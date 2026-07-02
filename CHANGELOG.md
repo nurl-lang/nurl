@@ -8,6 +8,62 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.9] — 2026-07-02
+
+A **wasm toolchain** release. The pure-NURL `packages/wasmtime` runtime grows
+from a proof-of-concept into a spec-faithful, hostile-input-hardened WebAssembly
+engine — real traps and multi-value blocks, bulk memory + reference types, a
+bounded explicit frame stack with fuel metering and name-section backtraces, a
+much larger WASI surface (positioned I/O, directories, real clocks/entropy/env),
+and a CUDA/NVRTC host-import bridge that runs GPU wasm modules on real hardware.
+Two compiler FFI argument-coercion fixes make GPU-using NURL compile to wasm at
+all, and the runtime now aborts loudly on OOM instead of silently corrupting
+wasm32 linear memory. Organisationally, `stdlib/runtime.c` is split into a
+bootstrap core and the stdlib FFI shims.
+
+### Added
+
+- **Compile GPU-using NURL to WebAssembly — `nurlc --ffi-host-imports`.** With
+  the new flag, external `` `&`-FFI `` libraries are satisfied by the run-time
+  embedder as wasm imports (module `env`) instead of a native link line, and the
+  build-time `stdlib/runtime.<lib>` sentinel gate is skipped (native path
+  unchanged, flag off by default). `nurlapi`'s wasm build passes it through and
+  links with `-Wl,--allow-undefined`, so undefined FFI symbols become wasm
+  imports; a genuinely missing symbol traps at run time with its name. This is
+  what lets a GPU package (objdet → onnx → gpu) compile to a wasm module the host
+  resolves against real libcuda/libnvrtc.
+- **`packages/wasmtime` — WASI expansion.** `environ_get`/`_sizes_get` from
+  repeatable `--env NAME=VALUE` (capability-style; the host environment is never
+  inherited implicitly); real `clock_time_get` (wall + monotonic, ns) and
+  `random_get` from the OS CSPRNG (both previously returned zeros); a `path_open`
+  overhaul (directory fds, `O_CREAT`/`O_EXCL`/`O_APPEND`/`O_TRUNC` semantics),
+  positioned `fd_pread`/`fd_pwrite`/`fd_tell`/`fd_sync`, offset-correct
+  `fd_write`, a directory surface (`fd_readdir`, `path_create_directory`,
+  `path_remove_directory`, `path_unlink_file`, `path_rename`,
+  `path_filestat_get`), and multiple preopens via repeatable `--dir`.
+- **`packages/wasmtime` — bulk memory + reference types.** Passive data/element
+  segments (`memory.init`/`data.drop`, `table.init`/`elem.drop`), a runtime
+  funcref table mutable via `table.get`/`set`/`grow`/`size`/`fill`/`copy`,
+  `ref.null`/`ref.is_null`/`ref.func` and typed `select`, and up-front
+  bounds-checked `memory.copy`/`fill`/`init` (no partial writes before a trap).
+- **`packages/wasmtime` — explicit frame stack, fuel metering, backtraces.**
+  `exec_func` drives an explicit frame stack, so guest calls no longer recurse on
+  the host native stack — deep guest recursion is bounded by `max_depth` (65536
+  frames, trap `call stack exhausted`) instead of a host stack overflow (verified
+  1M-deep). Optional `--fuel N` traps a runaway guest after N instructions; the
+  custom `name` section is decoded and traps append a wasm backtrace.
+- **`packages/wasmtime` — CUDA/NVRTC GPU host-import bridge.** Resolves a GPU wasm
+  module's `cuda`/`nvrtc` imports to real libcuda/libnvrtc, marshalling guest
+  linear memory ↔ host (every `*u` param is a guest offset → host address;
+  opaque handles and `CUdeviceptr` travel as raw `i64`; `cuLaunchKernel`'s guest
+  `void**` is reconstructed host-side). `nurl.sh` auto-links libcuda/libnvrtc
+  when those symbols appear and stubs them on a GPU-less host. Verified on an
+  RTX 4090 (`vadd`, `cuInit`+`cuDeviceGetCount`).
+- **`nurlapi` — `/build_wasm` accepts pre-compiled IR (`ir` field).** The only
+  way to wasm-build a multi-file package: a host `nurlc` resolves the `$`-imports
+  the container lacks and the container just does the wasm rewrite + wasi-clang
+  link.
+
 ### Changed
 
 - **Runtime source split (A9) — `stdlib/runtime.c` → bootstrap core + FFI
@@ -25,6 +81,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   now *defines the core symbol set* a bootstrap/`no_std` target must
   provide (unblocks ROADMAP D2). Organisational only: no behavioural
   change, self-host fixed point held, full corpus + sanitizer suite green.
+- **`packages/wasmtime` — core semantics: multi-value, real traps, checked
+  `call_indirect`.** Block types decode as signed-LEB `s33` (multi-value
+  blocks/loops/ifs), `call_indirect` performs the runtime structural signature
+  check, the `start` section runs at instantiation, integer divide-by-zero and
+  `INT_MIN/-1` overflow trap, float→int truncation traps on NaN / out-of-range
+  (with saturating `0xfc` forms), and float min/max/compare are NaN-correct.
+- **`packages/wasmtime` — import layer strictness.** Imports record their module
+  name and dispatch verifies `wasi_snapshot_preview1`; a table/memory/global
+  import (or `global.get` in a const expression) is now a hard decode error
+  instead of being silently skipped.
+- **`packages/wasmtime` — hardened against hostile input (v0.6.0).** Audited
+  against malformed/adversarial wasm (ASan-fuzz + exhaustive prefix sweep): every
+  vector count is validated against the bytes physically remaining before
+  allocating (`__chk_count`), negative/over-long section and name-subsection
+  sizes are rejected, truncated init/element expressions are clean decode errors,
+  and `mem.min`/`table.min`/per-function locals are capped. Every input is now
+  memory-safe and terminating; valid modules still run byte-identically to
+  reference wasmtime.
+
+### Fixed
+
+- **`nurlc` — FFI argument coercion to the declared parameter width, plus
+  int↔pointer.** An integer argument whose width differs from an FFI function's
+  declared parameter (NURL literals are `i64` → an `i32` param) was emitted
+  verbatim; native LLVM tolerates it but `wasm-ld` replaces the whole function
+  with an `unreachable` stub that traps at run time. `gen_ffi_decl` now records
+  each symbol's LLVM parameter types (`__ffi_params`) and `gen_call` coerces via
+  `trunc`/`sext` (and `inttoptr` for a bare `0`/handle passed to a pointer
+  param). `__ffi_params` is also registered in the `scan_fn_sigs` pre-pass so
+  forward-referenced FFI symbols coerce correctly. Fixes the long-standing
+  `fread`/`cuLaunchKernel` "unreachable stub" on wasm.
+- **runtime — abort loudly on OOM, on every allocation.** `nurl_alloc`/`_zalloc`/
+  `_realloc` and the 81 other `malloc`/`calloc`/`realloc`/`strdup` sites in the
+  runtime returned raw NULL on OOM. On native that faults on first write, but on
+  wasm32 address 0 is ordinary writable linear memory, so a NULL-backed
+  string/vec silently corrupts state (observed as the `nurlc.wasm` self-host
+  "hang": once `memory.grow` failed past the 4 GiB ceiling the analysis spun on
+  NULL-backed state). File-wide checked wrappers now abort with
+  `nurl: out of memory (requested N bytes)`; the panic-journal grow keeps its
+  deliberate degrade-to-a-leak.
+- **FFI decls — `nurl_peek_i32`/`nurl_poke_i32` are 32-bit, not `i64`.** Every
+  package declared these 32-bit runtime accessors with NURL's `i` (`i64`); on
+  LP64 native the register hid the high bits, but on wasm the type differs from
+  `runtime.wasm.o` and `wasm-ld` emits an `unreachable` stub. Fixed to `i32` in
+  gpu (`cuda.nu`/`cpu.nu`), onnx (`pb.nu`) and yoloe.
+- **`nurlapi` — libc `off_t`/`size_t` wasm width shims.** Correct the FFI shim
+  widths that produced `unreachable` stubs on `fs.nu`'s `fopen`/`fread` file path
+  (`lseek` removed from the shim list — its `off_t` is already 64-bit on wasm32;
+  a new `w` param-char for an `i32` parameter `nurlc` already emits as `i32`).
 
 ## [0.10.8] — 2026-07-02
 
