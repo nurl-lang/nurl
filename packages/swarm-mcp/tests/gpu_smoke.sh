@@ -48,7 +48,7 @@ fail=0
 # 1. compute_submit_cuda: ∫₀¹ 4/(1+t²) dt · 1e8 = π·1e8 — the whole chain:
 #    generate → build API → wasm → GPU domain routing → wt --allow-gpu → CUDA.
 sub="$(MCP '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"compute_submit_cuda","arguments":{"cuda":"__device__ double f(long long x) { double t = (double)x * 1e-8; return 4.0 / (1.0 + t*t); }","lo":0,"hi":100000000,"reduce":"sum"}}}')"
-tid="$(printf '%s' "$sub" | grep -oE 'task_id..[0-9]+' | grep -oE '[0-9]+' | head -1)"
+tid="$(printf '%s' "$sub" | grep -oE 'task_id[^0-9]*[0-9]+' | grep -oE '[0-9]+' | head -1)"
 [ -z "$tid" ] && tid=1
 ok=0
 for _ in 1 2 3 4 5 6 7 8 9 10 11 12; do
@@ -66,7 +66,7 @@ if [ "$ok" = 1 ]; then echo "[gpu-smoke] PASS compute_submit_cuda π·1e8 on the
 cpu_pid=$!
 sleep 1.5
 sub2="$(MCP '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"compute_submit_cuda","arguments":{"cuda":"__device__ double f(long long x) { return 1.0; }","lo":0,"hi":1000000,"reduce":"sum"}}}')"
-tid2="$(printf '%s' "$sub2" | grep -oE 'task_id..[0-9]+' | grep -oE '[0-9]+' | head -1)"
+tid2="$(printf '%s' "$sub2" | grep -oE 'task_id[^0-9]*[0-9]+' | grep -oE '[0-9]+' | head -1)"
 [ -z "$tid2" ] && tid2=2
 ok2=0
 for _ in 1 2 3 4 5 6 7 8; do
@@ -77,6 +77,36 @@ done
 kill -9 "$cpu_pid" 2>/dev/null
 if [ "$ok2" = 1 ]; then echo "[gpu-smoke] PASS GPU task routed around the CPU worker (mixed cluster)"; else
     echo "[gpu-smoke] FAIL mixed-cluster routing — last: $res2"; fail=1; fi
+
+# 3. runtime params + the coordinator module cache: same source, two params —
+#    the second submit must skip the build API (fast) and scale the result.
+p1="$(MCP '{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"compute_submit_cuda","arguments":{"cuda":"__device__ double f(long long x, const double* p) { return p[0] * (double)x; }","lo":0,"hi":1000,"reduce":"sum","params":[2.0]}}}')"
+t0=$(date +%s)
+p2="$(MCP '{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"compute_submit_cuda","arguments":{"cuda":"__device__ double f(long long x, const double* p) { return p[0] * (double)x; }","lo":0,"hi":1000,"reduce":"sum","params":[3.0]}}}')"
+t1=$(date +%s)
+ok3=0
+if printf '%s' "$p1" | grep -qF '999000' && printf '%s' "$p2" | grep -qF '1.4985e+06' && [ $((t1 - t0)) -le 10 ]; then ok3=1; fi
+if [ "$ok3" = 1 ]; then echo "[gpu-smoke] PASS runtime params + warm module cache ($((t1 - t0))s warm submit)"; else
+    echo "[gpu-smoke] FAIL params/cache — p1: $p1 p2: $p2 warm=$((t1 - t0))s"; fail=1; fi
+
+# 4. compute_sample_cuda: 16 values of 0.25x come back in order
+sm="$(MCP '{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"compute_sample_cuda","arguments":{"cuda":"__device__ double f(long long x) { return 0.25 * (double)x; }","lo":0,"hi":16}}}')"
+if printf '%s' "$sm" | grep -qF '0.25' && printf '%s' "$sm" | grep -qF '3.75' && printf '%s' "$sm" | grep -qE 'count.":16'; then
+    echo "[gpu-smoke] PASS compute_sample_cuda (16 ordered values)"; else
+    echo "[gpu-smoke] FAIL compute_sample_cuda — $sm"; fail=1; fi
+
+# 5. compute_histogram_cuda: x%8 over [0,1e6) → 8 bins of 125000
+hs="$(MCP '{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"compute_histogram_cuda","arguments":{"cuda":"__device__ long long bin(long long x) { return x % 8; }","lo":0,"hi":1000000,"bins":8}}}')"
+htid="$(printf '%s' "$hs" | grep -oE 'task_id[^0-9]*[0-9]+' | grep -oE '[0-9]+' | head -1)"
+[ -z "$htid" ] && htid=5
+hok=0
+for _ in 1 2 3 4 5 6 7 8; do
+    hres="$(MCP "{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"tools/call\",\"params\":{\"name\":\"compute_result\",\"arguments\":{\"task_id\":$htid}}}")"
+    if [ "$(printf '%s' "$hres" | grep -oF '125000' | wc -l)" -ge 8 ]; then hok=1; break; fi
+    sleep 2
+done
+if [ "$hok" = 1 ]; then echo "[gpu-smoke] PASS compute_histogram_cuda (8 × 125000)"; else
+    echo "[gpu-smoke] FAIL compute_histogram_cuda — $hres"; fail=1; fi
 
 if [ "$fail" = 0 ]; then echo "[gpu-smoke] OK"; else echo "[gpu-smoke] FAILURES"; fi
 exit "$fail"

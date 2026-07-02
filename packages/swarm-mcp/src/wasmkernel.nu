@@ -14,24 +14,27 @@
 // on PATH as `wasmtime`, or point $WASMTIME at it. The Bytecode-Alliance
 // wasmtime works too — whichever $WASMTIME resolves to is used.
 //
-//   chunk : [lo:8 BE][hi:8 BE][wasm module bytes…]   (the reduce op is baked
-//           into the module by the wrapper, so the partial is final per chunk)
+//   CPU chunk (kind_wasm)     : [lo:8 BE][hi:8 BE][wasm…]
+//   GPU chunk (kind_wasm_gpu) : payload v2 — see wasm_gpu_chunk_payload below
+//                               (adds an output mode, K, and runtime params)
 //
-// The module prints its partial as a decimal integer on stdout; __wasm_run reads
-// it back with nurl_str_to_int. For a float task (dtype=1) the module prints the
-// partial's f64 BIT PATTERN as that decimal integer (see buildwasm.nu), so the
-// same int wire carries it unchanged — the coordinator reinterprets it in
-// tids_combine's float path. This file is dtype-agnostic: it ships and runs the
-// module and returns whatever integer it printed.
+// The reduce op is baked into the module by the wrapper, so the partial is
+// final per chunk. A scalar module prints its partial as a decimal integer on
+// stdout; for a float task that integer is the partial's f64 BIT PATTERN (see
+// buildwasm.nu), so the same int wire carries it unchanged — the coordinator
+// reinterprets it. Vector modes (sample/hist) write raw little-endian f64s to
+// a worker-named output file instead (fast: one fwrite, no per-value stdout).
 //
 // The module is cached on each worker by a content hash, so re-running the same
-// kernel (every chunk of a task, and across tasks) writes the .wasm only once.
+// kernel (every chunk of a task, and across tasks — runtime params don't touch
+// the module) writes the .wasm only once.
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/bytes.nu`
 $ `stdlib/std/fs.nu`
 $ `stdlib/std/process.nu`
+$ `stdlib/std/random.nu`
 $ `stdlib/ext/env.nu`
 $ `token.nu`
 
@@ -42,12 +45,84 @@ $ `token.nu`
 // register this handler — a non-GPU worker can never receive (or garble) one.
 @ kind_wasm_gpu → i { ^ 3 }
 
+// GPU task output modes (baked into the generated program AND carried in the
+// chunk so the worker knows how to invoke the module and collect its output).
+@ gpu_mode_scalar → i { ^ 0 }  // partial's f64 bits on stdout
+@ gpu_mode_sample → i { ^ 1 }  // hi-lo doubles written to an output file
+@ gpu_mode_hist → i { ^ 2 }    // K bin sums written to an output file
+
 @ wasm_chunk_payload i lo i hi ( Vec u ) wasm → ( Vec u ) {
     : ( Vec u ) b ( vec_new [u] )
     ( bytes_push_u64_be b # u64 lo )
     ( bytes_push_u64_be b # u64 hi )
     ( vec_extend [u] b wasm )
     ^ b
+}
+
+// ── GPU chunk payload v2 ─────────────────────────────────────────
+//   [ver:1 = 2][mode:1][lo:8][hi:8][K:4][nparams:2][f64 bits:8×n][wasm…]
+// mode selects the module's output contract; K is the histogram bin count
+// (0 otherwise); params are runtime kernel arguments passed on the module's
+// argv as f64-bit-pattern decimals — the SAME module (same content hash, no
+// rebuild, warm worker cache) serves any parameter values.
+@ wasm_gpu_chunk_payload i mode i lo i hi i kbins ( Vec i ) params ( Vec u ) wasm → ( Vec u ) {
+    : ( Vec u ) b ( vec_new [u] )
+    ( vec_push [u] b 2 )
+    ( vec_push [u] b # u mode )
+    ( bytes_push_u64_be b # u64 lo )
+    ( bytes_push_u64_be b # u64 hi )
+    ( bytes_push_u32_be b # u32 kbins )
+    : i np ( vec_len [i] params )
+    ( bytes_push_u16_be b # u16 np )
+    : ~ i k 0
+    ~ < k np {
+        ( bytes_push_u64_be b # u64 ?? ( vec_get [i] params k ) { T x → x F → 0 } )
+        = k + k 1
+    }
+    ( vec_extend [u] b wasm )
+    ^ b
+}
+
+: GpuChunk {
+    i ok
+    i mode
+    i lo
+    i hi
+    i kbins
+    ( Vec i ) params
+    ( Vec u ) wasm
+}
+
+@ gpu_chunk_free GpuChunk c → v { ( vec_free [i] . c params ) ( vec_free [u] . c wasm ) }
+
+@ wasm_gpu_chunk_decode ( Vec u ) body → GpuChunk {
+    : ( Vec i ) params ( vec_new [i] )
+    : ~ i ok 0
+    : ~ i mode 0
+    : ~ i lo 0
+    : ~ i hi 0
+    : ~ i kbins 0
+    : ~ ( Vec u ) wasm ( vec_new [u] )
+    : i ver ?? ( vec_get [u] body 0 ) { T x → # i x F → 0 }
+    ? == ver 2 {
+        = mode ?? ( vec_get [u] body 1 ) { T x → # i x F → 0 }
+        = lo ?? ( bytes_read_u64_be body 2 ) { T x → # i x F → 0 }
+        = hi ?? ( bytes_read_u64_be body 10 ) { T x → # i x F → 0 }
+        = kbins ?? ( bytes_read_u32_be body 18 ) { T x → # i x F → 0 }
+        : i np ?? ( bytes_read_u16_be body 22 ) { T x → # i x F → 0 }
+        : i pend + 24 * np 8
+        ? <= pend ( vec_len [u] body ) {
+            : ~ i k 0
+            ~ < k np {
+                ( vec_push [i] params ?? ( bytes_read_u64_be body + 24 * k 8 ) { T x → x F → 0 } )
+                = k + k 1
+            }
+            ( vec_free [u] wasm )
+            = wasm ( bytes_slice body pend ( vec_len [u] body ) )
+            = ok 1
+        } {}
+    } {}
+    ^ @ GpuChunk { ok mode lo hi kbins params wasm }
 }
 
 // FNV-1a/64 content hash → 16 lowercase hex chars, for the cache filename.
@@ -114,14 +189,12 @@ $ `token.nu`
     ^ @ WasmRun { ok v }
 }
 
-// The worker handler for a wasm chunk: verify the cluster HMAC tag, cache the
-// module by content hash, run it under wasmtime, return the partial tagged for
-// the coordinator. An untrusted/forged payload yields a tagged zero — a
-// stranger can't make a worker fetch-and-run an arbitrary module. `key` is the
-// cluster HMAC key (token_key), captured by the handler closure. allow_gpu≠0
-// builds the kind_wasm_gpu variant: modules run with GPU host imports live —
-// only a worker started with --gpu registers that one.
-@ wasm_handler ( Vec u ) key i allow_gpu → ( @ ( Vec u ) ( Vec u ) ) {
+// The worker handler for a (CPU) wasm chunk: verify the cluster HMAC tag,
+// cache the module by content hash, run it under wasmtime, return the partial
+// tagged for the coordinator. An untrusted/forged payload yields a tagged
+// ok=0 — a stranger can't make a worker fetch-and-run an arbitrary module.
+// `key` is the cluster HMAC key (token_key), captured by the handler closure.
+@ wasm_handler ( Vec u ) key → ( @ ( Vec u ) ( Vec u ) ) {
     ^ \ ( Vec u ) p → ( Vec u ) {
         : ~ i partial 0
         : ~ i run_ok 0
@@ -136,7 +209,7 @@ $ `token.nu`
                 ? ! ( file_exists ( string_data path ) ) {
                     ?? ( write_file_bytes ( string_data path ) wasm ) { T _ → {} F _ → {} }
                 } {}
-                : WasmRun wr ( __wasm_run path lo hi allow_gpu )
+                : WasmRun wr ( __wasm_run path lo hi 0 )
                 = run_ok . wr ok
                 = partial . wr value
                 ( string_free hex ) ( string_free path ) ( vec_free [u] wasm )
@@ -149,6 +222,158 @@ $ `token.nu`
         : ( Vec u ) r ( vec_new [u] )
         ( vec_push [u] r # u run_ok )
         ( bytes_push_u64_be r # u64 partial )
+        : ( Vec u ) out ( token_tag key r )
+        ( vec_free [u] r )
+        ^ out
+    }
+}
+
+// ── the GPU chunk handler (payload v2, all output modes) ─────────
+
+// 16 lowercase hex chars of an i64 (unique temp-file names).
+@ __hex_u64 i h → String {
+    : String out ( string_with_cap 16 )
+    : ~ i i 60
+    ~ >= i 0 {
+        : i nib & >> h i 15
+        ( string_push_char out ? < nib 10 + 48 nib + 87 nib )
+        = i - i 4
+    }
+    ^ out
+}
+
+: GpuOut { i ok i scalar ( Vec u ) bytes }
+
+// Run a cached module for one GPU chunk under `wt run --allow-gpu`.
+// Scalar mode: the partial's f64 bits on stdout (as before). Sample/hist
+// modes: the module writes raw LITTLE-ENDIAN f64s to an output file the
+// worker names under $TMPDIR (preopened into the sandbox via --dir); the
+// exact byte length is validated (8·(hi−lo), or 8·K for a histogram).
+// Runtime params ride argv as f64-bit-pattern decimals.
+@ __wasm_run_gpu String path GpuChunk c → GpuOut {
+    : String tmp ( env_var_or `TMPDIR` `/tmp` )
+    : b vecmode | == . c mode ( gpu_mode_sample ) == . c mode ( gpu_mode_hist )
+    : ~ String outp ( string_new )
+    ? vecmode {
+        ( string_push_str outp ( string_data tmp ) )
+        ( string_push_str outp `/swarmo_` )
+        : String rh ( __hex_u64 ( rand_u64 ) )
+        ( string_push_str outp ( string_data rh ) )
+        ( string_free rh )
+        ( string_push_str outp `.bin` )
+    } {}
+    // The numeric argv strings (lo, hi, K, params…) are variable-count and
+    // built in loops — a `: s` binding would be auto-reclaimed at its block's
+    // end, BEFORE process_run reads it. So they live in ONE owned arena
+    // String as NUL-separated segments; the args vec gets pointer views into
+    // it, resolved only after the arena stops growing (pushes may realloc).
+    : String blob ( string_new )
+    : ( Vec i ) offs ( vec_new [i] )
+    ( vec_push [i] offs ( string_len blob ) )
+    ( string_push_str blob ( nurl_str_int . c lo ) ) ( string_push_char blob 0 )
+    ( vec_push [i] offs ( string_len blob ) )
+    ( string_push_str blob ( nurl_str_int . c hi ) ) ( string_push_char blob 0 )
+    ? == . c mode ( gpu_mode_hist ) {
+        ( vec_push [i] offs ( string_len blob ) )
+        ( string_push_str blob ( nurl_str_int . c kbins ) ) ( string_push_char blob 0 )
+    } {}
+    : i np ( vec_len [i] . c params )
+    : ~ i k 0
+    ~ < k np {
+        ( vec_push [i] offs ( string_len blob ) )
+        ( string_push_str blob ( nurl_str_int ?? ( vec_get [i] . c params k ) { T x → x F → 0 } ) )
+        ( string_push_char blob 0 )
+        = k + k 1
+    }
+    : i base # i ( string_data blob )
+    : ( Vec s ) args ( vec_new [s] )
+    ( vec_push [s] args `run` )
+    ( vec_push [s] args `--allow-gpu` )
+    ? vecmode { ( vec_push [s] args `--dir` ) ( vec_push [s] args ( string_data tmp ) ) } {}
+    ( vec_push [s] args ( string_data path ) )
+    ( vec_push [s] args # s + base ?? ( vec_get [i] offs 0 ) { T x → x F → 0 } )
+    ( vec_push [s] args # s + base ?? ( vec_get [i] offs 1 ) { T x → x F → 0 } )
+    ? vecmode { ( vec_push [s] args ( string_data outp ) ) } {}
+    : i ntail - ( vec_len [i] offs ) 2
+    : ~ i t 0
+    ~ < t ntail {
+        ( vec_push [s] args # s + base ?? ( vec_get [i] offs + 2 t ) { T x → x F → 0 } )
+        = t + t 1
+    }
+    : String wt ( __wasmtime )
+    : ~ i ok 0
+    : ~ i scalar 0
+    : ~ ( Vec u ) outb ( vec_new [u] )
+    ?? ( process_run ( string_data wt ) args `` ) {
+        T out → {
+            ? == ( output_exit_code out ) 0 {
+                ? vecmode {
+                    ?? ( read_file_bytes ( string_data outp ) ) {
+                        T bts → {
+                            : i want * 8 ? == . c mode ( gpu_mode_hist ) . c kbins - . c hi . c lo
+                            ? == ( vec_len [u] bts ) want {
+                                ( vec_free [u] outb )
+                                = outb bts
+                                = ok 1
+                            } { ( vec_free [u] bts ) }
+                        }
+                        F e → {}
+                    }
+                } {
+                    = ok 1
+                    = scalar ( nurl_str_to_int ( output_stdout out ) )
+                }
+            } {}
+            ( output_free out )
+        }
+        F e → {}
+    }
+    ? vecmode { ?? ( file_delete ( string_data outp ) ) { T _ → {} F _ → {} } } {}
+    ( vec_free [s] args ) ( vec_free [i] offs )
+    ( string_free blob ) ( string_free outp ) ( string_free wt ) ( string_free tmp )
+    ^ @ GpuOut { ok scalar outb }
+}
+
+// GPU worker handler: decode payload v2, cache the module, run per mode, and
+// reply the mode's result frame — scalar [ok:1][bits:8], vector
+// [ok:1][count:4 BE][f64 LE × count]. Forged/undecodable payloads → ok=0.
+@ wasm_gpu_handler ( Vec u ) key → ( @ ( Vec u ) ( Vec u ) ) {
+    ^ \ ( Vec u ) p → ( Vec u ) {
+        : ~ i run_ok 0
+        : ~ i scalar 0
+        : ~ i mode ( gpu_mode_scalar )
+        : ~ ( Vec u ) outb ( vec_new [u] )
+        ?? ( token_untag key p ) {
+            F → {}
+            T body → {
+                : GpuChunk c ( wasm_gpu_chunk_decode body )
+                = mode . c mode
+                ? == . c ok 1 {
+                    : String hex ( __wasm_hash . c wasm )
+                    : String path ( __wasm_cache_path hex )
+                    ? ! ( file_exists ( string_data path ) ) {
+                        ?? ( write_file_bytes ( string_data path ) . c wasm ) { T _ → {} F _ → {} }
+                    } {}
+                    : GpuOut r ( __wasm_run_gpu path c )
+                    = run_ok . r ok
+                    = scalar . r scalar
+                    ( vec_free [u] outb )
+                    = outb . r bytes
+                    ( string_free hex ) ( string_free path )
+                } {}
+                ( gpu_chunk_free c )
+                ( vec_free [u] body )
+            }
+        }
+        : ( Vec u ) r ( vec_new [u] )
+        ( vec_push [u] r # u run_ok )
+        ? == mode ( gpu_mode_scalar ) {
+            ( bytes_push_u64_be r # u64 scalar )
+        } {
+            ( bytes_push_u32_be r # u32 / ( vec_len [u] outb ) 8 )
+            ( vec_extend [u] r outb )
+        }
+        ( vec_free [u] outb )
         : ( Vec u ) out ( token_tag key r )
         ( vec_free [u] r )
         ^ out
