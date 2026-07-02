@@ -5094,6 +5094,28 @@
             = at ( variadic_promoted_type at )
         }
         {}
+        // FFI arg width coercion (fixed positions only; vararg positions are
+        // promoted above). If the callee is an FFI symbol and this argument's
+        // integer width differs from the declared parameter type, emit the
+        // trunc/sext so the emitted call type matches the `declare` — required
+        // for a correct wasm import (see gen_ffi_decl's `ptypes` note).
+        ? ! & is_variadic >= arg_idx fixed_count {
+            : s __ffp ( nurl_sym_get syms ( nurl_str_cat fname `__ffi_params` ) )
+            ? != 0 ( nurl_str_len __ffp ) {
+                : s __want ( __nth_sep __ffp arg_idx )
+                : i __ww ( int_width __want )
+                : i __hw ( int_width at )
+                ? & & & > __ww 0 > __hw 0 != __ww __hw ! ( seq at __want ) {
+                    : s __nv ( nurl_cg_reg cg )
+                    ( nurl_print `  ` ) ( nurl_print __nv )
+                    ( nurl_print ? > __hw __ww ` = trunc ` ` = sext ` )
+                    ( nurl_print at ) ( nurl_print ` ` ) ( nurl_print av )
+                    ( nurl_print ` to ` ) ( nurl_print __want ) ( nurl_print `\n` )
+                    = av __nv
+                    = at __want
+                } {}
+            } {}
+        } {}
         ? & & != 0 g_auto_drop_strings
         ( seq at `i8*` )
         ( seq ( nurl_sym_get syms `__last_call_ret_owned__` ) `str` )
@@ -12318,6 +12340,15 @@
 // `{ T*, i64 }`, result, nested closure) contains its own spaces and
 // commas — `str_first_word` would truncate it at the first space. ';'
 // never appears in an LLVM type string, so it is a safe field delimiter.
+// The n-th (0-based) element of a `;`-separated list, or `` if out of range.
+@ __nth_sep s list i n → s {
+    : ~ s rest list
+    : ~ i k 0
+    ~ < k n { = rest ( seplist_rest rest ) = k + k 1 }
+    ? == 0 ( nurl_str_len rest ) { ^ `` } {}
+    ^ ( seplist_first rest )
+}
+
 @ seplist_first s str → s {
     : i n ( nurl_str_len str )
     : ~ i i 0
@@ -14763,6 +14794,14 @@
     ( lint_note_def fname )
     ( nurl_lex_advance lex )
     : ~ s params_str ``
+    // `;`-joined LLVM param types, consulted by gen_call to coerce each
+    // argument to its declared FFI parameter width. Native LLVM silently
+    // tolerates a width-mismatched call arg (e.g. an i64 integer literal
+    // passed to an i32 parameter — high bits ignored in the ABI register),
+    // but wasm is strict: the call's inferred function type then differs
+    // from the import's declared type and wasm-ld replaces the callee with
+    // an `unreachable` stub. Coercing at the call site fixes both targets.
+    : ~ s ptypes ``
     : ~ i pct 0
     ~ & != ( nurl_lex_type lex ) TT_ARROW != ( nurl_lex_type lex ) TT_EOF {
         ? == ( nurl_lex_type lex ) TT_ELLIPSIS
@@ -14782,8 +14821,9 @@
             ( check_type_known lex syms lt `an FFI parameter type` )
             ? ( is_ident_tok ( nurl_lex_type lex ) ) { ( nurl_lex_advance lex ) } {}
             ? == pct 0
-            { = params_str lt }
-            { = params_str ( nurl_str_cat params_str ( nurl_str_cat `, ` lt ) ) }
+            { = params_str lt = ptypes lt }
+            { = params_str ( nurl_str_cat params_str ( nurl_str_cat `, ` lt ) )
+                = ptypes ( nurl_str_cat3 ptypes `;` lt ) }
             = pct + pct 1
         }
     }
@@ -14798,6 +14838,8 @@
     // by vis_record_fn, which FFI decls deliberately do not get
     // (FFI symbols are linker-level ABI globals, not NURL sources).
     ( nurl_sym_def syms ( nurl_str_cat fname `__ffi` ) `1` )
+    // Per-parameter LLVM types for call-site width coercion (see `ptypes`).
+    ( nurl_sym_def syms ( nurl_str_cat fname `__ffi_params` ) ptypes )
     // emit_header already emits `declare` lines for a small set of libc
     // symbols (malloc, free, puts, printf). If the user FFI-declares any of
     // those, re-emitting the same `declare` would trigger LLVM's "invalid
