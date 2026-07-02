@@ -13,3 +13,7 @@ duplicate delivery is idempotent (keeps first): YES
 key has an owner in 3-node ring: YES
 owner recomputes after removal (re-home): YES
 new owner is a surviving member: YES
+found a key not owned on the main ring: YES
+kind-scoped submit executes locally: YES
+kind-scoped result is sum=10: YES
+main-ring ownership unchanged by the domain: YES

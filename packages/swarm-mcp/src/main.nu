@@ -39,6 +39,7 @@ $ `expr.nu`
 $ `work.nu`
 $ `wasmkernel.nu`
 $ `buildwasm.nu`
+$ `cudakernel.nu`
 
 @ swarm_vnodes → i { ^ 64 }
 
@@ -62,38 +63,51 @@ $ `buildwasm.nu`
 : Swarm {
     s transport  // *Transport
     s ring  // *Ring
+    s gpu_ring  // *Ring — the GPU capability domain (cap_gpu workers only)
     s roster  // *Roster
     s job  // *JobNode
     ( Vec u ) self_pk
     i self_id
     i role
+    i self_caps  // capability bits this node advertises (cap_gpu for --gpu workers)
     ( Vec u ) group  // token-derived 32-byte relay multicast group (cluster isolation)
     ( Vec u ) key  // token-derived HMAC key (compute authenticity)
 }
 
-@ swarm_new RelayClient rc i id i role s token → *Swarm {
+@ swarm_new RelayClient rc i id i role i caps s token → *Swarm {
     : ( Vec u ) me ( pk_from_id id )
     : *Transport tr # *Transport ( transport_open # s 0 rc 1 )
     : *Ring ring ( ring_new )
+    : *Ring gring ( ring_new )
     : *Roster roster ( roster_new )
     : *JobNode jn ( job_node_new # s tr # s ring me id )
+    // GPU wasm chunks route/own/forward on the GPU capability ring — every
+    // node scopes the kind the same way, so mid-flight re-homing stays inside
+    // the domain (dist/job job_set_ring).
+    ( job_set_ring jn ( kind_wasm_gpu ) # s gring )
     : *Swarm sw # *Swarm ( nurl_alloc Z Swarm )
     = . sw transport # s tr
     = . sw ring # s ring
+    = . sw gpu_ring # s gring
     = . sw roster # s roster
     = . sw job # s jn
     = . sw self_pk me
     = . sw self_id id
     = . sw role role
+    = . sw self_caps caps
     = . sw group ( token_group_id token )
     = . sw key ( token_key token )
-    ? == role ( role_worker ) { ( roster_add roster ring me id ( swarm_vnodes ) ) } {}
+    ? == role ( role_worker ) {
+        ( roster_add roster ring me id ( swarm_vnodes ) caps )
+        ? == & caps ( cap_gpu ) ( cap_gpu ) { ( ring_add_member gring me ( swarm_vnodes ) ) } {}
+    } {}
     ^ sw
 }
 
 @ swarm_free * Swarm sw → v {
     ( job_node_free # *JobNode . sw job )
     ( ring_free # *Ring . sw ring )
+    ( ring_free # *Ring . sw gpu_ring )
     ( roster_free # *Roster . sw roster )
     ( transport_free # *Transport . sw transport )
     ( vec_free [u] . sw self_pk )
@@ -107,18 +121,22 @@ $ `buildwasm.nu`
 }
 
 @ swarm_announce * Swarm sw i want → v {
-    : ( Vec u ) msg ( hello_build . sw self_id . sw role want . sw self_pk )
+    : ( Vec u ) msg ( hello_build . sw self_id . sw role want . sw self_pk . sw self_caps )
     ?? ( transport_broadcast # *Transport . sw transport . sw group msg ) { T _ → {} F _ → {} }
     ( vec_free [u] msg )
 }
 
 @ swarm_on_hello * Swarm sw Hello h → v {
     ? == . h role ( role_worker ) {
-        ( roster_add # *Roster . sw roster # *Ring . sw ring . h pubkey . h id ( swarm_vnodes ) )
+        ? ( roster_add # *Roster . sw roster # *Ring . sw ring . h pubkey . h id ( swarm_vnodes ) . h caps ) {
+            // A newly-heard GPU-capable worker also joins the GPU domain ring
+            // (idempotent via the roster gate — a re-heard HELLO adds nothing).
+            ? == & . h caps ( cap_gpu ) ( cap_gpu ) { ( ring_add_member # *Ring . sw gpu_ring . h pubkey ( swarm_vnodes ) ) } {}
+        } {}
         ( transport_add_peer # *Transport . sw transport . h pubkey )
     } {}
     ? & == . h want 1 ! ( bytes_eq . h pubkey . sw self_pk ) {
-        : ( Vec u ) reply ( hello_build . sw self_id . sw role 0 . sw self_pk )
+        : ( Vec u ) reply ( hello_build . sw self_id . sw role 0 . sw self_pk . sw self_caps )
         ?? ( transport_send # *Transport . sw transport . h pubkey reply ) { T _ → {} F _ → {} }
         ( vec_free [u] reply )
     } {}
@@ -193,8 +211,9 @@ $ `buildwasm.nu`
 // WORKER role: join the cluster, register the kernel + wasm handlers (every
 // worker can run wasm modules), and drain cluster traffic forever. Each worker
 // thread takes a fresh random identity, so `--workers N` spins up N independent
-// ring members in one process.
-@ node_worker s host i port s token i vflag → v {
+// ring members in one process. gpu≠0: advertise cap_gpu and register the
+// kind_wasm_gpu handler — wasm chunks of that kind run with --allow-gpu.
+@ node_worker s host i port s token i vflag i gpu → v {
     : i id ( rand_u64 )
     ?? ( relay_dial_retry host port 60 ) {
         T rc → {
@@ -202,12 +221,14 @@ $ `buildwasm.nu`
             ?? ( relay_register rc reg ) { T _ → {} F _ → {} }
             ( vec_free [u] reg )
             ( relay_set_timeout rc 250 )
-            : *Swarm sw ( swarm_new rc id ( role_worker ) token )
+            : i caps ? != gpu 0 ( cap_gpu ) 0
+            : *Swarm sw ( swarm_new rc id ( role_worker ) caps token )
             ( job_register # *JobNode . sw job ( kind_kernel ) ( kernel_handler . sw key ) )
-            ( job_register # *JobNode . sw job ( kind_wasm ) ( wasm_handler . sw key ) )
+            ( job_register # *JobNode . sw job ( kind_wasm ) ( wasm_handler . sw key 0 ) )
+            ? != gpu 0 { ( job_register # *JobNode . sw job ( kind_wasm_gpu ) ( wasm_handler . sw key 1 ) ) } {}
             ( swarm_join_group sw )
             ( swarm_announce sw 1 )
-            ? == vflag 1 { ( nurl_print `swarm-mcp worker ` ) ( nurl_print ( nurl_str_int id ) ) ( nurl_print ` ready\n` ) } {}
+            ? == vflag 1 { ( nurl_print `swarm-mcp worker ` ) ( nurl_print ( nurl_str_int id ) ) ( nurl_print ? != gpu 0 ` ready (gpu)\n` ` ready\n` ) } {}
             : ~ b run T
             ~ run { ( swarm_pump sw 200 ) }
             ( swarm_free sw )
@@ -240,9 +261,10 @@ $ `buildwasm.nu`
 }
 
 // Shard a wasm-kernel task: ship the compiled module + each sub-range to its
-// ring owner under kind_wasm. The module bytes ride every chunk (workers cache
-// by content hash, so it is written once per worker).
-@ cluster_submit_wasm * Swarm sw i lo i hi ( Vec u ) wasm i nchunks → ( Vec i ) {
+// ring owner under `kind` (kind_wasm, or kind_wasm_gpu — the GPU capability
+// domain). The module bytes ride every chunk (workers cache by content hash,
+// so it is written once per worker).
+@ cluster_submit_wasm * Swarm sw i lo i hi ( Vec u ) wasm i nchunks i kind → ( Vec i ) {
     : ( Vec s ) chunks ( shard lo hi nchunks )
     : ( Vec i ) tids ( vec_new [i] )
     : ~ i i 0
@@ -252,7 +274,7 @@ $ `buildwasm.nu`
         : ( Vec u ) rkey ( chunk_key i )
         : ( Vec u ) payload ( wasm_chunk_payload . c lo . c hi wasm )
         : ( Vec u ) tagged ( token_tag . sw key payload )
-        ( vec_push [i] tids ( job_submit # *JobNode . sw job ( kind_wasm ) rkey tagged ) )
+        ( vec_push [i] tids ( job_submit # *JobNode . sw job kind rkey tagged ) )
         ( vec_free [u] rkey ) ( vec_free [u] payload ) ( vec_free [u] tagged )
         = i + i 1
     }
@@ -275,31 +297,48 @@ $ `buildwasm.nu`
 // task each partial is an f64 bit pattern: decode→f64, combine in f64, and
 // return the combined f64 re-encoded as its bit pattern (the Task stores it
 // that way; task_to_json reinterprets it for the model).
-@ tids_combine * Swarm sw i dtype i op ( Vec i ) tids → i {
+//
+// Two result frames ride the wire: the expr kernel's legacy [partial:8], and
+// the wasm kinds' [ok:1][partial:8]. A chunk whose ok=0 (module trap, missing
+// runtime, GPU failure) is COUNTED, not folded — nfail>0 marks the task as
+// failed instead of silently reducing zeros into the answer.
+: Combined { i value i nfail }
+
+@ tids_combine * Swarm sw i dtype i op ( Vec i ) tids → Combined {
     : i n ( vec_len [i] tids )
     : ~ i acc ? == dtype 1 ( f64_to_bits ( red_id_f op ) ) ( red_id op )
+    : ~ i nfail 0
     : ~ i k 0
     ~ < k n {
         ?? ( job_await # *JobNode . sw job ?? ( vec_get [i] tids k ) { T x → x F → 0 } ) {
             T r → {
                 ?? ( token_untag . sw key r ) {
                     T body → {
-                        ? == dtype 1 {
-                            = acc ( f64_to_bits ( red_combine_f op ( bits_to_f64 acc ) ( bits_to_f64 ( result_decode body ) ) ) )
-                        } {
-                            = acc ( red_combine op acc ( result_decode body ) )
+                        : ~ i ok 1
+                        : ~ i off 0
+                        ? >= ( vec_len [u] body ) 9 {
+                            = ok ?? ( vec_get [u] body 0 ) { T x → # i x F → 0 }
+                            = off 1
+                        } {}
+                        ? == ok 0 { = nfail + nfail 1 } {
+                            : i raw ?? ( bytes_read_u64_be body off ) { T x → # i x F → 0 }
+                            ? == dtype 1 {
+                                = acc ( f64_to_bits ( red_combine_f op ( bits_to_f64 acc ) ( bits_to_f64 raw ) ) )
+                            } {
+                                = acc ( red_combine op acc raw )
+                            }
                         }
                         ( vec_free [u] body )
                     }
-                    F → {}
+                    F → { = nfail + nfail 1 }
                 }
                 ( vec_free [u] r )
             }
-            F → {}
+            F → { = nfail + nfail 1 }
         }
         = k + k 1
     }
-    ^ acc
+    ^ @ Combined { acc nfail }
 }
 
 @ nchunks_for i nworkers → i { ^ ? > * nworkers 4 256 256 ? > nworkers 0 * nworkers 4 4 }
@@ -314,7 +353,7 @@ $ `buildwasm.nu`
             ?? ( relay_register rc reg ) { T _ → {} F _ → {} }
             ( vec_free [u] reg )
             ( relay_set_timeout rc 250 )
-            : *Swarm sw ( swarm_new rc myid ( role_client ) token )
+            : *Swarm sw ( swarm_new rc myid ( role_client ) 0 token )
             ( swarm_join_group sw )
             ( swarm_discover sw 8 )
             : i nworkers ( roster_count # *Roster . sw roster )
@@ -327,7 +366,9 @@ $ `buildwasm.nu`
             : ( Vec i ) tids ( cluster_submit sw op 0 lo hi eb nchunks )
             : ~ i rnd 0
             ~ & ! ( tids_ready sw tids ) < rnd 400 { ( swarm_pump sw 200 ) = rnd + rnd 1 }
-            : i total ( tids_combine sw 0 op tids )
+            : Combined cb ( tids_combine sw 0 op tids )
+            : i total . cb value
+            ? > . cb nfail 0 { ( nurl_print `swarm-mcp: WARNING ` ) ( nurl_print_int . cb nfail ) ( nurl_print ` chunk(s) failed\n` ) } {}
             ( nurl_print ( reduce_op_name op ) ) ( nurl_print ` of (` ) ( nurl_print expr )
             ( nurl_print `) over [` ) ( nurl_print_int lo ) ( nurl_print `,` ) ( nurl_print_int hi )
             ( nurl_print `) = ` ) ( nurl_print_int total ) ( nurl_print `\n` )
@@ -359,7 +400,7 @@ $ `buildwasm.nu`
                     ?? ( relay_register relc reg ) { T _ → {} F _ → {} }
                     ( vec_free [u] reg )
                     ( relay_set_timeout relc 250 )
-                    : *Swarm sw ( swarm_new relc myid ( role_client ) token )
+                    : *Swarm sw ( swarm_new relc myid ( role_client ) 0 token )
                     ( swarm_join_group sw )
                     ( swarm_discover sw 8 )
                     : i nworkers ( roster_count # *Roster . sw roster )
@@ -370,10 +411,12 @@ $ `buildwasm.nu`
                         : i nchunks ( nchunks_wasm nworkers )
                         ( nurl_print `swarm-mcp: ` ) ( nurl_print_int nworkers ) ( nurl_print ` worker(s), ` )
                         ( nurl_print_int nchunks ) ( nurl_print ` wasm chunk(s)\n` )
-                        : ( Vec i ) tids ( cluster_submit_wasm sw lo hi wasm nchunks )
+                        : ( Vec i ) tids ( cluster_submit_wasm sw lo hi wasm nchunks ( kind_wasm ) )
                         : ~ i rnd 0
                         ~ & ! ( tids_ready sw tids ) < rnd 600 { ( swarm_pump sw 200 ) = rnd + rnd 1 }
-                        : i total ( tids_combine sw 0 op tids )
+                        : Combined cb ( tids_combine sw 0 op tids )
+                        : i total . cb value
+                        ? > . cb nfail 0 { ( nurl_print `swarm-mcp: WARNING ` ) ( nurl_print_int . cb nfail ) ( nurl_print ` chunk(s) failed\n` ) } {}
                         ( nurl_print ( reduce_op_name op ) ) ( nurl_print ` (wasm kernel) over [` )
                         ( nurl_print_int lo ) ( nurl_print `,` ) ( nurl_print_int hi )
                         ( nurl_print `) = ` ) ( nurl_print_int total ) ( nurl_print `\n` )
@@ -404,6 +447,7 @@ $ `buildwasm.nu`
     ( Vec i ) tids
     i done
     i result
+    i failed  // chunks that reported ok=0 (task status "error" when > 0)
 }
 
 : McpState {
@@ -427,6 +471,7 @@ $ `buildwasm.nu`
     = . t tids tids
     = . t done 0
     = . t result 0
+    = . t failed 0
     ^ t
 }
 
@@ -445,7 +490,9 @@ $ `buildwasm.nu`
     ? == . t done 1 { ^ v } {}
     : *Swarm sw ( mcp_swarm )
     ? ( tids_ready sw . t tids ) {
-        = . t result ( tids_combine sw . t dtype . t op . t tids )
+        : Combined cb ( tids_combine sw . t dtype . t op . t tids )
+        = . t result . cb value
+        = . t failed . cb nfail
         = . t done 1
     } {}
 }
@@ -467,7 +514,8 @@ $ `buildwasm.nu`
 @ task_to_json * Task t → Json {
     : Json o ( json_obj_new )
     ( json_obj_set o `task_id` ( json_int . t id ) )
-    ( json_obj_set o `status` ( json_str_lit ? == . t done 1 `done` `running` ) )
+    ( json_obj_set o `status` ( json_str_lit ? == . t done 1 ? > . t failed 0 `error` `done` `running` ) )
+    ? > . t failed 0 { ( json_obj_set o `failed_chunks` ( json_int . t failed ) ) } {}
     : String es ( bytes_to_str . t expr )
     ( json_obj_set o `kernel` ( json_str_lit ( string_data es ) ) )
     ( string_free es )
@@ -476,7 +524,7 @@ $ `buildwasm.nu`
     ( json_obj_set o `lo` ( json_int . t lo ) )
     ( json_obj_set o `hi` ( json_int . t hi ) )
     ( json_obj_set o `chunks` ( json_int . t nchunks ) )
-    ? == . t done 1 {
+    ? & == . t done 1 == . t failed 0 {
         ? == . t dtype 1 { ( json_obj_set o `result` ( json_float ( bits_to_f64 . t result ) ) ) }
                          { ( json_obj_set o `result` ( json_int . t result ) ) }
     } {}
@@ -544,20 +592,25 @@ $ `buildwasm.nu`
 // Ship a compiled wasm module to the cluster as a task (takes ownership of
 // `wasm`, frees it). Shared by both phase-2 tools.
 
-@ __ship_wasm ( Vec u ) wasm i lo i hi i op i dtype → Json {
+@ __ship_wasm ( Vec u ) wasm i lo i hi i op i dtype i gpu → Json {
     ? == ( vec_len [u] wasm ) 0 { ( vec_free [u] wasm ) ^ ( mcp_tool_result_error `empty wasm module` ) } {}
     : *Swarm sw ( mcp_swarm )
     ( swarm_discover sw 6 )
-    : i nworkers ( roster_count # *Roster . sw roster )
+    : i nworkers ? != gpu 0
+        ( roster_count_caps # *Roster . sw roster ( cap_gpu ) )
+        ( roster_count # *Roster . sw roster )
     ? == nworkers 0 {
         ( vec_free [u] wasm )
-        ^ ( mcp_tool_result_error `no workers in the cluster — start some with 'swarm-mcp worker'` )
+        ^ ? != gpu 0
+            ( mcp_tool_result_error `no GPU workers in the cluster — start some with 'swarm-mcp --worker --gpu' (needs the pure-NURL wasmtime and an NVIDIA GPU)` )
+            ( mcp_tool_result_error `no workers in the cluster — start some with 'swarm-mcp worker'` )
     } {}
     : i nchunks ( nchunks_wasm nworkers )
-    : ( Vec i ) tids ( cluster_submit_wasm sw lo hi wasm nchunks )
+    : i kind ? != gpu 0 ( kind_wasm_gpu ) ( kind_wasm )
+    : ( Vec i ) tids ( cluster_submit_wasm sw lo hi wasm nchunks kind )
     ( vec_free [u] wasm )
     : *McpState st # *McpState g_mcp
-    : *Task t ( task_new . st next_id ( bytes_from_str `<wasm kernel>` ) dtype lo hi op nchunks tids )
+    : *Task t ( task_new . st next_id ( bytes_from_str ? != gpu 0 `<wasm kernel (gpu)>` `<wasm kernel>` ) dtype lo hi op nchunks tids )
     = . st next_id + . st next_id 1
     ( vec_push [s] . st tasks # s t )
     ( mcp_pump 8 )
@@ -578,10 +631,11 @@ $ `buildwasm.nu`
     : i op ?? ( json_obj_get args `reduce` ) { T v → ( reduce_op_of ( json_str_data v ) 0 ) F → 0 }
     : i dtype ?? ( json_obj_get args `dtype` ) { T v → ? != 0 ( nurl_str_eq ( json_str_data v ) `float` ) 1 0 F → 0 }
     ? >= lo hi { ^ ( mcp_tool_result_error `empty range: need lo < hi` ) } {}
+    : i gpu ?? ( json_obj_get args `gpu` ) { T v → ? ( json_as_bool v ) 1 0 F → 0 }
     : !( Vec u ) ParseErr dr ( b64_decode_vec w64 )
     ?? dr {
         F e → { ^ ( mcp_tool_result_error `wasm_base64 is not valid base64` ) }
-        T wasm → { ^ ( __ship_wasm wasm lo hi op dtype ) }
+        T wasm → { ^ ( __ship_wasm wasm lo hi op dtype gpu ) }
     }
 }
 
@@ -599,11 +653,14 @@ $ `buildwasm.nu`
     : i hi ?? hj { T v → ( json_as_int v ) F → 0 }
     : i op ?? ( json_obj_get args `reduce` ) { T v → ( reduce_op_of ( json_str_data v ) 0 ) F → 0 }
     : i dtype ?? ( json_obj_get args `dtype` ) { T v → ? != 0 ( nurl_str_eq ( json_str_data v ) `float` ) 1 0 F → 0 }
+    : i gpu ?? ( json_obj_get args `gpu` ) { T v → ? ( json_as_bool v ) 1 0 F → 0 }
+    : i kkind ?? ( json_obj_get args `kind` ) { T v → ? != 0 ( nurl_str_eq ( json_str_data v ) `chunk` ) 1 0 F → 0 }
     ? >= lo hi { ^ ( mcp_tool_result_error `empty range: need lo < hi` ) } {}
-    // Wrap the bare kernel (`@ kernel i x → i`, or `→ f` for dtype "float") into
-    // a full program: a main that reads lo/hi from argv and folds kernel(x) over
-    // the range with the op, printing the partial (an f64 bit pattern in float).
-    : String wrapped ( wrap_kernel source op dtype )
+    // Wrap the bare kernel (`@ kernel i x → i`, or `→ f` for dtype "float"; with
+    // kind "chunk", `@ kernel i lo i hi → i/f` called once per chunk) into a
+    // full program: a main that reads lo/hi from argv and prints the partial
+    // (an f64 bit pattern in float).
+    : String wrapped ( wrap_kernel source op dtype kkind )
     : !( Vec u ) String cr ( compile_to_wasm ( string_data wrapped ) )
     ( string_free wrapped )
     ?? cr {
@@ -613,7 +670,44 @@ $ `buildwasm.nu`
             ( string_free em ) ( string_free msg )
             ^ e
         }
-        T wasm → { ^ ( __ship_wasm wasm lo hi op dtype ) }
+        T wasm → { ^ ( __ship_wasm wasm lo hi op dtype gpu ) }
+    }
+}
+
+// compute_submit_cuda: the model hands over ONLY a CUDA-C map function
+// `__device__ double f(long long x) { … }`; the server generates the whole
+// GPU chunk kernel around it (NVRTC JIT + grid-stride map + block reduce +
+// host fold — cudakernel.nu), compiles it to wasm, and ships it to the GPU
+// capability domain. Results combine in f64 (dtype float).
+@ tool_submit_cuda Json args → Json {
+    : ?Json cj ( json_obj_get args `cuda` )
+    : ?Json lj ( json_obj_get args `lo` )
+    : ?Json hj ( json_obj_get args `hi` )
+    ? | ! ?? cj { T _ → T F → F } | ! ?? lj { T _ → T F → F } ! ?? hj { T _ → T F → F } {
+        ^ ( mcp_tool_result_error `compute_submit_cuda needs "cuda" (a __device__ double f(long long x) function), "lo" (int), "hi" (int); "reduce" optional` )
+    } {}
+    : s cuda ?? cj { T v → ( json_str_data v ) F → `` }
+    : i lo ?? lj { T v → ( json_as_int v ) F → 0 }
+    : i hi ?? hj { T v → ( json_as_int v ) F → 0 }
+    : i op ?? ( json_obj_get args `reduce` ) { T v → ( reduce_op_of ( json_str_data v ) 0 ) F → 0 }
+    ? >= lo hi { ^ ( mcp_tool_result_error `empty range: need lo < hi` ) } {}
+    ? ! ( cuda_src_ok cuda ) {
+        ^ ( mcp_tool_result_error `the CUDA source may not contain a backtick character` )
+    } {}
+    ? < ( nurl_str_find cuda `double f` ) 0 {
+        ^ ( mcp_tool_result_error `the CUDA source must define __device__ double f(long long x) { ... } (helpers are fine, but f is the entry the generated kernel calls)` )
+    } {}
+    : String wrapped ( cuda_wrap cuda op )
+    : !( Vec u ) String cr ( compile_to_wasm ( string_data wrapped ) )
+    ( string_free wrapped )
+    ?? cr {
+        F msg → {
+            : String em ( string_concat ( string_from `CUDA kernel program did not compile: ` ) msg )
+            : Json e ( mcp_tool_result_error ( string_data em ) )
+            ( string_free em ) ( string_free msg )
+            ^ e
+        }
+        T wasm → { ^ ( __ship_wasm wasm lo hi op 1 1 ) }  // dtype float, gpu
     }
 }
 
@@ -707,6 +801,7 @@ $ `buildwasm.nu`
     ( ms_prop props `hi` `integer` `Range end (exclusive). Must be > lo.` )
     ( ms_prop props `reduce` `string` `How to combine the per-worker partials: "sum" (default), "product", "min", "max", or "count". Must match what the module's main reduces with.` )
     ( ms_prop props `dtype` `string` `Partial domain: "int" (default) or "float". With "float" the module must print its partial as the f64 bit pattern (a decimal integer — e.g. via floatbits f64_to_bits) and the coordinator combines the partials in f64. With "int" it prints a plain decimal integer.` )
+    ( ms_prop props `gpu` `boolean` `Route this task ONLY to GPU-capable workers (started with --gpu) and run the module with GPU host imports enabled: CUDA/NVRTC FFI calls in the module (compiled with --ffi-host-imports) execute on the worker's real GPU. Default false.` )
     ( json_obj_set schema `properties` props )
     : Json req ( json_arr_new )
     ( json_arr_push req ( json_str_lit `wasm_base64` ) )
@@ -725,9 +820,28 @@ $ `buildwasm.nu`
     ( ms_prop props `hi` `integer` `Range end (exclusive). Must be > lo.` )
     ( ms_prop props `reduce` `string` `How to combine the per-worker partials: "sum" (default), "product", "min", "max", or "count". Must match what your main reduces with.` )
     ( ms_prop props `dtype` `string` `Numeric domain: "int" (default; kernel returns i) or "float" (kernel returns f, folded in f64, result is a float). The server generates all argv/loop/fold/print boilerplate either way.` )
+    ( ms_prop props `gpu` `boolean` `Route to GPU-capable workers only (--gpu) and run with GPU host imports live: cuda/nvrtc FFI declarations in your source execute on the worker's real GPU. Default false.` )
+    ( ms_prop props `kind` `string` `Kernel granularity: "element" (default — @ kernel i x → i/f, evaluated per x and folded by generated code) or "chunk" (@ kernel i lo i hi → i/f, called ONCE with the worker's whole sub-range — the kernel owns the loop and returns the chunk partial; the reduce op combines partials across chunks). Use "chunk" when the kernel has per-invocation setup cost — e.g. GPU context creation + JIT — or wants to vectorise the range itself.` )
     ( json_obj_set schema `properties` props )
     : Json req ( json_arr_new )
     ( json_arr_push req ( json_str_lit `source` ) )
+    ( json_arr_push req ( json_str_lit `lo` ) )
+    ( json_arr_push req ( json_str_lit `hi` ) )
+    ( json_obj_set schema `required` req )
+    ^ schema
+}
+
+@ ms_schema_submit_cuda → Json {
+    : Json schema ( json_obj_new )
+    ( json_obj_set schema `type` ( json_str_lit `object` ) )
+    : Json props ( json_obj_new )
+    ( ms_prop props `cuda` `string` `A CUDA-C map function: __device__ double f(long long x) { ... } — pure math from the 64-bit index x to a double. You may add __device__ helpers; no __global__ kernel, no host code, no #includes (NVRTC builtins like sin, cos, exp, sqrt, fmin, fmax are available). Backtick characters are not allowed. Example: "__device__ double f(long long x) { double t = (double)x * 1e-9; return 4.0 / (1.0 + t*t); }"` )
+    ( ms_prop props `lo` `integer` `Range start (inclusive).` )
+    ( ms_prop props `hi` `integer` `Range end (exclusive). Must be > lo.` )
+    ( ms_prop props `reduce` `string` `How to fold f(x) over the range: "sum" (default) · "product" · "min" · "max" · "count" (how many x give f(x) != 0). Applied on-device per block, per chunk on the worker, and across chunks on the coordinator — the op must be associative, which these all are.` )
+    ( json_obj_set schema `properties` props )
+    : Json req ( json_arr_new )
+    ( json_arr_push req ( json_str_lit `cuda` ) )
     ( json_arr_push req ( json_str_lit `lo` ) )
     ( json_arr_push req ( json_str_lit `hi` ) )
     ( json_obj_set schema `required` req )
@@ -742,6 +856,9 @@ $ `buildwasm.nu`
     ( vec_push [Json] tools ( mcp_tool_descriptor `compute_submit_kernel`
     `Run an arbitrary NURL kernel on the cluster for workloads the compute_submit expression language cannot express (loops, helper functions, anything). Provide just the per-element kernel as NURL source — @ kernel i x → i { … } plus any imports/helpers; no main needed, the server generates the argv-reading, fold, and print boilerplate. The server compiles the wrapped program to wasm itself (via the NURL build service) and runs it sharded across the workers, folding kernel(x) over [lo, hi) with the reduce op. Compile errors are returned to you. Returns a task_id; poll compute_result. (Use compute_run_wasm if you already have a compiled module.)`
     ( ms_schema_submit_kernel ) ) )
+    ( vec_push [Json] tools ( mcp_tool_descriptor `compute_submit_cuda`
+    `Run a distributed GPU map-reduce: you write ONLY the math — a CUDA-C __device__ double f(long long x) — and the cluster does everything else. The server generates a complete GPU kernel around it (NVRTC JIT, grid-stride map over the range, on-device block reduction), compiles it to wasm, and shards [lo, hi) across every GPU-capable worker (started with --gpu); each worker JIT-compiles and runs the kernel on its real GPU and returns its chunk partial; the reduce op combines them. Use this for heavy numeric ranges (millions to billions of x) — integrals, Monte-Carlo-style sums with a hash of x as the noise source, parameter scans. The result is a float (f64). Needs at least one --gpu worker; returns a task_id, poll compute_result.`
+    ( ms_schema_submit_cuda ) ) )
     ( vec_push [Json] tools ( mcp_tool_descriptor `compute_run_wasm`
     `Like compute_submit_kernel but you provide an already-compiled wasm32-wasi module (base64) instead of NURL source — e.g. one built with the nurl_build_wasm tool. The module's main reads lo and hi from argv, folds the kernel over [lo, hi), and prints the partial. Returns a task_id; poll compute_result.`
     ( ms_schema_run_wasm ) ) )
@@ -757,6 +874,7 @@ $ `buildwasm.nu`
 @ dispatch_tool s name Json args → Json {
     ? != ( nurl_str_eq name `compute_submit` ) 0 { ^ ( tool_submit args ) } {}
     ? != ( nurl_str_eq name `compute_submit_kernel` ) 0 { ^ ( tool_submit_kernel args ) } {}
+    ? != ( nurl_str_eq name `compute_submit_cuda` ) 0 { ^ ( tool_submit_cuda args ) } {}
     ? != ( nurl_str_eq name `compute_run_wasm` ) 0 { ^ ( tool_run_wasm args ) } {}
     ? != ( nurl_str_eq name `compute_list` ) 0 { ^ ( tool_list args ) } {}
     ? != ( nurl_str_eq name `compute_result` ) 0 { ^ ( tool_result args ) } {}
@@ -766,7 +884,7 @@ $ `buildwasm.nu`
 // ── JSON-RPC method handlers ─────────────────────────────────────
 
 @ handle_initialize Json id → Json {
-    : Json result ( mcp_initialize_result `swarm-mcp` `0.4.0` )
+    : Json result ( mcp_initialize_result `swarm-mcp` `0.5.0` )
     ^ ( mcp_response_result id result )
 }
 
@@ -845,7 +963,7 @@ $ `buildwasm.nu`
             ?? ( relay_register rc reg ) { T _ → {} F _ → {} }
             ( vec_free [u] reg )
             ( relay_set_timeout rc 150 )
-            : *Swarm sw ( swarm_new rc myid ( role_client ) token )
+            : *Swarm sw ( swarm_new rc myid ( role_client ) 0 token )
             ( swarm_join_group sw )
             ( swarm_discover sw 6 )
             : *McpState st # *McpState ( nurl_alloc Z McpState )
@@ -1012,6 +1130,8 @@ $ `buildwasm.nu`
     ( nurl_print `  --mcp-listen HOST:PORT   MCP HTTPS bind    (default 127.0.0.1:8443)\n` )
     ( nurl_print `  --tls-cert FILE --tls-key FILE  PEM cert+key (default: self-signed in ~/.swarm-mcp)\n` )
     ( nurl_print `  --workers N              worker threads   (default 1)\n` )
+    ( nurl_print `  --gpu                    workers run GPU wasm kernels (--allow-gpu; needs the\n` )
+    ( nurl_print `                           pure-NURL wasmtime as $WASMTIME + an NVIDIA GPU/CUDA)\n` )
     ( nurl_print `  -v, --verbose\n\n` )
     ( nurl_print `Examples:\n` )
     ( nurl_print `  swarm-mcp --token sekret --relay --worker --mcp              # all-in-one node\n` )
@@ -1048,6 +1168,7 @@ $ `buildwasm.nu`
     : String mls ( flag_val `--mcp-listen` `127.0.0.1:8443` )
     : HostPort mhp ( parse_hostport mls `127.0.0.1` 8443 )
     : i vflag ? | ( has_flag `-v` ) ( has_flag `--verbose` ) 1 0
+    : i gpuflag ? ( has_flag `--gpu` ) 1 0
     : i nworkers0 ( flag_int `--workers` 1 )
     : i nworkers ? > nworkers0 0 nworkers0 1
 
@@ -1080,13 +1201,13 @@ $ `buildwasm.nu`
     ? mcp_on { ( nurl_print ` mcp` ) } {}
     ( nurl_print `\n` )
     ? relay_on { ( nurl_print `  relay   listening ` ) ( nurl_print ( string_data . lhp host ) ) ( nurl_print `:` ) ( nurl_print ( nurl_str_int . lhp port ) ) ( nurl_print `\n` ) } {}
-    ? worker_on { ( nurl_print `  worker  x` ) ( nurl_print ( nurl_str_int nworkers ) ) ( nurl_print ` -> relay ` ) ( nurl_print ( string_data drh ) ) ( nurl_print `:` ) ( nurl_print ( nurl_str_int drp ) ) ( nurl_print `\n` ) } {}
+    ? worker_on { ( nurl_print `  worker  x` ) ( nurl_print ( nurl_str_int nworkers ) ) ( nurl_print ? != gpuflag 0 ` (gpu)` `` ) ( nurl_print ` -> relay ` ) ( nurl_print ( string_data drh ) ) ( nurl_print `:` ) ( nurl_print ( nurl_str_int drp ) ) ( nurl_print `\n` ) } {}
     ? mcp_on { ( nurl_print `  mcp     https://` ) ( nurl_print ( string_data . mhp host ) ) ( nurl_print `:` ) ( nurl_print ( nurl_str_int . mhp port ) ) ( nurl_print `/  -> relay ` ) ( nurl_print ( string_data drh ) ) ( nurl_print `:` ) ( nurl_print ( nurl_str_int drp ) ) ( nurl_print `\n` ) } {}
 
     // One closure per role (held alive for the process; worker threads share
     // one closure and each takes a fresh identity inside node_worker).
     : ( @ v ) relay_body \ → v { ( node_relay ( string_data . lhp host ) . lhp port vflag ) }
-    : ( @ v ) worker_body \ → v { ( node_worker ( string_data drh ) drp ( string_data tok ) vflag ) }
+    : ( @ v ) worker_body \ → v { ( node_worker ( string_data drh ) drp ( string_data tok ) vflag gpuflag ) }
     : ( @ v ) mcp_body \ → v { ( node_mcp ( string_data drh ) drp ( string_data . mhp host ) . mhp port ( string_data certp ) ( string_data keyp ) ( string_data tok ) ) }
 
     : ( Vec s ) ths ( vec_new [s] )

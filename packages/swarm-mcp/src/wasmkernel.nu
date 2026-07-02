@@ -37,6 +37,11 @@ $ `token.nu`
 
 @ kind_wasm → i { ^ 2 }
 
+// GPU wasm chunks are a SEPARATE job kind, routed on the GPU capability ring
+// (dist/job job_set_ring): only --gpu workers own these keys, and only they
+// register this handler — a non-GPU worker can never receive (or garble) one.
+@ kind_wasm_gpu → i { ^ 3 }
+
 @ wasm_chunk_payload i lo i hi ( Vec u ) wasm → ( Vec u ) {
     : ( Vec u ) b ( vec_new [u] )
     ( bytes_push_u64_be b # u64 lo )
@@ -81,11 +86,17 @@ $ `token.nu`
 // Bytecode-Alliance wasmtime works equally well.
 @ __wasmtime → String { ^ ( env_var_or `WASMTIME` `wasmtime` ) }
 
-// Run a cached module over [lo, hi); returns the printed partial (0 on any
-// failure — a broken module can't take a worker down).
-@ __wasm_run String path i lo i hi → i {
+// Run a cached module over [lo, hi). ok=1 iff the runtime ran the module to a
+// zero exit — a failed chunk (missing wasmtime, module trap, GPU error path
+// exiting non-zero) is REPORTED, not folded into the reduce as a silent zero.
+// allow_gpu≠0 passes --allow-gpu so the module's env imports (CUDA/NVRTC)
+// resolve to real hardware — this needs the pure-NURL packages/wasmtime.
+: WasmRun { i ok i value }
+
+@ __wasm_run String path i lo i hi i allow_gpu → WasmRun {
     : ( Vec s ) args ( vec_new [s] )
     ( vec_push [s] args `run` )
+    ? != allow_gpu 0 { ( vec_push [s] args `--allow-gpu` ) } {}
     ( vec_push [s] args ( string_data path ) )
     : s los ( nurl_str_int lo )
     : s his ( nurl_str_int hi )
@@ -93,28 +104,30 @@ $ `token.nu`
     ( vec_push [s] args his )
     : String wt ( __wasmtime )
     : ~ i v 0
+    : ~ i ok 0
     ?? ( process_run ( string_data wt ) args `` ) {
-        T out → { ? == ( output_exit_code out ) 0 { = v ( nurl_str_to_int ( output_stdout out ) ) } {} ( output_free out ) }
+        T out → { ? == ( output_exit_code out ) 0 { = ok 1 = v ( nurl_str_to_int ( output_stdout out ) ) } {} ( output_free out ) }
         F e → {}
     }
     ( string_free wt )
     ( vec_free [s] args )
-    ^ v
+    ^ @ WasmRun { ok v }
 }
 
 // The worker handler for a wasm chunk: verify the cluster HMAC tag, cache the
 // module by content hash, run it under wasmtime, return the partial tagged for
 // the coordinator. An untrusted/forged payload yields a tagged zero — a
 // stranger can't make a worker fetch-and-run an arbitrary module. `key` is the
-// cluster HMAC key (token_key), captured by the handler closure.
-@ wasm_handler ( Vec u ) key → ( @ ( Vec u ) ( Vec u ) ) {
+// cluster HMAC key (token_key), captured by the handler closure. allow_gpu≠0
+// builds the kind_wasm_gpu variant: modules run with GPU host imports live —
+// only a worker started with --gpu registers that one.
+@ wasm_handler ( Vec u ) key i allow_gpu → ( @ ( Vec u ) ( Vec u ) ) {
     ^ \ ( Vec u ) p → ( Vec u ) {
         : ~ i partial 0
-        : ~ b ok F
+        : ~ i run_ok 0
         ?? ( token_untag key p ) {
             F → {}
             T body → {
-                = ok T
                 : i lo ?? ( bytes_read_u64_be body 0 ) { T x → # i x F → 0 }
                 : i hi ?? ( bytes_read_u64_be body 8 ) { T x → # i x F → 0 }
                 : ( Vec u ) wasm ( bytes_slice body 16 ( vec_len [u] body ) )
@@ -123,12 +136,18 @@ $ `token.nu`
                 ? ! ( file_exists ( string_data path ) ) {
                     ?? ( write_file_bytes ( string_data path ) wasm ) { T _ → {} F _ → {} }
                 } {}
-                = partial ( __wasm_run path lo hi )
+                : WasmRun wr ( __wasm_run path lo hi allow_gpu )
+                = run_ok . wr ok
+                = partial . wr value
                 ( string_free hex ) ( string_free path ) ( vec_free [u] wasm )
                 ( vec_free [u] body )
             }
         }
+        // result wire: [ok:1][partial:8] — the coordinator counts failed
+        // chunks and marks the task instead of silently reducing zeros.
+        // (An untagged/forged payload reports ok=0 too.)
         : ( Vec u ) r ( vec_new [u] )
+        ( vec_push [u] r # u run_ok )
         ( bytes_push_u64_be r # u64 partial )
         : ( Vec u ) out ( token_tag key r )
         ( vec_free [u] r )
