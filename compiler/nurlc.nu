@@ -704,6 +704,13 @@
 // unaffected). All borrowck_* state below is untouched when the flag
 // is 0.
 : ~ i g_borrowck 1  // 0 when --no-borrowck passed on the CLI
+// g_ffi_host_imports is 1 when `--ffi-host-imports` is passed: external
+// `&`-FFI libraries are then satisfied by the RUN-TIME host (wasm imports
+// resolved by the embedder) rather than by a native link line, so the
+// build-time `stdlib/runtime.<lib>` sentinel gate is skipped. Set by the
+// wasm build path (nurlapi) — a wasm module's undefined FFI symbols become
+// imports the host runtime (e.g. packages/wasmtime) provides.
+: ~ i g_ffi_host_imports 0
 // `--strict-borrowck` (off by default) enables two additional checks:
 // (1) aliased mutation through `. obj field` arguments at the same
 // call site — a generalisation of the bare-identifier-only check, and
@@ -5087,6 +5094,53 @@
             = at ( variadic_promoted_type at )
         }
         {}
+        // FFI arg width coercion (fixed positions only; vararg positions are
+        // promoted above). If the callee is an FFI symbol and this argument's
+        // integer width differs from the declared parameter type, emit the
+        // trunc/sext so the emitted call type matches the `declare` — required
+        // for a correct wasm import (see gen_ffi_decl's `ptypes` note).
+        ? ! & is_variadic >= arg_idx fixed_count {
+            : s __ffp ( nurl_sym_get syms ( nurl_str_cat fname `__ffi_params` ) )
+            ? != 0 ( nurl_str_len __ffp ) {
+                : s __want ( __nth_sep __ffp arg_idx )
+                : i __ww ( int_width __want )
+                : i __hw ( int_width at )
+                : b __wp ( is_ptr_ty __want )
+                : b __hp ( is_ptr_ty at )
+                ? & != 0 ( nurl_str_len __want ) ! ( seq at __want ) {
+                    ? & & > __ww 0 > __hw 0 != __ww __hw {
+                        // int → narrower/wider int: trunc / sext
+                        : s __nv ( nurl_cg_reg cg )
+                        ( nurl_print `  ` ) ( nurl_print __nv )
+                        ( nurl_print ? > __hw __ww ` = trunc ` ` = sext ` )
+                        ( nurl_print at ) ( nurl_print ` ` ) ( nurl_print av )
+                        ( nurl_print ` to ` ) ( nurl_print __want ) ( nurl_print `\n` )
+                        = av __nv = at __want
+                    } {
+                        ? & __wp > __hw 0 {
+                            // integer arg (e.g. a bare `0` / a handle held as i64)
+                            // to a pointer parameter: inttoptr. A wasm call
+                            // otherwise needs a function-signature bitcast, which
+                            // is invalid → wasm-ld emits a trapping stub.
+                            : s __nv ( nurl_cg_reg cg )
+                            ( nurl_print `  ` ) ( nurl_print __nv )
+                            ( nurl_print ` = inttoptr ` ) ( nurl_print at ) ( nurl_print ` ` ) ( nurl_print av )
+                            ( nurl_print ` to ` ) ( nurl_print __want ) ( nurl_print `\n` )
+                            = av __nv = at __want
+                        } {
+                            ? & > __ww 0 __hp {
+                                // pointer arg to an integer parameter: ptrtoint
+                                : s __nv ( nurl_cg_reg cg )
+                                ( nurl_print `  ` ) ( nurl_print __nv )
+                                ( nurl_print ` = ptrtoint ` ) ( nurl_print at ) ( nurl_print ` ` ) ( nurl_print av )
+                                ( nurl_print ` to ` ) ( nurl_print __want ) ( nurl_print `\n` )
+                                = av __nv = at __want
+                            } {}
+                        }
+                    }
+                } {}
+            } {}
+        } {}
         ? & & != 0 g_auto_drop_strings
         ( seq at `i8*` )
         ( seq ( nurl_sym_get syms `__last_call_ret_owned__` ) `str` )
@@ -12311,6 +12365,15 @@
 // `{ T*, i64 }`, result, nested closure) contains its own spaces and
 // commas — `str_first_word` would truncate it at the first space. ';'
 // never appears in an LLVM type string, so it is a safe field delimiter.
+// The n-th (0-based) element of a `;`-separated list, or `` if out of range.
+@ __nth_sep s list i n → s {
+    : ~ s rest list
+    : ~ i k 0
+    ~ < k n { = rest ( seplist_rest rest ) = k + k 1 }
+    ? == 0 ( nurl_str_len rest ) { ^ `` } {}
+    ^ ( seplist_first rest )
+}
+
 @ seplist_first s str → s {
     : i n ( nurl_str_len str )
     : ~ i i 0
@@ -14691,6 +14754,9 @@
 // `libc` / `m` / `pthread` / `dl` are always linked (default link
 // line in `build.sh` / `run_tests.sh`) and skip the check.
 @ __ffi_lib_check i lex s lib → v {
+    // Host-imports mode (wasm): external FFI libs are resolved by the run-time
+    // embedder as imports, not linked natively — skip the native sentinel gate.
+    ? != g_ffi_host_imports 0 { ^ v } {}
     : i llen ( nurl_str_len lib )
     ? > llen 0 {
         // Strip a leading `lib` prefix if present (`libcurl` → `curl`).
@@ -14753,6 +14819,14 @@
     ( lint_note_def fname )
     ( nurl_lex_advance lex )
     : ~ s params_str ``
+    // `;`-joined LLVM param types, consulted by gen_call to coerce each
+    // argument to its declared FFI parameter width. Native LLVM silently
+    // tolerates a width-mismatched call arg (e.g. an i64 integer literal
+    // passed to an i32 parameter — high bits ignored in the ABI register),
+    // but wasm is strict: the call's inferred function type then differs
+    // from the import's declared type and wasm-ld replaces the callee with
+    // an `unreachable` stub. Coercing at the call site fixes both targets.
+    : ~ s ptypes ``
     : ~ i pct 0
     ~ & != ( nurl_lex_type lex ) TT_ARROW != ( nurl_lex_type lex ) TT_EOF {
         ? == ( nurl_lex_type lex ) TT_ELLIPSIS
@@ -14772,8 +14846,9 @@
             ( check_type_known lex syms lt `an FFI parameter type` )
             ? ( is_ident_tok ( nurl_lex_type lex ) ) { ( nurl_lex_advance lex ) } {}
             ? == pct 0
-            { = params_str lt }
-            { = params_str ( nurl_str_cat params_str ( nurl_str_cat `, ` lt ) ) }
+            { = params_str lt = ptypes lt }
+            { = params_str ( nurl_str_cat params_str ( nurl_str_cat `, ` lt ) )
+                = ptypes ( nurl_str_cat3 ptypes `;` lt ) }
             = pct + pct 1
         }
     }
@@ -14788,6 +14863,8 @@
     // by vis_record_fn, which FFI decls deliberately do not get
     // (FFI symbols are linker-level ABI globals, not NURL sources).
     ( nurl_sym_def syms ( nurl_str_cat fname `__ffi` ) `1` )
+    // Per-parameter LLVM types for call-site width coercion (see `ptypes`).
+    ( nurl_sym_def syms ( nurl_str_cat fname `__ffi_params` ) ptypes )
     // emit_header already emits `declare` lines for a small set of libc
     // symbols (malloc, free, puts, printf). If the user FFI-declares any of
     // those, re-emitting the same `declare` would trigger LLVM's "invalid
@@ -17649,12 +17726,29 @@
                         ? ( is_ident_tok ( nurl_lex_type lex ) )
                         { : s fname ( nurl_lex_val lex )
                             ( nurl_lex_advance lex )
+                            // Parse the parameter types here too (not just skip
+                            // tokens) so __ffi_params is registered in the
+                            // pre-pass — a FORWARD call to this FFI symbol (the
+                            // callee declared LATER in the same file) must still
+                            // get its args width-coerced at the call site, or the
+                            // wasm call type won't match the declare. Mirrors
+                            // gen_ffi_decl's param loop exactly to stay in sync.
+                            : ~ s ptypes ``
+                            : ~ i pct 0
                             ~ & != ( nurl_lex_type lex ) TT_ARROW != ( nurl_lex_type lex ) TT_EOF
-                            { ( nurl_lex_advance lex ) }
+                            { ? == ( nurl_lex_type lex ) TT_ELLIPSIS
+                                { ( nurl_lex_advance lex ) }
+                                { : s lt ( parse_type lex )
+                                    ? ( is_ident_tok ( nurl_lex_type lex ) ) { ( nurl_lex_advance lex ) } {}
+                                    = ptypes ? == pct 0 lt ( nurl_str_cat3 ptypes `;` lt )
+                                    = pct + pct 1
+                                }
+                            }
                             ? == ( nurl_lex_type lex ) TT_ARROW
                             { ( nurl_lex_advance lex )
                                 : s ret_ty ( parse_type lex )
                                 ( nurl_sym_def syms fname ret_ty )
+                                ( nurl_sym_def syms ( nurl_str_cat fname `__ffi_params` ) ptypes )
                             }
                             {}
                         }
@@ -17823,11 +17917,13 @@
                         { = g_borrowck 0 }
                         { ? ( seq a `--strict-borrowck` )
                             { = g_borrowck 1 = g_strict_borrowck 1 }
-                            { = path a } } } } } }
+                            { ? ( seq a `--ffi-host-imports` )
+                                { = g_ffi_host_imports 1 }
+                                { = path a } } } } } } }
         = ai + ai 1
     }
     ? == 0 ( nurl_str_len path )
-    { ( nurl_eprintln `usage: nurlc [--version] [--g] [--lint] [--no-borrowck | --strict-borrowck] <file.nu>` ) ( nurl_exit 1 ) }
+    { ( nurl_eprintln `usage: nurlc [--version] [--g] [--lint] [--no-borrowck | --strict-borrowck] [--ffi-host-imports] <file.nu>` ) ( nurl_exit 1 ) }
     {}
     ? != g_lint 0 { ( lint_init path ) } {}
     : s src ( nurl_read_file path )

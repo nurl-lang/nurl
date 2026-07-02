@@ -24,25 +24,29 @@ $ `stdlib/core/string.nu`
 & `cuda` @ cuDeviceGet *u device i32 ordinal → i32
 & `cuda` @ cuDeviceGetName *u name i32 len i32 dev → i32
 & `cuda` @ cuCtxCreate *u pctx i32 flags i32 dev → i32
-& `cuda` @ cuCtxDestroy *u ctx → i32
+& `cuda` @ cuCtxDestroy i ctx → i32
 & `cuda` @ cuCtxSynchronize → i32
 & `cuda` @ cuModuleLoadData *u module *u image → i32
-& `cuda` @ cuModuleUnload *u module → i32
-& `cuda` @ cuModuleGetFunction *u hfunc *u hmod s name → i32
+& `cuda` @ cuModuleUnload i module → i32
+& `cuda` @ cuModuleGetFunction *u hfunc i hmod s name → i32
 & `cuda` @ cuMemAlloc *u dptr i bytesize → i32
 & `cuda` @ cuMemFree i dptr → i32
 & `cuda` @ cuMemcpyHtoD i dst *u src i n → i32
 & `cuda` @ cuMemcpyDtoH *u dst i src i n → i32
-& `cuda` @ cuLaunchKernel *u f i32 gx i32 gy i32 gz i32 bx i32 by i32 bz i32 sh *u stream *u params *u extra → i32
+& `cuda` @ cuLaunchKernel i f i32 gx i32 gy i32 gz i32 bx i32 by i32 bz i32 sh i stream *u params i extra → i32
 & `cuda` @ cuGetErrorName i32 err *u pstr → i32
 
 // ── NVRTC (runtime CUDA-C → PTX) ──────────────────────────────────
+// nvrtcCreateProgram / nvrtcDestroyProgram take nvrtcProgram* (a pointer to
+// the handle slot) → *u out-slot offset. The rest take the nvrtcProgram
+// handle BY VALUE → i (i64), portable across native/wasm (see the driver
+// handles above); their remaining *u are genuine out/data offsets.
 & `nvrtc` @ nvrtcCreateProgram *u prog s src s name i32 nh *u headers *u incs → i32
-& `nvrtc` @ nvrtcCompileProgram *u prog i32 nopt *u opts → i32
-& `nvrtc` @ nvrtcGetPTXSize *u prog *u sz → i32
-& `nvrtc` @ nvrtcGetPTX *u prog *u ptx → i32
-& `nvrtc` @ nvrtcGetProgramLogSize *u prog *u sz → i32
-& `nvrtc` @ nvrtcGetProgramLog *u prog *u log → i32
+& `nvrtc` @ nvrtcCompileProgram i prog i32 nopt *u opts → i32
+& `nvrtc` @ nvrtcGetPTXSize i prog *u sz → i32
+& `nvrtc` @ nvrtcGetPTX i prog *u ptx → i32
+& `nvrtc` @ nvrtcGetProgramLogSize i prog *u sz → i32
+& `nvrtc` @ nvrtcGetProgramLog i prog *u log → i32
 & `nvrtc` @ nvrtcDestroyProgram *u prog → i32
 
 // ── typed 4-byte buffer accessors (runtime.c, always linked) ──────
@@ -50,8 +54,12 @@ $ `stdlib/core/string.nu`
 // nurl_peek/poke can't address them at their natural stride.
 & `c` @ nurl_peek_f32 *u base i idx → f
 & `c` @ nurl_poke_f32 *u base i idx f val → v
-& `c` @ nurl_peek_i32 *u base i idx → i
-& `c` @ nurl_poke_i32 *u base i idx i val → v
+// nurl_peek_i32 returns a C `int` and nurl_poke_i32 takes a C `int` value —
+// both 32-bit. Declaring them with i64 (`i`) worked on LP64 native (the ABI
+// register ignores the high bits) but is a hard signature mismatch on wasm,
+// where wasm-ld then replaces the caller with an `unreachable` stub.
+& `c` @ nurl_peek_i32 *u base i idx → i32
+& `c` @ nurl_poke_i32 *u base i idx i32 val → v
 
 // ── out-param helper ──────────────────────────────────────────────
 // Allocate a zeroed 8-byte slot for a `*` out-parameter. Zeroing matters
@@ -95,7 +103,7 @@ $ `stdlib/core/string.nu`
     ^ ( nurl_peek s 0 )
 }
 
-@ cuda_ctx_destroy i ctx → i { ^ # i ( cuCtxDestroy # *u ctx ) }
+@ cuda_ctx_destroy i ctx → i { ^ # i ( cuCtxDestroy ctx ) }
 
 @ cuda_sync → i { ^ # i ( cuCtxSynchronize ) }
 
@@ -108,7 +116,7 @@ $ `stdlib/core/string.nu`
         ( nurl_eprint `[gpu/cuda] nvrtcCreateProgram failed\n` )
         ^ # *u 0
     } {}
-    : *u prog # *u ( nurl_peek ps 0 )
+    : i prog ( nurl_peek ps 0 )
     : i cr # i ( nvrtcCompileProgram prog 0 0 )
     ? != cr 0 {
         : *u ls ( __outslot )
@@ -138,11 +146,11 @@ $ `stdlib/core/string.nu`
     ^ ( nurl_peek s 0 )
 }
 
-@ cuda_module_unload i module → i { ^ # i ( cuModuleUnload # *u module ) }
+@ cuda_module_unload i module → i { ^ # i ( cuModuleUnload module ) }
 
 @ cuda_function i module s name → i {
     : *u s ( __outslot )
-    ? != # i ( cuModuleGetFunction s # *u module name ) 0 { ^ 0 } {}
+    ? != # i ( cuModuleGetFunction s module name ) 0 { ^ 0 } {}
     ^ ( nurl_peek s 0 )
 }
 
@@ -163,7 +171,7 @@ $ `stdlib/core/string.nu`
 // `params` is a void** array of pointers to the argument values (built
 // by gpu.nu from a Vec of i64-encoded args). 1-D grid/block for now.
 @ cuda_launch i func i grid i block *u params → i {
-    ^ # i ( cuLaunchKernel # *u func # i32 grid 1 1 # i32 block 1 1 0 0 params 0 )
+    ^ # i ( cuLaunchKernel func # i32 grid 1 1 # i32 block 1 1 0 0 params 0 )
 }
 
 // CUresult code → driver error-name string (e.g. "CUDA_ERROR_INVALID_VALUE").

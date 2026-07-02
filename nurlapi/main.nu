@@ -228,7 +228,14 @@ $ `nurlapi/pptws.nu`
     // fread/fwrite/fseek/ftell/lseek added 2026-05-27 — find_clone /
     // csv_demo / claude_agent stdio path. wasi-libc has all of these
     // with i32-flavored size_t/long; NURL emits the i64 variants.
-    : s list `malloc:p:s,calloc:p:ss,realloc:p:ps,puts:i:p,putchar:i:i,getchar:i:,strlen:s:p,strcmp:i:pp,strncmp:i:pps,strcpy:p:pp,strncpy:p:pps,strcat:p:pp,strdup:p:p,memcpy:p:pps,memmove:p:pps,memset:p:pis,memcmp:i:pps,memchr:p:pis,memmem:p:psps,strchr:p:pi,strrchr:p:pi,atoi:i:p,abs:i:i,exit:v:i,rand:i:,srand:v:s,system:i:p,write:i:ips,read:i:ips,open:i:pii,close:i:i,getcwd:p:ps,fread:s:psps,fwrite:s:psps,fseek:i:pii,ftell:i:p,lseek:i:iii`
+    // NOTE: lseek is deliberately NOT shimmed. Its offset and return are
+    // off_t, which is 64-bit on wasm32-wasi too — so NURL's i64 declaration
+    // (posix.nu: `lseek i32 fd i offset i32 whence → i`) already matches
+    // wasi-libc. Narrowing it here produced a signature mismatch and an
+    // `unreachable` stub (breaking every fs.nu file-size probe on wasm).
+    // Only libc functions whose wasm32 ABI genuinely uses a 32-bit long /
+    // size_t where NURL emits i64 belong below (fseek's `long`, ftell, …).
+    : s list `malloc:p:s,calloc:p:ss,realloc:p:ps,puts:i:p,putchar:i:i,getchar:i:,strlen:s:p,strcmp:i:pp,strncmp:i:pps,strcpy:p:pp,strncpy:p:pps,strcat:p:pp,strdup:p:p,memcpy:p:pps,memmove:p:pps,memset:p:pis,memcmp:i:pps,memchr:p:pis,memmem:p:psps,strchr:p:pi,strrchr:p:pi,atoi:i:p,abs:i:i,exit:v:i,rand:i:,srand:v:s,system:i:p,write:i:ips,read:i:ips,open:i:pii,close:i:i,getcwd:p:ps,fread:s:pssp,fwrite:s:pssp,fseek:i:piw,ftell:s:p`
     : String slist ( string_from list )
     : ( Vec String ) entries ( string_split slist `,` )
 
@@ -348,15 +355,20 @@ $ `nurlapi/pptws.nu`
                                 // → `unreachable` trap; nurl_str_eq→strcmp hits this.)
                                 ( string_push_str shims ? == r_char 112 `i8*` ? == r_char 118 `void` ? == r_char 105 `i32` `i64` )
                                 ( string_push_str shims ` @__nurl_` ) ( string_push_str shims ( string_data name ) ) ( string_push_str shims `_shim(` )
-                                : ~ i k2 0 ~ < k2 ( string_len pms ) { ? > k2 0 { ( string_push_str shims `, ` ) } {} : i p ( string_get pms k2 ) ( string_push_str shims ? == p 112 `i8* %a` `i64 %a` ) ( string_push_int shims k2 ) = k2 + k2 1 }
+                                // Param char: 'p' = i8* (pointer, pass through), 'w' = i32
+                                // (a param nurlc already emits as i32 — e.g. fseek's `whence`
+                                // — so the wrapper must accept i32, NOT i64, or the call type
+                                // won't match and wasm-ld stubs it), any other = i64 narrowed
+                                // to i32 for the wasi call.
+                                : ~ i k2 0 ~ < k2 ( string_len pms ) { ? > k2 0 { ( string_push_str shims `, ` ) } {} : i p ( string_get pms k2 ) ( string_push_str shims ? == p 112 `i8* %a` ? == p 119 `i32 %a` `i64 %a` ) ( string_push_int shims k2 ) = k2 + k2 1 }
                                 ( string_push_str shims `) {\n` )
-                                : ~ i k3 0 ~ < k3 ( string_len pms ) { : i p ( string_get pms k3 ) ? != p 112 { ( string_push_str shims `  %t` ) ( string_push_int shims k3 ) ( string_push_str shims ` = trunc i64 %a` ) ( string_push_int shims k3 ) ( string_push_str shims ` to i32\n` ) } {} = k3 + k3 1 }
+                                : ~ i k3 0 ~ < k3 ( string_len pms ) { : i p ( string_get pms k3 ) ? & != p 112 != p 119 { ( string_push_str shims `  %t` ) ( string_push_int shims k3 ) ( string_push_str shims ` = trunc i64 %a` ) ( string_push_int shims k3 ) ( string_push_str shims ` to i32\n` ) } {} = k3 + k3 1 }
                                 ( string_push_str shims `  %r = tail call ` )
                                 ( string_push_str shims ? == r_char 112 `i8*` ? == r_char 118 `void` `i32` )
                                 ( string_push_str shims ` @` ) ( string_push_str shims ( string_data name ) ) ( string_push_char shims 40 )
                                 : ~ i k4 0 ~ < k4 ( string_len pms ) {
                                     ? > k4 0 { ( string_push_str shims `, ` ) } {}
-                                    : i p ( string_get pms k4 ) ? == p 112 { ( string_push_str shims `i8* %a` ) ( string_push_int shims k4 ) } { ( string_push_str shims `i32 %t` ) ( string_push_int shims k4 ) }
+                                    : i p ( string_get pms k4 ) ? == p 112 { ( string_push_str shims `i8* %a` ) ( string_push_int shims k4 ) } { ? == p 119 { ( string_push_str shims `i32 %a` ) ( string_push_int shims k4 ) } { ( string_push_str shims `i32 %t` ) ( string_push_int shims k4 ) } }
                                     = k4 + k4 1
                                 }
                                 ( string_push_str shims `)\n` )
@@ -898,14 +910,52 @@ s combined_stdout s combined_stderr → v {
                     : b uses_canvas >= ( nurl_str_find source `stdlib/ext/canvas.nu` ) 0
                     : b uses_audio >= ( nurl_str_find source `stdlib/ext/audio.nu` ) 0
 
-                    : ( Vec s ) nurlc_args ( vec_new [s] ) ( vec_push [s] nurlc_args ( string_data nu_path ) )
-                    : !Output ProcessErr nurlc_res ( process_run ( string_data ( get_nurlc_path ) ) nurlc_args `` ) ( vec_free [s] nurlc_args )
-
-                    ?? nurlc_res {
-                        T n_out → {
-                            : i n_rc ( output_exit_code n_out )
-                            ? ( output_success n_out ) {
-                                : String ir ( string_from ( output_stdout n_out ) )
+                    // --ffi-host-imports: external `&`-FFI libraries (e.g. the
+                    // GPU package's cuda/nvrtc symbols) are resolved as wasm
+                    // IMPORTS by the host runtime, not linked natively — so the
+                    // native build-time sentinel gate must be skipped here.
+                    // The IR source is either a caller-supplied `ir` field
+                    // (a host nurlc already resolved the package's $-imports —
+                    // the only way to wasm-build a MULTI-FILE package, whose deps
+                    // don't exist in this container) or produced by running
+                    // nurlc on the single uploaded source. The rewrite + link
+                    // tail is shared. --ffi-host-imports skips the native FFI
+                    // sentinel gate (cuda/nvrtc become wasm imports).
+                    : s provided_ir ( get_common_json root `ir` `` )
+                    : ~ String ir ( string_new )
+                    : ~ String n_se_s ( string_new )
+                    : ~ i n_rc 0
+                    : ~ b nok F
+                    : ~ b proc_ok T
+                    ? != 0 ( nurl_str_len provided_ir ) {
+                        ( string_free ir ) = ir ( string_from provided_ir ) = nok T
+                    } {
+                        : ( Vec s ) nurlc_args ( vec_new [s] ) ( vec_push [s] nurlc_args ( string_data nu_path ) ) ( vec_push [s] nurlc_args `--ffi-host-imports` )
+                        : !Output ProcessErr nurlc_res ( process_run ( string_data ( get_nurlc_path ) ) nurlc_args `` ) ( vec_free [s] nurlc_args )
+                        ?? nurlc_res {
+                            T n_out → {
+                                = n_rc ( output_exit_code n_out )
+                                = nok ( output_success n_out )
+                                ( string_free n_se_s ) = n_se_s ( string_from ( output_stderr n_out ) )
+                                ? nok { ( string_free ir ) = ir ( string_from ( output_stdout n_out ) ) } {}
+                                ( output_free n_out )
+                            }
+                            F _ → { = proc_ok F }
+                        }
+                    }
+                    ? ! proc_ok {
+                        ( string_free ir ) ( string_free n_se_s ) ( json_free root )
+                        ( string_free nu_path ) ( string_free ll_path ) ( string_free wasm_path )
+                        ( string_free build_id ) ( string_free build_dir ) ( string_free body_str )
+                        ^ ( response_text 500 `{"error":"nurlc process failed"}\n` )
+                    } {}
+                    ? ! nok {
+                        : HttpResponse hr_err ( nurlc_failure_response filename n_rc ( string_data n_se_s ) 0 )
+                        ( string_free ir ) ( string_free n_se_s ) ( json_free root )
+                        ( string_free nu_path ) ( string_free ll_path ) ( string_free wasm_path )
+                        ( string_free build_id ) ( string_free build_dir ) ( string_free body_str )
+                        ^ hr_err
+                    } {}
                                 : String ir_fixed ( prepare_ir_for_wasi ir )
                                 ( write_file ( string_data ll_path ) ( string_data ir_fixed ) )
                                 ( string_free ir )
@@ -934,11 +984,16 @@ s combined_stdout s combined_stderr → v {
                                 // compiling >150-function programs). --no-gc-sections keeps the
                                 // table stable so indices stay valid.
                                 ( vec_push [s] clang_args `-Wl,--no-gc-sections` )
+                                // Undefined symbols become wasm IMPORTS the host
+                                // runtime resolves (WASI, and — via the GPU
+                                // package's cuda/nvrtc FFI — a CUDA host bridge).
+                                // A genuinely missing symbol then traps at run
+                                // time with its name, under our wasmtime.
+                                ( vec_push [s] clang_args `-Wl,--allow-undefined` )
                                 ( vec_push [s] clang_args ( string_data ll_path ) )
                                 ( vec_push [s] clang_args ( string_data ( get_runtime_wasm_o ) ) )
                                 ? uses_canvas { ( vec_push [s] clang_args ( string_data ( get_canvas_wasm_o ) ) ) } {}
                                 ? uses_audio { ( vec_push [s] clang_args ( string_data ( get_audio_wasm_o ) ) ) } {}
-                                ? | uses_canvas uses_audio { ( vec_push [s] clang_args `-Wl,--allow-undefined` ) } {}
                                 ( vec_push [s] clang_args `-o` ) ( vec_push [s] clang_args ( string_data wasm_path ) ) ( vec_push [s] clang_args `-lm` )
 
                                 : !Output ProcessErr clang_res ( process_run ( string_data ( get_wasi_clang ) ) clang_args `` ) ( vec_free [s] clang_args )
@@ -947,7 +1002,7 @@ s combined_stdout s combined_stderr → v {
                                     T c_out → {
                                         : ~ i c_rc ( output_exit_code c_out )
                                         : s c_se ( output_stderr c_out )
-                                        : s n_se ( output_stderr n_out )
+                                        : s n_se ( string_data n_se_s )
                                         : String combined_stderr ( combine_stderr n_se c_se )
 
                                         // ── Asyncify wrap for canvas programs ──────────────────
@@ -1038,21 +1093,13 @@ s combined_stdout s combined_stderr → v {
                                         ( response_set_header hr `Content-Type` `application/json` )
 
                                         ( string_free b64 ) ( string_free wasm_url ) ( string_free combined_stderr ) ( json_free res ) ( string_free ir_fixed )
-                                        ( output_free n_out ) ( output_free c_out ) ( json_free root )
+                                        ( string_free n_se_s ) ( output_free c_out ) ( json_free root )
                                         ( string_free nu_path ) ( string_free ll_name ) ( string_free ll_path ) ( string_free wasm_name ) ( string_free wasm_path )
                                         ( string_free build_id ) ( string_free build_dir ) ( string_free body_str ) ( string_free body )
                                         ^ hr
                                     }
-                                    F ce → { ( string_free ir_fixed ) ^ ( response_text 500 `{"error":"wasi-clang failed"}\n` ) }
+                                    F ce → { ( string_free ir_fixed ) ( string_free n_se_s ) ^ ( response_text 500 `{"error":"wasi-clang failed"}\n` ) }
                                 }
-                            } {
-                                : HttpResponse hr_err ( nurlc_failure_response filename ( output_exit_code n_out ) ( output_stderr n_out ) ( nurl_str_len ( output_stdout n_out ) ) )
-                                ( output_free n_out ) ( json_free root ) ( string_free nu_path ) ( string_free ll_path ) ( string_free wasm_path ) ( string_free build_id ) ( string_free build_dir ) ( string_free body_str )
-                                ^ hr_err
-                            }
-                        }
-                        F _ → { ^ ( response_text 500 `{"error":"nurlc failed"}\n` ) }
-                    }
                 }
                 F _ → { ^ ( response_text 500 `{"error":"could not create build dir"}\n` ) }
             }

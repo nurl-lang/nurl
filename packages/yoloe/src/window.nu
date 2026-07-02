@@ -29,8 +29,8 @@ $ `image.nu`
 & `X11` @ XInternAtom *u dpy s name i only → i
 & `X11` @ XSetWMProtocols *u dpy i win *u protocols i count → i
 & `X11` @ XCloseDisplay *u dpy → i
-& `c` @ nurl_poke_i32 *u base i idx i val → v
-& `c` @ nurl_peek_i32 *u base i idx → i
+& `c` @ nurl_poke_i32 *u base i idx i32 val → v
+& `c` @ nurl_peek_i32 *u base i idx → i32
 
 // Pointers (Display*, GC, XImage*, data) carried as i64; w/h the frame size.
 : XWin { i dpy  i win  i gc  i img  i data  i w  i h  i ok }

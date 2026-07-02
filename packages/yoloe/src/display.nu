@@ -14,8 +14,8 @@ $ `stdlib/core/string.nu`
 $ `image.nu`
 
 & `c` @ ioctl i fd i req *u argp → i
-& `c` @ nurl_poke_i32 *u base i idx i val → v
-& `c` @ nurl_peek_i32 *u base i idx → i
+& `c` @ nurl_poke_i32 *u base i idx i32 val → v
+& `c` @ nurl_peek_i32 *u base i idx → i32
 
 @ __TIOCGWINSZ → i { ^ 21523 }   // 0x5413; struct winsize { u16 row, col, xpx, ypx }
 
