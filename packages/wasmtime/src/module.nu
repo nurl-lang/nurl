@@ -102,6 +102,7 @@ $ `stdlib/std/bytes.nu`
     ( Vec i ) table  // function indices (−1 = empty slot)
     ( Vec s ) imports  // *WImport (imported functions, in index order)
     i num_import_funcs  // imported funcs occupy func indices 0..n-1
+    i start_func  // start-section function index (-1 = none)
     b ok
     ( Vec u ) err
 }
@@ -363,6 +364,7 @@ $ `stdlib/std/bytes.nu`
     = . m table ( vec_new [i] )
     = . m imports ( vec_new [s] )
     = . m num_import_funcs 0
+    = . m start_func -1
     = . m ok T
     = . m err ( vec_new [u] )
     : *Wc c ( wc_new bytes )
@@ -383,9 +385,10 @@ $ `stdlib/std/bytes.nu`
                     ? == id 5 { ( __decode_mem_sec c m ) } {
                         ? == id 6 { ( __decode_global_sec c m ) } {
                             ? == id 7 { ( __decode_export_sec c m ) } {
+                                ? == id 8 { = . m start_func ( wc_uleb c ) } {
                                 ? == id 9 { ( __decode_elem_sec c m ) } {
                                     ? == id 10 { ( __decode_code_sec c m ) } {
-                                        ? == id 11 { ( __decode_data_sec c m ) } {} } } } } } } } } }
+                                        ? == id 11 { ( __decode_data_sec c m ) } {} } } } } } } } } } }
         = . c pos sec_end  // robust against partially-read / skipped sections
     }
     ( wc_free c )
@@ -406,6 +409,46 @@ $ `stdlib/std/bytes.nu`
         = k + k 1
     }
     ^ found
+}
+
+// The *FuncType of any function index — imported (low indices) or defined —
+// as an opaque pointer; #s 0 if out of range.
+@ module_func_type * Module m i fidx → s {
+    ? < fidx 0 { ^ # s 0 } {}
+    : ~ i ti -1
+    ? < fidx . m num_import_funcs {
+        : s wp ?? ( vec_get [s] . m imports fidx ) { T x → x F → # s 0 }
+        ? == # i wp 0 { ^ # s 0 } {}
+        : *WImport w # *WImport wp
+        = ti . w typeidx
+    } {
+        : s fp ?? ( vec_get [s] . m funcs - fidx . m num_import_funcs ) { T x → x F → # s 0 }
+        ? == # i fp 0 { ^ # s 0 } {}
+        : *WFunc f # *WFunc fp
+        = ti . f typeidx
+    }
+    ^ ?? ( vec_get [s] . m types ti ) { T x → x F → # s 0 }
+}
+
+// Structural function-type equality (the call_indirect runtime check): same
+// parameter and result valtypes, in order.
+@ functype_eq * FuncType a * FuncType b → b {
+    : i np ( vec_len [i] . a params )
+    ? != np ( vec_len [i] . b params ) { ^ F } {}
+    : i nr ( vec_len [i] . a results )
+    ? != nr ( vec_len [i] . b results ) { ^ F } {}
+    : ~ b eq T
+    : ~ i k 0
+    ~ & eq < k np {
+        ? != ?? ( vec_get [i] . a params k ) { T x → x F → -1 } ?? ( vec_get [i] . b params k ) { T x → x F → -2 } { = eq F } {}
+        = k + k 1
+    }
+    = k 0
+    ~ & eq < k nr {
+        ? != ?? ( vec_get [i] . a results k ) { T x → x F → -1 } ?? ( vec_get [i] . b results k ) { T x → x F → -2 } { = eq F } {}
+        = k + k 1
+    }
+    ^ eq
 }
 
 @ __name_eq ( Vec u ) nm s want → b {

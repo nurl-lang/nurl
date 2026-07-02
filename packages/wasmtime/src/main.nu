@@ -88,6 +88,7 @@ $ `interp.nu`
                         ( string_free a )
                         = k + k 1
                     }
+                    ( interp_run_start it )
                     ( exec_func it fidx )
                     ? . it trap {
                         ( nurl_print `wasmtime: trap: ` ) ( nurl_print ( string_data ( bytes_to_str . it trapmsg ) ) ) ( nurl_print `\n` )
@@ -161,6 +162,7 @@ $ `interp.nu`
                     ( interp_push_arg it path )
                     : ~ i k prog_start
                     ~ < k argc { : String a ( env_arg k ) ( interp_push_arg it ( string_data a ) ) ( string_free a ) = k + k 1 }
+                    ( interp_run_start it )
                     ( exec_func it fidx )
                     ? . it trap {
                         ( nurl_eprint `wasmtime: trap: ` ) ( nurl_eprintln ( string_data ( bytes_to_str . it trapmsg ) ) )

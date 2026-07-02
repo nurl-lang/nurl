@@ -152,11 +152,18 @@ $ `module.nu`
     ( vec_push [s] . it fds # s f )
 }
 
+// Run the module's start-section function, if any — the final instantiation
+// step, before any export is invoked.
+@ interp_run_start * Interp it → v {
+    : *Module m # *Module . it mod
+    ? >= . m start_func 0 { ( exec_func it . m start_func ) } {}
+}
+
 @ __push * Interp it i v → v { ( vec_push [i] . it vs v ) }
 
 @ __pop * Interp it → i {
     : i n ( vec_len [i] . it vs )
-    ? <= n 0 { = . it trap T ^ 0 } {}
+    ? <= n 0 { ( __trap it `value stack underflow` ) ^ 0 } {}
     : i v ?? ( vec_get [i] . it vs - n 1 ) { T x → x F → 0 }
     ( vec_pop [i] . it vs )
     ^ v
@@ -184,8 +191,8 @@ $ `module.nu`
 // Advance `c` past the immediates of the instruction whose opcode is `op`.
 
 @ __skip_imm * Wc c i op → v {
-    // block / loop / if : 1-byte block type
-    ? | == op 2 | == op 3 == op 4 { ( wc_u8 c ) ^ v } {}
+    // block / loop / if : block type = signed LEB (s33: void / valtype / type index)
+    ? | == op 2 | == op 3 == op 4 { ( wc_sleb c ) ^ v } {}
     // br / br_if / call / local.* / global.* : one uleb
     ? | == op 12 | == op 13 | == op 16 | == op 32 | == op 33 | == op 34 | == op 35 == op 36 { ( wc_uleb c ) ^ v } {}
     // call_indirect : two ulebs
@@ -256,14 +263,62 @@ $ `module.nu`
     ^ result
 }
 
-// Result arity of a block type byte (0x40 void → 0; a valtype → 1).
-@ __bt_arity i bt → i { ^ ? == bt 64 0 1 }
+// Block types are a signed LEB (s33): -64 (0x40) = void, other negatives are a
+// single valtype, non-negative = an index into the type section (multi-value).
+
+// Parameter count of a block type.
+@ __bt_params * Module m i bt → i {
+    ? < bt 0 { ^ 0 } {}
+    : s tp ?? ( vec_get [s] . m types bt ) { T x → x F → # s 0 }
+    ? == # i tp 0 { ^ 0 } {}
+    : *FuncType ft # *FuncType tp
+    ^ ( vec_len [i] . ft params )
+}
+
+// Result count of a block type.
+@ __bt_results * Module m i bt → i {
+    ? == bt -64 { ^ 0 } {}
+    ? < bt 0 { ^ 1 } {}
+    : s tp ?? ( vec_get [s] . m types bt ) { T x → x F → # s 0 }
+    ? == # i tp 0 { ^ 0 } {}
+    : *FuncType ft # *FuncType tp
+    ^ ( vec_len [i] . ft results )
+}
 
 // ── arithmetic helpers ───────────────────────────────────────────
 
-@ __idiv i a i b → i { ^ ? == b 0 0 / a b }
+// Set the trap flag with a message (the uniform way every trap is raised).
+@ __trap * Interp it s msg → v {
+    = . it trap T
+    ( vec_free [u] . it trapmsg )
+    = . it trapmsg ( bytes_from_str msg )
+}
 
-@ __irem i a i b → i { ^ ? == b 0 0 % a b }
+// wasm div/rem semantics: divide-by-zero traps; signed div overflow
+// (minv / −1, where minv = INT32_MIN or INT64_MIN) traps; signed rem by −1 is
+// defined as 0 (also dodging the host SIGFPE on INT_MIN % −1).
+@ __div_s * Interp it i a i b i minv → i {
+    ? == b 0 { ( __trap it `integer divide by zero` ) ^ 0 } {}
+    ? & == a minv == b -1 { ( __trap it `integer overflow` ) ^ 0 } {}
+    ^ / a b
+}
+
+@ __rem_s * Interp it i a i b → i {
+    ? == b 0 { ( __trap it `integer divide by zero` ) ^ 0 } {}
+    ? == b -1 { ^ 0 } {}
+    ^ % a b
+}
+
+// Unsigned variants over already-nonnegative operands (u32 zero-extended).
+@ __div_u * Interp it i a i b → i {
+    ? == b 0 { ( __trap it `integer divide by zero` ) ^ 0 } {}
+    ^ / a b
+}
+
+@ __rem_u * Interp it i a i b → i {
+    ? == b 0 { ( __trap it `integer divide by zero` ) ^ 0 } {}
+    ^ % a b
+}
 
 // ── unsigned helpers (NURL's `/ % >> < …` are signed; wasm needs unsigned) ──
 
@@ -308,11 +363,57 @@ $ `module.nu`
 @ __ctz64 i x → i { ? == x 0 { ^ 64 } {} : ~ i n 0 : ~ i k 0 ~ & < k 64 == 0 & ( __lshr64 x k ) 1 { = n + n 1 = k + k 1 } ^ n }
 @ __popc64 i x → i { : ~ i n 0 : ~ i k 0 ~ < k 64 { = n + n & ( __lshr64 x k ) 1 = k + k 1 } ^ n }
 
+// ── float↔int conversion helpers ─────────────────────────────────
+// NaN tests on the IEEE-754 bit patterns. (NURL's float `!=` lowers to
+// `fcmp one` — ordered — so the x≠x trick cannot see NaN; inspect bits.)
+@ __f64_nan i bits → b { ^ > & bits 9223372036854775807 9218868437227405312 }
+@ __f32_nan i bits → b { ^ > & bits 2147483647 2139095040 }
+
+// 2^63 and 2^64 as f64 (too big for a float literal's integer part).
+@ __f_2p63 → f { ^ ( bits_to_f64 4890909195324358656 ) }
+@ __f_2p64 → f { ^ ( bits_to_f64 4895412794951729152 ) }
+
+// Trapping float→int truncation core (wasm's two distinct traps): NaN →
+// `invalid conversion to integer`; trunc(x) outside [lo, hi) → `integer
+// overflow`. Returns the integral value as f64.
+@ __trunc_ck * Interp it b isnan f x f lo f hi → f {
+    ? isnan { ( __trap it `invalid conversion to integer` ) ^ 0.0 } {}
+    : f t ( trunc x )
+    ? ! & >= t lo < t hi { ( __trap it `integer overflow` ) ^ 0.0 } {}
+    ^ t
+}
+
+// Saturating counterpart (0xfc 0..7): NaN → 0, below lo → imin, at/above hi →
+// imax, else the truncated value. (Targets whose values fit an i64 cell.)
+@ __trunc_sat b isnan f x f lo f hi i imin i imax → i {
+    ? isnan { ^ 0 } {}
+    : f t ( trunc x )
+    ? < t lo { ^ imin } {}
+    ? >= t hi { ^ imax } {}
+    ^ # i t
+}
+
+// An integral f64 in [0, 2^64) → its u64 bit pattern in the i64 cell (values
+// ≥ 2^63 wrap into the negative half; NURL integer add wraps).
+@ __f_to_u64 f t → i {
+    ? >= t ( __f_2p63 ) { ^ + # i - t ( __f_2p63 ) -9223372036854775808 } {}
+    ^ # i t
+}
+
+// Saturating trunc to u64 (needs __f_to_u64 for the in-range conversion).
+@ __trunc_sat_u64 b isnan f x → i {
+    ? isnan { ^ 0 } {}
+    : f t ( trunc x )
+    ? < t 0.0 { ^ 0 } {}
+    ? >= t ( __f_2p64 ) { ^ -1 } {}
+    ^ ( __f_to_u64 t )
+}
+
 // ── linear memory ────────────────────────────────────────────────
 // Read n bytes little-endian from mem[ea]; sign-extend when `signed` and n<8.
 @ __mem_load * Interp it i ea i n i signed → i {
     ? | < ea 0 > + ea n ( vec_len [u] . it mem ) {
-        = . it trap T = . it trapmsg ( bytes_from_str `memory load out of bounds` ) ^ 0
+        ( __trap it `memory load out of bounds` ) ^ 0
     } {}
     : ~ i v 0
     : ~ i k 0
@@ -331,7 +432,7 @@ $ `module.nu`
 // Write the low n bytes of val little-endian to mem[ea].
 @ __mem_store * Interp it i ea i n i val → v {
     ? | < ea 0 > + ea n ( vec_len [u] . it mem ) {
-        = . it trap T = . it trapmsg ( bytes_from_str `memory store out of bounds` ) ^ v
+        ( __trap it `memory store out of bounds` ) ^ v
     } {}
     : ~ i k 0
     ~ < k n {
@@ -340,18 +441,27 @@ $ `module.nu`
     }
 }
 
-@ __mem_grow * Interp it i delta → v {
-    ? <= delta 0 { ^ v } {}
+// Grow linear memory by `delta` pages. Returns the old page count, or −1 when
+// the declared maximum (or the wasm32 hard limit of 65536 pages) would be
+// exceeded — the value memory.grow pushes.
+@ __mem_grow * Interp it i delta → i {
+    : i old . it mem_pages
+    ? == delta 0 { ^ old } {}
+    : *Module m # *Module . it mod
+    : ~ i limit 65536
+    ? & > . m mem_max 0 < . m mem_max limit { = limit . m mem_max } {}
+    ? | < delta 0 > + old delta limit { ^ -1 } {}
     : i add * delta ( __page )
     : ~ i k 0
     ~ < k add { ( vec_push [u] . it mem # u 0 ) = k + k 1 }
-    = . it mem_pages + . it mem_pages delta
+    = . it mem_pages + old delta
+    ^ old
 }
 
 // Execute a memory instruction (0x28..0x40). memarg = align + offset ulebs.
 @ __exec_mem * Interp it * Wc c i op → v {
     ? == op 63 { ( wc_u8 c ) ( __push it . it mem_pages ) ^ v } {}  // memory.size
-    ? == op 64 { ( wc_u8 c ) : i d ( __pop it ) : i old . it mem_pages ( __mem_grow it d ) ( __push it old ) ^ v } {}  // memory.grow
+    ? == op 64 { ( wc_u8 c ) : i d ( __u32 ( __pop it ) ) ( __push it ( __mem_grow it d ) ) ^ v } {}  // memory.grow
     : i align ( wc_uleb c )
     : i off ( wc_uleb c )
     ? & >= op 54 <= op 62 {  // stores: pop value, then addr
@@ -410,20 +520,30 @@ $ `module.nu`
     ^ ?? ( vec_get [s] ctrl ix ) { T x → x F → # s 0 }
 }
 
-// Take branch to label depth k: re-enter a loop, or exit a block past its end.
+// Truncate the value stack to `height`, preserving the top `arity` values (the
+// branch payload: a block's results / a loop's parameters).
+@ __br_keep * Interp it i height i arity → v {
+    : ( Vec i ) kept ( vec_new [i] )
+    : ~ i k 0
+    ~ < k arity { ( vec_push [i] kept ( __pop it ) ) = k + k 1 }
+    ( __vtrunc it height )
+    : ~ i j arity
+    ~ > j 0 { = j - j 1 ( __push it ?? ( vec_get [i] kept j ) { T x → x F → 0 } ) }
+    ( vec_free [i] kept )
+}
+
+// Take branch to label depth k: re-enter a loop (carrying its parameters), or
+// exit a block past its `end` (carrying its results).
 @ __do_branch * Interp it ( Vec s ) ctrl * Wc c i k → v {
     : s tp ( __ctrl_at ctrl k )
-    ? == # i tp 0 { = . it trap T ^ v } {}
+    ? == # i tp 0 { ( __trap it `branch label out of range` ) ^ v } {}
     : *Ctrl target # *Ctrl tp
+    ( __br_keep it . target height . target arity )
     ? == . target is_loop 1 {
-        ( __vtrunc it . target height )
         : ~ i pops k
         ~ > pops 0 { ( __ctrl_pop ctrl ) = pops - pops 1 }
         = . c pos . target start_pc
     } {
-        ? == . target arity 1 {
-            : i rv ( __pop it ) ( __vtrunc it . target height ) ( __push it rv )
-        } { ( __vtrunc it . target height ) }
         : ~ i pops + k 1
         ~ > pops 0 { ( __ctrl_pop ctrl ) = pops - pops 1 }
         = . c pos + . target end_pc 1
@@ -440,11 +560,11 @@ $ `module.nu`
     // Imported functions occupy the low indices → dispatch to the host (WASI).
     ? < fidx . m num_import_funcs {
         : s wp ?? ( vec_get [s] . m imports fidx ) { T x → x F → # s 0 }
-        ? != # i wp 0 { : *WImport w # *WImport wp ( __wasi_dispatch it . w field ) } { = . it trap T }
+        ? != # i wp 0 { : *WImport w # *WImport wp ( __wasi_dispatch it . w field ) } { ( __trap it `bad import index` ) }
         ^ v
     } {}
     : s fp ?? ( vec_get [s] . m funcs - fidx . m num_import_funcs ) { T x → x F → # s 0 }
-    ? == # i fp 0 { = . it trap T ^ v } {}
+    ? == # i fp 0 { ( __trap it `bad function index` ) ^ v } {}
     : *WFunc f # *WFunc fp
     : s tp ?? ( vec_get [s] . m types . f typeidx ) { T x → x F → # s 0 }
     : *FuncType ft # *FuncType tp
@@ -482,21 +602,24 @@ $ `module.nu`
 // stack, locals, control stack and cursor.
 @ __exec_op * Interp it * Module m * Wc c ( Vec s ) ctrl ( Vec i ) locals i op → v {
     // ── control flow ──
-    ? == op 0 { = . it trap T = . it trapmsg ( bytes_from_str `unreachable` ) ^ v } {}  // unreachable
+    ? == op 0 { ( __trap it `unreachable` ) ^ v } {}  // unreachable
     ? == op 1 { ^ v } {}  // nop
     ? | == op 2 == op 3 {  // block / loop
-        : i bt ( wc_u8 c )
+        : i bt ( wc_sleb c )
         : i endp ( __find_end . m code . c pos . c len )
-        ? == op 3 { ( __ctrl_push ctrl 1 . c pos endp ( __vsh it ) ( __bt_arity bt ) ) }
-        { ( __ctrl_push ctrl 0 0 endp ( __vsh it ) ( __bt_arity bt ) ) }
+        // control-frame height = the stack base under the block's parameters;
+        // a branch carries a loop's params back to the top, a block's results out.
+        : i height - ( __vsh it ) ( __bt_params m bt )
+        ? == op 3 { ( __ctrl_push ctrl 1 . c pos endp height ( __bt_params m bt ) ) }
+        { ( __ctrl_push ctrl 0 0 endp height ( __bt_results m bt ) ) }
         ^ v
     } {}
     ? == op 4 {  // if
-        : i bt ( wc_u8 c )
+        : i bt ( wc_sleb c )
         : i endp ( __find_end . m code . c pos . c len )
         : i elsep ( __find_else . m code . c pos . c len )
         : i cond ( __pop it )
-        ( __ctrl_push ctrl 0 0 endp ( __vsh it ) ( __bt_arity bt ) )
+        ( __ctrl_push ctrl 0 0 endp - ( __vsh it ) ( __bt_params m bt ) ( __bt_results m bt ) )
         ? == cond 0 { = . c pos ? >= elsep 0 + elsep 1 endp } {}
         ^ v
     } {}
@@ -525,10 +648,18 @@ $ `module.nu`
         : i tblidx ( wc_uleb c )
         : i ei & ( __pop it ) 4294967295
         ? | < ei 0 >= ei ( vec_len [i] . m table ) {
-            = . it trap T = . it trapmsg ( bytes_from_str `call_indirect: index out of range` ) ^ v
+            ( __trap it `call_indirect: index out of range` ) ^ v
         } {}
         : i fi ?? ( vec_get [i] . m table ei ) { T x → x F → -1 }
-        ? < fi 0 { = . it trap T = . it trapmsg ( bytes_from_str `call_indirect: null table element` ) ^ v } {}
+        ? < fi 0 { ( __trap it `call_indirect: null table element` ) ^ v } {}
+        // runtime type check: the callee's type must structurally equal the
+        // instruction's expected type
+        : s want ?? ( vec_get [s] . m types typeidx ) { T x → x F → # s 0 }
+        : s have ( module_func_type m fi )
+        ? | == # i want 0 == # i have 0 {
+            ( __trap it `call_indirect: bad type index` ) ^ v } {}
+        ? ! ( functype_eq # *FuncType want # *FuncType have ) {
+            ( __trap it `call_indirect: signature mismatch` ) ^ v } {}
         ( exec_func it fi )
         ^ v
     } {}
@@ -590,10 +721,10 @@ $ `module.nu`
     ? == op 106 { ( __push it ( __w32 + a b ) ) ^ v } {}
     ? == op 107 { ( __push it ( __w32 - a b ) ) ^ v } {}
     ? == op 108 { ( __push it ( __w32 * a b ) ) ^ v } {}
-    ? == op 109 { ( __push it ( __w32 ( __idiv ( __w32 a ) ( __w32 b ) ) ) ) ^ v } {}
-    ? == op 110 { ( __push it ( __w32 ( __idiv ( __u32 a ) ( __u32 b ) ) ) ) ^ v } {}  // div_u
-    ? == op 111 { ( __push it ( __w32 ( __irem ( __w32 a ) ( __w32 b ) ) ) ) ^ v } {}
-    ? == op 112 { ( __push it ( __w32 ( __irem ( __u32 a ) ( __u32 b ) ) ) ) ^ v } {}  // rem_u
+    ? == op 109 { ( __push it ( __w32 ( __div_s it ( __w32 a ) ( __w32 b ) -2147483648 ) ) ) ^ v } {}
+    ? == op 110 { ( __push it ( __w32 ( __div_u it ( __u32 a ) ( __u32 b ) ) ) ) ^ v } {}  // div_u
+    ? == op 111 { ( __push it ( __w32 ( __rem_s it ( __w32 a ) ( __w32 b ) ) ) ) ^ v } {}
+    ? == op 112 { ( __push it ( __w32 ( __rem_u it ( __u32 a ) ( __u32 b ) ) ) ) ^ v } {}  // rem_u
     ? == op 113 { ( __push it ( __w32 & a b ) ) ^ v } {}
     ? == op 114 { ( __push it ( __w32 | a b ) ) ^ v } {}
     ? == op 115 { ( __push it ( __w32 ^^ a b ) ) ^ v } {}
@@ -617,10 +748,10 @@ $ `module.nu`
     ? == op 124 { ( __push it + a b ) ^ v } {}
     ? == op 125 { ( __push it - a b ) ^ v } {}
     ? == op 126 { ( __push it * a b ) ^ v } {}
-    ? == op 127 { ( __push it ( __idiv a b ) ) ^ v } {}
-    ? == op 128 { ( __push it ( __udiv64 a b ) ) ^ v } {}  // div_u
-    ? == op 129 { ( __push it ( __irem a b ) ) ^ v } {}
-    ? == op 130 { ( __push it ( __urem64 a b ) ) ^ v } {}  // rem_u
+    ? == op 127 { ( __push it ( __div_s it a b -9223372036854775808 ) ) ^ v } {}
+    ? == op 128 { ? == b 0 { ( __trap it `integer divide by zero` ) } { ( __push it ( __udiv64 a b ) ) } ^ v } {}  // div_u
+    ? == op 129 { ( __push it ( __rem_s it a b ) ) ^ v } {}
+    ? == op 130 { ? == b 0 { ( __trap it `integer divide by zero` ) } { ( __push it ( __urem64 a b ) ) } ^ v } {}  // rem_u
     ? == op 131 { ( __push it & a b ) ^ v } {}
     ? == op 132 { ( __push it | a b ) ^ v } {}
     ? == op 133 { ( __push it ^^ a b ) ^ v } {}
@@ -630,8 +761,7 @@ $ `module.nu`
     ? == op 137 { ( __push it ( __rotl64 a b ) ) ^ v } {}  // rotl
     ? == op 138 { ( __push it ( __rotr64 a b ) ) ^ v } {}  // rotr
     // unsupported opcode → trap
-    = . it trap T
-    = . it trapmsg ( bytes_from_str `unsupported opcode` )
+    ( __trap it `unsupported opcode` )
 }
 
 // ── floats (values held as their IEEE-754 bit pattern in the i64 cell) ──
@@ -660,13 +790,23 @@ $ `module.nu`
     ? == op 161 { ( __push it ( f64_to_bits - a b ) ) ^ v } {}
     ? == op 162 { ( __push it ( f64_to_bits * a b ) ) ^ v } {}
     ? == op 163 { ( __push it ( f64_to_bits / a b ) ) ^ v } {}
-    ? == op 164 { ( __push it ( f64_to_bits ? < a b a b ) ) ^ v } {}  // min (NaN-naive)
+    // min/max, wasm semantics: any NaN → canonical NaN; min(±0,∓0) = −0 (sign
+    // OR on the bits), max(±0,∓0) = +0 (sign AND).
+    ? | ( __f64_nan ab ) ( __f64_nan bb ) { ( __push it 9221120237041090560 ) ^ v } {}
+    ? & == & ab 9223372036854775807 0 == & bb 9223372036854775807 0 {
+        ? == op 164 { ( __push it | ab bb ) } { ( __push it & ab bb ) }
+        ^ v } {}
+    ? == op 164 { ( __push it ( f64_to_bits ? < a b a b ) ) ^ v } {}  // min
     ? == op 165 { ( __push it ( f64_to_bits ? > a b a b ) ) ^ v } {}  // max
 }
 
 @ __f64_cmp * Interp it i op → v {
-    : f b ( bits_to_f64 ( __pop it ) )
-    : f a ( bits_to_f64 ( __pop it ) )
+    : i bb ( __pop it )
+    : i ab ( __pop it )
+    // unordered: NaN makes `ne` true and every other comparison false
+    ? | ( __f64_nan ab ) ( __f64_nan bb ) { ( __push it ? == op 98 1 0 ) ^ v } {}
+    : f a ( bits_to_f64 ab )
+    : f b ( bits_to_f64 bb )
     ? == op 97 { ( __push it ? == a b 1 0 ) ^ v } {}
     ? == op 98 { ( __push it ? != a b 1 0 ) ^ v } {}
     ? == op 99 { ( __push it ? < a b 1 0 ) ^ v } {}
@@ -697,13 +837,22 @@ $ `module.nu`
     ? == op 147 { ( __push it ( f32_to_bits - a b ) ) ^ v } {}
     ? == op 148 { ( __push it ( f32_to_bits * a b ) ) ^ v } {}
     ? == op 149 { ( __push it ( f32_to_bits / a b ) ) ^ v } {}
+    // min/max, wasm semantics (see the f64 twin)
+    ? | ( __f32_nan ab ) ( __f32_nan bb ) { ( __push it 2143289344 ) ^ v } {}
+    ? & == & ab 2147483647 0 == & bb 2147483647 0 {
+        ? == op 150 { ( __push it | ab bb ) } { ( __push it & ab bb ) }
+        ^ v } {}
     ? == op 150 { ( __push it ( f32_to_bits ? < a b a b ) ) ^ v } {}
     ? == op 151 { ( __push it ( f32_to_bits ? > a b a b ) ) ^ v } {}
 }
 
 @ __f32_cmp * Interp it i op → v {
-    : f32 b ( bits_to_f32 ( __pop it ) )
-    : f32 a ( bits_to_f32 ( __pop it ) )
+    : i bb ( __pop it )
+    : i ab ( __pop it )
+    // unordered: NaN makes `ne` true and every other comparison false
+    ? | ( __f32_nan ab ) ( __f32_nan bb ) { ( __push it ? == op 92 1 0 ) ^ v } {}
+    : f32 b ( bits_to_f32 bb )
+    : f32 a ( bits_to_f32 ab )
     ? == op 91 { ( __push it ? == a b 1 0 ) ^ v } {}
     ? == op 92 { ( __push it ? != a b 1 0 ) ^ v } {}
     ? == op 93 { ( __push it ? < a b 1 0 ) ^ v } {}
@@ -719,19 +868,60 @@ $ `module.nu`
     ? == op 172 { ( __push it ( __w32 ( __pop it ) ) ) ^ v } {}  // i64.extend_i32_s
     ? == op 173 { ( __push it & ( __pop it ) 4294967295 ) ^ v } {}  // i64.extend_i32_u
     ? & >= op 188 <= op 191 { ^ v } {}  // *.reinterpret_* : no-op
-    ? == op 168 { ( __push it ( __w32 # i # f ( bits_to_f32 ( __pop it ) ) ) ) ^ v } {}  // i32.trunc_f32_s
-    ? == op 169 { ( __push it ( __w32 # i # f ( bits_to_f32 ( __pop it ) ) ) ) ^ v } {}  // i32.trunc_f32_u (approx)
-    ? == op 170 { ( __push it ( __w32 # i ( bits_to_f64 ( __pop it ) ) ) ) ^ v } {}  // i32.trunc_f64_s
-    ? == op 171 { ( __push it ( __w32 # i ( bits_to_f64 ( __pop it ) ) ) ) ^ v } {}  // i32.trunc_f64_u (approx)
-    ? | == op 174 == op 175 { ( __push it # i # f ( bits_to_f32 ( __pop it ) ) ) ^ v } {}  // i64.trunc_f32_*
-    ? | == op 176 == op 177 { ( __push it # i ( bits_to_f64 ( __pop it ) ) ) ^ v } {}  // i64.trunc_f64_*
+    // trapping float→int truncation (NaN / out-of-range → trap, per spec)
+    ? == op 168 {  // i32.trunc_f32_s
+        : i ab ( __pop it )
+        : f t ( __trunc_ck it ( __f32_nan ab ) # f ( bits_to_f32 ab ) -2147483648.0 2147483648.0 )
+        ( __push it ( __w32 # i t ) ) ^ v } {}
+    ? == op 169 {  // i32.trunc_f32_u  (trunc(-0.9) = -0.0 ≥ 0.0 → valid 0)
+        : i ab ( __pop it )
+        : f t ( __trunc_ck it ( __f32_nan ab ) # f ( bits_to_f32 ab ) 0.0 4294967296.0 )
+        ( __push it ( __w32 # i t ) ) ^ v } {}
+    ? == op 170 {  // i32.trunc_f64_s
+        : i ab ( __pop it )
+        : f t ( __trunc_ck it ( __f64_nan ab ) ( bits_to_f64 ab ) -2147483648.0 2147483648.0 )
+        ( __push it ( __w32 # i t ) ) ^ v } {}
+    ? == op 171 {  // i32.trunc_f64_u
+        : i ab ( __pop it )
+        : f t ( __trunc_ck it ( __f64_nan ab ) ( bits_to_f64 ab ) 0.0 4294967296.0 )
+        ( __push it ( __w32 # i t ) ) ^ v } {}
+    ? == op 174 {  // i64.trunc_f32_s
+        : i ab ( __pop it )
+        : f t ( __trunc_ck it ( __f32_nan ab ) # f ( bits_to_f32 ab ) - 0.0 ( __f_2p63 ) ( __f_2p63 ) )
+        ( __push it # i t ) ^ v } {}
+    ? == op 175 {  // i64.trunc_f32_u
+        : i ab ( __pop it )
+        : f t ( __trunc_ck it ( __f32_nan ab ) # f ( bits_to_f32 ab ) 0.0 ( __f_2p64 ) )
+        ( __push it ( __f_to_u64 t ) ) ^ v } {}
+    ? == op 176 {  // i64.trunc_f64_s
+        : i ab ( __pop it )
+        : f t ( __trunc_ck it ( __f64_nan ab ) ( bits_to_f64 ab ) - 0.0 ( __f_2p63 ) ( __f_2p63 ) )
+        ( __push it # i t ) ^ v } {}
+    ? == op 177 {  // i64.trunc_f64_u
+        : i ab ( __pop it )
+        : f t ( __trunc_ck it ( __f64_nan ab ) ( bits_to_f64 ab ) 0.0 ( __f_2p64 ) )
+        ( __push it ( __f_to_u64 t ) ) ^ v } {}
     ? == op 178 { ( __push it ( f32_to_bits # f32 ( __w32 ( __pop it ) ) ) ) ^ v } {}  // f32.convert_i32_s
     ? == op 179 { ( __push it ( f32_to_bits # f32 & ( __pop it ) 4294967295 ) ) ^ v } {}  // f32.convert_i32_u
-    ? | == op 180 == op 181 { ( __push it ( f32_to_bits # f32 ( __pop it ) ) ) ^ v } {}  // f32.convert_i64_*
+    ? == op 180 { ( __push it ( f32_to_bits # f32 ( __pop it ) ) ) ^ v } {}  // f32.convert_i64_s
+    ? == op 181 {  // f32.convert_i64_u — u64 ≥ 2^63 via halve-with-sticky-bit + double
+        : i a ( __pop it )
+        ? >= a 0 { ( __push it ( f32_to_bits # f32 a ) ) } {
+            : i h | ( __lshr64 a 1 ) & a 1
+            : f32 t # f32 h
+            ( __push it ( f32_to_bits + t t ) ) }
+        ^ v } {}
     ? == op 182 { ( __push it ( f32_to_bits # f32 ( bits_to_f64 ( __pop it ) ) ) ) ^ v } {}  // f32.demote_f64
     ? == op 183 { ( __push it ( f64_to_bits # f ( __w32 ( __pop it ) ) ) ) ^ v } {}  // f64.convert_i32_s
     ? == op 184 { ( __push it ( f64_to_bits # f & ( __pop it ) 4294967295 ) ) ^ v } {}  // f64.convert_i32_u
-    ? | == op 185 == op 186 { ( __push it ( f64_to_bits # f ( __pop it ) ) ) ^ v } {}  // f64.convert_i64_*
+    ? == op 185 { ( __push it ( f64_to_bits # f ( __pop it ) ) ) ^ v } {}  // f64.convert_i64_s
+    ? == op 186 {  // f64.convert_i64_u — u64 ≥ 2^63 via halve-with-sticky-bit + double
+        : i a ( __pop it )
+        ? >= a 0 { ( __push it ( f64_to_bits # f a ) ) } {
+            : i h | ( __lshr64 a 1 ) & a 1
+            : f t # f h
+            ( __push it ( f64_to_bits + t t ) ) }
+        ^ v } {}
     ? == op 187 { ( __push it ( f64_to_bits # f # f ( bits_to_f32 ( __pop it ) ) ) ) ^ v } {}  // f64.promote_f32
     ? & >= op 153 <= op 159 { ( __f64_unary it op ) ^ v } {}
     ? & >= op 160 <= op 166 { ( __f64_binary it op ) ^ v } {}
@@ -739,8 +929,7 @@ $ `module.nu`
     ? & >= op 139 <= op 145 { ( __f32_unary it op ) ^ v } {}
     ? & >= op 146 <= op 152 { ( __f32_binary it op ) ^ v } {}
     ? & >= op 91 <= op 96 { ( __f32_cmp it op ) ^ v } {}
-    = . it trap T
-    = . it trapmsg ( bytes_from_str `unsupported float opcode` )
+    ( __trap it `unsupported float opcode` )
 }
 
 // ── WASI host functions (wasi_snapshot_preview1) ─────────────────
@@ -1068,8 +1257,7 @@ $ `module.nu`
     ? ( __feq field `random_get` ) { ( __wasi_random_get it ) ^ v } {}
     ? ( __feq field `fd_fdstat_set_flags` ) { ( __pop it ) ( __pop it ) ( __push it 0 ) ^ v } {}
     ? ( __feq field `sched_yield` ) { ( __push it 0 ) ^ v } {}
-    = . it trap T
-    = . it trapmsg ( bytes_from_str `unsupported wasi import` )
+    ( __trap it `unsupported wasi import` )
 }
 
 // ── sign-extension ops + 0xfc-prefixed bulk memory / saturating trunc ──
@@ -1124,15 +1312,30 @@ $ `module.nu`
         ( __mem_fill it dst val n )
         ^ v
     } {}
-    // saturating float→int truncation (0..7): approximated by plain truncation
-    ? == sub 0 { ( __push it ( __w32 # i # f ( bits_to_f32 ( __pop it ) ) ) ) ^ v } {}
-    ? == sub 1 { ( __push it ( __w32 # i # f ( bits_to_f32 ( __pop it ) ) ) ) ^ v } {}
-    ? == sub 2 { ( __push it ( __w32 # i ( bits_to_f64 ( __pop it ) ) ) ) ^ v } {}
-    ? == sub 3 { ( __push it ( __w32 # i ( bits_to_f64 ( __pop it ) ) ) ) ^ v } {}
-    ? == sub 4 { ( __push it # i # f ( bits_to_f32 ( __pop it ) ) ) ^ v } {}
-    ? == sub 5 { ( __push it # i # f ( bits_to_f32 ( __pop it ) ) ) ^ v } {}
-    ? == sub 6 { ( __push it # i ( bits_to_f64 ( __pop it ) ) ) ^ v } {}
-    ? == sub 7 { ( __push it # i ( bits_to_f64 ( __pop it ) ) ) ^ v } {}
-    = . it trap T
-    = . it trapmsg ( bytes_from_str `unsupported 0xfc op` )
+    // saturating float→int truncation (0..7): NaN → 0, clamp out-of-range
+    ? == sub 0 {  // i32.trunc_sat_f32_s
+        : i ab ( __pop it )
+        ( __push it ( __w32 ( __trunc_sat ( __f32_nan ab ) # f ( bits_to_f32 ab ) -2147483648.0 2147483648.0 -2147483648 2147483647 ) ) ) ^ v } {}
+    ? == sub 1 {  // i32.trunc_sat_f32_u
+        : i ab ( __pop it )
+        ( __push it ( __w32 ( __trunc_sat ( __f32_nan ab ) # f ( bits_to_f32 ab ) 0.0 4294967296.0 0 4294967295 ) ) ) ^ v } {}
+    ? == sub 2 {  // i32.trunc_sat_f64_s
+        : i ab ( __pop it )
+        ( __push it ( __w32 ( __trunc_sat ( __f64_nan ab ) ( bits_to_f64 ab ) -2147483648.0 2147483648.0 -2147483648 2147483647 ) ) ) ^ v } {}
+    ? == sub 3 {  // i32.trunc_sat_f64_u
+        : i ab ( __pop it )
+        ( __push it ( __w32 ( __trunc_sat ( __f64_nan ab ) ( bits_to_f64 ab ) 0.0 4294967296.0 0 4294967295 ) ) ) ^ v } {}
+    ? == sub 4 {  // i64.trunc_sat_f32_s
+        : i ab ( __pop it )
+        ( __push it ( __trunc_sat ( __f32_nan ab ) # f ( bits_to_f32 ab ) - 0.0 ( __f_2p63 ) ( __f_2p63 ) -9223372036854775808 9223372036854775807 ) ) ^ v } {}
+    ? == sub 5 {  // i64.trunc_sat_f32_u
+        : i ab ( __pop it )
+        ( __push it ( __trunc_sat_u64 ( __f32_nan ab ) # f ( bits_to_f32 ab ) ) ) ^ v } {}
+    ? == sub 6 {  // i64.trunc_sat_f64_s
+        : i ab ( __pop it )
+        ( __push it ( __trunc_sat ( __f64_nan ab ) ( bits_to_f64 ab ) - 0.0 ( __f_2p63 ) ( __f_2p63 ) -9223372036854775808 9223372036854775807 ) ) ^ v } {}
+    ? == sub 7 {  // i64.trunc_sat_f64_u
+        : i ab ( __pop it )
+        ( __push it ( __trunc_sat_u64 ( __f64_nan ab ) ( bits_to_f64 ab ) ) ) ^ v } {}
+    ( __trap it `unsupported 0xfc op` )
 }
