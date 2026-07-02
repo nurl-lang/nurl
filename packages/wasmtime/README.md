@@ -9,50 +9,67 @@ The motivation: NURL already compiles to `wasm32-wasi`, and packages like
 shell out to the reference `wasmtime`. A pure-NURL runtime removes that external
 dependency — a worker (or any NURL program) can host a wasm module itself.
 
-This is a **multi-milestone** effort. The runtime now decodes and executes the
-full integer + float instruction set **and hosts real `wasm32-wasi` command
-modules** — a clang- or NURL-compiled `hello.wasm` prints to stdout and exits
-through this runtime, with output and exit code matching the reference wasmtime.
+This is a **multi-milestone** effort. The runtime decodes and executes the
+full MVP instruction set with spec-correct trap semantics, plus the
+multi-value, bulk-memory, reference-types and sign-extension proposals, and
+hosts real `wasm32-wasi` command modules — a clang- or NURL-compiled
+`hello.wasm` prints to stdout and exits through this runtime, with output and
+exit code matching the reference wasmtime.
 
 ## What works now
 
 ```sh
 # WASI command mode: run a wasm32-wasi module's _start (argv = module + args)
-wasmtime run hello.wasm                            # → hello from wasm
+wasmtime run [--dir <path>]… [--env NAME=VALUE]… [--fuel N] hello.wasm [args…]
 
 # Direct mode: invoke an exported function with integer / float args
 wasmtime run --invoke <export> <module.wasm> [args…]
 ```
 
-- **Decoder** (`src/module.nu`) — magic/version, LEB128 (signed + unsigned), and
-  the type / function / export / code sections. Unknown sections are skipped.
-- **Interpreter** (`src/interp.nu`) — a stack machine over 64-bit integer cells:
+- **Decoder** (`src/module.nu`) — magic/version, LEB128 (signed + unsigned),
+  the type / import / function / table / memory / global / export / start /
+  element / code / data sections, and the custom `name` section (function
+  names for trap backtraces). Non-function imports and externref tables are
+  clean decode errors. Unknown sections are skipped.
+- **Interpreter** (`src/interp.nu`) — a stack machine over 64-bit integer
+  cells, driven on an **explicit frame stack** (guest recursion never grows
+  the host's native stack; depth-limited, optionally fuel-metered):
   - structured control flow: `block`, `loop`, `if`/`else`, `br`, `br_if`,
-    `return`, `end` (an explicit control stack; matching `end`/`else` found by a
-    one-pass immediate scan)
-  - `i32`/`i64` `const`, the **full** integer arithmetic / comparison / bitwise
-    set: signed **and** unsigned `div`/`rem`/`shr`/compares, `rotl`/`rotr`,
-    `clz`/`ctz`/`popcnt`, sign-extension ops, with i32 results wrapped to 32 bits
-  - `local.get/set/tee`, `drop`, `select`, `i32.wrap_i64`, `i64.extend_i32_*`
-  - direct `call` (recursive frames; one shared value stack)
-  - **linear memory**: `i32`/`i64` `load`/`store` incl. sized 8/16/32-bit
-    signed/unsigned variants, `memory.size`/`memory.grow`, **bulk memory**
-    (`memory.copy`/`memory.fill`), and the **data section** (active segments
-    copied into memory at load time)
-  - **globals** (`global.get`/`global.set`, const-initialised) and **tables**
-    + **`call_indirect`** (element segments populate the function table)
-  - **floats** — `f32`/`f64` `const`/`load`/`store`, arithmetic (`add` … `div`,
-    `min`/`max`/`copysign`), `sqrt`/`abs`/`neg`/`ceil`/`floor`/`trunc`/`nearest`,
-    comparisons, and every int↔float conversion (`trunc`/`convert`/`demote`/
-    `promote`/`reinterpret`). Held as IEEE-754 bits via `std/floatbits`.
-  - **imports + WASI** (`wasi_snapshot_preview1`): `proc_exit`, `fd_write`
-    (stdout/stderr, iovec walk), `args_*`, `environ_*`, `clock_time_get`,
-    `random_get`, and a real **file-descriptor table**.
-  - **`--dir` preopen + file ops**: one host directory is exposed to the module
-    (`fd_prestat_*`), and `path_open` / `fd_read` / `fd_seek` / `fd_write` (to a
-    buffer flushed on `fd_close`) / `fd_filestat_get` back real files under it —
-    enough for a program to read a source file. Cross-checked against reference
-    wasmtime on multi-kilobyte reads.
+    `br_table`, `return`, `end` — **multi-value** block types included
+    (s33-encoded type-section indices; branches carry a loop's params / a
+    block's results)
+  - the **full** integer set with spec-correct traps: divide-by-zero and
+    `INT_MIN/−1` trap, `INT_MIN rem −1` is 0; signed **and** unsigned
+    `div`/`rem`/`shr`/compares, `rotl`/`rotr`, `clz`/`ctz`/`popcnt`,
+    sign-extension ops, i32 results wrapped to 32 bits
+  - `call` / `call_indirect` (the latter with the runtime **signature check**)
+  - **linear memory**: all sized loads/stores, `memory.size`/`memory.grow`
+    (declared max + wasm32 limit honoured, −1 past them), **bulk memory**
+    (`memory.copy`/`fill`/`init` with up-front bounds checks, `data.drop`,
+    passive data segments), active data segments applied at instantiation
+  - **globals**, **tables** + reference types: `table.get/set/grow/size/`
+    `fill/copy/init`, `elem.drop`, `ref.null`/`ref.is_null`/`ref.func`,
+    typed `select`; all element-segment encodings (active/passive/declared,
+    index- and expression-form)
+  - **floats** — full f32/f64 arithmetic and conversions with IEEE-correct
+    semantics: NaN-aware comparisons (`ne` true on unordered), canonical-NaN
+    `min`/`max` with ±0 ordering, **trapping** float→int truncation (NaN /
+    out-of-range) and true **saturating** `trunc_sat` forms, unsigned
+    `convert_i64_u` via halve-with-sticky-bit (matches LLVM's lowering)
+  - **imports + WASI** (`wasi_snapshot_preview1`, module name checked):
+    `proc_exit`, `fd_write`/`fd_read`/`fd_seek`/`fd_tell`/`fd_pread`/
+    `fd_pwrite`/`fd_sync`/`fd_datasync`/`fd_close`/`fd_readdir`, `args_*`,
+    real `environ_*` (from repeatable `--env`), real `clock_time_get`
+    (wall + monotonic) and `random_get` (OS entropy), `fd_prestat_*`,
+    `fd_fdstat_get`, `fd_filestat_get`
+  - **`--dir` preopens + path ops** (repeatable): `path_open` (O_CREAT/
+    O_TRUNC/O_EXCL/O_DIRECTORY/O_APPEND semantics, rights-derived
+    writability), `path_create_directory` / `path_remove_directory` /
+    `path_unlink_file` / `path_rename` / `path_filestat_get`; buffered file
+    writes flush on close/sync/`proc_exit`/normal exit
+  - **diagnostics**: traps carry a message plus a wasm **backtrace** (name
+    section names when present); `--fuel N` bounds runaway guests
+    deterministically
 
 ```sh
 # WASI command: prints to stdout, exits with the program's code
@@ -96,15 +113,20 @@ With the file layer in place, `swarm-mcp` workers can drop the external
 ### Toward self-hosting
 
 The end goal is to run the NURL compiler itself as `nurlc.wasm` and have it
-compile NURL. This runtime is ready for that: it loads the 562 KB
-`nurlc.wasm` (built via `./buildwasm.sh`), runs its startup path (prints
-`usage:` with no args), and — when compiling a file — reaches **the exact same
-`unreachable` trap as the reference `wasmtime`**. That trap is a defect in
-`nurlc.wasm`'s own codegen (the NURL→wasm 32-bit-pointer ABI: pointer values the
-compiler treats as 64-bit get mangled on wasm, steering a `match` to an
-uncovered arm), not a gap in this runtime. Simpler NURL→wasm programs (e.g.
-`cat.wasm`) run correctly end-to-end. Closing the self-hosting loop needs that
-compiler-side ABI fix; the runtime side is in place.
+compile NURL. **The runtime side is done, and the loop closes** (with one
+caveat): `nurlc.wasm --no-borrowck nurlc.nu` compiles the full 65k-line
+compiler **byte-identically to the native compiler** — the first complete
+self-host compile under wasm.
+
+The caveat is memory, not correctness: self-compiling nurlc keeps ~11.7 GB
+of allocations live (native peak RSS), and wasm32 linear memory tops out at
+4 GiB. With the borrow checker on, the ceiling is hit mid-analysis; the
+long-standing "self-host hang" was malloc returning NULL there — address 0
+is writable linear memory on wasm32, so NULL-backed strings silently
+corrupted the analysis state instead of crashing (identically under this
+runtime and the reference wasmtime). The runtime now aborts loudly on OOM
+(`nurl: out of memory`). Full self-host *with* borrowck needs the
+compiler's live set under 4 GiB (or memory64).
 
 ## Layout
 

@@ -79,12 +79,22 @@ $ `stdlib/std/bytes.nu`
 
 : WExport { ( Vec u ) name i kind i index }
 
-// An active data segment: raw bytes to copy into linear memory at `offset`.
-: DataSeg { i offset ( Vec u ) bytes }
+// A data segment. Active (passive=0): copied to memory at `offset` during
+// instantiation. Passive (passive=1): source material for memory.init only.
+: DataSeg { i offset ( Vec u ) bytes i passive }
 
-// An imported function (the only import kind this runtime resolves): its field
-// name selects the host (WASI) implementation; typeidx gives its signature.
-: WImport { ( Vec u ) field i typeidx }
+// An element segment: function indices (−1 = null ref). Active segments are
+// applied to the table at decode; passive ones feed table.init; declared
+// (and applied active) ones count as dropped at instantiation.
+: ElemSeg { ( Vec i ) funcs i passive }
+
+// An owned byte buffer behind an opaque pointer (name-section entries).
+: NameBuf { ( Vec u ) bytes }
+
+// An imported function (the only import kind this runtime resolves): module +
+// field name select the host (WASI) implementation; typeidx gives its
+// signature. Non-function imports are a decode error (nothing satisfies them).
+: WImport { ( Vec u ) module ( Vec u ) field i typeidx }
 
 : Module {
     ( Vec s ) types  // *FuncType
@@ -99,9 +109,14 @@ $ `stdlib/std/bytes.nu`
     ( Vec i ) global_init  // initial value per global
     ( Vec i ) global_mut  // 1 if mutable
     i has_table
-    ( Vec i ) table  // function indices (−1 = empty slot)
+    ( Vec i ) table  // initial table image: function indices (−1 = null)
+    i table_max  // declared table maximum (0 = none)
+    ( Vec s ) elems  // *ElemSeg — element segments, in order
     ( Vec s ) imports  // *WImport (imported functions, in index order)
     i num_import_funcs  // imported funcs occupy func indices 0..n-1
+    i start_func  // start-section function index (-1 = none)
+    ( Vec i ) name_idx  // function indices with a "name"-section entry…
+    ( Vec s ) name_str  // …and their names (*( Vec u )), parallel (sparse)
     b ok
     ( Vec u ) err
 }
@@ -129,22 +144,41 @@ $ `stdlib/std/bytes.nu`
     ( vec_free [i] . m global_init )
     ( vec_free [i] . m global_mut )
     ( vec_free [i] . m table )
+    : i eln ( vec_len [s] . m elems )
+    : ~ i el 0
+    ~ < el eln { ?? ( vec_get [s] . m elems el ) { T pp → ?!= # i pp 0 { : *ElemSeg es # *ElemSeg pp ( vec_free [i] . es funcs ) ( nurl_free # s es ) } {} F → {} } = el + el 1 }
+    ( vec_free [s] . m elems )
     : i in ( vec_len [s] . m imports )
     : ~ i ii 0
-    ~ < ii in { ?? ( vec_get [s] . m imports ii ) { T pp → ?!= # i pp 0 { : *WImport w # *WImport pp ( vec_free [u] . w field ) ( nurl_free # s w ) } {} F → {} } = ii + ii 1 }
+    ~ < ii in { ?? ( vec_get [s] . m imports ii ) { T pp → ?!= # i pp 0 { : *WImport w # *WImport pp ( vec_free [u] . w module ) ( vec_free [u] . w field ) ( nurl_free # s w ) } {} F → {} } = ii + ii 1 }
     ( vec_free [s] . m imports )
+    ( vec_free [i] . m name_idx )
+    : i nn ( vec_len [s] . m name_str )
+    : ~ i ni 0
+    ~ < ni nn { ?? ( vec_get [s] . m name_str ni ) { T pp → ?!= # i pp 0 { : *NameBuf nb # *NameBuf pp ( vec_free [u] . nb bytes ) ( nurl_free # s nb ) } {} F → {} } = ni + ni 1 }
+    ( vec_free [s] . m name_str )
     ( vec_free [u] . m code )
     ( vec_free [u] . m err )
     ( nurl_free # s m )
 }
 
-// Evaluate a constant init expr (i32/i64.const N … end); global.get is treated
-// as 0 (imported globals unsupported). Consumes through the trailing `end`.
-@ __const_expr * Wc c → i {
+// Record a decode error (first error wins; frees the previous message).
+@ __mod_err * Module m s msg → v {
+    ? ! . m ok { ^ v } {}
+    = . m ok F
+    ( vec_free [u] . m err )
+    = . m err ( bytes_from_str msg )
+}
+
+// Evaluate a constant init expr (i32/i64.const N … end). `global.get` in a
+// constant expression may only reference an imported global (spec), and those
+// are rejected at decode — so hitting one here is itself a decode error.
+// Consumes through the trailing `end`.
+@ __const_expr * Wc c * Module m → i {
     : i op0 ( wc_u8 c )
     : ~ i val 0
     ? | == op0 65 == op0 66 { = val ( wc_sleb c ) } {
-        ? == op0 35 { ( wc_uleb c ) } {} }
+        ? == op0 35 { ( wc_uleb c ) ( __mod_err m `constant expression uses global.get (imported globals unsupported)` ) } {} }
     ~ != ( wc_u8 c ) 11 {}
     ^ val
 }
@@ -212,14 +246,14 @@ $ `stdlib/std/bytes.nu`
 }
 
 // Data section: active segments (flag 0/2) carry an i32.const offset expr then
-// raw bytes; passive segments (flag 1) carry bytes only (offset 0, ignored).
+// raw bytes; passive segments (flag 1) carry bytes only (memory.init source).
 @ __decode_data_sec * Wc c * Module m → v {
     : i n ( wc_uleb c )
     : ~ i k 0
     ~ < k n {
         : i flag ( wc_uleb c )
         ? == flag 2 { ( wc_uleb c ) } {}  // explicit memidx
-        : i offset ? != flag 1 ( __const_expr c ) 0
+        : i offset ? != flag 1 ( __const_expr c m ) 0
         : i blen ( wc_uleb c )
         : ( Vec u ) bytes ( vec_with_cap [u] blen )
         : ~ i bi 0
@@ -227,19 +261,24 @@ $ `stdlib/std/bytes.nu`
         : *DataSeg ds # *DataSeg ( nurl_alloc Z DataSeg )
         = . ds offset offset
         = . ds bytes bytes
+        = . ds passive ? == flag 1 1 0
         ( vec_push [s] . m datas ds )
         = k + k 1
     }
 }
 
-// Import section: record imported FUNCTIONS (the only kind resolved — by their
-// field name, to a host/WASI implementation). Other import kinds are skipped.
+// Import section: record imported FUNCTIONS (module + field name resolve to a
+// host/WASI implementation at call time). A table / memory / global import is
+// a hard decode error — this runtime has nothing to satisfy it with, and
+// running anyway would silently corrupt the module's own state.
 @ __decode_import_sec * Wc c * Module m → v {
     : i n ( wc_uleb c )
     : ~ i k 0
     ~ < k n {
         : i mlen ( wc_uleb c )
-        ( wc_skip c mlen )  // module name (ignored; WASI assumed)
+        : ( Vec u ) mnm ( vec_with_cap [u] mlen )
+        : ~ i b 0
+        ~ < b mlen { ( vec_push [u] mnm ( wc_u8 c ) ) = b + b 1 }
         : i flen ( wc_uleb c )
         : ( Vec u ) fld ( vec_with_cap [u] flen )
         : ~ i a 0
@@ -248,12 +287,19 @@ $ `stdlib/std/bytes.nu`
         ? == kind 0 {
             : i ti ( wc_uleb c )
             : *WImport w # *WImport ( nurl_alloc Z WImport )
+            = . w module mnm
             = . w field fld
             = . w typeidx ti
             ( vec_push [s] . m imports # s w )
             = . m num_import_funcs + . m num_import_funcs 1
         } {
+            ( vec_free [u] mnm )
             ( vec_free [u] fld )
+            ? . m ok {
+                = . m ok F
+                = . m err ( bytes_from_str ? == kind 1 `unsupported import: table` ? == kind 2 `unsupported import: memory` ? == kind 3 `unsupported import: global` `unsupported import kind` )
+            } {}
+            // consume the entry's immediates so the cursor stays coherent
             ? == kind 1 { ( wc_u8 c ) : i fl ( wc_u8 c ) ( wc_uleb c ) ? == fl 1 { ( wc_uleb c ) } {} } {
                 ? == kind 2 { : i fl ( wc_u8 c ) ( wc_uleb c ) ? == fl 1 { ( wc_uleb c ) } {} } {
                     ? == kind 3 { ( wc_u8 c ) ( wc_u8 c ) } {} } }
@@ -269,23 +315,27 @@ $ `stdlib/std/bytes.nu`
     ~ < k n {
         ( wc_u8 c )  // valtype
         : i mut ( wc_u8 c )
-        ( vec_push [i] . m global_init ( __const_expr c ) )
+        ( vec_push [i] . m global_init ( __const_expr c m ) )
         ( vec_push [i] . m global_mut mut )
         = k + k 1
     }
 }
 
-// Table section: allocate the first table (size = min, slots empty = −1).
+// Table section: allocate the first table (size = min, slots null = −1),
+// recording its declared maximum for table.grow. Only funcref tables are
+// supported — an externref table is a decode error.
 @ __decode_table_sec * Wc c * Module m → v {
     : i n ( wc_uleb c )
     : ~ i k 0
     ~ < k n {
-        ( wc_u8 c )  // elemtype (0x70 funcref)
+        : i et ( wc_u8 c )  // elemtype: 0x70 funcref / 0x6f externref
+        ? != et 112 { ( __mod_err m `unsupported table element type (externref)` ) } {}
         : i flag ( wc_u8 c )
         : i mn ( wc_uleb c )
-        ? == flag 1 { ( wc_uleb c ) } {}  // max
+        : i mx ? == flag 1 ( wc_uleb c ) 0
         ? == k 0 {
             = . m has_table 1
+            = . m table_max mx
             : ~ i j 0
             ~ < j mn { ( vec_push [i] . m table -1 ) = j + j 1 }
         } {}
@@ -293,24 +343,56 @@ $ `stdlib/std/bytes.nu`
     }
 }
 
-// Element section: active segments (flag 0) fill the table with function indices
-// at a const offset.
+// One element expression: (ref.func N end) → N, (ref.null ht end) → −1.
+@ __elem_expr * Wc c → i {
+    : i op ( wc_u8 c )
+    : ~ i val -1
+    ? == op 210 { = val ( wc_uleb c ) } {  // ref.func
+        ? == op 208 { ( wc_u8 c ) } {} }  // ref.null: heap type byte
+    ~ != ( wc_u8 c ) 11 {}
+    ^ val
+}
+
+// Element section, all MVP+reftype encodings (flags 0–7):
+//   bit0 passive/declared (1) vs active (0); bit1 explicit tableidx (active)
+//   or declared (passive); bit2 element EXPRS instead of func indices.
+// Active segments are applied to the table image here and then count as
+// dropped; passive ones are stored for table.init.
 @ __decode_elem_sec * Wc c * Module m → v {
     : i n ( wc_uleb c )
     : ~ i k 0
     ~ < k n {
         : i flag ( wc_uleb c )
-        ? == flag 0 {
-            : i off ( __const_expr c )
-            : i cnt ( wc_uleb c )
-            : ~ i j 0
-            ~ < j cnt {
-                : i fi ( wc_uleb c )
-                : i tgt + off j
-                ? & >= tgt 0 < tgt ( vec_len [i] . m table ) { ( vec_set [i] . m table tgt fi ) } {}
-                = j + j 1
+        : i active ? == & flag 1 0 1 0
+        : ~ i off 0
+        ? == active 1 {
+            ? == & flag 2 2 { ( wc_uleb c ) } {}  // explicit table index (0)
+            = off ( __const_expr c m )
+        } {}
+        // elemkind / reftype byte is present unless flag is 0 or 4
+        ? & != flag 0 != flag 4 { ( wc_u8 c ) } {}
+        : i cnt ( wc_uleb c )
+        : ( Vec i ) funcs ( vec_with_cap [i] cnt )
+        : ~ i j 0
+        ~ < j cnt {
+            ? >= flag 4 { ( vec_push [i] funcs ( __elem_expr c ) ) } { ( vec_push [i] funcs ( wc_uleb c ) ) }
+            = j + j 1
+        }
+        ? == active 1 {
+            : ~ i a 0
+            ~ < a cnt {
+                : i tgt + off a
+                ? & >= tgt 0 < tgt ( vec_len [i] . m table ) {
+                    ( vec_set [i] . m table tgt ?? ( vec_get [i] funcs a ) { T x → x F → -1 } )
+                } {}
+                = a + a 1
             }
         } {}
+        : *ElemSeg es # *ElemSeg ( nurl_alloc Z ElemSeg )
+        = . es funcs funcs
+        // active (and declared, flag 3/7) segments are dropped at instantiation
+        = . es passive ? | == flag 1 == flag 5 1 0
+        ( vec_push [s] . m elems # s es )
         = k + k 1
     }
 }
@@ -345,6 +427,59 @@ $ `stdlib/std/bytes.nu`
     }
 }
 
+// Custom section: if it is the "name" section, harvest subsection 1
+// (function names) for diagnostics; anything else is skipped.
+@ __decode_custom_sec * Wc c * Module m i sec_end → v {
+    : i nlen ( wc_uleb c )
+    ? != nlen 4 { ^ v } {}
+    : b isname & & & == ( wc_u8 c ) 110 == ( wc_u8 c ) 97 == ( wc_u8 c ) 109 == ( wc_u8 c ) 101
+    ? ! isname { ^ v } {}
+    ~ < . c pos sec_end {
+        : i sub ( wc_u8 c )
+        : i ssize ( wc_uleb c )
+        : i sub_end + . c pos ssize
+        ? == sub 1 {  // function names: count, then (funcidx, name) pairs
+            : i n ( wc_uleb c )
+            : ~ i k 0
+            ~ < k n {
+                : i fi ( wc_uleb c )
+                : i ln ( wc_uleb c )
+                : ( Vec u ) nm ( vec_with_cap [u] ln )
+                : ~ i a 0
+                ~ < a ln { ( vec_push [u] nm ( wc_u8 c ) ) = a + a 1 }
+                : *NameBuf nb # *NameBuf ( nurl_alloc Z NameBuf )
+                = . nb bytes nm
+                ( vec_push [i] . m name_idx fi )
+                ( vec_push [s] . m name_str # s nb )
+                = k + k 1
+            }
+        } {}
+        = . c pos sub_end
+    }
+}
+
+// The name-section name of function `fidx` as a fresh byte vector (empty if
+// unknown). Cold path — linear scan is fine (used only for trap backtraces).
+@ module_func_name * Module m i fidx → ( Vec u ) {
+    : i n ( vec_len [i] . m name_idx )
+    : ~ i k 0
+    ~ < k n {
+        ? == ?? ( vec_get [i] . m name_idx k ) { T x → x F → -1 } fidx {
+            : s pp ?? ( vec_get [s] . m name_str k ) { T x → x F → # s 0 }
+            ? != # i pp 0 {
+                : *NameBuf nb # *NameBuf pp
+                : ( Vec u ) out ( vec_with_cap [u] ( vec_len [u] . nb bytes ) )
+                : i bn ( vec_len [u] . nb bytes )
+                : ~ i b 0
+                ~ < b bn { ( vec_push [u] out ?? ( vec_get [u] . nb bytes b ) { T x → x F → # u 0 } ) = b + b 1 }
+                ^ out
+            } {}
+        } {}
+        = k + k 1
+    }
+    ^ ( vec_new [u] )
+}
+
 // Decode a whole module. On error, .ok is F and .err carries a message.
 @ module_decode ( Vec u ) bytes → *Module {
     : *Module m # *Module ( nurl_alloc Z Module )
@@ -361,21 +496,27 @@ $ `stdlib/std/bytes.nu`
     = . m global_mut ( vec_new [i] )
     = . m has_table 0
     = . m table ( vec_new [i] )
+    = . m table_max 0
+    = . m elems ( vec_new [s] )
     = . m imports ( vec_new [s] )
     = . m num_import_funcs 0
+    = . m start_func -1
+    = . m name_idx ( vec_new [i] )
+    = . m name_str ( vec_new [s] )
     = . m ok T
     = . m err ( vec_new [u] )
     : *Wc c ( wc_new bytes )
     // header: 00 61 73 6d 01 00 00 00
-    ? < . c len 8 { = . m ok F = . m err ( bytes_from_str `not a wasm module` ) ( wc_free c ) ^ m } {}
+    ? < . c len 8 { ( __mod_err m `not a wasm module` ) ( wc_free c ) ^ m } {}
     ? ! & == ( wc_u8 c ) 0 & == ( wc_u8 c ) 97 & == ( wc_u8 c ) 115 == ( wc_u8 c ) 109 {
-        = . m ok F = . m err ( bytes_from_str `bad wasm magic` ) ( wc_free c ) ^ m
+        ( __mod_err m `bad wasm magic` ) ( wc_free c ) ^ m
     } {}
     ( wc_skip c 4 )  // version
     ~ ! ( wc_eof c ) {
         : i id ( wc_u8 c )
         : i size ( wc_uleb c )
         : i sec_end + . c pos size
+        ? == id 0 { ( __decode_custom_sec c m sec_end ) } {}
         ? == id 1 { ( __decode_type_sec c m ) } {
             ? == id 2 { ( __decode_import_sec c m ) } {
             ? == id 3 { ( __decode_func_sec c m ) } {
@@ -383,9 +524,10 @@ $ `stdlib/std/bytes.nu`
                     ? == id 5 { ( __decode_mem_sec c m ) } {
                         ? == id 6 { ( __decode_global_sec c m ) } {
                             ? == id 7 { ( __decode_export_sec c m ) } {
+                                ? == id 8 { = . m start_func ( wc_uleb c ) } {
                                 ? == id 9 { ( __decode_elem_sec c m ) } {
                                     ? == id 10 { ( __decode_code_sec c m ) } {
-                                        ? == id 11 { ( __decode_data_sec c m ) } {} } } } } } } } } }
+                                        ? == id 11 { ( __decode_data_sec c m ) } {} } } } } } } } } } }
         = . c pos sec_end  // robust against partially-read / skipped sections
     }
     ( wc_free c )
@@ -406,6 +548,46 @@ $ `stdlib/std/bytes.nu`
         = k + k 1
     }
     ^ found
+}
+
+// The *FuncType of any function index — imported (low indices) or defined —
+// as an opaque pointer; #s 0 if out of range.
+@ module_func_type * Module m i fidx → s {
+    ? < fidx 0 { ^ # s 0 } {}
+    : ~ i ti -1
+    ? < fidx . m num_import_funcs {
+        : s wp ?? ( vec_get [s] . m imports fidx ) { T x → x F → # s 0 }
+        ? == # i wp 0 { ^ # s 0 } {}
+        : *WImport w # *WImport wp
+        = ti . w typeidx
+    } {
+        : s fp ?? ( vec_get [s] . m funcs - fidx . m num_import_funcs ) { T x → x F → # s 0 }
+        ? == # i fp 0 { ^ # s 0 } {}
+        : *WFunc f # *WFunc fp
+        = ti . f typeidx
+    }
+    ^ ?? ( vec_get [s] . m types ti ) { T x → x F → # s 0 }
+}
+
+// Structural function-type equality (the call_indirect runtime check): same
+// parameter and result valtypes, in order.
+@ functype_eq * FuncType a * FuncType b → b {
+    : i np ( vec_len [i] . a params )
+    ? != np ( vec_len [i] . b params ) { ^ F } {}
+    : i nr ( vec_len [i] . a results )
+    ? != nr ( vec_len [i] . b results ) { ^ F } {}
+    : ~ b eq T
+    : ~ i k 0
+    ~ & eq < k np {
+        ? != ?? ( vec_get [i] . a params k ) { T x → x F → -1 } ?? ( vec_get [i] . b params k ) { T x → x F → -2 } { = eq F } {}
+        = k + k 1
+    }
+    = k 0
+    ~ & eq < k nr {
+        ? != ?? ( vec_get [i] . a results k ) { T x → x F → -1 } ?? ( vec_get [i] . b results k ) { T x → x F → -2 } { = eq F } {}
+        = k + k 1
+    }
+    ^ eq
 }
 
 @ __name_eq ( Vec u ) nm s want → b {

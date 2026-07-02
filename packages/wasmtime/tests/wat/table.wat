@@ -1,0 +1,22 @@
+(module
+  (type $ii (func (param i32) (result i32)))
+  (type $v (func (result i64)))
+  (table 4 8 funcref)
+  (elem (i32.const 0) $inc $inc)
+  (elem $pas funcref (ref.func $inc) (ref.null func))
+  (func $inc (type $ii) (i32.add (local.get 0) (i32.const 1)))
+  (func $l64 (type $v) (i64.const 7))
+  (func (export "callok") (param i32) (result i32)
+    (call_indirect (type $ii) (local.get 0) (i32.const 0)))
+  (func (export "callbad") (result i64)
+    (call_indirect (type $v) (i32.const 0)))
+  (func (export "tsize") (result i32) (table.size))
+  (func (export "tgrow") (param i32) (result i32)
+    (table.grow (ref.null func) (local.get 0)))
+  (func (export "tinit") (result i32)
+    ;; copy passive elem [inc, null] to slots 2..3, then call slot 2
+    (table.init $pas (i32.const 2) (i32.const 0) (i32.const 2))
+    (call_indirect (type $ii) (i32.const 41) (i32.const 2)))
+  (func (export "tnull") (result i32)
+    ;; slot 3 is null after tinit
+    (ref.is_null (table.get (i32.const 3)))))

@@ -19,10 +19,17 @@ $ `stdlib/std/bytes.nu`
 $ `stdlib/std/float.nu`
 $ `stdlib/std/floatbits.nu`
 $ `stdlib/std/fs.nu`
+$ `stdlib/std/time.nu`
 $ `module.nu`
 
 // round-to-nearest-even (wasm f*.nearest) — libm rint honours the default mode.
 & `m` @ rint f x → f
+
+// OS entropy (runtime helper; getrandom/urandom under the hood).
+& `c` @ nurl_rand_fill *u buf i n → i
+
+// unlink(2): path_unlink_file must NOT remove directories (remove(3) would).
+& `c` @ unlink s path → i32
 
 // ── value + control stacks ───────────────────────────────────────
 
@@ -30,11 +37,12 @@ $ `module.nu`
 
 : Ctrl { i is_loop i start_pc i end_pc i height i arity }
 
-// A WASI file descriptor. kind: 0 closed, 1 stdio, 2 preopened dir, 3 file.
-// For a file, `data` holds the contents (read) or the bytes written so far,
+// A WASI file descriptor. kind: 0 closed, 1 stdio, 2 preopened dir, 3 file,
+// 4 opened (non-preopen) directory. For a file, `data` holds the contents,
 // `pos` the read/write offset, `host` the on-disk path (for open/flush), and
 // `name` (a dir) the guest-visible preopen name reported by fd_prestat_*.
-: WFd { i kind ( Vec u ) data i pos ( Vec u ) host ( Vec u ) name b writable b dirty }
+// `append` = O_APPEND: every write lands at the end regardless of pos.
+: WFd { i kind ( Vec u ) data i pos ( Vec u ) host ( Vec u ) name b writable b dirty b append }
 
 : Interp {
     s mod  // *Module
@@ -42,13 +50,24 @@ $ `module.nu`
     ( Vec u ) mem  // linear memory (bytes)
     i mem_pages  // current size in 64 KiB pages
     ( Vec i ) globals  // mutable global values
-    ( Vec s ) argv  // *( Vec u ) — WASI program arguments (argv[0] = program)
+    ( Vec i ) table  // runtime funcref table (mutable via table.set/grow/…)
+    ( Vec i ) data_dropped  // 1 per data segment once dropped / active
+    ( Vec i ) elem_dropped  // 1 per element segment once dropped / active
+    ( Vec s ) argv  // *Arg — WASI program arguments (argv[0] = program)
+    ( Vec s ) envp  // *Arg — WASI environment entries ("NAME=VALUE")
     ( Vec s ) fds  // *WFd — file-descriptor table (0/1/2 stdio, 3 preopen, …)
     b exited  // set after proc_exit
     i exit_code
     b trap
     ( Vec u ) trapmsg
+    i pending_call  // callee set by call/call_indirect for the driver (-1 none)
+    i max_depth  // frame-stack depth limit (trap when exceeded)
+    i fuel  // remaining instruction budget (-1 = unlimited)
 }
+
+// One activation record on the explicit call stack: the function, its locals,
+// its control stack, and the instruction cursor [pos, end).
+: Frame { i fidx ( Vec i ) locals ( Vec s ) ctrl i pos i end i code_start }
 
 @ __page → i { ^ 65536 }
 
@@ -60,6 +79,7 @@ $ `module.nu`
     = . it mem_pages 0
     = . it globals ( vec_new [i] )
     = . it argv ( vec_new [s] )
+    = . it envp ( vec_new [s] )
     = . it fds ( vec_new [s] )
     // fds 0/1/2 = stdin/stdout/stderr (kind 1); higher slots filled by preopen.
     : ~ i sfd 0
@@ -68,10 +88,39 @@ $ `module.nu`
     = . it exit_code 0
     = . it trap F
     = . it trapmsg ( vec_new [u] )
+    = . it pending_call -1
+    = . it max_depth 65536
+    = . it fuel -1
     // copy global initial values
     : i ng ( vec_len [i] . m global_init )
     : ~ i gi 0
     ~ < gi ng { ( vec_push [i] . it globals ?? ( vec_get [i] . m global_init gi ) { T x → x F → 0 } ) = gi + gi 1 }
+    // runtime table = the decoded initial image (mutable from here on)
+    = . it table ( vec_new [i] )
+    : i tn ( vec_len [i] . m table )
+    : ~ i ti 0
+    ~ < ti tn { ( vec_push [i] . it table ?? ( vec_get [i] . m table ti ) { T x → x F → -1 } ) = ti + ti 1 }
+    // segment drop state: active segments count as dropped once instantiated
+    = . it data_dropped ( vec_new [i] )
+    = . it elem_dropped ( vec_new [i] )
+    : i ndd ( vec_len [s] . m datas )
+    : ~ i dd 0
+    ~ < dd ndd {
+        : s dpp ?? ( vec_get [s] . m datas dd ) { T x → x F → # s 0 }
+        : ~ i drp 1
+        ? != # i dpp 0 { : *DataSeg dsg # *DataSeg dpp ? == . dsg passive 1 { = drp 0 } {} } {}
+        ( vec_push [i] . it data_dropped drp )
+        = dd + dd 1
+    }
+    : i ned ( vec_len [s] . m elems )
+    : ~ i ee 0
+    ~ < ee ned {
+        : s epp ?? ( vec_get [s] . m elems ee ) { T x → x F → # s 0 }
+        : ~ i drp 1
+        ? != # i epp 0 { : *ElemSeg esg # *ElemSeg epp ? == . esg passive 1 { = drp 0 } {} } {}
+        ( vec_push [i] . it elem_dropped drp )
+        = ee + ee 1
+    }
     ? == . m has_mem 1 {
         : i bytes * . m mem_min ( __page )
         : ~ i k 0
@@ -82,7 +131,7 @@ $ `module.nu`
         : ~ i di 0
         ~ < di nd {
             : s dp ?? ( vec_get [s] . m datas di ) { T x → x F → # s 0 }
-            ? != # i dp 0 {
+            ? & != # i dp 0 == . # *DataSeg dp passive 0 {  // passive: memory.init only
                 : *DataSeg ds # *DataSeg dp
                 : i dn ( vec_len [u] . ds bytes )
                 : ~ i bi 0
@@ -110,6 +159,7 @@ $ `module.nu`
     = . f name ( vec_new [u] )
     = . f writable F
     = . f dirty F
+    = . f append F
     ^ # s f
 }
 
@@ -124,10 +174,17 @@ $ `module.nu`
     ( vec_free [i] . it vs )
     ( vec_free [u] . it mem )
     ( vec_free [i] . it globals )
+    ( vec_free [i] . it table )
+    ( vec_free [i] . it data_dropped )
+    ( vec_free [i] . it elem_dropped )
     : i an ( vec_len [s] . it argv )
     : ~ i ai 0
     ~ < ai an { ?? ( vec_get [s] . it argv ai ) { T pp → ?!= # i pp 0 { : *Arg a # *Arg pp ( vec_free [u] . a bytes ) ( nurl_free # s a ) } {} F → {} } = ai + ai 1 }
     ( vec_free [s] . it argv )
+    : i en ( vec_len [s] . it envp )
+    : ~ i ei 0
+    ~ < ei en { ?? ( vec_get [s] . it envp ei ) { T pp → ?!= # i pp 0 { : *Arg a # *Arg pp ( vec_free [u] . a bytes ) ( nurl_free # s a ) } {} F → {} } = ei + ei 1 }
+    ( vec_free [s] . it envp )
     : i fn ( vec_len [s] . it fds )
     : ~ i fi 0
     ~ < fi fn { ?? ( vec_get [s] . it fds fi ) { T pp → ( __freefd pp ) F → {} } = fi + fi 1 }
@@ -143,6 +200,13 @@ $ `module.nu`
     ( vec_push [s] . it argv # s a )
 }
 
+// Append an environment entry ("NAME=VALUE", copied).
+@ interp_push_env * Interp it s str → v {
+    : *Arg a # *Arg ( nurl_alloc Z Arg )
+    = . a bytes ( bytes_from_str str )
+    ( vec_push [s] . it envp # s a )
+}
+
 // Grant the module one preopened host directory, visible to it as `guest_name`
 // (the path it resolves opens against). Installed as fd 3.
 @ interp_set_preopen * Interp it s host_path s guest_name → v {
@@ -152,11 +216,18 @@ $ `module.nu`
     ( vec_push [s] . it fds # s f )
 }
 
+// Run the module's start-section function, if any — the final instantiation
+// step, before any export is invoked.
+@ interp_run_start * Interp it → v {
+    : *Module m # *Module . it mod
+    ? >= . m start_func 0 { ( exec_func it . m start_func ) } {}
+}
+
 @ __push * Interp it i v → v { ( vec_push [i] . it vs v ) }
 
 @ __pop * Interp it → i {
     : i n ( vec_len [i] . it vs )
-    ? <= n 0 { = . it trap T ^ 0 } {}
+    ? <= n 0 { ( __trap it `value stack underflow` ) ^ 0 } {}
     : i v ?? ( vec_get [i] . it vs - n 1 ) { T x → x F → 0 }
     ( vec_pop [i] . it vs )
     ^ v
@@ -184,12 +255,15 @@ $ `module.nu`
 // Advance `c` past the immediates of the instruction whose opcode is `op`.
 
 @ __skip_imm * Wc c i op → v {
-    // block / loop / if : 1-byte block type
-    ? | == op 2 | == op 3 == op 4 { ( wc_u8 c ) ^ v } {}
-    // br / br_if / call / local.* / global.* : one uleb
-    ? | == op 12 | == op 13 | == op 16 | == op 32 | == op 33 | == op 34 | == op 35 == op 36 { ( wc_uleb c ) ^ v } {}
+    // block / loop / if : block type = signed LEB (s33: void / valtype / type index)
+    ? | == op 2 | == op 3 == op 4 { ( wc_sleb c ) ^ v } {}
+    // br / br_if / call / local.* / global.* / table.get/set / ref.func : one uleb
+    ? | == op 12 | == op 13 | == op 16 | == op 32 | == op 33 | == op 34 | == op 35 | == op 36 | == op 37 | == op 38 == op 210 { ( wc_uleb c ) ^ v } {}
     // call_indirect : two ulebs
     ? == op 17 { ( wc_uleb c ) ( wc_uleb c ) ^ v } {}
+    // select t : valtype vec ; ref.null : heap type byte
+    ? == op 28 { : i tc ( wc_uleb c ) ( wc_skip c tc ) ^ v } {}
+    ? == op 208 { ( wc_u8 c ) ^ v } {}
     // br_table : vec of ulebs + default
     ? == op 14 { : i n ( wc_uleb c ) : ~ i k 0 ~ <= k n { ( wc_uleb c ) = k + k 1 } ^ v } {}
     // i32.const / i64.const : one sleb
@@ -201,13 +275,17 @@ $ `module.nu`
     ? & >= op 40 <= op 62 { ( wc_uleb c ) ( wc_uleb c ) ^ v } {}
     // memory.size / memory.grow : 1 reserved byte
     ? | == op 63 == op 64 { ( wc_u8 c ) ^ v } {}
-    // 0xfc prefix (bulk memory / saturating trunc): sub-opcode + its immediates
+    // 0xfc prefix (bulk memory / table ops / saturating trunc)
     ? == op 252 {
         : i sub ( wc_uleb c )
         ? == sub 8 { ( wc_uleb c ) ( wc_u8 c ) } {  // memory.init: dataidx + memidx
             ? == sub 9 { ( wc_uleb c ) } {  // data.drop
                 ? == sub 10 { ( wc_u8 c ) ( wc_u8 c ) } {  // memory.copy: 2 memidx
-                    ? == sub 11 { ( wc_u8 c ) } {} } } }  // memory.fill: 1 memidx
+                    ? == sub 11 { ( wc_u8 c ) } {  // memory.fill: 1 memidx
+                        ? == sub 12 { ( wc_uleb c ) ( wc_uleb c ) } {  // table.init: elemidx + tableidx
+                            ? == sub 13 { ( wc_uleb c ) } {  // elem.drop
+                                ? == sub 14 { ( wc_uleb c ) ( wc_uleb c ) } {  // table.copy: 2 tableidx
+                                    ? | == sub 15 | == sub 16 == sub 17 { ( wc_uleb c ) } {} } } } } } } }  // table.grow/size/fill
         ^ v
     } {}
     // sign-extension ops (0xc0..0xc4): no immediates (fall through)
@@ -256,14 +334,62 @@ $ `module.nu`
     ^ result
 }
 
-// Result arity of a block type byte (0x40 void → 0; a valtype → 1).
-@ __bt_arity i bt → i { ^ ? == bt 64 0 1 }
+// Block types are a signed LEB (s33): -64 (0x40) = void, other negatives are a
+// single valtype, non-negative = an index into the type section (multi-value).
+
+// Parameter count of a block type.
+@ __bt_params * Module m i bt → i {
+    ? < bt 0 { ^ 0 } {}
+    : s tp ?? ( vec_get [s] . m types bt ) { T x → x F → # s 0 }
+    ? == # i tp 0 { ^ 0 } {}
+    : *FuncType ft # *FuncType tp
+    ^ ( vec_len [i] . ft params )
+}
+
+// Result count of a block type.
+@ __bt_results * Module m i bt → i {
+    ? == bt -64 { ^ 0 } {}
+    ? < bt 0 { ^ 1 } {}
+    : s tp ?? ( vec_get [s] . m types bt ) { T x → x F → # s 0 }
+    ? == # i tp 0 { ^ 0 } {}
+    : *FuncType ft # *FuncType tp
+    ^ ( vec_len [i] . ft results )
+}
 
 // ── arithmetic helpers ───────────────────────────────────────────
 
-@ __idiv i a i b → i { ^ ? == b 0 0 / a b }
+// Set the trap flag with a message (the uniform way every trap is raised).
+@ __trap * Interp it s msg → v {
+    = . it trap T
+    ( vec_free [u] . it trapmsg )
+    = . it trapmsg ( bytes_from_str msg )
+}
 
-@ __irem i a i b → i { ^ ? == b 0 0 % a b }
+// wasm div/rem semantics: divide-by-zero traps; signed div overflow
+// (minv / −1, where minv = INT32_MIN or INT64_MIN) traps; signed rem by −1 is
+// defined as 0 (also dodging the host SIGFPE on INT_MIN % −1).
+@ __div_s * Interp it i a i b i minv → i {
+    ? == b 0 { ( __trap it `integer divide by zero` ) ^ 0 } {}
+    ? & == a minv == b -1 { ( __trap it `integer overflow` ) ^ 0 } {}
+    ^ / a b
+}
+
+@ __rem_s * Interp it i a i b → i {
+    ? == b 0 { ( __trap it `integer divide by zero` ) ^ 0 } {}
+    ? == b -1 { ^ 0 } {}
+    ^ % a b
+}
+
+// Unsigned variants over already-nonnegative operands (u32 zero-extended).
+@ __div_u * Interp it i a i b → i {
+    ? == b 0 { ( __trap it `integer divide by zero` ) ^ 0 } {}
+    ^ / a b
+}
+
+@ __rem_u * Interp it i a i b → i {
+    ? == b 0 { ( __trap it `integer divide by zero` ) ^ 0 } {}
+    ^ % a b
+}
 
 // ── unsigned helpers (NURL's `/ % >> < …` are signed; wasm needs unsigned) ──
 
@@ -308,11 +434,57 @@ $ `module.nu`
 @ __ctz64 i x → i { ? == x 0 { ^ 64 } {} : ~ i n 0 : ~ i k 0 ~ & < k 64 == 0 & ( __lshr64 x k ) 1 { = n + n 1 = k + k 1 } ^ n }
 @ __popc64 i x → i { : ~ i n 0 : ~ i k 0 ~ < k 64 { = n + n & ( __lshr64 x k ) 1 = k + k 1 } ^ n }
 
+// ── float↔int conversion helpers ─────────────────────────────────
+// NaN tests on the IEEE-754 bit patterns. (NURL's float `!=` lowers to
+// `fcmp one` — ordered — so the x≠x trick cannot see NaN; inspect bits.)
+@ __f64_nan i bits → b { ^ > & bits 9223372036854775807 9218868437227405312 }
+@ __f32_nan i bits → b { ^ > & bits 2147483647 2139095040 }
+
+// 2^63 and 2^64 as f64 (too big for a float literal's integer part).
+@ __f_2p63 → f { ^ ( bits_to_f64 4890909195324358656 ) }
+@ __f_2p64 → f { ^ ( bits_to_f64 4895412794951729152 ) }
+
+// Trapping float→int truncation core (wasm's two distinct traps): NaN →
+// `invalid conversion to integer`; trunc(x) outside [lo, hi) → `integer
+// overflow`. Returns the integral value as f64.
+@ __trunc_ck * Interp it b isnan f x f lo f hi → f {
+    ? isnan { ( __trap it `invalid conversion to integer` ) ^ 0.0 } {}
+    : f t ( trunc x )
+    ? ! & >= t lo < t hi { ( __trap it `integer overflow` ) ^ 0.0 } {}
+    ^ t
+}
+
+// Saturating counterpart (0xfc 0..7): NaN → 0, below lo → imin, at/above hi →
+// imax, else the truncated value. (Targets whose values fit an i64 cell.)
+@ __trunc_sat b isnan f x f lo f hi i imin i imax → i {
+    ? isnan { ^ 0 } {}
+    : f t ( trunc x )
+    ? < t lo { ^ imin } {}
+    ? >= t hi { ^ imax } {}
+    ^ # i t
+}
+
+// An integral f64 in [0, 2^64) → its u64 bit pattern in the i64 cell (values
+// ≥ 2^63 wrap into the negative half; NURL integer add wraps).
+@ __f_to_u64 f t → i {
+    ? >= t ( __f_2p63 ) { ^ + # i - t ( __f_2p63 ) -9223372036854775808 } {}
+    ^ # i t
+}
+
+// Saturating trunc to u64 (needs __f_to_u64 for the in-range conversion).
+@ __trunc_sat_u64 b isnan f x → i {
+    ? isnan { ^ 0 } {}
+    : f t ( trunc x )
+    ? < t 0.0 { ^ 0 } {}
+    ? >= t ( __f_2p64 ) { ^ -1 } {}
+    ^ ( __f_to_u64 t )
+}
+
 // ── linear memory ────────────────────────────────────────────────
 // Read n bytes little-endian from mem[ea]; sign-extend when `signed` and n<8.
 @ __mem_load * Interp it i ea i n i signed → i {
     ? | < ea 0 > + ea n ( vec_len [u] . it mem ) {
-        = . it trap T = . it trapmsg ( bytes_from_str `memory load out of bounds` ) ^ 0
+        ( __trap it `memory load out of bounds` ) ^ 0
     } {}
     : ~ i v 0
     : ~ i k 0
@@ -331,7 +503,7 @@ $ `module.nu`
 // Write the low n bytes of val little-endian to mem[ea].
 @ __mem_store * Interp it i ea i n i val → v {
     ? | < ea 0 > + ea n ( vec_len [u] . it mem ) {
-        = . it trap T = . it trapmsg ( bytes_from_str `memory store out of bounds` ) ^ v
+        ( __trap it `memory store out of bounds` ) ^ v
     } {}
     : ~ i k 0
     ~ < k n {
@@ -340,18 +512,27 @@ $ `module.nu`
     }
 }
 
-@ __mem_grow * Interp it i delta → v {
-    ? <= delta 0 { ^ v } {}
+// Grow linear memory by `delta` pages. Returns the old page count, or −1 when
+// the declared maximum (or the wasm32 hard limit of 65536 pages) would be
+// exceeded — the value memory.grow pushes.
+@ __mem_grow * Interp it i delta → i {
+    : i old . it mem_pages
+    ? == delta 0 { ^ old } {}
+    : *Module m # *Module . it mod
+    : ~ i limit 65536
+    ? & > . m mem_max 0 < . m mem_max limit { = limit . m mem_max } {}
+    ? | < delta 0 > + old delta limit { ^ -1 } {}
     : i add * delta ( __page )
     : ~ i k 0
     ~ < k add { ( vec_push [u] . it mem # u 0 ) = k + k 1 }
-    = . it mem_pages + . it mem_pages delta
+    = . it mem_pages + old delta
+    ^ old
 }
 
 // Execute a memory instruction (0x28..0x40). memarg = align + offset ulebs.
 @ __exec_mem * Interp it * Wc c i op → v {
     ? == op 63 { ( wc_u8 c ) ( __push it . it mem_pages ) ^ v } {}  // memory.size
-    ? == op 64 { ( wc_u8 c ) : i d ( __pop it ) : i old . it mem_pages ( __mem_grow it d ) ( __push it old ) ^ v } {}  // memory.grow
+    ? == op 64 { ( wc_u8 c ) : i d ( __u32 ( __pop it ) ) ( __push it ( __mem_grow it d ) ) ^ v } {}  // memory.grow
     : i align ( wc_uleb c )
     : i off ( wc_uleb c )
     ? & >= op 54 <= op 62 {  // stores: pop value, then addr
@@ -410,20 +591,30 @@ $ `module.nu`
     ^ ?? ( vec_get [s] ctrl ix ) { T x → x F → # s 0 }
 }
 
-// Take branch to label depth k: re-enter a loop, or exit a block past its end.
+// Truncate the value stack to `height`, preserving the top `arity` values (the
+// branch payload: a block's results / a loop's parameters).
+@ __br_keep * Interp it i height i arity → v {
+    : ( Vec i ) kept ( vec_new [i] )
+    : ~ i k 0
+    ~ < k arity { ( vec_push [i] kept ( __pop it ) ) = k + k 1 }
+    ( __vtrunc it height )
+    : ~ i j arity
+    ~ > j 0 { = j - j 1 ( __push it ?? ( vec_get [i] kept j ) { T x → x F → 0 } ) }
+    ( vec_free [i] kept )
+}
+
+// Take branch to label depth k: re-enter a loop (carrying its parameters), or
+// exit a block past its `end` (carrying its results).
 @ __do_branch * Interp it ( Vec s ) ctrl * Wc c i k → v {
     : s tp ( __ctrl_at ctrl k )
-    ? == # i tp 0 { = . it trap T ^ v } {}
+    ? == # i tp 0 { ( __trap it `branch label out of range` ) ^ v } {}
     : *Ctrl target # *Ctrl tp
+    ( __br_keep it . target height . target arity )
     ? == . target is_loop 1 {
-        ( __vtrunc it . target height )
         : ~ i pops k
         ~ > pops 0 { ( __ctrl_pop ctrl ) = pops - pops 1 }
         = . c pos . target start_pc
     } {
-        ? == . target arity 1 {
-            : i rv ( __pop it ) ( __vtrunc it . target height ) ( __push it rv )
-        } { ( __vtrunc it . target height ) }
         : ~ i pops + k 1
         ~ > pops 0 { ( __ctrl_pop ctrl ) = pops - pops 1 }
         = . c pos + . target end_pc 1
@@ -434,47 +625,141 @@ $ `module.nu`
 // Execute function `fidx`. Arguments are already on the value stack; on return
 // the function's results are left on top. Recurses for `call`.
 
-@ exec_func * Interp it i fidx → v {
-    ? | . it trap . it exited { ^ v } {}
-    : *Module m # *Module . it mod
-    // Imported functions occupy the low indices → dispatch to the host (WASI).
-    ? < fidx . m num_import_funcs {
-        : s wp ?? ( vec_get [s] . m imports fidx ) { T x → x F → # s 0 }
-        ? != # i wp 0 { : *WImport w # *WImport wp ( __wasi_dispatch it . w field ) } { = . it trap T }
-        ^ v
-    } {}
+// Dispatch an imported function to the WASI host layer (no frame needed).
+@ __call_import * Interp it * Module m i fidx → v {
+    : s wp ?? ( vec_get [s] . m imports fidx ) { T x → x F → # s 0 }
+    ? != # i wp 0 { : *WImport w # *WImport wp ( __wasi_dispatch it . w module . w field ) } { ( __trap it `bad import index` ) }
+}
+
+// Build a frame for defined function `fidx`: locals = params (popped from the
+// value stack, in order) ++ declared locals (zeroed). #s 0 on a bad index.
+@ __frame_new * Interp it * Module m i fidx → s {
     : s fp ?? ( vec_get [s] . m funcs - fidx . m num_import_funcs ) { T x → x F → # s 0 }
-    ? == # i fp 0 { = . it trap T ^ v } {}
+    ? == # i fp 0 { ( __trap it `bad function index` ) ^ # s 0 } {}
     : *WFunc f # *WFunc fp
     : s tp ?? ( vec_get [s] . m types . f typeidx ) { T x → x F → # s 0 }
+    ? == # i tp 0 { ( __trap it `bad type index` ) ^ # s 0 } {}
     : *FuncType ft # *FuncType tp
     : i nparams ( vec_len [i] . ft params )
     : i nlocals_decl ( vec_len [i] . f locals )
-
-    // frame locals = params (popped in order) ++ declared locals (zeroed)
     : ( Vec i ) locals ( vec_new [i] )
     : ~ i k 0
     ~ < k + nparams nlocals_decl { ( vec_push [i] locals 0 ) = k + k 1 }
     : ~ i p nparams
     ~ > p 0 { = p - p 1 ( vec_set [i] locals p ( __pop it ) ) }
+    : *Frame fr # *Frame ( nurl_alloc Z Frame )
+    = . fr fidx fidx
+    = . fr locals locals
+    = . fr ctrl ( vec_new [s] )
+    = . fr pos . f code_start
+    = . fr end . f code_end
+    = . fr code_start . f code_start
+    ^ # s fr
+}
 
-    : ( Vec s ) ctrl ( vec_new [s] )
-    : *Wc c ( wc_new . m code )
-    = . c pos . f code_start
-    = . c len . f code_end
-    : ~ b ret F
-
-    ~ & & ! ret ! . it exited & ! . it trap < . c pos . f code_end {
-        : i op ( wc_u8 c )
-        ( __exec_op it m c ctrl locals op )
-        ? == op 15 { = ret T } {}  // return
-    }
-
-    : i cn ( vec_len [s] ctrl )
+@ __frame_free s pp → v {
+    ? == # i pp 0 { ^ v } {}
+    : *Frame fr # *Frame pp
+    : i cn ( vec_len [s] . fr ctrl )
     : ~ i ci 0
-    ~ < ci cn { ?? ( vec_get [s] ctrl ci ) { T pp → ?!= # i pp 0 { ( nurl_free pp ) } {} F → {} } = ci + ci 1 }
-    ( vec_free [s] ctrl )
-    ( vec_free [i] locals )
+    ~ < ci cn { ?? ( vec_get [s] . fr ctrl ci ) { T cp → ?!= # i cp 0 { ( nurl_free cp ) } {} F → {} } = ci + ci 1 }
+    ( vec_free [s] . fr ctrl )
+    ( vec_free [i] . fr locals )
+    ( nurl_free # s fr )
+}
+
+// On trap: append a wasm backtrace (innermost first) to the trap message,
+// naming frames from the module's name section when present.
+@ __trap_backtrace * Interp it * Module m ( Vec s ) frames → v {
+    : ( Vec u ) msg . it trapmsg
+    : i n ( vec_len [s] frames )
+    : ~ i k - n 1
+    : ~ i shown 0
+    ~ & >= k 0 < shown 16 {
+        : s pp ?? ( vec_get [s] frames k ) { T x → x F → # s 0 }
+        ? != # i pp 0 {
+            : *Frame fr # *Frame pp
+            ( __msg_push_str msg `\n  at ` )
+            : ( Vec u ) nm ( module_func_name m . fr fidx )
+            ? > ( vec_len [u] nm ) 0 { ( __msg_push_vec msg nm ) } { ( __msg_push_str msg `<unknown>` ) }
+            ( vec_free [u] nm )
+            ( __msg_push_str msg ` (func ` )
+            ( __msg_push_int msg . fr fidx )
+            ( __msg_push_str msg `, +` )
+            ( __msg_push_int msg - . fr pos . fr code_start )
+            ( __msg_push_str msg `)` )
+        } {}
+        = shown + shown 1
+        = k - k 1
+    }
+    ? >= k 0 { ( __msg_push_str msg `\n  …` ) } {}
+    = . it trapmsg msg
+}
+
+@ __msg_push_str ( Vec u ) msg s str → v {
+    : i n ( nurl_str_len str )
+    : ~ i k 0
+    ~ < k n { ( vec_push [u] msg # u ( nurl_str_get str k ) ) = k + k 1 }
+}
+
+@ __msg_push_vec ( Vec u ) msg ( Vec u ) src → v {
+    : i n ( vec_len [u] src )
+    : ~ i k 0
+    ~ < k n { ( vec_push [u] msg ?? ( vec_get [u] src k ) { T x → x F → # u 0 } ) = k + k 1 }
+}
+
+@ __msg_push_int ( Vec u ) msg i x → v {
+    ? < x 0 { ( vec_push [u] msg # u 45 ) ( __msg_push_int msg - 0 x ) ^ v } {}
+    ? >= x 10 { ( __msg_push_int msg / x 10 ) } {}
+    ( vec_push [u] msg # u + 48 % x 10 )
+}
+
+// Execute function `fidx` to completion on an EXPLICIT frame stack — guest
+// recursion depth is bounded by max_depth, not by the host's native stack.
+// Arguments are already on the value stack; results are left on top.
+@ exec_func * Interp it i fidx → v {
+    ? | . it trap . it exited { ^ v } {}
+    : *Module m # *Module . it mod
+    // Imported functions occupy the low indices → dispatch to the host (WASI).
+    ? < fidx . m num_import_funcs { ( __call_import it m fidx ) ^ v } {}
+    : ( Vec s ) frames ( vec_new [s] )
+    : s fr0 ( __frame_new it m fidx )
+    ? != # i fr0 0 { ( vec_push [s] frames fr0 ) } {}
+    : *Wc c ( wc_new . m code )
+    ~ & & > ( vec_len [s] frames ) 0 ! . it exited ! . it trap {
+        : i depth ( vec_len [s] frames )
+        : s tp ?? ( vec_get [s] frames - depth 1 ) { T x → x F → # s 0 }
+        : *Frame fr # *Frame tp
+        ? >= . fr pos . fr end {  // fell off the end of the body → return
+            ( __frame_free tp ) ( vec_pop [s] frames )
+        } {
+            ? == . it fuel 0 { ( __trap it `fuel exhausted` ) } {
+                ? > . it fuel 0 { = . it fuel - . it fuel 1 } {}
+                = . c pos . fr pos
+                = . c len . fr end
+                : i op ( wc_u8 c )
+                ( __exec_op it m c . fr ctrl . fr locals op )
+                = . fr pos . c pos
+                ? == op 15 { ( __frame_free tp ) ( vec_pop [s] frames ) } {  // return
+                    ? >= . it pending_call 0 {  // call / call_indirect
+                        : i callee . it pending_call
+                        = . it pending_call -1
+                        ? < callee . m num_import_funcs { ( __call_import it m callee ) } {
+                            ? >= ( vec_len [s] frames ) . it max_depth { ( __trap it `call stack exhausted` ) } {
+                                : s nf ( __frame_new it m callee )
+                                ? != # i nf 0 { ( vec_push [s] frames nf ) } {}
+                            }
+                        }
+                    } {}
+                }
+            }
+        }
+    }
+    ? . it trap { ( __trap_backtrace it m frames ) } {}
+    : i fn ( vec_len [s] frames )
+    : ~ i fi 0
+    ~ < fi fn { ?? ( vec_get [s] frames fi ) { T pp → ( __frame_free pp ) F → {} } = fi + fi 1 }
+    ( vec_free [s] frames )
     ( wc_free c )
 }
 
@@ -482,21 +767,24 @@ $ `module.nu`
 // stack, locals, control stack and cursor.
 @ __exec_op * Interp it * Module m * Wc c ( Vec s ) ctrl ( Vec i ) locals i op → v {
     // ── control flow ──
-    ? == op 0 { = . it trap T = . it trapmsg ( bytes_from_str `unreachable` ) ^ v } {}  // unreachable
+    ? == op 0 { ( __trap it `unreachable` ) ^ v } {}  // unreachable
     ? == op 1 { ^ v } {}  // nop
     ? | == op 2 == op 3 {  // block / loop
-        : i bt ( wc_u8 c )
+        : i bt ( wc_sleb c )
         : i endp ( __find_end . m code . c pos . c len )
-        ? == op 3 { ( __ctrl_push ctrl 1 . c pos endp ( __vsh it ) ( __bt_arity bt ) ) }
-        { ( __ctrl_push ctrl 0 0 endp ( __vsh it ) ( __bt_arity bt ) ) }
+        // control-frame height = the stack base under the block's parameters;
+        // a branch carries a loop's params back to the top, a block's results out.
+        : i height - ( __vsh it ) ( __bt_params m bt )
+        ? == op 3 { ( __ctrl_push ctrl 1 . c pos endp height ( __bt_params m bt ) ) }
+        { ( __ctrl_push ctrl 0 0 endp height ( __bt_results m bt ) ) }
         ^ v
     } {}
     ? == op 4 {  // if
-        : i bt ( wc_u8 c )
+        : i bt ( wc_sleb c )
         : i endp ( __find_end . m code . c pos . c len )
         : i elsep ( __find_else . m code . c pos . c len )
         : i cond ( __pop it )
-        ( __ctrl_push ctrl 0 0 endp ( __vsh it ) ( __bt_arity bt ) )
+        ( __ctrl_push ctrl 0 0 endp - ( __vsh it ) ( __bt_params m bt ) ( __bt_results m bt ) )
         ? == cond 0 { = . c pos ? >= elsep 0 + elsep 1 endp } {}
         ^ v
     } {}
@@ -518,22 +806,47 @@ $ `module.nu`
         ( __do_branch it ctrl c chosen )
         ^ v
     } {}
-    ? == op 15 { ^ v } {}  // return (handled by caller loop)
-    ? == op 16 { : i fi ( wc_uleb c ) ( exec_func it fi ) ^ v } {}  // call
+    ? == op 15 { ^ v } {}  // return (handled by the driver)
+    ? == op 16 { : i fi ( wc_uleb c ) = . it pending_call fi ^ v } {}  // call → driver pushes the frame
     ? == op 17 {  // call_indirect typeidx tableidx
         : i typeidx ( wc_uleb c )
         : i tblidx ( wc_uleb c )
         : i ei & ( __pop it ) 4294967295
-        ? | < ei 0 >= ei ( vec_len [i] . m table ) {
-            = . it trap T = . it trapmsg ( bytes_from_str `call_indirect: index out of range` ) ^ v
+        ? | < ei 0 >= ei ( vec_len [i] . it table ) {
+            ( __trap it `call_indirect: index out of range` ) ^ v
         } {}
-        : i fi ?? ( vec_get [i] . m table ei ) { T x → x F → -1 }
-        ? < fi 0 { = . it trap T = . it trapmsg ( bytes_from_str `call_indirect: null table element` ) ^ v } {}
-        ( exec_func it fi )
+        : i fi ?? ( vec_get [i] . it table ei ) { T x → x F → -1 }
+        ? < fi 0 { ( __trap it `call_indirect: null table element` ) ^ v } {}
+        // runtime type check: the callee's type must structurally equal the
+        // instruction's expected type
+        : s want ?? ( vec_get [s] . m types typeidx ) { T x → x F → # s 0 }
+        : s have ( module_func_type m fi )
+        ? | == # i want 0 == # i have 0 {
+            ( __trap it `call_indirect: bad type index` ) ^ v } {}
+        ? ! ( functype_eq # *FuncType want # *FuncType have ) {
+            ( __trap it `call_indirect: signature mismatch` ) ^ v } {}
+        = . it pending_call fi
         ^ v
     } {}
     ? == op 26 { ( __pop it ) ^ v } {}  // drop
     ? == op 27 { : i cc ( __pop it ) : i b2 ( __pop it ) : i a2 ( __pop it ) ( __push it ? != cc 0 a2 b2 ) ^ v } {}  // select
+    ? == op 28 {  // select t (typed; reference types) — same semantics
+        : i tc ( wc_uleb c ) ( wc_skip c tc )
+        : i cc ( __pop it ) : i b2 ( __pop it ) : i a2 ( __pop it ) ( __push it ? != cc 0 a2 b2 ) ^ v } {}
+    ? == op 37 {  // table.get
+        ( wc_uleb c )
+        : i ei ( __u32 ( __pop it ) )
+        ? >= ei ( vec_len [i] . it table ) { ( __trap it `out of bounds table access` ) ^ v } {}
+        ( __push it ?? ( vec_get [i] . it table ei ) { T x → x F → -1 } ) ^ v } {}
+    ? == op 38 {  // table.set
+        ( wc_uleb c )
+        : i val ( __pop it )
+        : i ei ( __u32 ( __pop it ) )
+        ? >= ei ( vec_len [i] . it table ) { ( __trap it `out of bounds table access` ) ^ v } {}
+        ( vec_set [i] . it table ei val ) ^ v } {}
+    ? == op 208 { ( wc_u8 c ) ( __push it -1 ) ^ v } {}  // ref.null ht → −1
+    ? == op 209 { ( __push it ? == ( __pop it ) -1 1 0 ) ^ v } {}  // ref.is_null
+    ? == op 210 { : i rfi ( wc_uleb c ) ( __push it rfi ) ^ v } {}  // ref.func (funcref = index)
     // ── locals ──
     ? == op 32 { : i li ( wc_uleb c ) ( __push it ?? ( vec_get [i] locals li ) { T x → x F → 0 } ) ^ v } {}
     ? == op 33 { : i li ( wc_uleb c ) ( vec_set [i] locals li ( __pop it ) ) ^ v } {}
@@ -590,10 +903,10 @@ $ `module.nu`
     ? == op 106 { ( __push it ( __w32 + a b ) ) ^ v } {}
     ? == op 107 { ( __push it ( __w32 - a b ) ) ^ v } {}
     ? == op 108 { ( __push it ( __w32 * a b ) ) ^ v } {}
-    ? == op 109 { ( __push it ( __w32 ( __idiv ( __w32 a ) ( __w32 b ) ) ) ) ^ v } {}
-    ? == op 110 { ( __push it ( __w32 ( __idiv ( __u32 a ) ( __u32 b ) ) ) ) ^ v } {}  // div_u
-    ? == op 111 { ( __push it ( __w32 ( __irem ( __w32 a ) ( __w32 b ) ) ) ) ^ v } {}
-    ? == op 112 { ( __push it ( __w32 ( __irem ( __u32 a ) ( __u32 b ) ) ) ) ^ v } {}  // rem_u
+    ? == op 109 { ( __push it ( __w32 ( __div_s it ( __w32 a ) ( __w32 b ) -2147483648 ) ) ) ^ v } {}
+    ? == op 110 { ( __push it ( __w32 ( __div_u it ( __u32 a ) ( __u32 b ) ) ) ) ^ v } {}  // div_u
+    ? == op 111 { ( __push it ( __w32 ( __rem_s it ( __w32 a ) ( __w32 b ) ) ) ) ^ v } {}
+    ? == op 112 { ( __push it ( __w32 ( __rem_u it ( __u32 a ) ( __u32 b ) ) ) ) ^ v } {}  // rem_u
     ? == op 113 { ( __push it ( __w32 & a b ) ) ^ v } {}
     ? == op 114 { ( __push it ( __w32 | a b ) ) ^ v } {}
     ? == op 115 { ( __push it ( __w32 ^^ a b ) ) ^ v } {}
@@ -617,10 +930,10 @@ $ `module.nu`
     ? == op 124 { ( __push it + a b ) ^ v } {}
     ? == op 125 { ( __push it - a b ) ^ v } {}
     ? == op 126 { ( __push it * a b ) ^ v } {}
-    ? == op 127 { ( __push it ( __idiv a b ) ) ^ v } {}
-    ? == op 128 { ( __push it ( __udiv64 a b ) ) ^ v } {}  // div_u
-    ? == op 129 { ( __push it ( __irem a b ) ) ^ v } {}
-    ? == op 130 { ( __push it ( __urem64 a b ) ) ^ v } {}  // rem_u
+    ? == op 127 { ( __push it ( __div_s it a b -9223372036854775808 ) ) ^ v } {}
+    ? == op 128 { ? == b 0 { ( __trap it `integer divide by zero` ) } { ( __push it ( __udiv64 a b ) ) } ^ v } {}  // div_u
+    ? == op 129 { ( __push it ( __rem_s it a b ) ) ^ v } {}
+    ? == op 130 { ? == b 0 { ( __trap it `integer divide by zero` ) } { ( __push it ( __urem64 a b ) ) } ^ v } {}  // rem_u
     ? == op 131 { ( __push it & a b ) ^ v } {}
     ? == op 132 { ( __push it | a b ) ^ v } {}
     ? == op 133 { ( __push it ^^ a b ) ^ v } {}
@@ -630,8 +943,7 @@ $ `module.nu`
     ? == op 137 { ( __push it ( __rotl64 a b ) ) ^ v } {}  // rotl
     ? == op 138 { ( __push it ( __rotr64 a b ) ) ^ v } {}  // rotr
     // unsupported opcode → trap
-    = . it trap T
-    = . it trapmsg ( bytes_from_str `unsupported opcode` )
+    ( __trap it `unsupported opcode` )
 }
 
 // ── floats (values held as their IEEE-754 bit pattern in the i64 cell) ──
@@ -660,13 +972,23 @@ $ `module.nu`
     ? == op 161 { ( __push it ( f64_to_bits - a b ) ) ^ v } {}
     ? == op 162 { ( __push it ( f64_to_bits * a b ) ) ^ v } {}
     ? == op 163 { ( __push it ( f64_to_bits / a b ) ) ^ v } {}
-    ? == op 164 { ( __push it ( f64_to_bits ? < a b a b ) ) ^ v } {}  // min (NaN-naive)
+    // min/max, wasm semantics: any NaN → canonical NaN; min(±0,∓0) = −0 (sign
+    // OR on the bits), max(±0,∓0) = +0 (sign AND).
+    ? | ( __f64_nan ab ) ( __f64_nan bb ) { ( __push it 9221120237041090560 ) ^ v } {}
+    ? & == & ab 9223372036854775807 0 == & bb 9223372036854775807 0 {
+        ? == op 164 { ( __push it | ab bb ) } { ( __push it & ab bb ) }
+        ^ v } {}
+    ? == op 164 { ( __push it ( f64_to_bits ? < a b a b ) ) ^ v } {}  // min
     ? == op 165 { ( __push it ( f64_to_bits ? > a b a b ) ) ^ v } {}  // max
 }
 
 @ __f64_cmp * Interp it i op → v {
-    : f b ( bits_to_f64 ( __pop it ) )
-    : f a ( bits_to_f64 ( __pop it ) )
+    : i bb ( __pop it )
+    : i ab ( __pop it )
+    // unordered: NaN makes `ne` true and every other comparison false
+    ? | ( __f64_nan ab ) ( __f64_nan bb ) { ( __push it ? == op 98 1 0 ) ^ v } {}
+    : f a ( bits_to_f64 ab )
+    : f b ( bits_to_f64 bb )
     ? == op 97 { ( __push it ? == a b 1 0 ) ^ v } {}
     ? == op 98 { ( __push it ? != a b 1 0 ) ^ v } {}
     ? == op 99 { ( __push it ? < a b 1 0 ) ^ v } {}
@@ -697,13 +1019,22 @@ $ `module.nu`
     ? == op 147 { ( __push it ( f32_to_bits - a b ) ) ^ v } {}
     ? == op 148 { ( __push it ( f32_to_bits * a b ) ) ^ v } {}
     ? == op 149 { ( __push it ( f32_to_bits / a b ) ) ^ v } {}
+    // min/max, wasm semantics (see the f64 twin)
+    ? | ( __f32_nan ab ) ( __f32_nan bb ) { ( __push it 2143289344 ) ^ v } {}
+    ? & == & ab 2147483647 0 == & bb 2147483647 0 {
+        ? == op 150 { ( __push it | ab bb ) } { ( __push it & ab bb ) }
+        ^ v } {}
     ? == op 150 { ( __push it ( f32_to_bits ? < a b a b ) ) ^ v } {}
     ? == op 151 { ( __push it ( f32_to_bits ? > a b a b ) ) ^ v } {}
 }
 
 @ __f32_cmp * Interp it i op → v {
-    : f32 b ( bits_to_f32 ( __pop it ) )
-    : f32 a ( bits_to_f32 ( __pop it ) )
+    : i bb ( __pop it )
+    : i ab ( __pop it )
+    // unordered: NaN makes `ne` true and every other comparison false
+    ? | ( __f32_nan ab ) ( __f32_nan bb ) { ( __push it ? == op 92 1 0 ) ^ v } {}
+    : f32 b ( bits_to_f32 bb )
+    : f32 a ( bits_to_f32 ab )
     ? == op 91 { ( __push it ? == a b 1 0 ) ^ v } {}
     ? == op 92 { ( __push it ? != a b 1 0 ) ^ v } {}
     ? == op 93 { ( __push it ? < a b 1 0 ) ^ v } {}
@@ -719,19 +1050,60 @@ $ `module.nu`
     ? == op 172 { ( __push it ( __w32 ( __pop it ) ) ) ^ v } {}  // i64.extend_i32_s
     ? == op 173 { ( __push it & ( __pop it ) 4294967295 ) ^ v } {}  // i64.extend_i32_u
     ? & >= op 188 <= op 191 { ^ v } {}  // *.reinterpret_* : no-op
-    ? == op 168 { ( __push it ( __w32 # i # f ( bits_to_f32 ( __pop it ) ) ) ) ^ v } {}  // i32.trunc_f32_s
-    ? == op 169 { ( __push it ( __w32 # i # f ( bits_to_f32 ( __pop it ) ) ) ) ^ v } {}  // i32.trunc_f32_u (approx)
-    ? == op 170 { ( __push it ( __w32 # i ( bits_to_f64 ( __pop it ) ) ) ) ^ v } {}  // i32.trunc_f64_s
-    ? == op 171 { ( __push it ( __w32 # i ( bits_to_f64 ( __pop it ) ) ) ) ^ v } {}  // i32.trunc_f64_u (approx)
-    ? | == op 174 == op 175 { ( __push it # i # f ( bits_to_f32 ( __pop it ) ) ) ^ v } {}  // i64.trunc_f32_*
-    ? | == op 176 == op 177 { ( __push it # i ( bits_to_f64 ( __pop it ) ) ) ^ v } {}  // i64.trunc_f64_*
+    // trapping float→int truncation (NaN / out-of-range → trap, per spec)
+    ? == op 168 {  // i32.trunc_f32_s
+        : i ab ( __pop it )
+        : f t ( __trunc_ck it ( __f32_nan ab ) # f ( bits_to_f32 ab ) -2147483648.0 2147483648.0 )
+        ( __push it ( __w32 # i t ) ) ^ v } {}
+    ? == op 169 {  // i32.trunc_f32_u  (trunc(-0.9) = -0.0 ≥ 0.0 → valid 0)
+        : i ab ( __pop it )
+        : f t ( __trunc_ck it ( __f32_nan ab ) # f ( bits_to_f32 ab ) 0.0 4294967296.0 )
+        ( __push it ( __w32 # i t ) ) ^ v } {}
+    ? == op 170 {  // i32.trunc_f64_s
+        : i ab ( __pop it )
+        : f t ( __trunc_ck it ( __f64_nan ab ) ( bits_to_f64 ab ) -2147483648.0 2147483648.0 )
+        ( __push it ( __w32 # i t ) ) ^ v } {}
+    ? == op 171 {  // i32.trunc_f64_u
+        : i ab ( __pop it )
+        : f t ( __trunc_ck it ( __f64_nan ab ) ( bits_to_f64 ab ) 0.0 4294967296.0 )
+        ( __push it ( __w32 # i t ) ) ^ v } {}
+    ? == op 174 {  // i64.trunc_f32_s
+        : i ab ( __pop it )
+        : f t ( __trunc_ck it ( __f32_nan ab ) # f ( bits_to_f32 ab ) - 0.0 ( __f_2p63 ) ( __f_2p63 ) )
+        ( __push it # i t ) ^ v } {}
+    ? == op 175 {  // i64.trunc_f32_u
+        : i ab ( __pop it )
+        : f t ( __trunc_ck it ( __f32_nan ab ) # f ( bits_to_f32 ab ) 0.0 ( __f_2p64 ) )
+        ( __push it ( __f_to_u64 t ) ) ^ v } {}
+    ? == op 176 {  // i64.trunc_f64_s
+        : i ab ( __pop it )
+        : f t ( __trunc_ck it ( __f64_nan ab ) ( bits_to_f64 ab ) - 0.0 ( __f_2p63 ) ( __f_2p63 ) )
+        ( __push it # i t ) ^ v } {}
+    ? == op 177 {  // i64.trunc_f64_u
+        : i ab ( __pop it )
+        : f t ( __trunc_ck it ( __f64_nan ab ) ( bits_to_f64 ab ) 0.0 ( __f_2p64 ) )
+        ( __push it ( __f_to_u64 t ) ) ^ v } {}
     ? == op 178 { ( __push it ( f32_to_bits # f32 ( __w32 ( __pop it ) ) ) ) ^ v } {}  // f32.convert_i32_s
     ? == op 179 { ( __push it ( f32_to_bits # f32 & ( __pop it ) 4294967295 ) ) ^ v } {}  // f32.convert_i32_u
-    ? | == op 180 == op 181 { ( __push it ( f32_to_bits # f32 ( __pop it ) ) ) ^ v } {}  // f32.convert_i64_*
+    ? == op 180 { ( __push it ( f32_to_bits # f32 ( __pop it ) ) ) ^ v } {}  // f32.convert_i64_s
+    ? == op 181 {  // f32.convert_i64_u — u64 ≥ 2^63 via halve-with-sticky-bit + double
+        : i a ( __pop it )
+        ? >= a 0 { ( __push it ( f32_to_bits # f32 a ) ) } {
+            : i h | ( __lshr64 a 1 ) & a 1
+            : f32 t # f32 h
+            ( __push it ( f32_to_bits + t t ) ) }
+        ^ v } {}
     ? == op 182 { ( __push it ( f32_to_bits # f32 ( bits_to_f64 ( __pop it ) ) ) ) ^ v } {}  // f32.demote_f64
     ? == op 183 { ( __push it ( f64_to_bits # f ( __w32 ( __pop it ) ) ) ) ^ v } {}  // f64.convert_i32_s
     ? == op 184 { ( __push it ( f64_to_bits # f & ( __pop it ) 4294967295 ) ) ^ v } {}  // f64.convert_i32_u
-    ? | == op 185 == op 186 { ( __push it ( f64_to_bits # f ( __pop it ) ) ) ^ v } {}  // f64.convert_i64_*
+    ? == op 185 { ( __push it ( f64_to_bits # f ( __pop it ) ) ) ^ v } {}  // f64.convert_i64_s
+    ? == op 186 {  // f64.convert_i64_u — u64 ≥ 2^63 via halve-with-sticky-bit + double
+        : i a ( __pop it )
+        ? >= a 0 { ( __push it ( f64_to_bits # f a ) ) } {
+            : i h | ( __lshr64 a 1 ) & a 1
+            : f t # f h
+            ( __push it ( f64_to_bits + t t ) ) }
+        ^ v } {}
     ? == op 187 { ( __push it ( f64_to_bits # f # f ( bits_to_f32 ( __pop it ) ) ) ) ^ v } {}  // f64.promote_f32
     ? & >= op 153 <= op 159 { ( __f64_unary it op ) ^ v } {}
     ? & >= op 160 <= op 166 { ( __f64_binary it op ) ^ v } {}
@@ -739,8 +1111,7 @@ $ `module.nu`
     ? & >= op 139 <= op 145 { ( __f32_unary it op ) ^ v } {}
     ? & >= op 146 <= op 152 { ( __f32_binary it op ) ^ v } {}
     ? & >= op 91 <= op 96 { ( __f32_cmp it op ) ^ v } {}
-    = . it trap T
-    = . it trapmsg ( bytes_from_str `unsupported float opcode` )
+    ( __trap it `unsupported float opcode` )
 }
 
 // ── WASI host functions (wasi_snapshot_preview1) ─────────────────
@@ -762,8 +1133,18 @@ $ `module.nu`
 
 @ __m_put_u32 * Interp it i a i val → v { ( __mem_store it a 4 val ) }
 
+// Overwrite/extend a file fd's buffer at byte offset `at` (gap zero-filled —
+// the file-semantics core shared by fd_write and fd_pwrite).
+@ __fd_put_at * WFd f i at ( Vec u ) buf → v {
+    = . f dirty T
+    : i bn ( vec_len [u] buf )
+    ~ < ( vec_len [u] . f data ) + at bn { ( vec_push [u] . f data # u 0 ) }
+    : ~ i bi 0
+    ~ < bi bn { ( vec_set [u] . f data + at bi ?? ( vec_get [u] buf bi ) { T x → x F → # u 0 } ) = bi + bi 1 }
+}
+
 // Write `len` bytes of memory at `ptr` to fd: 1 stdout, 2 stderr, else a file
-// descriptor's buffer (flushed to disk on close).
+// descriptor's buffer at its current position (flushed to disk on close/sync).
 @ __wasi_write_bytes * Interp it i fd i ptr i len → v {
     ? <= len 0 { ^ v } {}
     : ( Vec u ) buf ( vec_with_cap [u] len )
@@ -775,7 +1156,12 @@ $ `module.nu`
         ( string_free s )
     } {
         : s fp ( __fd_at it fd )
-        ? != # i fp 0 { : *WFd f # *WFd fp = . f dirty T : i bn ( vec_len [u] buf ) : ~ i bi 0 ~ < bi bn { ( vec_push [u] . f data ?? ( vec_get [u] buf bi ) { T x → # i x F → 0 } ) = bi + bi 1 } } {}
+        ? != # i fp 0 {
+            : *WFd f # *WFd fp
+            : i at ? . f append ( vec_len [u] . f data ) . f pos
+            ( __fd_put_at f at buf )
+            = . f pos + at len
+        } {}
     }
     ( vec_free [u] buf )
 }
@@ -783,6 +1169,7 @@ $ `module.nu`
 @ __wasi_proc_exit * Interp it → v {
     = . it exit_code ( __pop it )
     = . it exited T
+    ( interp_flush it )
 }
 
 @ __wasi_fd_write * Interp it → v {
@@ -817,12 +1204,67 @@ $ `module.nu`
     ^ b
 }
 
+// IoErr → WASI errno (2 EACCES, 20 EEXIST, 29 EIO, 44 ENOENT).
+@ __ioerr_errno IoErr e → i {
+    ^ ?? e {
+        NotFound → 44
+        PermissionDenied → 2
+        AlreadyExists → 20
+        _ → 29
+    }
+}
+
+// Is `path` a directory on the host? (opendir succeeds ⇔ directory.)
+@ __is_dir s path → b {
+    : !( Vec String ) IoErr r ( dir_list path )
+    ^ ?? r {
+        T names → {
+            : i n ( vec_len [String] names )
+            : ~ i k 0
+            ~ < k n { ?? ( vec_get [String] names k ) { T nm → ( string_free nm ) F → {} } = k + k 1 }
+            ( vec_free [String] names )
+            ^ T
+        }
+        F e → F
+    }
+}
+
+// Join a dir fd's host path + "/" + `len` guest bytes at `ptr` into an owned
+// String; #s 0 (as String data) is never returned — the caller checked the fd.
+@ __join_path * Interp it * WFd d i ptr i len → String {
+    : ( Vec u ) full ( vec_new [u] )
+    : i hn ( vec_len [u] . d host )
+    : ~ i k 0
+    ~ < k hn { ( vec_push [u] full ?? ( vec_get [u] . d host k ) { T x → x F → # u 0 } ) = k + k 1 }
+    ? & > hn 0 != ?? ( vec_get [u] . d host - hn 1 ) { T x → # i x F → 0 } 47 { ( vec_push [u] full # u 47 ) } {}
+    : ( Vec u ) rel ( __mem_slice it ptr len )
+    : i rn ( vec_len [u] rel )
+    : ~ i j 0
+    ~ < j rn { ( vec_push [u] full ?? ( vec_get [u] rel j ) { T x → x F → # u 0 } ) = j + j 1 }
+    ( vec_free [u] rel )
+    : String hs ( bytes_to_str full )
+    ( vec_free [u] full )
+    ^ hs
+}
+
+// The dir fd record for `fd`, or #s 0 unless it is a directory (preopen or
+// opened) — the base every path_* call resolves against.
+@ __dirfd_at * Interp it i fd → s {
+    : s dp ( __fd_at it fd )
+    ? == # i dp 0 { ^ # s 0 } {}
+    : *WFd d # *WFd dp
+    ? | == . d kind 2 == . d kind 4 { ^ dp } {}
+    ^ # s 0
+}
+
 // path_open(dirfd, dirflags, path_ptr, path_len, oflags, rights_base,
-//   rights_inheriting, fdflags, opened_fd_ptr) → errno. Opens a file under the
-// preopened directory by slurping it into a new file descriptor.
+//   rights_inheriting, fdflags, opened_fd_ptr) → errno.
+// oflags: 1 CREAT, 2 DIRECTORY, 4 EXCL, 8 TRUNC. fdflags: 1 APPEND.
+// rights bit 6 (fd_write) makes the fd writable. Files are slurped into a
+// buffer; writes are flushed on close/sync/exit.
 @ __wasi_path_open * Interp it → v {
     : i ofd_p ( __pop it )
-    ( __pop it )  // fdflags
+    : i fdflags ( __pop it )
     ( __pop it )  // fs_rights_inheriting (i64 cell)
     : i rights ( __pop it )  // fs_rights_base (i64 cell)
     : i oflags ( __pop it )
@@ -830,46 +1272,287 @@ $ `module.nu`
     : i path_p ( __pop it )
     ( __pop it )  // dirflags
     : i dirfd ( __pop it )
-    : s dp ( __fd_at it dirfd )
+    : s dp ( __dirfd_at it dirfd )
     ? == # i dp 0 { ( __push it 8 ) ^ v } {}  // EBADF
     : *WFd d # *WFd dp
-    ? != . d kind 2 { ( __push it 8 ) ^ v } {}  // not a preopen dir
-    // join host dir + "/" + requested relative path
-    : ( Vec u ) full ( vec_new [u] )
-    : i hn ( vec_len [u] . d host )
-    : ~ i k 0
-    ~ < k hn { ( vec_push [u] full ?? ( vec_get [u] . d host k ) { T x → # i x F → 0 } ) = k + k 1 }
-    ? & > hn 0 != ?? ( vec_get [u] . d host - hn 1 ) { T x → # i x F → 0 } 47 { ( vec_push [u] full # u 47 ) } {}
-    : ( Vec u ) rel ( __mem_slice it path_p path_len )
-    : i rn ( vec_len [u] rel )
-    : ~ i j 0
-    ~ < j rn { ( vec_push [u] full ?? ( vec_get [u] rel j ) { T x → # i x F → 0 } ) = j + j 1 }
-    ( vec_free [u] rel )
-    : i writing & oflags 9  // bit0 creat | bit3 trunc → opening to write
-    : String hs ( bytes_to_str full )
+    : String hs ( __join_path it d path_p path_len )
+    : i creat & oflags 1
+    : i wantdir & oflags 2
+    : i excl & oflags 4
+    : i trunc & oflags 8
+    : i want_write | | != & rights 64 0 != creat 0 != trunc 0
     : ~ i rc 0
-    ? != writing 0 {
-        // create/truncate: start an empty writable buffer
-        : *WFd nf # *WFd ( __mkfd 3 )
+    ? != wantdir 0 {
+        // open a directory: it must exist and be a directory
+        ? ( __is_dir ( string_data hs ) ) {
+            : *WFd nf # *WFd ( __mkfd 4 )
+            ( vec_free [u] . nf host ) = . nf host ( bytes_from_str ( string_data hs ) )
+            ( __m_put_u32 it ofd_p ( vec_len [s] . it fds ) )
+            ( vec_push [s] . it fds # s nf )
+        } { = rc ? != 0 ( nurl_file_exists ( string_data hs ) ) 54 44 }  // ENOTDIR / ENOENT
+        ( string_free hs )
+        ( __push it rc )
+        ^ v
+    } {}
+    : i exists ( nurl_file_exists ( string_data hs ) )
+    ? & & != creat 0 != excl 0 != exists 0 { ( string_free hs ) ( __push it 20 ) ^ v } {}  // EEXIST
+    ? & != exists 0 ( __is_dir ( string_data hs ) ) {
+        // an existing directory opened without O_DIRECTORY: readable as a dir fd
+        : *WFd nf # *WFd ( __mkfd 4 )
         ( vec_free [u] . nf host ) = . nf host ( bytes_from_str ( string_data hs ) )
-        = . nf writable T
         ( __m_put_u32 it ofd_p ( vec_len [s] . it fds ) )
         ( vec_push [s] . it fds # s nf )
-    } {
+        ( string_free hs )
+        ( __push it 0 )
+        ^ v
+    } {}
+    ? & == exists 0 == creat 0 { ( string_free hs ) ( __push it 44 ) ^ v } {}  // ENOENT
+    : *WFd nf # *WFd ( __mkfd 3 )
+    ( vec_free [u] . nf host ) = . nf host ( bytes_from_str ( string_data hs ) )
+    ? & != exists 0 == trunc 0 {
+        // keep existing contents (read, or write without truncation)
         : !( Vec u ) IoErr fr ( read_file_bytes ( string_data hs ) )
         ?? fr {
-            T bytes → {
-                : *WFd nf # *WFd ( __mkfd 3 )
-                ( vec_free [u] . nf data ) = . nf data bytes
-                ( vec_free [u] . nf host ) = . nf host ( bytes_from_str ( string_data hs ) )
-                ( __m_put_u32 it ofd_p ( vec_len [s] . it fds ) )
-                ( vec_push [s] . it fds # s nf )
+            T bytes → { ( vec_free [u] . nf data ) = . nf data bytes }
+            F e → { = rc ( __ioerr_errno e ) }
+        }
+    } {}
+    ? != rc 0 { ( __freefd # s nf ) ( string_free hs ) ( __push it rc ) ^ v } {}
+    = . nf writable ? != want_write 0 T F
+    = . nf append ? != & fdflags 1 0 T F
+    ? & != creat 0 == exists 0 { = . nf dirty T } {}  // a created empty file must exist on disk
+    ( __m_put_u32 it ofd_p ( vec_len [s] . it fds ) )
+    ( vec_push [s] . it fds # s nf )
+    ( string_free hs )
+    ( __push it 0 )
+}
+
+// fd_pread / fd_pwrite: positioned I/O that leaves the fd offset untouched.
+@ __wasi_fd_pread * Interp it → v {
+    : i nread_p ( __pop it )
+    : i offset ( __pop it )
+    : i iovs_len ( __pop it )
+    : i iovs ( __pop it )
+    : i fd ( __pop it )
+    : s fp ( __fd_at it fd )
+    ? == # i fp 0 { ( __push it 8 ) ^ v } {}
+    : *WFd f # *WFd fp
+    ? != . f kind 3 { ( __m_put_u32 it nread_p 0 ) ( __push it 0 ) ^ v } {}
+    : i dn ( vec_len [u] . f data )
+    : ~ i at offset
+    : ~ i total 0
+    : ~ i iv 0
+    ~ < iv iovs_len {
+        : i bufp ( __m_get_u32 it + iovs * iv 8 )
+        : i buflen ( __m_get_u32 it + + iovs * iv 8 4 )
+        : ~ i c 0
+        ~ & < c buflen < at dn {
+            ( __mem_store it + bufp c 1 ?? ( vec_get [u] . f data at ) { T x → # i x F → 0 } )
+            = at + at 1
+            = c + c 1
+        }
+        = total + total c
+        = iv + iv 1
+    }
+    ( __m_put_u32 it nread_p total )
+    ( __push it 0 )
+}
+
+@ __wasi_fd_pwrite * Interp it → v {
+    : i nwritten_p ( __pop it )
+    : i offset ( __pop it )
+    : i iovs_len ( __pop it )
+    : i iovs ( __pop it )
+    : i fd ( __pop it )
+    : s fp ( __fd_at it fd )
+    ? == # i fp 0 { ( __push it 8 ) ^ v } {}
+    : *WFd f # *WFd fp
+    ? ! . f writable { ( __push it 8 ) ^ v } {}
+    : ~ i at offset
+    : ~ i total 0
+    : ~ i iv 0
+    ~ < iv iovs_len {
+        : i bufp ( __m_get_u32 it + iovs * iv 8 )
+        : i buflen ( __m_get_u32 it + + iovs * iv 8 4 )
+        : ( Vec u ) chunk ( __mem_slice it bufp buflen )
+        ( __fd_put_at f at chunk )
+        ( vec_free [u] chunk )
+        = at + at buflen
+        = total + total buflen
+        = iv + iv 1
+    }
+    ( __m_put_u32 it nwritten_p total )
+    ( __push it 0 )
+}
+
+// path_create_directory / path_remove_directory / path_unlink_file /
+// path_rename / path_filestat_get — the host-directory mutations, resolved
+// against a dir fd exactly like path_open.
+@ __wasi_path_create_directory * Interp it → v {
+    : i path_len ( __pop it )
+    : i path_p ( __pop it )
+    : i dirfd ( __pop it )
+    : s dp ( __dirfd_at it dirfd )
+    ? == # i dp 0 { ( __push it 8 ) ^ v } {}
+    : String hs ( __join_path it # *WFd dp path_p path_len )
+    : !v IoErr r ( dir_create ( string_data hs ) )
+    ( string_free hs )
+    ( __push it ?? r { T x → 0 F e → ( __ioerr_errno e ) } )
+}
+
+@ __wasi_path_remove_directory * Interp it → v {
+    : i path_len ( __pop it )
+    : i path_p ( __pop it )
+    : i dirfd ( __pop it )
+    : s dp ( __dirfd_at it dirfd )
+    ? == # i dp 0 { ( __push it 8 ) ^ v } {}
+    : String hs ( __join_path it # *WFd dp path_p path_len )
+    : i rc ( nurl_dir_remove ( string_data hs ) )
+    ( string_free hs )
+    ( __push it ? == rc 0 0 ( __ioerr_errno ( __io_err_of_kind ( errno_kind ) ) ) )
+}
+
+@ __wasi_path_unlink_file * Interp it → v {
+    : i path_len ( __pop it )
+    : i path_p ( __pop it )
+    : i dirfd ( __pop it )
+    : s dp ( __dirfd_at it dirfd )
+    ? == # i dp 0 { ( __push it 8 ) ^ v } {}
+    : String hs ( __join_path it # *WFd dp path_p path_len )
+    : i32 rc ( unlink ( string_data hs ) )
+    ( string_free hs )
+    ( __push it ? == # i rc 0 0 ( __ioerr_errno ( __io_err_of_kind ( errno_kind ) ) ) )
+}
+
+@ __wasi_path_rename * Interp it → v {
+    : i new_len ( __pop it )
+    : i new_p ( __pop it )
+    : i new_dirfd ( __pop it )
+    : i old_len ( __pop it )
+    : i old_p ( __pop it )
+    : i old_dirfd ( __pop it )
+    : s odp ( __dirfd_at it old_dirfd )
+    : s ndp ( __dirfd_at it new_dirfd )
+    ? | == # i odp 0 == # i ndp 0 { ( __push it 8 ) ^ v } {}
+    : String os ( __join_path it # *WFd odp old_p old_len )
+    : String ns ( __join_path it # *WFd ndp new_p new_len )
+    : !v IoErr r ( fs_rename ( string_data os ) ( string_data ns ) )
+    ( string_free os ) ( string_free ns )
+    ( __push it ?? r { T x → 0 F e → ( __ioerr_errno e ) } )
+}
+
+// path_filestat_get(dirfd, flags, path_ptr, path_len, st_p): 64-byte filestat —
+// filetype at +16, size at +32 (the fields programs actually read).
+@ __wasi_path_filestat_get * Interp it → v {
+    : i st_p ( __pop it )
+    : i path_len ( __pop it )
+    : i path_p ( __pop it )
+    ( __pop it )  // lookup flags
+    : i dirfd ( __pop it )
+    : s dp ( __dirfd_at it dirfd )
+    ? == # i dp 0 { ( __push it 8 ) ^ v } {}
+    : String hs ( __join_path it # *WFd dp path_p path_len )
+    : ~ i rc 0
+    : ~ i k 0
+    ~ < k 64 { ( __mem_store it + st_p k 1 0 ) = k + k 1 }
+    ? ( __is_dir ( string_data hs ) ) {
+        ( __mem_store it + st_p 16 1 3 )  // directory
+    } {
+        : !i IoErr szr ( file_size ( string_data hs ) )
+        ?? szr {
+            T sz → {
+                ( __mem_store it + st_p 16 1 4 )  // regular file
+                ( __mem_store it + st_p 32 8 sz )
             }
-            F e → { = rc 44 }  // ENOENT
+            F e → { = rc ( __ioerr_errno e ) }
         }
     }
-    ( string_free hs ) ( vec_free [u] full )
+    ( string_free hs )
     ( __push it rc )
+}
+
+// fd_readdir(fd, buf, buf_len, cookie, bufused_p): WASI dirent stream. Each
+// entry = 24-byte header (d_next u64, d_ino u64, d_namlen u32, d_type u8+pad)
+// + name. A partially-written final entry with bufused == buf_len tells libc
+// to enlarge and retry, per the ABI.
+@ __wasi_fd_readdir * Interp it → v {
+    : i bufused_p ( __pop it )
+    : i cookie ( __pop it )
+    : i buf_len ( __pop it )
+    : i buf ( __pop it )
+    : i fd ( __pop it )
+    : s fp ( __fd_at it fd )
+    ? == # i fp 0 { ( __push it 8 ) ^ v } {}
+    : *WFd f # *WFd fp
+    ? ! | == . f kind 2 == . f kind 4 { ( __push it 54 ) ^ v } {}  // ENOTDIR
+    : String hostdir ( bytes_to_str . f host )
+    : !( Vec String ) IoErr lr ( dir_list ( string_data hostdir ) )
+    : ~ i rc 0
+    : ~ i used 0
+    ?? lr {
+        F e → { = rc ( __ioerr_errno e ) }
+        T names → {
+            : i n ( vec_len [String] names )
+            : ~ i idx cookie
+            : ~ b full F
+            ~ & ! full < idx n {
+                : String nm ?? ( vec_get [String] names idx ) { T x → x F → # String 0 }
+                : i nlen ( nurl_str_len ( string_data nm ) )
+                // d_type: probe the joined path (3 dir / 4 regular)
+                : String sub ( __join_path2 hostdir ( string_data nm ) )
+                : i dtype ? ( __is_dir ( string_data sub ) ) 3 4
+                ( string_free sub )
+                // serialize header + name, truncating at buf_len
+                : ( Vec u ) ent ( vec_with_cap [u] + 24 nlen )
+                ( __ent_put64 ent + idx 1 )  // d_next
+                ( __ent_put64 ent + idx 1 )  // d_ino (nonzero, stable per entry)
+                ( __ent_put32 ent nlen )
+                ( vec_push [u] ent # u dtype )
+                ( vec_push [u] ent # u 0 ) ( vec_push [u] ent # u 0 ) ( vec_push [u] ent # u 0 )
+                : ~ i c 0
+                ~ < c nlen { ( vec_push [u] ent # u ( nurl_str_get ( string_data nm ) c ) ) = c + c 1 }
+                : i en ( vec_len [u] ent )
+                : ~ i w 0
+                ~ & < w en < used buf_len {
+                    ( __mem_store it + buf used 1 ?? ( vec_get [u] ent w ) { T x → # i x F → 0 } )
+                    = used + used 1
+                    = w + w 1
+                }
+                ( vec_free [u] ent )
+                ? < w en { = full T } {}  // buffer exhausted mid-entry
+                = idx + idx 1
+            }
+            : ~ i fi 0
+            ~ < fi n { ?? ( vec_get [String] names fi ) { T nm → ( string_free nm ) F → {} } = fi + fi 1 }
+            ( vec_free [String] names )
+        }
+    }
+    ( string_free hostdir )
+    ( __m_put_u32 it bufused_p used )
+    ( __push it rc )
+}
+
+// Little-endian u64/u32 pushes for dirent serialization.
+@ __ent_put64 ( Vec u ) v i x → v {
+    : ~ i k 0
+    ~ < k 8 { ( vec_push [u] v # u & ( __lshr64 x * 8 k ) 255 ) = k + k 1 }
+}
+@ __ent_put32 ( Vec u ) v i x → v {
+    : ~ i k 0
+    ~ < k 4 { ( vec_push [u] v # u & >> x * 8 k 255 ) = k + k 1 }
+}
+
+// hostdir + "/" + name as an owned String (host-side join for readdir probes).
+@ __join_path2 String dir s name → String {
+    : ( Vec u ) full ( bytes_from_str ( string_data dir ) )
+    : i hn ( vec_len [u] full )
+    ? & > hn 0 != ?? ( vec_get [u] full - hn 1 ) { T x → # i x F → 0 } 47 { ( vec_push [u] full # u 47 ) } {}
+    : i nl ( nurl_str_len name )
+    : ~ i k 0
+    ~ < k nl { ( vec_push [u] full # u ( nurl_str_get name k ) ) = k + k 1 }
+    : String out ( bytes_to_str full )
+    ( vec_free [u] full )
+    ^ out
 }
 
 @ __wasi_fd_read * Interp it → v {
@@ -977,8 +1660,9 @@ $ `module.nu`
     ( __push it 0 )
 }
 
-// filetype byte for a fd kind: stdio→char device(2), dir→directory(3), file→regular(4).
-@ __filetype_of i kind → i { ^ ? == kind 2 3 ? == kind 3 4 2 }
+// filetype byte for a fd kind: stdio→char device(2), dir (preopened 2 or
+// opened 4)→directory(3), file→regular(4).
+@ __filetype_of i kind → i { ^ ? | == kind 2 == kind 4 3 ? == kind 3 4 2 }
 
 @ __wasi_fd_fdstat_get * Interp it → v {
     : i stat_p ( __pop it )
@@ -1009,53 +1693,150 @@ $ `module.nu`
     ( __push it 0 )
 }
 
+// Flush a dirty written file to disk (fd_close / fd_sync / proc_exit / normal
+// program exit all funnel through here).
+@ __fd_flush * WFd f → v {
+    ? & . f writable . f dirty {
+        : String hs ( bytes_to_str . f host )
+        : !v IoErr wr ( write_file_bytes ( string_data hs ) . f data )
+        ?? wr { T x → { = . f dirty F } F e → {} }
+        ( string_free hs )
+    } {}
+}
+
+// Flush every open dirty file — called on proc_exit and when _start returns,
+// so buffered writes are never lost to a missing fd_close.
+@ interp_flush * Interp it → v {
+    : i n ( vec_len [s] . it fds )
+    : ~ i k 3
+    ~ < k n { ?? ( vec_get [s] . it fds k ) { T pp → ?!= # i pp 0 { ( __fd_flush # *WFd pp ) } {} F → {} } = k + k 1 }
+}
+
 @ __wasi_fd_close * Interp it → v {
     : i fd ( __pop it )
     : s fp ( __fd_at it fd )
     ? != # i fp 0 {
         : *WFd f # *WFd fp
-        ? & . f writable . f dirty {  // flush a written file to disk
-            : String hs ( bytes_to_str . f host )
-            : !v IoErr wr ( write_file_bytes ( string_data hs ) . f data )
-            ?? wr { T x → {} F e → {} }
-            ( string_free hs )
-        } {}
+        ( __fd_flush f )
         ? >= fd 3 { ( __freefd fp ) ( vec_set [s] . it fds fd # s 0 ) } {}  // keep stdio
     } {}
     ( __push it 0 )
 }
 
-// environ_sizes_get / environ_get: no environment is exposed.
+@ __wasi_fd_sync * Interp it → v {
+    : i fd ( __pop it )
+    : s fp ( __fd_at it fd )
+    ? == # i fp 0 { ( __push it 8 ) ^ v } {}  // EBADF
+    ( __fd_flush # *WFd fp )
+    ( __push it 0 )
+}
+
+// fd_tell(fd, off_p): current offset as u64.
+@ __wasi_fd_tell * Interp it → v {
+    : i off_p ( __pop it )
+    : i fd ( __pop it )
+    : s fp ( __fd_at it fd )
+    ? == # i fp 0 { ( __push it 8 ) ^ v } {}
+    : *WFd f # *WFd fp
+    ( __mem_store it off_p 8 . f pos )
+    ( __push it 0 )
+}
+
+// environ_sizes_get / environ_get: the entries pushed via interp_push_env
+// (the host environment is NOT inherited — capability-style, like --env).
 @ __wasi_environ_sizes_get * Interp it → v {
     : i bufsz_p ( __pop it )
     : i cnt_p ( __pop it )
-    ( __m_put_u32 it cnt_p 0 ) ( __m_put_u32 it bufsz_p 0 )
+    : i n ( vec_len [s] . it envp )
+    : ~ i bufsz 0
+    : ~ i k 0
+    ~ < k n {
+        : *Arg a # *Arg ?? ( vec_get [s] . it envp k ) { T x → x F → # s 0 }
+        = bufsz + bufsz + ( vec_len [u] . a bytes ) 1
+        = k + k 1
+    }
+    ( __m_put_u32 it cnt_p n )
+    ( __m_put_u32 it bufsz_p bufsz )
     ( __push it 0 )
 }
 
-// clock_time_get(id, precision, time_ptr) → write 0; random_get(buf,len) → zeros.
+@ __wasi_environ_get * Interp it → v {
+    : i buf_p ( __pop it )
+    : i envv_p ( __pop it )
+    : i n ( vec_len [s] . it envp )
+    : ~ i cur buf_p
+    : ~ i k 0
+    ~ < k n {
+        : *Arg a # *Arg ?? ( vec_get [s] . it envp k ) { T x → x F → # s 0 }
+        ( __m_put_u32 it + envv_p * k 4 cur )
+        : i blen ( vec_len [u] . a bytes )
+        : ~ i j 0
+        ~ < j blen { ( __mem_store it + cur j 1 ?? ( vec_get [u] . a bytes j ) { T x → # i x F → 0 } ) = j + j 1 }
+        ( __mem_store it + cur blen 1 0 )  // NUL terminator
+        = cur + cur + blen 1
+        = k + k 1
+    }
+    ( __push it 0 )
+}
+
+// clock_time_get(id, precision, time_ptr): realtime (0) from the wall clock,
+// everything else from the monotonic clock. Nanoseconds.
 @ __wasi_clock_time_get * Interp it → v {
     : i t_p ( __pop it )
-    ( __pop it ) ( __pop it )  // precision (i64), clock id
-    ( __mem_store it t_p 8 0 )
+    ( __pop it )  // precision (i64)
+    : i id ( __pop it )
+    : i ns ? == id 0 * ( now_ms ) 1000000 ( monotonic_ns )
+    ( __mem_store it t_p 8 ns )
     ( __push it 0 )
 }
 
+// random_get(buf, len): real OS entropy via the runtime CSPRNG.
 @ __wasi_random_get * Interp it → v {
     : i len ( __pop it )
     : i buf ( __pop it )
-    : ~ i k 0
-    ~ < k len { ( __mem_store it + buf k 1 0 ) = k + k 1 }
+    ? > len 0 {
+        : ( Vec u ) tmp ( vec_with_cap [u] len )
+        : ~ i z 0
+        ~ < z len { ( vec_push [u] tmp # u 0 ) = z + z 1 }
+        ( nurl_rand_fill # *u ( vec_data [u] tmp ) len )
+        : ~ i k 0
+        ~ < k len { ( __mem_store it + buf k 1 ?? ( vec_get [u] tmp k ) { T x → # i x F → 0 } ) = k + k 1 }
+        ( vec_free [u] tmp )
+    } {}
     ( __push it 0 )
 }
 
-@ __wasi_dispatch * Interp it ( Vec u ) field → v {
+// Trap with a message that carries a dynamic name (import module/field).
+@ __trap_named * Interp it s prefix ( Vec u ) name → v {
+    = . it trap T
+    ( vec_free [u] . it trapmsg )
+    : ( Vec u ) msg ( bytes_from_str prefix )
+    : i n ( vec_len [u] name )
+    : ~ i k 0
+    ~ < k n { ( vec_push [u] msg ?? ( vec_get [u] name k ) { T x → x F → # u 0 } ) = k + k 1 }
+    = . it trapmsg msg
+}
+
+@ __wasi_dispatch * Interp it ( Vec u ) mod ( Vec u ) field → v {
+    ? ! ( __feq mod `wasi_snapshot_preview1` ) {
+        ( __trap_named it `unsupported import module: ` mod ) ^ v } {}
     ? ( __feq field `proc_exit` ) { ( __wasi_proc_exit it ) ^ v } {}
     ? ( __feq field `fd_write` ) { ( __wasi_fd_write it ) ^ v } {}
     ? ( __feq field `fd_read` ) { ( __wasi_fd_read it ) ^ v } {}
     ? ( __feq field `fd_seek` ) { ( __wasi_fd_seek it ) ^ v } {}
+    ? ( __feq field `fd_tell` ) { ( __wasi_fd_tell it ) ^ v } {}
+    ? ( __feq field `fd_pread` ) { ( __wasi_fd_pread it ) ^ v } {}
+    ? ( __feq field `fd_pwrite` ) { ( __wasi_fd_pwrite it ) ^ v } {}
+    ? ( __feq field `fd_sync` ) { ( __wasi_fd_sync it ) ^ v } {}
+    ? ( __feq field `fd_datasync` ) { ( __wasi_fd_sync it ) ^ v } {}
     ? ( __feq field `fd_close` ) { ( __wasi_fd_close it ) ^ v } {}
+    ? ( __feq field `fd_readdir` ) { ( __wasi_fd_readdir it ) ^ v } {}
     ? ( __feq field `path_open` ) { ( __wasi_path_open it ) ^ v } {}
+    ? ( __feq field `path_create_directory` ) { ( __wasi_path_create_directory it ) ^ v } {}
+    ? ( __feq field `path_remove_directory` ) { ( __wasi_path_remove_directory it ) ^ v } {}
+    ? ( __feq field `path_unlink_file` ) { ( __wasi_path_unlink_file it ) ^ v } {}
+    ? ( __feq field `path_rename` ) { ( __wasi_path_rename it ) ^ v } {}
+    ? ( __feq field `path_filestat_get` ) { ( __wasi_path_filestat_get it ) ^ v } {}
     ? ( __feq field `args_sizes_get` ) { ( __wasi_args_sizes_get it ) ^ v } {}
     ? ( __feq field `args_get` ) { ( __wasi_args_get it ) ^ v } {}
     ? ( __feq field `fd_prestat_get` ) { ( __wasi_fd_prestat_get it ) ^ v } {}
@@ -1063,13 +1844,12 @@ $ `module.nu`
     ? ( __feq field `fd_fdstat_get` ) { ( __wasi_fd_fdstat_get it ) ^ v } {}
     ? ( __feq field `fd_filestat_get` ) { ( __wasi_fd_filestat_get it ) ^ v } {}
     ? ( __feq field `environ_sizes_get` ) { ( __wasi_environ_sizes_get it ) ^ v } {}
-    ? ( __feq field `environ_get` ) { ( __pop it ) ( __pop it ) ( __push it 0 ) ^ v } {}
+    ? ( __feq field `environ_get` ) { ( __wasi_environ_get it ) ^ v } {}
     ? ( __feq field `clock_time_get` ) { ( __wasi_clock_time_get it ) ^ v } {}
     ? ( __feq field `random_get` ) { ( __wasi_random_get it ) ^ v } {}
     ? ( __feq field `fd_fdstat_set_flags` ) { ( __pop it ) ( __pop it ) ( __push it 0 ) ^ v } {}
     ? ( __feq field `sched_yield` ) { ( __push it 0 ) ^ v } {}
-    = . it trap T
-    = . it trapmsg ( bytes_from_str `unsupported wasi import` )
+    ( __trap_named it `unsupported wasi import: ` field )
 }
 
 // ── sign-extension ops + 0xfc-prefixed bulk memory / saturating trunc ──
@@ -1106,33 +1886,150 @@ $ `module.nu`
     ~ < k n { ( __mem_store it + dst k 1 val ) = k + k 1 }
 }
 
+// The *DataSeg / *ElemSeg at segment index k (#s 0 if out of range).
+@ __data_at * Module m i k → s {
+    ? | < k 0 >= k ( vec_len [s] . m datas ) { ^ # s 0 } {}
+    ^ ?? ( vec_get [s] . m datas k ) { T x → x F → # s 0 }
+}
+@ __elem_at * Module m i k → s {
+    ? | < k 0 >= k ( vec_len [s] . m elems ) { ^ # s 0 } {}
+    ^ ?? ( vec_get [s] . m elems k ) { T x → x F → # s 0 }
+}
+
 @ __exec_fc * Interp it * Wc c → v {
     : i sub ( wc_uleb c )
-    ? == sub 10 {  // memory.copy
+    ? == sub 8 {  // memory.init dataidx: copy from a passive data segment
+        : i didx ( wc_uleb c ) ( wc_u8 c )
+        : i n ( __u32 ( __pop it ) )
+        : i src ( __u32 ( __pop it ) )
+        : i dst ( __u32 ( __pop it ) )
+        : *Module m # *Module . it mod
+        : s dp ( __data_at m didx )
+        : i dropped ?? ( vec_get [i] . it data_dropped didx ) { T x → x F → 1 }
+        ? | == # i dp 0 & == dropped 1 > n 0 { ( __trap it `memory.init: dropped or bad data segment` ) ^ v } {}
+        : *DataSeg ds # *DataSeg dp
+        ? | > + src n ( vec_len [u] . ds bytes ) > + dst n ( vec_len [u] . it mem ) {
+            ( __trap it `out of bounds memory access` ) ^ v } {}
+        : ~ i k 0
+        ~ < k n {
+            ( vec_set [u] . it mem + dst k ?? ( vec_get [u] . ds bytes + src k ) { T x → x F → # u 0 } )
+            = k + k 1
+        }
+        ^ v
+    } {}
+    ? == sub 9 {  // data.drop
+        : i didx ( wc_uleb c )
+        ? < didx ( vec_len [i] . it data_dropped ) { ( vec_set [i] . it data_dropped didx 1 ) } {}
+        ^ v
+    } {}
+    ? == sub 10 {  // memory.copy — bounds checked up front (no partial writes)
         ( wc_u8 c ) ( wc_u8 c )
-        : i n & ( __pop it ) 4294967295
-        : i src & ( __pop it ) 4294967295
-        : i dst & ( __pop it ) 4294967295
+        : i n ( __u32 ( __pop it ) )
+        : i src ( __u32 ( __pop it ) )
+        : i dst ( __u32 ( __pop it ) )
+        : i mn ( vec_len [u] . it mem )
+        ? | > + src n mn > + dst n mn { ( __trap it `out of bounds memory access` ) ^ v } {}
         ( __mem_copy it dst src n )
         ^ v
     } {}
-    ? == sub 11 {  // memory.fill
+    ? == sub 11 {  // memory.fill — bounds checked up front
         ( wc_u8 c )
-        : i n & ( __pop it ) 4294967295
+        : i n ( __u32 ( __pop it ) )
         : i val & ( __pop it ) 255
-        : i dst & ( __pop it ) 4294967295
+        : i dst ( __u32 ( __pop it ) )
+        ? > + dst n ( vec_len [u] . it mem ) { ( __trap it `out of bounds memory access` ) ^ v } {}
         ( __mem_fill it dst val n )
         ^ v
     } {}
-    // saturating float→int truncation (0..7): approximated by plain truncation
-    ? == sub 0 { ( __push it ( __w32 # i # f ( bits_to_f32 ( __pop it ) ) ) ) ^ v } {}
-    ? == sub 1 { ( __push it ( __w32 # i # f ( bits_to_f32 ( __pop it ) ) ) ) ^ v } {}
-    ? == sub 2 { ( __push it ( __w32 # i ( bits_to_f64 ( __pop it ) ) ) ) ^ v } {}
-    ? == sub 3 { ( __push it ( __w32 # i ( bits_to_f64 ( __pop it ) ) ) ) ^ v } {}
-    ? == sub 4 { ( __push it # i # f ( bits_to_f32 ( __pop it ) ) ) ^ v } {}
-    ? == sub 5 { ( __push it # i # f ( bits_to_f32 ( __pop it ) ) ) ^ v } {}
-    ? == sub 6 { ( __push it # i ( bits_to_f64 ( __pop it ) ) ) ^ v } {}
-    ? == sub 7 { ( __push it # i ( bits_to_f64 ( __pop it ) ) ) ^ v } {}
-    = . it trap T
-    = . it trapmsg ( bytes_from_str `unsupported 0xfc op` )
+    ? == sub 12 {  // table.init elemidx: copy from a passive element segment
+        : i eidx ( wc_uleb c ) ( wc_uleb c )
+        : i n ( __u32 ( __pop it ) )
+        : i src ( __u32 ( __pop it ) )
+        : i dst ( __u32 ( __pop it ) )
+        : *Module m # *Module . it mod
+        : s ep ( __elem_at m eidx )
+        : i dropped ?? ( vec_get [i] . it elem_dropped eidx ) { T x → x F → 1 }
+        ? | == # i ep 0 & == dropped 1 > n 0 { ( __trap it `table.init: dropped or bad element segment` ) ^ v } {}
+        : *ElemSeg es # *ElemSeg ep
+        ? | > + src n ( vec_len [i] . es funcs ) > + dst n ( vec_len [i] . it table ) {
+            ( __trap it `out of bounds table access` ) ^ v } {}
+        : ~ i k 0
+        ~ < k n {
+            ( vec_set [i] . it table + dst k ?? ( vec_get [i] . es funcs + src k ) { T x → x F → -1 } )
+            = k + k 1
+        }
+        ^ v
+    } {}
+    ? == sub 13 {  // elem.drop
+        : i eidx ( wc_uleb c )
+        ? < eidx ( vec_len [i] . it elem_dropped ) { ( vec_set [i] . it elem_dropped eidx 1 ) } {}
+        ^ v
+    } {}
+    ? == sub 14 {  // table.copy — overlap-safe within the one table
+        ( wc_uleb c ) ( wc_uleb c )
+        : i n ( __u32 ( __pop it ) )
+        : i src ( __u32 ( __pop it ) )
+        : i dst ( __u32 ( __pop it ) )
+        : i tn ( vec_len [i] . it table )
+        ? | > + src n tn > + dst n tn { ( __trap it `out of bounds table access` ) ^ v } {}
+        ? > dst src {
+            : ~ i k - n 1
+            ~ >= k 0 { ( vec_set [i] . it table + dst k ?? ( vec_get [i] . it table + src k ) { T x → x F → -1 } ) = k - k 1 }
+        } {
+            : ~ i k 0
+            ~ < k n { ( vec_set [i] . it table + dst k ?? ( vec_get [i] . it table + src k ) { T x → x F → -1 } ) = k + k 1 }
+        }
+        ^ v
+    } {}
+    ? == sub 15 {  // table.grow: [init n] → old size, or −1 past the maximum
+        ( wc_uleb c )
+        : i n ( __u32 ( __pop it ) )
+        : i init ( __pop it )
+        : *Module m # *Module . it mod
+        : i old ( vec_len [i] . it table )
+        : ~ i limit 10000000
+        ? > . m table_max 0 { = limit . m table_max } {}
+        ? > + old n limit { ( __push it -1 ) ^ v } {}
+        : ~ i k 0
+        ~ < k n { ( vec_push [i] . it table init ) = k + k 1 }
+        ( __push it old )
+        ^ v
+    } {}
+    ? == sub 16 { ( wc_uleb c ) ( __push it ( vec_len [i] . it table ) ) ^ v } {}  // table.size
+    ? == sub 17 {  // table.fill
+        ( wc_uleb c )
+        : i n ( __u32 ( __pop it ) )
+        : i val ( __pop it )
+        : i dst ( __u32 ( __pop it ) )
+        ? > + dst n ( vec_len [i] . it table ) { ( __trap it `out of bounds table access` ) ^ v } {}
+        : ~ i k 0
+        ~ < k n { ( vec_set [i] . it table + dst k val ) = k + k 1 }
+        ^ v
+    } {}
+    // saturating float→int truncation (0..7): NaN → 0, clamp out-of-range
+    ? == sub 0 {  // i32.trunc_sat_f32_s
+        : i ab ( __pop it )
+        ( __push it ( __w32 ( __trunc_sat ( __f32_nan ab ) # f ( bits_to_f32 ab ) -2147483648.0 2147483648.0 -2147483648 2147483647 ) ) ) ^ v } {}
+    ? == sub 1 {  // i32.trunc_sat_f32_u
+        : i ab ( __pop it )
+        ( __push it ( __w32 ( __trunc_sat ( __f32_nan ab ) # f ( bits_to_f32 ab ) 0.0 4294967296.0 0 4294967295 ) ) ) ^ v } {}
+    ? == sub 2 {  // i32.trunc_sat_f64_s
+        : i ab ( __pop it )
+        ( __push it ( __w32 ( __trunc_sat ( __f64_nan ab ) ( bits_to_f64 ab ) -2147483648.0 2147483648.0 -2147483648 2147483647 ) ) ) ^ v } {}
+    ? == sub 3 {  // i32.trunc_sat_f64_u
+        : i ab ( __pop it )
+        ( __push it ( __w32 ( __trunc_sat ( __f64_nan ab ) ( bits_to_f64 ab ) 0.0 4294967296.0 0 4294967295 ) ) ) ^ v } {}
+    ? == sub 4 {  // i64.trunc_sat_f32_s
+        : i ab ( __pop it )
+        ( __push it ( __trunc_sat ( __f32_nan ab ) # f ( bits_to_f32 ab ) - 0.0 ( __f_2p63 ) ( __f_2p63 ) -9223372036854775808 9223372036854775807 ) ) ^ v } {}
+    ? == sub 5 {  // i64.trunc_sat_f32_u
+        : i ab ( __pop it )
+        ( __push it ( __trunc_sat_u64 ( __f32_nan ab ) # f ( bits_to_f32 ab ) ) ) ^ v } {}
+    ? == sub 6 {  // i64.trunc_sat_f64_s
+        : i ab ( __pop it )
+        ( __push it ( __trunc_sat ( __f64_nan ab ) ( bits_to_f64 ab ) - 0.0 ( __f_2p63 ) ( __f_2p63 ) -9223372036854775808 9223372036854775807 ) ) ^ v } {}
+    ? == sub 7 {  // i64.trunc_sat_f64_u
+        : i ab ( __pop it )
+        ( __push it ( __trunc_sat_u64 ( __f64_nan ab ) ( bits_to_f64 ab ) ) ) ^ v } {}
+    ( __trap it `unsupported 0xfc op` )
 }
