@@ -5105,14 +5105,39 @@
                 : s __want ( __nth_sep __ffp arg_idx )
                 : i __ww ( int_width __want )
                 : i __hw ( int_width at )
-                ? & & & > __ww 0 > __hw 0 != __ww __hw ! ( seq at __want ) {
-                    : s __nv ( nurl_cg_reg cg )
-                    ( nurl_print `  ` ) ( nurl_print __nv )
-                    ( nurl_print ? > __hw __ww ` = trunc ` ` = sext ` )
-                    ( nurl_print at ) ( nurl_print ` ` ) ( nurl_print av )
-                    ( nurl_print ` to ` ) ( nurl_print __want ) ( nurl_print `\n` )
-                    = av __nv
-                    = at __want
+                : b __wp ( is_ptr_ty __want )
+                : b __hp ( is_ptr_ty at )
+                ? & != 0 ( nurl_str_len __want ) ! ( seq at __want ) {
+                    ? & & > __ww 0 > __hw 0 != __ww __hw {
+                        // int → narrower/wider int: trunc / sext
+                        : s __nv ( nurl_cg_reg cg )
+                        ( nurl_print `  ` ) ( nurl_print __nv )
+                        ( nurl_print ? > __hw __ww ` = trunc ` ` = sext ` )
+                        ( nurl_print at ) ( nurl_print ` ` ) ( nurl_print av )
+                        ( nurl_print ` to ` ) ( nurl_print __want ) ( nurl_print `\n` )
+                        = av __nv = at __want
+                    } {
+                        ? & __wp > __hw 0 {
+                            // integer arg (e.g. a bare `0` / a handle held as i64)
+                            // to a pointer parameter: inttoptr. A wasm call
+                            // otherwise needs a function-signature bitcast, which
+                            // is invalid → wasm-ld emits a trapping stub.
+                            : s __nv ( nurl_cg_reg cg )
+                            ( nurl_print `  ` ) ( nurl_print __nv )
+                            ( nurl_print ` = inttoptr ` ) ( nurl_print at ) ( nurl_print ` ` ) ( nurl_print av )
+                            ( nurl_print ` to ` ) ( nurl_print __want ) ( nurl_print `\n` )
+                            = av __nv = at __want
+                        } {
+                            ? & > __ww 0 __hp {
+                                // pointer arg to an integer parameter: ptrtoint
+                                : s __nv ( nurl_cg_reg cg )
+                                ( nurl_print `  ` ) ( nurl_print __nv )
+                                ( nurl_print ` = ptrtoint ` ) ( nurl_print at ) ( nurl_print ` ` ) ( nurl_print av )
+                                ( nurl_print ` to ` ) ( nurl_print __want ) ( nurl_print `\n` )
+                                = av __nv = at __want
+                            } {}
+                        }
+                    }
                 } {}
             } {}
         } {}
@@ -17701,12 +17726,29 @@
                         ? ( is_ident_tok ( nurl_lex_type lex ) )
                         { : s fname ( nurl_lex_val lex )
                             ( nurl_lex_advance lex )
+                            // Parse the parameter types here too (not just skip
+                            // tokens) so __ffi_params is registered in the
+                            // pre-pass — a FORWARD call to this FFI symbol (the
+                            // callee declared LATER in the same file) must still
+                            // get its args width-coerced at the call site, or the
+                            // wasm call type won't match the declare. Mirrors
+                            // gen_ffi_decl's param loop exactly to stay in sync.
+                            : ~ s ptypes ``
+                            : ~ i pct 0
                             ~ & != ( nurl_lex_type lex ) TT_ARROW != ( nurl_lex_type lex ) TT_EOF
-                            { ( nurl_lex_advance lex ) }
+                            { ? == ( nurl_lex_type lex ) TT_ELLIPSIS
+                                { ( nurl_lex_advance lex ) }
+                                { : s lt ( parse_type lex )
+                                    ? ( is_ident_tok ( nurl_lex_type lex ) ) { ( nurl_lex_advance lex ) } {}
+                                    = ptypes ? == pct 0 lt ( nurl_str_cat3 ptypes `;` lt )
+                                    = pct + pct 1
+                                }
+                            }
                             ? == ( nurl_lex_type lex ) TT_ARROW
                             { ( nurl_lex_advance lex )
                                 : s ret_ty ( parse_type lex )
                                 ( nurl_sym_def syms fname ret_ty )
+                                ( nurl_sym_def syms ( nurl_str_cat fname `__ffi_params` ) ptypes )
                             }
                             {}
                         }
