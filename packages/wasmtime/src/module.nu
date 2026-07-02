@@ -79,8 +79,14 @@ $ `stdlib/std/bytes.nu`
 
 : WExport { ( Vec u ) name i kind i index }
 
-// An active data segment: raw bytes to copy into linear memory at `offset`.
-: DataSeg { i offset ( Vec u ) bytes }
+// A data segment. Active (passive=0): copied to memory at `offset` during
+// instantiation. Passive (passive=1): source material for memory.init only.
+: DataSeg { i offset ( Vec u ) bytes i passive }
+
+// An element segment: function indices (−1 = null ref). Active segments are
+// applied to the table at decode; passive ones feed table.init; declared
+// (and applied active) ones count as dropped at instantiation.
+: ElemSeg { ( Vec i ) funcs i passive }
 
 // An owned byte buffer behind an opaque pointer (name-section entries).
 : NameBuf { ( Vec u ) bytes }
@@ -103,7 +109,9 @@ $ `stdlib/std/bytes.nu`
     ( Vec i ) global_init  // initial value per global
     ( Vec i ) global_mut  // 1 if mutable
     i has_table
-    ( Vec i ) table  // function indices (−1 = empty slot)
+    ( Vec i ) table  // initial table image: function indices (−1 = null)
+    i table_max  // declared table maximum (0 = none)
+    ( Vec s ) elems  // *ElemSeg — element segments, in order
     ( Vec s ) imports  // *WImport (imported functions, in index order)
     i num_import_funcs  // imported funcs occupy func indices 0..n-1
     i start_func  // start-section function index (-1 = none)
@@ -136,6 +144,10 @@ $ `stdlib/std/bytes.nu`
     ( vec_free [i] . m global_init )
     ( vec_free [i] . m global_mut )
     ( vec_free [i] . m table )
+    : i eln ( vec_len [s] . m elems )
+    : ~ i el 0
+    ~ < el eln { ?? ( vec_get [s] . m elems el ) { T pp → ?!= # i pp 0 { : *ElemSeg es # *ElemSeg pp ( vec_free [i] . es funcs ) ( nurl_free # s es ) } {} F → {} } = el + el 1 }
+    ( vec_free [s] . m elems )
     : i in ( vec_len [s] . m imports )
     : ~ i ii 0
     ~ < ii in { ?? ( vec_get [s] . m imports ii ) { T pp → ?!= # i pp 0 { : *WImport w # *WImport pp ( vec_free [u] . w module ) ( vec_free [u] . w field ) ( nurl_free # s w ) } {} F → {} } = ii + ii 1 }
@@ -234,7 +246,7 @@ $ `stdlib/std/bytes.nu`
 }
 
 // Data section: active segments (flag 0/2) carry an i32.const offset expr then
-// raw bytes; passive segments (flag 1) carry bytes only (offset 0, ignored).
+// raw bytes; passive segments (flag 1) carry bytes only (memory.init source).
 @ __decode_data_sec * Wc c * Module m → v {
     : i n ( wc_uleb c )
     : ~ i k 0
@@ -249,6 +261,7 @@ $ `stdlib/std/bytes.nu`
         : *DataSeg ds # *DataSeg ( nurl_alloc Z DataSeg )
         = . ds offset offset
         = . ds bytes bytes
+        = . ds passive ? == flag 1 1 0
         ( vec_push [s] . m datas ds )
         = k + k 1
     }
@@ -308,17 +321,21 @@ $ `stdlib/std/bytes.nu`
     }
 }
 
-// Table section: allocate the first table (size = min, slots empty = −1).
+// Table section: allocate the first table (size = min, slots null = −1),
+// recording its declared maximum for table.grow. Only funcref tables are
+// supported — an externref table is a decode error.
 @ __decode_table_sec * Wc c * Module m → v {
     : i n ( wc_uleb c )
     : ~ i k 0
     ~ < k n {
-        ( wc_u8 c )  // elemtype (0x70 funcref)
+        : i et ( wc_u8 c )  // elemtype: 0x70 funcref / 0x6f externref
+        ? != et 112 { ( __mod_err m `unsupported table element type (externref)` ) } {}
         : i flag ( wc_u8 c )
         : i mn ( wc_uleb c )
-        ? == flag 1 { ( wc_uleb c ) } {}  // max
+        : i mx ? == flag 1 ( wc_uleb c ) 0
         ? == k 0 {
             = . m has_table 1
+            = . m table_max mx
             : ~ i j 0
             ~ < j mn { ( vec_push [i] . m table -1 ) = j + j 1 }
         } {}
@@ -326,24 +343,56 @@ $ `stdlib/std/bytes.nu`
     }
 }
 
-// Element section: active segments (flag 0) fill the table with function indices
-// at a const offset.
+// One element expression: (ref.func N end) → N, (ref.null ht end) → −1.
+@ __elem_expr * Wc c → i {
+    : i op ( wc_u8 c )
+    : ~ i val -1
+    ? == op 210 { = val ( wc_uleb c ) } {  // ref.func
+        ? == op 208 { ( wc_u8 c ) } {} }  // ref.null: heap type byte
+    ~ != ( wc_u8 c ) 11 {}
+    ^ val
+}
+
+// Element section, all MVP+reftype encodings (flags 0–7):
+//   bit0 passive/declared (1) vs active (0); bit1 explicit tableidx (active)
+//   or declared (passive); bit2 element EXPRS instead of func indices.
+// Active segments are applied to the table image here and then count as
+// dropped; passive ones are stored for table.init.
 @ __decode_elem_sec * Wc c * Module m → v {
     : i n ( wc_uleb c )
     : ~ i k 0
     ~ < k n {
         : i flag ( wc_uleb c )
-        ? == flag 0 {
-            : i off ( __const_expr c m )
-            : i cnt ( wc_uleb c )
-            : ~ i j 0
-            ~ < j cnt {
-                : i fi ( wc_uleb c )
-                : i tgt + off j
-                ? & >= tgt 0 < tgt ( vec_len [i] . m table ) { ( vec_set [i] . m table tgt fi ) } {}
-                = j + j 1
+        : i active ? == & flag 1 0 1 0
+        : ~ i off 0
+        ? == active 1 {
+            ? == & flag 2 2 { ( wc_uleb c ) } {}  // explicit table index (0)
+            = off ( __const_expr c m )
+        } {}
+        // elemkind / reftype byte is present unless flag is 0 or 4
+        ? & != flag 0 != flag 4 { ( wc_u8 c ) } {}
+        : i cnt ( wc_uleb c )
+        : ( Vec i ) funcs ( vec_with_cap [i] cnt )
+        : ~ i j 0
+        ~ < j cnt {
+            ? >= flag 4 { ( vec_push [i] funcs ( __elem_expr c ) ) } { ( vec_push [i] funcs ( wc_uleb c ) ) }
+            = j + j 1
+        }
+        ? == active 1 {
+            : ~ i a 0
+            ~ < a cnt {
+                : i tgt + off a
+                ? & >= tgt 0 < tgt ( vec_len [i] . m table ) {
+                    ( vec_set [i] . m table tgt ?? ( vec_get [i] funcs a ) { T x → x F → -1 } )
+                } {}
+                = a + a 1
             }
         } {}
+        : *ElemSeg es # *ElemSeg ( nurl_alloc Z ElemSeg )
+        = . es funcs funcs
+        // active (and declared, flag 3/7) segments are dropped at instantiation
+        = . es passive ? | == flag 1 == flag 5 1 0
+        ( vec_push [s] . m elems # s es )
         = k + k 1
     }
 }
@@ -447,6 +496,8 @@ $ `stdlib/std/bytes.nu`
     = . m global_mut ( vec_new [i] )
     = . m has_table 0
     = . m table ( vec_new [i] )
+    = . m table_max 0
+    = . m elems ( vec_new [s] )
     = . m imports ( vec_new [s] )
     = . m num_import_funcs 0
     = . m start_func -1

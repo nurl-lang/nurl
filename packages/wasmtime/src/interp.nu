@@ -50,6 +50,9 @@ $ `module.nu`
     ( Vec u ) mem  // linear memory (bytes)
     i mem_pages  // current size in 64 KiB pages
     ( Vec i ) globals  // mutable global values
+    ( Vec i ) table  // runtime funcref table (mutable via table.set/grow/…)
+    ( Vec i ) data_dropped  // 1 per data segment once dropped / active
+    ( Vec i ) elem_dropped  // 1 per element segment once dropped / active
     ( Vec s ) argv  // *Arg — WASI program arguments (argv[0] = program)
     ( Vec s ) envp  // *Arg — WASI environment entries ("NAME=VALUE")
     ( Vec s ) fds  // *WFd — file-descriptor table (0/1/2 stdio, 3 preopen, …)
@@ -92,6 +95,32 @@ $ `module.nu`
     : i ng ( vec_len [i] . m global_init )
     : ~ i gi 0
     ~ < gi ng { ( vec_push [i] . it globals ?? ( vec_get [i] . m global_init gi ) { T x → x F → 0 } ) = gi + gi 1 }
+    // runtime table = the decoded initial image (mutable from here on)
+    = . it table ( vec_new [i] )
+    : i tn ( vec_len [i] . m table )
+    : ~ i ti 0
+    ~ < ti tn { ( vec_push [i] . it table ?? ( vec_get [i] . m table ti ) { T x → x F → -1 } ) = ti + ti 1 }
+    // segment drop state: active segments count as dropped once instantiated
+    = . it data_dropped ( vec_new [i] )
+    = . it elem_dropped ( vec_new [i] )
+    : i ndd ( vec_len [s] . m datas )
+    : ~ i dd 0
+    ~ < dd ndd {
+        : s dpp ?? ( vec_get [s] . m datas dd ) { T x → x F → # s 0 }
+        : ~ i drp 1
+        ? != # i dpp 0 { : *DataSeg dsg # *DataSeg dpp ? == . dsg passive 1 { = drp 0 } {} } {}
+        ( vec_push [i] . it data_dropped drp )
+        = dd + dd 1
+    }
+    : i ned ( vec_len [s] . m elems )
+    : ~ i ee 0
+    ~ < ee ned {
+        : s epp ?? ( vec_get [s] . m elems ee ) { T x → x F → # s 0 }
+        : ~ i drp 1
+        ? != # i epp 0 { : *ElemSeg esg # *ElemSeg epp ? == . esg passive 1 { = drp 0 } {} } {}
+        ( vec_push [i] . it elem_dropped drp )
+        = ee + ee 1
+    }
     ? == . m has_mem 1 {
         : i bytes * . m mem_min ( __page )
         : ~ i k 0
@@ -102,7 +131,7 @@ $ `module.nu`
         : ~ i di 0
         ~ < di nd {
             : s dp ?? ( vec_get [s] . m datas di ) { T x → x F → # s 0 }
-            ? != # i dp 0 {
+            ? & != # i dp 0 == . # *DataSeg dp passive 0 {  // passive: memory.init only
                 : *DataSeg ds # *DataSeg dp
                 : i dn ( vec_len [u] . ds bytes )
                 : ~ i bi 0
@@ -145,6 +174,9 @@ $ `module.nu`
     ( vec_free [i] . it vs )
     ( vec_free [u] . it mem )
     ( vec_free [i] . it globals )
+    ( vec_free [i] . it table )
+    ( vec_free [i] . it data_dropped )
+    ( vec_free [i] . it elem_dropped )
     : i an ( vec_len [s] . it argv )
     : ~ i ai 0
     ~ < ai an { ?? ( vec_get [s] . it argv ai ) { T pp → ?!= # i pp 0 { : *Arg a # *Arg pp ( vec_free [u] . a bytes ) ( nurl_free # s a ) } {} F → {} } = ai + ai 1 }
@@ -225,10 +257,13 @@ $ `module.nu`
 @ __skip_imm * Wc c i op → v {
     // block / loop / if : block type = signed LEB (s33: void / valtype / type index)
     ? | == op 2 | == op 3 == op 4 { ( wc_sleb c ) ^ v } {}
-    // br / br_if / call / local.* / global.* : one uleb
-    ? | == op 12 | == op 13 | == op 16 | == op 32 | == op 33 | == op 34 | == op 35 == op 36 { ( wc_uleb c ) ^ v } {}
+    // br / br_if / call / local.* / global.* / table.get/set / ref.func : one uleb
+    ? | == op 12 | == op 13 | == op 16 | == op 32 | == op 33 | == op 34 | == op 35 | == op 36 | == op 37 | == op 38 == op 210 { ( wc_uleb c ) ^ v } {}
     // call_indirect : two ulebs
     ? == op 17 { ( wc_uleb c ) ( wc_uleb c ) ^ v } {}
+    // select t : valtype vec ; ref.null : heap type byte
+    ? == op 28 { : i tc ( wc_uleb c ) ( wc_skip c tc ) ^ v } {}
+    ? == op 208 { ( wc_u8 c ) ^ v } {}
     // br_table : vec of ulebs + default
     ? == op 14 { : i n ( wc_uleb c ) : ~ i k 0 ~ <= k n { ( wc_uleb c ) = k + k 1 } ^ v } {}
     // i32.const / i64.const : one sleb
@@ -240,13 +275,17 @@ $ `module.nu`
     ? & >= op 40 <= op 62 { ( wc_uleb c ) ( wc_uleb c ) ^ v } {}
     // memory.size / memory.grow : 1 reserved byte
     ? | == op 63 == op 64 { ( wc_u8 c ) ^ v } {}
-    // 0xfc prefix (bulk memory / saturating trunc): sub-opcode + its immediates
+    // 0xfc prefix (bulk memory / table ops / saturating trunc)
     ? == op 252 {
         : i sub ( wc_uleb c )
         ? == sub 8 { ( wc_uleb c ) ( wc_u8 c ) } {  // memory.init: dataidx + memidx
             ? == sub 9 { ( wc_uleb c ) } {  // data.drop
                 ? == sub 10 { ( wc_u8 c ) ( wc_u8 c ) } {  // memory.copy: 2 memidx
-                    ? == sub 11 { ( wc_u8 c ) } {} } } }  // memory.fill: 1 memidx
+                    ? == sub 11 { ( wc_u8 c ) } {  // memory.fill: 1 memidx
+                        ? == sub 12 { ( wc_uleb c ) ( wc_uleb c ) } {  // table.init: elemidx + tableidx
+                            ? == sub 13 { ( wc_uleb c ) } {  // elem.drop
+                                ? == sub 14 { ( wc_uleb c ) ( wc_uleb c ) } {  // table.copy: 2 tableidx
+                                    ? | == sub 15 | == sub 16 == sub 17 { ( wc_uleb c ) } {} } } } } } } }  // table.grow/size/fill
         ^ v
     } {}
     // sign-extension ops (0xc0..0xc4): no immediates (fall through)
@@ -773,10 +812,10 @@ $ `module.nu`
         : i typeidx ( wc_uleb c )
         : i tblidx ( wc_uleb c )
         : i ei & ( __pop it ) 4294967295
-        ? | < ei 0 >= ei ( vec_len [i] . m table ) {
+        ? | < ei 0 >= ei ( vec_len [i] . it table ) {
             ( __trap it `call_indirect: index out of range` ) ^ v
         } {}
-        : i fi ?? ( vec_get [i] . m table ei ) { T x → x F → -1 }
+        : i fi ?? ( vec_get [i] . it table ei ) { T x → x F → -1 }
         ? < fi 0 { ( __trap it `call_indirect: null table element` ) ^ v } {}
         // runtime type check: the callee's type must structurally equal the
         // instruction's expected type
@@ -791,6 +830,23 @@ $ `module.nu`
     } {}
     ? == op 26 { ( __pop it ) ^ v } {}  // drop
     ? == op 27 { : i cc ( __pop it ) : i b2 ( __pop it ) : i a2 ( __pop it ) ( __push it ? != cc 0 a2 b2 ) ^ v } {}  // select
+    ? == op 28 {  // select t (typed; reference types) — same semantics
+        : i tc ( wc_uleb c ) ( wc_skip c tc )
+        : i cc ( __pop it ) : i b2 ( __pop it ) : i a2 ( __pop it ) ( __push it ? != cc 0 a2 b2 ) ^ v } {}
+    ? == op 37 {  // table.get
+        ( wc_uleb c )
+        : i ei ( __u32 ( __pop it ) )
+        ? >= ei ( vec_len [i] . it table ) { ( __trap it `out of bounds table access` ) ^ v } {}
+        ( __push it ?? ( vec_get [i] . it table ei ) { T x → x F → -1 } ) ^ v } {}
+    ? == op 38 {  // table.set
+        ( wc_uleb c )
+        : i val ( __pop it )
+        : i ei ( __u32 ( __pop it ) )
+        ? >= ei ( vec_len [i] . it table ) { ( __trap it `out of bounds table access` ) ^ v } {}
+        ( vec_set [i] . it table ei val ) ^ v } {}
+    ? == op 208 { ( wc_u8 c ) ( __push it -1 ) ^ v } {}  // ref.null ht → −1
+    ? == op 209 { ( __push it ? == ( __pop it ) -1 1 0 ) ^ v } {}  // ref.is_null
+    ? == op 210 { : i rfi ( wc_uleb c ) ( __push it rfi ) ^ v } {}  // ref.func (funcref = index)
     // ── locals ──
     ? == op 32 { : i li ( wc_uleb c ) ( __push it ?? ( vec_get [i] locals li ) { T x → x F → 0 } ) ^ v } {}
     ? == op 33 { : i li ( wc_uleb c ) ( vec_set [i] locals li ( __pop it ) ) ^ v } {}
@@ -1830,22 +1886,124 @@ $ `module.nu`
     ~ < k n { ( __mem_store it + dst k 1 val ) = k + k 1 }
 }
 
+// The *DataSeg / *ElemSeg at segment index k (#s 0 if out of range).
+@ __data_at * Module m i k → s {
+    ? | < k 0 >= k ( vec_len [s] . m datas ) { ^ # s 0 } {}
+    ^ ?? ( vec_get [s] . m datas k ) { T x → x F → # s 0 }
+}
+@ __elem_at * Module m i k → s {
+    ? | < k 0 >= k ( vec_len [s] . m elems ) { ^ # s 0 } {}
+    ^ ?? ( vec_get [s] . m elems k ) { T x → x F → # s 0 }
+}
+
 @ __exec_fc * Interp it * Wc c → v {
     : i sub ( wc_uleb c )
-    ? == sub 10 {  // memory.copy
+    ? == sub 8 {  // memory.init dataidx: copy from a passive data segment
+        : i didx ( wc_uleb c ) ( wc_u8 c )
+        : i n ( __u32 ( __pop it ) )
+        : i src ( __u32 ( __pop it ) )
+        : i dst ( __u32 ( __pop it ) )
+        : *Module m # *Module . it mod
+        : s dp ( __data_at m didx )
+        : i dropped ?? ( vec_get [i] . it data_dropped didx ) { T x → x F → 1 }
+        ? | == # i dp 0 & == dropped 1 > n 0 { ( __trap it `memory.init: dropped or bad data segment` ) ^ v } {}
+        : *DataSeg ds # *DataSeg dp
+        ? | > + src n ( vec_len [u] . ds bytes ) > + dst n ( vec_len [u] . it mem ) {
+            ( __trap it `out of bounds memory access` ) ^ v } {}
+        : ~ i k 0
+        ~ < k n {
+            ( vec_set [u] . it mem + dst k ?? ( vec_get [u] . ds bytes + src k ) { T x → x F → # u 0 } )
+            = k + k 1
+        }
+        ^ v
+    } {}
+    ? == sub 9 {  // data.drop
+        : i didx ( wc_uleb c )
+        ? < didx ( vec_len [i] . it data_dropped ) { ( vec_set [i] . it data_dropped didx 1 ) } {}
+        ^ v
+    } {}
+    ? == sub 10 {  // memory.copy — bounds checked up front (no partial writes)
         ( wc_u8 c ) ( wc_u8 c )
-        : i n & ( __pop it ) 4294967295
-        : i src & ( __pop it ) 4294967295
-        : i dst & ( __pop it ) 4294967295
+        : i n ( __u32 ( __pop it ) )
+        : i src ( __u32 ( __pop it ) )
+        : i dst ( __u32 ( __pop it ) )
+        : i mn ( vec_len [u] . it mem )
+        ? | > + src n mn > + dst n mn { ( __trap it `out of bounds memory access` ) ^ v } {}
         ( __mem_copy it dst src n )
         ^ v
     } {}
-    ? == sub 11 {  // memory.fill
+    ? == sub 11 {  // memory.fill — bounds checked up front
         ( wc_u8 c )
-        : i n & ( __pop it ) 4294967295
+        : i n ( __u32 ( __pop it ) )
         : i val & ( __pop it ) 255
-        : i dst & ( __pop it ) 4294967295
+        : i dst ( __u32 ( __pop it ) )
+        ? > + dst n ( vec_len [u] . it mem ) { ( __trap it `out of bounds memory access` ) ^ v } {}
         ( __mem_fill it dst val n )
+        ^ v
+    } {}
+    ? == sub 12 {  // table.init elemidx: copy from a passive element segment
+        : i eidx ( wc_uleb c ) ( wc_uleb c )
+        : i n ( __u32 ( __pop it ) )
+        : i src ( __u32 ( __pop it ) )
+        : i dst ( __u32 ( __pop it ) )
+        : *Module m # *Module . it mod
+        : s ep ( __elem_at m eidx )
+        : i dropped ?? ( vec_get [i] . it elem_dropped eidx ) { T x → x F → 1 }
+        ? | == # i ep 0 & == dropped 1 > n 0 { ( __trap it `table.init: dropped or bad element segment` ) ^ v } {}
+        : *ElemSeg es # *ElemSeg ep
+        ? | > + src n ( vec_len [i] . es funcs ) > + dst n ( vec_len [i] . it table ) {
+            ( __trap it `out of bounds table access` ) ^ v } {}
+        : ~ i k 0
+        ~ < k n {
+            ( vec_set [i] . it table + dst k ?? ( vec_get [i] . es funcs + src k ) { T x → x F → -1 } )
+            = k + k 1
+        }
+        ^ v
+    } {}
+    ? == sub 13 {  // elem.drop
+        : i eidx ( wc_uleb c )
+        ? < eidx ( vec_len [i] . it elem_dropped ) { ( vec_set [i] . it elem_dropped eidx 1 ) } {}
+        ^ v
+    } {}
+    ? == sub 14 {  // table.copy — overlap-safe within the one table
+        ( wc_uleb c ) ( wc_uleb c )
+        : i n ( __u32 ( __pop it ) )
+        : i src ( __u32 ( __pop it ) )
+        : i dst ( __u32 ( __pop it ) )
+        : i tn ( vec_len [i] . it table )
+        ? | > + src n tn > + dst n tn { ( __trap it `out of bounds table access` ) ^ v } {}
+        ? > dst src {
+            : ~ i k - n 1
+            ~ >= k 0 { ( vec_set [i] . it table + dst k ?? ( vec_get [i] . it table + src k ) { T x → x F → -1 } ) = k - k 1 }
+        } {
+            : ~ i k 0
+            ~ < k n { ( vec_set [i] . it table + dst k ?? ( vec_get [i] . it table + src k ) { T x → x F → -1 } ) = k + k 1 }
+        }
+        ^ v
+    } {}
+    ? == sub 15 {  // table.grow: [init n] → old size, or −1 past the maximum
+        ( wc_uleb c )
+        : i n ( __u32 ( __pop it ) )
+        : i init ( __pop it )
+        : *Module m # *Module . it mod
+        : i old ( vec_len [i] . it table )
+        : ~ i limit 10000000
+        ? > . m table_max 0 { = limit . m table_max } {}
+        ? > + old n limit { ( __push it -1 ) ^ v } {}
+        : ~ i k 0
+        ~ < k n { ( vec_push [i] . it table init ) = k + k 1 }
+        ( __push it old )
+        ^ v
+    } {}
+    ? == sub 16 { ( wc_uleb c ) ( __push it ( vec_len [i] . it table ) ) ^ v } {}  // table.size
+    ? == sub 17 {  // table.fill
+        ( wc_uleb c )
+        : i n ( __u32 ( __pop it ) )
+        : i val ( __pop it )
+        : i dst ( __u32 ( __pop it ) )
+        ? > + dst n ( vec_len [i] . it table ) { ( __trap it `out of bounds table access` ) ^ v } {}
+        : ~ i k 0
+        ~ < k n { ( vec_set [i] . it table + dst k val ) = k + k 1 }
         ^ v
     } {}
     // saturating float→int truncation (0..7): NaN → 0, clamp out-of-range
