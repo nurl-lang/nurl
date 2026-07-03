@@ -1471,7 +1471,7 @@ $ `cudakernel.nu`
 // ── JSON-RPC method handlers ─────────────────────────────────────
 
 @ handle_initialize Json id → Json {
-    : Json result ( mcp_initialize_result `swarm-mcp` `0.7.0` )
+    : Json result ( mcp_initialize_result `swarm-mcp` `0.9.0` )
     ^ ( mcp_response_result id result )
 }
 
