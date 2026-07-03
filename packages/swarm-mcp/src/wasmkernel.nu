@@ -59,15 +59,22 @@ $ `token.nu`
     ^ b
 }
 
-// ── GPU chunk payload v2 ─────────────────────────────────────────
-//   [ver:1 = 2][mode:1][lo:8][hi:8][K:4][nparams:2][f64 bits:8×n][wasm…]
+// ── GPU chunk payload (v2 / v3) ──────────────────────────────────
+//   v2: [2][mode:1][lo:8][hi:8][K:4][nparams:2][f64 bits:8×n][wasm…]
+//   v3: [3][mode:1][lo:8][hi:8][K:4][nparams:2][f64 bits:8×n]
+//       [dlen:4][data slice: raw LE f64s][wasm…]
 // mode selects the module's output contract; K is the histogram bin count
 // (0 otherwise); params are runtime kernel arguments passed on the module's
 // argv as f64-bit-pattern decimals — the SAME module (same content hash, no
-// rebuild, warm worker cache) serves any parameter values.
-@ wasm_gpu_chunk_payload i mode i lo i hi i kbins ( Vec i ) params ( Vec u ) wasm → ( Vec u ) {
+// rebuild, warm worker cache) serves any parameter values. v3 additionally
+// carries the chunk's DATASET SLICE — data[lo..hi) as raw doubles, following
+// the map-reduce rule that a split travels with its task. dlen is exact
+// (8·(hi−lo)) so a truncated frame is rejected, and dlen=0 means "no data"
+// (the encoder then emits plain v2).
+@ wasm_gpu_chunk_payload i mode i lo i hi i kbins ( Vec i ) params ( Vec u ) data ( Vec u ) wasm → ( Vec u ) {
+    : i dlen ( vec_len [u] data )
     : ( Vec u ) b ( vec_new [u] )
-    ( vec_push [u] b 2 )
+    ( vec_push [u] b # u ? > dlen 0 3 2 )
     ( vec_push [u] b # u mode )
     ( bytes_push_u64_be b # u64 lo )
     ( bytes_push_u64_be b # u64 hi )
@@ -79,6 +86,10 @@ $ `token.nu`
         ( bytes_push_u64_be b # u64 ?? ( vec_get [i] params k ) { T x → x F → 0 } )
         = k + k 1
     }
+    ? > dlen 0 {
+        ( bytes_push_u32_be b # u32 dlen )
+        ( vec_extend [u] b data )
+    } {}
     ( vec_extend [u] b wasm )
     ^ b
 }
@@ -90,10 +101,15 @@ $ `token.nu`
     i hi
     i kbins
     ( Vec i ) params
+    ( Vec u ) data  // raw LE f64 slice (empty without a dataset)
     ( Vec u ) wasm
 }
 
-@ gpu_chunk_free GpuChunk c → v { ( vec_free [i] . c params ) ( vec_free [u] . c wasm ) }
+@ gpu_chunk_free GpuChunk c → v {
+    ( vec_free [i] . c params )
+    ( vec_free [u] . c data )
+    ( vec_free [u] . c wasm )
+}
 
 @ wasm_gpu_chunk_decode ( Vec u ) body → GpuChunk {
     : ( Vec i ) params ( vec_new [i] )
@@ -102,27 +118,41 @@ $ `token.nu`
     : ~ i lo 0
     : ~ i hi 0
     : ~ i kbins 0
+    : ~ ( Vec u ) data ( vec_new [u] )
     : ~ ( Vec u ) wasm ( vec_new [u] )
     : i ver ?? ( vec_get [u] body 0 ) { T x → # i x F → 0 }
-    ? == ver 2 {
+    ? | == ver 2 == ver 3 {
         = mode ?? ( vec_get [u] body 1 ) { T x → # i x F → 0 }
         = lo ?? ( bytes_read_u64_be body 2 ) { T x → # i x F → 0 }
         = hi ?? ( bytes_read_u64_be body 10 ) { T x → # i x F → 0 }
         = kbins ?? ( bytes_read_u32_be body 18 ) { T x → # i x F → 0 }
         : i np ?? ( bytes_read_u16_be body 22 ) { T x → # i x F → 0 }
         : i pend + 24 * np 8
-        ? <= pend ( vec_len [u] body ) {
+        : ~ i dstart pend
+        : ~ i dlen 0
+        : ~ b sane <= pend ( vec_len [u] body )
+        ? & sane == ver 3 {
+            = dlen ?? ( bytes_read_u32_be body pend ) { T x → # i x F → -1 }
+            = dstart + pend 4
+            // the slice must be whole f64s covering exactly [lo, hi)
+            = sane & & >= dlen 0 == dlen * 8 - hi lo <= + dstart dlen ( vec_len [u] body )
+        } {}
+        ? sane {
             : ~ i k 0
             ~ < k np {
                 ( vec_push [i] params ?? ( bytes_read_u64_be body + 24 * k 8 ) { T x → x F → 0 } )
                 = k + k 1
             }
+            ? > dlen 0 {
+                ( vec_free [u] data )
+                = data ( bytes_slice body dstart + dstart dlen )
+            } {}
             ( vec_free [u] wasm )
-            = wasm ( bytes_slice body pend ( vec_len [u] body ) )
+            = wasm ( bytes_slice body + dstart dlen ( vec_len [u] body ) )
             = ok 1
         } {}
     } {}
-    ^ @ GpuChunk { ok mode lo hi kbins params wasm }
+    ^ @ GpuChunk { ok mode lo hi kbins params data wasm }
 }
 
 // FNV-1a/64 content hash → 16 lowercase hex chars, for the cache filename.
@@ -253,6 +283,7 @@ $ `token.nu`
 @ __wasm_run_gpu String path GpuChunk c → GpuOut {
     : String tmp ( env_var_or `TMPDIR` `/tmp` )
     : b vecmode | == . c mode ( gpu_mode_sample ) == . c mode ( gpu_mode_hist )
+    : b hasdata > ( vec_len [u] . c data ) 0
     : ~ String outp ( string_new )
     ? vecmode {
         ( string_push_str outp ( string_data tmp ) )
@@ -261,6 +292,18 @@ $ `token.nu`
         ( string_push_str outp ( string_data rh ) )
         ( string_free rh )
         ( string_push_str outp `.bin` )
+    } {}
+    // the chunk's dataset slice → a temp in-file the module reads back
+    : ~ String inp ( string_new )
+    : ~ b inp_ok T
+    ? hasdata {
+        ( string_push_str inp ( string_data tmp ) )
+        ( string_push_str inp `/swarmi_` )
+        : String rh2 ( __hex_u64 ( rand_u64 ) )
+        ( string_push_str inp ( string_data rh2 ) )
+        ( string_free rh2 )
+        ( string_push_str inp `.bin` )
+        ?? ( write_file_bytes ( string_data inp ) . c data ) { T _ → {} F e → { = inp_ok F } }
     } {}
     // The numeric argv strings (lo, hi, K, params…) are variable-count and
     // built in loops — a `: s` binding would be auto-reclaimed at its block's
@@ -289,10 +332,11 @@ $ `token.nu`
     : ( Vec s ) args ( vec_new [s] )
     ( vec_push [s] args `run` )
     ( vec_push [s] args `--allow-gpu` )
-    ? vecmode { ( vec_push [s] args `--dir` ) ( vec_push [s] args ( string_data tmp ) ) } {}
+    ? | vecmode hasdata { ( vec_push [s] args `--dir` ) ( vec_push [s] args ( string_data tmp ) ) } {}
     ( vec_push [s] args ( string_data path ) )
     ( vec_push [s] args # s + base ?? ( vec_get [i] offs 0 ) { T x → x F → 0 } )
     ( vec_push [s] args # s + base ?? ( vec_get [i] offs 1 ) { T x → x F → 0 } )
+    ? hasdata { ( vec_push [s] args ( string_data inp ) ) } {}
     ? vecmode { ( vec_push [s] args ( string_data outp ) ) } {}
     : i ntail - ( vec_len [i] offs ) 2
     : ~ i t 0
@@ -304,6 +348,7 @@ $ `token.nu`
     : ~ i ok 0
     : ~ i scalar 0
     : ~ ( Vec u ) outb ( vec_new [u] )
+    ? ! inp_ok { ( string_free wt ) ( vec_free [s] args ) ( vec_free [i] offs ) ( string_free blob ) ( string_free inp ) ( string_free outp ) ( string_free tmp ) ^ @ GpuOut { 0 0 outb } } {}
     ?? ( process_run ( string_data wt ) args `` ) {
         T out → {
             ? == ( output_exit_code out ) 0 {
@@ -329,8 +374,9 @@ $ `token.nu`
         F e → {}
     }
     ? vecmode { ?? ( file_delete ( string_data outp ) ) { T _ → {} F _ → {} } } {}
+    ? hasdata { ?? ( file_delete ( string_data inp ) ) { T _ → {} F _ → {} } } {}
     ( vec_free [s] args ) ( vec_free [i] offs )
-    ( string_free blob ) ( string_free outp ) ( string_free wt ) ( string_free tmp )
+    ( string_free blob ) ( string_free inp ) ( string_free outp ) ( string_free wt ) ( string_free tmp )
     ^ @ GpuOut { ok scalar outb }
 }
 

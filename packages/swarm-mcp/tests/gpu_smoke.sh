@@ -108,5 +108,21 @@ done
 if [ "$hok" = 1 ]; then echo "[gpu-smoke] PASS compute_histogram_cuda (8 × 125000)"; else
     echo "[gpu-smoke] FAIL compute_histogram_cuda — $hres"; fail=1; fi
 
+# 6. datasets: upload 16 values 0..15 (raw LE f64 base64), GPU-reduce over the
+#    data (Σv = 120), then a histogram of the data itself (4 bins × 4).
+if command -v python3 >/dev/null 2>&1; then
+    DB64="$(python3 -c "import struct,base64;print(base64.b64encode(struct.pack('<16d',*range(16))).decode())")"
+    up="$(MCP "{\"jsonrpc\":\"2.0\",\"id\":10,\"method\":\"tools/call\",\"params\":{\"name\":\"compute_upload_data\",\"arguments\":{\"data_base64\":\"$DB64\",\"name\":\"smoke16\"}}}")"
+    dsid="$(printf '%s' "$up" | grep -oE 'dataset_id[^0-9]*[0-9]+' | grep -oE '[0-9]+' | head -1)"
+    [ -z "$dsid" ] && dsid=1
+    dres="$(MCP "{\"jsonrpc\":\"2.0\",\"id\":11,\"method\":\"tools/call\",\"params\":{\"name\":\"compute_submit_cuda\",\"arguments\":{\"cuda\":\"__device__ double f(long long x, double v) { return v; }\",\"dataset\":$dsid,\"reduce\":\"sum\"}}}")"
+    dh="$(MCP "{\"jsonrpc\":\"2.0\",\"id\":12,\"method\":\"tools/call\",\"params\":{\"name\":\"compute_histogram_cuda\",\"arguments\":{\"cuda\":\"__device__ long long bin(long long x, double v) { return (long long)(v / 4.0); }\",\"dataset\":$dsid,\"bins\":4}}}")"
+    if printf '%s' "$dres" | grep -qF '120' && [ "$(printf '%s' "$dh" | grep -oF ',4,4,' | wc -l)" -ge 1 ]; then
+        echo "[gpu-smoke] PASS datasets (upload + GPU reduce Σv=120 + data histogram 4×4)"; else
+        echo "[gpu-smoke] FAIL datasets — up: $up dres: $dres dh: $dh"; fail=1; fi
+else
+    echo "[gpu-smoke] SKIP datasets subtest (no python3 to build the base64 fixture)"
+fi
+
 if [ "$fail" = 0 ]; then echo "[gpu-smoke] OK"; else echo "[gpu-smoke] FAILURES"; fi
 exit "$fail"
