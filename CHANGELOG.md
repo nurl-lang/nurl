@@ -8,6 +8,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.10] — 2026-07-03
+
+A **local wasm builds** release. The new `wasmbuilder` package turns a bare
+toolchain install into a complete NURL → wasm32-wasi compiler — no wasi-sdk,
+no Docker, no build service: the bundled `zig cc` (wasi-libc + wasm-ld
+built in) links what nurlc emits, and the wasm runtime object is compiled
+from the installed stdlib on first use. swarm-mcp compiles compute kernels
+locally on the strength of it, nurl-mcp grows a fully local
+`nurl_build_wasm` tool, and the Windows release now bundles zig like the
+Linux archives. The compiler fix underneath: enum payload slots are `i64`
+now, so f64 / >2³² payloads survive wasm32 bit-exactly — general-enum
+programs produce byte-identical output native vs wasm. Also in this
+release: swarm-mcp's GPU engine matured through v0.6.0 (runtime kernel
+params, GPU map + histogram) and v0.7.0 (distributed GPU compute over real
+uploaded datasets).
+
 ### Fixed
 
 - **Enum payload slots are now `i64`, not `ptr` — 64-bit payloads survive
