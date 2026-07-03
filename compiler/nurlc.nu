@@ -5714,13 +5714,10 @@
         ( nurl_print ` = extractvalue ` ) ( nurl_print match_type )
         ( nurl_print ` ` ) ( nurl_print match_val )
         ( nurl_print `, ` ) ( nurl_print ( nurl_str_int + idx 1 ) ) ( nurl_print `\n` )
-        // Payload is stored as ptr — convert to i64 for the literal comparison.
-        : s val_reg ( nurl_cg_reg cg )
-        ( nurl_print `  ` ) ( nurl_print val_reg )
-        ( nurl_print ` = ptrtoint ptr ` ) ( nurl_print raw_reg ) ( nurl_print ` to i64\n` )
+        // The i64 payload slot compares against the literal directly.
         : s cmp_reg ( nurl_cg_reg cg )
         ( nurl_print `  ` ) ( nurl_print cmp_reg )
-        ( nurl_print ` = icmp eq i64 ` ) ( nurl_print val_reg )
+        ( nurl_print ` = icmp eq i64 ` ) ( nurl_print raw_reg )
         ( nurl_print `, ` ) ( nurl_print lit ) ( nurl_print `\n` )
         : s ok_label ( nurl_cg_lbl cg `litok` )
         ( nurl_print `  br i1 ` ) ( nurl_print cmp_reg )
@@ -6564,20 +6561,18 @@
                     { ( emit_enum_float_extract cv0 pt0 pr0 cg ) }
                     { ? & > ( int_width pt0 ) 0 < ( int_width pt0 ) 64 {
                             // Narrow integer payload (i1 / i8 / i16 / i32, incl.
-                            // the unsigned u/u16/u32): the value rode the ptr slot
-                            // widened to i64 (gen_agg_lit), so ptrtoint back to i64
-                            // and trunc to the payload's width. Signedness for a
-                            // later widen is set on the binding below.
-                            : s t64 ( nurl_cg_reg cg )
-                            ( nurl_print `  ` ) ( nurl_print t64 )
-                            ( nurl_print ` = ptrtoint ptr ` ) ( nurl_print pr0 ) ( nurl_print ` to i64\n` )
+                            // the unsigned u/u16/u32): the value rode the i64 slot
+                            // widened (gen_agg_lit) — trunc to the payload's width.
+                            // Signedness for a later widen is set on the binding
+                            // below.
                             ( nurl_print `  ` ) ( nurl_print cv0 )
-                            ( nurl_print ` = trunc i64 ` ) ( nurl_print t64 ) ( nurl_print ` to ` ) ( nurl_print pt0 ) ( nurl_print `\n` )
+                            ( nurl_print ` = trunc i64 ` ) ( nurl_print pr0 ) ( nurl_print ` to ` ) ( nurl_print pt0 ) ( nurl_print `\n` )
                         } {
-                            // Struct-handle payload (e.g. %Vec__Json, %String): the payload
-                            // ptr stored in the enum slot IS the struct's field-0 pointer
-                            // (because aggregate construction does the inverse — extractvalue
-                            // 0 + ptrtoint into the i64 slot). Reconstruct by insertvalue.
+                            // Struct-handle payload (e.g. %Vec__Json, %String): the
+                            // i64 slot holds the struct's field-0 pointer (aggregate
+                            // construction does the inverse — extractvalue 0 +
+                            // ptrtoint into the i64 slot). inttoptr it back and
+                            // reconstruct by insertvalue.
                             : ~ b pt0_is_struct_handle F
                             : ~ s pt0_f0_ty ``
                             ? == ( nurl_str_get pt0 0 ) 37
@@ -6591,29 +6586,37 @@
                                 {} }
                             {}
                             ? pt0_is_struct_handle
-                            { ( nurl_print `  ` ) ( nurl_print cv0 )
+                            { : s h0p ( nurl_cg_reg cg )
+                                ( nurl_print `  ` ) ( nurl_print h0p )
+                                ( nurl_print ` = inttoptr i64 ` ) ( nurl_print pr0 )
+                                ( nurl_print ` to ` ) ( nurl_print pt0_f0_ty ) ( nurl_print `\n` )
+                                ( nurl_print `  ` ) ( nurl_print cv0 )
                                 ( nurl_print ` = insertvalue ` ) ( nurl_print pt0 )
                                 ( nurl_print ` undef, ` ) ( nurl_print pt0_f0_ty )
-                                ( nurl_print ` ` ) ( nurl_print pr0 ) ( nurl_print `, 0\n` ) }
-                            { ( nurl_print `  ` ) ( nurl_print cv0 )
-                                ? | == ( nurl_str_get pt0 0 ) 123
+                                ( nurl_print ` ` ) ( nurl_print h0p ) ( nurl_print `, 0\n` ) }
+                            { ? | == ( nurl_str_get pt0 0 ) 123
                                 & == ( nurl_str_get pt0 0 ) 37
                                 != ( nurl_str_get pt0 - ( nurl_str_len pt0 ) 1 ) 42
                                 {  // Anonymous aggregate (`{ i1, i64 }`) OR a named
                                     // non-pointer type (`%Geom` multi-field struct /
-                                    // `%Color` enum) — the payload slot holds a
-                                    // heap-box pointer to the whole value (see the
-                                    // symmetric heap-box in gen_agg_lit's enum-
-                                    // construction path). Load the value back
-                                    // through it. A pointer payload (`%Ast*`) keeps
-                                    // the bitcast-fallthrough below — the slot holds
-                                    // the pointer itself, not a box.
+                                    // `%Color` enum) — the i64 slot holds a heap-box
+                                    // pointer to the whole value (see the symmetric
+                                    // heap-box in gen_agg_lit's enum-construction
+                                    // path). inttoptr + load the value back. A
+                                    // pointer payload (`%Ast*`) keeps the inttoptr
+                                    // fallthrough below — the slot holds the pointer
+                                    // itself, not a box.
+                                    : s b0p ( nurl_cg_reg cg )
+                                    ( nurl_print `  ` ) ( nurl_print b0p )
+                                    ( nurl_print ` = inttoptr i64 ` ) ( nurl_print pr0 ) ( nurl_print ` to ptr\n` )
+                                    ( nurl_print `  ` ) ( nurl_print cv0 )
                                     ( nurl_print ` = load ` ) ( nurl_print pt0 )
-                                    ( nurl_print `, ptr ` ) ( nurl_print pr0 ) ( nurl_print `\n` )
+                                    ( nurl_print `, ptr ` ) ( nurl_print b0p ) ( nurl_print `\n` )
                                 }
-                                ? ( seq pt0 `i64` )
-                                { ( nurl_print ` = ptrtoint ptr ` ) ( nurl_print pr0 ) ( nurl_print ` to i64\n` ) }
-                                { ( nurl_print ` = bitcast ptr ` ) ( nurl_print pr0 ) ( nurl_print ` to i8*\n` ) } }
+                                { ( nurl_print `  ` ) ( nurl_print cv0 )
+                                    ? ( seq pt0 `i64` )
+                                    { ( nurl_print ` = add i64 ` ) ( nurl_print pr0 ) ( nurl_print `, 0\n` ) }
+                                    { ( nurl_print ` = inttoptr i64 ` ) ( nurl_print pr0 ) ( nurl_print ` to i8*\n` ) } } }
                         }
                     }
                 }
@@ -6698,11 +6701,8 @@
                 ? ( is_float_ty pt1 )
                 { ( emit_enum_float_extract cv1 pt1 pr1 cg ) }
                 { ? & > ( int_width pt1 ) 0 < ( int_width pt1 ) 64 {
-                        : s t64 ( nurl_cg_reg cg )
-                        ( nurl_print `  ` ) ( nurl_print t64 )
-                        ( nurl_print ` = ptrtoint ptr ` ) ( nurl_print pr1 ) ( nurl_print ` to i64\n` )
                         ( nurl_print `  ` ) ( nurl_print cv1 )
-                        ( nurl_print ` = trunc i64 ` ) ( nurl_print t64 ) ( nurl_print ` to ` ) ( nurl_print pt1 ) ( nurl_print `\n` )
+                        ( nurl_print ` = trunc i64 ` ) ( nurl_print pr1 ) ( nurl_print ` to ` ) ( nurl_print pt1 ) ( nurl_print `\n` )
                     } {
                         // Mirror slot-0 reconstruction (the inverse of
                         // gen_agg_lit's enum-construction boxing). A `%`-named
@@ -6726,22 +6726,31 @@
                             {} }
                         {}
                         ? pt1_is_struct_handle
-                        { ( nurl_print `  ` ) ( nurl_print cv1 )
+                        { : s h1p ( nurl_cg_reg cg )
+                            ( nurl_print `  ` ) ( nurl_print h1p )
+                            ( nurl_print ` = inttoptr i64 ` ) ( nurl_print pr1 )
+                            ( nurl_print ` to ` ) ( nurl_print pt1_f0_ty ) ( nurl_print `\n` )
+                            ( nurl_print `  ` ) ( nurl_print cv1 )
                             ( nurl_print ` = insertvalue ` ) ( nurl_print pt1 )
                             ( nurl_print ` undef, ` ) ( nurl_print pt1_f0_ty )
-                            ( nurl_print ` ` ) ( nurl_print pr1 ) ( nurl_print `, 0\n` ) }
-                        { ( nurl_print `  ` ) ( nurl_print cv1 )
-                            ? | == ( nurl_str_get pt1 0 ) 123
+                            ( nurl_print ` ` ) ( nurl_print h1p ) ( nurl_print `, 0\n` ) }
+                        { ? | == ( nurl_str_get pt1 0 ) 123
                             & == ( nurl_str_get pt1 0 ) 37
                             != ( nurl_str_get pt1 - ( nurl_str_len pt1 ) 1 ) 42
                             {  // Anon aggregate OR named non-pointer struct / enum:
-                                // load the whole value back through the box pointer.
+                                // inttoptr + load the whole value back through the
+                                // box pointer.
+                                : s b1p ( nurl_cg_reg cg )
+                                ( nurl_print `  ` ) ( nurl_print b1p )
+                                ( nurl_print ` = inttoptr i64 ` ) ( nurl_print pr1 ) ( nurl_print ` to ptr\n` )
+                                ( nurl_print `  ` ) ( nurl_print cv1 )
                                 ( nurl_print ` = load ` ) ( nurl_print pt1 )
-                                ( nurl_print `, ptr ` ) ( nurl_print pr1 ) ( nurl_print `\n` )
+                                ( nurl_print `, ptr ` ) ( nurl_print b1p ) ( nurl_print `\n` )
                             }
-                            ? ( seq pt1 `i64` )
-                            { ( nurl_print ` = ptrtoint ptr ` ) ( nurl_print pr1 ) ( nurl_print ` to i64\n` ) }
-                            { ( nurl_print ` = bitcast ptr ` ) ( nurl_print pr1 ) ( nurl_print ` to i8*\n` ) } }
+                            { ( nurl_print `  ` ) ( nurl_print cv1 )
+                                ? ( seq pt1 `i64` )
+                                { ( nurl_print ` = add i64 ` ) ( nurl_print pr1 ) ( nurl_print `, 0\n` ) }
+                                { ( nurl_print ` = inttoptr i64 ` ) ( nurl_print pr1 ) ( nurl_print ` to i8*\n` ) } } }
                     }
                 }
                 : s vp1 ( nurl_cg_reg cg )
@@ -6775,11 +6784,8 @@
                 ? ( is_float_ty pt2 )
                 { ( emit_enum_float_extract cv2 pt2 pr2 cg ) }
                 { ? & > ( int_width pt2 ) 0 < ( int_width pt2 ) 64 {
-                        : s t64 ( nurl_cg_reg cg )
-                        ( nurl_print `  ` ) ( nurl_print t64 )
-                        ( nurl_print ` = ptrtoint ptr ` ) ( nurl_print pr2 ) ( nurl_print ` to i64\n` )
                         ( nurl_print `  ` ) ( nurl_print cv2 )
-                        ( nurl_print ` = trunc i64 ` ) ( nurl_print t64 ) ( nurl_print ` to ` ) ( nurl_print pt2 ) ( nurl_print `\n` )
+                        ( nurl_print ` = trunc i64 ` ) ( nurl_print pr2 ) ( nurl_print ` to ` ) ( nurl_print pt2 ) ( nurl_print `\n` )
                     } {
                         // Mirror slot-0 reconstruction — same struct-payload hole
                         // as slot 1, one slot over (enum field 3).
@@ -6796,22 +6802,31 @@
                             {} }
                         {}
                         ? pt2_is_struct_handle
-                        { ( nurl_print `  ` ) ( nurl_print cv2 )
+                        { : s h2p ( nurl_cg_reg cg )
+                            ( nurl_print `  ` ) ( nurl_print h2p )
+                            ( nurl_print ` = inttoptr i64 ` ) ( nurl_print pr2 )
+                            ( nurl_print ` to ` ) ( nurl_print pt2_f0_ty ) ( nurl_print `\n` )
+                            ( nurl_print `  ` ) ( nurl_print cv2 )
                             ( nurl_print ` = insertvalue ` ) ( nurl_print pt2 )
                             ( nurl_print ` undef, ` ) ( nurl_print pt2_f0_ty )
-                            ( nurl_print ` ` ) ( nurl_print pr2 ) ( nurl_print `, 0\n` ) }
-                        { ( nurl_print `  ` ) ( nurl_print cv2 )
-                            ? | == ( nurl_str_get pt2 0 ) 123
+                            ( nurl_print ` ` ) ( nurl_print h2p ) ( nurl_print `, 0\n` ) }
+                        { ? | == ( nurl_str_get pt2 0 ) 123
                             & == ( nurl_str_get pt2 0 ) 37
                             != ( nurl_str_get pt2 - ( nurl_str_len pt2 ) 1 ) 42
                             {  // Anon aggregate OR named non-pointer struct / enum:
-                                // load the whole value back through the box pointer.
+                                // inttoptr + load the whole value back through the
+                                // box pointer.
+                                : s b2p ( nurl_cg_reg cg )
+                                ( nurl_print `  ` ) ( nurl_print b2p )
+                                ( nurl_print ` = inttoptr i64 ` ) ( nurl_print pr2 ) ( nurl_print ` to ptr\n` )
+                                ( nurl_print `  ` ) ( nurl_print cv2 )
                                 ( nurl_print ` = load ` ) ( nurl_print pt2 )
-                                ( nurl_print `, ptr ` ) ( nurl_print pr2 ) ( nurl_print `\n` )
+                                ( nurl_print `, ptr ` ) ( nurl_print b2p ) ( nurl_print `\n` )
                             }
-                            ? ( seq pt2 `i64` )
-                            { ( nurl_print ` = ptrtoint ptr ` ) ( nurl_print pr2 ) ( nurl_print ` to i64\n` ) }
-                            { ( nurl_print ` = bitcast ptr ` ) ( nurl_print pr2 ) ( nurl_print ` to i8*\n` ) } }
+                            { ( nurl_print `  ` ) ( nurl_print cv2 )
+                                ? ( seq pt2 `i64` )
+                                { ( nurl_print ` = add i64 ` ) ( nurl_print pr2 ) ( nurl_print `, 0\n` ) }
+                                { ( nurl_print ` = inttoptr i64 ` ) ( nurl_print pr2 ) ( nurl_print ` to i8*\n` ) } } }
                     }
                 }
                 : s vp2 ( nurl_cg_reg cg )
@@ -9889,20 +9904,17 @@
 
 // int_width: LLVM integer type string → bit width, or 0 if not iN.
 // Reconstruct a float (`double` / f32 `float`) enum payload out of the
-// uniformly-pointer enum slot. The construction side (gen_agg_lit) bitcast
-// the float to a same-width int and `inttoptr`'d it into the slot; this is
-// the exact inverse: `ptrtoint` the slot back to i64, then bitcast (an f32
-// first truncs to i32). `cv` is the already-allocated destination register.
+// uniform i64 enum slot. The construction side (gen_agg_lit) bitcast the
+// float to a same-width int into the slot; this is the exact inverse:
+// bitcast the i64 slot back (an f32 first truncs to i32). `cv` is the
+// already-allocated destination register.
 @ emit_enum_float_extract s cv s pt s pr i cg → v {
-    : s bits ( nurl_cg_reg cg )
-    ( nurl_print `  ` ) ( nurl_print bits )
-    ( nurl_print ` = ptrtoint ptr ` ) ( nurl_print pr ) ( nurl_print ` to i64\n` )
     ? ( seq pt `double` )
     { ( nurl_print `  ` ) ( nurl_print cv )
-        ( nurl_print ` = bitcast i64 ` ) ( nurl_print bits ) ( nurl_print ` to double\n` ) }
+        ( nurl_print ` = bitcast i64 ` ) ( nurl_print pr ) ( nurl_print ` to double\n` ) }
     { : s b32 ( nurl_cg_reg cg )
         ( nurl_print `  ` ) ( nurl_print b32 )
-        ( nurl_print ` = trunc i64 ` ) ( nurl_print bits ) ( nurl_print ` to i32\n` )
+        ( nurl_print ` = trunc i64 ` ) ( nurl_print pr ) ( nurl_print ` to i32\n` )
         ( nurl_print `  ` ) ( nurl_print cv )
         ( nurl_print ` = bitcast i32 ` ) ( nurl_print b32 ) ( nurl_print ` to float\n` ) }
 }
@@ -9935,15 +9947,16 @@
 // pointer operands to i64 before `icmp`, so `== ptr 0` / `!= ptr 0`
 // null-checks and pointer↔pointer compares emit valid IR.
 // Bind ONE enum payload slot (`pidx` ≥ 1; slot 0 keeps its own opt/res-bool
-// reconstruction inline in gen_match). The payload rode the uniformly-`ptr`
+// reconstruction inline in gen_match). The payload rode the uniform i64
 // enum slot; reconstruct it as the exact inverse of gen_agg_lit's boxing —
-// float via emit_enum_float_extract, a narrow int via ptrtoint+trunc, a
-// single-pointer struct handle via insertvalue, a multi-field struct / enum /
-// anon aggregate via a load through the heap-box pointer, i64 via ptrtoint,
-// else a bare pointer. Then alloca + store + register the binding (with its
-// `__ptr` / `__unsigned` metadata and any user-`Drop`). One call per slot,
-// driven by a loop in gen_match, generalises the former hand-unrolled slot-1 /
-// slot-2 blocks to N payloads — lifting the 3-payload destructuring limit.
+// float via emit_enum_float_extract, a narrow int via trunc, a
+// single-pointer struct handle via inttoptr + insertvalue, a multi-field
+// struct / enum / anon aggregate via a load through the heap-box pointer,
+// i64 as-is, else a bare pointer via inttoptr. Then alloca + store +
+// register the binding (with its `__ptr` / `__unsigned` metadata and any
+// user-`Drop`). One call per slot, driven by a loop in gen_match,
+// generalises the former hand-unrolled slot-1 / slot-2 blocks to N
+// payloads — lifting the 3-payload destructuring limit.
 @ emit_enum_payload_bind s pvi i pidx s pattern_name s match_type s match_val i syms i cg → v {
     : s pkey ( nurl_str_cat3 pattern_name `__payload__` ( nurl_str_int pidx ) )
     : s pti ( nurl_sym_get syms pkey )
@@ -9956,11 +9969,8 @@
     ? ( is_float_ty pti )
     { ( emit_enum_float_extract cvi pti pri cg ) }
     { ? & > ( int_width pti ) 0 < ( int_width pti ) 64 {
-            : s t64 ( nurl_cg_reg cg )
-            ( nurl_print `  ` ) ( nurl_print t64 )
-            ( nurl_print ` = ptrtoint ptr ` ) ( nurl_print pri ) ( nurl_print ` to i64\n` )
             ( nurl_print `  ` ) ( nurl_print cvi )
-            ( nurl_print ` = trunc i64 ` ) ( nurl_print t64 ) ( nurl_print ` to ` ) ( nurl_print pti ) ( nurl_print `\n` )
+            ( nurl_print ` = trunc i64 ` ) ( nurl_print pri ) ( nurl_print ` to ` ) ( nurl_print pti ) ( nurl_print `\n` )
         } {
             : ~ b is_sh F
             : ~ s f0ty ``
@@ -9975,19 +9985,27 @@
                 {} }
             {}
             ? is_sh
-            { ( nurl_print `  ` ) ( nurl_print cvi )
+            { : s hip ( nurl_cg_reg cg )
+                ( nurl_print `  ` ) ( nurl_print hip )
+                ( nurl_print ` = inttoptr i64 ` ) ( nurl_print pri )
+                ( nurl_print ` to ` ) ( nurl_print f0ty ) ( nurl_print `\n` )
+                ( nurl_print `  ` ) ( nurl_print cvi )
                 ( nurl_print ` = insertvalue ` ) ( nurl_print pti )
                 ( nurl_print ` undef, ` ) ( nurl_print f0ty )
-                ( nurl_print ` ` ) ( nurl_print pri ) ( nurl_print `, 0\n` ) }
-            { ( nurl_print `  ` ) ( nurl_print cvi )
-                ? | == ( nurl_str_get pti 0 ) 123
+                ( nurl_print ` ` ) ( nurl_print hip ) ( nurl_print `, 0\n` ) }
+            { ? | == ( nurl_str_get pti 0 ) 123
                 & == ( nurl_str_get pti 0 ) 37
                 != ( nurl_str_get pti - ( nurl_str_len pti ) 1 ) 42
-                { ( nurl_print ` = load ` ) ( nurl_print pti )
-                    ( nurl_print `, ptr ` ) ( nurl_print pri ) ( nurl_print `\n` ) }
-                ? ( seq pti `i64` )
-                { ( nurl_print ` = ptrtoint ptr ` ) ( nurl_print pri ) ( nurl_print ` to i64\n` ) }
-                { ( nurl_print ` = bitcast ptr ` ) ( nurl_print pri ) ( nurl_print ` to i8*\n` ) } }
+                { : s bip ( nurl_cg_reg cg )
+                    ( nurl_print `  ` ) ( nurl_print bip )
+                    ( nurl_print ` = inttoptr i64 ` ) ( nurl_print pri ) ( nurl_print ` to ptr\n` )
+                    ( nurl_print `  ` ) ( nurl_print cvi )
+                    ( nurl_print ` = load ` ) ( nurl_print pti )
+                    ( nurl_print `, ptr ` ) ( nurl_print bip ) ( nurl_print `\n` ) }
+                { ( nurl_print `  ` ) ( nurl_print cvi )
+                    ? ( seq pti `i64` )
+                    { ( nurl_print ` = add i64 ` ) ( nurl_print pri ) ( nurl_print `, 0\n` ) }
+                    { ( nurl_print ` = inttoptr i64 ` ) ( nurl_print pri ) ( nurl_print ` to i8*\n` ) } } }
         } }
     : s vpi ( nurl_cg_reg cg )
     ( nurl_print `  ` ) ( nurl_print vpi )
@@ -11102,21 +11120,18 @@
                 : b is_enum & != 0 ( nurl_str_len type_name ) != 0 ( nurl_str_len variants_entry )
 
                 ? is_enum
-                {  // enum payload: convert values to ptr
+                {  // enum payload: convert values to the uniform i64 slot
                     ? ( seq fty `i1` )
-                    {  // Convert boolean to i64, then to ptr
+                    {  // Convert boolean to i64
                         : s conv_reg1 ( nurl_cg_reg cg )
                         ( nurl_print `  ` ) ( nurl_print conv_reg1 )
                         ( nurl_print ` = zext i1 ` ) ( nurl_print fval ) ( nurl_print ` to i64\n` )
-                        : s conv_reg2 ( nurl_cg_reg cg )
-                        ( nurl_print `  ` ) ( nurl_print conv_reg2 )
-                        ( nurl_print ` = inttoptr i64 ` ) ( nurl_print conv_reg1 ) ( nurl_print ` to ptr\n` )
-                        = actual_fval conv_reg2
-                        = actual_fty `ptr`
+                        = actual_fval conv_reg1
+                        = actual_fty `i64`
                     }
                     ? ( is_float_ty fty )
-                    {  // Float payload → ptr slot. Bitcast the float to a
-                        // same-width int (f32 widens i32→i64), then inttoptr.
+                    {  // Float payload → i64 slot. Bitcast the float to a
+                        // same-width int (f32 widens i32→i64).
                         // The match arm inverts this (emit_enum_float_extract).
                         //
                         // Pick the slot width from the variant's DECLARED payload
@@ -11160,20 +11175,14 @@
                             = ibits ( nurl_cg_reg cg )
                             ( nurl_print `  ` ) ( nurl_print ibits )
                             ( nurl_print ` = bitcast double ` ) ( nurl_print fv64 ) ( nurl_print ` to i64\n` ) }
-                        : s conv_regf ( nurl_cg_reg cg )
-                        ( nurl_print `  ` ) ( nurl_print conv_regf )
-                        ( nurl_print ` = inttoptr i64 ` ) ( nurl_print ibits ) ( nurl_print ` to ptr\n` )
-                        = actual_fval conv_regf
-                        = actual_fty `ptr`
+                        = actual_fval ibits
+                        = actual_fty `i64`
                     }
                     ? & > ( int_width fty ) 0 ! ( seq fty `i1` )
-                    {  // Integer payload → ptr slot. A NARROW int (i8/i16/i32,
-                        // incl. the unsigned u/u16/u32) must first widen to i64
-                        // so the value survives the ptr round-trip — zext when
-                        // the payload value is unsigned (`fld_unsigned`), sext
-                        // otherwise. `inttoptr i8 … to ptr` would zero-extend
-                        // unconditionally and corrupt a signed payload. i64
-                        // payloads inttoptr directly.
+                    {  // Integer payload → i64 slot. A NARROW int (i8/i16/i32,
+                        // incl. the unsigned u/u16/u32) widens to i64 — zext
+                        // when the payload value is unsigned (`fld_unsigned`),
+                        // sext otherwise. i64 payloads ride the slot as-is.
                         : ~ s wide_val fval
                         ? < ( int_width fty ) 64
                         { : s ext_reg ( nurl_cg_reg cg )
@@ -11182,23 +11191,21 @@
                             ( nurl_print fty ) ( nurl_print ` ` ) ( nurl_print fval ) ( nurl_print ` to i64\n` )
                             = wide_val ext_reg }
                         {}
-                        : s conv_reg ( nurl_cg_reg cg )
-                        ( nurl_print `  ` ) ( nurl_print conv_reg )
-                        ( nurl_print ` = inttoptr i64 ` ) ( nurl_print wide_val ) ( nurl_print ` to ptr\n` )
-                        = actual_fval conv_reg
-                        = actual_fty `ptr`
+                        = actual_fval wide_val
+                        = actual_fty `i64`
                     }
                     ? | ( seq fty `sref` ) ( seq fty `i8*` )
-                    {  // Convert string to ptr
+                    {  // String pointer → i64 slot via ptrtoint
                         : s conv_reg ( nurl_cg_reg cg )
                         ( nurl_print `  ` ) ( nurl_print conv_reg )
-                        ( nurl_print ` = bitcast ` ) ( nurl_print fty ) ( nurl_print ` ` )
-                        ( nurl_print fval ) ( nurl_print ` to ptr\n` )
+                        ( nurl_print ` = ptrtoint ` ) ( nurl_print fty ) ( nurl_print ` ` )
+                        ( nurl_print fval ) ( nurl_print ` to i64\n` )
                         = actual_fval conv_reg
-                        = actual_fty `ptr`
+                        = actual_fty `i64`
                     }
                     ? == ( nurl_str_get fty 0 ) 123
-                    {  // Anonymous aggregate (e.g., { i1, i64 }): alloca + store + bitcast to ptr
+                    {  // Anonymous aggregate (e.g., { i1, i64 }): alloca + store +
+                        // ptrtoint into the i64 slot
                         : s alloc_reg ( nurl_cg_reg cg )
                         ( nurl_print `  ` ) ( nurl_print alloc_reg )
                         ( nurl_print ` = alloca ` ) ( nurl_print fty ) ( nurl_print `\n` )
@@ -11207,10 +11214,10 @@
                         ( nurl_print `* ` ) ( nurl_print alloc_reg ) ( nurl_print `\n` )
                         : s conv_reg ( nurl_cg_reg cg )
                         ( nurl_print `  ` ) ( nurl_print conv_reg )
-                        ( nurl_print ` = bitcast ` ) ( nurl_print fty ) ( nurl_print `* ` )
-                        ( nurl_print alloc_reg ) ( nurl_print ` to ptr\n` )
+                        ( nurl_print ` = ptrtoint ` ) ( nurl_print fty ) ( nurl_print `* ` )
+                        ( nurl_print alloc_reg ) ( nurl_print ` to i64\n` )
                         = actual_fval conv_reg
-                        = actual_fty `ptr`
+                        = actual_fty `i64`
                     }
                     ? & == ( nurl_str_get fty 0 ) 37
                     != ( nurl_str_get fty - ( nurl_str_len fty ) 1 ) 42
@@ -11238,10 +11245,10 @@
                             ( nurl_print ` ` ) ( nurl_print fval ) ( nurl_print `, 0\n` )
                             : s pcast ( nurl_cg_reg cg )
                             ( nurl_print `  ` ) ( nurl_print pcast )
-                            ( nurl_print ` = bitcast ` ) ( nurl_print f0_ty3 )
-                            ( nurl_print ` ` ) ( nurl_print xv3 ) ( nurl_print ` to ptr\n` )
+                            ( nurl_print ` = ptrtoint ` ) ( nurl_print f0_ty3 )
+                            ( nurl_print ` ` ) ( nurl_print xv3 ) ( nurl_print ` to i64\n` )
                             = actual_fval pcast
-                            = actual_fty `ptr` }
+                            = actual_fty `i64` }
                         { : s sz_reg ( nurl_cg_reg cg )
                             ( nurl_print `  ` ) ( nurl_print sz_reg )
                             ( nurl_print ` = getelementptr ` ) ( nurl_print fty )
@@ -11264,10 +11271,22 @@
                             ( nurl_print `* ` ) ( nurl_print box_ptr ) ( nurl_print `\n` )
                             : s box_cast ( nurl_cg_reg cg )
                             ( nurl_print `  ` ) ( nurl_print box_cast )
-                            ( nurl_print ` = bitcast ` ) ( nurl_print fty )
-                            ( nurl_print `* ` ) ( nurl_print box_ptr ) ( nurl_print ` to ptr\n` )
+                            ( nurl_print ` = ptrtoint ` ) ( nurl_print fty )
+                            ( nurl_print `* ` ) ( nurl_print box_ptr ) ( nurl_print ` to i64\n` )
                             = actual_fval box_cast
-                            = actual_fty `ptr` }
+                            = actual_fty `i64` }
+                    }
+                    ? | ( seq fty `ptr` ) == ( nurl_str_get fty - ( nurl_str_len fty ) 1 ) 42
+                    {  // Pointer payload (`%Ast*`, or an opaque `ptr` value):
+                        // ptrtoint into the i64 slot. Before the i64-slot
+                        // change these rode the ptr slot untouched; the match
+                        // arm recovers them with one inttoptr.
+                        : s pconv ( nurl_cg_reg cg )
+                        ( nurl_print `  ` ) ( nurl_print pconv )
+                        ( nurl_print ` = ptrtoint ` ) ( nurl_print fty ) ( nurl_print ` ` )
+                        ( nurl_print fval ) ( nurl_print ` to i64\n` )
+                        = actual_fval pconv
+                        = actual_fty `i64`
                     }
                     {}
                 }
@@ -15119,8 +15138,12 @@
 @ emit_drop_enum_payload s ename s pt i fidx s ctr i syms → v {
     : s slot ( __dr ctr )
     ( nurl_print `  ` ) ( nurl_print slot ) ( nurl_print ` = extractvalue %` ) ( nurl_print ename ) ( nurl_print ` %v, ` ) ( nurl_print ( nurl_str_int fidx ) ) ( nurl_print `\n` )
+    // The i64 slot holds a pointer (String/Vec f0, or a heap-box) —
+    // materialise it once for every use below.
+    : s sp ( __dr ctr )
+    ( nurl_print `  ` ) ( nurl_print sp ) ( nurl_print ` = inttoptr i64 ` ) ( nurl_print slot ) ( nurl_print ` to i8*\n` )
     ? ( seq pt `%String` ) {
-        ( nurl_print `  call void @nurl_vec_drop(i8* ` ) ( nurl_print slot ) ( nurl_print `, ptr null, i64 1)\n` )
+        ( nurl_print `  call void @nurl_vec_drop(i8* ` ) ( nurl_print sp ) ( nurl_print `, ptr null, i64 1)\n` )
         ^ v
     } {}
     ? != 0 ( nurl_str_starts pt `%Vec__` ) {
@@ -15130,20 +15153,20 @@
             ( nurl_print `  ` ) ( nurl_print szp ) ( nurl_print ` = getelementptr ` ) ( nurl_print elem ) ( nurl_print `, ` ) ( nurl_print elem ) ( nurl_print `* null, i32 1\n` )
             : s szi ( __dr ctr )
             ( nurl_print `  ` ) ( nurl_print szi ) ( nurl_print ` = ptrtoint ` ) ( nurl_print elem ) ( nurl_print `* ` ) ( nurl_print szp ) ( nurl_print ` to i64\n` )
-            ( nurl_print `  call void @nurl_vec_drop(i8* ` ) ( nurl_print slot ) ( nurl_print `, ptr @drop_ptr__` ) ( nurl_print ( __drop_mangle elem ) ) ( nurl_print `, i64 ` ) ( nurl_print szi ) ( nurl_print `)\n` )
+            ( nurl_print `  call void @nurl_vec_drop(i8* ` ) ( nurl_print sp ) ( nurl_print `, ptr @drop_ptr__` ) ( nurl_print ( __drop_mangle elem ) ) ( nurl_print `, i64 ` ) ( nurl_print szi ) ( nurl_print `)\n` )
         } {
-            ( nurl_print `  call void @nurl_vec_drop(i8* ` ) ( nurl_print slot ) ( nurl_print `, ptr null, i64 1)\n` )
+            ( nurl_print `  call void @nurl_vec_drop(i8* ` ) ( nurl_print sp ) ( nurl_print `, ptr null, i64 1)\n` )
         }
         ^ v
     } {}
     // boxed struct OR wide enum: load the payload through the box, drop
     // it recursively, free the box.
     : s bp ( __dr ctr )
-    ( nurl_print `  ` ) ( nurl_print bp ) ( nurl_print ` = bitcast i8* ` ) ( nurl_print slot ) ( nurl_print ` to ` ) ( nurl_print pt ) ( nurl_print `*\n` )
+    ( nurl_print `  ` ) ( nurl_print bp ) ( nurl_print ` = bitcast i8* ` ) ( nurl_print sp ) ( nurl_print ` to ` ) ( nurl_print pt ) ( nurl_print `*\n` )
     : s bv ( __dr ctr )
     ( nurl_print `  ` ) ( nurl_print bv ) ( nurl_print ` = load ` ) ( nurl_print pt ) ( nurl_print `, ` ) ( nurl_print pt ) ( nurl_print `* ` ) ( nurl_print bp ) ( nurl_print `\n` )
     ( emit_drop_value pt bv ctr syms )
-    ( nurl_print `  call void @nurl_free(i8* ` ) ( nurl_print slot ) ( nurl_print `)\n` )
+    ( nurl_print `  call void @nurl_free(i8* ` ) ( nurl_print sp ) ( nurl_print `)\n` )
 }
 
 @ emit_drop_enum_fn s ename s variants i syms → v {
@@ -15328,12 +15351,19 @@
     // and heap-box (has payloads). See "wide enum" comments at those sites.
     ( nurl_sym_def syms ( nurl_str_cat ename `__max_payloads` ) ( nurl_str_int max_payloads ) )
 
-    // Generate LLVM type declaration: { i64, ptr, ptr, ... } with max_payloads ptr slots
+    // Generate LLVM type declaration: { i64, i64, i64, ... } with
+    // max_payloads i64 slots. The slots are i64 — NOT ptr — because a
+    // payload survives the slot round-trip only if the slot holds all 64
+    // bits on every target: on wasm32 a ptr is 32 bits wide, so routing an
+    // f64 bit-pattern (or a >2^32 int) through `inttoptr` silently
+    // truncated it (the chaotic-showcase autodiff wasm miscompile).
+    // Pointers ride the i64 slot via ptrtoint/inttoptr, which is lossless
+    // on every supported target (wasm32 pointers zero-extend into i64).
     ( nurl_print `%` ) ( nurl_print ename )
     ( nurl_print ` = type { i64` )
     : ~ i pi 0
     ~ < pi max_payloads {
-        ( nurl_print `, ptr` )
+        ( nurl_print `, i64` )
         = pi + pi 1
     }
     ( nurl_print ` }\n` )

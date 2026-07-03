@@ -1,0 +1,11 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+big_i64 ok
+neg_i64 ok
+f64_slot0 ok
+mix_slot0 ok
+mix_slot1_f64 ok
+mix_slot2 ok
+ptr_payload_i64 ok

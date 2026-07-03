@@ -371,8 +371,12 @@ name is optional when only the type matters). Fields are accessed via
 An enum is `:` `|` `Name` `{` variant* `}`; a variant is
 `IDENT type*` — the variant name followed by zero or more payload types.
 Each variant compiles to an `i64` tag global named by the variant. The
-enum value is `{ i64, ptr, ptr, ... }` sized to fit the variant with
-the most payloads.
+enum value is `{ i64, i64, i64, ... }` sized to fit the variant with
+the most payloads. Payload slots are uniformly `i64` — bit-complete for
+every payload kind on every target (floats bitcast in and out, narrow
+ints widen and truncate, pointers `ptrtoint`/`inttoptr`); a
+pointer-typed slot would truncate f64 / >2³² payloads on wasm32, where
+pointers are 32 bits wide.
 
 A variant whose payload is a struct or enum declared *later* in the file
 parses correctly via a name pre-pass (grammar v2.1, 2026-05-21). Pattern

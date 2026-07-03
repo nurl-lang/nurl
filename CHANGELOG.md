@@ -8,6 +8,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Enum payload slots are now `i64`, not `ptr` — 64-bit payloads survive
+  wasm32.** General-enum payload slots were pointer-typed and every payload
+  transited them via `inttoptr`/`ptrtoint`. Lossless on 64-bit targets, but
+  a wasm32 pointer is 32 bits wide, so an `f` payload's bit-pattern or an
+  integer ≥ 2³² silently lost its upper half on the wasm target (the
+  chaotic-showcase autodiff computed garbage under wasm while passing
+  natively). Payload slots are now uniformly `i64` on every target —
+  floats bitcast in and out, narrow ints widen/trunc, and pointers are the
+  ones that convert (`ptrtoint`/`inttoptr`, lossless everywhere, wasm32
+  pointers zero-extend). Construction, match destructuring (slots 0–N,
+  literal payload patterns), and the auto-generated enum `Drop` all moved
+  together, so the layout change is invisible on 64-bit native — proven by
+  the full corpus and the held bootstrap fixed point. New regression:
+  `compiler/tests/enum_payload_64bit_slots.nu` pins the 64-bit-exact
+  round-trip for f64 / >2³² / negative i64 / mixed-slot / pointer payloads
+  (and runs identically as wasm via the wasmbuilder corpus).
+
 ### Added
 
 - **`packages/wasmbuilder` v0.1.0 — local NURL → wasm32-wasi builds, no
@@ -30,9 +49,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   linking at `-O0`. Corpus-tested: 13 repo examples byte-identical to their
   native builds under both the reference wasmtime and the pure-NURL `wt`;
   the compiler itself (65k lines) built through wasmbuilder compiles
-  programs byte-identically to its native twin. Known pre-existing nurlc
-  wasm32 limitation documented: float / >2³² integer payloads in user
-  enums truncate (pointer-typed payload slots).
+  programs byte-identically to its native twin.
 
 - **`packages/swarm-mcp` v0.8.0 — kernels compile locally.**
   `compute_submit_kernel` / `compute_submit_cuda` now build wasm in-process
