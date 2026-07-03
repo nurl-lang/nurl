@@ -91,6 +91,66 @@ $ `stdlib/core/vec.nu`
     ? ! ( string_ends_with frame `\r\n\r\n` ) { ( nurl_print `  FAIL sse-suffix\n` ) = fails + fails 1 } {}
     ( string_free frame )
 
+    // ── Id-tagged SSE frame ──
+    : Json sse_data2 ( json_str_lit `ok` )
+    : String frame2 ( mcp_sse_frame_id 7 `message` sse_data2 )
+    ( json_free sse_data2 )
+    ? ! ( string_starts_with frame2 `id: 7\r\nevent: message\r\ndata: ` ) { ( nurl_print `  FAIL sse-id-prefix\n` ) = fails + fails 1 } {}
+    ? ! ( string_ends_with frame2 `\r\n\r\n` ) { ( nurl_print `  FAIL sse-id-suffix\n` ) = fails + fails 1 } {}
+    ( string_free frame2 )
+
+    // ── Event ids + replay backlog ──
+    ( mcp_session_push_notify store sid ( mcp_notification `notifications/message` ( json_str_lit `e1` ) ) )
+    ( mcp_session_push_notify store sid ( mcp_notification `notifications/message` ( json_str_lit `e2` ) ) )
+    : ( Vec String ) fr1 ( mcp_session_drain_frames store sid )
+    ? != ( vec_len [String] fr1 ) 2 { ( nurl_print `  FAIL frames2\n` ) = fails + fails 1 } {}
+    ?? ( vec_get [String] fr1 0 ) {
+        T f → { ? ! ( string_starts_with f `id: 1\r\nevent: message\r\ndata: ` ) { ( nurl_print `  FAIL frame-id1\n` ) = fails + fails 1 } {} }
+        F → { ( nurl_print `  FAIL frame0-missing\n` ) = fails + fails 1 }
+    }
+    ?? ( vec_get [String] fr1 1 ) {
+        T f → { ? ! ( string_starts_with f `id: 2\r\n` ) { ( nurl_print `  FAIL frame-id2\n` ) = fails + fails 1 } {} }
+        F → { ( nurl_print `  FAIL frame1-missing\n` ) = fails + fails 1 }
+    }
+    ( vec_free_with [String] fr1 \ String f → v { ( string_free f ) } )
+    // Drained events moved into the backlog: replay from 0 → both.
+    : ( Vec String ) rp0 ( mcp_session_replay store sid 0 )
+    ? != ( vec_len [String] rp0 ) 2 { ( nurl_print `  FAIL replay-all\n` ) = fails + fails 1 } {}
+    ( vec_free_with [String] rp0 \ String f → v { ( string_free f ) } )
+    // Replay from 1 → only event 2.
+    : ( Vec String ) rp1 ( mcp_session_replay store sid 1 )
+    ? != ( vec_len [String] rp1 ) 1 { ( nurl_print `  FAIL replay-tail\n` ) = fails + fails 1 } {}
+    ?? ( vec_get [String] rp1 0 ) {
+        T f → { ? ! ( string_starts_with f `id: 2\r\n` ) { ( nurl_print `  FAIL replay-tail-id\n` ) = fails + fails 1 } {} }
+        F → { ( nurl_print `  FAIL replay-tail-missing\n` ) = fails + fails 1 }
+    }
+    ( vec_free_with [String] rp1 \ String f → v { ( string_free f ) } )
+    // Replay when current → empty; unknown session → empty.
+    : ( Vec String ) rp2 ( mcp_session_replay store sid 2 )
+    ? != ( vec_len [String] rp2 ) 0 { ( nurl_print `  FAIL replay-current\n` ) = fails + fails 1 } {}
+    ( vec_free [String] rp2 )
+    : ( Vec String ) rpx ( mcp_session_replay store `bogus` 0 )
+    ? != ( vec_len [String] rpx ) 0 { ( nurl_print `  FAIL replay-unknown\n` ) = fails + fails 1 } {}
+    ( vec_free [String] rpx )
+    // Backlog is bounded at mcp_session_backlog_cap (64): after 70 more
+    // events (ids 3..72), replay-from-0 best-effort returns only the
+    // retained window — 64 frames, the oldest being id 9.
+    : ~ i pi 0
+    ~ < pi 70 {
+        ( mcp_session_push_notify store sid ( mcp_notification `notifications/message` ( json_str_lit `x` ) ) )
+        = pi + pi 1
+    }
+    : ( Vec String ) frB ( mcp_session_drain_frames store sid )
+    ? != ( vec_len [String] frB ) 70 { ( nurl_print `  FAIL frames70\n` ) = fails + fails 1 } {}
+    ( vec_free_with [String] frB \ String f → v { ( string_free f ) } )
+    : ( Vec String ) rpB ( mcp_session_replay store sid 0 )
+    ? != ( vec_len [String] rpB ) ( mcp_session_backlog_cap ) { ( nurl_print `  FAIL backlog-cap\n` ) = fails + fails 1 } {}
+    ?? ( vec_get [String] rpB 0 ) {
+        T f → { ? ! ( string_starts_with f `id: 9\r\n` ) { ( nurl_print `  FAIL backlog-evict\n` ) = fails + fails 1 } {} }
+        F → { ( nurl_print `  FAIL backlog-first-missing\n` ) = fails + fails 1 }
+    }
+    ( vec_free_with [String] rpB \ String f → v { ( string_free f ) } )
+
     // ── Delete ──
     ? ! ( mcp_session_delete store sid ) { ( nurl_print `  FAIL delete\n` ) = fails + fails 1 } {}
     ? != ( mcp_session_count store ) 0 { ( nurl_print `  FAIL count-after-delete\n` ) = fails + fails 1 } {}
