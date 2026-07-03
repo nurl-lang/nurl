@@ -1,3 +1,7 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
 create: f.txt
 modify: f.txt
 close_write: f.txt
