@@ -38,6 +38,7 @@ Each example is tagged for where it can run:
 | [`wordcount.nu`](wordcount.nu) | `wc`-style line / word / char counter. Demonstrates file I/O, struct, and `nurl_argv_*`. | playground |
 | [`csv_demo.nu`](csv_demo.nu) | Round-trips a CSV file through `stdlib/ext/csv.nu` (RFC 4180-conformant quoting via the v2 arena writer). | playground |
 | [`uuidgen.nu`](uuidgen.nu) | Emits a UUID v4 string via `stdlib/ext/uuid.nu` — quick sanity check on `nurl_rand_fill` + the hex formatter. | playground |
+| [`selfsigned_cert.nu`](selfsigned_cert.nu) | Mints a self-signed HTTPS certificate in pure NURL (`std/x509_gen.nu`): P-256 keypair, X.509 v3 DER, RFC 6979 ECDSA self-signature, PEM out — no OpenSSL. Re-parses its own output with the stdlib X.509 parser and verifies the signature. `openssl verify` and `curl --cacert` accept the result. | playground |
 | [`time_basic.nu`](time_basic.nu) | Smokes the `stdlib/std/time.nu` surface: `now_ms`, `sleep_ms`, monotonic vs wall clocks. Output is intrinsically non-deterministic, so only relative orderings are asserted. | playground |
 
 ### Algorithms & control flow

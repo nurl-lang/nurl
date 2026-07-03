@@ -8,6 +8,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`std/x509_gen.nu` — self-signed X.509 certificates in pure NURL.** The
+  write-side sibling of the parse-only `std/x509.nu`: a minimal DER encoder
+  plus TBSCertificate assembly, self-signed with the ECDSA-P256/SHA-256 and
+  P-256-keygen machinery the stdlib already had. `x509_selfsigned_p256 cn
+  days` returns a certificate PEM (X.509 v3: random serial, CN + dNSName
+  SAN, basicConstraints critical CA:TRUE, ecdsa-with-SHA256) and a SEC1 /
+  RFC 5915 `EC PRIVATE KEY` PEM — exactly the pair `openssl ecparam` +
+  `openssl req -x509` used to produce, so the pure TLS server consumes the
+  files unchanged and servers like swarm-mcp `--mcp` can drop their OpenSSL
+  subprocess. The `_pinned` variant takes an explicit scalar/serial/validity
+  and — because the stdlib's ECDSA is deterministic RFC 6979 — produces a
+  byte-reproducible certificate, which is what makes the golden test
+  (`compiler/tests/x509_selfsigned.nu`) possible. Verified externally:
+  `openssl verify` accepts the cert, the key↔cert pair matches, and `curl
+  --cacert` completes a fully-verified TLS handshake against the pure-NURL
+  TLS server serving it. New playground example
+  `examples/selfsigned_cert.nu` prints a freshly minted pair and re-verifies
+  it with the stdlib's own X.509 parser.
+
 ## [0.10.10] — 2026-07-03
 
 A **local wasm builds** release. The new `wasmbuilder` package turns a bare
