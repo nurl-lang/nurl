@@ -720,7 +720,7 @@ $ `stdlib/std/async.nu`
     : ~ b found F
     : ~ i k 0
     ~ & ! found < k nn {
-        ?? ( vec_get [i] . n acked k ) { T x → ?== x seq { = found T } {} F → {} }
+        ?? ( vec_get [i] . n acked k ) { T x → ? == x seq { = found T } {} F → {} }
         = k + k 1
     }
     ( mutex_unlock . n ack_m )

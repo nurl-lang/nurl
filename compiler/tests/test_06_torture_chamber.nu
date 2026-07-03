@@ -46,7 +46,7 @@
 
     = result ? > mask 0
     ?? t {
-        Num n → *n 2
+        Num n → * n 2
         Op s → 0
         _ → ~ mask
     }

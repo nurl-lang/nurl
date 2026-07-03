@@ -7,7 +7,7 @@
 @ json_str Json j → s {
     ^ ?? j {
         JNull → `null`
-        JBool v → ?v `true` `false`
+        JBool v → ? v `true` `false`
     }
 }
 

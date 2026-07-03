@@ -160,7 +160,7 @@ $ `stdlib/ext/env.nu`
     ? ppu_mode { ^ ( run_rom_ppu path frames ) } {}
     // Audio dump mode: `gb <rom> --audio <frames> [out.pcm]`.
     : ~ b audio_mode F
-    ?? ( vec_get [String] args 2 ) { T b → ?( nurl_str_eq ( string_data b ) `--audio` ) { = audio_mode T } {} F _ → {} }
+    ?? ( vec_get [String] args 2 ) { T b → ? ( nurl_str_eq ( string_data b ) `--audio` ) { = audio_mode T } {} F _ → {} }
     ? audio_mode {
         : ~ i af 300
         : ~ s ap `gb_audio.pcm`

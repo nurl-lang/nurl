@@ -86,7 +86,7 @@
     // Unpack results with literal match fallthrough
     = q ?? r1 {
         T v → v
-        F e → *e - 0 1
+        F e → * e - 0 1
     }
 
     : ~ i k ?? r2 {

@@ -135,6 +135,15 @@ $ `tools/nurlfmt/tokenize.nu`
     // part of the trait header — NOT a new top-level decl, so it must not get
     // the inter-decl blank line that would split the header across lines.
     : ~ b in_trait_header F
+    // True inside a declaration HEADER — from a decl/aggregate/FFI `@` or a
+    // closure `\` until the body `{`. Only an `→` emitted in this span
+    // introduces a return TYPE; a match-arm `→` (inside a body, no header
+    // opener since the last `{`) is followed by an ordinary expression,
+    // where `?` / `*` / `!` / `%` are OPERATORS, not type sigils — gluing
+    // them there (`? flag …` → `?flag …`) changes the program's meaning.
+    : ~ b in_decl_hdr F
+    // True when the most recently emitted `→` was a return-type arrow.
+    : ~ b arrow_is_type F
 
     : ~ i idx 0
     ~ < idx n {
@@ -160,7 +169,7 @@ $ `tools/nurlfmt/tokenize.nu`
                 // As a type sigil it glues to the trait name (`%Pet`, like
                 // `*T`/`?T`) and does NOT open a new top-level declaration.
                 : b pct_type & ( __pp_text_eq text `%` )
-                | | ( __pp_text_eq prev_text `:` ) ( __pp_text_eq prev_text `→` )
+                | | ( __pp_text_eq prev_text `:` ) & ( __pp_text_eq prev_text `→` ) arrow_is_type
                 & & == prev_kind TT_FMT_IDENT == bd 0 == pd 0
 
                 ? == kind TT_FMT_EOF {
@@ -334,6 +343,17 @@ $ `tools/nurlfmt/tokenize.nu`
                         ? > bk 0 { = bk - bk 1 } {}
                     } {}
 
+                    // Declaration-header tracking: an `@` (fn decl, FFI fn,
+                    // aggregate literal — all open a `{` before any arm
+                    // arrow can appear) or a closure `\` opens a header;
+                    // the body `{` closes it. An `→` emitted inside the
+                    // header is a return-type arrow; any other `→` (match
+                    // arm) is NOT type context for the token that follows.
+                    ? ( __pp_text_eq text `@` ) { = in_decl_hdr T } {}
+                    ? ( __pp_text_eq text `\` ) { = in_decl_hdr T } {}
+                    ? ( __pp_text_eq text `{` ) { = in_decl_hdr F } {}
+                    ? ( __pp_text_eq text `→` ) { = arrow_is_type in_decl_hdr } {}
+
                     // Update the type-prefix flag for the NEXT iteration.
                     // The current token is a sigil-in-type-pos when:
                     //   * it is `*`, `?`, `!` AND prev was a type-context
@@ -349,7 +369,7 @@ $ `tools/nurlfmt/tokenize.nu`
                     | ( __pp_text_eq text `?` ) ( __pp_text_eq text `!` )
                     : b prev_is_trigger
                     | ( __pp_text_eq prev_text `:` )
-                    | ( __pp_text_eq prev_text `→` )
+                    | & ( __pp_text_eq prev_text `→` ) arrow_is_type
                     | ( __pp_text_eq prev_text `#` )
                     | ( __pp_text_eq prev_text `Z` )
                     | ( __pp_text_eq prev_text `@` )
