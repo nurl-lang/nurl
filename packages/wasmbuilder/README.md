@@ -104,13 +104,6 @@ resolve exactly as a native `nurl` build would).
 
 ## Limitations
 
-* **Float / large-int payloads in user enums** silently lose their upper
-  32 bits on wasm32 — nurlc routes N-payload enum slots through a
-  pointer-typed field (`inttoptr`), and wasm32 pointers are 32-bit. This
-  is a pre-existing nurlc wasm32 code-gen limitation shared by every wasm
-  build path (the playground included), not something wasmbuilder can
-  patch in the IR. Option/Result payloads and int payloads under 2³² are
-  fine. Fixing it belongs in nurlc's enum layout.
 * Programs using native-only libraries (e.g. `stdlib/ext/postgres.nu`)
   can't target wasm — the link reports the missing symbols.
 * Threads don't exist on wasm32-wasi: `thread_spawn` fails gracefully at

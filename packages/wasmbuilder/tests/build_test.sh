@@ -21,7 +21,14 @@ PKG_DIR="$PWD"
 REPO_ROOT="$(cd ../.. && pwd)"
 
 if [ -n "${NURL:-}" ]; then :;
-elif [ -x "$REPO_ROOT/nurl.sh" ]; then NURL="$REPO_ROOT/nurl.sh"; export NURL_STDLIB="${NURL_STDLIB:-$REPO_ROOT}";
+elif [ -x "$REPO_ROOT/nurl.sh" ]; then
+    NURL="$REPO_ROOT/nurl.sh"
+    export NURL_STDLIB="${NURL_STDLIB:-$REPO_ROOT}"
+    # Pin wasmbuilder's nurlc to the same freshly-built compiler that
+    # builds the native twins — otherwise it resolves the installed
+    # $NURL_HOME/bin/nurlc, and a corpus entry exercising new codegen
+    # (e.g. the i64 enum-payload slots) would diff against stale output.
+    if [ -x "$REPO_ROOT/build/nurlc" ]; then export NURLC="${NURLC:-$REPO_ROOT/build/nurlc}"; fi
 else NURL="nurl"; fi
 
 RUNTIME="${WASM_RUNTIME:-}"
@@ -38,11 +45,16 @@ fi
 
 echo "[2/3] corpus: native vs wasm output"
 # Deterministic, dependency-free examples. (uuidgen etc. are random by
-# design and can't be diffed; float-ADT programs like chaotic-showcase
-# are a known nurlc wasm32 limitation — see README "Limitations".)
-CORPUS="fizzbuzz collatz math_basic json_basic showcase serde_demo msgpack_demo dict_coder enigma rule30 slice_test test_05_closures_and_capture test_06_torture_chamber"
+# design and can't be diffed.) chaotic-showcase and the
+# enum_payload_64bit_slots compiler test guard the i64 enum-payload
+# slots: both carry f64 / >2^32 payloads that a pre-fix nurlc truncated
+# on wasm32 (they need a toolchain with the i64-slot enum layout).
+CORPUS="fizzbuzz collatz math_basic json_basic showcase serde_demo msgpack_demo dict_coder enigma rule30 slice_test test_05_closures_and_capture test_06_torture_chamber chaotic-showcase tests:enum_payload_64bit_slots"
 for name in $CORPUS; do
-    src="$REPO_ROOT/examples/$name.nu"
+    case "$name" in
+        tests:*) src="$REPO_ROOT/compiler/tests/${name#tests:}.nu" ;;
+        *)       src="$REPO_ROOT/examples/$name.nu" ;;
+    esac
     [ -f "$src" ] || { echo "  SKIP $name (example missing)"; continue; }
     if ! $NURL "$src" "$WORK/$name.native" >/dev/null 2>&1; then
         echo "  SKIP $name (native build failed)"; continue
