@@ -162,6 +162,9 @@ is_skipped() {
     case "$name" in
         sqlite_*)   [[ -f "$ROOT_DIR/stdlib/runtime.sqlite3" ]] || { echo skip; return; } ;;
         postgres_*) [[ -f "$ROOT_DIR/stdlib/runtime.pq"      ]] || { echo skip; return; } ;;
+        # std/fswatch.nu is Linux-only (inotify is a Linux kernel API; the
+        # symbols don't exist to link elsewhere — FreeBSD/macOS CI).
+        fswatch_*)  [[ "$(uname -s)" == "Linux" ]] || { echo skip; return; } ;;
     esac
     if [[ "$name" == http_* ]]; then
         if ! http_runs_by_default "$name" && [[ "$ENABLE_HTTP_TESTS" != "1" ]]; then
