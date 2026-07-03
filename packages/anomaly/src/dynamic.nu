@@ -33,6 +33,7 @@ $ `stdlib/std/time.nu`
 $ `stdlib/ext/json.nu`
 $ `src/prep.nu`
 $ `src/model.nu`
+$ `src/score.nu`
 $ `src/store.nu`
 
 // ── Types ─────────────────────────────────────────────────────────────
@@ -584,15 +585,17 @@ $ `src/store.nu`
     ~ < k nf {
         ?? ( vec_get [VerModel] . mo forests k ) {
             T vm → {
+                : ( Vec f ) dfs ( anom_decisions vm big rows nfeat )
+                : *f dfp ( vec_data [f] dfs )
                 : ~ f lowest 0.0
                 : ~ b first T
                 : ~ i r 0
                 ~ < r rows {
-                    : f df ( anom_decision_row vm big r )
-                    ? || first < df lowest { = lowest df } {}
+                    ? || first < . dfp r lowest { = lowest . dfp r } {}
                     = first F
                     = r + r 1
                 }
+                ( vec_free [f] dfs )
                 : f old ( __an_margin_of mm ( string_data . vm vname ) . vm margin )
                 : f adjusted * ( float_abs lowest ) 0.95
                 : b applied ( model_set_margin mo ( string_data . vm vname ) adjusted )

@@ -11,6 +11,7 @@ $ `stdlib/std/fs.nu`
 $ `stdlib/ext/env.nu`
 $ `src/prep.nu`
 $ `src/model.nu`
+$ `src/score.nu`
 $ `src/store.nu`
 
 : ~ i g_pass 0

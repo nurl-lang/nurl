@@ -8,6 +8,7 @@ $ `stdlib/std/float.nu`
 $ `stdlib/std/rng.nu`
 $ `src/prep.nu`
 $ `src/model.nu`
+$ `src/score.nu`
 
 : ~ i g_pass 0
 : ~ i g_fail 0

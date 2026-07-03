@@ -26,6 +26,7 @@ $ `stdlib/ext/env.nu`
 $ `stdlib/ext/json.nu`
 $ `src/prep.nu`
 $ `src/model.nu`
+$ `src/score.nu`
 $ `src/store.nu`
 $ `src/dynamic.nu`
 $ `src/csvdata.nu`
@@ -290,7 +291,7 @@ $ `src/service.nu`
         ^ 0
     } {}
     ? ( args_present p `version` ) {
-        ( pline `anomaly 0.1.0` )
+        ( pline `anomaly 0.2.0` )
         ( args_free p )
         ^ 0
     } {}

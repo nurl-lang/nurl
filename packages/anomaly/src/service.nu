@@ -37,6 +37,7 @@ $ `stdlib/ext/http_router.nu`
 $ `stdlib/ext/http_server.nu`
 $ `src/prep.nu`
 $ `src/model.nu`
+$ `src/score.nu`
 $ `src/store.nu`
 $ `src/dynamic.nu`
 $ `src/csvdata.nu`

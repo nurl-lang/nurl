@@ -18,6 +18,7 @@ $ `stdlib/ext/env.nu`
 $ `stdlib/ext/json.nu`
 $ `src/prep.nu`
 $ `src/model.nu`
+$ `src/score.nu`
 $ `src/store.nu`
 $ `src/dynamic.nu`
 

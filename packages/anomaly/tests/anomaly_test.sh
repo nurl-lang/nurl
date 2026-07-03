@@ -29,7 +29,7 @@ ok()  { echo "  PASS $1"; PASS=$((PASS+1)); }
 bad() { echo "  FAIL $1"; FAIL=$((FAIL+1)); }
 
 echo "[1/3] unit suites"
-for t in prep model store dynamic versions service; do
+for t in prep model store dynamic versions service gpu; do
     if ! $NURL "tests/${t}_test.nu" "$WORK/${t}_test" >/dev/null 2>"$WORK/build.err"; then
         echo "FAIL: could not build ${t}_test:"; tail -5 "$WORK/build.err"; exit 1
     fi
@@ -39,6 +39,14 @@ for t in prep model store dynamic versions service; do
         bad "${t}_test"; tail -8 "$WORK/$t.out"
     fi
 done
+
+# The accelerated scorer must be bit-identical on the gpu package's CPU
+# (host C++) backend too — the path a GPU-less machine takes.
+if (cd "$WORK" && NURL_GPU=cpu ANOMALY_TEST_DIR="$WORK/store_gpu_cpu" ./gpu_test > "$WORK/gpu_cpu.out" 2>&1); then
+    ok "gpu_test on the CPU backend ($(grep 'engine =' "$WORK/gpu_cpu.out" | head -1 | sed 's/.*= //'))"
+else
+    bad "gpu_test on the CPU backend"; tail -8 "$WORK/gpu_cpu.out"
+fi
 
 echo "[2/3] CLI"
 if ! $NURL src/main.nu "$WORK/anomaly" >/dev/null 2>"$WORK/build.err"; then

@@ -15,6 +15,7 @@ $ `stdlib/ext/http_response.nu`
 $ `stdlib/ext/http_router.nu`
 $ `src/prep.nu`
 $ `src/model.nu`
+$ `src/score.nu`
 $ `src/store.nu`
 $ `src/dynamic.nu`
 $ `src/csvdata.nu`

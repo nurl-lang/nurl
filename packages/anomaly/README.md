@@ -66,6 +66,29 @@ normal and outlier points. A fixed seed (42, the reference's
 `random_state`) makes forests — and therefore scores — byte-identical
 across platforms and runs.
 
+## GPU acceleration
+
+Bulk scoring (batch CSVs, the contamination percentile at training time,
+the fine-tune ring sweep) routes through the [`gpu`](../gpu) package when
+profitable (≥ 128 rows):
+
+- On a CUDA machine the forest walk runs as a CUDA kernel.
+- On a machine without a GPU, `gpu_open` falls back to the gpu package's
+  **CPU backend** — the same kernel compiled by the host C++ compiler and
+  parallelised with OpenMP.
+- With neither (no GPU, no C++ compiler), scoring silently stays on the
+  pure-NURL loop; the package behaves exactly like a pre-GPU build.
+
+The three paths are **bit-identical by construction**: the kernel only
+walks trees and accumulates f64 path lengths in the same order as the pure
+loop (per-leaf `c(size)` values are precomputed on the host by the same
+function the pure walker calls), and the nonlinear finish runs in NURL
+either way — so which engine ran can never change a verdict, and the test
+suite asserts element-for-element `==` across engines. Measured on 200 000
+rows × 300 trees: pure NURL 9.6 s, host C++ backend 1.1 s (~9×), RTX 4090
+213 ms (~45×). `ANOMALY_GPU=0` disables the accelerator; `NURL_GPU=cpu`
+forces the CPU backend on a CUDA machine.
+
 ## CLI
 
 ```
@@ -116,9 +139,10 @@ $ `deps/anomaly/src/dynamic.nu`
 `model_open / model_ingest / model_detect_only / model_force_train /
 model_reset / model_delete / model_finetune / model_set_schedule /
 model_set_margin / model_metadata / model_free`, plus the layers beneath:
-preprocessing + scaler (`prep.nu`), the stateless version kernel over
-`iforest` (`model.nu`), persistence (`store.nu`), batch CSV (`csvdata.nu`)
-and the HTTP surface (`service.nu`). Every mutating entry point has an
+preprocessing + scaler (`prep.nu`), the per-point decision core over
+`iforest` (`model.nu`), bulk/batch scoring + training with the GPU path
+(`score.nu`), persistence (`store.nu`), batch CSV (`csvdata.nu`) and the
+HTTP surface (`service.nu`). Every mutating entry point has an
 `_at` variant taking `now` in unix seconds — the injectable clock that
 makes window filtering reproducible in tests.
 
@@ -148,9 +172,9 @@ Deliberate, all documented in the code:
 
 ## Tests
 
-`./tests/anomaly_test.sh` builds and runs the six unit suites (162 checks:
+`./tests/anomaly_test.sh` builds and runs the seven unit suites (165+ checks:
 preprocessing golden vectors, sklearn-parity decision maths, bit-exact
 blob round-trips, corrupt-file rejection, streaming mechanics, window
-routing, fine-tune, all HTTP routes), a CLI end-to-end pass, and a live
-served-over-curl smoke test. The whole suite is AddressSanitizer /
+routing, fine-tune, all HTTP routes, GPU/CPU-backend bit-parity), a CLI
+end-to-end pass, and a live served-over-curl smoke test. The whole suite is AddressSanitizer /
 LeakSanitizer-clean (`NURL_SAN=1 ./tests/anomaly_test.sh`).
