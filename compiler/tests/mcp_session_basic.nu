@@ -151,6 +151,39 @@ $ `stdlib/core/vec.nu`
     }
     ( vec_free_with [String] rpB \ String f → v { ( string_free f ) } )
 
+    // ── Resource subscriptions + change notifications ──
+    // A second session proves routing: only subscribers get the update.
+    : String id2 ( mcp_session_create store )
+    : s sid2 ( string_data id2 )
+    ? ! ( mcp_session_subscribe store sid `file:///a.txt` ) { ( nurl_print `  FAIL sub\n` ) = fails + fails 1 } {}
+    // duplicate subscribe is an idempotent no-op
+    ? ! ( mcp_session_subscribe store sid `file:///a.txt` ) { ( nurl_print `  FAIL sub-dup\n` ) = fails + fails 1 } {}
+    ? ! ( mcp_session_is_subscribed store sid `file:///a.txt` ) { ( nurl_print `  FAIL is-sub\n` ) = fails + fails 1 } {}
+    ? ( mcp_session_is_subscribed store sid2 `file:///a.txt` ) { ( nurl_print `  FAIL is-sub-other\n` ) = fails + fails 1 } {}
+    ? ( mcp_session_subscribe store `bogus` `file:///a.txt` ) { ( nurl_print `  FAIL sub-bogus\n` ) = fails + fails 1 } {}
+    ? != ( mcp_session_notify_resource_updated store `file:///a.txt` ) 1 { ( nurl_print `  FAIL notify-count\n` ) = fails + fails 1 } {}
+    // subscriber's queue carries the spec-shaped notification…
+    : ( Vec String ) sfr ( mcp_session_drain_frames store sid )
+    ? != ( vec_len [String] sfr ) 1 { ( nurl_print `  FAIL notify-drain\n` ) = fails + fails 1 } {}
+    ?? ( vec_get [String] sfr 0 ) {
+        T f → {
+            ? < ( nurl_str_find ( string_data f ) `notifications/resources/updated` ) 0 { ( nurl_print `  FAIL notify-method\n` ) = fails + fails 1 } {}
+            ? < ( nurl_str_find ( string_data f ) `file:///a.txt` ) 0 { ( nurl_print `  FAIL notify-uri\n` ) = fails + fails 1 } {}
+        }
+        F → { ( nurl_print `  FAIL notify-frame-missing\n` ) = fails + fails 1 }
+    }
+    ( vec_free_with [String] sfr \ String f → v { ( string_free f ) } )
+    // …the non-subscriber's queue stays empty.
+    : ( Vec String ) nfr ( mcp_session_drain_frames store sid2 )
+    ? != ( vec_len [String] nfr ) 0 { ( nurl_print `  FAIL notify-other\n` ) = fails + fails 1 } {}
+    ( vec_free [String] nfr )
+    // unsubscribe stops delivery; unsubscribing a never-subscribed URI is F.
+    ? ! ( mcp_session_unsubscribe store sid `file:///a.txt` ) { ( nurl_print `  FAIL unsub\n` ) = fails + fails 1 } {}
+    ? ( mcp_session_unsubscribe store sid `file:///a.txt` ) { ( nurl_print `  FAIL unsub-twice\n` ) = fails + fails 1 } {}
+    ? != ( mcp_session_notify_resource_updated store `file:///a.txt` ) 0 { ( nurl_print `  FAIL notify-after-unsub\n` ) = fails + fails 1 } {}
+    ( mcp_session_delete store sid2 )
+    ( string_free id2 )
+
     // ── Delete ──
     ? ! ( mcp_session_delete store sid ) { ( nurl_print `  FAIL delete\n` ) = fails + fails 1 } {}
     ? != ( mcp_session_count store ) 0 { ( nurl_print `  FAIL count-after-delete\n` ) = fails + fails 1 } {}

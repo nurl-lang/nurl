@@ -45,6 +45,13 @@ $ `stdlib/core/vec.nu`
     : Json id ?? idc { T j → ( json_clone j ) F → ( json_null ) }
     ? == 1 ( nurl_str_eq method `initialize` ) {
         : Json res ( mcp_initialize_result `test` `0.1` )
+        // Advertise a resources capability so the SESSION transport's
+        // `subscribe: true` upgrade is observable in the reply.
+        : ?Json co ( json_obj_get res `capabilities` )
+        ?? co {
+            T caps → ( json_obj_set caps `resources` ( json_obj_new ) )
+            F _ → {}
+        }
         : Json out ( mcp_response_result id res )
         ( json_free id )
         ^ @ ?Json { T out }
@@ -70,6 +77,11 @@ $ `stdlib/core/vec.nu`
     ?? sido { T s → { ( string_push_str sid ( string_data s ) ) ( string_free s ) } F _ → {} }
     ? != ( string_len sid ) 32 { ( nurl_print `  FAIL no session id minted\n` ) = fails + fails 1 } {}
     ? != ( mcp_session_count store ) 1 { ( nurl_print `  FAIL store count\n` ) = fails + fails 1 } {}
+    // The session transport upgrades the resources capability with
+    // `"subscribe": true` (SSE stream = the delivery channel).
+    : String ib ( resp_body_str resp1 )
+    ? < ( nurl_str_find ( string_data ib ) `"subscribe":true` ) 0 { ( nurl_print `  FAIL init subscribe cap\n` ) = fails + fails 1 } {}
+    ( string_free ib )
     ( request_free r1 )
     ( http_response_free resp1 )
 
@@ -192,6 +204,34 @@ $ `stdlib/core/vec.nu`
     ? != . respbn status 202 { ( nurl_print `  FAIL notif-batch status\n` ) = fails + fails 1 } {}
     ( request_free rbn )
     ( http_response_free respbn )
+
+    // 6e. resources/subscribe end to end: subscribe over the handler,
+    // a server-side update lands on the session's SSE stream, and
+    // unsubscribe stops delivery.
+    : HttpRequest rs1 ( make_req `POST` `{"jsonrpc":"2.0","id":20,"method":"resources/subscribe","params":{"uri":"file:///w.txt"}}` ( string_data sid ) )
+    : HttpResponse resps1 ( handler rs1 )
+    ? != . resps1 status 200 { ( nurl_print `  FAIL sub status\n` ) = fails + fails 1 } {}
+    : String sb ( resp_body_str resps1 )
+    ? < ( nurl_str_find ( string_data sb ) `"result"` ) 0 { ( nurl_print `  FAIL sub ack\n` ) = fails + fails 1 } {}
+    ( string_free sb )
+    ( request_free rs1 )
+    ( http_response_free resps1 )
+    ? ! ( mcp_session_is_subscribed store ( string_data sid ) `file:///w.txt` ) { ( nurl_print `  FAIL sub recorded\n` ) = fails + fails 1 } {}
+    ? != ( mcp_session_notify_resource_updated store `file:///w.txt` ) 1 { ( nurl_print `  FAIL http notify count\n` ) = fails + fails 1 } {}
+    : HttpRequest rs2 ( make_req `GET` `` ( string_data sid ) )
+    : HttpResponse resps2 ( handler rs2 )
+    : String ub ( resp_body_str resps2 )
+    ? < ( nurl_str_find ( string_data ub ) `notifications/resources/updated` ) 0 { ( nurl_print `  FAIL updated missing\n` ) = fails + fails 1 } {}
+    ? < ( nurl_str_find ( string_data ub ) `file:///w.txt` ) 0 { ( nurl_print `  FAIL updated uri\n` ) = fails + fails 1 } {}
+    ( string_free ub )
+    ( request_free rs2 )
+    ( http_response_free resps2 )
+    : HttpRequest rs3 ( make_req `POST` `{"jsonrpc":"2.0","id":21,"method":"resources/unsubscribe","params":{"uri":"file:///w.txt"}}` ( string_data sid ) )
+    : HttpResponse resps3 ( handler rs3 )
+    ? != . resps3 status 200 { ( nurl_print `  FAIL unsub status\n` ) = fails + fails 1 } {}
+    ( request_free rs3 )
+    ( http_response_free resps3 )
+    ? != ( mcp_session_notify_resource_updated store `file:///w.txt` ) 0 { ( nurl_print `  FAIL notify after unsub\n` ) = fails + fails 1 } {}
 
     // 7. DELETE tears the session down.
     : HttpRequest r6 ( make_req `DELETE` `` ( string_data sid ) )

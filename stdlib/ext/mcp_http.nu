@@ -468,6 +468,32 @@ s host i port
     }
 }
 
+// The SESSION transport supports resources/subscribe (the per-session
+// SSE stream is the delivery channel for notifications/resources/
+// updated), so an initialize reply that advertises a `resources`
+// capability is upgraded in place to carry `"subscribe": true`. The
+// registry's initialize builder stays transport-agnostic — a stateless
+// or stdio transport has no push channel and must not advertise it.
+@ __mcp_init_mark_subscribable Json env → v {
+    : ?Json ro ( json_obj_get env `result` )
+    ?? ro {
+        T res → {
+            : ?Json co ( json_obj_get res `capabilities` )
+            ?? co {
+                T caps → {
+                    : ?Json rso ( json_obj_get caps `resources` )
+                    ?? rso {
+                        T rc → { ( json_obj_set rc `subscribe` ( json_bool T ) ) }
+                        F _ → {}
+                    }
+                }
+                F _ → {}
+            }
+        }
+        F _ → {}
+    }
+}
+
 @ __mcp_req_is_response Json req → b {
     // A JSON-RPC response carries result/error and no method.
     ? ( json_obj_has req `method` ) { ^ F } {}
@@ -779,6 +805,10 @@ McpSessionStore store
 
                 ?? reply {
                     T resp_json → {
+                        // The session transport can push notifications, so
+                        // initialize's resources capability (when present)
+                        // gains `"subscribe": true` here.
+                        ? is_init { ( __mcp_init_mark_subscribable resp_json ) } {}
                         : HttpResponse r ( __mcp_http_response_for_json req resp_json )
                         // On initialize, mint and attach a new session id.
                         ? is_init {
