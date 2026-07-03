@@ -147,6 +147,19 @@ list and how to reproduce each locally:
 
 ---
 
+## Tooling
+
+One `curl | sh` installs the toolchain; `nurlpkg install <name>` fetches,
+builds, and installs programs from the registry at
+[reg.nurl-lang.org](https://reg.nurl-lang.org). Alongside the compiler you
+get `nurlfmt` (canonical formatter), `nurl-lsp` + a VS Code extension,
+`nurl-mcp` (drive the local toolchain from an LLM agent over MCP), and a
+wasm story that needs nothing extra: `nurlpkg install wasmbuilder` compiles
+NURL to wasm32-wasi locally, `nurlpkg install wasmtime` runs it with a
+pure-NURL runtime. Details: [`docs/TOOLING.md`](docs/TOOLING.md).
+
+---
+
 ## Documentation
 
 | Topic | Document |

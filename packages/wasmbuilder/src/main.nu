@@ -23,7 +23,7 @@ $ `stdlib/std/args.nu`
 $ `stdlib/ext/env.nu`
 $ `build.nu`
 
-@ __wbc_version → s { ^ `wasmbuilder 0.1.0` }
+@ __wbc_version → s { ^ `wasmbuilder 0.1.1` }
 
 // --doctor: print every resolution step so a broken setup explains itself.
 @ __wbc_doctor → i {

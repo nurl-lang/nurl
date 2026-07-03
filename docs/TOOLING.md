@@ -3,7 +3,10 @@
 The build produces three host tools alongside the compiler: a formatter
 (`nurlfmt`), a language server (`nurl-lsp`), and a package manager
 (`nurlpkg`). An editor extension wires the LSP into VS Code / Cursor /
-Windsurf.
+Windsurf. On top of those, registry packages extend the toolchain itself:
+`nurl-mcp` (LLM agents drive the local compiler over MCP) and the wasm pair
+`wasmbuilder` / `wasmtime` (compile NURL to wasm32-wasi and run it, fully
+locally).
 
 ## Editor support
 
@@ -59,9 +62,11 @@ to the editors through the `tooling/vscode-nurl` extension.
 ## Package manager (`nurlpkg`)
 
 `./tools/nurlpkg/build.sh` produces `build/nurlpkg` — a Cargo-shaped package
-manager covering the full dependency lifecycle for path-based dependencies
-(registry-style version resolution is out of scope for v1). Manifests use a
-TOML subset compatible with the `stdlib/ext/toml.nu` parser.
+manager covering the full dependency lifecycle: path dependencies, registry
+dependencies resolved from [reg.nurl-lang.org](https://reg.nurl-lang.org),
+and hybrid path+registry declarations that work both in a repo checkout and
+from a published tarball. Manifests use a TOML subset compatible with the
+`stdlib/ext/toml.nu` parser.
 
 ```bash
 build/nurlpkg init demo-app                  # write nurl.toml skeleton
@@ -69,7 +74,41 @@ cd demo-app
 build/nurlpkg add http-router --path ../router --version 0.2.0
 build/nurlpkg install                        # symlink deps/, write nurl.lock
 build/nurlpkg verify                         # CI gate: exit 1 on lockfile drift
+
+nurlpkg install nq                           # cargo-install-shaped: fetch a
+                                             # registry package, build it, put
+                                             # the binary on $NURL_HOME/bin
+nurlpkg publish                              # pack + upload (token via
+                                             # `nurlpkg login`)
 ```
 
 Subcommands: `init`, `info`, `deps`, `add`, `remove`, `install`, `lock`,
-`verify`, `version`, `help`.
+`verify`, `publish`, `login`, `version`, `help`.
+
+## MCP server (`nurl-mcp`)
+
+`nurlpkg install nurl-mcp` — a local MCP server so an LLM agent can drive
+the installed toolchain: build, run, type-check, format, compile to
+wasm32-wasi (`nurl_build_wasm`), and read the installed stdlib. Stdio by
+default (`claude mcp add nurl -- nurl-mcp`); `--http` adds a
+token-authenticated network transport with code execution gated behind
+`--allow-run`, and `--read-only` strips everything but the analysis tools.
+
+## WebAssembly (`wasmbuilder` + `wasmtime`)
+
+The wasm toolchain is two registry packages away — no wasi-sdk, no build
+service:
+
+```bash
+nurlpkg install wasmbuilder     # NURL → wasm32-wasi, fully local
+nurlpkg install wasmtime        # pure-NURL wasm runtime
+
+wasmbuilder program.nu          # → program.wasm
+wt run program.wasm
+```
+
+`wasmbuilder` drives nurlc, retargets the emitted IR for wasm32-wasi, and
+links with the toolchain's bundled `zig cc` (wasi-libc + wasm-ld built in);
+`wasmbuilder --doctor` shows how everything resolves on your machine. `wt`
+runs wasm32-wasi modules (preopened dirs, `--allow-gpu` for the CUDA host
+bridge). Both packages' READMEs carry the full option surface.
