@@ -292,8 +292,10 @@ $ `stdlib/core/vec.nu`
     : ( Vec String ) toks ( vec_new [String] )
     : ~ i k 1
     ~ < k n {
+        // nurl_argv_get returns a heap COPY (runtime contract) — adopt it
+        // instead of copying again and leaking the original.
         : s raw ( nurl_argv_get k )
-        ( vec_push [String] toks ( string_from raw ) )
+        ( vec_push [String] toks ( string_from_take raw + ( nurl_str_len raw ) 1 ) )
         = k + k 1
     }
     : b ok ( args_parse p toks )
