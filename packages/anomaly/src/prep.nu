@@ -339,9 +339,11 @@ $ `stdlib/ext/json.nu`
     ^ msg
 }
 
-// Encode one column's value into (names, vals), updating metadata for new
-// categories. Returns an error message, or an empty String on success.
-@ __an_encode_col *Meta m i ci s cn Json jv ( Vec String ) names ( Vec f ) vals → String {
+// Encode one column's value into (names, vals). When `learn` is set, new
+// categories are recorded in the metadata; otherwise an unseen category
+// just yields an all-zero one-hot. Returns an error message, or an empty
+// String on success.
+@ __an_encode_col *Meta m i ci s cn Json jv ( Vec String ) names ( Vec f ) vals b learn → String {
     : i kind ( __an_kind_at m ci )
     ? == kind COL_NUMERIC {
         : ?f fx ( __an_num_of jv )
@@ -357,7 +359,7 @@ $ `stdlib/ext/json.nu`
         : String sval ( __an_str_of jv )
         ?? ( vec_get [( Vec String )] . m cats ci ) {
             T cv → {
-                ( __an_cat_add cv ( string_data sval ) )
+                ? learn { ( __an_cat_add cv ( string_data sval ) ) } {}
                 : i nc ( vec_len [String] cv )
                 : ~ i k 0
                 ~ < k nc {
@@ -402,11 +404,7 @@ $ `stdlib/ext/json.nu`
     ^ ( string_new )
 }
 
-// Encode one raw JSON record into named numeric features, updating the
-// metadata as new columns / categories appear. The reserved key
-// `timestamp` is the point's own clock and is never a feature. Numeric
-// parse failure and bad timestamps are hard errors (owned message).
-@ anomaly_preprocess *Meta m Json raw → !EncPoint String {
+@ __an_preprocess *Meta m Json raw b learn → !EncPoint String {
     : ( Vec String ) names ( vec_new [String] )
     : ( Vec f ) vals ( vec_new [f] )
     : ( Vec String ) keys ( json_obj_keys raw )
@@ -421,13 +419,17 @@ $ `stdlib/ext/json.nu`
                     ?? ( json_obj_get raw cn ) {
                         T jv → {
                             : ~ i ci ( __an_col_find m cn )
-                            ? < ci 0 {
+                            ? & < ci 0 learn {
                                 = ci ( vec_len [String] . m cols )
                                 ( vec_push [String] . m cols ( string_from cn ) )
                                 ( vec_push [i] . m kinds ( __an_detect_kind jv ) )
                                 ( vec_push [( Vec String )] . m cats ( vec_new [String] ) )
                             } {}
-                            : String e2 ( __an_encode_col m ci cn jv names vals )
+                            : ~ String e2 ( string_new )
+                            ? >= ci 0 {
+                                ( string_free e2 )
+                                = e2 ( __an_encode_col m ci cn jv names vals learn )
+                            } {}
                             ? > ( string_len e2 ) 0 {
                                 ( string_free err )
                                 = err e2
@@ -451,6 +453,22 @@ $ `stdlib/ext/json.nu`
     } {}
     ( string_free err )
     ^ @ !EncPoint String { T @ EncPoint { names vals } }
+}
+
+// Encode one raw JSON record into named numeric features, updating the
+// metadata as new columns / categories appear. The reserved key
+// `timestamp` is the point's own clock and is never a feature. Numeric
+// parse failure and bad timestamps are hard errors (owned message).
+@ anomaly_preprocess *Meta m Json raw → !EncPoint String {
+    ^ ( __an_preprocess m raw T )
+}
+
+// Read-only encode: never touches the metadata. Unknown columns are
+// skipped, unseen categories one-hot to all-zeros — exactly what the
+// frozen-feature projection would do with them anyway. For detect-only
+// paths that must not mutate model state.
+@ anomaly_preprocess_ro *Meta m Json raw → !EncPoint String {
+    ^ ( __an_preprocess m raw F )
 }
 
 // Project an encoded point onto an authoritative feature order: missing
