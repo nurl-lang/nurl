@@ -8,6 +8,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.12] — 2026-07-03
+
+A patch release: **GPU-dependent packages are installable from release
+archives again.** v0.10.11 archives were assembled on a GPU-less CI runner
+and shipped without the `runtime.cuda` / `runtime.nvrtc` sentinels, so the
+installed compiler refused to build anything depending on `packages/gpu`
+(`nurlpkg install anomaly` failed on every machine — GPU or not).
+
+### Fixed
+
+- **cuda/nvrtc build sentinels are unconditional — stub-backed libs always
+  link.** The sentinels (nurlc's compile-time FFI-lib gate) were probed
+  from the *build* machine, but they answer a question about the *link*:
+  cuda and nvrtc are the two FFI libraries with fallback stub objects
+  (`stdlib/{cuda,nvrtc}_stubs.o`) — `nurl.sh` links the real library when
+  the host has one and the stubs when it doesn't, stubbed calls return
+  errors, and `packages/gpu` falls back to its CPU backend. The gate could
+  only ever produce false negatives, and baked into a release archive it
+  blocked gpu-dependent packages everywhere. Stub-backed libraries now get
+  their sentinels unconditionally (the host probe remains for the build
+  log); libraries without stubs (opus, asound, X11, sqlite3, …) keep the
+  conditional probe, and Windows (`build.bat`, no cuda stubs) is
+  unchanged. Verified end to end: with the sentinels in the installed
+  stdlib, `nurlpkg install anomaly` resolves `iforest` + `gpu` from the
+  registry, compiles, links the real `libcuda`/`libnvrtc`, and the
+  installed binary scores a 5001-row batch through the CUDA path in
+  0.29 s.
+
 ## [0.10.11] — 2026-07-03
 
 A **streaming anomaly detection** release. The new `anomaly` package is a
@@ -6732,7 +6760,8 @@ releases are measured.
   compile-server (`api/`), browser playground (`nurlweb/`).
 * Dual license: MIT (LICENSE-MIT) or Apache-2.0 (LICENSE-APACHE).
 
-[Unreleased]: https://github.com/nurl-lang/nurl/compare/v0.10.11...HEAD
+[Unreleased]: https://github.com/nurl-lang/nurl/compare/v0.10.12...HEAD
+[0.10.12]: https://github.com/nurl-lang/nurl/compare/v0.10.11...v0.10.12
 [0.10.11]: https://github.com/nurl-lang/nurl/compare/v0.10.10...v0.10.11
 [0.10.10]: https://github.com/nurl-lang/nurl/compare/v0.10.9...v0.10.10
 [0.10.9]: https://github.com/nurl-lang/nurl/compare/v0.10.8...v0.10.9
