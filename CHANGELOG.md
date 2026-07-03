@@ -8,6 +8,60 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.11] — 2026-07-03
+
+A **streaming anomaly detection** release. The new `anomaly` package is a
+complete self-training anomaly-detection service in pure NURL: named models
+are created on first use, ingest one JSON point at a time over CLI or HTTP,
+and train themselves once enough history accumulates — Isolation Forests
+under the hood (the `iforest` package), scikit-learn's exact decision
+conventions on top, and GPU-accelerated bulk scoring that is bit-identical
+across CUDA, the gpu package's CPU backend, and the pure-NURL loop, so a
+GPU-less machine gets the same verdicts. Also in this release: the `cas`
+content-addressed store and pure-NURL self-signed X.509 certificates, plus
+two ecosystem-wide leak fixes the new package's sanitized suite flushed out
+(every CLI's argv parse; every gpu-package consumer's device allocations).
+
+### Added
+
+- **`packages/anomaly` v0.2.0 — streaming anomaly-detection service:
+  dynamically created, automatically trainable models.** Where `iforest`
+  is the kernel (matrix in, scores out), `anomaly` is the service around
+  it. Heterogeneous features encode automatically (numeric passthrough,
+  categorical → deterministic sorted one-hot, ISO-8601 → calendar
+  features) with a frozen feature-order projection so one-hot columns
+  never scramble across retrains; a persisted StandardScaler analogue
+  standardises them. Each model keeps a bounded ring of raw points
+  (data.jsonl — raw, so retrains learn new categories), warms up to 50
+  points, then retrains every enabled time-window version (`short_term`
+  180 min / `daily` / `weekly` / `seasonal` 90 d / `timevector` last 100
+  points) on schedule; a point is anomalous if any version flags it.
+  Decision maths match scikit-learn exactly — `decision_function =
+  -iforest_score − offset_`, `offset_ = −0.5` for `contamination='auto'`,
+  else the 100·c training percentile; validated against sklearn on
+  identical deterministic data (agreement within ~0.01). Margins are read
+  from live metadata so `finetune` (95 % of the worst observed score) and
+  config changes apply without retraining. Persistence is atomic with
+  fully-validated binary forest blobs — corrupt, truncated, or renamed
+  files load as errors, never UB. Ships as a library (`model_open` /
+  `model_ingest` / `model_detect_only` / …, injectable clock via `_at`
+  variants), a CLI (`anomaly detect/score/batch/train/reset/rm/ls/info/
+  serve`), and an HTTP/JSON service mirroring the reference Flask API
+  route for route (202 while warming, `^[a-zA-Z0-9_]+$` name validation,
+  same error shapes). **GPU path (M7):** bulk scoring (batch CSVs, the
+  contamination percentile, the fine-tune sweep) routes through
+  `packages/gpu` at ≥ 128 rows — CUDA when present, the gpu package's CPU
+  backend (host C++ + OpenMP) without one, pure NURL with neither — and
+  all three engines are **bit-identical by construction** (the kernel only
+  sums f64 path lengths in the pure walker's order over host-precomputed
+  per-leaf constants; the nonlinear finish stays in NURL), asserted
+  element-for-element `==` in the tests. Measured on 200 000 rows × 300
+  trees: pure 9.6 s → host C++ 1.1 s (~9×) → RTX 4090 213 ms (~45×).
+  Suite: seven unit suites (165 checks), a CLI end-to-end pass, a live
+  served-over-curl smoke, and the GPU parity test on both engines —
+  ASan/UBSan/LSan-clean throughout, deterministic (seed 42 ⇒
+  byte-identical forests and scores everywhere).
+
 ### Added
 
 - **`packages/cas` v0.1.0 — content-addressed store over BLAKE3 + minimal
@@ -48,6 +102,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   TLS server serving it. New playground example
   `examples/selfsigned_cert.nu` prints a freshly minted pair and re-verifies
   it with the stdlib's own X.509 parser.
+
+### Fixed
+
+- **`args_parse_argv` leaked every argv token** (`std/args`) — every CLI
+  built on it (cas, nq, anomaly, …) leaked argc strdups per process:
+  `nurl_argv_get` returns a heap copy by contract, but the parser treated
+  it as borrowed and copied it again. The copy is now adopted with
+  `string_from_take`. Found by the anomaly package's sanitized CLI suite.
+
+- **`packages/gpu` v0.2.1 — every out-slot and compile-path leak
+  plugged.** `cuda.nu` leaked its 8-byte out-param slot on every wrapper
+  call — `cuda_malloc` leaked per device allocation, for every consumer of
+  the package (onnx, objdet, yoloe) — and `cpu_compile` leaked every
+  working String it built (cast list, generated source, tmp paths,
+  compiler command lines) on success and error paths alike. All freed at
+  last use; `cuda_device_name`'s contract documented (returns a fresh
+  buffer the caller owns). gpu's own tests pass on both backends.
 
 ## [0.10.10] — 2026-07-03
 
@@ -6661,7 +6732,17 @@ releases are measured.
   compile-server (`api/`), browser playground (`nurlweb/`).
 * Dual license: MIT (LICENSE-MIT) or Apache-2.0 (LICENSE-APACHE).
 
-[Unreleased]: https://github.com/nurl-lang/nurl/compare/v0.10.0...HEAD
+[Unreleased]: https://github.com/nurl-lang/nurl/compare/v0.10.11...HEAD
+[0.10.11]: https://github.com/nurl-lang/nurl/compare/v0.10.10...v0.10.11
+[0.10.10]: https://github.com/nurl-lang/nurl/compare/v0.10.9...v0.10.10
+[0.10.9]: https://github.com/nurl-lang/nurl/compare/v0.10.8...v0.10.9
+[0.10.8]: https://github.com/nurl-lang/nurl/compare/v0.10.7...v0.10.8
+[0.10.7]: https://github.com/nurl-lang/nurl/compare/v0.10.6...v0.10.7
+[0.10.6]: https://github.com/nurl-lang/nurl/compare/v0.10.5...v0.10.6
+[0.10.5]: https://github.com/nurl-lang/nurl/compare/v0.10.4...v0.10.5
+[0.10.4]: https://github.com/nurl-lang/nurl/compare/v0.10.3...v0.10.4
+[0.10.3]: https://github.com/nurl-lang/nurl/compare/v0.10.2...v0.10.3
+[0.10.2]: https://github.com/nurl-lang/nurl/compare/v0.10.1...v0.10.2
 [0.10.1]: https://github.com/nurl-lang/nurl/compare/v0.10.0...v0.10.1
 [0.10.0]: https://github.com/nurl-lang/nurl/compare/v0.9.19...v0.10.0
 [0.9.14]: https://github.com/nurl-lang/nurl/compare/v0.9.13...v0.9.14
