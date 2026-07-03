@@ -216,10 +216,11 @@ hash, so it is written once per worker.
 Two ways to get there:
 
 - **`compute_submit_kernel`** — hand over the kernel as **NURL source**; the
-  server compiles it to wasm itself by POSTing to a NURL build service
-  (`$NURL_BUILD_API`, default `https://play.nurl-lang.org`), then runs it.
-  Compile errors come straight back to the model. (Needs `curl` and a reachable
-  build API on the host running the `--mcp` role.)
+  server compiles it to wasm itself, locally, via the wasmbuilder package
+  (the installed toolchain's nurlc + bundled zig cc — no network). Only when
+  the local toolchain can't build wasm does it fall back to POSTing to a NURL
+  build service (`$NURL_BUILD_API`, default `https://play.nurl-lang.org`).
+  Compile errors come straight back to the model.
 - **`compute_run_wasm`** — pass an **already-compiled** base64 module, e.g. one
   built with the `nurl_build_wasm` tool. No build service needed.
 
@@ -293,7 +294,7 @@ are practical.
 numbers and write `f(long long x, const double* p)` — the values ride each
 chunk's argv into a device buffer, never touching the generated source. The
 coordinator caches compiled modules by generated-source hash and each worker
-caches them by content hash, so a parameter scan pays the build API once
+caches them by content hash, so a parameter scan pays the kernel build once
 (~5–15 s) and then re-runs at interactive speed (seconds per submit):
 
 ```jsonc
@@ -408,7 +409,7 @@ src/token.nu       cluster token → group-id isolation + HMAC payload/result au
 src/expr.nu        the expression kernel language: tokenizer, parser, evaluator
 src/work.nu        map-reduce: reduce ops, the expression handler, sharding
 src/wasmkernel.nu  ship + run a compiled wasm kernel under wasmtime (± --allow-gpu)
-src/buildwasm.nu   compile NURL source → wasm via the NURL build API; kernel wrappers
+src/buildwasm.nu   compile NURL source → wasm (local wasmbuilder, build-API fallback); kernel wrappers
 src/cudakernel.nu  CUDA-C map fn → a complete generated GPU chunk-kernel program
 src/census.nu      HELLO membership gossip (+ capability bits) → consistent-hash rings
 src/main.nu        composable roles (--relay/--worker[--gpu]/--mcp) + HTTPS MCP server

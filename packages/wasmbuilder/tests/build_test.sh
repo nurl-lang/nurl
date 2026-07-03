@@ -1,0 +1,73 @@
+#!/usr/bin/env bash
+# Copyright (c) 2026 The NURL Project Developers
+# SPDX-License-Identifier: MIT OR Apache-2.0
+# ============================================================
+#  tests/build_test.sh — wasmbuilder end-to-end test.
+#
+#  1. builds the wasmbuilder CLI with the toolchain
+#  2. compiles a corpus of repo examples to wasm32-wasi
+#  3. runs each next to its native build and diffs the output
+#     (skipped per-module if no wasm runtime is available)
+#  4. runs the library-API test (wb_build_source)
+#
+#  Run from the package dir:  ./tests/build_test.sh
+#  Env:
+#    NURL          build driver (default: ../../nurl.sh, else nurl on PATH)
+#    WASM_RUNTIME  wasm runner (default: wasmtime on PATH, else skip runs)
+# ============================================================
+set -u
+cd "$(dirname "$0")/.."
+PKG_DIR="$PWD"
+REPO_ROOT="$(cd ../.. && pwd)"
+
+if [ -n "${NURL:-}" ]; then :;
+elif [ -x "$REPO_ROOT/nurl.sh" ]; then NURL="$REPO_ROOT/nurl.sh"; export NURL_STDLIB="${NURL_STDLIB:-$REPO_ROOT}";
+else NURL="nurl"; fi
+
+RUNTIME="${WASM_RUNTIME:-}"
+if [ -z "$RUNTIME" ] && command -v wasmtime >/dev/null 2>&1; then RUNTIME="wasmtime"; fi
+
+WORK="$(mktemp -d -t wasmbuilder-test.XXXXXX)"
+trap 'rm -rf "$WORK"' EXIT
+PASS=0; FAIL=0
+
+echo "[1/3] build wasmbuilder"
+if ! $NURL src/main.nu "$WORK/wasmbuilder" >/dev/null 2>"$WORK/build.err"; then
+    echo "FAIL: could not build wasmbuilder:"; tail -5 "$WORK/build.err"; exit 1
+fi
+
+echo "[2/3] corpus: native vs wasm output"
+# Deterministic, dependency-free examples. (uuidgen etc. are random by
+# design and can't be diffed; float-ADT programs like chaotic-showcase
+# are a known nurlc wasm32 limitation — see README "Limitations".)
+CORPUS="fizzbuzz collatz math_basic json_basic showcase serde_demo msgpack_demo dict_coder enigma rule30 slice_test test_05_closures_and_capture test_06_torture_chamber"
+for name in $CORPUS; do
+    src="$REPO_ROOT/examples/$name.nu"
+    [ -f "$src" ] || { echo "  SKIP $name (example missing)"; continue; }
+    if ! $NURL "$src" "$WORK/$name.native" >/dev/null 2>&1; then
+        echo "  SKIP $name (native build failed)"; continue
+    fi
+    if ! "$WORK/wasmbuilder" --quiet "$src" -o "$WORK/$name.wasm" 2>"$WORK/$name.err"; then
+        echo "  FAIL $name (wasm build): $(tail -1 "$WORK/$name.err")"; FAIL=$((FAIL+1)); continue
+    fi
+    if [ -z "$RUNTIME" ]; then
+        echo "  PASS $name (built; no wasm runtime to run it)"; PASS=$((PASS+1)); continue
+    fi
+    (cd "$WORK" && "./$name.native" > "$name.n.out" 2>&1); nrc=$?
+    (cd "$WORK" && timeout 120 "$RUNTIME" "$name.wasm" > "$name.w.out" 2>&1); wrc=$?
+    if [ "$nrc" = "$wrc" ] && cmp -s "$WORK/$name.n.out" "$WORK/$name.w.out"; then
+        echo "  PASS $name (rc=$nrc, output identical)"; PASS=$((PASS+1))
+    else
+        echo "  FAIL $name (native rc=$nrc, wasm rc=$wrc)"; FAIL=$((FAIL+1))
+    fi
+done
+
+echo "[3/3] library API (wb_build_source)"
+if $NURL tests/lib_test.nu "$WORK/lib_test" >/dev/null 2>"$WORK/lib.err" && "$WORK/lib_test"; then
+    PASS=$((PASS+1))
+else
+    echo "  FAIL lib_test"; tail -3 "$WORK/lib.err" 2>/dev/null; FAIL=$((FAIL+1))
+fi
+
+echo "== wasmbuilder tests: PASS=$PASS FAIL=$FAIL"
+[ "$FAIL" = 0 ]

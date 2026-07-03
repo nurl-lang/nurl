@@ -1,7 +1,8 @@
 [package]
 name = "nurl-mcp"
-version = "0.2.0"
-description = "Local MCP server for the NURL toolchain — exposes the installed compiler over Model Context Protocol so an LLM agent on the host can build, run, type-check, and format NURL, and read the installed stdlib. Stdio by default; an optional token-authenticated HTTP transport (--http) gates code execution behind --allow-run. The editor-facing counterpart of nurl-lsp, for LLMs."
+version = "0.3.0"
+description = "Local MCP server for the NURL toolchain — exposes the installed compiler over Model Context Protocol so an LLM agent on the host can build, run, type-check, format, and compile NURL to wasm32-wasi (fully local wasm builds via the wasmbuilder package), and read the installed stdlib. Stdio by default; an optional token-authenticated HTTP transport (--http) gates code execution behind --allow-run. The editor-facing counterpart of nurl-lsp, for LLMs."
 license = "MIT OR Apache-2.0"
 
 [dependencies]
+wasmbuilder = { path = "../wasmbuilder", version = "0.1.0" }

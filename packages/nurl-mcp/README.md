@@ -44,6 +44,7 @@ For any other client, configure an MCP server whose `command` is `nurl-mcp`
 | Tool | Arguments | Does |
 |---|---|---|
 | `nurl_build` | `source` *or* `path` | Compile with the local toolchain; report success or compiler diagnostics. Does not run the program. |
+| `nurl_build_wasm` | `source` *or* `path`, optional `out` | Compile to a **wasm32-wasi module**, fully locally (wasmbuilder package — no build service). `out` = output path; a `path` input defaults to `<input>.wasm`; inline `source` without `out` returns JSON with `wasm_base64`. |
 | `nurl_run` | `source` *or* `path` | Compile **and** run; return the program's exit code, stdout, and stderr. |
 | `nurl_check` | `source` *or* `path` | Front-end only — type-check + borrow-check, no binary. Fast. |
 | `nurl_fmt` | `source` *or* `path` | Format to canonical form (`nurlfmt`); return the formatted source. |
@@ -95,7 +96,7 @@ any syscall — there is no sandbox (unlike the playground's container).
 - **Non-loopback binds require a token.** `--http --host 0.0.0.0` (anything that
   isn't `127.0.0.1` / `::1` / `localhost`) **refuses to start** without
   `--token`. A loopback HTTP server with no token starts but warns.
-- **`--read-only`** removes `nurl_build` and `nurl_run` entirely (on any
+- **`--read-only`** removes `nurl_build`, `nurl_build_wasm`, and `nurl_run` entirely (on any
   transport), leaving only analysis/read tools — the mode to expose when you
   only want the agent to inspect, not execute.
 

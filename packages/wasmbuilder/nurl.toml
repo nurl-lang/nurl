@@ -1,0 +1,7 @@
+[package]
+name = "wasmbuilder"
+version = "0.1.0"
+description = "Compile NURL to wasm32-wasi locally — no wasi-sdk, no build service. Drives the installed toolchain end to end: nurlc emits LLVM IR, the production IR rewriter retargets it for wasm32-wasi (libc width shims, POSIX stubs, main rename), and the toolchain's bundled `zig cc` (wasi-libc + wasm-ld built in) links the .wasm. The NURL runtime is compiled from the installed stdlib's runtime.c on first use and cached by content hash, so it always matches your toolchain version. If no bundled zig is present (e.g. a Windows install), wasmbuilder downloads a pinned, sha256-verified zig into $NURL_HOME/zig once. Ships as both a CLI (`wasmbuilder file.nu -o file.wasm`, plus `--doctor` for setup diagnosis) and a library other packages embed to compile wasm in-process (swarm-mcp kernel builds, nurl-mcp). Optional: `--asyncify` for browser canvas programs (needs binaryen's wasm-opt). Run the result with the pure-NURL `wasmtime` package or any wasm runtime."
+license = "MIT OR Apache-2.0"
+
+[dependencies]

@@ -1,12 +1,19 @@
 // packages/swarm-mcp/src/buildwasm.nu — compile NURL source to a wasm module
-// via the NURL build API, so the MCP server itself can accept a kernel as
-// source (compute_submit_kernel) instead of requiring the caller to pre-compile.
+// so the MCP server itself can accept a kernel as source
+// (compute_submit_kernel / compute_submit_cuda) instead of requiring the
+// caller to pre-compile.
 //
-// POST {source, filename} to <NURL_BUILD_API>/build_wasm. A direct nurlapi can
-// answer with the raw wasm bytes; the public playground proxy answers with JSON
-// carrying `wasm_base64` (and `nurlc_errors` on failure). Both are handled.
+// LOCAL-FIRST: the wasmbuilder package (deps/wasmbuilder) compiles the
+// kernel in-process — nurlc → IR rewrite → the toolchain's bundled zig cc —
+// no network, no build service. Only when the local toolchain can't do it
+// (no nurlc/zig on this box) does it fall back to POSTing
+// {source, filename} to <NURL_BUILD_API>/build_wasm. A direct nurlapi
+// answers with raw wasm bytes; the public playground proxy answers with
+// JSON carrying `wasm_base64` (and `nurlc_errors` on failure). Both are
+// handled.
 //
-//   $NURL_BUILD_API   build service base URL (default https://play.nurl-lang.org)
+//   $NURL_BUILD_API   fallback build service base URL
+//                     (default https://play.nurl-lang.org)
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
@@ -15,6 +22,7 @@ $ `stdlib/std/encode.nu`
 $ `stdlib/ext/env.nu`
 $ `stdlib/ext/json.nu`
 $ `stdlib/ext/http_cli.nu`
+$ `deps/wasmbuilder/src/build.nu`
 
 @ build_api_url → String { ^ ( env_var_or `NURL_BUILD_API` `https://play.nurl-lang.org` ) }
 
@@ -176,7 +184,28 @@ $ `stdlib/ext/http_cli.nu`
 
 // Compile NURL `source` to a wasm module. Ok = module bytes; Err = a
 // human-readable transport/compile error (suitable to hand back to the model).
+//
+// Local wasmbuilder first. A LOCAL "nurlc failed" is a genuine source
+// error and is returned as-is (the build service would only repeat it);
+// any other local error means the environment can't build wasm (no
+// toolchain, no zig, download forbidden) → fall back to the build API.
 @ compile_to_wasm s source → !( Vec u ) String {
+    : ~ WbOpts wopts ( wb_opts_default )
+    = . wopts opt `-O1`
+    = . wopts quiet T
+    : !( Vec u ) String lr ( wb_build_source source `kernel.nu` wopts )
+    ?? lr {
+        T wasm → { ^ @ !( Vec u ) String { T wasm } }
+        F le → {
+            ? ( string_contains le `nurlc failed` ) { ^ @ !( Vec u ) String { F le } } {}
+            ( string_free le )
+        }
+    }
+    ^ ( __compile_via_api source )
+}
+
+// The remote fallback: POST the kernel to <NURL_BUILD_API>/build_wasm.
+@ __compile_via_api s source → !( Vec u ) String {
     : Json req ( json_obj_new )
     ( json_obj_set req `source` ( json_str_lit source ) )
     ( json_obj_set req `filename` ( json_str_lit `kernel.nu` ) )
