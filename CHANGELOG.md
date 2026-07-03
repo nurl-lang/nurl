@@ -10,6 +10,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`packages/wasmbuilder` v0.1.0 — local NURL → wasm32-wasi builds, no
+  wasi-sdk, no build service.** `nurlpkg install wasmbuilder` is all a blank
+  machine needs: the CLI (`wasmbuilder file.nu` → `file.wasm`, plus
+  `--doctor`) and library (`wb_build_file` / `wb_build_source`) drive the
+  installed toolchain end to end — nurlc emits IR, the production IR
+  rewriter (extracted from nurlapi's `/build_wasm`) retargets it for
+  wasm32-wasi, and the toolchain's **bundled `zig cc`** links it (zig
+  carries wasi-libc + wasm-ld, which is what makes wasi-sdk unnecessary).
+  `runtime.wasm.o` is compiled from the installed stdlib's `runtime.c` on
+  first use and cached by content hash, so it always matches the toolchain;
+  a machine with no zig at all downloads the pinned 0.13.0 release once,
+  sha256-verified against ziglang.org's index (`NURL_WASM_NO_DOWNLOAD=1`
+  opts out). zig's driver rejects `-Wl,--allow-undefined`, so the rewriter
+  instead marks every remaining `declare` with a
+  `"wasm-import-module"="env"` attribute — same semantics (undefined
+  symbols become host-resolved wasm imports; defined symbols win), now
+  expressed in the IR. A `@main` alias keeps zig's debug-mode wasi-libc
+  linking at `-O0`. Corpus-tested: 13 repo examples byte-identical to their
+  native builds under both the reference wasmtime and the pure-NURL `wt`;
+  the compiler itself (65k lines) built through wasmbuilder compiles
+  programs byte-identically to its native twin. Known pre-existing nurlc
+  wasm32 limitation documented: float / >2³² integer payloads in user
+  enums truncate (pointer-typed payload slots).
+
+- **`packages/swarm-mcp` v0.8.0 — kernels compile locally.**
+  `compute_submit_kernel` / `compute_submit_cuda` now build wasm in-process
+  via the new wasmbuilder dependency (local toolchain, no network); the
+  NURL build API (`$NURL_BUILD_API`) remains as a fallback for hosts whose
+  toolchain can't build wasm. A local `nurlc failed` (a genuine kernel
+  error) is returned directly instead of being retried remotely.
+
+- **`packages/nurl-mcp` v0.3.0 — `nurl_build_wasm` tool.** Compile inline
+  `source` or a `path` to a wasm32-wasi module fully locally via
+  wasmbuilder: optional `out` path; a `path` input defaults to
+  `<input>.wasm` next to it; inline source without `out` returns JSON with
+  `wasm_base64`. Gated with `nurl_build` (off under `--read-only`).
+
+- **Windows release bundles zig** (`release.yml` + `install-toolchain.bat`
+  staging + uninstall): the Windows toolchain zip now carries the same
+  self-contained zig backend as the Linux archives, so wasmbuilder works
+  offline there too; older Windows installs fall back to wasmbuilder's
+  one-time zig download.
+
 - **`packages/swarm-mcp` v0.7.0 — datasets: distributed GPU compute over real
   data.** `compute_upload_data` uploads a flat f64 array (base64 raw LE, or a
   file on the MCP host; ≤ 256 MiB) and returns a `dataset_id` + stats; the

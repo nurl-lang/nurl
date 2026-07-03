@@ -1,7 +1,8 @@
 // nurl-mcp — a local MCP (Model Context Protocol) server for the NURL
 // toolchain. The LLM-facing counterpart of nurl-lsp: where nurl-lsp serves
 // editors over LSP, nurl-mcp serves an LLM agent over MCP so it can drive the
-// *locally installed* compiler — build, run, type-check, format NURL, and read
+// *locally installed* compiler — build, run, type-check, format NURL, compile
+// it to wasm32-wasi (via the wasmbuilder package, no build service), and read
 // the installed standard library — against the host's real filesystem.
 //
 // Transport: newline-delimited JSON-RPC 2.0 over stdin/stdout (the transport
@@ -29,6 +30,8 @@ $ `stdlib/std/bytes.nu`
 $ `stdlib/ext/http_request.nu`
 $ `stdlib/ext/http_response.nu`
 $ `stdlib/ext/http_server.nu`
+$ `stdlib/std/encode.nu`
+$ `deps/wasmbuilder/src/build.nu`
 
 // ── Policy (set once in main, read by the dispatcher) ───────────────
 //
@@ -213,6 +216,99 @@ $ `stdlib/ext/http_server.nu`
                     }
                 }
                 F e → { ^ ( nm_proc_err e ) }
+            }
+        }
+        F → {}
+    }
+    ^ ( nm_missing_input )
+}
+
+// ── Tool: nurl_build_wasm (compile to wasm32-wasi, fully local) ──────
+//
+// Drives the wasmbuilder library in-process: nurlc → wasm32 IR rewrite →
+// the toolchain's bundled zig cc. No build service, no network (a machine
+// with no zig anywhere downloads it once — see the wasmbuilder README).
+//
+// Output shape:
+//   * `out` argument given          → module written there, text summary
+//   * `path` input, no `out`        → written next to the input as
+//                                     <input minus .nu>.wasm
+//   * inline `source`, no `out`     → JSON text with `wasm_base64`
+//                                     (mirrors the playground MCP tool)
+@ nm_tool_build_wasm Json args → Json {
+    : ?String po ( nm_input_path args )
+    ?? po {
+        T p → {
+            : b was_inline ( nm_is_temp ( string_data p ) )
+
+            : ~ String outp ( string_new )
+            : ?Json oj ( json_obj_get args `out` )
+            ?? oj { T ov → { ( string_free outp ) = outp ( string_from ( json_str_data ov ) ) } F → {} }
+            : ~ b b64_mode F
+            ? == ( string_len outp ) 0 {
+                ? was_inline {
+                    = b64_mode T
+                    ( string_free outp ) = outp ( nm_tmp_path `.wasm` )
+                } {
+                    ( string_free outp ) = outp ( string_from ( string_data p ) )
+                    ? ( string_ends_with outp `.nu` ) {
+                        : String t ( string_substr outp 0 - ( string_len outp ) 3 )
+                        ( string_free outp ) = outp t
+                    } {}
+                    ( string_push_str outp `.wasm` )
+                }
+            } {}
+
+            : ~ WbOpts wopts ( wb_opts_default )
+            = . wopts opt `-O1`
+            = . wopts quiet T
+            : !v String r ( wb_build_file ( string_data p ) ( string_data outp ) wopts )
+            ? was_inline { ( nm_unlink ( string_data p ) ) } {}
+            ( string_free p )
+            ?? r {
+                T _ → {
+                    : !i IoErr szr ( file_size ( string_data outp ) )
+                    : i sz ?? szr { T sv → sv F _ → 0 }
+                    ? b64_mode {
+                        : !( Vec u ) IoErr br ( read_file_bytes ( string_data outp ) )
+                        ( nm_unlink ( string_data outp ) )
+                        ( string_free outp )
+                        ?? br {
+                            T bytes → {
+                                : String b64 ( b64_encode_vec bytes )
+                                ( vec_free [u] bytes )
+                                : Json res ( json_obj_new )
+                                ( json_obj_set res `status` ( json_str_lit `ok` ) )
+                                ( json_obj_set res `wasm_bytes` ( json_int sz ) )
+                                ( json_obj_set res `wasm_base64` ( json_str_lit ( string_data b64 ) ) )
+                                ( string_free b64 )
+                                : String body ( json_stringify res )
+                                ( json_free res )
+                                : Json j ( mcp_tool_result_text ( string_data body ) )
+                                ( string_free body )
+                                ^ j
+                            }
+                            F _ → { ^ ( mcp_tool_result_error `built module could not be read back` ) }
+                        }
+                    } {
+                        : String msg ( string_from `OK — wrote ` )
+                        ( string_push_str msg ( string_data outp ) )
+                        ( string_push_str msg ` (` )
+                        ( string_push_int msg sz )
+                        ( string_push_str msg ` bytes of wasm32-wasi). Run it: wt run ` )
+                        ( string_push_str msg ( string_data outp ) )
+                        ( string_free outp )
+                        : Json j ( mcp_tool_result_text ( string_data msg ) )
+                        ( string_free msg )
+                        ^ j
+                    }
+                }
+                F e → {
+                    ( string_free outp )
+                    : Json j ( mcp_tool_result_error ( string_data e ) )
+                    ( string_free e )
+                    ^ j
+                }
             }
         }
         F → {}
@@ -460,6 +556,11 @@ $ `stdlib/ext/http_server.nu`
         `Compile NURL (inline "source" or a "path") with the local toolchain; reports success or compiler diagnostics. Does not run the program.`
         ( nm_schema_src_path ) ) )
     } {}
+    ? ( nm_build_ok ) {
+        ( vec_push [Json] tools ( mcp_tool_descriptor `nurl_build_wasm`
+        `Compile NURL (inline "source" or a "path") to a wasm32-wasi module, fully locally (no build service). Optional "out" = output path; a "path" input defaults to <input>.wasm next to it; inline "source" without "out" returns JSON with wasm_base64.`
+        ( nm_schema_src_path ) ) )
+    } {}
     ? ( nm_run_ok ) {
         ( vec_push [Json] tools ( mcp_tool_descriptor `nurl_run`
         `Compile AND run NURL with the local toolchain; returns the program's exit code, stdout, and stderr.`
@@ -485,6 +586,10 @@ $ `stdlib/ext/http_server.nu`
         ? ( nm_build_ok ) { ^ ( nm_tool_build args ) }
         { ^ ( mcp_tool_result_error `nurl_build is disabled (--read-only)` ) }
     } {}
+    ? != ( nurl_str_eq name `nurl_build_wasm` ) 0 {
+        ? ( nm_build_ok ) { ^ ( nm_tool_build_wasm args ) }
+        { ^ ( mcp_tool_result_error `nurl_build_wasm is disabled (--read-only)` ) }
+    } {}
     ? != ( nurl_str_eq name `nurl_run` ) 0 {
         ? ( nm_run_ok ) { ^ ( nm_tool_run args ) }
         { ^ ( mcp_tool_result_error `nurl_run is disabled — it is unsandboxed code execution; over HTTP pass --allow-run to enable it (and it is off entirely under --read-only)` ) }
@@ -500,7 +605,7 @@ $ `stdlib/ext/http_server.nu`
 // examples/mcp_echo_server_http.nu, used by both transports) ─────────
 
 @ handle_initialize Json id → Json {
-    : Json result ( mcp_initialize_result `nurl-mcp` `0.2.0` )
+    : Json result ( mcp_initialize_result `nurl-mcp` `0.3.0` )
     ^ ( mcp_response_result id result )
 }
 

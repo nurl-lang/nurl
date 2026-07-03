@@ -73,6 +73,22 @@ xcopy /e /i /y /q "%ROOT%\stdlib" "%PREFIX%\stdlib" >nul
 REM Build driver (resolves build\nurlc.exe + stdlib\runtime.o relative to itself).
 copy /y "%ROOT%\nurl.bat" "%PREFIX%\nurl.bat" >nul
 
+REM ── Bundled zig backend (optional but recommended) ─────────────
+REM Mirrors install-toolchain.sh: point NURL_BUNDLE_ZIG at an extracted
+REM zig dist (the dir with zig.exe + lib\) and it is staged at
+REM %PREFIX%\zig\. The wasmbuilder package uses it for local wasm32-wasi
+REM builds (zig carries wasi-libc + wasm-ld); without it, wasmbuilder's
+REM first build downloads zig on demand instead.
+set "ZIG_SRC=%NURL_BUNDLE_ZIG%"
+if not defined ZIG_SRC set "ZIG_SRC=%ROOT%\vendor\zig"
+if exist "%ZIG_SRC%\zig.exe" (
+  echo Bundling zig backend from %ZIG_SRC%
+  if exist "%PREFIX%\zig" rmdir /s /q "%PREFIX%\zig"
+  xcopy /e /i /y /q "%ZIG_SRC%" "%PREFIX%\zig" >nul
+) else (
+  echo Note: no bundled zig ^(%ZIG_SRC%\zig.exe absent^) - wasm builds will fetch zig on first use.
+)
+
 REM ── PATH shims (RELOCATABLE) ──────────────────────────────────
 REM Each shim resolves the prefix from its OWN location (%%~dp0..) at
 REM runtime, so the extracted tree works wherever it lands. It defaults
@@ -138,6 +154,7 @@ exit /b 0
 if exist "%PREFIX%\bin"      rmdir /s /q "%PREFIX%\bin"
 if exist "%PREFIX%\build"    rmdir /s /q "%PREFIX%\build"
 if exist "%PREFIX%\stdlib"   rmdir /s /q "%PREFIX%\stdlib"
+if exist "%PREFIX%\zig"      rmdir /s /q "%PREFIX%\zig"
 if exist "%PREFIX%\nurl.bat" del /q "%PREFIX%\nurl.bat"
 if exist "%PREFIX%\env.bat"  del /q "%PREFIX%\env.bat"
 echo Removed NURL toolchain from %PREFIX%

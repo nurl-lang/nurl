@@ -213,10 +213,26 @@ jobs:
           call build.bat --no-tests || exit /b 1
           call tools\nurlpkg\build.bat || exit /b 1
 
+      # Bundle a self-contained zig, mirroring the Linux jobs. Windows
+      # installs otherwise depend on a system LLVM for native builds, and
+      # the wasmbuilder package needs zig's wasi-libc + wasm-ld for local
+      # wasm32-wasi builds — bundling makes `nurlpkg install wasmbuilder`
+      # work on a blank machine with no extra downloads.
+      - name: Fetch bundled zig backend
+        shell: pwsh
+        run: |
+          $zigVer = "0.13.0"
+          $url = "https://ziglang.org/download/$zigVer/zig-windows-x86_64-$zigVer.zip"
+          Invoke-WebRequest $url -OutFile zig.zip
+          Expand-Archive zig.zip -DestinationPath vendor
+          Move-Item "vendor/zig-windows-x86_64-$zigVer" vendor/zig
+          & vendor/zig/zig.exe version
+
       - name: Assemble relocatable prefix
         shell: cmd
         run: |
           set "NURL_HOME=%CD%\dist\nurl"
+          set "NURL_BUNDLE_ZIG=%CD%\vendor\zig"
           call tools\install-toolchain.bat
 
       - name: Package
