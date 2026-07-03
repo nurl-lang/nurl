@@ -500,6 +500,117 @@ $ `src/store.nu`
     }
 }
 
+// ── Fine-tuning ───────────────────────────────────────────────────────
+
+// One version's fine-tune outcome.
+: FtVer {
+    String ftname
+    f min_score
+    f old_margin
+    f new_margin
+}
+
+: FineTuneReport {
+    ( Vec FtVer ) items
+}
+
+@ finetune_free FineTuneReport rep → v {
+    ( vec_free_with [FtVer] . rep items \ FtVer x → v { ( string_free . x ftname ) } )
+}
+
+// The ring, read-only encoded, projected onto the current feature order and
+// standardised with the current scaler — the exact view scoring uses.
+// Returns a row-major matrix of (result length / nfeat) rows.
+@ __an_ring_scaled *Model mo → ( Vec f ) {
+    : *Meta mm . mo meta
+    : i nfeat ( vec_len [String] . mm feats )
+    : ( Vec f ) big ( vec_new [f] )
+    ? <= nfeat 0 { ^ big } {}
+    : i n ( vec_len [String] . mo lines )
+    : ~ i k 0
+    ~ < k n {
+        ?? ( vec_get [String] . mo lines k ) {
+            T l → {
+                : !Json JsonError jr ( json_parse ( string_data l ) )
+                ?? jr {
+                    T j → {
+                        : !EncPoint String er ( anomaly_preprocess_ro mm j )
+                        ?? er {
+                            T p → {
+                                : ( Vec f ) row ( anomaly_project p . mm feats )
+                                ( scaler_apply . mo sc row )
+                                ( vec_extend [f] big row )
+                                ( vec_free [f] row )
+                                ( enc_free p )
+                            }
+                            F e → { ( string_free e ) }
+                        }
+                        ( json_free j )
+                    }
+                    F _ → {}
+                }
+            }
+            F _ → {}
+        }
+        = k + k 1
+    }
+    ^ big
+}
+
+// Recalibrate every trained version's decision margin against the observed
+// ring: margin becomes 95% of the magnitude of the most-negative
+// decision_function over the ring, so the most anomalous point seen so far
+// lands just inside the anomaly band. (This is the documented INTENT of the
+// reference's finetune — its own accumulator never updates due to an
+// inverted comparison against -inf, so it never adjusts anything; we
+// implement what the code meant, in place, per SPEC §5.2.) Margins are
+// persisted and take effect immediately. Returns per-version details.
+@ model_finetune *Model mo → FineTuneReport {
+    : ( Vec FtVer ) items ( vec_new [FtVer] )
+    : *Meta mm . mo meta
+    ? ( model_is_trained mo ) {} { ^ @ FineTuneReport { items } }
+
+    : i nfeat ( vec_len [String] . mm feats )
+    : ( Vec f ) big ( __an_ring_scaled mo )
+    : ~ i rows 0
+    ? > nfeat 0 { = rows / ( vec_len [f] big ) nfeat } {}
+    ? <= rows 0 {
+        ( vec_free [f] big )
+        ^ @ FineTuneReport { items }
+    } {}
+
+    : i nf ( vec_len [VerModel] . mo forests )
+    : ~ i k 0
+    ~ < k nf {
+        ?? ( vec_get [VerModel] . mo forests k ) {
+            T vm → {
+                : ~ f lowest 0.0
+                : ~ b first T
+                : ~ i r 0
+                ~ < r rows {
+                    : f df ( anom_decision_row vm big r )
+                    ? || first < df lowest { = lowest df } {}
+                    = first F
+                    = r + r 1
+                }
+                : f old ( __an_margin_of mm ( string_data . vm vname ) . vm margin )
+                : f adjusted * ( float_abs lowest ) 0.95
+                : b applied ( model_set_margin mo ( string_data . vm vname ) adjusted )
+                ( vec_push [FtVer] items @ FtVer {
+                    ( string_from ( string_data . vm vname ) )
+                    lowest
+                    old
+                    adjusted
+                } )
+            }
+            F _ → {}
+        }
+        = k + k 1
+    }
+    ( vec_free [f] big )
+    ^ @ FineTuneReport { items }
+}
+
 // ── Management ────────────────────────────────────────────────────────
 
 // Drop all data and trained forests but keep the model's name, schedule
