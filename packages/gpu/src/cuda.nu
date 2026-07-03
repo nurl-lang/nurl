@@ -78,17 +78,23 @@ $ `stdlib/core/string.nu`
 @ cuda_device_count → i {
     : *u s ( __outslot )
     ( cuDeviceGetCount s )
-    ^ ( nurl_peek s 0 )
+    : i n ( nurl_peek s 0 )
+    ( nurl_free s )
+    ^ n
 }
 
 // Device ordinal → CUdevice (itself a small int handle). -1 on failure.
 @ cuda_device i ordinal → i {
     : *u s ( __outslot )
-    ? != # i ( cuDeviceGet s # i32 ordinal ) 0 { ^ - 0 1 } {}
-    ^ ( nurl_peek s 0 )
+    ? != # i ( cuDeviceGet s # i32 ordinal ) 0 { ( nurl_free s ) ^ - 0 1 } {}
+    : i dev ( nurl_peek s 0 )
+    ( nurl_free s )
+    ^ dev
 }
 
-// CUdevice → device name string (borrowed copy into a fresh buffer).
+// CUdevice → device name string in a fresh buffer. The CALLER owns the
+// returned buffer (free with nurl_free after use) — it cannot be a borrow,
+// there is nothing to borrow from.
 @ cuda_device_name i dev → s {
     : *u buf ( nurl_alloc 256 )
     ( nurl_poke buf 0 0 )
@@ -99,8 +105,10 @@ $ `stdlib/core/string.nu`
 // Create a context on a CUdevice → CUcontext handle (0 on failure).
 @ cuda_ctx_create i dev → i {
     : *u s ( __outslot )
-    ? != # i ( cuCtxCreate s 0 # i32 dev ) 0 { ^ 0 } {}
-    ^ ( nurl_peek s 0 )
+    ? != # i ( cuCtxCreate s 0 # i32 dev ) 0 { ( nurl_free s ) ^ 0 } {}
+    : i ctx ( nurl_peek s 0 )
+    ( nurl_free s )
+    ^ ctx
 }
 
 @ cuda_ctx_destroy i ctx → i { ^ # i ( cuCtxDestroy ctx ) }
@@ -114,6 +122,7 @@ $ `stdlib/core/string.nu`
     : *u ps ( __outslot )
     ? != # i ( nvrtcCreateProgram ps src name 0 0 0 ) 0 {
         ( nurl_eprint `[gpu/cuda] nvrtcCreateProgram failed\n` )
+        ( nurl_free ps )
         ^ # *u 0
     } {}
     : i prog ( nurl_peek ps 0 )
@@ -127,38 +136,49 @@ $ `stdlib/core/string.nu`
         ( nurl_eprint `[gpu/cuda] kernel compile failed:\n` )
         ( nurl_eprint # s log )
         ( nurl_eprint `\n` )
+        ( nurl_free log )
+        ( nurl_free ls )
         ( nvrtcDestroyProgram ps )
+        ( nurl_free ps )
         ^ # *u 0
     } {}
     : *u szs ( __outslot )
     ( nvrtcGetPTXSize prog szs )
     : i psz ( nurl_peek szs 0 )
+    ( nurl_free szs )
     : *u ptx ( nurl_alloc + psz 1 )
     ( nvrtcGetPTX prog ptx )
     ( nvrtcDestroyProgram ps )
+    ( nurl_free ps )
     ^ ptx
 }
 
 // ── module / function ─────────────────────────────────────────────
 @ cuda_module_load *u ptx → i {
     : *u s ( __outslot )
-    ? != # i ( cuModuleLoadData s ptx ) 0 { ^ 0 } {}
-    ^ ( nurl_peek s 0 )
+    ? != # i ( cuModuleLoadData s ptx ) 0 { ( nurl_free s ) ^ 0 } {}
+    : i module ( nurl_peek s 0 )
+    ( nurl_free s )
+    ^ module
 }
 
 @ cuda_module_unload i module → i { ^ # i ( cuModuleUnload module ) }
 
 @ cuda_function i module s name → i {
     : *u s ( __outslot )
-    ? != # i ( cuModuleGetFunction s module name ) 0 { ^ 0 } {}
-    ^ ( nurl_peek s 0 )
+    ? != # i ( cuModuleGetFunction s module name ) 0 { ( nurl_free s ) ^ 0 } {}
+    : i fn ( nurl_peek s 0 )
+    ( nurl_free s )
+    ^ fn
 }
 
 // ── device memory ─────────────────────────────────────────────────
 @ cuda_malloc i bytes → i {
     : *u s ( __outslot )
-    ? != # i ( cuMemAlloc s bytes ) 0 { ^ 0 } {}
-    ^ ( nurl_peek s 0 )
+    ? != # i ( cuMemAlloc s bytes ) 0 { ( nurl_free s ) ^ 0 } {}
+    : i dptr ( nurl_peek s 0 )
+    ( nurl_free s )
+    ^ dptr
 }
 
 @ cuda_free i dptr → i { ^ # i ( cuMemFree dptr ) }
@@ -175,8 +195,12 @@ $ `stdlib/core/string.nu`
 }
 
 // CUresult code → driver error-name string (e.g. "CUDA_ERROR_INVALID_VALUE").
+// The returned pointer is the driver's own static string — only the
+// out-slot is ours to release.
 @ cuda_error_name i code → s {
     : *u s ( __outslot )
-    ? != # i ( cuGetErrorName # i32 code s ) 0 { ^ `CUDA_ERROR_UNKNOWN` } {}
-    ^ # s ( nurl_peek s 0 )
+    ? != # i ( cuGetErrorName # i32 code s ) 0 { ( nurl_free s ) ^ `CUDA_ERROR_UNKNOWN` } {}
+    : i namep ( nurl_peek s 0 )
+    ( nurl_free s )
+    ^ # s namep
 }

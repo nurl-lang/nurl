@@ -112,11 +112,16 @@ static __thread __nurl_dim3 blockIdx, threadIdx, blockDim, gridDim;
     ( string_push_char c 40 )
     ( string_push_str c ( string_data casts ) )
     ( string_push_str c `);\n}\n}\n` )
+    ( string_free casts )
 
     : String cpath ( __tmp_path name `.cc` )
     : String sopath ( __tmp_path name `.so` )
-    ? != 0 ( __write_file ( string_data cpath ) ( string_data c ) ) {
+    : i wr ( __write_file ( string_data cpath ) ( string_data c ) )
+    ( string_free c )
+    ? != 0 wr {
         ( nurl_eprint `[gpu/cpu] cannot write ` ) ( nurl_eprint ( string_data cpath ) ) ( nurl_eprint `\n` )
+        ( string_free cpath )
+        ( string_free sopath )
         ^ # *u 0
     } {}
 
@@ -135,12 +140,18 @@ static __thread __nurl_dim3 blockIdx, threadIdx, blockDim, gridDim;
     ( string_push_str omp ` 2>/tmp/nurlcpu_cc.log` )
     : ~ i rc ( system ( string_data omp ) )
     ? != rc 0 { = rc ( system ( string_data base ) ) } {}
+    ( string_free omp )
+    ( string_free base )
+    ( string_free cpath )
     ? != rc 0 {
         ( nurl_eprint `[gpu/cpu] host compile failed for ` ) ( nurl_eprint name )
         ( nurl_eprint ` (see /tmp/nurlcpu_cc.log; need a C++ compiler on PATH)\n` )
+        ( string_free sopath )
         ^ # *u 0
     } {}
-    ^ ( dlopen ( string_data sopath ) 2 )   // RTLD_NOW
+    : *u handle ( dlopen ( string_data sopath ) 2 )   // RTLD_NOW
+    ( string_free sopath )
+    ^ handle
 }
 
 // The generated grid-loop entry point in a compiled module (0 if absent).
