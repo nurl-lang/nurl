@@ -225,28 +225,30 @@ else
     log "[info] ALSA not found — pttvoice audio I/O unavailable"
 fi
 
-# ── CUDA driver + NVRTC detection ──────────────────────────
+# ── CUDA driver + NVRTC sentinels (ALWAYS on — stub-backed) ─
 # packages/gpu binds the CUDA Driver API (& `cuda` @ cu…) and NVRTC
-# (& `nvrtc` @ nvrtc…) directly — NO runtime.c bridge, so a GPU-less
-# build (e.g. MILK-V Duo) never grows a CUDA dependency. Drop the
-# sentinels the nurlc FFI-lib check looks for; nurl.sh auto-links
-# -lcuda / -lnvrtc only when those symbols actually appear AND the lib
-# probes link-able. libcuda ships with the NVIDIA driver (no toolkit
-# needed); libnvrtc ships with the CUDA toolkit and is optional — a
-# program that embeds pre-compiled PTX needs only -lcuda.
+# (& `nvrtc` @ nvrtc…) directly — NO runtime.c bridge. These are the two
+# FFI libs with FALLBACK STUB OBJECTS (stdlib/{cuda,nvrtc}_stubs.o):
+# nurl.sh links the real library when the host has it and the stubs when
+# it doesn't, so a program referencing cu*/nvrtc* symbols ALWAYS links and
+# loads — every stubbed call returns an error and packages/gpu falls back
+# to its CPU backend. The compile-time sentinel therefore must not depend
+# on the BUILD machine: a release archive assembled on a GPU-less CI
+# runner used to ship without runtime.cuda, and the installed nurlc then
+# refused to compile gpu-dependent packages on every machine, GPU or not.
+# Stub-backed libs get an unconditional sentinel; the probe below is
+# informational only (which flavour THIS host would link right now).
+echo 1 > stdlib/runtime.cuda
+echo 1 > stdlib/runtime.nvrtc
 if [ -e /usr/lib/x86_64-linux-gnu/libcuda.so ] || ldconfig -p 2>/dev/null | grep -q 'libcuda\.so '; then
-    echo 1 > stdlib/runtime.cuda
-    log "[info] CUDA driver (libcuda) detected — GPU compute FFI enabled"
+    log "[info] CUDA driver (libcuda) detected — GPU compute runs on the real driver"
 else
-    rm -f stdlib/runtime.cuda
-    log "[info] CUDA driver not found — packages/gpu unavailable"
+    log "[info] CUDA driver not found — cu* links against stubs; packages/gpu uses its CPU backend"
 fi
 if pkg-config --exists nvrtc 2>/dev/null || [ -e /usr/lib/x86_64-linux-gnu/libnvrtc.so ] || ldconfig -p 2>/dev/null | grep -q 'libnvrtc\.so '; then
-    echo 1 > stdlib/runtime.nvrtc
     log "[info] NVRTC detected — runtime CUDA-C→PTX kernel compilation enabled"
 else
-    rm -f stdlib/runtime.nvrtc
-    log "[info] NVRTC not found — runtime kernel compilation unavailable (embed PTX instead)"
+    log "[info] NVRTC not found — nvrtc* links against stubs (CUDA kernels need embedded PTX or the CPU backend)"
 fi
 
 # ── Xlib detection ─────────────────────────────────────────
