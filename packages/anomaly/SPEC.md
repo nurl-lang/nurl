@@ -1,7 +1,12 @@
 # `anomaly` — streaming anomaly-detection service (specification)
 
-Status: **draft / not yet implemented.** This document specifies the package;
-it does not describe existing code.
+Status: **implemented (M1–M6, v0.1.0).** §8's milestones M1–M6 are shipped
+and tested; M7 (autoencoder / GPU) remains open. Where the implementation
+deliberately diverges from this draft or from the Python reference, the
+divergence is listed in README.md ("Known divergences") — notably the
+point log is raw JSON lines (`data.jsonl`, §4.4) rather than a binary
+matrix, so retrains can learn categories that appeared after the last
+train.
 
 ## 1. Motivation
 
@@ -159,7 +164,10 @@ encodings aligned across retrains.
 ```
 <model_dir>/<name>/
   metadata.json            # §4.3
-  data.bin                 # ring of recent points, row-major f + timestamps
+  data.jsonl               # ring of recent RAW points, one JSON record per
+                           # line, each stamped with its ingest `timestamp`
+                           # (raw — not projected vectors — so a retrain can
+                           # pick up new categories/columns)
   version_<v>.forest       # one compact forest blob per enabled version
 ```
 
@@ -364,15 +372,20 @@ Matching the rest of the ecosystem:
 
 ## 11. Open questions
 
-- **Timestamp encoding.** The reference uses raw calendar fields
-  (`hour/day/month/weekday`); cyclical sin/cos encoding is better for the forest
-  but diverges from the reference. Ship raw first (M1), evaluate cyclical later.
-- **`contamination = auto`.** scikit-learn's `auto` sets the offset from the
-  training-score distribution. Decide the exact NURL equivalent in M2 and pin it
-  so scores are reproducible.
-- **Window filtering for versions (M5).** The reference filters points by wall
-  clock relative to *now*. For reproducible tests we need an injectable clock
-  (as `std/time` supports) rather than reading the real clock inside the model.
-- **Storage backend abstraction.** File backend is mandatory; confirm the
-  `store_*` interface is narrow enough that a Redis/`swarm` backend could be
-  added in a later package without breaking `Model`.
+- **Timestamp encoding.** RESOLVED (M1): raw calendar fields
+  (`hour/day/month/weekday`, Python weekday convention), matching the
+  reference. Cyclical sin/cos remains a possible later refinement.
+- **`contamination = auto`.** RESOLVED (M2): pinned to the sklearn
+  convention — `offset_ = -0.5` for `auto`, else the 100·c percentile
+  (numpy 'linear' interpolation) of the training set's score_samples;
+  `decision_function = -iforest_score - offset_`. Validated against
+  scikit-learn on identical data (agreement within ~0.01).
+- **Window filtering for versions (M5).** RESOLVED: every mutating entry
+  point has an `_at` variant taking `now` in unix seconds; the plain
+  variants read the wall clock. Window cutoffs and stamped timestamps are
+  fully injectable in tests.
+- **Storage backend abstraction.** File backend shipped; the `store_*`
+  surface (exists/list/save/load meta + forest, append/write/load points,
+  delete) is the interface a Redis/`swarm` backend would re-implement.
+  Still open: making `Model` carry the backend as a value rather than
+  calling `store_*` directly.
