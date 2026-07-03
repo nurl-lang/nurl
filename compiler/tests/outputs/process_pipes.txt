@@ -1,0 +1,20 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+=== cat round-trips ===
+w1=6
+r1=<hello
+>
+w2=6
+r2=<world
+>
+r3=eof
+cat_exit=0
+=== sort after close-stdin ===
+w3=4
+s=<a
+b
+>
+s=eof
+sort_exit=0

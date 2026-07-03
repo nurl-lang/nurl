@@ -666,11 +666,15 @@ $ `stdlib/core/posix.nu`
 //   ( proc_pid          ProcChild p )           → i
 //   ( proc_write        ProcChild p s buf i n ) → i      bytes written, -1 err
 //   ( proc_write_str    ProcChild p s s_view )  → i
+//   ( proc_write_bytes  ProcChild p ( Vec u ) data ) → i  full-write loop
 //   ( proc_write_line   ProcChild p s line )    → i      appends '\n'
 //   ( proc_close_stdin  ProcChild p )           → v
 //
 //   ( proc_read_line    ProcChild p i timeout_ms )
 //                                              → ? String   None on timeout/EOF
+//   ( proc_read_chunk   ProcChild p i max )
+//                                              → ! ( Vec u ) ProcessErr
+//                                                 blocking raw read; empty = EOF
 //   ( proc_eof          ProcChild p )           → b
 //   ( proc_last_io_err  ProcChild p )           → i      raw errno
 //
@@ -682,6 +686,13 @@ $ `stdlib/core/posix.nu`
 //   * `proc_read_line` returns a freshly-OWNED `String` on Some — the
 //     caller MUST `string_free` it. None means timeout (peer still alive,
 //     `proc_eof` = false) OR EOF (peer closed, `proc_eof` = true).
+//   * `proc_read_chunk` returns a freshly-OWNED `( Vec u )` on Ok — the
+//     caller MUST `vec_free` it. It BLOCKS until the child produces
+//     bytes (one read(2)-worth, at most `max`); an EMPTY Vec means EOF
+//     (child closed stdout). Bytes already buffered by a previous
+//     `proc_read_line` call are served first, so the two read styles
+//     interleave safely. POSIX only — Win32/WASI return ProcessOther
+//     (use `proc_read_line` there).
 //   * `proc_free` cascades: closes stdin/stdout, SIGTERMs an unwaited
 //     child (then SIGKILL after ~500ms), reaps via waitpid, frees the
 //     handle.
@@ -1081,6 +1092,92 @@ $ `stdlib/core/posix.nu`
     ^ ``
 }
 
+// Blocking raw-byte read from the child's stdout. Serves any bytes
+// left in the read_line scratch buffer first, then poll(2)s (infinite
+// timeout — the fd is O_NONBLOCK, poll gates the read) and does one
+// read(2) of at most `max` bytes. Empty Vec ⇒ EOF.
+@ __proc_read_chunk_posix i raw i max → !( Vec u ) ProcessErr {
+    : s c # s raw
+    ? <= max 0 { ^ @ !( Vec u ) ProcessErr { T ( vec_new [u] ) } } {}
+
+    // 1. Drain bytes buffered by an earlier proc_read_line call.
+    : i sc_len ( nurl_peek c 10 )
+    ? > sc_len 0 {
+        : i take ? > sc_len max max sc_len
+        : ( Vec u ) buf ( vec_with_cap [u] take )
+        : s scratch # s ( nurl_peek c 9 )
+        : *u src # *u scratch
+        : *u dst ( vec_data [u] buf )
+        ( nurl_memcpy dst src take )
+        : b _ok ( vec_set_len [u] buf take )
+        : i rem - sc_len take
+        ? > rem 0 {
+            // Shift the tail over the consumed prefix (aliasing — memmove).
+            : *u tail # *u + # i src take
+            ( nurl_memmove src tail rem )
+        } {}
+        ( nurl_poke c 10 rem )
+        ^ @ !( Vec u ) ProcessErr { T buf }
+    } {}
+
+    : i fd_out ( nurl_peek c 8 )
+    ? < fd_out 0 {
+        ( nurl_poke c 3 1 )  // eof
+        ^ @ !( Vec u ) ProcessErr { T ( vec_new [u] ) }
+    } {}
+
+    : s pollfds ( nurl_alloc 8 )
+    : i pollin ( posix_const `POLLIN` )
+    ~ T {
+        // 2. Block until readable or HUP; EINTR retries.
+        ( posix_pollfd_set # *u pollfds 0 fd_out pollin )
+        : ~ i pr -1
+        : ~ i poll_done 0
+        ~ == poll_done 0 {
+            = pr ( poll # *u pollfds 1 -1 )
+            ? >= pr 0 { = poll_done 1 } {
+                : i pe ( nurl_errno_get )
+                ? != pe ( posix_const `EINTR` ) { = poll_done 1 } {}
+            }
+        }
+        ? < pr 0 {
+            ( nurl_poke c 0 3 )  // Io
+            ( nurl_poke c 1 ( nurl_errno_get ) )
+            ( nurl_free pollfds )
+            ^ @ !( Vec u ) ProcessErr { F # ProcessErr ProcessIo }
+        } {}
+        // 3. One read(2) — POLLIN and POLLHUP both resolve here.
+        : ( Vec u ) buf ( vec_with_cap [u] max )
+        : *u dst ( vec_data [u] buf )
+        : i rd ( read fd_out dst max )
+        ? > rd 0 {
+            : b _ok ( vec_set_len [u] buf rd )
+            ( nurl_free pollfds )
+            ^ @ !( Vec u ) ProcessErr { T buf }
+        } {}
+        ? == rd 0 {
+            ( close fd_out )
+            ( nurl_poke c 8 -1 )
+            ( nurl_poke c 3 1 )  // eof
+            ( nurl_free pollfds )
+            ^ @ !( Vec u ) ProcessErr { T buf }  // empty ⇒ EOF
+        } {}
+        : i re ( nurl_errno_get )
+        ( vec_free [u] buf )
+        ? == re ( posix_const `EINTR` ) {} {
+            ? || == re ( posix_const `EAGAIN` ) == re ( posix_const `EWOULDBLOCK` ) {} {
+                ( nurl_poke c 0 3 )  // Io
+                ( nurl_poke c 1 re )
+                ( nurl_free pollfds )
+                ^ @ !( Vec u ) ProcessErr { F # ProcessErr ProcessIo }
+            }
+        }
+        // EINTR / spurious EAGAIN: poll again.
+    }
+    ( nurl_free pollfds )
+    ^ @ !( Vec u ) ProcessErr { T ( vec_new [u] ) }
+}
+
 @ __proc_wait_posix i raw → i {
     : s c # s raw
     : i waited ( nurl_peek c 4 )
@@ -1277,6 +1374,33 @@ $ `stdlib/core/posix.nu`
     : i n ( nurl_proc_spawn_read_line_len raw )
     ? == n 0 { ^ @ ?String { F # String 0 } } {}
     ^ @ ?String { T ( string_from view ) }
+}
+
+// Blocking raw-byte read from the child's stdout — the incremental
+// dual of proc_write. Blocks until the child produces output (or EOF),
+// then returns ONE read(2)-worth of bytes, at most `max`. Returns:
+//   * Ok(Vec u)  — fresh OWNED bytes; caller MUST vec_free. EMPTY ⇒ EOF
+//     (proc_eof = true from then on).
+//   * Err(ProcessIo) on a hard pipe error (errno via proc_last_io_err).
+// Bytes buffered by an earlier proc_read_line are served first.
+// POSIX only; Win32/WASI return ProcessOther (use proc_read_line).
+@ proc_read_chunk ProcChild p i max → !( Vec u ) ProcessErr {
+    : s rp . p raw
+    : i raw # i rp
+    ? != ( posix_const `O_NONBLOCK` ) -1 {
+        ^ ( __proc_read_chunk_posix raw max )
+    } {}
+    ^ @ !( Vec u ) ProcessErr { F # ProcessErr ProcessOther }
+}
+
+// Full-write a byte Vec to the child's stdin. Returns bytes written
+// (== vec_len on success) or -1 on error, like proc_write.
+@ proc_write_bytes ProcChild p ( Vec u ) data → i {
+    : i n ( vec_len [u] data )
+    ? <= n 0 { ^ 0 } {}
+    : *u dp ( vec_data [u] data )
+    : s buf # s # i dp
+    ^ ( proc_write p buf n )
 }
 
 @ proc_wait ProcChild p → i {
