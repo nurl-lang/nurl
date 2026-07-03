@@ -638,7 +638,7 @@ $ `stdlib/ext/json.nu`
 
 // JSON array of numbers → ( Vec f ); None if any element is not a number.
 @ __an_floats_of_jarr Json a → ?( Vec f ) {
-    ? ( json_is_arr a ) {} { ^ @ ?( Vec f ) { F ( vec_new [f] ) } }
+    ? ( json_is_arr a ) {} { ^ @ ?( Vec f ) { F } }
     : i n ( json_arr_len a )
     : ( Vec f ) out ( vec_with_cap [f] n )
     : ~ i k 0
@@ -648,7 +648,7 @@ $ `stdlib/ext/json.nu`
                 : ?f fx ( json_num_as_f e )
                 ?? fx {
                     T x → { ( vec_push [f] out x ) }
-                    F _ → { ( vec_free [f] out ) ^ @ ?( Vec f ) { F ( vec_new [f] ) } }
+                    F _ → { ( vec_free [f] out ) ^ @ ?( Vec f ) { F } }
                 }
             }
             F _ → {}
@@ -660,7 +660,7 @@ $ `stdlib/ext/json.nu`
 
 // JSON array of strings → ( Vec String ); None if any element is not a string.
 @ __an_strs_of_jarr Json a → ?( Vec String ) {
-    ? ( json_is_arr a ) {} { ^ @ ?( Vec String ) { F ( vec_new [String] ) } }
+    ? ( json_is_arr a ) {} { ^ @ ?( Vec String ) { F } }
     : i n ( json_arr_len a )
     : ( Vec String ) out ( vec_with_cap [String] n )
     : ~ i k 0
@@ -671,7 +671,7 @@ $ `stdlib/ext/json.nu`
                     ( vec_push [String] out ( string_from ( json_str_data e ) ) )
                 } {
                     ( vec_free_with [String] out \ String x → v { ( string_free x ) } )
-                    ^ @ ?( Vec String ) { F ( vec_new [String] ) }
+                    ^ @ ?( Vec String ) { F }
                 }
             }
             F _ → {}
@@ -801,7 +801,7 @@ $ `stdlib/ext/json.nu`
 // Parse metadata back from JSON. None on malformed shape (missing/mistyped
 // required fields); the partially-built Meta is freed on failure.
 @ meta_from_json Json j → ?*Meta {
-    ? ( json_is_obj j ) {} { ^ @ ?*Meta { F # *Meta 0 } }
+    ? ( json_is_obj j ) {} { ^ @ ?*Meta { F } }
 
     : ~ b ok T
     : ~ String mname ( string_new )
@@ -827,7 +827,7 @@ $ `stdlib/ext/json.nu`
     ? ok {} {
         ( string_free mname )
         ( string_free mcreated )
-        ^ @ ?*Meta { F # *Meta 0 }
+        ^ @ ?*Meta { F }
     }
 
     : *Meta m ( meta_new ( string_data mname ) ( string_data mcreated ) )
@@ -976,7 +976,7 @@ $ `stdlib/ext/json.nu`
 
     ? ok {} {
         ( meta_free m )
-        ^ @ ?*Meta { F # *Meta 0 }
+        ^ @ ?*Meta { F }
     }
     ^ @ ?*Meta { T m }
 }
@@ -998,6 +998,6 @@ $ `stdlib/ext/json.nu`
             ( json_free j )
             ^ mm
         }
-        F _ → { ^ @ ?*Meta { F # *Meta 0 } }
+        F _ → { ^ @ ?*Meta { F } }
     }
 }
