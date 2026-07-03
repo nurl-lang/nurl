@@ -10,6 +10,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`packages/cas` v0.1.0 — content-addressed store over BLAKE3 + minimal
+  manifest.** The keystone of a verifiable build → hash → dedup →
+  distribution chain: bytes are stored under their own BLAKE3-256 hex
+  (git/OCI-shaped two-level fan-out of plain files, atomic tmp+rename
+  writes, dedup by existence — no index, no database, no locks), and every
+  read **re-hashes what it found**, refusing to return bytes that don't
+  match their name — a store you can rsync, mirror, or fetch from an
+  untrusted cache without losing integrity. A snapshot is a canonical text
+  manifest (`cas-manifest v1` + sorted `hash size path` lines) stored in
+  the CAS like any blob, so one 64-hex string names an entire tree
+  Merkle-style and the same tree always snapshots to the same hash.
+  CLI (`cas put/hash/get/snapshot/ls/checkout/verify`, store at
+  `$CAS_STORE` or `~/.cas`) + embeddable library (`cas_put` / `cas_get` /
+  `cas_snapshot` / `cas_checkout` / `cas_verify`). Tests cover round-trip,
+  in-store dedup (N identical files → one object), snapshot determinism,
+  and the point of it all: a flipped byte inside the store turns `get`,
+  `verify`, and `checkout` into errors — never silent corruption.
+  Path-traversal-safe checkout (manifest paths may not escape the
+  destination). ASan/UBSan/LSan-clean including the error paths.
+
 - **`std/x509_gen.nu` — self-signed X.509 certificates in pure NURL.** The
   write-side sibling of the parse-only `std/x509.nu`: a minimal DER encoder
   plus TBSCertificate assembly, self-signed with the ECDSA-P256/SHA-256 and

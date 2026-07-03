@@ -1,0 +1,7 @@
+[package]
+name = "cas"
+version = "0.1.0"
+description = "Content-addressed store over BLAKE3 — the keystone of a verifiable build/distribution chain: bytes in, their BLAKE3-256 hex out, and from then on the hash IS the name. Plain-file store (git/OCI-shaped two-level fan-out, atomic tmp+rename writes, dedup by existence — no index, no database, no locks), where every read re-hashes what it found and refuses to return bytes that don't match their name: rsync it, mirror it, fetch from an untrusted cache, and you still get exactly the original bytes or an error. On top sits a minimal canonical manifest (sorted `hash size path` lines, itself stored in the CAS) so one 64-hex string names an entire directory tree Merkle-style: `cas snapshot ./dir` → manifest hash, `cas checkout <hash> ./dest` materialises it fully verified, `cas verify <hash>` deep-proves a blob or a whole snapshot. Ships as a CLI (put/hash/get/snapshot/ls/checkout/verify, store at $CAS_STORE or ~/.cas) and an embeddable library (cas_put/cas_get/cas_snapshot/… ) for build caches, artifact distribution, and wasm-module stores."
+license = "MIT OR Apache-2.0"
+
+[dependencies]
