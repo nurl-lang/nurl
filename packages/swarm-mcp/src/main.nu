@@ -20,6 +20,7 @@ $ `stdlib/std/bytes.nu`
 $ `stdlib/std/floatbits.nu`
 $ `stdlib/std/random.nu`
 $ `stdlib/std/fs.nu`
+$ `stdlib/std/x509_gen.nu`
 $ `stdlib/std/encode.nu`
 $ `stdlib/std/time.nu`
 $ `stdlib/std/thread.nu`
@@ -739,7 +740,7 @@ $ `cudakernel.nu`
     ? & == . t done 1 == . t failed 0 {
         ? == . t mode ( gpu_mode_scalar ) {
             ? == . t dtype 1 { ( json_obj_set o `result` ( json_float ( bits_to_f64 . t result ) ) ) }
-                             { ( json_obj_set o `result` ( json_int . t result ) ) }
+            { ( json_obj_set o `result` ( json_int . t result ) ) }
         } {
             ( __task_vres_json o t )
         }
@@ -857,13 +858,13 @@ $ `cudakernel.nu`
     : *Swarm sw ( mcp_swarm )
     ( swarm_discover sw 6 )
     : i nworkers ? != gpu 0
-        ( roster_count_caps # *Roster . sw roster ( cap_gpu ) )
-        ( roster_count # *Roster . sw roster )
+    ( roster_count_caps # *Roster . sw roster ( cap_gpu ) )
+    ( roster_count # *Roster . sw roster )
     ? == nworkers 0 {
         ( vec_free [u] wasm )
         ^ ? != gpu 0
-            ( mcp_tool_result_error `no GPU workers in the cluster — start some with 'swarm-mcp --worker --gpu' (needs the pure-NURL wasmtime and an NVIDIA GPU)` )
-            ( mcp_tool_result_error `no workers in the cluster — start some with 'swarm-mcp worker'` )
+        ( mcp_tool_result_error `no GPU workers in the cluster — start some with 'swarm-mcp --worker --gpu' (needs the pure-NURL wasmtime and an NVIDIA GPU)` )
+        ( mcp_tool_result_error `no workers in the cluster — start some with 'swarm-mcp worker'` )
     } {}
     : i nchunks ( nchunks_wasm nworkers )
     : i kind ? != gpu 0 ( kind_wasm_gpu ) ( kind_wasm )
@@ -981,8 +982,8 @@ $ `cudakernel.nu`
     ? < ( nurl_str_find cuda entry ) 0 {
         ( vec_free [i] params )
         ^ ? == mode ( gpu_mode_hist )
-            ( mcp_tool_result_error `the CUDA source must define __device__ long long bin(long long x) { ... } (and may define __device__ double val(long long x); with a dataset both take (long long x, double v); with params, a trailing const double* p)` )
-            ( mcp_tool_result_error `the CUDA source must define __device__ double f(long long x) { ... } (with a dataset: f(long long x, double v); with params, a trailing const double* p; helpers are fine, f is the entry the generated kernel calls)` )
+        ( mcp_tool_result_error `the CUDA source must define __device__ long long bin(long long x) { ... } (and may define __device__ double val(long long x); with a dataset both take (long long x, double v); with params, a trailing const double* p)` )
+        ( mcp_tool_result_error `the CUDA source must define __device__ double f(long long x) { ... } (with a dataset: f(long long x, double v); with params, a trailing const double* p; helpers are fine, f is the entry the generated kernel calls)` )
     } {}
     // resolved range (a dataset defaults a missing lo/hi to [0, count))
     : ~ i rlo lo
@@ -1651,27 +1652,50 @@ $ `cudakernel.nu`
     ^ @ HostPort { h ? > p 0 p dport }
 }
 
-// Ensure a TLS cert+key exist at the given paths, auto-minting a self-signed EC
-// P-256 pair with openssl if absent (so `--mcp` works out of the box; pass
-// --tls-cert/--tls-key for a real cert). Returns T once both files exist.
+// Directory part of a path (bytes before the last '/'), empty when the
+// path has no directory component.
+@ __cert_dirname s path → String {
+    : i n # i ( nurl_str_len path )
+    : ~ i last 0 - 0 1
+    : ~ i k 0
+    ~ < k n {
+        ? == ( nurl_str_get path k ) 47 { = last k } {}
+        = k + k 1
+    }
+    ? < last 0 { ^ ( string_new ) } {}
+    : String owned ( string_from path )
+    : String dir ( string_substr owned 0 last )
+    ( string_free owned )
+    ^ dir
+}
+
+// Ensure a TLS cert+key exist at the given paths, auto-minting a self-signed
+// EC P-256 pair in pure NURL if absent (std/x509_gen.nu — no openssl, no
+// subprocess), so `--mcp` works out of the box; pass --tls-cert/--tls-key for
+// a real cert. CN + SAN are `localhost` (matching the previous openssl
+// invocation minus the IP SAN — MCP clients pin or use --insecure against a
+// self-signed cert either way). Returns T once both files exist.
 @ ensure_cert s cert_path s key_path → b {
     ? & ( file_exists cert_path ) ( file_exists key_path ) { ^ T } {}
-    : String cmd ( string_new )
-    ( string_push_str cmd `mkdir -p "$(dirname '` ) ( string_push_str cmd cert_path ) ( string_push_str cmd `')" && ` )
-    ( string_push_str cmd `openssl ecparam -genkey -name prime256v1 -noout -out '` ) ( string_push_str cmd key_path ) ( string_push_str cmd `' && ` )
-    ( string_push_str cmd `openssl req -new -x509 -key '` ) ( string_push_str cmd key_path )
-    ( string_push_str cmd `' -out '` ) ( string_push_str cmd cert_path )
-    ( string_push_str cmd `' -days 3650 -subj "/CN=localhost" -addext "subjectAltName=DNS:localhost,IP:127.0.0.1"` )
-    : ( Vec s ) args ( vec_new [s] )
-    ( vec_push [s] args `-c` )
-    ( vec_push [s] args ( string_data cmd ) )
-    : ~ b ok F
-    ?? ( process_run `sh` args `` ) {
-        T out → { ? == ( output_exit_code out ) 0 { = ok T } {} ( output_free out ) }
-        F e → {}
+    : String dir ( __cert_dirname cert_path )
+    ? > ( string_len dir ) 0 {
+        ?? ( dir_create_all ( string_data dir ) ) {
+            T → {}
+            F e → {}
+        }
+    } {}
+    ( string_free dir )
+    : X509SelfSigned c ( x509_selfsigned_p256 `localhost` 3650 )
+    : ~ b ok T
+    ?? ( write_file key_path ( string_data . c key_pem ) ) {
+        T → {}
+        F e → { = ok F }
     }
-    ( vec_free [s] args )
-    ( string_free cmd )
+    ?? ( write_file cert_path ( string_data . c cert_pem ) ) {
+        T → {}
+        F e → { = ok F }
+    }
+    ( x509_selfsigned_free c )
     ^ & ok & ( file_exists cert_path ) ( file_exists key_path )
 }
 
@@ -1778,7 +1802,7 @@ $ `cudakernel.nu`
     : String keyp ( flag_val `--tls-key` ( string_data defkey ) )
     ? mcp_on {
         ? ! ( ensure_cert ( string_data certp ) ( string_data keyp ) ) {
-            ( nurl_eprintln `swarm-mcp: no TLS cert/key and could not auto-generate one (needs openssl). Pass --tls-cert FILE --tls-key FILE.` )
+            ( nurl_eprintln `swarm-mcp: no TLS cert/key and could not auto-generate one (is the target directory writable?). Pass --tls-cert FILE --tls-key FILE.` )
             ^ 1
         } {}
     } {}
