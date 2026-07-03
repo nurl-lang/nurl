@@ -833,6 +833,22 @@
 //  emit_one_instantiation so per-mono
 //  subprograms point at the original generic
 //  decl line, not synthetic `<generic>:1`.
+: ~ i g_dbg_file_syms 0  // Phase 8 (critic A8): path → !DIFile id cache so
+//  every source file gets its own !DIFile and a
+//  subprogram debug-attributes to the file that
+//  DEFINES it (imports, stdlib generics), not the
+//  top-level compile file.
+: ~ s g_dbg_override_file ``  // Phase 8: when non-empty, the template's
+//  defining path for the mono being emitted
+//  (the mono's lexer filename is the synthetic
+//  `<generic …>`). Set/restored by
+//  emit_one_instantiation beside the line
+//  override.
+: ~ i g_dbg_current_file_id 0  // !DIFile id of the current subprogram's
+//  defining file (0 outside any function);
+//  dbg_declare_local points DILocalVariable.file
+//  here so locals land in the same file as
+//  their subprogram.
 
 // Space-separated list of the concrete type-arguments substituted for a
 // generic function's type parameters in the instantiation currently being
@@ -931,6 +947,36 @@
     = g_dbg_type_syms ( nurl_sym_new )
     ( nurl_sym_def g_dbg_type_syms `i64`
     ( nurl_str_int g_dbg_placeholder_ty ) )
+    // Per-file !DIFile cache, pre-seeded with the top-level file so a
+    // single-file program emits exactly the metadata it always did.
+    = g_dbg_file_syms ( nurl_sym_new )
+    ( nurl_sym_def g_dbg_file_syms path ( nurl_str_int g_dbg_file_id ) )
+}
+
+// Phase 8 (critic A8): !DIFile id for `path`, buffering a new !DIFile
+// on first use. Empty/synthetic paths (`<generic …>`, `<repl>`, …)
+// fall back to the top-level file id.
+@ dbg_file_id_for s path → i {
+    ? == 0 ( nurl_str_len path ) { ^ g_dbg_file_id } {}
+    ? == ( nurl_str_get path 0 ) 60 { ^ g_dbg_file_id } {}
+    : s got ( nurl_sym_get g_dbg_file_syms path )
+    ? != 0 ( nurl_str_len got ) { ^ ( nurl_str_to_int got ) } {}
+    : i fid ( dbg_alloc_id )
+    ( dbg_buffer_meta fid
+    ( nurl_str_cat3 `!DIFile(filename: "` path `", directory: ".")` ) )
+    ( nurl_sym_def g_dbg_file_syms path ( nurl_str_int fid ) )
+    ^ fid
+}
+
+// The !DIFile id the CURRENT function should debug-attribute to: the
+// generic-template override when a mono is being emitted (its lexer
+// filename is synthetic), otherwise the emitting lexer's filename —
+// which is the IMPORTED file's path while an import is being walked,
+// closing the "stdlib fn points at the top file" gap.
+@ dbg_file_for_lex i lex → i {
+    ? != 0 ( nurl_str_len g_dbg_override_file )
+    { ^ ( dbg_file_id_for g_dbg_override_file ) } {}
+    ^ ( dbg_file_id_for ( nurl_lex_filename lex ) )
 }
 
 // Phase 6 layout helpers: LLVM "natural" alignment + size in BITS for
@@ -1132,10 +1178,12 @@
 //             NURL source name, but `main` is rewritten to
 //             `_nurl_main` (the C-side wrapper takes the bare name).
 //   `line` — source line of the function header (1-based; 0 = unknown).
-@ dbg_emit_subprogram s lname i line → i {
+//   `file` — !DIFile id of the DEFINING source file (dbg_file_for_lex);
+//            0 falls back to the top-level file.
+@ dbg_emit_subprogram s lname i line i file → i {
     : i sp_id ( dbg_alloc_id )
     : s ls ( nurl_str_int line )
-    : s fid ( nurl_str_int g_dbg_file_id )
+    : s fid ( nurl_str_int ? != file 0 file g_dbg_file_id )
     : s cu ( nurl_str_int g_dbg_cu_id )
     : s part1 ( nurl_str_cat3 `distinct !DISubprogram(name: "` lname `"` )
     : s part2 ( nurl_str_cat3 `, scope: !` fid `, file: !` )
@@ -1163,7 +1211,7 @@
     {
         : i var_id ( dbg_alloc_id )
         : s sp ( nurl_str_int g_dbg_current_subprogram )
-        : s fi ( nurl_str_int g_dbg_file_id )
+        : s fi ( nurl_str_int ? != g_dbg_current_file_id 0 g_dbg_current_file_id g_dbg_file_id )
         : s lns ( nurl_str_int line )
         : s ty_s ( nurl_str_int ( dbg_type_id_for vt syms ) )
         : s body
@@ -12091,7 +12139,7 @@
     : i saved_dbg_loc g_dbg_current_loc
     : ~ i closure_sp_id 0
     ? != g_dbg_enabled 0
-    { = closure_sp_id ( dbg_emit_subprogram closure_fn_name ( nurl_lex_line lex ) )
+    { = closure_sp_id ( dbg_emit_subprogram closure_fn_name ( nurl_lex_line lex ) ( dbg_file_for_lex lex ) )
         = g_dbg_current_subprogram closure_sp_id
         = g_dbg_current_loc ( dbg_emit_location ( nurl_lex_line lex ) 1 closure_sp_id ) }
     {}
@@ -13954,9 +14002,11 @@
     // fn-entry. emit_dbg_eol then attaches `!dbg` to every call/ret/br
     // inside the body. Both globals reset to 0 after the closing `}`.
     ? != g_dbg_enabled 0
-    { : i sp_id ( dbg_emit_subprogram lname fn_src_line )
+    { : i fn_fid ( dbg_file_for_lex lex )
+        : i sp_id ( dbg_emit_subprogram lname fn_src_line fn_fid )
         : i loc_id ( dbg_emit_location fn_src_line 1 sp_id )
         = g_dbg_current_subprogram sp_id
+        = g_dbg_current_file_id fn_fid
         = g_dbg_current_loc loc_id
         ( nurl_print ` !dbg !` ) ( nurl_print ( nurl_str_int sp_id ) ) }
     {}
@@ -14187,6 +14237,7 @@
     // referencing a stale scope. Reset to 0; emit_dbg_eol then degrades
     // to a plain `\n` until the next function sets it again.
     = g_dbg_current_subprogram 0
+    = g_dbg_current_file_id 0
     = g_dbg_current_loc 0
     ( emit_str_globals base_str g_str_idx )
     ( emit_closure_globals )
@@ -15698,6 +15749,14 @@
     ? != 0 ( nurl_str_len sl_s )
     { = g_dbg_override_line ( nurl_str_to_int sl_s ) }
     {}
+    // DWARF Phase 8 (critic A8): stash the template's DEFINING FILE
+    // beside the line, so the mono's !DISubprogram carries a !DIFile
+    // for the stdlib/template source instead of the top-level file.
+    : s saved_override_file g_dbg_override_file
+    : s sf_s ( nurl_sym_get g_generic_syms ( nurl_str_cat fname `__src_file` ) )
+    ? != 0 ( nurl_str_len sf_s )
+    { = g_dbg_override_file sf_s }
+    {}
     // Mark this instantiation's concrete type-args so gen_member /
     // gen_field_store treat pointers to them as arrays (their generic
     // origin — opaque type variables — have no accessible fields). Saved
@@ -15717,6 +15776,7 @@
     }
     { ( gen_fn_decl lex2 syms cg ) }
     = g_dbg_override_line saved_override
+    = g_dbg_override_file saved_override_file
     = g_mono_tparam_tys saved_mono_tys
 }
 
