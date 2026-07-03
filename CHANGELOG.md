@@ -8,6 +8,67 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+A bug-hunt sweep over the open items in `critic.md` / project memory:
+ten language/compiler/toolchain/ecosystem defects and gaps closed
+(branch `bugfix/bughunt-session`).
+
+### Fixed
+
+- **nurlfmt: a match-arm `→` is no longer type context.** The formatter
+  glued an operator starting a braceless arm body to its operand
+  (`? flag x 0` → `?flag x 0`, `* n 2` → `*n 2`, `? != …` → `?!=`),
+  making ternary/multiply/not/modulo read as type sigils in canonical
+  output. Declaration headers (`@`/`\` … `{`) are now the only type
+  context for arrows; return-type gluing (`→ ?i`) is unchanged. The 14
+  covered files carrying the old glued spelling were reformatted; lock
+  `fmt_arm_arrow_ops.nu`; both fmt gates green (777 files canonical,
+  idempotence + IR-equivalence).
+- **DWARF (critic A8): per-source-file `!DIFile`.** Imported functions
+  and monomorphised stdlib generics debug-attributed to the top-level
+  file (right line, wrong file). Subprograms now carry the !DIFile of
+  their defining source — generics map through the template's recorded
+  path. `vec_push__u8` renders as `./stdlib/core/vec.nu:203` in
+  llvm-dwarfdump; non-debug IR is byte-identical and the bootstrap
+  fixed point holds.
+- **swarm-mcp:** `serverInfo.version` no longer hardcoded (was 0.7.0).
+
+### Added
+
+- **`nurl.sh --coverage` (critic C9):** line coverage for `.nu`
+  sources — gcov-style `-fprofile-arcs -ftest-coverage` as IR passes
+  over the DWARF metadata `--debug` emits; `llvm-cov gcov` reports
+  per-line hit counts against the original source.
+- **`std/fswatch.nu` (critic B8):** file watching via Linux inotify,
+  pure libc FFI — blocking `fswatch_next`, `FSW_*` masks, multiple
+  packed events cursored out one per call. Lock `fswatch_basic.nu`.
+- **`std/process.nu` (critic B11):** raw streaming on a live child —
+  `proc_read_chunk` (poll-gated incremental read, empty Vec = EOF) +
+  `proc_write_bytes`, interleaving safely with `proc_read_line`. Lock
+  `process_pipes.nu` (live cat round-trips + sort-after-EOF).
+- **LSP `textDocument/rename` (critic C7):** references sweep + decl
+  index mapped to a WorkspaceEdit, -32602 on invalid targets/names,
+  `renameProvider` advertised. Lock `lsp_rename_smoke.sh`.
+- **MCP session completeness (critic B22, all three):**
+  `Last-Event-ID` SSE resumption (monotonic event ids + bounded
+  64-event per-session backlog, best-effort replay), JSON-RPC batch
+  arrays through `mcp_http_handler_session` (validated once, ordered
+  responses, 202 for pure notifications), and `resources/subscribe` +
+  `notifications/resources/updated` delivered over the session SSE
+  stream (the session transport advertises `resources.subscribe:true`
+  on initialize). Locks extended in `mcp_session_basic.nu` +
+  `mcp_http_session.nu`.
+- **packages/swarm-mcp 0.9.0:** `--mcp` now mints its self-signed TLS
+  certificate in pure NURL (`std/x509_gen`) — the `openssl` CLI
+  dependency is gone; minted pair verified with openssl and a live
+  curl MCP handshake.
+
+### Docs
+
+- `critic.md` synced to reality: A8/B8/B11/B22/C7/C9 checked off with
+  locks; B20 (HTTP/2 client interleave) and C6 (`nurlfmt --check` CI
+  gate) were found already shipped and are annotated as such; C8 notes
+  the live registry.
+
 ## [0.10.12] — 2026-07-03
 
 A patch release: **GPU-dependent packages are installable from release
