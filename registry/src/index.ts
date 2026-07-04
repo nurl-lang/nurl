@@ -210,14 +210,35 @@ const PAGE_STYLE =
   `.readme th{background:#f4f4f4}` +
   `.readme blockquote{border-left:3px solid #ddd;margin:1em 0;padding:.2rem 1rem;color:#555}` +
   `.readme h1,.readme h2{border-bottom:1px solid #eee;padding-bottom:.2em}` +
-  `.readme hr{border:0;border-top:1px solid #e5e5e5;margin:2rem 0}`;
+  `.readme hr{border:0;border-top:1px solid #e5e5e5;margin:2rem 0}` +
+  `.site-head{display:flex;align-items:center;gap:.6rem;text-decoration:none;color:#1a1a1a;` +
+    `margin:-1rem 0 1.8rem;padding-bottom:1rem;border-bottom:1px solid #e5e5e5}` +
+  `.site-head .badge{display:inline-flex;background:#0f1115;border-radius:9px;padding:5px;` +
+    `box-shadow:0 2px 10px rgba(20,184,166,.25)}` +
+  `.site-head .badge img{display:block}` +
+  `.site-head .wm{font-size:1.1rem;font-weight:600;letter-spacing:.01em}` +
+  `.site-head .wm b{color:#0b62d6}` +
+  `.site-head .spacer{flex:1}` +
+  `.site-head .home{font-size:.85rem;color:#666;font-weight:400}`;
+
+// Branded header injected on every registry page. The mark is served from
+// the main site (nurl-lang.org) and sits on a dark chip so the neon reads
+// against the light page.
+const SITE_HEAD =
+  `<a class="site-head" href="/">` +
+    `<span class="badge"><img src="https://nurl-lang.org/img/logo-sm.png" width="30" height="30" alt="NURL"></span>` +
+    `<span class="wm">NURL <b>registry</b></span>` +
+    `<span class="spacer"></span>` +
+    `<span class="home">nurl-lang.org →</span>` +
+  `</a>`;
 
 function htmlPage(title: string, bodyHtml: string, status = 200): Response {
   return new Response(
     `<!doctype html><meta charset=utf-8><title>${title}</title>` +
       `<meta name=viewport content="width=device-width,initial-scale=1">` +
+      `<link rel="icon" href="https://nurl-lang.org/favicon.svg">` +
       `<style>${PAGE_STYLE}</style>` +
-      `<body>${bodyHtml}</body>`,
+      `<body>${SITE_HEAD}${bodyHtml}</body>`,
     { status, headers: { "content-type": "text/html; charset=utf-8" } },
   );
 }
@@ -249,7 +270,7 @@ async function handleCatalog(url: URL, env: Env): Promise<Response> {
         (p.latest ? `<code>${esc(p.latest)}</code>` : `<em>(all versions yanked)</em>`) + `</li>`).join("")}</ul>`
     : `<p>No packages${q ? ` matching “${esc(q)}”` : " published"} yet.</p>`;
   return htmlPage("NURL registry",
-    `<h1>NURL package registry</h1>` +
+    `<h1>Packages</h1>` +
     `<form method=get><input name=q value="${esc(q)}" placeholder="search packages" ` +
       `style="padding:.4rem;width:60%"> <button>Search</button></form>` +
     `<p style="color:#666">${items.length} package(s) · <a href="/login">get a publish token →</a></p>` +
