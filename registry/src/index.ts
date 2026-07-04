@@ -264,8 +264,34 @@ async function handlePackageDetail(env: Env, name: string): Promise<Response> {
   }
   const newestFirst = [...idx.versions].reverse();
   const latest = newestFirst.find((v) => !v.yanked);
-  const versionsHtml = newestFirst.map((v) =>
-    `<li><code>${esc(v.version)}</code>${v.yanked ? ` <span style="color:#b00">(yanked)</span>` : ""}</li>`).join("");
+
+  // Verified authorship, straight from the D1 identity tables (not any
+  // self-declared manifest field): the package owner (first publisher) and
+  // the GitHub login that published each version.
+  const ownerRow = await env.REG_DB.prepare(
+    `SELECT u.login AS login
+       FROM packages p JOIN users u ON u.id = p.owner_user_id
+      WHERE p.name = ?`,
+  ).bind(name).first<{ login: string }>();
+  const pubRows = await env.REG_DB.prepare(
+    `SELECT v.version AS version, u.login AS login
+       FROM versions v JOIN users u ON u.id = v.published_by
+      WHERE v.name = ?`,
+  ).bind(name).all<{ version: string; login: string }>();
+  const pubBy = new Map((pubRows.results ?? []).map((r) => [r.version, r.login]));
+  const ghLink = (login: string) =>
+    `<a href="https://github.com/${esc(login)}">@${esc(login)}</a>`;
+  const ownerHtml = ownerRow
+    ? `<p style="color:#666">owner ${ghLink(ownerRow.login)}</p>`
+    : "";
+
+  const versionsHtml = newestFirst.map((v) => {
+    const pub = pubBy.get(v.version);
+    return `<li><code>${esc(v.version)}</code>` +
+      (v.yanked ? ` <span style="color:#b00">(yanked)</span>` : "") +
+      (pub ? ` <span style="color:#999">· ${ghLink(pub)}</span>` : "") +
+      `</li>`;
+  }).join("");
   const depsHtml = latest && latest.deps.length
     ? `<ul>${latest.deps.map((d) =>
         `<li><a href="/packages/${esc(d.name)}">${esc(d.name)}</a> <code>${esc(d.req)}</code></li>`).join("")}</ul>`
@@ -299,6 +325,7 @@ async function handlePackageDetail(env: Env, name: string): Promise<Response> {
 
   return htmlPage(name,
     `<p><a href="/">← all packages</a></p><h1>${esc(name)}</h1>` +
+    ownerHtml +
     `<h3>Install</h3><pre>[dependencies]\n${esc(name)} = "${esc(reqStr)}"</pre>` +
     `<h3>Versions</h3><ul>${versionsHtml}</ul>` +
     `<h3>Dependencies (latest)</h3>${depsHtml}` +
