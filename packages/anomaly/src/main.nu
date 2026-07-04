@@ -330,7 +330,7 @@ $ `src/service.nu`
         ^ 0
     } {}
     ? ( args_present p `version` ) {
-        ( pline `anomaly 0.2.0` )
+        ( pline `anomaly 0.3.0` )
         ( args_free p )
         ^ 0
     } {}
