@@ -21,6 +21,14 @@
 // the CSV with a self-trained stateless forest (the reference's separate
 // "static model" family doesn't exist here); passing model_name is a 400.
 //
+// When a web root is configured (anomaly_service_set_webroot), the router
+// also serves the self-contained dashboard pages from disk:
+//
+//   GET /  |  /modelmanager.html  |  /modeltrainer.html
+//       |  /visualize.html        |  /anomalies.html
+//
+// With no web root these routes 404 and the service is API-only.
+//
 // The router is exposed separately from the socket (anomaly_service_router
 // + router_handle) so every route is testable without networking.
 
@@ -28,6 +36,7 @@ $ `stdlib/core/vec.nu`
 $ `stdlib/core/string.nu`
 $ `stdlib/std/float.nu`
 $ `stdlib/std/fs.nu`
+$ `stdlib/std/path.nu`
 $ `stdlib/std/net.nu`
 $ `stdlib/std/bytes.nu`
 $ `stdlib/ext/json.nu`
@@ -47,6 +56,69 @@ $ `src/csvdata.nu`
 
 @ anomaly_service_set_root s root → v {
     = g_an_root root
+}
+
+// Directory holding the dashboard HTML (modelmanager.html, etc). Empty =
+// static serving disabled (API-only). Set once before serving.
+: ~ s g_an_webroot ``
+
+@ anomaly_service_set_webroot s root → v {
+    = g_an_webroot root
+}
+
+// ── Static dashboard serving ──────────────────────────────────────────
+
+// Content-Type for a filename by extension (only the handful the dashboard
+// actually ships; everything else is served as octet-stream).
+@ __an_content_type s name → s {
+    : i n ( nurl_str_len name )
+    ? ( __an_ends_with name `.html` ) { ^ `text/html; charset=utf-8` } {}
+    ? ( __an_ends_with name `.css` ) { ^ `text/css; charset=utf-8` } {}
+    ? ( __an_ends_with name `.js` ) { ^ `application/javascript; charset=utf-8` } {}
+    ? ( __an_ends_with name `.json` ) { ^ `application/json; charset=utf-8` } {}
+    ? ( __an_ends_with name `.svg` ) { ^ `image/svg+xml` } {}
+    ? ( __an_ends_with name `.ico` ) { ^ `image/x-icon` } {}
+    ^ `application/octet-stream`
+}
+
+@ __an_ends_with s hay s suf → b {
+    : i hn ( nurl_str_len hay )
+    : i sn ( nurl_str_len suf )
+    ? > sn hn { ^ F } {}
+    : ~ i k 0
+    ~ < k sn {
+        ? == ( nurl_str_get hay + - hn sn k ) ( nurl_str_get suf k ) {} { ^ F }
+        = k + k 1
+    }
+    ^ T
+}
+
+// Serve `<g_an_webroot>/<relfile>`. 404 when the webroot is unset or the
+// file is missing. `relfile` is a trusted constant (never request-derived),
+// so no path-traversal scrubbing is needed here.
+@ __an_serve_file s relfile → HttpResponse {
+    ? > ( nurl_str_len g_an_webroot ) 0 {} {
+        ^ ( __an_json_err 404 `Dashboard is not available (no web root configured)` )
+    }
+    : String path ( path_join g_an_webroot relfile )
+    : !String IoErr fr ( read_file ( string_data path ) )
+    ( string_free path )
+    ?? fr {
+        T text → {
+            : HttpResponse r ( response_new 200 )
+            ( response_set_header r `Content-Type` ( __an_content_type relfile ) )
+            ( response_set_body_str r ( string_data text ) )
+            ( string_free text )
+            ^ r
+        }
+        F _ → {
+            : String msg ( string_from `File not found: ` )
+            ( string_push_str msg relfile )
+            : HttpResponse rr ( __an_json_err 404 ( string_data msg ) )
+            ( string_free msg )
+            ^ rr
+        }
+    }
 }
 
 // ── Small helpers ─────────────────────────────────────────────────────
@@ -723,6 +795,12 @@ $ `src/csvdata.nu`
 
 @ anomaly_service_router → Router {
     : Router r ( router_new )
+    // Dashboard pages (served from g_an_webroot; 404 when unset).
+    ( router_get r `/` \ HttpRequest req Params p → HttpResponse { ^ ( __an_serve_file `modelmanager.html` ) } )
+    ( router_get r `/modelmanager.html` \ HttpRequest req Params p → HttpResponse { ^ ( __an_serve_file `modelmanager.html` ) } )
+    ( router_get r `/anomalies.html` \ HttpRequest req Params p → HttpResponse { ^ ( __an_serve_file `anomalies.html` ) } )
+    ( router_get r `/modeltrainer.html` \ HttpRequest req Params p → HttpResponse { ^ ( __an_serve_file `modeltrainer.html` ) } )
+    ( router_get r `/visualize.html` \ HttpRequest req Params p → HttpResponse { ^ ( __an_serve_file `visualize.html` ) } )
     ( router_post r `/detect/:model` \ HttpRequest req Params p → HttpResponse { ^ ( __an_h_detect req p T ) } )
     ( router_post r `/detect_only/:model` \ HttpRequest req Params p → HttpResponse { ^ ( __an_h_detect req p F ) } )
     ( router_post r `/force_train/:model` \ HttpRequest req Params p → HttpResponse { ^ ( __an_h_force_train req p ) } )

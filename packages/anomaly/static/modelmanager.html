@@ -1,0 +1,387 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Model Manager · anomaly</title>
+<style>
+  :root {
+    --bg: #0e1116; --panel: #161b22; --panel2: #1c2230; --border: #2a3242;
+    --fg: #e6edf3; --muted: #8b98a9; --accent: #4c9aff; --accent2: #6ee7b7;
+    --danger: #ff6b6b; --warn: #f6c344; --ok: #56d364; --radius: 10px;
+    --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+    --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font-family: var(--sans);
+         font-size: 14px; line-height: 1.5; }
+  a { color: var(--accent); text-decoration: none; }
+  header { display: flex; align-items: center; gap: 20px; padding: 14px 24px;
+           background: var(--panel); border-bottom: 1px solid var(--border);
+           position: sticky; top: 0; z-index: 10; }
+  header h1 { font-size: 16px; margin: 0; font-weight: 600; letter-spacing: .2px; }
+  header .brand { color: var(--accent2); font-family: var(--mono); }
+  nav { display: flex; gap: 4px; margin-left: auto; }
+  nav a { padding: 6px 12px; border-radius: 8px; color: var(--muted); font-weight: 500; }
+  nav a:hover { background: var(--panel2); color: var(--fg); }
+  nav a.active { background: var(--accent); color: #06122b; }
+  main { max-width: 1200px; margin: 0 auto; padding: 24px; }
+  .toolbar { display: flex; align-items: center; gap: 12px; margin-bottom: 18px; flex-wrap: wrap; }
+  .toolbar .spacer { flex: 1; }
+  .stat { display: flex; gap: 18px; color: var(--muted); font-size: 13px; }
+  .stat b { color: var(--fg); font-variant-numeric: tabular-nums; }
+  button, .btn { font-family: var(--sans); font-size: 13px; border: 1px solid var(--border);
+          background: var(--panel2); color: var(--fg); padding: 6px 12px; border-radius: 8px;
+          cursor: pointer; transition: .12s; font-weight: 500; }
+  button:hover { border-color: var(--accent); }
+  button:disabled { opacity: .5; cursor: default; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #06122b; }
+  button.danger { color: var(--danger); }
+  button.danger:hover { border-color: var(--danger); background: rgba(255,107,107,.1); }
+  button.small { padding: 3px 8px; font-size: 12px; }
+  input[type=text], input[type=number], select {
+    font-family: var(--mono); font-size: 13px; background: var(--bg); color: var(--fg);
+    border: 1px solid var(--border); border-radius: 8px; padding: 6px 10px; }
+  input:focus, select:focus { outline: none; border-color: var(--accent); }
+  table { width: 100%; border-collapse: collapse; background: var(--panel);
+          border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+  thead th { text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: .6px;
+             color: var(--muted); padding: 10px 14px; border-bottom: 1px solid var(--border);
+             font-weight: 600; background: var(--panel2); }
+  tbody td { padding: 11px 14px; border-bottom: 1px solid var(--border);
+             font-variant-numeric: tabular-nums; }
+  tbody tr:last-child td { border-bottom: none; }
+  tbody tr:hover { background: var(--panel2); }
+  tbody tr.selected { background: rgba(76,154,255,.08); }
+  .name { font-family: var(--mono); font-weight: 600; color: var(--fg); cursor: pointer; }
+  .name:hover { color: var(--accent); }
+  .pill { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 11px;
+          font-weight: 600; border: 1px solid var(--border); }
+  .pill.trained { color: var(--ok); border-color: rgba(86,211,100,.4); background: rgba(86,211,100,.08); }
+  .pill.warming { color: var(--warn); border-color: rgba(246,195,68,.4); background: rgba(246,195,68,.08); }
+  .actions { display: flex; gap: 6px; justify-content: flex-end; }
+  .muted { color: var(--muted); }
+  .empty { text-align: center; padding: 60px 20px; color: var(--muted); }
+  .empty svg { opacity: .3; }
+  /* detail drawer */
+  .drawer { position: fixed; top: 0; right: 0; height: 100vh; width: min(560px, 92vw);
+            background: var(--panel); border-left: 1px solid var(--border); z-index: 40;
+            transform: translateX(100%); transition: transform .22s ease; overflow-y: auto;
+            box-shadow: -20px 0 40px rgba(0,0,0,.4); }
+  .drawer.open { transform: translateX(0); }
+  .drawer-head { display: flex; align-items: center; gap: 12px; padding: 16px 20px;
+                 border-bottom: 1px solid var(--border); position: sticky; top: 0;
+                 background: var(--panel); }
+  .drawer-head h2 { margin: 0; font-size: 15px; font-family: var(--mono); }
+  .drawer-body { padding: 20px; }
+  .drawer-close { margin-left: auto; }
+  .section { margin-bottom: 22px; }
+  .section h3 { font-size: 11px; text-transform: uppercase; letter-spacing: .6px;
+                color: var(--muted); margin: 0 0 10px; font-weight: 600; }
+  .kv { display: grid; grid-template-columns: 130px 1fr; gap: 4px 12px; font-size: 13px; }
+  .kv dt { color: var(--muted); }
+  .kv dd { margin: 0; font-family: var(--mono); word-break: break-word; }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .chip { font-family: var(--mono); font-size: 12px; background: var(--panel2);
+          border: 1px solid var(--border); border-radius: 6px; padding: 2px 8px; }
+  .chip .t { color: var(--accent2); }
+  .vtable { width: 100%; font-size: 12px; }
+  .vtable th, .vtable td { padding: 5px 8px; text-align: right; }
+  .vtable th:first-child, .vtable td:first-child { text-align: left; font-family: var(--mono); }
+  .sched-form { display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap; }
+  .field { display: flex; flex-direction: column; gap: 4px; }
+  .field label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .4px; }
+  .field input { width: 110px; }
+  .backdrop { position: fixed; inset: 0; background: rgba(0,0,0,.5); z-index: 30;
+              opacity: 0; pointer-events: none; transition: opacity .2s; }
+  .backdrop.open { opacity: 1; pointer-events: auto; }
+  /* toasts */
+  #toasts { position: fixed; bottom: 20px; right: 20px; z-index: 100; display: flex;
+            flex-direction: column; gap: 10px; }
+  .toast { background: var(--panel2); border: 1px solid var(--border); border-left: 3px solid var(--accent);
+           padding: 12px 16px; border-radius: 8px; min-width: 240px; max-width: 380px;
+           box-shadow: 0 8px 24px rgba(0,0,0,.4); animation: slidein .2s; font-size: 13px; }
+  .toast.ok { border-left-color: var(--ok); }
+  .toast.err { border-left-color: var(--danger); }
+  .toast .th { font-weight: 600; margin-bottom: 2px; }
+  @keyframes slidein { from { transform: translateX(30px); opacity: 0; } }
+  .spin { display: inline-block; width: 13px; height: 13px; border: 2px solid var(--border);
+          border-top-color: var(--accent); border-radius: 50%; animation: rot .7s linear infinite;
+          vertical-align: -2px; }
+  @keyframes rot { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+<header>
+  <h1><span class="brand">anomaly</span> · Model Manager</h1>
+  <nav>
+    <a href="/modelmanager.html" class="active">Models</a>
+    <a href="/modeltrainer.html">Trainer</a>
+    <a href="/visualize.html">Visualize</a>
+    <a href="/anomalies.html">Anomalies</a>
+  </nav>
+</header>
+
+<main>
+  <div class="toolbar">
+    <button class="primary" onclick="load()">↻ Refresh</button>
+    <label class="muted" style="display:flex;align-items:center;gap:6px;font-size:13px;">
+      <input type="checkbox" id="auto"> auto (5s)
+    </label>
+    <div class="spacer"></div>
+    <div class="stat">
+      <span><b id="statCount">0</b> models</span>
+      <span>min pts <b id="statMin">–</b></span>
+      <span>max pts <b id="statMax">–</b></span>
+    </div>
+  </div>
+
+  <table id="tbl">
+    <thead>
+      <tr>
+        <th>Model</th>
+        <th>Status</th>
+        <th style="text-align:right">Points seen</th>
+        <th>Created</th>
+        <th>Last trained</th>
+        <th>Versions</th>
+        <th style="text-align:right">Actions</th>
+      </tr>
+    </thead>
+    <tbody id="rows"></tbody>
+  </table>
+  <div id="empty" class="empty" style="display:none">
+    <div style="font-size:15px;margin-bottom:6px">No models yet</div>
+    <div>Feed data via the <a href="/modeltrainer.html">Trainer</a> or <code>POST /detect/&lt;model&gt;</code>.</div>
+  </div>
+</main>
+
+<div class="backdrop" id="backdrop" onclick="closeDrawer()"></div>
+<div class="drawer" id="drawer">
+  <div class="drawer-head">
+    <h2 id="dTitle">model</h2>
+    <button class="small drawer-close" onclick="closeDrawer()">✕ Close</button>
+  </div>
+  <div class="drawer-body" id="dBody"></div>
+</div>
+
+<div id="toasts"></div>
+
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+let MODELS = {};      // name -> meta
+let SELECTED = null;
+let autoTimer = null;
+
+function toast(msg, kind, title) {
+  const t = document.createElement("div");
+  t.className = "toast " + (kind || "");
+  t.innerHTML = (title ? '<div class="th">' + esc(title) + "</div>" : "") + esc(msg);
+  $("toasts").appendChild(t);
+  setTimeout(() => { t.style.opacity = "0"; t.style.transition = "opacity .3s";
+                     setTimeout(() => t.remove(), 300); }, kind === "err" ? 5000 : 2800);
+}
+function esc(s) {
+  return String(s).replace(/[&<>"]/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;" }[c]));
+}
+async function api(method, url, body) {
+  const opt = { method, headers: {} };
+  if (body !== undefined) { opt.headers["Content-Type"] = "application/json"; opt.body = JSON.stringify(body); }
+  const r = await fetch(url, opt);
+  let data = null;
+  try { data = await r.json(); } catch (e) {}
+  if (!r.ok) throw new Error((data && data.message) || (r.status + " " + r.statusText));
+  return data;
+}
+
+// `last_trained_at` is a point counter (n_seen at the last retrain), not a
+// clock time — render it as a point mark.
+function fmtTrained(n) {
+  if (!n || n <= 0) return '<span class="muted">never</span>';
+  return '@ ' + Number(n).toLocaleString() + ' pts';
+}
+function versionSummary(meta) {
+  const v = meta.versions || {};
+  const names = Object.keys(v);
+  const on = names.filter(n => v[n].enabled).length;
+  return names.length ? (on + "/" + names.length + " on") : "–";
+}
+function isTrained(meta) {
+  return (meta.last_trained_at || 0) > 0;
+}
+
+async function load() {
+  try {
+    const d = await api("GET", "/models/dynamic");
+    MODELS = d.models || {};
+    $("statMin").textContent = d.min_data_points ?? "–";
+    $("statMax").textContent = (d.max_data_points ?? "–").toLocaleString?.() ?? d.max_data_points;
+    render();
+    if (SELECTED && MODELS[SELECTED]) renderDrawer(SELECTED);
+  } catch (e) {
+    toast(e.message, "err", "Load failed");
+  }
+}
+
+function render() {
+  const names = Object.keys(MODELS).sort();
+  $("statCount").textContent = names.length;
+  const rows = $("rows");
+  rows.innerHTML = "";
+  $("empty").style.display = names.length ? "none" : "block";
+  $("tbl").style.display = names.length ? "" : "none";
+  for (const name of names) {
+    const m = MODELS[name];
+    const tr = document.createElement("tr");
+    if (name === SELECTED) tr.className = "selected";
+    const trained = isTrained(m);
+    tr.innerHTML =
+      '<td><span class="name" data-m="' + esc(name) + '">' + esc(name) + "</span></td>" +
+      '<td><span class="pill ' + (trained ? "trained" : "warming") + '">' +
+        (trained ? "trained" : "warming") + "</span></td>" +
+      '<td style="text-align:right">' + (m.n_points_seen ?? 0).toLocaleString() + "</td>" +
+      "<td>" + esc(m.created || "–") + "</td>" +
+      "<td>" + fmtTrained(m.last_trained_at) + "</td>" +
+      "<td>" + versionSummary(m) + "</td>" +
+      '<td><div class="actions">' +
+        '<button class="small" data-act="train" data-m="' + esc(name) + '">Train</button>' +
+        '<button class="small" data-act="finetune" data-m="' + esc(name) + '">Finetune</button>' +
+        '<button class="small" data-act="reset" data-m="' + esc(name) + '">Reset</button>' +
+        '<button class="small danger" data-act="delete" data-m="' + esc(name) + '">Delete</button>' +
+      "</div></td>";
+    rows.appendChild(tr);
+  }
+  rows.querySelectorAll(".name").forEach(el =>
+    el.onclick = () => openDrawer(el.dataset.m));
+  rows.querySelectorAll("button[data-act]").forEach(el =>
+    el.onclick = () => doAction(el.dataset.act, el.dataset.m, el));
+}
+
+async function doAction(act, name, btn) {
+  if (act === "delete" && !confirm('Delete model "' + name + '"? This removes all data and forests.')) return;
+  if (act === "reset" && !confirm('Reset model "' + name + '"? Drops data and forests, keeps the name.')) return;
+  const orig = btn ? btn.textContent : "";
+  if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spin"></span>'; }
+  try {
+    let d;
+    if (act === "train")        d = await api("POST", "/force_train/" + enc(name));
+    else if (act === "reset")   d = await api("POST", "/models/dynamic/" + enc(name) + "/reset");
+    else if (act === "delete")  d = await api("DELETE", "/delete_model/" + enc(name));
+    else if (act === "finetune")d = await api("POST", "/api/dynamic/" + enc(name) + "/finetune");
+    toast((d && d.message) || "OK", "ok", act);
+    if (act === "delete" && SELECTED === name) closeDrawer();
+    await load();
+  } catch (e) {
+    toast(e.message, "err", act + " failed");
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = orig; }
+  }
+}
+const enc = encodeURIComponent;
+
+// ── Detail drawer ──────────────────────────────────────────────
+async function openDrawer(name) {
+  SELECTED = name;
+  $("drawer").classList.add("open");
+  $("backdrop").classList.add("open");
+  render();
+  try {
+    const meta = await api("GET", "/models/dynamic/" + enc(name) + "/metadata");
+    MODELS[name] = meta;
+    renderDrawer(name);
+  } catch (e) {
+    $("dBody").innerHTML = '<p class="muted">' + esc(e.message) + "</p>";
+  }
+}
+function closeDrawer() {
+  SELECTED = null;
+  $("drawer").classList.remove("open");
+  $("backdrop").classList.remove("open");
+  render();
+}
+function renderDrawer(name) {
+  const m = MODELS[name];
+  $("dTitle").textContent = name;
+  const cols = m.column_types || {};
+  const feats = m.feature_names || [];
+  const sched = m.schedule || { below_max: 0, at_max: 0 };
+  const vers = m.versions || {};
+
+  let colChips = Object.keys(cols).map(c =>
+    '<span class="chip">' + esc(c) + ' <span class="t">' + esc(cols[c]) + "</span></span>").join("");
+  if (!colChips) colChips = '<span class="muted">none</span>';
+
+  let vrows = Object.keys(vers).map(vn => {
+    const v = vers[vn];
+    return "<tr><td>" + esc(vn) + "</td><td>" + (v.enabled ? "✓" : "–") + "</td>" +
+      "<td>" + (v.window_minutes || 0) + "m/" + (v.window_points || 0) + "p</td>" +
+      "<td>" + (v.n_estimators || 0) + "×" + (v.max_samples || 0) + "</td>" +
+      "<td>" + fmtNum(v.decision_margin) + "</td></tr>";
+  }).join("");
+  if (!vrows) vrows = '<tr><td colspan="5" class="muted">no versions</td></tr>';
+
+  $("dBody").innerHTML =
+    '<div class="section"><h3>Overview</h3><dl class="kv">' +
+      "<dt>Status</dt><dd>" + (isTrained(m) ? "trained" : "warming up") + "</dd>" +
+      "<dt>Points seen</dt><dd>" + (m.n_points_seen ?? 0).toLocaleString() + "</dd>" +
+      "<dt>Created</dt><dd>" + esc(m.created || "–") + "</dd>" +
+      "<dt>Last trained</dt><dd>" + fmtTrained(m.last_trained_at) + "</dd>" +
+      "<dt>Features</dt><dd>" + (feats.length ? esc(feats.join(", ")) : '<span class="muted">–</span>') + "</dd>" +
+    "</dl></div>" +
+
+    '<div class="section"><h3>Columns</h3><div class="chips">' + colChips + "</div></div>" +
+
+    '<div class="section"><h3>Versions</h3><table class="vtable">' +
+      "<thead><tr><th>name</th><th>on</th><th>window</th><th>trees</th><th>margin</th></tr></thead>" +
+      "<tbody>" + vrows + "</tbody></table></div>" +
+
+    '<div class="section"><h3>Retrain schedule</h3>' +
+      '<div class="sched-form">' +
+        '<div class="field"><label>below max (every N pts)</label>' +
+          '<input type="number" id="schedBelow" min="0" value="' + (sched.below_max || 0) + '"></div>' +
+        '<div class="field"><label>at max (every N pts)</label>' +
+          '<input type="number" id="schedAt" min="0" value="' + (sched.at_max || 0) + '"></div>' +
+        '<button class="primary" onclick="saveSchedule(\'' + esc(name) + '\')">Save</button>' +
+      "</div></div>" +
+
+    '<div class="section"><h3>Actions</h3><div class="actions" style="justify-content:flex-start">' +
+      '<button onclick="doAction(\'train\',\'' + esc(name) + '\',this)">Force train</button>' +
+      '<button onclick="doAction(\'finetune\',\'' + esc(name) + '\',this)">Finetune margins</button>' +
+      '<a class="btn" href="/visualize.html?model=' + enc(name) + '">Visualize →</a>' +
+      '<a class="btn" href="/anomalies.html?model=' + enc(name) + '">Anomalies →</a>' +
+    "</div></div>";
+}
+function fmtNum(x) {
+  if (x === null || x === undefined) return "–";
+  if (typeof x !== "number") return esc(x);
+  return Math.abs(x) < 1e-4 && x !== 0 ? x.toExponential(2) : x.toFixed(4).replace(/\.?0+$/, "");
+}
+
+async function saveSchedule(name) {
+  const below = parseInt($("schedBelow").value, 10) || 0;
+  const at = parseInt($("schedAt").value, 10) || 0;
+  try {
+    const d = await api("PUT", "/api/dynamic/" + enc(name) + "/schedule", {
+      below_max_retrain_frequency: below,
+      at_max_retrain_frequency: at,
+    });
+    toast((d && d.message) || "Schedule saved", "ok", "schedule");
+    await load();
+  } catch (e) {
+    toast(e.message, "err", "Schedule failed");
+  }
+}
+
+$("auto").onchange = (e) => {
+  if (e.target.checked) autoTimer = setInterval(load, 5000);
+  else { clearInterval(autoTimer); autoTimer = null; }
+};
+document.addEventListener("keydown", e => { if (e.key === "Escape") closeDrawer(); });
+
+// deep link ?model=NAME opens the drawer
+const qp = new URLSearchParams(location.search);
+load().then(() => { const m = qp.get("model"); if (m && MODELS[m]) openDrawer(m); });
+</script>
+</body>
+</html>

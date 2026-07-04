@@ -99,7 +99,8 @@ anomaly train  <model>                 # force a retrain now
 anomaly reset  <model>                 # drop data+forests, keep the name
 anomaly rm     <model>                 # delete the model entirely
 anomaly ls / info <model>              # list models / dump metadata
-anomaly serve  [--addr HOST:PORT]      # run the HTTP/JSON service
+anomaly serve  [--addr HOST:PORT]      # run the HTTP/JSON service + dashboard
+               [--webroot DIR]
 ```
 
 The store defaults to `$ANOMALY_HOME`, else `~/.anomaly`; override per
@@ -125,6 +126,24 @@ command with `--store DIR`.
 
 Model names must match `^[a-zA-Z0-9_]+$`. The router is a plain function
 over `HttpRequest` — the test suite drives every route without a socket.
+
+## Dashboard
+
+`anomaly serve` also serves a small self-contained web dashboard (no CDN, no
+build step — plain HTML/CSS/JS that talks to the routes above):
+
+| Page | What it does |
+| --- | --- |
+| `/` · `/modelmanager.html` | list models, train / finetune / reset / delete, edit retrain schedule, inspect metadata |
+| `/modeltrainer.html` | feed points (`/detect`) one at a time or in bulk (paste JSON lines / generate synthetic), force-train |
+| `/visualize.html` | plot any numeric feature of a model's stored points over time |
+| `/anomalies.html` | re-score stored points via `/detect_only` and highlight the anomalies (chart + table with the flagging versions) |
+
+The HTML lives in `static/` next to the package. `serve` locates it via, in
+order: `--webroot DIR`, `$ANOMALY_WEBROOT`, `<exe-dir>/static`,
+`<exe-dir>/../share/anomaly/static`, then `./static`. If none exists the
+server runs API-only (dashboard routes return 404) and logs which web root it
+picked on startup.
 
 ## Library
 

@@ -8,7 +8,8 @@
 //   anomaly rm     <model>                 delete the model entirely
 //   anomaly ls                             list models in the store
 //   anomaly info   <model>                 dump model metadata (pretty JSON)
-//   anomaly serve  [--addr HOST:PORT]      run the HTTP/JSON service
+//   anomaly serve  [--addr HOST:PORT]      run the HTTP/JSON service + dashboard
+//                  [--webroot DIR]         (dashboard HTML dir; auto-located)
 //
 // Values in key=val are auto-typed: numbers are numeric features, ISO-8601
 // strings are timestamps, anything else is categorical (one-hot). Verdicts
@@ -46,6 +47,43 @@ $ `src/service.nu`
 @ pline s x → v {
     ( nurl_print x )
     ( nurl_print `\n` )
+}
+
+// Resolve the directory that holds the dashboard HTML for `serve`. Order:
+//   --webroot DIR  →  $ANOMALY_WEBROOT  →  <exe-dir>/static  →
+//   <exe-dir>/../share/anomaly/static  →  ./static.
+// Returns the first candidate that exists; empty String disables the
+// dashboard (API-only serving still works).
+@ __cli_webroot ArgParser p → String {
+    : ?String ov ( args_value p `webroot` )
+    ?? ov { T v → { ^ v } F junk → { ( string_free junk ) } }
+    : ?String ev ( env_get `ANOMALY_WEBROOT` )
+    ?? ev {
+        T v → {
+            ? ( file_exists ( string_data v ) ) { ^ v } { ( string_free v ) }
+        }
+        F junk → { ( string_free junk ) }
+    }
+    // Candidates derived from the executable location.
+    : !String IoErr exe ( fs_readlink `/proc/self/exe` )
+    ?? exe {
+        T ep → {
+            : String bindir ( path_dirname ( string_data ep ) )
+            ( string_free ep )
+            : String c1 ( path_join ( string_data bindir ) `static` )
+            ? ( file_exists ( string_data c1 ) ) {
+                ( string_free bindir )
+                ^ c1
+            } { ( string_free c1 ) }
+            : String share ( path_join ( string_data bindir ) `../share/anomaly/static` )
+            ( string_free bindir )
+            ? ( file_exists ( string_data share ) ) { ^ share } { ( string_free share ) }
+        }
+        F _ → {}
+    }
+    // Last resort: ./static relative to the current directory.
+    ? ( file_exists `static` ) { ^ ( string_from `static` ) } {}
+    ^ ( string_new )
 }
 
 // key=val positionals (from index `from`) → a JSON record. Numeric-looking
@@ -273,6 +311,7 @@ $ `src/service.nu`
     ( args_opt p `file` 102 `FILE` `for batch: read CSV from FILE instead of stdin` )
     ( args_opt p `margin` 109 `M` `for batch: decision margin (default 0 = predict==-1)` )
     ( args_opt p `addr` 97 `HOST:PORT` `for serve: bind address (default 127.0.0.1:8811)` )
+    ( args_opt p `webroot` 119 `DIR` `for serve: dashboard HTML dir (default: <exe>/static, $ANOMALY_WEBROOT)` )
     ( args_flag p `header` 72 `for batch: skip the first CSV line (header)` )
     ( args_flag p `help` 104 `show this help` )
     ( args_flag p `version` 0 `print the version` )
@@ -285,7 +324,7 @@ $ `src/service.nu`
     ? ( args_present p `help` ) {
         : String u ( args_usage p )
         ( nurl_print ( string_data u ) )
-        ( nurl_print `\ncommands:\n  detect <model> key=val ...   ingest one point, print the verdict\n  score  <model> key=val ...   score only (never ingests or retrains)\n  batch  [-f FILE] [-H]        score a CSV, one "index<TAB>score" per row\n  train  <model>               force a retrain now\n  reset  <model>               drop data + forests, keep the name\n  rm     <model>               delete the model entirely\n  ls                           list models\n  info   <model>               print model metadata\n  serve  [--addr HOST:PORT]    run the HTTP/JSON service\n` )
+        ( nurl_print `\ncommands:\n  detect <model> key=val ...   ingest one point, print the verdict\n  score  <model> key=val ...   score only (never ingests or retrains)\n  batch  [-f FILE] [-H]        score a CSV, one "index<TAB>score" per row\n  train  <model>               force a retrain now\n  reset  <model>               drop data + forests, keep the name\n  rm     <model>               delete the model entirely\n  ls                           list models\n  info   <model>               print model metadata\n  serve  [--addr H:P] [--webroot DIR]  HTTP/JSON service + web dashboard\n` )
         ( string_free u )
         ( args_free p )
         ^ 0
@@ -354,7 +393,16 @@ $ `src/service.nu`
         }
         : String root ( __cli_store_root p )
         ( anomaly_service_set_root ( string_data root ) )
+        : String webroot ( __cli_webroot p )
+        ( anomaly_service_set_webroot ( string_data webroot ) )
+        ? > ( string_len webroot ) 0 {
+            ( nurl_eprint `anomaly: dashboard web root: ` )
+            ( nurl_eprintln ( string_data webroot ) )
+        } {
+            ( nurl_eprintln `anomaly: no dashboard web root found (API-only)` )
+        }
         = rc ( anomaly_serve ( string_data host ) port )
+        ( string_free webroot )
         ( string_free root )
         ( string_free host )
         ( string_free addr )

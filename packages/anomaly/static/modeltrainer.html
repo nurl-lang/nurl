@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Trainer · anomaly</title>
+<style>
+  :root {
+    --bg: #0e1116; --panel: #161b22; --panel2: #1c2230; --border: #2a3242;
+    --fg: #e6edf3; --muted: #8b98a9; --accent: #4c9aff; --accent2: #6ee7b7;
+    --danger: #ff6b6b; --warn: #f6c344; --ok: #56d364; --radius: 10px;
+    --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+    --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font-family: var(--sans); font-size: 14px; line-height: 1.5; }
+  a { color: var(--accent); text-decoration: none; }
+  header { display: flex; align-items: center; gap: 20px; padding: 14px 24px; background: var(--panel);
+           border-bottom: 1px solid var(--border); position: sticky; top: 0; z-index: 10; }
+  header h1 { font-size: 16px; margin: 0; font-weight: 600; }
+  header .brand { color: var(--accent2); font-family: var(--mono); }
+  nav { display: flex; gap: 4px; margin-left: auto; }
+  nav a { padding: 6px 12px; border-radius: 8px; color: var(--muted); font-weight: 500; }
+  nav a:hover { background: var(--panel2); color: var(--fg); }
+  nav a.active { background: var(--accent); color: #06122b; }
+  main { max-width: 1100px; margin: 0 auto; padding: 24px; display: grid;
+         grid-template-columns: 1fr 1fr; gap: 20px; }
+  @media (max-width: 860px) { main { grid-template-columns: 1fr; } }
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 18px 20px; }
+  .card h2 { font-size: 14px; margin: 0 0 14px; font-weight: 600; }
+  .card h2 .sub { color: var(--muted); font-weight: 400; font-size: 12px; margin-left: 8px; }
+  label.fl { display: block; font-size: 11px; color: var(--muted); text-transform: uppercase;
+             letter-spacing: .4px; margin: 12px 0 5px; }
+  input[type=text], input[type=number], select, textarea {
+    font-family: var(--mono); font-size: 13px; background: var(--bg); color: var(--fg);
+    border: 1px solid var(--border); border-radius: 8px; padding: 7px 10px; width: 100%; }
+  input:focus, select:focus, textarea:focus { outline: none; border-color: var(--accent); }
+  textarea { resize: vertical; min-height: 120px; line-height: 1.45; }
+  button { font-family: var(--sans); font-size: 13px; border: 1px solid var(--border);
+           background: var(--panel2); color: var(--fg); padding: 8px 14px; border-radius: 8px;
+           cursor: pointer; transition: .12s; font-weight: 500; }
+  button:hover { border-color: var(--accent); }
+  button:disabled { opacity: .5; cursor: default; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #06122b; }
+  button.small { padding: 4px 9px; font-size: 12px; }
+  .row { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
+  .row input.k { flex: 0 0 40%; }
+  .row input.v { flex: 1; }
+  .btns { display: flex; gap: 8px; margin-top: 16px; flex-wrap: wrap; }
+  .muted { color: var(--muted); }
+  .verdict { margin-top: 16px; border-radius: 8px; padding: 14px; border: 1px solid var(--border);
+             background: var(--panel2); font-size: 13px; }
+  .verdict.anom { border-color: var(--danger); background: rgba(255,107,107,.08); }
+  .verdict.ok { border-color: var(--ok); background: rgba(86,211,100,.06); }
+  .verdict.warm { border-color: var(--warn); background: rgba(246,195,68,.06); }
+  .verdict .big { font-size: 15px; font-weight: 700; margin-bottom: 6px; }
+  .verdict .score { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+  .vgrid { display: grid; grid-template-columns: 1fr auto auto; gap: 3px 14px; margin-top: 10px;
+           font-family: var(--mono); font-size: 12px; }
+  .vgrid .h { color: var(--muted); font-size: 10px; text-transform: uppercase; }
+  .flag { color: var(--danger); font-weight: 700; }
+  .flag.n { color: var(--ok); }
+  pre.log { background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 12px;
+            font-family: var(--mono); font-size: 12px; max-height: 240px; overflow: auto; margin: 12px 0 0;
+            white-space: pre-wrap; word-break: break-word; }
+  .bar { height: 6px; background: var(--panel2); border-radius: 3px; overflow: hidden; margin-top: 10px; }
+  .bar > i { display: block; height: 100%; background: var(--accent); width: 0; transition: width .2s; }
+  #toasts { position: fixed; bottom: 20px; right: 20px; z-index: 100; display: flex; flex-direction: column; gap: 10px; }
+  .toast { background: var(--panel2); border: 1px solid var(--border); border-left: 3px solid var(--accent);
+           padding: 12px 16px; border-radius: 8px; min-width: 220px; box-shadow: 0 8px 24px rgba(0,0,0,.4); font-size: 13px; }
+  .toast.ok { border-left-color: var(--ok); } .toast.err { border-left-color: var(--danger); }
+  .toast .th { font-weight: 600; margin-bottom: 2px; }
+  .spin { display: inline-block; width: 13px; height: 13px; border: 2px solid var(--border);
+          border-top-color: var(--accent); border-radius: 50%; animation: rot .7s linear infinite; vertical-align: -2px; }
+  @keyframes rot { to { transform: rotate(360deg); } }
+  .hint { font-size: 12px; color: var(--muted); margin-top: 6px; }
+</style>
+</head>
+<body>
+<header>
+  <h1><span class="brand">anomaly</span> · Trainer</h1>
+  <nav>
+    <a href="/modelmanager.html">Models</a>
+    <a href="/modeltrainer.html" class="active">Trainer</a>
+    <a href="/visualize.html">Visualize</a>
+    <a href="/anomalies.html">Anomalies</a>
+  </nav>
+</header>
+
+<main>
+  <!-- Single point -->
+  <div class="card">
+    <h2>Ingest a point <span class="sub">POST /detect · /detect_only</span></h2>
+    <label class="fl">Model name</label>
+    <input type="text" id="model" list="models" placeholder="e.g. sensor_hall" autocomplete="off">
+    <datalist id="models"></datalist>
+    <div class="hint">A model is created on first ingest. Names: letters, digits, underscore.</div>
+
+    <label class="fl">Features (key = value)</label>
+    <div id="fields"></div>
+    <button class="small" onclick="addField()">+ add feature</button>
+
+    <div class="btns">
+      <button class="primary" id="btnIngest" onclick="send(true)">Ingest → detect</button>
+      <button id="btnScore" onclick="send(false)">Score only</button>
+      <button onclick="forceTrain()">Force train</button>
+    </div>
+    <div id="verdict"></div>
+  </div>
+
+  <!-- Bulk feed -->
+  <div class="card">
+    <h2>Bulk feed <span class="sub">one JSON object per line → POST /detect</span></h2>
+    <label class="fl">Target model</label>
+    <input type="text" id="bulkModel" list="models" placeholder="model name" autocomplete="off">
+    <label class="fl">JSON lines</label>
+    <textarea id="bulkData" placeholder='{"temp": 21.5, "load": 3}
+{"temp": 22.0, "load": 4}
+{"temp": 80.0, "load": 9}'></textarea>
+    <div class="btns">
+      <button class="primary" id="btnBulk" onclick="bulkFeed()">Feed all</button>
+      <button onclick="genSynthetic()">Generate 80 synthetic</button>
+      <span class="muted" id="bulkCount" style="align-self:center"></span>
+    </div>
+    <div class="bar"><i id="bulkBar"></i></div>
+    <pre class="log" id="bulkLog" style="display:none"></pre>
+  </div>
+</main>
+
+<div id="toasts"></div>
+
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const enc = encodeURIComponent;
+
+function toast(msg, kind, title) {
+  const t = document.createElement("div");
+  t.className = "toast " + (kind || "");
+  t.innerHTML = (title ? '<div class="th">' + esc(title) + "</div>" : "") + esc(msg);
+  $("toasts").appendChild(t);
+  setTimeout(() => { t.style.opacity = "0"; t.style.transition = "opacity .3s";
+                     setTimeout(() => t.remove(), 300); }, kind === "err" ? 5000 : 2600);
+}
+function esc(s) { return String(s).replace(/[&<>"]/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;" }[c])); }
+
+async function api(method, url, body) {
+  const opt = { method, headers: {} };
+  if (body !== undefined) { opt.headers["Content-Type"] = "application/json"; opt.body = JSON.stringify(body); }
+  const r = await fetch(url, opt);
+  let data = null; try { data = await r.json(); } catch (e) {}
+  return { ok: r.ok, status: r.status, data };
+}
+
+function addField(k, v) {
+  const div = document.createElement("div");
+  div.className = "row";
+  div.innerHTML =
+    '<input class="k" type="text" placeholder="key" value="' + esc(k || "") + '">' +
+    '<input class="v" type="text" placeholder="value" value="' + esc(v || "") + '">' +
+    '<button class="small" onclick="this.parentNode.remove()">✕</button>';
+  $("fields").appendChild(div);
+}
+function collectRecord() {
+  const rec = {};
+  $("fields").querySelectorAll(".row").forEach(r => {
+    const k = r.querySelector(".k").value.trim();
+    let v = r.querySelector(".v").value.trim();
+    if (!k) return;
+    const n = Number(v);
+    rec[k] = (v !== "" && !isNaN(n)) ? n : v;
+  });
+  return rec;
+}
+
+function renderVerdict(el, d, status) {
+  if (!d) { el.innerHTML = '<div class="verdict err">No response</div>'; return; }
+  if (status === 202 || d.status === "collecting") {
+    el.innerHTML = '<div class="verdict warm"><div class="big">⏳ Warming up</div>' +
+      '<div>' + esc(d.message || "") + "</div>" +
+      '<div class="muted">' + (d.data_points ?? "?") + " / " + (d.min_data_points ?? "?") + " points</div></div>";
+    return;
+  }
+  if (d.status === "error") { el.innerHTML = '<div class="verdict err"><div class="big">Error</div>' + esc(d.message) + "</div>"; return; }
+  const anom = !!d.anomaly;
+  let vrows = "";
+  const versions = d.versions || {};
+  for (const vn of Object.keys(versions)) {
+    const v = versions[vn];
+    const th = v.threshold_info || {};
+    vrows += "<div>" + esc(vn) + '</div><div class="flag ' + (v.anomaly ? "" : "n") + '">' +
+      (v.anomaly ? "ANOM" : "ok") + "</div><div>" + fmtNum(v.score) + "</div>";
+  }
+  el.innerHTML = '<div class="verdict ' + (anom ? "anom" : "ok") + '">' +
+    '<div class="big">' + (anom ? "🚨 Anomaly" : "✓ Normal") + "</div>" +
+    '<div class="score">score = ' + fmtNum(d.score) + " · " + (d.data_points ?? "?") + " pts</div>" +
+    (vrows ? '<div class="vgrid"><div class="h">version</div><div class="h">flag</div><div class="h">score</div>' + vrows + "</div>" : "") +
+    "</div>";
+}
+function fmtNum(x) {
+  if (x === null || x === undefined || typeof x !== "number") return "–";
+  return Math.abs(x) < 1e-4 && x !== 0 ? x.toExponential(3) : x.toFixed(5).replace(/\.?0+$/, "");
+}
+
+async function send(ingest) {
+  const name = $("model").value.trim();
+  if (!name) { toast("Model name required", "err"); return; }
+  const rec = collectRecord();
+  if (Object.keys(rec).length === 0) { toast("Add at least one feature", "err"); return; }
+  const btn = ingest ? $("btnIngest") : $("btnScore");
+  const orig = btn.textContent; btn.disabled = true; btn.innerHTML = '<span class="spin"></span>';
+  try {
+    const url = (ingest ? "/detect/" : "/detect_only/") + enc(name);
+    const { ok, status, data } = await api("POST", url, rec);
+    renderVerdict($("verdict"), data, status);
+    if (ok || status === 202) refreshModels();
+  } catch (e) { toast(e.message, "err"); }
+  finally { btn.disabled = false; btn.textContent = orig; }
+}
+
+async function forceTrain() {
+  const name = $("model").value.trim();
+  if (!name) { toast("Model name required", "err"); return; }
+  const { ok, data } = await api("POST", "/force_train/" + enc(name));
+  toast((data && data.message) || (ok ? "trained" : "failed"), ok ? "ok" : "err", "force train");
+}
+
+async function bulkFeed() {
+  const name = $("bulkModel").value.trim();
+  if (!name) { toast("Target model required", "err"); return; }
+  const lines = $("bulkData").value.split("\n").map(l => l.trim()).filter(Boolean);
+  if (!lines.length) { toast("No JSON lines to feed", "err"); return; }
+  const btn = $("btnBulk"); btn.disabled = true;
+  const log = $("bulkLog"); log.style.display = "block"; log.textContent = "";
+  let ok = 0, warm = 0, err = 0, lastVerdict = null;
+  for (let i = 0; i < lines.length; i++) {
+    let rec;
+    try { rec = JSON.parse(lines[i]); }
+    catch (e) { err++; log.textContent += "line " + (i+1) + ": bad JSON\n"; continue; }
+    const res = await api("POST", "/detect/" + enc(name), rec);
+    if (res.status === 202) warm++;
+    else if (res.ok) { ok++; lastVerdict = res.data; }
+    else { err++; log.textContent += "line " + (i+1) + ": " + ((res.data && res.data.message) || res.status) + "\n"; }
+    $("bulkBar").style.width = Math.round((i+1)/lines.length*100) + "%";
+    $("bulkCount").textContent = (i+1) + "/" + lines.length;
+    log.scrollTop = log.scrollHeight;
+  }
+  log.textContent += "\ndone — " + ok + " scored, " + warm + " warming, " + err + " errors\n";
+  if (lastVerdict) renderVerdict($("verdict"), lastVerdict, 200);
+  btn.disabled = false;
+  refreshModels();
+  toast(ok + " scored, " + warm + " warming, " + err + " err", err ? "err" : "ok", "bulk feed");
+}
+
+function genSynthetic() {
+  const N = 80;
+  let out = [];
+  for (let i = 0; i < N; i++) {
+    // mostly-normal stream with a few injected spikes
+    const spike = (i % 27 === 0 && i > 0);
+    const temp = spike ? 70 + Math.random()*15 : 20 + Math.random()*6;
+    const load = spike ? 9 : Math.floor(Math.random()*5);
+    const vib = spike ? 8 + Math.random()*4 : 1 + Math.random()*2;
+    out.push(JSON.stringify({ temp: +temp.toFixed(2), load, vib: +vib.toFixed(2) }));
+  }
+  $("bulkData").value = out.join("\n");
+  if (!$("bulkModel").value.trim()) $("bulkModel").value = "demo";
+  toast("Generated " + N + " points (with spikes)", "ok");
+}
+
+async function refreshModels() {
+  try {
+    const r = await api("GET", "/models/dynamic");
+    if (!r.ok) return;
+    const names = Object.keys(r.data.models || {});
+    $("models").innerHTML = names.map(n => '<option value="' + esc(n) + '">').join("");
+  } catch (e) {}
+}
+
+// init
+addField("temp", "");
+addField("load", "");
+refreshModels();
+const qp = new URLSearchParams(location.search);
+if (qp.get("model")) { $("model").value = qp.get("model"); $("bulkModel").value = qp.get("model"); }
+</script>
+</body>
+</html>

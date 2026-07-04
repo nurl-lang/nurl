@@ -1,0 +1,285 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Anomalies · anomaly</title>
+<style>
+  :root {
+    --bg: #0e1116; --panel: #161b22; --panel2: #1c2230; --border: #2a3242;
+    --fg: #e6edf3; --muted: #8b98a9; --accent: #4c9aff; --accent2: #6ee7b7;
+    --danger: #ff6b6b; --warn: #f6c344; --ok: #56d364; --radius: 10px; --grid: #212836;
+    --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+    --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font-family: var(--sans); font-size: 14px; }
+  a { color: var(--accent); text-decoration: none; }
+  header { display: flex; align-items: center; gap: 20px; padding: 14px 24px; background: var(--panel);
+           border-bottom: 1px solid var(--border); position: sticky; top: 0; z-index: 10; }
+  header h1 { font-size: 16px; margin: 0; font-weight: 600; }
+  header .brand { color: var(--accent2); font-family: var(--mono); }
+  nav { display: flex; gap: 4px; margin-left: auto; }
+  nav a { padding: 6px 12px; border-radius: 8px; color: var(--muted); font-weight: 500; }
+  nav a:hover { background: var(--panel2); color: var(--fg); }
+  nav a.active { background: var(--accent); color: #06122b; }
+  main { max-width: 1200px; margin: 0 auto; padding: 24px; }
+  .controls { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin-bottom: 18px; }
+  select, input[type=number] { font-family: var(--mono); font-size: 13px; background: var(--bg); color: var(--fg);
+    border: 1px solid var(--border); border-radius: 8px; padding: 7px 10px; }
+  select:focus { outline: none; border-color: var(--accent); }
+  button { font-family: var(--sans); font-size: 13px; border: 1px solid var(--border); background: var(--panel2);
+           color: var(--fg); padding: 7px 12px; border-radius: 8px; cursor: pointer; font-weight: 500; }
+  button:hover { border-color: var(--accent); }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #06122b; }
+  button:disabled { opacity: .5; cursor: default; }
+  label.lbl { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .4px; margin-right: 4px; }
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 18px; margin-bottom: 20px; }
+  .card h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .6px; color: var(--muted); margin: 0 0 14px; font-weight: 600; }
+  canvas { width: 100%; display: block; }
+  .stat-row { display: flex; gap: 20px; flex-wrap: wrap; margin-bottom: 18px; }
+  .stat { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 12px 16px; min-width: 120px; }
+  .stat .n { font-size: 22px; font-weight: 700; font-family: var(--mono); font-variant-numeric: tabular-nums; }
+  .stat .n.danger { color: var(--danger); } .stat .n.ok { color: var(--ok); }
+  .stat .l { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .4px; }
+  .muted { color: var(--muted); }
+  .bar { height: 6px; background: var(--panel2); border-radius: 3px; overflow: hidden; flex: 1; min-width: 120px; }
+  .bar > i { display: block; height: 100%; background: var(--accent); width: 0; transition: width .15s; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  thead th { text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: .5px; color: var(--muted);
+             padding: 8px 12px; border-bottom: 1px solid var(--border); }
+  tbody td { padding: 8px 12px; border-bottom: 1px solid var(--border); font-family: var(--mono);
+             font-variant-numeric: tabular-nums; }
+  tbody tr:hover { background: var(--panel2); }
+  .score { color: var(--danger); font-weight: 600; }
+  .vtags { display: flex; gap: 4px; flex-wrap: wrap; }
+  .vtag { font-size: 10px; padding: 1px 6px; border-radius: 999px; border: 1px solid rgba(255,107,107,.4);
+          color: var(--danger); background: rgba(255,107,107,.08); }
+  .empty { text-align: center; padding: 40px; color: var(--muted); }
+  #tip { position: fixed; pointer-events: none; background: var(--panel2); border: 1px solid var(--border);
+         border-radius: 6px; padding: 6px 9px; font-family: var(--mono); font-size: 12px; display: none;
+         box-shadow: 0 6px 18px rgba(0,0,0,.5); z-index: 50; white-space: nowrap; }
+</style>
+</head>
+<body>
+<header>
+  <h1><span class="brand">anomaly</span> · Anomalies</h1>
+  <nav>
+    <a href="/modelmanager.html">Models</a>
+    <a href="/modeltrainer.html">Trainer</a>
+    <a href="/visualize.html">Visualize</a>
+    <a href="/anomalies.html" class="active">Anomalies</a>
+  </nav>
+</header>
+
+<main>
+  <div class="controls">
+    <span><label class="lbl">Model</label><select id="model"></select></span>
+    <span><label class="lbl">Feature</label><select id="feature"></select></span>
+    <span><label class="lbl">Max points</label>
+      <input type="number" id="cap" value="500" min="10" max="5000" style="width:90px"></span>
+    <button class="primary" id="run" onclick="run()">Scan for anomalies</button>
+    <div class="bar" id="barWrap" style="display:none"><i id="bar"></i></div>
+    <span class="muted" id="prog"></span>
+  </div>
+
+  <div class="stat-row" id="stats" style="display:none"></div>
+
+  <div class="card" id="chartCard" style="display:none">
+    <h2 id="chartTitle">Series with anomalies</h2>
+    <canvas id="chart" height="360"></canvas>
+  </div>
+
+  <div class="card" id="listCard" style="display:none">
+    <h2>Flagged points</h2>
+    <div id="list"></div>
+  </div>
+
+  <div class="empty" id="hint">Pick a model and scan. Each stored point is re-scored via
+    <code>/detect_only</code> and anomalies are highlighted.</div>
+</main>
+<div id="tip"></div>
+
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const enc = encodeURIComponent;
+let DATA = [], NUMKEYS = [], RESULTS = [];
+
+async function api(method, url, body) {
+  const opt = { method, headers: {} };
+  if (body !== undefined) { opt.headers["Content-Type"] = "application/json"; opt.body = JSON.stringify(body); }
+  const r = await fetch(url, opt);
+  let d = null; try { d = await r.json(); } catch (e) {}
+  return { ok: r.ok, status: r.status, data: d };
+}
+function esc(s) { return String(s).replace(/[&<>"]/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;" }[c])); }
+function fmtNum(x) {
+  if (typeof x !== "number") return esc(x);
+  if (!isFinite(x)) return "–";
+  return Math.abs(x) < 1e-4 && x !== 0 ? x.toExponential(2) : +x.toFixed(5) + "";
+}
+function getVar(n) { return getComputedStyle(document.documentElement).getPropertyValue(n).trim(); }
+
+async function loadModels(preselect) {
+  const r = await api("GET", "/models/dynamic");
+  const names = Object.keys((r.data && r.data.models) || {}).sort();
+  $("model").innerHTML = names.length
+    ? names.map(n => '<option value="' + esc(n) + '">' + esc(n) + "</option>").join("")
+    : '<option>(no models)</option>';
+  if (preselect && names.includes(preselect)) $("model").value = preselect;
+  $("model").onchange = loadFeatures;
+  await loadFeatures();
+}
+
+async function loadFeatures() {
+  const name = $("model").value;
+  if (!name || name === "(no models)") { DATA = []; NUMKEYS = []; $("feature").innerHTML = ""; return; }
+  const r = await api("GET", "/models/dynamic/" + enc(name) + "/data?limit=all");
+  DATA = (r.data && r.data.data) || [];
+  const keys = {};
+  for (const rec of DATA) if (rec && typeof rec === "object")
+    for (const k of Object.keys(rec)) if (typeof rec[k] === "number") keys[k] = true;
+  NUMKEYS = Object.keys(keys);
+  $("feature").innerHTML = NUMKEYS.length
+    ? NUMKEYS.map(k => '<option value="' + esc(k) + '">' + esc(k) + "</option>").join("")
+    : '<option>(none)</option>';
+  $("prog").textContent = DATA.length + " stored points";
+}
+
+async function run() {
+  const name = $("model").value;
+  if (!name || name === "(no models)") return;
+  if (!DATA.length) { $("prog").textContent = "no stored data for this model"; return; }
+  const cap = Math.max(10, Math.min(5000, parseInt($("cap").value, 10) || 500));
+  const pts = DATA.slice(Math.max(0, DATA.length - cap));   // most recent `cap`
+  const baseIdx = DATA.length - pts.length;
+
+  $("run").disabled = true;
+  $("barWrap").style.display = "block";
+  RESULTS = [];
+  let warming = false;
+  for (let i = 0; i < pts.length; i++) {
+    const r = await api("POST", "/detect_only/" + enc(name), pts[i]);
+    if (r.status === 202) { warming = true; break; }
+    if (r.ok && r.data && r.data.status === "success") {
+      const flagged = [];
+      const vs = r.data.versions || {};
+      for (const vn of Object.keys(vs)) if (vs[vn].anomaly) flagged.push(vn);
+      RESULTS.push({ idx: baseIdx + i, rec: pts[i], score: r.data.score,
+                     anomaly: !!r.data.anomaly, versions: flagged });
+    }
+    $("bar").style.width = Math.round((i+1)/pts.length*100) + "%";
+    $("prog").textContent = (i+1) + "/" + pts.length + " scored";
+  }
+  $("run").disabled = false;
+  $("barWrap").style.display = "none";
+
+  if (warming) {
+    $("prog").textContent = "model is still warming up — not enough data to score";
+    $("hint").style.display = "block"; $("hint").textContent = "Model warming up: feed more data or force-train it first.";
+    $("stats").style.display = $("chartCard").style.display = $("listCard").style.display = "none";
+    return;
+  }
+  renderAll();
+}
+
+function renderAll() {
+  $("hint").style.display = "none";
+  const total = RESULTS.length;
+  const anoms = RESULTS.filter(r => r.anomaly);
+  const pct = total ? (anoms.length/total*100) : 0;
+  $("stats").style.display = "flex";
+  $("stats").innerHTML = [
+    ['<span class="n">' + total + "</span>", "scored"],
+    ['<span class="n ' + (anoms.length?"danger":"ok") + '">' + anoms.length + "</span>", "anomalies"],
+    ['<span class="n">' + pct.toFixed(1) + "%</span>", "rate"],
+  ].map(([n,l]) => '<div class="stat">' + n + '<div class="l">' + l + "</div></div>").join("");
+  drawChart();
+  renderList(anoms);
+}
+
+function drawChart() {
+  $("chartCard").style.display = "block";
+  const feat = $("feature").value;
+  const cv = $("chart");
+  const pts = RESULTS.map(r => ({ idx: r.idx, x: (r.rec && typeof r.rec[feat]==="number") ? r.rec[feat] : null,
+                                  score: r.score, anomaly: r.anomaly }));
+  const valid = pts.filter(p => p.x !== null);
+  $("chartTitle").textContent = feat + " — anomalies in red";
+  if (!valid.length) { cv.style.display = "none"; return; }
+  cv.style.display = "block";
+
+  const dpr = window.devicePixelRatio || 1, W = cv.clientWidth, H = 360;
+  cv.width = W*dpr; cv.height = H*dpr;
+  const g = cv.getContext("2d"); g.scale(dpr, dpr); g.clearRect(0,0,W,H);
+  const pad = { l: 54, r: 14, t: 14, b: 26 }, iw = W-pad.l-pad.r, ih = H-pad.t-pad.b;
+  const xs = valid.map(p=>p.x);
+  let mn = Math.min(...xs), mx = Math.max(...xs); if (mn===mx){mn-=1;mx+=1;}
+  const py=(mx-mn)*0.08; mn-=py; mx+=py;
+  const N = pts.length;
+  const X = (i)=> pad.l + (N<=1?iw/2:(i/(N-1))*iw);
+  const Y = (v)=> pad.t + ih - ((v-mn)/(mx-mn))*ih;
+
+  g.strokeStyle = getVar("--grid"); g.fillStyle = getVar("--muted");
+  g.font = "11px " + getVar("--mono"); g.lineWidth = 1;
+  for (let t=0;t<=4;t++){ const yv=mn+(mx-mn)*t/4, y=Y(yv);
+    g.beginPath(); g.moveTo(pad.l,y); g.lineTo(W-pad.r,y); g.stroke(); g.fillText(fmtNum(yv),6,y+3); }
+  for (let t=0;t<=4;t++){ const i=Math.round((N-1)*t/4);
+    g.fillText(String(pts[i] ? pts[i].idx : ""), X(i)-8, H-8); }
+
+  // line through valid points
+  g.beginPath(); let started=false;
+  pts.forEach((p,i)=>{ if(p.x===null) return; const x=X(i),y=Y(p.x);
+    if(!started){g.moveTo(x,y);started=true;} else g.lineTo(x,y); });
+  g.strokeStyle = getVar("--accent"); g.lineWidth = 1.6; g.stroke();
+
+  // markers
+  pts.forEach((p,i)=>{ if(p.x===null) return; const x=X(i), y=Y(p.x);
+    g.beginPath(); g.arc(x,y, p.anomaly?4:2, 0, 7);
+    g.fillStyle = p.anomaly ? getVar("--danger") : getVar("--accent"); g.fill();
+    if (p.anomaly){ g.beginPath(); g.arc(x,y,7,0,7); g.strokeStyle="rgba(255,107,107,.5)"; g.lineWidth=1.5; g.stroke(); }
+  });
+
+  cv._pts = pts; cv._X = X; cv._Y = Y; cv._N = N; cv._pad = pad; cv._feat = feat;
+}
+
+$("chart").addEventListener("mousemove", (e) => {
+  const cv = $("chart"); if (!cv._pts) return;
+  const rect = cv.getBoundingClientRect(), mx = e.clientX-rect.left;
+  const N=cv._N, pad=cv._pad, iw=cv.clientWidth-pad.l-pad.r;
+  let i = Math.round(((mx-pad.l)/iw)*(N-1)); i=Math.max(0,Math.min(N-1,i));
+  const p = cv._pts[i]; if(!p) return;
+  const tip=$("tip"); tip.style.display="block";
+  tip.style.left=(e.clientX+12)+"px"; tip.style.top=(e.clientY+12)+"px";
+  tip.innerHTML = "#" + p.idx + " · " + cv._feat + "=" + fmtNum(p.x) + " · score=" + fmtNum(p.score) +
+    (p.anomaly ? ' · <span style="color:var(--danger)">ANOMALY</span>' : "");
+});
+$("chart").addEventListener("mouseleave", ()=> $("tip").style.display="none");
+window.addEventListener("resize", ()=> { if (RESULTS.length) drawChart(); });
+
+function renderList(anoms) {
+  $("listCard").style.display = "block";
+  if (!anoms.length) { $("list").innerHTML = '<div class="empty">No anomalies found 🎉</div>'; return; }
+  const feat = $("feature").value;
+  const keys = NUMKEYS.slice(0, 4);
+  let head = "<tr><th>#</th><th>score</th><th>versions</th>" +
+    keys.map(k=>"<th>"+esc(k)+"</th>").join("") + "</tr>";
+  let rows = anoms.slice(0, 200).map(a =>
+    "<tr><td>" + a.idx + '</td><td class="score">' + fmtNum(a.score) + "</td>" +
+    '<td><div class="vtags">' + a.versions.map(v=>'<span class="vtag">'+esc(v)+"</span>").join("") + "</div></td>" +
+    keys.map(k => "<td>" + (a.rec && typeof a.rec[k]==="number" ? fmtNum(a.rec[k]) : "–") + "</td>").join("") +
+    "</tr>").join("");
+  $("list").innerHTML = "<table><thead>" + head + "</thead><tbody>" + rows + "</tbody></table>" +
+    (anoms.length > 200 ? '<div class="muted" style="padding:8px 12px">…' + (anoms.length-200) + " more</div>" : "");
+}
+
+const qp = new URLSearchParams(location.search);
+loadModels(qp.get("model")).then(() => {
+  // Arriving with ?model= (e.g. the "Anomalies →" deep link) means intent
+  // to scan — kick it off automatically.
+  if (qp.get("model") && DATA.length) run();
+}).catch(e => $("prog").textContent = e.message);
+</script>
+</body>
+</html>
