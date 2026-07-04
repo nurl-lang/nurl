@@ -363,6 +363,21 @@ async function handleSearch(url: URL, env: Env): Promise<Response> {
   return json({ results: (rows.results ?? []).map((r) => ({ name: r.name, version: r.latest })) });
 }
 
+// Public counts — powers the "registry packages" figure on nurl-lang.org
+// (injected at build time by tools/gen-site-facts.sh). CORS-open and briefly
+// cached so it's also safe to read from a browser.
+async function handleStats(env: Env): Promise<Response> {
+  const pkgs = await env.REG_DB.prepare(`SELECT COUNT(*) AS n FROM packages`).first<{ n: number }>();
+  const vers = await env.REG_DB.prepare(
+    `SELECT COUNT(*) AS n FROM versions WHERE yanked = 0`,
+  ).first<{ n: number }>();
+  return json(
+    { packages: pkgs?.n ?? 0, versions: vers?.n ?? 0 },
+    200,
+    { "access-control-allow-origin": "*", "cache-control": "public, max-age=300" },
+  );
+}
+
 // ── Yank / unyank (owner-only) + token revoke ─────────────────────────
 
 async function handleYank(req: Request, env: Env, yank: boolean): Promise<Response> {
@@ -470,6 +485,7 @@ export default {
       if (path === "/login") return handleLogin(env);
       if (path === "/auth/callback") return handleCallback(req, env);
       if (path === "/api/v1/search") return handleSearch(url, env);
+      if (path === "/api/v1/stats") return handleStats(env);
       if (path.startsWith("/packages/")) {
         return handlePackageDetail(env, decodeURIComponent(path.slice("/packages/".length)).toLowerCase());
       }

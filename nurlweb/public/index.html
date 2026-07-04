@@ -63,11 +63,12 @@
     </a>
   </div>
   <div class="stats">
-    <div class="stat"><strong data-fact="version">v0.9.14</strong><span>current release</span></div>
-    <div class="stat"><strong data-fact="compiler_lines">16,548</strong><span>lines of NURL in the compiler</span></div>
-    <div class="stat"><strong data-fact="tests">480</strong><span>compiler test programs</span></div>
-    <div class="stat"><strong data-fact="stdlib_modules">148</strong><span>stdlib modules</span></div>
+    <div class="stat"><strong data-fact="version">v0.10.12</strong><span>current release</span></div>
+    <div class="stat"><strong data-fact="compiler_lines">18,101</strong><span>lines of NURL in the compiler</span></div>
+    <div class="stat"><strong data-fact="tests">531</strong><span>compiler test programs</span></div>
+    <div class="stat"><strong data-fact="stdlib_modules">168</strong><span>stdlib modules</span></div>
     <div class="stat"><strong>10</strong><span>tested targets</span></div>
+    <div class="stat"><strong data-fact="registry_packages">22</strong><span>registry packages</span></div>
   </div>
   <p style="margin-top: 1.8rem; color: var(--fg-faint); font-size: 0.88rem;">
     Driving an LLM agent? The compiler is also exposed as an
@@ -128,7 +129,7 @@
       <div class="card">
         <div class="icon">⟳</div>
         <h3>Self-hosting</h3>
-        <p>The compiler is <span data-fact="compiler_lines">16,548</span> lines of NURL. The bootstrap compiles it with itself twice and requires byte-identical LLVM IR on both rounds before a build is accepted.</p>
+        <p>The compiler is <span data-fact="compiler_lines">18,101</span> lines of NURL. The bootstrap compiles it with itself twice and requires byte-identical LLVM IR on both rounds before a build is accepted.</p>
       </div>
     </div>
   </div>
@@ -321,7 +322,7 @@
 <section id="stdlib">
   <div class="container">
     <div class="section-head">
-      <h2><span data-fact="stdlib_modules">148</span> stdlib modules, batteries included</h2>
+      <h2><span data-fact="stdlib_modules">168</span> stdlib modules, batteries included</h2>
       <p>Not stubs — production-hardened modules with their own test programs, leak-checked under AddressSanitizer.</p>
     </div>
 
@@ -365,7 +366,7 @@
     <div class="grid">
       <div class="card">
         <h3>The compiler itself</h3>
-        <p><span data-fact="compiler_lines">16,548</span> lines of NURL compile NURL. Every release must reproduce its own LLVM IR byte-for-byte through two self-compilation rounds — a fixed point, not a checksum.</p>
+        <p><span data-fact="compiler_lines">18,101</span> lines of NURL compile NURL. Every release must reproduce its own LLVM IR byte-for-byte through two self-compilation rounds — a fixed point, not a checksum.</p>
         <p style="margin-top: 0.8rem;"><a href="https://github.com/nurl-lang/nurl/blob/main/compiler/nurlc.nu" target="_blank" rel="noopener">compiler/nurlc.nu</a></p>
       </div>
       <div class="card">
@@ -379,7 +380,7 @@
         <p style="margin-top: 0.8rem;"><a href="https://github.com/nurl-lang/nurl/tree/main/nurlapi" target="_blank" rel="noopener">nurlapi/</a></p>
       </div>
       <div class="card">
-        <h3><span data-fact="examples">65</span> examples</h3>
+        <h3><span data-fact="examples">64</span> examples</h3>
         <p>From an Enigma machine and Game of Life to a distributed Push-To-Talk voice app, an HTTP/2 client, MCP servers, a Claude-powered agent, and a C64 emulator.</p>
         <p style="margin-top: 0.8rem;"><a href="https://github.com/nurl-lang/nurl/tree/main/examples" target="_blank" rel="noopener">examples/</a></p>
       </div>
@@ -523,13 +524,18 @@ cd nurl
       </div>
       <div class="card">
         <h3>Changelog</h3>
-        <p>Every release documented in Keep-a-Changelog format with the reasoning behind each fix — currently at <span data-fact="version">v0.9.14</span>.</p>
+        <p>Every release documented in Keep-a-Changelog format with the reasoning behind each fix — currently at <span data-fact="version">v0.10.12</span>.</p>
         <p style="margin-top: 0.8rem;"><a href="https://github.com/nurl-lang/nurl/blob/main/CHANGELOG.md" target="_blank" rel="noopener">CHANGELOG.md</a></p>
       </div>
       <div class="card">
         <h3>Roadmap</h3>
         <p>What's done, what's next. Maintained alongside the source so it doesn't drift from reality.</p>
         <p style="margin-top: 0.8rem;"><a href="https://github.com/nurl-lang/nurl/blob/main/ROADMAP.md" target="_blank" rel="noopener">ROADMAP.md</a></p>
+      </div>
+      <div class="card">
+        <h3>Package registry</h3>
+        <p><span data-fact="registry_packages">22</span> packages published and installable with <code>nurlpkg install &lt;name&gt;</code> — browse, search, and read docs on the registry.</p>
+        <p style="margin-top: 0.8rem;"><a href="https://reg.nurl-lang.org" target="_blank" rel="noopener">reg.nurl-lang.org</a></p>
       </div>
     </div>
   </div>
