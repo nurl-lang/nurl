@@ -15,6 +15,11 @@
 // strings are timestamps, anything else is categorical (one-hot). Verdicts
 // print as one JSON object per invocation. The store lives under --store
 // DIR (default $ANOMALY_HOME, else ~/.anomaly).
+//
+// The command line is assembled with the `cli` package: one Cli, a flag set,
+// and a handler per subcommand — routing, typed flags with the $ANOMALY_HOME
+// / $ANOMALY_WEBROOT fallbacks, --help / --version and exit codes are the
+// framework's job.
 
 $ `stdlib/core/io.nu`
 $ `stdlib/core/string.nu`
@@ -22,9 +27,9 @@ $ `stdlib/core/vec.nu`
 $ `stdlib/std/float.nu`
 $ `stdlib/std/fs.nu`
 $ `stdlib/std/path.nu`
-$ `stdlib/std/args.nu`
 $ `stdlib/ext/env.nu`
 $ `stdlib/ext/json.nu`
+$ `deps/cli/src/cli.nu`
 $ `src/prep.nu`
 $ `src/model.nu`
 $ `src/score.nu`
@@ -33,38 +38,34 @@ $ `src/dynamic.nu`
 $ `src/csvdata.nu`
 $ `src/service.nu`
 
-@ __cli_store_root ArgParser p → String {
-    : ?String ov ( args_value p `store` )
-    ?? ov { T v → { ^ v } F junk → { ( string_free junk ) } }
-    : ?String ev ( env_get `ANOMALY_HOME` )
-    ?? ev { T v → { ^ v } F junk → { ( string_free junk ) } }
+@ pline s x → v {
+    ( nurl_print x )
+    ( nurl_print `\n` )
+}
+
+// Store directory: --store → $ANOMALY_HOME (via the flag's env fallback) →
+// ~/.anomaly. The flag binds $ANOMALY_HOME, so an empty resolved value means
+// neither was set and we fall back to the home directory.
+@ __an_store_root CliCtx x → String {
+    : String s ( ctx_str x `store` )
+    ? > ( string_len s ) 0 { ^ s } {}
+    ( string_free s )
     : String home ( env_var_or `HOME` `.` )
     : String r ( path_join ( string_data home ) `.anomaly` )
     ( string_free home )
     ^ r
 }
 
-@ pline s x → v {
-    ( nurl_print x )
-    ( nurl_print `\n` )
-}
-
-// Resolve the directory that holds the dashboard HTML for `serve`. Order:
-//   --webroot DIR  →  $ANOMALY_WEBROOT  →  <exe-dir>/static  →
-//   <exe-dir>/../share/anomaly/static  →  ./static.
-// Returns the first candidate that exists; empty String disables the
-// dashboard (API-only serving still works).
-@ __cli_webroot ArgParser p → String {
-    : ?String ov ( args_value p `webroot` )
-    ?? ov { T v → { ^ v } F junk → { ( string_free junk ) } }
-    : ?String ev ( env_get `ANOMALY_WEBROOT` )
-    ?? ev {
-        T v → {
-            ? ( file_exists ( string_data v ) ) { ^ v } { ( string_free v ) }
-        }
-        F junk → { ( string_free junk ) }
+// Dashboard web root for `serve`. --webroot / $ANOMALY_WEBROOT (via the
+// flag) first, then <exe-dir>/static, <exe-dir>/../share/anomaly/static,
+// then ./static. Empty String disables the dashboard (API-only).
+@ __an_webroot CliCtx x → String {
+    : String v ( ctx_str x `webroot` )
+    ? > ( string_len v ) 0 {
+        ? ( file_exists ( string_data v ) ) { ^ v } { ( string_free v ) }
+    } {
+        ( string_free v )
     }
-    // Candidates derived from the executable location.
     : !String IoErr exe ( fs_readlink `/proc/self/exe` )
     ?? exe {
         T ep → {
@@ -81,64 +82,62 @@ $ `src/service.nu`
         }
         F _ → {}
     }
-    // Last resort: ./static relative to the current directory.
     ? ( file_exists `static` ) { ^ ( string_from `static` ) } {}
     ^ ( string_new )
 }
 
-// key=val positionals (from index `from`) → a JSON record. Numeric-looking
+// The key=val positionals after the model → a JSON record. Numeric-looking
 // values become JSON numbers, everything else a JSON string (the library's
 // auto-typing takes it from there). None on a malformed argument.
-@ __cli_record ( Vec String ) pos i from → ?Json {
+@ __an_record CliCtx x → ?Json {
     : Json o ( json_obj_new )
-    : i n ( vec_len [String] pos )
-    : ~ i k from
+    : i n ( ctx_nargs x )
+    : ~ i k 1
     ~ < k n {
-        ?? ( vec_get [String] pos k ) {
-            T kv → {
-                : ?i eq ( string_index_of kv `=` )
-                ?? eq {
-                    T at → {
-                        ? <= at 0 {
-                            ( json_free o )
-                            ^ @ ?Json { F }
-                        } {}
-                        : String key ( string_new )
-                        : String val ( string_new )
-                        : i len ( string_len kv )
-                        : ~ i c 0
-                        ~ < c at {
-                            ( string_push_char key ( string_get kv c ) )
-                            = c + c 1
-                        }
-                        = c + at 1
-                        ~ < c len {
-                            ( string_push_char val ( string_get kv c ) )
-                            = c + c 1
-                        }
-                        : ?f fx ( string_to_float val )
-                        ?? fx {
-                            T x → { ( json_obj_set o ( string_data key ) ( json_float x ) ) }
-                            F _ → { ( json_obj_set o ( string_data key ) ( json_str_lit ( string_data val ) ) ) }
-                        }
-                        ( string_free key )
-                        ( string_free val )
-                    }
-                    F _ → {
-                        ( json_free o )
-                        ^ @ ?Json { F }
-                    }
+        : String kv ( ctx_arg x k )
+        : ?i eq ( string_index_of kv `=` )
+        ?? eq {
+            T at → {
+                ? <= at 0 {
+                    ( string_free kv )
+                    ( json_free o )
+                    ^ @ ?Json { F }
+                } {}
+                : String key ( string_new )
+                : String val ( string_new )
+                : i len ( string_len kv )
+                : ~ i c 0
+                ~ < c at {
+                    ( string_push_char key ( string_get kv c ) )
+                    = c + c 1
                 }
+                = c + at 1
+                ~ < c len {
+                    ( string_push_char val ( string_get kv c ) )
+                    = c + c 1
+                }
+                : ?f fx ( string_to_float val )
+                ?? fx {
+                    T fv → { ( json_obj_set o ( string_data key ) ( json_float fv ) ) }
+                    F _ → { ( json_obj_set o ( string_data key ) ( json_str_lit ( string_data val ) ) ) }
+                }
+                ( string_free key )
+                ( string_free val )
             }
-            F _ → {}
+            F _ → {
+                ( string_free kv )
+                ( json_free o )
+                ^ @ ?Json { F }
+            }
         }
+        ( string_free kv )
         = k + k 1
     }
     ^ @ ?Json { T o }
 }
 
 // Print a verdict as one compact JSON object.
-@ __cli_print_verdict *Model mo Verdict vd → v {
+@ __an_print_verdict *Model mo Verdict vd → v {
     : Json o ( json_obj_new )
     ? . vd ready {
         ( json_obj_set o `status` ( json_str_lit `success` ) )
@@ -173,10 +172,10 @@ $ `src/service.nu`
 }
 
 // Print (or report the error of) one detect/score result. Exit code.
-@ __cli_report *Model mo !Verdict String vr → i {
+@ __an_report *Model mo !Verdict String vr → i {
     ?? vr {
         T vd → {
-            ( __cli_print_verdict mo vd )
+            ( __an_print_verdict mo vd )
             ( verdict_free vd )
             ^ 0
         }
@@ -189,77 +188,75 @@ $ `src/service.nu`
     }
 }
 
-// detect / score shared path. Returns the exit code.
-@ __cli_detect ArgParser p ( Vec String ) pos b ingest → i {
-    ? < ( vec_len [String] pos ) 2 {
+// ── Command handlers ──────────────────────────────────────────────────
+
+// detect / score share a path: ingest = true stores + retrains, false only
+// scores. Model = first positional; features = the remaining key=val args.
+@ __an_cmd_detect CliCtx x b ingest → i {
+    ? < ( ctx_nargs x ) 1 {
         ( nurl_eprintln `anomaly: model name required` )
         ^ 2
     } {}
-    : ~ s mname ``
-    ?? ( vec_get [String] pos 1 ) { T m → { = mname ( string_data m ) } F _ → {} }
-    : ?Json ro ( __cli_record pos 2 )
+    : String mname ( ctx_arg x 0 )
+    : ?Json ro ( __an_record x )
+    : ~ i rc 0
     ?? ro {
         T rec → {
-            ? > ( json_arr_len rec ) 0 { } {}
-            : String root ( __cli_store_root p )
+            : String root ( __an_store_root x )
             : Store st ( store_open ( string_data root ) )
             ( string_free root )
-            : ~ i rc 0
-            ? & == ingest F == ( store_exists st mname ) F {
+            ? & == ingest F == ( store_exists st ( string_data mname ) ) F {
                 ( nurl_eprint `anomaly: model not found: ` )
-                ( nurl_eprintln mname )
+                ( nurl_eprintln ( string_data mname ) )
                 = rc 1
             } {
-                : *Model mo ( model_open st mname )
+                : *Model mo ( model_open st ( string_data mname ) )
                 ? ingest {
                     : !Verdict String vr ( model_ingest mo rec )
-                    = rc ( __cli_report mo vr )
+                    = rc ( __an_report mo vr )
                 } {
                     : !Verdict String vr ( model_detect_only mo rec )
-                    = rc ( __cli_report mo vr )
+                    = rc ( __an_report mo vr )
                 }
                 ( model_free mo )
             }
             ( store_free st )
             ( json_free rec )
-            ^ rc
         }
         F _ → {
             ( nurl_eprintln `anomaly: arguments must be key=value pairs` )
-            ^ 2
+            = rc 2
         }
     }
+    ( string_free mname )
+    ^ rc
 }
 
 // batch: stateless CSV scoring, one `index<TAB>score` line per row.
-@ __cli_batch ArgParser p → i {
+@ __an_cmd_batch CliCtx x → i {
     : ~ String input ( string_new )
     : ~ b have_input T
-    : ?String fo ( args_value p `file` )
-    ?? fo {
-        T fv → {
-            : !String IoErr r ( read_file ( string_data fv ) )
-            ?? r {
-                T txt → { ( string_free input ) = input txt }
-                F _ → {
-                    ( nurl_eprint `anomaly: cannot read file: ` )
-                    ( nurl_eprintln ( string_data fv ) )
-                    = have_input F
-                }
+    : String fv ( ctx_str x `file` )
+    ? > ( string_len fv ) 0 {
+        : !String IoErr r ( read_file ( string_data fv ) )
+        ?? r {
+            T txt → { ( string_free input ) = input txt }
+            F _ → {
+                ( nurl_eprint `anomaly: cannot read file: ` )
+                ( nurl_eprintln ( string_data fv ) )
+                = have_input F
             }
-            ( string_free fv )
         }
-        F junk → {
-            ( string_free junk )
-            ( string_free input )
-            = input ( read_all_stdin )
-        }
+    } {
+        ( string_free input )
+        = input ( read_all_stdin )
     }
+    ( string_free fv )
     ? have_input {} {
         ( string_free input )
         ^ 1
     }
-    : b header ( args_present p `header` )
+    : b header ( ctx_bool x `header` )
     : AnomCsv ds ( anom_parse_csv ( string_data input ) `,` header )
     ( string_free input )
     ? || <= . ds rows 0 <= . ds cols 0 {
@@ -267,15 +264,7 @@ $ `src/service.nu`
         ( anom_csv_free ds )
         ^ 1
     } {}
-    : ~ f margin 0.0
-    : ?String mg ( args_value p `margin` )
-    ?? mg {
-        T mv → {
-            ?? ( string_to_float mv ) { T x → { = margin x } F _ → {} }
-            ( string_free mv )
-        }
-        F junk → { ( string_free junk ) }
-    }
+    : f margin ( ctx_float x `margin` )
     : VerCfg cfg @ VerCfg { ( string_from `batch` ) 0 0 100 256 -1.0 margin T }
     : BatchReport rep ( anomaly_batch . ds data . ds rows . ds cols cfg )
     ( __an_vercfg_free cfg )
@@ -305,197 +294,189 @@ $ `src/service.nu`
     ^ 0
 }
 
-@ main → i {
-    : ArgParser p ( args_new `anomaly` `Streaming anomaly detection: dynamic self-training models over Isolation Forests.` )
-    ( args_opt p `store` 115 `DIR` `model store (default: $ANOMALY_HOME, else ~/.anomaly)` )
-    ( args_opt p `file` 102 `FILE` `for batch: read CSV from FILE instead of stdin` )
-    ( args_opt p `margin` 109 `M` `for batch: decision margin (default 0 = predict==-1)` )
-    ( args_opt p `addr` 97 `HOST:PORT` `for serve: bind address (default 127.0.0.1:8811)` )
-    ( args_opt p `webroot` 119 `DIR` `for serve: dashboard HTML dir (default: <exe>/static, $ANOMALY_WEBROOT)` )
-    ( args_flag p `header` 72 `for batch: skip the first CSV line (header)` )
-    ( args_flag p `help` 104 `show this help` )
-    ( args_flag p `version` 0 `print the version` )
-
-    ? ( args_parse_argv p ) {} {
-        ( nurl_eprintln ( args_error p ) )
-        ( args_free p )
-        ^ 2
+@ __an_cmd_serve CliCtx x → i {
+    : String addr ( ctx_str x `addr` )
+    : ~ String host ( string_new )
+    : ~ i port 8811
+    : ?i colon ( string_index_of addr `:` )
+    ?? colon {
+        T at → {
+            : i n ( string_len addr )
+            : ~ i c 0
+            ~ < c at {
+                ( string_push_char host ( string_get addr c ) )
+                = c + c 1
+            }
+            : String ps ( string_new )
+            = c + at 1
+            ~ < c n {
+                ( string_push_char ps ( string_get addr c ) )
+                = c + c 1
+            }
+            ?? ( string_to_int ps ) { T v → { = port v } F _ → {} }
+            ( string_free ps )
+        }
+        F _ → {
+            ( string_free host )
+            = host ( string_from ( string_data addr ) )
+        }
     }
-    ? ( args_present p `help` ) {
-        : String u ( args_usage p )
-        ( nurl_print ( string_data u ) )
-        ( nurl_print `\ncommands:\n  detect <model> key=val ...   ingest one point, print the verdict\n  score  <model> key=val ...   score only (never ingests or retrains)\n  batch  [-f FILE] [-H]        score a CSV, one "index<TAB>score" per row\n  train  <model>               force a retrain now\n  reset  <model>               drop data + forests, keep the name\n  rm     <model>               delete the model entirely\n  ls                           list models\n  info   <model>               print model metadata\n  serve  [--addr H:P] [--webroot DIR]  HTTP/JSON service + web dashboard\n` )
-        ( string_free u )
-        ( args_free p )
-        ^ 0
-    } {}
-    ? ( args_present p `version` ) {
-        ( pline `anomaly 0.3.1` )
-        ( args_free p )
-        ^ 0
-    } {}
-    ? < ( args_positional_count p ) 1 {
-        ( nurl_eprintln `usage: anomaly <detect|score|batch|train|reset|rm|ls|info|serve> ... (anomaly --help)` )
-        ( args_free p )
-        ^ 2
-    } {}
+    : String root ( __an_store_root x )
+    ( anomaly_service_set_root ( string_data root ) )
+    : String webroot ( __an_webroot x )
+    ( anomaly_service_set_webroot ( string_data webroot ) )
+    ? > ( string_len webroot ) 0 {
+        ( nurl_eprint `anomaly: dashboard web root: ` )
+        ( nurl_eprintln ( string_data webroot ) )
+    } {
+        ( nurl_eprintln `anomaly: no dashboard web root found (API-only)` )
+    }
+    : i rc ( anomaly_serve ( string_data host ) port )
+    ( string_free webroot )
+    ( string_free root )
+    ( string_free host )
+    ( string_free addr )
+    ^ rc
+}
 
-    : ( Vec String ) pos ( args_positionals p )
-    : ~ s cmd ``
-    ?? ( vec_get [String] pos 0 ) { T c → { = cmd ( string_data c ) } F _ → {} }
-    : ~ s arg1 ``
-    ? >= ( args_positional_count p ) 2 {
-        ?? ( vec_get [String] pos 1 ) { T a → { = arg1 ( string_data a ) } F _ → {} }
-    } {}
+@ __an_cmd_ls CliCtx x → i {
+    : String root ( __an_store_root x )
+    : Store st ( store_open ( string_data root ) )
+    ( string_free root )
+    : ( Vec String ) names ( store_list st )
+    : i n ( vec_len [String] names )
+    : ~ i k 0
+    ~ < k n {
+        ?? ( vec_get [String] names k ) {
+            T nm → { ( pline ( string_data nm ) ) }
+            F _ → {}
+        }
+        = k + k 1
+    }
+    ( vec_free_with [String] names \ String s → v { ( string_free s ) } )
+    ( store_free st )
+    ^ 0
+}
 
+@ __an_cmd_info CliCtx x → i {
+    : String mname ( ctx_arg x 0 )
+    : String root ( __an_store_root x )
+    : Store st ( store_open ( string_data root ) )
+    ( string_free root )
     : ~ i rc 0
-    : ~ b handled T
-    ? ( nurl_str_eq cmd `detect` ) {
-        = rc ( __cli_detect p pos T )
-    } {
-    ? ( nurl_str_eq cmd `score` ) {
-        = rc ( __cli_detect p pos F )
-    } {
-    ? ( nurl_str_eq cmd `batch` ) {
-        = rc ( __cli_batch p )
-    } {
-    ? ( nurl_str_eq cmd `serve` ) {
-        : ~ String addr ( string_from `127.0.0.1:8811` )
-        : ?String av ( args_value p `addr` )
-        ?? av {
-            T v → { ( string_free addr ) = addr v }
-            F junk → { ( string_free junk ) }
+    ?? ( store_load_meta st ( string_data mname ) ) {
+        T mm → {
+            : Json o ( meta_to_json mm )
+            : String out ( json_pretty o )
+            ( pline ( string_data out ) )
+            ( string_free out )
+            ( json_free o )
+            ( meta_free mm )
         }
-        : ~ String host ( string_new )
-        : ~ i port 8811
-        : ?i colon ( string_index_of addr `:` )
-        ?? colon {
-            T at → {
-                : i n ( string_len addr )
-                : ~ i c 0
-                ~ < c at {
-                    ( string_push_char host ( string_get addr c ) )
-                    = c + c 1
-                }
-                : String ps ( string_new )
-                = c + at 1
-                ~ < c n {
-                    ( string_push_char ps ( string_get addr c ) )
-                    = c + c 1
-                }
-                ?? ( string_to_int ps ) { T x → { = port x } F _ → {} }
-                ( string_free ps )
-            }
-            F _ → {
-                ( string_free host )
-                = host ( string_from ( string_data addr ) )
-            }
+        F _ → {
+            ( nurl_eprint `anomaly: model not found: ` )
+            ( nurl_eprintln ( string_data mname ) )
+            = rc 1
         }
-        : String root ( __cli_store_root p )
-        ( anomaly_service_set_root ( string_data root ) )
-        : String webroot ( __cli_webroot p )
-        ( anomaly_service_set_webroot ( string_data webroot ) )
-        ? > ( string_len webroot ) 0 {
-            ( nurl_eprint `anomaly: dashboard web root: ` )
-            ( nurl_eprintln ( string_data webroot ) )
-        } {
-            ( nurl_eprintln `anomaly: no dashboard web root found (API-only)` )
-        }
-        = rc ( anomaly_serve ( string_data host ) port )
-        ( string_free webroot )
-        ( string_free root )
-        ( string_free host )
-        ( string_free addr )
-    } {
-        // Store-backed single-model commands.
-        : String root ( __cli_store_root p )
-        : Store st ( store_open ( string_data root ) )
-        ( string_free root )
-        ? ( nurl_str_eq cmd `ls` ) {
-            : ( Vec String ) names ( store_list st )
-            : i n ( vec_len [String] names )
-            : ~ i k 0
-            ~ < k n {
-                ?? ( vec_get [String] names k ) {
-                    T nm → { ( pline ( string_data nm ) ) }
-                    F _ → {}
-                }
-                = k + k 1
-            }
-            ( vec_free_with [String] names \ String x → v { ( string_free x ) } )
-        } {
-        ? ( nurl_str_eq cmd `info` ) {
-            : ?*Meta mload ( store_load_meta st arg1 )
-            ?? mload {
-                T mm → {
-                    : Json o ( meta_to_json mm )
-                    : String out ( json_pretty o )
-                    ( pline ( string_data out ) )
-                    ( string_free out )
-                    ( json_free o )
-                    ( meta_free mm )
-                }
-                F _ → {
-                    ( nurl_eprint `anomaly: model not found: ` )
-                    ( nurl_eprintln arg1 )
-                    = rc 1
-                }
-            }
-        } {
-        ? ( nurl_str_eq cmd `train` ) {
-            ? ( store_exists st arg1 ) {
-                : *Model mo ( model_open st arg1 )
-                : i used ( model_force_train mo )
-                ? > used 0 {
-                    : String msg ( string_from `trained on ` )
-                    ( string_push_int msg used )
-                    ( string_push_str msg ` points` )
-                    ( pline ( string_data msg ) )
-                    ( string_free msg )
-                } {
-                    ( nurl_eprintln `anomaly: not enough data to train` )
-                    = rc 1
-                }
-                ( model_free mo )
-            } {
-                ( nurl_eprint `anomaly: model not found: ` )
-                ( nurl_eprintln arg1 )
-                = rc 1
-            }
-        } {
-        ? ( nurl_str_eq cmd `reset` ) {
-            ? ( store_exists st arg1 ) {
-                : *Model mo ( model_open st arg1 )
-                ( model_reset mo )
-                ( model_free mo )
-                ( pline `reset` )
-            } {
-                ( nurl_eprint `anomaly: model not found: ` )
-                ( nurl_eprintln arg1 )
-                = rc 1
-            }
-        } {
-        ? ( nurl_str_eq cmd `rm` ) {
-            ? ( store_exists st arg1 ) {
-                : b okd ( model_delete st arg1 )
-                ? okd { ( pline `deleted` ) } {
-                    ( nurl_eprintln `anomaly: delete failed` )
-                    = rc 1
-                }
-            } {
-                ( nurl_eprint `anomaly: model not found: ` )
-                ( nurl_eprintln arg1 )
-                = rc 1
-            }
-        } {
-            ( nurl_eprint `anomaly: unknown command: ` )
-            ( nurl_eprintln cmd )
-            ( nurl_eprintln `try 'anomaly --help'` )
-            = rc 2
-        } } } } }
-        ( store_free st )
-    } } } }
+    }
+    ( store_free st )
+    ( string_free mname )
+    ^ rc
+}
 
-    ( args_free p )
+@ __an_cmd_train CliCtx x → i {
+    : String mname ( ctx_arg x 0 )
+    : String root ( __an_store_root x )
+    : Store st ( store_open ( string_data root ) )
+    ( string_free root )
+    : ~ i rc 0
+    ? ( store_exists st ( string_data mname ) ) {
+        : *Model mo ( model_open st ( string_data mname ) )
+        : i used ( model_force_train mo )
+        ? > used 0 {
+            : String msg ( string_from `trained on ` )
+            ( string_push_int msg used )
+            ( string_push_str msg ` points` )
+            ( pline ( string_data msg ) )
+            ( string_free msg )
+        } {
+            ( nurl_eprintln `anomaly: not enough data to train` )
+            = rc 1
+        }
+        ( model_free mo )
+    } {
+        ( nurl_eprint `anomaly: model not found: ` )
+        ( nurl_eprintln ( string_data mname ) )
+        = rc 1
+    }
+    ( store_free st )
+    ( string_free mname )
+    ^ rc
+}
+
+@ __an_cmd_reset CliCtx x → i {
+    : String mname ( ctx_arg x 0 )
+    : String root ( __an_store_root x )
+    : Store st ( store_open ( string_data root ) )
+    ( string_free root )
+    : ~ i rc 0
+    ? ( store_exists st ( string_data mname ) ) {
+        : *Model mo ( model_open st ( string_data mname ) )
+        ( model_reset mo )
+        ( model_free mo )
+        ( pline `reset` )
+    } {
+        ( nurl_eprint `anomaly: model not found: ` )
+        ( nurl_eprintln ( string_data mname ) )
+        = rc 1
+    }
+    ( store_free st )
+    ( string_free mname )
+    ^ rc
+}
+
+@ __an_cmd_rm CliCtx x → i {
+    : String mname ( ctx_arg x 0 )
+    : String root ( __an_store_root x )
+    : Store st ( store_open ( string_data root ) )
+    ( string_free root )
+    : ~ i rc 0
+    ? ( store_exists st ( string_data mname ) ) {
+        : b okd ( model_delete st ( string_data mname ) )
+        ? okd { ( pline `deleted` ) } {
+            ( nurl_eprintln `anomaly: delete failed` )
+            = rc 1
+        }
+    } {
+        ( nurl_eprint `anomaly: model not found: ` )
+        ( nurl_eprintln ( string_data mname ) )
+        = rc 1
+    }
+    ( store_free st )
+    ( string_free mname )
+    ^ rc
+}
+
+@ main → i {
+    : *Cli c ( cli_new `anomaly` `Streaming anomaly detection: dynamic self-training models over Isolation Forests.` `0.3.1` )
+    ( cli_flag_str  c `store`   115 `DIR`  `model store (default: $ANOMALY_HOME, else ~/.anomaly)` `` `ANOMALY_HOME` )
+    ( cli_flag_str  c `file`    102 `FILE` `for batch: read CSV from FILE instead of stdin` `` `` )
+    ( cli_flag_str  c `margin`  109 `M`    `for batch: decision margin (default 0 = predict==-1)` `0` `` )
+    ( cli_flag_str  c `addr`    97  `HOST:PORT` `for serve: bind address` `127.0.0.1:8811` `` )
+    ( cli_flag_str  c `webroot` 119 `DIR`  `for serve: dashboard HTML dir (default: <exe>/static, $ANOMALY_WEBROOT)` `` `ANOMALY_WEBROOT` )
+    ( cli_flag_bool c `header`  72  `for batch: skip the first CSV line (header)` )
+
+    ( cli_cmd c `detect` `ingest one point, print the verdict` \ CliCtx x → i { ^ ( __an_cmd_detect x T ) } )
+    ( cli_cmd c `score`  `score only (never ingests or retrains)` \ CliCtx x → i { ^ ( __an_cmd_detect x F ) } )
+    ( cli_cmd c `batch`  `score a CSV, one index<TAB>score per row` \ CliCtx x → i { ^ ( __an_cmd_batch x ) } )
+    ( cli_cmd c `train`  `force a retrain now` \ CliCtx x → i { ^ ( __an_cmd_train x ) } )
+    ( cli_cmd c `reset`  `drop data + forests, keep the name` \ CliCtx x → i { ^ ( __an_cmd_reset x ) } )
+    ( cli_cmd c `rm`     `delete the model entirely` \ CliCtx x → i { ^ ( __an_cmd_rm x ) } )
+    ( cli_cmd c `ls`     `list models` \ CliCtx x → i { ^ ( __an_cmd_ls x ) } )
+    ( cli_cmd c `info`   `print model metadata` \ CliCtx x → i { ^ ( __an_cmd_info x ) } )
+    ( cli_cmd c `serve`  `run the HTTP/JSON service + web dashboard` \ CliCtx x → i { ^ ( __an_cmd_serve x ) } )
+
+    : i rc ( cli_run c )
+    ( cli_free c )
     ^ rc
 }
