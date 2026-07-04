@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.1
+
+- Internal: `anomaly serve` now runs on the [`http`](../http) package's
+  `HttpApp` facade instead of a hand-wired listener + server loop. No API or
+  behaviour change to the routes; the service additionally gains graceful
+  SIGINT/SIGTERM shutdown and handler-panic→500 for free. Adds an `http`
+  dependency.
+
 ## 0.3.0
 
 - **Web dashboard.** `anomaly serve` now serves a small, self-contained
