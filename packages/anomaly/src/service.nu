@@ -44,6 +44,7 @@ $ `stdlib/ext/http_request.nu`
 $ `stdlib/ext/http_response.nu`
 $ `stdlib/ext/http_router.nu`
 $ `stdlib/ext/http_server.nu`
+$ `deps/http/src/app.nu`
 $ `src/prep.nu`
 $ `src/model.nu`
 $ `src/score.nu`
@@ -818,37 +819,15 @@ $ `src/csvdata.nu`
 }
 
 // Serve until the listener errors. Returns a process exit code.
+// Serve the routes over the `http` package's App facade: it owns the
+// bind + keep-alive loop, a graceful SIGINT/SIGTERM shutdown, and turns a
+// handler panic into a 500 (rather than dropping the connection). The
+// router itself is still built by anomaly_service_router, so every route
+// stays drivable without a socket in the test suite.
 @ anomaly_serve s host i port → i {
-    : Router r ( anomaly_service_router )
-    : !TcpListener NetErr lr ( tcp_listen host port )
-    ?? lr {
-        T listener → {
-            : ( @ HttpResponse HttpRequest ) h \ HttpRequest req → HttpResponse { ^ ( router_handle r req ) }
-            : HttpServer srv ( server_new listener h )
-            ( nurl_eprint `anomaly: serving on ` )
-            ( nurl_eprint host )
-            ( nurl_eprint `:` )
-            : String ps ( string_new )
-            ( string_push_int ps port )
-            ( nurl_eprintln ( string_data ps ) )
-            ( string_free ps )
-            : !v NetErr rr ( server_run srv )
-            ( server_stop srv )
-            ( router_free r )
-            ?? rr {
-                T _ → { ^ 0 }
-                F e → {
-                    ( nurl_eprint `anomaly: server error: ` )
-                    ( nurl_eprintln ( net_err_name e ) )
-                    ^ 1
-                }
-            }
-        }
-        F e → {
-            ( router_free r )
-            ( nurl_eprint `anomaly: cannot bind ` )
-            ( nurl_eprintln host )
-            ^ 1
-        }
-    }
+    : *HttpApp app ( http_app_new )
+    ( http_app_use_router app ( anomaly_service_router ) )
+    : i rc ( http_app_listen app host port )
+    ( http_app_free app )
+    ^ rc
 }
