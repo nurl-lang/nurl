@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.2
+
+- Internal: the command line is now assembled with the [`cli`](../cli)
+  package — `main()` drops from ~150 lines of hand-rolled argument parsing +
+  dispatch to a declarative Cli. Command behaviour is unchanged; `--help` is
+  now auto-generated and colour-aware. Adds a `cli` dependency.
+
 ## 0.3.1
 
 - Internal: `anomaly serve` now runs on the [`http`](../http) package's
