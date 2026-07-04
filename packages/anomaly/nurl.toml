@@ -8,3 +8,4 @@ license = "MIT OR Apache-2.0"
 iforest = { path = "../iforest", version = "0.1" }
 gpu = { path = "../gpu", version = "0.2.1" }
 http = { path = "../http", version = "0.1" }
+cli = { path = "../cli", version = "0.1" }
