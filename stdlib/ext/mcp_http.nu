@@ -86,16 +86,22 @@
 // The plain `mcp_http_handler` below stays the stateless single/batch
 // path.
 //
+// Batches — SHIPPED in BOTH handlers. A top-level `[req1, req2, ...]`
+// array routes through `dispatch` per element; non-notification
+// responses are collected into an array response in order;
+// pure-notification batches return 202; empty batches return
+// invalid_request per JSON-RPC. In the session handler the
+// Mcp-Session-Id is validated once for the whole batch.
+//
+// Last-Event-ID resumption — SHIPPED for the session handler's GET
+// drain. Delivered events carry monotonic per-session SSE ids
+// (`mcp_sse_frame_id`) and are retained in a bounded replay backlog
+// (last `mcp_session_backlog_cap` = 64 events, best-effort); a GET
+// carrying `Last-Event-ID: <n>` gets the retained frames with id > n
+// replayed ahead of any newly drained events.
+//
 // Limitations / not yet implemented (each is straight-line work, just
 // outside the MVP):
-//   * Last-Event-ID resumption for the continuous SSE stream (the queue
-//     is fire-and-forget; a dropped connection loses un-flushed events).
-//   * Session-aware handler is single-request only — batch arrays still
-//     go through the stateless `mcp_http_handler`.
-//   * (BATCH NOW SHIPPED) Top-level `[req1, req2, ...]` arrays route
-//     through `dispatch` per element; non-notification responses are
-//     collected into an array response; pure-notification batches
-//     return 202; empty batches return invalid_request per JSON-RPC.
 //   * `Accept: text/event-stream` content-negotiation upgrade for
 //     POST — fall back to JSON for simplicity. The mainstream clients
 //     accept either.
@@ -417,12 +423,22 @@ s host i port
 //     a server→client reverse RPC (e.g. `sampling/createMessage`); the
 //     server replies 202 Accepted.
 //   * GET → drains the session's outbound queue and writes each queued
-//     message as an SSE `message` event (a real notification flush, not
-//     the static stub). With no/invalid session it emits a `ready` event.
+//     message as an id-tagged SSE `message` event (a real notification
+//     flush, not the static stub); delivered events are retained in the
+//     session's bounded replay backlog. A `Last-Event-ID: <n>` request
+//     header (case-insensitive) replays the retained frames with
+//     id > n ahead of the newly drained ones (best-effort — see
+//     `mcp_session_replay`). With no/invalid session it emits a `ready`
+//     event.
 //   * DELETE → tears the session down in the store.
-//
-// Batch arrays are not handled here — point batch clients at the
-// stateless `mcp_http_handler`; sessions are a single-request flow.
+//   * POST batch (top-level array) → the Mcp-Session-Id is validated
+//     once for the whole batch (unknown → 404), then every element runs
+//     through the same session dispatch as a single request (reverse-RPC
+//     responses settle, resources/(un)subscribe are handled
+//     session-side, the rest go to `dispatch`); responses are collected
+//     into a JSON array in order. Empty batch → invalid_request;
+//     all-notification batch → 202. `initialize` inside a batch does NOT
+//     mint a session id — initialize as a single request to get one.
 //
 // For a CONTINUOUS (long-lived) SSE stream, a custom accept loop owns
 // the TcpConn and uses the `mcp_sse_*` chunked helpers below; the
@@ -452,10 +468,76 @@ s host i port
     }
 }
 
+// The SESSION transport supports resources/subscribe (the per-session
+// SSE stream is the delivery channel for notifications/resources/
+// updated), so an initialize reply that advertises a `resources`
+// capability is upgraded in place to carry `"subscribe": true`. The
+// registry's initialize builder stays transport-agnostic — a stateless
+// or stdio transport has no push channel and must not advertise it.
+@ __mcp_init_mark_subscribable Json env → v {
+    : ?Json ro ( json_obj_get env `result` )
+    ?? ro {
+        T res → {
+            : ?Json co ( json_obj_get res `capabilities` )
+            ?? co {
+                T caps → {
+                    : ?Json rso ( json_obj_get caps `resources` )
+                    ?? rso {
+                        T rc → { ( json_obj_set rc `subscribe` ( json_bool T ) ) }
+                        F _ → {}
+                    }
+                }
+                F _ → {}
+            }
+        }
+        F _ → {}
+    }
+}
+
 @ __mcp_req_is_response Json req → b {
     // A JSON-RPC response carries result/error and no method.
     ? ( json_obj_has req `method` ) { ^ F } {}
     ^ | ( json_obj_has req `result` ) ( json_obj_has req `error` )
+}
+
+// Route ONE batch element through the same session-scoped dispatch the
+// single-request path uses: a JSON-RPC RESPONSE settles a pending
+// reverse RPC (no reply produced); resources/(un)subscribe is recorded
+// against the session and acked with an empty result; everything else
+// goes to the user dispatch closure. `elem` is BORROWED (an element of
+// the batch array); `sid` is the already-validated session id, or ``
+// when the request carried none. Returns an owned reply or None (the
+// element was a notification / a response).
+@ __mcp_session_dispatch_one McpSessionStore store s sid Json elem ( @ ?Json Json ) dispatch → ?Json {
+    ? ( __mcp_req_is_response elem ) {
+        ? > ( nurl_str_len sid ) 0 {
+            // resolve_rpc CONSUMES its response — clone the borrow.
+            ( mcp_session_resolve_rpc store sid ( json_clone elem ) )
+        } {}
+        ^ @ ?Json { F # Json 0 }
+    } {}
+    : s method ( __mcp_session_get_method elem )
+    : b is_sub ( nurl_str_eq method `resources/subscribe` )
+    : b is_unsub ( nurl_str_eq method `resources/unsubscribe` )
+    ? | is_sub is_unsub {
+        : ~ s sub_uri ``
+        : ?Json prm ( json_obj_get elem `params` )
+        ?? prm {
+            T pj → {
+                : ?Json uj ( json_obj_get pj `uri` )
+                ?? uj { T x → { = sub_uri ( json_as_str x ) } F _ → {} }
+            }
+            F _ → {}
+        }
+        ? > ( nurl_str_len sid ) 0 {
+            ? & is_sub != 0 ( nurl_str_len sub_uri )
+            { ( mcp_session_subscribe store sid sub_uri ) } {}
+            ? & is_unsub != 0 ( nurl_str_len sub_uri )
+            { ( mcp_session_unsubscribe store sid sub_uri ) } {}
+        } {}
+        ^ @ ?Json { T ( __mcp_subscribe_reply elem ) }
+    } {}
+    ^ ( dispatch elem )
 }
 
 @ mcp_http_handler_session
@@ -483,23 +565,50 @@ McpSessionStore store
                 T s → {
                     ? ( mcp_session_valid store ( string_data s ) ) {
                         = have T
-                        : ( Vec Json ) q ( mcp_session_drain_notify store ( string_data s ) )
-                        : i n ( vec_len [Json] q )
+                        // Last-Event-ID resumption: replay the retained
+                        // id-tagged frames the client missed (id > n)
+                        // ahead of anything newly drained. header_get is
+                        // case-insensitive.
+                        : ?String levo ( header_get . req headers `Last-Event-ID` )
+                        ?? levo {
+                            T lev → {
+                                : i last_id ( nurl_str_to_int ( string_data lev ) )
+                                ( string_free lev )
+                                : ( Vec String ) rp ( mcp_session_replay store ( string_data s ) last_id )
+                                : i rn ( vec_len [String] rp )
+                                : ~ i rk 0
+                                ~ < rk rn {
+                                    : ?String fo ( vec_get [String] rp rk )
+                                    ?? fo {
+                                        T f → {
+                                            ( string_push_str body ( string_data f ) )
+                                            ( string_free f )
+                                        }
+                                        F → {}
+                                    }
+                                    = rk + rk 1
+                                }
+                                ( vec_free [String] rp )
+                            }
+                            F _ → {}
+                        }
+                        // Fresh events: drained as id-tagged frames and
+                        // archived in the replay backlog.
+                        : ( Vec String ) q ( mcp_session_drain_frames store ( string_data s ) )
+                        : i n ( vec_len [String] q )
                         : ~ i k 0
                         ~ < k n {
-                            : ?Json e ( vec_get [Json] q k )
-                            ?? e {
-                                T jv → {
-                                    : String f ( mcp_sse_frame `message` jv )
+                            : ?String fo ( vec_get [String] q k )
+                            ?? fo {
+                                T f → {
                                     ( string_push_str body ( string_data f ) )
                                     ( string_free f )
-                                    ( json_free jv )
                                 }
                                 F → {}
                             }
                             = k + k 1
                         }
-                        ( vec_free [Json] q )
+                        ( vec_free [String] q )
                     } {}
                     ( string_free s )
                 }
@@ -546,6 +655,78 @@ McpSessionStore store
 
         ?? pj {
             T jreq → {
+                // JSON-RPC 2.0 batch: a top-level array routes every
+                // element through the same session dispatch as a single
+                // request (__mcp_session_dispatch_one). The session id is
+                // validated ONCE for the whole batch (unknown → 404).
+                // Empty batch → invalid_request; all-notification batch
+                // → 202. Explicit while-loop, same closure caveat as the
+                // stateless handler.
+                ? ( json_is_arr jreq ) {
+                    : i bcount ( json_arr_len jreq )
+                    ? <= bcount 0 {
+                        ( json_free jreq )
+                        : HttpResponse r ( __mcp_http_jsonrpc_error mcp_err_invalid_request `empty batch` )
+                        ( __mcp_http_apply_cors r )
+                        ( __mcp_http_echo_session req r )
+                        ^ r
+                    } {}
+                    : String bsid ( string_new )
+                    : ~ b breject F
+                    : ?String bso ( header_get . req headers `Mcp-Session-Id` )
+                    ?? bso {
+                        T s → {
+                            ? > ( string_len s ) 0 {
+                                ? ( mcp_session_valid store ( string_data s ) ) {
+                                    ( string_push_str bsid ( string_data s ) )
+                                } { = breject T }
+                            } {}
+                            ( string_free s )
+                        }
+                        F _ → {}
+                    }
+                    ? breject {
+                        ( string_free bsid )
+                        ( json_free jreq )
+                        : HttpResponse r ( __mcp_http_jsonrpc_error mcp_err_invalid_request `unknown or expired Mcp-Session-Id` )
+                        = . r status 404
+                        ( __mcp_http_apply_cors r )
+                        ^ r
+                    } {}
+                    : ( Vec Json ) resps ( vec_new [Json] )
+                    : ~ i bi 0
+                    ~ < bi bcount {
+                        : ?Json elem ( json_arr_get jreq bi )
+                        ?? elem {
+                            T el → {
+                                : ?Json reply ( __mcp_session_dispatch_one store ( string_data bsid ) el dispatch )
+                                ?? reply {
+                                    T resp → ( vec_push [Json] resps resp )
+                                    F empty → ( json_free empty )
+                                }
+                            }
+                            F _ → {}
+                        }
+                        = bi + bi 1
+                    }
+                    ( json_free jreq )
+                    ( string_free bsid )
+                    : i nr ( vec_len [Json] resps )
+                    ? > nr 0 {
+                        : Json resp_arr ( json_arr resps )
+                        : HttpResponse r ( __mcp_http_response_for_json req resp_arr )
+                        ( __mcp_http_apply_cors r )
+                        ( __mcp_http_echo_session req r )
+                        ^ r
+                    } {
+                        ( vec_free [Json] resps )
+                        : HttpResponse r ( response_status_only 202 )
+                        ( __mcp_http_apply_cors r )
+                        ( __mcp_http_echo_session req r )
+                        ^ r
+                    }
+                } {}
+
                 // Reverse-RPC response from the client → settle it.
                 ? ( __mcp_req_is_response jreq ) {
                     : ?String sido ( header_get . req headers `Mcp-Session-Id` )
@@ -624,6 +805,10 @@ McpSessionStore store
 
                 ?? reply {
                     T resp_json → {
+                        // The session transport can push notifications, so
+                        // initialize's resources capability (when present)
+                        // gains `"subscribe": true` here.
+                        ? is_init { ( __mcp_init_mark_subscribable resp_json ) } {}
                         : HttpResponse r ( __mcp_http_response_for_json req resp_json )
                         // On initialize, mint and attach a new session id.
                         ? is_init {

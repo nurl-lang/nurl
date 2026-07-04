@@ -12,6 +12,16 @@
 #    --emit-asm | --emit=asm   Emit .s (native assembly), skip link
 #    -O0 | -O1 | -O2 | -O3     Clang optimisation level (default -O2)
 #    -g | --debug              Pass -g to clang (DWARF line tables)
+#    --coverage                Line-coverage instrumentation (implies -g):
+#                              gcov-style -fprofile-arcs -ftest-coverage over
+#                              nurlc's DWARF line info. Run the binary (drops
+#                              <unit>.gcda next to the <unit>.gcno), then
+#                              `llvm-cov gcov <unit>.gcda` renders per-line
+#                              hit counts for the original .nu source.
+#                              (clang's source-based -fcoverage-mapping is a
+#                              C/C++ frontend feature and can't apply to IR
+#                              input — the gcov pipeline is the one that maps
+#                              back through !dbg line metadata.)
 #
 #  Environment:
 #    NURL_OPT=-O0..-O3   Override default -O2 when no CLI flag given
@@ -79,6 +89,7 @@ fi
 EMIT_IR=0
 EMIT_ASM=0
 DEBUG_INFO=0
+COVERAGE=0
 CLI_OPT=""
 
 while [ $# -gt 0 ]; do
@@ -86,6 +97,10 @@ while [ $# -gt 0 ]; do
         --emit-ir|--emit=ir)   EMIT_IR=1;    shift ;;
         --emit-asm|--emit=asm) EMIT_ASM=1;   shift ;;
         -g|--debug)            DEBUG_INFO=1; shift ;;
+        # Coverage needs the DWARF line metadata (nurlc --g) to map arc
+        # counters back to .nu lines, and the non-LTO debug link so the
+        # GCOV notes survive — so it implies --debug.
+        --coverage)            COVERAGE=1; DEBUG_INFO=1; shift ;;
         -O0|-O1|-O2|-O3)       CLI_OPT="$1"; shift ;;
         *) break ;;
     esac
@@ -94,7 +109,7 @@ done
 if [ $# -eq 0 ]; then
     echo "Usage: $0 [flags] <file.nu> [output_name]" >&2
     echo "" >&2
-    echo "  Flags: --emit-ir | --emit-asm | -O0..-O3 | -g | --debug" >&2
+    echo "  Flags: --emit-ir | --emit-asm | -O0..-O3 | -g | --debug | --coverage" >&2
     echo "" >&2
     echo "  Compiles a NURL source file to a native binary." >&2
     echo "  The intermediate .ll file is kept alongside the output." >&2
@@ -227,6 +242,14 @@ if [ $DEBUG_INFO -eq 1 ]; then
     # -rdynamic: export dynamic symbols so libc's backtrace_symbols
     #   used by nurl_panic can render function names (vs. raw addrs).
     DEBUG_FLAGS="-g -rdynamic"
+fi
+# --coverage: gcov-style instrumentation. -fprofile-arcs/-ftest-coverage
+# run as IR passes (unlike the C-frontend-only -fcoverage-mapping), keyed
+# off the !dbg line metadata --debug already turned on — so `llvm-cov
+# gcov <unit>.gcda` reports per-line hit counts against the .nu source.
+COVERAGE_FLAGS=""
+if [ $COVERAGE -eq 1 ]; then
+    COVERAGE_FLAGS="-fprofile-arcs -ftest-coverage"
 fi
 
 # --emit-asm: stop after clang -S, skip linking (no runtime needed for .s).
@@ -452,7 +475,7 @@ elif [ $DEBUG_INFO -eq 1 ]; then
     fi
     RUNTIME_TO_LINK="$DBG_RUNTIME"
 fi
-echo "[2/2] $LLFILE → $OUTBASE  ($OPT${LTO_FLAG:+ $LTO_FLAG}${DEBUG_FLAGS:+ $DEBUG_FLAGS}${SAN_LINK_FLAGS:+ $SAN_LINK_FLAGS}${EXTRA_LIBS:+ $EXTRA_LIBS})"
+echo "[2/2] $LLFILE → $OUTBASE  ($OPT${LTO_FLAG:+ $LTO_FLAG}${DEBUG_FLAGS:+ $DEBUG_FLAGS}${COVERAGE_FLAGS:+ $COVERAGE_FLAGS}${SAN_LINK_FLAGS:+ $SAN_LINK_FLAGS}${EXTRA_LIBS:+ $EXTRA_LIBS})"
 # `-flto` is required because stdlib/runtime.o is compiled with -flto
 # (build.sh) and therefore carries LLVM bitcode instead of native code.
 # The matching link-time flag here drives the LTO pipeline, inlining
@@ -465,7 +488,7 @@ echo "[2/2] $LLFILE → $OUTBASE  ($OPT${LTO_FLAG:+ $LTO_FLAG}${DEBUG_FLAGS:+ $D
 # because the build machine had them. Positional: it must precede the
 # `-l` libraries to govern them.
 # shellcheck disable=SC2086
-cc_run $OPT $LTO_FLAG -Wl,--as-needed $OPAQUE_FLAGS $DEBUG_FLAGS $SAN_LINK_FLAGS "$LLFILE" "$RUNTIME_TO_LINK" $EXTRA_OBJS -o "$OUTBASE" -lm -lpthread $DL_LIB $EXTRA_LIBS
+cc_run $OPT $LTO_FLAG -Wl,--as-needed $OPAQUE_FLAGS $DEBUG_FLAGS $COVERAGE_FLAGS $SAN_LINK_FLAGS "$LLFILE" "$RUNTIME_TO_LINK" $EXTRA_OBJS -o "$OUTBASE" -lm -lpthread $DL_LIB $EXTRA_LIBS
 
 echo ""
 echo "Done: $OUTBASE"

@@ -101,7 +101,7 @@ $ `stdlib/std/float.nu`
         Num c → c
         Var → xv
         Add a b → + ( e_eval a xv ) ( e_eval b xv )
-        Mul a b → *( e_eval a xv ) ( e_eval b xv )
+        Mul a b → * ( e_eval a xv ) ( e_eval b xv )
         Neg a → - 0.0 ( e_eval a xv )
         Sin a → ( float_sin ( e_eval a xv ) )
         Cos a → ( float_cos ( e_eval a xv ) )

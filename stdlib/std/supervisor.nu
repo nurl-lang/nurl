@@ -235,7 +235,7 @@ $ `stdlib/std/panic.nu`
     : ~ i lo ?? ( vec_get [i] v 0 ) { T x → x F → 0 }
     : ~ i k 1
     ~ < k n {
-        ?? ( vec_get [i] v k ) { T x → ?< x lo { = lo x } {} F → {} }
+        ?? ( vec_get [i] v k ) { T x → ? < x lo { = lo x } {} F → {} }
         = k + k 1
     }
     ^ lo

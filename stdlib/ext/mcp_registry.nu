@@ -23,10 +23,13 @@
 //   * completion/complete (argument autocompletion for prompts/resources)
 //   * ping (heartbeat — empty result)
 //
-// Out of scope here (deferred):
-//   * resources/subscribe + change notifications (needs SSE push)
-//   * sampling/createMessage (server→client; bidirectional reverse RPC)
-//   * roots/list (client-side feature)
+// Out of scope here (transport-level; served by mcp_session/mcp_http):
+//   * resources/subscribe + notifications/resources/updated — session-
+//     scoped in mcp_http_handler_session over the mcp_session queue
+//     (the registry dispatch stays session-agnostic)
+//   * sampling/createMessage (server→client reverse RPC — mcp_session)
+// Out of scope (client-side feature):
+//   * roots/list
 //
 // Memory model:
 //   McpRegistry OWNS its String + Json fields + the Vec containers.

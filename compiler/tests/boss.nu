@@ -10,7 +10,7 @@ $ `stdlib/core/string.nu`
 @ json_to_str Json val → s {
     ?? val {
         JNull → `null`
-        JBool b → ?b `true` `false`
+        JBool b → ? b `true` `false`
         JNum n → ( nurl_str_int n )
         JStr s → s
     }

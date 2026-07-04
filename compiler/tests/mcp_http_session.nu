@@ -45,6 +45,13 @@ $ `stdlib/core/vec.nu`
     : Json id ?? idc { T j → ( json_clone j ) F → ( json_null ) }
     ? == 1 ( nurl_str_eq method `initialize` ) {
         : Json res ( mcp_initialize_result `test` `0.1` )
+        // Advertise a resources capability so the SESSION transport's
+        // `subscribe: true` upgrade is observable in the reply.
+        : ?Json co ( json_obj_get res `capabilities` )
+        ?? co {
+            T caps → ( json_obj_set caps `resources` ( json_obj_new ) )
+            F _ → {}
+        }
         : Json out ( mcp_response_result id res )
         ( json_free id )
         ^ @ ?Json { T out }
@@ -70,6 +77,11 @@ $ `stdlib/core/vec.nu`
     ?? sido { T s → { ( string_push_str sid ( string_data s ) ) ( string_free s ) } F _ → {} }
     ? != ( string_len sid ) 32 { ( nurl_print `  FAIL no session id minted\n` ) = fails + fails 1 } {}
     ? != ( mcp_session_count store ) 1 { ( nurl_print `  FAIL store count\n` ) = fails + fails 1 } {}
+    // The session transport upgrades the resources capability with
+    // `"subscribe": true` (SSE stream = the delivery channel).
+    : String ib ( resp_body_str resp1 )
+    ? < ( nurl_str_find ( string_data ib ) `"subscribe":true` ) 0 { ( nurl_print `  FAIL init subscribe cap\n` ) = fails + fails 1 } {}
+    ( string_free ib )
     ( request_free r1 )
     ( http_response_free resp1 )
 
@@ -95,7 +107,7 @@ $ `stdlib/core/vec.nu`
     : HttpResponse resp4 ( handler r4 )
     ? != . resp4 status 200 { ( nurl_print `  FAIL get status\n` ) = fails + fails 1 } {}
     : String sse ( resp_body_str resp4 )
-    ? ! ( string_starts_with sse `event: message\r\ndata: ` ) { ( nurl_print `  FAIL sse not drained\n` ) = fails + fails 1 } {}
+    ? ! ( string_starts_with sse `id: 1\r\nevent: message\r\ndata: ` ) { ( nurl_print `  FAIL sse not drained\n` ) = fails + fails 1 } {}
     ? < ( nurl_str_find ( string_data sse ) `ping-from-server` ) 0 { ( nurl_print `  FAIL sse payload\n` ) = fails + fails 1 } {}
     ( string_free sse )
     ( request_free r4 )
@@ -108,6 +120,27 @@ $ `stdlib/core/vec.nu`
     ( string_free sse2 )
     ( request_free r4b )
     ( http_response_free resp4b )
+    // 4c. reconnect with Last-Event-ID: 0 → event 1 replayed from the
+    // backlog even though the queue is empty.
+    : HttpRequest r4c ( make_req `GET` `` ( string_data sid ) )
+    ( vec_push [Header] . r4c headers ( header_new `Last-Event-ID` `0` ) )
+    : HttpResponse resp4c ( handler r4c )
+    : String sse3 ( resp_body_str resp4c )
+    ? < ( nurl_str_find ( string_data sse3 ) `id: 1\r\nevent: message` ) 0 { ( nurl_print `  FAIL replay missing\n` ) = fails + fails 1 } {}
+    ? < ( nurl_str_find ( string_data sse3 ) `ping-from-server` ) 0 { ( nurl_print `  FAIL replay payload\n` ) = fails + fails 1 } {}
+    ( string_free sse3 )
+    ( request_free r4c )
+    ( http_response_free resp4c )
+    // 4d. Last-Event-ID current (lowercase header — case-insensitive
+    // match) → nothing replayed.
+    : HttpRequest r4d ( make_req `GET` `` ( string_data sid ) )
+    ( vec_push [Header] . r4d headers ( header_new `last-event-id` `1` ) )
+    : HttpResponse resp4d ( handler r4d )
+    : String sse4 ( resp_body_str resp4d )
+    ? < ( nurl_str_find ( string_data sse4 ) `event: message` ) 0 {} { ( nurl_print `  FAIL replay not idle\n` ) = fails + fails 1 }
+    ( string_free sse4 )
+    ( request_free r4d )
+    ( http_response_free resp4d )
 
     // 5. reverse-RPC response (no method, has result) → 202 + resolved.
     : i rid ( mcp_session_begin_rpc store ( string_data sid ) `sampling/createMessage` ( json_obj_new ) )
@@ -125,7 +158,82 @@ $ `stdlib/core/vec.nu`
     ~ < li ( vec_len [Json] leftover ) { ?? ( vec_get [Json] leftover li ) { T j → ( json_free j ) F → {} } = li + li 1 }
     ( vec_free [Json] leftover )
 
-    // 6. DELETE tears the session down.
+    // 6. batch POST: two requests → ordered JSON array of responses.
+    : HttpRequest rb ( make_req `POST` `[{"jsonrpc":"2.0","id":10,"method":"ping"},{"jsonrpc":"2.0","id":11,"method":"ping"}]` ( string_data sid ) )
+    : HttpResponse respb ( handler rb )
+    ? != . respb status 200 { ( nurl_print `  FAIL batch status\n` ) = fails + fails 1 } {}
+    : String bb ( resp_body_str respb )
+    : !Json JsonError pb ( json_parse ( string_data bb ) )
+    ?? pb {
+        T ja → {
+            ? ! ( json_is_arr ja ) { ( nurl_print `  FAIL batch not array\n` ) = fails + fails 1 } {}
+            ? != ( json_arr_len ja ) 2 { ( nurl_print `  FAIL batch arity\n` ) = fails + fails 1 } {}
+            ?? ( json_arr_get ja 0 ) {
+                T e0 → { ?? ( json_obj_get e0 `id` ) { T i0 → { ? != ( json_as_int i0 ) 10 { ( nurl_print `  FAIL batch order 0\n` ) = fails + fails 1 } {} } F → { ( nurl_print `  FAIL batch id 0\n` ) = fails + fails 1 } } }
+                F → { ( nurl_print `  FAIL batch elem 0\n` ) = fails + fails 1 }
+            }
+            ?? ( json_arr_get ja 1 ) {
+                T e1 → { ?? ( json_obj_get e1 `id` ) { T i1 → { ? != ( json_as_int i1 ) 11 { ( nurl_print `  FAIL batch order 1\n` ) = fails + fails 1 } {} } F → { ( nurl_print `  FAIL batch id 1\n` ) = fails + fails 1 } } }
+                F → { ( nurl_print `  FAIL batch elem 1\n` ) = fails + fails 1 }
+            }
+            ( json_free ja )
+        }
+        F _ → { ( nurl_print `  FAIL batch body parse\n` ) = fails + fails 1 }
+    }
+    ( string_free bb )
+    ( request_free rb )
+    ( http_response_free respb )
+    // 6b. batch with an unknown session id → 404 (validated once).
+    : HttpRequest rb404 ( make_req `POST` `[{"jsonrpc":"2.0","id":12,"method":"ping"}]` `deadbeefdeadbeefdeadbeefdeadbeef` )
+    : HttpResponse respb404 ( handler rb404 )
+    ? != . respb404 status 404 { ( nurl_print `  FAIL batch-unknown status\n` ) = fails + fails 1 } {}
+    ( request_free rb404 )
+    ( http_response_free respb404 )
+    // 6c. empty batch → JSON-RPC invalid_request error (HTTP 200).
+    : HttpRequest rbe ( make_req `POST` `[]` ( string_data sid ) )
+    : HttpResponse respbe ( handler rbe )
+    ? != . respbe status 200 { ( nurl_print `  FAIL empty-batch status\n` ) = fails + fails 1 } {}
+    : String be ( resp_body_str respbe )
+    ? < ( nurl_str_find ( string_data be ) `-32600` ) 0 { ( nurl_print `  FAIL empty-batch code\n` ) = fails + fails 1 } {}
+    ( string_free be )
+    ( request_free rbe )
+    ( http_response_free respbe )
+    // 6d. all-notification batch (no ids) → 202 Accepted, no body.
+    : HttpRequest rbn ( make_req `POST` `[{"jsonrpc":"2.0","method":"note"},{"jsonrpc":"2.0","method":"note2"}]` ( string_data sid ) )
+    : HttpResponse respbn ( handler rbn )
+    ? != . respbn status 202 { ( nurl_print `  FAIL notif-batch status\n` ) = fails + fails 1 } {}
+    ( request_free rbn )
+    ( http_response_free respbn )
+
+    // 6e. resources/subscribe end to end: subscribe over the handler,
+    // a server-side update lands on the session's SSE stream, and
+    // unsubscribe stops delivery.
+    : HttpRequest rs1 ( make_req `POST` `{"jsonrpc":"2.0","id":20,"method":"resources/subscribe","params":{"uri":"file:///w.txt"}}` ( string_data sid ) )
+    : HttpResponse resps1 ( handler rs1 )
+    ? != . resps1 status 200 { ( nurl_print `  FAIL sub status\n` ) = fails + fails 1 } {}
+    : String sb ( resp_body_str resps1 )
+    ? < ( nurl_str_find ( string_data sb ) `"result"` ) 0 { ( nurl_print `  FAIL sub ack\n` ) = fails + fails 1 } {}
+    ( string_free sb )
+    ( request_free rs1 )
+    ( http_response_free resps1 )
+    ? ! ( mcp_session_is_subscribed store ( string_data sid ) `file:///w.txt` ) { ( nurl_print `  FAIL sub recorded\n` ) = fails + fails 1 } {}
+    ? != ( mcp_session_notify_resource_updated store `file:///w.txt` ) 1 { ( nurl_print `  FAIL http notify count\n` ) = fails + fails 1 } {}
+    : HttpRequest rs2 ( make_req `GET` `` ( string_data sid ) )
+    : HttpResponse resps2 ( handler rs2 )
+    : String ub ( resp_body_str resps2 )
+    ? < ( nurl_str_find ( string_data ub ) `notifications/resources/updated` ) 0 { ( nurl_print `  FAIL updated missing\n` ) = fails + fails 1 } {}
+    ? < ( nurl_str_find ( string_data ub ) `file:///w.txt` ) 0 { ( nurl_print `  FAIL updated uri\n` ) = fails + fails 1 } {}
+    ( string_free ub )
+    ( request_free rs2 )
+    ( http_response_free resps2 )
+    : HttpRequest rs3 ( make_req `POST` `{"jsonrpc":"2.0","id":21,"method":"resources/unsubscribe","params":{"uri":"file:///w.txt"}}` ( string_data sid ) )
+    : HttpResponse resps3 ( handler rs3 )
+    ? != . resps3 status 200 { ( nurl_print `  FAIL unsub status\n` ) = fails + fails 1 } {}
+    ( request_free rs3 )
+    ( http_response_free resps3 )
+    ? != ( mcp_session_notify_resource_updated store `file:///w.txt` ) 0 { ( nurl_print `  FAIL notify after unsub\n` ) = fails + fails 1 } {}
+
+    // 7. DELETE tears the session down.
     : HttpRequest r6 ( make_req `DELETE` `` ( string_data sid ) )
     : HttpResponse resp6 ( handler r6 )
     ? != . resp6 status 204 { ( nurl_print `  FAIL delete status\n` ) = fails + fails 1 } {}

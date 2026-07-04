@@ -176,7 +176,7 @@ $ `stdlib/std/hashmap.nu`
     ~ & < id dict_size ! printed {
         : ?i c ( map_get [i i] freqs id hi ei )
         ?? c {
-            T n → ?== n max_count {
+            T n → ? == n max_count {
                 : ?s w ( vec_get [s] id_to_word id )
                 ?? w {
                     T s → { ( nurl_print `'` ) ( nurl_print s ) ( nurl_print `'` ) }

@@ -1381,7 +1381,7 @@ $ `stdlib/core/vec.nu`
 @ json_as_int Json j → i {
     ^ ?? j {
         JNum s → ( nurl_str_to_int ( string_data s ) )
-        JBool b → ?b 1 0
+        JBool b → ? b 1 0
         _ → 0
     }
 }

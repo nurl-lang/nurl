@@ -205,7 +205,7 @@ $ `stdlib/std/time.nu`  // smtp_date_now
 @ __smtp_expect SmtpClient c s text i want SmtpErr onfail → !v SmtpErr {
     : !i SmtpErr r ( __smtp_cmd c text )
     ^ ?? r {
-        T code → ?== code want { @ !v SmtpErr { T 0 } } { @ !v SmtpErr { F onfail } }
+        T code → ? == code want { @ !v SmtpErr { T 0 } } { @ !v SmtpErr { F onfail } }
         F er → @ !v SmtpErr { F er }
     }
 }
@@ -224,7 +224,7 @@ $ `stdlib/std/time.nu`  // smtp_date_now
     : SmtpClient c @ SmtpClient { conn ( vec_new [u] ) ( string_with_cap 128 ) }
     : !i SmtpErr g ( __smtp_read_reply c )
     ^ ?? g {
-        T code → ?== code 220 { @ !SmtpClient SmtpErr { T c } } { ( smtp_close c ) @ !SmtpClient SmtpErr { F # SmtpErr SmtpProtocol } }
+        T code → ? == code 220 { @ !SmtpClient SmtpErr { T c } } { ( smtp_close c ) @ !SmtpClient SmtpErr { F # SmtpErr SmtpProtocol } }
         F er → { ( smtp_close c ) @ !SmtpClient SmtpErr { F er } }
     }
 }
@@ -339,7 +339,7 @@ $ `stdlib/std/time.nu`  // smtp_date_now
     : !i SmtpErr r ( __smtp_cmd c ( string_data line ) )
     ( string_free line )
     ^ ?? r {
-        T code → ?| == code 250 == code 251 { @ !v SmtpErr { T 0 } } { @ !v SmtpErr { F # SmtpErr SmtpProtocol } }
+        T code → ? | == code 250 == code 251 { @ !v SmtpErr { T 0 } } { @ !v SmtpErr { F # SmtpErr SmtpProtocol } }
         F er → @ !v SmtpErr { F er }
     }
 }
@@ -360,7 +360,7 @@ $ `stdlib/std/time.nu`  // smtp_date_now
     ?? w { T _ → {} F er → { ^ @ !v SmtpErr { F ( __smtp_of_net er ) } } }
     : !i SmtpErr r2 ( __smtp_read_reply c )
     ^ ?? r2 {
-        T code → ?== code 250 { @ !v SmtpErr { T 0 } } { @ !v SmtpErr { F # SmtpErr SmtpProtocol } }
+        T code → ? == code 250 { @ !v SmtpErr { T 0 } } { @ !v SmtpErr { F # SmtpErr SmtpProtocol } }
         F er → @ !v SmtpErr { F er }
     }
 }

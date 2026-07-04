@@ -13,6 +13,9 @@
 //        struct/enum types + variants, and global `:` consts.
 //      * Transitively walks `$`-imports starting from each didOpen
 //        file so cross-file jumps land in the right place.
+//   4. textDocument/rename.
+//      * References sweep + declaration site, mapped to a
+//        WorkspaceEdit; invalid targets / names → -32602.
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/symtab.nu`
@@ -77,6 +80,7 @@ $ `tools/nurl-lsp/jsonrpc.nu`
     ( json_obj_set caps `textDocumentSync` ( json_int 1 ) )
     ( json_obj_set caps `definitionProvider` ( json_bool T ) )
     ( json_obj_set caps `referencesProvider` ( json_bool T ) )
+    ( json_obj_set caps `renameProvider` ( json_bool T ) )
     ( json_obj_set caps `documentSymbolProvider` ( json_bool T ) )
     ( json_obj_set caps `hoverProvider` ( json_bool T ) )
     // Completion: no trigger characters — VS Code invokes completion
@@ -95,7 +99,7 @@ $ `tools/nurl-lsp/jsonrpc.nu`
 @ __build_server_info → Json {
     : Json info ( json_obj_new )
     ( json_obj_set info `name` ( json_str_lit `nurl-lsp` ) )
-    ( json_obj_set info `version` ( json_str_lit `0.6.0` ) )
+    ( json_obj_set info `version` ( json_str_lit `0.7.0` ) )
     ^ info
 }
 
@@ -1795,6 +1799,217 @@ $ `tools/nurl-lsp/jsonrpc.nu`
     ( json_free resp )
 }
 
+// ── Rename (textDocument/rename) ────────────────────────────────────
+//
+// Rename = references + the declaration site, mapped to TextEdits.
+// Reuses the references scanner (__collect_refs_in_doc): every
+// Location it produces has its range cloned into a TextEdit
+// {range, newText}. The sweep covers the same scope as
+// textDocument/references (every open document); additionally, when
+// g_defs knows the declaring file and that file is NOT an open
+// buffer, it is read from disk and swept too, so the declaration is
+// always part of the WorkspaceEdit.
+//
+// Invalid targets are rejected with JSON-RPC error -32602:
+//   * position not on an identifier (whitespace / punctuation /
+//     numeric literal),
+//   * identifier under the cursor is a reserved word,
+//   * newName not shaped [A-Za-z_][A-Za-z0-9_]*,
+//   * newName collides with a reserved word.
+
+// Is `name` lexically a valid NURL identifier?
+@ __valid_ident s name → b {
+    : i n ( nurl_str_len name )
+    ? == n 0 { ^ F } {}
+    ? ! ( __is_ident_start ( nurl_str_get name 0 ) ) { ^ F } {}
+    : ~ i k 1
+    ~ < k n {
+        ? ! ( __is_ident_byte ( nurl_str_get name k ) ) { ^ F } {}
+        = k + k 1
+    }
+    ^ T
+}
+
+// Reserved words rename must never produce or target: the
+// single-token type keywords plus named types and the literal /
+// decl keywords the lexer treats specially.
+@ __is_reserved_word s name → b {
+    ? ( __is_type_kw name ) { ^ T } {}
+    ? != 0 ( nurl_str_eq name `String` ) { ^ T } {}
+    ? != 0 ( nurl_str_eq name `Vec` ) { ^ T } {}
+    ? != 0 ( nurl_str_eq name `T` ) { ^ T } {}
+    ? != 0 ( nurl_str_eq name `F` ) { ^ T } {}
+    ? != 0 ( nurl_str_eq name `pub` ) { ^ T } {}
+    ^ F
+}
+
+// Run the references scanner over one document and clone every
+// Location's range into a TextEdit under `changes[uri]`. No-op when
+// the doc has no matches (no empty arrays in the WorkspaceEdit).
+@ __rename_edits_for_doc s uri s content s name s new_name Json changes → v {
+    : Json locs ( json_arr_new )
+    ( __collect_refs_in_doc uri content name locs )
+    : i nl ( json_arr_len locs )
+    ? > nl 0 {
+        : Json edits ( json_arr_new )
+        : ~ i k 0
+        ~ < k nl {
+            : ?Json lo ( json_arr_get locs k )
+            ?? lo {
+                T loc → {
+                    : ?Json ro ( json_obj_get loc `range` )
+                    ?? ro {
+                        T range_j → {
+                            : Json edit ( json_obj_new )
+                            ( json_obj_set edit `range` ( json_clone range_j ) )
+                            ( json_obj_set edit `newText` ( json_str_lit new_name ) )
+                            ( json_arr_push edits edit )
+                        }
+                        F _ → {}
+                    }
+                }
+                F _ → {}
+            }
+            = k + k 1
+        }
+        ( json_obj_set changes uri edits )
+    } {}
+    ( json_free locs )
+}
+
+// Sweep the same scope as textDocument/references (every open doc),
+// then the g_defs declaration file when it isn't an open buffer —
+// closed / never-opened decl files are read from disk so the
+// declaration site is always covered.
+@ __rename_all_docs s name s new_name Json changes → v {
+    : s list ( nurl_sym_get g_doc_uris `list` )
+    : i n ( nurl_str_len list )
+    : ~ i pos 0
+    ~ < pos n {
+        : i nl ( __index_of_byte list pos n 10 )
+        : i end ? < nl 0 n nl
+        : String duri ( __substr list pos end )
+        : s dc ( nurl_sym_get g_docs ( string_data duri ) )
+        ? > ( nurl_str_len dc ) 0 { ( __rename_edits_for_doc ( string_data duri ) dc name new_name changes ) } {}
+        ( string_free duri )
+        = pos ? < nl 0 n + nl 1
+    }
+    : s defs_val ( nurl_sym_get g_defs name )
+    ? > ( nurl_str_len defs_val ) 0 {
+        : i dn ( nurl_str_len defs_val )
+        : i t1 ( __index_of_byte defs_val 0 dn 9 )
+        ? >= t1 0 {
+            : String def_uri ( __substr defs_val 0 t1 )
+            : s open_body ( nurl_sym_get g_docs ( string_data def_uri ) )
+            ? == 0 ( nurl_str_len open_body ) {
+                : String def_path ( __uri_to_path ( string_data def_uri ) )
+                : s def_content ( __read_if_exists ( string_data def_path ) )
+                ? > ( nurl_str_len def_content ) 0 {
+                    ( __rename_edits_for_doc ( string_data def_uri ) def_content name new_name changes )
+                } {}
+                ( string_free def_path )
+            } {}
+            ( string_free def_uri )
+        } {}
+    } {}
+}
+
+@ __handle_rename Json id Json params → v {
+    : s uri ( __extract_uri params )
+    : ~ s new_name ``
+    : ?Json nn_o ( json_obj_get params `newName` )
+    ?? nn_o {
+        T nj → = new_name ( json_str_data nj )
+        F _ → {}
+    }
+    // Position extraction (same envelope walk as references).
+    : ~ i p_line 0
+    : ~ i p_col 0
+    : ~ b have_pos F
+    : ?Json pos_o ( json_obj_get params `position` )
+    ?? pos_o {
+        T pos_j → {
+            : ?Json ln_o ( json_obj_get pos_j `line` )
+            : ?Json ch_o ( json_obj_get pos_j `character` )
+            ?? ln_o {
+                T ln_j → {
+                    ?? ch_o {
+                        T ch_j → {
+                            : ?i line_p ( json_num_as_i ln_j )
+                            : ?i col_p ( json_num_as_i ch_j )
+                            ?? line_p {
+                                T ln → {
+                                    ?? col_p {
+                                        T cn → { = p_line ln = p_col cn = have_pos T }
+                                        F _ → {}
+                                    }
+                                }
+                                F _ → {}
+                            }
+                        }
+                        F _ → {}
+                    }
+                }
+                F _ → {}
+            }
+        }
+        F _ → {}
+    }
+
+    : ~ s err_msg ``
+    : ~ b have_err F
+    : Json changes ( json_obj_new )
+    ? ! ( __valid_ident new_name ) {
+        = err_msg `rename rejected: newName is not a valid NURL identifier ([A-Za-z_][A-Za-z0-9_]*)`
+        = have_err T
+    } {
+        ? ( __is_reserved_word new_name ) {
+            = err_msg `rename rejected: newName collides with a NURL type keyword or reserved word`
+            = have_err T
+        } {
+            : s content ( nurl_sym_get g_docs uri )
+            ? | ! have_pos == ( nurl_str_len content ) 0 {
+                = err_msg `rename rejected: document not open or position missing`
+                = have_err T
+            } {
+                : ?String tk ( __token_at content p_line p_col )
+                ?? tk {
+                    F _ → {
+                        = err_msg `rename rejected: no identifier at the given position (keyword, literal, or whitespace)`
+                        = have_err T
+                    }
+                    T name → {
+                        ? ! ( __is_ident_start ( string_get name 0 ) ) {
+                            = err_msg `rename rejected: position is on a numeric literal, not an identifier`
+                            = have_err T
+                        } {
+                            ? ( __is_reserved_word ( string_data name ) ) {
+                                = err_msg `rename rejected: cannot rename a NURL type keyword or reserved word`
+                                = have_err T
+                            } {
+                                ( __rename_all_docs ( string_data name ) new_name changes )
+                            }
+                        }
+                        ( string_free name )
+                    }
+                }
+            }
+        }
+    }
+    ? have_err {
+        ( json_free changes )
+        : Json resp ( __make_error id - 0 32602 err_msg )
+        ( write_message resp )
+        ( json_free resp )
+    } {
+        : Json we ( json_obj_new )
+        ( json_obj_set we `changes` changes )
+        : Json resp ( __make_response id we )
+        ( write_message resp )
+        ( json_free resp )
+    }
+}
+
 // ── Open-document roster (for the references sweep) ─────────────────
 
 // True when `uri` already appears as a full line in the newline-
@@ -1989,7 +2204,19 @@ $ `tools/nurl-lsp/jsonrpc.nu`
                                                                 }
                                                             }
                                                         } {
-                                                            ( __handle_unknown_request id method )
+                                                            ? ( nurl_str_eq method `textDocument/rename` ) {
+                                                                : ?Json params_o ( json_obj_get msg `params` )
+                                                                ?? params_o {
+                                                                    T params_j → ( __handle_rename id params_j )
+                                                                    F _ → {
+                                                                        : Json resp ( __make_error id - 0 32602 `rename rejected: missing params` )
+                                                                        ( write_message resp )
+                                                                        ( json_free resp )
+                                                                    }
+                                                                }
+                                                            } {
+                                                                ( __handle_unknown_request id method )
+                                                            }
                                                         }
                                                     }
                                                 }

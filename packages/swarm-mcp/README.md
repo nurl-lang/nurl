@@ -45,13 +45,14 @@ deterministically (no coordination):
   result, so a worker only runs token-authentic jobs and a coordinator only
   accepts token-authentic results.
 
-> **Requires NURL ≥ v0.10.4** (built from source against your installed stdlib
+> **Requires NURL ≥ v0.10.12** (built from source against your installed stdlib
 > at install time). **wasm kernels additionally need a `wasmtime` on each
 > worker** — the toolchain's own pure-NURL runtime (`packages/wasmtime`) is a
 > drop-in (put it on `PATH` as `wasmtime` or set `$WASMTIME`), so no external
-> runtime is required; the Bytecode-Alliance `wasmtime` works too. **`--mcp`
-> needs `openssl`** on first run to auto-mint a self-signed TLS cert (or pass
-> your own with `--tls-cert`/`--tls-key`).
+> runtime is required; the Bytecode-Alliance `wasmtime` works too. `--mcp`
+> auto-mints a self-signed TLS cert on first run **in pure NURL**
+> (`std/x509_gen` — no `openssl`, no subprocess), or pass your own with
+> `--tls-cert`/`--tls-key`.
 
 ## The control surface (what the LLM sees)
 

@@ -36,6 +36,9 @@
 //   ( mcp_session_delete store sid )                → b
 //   ( mcp_session_push_notify store sid msg )       → b   CONSUMES msg
 //   ( mcp_session_drain_notify store sid )          → ( Vec Json )  owned
+//   ( mcp_session_drain_frames store sid )          → ( Vec String ) owned id-tagged SSE frames
+//   ( mcp_session_replay store sid last_event_id )  → ( Vec String ) owned, backlog frames id > last_event_id
+//   ( mcp_session_backlog_cap )                     → i   replay backlog bound (64)
 //   ( mcp_session_subscribe store sid uri )         → b
 //   ( mcp_session_unsubscribe store sid uri )       → b
 //   ( mcp_session_is_subscribed store sid uri )     → b
@@ -49,6 +52,7 @@
 //   ( mcp_session_store_free store )                → v
 //
 //   ( mcp_sse_frame event data )                    → String  borrows data
+//   ( mcp_sse_frame_id id event data )              → String  borrows data
 //   ( mcp_sampling_message role text )              → Json
 //   ( mcp_sampling_params msgs system max_tokens )  → Json   CONSUMES msgs
 //   ( mcp_sampling_request id msgs system max_tokens ) → Json full envelope
@@ -65,10 +69,13 @@ $ `stdlib/core/vec.nu`
     i created_ms
     i last_ms
     i next_rpc_id  // server→client request id allocator (1-based)
+    i next_event_id  // SSE event-id allocator (1-based, assigned at drain)
     ( Vec Json ) notify  // outbound queue (notifications + reverse-RPC requests)
     ( Vec i ) pending_ids  // reverse-RPC request ids awaiting a response
     ( Vec Json ) results  // inbound reverse-RPC responses, matched by their "id"
     ( Vec String ) subscriptions  // resource URIs this session subscribed to
+    ( Vec i ) backlog_ids  // event ids of the retained replay backlog (parallel)
+    ( Vec String ) backlog_frames  // rendered id-tagged SSE frames for replay
 }
 
 : McpSessionStore { ( Vec McpSession ) sessions }
@@ -142,9 +149,10 @@ $ `stdlib/core/vec.nu`
     : String ret ( string_from ( string_data id ) )
     : i now ( now_ms )
     : McpSession se @ McpSession {
-        id now now 1
+        id now now 1 1
         ( vec_new [Json] ) ( vec_new [i] ) ( vec_new [Json] )
         ( vec_new [String] )
+        ( vec_new [i] ) ( vec_new [String] )
     }
     ( vec_push [McpSession] . store sessions se )
     ^ ret
@@ -178,6 +186,8 @@ $ `stdlib/core/vec.nu`
     ( vec_free [i] . se pending_ids )
     ( vec_free_with [Json] . se results \ Json j → v { ( json_free j ) } )
     ( vec_free_with [String] . se subscriptions \ String s → v { ( string_free s ) } )
+    ( vec_free [i] . se backlog_ids )
+    ( vec_free_with [String] . se backlog_frames \ String s → v { ( string_free s ) } )
 }
 
 @ mcp_session_delete McpSessionStore store s sid → b {
@@ -227,6 +237,103 @@ $ `stdlib/core/vec.nu`
             // vec_clear drops the length without freeing elements — they
             // now live solely in `out`.
             ( vec_clear [Json] . se notify )
+        }
+        F → {}
+    }
+    ^ out
+}
+
+// ── SSE event ids + replay backlog ────────────────────────────────────
+//
+// Each outbound event delivered over SSE carries a MONOTONIC per-session
+// event id (integer, starting at 1). Ids are assigned in queue order at
+// drain time by `mcp_session_drain_frames`, which renders each queued
+// message as an id-tagged SSE `message` frame (`mcp_sse_frame_id`) and
+// retains a copy of the frame in a bounded per-session replay backlog.
+// The backlog holds the LAST `mcp_session_backlog_cap` (64) delivered
+// events; older ones are evicted oldest-first.
+//
+// `mcp_session_replay` gives a reconnecting client (`Last-Event-ID`
+// header) the retained frames with id > last_event_id. BEST-EFFORT
+// semantics: if last_event_id is current (or the session is unknown) the
+// result is empty; if last_event_id is so old that the backlog has
+// already evicted past it, everything still held is returned — a client
+// can therefore see a gap after a long disconnect, but never a stall.
+
+// Bound on retained delivered events per session (replay window).
+@ mcp_session_backlog_cap → i { ^ 64 }
+
+// Drain the queue as id-tagged SSE `message` frames (owned Strings, in
+// queue order), assigning fresh monotonic event ids and archiving a copy
+// of every frame in the session's replay backlog (bounded, oldest-first
+// eviction). Unknown session → empty Vec.
+@ mcp_session_drain_frames McpSessionStore store s sid → ( Vec String ) {
+    : ( Vec String ) out ( vec_new [String] )
+    : i idx ( __mcp_session_find store sid )
+    ? < idx 0 { ^ out } {}
+    : ?McpSession so ( vec_get [McpSession] . store sessions idx )
+    ?? so {
+        T se → {
+            : ~ i next . se next_event_id
+            : i n ( vec_len [Json] . se notify )
+            : ~ i k 0
+            ~ < k n {
+                : ?Json e ( vec_get [Json] . se notify k )
+                ?? e {
+                    T j → {
+                        : String f ( mcp_sse_frame_id next `message` j )
+                        ( json_free j )
+                        ( vec_push [i] . se backlog_ids next )
+                        ( vec_push [String] . se backlog_frames ( string_from ( string_data f ) ) )
+                        ( vec_push [String] out f )
+                        = next + next 1
+                    }
+                    F → {}
+                }
+                = k + k 1
+            }
+            ( vec_clear [Json] . se notify )
+            // Evict beyond the cap, oldest first.
+            ~ > ( vec_len [String] . se backlog_frames ) ( mcp_session_backlog_cap ) {
+                : ?String victim ( vec_get [String] . se backlog_frames 0 )
+                ?? victim { T s → ( string_free s ) F → {} }
+                ( vec_remove [String] . se backlog_frames 0 )
+                ( vec_remove [i] . se backlog_ids 0 )
+            }
+            // Vec pushes ride the heap-stable ctl; the id allocator is a
+            // scalar field, so write the struct copy back.
+            = . se next_event_id next
+            ( vec_set [McpSession] . store sessions idx se )
+        }
+        F → {}
+    }
+    ^ out
+}
+
+// Replay backlog frames with event id > last_event_id (owned copies, in
+// id order). Empty when the id is current or the session unknown; when
+// last_event_id predates the retained window (already evicted) every
+// frame still held is returned — see the best-effort note above.
+@ mcp_session_replay McpSessionStore store s sid i last_event_id → ( Vec String ) {
+    : ( Vec String ) out ( vec_new [String] )
+    : i idx ( __mcp_session_find store sid )
+    ? < idx 0 { ^ out } {}
+    : ?McpSession so ( vec_get [McpSession] . store sessions idx )
+    ?? so {
+        T se → {
+            : i n ( vec_len [String] . se backlog_frames )
+            : ~ i k 0
+            ~ < k n {
+                : i eid ?? ( vec_get [i] . se backlog_ids k ) { T x → x F → 0 }
+                ? > eid last_event_id {
+                    : ?String fo ( vec_get [String] . se backlog_frames k )
+                    ?? fo {
+                        T f → ( vec_push [String] out ( string_from ( string_data f ) ) )
+                        F → {}
+                    }
+                } {}
+                = k + k 1
+            }
         }
         F → {}
     }
@@ -472,6 +579,24 @@ $ `stdlib/core/vec.nu`
     : String payload ( json_stringify data )
     : String out ( string_with_cap + ( string_len payload ) + ( nurl_str_len event ) 24 )
     ( string_push_str out `event: ` )
+    ( string_push_str out event )
+    ( string_push_str out `\r\ndata: ` )
+    ( string_push_str out ( string_data payload ) )
+    ( string_push_str out `\r\n\r\n` )
+    ( string_free payload )
+    ^ out
+}
+
+// Id-tagged sibling of `mcp_sse_frame`:
+// `id: <id>\r\nevent: <event>\r\ndata: <json>\r\n\r\n`. Borrows `data`;
+// returns an owned String. The id is what a client echoes back in a
+// `Last-Event-ID` header to resume after a dropped connection.
+@ mcp_sse_frame_id i id s event Json data → String {
+    : String payload ( json_stringify data )
+    : String out ( string_with_cap + ( string_len payload ) + ( nurl_str_len event ) 48 )
+    ( string_push_str out `id: ` )
+    ( string_push_int out id )
+    ( string_push_str out `\r\nevent: ` )
     ( string_push_str out event )
     ( string_push_str out `\r\ndata: ` )
     ( string_push_str out ( string_data payload ) )
