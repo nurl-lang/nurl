@@ -1,0 +1,7 @@
+[package]
+name = "cli"
+version = "0.1.0"
+description = "The ergonomic command-line framework for NURL. A single dependency-importable facade over the stdlib command-line surface (std/args parser, std/term isatty + ANSI + line editor, core/io stdin/stdout, ext/env environment). Where the stdlib ships a flat argument parser, `cli` ships the glue every tool re-invents: a `Cli` object with git-style subcommand routing, typed flag accessors (string/int/bool/float) with environment-variable fallbacks and defaults, auto-generated and colour-aware --help / --version / usage, error → exit-code handling, and interactive prompts (confirm / prompt / no-echo password). `( cli_new … )`, a few `( cli_flag_* … )` and `( cli_cmd … )` registrations, and `( cli_run c )` stand up a complete, polished CLI — collapsing the ~100–500 line hand-written main() that every package carries today. Colours are TTY-gated and respect $NO_COLOR. Facades the command-line surface only; terminal widgets, config files and logging compose as separate packages."
+license = "MIT OR Apache-2.0"
+
+[dependencies]
