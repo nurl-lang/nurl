@@ -75,7 +75,7 @@ WORST=$(echo "$B" | sort -k2 -g | head -1 | cut -f1)
 
 echo "[3/3] live HTTP service"
 PORT=$((20000 + RANDOM % 20000))
-"$A" serve --addr "127.0.0.1:$PORT" --store "$WORK/svcmodels" 2>"$WORK/serve.err" &
+"$A" serve --addr "127.0.0.1:$PORT" --store "$WORK/svcmodels" --webroot static 2>"$WORK/serve.err" &
 SERVE_PID=$!
 for _ in $(seq 1 50); do
     curl -s -o /dev/null "http://127.0.0.1:$PORT/models/dynamic" 2>/dev/null && break
@@ -95,6 +95,19 @@ CODE=$(curl -s -o /dev/null -w '%{http_code}' -X POST "http://127.0.0.1:$PORT/de
 [ "$CODE" = "400" ] && ok "HTTP invalid name rejected" || bad "HTTP invalid name ($CODE)"
 CODE=$(curl -s -o /dev/null -w '%{http_code}' -X DELETE "http://127.0.0.1:$PORT/delete_model/live")
 [ "$CODE" = "200" ] && ok "HTTP delete" || bad "HTTP delete ($CODE)"
+
+# Dashboard static serving (--webroot static).
+CT=$(curl -s -o "$WORK/idx" -w '%{content_type}' "http://127.0.0.1:$PORT/")
+{ echo "$CT" | grep -q 'text/html' && grep -q '<title>Model Manager' "$WORK/idx"; } \
+    && ok "HTTP dashboard index (/)" || bad "HTTP dashboard index ($CT)"
+PAGES_OK=1
+for pg in modelmanager anomalies modeltrainer visualize; do
+    CODE=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/$pg.html")
+    [ "$CODE" = "200" ] || PAGES_OK=0
+done
+[ "$PAGES_OK" = 1 ] && ok "HTTP dashboard pages served" || bad "HTTP dashboard pages"
+CODE=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/nope.html")
+[ "$CODE" = "404" ] && ok "HTTP dashboard 404 for unknown page" || bad "HTTP dashboard 404 ($CODE)"
 
 kill "$SERVE_PID" 2>/dev/null; wait "$SERVE_PID" 2>/dev/null; SERVE_PID=""
 
