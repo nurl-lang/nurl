@@ -65,21 +65,27 @@ $ `deps/gpu/src/gpu.nu`
 // ── Lifecycle ─────────────────────────────────────────────────────────
 
 // Open device `ordinal` (CUDA when present, else the gpu package's CPU
-// backend). Check `gk_ok`; even a failed open is safe to `gk_close`.
-@ gk_open i ordinal → GpuKit {
+// backend). Returns a heap `*GpuKit` so it can be held as a long-lived
+// singleton (its kernel cache persists across calls). Check `gk_ok`; even a
+// failed open is safe to `gk_close`.
+@ gk_open i ordinal → *GpuKit {
     : Gpu g ( gpu_open ordinal )
-    ^ @ GpuKit { g ( gpu_ok g ) ( vec_new [GkKernelEntry] ) }
+    : *GpuKit kit # *GpuKit ( nurl_malloc Z GpuKit )
+    = . kit gpu g
+    = . kit ok ( gpu_ok g )
+    = . kit cache ( vec_new [GkKernelEntry] )
+    ^ kit
 }
 
-@ gk_ok GpuKit kit → b { ^ . kit ok }
+@ gk_ok *GpuKit kit → b { ^ . kit ok }
 
 // "cuda" or "cpu".
-@ gk_backend GpuKit kit → s { ? ( gpu_is_cpu ) { ^ `cpu` } { ^ `cuda` } }
+@ gk_backend *GpuKit kit → s { ? ( gpu_is_cpu ) { ^ `cpu` } { ^ `cuda` } }
 
-@ gk_device_name GpuKit kit → s { ^ ( gpu_name . kit gpu ) }
+@ gk_device_name *GpuKit kit → s { ^ ( gpu_name . kit gpu ) }
 
-// Release every cached kernel and close the device.
-@ gk_close GpuKit kit → v {
+// Release every cached kernel, close the device, and free the kit.
+@ gk_close *GpuKit kit → v {
     : i n ( vec_len [GkKernelEntry] . kit cache )
     : ~ i k 0
     ~ < k n {
@@ -94,6 +100,7 @@ $ `deps/gpu/src/gpu.nu`
     }
     ( vec_free [GkKernelEntry] . kit cache )
     ? . kit ok { ( gpu_close . kit gpu ) } {}
+    ( nurl_free kit )
 }
 
 // Grid size for `n` threads at the given block size (re-export of gpu_grid).
@@ -147,7 +154,7 @@ $ `deps/gpu/src/gpu.nu`
 // Compile `src` (entry `name`) once per kit; subsequent calls with the same
 // `name` reuse the cached kernel. A failed compile returns a not-ok kernel
 // and is not cached (so a fixed source can be retried).
-@ __gk_get_kernel GpuKit kit s src s name → GpuKernel {
+@ __gk_get_kernel *GpuKit kit s src s name → GpuKernel {
     : i n ( vec_len [GkKernelEntry] . kit cache )
     : ~ i k 0
     ~ < k n {
@@ -166,12 +173,20 @@ $ `deps/gpu/src/gpu.nu`
     ^ kn
 }
 
+// Warm the cache: compile `src` (entry `name`) into the kit now and report
+// whether it succeeded, so a long-lived caller can detect a bad kernel at
+// setup instead of on the first launch.
+@ gk_compile *GpuKit kit s src s name → b {
+    ? ( gk_ok kit ) {} { ^ F }
+    ^ ( gpu_kernel_ok ( __gk_get_kernel kit src name ) )
+}
+
 // ── The workhorse ─────────────────────────────────────────────────────
 
 // Compile-cached, marshal, launch, sync, download, free. `call` lists the
 // kernel's arguments in declaration order (buffers and scalars interleaved
 // exactly as the kernel signature expects). Returns F on any device error.
-@ gk_run GpuKit kit s src s name i grid i block ( Vec GkArg ) call → b {
+@ gk_run *GpuKit kit s src s name i grid i block ( Vec GkArg ) call → b {
     ? ( gk_ok kit ) {} { ^ F }
     : GpuKernel kn ( __gk_get_kernel kit src name )
     ? ( gpu_kernel_ok kn ) {} { ^ F }

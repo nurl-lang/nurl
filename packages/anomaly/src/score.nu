@@ -30,6 +30,7 @@ $ `src/prep.nu`
 $ `src/model.nu`
 $ `deps/iforest/src/iforest.nu`
 $ `deps/gpu/src/gpu.nu`
+$ `deps/gpukit/src/gpukit.nu`
 
 // Below this many rows the pure loop wins on latency. Bit-equality of the
 // paths makes the threshold unobservable in results.
@@ -48,15 +49,14 @@ $ `deps/gpu/src/gpu.nu`
 
 // ── GPU singleton ─────────────────────────────────────────────────────
 //
-// One device + one compiled kernel per process, probed lazily on first
-// bulk call. state: 0 = unprobed, 1 = ready, -1 = unavailable/disabled.
+// One GpuKit (device + kernel cache) per process, probed lazily on the first
+// bulk call. The gpukit facade owns the device, the compiled `anomaly_paths`
+// kernel (cached), and all the buffer marshalling. state: 0 = unprobed,
+// 1 = ready, -1 = unavailable/disabled. The kit pointer is held as an int
+// (0 = none), the same way the raw device handle used to be.
 
 : ~ i g_ag_state 0
-: ~ i g_ag_ord 0
-: ~ i g_ag_dev 0
-: ~ i g_ag_ctx 0
-: ~ i g_ag_kmod 0
-: ~ i g_ag_kfun 0
+: ~ i g_ag_kit 0
 
 // The path-walk kernel. One thread per row; per tree, descend by the same
 // comparison the pure walker uses and accumulate depth + c(leaf) — nothing
@@ -88,49 +88,40 @@ $ `deps/gpu/src/gpu.nu`
     ^ == ( nurl_str_eq v `0` ) 1
 }
 
-// Probe once: open a device (CUDA, else the gpu package's CPU backend) and
-// compile the kernel. Any failure parks the accelerator for the process.
+// Probe once: open a GpuKit (CUDA, else the gpu package's CPU backend) and
+// warm the kernel cache with `anomaly_paths`. Any failure parks the
+// accelerator for the process.
 @ __ag_ensure → b {
     ? != g_ag_state 0 { ^ == g_ag_state 1 } {}
     ? ( __ag_env_off ) {
         = g_ag_state -1
         ^ F
     } {}
-    : Gpu g ( gpu_open 0 )
-    ? ( gpu_ok g ) {} {
+    : *GpuKit kit ( gk_open 0 )
+    ? ( gk_ok kit ) {} {
+        ( gk_close kit )
         = g_ag_state -1
         ^ F
     }
-    : GpuKernel k ( gpu_compile g ( __ag_kernel_src ) `anomaly_paths` )
-    ? ( gpu_kernel_ok k ) {} {
-        ( gpu_close g )
+    ? ( gk_compile kit ( __ag_kernel_src ) `anomaly_paths` ) {} {
+        ( gk_close kit )
         = g_ag_state -1
         ^ F
     }
-    = g_ag_ord . g ordinal
-    = g_ag_dev . g dev
-    = g_ag_ctx . g ctx
-    = g_ag_kmod . k module
-    = g_ag_kfun . k func
+    = g_ag_kit # i kit
     = g_ag_state 1
     ^ T
 }
 
-@ __ag_handle → Gpu {
-    ^ @ Gpu { g_ag_ord g_ag_dev g_ag_ctx }
-}
+// The live kit (only valid when g_ag_state == 1).
+@ __ag_kit → *GpuKit { ^ # *GpuKit g_ag_kit }
 
-// Release the device + kernel (tests call this so leak checkers see a
+// Release the device + kernel cache (tests call this so leak checkers see a
 // closed shop; a long-running service just keeps the singleton).
 @ anom_gpu_close → v {
-    ? == g_ag_state 1 {
-        ( gpu_kernel_free @ GpuKernel { g_ag_kmod g_ag_kfun } )
-        ( gpu_close ( __ag_handle ) )
-    } {}
+    ? == g_ag_state 1 { ( gk_close ( __ag_kit ) ) } {}
     = g_ag_state 0
-    = g_ag_kmod 0
-    = g_ag_kfun 0
-    = g_ag_ctx 0
+    = g_ag_kit 0
 }
 
 // Which engine bulk scoring would use right now: `cuda`, `cpu` (the gpu
@@ -184,67 +175,28 @@ $ `deps/gpu/src/gpu.nu`
         = k + k 1
     }
 
-    : Gpu g ( __ag_handle )
-    : GpuKernel kn @ GpuKernel { g_ag_kmod g_ag_kfun }
-    : GpuBuffer b_xs ( gpu_alloc g * * n_rows n_cols 8 )
-    : GpuBuffer b_feat ( gpu_alloc g * n_nodes 8 )
-    : GpuBuffer b_split ( gpu_alloc g * n_nodes 8 )
-    : GpuBuffer b_left ( gpu_alloc g * n_nodes 8 )
-    : GpuBuffer b_right ( gpu_alloc g * n_nodes 8 )
-    : GpuBuffer b_cleaf ( gpu_alloc g * n_nodes 8 )
-    : GpuBuffer b_roots ( gpu_alloc g * n_trees 8 )
-    : GpuBuffer b_out ( gpu_alloc g * n_rows 8 )
-
-    : ~ b ok T
-    ? || == . b_xs dptr 0 || == . b_feat dptr 0 || == . b_split dptr 0 || == . b_left dptr 0 || == . b_right dptr 0 || == . b_cleaf dptr 0 || == . b_roots dptr 0 == . b_out dptr 0 { = ok F } {}
-    ? ok {
-        ? == ( gpu_upload b_xs # *u ( vec_data [f] scaled ) ) 0 {} { = ok F }
-        ? == ( gpu_upload b_feat # *u ( vec_data [i] . fo feature ) ) 0 {} { = ok F }
-        ? == ( gpu_upload b_split # *u ( vec_data [f] . fo split ) ) 0 {} { = ok F }
-        ? == ( gpu_upload b_left # *u ( vec_data [i] . fo left ) ) 0 {} { = ok F }
-        ? == ( gpu_upload b_right # *u ( vec_data [i] . fo right ) ) 0 {} { = ok F }
-        ? == ( gpu_upload b_cleaf # *u ( vec_data [f] cleaf ) ) 0 {} { = ok F }
-        ? == ( gpu_upload b_roots # *u ( vec_data [i] . fo roots ) ) 0 {} { = ok F }
-    } {}
-
+    // One gk_run marshals the 7 inputs, 3 scalars and 1 output; the kernel
+    // itself (anomaly_paths) is compiled once and served from the kit cache.
+    : *GpuKit kit ( __ag_kit )
     : ( Vec f ) totals ( vec_with_cap [f] n_rows )
-    ? ok {
-        : ( Vec i ) args ( vec_new [i] )
-        ( vec_push [i] args ( gpu_arg_buffer b_xs ) )
-        ( vec_push [i] args ( gpu_arg_buffer b_feat ) )
-        ( vec_push [i] args ( gpu_arg_buffer b_split ) )
-        ( vec_push [i] args ( gpu_arg_buffer b_left ) )
-        ( vec_push [i] args ( gpu_arg_buffer b_right ) )
-        ( vec_push [i] args ( gpu_arg_buffer b_cleaf ) )
-        ( vec_push [i] args ( gpu_arg_buffer b_roots ) )
-        ( vec_push [i] args ( gpu_arg_i64 n_rows ) )
-        ( vec_push [i] args ( gpu_arg_i64 n_cols ) )
-        ( vec_push [i] args ( gpu_arg_i64 n_trees ) )
-        ( vec_push [i] args ( gpu_arg_buffer b_out ) )
-        : i block 256
-        ? == ( gpu_launch kn ( gpu_grid n_rows block ) block args ) 0 {} { = ok F }
-        ( vec_free [i] args )
-    } {}
-    ? ok {
-        ? == ( gpu_sync g ) 0 {} { = ok F }
-    } {}
-    ? ok {
-        ? == ( gpu_download # *u ( vec_data [f] totals ) b_out ) 0 {
-            ( vec_set_len [f] totals n_rows )
-        } { = ok F }
-    } {}
-
-    ( gpu_free b_xs )
-    ( gpu_free b_feat )
-    ( gpu_free b_split )
-    ( gpu_free b_left )
-    ( gpu_free b_right )
-    ( gpu_free b_cleaf )
-    ( gpu_free b_roots )
-    ( gpu_free b_out )
+    : *u outp # *u ( vec_data [f] totals )
+    : ( Vec GkArg ) call ( vec_new [GkArg] )
+    ( vec_push [GkArg] call ( gk_in_f scaled ) )
+    ( vec_push [GkArg] call ( gk_in_i . fo feature ) )
+    ( vec_push [GkArg] call ( gk_in_f . fo split ) )
+    ( vec_push [GkArg] call ( gk_in_i . fo left ) )
+    ( vec_push [GkArg] call ( gk_in_i . fo right ) )
+    ( vec_push [GkArg] call ( gk_in_f cleaf ) )
+    ( vec_push [GkArg] call ( gk_in_i . fo roots ) )
+    ( vec_push [GkArg] call ( gk_i64 n_rows ) )
+    ( vec_push [GkArg] call ( gk_i64 n_cols ) )
+    ( vec_push [GkArg] call ( gk_i64 n_trees ) )
+    ( vec_push [GkArg] call ( gk_buf_out outp * n_rows 8 ) )
+    : b ok ( gk_run kit ( __ag_kernel_src ) `anomaly_paths` ( gk_grid n_rows 256 ) 256 call )
+    ( vec_free [GkArg] call )
     ( vec_free [f] cleaf )
 
-    ? ok {} {
+    ? ok { ( vec_set_len [f] totals n_rows ) } {
         ( vec_free [f] totals )
         ( nurl_eprintln `anomaly: gpu scoring failed, falling back to the pure path` )
         ^ @ ?( Vec f ) { F }
