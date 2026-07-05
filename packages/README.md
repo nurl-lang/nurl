@@ -17,6 +17,59 @@ shipped stdlib (found via `$NURL_STDLIB`), and drops the binary in
 `$NURL_HOME/bin` (default `~/.nurl/bin`, which `install-toolchain.sh` puts
 on `$PATH`).
 
+## Declaring a dependency
+
+```toml
+[dependencies]
+onnx  = { path = "../onnx", version = "^0.4.2" }   # monorepo path + registry version
+chart = "^0.1.1"                                     # registry-only, shorthand
+```
+
+`path` drives local/monorepo builds (resolved by symlink; `nurlpkg install`
+links it under `deps/`). The `version` is the requirement used when the same
+dependency is fetched from the registry, so a monorepo build and a
+registry install agree on what's acceptable. `nurlpkg` always resolves a
+registry dependency to the **newest published version that satisfies the
+requirement** (`semver_req_max_satisfying`).
+
+### Version requirement syntax
+
+The dialect is **identical to npm** (node-semver):
+
+| Syntax | Meaning |
+| --- | --- |
+| `1.2.3` | **exact** — a bare, fully-specified version is a pin, no wiggle room |
+| `*` · `x` · `""` | any version |
+| `1.x` · `1.2.x` · `1` · `1.2` | **X-range** — wildcard/omitted segment (`1` ≡ `1.x`, `1.2` ≡ `1.2.x`) |
+| `^1.2.3` | **caret** — newest compatible (below) |
+| `~1.2.3` | **tilde** — newest patch: `>=1.2.3 <1.3.0` |
+| `>=1.2.3 <2.0.0` | explicit range — space-separated comparators are **AND**-ed |
+| `1.2.3 - 2.3.4` | inclusive **hyphen** range: `>=1.2.3 <=2.3.4` |
+| `^1.0.0 \|\| ^2.0.0` | **OR** — matches if any side matches |
+
+Comparators are `=`, `>`, `>=`, `<`, `<=`; a partial completes with an X-range
+(`>1.2` ⇒ `>=1.3.0`, `<2` ⇒ `<2.0.0`).
+
+**`^` (caret)** admits changes that don't touch the left-most non-zero
+segment — the everyday choice:
+
+| Requirement | Range | Admits |
+| --- | --- | --- |
+| `^1.2.3` | `>=1.2.3 <2.0.0` | `1.2.3` … `1.9.9`, not `2.0.0` |
+| `^0.2.3` | `>=0.2.3 <0.3.0` | `0.2.x >= 0.2.3`, not `0.3.0` |
+| `^0.0.3` | `>=0.0.3 <0.0.4` | only `0.0.3` |
+
+For a `0.x` package caret locks the **minor** (`^0.2.3` won't jump to `0.3.0`),
+so every `0.x` package here pins deps with `^` and bumps its **minor** on a
+breaking change, **patch** on a fix.
+
+**`~` (tilde)** allows patch-level moves only: `~1.2.3` ⇒ `>=1.2.3 <1.3.0`,
+`~1.2` ⇒ `>=1.2.0 <1.3.0`, `~1` ⇒ `>=1.0.0 <2.0.0`.
+
+**Convention:** depend with `^<version>` (newest compatible); a bare `1.2.3`
+pins exactly — use it only when you must. The engine is
+`stdlib/ext/semver.nu`.
+
 ## `nq/` — a jq-lite JSON query tool (installable program)
 
 A genuinely useful everyday utility: read JSON from stdin (or `--file`),

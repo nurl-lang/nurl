@@ -6,15 +6,21 @@
 //      optional `-prerelease` and `+build` suffixes (semver.org §2, §9, §10),
 //      with full precedence ordering including the prerelease rules (§11).
 //
-//   2. Requirements — parse a constraint (`^1.2.3`, `~1.2`, `>=1.0`,
-//      `<2.0.0`, `=1.2.3`, `1.*`, `*`, or a bare `1.2.3`) into a half-open
-//      range and test versions against it. `semver_req_max_satisfying`
+//   2. Requirements — parse an **npm-style** range into an OR of half-open
+//      intervals and test versions against it. `semver_req_max_satisfying`
 //      picks the highest matching version — the resolution primitive the
 //      registry-backed package manager needs (ROADMAP §4).
 //
-// Constraint dialect is **Cargo-shaped** (the package manager is
-// cargo-shaped): a BARE `1.2.3` means `^1.2.3` (caret), not exact. Use
-// `=1.2.3` for an exact pin.
+// Constraint dialect is **npm-identical** (node-semver):
+//   1.2.3            exact (a bare, fully-specified version is a pin)
+//   * / x / (empty)  any version
+//   1.x / 1.2.x      X-range (bare `1` and `1.2` behave the same)
+//   ^1.2.3           caret: >=1.2.3 <2.0.0 (0.x locks the minor/patch)
+//   ~1.2.3           tilde: >=1.2.3 <1.3.0
+//   >=1.2.3 <2.0.0   space-separated comparators are AND-ed
+//   1.2.3 - 2.3.4    inclusive hyphen range
+//   ^1 || ^2         `||` is OR
+// Use `^` for "newest compatible"; a bare `1.2.3` pins exactly.
 //
 // Surface:
 //   ( semver_parse text )            → ! Semver SemverErr
@@ -47,13 +53,16 @@ $ `stdlib/core/vec.nu`
     String build  // without the leading '+'; empty when absent
 }
 
-: VersionReq {
+: SvInterval {
     i has_lo
     Semver lo
     i lo_incl
     i has_hi
     Semver hi
     i hi_incl
+}
+: VersionReq {
+    ( Vec SvInterval ) alts  // OR of intervals; empty matches nothing
 }
 
 : | SemverErr {
@@ -384,95 +393,240 @@ $ `stdlib/core/vec.nu`
     ^ ( __sv_make . p major . p minor . p patch )
 }
 
-@ __sv_any_req → VersionReq {
-    ^ @ VersionReq { 0 ( __sv_make 0 0 0 ) 1 0 ( __sv_make 0 0 0 ) 0 }
+// unbounded interval that matches every version
+@ __sv_any_interval → SvInterval {
+    ^ @ SvInterval { 0 ( __sv_make 0 0 0 ) 1 0 ( __sv_make 0 0 0 ) 0 }
 }
 
+@ __sv_free_interval SvInterval iv → v {
+    ( semver_free . iv lo )
+    ( semver_free . iv hi )
+}
+
+// X-range exclusive upper bound for a partial with <3 components:
+//   "1"   → 2.0.0     "1.2" → 1.3.0
+@ __sv_xr_hi PartialVer p → Semver {
+    ? >= . p count 2 { ^ ( __sv_make . p major + . p minor 1 0 ) } {}
+    ^ ( __sv_make + . p major 1 0 0 )
+}
+
+// Parse ONE comparator in text[from,to): ^ ~ = > >= < <= or a bare X-range
+// (bare full version = exact; bare partial = the X-range interval).
+@ __sv_comparator s text i from i to → !SvInterval SemverErr {
+    : ~ i start from
+    ~ & < start to == ( nurl_str_get text start ) 32 { = start + start 1 }
+    ? >= start to { ^ @ !SvInterval SemverErr { T ( __sv_any_interval ) } } {}
+    : i c0 ( nurl_str_get text start )
+    ? ( __sv_is_wild c0 ) { ^ @ !SvInterval SemverErr { T ( __sv_any_interval ) } } {}
+
+    : ~ i op 9  // 9 bare/X-range; 0 ^ ; 1 ~ ; 2 = ; 3 > ; 4 >= ; 5 < ; 6 <=
+    : ~ i vpos start
+    ? == c0 94 { = op 0 = vpos + start 1 } {}
+    ? == c0 126 { = op 1 = vpos + start 1 } {}
+    ? == c0 61 { = op 2 = vpos + start 1 } {}
+    ? == c0 62 { ? & < + start 1 to == ( nurl_str_get text + start 1 ) 61 { = op 4 = vpos + start 2 } { = op 3 = vpos + start 1 } } {}
+    ? == c0 60 { ? & < + start 1 to == ( nurl_str_get text + start 1 ) 61 { = op 6 = vpos + start 2 } { = op 5 = vpos + start 1 } } {}
+    ~ & < vpos to == ( nurl_str_get text vpos ) 32 { = vpos + vpos 1 }
+
+    : PartialVer p ( __sv_parse_partial text vpos to )
+    ? < . p count 0 { ^ @ !SvInterval SemverErr { F # SemverErr SvBadReq } } {}
+    ? == . p count 0 { ^ @ !SvInterval SemverErr { T ( __sv_any_interval ) } } {}
+    : i full ? >= . p count 3 { 1 } { 0 }
+
+    // > : full → exclusive lower at the version; partial → inclusive lower at X-range hi
+    ? == op 3 {
+        ? full { ^ @ !SvInterval SemverErr { T @ SvInterval { 1 ( __sv_partial_lo p ) 0 0 ( __sv_make 0 0 0 ) 0 } } } {}
+        ^ @ !SvInterval SemverErr { T @ SvInterval { 1 ( __sv_xr_hi p ) 1 0 ( __sv_make 0 0 0 ) 0 } }
+    } {}
+    // >= : inclusive lower at (padded) version
+    ? == op 4 { ^ @ !SvInterval SemverErr { T @ SvInterval { 1 ( __sv_partial_lo p ) 1 0 ( __sv_make 0 0 0 ) 0 } } } {}
+    // < : exclusive upper at (padded) version
+    ? == op 5 { ^ @ !SvInterval SemverErr { T @ SvInterval { 0 ( __sv_make 0 0 0 ) 1 1 ( __sv_partial_lo p ) 0 } } } {}
+    // <= : full → inclusive at version; partial → exclusive at X-range hi
+    ? == op 6 {
+        ? full { ^ @ !SvInterval SemverErr { T @ SvInterval { 0 ( __sv_make 0 0 0 ) 1 1 ( __sv_partial_lo p ) 1 } } } {}
+        ^ @ !SvInterval SemverErr { T @ SvInterval { 0 ( __sv_make 0 0 0 ) 1 1 ( __sv_xr_hi p ) 0 } }
+    } {}
+    // = or bare full → exact; = or bare partial → X-range
+    ? || == op 2 == op 9 {
+        ? full { ^ @ !SvInterval SemverErr { T @ SvInterval { 1 ( __sv_partial_lo p ) 1 1 ( __sv_partial_lo p ) 1 } } } {}
+        ^ @ !SvInterval SemverErr { T @ SvInterval { 1 ( __sv_partial_lo p ) 1 1 ( __sv_xr_hi p ) 0 } }
+    } {}
+    // ~ : tilde
+    ? == op 1 { ^ @ !SvInterval SemverErr { T @ SvInterval { 1 ( __sv_partial_lo p ) 1 1 ( __sv_tilde_hi p ) 0 } } } {}
+    // ^ : caret
+    ^ @ !SvInterval SemverErr { T @ SvInterval { 1 ( __sv_partial_lo p ) 1 1 ( __sv_caret_hi p ) 0 } }
+}
+
+// Intersect a set of comparator intervals (AND) into one; frees the inputs.
+@ __sv_and_reduce ( Vec SvInterval ) parts → SvInterval {
+    : ~ i hl 0
+    : ~ Semver lo ( __sv_make 0 0 0 )
+    : ~ i li 1
+    : ~ i hh 0
+    : ~ Semver hi ( __sv_make 0 0 0 )
+    : ~ i hii 0
+    : i n ( vec_len [SvInterval] parts )
+    : ~ i k 0
+    ~ < k n {
+        ?? ( vec_get [SvInterval] parts k ) {
+            T iv → {
+                ? != . iv has_lo 0 {
+                    : ~ b take ? == hl 0 { T } { F }
+                    ? == hl 0 {} {
+                        : i c ( semver_compare . iv lo lo )
+                        ? > c 0 { = take T } { ? & == c 0 & == . iv lo_incl 0 == li 1 { = take T } {} }
+                    }
+                    ? take { ( semver_free lo ) = lo ( semver_clone . iv lo ) = li . iv lo_incl = hl 1 } {}
+                } {}
+                ? != . iv has_hi 0 {
+                    : ~ b take2 ? == hh 0 { T } { F }
+                    ? == hh 0 {} {
+                        : i c ( semver_compare . iv hi hi )
+                        ? < c 0 { = take2 T } { ? & == c 0 & == . iv hi_incl 0 == hii 1 { = take2 T } {} }
+                    }
+                    ? take2 { ( semver_free hi ) = hi ( semver_clone . iv hi ) = hii . iv hi_incl = hh 1 } {}
+                } {}
+            }
+            F _ → {}
+        }
+        = k + k 1
+    }
+    = k 0
+    ~ < k n {
+        ?? ( vec_get [SvInterval] parts k ) { T iv → { ( __sv_free_interval iv ) } F _ → {} }
+        = k + k 1
+    }
+    ( vec_free [SvInterval] parts )
+    ^ @ SvInterval { hl lo li hh hi hii }
+}
+
+// A hyphen range `A - B`: >= A (padded low), <= B (full) or < B's X-range hi.
+@ __sv_hyphen s text i af i at i bf i bt → !SvInterval SemverErr {
+    : PartialVer pa ( __sv_parse_partial text af at )
+    : PartialVer pb ( __sv_parse_partial text bf bt )
+    ? | < . pa count 1 < . pb count 1 { ^ @ !SvInterval SemverErr { F # SemverErr SvBadReq } } {}
+    : Semver lo ( __sv_partial_lo pa )
+    ? >= . pb count 3 {
+        ^ @ !SvInterval SemverErr { T @ SvInterval { 1 lo 1 1 ( __sv_partial_lo pb ) 1 } }
+    } {}
+    ^ @ !SvInterval SemverErr { T @ SvInterval { 1 lo 1 1 ( __sv_xr_hi pb ) 0 } }
+}
+
+// Parse one comparator-set (space-separated AND, or a hyphen range).
+@ __sv_and_set s text i from i to → !SvInterval SemverErr {
+    // collect token boundaries
+    : ( Vec i ) ts ( vec_new [i] )
+    : ( Vec i ) te ( vec_new [i] )
+    : ~ i p from
+    ~ < p to {
+        ~ & < p to == ( nurl_str_get text p ) 32 { = p + p 1 }
+        ? < p to {
+            : i s p
+            ~ & < p to != ( nurl_str_get text p ) 32 { = p + p 1 }
+            ( vec_push [i] ts s )
+            ( vec_push [i] te p )
+        } {}
+    }
+    : i nt ( vec_len [i] ts )
+    ? == nt 0 { ( vec_free [i] ts ) ( vec_free [i] te ) ^ @ !SvInterval SemverErr { T ( __sv_any_interval ) } } {}
+    // hyphen range: exactly 3 tokens with the middle a lone '-'
+    ? & == nt 3 ( __sv_tok_is_dash text ts te 1 ) {
+        : i af ?? ( vec_get [i] ts 0 ) { T x → x F → 0 }
+        : i at ?? ( vec_get [i] te 0 ) { T x → x F → 0 }
+        : i bf ?? ( vec_get [i] ts 2 ) { T x → x F → 0 }
+        : i bt ?? ( vec_get [i] te 2 ) { T x → x F → 0 }
+        ( vec_free [i] ts ) ( vec_free [i] te )
+        ^ ( __sv_hyphen text af at bf bt )
+    } {}
+    // AND of comparators
+    : ( Vec SvInterval ) parts ( vec_new [SvInterval] )
+    : ~ i err 0
+    : ~ i k 0
+    ~ & == err 0 < k nt {
+        : i s ?? ( vec_get [i] ts k ) { T x → x F → 0 }
+        : i e ?? ( vec_get [i] te k ) { T x → x F → 0 }
+        : !SvInterval SemverErr cr ( __sv_comparator text s e )
+        ?? cr { T iv → { ( vec_push [SvInterval] parts iv ) } F _ → { = err 1 } }
+        = k + k 1
+    }
+    ( vec_free [i] ts ) ( vec_free [i] te )
+    ? != err 0 {
+        : i m ( vec_len [SvInterval] parts )
+        : ~ i j 0
+        ~ < j m { ?? ( vec_get [SvInterval] parts j ) { T iv → { ( __sv_free_interval iv ) } F _ → {} } = j + j 1 }
+        ( vec_free [SvInterval] parts )
+        ^ @ !SvInterval SemverErr { F # SemverErr SvBadReq }
+    } {}
+    ^ @ !SvInterval SemverErr { T ( __sv_and_reduce parts ) }
+}
+
+@ __sv_tok_is_dash s text ( Vec i ) ts ( Vec i ) te i idx → b {
+    : i s ?? ( vec_get [i] ts idx ) { T x → x F → 0 }
+    : i e ?? ( vec_get [i] te idx ) { T x → x F → 0 }
+    ^ & == - e s 1 == ( nurl_str_get text s ) 45
+}
+
+// Parse a full npm-style range: OR ("||") of comparator-sets.
 @ semver_req_parse s text → !VersionReq SemverErr {
     : i n ( nurl_str_len text )
-    // Skip leading spaces.
-    : ~ i start 0
-    ~ & < start n == ( nurl_str_get text start ) 32 { = start + start 1 }
-    ? >= start n { ^ @ !VersionReq SemverErr { F # SemverErr SvBadReq } } {}
-
-    : i c0 ( nurl_str_get text start )
-    // Bare '*' (possibly with trailing spaces) → match anything.
-    ? ( __sv_is_wild c0 ) {
-        ^ @ !VersionReq SemverErr { T ( __sv_any_req ) }
+    : ( Vec SvInterval ) alts ( vec_new [SvInterval] )
+    : ~ i err 0
+    : ~ i seg 0
+    : ~ i p 0
+    : ~ b going T
+    ~ going {
+        : b at_end == p n
+        : b at_or ? & & < + p 1 n == ( nurl_str_get text p ) 124 == ( nurl_str_get text + p 1 ) 124 { T } { F }
+        ? | at_end at_or {
+            : !SvInterval SemverErr sr ( __sv_and_set text seg p )
+            ?? sr { T iv → { ( vec_push [SvInterval] alts iv ) } F _ → { = err 1 } }
+            ? at_end { = going F } { = p + p 2 = seg p }
+        } {
+            = p + p 1
+        }
+    }
+    ? != err 0 {
+        : i m ( vec_len [SvInterval] alts )
+        : ~ i j 0
+        ~ < j m { ?? ( vec_get [SvInterval] alts j ) { T iv → { ( __sv_free_interval iv ) } F _ → {} } = j + j 1 }
+        ( vec_free [SvInterval] alts )
+        ^ @ !VersionReq SemverErr { F # SemverErr SvBadReq }
     } {}
-
-    // Operator prefix.
-    : ~ i op 0  // 0 caret(default/bare/^), 1 ~, 2 =, 3 >, 4 >=, 5 <, 6 <=
-    : ~ i vpos start
-    ? == c0 94 { = op 0 = vpos + start 1 } {}  // '^'
-    ? == c0 126 { = op 1 = vpos + start 1 } {}  // '~'
-    ? == c0 61 { = op 2 = vpos + start 1 } {}  // '='
-    ? == c0 62 {
-        ? & < + start 1 n == ( nurl_str_get text + start 1 ) 61 { = op 4 = vpos + start 2 } { = op 3 = vpos + start 1 }
-    } {}  // '>' / '>='
-    ? == c0 60 {
-        ? & < + start 1 n == ( nurl_str_get text + start 1 ) 61 { = op 6 = vpos + start 2 } { = op 5 = vpos + start 1 }
-    } {}  // '<' / '<='
-    // Skip spaces after the operator.
-    ~ & < vpos n == ( nurl_str_get text vpos ) 32 { = vpos + vpos 1 }
-
-    : PartialVer p ( __sv_parse_partial text vpos n )
-    ? < . p count 0 { ^ @ !VersionReq SemverErr { F # SemverErr SvBadReq } } {}
-    // A bare wildcard reached here (e.g. "1.*") has count >= 1.
-    ? == . p count 0 { ^ @ !VersionReq SemverErr { T ( __sv_any_req ) } } {}
-
-    : Semver lo ( __sv_partial_lo p )
-
-    // op 3/4 (> , >=): open upper bound.
-    ? == op 3 { ^ @ !VersionReq SemverErr { T @ VersionReq { 1 lo 0 0 ( __sv_make 0 0 0 ) 0 } } } {}
-    ? == op 4 { ^ @ !VersionReq SemverErr { T @ VersionReq { 1 lo 1 0 ( __sv_make 0 0 0 ) 0 } } } {}
-    // op 5/6 (< , <=): open lower bound.
-    ? == op 5 { ( semver_free lo ) ^ @ !VersionReq SemverErr { T @ VersionReq { 0 ( __sv_make 0 0 0 ) 1 1 ( __sv_partial_lo p ) 0 } } } {}
-    ? == op 6 { ( semver_free lo ) ^ @ !VersionReq SemverErr { T @ VersionReq { 0 ( __sv_make 0 0 0 ) 1 1 ( __sv_partial_lo p ) 1 } } } {}
-
-    // op 2 (=): exact when 3 components, else a partial range.
-    ? == op 2 {
-        ? >= . p count 3 {
-            ^ @ !VersionReq SemverErr { T @ VersionReq { 1 lo 1 1 ( __sv_partial_lo p ) 1 } }
-        } {}
-        : Semver he ( __sv_tilde_hi p )
-        ^ @ !VersionReq SemverErr { T @ VersionReq { 1 lo 1 1 he 0 } }
-    } {}
-
-    // op 1 (~): tilde range.
-    ? == op 1 {
-        : Semver ht ( __sv_tilde_hi p )
-        ^ @ !VersionReq SemverErr { T @ VersionReq { 1 lo 1 1 ht 0 } }
-    } {}
-
-    // op 0 (caret / bare default).
-    : Semver hc ( __sv_caret_hi p )
-    ^ @ !VersionReq SemverErr { T @ VersionReq { 1 lo 1 1 hc 0 } }
+    ^ @ !VersionReq SemverErr { T @ VersionReq { alts } }
 }
 
 @ semver_req_free VersionReq r → v {
-    ( semver_free . r lo )
-    ( semver_free . r hi )
+    : i n ( vec_len [SvInterval] . r alts )
+    : ~ i k 0
+    ~ < k n { ?? ( vec_get [SvInterval] . r alts k ) { T iv → { ( __sv_free_interval iv ) } F _ → {} } = k + k 1 }
+    ( vec_free [SvInterval] . r alts )
 }
 
-@ semver_req_matches VersionReq r Semver v → b {
-    ? != . r has_lo 0 {
-        : i c ( semver_compare v . r lo )
-        ? != . r lo_incl 0 {
-            ? < c 0 { ^ F } {}
-        } {
-            ? <= c 0 { ^ F } {}
-        }
+@ __sv_interval_matches SvInterval iv Semver v → b {
+    ? != . iv has_lo 0 {
+        : i c ( semver_compare v . iv lo )
+        ? != . iv lo_incl 0 { ? < c 0 { ^ F } {} } { ? <= c 0 { ^ F } {} }
     } {}
-    ? != . r has_hi 0 {
-        : i c ( semver_compare v . r hi )
-        ? != . r hi_incl 0 {
-            ? > c 0 { ^ F } {}
-        } {
-            ? >= c 0 { ^ F } {}
-        }
+    ? != . iv has_hi 0 {
+        : i c ( semver_compare v . iv hi )
+        ? != . iv hi_incl 0 { ? > c 0 { ^ F } {} } { ? >= c 0 { ^ F } {} }
     } {}
     ^ T
+}
+
+// A version matches the requirement when it lies in ANY of the OR intervals.
+@ semver_req_matches VersionReq r Semver v → b {
+    : i n ( vec_len [SvInterval] . r alts )
+    : ~ i k 0
+    ~ < k n {
+        ?? ( vec_get [SvInterval] . r alts k ) {
+            T iv → { ? ( __sv_interval_matches iv v ) { ^ T } {} }
+            F _ → {}
+        }
+        = k + k 1
+    }
+    ^ F
 }
 
 // Highest version in `versions` satisfying `r`, or None. Borrows the Vec
