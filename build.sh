@@ -40,6 +40,14 @@ set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
+# Wire up the version-controlled git hooks (idempotent; only in a work-tree
+# checkout). The pre-commit hook keeps staged .nu files nurlfmt-canonical.
+if [[ -d .githooks ]] && git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    if [[ "$(git config --local core.hooksPath 2>/dev/null || true)" != ".githooks" ]]; then
+        git config --local core.hooksPath .githooks 2>/dev/null || true
+    fi
+fi
+
 # Wall-clock timers (bash $SECONDS, integer). BUILD_T0 marks the start of
 # the whole build; TEST_T0 is set just before the test runner. fmt_dur
 # renders seconds as "1m 20s" / "12s" for the summary line.

@@ -1,0 +1,63 @@
+#!/usr/bin/env bash
+# ============================================================
+#  .githooks/pre-commit — keep staged NURL sources nurlfmt-canonical,
+#  the same gate CI enforces (compiler/tests/nurlfmt_check.sh).
+#
+#  For each staged *.nu file (bench/ excluded — those are recorded model
+#  outputs that must keep their exact bytes):
+#    * fully staged (no unstaged edits) → `nurlfmt --write` then re-stage,
+#      so the commit is always canonical with nothing to re-run;
+#    * partially staged → `nurlfmt --check` only, and block the commit if it
+#      isn't canonical (auto-writing would stage the unstaged edits too).
+#
+#  Skips cleanly (does not block) when build/nurlfmt hasn't been built yet.
+#  Bypass once with `git commit --no-verify`.
+#
+#  Activate:  git config core.hooksPath .githooks   (see .githooks/README.md)
+# ============================================================
+set -uo pipefail
+
+ROOT="$(git rev-parse --show-toplevel)"
+FMT="$ROOT/build/nurlfmt"
+
+if [[ ! -x "$FMT" ]]; then
+    echo "pre-commit: build/nurlfmt not found — skipping fmt check (run ./build.sh)." >&2
+    exit 0
+fi
+
+# Staged, added/copied/modified *.nu files, minus bench/.
+mapfile -t FILES < <(git diff --cached --name-only --diff-filter=ACM -- '*.nu' | grep -v '^bench/' || true)
+(( ${#FILES[@]} == 0 )) && exit 0
+
+blocked=()
+fixed=()
+for f in "${FILES[@]}"; do
+    [[ -f "$f" ]] || continue
+    if git diff --quiet -- "$f"; then
+        # No unstaged edits — safe to rewrite and re-stage.
+        before="$(git hash-object "$f")"
+        "$FMT" --write "$f" >/dev/null 2>&1 || true
+        after="$(git hash-object "$f")"
+        if [[ "$before" != "$after" ]]; then
+            git add -- "$f"
+            fixed+=("$f")
+        fi
+    else
+        # Partially staged — don't touch the working tree; just verify.
+        "$FMT" --check "$f" >/dev/null 2>&1 || blocked+=("$f")
+    fi
+done
+
+if (( ${#fixed[@]} > 0 )); then
+    echo "pre-commit: nurlfmt formatted and re-staged:" >&2
+    for f in "${fixed[@]}"; do echo "  $f" >&2; done
+fi
+
+if (( ${#blocked[@]} > 0 )); then
+    echo "pre-commit: not nurlfmt-canonical (has unstaged edits, not auto-fixed):" >&2
+    for f in "${blocked[@]}"; do echo "  $f" >&2; done
+    echo "Fix: build/nurlfmt --write <file>  then re-stage." >&2
+    exit 1
+fi
+
+exit 0
