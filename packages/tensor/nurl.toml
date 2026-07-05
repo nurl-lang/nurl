@@ -1,0 +1,8 @@
+[package]
+name = "tensor"
+version = "0.1.0"
+description = "The reusable n-dimensional array for NURL — the shared ML layer over gpukit. Tensor logic today is welded inside the onnx runtime (RTensor is bound to the graph Engine) and gpukit is a marshalling floor; `tensor` is the ndarray that onnx, anomaly and a future training package can all sit on. Row-major contiguous storage computed in f64, with an F32 dtype that keeps values on the float32 grid for interop. Ships creation (zeros/ones/full/from_data/arange), shape ops (reshape/transpose/permute), numpy-rule broadcasting elementwise (add/sub/mul/div/pow/maximum/minimum + scalar forms), unary maps (neg/abs/exp/log/sqrt/relu/sigmoid/tanh), 2-D matmul that runs on the GPU via gpukit for large f64 problems and a plain loop otherwise (identical results), and axis/global reductions (sum/mean/max/min/prod with keepdim). Verified against numpy."
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+gpukit = { path = "../gpukit", version = "^0.2" }
