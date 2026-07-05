@@ -1,0 +1,7 @@
+[package]
+name = "image"
+version = "0.1.0"
+description = "Pure-NURL image codecs — close the vision-stack loop with no ImageMagick/ffmpeg shell-out. Decodes and encodes without any native image library: an 8-bit, row-major Image raster (1/3/4 channels), binary PPM (P5/P6), and a full PNG codec built on the stdlib DEFLATE — png_decode handles 8-bit non-interlaced greyscale / RGB / palette (expanded to RGB) / grey+alpha / RGBA with all five scanline filters reconstructed, and png_encode writes valid, lossless 8-bit PNGs (decode→encode→decode reproduces the pixels exactly). Ships file helpers with format sniffing (image_load / image_save_png / image_save_ppm). The natural front door for objdet, yoloe, chart's PNG export and photography work, which today shell out to `convert photo.jpg photo.ppm`. Baseline JPEG decode is planned as a follow-up milestone; interlaced PNG, sub-8-bit depths and tRNS are current decode gaps (reported as a clean None, never an out-of-bounds read)."
+license = "MIT OR Apache-2.0"
+
+[dependencies]
