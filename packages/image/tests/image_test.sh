@@ -39,12 +39,15 @@ if ! python3 -c "import PIL, numpy" 2>/dev/null; then
     echo "  (codec reference checks skipped — python3 + Pillow + numpy not available)"; exit 0
 fi
 
-echo "[1/4] build tests/roundtrip.nu"
+echo "[1/5] build tests/roundtrip.nu + tests/jpegenc.nu"
+if ! $NURL tests/jpegenc.nu "$WORK/jpegenc" >/dev/null 2>"$WORK/jbuild.err"; then
+    echo "FAIL: could not build jpegenc:"; tail -8 "$WORK/jbuild.err"; exit 1
+fi
 if ! $NURL tests/roundtrip.nu "$WORK/roundtrip" >/dev/null 2>"$WORK/build.err"; then
     echo "FAIL: could not build roundtrip:"; tail -8 "$WORK/build.err"; exit 1
 fi
 
-echo "[2/4] generate references"
+echo "[2/5] generate references"
 python3 - "$WORK" <<'PY'
 import sys, numpy as np; from PIL import Image
 W=sys.argv[1]
@@ -77,7 +80,7 @@ for y in range(h):
 Image.fromarray(g,"L").save(f"{W}/jgray.jpg", quality=92)
 PY
 
-echo "[3/4] PNG/PPM round-trip (pixel-exact)"
+echo "[3/5] PNG/PPM round-trip (pixel-exact)"
 for n in rgb rgba gray pal; do
     "$WORK/roundtrip" "$WORK/$n.png" "$WORK/$n.out.png" "$WORK/$n.out.ppm" >/dev/null 2>&1
 done
@@ -95,7 +98,7 @@ sys.exit(1 if f else 0)
 PY
 V=$?
 
-echo "[4/4] JPEG decode (within tolerance of Pillow)"
+echo "[4/5] JPEG decode (within tolerance of Pillow)"
 for n in j444 j420 jgray; do
     "$WORK/roundtrip" "$WORK/$n.jpg" "$WORK/$n.d.png" "$WORK/$n.out.ppm" >/dev/null 2>&1
 done
@@ -114,6 +117,46 @@ sys.exit(1 if f else 0)
 PY
 [ $? = 0 ] || V=1
 
+echo "[5/5] JPEG encode (444/420/422/gray; self-decode + Pillow re-decode)"
+python3 - "$WORK" <<'PY'
+import sys, numpy as np; from PIL import Image
+W=sys.argv[1]
+h,w=48,64
+a=np.zeros((h,w,3),dtype=np.uint8)
+for y in range(h):
+    for x in range(w): a[y,x]=[x*255//w, y*255//h, (x+y)*255//(w+h)]
+Image.fromarray(a,"RGB").save(f"{W}/grad.png")
+rng=np.random.default_rng(7)
+Image.fromarray((rng.random((29,37,3))*255).astype(np.uint8),"RGB").save(f"{W}/noise.png")
+PY
+if ! "$WORK/jpegenc" "$WORK/grad.png" "$WORK/e444.jpg" "$WORK/e420.jpg" "$WORK/e422.jpg" "$WORK/egray.jpg" | sed 's/^/  /'; then
+    echo "  FAIL jpegenc (smooth)"; V=1
+fi
+# odd-size noise: structural health only (chroma subsampling loss is inherent)
+if ! "$WORK/jpegenc" "$WORK/noise.png" "$WORK/x1.jpg" "$WORK/x2.jpg" "$WORK/x3.jpg" "$WORK/x4.jpg" loose >/dev/null; then
+    echo "  FAIL jpegenc (odd-size noise)"; V=1
+fi
+python3 - "$WORK" <<'PY'
+import sys, numpy as np; from PIL import Image
+W=sys.argv[1]; f=0
+src=np.asarray(Image.open(f"{W}/grad.png").convert("RGB"),dtype=int)
+for n,tol in (("e444",6),("e420",12),("e422",12)):
+    im=Image.open(f"{W}/{n}.jpg"); im.load()
+    d=int(np.abs(np.asarray(im.convert("RGB"),dtype=int)-src).max())
+    ok=d<=tol
+    print(f"  {'PASS' if ok else 'FAIL'} {n}: Pillow re-decode max_diff={d} (≤{tol})"); f+=0 if ok else 1
+g=Image.open(f"{W}/egray.jpg"); g.load()
+gs=np.asarray(Image.open(f"{W}/grad.png").convert("L"),dtype=int)
+d=int(np.abs(np.asarray(g.convert("L"),dtype=int)-gs).max())
+ok=d<=6
+print(f"  {'PASS' if ok else 'FAIL'} egray: Pillow re-decode max_diff={d} (≤6)"); f+=0 if ok else 1
+for n in ("x1","x2","x3","x4"):
+    try: im=Image.open(f"{W}/{n}.jpg"); im.load()
+    except Exception as e: print(f"  FAIL {n}: {e}"); f+=1
+sys.exit(1 if f else 0)
+PY
+[ $? = 0 ] || V=1
+
 echo "[asan] decode/encode under AddressSanitizer"
 if NURL_SAN=1 $NURL tests/roundtrip.nu "$WORK/rt_san" >/dev/null 2>"$WORK/san_build.err"; then
     SAN_OK=1
@@ -121,6 +164,10 @@ if NURL_SAN=1 $NURL tests/roundtrip.nu "$WORK/rt_san" >/dev/null 2>"$WORK/san_bu
         "$WORK/rt_san" "$WORK/$f" "$WORK/s.png" "$WORK/s.ppm" >/dev/null 2>"$WORK/san.out" || true
         grep -qE "ERROR: AddressSanitizer|detected memory leaks" "$WORK/san.out" && SAN_OK=0
     done
+    if NURL_SAN=1 $NURL tests/jpegenc.nu "$WORK/jpegenc_san" >/dev/null 2>&1; then
+        "$WORK/jpegenc_san" "$WORK/noise.png" "$WORK/sa.jpg" "$WORK/sb.jpg" "$WORK/sc.jpg" "$WORK/sd.jpg" loose >"$WORK/jsan.out" 2>&1 || SAN_OK=0
+        grep -qE "ERROR: AddressSanitizer|detected memory leaks" "$WORK/jsan.out" && SAN_OK=0
+    fi
     [ "$SAN_OK" = 1 ] && echo "  PASS ASan clean (all cases)" || { echo "  FAIL ASan"; V=1; }
 else
     echo "  (skipped ASan build)"
