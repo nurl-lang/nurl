@@ -173,6 +173,26 @@ sys.exit(1 if f else 0)
 PY
 [ $? = 0 ] || V=1
 
+echo "[cli] img info / convert / resize"
+if ! $NURL src/main.nu "$WORK/img" >/dev/null 2>"$WORK/cbuild.err"; then
+    echo "FAIL: could not build img CLI:"; tail -8 "$WORK/cbuild.err"; V=1
+else
+    CLI_OK=1
+    "$WORK/img" info "$WORK/grad.png" >/dev/null || CLI_OK=0
+    "$WORK/img" convert "$WORK/p420.jpg" "$WORK/c1.png" || CLI_OK=0        # progressive → PNG
+    "$WORK/img" resize "$WORK/grad.png" "$WORK/c2.jpg" 32x -q 85 || CLI_OK=0
+    "$WORK/img" convert "$WORK/pm/paltrns.png" "$WORK/c3.png" || CLI_OK=0  # tRNS → RGBA
+    "$WORK/img" info /nonexistent 2>/dev/null && CLI_OK=0                   # must fail
+    python3 - "$WORK" <<'PY' || CLI_OK=0
+import sys; from PIL import Image
+W=sys.argv[1]
+a=Image.open(f"{W}/c1.png"); a.load(); assert a.size==(64,48), a.size
+b=Image.open(f"{W}/c2.jpg"); b.load(); assert b.size==(32,24), b.size
+c=Image.open(f"{W}/c3.png"); c.load(); assert c.mode=="RGBA", c.mode
+PY
+    [ "$CLI_OK" = 1 ] && echo "  PASS cli (convert/resize/tRNS/exit codes, Pillow-verified)" || { echo "  FAIL cli"; V=1; }
+fi
+
 echo "[fuzz] truncation + mutation sweeps over every decoder"
 if ! $NURL tests/fuzz.nu "$WORK/fuzz" >/dev/null 2>"$WORK/fbuild.err"; then
     echo "FAIL: could not build fuzz:"; tail -8 "$WORK/fbuild.err"; V=1
