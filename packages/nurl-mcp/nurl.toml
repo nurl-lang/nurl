@@ -5,4 +5,4 @@ description = "Local MCP server for the NURL toolchain — exposes the installed
 license = "MIT OR Apache-2.0"
 
 [dependencies]
-wasmbuilder = { path = "../wasmbuilder", version = "0.1.0" }
+wasmbuilder = { path = "../wasmbuilder", version = "^0.1.0" }

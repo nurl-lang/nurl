@@ -5,4 +5,4 @@ description = "An MCP-controlled distributed compute engine with real GPU comput
 license = "MIT OR Apache-2.0"
 
 [dependencies]
-wasmbuilder = { path = "../wasmbuilder", version = "0.1.0" }
+wasmbuilder = { path = "../wasmbuilder", version = "^0.1.0" }

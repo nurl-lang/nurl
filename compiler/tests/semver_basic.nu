@@ -5,7 +5,8 @@
 //   2. precedence — the canonical semver.org §11 ordering, incl. the
 //      prerelease rules (numeric < alphanumeric, fewer < more identifiers,
 //      prerelease < release).
-//   3. requirement ranges — ^, ~, =, >=, <, wildcard, bare (= caret).
+//   3. requirement ranges — npm-identical: ^, ~, =, >=, <, X-range,
+//      hyphen, OR (||), and a bare full version (= exact pin).
 //   4. semver_req_max_satisfying picks the highest matching version.
 //   5. parse errors.
 
@@ -111,6 +112,17 @@ $ `stdlib/core/vec.nu`
     ( pb `any__9.9.9` ( sat `*` `9.9.9` ) )
     ( pb `bare_1.2.3__1.8.0` ( sat `1.2.3` `1.8.0` ) )
     ( pb `bare_1.2.3__2.0.0` ( sat `1.2.3` `2.0.0` ) )
+    // npm-identical compound ranges
+    ( pb `and_range__1.5.0` ( sat `>=1.2.3 <2.0.0` `1.5.0` ) )
+    ( pb `and_range__2.0.0` ( sat `>=1.2.3 <2.0.0` `2.0.0` ) )
+    ( pb `hyphen__2.3.4` ( sat `1.2.3 - 2.3.4` `2.3.4` ) )
+    ( pb `hyphen__2.3.5` ( sat `1.2.3 - 2.3.4` `2.3.5` ) )
+    ( pb `or_1or2__2.5.0` ( sat `^1.0.0 || ^2.0.0` `2.5.0` ) )
+    ( pb `or_1or2__3.0.0` ( sat `^1.0.0 || ^2.0.0` `3.0.0` ) )
+    ( pb `xrange_1x__1.9.9` ( sat `1.x` `1.9.9` ) )
+    ( pb `xrange_1x__2.0.0` ( sat `1.x` `2.0.0` ) )
+    ( pb `part_1.2__1.3.0` ( sat `1.2` `1.3.0` ) )
+    ( pb `gt_part__1.2.9` ( sat `>1.2` `1.2.9` ) )
 
     // ── 4. max_satisfying ────────────────────────────────────────
     ( nurl_print `── max_satisfying ──\n` )

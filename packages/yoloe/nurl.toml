@@ -5,4 +5,4 @@ description = "Promptable, open-vocabulary object detection AND instance segment
 license = "MIT OR Apache-2.0"
 
 [dependencies]
-onnx = { path = "../onnx", version = "0.4.2" }
+onnx = { path = "../onnx", version = "^0.4.2" }
