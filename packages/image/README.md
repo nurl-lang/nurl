@@ -102,9 +102,11 @@ colour keys add an alpha channel), all five scanline filters. Encode:
 **JPEG decode** — 8-bit Huffman, greyscale or YCbCr, any 4:4:4 / 4:2:2 /
 4:2:0 / 4:1:1 subsampling, restart intervals, sequential (SOF0/SOF1) and
 **progressive** (SOF2: spectral selection + successive approximation, the
-format most web JPEGs use). Decode matches libjpeg/Pillow to within
-IDCT/upsampling rounding; progressive output is bit-identical to the
-baseline decode of the same content. **Encode** — baseline JFIF, Annex K
+format most web JPEGs use). Chroma upsampling is libjpeg's default "fancy"
+(triangular) filter, bit-matching jdsample.c for 2x1/2x2 expansion, so
+decode matches libjpeg/Pillow to within IDCT rounding even at 4:2:0;
+progressive output is bit-identical to the baseline decode of the same
+content. **Encode** — baseline JFIF, Annex K
 tables, libjpeg-style quality 1–100, 4:4:4 / 4:2:2 / 4:2:0; loss profile
 matches Pillow's encoder on the same content.
 
@@ -131,9 +133,13 @@ pixel-exact, JPEG decode within tolerance (baseline + progressive), JPEG
 encode re-decoded by Pillow, CLI smoke tests, the fuzz sweeps, and an ASan
 pass over everything. Skips the reference parts cleanly without Pillow.
 
+## Consumers
+
+[`objdet`](../objdet) and [`yoloe`](../yoloe) decode photos and encode
+annotated output through this package (their private PPM/resize/draw
+copies are gone); [`chart`](../chart) is terminal-only and needs no raster.
+
 ## Roadmap
 
-- Wire objdet / yoloe / chart to `image_load` and delete their private
-  PPM/resize/draw copies.
-- "Fancy" (triangle) chroma upsampling for closer 4:2:0 parity; optional
-  PNG adaptive filtering for smaller encodes.
+- Optional PNG adaptive filtering for smaller encodes; fancier resampling
+  (Lanczos) if a consumer needs it.
