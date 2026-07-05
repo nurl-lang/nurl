@@ -50,7 +50,7 @@ $ `src/kernels.nu`
 }
 
 @ main → i {
-    : GpuKit kit ( gk_open 0 )
+    : *GpuKit kit ( gk_open 0 )
     ? ( gk_ok kit ) {} {
         ( nurl_eprintln `gpukit: no device (open failed)` )
         ( gk_close kit )
@@ -106,7 +106,9 @@ $ `src/kernels.nu`
 
     // kernel cache: a second identical call must reuse (still correct)
     ( __ck `map cached rerun` ( gk_map_f kit `gk_sq` out a `x*x` ) )
-    ( __ck `map cached == host` ( __eq_vec out ( __seq_map_sq a ) ) )
+    : ( Vec f ) wsq2 ( __seq_map_sq a )
+    ( __ck `map cached == host` ( __eq_vec out wsq2 ) )
+    ( vec_free [f] wsq2 )
 
     // matmul: 3x4 · 4x2 = 3x2, checked exactly against a host loop
     : i M 3
@@ -116,7 +118,9 @@ $ `src/kernels.nu`
     : ( Vec f ) mb ( __seq_f * K Nn 2.0 )
     : ( Vec f ) mc ( __gk_zeros * M Nn )
     ( __ck `matmul ran` ( gk_matmul_f kit mc ma mb M K Nn ) )
-    ( __ck `matmul == host` ( __eq_vec mc ( __host_matmul ma mb M K Nn ) ) )
+    : ( Vec f ) hm ( __host_matmul ma mb M K Nn )
+    ( __ck `matmul == host` ( __eq_vec mc hm ) )
+    ( vec_free [f] hm )
     ( vec_free [f] ma )
     ( vec_free [f] mb )
     ( vec_free [f] mc )
