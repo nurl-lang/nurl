@@ -43,10 +43,16 @@ for ln in open(sys.argv[1]):
              np.array([float(x) for x in d.split(',')]) if d else np.array([]))
 a=np.arange(6.).reshape(2,3); b=np.arange(3.).reshape(1,3); a24=np.arange(24.).reshape(2,3,4)
 big=np.arange(16384.).reshape(128,128)
+bmA=np.arange(12.).reshape(2,2,3); bmB=np.arange(12.).reshape(2,3,2); bmA1=np.arange(6.).reshape(1,2,3)
+def _sm(x,ax):
+    e=np.exp(x-x.max(ax,keepdims=True)); return e/e.sum(ax,keepdims=True)
 exp={"a":a,"add":a+b,"mul":a*a,"aT":a.T,"matmul":a@a.T,"sum0":a.sum(0),"sum1":a.sum(1),
  "sum1k":a.sum(1,keepdims=True),"sumall":np.array(a.sum()),"mean0":a.mean(0),"max1":a.max(1),
  "min0":a.min(0),"relu":np.maximum(a-2.5,0),"exp":np.exp(a*0.1),"sig":1/(1+np.exp(-(a-2.0))),
- "perm":np.transpose(a24,(2,0,1)),"bigmm_sum":np.array((big@big).sum())}
+ "perm":np.transpose(a24,(2,0,1)),"bigmm_sum":np.array((big@big).sum()),
+ "bmm":bmA@bmB,"bmm_bc":bmA1@bmB,"softmax1":_sm(a,1),"slice":a[0:2,1:3],
+ "cat0":np.concatenate([a,a],0),"cat1":np.concatenate([a,a],1),
+ "argmax1":a.argmax(1).astype(float),"argmin0":a.argmin(0).astype(float)}
 fails=0
 for n,(shp,dat) in rows.items():
     if n not in exp: print(f"  FAIL {n}: no reference"); fails+=1; continue
