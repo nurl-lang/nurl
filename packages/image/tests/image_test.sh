@@ -106,6 +106,14 @@ sys.exit(1 if f else 0)
 PY
 V=$?
 
+echo "[3b/5] PNG feature matrix (bit depths, 16-bit, tRNS, Adam7 — pixel-exact)"
+mkdir -p "$WORK/pm"
+python3 tests/png_matrix.py gen "$WORK/pm"
+for n in $(cat "$WORK/pm/cases.txt"); do
+    "$WORK/roundtrip" "$WORK/pm/$n.png" "$WORK/pm/$n.out.png" "$WORK/pm/$n.out.ppm" >/dev/null 2>&1 || true
+done
+python3 tests/png_matrix.py check "$WORK/pm" || V=1
+
 echo "[4/5] JPEG decode, baseline + progressive (within tolerance of Pillow)"
 for n in j444 j420 jgray p444 p420 pgray pnoise; do
     "$WORK/roundtrip" "$WORK/$n.jpg" "$WORK/$n.d.png" "$WORK/$n.out.ppm" >/dev/null 2>&1
@@ -168,7 +176,7 @@ PY
 echo "[asan] decode/encode under AddressSanitizer"
 if NURL_SAN=1 $NURL tests/roundtrip.nu "$WORK/rt_san" >/dev/null 2>"$WORK/san_build.err"; then
     SAN_OK=1
-    for f in rgb.png rgba.png gray.png pal.png j444.jpg j420.jpg jgray.jpg p444.jpg p420.jpg pgray.jpg pnoise.jpg; do
+    for f in rgb.png rgba.png gray.png pal.png pm/adam_rgba16.png pm/paltrns.png pm/g1.png j444.jpg j420.jpg jgray.jpg p444.jpg p420.jpg pgray.jpg pnoise.jpg; do
         "$WORK/rt_san" "$WORK/$f" "$WORK/s.png" "$WORK/s.ppm" >/dev/null 2>"$WORK/san.out" || true
         grep -qE "ERROR: AddressSanitizer|detected memory leaks" "$WORK/san.out" && SAN_OK=0
     done

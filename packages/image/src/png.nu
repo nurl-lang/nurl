@@ -1,14 +1,17 @@
 // image/png.nu — PNG decode + encode over the stdlib DEFLATE codec.
 //
-// Decode: 8-bit depth, non-interlaced, colour types 0 (grey), 2 (RGB),
-// 3 (palette → expanded to RGB), 4 (grey+alpha), 6 (RGBA). Reconstructs all
-// five scanline filters. Encode: 8-bit, non-interlaced, filter 0, colour type
-// chosen from the image's channel count. Lossless — a decode→encode→decode
-// round-trip reproduces the pixels exactly.
+// Decode: the full still-image feature matrix — every legal bit depth
+// (1 / 2 / 4 / 8 / 16, deeper samples scaled to the 8-bit raster), every
+// colour type (grey, RGB, palette → RGB, grey+alpha, RGBA), Adam7
+// interlacing, and tRNS transparency (palette alpha and grey/RGB colour
+// keys, which add an alpha channel to the output). All five scanline
+// filters are reconstructed at any pixel width. Encode: 8-bit,
+// non-interlaced, filter 0, colour type chosen from the image's channel
+// count. Lossless — a decode→encode→decode round-trip reproduces the
+// pixels exactly.
 //
-// Not yet: interlaced (Adam7) images, bit depths other than 8, and tRNS
-// transparency on palette/grey images. `png_decode` returns None on those (and
-// on malformed input); the codec never reads out of bounds.
+// `png_decode` returns None on malformed input; the codec never reads out
+// of bounds.
 
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/bytes.nu`
@@ -39,6 +42,133 @@ $ `core.nu`
 
 // ── Decode ────────────────────────────────────────────────────────────
 
+// Is depth legal for this colour type?
+@ __png_depth_ok i color i depth → b {
+    : b sub8 ? || || == depth 1 == depth 2 == depth 4 { T } { F }
+    ? == color 0 { ^ ? || || sub8 == depth 8 == depth 16 { T } { F } } {}
+    ? == color 3 { ^ ? || sub8 == depth 8 { T } { F } } {}
+    ? || || == color 2 == color 4 == color 6 { ^ ? || == depth 8 == depth 16 { T } { F } } {}
+    ^ F
+}
+
+// Scale a raw sample at `depth` bits to 0..255.
+@ __png_scale8 i s i depth → i {
+    ? == depth 1 { ^ * s 255 } {}
+    ? == depth 2 { ^ * s 85 } {}
+    ? == depth 4 { ^ * s 17 } {}
+    ? == depth 16 { ^ >> s 8 } {}
+    ^ s
+}
+
+// Raw sample `si` (sample index within the row) from a reconstructed row.
+@ __png_sample ( Vec u ) recon i rowbase i si i depth → i {
+    ? == depth 8 { ^ ( __b recon + rowbase si ) } {}
+    ? == depth 16 {
+        : i o + rowbase * si 2
+        ^ + * ( __b recon o ) 256 ( __b recon + o 1 )
+    } {}
+    : i bitpos * si depth
+    : i byte ( __b recon + rowbase / bitpos 8 )
+    : i shift - - 8 depth % bitpos 8
+    ^ & >> byte shift - << 1 depth 1
+}
+
+// Decode one (sub-)image pass: unfilter `ph` rows of `pw` pixels starting
+// at raw[offset], then scatter the pixels into `out` on the (x0,y0,dx,dy)
+// lattice. Returns the number of raw bytes consumed, or -1 on error.
+// trns: palette-alpha bytes (colour 3) or 16-bit colour-key samples
+// (colour 0/2); tn = entry count.
+@ __png_pass ( Vec u ) raw i offset i W i H i x0 i y0 i dx i dy i color i depth ( Vec u ) plte ( Vec i ) trns i tn ( Vec u ) out i outch → i {
+    : i rch ( __png_raw_ch color )
+    ? || <= W x0 <= H y0 { ^ 0 } {}
+    : i pw / + - W x0 - dx 1 dx
+    : i ph / + - H y0 - dy 1 dy
+    ? || <= pw 0 <= ph 0 { ^ 0 } {}
+    : i sbytes / + * * pw rch depth 7 8
+    : i bpp / + * rch depth 7 8
+    : i need * ph + sbytes 1
+    ? > + offset need ( vec_len [u] raw ) { ^ -1 } {}
+
+    // unfilter this pass's rows into a compact buffer
+    : ( Vec u ) recon ( vec_with_cap [u] * ph sbytes )
+    : ~ i y 0
+    ~ < y ph {
+        : i rowpos + offset * y + sbytes 1
+        : i ft ( __b raw rowpos )
+        ? > ft 4 { ( vec_free [u] recon ) ^ -1 } {}
+        : i base + rowpos 1
+        : ~ i x 0
+        ~ < x sbytes {
+            : i fv ( __b raw + base x )
+            : i left ? >= x bpp { ( __b recon - + * y sbytes x bpp ) } { 0 }
+            : i up ? > y 0 { ( __b recon - + * y sbytes x sbytes ) } { 0 }
+            : i ul ? & > y 0 >= x bpp { ( __b recon - - + * y sbytes x bpp sbytes ) } { 0 }
+            : ~ i rv 0
+            ? == ft 0 { = rv fv } {}
+            ? == ft 1 { = rv + fv left } {}
+            ? == ft 2 { = rv + fv up } {}
+            ? == ft 3 { = rv + fv / + left up 2 } {}
+            ? == ft 4 { = rv + fv ( __paeth left up ul ) } {}
+            ( vec_push [u] recon & rv 255 )
+            = x + x 1
+        }
+        = y + y 1
+    }
+
+    // scatter pixels into the full-size output raster
+    : i plen ( vec_len [u] plte )
+    : ~ i j 0
+    ~ < j ph {
+        : i rowbase * j sbytes
+        : i Y + y0 * j dy
+        : ~ i i2 0
+        ~ < i2 pw {
+            : i X + x0 * i2 dx
+            : i pos * + * Y W X outch
+            ? == color 3 {
+                : i idx ( __png_sample recon rowbase i2 depth )
+                : i pi * idx 3
+                ? < pi plen {
+                    ( vec_set [u] out pos ( __b plte pi ) )
+                    ( vec_set [u] out + pos 1 ( __b plte + pi 1 ) )
+                    ( vec_set [u] out + pos 2 ( __b plte + pi 2 ) )
+                } {}
+                ? == outch 4 {
+                    : i a ? < idx tn { ( __b_it trns idx ) } { 255 }
+                    ( vec_set [u] out + pos 3 a )
+                } {}
+            } {
+                // grey / RGB / grey+alpha / RGBA: emit scaled channels, then
+                // a colour-key alpha when tRNS asks for one
+                : ~ i c 0
+                ~ < c rch {
+                    : i s ( __png_sample recon rowbase + * i2 rch c depth )
+                    ( vec_set [u] out + pos c ( __png_scale8 s depth ) )
+                    = c + c 1
+                }
+                ? > outch rch {
+                    : ~ b opaque F
+                    : ~ i c2 0
+                    ~ < c2 rch {
+                        ? == ( __png_sample recon rowbase + * i2 rch c2 depth ) ( __b_it trns c2 ) {} { = opaque T }
+                        = c2 + c2 1
+                    }
+                    ( vec_set [u] out + pos rch ? opaque { 255 } { 0 } )
+                } {}
+            }
+            = i2 + i2 1
+        }
+        = j + j 1
+    }
+    ( vec_free [u] recon )
+    ^ need
+}
+
+// int-vector read for tRNS (0 out of range)
+@ __b_it ( Vec i ) v i p → i {
+    ?? ( vec_get [i] v p ) { T x → { ^ x } F _ → { ^ 0 } }
+}
+
 @ png_decode ( Vec u ) buf → ?Image {
     : i n ( vec_len [u] buf )
     ? < n 8 { ^ @ ?Image { F } } {}
@@ -55,6 +185,7 @@ $ `core.nu`
     : ~ b have_ihdr F
     : ( Vec u ) zdata ( vec_new [u] )     // concatenated IDAT payloads
     : ( Vec u ) plte ( vec_new [u] )      // palette (RGB triples)
+    : ( Vec u ) trnsb ( vec_new [u] )     // raw tRNS payload
 
     : ~ i p 8
     : ~ b going T
@@ -66,7 +197,7 @@ $ `core.nu`
         : i t2 ( __b buf + tpos 2 )
         : i t3 ( __b buf + tpos 3 )
         : i dpos + p 8
-        ? > + dpos clen n { = going F } {
+        ? || < clen 0 > + dpos clen n { = going F } {
             // IHDR
             ? & == t0 73 & == t1 72 & == t2 68 == t3 82 {
                 = width ( __u32be buf dpos )
@@ -81,6 +212,11 @@ $ `core.nu`
                 : ~ i k 0
                 ~ < k clen { ( vec_push [u] plte ( __b buf + dpos k ) ) = k + k 1 }
             } {}
+            // tRNS
+            ? & == t0 116 & == t1 82 & == t2 78 == t3 83 {
+                : ~ i k 0
+                ~ < k clen { ( vec_push [u] trnsb ( __b buf + dpos k ) ) = k + k 1 }
+            } {}
             // IDAT
             ? & == t0 73 & == t1 68 & == t2 65 == t3 84 {
                 : ~ i k 0
@@ -92,10 +228,38 @@ $ `core.nu`
         }
     }
 
-    ? have_ihdr {} { ( vec_free [u] zdata ) ( vec_free [u] plte ) ^ @ ?Image { F } }
-    ? & & == depth 8 == interlace 0 > ( __png_raw_ch color ) 0 {} {
-        ( vec_free [u] zdata ) ( vec_free [u] plte )
+    : ~ b hdr_ok have_ihdr
+    ? & & > width 0 > height 0 & <= width 1000000 <= height 1000000 {} { = hdr_ok F }
+    ? > * width height 268435456 { = hdr_ok F }               // ≤ 256 Mpx
+    ? & hdr_ok & ( __png_depth_ok color depth ) <= interlace 1 {} { = hdr_ok F }
+    ? hdr_ok {} {
+        ( vec_free [u] zdata ) ( vec_free [u] plte ) ( vec_free [u] trnsb )
         ^ @ ?Image { F }
+    }
+
+    // interpret tRNS for the colour type
+    : ( Vec i ) trns ( vec_new [i] )
+    : i tbn ( vec_len [u] trnsb )
+    ? == color 3 {
+        : ~ i k 0
+        ~ < k tbn { ( vec_push [i] trns ( __b trnsb k ) ) = k + k 1 }
+    } {
+        // grey / RGB colour keys are 16-bit big-endian samples
+        : ~ i k 0
+        ~ < + k 1 tbn {
+            ( vec_push [i] trns + * ( __b trnsb k ) 256 ( __b trnsb + k 1 ) )
+            = k + k 2
+        }
+    }
+    ( vec_free [u] trnsb )
+    : i tn ( vec_len [i] trns )
+    // colour keys compare raw (undownscaled) samples; for depth < 16 the key
+    // is stored at source precision already, so equality just works.
+
+    : i rch ( __png_raw_ch color )
+    : ~ i outch rch
+    ? == color 3 { = outch ? > tn 0 { 4 } { 3 } } {
+        ? & > tn 0 || == color 0 == color 2 { = outch + rch 1 } {}
     }
 
     // zlib: strip the 2-byte header; inflate stops at the final block, so the
@@ -108,64 +272,52 @@ $ `core.nu`
     : !( Vec u ) DeflateErr ir ( inflate defl )
     ( vec_free [u] defl )
     : ~ ( Vec u ) raw ( vec_new [u] )
+    : ~ b infl_ok F
     ?? ir {
-        T d → { ( vec_free [u] raw ) = raw d }
-        F _ → { ( vec_free [u] raw ) ( vec_free [u] plte ) ^ @ ?Image { F } }
+        T d → { ( vec_free [u] raw ) = raw d = infl_ok T }
+        F _ → {}
     }
-
-    : i rch ( __png_raw_ch color )
-    : i stride * width rch
-    : i expect * height + stride 1
-    ? >= ( vec_len [u] raw ) expect {} {
-        ( vec_free [u] raw ) ( vec_free [u] plte )
+    ? infl_ok {} {
+        ( vec_free [u] raw ) ( vec_free [u] plte ) ( vec_free [i] trns )
         ^ @ ?Image { F }
     }
 
-    // Unfilter into a stride-packed buffer (no per-row filter byte).
-    : ( Vec u ) recon ( vec_with_cap [u] * height stride )
-    : ~ i y 0
-    ~ < y height {
-        : i rowpos * y + stride 1
-        : i ft ( __b raw rowpos )
-        : i base + rowpos 1
-        : i prevbase - base + stride 1     // start of previous recon row
-        : ~ i x 0
-        ~ < x stride {
-            : i fv ( __b raw + base x )
-            : i left ? >= x rch { ( __b recon - + * y stride x rch ) } { 0 }
-            : i up ? > y 0 { ( __b recon - + * y stride x stride ) } { 0 }
-            : i ul ? & > y 0 >= x rch { ( __b recon - - + * y stride x rch stride ) } { 0 }
-            : ~ i rv 0
-            ? == ft 0 { = rv fv } {}
-            ? == ft 1 { = rv + fv left } {}
-            ? == ft 2 { = rv + fv up } {}
-            ? == ft 3 { = rv + fv / + left up 2 } {}
-            ? == ft 4 { = rv + fv ( __paeth left up ul ) } {}
-            ( vec_push [u] recon & rv 255 )
-            = x + x 1
-        }
-        = y + y 1
-    }
-    ( vec_free [u] raw )
+    // zero-filled output raster
+    : i total * * width height outch
+    : ( Vec u ) out ( vec_with_cap [u] total )
+    : ~ i z 0
+    ~ < z total { ( vec_push [u] out 0 ) = z + z 1 }
 
-    // Palette → RGB expansion; everything else keeps its raw channels.
-    ? == color 3 {
-        : ( Vec u ) rgb ( vec_with_cap [u] * * width height 3 )
-        : i np * width height
-        : ~ i j 0
-        ~ < j np {
-            : i idx * ( __b recon j ) 3
-            ( vec_push [u] rgb ( __b plte idx ) )
-            ( vec_push [u] rgb ( __b plte + idx 1 ) )
-            ( vec_push [u] rgb ( __b plte + idx 2 ) )
-            = j + j 1
+    : ~ b ok T
+    ? == interlace 0 {
+        : i used ( __png_pass raw 0 width height 0 0 1 1 color depth plte trns tn out outch )
+        ? < used 0 { = ok F } {}
+    } {
+        // Adam7: x0 y0 dx dy per pass
+        : ( Vec i ) a7 ( vec_new [i] )
+        ( vec_push [i] a7 0 ) ( vec_push [i] a7 0 ) ( vec_push [i] a7 8 ) ( vec_push [i] a7 8 )
+        ( vec_push [i] a7 4 ) ( vec_push [i] a7 0 ) ( vec_push [i] a7 8 ) ( vec_push [i] a7 8 )
+        ( vec_push [i] a7 0 ) ( vec_push [i] a7 4 ) ( vec_push [i] a7 4 ) ( vec_push [i] a7 8 )
+        ( vec_push [i] a7 2 ) ( vec_push [i] a7 0 ) ( vec_push [i] a7 4 ) ( vec_push [i] a7 4 )
+        ( vec_push [i] a7 0 ) ( vec_push [i] a7 2 ) ( vec_push [i] a7 2 ) ( vec_push [i] a7 4 )
+        ( vec_push [i] a7 1 ) ( vec_push [i] a7 0 ) ( vec_push [i] a7 2 ) ( vec_push [i] a7 2 )
+        ( vec_push [i] a7 0 ) ( vec_push [i] a7 1 ) ( vec_push [i] a7 1 ) ( vec_push [i] a7 2 )
+        : ~ i off 0
+        : ~ i pi 0
+        ~ & ok < pi 7 {
+            : i base * pi 4
+            : i used ( __png_pass raw off width height ( __b_it a7 base ) ( __b_it a7 + base 1 ) ( __b_it a7 + base 2 ) ( __b_it a7 + base 3 ) color depth plte trns tn out outch )
+            ? < used 0 { = ok F } { = off + off used }
+            = pi + pi 1
         }
-        ( vec_free [u] recon )
-        ( vec_free [u] plte )
-        ^ @ ?Image { T ( image_of width height 3 rgb ) }
-    } {}
+        ( vec_free [i] a7 )
+    }
+
+    ( vec_free [u] raw )
     ( vec_free [u] plte )
-    ^ @ ?Image { T ( image_of width height rch recon ) }
+    ( vec_free [i] trns )
+    ? ok {} { ( vec_free [u] out ) ^ @ ?Image { F } }
+    ^ @ ?Image { T ( image_of width height outch out ) }
 }
 
 // ── Encode ────────────────────────────────────────────────────────────
