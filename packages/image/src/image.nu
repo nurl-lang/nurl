@@ -16,12 +16,17 @@ $ `stdlib/core/vec.nu`
 $ `stdlib/std/fs.nu`
 $ `core.nu`
 $ `png.nu`
+$ `jpeg.nu`
 
-// Decode by sniffing the magic bytes: PNG signature → png_decode, `P` → PPM.
+// Decode by sniffing the magic bytes: PNG signature → png_decode, JPEG SOI
+// (FF D8) → jpeg_decode, `P` → PPM.
 @ image_decode ( Vec u ) buf → ?Image {
     : i n ( vec_len [u] buf )
     ? >= n 8 {
         ? & == ( __b buf 0 ) 137 == ( __b buf 1 ) 80 { ^ ( png_decode buf ) } {}
+    } {}
+    ? >= n 3 {
+        ? & == ( __b buf 0 ) 255 == ( __b buf 1 ) 216 { ^ ( jpeg_decode buf ) } {}
     } {}
     ? >= n 2 {
         ? == ( __b buf 0 ) 80 { ^ ( ppm_decode buf ) } {}
