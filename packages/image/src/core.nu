@@ -16,6 +16,17 @@ $ `stdlib/std/bytes.nu`
     ( Vec u ) data
 }
 
+// ── Failure reason (stb_image-style) ──────────────────────────────────
+//
+// Decoders answer with ?Image; when you get None, ( image_error ) says
+// why — a static string, valid until the next decode call. Not
+// thread-safe (one global slot), like stbi_failure_reason.
+
+: ~ s __img_err ``
+
+@ image_error → s { ^ __img_err }
+@ __img_set_err s msg → v { = __img_err msg }
+
 // ── Construction ──────────────────────────────────────────────────────
 
 // A zero-filled image of the given geometry.
@@ -61,7 +72,12 @@ $ `stdlib/std/bytes.nu`
 
 // ── Pixel access ──────────────────────────────────────────────────────
 
+// -1 when (x,y,c) is outside the raster — callers treat that as "no pixel"
+// (image_get reads 0, image_set is a no-op). Without the guard an x just past
+// the row edge would silently wrap onto the next row.
 @ __px_idx Image im i x i y i c → i {
+    ? || || < x 0 < y 0 || >= x . im width >= y . im height { ^ -1 } {}
+    ? || < c 0 >= c . im channels { ^ -1 } {}
     : i pix + * y . im width x
     ^ + * pix . im channels c
 }
@@ -103,13 +119,14 @@ $ `stdlib/std/bytes.nu`
 }
 
 @ ppm_decode ( Vec u ) buf → ?Image {
+    ( __img_set_err `` )
     : i n ( vec_len [u] buf )
-    ? < n 2 { ^ @ ?Image { F } } {}
-    ? == ( __b buf 0 ) 80 {} { ^ @ ?Image { F } }
+    ? < n 2 { ( __img_set_err `not a PPM` ) ^ @ ?Image { F } } {}
+    ? == ( __b buf 0 ) 80 {} { ( __img_set_err `not a PPM` ) ^ @ ?Image { F } }
     : i kind ( __b buf 1 )
     : ~ i ch 3
     ? == kind 54 { = ch 3 } {
-        ? == kind 53 { = ch 1 } { ^ @ ?Image { F } }
+        ? == kind 53 { = ch 1 } { ( __img_set_err `PPM: only binary P5/P6 supported` ) ^ @ ?Image { F } }
     }
     : *u pc ( nurl_alloc 8 )
     : i w ( __ppm_int buf n 2 pc )
@@ -118,10 +135,11 @@ $ `stdlib/std/bytes.nu`
     // pixel data starts one whitespace byte after maxval
     : i start + ( nurl_peek pc 0 ) 1
     ( nurl_free # s pc )
-    ? || <= w 0 || <= h 0 != mx 255 { ^ @ ?Image { F } } {}
+    ? || <= w 0 || <= h 0 != mx 255 { ( __img_set_err `PPM: malformed header (needs maxval 255)` ) ^ @ ?Image { F } } {}
+    ? || || > w 1000000 > h 1000000 > * w h 268435456 { ( __img_set_err `PPM: dimensions too large` ) ^ @ ?Image { F } } {}
     : i need * * w h ch
     ? > + start need n {} { } // tolerate exact-or-more
-    ? < - n start need { ^ @ ?Image { F } } {}
+    ? < - n start need { ( __img_set_err `PPM: truncated pixel data` ) ^ @ ?Image { F } } {}
     : ( Vec u ) d ( vec_with_cap [u] need )
     : ~ i k 0
     ~ < k need { ( vec_push [u] d ( __b buf + start k ) ) = k + k 1 }

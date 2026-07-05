@@ -15,8 +15,10 @@
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/fs.nu`
 $ `core.nu`
+$ `ops.nu`
 $ `png.nu`
 $ `jpeg.nu`
+$ `jpeg_enc.nu`
 
 // Decode by sniffing the magic bytes: PNG signature → png_decode, JPEG SOI
 // (FF D8) → jpeg_decode, `P` → PPM.
@@ -31,6 +33,7 @@ $ `jpeg.nu`
     ? >= n 2 {
         ? == ( __b buf 0 ) 80 { ^ ( ppm_decode buf ) } {}
     } {}
+    ( __img_set_err `unknown image format (unrecognised magic bytes)` )
     ^ @ ?Image { F }
 }
 
@@ -44,12 +47,23 @@ $ `jpeg.nu`
             ( vec_free [u] bytes )
             ^ im
         }
-        F _ → { ^ @ ?Image { F } }
+        F _ → {
+            ( __img_set_err `cannot read file` )
+            ^ @ ?Image { F }
+        }
     }
 }
 
 @ image_save_png s path Image im → b {
     : ( Vec u ) enc ( png_encode im )
+    : !v IoErr r ( write_file_bytes path enc )
+    ( vec_free [u] enc )
+    ?? r { T _ → { ^ T } F _ → { ^ F } }
+}
+
+// Write a baseline JPEG (quality 1–100; 4:2:0 below 90, 4:4:4 from 90 up).
+@ image_save_jpeg s path Image im i quality → b {
+    : ( Vec u ) enc ( jpeg_encode im quality )
     : !v IoErr r ( write_file_bytes path enc )
     ( vec_free [u] enc )
     ?? r { T _ → { ^ T } F _ → { ^ F } }
