@@ -124,6 +124,7 @@ $ `stdlib/std/bytes.nu`
     : i start + ( nurl_peek pc 0 ) 1
     ( nurl_free # s pc )
     ? || <= w 0 || <= h 0 != mx 255 { ^ @ ?Image { F } } {}
+    ? || || > w 1000000 > h 1000000 > * w h 268435456 { ^ @ ?Image { F } } {}
     : i need * * w h ch
     ? > + start need n {} { } // tolerate exact-or-more
     ? < - n start need { ^ @ ?Image { F } } {}

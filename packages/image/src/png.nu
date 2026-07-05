@@ -282,6 +282,41 @@ $ `core.nu`
         ^ @ ?Image { F }
     }
 
+    // Preflight: the inflated stream must hold every pass's rows BEFORE the
+    // output raster is allocated — a 12-byte IDAT must not cost a 1 GB
+    // zero-fill just because the IHDR claims huge dimensions.
+    : i rawlen ( vec_len [u] raw )
+    : ~ i want 0
+    ? == interlace 0 {
+        = want * height + / + * * width rch depth 7 8 1
+    } {
+        : ~ i pi0 0
+        : ( Vec i ) ax ( vec_new [i] )
+        ( vec_push [i] ax 0 ) ( vec_push [i] ax 4 ) ( vec_push [i] ax 0 ) ( vec_push [i] ax 2 ) ( vec_push [i] ax 0 ) ( vec_push [i] ax 1 ) ( vec_push [i] ax 0 )
+        ( vec_push [i] ax 0 ) ( vec_push [i] ax 0 ) ( vec_push [i] ax 4 ) ( vec_push [i] ax 0 ) ( vec_push [i] ax 2 ) ( vec_push [i] ax 0 ) ( vec_push [i] ax 1 )
+        ( vec_push [i] ax 8 ) ( vec_push [i] ax 8 ) ( vec_push [i] ax 4 ) ( vec_push [i] ax 4 ) ( vec_push [i] ax 2 ) ( vec_push [i] ax 2 ) ( vec_push [i] ax 1 )
+        ( vec_push [i] ax 8 ) ( vec_push [i] ax 8 ) ( vec_push [i] ax 8 ) ( vec_push [i] ax 4 ) ( vec_push [i] ax 4 ) ( vec_push [i] ax 2 ) ( vec_push [i] ax 2 )
+        ~ < pi0 7 {
+            : i x0 ( __b_it ax pi0 )
+            : i y0 ( __b_it ax + 7 pi0 )
+            : i dxx ( __b_it ax + 14 pi0 )
+            : i dyy ( __b_it ax + 21 pi0 )
+            ? & > width x0 > height y0 {
+                : i pw / + - width x0 - dxx 1 dxx
+                : i ph / + - height y0 - dyy 1 dyy
+                ? & > pw 0 > ph 0 {
+                    = want + want * ph + / + * * pw rch depth 7 8 1
+                } {}
+            } {}
+            = pi0 + pi0 1
+        }
+        ( vec_free [i] ax )
+    }
+    ? < rawlen want {
+        ( vec_free [u] raw ) ( vec_free [u] plte ) ( vec_free [i] trns )
+        ^ @ ?Image { F }
+    } {}
+
     // zero-filled output raster
     : i total * * width height outch
     : ( Vec u ) out ( vec_with_cap [u] total )

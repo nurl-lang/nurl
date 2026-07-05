@@ -173,6 +173,26 @@ sys.exit(1 if f else 0)
 PY
 [ $? = 0 ] || V=1
 
+echo "[fuzz] truncation + mutation sweeps over every decoder"
+if ! $NURL tests/fuzz.nu "$WORK/fuzz" >/dev/null 2>"$WORK/fbuild.err"; then
+    echo "FAIL: could not build fuzz:"; tail -8 "$WORK/fbuild.err"; V=1
+else
+    "$WORK/roundtrip" "$WORK/pm/pal4.png" "$WORK/pm/tmp.png" "$WORK/seed.ppm" >/dev/null 2>&1
+    FUZZ_OK=1
+    for f in pm/adam_rgba16.png pm/paltrns.png pm/g1.png j420.jpg p420.jpg seed.ppm; do
+        if ! timeout 120 "$WORK/fuzz" "$WORK/$f" >/dev/null 2>&1; then
+            echo "  FAIL fuzz (native): $f"; FUZZ_OK=0
+        fi
+    done
+    if NURL_SAN=1 $NURL tests/fuzz.nu "$WORK/fuzz_san" >/dev/null 2>&1; then
+        for f in pm/adam_rgba16.png j420.jpg p420.jpg; do
+            timeout 600 "$WORK/fuzz_san" "$WORK/$f" >"$WORK/fsan.out" 2>&1 || FUZZ_OK=0
+            grep -qE "ERROR: AddressSanitizer|detected memory leaks" "$WORK/fsan.out" && { echo "  FAIL fuzz ASan: $f"; FUZZ_OK=0; }
+        done
+    fi
+    [ "$FUZZ_OK" = 1 ] && echo "  PASS fuzz (6 seeds native, 3 under ASan — no crash/hang/leak)" || V=1
+fi
+
 echo "[asan] decode/encode under AddressSanitizer"
 if NURL_SAN=1 $NURL tests/roundtrip.nu "$WORK/rt_san" >/dev/null 2>"$WORK/san_build.err"; then
     SAN_OK=1

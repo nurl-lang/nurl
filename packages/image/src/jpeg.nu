@@ -184,13 +184,15 @@ $ `core.nu`
     : i td ( __b_i . j ctd comp )
     : i ta + 4 ( __b_i . j cta comp )
     : i s ( __jp_huff j td )
+    ? < s 0 { = . j ok F ^ } {}          // corrupt Huffman table/stream
     : i diff ? > s 0 { ( __jp_extend ( __jp_receive j s ) s ) } { 0 }
     : i pred + ( __b_i . j cpred comp ) diff
     ( vec_set [i] . j cpred comp pred )
     ( vec_set [i] blk 0 * pred ( __b_i . j qt tq ) )
     : ~ i z 1
-    ~ <= z 63 {
+    ~ & . j ok <= z 63 {
         : i rs ( __jp_huff j ta )
+        ? < rs 0 { = . j ok F ^ } {}
         : i r >> rs 4
         : i sz & rs 15
         ? == sz 0 {
@@ -325,6 +327,8 @@ $ `core.nu`
     ? == ( __b . j buf dp ) 8 {} { ^ F }
     = . j height ( __u16 . j buf + dp 1 )
     = . j width ( __u16 . j buf + dp 3 )
+    ? & > . j width 0 > . j height 0 {} { ^ F }
+    ? <= * . j width . j height 67108864 {} { ^ F }           // ≤ 64 Mpx
     : i nc ( __b . j buf + dp 5 )
     ? || == nc 1 == nc 3 {} { ^ F }
     = . j ncomp nc
@@ -337,9 +341,12 @@ $ `core.nu`
         : i hv ( __b . j buf + o 1 )
         : i h >> hv 4
         : i vv & hv 15
+        ? & & >= h 1 <= h 4 & >= vv 1 <= vv 4 {} { ^ F }      // T.81 sampling range
         ( vec_set [i] . j chf c h )
         ( vec_set [i] . j cvf c vv )
-        ( vec_set [i] . j ctq c ( __b . j buf + o 2 ) )
+        : i tq ( __b . j buf + o 2 )
+        ? <= tq 3 {} { ^ F }
+        ( vec_set [i] . j ctq c tq )
         ? > h hmax { = hmax h } {}
         ? > vv vmax { = vmax vv } {}
         = c + c 1
