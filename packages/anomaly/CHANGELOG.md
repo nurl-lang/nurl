@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.3
+
+- Internal: the GPU bulk-scoring path now runs on the [`gpukit`](../gpukit)
+  facade — `anom_scores_gpu` drops from ~65 lines of hand-written device
+  marshalling to one `gk_run`, and the singleton holds a `*GpuKit` (device +
+  cached kernel). Output stays **bit-identical** across CUDA / CPU-backend /
+  pure (gpu_test's equality checks still pass on both backends). Adds a
+  `gpukit` dependency.
+
 ## 0.3.2
 
 - Internal: the command line is now assembled with the [`cli`](../cli)

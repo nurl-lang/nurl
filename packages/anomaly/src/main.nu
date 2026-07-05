@@ -458,7 +458,7 @@ $ `src/service.nu`
 }
 
 @ main → i {
-    : *Cli c ( cli_new `anomaly` `Streaming anomaly detection: dynamic self-training models over Isolation Forests.` `0.3.2` )
+    : *Cli c ( cli_new `anomaly` `Streaming anomaly detection: dynamic self-training models over Isolation Forests.` `0.3.3` )
     ( cli_flag_str  c `store`   115 `DIR`  `model store (default: $ANOMALY_HOME, else ~/.anomaly)` `` `ANOMALY_HOME` )
     ( cli_flag_str  c `file`    102 `FILE` `for batch: read CSV from FILE instead of stdin` `` `` )
     ( cli_flag_str  c `margin`  109 `M`    `for batch: decision margin (default 0 = predict==-1)` `0` `` )
