@@ -74,10 +74,18 @@ for y in range(h):
     for x in range(w): a[y,x]=[x*255//w, y*255//h, (x+y)*255//(w+h)]
 Image.fromarray(a,"RGB").save(f"{W}/j444.jpg", quality=92, subsampling=0)
 Image.fromarray(a,"RGB").save(f"{W}/j420.jpg", quality=92, subsampling=2)
+Image.fromarray(a,"RGB").save(f"{W}/p444.jpg", quality=92, subsampling=0, progressive=True)
+Image.fromarray(a,"RGB").save(f"{W}/p420.jpg", quality=92, subsampling=2, progressive=True)
 g=np.zeros((h,w),dtype=np.uint8)
 for y in range(h):
     for x in range(w): g[y,x]=(x*4+y*3)%256
 Image.fromarray(g,"L").save(f"{W}/jgray.jpg", quality=92)
+Image.fromarray(g,"L").save(f"{W}/pgray.jpg", quality=92, progressive=True)
+# odd-size progressive with restart markers — exercises non-interleaved AC
+# scans whose block raster is narrower than the padded MCU grid
+rng=np.random.default_rng(3)
+Image.fromarray((rng.random((29,37,3))*255).astype(np.uint8),"RGB").save(
+    f"{W}/pnoise.jpg", quality=85, subsampling=0, progressive=True, restart_marker_blocks=2)
 PY
 
 echo "[3/5] PNG/PPM round-trip (pixel-exact)"
@@ -98,15 +106,15 @@ sys.exit(1 if f else 0)
 PY
 V=$?
 
-echo "[4/5] JPEG decode (within tolerance of Pillow)"
-for n in j444 j420 jgray; do
+echo "[4/5] JPEG decode, baseline + progressive (within tolerance of Pillow)"
+for n in j444 j420 jgray p444 p420 pgray pnoise; do
     "$WORK/roundtrip" "$WORK/$n.jpg" "$WORK/$n.d.png" "$WORK/$n.out.ppm" >/dev/null 2>&1
 done
 python3 - "$WORK" <<'PY'
 import sys, numpy as np; from PIL import Image
 W=sys.argv[1]; f=0
 # (name, max-abs-diff tolerance) — 4:4:4/grey = IDCT rounding, 4:2:0 = box upsample
-for n,tol in (("j444",3),("j420",12),("jgray",3)):
+for n,tol in (("j444",3),("j420",12),("jgray",3),("p444",3),("p420",12),("pgray",3),("pnoise",3)):
     ref=np.asarray(Image.open(f"{W}/{n}.jpg").convert("RGB"),dtype=int)
     ours=np.asarray(Image.open(f"{W}/{n}.out.ppm").convert("RGB"),dtype=int)
     if ref.shape!=ours.shape: print(f"  FAIL {n}: shape {ref.shape} vs {ours.shape}"); f+=1; continue
@@ -160,7 +168,7 @@ PY
 echo "[asan] decode/encode under AddressSanitizer"
 if NURL_SAN=1 $NURL tests/roundtrip.nu "$WORK/rt_san" >/dev/null 2>"$WORK/san_build.err"; then
     SAN_OK=1
-    for f in rgb.png rgba.png gray.png pal.png j444.jpg j420.jpg jgray.jpg; do
+    for f in rgb.png rgba.png gray.png pal.png j444.jpg j420.jpg jgray.jpg p444.jpg p420.jpg pgray.jpg pnoise.jpg; do
         "$WORK/rt_san" "$WORK/$f" "$WORK/s.png" "$WORK/s.ppm" >/dev/null 2>"$WORK/san.out" || true
         grep -qE "ERROR: AddressSanitizer|detected memory leaks" "$WORK/san.out" && SAN_OK=0
     done
