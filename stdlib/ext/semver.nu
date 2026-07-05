@@ -62,7 +62,7 @@ $ `stdlib/core/vec.nu`
     i hi_incl
 }
 : VersionReq {
-    ( Vec SvInterval ) alts   // OR of intervals; empty matches nothing
+    ( Vec SvInterval ) alts  // OR of intervals; empty matches nothing
 }
 
 : | SemverErr {
@@ -397,6 +397,7 @@ $ `stdlib/core/vec.nu`
 @ __sv_any_interval → SvInterval {
     ^ @ SvInterval { 0 ( __sv_make 0 0 0 ) 1 0 ( __sv_make 0 0 0 ) 0 }
 }
+
 @ __sv_free_interval SvInterval iv → v {
     ( semver_free . iv lo )
     ( semver_free . iv hi )
