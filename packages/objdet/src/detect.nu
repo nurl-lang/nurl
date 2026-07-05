@@ -13,27 +13,35 @@ $ `stdlib/std/float.nu`
 & `c` @ nurl_peek_f32 *u base i idx → f
 
 // A detection in normalised (0..1) centre/size coordinates.
-: Detection { i cls  f score  f cx  f cy  f w  f h }
+: Detection { i cls f score f cx f cy f w f h }
 
 @ sigmoid f x → f { ^ / 1.0 + 1.0 ( exp - 0.0 x ) }
 
-// VOC 2007 20 classes (tiny-yolov2 order).
+// VOC 2007 20 classes (tiny-yolov2 order). Static literals — the old
+// version built a fresh Vec String per call and returned a borrow into it
+// (leaked the vector every lookup).
 @ voc_class i i → s {
-    ?? ( vec_get [String] ( __voc ) i ) { T s → ^ ( string_data s ) F _ → ^ `?` }
-}
-@ __voc → ( Vec String ) {
-    : ( Vec String ) v ( vec_new [String] )
-    ( vec_push [String] v ( string_from `aeroplane` ) ) ( vec_push [String] v ( string_from `bicycle` ) )
-    ( vec_push [String] v ( string_from `bird` ) ) ( vec_push [String] v ( string_from `boat` ) )
-    ( vec_push [String] v ( string_from `bottle` ) ) ( vec_push [String] v ( string_from `bus` ) )
-    ( vec_push [String] v ( string_from `car` ) ) ( vec_push [String] v ( string_from `cat` ) )
-    ( vec_push [String] v ( string_from `chair` ) ) ( vec_push [String] v ( string_from `cow` ) )
-    ( vec_push [String] v ( string_from `diningtable` ) ) ( vec_push [String] v ( string_from `dog` ) )
-    ( vec_push [String] v ( string_from `horse` ) ) ( vec_push [String] v ( string_from `motorbike` ) )
-    ( vec_push [String] v ( string_from `person` ) ) ( vec_push [String] v ( string_from `pottedplant` ) )
-    ( vec_push [String] v ( string_from `sheep` ) ) ( vec_push [String] v ( string_from `sofa` ) )
-    ( vec_push [String] v ( string_from `train` ) ) ( vec_push [String] v ( string_from `tvmonitor` ) )
-    ^ v
+    ? == i 0 { ^ `aeroplane` } {}
+    ? == i 1 { ^ `bicycle` } {}
+    ? == i 2 { ^ `bird` } {}
+    ? == i 3 { ^ `boat` } {}
+    ? == i 4 { ^ `bottle` } {}
+    ? == i 5 { ^ `bus` } {}
+    ? == i 6 { ^ `car` } {}
+    ? == i 7 { ^ `cat` } {}
+    ? == i 8 { ^ `chair` } {}
+    ? == i 9 { ^ `cow` } {}
+    ? == i 10 { ^ `diningtable` } {}
+    ? == i 11 { ^ `dog` } {}
+    ? == i 12 { ^ `horse` } {}
+    ? == i 13 { ^ `motorbike` } {}
+    ? == i 14 { ^ `person` } {}
+    ? == i 15 { ^ `pottedplant` } {}
+    ? == i 16 { ^ `sheep` } {}
+    ? == i 17 { ^ `sofa` } {}
+    ? == i 18 { ^ `train` } {}
+    ? == i 19 { ^ `tvmonitor` } {}
+    ^ `?`
 }
 
 // Anchor box dims (w,h in grid cells), tiny-yolov2 VOC.
@@ -47,10 +55,10 @@ $ `stdlib/std/float.nu`
 }
 
 // grid value at (channel, cy, cx) for a 13×13 grid.
-@ __gv *u grid i ch i cy i cx → f { ^ ( nurl_peek_f32 grid + * ch 169 + * cy 13 cx ) }
+@ __gv * u grid i ch i cy i cx → f { ^ ( nurl_peek_f32 grid + * ch 169 + * cy 13 cx ) }
 
 // Decode the grid into detections above `thresh`.
-@ yolo_decode *u grid f thresh → ( Vec Detection ) {
+@ yolo_decode * u grid f thresh → ( Vec Detection ) {
     : ( Vec Detection ) out ( vec_new [Detection] )
     : ~ i cy 0
     ~ < cy 13 {

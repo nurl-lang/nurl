@@ -1,163 +1,81 @@
-// packages/objdet/src/image.nu — minimal image I/O for object detection.
+// packages/objdet/src/image.nu — detector-facing adapter over packages/image.
 //
-// Reads/writes binary PPM (P6) — the simplest lossless RGB container, which
-// `ffmpeg`/`convert` produce from any image or video frame. Plus the pixel
-// ops a detector needs: bilinear resize (to the model's input size), box
-// drawing (for annotated output), and packing to an NCHW float tensor.
-//
-// An Image keeps the raw file bytes and an offset to the pixel data, so
-// reading copies nothing; a freshly built image (resize/blank) owns a new
-// byte buffer. Pixels are interleaved RGB, row-major.
+// The codecs and raster ops live in the image package (PNG/JPEG/PPM decode,
+// bilinear resize, rectangle drawing — see deps/image); this file keeps only
+// what is detector-specific: loading ANY supported format as guaranteed-RGB,
+// saving by extension, saturating pixel stores, and packing to the NCHW
+// float tensor the model consumes. The Image type is the image package's
+// (width/height/channels/data).
 
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/string.nu`
-$ `stdlib/std/fs.nu`
+$ `deps/image/src/image.nu`
 
 & `c` @ nurl_poke_f32 *u base i idx f val → v
 
-: Image { i w  i h  ( Vec u ) buf  i off }
+@ img_w Image im → i { ^ . im width }
 
-@ img_w Image im → i { ^ . im w }
-@ img_h Image im → i { ^ . im h }
+@ img_h Image im → i { ^ . im height }
 
-// Byte at (x,y,ch); clamped to the edge so resize/draw never read OOB.
-@ img_get Image im i x i y i ch → i {
-    : i xx ? < x 0 0 ? >= x . im w - . im w 1 x
-    : i yy ? < y 0 0 ? >= y . im h - . im h 1 y
-    : i idx + . im off + * + * yy . im w xx 3 ch
-    ?? ( vec_get [u] . im buf idx ) { T b → ^ # i b F _ → ^ 0 }
-}
+// A blank (black) RGB image.
+@ img_blank i w i h → Image { ^ ( image_new w h 3 ) }
 
+@ img_get Image im i x i y i ch → i { ^ ( image_get im x y ch ) }
+
+// Saturating store (image_set masks to the low byte; the detector's callers
+// pass computed values that must clamp, not wrap).
 @ img_set Image im i x i y i ch i val → v {
-    ? | | < x 0 >= x . im w | < y 0 >= y . im h { ^ {} } {}
-    : i idx + . im off + * + * y . im w x 3 ch
-    : i cv ? < val 0 0 ? > val 255 255 val
-    ( vec_set [u] . im buf idx # u cv )
+    : i cv ? < val 0 { 0 } { ? > val 255 { 255 } { val } }
+    ( image_set im x y ch cv )
 }
 
-// ── PPM (P6) ──────────────────────────────────────────────────────
-@ __ws i b → b { ^ | | | == b 32 == b 10 == b 13 == b 9 }
+@ img_resize Image im i nw i nh → Image { ^ ( image_resize im nw nh ) }
 
-// Parse a whitespace-delimited decimal starting at/after `pos`; returns the
-// value, and writes the position just past it through `pnext` (an i64 cell).
-@ __ppm_int ( Vec u ) buf i pos *u pnext → i {
-    : ~ i p pos
-    ~ ?? ( vec_get [u] buf p ) { T b → ( __ws # i b ) F _ → F } { = p + p 1 }
-    : ~ i v 0
-    ~ ?? ( vec_get [u] buf p ) { T b → & >= # i b 48 <= # i b 57 F _ → F } {
-        : i d ?? ( vec_get [u] buf p ) { T b → - # i b 48 F _ → 0 }
-        = v + * v 10 d
-        = p + p 1
-    }
-    ( nurl_poke pnext 0 p )
-    ^ v
-}
-
-@ ppm_read s path → ?Image {
-    ?? ( read_file_bytes path ) {
-        T buf → {
-            // header: P6 <w> <h> <maxval> then a single whitespace byte
-            : i b0 ?? ( vec_get [u] buf 0 ) { T x → # i x F _ → 0 }
-            : i b1 ?? ( vec_get [u] buf 1 ) { T x → # i x F _ → 0 }
-            ? | != b0 80 != b1 54 { ^ @ ?Image { F @ Image { 0 0 ( vec_new [u] ) 0 } } } {}
-            : *u pc ( nurl_alloc 8 )
-            : i w ( __ppm_int buf 2 pc )
-            : i h ( __ppm_int buf ( nurl_peek pc 0 ) pc )
-            : i mx ( __ppm_int buf ( nurl_peek pc 0 ) pc )
-            : i off + ( nurl_peek pc 0 ) 1   // one whitespace separator
-            ^ @ ?Image { T @ Image { w h buf off } }
+// Load any supported format (PNG / baseline+progressive JPEG / PPM) as
+// 3-channel RGB. On None, ( image_error ) says why.
+@ img_load s path → ?Image {
+    ?? ( image_load path ) {
+        T im → {
+            ? == ( image_channels im ) 3 { ^ @ ?Image { T im } } {}
+            : Image rgb ( image_convert im 3 )
+            ( image_free im )
+            ^ @ ?Image { T rgb }
         }
-        F _ → ^ @ ?Image { F @ Image { 0 0 ( vec_new [u] ) 0 } }
+        F _ → { ^ @ ?Image { F } }
     }
 }
 
-// A blank (black) image of the given size, owning a fresh buffer.
-@ img_blank i w i h → Image {
-    : i n * * w h 3
-    : ( Vec u ) buf ( vec_new [u] )
+@ __od_sfx s path s sfx → b {
+    : i n ( nurl_str_len path )
+    : i m ( nurl_str_len sfx )
+    ? < n m { ^ F } {}
     : ~ i k 0
-    ~ < k n { ( vec_push [u] buf # u 0 ) = k + k 1 }
-    ^ @ Image { w h buf 0 }
-}
-
-@ ppm_write s path Image im → b {
-    : String hdr ( string_from ( nurl_str_cat4 `P6\n` ( nurl_str_int . im w ) ` ` ( nurl_str_cat3 ( nurl_str_int . im h ) `\n` `255\n` ) ) )
-    : ( Vec u ) out ( vec_new [u] )
-    : s hs ( string_data hdr )
-    : i hn ( nurl_str_len hs )
-    : ~ i k 0
-    ~ < k hn { ( vec_push [u] out # u ( nurl_str_get hs k ) ) = k + k 1 }
-    : i n * * . im w . im h 3
-    : ~ i j 0
-    ~ < j n {
-        ?? ( vec_get [u] . im buf + . im off j ) { T b → ( vec_push [u] out b ) F _ → {} }
-        = j + j 1
+    ~ < k m {
+        ? == ( nurl_str_get path + - n m k ) ( nurl_str_get sfx k ) {} { ^ F }
+        = k + k 1
     }
-    ?? ( write_file_bytes path out ) { T _ → ^ T F _ → ^ F }
+    ^ T
 }
 
-// ── bilinear resize ───────────────────────────────────────────────
-@ img_resize Image im i nw i nh → Image {
-    : Image out ( img_blank nw nh )
-    : f sx / # f . im w # f nw
-    : f sy / # f . im h # f nh
-    : ~ i oy 0
-    ~ < oy nh {
-        : f oyf + # f oy 0.5
-        : f fy - * oyf sy 0.5
-        : i y0 # i fy
-        : f wy - fy # f y0
-        : ~ i ox 0
-        ~ < ox nw {
-            : f oxf + # f ox 0.5
-            : f fx - * oxf sx 0.5
-            : i x0 # i fx
-            : f wx - fx # f x0
-            : ~ i c 0
-            ~ < c 3 {
-                : f p00 # f ( img_get im x0 y0 c )
-                : f p10 # f ( img_get im + x0 1 y0 c )
-                : f p01 # f ( img_get im x0 + y0 1 c )
-                : f p11 # f ( img_get im + x0 1 + y0 1 c )
-                : f top + * p00 - 1.0 wx * p10 wx
-                : f bot + * p01 - 1.0 wx * p11 wx
-                : f v + * top - 1.0 wy * bot wy
-                ( img_set out ox oy c # i + v 0.5 )
-                = c + c 1
-            }
-            = ox + ox 1
-        }
-        = oy + oy 1
-    }
-    ^ out
+// Save by extension: .png / .jpg / .jpeg (quality 90) / anything else = PPM.
+@ img_save s path Image im → b {
+    ? ( __od_sfx path `.png` ) { ^ ( image_save_png path im ) } {}
+    ? | ( __od_sfx path `.jpg` ) ( __od_sfx path `.jpeg` ) { ^ ( image_save_jpeg path im 90 ) } {}
+    ^ ( image_save_ppm path im )
 }
 
-// ── drawing ───────────────────────────────────────────────────────
-@ __hline Image im i x0 i x1 i y i r i gg i bb → v {
-    : ~ i x x0
-    ~ <= x x1 { ( img_set im x y 0 r ) ( img_set im x y 1 gg ) ( img_set im x y 2 bb ) = x + x 1 }
-}
-@ __vline Image im i x i y0 i y1 i r i gg i bb → v {
-    : ~ i y y0
-    ~ <= y y1 { ( img_set im x y 0 r ) ( img_set im x y 1 gg ) ( img_set im x y 2 bb ) = y + y 1 }
-}
-
-// Draw a (thick) rectangle outline in the given colour.
+// Draw a thickness-2 rectangle outline in the given colour.
 @ img_draw_rect Image im i x0 i y0 i x1 i y1 i r i gg i bb → v {
-    : ~ i t 0
-    ~ < t 2 {
-        ( __hline im x0 x1 + y0 t r gg bb ) ( __hline im x0 x1 - y1 t r gg bb )
-        ( __vline im + x0 t y0 y1 r gg bb ) ( __vline im - x1 t y0 y1 r gg bb )
-        = t + t 1
-    }
+    : i rgba + + + * r 16777216 * gg 65536 * bb 256 255
+    ( image_draw_rect im x0 y0 x1 y1 2 rgba )
 }
 
 // ── pack to NCHW float tensor (values 0..255) ─────────────────────
 // Writes a fresh host buffer of 3*H*W floats in CHW order; the model's
 // in-graph preprocessor scales by 1/255.
 @ img_to_nchw Image im → *u {
-    : i W . im w
-    : i H . im h
+    : i W . im width
+    : i H . im height
     : *u host ( nurl_alloc * * * 3 H W 4 )
     : ~ i c 0
     ~ < c 3 {
@@ -165,7 +83,7 @@ $ `stdlib/std/fs.nu`
         ~ < y H {
             : ~ i x 0
             ~ < x W {
-                ( nurl_poke_f32 host + * c * H W + * y W x # f ( img_get im x y c ) )
+                ( nurl_poke_f32 host + * c * H W + * y W x # f ( image_get im x y c ) )
                 = x + x 1
             }
             = y + y 1
