@@ -47,7 +47,7 @@ yoloe cam    --model M --classes C [options]                 live webcam
 |---|---|
 | `--model <model.onnx>` | a YOLOE-seg export from `tools/export.py` (→ `yoloe-v8s-seg.onnx`); not bundled (~45 MB) |
 | `--classes <classes.txt>` | the vocabulary, **one prompt word per line** — swap it (and the model) to detect a different set of objects |
-| `--image <image.ppm>` | input for `detect`/`seg`, a binary PPM (P6): `convert photo.jpg photo.ppm` |
+| `--image <img>` | input for `detect`/`seg` — PNG, JPEG (baseline or progressive) or PPM, decoded natively via [`packages/image`](../image) |
 | `--out <path>` | `detect`/`seg`: the annotated output image; `cam`: a directory to save frames to (created if missing) |
 | `--device <dev>` | `cam` webcam device (default `/dev/video0`) |
 | `--frames <N>` | `cam`: stop after N frames — **omit to run until Ctrl-C** |
@@ -71,7 +71,7 @@ preview's resolution is the terminal's cell grid: a bigger window (or smaller
 font) gives a sharper picture.
 
 ```
-yoloe seg --model yoloe-v8s-seg.onnx --classes classes.txt --image dog.ppm --out out.ppm
+yoloe seg --model yoloe-v8s-seg.onnx --classes classes.txt --image dog.jpg --out out.png
 yoloe cam --model yoloe-v8s-seg.onnx --classes classes.txt              # live, in the terminal
 yoloe cam --model yoloe-v8s-seg.onnx --classes classes.txt --frames 60 --out frames/
 ffmpeg -framerate 10 -i frames/frame%05d.ppm seg.mp4                    # saved frames → video
@@ -110,7 +110,7 @@ frames. (Needs read access to the device — `ls -l /dev/video0`.)
 
 ```
 NURL_STDLIB=<repo> ../../nurl.sh src/prompt.nu
-./src/prompt <model.onnx> <tpe.f32> <classes.txt> <image.ppm> [out.ppm]
+./src/prompt <model.onnx> <tpe.f32> <classes.txt> <img> [out]
 ```
 
 `tpe.f32` is `K×512` raw MobileCLIP text features and `classes.txt` the K
@@ -122,7 +122,7 @@ them (no re-export) to detect different objects with the *same* model.
 ```
 nurlpkg install                                   # symlink deps/
 NURL_STDLIB=<repo> ../../nurl.sh src/main.nu      # build the `yoloe` command
-./src/main seg yoloe-v8s-seg.onnx example/classes.txt dog.ppm dog-out.ppm
+./src/main seg yoloe-v8s-seg.onnx example/classes.txt dog.jpg dog-out.png
 ```
 
 ## Why this is the crown jewel

@@ -12,6 +12,7 @@ $ `../src/image.nu`
 $ `../src/v4l2.nu`
 
 @ p s m → v { ( nurl_print m ) }
+
 @ pn i n → v { ( nurl_print ( nurl_str_int n ) ) }
 
 @ main → i {
@@ -41,6 +42,6 @@ $ `../src/v4l2.nu`
     ( p `grabbed ` ) ( pn ok ) ( p ` frames\n` )
     ( cam_close c )
 
-    : Image im @ Image { aw ah rgb 0 }
-    ? ( ppm_write ( string_data outp ) im ) { ( p `wrote ` ) ( p ( string_data outp ) ) ( p `\n` ) ^ 0 } { ( p `write failed\n` ) ^ 1 }
+    : Image im ( image_of aw ah 3 rgb )
+    ? ( img_save ( string_data outp ) im ) { ( p `wrote ` ) ( p ( string_data outp ) ) ( p `\n` ) ^ 0 } { ( p `write failed\n` ) ^ 1 }
 }

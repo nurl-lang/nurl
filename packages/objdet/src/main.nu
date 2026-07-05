@@ -1,16 +1,15 @@
 // packages/objdet/src/main.nu — object detection from pure NURL on the GPU.
 //
-//   objdet <model.onnx> <image.ppm> [out.ppm]
+//   objdet <model.onnx> <image.{png,jpg,ppm}> [out.{png,jpg,ppm}]
 //   objdet <model.onnx> --video <in_dir> <out_dir> <count>
 //
 // Loads any tiny-YOLOv2-style ONNX detector (e.g. the ONNX model-zoo
 // tinyyolov2-8.onnx), runs it on the GPU through packages/onnx, decodes the
 // grid into labelled boxes (packages objdet/detect), prints them, and (for
-// an image) writes an annotated PPM. The video mode runs a frame sequence
-// frame00000.ppm … reusing one GPU engine (kernels compiled once).
-//
-// Convert to/from PPM with ffmpeg/ImageMagick, e.g.
-//   convert photo.jpg photo.ppm
+// an image) writes an annotated image. Stills are read/written natively via
+// packages/image (PNG, baseline+progressive JPEG, PPM) — no ImageMagick.
+// The video mode runs a frame sequence frame00000.ppm … reusing one GPU
+// engine (kernels compiled once); use ffmpeg for the container:
 //   ffmpeg -i clip.mp4 -vf fps=10 in/frame%05d.ppm
 //   ffmpeg -framerate 10 -i out/frame%05d.ppm out.mp4
 
@@ -26,8 +25,11 @@ $ `image.nu`
 $ `detect.nu`
 
 @ p s m → v { ( nurl_print m ) }
+
 @ pf f x → v { ( nurl_print ( nurl_str_float x ) ) }
+
 @ pn i n → v { ( nurl_print ( nurl_str_int n ) ) }
+
 @ streqm s a s b → b { ^ != ( nurl_str_eq a b ) 0 }
 
 @ shape4 i a i b i c i d → ( Vec i ) {
@@ -36,7 +38,7 @@ $ `detect.nu`
 
 // Run the detector on one image, draw boxes in place, print detections.
 // Returns the number of detections.
-@ detect_image *Engine e OGraph g Image im f conf f iou → i {
+@ detect_image * Engine e OGraph g Image im f conf f iou → i {
     : Image in416 ? & == ( img_w im ) 416 == ( img_h im ) 416 im ( img_resize im 416 416 )
     : *u host ( img_to_nchw in416 )
     : RTensor out ( rt_run_shaped e g host ( shape4 1 3 416 416 ) )
@@ -67,7 +69,7 @@ $ `detect.nu`
     ^ nd
 }
 
-@ load_model s path *u pok → OGraph {
+@ load_model s path * u pok → OGraph {
     ?? ( read_file_bytes path ) {
         T mb → { ( nurl_poke pok 0 1 ) ^ ( onnx_parse mb ) }
         F _ → { ( nurl_poke pok 0 0 ) ^ @ OGraph { ( vec_new [ONode] ) ( vec_new [OTensor] ) ( string_new ) ( string_new ) } }
@@ -87,7 +89,7 @@ $ `detect.nu`
 @ main → i {
     : ( Vec String ) av ( env_args_list )
     ? < ( vec_len [String] av ) 3 {
-        ( p `usage: objdet <model.onnx> <image.ppm> [out.ppm]\n` )
+        ( p `usage: objdet <model.onnx> <image.{png,jpg,ppm}> [out.{png,jpg,ppm}]\n` )
         ( p `       objdet <model.onnx> --video <in_dir> <out_dir> <count>\n` )
         ^ 2
     } {}
@@ -112,12 +114,12 @@ $ `detect.nu`
         : ~ i fr 0
         ~ < fr count {
             : String fin ( frame_path ( string_data indir ) fr )
-            ?? ( ppm_read ( string_data fin ) ) {
+            ?? ( img_load ( string_data fin ) ) {
                 T im → {
                     ( p `frame ` ) ( pn fr ) ( p `:\n` )
                     ( detect_image e g im conf iou )
                     : String fout ( frame_path ( string_data outdir ) fr )
-                    ( ppm_write ( string_data fout ) im )
+                    ( img_save ( string_data fout ) im )
                 } F _ → { ( p `frame ` ) ( pn fr ) ( p ` unreadable\n` ) }
             }
             = fr + fr 1
@@ -126,7 +128,7 @@ $ `detect.nu`
     } {}
 
     // single-image mode
-    ?? ( ppm_read ( string_data a2 ) ) {
+    ?? ( img_load ( string_data a2 ) ) {
         T im → {
             ( p `image ` ) ( pn ( img_w im ) ) ( p `x` ) ( pn ( img_h im ) ) ( p `\n` )
             ( p `detections:\n` )
@@ -134,10 +136,10 @@ $ `detect.nu`
             ? == nd 0 { ( p `  (none above threshold)\n` ) } {}
             ? > ( vec_len [String] av ) 3 {
                 : String outp ?? ( vec_get [String] av 3 ) { T x → x F _ → ( string_new ) }
-                ? ( ppm_write ( string_data outp ) im ) { ( p `wrote ` ) ( p ( string_data outp ) ) ( p `\n` ) } { ( p `write failed\n` ) }
+                ? ( img_save ( string_data outp ) im ) { ( p `wrote ` ) ( p ( string_data outp ) ) ( p `\n` ) } { ( p `write failed\n` ) }
             } {}
         }
-        F _ → { ( p `cannot read image (PPM P6 expected)\n` ) ( rt_close e ) ^ 1 }
+        F _ → { ( p `cannot read image: ` ) ( p ( image_error ) ) ( p `\n` ) ( rt_close e ) ^ 1 }
     }
     ( rt_close e )
     ^ 0

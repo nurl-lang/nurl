@@ -5,9 +5,11 @@
 // 4:1:1 subsampling, restart intervals (DRI/RSTn), sequential (SOF0/SOF1)
 // and **progressive** (SOF2) frames — spectral selection and successive
 // approximation, DC and AC first/refinement scans, EOB runs. Chroma planes
-// are box-upsampled and a separable float IDCT is used, so output matches a
-// reference decoder (libjpeg) to within IDCT/upsampling rounding — JPEG is
-// lossy and the spec permits IDCT variation, so this is not bit-exact.
+// use libjpeg's "fancy" (triangular) upsampling for 2x1/2x2 expansion —
+// bit-matching libjpeg's default path — and a separable float IDCT, so
+// output matches a reference decoder (libjpeg/Pillow) to within IDCT
+// rounding — JPEG is lossy and the spec permits IDCT variation, so this is
+// not bit-exact.
 //
 // Not supported (clean None, never an out-of-bounds read): arithmetic
 // coding, 12-bit, lossless/hierarchical, and 4-component (CMYK/YCCK).
@@ -17,20 +19,20 @@ $ `stdlib/std/float.nu`
 $ `core.nu`
 
 : Jpeg {
-    ( Vec u ) buf   i len
-    i width  i height  i ncomp
-    ( Vec i ) cid  ( Vec i ) chf  ( Vec i ) cvf  ( Vec i ) ctq  ( Vec i ) ctd  ( Vec i ) cta  ( Vec i ) cpred
-    i hmax  i vmax  i restart
+    ( Vec u ) buf i len
+    i width i height i ncomp
+    ( Vec i ) cid ( Vec i ) chf ( Vec i ) cvf ( Vec i ) ctq ( Vec i ) ctd ( Vec i ) cta ( Vec i ) cpred
+    i hmax i vmax i restart
     ( Vec i ) qt
-    ( Vec i ) hmin  ( Vec i ) hmaxc  ( Vec i ) hptr  ( Vec i ) hvals
-    ( Vec f ) idct_a  ( Vec i ) zz
-    i bpos  i bbuf  i bcnt  i marker
+    ( Vec i ) hmin ( Vec i ) hmaxc ( Vec i ) hptr ( Vec i ) hvals
+    ( Vec f ) idct_a ( Vec i ) zz
+    i bpos i bbuf i bcnt i marker
     b ok
     // progressive state: scan parameters, per-component coefficient grids
-    b prog  i ss  i se  i ah  i al  i eobrun
-    i nscomp  ( Vec i ) scomp
+    b prog i ss i se i ah i al i eobrun
+    i nscomp ( Vec i ) scomp
     ( Vec ( Vec i ) ) coefs
-    ( Vec i ) cbw  ( Vec i ) cbh          // padded block-grid dims per comp
+    ( Vec i ) cbw ( Vec i ) cbh  // padded block-grid dims per comp
 }
 
 @ __ivec i n i fill → ( Vec i ) {
@@ -52,6 +54,7 @@ $ `core.nu`
     ( vec_push [f] a 0.19509032201612833 ) ( vec_push [f] a -0.55557023301960218 ) ( vec_push [f] a 0.83146961230254546 ) ( vec_push [f] a -0.98078528040323065 ) ( vec_push [f] a 0.98078528040323043 ) ( vec_push [f] a -0.83146961230254501 ) ( vec_push [f] a 0.55557023301960151 ) ( vec_push [f] a -0.19509032201612858 )
     ^ a
 }
+
 @ __zigzag → ( Vec i ) {
     : ( Vec i ) z ( vec_with_cap [i] 64 )
     ( vec_push [i] z 0 ) ( vec_push [i] z 1 ) ( vec_push [i] z 8 ) ( vec_push [i] z 16 ) ( vec_push [i] z 9 ) ( vec_push [i] z 2 ) ( vec_push [i] z 3 ) ( vec_push [i] z 10 )
@@ -101,7 +104,7 @@ $ `core.nu`
     ^ j
 }
 
-@ __jp_free *Jpeg j → v {
+@ __jp_free * Jpeg j → v {
     ( vec_free [i] . j cid ) ( vec_free [i] . j chf ) ( vec_free [i] . j cvf )
     ( vec_free [i] . j ctq ) ( vec_free [i] . j ctd ) ( vec_free [i] . j cta )
     ( vec_free [i] . j cpred ) ( vec_free [i] . j qt )
@@ -122,7 +125,7 @@ $ `core.nu`
 @ __u16 ( Vec u ) buf i p → i { ^ + * ( __b buf p ) 256 ( __b buf + p 1 ) }
 
 // ── Entropy bit reader (handles 0xFF00 stuffing; stops at a marker) ────
-@ __jp_bit *Jpeg j → i {
+@ __jp_bit * Jpeg j → i {
     ? > . j bcnt 0 {} {
         : i p . j bpos
         ? >= p . j len { = . j marker 217 ^ 0 } {}
@@ -146,19 +149,20 @@ $ `core.nu`
     ^ & >> . j bbuf . j bcnt 1
 }
 
-@ __jp_receive *Jpeg j i n → i {
+@ __jp_receive * Jpeg j i n → i {
     : ~ i v 0
     : ~ i k 0
     ~ < k n { = v | << v 1 ( __jp_bit j ) = k + k 1 }
     ^ v
 }
+
 @ __jp_extend i v i n → i {
     ? == n 0 { ^ 0 } {}
     ? < v << 1 - n 1 { ^ - v - << 1 n 1 } { ^ v }
 }
 
 // Decode one Huffman symbol from table `t` (0..7 = 4 DC then 4 AC).
-@ __jp_huff *Jpeg j i t → i {
+@ __jp_huff * Jpeg j i t → i {
     : i base * t 17
     : ~ i code ( __jp_bit j )
     : ~ i len 1
@@ -177,14 +181,14 @@ $ `core.nu`
 }
 
 // ── Decode + dequantize one 8×8 block into `blk` (natural order) ──────
-@ __jp_block *Jpeg j i comp ( Vec i ) blk → v {
+@ __jp_block * Jpeg j i comp ( Vec i ) blk → v {
     : ~ i k 0
     ~ < k 64 { ( vec_set [i] blk k 0 ) = k + k 1 }
     : i tq * ( __b_i . j ctq comp ) 64
     : i td ( __b_i . j ctd comp )
     : i ta + 4 ( __b_i . j cta comp )
     : i s ( __jp_huff j td )
-    ? < s 0 { = . j ok F ^ } {}          // corrupt Huffman table/stream
+    ? < s 0 { = . j ok F ^ } {}  // corrupt Huffman table/stream
     : i diff ? > s 0 { ( __jp_extend ( __jp_receive j s ) s ) } { 0 }
     : i pred + ( __b_i . j cpred comp ) diff
     ( vec_set [i] . j cpred comp pred )
@@ -209,7 +213,7 @@ $ `core.nu`
 }
 
 // ── Separable float IDCT: blk (natural) → out (8×8 row-major, 0..255) ──
-@ __jp_idct *Jpeg j ( Vec i ) blk ( Vec f ) tmp ( Vec i ) out i ox i oy i pw → v {
+@ __jp_idct * Jpeg j ( Vec i ) blk ( Vec f ) tmp ( Vec i ) out i ox i oy i pw → v {
     : ( Vec f ) A . j idct_a
     // rows: tmp[y*8+x] = 0.5 * Σ_u A[u*8+x] blk[y*8+u]
     : ~ i y 0
@@ -242,12 +246,13 @@ $ `core.nu`
         = x2 + x2 1
     }
 }
+
 @ __b_f ( Vec f ) v i p → f {
     ?? ( vec_get [f] v p ) { T x → { ^ x } F _ → { ^ 0.0 } }
 }
 
 // Reset at a restart marker: drop partial bits, skip FFDn, clear predictors.
-@ __jp_restart *Jpeg j → v {
+@ __jp_restart * Jpeg j → v {
     = . j bcnt 0
     = . j marker 0
     : i p . j bpos
@@ -260,7 +265,7 @@ $ `core.nu`
 
 // ── Segment parsers ───────────────────────────────────────────────────
 
-@ __jp_dqt *Jpeg j i dp i dend → v {
+@ __jp_dqt * Jpeg j i dp i dend → v {
     : ~ i p dp
     ~ < p dend {
         : i pqtq ( __b . j buf p )
@@ -277,7 +282,7 @@ $ `core.nu`
     }
 }
 
-@ __jp_dht *Jpeg j i dp i dend → v {
+@ __jp_dht * Jpeg j i dp i dend → v {
     : ~ i p dp
     ~ < p dend {
         : i tcth ( __b . j buf p )
@@ -323,12 +328,12 @@ $ `core.nu`
     }
 }
 
-@ __jp_sof *Jpeg j i dp → b {
+@ __jp_sof * Jpeg j i dp → b {
     ? == ( __b . j buf dp ) 8 {} { ^ F }
     = . j height ( __u16 . j buf + dp 1 )
     = . j width ( __u16 . j buf + dp 3 )
     ? & > . j width 0 > . j height 0 {} { ^ F }
-    ? <= * . j width . j height 67108864 {} { ^ F }           // ≤ 64 Mpx
+    ? <= * . j width . j height 67108864 {} { ^ F }  // ≤ 64 Mpx
     : i nc ( __b . j buf + dp 5 )
     ? || == nc 1 == nc 3 {} { ^ F }
     = . j ncomp nc
@@ -341,7 +346,7 @@ $ `core.nu`
         : i hv ( __b . j buf + o 1 )
         : i h >> hv 4
         : i vv & hv 15
-        ? & & >= h 1 <= h 4 & >= vv 1 <= vv 4 {} { ^ F }      // T.81 sampling range
+        ? & & >= h 1 <= h 4 & >= vv 1 <= vv 4 {} { ^ F }  // T.81 sampling range
         ( vec_set [i] . j chf c h )
         ( vec_set [i] . j cvf c vv )
         : i tq ( __b . j buf + o 2 )
@@ -356,7 +361,7 @@ $ `core.nu`
     ^ T
 }
 
-@ __jp_sos *Jpeg j i dp → v {
+@ __jp_sos * Jpeg j i dp → v {
     : ~ i ns ( __b . j buf dp )
     ? || < ns 1 > ns 4 { = ns 1 } {}
     = . j nscomp ns
@@ -400,7 +405,7 @@ $ `core.nu`
 // the IDCT once, after the last scan.
 
 // Allocate the per-component coefficient grids (padded to the MCU grid).
-@ __jp_prog_alloc *Jpeg j → v {
+@ __jp_prog_alloc * Jpeg j → v {
     : i mcux / + . j width - * . j hmax 8 1 * . j hmax 8
     : i mcuy / + . j height - * . j vmax 8 1 * . j vmax 8
     : ~ i c 0
@@ -414,14 +419,14 @@ $ `core.nu`
     }
 }
 
-@ __jp_prog_restart *Jpeg j → v {
+@ __jp_prog_restart * Jpeg j → v {
     ( __jp_restart j )
     = . j eobrun 0
 }
 
 // DC scan, one block. First pass (Ah=0) decodes the diff at reduced
 // precision; refinement passes append one magnitude bit.
-@ __jp_prog_dc *Jpeg j i ci ( Vec i ) cf i bidx → v {
+@ __jp_prog_dc * Jpeg j i ci ( Vec i ) cf i bidx → v {
     : i base * bidx 64
     ? == . j ah 0 {
         : i td ( __b_i . j ctd ci )
@@ -439,7 +444,7 @@ $ `core.nu`
 }
 
 // AC scan, first pass (Ah=0): run-length + size symbols with EOB runs.
-@ __jp_prog_ac1 *Jpeg j i ci ( Vec i ) cf i bidx → v {
+@ __jp_prog_ac1 * Jpeg j i ci ( Vec i ) cf i bidx → v {
     : i base * bidx 64
     ? > . j eobrun 0 { = . j eobrun - . j eobrun 1 ^ } {}
     : i ta + 4 ( __b_i . j cta ci )
@@ -470,7 +475,7 @@ $ `core.nu`
 }
 
 // One correction bit for an already-nonzero coefficient.
-@ __jp_prog_fix *Jpeg j ( Vec i ) cf i pos i bit → v {
+@ __jp_prog_fix * Jpeg j ( Vec i ) cf i pos i bit → v {
     : i cur ( __b_i cf pos )
     ? == ( __jp_bit j ) 1 {
         ? == & cur bit 0 {
@@ -481,7 +486,7 @@ $ `core.nu`
 
 // AC scan, refinement pass (Ah>0): new coefficients arrive as ±1<<Al and
 // every already-nonzero coefficient on the way gets a correction bit.
-@ __jp_prog_ac2 *Jpeg j i ci ( Vec i ) cf i bidx → v {
+@ __jp_prog_ac2 * Jpeg j i ci ( Vec i ) cf i bidx → v {
     : i base * bidx 64
     : i bit << 1 . j al
     ? > . j eobrun 0 {
@@ -506,7 +511,7 @@ $ `core.nu`
                 : ~ i er - << 1 r 1
                 ? > r 0 { = er + er ( __jp_receive j r ) } {}
                 = . j eobrun er
-                = r 64                      // walk out the rest of the block
+                = r 64  // walk out the rest of the block
             } {}
         } {
             = s ? == ( __jp_bit j ) 1 { bit } { - 0 bit }
@@ -526,7 +531,7 @@ $ `core.nu`
 }
 
 // Route one block to the right scan kind.
-@ __jp_prog_block *Jpeg j i ci ( Vec i ) cf i bidx → v {
+@ __jp_prog_block * Jpeg j i ci ( Vec i ) cf i bidx → v {
     ? == . j ss 0 { ( __jp_prog_dc j ci cf bidx ) } {
         ? == . j ah 0 { ( __jp_prog_ac1 j ci cf bidx ) } { ( __jp_prog_ac2 j ci cf bidx ) }
     }
@@ -534,7 +539,7 @@ $ `core.nu`
 
 // Run one progressive scan: interleaved (ns>1, MCU order) or single
 // component (its own unpadded block raster).
-@ __jp_prog_scan *Jpeg j → v {
+@ __jp_prog_scan * Jpeg j → v {
     : i ns . j nscomp
     ? == ns 1 {
         : i ci ( __b_i . j scomp 0 )
@@ -601,7 +606,7 @@ $ `core.nu`
 
 // After the last scan: dequantise + IDCT every block, then share the
 // baseline upsample/colour-convert tail.
-@ __jp_prog_finish *Jpeg j → ?Image {
+@ __jp_prog_finish * Jpeg j → ?Image {
     ? & & > . j width 0 > . j height 0 & > . j hmax 0 > . j vmax 0 {} { ^ @ ?Image { F } }
     : i nc . j ncomp
     : ( Vec ( Vec i ) ) planes ( vec_new [( Vec i )] )
@@ -649,7 +654,7 @@ $ `core.nu`
 
 // Walk all segments. Sequential (SOF0/SOF1) frames decode at their single
 // SOS; progressive (SOF2) frames accumulate scans until EOI, then finish.
-@ __jp_run *Jpeg j → ?Image {
+@ __jp_run * Jpeg j → ?Image {
     : ~ i p 2
     : i n . j len
     : ~ b sof F
@@ -660,59 +665,59 @@ $ `core.nu`
         ? going {
             : i m ( __b . j buf + p 1 )
             ? == m 255 { = p + p 1 } {
-            ? || == m 1 & >= m 208 <= m 215 { = p + p 2 } {      // TEM / stray RSTn
-            ? == m 216 { = p + p 2 } {                           // stray SOI
-            ? == m 217 { = going F } {                           // EOI
-                ? < + p 4 n {} { = . j ok F = going F }
-                ? going {
-                    : i seg + p 2
-                    : i slen ( __u16 . j buf seg )
-                    : i dp + seg 2
-                    : i dend + seg slen
-                    ? || < slen 2 > dend n { = . j ok F = going F } {
-                        : ~ i np dend
-                        ? == m 219 { ( __jp_dqt j dp dend ) } {
-                        ? == m 196 { ( __jp_dht j dp dend ) } {
-                        ? == m 221 { = . j restart ( __u16 . j buf dp ) } {
-                        ? || == m 192 == m 193 {
-                            ? || sof ! ( __jp_sof j dp ) {
-                                ( __img_set_err `JPEG: unsupported frame (precision, size, components or sampling)` )
-                                = . j ok F
-                            } { = sof T = . j prog F }
-                        } {
-                        ? == m 194 {
-                            ? || sof ! ( __jp_sof j dp ) {
-                                ( __img_set_err `JPEG: unsupported frame (precision, size, components or sampling)` )
-                                = . j ok F
-                            } {
-                                = sof T
-                                = . j prog T
-                                ( __jp_prog_alloc j )
-                            }
-                        } {
-                        ? & >= m 195 <= m 207 {
-                            ? == m 204 {} {
-                                ( __img_set_err `JPEG: unsupported coding (arithmetic, 12-bit or lossless)` )
-                                = . j ok F
-                            }
-                        } {
-                        ? == m 218 {
-                            ? sof {} { = . j ok F }
-                            ? . j ok {
-                                ( __jp_sos j dp )
-                                ? . j prog {
-                                    ( __jp_prog_scan j )
-                                    = sawscan T
-                                    = np . j bpos
-                                } {
-                                    ^ ( __jp_scan j )
+                ? || == m 1 & >= m 208 <= m 215 { = p + p 2 } {  // TEM / stray RSTn
+                    ? == m 216 { = p + p 2 } {  // stray SOI
+                        ? == m 217 { = going F } {  // EOI
+                            ? < + p 4 n {} { = . j ok F = going F }
+                            ? going {
+                                : i seg + p 2
+                                : i slen ( __u16 . j buf seg )
+                                : i dp + seg 2
+                                : i dend + seg slen
+                                ? || < slen 2 > dend n { = . j ok F = going F } {
+                                    : ~ i np dend
+                                    ? == m 219 { ( __jp_dqt j dp dend ) } {
+                                        ? == m 196 { ( __jp_dht j dp dend ) } {
+                                            ? == m 221 { = . j restart ( __u16 . j buf dp ) } {
+                                                ? || == m 192 == m 193 {
+                                                    ? || sof ! ( __jp_sof j dp ) {
+                                                        ( __img_set_err `JPEG: unsupported frame (precision, size, components or sampling)` )
+                                                        = . j ok F
+                                                    } { = sof T = . j prog F }
+                                                } {
+                                                    ? == m 194 {
+                                                        ? || sof ! ( __jp_sof j dp ) {
+                                                            ( __img_set_err `JPEG: unsupported frame (precision, size, components or sampling)` )
+                                                            = . j ok F
+                                                        } {
+                                                            = sof T
+                                                            = . j prog T
+                                                            ( __jp_prog_alloc j )
+                                                        }
+                                                    } {
+                                                        ? & >= m 195 <= m 207 {
+                                                            ? == m 204 {} {
+                                                                ( __img_set_err `JPEG: unsupported coding (arithmetic, 12-bit or lossless)` )
+                                                                = . j ok F
+                                                            }
+                                                        } {
+                                                            ? == m 218 {
+                                                                ? sof {} { = . j ok F }
+                                                                ? . j ok {
+                                                                    ( __jp_sos j dp )
+                                                                    ? . j prog {
+                                                                        ( __jp_prog_scan j )
+                                                                        = sawscan T
+                                                                        = np . j bpos
+                                                                    } {
+                                                                        ^ ( __jp_scan j )
+                                                                    }
+                                                                } {}
+                                                            } {} } } } } } }
+                                    = p np
                                 }
                             } {}
-                        } {} } } } } } }
-                        = p np
-                    }
-                } {}
-            } } } }
+                        } } } }
         } {}
     }
     ? & & . j ok . j prog sawscan { ^ ( __jp_prog_finish j ) } {}
@@ -721,13 +726,55 @@ $ `core.nu`
 
 // ── Scan: decode MCUs into per-component planes, upsample, colour-convert.
 
-@ __jp_sample ( Vec i ) plane i pw i hf i vf i hmax i vmax i x i y → i {
+// Clamped component-plane read (sample coordinates; cw/ch are the REAL
+// sample dimensions of the component — the plane is padded to the MCU grid
+// and the padding must never be read).
+@ __jp_pat ( Vec i ) p i pw i cw i ch i sx i sy → i {
+    : i xx ? < sx 0 { 0 } { ? < sx cw { sx } { - cw 1 } }
+    : i yy ? < sy 0 { 0 } { ? < sy ch { sy } { - ch 1 } }
+    ^ ( __b_i p + * yy pw xx )
+}
+
+// One full-resolution sample of a (possibly subsampled) component plane.
+// Matches libjpeg's DEFAULT upsamplers exactly (do_fancy_upsampling=TRUE,
+// what Pillow uses): direct read for 1:1; the triangular "fancy" filter for
+// 2x1 and 2x2 expansion — out = (3*near + far + bias) with edge clamping,
+// biases 1/2 (h2v1, >>2) and 8/7 (h2v2, >>4 on 3:1 column sums); plain box
+// for any other ratio and for tiny components (cw <= 2), as libjpeg does.
+@ __jp_sample ( Vec i ) plane i pw i cw i ch i hf i vf i hmax i vmax i x i y → i {
+    ? & == hf hmax == vf vmax { ^ ( __b_i plane + * y pw x ) } {}
+    ? & & == * hf 2 hmax > cw 2 == vf vmax {
+        // h2v1 fancy: (3*near + far + 1|2) >> 2
+        : i sx / x 2
+        : i px & x 1
+        : i dx ? == px 0 { -1 } { 1 }
+        : i near ( __jp_pat plane pw cw ch sx y )
+        : i far ( __jp_pat plane pw cw ch + sx dx y )
+        : i bias ? == px 0 { 1 } { 2 }
+        ^ >> + + * 3 near far bias 2
+    } {}
+    ? & & == * hf 2 hmax > cw 2 == * vf 2 vmax {
+        // h2v2 fancy: colsum = 3*near_row + far_row, then (3*cs + cs_far + 8|7) >> 4
+        : i sx / x 2
+        : i px & x 1
+        : i dx ? == px 0 { -1 } { 1 }
+        : i sy / y 2
+        : i py & y 1
+        : i dy ? == py 0 { -1 } { 1 }
+        : i syf + sy dy
+        : i sxf + sx dx
+        : i cs0 + * 3 ( __jp_pat plane pw cw ch sx sy ) ( __jp_pat plane pw cw ch sx syf )
+        : i cs1 + * 3 ( __jp_pat plane pw cw ch sxf sy ) ( __jp_pat plane pw cw ch sxf syf )
+        : i bias ? == px 0 { 8 } { 7 }
+        ^ >> + + * 3 cs0 cs1 bias 4
+    } {}
+    // box upsample (non-2x or fractional ratios)
     : i sx / * x hf hmax
     : i sy / * y vf vmax
     ^ ( __b_i plane + * sy pw sx )
 }
 
-@ __jp_scan *Jpeg j → ?Image {
+@ __jp_scan * Jpeg j → ?Image {
     : i W . j width
     : i H . j height
     : i hmax . j hmax
@@ -793,7 +840,7 @@ $ `core.nu`
 
 // Shared tail: per-component planes (padded to the MCU grid) → upsampled,
 // colour-converted Image. Frees `planes`.
-@ __jp_to_image *Jpeg j ( Vec ( Vec i ) ) planes → ?Image {
+@ __jp_to_image * Jpeg j ( Vec ( Vec i ) ) planes → ?Image {
     : i W . j width
     : i H . j height
     : i hmax . j hmax
@@ -804,7 +851,21 @@ $ `core.nu`
     : ( Vec u ) out ( vec_with_cap [u] * * W H outch )
     ?? ( vec_get [( Vec i )] planes 0 ) {
         T p0 → {
-            : i pw0 * * mcux ( __b_i . j chf 0 ) 8
+            : i hf0 ( __b_i . j chf 0 )
+            : i vf0 ( __b_i . j cvf 0 )
+            : i pw0 * * mcux hf0 8
+            : i cw0 / + * W hf0 - hmax 1 hmax
+            : i ch0 / + * H vf0 - vmax 1 vmax
+            : i hf1 ( __b_i . j chf 1 )
+            : i vf1 ( __b_i . j cvf 1 )
+            : i pw1 * * mcux hf1 8
+            : i cw1 / + * W hf1 - hmax 1 hmax
+            : i ch1 / + * H vf1 - vmax 1 vmax
+            : i hf2 ( __b_i . j chf 2 )
+            : i vf2 ( __b_i . j cvf 2 )
+            : i pw2 * * mcux hf2 8
+            : i cw2 / + * W hf2 - hmax 1 hmax
+            : i ch2 / + * H vf2 - vmax 1 vmax
             : ~ i y 0
             ~ < y H {
                 : ~ i x 0
@@ -812,15 +873,15 @@ $ `core.nu`
                     ? == nc 1 {
                         ( vec_push [u] out & ( __b_i p0 + * y pw0 x ) 255 )
                     } {
-                        : i Y ( __jp_sample p0 pw0 ( __b_i . j chf 0 ) ( __b_i . j cvf 0 ) hmax vmax x y )
+                        : i Y ( __jp_sample p0 pw0 cw0 ch0 hf0 vf0 hmax vmax x y )
                         : ~ i Cb 128
                         : ~ i Cr 128
                         ?? ( vec_get [( Vec i )] planes 1 ) {
-                            T p1 → { = Cb ( __jp_sample p1 * * mcux ( __b_i . j chf 1 ) 8 ( __b_i . j chf 1 ) ( __b_i . j cvf 1 ) hmax vmax x y ) }
+                            T p1 → { = Cb ( __jp_sample p1 pw1 cw1 ch1 hf1 vf1 hmax vmax x y ) }
                             F _ → {}
                         }
                         ?? ( vec_get [( Vec i )] planes 2 ) {
-                            T p2 → { = Cr ( __jp_sample p2 * * mcux ( __b_i . j chf 2 ) 8 ( __b_i . j chf 2 ) ( __b_i . j cvf 2 ) hmax vmax x y ) }
+                            T p2 → { = Cr ( __jp_sample p2 pw2 cw2 ch2 hf2 vf2 hmax vmax x y ) }
                             F _ → {}
                         }
                         : f cbf # f - Cb 128

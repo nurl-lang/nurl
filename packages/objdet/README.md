@@ -1,22 +1,24 @@
 # objdet — object detection from pure NURL, on the GPU
 
 Detect objects in an image or video feed using a tiny-YOLOv2-style **ONNX**
-model — written entirely in NURL. The image is read (PPM), the network runs
-on the **GPU** through [`packages/onnx`](../onnx) (every layer a CUDA-C
-kernel compiled at runtime via NVRTC — no external inference engine), and
-the YOLO grid is decoded into labelled boxes with non-max suppression.
+model — written entirely in NURL. The image is decoded natively through
+[`packages/image`](../image) (PNG, baseline+progressive JPEG, PPM — no
+ImageMagick), the network runs on the **GPU** through
+[`packages/onnx`](../onnx) (every layer a CUDA-C kernel compiled at runtime
+via NVRTC — no external inference engine), and the YOLO grid is decoded into
+labelled boxes with non-max suppression.
 
 Verified against **onnxruntime** on the ONNX model-zoo `tinyyolov2-8.onnx`:
 identical class scores and boxes.
 
 ```
-$ objdet tinyyolov2-8.onnx dog.ppm out.ppm
+$ objdet tinyyolov2-8.onnx dog.jpg out.png
 device: NVIDIA GeForce RTX 4090
 image 416x416
 detections:
   dog 0.764437  box[x=55 y=161 w=129 h=220]
   car 0.763744  box[x=240 y=66 w=133 h=68]
-wrote out.ppm
+wrote out.png
 ```
 
 ![annotated output: a dog and a car, each in a red box](docs/out.png)
@@ -24,18 +26,17 @@ wrote out.ppm
 ## Usage
 
 ```
-objdet <model.onnx> <image.ppm> [out.ppm]              # single image
-objdet <model.onnx> --video <in_dir> <out_dir> <count> # frame sequence
+objdet <model.onnx> <image.{png,jpg,ppm}> [out.{png,jpg,ppm}] # single image
+objdet <model.onnx> --video <in_dir> <out_dir> <count>        # frame sequence
 ```
 
-`in_dir`/`out_dir` hold `frame00000.ppm`, `frame00001.ppm`, … The video
-mode reuses one GPU engine (kernels compiled once) across all frames.
-
-Images are **binary PPM (P6)**. Convert anything with `ffmpeg`/ImageMagick:
+Stills are decoded and encoded natively (PNG / JPEG / PPM, by extension) —
+feed it a photo straight from a camera. `in_dir`/`out_dir` hold
+`frame00000.ppm`, `frame00001.ppm`, … The video mode reuses one GPU engine
+(kernels compiled once) across all frames; use ffmpeg for the container:
 
 ```
-convert photo.jpg photo.ppm
-objdet tinyyolov2-8.onnx photo.ppm out.ppm
+objdet tinyyolov2-8.onnx photo.jpg out.png
 
 ffmpeg -i clip.mp4 -vf fps=10 in/frame%05d.ppm     # video → frames
 objdet tinyyolov2-8.onnx --video in out $(ls in | wc -l)

@@ -121,8 +121,9 @@ done
 python3 - "$WORK" <<'PY'
 import sys, numpy as np; from PIL import Image
 W=sys.argv[1]; f=0
-# (name, max-abs-diff tolerance) — 4:4:4/grey = IDCT rounding, 4:2:0 = box upsample
-for n,tol in (("j444",3),("j420",12),("jgray",3),("p444",3),("p420",12),("pgray",3),("pnoise",3)):
+# (name, max-abs-diff tolerance) — IDCT rounding only: chroma upsampling is
+# libjpeg-identical "fancy" (triangular), so 4:2:0 is nearly as tight as 4:4:4
+for n,tol in (("j444",3),("j420",4),("jgray",3),("p444",3),("p420",4),("pgray",3),("pnoise",3)):
     ref=np.asarray(Image.open(f"{W}/{n}.jpg").convert("RGB"),dtype=int)
     ours=np.asarray(Image.open(f"{W}/{n}.out.ppm").convert("RGB"),dtype=int)
     if ref.shape!=ours.shape: print(f"  FAIL {n}: shape {ref.shape} vs {ours.shape}"); f+=1; continue
@@ -156,7 +157,7 @@ python3 - "$WORK" <<'PY'
 import sys, numpy as np; from PIL import Image
 W=sys.argv[1]; f=0
 src=np.asarray(Image.open(f"{W}/grad.png").convert("RGB"),dtype=int)
-for n,tol in (("e444",6),("e420",12),("e422",12)):
+for n,tol in (("e444",6),("e420",8),("e422",8)):
     im=Image.open(f"{W}/{n}.jpg"); im.load()
     d=int(np.abs(np.asarray(im.convert("RGB"),dtype=int)-src).max())
     ok=d<=tol

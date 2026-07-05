@@ -12,9 +12,11 @@ $ `src/image.nu`
 $ `src/detect.nu`
 
 & `c` @ nurl_poke_f32 *u base i idx f val → v
+
 & `c` @ nurl_peek_f32 *u base i idx → f
 
 : ~ i g_fail 0
+
 @ check b cond s name → v {
     ? cond { ( nurl_print `  ok  ` ) } { ( nurl_print `  FAIL ` ) = g_fail + g_fail 1 }
     ( nurl_print name ) ( nurl_print `\n` )
@@ -36,6 +38,7 @@ $ `src/detect.nu`
     : Image big ( img_resize solid 8 8 )
     ( check == ( img_get big 4 4 1 ) 120 `resize preserves solid colour` )
     ( check & == ( img_w big ) 8 == ( img_h big ) 8 `resize dims` )
+    ( image_free im ) ( image_free solid ) ( image_free big )
 }
 
 @ test_nchw → v {
@@ -50,6 +53,7 @@ $ `src/detect.nu`
     // channel 1 plane starts at index 4; (0,0) -> index 4 = 30.
     : f g00 ( nurl_peek_f32 t 4 )
     ( check & > g00 29.5 < g00 30.5 `nchw G(0,0)=30` )
+    ( nurl_free t ) ( image_free im )
 }
 
 // Build a 13x13x125 grid with one strong "dog" box planted at cell (6,6),
@@ -58,14 +62,14 @@ $ `src/detect.nu`
     ( nurl_print `[decode]\n` )
     : *u grid ( nurl_alloc * 21125 4 )
     : ~ i z 0
-    ~ < z 21125 { ( nurl_poke_f32 grid z # f - 0.0 10.0 ) = z + z 1 }   // all logits very negative
+    ~ < z 21125 { ( nurl_poke_f32 grid z # f - 0.0 10.0 ) = z + z 1 }  // all logits very negative
     : i cy 6
     : i cx 6
-    : i o 0   // anchor 0, channels 0..24
+    : i o 0  // anchor 0, channels 0..24
     // objectness logit high; class 11 (dog) logit high
-    ( nurl_poke_f32 grid + * + o 4 169 + * cy 13 cx # f 4.0 )    // to -> sigmoid ~0.98
+    ( nurl_poke_f32 grid + * + o 4 169 + * cy 13 cx # f 4.0 )  // to -> sigmoid ~0.98
     ( nurl_poke_f32 grid + * + o 5 169 + * cy 13 cx # f -10.0 )  // keep others low
-    ( nurl_poke_f32 grid + * + + o 5 11 169 + * cy 13 cx # f 8.0 ) // class 11 = dog
+    ( nurl_poke_f32 grid + * + + o 5 11 169 + * cy 13 cx # f 8.0 )  // class 11 = dog
     : ( Vec Detection ) dets ( yolo_decode grid 0.3 )
     ( check > ( vec_len [Detection] dets ) 0 `decode finds the planted box` )
     ?? ( vec_get [Detection] dets 0 ) {
@@ -74,17 +78,20 @@ $ `src/detect.nu`
             ( check & > . d cx 0.4 < . d cx 0.6 `box centre near cell (6,6)` )
         } F _ → ( check F `det fetch` )
     }
+    ( vec_free [Detection] dets )
     ( nurl_free grid )
 }
 
 @ test_nms → v {
     ( nurl_print `[nms]\n` )
     : ( Vec Detection ) ds ( vec_new [Detection] )
-    ( vec_push [Detection] ds @ Detection { 6 0.9 0.5 0.5 0.2 0.2 } )   // dog, strong
-    ( vec_push [Detection] ds @ Detection { 6 0.6 0.51 0.51 0.2 0.2 } ) // dog, overlaps -> dropped
-    ( vec_push [Detection] ds @ Detection { 7 0.7 0.5 0.5 0.2 0.2 } )   // cat, same box, kept (diff class)
+    ( vec_push [Detection] ds @ Detection { 6 0.9 0.5 0.5 0.2 0.2 } )  // dog, strong
+    ( vec_push [Detection] ds @ Detection { 6 0.6 0.51 0.51 0.2 0.2 } )  // dog, overlaps -> dropped
+    ( vec_push [Detection] ds @ Detection { 7 0.7 0.5 0.5 0.2 0.2 } )  // cat, same box, kept (diff class)
     : ( Vec Detection ) keep ( yolo_nms ds 0.45 )
     ( check == ( vec_len [Detection] keep ) 2 `nms drops the overlapping same-class box` )
+    ( vec_free [Detection] keep )
+    ( vec_free [Detection] ds )
 }
 
 @ test_names → v {

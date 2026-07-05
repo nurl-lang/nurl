@@ -28,7 +28,9 @@ $ `display.nu`
 $ `window.nu`
 
 @ p s m → v { ( nurl_print m ) }
+
 @ pf f x → v { ( nurl_print ( nurl_str_float x ) ) }
+
 @ pn i n → v { ( nurl_print ( nurl_str_int n ) ) }
 
 // ── flag parsing ──────────────────────────────────────────────────
@@ -41,12 +43,15 @@ $ `window.nu`
     }
     ^ - 0 1
 }
+
 @ flag_set ( Vec String ) av s name → b { ^ >= ( __arg_index av name ) 0 }
+
 @ flag_str ( Vec String ) av s name → String {
     : i i ( __arg_index av name )
     ? < i 0 { ^ ( string_new ) } {}
     ?? ( vec_get [String] av + i 1 ) { T x → ^ x F _ → ^ ( string_new ) }
 }
+
 @ flag_int ( Vec String ) av s name i dflt → i {
     : i i ( __arg_index av name )
     ? < i 0 { ^ dflt } {}
@@ -74,7 +79,9 @@ $ `window.nu`
     }
     ^ out
 }
+
 @ name_at ( Vec String ) names i i → s { ?? ( vec_get [String] names i ) { T s → ^ ( string_data s ) F _ → ^ `?` } }
+
 @ shape4 i a i b i c i d → ( Vec i ) { : ( Vec i ) v ( vec_new [i] )
     ( vec_push [i] v a ) ( vec_push [i] v b ) ( vec_push [i] v c ) ( vec_push [i] v d ) ^ v }
 
@@ -83,11 +90,14 @@ $ `window.nu`
     : ( Vec i ) v ( vec_new [i] )
     ? == ch 0 { ( vec_push [i] v 255 ) ( vec_push [i] v 60 ) ( vec_push [i] v 60 ) ( vec_push [i] v 255 ) ( vec_push [i] v 220 ) ( vec_push [i] v 60 ) }
     { ? == ch 1 { ( vec_push [i] v 70 ) ( vec_push [i] v 200 ) ( vec_push [i] v 90 ) ( vec_push [i] v 200 ) ( vec_push [i] v 60 ) ( vec_push [i] v 220 ) }
-    { ( vec_push [i] v 70 ) ( vec_push [i] v 90 ) ( vec_push [i] v 230 ) ( vec_push [i] v 60 ) ( vec_push [i] v 220 ) ( vec_push [i] v 220 ) } }
+        { ( vec_push [i] v 70 ) ( vec_push [i] v 90 ) ( vec_push [i] v 230 ) ( vec_push [i] v 60 ) ( vec_push [i] v 220 ) ( vec_push [i] v 220 ) } }
     ^ v
 }
+
 @ pal_r i k → i { ^ ?? ( vec_get [i] ( __pal 0 ) % k 6 ) { T x → x F _ → 255 } }
+
 @ pal_g i k → i { ^ ?? ( vec_get [i] ( __pal 1 ) % k 6 ) { T x → x F _ → 60 } }
+
 @ pal_b i k → i { ^ ?? ( vec_get [i] ( __pal 2 ) % k 6 ) { T x → x F _ → 60 } }
 
 // frame path: <dir>/frameNNNNN.ppm
@@ -103,13 +113,13 @@ $ `window.nu`
 // Run the network on one image, drawing boxes (and, when `want_masks`, the
 // per-object segmentation mask) onto `im`. When `verbose`, prints one line per
 // detection. Returns the detection count.
-@ process_frame Image im OGraph g *Engine e ( Vec String ) names i nc b want_boxes b want_masks b verbose → i {
+@ process_frame Image im OGraph g * Engine e ( Vec String ) names i nc b want_boxes b want_masks b verbose → i {
     : Letterbox lb ( letterbox im 640 )
     : *u host ( img_to_nchw_norm . lb img )
     : RTensor out ( rt_run_shaped e g host ( shape4 1 3 640 640 ) )
     : *u o ( rt_download e out )
     : ~ b masks want_masks
-    : ~ i proto_i 0     // proto buffer address carried as i64 (cast per use)
+    : ~ i proto_i 0  // proto buffer address carried as i64 (cast per use)
     ? masks {
         : RTensor proto_t ( rt_output1 e )
         ? == . proto_t nelem 0 { = masks F } { = proto_i # i ( rt_download e proto_t ) }
@@ -153,7 +163,7 @@ $ `window.nu`
     ^ nd
 }
 
-@ load_model s path *b okcell → OGraph {
+@ load_model s path * b okcell → OGraph {
     : ~ OGraph g @ OGraph { ( vec_new [ONode] ) ( vec_new [OTensor] ) ( string_new ) ( string_new ) ( string_new ) }
     ?? ( read_file_bytes path ) { T mb → { = g ( onnx_parse mb ) ( nurl_poke # *u okcell 0 1 ) } F _ → { ( nurl_poke # *u okcell 0 0 ) } }
     ^ g
@@ -162,7 +172,7 @@ $ `window.nu`
 // ── still-image modes (detect / seg) ──────────────────────────────
 @ run_still b want_boxes b want_masks String mp String np String ip String op i gpu → i {
     ? == ( string_len mp ) 0 { ( p `missing --model <model.onnx>\n` ) ^ 1 } {}
-    ? == ( string_len ip ) 0 { ( p `missing --image <image.ppm>\n` ) ^ 1 } {}
+    ? == ( string_len ip ) 0 { ( p `missing --image <img>\n` ) ^ 1 } {}
     : *b okc # *b ( nurl_alloc 8 )
     : OGraph g ( load_model ( string_data mp ) okc )
     ? == ( nurl_peek # *u okc 0 ) 0 { ( p `cannot read model: ` ) ( p ( string_data mp ) ) ( p `\n` ) ^ 1 } {}
@@ -170,7 +180,7 @@ $ `window.nu`
     : i nc ( vec_len [String] names )
     ? == nc 0 { ( p `missing/empty --classes <classes.txt>\n` ) ^ 1 } {}
     ( p `prompts: ` ) ( pn nc ) ( p ` classes\n` )
-    ?? ( ppm_read ( string_data ip ) ) {
+    ?? ( img_load ( string_data ip ) ) {
         T im → {
             ( p `image ` ) ( pn ( img_w im ) ) ( p `x` ) ( pn ( img_h im ) ) ( p `\n` )
             : *Engine e ( rt_open gpu )
@@ -181,11 +191,11 @@ $ `window.nu`
             ? == nd 0 { ( p `  (none above threshold)\n` ) } {}
             ( rt_close e )
             ? > ( string_len op ) 0 {
-                ? ( ppm_write ( string_data op ) im ) { ( p `wrote ` ) ( p ( string_data op ) ) ( p `\n` ) } { ( p `write failed\n` ) }
+                ? ( img_save ( string_data op ) im ) { ( p `wrote ` ) ( p ( string_data op ) ) ( p `\n` ) } { ( p `write failed\n` ) }
             } {}
             ^ 0
         }
-        F _ → { ( p `cannot read image (PPM P6 expected): ` ) ( p ( string_data ip ) ) ( p `\n` ) ^ 1 }
+        F _ → { ( p `cannot read image ` ) ( p ( string_data ip ) ) ( p `: ` ) ( p ( image_error ) ) ( p `\n` ) ^ 1 }
     }
 }
 
@@ -240,7 +250,7 @@ $ `window.nu`
         ~ < z * * cw ch 3 { ( vec_push [u] rgb 0 ) = z + z 1 }
         ? ( cam_grab cam rgb ) {
             = fails 0
-            : Image im @ Image { cw ch rgb 0 }
+            : Image im ( image_of cw ch 3 rgb )
             : i nd ( process_frame im g e names nc want_boxes want_masks F )
             ? == disp 2 {
                 ( xwin_show win im )
@@ -252,7 +262,7 @@ $ `window.nu`
             } {}
             ? save {
                 : String fp ( frame_path ( string_data od ) f )
-                ? ( ppm_write ( string_data fp ) im ) {
+                ? ( img_save ( string_data fp ) im ) {
                     ? == disp 0 { ( p `frame ` ) ( pn f ) ( p `: ` ) ( pn nd ) ( p ` objects -> ` ) ( p ( string_data fp ) ) ( p `\n` ) } {}
                 } { ( p `frame ` ) ( pn f ) ( p ` write failed\n` ) }
             } {}
@@ -285,7 +295,7 @@ $ `window.nu`
     ( p `  --model   <model.onnx>   a YOLOE-seg export from tools/export.py\n` )
     ( p `                           (-> yoloe-v8s-seg.onnx); not bundled (~45 MB).\n` )
     ( p `  --classes <classes.txt>  vocabulary, one prompt word per line.\n` )
-    ( p `  --image   <image.ppm>    input for detect/seg (binary PPM P6).\n` )
+    ( p `  --image   <img>          input for detect/seg (PNG, JPEG or PPM).\n` )
     ( p `  --out     <path>         detect/seg: output image; cam: dir to save frames.\n` )
     ( p `  --device  <dev>          cam webcam device (default /dev/video0).\n` )
     ( p `  --frames  <N>            cam: stop after N frames (default: run until Ctrl-C).\n` )

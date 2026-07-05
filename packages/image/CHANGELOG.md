@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.4.0
+
+- **libjpeg-exact "fancy" chroma upsampling** — 2x1/2x2 expansion now uses
+  libjpeg's default triangular filter (bit-matching jdsample.c, including
+  the 1/2 and 8/7 rounding biases and edge clamping); other ratios keep box,
+  as libjpeg does. 4:2:0 decode drops to IDCT-rounding distance from Pillow
+  (synthetic max_diff 3, tolerance tightened 12 → 4; real photos max 3,
+  mean ≈ 0.02). Both baseline and progressive decode benefit.
+- **Consumers wired**: objdet 0.3.0 and yoloe 0.5.0 now decode/encode
+  through this package (their private PPM/resize/draw copies are deleted) —
+  both proven equivalent bit-for-bit on their preprocessing tensors, and
+  yoloe verified live on GPU reading a JPEG and writing a mask-overlay PNG.
+
 ## 0.3.0
 
 The "diamond" release: real-world coverage on every axis.
