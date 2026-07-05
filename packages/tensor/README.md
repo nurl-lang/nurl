@@ -67,9 +67,20 @@ Unary → `Tensor`: `tensor_neg` / `abs` / `exp` / `log` / `sqrt` / `relu` /
 `sigmoid` / `tanh`.
 
 Matmul: `( tensor_matmul a b )` → `?Tensor` — 2-D `(M,K)·(K,N)`.
+`( tensor_bmm a b )` → `?Tensor` — N-D batched matmul: the last two dims are the
+matrix, leading batch dims broadcast (numpy rule).
 
 Reductions → `Tensor` (axis `< 0` reduces everything; `keepdim` is a `b`):
 `( tensor_sum t axis keepdim )` and `_mean` / `_max` / `_min` / `_prod`.
+
+Slicing / joining / indexing:
+
+| Call | |
+| --- | --- |
+| `( tensor_slice t starts stops )` → `?Tensor` | per-dim half-open `[start,stop)` |
+| `( tensor_concat2 a b axis )` → `?Tensor` | concatenate along an axis |
+| `( tensor_softmax t axis )` → `Tensor` | stable softmax over one axis |
+| `( tensor_argmax t axis keepdim )` · `_argmin` → `Tensor` | arg index (as f64) along an axis |
 
 ## GPU
 
@@ -86,16 +97,19 @@ Elementwise ops and matmul are exact to f64 (and bit-identical across the GPU
 and CPU paths); reductions accumulate sequentially, so they match a
 pairwise-summing reference (numpy) to rounding. Verified against numpy:
 creation, reshape, broadcasting, matmul (incl. a 128×128 GPU case), transpose,
-a 3-D permute, all reductions, and the unary maps — **17 / 17**.
+a 3-D permute, all reductions, the unary maps, and the M2 ops — batched matmul
+(with batch broadcasting), softmax, slicing, concat, and argmax/argmin —
+**25 / 25**.
 
 ## Tests
 
 `./tests/tensor_test.sh` builds `tests/tcheck.nu`, checks every op against
-numpy, and re-runs under AddressSanitizer. **17/17, ASan-clean.** Skips cleanly
+numpy, and re-runs under AddressSanitizer. **25/25, ASan-clean.** Skips cleanly
 without numpy.
 
 ## Roadmap
 
-Batched/N-D matmul, slicing and gather/scatter, more ops (softmax, conv),
-native-f32 GPU kernels, and — the payoff — porting `onnx`'s `RTensor` + ops
-onto this layer so tensors stop being ONNX-only.
+Gather/scatter and fancy indexing, conv, native-f32 GPU kernels, and — the
+payoff — porting `onnx`'s `RTensor` + ops onto this layer so tensors stop being
+ONNX-only. (Done in 0.2.0: batched/N-D matmul, softmax, slicing, concat,
+argmax/argmin.)

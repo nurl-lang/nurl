@@ -12,6 +12,17 @@ $ `src/ops.nu`
     : ( Vec i ) v ( vec_new [i] ) ( vec_push [i] v a ) ( vec_push [i] v b ) ^ v
 }
 
+@ sh3 i a i b i c → ( Vec i ) {
+    : ( Vec i ) v ( vec_new [i] ) ( vec_push [i] v a ) ( vec_push [i] v b ) ( vec_push [i] v c ) ^ v
+}
+// consumes t (it is always passed a fresh arange temporary here)
+@ reshape3 Tensor t i a i b i c → Tensor {
+    ?? ( tensor_reshape t ( sh3 a b c ) ) {
+        T r → { ( tensor_free t ) ^ r }
+        F _ → { ^ t }
+    }
+}
+
 @ pt s name Tensor t → v {
     : String s ( string_from name )
     ( string_push_char s 124 )
@@ -85,6 +96,29 @@ $ `src/ops.nu`
     ( pto `perm` ( tensor_permute t3 perm ) )
     ( vec_free [i] perm )
     ( tensor_free t3 )
+
+    // ── M2 ──────────────────────────────────────────────────────────
+    // batched matmul: A(2,2,3) · B(2,3,2) → (2,2,2)
+    : Tensor bmA ( reshape3 ( tensor_arange TE_F64 12 ) 2 2 3 )
+    : Tensor bmB ( reshape3 ( tensor_arange TE_F64 12 ) 2 3 2 )
+    ( pto `bmm` ( tensor_bmm bmA bmB ) )
+    // broadcast batch: A(1,2,3) · B(2,3,2) → (2,2,2)
+    : Tensor bmA1 ( reshape3 ( tensor_arange TE_F64 6 ) 1 2 3 )
+    ( pto `bmm_bc` ( tensor_bmm bmA1 bmB ) )
+    ( tensor_free bmA ) ( tensor_free bmB ) ( tensor_free bmA1 )
+
+    ( ptf `softmax1` ( tensor_softmax a 1 ) )
+
+    : ( Vec i ) sl0 ( sh2 0 1 )
+    : ( Vec i ) sl1 ( sh2 2 3 )
+    ( pto `slice` ( tensor_slice a sl0 sl1 ) )
+    ( vec_free [i] sl0 ) ( vec_free [i] sl1 )
+
+    ( pto `cat0` ( tensor_concat2 a a 0 ) )
+    ( pto `cat1` ( tensor_concat2 a a 1 ) )
+
+    ( ptf `argmax1` ( tensor_argmax a 1 F ) )
+    ( ptf `argmin0` ( tensor_argmin a 0 F ) )
 
     // large matmul to exercise the GPU path (128x128 · 128x128); print its sum
     : Tensor big16k ( tensor_arange TE_F64 16384 )
