@@ -1,3 +1,7 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
 ── round-trip ──
 major=1
 
