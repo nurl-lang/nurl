@@ -33,6 +33,7 @@ $ `jpeg_enc.nu`
     ? >= n 2 {
         ? == ( __b buf 0 ) 80 { ^ ( ppm_decode buf ) } {}
     } {}
+    ( __img_set_err `unknown image format (unrecognised magic bytes)` )
     ^ @ ?Image { F }
 }
 
@@ -46,7 +47,10 @@ $ `jpeg_enc.nu`
             ( vec_free [u] bytes )
             ^ im
         }
-        F _ → { ^ @ ?Image { F } }
+        F _ → {
+            ( __img_set_err `cannot read file` )
+            ^ @ ?Image { F }
+        }
     }
 }
 

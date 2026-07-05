@@ -170,10 +170,12 @@ $ `core.nu`
 }
 
 @ png_decode ( Vec u ) buf → ?Image {
+    ( __img_set_err `` )
     : i n ( vec_len [u] buf )
-    ? < n 8 { ^ @ ?Image { F } } {}
+    ? < n 8 { ( __img_set_err `not a PNG` ) ^ @ ?Image { F } } {}
     // signature 137 80 78 71 13 10 26 10
     ? & == ( __b buf 0 ) 137 & == ( __b buf 1 ) 80 & == ( __b buf 2 ) 78 & == ( __b buf 3 ) 71 & == ( __b buf 4 ) 13 & == ( __b buf 5 ) 10 & == ( __b buf 6 ) 26 == ( __b buf 7 ) 10 {} {
+        ( __img_set_err `not a PNG` )
         ^ @ ?Image { F }
     }
 
@@ -233,6 +235,7 @@ $ `core.nu`
     ? > * width height 268435456 { = hdr_ok F }               // ≤ 256 Mpx
     ? & hdr_ok & ( __png_depth_ok color depth ) <= interlace 1 {} { = hdr_ok F }
     ? hdr_ok {} {
+        ( __img_set_err `PNG: unsupported or malformed header` )
         ( vec_free [u] zdata ) ( vec_free [u] plte ) ( vec_free [u] trnsb )
         ^ @ ?Image { F }
     }
@@ -278,6 +281,7 @@ $ `core.nu`
         F _ → {}
     }
     ? infl_ok {} {
+        ( __img_set_err `PNG: corrupt DEFLATE stream` )
         ( vec_free [u] raw ) ( vec_free [u] plte ) ( vec_free [i] trns )
         ^ @ ?Image { F }
     }
@@ -313,6 +317,7 @@ $ `core.nu`
         ( vec_free [i] ax )
     }
     ? < rawlen want {
+        ( __img_set_err `PNG: truncated pixel data` )
         ( vec_free [u] raw ) ( vec_free [u] plte ) ( vec_free [i] trns )
         ^ @ ?Image { F }
     } {}
@@ -351,7 +356,11 @@ $ `core.nu`
     ( vec_free [u] raw )
     ( vec_free [u] plte )
     ( vec_free [i] trns )
-    ? ok {} { ( vec_free [u] out ) ^ @ ?Image { F } }
+    ? ok {} {
+        ( __img_set_err `PNG: malformed pixel data` )
+        ( vec_free [u] out )
+        ^ @ ?Image { F }
+    }
     ^ @ ?Image { T ( image_of width height outch out ) }
 }
 

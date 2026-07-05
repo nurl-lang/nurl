@@ -675,17 +675,26 @@ $ `core.nu`
                         ? == m 196 { ( __jp_dht j dp dend ) } {
                         ? == m 221 { = . j restart ( __u16 . j buf dp ) } {
                         ? || == m 192 == m 193 {
-                            ? || sof ! ( __jp_sof j dp ) { = . j ok F } { = sof T = . j prog F }
+                            ? || sof ! ( __jp_sof j dp ) {
+                                ( __img_set_err `JPEG: unsupported frame (precision, size, components or sampling)` )
+                                = . j ok F
+                            } { = sof T = . j prog F }
                         } {
                         ? == m 194 {
-                            ? || sof ! ( __jp_sof j dp ) { = . j ok F } {
+                            ? || sof ! ( __jp_sof j dp ) {
+                                ( __img_set_err `JPEG: unsupported frame (precision, size, components or sampling)` )
+                                = . j ok F
+                            } {
                                 = sof T
                                 = . j prog T
                                 ( __jp_prog_alloc j )
                             }
                         } {
                         ? & >= m 195 <= m 207 {
-                            ? == m 204 {} { = . j ok F }         // other SOFs: unsupported
+                            ? == m 204 {} {
+                                ( __img_set_err `JPEG: unsupported coding (arithmetic, 12-bit or lossless)` )
+                                = . j ok F
+                            }
                         } {
                         ? == m 218 {
                             ? sof {} { = . j ok F }
@@ -850,11 +859,18 @@ $ `core.nu`
 // ── Public entry ──────────────────────────────────────────────────────
 
 @ jpeg_decode ( Vec u ) buf → ?Image {
+    ( __img_set_err `` )
     : i n ( vec_len [u] buf )
-    ? < n 4 { ^ @ ?Image { F } } {}
-    ? & == ( __b buf 0 ) 255 == ( __b buf 1 ) 216 {} { ^ @ ?Image { F } }
+    ? < n 4 { ( __img_set_err `not a JPEG` ) ^ @ ?Image { F } } {}
+    ? & == ( __b buf 0 ) 255 == ( __b buf 1 ) 216 {} { ( __img_set_err `not a JPEG` ) ^ @ ?Image { F } }
     : *Jpeg j ( __jp_new buf )
     : ?Image im ( __jp_run j )
     ( __jp_free j )
-    ^ im
+    ?? im {
+        T x → { ^ @ ?Image { T x } }
+        F _ → {
+            ? ( nurl_str_eq ( image_error ) `` ) { ( __img_set_err `JPEG: corrupt or unsupported stream` ) } {}
+            ^ @ ?Image { F }
+        }
+    }
 }

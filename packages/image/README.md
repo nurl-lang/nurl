@@ -1,87 +1,139 @@
-# image — pure-NURL image codecs
+# image — pure-NURL image codecs and raster ops
 
-Decode and encode images with **no native library and no shell-out**. The
-vision stack (objdet, yoloe) used to tell you to `convert photo.jpg photo.ppm`
-before a single pixel reached the GPU — this package closes that loop. It
-decodes PNG, **baseline JPEG**, and PPM, and encodes PNG and PPM.
+Decode, encode and transform images with **no native library and no
+shell-out**. PNG (the complete still-image feature matrix), JPEG (baseline
+**and progressive** decode, baseline encode), PPM — plus the raster
+operations downstream code always ends up hand-rolling: resize, crop,
+flips, rotations, channel conversion, drawing and alpha blit. Ships an
+`img` CLI.
 
 ## Use
 
 ```nurl
 $ `deps/image/src/image.nu`
 
-?? ( image_load `photo.png` ) {
+?? ( image_load `photo.jpg` ) {
     T im → {
-        // im: width / height / channels (1 grey, 3 RGB, 4 RGBA) + a packed
-        // row-major byte buffer. Read pixels with image_get, write out with
-        // image_save_png / image_save_ppm.
-        ( image_save_ppm `photo.ppm` im )
+        : Image thumb ( image_resize_area im 320 200 )   // box-average shrink
+        ( image_draw_rect thumb 10 10 100 80 2 4278190335 )  // red 0xFF0000FF
+        ( image_save_png `thumb.png` thumb )
+        ( image_free thumb )
         ( image_free im )
     }
-    F _ → { ( nurl_eprintln `decode failed` ) }
+    F _ → { ( nurl_eprintln ( image_error ) ) }   // says WHY it failed
 }
 ```
 
+`Image` is `{ i width, i height, i channels, ( Vec u ) data }` — 8 bits per
+channel, row-major, tightly packed. Channels: 1 grey, 2 grey+alpha, 3 RGB,
+4 RGBA. `image_get`/`image_set` are bounds-checked (out-of-range reads 0,
+writes are ignored). Transform functions return a **new** image — free
+both.
+
+## CLI
+
+`nurlpkg install image` gives you `img`:
+
+```
+img info photo.jpg                    # 4032x3024 RGB
+img convert scan.png scan.jpg -q 85   # format from the extension
+img resize photo.jpg web.jpg 800x     # keep aspect; 800x600 / x600 also work
+```
+
+Shrinking box-averages (clean thumbnails), growing is bilinear. Extensions:
+`.png` `.jpg` `.jpeg` `.ppm` `.pgm`.
+
 ## API
+
+### Files and buffers
 
 | Call | |
 | --- | --- |
 | `( image_load path )` → `?Image` | read a file, sniff PNG/JPEG/PPM, decode |
-| `( image_save_png path im )` → `b` | write a lossless 8-bit PNG |
-| `( image_save_ppm path im )` → `b` | write a binary PPM (P6 / P5) |
-| `( image_decode buf )` → `?Image` | decode an in-memory buffer (magic-sniffed) |
+| `( image_decode buf )` → `?Image` | same, from an in-memory `( Vec u )` |
+| `( image_error )` → `s` | why the last decode returned None (static string) |
+| `( image_save_png path im )` → `b` | lossless 8-bit PNG |
+| `( image_save_jpeg path im quality )` → `b` | baseline JPEG, quality 1–100 |
+| `( image_save_ppm path im )` → `b` | binary PPM (P6 / P5) |
 | `( png_decode buf )` / `( png_encode im )` | PNG directly |
-| `( jpeg_decode buf )` → `?Image` | baseline JPEG directly |
+| `( jpeg_decode buf )` → `?Image` | baseline + progressive JPEG |
+| `( jpeg_encode im q )` → `( Vec u )` | 4:2:0 below q90, 4:4:4 from q90 |
+| `( jpeg_encode_sub im q sub )` → `( Vec u )` | force 0=4:4:4 / 1=4:2:2 / 2=4:2:0 |
 | `( ppm_decode buf )` / `( ppm_encode im )` | PPM directly |
-| `( image_new w h ch )`, `( image_of w h ch data )`, `( image_free im )` | |
-| `( image_width/height/channels im )`, `( image_get im x y c )`, `( image_set im x y c v )` | |
 
-`Image` is `{ i width, i height, i channels, ( Vec u ) data }` — 8 bits per
-channel, row-major, tightly packed.
+### Raster
 
-## PNG support
+| Call | |
+| --- | --- |
+| `( image_new w h ch )` / `( image_of w h ch data )` / `( image_free im )` | |
+| `( image_width im )` `( image_height im )` `( image_channels im )` | |
+| `( image_get im x y c )` / `( image_set im x y c v )` | per channel |
+| `( image_get_rgba im x y )` / `( image_set_rgba im x y rgba )` | packed `0xRRGGBBAA`, channel-mapped |
+| `( image_clone im )` | deep copy |
 
-- **Decode**: 8-bit depth, non-interlaced — greyscale, RGB, palette (expanded
-  to RGB), grey+alpha, and RGBA. All five scanline filters (None / Sub / Up /
-  Average / Paeth) are reconstructed. Built on the stdlib `deflate` codec (the
-  zlib header is stripped; `inflate` stops at the final block).
-- **Encode**: 8-bit, non-interlaced, filter 0; the colour type follows the
-  image's channel count. Lossless — `decode → encode → decode` reproduces the
-  pixels exactly.
-- **Not yet** (clean `None`, never an out-of-bounds read): interlaced (Adam7),
-  bit depths other than 8, and `tRNS` transparency on palette/grey images.
+### Ops (`ops.nu`, included by `image.nu`)
 
-## JPEG support
+| Call | |
+| --- | --- |
+| `( image_resize im w h )` | bilinear, edge-clamped — upscale & mild shrink |
+| `( image_resize_area im w h )` | box average — thumbnails, exact for integer factors |
+| `( image_resize_nearest im w h )` | blocky, exact |
+| `( image_crop im x y w h )` | clipped window copy |
+| `( image_flip_h im )` / `( image_flip_v im )` | |
+| `( image_rot90 im )` / `( image_rot180 im )` / `( image_rot270 im )` | clockwise |
+| `( image_convert im ch )` | 1/2/3/4 channels; grey↔RGB via BT.601 luma |
+| `( image_fill im rgba )` / `( image_fill_rect im x0 y0 x1 y1 rgba )` | in place, clipped |
+| `( image_draw_rect im x0 y0 x1 y1 t rgba )` | outline, `t` px thick, inward |
+| `( image_draw_line im x0 y0 x1 y1 rgba )` | Bresenham, clipped |
+| `( image_blit dst src dx dy )` | clipped; source-over blend when src has alpha |
 
-- **Decode** (baseline / sequential DCT, Huffman): 8-bit, greyscale or YCbCr,
-  any 4:4:4 / 4:2:2 / 4:2:0 / 4:1:1 subsampling, and restart intervals. Full
-  segment parser (DQT / DHT / SOF0 / DRI / SOS), a separable float IDCT, box
-  chroma upsampling, and YCbCr→RGB.
-- **Not yet** (clean `None`): progressive, arithmetic coding, 12-bit, and
-  4-component (CMYK/YCCK).
+Colours are one packed int, `0xRRGGBBAA` — e.g. opaque red `4278190335`
+(0xFF0000FF). Grey targets take the BT.601 luma; targets without alpha drop
+A. Drawing overwrites; only `image_blit` blends.
 
-## Numerics / correctness
+## Format support
 
-PNG is lossless, so its decode and encode are **bit-exact**. JPEG is lossy and
-the spec permits IDCT variation, so decode matches a reference decoder
-(libjpeg, via Pillow) to within IDCT and chroma-upsampling rounding — not
-bit-exact, but close: on smooth content the max per-channel difference is a
-couple of counts for 4:4:4/greyscale (IDCT only) and single digits for 4:2:0
-(box vs Pillow's "fancy" upsampling).
+**PNG decode** — the full still-image matrix: bit depths 1/2/4/8/16 (deep
+samples scaled to 8-bit), all colour types (grey, RGB, palette→RGB,
+grey+alpha, RGBA), **Adam7 interlacing**, **tRNS** (palette alpha; grey/RGB
+colour keys add an alpha channel), all five scanline filters. Encode:
+8-bit, non-interlaced, filter 0 — lossless round-trip.
+
+**JPEG decode** — 8-bit Huffman, greyscale or YCbCr, any 4:4:4 / 4:2:2 /
+4:2:0 / 4:1:1 subsampling, restart intervals, sequential (SOF0/SOF1) and
+**progressive** (SOF2: spectral selection + successive approximation, the
+format most web JPEGs use). Decode matches libjpeg/Pillow to within
+IDCT/upsampling rounding; progressive output is bit-identical to the
+baseline decode of the same content. **Encode** — baseline JFIF, Annex K
+tables, libjpeg-style quality 1–100, 4:4:4 / 4:2:2 / 4:2:0; loss profile
+matches Pillow's encoder on the same content.
+
+Not supported (clean `None` + `image_error` reason, never an out-of-bounds
+read): JPEG arithmetic coding, 12-bit, lossless/hierarchical, CMYK/YCCK;
+images beyond 64 Mpx (JPEG) / 256 Mpx (PNG/PPM).
+
+## Hardening
+
+`tests/fuzz.nu` drives every decoder through deterministic truncation,
+point-mutation and LCG sweeps — 10k+ mutants per seed across six seed
+formats — under AddressSanitizer + LeakSanitizer with a hang timeout.
+Malformed input gets a clean `None`; JPEG SOF sanity (sampling factors,
+dimension caps) and a PNG preflight (pixel data must actually be present
+before the output raster is allocated) keep hostile files from costing
+gigabytes.
 
 ## Tests
 
-`./tests/image_test.sh` builds `tests/roundtrip.nu` and checks against Pillow:
-PNG/PPM decode→encode is asserted **pixel-exact** (Pillow's adaptive filtering
-exercises every PNG filter), and baseline-JPEG decode (4:4:4 / 4:2:0 /
-greyscale) is asserted **within tolerance** of Pillow's own decode. Then it
-re-runs every decode/encode path under AddressSanitizer. Latest run: PNG
-pixel-exact; JPEG max-diff 2 / 6 / 1; **ASan-clean**. Skips cleanly without
-Pillow.
+`./tests/image_test.sh` — deterministic ops checks (no references needed),
+then against Pillow: PNG/PPM round-trips pixel-exact, a 16-case
+hand-crafted PNG feature matrix (Pillow can't even write most of them)
+pixel-exact, JPEG decode within tolerance (baseline + progressive), JPEG
+encode re-decoded by Pillow, CLI smoke tests, the fuzz sweeps, and an ASan
+pass over everything. Skips the reference parts cleanly without Pillow.
 
 ## Roadmap
 
-- Interlaced (Adam7) PNG, sub-8-bit depths, `tRNS`; "fancy" (triangle) chroma
-  upsampling for closer JPEG parity.
-- Wire objdet / yoloe / chart to `image_load` `.png`/`.jpg` directly and delete
-  the `convert` step.
+- Wire objdet / yoloe / chart to `image_load` and delete their private
+  PPM/resize/draw copies.
+- "Fancy" (triangle) chroma upsampling for closer 4:2:0 parity; optional
+  PNG adaptive filtering for smaller encodes.

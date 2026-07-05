@@ -99,7 +99,10 @@ $ `image.nu`
             ^ 0
         }
         F _ → {
-            ( nurl_eprintln `img: cannot decode (unsupported or corrupt file)` )
+            : String em ( string_from `img: cannot decode — ` )
+            ( string_push_str em ( image_error ) )
+            ( nurl_eprintln ( string_data em ) )
+            ( string_free em )
             ^ 1
         }
     }
@@ -223,7 +226,10 @@ $ `image.nu`
             }
         }
         F _ → {
-            ( nurl_eprintln `img: cannot decode input (unsupported or corrupt file)` )
+            : String em ( string_from `img: cannot decode input — ` )
+            ( string_push_str em ( image_error ) )
+            ( nurl_eprintln ( string_data em ) )
+            ( string_free em )
             = rc 1
         }
     }
