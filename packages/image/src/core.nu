@@ -61,7 +61,12 @@ $ `stdlib/std/bytes.nu`
 
 // ── Pixel access ──────────────────────────────────────────────────────
 
+// -1 when (x,y,c) is outside the raster — callers treat that as "no pixel"
+// (image_get reads 0, image_set is a no-op). Without the guard an x just past
+// the row edge would silently wrap onto the next row.
 @ __px_idx Image im i x i y i c → i {
+    ? || || < x 0 < y 0 || >= x . im width >= y . im height { ^ -1 } {}
+    ? || < c 0 >= c . im channels { ^ -1 } {}
     : i pix + * y . im width x
     ^ + * pix . im channels c
 }

@@ -15,6 +15,7 @@
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/fs.nu`
 $ `core.nu`
+$ `ops.nu`
 $ `png.nu`
 $ `jpeg.nu`
 

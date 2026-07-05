@@ -19,12 +19,25 @@ if [ -n "${NURL:-}" ]; then :;
 elif [ -x "$REPO_ROOT/nurl.sh" ]; then NURL="$REPO_ROOT/nurl.sh"; export NURL_STDLIB="${NURL_STDLIB:-$REPO_ROOT}";
 else NURL="nurl"; fi
 
-if ! python3 -c "import PIL, numpy" 2>/dev/null; then
-    echo "  (skipped — python3 + Pillow + numpy not available)"; exit 0
-fi
-
 WORK="$(mktemp -d -t image-test.XXXXXX)"
 trap 'rm -rf "$WORK"' EXIT
+
+echo "[ops] build + run tests/ops.nu (deterministic, no references)"
+if ! $NURL tests/ops.nu "$WORK/ops" >/dev/null 2>"$WORK/ops_build.err"; then
+    echo "FAIL: could not build ops:"; tail -8 "$WORK/ops_build.err"; exit 1
+fi
+if ! "$WORK/ops" | sed 's/^/  /'; then echo "== image tests: FAIL"; exit 1; fi
+if NURL_SAN=1 $NURL tests/ops.nu "$WORK/ops_san" >/dev/null 2>&1; then
+    if "$WORK/ops_san" >"$WORK/ops_san.out" 2>&1 && ! grep -qE "ERROR: AddressSanitizer|detected memory leaks" "$WORK/ops_san.out"; then
+        echo "  PASS ops ASan clean"
+    else
+        echo "  FAIL ops under ASan"; tail -5 "$WORK/ops_san.out"; exit 1
+    fi
+fi
+
+if ! python3 -c "import PIL, numpy" 2>/dev/null; then
+    echo "  (codec reference checks skipped — python3 + Pillow + numpy not available)"; exit 0
+fi
 
 echo "[1/4] build tests/roundtrip.nu"
 if ! $NURL tests/roundtrip.nu "$WORK/roundtrip" >/dev/null 2>"$WORK/build.err"; then
