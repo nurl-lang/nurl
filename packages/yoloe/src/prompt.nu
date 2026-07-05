@@ -1,6 +1,6 @@
 // packages/yoloe/src/prompt.nu — RUNTIME-promptable open-vocabulary detection.
 //
-//   yoloe-prompt <model.onnx> <tpe.f32> <classes.txt> <image.ppm> [out.ppm]
+//   yoloe-prompt <model.onnx> <tpe.f32> <classes.txt> <img> [out]
 //
 // Unlike src/main.nu (whose vocabulary is baked into the model at export
 // time), this takes the prompt text embeddings as a *runtime input*: the
@@ -25,15 +25,18 @@ $ `decode.nu`
 & `c` @ nurl_peek_f32 *u base i idx → f
 
 @ p s m → v { ( nurl_print m ) }
+
 @ pf f x → v { ( nurl_print ( nurl_str_float x ) ) }
+
 @ pn i n → v { ( nurl_print ( nurl_str_int n ) ) }
 
-@ load_f32 s path *u pcell → *u {
+@ load_f32 s path * u pcell → *u {
     ?? ( read_file_bytes path ) {
         T b → { : i n / ( vec_len [u] b ) 4 : *u h ( nurl_alloc * n 4 )
             : *PbR r ( pb_new b ) ( pb_read_f32_into r h n ) ( pb_free r ) ( nurl_poke pcell 0 n ) ^ h }
         F _ → { ( nurl_poke pcell 0 0 ) ^ # *u 0 } }
 }
+
 @ read_names s path → ( Vec String ) {
     : ( Vec String ) out ( vec_new [String] )
     ?? ( read_file_bytes path ) {
@@ -52,15 +55,18 @@ $ `decode.nu`
     }
     ^ out
 }
+
 @ name_at ( Vec String ) names i i → s { ?? ( vec_get [String] names i ) { T s → ^ ( string_data s ) F _ → ^ `?` } }
+
 @ shape4 i a i b i c i d → ( Vec i ) { : ( Vec i ) v ( vec_new [i] )
     ( vec_push [i] v a ) ( vec_push [i] v b ) ( vec_push [i] v c ) ( vec_push [i] v d ) ^ v }
+
 @ shape3 i a i b i c → ( Vec i ) { : ( Vec i ) v ( vec_new [i] )
     ( vec_push [i] v a ) ( vec_push [i] v b ) ( vec_push [i] v c ) ^ v }
 
 @ main → i {
     : ( Vec String ) av ( env_args_list )
-    ? < ( vec_len [String] av ) 5 { ( p `usage: yoloe-prompt <model.onnx> <tpe.f32> <classes.txt> <image.ppm> [out.ppm]\n` ) ^ 2 } {}
+    ? < ( vec_len [String] av ) 5 { ( p `usage: yoloe-prompt <model.onnx> <tpe.f32> <classes.txt> <img> [out]\n` ) ^ 2 } {}
     : String mp ?? ( vec_get [String] av 1 ) { T x → x F _ → ( string_new ) }
     : String tp ?? ( vec_get [String] av 2 ) { T x → x F _ → ( string_new ) }
     : String np ?? ( vec_get [String] av 3 ) { T x → x F _ → ( string_new ) }
@@ -83,7 +89,7 @@ $ `decode.nu`
     ?? ( read_file_bytes ( string_data mp ) ) { T mb → { = g ( onnx_parse mb ) = have T } F _ → {} }
     ? ! have { ( p `cannot read model\n` ) ^ 1 } {}
 
-    ?? ( ppm_read ( string_data ip ) ) {
+    ?? ( img_load ( string_data ip ) ) {
         T im → {
             ( p `image ` ) ( pn ( img_w im ) ) ( p `x` ) ( pn ( img_h im ) ) ( p `\n` )
             : Letterbox lb ( letterbox im 640 )
@@ -122,10 +128,10 @@ $ `decode.nu`
             ( rt_close e )
             ? > ( vec_len [String] av ) 5 {
                 : String outp ?? ( vec_get [String] av 5 ) { T x → x F _ → ( string_new ) }
-                ? ( ppm_write ( string_data outp ) im ) { ( p `wrote ` ) ( p ( string_data outp ) ) ( p `\n` ) } { ( p `write failed\n` ) }
+                ? ( img_save ( string_data outp ) im ) { ( p `wrote ` ) ( p ( string_data outp ) ) ( p `\n` ) } { ( p `write failed\n` ) }
             } {}
             ^ 0
         }
-        F _ → { ( p `cannot read image (PPM P6 expected)\n` ) ^ 1 }
+        F _ → { ( p `cannot read image: ` ) ( p ( image_error ) ) ( p `\n` ) ^ 1 }
     }
 }
