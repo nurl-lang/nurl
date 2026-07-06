@@ -1307,11 +1307,18 @@ $ `stdlib/std/bytes.nu`
 
 // ── login / logout ───────────────────────────────────────────────
 
+// Read a secret from the terminal with echo off (termios on POSIX, console
+// mode on Windows; falls back to echoed input on WASI / when stdin isn't a
+// tty). The runtime prints the prompt to stderr and returns the entered
+// line with the trailing newline stripped. Same builtin packages/psql uses
+// for its password prompt.
+& `c` @ nurl_read_password s prompt → s
+
 @ __cmd_login → i {
     : String reg ( __reg_default )
     ( nurl_print `Registry: ` ) ( nurl_print ( string_data reg ) ) ( nurl_print `\n` )
-    ( nurl_print `Paste a publish token (get one at <registry>/login): ` )
-    : String token ( read_line )
+    // Hidden entry: the pasted token must not echo to the screen.
+    : String token ( string_from ( nurl_read_password `Paste a publish token (get one at <registry>/login): ` ) )
     : ~ i rc 0
     ? == ( string_len token ) 0 {
         ( nurl_eprintln `nurlpkg: empty token; aborted` )
@@ -1644,6 +1651,27 @@ $ `stdlib/std/bytes.nu`
     ^ ok
 }
 
+// Print the freshly-installed package's [hints].postinstall message, if it
+// declares one. Best-effort: any manifest read/parse trouble is silent —
+// a missing hint must never make a successful install look like a failure.
+@ __print_postinstall s pkgdir → v {
+    : String mfp ( string_from pkgdir )
+    ( string_push_str mfp `/nurl.toml` )
+    : !Manifest ManifestErr mr ( manifest_load ( string_data mfp ) )
+    ( string_free mfp )
+    ?? mr {
+        T m → {
+            ? > ( string_len . m postinstall ) 0 {
+                ( nurl_print `\n` )
+                ( nurl_print ( string_data . m postinstall ) )
+                ( nurl_print `\n` )
+            } {}
+            ( manifest_free m )
+        }
+        F _ → {}
+    }
+}
+
 // pkgdir (absolute) holds the unpacked package (nurl.toml + src/main.nu).
 // Resolve its deps in-process, build the entry point, and install the
 // binary into bindir/name. Cross-platform: uses fs primitives + a
@@ -1714,6 +1742,8 @@ $ `stdlib/std/bytes.nu`
                 } {}
                 ( nurl_print `Installed ` ) ( nurl_print name )
                 ( nurl_print ` → ` ) ( nurl_print ( string_data dest ) ) ( nurl_print `\n` )
+                // Show the package's [hints].postinstall message, if any.
+                ( __print_postinstall pkgdir )
             }
         }
         ( string_free outbin )
