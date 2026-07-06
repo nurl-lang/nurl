@@ -80,6 +80,34 @@ export async function extractReadme(
   return findReadmeInTar(new Uint8Array(ab));
 }
 
+// Pull `[package].repository` out of the published tarball's nurl.toml.
+// Returns the URL string, or null when absent/unreadable. Deliberately a
+// tiny line-scan rather than a full TOML parser: we only need one scalar,
+// and the registry must never break a package page over a manifest quirk.
+export async function extractManifestRepository(
+  bucket: R2Bucket,
+  name: string,
+  version: string,
+): Promise<string | null> {
+  const obj = await bucket.get(`pkgs/${name}/${name}-${version}.tar.gz`);
+  if (!obj || !obj.body) return null;
+  const ab = await new Response(obj.body.pipeThrough(new DecompressionStream("gzip"))).arrayBuffer();
+  const hit = findInTar(new Uint8Array(ab), (p) => p.replace(/^\.\//, "") === "nurl.toml");
+  if (!hit) return null;
+  const toml = new TextDecoder().decode(hit.data);
+  // `repository = "..."` under [package]; stop at the next table header so a
+  // stray `repository` key in another section can't be mistaken for it.
+  let inPackage = false;
+  for (const raw of toml.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (line.startsWith("[")) { inPackage = line === "[package]"; continue; }
+    if (!inPackage) continue;
+    const m = line.match(/^repository\s*=\s*"([^"]*)"/);
+    if (m) return m[1] || null;
+  }
+  return null;
+}
+
 // Fetch + gunzip a published tarball and return the bytes of the member at
 // the exact relative path `rel` (e.g. `docs/demo.png`), or null if missing.
 // Used to serve README-referenced assets (images) straight from the tarball.
