@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.1
+
+- Manifest only: the gpu dependency range is `^0.3` (0.3.0 was published
+  with `^0.2`, which is disjoint from onnx 0.5.0's `^0.3` — a resolver
+  could try to install two gpu versions side by side).
+
 ## 0.3.0
 
 Device-resident layer (`src/dev.nu`) — data stays on the GPU between ops:
