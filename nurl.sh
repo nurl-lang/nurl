@@ -264,7 +264,9 @@ fi
 
 # Auto-link the canvas back-end and SDL2 if the program calls into the
 # canvas_* FFI. Otherwise a plain `clang runtime.o` is enough.
-EXTRA_OBJS=""
+# Extra objects for the link (e.g. a generated kernels_static.o for the
+# gpu package's static backend): NURL_EXTRA_OBJS="a.o b.o".
+EXTRA_OBJS="${NURL_EXTRA_OBJS:-}"
 EXTRA_LIBS=""
 
 # Runtime TLS resolves OpenSSL at runtime via dlopen/dlsym, so runtime.o has

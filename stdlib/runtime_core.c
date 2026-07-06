@@ -889,7 +889,22 @@ void nurl_poke_f32(void *base, long long idx, double val) {
  * tiny generic thunk (1 pointer + params + two i64 dims) bridges the gap. No
  * CUDA/GPU dependency; pure and always available. */
 void nurl_cpu_launch(void *fn, void *params, long long grid, long long block) {
-    if (fn) ((void (*)(void **, long long, long long))fn)((void **)params, grid, block);
+    /* params is an array of 8-byte cells (i64 addresses/values) — the
+     * launcher reads it as long long* so the stride survives wasm32,
+     * where void** would walk 4-byte slots. */
+    if (fn) ((void (*)(long long *, long long, long long))fn)((long long *)params, grid, block);
+}
+
+/* Static-kernel registry hook. A build that links a generated
+ * kernels_static.c (see packages/gpu tools) provides the strong
+ * definition, mapping a kernel entry name to its precompiled serial
+ * launcher — the no-compiler backend used by wasm builds (no dlopen, no
+ * system C++ compiler in a browser) and by static native binaries. This
+ * weak default keeps every other link working: the static backend then
+ * reports "no kernels linked" and gpu_open falls through. */
+__attribute__((weak)) void *nurl_static_kernel(const char *name) {
+    (void)name;
+    return 0;
 }
 
 /* Recursively reclaim a Vec/String backing store. `ctl` is the Vec
