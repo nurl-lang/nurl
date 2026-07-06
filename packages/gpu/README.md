@@ -77,7 +77,7 @@ backend (ROCm/HIP, OpenCL, a CPU fallback) slots in behind the same names.
 | function | purpose |
 |---|---|
 | `gpu_device_count → i` | number of CUDA devices |
-| `gpu_open i ordinal → Gpu` | init driver, bind device, create context |
+| `gpu_open i ordinal → Gpu` | init driver, bind device, retain the PRIMARY context (shared process-wide) |
 | `gpu_ok Gpu → b` / `gpu_name Gpu → s` | status / device name |
 | `gpu_compile Gpu s src s name → GpuKernel` | NVRTC compile + load `extern "C" __global__` entry |
 | `gpu_alloc Gpu i bytes → GpuBuffer` | device allocation |

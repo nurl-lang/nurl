@@ -28,7 +28,9 @@ $ `cpu.nu`
 // process is the norm (a program opens one device), so a global is enough and
 // keeps the Gpu / GpuKernel / GpuBuffer value structs unchanged.
 : ~ i __gpu_backend 0
+
 @ gpu_backend → i { ^ __gpu_backend }
+
 @ gpu_is_cpu → b { ^ == __gpu_backend 1 }
 
 // Force the CPU backend with NURL_GPU=cpu (so a model runs with no GPU, or to
@@ -40,9 +42,9 @@ $ `cpu.nu`
 }
 
 // ── handle types ──────────────────────────────────────────────────
-: Gpu { i ordinal  i dev  i ctx }       // an initialised device + context
-: GpuKernel { i module  i func }         // a compiled, loaded __global__ fn
-: GpuBuffer { i dptr  i bytes }          // a device-memory allocation
+: Gpu { i ordinal i dev i ctx }  // an initialised device + context
+: GpuKernel { i module i func }  // a compiled, loaded __global__ fn
+: GpuBuffer { i dptr i bytes }  // a device-memory allocation
 
 // ── device lifecycle ──────────────────────────────────────────────
 
@@ -72,7 +74,7 @@ $ `cpu.nu`
 // Human-readable device name (e.g. "NVIDIA GeForce RTX 4090", or "CPU").
 @ gpu_name Gpu g → s { ? == __gpu_backend 1 { ^ `CPU (host C++)` } { ^ ( cuda_device_name . g dev ) } }
 
-@ gpu_close Gpu g → v { ? == __gpu_backend 0 { ( cuda_ctx_destroy . g ctx ) } {} }
+@ gpu_close Gpu g → v { ? == __gpu_backend 0 { ( cuda_ctx_destroy_dev . g dev ) } {} }
 
 // Block until all submitted work on the context completes. 0 == success.
 // The CPU backend runs kernels synchronously, so there is nothing to await.
@@ -94,7 +96,7 @@ $ `cpu.nu`
     : *u ptx ( cuda_compile src name )
     ? == # i ptx 0 { ^ @ GpuKernel { 0 0 } } {}
     : i mod ( cuda_module_load ptx )
-    ( nurl_free ptx )   // the module keeps its own copy of the PTX
+    ( nurl_free ptx )  // the module keeps its own copy of the PTX
     ? == mod 0 { ^ @ GpuKernel { 0 0 } } {}
     : i fn ( cuda_function mod name )
     ^ @ GpuKernel { mod fn }
@@ -111,11 +113,16 @@ $ `cpu.nu`
 // f32 is the GPU-native element type; these address it at 4-byte stride.
 
 @ gpu_host_alloc i bytes → *u { ^ ( nurl_alloc bytes ) }
-@ gpu_host_free *u buf → v { ( nurl_free buf ) }
-@ gpu_host_set_f32 *u buf i idx f v → v { ( nurl_poke_f32 buf idx v ) }
-@ gpu_host_get_f32 *u buf i idx → f { ^ ( nurl_peek_f32 buf idx ) }
-@ gpu_host_set_i32 *u buf i idx i v → v { ( nurl_poke_i32 buf idx v ) }
-@ gpu_host_get_i32 *u buf i idx → i { ^ # i ( nurl_peek_i32 buf idx ) }
+
+@ gpu_host_free * u buf → v { ( nurl_free buf ) }
+
+@ gpu_host_set_f32 * u buf i idx f v → v { ( nurl_poke_f32 buf idx v ) }
+
+@ gpu_host_get_f32 * u buf i idx → f { ^ ( nurl_peek_f32 buf idx ) }
+
+@ gpu_host_set_i32 * u buf i idx i v → v { ( nurl_poke_i32 buf idx v ) }
+
+@ gpu_host_get_i32 * u buf i idx → i { ^ # i ( nurl_peek_i32 buf idx ) }
 
 // ── device memory ─────────────────────────────────────────────────
 
@@ -127,13 +134,21 @@ $ `cpu.nu`
 @ gpu_free GpuBuffer b → v { ? == __gpu_backend 1 { ( cpu_free . b dptr ) } { ( cuda_free . b dptr ) } }
 
 // Copy the buffer's worth of bytes host → device. 0 == success.
-@ gpu_upload GpuBuffer dst *u host → i {
+@ gpu_upload GpuBuffer dst * u host → i {
     ? == __gpu_backend 1 { ^ ( cpu_htod . dst dptr host . dst bytes ) } {}
     ^ ( cuda_htod . dst dptr host . dst bytes )
 }
 
+// Device → device copy of dst's worth of bytes from a raw device pointer.
+// 0 == success. Both allocations live in the process's shared (primary)
+// context, so any package's buffer is a valid source.
+@ gpu_dtod GpuBuffer dst i src_dptr → i {
+    ? == __gpu_backend 1 { ^ ( cpu_htod . dst dptr # *u src_dptr . dst bytes ) } {}
+    ^ ( cuda_dtod . dst dptr src_dptr . dst bytes )
+}
+
 // Copy the buffer's worth of bytes device → host. 0 == success.
-@ gpu_download *u host GpuBuffer src → i {
+@ gpu_download * u host GpuBuffer src → i {
     ? == __gpu_backend 1 { ^ ( cpu_dtoh host . src dptr . src bytes ) } {}
     ^ ( cuda_dtoh host . src dptr . src bytes )
 }
@@ -144,9 +159,9 @@ $ `cpu.nu`
 // a 4-byte int/float occupying the low bytes of an 8-byte cell is correct
 // on little-endian.
 
-@ gpu_arg_buffer GpuBuffer b → i { ^ . b dptr }   // device pointer
-@ gpu_arg_i32 i v → i { ^ v }                          // 32-bit int scalar
-@ gpu_arg_i64 i v → i { ^ v }                          // 64-bit int scalar
+@ gpu_arg_buffer GpuBuffer b → i { ^ . b dptr }  // device pointer
+@ gpu_arg_i32 i v → i { ^ v }  // 32-bit int scalar
+@ gpu_arg_i64 i v → i { ^ v }  // 64-bit int scalar
 @ gpu_arg_f32 f v → i { ^ ( nurl_f32_to_bits # f32 v ) }  // 32-bit float scalar
 
 // ── launch ────────────────────────────────────────────────────────
