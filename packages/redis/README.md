@@ -30,15 +30,17 @@ cd packages/redis
 
 ```
 redis [flags] ["redis://[user:pass@]host:port/db"]
-  -h HOST        host          (default $REDIS_HOST or 127.0.0.1)
-  -p PORT        port          (default $REDIS_PORT or 6379)
-  -a PASSWORD    AUTH password (default $REDIS_PASSWORD)
-  --user USER    ACL username for AUTH (Redis 6+)
-  -n DB          SELECT database index (default 0)
-  --tls          connect over TLS (verify-full)
-  --insecure     with --tls / rediss://, skip certificate verification
-  -c "CMD ARGS"  run one command and exit; otherwise start a REPL
+  -h, --host HOST      host          (default $REDIS_HOST or 127.0.0.1)
+  -p, --port PORT      port          (default $REDIS_PORT or 6379)
+  -a, --password PASS  AUTH password (default $REDIS_PASSWORD)
+      --user USER      ACL username for AUTH (Redis 6+)
+  -n, --db DB          SELECT database index (default 0)
+      --tls            connect over TLS (verify-full)
+      --insecure       with --tls / rediss://, skip certificate verification
+  -c, --command "CMD"  run one command and exit; otherwise start a REPL
 ```
+
+Flags are parsed by the [cli package](../cli) (`--help` for the full list).
 
 ```sh
 redis -c "PING"                                   # "PONG"

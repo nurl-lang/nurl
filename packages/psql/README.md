@@ -52,7 +52,7 @@ psql --sslmode require -U me -d mydb -c "select * from t"
 psql "postgres://me:secret@db.example.com:5432/mydb?sslmode=verify-full" -c "select now()"
 ```
 
-Run `psql --help` (or `-?`) for a usage summary. The password is taken from
+Run `psql --help` for a usage summary (flags are parsed by the cli package). The password is taken from
 `$PGPASSWORD` or the URL; if the server asks for one and neither is set, you
 are prompted for it on the terminal (with echo off, like the real `psql`).
 `-h/-p/-U/-d` fall back to `$PGHOST/$PGPORT/$PGUSER/$PGDATABASE`. With no

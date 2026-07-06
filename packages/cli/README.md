@@ -68,6 +68,7 @@ Commands — the handler is `( @ i CliCtx )`, returning an exit code:
 | Call | |
 | --- | --- |
 | `( cli_cmd c name help handler )` | register a subcommand |
+| `( cli_default c handler )` | the default command — runs on a bare invocation or when no subcommand matches (psql/redis-cli-style tools where the program *is* the command; positionals such as a connection URL stay readable via `ctx_arg`) |
 
 Inside a handler, read from the `CliCtx`:
 
@@ -93,11 +94,15 @@ Interactive prompts (write to stderr; TTY-aware):
 
 - **`--help` / `-h`** — auto-generated global help (usage, aligned command
   list, options with defaults and env vars). `prog <cmd> --help` gives the
-  command's help. **`--version`** prints `prog version`.
+  command's help. **`--version`** prints `prog version`. If one of *your*
+  flags claims short `-h` (psql-style `-h HOST`), the built-in help
+  automatically yields the short and stays reachable as `--help`.
 - **Colour** is decided once: on only when stdout is a TTY and `$NO_COLOR`
   is unset. Piped output is plain.
 - **Exit codes** — a command returns its own; unknown command or a parse
-  error is `2`; a bare invocation with no command prints help and exits `1`.
+  error is `2`; a bare invocation with no command prints help and exits `1` —
+  unless a `cli_default` is registered, in which case both a bare invocation
+  and an unmatched first token route to it (the token becomes `ctx_arg 0`).
 - **Flag resolution** — an explicit `--flag` wins, else the bound env var,
   else the declared default.
 
