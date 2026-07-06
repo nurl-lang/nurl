@@ -14,14 +14,14 @@ $ `deps/gpu/src/gpu.nu`
 
 // Compiled kernels, built once and reused across nodes.
 : Kernels {
-    GpuKernel gemm   GpuKernel relu
-    GpuKernel conv   GpuKernel pool
-    GpuKernel bn     GpuKernel lrelu  GpuKernel elt
-    GpuKernel sig    GpuKernel resize GpuKernel perm
-    GpuKernel softm  GpuKernel cpyax
-    GpuKernel rl2    GpuKernel clip   GpuKernel expand  GpuKernel slice
-    GpuKernel lnorm  GpuKernel erf    GpuKernel gather  GpuKernel bmm  GpuKernel amax
-    GpuKernel eos    GpuKernel convt
+    GpuKernel gemm GpuKernel relu
+    GpuKernel conv GpuKernel pool
+    GpuKernel bn GpuKernel lrelu GpuKernel elt
+    GpuKernel sig GpuKernel resize GpuKernel perm
+    GpuKernel softm GpuKernel cpyax
+    GpuKernel rl2 GpuKernel clip GpuKernel expand GpuKernel slice
+    GpuKernel lnorm GpuKernel erf GpuKernel gather GpuKernel bmm GpuKernel amax GpuKernel amax64
+    GpuKernel eos GpuKernel convt
     b ok
 }
 
@@ -279,6 +279,7 @@ $ `deps/gpu/src/gpu.nu`
         for (int j=0;j<ax;j++) q[j] = (p[j]-m)*inv*sc[j] + bi[j];
     }`
 }
+
 @ __k_erf → s {
     ^ `extern "C" __global__ void erfk(const float* X, float* Y, int n) {
         int i = blockIdx.x*blockDim.x + threadIdx.x;
@@ -326,6 +327,19 @@ $ `deps/gpu/src/gpu.nu`
 // CLIP EOS read-out: given per-row sequences `tok` [B,L] (int64) and the
 // transformer output `data` [B,L,D], select each row's EOS token (the
 // argmax token id) features → Y [B,D]. One thread per output element.
+// Same, over int64 input (CLIP token ids: the EOT position is the row's
+// max id). Output int64 indices, one per outer row.
+@ __k_amax_i64 → s {
+    ^ `extern "C" __global__ void argmaxk_i64(const long long* X, long long* Y, int outer, int ax) {
+        int o = blockIdx.x*blockDim.x + threadIdx.x;
+        if (o >= outer) return;
+        const long long* p = X + o*ax;
+        int bi = 0; long long bv = p[0];
+        for (int j=1;j<ax;j++){ if (p[j]>bv){ bv=p[j]; bi=j; } }
+        Y[o] = bi;
+    }`
+}
+
 @ __k_eosgather → s {
     ^ `extern "C" __global__ void eos_gather(const float* data, const long long* tok,
         float* Y, int B, int L, int D) {
@@ -387,15 +401,16 @@ $ `deps/gpu/src/gpu.nu`
     : GpuKernel kga ( gpu_compile g ( __k_gather ) `gather` )
     : GpuKernel kbm ( gpu_compile g ( __k_bmm ) `bmm` )
     : GpuKernel kam ( gpu_compile g ( __k_amax ) `argmaxk` )
+    : GpuKernel ka6 ( gpu_compile g ( __k_amax_i64 ) `argmaxk_i64` )
     : GpuKernel keo ( gpu_compile g ( __k_eosgather ) `eos_gather` )
     : GpuKernel kct ( gpu_compile g ( __k_convt ) `convtranspose2d` )
     : b ok1 & & & ( gpu_kernel_ok kg ) ( gpu_kernel_ok kr ) & ( gpu_kernel_ok kc ) ( gpu_kernel_ok kp )
-            & & ( gpu_kernel_ok kb ) ( gpu_kernel_ok kl ) ( gpu_kernel_ok ke )
+    & & ( gpu_kernel_ok kb ) ( gpu_kernel_ok kl ) ( gpu_kernel_ok ke )
     : b ok2 & & ( gpu_kernel_ok ksg ) ( gpu_kernel_ok krz )
-            & & ( gpu_kernel_ok kpm ) ( gpu_kernel_ok ksm ) ( gpu_kernel_ok kcp )
+    & & ( gpu_kernel_ok kpm ) ( gpu_kernel_ok ksm ) ( gpu_kernel_ok kcp )
     : b ok3 & & & ( gpu_kernel_ok krl ) ( gpu_kernel_ok kcl ) ( gpu_kernel_ok kex ) ( gpu_kernel_ok ksl )
-    : b ok4 & & & & & & ( gpu_kernel_ok kln ) ( gpu_kernel_ok ker ) ( gpu_kernel_ok kga ) ( gpu_kernel_ok kbm ) ( gpu_kernel_ok kam ) ( gpu_kernel_ok keo ) ( gpu_kernel_ok kct )
-    ^ @ Kernels { kg kr kc kp kb kl ke ksg krz kpm ksm kcp krl kcl kex ksl kln ker kga kbm kam keo kct & & & ok1 ok2 ok3 ok4 }
+    : b ok4 & & & & & & & ( gpu_kernel_ok kln ) ( gpu_kernel_ok ker ) ( gpu_kernel_ok kga ) ( gpu_kernel_ok kbm ) ( gpu_kernel_ok kam ) ( gpu_kernel_ok ka6 ) ( gpu_kernel_ok keo ) ( gpu_kernel_ok kct )
+    ^ @ Kernels { kg kr kc kp kb kl ke ksg krz kpm ksm kcp krl kcl kex ksl kln ker kga kbm kam ka6 keo kct & & & ok1 ok2 ok3 ok4 }
 }
 
 @ ops_free Kernels ks → v {
@@ -427,12 +442,14 @@ $ `deps/gpu/src/gpu.nu`
     ( gpu_launch . ks lnorm ( gpu_grid outer 256 ) 256 a )
     ( vec_free [i] a ) ^ yd
 }
+
 @ op_erf Gpu g Kernels ks i xd i yd i n → i {
     : ( Vec i ) a ( vec_new [i] )
     ( vec_push [i] a ( gpu_arg_i64 xd ) ) ( vec_push [i] a ( gpu_arg_i64 yd ) ) ( vec_push [i] a ( gpu_arg_i32 n ) )
     ( gpu_launch . ks erf ( gpu_grid n 256 ) 256 a )
     ( vec_free [i] a ) ^ yd
 }
+
 @ op_gather Gpu g Kernels ks i dd i idd i yd i outer i axis_in i inner i nidx → i {
     : ( Vec i ) a ( vec_new [i] )
     ( vec_push [i] a ( gpu_arg_i64 dd ) ) ( vec_push [i] a ( gpu_arg_i64 idd ) ) ( vec_push [i] a ( gpu_arg_i64 yd ) )
@@ -441,6 +458,7 @@ $ `deps/gpu/src/gpu.nu`
     ( gpu_launch . ks gather ( gpu_grid total 256 ) 256 a )
     ( vec_free [i] a ) ^ yd
 }
+
 @ op_bmm Gpu g Kernels ks i ad i bd i yd i batch i M i N i K → i {
     : ( Vec i ) a ( vec_new [i] )
     ( vec_push [i] a ( gpu_arg_i64 ad ) ) ( vec_push [i] a ( gpu_arg_i64 bd ) ) ( vec_push [i] a ( gpu_arg_i64 yd ) )
@@ -449,11 +467,20 @@ $ `deps/gpu/src/gpu.nu`
     ( gpu_launch . ks bmm ( gpu_grid total 256 ) 256 a )
     ( vec_free [i] a ) ^ yd
 }
+
 @ op_argmax Gpu g Kernels ks i xd i yd i outer i ax → i {
     : ( Vec i ) a ( vec_new [i] )
     ( vec_push [i] a ( gpu_arg_i64 xd ) ) ( vec_push [i] a ( gpu_arg_i64 yd ) )
     ( vec_push [i] a ( gpu_arg_i32 outer ) ) ( vec_push [i] a ( gpu_arg_i32 ax ) )
     ( gpu_launch . ks amax ( gpu_grid outer 256 ) 256 a )
+    ( vec_free [i] a ) ^ yd
+}
+
+@ op_argmax_i64 Gpu g Kernels ks i xd i yd i outer i ax → i {
+    : ( Vec i ) a ( vec_new [i] )
+    ( vec_push [i] a ( gpu_arg_i64 xd ) ) ( vec_push [i] a ( gpu_arg_i64 yd ) )
+    ( vec_push [i] a ( gpu_arg_i32 outer ) ) ( vec_push [i] a ( gpu_arg_i32 ax ) )
+    ( gpu_launch . ks amax64 ( gpu_grid outer 256 ) 256 a )
     ( vec_free [i] a ) ^ yd
 }
 
@@ -474,6 +501,7 @@ $ `deps/gpu/src/gpu.nu`
     ( gpu_launch . ks rl2 ( gpu_grid outer 256 ) 256 a )
     ( vec_free [i] a ) ^ yd
 }
+
 @ op_clip Gpu g Kernels ks i xd i yd i n f lo f hi → i {
     : ( Vec i ) a ( vec_new [i] )
     ( vec_push [i] a ( gpu_arg_i64 xd ) ) ( vec_push [i] a ( gpu_arg_i64 yd ) ) ( vec_push [i] a ( gpu_arg_i32 n ) )
@@ -481,6 +509,7 @@ $ `deps/gpu/src/gpu.nu`
     ( gpu_launch . ks clip ( gpu_grid n 256 ) 256 a )
     ( vec_free [i] a ) ^ yd
 }
+
 @ op_expand Gpu g Kernels ks i xd i yd i outer i rep → i {
     : ( Vec i ) a ( vec_new [i] )
     ( vec_push [i] a ( gpu_arg_i64 xd ) ) ( vec_push [i] a ( gpu_arg_i64 yd ) )

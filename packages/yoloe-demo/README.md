@@ -62,12 +62,42 @@ self-signed-certificate warning:
 | `--tls` | off | HTTPS with a fresh self-signed cert |
 | `--page FILE` | `views/index.html` | the demo page template |
 
+## Free-text prompting
+
+With the **promptable export**, the vocabulary is no longer baked in: type
+anything — `coffee mug`, `red car`, `a person waving` — press Enter (or
+comma, or *Add*), and the server tokenizes the text with the CLIP BPE
+(pure NURL), runs the **MobileCLIP text encoder on the GPU through the
+same onnx runtime** (~65 ms), writes the embedding into a free prompt
+slot, and the very next frame detects it. New chips toggle like the seed
+ones. The K=32-slot graph keeps unused slots inert (zero embeddings).
+
+```sh
+# one-time exports (torch + ultralytics + onnxsim in a venv; see tools/)
+python tools/export_promptable.py ~/yoloe-export
+python tools/export_text_encoder.py ~/yoloe-export
+
+./demo --model ~/yoloe-export/yoloe-promptable-k32.onnx \
+       --classes ~/yoloe-classes.txt \
+       --text-encoder ~/yoloe-export/text_encoder_n1.onnx
+```
+
+`POST /prompt` (body = the prompt text) → `{ id, name, n }`; 400 on an
+empty prompt, 409 when all 32 slots are used. The decode argmaxes only
+over *enabled* classes, so a custom prompt isn't shadowed by a disabled
+seed class of the same object (`a dog` 0.63 vs `dog` 0.88).
+
+Both graphs are verified against onnxruntime: the text encoder to ~4e-7
+per embedding, the K=32 detector to `PROMPTABLE FORWARD MATCH` on
+`packages/yoloe/tests/fwd2.nu`.
+
 ## The page
 
 * **Start camera** — streams the webcam through the model; **drop any
   image** on the page to run a single frame without a camera.
 * **Prompted classes** — chips toggle which of the model's prompt words
-  are shown (server-side filter).
+  are shown (server-side filter), and with `--text-encoder` a free-text
+  input adds new ones live.
 * **Confidence slider** and a **masks on/off** switch, applied per frame.
 * **Live stats** — fps, server inference ms, round-trip ms, object
   count, and a per-detection list.
@@ -116,7 +146,6 @@ available, so CI stays green.
   by NVRTC, so an in-browser build needs a WGSL backend for
   `packages/gpu` plus a wasm↔WebGPU host bridge. This demo is the
   host-GPU streaming architecture instead.
-* The model's vocabulary is baked at export time in this version.
-  `packages/yoloe/src/prompt.nu` already supports runtime text-prompt
-  embeddings (`tools/export_promptable.py`) — wiring a free-text prompt
-  box into this page is the natural next step.
+* With the plain `--model` export the vocabulary is baked at export
+  time; the promptable K=32 export + `--text-encoder` (see above) lifts
+  that at runtime.

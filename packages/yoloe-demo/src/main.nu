@@ -41,6 +41,7 @@ $ `stdlib/std/args.nu`
 $ `deps/onnx/src/pb.nu`
 $ `deps/onnx/src/model.nu`
 $ `deps/onnx/src/runtime.nu`
+$ `deps/yoloe/src/bpe.nu`
 $ `deps/yoloe/src/image.nu`
 $ `deps/yoloe/src/decode.nu`
 $ `deps/yoloe/src/mask.nu`
@@ -57,6 +58,11 @@ $ `deps/template/src/template.nu`
     String device
     String model_path
     String index_html  // pre-rendered demo page
+    // runtime prompting (kmax > 0 → the promptable K-slot export is loaded):
+    i kmax  // prompt slots baked into the detector graph (0 = baked vocab)
+    OGraph tgraph  // MobileCLIP text encoder (pure NURL on the GPU)
+    Tokenizer tk  // CLIP BPE tokenizer
+    ( Vec u ) tpe  // kmax×512 f32 text embeddings, zero-padded past nc
 }
 
 : ~ i g_st 0
@@ -162,12 +168,14 @@ $ `deps/template/src/template.nu`
     ^ != x 0.0
 }
 
-// per-class enable flags from `on=0,2,5`; no `on` param → all enabled
-@ yd_enabled ( Vec UrlParam ) ps i nc → ( Vec i ) {
+// per-class enable flags from `on=0,2,5`; no `on` param → all ACTIVE
+// classes enabled. `ncap` is the decode width (kmax in prompt mode) —
+// ids in [nc, ncap) are inert pad slots and stay off either way.
+@ yd_enabled ( Vec UrlParam ) ps i nc i ncap → ( Vec i ) {
     : ( Vec i ) flags ( vec_new [i] )
     : ~ b listed F
     : ~ i z 0
-    ~ < z nc { ( vec_push [i] flags 0 ) = z + z 1 }
+    ~ < z ncap { ( vec_push [i] flags 0 ) = z + z 1 }
     : i n ( vec_len [UrlParam] ps )
     : ~ i k 0
     ~ < k n {
@@ -206,6 +214,70 @@ $ `deps/template/src/template.nu`
     ^ flags
 }
 
+// Tokenize one prompt, run the text encoder on the GPU, and write the
+// 512-float embedding into tpe slot `slot`. The tokens ride as int64
+// [1,77]; the n1 text-encoder export ends in an L2 normalize, so the
+// slot lands in exactly the space the contrastive head was traced with.
+@ yd_encode_prompt * DemoState st s text i slot → b {
+    : *Engine e # *Engine . st eng
+    : ( Vec i ) row ( bpe_tokenize . st tk text 77 )
+    ? != ( vec_len [i] row ) 77 { ( vec_free [i] row ) ^ F } {}
+    : *u toks ( nurl_alloc * 77 8 )
+    : ~ i j 0
+    ~ < j 77 {
+        ( nurl_poke toks j ?? ( vec_get [i] row j ) { T x → x F _ → 0 } )
+        = j + j 1
+    }
+    ( vec_free [i] row )
+    : RTensor out ( rt_run_tokens e . st tgraph toks 1 77 )
+    : ~ b ok F
+    ? == . out nelem 512 {
+        : *u h ( rt_download e out )
+        : *u tp ( vec_data [u] . st tpe )
+        : ~ i q 0
+        ~ < q 512 {
+            ( nurl_poke_f32 tp + * slot 512 q ( nurl_peek_f32 h q ) )
+            = q + q 1
+        }
+        ( nurl_free # s h )
+        = ok T
+    } {}
+    ( nurl_free # s toks )
+    ^ ok
+}
+
+// Per-anchor best ENABLED class. yolo_decode argmaxes over every class
+// and filters afterwards — so a disabled seed class ('dog' 0.88) would
+// shadow an enabled custom prompt of the same object ('a dog' 0.63) and
+// the anchor vanished. Restricting the argmax to enabled classes makes
+// toggles behave the way the chips read.
+@ yd_decode * u o i na i nc f thresh ( Vec i ) flags → ( Vec Detection ) {
+    : ( Vec Detection ) dets ( vec_new [Detection] )
+    : ~ i a 0
+    ~ < a na {
+        : ~ f best 0.0
+        : ~ i bi - 0 1
+        : ~ i c 0
+        ~ < c nc {
+            : i on ?? ( vec_get [i] flags c ) { T x → x F _ → 0 }
+            ? == on 1 {
+                : f sc ( nurl_peek_f32 o + * + 4 c na a )
+                ? > sc best { = best sc = bi c } {}
+            } {}
+            = c + c 1
+        }
+        ? & >= bi 0 > best thresh {
+            : f cx ( nurl_peek_f32 o + * 0 na a )
+            : f cy ( nurl_peek_f32 o + * 1 na a )
+            : f w ( nurl_peek_f32 o + * 2 na a )
+            : f h ( nurl_peek_f32 o + * 3 na a )
+            ( vec_push [Detection] dets @ Detection { bi best cx cy w h a } )
+        } {}
+        = a + a 1
+    }
+    ^ dets
+}
+
 // ── inference: one frame in, masks drawn on, detection JSON out ─────
 
 @ yd_detect * DemoState st Image im f conf b want_masks ( Vec i ) flags → Json {
@@ -214,7 +286,14 @@ $ `deps/template/src/template.nu`
 
     : Letterbox lb ( letterbox im 640 )
     : *u host ( img_to_nchw_norm . lb img )
-    : RTensor out ( rt_run_shaped e . st graph host ( yd_shape4 1 3 640 640 ) )
+    : ~ RTensor out @ RTensor { ( string_new ) 0 ( vec_new [i] ) 0 }
+    ? > . st kmax 0 {
+        : ( Vec i ) s3 ( vec_new [i] )
+        ( vec_push [i] s3 1 ) ( vec_push [i] s3 . st kmax ) ( vec_push [i] s3 512 )
+        = out ( rt_run_two e . st graph `images` host ( yd_shape4 1 3 640 640 ) `tpe` ( vec_data [u] . st tpe ) s3 )
+    } {
+        = out ( rt_run_shaped e . st graph host ( yd_shape4 1 3 640 640 ) )
+    }
     : *u o ( rt_download e out )
 
     : ~ b masks want_masks
@@ -227,7 +306,8 @@ $ `deps/template/src/template.nu`
     : i na 8400
     : i MH ( mask_dim )
     : i MW ( mask_dim )
-    : ( Vec Detection ) raw ( yolo_decode o na . st nc conf )
+    : i ncap ? > . st kmax 0 . st kmax . st nc
+    : ( Vec Detection ) raw ( yd_decode o na ncap conf flags )
     : ( Vec Detection ) dets ( yolo_nms raw 0.5 )
     : f scale . lb scale
 
@@ -238,8 +318,7 @@ $ `deps/template/src/template.nu`
     ~ < k nd {
         ?? ( vec_get [Detection] dets k ) {
             T d → {
-                : i on ?? ( vec_get [i] flags . d cls ) { T x → x F _ → 1 }
-                ? == on 1 {
+                ? T {
                     : i ocx # i / - . d cx # f . lb padx scale
                     : i ocy # i / - . d cy # f . lb pady scale
                     : i ow # i / . d w scale
@@ -247,7 +326,7 @@ $ `deps/template/src/template.nu`
                     : i x0 - ocx / ow 2
                     : i y0 - ocy / oh 2
                     ? masks {
-                        : *u coeff ( mask_coeffs o na . st nc . d ai )
+                        : *u coeff ( mask_coeffs o na ncap . d ai )
                         : *u L ( mask_logits # *u proto_i coeff MH MW )
                         ( mask_overlay im L lb 640 x0 y0 ow oh ( yd_pal_r shown ) ( yd_pal_g shown ) ( yd_pal_b shown ) 118 )
                         ( nurl_free coeff )
@@ -316,7 +395,8 @@ $ `deps/template/src/template.nu`
     : ( Vec UrlParam ) ps ( url_query_decode ( string_data . req query ) )
     : f conf ( yd_query_f ps `conf` 0.25 )
     : b want_masks ( yd_query_b ps `masks` T )
-    : ( Vec i ) flags ( yd_enabled ps . st nc )
+    : i ncap ? > . st kmax 0 . st kmax . st nc
+    : ( Vec i ) flags ( yd_enabled ps . st nc ncap )
     ( yd_params_free ps )
 
     : ~ b ok F
@@ -346,6 +426,50 @@ $ `deps/template/src/template.nu`
     }
 }
 
+// POST /prompt — body is the prompt text. Encodes it through the
+// MobileCLIP text encoder ON the GPU and appends it to the vocabulary;
+// the next /detect already sees it. JSON out: { id, name, n }.
+@ h_prompt HttpRequest req Params p → HttpResponse {
+    : *DemoState st # *DemoState g_st
+    ? == . st kmax 0 {
+        ^ ( response_error 400 `runtime prompting is off — start the server with --text-encoder` )
+    } {}
+    ? >= . st nc . st kmax {
+        ^ ( response_error 409 `all prompt slots are in use` )
+    } {}
+    // sanitize: printable bytes only, collapse to a trimmed prompt
+    : ( Vec u ) body . req body
+    : i bn ( vec_len [u] body )
+    : ~ String txt ( string_with_cap 64 )
+    : ~ i k 0
+    ~ & < k bn < ( string_len txt ) 60 {
+        : i c ?? ( vec_get [u] body k ) { T x → # i x F _ → 0 }
+        ? | & >= c 32 <= c 126 >= c 128 { ( string_push_char txt c ) } {}
+        = k + k 1
+    }
+    : String trimmed ( string_trim txt )
+    ( string_free txt )
+    ? == ( string_len trimmed ) 0 {
+        ( string_free trimmed )
+        ^ ( response_error 400 `empty prompt` )
+    } {}
+    : i slot . st nc
+    ? ( yd_encode_prompt st ( string_data trimmed ) slot ) {
+        ( vec_push [String] . st names trimmed )
+        = . st nc + slot 1
+        : Json j ( json_obj_new )
+        ( json_obj_set j `id` ( json_int slot ) )
+        ( json_obj_set j `name` ( json_str_lit ( yd_name_at . st names slot ) ) )
+        ( json_obj_set j `n` ( json_int . st nc ) )
+        : HttpResponse r ( response_json 200 j )
+        ( json_free j )
+        ^ r
+    } {
+        ( string_free trimmed )
+        ^ ( response_error 500 `text encoder failed on this prompt` )
+    }
+}
+
 // ── startup ──────────────────────────────────────────────────────────
 
 @ yd_load_graph s path * b okcell → OGraph {
@@ -365,6 +489,8 @@ $ `deps/template/src/template.nu`
             : Json ctx ( json_obj_new )
             ( json_obj_set ctx `device` ( json_str_lit ( string_data . st device ) ) )
             ( json_obj_set ctx `model` ( json_str_lit ( string_data . st model_path ) ) )
+            ( json_obj_set ctx `promptable` ( json_bool > . st kmax 0 ) )
+            ( json_obj_set ctx `slots` ( json_int . st kmax ) )
             : Json arr ( json_arr_new )
             : ~ i k 0
             ~ < k . st nc {
@@ -408,6 +534,8 @@ $ `deps/template/src/template.nu`
     ( args_opt ap `host` 72 `HOST` `bind address (default 0.0.0.0)` )  // -H
     ( args_opt ap `gpu` 103 `N` `CUDA device ordinal (default 0)` )  // -g
     ( args_opt ap `page` 80 `FILE` `demo page template (default views/index.html)` )  // -P
+    ( args_opt ap `text-encoder` 116 `FILE` `MobileCLIP text-encoder .onnx → free-text prompting (needs the K-slot promptable --model)` )  // -t
+    ( args_opt ap `merges` 77 `FILE` `CLIP BPE merges (default deps/yoloe/assets/clip_merges.txt)` )  // -M
 
     : ( Vec String ) argv ( vec_new [String] )
     : i ac ( env_args_count )
@@ -425,12 +553,16 @@ $ `deps/template/src/template.nu`
             : ~ String mp ( string_new )
             : ~ String np ( string_new )
             : ~ String page ( string_from `views/index.html` )
+            : ~ String tep ( string_new )
+            : ~ String mgp ( string_from `deps/yoloe/assets/clip_merges.txt` )
             : ~ String host ( string_from `0.0.0.0` )
             : ~ i port 8090
             : ~ i gpu 0
             ?? ( args_value ap `model` ) { T v → { ( string_free mp ) = mp v } F _ → {} }
             ?? ( args_value ap `classes` ) { T v → { ( string_free np ) = np v } F _ → {} }
             ?? ( args_value ap `page` ) { T v → { ( string_free page ) = page v } F _ → {} }
+            ?? ( args_value ap `text-encoder` ) { T v → { ( string_free tep ) = tep v } F _ → {} }
+            ?? ( args_value ap `merges` ) { T v → { ( string_free mgp ) = mgp v } F _ → {} }
             ?? ( args_value ap `host` ) { T v → { ( string_free host ) = host v } F _ → {} }
             ?? ( args_value ap `port` ) { T v → { ?? ( string_to_int v ) { T x → { = port x } F _ → {} } ( string_free v ) } F _ → {} }
             ?? ( args_value ap `gpu` ) { T v → { ?? ( string_to_int v ) { T x → { = gpu x } F _ → {} } ( string_free v ) } F _ → {} }
@@ -467,9 +599,56 @@ $ `deps/template/src/template.nu`
                         = . st device ( string_from ( rt_name e ) )
                         = . st model_path mp
                         = . st index_html ( string_new )
+                        = . st kmax 0
+                        = . st tpe ( vec_new [u] )
                         = g_st # i st
 
-                        ? ( yd_render_index ( string_data page ) st ) {
+                        // free-text prompting: load the text encoder +
+                        // tokenizer and GPU-encode the seed vocabulary
+                        // into the K=32 tpe slots.
+                        : ~ b prompt_ok T
+                        ? > ( string_len tep ) 0 {
+                            = prompt_ok F
+                            : *b okc2 # *b ( nurl_alloc 8 )
+                            : OGraph tg ( yd_load_graph ( string_data tep ) okc2 )
+                            ? == ( nurl_peek # *u okc2 0 ) 0 {
+                                ( nurl_eprintln `yoloe-demo: cannot read the text encoder` )
+                            } {
+                                : Tokenizer tkz ( tokenizer_load ( string_data mgp ) )
+                                ? < . tkz sot 0 {
+                                    ( nurl_eprintln `yoloe-demo: cannot read the BPE merges (--merges)` )
+                                } {
+                                    ? > nc 32 {
+                                        ( nurl_eprintln `yoloe-demo: at most 32 seed classes with the K=32 promptable model` )
+                                    } {
+                                        = . st tgraph tg
+                                        = . st tk tkz
+                                        = . st kmax 32
+                                        : ~ i zb 0
+                                        ~ < zb * * 32 512 4 { ( vec_push [u] . st tpe 0 ) = zb + zb 1 }
+                                        ( nurl_print `prompts  encoding ` ) ( nurl_print ( nurl_str_int nc ) )
+                                        ( nurl_print ` seed classes on the GPU ... ` )
+                                        : i p0 ( monotonic_ns )
+                                        : ~ i pk 0
+                                        : ~ b enc_ok T
+                                        ~ & < pk nc enc_ok {
+                                            ? ( yd_encode_prompt st ( yd_name_at names pk ) pk ) {} { = enc_ok F }
+                                            = pk + pk 1
+                                        }
+                                        ? enc_ok {
+                                            ( nurl_print ( nurl_str_int / - ( monotonic_ns ) p0 1000000 ) )
+                                            ( nurl_print ` ms  (` ) ( nurl_print ( nurl_str_int - 32 nc ) )
+                                            ( nurl_print ` free slots)\n` )
+                                            = prompt_ok T
+                                        } { ( nurl_eprintln `yoloe-demo: seed-class text encoding failed` ) }
+                                    }
+                                }
+                            }
+                        } {}
+
+                        ? == prompt_ok F { = rc 1 = g_st 0 } {}
+
+                        ? & prompt_ok ( yd_render_index ( string_data page ) st ) {
                             // warm-up: compile every kernel before the first real frame
                             ( nurl_print `warmup   compiling kernels ... ` )
                             : i w0 ( monotonic_ns )
@@ -492,6 +671,7 @@ $ `deps/template/src/template.nu`
                             ( http_app_get a `/` \ HttpRequest rq Params pp → HttpResponse { ^ ( h_index rq pp ) } )
                             ( http_app_get a `/health` \ HttpRequest rq Params pp → HttpResponse { ^ ( h_health rq pp ) } )
                             ( http_app_post a `/detect` \ HttpRequest rq Params pp → HttpResponse { ^ ( h_detect rq pp ) } )
+                            ( http_app_post a `/prompt` \ HttpRequest rq Params pp → HttpResponse { ^ ( h_prompt rq pp ) } )
                             ( http_app_cors a )
 
                             ? ( args_present ap `tls` ) {
@@ -520,6 +700,8 @@ $ `deps/template/src/template.nu`
             ( string_free np )
             ( string_free page )
             ( string_free host )
+            ( string_free tep )
+            ( string_free mgp )
         }
     } {
         ( nurl_eprint `yoloe-demo: ` ) ( nurl_eprintln ( args_error ap ) )

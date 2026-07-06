@@ -99,6 +99,50 @@ RSS1="$(ps -o rss= -p "$SERVE_PID" | tr -d ' ')"
 GROW=$(( (RSS1 - RSS0) / 1024 ))
 if [ "$GROW" -lt 40 ]; then ok "60-frame sustained run (RSS +${GROW} MB)"; else bad "RSS grew ${GROW} MB over 60 frames"; fi
 
+# ── free-text prompting (needs the promptable export + text encoder) ──
+PMODEL="${YOLOE_PROMPT_MODEL:-$HOME/yoloe-export/yoloe-promptable-k32.onnx}"
+TENC="${YOLOE_TEXT_ENCODER:-$HOME/yoloe-export/text_encoder_n1.onnx}"
+if [ -f "$PMODEL" ] && [ -f "$TENC" ]; then
+    echo "[4/4] free-text prompting ($PMODEL)"
+    kill "$SERVE_PID" 2>/dev/null; wait "$SERVE_PID" 2>/dev/null; SERVE_PID=""
+    PPORT=$((PORT+1))
+    "$WORK/demo" --model "$PMODEL" --classes "$CLASSES" --text-encoder "$TENC" \
+        --host 127.0.0.1 --port "$PPORT" >"$WORK/pserver.log" 2>&1 &
+    SERVE_PID=$!
+    for i in $(seq 1 120); do
+        curl -s --max-time 1 "http://127.0.0.1:$PPORT/health" >/dev/null 2>&1 && break
+        sleep 0.5
+        kill -0 "$SERVE_PID" 2>/dev/null || { echo "FAIL: prompt server died:"; tail -5 "$WORK/pserver.log"; exit 1; }
+    done
+    PBASE="http://127.0.0.1:$PPORT"
+
+    # page advertises the prompt input
+    curl -s "$PBASE/" | grep -q 'id="promptIn"' && ok "page shows the prompt input" || bad "page shows the prompt input"
+
+    # baseline through the promptable graph still finds the dog
+    R="$(curl -s -X POST --data-binary @"$TESTIMG" "$PBASE/detect?conf=0.25&masks=1")"
+    echo "$R" | grep -q '"dog"' && ok "promptable baseline finds the dog" || bad "promptable baseline finds the dog"
+
+    # add a free-text prompt; it must land in slot 10
+    R="$(printf 'a dog' | curl -s -X POST --data-binary @- "$PBASE/prompt")"
+    echo "$R" | grep -q '"id": *10' || echo "$R" | grep -q '"id":10' \
+        && ok "prompt 'a dog' → slot 10" || bad "prompt 'a dog' → slot 10 (got $R)"
+
+    # with only the custom prompt enabled, the dog is found UNDER ITS NAME
+    R="$(curl -s -X POST --data-binary @"$TESTIMG" "$PBASE/detect?conf=0.25&on=10")"
+    if echo "$R" | grep -q '"a dog"' && ! echo "$R" | grep -q '"n": *"dog"'; then
+        ok "custom prompt detects (seeds disabled)"
+    else
+        bad "custom prompt detects (seeds disabled): $R"
+    fi
+
+    # empty prompt → 400
+    CODE="$(printf '  ' | curl -s -o /dev/null -w '%{http_code}' -X POST --data-binary @- "$PBASE/prompt")"
+    [ "$CODE" = "400" ] && ok "empty prompt → 400" || bad "empty prompt → 400 (got $CODE)"
+else
+    echo "[4/4] SKIP free-text prompting (promptable export not found — see tools/)"
+fi
+
 echo
 echo "PASS $PASS · FAIL $FAIL"
 [ "$FAIL" -eq 0 ]
