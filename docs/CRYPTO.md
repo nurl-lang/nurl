@@ -81,7 +81,7 @@ per signature: the *nonce* is deterministic, the *blinding factor* is random.
 ## 3. Side-channel posture
 
 This is where a pure-software stack differs most from a hardware-accelerated
-one, and where the 2026-06 security sweep (§9–§10 of `TODO.md`) focused.
+one, and where the 2026-06 security sweep focused.
 
 **Threat model — in scope:** a remote or co-resident attacker observing
 **timing and cache access patterns** across one or many operations (the
@@ -107,8 +107,8 @@ secret-indexed table, and (where stated) a fixed-width representation so
 operand timing is value-independent. They have **not** yet been measured
 statistically (e.g. dudect / ctgrind / ctverif). The cross-checks cited below
 prove *correctness* (the code computes the right answer), which is a separate
-axis from constant-timeness; an empirical leakage measurement is tracked as a
-follow-up in `TODO.md` §11. Hardening (timing/cache axis):
+axis from constant-timeness; an empirical leakage measurement is a tracked
+follow-up. Hardening (timing/cache axis):
 
 | Primitive | Countermeasure |
 |---|---|
@@ -142,7 +142,7 @@ follow-up in `TODO.md` §11. Hardening (timing/cache axis):
   traces) — exactly OpenSSL's posture for the same arithmetic. So RSA is robust
   against the multi-trace remote attacker but, unlike the EC path, is **not**
   hardened against a *single-trace timing/cache* observer of one signature; a
-  dedicated fixed-limb RSA modular multiply (tracked in `TODO.md` §10) would
+  dedicated fixed-limb RSA modular multiply (a tracked follow-up) would
   close that. (Power/EM remains out of scope for RSA too — and for everything.)
   RSA is the legacy path; the EC path above is the primary one for modern
   internet-facing TLS and carries no such timing residual.
@@ -240,7 +240,7 @@ be **sound, not a hardware-grade side-channel-free implementation**:
    `bigint` operand **timing** is the one residual on this axis (single-trace
    timing/cache on one RSA signature is not covered until a fixed-limb RSA
    multiply lands). These properties are by-construction and code-reviewed, not
-   yet measured statistically (dudect/ctgrind — `TODO.md` §11).
+   yet measured statistically (dudect/ctgrind — a tracked follow-up).
 4. **Power / EM (DPA, SPA-power, template) side-channels are OUT of scope for
    the entire software stack.** Software constant-time code does not defend
    them — a table-free AES S-box still leaks the processed byte's Hamming weight
@@ -250,7 +250,7 @@ be **sound, not a hardware-grade side-channel-free implementation**:
    model applies.
 
 The full audit, the RSA fixed-limb follow-up, the doc-taxonomy fixes and the
-planned dudect measurement are tracked in `TODO.md` §9–§11.
+planned dudect measurement are tracked follow-ups.
 
 ---
 
