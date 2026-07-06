@@ -34,6 +34,9 @@ with the driver + NVRTC installed.
 
 ```sh
 cd packages/yoloe-demo
+# in a repo checkout, link the sibling packages once (nurlpkg install does
+# the same from nurl.toml for registry installs):
+mkdir -p deps && for d in yoloe http template image onnx gpu; do ln -sfn ../../$d deps/$d; done
 ../../nurl.sh src/main.nu demo
 ./demo --model ~/yoloe-v8s-seg.onnx --classes ~/yoloe-classes.txt
 # → serving http://0.0.0.0:8090
