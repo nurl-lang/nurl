@@ -33,11 +33,16 @@ pipe; nothing listens on the network.
 
 ```sh
 # Claude Code
-claude mcp add nurl -- nurl-mcp
+claude mcp add nurl -- ~/.nurl/bin/nurl-mcp
 ```
 
-For any other client, configure an MCP server whose `command` is `nurl-mcp`
-(no arguments).
+`nurlpkg install` prints this exact line once the binary is in place. The `~`
+is expanded by your shell, so the absolute path works even from a client that
+doesn't inherit your `$PATH`; `claude mcp add nurl -- nurl-mcp` also works when
+`~/.nurl/bin` is on `$PATH`.
+
+For any other client, configure an MCP server whose `command` is
+`~/.nurl/bin/nurl-mcp` (no arguments).
 
 ## Tools
 
@@ -116,7 +121,7 @@ stdio-only by design.
 
 ## Status
 
-v0.2.0 — stdio + token-authenticated HTTP transport. Not yet bundled with the
+v0.4.1 — stdio + token-authenticated HTTP transport. Not yet bundled with the
 toolchain; install it explicitly. Possible follow-ups: serving the grammar /
 spec / examples once the installer ships them (a `nurl_doc` tool); a continuous
 SSE notification stream; per-session state.
