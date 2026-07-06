@@ -963,9 +963,29 @@ $ `stdlib/std/tls_verify.nu`
 }
 
 // ── application data ──────────────────────────────────────────────
+//
+// A TLS record carries at most 2^14 bytes of plaintext (RFC 8446 §5.1,
+// same limit in 1.2): peers MUST reject anything larger, and past 65535
+// the record header's u16 length field wraps outright. Split
+// application data into ≤16384-byte records.
 @ tls_write * TlsConn c ( Vec u ) data → !v TlsErr {
-    ? == . c version 12 { ^ ( __send_record_12 c 23 data ) } {}
-    ^ ( __send_encrypted c 23 data )
+    : i n ( vec_len [u] data )
+    ? <= n 16384 {
+        ? == . c version 12 { ^ ( __send_record_12 c 23 data ) } {}
+        ^ ( __send_encrypted c 23 data )
+    } {}
+    : ~ i off 0
+    ~ < off n {
+        : ~ i hi + off 16384
+        ? > hi n { = hi n } {}
+        : ( Vec u ) part ( bytes_slice data off hi )
+        : ~ ! v TlsErr w @ !v TlsErr { T 0 }
+        ? == . c version 12 { = w ( __send_record_12 c 23 part ) } { = w ( __send_encrypted c 23 part ) }
+        ( vec_free [u] part )
+        ?? w { T _ → {} F e → { ^ @ !v TlsErr { F e } } }
+        = off hi
+    }
+    ^ @ !v TlsErr { T 0 }
 }
 
 // Read up to `max` decrypted application bytes. Returns [] on clean EOF

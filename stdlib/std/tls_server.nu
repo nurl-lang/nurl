@@ -541,8 +541,43 @@ $ `stdlib/std/aes_gcm.nu`
 
 // ── post-handshake server I/O (server keys for write, client for read) ──
 
+// Application data is split into ≤16384-byte records — the RFC 8446
+// §5.1 plaintext cap; peers reject larger records, and past 65535 the
+// header's u16 length wraps (a >64 KB response used to come out as
+// garbage the client reported as "bad record mac").
 @ tls_server_write * TlsConn c ( Vec u ) data → !v TlsErr {
-    ^ ( __srv_send_enc c 23 data )
+    : i n ( vec_len [u] data )
+    ? <= n 16384 { ^ ( __srv_send_enc c 23 data ) } {}
+    : ~ i off 0
+    ~ < off n {
+        : ~ i hi + off 16384
+        ? > hi n { = hi n } {}
+        : ( Vec u ) part ( bytes_slice data off hi )
+        : !v TlsErr w ( __srv_send_enc c 23 part )
+        ( vec_free [u] part )
+        ?? w { T _ → {} F e → { ^ @ !v TlsErr { F e } } }
+        = off hi
+    }
+    ^ @ !v TlsErr { T 0 }
+}
+
+// Server-side close. The close_notify alert must go out under the
+// SERVER write keys — tls_close's alert path encrypts with the
+// client-direction keys (right for a client conn, garbage from the
+// server: an OpenSSL peer that reads to EOF aborted with "bad record
+// mac" on our alert, while a Content-Length-bounded client never
+// noticed). Send the alert under s_key/s_seq here, then let tls_close
+// do the shared teardown (its alert is skipped once closed = 1).
+@ tls_server_close * TlsConn c → v {
+    ? & == . c closed 0 == . c established 1 {
+        : ( Vec u ) alert ( vec_with_cap [u] 2 )
+        ( vec_push [u] alert # u 1 )
+        ( vec_push [u] alert # u 0 )
+        : !v TlsErr _w ( __srv_send_enc c 21 alert )
+        ( vec_free [u] alert )
+        = . c closed 1
+    } {}
+    ( tls_close c )
 }
 
 @ tls_server_read * TlsConn c i max → !( Vec u ) TlsErr {

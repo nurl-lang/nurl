@@ -539,7 +539,10 @@ $ `stdlib/std/pkey.nu`
     : i tp ( __conn_tlsptr c )
     ? != tp 0 {
         ( __starttls_unregister # i . c raw )
-        ( tls_close # *TlsConn tp )
+        // kind 2 = pure-NURL TLS server conn: its close_notify must be
+        // encrypted under the server write keys (tls_server_close);
+        // tls_close's alert uses the client direction.
+        ? == . c kind 2 { ( tls_server_close # *TlsConn tp ) } { ( tls_close # *TlsConn tp ) }
     } { ( nurl_tcp_close # i . c raw ) }
 }
 

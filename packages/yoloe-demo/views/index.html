@@ -1,0 +1,325 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>YOLOE live — pure NURL</title>
+<style>
+  :root {
+    --bg: #0b0e14; --panel: #121722; --panel2: #0e1320;
+    --line: #1e2635; --txt: #e6ebf4; --dim: #8b96ab;
+    --acc: #38ffb0; --acc2: #38c6ff; --warn: #ffb347;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: radial-gradient(1200px 700px at 70% -10%, #14203a 0%, var(--bg) 55%);
+    color: var(--txt);
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    min-height: 100vh; padding: 1.2rem;
+  }
+  header { display: flex; align-items: center; gap: .8rem; flex-wrap: wrap; margin-bottom: 1rem; }
+  .logo {
+    background: #0f1115; border: 1px solid var(--line); border-radius: 10px;
+    padding: .45rem .7rem; font-weight: 800; letter-spacing: .06em;
+    color: var(--acc); box-shadow: 0 2px 14px rgba(56,255,176,.18);
+  }
+  h1 { font-size: 1.15rem; font-weight: 650; }
+  h1 small { color: var(--dim); font-weight: 400; }
+  .chip {
+    border: 1px solid var(--line); background: var(--panel);
+    color: var(--dim); border-radius: 999px; padding: .25rem .7rem; font-size: .78rem;
+  }
+  .chip b { color: var(--acc2); font-weight: 600; }
+  .wrap { display: grid; grid-template-columns: minmax(0,1fr) 320px; gap: 1rem; align-items: start; }
+  @media (max-width: 900px) { .wrap { grid-template-columns: 1fr; } }
+  .stage {
+    position: relative; background: var(--panel2); border: 1px solid var(--line);
+    border-radius: 14px; overflow: hidden; aspect-ratio: 4 / 3;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .stage img, .stage canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+  .stage img { object-fit: contain; }
+  #placeholder { position: absolute; inset: 0; display: flex; flex-direction: column; gap: .8rem;
+    align-items: center; justify-content: center; color: var(--dim); text-align: center; padding: 2rem; }
+  #placeholder .big { font-size: 2.4rem; }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 1rem; }
+  .panel + .panel { margin-top: 1rem; }
+  .panel h2 { font-size: .72rem; text-transform: uppercase; letter-spacing: .12em; color: var(--dim); margin-bottom: .7rem; }
+  .btn {
+    width: 100%; padding: .65rem 1rem; border-radius: 10px; border: 1px solid var(--line);
+    background: linear-gradient(180deg, #1a2333, #141b29); color: var(--txt);
+    font-size: .95rem; font-weight: 600; cursor: pointer;
+  }
+  .btn.live { background: linear-gradient(180deg, #123326, #0e281e); border-color: #1f4a37; color: var(--acc); }
+  .btn:active { transform: translateY(1px); }
+  .row { display: flex; gap: .5rem; align-items: center; }
+  .row + .row { margin-top: .6rem; }
+  .row label { flex: 1; color: var(--dim); font-size: .85rem; }
+  .row output { min-width: 2.6rem; text-align: right; color: var(--txt); font-variant-numeric: tabular-nums; }
+  input[type=range] { flex: 2; accent-color: var(--acc); }
+  .switch { appearance: none; width: 2.2rem; height: 1.25rem; border-radius: 999px; background: #2a3346;
+    position: relative; cursor: pointer; transition: background .15s; }
+  .switch:checked { background: var(--acc); }
+  .switch::after { content: ""; position: absolute; top: 2px; left: 2px; width: .95rem; height: .95rem;
+    border-radius: 50%; background: #fff; transition: left .15s; }
+  .switch:checked::after { left: 1.1rem; }
+  .classes { display: flex; flex-wrap: wrap; gap: .4rem; }
+  .cls {
+    border: 1px solid var(--line); background: var(--panel2); color: var(--dim);
+    border-radius: 999px; padding: .3rem .75rem; font-size: .82rem; cursor: pointer; user-select: none;
+  }
+  .cls.on { color: #08110c; background: var(--acc); border-color: var(--acc); font-weight: 600; }
+  .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: .5rem; }
+  .stat { background: var(--panel2); border: 1px solid var(--line); border-radius: 10px; padding: .55rem; text-align: center; }
+  .stat b { display: block; font-size: 1.15rem; font-variant-numeric: tabular-nums; color: var(--acc2); }
+  .stat span { font-size: .68rem; color: var(--dim); text-transform: uppercase; letter-spacing: .08em; }
+  #dets { list-style: none; max-height: 180px; overflow-y: auto; font-size: .85rem; }
+  #dets li { display: flex; justify-content: space-between; padding: .28rem .2rem; border-bottom: 1px solid var(--line); }
+  #dets .score { color: var(--dim); font-variant-numeric: tabular-nums; }
+  #dets .swatch { display: inline-block; width: .7rem; height: .7rem; border-radius: 3px; margin-right: .45rem; }
+  footer { margin-top: 1.2rem; color: var(--dim); font-size: .8rem; line-height: 1.6; max-width: 70rem; }
+  footer b { color: var(--txt); }
+  a { color: var(--acc2); }
+</style>
+</head>
+<body>
+<header>
+  <div class="logo">NURL</div>
+  <h1>YOLOE live <small>— open-vocabulary segmentation, served by pure NURL</small></h1>
+  <span class="chip">GPU <b>{{ device }}</b></span>
+  <span class="chip">model <b>{{ model }}</b></span>
+</header>
+
+<div class="wrap">
+  <div class="stage" id="stage">
+    <img id="frame" alt="">
+    <canvas id="ol"></canvas>
+    <div id="placeholder">
+      <div class="big">🎥</div>
+      <div><b>Start camera</b> to stream your webcam through YOLOE,<br>
+      or drop an image anywhere on this page.</div>
+      <div style="font-size:.78rem">Every frame: JPEG → NURL HTTP server → ONNX graph as CUDA kernels → masks → back.</div>
+    </div>
+  </div>
+
+  <div>
+    <div class="panel">
+      <button class="btn" id="camBtn">▶ Start camera</button>
+      <div class="row" style="margin-top:.7rem">
+        <label for="conf">confidence</label>
+        <input type="range" id="conf" min="5" max="90" value="25">
+        <output id="confOut">0.25</output>
+      </div>
+      <div class="row">
+        <label for="masks">segmentation masks</label>
+        <input type="checkbox" class="switch" id="masks" checked>
+      </div>
+      <div class="row">
+        <label for="mirror">mirror view</label>
+        <input type="checkbox" class="switch" id="mirror" checked>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>Prompted classes</h2>
+      <div class="classes" id="classes">
+        {% for c in classes %}<span class="cls on" data-id="{{ c.id }}">{{ c.name }}</span>{% end %}
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>Live stats</h2>
+      <div class="stats">
+        <div class="stat"><b id="stFps">–</b><span>fps</span></div>
+        <div class="stat"><b id="stInf">–</b><span>infer ms</span></div>
+        <div class="stat"><b id="stRtt">–</b><span>rtt ms</span></div>
+        <div class="stat"><b id="stObj">–</b><span>objects</span></div>
+      </div>
+      <ul id="dets" style="margin-top:.7rem"></ul>
+    </div>
+  </div>
+</div>
+
+<footer>
+  <b>What you are looking at:</b> the browser posts webcam frames to a NURL HTTP
+  server; the YOLOE-v8s-seg network runs through NURL's own ONNX runtime — every
+  layer a CUDA-C kernel compiled at runtime with NVRTC — including the text-prompted
+  contrastive head and the mask-prototype branch. The JPEG codec, the HTTP/TLS
+  server, the template that rendered this page and the self-signed certificate
+  generator are all pure NURL too. No Python, no OpenCV, no inference engine.
+  <a href="https://github.com/nurl-lang/nurl">github.com/nurl-lang/nurl</a>
+</footer>
+
+<script>
+"use strict";
+const W = 640, H = 480;
+const PAL = [
+  [56,200,120],[255,92,92],[255,200,60],[56,140,255],
+  [190,120,255],[255,140,40],[64,220,90],[255,64,160]
+];
+const $ = id => document.getElementById(id);
+const frame = $("frame"), ol = $("ol"), stage = $("stage"), ph = $("placeholder");
+const camBtn = $("camBtn"), confIn = $("conf"), confOut = $("confOut");
+const masksIn = $("masks"), mirrorIn = $("mirror");
+ol.width = W; ol.height = H;
+const octx = ol.getContext("2d");
+
+let stream = null, running = false, dropped = null;
+let video = document.createElement("video");
+video.playsInline = true; video.muted = true;
+const cap = document.createElement("canvas");
+cap.width = W; cap.height = H;
+const cctx = cap.getContext("2d");
+
+let fpsEma = 0, lastT = 0;
+
+confIn.oninput = () => { confOut.textContent = (confIn.value / 100).toFixed(2); };
+mirrorIn.oninput = applyMirror;
+function applyMirror() {
+  const t = mirrorIn.checked ? "scaleX(-1)" : "none";
+  frame.style.transform = t; ol.style.transform = t;
+}
+applyMirror();
+
+document.querySelectorAll(".cls").forEach(el => {
+  el.onclick = () => el.classList.toggle("on");
+});
+function enabledIds() {
+  return Array.from(document.querySelectorAll(".cls.on")).map(el => el.dataset.id);
+}
+
+camBtn.onclick = async () => {
+  if (running) { stopCam(); return; }
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({
+      video: { width: { ideal: W }, height: { ideal: H }, facingMode: "environment" },
+      audio: false
+    });
+  } catch (e) {
+    ph.innerHTML = "<div class='big'>🔒</div><div><b>Camera blocked.</b> Serve over localhost or restart with --tls, then reload.<br><span style='font-size:.78rem'>" + e + "</span></div>";
+    return;
+  }
+  video.srcObject = stream;
+  await video.play();
+  dropped = null;
+  running = true;
+  camBtn.textContent = "■ Stop camera";
+  camBtn.classList.add("live");
+  ph.style.display = "none";
+  loop();
+};
+
+function stopCam() {
+  running = false;
+  if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
+  camBtn.textContent = "▶ Start camera";
+  camBtn.classList.remove("live");
+}
+
+// drag & drop a still image (works without any camera)
+window.addEventListener("dragover", e => e.preventDefault());
+window.addEventListener("drop", async e => {
+  e.preventDefault();
+  const f = e.dataTransfer.files && e.dataTransfer.files[0];
+  if (!f) return;
+  stopCam();
+  dropped = await createImageBitmap(f);
+  ph.style.display = "none";
+  mirrorIn.checked = false; applyMirror();
+  running = true; camBtn.textContent = "■ Stop"; camBtn.classList.add("live");
+  loop();
+});
+
+function captureBlob() {
+  const src = dropped || video;
+  const sw = dropped ? dropped.width : video.videoWidth;
+  const sh = dropped ? dropped.height : video.videoHeight;
+  const s = Math.min(W / sw, H / sh);
+  const dw = Math.round(sw * s), dh = Math.round(sh * s);
+  cctx.fillStyle = "#0b0e14"; cctx.fillRect(0, 0, W, H);
+  cctx.drawImage(src, (W - dw) / 2, (H - dh) / 2, dw, dh);
+  return new Promise(res => cap.toBlob(res, "image/jpeg", 0.75));
+}
+
+async function loop() {
+  while (running) {
+    try {
+      const blob = await captureBlob();
+      const q = new URLSearchParams();
+      q.set("conf", (confIn.value / 100).toFixed(2));
+      q.set("masks", masksIn.checked ? "1" : "0");
+      q.set("on", enabledIds().join(","));
+      const t0 = performance.now();
+      const res = await fetch("/detect?" + q.toString(), {
+        method: "POST", headers: { "Content-Type": "image/jpeg" }, body: blob
+      });
+      if (!res.ok) throw new Error("HTTP " + res.status);
+      const j = await res.json();
+      const rtt = performance.now() - t0;
+      frame.src = j.img;
+      drawOverlay(j.dets);
+      updateStats(j.ms, rtt, j.n, j.dets);
+      if (dropped) { running = false; camBtn.textContent = "▶ Start camera"; camBtn.classList.remove("live"); }
+    } catch (e) {
+      console.error(e);
+      await new Promise(r => setTimeout(r, 600));
+    }
+  }
+}
+
+function drawOverlay(dets) {
+  octx.clearRect(0, 0, W, H);
+  octx.font = "600 13px system-ui, sans-serif";
+  octx.textBaseline = "top";
+  for (const d of dets) {
+    const c = PAL[d.k % PAL.length];
+    const col = "rgb(" + c[0] + "," + c[1] + "," + c[2] + ")";
+    octx.strokeStyle = col; octx.lineWidth = 2;
+    octx.strokeRect(d.x, d.y, d.w, d.h);
+    const label = d.n + " " + Math.round(d.s * 100) + "%";
+    const tw = octx.measureText(label).width + 10;
+    const ty = d.y > 20 ? d.y - 20 : d.y + 2;
+    octx.fillStyle = col;
+    octx.fillRect(d.x - 1, ty, tw, 18);
+    octx.fillStyle = "#0b0e14";
+    // keep the label readable when the view is mirrored
+    if (mirrorIn.checked) {
+      octx.save();
+      octx.translate(d.x - 1 + tw / 2, 0); octx.scale(-1, 1); octx.translate(-(d.x - 1 + tw / 2), 0);
+      octx.fillText(label, d.x + 4, ty + 2);
+      octx.restore();
+    } else {
+      octx.fillText(label, d.x + 4, ty + 2);
+    }
+  }
+}
+
+// kiosk / test mode: ?auto=1 starts the camera on load
+if (new URLSearchParams(location.search).has("auto")) {
+  window.addEventListener("load", () => camBtn.onclick());
+}
+
+function updateStats(inf, rtt, n, dets) {
+  const now = performance.now();
+  if (lastT) {
+    const inst = 1000 / (now - lastT);
+    fpsEma = fpsEma ? fpsEma * 0.85 + inst * 0.15 : inst;
+    $("stFps").textContent = fpsEma.toFixed(1);
+  }
+  lastT = now;
+  $("stInf").textContent = inf;
+  $("stRtt").textContent = Math.round(rtt);
+  $("stObj").textContent = n;
+  const ul = $("dets");
+  ul.innerHTML = "";
+  for (const d of dets) {
+    const c = PAL[d.k % PAL.length];
+    const li = document.createElement("li");
+    const sw = "<span class='swatch' style='background:rgb(" + c[0] + "," + c[1] + "," + c[2] + ")'></span>";
+    li.innerHTML = "<span>" + sw + d.n + "</span><span class='score'>" + (d.s * 100).toFixed(0) + "%</span>";
+    ul.appendChild(li);
+  }
+}
+</script>
+</body>
+</html>
