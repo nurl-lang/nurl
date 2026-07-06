@@ -7,7 +7,7 @@ Anything marked done here has a regression test in
 [`compiler/tests/`](compiler/tests/) and is covered by the bootstrap fixed
 point.
 
-_Last reviewed: 2026-07-03 · Current release: **0.10.12** · Language: **Grammar
+_Last reviewed: 2026-07-06 · Current release: **0.11.0** · Language: **Grammar
 v2.3** ([`spec/grammar.ebnf`](spec/grammar.ebnf))._
 
 ---
@@ -73,9 +73,12 @@ A high-level map of what exists. Dates and per-feature detail are in
   select; **dynamic trait objects** (`%Trait` + `( dyn Trait v )`, v2.3); and
   locked the prefix-arity grouping decision.
 - Type system: strong, static, inferred, algebraic; no subtyping, no implicit
-  conversions. Sized integer/float types with signedness tracking; explicit
-  `#` casts with correct `sext`/`zext`/`trunc`/`fpext`/`fptrunc`.
-- Generics: monomorphised generic structs and functions (signedness-aware), generic nesting
+  conversions. Sized integer/float types with **signedness carried in the
+  type representation itself** (`u`/`u16`/`u32`/`u64` distinct from the
+  signed types end to end — no flag side-channels); explicit `#` casts with
+  correct `sext`/`zext`/`trunc`/`fpext`/`fptrunc`.
+- Generics: monomorphised generic structs and functions (signedness-aware
+  monomorphs, including behind `*`/`?` prefixes), generic nesting
   (`Channel[A]`, `Vec[Thread]`), and generics over `?T` / `!T E`.
 - Memory model: auto-drop, recursive `Drop` for boxed enum/struct payloads,
   `% Drop` user destructors, move/borrow analysis (incl. interprocedural and
@@ -154,6 +157,12 @@ platform-specific shims.
 - Showcase programs in [`examples/`](examples/) including a Game Boy emulator
   (with sound), a C64 demo, ESP32 / Milk-V embedded targets, and a
   Push-To-Talk distributed voice app (`pttvoice/`).
+- **Package ecosystem** on the live registry (`reg.nurl-lang.org`,
+  `nurlpkg install`): GPU compute (`gpu` — CUDA driver + NVRTC with a CPU
+  fallback backend, `gpukit`, `tensor`), pure-NURL vision and ML (`image`
+  PNG/JPEG codecs, `onnx` runtime, `objdet`, `yoloe`, `iforest`,
+  `anomaly`), distributed compute (`swarm`, `swarm-mcp`), and application
+  scaffolding (`cli`, `http`, `cas`, `wasmbuilder`, `nurl-mcp`).
 
 ---
 
@@ -253,7 +262,6 @@ Deliberate exclusions, to set expectations:
 
 - **Shipped, with proof** → it has a test in `compiler/tests/` and survives
   the bootstrap fixed point; details in [`CHANGELOG.md`](CHANGELOG.md).
-- **Toward 1.0 / Planned** → unchecked boxes here; the working notes that seed
-  them live in [`TODO.md`](TODO.md) (a scratch checklist, not authoritative).
+- **Toward 1.0 / Planned** → unchecked boxes here.
 - **Language reference** → [`docs/spec.md`](docs/spec.md) (normative) and
   [`spec/grammar.ebnf`](spec/grammar.ebnf) (authoritative grammar).

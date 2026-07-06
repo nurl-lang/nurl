@@ -6,7 +6,17 @@ are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.11.0] — 2026-07-06
+
+A **types-and-ecosystem** release. In the compiler, signedness now lives in
+the type representation itself — the flag side-channel behind a whole class
+of silent miscompiles is gone (critic A1, the last 1.0-lock compiler item) —
+and diamond package dependencies compile once. Around the compiler, the
+package ecosystem takes a leap: pure-NURL image codecs (`image`), an
+n-dimensional tensor package over the GPU stack (`tensor` + `gpukit`, with a
+zero-copy bridge into `onnx`), a declarative command-line framework (`cli`)
+and a unified HTTP server facade (`http`) — plus npm-identical dependency
+requirements, MCP session completeness, and a sweep of backlog fixes.
 
 ### Changed
 
@@ -30,13 +40,71 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   signed `i8` is no longer mislabeled `u8`. New regression
   `signedness_in_types.nu`; validated by the bootstrap fixed point, the
   full suite, the examples gate, and a clean differential-fuzzer run.
-
-A bug-hunt sweep over the open items in `critic.md` / project memory:
-ten language/compiler/toolchain/ecosystem defects and gaps closed
-(branch `bugfix/bughunt-session`).
+- **`packages/gpu` 0.3.0 — shared primary CUDA context, modern `_v2`
+  driver ABI, `gpu_dtod`.** `gpu_open` now retains the device's PRIMARY
+  context (`cuDevicePrimaryCtxRetain` + `cuCtxSetCurrent`) instead of
+  creating a private one — every consumer in the process shares one
+  context and one device address space, so device pointers flow between
+  packages (a gpukit buffer straight into an onnx graph); `gpu_close`
+  releases the retain. All memory/copy/context entry points now bind
+  the 64-bit `_v2` driver symbols — the unversioned names are the
+  legacy pre-CUDA-3.2 ABI with 32-bit device addresses, which only
+  happened to work inside a legacy `cuCtxCreate` context and silently
+  break with 64-bit primary-context addresses (a live 4 GB landmine
+  either way). New `gpu_dtod`: device→device copy from a raw device
+  pointer (`cuMemcpyDtoD_v2`; plain memcpy on the CPU backend) — the
+  primitive the tensor↔onnx bridge builds on. gpu/gpukit/tensor suites
+  green on both backends; yoloe's 267-node segmentation forward stays
+  byte-identical.
+- **objdet 0.3.0 + yoloe 0.5.0 decode PNG/JPEG natively via
+  `packages/image`.** Both packages delete their private PPM/resize/
+  draw code and keep only a thin adapter (yoloe's ultralytics-matching
+  letterbox and NCHW packing stay local), so they take photos and write
+  annotated/mask-overlay PNGs and JPEGs directly — no ImageMagick
+  shell-out. Equivalence proven: old-vs-new preprocessing tensors are
+  bit-identical on real photos (objdet's 3×416×416 NCHW; yoloe's
+  letterbox(640), 0 float mismatches), and a live GPU seg run on a real
+  JPEG matches the previously verified result. Also fixed along the
+  way: objdet's `voc_class` returned a borrow into a per-call Vec (real
+  leak; suite is now ASan-clean), and yoloe cam's v4l2 YUYV group mask
+  tripped the newer `&`-type check (widened before masking).
+- **Dependency version requirements are npm-identical (node-semver).**
+  `stdlib/ext/semver.nu`'s requirement engine rewritten as an OR of
+  half-open intervals: a bare fully-specified version is now EXACT (was
+  Cargo-style caret), and X-ranges (`*`/`1`/`1.2`), `^`, `~`,
+  comparators, space-separated AND, hyphen ranges and `||` OR all match
+  npm — verified against a table of npm cases, ASan-clean. The
+  resolver/registry-index API (`semver_req_parse`/`matches`/`free`,
+  `semver_req_max_satisfying`) is unchanged, so `nurlpkg` keeps
+  building; every inter-package dependency in `packages/*/nurl.toml`
+  switched to `^` to preserve the previous newest-compatible intent,
+  and `packages/README.md` documents the full syntax table plus the
+  convention (depend with `^`, bump minor on a 0.x breaking change).
+- **nurl-mcp 0.4.0: `serve --http` mounts the stdlib Streamable-HTTP
+  facade.** The hand-rolled single-POST handler (manual CORS, no
+  batches, 405 on GET, no session-id echo) is deleted; nurl-mcp's own
+  layer shrinks to bearer-token auth wrapped around `ext/mcp_http.nu`
+  — the same plumbing swarm-mcp serves through (OPTIONS preflight
+  bypasses auth, as browsers send no headers on preflight). Free from
+  the facade: JSON-RPC batches, `GET /mcp` SSE probe, `Mcp-Session-Id`
+  echo, `DELETE /mcp`, spec CORS. Verified live (401 without bearer,
+  preflight, initialize, batch, SSE content-type, session-id
+  round-trip); read-only tool gating holds and stdio is untouched.
 
 ### Fixed
 
+- **Compiler: canonical import-dedup key — diamond dependencies compile
+  once.** The import seen-tables keyed on the resolved path STRING, so
+  the same file reached through two different-but-equivalent paths
+  compiled twice and every symbol in it collided (`invalid
+  redefinition`). Packages hit this through symlinked `deps/` chains —
+  onnx importing tensor (whose dev.nu imports `deps/gpukit` →
+  `deps/gpu`) alongside its own `deps/gpu` is a diamond.
+  `__canon_import_key` (`realpath(3)`) now canonicalises the dedup key
+  at all four seen-table sites; the as-written path stays in use for
+  reading and diagnostics, so error messages and goldens are unchanged.
+  New regression `import_diamond.nu`; two-step bootstrap, fixed point
+  re-established.
 - **nurlfmt: a match-arm `→` is no longer type context.** The formatter
   glued an operator starting a braceless arm body to its operand
   (`? flag x 0` → `?flag x 0`, `* n 2` → `*n 2`, `? != …` → `?!=`),
@@ -57,6 +125,110 @@ ten language/compiler/toolchain/ecosystem defects and gaps closed
 
 ### Added
 
+- **`packages/tensor` 0.1.0→0.3.0 — the reusable n-dimensional array
+  the ML ecosystem lacked, over gpukit (M1–M3).** `Tensor` (row-major,
+  f64 compute; an F32 dtype keeps values on the float32 grid): creation
+  / reshape / transpose / permute, numpy-rule broadcasting elementwise
+  and scalar ops, unary maps, 2-D matmul (GPU via gpukit for large
+  problems, identical results), and axis/global reductions (M1);
+  N-D batched matmul with batch-dim broadcasting, numerically stable
+  softmax, per-dimension half-open slicing, concat, argmax/argmin (M2);
+  and `DTensor` (M3) — tensor data lives in GPU memory and ops chain on
+  the device with no host roundtrips (upload weights once, stream
+  activations), residency explicit via `tensor_to_device` /
+  `dtensor_to_host`, with TE_F32 DTensors computing IN float32
+  (accumulation included) to match numpy-float32/onnxruntime
+  semantics. Verified against numpy on CUDA (RTX 4090) and the gpu
+  package's CPU backend — 17/17 + 25/25 + 12/12 per dtype, ASan-clean.
+- **`packages/gpukit` 0.1.0→0.3.1 — diamond GPU-compute toolkit over
+  the gpu package.** Kills the ~35-line marshalling dance every
+  GPU-using package re-invents: typed `GkArg` bindings and one `gk_run`
+  (per-name kernel cache; alloc, upload, marshal, launch, sync,
+  download, free) plus ready-made f64 kernels — adding no numerics of
+  its own, so a kernel runs bit-for-bit the same as through
+  hand-written `gpu_*` calls. 0.2.0 (shaken out by the anomaly
+  dogfood): `gk_open` returns a heap `*GpuKit` for singleton use, plus
+  `gk_compile` to warm the cache at setup. 0.3.0: the device-resident
+  layer — element-typed `GkBuf` allocations (`GK_F32`|`GK_F64`) with
+  staging upload/download conversion, `gk_run_dev` (cached-compile
+  launch over raw device args, zero marshalling), and dtype-generic
+  `gkd_*` kernels with true-float32 GK_F32 semantics; 12/12 vs numpy
+  per dtype. 0.3.1 republishes the manifest with `gpu ^0.3` (the
+  published `^0.2` was disjoint from onnx 0.5.0's range, letting a
+  resolver install two gpu versions side by side).
+- **`packages/onnx` 0.5.0 — tensor↔onnx zero-copy bridge (M4a) + engine
+  memory ownership.** `src/tensor_bridge.nu` is the seam between
+  tensor's `DTensor` and the graph runtime, both living in the shared
+  primary context: `rt_run_dtensor` runs a graph with a device-resident
+  input — no host staging, no upload; the input is borrowed, never
+  freed — and `dtensor_from_output` wraps a run's output as an OWNED
+  `DTensor` via a device-to-device copy (outputs may alias an owned
+  base at an offset — Reshape/Split — so ownership transfer would
+  corrupt the heap). Device-input output is bit-identical to the host
+  path and matches the onnxruntime reference; ASan-clean. ASan-gating
+  the bridge also fixed a family of pre-existing engine leaks:
+  `rt_reset` freed device buffers with `cuda_free` directly (every
+  activation leaked on the CPU backend; now `gpu_free`), RTensor shapes
+  were never freed and 9 op sites shared the input's shape vector,
+  `graph_free` gives the parse layer a teardown at last, parser
+  placeholder-String overwrite leaks (one per attr/node/tensor name —
+  scales with model size), and `rt_open`/`rt_close` engine cleanup.
+  yoloe's 267-node seg graph (exercising the reshape/split alias paths)
+  stays byte-identical.
+- **`packages/image` 0.1.0→0.4.0 — pure-NURL image codecs, raster ops
+  and an `img` CLI.** Decode/encode images with no native library and
+  no `convert` shell-out, over the stdlib DEFLATE: PPM (P5/P6); a
+  complete PNG codec (decode of bit depths 1/2/4/8/16, Adam7
+  interlacing, palette + tRNS colour keys → alpha; lossless 8-bit
+  encode); baseline AND progressive (SOF2, the format most web JPEGs
+  use) JPEG decode with any common subsampling and restart intervals;
+  baseline JPEG encode (quality 1–100, 4:4:4/4:2:2/4:2:0, Annex K
+  tables, loss profile matching Pillow's encoder); and libjpeg-exact
+  "fancy" triangular chroma upsampling (bit-matching jdsample.c
+  including its rounding biases), dropping 4:2:0 decode to
+  IDCT-rounding distance from Pillow (max diff 3, tolerance tightened
+  12→4). Plus `ops.nu` (resize nearest/bilinear/area, crop, flips,
+  rotations, convert, fill/rect/line, alpha blit, packed `0xRRGGBBAA`
+  colours), stb-style `image_error` failure reasons, and the `img` CLI
+  (`info`/`convert`/`resize` with keep-aspect specs). Verified
+  pixel-exact against Pillow where lossless, and hardened by a
+  deterministic fuzz harness (10k+ mutants per seed, 6 formats,
+  ASan+LSan, no hangs) that found a real infinite loop — baseline block
+  decode never checked the Huffman decoder's corrupt-table return —
+  alongside new dimension caps and inflated-size preflights.
+- **`packages/cli` 0.1.0 + 0.2.0 — diamond command-line framework.** A
+  single dependency-importable facade over std/args + std/term +
+  ext/env that collapses the 100–500-line hand-written `main()` every
+  package carries into a declarative `Cli`: git-style subcommand
+  routing, typed flag accessors (str/int/bool/float) with env fallbacks
+  and defaults, auto colour-aware `--help`/`--version` (TTY-gated,
+  respects `$NO_COLOR`), error→exit-code conventions, and interactive
+  prompts (`cli_confirm`/`cli_prompt`/`cli_password`). 0.2.0 adds
+  `cli_default` — a default command for programs that ARE the command
+  (psql/redis-cli shape): a bare invocation runs it, and a first
+  positional matching no subcommand (e.g. a `redis://` URL) routes to
+  it — and automatic help-short yield when a user flag claims `-h`.
+  Migrated onto it: anomaly 0.3.2, yoloe 0.6.0, redis 0.2.0 and psql
+  0.3.0 — three hand-rolled argv parsers deleted, clients live-verified
+  against real servers (redis:7, postgres:16), and several pre-existing
+  leaks fixed along the way (TCP handle leaked on connect failure,
+  `__parse_url` String overwrites), flushed out by ASan-gating the new
+  paths.
+- **`packages/http` — unified HTTP server interface package.** The
+  stdlib already ships the complete toolkit (sockets + TLS, parser,
+  response builder, keep-alive server with pools + DoS limits, router,
+  static files, auth/jwt/multipart/middleware/websocket); what every
+  server re-invents is the glue. `HttpApp` collapses bind → router →
+  shutdown signal → logging/CORS/panic-recovery → keep-alive loop into
+  a few `http_app_*` calls (`http_app_get`/`_static_dir`/`_listen` or
+  `_listen_tls`), reusing the battle-tested stdlib implementation with
+  no duplication. First consumer: anomaly 0.3.0–0.3.3 — a
+  self-contained web dashboard (model manager, trainer, feature
+  visualiser, anomaly scanner served from `anomaly serve --webroot`;
+  plain HTML/JS, no CDN, no build step), serving migrated onto HttpApp
+  (~35 lines of hand-wired glue → 6, gaining graceful SIGINT/SIGTERM
+  shutdown and handler panic→500 for free) and GPU scoring onto gpukit
+  (bit-identical output preserved).
 - **`nurl.sh --coverage` (critic C9):** line coverage for `.nu`
   sources — gcov-style `-fprofile-arcs -ftest-coverage` as IR passes
   over the DWARF metadata `--debug` emits; `llvm-cov gcov` reports
@@ -84,13 +256,31 @@ ten language/compiler/toolchain/ecosystem defects and gaps closed
   certificate in pure NURL (`std/x509_gen`) — the `openssl` CLI
   dependency is gone; minted pair verified with openssl and a live
   curl MCP handshake.
+- **Registry + web.** Package pages now show the verified owner (first
+  publisher) and the GitHub login that published each version, sourced
+  from the D1 identity tables — the authenticated publishing identity,
+  crates.io/npm style; `nurl.toml` gains no self-declared author field.
+  New `GET /api/v1/stats` (packages/versions counts, CORS-open, 5-min
+  cached) feeds a live registry-package count on nurl-lang.org (fetched
+  at deploy time, best-effort). Brand imagery lands: hero logo mark,
+  og:image/twitter social card, brand-showcase band, and a branded
+  registry header + favicon on every page.
+- **Pre-commit `nurlfmt` hook.** `.githooks/pre-commit` runs `nurlfmt
+  --write` on fully-staged `.nu` files and re-stages them (a
+  partially-staged file is only `--check`ed and blocks the commit, so
+  unstaged edits are never silently staged); `build.sh` wires
+  `core.hooksPath = .githooks` on build, so a normal build activates
+  it. Prevents commits that would trip the CI `nurlfmt --check` gate.
 
 ### Docs
 
-- `critic.md` synced to reality: A8/B8/B11/B22/C7/C9 checked off with
+- Backlog synced to reality: A8/B8/B11/B22/C7/C9 checked off with
   locks; B20 (HTTP/2 client interleave) and C6 (`nurlfmt --check` CI
   gate) were found already shipped and are annotated as such; C8 notes
   the live registry.
+- `ROADMAP.md` reviewed for 0.11.0: signedness-in-the-type-repr wording,
+  the registry package-ecosystem summary, and removal of stale pointers
+  to untracked scratch files (also scrubbed from `docs/CRYPTO.md`).
 
 ## [0.10.12] — 2026-07-03
 
