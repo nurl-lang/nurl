@@ -157,6 +157,7 @@ $ `pb.nu`
     : ~ i dtype 0
     : ~ i raw_start - 0 1
     : ~ i raw_len 0
+    : ( Vec i ) i64vals ( vec_new [i] )
     ~ ( pb_more r ) {
         : i tag ( pb_tag r )
         : i fld ( pb_field tag )
@@ -178,6 +179,13 @@ $ `pb.nu`
                 ( pb_set_pos r + ( pb_pos r ) len )
             } { ( pb_skip r wt ) }
         }
+        ? == fld 7 {  // int64_data (packed varints — onnxsim writes these)
+            ? == wt 2 {
+                : *PbR ds ( pb_submsg r )
+                ~ ( pb_more ds ) { ( vec_push [i] i64vals ( pb_varint ds ) ) }
+                ( pb_free ds )
+            } { ( vec_push [i] i64vals ( pb_varint r ) ) }
+        }
         ? == fld 9 {  // raw_data (LE f32 bytes)
             : i len ( pb_varint r )
             = raw_start ( pb_pos r )
@@ -188,6 +196,19 @@ $ `pb.nu`
     }
     : i nelem ( __nelem dims )
     : ~ i host 0
+    // int64_data field (no raw block): materialise the varints as the
+    // same 8-byte LE host block the raw path produces.
+    ? & & < raw_start 0 > ( vec_len [i] i64vals ) 0 == dtype 7 {
+        : i nv ( vec_len [i] i64vals )
+        : *u h64 ( nurl_alloc * nv 8 )
+        : ~ i q 0
+        ~ < q nv {
+            ( nurl_poke h64 q ?? ( vec_get [i] i64vals q ) { T x → x F _ → 0 } )
+            = q + q 1
+        }
+        = host # i h64
+    } {}
+    ( vec_free [i] i64vals )
     ? & >= raw_start 0 > raw_len 0 {
         ? == dtype 7 {  // INT64: 8-byte LE values
             : *u h ( nurl_alloc * nelem 8 )

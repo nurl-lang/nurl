@@ -395,6 +395,50 @@ $ `ops.nu`
 
 // Resize (nearest, integer upscale). Scales come from the FLOAT init
 // input[2] = [1,1,sh,sw].
+// Slice along ONE axis, unit step, bounds from int64 initializers
+// (inputs: data, starts, ends, axes[, steps]) — the shape torch 2.12 /
+// onnxsim emit for channel splits (older exports used Split, which has
+// its own handler). Negative axes normalise; ends clamp to the dim.
+@ rt_slice * Engine e ONode n → v {
+    : RTensor X ( __in e n 0 )
+    : i nd0 ( rt_ndim X )
+    : s st_name ( string_data ?? ( vec_get [String] . n inputs 1 ) { T x → x F _ → ( string_new ) } )
+    : s en_name ( string_data ?? ( vec_get [String] . n inputs 2 ) { T x → x F _ → ( string_new ) } )
+    : ~ i axis 1
+    ? > ( vec_len [String] . n inputs ) 3 {
+        : s ax_name ( string_data ?? ( vec_get [String] . n inputs 3 ) { T x → x F _ → ( string_new ) } )
+        = axis ( __init_i64 e ax_name 0 )
+    } {}
+    ? < axis 0 { = axis + axis nd0 } {}
+    : ~ i step 1
+    ? > ( vec_len [String] . n inputs ) 4 {
+        : s sp_name ( string_data ?? ( vec_get [String] . n inputs 4 ) { T x → x F _ → ( string_new ) } )
+        = step ( __init_i64 e sp_name 0 )
+    } {}
+    ? | != step 1 > ( __init_i64_len e st_name ) 1 {
+        ( nurl_eprint `[onnx] Slice: only single-axis unit-step supported\n` )
+    } {
+        : i dim_ax ( rt_dim X axis )
+        : ~ i sbeg ( __init_i64 e st_name 0 )
+        : ~ i send ( __init_i64 e en_name 0 )
+        ? < sbeg 0 { = sbeg + sbeg dim_ax } {}
+        ? < send 0 { = send + send dim_ax } {}
+        ? > send dim_ax { = send dim_ax } {}
+        : i sz - send sbeg
+        : ~ i outer 1
+        : ~ i j 0
+        ~ < j axis { = outer * outer ( rt_dim X j ) = j + j 1 }
+        : ~ i inner 1
+        : ~ i m + axis 1
+        ~ < m nd0 { = inner * inner ( rt_dim X m ) = m + m 1 }
+        : ( Vec i ) os ( vec_new [i] )
+        : ~ i d 0
+        ~ < d nd0 { ( vec_push [i] os ? == d axis sz ( rt_dim X d ) ) = d + d 1 }
+        : i yd ( rt_alloc_out e ( __out_name n ) os )
+        : i _r ( op_slice_ax . e g . e ks . X dptr yd outer sz inner dim_ax sbeg )
+    }
+}
+
 @ rt_resize * Engine e ONode n → v {
     : RTensor X ( __in e n 0 )
     : s sc_name ( string_data ?? ( vec_get [String] . n inputs 2 ) { T x → x F _ → ( string_new ) } )
@@ -456,8 +500,11 @@ $ `ops.nu`
 
 // Concat along `axis`, viewing each input as (outer, axis_i, inner).
 @ rt_concat * Engine e ONode n → v {
-    : i axis ( node_attr_i n `axis` 1 )
     : RTensor first ( __in e n 0 )
+    // negative axis counts from the end (same normalisation softmax
+    // needed — torch 2.12 emits Concat axis=-1 for the level merge)
+    : ~ i axis ( node_attr_i n `axis` 1 )
+    ? < axis 0 { = axis + axis ( rt_ndim first ) } {}
     : ~ i outer 1
     : ~ i j 0
     ~ < j axis { = outer * outer ( rt_dim first j ) = j + j 1 }
@@ -591,9 +638,45 @@ $ `ops.nu`
 // Gather along `axis`. Two index sources: a device tensor (e.g. the token
 // matrix → embedding lookup) gathers nidx rows; a host scalar initializer
 // (e.g. the QKV split index) selects one slice and drops the axis.
+// ArgMax along the last axis. The output is int64 (allocated at 8
+// bytes/elem — rt_alloc_out's 4-byte default would let the kernel write
+// past the buffer). Dispatches to the int64 kernel when the input is the
+// graph's raw token input (the only 8-byte tensor in play; everything
+// else on the value map is f32). Used by the CLIP text encoder's EOT
+// read-out (ArgMax over token ids → Gather), which onnxsim leaves as a
+// plain ArgMax+Gather pair — the eos_gather fast path only matches the
+// old GatherND formulation.
+@ rt_argmax * Engine e ONode n → v {
+    : RTensor x ( __in e n 0 )
+    : i nd0 ( rt_ndim x )
+    : ~ i axis ( node_attr_i n `axis` 0 )
+    ? < axis 0 { = axis + axis nd0 } {}
+    ? != axis - nd0 1 { ( nurl_eprint `[onnx] ArgMax: only last-axis supported\n` ) } {
+        : i ax ( rt_dim x axis )
+        : ~ i outer 1
+        : ~ i j 0
+        ~ < j axis { = outer * outer ( rt_dim x j ) = j + j 1 }
+        : i keep ( node_attr_i n `keepdims` 1 )
+        : ( Vec i ) os ( vec_new [i] )
+        : ~ i d 0
+        ~ < d axis { ( vec_push [i] os ( rt_dim x d ) ) = d + d 1 }
+        ? != keep 0 { ( vec_push [i] os 1 ) } {}
+        : GpuBuffer buf ( gpu_alloc . e g * ( __prod os ) 8 )
+        ( rt_own e . buf dptr )
+        ( rt_put e ( __out_name n ) . buf dptr os )
+        : s in0 ( string_data ?? ( vec_get [String] . n inputs 0 ) { T x2 → x2 F _ → ( string_new ) } )
+        ? ( streq2 in0 ( string_data . . e graph input_name ) ) {
+            : i _r1 ( op_argmax_i64 . e g . e ks . x dptr . buf dptr outer ax )
+        } {
+            : i _r2 ( op_argmax . e g . e ks . x dptr . buf dptr outer ax )
+        }
+    }
+}
+
 @ rt_gather * Engine e ONode n → v {
     : RTensor data ( __in e n 0 )
-    : i axis ( node_attr_i n `axis` 0 )
+    : ~ i axis ( node_attr_i n `axis` 0 )
+    ? < axis 0 { = axis + axis ( rt_ndim data ) } {}
     : i axis_in ( rt_dim data axis )
     : ~ i outer 1
     : ~ i j 0
@@ -658,11 +741,16 @@ $ `ops.nu`
     : RTensor X ( __in e n 0 )
     : ~ f lo - 0.0 1000000000.0
     : ~ f hi 1000000000.0
+    // min/max are OPTIONAL inputs — an omitted one arrives as an empty
+    // name ("" placeholder input), which must keep the default, not
+    // read a nonexistent initializer as 0.0 (that clamped everything).
     ? > ( vec_len [String] . n inputs ) 1 {
-        = lo ( __init_f32 e ( string_data ?? ( vec_get [String] . n inputs 1 ) { T x → x F _ → ( string_new ) } ) 0 )
+        : s lon ( string_data ?? ( vec_get [String] . n inputs 1 ) { T x → x F _ → ( string_new ) } )
+        ? > ( nurl_str_len lon ) 0 { = lo ( __init_f32 e lon 0 ) } {}
     } {}
     ? > ( vec_len [String] . n inputs ) 2 {
-        = hi ( __init_f32 e ( string_data ?? ( vec_get [String] . n inputs 2 ) { T x → x F _ → ( string_new ) } ) 0 )
+        : s hin ( string_data ?? ( vec_get [String] . n inputs 2 ) { T x → x F _ → ( string_new ) } )
+        ? > ( nurl_str_len hin ) 0 { = hi ( __init_f32 e hin 0 ) } {}
     } {}
     : i yd ( rt_alloc_out e ( __out_name n ) ( __shape_copy_rt . X shape ) )
     ( op_clip . e g . e ks . X dptr yd . X nelem lo hi )
@@ -769,6 +857,7 @@ $ `ops.nu`
                     ? ( streq2 op `Sigmoid` ) { ( rt_sigmoid e nd ) }
                     ? ( streq2 op `Concat` ) { ( rt_concat e nd ) }
                     ? ( streq2 op `Split` ) { ( rt_split e nd ) }
+                    ? ( streq2 op `Slice` ) { ( rt_slice e nd ) }
                     ? ( streq2 op `Reshape` ) { ( rt_reshape e nd ) }
                     ? ( streq2 op `Resize` ) { ( rt_resize e nd ) }
                     ? ( streq2 op `Transpose` ) { ( rt_transpose e nd ) }
@@ -783,7 +872,7 @@ $ `ops.nu`
                     ? ( streq2 op `Erf` ) { ( rt_erf e nd ) }
                     ? ( streq2 op `Gather` ) { ( rt_gather e nd ) }
                     ? ( streq2 op `GatherND` ) { ( rt_gathernd e nd ) }
-                    ? ( streq2 op `ArgMax` ) {}
+                    ? ( streq2 op `ArgMax` ) { ( rt_argmax e nd ) }
                     ? ( streq2 op `Shape` ) {}
                     ? ( streq2 op `Range` ) {}
                     ? ( streq2 op `Squeeze` ) {}

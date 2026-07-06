@@ -69,6 +69,18 @@
     border-radius: 999px; padding: .3rem .75rem; font-size: .82rem; cursor: pointer; user-select: none;
   }
   .cls.on { color: #08110c; background: var(--acc); border-color: var(--acc); font-weight: 600; }
+  .cls.custom { border-style: dashed; }
+  .promptrow { display: flex; gap: .4rem; margin-top: .7rem; }
+  .promptrow input {
+    flex: 1; min-width: 0; background: var(--panel2); border: 1px solid var(--line);
+    border-radius: 8px; color: var(--txt); padding: .45rem .6rem; font-size: .85rem;
+  }
+  .promptrow input:focus { outline: 1px solid var(--acc2); }
+  .promptrow button {
+    border: 1px solid var(--line); background: linear-gradient(180deg, #1a2333, #141b29);
+    color: var(--acc); border-radius: 8px; padding: .45rem .8rem; font-weight: 600; cursor: pointer;
+  }
+  #promptMsg { font-size: .75rem; color: var(--warn); margin-top: .35rem; min-height: 1em; }
   .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: .5rem; }
   .stat { background: var(--panel2); border: 1px solid var(--line); border-radius: 10px; padding: .55rem; text-align: center; }
   .stat b { display: block; font-size: 1.15rem; font-variant-numeric: tabular-nums; color: var(--acc2); }
@@ -125,6 +137,13 @@
       <div class="classes" id="classes">
         {% for c in classes %}<span class="cls on" data-id="{{ c.id }}">{{ c.name }}</span>{% end %}
       </div>
+      {% if promptable %}
+      <div class="promptrow">
+        <input type="text" id="promptIn" placeholder="type anything — 'coffee mug', 'red car' …" maxlength="60">
+        <button id="promptBtn">Add</button>
+      </div>
+      <div id="promptMsg"></div>
+      {% end %}
     </div>
 
     <div class="panel">
@@ -292,6 +311,39 @@ function drawOverlay(dets) {
       octx.fillText(label, d.x + 4, ty + 2);
     }
   }
+}
+
+// free-text prompting: Enter, comma or the Add button encodes the text
+// on the server (MobileCLIP → tpe slot) and appends a toggle chip.
+const pIn = $("promptIn");
+if (pIn) {
+  const pMsg = $("promptMsg");
+  const addPrompt = async () => {
+    const t = pIn.value.replace(/,\s*$/, "").trim();
+    if (!t) return;
+    pIn.disabled = true;
+    try {
+      const res = await fetch("/prompt", { method: "POST", body: t });
+      if (!res.ok) throw new Error((await res.text()).slice(0, 120));
+      const j = await res.json();
+      const el = document.createElement("span");
+      el.className = "cls on custom";
+      el.dataset.id = j.id;
+      el.textContent = j.name;
+      el.onclick = () => el.classList.toggle("on");
+      $("classes").appendChild(el);
+      pIn.value = "";
+      pMsg.textContent = "";
+    } catch (e) {
+      pMsg.textContent = "" + (e.message || e);
+    }
+    pIn.disabled = false;
+    pIn.focus();
+  };
+  $("promptBtn").onclick = addPrompt;
+  pIn.addEventListener("keydown", e => {
+    if (e.key === "Enter" || e.key === ",") { e.preventDefault(); addPrompt(); }
+  });
 }
 
 // kiosk / test mode: ?auto=1 starts the camera on load
