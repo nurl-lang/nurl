@@ -892,9 +892,15 @@ $ `stdlib/ext/http_response.nu`
                 ? | != 0 ( nurl_str_eq nm `NetClosed` ) != 0 ( nurl_str_eq nm `NetAccept` ) {
                     = done T
                 } {
-                    = last_err e
-                    = had_err T
-                    = done T
+                    // A failed TLS handshake is a per-CONNECTION event (the
+                    // pure-TLS handshake runs inside tcp_accept): a port
+                    // scanner or a plain-HTTP probe against the TLS port
+                    // must not take the listener down. Keep serving.
+                    ? != 0 ( nurl_str_eq nm `NetTlsHandshake` ) {} {
+                        = last_err e
+                        = had_err T
+                        = done T
+                    }
                 }
             }
         }
@@ -968,10 +974,12 @@ $ `stdlib/ext/http_response.nu`
                     ? | != 0 ( nurl_str_eq nm `NetClosed` ) != 0 ( nurl_str_eq nm `NetAccept` ) {
                         = done T
                     } {
-                        // Any other NetErr is treated as a fatal worker-level
-                        // failure. Phase 8 will replace this with a per-error
-                        // policy (continue on transient, exit on listener-level).
-                        = done T
+                        // Per-connection TLS handshake failures keep the
+                        // worker alive (see server_run); any other NetErr is
+                        // treated as a fatal worker-level failure. Phase 8
+                        // will replace this with a per-error policy
+                        // (continue on transient, exit on listener-level).
+                        ? != 0 ( nurl_str_eq nm `NetTlsHandshake` ) {} { = done T }
                     }
                 }
             }
