@@ -24,9 +24,11 @@ $ `stdlib/core/io.nu`
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/ext/env.nu`
+$ `deps/cli/src/cli.nu`
 $ `pg.nu`
 
 & `c` @ isatty i32 fd → i32
+
 & `c` @ nurl_read_password s prompt → s
 
 @ __sslmode_code s m → i {
@@ -375,14 +377,17 @@ $ `pg.nu`
     }
     : ~ i hoststart p
     ? & != at -1 | == slash -1 < at slash {
-        : String ui ( string_substr ( string_from url ) p - at p )
+        : String usrc ( string_from url )
+        : String ui ( string_substr usrc p - at p )
+        ( string_free usrc )
         : ?i colon ( string_index_of ui `:` )
         ?? colon {
             T ci2 → {
-                = . c user ( string_substr ui 0 ci2 )
-                = . c password ( string_substr ui + ci2 1 - ( string_len ui ) + ci2 1 )
+                ( string_free . c user ) = . c user ( string_substr ui 0 ci2 )
+                ( string_free . c password ) = . c password ( string_substr ui + ci2 1 - ( string_len ui ) + ci2 1 )
+                ( string_free ui )
             }
-            F _ → { = . c user ui }
+            F _ → { ( string_free . c user ) = . c user ui }
         }
         = hoststart + at 1
     } {}
@@ -391,27 +396,37 @@ $ `pg.nu`
     = k hoststart
     ~ < k n { ? & == ( nurl_str_get url k ) 63 == q -1 { = q k } {} = k + k 1 }
     ? & != q -1 | == slash -1 < q hostend { = hostend q } {}
-    : String hostport ( string_substr ( string_from url ) hoststart - hostend hoststart )
+    : String uall ( string_from url )
+    : String hostport ( string_substr uall hoststart - hostend hoststart )
     : ?i pc ( string_index_of hostport `:` )
     ?? pc {
         T pci → {
-            = . c host ( string_substr hostport 0 pci )
-            = . c port ( __atoi ( string_data ( string_substr hostport + pci 1 - ( string_len hostport ) + pci 1 ) ) )
+            ( string_free . c host ) = . c host ( string_substr hostport 0 pci )
+            : String pstr ( string_substr hostport + pci 1 - ( string_len hostport ) + pci 1 )
+            = . c port ( __atoi ( string_data pstr ) )
+            ( string_free pstr )
+            ( string_free hostport )
         }
-        F _ → { = . c host hostport }
+        F _ → { ( string_free . c host ) = . c host hostport }
     }
     ? != slash -1 {
         : i dbend ? != q -1 q n
-        = . c database ( string_substr ( string_from url ) + slash 1 - dbend + slash 1 )
+        ( string_free . c database ) = . c database ( string_substr uall + slash 1 - dbend + slash 1 )
     } {}
     ? != q -1 {
-        : String qs ( string_substr ( string_from url ) + q 1 - n + q 1 )
+        : String qs ( string_substr uall + q 1 - n + q 1 )
         : ?i si ( string_index_of qs `sslmode=` )
         ?? si {
-            T sidx → { = . c sslmode ( __sslmode_code ( string_data ( string_substr qs + sidx 8 - ( string_len qs ) + sidx 8 ) ) ) }
+            T sidx → {
+                : String ms ( string_substr qs + sidx 8 - ( string_len qs ) + sidx 8 )
+                = . c sslmode ( __sslmode_code ( string_data ms ) )
+                ( string_free ms )
+            }
             F _ → {}
         }
+        ( string_free qs )
     } {}
+    ( string_free uall )
     ^ c
 }
 
@@ -436,75 +451,50 @@ $ `pg.nu`
     }
 }
 
-@ __usage → v {
-    ( nurl_print `psql (NURL) — a pure-NURL PostgreSQL client (no libpq, no OpenSSL)\n\n` )
-    ( nurl_print `Usage:\n` )
-    ( nurl_print `  psql [flags] ["postgres://user:pass@host:port/db?sslmode=..."]\n\n` )
-    ( nurl_print `Flags:\n` )
-    ( nurl_print `  -h HOST        server host   (default $PGHOST or localhost)\n` )
-    ( nurl_print `  -p PORT        server port   (default $PGPORT or 5432)\n` )
-    ( nurl_print `  -U USER        user name     (default $PGUSER or postgres)\n` )
-    ( nurl_print `  -d DB          database      (default $PGDATABASE or the user name)\n` )
-    ( nurl_print `  -c SQL         run one command and exit (otherwise start a REPL)\n` )
-    ( nurl_print `  --sslmode M    disable | prefer | require | verify-full (default prefer)\n` )
-    ( nurl_print `  --help, -?     show this help and exit\n\n` )
-    ( nurl_print `Environment:\n` )
-    ( nurl_print `  PGPASSWORD     password for authentication\n` )
-    ( nurl_print `  PGHOST PGPORT PGUSER PGDATABASE   connection defaults\n\n` )
-    ( nurl_print `In the REPL, statements end with ';'. Meta-commands:\n` )
-    ( nurl_print `  \dt   \d TABLE   \dn   \l   \du   \conninfo   \?   \q\n\n` )
-    ( nurl_print `Examples:\n` )
-    ( nurl_print `  psql -h localhost -U me -d mydb -c "select 1"\n` )
-    ( nurl_print `  psql --sslmode require -U me -d mydb\n` )
-    ( nurl_print `  psql "postgres://me:secret@db.example.com:5432/mydb?sslmode=verify-full"\n` )
-}
-
-@ main → i {
-    : ( Vec String ) args ( env_args_list )
-    : i argc ( vec_len [String] args )
-
+// The whole program is one default command (psql style): flags, an optional
+// postgres://… URL positional, then one-shot -c or the REPL.
+@ __psql_go CliCtx x → i {
+    : String hostv ( ctx_str x `host` )
+    : String userv ( ctx_str x `user` )
+    : String passv ( ctx_str x `password` )
+    : String dbv ( ctx_str x `dbname` )
+    : String sslv ( ctx_str x `sslmode` )
     : ~ ConnInfo ci @ ConnInfo {
-        ( env_var_or `PGHOST` `localhost` )
-        ( __atoi ( string_data ( env_var_or `PGPORT` `5432` ) ) )
-        ( env_var_or `PGUSER` `postgres` )
-        ( env_var_or `PGPASSWORD` `` )
-        ( env_var_or `PGDATABASE` `` )
-        1
+        hostv
+        ( ctx_int x `port` )
+        userv
+        passv
+        dbv
+        ( __sslmode_code ( string_data sslv ) )
         F
     }
-    : ~ String sql ( string_new )
-    : ~ b have_c F
-    : ~ b want_help F
+    ( string_free sslv )
+    : String sql ( ctx_str x `command` )
+    : b have_c > ( string_len sql ) 0
+    // an optional postgres:// / postgresql:// URL positional overrides flags
+    ? > ( ctx_nargs x ) 0 {
+        : String u ( ctx_arg x 0 )
+        : s us ( string_data u )
+        ? | ( nurl_str_starts us `postgres://` ) ( nurl_str_starts us `postgresql://` ) {
+            = ci ( __parse_url us ci )
+        } {
+            ( nurl_eprint `psql: unknown argument: ` ) ( nurl_eprint us ) ( nurl_eprint `\n` )
+        }
+    } {}
 
-    : ~ i ai 1
-    ~ < ai argc {
-        : String a ?? ( vec_get [String] args ai ) { T x → x F _ → ( string_new ) }
-        : s as ( string_data a )
-        ? ( nurl_str_eq as `-h` ) { = ai + ai 1 = . ci host ?? ( vec_get [String] args ai ) { T x → x F _ → . ci host } } {
-            ? ( nurl_str_eq as `-p` ) { = ai + ai 1 = . ci port ( __atoi ( string_data ?? ( vec_get [String] args ai ) { T x → x F _ → ( string_from `5432` ) } ) ) } {
-                ? ( nurl_str_eq as `-U` ) { = ai + ai 1 = . ci user ?? ( vec_get [String] args ai ) { T x → x F _ → . ci user } } {
-                    ? ( nurl_str_eq as `-d` ) { = ai + ai 1 = . ci database ?? ( vec_get [String] args ai ) { T x → x F _ → . ci database } } {
-                        ? ( nurl_str_eq as `-c` ) { = ai + ai 1 = sql ?? ( vec_get [String] args ai ) { T x → x F _ → ( string_new ) } = have_c T } {
-                            ? ( nurl_str_eq as `--sslmode` ) { = ai + ai 1 = . ci sslmode ( __sslmode_code ( string_data ?? ( vec_get [String] args ai ) { T x → x F _ → ( string_from `prefer` ) } ) ) } {
-                                ? | ( nurl_str_starts as `postgres://` ) ( nurl_str_starts as `postgresql://` ) { = ci ( __parse_url as ci ) } {
-                                    ? | ( nurl_str_eq as `--help` ) ( nurl_str_eq as `-?` ) { = want_help T } {
-                                        ( nurl_eprint `psql: unknown argument: ` ) ( nurl_eprint as ) ( nurl_eprint `\n` )
-                                    } } } } } } } }
-        = ai + ai 1
-    }
-
-    // Explicit --help: print usage and exit. (Bare `psql` still connects to
-    // the default host, like other psql clients.)
-    ? want_help { ( __usage ) ^ 0 } {}
-
-    // database defaults to the user name if unset
-    ? == ( string_len . ci database ) 0 { = . ci database . ci user } {}
+    // database defaults to the user name if unset (copied — both are freed)
+    ? == ( string_len . ci database ) 0 {
+        ( string_free . ci database )
+        = . ci database ( string_from ( string_data . ci user ) )
+    } {}
 
     : i tty # i ( isatty # i32 0 )
     : !*PgConn PgErr cr ( __connect ci tty )
     ?? cr {
         F e → {
             ( nurl_eprint `psql: connection failed: ` ) ( nurl_eprint ( pg_err_name e ) ) ( nurl_eprint `\n` )
+            ( string_free . ci host ) ( string_free . ci user ) ( string_free . ci password ) ( string_free . ci database )
+            ( string_free sql )
             ^ 1
         }
         T c → {
@@ -521,7 +511,24 @@ $ `pg.nu`
                 ( __repl c tty )
             }
             ( pg_close c )
+            ( string_free . ci host ) ( string_free . ci user ) ( string_free . ci password ) ( string_free . ci database )
+            ( string_free sql )
             ^ 0
         }
     }
+}
+
+@ main → i {
+    : *Cli c ( cli_new `psql` `a pure-NURL PostgreSQL client (no libpq, no OpenSSL); postgres://user:pass@host:port/db?sslmode=… as the argument` `0.3.0` )
+    ( cli_flag_str c `host` 104 `HOST` `server host` `localhost` `PGHOST` )
+    ( cli_flag_int c `port` 112 `PORT` `server port` 5432 `PGPORT` )
+    ( cli_flag_str c `user` 85 `USER` `user name` `postgres` `PGUSER` )
+    ( cli_flag_str c `password` 0 `PASS` `password (usually via $PGPASSWORD)` `` `PGPASSWORD` )
+    ( cli_flag_str c `dbname` 100 `DB` `database (default: the user name)` `` `PGDATABASE` )
+    ( cli_flag_str c `command` 99 `SQL` `run one command and exit (otherwise start a REPL)` `` `` )
+    ( cli_flag_str c `sslmode` 0 `MODE` `disable | prefer | require | verify-full` `prefer` `` )
+    ( cli_default c \ CliCtx x → i { ^ ( __psql_go x ) } )
+    : i rc ( cli_run c )
+    ( cli_free c )
+    ^ rc
 }

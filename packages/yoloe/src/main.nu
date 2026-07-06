@@ -1,7 +1,7 @@
 // packages/yoloe/src/main.nu — the `yoloe` command: promptable open-vocabulary
 // object detection AND instance segmentation, pure NURL on the GPU, with a
 // live webcam mode that draws straight to the terminal. Single binary, three
-// flag-driven sub-commands (see `yoloe help`):
+// sub-commands, parsed by the cli package (see `yoloe --help`):
 //
 //   yoloe detect --model M --classes C --image IMG [--out OUT]
 //   yoloe seg    --model M --classes C --image IMG [--out OUT]
@@ -20,6 +20,7 @@ $ `stdlib/ext/env.nu`
 $ `deps/onnx/src/pb.nu`
 $ `deps/onnx/src/model.nu`
 $ `deps/onnx/src/runtime.nu`
+$ `deps/cli/src/cli.nu`
 $ `image.nu`
 $ `decode.nu`
 $ `mask.nu`
@@ -33,29 +34,15 @@ $ `window.nu`
 
 @ pn i n → v { ( nurl_print ( nurl_str_int n ) ) }
 
-// ── flag parsing ──────────────────────────────────────────────────
-@ __arg_index ( Vec String ) av s name → i {
-    : i n ( vec_len [String] av )
-    : ~ i k 0
-    ~ < k n {
-        ?? ( vec_get [String] av k ) { T x → ? != 0 ( nurl_str_eq ( string_data x ) name ) { ^ k } {} F _ → {} }
-        = k + k 1
-    }
-    ^ - 0 1
-}
-
-@ flag_set ( Vec String ) av s name → b { ^ >= ( __arg_index av name ) 0 }
-
-@ flag_str ( Vec String ) av s name → String {
-    : i i ( __arg_index av name )
-    ? < i 0 { ^ ( string_new ) } {}
-    ?? ( vec_get [String] av + i 1 ) { T x → ^ x F _ → ^ ( string_new ) }
-}
-
-@ flag_int ( Vec String ) av s name i dflt → i {
-    : i i ( __arg_index av name )
-    ? < i 0 { ^ dflt } {}
-    ?? ( vec_get [String] av + i 1 ) { T x → ^ ( nurl_str_to_int ( string_data x ) ) F _ → ^ dflt }
+// ── flags (parsed by the cli package; see main) ───────────────────
+// What to draw: --boxes and/or --mask (alias --segment). Neither → both.
+// Bit mask: bit0 = draw boxes, bit1 = draw masks, bit2 = --mask was explicit.
+@ __ye_wants CliCtx x → i {
+    : b fb ( ctx_bool x `boxes` )
+    : b fm | ( ctx_bool x `mask` ) ( ctx_bool x `segment` )
+    : b wb | fb ! fm
+    : b wm | fm ! fb
+    ^ + + ? wb { 1 } { 0 } ? wm { 2 } { 0 } ? fm { 4 } { 0 }
 }
 
 // Read the prompt vocabulary from a text file (one class per line); the line
@@ -282,75 +269,69 @@ $ `window.nu`
     ^ 0
 }
 
-@ usage → v {
-    ( p `yoloe — promptable open-vocabulary detection & instance segmentation (pure NURL, GPU)\n\n` )
-    ( p `usage:\n` )
-    ( p `  yoloe detect --model M --classes C --image IMG [--out OUT]\n` )
-    ( p `        draw boxes for the prompted classes\n` )
-    ( p `  yoloe seg    --model M --classes C --image IMG [--out OUT]\n` )
-    ( p `        boxes + a per-object segmentation mask\n` )
-    ( p `  yoloe cam    --model M --classes C [options]\n` )
-    ( p `        LIVE segmentation from a webcam, drawn in the terminal\n\n` )
-    ( p `flags:\n` )
-    ( p `  --model   <model.onnx>   a YOLOE-seg export from tools/export.py\n` )
-    ( p `                           (-> yoloe-v8s-seg.onnx); not bundled (~45 MB).\n` )
-    ( p `  --classes <classes.txt>  vocabulary, one prompt word per line.\n` )
-    ( p `  --image   <img>          input for detect/seg (PNG, JPEG or PPM).\n` )
-    ( p `  --out     <path>         detect/seg: output image; cam: dir to save frames.\n` )
-    ( p `  --device  <dev>          cam webcam device (default /dev/video0).\n` )
-    ( p `  --frames  <N>            cam: stop after N frames (default: run until Ctrl-C).\n` )
-    ( p `  --boxes                  draw bounding boxes.\n` )
-    ( p `  --mask                   draw the segmentation masks (alias --segment).\n` )
-    ( p `                           (neither flag = draw both; pick one for just that.)\n` )
-    ( p `  --window                 cam: show in a real GUI window (X11).\n` )
-    ( p `  --terminal               cam: show in the terminal (truecolor half-blocks).\n` )
-    ( p `  --no-show                cam: don't display (e.g. only --out). Default: window\n` )
-    ( p `                           if $DISPLAY is set, else terminal.\n` )
-    ( p `  --gpu     <N>            CUDA device ordinal to run on (default 0).\n\n` )
-    ( p `examples:\n` )
-    ( p `  yoloe seg --model yoloe-v8s-seg.onnx --classes classes.txt --image photo.ppm --out out.ppm\n` )
-    ( p `  yoloe cam --model yoloe-v8s-seg.onnx --classes classes.txt              # live GUI window\n` )
-    ( p `  yoloe cam --model yoloe-v8s-seg.onnx --classes classes.txt --mask --terminal\n` )
-    ( p `  yoloe cam --model yoloe-v8s-seg.onnx --classes classes.txt --frames 60 --out frames/ --no-show\n` )
+@ __ye_cmd_still CliCtx x b is_detect → i {
+    : String mp ( ctx_str x `model` )
+    : String np ( ctx_str x `classes` )
+    : i gpu ( ctx_int x `gpu` )
+    : i w ( __ye_wants x )
+    : i wb1 & w 1
+    : i wm2 & w 2
+    : i fm4 & w 4
+    : b want_boxes == wb1 1
+    : b want_masks == wm2 2
+    : b fm == fm4 4
+    // `detect` is boxes-only unless the user explicitly asked for a mask.
+    : b dmask & want_masks ! & is_detect ! fm
+    : String ip ( ctx_str x `image` )
+    : String op ( ctx_str x `out` )
+    : i rc ( run_still want_boxes dmask mp np ip op gpu )
+    // ctx_str returns owned Strings (the old flag_str borrowed from argv)
+    ( string_free mp ) ( string_free np ) ( string_free ip ) ( string_free op )
+    ^ rc
+}
+
+@ __ye_cmd_cam CliCtx x → i {
+    : String mp ( ctx_str x `model` )
+    : String np ( ctx_str x `classes` )
+    : i gpu ( ctx_int x `gpu` )
+    : i w ( __ye_wants x )
+    : i wb1 & w 1
+    : i wm2 & w 2
+    : b want_boxes == wb1 1
+    : b want_masks == wm2 2
+    : String dev ( ctx_str x `device` )
+    : i nframes ( ctx_int x `frames` )
+    : String od ( ctx_str x `out` )
+    // display mode: --no-show → 0; --terminal → 1; --window → 2;
+    // default → window if $DISPLAY is set, else terminal.
+    : ~ i mode ? > ( string_len ( env_var_or `DISPLAY` `` ) ) 0 2 1
+    ? ( ctx_bool x `terminal` ) { = mode 1 } {}
+    ? ( ctx_bool x `window` ) { = mode 2 } {}
+    ? ( ctx_bool x `no-show` ) { = mode 0 } {}
+    : i rc ( run_cam mp np dev nframes od mode want_boxes want_masks gpu )
+    ( string_free mp ) ( string_free np ) ( string_free dev ) ( string_free od )
+    ^ rc
 }
 
 @ main → i {
-    : ( Vec String ) av ( env_args_list )
-    ? < ( vec_len [String] av ) 2 { ( usage ) ^ 2 } {}
-    : String cmd ?? ( vec_get [String] av 1 ) { T x → x F _ → ( string_new ) }
-    : s c ( string_data cmd )
-
-    : String mp ( flag_str av `--model` )
-    : String np ( flag_str av `--classes` )
-    : i gpu ( flag_int av `--gpu` 0 )
-    // What to draw: --boxes and/or --mask (alias --segment). Neither → both.
-    : b fb ( flag_set av `--boxes` )
-    : b fm | ( flag_set av `--mask` ) ( flag_set av `--segment` )
-    : b want_boxes | fb ! fm
-    : b want_masks | fm ! fb
-
-    ? | != 0 ( nurl_str_eq c `detect` ) != 0 ( nurl_str_eq c `seg` ) {
-        // `detect` is boxes-only unless the user explicitly asked for a mask.
-        : b dmask & want_masks ! & != 0 ( nurl_str_eq c `detect` ) ! fm
-        : String ip ( flag_str av `--image` )
-        : String op ( flag_str av `--out` )
-        ^ ( run_still want_boxes dmask mp np ip op gpu )
-    } {}
-
-    ? != 0 ( nurl_str_eq c `cam` ) {
-        : String dev0 ( flag_str av `--device` )
-        : String dev ? > ( string_len dev0 ) 0 dev0 ( string_from `/dev/video0` )
-        : i nframes ? ( flag_set av `--frames` ) ( flag_int av `--frames` 30 ) - 0 1
-        : String od ( flag_str av `--out` )
-        // display mode: --no-show → 0; --terminal → 1; --window → 2;
-        // default → window if $DISPLAY is set, else terminal.
-        : ~ i mode ? > ( string_len ( env_var_or `DISPLAY` `` ) ) 0 2 1
-        ? ( flag_set av `--terminal` ) { = mode 1 } {}
-        ? ( flag_set av `--window` ) { = mode 2 } {}
-        ? ( flag_set av `--no-show` ) { = mode 0 } {}
-        ^ ( run_cam mp np dev nframes od mode want_boxes want_masks gpu )
-    } {}
-
-    ? | != 0 ( nurl_str_eq c `help` ) | != 0 ( nurl_str_eq c `-h` ) != 0 ( nurl_str_eq c `--help` ) { ( usage ) ^ 0 } {}
-    ( p `yoloe: unknown command '` ) ( p c ) ( p `'\n\n` ) ( usage ) ^ 2
+    : *Cli c ( cli_new `yoloe` `promptable open-vocabulary detection & instance segmentation (pure NURL, GPU)` `0.6.0` )
+    ( cli_flag_str c `model` 109 `MODEL.onnx` `YOLOE-seg export from tools/export.py (~45 MB, not bundled)` `` `` )
+    ( cli_flag_str c `classes` 99 `FILE` `vocabulary, one prompt word per line` `` `` )
+    ( cli_flag_str c `image` 105 `IMG` `detect/seg input (PNG, JPEG or PPM)` `` `` )
+    ( cli_flag_str c `out` 111 `PATH` `detect/seg: output image; cam: dir to save frames` `` `` )
+    ( cli_flag_str c `device` 100 `DEV` `cam: webcam device` `/dev/video0` `` )
+    ( cli_flag_int c `frames` 0 `N` `cam: stop after N frames (-1 = until Ctrl-C)` -1 `` )
+    ( cli_flag_int c `gpu` 0 `N` `CUDA device ordinal to run on` 0 `` )
+    ( cli_flag_bool c `boxes` 98 `draw bounding boxes` )
+    ( cli_flag_bool c `mask` 0 `draw the segmentation masks (neither flag = draw both)` )
+    ( cli_flag_bool c `segment` 0 `alias for --mask` )
+    ( cli_flag_bool c `window` 119 `cam: show in a real GUI window (X11)` )
+    ( cli_flag_bool c `terminal` 116 `cam: show in the terminal (truecolor half-blocks)` )
+    ( cli_flag_bool c `no-show` 0 `cam: no display (default: window if $DISPLAY, else terminal)` )
+    ( cli_cmd c `detect` `draw boxes for the prompted classes` \ CliCtx x → i { ^ ( __ye_cmd_still x T ) } )
+    ( cli_cmd c `seg` `boxes + a per-object segmentation mask` \ CliCtx x → i { ^ ( __ye_cmd_still x F ) } )
+    ( cli_cmd c `cam` `LIVE segmentation from a webcam` \ CliCtx x → i { ^ ( __ye_cmd_cam x ) } )
+    : i rc ( cli_run c )
+    ( cli_free c )
+    ^ rc
 }

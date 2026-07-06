@@ -403,7 +403,10 @@ $ `stdlib/std/tls.nu`
 
 @ pg_connect s host i port s user s password s database i sslmode → !*PgConn PgErr {
     : i rawfd ( nurl_tcp_connect host port )
-    ? != ( nurl_tcp_err_kind rawfd ) 0 { ^ @ !*PgConn PgErr { F # PgErr PgConnFail } } {}
+    ? != ( nurl_tcp_err_kind rawfd ) 0 {
+        ( nurl_tcp_close rawfd )  // failed handles still own their allocation
+        ^ @ !*PgConn PgErr { F # PgErr PgConnFail }
+    } {}
 
     : *PgConn c # *PgConn ( nurl_alloc Z PgConn )
     = . c tls 0

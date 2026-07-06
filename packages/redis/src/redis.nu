@@ -316,7 +316,10 @@ $ `resp.nu`
 // tlsmode: 0 plaintext · 1 TLS no-verify · 2 TLS verify-full
 @ __redis_open s host i port i tlsmode s server_name → !*RedisConn RedisErr {
     : i rawfd ( nurl_tcp_connect host port )
-    ? != ( nurl_tcp_err_kind rawfd ) 0 { ^ @ !*RedisConn RedisErr { F # RedisErr RedisConnFail } } {}
+    ? != ( nurl_tcp_err_kind rawfd ) 0 {
+        ( nurl_tcp_close rawfd )  // failed handles still own their allocation
+        ^ @ !*RedisConn RedisErr { F # RedisErr RedisConnFail }
+    } {}
 
     : *RedisConn c # *RedisConn ( nurl_alloc Z RedisConn )
     = . c tls 0

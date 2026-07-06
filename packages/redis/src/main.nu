@@ -18,6 +18,7 @@ $ `stdlib/core/io.nu`
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/ext/env.nu`
+$ `deps/cli/src/cli.nu`
 $ `redis.nu`
 
 & `c` @ isatty i32 fd → i32
@@ -67,7 +68,7 @@ $ `redis.nu`
 }
 
 // Send one already-built command, print its reply, and free args.
-@ __run_cmd *RedisConn c ( Vec String ) args → v {
+@ __run_cmd * RedisConn c ( Vec String ) args → v {
     ?? ( redis_command c args ) {
         T rep → { ( __print_node rep ( resp_reply_root rep ) 0 ) ( resp_reply_free rep ) }
         F e → {
@@ -105,22 +106,22 @@ $ `redis.nu`
         ( nurl_print `message ` ) ( nurl_print ( redis_message_channel m ) )
         ( nurl_print ` "` ) ( nurl_print ( redis_message_payload m ) ) ( nurl_print `"\n` )
     } {
-    ? == k 3 {
-        ( nurl_print `pmessage ` ) ( nurl_print ( redis_message_pattern m ) )
-        ( nurl_print ` ` ) ( nurl_print ( redis_message_channel m ) )
-        ( nurl_print ` "` ) ( nurl_print ( redis_message_payload m ) ) ( nurl_print `"\n` )
-    } {
-        : i sub | == k 1 == k 4
-        ( nurl_print ? sub `(subscribed ` `(unsubscribed ` )
-        ( nurl_print ? | == k 4 == k 5 ( redis_message_pattern m ) ( redis_message_channel m ) )
-        ( nurl_print `, ` ) ( __print_int ( redis_message_count m ) ) ( nurl_print ` active)\n` )
-    } }
+        ? == k 3 {
+            ( nurl_print `pmessage ` ) ( nurl_print ( redis_message_pattern m ) )
+            ( nurl_print ` ` ) ( nurl_print ( redis_message_channel m ) )
+            ( nurl_print ` "` ) ( nurl_print ( redis_message_payload m ) ) ( nurl_print `"\n` )
+        } {
+            : i sub | == k 1 == k 4
+            ( nurl_print ? sub `(subscribed ` `(unsubscribed ` )
+            ( nurl_print ? | == k 4 == k 5 ( redis_message_pattern m ) ( redis_message_channel m ) )
+            ( nurl_print `, ` ) ( __print_int ( redis_message_count m ) ) ( nurl_print ` active)\n` )
+        } }
 }
 
 // SUBSCRIBE / PSUBSCRIBE one or more channels, then print delivered messages
 // until the connection closes (Ctrl-C / EOF). `toks` is the whole command
 // (toks[0] = the verb, toks[1..] = channels / patterns).
-@ __subscribe_loop *RedisConn c ( Vec String ) toks i is_pattern → v {
+@ __subscribe_loop * RedisConn c ( Vec String ) toks i is_pattern → v {
     : i n ( vec_len [String] toks )
     : ~ i k 1
     ~ < k n {
@@ -143,7 +144,7 @@ $ `redis.nu`
 
 // Route a parsed command: SUBSCRIBE / PSUBSCRIBE enter the message loop,
 // everything else is a one-shot request/reply. Frees `toks` either way.
-@ __dispatch *RedisConn c ( Vec String ) toks → v {
+@ __dispatch * RedisConn c ( Vec String ) toks → v {
     : s cmd0 ( string_data ?? ( vec_get [String] toks 0 ) { T x → x F _ → ( string_new ) } )
     ? ( __rci_eq cmd0 `subscribe` ) { ( __subscribe_loop c toks 0 ) ( redis_args_free toks ) ^ v } {}
     ? ( __rci_eq cmd0 `psubscribe` ) { ( __subscribe_loop c toks 1 ) ( redis_args_free toks ) ^ v } {}
@@ -186,7 +187,7 @@ $ `redis.nu`
     String user
     String password
     i db
-    i tlsmode    // 0 plain, 1 tls insecure, 2 tls verify-full
+    i tlsmode  // 0 plain, 1 tls insecure, 2 tls verify-full
 }
 
 // redis://[user:pass@]host[:port][/db]  (rediss:// → TLS)
@@ -207,30 +208,40 @@ $ `redis.nu`
     }
     : ~ i hoststart p
     ? & != at -1 | == slash -1 < at slash {
-        : String ui ( string_substr ( string_from url ) p - at p )
+        : String usrc ( string_from url )
+        : String ui ( string_substr usrc p - at p )
+        ( string_free usrc )
         : ?i colon ( string_index_of ui `:` )
         ?? colon {
             T ci2 → {
-                = . c user ( string_substr ui 0 ci2 )
-                = . c password ( string_substr ui + ci2 1 - ( string_len ui ) + ci2 1 )
+                ( string_free . c user ) = . c user ( string_substr ui 0 ci2 )
+                ( string_free . c password ) = . c password ( string_substr ui + ci2 1 - ( string_len ui ) + ci2 1 )
+                ( string_free ui )
             }
-            F _ → { = . c password ui }
+            F _ → { ( string_free . c password ) = . c password ui }
         }
         = hoststart + at 1
     } {}
     : i hostend ? != slash -1 slash n
-    : String hostport ( string_substr ( string_from url ) hoststart - hostend hoststart )
+    : String uall ( string_from url )
+    : String hostport ( string_substr uall hoststart - hostend hoststart )
     : ?i pc ( string_index_of hostport `:` )
     ?? pc {
         T pci → {
-            = . c host ( string_substr hostport 0 pci )
-            = . c port ( __atoi ( string_data ( string_substr hostport + pci 1 - ( string_len hostport ) + pci 1 ) ) )
+            ( string_free . c host ) = . c host ( string_substr hostport 0 pci )
+            : String pstr ( string_substr hostport + pci 1 - ( string_len hostport ) + pci 1 )
+            = . c port ( __atoi ( string_data pstr ) )
+            ( string_free pstr )
+            ( string_free hostport )
         }
-        F _ → { = . c host hostport }
+        F _ → { ( string_free . c host ) = . c host hostport }
     }
     ? != slash -1 {
-        = . c db ( __atoi ( string_data ( string_substr ( string_from url ) + slash 1 - n + slash 1 ) ) )
+        : String dstr ( string_substr uall + slash 1 - n + slash 1 )
+        = . c db ( __atoi ( string_data dstr ) )
+        ( string_free dstr )
     } {}
+    ( string_free uall )
     ^ c
 }
 
@@ -241,63 +252,33 @@ $ `redis.nu`
     ^ ( redis_connect ( string_data . ci host ) . ci port )
 }
 
-@ __usage → v {
-    ( nurl_print `redis (NURL) — a pure-NURL Redis client (RESP2, optional pure TLS)\n\n` )
-    ( nurl_print `Usage:\n` )
-    ( nurl_print `  redis [flags] ["redis://[user:pass@]host:port/db"]\n\n` )
-    ( nurl_print `Flags:\n` )
-    ( nurl_print `  -h HOST        host        (default $REDIS_HOST or 127.0.0.1)\n` )
-    ( nurl_print `  -p PORT        port        (default $REDIS_PORT or 6379)\n` )
-    ( nurl_print `  -a PASSWORD    AUTH password (default $REDIS_PASSWORD)\n` )
-    ( nurl_print `  --user USER    ACL username for AUTH (Redis 6+)\n` )
-    ( nurl_print `  -n DB          SELECT database index (default 0)\n` )
-    ( nurl_print `  --tls          connect over TLS (verify-full)\n` )
-    ( nurl_print `  --insecure     skip certificate verification\n` )
-    ( nurl_print `  -c "CMD ARGS"  run one command and exit (otherwise start a REPL)\n` )
-    ( nurl_print `  --help, -?     show this help and exit\n\n` )
-    ( nurl_print `Examples:\n` )
-    ( nurl_print `  redis -c "PING"\n` )
-    ( nurl_print `  redis -h cache.example.com -p 6380 --tls -c "GET session:42"\n` )
-    ( nurl_print `  redis "rediss://default:secret@cache.example.com:6380/0"\n` )
-}
-
-@ main → i {
-    : ( Vec String ) args ( env_args_list )
-    : i argc ( vec_len [String] args )
-
+// The whole program is one default command (redis-cli style): flags,
+// an optional redis://…/rediss://… URL positional, then one-shot or REPL.
+@ __redis_go CliCtx x → i {
+    : String hostv ( ctx_str x `host` )
+    : String passv ( ctx_str x `password` )
+    : String userv ( ctx_str x `user` )
     : ~ ConnInfo ci @ ConnInfo {
-        ( env_var_or `REDIS_HOST` `127.0.0.1` )
-        ( __atoi ( string_data ( env_var_or `REDIS_PORT` `6379` ) ) )
-        ( string_new )
-        ( env_var_or `REDIS_PASSWORD` `` )
-        0
-        0
+        hostv
+        ( ctx_int x `port` )
+        userv
+        passv
+        ( ctx_int x `db` )
+        ? ( ctx_bool x `tls` ) { 2 } { 0 }
     }
-    : ~ String oneshot ( string_new )
-    : ~ b have_c F
-    : ~ b want_help F
-    : ~ i insecure 0
-
-    : ~ i ai 1
-    ~ < ai argc {
-        : String a ?? ( vec_get [String] args ai ) { T x → x F _ → ( string_new ) }
-        : s as ( string_data a )
-        ? ( nurl_str_eq as `-h` ) { = ai + ai 1 = . ci host ?? ( vec_get [String] args ai ) { T x → x F _ → . ci host } } {
-        ? ( nurl_str_eq as `-p` ) { = ai + ai 1 = . ci port ( __atoi ( string_data ?? ( vec_get [String] args ai ) { T x → x F _ → ( string_from `6379` ) } ) ) } {
-        ? ( nurl_str_eq as `-a` ) { = ai + ai 1 = . ci password ?? ( vec_get [String] args ai ) { T x → x F _ → . ci password } } {
-        ? ( nurl_str_eq as `--user` ) { = ai + ai 1 = . ci user ?? ( vec_get [String] args ai ) { T x → x F _ → . ci user } } {
-        ? ( nurl_str_eq as `-n` ) { = ai + ai 1 = . ci db ( __atoi ( string_data ?? ( vec_get [String] args ai ) { T x → x F _ → ( string_from `0` ) } ) ) } {
-        ? ( nurl_str_eq as `--tls` ) { ? == . ci tlsmode 0 { = . ci tlsmode 2 } {} } {
-        ? ( nurl_str_eq as `--insecure` ) { = insecure 1 } {
-        ? ( nurl_str_eq as `-c` ) { = ai + ai 1 = oneshot ?? ( vec_get [String] args ai ) { T x → x F _ → ( string_new ) } = have_c T } {
-        ? | ( nurl_str_starts as `redis://` ) ( nurl_str_starts as `rediss://` ) { = ci ( __parse_url as ci ) } {
-        ? | ( nurl_str_eq as `--help` ) ( nurl_str_eq as `-?` ) { = want_help T } {
-            ( nurl_eprint `redis: unknown argument: ` ) ( nurl_eprint as ) ( nurl_eprint `\n` )
-        } } } } } } } } } }
-        = ai + ai 1
-    }
-
-    ? want_help { ( __usage ) ^ 0 } {}
+    : String oneshot ( ctx_str x `command` )
+    : b have_c > ( string_len oneshot ) 0
+    : i insecure ? ( ctx_bool x `insecure` ) { 1 } { 0 }
+    // an optional redis:// / rediss:// URL positional overrides the flags
+    ? > ( ctx_nargs x ) 0 {
+        : String u ( ctx_arg x 0 )
+        : s us ( string_data u )
+        ? | ( nurl_str_starts us `redis://` ) ( nurl_str_starts us `rediss://` ) {
+            = ci ( __parse_url us ci )
+        } {
+            ( nurl_eprint `redis: unknown argument: ` ) ( nurl_eprint us ) ( nurl_eprint `\n` )
+        }
+    } {}
 
     // --insecure downgrades verify-full to encrypt-only.
     ? & == insecure 1 > . ci tlsmode 0 { = . ci tlsmode 1 } {}
@@ -308,6 +289,8 @@ $ `redis.nu`
     ?? cr {
         F e → {
             ( nurl_eprint `redis: connection failed: ` ) ( nurl_eprint ( redis_err_name e ) ) ( nurl_eprint `\n` )
+            ( string_free . ci host ) ( string_free . ci user ) ( string_free . ci password )
+            ( string_free oneshot )
             ^ 1
         }
         T c → {
@@ -358,7 +341,25 @@ $ `redis.nu`
                 }
             }
             ( redis_close c )
+            ( string_free . ci host ) ( string_free . ci user ) ( string_free . ci password )
+            ( string_free oneshot )
             ^ 0
         }
     }
+}
+
+@ main → i {
+    : *Cli c ( cli_new `redis` `a pure-NURL Redis client (RESP2, optional pure TLS); redis://[user:pass@]host:port/db as the argument` `0.2.0` )
+    ( cli_flag_str c `host` 104 `HOST` `server host` `127.0.0.1` `REDIS_HOST` )
+    ( cli_flag_int c `port` 112 `PORT` `server port` 6379 `REDIS_PORT` )
+    ( cli_flag_str c `password` 97 `PASSWORD` `AUTH password` `` `REDIS_PASSWORD` )
+    ( cli_flag_str c `user` 0 `USER` `ACL username for AUTH (Redis 6+)` `` `` )
+    ( cli_flag_int c `db` 110 `DB` `SELECT database index` 0 `` )
+    ( cli_flag_bool c `tls` 0 `connect over TLS (verify-full)` )
+    ( cli_flag_bool c `insecure` 0 `skip certificate verification (encrypt-only)` )
+    ( cli_flag_str c `command` 99 `CMD` `run one command and exit (otherwise start a REPL)` `` `` )
+    ( cli_default c \ CliCtx x → i { ^ ( __redis_go x ) } )
+    : i rc ( cli_run c )
+    ( cli_free c )
+    ^ rc
 }
