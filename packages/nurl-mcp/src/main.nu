@@ -14,8 +14,11 @@
 // (found on $PATH — the installed toolchain shims export $NURL_STDLIB so the
 // compiler resolves stdlib imports). Running NURL is full code execution
 // (libc FFI, no sandbox); over stdio that is safe because only the process
-// that spawned this server talks to it. A network (`--http`) transport with
-// token auth is intentionally deferred to a later version.
+// that spawned this server talks to it. The `--http` transport serves the
+// MCP Streamable-HTTP protocol via the stdlib facade (`ext/mcp_http.nu`:
+// POST single/batch, GET SSE probe, Mcp-Session-Id echo, DELETE, CORS)
+// with bearer-token auth layered on top; nurl_run stays off over HTTP
+// unless --allow-run is given.
 
 $ `stdlib/ext/mcp.nu`
 $ `stdlib/ext/json.nu`
@@ -26,10 +29,10 @@ $ `stdlib/ext/env.nu`
 $ `stdlib/core/posix.nu`
 $ `stdlib/std/args.nu`
 $ `stdlib/std/net.nu`
-$ `stdlib/std/bytes.nu`
 $ `stdlib/ext/http_request.nu`
 $ `stdlib/ext/http_response.nu`
 $ `stdlib/ext/http_server.nu`
+$ `stdlib/ext/mcp_http.nu`
 $ `stdlib/std/encode.nu`
 $ `deps/wasmbuilder/src/build.nu`
 
@@ -547,6 +550,7 @@ $ `deps/wasmbuilder/src/build.nu`
 
 // Policy predicates (read the globals set in main).
 @ nm_build_ok → b { ^ ? == g_read_only 0 T F }
+
 @ nm_run_ok → b { ^ ? & == g_read_only 0 != g_run_allowed 0 T F }
 
 @ build_tools_list → ( Vec Json ) {
@@ -605,7 +609,7 @@ $ `deps/wasmbuilder/src/build.nu`
 // examples/mcp_echo_server_http.nu, used by both transports) ─────────
 
 @ handle_initialize Json id → Json {
-    : Json result ( mcp_initialize_result `nurl-mcp` `0.3.0` )
+    : Json result ( mcp_initialize_result `nurl-mcp` `0.4.0` )
     ^ ( mcp_response_result id result )
 }
 
@@ -717,12 +721,18 @@ $ `deps/wasmbuilder/src/build.nu`
     }
 }
 
-// ── HTTP transport (POST /mcp, bearer-token auth, permissive CORS) ───
+// ── HTTP transport ───────────────────────────────────────────────────
+//
+// The wire protocol (POST single/batch, GET SSE probe, DELETE,
+// Mcp-Session-Id echo, CORS + preflight) comes from the stdlib's
+// Streamable-HTTP facade (`ext/mcp_http.nu` — the same plumbing
+// swarm-mcp serves through); this file only layers bearer-token auth
+// around it. CORS headers for the auth reject, matching the facade's.
 
 @ nm_cors HttpResponse r → v {
     ( response_set_header r `Access-Control-Allow-Origin` `*` )
     ( response_set_header r `Access-Control-Allow-Headers` `Content-Type, Authorization, Mcp-Session-Id` )
-    ( response_set_header r `Access-Control-Allow-Methods` `POST, OPTIONS` )
+    ( response_set_header r `Access-Control-Allow-Methods` `POST, GET, DELETE, OPTIONS` )
 }
 
 @ nm_authed HttpRequest req → b {
@@ -742,64 +752,6 @@ $ `deps/wasmbuilder/src/build.nu`
     ^ F
 }
 
-@ http_handler HttpRequest req → HttpResponse {
-    : s rm ( string_data . req method )
-    ? != ( nurl_str_eq rm `OPTIONS` ) 0 {
-        : HttpResponse pre ( response_status_only 204 )
-        ( nm_cors pre )
-        ^ pre
-    } {}
-    ? != ( nurl_str_eq rm `POST` ) 0 {} {
-        : HttpResponse r ( response_text 405 `Method Not Allowed\n` )
-        ( response_set_header r `Allow` `POST, OPTIONS` )
-        ( nm_cors r )
-        ^ r
-    }
-    ? ! ( nm_authed req ) {
-        : HttpResponse r ( response_text 401 `Unauthorized\n` )
-        ( response_set_header r `WWW-Authenticate` `Bearer` )
-        ( nm_cors r )
-        ^ r
-    } {}
-    : i bn ( vec_len [u] . req body )
-    ? <= bn 0 {
-        : HttpResponse r ( response_text 400 `empty request body\n` )
-        ( nm_cors r )
-        ^ r
-    } {}
-    : String body_str ( bytes_to_str . req body )
-    : !Json JsonError pj ( json_parse ( string_data body_str ) )
-    ( string_free body_str )
-    ?? pj {
-        T jreq → {
-            : ?Json reply ( dispatch jreq )
-            ( json_free jreq )
-            ?? reply {
-                T resp → {
-                    : HttpResponse r ( response_json 200 resp )
-                    ( json_free resp )
-                    ( nm_cors r )
-                    ^ r
-                }
-                F empty → {
-                    ( json_free empty )
-                    : HttpResponse r ( response_status_only 202 )
-                    ( nm_cors r )
-                    ^ r
-                }
-            }
-        }
-        F e → {
-            : HttpResponse r ( response_text 400 `request body is not valid JSON\n` )
-            ( nm_cors r )
-            ^ r
-        }
-    }
-    : HttpResponse r ( response_text 500 `internal\n` )
-    ( nm_cors r )
-    ^ r
-}
-
 @ nm_is_loopback s host → b {
     ? != ( nurl_str_eq host `127.0.0.1` ) 0 { ^ T } {}
     ? != ( nurl_str_eq host `::1` ) 0 { ^ T } {}
@@ -811,7 +763,19 @@ $ `deps/wasmbuilder/src/build.nu`
     : !TcpListener NetErr lr ( tcp_listen host port )
     ?? lr {
         T listener → {
-            : ( @ HttpResponse HttpRequest ) h \ HttpRequest req → HttpResponse { ^ ( http_handler req ) }
+            // The facade handles the whole MCP wire protocol; auth wraps it.
+            // OPTIONS bypasses auth (browser preflights carry no headers).
+            : ( @ HttpResponse HttpRequest ) inner ( mcp_http_handler \ Json rq → ?Json { ^ ( dispatch rq ) } )
+            : ( @ HttpResponse HttpRequest ) h \ HttpRequest req → HttpResponse {
+                ? != ( nurl_str_eq ( string_data . req method ) `OPTIONS` ) 0 { ^ ( inner req ) } {}
+                ? ! ( nm_authed req ) {
+                    : HttpResponse r ( response_text 401 `Unauthorized\n` )
+                    ( response_set_header r `WWW-Authenticate` `Bearer` )
+                    ( nm_cors r )
+                    ^ r
+                } {}
+                ^ ( inner req )
+            }
             : HttpServer srv ( server_new listener h )
             : !v NetErr rr ( server_run srv )
             ( server_stop srv )

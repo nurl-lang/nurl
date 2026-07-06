@@ -60,8 +60,12 @@ too — the server leaves nothing behind).
 **stdio** (default) — described above; the client spawns the binary and talks
 over the pipe. Nothing listens on the network.
 
-**HTTP** (`--http`) — Streamable-HTTP-style `POST /mcp` (JSON-RPC in, JSON-RPC
-out), for clients that speak MCP over HTTP or when the agent runs elsewhere.
+**HTTP** (`--http`) — the MCP **Streamable HTTP** transport, served through
+the stdlib facade (`ext/mcp_http.nu`, the same plumbing swarm-mcp uses):
+`POST /mcp` single requests **and JSON-RPC batches**, `GET /mcp` SSE probe,
+`Mcp-Session-Id` echo, `DELETE /mcp`, CORS + preflight. Bearer-token auth
+wraps the whole endpoint. For clients that speak MCP over HTTP or when the
+agent runs elsewhere.
 
 ```
 nurl-mcp --http [--host ADDR] [--port N] [--token TOK] [--read-only] [--allow-run]
