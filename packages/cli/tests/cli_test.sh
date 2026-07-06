@@ -54,6 +54,24 @@ $D --help >/dev/null 2>&1; [ $? = 0 ] && ok "--help → 0"             || bad "-
 $D --help | grep -q "COMMANDS" && ok "help lists commands"          || bad "help commands"
 $D hello --help | grep -q "print a greeting" && ok "command help"   || bad "command help"
 
+# default command (psql/redis-cli shape): bare invocation acts, -h is a
+# user flag (help-short yields), positionals are arguments, subcommands win.
+echo "[2b/3] default command + help-short yield (tests/demo_default.nu)"
+if ! $NURL tests/demo_default.nu "$WORK/demodef" >/dev/null 2>"$WORK/build2.err"; then
+    echo "FAIL: could not build demo_default:"; tail -8 "$WORK/build2.err"; FAIL=$((FAIL+1))
+else
+    DD="$WORK/demodef"
+    eq "bare runs default"     "$($DD)"                       "connect localhost:5432"
+    eq "-h is HOST not help"   "$($DD -h db.example)"          "connect db.example:5432"
+    eq "short value flag"      "$($DD -h db -p 6432)"          "connect db:6432"
+    eq "url positional"        "$($DD postgres://u@h/db)"      "connect localhost:5432 url=postgres://u@h/db"
+    eq "subcommand still wins" "$($DD ping)"                  "pong"
+    eq "default env fallback"  "$(DEMO_HOST=envhost $DD)"      "connect envhost:5432"
+    $DD --help >/dev/null 2>&1; [ $? = 0 ] && ok "default: --help → 0" || bad "default --help exit"
+    $DD --help | grep -q "\[COMMAND\]" && ok "help shows optional COMMAND" || bad "optional COMMAND in usage"
+    $DD --help | grep -qE "^  ping" && ok "help lists ping, hides default" || bad "help cmd listing"
+fi
+
 echo "[3/3] AddressSanitizer"
 if NURL_SAN=1 $NURL tests/demo.nu "$WORK/demo_san" >/dev/null 2>"$WORK/san_build.err"; then
     SAN_ERR=0
@@ -61,6 +79,11 @@ if NURL_SAN=1 $NURL tests/demo.nu "$WORK/demo_san" >/dev/null 2>"$WORK/san_build
         printf 'y\n' | $WORK/demo_san $run >/dev/null 2>>"$WORK/san.out" || true
     done
     printf 'data' | $WORK/demo_san wc >/dev/null 2>>"$WORK/san.out" || true
+    if NURL_SAN=1 $NURL tests/demo_default.nu "$WORK/demodef_san" >/dev/null 2>>"$WORK/san_build.err"; then
+        for run in "" "-h db -p 1" "postgres://u@h/db" "ping" "--help"; do
+            $WORK/demodef_san $run >/dev/null 2>>"$WORK/san.out" || true
+        done
+    fi
     if grep -qE "ERROR: AddressSanitizer|detected memory leaks" "$WORK/san.out" 2>/dev/null; then
         bad "ASan clean"; grep -m3 "ERROR\|leak" "$WORK/san.out"
     else
