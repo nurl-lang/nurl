@@ -14940,7 +14940,7 @@
     // those, re-emitting the same `declare` would trigger LLVM's "invalid
     // redefinition of function" error, so skip the emit — the symbol is
     // still registered above so callers resolve correctly.
-    : b is_prelude_cfn | | | ( seq fname `malloc` ) ( seq fname `free` ) ( seq fname `puts` ) ( seq fname `printf` )
+    : b is_prelude_cfn | | | | ( seq fname `malloc` ) ( seq fname `free` ) ( seq fname `puts` ) ( seq fname `printf` ) ( seq fname `realpath` )
     // Dedupe `declare`s by symbol name across the whole compilation: two
     // imported modules may legitimately declare the same libc/runtime
     // extern (e.g. `nurl_rand_fill` in both std/random.nu and tls.nu), and
@@ -15665,9 +15665,10 @@
     }
     {}
 
-    ? ( mem_is_imported syms path )
+    : s __imp_key ( __canon_import_key path )
+    ? ( mem_is_imported syms __imp_key )
     {}
-    { ( mem_mark_imported syms path )
+    { ( mem_mark_imported syms __imp_key )
         : s src ( nurl_read_file path )
         : s eff_src ? != 0 ( nurl_str_len alias )
         { : s names ( collect_alias_targets src path )
@@ -15849,6 +15850,11 @@
     // installed toolchain finds stdlib regardless of cwd (see
     // __norm_import_path).
     ( emit `declare i8*  @getenv(i8*)` )
+    // realpath(3) — the import DEDUP key is the canonical path so the same
+    // file reached through two symlink chains (diamond package deps:
+    // deps/a/deps/gpu vs deps/gpu) compiles exactly once (see
+    // __canon_import_key). Diagnostics keep the as-written path.
+    ( emit `declare i8*  @realpath(i8*, i8*)` )
     ( emit `declare void @nurl_init(i32, i8**)` )
     ( emit `declare void @nurl_print(i8*)` )
     ( emit `declare void @nurl_eprint(i8*)` )
@@ -16060,6 +16066,20 @@
     ^ cur
 }
 
+// Canonical form of a RESOLVED import path, used ONLY as the dedup key in
+// the seen-tables: the same file reached through different symlink chains
+// (deps/tensor/deps/gpukit/deps/gpu vs deps/gpu — a diamond dependency)
+// must compile exactly once or its symbols collide. realpath(3) resolves
+// symlinks and '..'; on failure (races, exotic FS) fall back to the
+// resolved path — same behaviour as before, just a weaker key. The
+// as-written path stays in use for reading and diagnostics, so error
+// messages and goldens are unchanged.
+@ __canon_import_key s path → s {
+    : s r ( realpath path # *u 0 )
+    ? != # i r 0 { ^ r } {}
+    ^ path
+}
+
 @ mem_is_imported i syms s path → b {
     : s list ( nurl_sym_get syms `__imported_files__` )
     ^ ( str_contains_word list path )
@@ -16156,6 +16176,7 @@
     ( nurl_sym_def syms `ftell` `i64` )
     ( nurl_sym_def syms `access` `i32` )
     ( nurl_sym_def syms `getenv` `i8*` )
+    ( nurl_sym_def syms `realpath` `i8*` )
     // file I/O
     ( nurl_sym_def syms `nurl_file_open` `i8*` )
     ( nurl_sym_def syms `nurl_file_write` `void` )
@@ -17484,10 +17505,11 @@
                 : s path ( __norm_import_path ( nurl_lex_val lex ) )
                 ( nurl_lex_advance lex )
                 ? ( is_ident_tok ( nurl_lex_type lex ) ) { ( nurl_lex_advance lex ) } {}
+                : s __gs_key ( __canon_import_key path )
                 : s marker ( nurl_sym_get g_generic_struct_syms `__scanned__` )
-                ? ( str_contains_word marker path ) {} {
-                    : s new_marker ? == 0 ( nurl_str_len marker ) path
-                    ( nurl_str_cat3 marker ` ` path )
+                ? ( str_contains_word marker __gs_key ) {} {
+                    : s new_marker ? == 0 ( nurl_str_len marker ) __gs_key
+                    ( nurl_str_cat3 marker ` ` __gs_key )
                     ( nurl_sym_def g_generic_struct_syms `__scanned__` new_marker )
                     : s src2 ( nurl_read_file path )
                     : i lex2 ( nurl_lex_new src2 path )
@@ -17784,12 +17806,13 @@
                             ( nurl_lex_advance lex )
                         }
                         {}
+                        : s __fs_key ( __canon_import_key path )
                         : s scanned ( nurl_sym_get syms `__scanned_files__` )
-                        ? ( str_contains_word scanned path )
+                        ? ( str_contains_word scanned __fs_key )
                         {}
                         { : s new_scanned ? == 0 ( nurl_str_len scanned )
-                            path
-                            ( nurl_str_cat3 scanned ` ` path )
+                            __fs_key
+                            ( nurl_str_cat3 scanned ` ` __fs_key )
                             ( nurl_sym_def syms `__scanned_files__` new_scanned )
                             : s src2 ( nurl_read_file path )
                             : s eff_src2 ? != 0 ( nurl_str_len alias )
@@ -17887,11 +17910,12 @@
                         ? ( is_ident_tok ( nurl_lex_type lex ) )
                         { = alias ( nurl_lex_val lex ) ( nurl_lex_advance lex ) }
                         {}
+                        : s __tn_key ( __canon_import_key path )
                         : s marker ( nurl_sym_get syms `__tn_scanned__` )
-                        ? ( str_contains_word marker path )
+                        ? ( str_contains_word marker __tn_key )
                         {}
-                        { : s new_marker ? == 0 ( nurl_str_len marker ) path
-                            ( nurl_str_cat3 marker ` ` path )
+                        { : s new_marker ? == 0 ( nurl_str_len marker ) __tn_key
+                            ( nurl_str_cat3 marker ` ` __tn_key )
                             ( nurl_sym_def syms `__tn_scanned__` new_marker )
                             : s src2 ( nurl_read_file path )
                             : s eff_src2 ? != 0 ( nurl_str_len alias )
