@@ -107,9 +107,33 @@ a 3-D permute, all reductions, the unary maps, and the M2 ops — batched matmul
 numpy, and re-runs under AddressSanitizer. **25/25, ASan-clean.** Skips cleanly
 without numpy.
 
+## Device tensors (M3)
+
+`src/dev.nu` adds **`DTensor`** — the tensor's data lives in GPU memory
+(a gpukit `GkBuf`) and ops chain on the device with no host roundtrips:
+
+```nurl
+: *GpuKit kit ( gk_open 0 )
+: DTensor dw ( tensor_to_device kit weights )   // upload once
+: DTensor dx ( tensor_to_device kit x )
+?? ( dtensor_matmul kit dx dw ) { T h → {
+    ?? ( dtensor_relu kit h ) { T a → {
+        : Tensor out ( dtensor_to_host kit a )   // download at the end
+        ( dtensor_free a ) } F _ → {} }
+    ( dtensor_free h ) } F _ → {} }
+```
+
+Residency is explicit — nothing syncs behind your back. Ops:
+elementwise `dtensor_add/sub/mul/div` (+ scalar forms), unary
+`relu/sigmoid/exp/tanh/sqrt/log`, 2-D `dtensor_matmul`, last-axis
+`dtensor_softmax`, `dtensor_sum`. A TE_F32 DTensor computes **in float32
+on the device** (accumulation included — numpy-float32/onnxruntime
+semantics); the host TE_F32 path keeps f64-compute + grid rounding.
+Works on CUDA and the gpu package's CPU backend; skips cleanly with
+neither.
+
 ## Roadmap
 
-Gather/scatter and fancy indexing, conv, native-f32 GPU kernels, and — the
-payoff — porting `onnx`'s `RTensor` + ops onto this layer so tensors stop being
-ONNX-only. (Done in 0.2.0: batched/N-D matmul, softmax, slicing, concat,
-argmax/argmin.)
+Device broadcasting + batched device matmul, gather/scatter, conv — and the
+payoff: porting `onnx`'s `RTensor` + ops onto this layer so tensors stop
+being ONNX-only. (0.2.0: bmm/softmax/slice/concat/argmax. 0.3.0: DTensor.)

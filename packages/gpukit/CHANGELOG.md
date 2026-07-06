@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.3.0
+
+Device-resident layer (`src/dev.nu`) — data stays on the GPU between ops:
+
+- **`GkBuf`** — an element-typed device allocation (`GK_F32` | `GK_F64`)
+  with `gk_dbuf_new` / `_free` / `_upload` / `_download` (f64 host vectors
+  convert to/from the buffer's element type through a staging buffer).
+- **`gk_run_dev`** — compile-cached launch + sync over RAW device args
+  (`gk_arg_dev` + `gpu_arg_*` scalars), zero marshalling.
+- **`gkd_*` kernels**, dtype-generic (float/double sources cached per
+  dtype): elementwise `add/sub/mul/div` with 1-element scalar broadcast,
+  unary `relu/sigmoid/exp/tanh/sqrt/log`, `matmul` (sequential-k
+  accumulate), numerically-stable row `softmax`, `sum` reduction.
+- **Numerics:** GK_F32 computes IN float32, accumulation included — true
+  float32 semantics matching numpy float32 / onnxruntime. GK_F64 matches
+  kernels.nu exactly. `tests/devcheck.nu`: 12/12 vs numpy on CUDA.
+
 ## 0.2.0
 
 - **Breaking:** `gk_open` now returns a heap `*GpuKit` (was a by-value

@@ -102,6 +102,19 @@ bit-identical to a strictly sequential accumulation.
 `GpuKit` carries a stable kernel-cache Vec, so it is passed by value and
 mutated across calls (like an `ArgParser`). Free it with `gk_close`.
 
+## Device-resident buffers (`src/dev.nu`)
+
+`gk_run` marshals host↔device per call; chained pipelines want data to
+STAY on the device. `GkBuf` is an element-typed device allocation
+(`GK_F32` | `GK_F64`) with `gk_dbuf_new/_free/_upload/_download`, and
+`gk_run_dev` launches a cached kernel over raw device args with zero
+copies. Ready-made dtype-generic kernels: `gkd_add/sub/mul/div`
+(1-element scalar broadcast via the same kernel), `gkd_relu/sigmoid/
+exp/tanh/sqrt/log`, `gkd_matmul`, `gkd_softmax_rows`, `gkd_sum`.
+GK_F32 computes in true float32 (accumulation included);
+`tests/devcheck.nu` verifies 12/12 vs numpy per dtype on CUDA and the
+CPU backend.
+
 ## Tests
 
 `./tests/gpukit_test.sh` builds `tests/demo.nu` and runs it on the default

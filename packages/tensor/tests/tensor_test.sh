@@ -65,6 +65,45 @@ sys.exit(1 if fails else 0)
 PY
 V=$?
 
+echo "[2b] device tensors (M3) — skipped cleanly without a GPU/backend"
+if ! $NURL tests/dcheck.nu "$WORK/dcheck" >/dev/null 2>"$WORK/dbuild.err"; then
+    echo "FAIL: could not build dcheck:"; tail -8 "$WORK/dbuild.err"; V=1
+else
+    "$WORK/dcheck" > "$WORK/dout.txt" 2>/dev/null
+    if grep -q "^SKIP" "$WORK/dout.txt"; then
+        echo "  (skipped — no device backend)"
+    else
+        python3 - "$WORK/dout.txt" <<'PY'
+import sys, numpy as np
+rows={}
+for ln in open(sys.argv[1]):
+    ln=ln.strip()
+    if '|' not in ln or ln.startswith('backend'): continue
+    parts=ln.split('|'); rows[parts[0]]=np.array([float(x) for x in parts[-1].split(',')])
+def ref(dt):
+    a=np.arange(6,dtype=dt).reshape(2,3); w=np.arange(12,dtype=dt).reshape(3,4)
+    x=np.tanh((a@w)*dt(0.05)+dt(0.5))*dt(2.0)
+    e=np.exp(x-x.max(1,keepdims=True)); sm=e/e.sum(1,keepdims=True)
+    ba=(np.arange(8192,dtype=dt)*dt(0.001)).reshape(128,64)
+    bb=(np.arange(6144,dtype=dt)*dt(0.0005)).reshape(64,96)
+    return {"rt":a.reshape(-1),"fwd":sm.reshape(-1),
+            "relu":np.maximum(a-dt(2.5),0).reshape(-1),
+            "sq":(a*a).reshape(-1),"ssum":np.array([(a*a).sum()]),
+            "bigmm":np.array([(ba@bb).sum()])}
+f=0
+for tag,dt in (("f32",np.float32),("f64",np.float64)):
+    for op,e in ref(dt).items():
+        got=rows.get(f"{tag}_{op}")
+        if got is None: print(f"  FAIL {tag}_{op}: missing"); f+=1; continue
+        ok=np.allclose(got,e.astype(float),rtol=1e-4,atol=1e-6)
+        print(f"  {'PASS' if ok else 'FAIL'} {tag}_{op}"); f+=0 if ok else 1
+print(f"  {12-f}/12 device ops match numpy (true float32 + float64 semantics)")
+sys.exit(1 if f else 0)
+PY
+        [ $? = 0 ] || V=1
+    fi
+fi
+
 echo "[3/3] AddressSanitizer"
 if NURL_SAN=1 $NURL tests/tcheck.nu "$WORK/tcheck_san" >/dev/null 2>"$WORK/san_build.err"; then
     "$WORK/tcheck_san" >/dev/null 2>"$WORK/san.out" || true
@@ -75,6 +114,16 @@ if NURL_SAN=1 $NURL tests/tcheck.nu "$WORK/tcheck_san" >/dev/null 2>"$WORK/san_b
     fi
 else
     echo "  (skipped ASan build)"
+fi
+if NURL_SAN=1 $NURL tests/dcheck.nu "$WORK/dcheck_san" >/dev/null 2>"$WORK/dsan_build.err"; then
+    "$WORK/dcheck_san" >/dev/null 2>"$WORK/dsan.out" || true
+    if grep -qE "ERROR: AddressSanitizer|detected memory leaks" "$WORK/dsan.out"; then
+        echo "  FAIL ASan (device)"; grep -m3 "ERROR\|leak" "$WORK/dsan.out"; V=1
+    else
+        echo "  PASS ASan clean (device battery)"
+    fi
+else
+    echo "  (skipped device ASan build)"
 fi
 
 [ "$V" = 0 ] && echo "== tensor tests: PASS" || echo "== tensor tests: FAIL"
