@@ -40,10 +40,41 @@ $ `toolchain.nu`
     b asyncify  // wasm-opt asyncify wrap for canvas programs (needs binaryen)
     b keep_ll  // leave the rewritten .ll next to the .wasm
     b quiet  // suppress progress lines on stderr
+    s extra_obj  // extra object linked into the module (`` = none) — e.g.
+    // a generated kernels_static.o so `& c` symbols resolve
+    // statically instead of becoming env imports
+    s extra_cflags  // extra compile/link flags, space-separated (`` = none)
+    // — e.g. `-msimd128` for wasm SIMD
+}
+
+// Split a space-separated flag string into owned Strings (caller frees).
+// NOTE: the Vec Strings LEAK by design at the single link call site (a
+// handful of tiny strings once per build) to keep the argv `s` views
+// alive through process_run.
+@ string_split_borrow s flags → ( Vec String ) {
+    : ( Vec String ) out ( vec_new [String] )
+    : i n ( nurl_str_len flags )
+    : ~ i a 0
+    : ~ i k 0
+    ~ <= k n {
+        : ~ i c 32
+        ? < k n { = c ( nurl_str_get flags k ) } {}
+        ? == c 32 {
+            ? > k a {
+                : String w ( string_with_cap + - k a 1 )
+                : ~ i j a
+                ~ < j k { ( string_push_char w ( nurl_str_get flags j ) ) = j + j 1 }
+                ( vec_push [String] out w )
+            } {}
+            = a + k 1
+        } {}
+        = k + k 1
+    }
+    ^ out
 }
 
 @ wb_opts_default → WbOpts {
-    ^ @ WbOpts { `-O2` T F F F }
+    ^ @ WbOpts { `-O2` T F F F `` `` }
 }
 
 @ __wb_say b quiet s msg → v {
@@ -177,10 +208,20 @@ $ `toolchain.nu`
     ( vec_push [s] args . opts opt )
     ( vec_push [s] args `-Wno-override-module` )
     ( vec_push [s] args `-Wl,--no-gc-sections` )
+    ? > ( nurl_str_len . opts extra_cflags ) 0 {
+        // split the space-separated flag string into separate argv slots
+        : ( Vec String ) fl ( string_split_borrow . opts extra_cflags )
+        : ~ i fk 0
+        ~ < fk ( vec_len [String] fl ) {
+            ?? ( vec_get [String] fl fk ) { T x → { ( vec_push [s] args ( string_data x ) ) } F _ → {} }
+            = fk + fk 1
+        }
+    } {}
     ( vec_push [s] args ( string_data ll_path ) )
     ( vec_push [s] args ( string_data runtime_o ) )
     ? uses_canvas { ( vec_push [s] args ( string_data canvas_o ) ) } {}
     ? uses_audio { ( vec_push [s] args ( string_data audio_o ) ) } {}
+    ? > ( nurl_str_len . opts extra_obj ) 0 { ( vec_push [s] args . opts extra_obj ) } {}
     ( vec_push [s] args `-o` )
     ( vec_push [s] args out_wasm )
     ( vec_push [s] args `-lm` )

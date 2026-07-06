@@ -62,6 +62,24 @@ $ `stdlib/core/vec.nu`
     ^ out
 }
 
+// The @name of a `declare ... @name(...)` line ("" when unparseable).
+@ __wb_declare_sym String jline → String {
+    : s raw ( string_data jline )
+    : i n ( nurl_str_len raw )
+    : ~ i at - 0 1
+    : ~ i k 0
+    ~ & < k n < at 0 { ? == ( nurl_str_get raw k ) 64 { = at k } {} = k + k 1 }
+    : String out ( string_new )
+    ? < at 0 { ^ out } {}
+    : ~ i j + at 1
+    ~ < j n {
+        : i c ( nurl_str_get raw j )
+        : b idc | | | & >= c 48 <= c 57 & >= c 65 <= c 90 & >= c 97 <= c 122 | == c 95 == c 46
+        ? idc { ( string_push_char out c ) = j + j 1 } { = j n }
+    }
+    ^ out
+}
+
 @ wb_prepare_ir_for_wasi String ir → String {
     : ~ String res ( string_from ( string_data ir ) )
 
@@ -403,7 +421,19 @@ $ `stdlib/core/vec.nu`
                 ? > ji 0 { ( string_push_char marked 10 ) } {}
                 ( string_push_str marked ( string_data jline ) )
                 ? & ( string_starts_with jline `declare ` ) == ( string_contains jline `@llvm.` ) F {
-                    ( string_push_str marked ` #99` )
+                    // BOTH attributes are required: with only
+                    // wasm-import-module, wasm-ld still rejects the symbol
+                    // as undefined (the import-name attribute is what marks
+                    // it an explicit import — verified against zig 0.13 /
+                    // LLVM 18 wasm-ld). The name differs per declare, so
+                    // the attrs go inline rather than via a shared group.
+                    : String snm ( __wb_declare_sym jline )
+                    ? > ( string_len snm ) 0 {
+                        ( string_push_str marked ` "wasm-import-module"="env" "wasm-import-name"="` )
+                        ( string_push_str marked ( string_data snm ) )
+                        ( string_push_str marked `"` )
+                    } {}
+                    ( string_free snm )
                 } {}
             }
             F → {}
@@ -411,7 +441,7 @@ $ `stdlib/core/vec.nu`
         = ji + ji 1
     }
     ( vec_free_with [String] jlines \ String s → v { ( string_free s ) } )
-    ( string_push_str marked `\nattributes #99 = { "wasm-import-module"="env" }\n` )
+    ( string_push_char marked 10 )
 
     // Keep `main` visible as an alias of the renamed entry. zig's debug
     // (-O0) wasi-libc pulls a __main_void.o that references `main`
