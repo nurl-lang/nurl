@@ -8,6 +8,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Compiler (critic A1): signedness lives in the type representation.**
+  The internal type language now keeps `u`/`u16`/`u32`/`u64` distinct
+  from `i8`..`i64` end to end (as internal types `u8`/`u16`/`u32`/`u64`)
+  — through the last-type channel, binding/param/field/payload/return
+  metadata, `?`/`??` join types, and generic monomorph mangles —
+  lowering to the LLVM i-types only at the IR-emission boundary
+  (`nurl_llty`). The `__last_unsigned__` flag machinery (the
+  side-channel behind 11 fuzzer-found silent miscompiles, later tamed by
+  the last-type coupling) is deleted entirely: no
+  `g_last_unsigned_p`, no `__unsigned`/`__ret_unsigned` syms keys, no
+  `__last_nurl_type__` parse side-channel — a value's signedness can no
+  longer go stale or be forgotten at a producing site. Fixes that fell
+  out of the repr: struct→int casts zero-extend an unsigned field 0
+  (was always `sext`), FFI fixed-position argument widening
+  zero-extends unsigned args (was always `sext`), pointer-to-unsigned
+  generic arguments (`[ *u64 ]` vs `[ *i ]`) monomorphise separately,
+  and DWARF renders `u`/`u16`/`u32`/`u64` as `DW_ATE_unsigned` while
+  signed `i8` is no longer mislabeled `u8`. New regression
+  `signedness_in_types.nu`; validated by the bootstrap fixed point, the
+  full suite, the examples gate, and a clean differential-fuzzer run.
+
 A bug-hunt sweep over the open items in `critic.md` / project memory:
 ten language/compiler/toolchain/ecosystem defects and gaps closed
 (branch `bugfix/bughunt-session`).
