@@ -50,6 +50,28 @@ $ `deps/wasmbuilder/src/build.nu`
 : ~ i g_run_allowed 1
 : ~ s g_token ``
 
+// ── Version ─────────────────────────────────────────────────────────
+//
+// Single source of truth for the server version. Keep this in sync with
+// `version` in nurl.toml on every release — the banners and the MCP
+// `initialize` result both read it here, so there is exactly one string
+// to bump (previously the banners drifted to a stale 0.2.0 while the
+// handshake reported 0.4.0).
+
+@ nm_version → s { ^ `0.4.1` }
+
+// Log a startup banner "nurl-mcp <version> <suffix>" through mcp_log,
+// building the line from the single-source version so the banners can
+// never drift from the handshake version again.
+@ nm_log_banner s suffix → v {
+    : String b ( string_from `nurl-mcp ` )
+    ( string_push_str b ( nm_version ) )
+    ( string_push_char b 32 )
+    ( string_push_str b suffix )
+    ( mcp_log ( string_data b ) )
+    ( string_free b )
+}
+
 // ── Temp-file plumbing ──────────────────────────────────────────────
 //
 // Inline `source` is written to a unique temp .nu so the file-oriented
@@ -609,7 +631,7 @@ $ `deps/wasmbuilder/src/build.nu`
 // examples/mcp_echo_server_http.nu, used by both transports) ─────────
 
 @ handle_initialize Json id → Json {
-    : Json result ( mcp_initialize_result `nurl-mcp` `0.4.0` )
+    : Json result ( mcp_initialize_result `nurl-mcp` ( nm_version ) )
     ^ ( mcp_response_result id result )
 }
 
@@ -844,14 +866,14 @@ $ `deps/wasmbuilder/src/build.nu`
                 ( mcp_log `WARNING: serving HTTP with no --token — any local client can drive the toolchain` )
             } {}
             ? ( nm_run_ok ) {
-                ( mcp_log `nurl-mcp 0.2.0 ready (http) — nurl_run ENABLED` )
+                ( nm_log_banner `ready (http) — nurl_run ENABLED` )
             } {
-                ( mcp_log `nurl-mcp 0.2.0 ready (http) — nurl_run disabled (pass --allow-run to enable)` )
+                ( nm_log_banner `ready (http) — nurl_run disabled (pass --allow-run to enable)` )
             }
             = rc ( run_http ( string_data host ) port )
         }
     } {
-        ( mcp_log `nurl-mcp 0.2.0 ready (stdio)` )
+        ( nm_log_banner `ready (stdio)` )
         ( stdio_loop )
         ( mcp_log `bye` )
         = rc 0

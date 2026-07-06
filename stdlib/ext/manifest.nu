@@ -56,6 +56,8 @@ $ `stdlib/ext/toml.nu`
     String description
     String license
     String registry  // default registry URL for bare deps; empty → tool default
+    String repository  // [package].repository — source URL; empty → unset
+    String postinstall  // [hints].postinstall — message shown after install; empty → none
     ( Vec Dep ) dependencies
 }
 
@@ -111,6 +113,8 @@ $ `stdlib/ext/toml.nu`
     ( string_free . m version )
     ( string_free . m description )
     ( string_free . m license )
+    ( string_free . m repository )
+    ( string_free . m postinstall )
     ( string_free . m registry )
     : i n ( vec_len [Dep] . m dependencies )
     : ~ i k 0
@@ -246,6 +250,8 @@ $ `stdlib/ext/toml.nu`
             : String description ( __field_str root `package.description` )
             : String license ( __field_str root `package.license` )
             : String registry ( __field_str root `package.registry` )
+            : String repository ( __field_str root `package.repository` )
+            : String postinstall ( __field_str root `hints.postinstall` )
 
             // Dependencies.
             : ( Vec Dep ) deps ( vec_new [Dep] )
@@ -277,7 +283,7 @@ $ `stdlib/ext/toml.nu`
                 F _ → {}
             }
             ( toml_value_free root )
-            ^ @ !Manifest ManifestErr { T @ Manifest { name version description license registry deps } }
+            ^ @ !Manifest ManifestErr { T @ Manifest { name version description license registry repository postinstall deps } }
         }
     }
 }

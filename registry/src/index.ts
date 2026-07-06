@@ -22,7 +22,7 @@
 // (miniflare simulates R2 + D1) — no Cloudflare account needed to test.
 
 import { renderMarkdown } from "./markdown.ts";
-import { extractReadme, extractFile, normalizeRelPath } from "./readme.ts";
+import { extractReadme, extractFile, extractManifestRepository, normalizeRelPath } from "./readme.ts";
 
 export interface Env {
   REG_BUCKET: R2Bucket;
@@ -323,6 +323,18 @@ async function handlePackageDetail(env: Env, name: string): Promise<Response> {
     : `<p>None.</p>`;
   const reqStr = latest ? `^${latest.version}` : "*";
 
+  // Repository link, read straight from the latest tarball's nurl.toml
+  // ([package].repository). Only http(s) URLs are rendered as links.
+  let repoHtml = "";
+  if (latest) {
+    try {
+      const repo = await extractManifestRepository(env.REG_BUCKET, name, latest.version);
+      if (repo && /^https?:\/\//i.test(repo)) {
+        repoHtml = `<p style="color:#666">repository <a href="${esc(repo)}">${esc(repo)}</a></p>`;
+      }
+    } catch { /* no repository line */ }
+  }
+
   // README of the latest published version, rendered from its tarball.
   // Never let a missing/odd archive break the page.
   let readmeHtml = "";
@@ -351,6 +363,7 @@ async function handlePackageDetail(env: Env, name: string): Promise<Response> {
   return htmlPage(name,
     `<p><a href="/">← all packages</a></p><h1>${esc(name)}</h1>` +
     ownerHtml +
+    repoHtml +
     `<h3>Install</h3><pre>[dependencies]\n${esc(name)} = "${esc(reqStr)}"</pre>` +
     `<h3>Versions</h3><ul>${versionsHtml}</ul>` +
     `<h3>Dependencies (latest)</h3>${depsHtml}` +

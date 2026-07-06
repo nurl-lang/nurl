@@ -72,6 +72,31 @@ rounds before the build is accepted. Details: [`docs/BUILDING.md`](docs/BUILDING
 
 ## Quick start
 
+### Install the toolchain
+
+Prebuilt `nurlc` / `nurlpkg` / `nurlfmt` binaries, one command — no clang, no
+build:
+
+```bash
+# Linux / macOS
+curl -fsSL https://nurl-lang.org/install.sh | sh
+```
+
+```powershell
+# Windows (PowerShell)
+irm https://nurl-lang.org/install.ps1 | iex
+```
+
+Then:
+
+```bash
+nurlpkg install <name>     # fetch & build a program from reg.nurl-lang.org
+```
+
+### Build from source
+
+For contributors, or to run the bootstrap yourself:
+
 ```bash
 git clone https://github.com/nurl-lang/nurl.git
 cd nurl
