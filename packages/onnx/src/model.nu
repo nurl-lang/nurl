@@ -16,7 +16,7 @@ $ `pb.nu`
 // f (FLOAT, e.g. alpha/epsilon), i (INT, e.g. group), s (STRING, e.g.
 // auto_pad), and ints (INTS, e.g. kernel_shape/strides). `kind` is unused
 // (the consumer asks by name + form via node_attr_*).
-: OAttr { String name  i kind  f f  i i  String s  ( Vec i ) ints }
+: OAttr { String name i kind f f i i String s ( Vec i ) ints }
 
 : ONode {
     String op_type
@@ -32,8 +32,8 @@ $ `pb.nu`
     String name
     ( Vec i ) dims
     i nelem
-    i dtype       // ONNX DataType: 1=FLOAT, 7=INT64
-    i host        // *u as i64 (0 = no data)
+    i dtype  // ONNX DataType: 1=FLOAT, 7=INT64
+    i host  // *u as i64 (0 = no data)
 }
 
 : OGraph {
@@ -60,6 +60,7 @@ $ `pb.nu`
     }
     ^ r
 }
+
 @ node_attr_i ONode n s name i dflt → i {
     : ( Vec OAttr ) as . n attrs
     : ~ i r dflt
@@ -104,7 +105,7 @@ $ `pb.nu`
 }
 
 // ── AttributeProto ────────────────────────────────────────────────
-@ __parse_attr *PbR r → OAttr {
+@ __parse_attr * PbR r → OAttr {
     : ~ String name ( string_new )
     : ~ f fv 0.0
     : ~ i iv 0
@@ -114,11 +115,11 @@ $ `pb.nu`
         : i tag ( pb_tag r )
         : i fld ( pb_field tag )
         : i wt ( pb_wire tag )
-        ? == fld 1 { = name ( pb_string r ) }                 // name
+        ? == fld 1 { ( string_free name ) = name ( pb_string r ) }  // name
         ? == fld 2 { = fv # f ( bits_to_f32 ( pb_i32 r ) ) }  // f (float, wire 5)
-        ? == fld 3 { = iv ( pb_varint r ) }                   // i (int, varint)
-        ? == fld 4 { = sv ( pb_string r ) }                   // s (string/bytes)
-        ? == fld 8 {                                          // ints: packed or single
+        ? == fld 3 { = iv ( pb_varint r ) }  // i (int, varint)
+        ? == fld 4 { ( string_free sv ) = sv ( pb_string r ) }  // s (string/bytes)
+        ? == fld 8 {  // ints: packed or single
             ? == wt 2 {
                 : *PbR is ( pb_submsg r )
                 ~ ( pb_more is ) { ( vec_push [i] ints ( pb_varint is ) ) }
@@ -131,7 +132,7 @@ $ `pb.nu`
 }
 
 // ── NodeProto ─────────────────────────────────────────────────────
-@ __parse_node *PbR r → ONode {
+@ __parse_node * PbR r → ONode {
     : ( Vec String ) ins ( vec_new [String] )
     : ( Vec String ) outs ( vec_new [String] )
     : ( Vec OAttr ) attrs ( vec_new [OAttr] )
@@ -140,9 +141,9 @@ $ `pb.nu`
         : i tag ( pb_tag r )
         : i fld ( pb_field tag )
         : i wt ( pb_wire tag )
-        ? == fld 1 { ( vec_push [String] ins ( pb_string r ) ) }   // input
+        ? == fld 1 { ( vec_push [String] ins ( pb_string r ) ) }  // input
         ? == fld 2 { ( vec_push [String] outs ( pb_string r ) ) }  // output
-        ? == fld 4 { = op ( pb_string r ) }                        // op_type
+        ? == fld 4 { ( string_free op ) = op ( pb_string r ) }  // op_type
         ? == fld 5 { : *PbR sub ( pb_submsg r ) ( vec_push [OAttr] attrs ( __parse_attr sub ) ) ( pb_free sub ) }
         { ( pb_skip r wt ) }
     }
@@ -150,7 +151,7 @@ $ `pb.nu`
 }
 
 // ── TensorProto (initializer) ─────────────────────────────────────
-@ __parse_tensor *PbR r → OTensor {
+@ __parse_tensor * PbR r → OTensor {
     : ( Vec i ) dims ( vec_new [i] )
     : ~ String name ( string_new )
     : ~ i dtype 0
@@ -160,16 +161,16 @@ $ `pb.nu`
         : i tag ( pb_tag r )
         : i fld ( pb_field tag )
         : i wt ( pb_wire tag )
-        ? == fld 1 {            // dims (int64): packed (wire 2) or single varint
+        ? == fld 1 {  // dims (int64): packed (wire 2) or single varint
             ? == wt 2 {
                 : *PbR ds ( pb_submsg r )
                 ~ ( pb_more ds ) { ( vec_push [i] dims ( pb_varint ds ) ) }
                 ( pb_free ds )
             } { ( vec_push [i] dims ( pb_varint r ) ) }
         }
-        ? == fld 2 { = dtype ( pb_varint r ) }         // data_type
-        ? == fld 8 { = name ( pb_string r ) }          // name
-        ? == fld 4 {                                   // float_data (packed f32)
+        ? == fld 2 { = dtype ( pb_varint r ) }  // data_type
+        ? == fld 8 { ( string_free name ) = name ( pb_string r ) }  // name
+        ? == fld 4 {  // float_data (packed f32)
             ? == wt 2 {
                 : i len ( pb_varint r )
                 = raw_start ( pb_pos r )
@@ -177,7 +178,7 @@ $ `pb.nu`
                 ( pb_set_pos r + ( pb_pos r ) len )
             } { ( pb_skip r wt ) }
         }
-        ? == fld 9 {                                   // raw_data (LE f32 bytes)
+        ? == fld 9 {  // raw_data (LE f32 bytes)
             : i len ( pb_varint r )
             = raw_start ( pb_pos r )
             = raw_len len
@@ -188,12 +189,12 @@ $ `pb.nu`
     : i nelem ( __nelem dims )
     : ~ i host 0
     ? & >= raw_start 0 > raw_len 0 {
-        ? == dtype 7 {                          // INT64: 8-byte LE values
+        ? == dtype 7 {  // INT64: 8-byte LE values
             : *u h ( nurl_alloc * nelem 8 )
             ( pb_set_pos r raw_start )
             ( pb_read_i64_into r h nelem )
             = host # i h
-        } {                                     // FLOAT (default): f32
+        } {  // FLOAT (default): f32
             : *u h ( nurl_alloc * nelem 4 )
             ( pb_set_pos r raw_start )
             ( pb_read_f32_into r h nelem )
@@ -214,19 +215,19 @@ $ `pb.nu`
 }
 
 // ValueInfoProto → its name (field 1).
-@ __parse_valueinfo_name *PbR r → String {
+@ __parse_valueinfo_name * PbR r → String {
     : ~ String name ( string_new )
     ~ ( pb_more r ) {
         : i tag ( pb_tag r )
         : i fld ( pb_field tag )
         : i wt ( pb_wire tag )
-        ? == fld 1 { = name ( pb_string r ) } { ( pb_skip r wt ) }
+        ? == fld 1 { ( string_free name ) = name ( pb_string r ) } { ( pb_skip r wt ) }
     }
     ^ name
 }
 
 // ── GraphProto ────────────────────────────────────────────────────
-@ __parse_graph *PbR r → OGraph {
+@ __parse_graph * PbR r → OGraph {
     : ( Vec ONode ) nodes ( vec_new [ONode] )
     : ( Vec OTensor ) inits ( vec_new [OTensor] )
     : ~ String inp ( string_new )
@@ -243,7 +244,7 @@ $ `pb.nu`
             // The real model input is the FIRST entry; keep it, ignore the rest.
             : *PbR s ( pb_submsg r )
             : String nm ( __parse_valueinfo_name s )
-            ? == ( string_len inp ) 0 { = inp nm } {}
+            ? == ( string_len inp ) 0 { ( string_free inp ) = inp nm } { ( string_free nm ) }
             ( pb_free s )
         }
         ? == fld 12 {
@@ -252,7 +253,8 @@ $ `pb.nu`
             // seg model can return its mask prototypes.
             : *PbR s ( pb_submsg r )
             : String onm ( __parse_valueinfo_name s )
-            ? == ( string_len outp ) 0 { = outp onm } { ? == ( string_len outp1 ) 0 { = outp1 onm } {} }
+            ? == ( string_len outp ) 0 { ( string_free outp ) = outp onm }
+            { ? == ( string_len outp1 ) 0 { ( string_free outp1 ) = outp1 onm } { ( string_free onm ) } }
             ( pb_free s )
         }
         { ( pb_skip r wt ) }
@@ -268,14 +270,14 @@ $ `pb.nu`
         : i tag ( pb_tag r )
         : i fld ( pb_field tag )
         : i wt ( pb_wire tag )
-        ? == fld 7 { : *PbR s ( pb_submsg r ) = g ( __parse_graph s ) ( pb_free s ) } { ( pb_skip r wt ) }
+        ? == fld 7 { : *PbR s ( pb_submsg r ) ( graph_free g ) = g ( __parse_graph s ) ( pb_free s ) } { ( pb_skip r wt ) }
     }
     ( pb_free r )
     ^ g
 }
 
 // ── lookups ───────────────────────────────────────────────────────
-@ graph_find_init OGraph g s name → i {   // index into inits, -1 if none
+@ graph_find_init OGraph g s name → i {  // index into inits, -1 if none
     : ( Vec OTensor ) inits . g inits
     : ~ i k 0
     ~ < k ( vec_len [OTensor] inits ) {
@@ -285,4 +287,56 @@ $ `pb.nu`
         = k + k 1
     }
     ^ - 0 1
+}
+
+// ── Teardown ──────────────────────────────────────────────────────────
+
+// Free everything a parsed graph owns: every node (op string, input /
+// output name vectors, attributes incl. their strings and int vectors),
+// every initializer (name, dims, host data buffer), and the graph's
+// input/output name strings. The OGraph value itself is by-value — after
+// graph_free it must not be used again.
+@ __attr_free OAttr a → v {
+    ( string_free . a name )
+    ( string_free . a s )
+    ( vec_free [i] . a ints )
+}
+
+@ __node_free ONode n → v {
+    ( string_free . n op_type )
+    ( vec_free_with [String] . n inputs \ String x → v { ( string_free x ) } )
+    ( vec_free_with [String] . n outputs \ String x → v { ( string_free x ) } )
+    : i na ( vec_len [OAttr] . n attrs )
+    : ~ i k 0
+    ~ < k na {
+        ?? ( vec_get [OAttr] . n attrs k ) { T a → { ( __attr_free a ) } F _ → {} }
+        = k + k 1
+    }
+    ( vec_free [OAttr] . n attrs )
+}
+
+@ __otensor_free OTensor t → v {
+    ( string_free . t name )
+    ( vec_free [i] . t dims )
+    ? != . t host 0 { ( nurl_free # *u . t host ) } {}
+}
+
+@ graph_free OGraph g → v {
+    : i nn ( vec_len [ONode] . g nodes )
+    : ~ i k 0
+    ~ < k nn {
+        ?? ( vec_get [ONode] . g nodes k ) { T n → { ( __node_free n ) } F _ → {} }
+        = k + k 1
+    }
+    ( vec_free [ONode] . g nodes )
+    : i ni ( vec_len [OTensor] . g inits )
+    = k 0
+    ~ < k ni {
+        ?? ( vec_get [OTensor] . g inits k ) { T t → { ( __otensor_free t ) } F _ → {} }
+        = k + k 1
+    }
+    ( vec_free [OTensor] . g inits )
+    ( string_free . g input_name )
+    ( string_free . g output_name )
+    ( string_free . g output1_name )
 }
