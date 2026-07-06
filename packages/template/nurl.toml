@@ -1,0 +1,8 @@
+[package]
+name = "template"
+version = "0.1.0"
+description = "HTML template engine — Jinja-flavoured {{ vars }}, {% if/elif/else %}, {% for %} with loop.index/first/last, {% include %} partials and filters (raw/upper/lower/length/json), rendered against a stdlib Json context with HTML-escaping by default. Ships the engine (src/template.nu, no fs dependency), a directory loader for named template sets (src/loader.nu), and a small CLI. Missing keys render empty and are falsy (mustache-style lenient); malformed tags are hard errors with line/col positions. Pairs with the `http` package for server-rendered pages and with md2html for static generation."
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/nurl-lang/nurl-lang"
+
+[dependencies]
