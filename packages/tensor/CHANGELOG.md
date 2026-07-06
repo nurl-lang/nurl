@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.3.0
+
+M3 — device-resident tensors (`src/dev.nu`).
+
+- **`DTensor`** — a tensor whose data lives in GPU memory (a gpukit
+  `GkBuf`): ops chain on the device with **no host roundtrips** — what a NN
+  forward pass needs (upload weights once, stream activations through).
+  Residency is explicit: `tensor_to_device kit t` / `dtensor_to_host kit d`;
+  nothing syncs behind your back. `dtensor_free`, `dtensor_ok`,
+  shape/size/dtype queries.
+- Device ops (all `→ ?DTensor`): `dtensor_add/sub/mul/div` (same shape),
+  `dtensor_adds/subs/muls/divs` (scalar), `dtensor_relu/sigmoid/exp/tanh/
+  sqrt/log`, `dtensor_matmul` (2-D), `dtensor_softmax` (last axis, stable),
+  `dtensor_sum → ?f`.
+- **Numerics:** a TE_F32 DTensor computes IN float32 on the device
+  (accumulation included) — true float32 semantics matching numpy float32 /
+  onnxruntime. The HOST TE_F32 Tensor keeps its f64-compute + grid-rounding
+  behaviour; elementwise results agree exactly, accumulations differ as
+  documented. TE_F64 device ops are bit-compatible with host ops where the
+  kernel accumulates sequentially.
+- Verified on CUDA (RTX 4090) and the CPU backend: chained
+  matmul→scale→tanh→softmax pipeline + a 128×64·64×96 float32-accumulation
+  matmul — **12/12 vs numpy per dtype, ASan-clean**. Skips cleanly with no
+  backend.
+
 ## 0.2.0
 
 M2 — batched matmul, softmax, slicing, concat, argmax/argmin.
