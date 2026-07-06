@@ -14,8 +14,9 @@
 #    curl -fsSL https://nurl-lang.org/install.sh | sh -s -- --version v0.1.0
 #
 #  Env:
-#    NURL_HOME     install prefix (default ~/.nurl)
-#    NURL_VERSION  release tag to install (default: latest)
+#    NURL_HOME            install prefix (default ~/.nurl)
+#    NURL_VERSION         release tag to install (default: latest)
+#    NURL_NO_MODIFY_PATH  set to 1 to never touch shell rc files / prompt
 #
 #  POSIX sh — no bashisms; works under dash/ash/busybox.
 # ============================================================
@@ -156,16 +157,75 @@ smoke() {
 smoke "$PREFIX/build/nurlc"
 smoke "$PREFIX/build/nurlpkg"
 
-# ── Done ───────────────────────────────────────────────────────────────
+# ── PATH setup ─────────────────────────────────────────────────────────
 info ""
 info "NURL $VERSION installed → $PREFIX"
 info ""
-info "Put it on your PATH (works in any shell — add the line to your shell rc to persist):"
-info "    export PATH=\"$PREFIX/bin:\$PATH\""
+
+BIN_DIR="$PREFIX/bin"
+EXPORT_LINE="export PATH=\"$BIN_DIR:\$PATH\""
+
+# The shell rc to persist into, chosen from the user's login shell.
+rc_file() {
+    case "$(basename "${SHELL:-sh}")" in
+        zsh)  printf '%s' "${ZDOTDIR:-$HOME}/.zshrc" ;;
+        bash) printf '%s' "$HOME/.bashrc" ;;
+        *)    printf '%s' "$HOME/.profile" ;;
+    esac
+}
+
+case ":${PATH}:" in
+    *":$BIN_DIR:"*)
+        # Already visible in this shell (e.g. a re-install) — nothing to do.
+        info "$BIN_DIR is already on your PATH — you're all set."
+        ;;
+    *)
+        RC="$(rc_file)"
+        DO_PERSIST=0
+        # Piped installs have the script on stdin, so ask on the terminal
+        # directly. No tty (CI, no controlling terminal) ⇒ don't prompt and
+        # never modify rc files silently.
+        if [ "${NURL_NO_MODIFY_PATH:-0}" = "1" ]; then
+            :
+        elif ( : > /dev/tty ) 2>/dev/null && ( : < /dev/tty ) 2>/dev/null; then
+            # /dev/tty actually opens (a controlling terminal is attached) —
+            # an access() check alone passes even with no tty and then aborts.
+            # Probe in subshells: a redirection error on the special builtin
+            # ':' would otherwise exit the whole (non-interactive) shell.
+            printf 'Add %s to your PATH permanently in %s? [Y/n] ' "$BIN_DIR" "$RC" > /dev/tty
+            read ANS < /dev/tty || ANS=""
+            case "$ANS" in ""|[Yy]*) DO_PERSIST=1 ;; esac
+        fi
+
+        if [ "$DO_PERSIST" -eq 1 ]; then
+            if [ -e "$RC" ] && grep -qF "$BIN_DIR" "$RC" 2>/dev/null; then
+                info "PATH already configured in $RC — left it unchanged."
+            elif printf '\n# Added by the NURL installer (https://nurl-lang.org)\n%s\n' "$EXPORT_LINE" >> "$RC" 2>/dev/null; then
+                info "Added $BIN_DIR to PATH in $RC — new shells will pick it up."
+            else
+                info "Could not write to $RC; add this line to your shell rc yourself:"
+                info "    $EXPORT_LINE"
+            fi
+            # A piped `curl | sh` runs in a child shell and cannot change the
+            # PATH of the shell you launched it from, so this one still needs
+            # the export (or a fresh terminal).
+            info ""
+            info "This shell won't see it until you run (or open a new terminal):"
+            info "    $EXPORT_LINE"
+        else
+            info "To use NURL in this shell now, run:"
+            info "    $EXPORT_LINE"
+            info ""
+            info "To make it permanent, add that line to your shell rc (e.g. $RC),"
+            info "or re-run with a terminal attached to be offered the change."
+        fi
+        ;;
+esac
+
 info ""
-info "The shims self-locate the stdlib, so that one line is all you need —"
-info "no 'source env' required. (bash/zsh users may instead 'source $PREFIX/env',"
-info "which also exports NURL_HOME.)"
+info "The shims self-locate the stdlib, so PATH is all you need — no 'source"
+info "env' required. (bash/zsh users may instead 'source $PREFIX/env', which"
+info "also exports NURL_HOME.)"
 info ""
 info "Then:  nurlc --version   ·   nurlpkg install nq"
 

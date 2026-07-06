@@ -14,6 +14,9 @@
 #  Params:
 #    -Version <tag>   release tag to install (default: latest)
 #    -Prefix  <dir>   install prefix (default: %USERPROFILE%\.nurl)
+#
+#  Env:
+#    $env:NURL_NO_MODIFY_PATH = "1"   never prompt / change the User PATH
 # ============================================================
 param(
     [string]$Version = $env:NURL_VERSION,
@@ -65,14 +68,45 @@ try {
         throw "install looks incomplete: $Prefix\bin\nurl.bat missing."
     }
 
+    $binDir = Join-Path $Prefix "bin"
+
+    # This session: `iex` evaluates in the caller's session, so we can put
+    # NURL on PATH right now — no separate command to copy-paste.
+    if (($env:Path -split ';') -notcontains $binDir) {
+        $env:Path = "$binDir;$env:Path"
+    }
+    $env:NURL_STDLIB = $Prefix
+
     Write-Host ""
     Write-Host "NURL $Version installed -> $Prefix"
+    Write-Host "This session is ready — 'nurlc' and 'nurlpkg' are on PATH now."
     Write-Host ""
-    Write-Host "Add it to this session:"
-    Write-Host "    `$env:Path = `"$Prefix\bin;`$env:Path`""
-    Write-Host "Make it permanent:"
-    Write-Host "    setx PATH `"$Prefix\bin;%PATH%`""
-    Write-Host "    setx NURL_STDLIB `"$Prefix`""
+
+    # Offer to persist to the User environment so new terminals inherit it.
+    $persist = $false
+    if ($env:NURL_NO_MODIFY_PATH -eq "1") {
+        $persist = $false
+    } elseif ([Environment]::UserInteractive) {
+        $ans = Read-Host "Add NURL to your PATH permanently (User environment)? [Y/n]"
+        if ($ans -eq "" -or $ans -match '^[Yy]') { $persist = $true }
+    }
+
+    if ($persist) {
+        $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
+        if (-not $userPath) { $userPath = "" }
+        if (($userPath -split ';') -contains $binDir) {
+            Write-Host "PATH already contains $binDir (User environment)."
+        } else {
+            $newPath = if ($userPath) { "$binDir;$userPath" } else { $binDir }
+            [Environment]::SetEnvironmentVariable("Path", $newPath, "User")
+            Write-Host "Added $binDir to your User PATH — new terminals will have it."
+        }
+        [Environment]::SetEnvironmentVariable("NURL_STDLIB", $Prefix, "User")
+    } else {
+        Write-Host "Left your permanent PATH untouched. For future terminals, run:"
+        Write-Host "    [Environment]::SetEnvironmentVariable('Path', `"$binDir;`" + [Environment]::GetEnvironmentVariable('Path','User'), 'User')"
+    }
+
     Write-Host ""
     Write-Host "Then:  nurlc --version   ·   nurlpkg install nq"
 }
