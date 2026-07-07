@@ -81,6 +81,11 @@
     color: var(--acc); border-radius: 8px; padding: .45rem .8rem; font-weight: 600; cursor: pointer;
   }
   #promptMsg { font-size: .75rem; color: var(--warn); margin-top: .35rem; min-height: 1em; }
+  select {
+    flex: 2; background: var(--panel2); border: 1px solid var(--line); color: var(--txt);
+    border-radius: 8px; padding: .35rem .5rem; font-size: .85rem;
+  }
+  #wasmMsg { font-size: .75rem; color: var(--acc2); margin-top: .35rem; min-height: 1em; }
   .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: .5rem; }
   .stat { background: var(--panel2); border: 1px solid var(--line); border-radius: 10px; padding: .55rem; text-align: center; }
   .stat b { display: block; font-size: 1.15rem; font-variant-numeric: tabular-nums; color: var(--acc2); }
@@ -130,6 +135,16 @@
         <label for="mirror">mirror view</label>
         <input type="checkbox" class="switch" id="mirror" checked>
       </div>
+      {% if wasm %}
+      <div class="row">
+        <label for="engine">compute</label>
+        <select id="engine">
+          <option value="server">server · GPU</option>
+          <option value="wasm">this browser · wasm</option>
+        </select>
+      </div>
+      <div id="wasmMsg"></div>
+      {% end %}
     </div>
 
     <div class="panel">
@@ -263,6 +278,11 @@ function captureBlob() {
 async function loop() {
   while (running) {
     try {
+      if (engineSel && engineSel.value === "wasm" && wasmEng.state === "ready") {
+        await wasmStep();
+        if (dropped) { running = false; camBtn.textContent = "▶ Start camera"; camBtn.classList.remove("live"); }
+        continue;
+      }
       const blob = await captureBlob();
       const q = new URLSearchParams();
       q.set("conf", (confIn.value / 100).toFixed(2));
@@ -313,6 +333,163 @@ function drawOverlay(dets) {
   }
 }
 
+// ── in-browser wasm engine ──────────────────────────────────────────
+// The same pure-NURL onnx runtime, compiled to wasm32-wasi with
+// precompiled static kernels, running in a worker. Frames go through a
+// SharedArrayBuffer; the worker's host_frame import Atomics.waits on it.
+const FRAME_BYTES = W * H * 3;
+const SAB_IN = 4096, SAB_OUT = SAB_IN + FRAME_BYTES;
+const engineSel = $("engine");
+const wasmMsg = $("wasmMsg");
+const wmsg = (t) => { if (wasmMsg) wasmMsg.textContent = t; };
+
+const wasmEng = {
+  state: "off", worker: null, sab: null, ctl: null, bytes: null,
+  pending: null, names: [], _q: Promise.resolve(),
+  async start() {
+    if (this.state !== "off") return;
+    this.state = "loading";
+    if (typeof SharedArrayBuffer === "undefined") {
+      throw new Error("SharedArrayBuffer unavailable (page not cross-origin isolated)");
+    }
+    wmsg("fetching wasm module…");
+    const [wasm, model, tpeRes] = await Promise.all([
+      fetch("/yoloe_detect.wasm").then(r => { if (!r.ok) throw new Error("module fetch " + r.status); return r.arrayBuffer(); }),
+      (async () => { wmsg("fetching model (~52 MB)…"); const r = await fetch("/wasm/model"); if (!r.ok) throw new Error("model fetch " + r.status); return r.arrayBuffer(); })(),
+      fetch("/tpe").then(async r => { if (!r.ok) throw new Error("tpe fetch " + r.status); return { buf: await r.arrayBuffer(), cls: r.headers.get("X-Classes") || "" }; }),
+    ]);
+    this.names = tpeRes.cls.split(",");
+    this.sab = new SharedArrayBuffer(SAB_OUT + FRAME_BYTES);
+    this.ctl = new Int32Array(this.sab, 0, 1024);
+    this.bytes = new Uint8Array(this.sab);
+    wmsg("starting engine…");
+    this.worker = new Worker("/worker.js");
+    await new Promise((resolve, reject) => {
+      this.worker.onmessage = (e) => {
+        const m = e.data;
+        if (m.type === "status" && m.code === 2) { resolve(); }
+        else if (m.type === "status" && m.code < 0) { reject(new Error("engine init failed (" + m.extra + ")")); }
+        else if (m.type === "error") { reject(new Error(m.message)); }
+        else if (m.type === "log") { console.log("[wasm]", m.line); }
+      };
+      this.worker.postMessage({ type: "init", sab: this.sab, wasm, model, tpe: tpeRes.buf }, [wasm, model, tpeRes.buf]);
+    });
+    this.worker.onmessage = (e) => this._onmsg(e.data);
+    this.state = "ready";
+    wmsg("wasm engine ready — " + this.names.length + " classes");
+  },
+  _onmsg(m) {
+    if (m.type === "result" && this.pending) {
+      const p = this.pending; this.pending = null;
+      p.resolve(m);
+    } else if (m.type === "log") {
+      console.log("[wasm]", m.line);
+    } else if (m.type === "error" && this.pending) {
+      const p = this.pending; this.pending = null;
+      p.reject(new Error(m.message));
+    }
+  },
+  _post(cmd, fill) {
+    // serialize: a prompt-add racing an in-flight detect must not
+    // clobber the ctl block before the worker consumes it
+    const job = this._q.then(() => new Promise((resolve, reject) => {
+      this.pending = { resolve, reject };
+      fill();
+      this.ctl[1] = cmd;
+      Atomics.store(this.ctl, 0, 1);
+      Atomics.notify(this.ctl, 0);
+      if (cmd === 2) { // prompt add has no result message
+        this.pending = null;
+        resolve(null);
+      }
+    }));
+    this._q = job.catch(() => {});
+    return job;
+  },
+  detect(rgb, confPm, masksOn, bitmask) {
+    return this._post(0, () => {
+      this.bytes.set(rgb, SAB_IN);
+      this.ctl[2] = confPm; this.ctl[3] = masksOn ? 1 : 0; this.ctl[4] = bitmask;
+    });
+  },
+  addPrompt(slot, emb) {
+    return this._post(2, () => {
+      this.ctl[5] = slot;
+      new Float32Array(this.sab, 64, 512).set(emb);
+    });
+  },
+  outFrame() { return this.bytes.subarray(SAB_OUT, SAB_OUT + FRAME_BYTES); },
+};
+
+if (engineSel) {
+  engineSel.onchange = async () => {
+    if (engineSel.value === "wasm") {
+      try { await wasmEng.start(); }
+      catch (e) { wmsg("wasm: " + e.message); engineSel.value = "server"; }
+    } else { wmsg(""); }
+  };
+  // kiosk/test: ?engine=wasm pre-selects and boots the in-browser engine
+  if (new URLSearchParams(location.search).get("engine") === "wasm") {
+    engineSel.value = "wasm";
+    engineSel.onchange();
+  }
+}
+
+function captureRGB() {
+  const d = cctx.getImageData(0, 0, W, H).data;
+  const rgb = new Uint8Array(FRAME_BYTES);
+  for (let i = 0, j = 0; i < FRAME_BYTES; i += 3, j += 4) {
+    rgb[i] = d[j]; rgb[i + 1] = d[j + 1]; rgb[i + 2] = d[j + 2];
+  }
+  return rgb;
+}
+
+const paintCanvas = document.createElement("canvas");
+paintCanvas.width = W; paintCanvas.height = H;
+const paintCtx = paintCanvas.getContext("2d");
+function rgbToDataURL(rgb) {
+  const img = paintCtx.createImageData(W, H);
+  const d = img.data;
+  for (let i = 0, j = 0; i < FRAME_BYTES; i += 3, j += 4) {
+    d[j] = rgb[i]; d[j + 1] = rgb[i + 1]; d[j + 2] = rgb[i + 2]; d[j + 3] = 255;
+  }
+  paintCtx.putImageData(img, 0, 0);
+  return paintCanvas.toDataURL("image/jpeg", 0.85);
+}
+
+function enabledBitmask() {
+  let m = 0;
+  for (const el of document.querySelectorAll(".cls.on")) m |= (1 << Number(el.dataset.id));
+  return m | 0;
+}
+
+async function wasmStep() {
+  const src = dropped || video;
+  cctx.fillStyle = "#0b0e14"; cctx.fillRect(0, 0, W, H);
+  const sw = dropped ? dropped.width : video.videoWidth;
+  const sh = dropped ? dropped.height : video.videoHeight;
+  const s = Math.min(W / sw, H / sh);
+  cctx.drawImage(src, (W - sw * s) / 2, (H - sh * s) / 2, sw * s, sh * s);
+  const t0 = performance.now();
+  wmsg("wasm: computing…");
+  const res = await wasmEng.detect(captureRGB(), Math.round(confIn.value * 10), masksIn.checked, enabledBitmask());
+  const rtt = performance.now() - t0;
+  frame.src = rgbToDataURL(wasmEng.outFrame());
+  const dets = [];
+  for (let k = 0; k < res.n; k++) {
+    const [cls, score, x, y, w, h] = res.dets.slice(k * 6, k * 6 + 6);
+    dets.push({ n: chipName(cls), s: score, c: cls, k, x, y, w, h });
+  }
+  drawOverlay(dets);
+  updateStats(res.ms, rtt, res.n, dets);
+  wmsg("wasm: " + (res.ms / 1000).toFixed(1) + " s/frame — pure NURL in this tab");
+}
+
+function chipName(cls) {
+  const el = document.querySelector('.cls[data-id="' + cls + '"]');
+  return el ? el.textContent : ("#" + cls);
+}
+
 // free-text prompting: Enter, comma or the Add button encodes the text
 // on the server (MobileCLIP → tpe slot) and appends a toggle chip.
 const pIn = $("promptIn");
@@ -332,6 +509,14 @@ if (pIn) {
       el.textContent = j.name;
       el.onclick = () => el.classList.toggle("on");
       $("classes").appendChild(el);
+      // wasm engine shares the vocabulary: pull the new slot's embedding
+      if (wasmEng.state === "ready") {
+        const r2 = await fetch("/tpe");
+        const buf = await r2.arrayBuffer();
+        const emb = new Float32Array(buf, j.id * 2048, 512);
+        await wasmEng.addPrompt(j.id, emb);
+        wasmEng.names.push(j.name);
+      }
       pIn.value = "";
       pMsg.textContent = "";
     } catch (e) {

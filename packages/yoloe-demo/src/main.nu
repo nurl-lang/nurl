@@ -63,6 +63,8 @@ $ `deps/template/src/template.nu`
     OGraph tgraph  // MobileCLIP text encoder (pure NURL on the GPU)
     Tokenizer tk  // CLIP BPE tokenizer
     ( Vec u ) tpe  // kmax×512 f32 text embeddings, zero-padded past nc
+    ( Vec u ) model_bytes  // raw .onnx, served to the wasm client mode
+    b wasm_mode  // web/yoloe_detect.wasm present → offer in-browser compute
 }
 
 : ~ i g_st 0
@@ -382,7 +384,49 @@ $ `deps/template/src/template.nu`
     : *DemoState st # *DemoState g_st
     : HttpResponse r ( response_new 200 )
     ( response_set_header r `Content-Type` `text/html; charset=utf-8` )
+    // cross-origin isolation: the wasm client mode hands frames to the
+    // worker through a SharedArrayBuffer, which browsers only enable on
+    // COOP/COEP-isolated pages. Same-origin subresources need nothing.
+    ( response_set_header r `Cross-Origin-Opener-Policy` `same-origin` )
+    ( response_set_header r `Cross-Origin-Embedder-Policy` `require-corp` )
     ( response_set_body_str r ( string_data . st index_html ) )
+    ^ r
+}
+
+// GET /wasm/model — the detector .onnx for the in-browser wasm engine.
+@ h_wasm_model HttpRequest req Params p → HttpResponse {
+    : *DemoState st # *DemoState g_st
+    : HttpResponse r ( response_new 200 )
+    ( response_set_header r `Content-Type` `application/octet-stream` )
+    ( response_set_body_bytes r . st model_bytes )
+    ^ r
+}
+
+// GET /tpe — the CURRENT vocabulary embeddings (nc × 512 f32, raw LE)
+// with the class names in X-Classes. The wasm client seeds from this and
+// re-fetches after /prompt so both engines share one vocabulary.
+@ h_tpe HttpRequest req Params p → HttpResponse {
+    : *DemoState st # *DemoState g_st
+    : HttpResponse r ( response_new 200 )
+    ( response_set_header r `Content-Type` `application/octet-stream` )
+    : ( Vec u ) out ( vec_with_cap [u] * . st nc 2048 )
+    : *u tp ( vec_data [u] . st tpe )
+    : ~ i k 0
+    ~ < k * . st nc 2048 {
+        ( vec_push [u] out . tp k )
+        = k + k 1
+    }
+    : ~ String cls ( string_new )
+    : ~ i c 0
+    ~ < c . st nc {
+        ? > c 0 { ( string_push_char cls 44 ) } {}
+        ( string_push_str cls ( yd_name_at . st names c ) )
+        = c + c 1
+    }
+    ( response_set_header r `X-Classes` ( string_data cls ) )
+    ( string_free cls )
+    ( response_set_body_bytes r out )
+    ( vec_free [u] out )
     ^ r
 }
 
@@ -472,6 +516,16 @@ $ `deps/template/src/template.nu`
 
 // ── startup ──────────────────────────────────────────────────────────
 
+// 1-byte marker vec when `path` exists and is readable ([] otherwise).
+@ wd_probe s path → ( Vec u ) {
+    : ( Vec u ) out ( vec_new [u] )
+    ?? ( read_file_bytes path ) {
+        T b → { ? > ( vec_len [u] b ) 0 { ( vec_push [u] out 1 ) } {} ( vec_free [u] b ) }
+        F _ → {}
+    }
+    ^ out
+}
+
 @ yd_load_graph s path * b okcell → OGraph {
     : ~ OGraph g @ OGraph { ( vec_new [ONode] ) ( vec_new [OTensor] ) ( string_new ) ( string_new ) ( string_new ) }
     ?? ( read_file_bytes path ) {
@@ -491,6 +545,7 @@ $ `deps/template/src/template.nu`
             ( json_obj_set ctx `model` ( json_str_lit ( string_data . st model_path ) ) )
             ( json_obj_set ctx `promptable` ( json_bool > . st kmax 0 ) )
             ( json_obj_set ctx `slots` ( json_int . st kmax ) )
+            ( json_obj_set ctx `wasm` ( json_bool . st wasm_mode ) )
             : Json arr ( json_arr_new )
             : ~ i k 0
             ~ < k . st nc {
@@ -601,6 +656,14 @@ $ `deps/template/src/template.nu`
                         = . st index_html ( string_new )
                         = . st kmax 0
                         = . st tpe ( vec_new [u] )
+                        = . st model_bytes ( vec_new [u] )
+                        ?? ( read_file_bytes ( string_data mp ) ) {
+                            T mb2 → { ( vec_free [u] . st model_bytes ) = . st model_bytes mb2 }
+                            F _ → {}
+                        }
+                        : ( Vec u ) wprobe ( wd_probe `web/yoloe_detect.wasm` )
+                        = . st wasm_mode > ( vec_len [u] wprobe ) 0
+                        ( vec_free [u] wprobe )
                         = g_st # i st
 
                         // free-text prompting: load the text encoder +
@@ -672,7 +735,16 @@ $ `deps/template/src/template.nu`
                             ( http_app_get a `/health` \ HttpRequest rq Params pp → HttpResponse { ^ ( h_health rq pp ) } )
                             ( http_app_post a `/detect` \ HttpRequest rq Params pp → HttpResponse { ^ ( h_detect rq pp ) } )
                             ( http_app_post a `/prompt` \ HttpRequest rq Params pp → HttpResponse { ^ ( h_prompt rq pp ) } )
+                            ( http_app_get a `/wasm/model` \ HttpRequest rq Params pp → HttpResponse { ^ ( h_wasm_model rq pp ) } )
+                            ( http_app_get a `/tpe` \ HttpRequest rq Params pp → HttpResponse { ^ ( h_tpe rq pp ) } )
+                            ( http_app_static_dir a `web` )
                             ( http_app_cors a )
+                            // single-threaded server + a browser that fans
+                            // out parallel fetches (module/model/tpe/worker):
+                            // long keep-alive idles serialize the queue —
+                            // close idle connections quickly instead.
+                            ( http_app_idle_ms a 800 )
+                            ( http_app_logging a )
 
                             ? ( args_present ap `tls` ) {
                                 : X509SelfSigned cert ( x509_selfsigned_p256 `yoloe-demo.local` 30 )
