@@ -590,7 +590,7 @@ $ `deps/template/src/template.nu`
     ( args_opt ap `gpu` 103 `N` `CUDA device ordinal (default 0)` )  // -g
     ( args_opt ap `page` 80 `FILE` `demo page template (default views/index.html)` )  // -P
     ( args_opt ap `text-encoder` 116 `FILE` `MobileCLIP text-encoder .onnx → free-text prompting (needs the K-slot promptable --model)` )  // -t
-    ( args_opt ap `merges` 77 `FILE` `CLIP BPE merges (default deps/yoloe/assets/clip_merges.txt)` )  // -M
+    ( args_opt ap `merges` 77 `FILE` `CLIP BPE merges override (default: the table built into the binary)` )  // -M
 
     : ( Vec String ) argv ( vec_new [String] )
     : i ac ( env_args_count )
@@ -609,7 +609,7 @@ $ `deps/template/src/template.nu`
             : ~ String np ( string_new )
             : ~ String page ( string_from `views/index.html` )
             : ~ String tep ( string_new )
-            : ~ String mgp ( string_from `deps/yoloe/assets/clip_merges.txt` )
+            : ~ String mgp ( string_new )  // empty → built-in merge table
             : ~ String host ( string_from `0.0.0.0` )
             : ~ i port 8090
             : ~ i gpu 0
@@ -677,7 +677,9 @@ $ `deps/template/src/template.nu`
                             ? == ( nurl_peek # *u okc2 0 ) 0 {
                                 ( nurl_eprintln `yoloe-demo: cannot read the text encoder` )
                             } {
-                                : Tokenizer tkz ( tokenizer_load ( string_data mgp ) )
+                                : Tokenizer tkz ? > ( string_len mgp ) 0
+                                ( tokenizer_load ( string_data mgp ) )
+                                ( tokenizer_load_builtin )
                                 ? < . tkz sot 0 {
                                     ( nurl_eprintln `yoloe-demo: cannot read the BPE merges (--merges)` )
                                 } {
