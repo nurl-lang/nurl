@@ -5201,16 +5201,7 @@
                 : b __hp ( is_ptr_ty at )
                 ? & != 0 ( nurl_str_len __want ) ! ( seq ( nurl_llty at ) ( nurl_llty __want ) ) {
                     ? & & > __ww 0 > __hw 0 != __ww __hw {
-                        // int → narrower/wider int: trunc, or a widen whose
-                        // direction the argument's OWN type decides (A1):
-                        // an unsigned u8/u16/u32 arg zero-extends.
-                        : s __nv ( nurl_cg_reg cg )
-                        : s __wid ? ( ty_is_unsigned at ) ` = zext ` ` = sext `
-                        ( nurl_print `  ` ) ( nurl_print __nv )
-                        ( nurl_print ? > __hw __ww ` = trunc ` __wid )
-                        ( nurl_print ( nurl_llty at ) ) ( nurl_print ` ` ) ( nurl_print av )
-                        ( nurl_print ` to ` ) ( nurl_print ( nurl_llty __want ) ) ( nurl_print `\n` )
-                        = av __nv = at __want
+                        = av ( __emit_iwiden cg av at __want ) = at __want
                     } {
                         ? & __wp > __hw 0 {
                             // integer arg (e.g. a bare `0` / a handle held as i64)
@@ -5266,14 +5257,7 @@
                         : ~ i __hw ( int_width at )
                         ? == __hw 0 { = __hw ( int_width ( src_int_ty at ) ) } {}
                         ? & & > __ww 0 > __hw 0 != __ww __hw {
-                            : s __nv ( nurl_cg_reg cg )
-                            : s __wid ? ( ty_is_unsigned at ) ` = zext ` ` = sext `
-                            ( nurl_print `  ` ) ( nurl_print __nv )
-                            ( nurl_print ? > __hw __ww ` = trunc ` __wid )
-                            ( nurl_print ( nurl_llty at ) ) ( nurl_print ` ` ) ( nurl_print av )
-                            ( nurl_print ` to ` ) ( nurl_print ( nurl_llty __wsrc ) ) ( nurl_print `
-` )
-                            = av __nv = at __wsrc
+                            = av ( __emit_iwiden cg av at __wsrc ) = at __wsrc
                         } {}
                     } {}
                 } {}
@@ -10059,6 +10043,21 @@
     ? ( seq t `i64` ) `i64`
     ? ( seq t `i` ) `i64`
     ``
+}
+
+// Emit an integer-width bridge `%r = trunc|sext|zext <from> <val> to
+// <to>` and return the new register; used by BOTH call-arg coercion
+// sites (FFI + NURL callee) so the widen/narrow logic lives once. Widen
+// direction follows the SOURCE type (A1: an unsigned u8/u16/u32
+// zero-extends). Caller updates its own arg-type to `to_ty` after.
+@ __emit_iwiden i cg s val s from_ty s to_ty → s {
+    : s r ( nurl_cg_reg cg )
+    : s ins ? > ( int_width from_ty ) ( int_width to_ty ) ` = trunc `
+    ? ( ty_is_unsigned from_ty ) ` = zext ` ` = sext `
+    ( nurl_print `  ` ) ( nurl_print r ) ( nurl_print ins )
+    ( nurl_print ( nurl_llty from_ty ) ) ( nurl_print ` ` ) ( nurl_print val )
+    ( nurl_print ` to ` ) ( nurl_print ( nurl_llty to_ty ) ) ( nurl_print `\n` )
+    ^ r
 }
 
 @ int_width s ty → i {
