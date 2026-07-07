@@ -62,6 +62,38 @@ $ `cpu.nu`
     ^ != 0 ( nurl_str_eq v `static` )
 }
 
+// Backend 3: WEBGPU — the kernels run as WGSL compute shaders through
+// the browser's (or Deno's) navigator.gpu, driven by host imports the
+// JS embedder implements (see packages/gpu/web/webgpu.js). The onnx
+// kernels are pre-translated to WGSL and looked up by entry name (like
+// the static backend), so gpu_compile passes only the name. Device
+// memory is a GPUBuffer, addressed by an integer id. gpu_download is
+// asynchronous (mapAsync) — the wasm module must be built with asyncify
+// covering the wgpu_download import. Select from a wasm entry with
+// ( gpu_force_webgpu ) before gpu_open.
+& `c` @ wgpu_pipeline s name → i
+
+& `c` @ wgpu_alloc i bytes → i
+
+& `c` @ wgpu_free i id → v
+
+& `c` @ wgpu_upload i id *u host i bytes → i
+
+& `c` @ wgpu_download *u host i id i bytes → i
+
+& `c` @ wgpu_dtod i dst i src i bytes → i
+
+& `c` @ wgpu_launch i pipeline i total *u args i nargs → i
+
+@ gpu_force_webgpu → v { = __gpu_force 3 }
+
+@ __force_webgpu → b {
+    ? == __gpu_force 3 { ^ T } {}
+    : s v ( getenv `NURL_GPU` )
+    ? == # i v 0 { ^ F } {}
+    ^ != 0 ( nurl_str_eq v `webgpu` )
+}
+
 // ── handle types ──────────────────────────────────────────────────
 : Gpu { i ordinal i dev i ctx }  // an initialised device + context
 : GpuKernel { i module i func }  // a compiled, loaded __global__ fn
@@ -80,6 +112,16 @@ $ `cpu.nu`
 // returned Gpu is "ok" (ctx != 0) for either backend; a CPU Gpu carries
 // dev = -2, ctx = 1 as its marker.
 @ gpu_open i ordinal → Gpu {
+    ? ( __force_webgpu ) {
+        // probe: wgpu_pipeline of a known kernel returns >0 when the JS
+        // host has WebGPU up. 0 → no adapter / host missing.
+        ? <= ( wgpu_pipeline `osigmoid` ) 0 {
+            ( nurl_eprint `[gpu/webgpu] no WebGPU host / adapter (wgpu_pipeline failed)\n` )
+            ^ @ Gpu { ordinal - 0 4 0 }
+        } {}
+        = __gpu_backend 3
+        ^ @ Gpu { ordinal - 0 4 1 }
+    } {}
     ? ( __force_static ) {
         ? == # i ( nurl_static_kernel `gemm` ) 0 {
             ( nurl_eprint `[gpu/static] no static kernels linked into this binary (kernels_static.c missing)\n` )
@@ -102,6 +144,7 @@ $ `cpu.nu`
 
 // Human-readable device name (e.g. "NVIDIA GeForce RTX 4090", or "CPU").
 @ gpu_name Gpu g → s {
+    ? == __gpu_backend 3 { ^ `WebGPU (WGSL compute)` } {}
     ? == __gpu_backend 2 { ^ `CPU (static kernels)` } {}
     ? == __gpu_backend 1 { ^ `CPU (host C++)` } { ^ ( cuda_device_name . g dev ) }
 }
@@ -118,6 +161,14 @@ $ `cpu.nu`
 // The kernel must be declared `extern "C" __global__`. Returns a
 // GpuKernel with func == 0 on a compile/load error (log on stderr).
 @ gpu_compile Gpu g s src s name → GpuKernel {
+    ? == __gpu_backend 3 {
+        : i pid ( wgpu_pipeline name )
+        ? <= pid 0 {
+            ( nurl_eprint `[gpu/webgpu] no WGSL kernel named: ` ) ( nurl_eprint name ) ( nurl_eprint `\n` )
+            ^ @ GpuKernel { 0 0 }
+        } {}
+        ^ @ GpuKernel { 0 pid }
+    } {}
     ? == __gpu_backend 2 {
         : *u f ( nurl_static_kernel name )
         ? == # i f 0 {
@@ -145,7 +196,7 @@ $ `cpu.nu`
 @ gpu_kernel_ok GpuKernel k → b { ^ != . k func 0 }
 
 @ gpu_kernel_free GpuKernel k → v {
-    ? == __gpu_backend 2 { ^ {} } {}
+    ? >= __gpu_backend 2 { ^ {} } {}
     ? == __gpu_backend 1 { ( cpu_module_free # *u . k module ) } { ( cuda_module_unload . k module ) }
 }
 
@@ -168,14 +219,19 @@ $ `cpu.nu`
 // ── device memory ─────────────────────────────────────────────────
 
 @ gpu_alloc Gpu g i bytes → GpuBuffer {
+    ? == __gpu_backend 3 { ^ @ GpuBuffer { ( wgpu_alloc bytes ) bytes } } {}
     : i dptr ? != __gpu_backend 0 ( cpu_malloc bytes ) ( cuda_malloc bytes )
     ^ @ GpuBuffer { dptr bytes }
 }
 
-@ gpu_free GpuBuffer b → v { ? != __gpu_backend 0 { ( cpu_free . b dptr ) } { ( cuda_free . b dptr ) } }
+@ gpu_free GpuBuffer b → v {
+    ? == __gpu_backend 3 { ( wgpu_free . b dptr ) } {
+        ? != __gpu_backend 0 { ( cpu_free . b dptr ) } { ( cuda_free . b dptr ) } }
+}
 
 // Copy the buffer's worth of bytes host → device. 0 == success.
 @ gpu_upload GpuBuffer dst * u host → i {
+    ? == __gpu_backend 3 { ^ ( wgpu_upload . dst dptr host . dst bytes ) } {}
     ? != __gpu_backend 0 { ^ ( cpu_htod . dst dptr host . dst bytes ) } {}
     ^ ( cuda_htod . dst dptr host . dst bytes )
 }
@@ -184,12 +240,14 @@ $ `cpu.nu`
 // 0 == success. Both allocations live in the process's shared (primary)
 // context, so any package's buffer is a valid source.
 @ gpu_dtod GpuBuffer dst i src_dptr → i {
+    ? == __gpu_backend 3 { ^ ( wgpu_dtod . dst dptr src_dptr . dst bytes ) } {}
     ? != __gpu_backend 0 { ^ ( cpu_htod . dst dptr # *u src_dptr . dst bytes ) } {}
     ^ ( cuda_dtod . dst dptr src_dptr . dst bytes )
 }
 
 // Copy the buffer's worth of bytes device → host. 0 == success.
 @ gpu_download * u host GpuBuffer src → i {
+    ? == __gpu_backend 3 { ^ ( wgpu_download host . src dptr . src bytes ) } {}
     ? != __gpu_backend 0 { ^ ( cpu_dtoh host . src dptr . src bytes ) } {}
     ^ ( cuda_dtoh host . src dptr . src bytes )
 }
@@ -222,7 +280,8 @@ $ `cpu.nu`
     // void** layer is safe to reclaim as soon as it returns. The CPU backend
     // reads them synchronously inside cpu_launch, so it too is done on return.
     : ~ i r 0
-    ? != __gpu_backend 0 { = r ( cpu_launch . k func # i params grid block ) } { = r ( cuda_launch . k func grid block params ) }
+    ? == __gpu_backend 3 { = r ( wgpu_launch . k func * grid block # *u vbase n ) } {
+        ? != __gpu_backend 0 { = r ( cpu_launch . k func # i params grid block ) } { = r ( cuda_launch . k func grid block params ) } }
     ( nurl_free params )
     ^ r
 }

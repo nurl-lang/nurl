@@ -45,6 +45,8 @@ $ `toolchain.nu`
     // statically instead of becoming env imports
     s extra_cflags  // extra compile/link flags, space-separated (`` = none)
     // — e.g. `-msimd128` for wasm SIMD
+    s asyncify_imports  // comma-separated async import names (`` = none);
+    // e.g. `env.wgpu_download` for the WebGPU backend's async readback
 }
 
 // Split a space-separated flag string into owned Strings (caller frees).
@@ -74,7 +76,7 @@ $ `toolchain.nu`
 }
 
 @ wb_opts_default → WbOpts {
-    ^ @ WbOpts { `-O2` T F F F `` `` }
+    ^ @ WbOpts { `-O2` T F F F `` `` `` }
 }
 
 @ __wb_say b quiet s msg → v {
@@ -252,14 +254,23 @@ $ `toolchain.nu`
     ( string_free link_err )
 
     // 5. optional asyncify wrap (canvas-in-browser programs). Restricted
-    //    to canvas.sleep, matching the playground pipeline.
-    ? & . opts asyncify uses_canvas {
+    //    to canvas.sleep, matching the playground pipeline; any module
+    //    can name its own async imports via opts.asyncify_imports (e.g.
+    //    env.wgpu_download for the WebGPU backend).
+    : b __asy_custom > ( nurl_str_len . opts asyncify_imports ) 0
+    ? & . opts asyncify | uses_canvas __asy_custom {
         ( __wb_say . opts quiet `wasmbuilder: wasm-opt --asyncify` )
         : String tmp_out ( string_from out_wasm )
         ( string_push_str tmp_out `.async` )
+        : s imps ? __asy_custom . opts asyncify_imports `canvas.sleep`
+        : s parg ( nurl_str_cat `--pass-arg=asyncify-imports@` imps )
         : ( Vec s ) oargs ( vec_new [s] )
+        // strip DWARF first: wasm-opt's asyncify pass aborts on the debug
+        // line-table extensions wasi-sdk/zig objects carry
+        // (`Fatal: TODO: DW_LNE_define_file`).
+        ( vec_push [s] oargs `--strip-dwarf` )
         ( vec_push [s] oargs `--asyncify` )
-        ( vec_push [s] oargs `--pass-arg=asyncify-imports@canvas.sleep` )
+        ( vec_push [s] oargs parg )
         ( vec_push [s] oargs `-O2` )
         ( vec_push [s] oargs out_wasm )
         ( vec_push [s] oargs `-o` )

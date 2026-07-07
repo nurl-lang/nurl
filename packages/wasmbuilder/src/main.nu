@@ -76,6 +76,7 @@ $ `build.nu`
     ( args_flag p `asyncify` 0 `wasm-opt asyncify wrap for canvas programs (needs binaryen)` )
     ( args_opt p `obj` 0 `FILE` `extra wasm object linked into the module (e.g. kernels_static.wasm.o)` )
     ( args_opt p `cflags` 0 `FLAGS` `extra compile/link flags, space-separated (e.g. "-msimd128")` )
+    ( args_opt p `asyncify-imports` 0 `LIST` `comma-separated async import names (e.g. env.wgpu_download); implies --asyncify` )
     ( args_flag p `no-host-imports` 0 `do not pass --ffi-host-imports to nurlc` )
     ( args_flag p `quiet` 113 `suppress progress output` )
     ( args_flag p `doctor` 0 `print how nurlc/zig/runtime resolve on this machine` )
@@ -139,6 +140,8 @@ $ `build.nu`
     ?? ( args_value p `obj` ) { T v → { ( string_free objv ) = objv v = . opts extra_obj ( string_data objv ) } F _ → {} }
     : ~ String cflv ( string_new )
     ?? ( args_value p `cflags` ) { T v → { ( string_free cflv ) = cflv v = . opts extra_cflags ( string_data cflv ) } F _ → {} }
+    : ~ String asiv ( string_new )
+    ?? ( args_value p `asyncify-imports` ) { T v → { ( string_free asiv ) = asiv v = . opts asyncify_imports ( string_data asiv ) = . opts asyncify T } F _ → {} }
     ? ( args_present p `quiet` ) { = . opts quiet T } {}
 
     : !v String r ( wb_build_file ( string_data input ) ( string_data out ) opts )
