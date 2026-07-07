@@ -113,8 +113,15 @@ else
 fi
 
 # ── Unpack (the archive has a top-level nurl/ dir) ─────────────────────
+# Remove only the entries the toolchain owns (the same list
+# tools/install-toolchain.sh manages) — $PREFIX also holds user data
+# that must survive a reinstall, e.g. the nurlpkg publish token in
+# $PREFIX/credentials. `rm -rf $PREFIX` here used to silently log
+# users out of the registry on every upgrade.
 info "installing to $PREFIX…"
-rm -rf "$PREFIX"
+for entry in bin build stdlib zig nurl.sh env; do
+    rm -rf "${PREFIX:?}/$entry"
+done
 mkdir -p "$PREFIX"
 tar xzf "$tmp/$archive" -C "$PREFIX" --strip-components=1
 
