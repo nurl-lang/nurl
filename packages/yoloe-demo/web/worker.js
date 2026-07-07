@@ -14,6 +14,8 @@
 // postMessage out: {type:'status'|'result'|'error', ...}. The module's
 // host_frame import BLOCKS on Atomics.wait — legal here, never on main.
 
+import { makeWebGPUHost } from "./webgpu.js";
+
 const W = 640, H = 480, FRAME = W * H * 3;
 const CTL_I32 = 1024;            // 4096 bytes of control space
 const IN_OFF = 4096, OUT_OFF = IN_OFF + FRAME;
@@ -102,7 +104,11 @@ function wasiShim() {
   };
 }
 
+let gpuHost = null;      // WebGPU host (backend 3), created on init if requested
+let useWebGPU = false;
+
 const env = {
+  host_use_webgpu: () => (useWebGPU && gpuHost && gpuHost.ok) ? 1n : 0n,
   host_blob_size: (kind) => BigInt(blobs[Number(kind)]?.length ?? 0),
   host_blob_read: (kind, dst) => {
     const b = blobs[Number(kind)];
@@ -150,6 +156,10 @@ onmessage = async (e) => {
     sabBytes = new Uint8Array(sab);
     blobs[0] = new Uint8Array(m.model);
     blobs[1] = new Uint8Array(m.tpe);
+    useWebGPU = m.engine === 'webgpu';
+    gpuHost = await makeWebGPUHost();
+    if (useWebGPU && !gpuHost.ok) throw new Error('WebGPU unavailable (no adapter)');
+    Object.assign(env, gpuHost.imports);   // wgpu_* imports (stubbed when !ok)
     const module = await WebAssembly.compile(m.wasm);
     const wasi = wasiShim();
     for (const imp of WebAssembly.Module.imports(module)) {
@@ -168,9 +178,13 @@ onmessage = async (e) => {
       env,
     });
     memory = instance.exports.memory;
+    gpuHost.bind(instance);
     postMessage({ type: 'ready' });
     try {
-      instance.exports._start();
+      // runWithAsyncify drives the WebGPU async readback (unwind/await/
+      // rewind); for the static-CPU path nothing unwinds and it is just
+      // one _start() call.
+      await gpuHost.runWithAsyncify(() => instance.exports._start());
       postMessage({ type: 'exit', code: 0 });
     } catch (ex) {
       if (ex && typeof ex.wasiExit === 'number') {

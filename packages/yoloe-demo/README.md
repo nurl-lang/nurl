@@ -119,7 +119,7 @@ all). Response:
 `k` is the instance colour index (the page's box palette matches the
 server's mask palette). `GET /health` answers `ok`.
 
-## In-browser compute (wasm)
+## In-browser compute (wasm CPU · WebGPU)
 
 The demo runs the **entire network in the browser tab** as an
 alternative to the server round-trip — the same pure-NURL onnx runtime,
@@ -134,11 +134,27 @@ webcam → canvas → SharedArrayBuffer → web worker
    → masked RGB + detections → canvas
 ```
 
-Build it (one-time; needs a built `./build/nurlc` and zig, which
-wasmbuilder auto-provisions):
+The **compute** selector offers two client-side engines:
+
+* **this browser · wasm (CPU)** — the static kernels on one CPU core
+  (`-msimd128`), ~20 s/frame at 640×640. Correctness/portability path.
+* **this browser · WebGPU** — the *same* onnx runtime with every kernel
+  a WGSL compute shader (packages/gpu backend 3) on the browser GPU:
+  **~1.1 s/frame, ~20× faster than the CPU path** and matching the
+  server GPU / onnxruntime within tolerance. This is the whole network
+  running on your GPU with no server round-trip.
+
+Both share one module: `wasm_detect.nu` picks the backend at runtime
+(`host_use_webgpu`); `web/worker.js` supplies the WebGPU host
+(`packages/gpu/web/webgpu.js`) and drives the one async op — the GPU
+readback (`GPUBuffer.mapAsync`) — through Asyncify so the synchronous
+NURL `gpu_download` returns data in wasm memory.
+
+Build it (one-time; needs a built `./build/nurlc`, zig which wasmbuilder
+auto-provisions, and binaryen for the asyncify pass):
 
 ```sh
-./tools/build_wasm.sh          # → web/yoloe_detect.wasm (~1.7 MB)
+./tools/build_wasm.sh   # → web/yoloe_detect.wasm (static CPU + WebGPU) + the JS host
 ```
 
 At runtime the page fetches the module, the detector `.onnx` (`/wasm/model`)
@@ -152,11 +168,11 @@ the page pulls the new `/tpe` slot and feeds it to the worker, so both
 engines share one vocabulary.
 
 The worker runs off the UI thread, so its `host_frame` import can block
-on `Atomics.wait` while the module loops. Inference is ~20 s/frame at
-640×640 on one CPU core with `-msimd128` (conv2d is a vectorizable
-row-major kernel; the CUDA 1:1 translation would be ~3.5× slower) — a
-correctness/portability showcase, not a real-time path. Results are
-bit-identical to the GPU backend within the `fwd2` tolerance.
+on `Atomics.wait` while the module loops. The **WebGPU** engine reaches
+~1.1 s/frame on an RTX 4090 (every layer a WGSL compute shader); the
+**wasm-CPU** engine is ~20 s/frame on one core (`-msimd128`) — a
+correctness/portability fallback. Both match the server GPU /
+onnxruntime within the `fwd2` tolerance (max abs err ~0.02).
 
 ## Performance
 
@@ -183,11 +199,12 @@ mask composited into the returned frame.
 
 ## Notes
 
-* The in-browser wasm mode runs the network on the **CPU** (static
-  kernels). Running it on the browser **GPU** via WebGPU would need a
-  WGSL backend for `packages/gpu` (its kernels are CUDA-C today) — a
-  larger project; the static-CPU backend added here is what makes the
-  no-server path work at all.
+* The in-browser engines are the **CPU** (static kernels) and the
+  **WebGPU** backend (packages/gpu backend 3 — the onnx kernels as WGSL
+  compute shaders). The WGSL kernels are verified on a real GPU via Deno
+  (`packages/gpu/tests/webgpu_test.sh`); the full detector forward and
+  the shipped `web/worker.js` are verified via Deno Workers
+  (`tests/webgpu_worker_test.mjs`, exercised by `demo_test.sh`).
 * With the plain `--model` export the vocabulary is baked at export
   time; the promptable K=32 export + `--text-encoder` (see above) lifts
   that at runtime.

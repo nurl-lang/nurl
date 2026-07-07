@@ -143,18 +143,26 @@ else
     echo "[4/4] SKIP free-text prompting (promptable export not found — see tools/)"
 fi
 
-# ── in-browser wasm engine (node drives the real web/worker.js) ──────
-if command -v node >/dev/null 2>&1 && [ -f "web/yoloe_detect.wasm" ] \
-   && [ -f "$PMODEL" ] && [ -f "${YOLOE_TPE:-$HOME/yoloe-export/tpe10.f32}" ]; then
-    echo "[5/5] wasm engine (node + web/worker.js)"
-    if YOLOE_PROMPT_MODEL="$PMODEL" node tests/wasm_worker_test.mjs >"$WORK/wasm.log" 2>&1; then
-        ok "wasm worker: dog detected + mask composited"
+# ── in-browser engines: Deno runs the REAL web/worker.js (module Worker,
+#    same API + WebGPU as a browser) for both client backends ──────────
+DENO="${DENO:-deno}"
+if command -v "$DENO" >/dev/null 2>&1 && [ -f "web/yoloe_detect.wasm" ] && [ -f "$PMODEL" ]; then
+    echo "[5/6] wasm-CPU engine (Deno + web/worker.js)"
+    if YOLOE_PROMPT_MODEL="$PMODEL" "$DENO" run --unstable-webgpu --allow-all tests/webgpu_worker_test.mjs wasm >"$WORK/wasm.log" 2>&1 && grep -q PASS "$WORK/wasm.log"; then
+        ok "wasm-CPU worker: dog detected"
+    else bad "wasm-CPU worker"; tail -3 "$WORK/wasm.log"; fi
+    if command -v nvidia-smi >/dev/null 2>&1; then
+        echo "[6/6] WebGPU engine (Deno + web/worker.js on the GPU)"
+        if YOLOE_PROMPT_MODEL="$PMODEL" "$DENO" run --unstable-webgpu --allow-all tests/webgpu_worker_test.mjs webgpu >"$WORK/wgpu.log" 2>&1 && grep -q PASS "$WORK/wgpu.log"; then
+            ok "WebGPU worker: dog detected on the GPU"
+        else bad "WebGPU worker"; tail -3 "$WORK/wgpu.log"; fi
     else
-        bad "wasm worker (see below)"; tail -6 "$WORK/wasm.log"
+        echo "[6/6] SKIP WebGPU (no adapter)"
     fi
 else
-    echo "[5/5] SKIP wasm engine (build web/yoloe_detect.wasm via tools/build_wasm.sh + node)"
+    echo "[5/6] SKIP client engines (needs Deno + web/yoloe_detect.wasm)"
 fi
+
 
 echo
 echo "PASS $PASS · FAIL $FAIL"

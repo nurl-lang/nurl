@@ -1,3 +1,5 @@
 # built by tools/build_wasm.sh (depends on the local compiler + stdlib)
 yoloe_detect.wasm
 *.wasm.ll
+webgpu.js
+kernels_wgsl.js

@@ -35,19 +35,24 @@ echo "[1/4] generate kernels_static.c"
     || { cd "$REPO/packages/onnx" && "$REPO/nurl.sh" tools/gen_static_kernels.nu "$WORK/genk" >/dev/null; cd "$PKG"; }
 ( cd "$REPO/packages/onnx" && "$WORK/genk" "$WORK/kernels_static.c" )
 
-echo "[2/4] compile kernels → wasm object (-msimd128)"
+echo "[2/5] compile kernels → wasm object (-msimd128)"
 if [ -x "$ZIG" ]; then
     "$ZIG" cc --target=wasm32-wasi -O3 -msimd128 -c "$WORK/kernels_static.c" -o "$WORK/kernels_static.wasm.o"
+    "$ZIG" cc --target=wasm32-wasi -O2 -g0 -c "$REPO/packages/gpu/web/wgpu_asyncify.c" -o "$WORK/wgpu_asyncify.wasm.o"
 else
     echo "  zig not found at $ZIG — wasmbuilder will provision it, but the kernel object needs it too"
     exit 1
 fi
 
-echo "[3/4] build the wasmbuilder CLI"
+echo "[3/5] build the wasmbuilder CLI"
 "$REPO/nurl.sh" "$REPO/packages/wasmbuilder/src/main.nu" "$WORK/wasmbuilder" >/dev/null
 
-echo "[4/4] compile src/wasm_detect.nu → $OUT"
+echo "[4/5] compile src/wasm_detect.nu → $OUT (static CPU + WebGPU backends)"
 NURLC="$NURLC" "$WORK/wasmbuilder" src/wasm_detect.nu -o "$OUT" \
-    --obj "$WORK/kernels_static.wasm.o" --cflags "-msimd128" -O 3
+    --obj "$WORK/kernels_static.wasm.o $WORK/wgpu_asyncify.wasm.o" \
+    --cflags "-msimd128" -O 3 --asyncify-imports env.wgpu_download
 
-echo "wrote $OUT ($(stat -c%s "$OUT" 2>/dev/null || stat -f%z "$OUT") bytes)"
+echo "[5/5] copy the WebGPU host JS next to the worker"
+cp "$REPO/packages/gpu/web/webgpu.js" "$REPO/packages/gpu/web/kernels_wgsl.js" "$PKG/web/"
+
+echo "wrote $OUT ($(stat -c%s "$OUT" 2>/dev/null || stat -f%z "$OUT") bytes) + web/webgpu.js + web/kernels_wgsl.js"

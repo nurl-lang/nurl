@@ -1,10 +1,28 @@
 # gpu — GPU compute for NURL
 
-A backend-neutral GPU compute interface for NURL, with **two backends: CUDA
-and CPU**. You write a kernel in CUDA-C, and it runs either on the GPU (NVRTC
-compiles it to PTX at runtime; the CUDA Driver API launches it — bound
-directly from pure NURL, no C bridge in the core runtime) **or on the CPU**
-when no GPU is available.
+A backend-neutral GPU compute interface for NURL, with **four backends: CUDA,
+CPU (runtime-compiled), static-kernel, and WebGPU**. You write a kernel in
+CUDA-C, and it runs on the GPU (NVRTC compiles it to PTX at runtime; the CUDA
+Driver API launches it — bound directly from pure NURL, no C bridge in the
+core runtime), on the CPU when no GPU is available, from a set of precompiled
+kernels linked into a sealed binary, or — in a browser/Deno wasm module — as
+**WGSL compute shaders on the browser GPU** (backend 3).
+
+## WebGPU backend (backend 3) — the browser GPU
+
+`( gpu_force_webgpu )` before `gpu_open` selects a WebGPU backend: the onnx
+kernels, pre-translated to WGSL (`web/kernels_wgsl.js`), run through
+`navigator.gpu` driven by host imports the JS embedder implements
+(`web/webgpu.js`, works in a browser worker and in Deno). Device memory is a
+`GPUBuffer`; the one async op — `GPUBuffer.mapAsync` readback — is bridged with
+Asyncify so the synchronous NURL `gpu_download` returns data in wasm memory
+(`web/wgpu_asyncify.c` provides the unwind stack; build with wasmbuilder
+`--asyncify-imports env.wgpu_download`).
+
+Every WGSL kernel is verified on a real GPU against a JS reference of the
+CUDA-C (`./tests/webgpu_test.sh`, via Deno — skips without a GPU). This is
+what runs the whole YOLOE detector in the browser (see `packages/yoloe-demo`,
+~1.1 s/frame at 640×640 on an RTX 4090, matching onnxruntime within tolerance).
 
 ## CPU backend (v0.2.0) — run with no GPU
 
