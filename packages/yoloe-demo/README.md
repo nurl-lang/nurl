@@ -82,10 +82,11 @@ python tools/export_text_encoder.py ~/yoloe-export
        --text-encoder ~/yoloe-export/text_encoder_n1.onnx
 ```
 
-The CLIP BPE merge table is **built into the binary** (generated into
-`yoloe/src/clip_merges_data.nu` by `yoloe/tools/embed_merges.py`), so an
-installed `yoloe-demo` needs no asset files on disk. `--merges FILE`
-overrides it with a custom table.
+The CLIP BPE merge table and the demo page template are **built into
+the binary** (generated into `yoloe/src/clip_merges_data.nu` and
+`src/index_html_data.nu` by `yoloe/tools/embed_merges.py` /
+`tools/embed_page.py`), so an installed `yoloe-demo` needs no asset
+files on disk. `--merges FILE` / `--page FILE` override them.
 
 `POST /prompt` (body = the prompt text) → `{ id, name, n }`; 400 on an
 empty prompt, 409 when all 32 slots are used. The decode argmaxes only
