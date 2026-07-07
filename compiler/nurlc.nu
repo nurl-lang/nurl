@@ -4655,6 +4655,7 @@
     {}
     // Generic instantiation: ( fname [T1 T2...] args... )
     : ~ s call_name fname
+    : ~ s call_targs ``
     ? == ( nurl_lex_type lex ) TT_LBRACK
     { ( nurl_lex_advance lex )  // consume '['
         : ~ s type_args ``
@@ -4699,6 +4700,7 @@
         }
         ( expect lex TT_RBRACK )
         : s mangled ( nurl_str_cat fname mangle_sfx )
+        = call_targs type_args
         // Trait-bound check: each `A: Trait` tparam's concrete type must
         // have an impl of Trait (no-op for unbounded generics).
         ( check_generic_bounds lex fname type_args )
@@ -5029,7 +5031,11 @@
         // dchannel / SWIM bugs. `inout` args legitimately pass `<T>*` and
         // are skipped; generic callees (call_name ≠ fname) carry tparam
         // sources and are skipped too.
-        ? & & ( seq call_name fname ) ! is_inout_arg
+        // (generic fns now carry __ptypes_src too — for the width coercion
+        // below — but their UNSUBSTITUTED tparam sources must not feed this
+        // named-type comparison: `%Vec__u8` vs `( Vec A )` is not a clash.)
+        ? & & & ( seq call_name fname ) ! is_inout_arg
+        == 0 ( nurl_str_len ( nurl_sym_get g_generic_syms ( nurl_str_cat fname `__tparams` ) ) )
         != 0 ( nurl_str_len ( nurl_sym_get syms ( nurl_str_cat fname `__ptypes_src` ) ) )
         { : s __psrc ( __ptypes_nth ( nurl_sym_get syms ( nurl_str_cat fname `__ptypes_src` ) ) arg_idx )
             : b __at_ptr & > ( nurl_str_len at ) 0
@@ -5195,16 +5201,7 @@
                 : b __hp ( is_ptr_ty at )
                 ? & != 0 ( nurl_str_len __want ) ! ( seq ( nurl_llty at ) ( nurl_llty __want ) ) {
                     ? & & > __ww 0 > __hw 0 != __ww __hw {
-                        // int → narrower/wider int: trunc, or a widen whose
-                        // direction the argument's OWN type decides (A1):
-                        // an unsigned u8/u16/u32 arg zero-extends.
-                        : s __nv ( nurl_cg_reg cg )
-                        : s __wid ? ( ty_is_unsigned at ) ` = zext ` ` = sext `
-                        ( nurl_print `  ` ) ( nurl_print __nv )
-                        ( nurl_print ? > __hw __ww ` = trunc ` __wid )
-                        ( nurl_print ( nurl_llty at ) ) ( nurl_print ` ` ) ( nurl_print av )
-                        ( nurl_print ` to ` ) ( nurl_print ( nurl_llty __want ) ) ( nurl_print `\n` )
-                        = av __nv = at __want
+                        = av ( __emit_iwiden cg av at __want ) = at __want
                     } {
                         ? & __wp > __hw 0 {
                             // integer arg (e.g. a bare `0` / a handle held as i64)
@@ -5227,6 +5224,42 @@
                             } {}
                         }
                     }
+                } {}
+            } {}
+            // NURL callee (no __ffi_params): the same width coercion
+            // against the DECLARED parameter's source type. A sized-int
+            // parameter (`u`, `u16`, `i32`, …) called with an i64 value —
+            // any bare literal, or a plain `i` variable — used to emit
+            // `call @f(i64 …)` against `define @f(i8 …)`. The native ABI
+            // masks that (callee reads the low register bytes); on
+            // wasm32 the signature mismatch makes wasm-ld emit a
+            // trapping `_bitcast_invalid` stub. Generic calls substitute
+            // this call's type args for bare tparam names first
+            // (`vec_push [u] d 0` → param `A` → `u` → trunc to i8).
+            ? == 0 ( nurl_str_len __ffp ) {
+                : s __roster ( nurl_sym_get syms ( nurl_str_cat fname `__ptypes_src` ) )
+                ? != 0 ( nurl_str_len __roster ) {
+                    : ~ s __psrc ( __kw_trim ( __ptypes_nth __roster arg_idx ) )
+                    ? ! ( seq call_name fname ) {
+                        : ~ s __tpr ( nurl_sym_get g_generic_syms ( nurl_str_cat fname `__tparams` ) )
+                        : ~ s __tar call_targs
+                        ~ != 0 ( nurl_str_len __tpr ) {
+                            : s __tp ( str_first_word __tpr )
+                            = __tpr ( str_skip_word __tpr )
+                            : s __ta ( str_first_word __tar )
+                            = __tar ( str_skip_word __tar )
+                            ? ( seq __psrc __tp ) { = __psrc __ta } {}
+                        }
+                    } {}
+                    : s __wsrc ( src_int_ty __psrc )
+                    ? != 0 ( nurl_str_len __wsrc ) {
+                        : i __ww ( int_width __wsrc )
+                        : ~ i __hw ( int_width at )
+                        ? == __hw 0 { = __hw ( int_width ( src_int_ty at ) ) } {}
+                        ? & & > __ww 0 > __hw 0 != __ww __hw {
+                            = av ( __emit_iwiden cg av at __wsrc ) = at __wsrc
+                        } {}
+                    } {}
                 } {}
             } {}
         } {}
@@ -9992,6 +10025,39 @@
     ? | == 0 ( nurl_str_len vt ) == 0 ( nurl_str_len dt ) { ^ F } {}
     ^ | | != ( is_float_ty vt ) ( is_float_ty dt )
     ( __arg_named_struct_mismatch vt dt ) ( __arg_str_cstr_mismatch vt dt )
+}
+
+// Map a SOURCE-spelling scalar token to its canonical sized-int type
+// ("" when the token is not a sized-int scalar). Used by the call-arg
+// width coercion, where the declared parameter type is the pre-pass
+// source string (`u`, `u16`, `i`, …) rather than an LLVM type.
+@ src_int_ty s t → s {
+    ? ( seq t `u` ) `u8`
+    ? ( seq t `u8` ) `u8`
+    ? ( seq t `u16` ) `u16`
+    ? ( seq t `u32` ) `u32`
+    ? ( seq t `u64` ) `u64`
+    ? ( seq t `i8` ) `i8`
+    ? ( seq t `i16` ) `i16`
+    ? ( seq t `i32` ) `i32`
+    ? ( seq t `i64` ) `i64`
+    ? ( seq t `i` ) `i64`
+    ``
+}
+
+// Emit an integer-width bridge `%r = trunc|sext|zext <from> <val> to
+// <to>` and return the new register; used by BOTH call-arg coercion
+// sites (FFI + NURL callee) so the widen/narrow logic lives once. Widen
+// direction follows the SOURCE type (A1: an unsigned u8/u16/u32
+// zero-extends). Caller updates its own arg-type to `to_ty` after.
+@ __emit_iwiden i cg s val s from_ty s to_ty → s {
+    : s r ( nurl_cg_reg cg )
+    : s ins ? > ( int_width from_ty ) ( int_width to_ty ) ` = trunc `
+    ? ( ty_is_unsigned from_ty ) ` = zext ` ` = sext `
+    ( nurl_print `  ` ) ( nurl_print r ) ( nurl_print ins )
+    ( nurl_print ( nurl_llty from_ty ) ) ( nurl_print ` ` ) ( nurl_print val )
+    ( nurl_print ` to ` ) ( nurl_print ( nurl_llty to_ty ) ) ( nurl_print `\n` )
+    ^ r
 }
 
 @ int_width s ty → i {
@@ -17619,6 +17685,36 @@
                                 // index set itself is computed by
                                 // compute_generic_inout_sink at gen_generic_fn_store.
                                 : ~ b g_saw_inout F
+                                // Capture the parameter-type roster for the
+                                // GENERIC fn too (tparam names left in place —
+                                // `( Vec A );A`), so the call-site width
+                                // coercion can substitute this call's type
+                                // args and trunc/extend sized-int arguments.
+                                // Abandoning (gpc_ok → F) just skips the
+                                // roster, exactly like the non-generic walk.
+                                : ~ b gpc_ok T
+                                : ~ s gptypes ``
+                                ~ & & gpc_ok != ( nurl_lex_type lex ) TT_ARROW
+                                != ( nurl_lex_type lex ) TT_EOF
+                                { ? & ( is_ident_tok ( nurl_lex_type lex ) )
+                                    ( __is_param_marker_word ( nurl_lex_val lex ) )
+                                    { ? ( seq ( nurl_lex_val lex ) `inout` )
+                                        { = g_saw_inout T } {}
+                                        ( nurl_lex_advance lex ) }
+                                    {}
+                                    : i __gts ( nurl_lex_cur_start lex )
+                                    ? == 0 ( scan_skip_type lex )
+                                    { = gpc_ok F }
+                                    { : i __gte ( nurl_lex_cur_start lex )
+                                        : s __gt ( nurl_lex_src_slice lex __gts - __gte __gts )
+                                        = gptypes ? == 0 ( nurl_str_len gptypes )
+                                        __gt ( nurl_str_cat3 gptypes `;` __gt )
+                                        ? ( is_ident_tok ( nurl_lex_type lex ) )
+                                        { ( nurl_lex_advance lex ) }
+                                        { = gpc_ok F } } }
+                                ? gpc_ok
+                                { ( nurl_sym_def syms ( nurl_str_cat fname `__ptypes_src` ) gptypes ) }
+                                {}
                                 ~ & != ( nurl_lex_type lex ) TT_LBRACE != ( nurl_lex_type lex ) TT_EOF
                                 { ? & ( is_ident_tok ( nurl_lex_type lex ) )
                                     ( seq ( nurl_lex_val lex ) `inout` )

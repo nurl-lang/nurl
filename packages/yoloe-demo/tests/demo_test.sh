@@ -143,6 +143,19 @@ else
     echo "[4/4] SKIP free-text prompting (promptable export not found — see tools/)"
 fi
 
+# ── in-browser wasm engine (node drives the real web/worker.js) ──────
+if command -v node >/dev/null 2>&1 && [ -f "web/yoloe_detect.wasm" ] \
+   && [ -f "$PMODEL" ] && [ -f "${YOLOE_TPE:-$HOME/yoloe-export/tpe10.f32}" ]; then
+    echo "[5/5] wasm engine (node + web/worker.js)"
+    if YOLOE_PROMPT_MODEL="$PMODEL" node tests/wasm_worker_test.mjs >"$WORK/wasm.log" 2>&1; then
+        ok "wasm worker: dog detected + mask composited"
+    else
+        bad "wasm worker (see below)"; tail -6 "$WORK/wasm.log"
+    fi
+else
+    echo "[5/5] SKIP wasm engine (build web/yoloe_detect.wasm via tools/build_wasm.sh + node)"
+fi
+
 echo
 echo "PASS $PASS · FAIL $FAIL"
 [ "$FAIL" -eq 0 ]

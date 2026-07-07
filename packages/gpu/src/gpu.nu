@@ -31,7 +31,7 @@ $ `cpu.nu`
 
 @ gpu_backend → i { ^ __gpu_backend }
 
-@ gpu_is_cpu → b { ^ == __gpu_backend 1 }
+@ gpu_is_cpu → b { ^ != __gpu_backend 0 }
 
 // Force the CPU backend with NURL_GPU=cpu (so a model runs with no GPU, or to
 // compare backends). Any other value / unset → try CUDA first.
@@ -39,6 +39,27 @@ $ `cpu.nu`
     : s v ( getenv `NURL_GPU` )
     ? == # i v 0 { ^ F } {}
     ^ != 0 ( nurl_str_eq v `cpu` )
+}
+
+// Backend 2: STATIC — precompiled kernels linked into the binary (a
+// generated kernels_static.c provides the strong nurl_static_kernel;
+// runtime_core.c carries a weak NULL stub so every other link works).
+// No dlopen, no compiler on PATH, no CUDA: the backend for wasm builds
+// and for sealed native binaries. Select with NURL_GPU=static, or from
+// code with ( gpu_force_static ) before gpu_open — the latter is what a
+// wasm entry point uses (calling into libcuda probes from a browser
+// module is not an option).
+& `c` @ nurl_static_kernel s name → *u
+
+: ~ i __gpu_force 0
+
+@ gpu_force_static → v { = __gpu_force 2 }
+
+@ __force_static → b {
+    ? == __gpu_force 2 { ^ T } {}
+    : s v ( getenv `NURL_GPU` )
+    ? == # i v 0 { ^ F } {}
+    ^ != 0 ( nurl_str_eq v `static` )
 }
 
 // ── handle types ──────────────────────────────────────────────────
@@ -59,6 +80,14 @@ $ `cpu.nu`
 // returned Gpu is "ok" (ctx != 0) for either backend; a CPU Gpu carries
 // dev = -2, ctx = 1 as its marker.
 @ gpu_open i ordinal → Gpu {
+    ? ( __force_static ) {
+        ? == # i ( nurl_static_kernel `gemm` ) 0 {
+            ( nurl_eprint `[gpu/static] no static kernels linked into this binary (kernels_static.c missing)\n` )
+            ^ @ Gpu { ordinal - 0 3 0 }
+        } {}
+        = __gpu_backend 2
+        ^ @ Gpu { ordinal - 0 3 1 }
+    } {}
     ? ( __force_cpu ) { = __gpu_backend 1 ^ @ Gpu { ordinal - 0 2 1 } } {}
     ( cuda_init )
     : i dev ( cuda_device ordinal )
@@ -72,13 +101,16 @@ $ `cpu.nu`
 @ gpu_ok Gpu g → b { ^ != . g ctx 0 }
 
 // Human-readable device name (e.g. "NVIDIA GeForce RTX 4090", or "CPU").
-@ gpu_name Gpu g → s { ? == __gpu_backend 1 { ^ `CPU (host C++)` } { ^ ( cuda_device_name . g dev ) } }
+@ gpu_name Gpu g → s {
+    ? == __gpu_backend 2 { ^ `CPU (static kernels)` } {}
+    ? == __gpu_backend 1 { ^ `CPU (host C++)` } { ^ ( cuda_device_name . g dev ) }
+}
 
 @ gpu_close Gpu g → v { ? == __gpu_backend 0 { ( cuda_ctx_destroy_dev . g dev ) } {} }
 
 // Block until all submitted work on the context completes. 0 == success.
 // The CPU backend runs kernels synchronously, so there is nothing to await.
-@ gpu_sync Gpu g → i { ? == __gpu_backend 1 { ^ 0 } { ^ ( cuda_sync ) } }
+@ gpu_sync Gpu g → i { ? != __gpu_backend 0 { ^ 0 } { ^ ( cuda_sync ) } }
 
 // ── kernels ───────────────────────────────────────────────────────
 
@@ -86,6 +118,14 @@ $ `cpu.nu`
 // The kernel must be declared `extern "C" __global__`. Returns a
 // GpuKernel with func == 0 on a compile/load error (log on stderr).
 @ gpu_compile Gpu g s src s name → GpuKernel {
+    ? == __gpu_backend 2 {
+        : *u f ( nurl_static_kernel name )
+        ? == # i f 0 {
+            ( nurl_eprint `[gpu/static] kernel not in the linked set: ` ) ( nurl_eprint name ) ( nurl_eprint `\n` )
+            ^ @ GpuKernel { 0 0 }
+        } {}
+        ^ @ GpuKernel { 0 # i f }
+    } {}
     ? == __gpu_backend 1 {
         : *u h ( cpu_compile src name )
         ? == # i h 0 { ^ @ GpuKernel { 0 0 } } {}
@@ -105,6 +145,7 @@ $ `cpu.nu`
 @ gpu_kernel_ok GpuKernel k → b { ^ != . k func 0 }
 
 @ gpu_kernel_free GpuKernel k → v {
+    ? == __gpu_backend 2 { ^ {} } {}
     ? == __gpu_backend 1 { ( cpu_module_free # *u . k module ) } { ( cuda_module_unload . k module ) }
 }
 
@@ -127,15 +168,15 @@ $ `cpu.nu`
 // ── device memory ─────────────────────────────────────────────────
 
 @ gpu_alloc Gpu g i bytes → GpuBuffer {
-    : i dptr ? == __gpu_backend 1 ( cpu_malloc bytes ) ( cuda_malloc bytes )
+    : i dptr ? != __gpu_backend 0 ( cpu_malloc bytes ) ( cuda_malloc bytes )
     ^ @ GpuBuffer { dptr bytes }
 }
 
-@ gpu_free GpuBuffer b → v { ? == __gpu_backend 1 { ( cpu_free . b dptr ) } { ( cuda_free . b dptr ) } }
+@ gpu_free GpuBuffer b → v { ? != __gpu_backend 0 { ( cpu_free . b dptr ) } { ( cuda_free . b dptr ) } }
 
 // Copy the buffer's worth of bytes host → device. 0 == success.
 @ gpu_upload GpuBuffer dst * u host → i {
-    ? == __gpu_backend 1 { ^ ( cpu_htod . dst dptr host . dst bytes ) } {}
+    ? != __gpu_backend 0 { ^ ( cpu_htod . dst dptr host . dst bytes ) } {}
     ^ ( cuda_htod . dst dptr host . dst bytes )
 }
 
@@ -143,13 +184,13 @@ $ `cpu.nu`
 // 0 == success. Both allocations live in the process's shared (primary)
 // context, so any package's buffer is a valid source.
 @ gpu_dtod GpuBuffer dst i src_dptr → i {
-    ? == __gpu_backend 1 { ^ ( cpu_htod . dst dptr # *u src_dptr . dst bytes ) } {}
+    ? != __gpu_backend 0 { ^ ( cpu_htod . dst dptr # *u src_dptr . dst bytes ) } {}
     ^ ( cuda_dtod . dst dptr src_dptr . dst bytes )
 }
 
 // Copy the buffer's worth of bytes device → host. 0 == success.
 @ gpu_download * u host GpuBuffer src → i {
-    ? == __gpu_backend 1 { ^ ( cpu_dtoh host . src dptr . src bytes ) } {}
+    ? != __gpu_backend 0 { ^ ( cpu_dtoh host . src dptr . src bytes ) } {}
     ^ ( cuda_dtoh host . src dptr . src bytes )
 }
 
@@ -181,7 +222,7 @@ $ `cpu.nu`
     // void** layer is safe to reclaim as soon as it returns. The CPU backend
     // reads them synchronously inside cpu_launch, so it too is done on return.
     : ~ i r 0
-    ? == __gpu_backend 1 { = r ( cpu_launch . k func # i params grid block ) } { = r ( cuda_launch . k func grid block params ) }
+    ? != __gpu_backend 0 { = r ( cpu_launch . k func # i params grid block ) } { = r ( cuda_launch . k func grid block params ) }
     ( nurl_free params )
     ^ r
 }

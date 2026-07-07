@@ -100,10 +100,14 @@ jobs:
         with:
           release: "14.2"
           usesh: true
-          # The bootstrap self-compile (nurlc compiling nurlc.nu) peaks at
-          # ~9.5 GB RSS, so the VM needs most of the 16 GB runner. KVM on the
-          # GitHub Linux runner keeps the guest near-native speed.
-          mem: 13312
+          # The bootstrap self-compile (nurlc compiling nurlc.nu) is the
+          # memory peak: it holds the whole 18k-line unit's IR + symbol
+          # tables resident, and the peak grows with the compiler. Measured
+          # ~13.2 GB RSS at this size (up from ~9.5 GB when this job was
+          # added), so give the guest 14 GB and leave ~2 GB of the 16 GB
+          # runner for the host + KVM. Raise this in step with the peak
+          # rather than living 35 MB from the edge. KVM keeps it near-native.
+          mem: 14336
           cpu: 3
           prepare: |
             pkg install -y bash pkgconf sqlite3

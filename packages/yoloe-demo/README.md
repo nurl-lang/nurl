@@ -119,6 +119,45 @@ all). Response:
 `k` is the instance colour index (the page's box palette matches the
 server's mask palette). `GET /health` answers `ok`.
 
+## In-browser compute (wasm)
+
+The demo runs the **entire network in the browser tab** as an
+alternative to the server round-trip — the same pure-NURL onnx runtime,
+compiled to **wasm32-wasi** with the gpu package's kernels **precompiled
+and linked in** (no NVRTC, no server GPU). When `web/yoloe_detect.wasm`
+is present the page shows a **compute: server · GPU / this browser ·
+wasm** selector; switch to *wasm* and the frames never leave the machine.
+
+```
+webcam → canvas → SharedArrayBuffer → web worker
+   → yoloe_detect.wasm (pure-NURL onnx runtime, static CPU kernels)
+   → masked RGB + detections → canvas
+```
+
+Build it (one-time; needs a built `./build/nurlc` and zig, which
+wasmbuilder auto-provisions):
+
+```sh
+./tools/build_wasm.sh          # → web/yoloe_detect.wasm (~1.7 MB)
+```
+
+At runtime the page fetches the module, the detector `.onnx` (`/wasm/model`)
+and the current vocabulary embeddings (`/tpe`), spins up `web/worker.js`,
+and drives it over a `SharedArrayBuffer` — so the page is served with
+`Cross-Origin-Opener-Policy: same-origin` +
+`Cross-Origin-Embedder-Policy: require-corp` (browsers only expose
+`SharedArrayBuffer` on isolated pages). Free-text prompts work in wasm
+mode too: `/prompt` returns the embedding (encoded on the server GPU),
+the page pulls the new `/tpe` slot and feeds it to the worker, so both
+engines share one vocabulary.
+
+The worker runs off the UI thread, so its `host_frame` import can block
+on `Atomics.wait` while the module loops. Inference is ~20 s/frame at
+640×640 on one CPU core with `-msimd128` (conv2d is a vectorizable
+row-major kernel; the CUDA 1:1 translation would be ~3.5× slower) — a
+correctness/portability showcase, not a real-time path. Results are
+bit-identical to the GPU backend within the `fwd2` tolerance.
+
 ## Performance
 
 On an RTX 4090 a 640×480 frame takes ~110 ms server-side (≈7–9 fps
@@ -137,15 +176,18 @@ model, and drives `/detect` the way the browser does: baseline
 detections on a known image, `on=` class filtering, `conf=` gating,
 masks toggle, garbage-body → 400, and a 60-frame sustained run with an
 RSS leak watch. Skips cleanly (exit 0) when no model or GPU is
-available, so CI stays green.
+available, so CI stays green. When `web/yoloe_detect.wasm` + node are
+present it also drives the real `web/worker.js` in a node worker thread
+(`tests/wasm_worker_test.mjs`) and checks the dog is detected and its
+mask composited into the returned frame.
 
 ## Notes
 
-* Browser-side WebGPU (running the whole network **in** the page) is not
-  a small step from here: the gpu package's kernels are CUDA-C compiled
-  by NVRTC, so an in-browser build needs a WGSL backend for
-  `packages/gpu` plus a wasm↔WebGPU host bridge. This demo is the
-  host-GPU streaming architecture instead.
+* The in-browser wasm mode runs the network on the **CPU** (static
+  kernels). Running it on the browser **GPU** via WebGPU would need a
+  WGSL backend for `packages/gpu` (its kernels are CUDA-C today) — a
+  larger project; the static-CPU backend added here is what makes the
+  no-server path work at all.
 * With the plain `--model` export the vocabulary is baked at export
   time; the promptable K=32 export + `--text-encoder` (see above) lifts
   that at runtime.
