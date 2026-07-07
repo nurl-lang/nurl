@@ -956,150 +956,150 @@ s combined_stdout s combined_stderr → v {
                         ( string_free build_id ) ( string_free build_dir ) ( string_free body_str )
                         ^ hr_err
                     } {}
-                                : String ir_fixed ( prepare_ir_for_wasi ir )
-                                ( write_file ( string_data ll_path ) ( string_data ir_fixed ) )
-                                ( string_free ir )
+                    : String ir_fixed ( prepare_ir_for_wasi ir )
+                    ( write_file ( string_data ll_path ) ( string_data ir_fixed ) )
+                    ( string_free ir )
 
-                                // NURL regex doesn't support \b (unknown-escape falls through
-                                // to literal 'b'), so the trailing `(` of the IR call/decl
-                                // serves as the word boundary instead. Examples that import
-                                // canvas/audio via direct `& \`canvas\`` declarations (not
-                                // via stdlib/ext/canvas.nu) only show up in the post-IR scan,
-                                // so this matters — sand.nu and doomfire.nu silently failed
-                                // to link canvas.wasm.o until this fix.
-                                : ~ b uses_canvas F
-                                : !Regex ParseErr re_canv ( regex_compile `@canvas_(open|present|sleep|should_close|close|mouse_x|mouse_y|mouse_btn)\(` )
-                                ?? re_canv { T rc → { = uses_canvas ( regex_test rc ( string_data ir_fixed ) ) ( regex_free rc ) } F _ → {} }
+                    // NURL regex doesn't support \b (unknown-escape falls through
+                    // to literal 'b'), so the trailing `(` of the IR call/decl
+                    // serves as the word boundary instead. Examples that import
+                    // canvas/audio via direct `& \`canvas\`` declarations (not
+                    // via stdlib/ext/canvas.nu) only show up in the post-IR scan,
+                    // so this matters — sand.nu and doomfire.nu silently failed
+                    // to link canvas.wasm.o until this fix.
+                    : ~ b uses_canvas F
+                    : !Regex ParseErr re_canv ( regex_compile `@canvas_(open|present|sleep|should_close|close|mouse_x|mouse_y|mouse_btn)\(` )
+                    ?? re_canv { T rc → { = uses_canvas ( regex_test rc ( string_data ir_fixed ) ) ( regex_free rc ) } F _ → {} }
 
-                                : ~ b uses_audio F
-                                : !Regex ParseErr re_aud ( regex_compile `@audio_(level|bin|bin_count|peak_bin|centroid|freq_of|sample_rate|is_silent|ready)\(` )
-                                ?? re_aud { T ra → { = uses_audio ( regex_test ra ( string_data ir_fixed ) ) ( regex_free ra ) } F _ → {} }
+                    : ~ b uses_audio F
+                    : !Regex ParseErr re_aud ( regex_compile `@audio_(level|bin|bin_count|peak_bin|centroid|freq_of|sample_rate|is_silent|ready)\(` )
+                    ?? re_aud { T ra → { = uses_audio ( regex_test ra ( string_data ir_fixed ) ) ( regex_free ra ) } F _ → {} }
 
-                                : ( Vec s ) clang_args ( vec_new [s] )
-                                ( vec_push [s] clang_args `--target=wasm32-wasi` ) ( vec_push [s] clang_args opt ) ( vec_push [s] clang_args `-Wno-override-module` )
-                                // Keep dead-code elimination off: NURL closures take function
-                                // addresses (→ wasm function-table indices). --gc-sections
-                                // prunes/renumbers the table so a stored call_indirect index no
-                                // longer maps to its function, trapping at scale (e.g. nurlc.wasm
-                                // compiling >150-function programs). --no-gc-sections keeps the
-                                // table stable so indices stay valid.
-                                ( vec_push [s] clang_args `-Wl,--no-gc-sections` )
-                                // Undefined symbols become wasm IMPORTS the host
-                                // runtime resolves (WASI, and — via the GPU
-                                // package's cuda/nvrtc FFI — a CUDA host bridge).
-                                // A genuinely missing symbol then traps at run
-                                // time with its name, under our wasmtime.
-                                ( vec_push [s] clang_args `-Wl,--allow-undefined` )
-                                ( vec_push [s] clang_args ( string_data ll_path ) )
-                                ( vec_push [s] clang_args ( string_data ( get_runtime_wasm_o ) ) )
-                                ? uses_canvas { ( vec_push [s] clang_args ( string_data ( get_canvas_wasm_o ) ) ) } {}
-                                ? uses_audio { ( vec_push [s] clang_args ( string_data ( get_audio_wasm_o ) ) ) } {}
-                                ( vec_push [s] clang_args `-o` ) ( vec_push [s] clang_args ( string_data wasm_path ) ) ( vec_push [s] clang_args `-lm` )
+                    : ( Vec s ) clang_args ( vec_new [s] )
+                    ( vec_push [s] clang_args `--target=wasm32-wasi` ) ( vec_push [s] clang_args opt ) ( vec_push [s] clang_args `-Wno-override-module` )
+                    // Keep dead-code elimination off: NURL closures take function
+                    // addresses (→ wasm function-table indices). --gc-sections
+                    // prunes/renumbers the table so a stored call_indirect index no
+                    // longer maps to its function, trapping at scale (e.g. nurlc.wasm
+                    // compiling >150-function programs). --no-gc-sections keeps the
+                    // table stable so indices stay valid.
+                    ( vec_push [s] clang_args `-Wl,--no-gc-sections` )
+                    // Undefined symbols become wasm IMPORTS the host
+                    // runtime resolves (WASI, and — via the GPU
+                    // package's cuda/nvrtc FFI — a CUDA host bridge).
+                    // A genuinely missing symbol then traps at run
+                    // time with its name, under our wasmtime.
+                    ( vec_push [s] clang_args `-Wl,--allow-undefined` )
+                    ( vec_push [s] clang_args ( string_data ll_path ) )
+                    ( vec_push [s] clang_args ( string_data ( get_runtime_wasm_o ) ) )
+                    ? uses_canvas { ( vec_push [s] clang_args ( string_data ( get_canvas_wasm_o ) ) ) } {}
+                    ? uses_audio { ( vec_push [s] clang_args ( string_data ( get_audio_wasm_o ) ) ) } {}
+                    ( vec_push [s] clang_args `-o` ) ( vec_push [s] clang_args ( string_data wasm_path ) ) ( vec_push [s] clang_args `-lm` )
 
-                                : !Output ProcessErr clang_res ( process_run ( string_data ( get_wasi_clang ) ) clang_args `` ) ( vec_free [s] clang_args )
+                    : !Output ProcessErr clang_res ( process_run ( string_data ( get_wasi_clang ) ) clang_args `` ) ( vec_free [s] clang_args )
 
-                                ?? clang_res {
-                                    T c_out → {
-                                        : ~ i c_rc ( output_exit_code c_out )
-                                        : s c_se ( output_stderr c_out )
-                                        : s n_se ( string_data n_se_s )
-                                        : String combined_stderr ( combine_stderr n_se c_se )
+                    ?? clang_res {
+                        T c_out → {
+                            : ~ i c_rc ( output_exit_code c_out )
+                            : s c_se ( output_stderr c_out )
+                            : s n_se ( string_data n_se_s )
+                            : String combined_stderr ( combine_stderr n_se c_se )
 
-                                        // ── Asyncify wrap for canvas programs ──────────────────
-                                        // canvas.sleep yields back to the browser event loop;
-                                        // browser_wasi_shim drives this via `asyncify_get_state`
-                                        // / `asyncify_start_unwind`. Without this pass the first
-                                        // frame renders but the second `canvas_sleep` call hits
-                                        // "asyncify_get_state is not a function". We restrict the
-                                        // pass to `canvas.sleep` so the instrumentation overhead
-                                        // stays minimal.
-                                        ? & == c_rc 0 uses_canvas {
-                                            : String async_name ( string_from ( string_data bin_name ) ) ( string_push_str async_name `.async.wasm` )
-                                            : String asyncified_path ( path_join ( string_data build_dir ) ( string_data async_name ) )
-                                            ( string_free async_name )
-                                            : ( Vec s ) opt_args ( vec_new [s] )
-                                            ( vec_push [s] opt_args `--asyncify` )
-                                            ( vec_push [s] opt_args `--pass-arg=asyncify-imports@canvas.sleep` )
-                                            ( vec_push [s] opt_args `-O2` )
-                                            ( vec_push [s] opt_args ( string_data wasm_path ) )
-                                            ( vec_push [s] opt_args `-o` )
-                                            ( vec_push [s] opt_args ( string_data asyncified_path ) )
-                                            : !Output ProcessErr opt_res ( process_run ( string_data ( get_wasm_opt ) ) opt_args `` )
-                                            ( vec_free [s] opt_args )
-                                            ?? opt_res {
-                                                T o_out → {
-                                                    : i opt_rc ( output_exit_code o_out )
-                                                    ? == opt_rc 0 {
-                                                        ( string_free wasm_path ) = wasm_path asyncified_path
-                                                    } {
-                                                        = c_rc opt_rc
-                                                        ? > ( string_len combined_stderr ) 0 { ( string_push_char combined_stderr 10 ) } {}
-                                                        ( string_push_str combined_stderr `wasm-opt --asyncify failed:\n` )
-                                                        ( string_push_str combined_stderr ( output_stderr o_out ) )
-                                                        ( string_free asyncified_path )
-                                                    }
-                                                    ( output_free o_out )
-                                                }
-                                                F _ → {
-                                                    = c_rc 127
-                                                    ? > ( string_len combined_stderr ) 0 { ( string_push_char combined_stderr 10 ) } {}
-                                                    ( string_push_str combined_stderr `wasm-opt not found at ` )
-                                                    ( string_push_str combined_stderr ( string_data ( get_wasm_opt ) ) )
-                                                    ( string_push_str combined_stderr ` — canvas requires binaryen (apt install binaryen)` )
-                                                    ( string_free asyncified_path )
-                                                }
-                                            }
-                                        } {}
-
-                                        : Json res ( json_obj_new )
-                                        ( json_obj_set res `status` ( json_str_lit ? == c_rc 0 `ok` `error` ) )
-                                        // Match native handler's message text so the playground's
-                                        // build-info chip ("compiled" vs "build failed") agrees.
-                                        ( json_obj_set res `message` ( json_str_lit ? == c_rc 0 `compiled nurl → wasm32-wasi` `build failed (see stderr)` ) )
-                                        ( json_obj_set res `filename` ( json_str_lit filename ) )
-                                        ( json_obj_set res `wasm_base64` ( json_null ) )
-                                        ( json_obj_set res `wasm_bytes` ( json_int 0 ) )
-                                        ( json_obj_set res `nurlc_returncode` ( json_int n_rc ) )
-                                        ( json_obj_set res `nurlc_stderr` ( json_str_or_null n_se ) )
-                                        ( json_obj_set res `nurlc_errors` ( parse_nurlc_diagnostics n_se ) )
-                                        ( json_obj_set res `clang_returncode` ( json_int c_rc ) )
-                                        ( json_obj_set res `clang_stderr` ( json_str_or_null c_se ) )
-                                        // Unified `stderr` mirrors stamp_build_response; the
-                                        // playground's BUILD FAILED renderer only looks at this
-                                        // field + nurlc_stderr, so omitting it (as the original
-                                        // code did) silently swallowed wasi-clang errors like
-                                        // "undefined symbol: canvas_open".
-                                        ( json_obj_set res `stderr` ( json_str_lit ( string_data combined_stderr ) ) )
-                                        ( json_obj_set res `llvm_ir` ? | emit_ll != c_rc 0 { ( json_str_lit ( string_data ir_fixed ) ) } { ( json_null ) } )
-                                        ( json_obj_set res `uses_canvas` ( json_bool uses_canvas ) )
-                                        ( json_obj_set res `uses_audio` ( json_bool uses_audio ) )
-
-                                        : ~ String b64 ( string_new ) : ~ String wasm_url ( string_new )
-                                        ? == c_rc 0 {
-                                            : !i IoErr wasm_size_res ( file_size ( string_data wasm_path ) )
-                                            : i w_bytes ?? wasm_size_res { T s → s F _ → 0 }
-                                            ( json_obj_set res `wasm_bytes` ( json_int w_bytes ) )
-                                            : !( Vec u ) IoErr wasm_data_res ( read_file_bytes ( string_data wasm_path ) )
-                                            ?? wasm_data_res { T w_data → {
-                                                    : String b ( b64_encode_vec w_data ) ( json_obj_set res `wasm_base64` ( json_str_lit ( string_data b ) ) )
-                                                    ( string_free b64 ) = b64 b ( vec_free [u] w_data ) } F _ → {} }
-                                            = wasm_url ( string_with_cap 64 )
-                                            ( string_push_str wasm_url `/download/` ) ( string_push_str wasm_url ( string_data build_id ) ) ( string_push_str wasm_url `/` ) ( string_push_str wasm_url ( string_data wasm_name ) )
-                                            ( json_obj_set res `download_url` ( json_str_lit ( string_data wasm_url ) ) )
-                                        } {}
-
-                                        : String body ( json_stringify res )
-                                        : HttpResponse hr ( response_text 200 ( string_data body ) )
-                                        ( response_set_header hr `Content-Type` `application/json` )
-
-                                        ( string_free b64 ) ( string_free wasm_url ) ( string_free combined_stderr ) ( json_free res ) ( string_free ir_fixed )
-                                        ( string_free n_se_s ) ( output_free c_out ) ( json_free root )
-                                        ( string_free nu_path ) ( string_free ll_name ) ( string_free ll_path ) ( string_free wasm_name ) ( string_free wasm_path )
-                                        ( string_free build_id ) ( string_free build_dir ) ( string_free body_str ) ( string_free body )
-                                        ^ hr
+                            // ── Asyncify wrap for canvas programs ──────────────────
+                            // canvas.sleep yields back to the browser event loop;
+                            // browser_wasi_shim drives this via `asyncify_get_state`
+                            // / `asyncify_start_unwind`. Without this pass the first
+                            // frame renders but the second `canvas_sleep` call hits
+                            // "asyncify_get_state is not a function". We restrict the
+                            // pass to `canvas.sleep` so the instrumentation overhead
+                            // stays minimal.
+                            ? & == c_rc 0 uses_canvas {
+                                : String async_name ( string_from ( string_data bin_name ) ) ( string_push_str async_name `.async.wasm` )
+                                : String asyncified_path ( path_join ( string_data build_dir ) ( string_data async_name ) )
+                                ( string_free async_name )
+                                : ( Vec s ) opt_args ( vec_new [s] )
+                                ( vec_push [s] opt_args `--asyncify` )
+                                ( vec_push [s] opt_args `--pass-arg=asyncify-imports@canvas.sleep` )
+                                ( vec_push [s] opt_args `-O2` )
+                                ( vec_push [s] opt_args ( string_data wasm_path ) )
+                                ( vec_push [s] opt_args `-o` )
+                                ( vec_push [s] opt_args ( string_data asyncified_path ) )
+                                : !Output ProcessErr opt_res ( process_run ( string_data ( get_wasm_opt ) ) opt_args `` )
+                                ( vec_free [s] opt_args )
+                                ?? opt_res {
+                                    T o_out → {
+                                        : i opt_rc ( output_exit_code o_out )
+                                        ? == opt_rc 0 {
+                                            ( string_free wasm_path ) = wasm_path asyncified_path
+                                        } {
+                                            = c_rc opt_rc
+                                            ? > ( string_len combined_stderr ) 0 { ( string_push_char combined_stderr 10 ) } {}
+                                            ( string_push_str combined_stderr `wasm-opt --asyncify failed:\n` )
+                                            ( string_push_str combined_stderr ( output_stderr o_out ) )
+                                            ( string_free asyncified_path )
+                                        }
+                                        ( output_free o_out )
                                     }
-                                    F ce → { ( string_free ir_fixed ) ( string_free n_se_s ) ^ ( response_text 500 `{"error":"wasi-clang failed"}\n` ) }
+                                    F _ → {
+                                        = c_rc 127
+                                        ? > ( string_len combined_stderr ) 0 { ( string_push_char combined_stderr 10 ) } {}
+                                        ( string_push_str combined_stderr `wasm-opt not found at ` )
+                                        ( string_push_str combined_stderr ( string_data ( get_wasm_opt ) ) )
+                                        ( string_push_str combined_stderr ` — canvas requires binaryen (apt install binaryen)` )
+                                        ( string_free asyncified_path )
+                                    }
                                 }
+                            } {}
+
+                            : Json res ( json_obj_new )
+                            ( json_obj_set res `status` ( json_str_lit ? == c_rc 0 `ok` `error` ) )
+                            // Match native handler's message text so the playground's
+                            // build-info chip ("compiled" vs "build failed") agrees.
+                            ( json_obj_set res `message` ( json_str_lit ? == c_rc 0 `compiled nurl → wasm32-wasi` `build failed (see stderr)` ) )
+                            ( json_obj_set res `filename` ( json_str_lit filename ) )
+                            ( json_obj_set res `wasm_base64` ( json_null ) )
+                            ( json_obj_set res `wasm_bytes` ( json_int 0 ) )
+                            ( json_obj_set res `nurlc_returncode` ( json_int n_rc ) )
+                            ( json_obj_set res `nurlc_stderr` ( json_str_or_null n_se ) )
+                            ( json_obj_set res `nurlc_errors` ( parse_nurlc_diagnostics n_se ) )
+                            ( json_obj_set res `clang_returncode` ( json_int c_rc ) )
+                            ( json_obj_set res `clang_stderr` ( json_str_or_null c_se ) )
+                            // Unified `stderr` mirrors stamp_build_response; the
+                            // playground's BUILD FAILED renderer only looks at this
+                            // field + nurlc_stderr, so omitting it (as the original
+                            // code did) silently swallowed wasi-clang errors like
+                            // "undefined symbol: canvas_open".
+                            ( json_obj_set res `stderr` ( json_str_lit ( string_data combined_stderr ) ) )
+                            ( json_obj_set res `llvm_ir` ? | emit_ll != c_rc 0 { ( json_str_lit ( string_data ir_fixed ) ) } { ( json_null ) } )
+                            ( json_obj_set res `uses_canvas` ( json_bool uses_canvas ) )
+                            ( json_obj_set res `uses_audio` ( json_bool uses_audio ) )
+
+                            : ~ String b64 ( string_new ) : ~ String wasm_url ( string_new )
+                            ? == c_rc 0 {
+                                : !i IoErr wasm_size_res ( file_size ( string_data wasm_path ) )
+                                : i w_bytes ?? wasm_size_res { T s → s F _ → 0 }
+                                ( json_obj_set res `wasm_bytes` ( json_int w_bytes ) )
+                                : !( Vec u ) IoErr wasm_data_res ( read_file_bytes ( string_data wasm_path ) )
+                                ?? wasm_data_res { T w_data → {
+                                        : String b ( b64_encode_vec w_data ) ( json_obj_set res `wasm_base64` ( json_str_lit ( string_data b ) ) )
+                                        ( string_free b64 ) = b64 b ( vec_free [u] w_data ) } F _ → {} }
+                                = wasm_url ( string_with_cap 64 )
+                                ( string_push_str wasm_url `/download/` ) ( string_push_str wasm_url ( string_data build_id ) ) ( string_push_str wasm_url `/` ) ( string_push_str wasm_url ( string_data wasm_name ) )
+                                ( json_obj_set res `download_url` ( json_str_lit ( string_data wasm_url ) ) )
+                            } {}
+
+                            : String body ( json_stringify res )
+                            : HttpResponse hr ( response_text 200 ( string_data body ) )
+                            ( response_set_header hr `Content-Type` `application/json` )
+
+                            ( string_free b64 ) ( string_free wasm_url ) ( string_free combined_stderr ) ( json_free res ) ( string_free ir_fixed )
+                            ( string_free n_se_s ) ( output_free c_out ) ( json_free root )
+                            ( string_free nu_path ) ( string_free ll_name ) ( string_free ll_path ) ( string_free wasm_name ) ( string_free wasm_path )
+                            ( string_free build_id ) ( string_free build_dir ) ( string_free body_str ) ( string_free body )
+                            ^ hr
+                        }
+                        F ce → { ( string_free ir_fixed ) ( string_free n_se_s ) ^ ( response_text 500 `{"error":"wasi-clang failed"}\n` ) }
+                    }
                 }
                 F _ → { ^ ( response_text 500 `{"error":"could not create build dir"}\n` ) }
             }
@@ -3227,6 +3227,26 @@ s combined_stdout s combined_stderr → v {
     }
 }
 
+// Serve the objdet WebGPU demo page (static/objdetdemo.html) — tiny-YOLOv2
+// object detection running on the browser GPU via the gpu package's WebGPU
+// backend (WGSL compute shaders), pure NURL compiled to wasm.
+@ __serve_objdetdemo → HttpResponse {
+    : String sdir ( get_static_dir )
+    : String fp ( path_join ( string_data sdir ) `objdetdemo.html` )
+    : !( Vec u ) IoErr rd ( read_file_bytes ( string_data fp ) )
+    ( string_free sdir ) ( string_free fp )
+    ?? rd {
+        T body → {
+            : HttpResponse r ( response_new 200 )
+            ( response_set_header r `Content-Type` `text/html; charset=utf-8` )
+            ( response_set_body_bytes r body )
+            ( vec_free [u] body )
+            ^ r
+        }
+        F _ → { ^ ( response_text 500 `objdetdemo.html not found in static dir\n` ) }
+    }
+}
+
 @ h_stdlib_viewer HttpRequest req Params params → HttpResponse {
     ( nurl_print `[srv] GET /stdlib-viewer\n` )
     ^ ( __serve_viewer_html )
@@ -4823,6 +4843,7 @@ s combined_stdout s combined_stderr → v {
             ( router_get r `/tests-viewer` \ HttpRequest req Params params → HttpResponse { ^ ( h_tests_viewer req params ) } )
             ( router_get r `/gameboydemo` \ HttpRequest req Params params → HttpResponse { ^ ( __serve_gameboydemo ) } )
             ( router_get r `/c64demo` \ HttpRequest req Params params → HttpResponse { ^ ( __serve_c64demo ) } )
+            ( router_get r `/objdetdemo` \ HttpRequest req Params params → HttpResponse { ^ ( __serve_objdetdemo ) } )
             ( router_get r `/pptchat` \ HttpRequest req Params params → HttpResponse { ^ ( __serve_pptchatdemo ) } )
             // Per-channel join URL (e.g. /pptchat/h747gh20z2f4t) — serves the
             // SAME page; the channel id is read client-side from the path.
@@ -4872,7 +4893,7 @@ s combined_stdout s combined_stderr → v {
             ( nurl_print ( nurl_str_int compile_slots ) )
             ( nurl_print `, idle=5000ms)\n` )
             : HttpServer srv ( server_new_with_timeout listener logged 5000 )
-            ( ppt_install )   // /pptws/<channel> WebSocket voice relay (upgrade hook)
+            ( ppt_install )  // /pptws/<channel> WebSocket voice relay (upgrade hook)
             : !v NetErr rr ( server_run_pool srv workers )
             ( signal_clear_shutdown ) ( server_stop srv ) ( sem_free compile_gate ) ( router_free r )
             // The handler chain (`logged` wraps `base`) is dead once the
