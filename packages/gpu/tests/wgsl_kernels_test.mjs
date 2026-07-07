@@ -1,4 +1,4 @@
-import { K, buildWGSL, scalarLayout } from "../web/kernels_wgsl.js";
+import { K, buildWGSL, scalarLayout, dispatchInvocations } from "../web/kernels_wgsl.js";
 const adapter = navigator.gpu && await navigator.gpu.requestAdapter();
 if (!adapter) { console.log('no WebGPU adapter'); Deno.exit(2); }
 const device = await adapter.requestDevice();
@@ -28,7 +28,7 @@ async function run(name, storageArrays, scalarVals, outIdx, total) {
   const bg = device.createBindGroup({layout:pipe.getBindGroupLayout(0),entries});
   const enc = device.createCommandEncoder();
   const pass = enc.beginComputePass(); pass.setPipeline(pipe); pass.setBindGroup(0,bg);
-  const groups = Math.ceil(total/64); const gx = Math.min(groups,65535), gy = Math.ceil(groups/65535);
+  const groups = Math.ceil(dispatchInvocations(name, scalarVals, total)/64); const gx = Math.min(groups,65535), gy = Math.ceil(groups/65535);
   pass.dispatchWorkgroups(gx, gy); pass.end();
   const outLen = storageArrays[outIdx].length;
   const rb = device.createBuffer({size:outLen*4,usage:GPUBufferUsage.COPY_DST|GPUBufferUsage.MAP_READ});
@@ -83,6 +83,28 @@ async function check(name, storage, scalars, outIdx, total, ref) {
       for(let s=0;s<kw;s++){let iw=ow*sw-pw+s;if(iw<0||iw>=W)continue;acc+=X[(ic*H+ih)*W+iw]*Wt[((oc*Cin+ic)*kh+r)*kw+s];}}
     ref.push(acc);}
   await check("conv2d",[X,Wt,Bb,new Float32Array(Cout*OH*OW)],[Cin,H,W,Cout,kh,kw,OH,OW,ph,pw,sh,sw,1],3,Cout*OH*OW,ref); }
+// conv2d again for every specialized path in the 4-outputs-per-thread
+// kernel: k3s1 fast lane with OW not a multiple of 4 (tail lane), k3s2
+// fast lane, k1s1 lane, and a k5 shape that must take the generic lane.
+{ const convRef=(X,Wt,Bb,Cin,H,W,Cout,kh,kw,OH,OW,ph,pw,sh,sw)=>{const ref=[];
+    for(let oc=0;oc<Cout;oc++)for(let oh=0;oh<OH;oh++)for(let ow=0;ow<OW;ow++){let acc=Bb[oc];
+      for(let ic=0;ic<Cin;ic++)for(let r=0;r<kh;r++){let ih=oh*sh-ph+r;if(ih<0||ih>=H)continue;
+        for(let s=0;s<kw;s++){let iw=ow*sw-pw+s;if(iw<0||iw>=W)continue;acc+=X[(ic*H+ih)*W+iw]*Wt[((oc*Cin+ic)*kh+r)*kw+s];}}
+      ref.push(acc);}
+    return ref;};
+  const cases=[
+    ["conv k3s1 OW=7 tail", 3,6,7, 2, 3,3, 1,1, 1,1],
+    ["conv k3s2",           3,8,8, 2, 3,3, 1,1, 2,2],
+    ["conv k1s1",           4,6,8, 3, 1,1, 0,0, 1,1],
+    ["conv k5s1 generic",   2,9,9, 2, 5,5, 2,2, 1,1],
+  ];
+  for (const [label,Cin,H,W,Cout,kh,kw,ph,pw,sh,sw] of cases) {
+    const OH=Math.floor((H+2*ph-kh)/sh)+1, OW=Math.floor((W+2*pw-kw)/sw)+1;
+    const X=rnd(Cin*H*W),Wt=rnd(Cout*Cin*kh*kw),Bb=rnd(Cout);
+    const ref=convRef(X,Wt,Bb,Cin,H,W,Cout,kh,kw,OH,OW,ph,pw,sh,sw);
+    console.log(`  · ${label}`);
+    await check("conv2d",[X,Wt,Bb,new Float32Array(Cout*OH*OW)],[Cin,H,W,Cout,kh,kw,OH,OW,ph,pw,sh,sw,1],3,Cout*OH*OW,ref);
+  } }
 { // convtranspose2d 2ch 3x3, 2 out, 2x2 kernel stride2 pad0 → 6x6
   const Cin=2,H=3,W=3,Cout=2,kh=2,kw=2,sh=2,sw=2,ph=0,pw=0,OH=6,OW=6;
   const X=rnd(Cin*H*W),Wt=rnd(Cin*Cout*kh*kw),Bb=rnd(Cout); const ref=[];

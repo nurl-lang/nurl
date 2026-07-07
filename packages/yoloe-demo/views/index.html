@@ -369,7 +369,8 @@ const wasmEng = {
     await new Promise((resolve, reject) => {
       this.worker.onmessage = (e) => {
         const m = e.data;
-        if (m.type === "status" && m.code === 2) { resolve(); }
+        if (m.type === "ready") { this.gpuDesc = m.gpu; this.gpuFallback = m.fallback; }
+        else if (m.type === "status" && m.code === 2) { resolve(); }
         else if (m.type === "status" && m.code < 0) { reject(new Error("engine init failed (" + m.extra + ")")); }
         else if (m.type === "error") { reject(new Error(m.message)); }
         else if (m.type === "log") { console.log("[wasm]", m.line); }
@@ -378,7 +379,14 @@ const wasmEng = {
     });
     this.worker.onmessage = (e) => this._onmsg(e.data);
     this.state = "ready";
-    wmsg((this.engine === "webgpu" ? "WebGPU" : "wasm") + " engine ready — " + this.names.length + " classes");
+    if (this.engine === "webgpu") {
+      const gpu = this.gpuDesc && this.gpuDesc !== "GPU adapter" ? " on " + this.gpuDesc : "";
+      wmsg(this.gpuFallback
+        ? "⚠ WebGPU is using a SOFTWARE adapter (" + (this.gpuDesc || "cpu") + ") — expect it to be slow; enable GPU/Vulkan in the browser"
+        : "WebGPU engine ready" + gpu + " — " + this.names.length + " classes");
+    } else {
+      wmsg("wasm engine ready — " + this.names.length + " classes");
+    }
   },
   stop() {
     if (this.worker) { this.worker.terminate(); this.worker = null; }
@@ -491,7 +499,9 @@ async function wasmStep() {
   }
   drawOverlay(dets);
   updateStats(res.ms, rtt, res.n, dets);
-  wmsg("wasm: " + (res.ms / 1000).toFixed(1) + " s/frame — pure NURL in this tab");
+  wmsg(wasmEng.engine === "webgpu"
+    ? "WebGPU: " + res.ms + " ms/frame" + (wasmEng.gpuFallback ? " — ⚠ software adapter" : "") + " — pure NURL in this tab"
+    : "wasm: " + (res.ms / 1000).toFixed(1) + " s/frame — pure NURL in this tab");
 }
 
 function chipName(cls) {

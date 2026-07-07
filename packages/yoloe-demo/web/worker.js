@@ -179,7 +179,7 @@ onmessage = async (e) => {
     });
     memory = instance.exports.memory;
     gpuHost.bind(instance);
-    postMessage({ type: 'ready' });
+    postMessage({ type: 'ready', gpu: gpuHost.describe(), fallback: gpuHost.isFallback });
     try {
       // runWithAsyncify drives the WebGPU async readback (unwind/await/
       // rewind); for the static-CPU path nothing unwinds and it is just
