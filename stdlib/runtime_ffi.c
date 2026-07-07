@@ -1276,6 +1276,17 @@ long long nurl_tcp_write(long long handle, const char *buf, long long n) {
         return -1;
     }
     long long total = 0;
+    /* SO_SNDTIMEO (set by nurl_tcp_set_timeout for the keep-alive idle
+     * deadline) also caps every blocking send(): when a SLOW-BUT-ALIVE
+     * client (a phone on WiFi pulling a 50 MB model) drains the socket
+     * more slowly than we fill it, send() can spend the whole window
+     * waiting for buffer space and fail with EAGAIN — which used to be
+     * treated as fatal, cutting the response mid-body. A send timeout
+     * is only a DEAD peer if there is no progress across consecutive
+     * windows: retry zero-progress timeouts up to twice (≈2-3× the
+     * idle deadline of total stall), and let any progress reset the
+     * allowance. */
+    int stalls = 0;
     while (total < n) {
         long long want = n - total;
 #ifdef _WIN32
@@ -1294,13 +1305,29 @@ long long nurl_tcp_write(long long handle, const char *buf, long long n) {
 #endif
         if (wn <= 0) {
 #ifdef _WIN32
+            /* WSAETIMEDOUT only fires on BLOCKING sockets (SO_SNDTIMEO);
+             * the async path's would-block is WSAEWOULDBLOCK and must
+             * still return immediately for the reactor. */
             int we = WSAGetLastError();
+            if (wn < 0 && we == WSAETIMEDOUT && ++stalls <= 2) continue;
             h->err_kind = nurl__net_map_wsa(we, NURL_NET_ERR_WRITE);
 #else
+            /* On POSIX a SO_SNDTIMEO expiry and a nonblocking would-block
+             * are both EAGAIN — only retry on BLOCKING sockets, so the
+             * fiber reactor's park-on-EAGAIN contract stays intact. */
+            if (wn < 0 && (errno == EAGAIN ||
+#  if defined(EWOULDBLOCK) && EWOULDBLOCK != EAGAIN
+                           errno == EWOULDBLOCK ||
+#  endif
+                           0)) {
+                int fl = fcntl(h->fd, F_GETFL, 0);
+                if (fl >= 0 && !(fl & O_NONBLOCK) && ++stalls <= 2) continue;
+            }
             h->err_kind = nurl__net_map_errno(errno, NURL_NET_ERR_WRITE);
 #endif
             return -1;
         }
+        stalls = 0;
         total += (long long)wn;
     }
     h->err_kind = NURL_NET_ERR_OK;
