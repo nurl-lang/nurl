@@ -57,8 +57,18 @@ try {
     }
 
     # ── Unpack (archive has a top-level nurl\ dir) ─────────────────────
+    # Remove only the entries the toolchain owns (the list
+    # tools\install-toolchain.bat manages) — $Prefix also holds user data
+    # that must survive a reinstall, e.g. the nurlpkg publish token in
+    # $Prefix\credentials. Wiping the whole prefix silently logged users
+    # out of the registry on every upgrade.
     Write-Host "installing to $Prefix..."
-    if (Test-Path $Prefix) { Remove-Item -Recurse -Force $Prefix }
+    if (Test-Path $Prefix) {
+        foreach ($entry in @("bin", "build", "stdlib", "zig", "nurl.sh", "env")) {
+            $owned = Join-Path $Prefix $entry
+            if (Test-Path $owned) { Remove-Item -Recurse -Force $owned }
+        }
+    }
     New-Item -ItemType Directory -Force -Path $Prefix | Out-Null
     $unzipTmp = Join-Path $tmp "x"
     Expand-Archive -Path $zip -DestinationPath $unzipTmp -Force
