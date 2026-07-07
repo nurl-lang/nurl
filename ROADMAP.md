@@ -7,7 +7,7 @@ Anything marked done here has a regression test in
 [`compiler/tests/`](compiler/tests/) and is covered by the bootstrap fixed
 point.
 
-_Last reviewed: 2026-07-06 · Current release: **0.11.0** · Language: **Grammar
+_Last reviewed: 2026-07-07 · Current release: **0.11.1** · Language: **Grammar
 v2.3** ([`spec/grammar.ebnf`](spec/grammar.ebnf))._
 
 ---
@@ -141,7 +141,13 @@ platform-specific shims.
 
 - Native: Linux x86_64, Windows x86_64, macOS x86_64/ARM64.
 - WebAssembly `wasm32-wasi` (WASI SDK), including the compiler itself running
-  in the browser playground.
+  in the browser playground, and **whole neural networks running client-side
+  in the browser** — the pure-NURL ONNX runtime compiled to wasm, executing
+  on the CPU (precompiled kernels) or on the visitor's **GPU via WebGPU** (the
+  CUDA-C kernels translated to WGSL compute shaders; the `gpu` package's third
+  backend). Live YOLOE segmentation and tiny-YOLOv2 detection run in a tab
+  with no server inference (`packages/yoloe-demo`, the playground objdet
+  demo).
 - A **WebAssembly runtime written in pure NURL** (`packages/wasmtime`) that
   decodes and executes real `wasm32-wasi` modules (full int/float instruction
   set, linear/bulk memory, tables + `call_indirect`, WASI + `--dir` file ops),
@@ -158,11 +164,12 @@ platform-specific shims.
   (with sound), a C64 demo, ESP32 / Milk-V embedded targets, and a
   Push-To-Talk distributed voice app (`pttvoice/`).
 - **Package ecosystem** on the live registry (`reg.nurl-lang.org`,
-  `nurlpkg install`): GPU compute (`gpu` — CUDA driver + NVRTC with a CPU
-  fallback backend, `gpukit`, `tensor`), pure-NURL vision and ML (`image`
-  PNG/JPEG codecs, `onnx` runtime, `objdet`, `yoloe`, `iforest`,
-  `anomaly`), distributed compute (`swarm`, `swarm-mcp`), and application
-  scaffolding (`cli`, `http`, `cas`, `wasmbuilder`, `nurl-mcp`).
+  `nurlpkg install`): GPU compute (`gpu` — CUDA driver + NVRTC, a CPU
+  fallback backend, a static-kernel backend, and a **WebGPU / WGSL backend**;
+  `gpukit`, `tensor`), pure-NURL vision and ML (`image` PNG/JPEG codecs,
+  `onnx` runtime, `objdet`, `yoloe`, `iforest`, `anomaly`), distributed
+  compute (`swarm`, `swarm-mcp`), web (`template` HTML templating, `http`),
+  and application scaffolding (`cli`, `cas`, `wasmbuilder`, `nurl-mcp`).
 
 ---
 

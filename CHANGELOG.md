@@ -6,6 +6,117 @@ are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.11.1] — 2026-07-07
+
+A **neural-nets-in-the-browser** release. Real object detection and
+open-vocabulary segmentation now run **entirely in a web page** — pure NURL
+compiled to WebAssembly, with the ONNX runtime executing either on the CPU
+(precompiled kernels) or on the visitor's GPU via a new **WebGPU backend**
+(the CUDA-C kernels translated to WGSL compute shaders). No server inference,
+no Python, no OpenCV, no inference engine. This is carried by two new demo
+packages (`yoloe-demo`, and the playground's `objdet` page), two new `gpu`
+backends (static + WebGPU), and the toolchain work that made in-browser GPU
+compute possible — plus a template engine, TLS hardening, and a CI fix.
+
+### Added
+
+- **`packages/gpu` 0.4.0 — two new backends: static kernels and WebGPU.**
+  Beyond CUDA (NVRTC) and the runtime-compiled CPU backend, `gpu` gains a
+  **static-kernel backend** (backend 2): a generated `kernels_static.c`
+  precompiles every kernel and registers them under
+  `nurl_static_kernel(name)` (a weak NULL stub in the core runtime keeps
+  every other link working), so a model runs with **no NVRTC, no system
+  C++ compiler, no dlopen** — the backend a wasm module or a sealed native
+  binary needs. Select with `NURL_GPU=static` or `( gpu_force_static )`.
+  And a **WebGPU backend** (backend 3): the ONNX kernels, pre-translated to
+  WGSL (`web/kernels_wgsl.js`), run through `navigator.gpu` (browser or
+  Deno) driven by host imports the JS embedder implements (`web/webgpu.js`).
+  Device memory is a `GPUBuffer`; the one async op — the `mapAsync` grid
+  readback — is bridged with Asyncify so the synchronous NURL `gpu_download`
+  returns data in wasm memory. Every WGSL kernel is verified on a real GPU
+  against a JS reference of the CUDA-C (25/25 via Deno's headless WebGPU);
+  the full YOLOE detector forward matches onnxruntime within tolerance
+  (max abs err 0.02).
+- **`packages/yoloe-demo` 0.1.0 — live YOLOE in the browser, served by pure
+  NURL.** Open a page, start the webcam, and watch open-vocabulary detection
+  + instance segmentation stream back. Three compute engines: the server GPU
+  (frames posted to a pure-NURL HTTP/TLS server), **this browser · wasm
+  (CPU)**, and **this browser · WebGPU** — one wasm module picks the backend
+  at runtime. **Free-text prompting**: type any class (`coffee mug`,
+  `a person waving`), the CLIP BPE tokenizer + MobileCLIP text encoder run on
+  the GPU (all pure NURL), and the next frame detects it. The page template
+  is rendered by `packages/template`; `--tls` mints a self-signed P-256 cert
+  with `std/x509_gen`.
+- **`packages/template` 0.1.0 — an HTML template engine over stdlib `Json`.**
+  Jinja-flavoured `{{ vars }}` (HTML-escaped by default) with
+  `raw`/`upper`/`lower`/`length`/`json` filters, `{% if/elif/else %}`,
+  `{% for %}` with `loop.index`/`first`/`last`/`length`, `{% include %}`
+  partials from a named `TplSet`, and `{# comments #}`. Missing keys render
+  empty and are falsy (mustache-lenient); malformed tags are hard errors
+  with line/col positions. Ships the fs-free engine, a directory loader, and
+  a CLI. ASan/LSan-clean.
+- **`packages/onnx` 0.6.0 — static-kernel generator + graph-executor
+  completeness.** `tools/gen_static_kernels.nu` emits the precompiled kernel
+  set for the gpu static/WebGPU backends. The graph executor grows the ops a
+  browser-shaped ONNX graph (torch 2.12 / onnxsim) needs: `Slice` (single
+  axis), a real `ArgMax` (with an int64 kernel for token inputs), the pb
+  parser reads `TensorProto.int64_data` (packed varints), optional-input
+  `Clip` no longer clamps everything to zero, and `Concat`/`Gather`
+  normalise negative axes.
+- **Playground objdet WebGPU demo (`/objdetdemo`).** Tiny-YOLOv2 object
+  detection running on the visitor's GPU as WGSL compute shaders — the
+  lighter demo (single image input, no prompting/masks, one model fetched
+  once from the ONNX model zoo). Runs on the main thread (no worker, no
+  SharedArrayBuffer) via a generic `asyncImport()` so `host_frame` awaits the
+  next camera frame through the same Asyncify path as the GPU readback.
+
+### Changed
+
+- **`packages/wasmbuilder` 0.1.2 — WebGPU-ready wasm builds.** `--obj`
+  accepts several space-separated objects (a module can link both the static
+  kernels and the asyncify stack); `--cflags` passes extra flags (e.g.
+  `-msimd128`); `--asyncify-imports` names the async host imports (asyncify
+  was canvas-only); and the asyncify pass **strips DWARF first** — `wasm-opt
+  --asyncify` aborts on the debug line-tables wasi-sdk/zig objects carry.
+- **`packages/image` 0.4.1** — internal JPEG helpers renamed `__jp_*` →
+  `__jpg_*`, resolving a cross-package symbol collision with `ext/json.nu`'s
+  parser (one flat fn namespace) that surfaced the first time both were
+  imported together.
+- **Installers offer a permanent PATH entry** and set the current shell
+  session where possible; the registry renders the `[package].repository`
+  link and `nurlpkg` gained `[hints].postinstall`.
+- Published to `reg.nurl-lang.org`: `gpu` 0.4.0, `onnx` 0.6.0, `wasmbuilder`
+  0.1.2, `image` 0.4.1, `template` 0.1.0.
+
+### Fixed
+
+- **Compiler: call-argument integer-width coercion.** A sized-int parameter
+  (`u`/`u16`/`i32`, …) called with an i64 value — any bare literal or a plain
+  `i` variable — emitted `call @f(i64 …)` against `define @f(i8 …)`. The
+  native ABI masks the mismatch, but on wasm32 the exact-signature rule makes
+  `wasm-ld` emit a **trapping `_bitcast_invalid` stub** — YOLOE-in-the-browser
+  died in `image_new`'s `( vec_push [u] d 0 )`. `gen_call` now trunc/extends
+  fixed-position arguments against the declared parameter (generics substitute
+  the call's type args first). Lock `callarg_width.nu`.
+- **`packages/wasmbuilder`: working env imports.** The `#99` attribute group
+  carried only `wasm-import-module`, which `wasm-ld` still rejects as
+  undefined; the per-symbol `wasm-import-name` attribute is what marks an
+  explicit import — so undefined `& c` symbols never actually linked through
+  the local zig path (the container pipeline had masked this with
+  `-Wl,--allow-undefined`).
+- **Pure TLS: 16 KB record splitting + server-keyed close_notify.** A TLS
+  record caps its plaintext at 2^14 bytes (and past 65535 the u16 length
+  wraps), so responses over ~16 KB (fatally, over 64 KB) failed OpenSSL
+  clients with "bad record mac" — found live by the demo's ~90 KB HTTPS
+  responses. `tls_write`/`tls_server_write` now split into ≤16384-byte
+  records, and `tls_close`'s close_notify is sent under the server keys
+  (it was encrypting with the client-direction keys). A failed TLS handshake
+  no longer takes the whole HTTP server down (it is a per-connection event).
+- **FreeBSD CI out-of-memory.** The bootstrap self-compile peak had grown to
+  ~13.2 GB and crossed the guest's 13.3 GB budget (OOM → SSH drop → exit
+  255). The width-coercion emitter is now factored into one shared helper
+  (dropping the peak) and the VM memory was raised to track the real peak.
+
 ## [0.11.0] — 2026-07-06
 
 A **types-and-ecosystem** release. In the compiler, signedness now lives in
