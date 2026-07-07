@@ -47,6 +47,8 @@ $ `deps/yoloe/src/mask.nu`
 & `c` @ host_result *u dets i nd i ms → v
 
 & `c` @ host_status i code i extra → v
+// 1 → run the WebGPU backend, else the static CPU kernels
+& `c` @ host_use_webgpu → i
 
 : i WD_W 640
 : i WD_H 480
@@ -115,7 +117,7 @@ $ `deps/yoloe/src/mask.nu`
 }
 
 @ main → i {
-    ( gpu_force_static )
+    ? != 0 ( host_use_webgpu ) { ( gpu_force_webgpu ) } { ( gpu_force_static ) }
 
     // model
     : ( Vec u ) mb ( wd_load_blob 0 )

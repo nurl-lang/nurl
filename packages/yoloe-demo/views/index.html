@@ -140,7 +140,8 @@
         <label for="engine">compute</label>
         <select id="engine">
           <option value="server">server · GPU</option>
-          <option value="wasm">this browser · wasm</option>
+          <option value="wasm">this browser · wasm (CPU)</option>
+          <option value="webgpu">this browser · WebGPU</option>
         </select>
       </div>
       <div id="wasmMsg"></div>
@@ -278,7 +279,7 @@ function captureBlob() {
 async function loop() {
   while (running) {
     try {
-      if (engineSel && engineSel.value === "wasm" && wasmEng.state === "ready") {
+      if (engineSel && (engineSel.value === "wasm" || engineSel.value === "webgpu") && wasmEng.state === "ready") {
         await wasmStep();
         if (dropped) { running = false; camBtn.textContent = "▶ Start camera"; camBtn.classList.remove("live"); }
         continue;
@@ -346,8 +347,9 @@ const wmsg = (t) => { if (wasmMsg) wasmMsg.textContent = t; };
 const wasmEng = {
   state: "off", worker: null, sab: null, ctl: null, bytes: null,
   pending: null, names: [], _q: Promise.resolve(),
-  async start() {
+  async start(engine) {
     if (this.state !== "off") return;
+    this.engine = engine || "wasm";
     this.state = "loading";
     if (typeof SharedArrayBuffer === "undefined") {
       throw new Error("SharedArrayBuffer unavailable (page not cross-origin isolated)");
@@ -363,7 +365,7 @@ const wasmEng = {
     this.ctl = new Int32Array(this.sab, 0, 1024);
     this.bytes = new Uint8Array(this.sab);
     wmsg("starting engine…");
-    this.worker = new Worker("/worker.js");
+    this.worker = new Worker("/worker.js", { type: "module" });
     await new Promise((resolve, reject) => {
       this.worker.onmessage = (e) => {
         const m = e.data;
@@ -372,11 +374,15 @@ const wasmEng = {
         else if (m.type === "error") { reject(new Error(m.message)); }
         else if (m.type === "log") { console.log("[wasm]", m.line); }
       };
-      this.worker.postMessage({ type: "init", sab: this.sab, wasm, model, tpe: tpeRes.buf }, [wasm, model, tpeRes.buf]);
+      this.worker.postMessage({ type: "init", engine: this.engine, sab: this.sab, wasm, model, tpe: tpeRes.buf }, [wasm, model, tpeRes.buf]);
     });
     this.worker.onmessage = (e) => this._onmsg(e.data);
     this.state = "ready";
-    wmsg("wasm engine ready — " + this.names.length + " classes");
+    wmsg((this.engine === "webgpu" ? "WebGPU" : "wasm") + " engine ready — " + this.names.length + " classes");
+  },
+  stop() {
+    if (this.worker) { this.worker.terminate(); this.worker = null; }
+    this.state = "off"; this.pending = null; this._q = Promise.resolve();
   },
   _onmsg(m) {
     if (m.type === "result" && this.pending) {
@@ -423,14 +429,17 @@ const wasmEng = {
 
 if (engineSel) {
   engineSel.onchange = async () => {
-    if (engineSel.value === "wasm") {
-      try { await wasmEng.start(); }
-      catch (e) { wmsg("wasm: " + e.message); engineSel.value = "server"; }
+    const v = engineSel.value;
+    if (v === "wasm" || v === "webgpu") {
+      if (wasmEng.state !== "off" && wasmEng.engine !== v) { wasmEng.stop && wasmEng.stop(); }
+      try { await wasmEng.start(v); }
+      catch (e) { wmsg((v === "webgpu" ? "WebGPU" : "wasm") + ": " + e.message); engineSel.value = "server"; }
     } else { wmsg(""); }
   };
   // kiosk/test: ?engine=wasm pre-selects and boots the in-browser engine
-  if (new URLSearchParams(location.search).get("engine") === "wasm") {
-    engineSel.value = "wasm";
+  const qe = new URLSearchParams(location.search).get("engine");
+  if (qe === "wasm" || qe === "webgpu") {
+    engineSel.value = qe;
     engineSel.onchange();
   }
 }

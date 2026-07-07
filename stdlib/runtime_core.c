@@ -907,6 +907,22 @@ __attribute__((weak)) void *nurl_static_kernel(const char *name) {
     return 0;
 }
 
+/* WebGPU backend (gpu.nu backend 3) host imports. In a wasm build these
+ * stay UNDEFINED so wasm-ld turns each into an `env` import the JS
+ * embedder (packages/gpu/web/webgpu.js) provides — hence the __wasi__
+ * guard. A native link never selects backend 3, but gpu.nu's dead
+ * webgpu branches still reference the symbols; these no-op weak stubs
+ * let those links resolve. */
+#if !defined(__wasi__)
+__attribute__((weak)) long long wgpu_pipeline(const char *name) { (void)name; return 0; }
+__attribute__((weak)) long long wgpu_alloc(long long bytes) { (void)bytes; return 0; }
+__attribute__((weak)) void wgpu_free(long long id) { (void)id; }
+__attribute__((weak)) long long wgpu_upload(long long id, void *host, long long bytes) { (void)id; (void)host; (void)bytes; return -1; }
+__attribute__((weak)) long long wgpu_download(void *host, long long id, long long bytes) { (void)host; (void)id; (void)bytes; return -1; }
+__attribute__((weak)) long long wgpu_dtod(long long dst, long long src, long long bytes) { (void)dst; (void)src; (void)bytes; return -1; }
+__attribute__((weak)) long long wgpu_launch(long long pipeline, long long total, void *args, long long nargs) { (void)pipeline; (void)total; (void)args; (void)nargs; return -1; }
+#endif
+
 /* Recursively reclaim a Vec/String backing store. `ctl` is the Vec
  * control block (slot 0 = data ptr, slot 1 = len, slot 2 = cap). When
  * `elem_drop` is non-NULL it is invoked on a POINTER to each live
