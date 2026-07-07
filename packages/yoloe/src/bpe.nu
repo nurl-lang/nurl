@@ -205,11 +205,17 @@ $ `clip_merges_data.nu`
         = j + j 1
     }
     ( vec_free [i] order )
-    : s data ( clip_merges_data )
-    : i n ( nurl_str_len data )
-    : ( Vec u ) buf ( vec_with_cap [u] n )
-    : ~ i p 0
-    ~ < p n { ( vec_push [u] buf # u ( nurl_str_get data p ) ) = p + p 1 }
+    // the table is embedded as line-aligned chunks (see embed_merges.py)
+    : ( Vec u ) buf ( vec_with_cap [u] 524604 )
+    : i nchunks ( clip_merges_chunks )
+    : ~ i ci 0
+    ~ < ci nchunks {
+        : s data ( clip_merges_chunk ci )
+        : i n ( nurl_str_len data )
+        : ~ i p 0
+        ~ < p n { ( vec_push [u] buf # u ( nurl_str_get data p ) ) = p + p 1 }
+        = ci + ci 1
+    }
     ( __load_merges tk buf )
     ( __tokenizer_specials tk )
     = . tk sot 49406
