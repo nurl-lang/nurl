@@ -18,10 +18,13 @@
 //
 // kernels_wgsl.js supplies the WGSL + arg signatures.
 
-import { K, buildWGSL, scalarLayout } from "./kernels_wgsl.js";
+import { K, buildWGSL, scalarLayout, dispatchInvocations } from "./kernels_wgsl.js";
 
 export async function makeWebGPUHost() {
-  const adapter = navigator.gpu && await navigator.gpu.requestAdapter();
+  // high-performance matters on multi-GPU machines: the default adapter
+  // can be the weakest device (observed: Deno/wgpu handing out a GTX 970
+  // while an RTX 4090 sat idle in the same box)
+  const adapter = navigator.gpu && await navigator.gpu.requestAdapter({ powerPreference: "high-performance" });
   const device = adapter && await adapter.requestDevice();
   const ok = !!device;
 
@@ -44,6 +47,42 @@ export async function makeWebGPUHost() {
   // so bind this 4-byte buffer — the kernel's guard never reads it.
   let dummyBuf = null;
   const nullBuf = () => (dummyBuf ||= device.createBuffer({ size: 4, usage: ST }));
+
+  // ── batched submission ──
+  // One queue.submit per kernel launch is the dominant cost in a browser
+  // (each submit is an IPC round-trip to the GPU process — a ~270-node
+  // net paid it ~270× per frame). Instead launches accumulate dispatches
+  // in ONE command encoder / compute pass, and flush() submits only when
+  // something must observe the results (download, or an upload that
+  // would otherwise be reordered before the encoded work — queue
+  // operations execute in queue order, so a writeBuffer issued while an
+  // encoder is still pending would land BEFORE those dispatches).
+  let enc = null, pass = null;
+  const deadBufs = [];            // wgpu_free'd while referenced by the pending encoder
+  function getPass() {
+    if (!enc) enc = device.createCommandEncoder();
+    if (!pass) pass = enc.beginComputePass();
+    return pass;
+  }
+  function endPass() { if (pass) { pass.end(); pass = null; } }
+  function flush() {
+    if (!enc) return;
+    endPass();
+    device.queue.submit([enc.finish()]);
+    enc = null;
+    for (const b of deadBufs) b.destroy();
+    deadBufs.length = 0;
+  }
+  // A model forward launches the same nodes with the same buffers and
+  // scalars every frame — cache the (bind group + uniform buffer) per
+  // (pipeline, buffer ids, scalar bytes), so steady-state frames create
+  // no GPU objects and write no uniforms at all.
+  const bgCache = new Map();      // key → { bg, uni, ids }
+  function dropCachedFor(bufId) {
+    for (const [k, e] of bgCache) {
+      if (e.ids.includes(bufId)) { e.uni.destroy(); bgCache.delete(k); }
+    }
+  }
 
   // ── asyncify state ──
   let stackBase = 0, stackSize = 0, stackInited = false;
@@ -80,18 +119,30 @@ export async function makeWebGPUHost() {
       buffers.set(id, b);
       return BigInt(id);
     },
-    wgpu_free: (id) => { const b = buffers.get(Number(id)); if (b) { b.destroy(); buffers.delete(Number(id)); } },
+    wgpu_free: (id) => {
+      const b = buffers.get(Number(id)); if (!b) return;
+      buffers.delete(Number(id));
+      dropCachedFor(Number(id));
+      // The pending encoder may still reference it in a bind group;
+      // destroying now would fail validation at submit. Defer to flush().
+      if (enc) deadBufs.push(b); else b.destroy();
+    },
     wgpu_upload: (id, hostPtr, bytes) => {
       const b = buffers.get(Number(id)); if (!b) return -1n;
+      // writeBuffer executes in queue order — flush pending dispatches so
+      // they read the buffer's OLD contents, not this write.
+      flush();
       const n = Number(bytes);
       device.queue.writeBuffer(b, 0, mem().slice(Number(hostPtr), Number(hostPtr) + n));
       return 0n;
     },
     wgpu_dtod: (dst, src, bytes) => {
       const d = buffers.get(Number(dst)), sb = buffers.get(Number(src)); if (!d || !sb) return -1n;
-      const enc = device.createCommandEncoder();
+      // Encode into the pending batch (copies can't live inside a compute
+      // pass, so end it; the next launch reopens one in the same encoder).
+      endPass();
+      if (!enc) enc = device.createCommandEncoder();
       enc.copyBufferToBuffer(sb, 0, d, 0, Number(bytes));
-      device.queue.submit([enc.finish()]);
       return 0n;
     },
     wgpu_launch: (pipeId, total, argsPtr, nargs) => {
@@ -106,30 +157,38 @@ export async function makeWebGPUHost() {
       const ub = new ArrayBuffer(Math.max(16, Math.ceil(scalars.length * 4 / 16) * 16));
       const ubI = new Int32Array(ub), ubF = new Float32Array(ub);
       let bufBinding = 0, scalarIdx = 0;
+      const ids = [], scalarVals = [];
       for (let i = 0; i < params.length; i++) {
         const [pn, t] = params[i];
         const lo = cellsLo[i * 2]; // low 32 bits of the i64 cell
         if (t === "b" || t === "w" || t === "q" || t === "Q") {
           const b = lo === 0 ? nullBuf() : buffers.get(lo);
           if (!b) return -2n;
+          ids.push(lo);
           storageEntries.push({ binding: bufBinding++, resource: { buffer: b } });
         } else if (t === "f") {
-          ubF[scalarIdx++] = new Float32Array(new Int32Array([lo]).buffer)[0];
+          const fv = new Float32Array(new Int32Array([lo]).buffer)[0];
+          ubF[scalarIdx++] = fv;
+          scalarVals.push(fv);
         } else {
           ubI[scalarIdx++] = lo;
+          scalarVals.push(lo);
         }
       }
-      const uni = device.createBuffer({ size: ub.byteLength, usage: UN });
-      device.queue.writeBuffer(uni, 0, ub);
-      storageEntries.push({ binding: bufBinding, resource: { buffer: uni } });
-      const bg = device.createBindGroup({ layout: entry.pipe.getBindGroupLayout(0), entries: storageEntries });
-      const enc = device.createCommandEncoder();
-      const pass = enc.beginComputePass();
-      pass.setPipeline(entry.pipe); pass.setBindGroup(0, bg);
-      const groups = Math.ceil(Number(total) / 64);
+      const key = pipeId + "|" + ids.join(",") + "|" + new Uint32Array(ub).join(",");
+      let ce = bgCache.get(key);
+      if (!ce) {
+        const uni = device.createBuffer({ size: ub.byteLength, usage: UN });
+        device.queue.writeBuffer(uni, 0, ub);
+        storageEntries.push({ binding: bufBinding, resource: { buffer: uni } });
+        ce = { bg: device.createBindGroup({ layout: entry.pipe.getBindGroupLayout(0), entries: storageEntries }), uni, ids };
+        bgCache.set(key, ce);
+      }
+      const p = getPass();
+      p.setPipeline(entry.pipe); p.setBindGroup(0, ce.bg);
+      const groups = Math.ceil(dispatchInvocations(name, scalarVals, Number(total)) / 64);
       const gx = Math.min(groups, 65535), gy = Math.ceil(groups / 65535);
-      pass.dispatchWorkgroups(gx, gy); pass.end();
-      device.queue.submit([enc.finish()]);
+      p.dispatchWorkgroups(gx, gy);
       return 0n;
     },
     // async readback → asyncify unwind/rewind
@@ -139,9 +198,12 @@ export async function makeWebGPUHost() {
       const b = buffers.get(Number(id)); if (!b) return -1n;
       const n = Number(bytes), hp = Number(hostPtr);
       const rb = device.createBuffer({ size: n, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
-      const enc = device.createCommandEncoder();
+      // Ride the pending batch: the readback copy is ordered after every
+      // encoded dispatch, and the whole frame goes up in ONE submit.
+      endPass();
+      if (!enc) enc = device.createCommandEncoder();
       enc.copyBufferToBuffer(b, 0, rb, 0, n);
-      device.queue.submit([enc.finish()]);
+      flush();
       asy.result = 0n;
       asy.pending = rb.mapAsync(GPUMapMode.READ).then(() => {
         mem().set(new Uint8Array(rb.getMappedRange().slice(0)), hp);
@@ -158,9 +220,21 @@ export async function makeWebGPUHost() {
     return new TextDecoder().decode(m.subarray(Number(ptr), e));
   }
 
+  const info = adapter ? (adapter.info || {}) : {};
   return {
     ok,
-    adapterInfo: adapter ? (adapter.info || {}) : {},
+    adapterInfo: info,
+    // A software adapter (Chrome's SwiftShader, Mesa's lavapipe) runs the
+    // shaders on the CPU — 20-50× slower than a real GPU. Surface it so a
+    // demo can warn instead of silently reading "running on your GPU".
+    isFallback: !!(adapter && (adapter.isFallbackAdapter ||
+      /swiftshader|llvmpipe|lavapipe|software|cpu/i.test(
+        (info.vendor || "") + " " + (info.architecture || "") + " " + (info.device || "") + " " + (info.description || "")))),
+    describe() {
+      if (!ok) return "no WebGPU";
+      const s = [info.vendor, info.architecture, info.description].filter(Boolean).join(" · ");
+      return s || "GPU adapter";
+    },
     imports,
     bind(instance) { memory = instance.exports.memory; exp = instance.exports; },
     // Wrap a host import so a synchronous NURL call suspends the module

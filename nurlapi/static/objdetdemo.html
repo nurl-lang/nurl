@@ -187,7 +187,16 @@ async function boot() {
       $("stMs").textContent = ms;
       const now = performance.now(); if (lastT) { const inst = 1000 / (now - lastT); fpsEma = fpsEma ? fpsEma*0.8 + inst*0.2 : inst; $("stFps").textContent = fpsEma.toFixed(1); } lastT = now;
     },
-    host_status: (code) => { if (Number(code) === 2) msg.textContent = "running on your GPU"; },
+    host_status: (code) => {
+      if (Number(code) !== 2) return;
+      if (host.isFallback) {
+        msg.textContent = "⚠ software WebGPU adapter (" + host.describe() + ") — no GPU acceleration; enable Vulkan/GPU in the browser";
+        msg.style.color = "#f66";
+      } else {
+        const d = host.describe();
+        msg.textContent = "running on your GPU" + (d && d !== "GPU adapter" ? " — " + d : "");
+      }
+    },
   };
   const module = await WebAssembly.compile(wasm);
   const wasi = wasiShim(() => memory);
