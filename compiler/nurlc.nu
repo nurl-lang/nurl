@@ -1855,31 +1855,35 @@
     }
 }
 
-@ hex_digit i d → s {
-    ? == d 10 `A`
-    ? == d 11 `B`
-    ? == d 12 `C`
-    ? == d 13 `D`
-    ? == d 14 `E`
-    ? == d 15 `F`
-    ( nurl_str_int d )
+// One hex digit as its ASCII code (0-9 → '0'-'9', 10-15 → 'A'-'F').
+@ __hex_digit_ch i d → i {
+    ? < d 10 + 48 d + 55 d
 }
 
-@ byte_hex i c → s {
-    ( nurl_str_cat ( hex_digit / c 16 ) ( hex_digit % c 16 ) )
-}
-
+// Encode [pos,end) of val as an LLVM IR c"..." payload: printable
+// ASCII passes through, everything else (and '"' '\') becomes \HH.
+// Iterative on purpose — a per-character recursion overflowed the
+// stack on literals past ~124 KB (embedded assets are that big).
 @ encode_str s val i pos i end → s {
-    ? >= pos end
-    ``
-    { : i c ( nurl_str_get val pos )
-        : s esc ? | < c 32 > c 126
-        ( nurl_str_cat `\` ( byte_hex c ) )
-        ? | == c 34 == c 92
-        ( nurl_str_cat `\` ( byte_hex c ) )
-        ( nurl_str_slice val pos 1 )
-        ( nurl_str_cat esc ( encode_str val + pos 1 end ) )
+    : i n - end pos
+    // worst case every byte escapes to three chars, plus NUL
+    : s out # s ( malloc + * n 3 1 )
+    : *u op # *u out
+    : ~ i w 0
+    : ~ i p pos
+    ~ < p end {
+        : i c ( nurl_str_get val p )
+        ? | | < c 32 > c 126 | == c 34 == c 92 {
+            = . op w # u 92 = w + w 1
+            = . op w # u ( __hex_digit_ch / c 16 ) = w + w 1
+            = . op w # u ( __hex_digit_ch % c 16 ) = w + w 1
+        } {
+            = . op w # u c = w + w 1
+        }
+        = p + p 1
     }
+    = . op w # u 0
+    out
 }
 
 @ emit_str_global i cg s val → s {
