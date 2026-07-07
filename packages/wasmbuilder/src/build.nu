@@ -40,7 +40,7 @@ $ `toolchain.nu`
     b asyncify  // wasm-opt asyncify wrap for canvas programs (needs binaryen)
     b keep_ll  // leave the rewritten .ll next to the .wasm
     b quiet  // suppress progress lines on stderr
-    s extra_obj  // extra object linked into the module (`` = none) — e.g.
+    s extra_obj  // extra object(s), space-separated, linked in (`` = none) — e.g.
     // a generated kernels_static.o so `& c` symbols resolve
     // statically instead of becoming env imports
     s extra_cflags  // extra compile/link flags, space-separated (`` = none)
@@ -223,7 +223,17 @@ $ `toolchain.nu`
     ( vec_push [s] args ( string_data runtime_o ) )
     ? uses_canvas { ( vec_push [s] args ( string_data canvas_o ) ) } {}
     ? uses_audio { ( vec_push [s] args ( string_data audio_o ) ) } {}
-    ? > ( nurl_str_len . opts extra_obj ) 0 { ( vec_push [s] args . opts extra_obj ) } {}
+    // extra_obj is space-separated: split so several objects can link
+    // (e.g. kernels_static.wasm.o + wgpu_asyncify.wasm.o for a module
+    // that supports both the static-CPU and WebGPU backends).
+    ? > ( nurl_str_len . opts extra_obj ) 0 {
+        : ( Vec String ) obs ( string_split_borrow . opts extra_obj )
+        : ~ i ok 0
+        ~ < ok ( vec_len [String] obs ) {
+            ?? ( vec_get [String] obs ok ) { T x → { ( vec_push [s] args ( string_data x ) ) } F _ → {} }
+            = ok + ok 1
+        }
+    } {}
     ( vec_push [s] args `-o` )
     ( vec_push [s] args out_wasm )
     ( vec_push [s] args `-lm` )
