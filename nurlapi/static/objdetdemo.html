@@ -1,0 +1,243 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>NURL objdet — YOLO on your GPU via WebGPU</title>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: #0f1115; color: #d7dae0;
+    font: 15px/1.5 system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
+  header { padding: 18px 22px 6px; }
+  header h1 { margin: 0 0 4px; font-size: 20px; }
+  header h1 small { color: #9aa0ab; font-weight: 400; font-size: 14px; }
+  header a { color: #7aa2f7; text-decoration: none; }
+  .sub { color: #9aa0ab; font-size: 13px; max-width: 60rem; }
+  main { display: flex; flex-wrap: wrap; gap: 20px; padding: 14px 22px 28px; align-items: flex-start; }
+  .stage { position: relative; background: #000; border: 1px solid #2a2f3a; border-radius: 8px; overflow: hidden;
+    width: 512px; height: 512px; max-width: 92vw; }
+  .stage video, .stage canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+  .stage video { object-fit: cover; }
+  #ph { position: absolute; inset: 0; display: flex; flex-direction: column; gap: .6rem; align-items: center;
+    justify-content: center; color: #9aa0ab; text-align: center; padding: 2rem; }
+  #ph .big { font-size: 2.4rem; }
+  aside { min-width: 250px; max-width: 320px; }
+  .card { background: #161a22; border: 1px solid #2a2f3a; border-radius: 10px; padding: 14px; margin-bottom: 14px; }
+  .card h2 { margin: 0 0 10px; font-size: .72rem; text-transform: uppercase; letter-spacing: .1em; color: #9aa0ab; }
+  button { width: 100%; padding: .6rem; border-radius: 8px; border: 1px solid #2a2f3a;
+    background: linear-gradient(180deg,#1e2430,#161b26); color: #d7dae0; font-weight: 600; cursor: pointer; }
+  button.live { background: linear-gradient(180deg,#123326,#0e281e); border-color: #1f4a37; color: #38ffb0; }
+  .row { display: flex; align-items: center; gap: .5rem; margin-top: .6rem; }
+  .row label { flex: 1; color: #9aa0ab; font-size: .85rem; }
+  input[type=range] { flex: 2; accent-color: #38ffb0; }
+  .stats { display: grid; grid-template-columns: 1fr 1fr; gap: .5rem; }
+  .stat { background: #0e1320; border: 1px solid #2a2f3a; border-radius: 8px; padding: .5rem; text-align: center; }
+  .stat b { display: block; font-size: 1.1rem; color: #38c6ff; font-variant-numeric: tabular-nums; }
+  .stat span { font-size: .66rem; color: #9aa0ab; text-transform: uppercase; letter-spacing: .06em; }
+  #dets { list-style: none; margin: .5rem 0 0; padding: 0; max-height: 160px; overflow-y: auto; font-size: .85rem; }
+  #dets li { display: flex; justify-content: space-between; padding: .25rem .1rem; border-bottom: 1px solid #222834; }
+  #dets .sw { display: inline-block; width: .7rem; height: .7rem; border-radius: 3px; margin-right: .4rem; vertical-align: -1px; }
+  #msg { font-size: .8rem; color: #ffb347; margin-top: .5rem; min-height: 1.2em; }
+  progress { width: 100%; height: 8px; margin-top: .4rem; }
+  footer { padding: 4px 22px 28px; color: #9aa0ab; font-size: .82rem; line-height: 1.6; max-width: 62rem; }
+  footer b { color: #d7dae0; }
+</style>
+</head>
+<body>
+<header>
+  <h1>NURL objdet <small>— tiny-YOLOv2 on your GPU, pure NURL via WebGPU</small></h1>
+  <p class="sub">The whole detector runs <b>in this tab on your GPU</b> as WGSL compute shaders — the pure-NURL
+  ONNX runtime (<a href="https://github.com/nurl-lang/nurl" target="_blank" rel="noopener">packages/onnx</a> + the
+  <a href="https://github.com/nurl-lang/nurl/tree/main/packages/gpu" target="_blank" rel="noopener">gpu</a> package's WebGPU backend)
+  compiled to wasm. No server inference, no Python, no OpenCV, no inference engine.</p>
+</header>
+<main>
+  <div class="stage" id="stage">
+    <video id="video" playsinline muted></video>
+    <canvas id="ol"></canvas>
+    <div id="ph"><div class="big">🎥</div><div><b>Start camera</b> or drop an image here.</div>
+      <div style="font-size:.78rem">Needs a WebGPU browser (Chrome/Edge 113+, or Safari 18+).</div></div>
+  </div>
+  <aside>
+    <div class="card">
+      <button id="startBtn">▶ Start camera</button>
+      <div class="row"><label for="conf">confidence</label>
+        <input type="range" id="conf" min="10" max="80" value="30"><output id="confOut">0.30</output></div>
+      <div id="msg"></div>
+      <progress id="prog" max="100" value="0" style="display:none"></progress>
+    </div>
+    <div class="card"><h2>Live stats</h2>
+      <div class="stats">
+        <div class="stat"><b id="stFps">–</b><span>fps</span></div>
+        <div class="stat"><b id="stMs">–</b><span>infer ms</span></div>
+      </div>
+      <ul id="dets"></ul>
+    </div>
+  </aside>
+</main>
+<footer><b>What you are looking at:</b> a browser tab running a real object detector with zero server compute.
+The frame is drawn to a 416×416 canvas, the tiny-YOLOv2 network (9 convolutions) runs as WGSL compute shaders on
+your GPU through NURL's own ONNX runtime, and the YOLO grid is decoded into boxes — all pure NURL compiled to
+WebAssembly. The 61 MB model is fetched once from the ONNX model zoo and cached.
+&nbsp;<a href="/" style="color:#7aa2f7">← playground</a></footer>
+
+<script type="module">
+import { makeWebGPUHost } from "/webgpu.js";
+
+const N = 416, NCHW = 3 * N * N, MAXDET = 64;
+const MODEL_URL = "https://media.githubusercontent.com/media/onnx/models/main/validated/vision/object_detection_segmentation/tiny-yolov2/model/tinyyolov2-8.onnx";
+const VOC = ["aeroplane","bicycle","bird","boat","bottle","bus","car","cat","chair","cow","diningtable","dog","horse","motorbike","person","pottedplant","sheep","sofa","train","tvmonitor"];
+const PAL = ["#38ffb0","#ff5c5c","#ffc83c","#38c6ff","#be7cff","#ff8c28","#40dc5a","#ff40a0","#7cc8ff","#ffe060","#5adca0","#ff7c5c","#a0ff40","#40a0ff","#ff40e0","#60ffd0","#ffa040","#40ffa0","#c0a0ff","#ff6040"];
+
+const $ = id => document.getElementById(id);
+const video = $("video"), ol = $("ol"), ph = $("ph"), startBtn = $("startBtn"), confIn = $("conf"), confOut = $("confOut"), msg = $("msg"), prog = $("prog");
+ol.width = N; ol.height = N;
+const octx = ol.getContext("2d");
+const cap = document.createElement("canvas"); cap.width = N; cap.height = N;
+const cctx = cap.getContext("2d", { willReadFrequently: true });
+
+confIn.oninput = () => confOut.textContent = (confIn.value / 100).toFixed(2);
+
+let running = false, stream = null, dropped = null;
+let nchwPtr = 0, ctlPtr = 0, memory = null, host = null;
+let frameResolve = null;           // resolves the module's pending host_frame
+let lastResult = { n: 0, dets: [] };
+let fpsEma = 0, lastT = 0;
+
+// nchw fill: draw source into the 416 capture canvas, then CHW raw 0-255.
+function fillNCHW(dstF32) {
+  const src = dropped || video;
+  cctx.fillStyle = "#000"; cctx.fillRect(0, 0, N, N);
+  const sw = dropped ? dropped.width : video.videoWidth || N;
+  const sh = dropped ? dropped.height : video.videoHeight || N;
+  const s = Math.min(N / sw, N / sh), dw = sw * s, dh = sh * s;
+  cctx.drawImage(src, (N - dw) / 2, (N - dh) / 2, dw, dh);
+  const d = cctx.getImageData(0, 0, N, N).data;
+  const plane = N * N;
+  for (let i = 0, px = 0; i < d.length; i += 4, px++) {
+    dstF32[px] = d[i]; dstF32[plane + px] = d[i + 1]; dstF32[2 * plane + px] = d[i + 2];
+  }
+}
+
+function drawBoxes() {
+  octx.clearRect(0, 0, N, N);
+  octx.lineWidth = 2; octx.font = "600 13px system-ui"; octx.textBaseline = "top";
+  const ul = $("dets"); ul.innerHTML = "";
+  for (const b of lastResult.dets) {
+    const col = PAL[b.cls % PAL.length];
+    const x = (b.cx - b.w / 2) * N, y = (b.cy - b.h / 2) * N, w = b.w * N, h = b.h * N;
+    octx.strokeStyle = col; octx.strokeRect(x, y, w, h);
+    const label = VOC[b.cls] + " " + Math.round(b.score * 100) + "%";
+    const tw = octx.measureText(label).width + 8, ty = y > 18 ? y - 18 : y + 2;
+    octx.fillStyle = col; octx.fillRect(x - 1, ty, tw, 17);
+    octx.fillStyle = "#0f1115"; octx.fillText(label, x + 3, ty + 2);
+    const li = document.createElement("li");
+    li.innerHTML = `<span><span class="sw" style="background:${col}"></span>${VOC[b.cls]}</span><span>${(b.score*100).toFixed(0)}%</span>`;
+    ul.appendChild(li);
+  }
+}
+
+// The render loop: whenever the module asks for a frame (frameResolve set),
+// hand it the current canvas. Runs via rAF so the UI stays responsive.
+function pump() {
+  if (!running) return;
+  if (frameResolve) {
+    const r = frameResolve; frameResolve = null;
+    r();                              // unblocks the module's host_frame
+  }
+  requestAnimationFrame(pump);
+}
+
+async function boot() {
+  msg.textContent = "starting WebGPU…";
+  host = await makeWebGPUHost();
+  if (!host.ok) throw new Error("WebGPU unavailable — try Chrome/Edge 113+ or Safari 18+");
+  msg.textContent = "fetching model (61 MB, one-time)…"; prog.style.display = "block";
+  const res = await fetch(MODEL_URL);
+  if (!res.ok) throw new Error("model fetch failed (" + res.status + ")");
+  const total = +res.headers.get("content-length") || 63480982;
+  const reader = res.body.getReader(); const chunks = []; let got = 0;
+  for (;;) { const { done, value } = await reader.read(); if (done) break; chunks.push(value); got += value.length; prog.value = 100 * got / total; }
+  const model = new Uint8Array(got); let off = 0; for (const c of chunks) { model.set(c, off); off += c.length; }
+  prog.style.display = "none";
+  msg.textContent = "compiling kernels…";
+  const wasm = await (await fetch("/objdet_detect.wasm")).arrayBuffer();
+
+  const env = { ...host.imports,
+    host_blob_size: (k) => BigInt(Number(k) === 0 ? model.length : 0),
+    host_blob_read: (k, dst) => { if (Number(k) === 0) new Uint8Array(memory.buffer).set(model, Number(dst)); return 0n; },
+    // async: suspend until the render loop provides a frame
+    host_frame: host.asyncImport(async (nchwP, ctlP) => {
+      nchwPtr = Number(nchwP); ctlPtr = Number(ctlP);
+      if (!running) return 9n;                       // exit when stopped
+      await new Promise(r => { frameResolve = r; });
+      if (!running) return 9n;
+      new Int32Array(memory.buffer, ctlPtr, 4)[0] = Math.round(confIn.value * 10);  // conf‰
+      fillNCHW(new Float32Array(memory.buffer, nchwPtr, NCHW));
+      env.__t0 = performance.now();
+      return 0n;
+    }),
+    host_result: (ptr, nd) => {
+      const n = Number(nd), d = new Float32Array(memory.buffer, Number(ptr), n * 6), dets = [];
+      for (let k = 0; k < n; k++) { const b = k * 6; dets.push({ cls: Math.round(d[b]), score: d[b+1], cx: d[b+2], cy: d[b+3], w: d[b+4], h: d[b+5] }); }
+      lastResult = { n, dets }; drawBoxes();
+      const ms = Math.round(performance.now() - (env.__t0 || performance.now()));
+      $("stMs").textContent = ms;
+      const now = performance.now(); if (lastT) { const inst = 1000 / (now - lastT); fpsEma = fpsEma ? fpsEma*0.8 + inst*0.2 : inst; $("stFps").textContent = fpsEma.toFixed(1); } lastT = now;
+    },
+    host_status: (code) => { if (Number(code) === 2) msg.textContent = "running on your GPU"; },
+  };
+  const module = await WebAssembly.compile(wasm);
+  const wasi = wasiShim(() => memory);
+  for (const imp of WebAssembly.Module.imports(module)) {
+    if (imp.module === "env" && !(imp.name in env)) env[imp.name] = () => { throw new Error("stub " + imp.name); };
+    if (imp.module === "wasi_snapshot_preview1" && !(imp.name in wasi)) wasi[imp.name] = () => 52;
+  }
+  const instance = await WebAssembly.instantiate(module, { wasi_snapshot_preview1: wasi, env });
+  memory = instance.exports.memory; host.bind(instance);
+  running = true; pump();
+  host.runWithAsyncify(() => instance.exports._start()).catch(e => { if (!(e && typeof e.code === "number")) msg.textContent = "error: " + (e.message || e); });
+}
+
+startBtn.onclick = async () => {
+  if (stream || dropped) { stopAll(); return; }
+  try { stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" }, audio: false }); }
+  catch (e) { msg.textContent = "camera: " + e.message; return; }
+  video.srcObject = stream; await video.play(); ph.style.display = "none";
+  startBtn.textContent = "■ Stop"; startBtn.classList.add("live");
+  if (!host) boot().catch(e => { msg.textContent = "" + (e.message || e); stopAll(); });
+};
+function stopAll() {
+  running = false;
+  if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
+  dropped = null; startBtn.textContent = "▶ Start camera"; startBtn.classList.remove("live");
+  if (frameResolve) { const r = frameResolve; frameResolve = null; r(); }
+}
+
+window.addEventListener("dragover", e => e.preventDefault());
+window.addEventListener("drop", async e => {
+  e.preventDefault(); const f = e.dataTransfer.files && e.dataTransfer.files[0]; if (!f) return;
+  if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
+  dropped = await createImageBitmap(f); ph.style.display = "none";
+  startBtn.textContent = "■ Stop"; startBtn.classList.add("live"); running = true;
+  if (!host) { boot().then(() => pump()).catch(e => { msg.textContent = "" + (e.message || e); stopAll(); }); } else pump();
+});
+
+// minimal WASI: stdout + the handful the module touches.
+function wasiShim(getMem) {
+  const td = new TextDecoder(); const mem = () => new Uint8Array(getMem().buffer); const dv = () => new DataView(getMem().buffer);
+  return {
+    fd_write: (fd, iovs, n, nw) => { const v = dv(); let t = 0; for (let i = 0; i < n; i++) { const p = v.getUint32(iovs+i*8,true), l = v.getUint32(iovs+i*8+4,true); if (l) console.log(td.decode(mem().subarray(p,p+l))); t += l; } v.setUint32(nw, t, true); return 0; },
+    fd_prestat_get: () => 8, fd_prestat_dir_name: () => 8, fd_close: () => 0, fd_seek: () => 0, fd_fdstat_get: (fd,b) => { mem().fill(0,b,b+24); return 0; },
+    environ_sizes_get: (a,b) => { const v = dv(); v.setUint32(a,0,true); v.setUint32(b,0,true); return 0; }, environ_get: () => 0,
+    args_sizes_get: (a,b) => { const v = dv(); v.setUint32(a,1,true); v.setUint32(b,4,true); return 0; }, args_get: (a,b) => { const v = dv(); v.setUint32(a,b,true); mem().set([111,0],b); return 0; },
+    clock_time_get: (id,pr,o) => { dv().setBigUint64(o, BigInt(Math.round(performance.now()*1e6)), true); return 0; },
+    random_get: (p,l) => { crypto.getRandomValues(mem().subarray(Number(p),Number(p)+Number(l))); return 0; },
+    proc_exit: (c) => { throw { code: Number(c) }; }, sched_yield: () => 0, poll_oneoff: () => 52,
+  };
+}
+</script>
+</body>
+</html>
