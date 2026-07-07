@@ -382,7 +382,7 @@ const wasmEng = {
     if (this.engine === "webgpu") {
       const gpu = this.gpuDesc && this.gpuDesc !== "GPU adapter" ? " on " + this.gpuDesc : "";
       wmsg(this.gpuFallback
-        ? "⚠ WebGPU is using a SOFTWARE adapter (" + (this.gpuDesc || "cpu") + ") — expect it to be slow; enable GPU/Vulkan in the browser"
+        ? "⚠ WebGPU is using a SOFTWARE adapter (" + (this.gpuDesc || "cpu") + ") — expect it to be slow; on Linux Chrome enable chrome://flags → Vulkan + Unsafe WebGPU Support and relaunch (see README)"
         : "WebGPU engine ready" + gpu + " — " + this.names.length + " classes");
     } else {
       wmsg("wasm engine ready — " + this.names.length + " classes");

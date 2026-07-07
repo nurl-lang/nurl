@@ -43,6 +43,7 @@
   progress { width: 100%; height: 8px; margin-top: .4rem; }
   footer { padding: 4px 22px 28px; color: #9aa0ab; font-size: .82rem; line-height: 1.6; max-width: 62rem; }
   footer b { color: #d7dae0; }
+  footer code { background: #1a1e26; border: 1px solid #2a2f3a; border-radius: 4px; padding: 0 .3em; color: #c8ccd4; }
 </style>
 </head>
 <body>
@@ -81,6 +82,11 @@
 The frame is drawn to a 416×416 canvas, the tiny-YOLOv2 network (9 convolutions) runs as WGSL compute shaders on
 your GPU through NURL's own ONNX runtime, and the YOLO grid is decoded into boxes — all pure NURL compiled to
 WebAssembly. The 61 MB model is fetched once from the ONNX model zoo and cached.
+<br><br><b>Slow? Check the adapter.</b> The status line above shows which WebGPU adapter the browser handed over.
+If it warns about a <b>software adapter</b> (SwiftShader), the shaders are running on the CPU — on <b>Linux,
+Chrome does this by default</b>. To use the real GPU: open <code>chrome://flags</code>, set
+<b>Vulkan</b> (<code>#enable-vulkan</code>) and <b>Unsafe WebGPU Support</b> (<code>#enable-unsafe-webgpu</code>)
+to <b>Enabled</b>, and relaunch the browser. Windows and macOS use the real GPU out of the box.
 &nbsp;<a href="/" style="color:#7aa2f7">← playground</a></footer>
 
 <script type="module">
@@ -190,7 +196,7 @@ async function boot() {
     host_status: (code) => {
       if (Number(code) !== 2) return;
       if (host.isFallback) {
-        msg.textContent = "⚠ software WebGPU adapter (" + host.describe() + ") — no GPU acceleration; enable Vulkan/GPU in the browser";
+        msg.textContent = "⚠ software WebGPU adapter (" + host.describe() + ") — no GPU acceleration; on Linux Chrome enable chrome://flags → Vulkan + Unsafe WebGPU Support (see below)";
         msg.style.color = "#f66";
       } else {
         const d = host.describe();

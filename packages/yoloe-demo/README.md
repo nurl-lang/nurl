@@ -149,6 +149,26 @@ The **compute** selector offers two client-side engines:
   server GPU / onnxruntime within tolerance. This is the whole network
   running on your GPU with no server round-trip.
 
+### Getting a real GPU adapter (Linux Chrome)
+
+The page shows which adapter the browser actually handed over. If it
+warns about a **software adapter** (SwiftShader), WebGPU is running on
+the CPU — expect wasm-CPU-class frame times (~20 s), not GPU ones. On
+Linux, Chrome does this **by default**: WebGPU falls back to SwiftShader
+unless the Vulkan backend is enabled. To run on the real GPU:
+
+1. open `chrome://flags`,
+2. set **Vulkan** (`#enable-vulkan`) to **Enabled**,
+3. set **Unsafe WebGPU Support** (`#enable-unsafe-webgpu`) to **Enabled**,
+4. relaunch Chrome.
+
+![chrome://flags — Vulkan and Unsafe WebGPU Support set to Enabled](docs/chrome_flags_webgpu.png)
+
+The flags apply to the whole browser (the second one is a development
+convenience flag — Chrome's own warning applies), so consider a separate
+profile if that bothers you. On Windows and macOS WebGPU uses the real
+GPU out of the box and none of this is needed.
+
 Both share one module: `wasm_detect.nu` picks the backend at runtime
 (`host_use_webgpu`); `web/worker.js` supplies the WebGPU host
 (`packages/gpu/web/webgpu.js`) and drives the one async op — the GPU
