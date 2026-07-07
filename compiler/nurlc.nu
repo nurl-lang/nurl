@@ -2267,6 +2267,16 @@
     ( nurl_lex_advance lex )
     : s v ( gen_operand lex syms cg )
     ( die_if_void lex v `logical-not '!'` )
+    // '!' is logical not over b (i1) ONLY. Without this check a non-bool
+    // operand reaches the xor below and emits 'xor i1 <i64 reg>' — an
+    // LLVM-level type error escaping the frontend (classic trigger: an
+    // i-typed binding initialised with T/F, then '! flag').
+    : s ot ( nurl_get_last_type )
+    ? ! ( seq ot `i1` )
+    { : s msg ( nurl_str_cat `operator '!' requires a b operand — got ` ( llvm_to_nurl ot ) )
+        ( die lex ( nurl_str_cat msg `. Declare truth-value bindings as 'b', not 'i' (': ~ b flag F'), or test an integer explicitly ('== x 0')` ) )
+    }
+    {}
     : s res ( nurl_cg_reg cg )
     ( nurl_print `  ` ) ( nurl_print res )
     ( nurl_print ` = xor i1 ` ) ( nurl_print v ) ( nurl_print `, 1\n` )
@@ -2762,7 +2772,13 @@
     { ^ ( gen_logical_and lv left_lbl lex syms cg ) }
     { ? > ( int_width lt ) 0
         { ^ ( gen_bitwise_binary lv lt lex syms cg TT_AMP ) }
-        { : s msg ( nurl_str_cat `operator & requires matching types — got ` ( llvm_to_nurl lt ) )
+        {  // A string left operand with '@' as the NEXT token is an FFI
+            // declaration written inside a function body — name the real
+            // mistake instead of a boolean-AND type error.
+            ? == ( nurl_lex_type lex ) TT_AT
+            { ( die lex `FFI declaration inside a function body — an '&' library import ('& <lib> @ name args → ret') is a top-level form; move it to the top of the file next to the '$' imports` ) }
+            {}
+            : s msg ( nurl_str_cat `operator & requires matching types — got ` ( llvm_to_nurl lt ) )
             ( die lex ( nurl_str_cat msg ` and unknown` ) )
             ^ `error`
         }

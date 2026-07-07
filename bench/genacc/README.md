@@ -18,6 +18,14 @@ attempt — no human edits, no retry loop):
 - **correct** — printed exactly the expected bytes? (compiles-but-wrong = miss)
 - **tokens** — BPE token cost of the emitted program (cl100k / o200k).
 
+Plus one optional condition, `repair.py`: **one round of compiler-feedback
+repair** over an existing solutions directory. Programs that compiled
+first-pass are copied through untouched; each failing program goes back to the
+*same* model with its own code and the compiler's stderr — never the expected
+output — for one corrected attempt, identically in every language. This is the
+measured version of the "diagnostic-first compiler in an agent loop" claim;
+score the `…repair` directory and compare it against its source directory.
+
 The NURL **primer**'s own token cost is reported separately: in the primed
 condition it is prepended to every NURL prompt, so it is a real recurring
 expense and we do not hide it.
@@ -52,9 +60,13 @@ python3 bench/genacc/generate.py --model MODEL_ID --runs 5 --temperature 0.7 --t
 python3 bench/genacc/generate.py --model MODEL_ID --runs 5 --temperature 0.7 \
         --langs nurl --no-primer --tag noprimer
 
-# 3. score + build the combined report
+# 3. (optional) one round of compiler-feedback repair over a condition
+python3 bench/genacc/repair.py MODEL_ID__main
+
+# 4. score + build the combined report
 bench/_venv/bin/python bench/genacc/score.py \
-        MODEL_ID__main MODEL_ID__noprimer --detail --md bench/genacc/RESULTS.md
+        MODEL_ID__main MODEL_ID__mainrepair MODEL_ID__noprimer \
+        --detail --md bench/genacc/RESULTS.md
 ```
 
 `generate.py` writes to `solutions/<model>__<tag>/run<k>/<task>.<ext>`.
@@ -86,6 +98,9 @@ genacc/
 │                       --no-primer / --primer-all (primer framing)
 ├── generate_inception.py  same, for Inception Labs' Mercury (OpenAI-compatible,
 │                       INCEPTION_API_KEY); reuses generate.py's prompts verbatim
+├── repair.py           one round of compiler-stderr feedback over an existing
+│                       solutions dir → solutions/<dir>repair/ + repair_log.json
+│                       (both providers; the model never sees expected output)
 ├── score.py            compiles + runs each program; reports compile / correct /
 │                       tokens, primer cost broken out; --detail, --md; no model
 ├── RESULTS.md          our runs + interpretation (regenerate with score.py)
