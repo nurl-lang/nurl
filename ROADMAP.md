@@ -208,8 +208,15 @@ These convert a hypothesis into measured results.
   ([`bench/genacc/`](bench/genacc/), results in
   [`bench/genacc/RESULTS.md`](bench/genacc/RESULTS.md)). *Result: from a
   single page a model reaches the Python/Rust ballpark on several tasks but
-  not parity; failures are out-of-distribution habits (imports, then
-  grouping-parens, then mutability) that targeted primer cues fix in turn.*
+  not parity first-try; failures are out-of-distribution habits (imports,
+  then grouping-parens, then mutability) that targeted primer cues fix in
+  turn. The follow-up measured the agentic half of the claim: with ONE
+  round of compiler-diagnostic feedback (`bench/genacc/repair.py` — the
+  model sees only its program and the compiler's stderr, never the
+  expected output), Sonnet and Opus reach **exact Python/Rust parity —
+  100% compile, 100% correct** — Haiku reaches 100% compile, and the
+  diffusion model quadruples its score. The diagnostic-first compiler is
+  the load-bearing artifact, and its value is now measured, not asserted.*
 - [ ] **Separate the language claim from the MCP-integration claim** in
   project copy — "an agent can drive the toolchain over MCP" is a tooling
   win, not evidence the *language* is better for LLMs.
