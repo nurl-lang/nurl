@@ -65,6 +65,10 @@ Configuration (call before serving):
 | `( http_app_recover a on )` | **on** | handler panic → 500 instead of a dropped connection |
 | `( http_app_workers a n )` | 0 | 0 = single-threaded keep-alive; n > 0 = worker pool |
 | `( http_app_idle_ms a ms )` | 5000 | keep-alive idle timeout |
+| `( http_app_body_max a bytes )` | 10 MiB | request-body cap (parser answers 413 above it) — raise for upload endpoints |
+| `( http_app_head_max a bytes )` | 8 KiB | request-head cap |
+| `( http_app_max_keepalive a n )` | 1000 | per-connection request reuse cap (0 = close after one) |
+| `( http_app_request_timeout a ms )` | off | per-request wall-clock budget → stock 504 on overrun |
 | `( http_app_quiet a )` | off | suppress the startup banner |
 
 Everything under the facade is the untouched stdlib implementation, in scope
