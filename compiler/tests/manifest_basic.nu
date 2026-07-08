@@ -22,6 +22,20 @@ $ `stdlib/ext/manifest.nu`
         ( nurl_print ( string_data . m license ) )
     } { ( nurl_print `<empty>` ) }
     ( nurl_print `\n` )
+    : i na ( vec_len [String] . m assets )
+    ( nurl_print `assets_count=` ) ( nurl_print ( nurl_str_int na ) ) ( nurl_print `\n` )
+    : ~ i ak 0
+    ~ < ak na {
+        : ?String ao ( vec_get [String] . m assets ak )
+        ?? ao {
+            T a → {
+                ( nurl_print `asset[` ) ( nurl_print ( nurl_str_int ak ) ) ( nurl_print `] ` )
+                ( nurl_print ( string_data a ) ) ( nurl_print `\n` )
+            }
+            F _ → {}
+        }
+        = ak + ak 1
+    }
     : i n ( vec_len [Dep] . m dependencies )
     ( nurl_print `deps_count=` ) ( nurl_print ( nurl_str_int n ) ) ( nurl_print `\n` )
     : ~ i k 0
@@ -48,6 +62,9 @@ name = "demo-app"
 version = "0.1.0"
 description = "Demo of the manifest parser"
 license = "MIT OR Apache-2.0"
+
+[install]
+assets = ["static", "web/dashboard"]
 
 [dependencies]
 http-router = { path = "../router", version = "0.2.0" }

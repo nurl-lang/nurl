@@ -1676,6 +1676,116 @@ $ `stdlib/std/bytes.nu`
 // Resolve its deps in-process, build the entry point, and install the
 // binary into bindir/name. Cross-platform: uses fs primitives + a
 // shell-free driver spawn, no POSIX coreutils.
+// Recursively copy a file or directory tree from `src` to `dst`, creating
+// parent directories as needed. Returns 0 on success, 1 on any failure (or
+// if `src` does not exist). Used to stage a tool's declared assets into
+// $NURL_HOME/share/<name>/.
+@ __copy_tree s src s dst → i {
+    : i t ( nurl_path_type src )
+    ? == t 1 {
+        : String parent ( path_dirname dst )
+        ?? ( dir_create_all ( string_data parent ) ) { T _ → {} F _ → {} }
+        ( string_free parent )
+        ?? ( fs_copy_file src dst ) { T _ → { ^ 0 } F _ → { ^ 1 } }
+    } {}
+    ? == t 2 {
+        : ~ i rc 0
+        ?? ( dir_create_all dst ) { T _ → {} F _ → { = rc 1 } }
+        ? != rc 0 { ^ rc } {}
+        : !( Vec String ) IoErr lr ( dir_list src )
+        ?? lr {
+            F _ → { = rc 1 }
+            T entries → {
+                : i n ( vec_len [String] entries )
+                : ~ i k 0
+                ~ < k n {
+                    : ?String eo ( vec_get [String] entries k )
+                    ?? eo {
+                        T nm → {
+                            : String s2 ( path_join src ( string_data nm ) )
+                            : String d2 ( path_join dst ( string_data nm ) )
+                            ? != 0 ( __copy_tree ( string_data s2 ) ( string_data d2 ) ) { = rc 1 } {}
+                            ( string_free s2 )
+                            ( string_free d2 )
+                            ( string_free nm )
+                        }
+                        F _ → {}
+                    }
+                    = k + k 1
+                }
+                ( vec_free [String] entries )
+            }
+        }
+        ^ rc
+    } {}
+    // Missing source or unsupported node type.
+    ^ 1
+}
+
+// Stage a tool's declared `[install].assets` into $NURL_HOME/share/<name>/,
+// preserving each path (so `static` lands at `<prefix>/share/<name>/static`,
+// which a relocatable tool finds via `<exe-dir>/../share/<name>/…`). The
+// share dir is a sibling of `bindir`. Cleared first so an upgrade never
+// leaves a stale file behind. Returns 0 on success (including nothing to
+// do), 1 if any asset path is missing or fails to copy.
+// An asset path is safe to stage only if it stays inside the package: no
+// absolute paths (a leading `/`) and no `..` anywhere (which `path_join`
+// would happily let escape the share dir). Registry manifests are untrusted
+// input, so reject rather than trust.
+@ __asset_path_safe s a → b {
+    : i n ( nurl_str_len a )
+    ? == n 0 { ^ F } {}
+    ? == ( nurl_str_get a 0 ) 47 { ^ F } {}
+    : ~ i k 0
+    ~ < k - n 1 {
+        ? & == ( nurl_str_get a k ) 46 == ( nurl_str_get a + k 1 ) 46 { ^ F } {}
+        = k + k 1
+    }
+    ^ T
+}
+
+@ __install_assets Manifest m s pkgdir s name s bindir → i {
+    : i na ( vec_len [String] . m assets )
+    ? == na 0 { ^ 0 } {}
+    : String prefix ( path_dirname bindir )
+    : String sharedir ( path_join ( string_data prefix ) `share` )
+    ( string_free prefix )
+    : String pkgshare ( path_join ( string_data sharedir ) name )
+    ( string_free sharedir )
+    ?? ( dir_remove_all ( string_data pkgshare ) ) { T _ → {} F _ → {} }
+    : ~ i rc 0
+    : ~ i k 0
+    ~ < k na {
+        : ?String ao ( vec_get [String] . m assets k )
+        ?? ao {
+            T a → {
+                ? ! ( __asset_path_safe ( string_data a ) ) {
+                    ( nurl_eprint `nurlpkg: unsafe asset path rejected: ` )
+                    ( nurl_eprintln ( string_data a ) )
+                    = rc 1
+                } {
+                    : String srcp ( path_join pkgdir ( string_data a ) )
+                    : String dstp ( path_join ( string_data pkgshare ) ( string_data a ) )
+                    ? != 0 ( __copy_tree ( string_data srcp ) ( string_data dstp ) ) {
+                        ( nurl_eprint `nurlpkg: asset not staged: ` )
+                        ( nurl_eprintln ( string_data a ) )
+                        = rc 1
+                    } {}
+                    ( string_free srcp )
+                    ( string_free dstp )
+                }
+            }
+            F _ → {}
+        }
+        = k + k 1
+    }
+    ? == rc 0 {
+        ( nurl_print `Assets → ` ) ( nurl_print ( string_data pkgshare ) ) ( nurl_print `\n` )
+    } {}
+    ( string_free pkgshare )
+    ^ rc
+}
+
 @ __tool_build_and_install s name s pkgdir s binsrc → i {
     : String nurl ( __env_or `NURL` `nurl` )
     : String bindir ( __tool_bindir )
@@ -1742,6 +1852,19 @@ $ `stdlib/std/bytes.nu`
                 } {}
                 ( nurl_print `Installed ` ) ( nurl_print name )
                 ( nurl_print ` → ` ) ( nurl_print ( string_data dest ) ) ( nurl_print `\n` )
+                // Stage the package's declared runtime assets ([install].assets)
+                // into <prefix>/share/<name>/ so the tool finds them relative to
+                // its own executable (a registry install ships data, not just a
+                // binary). A missing/failed asset fails the install.
+                : String ampath ( path_join pkgdir `nurl.toml` )
+                ?? ( manifest_load ( string_data ampath ) ) {
+                    T am → {
+                        ? != 0 ( __install_assets am pkgdir name ( string_data bindir ) ) { = rc 1 } {}
+                        ( manifest_free am )
+                    }
+                    F _ → {}
+                }
+                ( string_free ampath )
                 // Show the package's [hints].postinstall message, if any.
                 ( __print_postinstall pkgdir )
             }
