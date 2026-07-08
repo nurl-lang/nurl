@@ -710,6 +710,20 @@ $ `stdlib/core/vec.nu`
     ^ ( sqlite3_last_insert_rowid db_ptr )
 }
 
+// Rows changed by the most recent INSERT/UPDATE/DELETE on this
+// connection. `sqlite_exec` already returns this for one-shot SQL; this
+// is the equivalent for statements run through prepare/step (where the
+// count was previously unreachable).
+@ sqlite_changes Database db → i {
+    : s rp . db raw
+    : i raw # i rp
+    ? == raw 0 { ^ 0 } {}
+    : s h # s raw
+    : s db_ptr # s ( nurl_peek h 0 )
+    ? == # i db_ptr 0 { ^ 0 } {}
+    ^ ( sqlite3_changes db_ptr )
+}
+
 // ── Hardening for untrusted SQL / DB (§13 / §14) ──────────────────
 
 // SQLITE_DBCONFIG_DEFENSIVE: refuse SQL that can corrupt the DB (writes
