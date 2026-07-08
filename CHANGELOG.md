@@ -6,7 +6,17 @@ are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.11.2] — 2026-07-08
+
+An **infrastructure-dogfood** release. The package registry itself is now a
+NURL program — `packages/registry` re-implements reg.nurl-lang.org in pure
+NURL on three of its own registry packages and is proven end-to-end against
+the real `nurlpkg` client. Around it: the installed-tools story hardened
+(embedded assets, an `[install] assets` mechanism, dependency-range and
+installer fixes — a registry install of a tool now *just works*), the
+WebGPU backend got 2–4× faster, the generation-accuracy study measured the
+repair loop (one diagnostic round → exact Python/Rust parity), and the
+LSan pass over the new registry found a long-standing compiler leak.
 
 ### Added
 
@@ -27,9 +37,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   34 socketless router-level wire tests (ASan/LSan-clean) and an
   end-to-end script that drives the real `nurlpkg publish → search →
   install → yank` against it, dependency resolution included.
+- **`nurlpkg`: `[install] assets` — runtime data files for installed
+  tools.** A registry install used to ship only the compiled binary, so a
+  tool with data files (anomaly's dashboard HTML) silently lost them. The
+  manifest gains an optional `[install] assets = [...]` array; `nurlpkg
+  install` stages each entry into `<prefix>/share/<name>/` (the
+  relocatable `<exe-dir>/../share/<name>` convention tools already probe),
+  clearing it first so upgrades leave no stale files. Asset paths are
+  validated (no absolute, no `..`) — registry manifests are untrusted
+  input. `anomaly` 0.3.6 declares `assets = ["static"]`, so a
+  registry-installed `anomaly serve` now serves its dashboard with no
+  `--webroot` flag.
+- **`bench/genacc`: the repair loop, measured** — the v3 report's missing
+  half. `repair.py` gives a failing generated program ONE round of
+  compiler-stderr feedback (the model sees only its own code and the
+  diagnostic, never the expected output): **Sonnet 80→100/100 and Opus
+  70→100/100 — exact Python/Rust parity**; Haiku reaches 100% compile; the
+  mercury-2 diffusion model quadruples its score. Auditing every v3
+  failure also closed two frontend holes, now hard errors with fix hints:
+  `!` on a non-`b` operand (used to emit invalid `xor` IR and surface a
+  raw LLVM error) and an `&` FFI declaration written inside a function
+  body (used to die with a misleading type-mismatch message).
 - **`stdlib/ext/sqlite.nu`: `sqlite_changes`** — rows changed by the most
   recent INSERT/UPDATE/DELETE on the connection; previously unreachable
   for statements run through prepare/step (only `sqlite_exec` returned it).
+- **Docs: getting a real WebGPU adapter on Linux Chrome** — the flag
+  combinations that turn SwiftShader into the actual GPU.
+
+### Performance
+
+- **`gpu` WebGPU backend: 2–4× faster WGSL inference.** Four per-launch /
+  per-element taxes removed: kernel launches now accumulate into a single
+  command encoder submitted only when results must be observed (a browser
+  pays an IPC round-trip per `queue.submit`; a YOLOE frame paid it ~380×);
+  `conv2d` computes 4×2 outputs per invocation with constant-unrolled
+  k3s1/k3s2/k1s1 fast lanes (66 → 269 GFLOPS on the yolov8s shape mix);
+  the mask-proto `convtranspose2d` decodes its single contributing tap
+  from output parity instead of scanning the kernel window; bind groups
+  are cached.
 
 ### Fixed
 
@@ -46,6 +91,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   nothing escapes a void return, so a stale last-ident can no longer cancel
   a Drop-value's drop there. Lock: `compiler/tests/ret_call_arg_drop.nu`;
   bootstrap refreshed (the fix reclaims buffers inside the compiler itself).
+- **Compiler: string literals are no longer size-capped by the C stack.**
+  `encode_str` — the LLVM-IR `c"…"` encoder — recursed once per character,
+  so a literal past ~124 KB (≈48 KB under a `zig -O2 -flto` release build)
+  was a stack overflow, plus two heap allocations per character. Rewritten
+  iteratively with a single worst-case output buffer; literal size is now
+  bounded by memory only (verified through 2 MB). Lock:
+  `big_string_literal.nu` (160 KB literal, position-weighted checksum).
+- **`net`: a large response no longer aborts because the client reads it
+  slowly.** `nurl_tcp_set_timeout` programs both `SO_RCVTIMEO` and
+  `SO_SNDTIMEO`; during a big write to a slow-but-alive client one blocking
+  `send()` window can pass with the socket buffer still full, and that
+  `EAGAIN` was treated as fatal — a phone fetching a 54 MB model over LAN
+  TLS died mid-body while the server logged a 200. A send timeout is only a
+  dead peer when there is NO progress across consecutive windows:
+  zero-progress send timeouts now retry up to twice (blocking sockets
+  only — the fiber reactor's park-on-EAGAIN contract is untouched), and
+  any successful write resets the allowance. A failed response write is
+  also now logged with its `NetErr` name instead of vanishing.
 - **`packages/http` 0.2.0** — the `HttpApp` facade now exposes the full
   server knob set (`http_app_body_max` / `head_max` / `max_keepalive` /
   `request_timeout` over `server_new_complete`), and two per-request leaks
@@ -53,6 +116,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the success path, and the dispatch/middleware closure envs released after
   the server returns. The same placeholder leak is fixed in the playground
   server (`nurlapi/main.nu`).
+- **Installed tools now carry their assets embedded.** `nurlpkg install`
+  ships only the built binary, so relative asset paths can never resolve
+  on the host: `yoloe` 0.6.2/0.6.3 compile the 512 KB CLIP BPE merge table
+  into the binary (`tokenizer_load_builtin`; emitted as ~32 KB chunks so
+  the RELEASED v0.11.1 compiler — which still has the recursive string
+  encoder — can build the package too), and `yoloe-demo` 0.2.2 embeds its
+  page template the same way. `--merges FILE` remains as an override.
+- **Installers no longer wipe registry credentials on reinstall.**
+  `get-nurl.sh` / `get-nurl.ps1` deleted the whole prefix before unpacking
+  — including `$NURL_HOME/credentials`, silently logging the user out of
+  the registry on every toolchain upgrade. User data now survives.
+- **Package dependency ranges un-broke registry installs.** Several
+  manifests had drifted behind their published dependencies (caret on
+  `0.x` locks the minor, so e.g. `onnx ^0.4.2` resolved a version missing
+  the ops the code was built against, and `anomaly` 0.3.4's
+  `gpu ^0.4` + `gpukit ^0.2` pair was unsatisfiable) — local path-deps hid
+  all of it. Versions bumped and ranges synced (`anomaly` 0.3.5).
 
 ## [0.11.1] — 2026-07-07
 

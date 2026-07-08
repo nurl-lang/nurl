@@ -7,7 +7,7 @@ Anything marked done here has a regression test in
 [`compiler/tests/`](compiler/tests/) and is covered by the bootstrap fixed
 point.
 
-_Last reviewed: 2026-07-07 · Current release: **0.11.1** · Language: **Grammar
+_Last reviewed: 2026-07-08 · Current release: **0.11.2** · Language: **Grammar
 v2.3** ([`spec/grammar.ebnf`](spec/grammar.ebnf))._
 
 ---
@@ -170,6 +170,17 @@ platform-specific shims.
   `onnx` runtime, `objdet`, `yoloe`, `iforest`, `anomaly`), distributed
   compute (`swarm`, `swarm-mcp`), web (`template` HTML templating, `http`),
   and application scaffolding (`cli`, `cas`, `wasmbuilder`, `nurl-mcp`).
+  Installed tools carry runtime data via the manifest's `[install] assets`
+  mechanism (staged into `<prefix>/share/<name>/`).
+- **The registry itself is a NURL program** (`packages/registry`): a
+  self-hostable server speaking the exact `nurlpkg` wire protocol —
+  bearer-authenticated publish with server-side checksums, name ownership
+  and version immutability, yank/revoke, search, and a server-rendered
+  catalog that renders each package's README straight from its published
+  tarball. SQLite as the single source of truth; built on the `http`,
+  `template` and `md2html` packages and proven end-to-end against the real
+  client. (The public reg.nurl-lang.org cutover from the Cloudflare Worker
+  is pending deployment.)
 
 ---
 
