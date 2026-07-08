@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.5
+
+- Fix a broken registry install. 0.3.4 bumped the `gpu` requirement to
+  `^0.4` but left `gpukit` pinned at `^0.2`; since `^0.2` selects gpukit
+  0.2.0 (which itself requires `gpu 0.2`), the two constraints could not
+  share a `gpu` version and resolution failed with `ResolveConflict`.
+  Bumps `gpukit` to `^0.3` (gpukit 0.3.2 requires `gpu ^0.4`), so the whole
+  graph agrees on `gpu 0.4.x`. No code or behaviour change.
+
 ## 0.3.3
 
 - Internal: the GPU bulk-scoring path now runs on the [`gpukit`](../gpukit)
