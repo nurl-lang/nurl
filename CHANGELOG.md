@@ -6,6 +6,54 @@ are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **`packages/registry` 0.1.0 — the NURL package registry, served by NURL
+  itself (critic C8).** A self-hostable registry speaking exactly the wire
+  protocol `nurlpkg` drives: `/index/<name>.json` + content-addressed
+  tarballs on the read side; bearer-authenticated `POST /api/v1/publish`
+  (server-side SHA-256, first-publisher name ownership, version
+  immutability), yank/unyank/revoke on the write side; search/stats JSON;
+  and a server-rendered catalog UI whose package pages render the README
+  straight out of the published tarball (relative image links rewritten
+  onto a version-pinned, CSP-sandboxed `/files/` asset route). SQLite is
+  the single source of truth — the index JSON is rendered from it on
+  demand, removing the dual-write consistency hazard of the Cloudflare
+  Worker it replaces. Tokens are peppered-SHA-256 hashes at rest, minted
+  locally (`registry token new`) or via the config-gated GitHub OAuth
+  flow. Built on the `http`, `template` and `md2html` packages. Proven by
+  34 socketless router-level wire tests (ASan/LSan-clean) and an
+  end-to-end script that drives the real `nurlpkg publish → search →
+  install → yank` against it, dependency resolution included.
+- **`stdlib/ext/sqlite.nu`: `sqlite_changes`** — rows changed by the most
+  recent INSERT/UPDATE/DELETE on the connection; previously unreachable
+  for statements run through prepare/step (only `sqlite_exec` returned it).
+
+### Fixed
+
+- **Compiler: `^ ( f … x … )` no longer cancels the argument's auto-drop.**
+  gen_ret derived the escaping binding from the last-identifier channel,
+  which for a direct-call return holds the call's last *argument* — so
+  returning a call that takes an owned string / `% Drop` value / owned-field
+  struct as an argument leaked it on every such return (the callee never
+  takes ownership of its arguments). The skip now keys on whether the
+  returned value can alias the binding: bare-identifier returns keep the
+  ownership transfer, call returns drop their arguments unless the callee
+  is summarised ret-borrow (then the skip stays — dropping the source would
+  dangle the returned alias). The `→ v` fall-off path gets the same guard:
+  nothing escapes a void return, so a stale last-ident can no longer cancel
+  a Drop-value's drop there. Lock: `compiler/tests/ret_call_arg_drop.nu`;
+  bootstrap refreshed (the fix reclaims buffers inside the compiler itself).
+- **`packages/http` 0.2.0** — the `HttpApp` facade now exposes the full
+  server knob set (`http_app_body_max` / `head_max` / `max_keepalive` /
+  `request_timeout` over `server_new_complete`), and two per-request leaks
+  are gone: the pre-allocated panic-500 placeholder response now freed on
+  the success path, and the dispatch/middleware closure envs released after
+  the server returns. The same placeholder leak is fixed in the playground
+  server (`nurlapi/main.nu`).
+
 ## [0.11.1] — 2026-07-07
 
 A **neural-nets-in-the-browser** release. Real object detection and
