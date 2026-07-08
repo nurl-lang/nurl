@@ -828,7 +828,16 @@ $ `stdlib/ext/http_response.nu`
                             T _ → {
                                 ? should_close { = done T } {}
                             }
-                            F _ → { = done T }
+                            F we → {
+                                // A failed response write is invisible to the
+                                // handler (it already returned its status) —
+                                // surface it, or a client-side "failed to
+                                // fetch" has nothing to correlate against.
+                                ( nurl_eprint `http: response write failed (` )
+                                ( nurl_eprint ( net_err_name we ) )
+                                ( nurl_eprintln `) — closing connection` )
+                                = done T
+                            }
                         }
                     }
                 } {
