@@ -4770,10 +4770,17 @@ s combined_stdout s combined_stderr → v {
 @ __gated_handle Router r Semaphore gate HttpRequest req → HttpResponse {
     ? ( __is_compile_route req ) {
         ( sem_acquire gate )
-        : ~ HttpResponse resp ( response_text 500 `internal error: handler panicked\n` )
+        // `placeholder` is returned only on panic; on success the closure
+        // overwrote `resp`, so free the placeholder there (it leaked one
+        // response per compile request before).
+        : HttpResponse placeholder ( response_text 500 `internal error: handler panicked\n` )
+        : ~ HttpResponse resp placeholder
         : !v PanicInfo pr ( recover \ → v { = resp ( router_handle r req ) } )
         ( sem_release gate )
-        ?? pr { T _ → {} F p → { ( panic_info_free p ) } }
+        ?? pr {
+            T _ → { ( http_response_free placeholder ) }
+            F p → { ( panic_info_free p ) }
+        }
         ^ resp
     } {
         ^ ( router_handle r req )

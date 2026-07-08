@@ -2212,7 +2212,18 @@
     // Ownership transfers only when the return type is itself a slice AND the
     // returned expression resolved to a simple identifier load.
     : s ret_ident ( nurl_sym_get syms `__last_ident_name__` )
-    : s skip ? & ( mem_is_slice_ty lt ) ( str_contains_word ( nurl_sym_get syms `__owned_slices__` ) ret_ident )
+    // `^ ( f … x … )`: the returned value is the CALL's result — the
+    // argument scan merely left `x` in __last_ident_name__, and the
+    // callee does NOT take ownership of its arguments, so cancelling
+    // x's scheduled drop here would leak it on every such return. The
+    // one aliasing shape — a callee that returns a borrow of its
+    // argument (ret_borrow summary / vec_get*) — keeps the skip:
+    // dropping the source would dangle the returned alias
+    // (conservative: worst case leak, never UAF).
+    : b ret_arg_alias | ! ret_is_direct_call
+    != 0 ( nurl_str_len ( nurl_sym_get syms `__last_value_borrow__` ) )
+    : s skip ? & & ( mem_is_slice_ty lt ) ( str_contains_word ( nurl_sym_get syms `__owned_slices__` ) ret_ident )
+    ret_arg_alias
     ret_ident
     ``
     // Phase 2B: owned-string escape analysis on the returned identifier.
@@ -2220,7 +2231,8 @@
     : ~ s skip_user_ptr ``
     ? != 0 g_auto_drop_strings
     { : s rid_ptr ( nurl_sym_get syms ( nurl_str_cat ret_ident `__ptr` ) )
-        = skip_str_ptr ? & ( seq ( nurl_llty lt ) `i8*` ) ( str_contains_word ( nurl_sym_get syms `__owned_strings__` ) rid_ptr )
+        = skip_str_ptr ? & & ( seq ( nurl_llty lt ) `i8*` ) ( str_contains_word ( nurl_sym_get syms `__owned_strings__` ) rid_ptr )
+        ret_arg_alias
         rid_ptr
         ``
         ? != 0 ( nurl_str_len skip_str_ptr )
@@ -2236,17 +2248,21 @@
         ( seq ( nurl_sym_get syms `__last_call_ret_owned__` ) `str` )
         { ( nurl_sym_def syms `__fn_ret_str_owned__` `1` ) }
         {}
-        = skip_user_ptr ? ( str_contains_word ( nurl_sym_get syms `__user_drops__` ) rid_ptr )
+        = skip_user_ptr ? & ( str_contains_word ( nurl_sym_get syms `__user_drops__` ) rid_ptr )
+        ret_arg_alias
         rid_ptr
         ``
     }
     {}
     // A4c: owned-struct-field ownership transfer. Compute the returned
     // struct binding to skip-drop (and publish `__fn_ret_struct_owned__`
-    // for the caller to re-register).
+    // for the caller to re-register). The binding path only applies
+    // when the returned value can BE that binding (see ret_arg_alias) —
+    // a direct call's fresh struct rides __last_call_ret_struct_fields__.
+    : s xfer_ident ? ret_arg_alias ret_ident ``
     : ~ s skip_struct_ptr ``
     ? != 0 g_auto_drop_strings
-    { = skip_struct_ptr ( mem_ret_struct_transfer syms lt ret_ident ) }
+    { = skip_struct_ptr ( mem_ret_struct_transfer syms lt xfer_ident ) }
     {}
     ? != 0 ( nurl_str_len skip )
     { ( nurl_sym_def syms `__fn_ret_owned__` `1` ) }
@@ -14196,7 +14212,11 @@
         ? != 0 ( nurl_str_len skip_str_ptr )
         { ( nurl_sym_def syms `__fn_ret_str_owned__` `1` ) }
         {}
-        = skip_user_ptr ? ( str_contains_word ( nurl_sym_get syms `__user_drops__` ) rid_ptr )
+        // A void fall-off returns nothing — no binding can escape
+        // through it, so a stale __last_ident_name__ (e.g. the last
+        // call's argument) must not cancel a Drop-value's drop here.
+        = skip_user_ptr ? & ! ( seq ret_ty `void` )
+        ( str_contains_word ( nurl_sym_get syms `__user_drops__` ) rid_ptr )
         rid_ptr
         ``
     }

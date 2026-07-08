@@ -40,14 +40,18 @@ $ `stdlib/ext/http_static.nu`
 
 : HttpApp {
     Router router
-    i idle_ms          // keep-alive idle timeout (ms) for server_new_with_timeout
-    i workers          // 0 → single-threaded server_run; >0 → server_run_pool(n)
-    b recover_panics   // wrap dispatch in `recover`, turning a panic into 500
-    b log_requests     // access log (method/path/status) to stderr
-    b cors             // permissive CORS + OPTIONS preflight
-    b quiet            // suppress the "serving on host:port" banner
-    b has_static       // static fallback enabled
-    String webroot     // directory served for unmatched GET/HEAD when has_static
+    i idle_ms  // keep-alive idle timeout (ms) for the server
+    i workers  // 0 → single-threaded server_run; >0 → server_run_pool(n)
+    b recover_panics  // wrap dispatch in `recover`, turning a panic into 500
+    b log_requests  // access log (method/path/status) to stderr
+    b cors  // permissive CORS + OPTIONS preflight
+    b quiet  // suppress the "serving on host:port" banner
+    b has_static  // static fallback enabled
+    String webroot  // directory served for unmatched GET/HEAD when has_static
+    i body_max  // request body byte cap; -1 → stdlib default (10 MiB)
+    i head_max  // request head byte cap; -1 → stdlib default (8 KiB)
+    i max_keepalive  // per-conn request reuse cap; -1 → server default (0 = close after one)
+    i req_timeout_ms  // per-request wall-clock budget; -1 → server default (0 = disabled)
 }
 
 // ── Construction / teardown ───────────────────────────────────────────
@@ -63,10 +67,14 @@ $ `stdlib/ext/http_static.nu`
     = . a quiet F
     = . a has_static F
     = . a webroot ( string_new )
+    = . a body_max -1
+    = . a head_max -1
+    = . a max_keepalive -1
+    = . a req_timeout_ms -1
     ^ a
 }
 
-@ http_app_free *HttpApp a → v {
+@ http_app_free * HttpApp a → v {
     ( router_free . a router )
     ( string_free . a webroot )
     ( nurl_free a )
@@ -75,27 +83,42 @@ $ `stdlib/ext/http_static.nu`
 // ── Configuration (each returns v; call before http_app_listen) ───────────
 
 // Serve on a worker pool of `n` threads (0 = single-threaded keep-alive).
-@ http_app_workers *HttpApp a i n → v { = . a workers n }
+@ http_app_workers * HttpApp a i n → v { = . a workers n }
 
 // Keep-alive idle timeout in milliseconds (0 = server default).
-@ http_app_idle_ms *HttpApp a i ms → v { = . a idle_ms ms }
+@ http_app_idle_ms * HttpApp a i ms → v { = . a idle_ms ms }
+
+// Request body byte cap (parser rejects larger with 413). The stdlib
+// default is 10 MiB — raise it for upload endpoints, lower it for
+// API-only servers.
+@ http_app_body_max * HttpApp a i bytes → v { = . a body_max bytes }
+
+// Request head byte cap (default 8 KiB).
+@ http_app_head_max * HttpApp a i bytes → v { = . a head_max bytes }
+
+// Per-connection keep-alive request cap (0 = close after one request).
+@ http_app_max_keepalive * HttpApp a i n → v { = . a max_keepalive n }
+
+// Per-request wall-clock budget in ms; overrun sends a stock 504 and
+// closes the connection (0 = disabled).
+@ http_app_request_timeout * HttpApp a i ms → v { = . a req_timeout_ms ms }
 
 // Toggle panic→500 recovery (on by default). A handler that panics then
 // yields a 500 instead of tearing down the connection loop.
-@ http_app_recover *HttpApp a b on → v { = . a recover_panics on }
+@ http_app_recover * HttpApp a b on → v { = . a recover_panics on }
 
 // Log every request (method path → status) to stderr.
-@ http_app_logging *HttpApp a → v { = . a log_requests T }
+@ http_app_logging * HttpApp a → v { = . a log_requests T }
 
 // Permissive CORS: reflect `*`, answer OPTIONS preflight with 204.
-@ http_app_cors *HttpApp a → v { = . a cors T }
+@ http_app_cors * HttpApp a → v { = . a cors T }
 
 // Suppress the startup banner on stderr.
-@ http_app_quiet *HttpApp a → v { = . a quiet T }
+@ http_app_quiet * HttpApp a → v { = . a quiet T }
 
 // Serve files from `dir` for any GET/HEAD the router leaves unmatched
 // (404). Path traversal is rejected by the underlying serve_static.
-@ http_app_static_dir *HttpApp a s dir → v {
+@ http_app_static_dir * HttpApp a s dir → v {
     ( string_free . a webroot )
     = . a webroot ( string_from dir )
     = . a has_static T
@@ -103,33 +126,38 @@ $ `stdlib/ext/http_static.nu`
 
 // ── Route registration (thin over the router) ─────────────────────────
 
-@ http_app_get *HttpApp a s pattern ( @ HttpResponse HttpRequest Params ) handler → v {
+@ http_app_get * HttpApp a s pattern ( @ HttpResponse HttpRequest Params ) handler → v {
     ( router_get . a router pattern handler )
 }
-@ http_app_post *HttpApp a s pattern ( @ HttpResponse HttpRequest Params ) handler → v {
+
+@ http_app_post * HttpApp a s pattern ( @ HttpResponse HttpRequest Params ) handler → v {
     ( router_post . a router pattern handler )
 }
-@ http_app_put *HttpApp a s pattern ( @ HttpResponse HttpRequest Params ) handler → v {
+
+@ http_app_put * HttpApp a s pattern ( @ HttpResponse HttpRequest Params ) handler → v {
     ( router_put . a router pattern handler )
 }
-@ http_app_patch *HttpApp a s pattern ( @ HttpResponse HttpRequest Params ) handler → v {
+
+@ http_app_patch * HttpApp a s pattern ( @ HttpResponse HttpRequest Params ) handler → v {
     ( router_patch . a router pattern handler )
 }
-@ http_app_delete *HttpApp a s pattern ( @ HttpResponse HttpRequest Params ) handler → v {
+
+@ http_app_delete * HttpApp a s pattern ( @ HttpResponse HttpRequest Params ) handler → v {
     ( router_delete . a router pattern handler )
 }
-@ http_app_route *HttpApp a s method s pattern ( @ HttpResponse HttpRequest Params ) handler → v {
+
+@ http_app_route * HttpApp a s method s pattern ( @ HttpResponse HttpRequest Params ) handler → v {
     ( router_any . a router method pattern handler )
 }
 
 // The embedded router, for advanced use (mounting sub-routers, tests).
-@ http_app_router *HttpApp a → Router { ^ . a router }
+@ http_app_router * HttpApp a → Router { ^ . a router }
 
 // Adopt a pre-built router as the app's router, freeing the default empty
 // one. For servers that assemble their routes elsewhere (e.g. a
 // `*_service_router → Router` that stays testable without a socket): build
 // the router, hand it to the app, and let the facade own the serving glue.
-@ http_app_use_router *HttpApp a Router r → v {
+@ http_app_use_router * HttpApp a Router r → v {
     ( router_free . a router )
     = . a router r
 }
@@ -145,7 +173,7 @@ $ `stdlib/ext/http_static.nu`
 
 // Router first; on a 404 for GET/HEAD with static enabled, fall through to
 // file serving (which itself returns a clean 404 when the file is absent).
-@ __httpapp_route_and_static *HttpApp a HttpRequest req → HttpResponse {
+@ __httpapp_route_and_static * HttpApp a HttpRequest req → HttpResponse {
     : HttpResponse resp ( router_handle . a router req )
     ? & . a has_static & == 404 . resp status ( __httpapp_is_get_or_head req ) {
         ( http_response_free resp )
@@ -156,11 +184,19 @@ $ `stdlib/ext/http_static.nu`
 
 // Optional panic→500 wrapper. `recover` sits directly in this top-level
 // function body (not inside another closure), the shape the runtime wants.
-@ __httpapp_dispatch *HttpApp a HttpRequest req → HttpResponse {
+@ __httpapp_dispatch * HttpApp a HttpRequest req → HttpResponse {
     ? . a recover_panics {
-        : ~ HttpResponse resp ( response_text 500 `internal error: handler panicked\n` )
+        // `placeholder` is returned only when the handler panics. On
+        // the success path the closure overwrites `resp`, so the
+        // placeholder must be freed there or every request leaks it.
+        // (recover itself frees the closure's env — panic.nu contract.)
+        : HttpResponse placeholder ( response_text 500 `internal error: handler panicked\n` )
+        : ~ HttpResponse resp placeholder
         : !v PanicInfo pr ( recover \ → v { = resp ( __httpapp_route_and_static a req ) } )
-        ?? pr { T _ → {} F p → { ( panic_info_free p ) } }
+        ?? pr {
+            T _ → { ( http_response_free placeholder ) }
+            F p → { ( panic_info_free p ) }
+        }
         ^ resp
     } {
         ^ ( __httpapp_route_and_static a req )
@@ -169,7 +205,7 @@ $ `stdlib/ext/http_static.nu`
 
 // ── Serving ───────────────────────────────────────────────────────────
 
-@ __httpapp_banner *HttpApp a s scheme s host i port → v {
+@ __httpapp_banner * HttpApp a s scheme s host i port → v {
     ? . a quiet { ^ v } {}
     ( nurl_eprint `http: serving ` )
     ( nurl_eprint scheme )
@@ -182,7 +218,7 @@ $ `stdlib/ext/http_static.nu`
     ( string_free ps )
 }
 
-@ __httpapp_run_result !v NetErr rr → i {
+@ __httpapp_run_result ! v NetErr rr → i {
     ?? rr {
         T _ → { ^ 0 }
         F e → {
@@ -193,14 +229,44 @@ $ `stdlib/ext/http_static.nu`
     }
 }
 
+// Resolve the app's limit knobs (-1 = keep the stdlib default) into a
+// concrete HttpLimits for the server.
+@ __httpapp_limits * HttpApp a → HttpLimits {
+    : ~ i bm . a body_max
+    ? < bm 0 { = bm ( http_req_body_default_max ) } {}
+    : ~ i hm . a head_max
+    ? < hm 0 { = hm ( http_req_head_max_bytes ) } {}
+    ^ @ HttpLimits { hm ( http_req_header_max_count ) bm }
+}
+
 // Drive a bound listener: shutdown signal + composed handler + keep-alive
 // loop (pool when workers>0). MOVES `listener`; stops the server on return.
-@ __httpapp_serve *HttpApp a TcpListener listener s scheme s host i port → i {
+@ __httpapp_serve * HttpApp a TcpListener listener s scheme s host i port → i {
     ( signal_install_shutdown listener )
-    : ~ ( @ HttpResponse HttpRequest ) base \ HttpRequest req → HttpResponse { ^ ( __httpapp_dispatch a req ) }
-    ? . a cors { = base ( with_cors_default base ) } {}
-    ? . a log_requests { = base ( with_log_requests base ) } {}
-    : HttpServer srv ( server_new_with_timeout listener base . a idle_ms )
+    // Each middleware layer is held in its own binding so every closure
+    // env can be released after the server returns (closures have no
+    // drop-glue — envs are manual).
+    : ( @ HttpResponse HttpRequest ) disp \ HttpRequest req → HttpResponse { ^ ( __httpapp_dispatch a req ) }
+    : ~ ( @ HttpResponse HttpRequest ) base disp
+    : ~ ( @ HttpResponse HttpRequest ) corsw disp
+    : ~ b has_cors F
+    ? . a cors {
+        = corsw ( with_cors_default base )
+        = base corsw
+        = has_cors T
+    } {}
+    : ~ ( @ HttpResponse HttpRequest ) logw disp
+    : ~ b has_log F
+    ? . a log_requests {
+        = logw ( with_log_requests base )
+        = base logw
+        = has_log T
+    } {}
+    : ~ i ka . a max_keepalive
+    ? < ka 0 { = ka ( server_default_max_keepalive_requests ) } {}
+    : ~ i rt . a req_timeout_ms
+    ? < rt 0 { = rt ( server_default_request_total_timeout_ms ) } {}
+    : HttpServer srv ( server_new_complete listener base . a idle_ms ka ( __httpapp_limits a ) rt )
     ( __httpapp_banner a scheme host port )
     : ~ i rc 0
     ? > . a workers 0 {
@@ -209,12 +275,15 @@ $ `stdlib/ext/http_static.nu`
         = rc ( __httpapp_run_result ( server_run srv ) )
     }
     ( server_stop srv )
+    ? has_log { ( nurl_free # s # *u logw 1 ) } {}
+    ? has_cors { ( nurl_free # s # *u corsw 1 ) } {}
+    ( nurl_free # s # *u disp 1 )
     ^ rc
 }
 
 // Bind host:port and serve until the listener is closed (SIGINT/SIGTERM or
 // error). Returns a process exit code (0 clean, 1 on bind/serve error).
-@ http_app_listen *HttpApp a s host i port → i {
+@ http_app_listen * HttpApp a s host i port → i {
     : !TcpListener NetErr lr ( tcp_listen host port )
     ?? lr {
         T listener → { ^ ( __httpapp_serve a listener `http` host port ) }
@@ -235,7 +304,7 @@ $ `stdlib/ext/http_static.nu`
 
 // Same, over TLS. `cert`/`key` are PEM paths (EC or RSA leaf; a fullchain
 // PEM is accepted for `cert`).
-@ http_app_listen_tls *HttpApp a s host i port s cert s key → i {
+@ http_app_listen_tls * HttpApp a s host i port s cert s key → i {
     : !TcpListener NetErr lr ( tcp_listen_tls host port cert key )
     ?? lr {
         T listener → { ^ ( __httpapp_serve a listener `https` host port ) }
