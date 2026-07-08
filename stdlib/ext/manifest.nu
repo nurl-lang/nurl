@@ -59,6 +59,7 @@ $ `stdlib/ext/toml.nu`
     String repository  // [package].repository — source URL; empty → unset
     String postinstall  // [hints].postinstall — message shown after install; empty → none
     ( Vec Dep ) dependencies
+    ( Vec String ) assets  // [install].assets — package-relative paths staged under $NURL_HOME/share/<name>/ on tool install
 }
 
 : | ManifestErr {
@@ -127,6 +128,14 @@ $ `stdlib/ext/toml.nu`
         = k + k 1
     }
     ( vec_free [Dep] . m dependencies )
+    : i na ( vec_len [String] . m assets )
+    : ~ i ak 0
+    ~ < ak na {
+        : ?String ao ( vec_get [String] . m assets ak )
+        ?? ao { T av → ( string_free av ) F _ → {} }
+        = ak + ak 1
+    }
+    ( vec_free [String] . m assets )
 }
 
 // ── Field extraction helpers ─────────────────────────────────────
@@ -145,6 +154,43 @@ $ `stdlib/ext/toml.nu`
             ?? s {
                 T sv → { ( string_free out ) = out sv }
                 F empty → ( string_free empty )
+            }
+        }
+        F _ → {}
+    }
+    ^ out
+}
+
+// Read a dotted `path` expected to hold an array of strings, returning an
+// OWNED Vec[String] (its elements each owned). Missing path, non-array
+// value, or non-string elements yield an empty vector; non-string elements
+// are skipped. `toml_get_path` borrows into `root`, so we copy each string
+// out (toml_as_str returns an owned copy) and never free the borrowed nodes.
+@ __field_str_array TomlValue root s path → ( Vec String ) {
+    : ( Vec String ) out ( vec_new [String] )
+    : ?TomlValue v ( toml_get_path root path )
+    ?? v {
+        T tv → {
+            ?? tv {
+                TArr arr → {
+                    : i n ( vec_len [TomlValue] arr )
+                    : ~ i k 0
+                    ~ < k n {
+                        : ?TomlValue ek ( vec_get [TomlValue] arr k )
+                        ?? ek {
+                            T ev → {
+                                : ?String sv ( toml_as_str ev )
+                                ?? sv {
+                                    T s → ( vec_push [String] out s )
+                                    F empty → ( string_free empty )
+                                }
+                            }
+                            F _ → {}
+                        }
+                        = k + k 1
+                    }
+                }
+                _ → {}
             }
         }
         F _ → {}
@@ -252,6 +298,7 @@ $ `stdlib/ext/toml.nu`
             : String registry ( __field_str root `package.registry` )
             : String repository ( __field_str root `package.repository` )
             : String postinstall ( __field_str root `hints.postinstall` )
+            : ( Vec String ) assets ( __field_str_array root `install.assets` )
 
             // Dependencies.
             : ( Vec Dep ) deps ( vec_new [Dep] )
@@ -283,7 +330,7 @@ $ `stdlib/ext/toml.nu`
                 F _ → {}
             }
             ( toml_value_free root )
-            ^ @ !Manifest ManifestErr { T @ Manifest { name version description license registry repository postinstall deps } }
+            ^ @ !Manifest ManifestErr { T @ Manifest { name version description license registry repository postinstall deps assets } }
         }
     }
 }

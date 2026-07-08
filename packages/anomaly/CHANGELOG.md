@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.3.6
+
+- The `serve` dashboard now works out of the box after a registry install.
+  Declares `[install] assets = ["static"]`, so `nurlpkg install anomaly`
+  stages the dashboard HTML into `$NURL_HOME/share/anomaly/static`, which
+  `serve` already resolves relative to its own executable
+  (`<exe-dir>/../share/anomaly/static`). Before this, only the binary was
+  installed and `anomaly serve` silently fell back to API-only unless you
+  pointed `--webroot` at a source checkout. Now `anomaly serve --addr
+  0.0.0.0:8080` serves the dashboard with no extra flags.
+
 ## 0.3.5
 
 - Fix a broken registry install. 0.3.4 bumped the `gpu` requirement to

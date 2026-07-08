@@ -7,6 +7,9 @@ name=demo-app
 version=0.1.0
 description=Demo of the manifest parser
 license=MIT OR Apache-2.0
+assets_count=2
+asset[0] static
+asset[1] web/dashboard
 deps_count=2
 dep[0] http-router path=../router version=0.2.0
 dep[1] some-lib path=../some-lib version=
