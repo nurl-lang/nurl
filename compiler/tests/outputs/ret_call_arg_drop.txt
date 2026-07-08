@@ -1,0 +1,9 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+drop:res
+probe=42
+got:xy
+drop:res
+keep:alive
