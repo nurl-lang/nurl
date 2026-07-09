@@ -34,14 +34,21 @@ export PATH="$(brew --prefix llvm)/bin:$PATH"   # add to ~/.zshrc to persist
 The toolchain binaries themselves link only libc, so they also run on
 musl/Alpine without extra packages (see [`PLATFORMS.md`](PLATFORMS.md)).
 
-## Step 1 — Build the C runtime (once)
+## Step 1 — Build the C runtime
+
+`./build.sh` (Step 2) compiles the C runtime for you, so most contributors
+can skip straight to Step 2. Build it by hand only for the manual bootstrap
+below:
 
 ```sh
 clang -c stdlib/runtime.c -o stdlib/runtime.o      # Linux / macOS
 clang -c stdlib\runtime.c -o stdlib\runtime.o      # Windows
 ```
 
-> `stdlib/runtime.o` is already checked in; rebuild it only if you modify `runtime.c`.
+> `stdlib/runtime.o` is **not** checked in (it is gitignored). `./build.sh`
+> regenerates it; note that the build compiles it with `-flto`, so after a
+> build `runtime.o` is LLVM bitcode and the build also emits a plain-ELF
+> `stdlib/runtime.native.o` for non-LTO linking (see below).
 
 ## Step 2 — Bootstrap the self-hosting compiler
 
@@ -93,10 +100,15 @@ nurl.bat  myprogram.nu              # → myprogram.exe         (Windows)
 
 **Manual (two-step):**
 ```sh
-./nurlc myprogram.nu > myprogram.ll               # or build/nurlc
-clang myprogram.ll stdlib/runtime.o -o myprogram
+./nurlc myprogram.nu > myprogram.ll                          # or build/nurlc
+clang myprogram.ll stdlib/runtime.native.o -lm -lpthread -o myprogram
 ./myprogram
 ```
+
+> Link against `stdlib/runtime.native.o` (a real ELF object), not
+> `stdlib/runtime.o` — after `./build.sh` the latter is LLVM bitcode and a
+> plain `clang` link rejects it with *"file format not recognized"*. The
+> `-lm -lpthread` libraries are required.
 
 ## Debugging with `gdb` / `lldb` (DWARF)
 
@@ -105,10 +117,16 @@ like any C-toolchain ELF: source-level breakpoints, single-step by `.nu`
 line, `info locals`, `print x` with the NURL type name.
 
 ```sh
-./nurl.sh --debug examples/fizzbuzz.nu          # builds fizzbuzz with DWARF
-gdb -ex 'break fizzbuzz' -ex run ./fizzbuzz     # break by name
-gdb -ex 'break examples/fizzbuzz.nu:18' …       # break by source line
+./nurl.sh -O0 --debug examples/fizzbuzz.nu            # DWARF, no optimisation
+gdb -ex 'break fizzbuzz' -ex run ./examples/fizzbuzz  # break by name
+gdb -ex 'break examples/fizzbuzz.nu:18' …             # break by source line
 ```
+
+Pass `-O0` (or `-O1`): at the default `-O2`, optimisation inlines and
+reorders enough that source-line breakpoints and `info locals` become
+unreliable — the breakpoint may never fire. `nurl.sh` writes the binary
+next to the source, so a program under `examples/` lands at
+`./examples/fizzbuzz`, not `./fizzbuzz`.
 
 Two knobs cooperate:
 - `nurlc --g <file>` emits `!DICompileUnit` / `!DISubprogram` /

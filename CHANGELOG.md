@@ -3849,7 +3849,7 @@ releases ship install packages for Linux and Windows.
 - **`docs/LIMITATIONS.md` scoped to actual language/compiler limitations.**
   Removed the standard-library capability tables (PostgreSQL, SQLite,
   panic/recover) that were never language limitations — that information
-  lives with each module (stdlib headers, `ROADMAP.md`, `TODO.md`). Moved
+  lives with each module (stdlib headers, `ROADMAP.md`). Moved
   the HTTPS/TLS table to [`docs/NETWORKING.md`](docs/NETWORKING.md) where it
   belongs. Removed two entries that were **stale** (the behaviour already
   works, verified empirically): "no tail-call optimisation" (self-recursive
