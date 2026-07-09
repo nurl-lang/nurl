@@ -4633,6 +4633,21 @@
     ^ & & ( __is_named_agg at ) ( __is_named_agg pt ) ! ( seq at pt )
 }
 
+// Exactly one operand lowers to a pointer, the other to a non-pointer
+// scalar (i64/i32/double/i1/i8…). Catches the different-base pointer↔scalar
+// class that __arg_ptr_depth_mismatch misses — e.g. an `i8*` string passed
+// where an `i64` is declared (`( add 1 \`two\` )`), or an integer passed
+// where a pointer is declared. Named aggregates and String have their own
+// checks, so a side that is a `%Name` value is excluded here to avoid
+// overlapping errors and the enum↔i64 lowering.
+@ __arg_ptr_scalar_mismatch s at s pt → b {
+    ? | == 0 ( nurl_str_len at ) == 0 ( nurl_str_len pt ) { ^ F } {}
+    : s at_ll ( nurl_llty at )
+    : s pt_ll ( nurl_llty pt )
+    ? | ( __is_named_agg at_ll ) ( __is_named_agg pt_ll ) { ^ F } {}
+    ^ != ( is_ptr_ty at_ll ) ( is_ptr_ty pt_ll )
+}
+
 @ gen_call i lex i syms i cg → s {
     ( nurl_lex_advance lex )
     : s fname ( nurl_lex_val lex )
@@ -5074,29 +5089,41 @@
         == 0 ( nurl_str_len ( nurl_sym_get g_generic_syms ( nurl_str_cat fname `__tparams` ) ) )
         != 0 ( nurl_str_len ( nurl_sym_get syms ( nurl_str_cat fname `__ptypes_src` ) ) )
         { : s __psrc ( __ptypes_nth ( nurl_sym_get syms ( nurl_str_cat fname `__ptypes_src` ) ) arg_idx )
-            : b __at_ptr & > ( nurl_str_len at ) 0
-            == ( nurl_str_get at - ( nurl_str_len at ) 1 ) 42
-            : b __ps_ptr & > ( nurl_str_len __psrc ) 0 == ( nurl_str_get __psrc 0 ) 42
-            ? & != 0 ( nurl_str_len __psrc ) | | | __at_ptr __ps_ptr ( seq at `%String` ) ( __is_named_agg at )
+            ? != 0 ( nurl_str_len __psrc )
             { : i __plx ( nurl_lex_new __psrc `<param>` )
                 : s __pllvm ( parse_type __plx )
-                ? ( __arg_ptr_depth_mismatch at __pllvm )
-                { ( die lex ( nurl_str_cat3
-                    ( nurl_str_cat4 `argument ` ( nurl_str_int + arg_idx 1 ) ` to '` fname )
-                    ( nurl_str_cat4 `': value of type '` at `' passed where parameter expects '` __pllvm )
-                    `' — pointer-vs-value mismatch (a '*T' was passed where a 'T' value is expected, or vice versa)` ) ) }
-                {}
-                ? ( __arg_str_cstr_mismatch at __pllvm )
-                { ( die lex ( nurl_str_cat3
-                    ( nurl_str_cat4 `argument ` ( nurl_str_int + arg_idx 1 ) ` to '` fname )
-                    ( nurl_str_cat4 `': value of type '` at `' passed where parameter expects '` __pllvm )
-                    `' — String vs raw C-string mismatch: 'String' is a managed string, 's' (i8*) a bare char pointer; convert with 'string_data' (String→s) or 'string_from' (s→String)` ) ) }
-                {}
-                ? ( __arg_named_struct_mismatch at __pllvm )
-                { ( die lex ( nurl_str_cat3
-                    ( nurl_str_cat4 `argument ` ( nurl_str_int + arg_idx 1 ) ` to '` fname )
-                    ( nurl_str_cat4 `': value of type '` at `' passed where parameter expects '` __pllvm )
-                    `' — wrong struct type passed by value (a value of one named type where a different one is declared); the call would silently reinterpret its fields` ) ) }
+                // Detect pointer-ness from the LOWERED types so pointer
+                // aliases with no literal `*` (e.g. `s` → i8*) are covered.
+                // That is what lets the reverse case — a bare scalar passed
+                // to an `s`/pointer parameter — reach the checks below, not
+                // just an explicit `*T` argument.
+                : b __at_ptr ( is_ptr_ty at )
+                : b __ps_ptr ( is_ptr_ty __pllvm )
+                ? | | | __at_ptr __ps_ptr ( seq at `%String` ) ( __is_named_agg at )
+                { ? ( __arg_ptr_depth_mismatch at __pllvm )
+                    { ( die lex ( nurl_str_cat3
+                        ( nurl_str_cat4 `argument ` ( nurl_str_int + arg_idx 1 ) ` to '` fname )
+                        ( nurl_str_cat4 `': value of type '` at `' passed where parameter expects '` __pllvm )
+                        `' — pointer-vs-value mismatch (a '*T' was passed where a 'T' value is expected, or vice versa)` ) ) }
+                    {}
+                    ? ( __arg_str_cstr_mismatch at __pllvm )
+                    { ( die lex ( nurl_str_cat3
+                        ( nurl_str_cat4 `argument ` ( nurl_str_int + arg_idx 1 ) ` to '` fname )
+                        ( nurl_str_cat4 `': value of type '` at `' passed where parameter expects '` __pllvm )
+                        `' — String vs raw C-string mismatch: 'String' is a managed string, 's' (i8*) a bare char pointer; convert with 'string_data' (String→s) or 'string_from' (s→String)` ) ) }
+                    {}
+                    ? ( __arg_named_struct_mismatch at __pllvm )
+                    { ( die lex ( nurl_str_cat3
+                        ( nurl_str_cat4 `argument ` ( nurl_str_int + arg_idx 1 ) ` to '` fname )
+                        ( nurl_str_cat4 `': value of type '` at `' passed where parameter expects '` __pllvm )
+                        `' — wrong struct type passed by value (a value of one named type where a different one is declared); the call would silently reinterpret its fields` ) ) }
+                    {}
+                    ? ( __arg_ptr_scalar_mismatch at __pllvm )
+                    { ( die lex ( nurl_str_cat3
+                        ( nurl_str_cat4 `argument ` ( nurl_str_int + arg_idx 1 ) ` to '` fname )
+                        ( nurl_str_cat4 `': value of type '` at `' passed where parameter expects '` __pllvm )
+                        `' — pointer-vs-scalar type mismatch; NURL has no implicit conversion between a pointer and an integer/float (convert explicitly with '# T expr' if this is intended)` ) ) }
+                    {} }
                 {} }
             {} }
         {}
