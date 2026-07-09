@@ -1,0 +1,69 @@
+name: fuzz
+
+# Continuous fuzzing — NOT a per-PR gate (it would slow every merge and its
+# value is in breadth over time, not a single run). Runs weekly and on demand:
+#   1. differential integer/float miscompile fuzzer (tools/fuzz/fuzz.sh):
+#      generate a self-checking program + a Python oracle, compile at -O0 and
+#      -O2, require stdout(-O0) == stdout(-O2) == oracle. Found 7 real
+#      miscompiles historically.
+#   2. mutational parser fuzzer (tools/fuzz/fuzz_parsers.sh): mutate seeds for
+#      the untrusted-input parsers (x509/DER, cbor, msgpack, json, yaml, xml,
+#      toml) against an ASan+UBSan harness; any crash / OOB / UB / hang is a
+#      finding.
+# Either finding fails the run and uploads the reproducer inputs as artifacts.
+# Seed corpora live in-tree (tools/fuzz/gen.py, tools/fuzz/fuzz_parsers.py).
+
+on:
+  schedule:
+    - cron: '0 6 * * 1'          # Mondays 06:00 UTC
+  workflow_dispatch:
+    inputs:
+      diff_seeds:
+        description: 'differential fuzzer: number of seeds'
+        default: '1500'
+      parser_iters:
+        description: 'parser fuzzer: iterations per RNG seed'
+        default: '4000'
+
+concurrency:
+  group: fuzz-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  fuzz:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build deps (clang + optional FFI libs)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            clang pkg-config \
+            libcurl4-openssl-dev libssl-dev libsqlite3-dev \
+            libpq-dev zlib1g-dev libzstd-dev
+          clang --version
+
+      - name: Build toolchain
+        run: ./build.sh --no-tests
+
+      - name: Differential miscompile fuzzer
+        run: ./tools/fuzz/fuzz.sh 1 "${{ github.event.inputs.diff_seeds || '1500' }}"
+
+      - name: Parser fuzzer (ASan + UBSan)
+        # Two RNG seeds for a bit of breadth; each builds the harness once and
+        # runs N mutated inputs. 8s per-input timeout catches hangs.
+        run: |
+          iters="${{ github.event.inputs.parser_iters || '4000' }}"
+          ./tools/fuzz/fuzz_parsers.sh 1 "$iters" 8
+          ./tools/fuzz/fuzz_parsers.sh 2 "$iters" 8
+
+      - name: Upload reproducers on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-failures
+          path: tools/fuzz/failures/
+          if-no-files-found: ignore
+          retention-days: 30
