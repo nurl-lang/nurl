@@ -7474,10 +7474,12 @@
         // `__owned_strings__` list (see gen_cond for the same reasoning).
         : ~ s old_strs_lp ``
         : ~ s old_structs_lp ``
+        : ~ s old_user_lp ``
         : ~ s old_closure_lp ( nurl_sym_get syms `__owned_closure_envs__` )
         ? != 0 g_auto_drop_strings
         { = old_strs_lp ( nurl_sym_get syms `__owned_strings__` )
             = old_structs_lp ( nurl_sym_get syms `__owned_struct_fields__` )
+            = old_user_lp ( nurl_sym_get syms `__user_drops__` )
             ( nurl_sym_push syms )
         } {}
         ( nurl_sym_def syms `__cur_lbl__` lb )
@@ -7489,7 +7491,8 @@
         ? == g_did_ret 0
         { ? != 0 g_auto_drop_strings
             { ( mem_drop_new_strings syms cg old_strs_lp )
-                ( mem_drop_new_struct_fields syms cg old_structs_lp ) } {}
+                ( mem_drop_new_struct_fields syms cg old_structs_lp )
+                ( mem_drop_new_user_drops syms cg old_user_lp ) } {}
             ( mem_drop_new_closure_envs syms cg old_closure_lp )
             ( nurl_print `  br label %` ) ( nurl_print lc ) ( emit_dbg_eol )
         } {}
