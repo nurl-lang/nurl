@@ -1,4 +1,5 @@
 COMPILE FAIL
 ERRORS
-compiler/tests/borrow_double_free.nu:12: error: use of moved value 'a' - it was consumed at line 11 (pass a fresh value or rebind it before reuse)
-error: compilation aborted - 1 borrow-checker violations (re-run with --no-borrowck to bypass)
+compiler/tests/borrow_double_free.nu:12: error: use of moved value 'a' — it was consumed at line 11 (pass a fresh value or rebind it before reuse)
+    ( vec_free [i] a )
+error: compilation aborted — 1 borrow-checker violation (re-run with --no-borrowck to bypass)

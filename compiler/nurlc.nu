@@ -2389,6 +2389,21 @@
     ( __diag_abort )
 }
 
+// die anchored at an EXPLICIT (line, col) in the current lexer's file,
+// with the full caret shape — for a check that fires after the lexer
+// has already advanced past the offending token (e.g. gen_ident's
+// undefined-identifier check runs one token late; the caller captured
+// the identifier's own position before advancing).
+@ die_pos i lex i line i col s msg → v {
+    : s loc ( nurl_str_cat ( nurl_lex_filename lex )
+    ( nurl_str_cat `:` ( nurl_str_cat ( nurl_str_int line )
+    ( nurl_str_cat `:` ( nurl_str_int col ) ) ) ) )
+    ( nurl_eprintln ( nurl_str_cat3 loc `: ` msg ) )
+    ( nurl_eprintln ( nurl_lex_line_text_at lex line ) )
+    ( nurl_eprintln ( nurl_diag_caret col ) )
+    ( __diag_abort )
+}
+
 // g_stmt_bare_lit — set by gen_stmt to 1 when the statement it just
 // parsed was a bare numeric/string LITERAL in expression position (no
 // side effect). The block iterators (gen_block_stmts / gen_block_ret)
@@ -2530,6 +2545,11 @@
 @ gen_ident i lex i syms i cg → s {
     ? ( is_ident_tok ( nurl_lex_type lex ) )
     { : s name ( nurl_lex_val lex )
+        // The identifier's own position, captured before the advance —
+        // the undefined-identifier check below fires after it, and a
+        // live-lexer diagnostic would blame the NEXT token (die_pos).
+        : i __id_line ( nurl_lex_line lex )
+        : i __id_col ( nurl_lex_col lex )
         ( nurl_lex_advance lex )
         // Borrow checker: every value-position identifier is a read.
         ( bck_note_read name )
@@ -2617,9 +2637,9 @@
         == 0 ( nurl_str_len ( nurl_sym_get syms ( nurl_str_cat name `__param` ) ) )
         { : s __sugg ( __suggest_ident syms name )
             ? != 0 ( nurl_str_len __sugg )
-            { ( die lex ( nurl_str_cat ( nurl_str_cat3 `use of undefined identifier '` name `' - did you mean '` )
+            { ( die_pos lex __id_line __id_col ( nurl_str_cat ( nurl_str_cat3 `use of undefined identifier '` name `' — did you mean '` )
                 ( nurl_str_cat3 __sugg `'? No binding, parameter, constant, enum variant, or ` `function with this name is in scope` ) ) ) }
-            { ( die lex ( nurl_str_cat3 `use of undefined identifier '` name `' - no binding, parameter, constant, enum variant, or function with this name is in scope` ) ) } }
+            { ( die_pos lex __id_line __id_col ( nurl_str_cat3 `use of undefined identifier '` name `' — no binding, parameter, constant, enum variant, or function with this name is in scope` ) ) } }
         {}
         ^ ? != 0 ( nurl_str_len ptr )
         ( load_var cg lt ptr )
@@ -3158,7 +3178,7 @@
     ? == 0 ( nurl_str_len ( nurl_sym_get syms ( nurl_str_cat obj `__mutable` ) ) )
     { ( die lex ( nurl_str_cat3
         `inout field argument: binding '` obj
-        `' must be mutable ': ~' - the callee mutates its field in place` ) ) }
+        `' must be mutable ': ~' — the callee mutates its field in place` ) ) }
     {}
     ? | == 0 ( nurl_str_len objty ) ! == 37 ( nurl_str_get objty 0 )
     { ( die lex ( nurl_str_cat3
@@ -4464,6 +4484,42 @@
     ^ out
 }
 
+// Text of 1-based line `line` in the raw buffer src[0..len), tabs
+// rendered as spaces (mirrors nurl_lex_line_text) — for diagnostics
+// anchored somewhere other than the lexer's current token. OWNED
+// return; empty string when the line is out of range.
+@ __src_line_text s src i len i line → s {
+    : *u sp # *u src
+    : ~ i k 0
+    : ~ i ln 1
+    ~ & < k len < ln line {
+        ? == & # i . sp k 255 10 { = ln + ln 1 } {}
+        = k + k 1
+    }
+    ? < ln line { ^ ( strdup `` ) } {}
+    : i line_start k
+    : ~ i line_end k
+    ~ & < line_end len != & # i . sp line_end 255 10 { = line_end + line_end 1 }
+    ? & > line_end line_start == & # i . sp - line_end 1 255 13 { = line_end - line_end 1 } {}
+    : i n - line_end line_start
+    : s out # s ( malloc + n 1 )
+    : *u op # *u out
+    : ~ i i 0
+    ~ < i n {
+        : i c & # i . sp + line_start i 255
+        = . op i # u ? == c 9 32 c
+        = i + i 1
+    }
+    = . op n # u 0
+    ^ out
+}
+
+// __src_line_text over the lexer's own source buffer.
+@ nurl_lex_line_text_at i h i line → s {
+    : s p # s h
+    ^ ( __src_line_text # s ( nurl_peek p LX_SRC ) ( nurl_peek p LX_LEN ) line )
+}
+
 @ nurl_lex_src_slice i h i start i n → s {
     : s p # s h
     : i len ( nurl_peek p LX_LEN )
@@ -5212,7 +5268,7 @@
             & ! is_inout_arg ( str_contains_word p5_inout_seen bck_arg_root )
             { ( bck_esc_warn lex bck_arg_line ( nurl_str_cat3
                 `'` bck_arg_root
-                `' is both mutably borrowed (passed as 'inout') and aliased by another argument of the same call - exclusive access is violated` ) ) }
+                `' is both mutably borrowed (passed as 'inout') and aliased by another argument of the same call — exclusive access is violated` ) ) }
             {}
             = p5_seen ? == 0 ( nurl_str_len p5_seen )
             bck_arg_root ( nurl_str_cat3 p5_seen ` ` bck_arg_root )
@@ -5234,7 +5290,7 @@
             ? & fe_iterated | is_inout_arg fe_mutates
             { ( bck_esc_warn lex bck_arg_line ( nurl_str_cat3
                 `cannot mutate '` bck_arg_root
-                `' while iterating over it - the '~' loop holds a borrow of the container; move the mutation out of the loop body` ) ) }
+                `' while iterating over it — the '~' loop holds a borrow of the container; move the mutation out of the loop body` ) ) }
             {} }
         {}
         : ~ s av ``
@@ -5256,7 +5312,7 @@
                 { ( die lex ( nurl_str_cat3 `inout argument '` bck_arg_val `' is not a binding in scope` ) ) }
                 {}
                 ? == 0 ( nurl_str_len ( nurl_sym_get syms ( nurl_str_cat bck_arg_val `__mutable` ) ) )
-                { ( die lex ( nurl_str_cat3 `inout argument '` bck_arg_val `' must be a mutable ': ~' binding - the callee mutates it in place` ) ) }
+                { ( die lex ( nurl_str_cat3 `inout argument '` bck_arg_val `' must be a mutable ': ~' binding — the callee mutates it in place` ) ) }
                 {}
                 ( nurl_lex_advance lex )
                 // Lint: `inout name` passes the binding by address (no
@@ -9107,6 +9163,26 @@
 
 // ── Phase 1: the use-after-move rule ──────────────────────────────
 
+// Render one borrow-checker error in the front-end's diagnostic shape:
+//   file:line: error: <msg>
+//       <source line text>
+// Borrow checks fire after parsing has moved past the offending token,
+// so only file+line are known: the source line is re-read from disk and
+// echoed, but no caret is drawn — a guessed column would lie. Shared by
+// every borrow-checker emitter so the format can't drift from `die`'s.
+@ bck_emit_error s file i line s msg → v {
+    ( nurl_eprintln ( nurl_str_cat ( nurl_str_cat3 file `:` ( nurl_str_int line ) )
+    ( nurl_str_cat `: error: ` msg ) ) )
+    // Owned strings (`src`, `lt`) are reclaimed by auto-drop at scope
+    // exit — no manual frees here (they would double-free).
+    : s src ( nurl_read_file file )
+    ? != 0 ( nurl_str_len src ) {
+        : s lt ( __src_line_text src ( nurl_str_len src ) line )
+        ? != 0 ( nurl_str_len lt ) { ( nurl_eprintln lt ) } {}
+    } {}
+    = g_bck_errors + g_bck_errors 1
+}
+
 // Emit `file:line: warning: use of moved value`. The analyze walk
 // runs after the function is fully parsed, so `lex` no longer points
 // at the use site — the line is carried explicitly and the filename
@@ -9120,13 +9196,10 @@
         ( nurl_sym_def g_bck `warnset`
         ? == 0 ( nurl_str_len ws ) tag ( nurl_str_cat3 ws ` ` tag ) )
         : s ml ( nurl_sym_get g_bck ( nurl_str_cat `ml_` name ) )
-        : s loc ( nurl_str_cat3 ( nurl_sym_get g_bck `file` ) `:`
-        ( nurl_str_int useline ) )
-        : s msg ( nurl_str_cat4 `: error: use of moved value '` name
-        `' - it was consumed at line ` ( nurl_str_cat3 ml
-        ` (pass a fresh value or rebind it before reuse)` `` ) )
-        ( nurl_eprintln ( nurl_str_cat loc msg ) )
-        = g_bck_errors + g_bck_errors 1
+        ( bck_emit_error ( nurl_sym_get g_bck `file` ) useline
+        ( nurl_str_cat4 `use of moved value '` name
+        `' — it was consumed at line ` ( nurl_str_cat3 ml
+        ` (pass a fresh value or rebind it before reuse)` `` ) ) )
     }
 }
 
@@ -9427,10 +9500,7 @@
 // were recorded. The body is shared by escape, aliased-mut, and
 // iterator-invalidation diagnostics.
 @ bck_esc_warn i lex i line s msg → v {
-    : s loc ( nurl_str_cat3 ( nurl_lex_filename lex ) `:`
-    ( nurl_str_int line ) )
-    ( nurl_eprintln ( nurl_str_cat3 loc `: error: ` msg ) )
-    = g_bck_errors + g_bck_errors 1
+    ( bck_emit_error ( nurl_lex_filename lex ) line msg )
 }
 
 // Record a freshly-declared binding's region (its block depth) and,
@@ -9459,7 +9529,7 @@
             ? < bdv refdepth
             { ( bck_esc_warn lex line ( nurl_str_cat3
                 `assigning to '` name
-                `' a value that references a more deeply scoped binding by pointer - it dangles once that inner scope exits` ) ) }
+                `' a value that references a more deeply scoped binding by pointer — it dangles once that inner scope exits` ) ) }
             {}
         } {}
     }
@@ -9470,7 +9540,7 @@
 // container / a worker thread all outlive every in-function region).
 @ bck_esc_check_return i lex i syms i line s ident → v {
     ? & != g_borrowck 0 > ( bck_expr_refdepth syms ident ) 0
-    { ( bck_esc_warn lex line `returning a value that references a stack binding by pointer - it dangles after this function returns (move the captured data to a heap-backed handle)` ) }
+    { ( bck_esc_warn lex line `returning a value that references a stack binding by pointer — it dangles after this function returns (move the captured data to a heap-backed handle)` ) }
     {}
 }
 
@@ -9478,7 +9548,7 @@
     ? & != g_borrowck 0 > ( bck_expr_refdepth syms ident ) 0
     { ( bck_esc_warn lex line ( nurl_str_cat3
         `passing a value that references a stack binding by pointer to '` fname
-        `' - it escapes the current stack frame and dangles (move it to a heap-backed handle)` ) ) }
+        `' — it escapes the current stack frame and dangles (move it to a heap-backed handle)` ) ) }
     {}
 }
 
@@ -13386,13 +13456,10 @@
             : ~ s esc ( nurl_sym_get g_fn_escapes cn )
             ? == 0 ( nurl_str_len esc ) { = esc ( nurl_sym_get g_fn_escapes fn ) } {}
             ? ( str_contains_word esc ai ) {
-                : s loc ( nurl_str_cat3 file `:` ln )
-                : s msg ( nurl_str_cat3
-                `: error: passing a value that references a stack binding by pointer to '`
+                ( bck_emit_error file ( nurl_str_to_int ln ) ( nurl_str_cat3
+                `passing a value that references a stack binding by pointer to '`
                 fn
-                `' - it escapes the current stack frame and dangles (move it to a heap-backed handle)` )
-                ( nurl_eprintln ( nurl_str_cat loc msg ) )
-                = g_bck_errors + g_bck_errors 1
+                `' — it escapes the current stack frame and dangles (move it to a heap-backed handle)` ) )
             } {}
         }
     }
@@ -18583,9 +18650,10 @@
     // borrow-clean program leaves g_bck_errors at 0 and this is a
     // no-op.
     ? > g_bck_errors 0
-    { ( nurl_eprintln ( nurl_str_cat3 `error: compilation aborted - `
+    { ( nurl_eprintln ( nurl_str_cat ( nurl_str_cat3 `error: compilation aborted — `
         ( nurl_str_int g_bck_errors )
-        ` borrow-checker violations (re-run with --no-borrowck to bypass)` ) )
+        ? > g_bck_errors 1 ` borrow-checker violations` ` borrow-checker violation` )
+        ` (re-run with --no-borrowck to bypass)` ) )
         ( nurl_exit 1 ) }
     {}
 }

@@ -1,4 +1,5 @@
 COMPILE FAIL
 ERRORS
-compiler/tests/borrow_escape_interproc.nu:21: error: passing a value that references a stack binding by pointer to 'detach' - it escapes the current stack frame and dangles (move it to a heap-backed handle)
-error: compilation aborted - 1 borrow-checker violations (re-run with --no-borrowck to bypass)
+compiler/tests/borrow_escape_interproc.nu:21: error: passing a value that references a stack binding by pointer to 'detach' — it escapes the current stack frame and dangles (move it to a heap-backed handle)
+    ( detach f )
+error: compilation aborted — 1 borrow-checker violation (re-run with --no-borrowck to bypass)
