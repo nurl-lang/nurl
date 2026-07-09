@@ -2338,6 +2338,29 @@
 // the real culprit instead of blaming the innocent next statement.
 : ~ i g_stmt_line 0
 
+// g_stmt_col — column of the current statement's first token, captured
+// alongside g_stmt_line. `die_stmt` anchors a diagnostic here when the
+// clash is only detected after the statement's operands were consumed
+// (e.g. a bind's initializer type mismatch, where the lexer has already
+// advanced to the next statement).
+: ~ i g_stmt_col 0
+
+// die_stmt: like die, but anchored at the CURRENT statement's start
+// (g_stmt_line / g_stmt_col) rather than the lexer's live position. Use it
+// for a clash detected only after the statement's operands were consumed —
+// e.g. a bind/assign initializer type mismatch, where the lexer has already
+// advanced to the next statement and `die lex` would blame the wrong line.
+// No caret/source-line echo (the anchor's line text isn't retained), but the
+// `file:line:col: msg` prefix points at the real culprit. `lex` supplies the
+// filename only.
+@ die_stmt i lex s msg → v {
+    : s loc ( nurl_str_cat ( nurl_lex_filename lex )
+    ( nurl_str_cat `:` ( nurl_str_cat ( nurl_str_int g_stmt_line )
+    ( nurl_str_cat `:` ( nurl_str_int g_stmt_col ) ) ) ) )
+    ( nurl_eprintln ( nurl_str_cat3 loc `: ` msg ) )
+    ( nurl_exit 1 )
+}
+
 // g_stmt_bare_lit — set by gen_stmt to 1 when the statement it just
 // parsed was a bare numeric/string LITERAL in expression position (no
 // side effect). The block iterators (gen_block_stmts / gen_block_ret)
@@ -9295,9 +9318,10 @@
     {}
     : i tt ( nurl_lex_type lex )
     : i bck_line ( nurl_lex_line lex )
-    // Record this statement's start line for gen_ident's cascade-aware
-    // "unexpected token" diagnostic (see g_stmt_line).
+    // Record this statement's start line + col for gen_ident's cascade-aware
+    // "unexpected token" diagnostic and for die_stmt (see g_stmt_line).
     = g_stmt_line bck_line
+    = g_stmt_col ( nurl_lex_col lex )
     = g_stmt_bare_lit 0
     // A statement is a legal `^` position — clear any operand-context
     // guard inherited from an enclosing expression (e.g. a `?`/`??` arm
@@ -9784,7 +9808,7 @@
         // otherwise emit a mismatched `store` clang rejects. Width / sign /
         // pointer coercions stay legal and are not flagged.
         ? ( __store_type_clash __asn_rt vt )
-        { ( die lex ( nurl_str_cat
+        { ( die_stmt lex ( nurl_str_cat
             ( nurl_str_cat4 `cannot assign a value of type '` __asn_rt `' to '` name )
             ( nurl_str_cat3 `' of type '` vt `' — NURL has no implicit conversions` ) ) ) }
         {}
@@ -11878,7 +11902,7 @@
     { : b csv_sf | ( seq from_ty `double` ) ( seq from_ty `float` )
         : b csv_tf | ( seq to_ty `double` ) ( seq to_ty `float` )
         ? | != csv_sf csv_tf & ( is_ptr_ty from_ty ) ! ( is_ptr_ty to_ty )
-        { ( die lex ( nurl_str_cat ( nurl_str_cat4
+        { ( die_stmt lex ( nurl_str_cat ( nurl_str_cat4
             `value of type '` from_ty `' cannot initialise / assign a binding of type '` to_ty )
             `' — NURL has no implicit conversions; use a matching value or convert with '# T expr'` ) ) }
         {}
