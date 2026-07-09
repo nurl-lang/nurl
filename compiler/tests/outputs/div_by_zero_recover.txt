@@ -1,0 +1,8 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+div: caught msg=division by zero
+mod: caught msg=remainder by zero
+ok: 5
+

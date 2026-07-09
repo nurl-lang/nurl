@@ -1901,6 +1901,29 @@
     name
 }
 
+// Like gen_str_lit but for a compiler-synthesised message (no lexer token):
+// registers a deferred @.str.N global (emitted after the function, so it is
+// safe to call mid-body) and emits a getelementptr to its i8*. Used for
+// runtime panic messages such as the div-by-zero guard.
+@ emit_deferred_cstr i cg s msg → s {
+    : s enc ( encode_str msg 0 ( nurl_str_len msg ) )
+    : i totlen + ( nurl_str_len msg ) 1
+    : i idx g_str_idx
+    = g_str_idx + g_str_idx 1
+    : s kstr ( nurl_str_int idx )
+    : i sg g_str_syms
+    ( nurl_sym_def sg ( nurl_str_cat `__enc_` kstr ) enc )
+    ( nurl_sym_def sg ( nurl_str_cat `__len_` kstr ) ( nurl_str_int totlen ) )
+    : s name ( nurl_str_cat `@.str.` kstr )
+    : s res ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print res )
+    ( nurl_print ` = getelementptr [` ) ( nurl_print ( nurl_str_int totlen ) )
+    ( nurl_print ` x i8], [` ) ( nurl_print ( nurl_str_int totlen ) )
+    ( nurl_print ` x i8]* ` ) ( nurl_print name )
+    ( nurl_print `, i64 0, i64 0\n` )
+    res
+}
+
 // ── Expression generation ─────────────────────────────────────────
 
 @ gen_int_lit i lex → s {
@@ -2665,6 +2688,29 @@
         } {}
         = cmp_ty `i64`
     } {}
+    // Integer division / remainder by zero is LLVM UB (SIGFPE on native, a
+    // trap on wasm; INT_MIN / -1 likewise). NURL is a safe language, so guard
+    // the divisor and panic with a clear message instead of trapping. Float
+    // div/rem (fdiv/frem) is IEEE-defined (±inf / NaN) and left untouched —
+    // only sdiv/udiv/srem/urem get the check.
+    ? & ! isf | == tt TT_SLASH == tt TT_PERCENT
+    { : s __dz ( nurl_cg_reg cg )
+        : s __lz ( nurl_cg_lbl cg `divzero` )
+        : s __lo ( nurl_cg_lbl cg `divok` )
+        ( nurl_print `  ` ) ( nurl_print __dz )
+        ( nurl_print ` = icmp eq ` ) ( nurl_print ( nurl_llty cmp_ty ) ) ( nurl_print ` ` )
+        ( nurl_print rv ) ( nurl_print `, 0\n` )
+        ( nurl_print `  br i1 ` ) ( nurl_print __dz )
+        ( nurl_print `, label %` ) ( nurl_print __lz )
+        ( nurl_print `, label %` ) ( nurl_print __lo ) ( nurl_print `\n` )
+        ( emit ( nurl_str_cat __lz `:` ) )
+        : s __dmsg ( emit_deferred_cstr cg ? == tt TT_SLASH `division by zero` `remainder by zero` )
+        ( nurl_print `  call void @nurl_panic(i8* ` ) ( nurl_print __dmsg ) ( nurl_print `)\n` )
+        ( nurl_print `  unreachable\n` )
+        ( emit ( nurl_str_cat __lo `:` ) )
+        ( nurl_sym_def syms `__cur_lbl__` __lo )
+    }
+    {}
     ( nurl_print `  ` ) ( nurl_print res ) ( nurl_print ` = ` )
     ( nurl_print ins ) ( nurl_print ` ` )
     ( nurl_print ( nurl_llty cmp_ty ) ) ( nurl_print ` ` )
@@ -4633,6 +4679,21 @@
     ^ & & ( __is_named_agg at ) ( __is_named_agg pt ) ! ( seq at pt )
 }
 
+// Exactly one operand lowers to a pointer, the other to a non-pointer
+// scalar (i64/i32/double/i1/i8…). Catches the different-base pointer↔scalar
+// class that __arg_ptr_depth_mismatch misses — e.g. an `i8*` string passed
+// where an `i64` is declared (`( add 1 \`two\` )`), or an integer passed
+// where a pointer is declared. Named aggregates and String have their own
+// checks, so a side that is a `%Name` value is excluded here to avoid
+// overlapping errors and the enum↔i64 lowering.
+@ __arg_ptr_scalar_mismatch s at s pt → b {
+    ? | == 0 ( nurl_str_len at ) == 0 ( nurl_str_len pt ) { ^ F } {}
+    : s at_ll ( nurl_llty at )
+    : s pt_ll ( nurl_llty pt )
+    ? | ( __is_named_agg at_ll ) ( __is_named_agg pt_ll ) { ^ F } {}
+    ^ != ( is_ptr_ty at_ll ) ( is_ptr_ty pt_ll )
+}
+
 @ gen_call i lex i syms i cg → s {
     ( nurl_lex_advance lex )
     : s fname ( nurl_lex_val lex )
@@ -5074,29 +5135,41 @@
         == 0 ( nurl_str_len ( nurl_sym_get g_generic_syms ( nurl_str_cat fname `__tparams` ) ) )
         != 0 ( nurl_str_len ( nurl_sym_get syms ( nurl_str_cat fname `__ptypes_src` ) ) )
         { : s __psrc ( __ptypes_nth ( nurl_sym_get syms ( nurl_str_cat fname `__ptypes_src` ) ) arg_idx )
-            : b __at_ptr & > ( nurl_str_len at ) 0
-            == ( nurl_str_get at - ( nurl_str_len at ) 1 ) 42
-            : b __ps_ptr & > ( nurl_str_len __psrc ) 0 == ( nurl_str_get __psrc 0 ) 42
-            ? & != 0 ( nurl_str_len __psrc ) | | | __at_ptr __ps_ptr ( seq at `%String` ) ( __is_named_agg at )
+            ? != 0 ( nurl_str_len __psrc )
             { : i __plx ( nurl_lex_new __psrc `<param>` )
                 : s __pllvm ( parse_type __plx )
-                ? ( __arg_ptr_depth_mismatch at __pllvm )
-                { ( die lex ( nurl_str_cat3
-                    ( nurl_str_cat4 `argument ` ( nurl_str_int + arg_idx 1 ) ` to '` fname )
-                    ( nurl_str_cat4 `': value of type '` at `' passed where parameter expects '` __pllvm )
-                    `' — pointer-vs-value mismatch (a '*T' was passed where a 'T' value is expected, or vice versa)` ) ) }
-                {}
-                ? ( __arg_str_cstr_mismatch at __pllvm )
-                { ( die lex ( nurl_str_cat3
-                    ( nurl_str_cat4 `argument ` ( nurl_str_int + arg_idx 1 ) ` to '` fname )
-                    ( nurl_str_cat4 `': value of type '` at `' passed where parameter expects '` __pllvm )
-                    `' — String vs raw C-string mismatch: 'String' is a managed string, 's' (i8*) a bare char pointer; convert with 'string_data' (String→s) or 'string_from' (s→String)` ) ) }
-                {}
-                ? ( __arg_named_struct_mismatch at __pllvm )
-                { ( die lex ( nurl_str_cat3
-                    ( nurl_str_cat4 `argument ` ( nurl_str_int + arg_idx 1 ) ` to '` fname )
-                    ( nurl_str_cat4 `': value of type '` at `' passed where parameter expects '` __pllvm )
-                    `' — wrong struct type passed by value (a value of one named type where a different one is declared); the call would silently reinterpret its fields` ) ) }
+                // Detect pointer-ness from the LOWERED types so pointer
+                // aliases with no literal `*` (e.g. `s` → i8*) are covered.
+                // That is what lets the reverse case — a bare scalar passed
+                // to an `s`/pointer parameter — reach the checks below, not
+                // just an explicit `*T` argument.
+                : b __at_ptr ( is_ptr_ty at )
+                : b __ps_ptr ( is_ptr_ty __pllvm )
+                ? | | | __at_ptr __ps_ptr ( seq at `%String` ) ( __is_named_agg at )
+                { ? ( __arg_ptr_depth_mismatch at __pllvm )
+                    { ( die lex ( nurl_str_cat3
+                        ( nurl_str_cat4 `argument ` ( nurl_str_int + arg_idx 1 ) ` to '` fname )
+                        ( nurl_str_cat4 `': value of type '` at `' passed where parameter expects '` __pllvm )
+                        `' — pointer-vs-value mismatch (a '*T' was passed where a 'T' value is expected, or vice versa)` ) ) }
+                    {}
+                    ? ( __arg_str_cstr_mismatch at __pllvm )
+                    { ( die lex ( nurl_str_cat3
+                        ( nurl_str_cat4 `argument ` ( nurl_str_int + arg_idx 1 ) ` to '` fname )
+                        ( nurl_str_cat4 `': value of type '` at `' passed where parameter expects '` __pllvm )
+                        `' — String vs raw C-string mismatch: 'String' is a managed string, 's' (i8*) a bare char pointer; convert with 'string_data' (String→s) or 'string_from' (s→String)` ) ) }
+                    {}
+                    ? ( __arg_named_struct_mismatch at __pllvm )
+                    { ( die lex ( nurl_str_cat3
+                        ( nurl_str_cat4 `argument ` ( nurl_str_int + arg_idx 1 ) ` to '` fname )
+                        ( nurl_str_cat4 `': value of type '` at `' passed where parameter expects '` __pllvm )
+                        `' — wrong struct type passed by value (a value of one named type where a different one is declared); the call would silently reinterpret its fields` ) ) }
+                    {}
+                    ? ( __arg_ptr_scalar_mismatch at __pllvm )
+                    { ( die lex ( nurl_str_cat3
+                        ( nurl_str_cat4 `argument ` ( nurl_str_int + arg_idx 1 ) ` to '` fname )
+                        ( nurl_str_cat4 `': value of type '` at `' passed where parameter expects '` __pllvm )
+                        `' — pointer-vs-scalar type mismatch; NURL has no implicit conversion between a pointer and an integer/float (convert explicitly with '# T expr' if this is intended)` ) ) }
+                    {} }
                 {} }
             {} }
         {}
