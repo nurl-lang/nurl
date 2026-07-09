@@ -1379,6 +1379,26 @@ foo.nu:6:3: error: bare identifier 'nurl_print' as a statement has no
   ^
 ```
 
+**Multi-error reporting.** One `nurlc` run reports the errors of *every*
+failing top-level declaration, not just the first: a diagnostic aborts
+only the declaration it fired in, the compiler resynchronises to the
+next top-level declaration, and the run ends with an
+`error: aborting due to N previous error(s)` summary and a non-zero
+exit. Reporting is capped at 20 errors per run (`too many errors`).
+Two scopes stay fail-fast (first error exits immediately): the
+structural pre-scan passes that run before the main walk, and the
+deferred stages after it (generic-instantiation flush). On wasm32-wasi
+the resynchronisation mechanism is unavailable (no unwinding), so the
+compiler degrades to fail-fast there. Any IR emitted after the first
+error is garbage; the non-zero exit makes every caller discard it.
+
+**Internal compiler errors.** If the compiler *itself* panics while
+processing a declaration — as opposed to reporting a diagnostic about
+the program — it prints an `internal compiler error:` report naming the
+panic message, the file and approximate line being processed, and the
+compiler version, asks for a bug report, and exits with status 3
+(distinct from status 1, a rejected program).
+
 ### 10.3 The grammar v2.1 Tier-A diagnostics
 
 Four new diagnostics shipped 2026-05-25 closing the remaining

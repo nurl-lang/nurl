@@ -159,12 +159,13 @@ REM net_* (except net_basic) opt-in via NURL_NET_TESTS=1.
 if "%name:~0,4%"=="net_" if not "%name%"=="net_basic" if not "%NURL_NET_TESTS%"=="1" set "SKIP=1"
 if "%SKIP%"=="1" exit /b 0
 
-REM borrow_* and should_fail_* expect COMPILE FAIL; borrow_strict_*
+REM borrow_*, diag_* and should_fail_* expect COMPILE FAIL; borrow_strict_*
 REM only fires under the stricter checker flag (mirrors run_tests.sh).
 set "EXPECT_FAIL=0"
 set "CFLAGS="
 if "%name:~0,12%"=="should_fail_" set "EXPECT_FAIL=1"
 if "%name:~0,7%"=="borrow_"       set "EXPECT_FAIL=1"
+if "%name:~0,5%"=="diag_"         set "EXPECT_FAIL=1"
 if "%name:~0,14%"=="borrow_strict_" set "CFLAGS=--strict-borrowck"
 
 "%NURLC%" %CFLAGS% "%src%" > "%ll%" 2>"%err%"

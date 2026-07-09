@@ -291,6 +291,18 @@ $results = $names | ForEach-Object -ThrottleLimit $Jobs -Parallel {
             $act = "COMPILE FAIL`n"
         }
     }
+    elseif ($name -like 'diag_*') {
+        # diag_* — like should_fail_ but the diagnostic TEXT is baselined
+        # (default flags; front-end stderr captured verbatim).
+        $r = Run-Proc $Nurlc @($src) $RootDir
+        if ($r.Code -eq 0) {
+            $act = "COMPILE OK`n(expected COMPILE FAIL but compiler accepted it)`n"
+        } else {
+            $act = "COMPILE FAIL`n"
+            $e = Normalize $r.Err
+            if ($e.Length -gt 0) { $act += "ERRORS`n" + (Cap-Lines (Strip-Root $e)) }
+        }
+    }
     else {
         $isWarn = $name -like 'should_warn_*'
         $r = Run-Proc $Nurlc @($src) $RootDir
