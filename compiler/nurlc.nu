@@ -1901,6 +1901,29 @@
     name
 }
 
+// Like gen_str_lit but for a compiler-synthesised message (no lexer token):
+// registers a deferred @.str.N global (emitted after the function, so it is
+// safe to call mid-body) and emits a getelementptr to its i8*. Used for
+// runtime panic messages such as the div-by-zero guard.
+@ emit_deferred_cstr i cg s msg → s {
+    : s enc ( encode_str msg 0 ( nurl_str_len msg ) )
+    : i totlen + ( nurl_str_len msg ) 1
+    : i idx g_str_idx
+    = g_str_idx + g_str_idx 1
+    : s kstr ( nurl_str_int idx )
+    : i sg g_str_syms
+    ( nurl_sym_def sg ( nurl_str_cat `__enc_` kstr ) enc )
+    ( nurl_sym_def sg ( nurl_str_cat `__len_` kstr ) ( nurl_str_int totlen ) )
+    : s name ( nurl_str_cat `@.str.` kstr )
+    : s res ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print res )
+    ( nurl_print ` = getelementptr [` ) ( nurl_print ( nurl_str_int totlen ) )
+    ( nurl_print ` x i8], [` ) ( nurl_print ( nurl_str_int totlen ) )
+    ( nurl_print ` x i8]* ` ) ( nurl_print name )
+    ( nurl_print `, i64 0, i64 0\n` )
+    res
+}
+
 // ── Expression generation ─────────────────────────────────────────
 
 @ gen_int_lit i lex → s {
@@ -2665,6 +2688,29 @@
         } {}
         = cmp_ty `i64`
     } {}
+    // Integer division / remainder by zero is LLVM UB (SIGFPE on native, a
+    // trap on wasm; INT_MIN / -1 likewise). NURL is a safe language, so guard
+    // the divisor and panic with a clear message instead of trapping. Float
+    // div/rem (fdiv/frem) is IEEE-defined (±inf / NaN) and left untouched —
+    // only sdiv/udiv/srem/urem get the check.
+    ? & ! isf | == tt TT_SLASH == tt TT_PERCENT
+    { : s __dz ( nurl_cg_reg cg )
+        : s __lz ( nurl_cg_lbl cg `divzero` )
+        : s __lo ( nurl_cg_lbl cg `divok` )
+        ( nurl_print `  ` ) ( nurl_print __dz )
+        ( nurl_print ` = icmp eq ` ) ( nurl_print ( nurl_llty cmp_ty ) ) ( nurl_print ` ` )
+        ( nurl_print rv ) ( nurl_print `, 0\n` )
+        ( nurl_print `  br i1 ` ) ( nurl_print __dz )
+        ( nurl_print `, label %` ) ( nurl_print __lz )
+        ( nurl_print `, label %` ) ( nurl_print __lo ) ( nurl_print `\n` )
+        ( emit ( nurl_str_cat __lz `:` ) )
+        : s __dmsg ( emit_deferred_cstr cg ? == tt TT_SLASH `division by zero` `remainder by zero` )
+        ( nurl_print `  call void @nurl_panic(i8* ` ) ( nurl_print __dmsg ) ( nurl_print `)\n` )
+        ( nurl_print `  unreachable\n` )
+        ( emit ( nurl_str_cat __lo `:` ) )
+        ( nurl_sym_def syms `__cur_lbl__` __lo )
+    }
+    {}
     ( nurl_print `  ` ) ( nurl_print res ) ( nurl_print ` = ` )
     ( nurl_print ins ) ( nurl_print ` ` )
     ( nurl_print ( nurl_llty cmp_ty ) ) ( nurl_print ` ` )
