@@ -61,6 +61,14 @@ jobs:
         # linking or running anything.
         run: ./tools/check_examples.sh
 
+      - name: stdlib symbol-collision gate
+        # NURL's flat namespace makes two stdlib modules that define the
+        # same top-level @ name collide when a program imports both (link
+        # error, or a silent link-order-dependent pick — the __u32 /
+        # __free_str_vec class). Assert every stdlib @-function name is
+        # globally unique.
+        run: ./tools/check_stdlib_symbols.sh
+
       - name: nurlfmt --check (canonical-form gate)
         # Every first-party .nu file must be in canonical nurlfmt
         # form. build.sh above already produced build/nurlfmt, so

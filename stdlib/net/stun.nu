@@ -29,7 +29,7 @@ $ `stdlib/std/random.nu`
 
 @ __u16 ( Vec u ) v i off → i { ^ ?? ( bytes_read_u16_be v off ) { T x → # i x F → -1 } }
 
-@ __u32 ( Vec u ) v i off → i { ^ ?? ( bytes_read_u32_be v off ) { T x → # i x F → -1 } }
+@ __stun_u32 ( Vec u ) v i off → i { ^ ?? ( bytes_read_u32_be v off ) { T x → # i x F → -1 } }
 
 @ __b ( Vec u ) v i off → i { ^ ?? ( vec_get [u] v off ) { T x → # i x F → -1 } }
 
@@ -74,7 +74,7 @@ $ `stdlib/std/random.nu`
     : i len ( vec_len [u] msg )
     ? < len 20 { ^ @ ?StunAddr { F # StunAddr 0 } } {}
     ? != ( __u16 msg 0 ) 257 { ^ @ ?StunAddr { F # StunAddr 0 } } {}  // 0x0101
-    ? != ( __u32 msg 4 ) ( __stun_cookie ) { ^ @ ?StunAddr { F # StunAddr 0 } } {}
+    ? != ( __stun_u32 msg 4 ) ( __stun_cookie ) { ^ @ ?StunAddr { F # StunAddr 0 } } {}
     : ~ b txok T
     : ~ i ti 0
     ~ & txok < ti 12 {

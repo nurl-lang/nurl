@@ -629,7 +629,7 @@ $ `stdlib/core/posix.nu`  // open / lseek / mmap / munmap + posix_const
 }
 
 // Free a Vec[String] and every String it owns.
-@ __free_str_vec ( Vec String ) v → v {
+@ __fs_free_str_vec ( Vec String ) v → v {
     : ( @ v String ) drop_str \ String e → v { ( string_free e ) }
     ( vec_free_with [String] v drop_str )
 }
@@ -659,7 +659,7 @@ $ `stdlib/core/posix.nu`  // open / lseek / mmap / munmap + posix_const
                         ?? r {
                             T → {}
                             F e → {
-                                ( __free_str_vec entries )
+                                ( __fs_free_str_vec entries )
                                 ^ @ !v IoErr { F e }
                             }
                         }
@@ -668,7 +668,7 @@ $ `stdlib/core/posix.nu`  // open / lseek / mmap / munmap + posix_const
                 }
                 = idx + idx 1
             }
-            ( __free_str_vec entries )
+            ( __fs_free_str_vec entries )
         }
     }
     // The directory is empty now — remove the directory itself.

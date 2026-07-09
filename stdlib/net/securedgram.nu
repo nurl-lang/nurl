@@ -50,7 +50,7 @@ $ `stdlib/net/session.nu`
     ^ o
 }
 
-@ __u32 ( Vec u ) v i off → i { ^ ?? ( bytes_read_u32_be v off ) { T x → # i x F → 0 } }
+@ __sdg_u32 ( Vec u ) v i off → i { ^ ?? ( bytes_read_u32_be v off ) { T x → # i x F → 0 } }
 
 @ __u64 ( Vec u ) v i off → i { ^ ?? ( bytes_read_u64_be v off ) { T x → # i x F → 0 } }
 
@@ -228,7 +228,7 @@ $ `stdlib/net/session.nu`
 // Responder side: process a handshake init, reply with msg2, establish.
 @ __handle_init * SecureNode n String src ( Vec u ) buf → v {
     ? < ( vec_len [u] buf ) 101 { ^ v } {}
-    : i sender_index ( __u32 buf 1 )
+    : i sender_index ( __sdg_u32 buf 1 )
     : ( Vec u ) msg1 ( __slc buf 5 96 )
     : *Handshake hs ( noise_init F ( __node_kp n ) . n s_pub . n psk )
     : !v NoiseErr r1 ( noise_read_msg1 hs msg1 )
@@ -264,8 +264,8 @@ $ `stdlib/net/session.nu`
 // Initiator side: process the handshake response, establish.
 @ __handle_resp * SecureNode n String src ( Vec u ) buf → v {
     ? < ( vec_len [u] buf ) 57 { ^ v } {}
-    : i resp_index ( __u32 buf 1 )
-    : i our_index ( __u32 buf 5 )
+    : i resp_index ( __sdg_u32 buf 1 )
+    : i our_index ( __sdg_u32 buf 5 )
     : ( Vec u ) msg2 ( __slc buf 9 48 )
     : s pp ( __find_idx n our_index )
     ? == # i pp 0 { ( vec_free [u] msg2 ) ^ v } {}
@@ -304,7 +304,7 @@ $ `stdlib/net/session.nu`
 // datagram.
 @ __handle_data * SecureNode n String src ( Vec u ) buf → ?RecvData {
     ? < ( vec_len [u] buf ) 13 { ^ @ ?RecvData { F # RecvData 0 } } {}
-    : i recv_index ( __u32 buf 1 )
+    : i recv_index ( __sdg_u32 buf 1 )
     : i counter ( __u64 buf 5 )
     : ( Vec u ) ct ( __slc buf 13 - ( vec_len [u] buf ) 13 )
     : s pp ( __find_idx n recv_index )
