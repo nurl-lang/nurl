@@ -15,6 +15,7 @@
 //   err trailing: trailing garbage
 
 $ `stdlib/ext/json.nu`
+$ `stdlib/core/result.nu`
 
 @ show_err s label JsonError e → v {
     ( nurl_print label )
@@ -360,24 +361,22 @@ $ `stdlib/ext/json.nu`
         F → {}
     }
 
-    // 17. json_eq round-trip on a parsed object
-    : !Json JsonError e1 ( json_parse `{"x":1,"y":2}` )
-    : !Json JsonError e2 ( json_parse `{"x":1,"y":2}` )
-    : !Json JsonError e3 ( json_parse `{"x":1,"y":3}` )
-    ?? e1 { T j1 → {
-            ?? e2 { T j2 → {
-                    ?? e3 { T j3 → {
-                            ( nurl_print `eq_same=` )
-                            ( nurl_print ? ( json_eq j1 j2 ) `T` `F` )
-                            ( nurl_print ` eq_diff=` )
-                            ( nurl_print ? ( json_eq j1 j3 ) `T` `F` )
-                            ( nurl_print `\n` )
-                            ( json_free j3 )
-                        } F _ → {} }
-                    ( json_free j2 )
-                } F _ → {} }
-            ( json_free j1 )
-        } F _ → {} }
+    // 17. json_eq round-trip on a parsed object. main returns `i` so `\`
+    // cannot propagate here — `res_expect` (stdlib/core/result.nu) is the
+    // leaf-site tool: Ok payload straight out, panic with the message on
+    // Err. Compare this flat sequence with the triple-nested `??` pyramid
+    // it replaced.
+    : Json j1 ( res_expect [Json JsonError] ( json_parse `{"x":1,"y":2}` ) `parse j1` )
+    : Json j2 ( res_expect [Json JsonError] ( json_parse `{"x":1,"y":2}` ) `parse j2` )
+    : Json j3 ( res_expect [Json JsonError] ( json_parse `{"x":1,"y":3}` ) `parse j3` )
+    ( nurl_print `eq_same=` )
+    ( nurl_print ? ( json_eq j1 j2 ) `T` `F` )
+    ( nurl_print ` eq_diff=` )
+    ( nurl_print ? ( json_eq j1 j3 ) `T` `F` )
+    ( nurl_print `\n` )
+    ( json_free j3 )
+    ( json_free j2 )
+    ( json_free j1 )
 
     ( json_free dup )
     ( string_free built_s )
