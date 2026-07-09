@@ -88,7 +88,7 @@ test that returns/matches a Result is your canary — `string_to_int`
 - `nurlfmt`: `build/nurlfmt --write` any touched + new files;
   `./compiler/tests/nurlfmt_check.sh` must say OK.
 - Update `docs/spec.md` §4.5 (the `{ i1, i64 }` description) and remove the
-  `docs/LIMITATIONS.md` / TODO.md "Result boxes multi-field payloads" entry.
+  `docs/LIMITATIONS.md` "Result boxes multi-field payloads" entry.
 - Commit (one focused commit), push, PR. Keep the two planning docs or fold them
   into the PR description.
 

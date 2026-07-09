@@ -10,11 +10,11 @@ feature coverage and gaps (databases, TLS, MQTT, …) are *not* language
 limitations — they live with each module (the `stdlib/**` file headers and
 [`docs/NETWORKING.md`](NETWORKING.md)) and on the [`ROADMAP.md`](../ROADMAP.md).
 
-For active compiler quirks (binary `&` / `|` arity, bare `@-fn` closure
-coercion, same-line parameter shadowing, ternary cascading, `: ~`
-closure-borrow escape) see [`docs/GOTCHAS.md`](GOTCHAS.md). The memory model
-and the borrow checker's not-yet-checked list live in
-[`docs/MEMORY.md`](MEMORY.md).
+The fixed grammar quirks (binary `&` / `|` arity, ternary cascading, `^`
+vs `^^`) are documented in the [Grammar](#grammar) section below; the
+closure-capture and `: ~` closure-borrow-escape rules live in
+[`docs/MEMORY.md`](MEMORY.md). All of these are compiler-diagnosed — see
+[`docs/GOTCHAS.md`](GOTCHAS.md) for the "the error message is the API" policy.
 
 ## Type system
 
@@ -26,7 +26,7 @@ and the borrow checker's not-yet-checked list live in
 
 | Limitation | Workaround |
 |---|---|
-| Dispatch is **fully static** — a bare-name method call resolves to `method__<mangled-first-arg-type>` at monomorphisation. There is no runtime trait identity, no vtable, and **no `dyn Trait`** (dynamic dispatch / heterogeneous collections of differing impls). The model is a deliberately reserved extension point (see `docs/spec.md` §4.9) | Keep the concrete type at the call site; for a heterogeneous set, use an enum of the variants and match |
+| Bare-name method calls are **statically** dispatched — resolved to `method__<mangled-first-arg-type>` at monomorphisation, with no per-call vtable. Dynamic dispatch **is** supported but must be opted into via the `%Trait` object type + `( dyn Trait value )` construction: a `%dyn.<Trait> = { i8*, i8* }` box-plus-vtable fat pointer (spec §4.9). A trait must be **object-safe** to be used as `%Trait` (see `compiler/tests/should_fail_dyn_not_object_safe.nu`) | Keep the concrete type at the call site for static hot paths; for a heterogeneous collection, box values as `%Trait` with `( dyn Trait v )`, or use an enum of the variants and match |
 | Associated types have **no projection**: an associated type cannot be named as `A::Elem` at a generic call site — it is usable only inside the declaring trait's own method bodies/signatures | Make the element an explicit type parameter of the function (`[A E]`) when a caller needs to name it |
 | An associated-type binding (`type Elem Concrete`) must be a **single simple type name** (IDENT / type keyword); compound types (`* T`, `Vec T`, `?T`) are not accepted — the same restriction trait-default substitution carries | Bind to a named struct/alias type that wraps the compound type |
 | A trait must be scanned **before** its impls (defaults, supertrait names, and associated types are read from the trait when an impl is processed) | Declare the trait — or place its `$`-import — above the impl (the natural order) |

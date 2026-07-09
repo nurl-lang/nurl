@@ -84,8 +84,12 @@ enough — we'll iterate on the design in the issue thread.
   The bootstrap requires byte-identical LLVM IR on its second pass —
   if your change is non-deterministic, the build will reject it.
 - **Add or update tests** for compiler changes. New language features
-  belong in `compiler/tests/` as `.nu` snippets with their expected
-  output checked in via `correct.txt`.
+  belong in `compiler/tests/` as `.nu` snippets, each with a per-test
+  golden under `compiler/tests/outputs/` (record it with
+  `compiler/tests/run_tests.sh --update <name>`; run a single test with
+  `run_tests.sh <name>`). Programs that must be *rejected* go in as
+  `should_fail_*.nu` / `borrow_*.nu`, with their expected diagnostic as
+  the golden.
 - **Update docs** if you change observable behaviour. The README is a
   thin overview that links to topic docs under [`docs/`](docs/); update
   the relevant one (`docs/spec.md`, `docs/LIMITATIONS.md`,
@@ -130,21 +134,19 @@ The browser playground lives under `nurlapi/`; see its `README.md`
 
 ## Style conventions
 
-NURL doesn't ship an autoformatter yet, so style is "match the
-surrounding code". Some loose conventions:
+Run **`nurlfmt --write`** before pushing. It applies the canonical `.nu`
+format (indentation, spacing, import grouping) and is idempotent and
+IR-preserving; CI **hard-gates** on `nurlfmt --check`, and a pre-commit
+hook under `.githooks/` formats on commit. See [`docs/FORMAT.md`](docs/FORMAT.md).
 
-- **Indentation**: 4 spaces in `.nu` files, 2 spaces in
-  TypeScript/JSON.
+A few conventions the formatter does **not** enforce, so apply them by hand:
+
 - **Naming**: `snake_case` for functions and bindings, `PascalCase`
   for types, `SCREAMING_CASE` for top-level constants.
 - **Comments**: `//` for single-line. Avoid restating what the code
   obviously does; document *why* when the answer isn't immediately
   obvious from context.
-- **Imports** (`$ \`path/module.nu\``) go at the top of the file,
-  grouped by category (core / std / ext).
-
-If you want to propose tighter conventions or an autoformatter,
-please do — both would be welcome additions.
+- **Non-`.nu` files**: 2 spaces in TypeScript/JSON.
 
 ## Licensing
 

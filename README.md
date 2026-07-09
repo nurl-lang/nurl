@@ -13,8 +13,8 @@
 NURL takes a few design positions that are uncommon together:
 
 - **Regular prefix-arity grammar** — every operator has a fixed arity, no infix, no precedence cliffs. The grammar fits on a single page and is LL(k≤4) — recursive-descent with up to 4 tokens of lookahead.
-- **Local semantics** — a construct's meaning is derivable from a short window of surrounding tokens. No long-range dependencies.
-- **Deterministic compiler** — the same source always produces identical output. No UB, no platform-dependent behaviour. The self-hosted compiler reaches a byte-identical fixed point on its own source.
+- **Locally parseable** — a construct's shape (arity and nesting) is fixed by a short window of surrounding tokens, with no long-range parse dependencies. (A few operators — `.`, `&`, `|`, `#` — resolve their *lowering* by operand type; see [`docs/spec.md`](docs/spec.md) §4.9/§6.)
+- **Deterministic compiler** — the same source always produces identical output, with no platform-dependent codegen. The self-hosted compiler reaches a byte-identical fixed point on its own source. (Raw `*T` pointers and out-of-range shifts inherit LLVM semantics — spec §4.2, §6.1.)
 - **Single-owner memory + default-on static borrow checker** — auto-drop at scope exit, plus a diagnostic pass (on by default, `--no-borrowck` to disable) that catches use-after-move, alias-double-free, escaping closure-captures, and iterator invalidation as hard errors.
 - **LLVM-based codegen, broad platform reach** — one pipeline targets Linux, macOS, Windows, wasm32-wasi, RISC-V, and ARM64.
 
@@ -35,8 +35,8 @@ they are machine-specific, so run the suite locally for figures you can trust.
 ## Design principles
 
 1. **Regular grammar** — no exceptions; the same construct always works the same way.
-2. **Local semantics** — meaning derives from a short window of tokens, no long-range dependencies.
-3. **Deterministic compiler** — same source → identical output, no UB, no platform variation.
+2. **Local structure** — a construct's shape derives from a short window of tokens, no long-range parse dependencies.
+3. **Deterministic compiler** — same source → identical output, no platform variation.
 4. **Full platform support** — one compilation pipeline → every LLVM target without porting.
 
 ---
@@ -100,9 +100,8 @@ For contributors, or to run the bootstrap yourself:
 ```bash
 git clone https://github.com/nurl-lang/nurl.git
 cd nurl
-clang -c stdlib/runtime.c -o stdlib/runtime.o   # once (already checked in)
-./build.sh                                       # bootstrap + test suite
-./nurl.sh examples/fizzbuzz.nu && ./fizzbuzz     # compile & run a program
+./build.sh                                            # builds the C runtime, bootstraps, runs tests
+./nurl.sh examples/fizzbuzz.nu fizzbuzz && ./fizzbuzz # compile & run a program
 ```
 
 The only build-time dependency is **clang / LLVM 15+**. `./install.sh` also

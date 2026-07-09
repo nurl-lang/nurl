@@ -5,7 +5,7 @@
 // `json_*` accessor, `json_free`, and `json_stringify` work unchanged on a
 // parsed document) and serializes a `Json` tree back to block-style YAML.
 //
-// Handled (the pragmatic subset called out in TODO.md):
+// Handled (the pragmatic subset this module targets):
 //   * Block mappings        key: value  /  key:\n  (nested block)
 //   * Block sequences       - item      /  -\n      (nested block)
 //   * The "sequence under a key at the same indentation" idiom:

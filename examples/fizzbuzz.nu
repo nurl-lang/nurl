@@ -8,8 +8,10 @@
 //   - String operations
 //
 // Build & run:
+//   ./nurl.sh examples/fizzbuzz.nu fizzbuzz && ./fizzbuzz
+// Or manually (link the plain-ELF runtime, not the LTO-bitcode runtime.o):
 //   ./build/nurlc examples/fizzbuzz.nu > /tmp/fizzbuzz.ll
-//   clang /tmp/fizzbuzz.ll stdlib/runtime.o -o /tmp/fizzbuzz
+//   clang /tmp/fizzbuzz.ll stdlib/runtime.native.o -lm -lpthread -o /tmp/fizzbuzz
 //   /tmp/fizzbuzz
 
 @ fizzbuzz i n → v {
