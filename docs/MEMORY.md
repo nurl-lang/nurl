@@ -645,9 +645,10 @@ on; they are not two separate tools or two separate builds.
      (None-placeholder allocations, the keepalive-500 response, and
      router/handler closure envs).
 
-   Neither pinned check is wired into `ci.yml` yet — they are the
-   pre-1.0 review gates; gate 2 with `LSAN_DETECT_LEAKS=1` is the
-   reproducible audit.
+   Both pinned checks are now wired into `ci.yml`: the leak-pinned
+   subset runs under `LSAN_DETECT_LEAKS=1` in the sanitizers job, and
+   `tools/leakcheck/run.sh` runs in the build-test job. So a leak
+   regression in the pinned surface fails CI, not just a manual audit.
 
 ## 7. Leaks versus memory safety
 

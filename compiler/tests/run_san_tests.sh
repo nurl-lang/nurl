@@ -169,6 +169,23 @@ shopt -u nullglob
 if [[ ${#tests[@]} -eq 0 ]]; then echo "ERROR: no .nu files in $SCRIPT_DIR" >&2; exit 2; fi
 declare -a names=()
 for src in "${tests[@]}"; do names+=("$(basename "$src" .nu)"); done
+# Optional filter: if test names are passed as arguments, run only those.
+# Used by the CI leak gate to run just the leak-pinned tests under
+# LSAN_DETECT_LEAKS=1 (the whole corpus can't run leak-on — the compiler's
+# process-lifetime arenas and the brevity tests leak by design). No args →
+# the whole corpus, exactly as before.
+if [[ $# -gt 0 ]]; then
+    declare -a filtered=()
+    for want in "$@"; do
+        for have in "${names[@]}"; do
+            [[ "$have" == "$want" ]] && filtered+=("$have")
+        done
+    done
+    if [[ ${#filtered[@]} -eq 0 ]]; then
+        echo "ERROR: none of the requested tests exist: $*" >&2; exit 2
+    fi
+    names=("${filtered[@]}")
+fi
 IFS=$'\n' names=($(printf '%s\n' "${names[@]}" | LC_ALL=C sort)); unset IFS
 
 # ── run in parallel ─────────────────────────────────────────────

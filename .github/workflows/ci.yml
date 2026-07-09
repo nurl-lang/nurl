@@ -80,6 +80,13 @@ jobs:
         # nurlfmt IR-transparent (compiler/tests/nurlfmt_idempotent.sh).
         run: ./compiler/tests/nurlfmt_check.sh
 
+      - name: HTTP-server per-request leak gate
+        # Builds the leakcheck HTTP server with ASan+LSan and fails on ANY
+        # leak across 21 requests. Uses the normal build/nurlc from ./build.sh
+        # above — NURL_SAN=1 instruments only the server, not the compiler
+        # (whose process-lifetime arenas would otherwise dominate the report).
+        run: ./tools/leakcheck/run.sh
+
   freebsd:
     name: FreeBSD (build + bootstrap fixed point + tests, in a VM)
     runs-on: ubuntu-latest
@@ -159,6 +166,16 @@ jobs:
         # that are intentionally never freed. The non-leak ASan +
         # UBSan signal is what catches actual codegen bugs.
         run: ./compiler/tests/run_san_tests.sh
+
+      - name: leak-pinned tests (LSan)
+        # The whole corpus can't run leak-on — the compiler's process-lifetime
+        # arenas (g_str_pool, g_sym_arena) and the brevity tests leak by design
+        # — so gate the curated leak-clean set under LSAN_DETECT_LEAKS=1. Reuses
+        # the --san build above; run_san_tests.sh exits non-zero on any LSan hit.
+        run: |
+          LSAN_DETECT_LEAKS=1 ./compiler/tests/run_san_tests.sh \
+            struct_nested_field_drop arm_local_drop arm_local_trailing_drop \
+            recover_unwind closure_env_reclaim closure_env_binding
 
 # nurlfmt --check now runs as a step in the build-test job above
 # (after the examples gate). The repo-wide `nurlfmt --write` pass that
