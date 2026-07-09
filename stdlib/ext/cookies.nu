@@ -58,7 +58,7 @@ $ `stdlib/std/time.nu`
     ( vec_free [Cookie] . j cookies )
 }
 
-@ __free_str_vec ( Vec String ) v → v {
+@ __cookies_free_str_vec ( Vec String ) v → v {
     : ~ i k 0
     ~ < k ( vec_len [String] v ) {
         ?? ( vec_get [String] v k ) { T s → ( string_free s ) F _ → {} }
@@ -178,7 +178,7 @@ $ `stdlib/std/time.nu`
     }
     ? == ( string_len nm ) 0 {
         ( string_free nm ) ( string_free val )
-        ( __free_str_vec parts )
+        ( __cookies_free_str_vec parts )
         ^ @ ?Cookie { F }
     } {}
 
@@ -236,7 +236,7 @@ $ `stdlib/std/time.nu`
         }
         = pi + pi 1
     }
-    ( __free_str_vec parts )
+    ( __cookies_free_str_vec parts )
 
     : Cookie c @ Cookie { nm val dom cpath expires host_only secure }
     ^ @ ?Cookie { T c }
