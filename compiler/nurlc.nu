@@ -2615,7 +2615,11 @@
         // diagnostic" claim true end-to-end.
         ? & & == 0 ( nurl_str_len ptr ) == 0 ( nurl_str_len glb )
         == 0 ( nurl_str_len ( nurl_sym_get syms ( nurl_str_cat name `__param` ) ) )
-        { ( die lex ( nurl_str_cat3 `use of undefined identifier '` name `' - no binding, parameter, constant, enum variant, or function with this name is in scope` ) ) }
+        { : s __sugg ( __suggest_ident syms name )
+            ? != 0 ( nurl_str_len __sugg )
+            { ( die lex ( nurl_str_cat ( nurl_str_cat3 `use of undefined identifier '` name `' - did you mean '` )
+                ( nurl_str_cat3 __sugg `'? No binding, parameter, constant, enum variant, or ` `function with this name is in scope` ) ) ) }
+            { ( die lex ( nurl_str_cat3 `use of undefined identifier '` name `' - no binding, parameter, constant, enum variant, or function with this name is in scope` ) ) } }
         {}
         ^ ? != 0 ( nurl_str_len ptr )
         ( load_var cg lt ptr )
@@ -3661,6 +3665,147 @@
     }
     ( nurl_poke t 0 count )
     ? > depth 0 { ( nurl_poke t 1 - depth 1 ) } {}
+}
+
+// ── Did-you-mean suggestions (diagnostic cold path only) ──────────
+
+// Flat-entry iteration over the symbol table, for the suggestion scan.
+@ __sym_count i h → i {
+    ^ ( nurl_peek # s h 0 )
+}
+
+// BORROW of the table's own strdup'd key copy — do not free.
+@ __sym_entry_name i h i k → s {
+    : *s names # *s # s ( nurl_peek # s h 3 )
+    ^ . names k
+}
+
+// str[0..n) ends with `__arity` (no allocation).
+@ __key_is_arity s str i n → b {
+    ? < n 8 { ^ F } {}
+    : *u p # *u str
+    : s sfx `__arity`
+    : *u q # *u sfx
+    : ~ i k 0
+    ~ < k 7 {
+        ? != & # i . p + - n 7 k 255 & # i . q k 255 { ^ F } {}
+        = k + k 1
+    }
+    ^ T
+}
+
+// str[0..n) contains a `__` pair (metadata-key marker; no allocation).
+@ __key_has_dunder s str i n → b {
+    : *u p # *u str
+    : ~ i k 1
+    ~ < k n {
+        ? & == & # i . p - k 1 255 95 == & # i . p k 255 95 { ^ T } {}
+        = k + k 1
+    }
+    ^ F
+}
+
+// Byte-equality of a[0..n) and b[0..n) (no allocation).
+@ __bytes_eq s a s b i n → b {
+    : *u p # *u a
+    : *u q # *u b
+    : ~ i k 0
+    ~ < k n {
+        ? != & # i . p k 255 & # i . q k 255 { ^ F } {}
+        = k + k 1
+    }
+    ^ T
+}
+
+// Levenshtein distance of a[0..la) / b[0..lb), early-out once every cell
+// of a row exceeds `cap` (returns cap+1 then). Two u8 scratch rows of at
+// least lb+1 bytes each are supplied by the caller so a scan over
+// thousands of candidates doesn't allocate per pair.
+@ __edit_dist_le s a i la s b i lb i cap * u r0v * u r1v → i {
+    : ~ * u r0 r0v
+    : ~ * u r1 r1v
+    : *u pa # *u a
+    : *u pb # *u b
+    : ~ i j 0
+    ~ <= j lb {
+        = . r0 j # u j
+        = j + j 1
+    }
+    : ~ i i 1
+    : ~ i bail 0
+    ~ & <= i la == bail 0 {
+        = . r1 0 # u i
+        : ~ i rowmin i
+        : i ca & # i . pa - i 1 255
+        : ~ i jj 1
+        ~ <= jj lb {
+            : i cb & # i . pb - jj 1 255
+            : i cost ? == ca cb 0 1
+            : ~ i d + & # i . r0 - jj 1 255 cost
+            : i del + & # i . r0 jj 255 1
+            : i ins + & # i . r1 - jj 1 255 1
+            ? < del d { = d del } {}
+            ? < ins d { = d ins } {}
+            ? > d 250 { = d 250 } {}
+            = . r1 jj # u d
+            ? < d rowmin { = rowmin d } {}
+            = jj + jj 1
+        }
+        ? > rowmin cap { = bail 1 } {}
+        : *u tmp r0
+        = r0 r1
+        = r1 tmp
+        = i + i 1
+    }
+    ? != bail 0 { ^ + cap 1 } {}
+    ^ & # i . r0 lb 255
+}
+
+// Closest known name to `name`, or `` when nothing is close enough.
+// Candidates come from the symbol table itself: every `<fn>__arity` key
+// (scan_fn_sigs pre-registers every @-function program-wide) plus every
+// plain no-`__` key (builtins, FFI, bindings, constants). Distance cap 1
+// for names up to 4 chars, else 2 — rustc-style. Returns an OWNED string
+// (the caller feeds it straight into a die message).
+@ __suggest_ident i syms s name → s {
+    : i n ( nurl_str_len name )
+    ? < n 2 { ^ ( strdup `` ) } {}
+    : i cap ? <= n 4 1 2
+    : i cnt ( __sym_count syms )
+    : *u row0 # *u ( malloc 160 )
+    : *u row1 # *u ( malloc 160 )
+    : ~ i best_k -1
+    : ~ i best_len 0
+    : ~ i bestd + cap 1
+    : ~ i k 0
+    ~ < k cnt {
+        : s key ( __sym_entry_name syms k )
+        : i kl ( nurl_str_len key )
+        : ~ i cl 0
+        ? ( __key_is_arity key kl )
+        { = cl - kl 7 }
+        { ? ! ( __key_has_dunder key kl ) { = cl kl } {} }
+        // Prune: viable length, not the name itself (an exact key match
+        // reaching a diagnostic means a different-namespace hit — a
+        // same-name suggestion would read as nonsense).
+        : i diff ? > cl n - cl n - n cl
+        ? & & & > cl 1 < cl 150 <= diff cap ! & == cl n ( __bytes_eq key name n )
+        {
+            : i d ( __edit_dist_le name n key cl cap row0 row1 )
+            ? < d bestd {
+                = bestd d
+                = best_k k
+                = best_len cl
+            } {}
+        } {}
+        = k + k 1
+    }
+    ( nurl_free # s row0 )
+    ( nurl_free # s row1 )
+    ? >= best_k 0
+    { ^ ( nurl_str_slice ( __sym_entry_name syms best_k ) 0 best_len ) }
+    {}
+    ^ ( strdup `` )
 }
 
 // ══════════════════════════════════════════════════════════════════
@@ -5511,9 +5656,15 @@
             ( nurl_str_cat3 `generic function '` fname `' needs explicit type argument(s): write ( ` )
             ( nurl_str_cat3 fname ` [` ( nurl_str_cat __gtp `] … ) ` ) )
             `— NURL does not infer generic type arguments from value arguments.` ) ) }
-        { ( die lex ( nurl_str_cat3
-            `call to unknown function '` fname
-            `' — it is not defined in this file, not in any '$'-imported file processed so far, and not a known FFI/builtin. Add the missing '$' import (or move it above this file's import in the program), or check the spelling.` ) ) } }
+        { : s __sugg ( __suggest_ident syms fname )
+            ? != 0 ( nurl_str_len __sugg )
+            { ( die lex ( nurl_str_cat ( nurl_str_cat3
+                `call to unknown function '` fname
+                `' — did you mean '` )
+                ( nurl_str_cat3 __sugg `'? If not: it is not defined in this file, not in any ` `'$'-imported file processed so far, and not a known FFI/builtin — add the missing '$' import, or check the spelling.` ) ) ) }
+            { ( die lex ( nurl_str_cat3
+                `call to unknown function '` fname
+                `' — it is not defined in this file, not in any '$'-imported file processed so far, and not a known FFI/builtin. Add the missing '$' import (or move it above this file's import in the program), or check the spelling.` ) ) } } }
     {}
     // Call-arity check. scan_fn_sigs records every non-generic
     // @-function's declared parameter count as `<fname>__arity`. A call
