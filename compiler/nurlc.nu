@@ -9564,9 +9564,6 @@
                 ( bck_esc_let syms name ( bck_expr_refdepth syms
                 ? ( is_ident_tok bck_rhs_tt ) bck_rhs_val `` ) )
 
-                // Debug: show types being converted
-                ( nurl_print `  ; DEBUG: val=` ) ( nurl_print val ) ( nurl_print ` vt=` ) ( nurl_print vt ) ( nurl_print ` ptype=` ) ( nurl_print ptype ) ( nurl_print `\n` )
-
                 // Widen i1 short-circuit / comparison results to the declared
                 // integer width before storing (`: i can_l & …` etc.).
                 : s widened_val ( coerce_store_val lex val vt ptype syms cg )
@@ -11847,8 +11844,6 @@
     : b starts_with_i32 != 0 ( nurl_str_starts expected_ll `i32 (` )
     : b starts_with_dbl != 0 ( nurl_str_starts expected_ll `double (` )
     : b expects_fn_ptr | | | starts_with_fn starts_with_void starts_with_i8 | starts_with_i32 starts_with_dbl
-
-    ( nurl_print `  ; DEBUG: convert_closure_arg is_closure=` ) ( nurl_print ? is_closure_struct `1` `0` ) ( nurl_print ` expects_fn=` ) ( nurl_print ? expects_fn_ptr `1` `0` ) ( nurl_print `\n` )
 
     ? & is_closure_struct expects_fn_ptr
     {
@@ -18072,6 +18067,22 @@
 
 // ── Entry point ────────────────────────────────────────────────────
 
+@ nurlc_print_help → v {
+    ( nurl_print `nurlc — the NURL compiler. Compiles a .nu source file to LLVM IR on stdout.\n\n` )
+    ( nurl_print `usage: nurlc [flags] <file.nu>  >out.ll\n\n` )
+    ( nurl_print `flags:\n` )
+    ( nurl_print `  --help, -h          print this help and exit\n` )
+    ( nurl_print `  --version           print the compiler version and exit\n` )
+    ( nurl_print `  --g, -g             emit DWARF debug info (nurl.sh --debug forwards this)\n` )
+    ( nurl_print `  --lint              run lint-only diagnostics (e.g. unused imports)\n` )
+    ( nurl_print `  --no-borrowck       disable the borrow-checker pass (on by default)\n` )
+    ( nurl_print `  --strict-borrowck   run the borrow-checker in strict mode\n` )
+    ( nurl_print `  --ffi-host-imports  emit FFI calls as wasm host imports\n` )
+    ( nurl_print `\nThe LLVM IR goes to stdout; link it with clang against\n` )
+    ( nurl_print `stdlib/runtime.native.o (see docs/BUILDING.md). For a one-step\n` )
+    ( nurl_print `source-to-binary build use ./nurl.sh <file.nu> [output].\n` )
+}
+
 @ main → v {
     // CLI: `nurlc [--g] [--no-borrowck] <file.nu>`. Optional flags in
     // any order; the lone non-flag argument is the source path.
@@ -18086,19 +18097,21 @@
         : s a ( nurl_argv ai )
         ? ( seq a `--version` )
         { ( nurl_print ( nurl_version ) ) ( nurl_print `\n` ) ( nurl_exit 0 ) }
-        { ? | ( seq a `--g` ) ( seq a `-g` )
-            { = g_dbg_enabled 1 }
-            { ? ( seq a `--lint` )
-                { = g_lint 1 }
-                { ? ( seq a `--borrowck` )
-                    { = g_borrowck 1 }
-                    { ? ( seq a `--no-borrowck` )
-                        { = g_borrowck 0 }
-                        { ? ( seq a `--strict-borrowck` )
-                            { = g_borrowck 1 = g_strict_borrowck 1 }
-                            { ? ( seq a `--ffi-host-imports` )
-                                { = g_ffi_host_imports 1 }
-                                { = path a } } } } } } }
+        { ? | ( seq a `--help` ) ( seq a `-h` )
+            { ( nurlc_print_help ) ( nurl_exit 0 ) }
+            { ? | ( seq a `--g` ) ( seq a `-g` )
+                { = g_dbg_enabled 1 }
+                { ? ( seq a `--lint` )
+                    { = g_lint 1 }
+                    { ? ( seq a `--borrowck` )
+                        { = g_borrowck 1 }
+                        { ? ( seq a `--no-borrowck` )
+                            { = g_borrowck 0 }
+                            { ? ( seq a `--strict-borrowck` )
+                                { = g_borrowck 1 = g_strict_borrowck 1 }
+                                { ? ( seq a `--ffi-host-imports` )
+                                    { = g_ffi_host_imports 1 }
+                                    { = path a } } } } } } } }
         = ai + ai 1
     }
     ? == 0 ( nurl_str_len path )
