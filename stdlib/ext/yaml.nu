@@ -416,16 +416,24 @@ $ `stdlib/core/vec.nu`
     }
 }
 
-@ __yaml_flow_value s text i n i pos → __YFlow {
+// Hard cap on flow-collection nesting depth. `[[[…` / `{a:{a:…` drive native
+// recursion (__yaml_flow_value ↔ __yaml_flow_seq/__yaml_flow_map), so an
+// unbounded document would overflow the C stack — a crafted-input DoS (YAML
+// is commonly fed untrusted config). Exceeding the cap fails the parse
+// (reported as YamlSyntax) instead.
+: i YAML_MAX_DEPTH 256
+
+@ __yaml_flow_value s text i n i pos i depth → __YFlow {
+    ? >= depth YAML_MAX_DEPTH { ^ @ __YFlow { @ Json { JNull } pos F } } {}
     : i p ( __yaml_skip_sp text pos n )
     ? >= p n { ^ @ __YFlow { @ Json { JNull } p F } } {}
     : i c ( nurl_str_get text p )
-    ? == c 91 { ^ ( __yaml_flow_seq text n p ) } {}
-    ? == c 123 { ^ ( __yaml_flow_map text n p ) } {}
+    ? == c 91 { ^ ( __yaml_flow_seq text n p depth ) } {}
+    ? == c 123 { ^ ( __yaml_flow_map text n p depth ) } {}
     ^ ( __yaml_flow_scalar text n p F )
 }
 
-@ __yaml_flow_seq s text i n i pos → __YFlow {
+@ __yaml_flow_seq s text i n i pos i depth → __YFlow {
     : Json arr ( json_arr_new )
     : ~ i p + pos 1
     : ~ b done F
@@ -433,7 +441,7 @@ $ `stdlib/core/vec.nu`
     = p ( __yaml_skip_sp text p n )
     ? & < p n == ( nurl_str_get text p ) 93 { ^ @ __YFlow { arr + p 1 T } } {}
     ~ & ! done ok {
-        : __YFlow ev ( __yaml_flow_value text n p )
+        : __YFlow ev ( __yaml_flow_value text n p + depth 1 )
         ? ! . ev ok { = ok F = done T ( json_free . ev val ) } {
             ( json_arr_push arr . ev val )
             = p ( __yaml_skip_sp text . ev pos n )
@@ -450,7 +458,7 @@ $ `stdlib/core/vec.nu`
     ^ @ __YFlow { arr p ok }
 }
 
-@ __yaml_flow_map s text i n i pos → __YFlow {
+@ __yaml_flow_map s text i n i pos i depth → __YFlow {
     : Json obj ( json_obj_new )
     : ~ i p + pos 1
     : ~ b done F
@@ -467,7 +475,7 @@ $ `stdlib/core/vec.nu`
             : b nocolon | >= p n != ( nurl_str_get text p ) 58
             ? nocolon { = ok F = done T ( string_free keystr ) } {
                 = p ( __yaml_skip_sp text + p 1 n )
-                : __YFlow vv ( __yaml_flow_value text n p )
+                : __YFlow vv ( __yaml_flow_value text n p + depth 1 )
                 ? ! . vv ok { = ok F = done T ( string_free keystr ) ( json_free . vv val ) } {
                     ( json_obj_set obj ( string_data keystr ) . vv val )
                     ( string_free keystr )
@@ -491,7 +499,7 @@ $ `stdlib/core/vec.nu`
 // '[' or '{'). Trailing content after the close is ignored (lenient).
 @ __yaml_parse_flow s text → !Json YamlErr {
     : i n ( nurl_str_len text )
-    : __YFlow r ( __yaml_flow_value text n 0 )
+    : __YFlow r ( __yaml_flow_value text n 0 0 )
     ? . r ok { ^ @ !Json YamlErr { T . r val } } {}
     ( json_free . r val )
     ^ @ !Json YamlErr { F @ YamlErr { YamlSyntax } }

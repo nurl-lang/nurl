@@ -68,6 +68,13 @@ $ `stdlib/core/vec.nu`
 // node produced, 0 = none (hit `</` or EOF), -1 = error.
 : __XmlNode { Xml node i endpos i ok }
 
+// Hard cap on element-nesting depth. `<a><a>…` drives native recursion
+// (__xml_parse_element ↔ __xml_parse_node), so an unbounded document would
+// overflow the C stack — a crafted-input DoS. Exceeding the cap fails the
+// parse (reported as XmlSyntax) instead. XML frames are heavier than JSON's,
+// so this cap is lower than json's 1024.
+: i XML_MAX_DEPTH 256
+
 @ xml_err_name XmlErr e → s {
     ^ ?? e {
         XmlSyntax → `XmlSyntax`
@@ -500,8 +507,13 @@ $ `stdlib/core/vec.nu`
     ^ res
 }
 
-// Parse one element starting at the '<' at pos.
-@ __xml_parse_element s src i pos i n → __XmlNode {
+// Parse one element starting at the '<' at pos. `depth` is the current
+// element-nesting depth; exceeding XML_MAX_DEPTH fails the parse (ok = -1)
+// rather than recursing into a C-stack overflow.
+@ __xml_parse_element s src i pos i n i depth → __XmlNode {
+    ? >= depth XML_MAX_DEPTH {
+        ^ @ __XmlNode { ( __xml_empty ) pos -1 }
+    } {}
     : i nstart + pos 1
     ? ! ( __xml_is_name_start ( nurl_str_get src nstart ) ) {
         ^ @ __XmlNode { ( __xml_empty ) pos -1 }
@@ -528,7 +540,7 @@ $ `stdlib/core/vec.nu`
             ? ( __xml_match src cp n `</` ) {
                 = cdone T
             } {
-                : __XmlNode nd ( __xml_parse_node src cp n )
+                : __XmlNode nd ( __xml_parse_node src cp n + depth 1 )
                 ? < . nd ok 0 {
                     = cerr T
                     = cdone T
@@ -556,7 +568,7 @@ $ `stdlib/core/vec.nu`
 
 // Parse the next node (element, text, or CDATA) at pos. ok: 1 produced,
 // 0 = at `</` or EOF (no node), -1 = error.
-@ __xml_parse_node s src i pos i n → __XmlNode {
+@ __xml_parse_node s src i pos i n i depth → __XmlNode {
     : i p ( __xml_skip_misc src pos n )
     ? >= p n { ^ @ __XmlNode { ( __xml_empty ) p 0 } } {}
     ? ( __xml_match src p n `</` ) { ^ @ __XmlNode { ( __xml_empty ) p 0 } } {}
@@ -568,7 +580,7 @@ $ `stdlib/core/vec.nu`
         ^ @ __XmlNode { ( __xml_mk_text txt ) + cend 3 1 }
     } {}
     ? == ( nurl_str_get src p ) 60 {  // '<' → element
-        ^ ( __xml_parse_element src p n )
+        ^ ( __xml_parse_element src p n depth )
     } {}
     // text run up to the next '<'
     : i lt ( __xml_find_lit src p n `<` )
@@ -582,7 +594,7 @@ $ `stdlib/core/vec.nu`
     : i p ( __xml_skip_misc src 0 n )
     ? >= p n { ^ @ !Xml XmlErr { F @ XmlErr { XmlOther } } } {}
     ? != ( nurl_str_get src p ) 60 { ^ @ !Xml XmlErr { F @ XmlErr { XmlSyntax } } } {}
-    : __XmlNode nd ( __xml_parse_element src p n )
+    : __XmlNode nd ( __xml_parse_element src p n 0 )
     ? < . nd ok 0 {
         ( xml_free . nd node )
         ^ @ !Xml XmlErr { F @ XmlErr { XmlSyntax } }

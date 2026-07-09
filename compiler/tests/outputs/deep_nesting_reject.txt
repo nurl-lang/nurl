@@ -1,0 +1,8 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+xml: deep rejected
+yaml: deep rejected
+xml: shallow ok
+yaml: shallow ok
