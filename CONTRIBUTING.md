@@ -136,8 +136,15 @@ The browser playground lives under `nurlapi/`; see its `README.md`
 
 Run **`nurlfmt --write`** before pushing. It applies the canonical `.nu`
 format (indentation, spacing, import grouping) and is idempotent and
-IR-preserving; CI **hard-gates** on `nurlfmt --check`, and a pre-commit
-hook under `.githooks/` formats on commit. See [`docs/FORMAT.md`](docs/FORMAT.md).
+IR-preserving; CI **hard-gates** on `nurlfmt --check`. `./build.sh` also
+activates the pre-commit hook (`.githooks/pre-commit`, via `core.hooksPath`),
+which keeps commits canonical for you: a **fully-staged** `.nu` file is
+`nurlfmt --write`'n and re-staged automatically, while a **partially-staged**
+file that isn't canonical **blocks** the commit (run `nurlfmt --write` and
+re-stage it — the hook won't rewrite it, to avoid staging your unstaged
+edits). The hook skips cleanly if `build/nurlfmt` isn't built yet, excludes
+`bench/`, and can be bypassed once with `git commit --no-verify`. See
+[`docs/FORMAT.md`](docs/FORMAT.md).
 
 A few conventions the formatter does **not** enforce, so apply them by hand:
 
