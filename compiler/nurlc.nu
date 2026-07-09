@@ -79,6 +79,34 @@
 
 // ── Abort helpers ─────────────────────────────────────────────────
 
+// Multi-error mode (rustc-style): while parse_program's per-declaration
+// recovery frame is active (g_diag_recover_active), `die` prints its
+// diagnostic and then PANICS with the __nurlc_diag__ sentinel instead of
+// exiting — parse_program catches it, resyncs the lexer to the next
+// top-level declaration, and keeps going, so one run reports many errors.
+// Outside a recovery frame (the scan pre-passes, deferred flush stages)
+// `die` stays fail-fast exit(1). Capped at NURLC_MAX_ERRORS so a cascade
+// can't scroll forever; the emitted IR after the first error is garbage,
+// but the non-zero exit makes every caller discard it.
+: ~ i g_err_count 0
+: ~ i g_diag_recover_active 0
+: i NURLC_MAX_ERRORS 20
+
+// die → __diag_abort: print-position variants share this exit/panic tail.
+@ __diag_abort → v {
+    ? != g_diag_recover_active 0
+    { = g_err_count + g_err_count 1
+        ? >= g_err_count NURLC_MAX_ERRORS
+        { ( nurl_eprintln ( nurl_str_cat3 `error: too many errors (`
+            ( nurl_str_int g_err_count ) `) — stopping here` ) )
+            ( nurl_exit 1 ) }
+        {}
+        ( nurl_panic `__nurlc_diag__` )
+    }
+    {}
+    ( nurl_exit 1 )
+}
+
 @ die i lex s msg → v {
     // Format:
     //   file:line:col: msg
@@ -94,7 +122,7 @@
     ( nurl_eprintln ( nurl_str_cat3 loc `: ` msg ) )
     ( nurl_eprintln ( nurl_lex_line_text lex ) )
     ( nurl_eprintln ( nurl_diag_caret col ) )
-    ( nurl_exit 1 )
+    ( __diag_abort )
 }
 
 // die_at: a fatal diagnostic for a deferred (post-scan) check that has only a
@@ -104,7 +132,7 @@
 // been registered and so cannot point at a single lexer position.
 @ die_at s loc s msg → v {
     ( nurl_eprintln ( nurl_str_cat3 loc `: ` msg ) )
-    ( nurl_exit 1 )
+    ( __diag_abort )
 }
 
 // Soft diagnostic — same format as `die` but does not exit. Used for
@@ -2358,7 +2386,7 @@
     ( nurl_str_cat `:` ( nurl_str_cat ( nurl_str_int g_stmt_line )
     ( nurl_str_cat `:` ( nurl_str_int g_stmt_col ) ) ) ) )
     ( nurl_eprintln ( nurl_str_cat3 loc `: ` msg ) )
-    ( nurl_exit 1 )
+    ( __diag_abort )
 }
 
 // g_stmt_bare_lit — set by gen_stmt to 1 when the statement it just
@@ -18127,41 +18155,139 @@
 
 // ── Top-level loop ─────────────────────────────────────────────────
 
+// One top-level declaration — the body of parse_program's loop, split out
+// so the multi-error recovery frame can wrap exactly one declaration.
+@ parse_toplevel_decl i lex i syms i cg → v {
+    // Grammar v2.0: consume an optional `pub` visibility prefix
+    // before dispatching to the matching decl handler. The pending
+    // flag is read-and-cleared by vis_take_pending_pub at the @-
+    // decl site (gen_fn_decl). Other decl kinds parse the prefix
+    // for forward-compat but enforcement is fn-only in v2.0.
+    ? == ( nurl_lex_type lex ) TT_PUB
+    { ( nurl_lex_advance lex )
+        = g_pending_pub 1
+    }
+    {}
+    : i tt ( nurl_lex_type lex )
+    ? == tt TT_AT { ( gen_fn_decl lex syms cg ) }
+    ? == tt TT_COLON { ( gen_const_or_struct lex syms ) }
+    ? == tt TT_AMP { ( gen_ffi_decl lex syms ) }
+    ? == tt TT_DOLLAR { ( gen_import_decl lex syms cg ) }
+    ? == tt TT_PERCENT { ( gen_trait_or_impl lex syms cg ) }
+    // A bare `|` is the most common near-miss: enums are declared
+    // `: | Name { … }`, not `| Name { … }`. (The `:`-less spelling
+    // used to be silently skipped — and only "worked" when the enum
+    // was also imported under the same name; now it's a diagnostic.)
+    ? == tt TT_PIPE { ( die lex `enum declarations start with ': |', not a bare '|' — write ': | Name { Variant... }'` ) }
+    // Anything else at the top level is a hard error. The decl loop
+    // used to silently advance past stray tokens — which is exactly
+    // how an unbalanced-brace function body slipped through: an extra
+    // `}` closed the body early, and the leftover statements (`^ x`,
+    // a stray `}`, …) leaked here and were swallowed, leaving the
+    // truncated function to silently miscompile (undef return) or to
+    // desync the scan_fn_sigs pre-pass. Refusing them turns that whole
+    // class into a diagnostic at the first leaked token.
+    { ( die lex ( nurl_str_cat3
+        `unexpected `
+        ( __tok_label tt ( nurl_lex_val lex ) )
+        ` at the top level — expected a declaration (@ fn, : const/struct/enum, & ffi, $ import, or % trait/impl). A stray '}' or leftover expression here usually means an earlier function body has unbalanced braces.` ) ) }
+}
+
+// Runtime entry points for the multi-error machinery, declared via the
+// language's own `&` FFI (NOT compiler builtins): the committed bootstrap
+// compiler must be able to compile this file, and it predates these
+// symbols — an `&` decl needs no compiler support beyond the FFI feature
+// itself. Both live in runtime_core.c and resolve from runtime.o.
+& `c` @ nurl_recover_nojournal *u fnp *u env → i
+
+& `c` @ nurl_print_buf_unwind → v
+
+// Minimal recover for the compiler's own multi-error frames (nurlc.nu
+// imports no stdlib): decompose the closure into (fn, env), run it under
+// the JOURNAL-FREE recover variant, free the env. The journal-free
+// variant matters: the journalled one makes every nurl_free scan the
+// live journal, which would make error-free compilation quadratic in
+// per-declaration allocations. The trade is that a panic leaks whatever
+// the declaration allocated — fine, the process exits non-zero shortly.
+// Returns 0 = completed, 1 = panicked (message via nurl_panic_last_msg).
+@ __diag_recover ( @ v ) closure → i {
+    : *u fnp # *u closure 0
+    : *u env # *u closure 1
+    : i rv ( nurl_recover_nojournal fnp env )
+    ( nurl_free # s env )
+    ^ rv
+}
+
+// Does the lexer sit on a token that can start a top-level declaration,
+// at column 1? (Canonical nurlfmt source puts every top-level decl at
+// column 1, so this is a reliable resync anchor; non-canonical code just
+// gets coarser recovery.)
+@ __at_toplevel_start i lex → b {
+    ? != ( nurl_lex_col lex ) 1 { ^ F } {}
+    : i tt ( nurl_lex_type lex )
+    ? == tt TT_AT { ^ T } {}
+    ? == tt TT_COLON { ^ T } {}
+    ? == tt TT_AMP { ^ T } {}
+    ? == tt TT_DOLLAR { ^ T } {}
+    ? == tt TT_PERCENT { ^ T } {}
+    ? == tt TT_PUB { ^ T } {}
+    ^ F
+}
+
+// Skip the rest of a failed declaration: advance at least one token
+// (the error may have fired ON a decl starter), then to the next
+// column-1 declaration token or EOF.
+@ __diag_resync i lex → v {
+    ? != ( nurl_lex_type lex ) TT_EOF { ( nurl_lex_advance lex ) } {}
+    ~ & != ( nurl_lex_type lex ) TT_EOF ! ( __at_toplevel_start lex ) {
+        ( nurl_lex_advance lex )
+    }
+}
+
+// The compiler itself panicked (div-by-zero, OOB, …) with no diagnostic
+// reported: an internal compiler error, not a user error. Say so loudly
+// and ask for a report — the alternative is an opaque abort.
+@ __ice_report s file s pm → v {
+    ( nurl_eprintln `` )
+    ( nurl_eprintln `internal compiler error: nurlc itself panicked` )
+    ( nurl_eprintln ( nurl_str_cat `  panic message: ` pm ) )
+    ( nurl_eprintln ( nurl_str_cat ( nurl_str_cat3 `  while processing ` file `, near line ` )
+    ( nurl_str_int g_stmt_line ) ) )
+    ( nurl_eprintln `  this is a bug in nurlc, not in your program — please report it at` )
+    ( nurl_eprintln `  https://github.com/nurl-lang/nurl/issues with the source that triggered it.` )
+    ( nurl_eprintln ( nurl_str_cat `  nurlc version: ` ( nurl_version ) ) )
+    ( nurl_exit 3 )
+}
+
 @ parse_program i lex i syms i cg → v {
     ~ != ( nurl_lex_type lex ) TT_EOF {
-        // Grammar v2.0: consume an optional `pub` visibility prefix
-        // before dispatching to the matching decl handler. The pending
-        // flag is read-and-cleared by vis_take_pending_pub at the @-
-        // decl site (gen_fn_decl). Other decl kinds parse the prefix
-        // for forward-compat but enforcement is fn-only in v2.0.
-        ? == ( nurl_lex_type lex ) TT_PUB
-        { ( nurl_lex_advance lex )
-            = g_pending_pub 1
-        }
-        {}
-        : i tt ( nurl_lex_type lex )
-        ? == tt TT_AT { ( gen_fn_decl lex syms cg ) }
-        ? == tt TT_COLON { ( gen_const_or_struct lex syms ) }
-        ? == tt TT_AMP { ( gen_ffi_decl lex syms ) }
-        ? == tt TT_DOLLAR { ( gen_import_decl lex syms cg ) }
-        ? == tt TT_PERCENT { ( gen_trait_or_impl lex syms cg ) }
-        // A bare `|` is the most common near-miss: enums are declared
-        // `: | Name { … }`, not `| Name { … }`. (The `:`-less spelling
-        // used to be silently skipped — and only "worked" when the enum
-        // was also imported under the same name; now it's a diagnostic.)
-        ? == tt TT_PIPE { ( die lex `enum declarations start with ': |', not a bare '|' — write ': | Name { Variant... }'` ) }
-        // Anything else at the top level is a hard error. The decl loop
-        // used to silently advance past stray tokens — which is exactly
-        // how an unbalanced-brace function body slipped through: an extra
-        // `}` closed the body early, and the leftover statements (`^ x`,
-        // a stray `}`, …) leaked here and were swallowed, leaving the
-        // truncated function to silently miscompile (undef return) or to
-        // desync the scan_fn_sigs pre-pass. Refusing them turns that whole
-        // class into a diagnostic at the first leaked token.
-        { ( die lex ( nurl_str_cat3
-            `unexpected `
-            ( __tok_label tt ( nurl_lex_val lex ) )
-            ` at the top level — expected a declaration (@ fn, : const/struct/enum, & ffi, $ import, or % trait/impl). A stray '}' or leftover expression here usually means an earlier function body has unbalanced braces.` ) ) }
+        // Each top-level declaration compiles under a recovery frame so a
+        // diagnostic (die → __nurlc_diag__ panic) skips just that decl and
+        // the walk continues — one run reports many errors. Nested calls
+        // (imports re-enter parse_program) nest frames; the depth counter
+        // keeps die's panic-vs-exit decision right on the way back out.
+        = g_diag_recover_active + g_diag_recover_active 1
+        : i rv ( __diag_recover \ → v { ( parse_toplevel_decl lex syms cg ) } )
+        = g_diag_recover_active - g_diag_recover_active 1
+        ? != rv 0 {
+            : s pm ( nurl_panic_last_msg )
+            ? ( seq pm `__nurlc_diag__` )
+            {  // A reported diagnostic. The panic may have unwound out of
+                // buffered closure-IR emission — reset the output stack to
+                // stdout (post-error IR is garbage; the non-zero exit makes
+                // callers discard it) and resync to the next declaration.
+                ( nurl_print_buf_unwind )
+                ( __diag_resync lex )
+            }
+            { ? > g_err_count 0
+                {  // The compiler lost its footing in state a half-parsed
+                    // declaration left behind. The diagnostics above are
+                    // real; don't bury them under an ICE report.
+                    ( nurl_eprintln `note: stopping early — the compiler could not continue past the errors above` )
+                    ( nurl_exit 1 ) }
+                { ( __ice_report ( nurl_lex_filename lex ) pm ) }
+            }
+        } {}
     }
 }
 
@@ -18273,6 +18399,17 @@
     : i lex ( nurl_lex_new src path )
     ? != g_lint 0 { = g_lint_recording 1 } {}
     ( parse_program lex syms cg )
+    // Multi-error mode: diagnostics were reported per-declaration and the
+    // walk continued. If any fired, fail NOW — the deferred stages below
+    // (generic flush, escape resolution, lint) walk state that half-parsed
+    // declarations may have left inconsistent, and the emitted IR is
+    // already garbage past the first error.
+    ? > g_err_count 0
+    { ( nurl_eprintln ( nurl_str_cat ( nurl_str_cat3 `error: aborting due to `
+        ( nurl_str_int g_err_count ) ` previous error` )
+        ? > g_err_count 1 `s` `` ) )
+        ( nurl_exit 1 ) }
+    {}
     // Stop recording new lint targets before flushing generic
     // monomorphisations — those are synthetic, not the user's source.
     = g_lint_recording 0

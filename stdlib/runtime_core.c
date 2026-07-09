@@ -449,6 +449,22 @@ void nurl_print_buf_reset(void) {
     }
 }
 
+/* Hard-unwind the whole buffering stack back to stdout mode, freeing any
+ * saved frames. For panic-recovery paths (nurlc's multi-error resync):
+ * a panic can fire while frames pushed by nurl_print_buf_start are still
+ * open, and the matching _stop calls will never run — without this, later
+ * output would land in an abandoned buffer via stale frames. */
+void nurl_print_buf_unwind(void) {
+    outbuf_init();
+    while (g_outbuf_sp > 0) {
+        struct OutbufFrame *f = &g_outbuf_stack[--g_outbuf_sp];
+        if (f->bytes) { free(f->bytes); f->bytes = NULL; }
+    }
+    g_outbuf_len  = 0;
+    g_outbuf[0]   = '\0';
+    g_outbuf_mode = 0;
+}
+
 /* Print without a trailing newline. */
 void nurl_print(const char *s) {
     if (g_outbuf_mode) {
@@ -1621,6 +1637,32 @@ long long nurl_recover(void *fn_ptr, void *env_ptr) {
     return 1;
 }
 
+/* Like nurl_recover but WITHOUT activating the allocation journal.
+ * For recovery extents on a program's error/exit path (nurlc's
+ * multi-error resync): the journal exists to prevent unwind leaks, but
+ * it makes every nurl_free scan the live journal — quadratic when the
+ * extent allocates heavily. Here the caller accepts that a panic leaks
+ * whatever the extent allocated (the process is about to exit non-zero
+ * anyway) in exchange for ZERO happy-path overhead: with jrnl_active
+ * unchanged, journal pushes stay no-ops and nurl_free never scans. */
+long long nurl_recover_nojournal(void *fn_ptr, void *env_ptr) {
+    if (!fn_ptr) return 0;
+    NurlPanicFrame frame;
+    frame.msg   = NULL;
+    frame.jmark = nurl__jrnl_mark();
+    frame.prev  = nurl__panic_top;
+    nurl__panic_top = &frame;
+    if (setjmp(frame.jb) == 0) {
+        ((void (*)(void *))fn_ptr)(env_ptr);
+        nurl__panic_top = frame.prev;
+        return 0;
+    }
+    nurl__panic_top = frame.prev;
+    free(nurl__panic_last_msg);
+    nurl__panic_last_msg = frame.msg ? frame.msg : strdup("(no panic message)");
+    return 1;
+}
+
 /* Captured panic message from the most recent recover-with-panic on
  * this thread. BORROWED — overwritten by the next panic. */
 const char *nurl_panic_last_msg(void) {
@@ -1673,6 +1715,14 @@ void nurl_panic(const char *msg) {
         *   - nurl_panic_last_msg always returns "". */
 
 long long nurl_recover(void *fn_ptr, void *env_ptr) {
+    if (!fn_ptr) return 0;
+    ((void (*)(void *))fn_ptr)(env_ptr);
+    return 0;
+}
+
+/* Same stub shape: run inline, no unwind (a panic aborts). nurlc's
+ * multi-error resync therefore degrades to fail-fast on wasm. */
+long long nurl_recover_nojournal(void *fn_ptr, void *env_ptr) {
     if (!fn_ptr) return 0;
     ((void (*)(void *))fn_ptr)(env_ptr);
     return 0;

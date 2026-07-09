@@ -8,8 +8,8 @@
 #
 #  Record shapes (the golden file holds exactly these lines):
 #
-#    normal test          should_fail_* / should_*       borrow_*
-#    ───────────          ─────────────────────────      ────────
+#    normal test          should_fail_* / should_*       borrow_* / diag_*
+#    ───────────          ─────────────────────────      ─────────────────
 #    COMPILE OK           COMPILE FAIL                   COMPILE FAIL
 #    LINK OK                                             ERRORS
 #    EXIT <n>                                            <diagnostics>
@@ -235,6 +235,18 @@ run_one() {
             { echo "COMPILE OK"; echo "(expected COMPILE FAIL but compiler accepted it)"; } > "$act"
         else
             echo "COMPILE FAIL" > "$act"
+        fi
+    # ── diag_* — like should_fail_ but the diagnostic TEXT is baselined
+    #            (default flags, front-end stderr captured verbatim).
+    #            For multi-error / diagnostic-quality regressions where
+    #            WHAT was reported matters, not just that compilation
+    #            failed.
+    elif [[ "$name" == diag_* ]]; then
+        if "$NURLC" "$src" > "$ll" 2>"$err"; then
+            { echo "COMPILE OK"; echo "(expected COMPILE FAIL but compiler accepted it)"; } > "$act"
+        else
+            { echo "COMPILE FAIL"; } > "$act"
+            if [[ -s "$err" ]]; then strip_root "$err"; echo "ERRORS" >> "$act"; append_capped "$act" "$err"; fi
         fi
     else
         # ── should_warn_* keep the compile diagnostic as WARNINGS ──

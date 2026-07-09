@@ -109,7 +109,7 @@ export UBSAN_OPTIONS="${UBSAN_OPTIONS:-print_stacktrace=1:halt_on_error=0}"
 
 # should_fail_* are compile-time negative tests; nurlfmt_idempotent is a
 # shell round-trip, not a binary; *_mod are helper modules without main().
-SKIP_RE='(should_fail_|nurlfmt_idempotent|alias_rewrite_types_mod)'
+SKIP_RE='(should_fail_|diag_|nurlfmt_idempotent|alias_rewrite_types_mod)'
 
 # ── per-test worker (exported, fanned out with xargs -P) ─────────
 # Echoes a single "<name> <VERDICT>" line; writes its own logs under
