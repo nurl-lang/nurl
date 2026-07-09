@@ -636,14 +636,17 @@ on; they are not two separate tools or two separate builds.
      leak check on, turning any leak into a `SAN_FAIL`. Used as an audit
      and on the leak-pinned tests, which run clean:
      `struct_nested_field_drop`, `arm_local_drop`,
-     `arm_local_trailing_drop` (normal-path drop, §7.1), and
-     `closure_env_reclaim`, `closure_env_binding` (closure-env
-     reclamation, §7.4). NOTE: `recover_unwind` (panic-unwind, §7.2) is
-     leak-clean on most dev boxes but exhibits a **24-byte,
-     environment-dependent leak on the CI ubuntu runner** (crash_drop's
-     `Handle` buf on the panic path). It is therefore **excluded from the
-     CI gate** and tracked as an open panic-journal issue (critic.md) —
-     it is not a reliable pin until reproduced and fixed.
+     `arm_local_trailing_drop` (normal-path drop, §7.1),
+     `recover_unwind` (panic-unwind, §7.2), `loop_drop_reclaim`
+     (loop-body `% Drop` reclamation), and `closure_env_reclaim`,
+     `closure_env_binding` (closure-env reclamation, §7.4).
+     (`loop_drop_reclaim` + `recover_unwind` pin the fix for a real
+     loop-body leak: a `% Drop` value bound inside a `~` loop was not
+     dropped at iteration end — the while-loop scope exit freed owned
+     strings/vecs but skipped user destructors — so each iteration
+     leaked the prior value's resources. LSan only reports *unreachable*
+     allocations, so a stale pointer left in a register made the report
+     environment-dependent, which is how the manual audit missed it.)
    - `tools/leakcheck/run.sh` — an end-to-end gate that builds the HTTP
      server with ASan+LSan (`detect_leaks=1`), serves 21 requests, and
      fails on *any* leak; it locks the per-request leak class
@@ -651,8 +654,7 @@ on; they are not two separate tools or two separate builds.
      router/handler closure envs).
 
    Both pinned checks are now wired into `ci.yml`: the leak-pinned
-   subset (the five reliable ones above — not `recover_unwind`) runs
-   under `LSAN_DETECT_LEAKS=1` in the sanitizers job, and
+   subset runs under `LSAN_DETECT_LEAKS=1` in the sanitizers job, and
    `tools/leakcheck/run.sh` runs in the build-test job. So a leak
    regression in the pinned surface fails CI, not just a manual audit.
 

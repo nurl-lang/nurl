@@ -172,18 +172,12 @@ jobs:
         # arenas (g_str_pool, g_sym_arena) and the brevity tests leak by design
         # — so gate the curated leak-clean set under LSAN_DETECT_LEAKS=1. Reuses
         # the --san build above; run_san_tests.sh exits non-zero on any LSan hit.
-        #
-        # recover_unwind is intentionally NOT in this set: it exhibits a
-        # 24-byte, environment-dependent leak (crash_drop's Handle buf on the
-        # panic-unwind path) that reproduces on the ubuntu runner but not on
-        # every dev box — a real panic-journal issue tracked in critic.md, not
-        # a reliable gate. The other five cover normal-path drop placement and
-        # closure-env reclamation; tools/leakcheck (build-test job) covers the
-        # HTTP per-request surface.
+        # loop_drop_reclaim + recover_unwind pin the loop-body `% Drop` fix (a
+        # loop-local Drop value is now dropped each iteration, not leaked).
         run: |
           LSAN_DETECT_LEAKS=1 ./compiler/tests/run_san_tests.sh \
             struct_nested_field_drop arm_local_drop arm_local_trailing_drop \
-            closure_env_reclaim closure_env_binding
+            recover_unwind loop_drop_reclaim closure_env_reclaim closure_env_binding
 
 # nurlfmt --check now runs as a step in the build-test job above
 # (after the examples gate). The repo-wide `nurlfmt --write` pass that
