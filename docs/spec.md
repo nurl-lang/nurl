@@ -903,6 +903,15 @@ at the next 1–3 tokens:
 : n \ ( parse_int src )              // try-propagate Result
 ```
 
+`\` propagation requires the **enclosing function** to return a
+compatible `?` / `!` shape (same error type for results). At a site
+that cannot propagate — a `→ i` `main`, a callback with a fixed
+signature — use the leaf-site combinators from the stdlib instead of
+nesting `??`: `res_expect` / `opt_expect` (payload or panic with your
+message), `res_unwrap_or` / `res_unwrap_or_else` (payload or fallback),
+and the `res_ok` / `res_err` / `opt_ok_or` bridges
+(`stdlib/core/result.nu`, `stdlib/core/option.nu`).
+
 A closure compiles to a 16-byte `{ fn_ptr, env_ptr }` value. Captures
 are stored in a heap-allocated environment struct. A closure that
 provably does **not** escape its creating frame has that env reclaimed
