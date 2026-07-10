@@ -19,6 +19,8 @@ $ `stdlib/std/time.nu`
 $ `stdlib/std/fs.nu`
 $ `stdlib/std/bytes.nu`
 $ `stdlib/std/hash_sha256.nu`
+$ `stdlib/std/ed25519.nu`
+$ `stdlib/std/encode.nu`
 $ `stdlib/ext/http_server.nu`
 $ `stdlib/ext/http_response.nu`
 $ `stdlib/ext/http_request.nu`
@@ -79,9 +81,71 @@ version = "1.0.0"
     ^ idx
 }
 
+// Deterministic 32-byte Ed25519 seed + 8-byte keyid for the test registry
+// key. The e2e proves nurlpkg's mandatory signature check against a key it
+// controls, via the $NURL_REGISTRY_PUBKEY trust-anchor override.
+@ test_seed → ( Vec u ) {
+    : ( Vec u ) s ( vec_new [u] )
+    : ~ i k 0
+    ~ < k 32 { ( vec_push [u] s # u + * k 7 3 ) = k + k 1 }
+    ^ s
+}
+
+@ test_keyid → ( Vec u ) {
+    : ( Vec u ) s ( vec_new [u] )
+    : ~ i k 0
+    ~ < k 8 { ( vec_push [u] s # u + k 10 ) = k + k 1 }
+    ^ s
+}
+
+// minisign pubkey payload line: base64( 'Ed' | keyid(8) | pubkey(32) ).
+@ build_publine ( Vec u ) keyid ( Vec u ) pubkey → String {
+    : ( Vec u ) raw ( vec_new [u] )
+    ( vec_push [u] raw # u 69 )
+    ( vec_push [u] raw # u 100 )
+    ( bytes_extend_bytes raw keyid )
+    ( bytes_extend_bytes raw pubkey )
+    : String b64 ( b64_encode_vec raw )
+    ( vec_free [u] raw )
+    ^ b64
+}
+
+// A full .minisig text signing `tarball` in legacy 'Ed' mode (raw Ed25519).
+@ build_sigtext ( Vec u ) keyid ( Vec u ) sig → String {
+    : ( Vec u ) raw ( vec_new [u] )
+    ( vec_push [u] raw # u 69 )
+    ( vec_push [u] raw # u 100 )
+    ( bytes_extend_bytes raw keyid )
+    ( bytes_extend_bytes raw sig )
+    : String line ( b64_encode_vec raw )
+    ( vec_free [u] raw )
+    : String out ( string_with_cap 160 )
+    ( string_push_str out `untrusted comment: nurl e2e test signature
+` )
+    ( string_push_str out ( string_data line ) )
+    ( string_push_char out 10 )
+    ( string_free line )
+    ^ out
+}
+
 @ run_e2e → v {
     : ( Vec u ) tarball ( build_tarball )
     : String index ( build_index tarball )
+
+    // Sign the tarball with the test key + advertise its pubkey as the pin.
+    : ( Vec u ) seed ( test_seed )
+    : ( Vec u ) keyid ( test_keyid )
+    : ( Vec u ) pubkey ( ed25519_pubkey_pure seed )
+    : String publine ( build_publine keyid pubkey )
+    : !v IoErr es ( env_set `NURL_REGISTRY_PUBKEY` ( string_data publine ) )
+    ?? es { T _ → {} F _ → {} }
+    : ( Vec u ) sigbytes ( ed25519_sign_pure seed tarball )
+    : String sigtext ( build_sigtext keyid sigbytes )
+    ( vec_free [u] seed )
+    ( vec_free [u] keyid )
+    ( vec_free [u] pubkey )
+    ( vec_free [u] sigbytes )
+    ( string_free publine )
 
     : !v IoErr rm0 ( dir_remove_all `/tmp/nurl_pkg_e2e` )
     ?? rm0 { T _ → {} F _ → {} }
@@ -95,7 +159,17 @@ version = "1.0.0"
                 ? != 0 ( nurl_str_eq path `/index/foo.json` ) {
                     ^ ( response_text 200 ( string_data index ) )
                 } {}
+                ? != 0 ( nurl_str_eq path `/pkgs/foo/foo-1.0.0.tar.gz.minisig` ) {
+                    ^ ( response_text 200 ( string_data sigtext ) )
+                } {}
                 ? != 0 ( nurl_str_eq path `/pkgs/foo/foo-1.0.0.tar.gz` ) {
+                    : HttpResponse resp ( response_new 200 )
+                    ( response_set_body_bytes resp tarball )
+                    ^ resp
+                } {}
+                // foo-2.0.0 exists as a tarball but has NO .minisig — the
+                // fail-closed case: verification must reject it.
+                ? != 0 ( nurl_str_eq path `/pkgs/foo/foo-2.0.0.tar.gz` ) {
                     : HttpResponse resp ( response_new 200 )
                     ( response_set_body_bytes resp tarball )
                     ^ resp
@@ -135,6 +209,14 @@ version = "1.0.0"
                                     T _ → ( nurl_print `badcheck=accepted(bug)\n` )
                                     F e → { ( nurl_print `badcheck=` ) ( nurl_print ( pkg_err_name e ) ) ( nurl_print `\n` ) }
                                 }
+                                // Fail-closed: foo-2.0.0 has no signature ⇒ reject
+                                // (empty checksum skips the sha step, isolating the
+                                // signature gate).
+                                : !i PkgFetchErr nosig ( pkg_install_one REG nm `2.0.0` `` `/tmp/nurl_pkg_e2e_nosig` )
+                                ?? nosig {
+                                    T _ → ( nurl_print `nosig=accepted(bug)\n` )
+                                    F e → { ( nurl_print `nosig=` ) ( nurl_print ( pkg_err_name e ) ) ( nurl_print `\n` ) }
+                                }
                             }
                             F → {}
                         }
@@ -147,8 +229,10 @@ version = "1.0.0"
             }
             : !Thread ThreadErr ct ( thread_spawn client )
 
+            // Requests: index(1) + install-ok tarball+minisig(2) +
+            // bad-checksum tarball(1) + nosig tarball+minisig-404(2) = 6.
             : ~ i served 0
-            ~ < served 3 {
+            ~ < served 6 {
                 : !v NetErr sr ( server_run_once srv )
                 ?? sr { T _ → {} F _ → {} }
                 = served + served 1
@@ -161,8 +245,11 @@ version = "1.0.0"
     ?? rm1 { T _ → {} F _ → {} }
     : !v IoErr rm2 ( dir_remove_all `/tmp/nurl_pkg_e2e_bad` )
     ?? rm2 { T _ → {} F _ → {} }
+    : !v IoErr rm3 ( dir_remove_all `/tmp/nurl_pkg_e2e_nosig` )
+    ?? rm3 { T _ → {} F _ → {} }
     ( vec_free [u] tarball )
     ( string_free index )
+    ( string_free sigtext )
 }
 
 @ main → i {

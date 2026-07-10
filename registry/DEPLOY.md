@@ -39,9 +39,36 @@ npx wrangler d1 migrations apply REG_DB --remote
 # Secrets — stored encrypted in Cloudflare, NEVER in the repo:
 npx wrangler secret put GITHUB_CLIENT_SECRET     # from the OAuth app
 npx wrangler secret put TOKEN_PEPPER             # any long random string
+npx wrangler secret put REG_SIGN_KEY             # base64 Ed25519 seed (32B) —
+                                                 # signs every published tarball
 
 npx wrangler deploy
 ```
+
+### Package signing (`REG_SIGN_KEY`)
+
+The registry signs every published tarball with a project Ed25519 key
+(minisign legacy `Ed` format — a raw signature over the `.tar.gz` bytes, since
+Web Crypto lacks BLAKE2b). `nurlpkg` pins the matching **public** key and
+verifies with its pure-NURL minisign implementation, so a compromised R2/CDN
+can't substitute tarball bytes. Verification is **mandatory + fail-closed**.
+
+- `REG_SIGN_KEY` is the base64 32-byte Ed25519 **seed**. The pinned public key
+  lives in `stdlib/ext/pkg_fetch.nu` (`__pkg_reg_pubkey`) and its keyid is
+  hard-coded in `src/index.ts` (`REG_SIGN_KEYID`) — all three must correspond
+  to the same key.
+- **One-time backfill** — packages published *before* signing was enabled have
+  no `.minisig`, so after the first deploy that sets `REG_SIGN_KEY`, sign them
+  all (idempotent; auth = presenting the seed itself):
+
+  ```bash
+  curl -X POST https://reg.nurl-lang.org/api/v1/admin/sign-backfill \
+       -H "X-Reg-Sign-Key: $REG_SIGN_KEY"
+  # → {"ok":true,"signed":N,"skipped":M,"failed":0,...}
+  ```
+- Rotating the key means re-signing everything (`sign-backfill` after clearing
+  the old `.minisig` objects) **and** updating the pin in `pkg_fetch.nu` +
+  `REG_SIGN_KEYID` in a client release — treat it like a CA rotation.
 
 Point `reg.nurl-lang.org` at the Worker (Workers → custom domain) and the
 read path is a cacheable CDN; the write path (`/api/v1/publish`) is the
@@ -51,9 +78,9 @@ authenticated Worker route.
 
 | Secret | Home | How |
 |---|---|---|
-| `GITHUB_CLIENT_SECRET`, `TOKEN_PEPPER` | Cloudflare (encrypted) | `wrangler secret put` — never in repo/wrangler.jsonc |
+| `GITHUB_CLIENT_SECRET`, `TOKEN_PEPPER`, `REG_SIGN_KEY` | Cloudflare (encrypted) | `wrangler secret put` — never in repo/wrangler.jsonc |
 | `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID` | GitHub Actions repo secrets | used by the deploy workflow (placeholders pre-created) |
-| local dev values | `registry/.dev.vars` | gitignored (`.dev.vars.*`); keys: `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`, `TOKEN_PEPPER`, `REGISTRY_URL`. `test-local.sh` writes it automatically. |
+| local dev values | `registry/.dev.vars` | gitignored (`.dev.vars.*`); keys: `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`, `TOKEN_PEPPER`, `REGISTRY_URL`, `REG_SIGN_KEY`. `test-local.sh` writes it automatically (with a deterministic test key). |
 | `GITHUB_CLIENT_ID` | `wrangler.jsonc` `vars` | public, fine to commit |
 
 The `CLOUDFLARE_API_TOKEN` for CI: Cloudflare dashboard → My Profile → API

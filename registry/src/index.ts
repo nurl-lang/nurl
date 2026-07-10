@@ -31,6 +31,9 @@ export interface Env {
   GITHUB_CLIENT_SECRET: string; // wrangler secret
   TOKEN_PEPPER: string;         // wrangler secret
   REGISTRY_URL: string;         // public base, e.g. https://reg.nurl-lang.org
+  REG_SIGN_KEY?: string;        // wrangler secret: base64 Ed25519 seed (32B) —
+                                // signs every published tarball (minisign legacy
+                                // 'Ed' mode). Unset ⇒ publishes stay unsigned.
 }
 
 const NAME_RE = /^[a-z0-9](?:[a-z0-9_-]{0,63})$/;
@@ -50,6 +53,57 @@ function toHex(buf: ArrayBuffer): string {
 async function sha256Hex(data: ArrayBuffer | string): Promise<string> {
   const buf = typeof data === "string" ? new TextEncoder().encode(data) : data;
   return toHex(await crypto.subtle.digest("SHA-256", buf));
+}
+
+// ── Package signing (minisign legacy 'Ed' mode) ──────────────────────
+// The registry holds a project Ed25519 key and signs every tarball with it.
+// nurlpkg pins the matching public key and verifies with its pure-NURL
+// minisign implementation, so a compromised R2/CDN can't swap in bad bytes.
+//
+// We use minisign's LEGACY signature (algorithm 'Ed'): a raw Ed25519
+// signature over the tarball bytes — no BLAKE2b prehash — because Web Crypto
+// exposes Ed25519 but not BLAKE2b. The pure-NURL verifier supports both.
+
+// keyid = first 8 bytes of the .minisig, must match the pinned public key's.
+// Public key: RWTGgah04Ft7n6+UNxc/MKT4eMViHBo4DLgKryJVbv9ZwedeQWpmmPq5
+const REG_SIGN_KEYID = new Uint8Array([0xc6, 0x81, 0xa8, 0x74, 0xe0, 0x5b, 0x7b, 0x9f]);
+
+// PKCS#8 wrapper for a bare Ed25519 seed: SEQUENCE header + OID + the 32-byte
+// seed as an OCTET STRING. Lets crypto.subtle.importKey ingest a raw seed.
+const PKCS8_ED25519_PREFIX = new Uint8Array([
+  0x30, 0x2e, 0x02, 0x01, 0x00, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70,
+  0x04, 0x22, 0x04, 0x20,
+]);
+
+function b64ToBytes(b64: string): Uint8Array {
+  const bin = atob(b64);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+
+function bytesToB64(bytes: Uint8Array): string {
+  let bin = "";
+  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+  return btoa(bin);
+}
+
+// Produce the .minisig text signing `body` with the given base64 Ed25519 seed.
+async function signTarball(seedB64: string, body: ArrayBuffer): Promise<string> {
+  const seed = b64ToBytes(seedB64);
+  if (seed.length !== 32) throw new Error("REG_SIGN_KEY must be a 32-byte Ed25519 seed");
+  const pkcs8 = new Uint8Array(PKCS8_ED25519_PREFIX.length + 32);
+  pkcs8.set(PKCS8_ED25519_PREFIX);
+  pkcs8.set(seed, PKCS8_ED25519_PREFIX.length);
+  const key = await crypto.subtle.importKey("pkcs8", pkcs8, { name: "Ed25519" }, false, ["sign"]);
+  const sig = new Uint8Array(await crypto.subtle.sign("Ed25519", key, body)); // raw msg
+  // signature line 2 = base64( 'Ed' | keyid(8) | sig(64) )
+  const line = new Uint8Array(2 + 8 + 64);
+  line[0] = 0x45; // 'E'
+  line[1] = 0x64; // 'd'  → legacy raw-Ed25519 mode
+  line.set(REG_SIGN_KEYID, 2);
+  line.set(sig, 10);
+  return `untrusted comment: nurl registry signature\n${bytesToB64(line)}\n`;
 }
 
 // token_hash = sha256(pepper || token), hex. The pepper is a Worker secret
@@ -174,8 +228,22 @@ async function handlePublish(req: Request, env: Env): Promise<Response> {
     .bind(name, version).first();
   if (existing) return json({ error: "version_exists" }, 409);
 
-  // Write tarball + updated index to R2.
-  await env.REG_BUCKET.put(`pkgs/${name}/${name}-${version}.tar.gz`, body);
+  // Sign the tarball before storing it, so the signature lands atomically with
+  // the bytes. A signing failure ABORTS the publish — we never expose an
+  // unsigned tarball once a key is configured (fail-closed).
+  const tarKey = `pkgs/${name}/${name}-${version}.tar.gz`;
+  await env.REG_BUCKET.put(tarKey, body);
+  if (env.REG_SIGN_KEY) {
+    try {
+      const sig = await signTarball(env.REG_SIGN_KEY, body);
+      await env.REG_BUCKET.put(`${tarKey}.minisig`, sig, {
+        httpMetadata: { contentType: "text/plain" },
+      });
+    } catch (e) {
+      await env.REG_BUCKET.delete(tarKey); // don't leave signed-expecting bytes unsigned
+      return json({ error: "signing_failed", detail: String(e) }, 500);
+    }
+  }
   const idx = await readIndex(env, name);
   idx.versions.push({ version, checksum, yanked: false, deps: parseDeps(req) });
   await env.REG_BUCKET.put(`index/${name}.json`, JSON.stringify(idx));
@@ -191,6 +259,55 @@ async function handlePublish(req: Request, env: Env): Promise<Response> {
   ).bind(name, version, checksum, user.id, now).run();
 
   return json({ ok: true, name, version, checksum });
+}
+
+// Constant-time string compare (avoid leaking the admin key via timing).
+function ctEq(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  let d = 0;
+  for (let i = 0; i < a.length; i++) d |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return d === 0;
+}
+
+// POST /api/v1/admin/sign-backfill — sign every already-published tarball that
+// lacks a .minisig, using the registry key. Idempotent: re-running only signs
+// what's still missing. Gated on presenting the REG_SIGN_KEY seed itself
+// (X-Reg-Sign-Key), so only the key holder can trigger it. This is the
+// one-time migration that lets nurlpkg make signature checks MANDATORY without
+// stranding packages published before signing existed.
+async function handleSignBackfill(req: Request, env: Env): Promise<Response> {
+  if (!env.REG_SIGN_KEY) return json({ error: "signing_not_configured" }, 503);
+  const presented = req.headers.get("x-reg-sign-key") ?? "";
+  if (!ctEq(presented, env.REG_SIGN_KEY)) return json({ error: "unauthorized" }, 401);
+
+  // Enumerate everything under pkgs/ (paginated), then sign each .tar.gz whose
+  // .minisig sibling is absent.
+  const keys = new Set<string>();
+  let cursor: string | undefined;
+  do {
+    const page = await env.REG_BUCKET.list({ prefix: "pkgs/", cursor, limit: 1000 });
+    for (const o of page.objects) keys.add(o.key);
+    cursor = page.truncated ? page.cursor : undefined;
+  } while (cursor);
+
+  let signed = 0, skipped = 0, failed = 0;
+  const errors: string[] = [];
+  for (const key of keys) {
+    if (!key.endsWith(".tar.gz")) continue;
+    if (keys.has(`${key}.minisig`)) { skipped++; continue; }
+    try {
+      const obj = await env.REG_BUCKET.get(key);
+      if (!obj) { failed++; errors.push(`${key}: vanished`); continue; }
+      const body = await obj.arrayBuffer();
+      const sig = await signTarball(env.REG_SIGN_KEY, body);
+      await env.REG_BUCKET.put(`${key}.minisig`, sig, { httpMetadata: { contentType: "text/plain" } });
+      signed++;
+    } catch (e) {
+      failed++;
+      errors.push(`${key}: ${String(e)}`);
+    }
+  }
+  return json({ ok: failed === 0, signed, skipped, failed, errors });
 }
 
 // ── GitHub OAuth (token bootstrap) ────────────────────────────────────
@@ -523,9 +640,11 @@ export default {
         return handleFile(env, fname, fver, frel);
       }
       if (path.startsWith("/pkgs/")) {
-        // pkgs/<name>/<file>.tar.gz — reject traversal.
-        if (path.includes("..") || !path.endsWith(".tar.gz")) return json({ error: "bad_path" }, 400);
-        return serveR2(env, path.slice(1), "application/gzip");
+        // pkgs/<name>/<file>.tar.gz (+ optional .minisig) — reject traversal.
+        if (path.includes("..")) return json({ error: "bad_path" }, 400);
+        if (path.endsWith(".tar.gz.minisig")) return serveR2(env, path.slice(1), "text/plain");
+        if (path.endsWith(".tar.gz")) return serveR2(env, path.slice(1), "application/gzip");
+        return json({ error: "bad_path" }, 400);
       }
       return json({ error: "not_found" }, 404);
     }
@@ -535,6 +654,7 @@ export default {
       if (path === "/api/v1/yank") return handleYank(req, env, true);
       if (path === "/api/v1/unyank") return handleYank(req, env, false);
       if (path === "/api/v1/revoke") return handleRevoke(req, env);
+      if (path === "/api/v1/admin/sign-backfill") return handleSignBackfill(req, env);
     }
     return json({ error: "not_found" }, 404);
   },
