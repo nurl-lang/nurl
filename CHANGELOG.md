@@ -6,6 +6,92 @@ are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.11.3] — 2026-07-10
+
+A **hardening & supply-chain** release. A clean-room self-critique of the whole
+project — compiler, language, libraries, toolchain, ecosystem — was turned into
+fixes, one focused change at a time. The headline is **end-to-end package
+signing**: the registry now signs every published tarball with a project
+Ed25519 key and `nurlpkg` verifies the detached signature with a *pure-NURL*
+minisign implementation before unpacking, so a compromised CDN can no longer
+substitute bytes. Around it: fail-closed installers, integer/type safety fixes
+in the compiler, a diagnostics overhaul (multi-error reporting, "did you mean",
+unified borrow-checker rendering), a resolver correctness fix, and new CI safety
+gates (leak surface, symbol collisions, a second fuzzer).
+
+### Security
+
+- **End-to-end package signing — mandatory and fail-closed.** The registry
+  signs every published tarball with a project Ed25519 key (minisign legacy
+  `Ed` format — a raw signature over the `.tar.gz` bytes); `nurlpkg` pins the
+  matching public key and verifies the detached `.minisig` before unpacking. No
+  signature, no install (`PkgBadSig`). The SHA-256 checksum still runs first,
+  but it defended integrity given an authentic index — it no longer stands
+  alone. A `$NURL_REGISTRY_PUBKEY` trust-anchor override supports self-hosted
+  registries. New stdlib primitives make this possible without any C
+  dependency: **pure-NURL BLAKE2b-512** (RFC 7693, `std/hash_blake2b`) and a
+  **pure-NURL minisign verifier** (`std/minisign`) on the existing Ed25519. The
+  registry gained an idempotent backfill so packages published before signing
+  existed are signed without stranding older clients.
+- **Toolchain archives are signed.** `release.yml` signs each release archive
+  with minisign, and `install.sh` / `install.ps1` verify the detached signature
+  against a pinned key. This layer is opportunistic — the toolchain can't assume
+  minisign is present at first-run, so HTTPS + a fail-closed checksum stay the
+  root of trust there; the pure-NURL verifier covers the package layer, where
+  `nurl` is already installed.
+- **`curl | sh` installer no longer fails open.** Both installers verify
+  **fail-closed**: a missing, empty, or malformed checksum — or any mismatch —
+  aborts; `--insecure` / `NURL_INSTALL_INSECURE=1` is the explicit opt-out. The
+  `rm -rf "$PREFIX"` step is guarded so it refuses `$HOME` / `/` / `%USERPROFILE%`
+  and any non-empty directory that isn't a prior NURL install.
+- **Integer division / remainder by zero now panics** with a clear message
+  instead of executing undefined behaviour (previously a raw `sdiv` / `srem`).
+- **Recursion-depth caps in the XML and YAML-flow parsers** — deeply nested
+  hostile input can no longer exhaust the stack.
+
+### Added
+
+- **Compiler diagnostics overhaul (`nurlc`).** Reports **multiple errors per
+  run** instead of aborting on the first; prints **"did you mean …?"**
+  suggestions for unknown functions and identifiers; routes internal invariant
+  violations through a labelled **internal-compiler-error** path instead of a
+  bare crash; renders borrow-checker diagnostics through the same source-caret
+  renderer as front-end errors; and adds `--help` / `-h`.
+- **Leaf-site error-handling combinators** in the stdlib — `expect`, `unwrap`,
+  `unwrap_or`, `or_else`, and Option↔Result bridges for terminal error handling.
+- **A mutational parser fuzzer** (`tools/fuzz`) over the DER/X.509 and
+  format parsers, plus a weekly CI workflow running it alongside the existing
+  differential fuzzer.
+
+### Changed
+
+- **Resolver intersects all version requirements per package**, rather than
+  taking the first requirement seen — a dependency constrained as both `^0.2`
+  and `^0.2.3` now resolves against the intersection.
+- **`nurlc` rejects pointer↔scalar call-argument mismatches** — passing a `*T`
+  where a value `T` is expected (or vice versa) is now a call-site error.
+- **bind / assign type-mismatch diagnostics point at the offending statement**,
+  not the line after it.
+- Removed stray `DEBUG:` prints from `nurlc`.
+- Docs: corrected inaccurate claims and broken commands across the README and
+  guides, and documented the pre-commit `nurlfmt` hook accurately.
+- Packages `anomaly` 0.3.7 and `yoloe-demo` 0.2.3 depend on `http ^0.2` (the
+  `^0.1` caret-lock never picked up the 0.2.0 leak fixes).
+
+### Fixed
+
+- **Loop-carried `% Drop` leak** — a value with a `Drop` impl created inside a
+  `while`-loop body was never dropped at the end of each iteration (surfaced by
+  the new leak gate). The compiler now reclaims it at the loop-scope boundary.
+
+### CI
+
+- **Release publishing is gated on the tagged commit's CI status** — a release
+  can no longer ship from a SHA whose `ci.yml` did not pass.
+- **Leak-freedom gate** over a pinned surface plus an HTTP per-request leak
+  check, and a **symbol-collision gate** that fails the build when two stdlib
+  helpers mangle to the same symbol (two real collisions were found and fixed).
+
 ## [0.11.2] — 2026-07-08
 
 An **infrastructure-dogfood** release. The package registry itself is now a

@@ -7,7 +7,7 @@ Anything marked done here has a regression test in
 [`compiler/tests/`](compiler/tests/) and is covered by the bootstrap fixed
 point.
 
-_Last reviewed: 2026-07-08 · Current release: **0.11.2** · Language: **Grammar
+_Last reviewed: 2026-07-10 · Current release: **0.11.3** · Language: **Grammar
 v2.3** ([`spec/grammar.ebnf`](spec/grammar.ebnf))._
 
 ---
@@ -181,6 +181,13 @@ platform-specific shims.
   `template` and `md2html` packages and proven end-to-end against the real
   client. (The public reg.nurl-lang.org cutover from the Cloudflare Worker
   is pending deployment.)
+- **Signed packages, verified in pure NURL.** The registry signs every
+  published tarball with a project Ed25519 key; `nurlpkg` pins the public key
+  and verifies the detached minisign signature — using a pure-NURL BLAKE2b +
+  minisign implementation (`std/hash_blake2b`, `std/minisign`) — before
+  unpacking, **mandatory and fail-closed**. Release archives are signed and
+  the installers verify them against a pinned key too, so a compromised CDN
+  can't substitute bytes at either layer.
 
 ---
 
