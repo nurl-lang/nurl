@@ -22,7 +22,16 @@ say() { printf '\n=== %s ===\n' "$1"; }
 [[ -x "$NURLPKG" ]] || { echo "build/nurlpkg missing — run ./build.sh"; exit 2; }
 
 cd "$HERE"
-printf 'GITHUB_CLIENT_ID=local\nGITHUB_CLIENT_SECRET=local\nTOKEN_PEPPER=%s\nREGISTRY_URL=%s\n' "$PEPPER" "$REG" > .dev.vars
+
+# Deterministic test signing key (seed) + its minisign public-key line. The
+# Worker signs published tarballs with REG_SIGN_KEY; nurlpkg verifies against
+# the pinned pubkey (mandatory + fail-closed). Point nurlpkg at THIS key via
+# $NURL_REGISTRY_PUBKEY so the round-trip verifies against a key we control.
+# (Matches the deterministic key in compiler/tests/pkg_install_e2e.nu.)
+REG_SIGN_KEY='AwoRGB8mLTQ7QklQV15lbHN6gYiPlp2kq7K5wMfO1dw='
+REG_SIGN_PUB='RWQKCwwNDg8QEXVcTLklbKfNxKz9xs/u2oSQF+W5+VFOmRkb1n4LDUJ2'
+
+printf 'GITHUB_CLIENT_ID=local\nGITHUB_CLIENT_SECRET=local\nTOKEN_PEPPER=%s\nREGISTRY_URL=%s\nREG_SIGN_KEY=%s\n' "$PEPPER" "$REG" "$REG_SIGN_KEY" > .dev.vars
 
 # Start from a clean local state (fresh D1 + empty R2 each run).
 rm -rf .wrangler/state
@@ -65,7 +74,7 @@ say "publish"
 say "install"
 mkdir -p "$WORK/app"
 printf '[package]\nname = "app"\nversion = "0.1.0"\n\n[dependencies]\nfoo = "^1.0"\n' > "$WORK/app/nurl.toml"
-( cd "$WORK/app" && NURL_REGISTRY="$REG" "$NURLPKG" install ) || fail=1
+( cd "$WORK/app" && NURL_REGISTRY="$REG" NURL_REGISTRY_PUBKEY="$REG_SIGN_PUB" "$NURLPKG" install ) || fail=1
 [[ -f "$WORK/app/deps/foo/nurl.toml" && -f "$WORK/app/deps/foo/src/lib.nu" ]] && echo "deps/foo: OK" || { echo "deps/foo: MISSING"; fail=1; }
 grep -q 'checksum =' "$WORK/app/nurl.lock" && echo "lock checksum: OK" || { echo "lock checksum: MISSING"; fail=1; }
 

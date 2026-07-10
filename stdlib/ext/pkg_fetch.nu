@@ -20,6 +20,8 @@ $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/bytes.nu`
 $ `stdlib/std/hash_sha256.nu`
+$ `stdlib/std/minisign.nu`
+$ `stdlib/ext/env.nu`
 $ `stdlib/ext/http_cli.nu`
 $ `stdlib/ext/compress.nu`
 $ `stdlib/ext/tar.nu`
@@ -29,6 +31,7 @@ $ `stdlib/ext/registry_index.nu`
     PkgHttp  // non-200 status or transport failure
     PkgEmpty  // empty tarball body
     PkgChecksumMismatch  // downloaded bytes don't match the recorded sha256
+    PkgBadSig  // missing or invalid registry signature (fail-closed)
     PkgDecompress  // gzip_decompress failed
     PkgUnpack  // tar_unpack failed (bad/unsafe archive, I/O)
 }
@@ -38,6 +41,7 @@ $ `stdlib/ext/registry_index.nu`
         PkgHttp → `PkgHttp`
         PkgEmpty → `PkgEmpty`
         PkgChecksumMismatch → `PkgChecksumMismatch`
+        PkgBadSig → `PkgBadSig`
         PkgDecompress → `PkgDecompress`
         PkgUnpack → `PkgUnpack`
     }
@@ -84,9 +88,55 @@ $ `stdlib/ext/registry_index.nu`
     }
 }
 
+// Pinned registry signing key (minisign public key — the base64 payload line,
+// no comment header). The registry signs every published tarball with the
+// matching Ed25519 secret; pinning the public key here means a compromised
+// R2/CDN can't substitute tarball bytes without also forging this key. This
+// is the trust anchor the pure-NURL minisign verifier checks against.
+//
+// $NURL_REGISTRY_PUBKEY overrides it — required when pointing nurlpkg at a
+// self-hosted registry (with $NURL_REGISTRY), and used by the e2e test. It is
+// a trust anchor, so treat it like a CA pin: only set it to a key you control.
+@ __pkg_reg_pubkey → String {
+    : ?String ev ( env_get `NURL_REGISTRY_PUBKEY` )
+    ^ ?? ev {
+        T v → v
+        F → ( string_from `RWTGgah04Ft7n6+UNxc/MKT4eMViHBo4DLgKryJVbv9ZwedeQWpmmPq5` )
+    }
+}
+
+// Fetch <tarball_url>.minisig and verify it over the tarball bytes with the
+// pinned registry key. MANDATORY + fail-closed: a missing signature, a
+// transport failure, or a bad signature all return F. `gz` is the exact
+// .tar.gz bytes the registry signed (legacy 'Ed' minisign: raw Ed25519).
+@ __pkg_verify_sig s registry s name s version ( Vec u ) gz → b {
+    : String sigurl ( regindex_tarball_url registry name version )
+    ( string_push_str sigurl `.minisig` )
+    : !HttpcResp HttpcErr sr ( httpc_get ( string_data sigurl ) )
+    ( string_free sigurl )
+    ^ ?? sr {
+        F _ → F
+        T sresp → {
+            : ~ b ok F
+            ? == ( httpc_status sresp ) 200 {
+                : String sigbody ( string_from ( httpc_body_str sresp ) )
+                : String sl ( __ms_line2 ( string_data sigbody ) )
+                : String pubkey ( __pkg_reg_pubkey )
+                = ok ( minisign_verify_b64 gz ( string_data pubkey ) ( string_data sl ) )
+                ( string_free pubkey )
+                ( string_free sl )
+                ( string_free sigbody )
+            } {}
+            ( httpc_resp_free sresp )
+            ^ ok
+        }
+    }
+}
+
 // Download <registry>/pkgs/<name>/<name>-<version>.tar.gz, verify its
-// SHA-256 against `checksum` (skipped only when `checksum` is empty),
-// gunzip, and tar_unpack into <dest>/<name>. Returns 0 on success.
+// SHA-256 against `checksum` (skipped only when `checksum` is empty), verify
+// the registry's minisign signature (mandatory, fail-closed), gunzip, and
+// tar_unpack into <dest>/<name>. Returns 0 on success.
 @ pkg_install_one s registry s name s version s checksum s dest → !i PkgFetchErr {
     : String url ( regindex_tarball_url registry name version )
     : !HttpcResp HttpcErr rr ( httpc_get ( string_data url ) )
@@ -117,6 +167,14 @@ $ `stdlib/ext/registry_index.nu`
                     ^ @ !i PkgFetchErr { F # PkgFetchErr PkgChecksumMismatch }
                 } {}
             } {}
+
+            // Authenticity: the registry signs every tarball with its Ed25519
+            // project key. Verification is mandatory and fail-closed — no
+            // signature, no install (even when the checksum matched).
+            ? ( __pkg_verify_sig registry name version gz ) {} {
+                ( vec_free [u] gz )
+                ^ @ !i PkgFetchErr { F # PkgFetchErr PkgBadSig }
+            }
 
             : !( Vec u ) CompressErr dr ( gzip_decompress gz )
             ( vec_free [u] gz )
