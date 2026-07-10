@@ -34,6 +34,11 @@ closure-capture and `: ~` closure-borrow-escape rules live in
 
 ## Concurrency / thread safety
 
+The complete list of ways *safe-looking* code can still fail — this
+table plus the conditional double-free — is stated together in
+[`MEMORY.md` §6.5 "This is not Rust"](MEMORY.md); read that section
+before relying on any thread-safety expectation.
+
 | Limitation | Workaround |
 |---|---|
 | Sending a non-thread-safe value across a thread boundary is **partially** checked at compile time: a `thread_spawn` closure that captures an **`Rc`** (non-atomic refcount) is rejected, since two threads racing on its control-block count is UB. This is the concrete, documented footgun. There is **no general `Send`/`Sync` auto-derive** yet — a *user* type that is internally non-thread-safe is not automatically flagged when captured | Use **`Arc`** (atomic refcount) for any handle that crosses a thread boundary, exactly as `stdlib/std/arc.nu` documents; keep shared mutable state behind `Arc[Mutex]` |

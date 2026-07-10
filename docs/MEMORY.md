@@ -591,6 +591,32 @@ deliberately simpler and the equivalence does **not** hold:
   safe. Its boundary (§3) is real and intentional, not a TODO list of
   Rust features pending.
 
+Concretely — and this is the comparison that matters — code that
+compiles clean, uses no `*T`, and calls no FFI can still do things
+safe Rust cannot:
+
+1. **Conditionally double-free.** A value freed on one arm of a `?`
+   and then freed again unconditionally is a real double-free on one
+   path, and it is *not* flagged — the price of the no-false-positive
+   property (§6.2, §6.3).
+2. **Data-race on shared heap state.** There is **no `Send`/`Sync`
+   system**. The one concrete footgun the compiler does reject is an
+   `Rc` captured into `thread_spawn`; but two threads sharing an
+   `Arc[Vec]` and both mutating the *contents* are entirely
+   unchecked, and a user type that is internally non-thread-safe is
+   not flagged when it crosses a thread boundary
+   ([`LIMITATIONS.md`](LIMITATIONS.md), *Concurrency / thread
+   safety*). `Arc` makes the *refcount* atomic, not your data.
+
+(Integer division by zero used to be a third entry here — it now
+panics with a clear message instead of executing UB.)
+
+So the accurate one-line claim is: **memory-safer than C by
+construction, with the common bug classes machine-checked — not
+memory-safe by proof, and not data-race-free.** Anyone needing the
+latter two guarantees today should reach for Rust; anyone reading a
+"NURL is memory-safe like Rust" claim should be pointed here.
+
 ### 6.6 The gates — how the guarantees are checked
 
 Everything above is enforced by two CI jobs
