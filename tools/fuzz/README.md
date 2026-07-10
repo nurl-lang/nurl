@@ -1,12 +1,22 @@
-# tools/fuzz — differential miscompile testing for nurlc
+# tools/fuzz — fuzzing for nurlc and the stdlib parsers
 
-A generative, oracle-backed fuzzer that systematically hunts silent
-integer miscompiles in `nurlc`. It complements the hand-written
-`compiler/tests/` corpus: instead of checking a fixed set of programs, it
-generates thousands of random ones and checks each against an independent
-reference.
+Two fuzzers, both run weekly (and on demand) by
+[`.github/workflows/fuzz.yml`](../../.github/workflows/fuzz.yml), never as a
+per-PR gate. Either finding fails the run and uploads its reproducer inputs
+from `failures/` as an artifact.
 
-## How it works
+1. **Differential miscompile fuzzer** (`fuzz.sh` + `gen.py`) — described below:
+   oracle-backed hunt for silent integer/float miscompiles in `nurlc`.
+2. **Mutational parser fuzzer** (`fuzz_parsers.sh` + `fuzz_parsers.py` +
+   `parse_harness.nu`) — mutates seeds for the untrusted-input parsers
+   (x509/DER, cbor, msgpack, json, yaml, xml, toml) against an ASan+UBSan
+   harness; a crash / out-of-bounds / UB / hang is a bug. Run it locally with
+   `./tools/fuzz/fuzz_parsers.sh [SEED] [ITERS] [TIMEOUT]` after `./build.sh`.
+
+Both are deterministic per seed, so a finding reproduces. Seed corpora live
+in-tree (`gen.py`'s generator; `fuzz_parsers.py`'s `TEXT_SEEDS`/`BINARY_SEEDS`).
+
+## Differential fuzzer — how it works
 
 `gen.py` builds a random **integer expression tree** over NURL's sized
 types (`i8 i16 i32 i64 u u16 u32 u64`) and operators (`+ - * / % & | << >>`
