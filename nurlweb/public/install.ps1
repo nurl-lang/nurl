@@ -74,6 +74,29 @@ try {
         throw "no checksum file published for $Version ($archive.sha256). Refusing to install unverified bytes; use -Insecure to override."
     }
 
+    # ── Signature (defense-in-depth beyond the same-release checksum) ──
+    # If minisign is on PATH, verify the detached signature against the pinned
+    # release key, fail-closed. If it isn't, we don't force an install of it —
+    # checksum + HTTPS stay the root of trust (nurl's pure-NURL verifier covers
+    # the package layer, where nurl is present).
+    $minisignPub = "RWQT5WWtjTnEyaYAG5X4HKCRtb7rFT5psjJVGB5Q9kVQBI71F5jfPWUf"
+    if (Get-Command minisign -ErrorAction SilentlyContinue) {
+        $sig = "$zip.minisig"
+        $haveSig = $false
+        try { Invoke-WebRequest "$base/$archive.minisig" -OutFile $sig; $haveSig = $true } catch { }
+        if ($haveSig) {
+            & minisign -Vm $zip -P $minisignPub | Out-Null
+            if ($LASTEXITCODE -ne 0) { throw "signature verification FAILED — refusing to install." }
+            Write-Host "signature OK"
+        } elseif ($Insecure) {
+            Write-Host "warning: no signature for $Version — continuing (-Insecure)."
+        } else {
+            throw "no signature (.minisig) published for $Version, and minisign is available to check it. Use -Insecure to override."
+        }
+    } else {
+        Write-Host "note: minisign not installed — skipping signature check (checksum + HTTPS enforced)."
+    }
+
     # ── Unpack (archive has a top-level nurl\ dir) ─────────────────────
     # Guard the wipe: never delete the user profile root or a directory that
     # isn't ours. Only clear an empty dir or a prior NURL install.
