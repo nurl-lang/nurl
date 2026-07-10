@@ -17,11 +17,17 @@
 #
 #  Env:
 #    $env:NURL_NO_MODIFY_PATH = "1"   never prompt / change the User PATH
+#    $env:NURL_INSTALL_INSECURE = "1" (or -Insecure) install even without a
+#                                     verifiable checksum. OFF by default: a
+#                                     missing checksum file ABORTS rather than
+#                                     silently trusting unverified bytes.
 # ============================================================
 param(
     [string]$Version = $env:NURL_VERSION,
-    [string]$Prefix  = $(if ($env:NURL_HOME) { $env:NURL_HOME } else { Join-Path $env:USERPROFILE ".nurl" })
+    [string]$Prefix  = $(if ($env:NURL_HOME) { $env:NURL_HOME } else { Join-Path $env:USERPROFILE ".nurl" }),
+    [switch]$Insecure
 )
+if ($env:NURL_INSTALL_INSECURE -eq "1") { $Insecure = $true }
 $ErrorActionPreference = "Stop"
 $repo = "nurl-lang/nurl"
 $target = "windows-x86_64"
@@ -44,21 +50,45 @@ try {
     $zip = Join-Path $tmp $archive
     Invoke-WebRequest "$base/$archive" -OutFile $zip
 
-    # ── Verify checksum (best-effort) ──────────────────────────────────
-    try {
-        $sumFile = "$zip.sha256"
-        Invoke-WebRequest "$base/$archive.sha256" -OutFile $sumFile
+    # ── Verify checksum (fail-CLOSED unless -Insecure) ─────────────────
+    # A checksum MISMATCH always aborts. Only the *inability* to fetch the
+    # checksum file is what -Insecure downgrades to a warning. (Same-release
+    # checksum defends against corruption, not a compromised release.)
+    $sumFile = "$zip.sha256"
+    $haveSum = $false
+    try { Invoke-WebRequest "$base/$archive.sha256" -OutFile $sumFile; $haveSum = $true } catch { }
+    if ($haveSum) {
         $want = ((Get-Content $sumFile) -split '\s+')[0].ToLower()
         $got = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
-        if ($want -ne $got) { throw "checksum mismatch (expected $want, got $got)." }
-        Write-Host "checksum OK"
-    } catch {
-        Write-Host "warning: checksum verification skipped ($($_.Exception.Message))"
+        if (-not $want) {
+            if ($Insecure) { Write-Host "warning: empty checksum file — continuing (-Insecure)." }
+            else { throw "the published checksum file is empty/malformed. Refusing; use -Insecure to override." }
+        } elseif ($want -ne $got) {
+            throw "checksum mismatch (expected $want, got $got) — refusing to install."
+        } else {
+            Write-Host "checksum OK"
+        }
+    } elseif ($Insecure) {
+        Write-Host "warning: no checksum file for $Version — continuing (-Insecure)."
+    } else {
+        throw "no checksum file published for $Version ($archive.sha256). Refusing to install unverified bytes; use -Insecure to override."
     }
 
     # ── Unpack (archive has a top-level nurl\ dir) ─────────────────────
+    # Guard the wipe: never delete the user profile root or a directory that
+    # isn't ours. Only clear an empty dir or a prior NURL install.
+    $userRoot = $env:USERPROFILE.TrimEnd('\', '/')
+    $pfxNorm  = "$Prefix".TrimEnd('\', '/')
+    if ([string]::IsNullOrWhiteSpace($pfxNorm) -or $pfxNorm -eq $userRoot) {
+        throw "refusing to install into '$Prefix' — pick a dedicated directory (e.g. `$env:USERPROFILE\.nurl)."
+    }
     Write-Host "installing to $Prefix..."
-    if (Test-Path $Prefix) { Remove-Item -Recurse -Force $Prefix }
+    if (Test-Path $Prefix) {
+        $isNurl  = (Test-Path (Join-Path $Prefix "bin\nurl.bat")) -or (Test-Path (Join-Path $Prefix "bin\nurlc.exe"))
+        $isEmpty = -not (Get-ChildItem -Force $Prefix -ErrorAction SilentlyContinue)
+        if ($isNurl -or $isEmpty) { Remove-Item -Recurse -Force $Prefix }
+        else { throw "'$Prefix' exists, is not empty, and is not a NURL install — refusing to overwrite it. Remove it yourself or set -Prefix to a fresh path." }
+    }
     New-Item -ItemType Directory -Force -Path $Prefix | Out-Null
     $unzipTmp = Join-Path $tmp "x"
     Expand-Archive -Path $zip -DestinationPath $unzipTmp -Force
