@@ -34,6 +34,10 @@ export interface Env {
   REG_SIGN_KEY?: string;        // wrangler secret: base64 Ed25519 seed (32B) —
                                 // signs every published tarball (minisign legacy
                                 // 'Ed' mode). Unset ⇒ publishes stay unsigned.
+  REG_SIGN_KEYID?: string;      // 16 hex chars: the minisign keyid embedded in
+                                // signatures. MUST equal the keyid inside the
+                                // public key the clients pin (bytes 2..10 of its
+                                // base64 payload). Unset ⇒ the production keyid.
 }
 
 const NAME_RE = /^[a-z0-9](?:[a-z0-9_-]{0,63})$/;
@@ -64,9 +68,22 @@ async function sha256Hex(data: ArrayBuffer | string): Promise<string> {
 // signature over the tarball bytes — no BLAKE2b prehash — because Web Crypto
 // exposes Ed25519 but not BLAKE2b. The pure-NURL verifier supports both.
 
-// keyid = first 8 bytes of the .minisig, must match the pinned public key's.
-// Public key: RWTGgah04Ft7n6+UNxc/MKT4eMViHBo4DLgKryJVbv9ZwedeQWpmmPq5
-const REG_SIGN_KEYID = new Uint8Array([0xc6, 0x81, 0xa8, 0x74, 0xe0, 0x5b, 0x7b, 0x9f]);
+// keyid = 8 bytes embedded in the .minisig; clients check it equals the keyid
+// inside the public key they pin, so it must match bytes 2..10 of that key's
+// base64 payload. Default = the production key's keyid
+// (pub RWTGgah04Ft7n6+UNxc/MKT4eMViHBo4DLgKryJVbv9ZwedeQWpmmPq5); override
+// with env.REG_SIGN_KEYID (16 hex chars) when signing with a different key
+// (self-hosted registries, the local test harness).
+const DEFAULT_SIGN_KEYID = new Uint8Array([0xc6, 0x81, 0xa8, 0x74, 0xe0, 0x5b, 0x7b, 0x9f]);
+
+function signKeyid(env: Env): Uint8Array {
+  const hex = env.REG_SIGN_KEYID;
+  if (!hex) return DEFAULT_SIGN_KEYID;
+  if (!/^[0-9a-fA-F]{16}$/.test(hex)) throw new Error("REG_SIGN_KEYID must be 16 hex chars (8 bytes)");
+  const out = new Uint8Array(8);
+  for (let i = 0; i < 8; i++) out[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
+  return out;
+}
 
 // PKCS#8 wrapper for a bare Ed25519 seed: SEQUENCE header + OID + the 32-byte
 // seed as an OCTET STRING. Lets crypto.subtle.importKey ingest a raw seed.
@@ -89,7 +106,7 @@ function bytesToB64(bytes: Uint8Array): string {
 }
 
 // Produce the .minisig text signing `body` with the given base64 Ed25519 seed.
-async function signTarball(seedB64: string, body: ArrayBuffer): Promise<string> {
+async function signTarball(seedB64: string, keyid: Uint8Array, body: ArrayBuffer): Promise<string> {
   const seed = b64ToBytes(seedB64);
   if (seed.length !== 32) throw new Error("REG_SIGN_KEY must be a 32-byte Ed25519 seed");
   const pkcs8 = new Uint8Array(PKCS8_ED25519_PREFIX.length + 32);
@@ -101,7 +118,7 @@ async function signTarball(seedB64: string, body: ArrayBuffer): Promise<string> 
   const line = new Uint8Array(2 + 8 + 64);
   line[0] = 0x45; // 'E'
   line[1] = 0x64; // 'd'  → legacy raw-Ed25519 mode
-  line.set(REG_SIGN_KEYID, 2);
+  line.set(keyid, 2);
   line.set(sig, 10);
   return `untrusted comment: nurl registry signature\n${bytesToB64(line)}\n`;
 }
@@ -235,7 +252,7 @@ async function handlePublish(req: Request, env: Env): Promise<Response> {
   await env.REG_BUCKET.put(tarKey, body);
   if (env.REG_SIGN_KEY) {
     try {
-      const sig = await signTarball(env.REG_SIGN_KEY, body);
+      const sig = await signTarball(env.REG_SIGN_KEY, signKeyid(env), body);
       await env.REG_BUCKET.put(`${tarKey}.minisig`, sig, {
         httpMetadata: { contentType: "text/plain" },
       });
@@ -299,7 +316,7 @@ async function handleSignBackfill(req: Request, env: Env): Promise<Response> {
       const obj = await env.REG_BUCKET.get(key);
       if (!obj) { failed++; errors.push(`${key}: vanished`); continue; }
       const body = await obj.arrayBuffer();
-      const sig = await signTarball(env.REG_SIGN_KEY, body);
+      const sig = await signTarball(env.REG_SIGN_KEY, signKeyid(env), body);
       await env.REG_BUCKET.put(`${key}.minisig`, sig, { httpMetadata: { contentType: "text/plain" } });
       signed++;
     } catch (e) {

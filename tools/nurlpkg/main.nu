@@ -205,7 +205,7 @@ $ `stdlib/std/bytes.nu`
     ( nurl_print `  nurlpkg info           Print the parsed manifest in the current directory.\n` )
     ( nurl_print `  nurlpkg deps           List dependencies, one per line.\n` )
     ( nurl_print `  nurlpkg install        Resolve this project's deps and symlink them under ./deps/.\n` )
-    ( nurl_print `  nurlpkg install <name> Fetch, build, and install a program from the registry onto $PATH.\n` )
+    ( nurl_print `  nurlpkg install <name> Program: fetch, build + install onto $PATH. Library: install under ./deps/ (no nurl.toml needed).\n` )
     ( nurl_print `  nurlpkg lock           Regenerate nurl.lock from the current deps/ tree.\n` )
     ( nurl_print `  nurlpkg publish        Pack + upload this package to the registry.\n` )
     ( nurl_print `  nurlpkg login          Store a publish token in ~/.nurl/credentials.\n` )
@@ -1553,6 +1553,9 @@ $ `stdlib/std/bytes.nu`
 // published package from the registry, resolve ITS dependencies, compile
 // its `src/main.nu` entry point with the installed compiler, and drop the
 // resulting binary on $PATH (under $NURL_HOME/bin, default ~/.nurl/bin).
+// If the package has no `src/main.nu` it is a LIBRARY: it lands under
+// ./deps/<name> instead (with its transitive registry deps), so a plain
+// folder of .nu files can pull a library without writing a nurl.toml.
 //
 // This is the payoff of the installable toolchain: an outside user runs
 // `nurlpkg install nq` and gets a working program built from
@@ -1879,6 +1882,106 @@ $ `stdlib/std/bytes.nu`
     ^ rc
 }
 
+// True if ./nurl.toml exists and already declares `name` under
+// [dependencies] (so a library install doesn't duplicate the entry).
+@ __toml_declares_dep s name → b {
+    : ~ b found F
+    ?? ( manifest_load `nurl.toml` ) {
+        T m → {
+            : i n ( vec_len [Dep] . m dependencies )
+            : ~ i k 0
+            ~ < k n {
+                : ?Dep d ( vec_get [Dep] . m dependencies k )
+                ?? d {
+                    T dv → { ? != 0 ( nurl_str_eq ( string_data . dv name ) name ) { = found T } {} }
+                    F _ → {}
+                }
+                = k + k 1
+            }
+            ( manifest_free m )
+        }
+        F _ → {}
+    }
+    ^ found
+}
+
+// `install <name>` on a LIBRARY package: land the latest version (and its
+// transitive registry deps) under ./deps/<name> — the same layout a
+// manifest-driven `nurlpkg install` produces — so a plain folder of .nu
+// files can pull a registry library without writing a nurl.toml first.
+// When a nurl.toml IS present, the dependency is recorded there too (same
+// effect as `nurlpkg add <name> --version ^<ver>`), so a later
+// manifest-driven install reproduces this state.
+@ __install_lib_deps s name s reg → i {
+    ( nurl_print `'` ) ( nurl_print name )
+    ( nurl_print `' is a library — installing into ./deps/\n` )
+    : ( Vec Dep ) roots ( vec_new [Dep] )
+    ( vec_push [Dep] roots @ Dep {
+        ( string_from name ) ( string_new ) ( string_from `*` ) ( string_new )
+    } )
+    : ( @ String s ) fetch \ s nm → String { ^ ( pkg_fetch_index reg nm ) }
+    : ~ i rc 0
+    : ~ String rootver ( string_new )
+    : !( Vec LockPkg ) ResolveErr rr ( resolve_registry roots reg fetch )
+    ?? rr {
+        F e → {
+            ( nurl_eprint `nurlpkg: registry resolution failed (` )
+            ( nurl_eprint ( resolve_err_name e ) ) ( nurl_eprintln `)` )
+            = rc 1
+        }
+        T locked → {
+            : i ln ( vec_len [LockPkg] locked )
+            : ~ i k 0
+            ~ < k ln {
+                : ?LockPkg po ( vec_get [LockPkg] locked k )
+                ?? po {
+                    T p → {
+                        : !i PkgFetchErr ir ( pkg_install_one reg ( string_data . p name ) ( string_data . p version ) ( string_data . p checksum ) `deps` )
+                        ?? ir {
+                            T _ → {
+                                ( nurl_print `  ` ) ( nurl_print ( string_data . p name ) )
+                                ( nurl_print ` ` ) ( nurl_print ( string_data . p version ) )
+                                ( nurl_print ` → deps/` ) ( nurl_print ( string_data . p name ) )
+                                ( nurl_print `\n` )
+                                ? != 0 ( nurl_str_eq ( string_data . p name ) name ) {
+                                    ( string_free rootver )
+                                    = rootver ( string_from ( string_data . p version ) )
+                                } {}
+                            }
+                            F fe → {
+                                ( nurl_eprint `  ` ) ( nurl_eprint ( string_data . p name ) )
+                                ( nurl_eprint `: ` ) ( nurl_eprintln ( pkg_err_name fe ) )
+                                = rc 1
+                            }
+                        }
+                    }
+                    F _ → {}
+                }
+                = k + k 1
+            }
+            ( lockpkgs_free locked )
+        }
+    }
+    ( __deps_free_vec roots )
+    ? & == rc 0 & ( file_exists `nurl.toml` ) > ( string_len rootver ) 0 {
+        ? ( __toml_declares_dep name ) {} {
+            : String req ( string_with_cap 24 )
+            ( string_push_char req 94 )
+            ( string_push_str req ( string_data rootver ) )
+            : i arc ( __cmd_add name `` ( string_data req ) )
+            ? != arc 0 { = rc arc } {}
+            ( string_free req )
+        }
+    } {}
+    ? == rc 0 {
+        ( nurl_print `done. Import it with:  $ deps/` )
+        ( nurl_print name )
+        ( nurl_print `/src/<module>.nu  (backtick-quoted)\n` )
+    } {}
+    ( string_free rootver )
+    ^ rc
+}
+
 @ __cmd_install_tool s name → i {
     : String regS ( __reg_default )
     : s reg ( string_data regS )
@@ -1927,8 +2030,9 @@ $ `stdlib/std/bytes.nu`
                                 ( string_push_char pkgdir 47 ) ( string_push_str pkgdir name )
                                 : String binsrc ( string_concat ( string_from ( string_data pkgdir ) ) ( string_from `/src/main.nu` ) )
                                 ? ! ( file_exists ( string_data binsrc ) ) {
-                                    ( nurl_eprint `nurlpkg: '` ) ( nurl_eprint name )
-                                    ( nurl_eprintln `' is a library, not an installable program (no src/main.nu)` )
+                                    // No src/main.nu → a library. Install it
+                                    // under ./deps/ instead of erroring.
+                                    = rc ( __install_lib_deps name reg )
                                 } {
                                     = rc ( __tool_build_and_install name ( string_data pkgdir ) ( string_data binsrc ) )
                                 }

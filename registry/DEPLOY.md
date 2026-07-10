@@ -54,9 +54,13 @@ verifies with its pure-NURL minisign implementation, so a compromised R2/CDN
 can't substitute tarball bytes. Verification is **mandatory + fail-closed**.
 
 - `REG_SIGN_KEY` is the base64 32-byte Ed25519 **seed**. The pinned public key
-  lives in `stdlib/ext/pkg_fetch.nu` (`__pkg_reg_pubkey`) and its keyid is
-  hard-coded in `src/index.ts` (`REG_SIGN_KEYID`) — all three must correspond
-  to the same key.
+  lives in `stdlib/ext/pkg_fetch.nu` (`__pkg_reg_pubkey`) and the keyid
+  embedded in signatures defaults to the production key's
+  (`DEFAULT_SIGN_KEYID` in `src/index.ts`) — all three must correspond to the
+  same key. Signing with a **different** key (self-hosted registry, local
+  tests) additionally requires `REG_SIGN_KEYID` (16 hex chars): the keyid
+  inside the public key your clients pin (bytes 2..10 of its base64 payload).
+  A wrong keyid makes every client reject the signature.
 - **One-time backfill** — packages published *before* signing was enabled have
   no `.minisig`, so after the first deploy that sets `REG_SIGN_KEY`, sign them
   all (idempotent; auth = presenting the seed itself):
