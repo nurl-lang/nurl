@@ -34,7 +34,8 @@ REG_SIGN_PUB='RWQKCwwNDg8QEXVcTLklbKfNxKz9xs/u2oSQF+W5+VFOmRkb1n4LDUJ2'
 # must embed the SAME keyid in signatures or the client's keyid check fails.
 REG_SIGN_KEYID='0a0b0c0d0e0f1011'
 
-printf 'GITHUB_CLIENT_ID=local\nGITHUB_CLIENT_SECRET=local\nTOKEN_PEPPER=%s\nREGISTRY_URL=%s\nREG_SIGN_KEY=%s\nREG_SIGN_KEYID=%s\n' "$PEPPER" "$REG" "$REG_SIGN_KEY" "$REG_SIGN_KEYID" > .dev.vars
+# Tiny search rate limit so the limiter is testable in seconds (prod: 120).
+printf 'GITHUB_CLIENT_ID=local\nGITHUB_CLIENT_SECRET=local\nTOKEN_PEPPER=%s\nREGISTRY_URL=%s\nREG_SIGN_KEY=%s\nREG_SIGN_KEYID=%s\nRL_SEARCH_PER_MIN=5\n' "$PEPPER" "$REG" "$REG_SIGN_KEY" "$REG_SIGN_KEYID" > .dev.vars
 
 # Start from a clean local state (fresh D1 + empty R2 each run).
 rm -rf .wrangler/state
@@ -46,6 +47,13 @@ npx wrangler d1 execute REG_DB --local --command \
   "INSERT OR IGNORE INTO users (id,github_id,login,created_at) VALUES (1,1,'tester',0);" >/dev/null 2>&1
 npx wrangler d1 execute REG_DB --local --command \
   "INSERT OR IGNORE INTO tokens (user_id,token_hash,name,created_at) VALUES (1,'$HASH','cli',0);" >/dev/null 2>&1
+# A second user for the cross-owner typosquat tests.
+TOKEN2=localtoken456
+HASH2=$(node -e "console.log(require('crypto').createHash('sha256').update('$PEPPER'+'$TOKEN2').digest('hex'))")
+npx wrangler d1 execute REG_DB --local --command \
+  "INSERT OR IGNORE INTO users (id,github_id,login,created_at) VALUES (2,2,'other',0);" >/dev/null 2>&1
+npx wrangler d1 execute REG_DB --local --command \
+  "INSERT OR IGNORE INTO tokens (user_id,token_hash,name,created_at) VALUES (2,'$HASH2','ci',0);" >/dev/null 2>&1
 
 # A leftover server from an interrupted run would answer the health check
 # with stale state and poison every step below — clear the port first, and
@@ -104,6 +112,57 @@ say "republish -> 409"
 
 say "bad token -> 401"
 ( cd "$WORK/foo" && NURL_REGISTRY="$REG" NURL_TOKEN="nope" "$NURLPKG" publish ) && { echo "expected failure"; fail=1; } || echo "rejected (correct)"
+
+# ── M9 hardening: name hygiene, scoped tokens, expiry, rate limits ─────
+# Raw curl for precise status assertions; the body is opaque at publish time.
+pub_code() { # pub_code <token> <name> <version> → HTTP status
+  curl -s -o /dev/null -w '%{http_code}' -X POST "${REG%/}/api/v1/publish" \
+    -H "Authorization: Bearer $1" -H "X-Nurl-Package: $2" -H "X-Nurl-Version: $3" \
+    --data-binary @"$WORK/foo.tar.gz.raw"
+}
+# Reuse the packed tarball bytes for the raw publishes.
+( cd "$WORK/foo" && tar czf "$WORK/foo.tar.gz.raw" nurl.toml src README.md )
+
+say "reserved name -> 403"
+c=$(pub_code "$TOKEN" std 1.0.0)
+[[ "$c" == 403 ]] && echo "rejected (correct)" || { echo "expected 403, got $c"; fail=1; }
+
+say "typosquat by another user -> 403"
+c=$(pub_code "$TOKEN2" fooo 1.0.0)          # edit distance 1 from foo
+[[ "$c" == 403 ]] && echo "fooo rejected (correct)" || { echo "expected 403, got $c"; fail=1; }
+c=$(pub_code "$TOKEN2" f-oo 1.0.0)          # normalised-equal to foo
+[[ "$c" == 403 ]] && echo "f-oo rejected (correct)" || { echo "expected 403, got $c"; fail=1; }
+
+say "lookalike by the owner is allowed"
+c=$(pub_code "$TOKEN" foo2 1.0.0)
+[[ "$c" == 200 ]] && echo "foo2 published (correct)" || { echo "expected 200, got $c"; fail=1; }
+
+say "scoped token: allowed package only"
+SCOPED=$(curl -s -X POST "${REG%/}/api/v1/token/new" -H "Authorization: Bearer $TOKEN" \
+  -H 'content-type: application/json' -d '{"name":"ci","pkgs":["foo"],"ttl_days":7}' \
+  | node -e "let d='';process.stdin.on('data',c=>d+=c).on('end',()=>console.log(JSON.parse(d).token||''))")
+[[ -n "$SCOPED" ]] || { echo "token/new failed"; fail=1; }
+c=$(pub_code "$SCOPED" foo 2.0.0)
+[[ "$c" == 200 ]] && echo "in-scope publish ok" || { echo "expected 200, got $c"; fail=1; }
+c=$(pub_code "$SCOPED" bar 1.0.0)
+[[ "$c" == 403 ]] && echo "out-of-scope rejected (correct)" || { echo "expected 403, got $c"; fail=1; }
+c=$(curl -s -o /dev/null -w '%{http_code}' -X POST "${REG%/}/api/v1/token/new" \
+  -H "Authorization: Bearer $SCOPED" -H 'content-type: application/json' -d '{}')
+[[ "$c" == 403 ]] && echo "scoped token cannot mint (correct)" || { echo "expected 403, got $c"; fail=1; }
+
+say "expired token -> 401"
+npx wrangler d1 execute REG_DB --local --command \
+  "UPDATE tokens SET expires_at = 1 WHERE name = 'ci' AND user_id = 1;" >/dev/null 2>&1
+c=$(pub_code "$SCOPED" foo 3.0.0)
+[[ "$c" == 401 ]] && echo "rejected (correct)" || { echo "expected 401, got $c"; fail=1; }
+
+say "search rate limit (RL_SEARCH_PER_MIN=5)"
+limited=0
+for i in $(seq 1 8); do
+  c=$(curl -s -o /dev/null -w '%{http_code}' "${REG%/}/api/v1/search?q=foo")
+  [[ "$c" == 429 ]] && limited=1
+done
+[[ $limited -eq 1 ]] && echo "429 seen (correct)" || { echo "no 429 in 8 requests"; fail=1; }
 
 say "RESULT"
 [[ $fail -eq 0 ]] && echo "PASS" || echo "FAIL"

@@ -38,6 +38,10 @@ export interface Env {
                                 // signatures. MUST equal the keyid inside the
                                 // public key the clients pin (bytes 2..10 of its
                                 // base64 payload). Unset ⇒ the production keyid.
+  RL_PUBLISH_PER_HOUR?: string; // rate-limit overrides (numbers as strings;
+  RL_MINT_PER_HOUR?: string;    //  defaults 30 / 10 / 120 / 10). Mostly for
+  RL_SEARCH_PER_MIN?: string;   //  the local test harness — production runs
+  RL_TOKEN_NEW_PER_HOUR?: string; // on the defaults.
 }
 
 const NAME_RE = /^[a-z0-9](?:[a-z0-9_-]{0,63})$/;
@@ -135,23 +139,60 @@ function randomToken(): string {
   return [...b].map((x) => x.toString(16).padStart(2, "0")).join("");
 }
 
-interface UserRow { id: number; github_id: number; login: string; }
+interface UserRow {
+  id: number;
+  github_id: number;
+  login: string;
+  // Per-token package scope: null ⇒ the token may act on every package the
+  // user owns; else only on the listed names. Set at token mint, immutable.
+  tokenPkgs: string[] | null;
+}
 
-// Resolve the Bearer token to a user, or null. Bumps last_used_at.
+// Resolve the Bearer token to a user, or null. Enforces token expiry;
+// bumps last_used_at.
 async function userFromAuth(req: Request, env: Env): Promise<UserRow | null> {
   const auth = req.headers.get("authorization") ?? "";
   const m = auth.match(/^Bearer\s+(.+)$/i);
   if (!m) return null;
   const hash = await hashToken(m[1].trim(), env.TOKEN_PEPPER);
   const row = await env.REG_DB.prepare(
-    `SELECT u.id AS id, u.github_id AS github_id, u.login AS login, t.id AS tid
+    `SELECT u.id AS id, u.github_id AS github_id, u.login AS login,
+            t.id AS tid, t.expires_at AS expires_at, t.pkgs AS pkgs
        FROM tokens t JOIN users u ON u.id = t.user_id
       WHERE t.token_hash = ?`,
-  ).bind(hash).first<UserRow & { tid: number }>();
+  ).bind(hash).first<UserRow & { tid: number; expires_at: number | null; pkgs: string | null }>();
   if (!row) return null;
+  if (row.expires_at !== null && row.expires_at < Date.now()) return null; // expired
   await env.REG_DB.prepare(`UPDATE tokens SET last_used_at = ? WHERE id = ?`)
     .bind(Date.now(), row.tid).run();
-  return { id: row.id, github_id: row.github_id, login: row.login };
+  const tokenPkgs = row.pkgs ? row.pkgs.split(",").filter((s) => s.length > 0) : null;
+  return { id: row.id, github_id: row.github_id, login: row.login, tokenPkgs };
+}
+
+// ── Rate limiting (D1 fixed window) ───────────────────────────────────
+// One upsert per checked request: reset the window if it has lapsed, else
+// increment, and read the count back. Returns true when the request is
+// within the limit. Keys are per-user for authenticated writes and per-IP
+// for anonymous endpoints.
+async function rateLimit(env: Env, key: string, limit: number, windowMs: number): Promise<boolean> {
+  const now = Date.now();
+  const row = await env.REG_DB.prepare(
+    `INSERT INTO rate_limits (key, window_start, count) VALUES (?1, ?2, 1)
+     ON CONFLICT(key) DO UPDATE SET
+       count        = CASE WHEN window_start <= ?2 - ?3 THEN 1 ELSE count + 1 END,
+       window_start = CASE WHEN window_start <= ?2 - ?3 THEN ?2 ELSE window_start END
+     RETURNING count`,
+  ).bind(key, now, windowMs).first<{ count: number }>();
+  return (row?.count ?? 1) <= limit;
+}
+
+function rlNum(v: string | undefined, dflt: number): number {
+  const n = v ? parseInt(v, 10) : NaN;
+  return Number.isFinite(n) && n > 0 ? n : dflt;
+}
+
+function clientIp(req: Request): string {
+  return req.headers.get("cf-connecting-ip") ?? "unknown";
 }
 
 interface IndexDep { name: string; req: string; }
@@ -221,14 +262,77 @@ async function handleFile(env: Env, name: string, version: string, rel: string):
   return new Response(data, { headers });
 }
 
+// ── Name hygiene (typosquat + reserved) ───────────────────────────────
+// Toolchain binaries, stdlib roots, and this Worker's own route segments —
+// claiming any of these as a package name is confusing at best and an
+// attack surface at worst.
+const RESERVED_NAMES = new Set([
+  "nurl", "nurlc", "nurlpkg", "nurlfmt", "nurldoc", "nurlapi", "nurl-lsp",
+  "std", "stdlib", "core", "ext", "deps", "test", "tests", "bench",
+  "api", "admin", "index", "files", "pkgs", "packages", "login", "auth",
+  "search", "stats", "www",
+]);
+
+// Normalised form for lookalike detection: separators dropped, common
+// digit↔letter homoglyphs folded. "imag3" and "im-age" both normalise
+// to "image".
+function squatNormalize(name: string): string {
+  const homo: Record<string, string> = { "0": "o", "1": "l", "3": "e", "4": "a", "5": "s", "7": "t" };
+  let out = "";
+  for (const c of name) {
+    if (c === "-" || c === "_") continue;
+    out += homo[c] ?? c;
+  }
+  return out;
+}
+
+function levenshtein(a: string, b: string): number {
+  if (a === b) return 0;
+  const m = a.length, n = b.length;
+  let prev = Array.from({ length: n + 1 }, (_, j) => j);
+  for (let i = 1; i <= m; i++) {
+    const cur = [i];
+    for (let j = 1; j <= n; j++) {
+      cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+    }
+    prev = cur;
+  }
+  return prev[n];
+}
+
+// A NEW package name is rejected when it is reserved, or when it is a
+// lookalike of an existing package owned by SOMEONE ELSE (normalised-equal,
+// or raw edit distance ≤ 1). The owner of `http` may publish `http2`;
+// a stranger may not publish `htttp`.
+async function newNameRejection(env: Env, name: string, userId: number): Promise<string | null> {
+  if (RESERVED_NAMES.has(name)) return "reserved_name";
+  const rows = await env.REG_DB.prepare(`SELECT name, owner_user_id FROM packages`)
+    .all<{ name: string; owner_user_id: number }>();
+  const norm = squatNormalize(name);
+  for (const r of rows.results ?? []) {
+    if (r.owner_user_id === userId) continue;
+    if (squatNormalize(r.name) === norm || levenshtein(name, r.name) <= 1) {
+      return `name_too_similar:${r.name}`;
+    }
+  }
+  return null;
+}
+
 async function handlePublish(req: Request, env: Env): Promise<Response> {
   const user = await userFromAuth(req, env);
   if (!user) return json({ error: "unauthorized" }, 401);
+  if (!(await rateLimit(env, `pub:${user.id}`, rlNum(env.RL_PUBLISH_PER_HOUR, 30), 3_600_000))) {
+    return json({ error: "rate_limited" }, 429, { "retry-after": "3600" });
+  }
 
   const name = (req.headers.get("x-nurl-package") ?? "").toLowerCase();
   const version = req.headers.get("x-nurl-version") ?? "";
   if (!NAME_RE.test(name)) return json({ error: "invalid_name" }, 400);
   if (!VERSION_RE.test(version)) return json({ error: "invalid_version" }, 400);
+  // Per-token package scope (M9): a scoped token acts only on its list.
+  if (user.tokenPkgs && !user.tokenPkgs.includes(name)) {
+    return json({ error: "token_scope" }, 403);
+  }
 
   const body = await req.arrayBuffer();
   if (body.byteLength === 0) return json({ error: "empty_body" }, 400);
@@ -239,6 +343,14 @@ async function handlePublish(req: Request, env: Env): Promise<Response> {
   const owner = await env.REG_DB.prepare(`SELECT owner_user_id FROM packages WHERE name = ?`)
     .bind(name).first<{ owner_user_id: number }>();
   if (owner && owner.owner_user_id !== user.id) return json({ error: "not_owner" }, 403);
+  // New names pass reserved-word + lookalike (typosquat) checks.
+  if (!owner) {
+    const rejection = await newNameRejection(env, name, user.id);
+    if (rejection) {
+      const [error, conflict] = rejection.split(":");
+      return json(conflict ? { error, conflict } : { error }, 403);
+    }
+  }
 
   // Immutability.
   const existing = await env.REG_DB.prepare(`SELECT version FROM versions WHERE name = ? AND version = ?`)
@@ -504,7 +616,10 @@ async function handlePackageDetail(env: Env, name: string): Promise<Response> {
     readmeHtml);
 }
 
-async function handleSearch(url: URL, env: Env): Promise<Response> {
+async function handleSearch(req: Request, url: URL, env: Env): Promise<Response> {
+  if (!(await rateLimit(env, `search:${clientIp(req)}`, rlNum(env.RL_SEARCH_PER_MIN, 120), 60_000))) {
+    return json({ error: "rate_limited" }, 429, { "retry-after": "60" });
+  }
   const q = (url.searchParams.get("q") ?? "").toLowerCase().slice(0, 64);
   const like = q ? `%${q.replace(/[%_\\]/g, "")}%` : "%";
   const rows = await env.REG_DB.prepare(
@@ -538,6 +653,9 @@ async function handleYank(req: Request, env: Env, yank: boolean): Promise<Respon
   const version = req.headers.get("x-nurl-version") ?? "";
   if (!NAME_RE.test(name)) return json({ error: "invalid_name" }, 400);
   if (!VERSION_RE.test(version)) return json({ error: "invalid_version" }, 400);
+  if (user.tokenPkgs && !user.tokenPkgs.includes(name)) {
+    return json({ error: "token_scope" }, 403);
+  }
   const owner = await env.REG_DB.prepare(`SELECT owner_user_id FROM packages WHERE name = ?`)
     .bind(name).first<{ owner_user_id: number }>();
   if (!owner) return json({ error: "not_found" }, 404);
@@ -576,7 +694,15 @@ function handleLogin(env: Env): Response {
   });
 }
 
+// Tokens minted via OAuth (and by default via /api/v1/token/new) live 90
+// days — long enough that rotation isn't a nuisance, short enough that a
+// leaked token doesn't work forever.
+const TOKEN_TTL_MS = 90 * 24 * 3_600_000;
+
 async function handleCallback(req: Request, env: Env): Promise<Response> {
+  if (!(await rateLimit(env, `mint:${clientIp(req)}`, rlNum(env.RL_MINT_PER_HOUR, 10), 3_600_000))) {
+    return json({ error: "rate_limited" }, 429, { "retry-after": "3600" });
+  }
   const url = new URL(req.url);
   const code = url.searchParams.get("code");
   const state = url.searchParams.get("state");
@@ -612,9 +738,10 @@ async function handleCallback(req: Request, env: Env): Promise<Response> {
     .bind(ghUser.id).first<{ id: number }>();
 
   const token = randomToken();
+  const expires = now + TOKEN_TTL_MS;
   await env.REG_DB.prepare(
-    `INSERT INTO tokens (user_id, token_hash, name, created_at) VALUES (?, ?, ?, ?)`,
-  ).bind(user!.id, await hashToken(token, env.TOKEN_PEPPER), "cli", now).run();
+    `INSERT INTO tokens (user_id, token_hash, name, created_at, expires_at) VALUES (?, ?, ?, ?, ?)`,
+  ).bind(user!.id, await hashToken(token, env.TOKEN_PEPPER), "cli", now, expires).run();
 
   return htmlPage(
     "NURL registry — token",
@@ -622,8 +749,49 @@ async function handleCallback(req: Request, env: Env): Promise<Response> {
       `<p>Your publish token (shown once — store it now):</p>` +
       `<pre style="background:#f4f4f4;padding:1rem;border-radius:6px;user-select:all">${token}</pre>` +
       `<p>Use it with nurlpkg:</p>` +
-      `<pre style="background:#f4f4f4;padding:1rem;border-radius:6px">export NURL_TOKEN=${token}\nnurlpkg publish</pre>`,
+      `<pre style="background:#f4f4f4;padding:1rem;border-radius:6px">export NURL_TOKEN=${token}\nnurlpkg publish</pre>` +
+      `<p>This token expires on <b>${new Date(expires).toISOString().slice(0, 10)}</b> ` +
+      `(90 days) — sign in again to rotate it. For CI, mint a token restricted to ` +
+      `specific packages with <code>POST /api/v1/token/new</code>.</p>`,
   );
+}
+
+// POST /api/v1/token/new — mint a scoped token from an existing full token.
+// Body: { name?, pkgs?: string[], ttl_days?: number }. `pkgs` restricts the
+// new token to those package names (the CI use case: a token that can
+// publish exactly one package). Only an UNSCOPED token may mint (a scoped
+// token minting a broader one would be privilege escalation). The plaintext
+// is returned once and never stored.
+async function handleTokenNew(req: Request, env: Env): Promise<Response> {
+  const user = await userFromAuth(req, env);
+  if (!user) return json({ error: "unauthorized" }, 401);
+  if (user.tokenPkgs) return json({ error: "scoped_token_cannot_mint" }, 403);
+  if (!(await rateLimit(env, `tok:${user.id}`, rlNum(env.RL_TOKEN_NEW_PER_HOUR, 10), 3_600_000))) {
+    return json({ error: "rate_limited" }, 429, { "retry-after": "3600" });
+  }
+  let body: { name?: unknown; pkgs?: unknown; ttl_days?: unknown };
+  try { body = await req.json(); } catch { return json({ error: "bad_json" }, 400); }
+  const label = typeof body.name === "string" && body.name.length <= 64 ? body.name : "scoped";
+  let pkgs: string[] | null = null;
+  if (body.pkgs !== undefined) {
+    if (!Array.isArray(body.pkgs) || body.pkgs.length === 0 || body.pkgs.length > 32 ||
+        !body.pkgs.every((p) => typeof p === "string" && NAME_RE.test(p))) {
+      return json({ error: "bad_pkgs" }, 400);
+    }
+    pkgs = body.pkgs as string[];
+  }
+  const ttlDays = typeof body.ttl_days === "number" && body.ttl_days >= 1 && body.ttl_days <= 365
+    ? Math.floor(body.ttl_days) : 90;
+
+  const now = Date.now();
+  const expires = now + ttlDays * 24 * 3_600_000;
+  const token = randomToken();
+  await env.REG_DB.prepare(
+    `INSERT INTO tokens (user_id, token_hash, name, created_at, expires_at, pkgs)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+  ).bind(user.id, await hashToken(token, env.TOKEN_PEPPER), label, now, expires,
+         pkgs ? pkgs.join(",") : null).run();
+  return json({ ok: true, token, expires_at: expires, pkgs });
 }
 
 export default {
@@ -635,7 +803,7 @@ export default {
       if (path === "/") return handleCatalog(url, env);
       if (path === "/login") return handleLogin(env);
       if (path === "/auth/callback") return handleCallback(req, env);
-      if (path === "/api/v1/search") return handleSearch(url, env);
+      if (path === "/api/v1/search") return handleSearch(req, url, env);
       if (path === "/api/v1/stats") return handleStats(env);
       if (path.startsWith("/packages/")) {
         return handlePackageDetail(env, decodeURIComponent(path.slice("/packages/".length)).toLowerCase());
@@ -671,6 +839,7 @@ export default {
       if (path === "/api/v1/yank") return handleYank(req, env, true);
       if (path === "/api/v1/unyank") return handleYank(req, env, false);
       if (path === "/api/v1/revoke") return handleRevoke(req, env);
+      if (path === "/api/v1/token/new") return handleTokenNew(req, env);
       if (path === "/api/v1/admin/sign-backfill") return handleSignBackfill(req, env);
     }
     return json({ error: "not_found" }, 404);
