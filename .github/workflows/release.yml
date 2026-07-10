@@ -317,6 +317,31 @@ jobs:
           path: artifacts
           merge-multiple: true
 
+      - name: Sign archives with minisign
+        # Detached minisign signatures over every archive, so `minisign -V` (or
+        # nurl's pure-NURL verifier) can confirm a download came from the real
+        # release key — not just that it matches a checksum served alongside it.
+        # The passwordless secret key lives only in the MINISIGN_SECRET_KEY
+        # secret. If the secret is unset (e.g. a fork), skip signing rather than
+        # fail the release.
+        env:
+          MINISIGN_SECRET_KEY: ${{ secrets.MINISIGN_SECRET_KEY }}
+        run: |
+          if [ -z "${MINISIGN_SECRET_KEY:-}" ]; then
+            echo "MINISIGN_SECRET_KEY not set — skipping signing." >&2
+            exit 0
+          fi
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends minisign
+          printf '%s\n' "$MINISIGN_SECRET_KEY" > "$RUNNER_TEMP/minisign.key"
+          trap 'shred -u "$RUNNER_TEMP/minisign.key" 2>/dev/null || rm -f "$RUNNER_TEMP/minisign.key"' EXIT
+          for f in artifacts/*.tar.gz artifacts/*.zip; do
+            [ -e "$f" ] || continue
+            minisign -S -s "$RUNNER_TEMP/minisign.key" -m "$f" \
+              -c "nurl release $GITHUB_REF_NAME" -t "nurl $GITHUB_REF_NAME"
+            echo "signed $f -> $f.minisig"
+          done
+
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
@@ -327,3 +352,4 @@ jobs:
             artifacts/*.tar.gz
             artifacts/*.zip
             artifacts/*.sha256
+            artifacts/*.minisig

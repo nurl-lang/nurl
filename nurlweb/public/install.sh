@@ -135,6 +135,27 @@ else
     insecure_or_die "no checksum file published for $VERSION ($archive.sha256)"
 fi
 
+# ── Signature (defense-in-depth beyond the same-release checksum) ──────
+# The pinned release public key. A minisign signature proves the archive was
+# produced by the holder of the release key, which a same-release checksum
+# can't. If minisign is available we verify fail-closed; if it isn't, we do
+# NOT force an install of it — the checksum + HTTPS remain the root of trust,
+# exactly as with rustup/deno. (nurl's own pure-NURL verifier — stdlib
+# minisign.nu — covers the package layer, where nurl is already present.)
+MINISIGN_PUB="RWQT5WWtjTnEyaYAG5X4HKCRtb7rFT5psjJVGB5Q9kVQBI71F5jfPWUf"
+if have minisign; then
+    if dl "$base/$archive.minisig" "$tmp/$archive.minisig" 2>/dev/null; then
+        info "verifying signature…"
+        minisign -Vm "$tmp/$archive" -P "$MINISIGN_PUB" >/dev/null 2>&1 \
+            || err "signature verification FAILED — refusing to install."
+        info "signature OK"
+    else
+        insecure_or_die "no signature (.minisig) published for $VERSION, and minisign is available to check it"
+    fi
+else
+    info "note: minisign not installed — skipping signature check (checksum + HTTPS enforced)."
+fi
+
 # ── Unpack (the archive has a top-level nurl/ dir) ─────────────────────
 # Guard the destructive wipe: never delete $HOME, /, or a directory that
 # isn't ours. Only clear an empty dir or a prior NURL install (has bin/nurl).
