@@ -1,0 +1,8 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+empty  ok
+abc    ok
+200x   ok
+128x   ok
