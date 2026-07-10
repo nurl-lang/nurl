@@ -9278,6 +9278,25 @@
     }
 }
 
+// --strict-borrowck companion of bck_diag: consuming a binding whose
+// state is MAYBE-moved (freed on one arm of a `?`, still owned on the
+// other). Deduplicated through the same warnset; the `mm:` prefix keeps
+// a strict diagnostic from suppressing a later definite one (or vice
+// versa) on the same line+name.
+@ bck_diag_maybe s name i useline → v {
+    : s tag ( nurl_str_cat3 ( nurl_str_cat `mm:` ( nurl_str_int useline ) ) `:` name )
+    : s ws ( nurl_sym_get g_bck `warnset` )
+    ? ( str_contains_word ws tag ) {} {
+        ( nurl_sym_def g_bck `warnset`
+        ? == 0 ( nurl_str_len ws ) tag ( nurl_str_cat3 ws ` ` tag ) )
+        : s ml ( nurl_sym_get g_bck ( nurl_str_cat `ml_` name ) )
+        ( bck_emit_error ( nurl_sym_get g_bck `file` ) useline
+        ( nurl_str_cat4 `'` name
+        `' may already be freed here — it was conditionally consumed (one branch only) at line ` ( nurl_str_cat3 ml
+        `; this second free double-frees on that path (strict-borrowck; restructure so exactly one path frees it)` `` ) ) )
+    }
+}
+
 // Flag any read of a definitely-Moved binding as a use-after-move.
 // MaybeMoved (a conditional move at a CFG join) is deliberately NOT
 // flagged — erroring only on a definite move keeps this check
@@ -9324,6 +9343,16 @@
         ? & ! done ( seq kind `move` ) {
             // A consumed binding: Owned -> Moved; remember where.
             : s mvn ( bck_field rec 1 )
+            // --strict-borrowck: consuming a MAYBE-moved binding is the
+            // conditional double-free the default checker deliberately
+            // lets through (docs/MEMORY.md §6.2/§6.5): freed on one arm
+            // of a `?`, then freed again — a real double-free on the
+            // path where the first free ran. Opt-in because it also
+            // flags the mutually-exclusive-frees pattern the default
+            // no-false-positive contract protects.
+            ? & != 0 g_strict_borrowck == BCK_MAYBE_MOVED ( bck_st_get st mvn ) {
+                ( bck_diag_maybe mvn ( nurl_str_to_int ( bck_field rec 3 ) ) )
+            } {}
             = st ( bck_st_set st mvn BCK_MOVED )
             ( nurl_sym_def g_bck ( nurl_str_cat `ml_` mvn )
             ( bck_field rec 3 ) )
