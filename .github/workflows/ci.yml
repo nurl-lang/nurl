@@ -53,6 +53,13 @@ jobs:
         # the relevant diff so we don't need extra grep here.
         run: ./build.sh
 
+      - name: self-compile peak-RSS gate
+        # Peak memory to compile the compiler is its existential
+        # scaling liability (critic M1) — the FreeBSD job already runs
+        # a hand-sized VM because of it. This turns the number into a
+        # budget so the PR that regresses it is the one that fails.
+        run: ./tools/memgate.sh
+
       - name: examples corpus frontend gate
         # Frontend-compiles every examples/ + bench/ + duo/ program.
         # Examples have rotted silently twice (immutability-migration
