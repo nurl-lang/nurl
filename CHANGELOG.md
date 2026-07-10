@@ -8,8 +8,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Self-compiling the compiler takes 366 MB instead of 13.6 GB** (and
+  3.0 s instead of 10.1 s). Instrumented per-site allocation counters
+  attributed 11.9 GB of the peak to one function — the borrow checker's
+  per-binding state lookup, which re-sliced the remainder of its state
+  string per token (O(n²) bytes, 14.8 M calls per self-compile). The
+  state-map operations now walk by index and build their output in one
+  exact-size buffer; the state format and every diagnostic are
+  unchanged (old and new compiler emit byte-identical IR). CI gates the
+  number with `tools/memgate.sh` (600 MB budget) so it cannot silently
+  regress.
+
 ### Added
 
+- **`--strict-borrowck` closes the conditional double-free hole.** A
+  value freed on one arm of a `?` and freed again unconditionally — a
+  real double-free on the path where the first free ran — is now an
+  error under the strict checker (its third opt-in check). The default
+  checker still deliberately allows it to keep the no-false-positive
+  property; `docs/MEMORY.md` §2.9/§6.5 state the trade both ways.
+- **`docs/dev/COMPILER_INTERNALS.md`** — the map of the fused walk:
+  pipeline order, every process-global table with its writers
+  (appendix generated from source by `tools/gen_globals_map.py`), the
+  invariants that bite, and the safe-change checklist.
+- `docs/MEMORY.md` §6.5 now states every way safe-looking code can
+  still fail, together, with the accurate one-line safety claim to
+  quote instead of "memory-safe like Rust".
 - **`nurlpkg install <library>` works in a plain folder — no `nurl.toml`
   required.** A library package (no `src/main.nu`) now lands under
   `./deps/<name>` with its transitive registry deps, instead of erroring;
