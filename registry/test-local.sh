@@ -30,8 +30,11 @@ cd "$HERE"
 # (Matches the deterministic key in compiler/tests/pkg_install_e2e.nu.)
 REG_SIGN_KEY='AwoRGB8mLTQ7QklQV15lbHN6gYiPlp2kq7K5wMfO1dw='
 REG_SIGN_PUB='RWQKCwwNDg8QEXVcTLklbKfNxKz9xs/u2oSQF+W5+VFOmRkb1n4LDUJ2'
+# keyid inside REG_SIGN_PUB (bytes 2..10 of its base64 payload) — the Worker
+# must embed the SAME keyid in signatures or the client's keyid check fails.
+REG_SIGN_KEYID='0a0b0c0d0e0f1011'
 
-printf 'GITHUB_CLIENT_ID=local\nGITHUB_CLIENT_SECRET=local\nTOKEN_PEPPER=%s\nREGISTRY_URL=%s\nREG_SIGN_KEY=%s\n' "$PEPPER" "$REG" "$REG_SIGN_KEY" > .dev.vars
+printf 'GITHUB_CLIENT_ID=local\nGITHUB_CLIENT_SECRET=local\nTOKEN_PEPPER=%s\nREGISTRY_URL=%s\nREG_SIGN_KEY=%s\nREG_SIGN_KEYID=%s\n' "$PEPPER" "$REG" "$REG_SIGN_KEY" "$REG_SIGN_KEYID" > .dev.vars
 
 # Start from a clean local state (fresh D1 + empty R2 each run).
 rm -rf .wrangler/state
@@ -44,9 +47,16 @@ npx wrangler d1 execute REG_DB --local --command \
 npx wrangler d1 execute REG_DB --local --command \
   "INSERT OR IGNORE INTO tokens (user_id,token_hash,name,created_at) VALUES (1,'$HASH','cli',0);" >/dev/null 2>&1
 
+# A leftover server from an interrupted run would answer the health check
+# with stale state and poison every step below — clear the port first, and
+# kill the whole tree (wrangler's workerd child survives a plain `kill`).
+pkill -f "wrangler dev --port $PORT" 2>/dev/null || true
+pkill -f "workerd.*entry=localhost:$PORT" 2>/dev/null || true
+sleep 0.5
+
 npx wrangler dev --port "$PORT" --local > "$WORK/wrangler.log" 2>&1 &
 WPID=$!
-trap 'kill $WPID 2>/dev/null; rm -rf "$WORK"' EXIT
+trap 'kill $WPID 2>/dev/null; pkill -f "wrangler dev --port $PORT" 2>/dev/null; pkill -f "workerd.*entry=localhost:$PORT" 2>/dev/null; rm -rf "$WORK"' EXIT
 for i in $(seq 1 60); do curl -sf "$REG" >/dev/null 2>&1 && break; sleep 0.5; done
 
 mkdir -p "$WORK/foo/src"
