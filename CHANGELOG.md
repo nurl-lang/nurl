@@ -6,6 +6,31 @@ are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **`nurlpkg install <library>` works in a plain folder — no `nurl.toml`
+  required.** A library package (no `src/main.nu`) now lands under
+  `./deps/<name>` with its transitive registry deps, instead of erroring;
+  when a `nurl.toml` is present the dependency is recorded there too.
+  Program packages still build + install onto `$PATH` unchanged.
+- **Registry account hardening (M9).** Tokens expire after 90 days;
+  `POST /api/v1/token/new` mints per-package **scoped CI tokens**; new
+  package names pass **reserved-name** and **typosquat** checks
+  (normalised lookalikes and edit-distance ≤ 1 of someone else's package
+  are rejected); publish / token-mint / search are **rate-limited**.
+- **Playground hardening (M11).** The `nurlapi` container runs as a
+  non-root user; every build-tool invocation runs under `timeout(1)`;
+  build routes are rate-limited per client IP with an explicit body cap;
+  the build-output directory is TTL-swept and count-capped.
+
+### Fixed
+
+- Registry signing keyid is configurable (`REG_SIGN_KEYID`) — signing with
+  a non-default key (self-hosted registry, local tests) used to embed the
+  production keyid and produce signatures every client rejects.
+
 ## [0.11.3] — 2026-07-10
 
 A **hardening & supply-chain** release. A clean-room self-critique of the whole
@@ -7359,7 +7384,7 @@ releases are measured.
   compile-server (`api/`), browser playground (`nurlweb/`).
 * Dual license: MIT (LICENSE-MIT) or Apache-2.0 (LICENSE-APACHE).
 
-[Unreleased]: https://github.com/nurl-lang/nurl/compare/v0.10.12...HEAD
+[Unreleased]: https://github.com/nurl-lang/nurl/compare/v0.11.3...HEAD
 [0.10.12]: https://github.com/nurl-lang/nurl/compare/v0.10.11...v0.10.12
 [0.10.11]: https://github.com/nurl-lang/nurl/compare/v0.10.10...v0.10.11
 [0.10.10]: https://github.com/nurl-lang/nurl/compare/v0.10.9...v0.10.10

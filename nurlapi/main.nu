@@ -112,6 +112,229 @@ $ `nurlapi/pptws.nu`
 
 @ drop_str String s → v { ( string_free s ) }
 
+// ── M11 hardening: tool timeouts, per-IP rate limit, output GC ────────
+//
+// The playground is an unauthenticated public compile farm; these keep a
+// single client (or a pathological source) from wedging or filling it:
+//   * every build-tool invocation runs under coreutils timeout(1)
+//     (`process_run` has no per-child timeout yet — std/process.nu MVP),
+//   * POST /build* + POST /mcp are rate-limited per client IP,
+//   * request bodies have an explicit cap (source / wasm IR),
+//   * /app/output build dirs are TTL-swept and count-capped.
+
+// Run a build tool under timeout(1) so a hanging compile can't hold a
+// compile-gate permit forever. -k 5: SIGKILL 5s after the soft TERM.
+// Falls back to a plain run where timeout(1) doesn't exist (bare local
+// dev outside the container).
+@ run_tool s path ( Vec s ) args → !Output ProcessErr {
+    ? ! ( file_exists `/usr/bin/timeout` ) { ^ ( process_run path args `` ) } {}
+    : String secs ( env_var_or `NURL_COMPILE_TIMEOUT_SECS` `120` )
+    : ( Vec s ) targs ( vec_new [s] )
+    ( vec_push [s] targs `-k` )
+    ( vec_push [s] targs `5` )
+    ( vec_push [s] targs ( string_data secs ) )
+    ( vec_push [s] targs path )
+    : i n ( vec_len [s] args )
+    : ~ i k 0
+    ~ < k n { ?? ( vec_get [s] args k ) { T a → ( vec_push [s] targs a ) F → {} } = k + k 1 }
+    : !Output ProcessErr r ( process_run `/usr/bin/timeout` targs `` )
+    ( vec_free [s] targs )
+    ( string_free secs )
+    ^ r
+}
+
+// Explicit cap on build request bodies (source or wasm IR). The HTTP
+// layer already caps bodies at 10 MiB; this is the tighter, documented
+// build-specific bound.
+@ get_max_build_body → i {
+    : String s ( env_var_or `NURL_MAX_BUILD_BODY` `8388608` )
+    : i n ?? ( int_parse ( string_data s ) ) { T v → v F _ → 8388608 }
+    ( string_free s )
+    ^ n
+}
+
+// Fixed-window per-IP rate limiter for compile routes. State is a boxed
+// registry behind a module global (same shape as pptws' PptReg).
+: RlReg {
+    ( Vec String ) ips
+    ( Vec i ) wins  // window start, epoch ms
+    ( Vec i ) cnts
+    Mutex lock
+}
+: ~ i g_rl_reg 0
+
+@ __rl_reg → *RlReg { ^ # *RlReg g_rl_reg }
+
+@ rl_install → v {
+    : *RlReg reg # *RlReg ( nurl_alloc Z RlReg )
+    = . reg ips ( vec_new [String] )
+    = . reg wins ( vec_new [i] )
+    = . reg cnts ( vec_new [i] )
+    = . reg lock ( mutex_new )
+    = g_rl_reg # i reg
+}
+
+// Two per-IP budgets: direct /build* posts are pure compile work (20/min
+// is generous for a human, hostile for a farm); POST /mcp carries whole
+// MCP sessions — dozens of LIGHT calls (initialize, tools/list,
+// resources/read) around the occasional build — so it gets a wider
+// window. Both share the compile semaphore, so concurrency stays bounded
+// either way.
+@ get_builds_per_min → i {
+    : String s ( env_var_or `NURL_BUILDS_PER_MIN` `20` )
+    : i n ?? ( int_parse ( string_data s ) ) { T v → v F _ → 20 }
+    ( string_free s )
+    ^ ? > n 0 n 1
+}
+
+@ get_mcp_per_min → i {
+    : String s ( env_var_or `NURL_MCP_PER_MIN` `120` )
+    : i n ?? ( int_parse ( string_data s ) ) { T v → v F _ → 120 }
+    ( string_free s )
+    ^ ? > n 0 n 1
+}
+
+// Client IP for rate-limiting. The playground fronts through Cloudflare,
+// which sets CF-Connecting-IP; a direct/local deployment falls back to
+// X-Forwarded-For, else one shared "direct" bucket.
+@ __client_ip HttpRequest req → String {
+    ?? ( header_get . req headers `cf-connecting-ip` ) { T v → { ^ v } F → {} }
+    ?? ( header_get . req headers `x-forwarded-for` ) { T v → { ^ v } F → {} }
+    ^ ( string_from `direct` )
+}
+
+// True when `key` (a class-prefixed client IP, e.g. "b:1.2.3.4") is
+// within its per-minute budget — and count the request. One coarse lock;
+// the section is a short vector scan.
+@ rl_allow s key i limit → b {
+    ? == g_rl_reg 0 { ^ T } {}
+    : *RlReg reg ( __rl_reg )
+    : i now ( now_ms )
+    ( mutex_lock . reg lock )
+    // Safety valve: an attacker cycling source IPs would otherwise grow
+    // the table without bound. Reset wholesale past 4096 distinct IPs —
+    // crude, but bounded memory beats precise bookkeeping here.
+    ? > ( vec_len [String] . reg ips ) 4096 {
+        : i cn ( vec_len [String] . reg ips )
+        : ~ i ck 0
+        ~ < ck cn { ?? ( vec_get [String] . reg ips ck ) { T s2 → ( string_free s2 ) F → {} } = ck + ck 1 }
+        ( vec_clear [String] . reg ips )
+        ( vec_clear [i] . reg wins )
+        ( vec_clear [i] . reg cnts )
+    } {}
+    : i n ( vec_len [String] . reg ips )
+    : ~ i idx -1
+    : ~ i k 0
+    ~ < k n {
+        ?? ( vec_get [String] . reg ips k ) {
+            T s2 → { ? != 0 ( nurl_str_eq ( string_data s2 ) key ) { = idx k } {} }
+            F → {}
+        }
+        = k + k 1
+    }
+    : ~ b ok T
+    ? < idx 0 {
+        ( vec_push [String] . reg ips ( string_from key ) )
+        ( vec_push [i] . reg wins now )
+        ( vec_push [i] . reg cnts 1 )
+    } {
+        : i win ?? ( vec_get [i] . reg wins idx ) { T v → v F → 0 }
+        : i cnt ?? ( vec_get [i] . reg cnts idx ) { T v → v F → 0 }
+        ? > - now win 60000 {
+            ( vec_set [i] . reg wins idx now )
+            ( vec_set [i] . reg cnts idx 1 )
+        } {
+            ( vec_set [i] . reg cnts idx + cnt 1 )
+            ? >= cnt limit { = ok F } {}
+        }
+    }
+    ( mutex_unlock . reg lock )
+    ^ ok
+}
+
+// GC the build-output dir: build ids start with their epoch-ms stamp
+// (create_build_id), so age falls straight out of the name — no stat
+// needed. Sweeps entries older than the TTL, then trims to the count
+// cap oldest-first. Entries without a leading ms stamp are left alone.
+@ __build_dir_ms s name → i {
+    : ~ i v 0
+    : ~ i k 0
+    : i n ( nurl_str_len name )
+    ~ < k n {
+        : i c ( nurl_str_get name k )
+        ? & >= c 48 <= c 57 { = v + * v 10 - c 48 = k + k 1 } { = k n }
+    }
+    ^ v
+}
+
+@ sweep_output_dir → v {
+    : String ttl_s ( env_var_or `NURL_OUTPUT_TTL_SECS` `3600` )
+    : i ttl_ms * ?? ( int_parse ( string_data ttl_s ) ) { T v → v F _ → 3600 } 1000
+    ( string_free ttl_s )
+    : String max_s ( env_var_or `NURL_OUTPUT_MAX_BUILDS` `512` )
+    : i max_builds ?? ( int_parse ( string_data max_s ) ) { T v → v F _ → 512 }
+    ( string_free max_s )
+    : i now ( now_ms )
+    : String od ( get_output_dir )
+    : !( Vec String ) IoErr dr ( dir_list ( string_data od ) )
+    ?? dr {
+        T files → {
+            // Pass 1: TTL. Collect survivors' stamps for the quota pass.
+            : ~ ( Vec i ) alive_ms ( vec_new [i] )
+            : i n ( vec_len [String] files )
+            : ~ i k 0
+            ~ < k n {
+                ?? ( vec_get [String] files k ) {
+                    T f → {
+                        : i ms ( __build_dir_ms ( string_data f ) )
+                        ? > ms 0 {
+                            ? > - now ms ttl_ms {
+                                : String p ( path_join ( string_data od ) ( string_data f ) )
+                                ?? ( dir_remove_all ( string_data p ) ) { T _ → {} F _ → {} }
+                                ( string_free p )
+                            } { ( vec_push [i] alive_ms ms ) }
+                        } {}
+                    }
+                    F → {}
+                }
+                = k + k 1
+            }
+            // Pass 2: count cap — drop oldest survivors until under it.
+            : ~ i alive ( vec_len [i] alive_ms )
+            ~ > alive max_builds {
+                : ~ i oldest 9223372036854775807
+                : ~ i j 0
+                ~ < j alive { ?? ( vec_get [i] alive_ms j ) { T v → { ? < v oldest { = oldest v } {} } F → {} } = j + j 1 }
+                : ~ i m 0
+                ~ < m ( vec_len [String] files ) {
+                    ?? ( vec_get [String] files m ) {
+                        T f → {
+                            ? == ( __build_dir_ms ( string_data f ) ) oldest {
+                                : String p ( path_join ( string_data od ) ( string_data f ) )
+                                ?? ( dir_remove_all ( string_data p ) ) { T _ → {} F _ → {} }
+                                ( string_free p )
+                            } {}
+                        }
+                        F → {}
+                    }
+                    = m + m 1
+                }
+                // Drop the swept stamp from alive_ms.
+                : ( Vec i ) rest ( vec_new [i] )
+                : ~ i q 0
+                ~ < q alive { ?? ( vec_get [i] alive_ms q ) { T v → { ? != v oldest { ( vec_push [i] rest v ) } {} } F → {} } = q + q 1 }
+                ( vec_free [i] alive_ms )
+                = alive_ms rest
+                = alive ( vec_len [i] alive_ms )
+            }
+            ( vec_free [i] alive_ms )
+            ( vec_free_with [String] files \ String s2 → v { ( string_free s2 ) } )
+        }
+        F _ → {}
+    }
+    ( string_free od )
+}
+
 @ list_stdlib_modules → Json {
     : String sdir ( get_stdlib_dir )
     : !( Vec String ) IoErr dr ( dir_list ( string_data sdir ) )
@@ -788,7 +1011,7 @@ s combined_stdout s combined_stderr → v {
                     : b uses_canvas >= ( nurl_str_find source `stdlib/ext/canvas.nu` ) 0
 
                     : ( Vec s ) nurlc_args ( vec_new [s] ) ( vec_push [s] nurlc_args ( string_data nu_path ) )
-                    : !Output ProcessErr nurlc_res ( process_run ( string_data ( get_nurlc_path ) ) nurlc_args `` ) ( vec_free [s] nurlc_args )
+                    : !Output ProcessErr nurlc_res ( run_tool ( string_data ( get_nurlc_path ) ) nurlc_args ) ( vec_free [s] nurlc_args )
 
                     ?? nurlc_res {
                         T n_out → {
@@ -805,7 +1028,7 @@ s combined_stdout s combined_stderr → v {
                                 ( vec_push [s] clang_args ( string_data bin_path ) )
                                 ( push_native_runtime_libs clang_args )
 
-                                : !Output ProcessErr clang_res ( process_run `clang` clang_args `` ) ( vec_free [s] clang_args )
+                                : !Output ProcessErr clang_res ( run_tool `clang` clang_args ) ( vec_free [s] clang_args )
 
                                 ?? clang_res {
                                     T c_out → {
@@ -931,7 +1154,7 @@ s combined_stdout s combined_stderr → v {
                         ( string_free ir ) = ir ( string_from provided_ir ) = nok T
                     } {
                         : ( Vec s ) nurlc_args ( vec_new [s] ) ( vec_push [s] nurlc_args ( string_data nu_path ) ) ( vec_push [s] nurlc_args `--ffi-host-imports` )
-                        : !Output ProcessErr nurlc_res ( process_run ( string_data ( get_nurlc_path ) ) nurlc_args `` ) ( vec_free [s] nurlc_args )
+                        : !Output ProcessErr nurlc_res ( run_tool ( string_data ( get_nurlc_path ) ) nurlc_args ) ( vec_free [s] nurlc_args )
                         ?? nurlc_res {
                             T n_out → {
                                 = n_rc ( output_exit_code n_out )
@@ -996,7 +1219,7 @@ s combined_stdout s combined_stderr → v {
                     ? uses_audio { ( vec_push [s] clang_args ( string_data ( get_audio_wasm_o ) ) ) } {}
                     ( vec_push [s] clang_args `-o` ) ( vec_push [s] clang_args ( string_data wasm_path ) ) ( vec_push [s] clang_args `-lm` )
 
-                    : !Output ProcessErr clang_res ( process_run ( string_data ( get_wasi_clang ) ) clang_args `` ) ( vec_free [s] clang_args )
+                    : !Output ProcessErr clang_res ( run_tool ( string_data ( get_wasi_clang ) ) clang_args ) ( vec_free [s] clang_args )
 
                     ?? clang_res {
                         T c_out → {
@@ -1024,7 +1247,7 @@ s combined_stdout s combined_stderr → v {
                                 ( vec_push [s] opt_args ( string_data wasm_path ) )
                                 ( vec_push [s] opt_args `-o` )
                                 ( vec_push [s] opt_args ( string_data asyncified_path ) )
-                                : !Output ProcessErr opt_res ( process_run ( string_data ( get_wasm_opt ) ) opt_args `` )
+                                : !Output ProcessErr opt_res ( run_tool ( string_data ( get_wasm_opt ) ) opt_args )
                                 ( vec_free [s] opt_args )
                                 ?? opt_res {
                                     T o_out → {
@@ -1139,7 +1362,7 @@ s combined_stdout s combined_stderr → v {
                     ( string_push_str bin_name `.exe` )
                     : String bin_path ( path_join ( string_data build_dir ) ( string_data bin_name ) )
                     : ( Vec s ) nurlc_args ( vec_new [s] ) ( vec_push [s] nurlc_args ( string_data nu_path ) )
-                    : !Output ProcessErr nurlc_res ( process_run ( string_data ( get_nurlc_path ) ) nurlc_args `` ) ( vec_free [s] nurlc_args )
+                    : !Output ProcessErr nurlc_res ( run_tool ( string_data ( get_nurlc_path ) ) nurlc_args ) ( vec_free [s] nurlc_args )
                     ?? nurlc_res {
                         T n_out → {
                             : i n_rc ( output_exit_code n_out )
@@ -1167,7 +1390,7 @@ s combined_stdout s combined_stderr → v {
                                 ( vec_push [s] clang_args ( string_data ll_path ) )
                                 ( vec_push [s] clang_args `-o` )
                                 ( vec_push [s] clang_args ( string_data obj_path ) )
-                                : !Output ProcessErr clang_res ( process_run `clang` clang_args `` ) ( vec_free [s] clang_args )
+                                : !Output ProcessErr clang_res ( run_tool `clang` clang_args ) ( vec_free [s] clang_args )
 
                                 ?? clang_res {
                                     T c_out → {
@@ -1242,7 +1465,7 @@ s combined_stdout s combined_stderr → v {
                                         }
                                         ( vec_push [s] link_args `-o` )
                                         ( vec_push [s] link_args ( string_data bin_path ) )
-                                        : !Output ProcessErr link_res ( process_run ( string_data ( get_mingw_gcc ) ) link_args `` )
+                                        : !Output ProcessErr link_res ( run_tool ( string_data ( get_mingw_gcc ) ) link_args )
                                         ( vec_free [s] link_args )
 
                                         ?? link_res {
@@ -1322,7 +1545,7 @@ s combined_stdout s combined_stderr → v {
                     ? ( string_ends_with bin_name `.nu` ) { : String tmp ( string_substr bin_name 0 - ( string_len bin_name ) 3 ) ( string_free bin_name ) = bin_name tmp } {}
                     : String bin_path ( path_join ( string_data build_dir ) ( string_data bin_name ) )
                     : ( Vec s ) nurlc_args ( vec_new [s] ) ( vec_push [s] nurlc_args ( string_data nu_path ) )
-                    : !Output ProcessErr nurlc_res ( process_run ( string_data ( get_nurlc_path ) ) nurlc_args `` ) ( vec_free [s] nurlc_args )
+                    : !Output ProcessErr nurlc_res ( run_tool ( string_data ( get_nurlc_path ) ) nurlc_args ) ( vec_free [s] nurlc_args )
                     ?? nurlc_res {
                         T n_out → {
                             : i n_rc ( output_exit_code n_out )
@@ -1331,7 +1554,7 @@ s combined_stdout s combined_stderr → v {
                                 : ( Vec s ) zig_args ( vec_new [s] )
                                 ( vec_push [s] zig_args `cc` ) ( vec_push [s] zig_args `-target` ) ( vec_push [s] zig_args `x86_64-macos-none` ) ( vec_push [s] zig_args opt )
                                 ( vec_push [s] zig_args `-Wno-override-module` ) ( vec_push [s] zig_args ( string_data ll_path ) ) ( vec_push [s] zig_args ( string_data ( get_runtime_mac_o ) ) ) ( vec_push [s] zig_args `-o` ) ( vec_push [s] zig_args ( string_data bin_path ) )
-                                : !Output ProcessErr zig_res ( process_run ( string_data ( get_zig ) ) zig_args `` ) ( vec_free [s] zig_args )
+                                : !Output ProcessErr zig_res ( run_tool ( string_data ( get_zig ) ) zig_args ) ( vec_free [s] zig_args )
                                 ?? zig_res {
                                     T z_out → {
                                         : i z_rc ( output_exit_code z_out )
@@ -3539,7 +3762,7 @@ s combined_stdout s combined_stderr → v {
                     : String rt_o ( get_runtime_target_o target )
 
                     : ( Vec s ) nurlc_args ( vec_new [s] ) ( vec_push [s] nurlc_args ( string_data nu_path ) )
-                    : !Output ProcessErr nurlc_res ( process_run ( string_data ( get_nurlc_path ) ) nurlc_args `` ) ( vec_free [s] nurlc_args )
+                    : !Output ProcessErr nurlc_res ( run_tool ( string_data ( get_nurlc_path ) ) nurlc_args ) ( vec_free [s] nurlc_args )
                     ?? nurlc_res {
                         T n_out → {
                             : i n_rc ( output_exit_code n_out )
@@ -3555,7 +3778,7 @@ s combined_stdout s combined_stderr → v {
                                 ( vec_push [s] zig_args ( string_data rt_o ) )
                                 ? is_linux { ( vec_push [s] zig_args `-lm` ) ( vec_push [s] zig_args `-lpthread` ) } {}
                                 ( vec_push [s] zig_args `-o` ) ( vec_push [s] zig_args ( string_data bin_path ) )
-                                : !Output ProcessErr zig_res ( process_run ( string_data ( get_zig ) ) zig_args `` ) ( vec_free [s] zig_args )
+                                : !Output ProcessErr zig_res ( run_tool ( string_data ( get_zig ) ) zig_args ) ( vec_free [s] zig_args )
                                 ?? zig_res {
                                     T z_out → {
                                         : i z_rc ( output_exit_code z_out )
@@ -4769,6 +4992,27 @@ s combined_stdout s combined_stderr → v {
 // not nested inside another closure.
 @ __gated_handle Router r Semaphore gate HttpRequest req → HttpResponse {
     ? ( __is_compile_route req ) {
+        // M11 hardening, before a compile permit is spent: explicit body
+        // cap (source / wasm IR), per-IP rate limit, output-dir GC.
+        ? > ( vec_len [u] . req body ) ( get_max_build_body ) {
+            : HttpResponse r413 ( response_text 413 `{"error":"request body too large"}\n` )
+            ( response_set_header r413 `Content-Type` `application/json` )
+            ^ r413
+        } {}
+        : String ip ( __client_ip req )
+        : b is_mcp != 0 ( nurl_str_eq ( string_data . req path ) `/mcp` )
+        : String rkey ( string_from ? is_mcp `m:` `b:` )
+        ( string_push_str rkey ( string_data ip ) )
+        : b allowed ( rl_allow ( string_data rkey ) ? is_mcp ( get_mcp_per_min ) ( get_builds_per_min ) )
+        ( string_free rkey )
+        ( string_free ip )
+        ? ! allowed {
+            : HttpResponse r429 ( response_text 429 `{"error":"rate_limited"}\n` )
+            ( response_set_header r429 `Content-Type` `application/json` )
+            ( response_set_header r429 `Retry-After` `60` )
+            ^ r429
+        } {}
+        ( sweep_output_dir )
         ( sem_acquire gate )
         // `placeholder` is returned only on panic; on success the closure
         // overwrote `resp`, so free the placeholder there (it leaked one
@@ -4900,6 +5144,7 @@ s combined_stdout s combined_stderr → v {
             ( nurl_print ( nurl_str_int compile_slots ) )
             ( nurl_print `, idle=5000ms)\n` )
             : HttpServer srv ( server_new_with_timeout listener logged 5000 )
+            ( rl_install )  // per-IP build rate limiter (M11)
             ( ppt_install )  // /pptws/<channel> WebSocket voice relay (upgrade hook)
             : !v NetErr rr ( server_run_pool srv workers )
             ( signal_clear_shutdown ) ( server_stop srv ) ( sem_free compile_gate ) ( router_free r )

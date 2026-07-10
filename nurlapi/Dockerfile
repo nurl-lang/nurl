@@ -231,5 +231,16 @@ COPY --from=builder /src/LICENSE-APACHE          /opt/nurl/LICENSE-APACHE
 COPY --from=builder /src/NOTICE                  /opt/nurl/NOTICE
 COPY --from=builder /src/spec                    /opt/nurl/spec
 
+# ── Run unprivileged (M11) ────────────────────────────────────────────
+# The server compiles untrusted source with nurlc/clang/zig; none of that
+# needs root. Writable surface is exactly what the tools touch at request
+# time: /app/output (build artifacts), /opt/zig-cache (zig target cache),
+# /tmp (compiler temps), plus a HOME for zig/clang dotfiles.
+RUN groupadd -g 10001 nurl \
+    && useradd -m -u 10001 -g nurl -d /home/nurl -s /usr/sbin/nologin nurl \
+    && chown -R nurl:nurl /app/output /opt/zig-cache
+USER nurl
+ENV HOME=/home/nurl
+
 EXPOSE 8000
 CMD ["/app/nurlapi"]
