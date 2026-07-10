@@ -1529,6 +1529,12 @@ $ `stdlib/std/bytes.nu`
                                 ( nurl_eprint `nurlpkg: publish failed (` )
                                 ( nurl_eprint ( publish_err_name ue ) )
                                 ( nurl_eprintln `)` )
+                                // Tokens expire after 90 days — the most common
+                                // cause of a 401 on a previously working setup.
+                                ?? ue {
+                                    PubAuth → ( nurl_eprintln `hint: registry tokens expire after 90 days - run 'nurlpkg login' to mint a fresh one` )
+                                    _ → {}
+                                }
                                 = rc 1
                             }
                         }

@@ -110,6 +110,39 @@ nurlpkg install
 server-side, enforces first-publisher name ownership, and treats published
 versions as immutable.
 
+## Tokens, name hygiene, rate limits (M9)
+
+- **Expiry.** Every token expires **90 days** after minting (pre-hardening
+  tokens were backfilled by migration `0002` to expire 90 days after it ran).
+  A 401 on a previously working setup usually means an expired token — sign
+  in again (`nurlpkg login`) to rotate. Revoke early with `nurlpkg logout
+  --revoke`.
+- **Scoped tokens (CI).** `POST /api/v1/token/new` with an existing
+  (unscoped) token mints a token restricted to specific packages — the right
+  shape for CI, which should be able to publish exactly one package:
+
+  ```bash
+  curl -X POST https://reg.nurl-lang.org/api/v1/token/new \
+       -H "Authorization: Bearer $NURL_TOKEN" \
+       -H 'content-type: application/json' \
+       -d '{"name":"ci-mypkg","pkgs":["mypkg"],"ttl_days":90}'
+  # → {"ok":true,"token":"...(shown once)...","expires_at":...,"pkgs":["mypkg"]}
+  ```
+
+  Scoped tokens can publish/yank only their listed packages and cannot mint
+  further tokens.
+- **Name hygiene.** New package names are rejected when they are reserved
+  (toolchain/stdlib/route names: `nurl`, `nurlc`, `std`, `api`, …) or
+  **lookalikes** of an existing package owned by someone else — normalised
+  match (separators dropped, digit homoglyphs folded: `imag3` ≈ `image`) or
+  edit distance ≤ 1 (`htttp` vs `http`). The owner of a package may publish
+  near its own name (`http` → `http2`).
+- **Rate limits** (D1 fixed-window): publish 30/h per user, token mint 10/h
+  (per IP for OAuth, per user for `/token/new`), search 120/min per IP.
+  Exceeding returns 429 + `retry-after`. Defaults are overridable via
+  `RL_PUBLISH_PER_HOUR` / `RL_MINT_PER_HOUR` / `RL_SEARCH_PER_MIN` /
+  `RL_TOKEN_NEW_PER_HOUR` (used by the local test harness).
+
 ## Local testing (no account)
 
 `registry/test-local.sh` runs the Worker under `wrangler dev` (miniflare
