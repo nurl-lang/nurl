@@ -23,8 +23,9 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 # Keep the budget a hair above the current measured peak. History:
-#   2026-07-11  13.6 GB measured pre-arena  → budget 14300
-DEFAULT_BUDGET_MB=14300
+#   2026-07-11  13.6 GB measured pre-fix   → budget 14300
+#   2026-07-11  366 MB after the bck state-map index rewrite → budget 600
+DEFAULT_BUDGET_MB=600
 
 BUDGET_MB="${1:-${NURL_RSS_BUDGET_MB:-$DEFAULT_BUDGET_MB}}"
 

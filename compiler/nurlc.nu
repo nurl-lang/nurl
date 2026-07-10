@@ -316,7 +316,14 @@
     : i wl ( nurl_str_len w )
     : i tl ( nurl_str_len t )
     ? > + pos wl tl { ^ F } {}
-    ? ! ( seq ( nurl_str_slice t pos wl ) w ) { ^ F } {}
+    // Direct char compare — this runs per character of every lowered
+    // type; the old slice+seq allocated a 2-4 byte string per probe
+    // (16.5M mallocs per self-compile).
+    : ~ i ck 0
+    ~ < ck wl {
+        ? != ( nurl_str_get t + pos ck ) ( nurl_str_get w ck ) { ^ F } {}
+        = ck + ck 1
+    }
     ? > pos 0
     { : i pc ( nurl_str_get t - pos 1 )
         ? | ( __is_ident_char pc ) == pc 37 { ^ F } {} }
@@ -9019,36 +9026,84 @@
     - ( nurl_str_get tok - len 1 ) 48
 }
 
-// State lookup — BCK_UNINIT when the binding is absent.
-@ bck_st_get s state s name → i {
-    : ~ s rest state
-    ~ != 0 ( nurl_str_len rest ) {
-        : s tok ( str_first_word rest )
-        = rest ( str_skip_word rest )
-        ? ( seq ( bck_tok_name tok ) name ) { ^ ( bck_tok_val tok ) } {}
+// State lookup — BCK_UNINIT when the binding is absent. Walks by INDEX,
+// allocating nothing: bck_st_get is the hottest allocation site in the
+// whole compiler (14.8M calls per self-compile), and the old remainder-
+// re-slice walk (`= rest ( str_skip_word rest )`) copied the entire tail
+// of the state string per step — measured at 11.9 GB of the 13.6 GB
+// self-compile peak RSS. A token is `name=digit`; its name part is
+// everything but the last two chars (same rule as bck_tok_name). The
+// name to look up lives at src[at .. at+wl) so bck_join_state can probe
+// with a name that is still embedded in the other state string — no
+// copy of the name either.
+@ __bck_st_get_at s state s src i at i wl → i {
+    : i n ( nurl_str_len state )
+    : ~ i i 0
+    ~ < i n {
+        // token spans [i, e)
+        : ~ i e i
+        ~ & < e n != ( nurl_str_get state e ) 32 { = e + e 1 }
+        ? == - - e i 2 wl {
+            : ~ i k 0
+            : ~ b eq T
+            ~ & eq < k wl {
+                ? != ( nurl_str_get state + i k ) ( nurl_str_get src + at k ) { = eq F } {}
+                = k + k 1
+            }
+            ? eq { ^ - ( nurl_str_get state - e 1 ) 48 } {}
+        } {}
+        = i + e 1
     }
     BCK_UNINIT
 }
 
+@ bck_st_get s state s name → i {
+    ^ ( __bck_st_get_at state name 0 ( nurl_str_len name ) )
+}
+
 // State update — a new state with `name` set to `val` (any prior
-// entry dropped; the binding lands at the end). Every `= out ...`
-// builds a fresh string rather than aliasing the loop-local `tok`,
-// which would be a double-free once both are auto-dropped.
+// entry dropped; the binding lands at the end). Built in ONE buffer
+// with an index walk: the old version re-sliced the remainder per
+// token AND re-copied the accumulated output per append — O(B²) bytes
+// per update on a B-byte state.
 @ bck_st_set s state s name i val → s {
-    : ~ s out ( nurl_str_cat `` `` )
-    : ~ s rest state
-    ~ != 0 ( nurl_str_len rest ) {
-        : s tok ( str_first_word rest )
-        = rest ( str_skip_word rest )
-        ? ( seq ( bck_tok_name tok ) name ) {} {
-            = out ? == 0 ( nurl_str_len out )
-            ( nurl_str_cat tok `` )
-            ( nurl_str_cat3 out ` ` tok )
-        }
+    : i n ( nurl_str_len state )
+    : i wl ( nurl_str_len name )
+    : s vs ( nurl_str_int val )
+    : i vl ( nurl_str_len vs )
+    // worst case: whole state kept + separator + `name=val`
+    : s out # s ( malloc + + + n wl vl 3 )
+    : *u ob # *u out
+    : ~ i op 0
+    : ~ i i 0
+    ~ < i n {
+        : ~ i e i
+        ~ & < e n != ( nurl_str_get state e ) 32 { = e + e 1 }
+        : ~ b keep T
+        ? == - - e i 2 wl {
+            : ~ i k 0
+            : ~ b eq T
+            ~ & eq < k wl {
+                ? != ( nurl_str_get state + i k ) ( nurl_str_get name k ) { = eq F } {}
+                = k + k 1
+            }
+            ? eq { = keep F } {}
+        } {}
+        ? keep {
+            ? > op 0 { : u sp # u 32 = . ob op sp = op + op 1 } {}
+            ( memcpy # s + # i out op # s + # i state i - e i )
+            = op + op - e i
+        } {}
+        = i + e 1
     }
-    : s nt ( nurl_str_cat3 name `=` ( nurl_str_int val ) )
-    ? == 0 ( nurl_str_len out ) { ^ nt } {}
-    ( nurl_str_cat3 out ` ` nt )
+    ? > op 0 { : u sp2 # u 32 = . ob op sp2 = op + op 1 } {}
+    ( memcpy # s + # i out op name wl )
+    = op + op wl
+    : u eqc # u 61
+    = . ob op eqc
+    = op + op 1
+    ( memcpy # s + # i out op vs + vl 1 )
+    ^ out
 }
 
 // State join — least upper bound of two states, binding by binding.
@@ -9063,32 +9118,52 @@
 // builds a fresh string — aliasing a loop-local would double-free at
 // auto-drop.
 @ bck_join_state s a s b → s {
-    : ~ s out ( nurl_str_cat `` `` )
-    : ~ s rest a
-    ~ != 0 ( nurl_str_len rest ) {
-        : s tok ( str_first_word rest )
-        = rest ( str_skip_word rest )
-        : s nm ( bck_tok_name tok )
-        : i vj ( bck_join ( bck_tok_val tok ) ( bck_st_get b nm ) )
-        : s nt ( nurl_str_cat3 nm `=` ( nurl_str_int vj ) )
-        = out ? == 0 ( nurl_str_len out )
-        ( nurl_str_cat nt `` )
-        ( nurl_str_cat3 out ` ` nt )
+    // Index walk + single output buffer (see bck_st_set). The lattice
+    // digit is one char, so the join of a and b never exceeds
+    // len(a) + len(b) + 2. Names probed while still embedded in their
+    // state string via __bck_st_get_at — the whole join allocates
+    // exactly one buffer.
+    : i na ( nurl_str_len a )
+    : i nb ( nurl_str_len b )
+    : s out # s ( malloc + + na nb 2 )
+    : *u ob # *u out
+    : ~ i op 0
+    // pass 1: every binding of a, joined against its state in b
+    : ~ i i 0
+    ~ < i na {
+        : ~ i e i
+        ~ & < e na != ( nurl_str_get a e ) 32 { = e + e 1 }
+        : i wl - - e i 2
+        : i vj ( bck_join - ( nurl_str_get a - e 1 ) 48 ( __bck_st_get_at b a i wl ) )
+        ? > op 0 { : u sp # u 32 = . ob op sp = op + op 1 } {}
+        // `name=` copied verbatim from a; then the joined digit
+        ( memcpy # s + # i out op # s + # i a i + wl 1 )
+        = op + op + wl 1
+        : u dg # u + 48 vj
+        = . ob op dg
+        = op + op 1
+        = i + e 1
     }
-    : ~ s rest2 b
-    ~ != 0 ( nurl_str_len rest2 ) {
-        : s tok ( str_first_word rest2 )
-        = rest2 ( str_skip_word rest2 )
-        : s nm ( bck_tok_name tok )
-        ? == BCK_UNINIT ( bck_st_get a nm ) {
-            : i vj ( bck_join BCK_UNINIT ( bck_tok_val tok ) )
-            : s nt ( nurl_str_cat3 nm `=` ( nurl_str_int vj ) )
-            = out ? == 0 ( nurl_str_len out )
-            ( nurl_str_cat nt `` )
-            ( nurl_str_cat3 out ` ` nt )
+    // pass 2: bindings present only in b (join against BCK_UNINIT)
+    : ~ i j 0
+    ~ < j nb {
+        : ~ i e2 j
+        ~ & < e2 nb != ( nurl_str_get b e2 ) 32 { = e2 + e2 1 }
+        : i wl2 - - e2 j 2
+        ? == BCK_UNINIT ( __bck_st_get_at a b j wl2 ) {
+            : i vj2 ( bck_join BCK_UNINIT - ( nurl_str_get b - e2 1 ) 48 )
+            ? > op 0 { : u sp2 # u 32 = . ob op sp2 = op + op 1 } {}
+            ( memcpy # s + # i out op # s + # i b j + wl2 1 )
+            = op + op + wl2 1
+            : u dg2 # u + 48 vj2
+            = . ob op dg2
+            = op + op 1
         } {}
+        = j + e2 1
     }
-    out
+    : u z # u 0
+    = . ob op z
+    ^ out
 }
 
 // ── Record access ─────────────────────────────────────────────────
