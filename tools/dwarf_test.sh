@@ -31,8 +31,32 @@ BIN="$ROOT_DIR/build/dwarf_basic_dbg"
 STRUCT_SRC="$ROOT_DIR/compiler/tests/dwarf_struct.nu"
 STRUCT_BIN="$ROOT_DIR/build/dwarf_struct_dbg"
 
+fail() { echo "FAIL: $1" >&2; exit 1; }
+pass() { echo "  ok: $1"; }
+
+# ── -O2 inliner regression (closure + Drop + main wrapper) ──────────
+# BUILD-ONLY, so it runs even where gdb is absent (CI, minimal hosts).
+# At the DEFAULT -O2 (not -O0), a program mixing an indirect closure
+# call, a `% Drop` thunk, and the C-ABI main wrapper used to crash clang
+# in DwarfDebug::finalizeModuleInfo. Linking at all is the assertion.
+CLD_SRC="$ROOT_DIR/compiler/tests/dwarf_closure_drop.nu"
+CLD_BIN="$ROOT_DIR/build/dwarf_closure_drop_dbg"
+if [ -f "$CLD_SRC" ]; then
+    echo "[regression] building $CLD_SRC with --debug at -O2 (inliner/DWARF)"
+    if ! "$ROOT_DIR/nurl.sh" --debug "$CLD_SRC" "$CLD_BIN" >/tmp/dwarf_cld.build 2>&1; then
+        cat /tmp/dwarf_cld.build
+        fail "nurl.sh --debug (-O2) crashed on closure+Drop — DWARF regression"
+    fi
+    readelf -S "$CLD_BIN" 2>/dev/null | grep -q '\.debug_info' \
+        || fail "closure+Drop binary has no .debug_info section"
+    OUT=$("$CLD_BIN" 2>&1)
+    echo "$OUT" | grep -q 'total_len=' \
+        || fail "closure+Drop binary produced wrong output: $OUT"
+    pass "closure+Drop links at -O2 with --debug and runs correctly"
+fi
+
 if ! command -v gdb >/dev/null 2>&1; then
-    echo "SKIP: gdb not found on PATH — DWARF behavioural test skipped"
+    echo "SKIP: gdb not found on PATH — remaining DWARF behavioural checks skipped"
     exit 0
 fi
 
@@ -40,9 +64,6 @@ if [[ ! -f "$NU_SRC" ]]; then
     echo "ERROR: $NU_SRC not present" >&2
     exit 1
 fi
-
-fail() { echo "FAIL: $1" >&2; exit 1; }
-pass() { echo "  ok: $1"; }
 
 echo "[1/5] building $NU_SRC with --debug"
 if ! "$ROOT_DIR/nurl.sh" --debug -O0 "$NU_SRC" "$BIN" >/tmp/dwarf_test.build 2>&1; then
