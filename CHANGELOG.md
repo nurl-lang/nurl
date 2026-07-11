@@ -8,12 +8,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Changed
+## [0.12.0] — 2026-07-11
 
-- **`std/random.nu` draws fail closed.** `rand_u64` / `rand_hex_str` now
-  check `nurl_rand_fill`'s return and panic when every OS entropy source
-  failed (the runtime would otherwise degrade to a non-cryptographic
-  LCG) — the same contract the tls/rsa/x509 draws already enforced.
+The release that finishes the clean-room self-critique started in 0.11.3.
+It closes the compiler's existential scaling wall (**self-compile 13.6 GB
+→ 366 MB**), the ecosystem's account-takeover surface (**registry token
+expiry + scoped tokens + typosquat guard**), the playground's abuse
+surface (**non-root, timeouts, rate limits**), a real `--debug` compiler
+crash, and a documentation-accuracy sweep that made every user-facing
+claim verifiable — plus the two remaining structural critique items (the
+fused-compiler map, the safe-code safety-hole statement) and a first real
+Windows CI corpus.
+
+### Changed
 
 - **Self-compiling the compiler takes 366 MB instead of 13.6 GB** (and
   3.0 s instead of 10.1 s). Instrumented per-site allocation counters
@@ -21,35 +28,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   per-binding state lookup, which re-sliced the remainder of its state
   string per token (O(n²) bytes, 14.8 M calls per self-compile). The
   state-map operations now walk by index and build their output in one
-  exact-size buffer; the state format and every diagnostic are
-  unchanged (old and new compiler emit byte-identical IR). CI gates the
-  number with `tools/memgate.sh` (600 MB budget) so it cannot silently
-  regress.
+  exact-size buffer; the state format and every diagnostic are unchanged
+  (old and new compiler emit byte-identical IR). CI gates the number with
+  `tools/memgate.sh` (600 MB budget) so it cannot silently regress.
+- **`std/random.nu` draws fail closed.** `rand_u64` / `rand_hex_str` now
+  check `nurl_rand_fill`'s return and panic when every OS entropy source
+  failed (the runtime would otherwise degrade to a non-cryptographic LCG)
+  — the same contract the tls/rsa/x509 draws already enforced.
+- **Documentation accuracy sweep.** Every user-facing doc was verified
+  against the source, workflows, installers, and release assets: a
+  platform-support **tier model** replaces contradictory "fully supported"
+  claims (tiers defined by what CI actually verifies), `docs/ASYNC.md` was
+  rewritten from a stale design plan to the shipped runtime, and roughly
+  95 stale references, wrong numbers, and marketing/past-version notes
+  were corrected across the tree.
 
 ### Added
 
-- **`std/net.nu` gains `tcp_connect`** — the plain-TCP client connect,
-  returning `!TcpConn NetErr` like its TLS siblings. The MQTT module's
-  private duplicate (which returned `MqttErr`) is gone; `async_tcp`'s
-  local FFI shim now uses the public API.
-- **`--strict-borrowck` closes the conditional double-free hole.** A
-  value freed on one arm of a `?` and freed again unconditionally — a
-  real double-free on the path where the first free ran — is now an
-  error under the strict checker (its third opt-in check). The default
-  checker still deliberately allows it to keep the no-false-positive
-  property; `docs/MEMORY.md` §2.9/§6.5 state the trade both ways.
-- **`docs/dev/COMPILER_INTERNALS.md`** — the map of the fused walk:
-  pipeline order, every process-global table with its writers
-  (appendix generated from source by `tools/gen_globals_map.py`), the
-  invariants that bite, and the safe-change checklist.
-- `docs/MEMORY.md` §6.5 now states every way safe-looking code can
-  still fail, together, with the accurate one-line safety claim to
-  quote instead of "memory-safe like Rust".
-- **`nurlpkg install <library>` works in a plain folder — no `nurl.toml`
-  required.** A library package (no `src/main.nu`) now lands under
-  `./deps/<name>` with its transitive registry deps, instead of erroring;
-  when a `nurl.toml` is present the dependency is recorded there too.
-  Program packages still build + install onto `$PATH` unchanged.
 - **Registry account hardening (M9).** Tokens expire after 90 days;
   `POST /api/v1/token/new` mints per-package **scoped CI tokens**; new
   package names pass **reserved-name** and **typosquat** checks
@@ -59,12 +54,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   non-root user; every build-tool invocation runs under `timeout(1)`;
   build routes are rate-limited per client IP with an explicit body cap;
   the build-output directory is TTL-swept and count-capped.
+- **`nurlpkg install <library>` works in a plain folder — no `nurl.toml`
+  required.** A library package (no `src/main.nu`) now lands under
+  `./deps/<name>` with its transitive registry deps, instead of erroring;
+  when a `nurl.toml` is present the dependency is recorded there too.
+  Program packages still build + install onto `$PATH` unchanged.
+- **`--strict-borrowck` closes the conditional double-free hole.** A value
+  freed on one arm of a `?` and freed again unconditionally — a real
+  double-free on the path where the first free ran — is now an error under
+  the strict checker (its third opt-in check). The default checker still
+  deliberately allows it to keep the no-false-positive property;
+  `docs/MEMORY.md` §2.9/§6.5 state the trade both ways.
+- **`std/net.nu` gains `tcp_connect`** — the plain-TCP client connect,
+  returning `!TcpConn NetErr` like its TLS siblings. The MQTT module's
+  private duplicate (which returned `MqttErr`) is gone.
+- **`docs/dev/COMPILER_INTERNALS.md`** — the map of the fused walk:
+  pipeline order, every process-global table with its writers (appendix
+  generated from source by `tools/gen_globals_map.py`), the invariants
+  that bite, and the safe-change checklist.
+- `docs/MEMORY.md` §6.5 now states every way safe-looking code can still
+  fail, together, with the accurate one-line safety claim to quote instead
+  of "memory-safe like Rust".
 
 ### Fixed
 
+- **`nurl.sh --debug` no longer crashes clang at `-O2`.** A larger
+  multi-file program built with debug info crashed clang in
+  `DwarfDebug::finalizeModuleInfo`: three kinds of inlinable call (the
+  indirect closure call, the `__jdrop_*` thunk's drop call, and the C-ABI
+  `main` wrapper's call) were emitted without a `!dbg` location, so the
+  optimizer reparented a debug-info callee into the wrong subprogram. All
+  synthetic functions now carry a subprogram and their inlinable calls
+  carry `!dbg`; non-debug IR is byte-identical.
+- **`url_parse` rejects out-of-range ports** instead of wrapping — a port
+  past 65535 silently wrapped into a plausible small number and parsed as
+  a valid URL pointing at the wrong port.
 - Registry signing keyid is configurable (`REG_SIGN_KEYID`) — signing with
   a non-default key (self-hosted registry, local tests) used to embed the
   production keyid and produce signatures every client rejects.
+
+### CI
+
+- **The Windows golden corpus now runs on a real `windows-latest` runner**
+  (the `windows-tests` workflow), on every push to `main` — the 447
+  Windows goldens were previously exercised only locally. `build.bat` now
+  exits non-zero when it skips the test suite (a missing PowerShell 7 used
+  to print success), so an untested build can't masquerade as a tested one.
+- **DWARF debug-info gate** — the plain corpus never builds with
+  `--debug`, so `tools/dwarf_test.sh` (the `-O2` closure/Drop regression
+  plus gdb source-level checks) is now wired into CI.
 
 ## [0.11.3] — 2026-07-10
 
@@ -7419,7 +7457,8 @@ releases are measured.
   compile-server (`api/`), browser playground (`nurlweb/`).
 * Dual license: MIT (LICENSE-MIT) or Apache-2.0 (LICENSE-APACHE).
 
-[Unreleased]: https://github.com/nurl-lang/nurl/compare/v0.11.3...HEAD
+[Unreleased]: https://github.com/nurl-lang/nurl/compare/v0.12.0...HEAD
+[0.12.0]: https://github.com/nurl-lang/nurl/compare/v0.11.3...v0.12.0
 [0.10.12]: https://github.com/nurl-lang/nurl/compare/v0.10.11...v0.10.12
 [0.10.11]: https://github.com/nurl-lang/nurl/compare/v0.10.10...v0.10.11
 [0.10.10]: https://github.com/nurl-lang/nurl/compare/v0.10.9...v0.10.10
