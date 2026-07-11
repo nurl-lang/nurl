@@ -1,0 +1,11 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+found a key owned by a remote node: YES
+lossy: task completed (result recorded on submitter): YES
+lossy: recorded result is sum=10: YES
+lossy: messages were actually dropped: YES
+partition: task does NOT complete while split: YES
+after heal: task completes: YES
+after heal: recorded result is sum=10: YES

@@ -1,0 +1,8 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+ok 7 14 21
+direct 7 21
+err bust
+err2 bust

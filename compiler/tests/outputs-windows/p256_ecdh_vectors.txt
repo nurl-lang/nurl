@@ -1,0 +1,9 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+keygen1: PASS
+keygen2: PASS
+keygen256: PASS
+ecdh_symmetry: PASS
+p256_ecdh: all vectors PASS

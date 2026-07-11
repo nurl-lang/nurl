@@ -1,0 +1,6 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+cat-spawn-failed=ProcessOther
+sort-spawn-failed=ProcessOther

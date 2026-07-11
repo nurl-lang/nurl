@@ -1,0 +1,10 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+rfc5869_prk: PASS
+rfc5869_okm: PASS
+tls13_early_secret: PASS
+sha256_empty: PASS
+tls13_derived: PASS
+hkdf: all vectors PASS

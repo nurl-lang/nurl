@@ -9,3 +9,10 @@ Dockerfile text eol=lf
 # Keep Windows batch files as CRLF so cmd.exe is happy.
 *.bat     text eol=crlf
 *.cmd     text eol=crlf
+
+# Test goldens are byte-compared (after \r-normalisation) by the runners
+# and REGENERATED on Windows via run_tests.ps1 -Update; force LF so a
+# Windows checkout (autocrlf) can't reintroduce CRLF churn into diffs
+# and golden-update artifacts.
+compiler/tests/outputs/*.txt          text eol=lf
+compiler/tests/outputs-windows/*.txt  text eol=lf

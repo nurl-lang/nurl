@@ -1,0 +1,11 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+vector1: PASS
+vector2: PASS
+alice_pub: PASS
+bob_pub: PASS
+shared_a: PASS
+shared_b: PASS
+x25519: all vectors PASS

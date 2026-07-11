@@ -15,5 +15,7 @@ gjoin body == gid: YES
 gsend type: YES
 gsend gid split: YES
 gsend payload split: YES
+gsend short gid: YES
+gsend short payload: YES
 incomplete → None: YES
 oversize → None: YES
