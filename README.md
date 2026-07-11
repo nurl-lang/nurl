@@ -18,12 +18,6 @@ NURL takes a few design positions that are uncommon together:
 - **Single-owner memory + default-on static borrow checker** — auto-drop at scope exit, plus a diagnostic pass (on by default, `--no-borrowck` to disable) that catches use-after-move, alias-double-free, escaping closure-captures, and iterator invalidation as hard errors.
 - **LLVM-based codegen, broad platform reach** — one pipeline targets Linux, macOS, Windows, wasm32-wasi, RISC-V, and ARM64.
 
-| Metric | Python | C | NURL |
-|---|---|---|---|
-| Grammar productions | ~100 | ~200 | ~50 |
-| Runtime performance | slow | fast | fast (LLVM) |
-| Target platforms | one | many | any LLVM target |
-
 A reproducible micro-benchmark suite lives in [`bench/`](bench/) — `bench/run.sh`
 compiles and runs one source file per language N times and prints a median-ms
 table. Captured numbers (compute and HTTP-server peer benchmarks) are in
@@ -78,7 +72,7 @@ Prebuilt `nurlc` / `nurlpkg` / `nurlfmt` binaries, one command — no clang, no
 build:
 
 ```bash
-# Linux / macOS
+# Linux / FreeBSD  (macOS: build from source — see Building)
 curl -fsSL https://nurl-lang.org/install.sh | sh
 ```
 
@@ -173,13 +167,14 @@ list and how to reproduce each locally:
 
 ## Tooling
 
-One `curl | sh` installs the toolchain; `nurlpkg install <name>` fetches,
-builds, and installs programs from the registry at
-[reg.nurl-lang.org](https://reg.nurl-lang.org). Alongside the compiler you
-get `nurlfmt` (canonical formatter), `nurl-lsp` + a VS Code extension,
-`nurl-mcp` (drive the local toolchain from an LLM agent over MCP), and a
-wasm story that needs nothing extra: `nurlpkg install wasmbuilder` compiles
-NURL to wasm32-wasi locally, `nurlpkg install wasmtime` runs it with a
+One `curl | sh` installs the toolchain — `nurlc`, `nurlpkg`, `nurlfmt` and
+the `nurl` build wrapper. `nurlpkg install <name>` fetches, builds, and
+installs programs from the registry at
+[reg.nurl-lang.org](https://reg.nurl-lang.org). The rest is one command
+away: `nurl-lsp` + the VS Code extension come with a source checkout's
+`./install.sh`; `nurlpkg install nurl-mcp` drives the local toolchain from
+an LLM agent over MCP; `nurlpkg install wasmbuilder` compiles NURL to
+wasm32-wasi locally and `nurlpkg install wasmtime` runs it with a
 pure-NURL runtime. Details: [`docs/TOOLING.md`](docs/TOOLING.md).
 
 ---
@@ -194,7 +189,7 @@ pure-NURL runtime. Details: [`docs/TOOLING.md`](docs/TOOLING.md).
 | Tooling — editor / LSP / formatter / package manager | [`docs/TOOLING.md`](docs/TOOLING.md) |
 | Canonical source format (`nurlfmt`) | [`docs/FORMAT.md`](docs/FORMAT.md) |
 | Memory model & borrow checker | [`docs/MEMORY.md`](docs/MEMORY.md) |
-| Async runtime (fibers) design | [`docs/ASYNC.md`](docs/ASYNC.md) |
+| Async runtime (fibers) | [`docs/ASYNC.md`](docs/ASYNC.md) |
 | Networking & MQTT client | [`docs/NETWORKING.md`](docs/NETWORKING.md) |
 | Cryptography & TLS (pure-NURL, no OpenSSL) | [`docs/CRYPTO.md`](docs/CRYPTO.md) |
 | Distributed stack (NAT traversal, overlay, SWIM, CRDTs) | [`docs/DISTRIBUTED.md`](docs/DISTRIBUTED.md) |
@@ -202,6 +197,7 @@ pure-NURL runtime. Details: [`docs/TOOLING.md`](docs/TOOLING.md).
 | Platforms — codegen targets & host OSes (incl. FreeBSD) | [`docs/PLATFORMS.md`](docs/PLATFORMS.md) |
 | Known limitations | [`docs/LIMITATIONS.md`](docs/LIMITATIONS.md) |
 | Gotchas (compiler-diagnosed) | [`docs/GOTCHAS.md`](docs/GOTCHAS.md) |
+| Compiler internals (for contributors) | [`docs/dev/COMPILER_INTERNALS.md`](docs/dev/COMPILER_INTERNALS.md) |
 | Examples catalogue | [`examples/README.md`](examples/README.md) |
 | Roadmap · Changelog · Contributing | [`ROADMAP.md`](ROADMAP.md) · [`CHANGELOG.md`](CHANGELOG.md) · [`CONTRIBUTING.md`](CONTRIBUTING.md) |
 
@@ -224,7 +220,7 @@ nurl/
 ├── stdlib/
 │   ├── runtime.c           — C runtime (I/O, string helpers, FFI surface)
 │   ├── core/ std/ ext/     — the NURL standard library
-│   └── runtime{.o,.wasm.o} — native and wasm32-wasi runtime builds
+│   └── runtime.o, …      — runtime objects (build outputs of build.sh)
 ├── examples/               — curated .nu programs (see examples/README.md)
 ├── nurlapi/                — NURL-native container: compiler-as-a-service + playground + MCP
 ├── tooling/vscode-nurl/    — editor extension (syntax + LSP client)

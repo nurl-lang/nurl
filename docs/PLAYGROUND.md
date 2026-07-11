@@ -18,12 +18,12 @@ and serves a public **MCP endpoint** at `/mcp`.
 - `GET /` — playground UI (editor, examples dropdown, build/run/download).
 - `GET /health` — liveness probe; reports whether `nurlc` is available.
 - `POST /build_wasm` — compile NURL source to `wasm32-wasi`. Body:
-  `{"source":"…","filename":"main.nu","return_format":"json"|"binary","emit_ll":false}`.
-  JSON mode returns base64-encoded wasm + compile logs; binary mode returns
-  raw `application/wasm` bytes.
+  `{"source":"…","filename":"main.nu","emit_ll":false,"opt":"-O2"}` (an
+  optional `"ir"` field supplies pre-resolved LLVM IR for multi-file
+  packages). Response is JSON: base64-encoded wasm + compile logs.
 - `POST /build` — compile to a native Linux **x86_64 ELF** (clang +
-  `stdlib/runtime.o`). Returns build logs plus one-shot download tokens for
-  the `.ll` and the binary.
+  `stdlib/runtime.native.o`). Returns build logs plus expiring download
+  URLs for the `.ll` and the binary.
 - `POST /build_windows` — cross-compile to a Windows **x86_64 `.exe`** via
   mingw-w64. Runtime is pre-built with static libcurl (Schannel TLS) so HTTP
   works end-to-end; canvas/audio FFIs are rejected up front.
@@ -36,8 +36,9 @@ and serves a public **MCP endpoint** at `/mcp`.
   Body adds `"target":"<id>"`. canvas/audio/HTTP unsupported on these targets.
 - `GET /targets` — list every selectable compile target (the playground's
   **Target** dropdown is built from this).
-- `GET /download/{token}` — stream a build artifact registered by a
-  `/build*` endpoint. Tokens expire automatically.
+- `GET /download/{build_id}/{filename}` — stream a build artifact
+  produced by a `/build*` endpoint. Artifacts expire automatically
+  (TTL sweep, default 1 h).
 - `GET /examples`, `GET /examples/{name}` — list / fetch bundled examples.
 - `GET /grammar` — current grammar rendered as HTML (from `spec/grammar.ebnf`).
 - `GET /readme` — this project's README rendered as HTML.

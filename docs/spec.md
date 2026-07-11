@@ -72,7 +72,7 @@ used as variable, parameter, field, or function names:
 | Token | Identifiers | Use |
 |---|---|---|
 | `TT_TYPE_KW` | `i u f b s v` | single-char type keywords |
-| `TT_TYPE_KW` | `i8 i16 i32` | signed fixed-width integers (v1.8) |
+| `TT_TYPE_KW` | `i8 i16 i32 i64` | signed fixed-width integers |
 | `TT_TYPE_KW` | `u16 u32 u64` | unsigned fixed-width integers (v1.8) |
 | `TT_TYPE_KW` | `f32` | 32-bit float (v1.8) |
 | `TT_BOOL` | `T` `F` | boolean literals |
@@ -126,7 +126,7 @@ shorter prefixes):
 | `TT_SHL` / `TT_SHR` | `<<` `>>` | shift |
 | `TT_CARETCARET` | `^^` | XOR (v1.8) — two adjacent carets only |
 | `TT_QUESTQUEST` | `??` | match |
-| `TT_OROR` / `TT_ANDAND` | `||` `&&` | strict-binary logical (v1.8) |
+| `TT_OROR` / `TT_ANDAND` | `\|\|` `&&` | strict-binary logical (v1.8) |
 
 Single-character operator tokens include `+ - * / % < > = ! ? & | ^ ~
 \ : ; @ # . $ ( ) { } [ ]`.
@@ -150,7 +150,7 @@ declaration is one of:
 | `('pub')? & "lib" @ name params → type` | FFI |
 | `('pub')? @ name [T]? params → type { body }` | function |
 | `('pub')? : Name [T]? { fields }` | struct |
-| `('pub')? : | Name { variants }` | enum |
+| `('pub')? : \| Name { variants }` | enum |
 | `('pub')? : type IDENT value` | const / global |
 | `('pub')? % Name [T]? (: Super+)? { ... }` | trait (`: Super` = supertraits; body may hold `type Item` assoc-type decls) |
 | `('pub')? % Trait [T]? type { methods }` | impl (body may hold `type Item Concrete` assoc-type bindings) |
@@ -267,7 +267,7 @@ explicit cast (`#`).
 | `f` | `double` | 64-bit IEEE 754 float |
 | `b` | `i1` | boolean |
 | `s` | `i8*` | UTF-8 string (NUL-terminated C string) |
-| `i8` `i16` `i32` | `i8` `i16` `i32` | signed sized integers (v1.8) |
+| `i8` `i16` `i32` `i64` | `i8` `i16` `i32` `i64` | signed sized integers |
 | `u16` `u32` `u64` | `i16` `i32` `i64` | unsigned sized integers (v1.8) |
 | `f32` | `float` | 32-bit float (v1.8) |
 
@@ -323,7 +323,7 @@ the tag is 1).
 Construction: `@ ?T { T payload }` for Some, `@ ?T { F # T 0 }` (or any
 zero-shaped expression of T) for None.
 
-Destructure with `??` match (§6.4) or `\` propagate (§6.5).
+Destructure with `??` match (§6.1) or `\` propagate (§6.4).
 
 ### 4.4 Slice `[T`
 
@@ -366,7 +366,7 @@ A bare `@`-fn name is **not** a value. Using one in expression position
 
 A struct is `:` `Name` `{` field* `}`; a field is `type IDENT?` (the
 name is optional when only the type matters). Fields are accessed via
-`. obj field` (§6.7).
+`. obj field` (§6.6).
 
 An enum is `:` `|` `Name` `{` variant* `}`; a variant is
 `IDENT type*` — the variant name followed by zero or more payload types.
@@ -379,8 +379,8 @@ pointer-typed slot would truncate f64 / >2³² payloads on wasm32, where
 pointers are 32 bits wide.
 
 A variant whose payload is a struct or enum declared *later* in the file
-parses correctly via a name pre-pass (grammar v2.1, 2026-05-21). Pattern
-matching binds at most 3 payload variables per arm (§6.4).
+parses correctly via a name pre-pass. Pattern matching binds one variable
+per payload slot, with no fixed cap on the number of slots (§6.1).
 
 ### 4.8 Generics
 
@@ -462,8 +462,8 @@ one impl. The compiler rejects, as a clear diagnostic rather than an LLVM
 redefinition:
 
 - a duplicate impl of the same trait for the same type;
-- two type aliases that share an LLVM lowering (e.g. `i` and `i64`, `u` and
-  `u8`) implementing the same method — they collide on one dispatch key;
+- two type aliases that share an LLVM lowering (`i` and `i64`) implementing
+  the same method — they collide on one dispatch key;
 - two *different* traits each providing a same-named method for one type —
   bare-name dispatch cannot disambiguate, and the error names both traits.
 
@@ -689,8 +689,7 @@ instantiation `( Name A )`.
 > Fixed prefix arity with **no closing token** is the permanent surface
 > form. An expression's shape is fully determined by each operator's known
 > arity, so the grammar stays a regular LL(k≤4) with no precedence table and
-> no balancing parentheses — which is the entire point of the notation, and
-> the largest contributor to its token economy.
+> no balancing parentheses — which is the entire point of the notation.
 >
 > This is the one ergonomics objection a reader raises ("how deep can the
 > un-parenthesised nesting get before it's unreadable?"), so the call was
@@ -762,7 +761,7 @@ ternary's then/else, the `{ ... }` blocks become statements).
 ! expr     logical NOT
 ^ expr     return
 ~ expr     bitwise complement (xor -1) for integers; fneg for f
-\ expr     try-propagate (disambiguated from closure by lookahead, §6.5)
+\ expr     try-propagate (disambiguated from closure by lookahead, §6.4)
 ```
 
 There are no unary arithmetic operators. To negate a value, use binary
@@ -823,7 +822,7 @@ A payload slot is one of:
 }
 ```
 
-A pattern arm binds at most 3 payload variables.
+A pattern arm binds one variable per payload slot (no fixed cap).
 
 An arm may carry a **guard** — `? cond` after the payload, before the
 `→` — evaluated *after* the payload bindings are in scope. A false guard
@@ -1239,9 +1238,9 @@ spawning a thread that holds it).
 
 The borrow checker is a static analysis pass over the parsed program.
 It is **on by default**; `--no-borrowck` disables it, and
-`--strict-borrowck` (off by default) adds two opt-in checks on top
+`--strict-borrowck` (off by default) adds three opt-in checks on top
 (see [`docs/MEMORY.md` §2.9](MEMORY.md)). Diagnostics are **hard
-errors** as of grammar v2.1 (2026-05-25); the compiler exits non-zero
+errors**; the compiler exits non-zero
 with a count of violations after walking the whole program. The checker
 is **diagnostic-only** — emitted IR is byte-identical whether it runs or
 not.
@@ -1364,8 +1363,7 @@ NURL treats compiler errors and warnings as the primary user interface,
 not the spec. The historical "gotchas list" is empty by policy: every
 previously-required-memorisation foot-gun is surfaced as a compiler
 `error:` or `warning:` with a pointing caret and the concrete cure
-inline. The compiler MUST emit ASCII-only diagnostic text (legacy
-constraint inherited from a now-removed Python stage-0 lexer; may be
+inline. The compiler MUST emit ASCII-only diagnostic text (may be
 relaxed in a future revision).
 
 ### 10.2 Diagnostic shape
@@ -1466,7 +1464,7 @@ SHOULD NOT be used as variable names:
 - `pub` — visibility.
 - `Z` — sizeof.
 - `T` `F` — booleans.
-- `i` `u` `f` `b` `s` `v` `i8` `i16` `i32` `u16` `u32` `u64` `f32` —
+- `i` `u` `f` `b` `s` `v` `i8` `i16` `i32` `i64` `u16` `u32` `u64` `f32` —
   type keywords.
 - `entry` — collides with LLVM's basic-block label.
 

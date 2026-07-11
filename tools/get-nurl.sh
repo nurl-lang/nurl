@@ -14,9 +14,14 @@
 #    curl -fsSL https://nurl-lang.org/install.sh | sh -s -- --version v0.1.0
 #
 #  Env:
-#    NURL_HOME            install prefix (default ~/.nurl)
-#    NURL_VERSION         release tag to install (default: latest)
-#    NURL_NO_MODIFY_PATH  set to 1 to never touch shell rc files / prompt
+#    NURL_HOME              install prefix (default ~/.nurl)
+#    NURL_VERSION           release tag to install (default: latest)
+#    NURL_NO_MODIFY_PATH    set to 1 to never touch shell rc files / prompt
+#    NURL_INSTALL_INSECURE  set to 1 (or pass --insecure) to install even when
+#                           the download can't be checksum-verified. OFF by
+#                           default: a missing checksum file or a missing
+#                           sha256 tool ABORTS the install rather than
+#                           silently trusting unverified bytes.
 #
 #  POSIX sh — no bashisms; works under dash/ash/busybox.
 # ============================================================
@@ -25,6 +30,7 @@ set -eu
 REPO="nurl-lang/nurl"
 PREFIX="${NURL_HOME:-$HOME/.nurl}"
 VERSION="${NURL_VERSION:-}"
+INSECURE="${NURL_INSTALL_INSECURE:-0}"
 
 err() { printf 'error: %s\n' "$*" >&2; exit 1; }
 info() { printf '%s\n' "$*" >&2; }
@@ -37,6 +43,7 @@ while [ $# -gt 0 ]; do
         --version=*) VERSION="${1#--version=}"; shift ;;
         --prefix) PREFIX="${2:-}"; shift 2 ;;
         --prefix=*) PREFIX="${1#--prefix=}"; shift ;;
+        --insecure) INSECURE=1; shift ;;
         -h|--help)
             sed -n '5,22p' "$0" 2>/dev/null | sed 's/^# \{0,1\}//'
             exit 0 ;;
@@ -97,31 +104,72 @@ trap 'rm -rf "$tmp"' EXIT
 info "downloading $archive ($VERSION)…"
 dl "$base/$archive" "$tmp/$archive" || err "download failed: $base/$archive"
 
+# Verification is fail-CLOSED: anything that stops us confirming the bytes
+# match the published SHA-256 aborts, unless the user set --insecure /
+# NURL_INSTALL_INSECURE=1. (Note: the checksum comes from the same release, so
+# it defends against a corrupted/truncated download — not against a compromised
+# release. Detached signatures would close that; tracked separately.)
+insecure_or_die() {
+    if [ "$INSECURE" = 1 ]; then
+        info "warning: $1 — continuing anyway (--insecure)."
+    else
+        err "$1. Refusing to install unverified bytes; re-run with --insecure to override."
+    fi
+}
 if dl "$base/$archive.sha256" "$tmp/$archive.sha256" 2>/dev/null; then
     info "verifying checksum…"
     want="$(awk '{print $1}' "$tmp/$archive.sha256")"
+    [ -n "$want" ] || insecure_or_die "the published checksum file is empty or malformed"
     if have sha256sum; then
         got="$(sha256sum "$tmp/$archive" | awk '{print $1}')"
     elif have shasum; then
         got="$(shasum -a 256 "$tmp/$archive" | awk '{print $1}')"
     else
-        got=""; info "warning: no sha256sum/shasum — skipping checksum verification."
+        got=""
+        insecure_or_die "no sha256sum/shasum on PATH to verify the download"
     fi
-    [ -z "$got" ] || [ "$got" = "$want" ] || err "checksum mismatch (expected $want, got $got)."
+    if [ -n "$got" ] && [ -n "$want" ] && [ "$got" != "$want" ]; then
+        err "checksum mismatch (expected $want, got $got) — refusing to install."
+    fi
 else
-    info "warning: no checksum file published — skipping verification."
+    insecure_or_die "no checksum file published for $VERSION ($archive.sha256)"
+fi
+
+# ── Signature (defense-in-depth beyond the same-release checksum) ──────
+# The pinned release public key. A minisign signature proves the archive was
+# produced by the holder of the release key, which a same-release checksum
+# can't. If minisign is available we verify fail-closed; if it isn't, we do
+# NOT force an install of it — the checksum + HTTPS remain the root of trust,
+# exactly as with rustup/deno. (nurl's own pure-NURL verifier — stdlib
+# minisign.nu — covers the package layer, where nurl is already present.)
+MINISIGN_PUB="RWQT5WWtjTnEyaYAG5X4HKCRtb7rFT5psjJVGB5Q9kVQBI71F5jfPWUf"
+if have minisign; then
+    if dl "$base/$archive.minisig" "$tmp/$archive.minisig" 2>/dev/null; then
+        info "verifying signature…"
+        minisign -Vm "$tmp/$archive" -P "$MINISIGN_PUB" >/dev/null 2>&1 \
+            || err "signature verification FAILED — refusing to install."
+        info "signature OK"
+    else
+        insecure_or_die "no signature (.minisig) published for $VERSION, and minisign is available to check it"
+    fi
+else
+    info "note: minisign not installed — skipping signature check (checksum + HTTPS enforced)."
 fi
 
 # ── Unpack (the archive has a top-level nurl/ dir) ─────────────────────
-# Remove only the entries the toolchain owns (the same list
-# tools/install-toolchain.sh manages) — $PREFIX also holds user data
-# that must survive a reinstall, e.g. the nurlpkg publish token in
-# $PREFIX/credentials. `rm -rf $PREFIX` here used to silently log
-# users out of the registry on every upgrade.
+# Guard the destructive wipe: never delete $HOME, /, or a directory that
+# isn't ours. Only clear an empty dir or a prior NURL install (has bin/nurl).
+case "$PREFIX" in
+    ""|/|"$HOME"|"$HOME"/) err "refusing to install into '$PREFIX' — set NURL_HOME to a dedicated directory (e.g. ~/.nurl)." ;;
+esac
+if [ -e "$PREFIX" ]; then
+    if [ -x "$PREFIX/bin/nurl" ] || [ -x "$PREFIX/bin/nurlc" ] || [ -z "$(ls -A "$PREFIX" 2>/dev/null)" ]; then
+        rm -rf "$PREFIX"
+    else
+        err "'$PREFIX' exists, is not empty, and is not a NURL install (no bin/nurl) — refusing to overwrite it. Remove it yourself or set NURL_HOME to a fresh path."
+    fi
+fi
 info "installing to $PREFIX…"
-for entry in bin build stdlib zig nurl.sh env; do
-    rm -rf "${PREFIX:?}/$entry"
-done
 mkdir -p "$PREFIX"
 tar xzf "$tmp/$archive" -C "$PREFIX" --strip-components=1
 
@@ -155,7 +203,7 @@ smoke() {
             info "    Alpine:         sudo apk add            <package that provides ${lib:-the library}>"
             info "    FreeBSD:        sudo pkg install -y     <package that provides ${lib:-the library}>"
             info ""
-            info "Please also report this at https://github.com/nurl-lang/nurl-lang/issues —"
+            info "Please also report this at https://github.com/nurl-lang/nurl/issues —"
             info "the shipped toolchain is meant to need only libc."
             exit 1
             ;;

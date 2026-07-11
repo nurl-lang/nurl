@@ -56,6 +56,11 @@ def build_table() -> str:
     return "\n".join(out) + "\n"
 
 def main() -> int:
+    # No options: any argument is a mistake (this script REWRITES the doc
+    # in place — `--help` must not trigger a silent write).
+    if len(sys.argv) > 1:
+        print(f"usage: {sys.argv[0]}   (no arguments; rewrites the appendix of {DOC} in place)")
+        return 0 if sys.argv[1] in ("-h", "--help") else 2
     doc = DOC.read_text()
     idx = doc.find(MARK)
     if idx < 0:

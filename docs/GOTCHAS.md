@@ -1,9 +1,12 @@
 # Gotchas
 
-> **Currently no known gotchas.**
+> **No gotchas outside the documented ownership contract.** The known
+> deliberately-undiagnosed cases (e.g. the conditional double-free, closed
+> under `--strict-borrowck`) are enumerated in
+> [`MEMORY.md` §6.2/§6.5](MEMORY.md).
 
-Every source-level trap that once needed memorisation is now reported by the
-compiler itself: `nurlc` emits an `error:` / `warning:` with a pointing caret
+Every other source-level trap that once needed memorisation is reported by
+the compiler itself: `nurlc` emits an `error:` / `warning:` with a pointing caret
 and the concrete cure inline, so a wrong program tells you what to fix at the
 point you wrote it. If you hit a NURL compile error, the diagnostic is the
 source of truth — read it rather than guessing.

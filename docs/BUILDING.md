@@ -24,7 +24,8 @@ PowerShell, or Git Bash all work.
 
 **Linux (Fedora/RHEL)** — `sudo dnf install clang`
 
-**macOS** — `brew install llvm`, then add it to `PATH`:
+**macOS** — `brew install llvm`, then add it to `PATH`. Note: macOS host
+builds are not covered by CI (see [`PLATFORMS.md`](PLATFORMS.md)):
 ```sh
 export PATH="$(brew --prefix llvm)/bin:$PATH"   # add to ~/.zshrc to persist
 ```
@@ -66,8 +67,9 @@ The build script performs a complete bootstrap:
 3. `nurlc_self` compiles `compiler/nurlc.nu` again → `build/nurlc_self2` (stage 2).
 4. Verifies stages 1 and 2 produce **byte-identical LLVM IR** (the bootstrap fixed point).
 5. Copies stage 2 to `build/nurlc` and symlinks it at the repo root.
-6. Runs the snapshot test suite (`compiler/tests/run_tests.sh` /
-   `run_tests.bat`) and diffs against the golden baseline.
+6. Runs the snapshot test suite (`compiler/tests/run_tests.sh`; on
+   Windows `run_tests.ps1`, which needs PowerShell 7) and diffs against
+   the golden baseline.
 
 It prints `BUILD SUCCESS & TESTS PASSED` on success, or the full log / diff
 on failure. All artefacts land under `build/`.
@@ -159,15 +161,19 @@ commit them together).
 
 ## Continuous integration
 
-Every push and pull request runs [`.github/workflows/ci.yml`](../.github/workflows/ci.yml):
+Every pull request, and every push to `main`, runs
+[`.github/workflows/ci.yml`](../.github/workflows/ci.yml):
 
-| Job | What it checks |
+| Job / step | What it checks |
 |---|---|
 | build + bootstrap fixed point + test corpus | `build.sh` on Linux x86_64 — stage1 ≡ stage2 byte-identical IR, then the snapshot test suite |
+| self-compile peak-RSS gate | `tools/memgate.sh` — compiling the compiler must stay under the memory budget |
 | examples corpus frontend gate | every program under `examples/` compiles (`tools/check_examples.sh`) |
+| stdlib symbol-collision gate | no two stdlib helpers mangle to the same symbol (`tools/check_stdlib_symbols.sh`) |
 | `nurlfmt --check` | the whole tree is in canonical format (no drift) |
-| AddressSanitizer + UndefinedBehaviorSanitizer | `build.sh --san` + the corpus under ASan/UBSan/LSan |
-| FreeBSD (VM) | full build + bootstrap + corpus on a real FreeBSD 14.2 guest (`vmactions/freebsd-vm`); the second OS that keeps libc/`sh`-portability honest — it once caught a regression Linux could not (async fibers silently no-op'd on FreeBSD). A hard gate: a FreeBSD failure fails CI. |
+| HTTP per-request leak gate | `tools/leakcheck/run.sh` — the HTTP server serves a request burst leak-free under LSan |
+| AddressSanitizer + UndefinedBehaviorSanitizer | `build.sh --san` + the corpus under ASan/UBSan, plus a leak-pinned test set under LSan |
+| FreeBSD (VM) | full build + bootstrap + corpus on a real FreeBSD 14.2 guest (`vmactions/freebsd-vm`) — a hard gate that keeps libc/`sh` portability honest |
 
 A local `./build.sh` reproduces the first two gates; `./build.sh --san` then
 `./compiler/tests/run_san_tests.sh` reproduces the sanitizer gate; and

@@ -3,7 +3,10 @@
 Distribution model (the rustup / Zig / Bun shape):
 
 - **GitHub Releases** is the artifact store — one relocatable archive per
-  target plus its `.sha256`.
+  target plus its `.sha256` checksum and a detached minisign signature
+  (`.minisig`, signed in the release workflow with `MINISIGN_SECRET_KEY`;
+  the installers verify it against a pinned public key when `minisign` is
+  available, and always verify the checksum fail-closed).
 - **`tools/get-nurl.sh` / `get-nurl.ps1`** is the front door, served from
   `nurl-lang.org` so users run `curl -fsSL https://nurl-lang.org/install.sh | sh`.
   It detects OS/arch, downloads the matching archive, verifies the
@@ -29,9 +32,11 @@ git push origin v0.1.0
 
 Each job builds `nurlc` + `nurlpkg`, assembles the prefix with
 `tools/install-toolchain.{sh,bat}` (relocatable shims), packages it, and
-the final `release` job attaches every archive + `.sha256` to the GitHub
-Release. Use the `workflow_dispatch` input for a dry run that builds the
-artifacts without publishing.
+the final `release` job signs and attaches the produced archives +
+`.sha256` + `.minisig` to the GitHub Release. The FreeBSD leg is
+**best-effort** (`continue-on-error`): a release can ship without the
+FreeBSD archive if that VM build fails. Use the `workflow_dispatch` input
+for a dry run that builds the artifacts without publishing.
 
 An archive is just the `~/.nurl` layout (`bin/`, `build/`, `stdlib/`,
 `nurl.{sh,bat}`, `env`) with shims that resolve their own location, so it
@@ -40,10 +45,8 @@ works wherever it is unpacked.
 ## Runtime dependencies (dynamic linking)
 
 The toolchain binaries are built to depend on **libc only** — nothing else.
-This is deliberate: a stray dependency on a library a fresh box lacks would
-stop the toolchain dead before `main()` (the original bug: a `libpq.so.5`
-NEEDED entry, inherited from the monolithic `runtime.o`, made `nurlpkg
-install` fail on every machine without a Postgres client).
+This is deliberate: a stray `NEEDED` entry for a library a fresh box lacks
+would stop the toolchain dead before `main()`.
 
 Two mechanisms keep it that way:
 
@@ -75,10 +78,10 @@ at first use.
 Running the toolchain (e.g. `nurlc`) needs nothing but libc, but *building*
 a program does: `nurlc` emits LLVM IR (`.ll`), which an LLVM compiler lowers
 to a native binary and links against `runtime.o`. gcc/cc cannot consume LLVM
-IR. Because `nurlpkg install <tool>` compiles the package from source, it
-inherits this requirement — and on a fresh box that hit three walls in a
-row: no `clang`; clang too old to parse nurlc's opaque-pointer IR; and clang
-unable to read the release's newer LLVM bitcode.
+IR, the compiler must be new enough to parse opaque-pointer IR (LLVM 15+),
+and it must be able to read the release's `runtime.o` bitcode. Because
+`nurlpkg install <tool>` compiles the package from source, it inherits all
+of this.
 
 The archive therefore **bundles a self-contained `zig`** (`zig cc`) as the
 default backend — it carries its own modern LLVM (opaque pointers just
@@ -103,8 +106,7 @@ works".)
 `-lpq` / `-lz` / `-lzstd`) **only when the emitted IR actually references
 that back-end's symbols** — so a feature-free program (the common tool)
 links against libc only and never demands a library the box may lack
-(naming `-lpq` unconditionally previously made even a hello-world fail to
-link where libpq was absent).
+— so a feature-free program never demands a library the box may lack.
 
 (A prebuilt-binary package channel — install a tool with no local compile at
 all — remains the future bombproofing; see the registry roadmap.)
@@ -117,9 +119,9 @@ start on an older box (e.g. Raspberry Pi OS bullseye, glibc 2.31) with
 `libc.so.6: version 'GLIBC_2.34' not found` (2.34 is where pthread folded
 into libc). The release therefore **relinks** the shipped `nurlc` + `nurlpkg`
 with the bundled zig against an **old glibc floor**
-(`tools/relink-toolchain-portable.sh`, `zig cc -target <arch>-linux-gnu.2.17`)
-— zig supplies the versioned glibc stubs, so we build on the modern runner
-yet target ~glibc 2.14. This is possible because `nurlc` is libc-only and
+(`tools/relink-toolchain-portable.sh`, `zig cc -target <arch>-linux-gnu.2.28`
+by default) — zig supplies the versioned glibc stubs, so we build on the
+modern runner yet target glibc 2.28. This is possible because `nurlc` is libc-only and
 `nurlpkg` adds only static zlib/zstd (ancient symbols). A successful relink
 *caps* the floor at the target (the link fails outright if any code needs a
 newer symbol), so portability is guaranteed by construction. The bundled
@@ -128,15 +130,14 @@ those are unaffected.
 
 ## Front-door wiring (nurlweb)
 
-`nurl-lang.org` should serve the two installer scripts so the one-liners
-work. Point:
-
-- `https://nurl-lang.org/install.sh`  → `tools/get-nurl.sh`
-- `https://nurl-lang.org/install.ps1` → `tools/get-nurl.ps1`
-
-(either a static copy in the nurlweb deploy, or a redirect to the repo's
-`raw.githubusercontent.com` path). `$NURL_INSTALL_BASE` overrides the
-download base for internal mirrors / air-gapped installs.
+`nurl-lang.org` serves the two installer scripts so the one-liners work:
+the web deploy's `predeploy` hook (`nurlweb/package.json`,
+`sync-installers`) copies `tools/get-nurl.sh` → `nurlweb/public/install.sh`
+and `tools/get-nurl.ps1` → `nurlweb/public/install.ps1` before
+`wrangler deploy`. **`tools/get-nurl.{sh,ps1}` are the canonical sources**
+— edit those, never the `public/` copies, or the next deploy overwrites
+the edit. `$NURL_INSTALL_BASE` overrides the download base for internal
+mirrors / air-gapped installs.
 
 Pushing a `v*` tag also fires `.github/workflows/web-deploy.yml`, which
 runs `npm run deploy` in `nurlweb/`. Its `predeploy` hook regenerates the
@@ -152,9 +153,12 @@ the Actions tab.
 - The Linux client path (download → verify → unpack → run) is verified
   end to end against a local mirror; the relocatable prefix is verified by
   moving it after install.
-- The **Windows job is unverified on a real runner** — `build.bat` +
-  `tools/nurlpkg/build.bat` + `install-toolchain.bat` exist but the
-  toolchain has not yet been cut on `windows-latest`; exercise it with the
-  `workflow_dispatch` dry run before announcing Windows support.
+- The Windows job builds and verifies the bootstrap fixed point on
+  `windows-latest` and ships in releases, but **no test corpus or smoke
+  test runs on Windows in CI** — the Windows goldens
+  (`compiler/tests/outputs-windows/`) are exercised only by a local
+  `build.bat` with PowerShell 7.
+- The FreeBSD release leg is best-effort (`continue-on-error`); a release
+  can ship without the FreeBSD archive.
 - macOS is not built yet (the installer rejects it with a clear message);
   add a `macos-14` (arm64) / `macos-13` (x86_64) matrix when wanted.

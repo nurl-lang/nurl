@@ -146,7 +146,7 @@ unaffected.
 
 All eight rules below (§2.1–§2.8) emit `error:`. Use `--no-borrowck`
 for the escape hatch if a corner case slips through, and
-`--strict-borrowck` (off by default) to add two opt-in checks on top —
+`--strict-borrowck` (off by default) to add three opt-in checks on top —
 see §2.9.
 
 ### 2.1 Move checking — use-after-move
@@ -285,11 +285,8 @@ owned on every iteration:
 Only bindings that already existed at loop entry are carried, so none
 of these three false-positive. This rests on the lattice join being
 exact at the back-edge: a binding moved on only the body path joins to
-`MaybeMoved`, never `Moved` (an earlier shortcut that copied a
-body-only binding's `Moved` state verbatim into the loop head made the
-loop element above look definitely moved — that join is now routed
-through the same `Uninit ⊔ Moved = MaybeMoved` rule as every other
-merge).
+`MaybeMoved`, never `Moved` — every merge routes through the same
+`Uninit ⊔ Moved = MaybeMoved` rule.
 
 ### 2.7 Interprocedural escape
 
@@ -361,11 +358,9 @@ it uniformly:
 
 A helper that takes the reference but returns a **fresh** value
 (`@ runit ( @ v ) cb → i { ( cb ) ^ 0 }`) is not a passthrough, so
-`( runit f )` is not a reference and may be returned freely. Making the
-call result's referent depth *authoritative* (an explicit `0` when it
-is not a reference) also fixed a latent false positive: previously the
-stale `__last_ident_name__` left by the last argument could make
-`^ ( anycall … ref )` mis-flag the result as that argument.
+`( runit f )` is not a reference and may be returned freely: the call
+result's referent depth is *authoritative* (an explicit `0` when it is
+not a reference).
 
 The summary also covers a parameter returned **inside an aggregate** —
 `@ wrap ( @ v ) cb → Slot { ^ @ Slot { cb } }` records `cb`, because the
@@ -617,8 +612,8 @@ safe Rust cannot:
    ([`LIMITATIONS.md`](LIMITATIONS.md), *Concurrency / thread
    safety*). `Arc` makes the *refcount* atomic, not your data.
 
-(Integer division by zero used to be a third entry here — it now
-panics with a clear message instead of executing UB.)
+Integer division and remainder by zero panic with a clear message —
+they are not UB.
 
 So the accurate one-line claim is: **memory-safer than C by
 construction, with the common bug classes machine-checked — not
@@ -658,8 +653,8 @@ on; they are not two separate tools or two separate builds.
 
    **It deliberately does not gate leaks** (`detect_leaks=0`). A
    corpus-wide leak run would flag two non-defects: the compiler's own
-   process-lifetime arenas (`g_str_pool`, `g_sym_arena`), never freed by
-   design; and the many tests that allocate a manual handle
+   process-lifetime structures (symbol tables and interned strings),
+   never freed by design; and the many tests that allocate a manual handle
    (`Vec` / `String`) and exit without freeing it — test brevity
    exercising the §7.4 contract. So the corpus-wide gate proves
    *memory-safety*, not leak-freedom.
@@ -678,10 +673,7 @@ on; they are not two separate tools or two separate builds.
      (`loop_drop_reclaim` + `recover_unwind` pin the fix for a real
      loop-body leak: a `% Drop` value bound inside a `~` loop was not
      dropped at iteration end — the while-loop scope exit freed owned
-     strings/vecs but skipped user destructors — so each iteration
-     leaked the prior value's resources. LSan only reports *unreachable*
-     allocations, so a stale pointer left in a register made the report
-     environment-dependent, which is how the manual audit missed it.)
+     strings/vecs but skipped user destructors.)
    - `tools/leakcheck/run.sh` — an end-to-end gate that builds the HTTP
      server with ASan+LSan (`detect_leaks=1`), serves 21 requests, and
      fails on *any* leak; it locks the per-request leak class
@@ -717,9 +709,8 @@ bodies, auto-drop is exhaustive: owned strings, owned slices, `Drop`
 values, and **owned struct fields — including fields nested inside
 inner struct literals** — are all freed at scope exit, and a binding
 declared in a `?` / match / loop arm that *falls through* (no `^`) is
-dropped at arm end, not leaked. These were the historically weak spots
-(“Phase 2D”); they are now closed and pinned leak-clean by the
-leak-verification tests `struct_nested_field_drop`, `arm_local_drop`,
+dropped at arm end, not leaked. These behaviours are pinned leak-clean
+by the leak-verification tests `struct_nested_field_drop`, `arm_local_drop`,
 `arm_local_trailing_drop` (§6.6). Do **not** treat them as open
 limitations.
 

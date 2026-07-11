@@ -45,14 +45,16 @@ separate, explicitly-named `tls_connect_insecure`.
 
 ### Randomness
 
-`std/random.nu` is the only entropy source for keys, nonces, salts and
-blinding factors. It is a single runtime bridge, `nurl_rand_fill`, that selects
-the OS CSPRNG per platform — `getrandom(2)` on Linux, `arc4random_buf` on
-macOS/BSD, `BCryptGenRandom` on Windows, `/dev/urandom` otherwise. Every
-draw checks the return value and **fails closed** (panics) rather than
-proceeding with predictable bytes. `std/rng.nu` (xoshiro256\*\*) is a separate,
-clearly-marked **non-cryptographic** PRNG for simulations and is never used by
-this stack.
+All key, nonce, salt and blinding-factor entropy comes from one runtime
+bridge, `nurl_rand_fill`, which selects the OS CSPRNG per platform —
+`getrandom(2)` on Linux, `arc4random_buf` on macOS, `BCryptGenRandom` on
+Windows, `/dev/urandom` otherwise. The crypto modules (`std/tls.nu`,
+`std/rsa.nu`, `std/x509_gen.nu`) each check its return value and **fail
+closed** (panic) rather than proceed with predictable bytes. Note:
+`std/random.nu`'s convenience draws (`rand_u64`, `rand_hex_str`) do **not**
+check the return value — do not use them for key material. `std/rng.nu`
+(xoshiro256\*\*) is a separate, clearly-marked **non-cryptographic** PRNG
+for simulations and is never used by this stack.
 
 ---
 
@@ -60,15 +62,12 @@ this stack.
 
 Every primitive has a known-answer test (KAT) in `compiler/tests/`
 (`aes_gcm_vectors`, `chacha20poly1305_vectors`, `hkdf_vectors`,
-`ecdsa_p256_*`, `ed25519_vectors`, `x25519_vectors`, `rsa_*`, `x509_*`), run
-on every build, and the stack is exercised against real peers:
-
-- `tls_connect` performs verify-full GETs against `example.com`, Google,
-  Cloudflare and `*.badssl.com`; self-signed / wrong-host / expired /
-  untrusted-root certificates are rejected.
-- `tls_server` (RSA-2048 and EC P-256 leaf certs) completes handshakes with
-  `curl`, browsers and a Python `ssl` client.
-- RSASSA-PSS signatures produced here verify under OpenSSL and vice-versa.
+`ecdsa_p256_*`, `ed25519_vectors`, `x25519_vectors`, `rsa_*`, `x509_*`) and
+run on every build. Interoperability was additionally validated manually at
+development time (not re-run in CI): verify-full `tls_connect` GETs against
+public sites and the `badssl.com` negative suite; `tls_server` handshakes
+(RSA-2048 and EC P-256 leaf certs) with `curl`, browsers and a Python `ssl`
+client; RSASSA-PSS cross-verification with OpenSSL.
 
 ECDSA signing derives its **nonce** with **RFC 6979** (HMAC-SHA-256) — fully
 deterministic, so the nonce needs no RNG and can never be reused, and the
@@ -81,7 +80,7 @@ per signature: the *nonce* is deterministic, the *blinding factor* is random.
 ## 3. Side-channel posture
 
 This is where a pure-software stack differs most from a hardware-accelerated
-one, and where the 2026-06 security sweep focused.
+one.
 
 **Threat model — in scope:** a remote or co-resident attacker observing
 **timing and cache access patterns** across one or many operations (the
@@ -117,7 +116,7 @@ follow-up. Hardening (timing/cache axis):
 | GCM / Poly1305 / TLS Finished tag compares | Constant-time (OR-accumulated XOR, no early exit). |
 | RSA modexp (`bigint_modpow`) | **Constant control flow**: a Montgomery powering ladder — exactly two modular multiplies per iteration for a fixed iteration count = bit-length of the **modulus `n`** (a public value), register choice by a constant-time conditional swap. The count depends only on the public modulus, **never on the secret exponent `d`** (no naive "multiply only on 1-bits" leak, and the loop length does not reveal `d`'s bit length). No CRT is used (single direct modexp with the full `d`), so there is no CRT-reduction timing surface (Brumley–Boneh class). |
 | RSA private key (PSS sign) | **Base blinding** on top: `s = ((EM·rᵉ)ᵈ · r⁻¹) mod n` for a fresh random `r` per signature. `rᵉᵈ ≡ r (mod n)`, so the result is identical, but the value fed to the (still operand-time-dependent) `bigint` mul/rem is randomized — covering the residual timing the ladder's uniform control flow does not. The setup inverse `r⁻¹ mod n` is computed with the variable-time `bigint_modinv`, but its timing is **not security-relevant**: `r` is a fresh per-signature ephemeral that is discarded, so its magnitude leaks nothing about the key. |
-| P-256 secret scalar mult (ECDSA nonce / ECDHE) | **Constant-time on the timing/cache axis** (`std/p256_field`): a dedicated fixed-16-limb GF(p) field — Montgomery (CIOS) multiply, conditional-`±p` add/sub, fixed-exponent Fermat inverse — never normalized, so even the *operand timing* is value-independent. Points use the Renes–Costello–Batina **complete** addition formula (a = −3), correct for all inputs incl. identity, in a branchless always-add ladder with a constant-time point select. The ladder runs a **fixed number of steps = 8·len(scalar bytes)** (256 for a 32-byte nonce) regardless of the scalar's value, so the top bits do not change the trace. No branch, no table index, no operand-time dependence — **no blinding needed**. Verified for *correctness* (a separate axis from constant-timeness — see the caveat above): the field matches the bigint reference (2000 random cases) and the scalar multiply matches both the bigint path and Python `cryptography` (500/300 cases). |
+| P-256 secret scalar mult (ECDSA nonce / ECDHE) | **Constant-time on the timing/cache axis** (`std/p256_field`): a dedicated fixed-16-limb GF(p) field — Montgomery (CIOS) multiply, conditional-`±p` add/sub, fixed-exponent Fermat inverse — never normalized, so even the *operand timing* is value-independent. Points use the Renes–Costello–Batina **complete** addition formula (a = −3), correct for all inputs incl. identity, in a branchless always-add ladder with a constant-time point select. The ladder runs a **fixed number of steps = 8·len(scalar bytes)** (256 for a 32-byte nonce) regardless of the scalar's value, so the top bits do not change the trace. No branch, no table index, no operand-time dependence — **no blinding needed**. Verified for *correctness* (a separate axis from constant-timeness — see the caveat above): the in-tree test `compiler/tests/p256_ct_field.nu` pins the field against the bigint reference; a one-time development cross-check also matched the scalar multiply against Python `cryptography`. |
 | P-256/P-384 verify (`__jmul`) | Branchless ladder over the bigint field, but the scalars are **public** (verification), so the bigint operand timing is harmless here. |
 | X25519 | Montgomery ladder with a branchless constant-time conditional swap (TweetNaCl); fixed iteration count. |
 | Ed25519 | Deterministic nonce (RFC 8032), so no per-signature secret randomness to leak. |
@@ -249,8 +248,9 @@ be **sound, not a hardware-grade side-channel-free implementation**:
    library (HSM, secure element, AES-NI + a vetted bignum) where that threat
    model applies.
 
-The full audit, the RSA fixed-limb follow-up, the doc-taxonomy fixes and the
-planned dudect measurement are tracked follow-ups.
+An external audit, a fixed-limb RSA field (removing the last operand-time
+dependence), and statistical timing measurement (dudect-style) remain open
+work — see `TODO.md`.
 
 ---
 

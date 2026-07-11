@@ -89,12 +89,9 @@ keeps the spaces because the inside is non-empty (the `fn` name);
 `{}` keeps no spaces because the inside is empty (legal as a no-op
 arm in a ternary, see fizzbuzz).
 
-Exception: the `(@ R P*)` function-type form keeps the canonical
-spacing `(@ i i)` — the `(@` digraph has no internal space because
-the lexer treats them as the function-type opener. The rest of the
-form is normal `( @ R P* )` only at the source level if the user
-writes it that way; the `(@` form is preferred and is what nurlfmt
-emits.
+The `(@ R P*)` function-type form: the lexer accepts both the `(@`
+digraph and the spaced `( @ …` form; nurlfmt canonicalises to the
+spaced form `( @ R P* )`, like every other parenthesised form.
 
 ## 4. Newlines and statements
 
@@ -164,15 +161,16 @@ for cascading-construct alignment.
 { c }
 ```
 
-This is intentionally simple in v1: indent is purely a function of
-brace depth (§1). A cascading-construct heuristic that walks back
-to the construct opener and bumps continuation lines by one extra
-level is on the v2 backlog (see ROADMAP §3). It is the single
-biggest visible diff between v1 nurlfmt output and the
-conventionally hand-formatted source in `examples/` and `stdlib/`.
-The diff is **layout-only**: the formatted source still compiles to
-the same LLVM IR as the original, which the round-trip test in
-work-list item 6 enforces.
+This is intentionally simple: indent is purely a function of brace
+depth (§1). A cascading-construct heuristic (bumping continuation
+lines of a multi-line construct by one extra level) is a possible
+future extension. It is the single biggest visible diff between
+nurlfmt output and conventionally hand-formatted source. The diff is
+**layout-only**: the formatted source still compiles to the same
+LLVM IR as the original, which
+`compiler/tests/nurlfmt_idempotent.sh` enforces (idempotence + IR
+equivalence over `stdlib/`, `examples/`, `compiler/tests/` and the
+compiler itself).
 
 ## 8. Comments
 

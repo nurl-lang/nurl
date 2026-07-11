@@ -12,7 +12,7 @@ and every incremental step here is gated (see §5).
 
 ## 1. Shape
 
-`compiler/nurlc.nu` is **one self-contained file** (~18.5k lines, no `$`
+`compiler/nurlc.nu` is **one self-contained file** (~18.8k lines, no `$`
 imports — it defines its own string/symtab/lexer helpers so stage0 can
 build it from `nurlc_lastgood.ll` with nothing but clang). There is **no
 AST and no IR data structure**: parsing, type checking, borrow checking
@@ -72,7 +72,7 @@ get — returned values are owned copies).
 |---|---|---|
 | diagnostics | `g_err_count`, `g_diag_recover_active` | error count + multi-error recovery mode; whole run |
 | codegen cursor | `g_str_idx`, `g_did_ret`, `g_ret_forbidden`, `g_in_match_arm`, `g_defer_count`, `g_stmt_line/col/bare_*` | per-statement/-function flags; must be reset on the boundaries that own them (grep their writers before trusting a reset) |
-| **last-type channel** | `g_last_type_ptr` (+ unsigned flag) | the expression walk's implicit return value: every `gen_expr` sets it; the *caller* reads it. The signedness flag **rides with it** — set/reset them together or resurrect the killed bug class (see `docs/GOTCHAS.md`, signedness-coupling) |
+| **last-type channel** | `g_last_type_ptr` | the expression walk's implicit return value: every `gen_expr` sets it; the *caller* reads it. Signedness is carried **in the type string itself** (`u8`/`u16`/… stay distinct from `i8`/`i16`/… in this channel; readers use `ty_is_unsigned`, emission normalises via `nurl_llty`) — the former separate unsigned flag was removed in the A1 rework; see the comment at `nurl_set_last_type` |
 | string literals | `g_str_syms`, `g_str_idx` | interned literal metadata, flushed as module constants |
 | generics | `g_generic_syms`, `g_generic_struct_syms`, `g_struct_inst_syms` | stored templates (token streams) + emitted-instantiation dedupe; whole run |
 | traits/impls | `g_trait_syms`, `g_impl_{ret,name,trait,pos}_syms` | method dispatch keys `method##llvm_type` → return type / mangle / owning trait / declaration site (coherence) |
