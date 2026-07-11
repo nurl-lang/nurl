@@ -290,12 +290,23 @@ REM Windows-PowerShell 5.1 fallback.
 set "PWSH=pwsh"
 where pwsh >nul 2>&1
 if errorlevel 1 (
-    echo BUILD SUCCESS, but PowerShell 7+ ^(pwsh^) not found - skipping tests.
-    echo Install pwsh and run: pwsh compiler\tests\run_tests.ps1
+    REM Skipping tests is a DEGRADED result, not success: exit non-zero so
+    REM CI (and scripts) can't mistake an untested build for a tested one.
+    REM Set NURL_ALLOW_NOTESTS=1 to accept the skip locally.
+    if "%NURL_ALLOW_NOTESTS%"=="1" (
+        echo BUILD SUCCESS, TESTS SKIPPED - PowerShell 7+ ^(pwsh^) not found ^(NURL_ALLOW_NOTESTS=1^).
+        del "%TESTOUT%" 2>nul
+        call :cleanup
+        popd >nul
+        exit /b 0
+    )
+    echo BUILD SUCCESS, but TESTS DID NOT RUN: PowerShell 7+ ^(pwsh^) not found.
+    echo Install pwsh ^(winget install Microsoft.PowerShell^) and re-run,
+    echo or set NURL_ALLOW_NOTESTS=1 to accept an untested build.
     del "%TESTOUT%" 2>nul
     call :cleanup
     popd >nul
-    exit /b 0
+    exit /b 2
 )
 set "TESTOUT=%TEMP%\nurl_testout_%RANDOM%%RANDOM%.log"
 "%PWSH%" -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%\compiler\tests\run_tests.ps1" > "%TESTOUT%" 2>&1
