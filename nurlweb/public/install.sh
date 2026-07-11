@@ -203,7 +203,7 @@ smoke() {
             info "    Alpine:         sudo apk add            <package that provides ${lib:-the library}>"
             info "    FreeBSD:        sudo pkg install -y     <package that provides ${lib:-the library}>"
             info ""
-            info "Please also report this at https://github.com/nurl-lang/nurl-lang/issues —"
+            info "Please also report this at https://github.com/nurl-lang/nurl/issues —"
             info "the shipped toolchain is meant to need only libc."
             exit 1
             ;;
