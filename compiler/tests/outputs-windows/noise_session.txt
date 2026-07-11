@@ -1,0 +1,9 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+in-order 0: YES
+in-order 1: YES
+replay 0 rejected: YES
+reorder 3 then 2: YES
+tamper rejected: YES

@@ -1,0 +1,8 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+rsa.ok=yes sig_alg=1 key_alg=1 n=256 sans=2
+rsa.selfsig=yes
+host localhost=yes a.example.com=yes evil=no
+ec.ok=yes key_alg=2 curve=256 point=65 ec.sig_alg=4

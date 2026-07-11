@@ -1,0 +1,9 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+scrypt N=16,r=1,p=1: PASS
+scrypt N=1024,r=8,p=16: PASS
+pbkdf2-sha512 c=1: PASS
+pbkdf2-sha512 c=4096: PASS
+scrypt/pbkdf2: all vectors PASS

@@ -1,0 +1,11 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+chacha20_encrypt: PASS
+chacha20_decrypt: PASS
+poly1305: PASS
+aead_seal: PASS
+aead_open: PASS
+aead_tamper: PASS
+chacha20poly1305: all vectors PASS

@@ -1,0 +1,7 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+result: PASS
+option: PASS
+ALL PASS
