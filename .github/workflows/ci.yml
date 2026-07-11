@@ -94,6 +94,15 @@ jobs:
         # (whose process-lifetime arenas would otherwise dominate the report).
         run: ./tools/leakcheck/run.sh
 
+      - name: DWARF debug-info gate
+        # The plain corpus never builds with --debug, so it can't catch a
+        # broken !DI emission. This builds the --debug regression
+        # (dwarf_closure_drop, the -O2 inliner crash) plus the gdb
+        # behavioural checks; gdb makes the source-level asserts run too.
+        run: |
+          sudo apt-get install -y --no-install-recommends gdb
+          ./tools/dwarf_test.sh
+
   freebsd:
     name: FreeBSD (build + bootstrap fixed point + tests, in a VM)
     runs-on: ubuntu-latest
