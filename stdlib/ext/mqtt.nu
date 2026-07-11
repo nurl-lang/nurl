@@ -60,7 +60,7 @@
 // connection. `mqtt_listen` spawns a background reader thread that owns
 // the connection and feeds inbound messages through a channel — the
 // application does other work and just `mqtt_listener_recv`s. Plain TCP
-// (`tcp_connect`) is also exported. `mqtt_topic_matches` runs the MQTT
+// (`std/net.nu`'s `tcp_connect`) is available for plaintext use. `mqtt_topic_matches` runs the MQTT
 // §4.7 `+` / `#` wildcard rules for client-side dispatch when one
 // connection carries several subscriptions.
 //
@@ -141,9 +141,8 @@ $ `stdlib/ext/websocket.nu`
 
 // ── client-side connect ──────────────────────────────────────────────
 //
-// Plaintext connect uses runtime.o's `nurl_tcp_connect` (declared via the
-// websocket.nu import above). TLS goes through net.nu's pure
-// `tcp_connect_tls` — no runtime SSL.
+// Plaintext connect is std/net.nu's `tcp_connect`. TLS goes through
+// net.nu's pure `tcp_connect_tls` — no runtime SSL.
 
 // Open a TLS client connection. `verify` T = check the broker cert
 // chain + hostname against the system trust store; F = encrypt but
@@ -154,20 +153,6 @@ $ `stdlib/ext/websocket.nu`
         F e → ^ @ !TcpConn MqttErr { F ( __mqtt_of_net e ) }
         T c → ^ @ !TcpConn MqttErr { T c }
     }
-}
-
-// Open a plain (unencrypted) TCP client connection — port 1883.
-@ tcp_connect s host i port → !TcpConn MqttErr {
-    : i craw ( nurl_tcp_connect host port )
-    ? == craw 0 { ^ @ !TcpConn MqttErr { F # MqttErr MqttTransport } } {}
-    : i ek ( nurl_tcp_err_kind craw )
-    ? != ek 0 {
-        ( nurl_tcp_close craw )
-        ^ @ !TcpConn MqttErr { F ( __mqtt_of_net ( __net_err_of ek ) ) }
-    } {}
-    : s crp # s craw
-    : TcpConn c @ TcpConn { crp 0 0 }
-    ^ @ !TcpConn MqttErr { T c }
 }
 
 // ── client handle + message ──────────────────────────────────────────
