@@ -34,6 +34,9 @@ $ `stdlib/std/url.nu`
     ( show `http://example.com` )
     ( show `https://user:pass@host.example.org:8443/secure?token=abc` )
     ( show `ws://localhost:9001/chat` )
+    ( show `http://host:65535/edge` )  // max valid port
+    ( show `http://host:65536/over` )  // one past → reject
+    ( show `http://host:99999999999999/huge` )  // overflow → reject
     ( show `wss://stream.example.com/feed` )
     ( show `https://[2001:db8::1]:8080/v6` )
     ( show `http://[::1]/loopback` )
