@@ -24,8 +24,11 @@ seems wrong, that's a contribution opportunity too.
   If you need something useful and general, propose it.
 - **Compiler / runtime work.** Bug fixes, performance improvements,
   better error messages, missing features from the roadmap — all
-  fair game. Open an issue first for anything non-trivial so we can
-  align on approach before you write a lot of code.
+  fair game. Read
+  [`docs/dev/COMPILER_INTERNALS.md`](docs/dev/COMPILER_INTERNALS.md)
+  first — it maps the fused walk, the global state, and the safe-change
+  checklist. Open an issue for anything non-trivial so we can align on
+  approach before you write a lot of code.
 - **Tooling.** Editor extensions, formatters, language-server work,
   package management, build integrations — there's plenty of green
   field.
@@ -110,18 +113,16 @@ The full bootstrap chain:
 git clone https://github.com/nurl-lang/nurl
 cd nurl
 
-# One-time: build the C runtime
-clang -c stdlib/runtime.c -o stdlib/runtime.o
-
-# Bootstrap the self-hosted compiler (committed snapshot IR → NURL → NURL fixed point)
+# Bootstrap the self-hosted compiler (committed snapshot IR → NURL → NURL
+# fixed point). Compiles the C runtime for you.
 ./build.sh
 ```
 
-Requirements: clang/LLVM 15+. Nothing else — Python was removed
-from the build path 2026-05-23; the bootstrap snapshot now lives
-as committed LLVM IR (`compiler/nurlc_lastgood.ll`) that clang
-links directly into a working boot compiler. Windows users have
-`build.bat`; macOS works with Homebrew LLVM (`brew install llvm`).
+Requirements: clang/LLVM 15+. Nothing else — the bootstrap snapshot is
+committed LLVM IR (`compiler/nurlc_lastgood.ll`) that clang links
+directly into a working boot compiler. Windows users have `build.bat`;
+macOS builds with Homebrew LLVM (`brew install llvm`) but is not covered
+by CI.
 
 Compile and run a single program:
 

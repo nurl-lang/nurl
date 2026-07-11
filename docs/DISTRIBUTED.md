@@ -410,12 +410,13 @@ matrix. A seeded RNG makes every run byte-reproducible; the assertions check
 end-state invariants the code can genuinely violate.
 
 `sim_net_new` / `sim_send` / `sim_due` / `sim_partition` / `sim_heal` /
-`sim_dropped`. The scenario suite (e.g. `compiler/tests/sim_membership.nu` —
-gossip converges under 30% loss + reorder; a partition isolates a fact and a
-heal reconverges it) grows toward the headline assertions: cluster stable across
-a forced network change; a job completes across a partition + heal; a CPU-pinned
-node is not evicted; no double side-effect across split ownership; CRDT
-convergence after churn with no slot corruption.
+`sim_dropped`. The scenario suite covers the headline assertions —
+`sim_membership.nu` (gossip converges under 30% loss + reorder; a partition
+isolates a fact and a heal reconverges it), `sim_job.nu` (a job completes
+across a partition + heal), `sim_cpupin.nu` (a CPU-pinned node is not
+evicted), `sim_lease.nu` (no double side-effect across split ownership),
+and `sim_crdt.nu` (CRDT convergence after churn with no slot corruption) —
+all in `compiler/tests/`.
 
 ---
 
@@ -525,9 +526,9 @@ listen sockets (so unit tests can't bind):
 
 ## Status & limitations
 
-The data and control planes are complete and the path
-`Phase 0 → 1 → 2 → 4` (a working pubkey overlay with guaranteed reachability)
-plus Phases 3, 5, and 6 are in. On top of them the **Crown** compute layer is
+The data and control planes are complete: every phase of the transport plan
+(a working pubkey overlay with guaranteed reachability, NAT traversal,
+relays, membership and failure detection) has shipped. On top of them the **Crown** compute layer is
 landed: stable replica identity (`dist/identity.nu`), self-refutation +
 dedicated-OS-thread heartbeat (`dist/heartbeat.nu`), the job-dispatch keystone
 (`dist/job.nu`), lease/fencing tokens (`dist/lease.nu`), and the deterministic
@@ -550,7 +551,7 @@ Known deep follow-ups (no workarounds — these are tracked for a genuine fix):
   OS thread today (Tier 1), which keeps liveness independent of a long-running
   handler. A fuller fix is compiler-inserted loop back-edge preemption so even a
   tight in-fiber loop yields.
-- **Reactor recv-deadline.** A fiber blocked on `tcp_read_chunk` parks on epoll
+- **Reactor recv-deadline.** A fiber blocked on `tcp_read_chunk` parks on the runtime's reactor (poll(2))
   without a timer-wheel deadline, so a recv timeout is ignored under the fiber
   reactor; single-process multi-node demos use process-per-node until fiber
   reads are registered on the timer wheel.

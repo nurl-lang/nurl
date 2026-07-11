@@ -43,9 +43,10 @@ What is solid today:
 - **Standard library.** A broad pure-NURL stdlib (see the inventory below)
   spanning collections, hashing, serialization, a full HTTP/1.1+2 + WebSocket
   stack, database clients, distributed systems (p2p overlay, CRDTs), MCP, and the Anthropic Claude API.
-- **Targets.** Linux x86_64 (primary), Windows x86_64, macOS x86_64/ARM64,
-  `wasm32-wasi`, and static Linux ARM64 / RISC-V64 (musl). See
-  [`docs/PLATFORMS.md`](docs/PLATFORMS.md).
+- **Targets.** Linux x86_64 (primary, CI-tested), Windows x86_64 (CI-built,
+  corpus runs locally), macOS x86_64/ARM64 (cross-compiled Mach-O — no CI, no
+  prebuilt toolchain), `wasm32-wasi`, and static Linux ARM64 / RISC-V64
+  (musl). Tier definitions: [`docs/PLATFORMS.md`](docs/PLATFORMS.md).
 - **Tooling.** `nurlc` (compiler), `nurlfmt` (canonical formatter), `nurl-lsp`
   (language server), `nurlpkg` (package manager + test/bench runner), `nurldoc`
   (API-doc generator), `tools/repl`, DWARF debug info (`--g`), a
@@ -123,8 +124,9 @@ platform-specific shims.
   dedicated security-hardening pass (path-traversal, SSRF, request-smuggling,
   HTTP/2 CONTINUATION-flood + stream-accounting, and clean cross-thread
   listener shutdown) with regression tests.
-- **ext/data services** — `sqlite` (production-hardened), `postgres` (binary
-  protocol, async, LISTEN/NOTIFY, COPY), `mqtt` 5.0 client, `smtp` (mail submission).
+- **ext/data services** — `sqlite` (production-hardened), `mqtt` 5.0 client,
+  `smtp` (mail submission). Postgres and Redis clients live in the registry
+  packages `psql` and `redis` (pure NURL — no libpq, no hiredis).
 - **ext/AI & agents** — `mcp` (+ `client`, `http`, `session`, `stdio`,
   `registry`) and `anthropic` (Claude Messages API incl. streaming SSE +
   tool-use deltas).
@@ -139,7 +141,8 @@ platform-specific shims.
 
 ### Targets & tooling
 
-- Native: Linux x86_64, Windows x86_64, macOS x86_64/ARM64.
+- Native: Linux x86_64 (CI-tested), Windows x86_64 (CI-built), macOS
+  x86_64/ARM64 (cross-compiled, not CI-tested, no prebuilt toolchain).
 - WebAssembly `wasm32-wasi` (WASI SDK), including the compiler itself running
   in the browser playground, and **whole neural networks running client-side
   in the browser** — the pure-NURL ONNX runtime compiled to wasm, executing
@@ -160,15 +163,16 @@ platform-specific shims.
   (completion, references, unused-symbol lint), `nurlpkg` package manager,
   DWARF debugging, VS Code extension, and the `nurlapi` compiler-as-a-service
   container (playground + cross-compile endpoints + public MCP server).
-- Showcase programs in [`examples/`](examples/) including a Game Boy emulator
-  (with sound), a C64 demo, ESP32 / Milk-V embedded targets, and a
-  Push-To-Talk distributed voice app (`pttvoice/`).
+- Showcase programs: a Game Boy emulator (with sound), a C64 demo and ESP32
+  targets in [`examples/`](examples/), Milk-V Duo programs in
+  [`duo/`](duo/), and a Push-To-Talk distributed voice app (`pttvoice/`).
 - **Package ecosystem** on the live registry (`reg.nurl-lang.org`,
   `nurlpkg install`): GPU compute (`gpu` — CUDA driver + NVRTC, a CPU
   fallback backend, a static-kernel backend, and a **WebGPU / WGSL backend**;
   `gpukit`, `tensor`), pure-NURL vision and ML (`image` PNG/JPEG codecs,
   `onnx` runtime, `objdet`, `yoloe`, `iforest`, `anomaly`), distributed
   compute (`swarm`, `swarm-mcp`), web (`template` HTML templating, `http`),
+  database clients (`psql`, `redis` — pure NURL),
   and application scaffolding (`cli`, `cas`, `wasmbuilder`, `nurl-mcp`).
   Installed tools carry runtime data via the manifest's `[install] assets`
   mechanism (staged into `<prefix>/share/<name>/`).
@@ -185,9 +189,9 @@ platform-specific shims.
   published tarball with a project Ed25519 key; `nurlpkg` pins the public key
   and verifies the detached minisign signature — using a pure-NURL BLAKE2b +
   minisign implementation (`std/hash_blake2b`, `std/minisign`) — before
-  unpacking, **mandatory and fail-closed**. Release archives are signed and
-  the installers verify them against a pinned key too, so a compromised CDN
-  can't substitute bytes at either layer.
+  unpacking, **mandatory and fail-closed**. Release archives are signed too;
+  the installers always verify the checksum fail-closed and verify the
+  minisign signature against a pinned key when `minisign` is available.
 
 ---
 

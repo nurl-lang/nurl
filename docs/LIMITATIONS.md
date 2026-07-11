@@ -60,7 +60,7 @@ before relying on any thread-safety expectation.
 | `import_decl` is a static inline-include (like `#include`) — the imported file is compiled into the same LLVM module | Avoid importing files that define `main`; avoid circular imports |
 | Import alias (`` $ `path` alias ``) rewrites top-level `@`-functions, struct/enum types, enum variants, and global `:` constants to `alias__name`. FFI decls (`& "lib" @ name`) and trait/impl methods are intentionally NOT renamed — FFI symbols resolve at the linker by literal C-ABI name, and trait methods are mangled by the impl-target type | Use `pub` to scope FFI declarations to the importing file if collision is a risk |
 | `pub` visibility covers `@`-functions, struct/enum types, enum variants (inheriting their enum's flag), and global `:` constants. Files with no `pub` decl stay in legacy mode (everything public, backwards-compat). FFI and trait/impl decls accept `pub` forward-compat but do not enforce | Mark each cross-file API entry with `pub`; the diagnostic `private X 'Y' is not visible across files` points at the leaked-private use site |
-| `$`-import dedup is keyed on the path string with a small normalisation (leading `./` is stripped). Symlink-equivalent paths still collide as separate imports | Stick to the project-root-relative form (`stdlib/foo.nu`, no `./` prefix) |
+| `$`-import dedup keys on the `realpath(3)`-canonical file, so the same file reached through different symlink chains compiles exactly once; only when `realpath` itself fails (exotic filesystems) does dedup fall back to the normalised path string | None needed in practice; prefer the project-root-relative form (`stdlib/foo.nu`) for readability |
 
 ## Grammar
 

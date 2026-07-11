@@ -813,14 +813,15 @@
 // wasm build path (nurlapi) — a wasm module's undefined FFI symbols become
 // imports the host runtime (e.g. packages/wasmtime) provides.
 : ~ i g_ffi_host_imports 0
-// `--strict-borrowck` (off by default) enables two additional checks:
+// `--strict-borrowck` (off by default) enables three additional checks:
 // (1) aliased mutation through `. obj field` arguments at the same
-// call site — a generalisation of the bare-identifier-only check, and
+// call site — a generalisation of the bare-identifier-only check,
 // (2) `# *T` raw-pointer escape from owned bindings whose pointer may
-// outlive the binding's drop. Both are diagnostic-only and emit
-// `error:` like the rest of the borrowck. Disabled by default because
-// the extension has a meaningful false-positive rate against existing
-// stdlib code.
+// outlive the binding's drop, and (3) consuming a MAYBE-moved binding
+// (the conditional double-free — see bck_diag_maybe). All are
+// diagnostic-only and emit `error:` like the rest of the borrowck.
+// Disabled by default because the extensions have a meaningful
+// false-positive rate against existing stdlib code.
 : ~ i g_strict_borrowck 0  // 1 when --strict-borrowck passed on the CLI
 : ~ i g_bck 0  // sym handle for the borrow checker's per-function
 //  data (statement list etc.); allocated in main()

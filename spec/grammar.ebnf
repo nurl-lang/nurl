@@ -573,7 +573,7 @@ cast_expr = '#' type expr [ INT ] ;
    still required.
 
    Each non-wildcard arm names a variant (or a BOOL for ?T tag) and then
-   up to 3 payload slots. A payload slot is either:
+   one slot per payload (no fixed cap). A payload slot is either:
      - IDENT   → binds the payload at that position
      - INT     → compares equality with the payload value
    The pattern name may be a BOOL literal (T/F) when matching an ?T whose

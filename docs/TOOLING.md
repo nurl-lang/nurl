@@ -1,9 +1,11 @@
 # Tooling
 
-The build produces three host tools alongside the compiler: a formatter
-(`nurlfmt`), a language server (`nurl-lsp`), and a package manager
-(`nurlpkg`). An editor extension wires the LSP into VS Code / Cursor /
-Windsurf. On top of those, registry packages extend the toolchain itself:
+Host tools alongside the compiler: a formatter (`nurlfmt`, built by
+`build.sh`), a language server (`nurl-lsp`), a package manager
+(`nurlpkg`), an API-doc generator (`nurldoc`) and a REPL (`tools/repl`)
+— each of the latter four builds with its own `tools/<name>/build.sh`.
+An editor extension wires the LSP into VS Code / Cursor / Windsurf. On
+top of those, registry packages extend the toolchain itself:
 `nurl-mcp` (LLM agents drive the local compiler over MCP) and the wasm pair
 `wasmbuilder` / `wasmtime` (compile NURL to wasm32-wasi and run it, fully
 locally).
@@ -69,8 +71,8 @@ from a published tarball. Manifests use a TOML subset compatible with the
 `stdlib/ext/toml.nu` parser.
 
 ```bash
+mkdir demo-app && cd demo-app
 build/nurlpkg init demo-app                  # write nurl.toml skeleton
-cd demo-app
 build/nurlpkg add http-router --path ../router --version 0.2.0
 build/nurlpkg install                        # symlink deps/, write nurl.lock
 build/nurlpkg verify                         # CI gate: exit 1 on lockfile drift
@@ -82,8 +84,10 @@ nurlpkg publish                              # pack + upload (token via
                                              # `nurlpkg login`)
 ```
 
-Subcommands: `init`, `info`, `deps`, `add`, `remove`, `install`, `lock`,
-`verify`, `publish`, `login`, `version`, `help`.
+Subcommands: `init`, `info` (manifest or registry package), `deps`,
+`add`, `remove`, `install` (project deps, or a registry program/library),
+`lock`, `verify`, `publish`, `login`, `logout [--revoke]`, `search`,
+`yank` / `unyank`, `test`, `bench`, `version`, `help`.
 
 ## MCP server (`nurl-mcp`)
 
@@ -104,11 +108,11 @@ nurlpkg install wasmbuilder     # NURL → wasm32-wasi, fully local
 nurlpkg install wasmtime        # pure-NURL wasm runtime
 
 wasmbuilder program.nu          # → program.wasm
-wt run program.wasm
+wasmtime run program.wasm
 ```
 
 `wasmbuilder` drives nurlc, retargets the emitted IR for wasm32-wasi, and
 links with the toolchain's bundled `zig cc` (wasi-libc + wasm-ld built in);
-`wasmbuilder --doctor` shows how everything resolves on your machine. `wt`
-runs wasm32-wasi modules (preopened dirs, `--allow-gpu` for the CUDA host
-bridge). Both packages' READMEs carry the full option surface.
+`wasmbuilder --doctor` shows how everything resolves on your machine.
+`wasmtime` runs wasm32-wasi modules (preopened dirs, `--allow-gpu` for the
+CUDA host bridge). Both packages' READMEs carry the full option surface.

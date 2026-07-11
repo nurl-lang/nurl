@@ -1,18 +1,20 @@
 # Networking
 
 NURL reaches the network through a pure-POSIX socket layer in the C runtime
-(`nurl_tcp_*` / `nurl_udp_*` / `nurl_dns_*`) — no libcurl, no framework. Four
-primitives, every one dual-stack IPv4/IPv6 and integrated with the fiber
-reactor for async I/O.
+(`nurl_tcp_*` / `nurl_udp_*` / `nurl_dns_*`) — no framework, and no libcurl
+at this layer. (The stdlib HTTP *client* `ext/http.nu` and the reverse proxy
+are separate, optional libcurl bridges.) Four primitives, every one
+dual-stack IPv4/IPv6 and integrated with the fiber reactor for async I/O.
 
 - **TCP server** — `tcp_listen` / `tcp_listen_tls` + `tcp_accept`, with a full
   HTTP/1.1 server stack on top (`stdlib/ext/http_*` — routing, static files,
   middleware, multipart, WebSockets, TLS with SNI + ALPN + mTLS + live cert
   reload; see [HTTPS / TLS](#https--tls) below).
-- **TCP client** — `tcp_connect` / `tcp_connect_tls`. TLS client handshake
-  with SNI; the `verify` flag turns on peer-certificate chain + host-name
-  verification against the system trust store. The primitive behind the MQTT
-  client and any outbound TLS application.
+- **TCP client** — `tcp_connect_tls` (TLS client handshake with SNI; the
+  `verify` flag turns on peer-certificate chain + host-name verification
+  against the system trust store — the primitive behind any outbound TLS
+  application). A plain-TCP connect is currently provided by the MQTT
+  module (`ext/mqtt.nu`, `tcp_connect`), not by `std/net.nu`.
 - **UDP** (`stdlib/std/udp.nu`) — `udp_bind` (dual-stack wildcard),
   `udp_connect`, `udp_send_to` / `udp_recv_from`, connected-mode `udp_send` /
   `udp_recv`, broadcast and multicast (`udp_join_group` / `_leave_group` /
@@ -79,14 +81,16 @@ What it covers:
 
 ## HTTPS / TLS
 
-TLS (server and client) is provided by the runtime's `libssl` integration
-(build-time dependency: `libssl`, via pkg-config). The HTTP server stack
-picks it up transparently — swap `tcp_listen` for `tcp_listen_tls`.
+The runtime offers a `libssl`-backed TLS integration (**optional**
+dependency — required only by the `tcp_connect_tls` / `tcp_listen_tls`
+family below; see the pure-NURL alternative in the next section). The HTTP
+server stack picks it up transparently — swap `tcp_listen` for
+`tcp_listen_tls`.
 
 | Capability | Notes |
 |---|---|
 | **TLS server-side** — `tcp_listen_tls host port cert_path key_path → !TcpListener NetErr` | HttpServer integrates without code changes. |
-| **TLS client-side** — `tcp_connect_tls host port verify` | Client handshake with SNI; `verify` enables peer-certificate chain + host-name verification against the system trust store. The primitive behind the MQTT client and any outbound TLS. |
+| **TLS client-side** — `tcp_connect_tls host port server_name verify` | Client handshake with SNI; `verify` enables peer-certificate chain + host-name verification against the system trust store. The primitive behind the MQTT client and any outbound TLS. |
 | TLS 1.2 minimum | TLS 1.0 / 1.1 / SSL 3.0 disabled in the SSL_CTX. |
 | **SNI** (RFC 6066 §3) — `tcp_tls_add_sni listener hostname cert key` | Multi-tenant HTTPS — per-hostname cert/key pairs on one listener; handshake-time selection; no-match falls through to the default cert. |
 | **ALPN** (RFC 7301) — `tcp_listen_tls_with_alpn`; `tcp_alpn_protocol conn` | Required by HTTP/2-over-TLS (RFC 9113 §3.3). |
@@ -105,8 +109,7 @@ X25519 or NIST P-256, verifies the chain against the system trust store by
 default, and runs on a host with nothing installed. `tls_attach` upgrades
 an already-connected socket, which is what STARTTLS-style protocols need.
 
-Because of this, the runtime's `libssl` is now an **optional** dependency:
-a program that never calls `tcp_connect_tls` / `tcp_listen_tls` (a
+A program that never calls `tcp_connect_tls` / `tcp_listen_tls` (a
 pure-NURL-TLS client, or plain TCP) links `libc` only. The
 [`psql`](../packages/psql) package builds on the pure-NURL TLS client to
 reach PostgreSQL securely with no libpq and no OpenSSL.
