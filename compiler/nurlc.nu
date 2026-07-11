@@ -741,6 +741,17 @@
 // (`T x → ^ x  F _ → …`), not a stray XOR operand — so the warning is
 // suppressed inside arm bodies. Save/restore (nested matches).
 : ~ i g_in_match_arm 0
+
+// Cheap per-function gate for the Phase 2D slice machinery: most
+// functions declare no owned slices at all, and the sanitized
+// self-compile runs tight against CI memory — skip the per-arm
+// `__slice_decls__` snapshot/walk (each a strdup'ing sym_get) entirely
+// unless this function has actually declared one. Set by
+// mem_slice_decl_add, reset at function entry. A closure body lifted
+// mid-function inherits the enclosing value — a stale 1 only costs the
+// snapshot, never correctness (the drop walks the real lists).
+: ~ i g_fn_slice_decls 0
+
 : ~ i g_defer_count 0  // number of active defers in the current function
 : ~ i g_generic_syms 0  // sym handle for stored generic function templates (Group E)
 : ~ i g_generic_struct_syms 0  // generic struct templates (Group E-structs).
@@ -6063,7 +6074,7 @@
     { = old_strs_t ( nurl_sym_get syms `__owned_strings__` )
         = old_structs_t ( nurl_sym_get syms `__owned_struct_fields__` )
         = old_user_t ( nurl_sym_get syms `__user_drops__` )
-        = old_slices_t ( nurl_sym_get syms `__slice_decls__` )
+        ? != 0 g_fn_slice_decls { = old_slices_t ( nurl_sym_get syms `__slice_decls__` ) } {}
         ( nurl_sym_push syms )
     } {}
     ( nurl_sym_def syms `__cur_lbl__` lt )
@@ -6098,7 +6109,7 @@
         { ( mem_drop_new_strings syms cg old_strs_t )
             ( mem_drop_new_struct_fields syms cg old_structs_t )
             ( mem_drop_new_user_drops syms cg old_user_t )
-            ( mem_drop_new_slices syms cg old_slices_t ) } {}
+            ? != 0 g_fn_slice_decls { ( mem_drop_new_slices syms cg old_slices_t ) } {} } {}
         ( mem_drop_new_closure_envs syms cg old_closure_t )
         ( nurl_print `  br label %` ) ( nurl_print lend ) ( emit_dbg_eol )
     } {}
@@ -6113,7 +6124,7 @@
     { = old_strs_e ( nurl_sym_get syms `__owned_strings__` )
         = old_structs_e ( nurl_sym_get syms `__owned_struct_fields__` )
         = old_user_e ( nurl_sym_get syms `__user_drops__` )
-        = old_slices_e ( nurl_sym_get syms `__slice_decls__` )
+        ? != 0 g_fn_slice_decls { = old_slices_e ( nurl_sym_get syms `__slice_decls__` ) } {}
         ( nurl_sym_push syms )
     } {}
     ( nurl_sym_def syms `__cur_lbl__` le )
@@ -6135,7 +6146,7 @@
         { ( mem_drop_new_strings syms cg old_strs_e )
             ( mem_drop_new_struct_fields syms cg old_structs_e )
             ( mem_drop_new_user_drops syms cg old_user_e )
-            ( mem_drop_new_slices syms cg old_slices_e ) } {}
+            ? != 0 g_fn_slice_decls { ( mem_drop_new_slices syms cg old_slices_e ) } {} } {}
         ( mem_drop_new_closure_envs syms cg old_closure_e )
         ( nurl_print `  br label %` ) ( nurl_print lend ) ( emit_dbg_eol )
     } {}
@@ -6888,7 +6899,7 @@
             { = old_strs_m ( nurl_sym_get syms `__owned_strings__` )
                 = old_structs_m ( nurl_sym_get syms `__owned_struct_fields__` )
                 = old_user_m ( nurl_sym_get syms `__user_drops__` )
-                = old_slices_m ( nurl_sym_get syms `__slice_decls__` )
+                ? != 0 g_fn_slice_decls { = old_slices_m ( nurl_sym_get syms `__slice_decls__` ) } {}
                 ( nurl_sym_push syms )
             } {}
 
@@ -7445,7 +7456,7 @@
             { ( mem_drop_new_strings syms cg old_strs_m )
                 ( mem_drop_new_struct_fields syms cg old_structs_m )
                 ( mem_drop_new_user_drops syms cg old_user_m )
-                ( mem_drop_new_slices syms cg old_slices_m ) } {}
+                ? != 0 g_fn_slice_decls { ( mem_drop_new_slices syms cg old_slices_m ) } {} } {}
             ? == arm_did_ret 0
             { ( mem_drop_new_closure_envs syms cg old_closure_m ) } {}
             ? != 0 g_auto_drop_strings { ( nurl_sym_pop syms ) } {}
@@ -7706,7 +7717,7 @@
     { = old_strs_fe ( nurl_sym_get syms `__owned_strings__` )
         = old_structs_fe ( nurl_sym_get syms `__owned_struct_fields__` )
         = old_user_fe ( nurl_sym_get syms `__user_drops__` )
-        = old_slices_fe ( nurl_sym_get syms `__slice_decls__` )
+        ? != 0 g_fn_slice_decls { = old_slices_fe ( nurl_sym_get syms `__slice_decls__` ) } {}
         ( nurl_sym_push syms )
     } {}
     = g_did_ret 0
@@ -7723,7 +7734,7 @@
         { ( mem_drop_new_strings syms cg old_strs_fe )
             ( mem_drop_new_struct_fields syms cg old_structs_fe )
             ( mem_drop_new_user_drops syms cg old_user_fe )
-            ( mem_drop_new_slices syms cg old_slices_fe ) } {}
+            ? != 0 g_fn_slice_decls { ( mem_drop_new_slices syms cg old_slices_fe ) } {} } {}
         ( mem_drop_new_closure_envs syms cg old_closure_fe )
         : s next_idx ( nurl_cg_reg cg )
         ( nurl_print `  ` ) ( nurl_print next_idx )
@@ -7787,7 +7798,7 @@
         { = old_strs_lp ( nurl_sym_get syms `__owned_strings__` )
             = old_structs_lp ( nurl_sym_get syms `__owned_struct_fields__` )
             = old_user_lp ( nurl_sym_get syms `__user_drops__` )
-            = old_slices_lp ( nurl_sym_get syms `__slice_decls__` )
+            ? != 0 g_fn_slice_decls { = old_slices_lp ( nurl_sym_get syms `__slice_decls__` ) } {}
             ( nurl_sym_push syms )
         } {}
         ( nurl_sym_def syms `__cur_lbl__` lb )
@@ -7801,7 +7812,7 @@
             { ( mem_drop_new_strings syms cg old_strs_lp )
                 ( mem_drop_new_struct_fields syms cg old_structs_lp )
                 ( mem_drop_new_user_drops syms cg old_user_lp )
-                ( mem_drop_new_slices syms cg old_slices_lp ) } {}
+                ? != 0 g_fn_slice_decls { ( mem_drop_new_slices syms cg old_slices_lp ) } {} } {}
             ( mem_drop_new_closure_envs syms cg old_closure_lp )
             ( nurl_print `  br label %` ) ( nurl_print lc ) ( emit_dbg_eol )
         } {}
@@ -7979,6 +7990,7 @@
 // fall-through would be a use-after-free — only bindings declared
 // during the arm itself may be dropped there.
 @ mem_slice_decl_add i syms s name → v {
+    = g_fn_slice_decls 1
     : s cur ( nurl_sym_get syms `__slice_decls__` )
     ( nurl_sym_def syms `__slice_decls__`
     ? == 0 ( nurl_str_len cur ) name ( nurl_str_cat3 cur ` ` name ) )
@@ -14518,6 +14530,7 @@
     ( nurl_sym_push syms )
     ( nurl_sym_def syms `__owned_slices__` `` )
     ( nurl_sym_def syms `__slice_decls__` `` )
+    = g_fn_slice_decls 0
     ( nurl_sym_def syms `__last_ident_name__` `` )
     ( nurl_sym_def syms `__fn_ret_owned__` `` )
     // Borrow provenance: does THIS function return a borrow (a value that
