@@ -377,10 +377,10 @@ has depth 0. Boundaries that remain: a parameter returned through a
 closure *capture* (`^ \ → … cb …`) rather than a struct field, and
 forward / generic calls, are not yet summarised.
 
-### 2.9 `--strict-borrowck` — two opt-in checks
+### 2.9 `--strict-borrowck` — three opt-in checks
 
 The eight rules above run by default. `--strict-borrowck` (off by
-default) adds two further checks, both diagnostic-only and both emitting
+default) adds three further checks, all diagnostic-only and all emitting
 `error:` like the rest:
 
 1. **Aliased mutation through a field argument.** §2.4 flags an `inout`
@@ -392,8 +392,15 @@ default) adds two further checks, both diagnostic-only and both emitting
    owned binding whose pointer may outlive that binding's drop is
    reported — a narrow check on the otherwise-untracked `*T` surface
    (§3).
+3. **Conditional double-free (the maybe-moved hole, §6.2/§6.5).**
+   Consuming a binding that is *maybe*-moved — freed on one arm of a
+   `?`, still owned on the other — is reported: it is a real
+   double-free on the path where the first free ran. Off by default
+   because it also flags the legitimate mutually-exclusive-frees
+   pattern (free under `cond` here, free under `! cond` later), which
+   the default no-false-positive contract protects.
 
-It is **off by default** because the extension has a meaningful
+It is **off by default** because the extensions have a meaningful
 false-positive rate against existing stdlib code; it is a tightening
 knob for auditing a specific module, not part of the standard contract.
 The default-on eight rules remain the guarantee everything else in this
@@ -590,6 +597,34 @@ deliberately simpler and the equivalence does **not** hold:
   auto-drop base, not a total borrow system that *proves* a program
   safe. Its boundary (§3) is real and intentional, not a TODO list of
   Rust features pending.
+
+Concretely — and this is the comparison that matters — code that
+compiles clean, uses no `*T`, and calls no FFI can still do things
+safe Rust cannot:
+
+1. **Conditionally double-free.** A value freed on one arm of a `?`
+   and then freed again unconditionally is a real double-free on one
+   path, and it is *not* flagged by default — the price of the
+   no-false-positive property (§6.2, §6.3). `--strict-borrowck` closes
+   exactly this hole (§2.9, check 3) at the cost of also flagging the
+   legitimate mutually-exclusive-frees pattern.
+2. **Data-race on shared heap state.** There is **no `Send`/`Sync`
+   system**. The one concrete footgun the compiler does reject is an
+   `Rc` captured into `thread_spawn`; but two threads sharing an
+   `Arc[Vec]` and both mutating the *contents* are entirely
+   unchecked, and a user type that is internally non-thread-safe is
+   not flagged when it crosses a thread boundary
+   ([`LIMITATIONS.md`](LIMITATIONS.md), *Concurrency / thread
+   safety*). `Arc` makes the *refcount* atomic, not your data.
+
+(Integer division by zero used to be a third entry here — it now
+panics with a clear message instead of executing UB.)
+
+So the accurate one-line claim is: **memory-safer than C by
+construction, with the common bug classes machine-checked — not
+memory-safe by proof, and not data-race-free.** Anyone needing the
+latter two guarantees today should reach for Rust; anyone reading a
+"NURL is memory-safe like Rust" claim should be pointed here.
 
 ### 6.6 The gates — how the guarantees are checked
 
