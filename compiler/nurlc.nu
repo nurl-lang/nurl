@@ -1371,6 +1371,30 @@
     ^ loc_id
 }
 
+// A DISubprogram for a synthetic, compiler-generated function — the
+// C-ABI `main` wrapper and the `__jdrop_*` journal thunks. These are
+// real DEFINED functions, so under --g they need their own subprogram
+// AND `!dbg` on any inlinable call they make. Without it the inliner
+// reparents a callee's scoped instructions into a subprogram-less
+// caller — LLVM reports "!dbg attachment points at wrong subprogram
+// for function" and DWARF emission then null-derefs in
+// finalizeModuleInfo at -O2 (DIE::getUnitDie). Returns the sp id, or 0
+// when --g is off; sets g_dbg_current_subprogram / g_dbg_current_loc so
+// emit_call / emit_dbg_eol attach the right location. Pair with
+// dbg_synth_end. Line 0 = artificial (no user source line).
+@ dbg_synth_begin s name → i {
+    ? == g_dbg_enabled 0 { ^ 0 } {}
+    : i sp ( dbg_emit_subprogram name 0 g_dbg_file_id )
+    = g_dbg_current_subprogram sp
+    = g_dbg_current_loc ( dbg_emit_location 0 0 sp )
+    ^ sp
+}
+
+@ dbg_synth_end → v {
+    = g_dbg_current_subprogram 0
+    = g_dbg_current_loc 0
+}
+
 // End-of-module flush. Emits the named-metadata directives
 // (`!llvm.dbg.cu`, `!llvm.module.flags`) followed by every buffered
 // `!N = !DI…` definition in id order. No-op when --g is off.
@@ -3016,7 +3040,11 @@
     { ( nurl_print `, ` ) ( nurl_print argstr ) }
     {}
 
-    ( nurl_print `)\n` )
+    // `!dbg` is required here: the callee is a module-defined closure the
+    // optimizer will inline, and an inlined call with no location leaves
+    // the closure's scoped instructions attached to the wrong subprogram
+    // (DWARF crash at -O2). emit_dbg_eol is a plain `\n` when --g is off.
+    ( nurl_print `)` ) ( emit_dbg_eol )
     ( nurl_set_last_type ret_type )
     res
 }
@@ -8452,12 +8480,22 @@
     : s donekey ( nurl_str_cat `jdrop##` mangle )
     ? != 0 ( nurl_str_len ( nurl_sym_get g_impl_name_syms donekey ) ) { ^ v } {}
     ( nurl_sym_def g_impl_name_syms donekey `1` )
-    ( nurl_print `define void @__jdrop_` ) ( nurl_print mangle )
-    ( nurl_print `(i8* %p) {\nentry:\n` )
+    // The thunk CALLS `@drop__<mangle>` (module-defined, inlinable) — so
+    // under --g it needs its own subprogram + `!dbg` on that call, or the
+    // inliner reparents drop__'s scoped instructions into this otherwise
+    // subprogram-less thunk (see dbg_synth_begin). Text is byte-identical
+    // to the pre-DWARF form when --g is off.
+    : i jsp ( dbg_synth_begin ( nurl_str_cat `__jdrop_` mangle ) )
+    ( nurl_print `define void @__jdrop_` ) ( nurl_print mangle ) ( nurl_print `(i8* %p)` )
+    ? != g_dbg_enabled 0 { ( nurl_print ` !dbg !` ) ( nurl_print ( nurl_str_int jsp ) ) } {}
+    ( nurl_print ` {\nentry:\n` )
     ( nurl_print `  %t = bitcast i8* %p to ` ) ( nurl_print llvm ) ( nurl_print `*\n` )
     ( nurl_print `  %v = load ` ) ( nurl_print llvm ) ( nurl_print `, ` ) ( nurl_print llvm ) ( nurl_print `* %t\n` )
     ( nurl_print `  call void @drop__` ) ( nurl_print mangle )
-    ( nurl_print `(` ) ( nurl_print llvm ) ( nurl_print ` %v)\n  ret void\n}\n` )
+    ( nurl_print `(` ) ( nurl_print llvm ) ( nurl_print ` %v)` ) ( emit_dbg_eol )
+    ( emit_call_term `ret void` )
+    ( nurl_print `}\n` )
+    ( dbg_synth_end )
 }
 
 // ── Closure-env reclamation for `:`-bound capturing closures (§7.4) ──
@@ -15012,15 +15050,23 @@
 }
 
 @ emit_main_wrapper s ret_ty → v {
-    ( emit `define i32 @main(i32 %argc, i8** %argv) {` )
+    // Synthetic C-ABI wrapper. It CALLS the module-defined `@_nurl_main`,
+    // which the optimizer may inline — so under --g it needs a subprogram
+    // and `!dbg` on that call (see dbg_synth_begin). Emit-order and text
+    // are byte-identical to the pre-DWARF form when --g is off.
+    : i msp ( dbg_synth_begin `main` )
+    ( nurl_print `define i32 @main(i32 %argc, i8** %argv)` )
+    ? != g_dbg_enabled 0 { ( nurl_print ` !dbg !` ) ( nurl_print ( nurl_str_int msp ) ) } {}
+    ( nurl_print ` {\n` )
     ( emit `entry:` )
-    ( emiti `call void @nurl_init(i32 %argc, i8** %argv)` )
+    ( emit_call `call void @nurl_init(i32 %argc, i8** %argv)` )
     ? ( seq ret_ty `void` )
-    { ( emiti `call void @_nurl_main()` ) ( emiti `ret i32 0` ) }
-    { ( emiti `%_ret = call i64 @_nurl_main()` )
-        ( emiti `%_exit = trunc i64 %_ret to i32` )
-        ( emiti `ret i32 %_exit` ) }
+    { ( emit_call `call void @_nurl_main()` ) ( emit_call_term `ret i32 0` ) }
+    { ( emit_call `%_ret = call i64 @_nurl_main()` )
+        ( emit_inst `%_exit = trunc i64 %_ret to i32` )
+        ( emit_call_term `ret i32 %_exit` ) }
     ( emit `}` ) ( emit `` )
+    ( dbg_synth_end )
 }
 
 // ── Top-level constant / struct declaration ── : ... ──────────────
