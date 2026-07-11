@@ -6,6 +6,9 @@ https://example.com/path/to/page?a=1&b=2#section => scheme=https user= host=exam
 http://example.com => scheme=http user= host=example.com port=-1 eff=80 path= query= frag= target=/
 https://user:pass@host.example.org:8443/secure?token=abc => scheme=https user=user:pass host=host.example.org port=8443 eff=8443 path=/secure query=token=abc frag= target=/secure?token=abc
 ws://localhost:9001/chat => scheme=ws user= host=localhost port=9001 eff=9001 path=/chat query= frag= target=/chat
+http://host:65535/edge => scheme=http user= host=host port=65535 eff=65535 path=/edge query= frag= target=/edge
+http://host:65536/over => NONE
+http://host:99999999999999/huge => NONE
 wss://stream.example.com/feed => scheme=wss user= host=stream.example.com port=-1 eff=443 path=/feed query= frag= target=/feed
 https://[2001:db8::1]:8080/v6 => scheme=https user= host=2001:db8::1 port=8080 eff=8080 path=/v6 query= frag= target=/v6
 http://[::1]/loopback => scheme=http user= host=::1 port=-1 eff=80 path=/loopback query= frag= target=/loopback

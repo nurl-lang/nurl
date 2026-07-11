@@ -229,17 +229,29 @@ $ `stdlib/core/vec.nu`
         ( string_free scheme ) ( string_free userinfo ) ( string_free host )
         ^ @ ?Url { F # Url 0 }
     } {}
-    // optional :port
+    // optional :port. A port is 0..65535 (RFC 3986 allows *DIGIT, but a
+    // TCP/UDP port that doesn't fit 16 bits is meaningless); a bad or
+    // overflowing port rejects the whole URL rather than wrapping into a
+    // plausible-looking small number.
     : ~ i port -1
     ? & < hp auth_end == ( nurl_str_get in hp ) 58 {
         = hp + hp 1
         : ~ i pv 0
         : ~ b anyd F
+        : ~ b over F
         ~ & < hp auth_end ( __url_is_digit ( nurl_str_get in hp ) ) {
             = pv + * pv 10 - ( nurl_str_get in hp ) 48
+            ? > pv 65535 { = over T } {}
             = anyd T
             = hp + hp 1
         }
+        // An out-of-range port → invalid URL (rather than a 16-bit-wrapped
+        // small number). A bare ':' with no digits stays lenient (no port),
+        // matching the prior behaviour.
+        ? over {
+            ( string_free scheme ) ( string_free userinfo ) ( string_free host )
+            ^ @ ?Url { F # Url 0 }
+        } {}
         ? anyd { = port pv } {}
     } {}
     = pos auth_end
