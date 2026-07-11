@@ -3,6 +3,7 @@
 
 $ `stdlib/std/bytes.nu`
 $ `stdlib/std/fs.nu`
+$ `stdlib/ext/env.nu`
 
 @ show_opt_i s label ? i o → v {
     ?? o {
@@ -177,7 +178,14 @@ $ `stdlib/std/fs.nu`
     ( vec_free [u] h )
 
     // ── Binary file I/O round-trip — write hello then read it back ──
-    : !v IoErr w_rc ( write_file_bytes `/tmp/_nurl_bytes_test.bin` hello )
+    // Portable temp root: %TEMP% on Windows, /tmp elsewhere (a hardcoded
+    // /tmp resolves to C:\tmp on Windows, which need not exist).
+    : String tmproot ( env_var_or `TEMP` `/tmp` )
+    : String bpath ( string_from ( string_data tmproot ) )
+    ( string_push_str bpath `/_nurl_bytes_test.bin` )
+    : String mpath ( string_from ( string_data tmproot ) )
+    ( string_push_str mpath `/_nurl_definitely_does_not_exist.bin` )
+    : !v IoErr w_rc ( write_file_bytes ( string_data bpath ) hello )
     ?? w_rc {
         T _ → ( nurl_print `write ok\n` )
         F e → {
@@ -187,7 +195,7 @@ $ `stdlib/std/fs.nu`
         }
     }
 
-    : !( Vec u ) IoErr r_rc ( read_file_bytes `/tmp/_nurl_bytes_test.bin` )
+    : !( Vec u ) IoErr r_rc ( read_file_bytes ( string_data bpath ) )
     ?? r_rc {
         T rv → {
             : b same ( bytes_eq hello rv )
@@ -204,14 +212,14 @@ $ `stdlib/std/fs.nu`
     }
 
     // Cleanup test file (best-effort).
-    : !v IoErr d_rc ( file_delete `/tmp/_nurl_bytes_test.bin` )
+    : !v IoErr d_rc ( file_delete ( string_data bpath ) )
     ?? d_rc {
         T _ → ( nurl_print `delete ok\n` )
         F _ → ( nurl_print `delete failed\n` )
     }
 
     // Read missing file → IoErr.NotFound
-    : !( Vec u ) IoErr miss ( read_file_bytes `/tmp/_nurl_definitely_does_not_exist.bin` )
+    : !( Vec u ) IoErr miss ( read_file_bytes ( string_data mpath ) )
     ?? miss {
         T v → { ( nurl_print `WRONG missing ok\n` ) ( vec_free [u] v ) }
         F e → {

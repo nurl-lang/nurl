@@ -8,6 +8,7 @@
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/fs.nu`
+$ `stdlib/ext/env.nu`
 $ `stdlib/std/sort.nu`
 $ `stdlib/std/cmp.nu`
 
@@ -93,12 +94,20 @@ $ `stdlib/std/cmp.nu`
 }
 
 @ main → i {
+    // Portable temp root: %TEMP% on Windows, /tmp elsewhere (a hardcoded
+    // /tmp resolves to C:\tmp on Windows, which need not exist).
+    : String tmp ( env_var_or `TEMP` `/tmp` )
+    : s tmproot ( string_data tmp )
+
     // ── B6 fs_tempfile (standalone: create, assert, delete, free) ──
-    : !String IoErr tro ( fs_tempfile `/tmp` `nurlglob_` )
+    : !String IoErr tro ( fs_tempfile tmproot `nurlglob_` )
     ?? tro {
         T p → {
+            : String want ( string_from tmproot )
+            ( string_push_str want `/nurlglob_` )
             ( nurl_print `tempfile_ok=` )
-            ( nurl_print ? ( __starts_with ( string_data p ) `/tmp/nurlglob_` ) `T` `F` ) ( nurl_print `\n` )
+            ( nurl_print ? ( __starts_with ( string_data p ) ( string_data want ) ) `T` `F` ) ( nurl_print `\n` )
+            ( string_free want )
             : !v IoErr _d ( file_delete ( string_data p ) )
             ?? _d { T _ → {} F _ → {} }
             ( string_free p )
@@ -108,8 +117,9 @@ $ `stdlib/std/cmp.nu`
 
     // Unique root dir, fully owned (rootstr); `root` is a borrowed view.
     // getpid keeps it collision-free without printing into the golden.
-    : String rootstr ( string_with_cap 48 )
-    ( string_push_str rootstr `/tmp/nurlglob_root_` )
+    : String rootstr ( string_with_cap 96 )
+    ( string_push_str rootstr tmproot )
+    ( string_push_str rootstr `/nurlglob_root_` )
     ( string_push_str rootstr ( nurl_str_int ( getpid ) ) )
     : s root ( string_data rootstr )
     : !v IoErr _rm0 ( dir_remove_all root )  // clear any stale tree

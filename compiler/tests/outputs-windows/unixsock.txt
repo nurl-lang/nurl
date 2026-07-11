@@ -1,7 +1,0 @@
-COMPILE OK
-LINK FAIL
-warning: overriding the module target triple with x86_64-pc-windows-msvc19.44.35222 [-Woverride-module]
-1 warning generated.
-lld-link: error: undefined symbol: socketpair
->>> referenced by unixsock.o:(unix_socketpair)
-clang: error: linker command failed with exit code 1 (use -v to see invocation)

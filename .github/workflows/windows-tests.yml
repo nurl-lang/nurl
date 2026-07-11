@@ -13,7 +13,15 @@ name: windows-tests
 on:
   push:
     branches: [main]
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      update_goldens:
+        description: >-
+          Regenerate compiler/tests/outputs-windows/ goldens on the runner
+          (run_tests.ps1 -Update) and upload them as an artifact instead of
+          gating. Download the artifact, review the diff, commit.
+        type: boolean
+        default: false
 
 jobs:
   windows:
@@ -32,5 +40,28 @@ jobs:
       - name: build.bat (bootstrap fixed point + Windows golden corpus)
         # pwsh 7 is preinstalled on windows-latest, so build.bat runs
         # run_tests.ps1; a missing pwsh now exits non-zero by design.
+        if: ${{ !inputs.update_goldens }}
         run: call build.bat
         shell: cmd
+
+      # ── Golden regeneration mode (workflow_dispatch only) ──────────
+      # The Windows goldens can only be produced on Windows; this runner
+      # IS the canonical environment. Build without tests, then rewrite
+      # every golden and publish the tree for review + commit.
+      - name: build.bat --no-tests (golden update mode)
+        if: ${{ inputs.update_goldens }}
+        run: call build.bat --no-tests
+        shell: cmd
+
+      - name: Regenerate Windows goldens
+        if: ${{ inputs.update_goldens }}
+        run: pwsh -NoProfile -ExecutionPolicy Bypass -File compiler/tests/run_tests.ps1 -Update
+        shell: cmd
+
+      - name: Upload regenerated goldens
+        if: ${{ inputs.update_goldens }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: outputs-windows
+          path: compiler/tests/outputs-windows/
+          if-no-files-found: error
