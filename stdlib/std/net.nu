@@ -321,6 +321,22 @@ $ `stdlib/std/pkey.nu`
     ^ ( tls_alpn_selected # *TlsConn tp )
 }
 
+// Open a plain (unencrypted) TCP client connection. Returns a
+// polymorphic TcpConn (kind 0) usable with the same tcp_read/tcp_write
+// family as accepted connections. For an encrypted connection use
+// tcp_connect_tls below.
+@ tcp_connect s host i port → !TcpConn NetErr {
+    : i craw ( nurl_tcp_connect host port )
+    ? == craw 0 { ^ @ !TcpConn NetErr { F # NetErr NetOther } } {}
+    : i ek ( nurl_tcp_err_kind craw )
+    ? != ek 0 {
+        ( nurl_tcp_close craw )
+        ^ @ !TcpConn NetErr { F ( __net_err_of ek ) }
+    } {}
+    : s crp # s craw
+    ^ @ !TcpConn NetErr { T @ TcpConn { crp 0 0 } }
+}
+
 // Open a verified (or, with verify = 0, encrypted-only) pure-TLS client
 // connection. Returns a polymorphic TcpConn (kind 1) whose reads/writes
 // dispatch to the pure client stack.

@@ -22,11 +22,6 @@ $ `stdlib/std/time.nu`
 $ `stdlib/ext/env.nu`
 $ `stdlib/core/string.nu`
 
-// Client-side FFI: blocking TCP connect (runtime §18b — landed via
-// the MQTT work but not exposed in std/net.nu yet). Declared
-// locally; same C symbol as mqtt.nu's binding.
-& `libc` @ nurl_tcp_connect s host i port → i
-
 : ~ i echoed 0
 : ~ i client_match 0
 
@@ -60,40 +55,39 @@ $ `stdlib/core/string.nu`
                 }
             }
 
+            // Client uses std/net.nu's tcp_connect — the public
+            // plain-TCP client connect this test also serves to pin.
             : ( @ v ) client \ → v {
                 ( sleep_ms 50 )
-                : i craw ( nurl_tcp_connect `127.0.0.1` 18910 )
-                ? == craw 0 {
-                    ( chan_send [i] done 0 )
-                } {
-                    : i ek ( nurl_tcp_err_kind craw )
-                    ? != ek 0 {
-                        ( nurl_tcp_close craw )
-                        ( chan_send [i] done 0 )
-                    } {
-                        : s msg `hi`
-                        : i wn ( nurl_tcp_write craw msg 2 )
-                        ? != wn 2 {
-                            ( nurl_tcp_close craw )
-                            ( chan_send [i] done 0 )
-                        } {
-                            : s buf ( nurl_alloc 16 )
-                            ( nurl_poke buf 0 0 )
-                            ( nurl_poke buf 1 0 )
-                            : i rdn ( nurl_tcp_read craw buf 16 )
-                            ? == rdn 2 {
-                                : i b0 ( nurl_peek buf 0 )
-                                : i lo & b0 255
-                                ? == lo 104 {
-                                    : i hi & / b0 256 255
-                                    ? == hi 105 {
-                                        = client_match 1
-                                    } {}
-                                } {}
-                            } {}
-                            ( nurl_free buf )
-                            ( nurl_tcp_close craw )
-                            ( chan_send [i] done 1 )
+                ?? ( tcp_connect `127.0.0.1` 18910 ) {
+                    F e → ( chan_send [i] done 0 )
+                    T c → {
+                        : ( Vec u ) msg ( vec_new [u] )
+                        ( vec_push [u] msg # u 104 )
+                        ( vec_push [u] msg # u 105 )
+                        : !v NetErr wr ( tcp_write_all c msg )
+                        ( vec_free [u] msg )
+                        ?? wr {
+                            F e2 → {
+                                ( tcp_close_conn c )
+                                ( chan_send [i] done 0 )
+                            }
+                            T _ → {
+                                : !( Vec u ) NetErr rd ( tcp_read_chunk c 16 )
+                                ?? rd {
+                                    T v → {
+                                        ? == ( vec_len [u] v ) 2 {
+                                            : i b0 ?? ( vec_get [u] v 0 ) { T x → # i x F → 0 }
+                                            : i b1 ?? ( vec_get [u] v 1 ) { T x → # i x F → 0 }
+                                            ? & == b0 104 == b1 105 { = client_match 1 } {}
+                                        } {}
+                                        ( vec_free [u] v )
+                                    }
+                                    F e3 → {}
+                                }
+                                ( tcp_close_conn c )
+                                ( chan_send [i] done 1 )
+                            }
                         }
                     }
                 }

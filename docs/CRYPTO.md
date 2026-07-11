@@ -48,11 +48,11 @@ separate, explicitly-named `tls_connect_insecure`.
 All key, nonce, salt and blinding-factor entropy comes from one runtime
 bridge, `nurl_rand_fill`, which selects the OS CSPRNG per platform —
 `getrandom(2)` on Linux, `arc4random_buf` on macOS, `BCryptGenRandom` on
-Windows, `/dev/urandom` otherwise. The crypto modules (`std/tls.nu`,
-`std/rsa.nu`, `std/x509_gen.nu`) each check its return value and **fail
-closed** (panic) rather than proceed with predictable bytes. Note:
-`std/random.nu`'s convenience draws (`rand_u64`, `rand_hex_str`) do **not**
-check the return value — do not use them for key material. `std/rng.nu`
+Windows, `/dev/urandom` otherwise. Every draw — the crypto modules
+(`std/tls.nu`, `std/rsa.nu`, `std/x509_gen.nu`) and `std/random.nu`'s
+convenience draws (`rand_u64`, `rand_hex_str`) alike — checks its return
+value and **fails closed** (panics) rather than proceed with predictable
+bytes. `std/rng.nu`
 (xoshiro256\*\*) is a separate, clearly-marked **non-cryptographic** PRNG
 for simulations and is never used by this stack.
 

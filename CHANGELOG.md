@@ -10,6 +10,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`std/random.nu` draws fail closed.** `rand_u64` / `rand_hex_str` now
+  check `nurl_rand_fill`'s return and panic when every OS entropy source
+  failed (the runtime would otherwise degrade to a non-cryptographic
+  LCG) — the same contract the tls/rsa/x509 draws already enforced.
+
 - **Self-compiling the compiler takes 366 MB instead of 13.6 GB** (and
   3.0 s instead of 10.1 s). Instrumented per-site allocation counters
   attributed 11.9 GB of the peak to one function — the borrow checker's
@@ -23,6 +28,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`std/net.nu` gains `tcp_connect`** — the plain-TCP client connect,
+  returning `!TcpConn NetErr` like its TLS siblings. The MQTT module's
+  private duplicate (which returned `MqttErr`) is gone; `async_tcp`'s
+  local FFI shim now uses the public API.
 - **`--strict-borrowck` closes the conditional double-free hole.** A
   value freed on one arm of a `?` and freed again unconditionally — a
   real double-free on the path where the first free ran — is now an

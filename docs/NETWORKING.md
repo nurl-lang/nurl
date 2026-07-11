@@ -10,11 +10,10 @@ dual-stack IPv4/IPv6 and integrated with the fiber reactor for async I/O.
   HTTP/1.1 server stack on top (`stdlib/ext/http_*` — routing, static files,
   middleware, multipart, WebSockets, TLS with SNI + ALPN + mTLS + live cert
   reload; see [HTTPS / TLS](#https--tls) below).
-- **TCP client** — `tcp_connect_tls` (TLS client handshake with SNI; the
-  `verify` flag turns on peer-certificate chain + host-name verification
-  against the system trust store — the primitive behind any outbound TLS
-  application). A plain-TCP connect is currently provided by the MQTT
-  module (`ext/mqtt.nu`, `tcp_connect`), not by `std/net.nu`.
+- **TCP client** — `tcp_connect` (plain) / `tcp_connect_tls` (TLS client
+  handshake with SNI; the `verify` flag turns on peer-certificate chain +
+  host-name verification against the system trust store — the primitive
+  behind any outbound TLS application).
 - **UDP** (`stdlib/std/udp.nu`) — `udp_bind` (dual-stack wildcard),
   `udp_connect`, `udp_send_to` / `udp_recv_from`, connected-mode `udp_send` /
   `udp_recv`, broadcast and multicast (`udp_join_group` / `_leave_group` /

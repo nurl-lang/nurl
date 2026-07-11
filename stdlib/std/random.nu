@@ -25,7 +25,7 @@ $ `stdlib/core/string.nu`
 // Single syscall-shaped runtime bridge. Returns 1 on success, 0 on a
 // total entropy failure (which the degraded /dev/urandom-or-PRNG fallback
 // makes impossible on every supported target). Platform-branched in C:
-// getrandom(2) on Linux, arc4random_buf on macOS/BSD, BCryptGenRandom on
+// getrandom(2) on Linux, arc4random_buf on macOS, BCryptGenRandom on
 // Windows, /dev/urandom otherwise.
 & `c` @ nurl_rand_fill *u buf i n → i
 
@@ -37,7 +37,12 @@ $ `stdlib/core/string.nu`
 
 @ rand_u64 → i {
     : s buf ( nurl_zalloc 8 )
-    ( nurl_rand_fill # *u buf 8 )
+    : i r ( nurl_rand_fill # *u buf 8 )
+    // Fail closed: nurl_rand_fill returns 0 only when every OS entropy
+    // source failed and the runtime degraded to a non-cryptographic LCG.
+    // Proceeding would hand predictable bytes to whoever asked for random
+    // ones — panic instead (same contract as the tls/rsa/x509 draws).
+    ? == r 0 { ( nurl_panic `random: CSPRNG (nurl_rand_fill) failed` ) } {}
     : *u p # *u buf
     : ~ i v 0
     : ~ i k 0
@@ -75,7 +80,8 @@ $ `stdlib/core/string.nu`
     ? <= n 0 { ^ ( string_with_cap 0 ) } {}
     : i cap ? > n 4096 4096 n
     : s buf ( nurl_zalloc cap )
-    ( nurl_rand_fill # *u buf cap )
+    : i r ( nurl_rand_fill # *u buf cap )
+    ? == r 0 { ( nurl_panic `random: CSPRNG (nurl_rand_fill) failed` ) } {}
     : *u p # *u buf
     : String out ( string_with_cap * cap 2 )
     : ~ i k 0
