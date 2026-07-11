@@ -246,6 +246,10 @@ $results = $names | ForEach-Object -ThrottleLimit $Jobs -Parallel {
     # ── is_skipped (name-based) ─────────────────────────────────
     $skip = $false
     if ($name -match '(_mod|_helper|_lib)$') { $skip = $true }
+    # POSIX-only surfaces with no Windows equivalent: termios raw mode and
+    # AF_UNIX socketpair. Their link errors are environment text (lld/MSVC
+    # version-dependent), so golden-ing the failure is brittle — skip.
+    elseif (@('term_basic','unixsock') -contains $name) { $skip = $true }
     elseif ($name -like 'http_*') {
         $httpDefault = @('http_request_parser','http_response_builder','http_options','http_router',
                          'http_static_traversal','http_extras','http_middleware','http_form',
