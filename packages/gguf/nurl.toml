@@ -1,0 +1,7 @@
+[package]
+name = "gguf"
+version = "0.1.0"
+description = "Bulletproof GGUF container toolkit — parse, verify, write and dequantise the ggml-ecosystem tensor format (llama.cpp, whisper.cpp, stable-diffusion.cpp) in pure NURL. The parser treats every file as hostile input: each count, length and offset is validated against the real file size before anything is allocated or read, allocations are proportional to bytes actually consumed (never to what a header claims), and malformed, truncated or adversarial files are a clean error — never a crash, hang or unbounded allocation, proven by a corruption battery plus python-crafted attack files in tests/. mmap-backed and lazy: metadata and the tensor table are parsed up front, tensor bytes are addressed straight out of the mapping so a multi-GB model costs no RAM to inspect. Ships a spec-exact v3 writer (the reader's round-trip partner, bit-for-bit under `gguf selftest`), host-side scalar dequantisation for F32/F64/F16/BF16/Q4_0/Q4_1/Q8_0 (the golden oracle for any GPU dequant kernel — verified bit-identical against independent decodes of real llama.cpp models), and a CLI: `gguf info/dump/kv/tensors/verify/export/gen/selftest`. The foundation of nurllama and any tool that needs to read model weights."
+license = "MIT OR Apache-2.0"
+
+[dependencies]
