@@ -6057,11 +6057,13 @@
     : ~ s old_strs_t ``
     : ~ s old_structs_t ``
     : ~ s old_user_t ``
+    : ~ s old_slices_t ``
     : ~ s old_closure_t ( nurl_sym_get syms `__owned_closure_envs__` )
     ? != 0 g_auto_drop_strings
     { = old_strs_t ( nurl_sym_get syms `__owned_strings__` )
         = old_structs_t ( nurl_sym_get syms `__owned_struct_fields__` )
         = old_user_t ( nurl_sym_get syms `__user_drops__` )
+        = old_slices_t ( nurl_sym_get syms `__slice_decls__` )
         ( nurl_sym_push syms )
     } {}
     ( nurl_sym_def syms `__cur_lbl__` lt )
@@ -6095,7 +6097,8 @@
         ? & != 0 g_auto_drop_strings ( seq tt2 `void` )
         { ( mem_drop_new_strings syms cg old_strs_t )
             ( mem_drop_new_struct_fields syms cg old_structs_t )
-            ( mem_drop_new_user_drops syms cg old_user_t ) } {}
+            ( mem_drop_new_user_drops syms cg old_user_t )
+            ( mem_drop_new_slices syms cg old_slices_t ) } {}
         ( mem_drop_new_closure_envs syms cg old_closure_t )
         ( nurl_print `  br label %` ) ( nurl_print lend ) ( emit_dbg_eol )
     } {}
@@ -6104,11 +6107,13 @@
     : ~ s old_strs_e ``
     : ~ s old_structs_e ``
     : ~ s old_user_e ``
+    : ~ s old_slices_e ``
     : ~ s old_closure_e ( nurl_sym_get syms `__owned_closure_envs__` )
     ? != 0 g_auto_drop_strings
     { = old_strs_e ( nurl_sym_get syms `__owned_strings__` )
         = old_structs_e ( nurl_sym_get syms `__owned_struct_fields__` )
         = old_user_e ( nurl_sym_get syms `__user_drops__` )
+        = old_slices_e ( nurl_sym_get syms `__slice_decls__` )
         ( nurl_sym_push syms )
     } {}
     ( nurl_sym_def syms `__cur_lbl__` le )
@@ -6129,7 +6134,8 @@
     { ? & != 0 g_auto_drop_strings ( seq et2 `void` )
         { ( mem_drop_new_strings syms cg old_strs_e )
             ( mem_drop_new_struct_fields syms cg old_structs_e )
-            ( mem_drop_new_user_drops syms cg old_user_e ) } {}
+            ( mem_drop_new_user_drops syms cg old_user_e )
+            ( mem_drop_new_slices syms cg old_slices_e ) } {}
         ( mem_drop_new_closure_envs syms cg old_closure_e )
         ( nurl_print `  br label %` ) ( nurl_print lend ) ( emit_dbg_eol )
     } {}
@@ -6876,11 +6882,13 @@
             : ~ s old_strs_m ``
             : ~ s old_structs_m ``
             : ~ s old_user_m ``
+            : ~ s old_slices_m ``
             : ~ s old_closure_m ( nurl_sym_get syms `__owned_closure_envs__` )
             ? != 0 g_auto_drop_strings
             { = old_strs_m ( nurl_sym_get syms `__owned_strings__` )
                 = old_structs_m ( nurl_sym_get syms `__owned_struct_fields__` )
                 = old_user_m ( nurl_sym_get syms `__user_drops__` )
+                = old_slices_m ( nurl_sym_get syms `__slice_decls__` )
                 ( nurl_sym_push syms )
             } {}
 
@@ -7436,7 +7444,8 @@
             ? & & != 0 g_auto_drop_strings ( seq arm_type `void` ) == arm_did_ret 0
             { ( mem_drop_new_strings syms cg old_strs_m )
                 ( mem_drop_new_struct_fields syms cg old_structs_m )
-                ( mem_drop_new_user_drops syms cg old_user_m ) } {}
+                ( mem_drop_new_user_drops syms cg old_user_m )
+                ( mem_drop_new_slices syms cg old_slices_m ) } {}
             ? == arm_did_ret 0
             { ( mem_drop_new_closure_envs syms cg old_closure_m ) } {}
             ? != 0 g_auto_drop_strings { ( nurl_sym_pop syms ) } {}
@@ -7691,11 +7700,13 @@
     : ~ s old_strs_fe ``
     : ~ s old_structs_fe ``
     : ~ s old_user_fe ``
+    : ~ s old_slices_fe ``
     : ~ s old_closure_fe ( nurl_sym_get syms `__owned_closure_envs__` )
     ? != 0 g_auto_drop_strings
     { = old_strs_fe ( nurl_sym_get syms `__owned_strings__` )
         = old_structs_fe ( nurl_sym_get syms `__owned_struct_fields__` )
         = old_user_fe ( nurl_sym_get syms `__user_drops__` )
+        = old_slices_fe ( nurl_sym_get syms `__slice_decls__` )
         ( nurl_sym_push syms )
     } {}
     = g_did_ret 0
@@ -7711,7 +7722,8 @@
     { ? != 0 g_auto_drop_strings
         { ( mem_drop_new_strings syms cg old_strs_fe )
             ( mem_drop_new_struct_fields syms cg old_structs_fe )
-            ( mem_drop_new_user_drops syms cg old_user_fe ) } {}
+            ( mem_drop_new_user_drops syms cg old_user_fe )
+            ( mem_drop_new_slices syms cg old_slices_fe ) } {}
         ( mem_drop_new_closure_envs syms cg old_closure_fe )
         : s next_idx ( nurl_cg_reg cg )
         ( nurl_print `  ` ) ( nurl_print next_idx )
@@ -7769,11 +7781,13 @@
         : ~ s old_strs_lp ``
         : ~ s old_structs_lp ``
         : ~ s old_user_lp ``
+        : ~ s old_slices_lp ``
         : ~ s old_closure_lp ( nurl_sym_get syms `__owned_closure_envs__` )
         ? != 0 g_auto_drop_strings
         { = old_strs_lp ( nurl_sym_get syms `__owned_strings__` )
             = old_structs_lp ( nurl_sym_get syms `__owned_struct_fields__` )
             = old_user_lp ( nurl_sym_get syms `__user_drops__` )
+            = old_slices_lp ( nurl_sym_get syms `__slice_decls__` )
             ( nurl_sym_push syms )
         } {}
         ( nurl_sym_def syms `__cur_lbl__` lb )
@@ -7786,7 +7800,8 @@
         { ? != 0 g_auto_drop_strings
             { ( mem_drop_new_strings syms cg old_strs_lp )
                 ( mem_drop_new_struct_fields syms cg old_structs_lp )
-                ( mem_drop_new_user_drops syms cg old_user_lp ) } {}
+                ( mem_drop_new_user_drops syms cg old_user_lp )
+                ( mem_drop_new_slices syms cg old_slices_lp ) } {}
             ( mem_drop_new_closure_envs syms cg old_closure_lp )
             ( nurl_print `  br label %` ) ( nurl_print lc ) ( emit_dbg_eol )
         } {}
@@ -7957,6 +7972,45 @@
     >= ( nurl_str_find t `*, i64 }` ) 0
 }
 
+// Record that `name` was DECLARED (`:`-bound) as an owned slice in the
+// current scope. Parallel sideband to `__owned_slices__`, needed by the
+// Phase 2D arm-local slice drop: `= outer [ … ]` inside an arm also
+// calls mem_own_add for an OUTER binding, and freeing that at the arm's
+// fall-through would be a use-after-free — only bindings declared
+// during the arm itself may be dropped there.
+@ mem_slice_decl_add i syms s name → v {
+    : s cur ( nurl_sym_get syms `__slice_decls__` )
+    ( nurl_sym_def syms `__slice_decls__`
+    ? == 0 ( nurl_str_len cur ) name ( nurl_str_cat3 cur ` ` name ) )
+}
+
+// Emit the free of one owned-slice binding's backing buffer: load the
+// slice struct from the binding's alloca, extract the data pointer,
+// free it. Symtab lookup is innermost-scope, so inside an arm this
+// resolves a shadowing declaration to the arm's own alloca.
+@ mem_emit_slice_free i syms i cg s name → v {
+    : s ty ( nurl_sym_get syms name )
+    : s ptr ( nurl_sym_get syms ( nurl_str_cat name `__ptr` ) )
+    // Slice type is always "{ <T>*, i64 }" (suffix ", i64 }" = 7 chars).
+    // Extract <T>* = chars [2 .. len-7).
+    : i tylen ( nurl_str_len ty )
+    : s tptr ( nurl_str_slice ty 2 - tylen 9 )
+    : s v ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print v )
+    ( nurl_print ` = load ` ) ( nurl_print ( nurl_llty ty ) )
+    ( nurl_print `, ` ) ( nurl_print ( nurl_llty ty ) )
+    ( nurl_print `* ` ) ( nurl_print ptr ) ( nurl_print `\n` )
+    : s dp ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print dp )
+    ( nurl_print ` = extractvalue ` ) ( nurl_print ( nurl_llty ty ) )
+    ( nurl_print ` ` ) ( nurl_print v ) ( nurl_print `, 0\n` )
+    : s raw ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print raw )
+    ( nurl_print ` = bitcast ` ) ( nurl_print ( nurl_llty tptr ) )
+    ( nurl_print ` ` ) ( nurl_print dp ) ( nurl_print ` to i8*\n` )
+    ( nurl_print `  call void @nurl_free(i8* ` ) ( nurl_print raw ) ( nurl_print `)` ) ( emit_dbg_eol )
+}
+
 // Emit `free` for every binding in the owned list, skipping `skip_name`.
 // If defers are active, skips entirely (defers may still reference slices).
 // Does NOT clear the list — each return path emits its own set; paths are
@@ -7969,27 +8023,7 @@
             : s name ( str_first_word rest )
             = rest ( str_skip_word rest )
             ? ! ( seq name skip_name )
-            { : s ty ( nurl_sym_get syms name )
-                : s ptr ( nurl_sym_get syms ( nurl_str_cat name `__ptr` ) )
-                // Slice type is always "{ <T>*, i64 }" (suffix ", i64 }" = 7 chars).
-                // Extract <T>* = chars [2 .. len-7).
-                : i tylen ( nurl_str_len ty )
-                : s tptr ( nurl_str_slice ty 2 - tylen 9 )
-                : s v ( nurl_cg_reg cg )
-                ( nurl_print `  ` ) ( nurl_print v )
-                ( nurl_print ` = load ` ) ( nurl_print ( nurl_llty ty ) )
-                ( nurl_print `, ` ) ( nurl_print ( nurl_llty ty ) )
-                ( nurl_print `* ` ) ( nurl_print ptr ) ( nurl_print `\n` )
-                : s dp ( nurl_cg_reg cg )
-                ( nurl_print `  ` ) ( nurl_print dp )
-                ( nurl_print ` = extractvalue ` ) ( nurl_print ( nurl_llty ty ) )
-                ( nurl_print ` ` ) ( nurl_print v ) ( nurl_print `, 0\n` )
-                : s raw ( nurl_cg_reg cg )
-                ( nurl_print `  ` ) ( nurl_print raw )
-                ( nurl_print ` = bitcast ` ) ( nurl_print ( nurl_llty tptr ) )
-                ( nurl_print ` ` ) ( nurl_print dp ) ( nurl_print ` to i8*\n` )
-                ( nurl_print `  call void @nurl_free(i8* ` ) ( nurl_print raw ) ( nurl_print `)` ) ( emit_dbg_eol )
-            }
+            { ( mem_emit_slice_free syms cg name ) }
             {}
         }
     }
@@ -8455,6 +8489,33 @@
             ? ( str_contains_word old_list ptr )
             {}
             { ( mem_emit_struct_field_drop syms cg ptr sname path kind leaf_sname leaf_idx ) }
+        }
+    }
+    {}
+}
+
+// Slice counterpart of mem_drop_new_strings: at an arm's fall-through,
+// free every owned slice DECLARED during the arm (memory-model rule 5 —
+// arm-local slice literals used to leak because `__owned_slices__` is
+// scope-shadowed and the arm's delta died unseen at nurl_sym_pop).
+// Driven by the `__slice_decls__` delta, NOT the ownership list: an
+// `= outer [ … ]` inside the arm registers an OUTER binding in the
+// arm's ownership shadow, and freeing that here would be a UAF — only
+// arm-DECLARED names are candidates, and each must still be word-in
+// the current ownership list. Names (unlike alloca registers) are not
+// unique, so an arm-local shadow of an outer slice-declaring name is
+// skipped (a leak, never a double free).
+@ mem_drop_new_slices i syms i cg s old_decls → v {
+    : s dtop ( nurl_sym_get syms `__defer_top__` )
+    ? == 0 ( nurl_str_len dtop )
+    { : s owned ( nurl_sym_get syms `__owned_slices__` )
+        : ~ s rest ( nurl_sym_get syms `__slice_decls__` )
+        ~ != 0 ( nurl_str_len rest ) {
+            : s name ( str_first_word rest )
+            = rest ( str_skip_word rest )
+            ? | ( str_contains_word old_decls name ) ! ( str_contains_word owned name )
+            {}
+            { ( mem_emit_slice_free syms cg name ) }
         }
     }
     {}
@@ -9900,7 +9961,9 @@
         { ( nurl_sym_def syms ( nurl_str_cat name `__mutable` ) `1` ) }
         {}
         ? | rhs_is_slice_lit & rhs_is_owned_call ( mem_is_slice_ty vt )
-        { ( mem_own_add syms name ) ( mem_journal_push_slice cg vt ptr ) }
+        { ( mem_own_add syms name )
+            ( mem_slice_decl_add syms name )
+            ( mem_journal_push_slice cg vt ptr ) }
         {}
         // Closure-env reclamation (§7.4): a `: f \ … x …` literal binding
         // owns the env → track it for the function-exit free. A `: g f`
@@ -10077,7 +10140,9 @@
                 { ( nurl_sym_def syms ( nurl_str_cat name `__mutable` ) `1` ) }
                 {}
                 ? | rhs_is_slice_lit & rhs_is_owned_call ( mem_is_slice_ty ptype )
-                { ( mem_own_add syms name ) ( mem_journal_push_slice cg ptype ptr ) }
+                { ( mem_own_add syms name )
+                    ( mem_slice_decl_add syms name )
+                    ( mem_journal_push_slice cg ptype ptr ) }
                 {}
                 // Closure-env reclamation (§7.4): track a capturing closure
                 // bound here for the function-exit free.
@@ -10184,7 +10249,11 @@
         : b lhs_is_owned_str & & != 0 g_auto_drop_strings
         ( seq ( nurl_llty vt ) `i8*` )
         ( str_contains_word ( nurl_sym_get syms `__owned_strings__` ) ptr )
-        ? lhs_is_owned_str { ( nurl_sym_def syms `__last_call_ret_owned__` `` ) } {}
+        // Slice dual: LHS is a tracked owned-slice binding (keyed by
+        // NAME — Phase 1 protocol) being overwritten.
+        : b lhs_is_owned_slc & ( mem_is_slice_ty vt )
+        ( str_contains_word ( nurl_sym_get syms `__owned_slices__` ) name )
+        ? | lhs_is_owned_str lhs_is_owned_slc { ( nurl_sym_def syms `__last_call_ret_owned__` `` ) } {}
         // Escape analysis: snapshot the RHS's
         // first token (a bare identifier may copy a stack reference)
         // and clear the side-channel a closure / aggregate literal
@@ -10219,6 +10288,19 @@
             ( nurl_print ` = load i8*, i8** ` ) ( nurl_print ptr ) ( nurl_print `\n` )
             ( nurl_print `  call void @nurl_free(i8* ` ) ( nurl_print old_reg ) ( nurl_print `)` ) ( emit_dbg_eol )
         }
+        {}
+        // Slice reassignment-drop (rule 3 dual of the string block
+        // above): `= xs [ … ]` / `= xs ( fresh-slice-call )` frees the
+        // old backing buffer before the store overwrites the alloca.
+        // Same alias discipline: gated on a FRESH RHS (a slice literal
+        // token, or a call that published slice-ownership `1`) — a
+        // bare-identifier RHS may alias the old heap and is left alone.
+        // nurl_free auto-forgets the journal entry, so a later panic
+        // cannot replay the freed buffer.
+        ? & lhs_is_owned_slc
+        | == bck_rhs_tt TT_LBRACK
+        ( seq ( nurl_sym_get syms `__last_call_ret_owned__` ) `1` )
+        { ( mem_emit_slice_free syms cg name ) }
         {}
         // Ownership transfer: `= name x` with a bare-identifier RHS
         // copies x's pointer into `name`. If x was a tracked owned
@@ -12758,6 +12840,7 @@
     : i body_syms syms
     // Shadow outer __owned_slices__ with empty list for the closure body
     ( nurl_sym_def body_syms `__owned_slices__` `` )
+    ( nurl_sym_def body_syms `__slice_decls__` `` )
     // Defers don't cross closure boundaries — clear shadow too
     ( nurl_sym_def body_syms `__defer_top__` `` )
     // Reset the shadow-check roster so a `:` inside the closure body
@@ -14434,6 +14517,7 @@
     0
     ( nurl_sym_push syms )
     ( nurl_sym_def syms `__owned_slices__` `` )
+    ( nurl_sym_def syms `__slice_decls__` `` )
     ( nurl_sym_def syms `__last_ident_name__` `` )
     ( nurl_sym_def syms `__fn_ret_owned__` `` )
     // Borrow provenance: does THIS function return a borrow (a value that
