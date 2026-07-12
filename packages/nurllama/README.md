@@ -80,8 +80,14 @@ attention run over 64 positions at once — so a long prompt does not
 crawl: a 301-token prompt reaches its first generated token in 1.2 s
 instead of 7.2 s.
 
-**No GPU?** `NURL_GPU=cpu` runs the identical kernel sources on the
-host through OpenMP and produces byte-identical output.
+On CUDA the matvecs give one **warp** per output row (32 lanes stride
+through the row together, then a shuffle reduction) and attention runs
+in two parallel passes instead of one thread per head — 157 tok/s for
+Qwen2.5-0.5B Q4_K_M on an RTX 4090, up from 62.
+
+**No GPU?** `NURL_GPU=cpu` runs the portable kernels on the host through
+OpenMP and produces byte-identical output — the CUDA-only variants are a
+dispatch choice, never a behaviour change.
 
 ## Configuration
 
