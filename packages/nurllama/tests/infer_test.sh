@@ -142,6 +142,54 @@ else
     echo "  SKIP Q5_K_M download failed"
 fi
 
+# 5c. gemma3 — a genuinely different shape: embeddings scaled by sqrt(n_embd),
+# head_dim decoupled from n_embd/n_head (270m: 640/4 = 160, but head_dim is
+# 256), per-head Q/K norms, post-attention and post-FFW norms, GeGLU, and a
+# 512-token sliding window on five of every six layers (those layers use their
+# own RoPE base). The reference (tests/gemma_ref.py) was itself checked against
+# HF transformers running the original safetensors: every layer's hidden state
+# to cosine 1.0000, logits r = 0.9996, same top-1.
+GM="$WORK/gemma3.gguf"
+# 279 MB — the 300 s the smaller models get is not enough, and a truncated
+# download silently SKIPs the whole gemma block.
+if curl -sL --max-time 1800 -f -o "$GM" \
+    https://huggingface.co/unsloth/gemma-3-270m-it-GGUF/resolve/main/gemma-3-270m-it-Q8_0.gguf; then
+    GIDS=$("$NL" tokenize "$GM" "The capital of France is")
+    GREF=$(python3 tests/gemma_ref.py "$GM" "$GIDS" greedy 16)
+    GREFTXT=$("$NL" detok "$GM" $GREF)
+    GOURS=$("$NL" run "$GM" "The capital of France is" -n 16 --temp 0)
+    [ "$GREFTXT" = "$GOURS" ] && ok "gemma3 greedy text == numpy reference (HF-verified)" || {
+        bad "gemma3 forward pass"; echo "    ref: [$GREFTXT]"; echo "    our: [$GOURS]"; }
+    GCPU=$(NURL_GPU=cpu "$NL" run "$GM" "The capital of France is" -n 16 --temp 0)
+    [ "$GCPU" = "$GOURS" ] && ok "gemma3 CPU backend text == device text" || bad "gemma3 backend parity"
+    GHOST=$(NURLLAMA_DEQUANT=host "$NL" run "$GM" "The capital of France is" -n 16 --temp 0)
+    [ "$GHOST" = "$GOURS" ] && ok "gemma3 host-dequant text == device-native text" || bad "gemma3 dequant parity"
+
+    # The sliding window only engages past 512 tokens, so it takes a long
+    # prompt to exercise it at all — and that prompt also crosses the 64-token
+    # prefill chunks.
+    GLONG=$(python3 -c "print('The quick brown fox jumps over the lazy dog. ' * 70, end='')")
+    GLIDS=$("$NL" tokenize "$GM" "$GLONG"); GNP=$(echo $GLIDS | wc -w)
+    GLREF=$("$NL" detok "$GM" $(python3 tests/gemma_ref.py "$GM" "$GLIDS" greedy 8))
+    GLOURS=$("$NL" run "$GM" "$GLONG" -n 8 --temp 0)
+    [ "$GLREF" = "$GLOURS" ] \
+        && ok "gemma3 $GNP-token prompt (crosses the 512 sliding window) == reference" \
+        || bad "gemma3 sliding window / chunked prefill"
+
+    # A chat template writes its turn markers as TEXT; they have to come back
+    # out as single ids or the model answers a prompt it has never seen. These
+    # ids are what HF's own tokenizer produces for the same string.
+    # No trailing newline in the prompt: `$( )` strips those, so asking for one
+    # here would only test the shell.
+    printf -v GPROMPT '<start_of_turn>user\nHi there<end_of_turn>\n<start_of_turn>model'
+    GT=$("$NL" tokenize "$GM" "$GPROMPT")
+    [ "$GT" = "2 105 2364 107 10979 993 106 107 105 4368" ] \
+        && ok "gemma3 chat markers tokenise as single special ids (== HF)" \
+        || { bad "special-token parsing"; echo "    got: $GT"; }
+else
+    echo "  SKIP gemma3 download failed"
+fi
+
 # 6. seeded sampling determinism
 A=$("$NL" run "$M" "One day" -n 16 --temp 0.8 --seed 7)
 B=$("$NL" run "$M" "One day" -n 16 --temp 0.8 --seed 7)

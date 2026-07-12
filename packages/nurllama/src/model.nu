@@ -40,6 +40,7 @@ $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/bytes.nu`
 $ `stdlib/std/floatbits.nu`
+$ `stdlib/std/float.nu`
 $ `deps/gguf/src/gguf.nu`
 $ `deps/gguf/src/dequant.nu`
 $ `stdlib/ext/env.nu`
@@ -63,6 +64,16 @@ $ `src/tokenizer.nu`
     i rope_style
     f eps
     f rope_base
+    // gemma: the attention projections do NOT have to land back on n_embd —
+    // gemma3-270m has n_embd 640, 4 heads and head_dim 256, so q is 1024 wide
+    // and `wo` maps 1024 → 640. q_dim is nh*head_dim, never assumed = n_embd.
+    i q_dim
+    f embd_scale
+    f attn_scale
+    b ffn_gelu
+    i swa_window
+    i swa_period
+    f rope_base_swa
     i gg
     i embd_idx
     ( Vec u ) embd_host
@@ -82,6 +93,10 @@ $ `src/tokenizer.nu`
     ( Vec i ) tq_up
     i tq_output
     ( Vec i ) attn_norm
+    ( Vec i ) q_norm
+    ( Vec i ) k_norm
+    ( Vec i ) post_attn_norm
+    ( Vec i ) post_ffn_norm
     ( Vec i ) wq
     ( Vec i ) wk
     ( Vec i ) wv
@@ -101,6 +116,13 @@ $ `src/tokenizer.nu`
     i vd
     i aod
     i tmpd
+    // rmsnorm reads the whole row to form its sum of squares, so it can never
+    // write back into its own input: another block would already have
+    // overwritten the row under it. gemma's Q/K and post-block norms
+    // therefore need somewhere to land.
+    i qn2d
+    i kn2d
+    i tn2d
     i gd
     i ud
     i scored
@@ -277,11 +299,12 @@ $ `src/tokenizer.nu`
     }
     : *Gguf gg # *Gguf ggaddr
     : s arch ( gguf_kv_str_or gg `general.architecture` `` )
-    ? | != 0 ( nurl_str_eq arch `llama` ) != 0 ( nurl_str_eq arch `qwen2` ) {} {
+    : b is_gemma3 != 0 ( nurl_str_eq arch `gemma3` )
+    ? | | != 0 ( nurl_str_eq arch `llama` ) != 0 ( nurl_str_eq arch `qwen2` ) is_gemma3 {} {
         ( gguf_close gg )
         : String msg ( string_from `nurllama: unsupported architecture '` )
         ( string_push_str msg arch )
-        ( string_push_str msg `' (runs the llama shape: llama, qwen2)` )
+        ( string_push_str msg `' (supported: llama, qwen2, gemma3)` )
         ^ @ !*Llm String { F msg }
     }
 
@@ -298,11 +321,40 @@ $ `src/tokenizer.nu`
         ( gguf_close gg )
         ^ ( __lm_err `nurllama: model is missing llama.* hyperparameters` )
     } {}
-    = . m head_dim / . m n_embd . m n_head
+    // head_dim is NOT n_embd/n_head in general: gemma3 states it explicitly
+    // (key_length), and for gemma3-270m it is 256 against an n_embd/n_head of
+    // 160. Everything downstream therefore sizes attention off q_dim = nh*hd,
+    // and `wo` maps q_dim → n_embd.
+    = . m head_dim ( __lm_kv_i gg arch `attention.key_length` / . m n_embd . m n_head )
+    = . m q_dim * . m n_head . m head_dim
     = . m rope_dim ( __lm_kv_i gg arch `rope.dimension_count` . m head_dim )
     // Rotary layout is architecture-defined: llama rotates adjacent pairs
-    // (NORM), qwen2 rotates the two halves of the rotary span (NEOX).
-    = . m rope_style ? != 0 ( nurl_str_eq arch `qwen2` ) 1 0
+    // (NORM), qwen2 and gemma rotate the two halves of the span (NEOX).
+    = . m rope_style ? | != 0 ( nurl_str_eq arch `qwen2` ) is_gemma3 1 0
+
+    // ── the gemma shape ──────────────────────────────────────────────────
+    // The embedding row is scaled by sqrt(n_embd) before the first block; the
+    // FFN gate is GeGLU, not SwiGLU; Q and K are RMSNormed per head before the
+    // rotation; each block norms its own output before the residual add; and
+    // five of every six layers attend only within a sliding window, with their
+    // own (smaller) RoPE base. Defaults below are the llama shape, so nothing
+    // changes for llama/qwen2.
+    //
+    // NOT here: gemma's `1 + w` norm weights. The GGUF converter already folds
+    // the +1 into the stored tensors (checked against the HF checkpoint: every
+    // gemma norm weight in the GGUF is exactly the HF weight plus one), so
+    // adding it in the kernel would count it twice.
+    = . m ffn_gelu is_gemma3
+    = . m embd_scale ? is_gemma3 ( sqrt # f . m n_embd ) 1.0
+    // gemma states the query scale separately (query_pre_attn_scalar); for
+    // gemma3 it equals head_dim, but reading it keeps the kernel honest.
+    : i qpre ( __lm_kv_i gg arch `attention.query_pre_attn_scalar` . m head_dim )
+    = . m attn_scale ? is_gemma3 / 1.0 ( sqrt # f qpre ) / 1.0 ( sqrt # f . m head_dim )
+    = . m swa_window ? is_gemma3 ( __lm_kv_i gg arch `attention.sliding_window` 0 ) 0
+    // Layer L is a full-attention layer when (L+1) % period == 0; the rest
+    // slide. gemma3's period is 6.
+    = . m swa_period ? is_gemma3 6 0
+    = . m rope_base_swa ( __lm_kv_f gg arch `rope.local.freq_base` 10000.0 )
     // Context: the KV cache is preallocated, and a modern model advertises
     // a training context far larger than a session needs — Qwen2.5's 32 768
     // would claim 800 MB of device memory for a 0.5 B model whose weights
@@ -360,6 +412,10 @@ $ `src/tokenizer.nu`
     = . m tq_up ( vec_new [i] )
     = . m tq_output 0
     = . m attn_norm ( vec_new [i] )
+    = . m q_norm ( vec_new [i] )
+    = . m k_norm ( vec_new [i] )
+    = . m post_attn_norm ( vec_new [i] )
+    = . m post_ffn_norm ( vec_new [i] )
     = . m wq ( vec_new [i] )
     = . m wk ( vec_new [i] )
     = . m wv ( vec_new [i] )
@@ -402,6 +458,13 @@ $ `src/tokenizer.nu`
         ( vec_push [i] . m bq ( __lm_upload_opt m gg L `attn_q.bias` ) )
         ( vec_push [i] . m bk ( __lm_upload_opt m gg L `attn_k.bias` ) )
         ( vec_push [i] . m bv ( __lm_upload_opt m gg L `attn_v.bias` ) )
+        // gemma3: per-head Q/K norms (applied before RoPE) and the post-block
+        // norms it puts on the attention and FFN outputs before each residual
+        // add. Absent on llama/qwen2 → -1 → skipped in the forward pass.
+        ( vec_push [i] . m q_norm ( __lm_upload_opt m gg L `attn_q_norm.weight` ) )
+        ( vec_push [i] . m k_norm ( __lm_upload_opt m gg L `attn_k_norm.weight` ) )
+        ( vec_push [i] . m post_attn_norm ( __lm_upload_opt m gg L `post_attention_norm.weight` ) )
+        ( vec_push [i] . m post_ffn_norm ( __lm_upload_opt m gg L `post_ffw_norm.weight` ) )
         ? ( __lm_upload_layer m gg L `ffn_norm.weight` . m ffn_norm . m tq_ffn_norm ) {} { = ok F }
         ? ( __lm_upload_layer m gg L `ffn_gate.weight` . m w_gate . m tq_gate ) {} { = ok F }
         ? ( __lm_upload_layer m gg L `ffn_down.weight` . m w_down . m tq_down ) {} { = ok F }
@@ -429,11 +492,14 @@ $ `src/tokenizer.nu`
     // the first row of each.
     = . m xd ( __lm_scratch m * LM_CHUNK . m n_embd )
     = . m xnd ( __lm_scratch m * LM_CHUNK . m n_embd )
-    = . m qd ( __lm_scratch m * LM_CHUNK . m n_embd )
+    = . m qd ( __lm_scratch m * LM_CHUNK . m q_dim )
     = . m kd ( __lm_scratch m * LM_CHUNK kvdim )
     = . m vd ( __lm_scratch m * LM_CHUNK kvdim )
-    = . m aod ( __lm_scratch m * LM_CHUNK . m n_embd )
+    = . m aod ( __lm_scratch m * LM_CHUNK . m q_dim )
     = . m tmpd ( __lm_scratch m * LM_CHUNK . m n_embd )
+    = . m qn2d ( __lm_scratch m * LM_CHUNK . m q_dim )
+    = . m kn2d ( __lm_scratch m * LM_CHUNK kvdim )
+    = . m tn2d ( __lm_scratch m * LM_CHUNK . m n_embd )
     = . m gd ( __lm_scratch m * LM_CHUNK . m n_ff )
     = . m ud ( __lm_scratch m * LM_CHUNK . m n_ff )
     = . m scored ( __lm_scratch m * * LM_CHUNK . m n_head . m n_ctx )
@@ -484,6 +550,10 @@ $ `src/tokenizer.nu`
     ( vec_free [i] . m tq_down )
     ( vec_free [i] . m tq_up )
     ( vec_free [i] . m attn_norm )
+    ( vec_free [i] . m q_norm )
+    ( vec_free [i] . m k_norm )
+    ( vec_free [i] . m post_attn_norm )
+    ( vec_free [i] . m post_ffn_norm )
     ( vec_free [i] . m wq )
     ( vec_free [i] . m wk )
     ( vec_free [i] . m wv )
@@ -551,38 +621,80 @@ $ `src/tokenizer.nu`
         = bi + bi 1
     }
 
+    : i qd_ . m q_dim
+
+    // gemma scales the embedding row by sqrt(n_embd) before the first block.
+    ? != . m embd_scale 1.0 { ( lk_scale . m ks . m xd . m embd_scale * ne count ) } {}
+
     : ~ i L 0
     ~ < L . m n_layer {
+        // gemma3 attends within a sliding window on every layer but each
+        // sixth, and the windowed layers carry their own (smaller) RoPE base.
+        // Period 0 = never slide = the llama shape.
+        : b full ? == . m swa_period 0 T == 0 % + L 1 . m swa_period
+        : i window ? full 0 . m swa_window
+        : f rbase ? full . m rope_base ? == . m swa_window 0 . m rope_base . m rope_base_swa
+
         // ── attention ──
         ( lk_rmsnorm . m ks . m xd ( __lm_geti . m attn_norm L ) . m xnd ne . m eps count )
-        : b _q1 ( lk_matvec_q . m ks ( __lm_geti . m tq_wq L ) ( __lm_geti . m wq L ) . m xnd . m qd ne ne count )
+        : b _q1 ( lk_matvec_q . m ks ( __lm_geti . m tq_wq L ) ( __lm_geti . m wq L ) . m xnd . m qd qd_ ne count )
         : b _q2 ( lk_matvec_q . m ks ( __lm_geti . m tq_wk L ) ( __lm_geti . m wk L ) . m xnd . m kd kvdim ne count )
         : b _q3 ( lk_matvec_q . m ks ( __lm_geti . m tq_wv L ) ( __lm_geti . m wv L ) . m xnd . m vd kvdim ne count )
         // qwen2: Q/K/V biases, broadcast over the batch (llama has none)
         : i bqd ( __lm_geti . m bq L )
         : i bkd ( __lm_geti . m bk L )
         : i bvd ( __lm_geti . m bv L )
-        ? >= bqd 0 { ( lk_addrow . m ks . m qd bqd ne count ) } {}
+        ? >= bqd 0 { ( lk_addrow . m ks . m qd bqd qd_ count ) } {}
         ? >= bkd 0 { ( lk_addrow . m ks . m kd bkd kvdim count ) } {}
         ? >= bvd 0 { ( lk_addrow . m ks . m vd bvd kvdim count ) } {}
-        ( lk_rope . m ks . m qd nh hd . m rope_dim pos0 . m rope_base . m rope_style count )
-        ( lk_rope . m ks . m kd nkv hd . m rope_dim pos0 . m rope_base . m rope_style count )
+        // gemma3: RMSNorm every head's Q and K vector before the rotation.
+        // The rows of q are head_dim wide and there are nh of them per
+        // position, so this is the ordinary rmsnorm over nh*count rows.
+        : i qnd ( __lm_geti . m q_norm L )
+        : i knd ( __lm_geti . m k_norm L )
+        : ~ i qbuf . m qd
+        : ~ i kbuf . m kd
+        ? >= qnd 0 {
+            ( lk_rmsnorm . m ks . m qd qnd . m qn2d hd . m eps * nh count )
+            = qbuf . m qn2d
+        } {}
+        ? >= knd 0 {
+            ( lk_rmsnorm . m ks . m kd knd . m kn2d hd . m eps * nkv count )
+            = kbuf . m kn2d
+        } {}
+        ( lk_rope . m ks qbuf nh hd . m rope_dim pos0 rbase . m rope_style count )
+        ( lk_rope . m ks kbuf nkv hd . m rope_dim pos0 rbase . m rope_style count )
         // the whole batch's K/V rows land in the cache before any position
         // attends, so a position can see every earlier one in this chunk
-        ( lk_copyat . m ks ( __lm_geti . m kcache L ) . m kd * pos0 kvdim * count kvdim )
+        ( lk_copyat . m ks ( __lm_geti . m kcache L ) kbuf * pos0 kvdim * count kvdim )
         ( lk_copyat . m ks ( __lm_geti . m vcache L ) . m vd * pos0 kvdim * count kvdim )
-        ( lk_attn . m ks . m qd ( __lm_geti . m kcache L ) ( __lm_geti . m vcache L )
-        . m aod . m scored nh nkv hd + pos0 1 count . m n_ctx )
-        : b _q4 ( lk_matvec_q . m ks ( __lm_geti . m tq_wo L ) ( __lm_geti . m wo L ) . m aod . m tmpd ne ne count )
-        ( lk_addv . m ks . m xd . m tmpd * ne count )
+        ( lk_attn . m ks qbuf ( __lm_geti . m kcache L ) ( __lm_geti . m vcache L )
+        . m aod . m scored nh nkv hd + pos0 1 count . m n_ctx . m attn_scale window )
+        : b _q4 ( lk_matvec_q . m ks ( __lm_geti . m tq_wo L ) ( __lm_geti . m wo L ) . m aod . m tmpd ne qd_ count )
+        // gemma3 norms the block's OUTPUT as well, before the residual add.
+        : i pan ( __lm_geti . m post_attn_norm L )
+        : ~ i abuf . m tmpd
+        ? >= pan 0 {
+            ( lk_rmsnorm . m ks . m tmpd pan . m tn2d ne . m eps count )
+            = abuf . m tn2d
+        } {}
+        ( lk_addv . m ks . m xd abuf * ne count )
 
-        // ── FFN (SwiGLU) ──
+        // ── FFN (SwiGLU for llama/qwen2, GeGLU for gemma) ──
         ( lk_rmsnorm . m ks . m xd ( __lm_geti . m ffn_norm L ) . m xnd ne . m eps count )
         : b _q5 ( lk_matvec_q . m ks ( __lm_geti . m tq_gate L ) ( __lm_geti . m w_gate L ) . m xnd . m gd . m n_ff ne count )
         : b _q6 ( lk_matvec_q . m ks ( __lm_geti . m tq_up L ) ( __lm_geti . m w_up L ) . m xnd . m ud . m n_ff ne count )
-        ( lk_silumul . m ks . m gd . m ud * . m n_ff count )
+        ? . m ffn_gelu
+        { ( lk_gelumul . m ks . m gd . m ud * . m n_ff count ) }
+        { ( lk_silumul . m ks . m gd . m ud * . m n_ff count ) }
         : b _q7 ( lk_matvec_q . m ks ( __lm_geti . m tq_down L ) ( __lm_geti . m w_down L ) . m gd . m tmpd ne . m n_ff count )
-        ( lk_addv . m ks . m xd . m tmpd * ne count )
+        : i pfn ( __lm_geti . m post_ffn_norm L )
+        : ~ i fbuf . m tmpd
+        ? >= pfn 0 {
+            ( lk_rmsnorm . m ks . m tmpd pfn . m tn2d ne . m eps count )
+            = fbuf . m tn2d
+        } {}
+        ( lk_addv . m ks . m xd fbuf * ne count )
         = L + L 1
     }
 

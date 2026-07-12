@@ -80,6 +80,15 @@ $ `deps/gguf/src/gguf.nu`
     b add_bos
     b add_eos
     b add_space_prefix
+    // Inline special tokens (CONTROL / USER_DEFINED pieces such as
+    // `<start_of_turn>` or `<|im_start|>`). A chat template puts these in the
+    // TEXT, and they must come out as their own single id — tokenised as
+    // ordinary text they shred into a dozen pieces and the model answers a
+    // different question than the one asked. `sp_first` is a 256-entry table
+    // of the bytes any special piece can start with, so ordinary text pays
+    // one array lookup per byte rather than a scan of the whole list.
+    ( Vec i ) sp_ids
+    ( Vec i ) sp_first
 }
 
 // ── string-keyed map helpers (yoloe/bpe.nu idiom) ───────────────────
@@ -169,6 +178,8 @@ $ `deps/gguf/src/gguf.nu`
     = . t pieces ( vec_new [String] )
     = . t scores ( vec_new [f] )
     = . t ttype ( vec_new [i] )
+    = . t sp_ids ( vec_new [i] )
+    = . t sp_first ( vec_new [i] )
     = . t lookup ( map_new [s i] )
     = . t ranks ( map_new [s i] )
     = . t rankkeys ( vec_new [String] )
@@ -237,6 +248,26 @@ $ `deps/gguf/src/gguf.nu`
     : ~ i k 0
     ~ < k nvocab {
         ( __tk_set . t lookup ( __tk_piece_data t k ) k )
+        = k + k 1
+    }
+
+    // Special-token index: every CONTROL / USER_DEFINED piece, plus the table
+    // of first bytes so ordinary text is not scanned against the whole list.
+    = k 0
+    ~ < k 256 {
+        ( vec_push [i] . t sp_first 0 )
+        = k + k 1
+    }
+    = k 0
+    ~ < k nvocab {
+        : i ty ( __tk_geti . t ttype k TT_NORMAL )
+        ? | == ty TT_CONTROL == ty TT_USER {
+            : s pc ( __tk_piece_data t k )
+            ? > ( nurl_str_len pc ) 0 {
+                ( vec_push [i] . t sp_ids k )
+                ( vec_set [i] . t sp_first ( nurl_str_get pc 0 ) 1 )
+            } {}
+        } {}
         = k + k 1
     }
 
@@ -309,6 +340,8 @@ $ `deps/gguf/src/gguf.nu`
     ( vec_free_with [String] . t rankkeys \ String s → v { ( string_free s ) } )
     ( vec_free_with [String] . t byte_enc \ String s → v { ( string_free s ) } )
     ( vec_free [i] . t byte_id )
+    ( vec_free [i] . t sp_ids )
+    ( vec_free [i] . t sp_first )
     ( nurl_free # s t )
 }
 
@@ -710,10 +743,70 @@ $ `deps/gguf/src/gguf.nu`
 
 // ── public encode / decode ──────────────────────────────────────────
 
+// The longest special-token piece matching `text` at `p`, or -1. Only called
+// when text[p] is a byte some special piece starts with.
+@ __tk_special_at * Tok t s text i p i n → i {
+    : ~ i best -1
+    : ~ i best_len 0
+    : ~ i j 0
+    : i ns ( vec_len [i] . t sp_ids )
+    ~ < j ns {
+        : i id ( __tk_geti . t sp_ids j -1 )
+        : s pc ( __tk_piece_data t id )
+        : i pl ( nurl_str_len pc )
+        ? & > pl best_len <= + p pl n {
+            : ~ b eq T
+            : ~ i c 0
+            ~ & eq < c pl {
+                ? != ( nurl_str_get text + p c ) ( nurl_str_get pc c ) { = eq F } {}
+                = c + c 1
+            }
+            ? eq { = best id = best_len pl } {}
+        } {}
+        = j + j 1
+    }
+    ^ ? >= best 0 best -1
+}
+
+// Encode one run of ordinary text (no special tokens inside it).
+@ __tk_encode_raw * Tok t s text ( Vec i ) out → v {
+    ? == . t mode TOK_SPM { ( __tk_spm_encode t text out ) } { ( __tk_bpe_encode t text out ) }
+}
+
 @ tok_encode * Tok t s text b add_special → ( Vec i ) {
     : ( Vec i ) out ( vec_new [i] )
     ? & & add_special . t add_bos >= . t bos 0 { ( vec_push [i] out . t bos ) } {}
-    ? == . t mode TOK_SPM { ( __tk_spm_encode t text out ) } { ( __tk_bpe_encode t text out ) }
+    // Split the text on special tokens (`<start_of_turn>`, `<|im_start|>`, …)
+    // and emit each as its own id — a chat template writes them as text, and
+    // shredding them into ordinary pieces feeds the model a prompt it has
+    // never seen. Only done under add_special, which is exactly llama.cpp's
+    // parse_special: `nurllama tokenize --no-special` still treats the markers
+    // as literal text.
+    ? & add_special > ( vec_len [i] . t sp_ids ) 0 {
+        : i n ( nurl_str_len text )
+        : String buf ( string_new )
+        : ~ i p 0
+        ~ < p n {
+            : i b0 ( nurl_str_get text p )
+            : ~ i hit -1
+            ? != 0 ( __tk_geti . t sp_first b0 0 ) { = hit ( __tk_special_at t text p n ) } {}
+            ? >= hit 0 {
+                ? > ( string_len buf ) 0 {
+                    ( __tk_encode_raw t ( string_data buf ) out )
+                    ( string_clear buf )
+                } {}
+                ( vec_push [i] out hit )
+                = p + p ( nurl_str_len ( __tk_piece_data t hit ) )
+            } {
+                ( string_push_char buf b0 )
+                = p + p 1
+            }
+        }
+        ? > ( string_len buf ) 0 { ( __tk_encode_raw t ( string_data buf ) out ) } {}
+        ( string_free buf )
+    } {
+        ( __tk_encode_raw t text out )
+    }
     ? & & add_special . t add_eos >= . t eos 0 { ( vec_push [i] out . t eos ) } {}
     ^ out
 }

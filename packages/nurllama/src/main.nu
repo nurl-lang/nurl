@@ -368,7 +368,7 @@ $ `stdlib/std/term.nu`
     // Writes a model file carrying tokenizer.chat_template and reads the
     // style back through the same path a downloaded model takes.
     : ~ i si 0
-    ~ < si 4 {
+    ~ < si 5 {
         : ~ s tpl ``
         : ~ i want CHAT_PLAIN
         ? == si 0 {
@@ -383,7 +383,11 @@ $ `stdlib/std/term.nu`
             = tpl `{% for m in messages %}[INST] {{ m.content }} [/INST]{% endfor %}`
             = want CHAT_LLAMA2
         } {}
-        // si == 3: no template at all → PLAIN
+        ? == si 3 {
+            = tpl `{% for m in messages %}<start_of_turn>{{ m.role }}\n{{ m.content }}<end_of_turn>\n{% endfor %}`
+            = want CHAT_GEMMA
+        } {}
+        // si == 4: no template at all → PLAIN
         ?? ( gw_new 32 ) {
             T w → {
                 ( gw_kv_str w `general.architecture` `llama` )
@@ -599,6 +603,7 @@ $ `stdlib/std/term.nu`
         ? ( nurl_str_eq which `chatml` ) { = style CHAT_CHATML } {}
         ? ( nurl_str_eq which `llama3` ) { = style CHAT_LLAMA3 } {}
         ? ( nurl_str_eq which `llama2` ) { = style CHAT_LLAMA2 } {}
+        ? ( nurl_str_eq which `gemma` ) { = style CHAT_GEMMA } {}
         : ( Vec ChatMsg ) msgs ( vec_new [ChatMsg] )
         ( vec_push [ChatMsg] msgs ( chat_msg `system` `be brief` ) )
         ( vec_push [ChatMsg] msgs ( chat_msg `user` `hi` ) )
