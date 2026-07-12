@@ -18,6 +18,14 @@ $ `deps/gpu/src/gpu.nu`
 
 : LlmKernels {
     GpuKernel matvec
+    GpuKernel mv_q4_0
+    GpuKernel mv_q8_0
+    GpuKernel mv_q5_0
+    GpuKernel mv_q5_1
+    GpuKernel mv_q4_k
+    GpuKernel mv_q5_k
+    GpuKernel mv_q6_k
+    GpuKernel mv_f16
     GpuKernel rmsnorm
     GpuKernel rope
     GpuKernel attn
@@ -139,6 +147,288 @@ $ `deps/gpu/src/gpu.nu`
     }`
 }
 
+// ── Quantised matvec: dequantise IN the matmul ──────────────────────
+//
+// The weights stay on the device in their GGUF block form — a Q4_K
+// row is 4.5 bits/weight instead of 32, so a model needs ~7× less
+// device memory than the f32 expansion and the matvec reads ~7× fewer
+// bytes (these kernels are memory-bound, so that is also the speed).
+// Each thread owns one output row and walks its blocks, decoding each
+// on the fly into registers. Block layouts are ggml's, byte for byte —
+// the same ones packages/gguf's host dequant decodes, which is the
+// bit-exact oracle these kernels are verified against.
+
+@ __lk_f16_dev → s {
+    ^ `
+    // IEEE half → float, integer bit transport. Deliberately NOT
+    // __half2float: that needs cuda_fp16.h, which NVRTC does not have
+    // by default and the CPU backend's shim has no notion of. A union
+    // and shifts compile identically on both backends.
+    __device__ static inline float nl_f16(const unsigned char* p) {
+        unsigned int h = (unsigned int)p[0] | ((unsigned int)p[1] << 8);
+        unsigned int sign = (h >> 15) << 31;
+        unsigned int e = (h >> 10) & 31u;
+        unsigned int m = h & 1023u;
+        unsigned int bits;
+        if (e == 0u) {
+            if (m == 0u) bits = sign;
+            else {
+                int ex = 113;
+                while (!(m & 1024u)) { m <<= 1; ex--; }
+                m &= 1023u;
+                bits = sign | ((unsigned int)ex << 23) | (m << 13);
+            }
+        } else if (e == 31u) {
+            bits = sign | 0x7F800000u | (m << 13);
+        } else {
+            bits = sign | ((e + 112u) << 23) | (m << 13);
+        }
+        union { unsigned int u; float f; } cv;
+        cv.u = bits;
+        return cv.f;
+    }
+    `
+}
+
+@ __lk_mv_q4_0 → s {
+    ^ ( nurl_str_cat ( __lk_f16_dev ) `extern "C" __global__ void mv_q4_0(
+        const unsigned char* W, const float* x, float* y, int rows, int cols) {
+        int r = blockIdx.x*blockDim.x + threadIdx.x;
+        if (r >= rows) return;
+        int nb = cols / 32;
+        const unsigned char* w = W + (long long)r * nb * 18;
+        float acc = 0.f;
+        for (int b = 0; b < nb; ++b) {
+            const unsigned char* blk = w + b*18;
+            float d = nl_f16(blk);
+            const float* xb = x + b*32;
+            for (int j = 0; j < 16; ++j) {
+                unsigned char q = blk[2+j];
+                acc += d * ((float)((q & 0xF) - 8)) * xb[j];
+                acc += d * ((float)((q >> 4)  - 8)) * xb[j+16];
+            }
+        }
+        y[r] = acc;
+    }` )
+}
+
+@ __lk_mv_q8_0 → s {
+    ^ ( nurl_str_cat ( __lk_f16_dev ) `extern "C" __global__ void mv_q8_0(
+        const unsigned char* W, const float* x, float* y, int rows, int cols) {
+        int r = blockIdx.x*blockDim.x + threadIdx.x;
+        if (r >= rows) return;
+        int nb = cols / 32;
+        const unsigned char* w = W + (long long)r * nb * 34;
+        float acc = 0.f;
+        for (int b = 0; b < nb; ++b) {
+            const unsigned char* blk = w + b*34;
+            float d = nl_f16(blk);
+            const signed char* q = (const signed char*)(blk + 2);
+            const float* xb = x + b*32;
+            float sub = 0.f;
+            for (int j = 0; j < 32; ++j) sub += (float)q[j] * xb[j];
+            acc += d * sub;
+        }
+        y[r] = acc;
+    }` )
+}
+
+// Q4_K: 144-byte super-block of 256 — d, dmin (f16), 12 packed 6-bit
+// scale/min pairs, 128 nibble bytes. Sub-block s takes its 32 values
+// from the low (even s) or high (odd s) nibbles of bytes [s/2*32 …].
+@ __lk_mv_q4_k → s {
+    ^ ( nurl_str_cat ( __lk_f16_dev ) `extern "C" __global__ void mv_q4_k(
+        const unsigned char* W, const float* x, float* y, int rows, int cols) {
+        int r = blockIdx.x*blockDim.x + threadIdx.x;
+        if (r >= rows) return;
+        int nb = cols / 256;
+        const unsigned char* w = W + (long long)r * nb * 144;
+        float acc = 0.f;
+        for (int b = 0; b < nb; ++b) {
+            const unsigned char* blk = w + b*144;
+            float d    = nl_f16(blk);
+            float dmin = nl_f16(blk + 2);
+            const unsigned char* sc = blk + 4;
+            const unsigned char* qs = blk + 16;
+            const float* xb = x + b*256;
+            for (int s = 0; s < 8; ++s) {
+                int sV, mV;
+                if (s < 4) { sV = sc[s] & 63; mV = sc[s+4] & 63; }
+                else {
+                    sV = (sc[s+4] & 0xF) | ((sc[s-4] >> 6) << 4);
+                    mV = (sc[s+4] >>  4) | ((sc[s]   >> 6) << 4);
+                }
+                float d1 = d * sV, m1 = dmin * mV;
+                const unsigned char* qb = qs + (s/2)*32;
+                const float* xs = xb + s*32;
+                int hi = s & 1;
+                float sub = 0.f, msum = 0.f;
+                for (int l = 0; l < 32; ++l) {
+                    int q = hi ? (qb[l] >> 4) : (qb[l] & 0xF);
+                    sub  += (float)q * xs[l];
+                    msum += xs[l];
+                }
+                acc += d1 * sub - m1 * msum;
+            }
+        }
+        y[r] = acc;
+    }` )
+}
+
+// Q6_K: 210-byte super-block of 256 — 128 low-nibble bytes, 64 bytes
+// of upper 2 bits, 16 int8 scales, f16 d. Sixteen 16-element groups.
+@ __lk_mv_q6_k → s {
+    ^ ( nurl_str_cat ( __lk_f16_dev ) `extern "C" __global__ void mv_q6_k(
+        const unsigned char* W, const float* x, float* y, int rows, int cols) {
+        int r = blockIdx.x*blockDim.x + threadIdx.x;
+        if (r >= rows) return;
+        int nb = cols / 256;
+        const unsigned char* w = W + (long long)r * nb * 210;
+        float acc = 0.f;
+        for (int b = 0; b < nb; ++b) {
+            const unsigned char* blk = w + b*210;
+            const unsigned char* ql = blk;
+            const unsigned char* qh = blk + 128;
+            const signed char*   sc = (const signed char*)(blk + 192);
+            float d = nl_f16(blk + 208);
+            const float* xb = x + b*256;
+            for (int n = 0; n < 2; ++n) {
+                const unsigned char* ql0 = ql + n*64;
+                const unsigned char* qh0 = qh + n*32;
+                const signed char*   sc0 = sc + n*8;
+                const float* xn = xb + n*128;
+                for (int l = 0; l < 32; ++l) {
+                    int is = l/16;
+                    unsigned char h = qh0[l];
+                    int b1 = ql0[l], b2 = ql0[l+32];
+                    int q1 = ((b1 & 0xF) | (( h       & 3) << 4)) - 32;
+                    int q2 = ((b2 & 0xF) | (((h >> 2) & 3) << 4)) - 32;
+                    int q3 = ((b1 >>  4) | (((h >> 4) & 3) << 4)) - 32;
+                    int q4 = ((b2 >>  4) | (((h >> 6) & 3) << 4)) - 32;
+                    acc += d * (float)sc0[is    ] * (float)q1 * xn[l];
+                    acc += d * (float)sc0[is + 2] * (float)q2 * xn[l + 32];
+                    acc += d * (float)sc0[is + 4] * (float)q3 * xn[l + 64];
+                    acc += d * (float)sc0[is + 6] * (float)q4 * xn[l + 96];
+                }
+            }
+        }
+        y[r] = acc;
+    }` )
+}
+
+@ __lk_mv_q5_0 → s {
+    ^ ( nurl_str_cat ( __lk_f16_dev ) `extern "C" __global__ void mv_q5_0(
+        const unsigned char* W, const float* x, float* y, int rows, int cols) {
+        int r = blockIdx.x*blockDim.x + threadIdx.x;
+        if (r >= rows) return;
+        int nb = cols / 32;
+        const unsigned char* w = W + (long long)r * nb * 22;
+        float acc = 0.f;
+        for (int b = 0; b < nb; ++b) {
+            const unsigned char* blk = w + b*22;
+            float d = nl_f16(blk);
+            unsigned int qh = (unsigned int)blk[2] | ((unsigned int)blk[3] << 8)
+                            | ((unsigned int)blk[4] << 16) | ((unsigned int)blk[5] << 24);
+            const unsigned char* qs = blk + 6;
+            const float* xb = x + b*32;
+            float sub = 0.f;
+            for (int j = 0; j < 16; ++j) {
+                int h0 = ((qh >> j) & 1u) << 4;
+                int h1 = ((qh >> (j + 16)) & 1u) << 4;
+                sub += (float)(((qs[j] & 0xF) | h0) - 16) * xb[j];
+                sub += (float)(((qs[j] >> 4)  | h1) - 16) * xb[j + 16];
+            }
+            acc += d * sub;
+        }
+        y[r] = acc;
+    }` )
+}
+
+@ __lk_mv_q5_1 → s {
+    ^ ( nurl_str_cat ( __lk_f16_dev ) `extern "C" __global__ void mv_q5_1(
+        const unsigned char* W, const float* x, float* y, int rows, int cols) {
+        int r = blockIdx.x*blockDim.x + threadIdx.x;
+        if (r >= rows) return;
+        int nb = cols / 32;
+        const unsigned char* w = W + (long long)r * nb * 24;
+        float acc = 0.f;
+        for (int b = 0; b < nb; ++b) {
+            const unsigned char* blk = w + b*24;
+            float d = nl_f16(blk);
+            float m = nl_f16(blk + 2);
+            unsigned int qh = (unsigned int)blk[4] | ((unsigned int)blk[5] << 8)
+                            | ((unsigned int)blk[6] << 16) | ((unsigned int)blk[7] << 24);
+            const unsigned char* qs = blk + 8;
+            const float* xb = x + b*32;
+            float sub = 0.f, msum = 0.f;
+            for (int j = 0; j < 16; ++j) {
+                int h0 = ((qh >> j) & 1u) << 4;
+                int h1 = ((qh >> (j + 16)) & 1u) << 4;
+                sub  += (float)((qs[j] & 0xF) | h0) * xb[j];
+                sub  += (float)((qs[j] >> 4)  | h1) * xb[j + 16];
+                msum += xb[j] + xb[j + 16];
+            }
+            acc += d * sub + m * msum;
+        }
+        y[r] = acc;
+    }` )
+}
+
+// Q5_K: 176-byte super-block of 256 — d, dmin (f16), 12 packed scale/
+// min bytes, 32 bytes carrying each value's 5th bit, 128 nibble bytes.
+@ __lk_mv_q5_k → s {
+    ^ ( nurl_str_cat ( __lk_f16_dev ) `extern "C" __global__ void mv_q5_k(
+        const unsigned char* W, const float* x, float* y, int rows, int cols) {
+        int r = blockIdx.x*blockDim.x + threadIdx.x;
+        if (r >= rows) return;
+        int nb = cols / 256;
+        const unsigned char* w = W + (long long)r * nb * 176;
+        float acc = 0.f;
+        for (int b = 0; b < nb; ++b) {
+            const unsigned char* blk = w + b*176;
+            float d    = nl_f16(blk);
+            float dmin = nl_f16(blk + 2);
+            const unsigned char* sc = blk + 4;
+            const unsigned char* qh = blk + 16;
+            const unsigned char* qs = blk + 48;
+            const float* xb = x + b*256;
+            for (int s = 0; s < 8; ++s) {
+                int sV, mV;
+                if (s < 4) { sV = sc[s] & 63; mV = sc[s+4] & 63; }
+                else {
+                    sV = (sc[s+4] & 0xF) | ((sc[s-4] >> 6) << 4);
+                    mV = (sc[s+4] >>  4) | ((sc[s]   >> 6) << 4);
+                }
+                float d1 = d * sV, m1 = dmin * mV;
+                const unsigned char* qb = qs + (s/2)*32;
+                const float* xs = xb + s*32;
+                int hi = s & 1;
+                float sub = 0.f, msum = 0.f;
+                for (int l = 0; l < 32; ++l) {
+                    int q = hi ? (qb[l] >> 4) : (qb[l] & 0xF);
+                    int hbit = (qh[l] >> s) & 1;
+                    sub  += (float)(q + (hbit << 4)) * xs[l];
+                    msum += xs[l];
+                }
+                acc += d1 * sub - m1 * msum;
+            }
+        }
+        y[r] = acc;
+    }` )
+}
+
+@ __lk_mv_f16 → s {
+    ^ ( nurl_str_cat ( __lk_f16_dev ) `extern "C" __global__ void mv_f16(
+        const unsigned char* W, const float* x, float* y, int rows, int cols) {
+        int r = blockIdx.x*blockDim.x + threadIdx.x;
+        if (r >= rows) return;
+        const unsigned char* w = W + (long long)r*cols*2;
+        float acc = 0.f;
+        for (int c = 0; c < cols; ++c) acc += nl_f16(w + c*2) * x[c];
+        y[r] = acc;
+    }` )
+}
+
 @ lk_build Gpu g → LlmKernels {
     : GpuKernel k1 ( gpu_compile g ( __lk_matvec ) `matvec` )
     : GpuKernel k2 ( gpu_compile g ( __lk_rmsnorm ) `rmsnorm` )
@@ -147,14 +437,33 @@ $ `deps/gpu/src/gpu.nu`
     : GpuKernel k5 ( gpu_compile g ( __lk_silumul ) `silumul` )
     : GpuKernel k6 ( gpu_compile g ( __lk_addv ) `addv` )
     : GpuKernel k7 ( gpu_compile g ( __lk_copyat ) `copyat` )
-    : b ok & & & ( gpu_kernel_ok k1 ) ( gpu_kernel_ok k2 )
+    : GpuKernel q1 ( gpu_compile g ( __lk_mv_q4_0 ) `mv_q4_0` )
+    : GpuKernel q2 ( gpu_compile g ( __lk_mv_q8_0 ) `mv_q8_0` )
+    : GpuKernel q3 ( gpu_compile g ( __lk_mv_q4_k ) `mv_q4_k` )
+    : GpuKernel q4 ( gpu_compile g ( __lk_mv_q6_k ) `mv_q6_k` )
+    : GpuKernel q5 ( gpu_compile g ( __lk_mv_f16 ) `mv_f16` )
+    : GpuKernel q6 ( gpu_compile g ( __lk_mv_q5_0 ) `mv_q5_0` )
+    : GpuKernel q7 ( gpu_compile g ( __lk_mv_q5_1 ) `mv_q5_1` )
+    : GpuKernel q8 ( gpu_compile g ( __lk_mv_q5_k ) `mv_q5_k` )
+    : b ok0 & & & ( gpu_kernel_ok k1 ) ( gpu_kernel_ok k2 )
     & ( gpu_kernel_ok k3 ) ( gpu_kernel_ok k4 )
     & & ( gpu_kernel_ok k5 ) ( gpu_kernel_ok k6 ) ( gpu_kernel_ok k7 )
-    ^ @ LlmKernels { k1 k2 k3 k4 k5 k6 k7 ok }
+    : b ok1 & & ( gpu_kernel_ok q1 ) ( gpu_kernel_ok q2 )
+    & & ( gpu_kernel_ok q3 ) ( gpu_kernel_ok q4 ) ( gpu_kernel_ok q5 )
+    : b ok & ok0 & ok1 & & ( gpu_kernel_ok q6 ) ( gpu_kernel_ok q7 ) ( gpu_kernel_ok q8 )
+    ^ @ LlmKernels { k1 q1 q2 q6 q7 q3 q8 q4 q5 k2 k3 k4 k5 k6 k7 ok }
 }
 
 @ lk_free LlmKernels ks → v {
     ( gpu_kernel_free . ks matvec )
+    ( gpu_kernel_free . ks mv_q4_0 )
+    ( gpu_kernel_free . ks mv_q8_0 )
+    ( gpu_kernel_free . ks mv_q5_0 )
+    ( gpu_kernel_free . ks mv_q5_1 )
+    ( gpu_kernel_free . ks mv_q4_k )
+    ( gpu_kernel_free . ks mv_q5_k )
+    ( gpu_kernel_free . ks mv_q6_k )
+    ( gpu_kernel_free . ks mv_f16 )
     ( gpu_kernel_free . ks rmsnorm )
     ( gpu_kernel_free . ks rope )
     ( gpu_kernel_free . ks attn )
@@ -174,6 +483,44 @@ $ `deps/gpu/src/gpu.nu`
     ( vec_push [i] a ( gpu_arg_i32 cols ) )
     : i _r ( gpu_launch . ks matvec ( gpu_grid rows 256 ) 256 a )
     ( vec_free [i] a )
+}
+
+// Quantised matvec dispatch: `gt` is the ggml tensor type of W.
+// Returns F when the type has no device kernel (the caller then falls
+// back to the f32 path — correctness first, always).
+@ lk_matvec_q LlmKernels ks i gt i wd i xd i yd i rows i cols → b {
+    : ~ i which -1
+    ? == gt 0 { = which 0 } {}
+    ? == gt 1 { = which 5 } {}
+    ? == gt 2 { = which 1 } {}
+    ? == gt 8 { = which 2 } {}
+    ? == gt 12 { = which 3 } {}
+    ? == gt 14 { = which 4 } {}
+    ? == gt 6 { = which 6 } {}
+    ? == gt 7 { = which 7 } {}
+    ? == gt 13 { = which 8 } {}
+    ? < which 0 { ^ F } {}
+    ? == which 0 {
+        ( lk_matvec ks wd xd yd rows cols )
+        ^ T
+    } {}
+    : ( Vec i ) a ( vec_new [i] )
+    ( vec_push [i] a ( gpu_arg_i64 wd ) )
+    ( vec_push [i] a ( gpu_arg_i64 xd ) )
+    ( vec_push [i] a ( gpu_arg_i64 yd ) )
+    ( vec_push [i] a ( gpu_arg_i32 rows ) )
+    ( vec_push [i] a ( gpu_arg_i32 cols ) )
+    : i grid ( gpu_grid rows 64 )
+    ? == which 1 { : i _r ( gpu_launch . ks mv_q4_0 grid 64 a ) } {}
+    ? == which 2 { : i _r ( gpu_launch . ks mv_q8_0 grid 64 a ) } {}
+    ? == which 3 { : i _r ( gpu_launch . ks mv_q4_k grid 64 a ) } {}
+    ? == which 4 { : i _r ( gpu_launch . ks mv_q6_k grid 64 a ) } {}
+    ? == which 5 { : i _r ( gpu_launch . ks mv_f16 grid 64 a ) } {}
+    ? == which 6 { : i _r ( gpu_launch . ks mv_q5_0 grid 64 a ) } {}
+    ? == which 7 { : i _r ( gpu_launch . ks mv_q5_1 grid 64 a ) } {}
+    ? == which 8 { : i _r ( gpu_launch . ks mv_q5_k grid 64 a ) } {}
+    ( vec_free [i] a )
+    ^ T
 }
 
 @ lk_rmsnorm LlmKernels ks i xd i wd i yd i n f eps → v {

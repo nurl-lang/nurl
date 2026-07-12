@@ -91,7 +91,35 @@ else
     echo "  SKIP quantized model download failed"
 fi
 
-# 5. seeded sampling determinism
+# 5. quantised-native device kernels == the host dequant oracle
+MQ2="$WORK/q4km.gguf"
+if curl -sL --max-time 240 -f -o "$MQ2" \
+    https://huggingface.co/QuantFactory/SmolLM-135M-GGUF/resolve/main/SmolLM-135M.Q4_K_M.gguf; then
+    "$NL" logits "$MQ2" "Once upon a time" > "$WORK/dev.logits"
+    NURLLAMA_DEQUANT=host "$NL" logits "$MQ2" "Once upon a time" > "$WORK/host.logits"
+    python3 - "$WORK" <<'PYEOF3' && ok "device quant kernels == host dequant oracle (Q4_K/Q6_K/Q5_0/Q8_0)" || bad "quant kernel equivalence"
+import sys, numpy as np
+w = sys.argv[1]
+a = np.loadtxt(w+'/dev.logits'); b = np.loadtxt(w+'/host.logits')
+span = b.max() - b.min()
+assert np.abs(a-b).max() < span*1e-4, "device/host logits diverge"
+assert list(np.argsort(-a)[:5]) == list(np.argsort(-b)[:5]), "top-5 differ"
+PYEOF3
+    QK=$("$NL" run "$MQ2" "Once upon a time" -n 16 --temp 0)
+    QH=$(NURLLAMA_DEQUANT=host "$NL" run "$MQ2" "Once upon a time" -n 16 --temp 0)
+    [ "$QK" = "$QH" ] && ok "K-quant greedy text identical device-native vs host-dequant" || bad "K-quant text drift"
+    QC=$(NURL_GPU=cpu "$NL" run "$MQ2" "Once upon a time" -n 16 --temp 0)
+    [ "$QC" = "$QK" ] && ok "K-quant CPU backend text == device text" || bad "K-quant backend parity"
+    DEVMEM=$(NURLLAMA_VERBOSE=1 "$NL" run "$MQ2" "hi" -n 1 --temp 0 2>&1 >/dev/null | grep -oP 'device memory: \K[0-9]+')
+    HOSTMEM=$(NURLLAMA_VERBOSE=1 NURLLAMA_DEQUANT=host "$NL" run "$MQ2" "hi" -n 1 --temp 0 2>&1 >/dev/null | grep -oP 'device memory: \K[0-9]+')
+    [ -n "$DEVMEM" ] && [ -n "$HOSTMEM" ] && [ "$DEVMEM" -lt "$HOSTMEM" ] \
+        && ok "quantised weights cut device memory ${HOSTMEM} → ${DEVMEM} MiB" \
+        || bad "device memory not reduced ($DEVMEM vs $HOSTMEM)"
+else
+    echo "  SKIP Q4_K_M download failed"
+fi
+
+# 6. seeded sampling determinism
 A=$("$NL" run "$M" "One day" -n 16 --temp 0.8 --seed 7)
 B=$("$NL" run "$M" "One day" -n 16 --temp 0.8 --seed 7)
 C=$("$NL" run "$M" "One day" -n 16 --temp 0.8 --seed 8)

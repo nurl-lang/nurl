@@ -188,6 +188,32 @@ else
     echo "  SKIP python3 not found — independence battery skipped"
 fi
 
+if [ "${NURL_NET_TESTS:-0}" = 1 ] && command -v curl >/dev/null 2>&1 && python3 -c 'import numpy' 2>/dev/null; then
+    echo "[net] K-quants vs an independent decoder, on a real Q4_K_M model"
+    KM="$WORK/q4km.gguf"
+    if curl -sL --max-time 240 -f -o "$KM" \
+        https://huggingface.co/QuantFactory/SmolLM-135M-GGUF/resolve/main/SmolLM-135M.Q4_K_M.gguf; then
+        # one tensor per quant type present in a real Q4_K_M file
+        for pair in "blk.11.ffn_down.weight Q4_K" "blk.0.ffn_down.weight Q6_K" \
+                    "blk.0.ffn_gate.weight Q5_0" "token_embd.weight Q8_0"; do
+            set -- $pair
+            "$GGUF" export "$KM" "$1" -o "$WORK/ours.f32" >/dev/null
+            python3 tests/kquant_ref.py "$KM" "$1" "$WORK/ref.f32" >/dev/null
+            if python3 - "$WORK" <<'PYEOF2'
+import sys, numpy as np
+w = sys.argv[1]
+a = np.fromfile(w+'/ours.f32', dtype='<f4'); b = np.fromfile(w+'/ref.f32', dtype='<f4')
+assert len(a) == len(b) and len(a) > 0, "length mismatch"
+assert (a.view(np.uint32) == b.view(np.uint32)).all(), "not bit-identical"
+PYEOF2
+            then ok "$2 dequant BIT-IDENTICAL to the independent decoder"
+            else bad "$2 dequant"; fi
+        done
+    else
+        echo "  SKIP Q4_K_M download failed"
+    fi
+fi
+
 if [ "${NURL_NET_TESTS:-0}" = 1 ] && command -v curl >/dev/null 2>&1; then
     echo "[net] real llama.cpp model from HuggingFace"
     M="$WORK/stories260K.gguf"

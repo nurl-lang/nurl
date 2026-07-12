@@ -38,7 +38,12 @@ $ `stdlib/std/fs.nu`
 typedef struct { int x, y, z; } __nurl_dim3;
 static __thread __nurl_dim3 blockIdx, threadIdx, blockDim, gridDim;
 #define __global__
-#define __device__ static
+// __device__ is an execution-space qualifier, NOT a storage class:
+// "__device__ static inline f()" is legal CUDA, so expanding it to
+// "static" would emit "static static inline" (duplicate specifier).
+// It means nothing on the host — expand it away and let the kernel's
+// own storage class stand.
+#define __device__
 #define __restrict__
 // CUDA-only math intrinsics that C99 math.h lacks — a kernel using
 // them must run identically on this backend.
@@ -79,11 +84,26 @@ static inline double rsqrt(double x) { return 1.0/sqrt(x); }
 
 // Parse the kernel signature and build the comma-separated call argument list
 // (`*(T0*)p[0], *(T1*)p[1], …`) from the FIRST `(...)` in `src`.
-@ __parse_casts s src → String {
+@ __parse_casts s src s name → String {
     : i n ( nurl_str_len src )
+    // Locate the ENTRY kernel's own parameter list — "void <name>(" —
+    // not merely the first '(' in the source. A kernel is free to
+    // declare __device__ helpers above itself (nurllama's quant
+    // matvecs decode f16 through one), and taking the first paren
+    // would then parse the helper's parameters and emit a launch stub
+    // with the wrong arity. Falls back to the first '(' when the
+    // signature cannot be located, preserving the old behaviour.
+    : String needle ( string_from `void ` )
+    ( string_push_str needle name )
+    ( string_push_char needle 40 )
+    : i hit ( nurl_str_find src ( string_data needle ) )
+    : i nlen ( string_len needle )
+    ( string_free needle )
     : ~ i op - 0 1
-    : ~ i i 0
-    ~ & < i n < op 0 { ? == ( nurl_str_get src i ) 40 { = op i } {} = i + i 1 }
+    ? >= hit 0 { = op + hit - nlen 1 } {
+        : ~ i i 0
+        ~ & < i n < op 0 { ? == ( nurl_str_get src i ) 40 { = op i } {} = i + i 1 }
+    }
     : String out ( string_new )
     ? < op 0 { ^ out } {}
     : ~ i depth 1
@@ -121,7 +141,7 @@ static inline double rsqrt(double x) { return 1.0/sqrt(x); }
 // Compile CUDA-C `src` (entry `name`) to a host shared object and dlopen it.
 // Returns the dlopen handle (0 on failure), analogous to cuda_module_load.
 @ cpu_compile s src s name → *u {
-    : String casts ( __parse_casts src )
+    : String casts ( __parse_casts src name )
     : String c ( string_with_cap + 2048 ( nurl_str_len src ) )
     ( string_push_str c ( __cpu_header ) )
     ( string_push_str c src )
@@ -223,7 +243,12 @@ static inline double rsqrt(double x) { return 1.0/sqrt(x); }
 typedef struct { int x, y, z; } __nurl_dim3;
 static __nurl_dim3 blockIdx, threadIdx, blockDim, gridDim;
 #define __global__
-#define __device__ static
+// __device__ is an execution-space qualifier, NOT a storage class:
+// "__device__ static inline f()" is legal CUDA, so expanding it to
+// "static" would emit "static static inline" (duplicate specifier).
+// It means nothing on the host — expand it away and let the kernel's
+// own storage class stand.
+#define __device__
 #define __restrict__
 `
 }
@@ -235,7 +260,7 @@ static __nurl_dim3 blockIdx, threadIdx, blockDim, gridDim;
     : String srcs ( string_from src )
     : String cleaned ( string_replace srcs `extern "C" ` `` )
     ( string_free srcs )
-    : String casts ( __parse_casts src )
+    : String casts ( __parse_casts src ename )
     : String out ( string_with_cap + 1024 ( string_len cleaned ) )
     ( string_push_str out ( string_data cleaned ) )
     ( string_push_str out `\nstatic void __nurl_sl_` )
