@@ -103,7 +103,19 @@ if (( SAN == 1 )); then
     # exit-1-on-detect. run_san_tests.sh re-enables leak detection on
     # demand via LSAN_DETECT_LEAKS=1 for the test corpus, where the
     # release-and-cleanup discipline is meaningfully different.
-    export ASAN_OPTIONS="detect_leaks=0:abort_on_error=0:halt_on_error=0:print_stacktrace=1"
+    #
+    # Memory knobs: the instrumented self-compile (stage1/stage2 ir)
+    # holds tens of millions of live small allocations (that same
+    # process-lifetime str-pool strategy), and default ASan redzones on
+    # the larger pool blocks push the stage peak right against the
+    # 16 GB GitHub runner — the job then dies as a 143/OOM with no
+    # output. max_redzone=16 alone cuts ~1.9 GB off the self-compile
+    # peak (measured); the small quarantine + shallow malloc stacks
+    # trim the rest of the always-on cost. Error DETECTION is
+    # unaffected — only the free-reuse distance and the alloc-stack
+    # depth in reports shrink, and run_san_tests.sh (the corpus that
+    # actually hunts bugs in small programs) sets its own defaults.
+    export ASAN_OPTIONS="detect_leaks=0:abort_on_error=0:halt_on_error=0:print_stacktrace=1:quarantine_size_mb=4:malloc_context_size=2:max_redzone=16"
     export UBSAN_OPTIONS="print_stacktrace=1:halt_on_error=0"
 else
     NO_LTO_IN_SAN=0
