@@ -1,0 +1,8 @@
+[package]
+name = "nurllama"
+version = "0.1.0"
+description = "Run language models locally, in pure NURL — the ollama-shaped engine being built package by package on top of the gguf container toolkit. Phase 2 (this release): the tokenizer, loaded entirely from the model's own tokenizer.ggml.* GGUF metadata — no external vocab files, no exporter step. Two families: SentencePiece-style bigram merging for llama-family models (space-escape to ▁, highest-score adjacent merge with llama.cpp's exact selection order, <0xNN> byte fallback, UNK) and byte-level BPE for gpt2-family models (GPT-2 byte→unicode remap, contraction/letter/digit/punct/whitespace pre-split, lowest-merge-rank pairing from tokenizer.ggml.merges). Encode and decode are verified bit-for-bit: a 17-check selftest over synthetic vocabularies with hand-derived expected ids (built with the gguf writer, parsed back through the real parser), plus token-for-token parity with an independent python SentencePiece implementation on a real llama.cpp model — unicode, emoji byte-fallback, tabs, runs of spaces and the empty string included. CLI: nurllama tokenize/detok/vocab/selftest. Next phases: the gpukit inference core (RMSNorm/RoPE/attention/KV-cache), the model store + pull, and an ollama-compatible HTTP API."
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+gguf = { path = "../gguf", version = "^0.1" }
