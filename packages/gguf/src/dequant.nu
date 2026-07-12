@@ -85,21 +85,66 @@ $ `gguf.nu`
     ^ | >> # i . P + base + j 4 4 << >> # i . P + base j 6 4
 }
 
-// Dequantise tensor #idx of g to little-endian f32 (4 bytes per
-// element, storage order). Allocation is nelems * 4 — bounded because
-// nelems was range-proven against the file at parse time.
-@ gguf_dequant * Gguf g i idx → !( Vec u ) String {
+// Dequantise a contiguous ELEMENT RANGE of tensor #idx — [first,
+// first+count) — to little-endian f32. `first` and `count` must be
+// multiples of the type's block size (they always are for whole rows:
+// ggml guarantees dim0 is a block multiple). This is what lets a
+// consumer touch one row of a multi-gigabyte embedding table without
+// expanding the whole tensor: nurllama dequantises exactly the token's
+// row per step.
+@ gguf_dequant_range * Gguf g i idx i first i count → !( Vec u ) String {
+    ? | < first 0 < count 0 {
+        ^ @ !( Vec u ) String { F ( string_from `gguf: negative dequant range` ) }
+    } {}
     ? | < idx 0 >= idx ( gguf_n_tensors g ) {
         ^ @ !( Vec u ) String { F ( string_from `gguf: tensor index out of range` ) }
     } {}
     : ~ i gt -1
     : ~ i ne 0
+    ?? ( vec_get [GgufTensor] . g tensors idx ) {
+        T t → {
+            = gt . t gtype
+            = ne . t nelems
+        }
+        F → {}
+    }
+    ? > + first count ne {
+        ^ @ !( Vec u ) String { F ( string_from `gguf: dequant range runs past the tensor` ) }
+    } {}
+    : i blk ( gguf_type_blck gt )
+    ? == blk 0 {
+        : String m ( string_from `gguf: cannot dequantise tensor of unsized type ` )
+        ( string_push_int m gt )
+        ^ @ !( Vec u ) String { F m }
+    } {}
+    ? | != % first blk 0 != % count blk 0 {
+        ^ @ !( Vec u ) String { F ( string_from `gguf: dequant range must be block-aligned` ) }
+    } {}
+    ^ ( __gg_dequant g idx first count )
+}
+
+// Dequantise the whole tensor.
+@ gguf_dequant * Gguf g i idx → !( Vec u ) String {
+    ? | < idx 0 >= idx ( gguf_n_tensors g ) {
+        ^ @ !( Vec u ) String { F ( string_from `gguf: tensor index out of range` ) }
+    } {}
+    : ~ i ne 0
+    ?? ( vec_get [GgufTensor] . g tensors idx ) {
+        T t → { = ne . t nelems }
+        F → {}
+    }
+    ^ ( __gg_dequant g idx 0 ne )
+}
+
+// The decoder. `first`/`count` are block-aligned element bounds,
+// validated by the public entries above.
+@ __gg_dequant * Gguf g i idx i first i count → !( Vec u ) String {
+    : ~ i gt -1
     : ~ i nb -1
     : ~ i addr 0
     ?? ( vec_get [GgufTensor] . g tensors idx ) {
         T t → {
             = gt . t gtype
-            = ne . t nelems
             = nb . t nbytes
             = addr # i ( gguf_tensor_ptr g t )
         }
@@ -110,6 +155,13 @@ $ `gguf.nu`
         ( string_push_int m gt )
         ^ @ !( Vec u ) String { F m }
     } {}
+    // Skip to the range's first block. Every layout below is a flat run
+    // of fixed-size blocks, so the offset is exact.
+    : i blk0 ( gguf_type_blck gt )
+    : i esz ( gguf_type_size gt )
+    = addr + addr * / first blk0 esz
+    : i ne count
+    = nb * / count blk0 esz
     : *u P # *u addr
     : ( Vec u ) out ( vec_with_cap [u] * ne 4 )
     // Q6_K writes its four quarters out of order (see below), so its
