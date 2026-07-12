@@ -21,13 +21,20 @@
 //   Characters that never reach a vocab piece fall back to the <0xXX>
 //   BYTE tokens, then to UNK.
 //
-//   BPE ("gpt2") — byte-level BPE: GPT-2's byte→unicode remap, greedy
-//   regex-style pre-split (contractions / letters / digits / punct /
-//   whitespace), then lowest-merge-rank pairing driven by
-//   tokenizer.ggml.merges. NOTE v1: the pre-split implements the GPT-2
-//   pattern with \p{L} approximated as "ASCII letters + any cp ≥ 0x80"
-//   — per-model `tokenizer.ggml.pre` variants (qwen2 digit splitting
-//   etc.) are a follow-up.
+//   BPE ("gpt2") — byte-level BPE: GPT-2's byte→unicode remap, a
+//   regex-shaped pre-split, then lowest-merge-rank pairing driven by
+//   tokenizer.ggml.merges. The pre-split VARIANT comes from the model's
+//   own `tokenizer.ggml.pre`:
+//
+//     default / gpt2  ` ?\p{L}+` · ` ?\p{N}+` (digits GROUPED) ·
+//                     ` ?[^\s\p{L}\p{N}]+` · contractions · whitespace
+//     qwen2           `\p{N}` (ONE digit per token) · a letter run may
+//                     absorb one leading non-letter/non-digit character ·
+//                     case-insensitive contractions · trailing-newline
+//                     punctuation runs
+//
+//   \p{L} is approximated as "ASCII letter or any codepoint ≥ 0x80",
+//   which is exact for every script these vocabularies actually contain.
 //
 // The Tok owns copies of every piece (the source Gguf can be closed
 // after tok_new). The piece→id map borrows the buffers of `pieces` —
@@ -52,6 +59,10 @@ $ `deps/gguf/src/gguf.nu`
 : i TOK_SPM 0
 : i TOK_BPE 1
 
+// BPE pre-tokenizer variants (tokenizer.ggml.pre)
+: i PRE_DEFAULT 0
+: i PRE_QWEN2 1
+
 : Tok {
     i mode
     ( Vec String ) pieces
@@ -62,6 +73,7 @@ $ `deps/gguf/src/gguf.nu`
     ( Vec String ) rankkeys
     ( Vec String ) byte_enc
     ( Vec i ) byte_id
+    i pre
     i bos
     i eos
     i unk
@@ -162,6 +174,9 @@ $ `deps/gguf/src/gguf.nu`
     = . t rankkeys ( vec_new [String] )
     = . t byte_enc ? == mode TOK_BPE ( __tk_build_byte_enc ) ( vec_new [String] )
     = . t byte_id ( vec_new [i] )
+    // pre-tokenizer variant: the model names its own
+    : s pre ( gguf_kv_str_or g `tokenizer.ggml.pre` `default` )
+    = . t pre ? ( nurl_str_eq pre `qwen2` ) PRE_QWEN2 PRE_DEFAULT
     = . t bos ( gguf_kv_int_or g `tokenizer.ggml.bos_token_id` -1 )
     = . t eos ( gguf_kv_int_or g `tokenizer.ggml.eos_token_id` -1 )
     = . t unk ( gguf_kv_int_or g `tokenizer.ggml.unknown_token_id` -1 )
@@ -456,6 +471,111 @@ $ `deps/gguf/src/gguf.nu`
     ^ 0
 }
 
+// qwen2's pre-tokenizer, alternation by alternation — the order is what
+// decides the token ids:
+//
+//   1  (?i:'s|'t|'re|'ve|'m|'ll|'d)      case-insensitive contractions
+//   2  [^\r\n\p{L}\p{N}]?\p{L}+          letters, optionally absorbing ONE
+//                                        leading non-letter/digit char
+//                                        (a space, but also "(" in "(foo")
+//   3  \p{N}                              ONE digit (GPT-2 groups runs)
+//   4   ?[^\s\p{L}\p{N}]+[\r\n]*         punctuation run + trailing newlines
+//   5  \s*[\r\n]+                        whitespace ending in newlines
+//   6  \s+(?!\S)                         whitespace NOT followed by a
+//                                        non-space — a run of k spaces
+//                                        before a word yields k−1 here and
+//                                        leaves the last space to rule 2
+//   7  \s+                                anything left
+@ __tk_pretoken_len_qwen2 s text i p i n → i {
+    : i b0 ( nurl_str_get text p )
+
+    // 1
+    ? == b0 39 {
+        : i cl ( __tk_contraction_ci text p n )
+        ? > cl 0 { ^ cl } {}
+    } {}
+
+    // 2 — the lead char must not be a letter, a digit or a newline
+    ? & ! ( __tk_is_letterish b0 ) & ! ( __tk_is_ascii_digit b0 ) & != b0 10 != b0 13 {
+        ? & < + p 1 n ( __tk_is_letterish ( nurl_str_get text + p 1 ) ) {
+            : ~ i r + p 1
+            ~ & < r n ( __tk_is_letterish ( nurl_str_get text r ) ) { = r + r 1 }
+            ^ - r p
+        } {}
+    } {}
+    ? ( __tk_is_letterish b0 ) {
+        : ~ i r p
+        ~ & < r n ( __tk_is_letterish ( nurl_str_get text r ) ) { = r + r 1 }
+        ^ - r p
+    } {}
+
+    // 3
+    ? ( __tk_is_ascii_digit b0 ) { ^ 1 } {}
+
+    // 4 — an optional single space, then a punctuation run, then newlines
+    : ~ i q p
+    : ~ i lead 0
+    ? & == b0 32 < + p 1 n {
+        : i b1 ( nurl_str_get text + p 1 )
+        ? & ! ( __tk_is_ws b1 ) & ! ( __tk_is_letterish b1 ) ! ( __tk_is_ascii_digit b1 ) {
+            = q + p 1
+            = lead 1
+        } {}
+    } {}
+    ? | > lead 0 & ! ( __tk_is_ws b0 ) & ! ( __tk_is_letterish b0 ) ! ( __tk_is_ascii_digit b0 ) {
+        : ~ i r q
+        : ~ b more T
+        ~ & more < r n {
+            : i cc ( nurl_str_get text r )
+            ? | | ( __tk_is_ws cc ) ( __tk_is_letterish cc ) ( __tk_is_ascii_digit cc ) { = more F } { = r + r 1 }
+        }
+        ? > r q {
+            ~ & < r n | == ( nurl_str_get text r ) 10 == ( nurl_str_get text r ) 13 { = r + r 1 }
+            ^ - r p
+        } {}
+    } {}
+
+    // 5/6/7 — whitespace
+    ? ( __tk_is_ws b0 ) {
+        : ~ i r p
+        ~ & < r n ( __tk_is_ws ( nurl_str_get text r ) ) { = r + r 1 }
+        // 5: through the LAST newline inside the run, if any
+        : ~ i nl -1
+        : ~ i k p
+        ~ < k r {
+            : i cc ( nurl_str_get text k )
+            ? | == cc 10 == cc 13 { = nl k } {}
+            = k + k 1
+        }
+        ? >= nl 0 { ^ - + nl 1 p } {}
+        // 6: a run followed by a non-space yields all but its last char —
+        // rule 2 (or 4) picks that one up as its leading character
+        ? & < r n > - r p 1 { ^ - - r p 1 } {}
+        // 7
+        ^ - r p
+    } {}
+
+    ^ 1
+}
+
+// Case-insensitive contraction after the apostrophe at text[p]
+// ('s 't 're 've 'm 'll 'd, either case). Length includes the quote.
+@ __tk_contraction_ci s text i p i n → i {
+    ? >= + p 1 n { ^ 0 } {}
+    : i c1 ( __tk_lower ( nurl_str_get text + p 1 ) )
+    ? | | == c1 115 == c1 116 | == c1 109 == c1 100 { ^ 2 } {}
+    ? >= + p 2 n { ^ 0 } {}
+    : i c2 ( __tk_lower ( nurl_str_get text + p 2 ) )
+    ? & == c1 114 == c2 101 { ^ 3 } {}
+    ? & == c1 118 == c2 101 { ^ 3 } {}
+    ? & == c1 108 == c2 108 { ^ 3 } {}
+    ^ 0
+}
+
+@ __tk_lower i c → i {
+    ^ ? & >= c 65 <= c 90 + c 32 c
+}
+
 // One GPT-2 pre-token starting at p; returns its byte length (≥ 1).
 @ __tk_pretoken_len s text i p i n → i {
     : i b0 ( nurl_str_get text p )
@@ -582,7 +702,7 @@ $ `deps/gguf/src/gguf.nu`
     : i n ( nurl_str_len text )
     : ~ i p 0
     ~ < p n {
-        : i len ( __tk_pretoken_len text p n )
+        : i len ? == . t pre PRE_QWEN2 ( __tk_pretoken_len_qwen2 text p n ) ( __tk_pretoken_len text p n )
         ( __tk_bpe_word t text p ? < len 1 1 len out )
         = p + p ? < len 1 1 len
     }

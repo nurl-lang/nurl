@@ -11,14 +11,14 @@ nurlpkg install nurllama
 ## Sixty seconds
 
 ```sh
-$ nurllama pull hf.co/QuantFactory/SmolLM-135M-GGUF/SmolLM-135M.Q4_K_M.gguf
-SmolLM-135M.Q4_K_M [===================>     ] 82%  86.1 MB / 105.4 MB  24.3 MB/s
-pulled SmolLM-135M.Q4_K_M (sha256:9b1c4e0a2f31…, 105.4 MB)
+$ nurllama pull hf.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/qwen2.5-0.5b-instruct-q4_k_m.gguf
+qwen2.5-0.5b-instruct-q4_k_m [=============>    ] 74%  294.1 MB / 397.8 MB  31.2 MB/s
+pulled qwen2.5-0.5b-instruct-q4_k_m (sha256:5c1e0d97a2b4…, 397.8 MB)
 
-$ nurllama run SmolLM-135M.Q4_K_M "Once upon a time" -n 40
-, there was a little girl named Lily. Lily loved to play with her friends…
+$ nurllama run qwen2.5-0.5b-instruct-q4_k_m "The capital of France is" -n 12
+ Paris. It is the largest city in Europe and the third
 
-$ nurllama chat SmolLM-135M.Q4_K_M
+$ nurllama chat qwen2.5-0.5b-instruct-q4_k_m
 chat ready — /exit to quit
 > what is a GGUF file?
 It is a container format for model weights…
@@ -56,9 +56,17 @@ single aggregated object instead.
 
 ## What it runs
 
-Llama-family GGUF models — F32, F16, BF16, Q4_0, Q4_1, Q5_0, Q5_1,
-Q8_0 and the K-quants **Q4_K / Q5_K / Q6_K** (the `Q4_K_M` files people
-actually download).
+**Architectures:** `llama` and `qwen2` — the two that share the llama
+shape (RMSNorm → GQA attention with rotary → SwiGLU). Each model's own
+metadata decides the details that actually change the output: qwen2's
+Q/K/V biases, its NEOX rotary layout (the two halves of a head rotate
+together, not adjacent pairs), and its BPE pre-tokenizer variant. Get
+those wrong and a model still runs while quietly producing nonsense —
+so nurllama reads them from the file rather than guessing.
+
+**Quantisations:** F32, F16, BF16, Q4_0, Q4_1, Q5_0, Q5_1, Q8_0 and the
+K-quants **Q4_K / Q5_K / Q6_K** (the `Q4_K_M` files people actually
+download).
 
 Weights stay **quantised on the device**: the matvec kernels decode
 GGUF blocks inside the matmul, so a Q4_K_M model needs about a third of
@@ -75,6 +83,7 @@ host through OpenMP and produces byte-identical output.
 | | |
 |---|---|
 | `NURLLAMA_HOME` | store location (default `~/.nurllama`) |
+| `--ctx N` | context length (default 4096, or the model's own if smaller) |
 | `NURL_GPU=cpu` | run on the CPU backend |
 | `NURLLAMA_VERBOSE=1` | report device memory at load |
 | `NURLLAMA_DEQUANT=host` | force the f32 reference path (debugging) |
@@ -98,8 +107,9 @@ Not by trusting itself:
 - Token IDs match an independent Python SentencePiece implementation on
   a real model — unicode, emoji, whitespace runs, empty input included.
 - Final-position logits match an independent **numpy** implementation of
-  the whole forward pass, and a 40-token greedy continuation is
-  text-identical to it.
+  the whole forward pass, and a greedy continuation is text-identical to
+  it — for llama *and* for qwen2, whose biases and NEOX rotary the
+  reference implements independently.
 - The quantised device kernels agree with the host dequant oracle —
   itself bit-identical to an independent decoder — and the CPU backend
   reproduces the same text exactly.

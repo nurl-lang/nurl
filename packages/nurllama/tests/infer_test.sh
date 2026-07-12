@@ -126,5 +126,57 @@ C=$("$NL" run "$M" "One day" -n 16 --temp 0.8 --seed 8)
 [ "$A" = "$B" ] && ok "same seed → same sample" || bad "sampling determinism"
 [ "$A" != "$C" ] && ok "different seed → different sample" || bad "seed sensitivity"
 
+# ── qwen2: a different architecture, tokenizer variant and rotary layout ──
+# A 400 MB download per run is unfriendly: point NURLLAMA_TEST_QWEN at an
+# already-fetched Qwen2.5 GGUF to reuse it; otherwise it is fetched once.
+QW="${NURLLAMA_TEST_QWEN:-}"
+if [ -z "$QW" ]; then
+    QW="$WORK/qwen.gguf"
+    curl -sL --max-time 1800 -f -o "$QW" \
+        https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/qwen2.5-0.5b-instruct-q4_k_m.gguf \
+        || rm -f "$QW"
+fi
+if python3 -c 'import regex' 2>/dev/null && [ -s "$QW" ]; then
+    # token ids vs an independent BPE reference that reads the model's own
+    # vocab, merges and tokenizer.ggml.pre and applies llama.cpp's regex
+    QP=0; QF=0
+    while IFS= read -r t; do
+        ours=$("$NL" tokenize "$QW" "$t" --no-special)
+        ref=$(printf '%s' "$t" | python3 tests/bpe_ref.py "$QW")
+        if [ "$ours" = "$ref" ]; then QP=$((QP+1)); else QF=$((QF+1)); echo "    MISMATCH [$t]"; fi
+    done <<'STRINGS'
+Hello world
+The year 2025 had 365 days
+def foo(x): return x+1
+  spaces   and tabs
+café naïve 日本語
+It's John's, isn't IT?
+1234567890
+(parens) [brackets]
+STRINGS
+    [ "$QF" = 0 ] && ok "qwen2 tokenizer: $QP strings match the independent BPE reference" || bad "qwen2 tokenizer ($QF mismatches)"
+
+    QIDS=$("$NL" tokenize "$QW" "The capital of France is" --no-special)
+    "$NL" logits "$QW" "The capital of France is" > "$WORK/q_ours.logits"
+    python3 tests/llama_ref.py "$QW" "$QIDS" > "$WORK/q_ref.logits"
+    python3 - "$WORK" <<'PYEOF2' && ok "qwen2 logits match the independent numpy forward pass" || bad "qwen2 logits"
+import sys, numpy as np
+w = sys.argv[1]
+a = np.loadtxt(w+'/q_ours.logits'); b = np.loadtxt(w+'/q_ref.logits')
+span = b.max() - b.min()
+assert np.abs(a-b).max() < span*1e-4, "logits diverge"
+assert list(np.argsort(-a)[:5]) == list(np.argsort(-b)[:5]), "top-5 differ"
+PYEOF2
+    QREF=$(python3 tests/llama_ref.py "$QW" "$QIDS" greedy 12)
+    QREFTXT=$("$NL" detok "$QW" $QREF)
+    QOURS=$("$NL" run "$QW" "The capital of France is" -n 12 --temp 0)
+    [ "$QREFTXT" = "$QOURS" ] && ok "qwen2 greedy text == numpy greedy (biases + NEOX rotary)" || {
+        bad "qwen2 greedy"; echo "    ours: $QOURS"; echo "    ref : $QREFTXT"; }
+    QCPU=$(NURL_GPU=cpu "$NL" run "$QW" "The capital of France is" -n 12 --temp 0)
+    [ "$QCPU" = "$QOURS" ] && ok "qwen2 CPU backend text == device text" || bad "qwen2 backend parity"
+else
+    echo "  SKIP qwen2 (needs python3-regex and the model)"
+fi
+
 echo "== nurllama inference tests: PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" = 0 ]
