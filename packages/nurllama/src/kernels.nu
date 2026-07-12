@@ -32,20 +32,22 @@ $ `deps/gpu/src/gpu.nu`
     GpuKernel attn
     GpuKernel silumul
     GpuKernel addv
+    GpuKernel addrow
     GpuKernel copyat
     b ok
 }
 
 @ __lk_matvec → s {
     ^ `extern "C" __global__ void matvec(
-        const float* W, const float* x, float* y, int rows, int cols) {
-        int r = blockIdx.x*blockDim.x + threadIdx.x;
-        if (r < rows) {
-            const float* w = W + (long long)r*cols;
-            float acc = 0.f;
-            for (int c = 0; c < cols; ++c) acc += w[c]*x[c];
-            y[r] = acc;
-        }
+        const float* W, const float* x, float* y, int rows, int cols, int batch) {
+        int idx = blockIdx.x*blockDim.x + threadIdx.x;
+        if (idx >= rows*batch) return;
+        int b = idx / rows, r = idx % rows;
+        const float* w = W + (long long)r*cols;
+        const float* xb = x + (long long)b*cols;
+        float acc = 0.f;
+        for (int c = 0; c < cols; ++c) acc += w[c]*xb[c];
+        y[(long long)b*rows + r] = acc;
     }`
 }
 
@@ -54,14 +56,15 @@ $ `deps/gpu/src/gpu.nu`
 // kernel valid on the block-serial CPU backend (no cross-thread sync).
 @ __lk_rmsnorm → s {
     ^ `extern "C" __global__ void rmsnorm(
-        const float* x, const float* w, float* y, int n, float eps) {
-        int i = blockIdx.x*blockDim.x + threadIdx.x;
-        if (i < n) {
-            float ss = 0.f;
-            for (int j = 0; j < n; ++j) ss += x[j]*x[j];
-            float inv = rsqrtf(ss/n + eps);
-            y[i] = x[i]*inv*w[i];
-        }
+        const float* x, const float* w, float* y, int n, float eps, int batch) {
+        int idx = blockIdx.x*blockDim.x + threadIdx.x;
+        if (idx >= n*batch) return;
+        int b = idx / n, i = idx % n;
+        const float* xb = x + (long long)b*n;
+        float ss = 0.f;
+        for (int j = 0; j < n; ++j) ss += xb[j]*xb[j];
+        float inv = rsqrtf(ss/n + eps);
+        y[(long long)b*n + i] = xb[i]*inv*w[i];
     }`
 }
 
@@ -69,10 +72,14 @@ $ `deps/gpu/src/gpu.nu`
 // of the first rd dims of every head rotate by pos·base^(-2j/rd).
 @ __lk_rope → s {
     ^ `extern "C" __global__ void rope(
-        float* x, int nh, int hd, int rd, int pos, float base) {
-        int p = blockIdx.x*blockDim.x + threadIdx.x;
+        float* x, int nh, int hd, int rd, int pos0, float base, int batch) {
+        int idx = blockIdx.x*blockDim.x + threadIdx.x;
         int pairs = rd/2;
-        if (p < nh*pairs) {
+        if (idx >= nh*pairs*batch) return;
+        int b = idx / (nh*pairs), p = idx % (nh*pairs);
+        x += (long long)b*nh*hd;
+        int pos = pos0 + b;
+        {
             int h = p / pairs, j = p % pairs;
             float theta = pos * powf(base, -2.f*j/rd);
             float c = cosf(theta), s = sinf(theta);
@@ -91,10 +98,14 @@ $ `deps/gpu/src/gpu.nu`
 // the architecture selects it rather than a heuristic.
 @ __lk_rope_neox → s {
     ^ `extern "C" __global__ void rope_neox(
-        float* x, int nh, int hd, int rd, int pos, float base) {
-        int p = blockIdx.x*blockDim.x + threadIdx.x;
+        float* x, int nh, int hd, int rd, int pos0, float base, int batch) {
+        int idx = blockIdx.x*blockDim.x + threadIdx.x;
         int pairs = rd/2;
-        if (p < nh*pairs) {
+        if (idx >= nh*pairs*batch) return;
+        int b = idx / (nh*pairs), p = idx % (nh*pairs);
+        x += (long long)b*nh*hd;
+        int pos = pos0 + b;
+        {
             int h = p / pairs, j = p % pairs;
             float theta = pos * powf(base, -2.f*j/rd);
             float c = cosf(theta), s = sinf(theta);
@@ -113,13 +124,19 @@ $ `deps/gpu/src/gpu.nu`
 @ __lk_attn → s {
     ^ `extern "C" __global__ void attn(
         const float* q, const float* K, const float* V, float* out,
-        float* scores, int nh, int nkv, int hd, int npos) {
-        int h = blockIdx.x*blockDim.x + threadIdx.x;
-        if (h < nh) {
+        float* scores, int nh, int nkv, int hd, int npos0, int batch, int maxpos) {
+        int idx = blockIdx.x*blockDim.x + threadIdx.x;
+        if (idx < nh*batch) {
+            int b = idx / nh, h = idx % nh;
+            // batch element b is at absolute position (npos0-1)+b, so it
+            // attends over npos0+b cache rows — its own causal window
+            int npos = npos0 + b;
+            q   += (long long)b*nh*hd;
+            out += (long long)b*nh*hd;
             int kvdim = nkv*hd;
             int kh = h / (nh/nkv);
             const float* qh = q + h*hd;
-            float* sc = scores + (long long)h*npos;
+            float* sc = scores + (long long)idx*maxpos;
             float scale = rsqrtf((float)hd);
             float mx = -1e30f;
             for (int t = 0; t < npos; ++t) {
@@ -159,6 +176,14 @@ $ `deps/gpu/src/gpu.nu`
     ^ `extern "C" __global__ void addv(float* a, const float* b, int n) {
         int i = blockIdx.x*blockDim.x + threadIdx.x;
         if (i < n) a[i] += b[i];
+    }`
+}
+
+// Broadcast add: every row of a batch gets the same vector (a bias).
+@ __lk_addrow → s {
+    ^ `extern "C" __global__ void addrow(float* a, const float* v, int n, int batch) {
+        int idx = blockIdx.x*blockDim.x + threadIdx.x;
+        if (idx < n*batch) a[idx] += v[idx % n];
     }`
 }
 
@@ -215,18 +240,21 @@ $ `deps/gpu/src/gpu.nu`
 
 @ __lk_mv_q4_0 → s {
     ^ ( nurl_str_cat ( __lk_f16_dev ) `extern "C" __global__ void mv_q4_0(
-        const unsigned char* W, const float* x, float* y, int rows, int cols) {
-        int r = blockIdx.x*blockDim.x + threadIdx.x;
-        if (r >= rows) return;
+        const unsigned char* W, const float* x, float* y, int rows, int cols, int batch) {
+        int idx = blockIdx.x*blockDim.x + threadIdx.x;
+        if (idx >= rows*batch) return;
+        int b = idx / rows, r = idx % rows;
+        x += (long long)b*cols;
+        y += (long long)b*rows;
         int nb = cols / 32;
         const unsigned char* w = W + (long long)r * nb * 18;
         float acc = 0.f;
-        for (int b = 0; b < nb; ++b) {
-            const unsigned char* blk = w + b*18;
-            float d = nl_f16(blk);
-            const float* xb = x + b*32;
+        for (int blk = 0; blk < nb; ++blk) {
+            const unsigned char* bp = w + blk*18;
+            float d = nl_f16(bp);
+            const float* xb = x + blk*32;
             for (int j = 0; j < 16; ++j) {
-                unsigned char q = blk[2+j];
+                unsigned char q = bp[2+j];
                 acc += d * ((float)((q & 0xF) - 8)) * xb[j];
                 acc += d * ((float)((q >> 4)  - 8)) * xb[j+16];
             }
@@ -237,17 +265,20 @@ $ `deps/gpu/src/gpu.nu`
 
 @ __lk_mv_q8_0 → s {
     ^ ( nurl_str_cat ( __lk_f16_dev ) `extern "C" __global__ void mv_q8_0(
-        const unsigned char* W, const float* x, float* y, int rows, int cols) {
-        int r = blockIdx.x*blockDim.x + threadIdx.x;
-        if (r >= rows) return;
+        const unsigned char* W, const float* x, float* y, int rows, int cols, int batch) {
+        int idx = blockIdx.x*blockDim.x + threadIdx.x;
+        if (idx >= rows*batch) return;
+        int b = idx / rows, r = idx % rows;
+        x += (long long)b*cols;
+        y += (long long)b*rows;
         int nb = cols / 32;
         const unsigned char* w = W + (long long)r * nb * 34;
         float acc = 0.f;
-        for (int b = 0; b < nb; ++b) {
-            const unsigned char* blk = w + b*34;
-            float d = nl_f16(blk);
-            const signed char* q = (const signed char*)(blk + 2);
-            const float* xb = x + b*32;
+        for (int blk = 0; blk < nb; ++blk) {
+            const unsigned char* bp = w + blk*34;
+            float d = nl_f16(bp);
+            const signed char* q = (const signed char*)(bp + 2);
+            const float* xb = x + blk*32;
             float sub = 0.f;
             for (int j = 0; j < 32; ++j) sub += (float)q[j] * xb[j];
             acc += d * sub;
@@ -261,19 +292,22 @@ $ `deps/gpu/src/gpu.nu`
 // from the low (even s) or high (odd s) nibbles of bytes [s/2*32 …].
 @ __lk_mv_q4_k → s {
     ^ ( nurl_str_cat ( __lk_f16_dev ) `extern "C" __global__ void mv_q4_k(
-        const unsigned char* W, const float* x, float* y, int rows, int cols) {
-        int r = blockIdx.x*blockDim.x + threadIdx.x;
-        if (r >= rows) return;
+        const unsigned char* W, const float* x, float* y, int rows, int cols, int batch) {
+        int idx = blockIdx.x*blockDim.x + threadIdx.x;
+        if (idx >= rows*batch) return;
+        int b = idx / rows, r = idx % rows;
+        x += (long long)b*cols;
+        y += (long long)b*rows;
         int nb = cols / 256;
         const unsigned char* w = W + (long long)r * nb * 144;
         float acc = 0.f;
-        for (int b = 0; b < nb; ++b) {
-            const unsigned char* blk = w + b*144;
-            float d    = nl_f16(blk);
-            float dmin = nl_f16(blk + 2);
-            const unsigned char* sc = blk + 4;
-            const unsigned char* qs = blk + 16;
-            const float* xb = x + b*256;
+        for (int blk = 0; blk < nb; ++blk) {
+            const unsigned char* bp = w + blk*144;
+            float d    = nl_f16(bp);
+            float dmin = nl_f16(bp + 2);
+            const unsigned char* sc = bp + 4;
+            const unsigned char* qs = bp + 16;
+            const float* xb = x + blk*256;
             for (int s = 0; s < 8; ++s) {
                 int sV, mV;
                 if (s < 4) { sV = sc[s] & 63; mV = sc[s+4] & 63; }
@@ -302,19 +336,22 @@ $ `deps/gpu/src/gpu.nu`
 // of upper 2 bits, 16 int8 scales, f16 d. Sixteen 16-element groups.
 @ __lk_mv_q6_k → s {
     ^ ( nurl_str_cat ( __lk_f16_dev ) `extern "C" __global__ void mv_q6_k(
-        const unsigned char* W, const float* x, float* y, int rows, int cols) {
-        int r = blockIdx.x*blockDim.x + threadIdx.x;
-        if (r >= rows) return;
+        const unsigned char* W, const float* x, float* y, int rows, int cols, int batch) {
+        int idx = blockIdx.x*blockDim.x + threadIdx.x;
+        if (idx >= rows*batch) return;
+        int b = idx / rows, r = idx % rows;
+        x += (long long)b*cols;
+        y += (long long)b*rows;
         int nb = cols / 256;
         const unsigned char* w = W + (long long)r * nb * 210;
         float acc = 0.f;
-        for (int b = 0; b < nb; ++b) {
-            const unsigned char* blk = w + b*210;
-            const unsigned char* ql = blk;
-            const unsigned char* qh = blk + 128;
-            const signed char*   sc = (const signed char*)(blk + 192);
-            float d = nl_f16(blk + 208);
-            const float* xb = x + b*256;
+        for (int blk = 0; blk < nb; ++blk) {
+            const unsigned char* bp = w + blk*210;
+            const unsigned char* ql = bp;
+            const unsigned char* qh = bp + 128;
+            const signed char*   sc = (const signed char*)(bp + 192);
+            float d = nl_f16(bp + 208);
+            const float* xb = x + blk*256;
             for (int n = 0; n < 2; ++n) {
                 const unsigned char* ql0 = ql + n*64;
                 const unsigned char* qh0 = qh + n*32;
@@ -341,19 +378,22 @@ $ `deps/gpu/src/gpu.nu`
 
 @ __lk_mv_q5_0 → s {
     ^ ( nurl_str_cat ( __lk_f16_dev ) `extern "C" __global__ void mv_q5_0(
-        const unsigned char* W, const float* x, float* y, int rows, int cols) {
-        int r = blockIdx.x*blockDim.x + threadIdx.x;
-        if (r >= rows) return;
+        const unsigned char* W, const float* x, float* y, int rows, int cols, int batch) {
+        int idx = blockIdx.x*blockDim.x + threadIdx.x;
+        if (idx >= rows*batch) return;
+        int b = idx / rows, r = idx % rows;
+        x += (long long)b*cols;
+        y += (long long)b*rows;
         int nb = cols / 32;
         const unsigned char* w = W + (long long)r * nb * 22;
         float acc = 0.f;
-        for (int b = 0; b < nb; ++b) {
-            const unsigned char* blk = w + b*22;
-            float d = nl_f16(blk);
-            unsigned int qh = (unsigned int)blk[2] | ((unsigned int)blk[3] << 8)
-                            | ((unsigned int)blk[4] << 16) | ((unsigned int)blk[5] << 24);
-            const unsigned char* qs = blk + 6;
-            const float* xb = x + b*32;
+        for (int blk = 0; blk < nb; ++blk) {
+            const unsigned char* bp = w + blk*22;
+            float d = nl_f16(bp);
+            unsigned int qh = (unsigned int)bp[2] | ((unsigned int)bp[3] << 8)
+                            | ((unsigned int)bp[4] << 16) | ((unsigned int)bp[5] << 24);
+            const unsigned char* qs = bp + 6;
+            const float* xb = x + blk*32;
             float sub = 0.f;
             for (int j = 0; j < 16; ++j) {
                 int h0 = ((qh >> j) & 1u) << 4;
@@ -369,20 +409,23 @@ $ `deps/gpu/src/gpu.nu`
 
 @ __lk_mv_q5_1 → s {
     ^ ( nurl_str_cat ( __lk_f16_dev ) `extern "C" __global__ void mv_q5_1(
-        const unsigned char* W, const float* x, float* y, int rows, int cols) {
-        int r = blockIdx.x*blockDim.x + threadIdx.x;
-        if (r >= rows) return;
+        const unsigned char* W, const float* x, float* y, int rows, int cols, int batch) {
+        int idx = blockIdx.x*blockDim.x + threadIdx.x;
+        if (idx >= rows*batch) return;
+        int b = idx / rows, r = idx % rows;
+        x += (long long)b*cols;
+        y += (long long)b*rows;
         int nb = cols / 32;
         const unsigned char* w = W + (long long)r * nb * 24;
         float acc = 0.f;
-        for (int b = 0; b < nb; ++b) {
-            const unsigned char* blk = w + b*24;
-            float d = nl_f16(blk);
-            float m = nl_f16(blk + 2);
-            unsigned int qh = (unsigned int)blk[4] | ((unsigned int)blk[5] << 8)
-                            | ((unsigned int)blk[6] << 16) | ((unsigned int)blk[7] << 24);
-            const unsigned char* qs = blk + 8;
-            const float* xb = x + b*32;
+        for (int blk = 0; blk < nb; ++blk) {
+            const unsigned char* bp = w + blk*24;
+            float d = nl_f16(bp);
+            float m = nl_f16(bp + 2);
+            unsigned int qh = (unsigned int)bp[4] | ((unsigned int)bp[5] << 8)
+                            | ((unsigned int)bp[6] << 16) | ((unsigned int)bp[7] << 24);
+            const unsigned char* qs = bp + 8;
+            const float* xb = x + blk*32;
             float sub = 0.f, msum = 0.f;
             for (int j = 0; j < 16; ++j) {
                 int h0 = ((qh >> j) & 1u) << 4;
@@ -401,20 +444,23 @@ $ `deps/gpu/src/gpu.nu`
 // min bytes, 32 bytes carrying each value's 5th bit, 128 nibble bytes.
 @ __lk_mv_q5_k → s {
     ^ ( nurl_str_cat ( __lk_f16_dev ) `extern "C" __global__ void mv_q5_k(
-        const unsigned char* W, const float* x, float* y, int rows, int cols) {
-        int r = blockIdx.x*blockDim.x + threadIdx.x;
-        if (r >= rows) return;
+        const unsigned char* W, const float* x, float* y, int rows, int cols, int batch) {
+        int idx = blockIdx.x*blockDim.x + threadIdx.x;
+        if (idx >= rows*batch) return;
+        int b = idx / rows, r = idx % rows;
+        x += (long long)b*cols;
+        y += (long long)b*rows;
         int nb = cols / 256;
         const unsigned char* w = W + (long long)r * nb * 176;
         float acc = 0.f;
-        for (int b = 0; b < nb; ++b) {
-            const unsigned char* blk = w + b*176;
-            float d    = nl_f16(blk);
-            float dmin = nl_f16(blk + 2);
-            const unsigned char* sc = blk + 4;
-            const unsigned char* qh = blk + 16;
-            const unsigned char* qs = blk + 48;
-            const float* xb = x + b*256;
+        for (int blk = 0; blk < nb; ++blk) {
+            const unsigned char* bp = w + blk*176;
+            float d    = nl_f16(bp);
+            float dmin = nl_f16(bp + 2);
+            const unsigned char* sc = bp + 4;
+            const unsigned char* qh = bp + 16;
+            const unsigned char* qs = bp + 48;
+            const float* xb = x + blk*256;
             for (int s = 0; s < 8; ++s) {
                 int sV, mV;
                 if (s < 4) { sV = sc[s] & 63; mV = sc[s+4] & 63; }
@@ -442,9 +488,12 @@ $ `deps/gpu/src/gpu.nu`
 
 @ __lk_mv_f16 → s {
     ^ ( nurl_str_cat ( __lk_f16_dev ) `extern "C" __global__ void mv_f16(
-        const unsigned char* W, const float* x, float* y, int rows, int cols) {
-        int r = blockIdx.x*blockDim.x + threadIdx.x;
-        if (r >= rows) return;
+        const unsigned char* W, const float* x, float* y, int rows, int cols, int batch) {
+        int idx = blockIdx.x*blockDim.x + threadIdx.x;
+        if (idx >= rows*batch) return;
+        int b = idx / rows, r = idx % rows;
+        x += (long long)b*cols;
+        y += (long long)b*rows;
         const unsigned char* w = W + (long long)r*cols*2;
         float acc = 0.f;
         for (int c = 0; c < cols; ++c) acc += nl_f16(w + c*2) * x[c];
@@ -460,6 +509,7 @@ $ `deps/gpu/src/gpu.nu`
     : GpuKernel k4 ( gpu_compile g ( __lk_attn ) `attn` )
     : GpuKernel k5 ( gpu_compile g ( __lk_silumul ) `silumul` )
     : GpuKernel k6 ( gpu_compile g ( __lk_addv ) `addv` )
+    : GpuKernel k6b ( gpu_compile g ( __lk_addrow ) `addrow` )
     : GpuKernel k7 ( gpu_compile g ( __lk_copyat ) `copyat` )
     : GpuKernel q1 ( gpu_compile g ( __lk_mv_q4_0 ) `mv_q4_0` )
     : GpuKernel q2 ( gpu_compile g ( __lk_mv_q8_0 ) `mv_q8_0` )
@@ -474,8 +524,8 @@ $ `deps/gpu/src/gpu.nu`
     & & ( gpu_kernel_ok k5 ) ( gpu_kernel_ok k6 ) ( gpu_kernel_ok k7 )
     : b ok1 & & ( gpu_kernel_ok q1 ) ( gpu_kernel_ok q2 )
     & & ( gpu_kernel_ok q3 ) ( gpu_kernel_ok q4 ) ( gpu_kernel_ok q5 )
-    : b ok & & ok0 ( gpu_kernel_ok k3n ) & ok1 & & ( gpu_kernel_ok q6 ) ( gpu_kernel_ok q7 ) ( gpu_kernel_ok q8 )
-    ^ @ LlmKernels { k1 q1 q2 q6 q7 q3 q8 q4 q5 k2 k3 k3n k4 k5 k6 k7 ok }
+    : b ok & & & ok0 ( gpu_kernel_ok k3n ) ( gpu_kernel_ok k6b ) & ok1 & & ( gpu_kernel_ok q6 ) ( gpu_kernel_ok q7 ) ( gpu_kernel_ok q8 )
+    ^ @ LlmKernels { k1 q1 q2 q6 q7 q3 q8 q4 q5 k2 k3 k3n k4 k5 k6 k6b k7 ok }
 }
 
 @ lk_free LlmKernels ks → v {
@@ -494,26 +544,28 @@ $ `deps/gpu/src/gpu.nu`
     ( gpu_kernel_free . ks attn )
     ( gpu_kernel_free . ks silumul )
     ( gpu_kernel_free . ks addv )
+    ( gpu_kernel_free . ks addrow )
     ( gpu_kernel_free . ks copyat )
 }
 
 // ── launch wrappers (raw device pointers, onnx op idiom) ────────────
 
-@ lk_matvec LlmKernels ks i wd i xd i yd i rows i cols → v {
+@ lk_matvec LlmKernels ks i wd i xd i yd i rows i cols i batch → v {
     : ( Vec i ) a ( vec_new [i] )
     ( vec_push [i] a ( gpu_arg_i64 wd ) )
     ( vec_push [i] a ( gpu_arg_i64 xd ) )
     ( vec_push [i] a ( gpu_arg_i64 yd ) )
     ( vec_push [i] a ( gpu_arg_i32 rows ) )
     ( vec_push [i] a ( gpu_arg_i32 cols ) )
-    : i _r ( gpu_launch . ks matvec ( gpu_grid rows 256 ) 256 a )
+    ( vec_push [i] a ( gpu_arg_i32 batch ) )
+    : i _r ( gpu_launch . ks matvec ( gpu_grid * rows batch 256 ) 256 a )
     ( vec_free [i] a )
 }
 
 // Quantised matvec dispatch: `gt` is the ggml tensor type of W.
 // Returns F when the type has no device kernel (the caller then falls
 // back to the f32 path — correctness first, always).
-@ lk_matvec_q LlmKernels ks i gt i wd i xd i yd i rows i cols → b {
+@ lk_matvec_q LlmKernels ks i gt i wd i xd i yd i rows i cols i batch → b {
     : ~ i which -1
     ? == gt 0 { = which 0 } {}
     ? == gt 1 { = which 5 } {}
@@ -526,7 +578,7 @@ $ `deps/gpu/src/gpu.nu`
     ? == gt 13 { = which 8 } {}
     ? < which 0 { ^ F } {}
     ? == which 0 {
-        ( lk_matvec ks wd xd yd rows cols )
+        ( lk_matvec ks wd xd yd rows cols batch )
         ^ T
     } {}
     : ( Vec i ) a ( vec_new [i] )
@@ -535,7 +587,8 @@ $ `deps/gpu/src/gpu.nu`
     ( vec_push [i] a ( gpu_arg_i64 yd ) )
     ( vec_push [i] a ( gpu_arg_i32 rows ) )
     ( vec_push [i] a ( gpu_arg_i32 cols ) )
-    : i grid ( gpu_grid rows 64 )
+    ( vec_push [i] a ( gpu_arg_i32 batch ) )
+    : i grid ( gpu_grid * rows batch 64 )
     ? == which 1 { : i _r ( gpu_launch . ks mv_q4_0 grid 64 a ) } {}
     ? == which 2 { : i _r ( gpu_launch . ks mv_q8_0 grid 64 a ) } {}
     ? == which 3 { : i _r ( gpu_launch . ks mv_q4_k grid 64 a ) } {}
@@ -548,19 +601,20 @@ $ `deps/gpu/src/gpu.nu`
     ^ T
 }
 
-@ lk_rmsnorm LlmKernels ks i xd i wd i yd i n f eps → v {
+@ lk_rmsnorm LlmKernels ks i xd i wd i yd i n f eps i batch → v {
     : ( Vec i ) a ( vec_new [i] )
     ( vec_push [i] a ( gpu_arg_i64 xd ) )
     ( vec_push [i] a ( gpu_arg_i64 wd ) )
     ( vec_push [i] a ( gpu_arg_i64 yd ) )
     ( vec_push [i] a ( gpu_arg_i32 n ) )
     ( vec_push [i] a ( gpu_arg_f32 eps ) )
-    : i _r ( gpu_launch . ks rmsnorm ( gpu_grid n 256 ) 256 a )
+    ( vec_push [i] a ( gpu_arg_i32 batch ) )
+    : i _r ( gpu_launch . ks rmsnorm ( gpu_grid * n batch 256 ) 256 a )
     ( vec_free [i] a )
 }
 
 // style: 0 = NORM (llama), 1 = NEOX (qwen2)
-@ lk_rope LlmKernels ks i xd i nh i hd i rd i pos f base i style → v {
+@ lk_rope LlmKernels ks i xd i nh i hd i rd i pos f base i style i batch → v {
     : ( Vec i ) a ( vec_new [i] )
     ( vec_push [i] a ( gpu_arg_i64 xd ) )
     ( vec_push [i] a ( gpu_arg_i32 nh ) )
@@ -568,7 +622,8 @@ $ `deps/gpu/src/gpu.nu`
     ( vec_push [i] a ( gpu_arg_i32 rd ) )
     ( vec_push [i] a ( gpu_arg_i32 pos ) )
     ( vec_push [i] a ( gpu_arg_f32 base ) )
-    : i total * nh / rd 2
+    ( vec_push [i] a ( gpu_arg_i32 batch ) )
+    : i total * * nh / rd 2 batch
     ? == style 1 {
         : i _r ( gpu_launch . ks rope_neox ( gpu_grid total 256 ) 256 a )
     } {
@@ -577,7 +632,9 @@ $ `deps/gpu/src/gpu.nu`
     ( vec_free [i] a )
 }
 
-@ lk_attn LlmKernels ks i qd i kcd i vcd i outd i scd i nh i nkv i hd i npos → v {
+// npos0 = the causal window of the FIRST batch element (element b sees
+// npos0 + b rows). maxpos strides the per-(batch,head) score scratch.
+@ lk_attn LlmKernels ks i qd i kcd i vcd i outd i scd i nh i nkv i hd i npos0 i batch i maxpos → v {
     : ( Vec i ) a ( vec_new [i] )
     ( vec_push [i] a ( gpu_arg_i64 qd ) )
     ( vec_push [i] a ( gpu_arg_i64 kcd ) )
@@ -587,8 +644,10 @@ $ `deps/gpu/src/gpu.nu`
     ( vec_push [i] a ( gpu_arg_i32 nh ) )
     ( vec_push [i] a ( gpu_arg_i32 nkv ) )
     ( vec_push [i] a ( gpu_arg_i32 hd ) )
-    ( vec_push [i] a ( gpu_arg_i32 npos ) )
-    : i _r ( gpu_launch . ks attn ( gpu_grid nh 32 ) 32 a )
+    ( vec_push [i] a ( gpu_arg_i32 npos0 ) )
+    ( vec_push [i] a ( gpu_arg_i32 batch ) )
+    ( vec_push [i] a ( gpu_arg_i32 maxpos ) )
+    : i _r ( gpu_launch . ks attn ( gpu_grid * nh batch 32 ) 32 a )
     ( vec_free [i] a )
 }
 
@@ -607,6 +666,17 @@ $ `deps/gpu/src/gpu.nu`
     ( vec_push [i] a ( gpu_arg_i64 bd ) )
     ( vec_push [i] a ( gpu_arg_i32 n ) )
     : i _r ( gpu_launch . ks addv ( gpu_grid n 256 ) 256 a )
+    ( vec_free [i] a )
+}
+
+// a[b][i] += v[i] for every row of the batch
+@ lk_addrow LlmKernels ks i ad i vd i n i batch → v {
+    : ( Vec i ) a ( vec_new [i] )
+    ( vec_push [i] a ( gpu_arg_i64 ad ) )
+    ( vec_push [i] a ( gpu_arg_i64 vd ) )
+    ( vec_push [i] a ( gpu_arg_i32 n ) )
+    ( vec_push [i] a ( gpu_arg_i32 batch ) )
+    : i _r ( gpu_launch . ks addrow ( gpu_grid * n batch 256 ) 256 a )
     ( vec_free [i] a )
 }
 

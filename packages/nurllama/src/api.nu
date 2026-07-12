@@ -256,11 +256,7 @@ i npredict f temp i topk f topp i seed → b {
     } {}
     ? stream { ? ( __api_begin_ndjson c ) {} { ( vec_free [i] ids ) ^ T } } {}
 
-    : ~ i k 0
-    ~ < k nprompt {
-        ( llm_eval m ( __tk_geti ids k 0 ) k )
-        = k + k 1
-    }
+    ( llm_prefill m ids )
     ( vec_free [i] ids )
 
     : Rng rng ( rng_seed seed )
