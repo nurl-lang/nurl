@@ -109,7 +109,24 @@ try {
     if (Test-Path $Prefix) {
         $isNurl  = (Test-Path (Join-Path $Prefix "bin\nurl.bat")) -or (Test-Path (Join-Path $Prefix "bin\nurlc.exe"))
         $isEmpty = -not (Get-ChildItem -Force $Prefix -ErrorAction SilentlyContinue)
-        if ($isNurl -or $isEmpty) { Remove-Item -Recurse -Force $Prefix }
+        # Preserve USER state in the prefix across an upgrade: the
+        # registry token (credentials), tool assets (share\), and any
+        # program installed with `nurlpkg install` (bin\<other>). Only
+        # the toolchain's own paths are removed; the archive overwrites
+        # the rest. build\ and stdlib\ go wholesale so a module deleted
+        # upstream cannot linger.
+        if ($isNurl -or $isEmpty) {
+            foreach ($d in @("build", "stdlib", "zig")) {
+                $p2 = Join-Path $Prefix $d
+                if (Test-Path $p2) { Remove-Item -Recurse -Force $p2 }
+            }
+            foreach ($f in @("nurl.bat", "nurl.sh", "env",
+                             "bin\nurl.bat", "bin\nurlc.exe",
+                             "bin\nurlfmt.exe", "bin\nurlpkg.exe")) {
+                $p2 = Join-Path $Prefix $f
+                if (Test-Path $p2) { Remove-Item -Force $p2 }
+            }
+        }
         else { throw "'$Prefix' exists, is not empty, and is not a NURL install — refusing to overwrite it. Remove it yourself or set -Prefix to a fresh path." }
     }
     New-Item -ItemType Directory -Force -Path $Prefix | Out-Null

@@ -1477,6 +1477,135 @@ $ `stdlib/std/bytes.nu`
 // Pack the current project into a .tar.gz and upload it to the registry's
 // write endpoint. The token comes from $NURL_TOKEN or `nurlpkg login`; the
 // registry from $NURL_REGISTRY → [package].registry → default.
+// ── deps/ import audit (publish gate) ───────────────────────────────
+//
+// A source that imports `deps/<name>/…` needs `<name>` in
+// [dependencies]: the symlink under deps/ is a LOCAL build artefact
+// (nurlpkg materialises it from the manifest), so a missing declaration
+// compiles fine on the author's machine and then fails for every user
+// who installs from the registry with "cannot open deps/<name>/…".
+// nurllama 0.1.0 shipped exactly that bug. Publishing now refuses it.
+
+// Collect the package names appearing in `$ \`deps/<name>/…\`` imports
+// across the package's .nu sources.
+@ __scan_dep_imports → ( Vec String ) {
+    : ( Vec String ) found ( vec_new [String] )
+    : ( Vec String ) pats ( vec_new [String] )
+    ( vec_push [String] pats ( string_from `src/*.nu` ) )
+    ( vec_push [String] pats ( string_from `src/**/*.nu` ) )
+    : ~ i pi 0
+    ~ < pi ( vec_len [String] pats ) {
+        ?? ( vec_get [String] pats pi ) {
+            T pat → {
+                ?? ( fs_glob ( string_data pat ) ) {
+                    T files → {
+                        : ~ i fi 0
+                        ~ < fi ( vec_len [String] files ) {
+                            ?? ( vec_get [String] files fi ) {
+                                T f → { ( __scan_one_file ( string_data f ) found ) }
+                                F → {}
+                            }
+                            = fi + fi 1
+                        }
+                        ( vec_free_with [String] files \ String x → v { ( string_free x ) } )
+                    }
+                    F _ → {}
+                }
+            }
+            F → {}
+        }
+        = pi + pi 1
+    }
+    ( vec_free_with [String] pats \ String x → v { ( string_free x ) } )
+    ^ found
+}
+
+// Append every `deps/<name>/` package name found in `path` to `acc`
+// (deduplicated).
+@ __scan_one_file s path ( Vec String ) acc → v {
+    ?? ( read_file path ) {
+        T txt → {
+            : s src ( string_data txt )
+            : i n ( nurl_str_len src )
+            : ~ i i 0
+            ~ < i n {
+                // match the literal "deps/"
+                ? & < + i 5 n & == ( nurl_str_get src i ) 100 & == ( nurl_str_get src + i 1 ) 101
+                & == ( nurl_str_get src + i 2 ) 112 & == ( nurl_str_get src + i 3 ) 115 == ( nurl_str_get src + i 4 ) 47 {
+                    : ~ i j + i 5
+                    : String nm ( string_new )
+                    ~ & < j n != ( nurl_str_get src j ) 47 {
+                        ( string_push_char nm ( nurl_str_get src j ) )
+                        = j + j 1
+                    }
+                    ? & > ( string_len nm ) 0 < j n {
+                        ? ( __vec_has_str acc ( string_data nm ) ) { ( string_free nm ) } { ( vec_push [String] acc nm ) }
+                    } { ( string_free nm ) }
+                    = i j
+                } { = i + i 1 }
+            }
+            ( string_free txt )
+        }
+        F _ → {}
+    }
+}
+
+@ __vec_has_str ( Vec String ) v s want → b {
+    : ~ i k 0
+    ~ < k ( vec_len [String] v ) {
+        ?? ( vec_get [String] v k ) {
+            T x → { ? ( nurl_str_eq ( string_data x ) want ) { ^ T } {} }
+            F → {}
+        }
+        = k + k 1
+    }
+    ^ F
+}
+
+@ __manifest_has_dep Manifest m s want → b {
+    : ~ i k 0
+    ~ < k ( vec_len [Dep] . m dependencies ) {
+        ?? ( vec_get [Dep] . m dependencies k ) {
+            T d → { ? ( nurl_str_eq ( string_data . d name ) want ) { ^ T } {} }
+            F → {}
+        }
+        = k + k 1
+    }
+    ^ F
+}
+
+// 0 = every deps/ import is declared; 1 = something is missing (message
+// already printed).
+@ __check_declared_deps Manifest m → i {
+    : ( Vec String ) used ( __scan_dep_imports )
+    : ~ i missing 0
+    : ~ i k 0
+    ~ < k ( vec_len [String] used ) {
+        ?? ( vec_get [String] used k ) {
+            T nm → {
+                ? ( __manifest_has_dep m ( string_data nm ) ) {} {
+                    ? == missing 0 {
+                        ( nurl_eprintln `nurlpkg: sources import a package that is not declared in [dependencies]:` )
+                    } {}
+                    ( nurl_eprint `  deps/` )
+                    ( nurl_eprint ( string_data nm ) )
+                    ( nurl_eprint `/… is imported, but '` )
+                    ( nurl_eprint ( string_data nm ) )
+                    ( nurl_eprintln `' is missing from nurl.toml` )
+                    = missing 1
+                }
+            }
+            F → {}
+        }
+        = k + k 1
+    }
+    ( vec_free_with [String] used \ String x → v { ( string_free x ) } )
+    ? != missing 0 {
+        ( nurl_eprintln `  (the deps/ symlink is a local artefact — an undeclared dependency breaks every registry install)` )
+    } {}
+    ^ missing
+}
+
 @ __cmd_publish → i {
     ? ! ( file_exists `nurl.toml` ) {
         ( nurl_eprintln `nurlpkg: no nurl.toml in the current directory` )
@@ -1498,6 +1627,10 @@ $ `stdlib/std/bytes.nu`
                 ( nurl_eprintln `nurlpkg: no auth token — run 'nurlpkg login' or set $NURL_TOKEN` )
                 = rc 1
             } {
+                ? != 0 ( __check_declared_deps m ) {
+                    ( manifest_free m )
+                    ^ 1
+                } {}
                 : !( Vec u ) PackErr pr ( pkg_pack `.` )
                 ?? pr {
                     F pe → {
