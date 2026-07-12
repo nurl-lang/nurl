@@ -23,10 +23,13 @@
 // one at a time), which costs host RAM but no device memory.
 // Prefill runs the decode step per prompt token — batched later.
 //
-// Architecture: llama-family (RMSNorm → GQA attention with NORM-style
-// RoPE → SwiGLU FFN, residuals around both), read from the llama.*
-// GGUF keys. Tied-embedding models (no output.weight) reuse
-// token_embd as the output projection.
+// Architectures: the llama shape — RMSNorm → GQA attention with
+// NORM-style RoPE → SwiGLU FFN, residuals around both — which `llama`
+// and `qwen2` both are. Hyperparameters are read under the model's own
+// key prefix (`llama.*` / `qwen2.*`), and qwen2's per-layer Q/K/V
+// biases are applied when present (llama models simply have none).
+// Tied-embedding models (no output.weight) reuse token_embd as the
+// output projection.
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
@@ -52,6 +55,7 @@ $ `src/tokenizer.nu`
     i n_vocab
     i n_ctx
     i rope_dim
+    i rope_style
     f eps
     f rope_base
     i gg
@@ -63,6 +67,9 @@ $ `src/tokenizer.nu`
     ( Vec i ) tq_wq
     ( Vec i ) tq_wk
     ( Vec i ) tq_wv
+    ( Vec i ) bq
+    ( Vec i ) bk
+    ( Vec i ) bv
     ( Vec i ) tq_wo
     ( Vec i ) tq_ffn_norm
     ( Vec i ) tq_gate
@@ -102,6 +109,29 @@ $ `src/tokenizer.nu`
 
 @ __lm_geti ( Vec i ) v i k → i {
     ?? ( vec_get [i] v k ) { T x → { ^ x } F → { ^ 0 } }
+}
+
+// GGUF hyperparameters live under the architecture's own prefix
+// (`llama.embedding_length`, `qwen2.embedding_length`, …).
+@ __lm_key s arch s suffix → String {
+    : String k ( string_from arch )
+    ( string_push_char k 46 )
+    ( string_push_str k suffix )
+    ^ k
+}
+
+@ __lm_kv_i * Gguf g s arch s suffix i def → i {
+    : String k ( __lm_key arch suffix )
+    : i v ( gguf_kv_int_or g ( string_data k ) def )
+    ( string_free k )
+    ^ v
+}
+
+@ __lm_kv_f * Gguf g s arch s suffix f def → f {
+    : String k ( __lm_key arch suffix )
+    : f v ( gguf_kv_f_or g ( string_data k ) def )
+    ( string_free k )
+    ^ v
 }
 
 // Dequantise tensor `name` to f32 and upload; returns the device
@@ -190,6 +220,35 @@ $ `src/tokenizer.nu`
     ^ nm
 }
 
+// Optional per-layer tensor: device pointer, or -1 when the model has
+// none (biases are architecture-dependent). Always uploaded as f32 —
+// a bias is a single row, so the dequant cost is nil.
+@ __lm_upload_opt * Llm m * Gguf gg i layer s suffix → i {
+    : String nm ( __lm_tname layer suffix )
+    : i ti ( gguf_find_tensor gg ( string_data nm ) )
+    ? < ti 0 {
+        ( string_free nm )
+        ^ -1
+    } {}
+    : !( Vec u ) String r ( gguf_dequant gg ti )
+    ( string_free nm )
+    ?? r {
+        T raw → {
+            : i n ( vec_len [u] raw )
+            : GpuBuffer b ( gpu_alloc . m g n )
+            : i _u ( gpu_upload b ( vec_data [u] raw ) )
+            ( vec_free [u] raw )
+            ( vec_push [i] . m wdptr . b dptr )
+            ( vec_push [i] . m wbytes . b bytes )
+            ^ . b dptr
+        }
+        F e → {
+            ( string_free e )
+            ^ -1
+        }
+    }
+}
+
 @ __lm_upload_layer * Llm m * Gguf gg i layer s suffix ( Vec i ) dst ( Vec i ) tdst → b {
     : String nm ( __lm_tname layer suffix )
     : i d ( __lm_upload m gg ( string_data nm ) )
@@ -209,32 +268,42 @@ $ `src/tokenizer.nu`
     }
     : *Gguf gg # *Gguf ggaddr
     : s arch ( gguf_kv_str_or gg `general.architecture` `` )
-    ? ( nurl_str_eq arch `llama` ) {} {
+    ? | != 0 ( nurl_str_eq arch `llama` ) != 0 ( nurl_str_eq arch `qwen2` ) {} {
         ( gguf_close gg )
         : String msg ( string_from `nurllama: unsupported architecture '` )
         ( string_push_str msg arch )
-        ( string_push_str msg `' (v1 runs llama-family models)` )
+        ( string_push_str msg `' (runs the llama shape: llama, qwen2)` )
         ^ @ !*Llm String { F msg }
     }
 
     : *Llm m # *Llm ( nurl_alloc Z Llm )
-    = . m n_embd ( gguf_kv_int_or gg `llama.embedding_length` 0 )
-    = . m n_layer ( gguf_kv_int_or gg `llama.block_count` 0 )
-    = . m n_head ( gguf_kv_int_or gg `llama.attention.head_count` 0 )
-    = . m n_kv ( gguf_kv_int_or gg `llama.attention.head_count_kv` ( gguf_kv_int_or gg `llama.attention.head_count` 0 ) )
-    = . m n_ff ( gguf_kv_int_or gg `llama.feed_forward_length` 0 )
-    = . m eps ( gguf_kv_f_or gg `llama.attention.layer_norm_rms_epsilon` 0.00001 )
-    = . m rope_base ( gguf_kv_f_or gg `llama.rope.freq_base` 10000.0 )
+    = . m n_embd ( __lm_kv_i gg arch `embedding_length` 0 )
+    = . m n_layer ( __lm_kv_i gg arch `block_count` 0 )
+    = . m n_head ( __lm_kv_i gg arch `attention.head_count` 0 )
+    = . m n_kv ( __lm_kv_i gg arch `attention.head_count_kv` ( __lm_kv_i gg arch `attention.head_count` 0 ) )
+    = . m n_ff ( __lm_kv_i gg arch `feed_forward_length` 0 )
+    = . m eps ( __lm_kv_f gg arch `attention.layer_norm_rms_epsilon` 0.00001 )
+    = . m rope_base ( __lm_kv_f gg arch `rope.freq_base` 10000.0 )
     ? | | | < . m n_embd 1 < . m n_layer 1 < . m n_head 1 < . m n_ff 1 {
         ( nurl_free # s m )
         ( gguf_close gg )
         ^ ( __lm_err `nurllama: model is missing llama.* hyperparameters` )
     } {}
     = . m head_dim / . m n_embd . m n_head
-    = . m rope_dim ( gguf_kv_int_or gg `llama.rope.dimension_count` . m head_dim )
-    : i model_ctx ( gguf_kv_int_or gg `llama.context_length` 2048 )
+    = . m rope_dim ( __lm_kv_i gg arch `rope.dimension_count` . m head_dim )
+    // Rotary layout is architecture-defined: llama rotates adjacent pairs
+    // (NORM), qwen2 rotates the two halves of the rotary span (NEOX).
+    = . m rope_style ? != 0 ( nurl_str_eq arch `qwen2` ) 1 0
+    // Context: the KV cache is preallocated, and a modern model advertises
+    // a training context far larger than a session needs — Qwen2.5's 32 768
+    // would claim 800 MB of device memory for a 0.5 B model whose weights
+    // are 400 MB. Default to 4096 (or the model's own, whichever is
+    // smaller); --ctx raises it up to the model's limit.
+    : i model_ctx ( __lm_kv_i gg arch `context_length` 2048 )
+    : i default_ctx ? < model_ctx 4096 model_ctx 4096
     : ~ i ctx want_ctx
-    ? | < ctx 1 > ctx model_ctx { = ctx model_ctx } {}
+    ? < ctx 1 { = ctx default_ctx } {}
+    ? > ctx model_ctx { = ctx model_ctx } {}
     = . m n_ctx ctx
 
     // tokenizer first (it copies out of gg)
@@ -271,6 +340,9 @@ $ `src/tokenizer.nu`
     = . m tq_wq ( vec_new [i] )
     = . m tq_wk ( vec_new [i] )
     = . m tq_wv ( vec_new [i] )
+    = . m bq ( vec_new [i] )
+    = . m bk ( vec_new [i] )
+    = . m bv ( vec_new [i] )
     = . m tq_wo ( vec_new [i] )
     = . m tq_ffn_norm ( vec_new [i] )
     = . m tq_gate ( vec_new [i] )
@@ -316,6 +388,10 @@ $ `src/tokenizer.nu`
         ? ( __lm_upload_layer m gg L `attn_k.weight` . m wk . m tq_wk ) {} { = ok F }
         ? ( __lm_upload_layer m gg L `attn_v.weight` . m wv . m tq_wv ) {} { = ok F }
         ? ( __lm_upload_layer m gg L `attn_output.weight` . m wo . m tq_wo ) {} { = ok F }
+        // qwen2 carries Q/K/V biases; llama does not. Absent = -1 = skip.
+        ( vec_push [i] . m bq ( __lm_upload_opt m gg L `attn_q.bias` ) )
+        ( vec_push [i] . m bk ( __lm_upload_opt m gg L `attn_k.bias` ) )
+        ( vec_push [i] . m bv ( __lm_upload_opt m gg L `attn_v.bias` ) )
         ? ( __lm_upload_layer m gg L `ffn_norm.weight` . m ffn_norm . m tq_ffn_norm ) {} { = ok F }
         ? ( __lm_upload_layer m gg L `ffn_gate.weight` . m w_gate . m tq_gate ) {} { = ok F }
         ? ( __lm_upload_layer m gg L `ffn_down.weight` . m w_down . m tq_down ) {} { = ok F }
@@ -383,6 +459,9 @@ $ `src/tokenizer.nu`
     ( vec_free [i] . m tq_wq )
     ( vec_free [i] . m tq_wk )
     ( vec_free [i] . m tq_wv )
+    ( vec_free [i] . m bq )
+    ( vec_free [i] . m bk )
+    ( vec_free [i] . m bv )
     ( vec_free [i] . m tq_wo )
     ( vec_free [i] . m tq_ffn_norm )
     ( vec_free [i] . m tq_gate )
@@ -444,8 +523,15 @@ $ `src/tokenizer.nu`
         : b _q1 ( lk_matvec_q . m ks ( __lm_geti . m tq_wq L ) ( __lm_geti . m wq L ) . m xnd . m qd ne ne )
         : b _q2 ( lk_matvec_q . m ks ( __lm_geti . m tq_wk L ) ( __lm_geti . m wk L ) . m xnd . m kd kvdim ne )
         : b _q3 ( lk_matvec_q . m ks ( __lm_geti . m tq_wv L ) ( __lm_geti . m wv L ) . m xnd . m vd kvdim ne )
-        ( lk_rope . m ks . m qd nh hd . m rope_dim pos . m rope_base )
-        ( lk_rope . m ks . m kd nkv hd . m rope_dim pos . m rope_base )
+        // qwen2: Q/K/V biases (llama has none — the pointers are -1)
+        : i bqd ( __lm_geti . m bq L )
+        : i bkd ( __lm_geti . m bk L )
+        : i bvd ( __lm_geti . m bv L )
+        ? >= bqd 0 { ( lk_addv . m ks . m qd bqd ne ) } {}
+        ? >= bkd 0 { ( lk_addv . m ks . m kd bkd kvdim ) } {}
+        ? >= bvd 0 { ( lk_addv . m ks . m vd bvd kvdim ) } {}
+        ( lk_rope . m ks . m qd nh hd . m rope_dim pos . m rope_base . m rope_style )
+        ( lk_rope . m ks . m kd nkv hd . m rope_dim pos . m rope_base . m rope_style )
         ( lk_copyat . m ks ( __lm_geti . m kcache L ) . m kd * pos kvdim kvdim )
         ( lk_copyat . m ks ( __lm_geti . m vcache L ) . m vd * pos kvdim kvdim )
         ( lk_attn . m ks . m qd ( __lm_geti . m kcache L ) ( __lm_geti . m vcache L )

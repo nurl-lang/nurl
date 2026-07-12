@@ -28,6 +28,7 @@ $ `deps/gpu/src/gpu.nu`
     GpuKernel mv_f16
     GpuKernel rmsnorm
     GpuKernel rope
+    GpuKernel rope_neox
     GpuKernel attn
     GpuKernel silumul
     GpuKernel addv
@@ -79,6 +80,28 @@ $ `deps/gpu/src/gpu.nu`
             float a = v[0], b = v[1];
             v[0] = a*c - b*s;
             v[1] = a*s + b*c;
+        }
+    }`
+}
+
+// NEOX-style rotary (qwen2, phi, …): the rotated pairs are (j, j + rd/2)
+// — the two halves of the head's rotary span — not the adjacent (2j,
+// 2j+1) of the llama/NORM layout. Feeding a model the wrong variant
+// still runs and still produces fluent-looking garbage, which is why
+// the architecture selects it rather than a heuristic.
+@ __lk_rope_neox → s {
+    ^ `extern "C" __global__ void rope_neox(
+        float* x, int nh, int hd, int rd, int pos, float base) {
+        int p = blockIdx.x*blockDim.x + threadIdx.x;
+        int pairs = rd/2;
+        if (p < nh*pairs) {
+            int h = p / pairs, j = p % pairs;
+            float theta = pos * powf(base, -2.f*j/rd);
+            float c = cosf(theta), s = sinf(theta);
+            float* v = x + h*hd;
+            float a = v[j], b = v[j + pairs];
+            v[j]         = a*c - b*s;
+            v[j + pairs] = a*s + b*c;
         }
     }`
 }
@@ -433,6 +456,7 @@ $ `deps/gpu/src/gpu.nu`
     : GpuKernel k1 ( gpu_compile g ( __lk_matvec ) `matvec` )
     : GpuKernel k2 ( gpu_compile g ( __lk_rmsnorm ) `rmsnorm` )
     : GpuKernel k3 ( gpu_compile g ( __lk_rope ) `rope` )
+    : GpuKernel k3n ( gpu_compile g ( __lk_rope_neox ) `rope_neox` )
     : GpuKernel k4 ( gpu_compile g ( __lk_attn ) `attn` )
     : GpuKernel k5 ( gpu_compile g ( __lk_silumul ) `silumul` )
     : GpuKernel k6 ( gpu_compile g ( __lk_addv ) `addv` )
@@ -450,8 +474,8 @@ $ `deps/gpu/src/gpu.nu`
     & & ( gpu_kernel_ok k5 ) ( gpu_kernel_ok k6 ) ( gpu_kernel_ok k7 )
     : b ok1 & & ( gpu_kernel_ok q1 ) ( gpu_kernel_ok q2 )
     & & ( gpu_kernel_ok q3 ) ( gpu_kernel_ok q4 ) ( gpu_kernel_ok q5 )
-    : b ok & ok0 & ok1 & & ( gpu_kernel_ok q6 ) ( gpu_kernel_ok q7 ) ( gpu_kernel_ok q8 )
-    ^ @ LlmKernels { k1 q1 q2 q6 q7 q3 q8 q4 q5 k2 k3 k4 k5 k6 k7 ok }
+    : b ok & & ok0 ( gpu_kernel_ok k3n ) & ok1 & & ( gpu_kernel_ok q6 ) ( gpu_kernel_ok q7 ) ( gpu_kernel_ok q8 )
+    ^ @ LlmKernels { k1 q1 q2 q6 q7 q3 q8 q4 q5 k2 k3 k3n k4 k5 k6 k7 ok }
 }
 
 @ lk_free LlmKernels ks → v {
@@ -466,6 +490,7 @@ $ `deps/gpu/src/gpu.nu`
     ( gpu_kernel_free . ks mv_f16 )
     ( gpu_kernel_free . ks rmsnorm )
     ( gpu_kernel_free . ks rope )
+    ( gpu_kernel_free . ks rope_neox )
     ( gpu_kernel_free . ks attn )
     ( gpu_kernel_free . ks silumul )
     ( gpu_kernel_free . ks addv )
@@ -534,7 +559,8 @@ $ `deps/gpu/src/gpu.nu`
     ( vec_free [i] a )
 }
 
-@ lk_rope LlmKernels ks i xd i nh i hd i rd i pos f base → v {
+// style: 0 = NORM (llama), 1 = NEOX (qwen2)
+@ lk_rope LlmKernels ks i xd i nh i hd i rd i pos f base i style → v {
     : ( Vec i ) a ( vec_new [i] )
     ( vec_push [i] a ( gpu_arg_i64 xd ) )
     ( vec_push [i] a ( gpu_arg_i32 nh ) )
@@ -543,7 +569,11 @@ $ `deps/gpu/src/gpu.nu`
     ( vec_push [i] a ( gpu_arg_i32 pos ) )
     ( vec_push [i] a ( gpu_arg_f32 base ) )
     : i total * nh / rd 2
-    : i _r ( gpu_launch . ks rope ( gpu_grid total 256 ) 256 a )
+    ? == style 1 {
+        : i _r ( gpu_launch . ks rope_neox ( gpu_grid total 256 ) 256 a )
+    } {
+        : i _r ( gpu_launch . ks rope ( gpu_grid total 256 ) 256 a )
+    }
     ( vec_free [i] a )
 }
 

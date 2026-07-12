@@ -40,19 +40,27 @@ def read_gguf(path):
     doff=(off+align-1)//align*align
     for nm,dims,ty,rel in infos:
         ne=int(np.prod(dims))
-        assert ty==0, 'F32 only in the reference'
-        a=np.frombuffer(d,dtype='<f4',count=ne,offset=doff+rel)
+        if ty==0:
+            a=np.frombuffer(d,dtype='<f4',count=ne,offset=doff+rel)
+        else:
+            import kq_vec as kq
+            raw=bytes(d[doff+rel: doff+rel + ne*{6:22,8:34,12:144,13:176,14:210}[ty]//{6:32,8:32,12:256,13:256,14:256}[ty]])
+            a=kq.DEQ[ty](raw,ne)
         # ggml ne0 fastest → numpy shape reversed
         tens[nm]=a.reshape(list(reversed(dims)))
     return kvs,tens
 
 kvs,tens=read_gguf(sys.argv[1])
 ids=[int(x) for x in sys.argv[2].split()]
-n_embd=kvs['llama.embedding_length']; n_layer=kvs['llama.block_count']
-n_head=kvs['llama.attention.head_count']; n_kv=kvs['llama.attention.head_count_kv']
-eps=kvs['llama.attention.layer_norm_rms_epsilon']
-rope_dim=kvs.get('llama.rope.dimension_count', n_embd//n_head)
-base=kvs.get('llama.rope.freq_base',10000.0)
+ARCH=kvs['general.architecture'].decode() if isinstance(kvs['general.architecture'],bytes) else kvs['general.architecture']
+K=lambda s: kvs[ARCH+'.'+s]
+KG=lambda s,d: kvs.get(ARCH+'.'+s,d)
+n_embd=K('embedding_length'); n_layer=K('block_count')
+n_head=K('attention.head_count'); n_kv=K('attention.head_count_kv')
+eps=K('attention.layer_norm_rms_epsilon')
+rope_dim=KG('rope.dimension_count', n_embd//n_head)
+base=KG('rope.freq_base',10000.0)
+NEOX = (ARCH=='qwen2')
 hd=n_embd//n_head
 
 f32=np.float32
@@ -63,12 +71,19 @@ def rms(x,w):
 
 def rope(v,nh,pos):
     v=v.reshape(nh,hd).copy()
-    for j in range(rope_dim//2):
+    half=rope_dim//2
+    for j in range(half):
         th=f32(pos)*f32(base)**f32(-2.0*j/rope_dim)
         c,s=np.cos(th,dtype=f32),np.sin(th,dtype=f32)
-        a,b=v[:,2*j].copy(),v[:,2*j+1].copy()
-        v[:,2*j]=a*c-b*s; v[:,2*j+1]=a*s+b*c
+        if NEOX: i0,i1 = j, j+half
+        else:    i0,i1 = 2*j, 2*j+1
+        a,b=v[:,i0].copy(),v[:,i1].copy()
+        v[:,i0]=a*c-b*s; v[:,i1]=a*s+b*c
     return v.reshape(nh*hd)
+
+def bias(name):
+    t=tens.get(name)
+    return t.astype(f32).reshape(-1) if t is not None else 0.0
 
 K=[np.zeros((0,n_kv*hd),dtype=f32) for _ in range(n_layer)]
 V=[np.zeros((0,n_kv*hd),dtype=f32) for _ in range(n_layer)]
@@ -77,9 +92,9 @@ for pos,tok in enumerate(ids):
     x=tens['token_embd.weight'][tok].astype(f32)
     for L in range(n_layer):
         xn=rms(x,tens['blk.%d.attn_norm.weight'%L])
-        q=(tens['blk.%d.attn_q.weight'%L]@xn).astype(f32)
-        k=(tens['blk.%d.attn_k.weight'%L]@xn).astype(f32)
-        v=(tens['blk.%d.attn_v.weight'%L]@xn).astype(f32)
+        q=(tens['blk.%d.attn_q.weight'%L]@xn).astype(f32)+bias('blk.%d.attn_q.bias'%L)
+        k=(tens['blk.%d.attn_k.weight'%L]@xn).astype(f32)+bias('blk.%d.attn_k.bias'%L)
+        v=(tens['blk.%d.attn_v.weight'%L]@xn).astype(f32)+bias('blk.%d.attn_v.bias'%L)
         q=rope(q,n_head,pos); k=rope(k,n_kv,pos)
         K[L]=np.vstack([K[L],k]); V[L]=np.vstack([V[L],v])
         out=np.zeros(n_embd,dtype=f32)
@@ -109,9 +124,9 @@ if len(sys.argv)>3 and sys.argv[3]=='greedy':
         x=tens['token_embd.weight'][t].astype(f32)
         for L in range(n_layer):
             xn=rms(x,tens['blk.%d.attn_norm.weight'%L])
-            q=(tens['blk.%d.attn_q.weight'%L]@xn).astype(f32)
-            k=(tens['blk.%d.attn_k.weight'%L]@xn).astype(f32)
-            v=(tens['blk.%d.attn_v.weight'%L]@xn).astype(f32)
+            q=(tens['blk.%d.attn_q.weight'%L]@xn).astype(f32)+bias('blk.%d.attn_q.bias'%L)
+            k=(tens['blk.%d.attn_k.weight'%L]@xn).astype(f32)+bias('blk.%d.attn_k.bias'%L)
+            v=(tens['blk.%d.attn_v.weight'%L]@xn).astype(f32)+bias('blk.%d.attn_v.bias'%L)
             q=rope(q,n_head,pos); k=rope(k,n_kv,pos)
             K[L]=np.vstack([K[L],k]); V[L]=np.vstack([V[L],v])
             o=np.zeros(n_embd,dtype=f32)
