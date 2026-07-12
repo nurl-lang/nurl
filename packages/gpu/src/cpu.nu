@@ -15,7 +15,12 @@
 
 $ `stdlib/core/io.nu`
 $ `stdlib/core/string.nu`
+$ `stdlib/core/vec.nu`
+$ `stdlib/std/bytes.nu`
 $ `stdlib/std/fs.nu`
+$ `stdlib/std/path.nu`
+$ `stdlib/std/hash.nu`
+$ `stdlib/ext/env.nu`
 
 & `c` @ dlopen s path i flags → *u
 
@@ -138,6 +143,57 @@ static inline double rsqrt(double x) { return 1.0/sqrt(x); }
     ?? ( write_file path content ) { T _ → ^ 0 F _ → ^ - 0 1 }
 }
 
+// Cache directory + key, shared with the CUDA path's policy
+// (NURL_GPU_CACHE / XDG_CACHE_HOME / ~/.cache/nurl-gpu, "off" to
+// disable). Defined here because cpu.nu is imported before gpu.nu.
+@ __cpu_cache_off → b {
+    ?? ( env_get `NURL_GPU_CACHE` ) {
+        T v → {
+            : b off ? ( nurl_str_eq ( string_data v ) `off` ) T F
+            ( string_free v )
+            ^ off
+        }
+        F → { ^ F }
+    }
+}
+
+@ __cpu_cache_dir → String {
+    ?? ( env_get `NURL_GPU_CACHE` ) {
+        T v → { ^ v }
+        F → {}
+    }
+    ?? ( env_get `XDG_CACHE_HOME` ) {
+        T v → {
+            : String p ( path_join ( string_data v ) `nurl-gpu` )
+            ( string_free v )
+            ^ p
+        }
+        F → {}
+    }
+    : String home ( env_var_or `HOME` `.` )
+    : String c ( path_join ( string_data home ) `.cache` )
+    : String p ( path_join ( string_data c ) `nurl-gpu` )
+    ( string_free home )
+    ( string_free c )
+    ^ p
+}
+
+@ __cpu_cache_path s src → String {
+    : String dir ( __cpu_cache_dir )
+    : !v IoErr _mk ( dir_create_all ( string_data dir ) )
+    : ( Vec u ) sb ( bytes_from_str src )
+    : String hex ( blake3_hex sb )
+    ( vec_free [u] sb )
+    : String nm ( string_from `cpu-` )
+    ( string_push_str nm ( string_data hex ) )
+    ( string_push_str nm `.so` )
+    ( string_free hex )
+    : String p ( path_join ( string_data dir ) ( string_data nm ) )
+    ( string_free dir )
+    ( string_free nm )
+    ^ p
+}
+
 // Compile CUDA-C `src` (entry `name`) to a host shared object and dlopen it.
 // Returns the dlopen handle (0 on failure), analogous to cuda_module_load.
 @ cpu_compile s src s name → *u {
@@ -152,8 +208,27 @@ static inline double rsqrt(double x) { return 1.0/sqrt(x); }
     ( string_push_str c `);\n}\n}\n` )
     ( string_free casts )
 
+    // Cache key: the hash of the GENERATED source (kernel + shim +
+    // launcher), so an edited kernel misses and rebuilds while a
+    // repeat run just dlopens the existing object — the CPU backend's
+    // c++ invocation is otherwise paid on every process start.
+    : ~ b use_cache ! ( __cpu_cache_off )
+    : ~ String sopath ( string_new )
+    ? use_cache {
+        ( string_free sopath )
+        = sopath ( __cpu_cache_path ( string_data c ) )
+        ? ( file_exists ( string_data sopath ) ) {
+            : *u h0 ( dlopen ( string_data sopath ) 2 )
+            ? != # i h0 0 {
+                ( string_free sopath )
+                ^ h0
+            } {}
+        } {}
+    } {
+        ( string_free sopath )
+        = sopath ( __tmp_path name `.so` )
+    }
     : String cpath ( __tmp_path name `.cc` )
-    : String sopath ( __tmp_path name `.so` )
     : i wr ( __write_file ( string_data cpath ) ( string_data c ) )
     ( string_free c )
     ? != 0 wr {
