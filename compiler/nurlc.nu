@@ -5289,14 +5289,14 @@
         // a borrow producer names the container the pointer will point
         // into; the first argument of a container mutator names the
         // container whose buffer may move. Both are bare identifiers.
-        ? & == arg_idx 0 ( is_ident_tok bck_arg_tt ) {
-            ? ( __ptr_borrow_fn fname ) {
-                ( nurl_sym_def syms `__last_borrow_src__` bck_arg_val )
-            } {}
-            ? ( __ptr_mutator fname ) {
-                ( __ptr_kill bck_arg_val ( nurl_lex_line lex ) )
-            } {}
-        } {}
+        // Dangling-borrow tracking (see __ptr_kill): the FIRST argument of a
+        // borrow producer names the container the pointer will point into;
+        // the first argument of a container mutator names the container whose
+        // buffer may move. Both are bare identifiers. The provenance is
+        // published in __ptr_note_arg AFTER the argument expression has been
+        // generated — a nested producer (`( mime_for_ext ( string_data ext ) )`)
+        // would otherwise leave ITS provenance standing and make the outer
+        // call's result look like a borrow of `ext`.
         ( nurl_sym_def syms `__last_call_ret_owned__` `` )
         // Reset __last_ident_name__ so the post-gen_expr check below
         // sees an ident only when this argument actually loaded one.
@@ -5411,6 +5411,22 @@
         // empty set, so the default is to NOT free (a leak, never a UAF).
         // thread_spawn and recover decompose the closure, so they are not
         // invoke-only and are correctly skipped.
+        // Dangling-borrow tracking, published AFTER the argument expression:
+        // a nested producer inside the argument would otherwise leave its own
+        // provenance standing and make the OUTER call's result look like a
+        // borrow (`( mime_for_ext ( string_data ext ) )` is not a borrow of
+        // `ext` — mime_for_ext returns its own string).
+        // Cleared after EVERY argument, not just the first: a producer nested
+        // in argument N (`( meta_new ( string_data a ) ( string_data b ) )`)
+        // would otherwise leave `b`'s provenance standing and make meta_new's
+        // result look like a borrow of `b`.
+        ( nurl_sym_def syms `__last_borrow_src__` `` )
+        ? == arg_idx 0 {
+            ? & ( is_ident_tok bck_arg_tt ) ( __ptr_borrow_fn fname )
+            { ( nurl_sym_def syms `__last_borrow_src__` bck_arg_val ) } {}
+            ? & ( is_ident_tok bck_arg_tt ) ( __ptr_mutator fname )
+            { ( __ptr_kill bck_arg_val bck_arg_line ) } {}
+        } {}
         : s __cle ( nurl_sym_get syms `__last_closure_env__` )
         ? & != 0 ( nurl_str_len __cle )
         ( str_contains_word ( nurl_sym_get g_fn_invoke_only call_name ) ( nurl_str_int arg_idx ) )
@@ -6122,6 +6138,10 @@
     // block). Copy the snapshot via nurl_str_cat: sym_get returns a
     // pointer into the arm scope's entry, which nurl_sym_pop frees.
     ( nurl_sym_def syms `__last_ident_name__` `` )
+    // Dangling-borrow tracking: the arms are alternatives — snapshot the
+    // stale set so the else-arm starts from the pre-`?` state, and join by
+    // union at %lend (see __ptr_dead_union).
+    : s __ptr_dead_pre ( nurl_str_cat ( __ptr_dead_snapshot ) `` )
     : s tv ( gen_expr lex syms cg )
     : s tt2 ( nurl_get_last_type )
     : s t_retid ( nurl_str_cat ( nurl_sym_get syms `__last_ident_name__` ) `` )
@@ -6156,6 +6176,9 @@
         ( nurl_sym_push syms )
     } {}
     ( nurl_sym_def syms `__cur_lbl__` le )
+    // Dangling-borrow tracking: park the then-arm's stale set and rewind.
+    : s __ptr_dead_then ( nurl_str_cat ( __ptr_dead_snapshot ) `` )
+    ( __ptr_dead_restore __ptr_dead_pre )
     = g_did_ret 0
     // Borrow checker (Phase 0c): the else-arm `{` is a forward join.
     // Setting this also re-arms over any `cond-then` left pending by a
@@ -6184,6 +6207,14 @@
     // close the conditional with its `endcond` marker (Phase 0d).
     ( bck_set_block_kind `` )
     ( bck_record `endcond` `` bck_cline )
+    // Dangling-borrow tracking: join — stale if stale on either path that
+    // REACHES here. An arm that returns (`{ ( string_free rel ) ^ ( … 403 ) }`)
+    // never falls through to %lend, so its frees must not follow the other
+    // arm's live pointer out of the conditional.
+    ? == tdr 0 {
+        ? == edr 0 { ( __ptr_dead_union __ptr_dead_then ( __ptr_dead_snapshot ) ) }
+        { ( __ptr_dead_restore __ptr_dead_then ) }
+    } {}
     ( emit ( nurl_str_cat lend `:` ) )
     ( nurl_sym_def syms `__cur_lbl__` lend )
     // The whole conditional only "did_ret" if BOTH branches did. If either
@@ -10061,6 +10092,32 @@
     ( nurl_eprintln ( nurl_str_cat3 loc `: warning: ` msg ) )
     ( nurl_eprintln ( nurl_str_cat3 `  note: re-fetch the pointer after the mutation (` name
     ( nurl_str_cat3 ` = ( vec_data … ` cont ` ) )` ) ) )
+}
+
+// Arm-local staleness. The two arms of a `?` are ALTERNATIVES: a
+// `( string_free line )` in the then-arm does not run on the else-arm's
+// path, so it must not mark a pointer stale there (it flagged correct
+// stdlib code before this — the no-false-positive contract, docs/MEMORY.md
+// §6). After the `?` closes, though, either arm may have run, so the join
+// takes the UNION: stale if stale on either path.
+@ __ptr_dead_snapshot → s { ^ ( nurl_sym_get g_ptrtab `__ptr_dead__` ) }
+
+@ __ptr_dead_restore s snap → v { ( nurl_sym_def g_ptrtab `__ptr_dead__` snap ) }
+
+@ __ptr_dead_union s a s b → v {
+    : ~ s rest b
+    : ~ s out a
+    ~ != 0 ( nurl_str_len rest ) {
+        : s p ( str_first_word rest )
+        = rest ( str_skip_word rest )
+        : s l ( str_first_word rest )
+        = rest ( str_skip_word rest )
+        ? ( str_contains_word out p ) {} {
+            : s entry ( nurl_str_cat3 p ` ` l )
+            = out ? == 0 ( nurl_str_len out ) entry ( nurl_str_cat3 out ` ` entry )
+        }
+    }
+    ( nurl_sym_def g_ptrtab `__ptr_dead__` out )
 }
 
 // The container a pointer was borrowed from ("" when unknown).

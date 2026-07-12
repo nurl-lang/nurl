@@ -427,6 +427,13 @@ The fix is to re-fetch the pointer after the mutation (`= p ( vec_data
 pre-reserved and the push provably does not grow it, so this is the one
 place the `*T` escape hatch is nudged rather than blocked.
 
+The check is path-aware in the one way that matters for false positives:
+the two arms of a `?` are alternatives, so a free or push in one arm does
+not make a pointer stale in the *other* (the guard-clause shape
+`? bad { ( string_free s ) ^ err } {}` is everywhere in the stdlib). At
+the join it takes the union of the arms that actually fall through — an
+arm that returns cannot invalidate anything downstream of the `?`.
+
 This hazard has nothing to do with `~` mutability — a `: *T` borrow
 dangles identically. (nurlc used to warn about `: ~ *T` bindings on the
 theory that mutable pointers miscompiled in long write loops; they do

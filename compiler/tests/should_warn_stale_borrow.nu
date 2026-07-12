@@ -33,5 +33,15 @@ $ `stdlib/std/bytes.nu`
     : i sb # i . bp 0  // warns: 'bp' is stale
     ( nurl_print ( nurl_str_int - sb sb ) ) ( nurl_print `\n` )
     ( vec_free [u] b )
+
+    // Join: the mutation is in a `?`-arm that FALLS THROUGH, so after the
+    // conditional the pointer may or may not have been invalidated — stale
+    // on either path is stale here.
+    : ( Vec u ) c ( vec_with_cap [u] 4 )
+    ( vec_push [u] c # u 3 )
+    : *u cp ( vec_data [u] c )
+    ? > ( vec_len [u] c ) 0 { ( vec_push [u] c # u 4 ) } {}
+    ( nurl_print ( nurl_str_int # i . cp 0 ) ) ( nurl_print `\n` )  // warns
+    ( vec_free [u] c )
     ^ 0
 }
