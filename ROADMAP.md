@@ -7,7 +7,7 @@ Anything marked done here has a regression test in
 [`compiler/tests/`](compiler/tests/) and is covered by the bootstrap fixed
 point.
 
-_Last reviewed: 2026-07-11 · Current release: **0.12.0** · Language: **Grammar
+_Last reviewed: 2026-07-12 · Current release: **0.13.0** · Language: **Grammar
 v2.3** ([`spec/grammar.ebnf`](spec/grammar.ebnf))._
 
 ---
@@ -166,14 +166,26 @@ platform-specific shims.
 - Showcase programs: a Game Boy emulator (with sound), a C64 demo and ESP32
   targets in [`examples/`](examples/), Milk-V Duo programs in
   [`duo/`](duo/), and a Push-To-Talk distributed voice app (`pttvoice/`).
+- **Language models run locally, in pure NURL** (`nurllama` + `gguf`):
+  pull a GGUF model from HuggingFace (resumable, content-addressed store),
+  then `run`, `chat`, or `serve` an **ollama-compatible API** that existing
+  clients speak unchanged. A hostile-input GGUF parser, a tokenizer read
+  from the model's own metadata, and a llama forward pass whose matvec
+  kernels **decode quantised blocks inside the matmul** — Q4_0…Q8_0 and the
+  K-quants (Q4_K/Q5_K/Q6_K) — so weights never expand to f32 on the device,
+  and the same kernel sources run on the CPU backend byte-identically.
+  Verified against independent references at every layer: token IDs vs a
+  SentencePiece implementation, logits and greedy text vs a numpy forward
+  pass, dequantisation bit-identical to an independent decoder.
 - **Package ecosystem** on the live registry (`reg.nurl-lang.org`,
   `nurlpkg install`): GPU compute (`gpu` — CUDA driver + NVRTC, a CPU
   fallback backend, a static-kernel backend, and a **WebGPU / WGSL backend**;
   `gpukit`, `tensor`), pure-NURL vision and ML (`image` PNG/JPEG codecs,
-  `onnx` runtime, `objdet`, `yoloe`, `iforest`, `anomaly`), distributed
-  compute (`swarm`, `swarm-mcp`), web (`template` HTML templating, `http`),
-  database clients (`psql`, `redis` — pure NURL),
-  and application scaffolding (`cli`, `cas`, `wasmbuilder`, `nurl-mcp`).
+  `onnx` runtime, `objdet`, `yoloe`, `iforest`, `anomaly`), local LLMs
+  (`nurllama`, `gguf`), distributed compute (`swarm`, `swarm-mcp`), web
+  (`template` HTML templating, `http`), database clients (`psql`, `redis`
+  — pure NURL), and application scaffolding (`cli`, `cas`, `wasmbuilder`,
+  `nurl-mcp`).
   Installed tools carry runtime data via the manifest's `[install] assets`
   mechanism (staged into `<prefix>/share/<name>/`).
 - **The registry itself is a NURL program** (`packages/registry`): a

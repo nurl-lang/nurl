@@ -8,6 +8,93 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.0] — 2026-07-12
+
+The **local-LLM release**. NURL now runs language models end to end — a
+hostile-input GGUF parser, a tokenizer read from the model's own
+metadata, a llama forward pass on GPU kernels that also run on the CPU,
+a content-addressed model store with resumable downloads, and an
+ollama-compatible API — all in pure NURL, all verified against
+independent references. The compiler, the stdlib and three packages
+each grew what that work proved they were missing.
+
+### Added
+
+- **`stdlib/std/progress.nu`** (new module) — a throttled, width-fitted
+  transfer bar on stderr that stays **completely silent when stderr is
+  not a tty**, so CI logs never fill with carriage returns.
+  `progress_human` is a pure, unit-testable byte formatter.
+- **`stdlib/std/fs.nu`: handle-based writes and seeking** —
+  `file_create` / `file_append` / `file_write_chunk` (binary-safe; a
+  short write is an error, never silent truncation) / `file_flush`,
+  plus `file_seek` / `file_tell` / `file_read_at` with
+  `FS_SEEK_SET/CUR/END`. An output far larger than RAM can now be
+  emitted, and a broken transfer resumed.
+- **Incremental hashing** — `sha256_init/update/final` and
+  `blake3_init/update/final`. BLAKE3 grows the real chunk tree as bytes
+  arrive (a buffered chunk is only compressed once a later byte proves
+  it non-final), so any update pattern reproduces the one-shot's tree.
+  **Both one-shots are rebuilt as init/update/final compositions**, so
+  the streaming and whole-buffer paths cannot drift.
+- **`stdlib/std/floatbits.nu`: f16 / bf16 ↔ f32**, both directions —
+  widening is exact (subnormals, ±inf, NaN payloads, −0), narrowing
+  rounds to nearest-even. Proven by an **exhaustive 65 536-pattern
+  round-trip identity** for both formats.
+- **`stdlib/std/term.nu`: `term_width` / `term_height`** — TIOCGWINSZ
+  (new `nurl_native_constant` entry) with a `$COLUMNS`/`$LINES` → 80×24
+  fallback.
+- **HTTP streaming-response hook** — `server_set_stream`, exposed on the
+  `http` package facade as `http_app_stream`: the write-side sibling of
+  the WebSocket upgrade hook, for chunked / SSE / NDJSON bodies. The
+  chunked writers existed at the low level, but `HttpApp`'s
+  request→`HttpResponse` handler type had no seam for a token-by-token
+  body.
+
+### Fixed
+
+- **Arm-local owned slices are dropped at fall-through** (memory-model
+  rule 5). A slice literal `:`-bound inside a `?` / `??` / `~` / foreach
+  arm leaked: `__owned_slices__` is name-keyed and scope-shadowed, so
+  the arm's delta died unseen at `nurl_sym_pop`. Phase 2D now has a
+  slice counterpart driven by a `__slice_decls__` sideband (only
+  bindings *declared* in the arm — freeing an `= outer [ … ]` target
+  would be a use-after-free), and the same family's rule-3 gap is closed:
+  `= xs [ … ]` now frees the old backing buffer.
+- **The sanitized CI job no longer runs at the memory ceiling.** The
+  bootstrap snapshot predated the 0.12.0 self-compile work, so stage 1
+  still ran the 13.6 GB-era compiler under ASan — right against the
+  16 GB runner, where it died as a silent `Terminated`. Refreshing
+  `nurlc_lastgood` takes the sanitized build's peak from **17.2 GB to
+  0.47 GB**; the build-stage `ASAN_OPTIONS` were tuned as well.
+
+### Packages
+
+- **`gguf` 0.2.0** (new) — read, verify, write and dequantise the GGUF
+  container. mmap-lazy and hostile-input-safe: every count, length and
+  offset is validated against the real file size *before* anything is
+  allocated. Dequantisation covers F32/F64/F16/BF16, Q4_0/Q4_1/Q5_0/Q5_1/
+  Q8_0 and the K-quants **Q4_K/Q5_K/Q6_K** — verified **bit-identical**
+  against an independent Python decoder on real llama.cpp models — and
+  `gguf_dequant_range` reads one row of a multi-gigabyte tensor without
+  expanding it.
+- **`nurllama` 0.1.0** (new) — run language models locally:
+  `pull` (resumable, content-addressed store) · `run` · `chat` ·
+  `serve` (ollama-compatible NDJSON API). Weights stay **quantised on
+  the device** — the matvec kernels decode GGUF blocks inside the matmul
+  (a Q4_K_M model needs ~3× less device memory than its f32 expansion) —
+  and the same kernel sources run on the CPU backend byte-identically.
+  Token IDs are checked against an independent SentencePiece
+  implementation, logits and greedy text against an independent numpy
+  forward pass.
+- **`gpu` 0.5.0** — **compiled kernels are cached on disk**, keyed by the
+  BLAKE3 hash of the source, so a process start costs a file read
+  instead of an NVRTC / C++ compile (a dozen-kernel package starts ~3×
+  faster; `NURL_GPU_CACHE=off` disables it). Two CPU-backend bugs that
+  banned `__device__` helper functions are fixed: `__device__` is an
+  execution-space qualifier, not a storage class, and the parameter
+  scanner now finds the entry kernel by name instead of taking the
+  source's first parenthesised list.
+
 ## [0.12.0] — 2026-07-11
 
 The release that finishes the clean-room self-critique started in 0.11.3.
@@ -7457,7 +7544,8 @@ releases are measured.
   compile-server (`api/`), browser playground (`nurlweb/`).
 * Dual license: MIT (LICENSE-MIT) or Apache-2.0 (LICENSE-APACHE).
 
-[Unreleased]: https://github.com/nurl-lang/nurl/compare/v0.12.0...HEAD
+[Unreleased]: https://github.com/nurl-lang/nurl/compare/v0.13.0...HEAD
+[0.13.0]: https://github.com/nurl-lang/nurl/compare/v0.12.0...v0.13.0
 [0.12.0]: https://github.com/nurl-lang/nurl/compare/v0.11.3...v0.12.0
 [0.10.12]: https://github.com/nurl-lang/nurl/compare/v0.10.11...v0.10.12
 [0.10.11]: https://github.com/nurl-lang/nurl/compare/v0.10.10...v0.10.11
