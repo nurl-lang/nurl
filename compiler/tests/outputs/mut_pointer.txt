@@ -1,0 +1,10 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+PASS struct pointer walked 100k links
+PASS 200k advancing writes read back
+PASS reassigned inside a ?-arm
+PASS write through a String's data pointer
+PASS read-only borrow of a Vec stays live
+PASS vec_len does not invalidate a borrow

@@ -401,6 +401,45 @@ knob for auditing a specific module, not part of the standard contract.
 The default-on eight rules remain the guarantee everything else in this
 document refers to.
 
+### 2.10 Stale container borrows (`vec_data` / `string_data`)
+
+`( vec_data v )` (and `string_data`) hands out a raw pointer *into* the
+container's heap buffer. If
+`v` is then grown — `vec_push`, `vec_extend`, `vec_reserve` — the
+buffer may be reallocated somewhere else, and every pointer taken
+before that mutation points into freed memory. `vec_clear` / `vec_free`
+do the same by releasing it outright. Reading such a pointer is a
+use-after-free that produces plausible-looking garbage rather than a
+crash, which is what makes it worth diagnosing:
+
+```
+: * u p ( vec_data [u] v )     // borrow
+( vec_push [u] v # u 1 )       // may realloc → p dangles
+: i x # i . p 0                // warning: pointer 'p' borrowed from 'v'
+                               //          is stale: 'v' was mutated on
+                               //          line N and may have
+                               //          reallocated its buffer
+```
+
+The fix is to re-fetch the pointer after the mutation (`= p ( vec_data
+[u] v )`), which clears the diagnostic for that pointer. It is a
+**warning**, not an error: the borrow is legal when the container was
+pre-reserved and the push provably does not grow it, so this is the one
+place the `*T` escape hatch is nudged rather than blocked.
+
+The check is path-aware in the one way that matters for false positives:
+the two arms of a `?` are alternatives, so a free or push in one arm does
+not make a pointer stale in the *other* (the guard-clause shape
+`? bad { ( string_free s ) ^ err } {}` is everywhere in the stdlib). At
+the join it takes the union of the arms that actually fall through — an
+arm that returns cannot invalidate anything downstream of the `?`.
+
+This hazard has nothing to do with `~` mutability — a `: *T` borrow
+dangles identically. (nurlc used to warn about `: ~ *T` bindings on the
+theory that mutable pointers miscompiled in long write loops; they do
+not, and `compiler/tests/mut_pointer.nu` pins that. The realloc above
+was the real bug all along.)
+
 ## 3. What is NOT checked
 
 The borrow checker targets the bug classes that ordinary NURL code
@@ -409,8 +448,10 @@ hits in practice. It deliberately does **not** cover:
 - **`*T` raw pointers.** `*T` is the FFI ABI escape hatch — NURL's
   `unsafe`. A `*T` taken of a local, stored, returned, or captured
   is *not* checked by default. Treat `*T` lifetimes as your
-  responsibility. (`--strict-borrowck` adds one narrow exception — a
-  `# *T` escape from an owned binding, §2.9.)
+  responsibility. Two narrow exceptions: a pointer borrowed from a
+  container that is then reallocated is warned about (§2.10), and
+  `--strict-borrowck` reports a `# *T` escape from an owned binding
+  (§2.9).
 - **Aliased mutation beyond a single call.** The exclusive-access
   check (§2.4) covers a binding aliased among one call's arguments.
   A binding read through a *nested* sub-expression argument, and

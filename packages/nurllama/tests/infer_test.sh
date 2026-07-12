@@ -119,6 +119,29 @@ else
     echo "  SKIP Q4_K_M download failed"
 fi
 
+# 5b. Q5_K / Q6_K native kernels == the host dequant oracle. The Q4_K_M file
+# above is mostly Q5_0 + Q4_K; nothing exercised Q5_K until the warp-per-row
+# matvecs were written for it, so it gets its own model.
+MQ3="$WORK/q5km.gguf"
+if curl -sL --max-time 240 -f -o "$MQ3" \
+    https://huggingface.co/QuantFactory/SmolLM-135M-GGUF/resolve/main/SmolLM-135M.Q5_K_M.gguf; then
+    "$NL" logits "$MQ3" "Once upon a time" > "$WORK/dev5.logits"
+    NURLLAMA_DEQUANT=host "$NL" logits "$MQ3" "Once upon a time" > "$WORK/host5.logits"
+    python3 - "$WORK" <<'PYEOF5' && ok "device quant kernels == host dequant oracle (Q5_K/Q6_K)" || bad "Q5_K kernel equivalence"
+import sys, numpy as np
+w = sys.argv[1]
+a = np.loadtxt(w+'/dev5.logits'); b = np.loadtxt(w+'/host5.logits')
+span = b.max() - b.min()
+assert np.abs(a-b).max() < span*1e-4, "device/host logits diverge"
+assert list(np.argsort(-a)[:5]) == list(np.argsort(-b)[:5]), "top-5 differ"
+PYEOF5
+    Q5K=$("$NL" run "$MQ3" "Once upon a time" -n 16 --temp 0)
+    Q5H=$(NURLLAMA_DEQUANT=host "$NL" run "$MQ3" "Once upon a time" -n 16 --temp 0)
+    [ "$Q5K" = "$Q5H" ] && ok "Q5_K greedy text identical device-native vs host-dequant" || bad "Q5_K text drift"
+else
+    echo "  SKIP Q5_K_M download failed"
+fi
+
 # 6. seeded sampling determinism
 A=$("$NL" run "$M" "One day" -n 16 --temp 0.8 --seed 7)
 B=$("$NL" run "$M" "One day" -n 16 --temp 0.8 --seed 7)

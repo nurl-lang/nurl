@@ -1,0 +1,17 @@
+COMPILE OK
+WARNINGS
+compiler/tests/should_warn_stale_borrow.nu:19:21: warning: pointer 'p' borrowed from 'v' is stale: 'v' was mutated on line 16 and may have reallocated its buffer
+  note: re-fetch the pointer after the mutation (p = ( vec_data … v ) )
+compiler/tests/should_warn_stale_borrow.nu:33:18: warning: pointer 'bp' borrowed from 'b' is stale: 'b' was mutated on line 32 and may have reallocated its buffer
+  note: re-fetch the pointer after the mutation (bp = ( vec_data … b ) )
+compiler/tests/should_warn_stale_borrow.nu:44:39: warning: pointer 'cp' borrowed from 'c' is stale: 'c' was mutated on line 43 and may have reallocated its buffer
+  note: re-fetch the pointer after the mutation (cp = ( vec_data … c ) )
+compiler/tests/should_warn_stale_borrow.nu:55:39: warning: pointer 'ep' borrowed from 'e' is stale: 'e' was mutated on line 52 and may have reallocated its buffer
+  note: re-fetch the pointer after the mutation (ep = ( vec_data … e ) )
+LINK OK
+EXIT 0
+OUTPUT
+7
+0
+3
+5

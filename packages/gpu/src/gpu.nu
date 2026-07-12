@@ -452,10 +452,29 @@ $ `cpu.nu`
 // 1-D launch: `grid` blocks of `block` threads. `args` is the Vec built
 // from gpu_arg_*; its contiguous i64 backing IS the argument-value array,
 // so we only build the pointer (void**) layer over it. 0 == success.
+// The void** argument layer is rebuilt on EVERY launch — a decode step in
+// a language model issues a few hundred of them, so a malloc/free pair per
+// launch is pure overhead on the hot path. Keep one buffer and grow it
+// on demand; a launch is synchronous with respect to reading the argument
+// values (cuLaunchKernel copies them, cpu_launch reads them inline), so a
+// single buffer per process is safe.
+: ~ i g_params_buf 0
+: ~ i g_params_cap 0
+
+@ __gpu_params i n → *u {
+    ? > n g_params_cap {
+        ? != g_params_buf 0 { ( nurl_free # s g_params_buf ) } {}
+        : i want ? < n 16 16 n
+        = g_params_buf # i ( nurl_alloc * want 8 )
+        = g_params_cap want
+    } {}
+    ^ # *u g_params_buf
+}
+
 @ gpu_launch GpuKernel k i grid i block ( Vec i ) args → i {
     : i n ( vec_len [i] args )
     : i vbase # i ( vec_data [i] args )
-    : *u params ( nurl_alloc * n 8 )
+    : *u params ( __gpu_params n )
     : ~ i idx 0
     ~ < idx n {
         ( nurl_poke params idx + vbase * idx 8 )
@@ -467,7 +486,6 @@ $ `cpu.nu`
     : ~ i r 0
     ? == __gpu_backend 3 { = r ( wgpu_launch . k func * grid block # *u vbase n ) } {
         ? != __gpu_backend 0 { = r ( cpu_launch . k func # i params grid block ) } { = r ( cuda_launch . k func grid block params ) } }
-    ( nurl_free params )
     ^ r
 }
 

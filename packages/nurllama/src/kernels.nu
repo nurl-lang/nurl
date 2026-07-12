@@ -31,6 +31,9 @@ $ `deps/gpu/src/gpu.nu`
     GpuKernel w_q8_0
     GpuKernel w_q4_k
     GpuKernel w_q6_k
+    GpuKernel w_q5_0
+    GpuKernel w_q5_1
+    GpuKernel w_q5_k
     b warp
     GpuKernel rmsnorm
     GpuKernel rope
@@ -47,7 +50,7 @@ $ `deps/gpu/src/gpu.nu`
 
 @ __lk_matvec → s {
     ^ `extern "C" __global__ void matvec(
-        const float* W, const float* x, float* y, int rows, int cols, int batch) {
+        const float* __restrict__ W, const float* __restrict__ x, float* __restrict__ y, int rows, int cols, int batch) {
         int idx = blockIdx.x*blockDim.x + threadIdx.x;
         if (idx >= rows*batch) return;
         int b = idx / rows, r = idx % rows;
@@ -307,7 +310,7 @@ $ `deps/gpu/src/gpu.nu`
 
 @ __lk_mv_q4_0 → s {
     ^ ( nurl_str_cat ( __lk_f16_dev ) `extern "C" __global__ void mv_q4_0(
-        const unsigned char* W, const float* x, float* y, int rows, int cols, int batch) {
+        const unsigned char* __restrict__ W, const float* __restrict__ x, float* __restrict__ y, int rows, int cols, int batch) {
         int idx = blockIdx.x*blockDim.x + threadIdx.x;
         if (idx >= rows*batch) return;
         int b = idx / rows, r = idx % rows;
@@ -332,7 +335,7 @@ $ `deps/gpu/src/gpu.nu`
 
 @ __lk_mv_q8_0 → s {
     ^ ( nurl_str_cat ( __lk_f16_dev ) `extern "C" __global__ void mv_q8_0(
-        const unsigned char* W, const float* x, float* y, int rows, int cols, int batch) {
+        const unsigned char* __restrict__ W, const float* __restrict__ x, float* __restrict__ y, int rows, int cols, int batch) {
         int idx = blockIdx.x*blockDim.x + threadIdx.x;
         if (idx >= rows*batch) return;
         int b = idx / rows, r = idx % rows;
@@ -359,7 +362,7 @@ $ `deps/gpu/src/gpu.nu`
 // from the low (even s) or high (odd s) nibbles of bytes [s/2*32 …].
 @ __lk_mv_q4_k → s {
     ^ ( nurl_str_cat ( __lk_f16_dev ) `extern "C" __global__ void mv_q4_k(
-        const unsigned char* W, const float* x, float* y, int rows, int cols, int batch) {
+        const unsigned char* __restrict__ W, const float* __restrict__ x, float* __restrict__ y, int rows, int cols, int batch) {
         int idx = blockIdx.x*blockDim.x + threadIdx.x;
         if (idx >= rows*batch) return;
         int b = idx / rows, r = idx % rows;
@@ -403,7 +406,7 @@ $ `deps/gpu/src/gpu.nu`
 // of upper 2 bits, 16 int8 scales, f16 d. Sixteen 16-element groups.
 @ __lk_mv_q6_k → s {
     ^ ( nurl_str_cat ( __lk_f16_dev ) `extern "C" __global__ void mv_q6_k(
-        const unsigned char* W, const float* x, float* y, int rows, int cols, int batch) {
+        const unsigned char* __restrict__ W, const float* __restrict__ x, float* __restrict__ y, int rows, int cols, int batch) {
         int idx = blockIdx.x*blockDim.x + threadIdx.x;
         if (idx >= rows*batch) return;
         int b = idx / rows, r = idx % rows;
@@ -445,7 +448,7 @@ $ `deps/gpu/src/gpu.nu`
 
 @ __lk_mv_q5_0 → s {
     ^ ( nurl_str_cat ( __lk_f16_dev ) `extern "C" __global__ void mv_q5_0(
-        const unsigned char* W, const float* x, float* y, int rows, int cols, int batch) {
+        const unsigned char* __restrict__ W, const float* __restrict__ x, float* __restrict__ y, int rows, int cols, int batch) {
         int idx = blockIdx.x*blockDim.x + threadIdx.x;
         if (idx >= rows*batch) return;
         int b = idx / rows, r = idx % rows;
@@ -476,7 +479,7 @@ $ `deps/gpu/src/gpu.nu`
 
 @ __lk_mv_q5_1 → s {
     ^ ( nurl_str_cat ( __lk_f16_dev ) `extern "C" __global__ void mv_q5_1(
-        const unsigned char* W, const float* x, float* y, int rows, int cols, int batch) {
+        const unsigned char* __restrict__ W, const float* __restrict__ x, float* __restrict__ y, int rows, int cols, int batch) {
         int idx = blockIdx.x*blockDim.x + threadIdx.x;
         if (idx >= rows*batch) return;
         int b = idx / rows, r = idx % rows;
@@ -511,7 +514,7 @@ $ `deps/gpu/src/gpu.nu`
 // min bytes, 32 bytes carrying each value's 5th bit, 128 nibble bytes.
 @ __lk_mv_q5_k → s {
     ^ ( nurl_str_cat ( __lk_f16_dev ) `extern "C" __global__ void mv_q5_k(
-        const unsigned char* W, const float* x, float* y, int rows, int cols, int batch) {
+        const unsigned char* __restrict__ W, const float* __restrict__ x, float* __restrict__ y, int rows, int cols, int batch) {
         int idx = blockIdx.x*blockDim.x + threadIdx.x;
         if (idx >= rows*batch) return;
         int b = idx / rows, r = idx % rows;
@@ -555,7 +558,7 @@ $ `deps/gpu/src/gpu.nu`
 
 @ __lk_mv_f16 → s {
     ^ ( nurl_str_cat ( __lk_f16_dev ) `extern "C" __global__ void mv_f16(
-        const unsigned char* W, const float* x, float* y, int rows, int cols, int batch) {
+        const unsigned char* __restrict__ W, const float* __restrict__ x, float* __restrict__ y, int rows, int cols, int batch) {
         int idx = blockIdx.x*blockDim.x + threadIdx.x;
         if (idx >= rows*batch) return;
         int b = idx / rows, r = idx % rows;
@@ -598,7 +601,7 @@ $ `deps/gpu/src/gpu.nu`
 
 @ __lk_mv_f32_w → s {
     ^ ( nurl_str_cat ( __lk_warp_red ) `extern "C" __global__ void mv_f32_w(
-        const float* W, const float* x, float* y, int rows, int cols, int batch) {
+        const float* __restrict__ W, const float* __restrict__ x, float* __restrict__ y, int rows, int cols, int batch) {
         NL_WARP_PROLOGUE(rows, batch)
         const float* w = W + (long long)r*cols;
         const float* xb = x + (long long)b*cols;
@@ -611,7 +614,7 @@ $ `deps/gpu/src/gpu.nu`
 
 @ __lk_mv_q4_0_w → s {
     ^ ( nurl_str_cat ( nurl_str_cat ( __lk_warp_red ) ( __lk_f16_dev ) ) `extern "C" __global__ void mv_q4_0_w(
-        const unsigned char* W, const float* x, float* y, int rows, int cols, int batch) {
+        const unsigned char* __restrict__ W, const float* __restrict__ x, float* __restrict__ y, int rows, int cols, int batch) {
         NL_WARP_PROLOGUE(rows, batch)
         int nb = cols / 32;
         const unsigned char* w = W + (long long)r * nb * 18;
@@ -634,7 +637,7 @@ $ `deps/gpu/src/gpu.nu`
 
 @ __lk_mv_q8_0_w → s {
     ^ ( nurl_str_cat ( nurl_str_cat ( __lk_warp_red ) ( __lk_f16_dev ) ) `extern "C" __global__ void mv_q8_0_w(
-        const unsigned char* W, const float* x, float* y, int rows, int cols, int batch) {
+        const unsigned char* __restrict__ W, const float* __restrict__ x, float* __restrict__ y, int rows, int cols, int batch) {
         NL_WARP_PROLOGUE(rows, batch)
         int nb = cols / 32;
         const unsigned char* w = W + (long long)r * nb * 34;
@@ -656,37 +659,39 @@ $ `deps/gpu/src/gpu.nu`
 
 @ __lk_mv_q4_k_w → s {
     ^ ( nurl_str_cat ( nurl_str_cat ( __lk_warp_red ) ( __lk_f16_dev ) ) `extern "C" __global__ void mv_q4_k_w(
-        const unsigned char* W, const float* x, float* y, int rows, int cols, int batch) {
+        const unsigned char* __restrict__ W, const float* __restrict__ x, float* __restrict__ y, int rows, int cols, int batch) {
         NL_WARP_PROLOGUE(rows, batch)
         int nb = cols / 256;
         const unsigned char* w = W + (long long)r * nb * 144;
         const float* xb = x + (long long)b*cols;
         float acc = 0.f;
-        for (int blk = lane; blk < nb; blk += 32) {
+        // The whole warp walks the row's blocks TOGETHER, and the 32 lanes
+        // split each block's quants: lane l takes byte l of each 32-byte
+        // nibble group, so one warp load is 32 contiguous bytes (and the
+        // matching x load is 32 contiguous floats). Giving each lane its own
+        // 144-byte block instead — the obvious partition — makes every warp
+        // load touch 32 separate cache lines.
+        for (int blk = 0; blk < nb; ++blk) {
             const unsigned char* bp = w + blk*144;
             float d    = nl_f16(bp);
             float dmin = nl_f16(bp + 2);
             const unsigned char* sc = bp + 4;
             const unsigned char* qs = bp + 16;
             const float* xblk = xb + blk*256;
-            for (int sb = 0; sb < 8; ++sb) {
-                int sV, mV;
-                if (sb < 4) { sV = sc[sb] & 63; mV = sc[sb+4] & 63; }
-                else {
-                    sV = (sc[sb+4] & 0xF) | ((sc[sb-4] >> 6) << 4);
-                    mV = (sc[sb+4] >>  4) | ((sc[sb]   >> 6) << 4);
+            for (int j = 0; j < 4; ++j) {
+                unsigned char q = qs[j*32 + lane];
+                for (int t = 0; t < 2; ++t) {
+                    int sb = 2*j + t;               // sub-block: low nibble, then high
+                    int sV, mV;
+                    if (sb < 4) { sV = sc[sb] & 63; mV = sc[sb+4] & 63; }
+                    else {
+                        sV = (sc[sb+4] & 0xF) | ((sc[sb-4] >> 6) << 4);
+                        mV = (sc[sb+4] >>  4) | ((sc[sb]   >> 6) << 4);
+                    }
+                    float xv = xblk[sb*32 + lane];
+                    int   qq = t ? (q >> 4) : (q & 0xF);
+                    acc += (d * sV) * ((float)qq * xv) - (dmin * mV) * xv;
                 }
-                float d1 = d * sV, m1 = dmin * mV;
-                const unsigned char* qb = qs + (sb/2)*32;
-                const float* xs = xblk + sb*32;
-                int hi = sb & 1;
-                float sub = 0.f, msum = 0.f;
-                for (int l = 0; l < 32; ++l) {
-                    int q = hi ? (qb[l] >> 4) : (qb[l] & 0xF);
-                    sub  += (float)q * xs[l];
-                    msum += xs[l];
-                }
-                acc += d1 * sub - m1 * msum;
             }
         }
         acc = nl_warp_sum(acc);
@@ -696,7 +701,7 @@ $ `deps/gpu/src/gpu.nu`
 
 @ __lk_mv_q6_k_w → s {
     ^ ( nurl_str_cat ( nurl_str_cat ( __lk_warp_red ) ( __lk_f16_dev ) ) `extern "C" __global__ void mv_q6_k_w(
-        const unsigned char* W, const float* x, float* y, int rows, int cols, int batch) {
+        const unsigned char* __restrict__ W, const float* __restrict__ x, float* __restrict__ y, int rows, int cols, int batch) {
         NL_WARP_PROLOGUE(rows, batch)
         int nb = cols / 256;
         const unsigned char* w = W + (long long)r * nb * 210;
@@ -726,6 +731,106 @@ $ `deps/gpu/src/gpu.nu`
                     acc += d * (float)sc0[is + 2] * (float)q2 * xn[l + 32];
                     acc += d * (float)sc0[is + 4] * (float)q3 * xn[l + 64];
                     acc += d * (float)sc0[is + 6] * (float)q4 * xn[l + 96];
+                }
+            }
+        }
+        acc = nl_warp_sum(acc);
+        if (lane == 0) y[(long long)b*rows + r] = acc;
+    }` )
+}
+
+// Q5_0 / Q5_1 / Q5_K warp variants. The 5-bit quants were the last matvecs
+// without one — and a Q5_0-heavy model (which is what most llama.cpp
+// "q4_k_m" files actually are: 166 of this one's 272 tensors) therefore ran
+// entirely on the one-thread-per-row kernel, where the 32 lanes of a warp
+// read 32 rows at once, i.e. 32 unrelated cache lines per load. Same warp
+// split as the K-quants: the warp walks blocks together, lane l takes byte l.
+
+@ __lk_mv_q5_0_w → s {
+    ^ ( nurl_str_cat ( nurl_str_cat ( __lk_warp_red ) ( __lk_f16_dev ) ) `extern "C" __global__ void mv_q5_0_w(
+        const unsigned char* __restrict__ W, const float* __restrict__ x, float* __restrict__ y, int rows, int cols, int batch) {
+        NL_WARP_PROLOGUE(rows, batch)
+        int nb = cols / 32;
+        const unsigned char* w = W + (long long)r * nb * 22;
+        const float* xb = x + (long long)b*cols;
+        float acc = 0.f;
+        // 32 lanes, 16 bytes of quants per block: lanes 0..15 take the block's
+        // bytes, lanes 16..31 take the next block's — two blocks per step.
+        for (int blk = lane >> 4; blk < nb; blk += 2) {
+            const unsigned char* bp = w + blk*22;
+            int j = lane & 15;
+            float d = nl_f16(bp);
+            unsigned int qh = (unsigned int)bp[2] | ((unsigned int)bp[3] << 8)
+                            | ((unsigned int)bp[4] << 16) | ((unsigned int)bp[5] << 24);
+            unsigned char q = bp[6 + j];
+            const float* xs = xb + blk*32;
+            int h0 = ((qh >> j) & 1u) << 4;
+            int h1 = ((qh >> (j + 16)) & 1u) << 4;
+            acc += d * (float)(((q & 0xF) | h0) - 16) * xs[j];
+            acc += d * (float)(((q >> 4)  | h1) - 16) * xs[j + 16];
+        }
+        acc = nl_warp_sum(acc);
+        if (lane == 0) y[(long long)b*rows + r] = acc;
+    }` )
+}
+
+@ __lk_mv_q5_1_w → s {
+    ^ ( nurl_str_cat ( nurl_str_cat ( __lk_warp_red ) ( __lk_f16_dev ) ) `extern "C" __global__ void mv_q5_1_w(
+        const unsigned char* __restrict__ W, const float* __restrict__ x, float* __restrict__ y, int rows, int cols, int batch) {
+        NL_WARP_PROLOGUE(rows, batch)
+        int nb = cols / 32;
+        const unsigned char* w = W + (long long)r * nb * 24;
+        const float* xb = x + (long long)b*cols;
+        float acc = 0.f;
+        for (int blk = lane >> 4; blk < nb; blk += 2) {
+            const unsigned char* bp = w + blk*24;
+            int j = lane & 15;
+            float d = nl_f16(bp);
+            float m = nl_f16(bp + 2);
+            unsigned int qh = (unsigned int)bp[4] | ((unsigned int)bp[5] << 8)
+                            | ((unsigned int)bp[6] << 16) | ((unsigned int)bp[7] << 24);
+            unsigned char q = bp[8 + j];
+            const float* xs = xb + blk*32;
+            int h0 = ((qh >> j) & 1u) << 4;
+            int h1 = ((qh >> (j + 16)) & 1u) << 4;
+            acc += (d * (float)((q & 0xF) | h0) + m) * xs[j];
+            acc += (d * (float)((q >> 4)  | h1) + m) * xs[j + 16];
+        }
+        acc = nl_warp_sum(acc);
+        if (lane == 0) y[(long long)b*rows + r] = acc;
+    }` )
+}
+
+@ __lk_mv_q5_k_w → s {
+    ^ ( nurl_str_cat ( nurl_str_cat ( __lk_warp_red ) ( __lk_f16_dev ) ) `extern "C" __global__ void mv_q5_k_w(
+        const unsigned char* __restrict__ W, const float* __restrict__ x, float* __restrict__ y, int rows, int cols, int batch) {
+        NL_WARP_PROLOGUE(rows, batch)
+        int nb = cols / 256;
+        const unsigned char* w = W + (long long)r * nb * 176;
+        const float* xb = x + (long long)b*cols;
+        float acc = 0.f;
+        for (int blk = 0; blk < nb; ++blk) {
+            const unsigned char* bp = w + blk*176;
+            float d    = nl_f16(bp);
+            float dmin = nl_f16(bp + 2);
+            const unsigned char* sc = bp + 4;
+            const unsigned char* qh = bp + 16;
+            const unsigned char* qs = bp + 48;
+            const float* xblk = xb + blk*256;
+            unsigned char hbits = qh[lane];
+            for (int j = 0; j < 4; ++j) {
+                unsigned char q = qs[j*32 + lane];
+                for (int t = 0; t < 2; ++t) {
+                    int sb = 2*j + t;
+                    int sV, mV;
+                    if (sb < 4) { sV = sc[sb] & 63; mV = sc[sb+4] & 63; }
+                    else {
+                        sV = (sc[sb+4] & 0xF) | ((sc[sb-4] >> 6) << 4);
+                        mV = (sc[sb+4] >>  4) | ((sc[sb]   >> 6) << 4);
+                    }
+                    float xv = xblk[sb*32 + lane];
+                    int qq = (t ? (q >> 4) : (q & 0xF)) | (((hbits >> sb) & 1u) << 4);
+                    acc += (d * sV) * ((float)qq * xv) - (dmin * mV) * xv;
                 }
             }
         }
@@ -769,9 +874,13 @@ $ `deps/gpu/src/gpu.nu`
     : GpuKernel w3 ? want_warp ( gpu_compile g ( __lk_mv_q8_0_w ) `mv_q8_0_w` ) @ GpuKernel { 0 0 }
     : GpuKernel w4 ? want_warp ( gpu_compile g ( __lk_mv_q4_k_w ) `mv_q4_k_w` ) @ GpuKernel { 0 0 }
     : GpuKernel w5 ? want_warp ( gpu_compile g ( __lk_mv_q6_k_w ) `mv_q6_k_w` ) @ GpuKernel { 0 0 }
-    : b warp & want_warp & & ( gpu_kernel_ok w1 ) ( gpu_kernel_ok w2 )
-    & & ( gpu_kernel_ok w3 ) ( gpu_kernel_ok w4 ) ( gpu_kernel_ok w5 )
-    ^ @ LlmKernels { k1 q1 q2 q6 q7 q3 q8 q4 q5 w1 w2 w3 w4 w5 warp k2 k3 k3n k4 k4a k4b k5 k6 k6b k7 ok }
+    : GpuKernel w6 ? want_warp ( gpu_compile g ( __lk_mv_q5_0_w ) `mv_q5_0_w` ) @ GpuKernel { 0 0 }
+    : GpuKernel w7 ? want_warp ( gpu_compile g ( __lk_mv_q5_1_w ) `mv_q5_1_w` ) @ GpuKernel { 0 0 }
+    : GpuKernel w8 ? want_warp ( gpu_compile g ( __lk_mv_q5_k_w ) `mv_q5_k_w` ) @ GpuKernel { 0 0 }
+    : b warp & want_warp
+    & & & ( gpu_kernel_ok w1 ) ( gpu_kernel_ok w2 ) & ( gpu_kernel_ok w3 ) ( gpu_kernel_ok w4 )
+    & & ( gpu_kernel_ok w5 ) ( gpu_kernel_ok w6 ) & ( gpu_kernel_ok w7 ) ( gpu_kernel_ok w8 )
+    ^ @ LlmKernels { k1 q1 q2 q6 q7 q3 q8 q4 q5 w1 w2 w3 w4 w5 w6 w7 w8 warp k2 k3 k3n k4 k4a k4b k5 k6 k6b k7 ok }
 }
 
 @ lk_free LlmKernels ks → v {
@@ -790,6 +899,9 @@ $ `deps/gpu/src/gpu.nu`
         ( gpu_kernel_free . ks w_q8_0 )
         ( gpu_kernel_free . ks w_q4_k )
         ( gpu_kernel_free . ks w_q6_k )
+        ( gpu_kernel_free . ks w_q5_0 )
+        ( gpu_kernel_free . ks w_q5_1 )
+        ( gpu_kernel_free . ks w_q5_k )
     } {}
     ( gpu_kernel_free . ks rmsnorm )
     ( gpu_kernel_free . ks rope )
@@ -832,8 +944,9 @@ $ `deps/gpu/src/gpu.nu`
     ? == gt 7 { = which 7 } {}
     ? == gt 13 { = which 8 } {}
     ? < which 0 { ^ F } {}
-    // warp-per-row variants (CUDA): f32, Q4_0, Q8_0, Q4_K, Q6_K
-    ? & . ks warp | | | | == which 0 == which 1 == which 2 == which 3 == which 4 {
+    // warp-per-row variants (CUDA): f32, Q4_0, Q8_0, Q4_K, Q6_K, Q5_0, Q5_1, Q5_K
+    ? & . ks warp | | | | | | | == which 0 == which 1 == which 2 == which 3 == which 4
+    == which 6 == which 7 == which 8 {
         : ( Vec i ) wa ( vec_new [i] )
         ( vec_push [i] wa ( gpu_arg_i64 wd ) )
         ( vec_push [i] wa ( gpu_arg_i64 xd ) )
@@ -849,6 +962,9 @@ $ `deps/gpu/src/gpu.nu`
         ? == which 2 { : i _r ( gpu_launch . ks w_q8_0 wg 128 wa ) } {}
         ? == which 3 { : i _r ( gpu_launch . ks w_q4_k wg 128 wa ) } {}
         ? == which 4 { : i _r ( gpu_launch . ks w_q6_k wg 128 wa ) } {}
+        ? == which 6 { : i _r ( gpu_launch . ks w_q5_0 wg 128 wa ) } {}
+        ? == which 7 { : i _r ( gpu_launch . ks w_q5_1 wg 128 wa ) } {}
+        ? == which 8 { : i _r ( gpu_launch . ks w_q5_k wg 128 wa ) } {}
         ( vec_free [i] wa )
         ^ T
     } {}
