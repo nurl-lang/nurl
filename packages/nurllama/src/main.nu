@@ -1,6 +1,10 @@
 // nurllama — run language models locally.
 //
-//   nurllama run <model.gguf> <prompt>        generate (stream to stdout)
+//   nurllama pull <src> [--name N]            download into ~/.nurllama
+//                                             (hf.co/ORG/REPO/FILE.gguf or a
+//                                             URL; resumes a broken pull)
+//   nurllama list · rm <name> · verify <name> the local model store
+//   nurllama run <model|name> <prompt>        generate (stream to stdout)
 //     -n N (default 64) · --temp F (0 = greedy, default 0.8)
 //     --topk N · --topp F · --seed N · --ctx N
 //   nurllama logits <model.gguf> <prompt>     final-position logits, one
@@ -33,6 +37,8 @@ $ `src/tokenizer.nu`
 $ `src/kernels.nu`
 $ `src/model.nu`
 $ `src/sample.nu`
+$ `src/store.nu`
+$ `src/pull.nu`
 
 @ __nl_err String e → i {
     ( nurl_eprintln ( string_data e ) )
@@ -378,6 +384,7 @@ $ `src/sample.nu`
     ( args_opt p `topp` 0 `F` `run: top-p nucleus (default 0.95; 1 = off)` )
     ( args_opt p `seed` 0 `N` `run: RNG seed (default 42)` )
     ( args_opt p `ctx` 0 `N` `run: context length cap (default: model's)` )
+    ( args_opt p `name` 0 `NAME` `pull: store under this name` )
     ? ( args_parse_argv p ) {} {
         ( nurl_eprintln ( args_error p ) )
         ( args_free p )
@@ -386,7 +393,7 @@ $ `src/sample.nu`
     ? ( args_present p `help` ) {
         : String u ( args_usage p )
         ( nurl_print ( string_data u ) )
-        ( nurl_print `\ncommands:\n  run <model.gguf> <prompt> [-n N] [--temp F] [--topk N] [--topp F] [--seed N]\n  logits <model.gguf> <prompt> · tokenize <model.gguf> <text>\n  detok <model.gguf> <id> [id …] · vocab <model.gguf> [n] · selftest\n` )
+        ( nurl_print `\ncommands:\n  pull <hf.co/ORG/REPO/FILE.gguf | url> [--name N] · list · rm <name> · verify <name>\n  run <model|name> <prompt> [-n N] [--temp F] [--topk N] [--topp F] [--seed N]\n  logits <model> <prompt> · tokenize <model> <text>\n  detok <model> <id> [id …] · vocab <model> [n] · selftest\n` )
         ( string_free u )
         ( args_free p )
         ^ 0
@@ -414,17 +421,82 @@ $ `src/sample.nu`
         ^ rc
     } {}
 
+    ? ( nurl_str_eq cmd `list` ) {
+        : String root ( nl_store_root )
+        ( nl_store_list root )
+        ( string_free root )
+        ( args_free p )
+        ^ 0
+    } {}
+
+    ? | | ( nurl_str_eq cmd `pull` ) ( nurl_str_eq cmd `rm` ) ( nurl_str_eq cmd `verify` ) {
+        ? < ( args_positional_count p ) 2 {
+            ( args_free p )
+            ^ ( __nl_err ( string_from `nurllama: this command needs an argument (nurllama --help)` ) )
+        } {}
+        : ~ s a1 ``
+        ?? ( vec_get [String] pos 1 ) {
+            T c → { = a1 ( string_data c ) }
+            F → {}
+        }
+        : String root ( nl_store_root )
+        : ~ i rc 0
+        ? ( nurl_str_eq cmd `pull` ) {
+            : String nn ( args_value_or p `name` `` )
+            : !v String r ( nl_pull root a1 ( string_data nn ) )
+            ( string_free nn )
+            ?? r {
+                T _ → {}
+                F e → { = rc ( __nl_err e ) }
+            }
+        } {
+            ? ( nurl_str_eq cmd `rm` ) {
+                : !v String r ( nl_store_rm root a1 )
+                ?? r {
+                    T _ → { ( nurl_print `removed\n` ) }
+                    F e → { = rc ( __nl_err e ) }
+                }
+            } {
+                : !v String r ( nl_store_verify root a1 )
+                ?? r {
+                    T _ → { ( nurl_print `OK — blob hashes to its manifest digest\n` ) }
+                    F e → { = rc ( __nl_err e ) }
+                }
+            }
+        }
+        ( string_free root )
+        ( args_free p )
+        ^ rc
+    } {}
+
     ? < ( args_positional_count p ) 2 {
         ( args_free p )
         ^ ( __nl_err ( string_from `nurllama: this command needs a model file (nurllama --help)` ) )
     } {}
 
     ? | ( nurl_str_eq cmd `run` ) ( nurl_str_eq cmd `logits` ) {
-        : ~ s mp ``
+        : ~ s mparg ``
         ?? ( vec_get [String] pos 1 ) {
-            T c → { = mp ( string_data c ) }
+            T c → { = mparg ( string_data c ) }
             F → {}
         }
+        // an existing path wins; otherwise the store resolves the name
+        : String mroot ( nl_store_root )
+        : ~ String mres ( string_new )
+        ?? ( nl_resolve mroot mparg ) {
+            T pth → {
+                ( string_free mres )
+                = mres pth
+            }
+            F → {}
+        }
+        ( string_free mroot )
+        ? > ( string_len mres ) 0 {} {
+            ( string_free mres )
+            ( args_free p )
+            ^ ( __nl_err ( string_from `nurllama: not a file and not a stored model name (nurllama list)` ) )
+        }
+        : s mp ( string_data mres )
         : ~ s prompt ``
         ?? ( vec_get [String] pos 2 ) {
             T c → { = prompt ( string_data c ) }
@@ -506,14 +578,31 @@ $ `src/sample.nu`
             }
             F e → { = rc2 ( __nl_err e ) }
         }
+        ( string_free mres )
         ( args_free p )
         ^ rc2
     } {}
-    : ~ s mpath ``
+    : ~ s mparg2 ``
     ?? ( vec_get [String] pos 1 ) {
-        T c → { = mpath ( string_data c ) }
+        T c → { = mparg2 ( string_data c ) }
         F → {}
     }
+    : String mroot2 ( nl_store_root )
+    : ~ String mres2 ( string_new )
+    ?? ( nl_resolve mroot2 mparg2 ) {
+        T pth → {
+            ( string_free mres2 )
+            = mres2 pth
+        }
+        F → {}
+    }
+    ( string_free mroot2 )
+    ? > ( string_len mres2 ) 0 {} {
+        ( string_free mres2 )
+        ( args_free p )
+        ^ ( __nl_err ( string_from `nurllama: not a file and not a stored model name (nurllama list)` ) )
+    }
+    : s mpath ( string_data mres2 )
     : ~ i rc 0
     ?? ( gguf_open mpath ) {
         T g → {
@@ -589,6 +678,7 @@ $ `src/sample.nu`
         }
         F e → { = rc ( __nl_err e ) }
     }
+    ( string_free mres2 )
     ( args_free p )
     ^ rc
 }
