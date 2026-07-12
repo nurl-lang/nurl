@@ -26,6 +26,10 @@ else NURL="nurl"; fi
 
 WORK="$(mktemp -d -t nurllama-test.XXXXXX)"
 trap 'rm -rf "$WORK"' EXIT
+
+# deps/ symlinks are local build artifacts (nurlpkg materialises them from
+# nurl.toml path-deps; .gitignore keeps them out) — create for a fresh clone.
+[ -e deps/gguf ] || { mkdir -p deps && ln -s ../../gguf deps/gguf; }
 PASS=0; FAIL=0
 ok()  { echo "  PASS $1"; PASS=$((PASS+1)); }
 bad() { echo "  FAIL $1"; FAIL=$((FAIL+1)); }
