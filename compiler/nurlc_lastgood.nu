@@ -79,6 +79,34 @@
 
 // ── Abort helpers ─────────────────────────────────────────────────
 
+// Multi-error mode (rustc-style): while parse_program's per-declaration
+// recovery frame is active (g_diag_recover_active), `die` prints its
+// diagnostic and then PANICS with the __nurlc_diag__ sentinel instead of
+// exiting — parse_program catches it, resyncs the lexer to the next
+// top-level declaration, and keeps going, so one run reports many errors.
+// Outside a recovery frame (the scan pre-passes, deferred flush stages)
+// `die` stays fail-fast exit(1). Capped at NURLC_MAX_ERRORS so a cascade
+// can't scroll forever; the emitted IR after the first error is garbage,
+// but the non-zero exit makes every caller discard it.
+: ~ i g_err_count 0
+: ~ i g_diag_recover_active 0
+: i NURLC_MAX_ERRORS 20
+
+// die → __diag_abort: print-position variants share this exit/panic tail.
+@ __diag_abort → v {
+    ? != g_diag_recover_active 0
+    { = g_err_count + g_err_count 1
+        ? >= g_err_count NURLC_MAX_ERRORS
+        { ( nurl_eprintln ( nurl_str_cat3 `error: too many errors (`
+            ( nurl_str_int g_err_count ) `) — stopping here` ) )
+            ( nurl_exit 1 ) }
+        {}
+        ( nurl_panic `__nurlc_diag__` )
+    }
+    {}
+    ( nurl_exit 1 )
+}
+
 @ die i lex s msg → v {
     // Format:
     //   file:line:col: msg
@@ -94,7 +122,7 @@
     ( nurl_eprintln ( nurl_str_cat3 loc `: ` msg ) )
     ( nurl_eprintln ( nurl_lex_line_text lex ) )
     ( nurl_eprintln ( nurl_diag_caret col ) )
-    ( nurl_exit 1 )
+    ( __diag_abort )
 }
 
 // die_at: a fatal diagnostic for a deferred (post-scan) check that has only a
@@ -104,7 +132,7 @@
 // been registered and so cannot point at a single lexer position.
 @ die_at s loc s msg → v {
     ( nurl_eprintln ( nurl_str_cat3 loc `: ` msg ) )
-    ( nurl_exit 1 )
+    ( __diag_abort )
 }
 
 // Soft diagnostic — same format as `die` but does not exit. Used for
@@ -288,7 +316,14 @@
     : i wl ( nurl_str_len w )
     : i tl ( nurl_str_len t )
     ? > + pos wl tl { ^ F } {}
-    ? ! ( seq ( nurl_str_slice t pos wl ) w ) { ^ F } {}
+    // Direct char compare — this runs per character of every lowered
+    // type; the old slice+seq allocated a 2-4 byte string per probe
+    // (16.5M mallocs per self-compile).
+    : ~ i ck 0
+    ~ < ck wl {
+        ? != ( nurl_str_get t + pos ck ) ( nurl_str_get w ck ) { ^ F } {}
+        = ck + ck 1
+    }
     ? > pos 0
     { : i pc ( nurl_str_get t - pos 1 )
         ? | ( __is_ident_char pc ) == pc 37 { ^ F } {} }
@@ -706,6 +741,17 @@
 // (`T x → ^ x  F _ → …`), not a stray XOR operand — so the warning is
 // suppressed inside arm bodies. Save/restore (nested matches).
 : ~ i g_in_match_arm 0
+
+// Cheap per-function gate for the Phase 2D slice machinery: most
+// functions declare no owned slices at all, and the sanitized
+// self-compile runs tight against CI memory — skip the per-arm
+// `__slice_decls__` snapshot/walk (each a strdup'ing sym_get) entirely
+// unless this function has actually declared one. Set by
+// mem_slice_decl_add, reset at function entry. A closure body lifted
+// mid-function inherits the enclosing value — a stale 1 only costs the
+// snapshot, never correctness (the drop walks the real lists).
+: ~ i g_fn_slice_decls 0
+
 : ~ i g_defer_count 0  // number of active defers in the current function
 : ~ i g_generic_syms 0  // sym handle for stored generic function templates (Group E)
 : ~ i g_generic_struct_syms 0  // generic struct templates (Group E-structs).
@@ -778,14 +824,15 @@
 // wasm build path (nurlapi) — a wasm module's undefined FFI symbols become
 // imports the host runtime (e.g. packages/wasmtime) provides.
 : ~ i g_ffi_host_imports 0
-// `--strict-borrowck` (off by default) enables two additional checks:
+// `--strict-borrowck` (off by default) enables three additional checks:
 // (1) aliased mutation through `. obj field` arguments at the same
-// call site — a generalisation of the bare-identifier-only check, and
+// call site — a generalisation of the bare-identifier-only check,
 // (2) `# *T` raw-pointer escape from owned bindings whose pointer may
-// outlive the binding's drop. Both are diagnostic-only and emit
-// `error:` like the rest of the borrowck. Disabled by default because
-// the extension has a meaningful false-positive rate against existing
-// stdlib code.
+// outlive the binding's drop, and (3) consuming a MAYBE-moved binding
+// (the conditional double-free — see bck_diag_maybe). All are
+// diagnostic-only and emit `error:` like the rest of the borrowck.
+// Disabled by default because the extensions have a meaningful
+// false-positive rate against existing stdlib code.
 : ~ i g_strict_borrowck 0  // 1 when --strict-borrowck passed on the CLI
 : ~ i g_bck 0  // sym handle for the borrow checker's per-function
 //  data (statement list etc.); allocated in main()
@@ -1333,6 +1380,30 @@
     `, scope: !` ( nurl_str_int sp_id ) `)` ) )
     ( dbg_buffer_meta loc_id body )
     ^ loc_id
+}
+
+// A DISubprogram for a synthetic, compiler-generated function — the
+// C-ABI `main` wrapper and the `__jdrop_*` journal thunks. These are
+// real DEFINED functions, so under --g they need their own subprogram
+// AND `!dbg` on any inlinable call they make. Without it the inliner
+// reparents a callee's scoped instructions into a subprogram-less
+// caller — LLVM reports "!dbg attachment points at wrong subprogram
+// for function" and DWARF emission then null-derefs in
+// finalizeModuleInfo at -O2 (DIE::getUnitDie). Returns the sp id, or 0
+// when --g is off; sets g_dbg_current_subprogram / g_dbg_current_loc so
+// emit_call / emit_dbg_eol attach the right location. Pair with
+// dbg_synth_end. Line 0 = artificial (no user source line).
+@ dbg_synth_begin s name → i {
+    ? == g_dbg_enabled 0 { ^ 0 } {}
+    : i sp ( dbg_emit_subprogram name 0 g_dbg_file_id )
+    = g_dbg_current_subprogram sp
+    = g_dbg_current_loc ( dbg_emit_location 0 0 sp )
+    ^ sp
+}
+
+@ dbg_synth_end → v {
+    = g_dbg_current_subprogram 0
+    = g_dbg_current_loc 0
 }
 
 // End-of-module flush. Emits the named-metadata directives
@@ -2338,6 +2409,44 @@
 // the real culprit instead of blaming the innocent next statement.
 : ~ i g_stmt_line 0
 
+// g_stmt_col — column of the current statement's first token, captured
+// alongside g_stmt_line. `die_stmt` anchors a diagnostic here when the
+// clash is only detected after the statement's operands were consumed
+// (e.g. a bind's initializer type mismatch, where the lexer has already
+// advanced to the next statement).
+: ~ i g_stmt_col 0
+
+// die_stmt: like die, but anchored at the CURRENT statement's start
+// (g_stmt_line / g_stmt_col) rather than the lexer's live position. Use it
+// for a clash detected only after the statement's operands were consumed —
+// e.g. a bind/assign initializer type mismatch, where the lexer has already
+// advanced to the next statement and `die lex` would blame the wrong line.
+// No caret/source-line echo (the anchor's line text isn't retained), but the
+// `file:line:col: msg` prefix points at the real culprit. `lex` supplies the
+// filename only.
+@ die_stmt i lex s msg → v {
+    : s loc ( nurl_str_cat ( nurl_lex_filename lex )
+    ( nurl_str_cat `:` ( nurl_str_cat ( nurl_str_int g_stmt_line )
+    ( nurl_str_cat `:` ( nurl_str_int g_stmt_col ) ) ) ) )
+    ( nurl_eprintln ( nurl_str_cat3 loc `: ` msg ) )
+    ( __diag_abort )
+}
+
+// die anchored at an EXPLICIT (line, col) in the current lexer's file,
+// with the full caret shape — for a check that fires after the lexer
+// has already advanced past the offending token (e.g. gen_ident's
+// undefined-identifier check runs one token late; the caller captured
+// the identifier's own position before advancing).
+@ die_pos i lex i line i col s msg → v {
+    : s loc ( nurl_str_cat ( nurl_lex_filename lex )
+    ( nurl_str_cat `:` ( nurl_str_cat ( nurl_str_int line )
+    ( nurl_str_cat `:` ( nurl_str_int col ) ) ) ) )
+    ( nurl_eprintln ( nurl_str_cat3 loc `: ` msg ) )
+    ( nurl_eprintln ( nurl_lex_line_text_at lex line ) )
+    ( nurl_eprintln ( nurl_diag_caret col ) )
+    ( __diag_abort )
+}
+
 // g_stmt_bare_lit — set by gen_stmt to 1 when the statement it just
 // parsed was a bare numeric/string LITERAL in expression position (no
 // side effect). The block iterators (gen_block_stmts / gen_block_ret)
@@ -2479,6 +2588,11 @@
 @ gen_ident i lex i syms i cg → s {
     ? ( is_ident_tok ( nurl_lex_type lex ) )
     { : s name ( nurl_lex_val lex )
+        // The identifier's own position, captured before the advance —
+        // the undefined-identifier check below fires after it, and a
+        // live-lexer diagnostic would blame the NEXT token (die_pos).
+        : i __id_line ( nurl_lex_line lex )
+        : i __id_col ( nurl_lex_col lex )
         ( nurl_lex_advance lex )
         // Borrow checker: every value-position identifier is a read.
         ( bck_note_read name )
@@ -2564,7 +2678,11 @@
         // diagnostic" claim true end-to-end.
         ? & & == 0 ( nurl_str_len ptr ) == 0 ( nurl_str_len glb )
         == 0 ( nurl_str_len ( nurl_sym_get syms ( nurl_str_cat name `__param` ) ) )
-        { ( die lex ( nurl_str_cat3 `use of undefined identifier '` name `' - no binding, parameter, constant, enum variant, or function with this name is in scope` ) ) }
+        { : s __sugg ( __suggest_ident syms name )
+            ? != 0 ( nurl_str_len __sugg )
+            { ( die_pos lex __id_line __id_col ( nurl_str_cat ( nurl_str_cat3 `use of undefined identifier '` name `' — did you mean '` )
+                ( nurl_str_cat3 __sugg `'? No binding, parameter, constant, enum variant, or ` `function with this name is in scope` ) ) ) }
+            { ( die_pos lex __id_line __id_col ( nurl_str_cat3 `use of undefined identifier '` name `' — no binding, parameter, constant, enum variant, or function with this name is in scope` ) ) } }
         {}
         ^ ? != 0 ( nurl_str_len ptr )
         ( load_var cg lt ptr )
@@ -2933,7 +3051,11 @@
     { ( nurl_print `, ` ) ( nurl_print argstr ) }
     {}
 
-    ( nurl_print `)\n` )
+    // `!dbg` is required here: the callee is a module-defined closure the
+    // optimizer will inline, and an inlined call with no location leaves
+    // the closure's scoped instructions attached to the wrong subprogram
+    // (DWARF crash at -O2). emit_dbg_eol is a plain `\n` when --g is off.
+    ( nurl_print `)` ) ( emit_dbg_eol )
     ( nurl_set_last_type ret_type )
     res
 }
@@ -3103,7 +3225,7 @@
     ? == 0 ( nurl_str_len ( nurl_sym_get syms ( nurl_str_cat obj `__mutable` ) ) )
     { ( die lex ( nurl_str_cat3
         `inout field argument: binding '` obj
-        `' must be mutable ': ~' - the callee mutates its field in place` ) ) }
+        `' must be mutable ': ~' — the callee mutates its field in place` ) ) }
     {}
     ? | == 0 ( nurl_str_len objty ) ! == 37 ( nurl_str_get objty 0 )
     { ( die lex ( nurl_str_cat3
@@ -3610,6 +3732,147 @@
     }
     ( nurl_poke t 0 count )
     ? > depth 0 { ( nurl_poke t 1 - depth 1 ) } {}
+}
+
+// ── Did-you-mean suggestions (diagnostic cold path only) ──────────
+
+// Flat-entry iteration over the symbol table, for the suggestion scan.
+@ __sym_count i h → i {
+    ^ ( nurl_peek # s h 0 )
+}
+
+// BORROW of the table's own strdup'd key copy — do not free.
+@ __sym_entry_name i h i k → s {
+    : *s names # *s # s ( nurl_peek # s h 3 )
+    ^ . names k
+}
+
+// str[0..n) ends with `__arity` (no allocation).
+@ __key_is_arity s str i n → b {
+    ? < n 8 { ^ F } {}
+    : *u p # *u str
+    : s sfx `__arity`
+    : *u q # *u sfx
+    : ~ i k 0
+    ~ < k 7 {
+        ? != & # i . p + - n 7 k 255 & # i . q k 255 { ^ F } {}
+        = k + k 1
+    }
+    ^ T
+}
+
+// str[0..n) contains a `__` pair (metadata-key marker; no allocation).
+@ __key_has_dunder s str i n → b {
+    : *u p # *u str
+    : ~ i k 1
+    ~ < k n {
+        ? & == & # i . p - k 1 255 95 == & # i . p k 255 95 { ^ T } {}
+        = k + k 1
+    }
+    ^ F
+}
+
+// Byte-equality of a[0..n) and b[0..n) (no allocation).
+@ __bytes_eq s a s b i n → b {
+    : *u p # *u a
+    : *u q # *u b
+    : ~ i k 0
+    ~ < k n {
+        ? != & # i . p k 255 & # i . q k 255 { ^ F } {}
+        = k + k 1
+    }
+    ^ T
+}
+
+// Levenshtein distance of a[0..la) / b[0..lb), early-out once every cell
+// of a row exceeds `cap` (returns cap+1 then). Two u8 scratch rows of at
+// least lb+1 bytes each are supplied by the caller so a scan over
+// thousands of candidates doesn't allocate per pair.
+@ __edit_dist_le s a i la s b i lb i cap * u r0v * u r1v → i {
+    : ~ * u r0 r0v
+    : ~ * u r1 r1v
+    : *u pa # *u a
+    : *u pb # *u b
+    : ~ i j 0
+    ~ <= j lb {
+        = . r0 j # u j
+        = j + j 1
+    }
+    : ~ i i 1
+    : ~ i bail 0
+    ~ & <= i la == bail 0 {
+        = . r1 0 # u i
+        : ~ i rowmin i
+        : i ca & # i . pa - i 1 255
+        : ~ i jj 1
+        ~ <= jj lb {
+            : i cb & # i . pb - jj 1 255
+            : i cost ? == ca cb 0 1
+            : ~ i d + & # i . r0 - jj 1 255 cost
+            : i del + & # i . r0 jj 255 1
+            : i ins + & # i . r1 - jj 1 255 1
+            ? < del d { = d del } {}
+            ? < ins d { = d ins } {}
+            ? > d 250 { = d 250 } {}
+            = . r1 jj # u d
+            ? < d rowmin { = rowmin d } {}
+            = jj + jj 1
+        }
+        ? > rowmin cap { = bail 1 } {}
+        : *u tmp r0
+        = r0 r1
+        = r1 tmp
+        = i + i 1
+    }
+    ? != bail 0 { ^ + cap 1 } {}
+    ^ & # i . r0 lb 255
+}
+
+// Closest known name to `name`, or `` when nothing is close enough.
+// Candidates come from the symbol table itself: every `<fn>__arity` key
+// (scan_fn_sigs pre-registers every @-function program-wide) plus every
+// plain no-`__` key (builtins, FFI, bindings, constants). Distance cap 1
+// for names up to 4 chars, else 2 — rustc-style. Returns an OWNED string
+// (the caller feeds it straight into a die message).
+@ __suggest_ident i syms s name → s {
+    : i n ( nurl_str_len name )
+    ? < n 2 { ^ ( strdup `` ) } {}
+    : i cap ? <= n 4 1 2
+    : i cnt ( __sym_count syms )
+    : *u row0 # *u ( malloc 160 )
+    : *u row1 # *u ( malloc 160 )
+    : ~ i best_k -1
+    : ~ i best_len 0
+    : ~ i bestd + cap 1
+    : ~ i k 0
+    ~ < k cnt {
+        : s key ( __sym_entry_name syms k )
+        : i kl ( nurl_str_len key )
+        : ~ i cl 0
+        ? ( __key_is_arity key kl )
+        { = cl - kl 7 }
+        { ? ! ( __key_has_dunder key kl ) { = cl kl } {} }
+        // Prune: viable length, not the name itself (an exact key match
+        // reaching a diagnostic means a different-namespace hit — a
+        // same-name suggestion would read as nonsense).
+        : i diff ? > cl n - cl n - n cl
+        ? & & & > cl 1 < cl 150 <= diff cap ! & == cl n ( __bytes_eq key name n )
+        {
+            : i d ( __edit_dist_le name n key cl cap row0 row1 )
+            ? < d bestd {
+                = bestd d
+                = best_k k
+                = best_len cl
+            } {}
+        } {}
+        = k + k 1
+    }
+    ( nurl_free # s row0 )
+    ( nurl_free # s row1 )
+    ? >= best_k 0
+    { ^ ( nurl_str_slice ( __sym_entry_name syms best_k ) 0 best_len ) }
+    {}
+    ^ ( strdup `` )
 }
 
 // ══════════════════════════════════════════════════════════════════
@@ -4266,6 +4529,42 @@
     = . op pad # u 94
     = . op + pad 1 # u 0
     ^ out
+}
+
+// Text of 1-based line `line` in the raw buffer src[0..len), tabs
+// rendered as spaces (mirrors nurl_lex_line_text) — for diagnostics
+// anchored somewhere other than the lexer's current token. OWNED
+// return; empty string when the line is out of range.
+@ __src_line_text s src i len i line → s {
+    : *u sp # *u src
+    : ~ i k 0
+    : ~ i ln 1
+    ~ & < k len < ln line {
+        ? == & # i . sp k 255 10 { = ln + ln 1 } {}
+        = k + k 1
+    }
+    ? < ln line { ^ ( strdup `` ) } {}
+    : i line_start k
+    : ~ i line_end k
+    ~ & < line_end len != & # i . sp line_end 255 10 { = line_end + line_end 1 }
+    ? & > line_end line_start == & # i . sp - line_end 1 255 13 { = line_end - line_end 1 } {}
+    : i n - line_end line_start
+    : s out # s ( malloc + n 1 )
+    : *u op # *u out
+    : ~ i i 0
+    ~ < i n {
+        : i c & # i . sp + line_start i 255
+        = . op i # u ? == c 9 32 c
+        = i + i 1
+    }
+    = . op n # u 0
+    ^ out
+}
+
+// __src_line_text over the lexer's own source buffer.
+@ nurl_lex_line_text_at i h i line → s {
+    : s p # s h
+    ^ ( __src_line_text # s ( nurl_peek p LX_SRC ) ( nurl_peek p LX_LEN ) line )
 }
 
 @ nurl_lex_src_slice i h i start i n → s {
@@ -5016,7 +5315,7 @@
             & ! is_inout_arg ( str_contains_word p5_inout_seen bck_arg_root )
             { ( bck_esc_warn lex bck_arg_line ( nurl_str_cat3
                 `'` bck_arg_root
-                `' is both mutably borrowed (passed as 'inout') and aliased by another argument of the same call - exclusive access is violated` ) ) }
+                `' is both mutably borrowed (passed as 'inout') and aliased by another argument of the same call — exclusive access is violated` ) ) }
             {}
             = p5_seen ? == 0 ( nurl_str_len p5_seen )
             bck_arg_root ( nurl_str_cat3 p5_seen ` ` bck_arg_root )
@@ -5038,7 +5337,7 @@
             ? & fe_iterated | is_inout_arg fe_mutates
             { ( bck_esc_warn lex bck_arg_line ( nurl_str_cat3
                 `cannot mutate '` bck_arg_root
-                `' while iterating over it - the '~' loop holds a borrow of the container; move the mutation out of the loop body` ) ) }
+                `' while iterating over it — the '~' loop holds a borrow of the container; move the mutation out of the loop body` ) ) }
             {} }
         {}
         : ~ s av ``
@@ -5060,7 +5359,7 @@
                 { ( die lex ( nurl_str_cat3 `inout argument '` bck_arg_val `' is not a binding in scope` ) ) }
                 {}
                 ? == 0 ( nurl_str_len ( nurl_sym_get syms ( nurl_str_cat bck_arg_val `__mutable` ) ) )
-                { ( die lex ( nurl_str_cat3 `inout argument '` bck_arg_val `' must be a mutable ': ~' binding - the callee mutates it in place` ) ) }
+                { ( die lex ( nurl_str_cat3 `inout argument '` bck_arg_val `' must be a mutable ': ~' binding — the callee mutates it in place` ) ) }
                 {}
                 ( nurl_lex_advance lex )
                 // Lint: `inout name` passes the binding by address (no
@@ -5460,9 +5759,15 @@
             ( nurl_str_cat3 `generic function '` fname `' needs explicit type argument(s): write ( ` )
             ( nurl_str_cat3 fname ` [` ( nurl_str_cat __gtp `] … ) ` ) )
             `— NURL does not infer generic type arguments from value arguments.` ) ) }
-        { ( die lex ( nurl_str_cat3
-            `call to unknown function '` fname
-            `' — it is not defined in this file, not in any '$'-imported file processed so far, and not a known FFI/builtin. Add the missing '$' import (or move it above this file's import in the program), or check the spelling.` ) ) } }
+        { : s __sugg ( __suggest_ident syms fname )
+            ? != 0 ( nurl_str_len __sugg )
+            { ( die lex ( nurl_str_cat ( nurl_str_cat3
+                `call to unknown function '` fname
+                `' — did you mean '` )
+                ( nurl_str_cat3 __sugg `'? If not: it is not defined in this file, not in any ` `'$'-imported file processed so far, and not a known FFI/builtin — add the missing '$' import, or check the spelling.` ) ) ) }
+            { ( die lex ( nurl_str_cat3
+                `call to unknown function '` fname
+                `' — it is not defined in this file, not in any '$'-imported file processed so far, and not a known FFI/builtin. Add the missing '$' import (or move it above this file's import in the program), or check the spelling.` ) ) } } }
     {}
     // Call-arity check. scan_fn_sigs records every non-generic
     // @-function's declared parameter count as `<fname>__arity`. A call
@@ -5763,11 +6068,13 @@
     : ~ s old_strs_t ``
     : ~ s old_structs_t ``
     : ~ s old_user_t ``
+    : ~ s old_slices_t ``
     : ~ s old_closure_t ( nurl_sym_get syms `__owned_closure_envs__` )
     ? != 0 g_auto_drop_strings
     { = old_strs_t ( nurl_sym_get syms `__owned_strings__` )
         = old_structs_t ( nurl_sym_get syms `__owned_struct_fields__` )
         = old_user_t ( nurl_sym_get syms `__user_drops__` )
+        ? != 0 g_fn_slice_decls { = old_slices_t ( nurl_sym_get syms `__slice_decls__` ) } {}
         ( nurl_sym_push syms )
     } {}
     ( nurl_sym_def syms `__cur_lbl__` lt )
@@ -5801,7 +6108,8 @@
         ? & != 0 g_auto_drop_strings ( seq tt2 `void` )
         { ( mem_drop_new_strings syms cg old_strs_t )
             ( mem_drop_new_struct_fields syms cg old_structs_t )
-            ( mem_drop_new_user_drops syms cg old_user_t ) } {}
+            ( mem_drop_new_user_drops syms cg old_user_t )
+            ? != 0 g_fn_slice_decls { ( mem_drop_new_slices syms cg old_slices_t ) } {} } {}
         ( mem_drop_new_closure_envs syms cg old_closure_t )
         ( nurl_print `  br label %` ) ( nurl_print lend ) ( emit_dbg_eol )
     } {}
@@ -5810,11 +6118,13 @@
     : ~ s old_strs_e ``
     : ~ s old_structs_e ``
     : ~ s old_user_e ``
+    : ~ s old_slices_e ``
     : ~ s old_closure_e ( nurl_sym_get syms `__owned_closure_envs__` )
     ? != 0 g_auto_drop_strings
     { = old_strs_e ( nurl_sym_get syms `__owned_strings__` )
         = old_structs_e ( nurl_sym_get syms `__owned_struct_fields__` )
         = old_user_e ( nurl_sym_get syms `__user_drops__` )
+        ? != 0 g_fn_slice_decls { = old_slices_e ( nurl_sym_get syms `__slice_decls__` ) } {}
         ( nurl_sym_push syms )
     } {}
     ( nurl_sym_def syms `__cur_lbl__` le )
@@ -5835,7 +6145,8 @@
     { ? & != 0 g_auto_drop_strings ( seq et2 `void` )
         { ( mem_drop_new_strings syms cg old_strs_e )
             ( mem_drop_new_struct_fields syms cg old_structs_e )
-            ( mem_drop_new_user_drops syms cg old_user_e ) } {}
+            ( mem_drop_new_user_drops syms cg old_user_e )
+            ? != 0 g_fn_slice_decls { ( mem_drop_new_slices syms cg old_slices_e ) } {} } {}
         ( mem_drop_new_closure_envs syms cg old_closure_e )
         ( nurl_print `  br label %` ) ( nurl_print lend ) ( emit_dbg_eol )
     } {}
@@ -6582,11 +6893,13 @@
             : ~ s old_strs_m ``
             : ~ s old_structs_m ``
             : ~ s old_user_m ``
+            : ~ s old_slices_m ``
             : ~ s old_closure_m ( nurl_sym_get syms `__owned_closure_envs__` )
             ? != 0 g_auto_drop_strings
             { = old_strs_m ( nurl_sym_get syms `__owned_strings__` )
                 = old_structs_m ( nurl_sym_get syms `__owned_struct_fields__` )
                 = old_user_m ( nurl_sym_get syms `__user_drops__` )
+                ? != 0 g_fn_slice_decls { = old_slices_m ( nurl_sym_get syms `__slice_decls__` ) } {}
                 ( nurl_sym_push syms )
             } {}
 
@@ -7142,7 +7455,8 @@
             ? & & != 0 g_auto_drop_strings ( seq arm_type `void` ) == arm_did_ret 0
             { ( mem_drop_new_strings syms cg old_strs_m )
                 ( mem_drop_new_struct_fields syms cg old_structs_m )
-                ( mem_drop_new_user_drops syms cg old_user_m ) } {}
+                ( mem_drop_new_user_drops syms cg old_user_m )
+                ? != 0 g_fn_slice_decls { ( mem_drop_new_slices syms cg old_slices_m ) } {} } {}
             ? == arm_did_ret 0
             { ( mem_drop_new_closure_envs syms cg old_closure_m ) } {}
             ? != 0 g_auto_drop_strings { ( nurl_sym_pop syms ) } {}
@@ -7397,11 +7711,13 @@
     : ~ s old_strs_fe ``
     : ~ s old_structs_fe ``
     : ~ s old_user_fe ``
+    : ~ s old_slices_fe ``
     : ~ s old_closure_fe ( nurl_sym_get syms `__owned_closure_envs__` )
     ? != 0 g_auto_drop_strings
     { = old_strs_fe ( nurl_sym_get syms `__owned_strings__` )
         = old_structs_fe ( nurl_sym_get syms `__owned_struct_fields__` )
         = old_user_fe ( nurl_sym_get syms `__user_drops__` )
+        ? != 0 g_fn_slice_decls { = old_slices_fe ( nurl_sym_get syms `__slice_decls__` ) } {}
         ( nurl_sym_push syms )
     } {}
     = g_did_ret 0
@@ -7417,7 +7733,8 @@
     { ? != 0 g_auto_drop_strings
         { ( mem_drop_new_strings syms cg old_strs_fe )
             ( mem_drop_new_struct_fields syms cg old_structs_fe )
-            ( mem_drop_new_user_drops syms cg old_user_fe ) } {}
+            ( mem_drop_new_user_drops syms cg old_user_fe )
+            ? != 0 g_fn_slice_decls { ( mem_drop_new_slices syms cg old_slices_fe ) } {} } {}
         ( mem_drop_new_closure_envs syms cg old_closure_fe )
         : s next_idx ( nurl_cg_reg cg )
         ( nurl_print `  ` ) ( nurl_print next_idx )
@@ -7474,10 +7791,14 @@
         // `__owned_strings__` list (see gen_cond for the same reasoning).
         : ~ s old_strs_lp ``
         : ~ s old_structs_lp ``
+        : ~ s old_user_lp ``
+        : ~ s old_slices_lp ``
         : ~ s old_closure_lp ( nurl_sym_get syms `__owned_closure_envs__` )
         ? != 0 g_auto_drop_strings
         { = old_strs_lp ( nurl_sym_get syms `__owned_strings__` )
             = old_structs_lp ( nurl_sym_get syms `__owned_struct_fields__` )
+            = old_user_lp ( nurl_sym_get syms `__user_drops__` )
+            ? != 0 g_fn_slice_decls { = old_slices_lp ( nurl_sym_get syms `__slice_decls__` ) } {}
             ( nurl_sym_push syms )
         } {}
         ( nurl_sym_def syms `__cur_lbl__` lb )
@@ -7489,7 +7810,9 @@
         ? == g_did_ret 0
         { ? != 0 g_auto_drop_strings
             { ( mem_drop_new_strings syms cg old_strs_lp )
-                ( mem_drop_new_struct_fields syms cg old_structs_lp ) } {}
+                ( mem_drop_new_struct_fields syms cg old_structs_lp )
+                ( mem_drop_new_user_drops syms cg old_user_lp )
+                ? != 0 g_fn_slice_decls { ( mem_drop_new_slices syms cg old_slices_lp ) } {} } {}
             ( mem_drop_new_closure_envs syms cg old_closure_lp )
             ( nurl_print `  br label %` ) ( nurl_print lc ) ( emit_dbg_eol )
         } {}
@@ -7660,6 +7983,46 @@
     >= ( nurl_str_find t `*, i64 }` ) 0
 }
 
+// Record that `name` was DECLARED (`:`-bound) as an owned slice in the
+// current scope. Parallel sideband to `__owned_slices__`, needed by the
+// Phase 2D arm-local slice drop: `= outer [ … ]` inside an arm also
+// calls mem_own_add for an OUTER binding, and freeing that at the arm's
+// fall-through would be a use-after-free — only bindings declared
+// during the arm itself may be dropped there.
+@ mem_slice_decl_add i syms s name → v {
+    = g_fn_slice_decls 1
+    : s cur ( nurl_sym_get syms `__slice_decls__` )
+    ( nurl_sym_def syms `__slice_decls__`
+    ? == 0 ( nurl_str_len cur ) name ( nurl_str_cat3 cur ` ` name ) )
+}
+
+// Emit the free of one owned-slice binding's backing buffer: load the
+// slice struct from the binding's alloca, extract the data pointer,
+// free it. Symtab lookup is innermost-scope, so inside an arm this
+// resolves a shadowing declaration to the arm's own alloca.
+@ mem_emit_slice_free i syms i cg s name → v {
+    : s ty ( nurl_sym_get syms name )
+    : s ptr ( nurl_sym_get syms ( nurl_str_cat name `__ptr` ) )
+    // Slice type is always "{ <T>*, i64 }" (suffix ", i64 }" = 7 chars).
+    // Extract <T>* = chars [2 .. len-7).
+    : i tylen ( nurl_str_len ty )
+    : s tptr ( nurl_str_slice ty 2 - tylen 9 )
+    : s v ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print v )
+    ( nurl_print ` = load ` ) ( nurl_print ( nurl_llty ty ) )
+    ( nurl_print `, ` ) ( nurl_print ( nurl_llty ty ) )
+    ( nurl_print `* ` ) ( nurl_print ptr ) ( nurl_print `\n` )
+    : s dp ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print dp )
+    ( nurl_print ` = extractvalue ` ) ( nurl_print ( nurl_llty ty ) )
+    ( nurl_print ` ` ) ( nurl_print v ) ( nurl_print `, 0\n` )
+    : s raw ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print raw )
+    ( nurl_print ` = bitcast ` ) ( nurl_print ( nurl_llty tptr ) )
+    ( nurl_print ` ` ) ( nurl_print dp ) ( nurl_print ` to i8*\n` )
+    ( nurl_print `  call void @nurl_free(i8* ` ) ( nurl_print raw ) ( nurl_print `)` ) ( emit_dbg_eol )
+}
+
 // Emit `free` for every binding in the owned list, skipping `skip_name`.
 // If defers are active, skips entirely (defers may still reference slices).
 // Does NOT clear the list — each return path emits its own set; paths are
@@ -7672,27 +8035,7 @@
             : s name ( str_first_word rest )
             = rest ( str_skip_word rest )
             ? ! ( seq name skip_name )
-            { : s ty ( nurl_sym_get syms name )
-                : s ptr ( nurl_sym_get syms ( nurl_str_cat name `__ptr` ) )
-                // Slice type is always "{ <T>*, i64 }" (suffix ", i64 }" = 7 chars).
-                // Extract <T>* = chars [2 .. len-7).
-                : i tylen ( nurl_str_len ty )
-                : s tptr ( nurl_str_slice ty 2 - tylen 9 )
-                : s v ( nurl_cg_reg cg )
-                ( nurl_print `  ` ) ( nurl_print v )
-                ( nurl_print ` = load ` ) ( nurl_print ( nurl_llty ty ) )
-                ( nurl_print `, ` ) ( nurl_print ( nurl_llty ty ) )
-                ( nurl_print `* ` ) ( nurl_print ptr ) ( nurl_print `\n` )
-                : s dp ( nurl_cg_reg cg )
-                ( nurl_print `  ` ) ( nurl_print dp )
-                ( nurl_print ` = extractvalue ` ) ( nurl_print ( nurl_llty ty ) )
-                ( nurl_print ` ` ) ( nurl_print v ) ( nurl_print `, 0\n` )
-                : s raw ( nurl_cg_reg cg )
-                ( nurl_print `  ` ) ( nurl_print raw )
-                ( nurl_print ` = bitcast ` ) ( nurl_print ( nurl_llty tptr ) )
-                ( nurl_print ` ` ) ( nurl_print dp ) ( nurl_print ` to i8*\n` )
-                ( nurl_print `  call void @nurl_free(i8* ` ) ( nurl_print raw ) ( nurl_print `)` ) ( emit_dbg_eol )
-            }
+            { ( mem_emit_slice_free syms cg name ) }
             {}
         }
     }
@@ -8163,6 +8506,33 @@
     {}
 }
 
+// Slice counterpart of mem_drop_new_strings: at an arm's fall-through,
+// free every owned slice DECLARED during the arm (memory-model rule 5 —
+// arm-local slice literals used to leak because `__owned_slices__` is
+// scope-shadowed and the arm's delta died unseen at nurl_sym_pop).
+// Driven by the `__slice_decls__` delta, NOT the ownership list: an
+// `= outer [ … ]` inside the arm registers an OUTER binding in the
+// arm's ownership shadow, and freeing that here would be a UAF — only
+// arm-DECLARED names are candidates, and each must still be word-in
+// the current ownership list. Names (unlike alloca registers) are not
+// unique, so an arm-local shadow of an outer slice-declaring name is
+// skipped (a leak, never a double free).
+@ mem_drop_new_slices i syms i cg s old_decls → v {
+    : s dtop ( nurl_sym_get syms `__defer_top__` )
+    ? == 0 ( nurl_str_len dtop )
+    { : s owned ( nurl_sym_get syms `__owned_slices__` )
+        : ~ s rest ( nurl_sym_get syms `__slice_decls__` )
+        ~ != 0 ( nurl_str_len rest ) {
+            : s name ( str_first_word rest )
+            = rest ( str_skip_word rest )
+            ? | ( str_contains_word old_decls name ) ! ( str_contains_word owned name )
+            {}
+            { ( mem_emit_slice_free syms cg name ) }
+        }
+    }
+    {}
+}
+
 @ mem_own_add_user_drop i syms s ptr s vt → v {
     : s cur ( nurl_sym_get syms `__user_drops__` )
     : s entry ( nurl_str_cat3 ptr ` ` vt )
@@ -8183,12 +8553,22 @@
     : s donekey ( nurl_str_cat `jdrop##` mangle )
     ? != 0 ( nurl_str_len ( nurl_sym_get g_impl_name_syms donekey ) ) { ^ v } {}
     ( nurl_sym_def g_impl_name_syms donekey `1` )
-    ( nurl_print `define void @__jdrop_` ) ( nurl_print mangle )
-    ( nurl_print `(i8* %p) {\nentry:\n` )
+    // The thunk CALLS `@drop__<mangle>` (module-defined, inlinable) — so
+    // under --g it needs its own subprogram + `!dbg` on that call, or the
+    // inliner reparents drop__'s scoped instructions into this otherwise
+    // subprogram-less thunk (see dbg_synth_begin). Text is byte-identical
+    // to the pre-DWARF form when --g is off.
+    : i jsp ( dbg_synth_begin ( nurl_str_cat `__jdrop_` mangle ) )
+    ( nurl_print `define void @__jdrop_` ) ( nurl_print mangle ) ( nurl_print `(i8* %p)` )
+    ? != g_dbg_enabled 0 { ( nurl_print ` !dbg !` ) ( nurl_print ( nurl_str_int jsp ) ) } {}
+    ( nurl_print ` {\nentry:\n` )
     ( nurl_print `  %t = bitcast i8* %p to ` ) ( nurl_print llvm ) ( nurl_print `*\n` )
     ( nurl_print `  %v = load ` ) ( nurl_print llvm ) ( nurl_print `, ` ) ( nurl_print llvm ) ( nurl_print `* %t\n` )
     ( nurl_print `  call void @drop__` ) ( nurl_print mangle )
-    ( nurl_print `(` ) ( nurl_print llvm ) ( nurl_print ` %v)\n  ret void\n}\n` )
+    ( nurl_print `(` ) ( nurl_print llvm ) ( nurl_print ` %v)` ) ( emit_dbg_eol )
+    ( emit_call_term `ret void` )
+    ( nurl_print `}\n` )
+    ( dbg_synth_end )
 }
 
 // ── Closure-env reclamation for `:`-bound capturing closures (§7.4) ──
@@ -8758,36 +9138,84 @@
     - ( nurl_str_get tok - len 1 ) 48
 }
 
-// State lookup — BCK_UNINIT when the binding is absent.
-@ bck_st_get s state s name → i {
-    : ~ s rest state
-    ~ != 0 ( nurl_str_len rest ) {
-        : s tok ( str_first_word rest )
-        = rest ( str_skip_word rest )
-        ? ( seq ( bck_tok_name tok ) name ) { ^ ( bck_tok_val tok ) } {}
+// State lookup — BCK_UNINIT when the binding is absent. Walks by INDEX,
+// allocating nothing: bck_st_get is the hottest allocation site in the
+// whole compiler (14.8M calls per self-compile), and the old remainder-
+// re-slice walk (`= rest ( str_skip_word rest )`) copied the entire tail
+// of the state string per step — measured at 11.9 GB of the 13.6 GB
+// self-compile peak RSS. A token is `name=digit`; its name part is
+// everything but the last two chars (same rule as bck_tok_name). The
+// name to look up lives at src[at .. at+wl) so bck_join_state can probe
+// with a name that is still embedded in the other state string — no
+// copy of the name either.
+@ __bck_st_get_at s state s src i at i wl → i {
+    : i n ( nurl_str_len state )
+    : ~ i i 0
+    ~ < i n {
+        // token spans [i, e)
+        : ~ i e i
+        ~ & < e n != ( nurl_str_get state e ) 32 { = e + e 1 }
+        ? == - - e i 2 wl {
+            : ~ i k 0
+            : ~ b eq T
+            ~ & eq < k wl {
+                ? != ( nurl_str_get state + i k ) ( nurl_str_get src + at k ) { = eq F } {}
+                = k + k 1
+            }
+            ? eq { ^ - ( nurl_str_get state - e 1 ) 48 } {}
+        } {}
+        = i + e 1
     }
     BCK_UNINIT
 }
 
+@ bck_st_get s state s name → i {
+    ^ ( __bck_st_get_at state name 0 ( nurl_str_len name ) )
+}
+
 // State update — a new state with `name` set to `val` (any prior
-// entry dropped; the binding lands at the end). Every `= out ...`
-// builds a fresh string rather than aliasing the loop-local `tok`,
-// which would be a double-free once both are auto-dropped.
+// entry dropped; the binding lands at the end). Built in ONE buffer
+// with an index walk: the old version re-sliced the remainder per
+// token AND re-copied the accumulated output per append — O(B²) bytes
+// per update on a B-byte state.
 @ bck_st_set s state s name i val → s {
-    : ~ s out ( nurl_str_cat `` `` )
-    : ~ s rest state
-    ~ != 0 ( nurl_str_len rest ) {
-        : s tok ( str_first_word rest )
-        = rest ( str_skip_word rest )
-        ? ( seq ( bck_tok_name tok ) name ) {} {
-            = out ? == 0 ( nurl_str_len out )
-            ( nurl_str_cat tok `` )
-            ( nurl_str_cat3 out ` ` tok )
-        }
+    : i n ( nurl_str_len state )
+    : i wl ( nurl_str_len name )
+    : s vs ( nurl_str_int val )
+    : i vl ( nurl_str_len vs )
+    // worst case: whole state kept + separator + `name=val`
+    : s out # s ( malloc + + + n wl vl 3 )
+    : *u ob # *u out
+    : ~ i op 0
+    : ~ i i 0
+    ~ < i n {
+        : ~ i e i
+        ~ & < e n != ( nurl_str_get state e ) 32 { = e + e 1 }
+        : ~ b keep T
+        ? == - - e i 2 wl {
+            : ~ i k 0
+            : ~ b eq T
+            ~ & eq < k wl {
+                ? != ( nurl_str_get state + i k ) ( nurl_str_get name k ) { = eq F } {}
+                = k + k 1
+            }
+            ? eq { = keep F } {}
+        } {}
+        ? keep {
+            ? > op 0 { : u sp # u 32 = . ob op sp = op + op 1 } {}
+            ( memcpy # s + # i out op # s + # i state i - e i )
+            = op + op - e i
+        } {}
+        = i + e 1
     }
-    : s nt ( nurl_str_cat3 name `=` ( nurl_str_int val ) )
-    ? == 0 ( nurl_str_len out ) { ^ nt } {}
-    ( nurl_str_cat3 out ` ` nt )
+    ? > op 0 { : u sp2 # u 32 = . ob op sp2 = op + op 1 } {}
+    ( memcpy # s + # i out op name wl )
+    = op + op wl
+    : u eqc # u 61
+    = . ob op eqc
+    = op + op 1
+    ( memcpy # s + # i out op vs + vl 1 )
+    ^ out
 }
 
 // State join — least upper bound of two states, binding by binding.
@@ -8802,32 +9230,52 @@
 // builds a fresh string — aliasing a loop-local would double-free at
 // auto-drop.
 @ bck_join_state s a s b → s {
-    : ~ s out ( nurl_str_cat `` `` )
-    : ~ s rest a
-    ~ != 0 ( nurl_str_len rest ) {
-        : s tok ( str_first_word rest )
-        = rest ( str_skip_word rest )
-        : s nm ( bck_tok_name tok )
-        : i vj ( bck_join ( bck_tok_val tok ) ( bck_st_get b nm ) )
-        : s nt ( nurl_str_cat3 nm `=` ( nurl_str_int vj ) )
-        = out ? == 0 ( nurl_str_len out )
-        ( nurl_str_cat nt `` )
-        ( nurl_str_cat3 out ` ` nt )
+    // Index walk + single output buffer (see bck_st_set). The lattice
+    // digit is one char, so the join of a and b never exceeds
+    // len(a) + len(b) + 2. Names probed while still embedded in their
+    // state string via __bck_st_get_at — the whole join allocates
+    // exactly one buffer.
+    : i na ( nurl_str_len a )
+    : i nb ( nurl_str_len b )
+    : s out # s ( malloc + + na nb 2 )
+    : *u ob # *u out
+    : ~ i op 0
+    // pass 1: every binding of a, joined against its state in b
+    : ~ i i 0
+    ~ < i na {
+        : ~ i e i
+        ~ & < e na != ( nurl_str_get a e ) 32 { = e + e 1 }
+        : i wl - - e i 2
+        : i vj ( bck_join - ( nurl_str_get a - e 1 ) 48 ( __bck_st_get_at b a i wl ) )
+        ? > op 0 { : u sp # u 32 = . ob op sp = op + op 1 } {}
+        // `name=` copied verbatim from a; then the joined digit
+        ( memcpy # s + # i out op # s + # i a i + wl 1 )
+        = op + op + wl 1
+        : u dg # u + 48 vj
+        = . ob op dg
+        = op + op 1
+        = i + e 1
     }
-    : ~ s rest2 b
-    ~ != 0 ( nurl_str_len rest2 ) {
-        : s tok ( str_first_word rest2 )
-        = rest2 ( str_skip_word rest2 )
-        : s nm ( bck_tok_name tok )
-        ? == BCK_UNINIT ( bck_st_get a nm ) {
-            : i vj ( bck_join BCK_UNINIT ( bck_tok_val tok ) )
-            : s nt ( nurl_str_cat3 nm `=` ( nurl_str_int vj ) )
-            = out ? == 0 ( nurl_str_len out )
-            ( nurl_str_cat nt `` )
-            ( nurl_str_cat3 out ` ` nt )
+    // pass 2: bindings present only in b (join against BCK_UNINIT)
+    : ~ i j 0
+    ~ < j nb {
+        : ~ i e2 j
+        ~ & < e2 nb != ( nurl_str_get b e2 ) 32 { = e2 + e2 1 }
+        : i wl2 - - e2 j 2
+        ? == BCK_UNINIT ( __bck_st_get_at a b j wl2 ) {
+            : i vj2 ( bck_join BCK_UNINIT - ( nurl_str_get b - e2 1 ) 48 )
+            ? > op 0 { : u sp2 # u 32 = . ob op sp2 = op + op 1 } {}
+            ( memcpy # s + # i out op # s + # i b j + wl2 1 )
+            = op + op + wl2 1
+            : u dg2 # u + 48 vj2
+            = . ob op dg2
+            = op + op 1
         } {}
+        = j + e2 1
     }
-    out
+    : u z # u 0
+    = . ob op z
+    ^ out
 }
 
 // ── Record access ─────────────────────────────────────────────────
@@ -8902,6 +9350,26 @@
 
 // ── Phase 1: the use-after-move rule ──────────────────────────────
 
+// Render one borrow-checker error in the front-end's diagnostic shape:
+//   file:line: error: <msg>
+//       <source line text>
+// Borrow checks fire after parsing has moved past the offending token,
+// so only file+line are known: the source line is re-read from disk and
+// echoed, but no caret is drawn — a guessed column would lie. Shared by
+// every borrow-checker emitter so the format can't drift from `die`'s.
+@ bck_emit_error s file i line s msg → v {
+    ( nurl_eprintln ( nurl_str_cat ( nurl_str_cat3 file `:` ( nurl_str_int line ) )
+    ( nurl_str_cat `: error: ` msg ) ) )
+    // Owned strings (`src`, `lt`) are reclaimed by auto-drop at scope
+    // exit — no manual frees here (they would double-free).
+    : s src ( nurl_read_file file )
+    ? != 0 ( nurl_str_len src ) {
+        : s lt ( __src_line_text src ( nurl_str_len src ) line )
+        ? != 0 ( nurl_str_len lt ) { ( nurl_eprintln lt ) } {}
+    } {}
+    = g_bck_errors + g_bck_errors 1
+}
+
 // Emit `file:line: warning: use of moved value`. The analyze walk
 // runs after the function is fully parsed, so `lex` no longer points
 // at the use site — the line is carried explicitly and the filename
@@ -8915,13 +9383,29 @@
         ( nurl_sym_def g_bck `warnset`
         ? == 0 ( nurl_str_len ws ) tag ( nurl_str_cat3 ws ` ` tag ) )
         : s ml ( nurl_sym_get g_bck ( nurl_str_cat `ml_` name ) )
-        : s loc ( nurl_str_cat3 ( nurl_sym_get g_bck `file` ) `:`
-        ( nurl_str_int useline ) )
-        : s msg ( nurl_str_cat4 `: error: use of moved value '` name
-        `' - it was consumed at line ` ( nurl_str_cat3 ml
-        ` (pass a fresh value or rebind it before reuse)` `` ) )
-        ( nurl_eprintln ( nurl_str_cat loc msg ) )
-        = g_bck_errors + g_bck_errors 1
+        ( bck_emit_error ( nurl_sym_get g_bck `file` ) useline
+        ( nurl_str_cat4 `use of moved value '` name
+        `' — it was consumed at line ` ( nurl_str_cat3 ml
+        ` (pass a fresh value or rebind it before reuse)` `` ) ) )
+    }
+}
+
+// --strict-borrowck companion of bck_diag: consuming a binding whose
+// state is MAYBE-moved (freed on one arm of a `?`, still owned on the
+// other). Deduplicated through the same warnset; the `mm:` prefix keeps
+// a strict diagnostic from suppressing a later definite one (or vice
+// versa) on the same line+name.
+@ bck_diag_maybe s name i useline → v {
+    : s tag ( nurl_str_cat3 ( nurl_str_cat `mm:` ( nurl_str_int useline ) ) `:` name )
+    : s ws ( nurl_sym_get g_bck `warnset` )
+    ? ( str_contains_word ws tag ) {} {
+        ( nurl_sym_def g_bck `warnset`
+        ? == 0 ( nurl_str_len ws ) tag ( nurl_str_cat3 ws ` ` tag ) )
+        : s ml ( nurl_sym_get g_bck ( nurl_str_cat `ml_` name ) )
+        ( bck_emit_error ( nurl_sym_get g_bck `file` ) useline
+        ( nurl_str_cat4 `'` name
+        `' may already be freed here — it was conditionally consumed (one branch only) at line ` ( nurl_str_cat3 ml
+        `; this second free double-frees on that path (strict-borrowck; restructure so exactly one path frees it)` `` ) ) )
     }
 }
 
@@ -8971,6 +9455,16 @@
         ? & ! done ( seq kind `move` ) {
             // A consumed binding: Owned -> Moved; remember where.
             : s mvn ( bck_field rec 1 )
+            // --strict-borrowck: consuming a MAYBE-moved binding is the
+            // conditional double-free the default checker deliberately
+            // lets through (docs/MEMORY.md §6.2/§6.5): freed on one arm
+            // of a `?`, then freed again — a real double-free on the
+            // path where the first free ran. Opt-in because it also
+            // flags the mutually-exclusive-frees pattern the default
+            // no-false-positive contract protects.
+            ? & != 0 g_strict_borrowck == BCK_MAYBE_MOVED ( bck_st_get st mvn ) {
+                ( bck_diag_maybe mvn ( nurl_str_to_int ( bck_field rec 3 ) ) )
+            } {}
             = st ( bck_st_set st mvn BCK_MOVED )
             ( nurl_sym_def g_bck ( nurl_str_cat `ml_` mvn )
             ( bck_field rec 3 ) )
@@ -9222,10 +9716,7 @@
 // were recorded. The body is shared by escape, aliased-mut, and
 // iterator-invalidation diagnostics.
 @ bck_esc_warn i lex i line s msg → v {
-    : s loc ( nurl_str_cat3 ( nurl_lex_filename lex ) `:`
-    ( nurl_str_int line ) )
-    ( nurl_eprintln ( nurl_str_cat3 loc `: error: ` msg ) )
-    = g_bck_errors + g_bck_errors 1
+    ( bck_emit_error ( nurl_lex_filename lex ) line msg )
 }
 
 // Record a freshly-declared binding's region (its block depth) and,
@@ -9254,7 +9745,7 @@
             ? < bdv refdepth
             { ( bck_esc_warn lex line ( nurl_str_cat3
                 `assigning to '` name
-                `' a value that references a more deeply scoped binding by pointer - it dangles once that inner scope exits` ) ) }
+                `' a value that references a more deeply scoped binding by pointer — it dangles once that inner scope exits` ) ) }
             {}
         } {}
     }
@@ -9265,7 +9756,7 @@
 // container / a worker thread all outlive every in-function region).
 @ bck_esc_check_return i lex i syms i line s ident → v {
     ? & != g_borrowck 0 > ( bck_expr_refdepth syms ident ) 0
-    { ( bck_esc_warn lex line `returning a value that references a stack binding by pointer - it dangles after this function returns (move the captured data to a heap-backed handle)` ) }
+    { ( bck_esc_warn lex line `returning a value that references a stack binding by pointer — it dangles after this function returns (move the captured data to a heap-backed handle)` ) }
     {}
 }
 
@@ -9273,7 +9764,7 @@
     ? & != g_borrowck 0 > ( bck_expr_refdepth syms ident ) 0
     { ( bck_esc_warn lex line ( nurl_str_cat3
         `passing a value that references a stack binding by pointer to '` fname
-        `' - it escapes the current stack frame and dangles (move it to a heap-backed handle)` ) ) }
+        `' — it escapes the current stack frame and dangles (move it to a heap-backed handle)` ) ) }
     {}
 }
 
@@ -9292,9 +9783,10 @@
     {}
     : i tt ( nurl_lex_type lex )
     : i bck_line ( nurl_lex_line lex )
-    // Record this statement's start line for gen_ident's cascade-aware
-    // "unexpected token" diagnostic (see g_stmt_line).
+    // Record this statement's start line + col for gen_ident's cascade-aware
+    // "unexpected token" diagnostic and for die_stmt (see g_stmt_line).
     = g_stmt_line bck_line
+    = g_stmt_col ( nurl_lex_col lex )
     = g_stmt_bare_lit 0
     // A statement is a legal `^` position — clear any operand-context
     // guard inherited from an enclosing expression (e.g. a `?`/`??` arm
@@ -9481,7 +9973,9 @@
         { ( nurl_sym_def syms ( nurl_str_cat name `__mutable` ) `1` ) }
         {}
         ? | rhs_is_slice_lit & rhs_is_owned_call ( mem_is_slice_ty vt )
-        { ( mem_own_add syms name ) ( mem_journal_push_slice cg vt ptr ) }
+        { ( mem_own_add syms name )
+            ( mem_slice_decl_add syms name )
+            ( mem_journal_push_slice cg vt ptr ) }
         {}
         // Closure-env reclamation (§7.4): a `: f \ … x …` literal binding
         // owns the env → track it for the function-exit free. A `: g f`
@@ -9658,7 +10152,9 @@
                 { ( nurl_sym_def syms ( nurl_str_cat name `__mutable` ) `1` ) }
                 {}
                 ? | rhs_is_slice_lit & rhs_is_owned_call ( mem_is_slice_ty ptype )
-                { ( mem_own_add syms name ) ( mem_journal_push_slice cg ptype ptr ) }
+                { ( mem_own_add syms name )
+                    ( mem_slice_decl_add syms name )
+                    ( mem_journal_push_slice cg ptype ptr ) }
                 {}
                 // Closure-env reclamation (§7.4): track a capturing closure
                 // bound here for the function-exit free.
@@ -9765,7 +10261,11 @@
         : b lhs_is_owned_str & & != 0 g_auto_drop_strings
         ( seq ( nurl_llty vt ) `i8*` )
         ( str_contains_word ( nurl_sym_get syms `__owned_strings__` ) ptr )
-        ? lhs_is_owned_str { ( nurl_sym_def syms `__last_call_ret_owned__` `` ) } {}
+        // Slice dual: LHS is a tracked owned-slice binding (keyed by
+        // NAME — Phase 1 protocol) being overwritten.
+        : b lhs_is_owned_slc & ( mem_is_slice_ty vt )
+        ( str_contains_word ( nurl_sym_get syms `__owned_slices__` ) name )
+        ? | lhs_is_owned_str lhs_is_owned_slc { ( nurl_sym_def syms `__last_call_ret_owned__` `` ) } {}
         // Escape analysis: snapshot the RHS's
         // first token (a bare identifier may copy a stack reference)
         // and clear the side-channel a closure / aggregate literal
@@ -9781,7 +10281,7 @@
         // otherwise emit a mismatched `store` clang rejects. Width / sign /
         // pointer coercions stay legal and are not flagged.
         ? ( __store_type_clash __asn_rt vt )
-        { ( die lex ( nurl_str_cat
+        { ( die_stmt lex ( nurl_str_cat
             ( nurl_str_cat4 `cannot assign a value of type '` __asn_rt `' to '` name )
             ( nurl_str_cat3 `' of type '` vt `' — NURL has no implicit conversions` ) ) ) }
         {}
@@ -9800,6 +10300,19 @@
             ( nurl_print ` = load i8*, i8** ` ) ( nurl_print ptr ) ( nurl_print `\n` )
             ( nurl_print `  call void @nurl_free(i8* ` ) ( nurl_print old_reg ) ( nurl_print `)` ) ( emit_dbg_eol )
         }
+        {}
+        // Slice reassignment-drop (rule 3 dual of the string block
+        // above): `= xs [ … ]` / `= xs ( fresh-slice-call )` frees the
+        // old backing buffer before the store overwrites the alloca.
+        // Same alias discipline: gated on a FRESH RHS (a slice literal
+        // token, or a call that published slice-ownership `1`) — a
+        // bare-identifier RHS may alias the old heap and is left alone.
+        // nurl_free auto-forgets the journal entry, so a later panic
+        // cannot replay the freed buffer.
+        ? & lhs_is_owned_slc
+        | == bck_rhs_tt TT_LBRACK
+        ( seq ( nurl_sym_get syms `__last_call_ret_owned__` ) `1` )
+        { ( mem_emit_slice_free syms cg name ) }
         {}
         // Ownership transfer: `= name x` with a bare-identifier RHS
         // copies x's pointer into `name`. If x was a tracked owned
@@ -11875,7 +12388,7 @@
     { : b csv_sf | ( seq from_ty `double` ) ( seq from_ty `float` )
         : b csv_tf | ( seq to_ty `double` ) ( seq to_ty `float` )
         ? | != csv_sf csv_tf & ( is_ptr_ty from_ty ) ! ( is_ptr_ty to_ty )
-        { ( die lex ( nurl_str_cat ( nurl_str_cat4
+        { ( die_stmt lex ( nurl_str_cat ( nurl_str_cat4
             `value of type '` from_ty `' cannot initialise / assign a binding of type '` to_ty )
             `' — NURL has no implicit conversions; use a matching value or convert with '# T expr'` ) ) }
         {}
@@ -12339,6 +12852,7 @@
     : i body_syms syms
     // Shadow outer __owned_slices__ with empty list for the closure body
     ( nurl_sym_def body_syms `__owned_slices__` `` )
+    ( nurl_sym_def body_syms `__slice_decls__` `` )
     // Defers don't cross closure boundaries — clear shadow too
     ( nurl_sym_def body_syms `__defer_top__` `` )
     // Reset the shadow-check roster so a `:` inside the closure body
@@ -13180,13 +13694,10 @@
             : ~ s esc ( nurl_sym_get g_fn_escapes cn )
             ? == 0 ( nurl_str_len esc ) { = esc ( nurl_sym_get g_fn_escapes fn ) } {}
             ? ( str_contains_word esc ai ) {
-                : s loc ( nurl_str_cat3 file `:` ln )
-                : s msg ( nurl_str_cat3
-                `: error: passing a value that references a stack binding by pointer to '`
+                ( bck_emit_error file ( nurl_str_to_int ln ) ( nurl_str_cat3
+                `passing a value that references a stack binding by pointer to '`
                 fn
-                `' - it escapes the current stack frame and dangles (move it to a heap-backed handle)` )
-                ( nurl_eprintln ( nurl_str_cat loc msg ) )
-                = g_bck_errors + g_bck_errors 1
+                `' — it escapes the current stack frame and dangles (move it to a heap-backed handle)` ) )
             } {}
         }
     }
@@ -14018,6 +14529,8 @@
     0
     ( nurl_sym_push syms )
     ( nurl_sym_def syms `__owned_slices__` `` )
+    ( nurl_sym_def syms `__slice_decls__` `` )
+    = g_fn_slice_decls 0
     ( nurl_sym_def syms `__last_ident_name__` `` )
     ( nurl_sym_def syms `__fn_ret_owned__` `` )
     // Borrow provenance: does THIS function return a borrow (a value that
@@ -14634,15 +15147,23 @@
 }
 
 @ emit_main_wrapper s ret_ty → v {
-    ( emit `define i32 @main(i32 %argc, i8** %argv) {` )
+    // Synthetic C-ABI wrapper. It CALLS the module-defined `@_nurl_main`,
+    // which the optimizer may inline — so under --g it needs a subprogram
+    // and `!dbg` on that call (see dbg_synth_begin). Emit-order and text
+    // are byte-identical to the pre-DWARF form when --g is off.
+    : i msp ( dbg_synth_begin `main` )
+    ( nurl_print `define i32 @main(i32 %argc, i8** %argv)` )
+    ? != g_dbg_enabled 0 { ( nurl_print ` !dbg !` ) ( nurl_print ( nurl_str_int msp ) ) } {}
+    ( nurl_print ` {\n` )
     ( emit `entry:` )
-    ( emiti `call void @nurl_init(i32 %argc, i8** %argv)` )
+    ( emit_call `call void @nurl_init(i32 %argc, i8** %argv)` )
     ? ( seq ret_ty `void` )
-    { ( emiti `call void @_nurl_main()` ) ( emiti `ret i32 0` ) }
-    { ( emiti `%_ret = call i64 @_nurl_main()` )
-        ( emiti `%_exit = trunc i64 %_ret to i32` )
-        ( emiti `ret i32 %_exit` ) }
+    { ( emit_call `call void @_nurl_main()` ) ( emit_call_term `ret i32 0` ) }
+    { ( emit_call `%_ret = call i64 @_nurl_main()` )
+        ( emit_inst `%_exit = trunc i64 %_ret to i32` )
+        ( emit_call_term `ret i32 %_exit` ) }
     ( emit `}` ) ( emit `` )
+    ( dbg_synth_end )
 }
 
 // ── Top-level constant / struct declaration ── : ... ──────────────
@@ -18100,41 +18621,139 @@
 
 // ── Top-level loop ─────────────────────────────────────────────────
 
+// One top-level declaration — the body of parse_program's loop, split out
+// so the multi-error recovery frame can wrap exactly one declaration.
+@ parse_toplevel_decl i lex i syms i cg → v {
+    // Grammar v2.0: consume an optional `pub` visibility prefix
+    // before dispatching to the matching decl handler. The pending
+    // flag is read-and-cleared by vis_take_pending_pub at the @-
+    // decl site (gen_fn_decl). Other decl kinds parse the prefix
+    // for forward-compat but enforcement is fn-only in v2.0.
+    ? == ( nurl_lex_type lex ) TT_PUB
+    { ( nurl_lex_advance lex )
+        = g_pending_pub 1
+    }
+    {}
+    : i tt ( nurl_lex_type lex )
+    ? == tt TT_AT { ( gen_fn_decl lex syms cg ) }
+    ? == tt TT_COLON { ( gen_const_or_struct lex syms ) }
+    ? == tt TT_AMP { ( gen_ffi_decl lex syms ) }
+    ? == tt TT_DOLLAR { ( gen_import_decl lex syms cg ) }
+    ? == tt TT_PERCENT { ( gen_trait_or_impl lex syms cg ) }
+    // A bare `|` is the most common near-miss: enums are declared
+    // `: | Name { … }`, not `| Name { … }`. (The `:`-less spelling
+    // used to be silently skipped — and only "worked" when the enum
+    // was also imported under the same name; now it's a diagnostic.)
+    ? == tt TT_PIPE { ( die lex `enum declarations start with ': |', not a bare '|' — write ': | Name { Variant... }'` ) }
+    // Anything else at the top level is a hard error. The decl loop
+    // used to silently advance past stray tokens — which is exactly
+    // how an unbalanced-brace function body slipped through: an extra
+    // `}` closed the body early, and the leftover statements (`^ x`,
+    // a stray `}`, …) leaked here and were swallowed, leaving the
+    // truncated function to silently miscompile (undef return) or to
+    // desync the scan_fn_sigs pre-pass. Refusing them turns that whole
+    // class into a diagnostic at the first leaked token.
+    { ( die lex ( nurl_str_cat3
+        `unexpected `
+        ( __tok_label tt ( nurl_lex_val lex ) )
+        ` at the top level — expected a declaration (@ fn, : const/struct/enum, & ffi, $ import, or % trait/impl). A stray '}' or leftover expression here usually means an earlier function body has unbalanced braces.` ) ) }
+}
+
+// Runtime entry points for the multi-error machinery, declared via the
+// language's own `&` FFI (NOT compiler builtins): the committed bootstrap
+// compiler must be able to compile this file, and it predates these
+// symbols — an `&` decl needs no compiler support beyond the FFI feature
+// itself. Both live in runtime_core.c and resolve from runtime.o.
+& `c` @ nurl_recover_nojournal *u fnp *u env → i
+
+& `c` @ nurl_print_buf_unwind → v
+
+// Minimal recover for the compiler's own multi-error frames (nurlc.nu
+// imports no stdlib): decompose the closure into (fn, env), run it under
+// the JOURNAL-FREE recover variant, free the env. The journal-free
+// variant matters: the journalled one makes every nurl_free scan the
+// live journal, which would make error-free compilation quadratic in
+// per-declaration allocations. The trade is that a panic leaks whatever
+// the declaration allocated — fine, the process exits non-zero shortly.
+// Returns 0 = completed, 1 = panicked (message via nurl_panic_last_msg).
+@ __diag_recover ( @ v ) closure → i {
+    : *u fnp # *u closure 0
+    : *u env # *u closure 1
+    : i rv ( nurl_recover_nojournal fnp env )
+    ( nurl_free # s env )
+    ^ rv
+}
+
+// Does the lexer sit on a token that can start a top-level declaration,
+// at column 1? (Canonical nurlfmt source puts every top-level decl at
+// column 1, so this is a reliable resync anchor; non-canonical code just
+// gets coarser recovery.)
+@ __at_toplevel_start i lex → b {
+    ? != ( nurl_lex_col lex ) 1 { ^ F } {}
+    : i tt ( nurl_lex_type lex )
+    ? == tt TT_AT { ^ T } {}
+    ? == tt TT_COLON { ^ T } {}
+    ? == tt TT_AMP { ^ T } {}
+    ? == tt TT_DOLLAR { ^ T } {}
+    ? == tt TT_PERCENT { ^ T } {}
+    ? == tt TT_PUB { ^ T } {}
+    ^ F
+}
+
+// Skip the rest of a failed declaration: advance at least one token
+// (the error may have fired ON a decl starter), then to the next
+// column-1 declaration token or EOF.
+@ __diag_resync i lex → v {
+    ? != ( nurl_lex_type lex ) TT_EOF { ( nurl_lex_advance lex ) } {}
+    ~ & != ( nurl_lex_type lex ) TT_EOF ! ( __at_toplevel_start lex ) {
+        ( nurl_lex_advance lex )
+    }
+}
+
+// The compiler itself panicked (div-by-zero, OOB, …) with no diagnostic
+// reported: an internal compiler error, not a user error. Say so loudly
+// and ask for a report — the alternative is an opaque abort.
+@ __ice_report s file s pm → v {
+    ( nurl_eprintln `` )
+    ( nurl_eprintln `internal compiler error: nurlc itself panicked` )
+    ( nurl_eprintln ( nurl_str_cat `  panic message: ` pm ) )
+    ( nurl_eprintln ( nurl_str_cat ( nurl_str_cat3 `  while processing ` file `, near line ` )
+    ( nurl_str_int g_stmt_line ) ) )
+    ( nurl_eprintln `  this is a bug in nurlc, not in your program — please report it at` )
+    ( nurl_eprintln `  https://github.com/nurl-lang/nurl/issues with the source that triggered it.` )
+    ( nurl_eprintln ( nurl_str_cat `  nurlc version: ` ( nurl_version ) ) )
+    ( nurl_exit 3 )
+}
+
 @ parse_program i lex i syms i cg → v {
     ~ != ( nurl_lex_type lex ) TT_EOF {
-        // Grammar v2.0: consume an optional `pub` visibility prefix
-        // before dispatching to the matching decl handler. The pending
-        // flag is read-and-cleared by vis_take_pending_pub at the @-
-        // decl site (gen_fn_decl). Other decl kinds parse the prefix
-        // for forward-compat but enforcement is fn-only in v2.0.
-        ? == ( nurl_lex_type lex ) TT_PUB
-        { ( nurl_lex_advance lex )
-            = g_pending_pub 1
-        }
-        {}
-        : i tt ( nurl_lex_type lex )
-        ? == tt TT_AT { ( gen_fn_decl lex syms cg ) }
-        ? == tt TT_COLON { ( gen_const_or_struct lex syms ) }
-        ? == tt TT_AMP { ( gen_ffi_decl lex syms ) }
-        ? == tt TT_DOLLAR { ( gen_import_decl lex syms cg ) }
-        ? == tt TT_PERCENT { ( gen_trait_or_impl lex syms cg ) }
-        // A bare `|` is the most common near-miss: enums are declared
-        // `: | Name { … }`, not `| Name { … }`. (The `:`-less spelling
-        // used to be silently skipped — and only "worked" when the enum
-        // was also imported under the same name; now it's a diagnostic.)
-        ? == tt TT_PIPE { ( die lex `enum declarations start with ': |', not a bare '|' — write ': | Name { Variant... }'` ) }
-        // Anything else at the top level is a hard error. The decl loop
-        // used to silently advance past stray tokens — which is exactly
-        // how an unbalanced-brace function body slipped through: an extra
-        // `}` closed the body early, and the leftover statements (`^ x`,
-        // a stray `}`, …) leaked here and were swallowed, leaving the
-        // truncated function to silently miscompile (undef return) or to
-        // desync the scan_fn_sigs pre-pass. Refusing them turns that whole
-        // class into a diagnostic at the first leaked token.
-        { ( die lex ( nurl_str_cat3
-            `unexpected `
-            ( __tok_label tt ( nurl_lex_val lex ) )
-            ` at the top level — expected a declaration (@ fn, : const/struct/enum, & ffi, $ import, or % trait/impl). A stray '}' or leftover expression here usually means an earlier function body has unbalanced braces.` ) ) }
+        // Each top-level declaration compiles under a recovery frame so a
+        // diagnostic (die → __nurlc_diag__ panic) skips just that decl and
+        // the walk continues — one run reports many errors. Nested calls
+        // (imports re-enter parse_program) nest frames; the depth counter
+        // keeps die's panic-vs-exit decision right on the way back out.
+        = g_diag_recover_active + g_diag_recover_active 1
+        : i rv ( __diag_recover \ → v { ( parse_toplevel_decl lex syms cg ) } )
+        = g_diag_recover_active - g_diag_recover_active 1
+        ? != rv 0 {
+            : s pm ( nurl_panic_last_msg )
+            ? ( seq pm `__nurlc_diag__` )
+            {  // A reported diagnostic. The panic may have unwound out of
+                // buffered closure-IR emission — reset the output stack to
+                // stdout (post-error IR is garbage; the non-zero exit makes
+                // callers discard it) and resync to the next declaration.
+                ( nurl_print_buf_unwind )
+                ( __diag_resync lex )
+            }
+            { ? > g_err_count 0
+                {  // The compiler lost its footing in state a half-parsed
+                    // declaration left behind. The diagnostics above are
+                    // real; don't bury them under an ICE report.
+                    ( nurl_eprintln `note: stopping early — the compiler could not continue past the errors above` )
+                    ( nurl_exit 1 ) }
+                { ( __ice_report ( nurl_lex_filename lex ) pm ) }
+            }
+        } {}
     }
 }
 
@@ -18246,6 +18865,17 @@
     : i lex ( nurl_lex_new src path )
     ? != g_lint 0 { = g_lint_recording 1 } {}
     ( parse_program lex syms cg )
+    // Multi-error mode: diagnostics were reported per-declaration and the
+    // walk continued. If any fired, fail NOW — the deferred stages below
+    // (generic flush, escape resolution, lint) walk state that half-parsed
+    // declarations may have left inconsistent, and the emitted IR is
+    // already garbage past the first error.
+    ? > g_err_count 0
+    { ( nurl_eprintln ( nurl_str_cat ( nurl_str_cat3 `error: aborting due to `
+        ( nurl_str_int g_err_count ) ` previous error` )
+        ? > g_err_count 1 `s` `` ) )
+        ( nurl_exit 1 ) }
+    {}
     // Stop recording new lint targets before flushing generic
     // monomorphisations — those are synthetic, not the user's source.
     = g_lint_recording 0
@@ -18268,9 +18898,10 @@
     // borrow-clean program leaves g_bck_errors at 0 and this is a
     // no-op.
     ? > g_bck_errors 0
-    { ( nurl_eprintln ( nurl_str_cat3 `error: compilation aborted - `
+    { ( nurl_eprintln ( nurl_str_cat ( nurl_str_cat3 `error: compilation aborted — `
         ( nurl_str_int g_bck_errors )
-        ` borrow-checker violations (re-run with --no-borrowck to bypass)` ) )
+        ? > g_bck_errors 1 ` borrow-checker violations` ` borrow-checker violation` )
+        ` (re-run with --no-borrowck to bypass)` ) )
         ( nurl_exit 1 ) }
     {}
 }
