@@ -9949,6 +9949,17 @@
 // A call that can move a container's buffer. Conservative and by name —
 // the stdlib's growable containers all take the container first.
 @ __ptr_mutator s fn → b {
+    // `vec_iota` builds a fresh Vec, it does not grow an existing one —
+    // and it would otherwise be caught by the `vec_` prefixes below.
+    ? ( seq fn `vec_iota` ) { ^ F } {}
+    // Every family member that can grow, shrink or release a container's
+    // buffer. Matched by PREFIX, not by an enumerated list: a hand-written
+    // list of `bytes_push_*` already missed six of them (the f32/f64/int
+    // writers), and every new one added to the stdlib would have escaped
+    // the check silently.
+    ? ( nurl_str_starts fn `string_push_` ) { ^ T } {}
+    ? ( nurl_str_starts fn `bytes_push_` ) { ^ T } {}
+    ? ( nurl_str_starts fn `bytes_extend_` ) { ^ T } {}
     ? ( seq fn `vec_push` ) { ^ T } {}
     ? ( seq fn `vec_insert` ) { ^ T } {}
     ? ( seq fn `vec_extend` ) { ^ T } {}
@@ -9957,30 +9968,19 @@
     ? ( seq fn `vec_clear` ) { ^ T } {}
     ? ( seq fn `vec_free` ) { ^ T } {}
     ? ( seq fn `vec_free_with` ) { ^ T } {}
-    ? ( seq fn `vec_iota` ) { ^ F } {}
-    ? ( seq fn `string_push_char` ) { ^ T } {}
-    ? ( seq fn `string_push_str` ) { ^ T } {}
-    ? ( seq fn `string_push_int` ) { ^ T } {}
-    ? ( seq fn `string_push_float` ) { ^ T } {}
-    ? ( seq fn `string_push_bytes` ) { ^ T } {}
     ? ( seq fn `string_clear` ) { ^ T } {}
     ? ( seq fn `string_free` ) { ^ T } {}
-    ? ( seq fn `bytes_extend_str` ) { ^ T } {}
-    ? ( seq fn `bytes_extend_raw` ) { ^ T } {}
-    ? ( seq fn `bytes_push_u16_be` ) { ^ T } {}
-    ? ( seq fn `bytes_push_u16_le` ) { ^ T } {}
-    ? ( seq fn `bytes_push_u32_be` ) { ^ T } {}
-    ? ( seq fn `bytes_push_u32_le` ) { ^ T } {}
-    ? ( seq fn `bytes_push_u64_be` ) { ^ T } {}
-    ? ( seq fn `bytes_push_u64_le` ) { ^ T } {}
     ^ F
 }
 
 // `( vec_data … v )` / `( string_data v )` / `( bytes_data v )` — the
 // borrow producers. Returns T and publishes nothing else; the CALLER
 // records the container it saw.
+// The two stdlib functions that hand out a raw pointer INTO a container's
+// heap buffer. (A byte buffer is a `Vec u8`, so `bytes_*` code borrows
+// through `vec_data` — there is no `bytes_data`.)
 @ __ptr_borrow_fn s fn → b {
-    ^ | | ( seq fn `vec_data` ) ( seq fn `string_data` ) ( seq fn `bytes_data` )
+    ^ | ( seq fn `vec_data` ) ( seq fn `string_data` )
 }
 
 @ __ptr_src_add s ptr s cont i line → v {

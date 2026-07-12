@@ -401,9 +401,10 @@ knob for auditing a specific module, not part of the standard contract.
 The default-on eight rules remain the guarantee everything else in this
 document refers to.
 
-### 2.10 Stale container borrows (`vec_data` / `string_data` / `bytes_data`)
+### 2.10 Stale container borrows (`vec_data` / `string_data`)
 
-`( vec_data v )` hands out a raw pointer *into* `v`'s heap buffer. If
+`( vec_data v )` (and `string_data`) hands out a raw pointer *into* the
+container's heap buffer. If
 `v` is then grown — `vec_push`, `vec_extend`, `vec_reserve` — the
 buffer may be reallocated somewhere else, and every pointer taken
 before that mutation points into freed memory. `vec_clear` / `vec_free`
