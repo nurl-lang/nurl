@@ -834,6 +834,7 @@
 // Disabled by default because the extensions have a meaningful
 // false-positive rate against existing stdlib code.
 : ~ i g_strict_borrowck 0  // 1 when --strict-borrowck passed on the CLI
+: ~ i g_ptrtab 0  // sym handle for the dangling-borrow tracker (unscoped)
 : ~ i g_bck 0  // sym handle for the borrow checker's per-function
 //  data (statement list etc.); allocated in main()
 //  only when --borrowck is set
@@ -2596,6 +2597,17 @@
         ( nurl_lex_advance lex )
         // Borrow checker: every value-position identifier is a read.
         ( bck_note_read name )
+        // Dangling-borrow diagnostic. `name` is a pointer borrowed from a
+        // container (vec_data/string_data/bytes_data) that has since been
+        // grown, cleared or freed — its buffer may have been reallocated,
+        // so this load reads (or worse, writes) freed memory. Warn once
+        // per pointer, naming BOTH the mutation and the fix.
+        : i __dl ( __ptr_dead_line name )
+        ? >= __dl 0 {
+            ( __ptr_stale_warn lex __id_line __id_col name
+            ( __ptr_src_of name ) __dl )
+            ( __ptr_revive name )
+        } {}
         // Closure-env reclamation: a value-position load disqualifies a
         // parameter from the invoke-only set (§7.4). The callee position
         // of a call never reaches gen_ident, so a parameter that is only
@@ -4996,6 +5008,10 @@
 @ gen_call i lex i syms i cg → s {
     ( nurl_lex_advance lex )
     : s fname ( nurl_lex_val lex )
+    // A call is the only thing that can produce a borrow; clear the
+    // side-channel so a stale one from a previous call cannot be read
+    // by the `:` that binds THIS call's result.
+    ( nurl_sym_def syms `__last_borrow_src__` `` )
     // Lint: the callee is both a global reference (unused-function) and,
     // when it names a local closure binding, a read of it (unused-binding).
     // gen_call consumes the name directly, bypassing gen_ident, so record
@@ -5269,6 +5285,18 @@
         : i bck_arg_tt ( nurl_lex_type lex )
         : s bck_arg_val ( nurl_lex_val lex )
         : i bck_arg_line ( nurl_lex_line lex )
+        // Dangling-borrow tracking (see __ptr_kill): the FIRST argument of
+        // a borrow producer names the container the pointer will point
+        // into; the first argument of a container mutator names the
+        // container whose buffer may move. Both are bare identifiers.
+        ? & == arg_idx 0 ( is_ident_tok bck_arg_tt ) {
+            ? ( __ptr_borrow_fn fname ) {
+                ( nurl_sym_def syms `__last_borrow_src__` bck_arg_val )
+            } {}
+            ? ( __ptr_mutator fname ) {
+                ( __ptr_kill bck_arg_val ( nurl_lex_line lex ) )
+            } {}
+        } {}
         ( nurl_sym_def syms `__last_call_ret_owned__` `` )
         // Reset __last_ident_name__ so the post-gen_expr check below
         // sees an ident only when this argument actually loaded one.
@@ -9901,6 +9929,156 @@
     {}
 }
 
+// ── Borrowed-pointer invalidation (dangling data pointers) ─────────
+//
+// `( vec_data v )` / `( string_data s )` hand out a pointer INTO a
+// growable container. The next push may reallocate it, and every such
+// pointer then dangles — silently: the program keeps running and reads
+// freed memory. This is the real hazard around raw data pointers, and it
+// is independent of whether the binding is `: ~` (a `: *T` borrow dangles
+// just as hard).
+//
+// So: remember which container each pointer was borrowed from; when that
+// container is passed to something that can reallocate it, mark the
+// pointer stale; warn at the first use of a stale pointer, naming both
+// lines. Re-fetching (`= p ( vec_data v )`) clears the mark.
+//
+// Sidebands: `__ptr_src__`  = "<ptr> <container> <line>" triples
+//            `__ptr_dead__` = "<ptr> <line>" pairs (line of the mutation)
+
+// A call that can move a container's buffer. Conservative and by name —
+// the stdlib's growable containers all take the container first.
+@ __ptr_mutator s fn → b {
+    ? ( seq fn `vec_push` ) { ^ T } {}
+    ? ( seq fn `vec_insert` ) { ^ T } {}
+    ? ( seq fn `vec_extend` ) { ^ T } {}
+    ? ( seq fn `vec_reserve` ) { ^ T } {}
+    ? ( seq fn `vec_shrink_to_fit` ) { ^ T } {}
+    ? ( seq fn `vec_clear` ) { ^ T } {}
+    ? ( seq fn `vec_free` ) { ^ T } {}
+    ? ( seq fn `vec_free_with` ) { ^ T } {}
+    ? ( seq fn `vec_iota` ) { ^ F } {}
+    ? ( seq fn `string_push_char` ) { ^ T } {}
+    ? ( seq fn `string_push_str` ) { ^ T } {}
+    ? ( seq fn `string_push_int` ) { ^ T } {}
+    ? ( seq fn `string_push_float` ) { ^ T } {}
+    ? ( seq fn `string_push_bytes` ) { ^ T } {}
+    ? ( seq fn `string_clear` ) { ^ T } {}
+    ? ( seq fn `string_free` ) { ^ T } {}
+    ? ( seq fn `bytes_extend_str` ) { ^ T } {}
+    ? ( seq fn `bytes_extend_raw` ) { ^ T } {}
+    ? ( seq fn `bytes_push_u16_be` ) { ^ T } {}
+    ? ( seq fn `bytes_push_u16_le` ) { ^ T } {}
+    ? ( seq fn `bytes_push_u32_be` ) { ^ T } {}
+    ? ( seq fn `bytes_push_u32_le` ) { ^ T } {}
+    ? ( seq fn `bytes_push_u64_be` ) { ^ T } {}
+    ? ( seq fn `bytes_push_u64_le` ) { ^ T } {}
+    ^ F
+}
+
+// `( vec_data … v )` / `( string_data v )` / `( bytes_data v )` — the
+// borrow producers. Returns T and publishes nothing else; the CALLER
+// records the container it saw.
+@ __ptr_borrow_fn s fn → b {
+    ^ | | ( seq fn `vec_data` ) ( seq fn `string_data` ) ( seq fn `bytes_data` )
+}
+
+@ __ptr_src_add s ptr s cont i line → v {
+    : i syms g_ptrtab
+    : s cur ( nurl_sym_get syms `__ptr_src__` )
+    : s e ( nurl_str_cat3 ptr ` ` ( nurl_str_cat3 cont ` ` ( nurl_str_int line ) ) )
+    : s new ? == 0 ( nurl_str_len cur ) e ( nurl_str_cat3 cur ` ` e )
+    ( nurl_sym_def syms `__ptr_src__` new )
+}
+
+// Mark every pointer borrowed from `cont` as stale (mutated at `line`).
+@ __ptr_kill s cont i line → v {
+    : i syms g_ptrtab
+    : ~ s rest ( nurl_sym_get syms `__ptr_src__` )
+    // Fast path: no live borrows in this function — and that is the
+    // overwhelmingly common case, so a container mutation costs one
+    // symtab lookup, not a table write per `vec_push` in the program.
+    ? == 0 ( nurl_str_len rest ) { ^ v } {}
+    : ~ s dead ( nurl_sym_get syms `__ptr_dead__` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s p ( str_first_word rest )
+        = rest ( str_skip_word rest )
+        : s c ( str_first_word rest )
+        = rest ( str_skip_word rest )
+        : s _l ( str_first_word rest )
+        = rest ( str_skip_word rest )
+        ? & ( seq c cont ) ! ( str_contains_word dead p ) {
+            : s entry ( nurl_str_cat3 p ` ` ( nurl_str_int line ) )
+            = dead ? == 0 ( nurl_str_len dead ) entry ( nurl_str_cat3 dead ` ` entry )
+        } {}
+    }
+    ( nurl_sym_def syms `__ptr_dead__` dead )
+}
+
+// The line at which `name` was invalidated, or -1 when it is still live.
+@ __ptr_dead_line s name → i {
+    : i syms g_ptrtab
+    : ~ s rest ( nurl_sym_get syms `__ptr_dead__` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s p ( str_first_word rest )
+        = rest ( str_skip_word rest )
+        : s l ( str_first_word rest )
+        = rest ( str_skip_word rest )
+        ? ( seq p name ) { ^ ( nurl_str_to_int l ) } {}
+    }
+    ^ - 0 1
+}
+
+// Report once: drop `name` from the stale set after warning about it.
+@ __ptr_revive s name → v {
+    : i syms g_ptrtab
+    : ~ s rest ( nurl_sym_get syms `__ptr_dead__` )
+    : ~ s keep ``
+    ~ != 0 ( nurl_str_len rest ) {
+        : s p ( str_first_word rest )
+        = rest ( str_skip_word rest )
+        : s l ( str_first_word rest )
+        = rest ( str_skip_word rest )
+        ? ( seq p name ) {} {
+            : s entry ( nurl_str_cat3 p ` ` l )
+            = keep ? == 0 ( nurl_str_len keep ) entry ( nurl_str_cat3 keep ` ` entry )
+        }
+    }
+    ( nurl_sym_def syms `__ptr_dead__` keep )
+}
+
+// Report a use of a pointer whose container was mutated after the borrow.
+// The lexer has already advanced past the identifier, so the position is
+// passed in rather than read from it.
+@ __ptr_stale_warn i lex i line i col s name s cont i dline → v {
+    : s loc ( nurl_str_cat3 ( nurl_lex_filename lex ) `:`
+    ( nurl_str_cat3 ( nurl_str_int line ) `:` ( nurl_str_int col ) ) )
+    : s msg ( nurl_str_cat3 `pointer '` name
+    ( nurl_str_cat3 `' borrowed from '` cont
+    ( nurl_str_cat3 `' is stale: '` cont
+    ( nurl_str_cat3 `' was mutated on line ` ( nurl_str_int dline )
+    ` and may have reallocated its buffer` ) ) ) )
+    ( nurl_eprintln ( nurl_str_cat3 loc `: warning: ` msg ) )
+    ( nurl_eprintln ( nurl_str_cat3 `  note: re-fetch the pointer after the mutation (` name
+    ( nurl_str_cat3 ` = ( vec_data … ` cont ` ) )` ) ) )
+}
+
+// The container a pointer was borrowed from ("" when unknown).
+@ __ptr_src_of s name → s {
+    : i syms g_ptrtab
+    : ~ s rest ( nurl_sym_get syms `__ptr_src__` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s p ( str_first_word rest )
+        = rest ( str_skip_word rest )
+        : s c ( str_first_word rest )
+        = rest ( str_skip_word rest )
+        : s _l ( str_first_word rest )
+        = rest ( str_skip_word rest )
+        ? ( seq p name ) { ^ c } {}
+    }
+    ^ ``
+}
+
 @ gen_let_or_struct i lex i syms i cg → s {
     // Borrow checker: source line of the `:` token, for the record.
     : i bck_line ( nurl_lex_line lex )
@@ -9909,15 +10087,18 @@
     : b had_mutability_check | == ( nurl_lex_type lex ) TT_TILDE ( is_type_start ( nurl_lex_type lex ) )
     : b is_mutable == ( nurl_lex_type lex ) TT_TILDE
     ? is_mutable { ( nurl_lex_advance lex ) } {}
-    // `: ~ * T name init` (mutable pointer to T)
-    // miscompiles in long-running write loops — confirmed via the CSV
-    // P2c hoist attempt where writes started segfaulting at ~row 66k.
-    // Warn (don't `die`) because trivial isolated cases work and the
-    // warning is advisory; suggest the immutable `: *T` alternative
-    // or re-fetching the pointer per iteration.
-    ? & is_mutable == ( nurl_lex_type lex ) TT_STAR
-    { ( warn lex `mutable pointer binding ': ~ *T' miscompiles in long-running write loops. Prefer immutable ': *T' + re-fetch on grow, or carry the address as an i64 and cast per use.` ) }
-    {}
+    // A `: ~ *T` binding used to be warned about here as "miscompiles in
+    // long-running write loops". It does not: advancing-write loops over
+    // 100k+ elements, struct-pointer chains, writes through a String's
+    // data pointer and reassignment inside a `?`-arm all produce correct
+    // code (compiler/tests/mut_pointer.nu). What the original report hit
+    // was a pointer into a container that REALLOCATED — a hazard that has
+    // nothing to do with mutability (a `: *T` borrow dangles identically)
+    // and everything to do with the container being grown while the
+    // pointer is still live. That is now diagnosed where it actually
+    // happens (see __ptr_kill / the use-site warning in gen_ident), so the
+    // blanket warning — which fired on correct code and pushed callers to
+    // launder pointers through i64 — is gone.
     // Check if first token could be a type name by looking it up in symbol table
     ? & == ( nurl_lex_type lex ) TT_IDENT == 0 ( nurl_str_len ( nurl_sym_get syms ( nurl_lex_val lex ) ) )
     {  // Type inference: plain IDENT that's not a known type
@@ -9977,6 +10158,12 @@
             ( mem_slice_decl_add syms name )
             ( mem_journal_push_slice cg vt ptr ) }
         {}
+        // Dangling-borrow tracking (see the annotated path below).
+        : s __bsrc2 ( nurl_sym_get syms `__last_borrow_src__` )
+        ? & & == bck_rhs_tt TT_LPAREN != 0 ( nurl_str_len __bsrc2 ) ( is_ptr_ty vt ) {
+            ( __ptr_src_add name __bsrc2 bck_line )
+            ( __ptr_revive name )
+        } {}
         // Closure-env reclamation (§7.4): a `: f \ … x …` literal binding
         // owns the env → track it for the function-exit free. A `: g f`
         // copy MOVES the env to g (the borrow checker forbids reusing f),
@@ -10156,6 +10343,14 @@
                     ( mem_slice_decl_add syms name )
                     ( mem_journal_push_slice cg ptype ptr ) }
                 {}
+                // Dangling-borrow tracking: `: *T p ( vec_data … v )` binds a
+                // pointer INTO v's buffer. Remember where it came from so a
+                // later push on v can invalidate it.
+                : s __bsrc ( nurl_sym_get syms `__last_borrow_src__` )
+                ? & & == bck_rhs_tt TT_LPAREN != 0 ( nurl_str_len __bsrc ) ( is_ptr_ty ptype ) {
+                    ( __ptr_src_add name __bsrc bck_line )
+                    ( __ptr_revive name )
+                } {}
                 // Closure-env reclamation (§7.4): track a capturing closure
                 // bound here for the function-exit free.
                 ? != 0 ( nurl_str_len rhs_closure_env )
@@ -10368,6 +10563,14 @@
         != 0 ( nurl_str_len ( nurl_sym_get syms ( nurl_str_cat name `__captured_byref` ) ) )
         { ( mem_journal_forget_struct syms cg store_val vt ) }
         {}
+        // Dangling-borrow tracking: re-fetching the pointer from its
+        // container (`= p ( vec_data … v )`) makes it live again. Record
+        // the new provenance too — a subsequent mutation must re-kill it.
+        : s __asrc ( nurl_sym_get syms `__last_borrow_src__` )
+        ? & != 0 ( nurl_str_len __asrc ) ( is_ptr_ty vt ) {
+            ( __ptr_src_add name __asrc ( nurl_lex_line lex ) )
+            ( __ptr_revive name )
+        } {}
         // Publish the LHS type as the assignment's result type. If the
         // assignment lands as the last expression of a match arm or block
         // ( `?? r { F e → { = err e } }` ), gen_match's phi-typing logic
@@ -14515,6 +14718,8 @@
     ( nurl_cg_reset cg )
     // Borrow checker: start a fresh per-function statement list.
     ( bck_fn_begin )
+    ( nurl_sym_def g_ptrtab `__ptr_src__` `` )
+    ( nurl_sym_def g_ptrtab `__ptr_dead__` `` )
     ( lint_fn_begin )
     // Snapshot the lex position for DWARF DISubprogram.line / scopeLine
     // before we consume any tokens — by the time we reach the `define`
@@ -18842,6 +19047,11 @@
     = g_type_emit_base 0
     = g_vis_syms ( nurl_sym_new )
     ? != g_borrowck 0 { = g_bck ( nurl_sym_new ) } {}
+    // Dangling-borrow tracking table (see __ptr_src_add). A table of its
+    // own, not `syms`: `syms` is scoped — a mutation inside a loop body
+    // would have its invalidation popped with the block, which is exactly
+    // where the hazard is most common.
+    = g_ptrtab ( nurl_sym_new )
     ( vis_set_current_src_file path )
     ( emit_header )
     ? != g_dbg_enabled 0 { ( dbg_init path ) } {}

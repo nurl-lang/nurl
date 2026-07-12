@@ -1,0 +1,8 @@
+COMPILE OK
+WARNINGS
+compiler/tests/should_warn_stale_borrow.nu:18:21: warning: pointer 'p' borrowed from 'v' is stale: 'v' was mutated on line 15 and may have reallocated its buffer
+  note: re-fetch the pointer after the mutation (p = ( vec_data … v ) )
+LINK OK
+EXIT 0
+OUTPUT
+7
