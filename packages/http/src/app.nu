@@ -150,6 +150,18 @@ $ `stdlib/ext/http_static.nu`
     ( router_any . a router method pattern handler )
 }
 
+// Streaming routes (SSE / NDJSON / chunked). The handler sees every
+// request BEFORE the router — return F to fall through to the normal
+// routes, or write the whole response itself (response_begin_chunked /
+// response_write_chunk / response_end_chunked on the TcpConn) and
+// return T; the server then closes the connection when the handler
+// returns (a streamed response is that connection's last — do not
+// close the conn inside the handler). One hook per process: dispatch
+// on `. req path` / `. req method` inside it.
+@ http_app_stream * HttpApp a ( @ b TcpConn HttpRequest ) f → v {
+    ( server_set_stream f )
+}
+
 // The embedded router, for advanced use (mounting sub-routers, tests).
 @ http_app_router * HttpApp a → Router { ^ . a router }
 
