@@ -116,6 +116,47 @@ $ `cpu.nu`
 // no CUDA device is available (or NURL_GPU=cpu), select the CPU backend. The
 // returned Gpu is "ok" (ctx != 0) for either backend; a CPU Gpu carries
 // dev = -2, ctx = 1 as its marker.
+// Which device to open when the caller does not care: $NURL_GPU_DEVICE
+// (an ordinal), else the best one — highest compute capability, ties
+// broken by memory. A box with an old card beside a new one would
+// otherwise silently run everything on whichever the driver enumerates
+// first.
+@ gpu_best_device → i {
+    ?? ( env_get `NURL_GPU_DEVICE` ) {
+        T v → {
+            : ~ i ord 0
+            ?? ( string_to_int v ) {
+                T n → { = ord n }
+                F _ → {}
+            }
+            ( string_free v )
+            ^ ord
+        }
+        F → {}
+    }
+    ( cuda_init )
+    : i n ( cuda_device_count )
+    ? <= n 1 { ^ 0 } {}
+    : ~ i best 0
+    : ~ i best_cc -1
+    : ~ i best_mem -1
+    : ~ i k 0
+    ~ < k n {
+        : i dev ( cuda_device k )
+        ? >= dev 0 {
+            : i cc ( cuda_device_cc dev )
+            : i mem ( cuda_device_mem dev )
+            ? | > cc best_cc & == cc best_cc > mem best_mem {
+                = best k
+                = best_cc cc
+                = best_mem mem
+            } {}
+        } {}
+        = k + k 1
+    }
+    ^ best
+}
+
 @ gpu_open i ordinal → Gpu {
     ? ( __force_webgpu ) {
         // probe: wgpu_pipeline of a known kernel returns >0 when the JS
@@ -178,8 +219,11 @@ $ `cpu.nu`
 //     cuda-<hash>.ptx       NVRTC output
 //     cpu-<hash>.so         host shared object
 //
-// The key is the hash of the SOURCE, so an edited kernel simply misses
-// and recompiles; a stale entry can never be served for changed code.
+// The key is the hash of the SOURCE **and the target**, so an edited
+// kernel simply misses and recompiles, and a PTX built for one GPU is
+// never handed to another — a cross-architecture hit still "works"
+// (PTX is portable) but makes the driver JIT it on every process start,
+// which is exactly the latency the cache exists to remove.
 // Set NURL_GPU_CACHE=off to disable (e.g. to time a cold compile).
 
 @ __gpu_cache_dir → String {
@@ -215,9 +259,22 @@ $ `cpu.nu`
 }
 
 // <dir>/<prefix>-<blake3(src)>.<ext>
+// "cuda-sm<cc>" — the PTX is only valid (without a JIT) for the
+// architecture it was produced for.
+@ __gpu_cuda_tag Gpu g → String {
+    : String t ( string_from `cuda-sm` )
+    ( string_push_int t ( cuda_device_cc . g dev ) )
+    ^ t
+}
+
 @ __gpu_cache_path s src s prefix s ext → String {
     : String dir ( __gpu_cache_dir )
-    : ( Vec u ) sb ( bytes_from_str src )
+    // hash the source together with the target tag, so the key changes
+    // when either does
+    : String keyed ( string_from prefix )
+    ( string_push_str keyed src )
+    : ( Vec u ) sb ( bytes_from_str ( string_data keyed ) )
+    ( string_free keyed )
     : String hex ( blake3_hex sb )
     ( vec_free [u] sb )
     : String nm ( string_from prefix )
@@ -282,7 +339,9 @@ $ `cpu.nu`
     : ~ b cached F
     : ~ i mod 0
     ? ( __gpu_cache_off ) {} {
-        : String cp ( __gpu_cache_path src `cuda` `.ptx` )
+        : String tag ( __gpu_cuda_tag g )
+        : String cp ( __gpu_cache_path src ( string_data tag ) `.ptx` )
+        ( string_free tag )
         ?? ( read_file_bytes ( string_data cp ) ) {
             T ptxb → {
                 // read_file_bytes gives exactly the stored bytes; the
@@ -304,7 +363,9 @@ $ `cpu.nu`
             : i plen + ( nurl_str_len # s ptx ) 1
             : ( Vec u ) pb ( vec_with_cap [u] plen )
             ( bytes_extend_raw pb # s ptx plen )
-            : String cp2 ( __gpu_cache_path src `cuda` `.ptx` )
+            : String tag2 ( __gpu_cuda_tag g )
+            : String cp2 ( __gpu_cache_path src ( string_data tag2 ) `.ptx` )
+            ( string_free tag2 )
             ( __gpu_cache_store ( string_data cp2 ) pb )
             ( string_free cp2 )
             ( vec_free [u] pb )

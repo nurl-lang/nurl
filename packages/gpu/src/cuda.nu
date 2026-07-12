@@ -27,6 +27,13 @@ $ `stdlib/core/string.nu`
 
 & `cuda` @ cuDeviceGetName *u name i32 len i32 dev → i32
 
+// cuDeviceGetAttribute: attribute 75 = COMPUTE_CAPABILITY_MAJOR,
+// 76 = MINOR, 15 = TOTAL_CONSTANT_MEMORY … we need the first two to
+// key compiled kernels by architecture and to rank devices.
+& `cuda` @ cuDeviceGetAttribute *u out i32 attrib i32 dev → i32
+
+& `cuda` @ cuDeviceTotalMem_v2 *u bytes i32 dev → i32
+
 & `cuda` @ cuCtxCreate_v2 *u pctx i32 flags i32 dev → i32
 
 & `cuda` @ cuDevicePrimaryCtxRetain *u pctx i32 dev → i32
@@ -131,6 +138,27 @@ $ `stdlib/core/string.nu`
     ( nurl_poke buf 0 0 )
     ( cuDeviceGetName buf 256 # i32 dev )
     ^ # s buf
+}
+
+// Compute capability of a CUdevice as major*10 + minor (e.g. 89 for an
+// RTX 4090's sm_89). 0 when the query fails.
+@ cuda_device_cc i dev → i {
+    : *u s ( __outslot )
+    : ~ i major 0
+    ? == # i ( cuDeviceGetAttribute s # i32 75 # i32 dev ) 0 { = major ( nurl_peek s 0 ) } {}
+    : ~ i minor 0
+    ? == # i ( cuDeviceGetAttribute s # i32 76 # i32 dev ) 0 { = minor ( nurl_peek s 0 ) } {}
+    ( nurl_free s )
+    ^ + * major 10 minor
+}
+
+// Total device memory in bytes (0 on failure).
+@ cuda_device_mem i dev → i {
+    : *u s ( __outslot )
+    ? != # i ( cuDeviceTotalMem_v2 s # i32 dev ) 0 { ( nurl_free s ) ^ 0 } {}
+    : i n ( nurl_peek s 0 )
+    ( nurl_free s )
+    ^ n
 }
 
 // Retain the device's PRIMARY context and make it current → CUcontext
