@@ -71,11 +71,15 @@ $ `write.nu`     // GGUF v3 writer/builder
   IQ4_NL, I8–I64); unknown ids are still listed — the parser degrades
   loudly, not wrongly.
 - **Dequantisation** (`gguf_dequant` → little-endian f32, one element
-  per value in storage order): F32, F64, F16, BF16, Q4_0, Q4_1, Q8_0.
+  per value in storage order): F32, F64, F16, BF16, Q4_0, Q4_1, Q5_0,
+  Q5_1, Q8_0, and the K-quants **Q4_K / Q5_K / Q6_K** — every format a
+  modern llama.cpp model actually ships in (a `Q4_K_M` file mixes Q4_K
+  and Q6_K).
   F16 conversion is a pure bit transport (subnormals, ±inf, NaN and
   −0 preserved exactly). This is the CPU decode path *and* the golden
-  oracle for GPU dequant kernels — verified bit-identical against
-  independent python decodes of real llama.cpp models.
+  oracle for GPU dequant kernels — every format verified **bit-identical**
+  against an independent python decoder reading the same real-model
+  bytes (`tests/kquant_ref.py`).
 - **Writer** (`gw_new` / `gw_kv_*` / `gw_tensor` / `gw_finish`): emits
   spec-exact v3 images, validates shapes against payload sizes with
   the same rules the parser enforces, and round-trips bit-for-bit
