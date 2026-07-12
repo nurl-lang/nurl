@@ -424,12 +424,6 @@ $ `write.nu`
 
 @ __st_run → i {
     : ~ STCnt cn @ STCnt { 0 0 }
-    // expected-value tables live at function scope: owned slice
-    // literals inside ?/??-arms are not yet dropped by the compiler
-    // (TODO.md §8) — at function scope the scope-exit drop is sound
-    : f32exp [f | 0.0 1.5 -2.25 3.75 100.0 -0.0078125 6.5 -7.0]
-    : f16exp [i | 0 1065353216 3221225472 864026624 947896320 2139095040 4286578688 2143289344 2147483648]
-    : bfexp [i | 1065353216 3221225472 0 2139095040]
     : *GgufW w ( __st_build )
     : !String IoErr tf ( fs_tempfile `/tmp` `gguf-selftest.` )
     : ~ String path ( string_new )
@@ -522,6 +516,7 @@ $ `write.nu`
                 : !( Vec f ) String dr ( gguf_dequant_f64 g tf32 )
                 ?? dr {
                     T got → {
+                        : f32exp [f | 0.0 1.5 -2.25 3.75 100.0 -0.0078125 6.5 -7.0]
                         ( __st_ck cn ( __st_vec_eq got . f32exp 0 8 ) `t_f32 dequant values` )
                         ( vec_free [f] got )
                     }
@@ -539,6 +534,7 @@ $ `write.nu`
                 : !( Vec u ) String dr ( gguf_dequant g tf16 )
                 ?? dr {
                     T got → {
+                        : f16exp [i | 0 1065353216 3221225472 864026624 947896320 2139095040 4286578688 2143289344 2147483648]
                         : *i EP . f16exp 0
                         : ~ b ok == ( vec_len [u] got ) 36
                         : ~ i k 0
@@ -567,6 +563,7 @@ $ `write.nu`
                 : !( Vec u ) String dr ( gguf_dequant g tbf )
                 ?? dr {
                     T got → {
+                        : bfexp [i | 1065353216 3221225472 0 2139095040]
                         : *i EP . bfexp 0
                         : ~ b ok == ( vec_len [u] got ) 16
                         : ~ i k 0
