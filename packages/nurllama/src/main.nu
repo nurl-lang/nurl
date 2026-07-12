@@ -526,6 +526,7 @@ $ `stdlib/std/term.nu`
             }
             ( chat_msgs_free msgs )
             ( vec_free_with [String] hist \ String s → v { ( string_free s ) } )
+            ( rng_free rng )
             ( llm_close m )
             ^ 0
         }
@@ -800,6 +801,7 @@ $ `stdlib/std/term.nu`
                                 = produced + produced 1
                             }
                         }
+                        ( rng_free rng )
                         ( nurl_print `\n` )
                     }
                 }

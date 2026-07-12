@@ -2,7 +2,7 @@
 
 The ollama-shaped engine, built package by package on top of
 [`packages/gguf`](../gguf) and [`packages/gpu`](../gpu).
-**Phase 5 (current): chat + an ollama-compatible API.**
+**Phase 6 (current): quantised weights run natively on the device.**
 
 ```
 $ nurllama pull hf.co/ggml-org/models/tinyllamas/stories260K.gguf
@@ -61,6 +61,18 @@ stream and only the tail transfers; a server without Range support
 triggers a clean restart). `verify` re-hashes the blob and refuses
 drift; `rm` drops the blob only when the last name referencing it is
 gone. `run`/`show`/`tokenize` accept a store name or a plain path.
+
+## Quantised inference
+
+Weights stay in their **GGUF block form on the device** — the matvec
+kernels decode Q4_0 / Q4_1 / Q5_0 / Q5_1 / Q8_0 / **Q4_K / Q5_K /
+Q6_K** blocks inside the matmul. A Q4_K_M model therefore needs ~3×
+less device memory than its f32 expansion (measured: 603 → 189 MiB for
+SmolLM-135M) and the memory-bound matvec reads proportionally fewer
+bytes. `NURLLAMA_DEQUANT=host` forces the f32 reference path — the two
+must agree, and the test suite proves they do (identical top-5 logits,
+identical greedy text). A type without a device kernel falls back to
+host dequantisation automatically: correctness first, always.
 
 ## Inference core
 
@@ -149,6 +161,6 @@ $ `src/tokenizer.nu`
 
 ## Roadmap
 
-Phase 6: device-side dequant-in-matmul, K-quants, batched prefill,
-per-model BPE pre-tokenizer variants. See the plan in the repo's
-development notes.
+Batched prefill (the prompt currently runs one decode step per token),
+fused attention, and per-model BPE pre-tokenizer variants (qwen2). See
+the plan in the repo's development notes.

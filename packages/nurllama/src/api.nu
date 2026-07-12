@@ -291,6 +291,7 @@ i npredict f temp i topk f topp i seed → b {
         }
     }
 
+    ( rng_free rng )
     ? broken {
         ( string_free full )
         ^ T
