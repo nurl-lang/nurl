@@ -42,6 +42,8 @@ $ `deps/gpu/src/gpu.nu`
     GpuKernel attn_sc
     GpuKernel attn_out
     GpuKernel silumul
+    GpuKernel gelumul
+    GpuKernel scale
     GpuKernel addv
     GpuKernel addrow
     GpuKernel copyat
@@ -65,6 +67,11 @@ $ `deps/gpu/src/gpu.nu`
 // Every thread recomputes the sum of squares — O(n²) total, but norms
 // are dwarfed by the matvecs at decode shapes and this keeps the
 // kernel valid on the block-serial CPU backend (no cross-thread sync).
+// gemma's RMSNorm is documented as `x * inv * (1 + w)`, but the GGUF
+// converter folds that +1 into the stored weights (every norm weight in a
+// gemma GGUF is exactly the HF weight plus one — verified against the HF
+// checkpoint). Adding it again here is a double count, so this kernel is the
+// plain form for every architecture.
 @ __lk_rmsnorm → s {
     ^ `extern "C" __global__ void rmsnorm(
         const float* x, const float* w, float* y, int n, float eps, int batch) {
@@ -183,10 +190,17 @@ $ `deps/gpu/src/gpu.nu`
 //   pass 2: one thread per (position, head, head-dim) → softmax over the
 //           row's scores (each thread folds them serially — npos is small)
 //           and the value-weighted sum
+// `qscale` is the query scale (1/sqrt(head_dim) for llama; gemma states it
+// separately as query_pre_attn_scalar). `window` > 0 is a sliding attention
+// window: a key older than `window` positions is not attended to at all —
+// gemma3 does this on five of every six layers. `window` = 0 is full causal
+// attention. attn_sc and attn_out compute the same lower bound `lo`, so the
+// masked score slots are never read rather than being written with -inf.
 @ __lk_attn_sc → s {
     ^ `extern "C" __global__ void attn_sc(
         const float* q, const float* K, float* scores,
-        int nh, int nkv, int hd, int npos0, int batch, int maxpos) {
+        int nh, int nkv, int hd, int npos0, int batch, int maxpos,
+        float qscale, int window) {
         int idx = blockIdx.x*blockDim.x + threadIdx.x;
         int total = nh*batch*maxpos;
         if (idx >= total) return;
@@ -195,33 +209,36 @@ $ `deps/gpu/src/gpu.nu`
         int h  = hb % nh, b = hb / nh;
         int npos = npos0 + b;
         if (t >= npos) return;
+        int lo = (window > 0 && npos - 1 - window > 0) ? (npos - 1 - window) : 0;
+        if (t < lo) return;
         int kvdim = nkv*hd;
         int kh = h / (nh/nkv);
         const float* qh = q + (long long)b*nh*hd + h*hd;
         const float* kr = K + (long long)t*kvdim + kh*hd;
         float d = 0.f;
         for (int j = 0; j < hd; ++j) d += qh[j]*kr[j];
-        scores[(long long)hb*maxpos + t] = d * rsqrtf((float)hd);
+        scores[(long long)hb*maxpos + t] = d * qscale;
     }`
 }
 
 @ __lk_attn_out → s {
     ^ `extern "C" __global__ void attn_out(
         const float* V, const float* scores, float* out,
-        int nh, int nkv, int hd, int npos0, int batch, int maxpos) {
+        int nh, int nkv, int hd, int npos0, int batch, int maxpos, int window) {
         int idx = blockIdx.x*blockDim.x + threadIdx.x;
         if (idx >= nh*batch*hd) return;
         int d  = idx % hd;
         int hb = idx / hd;
         int h  = hb % nh, b = hb / nh;
         int npos = npos0 + b;
+        int lo = (window > 0 && npos - 1 - window > 0) ? (npos - 1 - window) : 0;
         int kvdim = nkv*hd;
         int kh = h / (nh/nkv);
         const float* sc = scores + (long long)hb*maxpos;
         float mx = -1e30f;
-        for (int t = 0; t < npos; ++t) if (sc[t] > mx) mx = sc[t];
+        for (int t = lo; t < npos; ++t) if (sc[t] > mx) mx = sc[t];
         float sum = 0.f, acc = 0.f;
-        for (int t = 0; t < npos; ++t) {
+        for (int t = lo; t < npos; ++t) {
             float p = expf(sc[t] - mx);
             sum += p;
             acc += p * V[(long long)t*kvdim + kh*hd + d];
@@ -242,6 +259,28 @@ $ `deps/gpu/src/gpu.nu`
 }
 
 // Residual add, in place: a += b.
+// GeGLU — gemma's FFN gate. The tanh approximation is what gemma was
+// trained with (gelu_pytorch_tanh), so the exact erf form would be the
+// wrong function here, not a more accurate one.
+@ __lk_gelumul → s {
+    ^ `extern "C" __global__ void gelumul(float* g, const float* u, int n) {
+        int i = blockIdx.x*blockDim.x + threadIdx.x;
+        if (i < n) {
+            float v = g[i];
+            float c = 0.7978845608028654f * (v + 0.044715f*v*v*v);
+            g[i] = (0.5f*v*(1.f + tanhf(c))) * u[i];
+        }
+    }`
+}
+
+// gemma scales the embedding row by sqrt(n_embd) before the first block.
+@ __lk_scale → s {
+    ^ `extern "C" __global__ void scale(float* x, float s, int n) {
+        int i = blockIdx.x*blockDim.x + threadIdx.x;
+        if (i < n) x[i] *= s;
+    }`
+}
+
 @ __lk_addv → s {
     ^ `extern "C" __global__ void addv(float* a, const float* b, int n) {
         int i = blockIdx.x*blockDim.x + threadIdx.x;
@@ -848,6 +887,8 @@ $ `deps/gpu/src/gpu.nu`
     : GpuKernel k4a ( gpu_compile g ( __lk_attn_sc ) `attn_sc` )
     : GpuKernel k4b ( gpu_compile g ( __lk_attn_out ) `attn_out` )
     : GpuKernel k5 ( gpu_compile g ( __lk_silumul ) `silumul` )
+    : GpuKernel k5g ( gpu_compile g ( __lk_gelumul ) `gelumul` )
+    : GpuKernel k5s ( gpu_compile g ( __lk_scale ) `scale` )
     : GpuKernel k6 ( gpu_compile g ( __lk_addv ) `addv` )
     : GpuKernel k6b ( gpu_compile g ( __lk_addrow ) `addrow` )
     : GpuKernel k7 ( gpu_compile g ( __lk_copyat ) `copyat` )
@@ -864,7 +905,8 @@ $ `deps/gpu/src/gpu.nu`
     & & ( gpu_kernel_ok k5 ) ( gpu_kernel_ok k6 ) ( gpu_kernel_ok k7 )
     : b ok1 & & ( gpu_kernel_ok q1 ) ( gpu_kernel_ok q2 )
     & & ( gpu_kernel_ok q3 ) ( gpu_kernel_ok q4 ) ( gpu_kernel_ok q5 )
-    : b ok & & & ok0 ( gpu_kernel_ok k3n ) ( gpu_kernel_ok k6b ) & ok1 & & ( gpu_kernel_ok q6 ) ( gpu_kernel_ok q7 ) ( gpu_kernel_ok q8 )
+    : b ok & & & & ok0 ( gpu_kernel_ok k3n ) ( gpu_kernel_ok k6b )
+    & ( gpu_kernel_ok k5g ) ( gpu_kernel_ok k5s ) & ok1 & & ( gpu_kernel_ok q6 ) ( gpu_kernel_ok q7 ) ( gpu_kernel_ok q8 )
     // The warp-per-row matvecs use __shfl_down_sync — CUDA only. On any
     // other backend the portable kernels above stay in charge, and the
     // flag below turns the dispatch off.
@@ -880,7 +922,7 @@ $ `deps/gpu/src/gpu.nu`
     : b warp & want_warp
     & & & ( gpu_kernel_ok w1 ) ( gpu_kernel_ok w2 ) & ( gpu_kernel_ok w3 ) ( gpu_kernel_ok w4 )
     & & ( gpu_kernel_ok w5 ) ( gpu_kernel_ok w6 ) & ( gpu_kernel_ok w7 ) ( gpu_kernel_ok w8 )
-    ^ @ LlmKernels { k1 q1 q2 q6 q7 q3 q8 q4 q5 w1 w2 w3 w4 w5 w6 w7 w8 warp k2 k3 k3n k4 k4a k4b k5 k6 k6b k7 ok }
+    ^ @ LlmKernels { k1 q1 q2 q6 q7 q3 q8 q4 q5 w1 w2 w3 w4 w5 w6 w7 w8 warp k2 k3 k3n k4 k4a k4b k5 k5g k5s k6 k6b k7 ok }
 }
 
 @ lk_free LlmKernels ks → v {
@@ -910,6 +952,8 @@ $ `deps/gpu/src/gpu.nu`
     ( gpu_kernel_free . ks attn_sc )
     ( gpu_kernel_free . ks attn_out )
     ( gpu_kernel_free . ks silumul )
+    ( gpu_kernel_free . ks gelumul )
+    ( gpu_kernel_free . ks scale )
     ( gpu_kernel_free . ks addv )
     ( gpu_kernel_free . ks addrow )
     ( gpu_kernel_free . ks copyat )
@@ -1026,7 +1070,7 @@ $ `deps/gpu/src/gpu.nu`
 // npos0 = the causal window of the FIRST batch element (element b sees
 // npos0 + b rows). maxpos strides the per-(batch,head) score scratch.
 // Two-pass attention: scores, then softmax + value-weighted sum.
-@ lk_attn LlmKernels ks i qd i kcd i vcd i outd i scd i nh i nkv i hd i npos0 i batch i maxpos → v {
+@ lk_attn LlmKernels ks i qd i kcd i vcd i outd i scd i nh i nkv i hd i npos0 i batch i maxpos f qscale i window → v {
     : ( Vec i ) a1 ( vec_new [i] )
     ( vec_push [i] a1 ( gpu_arg_i64 qd ) )
     ( vec_push [i] a1 ( gpu_arg_i64 kcd ) )
@@ -1037,6 +1081,8 @@ $ `deps/gpu/src/gpu.nu`
     ( vec_push [i] a1 ( gpu_arg_i32 npos0 ) )
     ( vec_push [i] a1 ( gpu_arg_i32 batch ) )
     ( vec_push [i] a1 ( gpu_arg_i32 maxpos ) )
+    ( vec_push [i] a1 ( gpu_arg_f32 qscale ) )
+    ( vec_push [i] a1 ( gpu_arg_i32 window ) )
     : i _r1 ( gpu_launch . ks attn_sc ( gpu_grid * * * nh batch maxpos 1 256 ) 256 a1 )
     ( vec_free [i] a1 )
     : ( Vec i ) a2 ( vec_new [i] )
@@ -1049,8 +1095,29 @@ $ `deps/gpu/src/gpu.nu`
     ( vec_push [i] a2 ( gpu_arg_i32 npos0 ) )
     ( vec_push [i] a2 ( gpu_arg_i32 batch ) )
     ( vec_push [i] a2 ( gpu_arg_i32 maxpos ) )
+    ( vec_push [i] a2 ( gpu_arg_i32 window ) )
     : i _r2 ( gpu_launch . ks attn_out ( gpu_grid * * nh batch hd 256 ) 256 a2 )
     ( vec_free [i] a2 )
+}
+
+// GeGLU: g ← gelu(g) * u, in place. Same shape as lk_silumul.
+@ lk_gelumul LlmKernels ks i gd i ud i n → v {
+    : ( Vec i ) a ( vec_new [i] )
+    ( vec_push [i] a ( gpu_arg_i64 gd ) )
+    ( vec_push [i] a ( gpu_arg_i64 ud ) )
+    ( vec_push [i] a ( gpu_arg_i32 n ) )
+    : i _r ( gpu_launch . ks gelumul ( gpu_grid n 256 ) 256 a )
+    ( vec_free [i] a )
+}
+
+// x ← x * s, in place.
+@ lk_scale LlmKernels ks i xd f s i n → v {
+    : ( Vec i ) a ( vec_new [i] )
+    ( vec_push [i] a ( gpu_arg_i64 xd ) )
+    ( vec_push [i] a ( gpu_arg_f32 s ) )
+    ( vec_push [i] a ( gpu_arg_i32 n ) )
+    : i _r ( gpu_launch . ks scale ( gpu_grid n 256 ) 256 a )
+    ( vec_free [i] a )
 }
 
 @ lk_silumul LlmKernels ks i gd i ud i n → v {

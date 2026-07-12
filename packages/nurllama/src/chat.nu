@@ -14,6 +14,10 @@
 //   CHAT_LLAMA2   [INST] <<SYS>>…<</SYS>> user [/INST] assistant </s>
 //   CHAT_LLAMA3   <|start_header_id|>role<|end_header_id|>…<|eot_id|>
 //   CHAT_CHATML   <|im_start|>role\n…<|im_end|>   (qwen, many finetunes)
+//   CHAT_GEMMA    <start_of_turn>user\n…<end_of_turn>  (gemma; the
+//                 assistant's role is spelled "model", and gemma has NO
+//                 system role — the system prompt folds into the first
+//                 user turn, which is what its own template does)
 //   CHAT_PLAIN    no template — the messages are concatenated; a base
 //                 (non-chat) model gets its raw prompt, which is the
 //                 honest thing to do rather than inventing turns.
@@ -28,6 +32,7 @@ $ `deps/gguf/src/gguf.nu`
 : i CHAT_LLAMA2 1
 : i CHAT_LLAMA3 2
 : i CHAT_CHATML 3
+: i CHAT_GEMMA 4
 
 : ChatMsg {
     String role
@@ -56,6 +61,7 @@ $ `deps/gguf/src/gguf.nu`
         ? >= ( nurl_str_find tpl `<|im_start|>` ) 0 { ^ CHAT_CHATML } {}
         ? >= ( nurl_str_find tpl `<|start_header_id|>` ) 0 { ^ CHAT_LLAMA3 } {}
         ? >= ( nurl_str_find tpl `[INST]` ) 0 { ^ CHAT_LLAMA2 } {}
+        ? >= ( nurl_str_find tpl `<start_of_turn>` ) 0 { ^ CHAT_GEMMA } {}
     } {}
     ^ CHAT_PLAIN
 }
@@ -153,6 +159,54 @@ $ `deps/gguf/src/gguf.nu`
     ^ out
 }
 
+// gemma: <start_of_turn>ROLE\n … <end_of_turn>\n, where the assistant is
+// called "model". gemma's own template REJECTS a system role, so a system
+// prompt is prepended to the first user turn (two newlines), exactly as the
+// upstream template does.
+@ __chat_gemma ( Vec ChatMsg ) msgs → String {
+    : String out ( string_new )
+    : ~ String sys ( string_new )
+    : ~ i k 0
+    ~ < k ( vec_len [ChatMsg] msgs ) {
+        ?? ( vec_get [ChatMsg] msgs k ) {
+            T m → {
+                ? ( __chat_is m `system` ) {
+                    ( string_free sys )
+                    = sys ( string_from ( __chat_text m ) )
+                } {}
+            }
+            F → {}
+        }
+        = k + k 1
+    }
+    : ~ b first T
+    = k 0
+    ~ < k ( vec_len [ChatMsg] msgs ) {
+        ?? ( vec_get [ChatMsg] msgs k ) {
+            T m → {
+                ? ( __chat_is m `system` ) {} {
+                    : b usr ( __chat_is m `user` )
+                    ( string_push_str out `<start_of_turn>` )
+                    ( string_push_str out ? usr `user` `model` )
+                    ( string_push_char out 10 )
+                    ? & & usr first > ( string_len sys ) 0 {
+                        ( string_push_str out ( string_data sys ) )
+                        ( string_push_str out `\n\n` )
+                    } {}
+                    ? usr { = first F } {}
+                    ( string_push_str out ( __chat_text m ) )
+                    ( string_push_str out `<end_of_turn>\n` )
+                }
+            }
+            F → {}
+        }
+        = k + k 1
+    }
+    ( string_push_str out `<start_of_turn>model\n` )
+    ( string_free sys )
+    ^ out
+}
+
 // Base model: no invented turns — system + user text, blank-line
 // separated, which is what a completion model actually expects.
 @ __chat_plain ( Vec ChatMsg ) msgs → String {
@@ -177,6 +231,7 @@ $ `deps/gguf/src/gguf.nu`
     ? == style CHAT_LLAMA3 { ^ ( __chat_llama3 msgs ) } {}
     ? == style CHAT_CHATML { ^ ( __chat_chatml msgs ) } {}
     ? == style CHAT_LLAMA2 { ^ ( __chat_llama2 msgs ) } {}
+    ? == style CHAT_GEMMA { ^ ( __chat_gemma msgs ) } {}
     ^ ( __chat_plain msgs )
 }
 
@@ -187,5 +242,6 @@ $ `deps/gguf/src/gguf.nu`
     ? == style CHAT_CHATML { ^ ? >= ( nurl_str_find piece `<|im_end|>` ) 0 T F } {}
     ? == style CHAT_LLAMA3 { ^ ? >= ( nurl_str_find piece `<|eot_id|>` ) 0 T F } {}
     ? == style CHAT_LLAMA2 { ^ ? >= ( nurl_str_find piece `</s>` ) 0 T F } {}
+    ? == style CHAT_GEMMA { ^ ? >= ( nurl_str_find piece `<end_of_turn>` ) 0 T F } {}
     ^ F
 }

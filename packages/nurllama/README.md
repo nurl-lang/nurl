@@ -56,13 +56,27 @@ single aggregated object instead.
 
 ## What it runs
 
-**Architectures:** `llama` and `qwen2` — the two that share the llama
-shape (RMSNorm → GQA attention with rotary → SwiGLU). Each model's own
-metadata decides the details that actually change the output: qwen2's
-Q/K/V biases, its NEOX rotary layout (the two halves of a head rotate
-together, not adjacent pairs), and its BPE pre-tokenizer variant. Get
-those wrong and a model still runs while quietly producing nonsense —
-so nurllama reads them from the file rather than guessing.
+**Architectures:** `llama`, `qwen2` and `gemma3`. Each model's own
+metadata decides the details that actually change the output — get one
+wrong and the model still runs while quietly producing nonsense, so
+nurllama reads them from the file rather than guessing:
+
+* **llama** — RMSNorm → GQA attention with rotary → SwiGLU, rotating
+  adjacent pairs of each head (NORM).
+* **qwen2** — adds Q/K/V biases and rotates the two halves of a head
+  together (NEOX), with its own BPE pre-tokenizer variant.
+* **gemma3** — a different shape throughout: the embedding row is scaled
+  by `sqrt(n_embd)`, `head_dim` is stated outright rather than being
+  `n_embd / n_head` (gemma3-270m: 640/4 = 160, but head_dim is **256**),
+  Q and K are RMSNormed *per head* before the rotation, every block norms
+  its own output before the residual add, the FFN gate is GeGLU, and five
+  of every six layers attend only within a **512-token sliding window**
+  — those layers using their own, smaller RoPE base.
+
+A chat template writes its turn markers (`<start_of_turn>`,
+`<|im_start|>`, …) into the prompt as *text*; nurllama emits each as its
+own token id, as llama.cpp does. Tokenised as ordinary text they shred
+into a dozen pieces and the model answers a question you did not ask.
 
 **Quantisations:** F32, F16, BF16, Q4_0, Q4_1, Q5_0, Q5_1, Q8_0 and the
 K-quants **Q4_K / Q5_K / Q6_K** (the `Q4_K_M` files people actually

@@ -50,78 +50,50 @@ def read_gguf(path):
         tens[nm]=a.reshape(list(reversed(dims)))
     return kvs,tens
 
-kvs,tens=read_gguf(sys.argv[1])
-ids=[int(x) for x in sys.argv[2].split()]
-ARCH=kvs['general.architecture'].decode() if isinstance(kvs['general.architecture'],bytes) else kvs['general.architecture']
-K=lambda s: kvs[ARCH+'.'+s]
-KG=lambda s,d: kvs.get(ARCH+'.'+s,d)
-n_embd=K('embedding_length'); n_layer=K('block_count')
-n_head=K('attention.head_count'); n_kv=K('attention.head_count_kv')
-eps=K('attention.layer_norm_rms_epsilon')
-rope_dim=KG('rope.dimension_count', n_embd//n_head)
-base=KG('rope.freq_base',10000.0)
-NEOX = (ARCH=='qwen2')
-hd=n_embd//n_head
+# Script body under a main guard so the GGUF reader above can be imported
+# (gemma_ref.py reuses read_gguf; without the guard, importing it would run
+# a whole llama forward pass first).
+if __name__ == '__main__':
+    kvs,tens=read_gguf(sys.argv[1])
+    ids=[int(x) for x in sys.argv[2].split()]
+    ARCH=kvs['general.architecture'].decode() if isinstance(kvs['general.architecture'],bytes) else kvs['general.architecture']
+    K=lambda s: kvs[ARCH+'.'+s]
+    KG=lambda s,d: kvs.get(ARCH+'.'+s,d)
+    n_embd=K('embedding_length'); n_layer=K('block_count')
+    n_head=K('attention.head_count'); n_kv=K('attention.head_count_kv')
+    eps=K('attention.layer_norm_rms_epsilon')
+    rope_dim=KG('rope.dimension_count', n_embd//n_head)
+    base=KG('rope.freq_base',10000.0)
+    NEOX = (ARCH=='qwen2')
+    hd=n_embd//n_head
 
-f32=np.float32
-def rms(x,w):
-    x=x.astype(f32)
-    inv=f32(1.0)/np.sqrt(np.mean(x*x,dtype=f32)+f32(eps))
-    return (x*inv*w).astype(f32)
+    f32=np.float32
+    def rms(x,w):
+        x=x.astype(f32)
+        inv=f32(1.0)/np.sqrt(np.mean(x*x,dtype=f32)+f32(eps))
+        return (x*inv*w).astype(f32)
 
-def rope(v,nh,pos):
-    v=v.reshape(nh,hd).copy()
-    half=rope_dim//2
-    for j in range(half):
-        th=f32(pos)*f32(base)**f32(-2.0*j/rope_dim)
-        c,s=np.cos(th,dtype=f32),np.sin(th,dtype=f32)
-        if NEOX: i0,i1 = j, j+half
-        else:    i0,i1 = 2*j, 2*j+1
-        a,b=v[:,i0].copy(),v[:,i1].copy()
-        v[:,i0]=a*c-b*s; v[:,i1]=a*s+b*c
-    return v.reshape(nh*hd)
+    def rope(v,nh,pos):
+        v=v.reshape(nh,hd).copy()
+        half=rope_dim//2
+        for j in range(half):
+            th=f32(pos)*f32(base)**f32(-2.0*j/rope_dim)
+            c,s=np.cos(th,dtype=f32),np.sin(th,dtype=f32)
+            if NEOX: i0,i1 = j, j+half
+            else:    i0,i1 = 2*j, 2*j+1
+            a,b=v[:,i0].copy(),v[:,i1].copy()
+            v[:,i0]=a*c-b*s; v[:,i1]=a*s+b*c
+        return v.reshape(nh*hd)
 
-def bias(name):
-    t=tens.get(name)
-    return t.astype(f32).reshape(-1) if t is not None else 0.0
+    def bias(name):
+        t=tens.get(name)
+        return t.astype(f32).reshape(-1) if t is not None else 0.0
 
-K=[np.zeros((0,n_kv*hd),dtype=f32) for _ in range(n_layer)]
-V=[np.zeros((0,n_kv*hd),dtype=f32) for _ in range(n_layer)]
-logits=None
-for pos,tok in enumerate(ids):
-    x=tens['token_embd.weight'][tok].astype(f32)
-    for L in range(n_layer):
-        xn=rms(x,tens['blk.%d.attn_norm.weight'%L])
-        q=(tens['blk.%d.attn_q.weight'%L]@xn).astype(f32)+bias('blk.%d.attn_q.bias'%L)
-        k=(tens['blk.%d.attn_k.weight'%L]@xn).astype(f32)+bias('blk.%d.attn_k.bias'%L)
-        v=(tens['blk.%d.attn_v.weight'%L]@xn).astype(f32)+bias('blk.%d.attn_v.bias'%L)
-        q=rope(q,n_head,pos); k=rope(k,n_kv,pos)
-        K[L]=np.vstack([K[L],k]); V[L]=np.vstack([V[L],v])
-        out=np.zeros(n_embd,dtype=f32)
-        for h in range(n_head):
-            kh=h//(n_head//n_kv)
-            qh=q[h*hd:(h+1)*hd]
-            ks=K[L][:,kh*hd:(kh+1)*hd]
-            sc=(ks@qh)/np.sqrt(f32(hd))
-            sc=np.exp(sc-sc.max()); sc/=sc.sum()
-            out[h*hd:(h+1)*hd]=sc@V[L][:,kh*hd:(kh+1)*hd]
-        x=x+(tens['blk.%d.attn_output.weight'%L]@out).astype(f32)
-        xn=rms(x,tens['blk.%d.ffn_norm.weight'%L])
-        g=(tens['blk.%d.ffn_gate.weight'%L]@xn).astype(f32)
-        u=(tens['blk.%d.ffn_up.weight'%L]@xn).astype(f32)
-        g=(g/(1.0+np.exp(-g))*u).astype(f32)
-        x=x+(tens['blk.%d.ffn_down.weight'%L]@g).astype(f32)
-    xn=rms(x,tens['output_norm.weight'])
-    W=tens.get('output.weight',tens['token_embd.weight'])
-    logits=(W@xn).astype(f32)
-
-if len(sys.argv)>3 and sys.argv[3]=='greedy':
-    # continue greedily N tokens
-    n=int(sys.argv[4]); out=[]
-    pos=len(ids)
-    for _ in range(n):
-        t=int(np.argmax(logits)); out.append(t)
-        x=tens['token_embd.weight'][t].astype(f32)
+    K=[np.zeros((0,n_kv*hd),dtype=f32) for _ in range(n_layer)]
+    V=[np.zeros((0,n_kv*hd),dtype=f32) for _ in range(n_layer)]
+    logits=None
+    for pos,tok in enumerate(ids):
+        x=tens['token_embd.weight'][tok].astype(f32)
         for L in range(n_layer):
             xn=rms(x,tens['blk.%d.attn_norm.weight'%L])
             q=(tens['blk.%d.attn_q.weight'%L]@xn).astype(f32)+bias('blk.%d.attn_q.bias'%L)
@@ -129,23 +101,55 @@ if len(sys.argv)>3 and sys.argv[3]=='greedy':
             v=(tens['blk.%d.attn_v.weight'%L]@xn).astype(f32)+bias('blk.%d.attn_v.bias'%L)
             q=rope(q,n_head,pos); k=rope(k,n_kv,pos)
             K[L]=np.vstack([K[L],k]); V[L]=np.vstack([V[L],v])
-            o=np.zeros(n_embd,dtype=f32)
+            out=np.zeros(n_embd,dtype=f32)
             for h in range(n_head):
                 kh=h//(n_head//n_kv)
                 qh=q[h*hd:(h+1)*hd]
                 ks=K[L][:,kh*hd:(kh+1)*hd]
                 sc=(ks@qh)/np.sqrt(f32(hd))
                 sc=np.exp(sc-sc.max()); sc/=sc.sum()
-                o[h*hd:(h+1)*hd]=sc@V[L][:,kh*hd:(kh+1)*hd]
-            x=x+(tens['blk.%d.attn_output.weight'%L]@o).astype(f32)
+                out[h*hd:(h+1)*hd]=sc@V[L][:,kh*hd:(kh+1)*hd]
+            x=x+(tens['blk.%d.attn_output.weight'%L]@out).astype(f32)
             xn=rms(x,tens['blk.%d.ffn_norm.weight'%L])
             g=(tens['blk.%d.ffn_gate.weight'%L]@xn).astype(f32)
             u=(tens['blk.%d.ffn_up.weight'%L]@xn).astype(f32)
             g=(g/(1.0+np.exp(-g))*u).astype(f32)
             x=x+(tens['blk.%d.ffn_down.weight'%L]@g).astype(f32)
         xn=rms(x,tens['output_norm.weight'])
+        W=tens.get('output.weight',tens['token_embd.weight'])
         logits=(W@xn).astype(f32)
-        pos+=1
-    print(' '.join(map(str,out)))
-else:
-    for v in logits: print('%.6f'%v)
+
+    if len(sys.argv)>3 and sys.argv[3]=='greedy':
+        # continue greedily N tokens
+        n=int(sys.argv[4]); out=[]
+        pos=len(ids)
+        for _ in range(n):
+            t=int(np.argmax(logits)); out.append(t)
+            x=tens['token_embd.weight'][t].astype(f32)
+            for L in range(n_layer):
+                xn=rms(x,tens['blk.%d.attn_norm.weight'%L])
+                q=(tens['blk.%d.attn_q.weight'%L]@xn).astype(f32)+bias('blk.%d.attn_q.bias'%L)
+                k=(tens['blk.%d.attn_k.weight'%L]@xn).astype(f32)+bias('blk.%d.attn_k.bias'%L)
+                v=(tens['blk.%d.attn_v.weight'%L]@xn).astype(f32)+bias('blk.%d.attn_v.bias'%L)
+                q=rope(q,n_head,pos); k=rope(k,n_kv,pos)
+                K[L]=np.vstack([K[L],k]); V[L]=np.vstack([V[L],v])
+                o=np.zeros(n_embd,dtype=f32)
+                for h in range(n_head):
+                    kh=h//(n_head//n_kv)
+                    qh=q[h*hd:(h+1)*hd]
+                    ks=K[L][:,kh*hd:(kh+1)*hd]
+                    sc=(ks@qh)/np.sqrt(f32(hd))
+                    sc=np.exp(sc-sc.max()); sc/=sc.sum()
+                    o[h*hd:(h+1)*hd]=sc@V[L][:,kh*hd:(kh+1)*hd]
+                x=x+(tens['blk.%d.attn_output.weight'%L]@o).astype(f32)
+                xn=rms(x,tens['blk.%d.ffn_norm.weight'%L])
+                g=(tens['blk.%d.ffn_gate.weight'%L]@xn).astype(f32)
+                u=(tens['blk.%d.ffn_up.weight'%L]@xn).astype(f32)
+                g=(g/(1.0+np.exp(-g))*u).astype(f32)
+                x=x+(tens['blk.%d.ffn_down.weight'%L]@g).astype(f32)
+            xn=rms(x,tens['output_norm.weight'])
+            logits=(W@xn).astype(f32)
+            pos+=1
+        print(' '.join(map(str,out)))
+    else:
+        for v in logits: print('%.6f'%v)
