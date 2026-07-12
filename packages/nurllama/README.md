@@ -56,7 +56,7 @@ single aggregated object instead.
 
 ## What it runs
 
-**Architectures:** `llama`, `qwen2` and `gemma3`. Each model's own
+**Architectures:** `llama`, `qwen2`, `gemma3` and `phi3`. Each model's own
 metadata decides the details that actually change the output — get one
 wrong and the model still runs while quietly producing nonsense, so
 nurllama reads them from the file rather than guessing:
@@ -72,6 +72,13 @@ nurllama reads them from the file rather than guessing:
   its own output before the residual add, the FFN gate is GeGLU, and five
   of every six layers attend only within a **512-token sliding window**
   — those layers using their own, smaller RoPE base.
+
+* **phi3** — the llama shape, but Q/K/V arrive as **one** tensor
+  (`attn_qkv`) and the FFN gate and up as one (`ffn_up`). Nothing is
+  split apart: a weight here is a device pointer plus a row count, so the
+  parts are row *ranges* inside the uploaded tensor — and every range
+  lands on a block boundary, because a row is a whole number of
+  quantisation blocks.
 
 A chat template writes its turn markers (`<start_of_turn>`,
 `<|im_start|>`, …) into the prompt as *text*; nurllama emits each as its
