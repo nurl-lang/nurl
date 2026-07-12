@@ -13,6 +13,11 @@
 // encoders; gpu_launch lays them out as the void** array CUDA expects.
 
 $ `stdlib/core/vec.nu`
+$ `stdlib/std/bytes.nu`
+$ `stdlib/std/fs.nu`
+$ `stdlib/std/path.nu`
+$ `stdlib/std/hash.nu`
+$ `stdlib/ext/env.nu`
 $ `cuda.nu`
 $ `cpu.nu`
 
@@ -160,6 +165,93 @@ $ `cpu.nu`
 // Compile CUDA-C `src` at runtime (NVRTC) and load entry point `name`.
 // The kernel must be declared `extern "C" __global__`. Returns a
 // GpuKernel with func == 0 on a compile/load error (log on stderr).
+// ── Persistent kernel cache ─────────────────────────────────────────
+//
+// NVRTC (and the CPU backend's C++ compiler) turn a kernel source into
+// machine code on every process start — for a package with a dozen
+// kernels that is a second or two of pure latency before any real work
+// begins, paid again on every run. The compiled artefact depends only
+// on the source text and the target backend, so it is cached on disk,
+// keyed by the source's BLAKE3 hash:
+//
+//   $NURL_GPU_CACHE, else $XDG_CACHE_HOME/nurl-gpu, else ~/.cache/nurl-gpu
+//     cuda-<hash>.ptx       NVRTC output
+//     cpu-<hash>.so         host shared object
+//
+// The key is the hash of the SOURCE, so an edited kernel simply misses
+// and recompiles; a stale entry can never be served for changed code.
+// Set NURL_GPU_CACHE=off to disable (e.g. to time a cold compile).
+
+@ __gpu_cache_dir → String {
+    ?? ( env_get `NURL_GPU_CACHE` ) {
+        T v → { ^ v }
+        F → {}
+    }
+    ?? ( env_get `XDG_CACHE_HOME` ) {
+        T v → {
+            : String p ( path_join ( string_data v ) `nurl-gpu` )
+            ( string_free v )
+            ^ p
+        }
+        F → {}
+    }
+    : String home ( env_var_or `HOME` `.` )
+    : String c ( path_join ( string_data home ) `.cache` )
+    : String p ( path_join ( string_data c ) `nurl-gpu` )
+    ( string_free home )
+    ( string_free c )
+    ^ p
+}
+
+@ __gpu_cache_off → b {
+    ?? ( env_get `NURL_GPU_CACHE` ) {
+        T v → {
+            : b off ? ( nurl_str_eq ( string_data v ) `off` ) T F
+            ( string_free v )
+            ^ off
+        }
+        F → { ^ F }
+    }
+}
+
+// <dir>/<prefix>-<blake3(src)>.<ext>
+@ __gpu_cache_path s src s prefix s ext → String {
+    : String dir ( __gpu_cache_dir )
+    : ( Vec u ) sb ( bytes_from_str src )
+    : String hex ( blake3_hex sb )
+    ( vec_free [u] sb )
+    : String nm ( string_from prefix )
+    ( string_push_char nm 45 )
+    ( string_push_str nm ( string_data hex ) )
+    ( string_push_str nm ext )
+    ( string_free hex )
+    : String p ( path_join ( string_data dir ) ( string_data nm ) )
+    ( string_free dir )
+    ( string_free nm )
+    ^ p
+}
+
+// Atomic publish: write to <path>.<pid>.tmp, then rename. Concurrent
+// builders of the same kernel converge on identical bytes, so whoever
+// wins the rename is right.
+@ __gpu_cache_store s path ( Vec u ) data → v {
+    : String dir ( __gpu_cache_dir )
+    : !v IoErr _mk ( dir_create_all ( string_data dir ) )
+    ( string_free dir )
+    : String tmp ( string_from path )
+    ( string_push_char tmp 46 )
+    ( string_push_int tmp ( getpid ) )
+    ( string_push_str tmp `.tmp` )
+    : !v IoErr wr ( write_file_bytes ( string_data tmp ) data )
+    ?? wr {
+        T _ → {
+            : !v IoErr _mv ( fs_rename ( string_data tmp ) path )
+        }
+        F _ → { ( file_delete ( string_data tmp ) ) }
+    }
+    ( string_free tmp )
+}
+
 @ gpu_compile Gpu g s src s name → GpuKernel {
     ? == __gpu_backend 3 {
         : i pid ( wgpu_pipeline name )
@@ -184,10 +276,42 @@ $ `cpu.nu`
         ? == fn 0 { ( cpu_module_free h ) ^ @ GpuKernel { 0 0 } } {}
         ^ @ GpuKernel { # i h fn }
     } {}
-    : *u ptx ( cuda_compile src name )
-    ? == # i ptx 0 { ^ @ GpuKernel { 0 0 } } {}
-    : i mod ( cuda_module_load ptx )
-    ( nurl_free ptx )  // the module keeps its own copy of the PTX
+    // CUDA: serve the PTX from the on-disk cache when the source hash
+    // matches, so a process start costs a file read instead of an NVRTC
+    // compile (a dozen kernels is a second or two of pure latency).
+    : ~ b cached F
+    : ~ i mod 0
+    ? ( __gpu_cache_off ) {} {
+        : String cp ( __gpu_cache_path src `cuda` `.ptx` )
+        ?? ( read_file_bytes ( string_data cp ) ) {
+            T ptxb → {
+                // read_file_bytes gives exactly the stored bytes; the
+                // NUL terminator was stored with them
+                = mod ( cuda_module_load ( vec_data [u] ptxb ) )
+                ( vec_free [u] ptxb )
+                ? != mod 0 { = cached T } {}
+            }
+            F _ → {}
+        }
+        ( string_free cp )
+    }
+    ? cached {} {
+        : *u ptx ( cuda_compile src name )
+        ? == # i ptx 0 { ^ @ GpuKernel { 0 0 } } {}
+        ? ( __gpu_cache_off ) {} {
+            // store the PTX text INCLUDING its NUL, so a cache hit can
+            // hand the bytes straight to cuModuleLoadData
+            : i plen + ( nurl_str_len # s ptx ) 1
+            : ( Vec u ) pb ( vec_with_cap [u] plen )
+            ( bytes_extend_raw pb # s ptx plen )
+            : String cp2 ( __gpu_cache_path src `cuda` `.ptx` )
+            ( __gpu_cache_store ( string_data cp2 ) pb )
+            ( string_free cp2 )
+            ( vec_free [u] pb )
+        }
+        = mod ( cuda_module_load ptx )
+        ( nurl_free ptx )  // the module keeps its own copy of the PTX
+    }
     ? == mod 0 { ^ @ GpuKernel { 0 0 } } {}
     : i fn ( cuda_function mod name )
     ^ @ GpuKernel { mod fn }

@@ -1,58 +1,58 @@
-# gguf — bulletproof GGUF container toolkit in pure NURL
+# gguf
 
-GGUF is the ggml-ecosystem tensor container: the file format of
-llama.cpp, whisper.cpp and stable-diffusion.cpp models. This package
-reads it, proves it, writes it and dequantises it — with no
-dependency beyond the NURL stdlib.
+Read, verify, write and dequantise **GGUF** — the tensor container behind
+llama.cpp, whisper.cpp and stable-diffusion.cpp. Pure NURL, no
+dependencies beyond the stdlib.
 
-```
-gguf info  model.gguf                 # GGUF v3 — 20 kv, 57 tensors, align 32, arch llama
-gguf dump  model.gguf                 # every metadata key/value + the tensor table
-gguf kv    model.gguf llama.context_length
-gguf tensors model.gguf
-gguf verify model.gguf                # deep structural proof (bounds, alignment, overlap)
-gguf export model.gguf blk.0.attn_q.weight -o q.f32   # dequantised f32-LE
-gguf gen   sample.gguf                # write the reference sample file
-gguf selftest                         # write → parse → compare, bit-exact
+```sh
+nurlpkg install gguf
 ```
 
-## The point: hostile-input parsing
+## Command line
 
-A model file is a download — treat it as an attack. The parser
-validates **every count, length and offset against the actual file
-size before any allocation or read depends on it**, and allocations
-are proportional to bytes actually consumed from the file, never to
-what a header merely claims. A 24-byte file claiming 2⁶³ tensors
-fails in microseconds; a truncated vocab array, a NUL-smuggling key,
-a nested array, a duplicate key or tensor name, an unaligned or
-out-of-bounds tensor, a dimension product that would overflow —
-each is a clean `gguf:` error, never a crash, a hang or a wrong
-answer. `tests/gguf_test.sh` proves this with a corruption battery
-(truncations at every structural boundary, hostile counts, absurd
-lengths) plus attack files crafted independently in python.
+```sh
+$ gguf info model.gguf
+GGUF v3 — 29 kv, 272 tensors, align 32, data 103668480 B, arch llama, name SmolLM
 
-## Lazy by design
+$ gguf tensors model.gguf | head -3
+token_embd.weight             Q8_0 [576 49152] 30081024 B @ 0
+blk.0.attn_norm.weight        F32  [576]           2304 B @ 30081024
+blk.0.ffn_down.weight         Q6_K [1536 576]   725760 B @ 30083328
 
-`gguf_open` mmaps the file and parses only metadata and the tensor
-table; tensor bytes are addressed straight out of the mapping
-(`gguf_tensor_ptr`) and uploaded/decoded tensor by tensor. Inspecting
-a multi-gigabyte model costs no RAM. Platforms without mmap (wasm,
-win32) fall back to a whole-file buffer transparently.
+$ gguf kv model.gguf llama.context_length
+llama.context_length = u32 2048
 
-## Library API
+$ gguf verify model.gguf
+OK — GGUF v3, 29 kv, 272 tensors, all offsets aligned, in-bounds and disjoint
+
+$ gguf export model.gguf blk.0.attn_q.weight -o q.f32   # dequantised f32
+wrote 331776 bytes of f32-LE
+```
+
+`gguf dump` prints the header, every metadata key and the tensor table.
+`gguf gen sample.gguf` writes a reference file; `gguf selftest` proves
+the round-trip.
+
+## Library
 
 ```nurl
-$ `gguf.nu`      // parser + accessors
-$ `dequant.nu`   // host-side scalar dequantisation
-$ `write.nu`     // GGUF v3 writer/builder
+$ `deps/gguf/src/gguf.nu`
+$ `deps/gguf/src/dequant.nu`
 
-: !*Gguf String r ( gguf_open `model.gguf` )
-?? r {
+?? ( gguf_open `model.gguf` ) {
     T g → {
-        : i n_layers ( gguf_kv_int_or g `llama.block_count` 0 )
+        : i layers ( gguf_kv_int_or g `llama.block_count` 0 )
         : s arch ( gguf_kv_str_or g `general.architecture` `?` )   // borrowed
+
         : i ti ( gguf_find_tensor g `token_embd.weight` )
-        : !( Vec u ) String w ( gguf_dequant g ti )   // f32-LE, upload-ready
+        // one row of a huge table — no full expansion
+        ?? ( gguf_dequant_range g ti * token 576 576 ) {
+            T row → {
+                // 576 little-endian f32s, ready to upload
+                ( vec_free [u] row )
+            }
+            F e → { ( string_free e ) }
+        }
         ( gguf_close g )
     }
     F e → {
@@ -62,36 +62,54 @@ $ `write.nu`     // GGUF v3 writer/builder
 }
 ```
 
-- **Versions**: GGUF v2 and v3 (v1's legacy 32-bit layout is rejected
-  with a clear message).
-- **Metadata**: all 13 value types, including arrays of
-  ints/floats/strings (tokeniser vocabularies).
-- **Tensor types**: every current ggml id is named and sized
-  (F32/F16/BF16/F64, Q4_0/Q4_1/Q5_0/Q5_1/Q8_0/Q8_1, all K-quants,
-  IQ4_NL, I8–I64); unknown ids are still listed — the parser degrades
-  loudly, not wrongly.
-- **Dequantisation** (`gguf_dequant` → little-endian f32, one element
-  per value in storage order): F32, F64, F16, BF16, Q4_0, Q4_1, Q5_0,
-  Q5_1, Q8_0, and the K-quants **Q4_K / Q5_K / Q6_K** — every format a
-  modern llama.cpp model actually ships in (a `Q4_K_M` file mixes Q4_K
-  and Q6_K).
-  F16 conversion is a pure bit transport (subnormals, ±inf, NaN and
-  −0 preserved exactly). This is the CPU decode path *and* the golden
-  oracle for GPU dequant kernels — every format verified **bit-identical**
-  against an independent python decoder reading the same real-model
-  bytes (`tests/kquant_ref.py`).
-- **Writer** (`gw_new` / `gw_kv_*` / `gw_tensor` / `gw_finish`): emits
-  spec-exact v3 images, validates shapes against payload sizes with
-  the same rules the parser enforces, and round-trips bit-for-bit
-  (`gguf selftest`, 37 checks).
+| | |
+|---|---|
+| `gguf_open path` → `!*Gguf String` | mmap + parse (metadata and the tensor table only) |
+| `gguf_parse_bytes v` | the same, from a buffer you own |
+| `gguf_kv_int_or` / `_f_or` / `_str_or` | metadata with a default |
+| `gguf_find_tensor` / `gguf_tensor_ptr` | locate a tensor; borrow its bytes in place |
+| `gguf_dequant g i` | whole tensor → little-endian f32 |
+| `gguf_dequant_range g i first count` | a block-aligned slice — one row of a 4 GB table |
+| `gw_new` / `gw_kv_*` / `gw_tensor` / `gw_write` | build and emit a spec-exact GGUF v3 file |
 
-## Testing
+**Formats.** Metadata: all 13 value types, arrays included (tokenizer
+vocabularies). Tensors: every current ggml id is named and sized, and
+dequantisation covers F32, F64, F16, BF16, Q4_0, Q4_1, Q5_0, Q5_1,
+Q8_0 and the K-quants **Q4_K / Q5_K / Q6_K** — every format a modern
+model actually ships in (a `Q4_K_M` file mixes Q4_K and Q6_K). An
+unknown type is still listed and verified; it simply cannot be
+dequantised, and says so.
 
+## Two things worth knowing
+
+**It never trusts the file.** A model is a download. Every count,
+length and offset is checked against the real file size *before*
+anything is allocated or read, and allocations are proportional to
+bytes actually consumed — not to what a header claims. A 24-byte file
+declaring 2⁶³ tensors fails in microseconds. Truncations, NUL-smuggling
+keys, nested arrays, duplicate names, unaligned or overlapping tensors:
+each is a clean `gguf:` error, never a crash, a hang or a wrong answer.
+
+**It is lazy.** `gguf_open` mmaps the file and parses only metadata and
+the tensor table; tensor bytes are addressed in place. Inspecting — or
+streaming one row at a time out of — a multi-gigabyte model costs no
+RAM. (Platforms without mmap fall back to a whole-file buffer
+transparently.)
+
+## Correctness
+
+Dequantisation is verified **bit-identical** against an independent
+Python decoder reading the same bytes of real llama.cpp models
+(`tests/kquant_ref.py`); the writer round-trips through the parser
+bit-for-bit (`gguf selftest`, 37 checks); and the hostile-input claims
+above are proven by a corruption battery plus attack files crafted
+independently in Python. 55 checks, ASan/UBSan/LeakSanitizer-clean:
+
+```sh
+./tests/gguf_test.sh                    # offline
+NURL_NET_TESTS=1 ./tests/gguf_test.sh   # + real models from HuggingFace
 ```
-./tests/gguf_test.sh                  # 48 checks, no network needed
-NURL_NET_TESTS=1 ./tests/gguf_test.sh # + parses a real llama.cpp model from HF
-```
 
-The suite was developed under ASan/UBSan + LeakSanitizer
-(`NURL_SAN=1 nurl.sh …`): zero leaks, zero UB on every path including
-the corruption battery.
+## License
+
+MIT OR Apache-2.0

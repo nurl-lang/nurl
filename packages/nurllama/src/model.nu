@@ -54,6 +54,8 @@ $ `src/tokenizer.nu`
     i rope_dim
     f eps
     f rope_base
+    i gg
+    i embd_idx
     ( Vec u ) embd_host
     ( Vec i ) wdptr
     ( Vec i ) wbytes
@@ -287,23 +289,14 @@ $ `src/tokenizer.nu`
     = . m kcache ( vec_new [i] )
     = . m vcache ( vec_new [i] )
 
-    // embeddings stay host-side: one row uploads per token
+    // Embeddings are NOT expanded: the model keeps its GGUF mapping
+    // open and dequantises exactly the token's row (n_embd values) per
+    // decode step. For a 32k-vocab Q4_K table that is ~150 MB of host
+    // RAM and a second of startup saved, for a few microseconds a step.
     : ~ b ok T
     = . m embd_host ( vec_new [u] )
-    : i ei ( gguf_find_tensor gg `token_embd.weight` )
-    ? < ei 0 { = ok F } {
-        : !( Vec u ) String er ( gguf_dequant gg ei )
-        ?? er {
-            T raw → {
-                ( vec_free [u] . m embd_host )
-                = . m embd_host raw
-            }
-            F e → {
-                ( string_free e )
-                = ok F
-            }
-        }
-    }
+    = . m embd_idx ( gguf_find_tensor gg `token_embd.weight` )
+    ? < . m embd_idx 0 { = ok F } {}
 
     // weights
     = . m out_norm ( __lm_upload m gg `output_norm.weight` )
@@ -329,7 +322,10 @@ $ `src/tokenizer.nu`
         ? ( __lm_upload_layer m gg L `ffn_up.weight` . m w_up . m tq_up ) {} { = ok F }
         = L + L 1
     }
-    ( gguf_close gg )
+    // The mapping stays open for the model's lifetime — the embedding
+    // rows are dequantised straight out of it per step (see llm_eval).
+    // llm_close unmaps.
+    = . m gg # i gg
     ? ok {} {
         ( llm_close m )
         ^ ( __lm_err `nurllama: model is missing required llama tensors (or dequant failed)` )
@@ -404,6 +400,7 @@ $ `src/tokenizer.nu`
     ( vec_free [i] . m kcache )
     ( vec_free [i] . m vcache )
     ( vec_free [u] . m embd_host )
+    ? != . m gg 0 { ( gguf_close # *Gguf . m gg ) } {}
     ( gpu_host_free . m logits_host )
     ( lk_free . m ks )
     ( tok_free . m tok )
@@ -429,9 +426,16 @@ $ `src/tokenizer.nu`
     : i nkv . m n_kv
     : i kvdim * nkv hd
 
-    // x ← embedding row (host → device)
+    // x ← the token's embedding row, dequantised on demand out of the
+    // still-open GGUF mapping (no full-table expansion)
     : GpuBuffer xb @ GpuBuffer { . m xd * ne 4 }
-    : i _u1 ( gpu_upload xb # *u + # i ( vec_data [u] . m embd_host ) * * token ne 4 )
+    ?? ( gguf_dequant_range # *Gguf . m gg . m embd_idx * token ne ne ) {
+        T row → {
+            : i _u1 ( gpu_upload xb ( vec_data [u] row ) )
+            ( vec_free [u] row )
+        }
+        F e → { ( string_free e ) }
+    }
 
     : ~ i L 0
     ~ < L . m n_layer {
