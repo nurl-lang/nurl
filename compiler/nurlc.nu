@@ -6653,6 +6653,12 @@
     // the analyze walk scope them unambiguously.
     ( bck_record `match` `` bck_mline )
 
+    // Dangling-borrow tracking: `??` arms are alternatives, exactly like the
+    // two arms of a `?` — a `( vec_push … v )` in one arm must not make a
+    // pointer stale in the others. Each arm starts from the pre-match state;
+    // the arms that FALL THROUGH are unioned into the state after the match.
+    : s __ptr_dead_pre_m ( nurl_str_cat ( __ptr_dead_snapshot ) `` )
+    : ~ s __ptr_dead_acc_m ( nurl_str_cat __ptr_dead_pre_m `` )
     // Process all match arms
     ~ != ( nurl_lex_type lex ) TT_RBRACE {
         : i pat_tt ( nurl_lex_type lex )
@@ -7485,6 +7491,9 @@
             } {}
 
             = g_did_ret 0
+            // Dangling-borrow tracking: this arm starts from the pre-match
+            // staleness, not from whatever a previous arm invalidated.
+            ( __ptr_dead_restore __ptr_dead_pre_m )
             // Borrow checker (Phase 0c): a `??` arm `{` is a forward
             // join. A bare (block-less) arm leaves this armed; the
             // next arm re-arms it, and the post-loop disarm clears a
@@ -7507,6 +7516,12 @@
             : i arm_did_ret g_did_ret
             = arms_total + arms_total 1
             ? != 0 arm_did_ret { = arms_ret + arms_ret 1 } {}
+            // Dangling-borrow tracking: an arm that returns never reaches the
+            // merge label, so only falling-through arms join.
+            ? == arm_did_ret 0 {
+                ( __ptr_dead_union __ptr_dead_acc_m ( __ptr_dead_snapshot ) )
+                = __ptr_dead_acc_m ( nurl_str_cat ( __ptr_dead_snapshot ) `` )
+            } {}
 
             // Phase 2D arm-local fall-through drop — only safe when the arm
             // type is void (an arm-local heap object may back a value flowing
@@ -7572,6 +7587,9 @@
 
     ( expect lex TT_RBRACE )  // expect '}'
 
+    // Dangling-borrow tracking: the state after the match is the union over
+    // the arms that reach the merge label.
+    ( __ptr_dead_restore __ptr_dead_acc_m )
     // Borrow checker: disarm — a trailing block-less arm would
     // otherwise leak `match-arm` onto the next sibling block (Phase
     // 0c) — then close the match with its `endmatch` marker (0d).

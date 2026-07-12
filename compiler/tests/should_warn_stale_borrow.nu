@@ -43,5 +43,16 @@ $ `stdlib/std/bytes.nu`
     ? > ( vec_len [u] c ) 0 { ( vec_push [u] c # u 4 ) } {}
     ( nurl_print ( nurl_str_int # i . cp 0 ) ) ( nurl_print `\n` )  // warns
     ( vec_free [u] c )
+
+    // …and the same join through a `??`: the T-arm grows and falls through.
+    : ( Vec u ) e ( vec_with_cap [u] 4 )
+    ( vec_push [u] e # u 5 )
+    : *u ep ( vec_data [u] e )
+    ?? ( vec_get [u] e 0 ) {
+        T q → { ( vec_push [u] e q ) }
+        F _ → {}
+    }
+    ( nurl_print ( nurl_str_int # i . ep 0 ) ) ( nurl_print `\n` )  // warns
+    ( vec_free [u] e )
     ^ 0
 }

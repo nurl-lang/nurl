@@ -4,3 +4,4 @@ EXIT 0
 OUTPUT
 7
 7
+7

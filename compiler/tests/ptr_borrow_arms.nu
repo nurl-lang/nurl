@@ -27,11 +27,24 @@ $ `stdlib/core/string.nu`
     ^ # i . p 0
 }
 
+@ opt i k → ?i { ? > k 0 { ^ @ ?i { T k } } {} ^ @ ?i { F } }
+
+// 3. `??` arms are alternatives too: the grow in the T-arm must not make
+//    `p` stale in the F-arm.
+@ viamatch i k ( Vec u ) v → i {
+    : *u p ( vec_data [u] v )
+    ?? ( opt k ) {
+        T n → { ( vec_push [u] v # u 1 ) ^ -1 }
+        F _ → { ^ # i . p 0 }
+    }
+}
+
 @ main → i {
     : ( Vec u ) a ( vec_with_cap [u] 4 )
     ( vec_push [u] a # u 7 )
     ( nurl_print ( nurl_str_int ( pick F a ) ) ) ( nurl_print `\n` )
     ( nurl_print ( nurl_str_int ( early a ) ) ) ( nurl_print `\n` )
+    ( nurl_print ( nurl_str_int ( viamatch 0 a ) ) ) ( nurl_print `\n` )
     ( vec_free [u] a )
     ^ 0
 }
