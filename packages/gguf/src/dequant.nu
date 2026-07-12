@@ -27,25 +27,11 @@ $ `stdlib/std/bytes.nu`
 $ `stdlib/std/floatbits.nu`
 $ `gguf.nu`
 
-// IEEE-754 binary16 → binary32, pure integer bit transport: sign
-// copied, exponent rebased 15 → 127, mantissa widened 10 → 23 bits.
-// Subnormals are normalised; ±inf and NaN map to their f32 forms.
+// IEEE-754 binary16 → binary32 — the stdlib bit-transport primitive
+// (stdlib/std/floatbits.nu), kept under the historical gg_ name for
+// the package's public dequant API.
 @ gg_f16_to_f32_bits i h → i {
-    : i sign << & >> h 15 1 31
-    : i e & >> h 10 31
-    : ~ i man & h 1023
-    ? == e 0 {
-        ? == man 0 { ^ sign } {}
-        : ~ i ex 113
-        ~ == & man 1024 0 {
-            = man << man 1
-            = ex - ex 1
-        }
-        = man & man 1023
-        ^ | sign | << ex 23 << man 13
-    } {}
-    ? == e 31 { ^ | sign | 2139095040 << man 13 } {}
-    ^ | sign | << + e 112 23 << man 13
+    ^ ( f16_bits_to_f32_bits h )
 }
 
 @ gg_f16_to_f i h → f {

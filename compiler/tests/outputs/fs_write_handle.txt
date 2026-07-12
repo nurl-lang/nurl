@@ -1,0 +1,12 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+PASS create + chunks + tell
+PASS append
+PASS binary round-trip (29 B, NUL kept)
+PASS seek END reports size
+PASS read_at mid-file
+PASS seek CUR
+PASS tail after seek
+PASS create on a directory rejects

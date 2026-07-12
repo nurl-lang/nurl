@@ -1,0 +1,10 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+PASS f16 → f32: 0 / 1.0 / -2.0 / subnormals / ±inf / -0
+PASS bf16 → f32: 1.0
+PASS f32 → f16 RNE: max/overflow/subnormal/ties-to-even
+PASS f32 → bf16 RNE: exact + ties-to-even
+PASS f16 → f32 → f16 identity over all 65536 patterns
+PASS bf16 → f32 → bf16 identity over all 65536 patterns

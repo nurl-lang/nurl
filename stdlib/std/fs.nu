@@ -726,6 +726,104 @@ $ `stdlib/core/posix.nu`  // open / lseek / mmap / munmap + posix_const
     ? != 0 # i hp { ( nurl_file_close # *v hp ) } {}
 }
 
+// ── Handle-based streaming writes + seeking ─────────────────────────
+//
+// The write-side dual of file_open/file_read_chunk: create (or append
+// to) a file and emit it in pieces, so an output far larger than RAM —
+// a model download, a log, an export — is written without ever being
+// fully resident. The same File handle then seeks and tells, which is
+// what a resumed download (HTTP Range) or a random-access reader needs.
+//
+//   ( file_create path )          → !File IoErr    "wb": truncate + write
+//   ( file_append path )          → !File IoErr    "ab": append
+//   ( file_write_chunk f v )      → !v IoErr       binary-safe, all-or-error
+//   ( file_flush f )              → !v IoErr       push libc buffers to the OS
+//   ( file_seek f off whence )    → !i IoErr       → new absolute offset
+//   ( file_tell f )               → !i IoErr
+//   ( file_read_at f off n )      → !( Vec u ) IoErr   seek SET + read
+//
+// Whence values (universal POSIX): FS_SEEK_SET / FS_SEEK_CUR / FS_SEEK_END.
+// Handles from file_open seek too — mixed read/write handles are not
+// offered (libc requires an intervening seek between r/w on "r+" streams;
+// open one handle per direction instead).
+
+: i FS_SEEK_SET 0
+: i FS_SEEK_CUR 1
+: i FS_SEEK_END 2
+
+& `c` @ fflush s h → i32
+
+@ __file_open_mode s path s mode → !File IoErr {
+    : *v h ( nurl_file_open path mode )
+    ? == 0 # i h {
+        ^ @ !File IoErr { F ( __io_err_of_kind ( errno_kind ) ) }
+    } {}
+    : s rawp # s h
+    ^ @ !File IoErr { T @ File { rawp } }
+}
+
+// Create (truncate) `path` for writing. Binary mode — see the CRLF
+// rationale on __write_file_pure.
+@ file_create s path → !File IoErr {
+    ^ ( __file_open_mode path `wb` )
+}
+
+// Open `path` for appending; created if absent. Every write lands at
+// the end regardless of seeks (POSIX "a" semantics).
+@ file_append s path → !File IoErr {
+    ^ ( __file_open_mode path `ab` )
+}
+
+// Write the whole Vec (binary-safe: NULs included). A short write is
+// an error, never silent truncation.
+@ file_write_chunk File f ( Vec u ) data → !v IoErr {
+    : s hp . f raw
+    ? == 0 # i hp { ^ @ !v IoErr { F @ IoErr { Other } } } {}
+    : i n ( vec_len [u] data )
+    ? <= n 0 { ^ @ !v IoErr { T 0 } } {}
+    : i wrote ( fwrite # s ( vec_data [u] data ) 1 n hp )
+    ? == wrote n { ^ @ !v IoErr { T 0 } } {}
+    ^ @ !v IoErr { F ( __io_err_of_kind ( errno_kind ) ) }
+}
+
+@ file_flush File f → !v IoErr {
+    : s hp . f raw
+    ? == 0 # i hp { ^ @ !v IoErr { F @ IoErr { Other } } } {}
+    ? == 0 # i ( fflush hp ) { ^ @ !v IoErr { T 0 } } {}
+    ^ @ !v IoErr { F ( __io_err_of_kind ( errno_kind ) ) }
+}
+
+// Seek to `off` relative to `whence`; returns the new ABSOLUTE offset
+// (so `( file_seek f 0 FS_SEEK_END )` doubles as "how big is this").
+@ file_seek File f i off i whence → !i IoErr {
+    : s hp . f raw
+    ? == 0 # i hp { ^ @ !i IoErr { F @ IoErr { Other } } } {}
+    ? == 0 # i ( fseek hp off # i32 whence ) {} {
+        ^ @ !i IoErr { F ( __io_err_of_kind ( errno_kind ) ) }
+    }
+    : i posn ( ftell hp )
+    ? >= posn 0 { ^ @ !i IoErr { T posn } } {}
+    ^ @ !i IoErr { F ( __io_err_of_kind ( errno_kind ) ) }
+}
+
+@ file_tell File f → !i IoErr {
+    : s hp . f raw
+    ? == 0 # i hp { ^ @ !i IoErr { F @ IoErr { Other } } } {}
+    : i posn ( ftell hp )
+    ? >= posn 0 { ^ @ !i IoErr { T posn } } {}
+    ^ @ !i IoErr { F ( __io_err_of_kind ( errno_kind ) ) }
+}
+
+// Random-access read: up to `n` bytes at absolute offset `off`.
+@ file_read_at File f i off i n → !( Vec u ) IoErr {
+    : !i IoErr sr ( file_seek f off FS_SEEK_SET )
+    ?? sr {
+        T _ → {}
+        F e → { ^ @ !( Vec u ) IoErr { F e } }
+    }
+    ^ ( file_read_chunk f n )
+}
+
 // ── Rename / copy / tempfile (B6) ──────────────────────────────────
 
 // libc rename(2): atomically move/rename within a filesystem (cross-

@@ -170,36 +170,77 @@ $ `stdlib/std/bytes.nu`
 
 // ── Public entry — bytes-in, 32-byte digest out.
 
-@ sha256_pure ( Vec u ) data → ( Vec u ) {
-    : ( Vec u32 ) K ( __sha256_K )
+// ── Incremental (streaming) hashing ────────────────────────────────
+//
+// Hash gigabytes without holding them: feed pieces as they arrive
+// (file_read_chunk, an HTTP stream) and finalize once. The one-shot
+// sha256_pure below is a thin init/update/final composition, so the
+// two paths cannot drift.
+//
+//   ( sha256_init )          → *Sha256
+//   ( sha256_update h v )    → v          any piece size, any count
+//   ( sha256_final h )       → ( Vec u )  32-byte digest; FREES h —
+//                                          the handle is dead after this
 
-    : ( Vec u32 ) state ( vec_with_cap [u32] 8 )
-    ( vec_push [u32] state # u32 1779033703 )
-    ( vec_push [u32] state # u32 3144134277 )
-    ( vec_push [u32] state # u32 1013904242 )
-    ( vec_push [u32] state # u32 2773480762 )
-    ( vec_push [u32] state # u32 1359893119 )
-    ( vec_push [u32] state # u32 2600822924 )
-    ( vec_push [u32] state # u32 528734635 )
-    ( vec_push [u32] state # u32 1541459225 )
+: Sha256 {
+    ( Vec u32 ) state
+    ( Vec u ) buf
+    i total
+    ( Vec u32 ) k
+}
 
+@ sha256_init → *Sha256 {
+    : *Sha256 h # *Sha256 ( nurl_alloc Z Sha256 )
+    : ( Vec u32 ) st ( vec_with_cap [u32] 8 )
+    ( vec_push [u32] st # u32 1779033703 )
+    ( vec_push [u32] st # u32 3144134277 )
+    ( vec_push [u32] st # u32 1013904242 )
+    ( vec_push [u32] st # u32 2773480762 )
+    ( vec_push [u32] st # u32 1359893119 )
+    ( vec_push [u32] st # u32 2600822924 )
+    ( vec_push [u32] st # u32 528734635 )
+    ( vec_push [u32] st # u32 1541459225 )
+    = . h state st
+    = . h buf ( vec_new [u] )
+    = . h total 0
+    = . h k ( __sha256_K )
+    ^ h
+}
+
+@ sha256_update * Sha256 h ( Vec u ) data → v {
     : i n ( vec_len [u] data )
-
+    ? <= n 0 { ^ v } {}
+    = . h total + . h total n
     : ~ i off 0
+    // top up a partial block first
+    : i have ( vec_len [u] . h buf )
+    ? > have 0 {
+        : i need - 64 have
+        : i take ? < n need n need
+        ( bytes_extend_raw . h buf # s ( vec_data [u] data ) take )
+        = off take
+        ? == ( vec_len [u] . h buf ) 64 {
+            ( __sha256_transform . h state . h buf 0 . h k )
+            ( vec_clear [u] . h buf )
+        } {}
+    } {}
+    // full blocks straight from the caller's data — no copy
     ~ <= + off 64 n {
-        ( __sha256_transform state data off K )
+        ( __sha256_transform . h state data off . h k )
         = off + off 64
     }
+    // stash the tail
+    ? < off n {
+        ( bytes_extend_raw . h buf # s + # i ( vec_data [u] data ) off - n off )
+    } {}
+}
 
-    : ( Vec u ) tail ( vec_with_cap [u] 128 )
-    : ~ i ti off
-    ~ < ti n {
-        : i bv ( __sha256_vu8 data ti )
-        ( vec_push [u] tail # u & bv 255 )
-        = ti + ti 1
-    }
+// Digest and DESTROY: pads, runs the final block(s), serialises the
+// state big-endian, and frees every part of the handle.
+@ sha256_final * Sha256 h → ( Vec u ) {
+    : ( Vec u ) tail . h buf
     ( vec_push [u] tail # u 128 )
-    : i leftover - n off
+    : i leftover % . h total 64
     : i after_one + leftover 1
     : i need_zeros ? <= after_one 56 - 56 after_one - 120 after_one
     : ~ i zi 0
@@ -207,7 +248,7 @@ $ `stdlib/std/bytes.nu`
         ( vec_push [u] tail # u 0 )
         = zi + zi 1
     }
-    : i bitlen * n 8
+    : i bitlen * . h total 8
     ( vec_push [u] tail # u & >> bitlen 56 255 )
     ( vec_push [u] tail # u & >> bitlen 48 255 )
     ( vec_push [u] tail # u & >> bitlen 40 255 )
@@ -216,19 +257,17 @@ $ `stdlib/std/bytes.nu`
     ( vec_push [u] tail # u & >> bitlen 16 255 )
     ( vec_push [u] tail # u & >> bitlen 8 255 )
     ( vec_push [u] tail # u & bitlen 255 )
-
     : i tail_len ( vec_len [u] tail )
     : ~ i toff 0
     ~ < toff tail_len {
-        ( __sha256_transform state tail toff K )
+        ( __sha256_transform . h state tail toff . h k )
         = toff + toff 64
     }
-    ( vec_free [u] tail )
 
     : ( Vec u ) out ( vec_with_cap [u] 32 )
     : ~ i si 0
     ~ < si 8 {
-        : u32 sv ( __sha256_vu32 state si )
+        : u32 sv ( __sha256_vu32 . h state si )
         : i siv # i sv
         ( vec_push [u] out # u & >> siv 24 255 )
         ( vec_push [u] out # u & >> siv 16 255 )
@@ -236,10 +275,18 @@ $ `stdlib/std/bytes.nu`
         ( vec_push [u] out # u & siv 255 )
         = si + si 1
     }
-
-    ( vec_free [u32] state )
-    ( vec_free [u32] K )
+    ( vec_free [u] tail )
+    ( vec_free [u32] . h state )
+    ( vec_free [u32] . h k )
+    ( nurl_free # s h )
     ^ out
+}
+
+// One-shot over the streaming core.
+@ sha256_pure ( Vec u ) data → ( Vec u ) {
+    : *Sha256 h ( sha256_init )
+    ( sha256_update h data )
+    ^ ( sha256_final h )
 }
 
 // ── HMAC-SHA-256 (RFC 2104; block size B = 64 bytes for SHA-256). ──

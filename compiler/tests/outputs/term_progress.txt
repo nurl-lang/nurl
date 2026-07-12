@@ -1,0 +1,11 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+PASS term_width honours $COLUMNS off-tty
+PASS term_height honours $LINES off-tty
+PASS unparseable $COLUMNS falls back to 80
+PASS progress_human: B/KB/MB/GB with one decimal
+PASS progress counters advance
+PASS non-tty detected (renders suppressed)
+done

@@ -675,6 +675,7 @@ const char* nurl_read_file(const char *path) {
 #  include <sys/mman.h>
 #  include <fcntl.h>
 #  include <unistd.h>
+#  include <sys/ioctl.h>
 #endif
 
 /* Classify entry at `path` WITHOUT following a final symlink (lstat).
@@ -1321,6 +1322,11 @@ long long nurl_native_constant(const char *name) {
     if (strcmp(name, "MAP_PRIVATE")     == 0) return MAP_PRIVATE;
 #  ifdef MADV_SEQUENTIAL
     if (strcmp(name, "MADV_SEQUENTIAL") == 0) return MADV_SEQUENTIAL;
+#  endif
+#  ifdef TIOCGWINSZ
+    /* terminal window size ioctl — value differs per platform
+     * (0x5413 Linux, 0x40087468 BSD/macOS), so surface the real one. */
+    if (strcmp(name, "TIOCGWINSZ")      == 0) return (long long)TIOCGWINSZ;
 #  endif
 #endif
     (void)name;
