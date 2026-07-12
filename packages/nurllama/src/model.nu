@@ -1,0 +1,366 @@
+// packages/nurllama/src/model.nu — the llama-architecture forward pass.
+//
+// Loads a GGUF model onto the device (CUDA, or the CPU/OpenMP backend
+// via NURL_GPU=cpu — same kernels either way) and runs autoregressive
+// decode with a device-resident KV cache:
+//
+//   ( llm_open path n_ctx )   → !*Llm String
+//   ( llm_eval m token pos )  → v        one decode step; logits land in
+//                                        the reused host buffer
+//   ( llm_logit m i )         → f        read logit i of the last eval
+//   ( llm_n_vocab m ) ( llm_tok m )      the model's tokenizer rides along
+//   ( llm_close m )
+//
+// v1 shape: weights are host-dequantised to f32 through gguf_dequant
+// (bit-exact against the package's verified oracle — F32/F16/BF16/
+// Q4_0/Q4_1/Q8_0 models all load) and uploaded whole; activations,
+// KV cache and logits are f32. Device-side dequant-in-matmul is the
+// planned phase-6 optimisation for models whose f32 expansion is too
+// large. Prefill runs the decode step per prompt token — correct
+// first, batched later.
+//
+// Architecture: llama-family (RMSNorm → GQA attention with NORM-style
+// RoPE → SwiGLU FFN, residuals around both), read from the llama.*
+// GGUF keys. Tied-embedding models (no output.weight) reuse
+// token_embd as the output projection.
+
+$ `stdlib/core/string.nu`
+$ `stdlib/core/vec.nu`
+$ `stdlib/std/bytes.nu`
+$ `stdlib/std/floatbits.nu`
+$ `deps/gguf/src/gguf.nu`
+$ `deps/gguf/src/dequant.nu`
+$ `deps/gpu/src/gpu.nu`
+$ `src/kernels.nu`
+$ `src/tokenizer.nu`
+
+: Llm {
+    Gpu g
+    LlmKernels ks
+    * Tok tok
+    i n_embd
+    i n_layer
+    i n_head
+    i n_kv
+    i head_dim
+    i n_ff
+    i n_vocab
+    i n_ctx
+    i rope_dim
+    f eps
+    f rope_base
+    ( Vec u ) embd_host
+    ( Vec i ) wdptr
+    ( Vec i ) wbytes
+    ( Vec i ) attn_norm
+    ( Vec i ) wq
+    ( Vec i ) wk
+    ( Vec i ) wv
+    ( Vec i ) wo
+    ( Vec i ) ffn_norm
+    ( Vec i ) w_gate
+    ( Vec i ) w_down
+    ( Vec i ) w_up
+    i out_norm
+    i w_output
+    ( Vec i ) kcache
+    ( Vec i ) vcache
+    i xd
+    i xnd
+    i qd
+    i kd
+    i vd
+    i aod
+    i tmpd
+    i gd
+    i ud
+    i scored
+    i logitsd
+    * u logits_host
+}
+
+@ __lm_err s msg → !*Llm String {
+    ^ @ !*Llm String { F ( string_from msg ) }
+}
+
+@ __lm_geti ( Vec i ) v i k → i {
+    ?? ( vec_get [i] v k ) { T x → { ^ x } F → { ^ 0 } }
+}
+
+// Dequantise tensor `name` to f32 and upload; returns the device
+// pointer (tracked in wdptr/wbytes for teardown), -1 on failure.
+@ __lm_upload * Llm m * Gguf gg s name → i {
+    : i ti ( gguf_find_tensor gg name )
+    ? < ti 0 { ^ -1 } {}
+    : !( Vec u ) String r ( gguf_dequant gg ti )
+    ?? r {
+        T raw → {
+            : i n ( vec_len [u] raw )
+            : GpuBuffer b ( gpu_alloc . m g n )
+            : i _u ( gpu_upload b ( vec_data [u] raw ) )
+            ( vec_free [u] raw )
+            ( vec_push [i] . m wdptr . b dptr )
+            ( vec_push [i] . m wbytes . b bytes )
+            ^ . b dptr
+        }
+        F e → {
+            ( string_free e )
+            ^ -1
+        }
+    }
+}
+
+// Allocate an f32 scratch/cache device buffer of n floats (tracked).
+@ __lm_scratch * Llm m i nfloats → i {
+    : GpuBuffer b ( gpu_alloc . m g * nfloats 4 )
+    ( vec_push [i] . m wdptr . b dptr )
+    ( vec_push [i] . m wbytes . b bytes )
+    ^ . b dptr
+}
+
+// Per-layer tensor name: blk.<L>.<suffix>
+@ __lm_tname i layer s suffix → String {
+    : String nm ( string_from `blk.` )
+    ( string_push_int nm layer )
+    ( string_push_char nm 46 )
+    ( string_push_str nm suffix )
+    ^ nm
+}
+
+@ __lm_upload_layer * Llm m * Gguf gg i layer s suffix ( Vec i ) dst → b {
+    : String nm ( __lm_tname layer suffix )
+    : i d ( __lm_upload m gg ( string_data nm ) )
+    ( string_free nm )
+    ? < d 0 { ^ F } {}
+    ( vec_push [i] dst d )
+    ^ T
+}
+
+@ llm_open s path i want_ctx → !*Llm String {
+    : !*Gguf String gr ( gguf_open path )
+    : ~ i ggaddr 0
+    ?? gr {
+        T gg → { = ggaddr # i gg }
+        F e → { ^ @ !*Llm String { F e } }
+    }
+    : *Gguf gg # *Gguf ggaddr
+    : s arch ( gguf_kv_str_or gg `general.architecture` `` )
+    ? ( nurl_str_eq arch `llama` ) {} {
+        ( gguf_close gg )
+        : String msg ( string_from `nurllama: unsupported architecture '` )
+        ( string_push_str msg arch )
+        ( string_push_str msg `' (v1 runs llama-family models)` )
+        ^ @ !*Llm String { F msg }
+    }
+
+    : *Llm m # *Llm ( nurl_alloc Z Llm )
+    = . m n_embd ( gguf_kv_int_or gg `llama.embedding_length` 0 )
+    = . m n_layer ( gguf_kv_int_or gg `llama.block_count` 0 )
+    = . m n_head ( gguf_kv_int_or gg `llama.attention.head_count` 0 )
+    = . m n_kv ( gguf_kv_int_or gg `llama.attention.head_count_kv` ( gguf_kv_int_or gg `llama.attention.head_count` 0 ) )
+    = . m n_ff ( gguf_kv_int_or gg `llama.feed_forward_length` 0 )
+    = . m eps ( gguf_kv_f_or gg `llama.attention.layer_norm_rms_epsilon` 0.00001 )
+    = . m rope_base ( gguf_kv_f_or gg `llama.rope.freq_base` 10000.0 )
+    ? | | | < . m n_embd 1 < . m n_layer 1 < . m n_head 1 < . m n_ff 1 {
+        ( nurl_free # s m )
+        ( gguf_close gg )
+        ^ ( __lm_err `nurllama: model is missing llama.* hyperparameters` )
+    } {}
+    = . m head_dim / . m n_embd . m n_head
+    = . m rope_dim ( gguf_kv_int_or gg `llama.rope.dimension_count` . m head_dim )
+    : i model_ctx ( gguf_kv_int_or gg `llama.context_length` 2048 )
+    : ~ i ctx want_ctx
+    ? | < ctx 1 > ctx model_ctx { = ctx model_ctx } {}
+    = . m n_ctx ctx
+
+    // tokenizer first (it copies out of gg)
+    : !*Tok String tr ( tok_new gg )
+    ?? tr {
+        T t → { = . m tok t }
+        F e → {
+            ( nurl_free # s m )
+            ( gguf_close gg )
+            ^ @ !*Llm String { F e }
+        }
+    }
+    = . m n_vocab ( tok_n_vocab . m tok )
+
+    // device + kernels
+    = . m g ( gpu_open 0 )
+    ? ( gpu_ok . m g ) {} {
+        ( tok_free . m tok )
+        ( nurl_free # s m )
+        ( gguf_close gg )
+        ^ ( __lm_err `nurllama: no compute device (set NURL_GPU=cpu for the host backend)` )
+    }
+    = . m ks ( lk_build . m g )
+    ? . . m ks ok {} {
+        ( tok_free . m tok )
+        ( nurl_free # s m )
+        ( gguf_close gg )
+        ^ ( __lm_err `nurllama: kernel compilation failed` )
+    }
+
+    = . m wdptr ( vec_new [i] )
+    = . m wbytes ( vec_new [i] )
+    = . m attn_norm ( vec_new [i] )
+    = . m wq ( vec_new [i] )
+    = . m wk ( vec_new [i] )
+    = . m wv ( vec_new [i] )
+    = . m wo ( vec_new [i] )
+    = . m ffn_norm ( vec_new [i] )
+    = . m w_gate ( vec_new [i] )
+    = . m w_down ( vec_new [i] )
+    = . m w_up ( vec_new [i] )
+    = . m kcache ( vec_new [i] )
+    = . m vcache ( vec_new [i] )
+
+    // embeddings stay host-side: one row uploads per token
+    : ~ b ok T
+    = . m embd_host ( vec_new [u] )
+    : i ei ( gguf_find_tensor gg `token_embd.weight` )
+    ? < ei 0 { = ok F } {
+        : !( Vec u ) String er ( gguf_dequant gg ei )
+        ?? er {
+            T raw → {
+                ( vec_free [u] . m embd_host )
+                = . m embd_host raw
+            }
+            F e → {
+                ( string_free e )
+                = ok F
+            }
+        }
+    }
+
+    // weights
+    = . m out_norm ( __lm_upload m gg `output_norm.weight` )
+    ? < . m out_norm 0 { = ok F } {}
+    = . m w_output ( __lm_upload m gg `output.weight` )
+    ? < . m w_output 0 {
+        // tied embeddings: reuse token_embd as the output projection
+        = . m w_output ( __lm_upload m gg `token_embd.weight` )
+        ? < . m w_output 0 { = ok F } {}
+    } {}
+    : ~ i L 0
+    ~ & ok < L . m n_layer {
+        ? ( __lm_upload_layer m gg L `attn_norm.weight` . m attn_norm ) {} { = ok F }
+        ? ( __lm_upload_layer m gg L `attn_q.weight` . m wq ) {} { = ok F }
+        ? ( __lm_upload_layer m gg L `attn_k.weight` . m wk ) {} { = ok F }
+        ? ( __lm_upload_layer m gg L `attn_v.weight` . m wv ) {} { = ok F }
+        ? ( __lm_upload_layer m gg L `attn_output.weight` . m wo ) {} { = ok F }
+        ? ( __lm_upload_layer m gg L `ffn_norm.weight` . m ffn_norm ) {} { = ok F }
+        ? ( __lm_upload_layer m gg L `ffn_gate.weight` . m w_gate ) {} { = ok F }
+        ? ( __lm_upload_layer m gg L `ffn_down.weight` . m w_down ) {} { = ok F }
+        ? ( __lm_upload_layer m gg L `ffn_up.weight` . m w_up ) {} { = ok F }
+        = L + L 1
+    }
+    ( gguf_close gg )
+    ? ok {} {
+        ( llm_close m )
+        ^ ( __lm_err `nurllama: model is missing required llama tensors (or dequant failed)` )
+    }
+
+    // KV cache + activation scratch
+    : i kvdim * . m n_kv . m head_dim
+    = L 0
+    ~ < L . m n_layer {
+        ( vec_push [i] . m kcache ( __lm_scratch m * . m n_ctx kvdim ) )
+        ( vec_push [i] . m vcache ( __lm_scratch m * . m n_ctx kvdim ) )
+        = L + L 1
+    }
+    = . m xd ( __lm_scratch m . m n_embd )
+    = . m xnd ( __lm_scratch m . m n_embd )
+    = . m qd ( __lm_scratch m . m n_embd )
+    = . m kd ( __lm_scratch m kvdim )
+    = . m vd ( __lm_scratch m kvdim )
+    = . m aod ( __lm_scratch m . m n_embd )
+    = . m tmpd ( __lm_scratch m . m n_embd )
+    = . m gd ( __lm_scratch m . m n_ff )
+    = . m ud ( __lm_scratch m . m n_ff )
+    = . m scored ( __lm_scratch m * . m n_head . m n_ctx )
+    = . m logitsd ( __lm_scratch m . m n_vocab )
+    = . m logits_host ( gpu_host_alloc * . m n_vocab 4 )
+    ^ @ !*Llm String { T m }
+}
+
+@ llm_close * Llm m → v {
+    : ~ i k 0
+    ~ < k ( vec_len [i] . m wdptr ) {
+        ( gpu_free @ GpuBuffer { ( __lm_geti . m wdptr k ) ( __lm_geti . m wbytes k ) } )
+        = k + k 1
+    }
+    ( vec_free [i] . m wdptr )
+    ( vec_free [i] . m wbytes )
+    ( vec_free [i] . m attn_norm )
+    ( vec_free [i] . m wq )
+    ( vec_free [i] . m wk )
+    ( vec_free [i] . m wv )
+    ( vec_free [i] . m wo )
+    ( vec_free [i] . m ffn_norm )
+    ( vec_free [i] . m w_gate )
+    ( vec_free [i] . m w_down )
+    ( vec_free [i] . m w_up )
+    ( vec_free [i] . m kcache )
+    ( vec_free [i] . m vcache )
+    ( vec_free [u] . m embd_host )
+    ( gpu_host_free . m logits_host )
+    ( lk_free . m ks )
+    ( tok_free . m tok )
+    ( gpu_close . m g )
+    ( nurl_free # s m )
+}
+
+@ llm_tok * Llm m → *Tok { ^ . m tok }
+
+@ llm_n_vocab * Llm m → i { ^ . m n_vocab }
+
+@ llm_n_ctx * Llm m → i { ^ . m n_ctx }
+
+@ llm_logit * Llm m i idx → f { ^ ( gpu_host_get_f32 . m logits_host idx ) }
+
+// One decode step: token at position pos (0-based; caller feeds
+// positions sequentially). Logits for the NEXT token land in
+// logits_host.
+@ llm_eval * Llm m i token i pos → v {
+    : i ne . m n_embd
+    : i hd . m head_dim
+    : i nh . m n_head
+    : i nkv . m n_kv
+    : i kvdim * nkv hd
+
+    // x ← embedding row (host → device)
+    : GpuBuffer xb @ GpuBuffer { . m xd * ne 4 }
+    : i _u1 ( gpu_upload xb # *u + # i ( vec_data [u] . m embd_host ) * * token ne 4 )
+
+    : ~ i L 0
+    ~ < L . m n_layer {
+        // attention block
+        ( lk_rmsnorm . m ks . m xd ( __lm_geti . m attn_norm L ) . m xnd ne . m eps )
+        ( lk_matvec . m ks ( __lm_geti . m wq L ) . m xnd . m qd ne ne )
+        ( lk_matvec . m ks ( __lm_geti . m wk L ) . m xnd . m kd kvdim ne )
+        ( lk_matvec . m ks ( __lm_geti . m wv L ) . m xnd . m vd kvdim ne )
+        ( lk_rope . m ks . m qd nh hd . m rope_dim pos . m rope_base )
+        ( lk_rope . m ks . m kd nkv hd . m rope_dim pos . m rope_base )
+        ( lk_copyat . m ks ( __lm_geti . m kcache L ) . m kd * pos kvdim kvdim )
+        ( lk_copyat . m ks ( __lm_geti . m vcache L ) . m vd * pos kvdim kvdim )
+        ( lk_attn . m ks . m qd ( __lm_geti . m kcache L ) ( __lm_geti . m vcache L )
+        . m aod . m scored nh nkv hd + pos 1 )
+        ( lk_matvec . m ks ( __lm_geti . m wo L ) . m aod . m tmpd ne ne )
+        ( lk_addv . m ks . m xd . m tmpd ne )
+
+        // FFN block (SwiGLU)
+        ( lk_rmsnorm . m ks . m xd ( __lm_geti . m ffn_norm L ) . m xnd ne . m eps )
+        ( lk_matvec . m ks ( __lm_geti . m w_gate L ) . m xnd . m gd . m n_ff ne )
+        ( lk_matvec . m ks ( __lm_geti . m w_up L ) . m xnd . m ud . m n_ff ne )
+        ( lk_silumul . m ks . m gd . m ud . m n_ff )
+        ( lk_matvec . m ks ( __lm_geti . m w_down L ) . m gd . m tmpd ne . m n_ff )
+        ( lk_addv . m ks . m xd . m tmpd ne )
+        = L + L 1
+    }
+
+    ( lk_rmsnorm . m ks . m xd . m out_norm . m xnd ne . m eps )
+    ( lk_matvec . m ks . m w_output . m xnd . m logitsd . m n_vocab ne )
+    : GpuBuffer lb @ GpuBuffer { . m logitsd * . m n_vocab 4 }
+    : i _u2 ( gpu_download . m logits_host lb )
+}

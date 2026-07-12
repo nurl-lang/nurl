@@ -1,13 +1,19 @@
-// nurllama — run language models locally (phase 2: the tokenizer).
+// nurllama — run language models locally.
 //
+//   nurllama run <model.gguf> <prompt>        generate (stream to stdout)
+//     -n N (default 64) · --temp F (0 = greedy, default 0.8)
+//     --topk N · --topp F · --seed N · --ctx N
+//   nurllama logits <model.gguf> <prompt>     final-position logits, one
+//                                             per line (verification tap)
 //   nurllama tokenize <model.gguf> <text>     encode → token ids
 //   nurllama detok <model.gguf> <id> [id …]   decode ids → bytes
 //   nurllama vocab <model.gguf> [n]           dump the first n pieces
 //   nurllama selftest                         synthetic SPM + BPE vocab
 //                                             round-trips, bit-exact
 //
-// The tokenizer is loaded straight from the model's own
-// tokenizer.ggml.* metadata via packages/gguf — no side files.
+// Everything is loaded from the model file alone (tokenizer.ggml.* +
+// llama.* metadata + tensors via packages/gguf); compute runs on
+// packages/gpu — CUDA when present, NURL_GPU=cpu for the host backend.
 
 $ `stdlib/core/io.nu`
 $ `stdlib/core/posix.nu`
@@ -19,9 +25,14 @@ $ `stdlib/std/args.nu`
 $ `stdlib/std/hashmap.nu`
 $ `stdlib/std/utf8.nu`
 $ `stdlib/std/floatbits.nu`
+$ `stdlib/std/rng.nu`
 $ `deps/gguf/src/gguf.nu`
 $ `deps/gguf/src/write.nu`
+$ `deps/gpu/src/gpu.nu`
 $ `src/tokenizer.nu`
+$ `src/kernels.nu`
+$ `src/model.nu`
+$ `src/sample.nu`
 
 @ __nl_err String e → i {
     ( nurl_eprintln ( string_data e ) )
@@ -361,6 +372,12 @@ $ `src/tokenizer.nu`
     ( args_flag p `help` 104 `show this help` )
     ( args_flag p `version` 0 `print the version` )
     ( args_flag p `no-special` 0 `tokenize: do not add BOS/EOS` )
+    ( args_opt p `n-predict` 110 `N` `run: max tokens to generate (default 64)` )
+    ( args_opt p `temp` 0 `F` `run: temperature; 0 = greedy (default 0.8)` )
+    ( args_opt p `topk` 0 `N` `run: top-k filter (default 40; 0 = off)` )
+    ( args_opt p `topp` 0 `F` `run: top-p nucleus (default 0.95; 1 = off)` )
+    ( args_opt p `seed` 0 `N` `run: RNG seed (default 42)` )
+    ( args_opt p `ctx` 0 `N` `run: context length cap (default: model's)` )
     ? ( args_parse_argv p ) {} {
         ( nurl_eprintln ( args_error p ) )
         ( args_free p )
@@ -369,7 +386,7 @@ $ `src/tokenizer.nu`
     ? ( args_present p `help` ) {
         : String u ( args_usage p )
         ( nurl_print ( string_data u ) )
-        ( nurl_print `\ncommands:\n  tokenize <model.gguf> <text> · detok <model.gguf> <id> [id …]\n  vocab <model.gguf> [n] · selftest\n` )
+        ( nurl_print `\ncommands:\n  run <model.gguf> <prompt> [-n N] [--temp F] [--topk N] [--topp F] [--seed N]\n  logits <model.gguf> <prompt> · tokenize <model.gguf> <text>\n  detok <model.gguf> <id> [id …] · vocab <model.gguf> [n] · selftest\n` )
         ( string_free u )
         ( args_free p )
         ^ 0
@@ -400,6 +417,97 @@ $ `src/tokenizer.nu`
     ? < ( args_positional_count p ) 2 {
         ( args_free p )
         ^ ( __nl_err ( string_from `nurllama: this command needs a model file (nurllama --help)` ) )
+    } {}
+
+    ? | ( nurl_str_eq cmd `run` ) ( nurl_str_eq cmd `logits` ) {
+        : ~ s mp ``
+        ?? ( vec_get [String] pos 1 ) {
+            T c → { = mp ( string_data c ) }
+            F → {}
+        }
+        : ~ s prompt ``
+        ?? ( vec_get [String] pos 2 ) {
+            T c → { = prompt ( string_data c ) }
+            F → {}
+        }
+        : String sctx ( args_value_or p `ctx` `0` )
+        : ~ i want_ctx 0
+        ?? ( string_to_int sctx ) { T v2 → { = want_ctx v2 } F _ → {} }
+        ( string_free sctx )
+        : ~ i rc2 0
+        ?? ( llm_open mp want_ctx ) {
+            T m → {
+                : *Tok t ( llm_tok m )
+                : ( Vec i ) ids ( tok_encode t prompt T )
+                : i nprompt ( vec_len [i] ids )
+                ? > nprompt ( llm_n_ctx m ) {
+                    = rc2 ( __nl_err ( string_from `nurllama: prompt longer than the context` ) )
+                } {
+                    // prefill: decode step per prompt token
+                    : ~ i k 0
+                    ~ < k nprompt {
+                        ( llm_eval m ( __tk_geti ids k 0 ) k )
+                        = k + k 1
+                    }
+                    ? ( nurl_str_eq cmd `logits` ) {
+                        : ~ i j 0
+                        ~ < j ( llm_n_vocab m ) {
+                            : String ln ( string_new )
+                            ( string_push_float ln ( llm_logit m j ) )
+                            ( nurl_print ( string_data ln ) )
+                            ( nurl_print `\n` )
+                            ( string_free ln )
+                            = j + j 1
+                        }
+                    } {
+                        : String stmp ( args_value_or p `temp` `0.8` )
+                        : ~ f temp 0.8
+                        ?? ( string_to_float stmp ) { T v2 → { = temp v2 } F → {} }
+                        ( string_free stmp )
+                        : String snp ( args_value_or p `n-predict` `64` )
+                        : ~ i npredict 64
+                        ?? ( string_to_int snp ) { T v2 → { = npredict v2 } F _ → {} }
+                        ( string_free snp )
+                        : String stk ( args_value_or p `topk` `40` )
+                        : ~ i topk 40
+                        ?? ( string_to_int stk ) { T v2 → { = topk v2 } F _ → {} }
+                        ( string_free stk )
+                        : String stp ( args_value_or p `topp` `0.95` )
+                        : ~ f topp 0.95
+                        ?? ( string_to_float stp ) { T v2 → { = topp v2 } F → {} }
+                        ( string_free stp )
+                        : String ssd ( args_value_or p `seed` `42` )
+                        : ~ i seed 42
+                        ?? ( string_to_int ssd ) { T v2 → { = seed v2 } F _ → {} }
+                        ( string_free ssd )
+                        : Rng rng ( rng_seed seed )
+
+                        : ~ i pos nprompt
+                        : ~ i produced 0
+                        : ~ b stop F
+                        ~ & & < produced npredict < pos ( llm_n_ctx m ) ! stop {
+                            : i nt2 ( sample_next m rng temp topk topp )
+                            ? == nt2 ( tok_eos t ) { = stop T } {
+                                : ( Vec u ) pb ( tok_piece t nt2 )
+                                : i pn ( vec_len [u] pb )
+                                ? > pn 0 { : i _w ( write 1 # *u ( vec_data [u] pb ) pn ) } {}
+                                ( vec_free [u] pb )
+                                ( flush )
+                                ( llm_eval m nt2 pos )
+                                = pos + pos 1
+                                = produced + produced 1
+                            }
+                        }
+                        ( nurl_print `\n` )
+                    }
+                }
+                ( vec_free [i] ids )
+                ( llm_close m )
+            }
+            F e → { = rc2 ( __nl_err e ) }
+        }
+        ( args_free p )
+        ^ rc2
     } {}
     : ~ s mpath ``
     ?? ( vec_get [String] pos 1 ) {
