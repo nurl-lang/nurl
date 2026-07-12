@@ -33,10 +33,11 @@ env:
 jobs:
   # ── Gate: the tagged commit must already have a green ci.yml run ──────
   # Branch protection keeps `main` green, so a tag on a merged main commit
-  # passes this instantly. It exists to catch a tag pushed to a NON-main /
-  # untested SHA. It does NOT re-run the suite (that would be redundant —
-  # ci.yml runs on every push/PR); it reads the existing ci.yml conclusion
-  # for the tagged commit. Skipped on workflow_dispatch dry runs (they don't
+  # passes this. It exists to catch a tag pushed to a NON-main / untested
+  # SHA. It does NOT re-run the suite (that would be redundant — ci.yml runs
+  # on every push/PR); it WAITS for the tagged commit's ci.yml to conclude
+  # and then requires success, because a tag is normally pushed while that
+  # run is still in flight. Skipped on workflow_dispatch dry runs (they don't
   # publish anyway).
   verify-ci:
     name: verify tagged commit passed CI
@@ -46,23 +47,59 @@ jobs:
       - name: Require a successful ci.yml run for this SHA
         uses: actions/github-script@v7
         with:
+          # A tag is normally pushed seconds after the release PR merges, so
+          # the merge commit's ci.yml is still QUEUED or RUNNING (and may not
+          # even be listed yet) when this job starts. A single instantaneous
+          # look therefore fails the gate on a race and skips the whole
+          # release — which is exactly what happened to v0.13.0. Wait for the
+          # SHA's ci.yml to reach a conclusion instead, then demand success:
+          # the safety property (never publish an unverified commit) is
+          # unchanged, only the impatience is gone.
           script: |
             const sha = context.sha;
-            const runs = await github.paginate(github.rest.actions.listWorkflowRuns, {
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              workflow_id: 'ci.yml',
-              head_sha: sha,
-              per_page: 100,
-            });
-            const conclusions = runs.map(r => r.conclusion);
-            if (conclusions.includes('success')) {
-              core.info(`ci.yml is green for ${sha} — proceeding.`);
-            } else {
-              core.setFailed(
-                `No successful ci.yml run for ${sha}. Tag a commit whose CI is ` +
-                `green (a merged main commit). ci.yml runs seen for this SHA: ` +
-                (conclusions.join(', ') || 'none'));
+            const DEADLINE_MS = 45 * 60 * 1000;   // ci.yml takes ~6 min
+            const POLL_MS = 30 * 1000;
+            const started = Date.now();
+            const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+            while (true) {
+              const runs = await github.paginate(github.rest.actions.listWorkflowRuns, {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                workflow_id: 'ci.yml',
+                head_sha: sha,
+                per_page: 100,
+              });
+              if (runs.some(r => r.conclusion === 'success')) {
+                core.info(`ci.yml is green for ${sha} — proceeding.`);
+                return;
+              }
+              const pending = runs.filter(
+                r => r.status === 'queued' || r.status === 'in_progress');
+              const waited = Date.now() - started;
+
+              // Nothing running and nothing green: if a run has already
+              // concluded non-success, the commit is genuinely bad — fail
+              // now rather than burning the deadline. An empty list this
+              // early is just the API not having indexed the push yet.
+              if (pending.length === 0 && runs.length > 0) {
+                core.setFailed(
+                  `ci.yml did not pass for ${sha} (conclusions: ` +
+                  `${runs.map(r => r.conclusion).join(', ')}). Tag a commit ` +
+                  `whose CI is green.`);
+                return;
+              }
+              if (waited > DEADLINE_MS) {
+                core.setFailed(
+                  `Timed out after ${Math.round(waited / 60000)} min waiting ` +
+                  `for a ci.yml run for ${sha}. Runs seen: ` +
+                  `${runs.map(r => r.status + '/' + r.conclusion).join(', ') || 'none'}.`);
+                return;
+              }
+              core.info(
+                `waiting for ci.yml on ${sha} — ${pending.length} run(s) ` +
+                `pending, ${Math.round(waited / 1000)}s elapsed…`);
+              await sleep(POLL_MS);
             }
 
   # ── Linux (x86_64 + arm64), native per-arch runners ──────────────────
