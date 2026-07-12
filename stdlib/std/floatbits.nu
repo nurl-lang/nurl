@@ -66,3 +66,98 @@ $ `stdlib/std/bytes.nu`
 @ bytes_read_f32_le ( Vec u ) v i off → ?f32 {
     ?? ( bytes_read_u32_le v off ) { T b → @ ?f32 { T ( bits_to_f32 # i b ) } F → @ ?f32 { F # f32 0.0 } }
 }
+
+// ── Half-precision (IEEE binary16) and bfloat16 bit conversion ──────
+//
+// Pure integer bit transport in both directions — no float round-trip,
+// so subnormals, ±inf, NaN (payload included) and -0 survive exactly.
+// The f32→narrow direction rounds to nearest, ties to even, exactly
+// like hardware converts. These are the primitives under GGUF/ONNX
+// tensor decoding, wire formats (CBOR half floats), and GPU data prep.
+//
+//   ( f16_bits_to_f32_bits h )   → i     widen, exact
+//   ( f32_bits_to_f16_bits b )   → i     RNE narrow (overflow → ±inf)
+//   ( bf16_bits_to_f32_bits h )  → i     widen, exact (<< 16)
+//   ( f32_bits_to_bf16_bits b )  → i     RNE narrow, NaN kept NaN
+//   ( f16_to_f h ) ( f_to_f16 x ) ( bf16_to_f h ) ( f_to_bf16 x )
+
+// sign copied, exponent rebased 15 → 127, mantissa widened 10 → 23
+// bits; subnormals normalised, inf/NaN mapped to their f32 forms.
+@ f16_bits_to_f32_bits i h → i {
+    : i sign << & >> h 15 1 31
+    : i e & >> h 10 31
+    : ~ i man & h 1023
+    ? == e 0 {
+        ? == man 0 { ^ sign } {}
+        : ~ i ex 113
+        ~ == & man 1024 0 {
+            = man << man 1
+            = ex - ex 1
+        }
+        = man & man 1023
+        ^ | sign | << ex 23 << man 13
+    } {}
+    ? == e 31 { ^ | sign | 2139095040 << man 13 } {}
+    ^ | sign | << + e 112 23 << man 13
+}
+
+// Round-to-nearest-even narrow. Exponent ≥ 31 after rebias → ±inf;
+// tiny values denormalise (the mantissa round can carry back up into
+// the exponent, which is exactly RNE's behaviour); NaN keeps its top
+// payload bits and is forced non-zero so it cannot decay to inf.
+@ f32_bits_to_f16_bits i b → i {
+    : i sign & >> b 16 32768
+    : i e & >> b 23 255
+    : i man & b 8388607
+    ? == e 255 {
+        ? == man 0 { ^ | sign 31744 } {}
+        : i pay >> man 13
+        ^ | sign | 31744 ? == pay 0 512 pay
+    } {}
+    : i E - e 112
+    ? >= E 31 { ^ | sign 31744 } {}
+    ? <= E 0 {
+        // subnormal target: shift the implicit-1 mantissa down
+        ? < E -10 { ^ sign } {}
+        : i M | man 8388608
+        : i sh - 14 E
+        : i v >> M sh
+        : i rem & M - << 1 sh 1
+        : i half << 1 - sh 1
+        : ~ i out v
+        ? | > rem half & == rem half == & v 1 1 { = out + v 1 } {}
+        ^ | sign out
+    } {}
+    : ~ i v | << E 10 >> man 13
+    : i rem & man 8191
+    ? | > rem 4096 & == rem 4096 == & v 1 1 { = v + v 1 } {}
+    ^ | sign v
+}
+
+@ bf16_bits_to_f32_bits i h → i { ^ << h 16 }
+
+// RNE truncation of the low 16 mantissa bits; a NaN whose payload
+// lives entirely in the dropped bits is pinned to a quiet NaN rather
+// than rounding to inf.
+@ f32_bits_to_bf16_bits i b → i {
+    : i e & >> b 23 255
+    : i man & b 8388607
+    ? & == e 255 != man 0 {
+        : i top >> b 16
+        ^ ? == & top 127 0 | top 64 top
+    } {}
+    : i base >> b 16
+    : i rem & b 65535
+    ? | > rem 32768 & == rem 32768 == & base 1 1 { ^ + base 1 } {}
+    ^ base
+}
+
+// f64-level conveniences (f32 is the exact carrier of every f16/bf16
+// value, and f64 carries every f32, so these are lossless).
+@ f16_to_f i h → f { ^ # f ( bits_to_f32 ( f16_bits_to_f32_bits h ) ) }
+
+@ f_to_f16 f x → i { ^ ( f32_bits_to_f16_bits ( f32_to_bits # f32 x ) ) }
+
+@ bf16_to_f i h → f { ^ # f ( bits_to_f32 ( bf16_bits_to_f32_bits h ) ) }
+
+@ f_to_bf16 f x → i { ^ ( f32_bits_to_bf16_bits ( f32_to_bits # f32 x ) ) }

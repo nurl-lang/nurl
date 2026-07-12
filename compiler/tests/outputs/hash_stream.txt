@@ -1,0 +1,10 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+PASS sha256 stream: empty
+PASS sha256 stream: "abc" 1 B at a time
+PASS sha256 stream: NIST 2-block, 13 B steps
+PASS sha256 stream == one-shot across 7 split sizes
+PASS blake3 stream: empty (official vector)
+PASS blake3 stream == one-shot: 7 sizes × 3 splits

@@ -33,6 +33,7 @@
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/posix.nu`  // read / write / close / posix_const
+$ `stdlib/ext/env.nu`  // $COLUMNS / $LINES fallback for term_width
 
 & `c` @ isatty i32 fd → i32
 
@@ -291,4 +292,59 @@ $ `stdlib/core/posix.nu`  // read / write / close / posix_const
     ? == done 1 { ^ @ ?String { T buf } } {}
     ( string_free buf )
     ^ @ ?String { F }
+}
+
+// ── Terminal size ───────────────────────────────────────────────────
+//
+// TIOCGWINSZ on the requested fd; when that fails (not a tty, wasm,
+// win32 console without the ioctl) fall back to $COLUMNS / $LINES,
+// then to the classic 80×24. struct winsize is four u16s (row, col,
+// xpixel, ypixel) on every POSIX platform; the ioctl request value
+// differs per OS and is surfaced through nurl_native_constant.
+
+& `c` @ ioctl i32 fd i req *u argp → i32
+
+@ __term_winsz i fd i idx → i {
+    : i req ( posix_const `TIOCGWINSZ` )
+    ? < req 0 { ^ -1 } {}
+    : *u ws # *u ( nurl_alloc 8 )
+    : i32 rc ( ioctl # i32 fd req ws )
+    : ~ i out -1
+    ? == # i rc 0 {
+        : i lo # i . ws * idx 2
+        : i hi # i . ws + * idx 2 1
+        = out | lo << hi 8
+    } {}
+    ( nurl_free # s ws )
+    ^ ? > out 0 out -1
+}
+
+@ __term_env_dim s name i def → i {
+    : ?String ev ( env_get name )
+    ?? ev {
+        T v → {
+            : ~ i out def
+            ?? ( string_to_int v ) {
+                T n → { ? > n 0 { = out n } {} }
+                F _ → {}
+            }
+            ( string_free v )
+            ^ out
+        }
+        F → { ^ def }
+    }
+}
+
+// Columns of the terminal on stdout: ioctl → $COLUMNS → 80.
+@ term_width → i {
+    : i w ( __term_winsz 1 1 )
+    ? > w 0 { ^ w } {}
+    ^ ( __term_env_dim `COLUMNS` 80 )
+}
+
+// Rows of the terminal on stdout: ioctl → $LINES → 24.
+@ term_height → i {
+    : i hh ( __term_winsz 1 0 )
+    ? > hh 0 { ^ hh } {}
+    ^ ( __term_env_dim `LINES` 24 )
 }
