@@ -42,6 +42,7 @@ $ `stdlib/ext/registry_index.nu`
 $ `stdlib/ext/resolver.nu`
 $ `stdlib/ext/pkg_fetch.nu`
 $ `stdlib/ext/pkg_publish.nu`
+$ `stdlib/ext/semver.nu`
 $ `stdlib/ext/credentials.nu`
 $ `stdlib/ext/json.nu`
 $ `stdlib/core/io.nu`
@@ -1529,9 +1530,37 @@ $ `stdlib/std/bytes.nu`
             : i n ( nurl_str_len src )
             : ~ i i 0
             ~ < i n {
-                // match the literal "deps/"
-                ? & < + i 5 n & == ( nurl_str_get src i ) 100 & == ( nurl_str_get src + i 1 ) 101
-                & == ( nurl_str_get src + i 2 ) 112 & == ( nurl_str_get src + i 3 ) 115 == ( nurl_str_get src + i 4 ) 47 {
+                // Only real imports count: `$` … backtick … "deps/<name>/".
+                // Scanning for the bare literal would also match doc
+                // comments (packages/http documents `deps/http/src/http.nu`
+                // as its own usage line) — a false refusal.
+                : ~ b is_import F
+                // …and the `$` must START the line: packages/http's header
+                // documents its own import as a COMMENT ("//     $ `deps/…`"),
+                // which is not an import at all.
+                : ~ b line_start T
+                ? == ( nurl_str_get src i ) 36 {
+                    : ~ i bk - i 1
+                    ~ & >= bk 0 line_start {
+                        : i cb ( nurl_str_get src bk )
+                        ? == cb 10 { = bk -1 } {
+                            ? | == cb 32 == cb 9 { = bk - bk 1 } { = line_start F }
+                        }
+                    }
+                } {}
+                ? & line_start == ( nurl_str_get src i ) 36 {
+                    : ~ i q + i 1
+                    ~ & < q n == ( nurl_str_get src q ) 32 { = q + q 1 }
+                    ? & < q n == ( nurl_str_get src q ) 96 {
+                        : i d0 + q 1
+                        ? & < + d0 5 n & == ( nurl_str_get src d0 ) 100 & == ( nurl_str_get src + d0 1 ) 101
+                        & == ( nurl_str_get src + d0 2 ) 112 & == ( nurl_str_get src + d0 3 ) 115 == ( nurl_str_get src + d0 4 ) 47 {
+                            = is_import T
+                            = i d0
+                        } {}
+                    } {}
+                } {}
+                ? is_import {
                     : ~ i j + i 5
                     : String nm ( string_new )
                     ~ & < j n != ( nurl_str_get src j ) 47 {
@@ -1606,6 +1635,258 @@ $ `stdlib/std/bytes.nu`
     ^ missing
 }
 
+// The cheap, network-free half of the same class: a path dep's VERSION
+// REQUIREMENT must be satisfied by the LOCAL dependency's version. If the
+// local http is 0.3.0 but the requirement says ^0.2, this package is built
+// and tested against 0.3.0 here while every registry install compiles
+// against 0.2.x — different code under the same publish. That is precisely
+// how nurllama 0.1.1 shipped calling a function that existed only in the
+// unpublished local http.
+//
+// 0 = every requirement covers its local dep; 1 = refuse (message printed).
+@ __check_pathdep_req Manifest m → i {
+    : ~ i bad 0
+    : ~ i di 0
+    ~ < di ( vec_len [Dep] . m dependencies ) {
+        ?? ( vec_get [Dep] . m dependencies di ) {
+            T d → {
+                ? & ( dep_is_path d ) ( dep_has_version d ) {
+                    : String dtoml ( string_from ( string_data . d path ) )
+                    ( string_push_str dtoml `/nurl.toml` )
+                    ?? ( manifest_load ( string_data dtoml ) ) {
+                        T dm → {
+                            ?? ( semver_req_parse ( string_data . d version ) ) {
+                                T req → {
+                                    ?? ( semver_parse ( string_data . dm version ) ) {
+                                        T lv → {
+                                            ? ( semver_req_matches req lv ) {} {
+                                                ( nurl_eprint `nurlpkg: dependency '` )
+                                                ( nurl_eprint ( string_data . dm name ) )
+                                                ( nurl_eprint `' requires '` )
+                                                ( nurl_eprint ( string_data . d version ) )
+                                                ( nurl_eprint `' but the local copy is ` )
+                                                ( nurl_eprintln ( string_data . dm version ) )
+                                                ( nurl_eprintln `  You build against the local source; everyone else resolves the requirement from the registry — they would compile against different code. Widen the requirement (and publish that version) before publishing this package.` )
+                                                = bad 1
+                                            }
+                                            ( semver_free lv )
+                                        }
+                                        F _ → {}
+                                    }
+                                    ( semver_req_free req )
+                                }
+                                F _ → {}
+                            }
+                            ( manifest_free dm )
+                        }
+                        F _ → {}
+                    }
+                    ( string_free dtoml )
+                } {}
+            }
+            F → {}
+        }
+        = di + di 1
+    }
+    ^ bad
+}
+
+// ── path-dep drift audit (publish gate) ─────────────────────────────
+//
+// A path dependency with a version requirement is built LOCALLY here but
+// resolved from the REGISTRY by everyone else. If the local copy has been
+// edited without bumping its version, the two are different code under the
+// same version number: the author's build succeeds and every registry
+// install compiles against the old published source. That is exactly how
+// nurllama 0.1.1 shipped calling http_app_stream — a function added to the
+// local http package without republishing it.
+//
+// So: for every path dep whose version is already published, fetch that
+// published tarball and compare its sources with the local ones. Any
+// difference is refused, naming the dependency.
+
+@ __srcs_of s dir → ( Vec String ) {
+    : ( Vec String ) out ( vec_new [String] )
+    : String pat ( string_from dir )
+    ( string_push_str pat `/src/*.nu` )
+    ?? ( fs_glob ( string_data pat ) ) {
+        T fs → {
+            : ~ i k 0
+            ~ < k ( vec_len [String] fs ) {
+                ?? ( vec_get [String] fs k ) {
+                    T f → { ( vec_push [String] out ( string_from ( string_data f ) ) ) }
+                    F → {}
+                }
+                = k + k 1
+            }
+            ( vec_free_with [String] fs \ String x → v { ( string_free x ) } )
+        }
+        F _ → {}
+    }
+    ( string_free pat )
+    ^ out
+}
+
+// basename after the last '/'
+@ __basename s p → String {
+    : i n ( nurl_str_len p )
+    : ~ i st 0
+    : ~ i k 0
+    ~ < k n {
+        ? == ( nurl_str_get p k ) 47 { = st + k 1 } {}
+        = k + k 1
+    }
+    : String out ( string_new )
+    = k st
+    ~ < k n {
+        ( string_push_char out ( nurl_str_get p k ) )
+        = k + k 1
+    }
+    ^ out
+}
+
+@ __files_same s a s b → b {
+    ?? ( read_file_bytes a ) {
+        T ba → {
+            ?? ( read_file_bytes b ) {
+                T bb → {
+                    : b same ( bytes_eq ba bb )
+                    ( vec_free [u] ba )
+                    ( vec_free [u] bb )
+                    ^ same
+                }
+                F _ → {
+                    ( vec_free [u] ba )
+                    ^ F
+                }
+            }
+        }
+        F _ → { ^ F }
+    }
+}
+
+// 0 = no drift (or nothing to compare); 1 = refuse (message printed).
+@ __check_pathdep_drift Manifest m s reg → i {
+    : ~ i bad 0
+    : ~ i di 0
+    ~ < di ( vec_len [Dep] . m dependencies ) {
+        ?? ( vec_get [Dep] . m dependencies di ) {
+            T d → {
+                ? & ( dep_is_path d ) ( dep_has_version d ) {
+                    // local version of the dependency
+                    : String dtoml ( string_from ( string_data . d path ) )
+                    ( string_push_str dtoml `/nurl.toml` )
+                    ?? ( manifest_load ( string_data dtoml ) ) {
+                        T dm → {
+                            : s dname ( string_data . dm name )
+                            : s dver ( string_data . dm version )
+                            : String idx ( pkg_fetch_index reg dname )
+                            ? > ( string_len idx ) 0 {
+                                ?? ( regindex_parse ( string_data idx ) ) {
+                                    T ridx → {
+                                        // is THIS local version already published?
+                                        : ~ i hit -1
+                                        : ~ i vi 0
+                                        ~ < vi ( vec_len [IdxVersion] . ridx versions ) {
+                                            ?? ( vec_get [IdxVersion] . ridx versions vi ) {
+                                                T iv → {
+                                                    ? ( nurl_str_eq ( string_data . iv version ) dver ) { = hit vi } {}
+                                                }
+                                                F → {}
+                                            }
+                                            = vi + vi 1
+                                        }
+                                        ? >= hit 0 {
+                                            ?? ( vec_get [IdxVersion] . ridx versions hit ) {
+                                                T iv → {
+                                                    ? != 0 ( __dep_drifts reg dname ( string_data . iv version ) ( string_data . iv checksum ) ( string_data . d path ) ) {
+                                                        ( nurl_eprint `nurlpkg: local '` )
+                                                        ( nurl_eprint dname )
+                                                        ( nurl_eprint `' differs from the published ` )
+                                                        ( nurl_eprint dname )
+                                                        ( nurl_eprint ` ` )
+                                                        ( nurl_eprint dver )
+                                                        ( nurl_eprintln ` — bump its version and publish it BEFORE publishing this package.` )
+                                                        ( nurl_eprintln `  (a path dep is built locally here but fetched from the registry by everyone else)` )
+                                                        = bad 1
+                                                    } {}
+                                                }
+                                                F → {}
+                                            }
+                                        } {}
+                                        ( regindex_free ridx )
+                                    }
+                                    F _ → {}
+                                }
+                            } {}
+                            ( string_free idx )
+                            ( manifest_free dm )
+                        }
+                        F _ → {}
+                    }
+                    ( string_free dtoml )
+                } {}
+            }
+            F → {}
+        }
+        = di + di 1
+    }
+    ^ bad
+}
+
+// 1 = the published tarball's sources differ from the local ones.
+@ __dep_drifts s reg s name s ver s checksum s localdir → i {
+    : String troot ( __tmp_root )
+    : String stage ( string_with_cap 96 )
+    ( string_push_str stage ( string_data troot ) )
+    ( string_push_str stage `/nurlpkg-drift-` )
+    ( string_push_str stage name )
+    ( string_free troot )
+    ?? ( dir_remove_all ( string_data stage ) ) { T _ → {} F _ → {} }
+    ?? ( dir_create_all ( string_data stage ) ) { T _ → {} F _ → {} }
+    : !i PkgFetchErr fr ( pkg_install_one reg name ver checksum ( string_data stage ) )
+    : ~ i drift 0
+    ?? fr {
+        F _ → {
+            // cannot fetch/verify → do not block the publish on a network
+            // failure; the undeclared-dep gate above still applies
+            = drift 0
+        }
+        T _ → {
+            : String pubdir ( string_with_cap 96 )
+            ( string_push_str pubdir ( string_data stage ) )
+            ( string_push_char pubdir 47 )
+            ( string_push_str pubdir name )
+            : ( Vec String ) locals ( __srcs_of localdir )
+            : ( Vec String ) pubs ( __srcs_of ( string_data pubdir ) )
+            ? != ( vec_len [String] locals ) ( vec_len [String] pubs ) { = drift 1 } {}
+            : ~ i k 0
+            ~ & < k ( vec_len [String] locals ) == drift 0 {
+                ?? ( vec_get [String] locals k ) {
+                    T lf → {
+                        : String bn ( __basename ( string_data lf ) )
+                        : String pf ( string_with_cap 96 )
+                        ( string_push_str pf ( string_data pubdir ) )
+                        ( string_push_str pf `/src/` )
+                        ( string_push_str pf ( string_data bn ) )
+                        ? ( __files_same ( string_data lf ) ( string_data pf ) ) {} { = drift 1 }
+                        ( string_free pf )
+                        ( string_free bn )
+                    }
+                    F → {}
+                }
+                = k + k 1
+            }
+            ( vec_free_with [String] locals \ String x → v { ( string_free x ) } )
+            ( vec_free_with [String] pubs \ String x → v { ( string_free x ) } )
+            ( string_free pubdir )
+        }
+    }
+    ?? ( dir_remove_all ( string_data stage ) ) { T _ → {} F _ → {} }
+    ( string_free stage )
+    ^ drift
+}
+
 @ __cmd_publish → i {
     ? ! ( file_exists `nurl.toml` ) {
         ( nurl_eprintln `nurlpkg: no nurl.toml in the current directory` )
@@ -1628,6 +1909,14 @@ $ `stdlib/std/bytes.nu`
                 = rc 1
             } {
                 ? != 0 ( __check_declared_deps m ) {
+                    ( manifest_free m )
+                    ^ 1
+                } {}
+                ? != 0 ( __check_pathdep_req m ) {
+                    ( manifest_free m )
+                    ^ 1
+                } {}
+                ? != 0 ( __check_pathdep_drift m ( string_data reg ) ) {
                     ( manifest_free m )
                     ^ 1
                 } {}
