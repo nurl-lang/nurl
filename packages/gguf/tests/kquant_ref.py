@@ -117,13 +117,20 @@ def deq_q6_k(blk, n):
     return out
 
 DEQ = {6: deq_q5_0, 8: deq_q8_0, 12: deq_q4_k, 13: deq_q5_k, 14: deq_q6_k}
-data, doff, infos = read_gguf(sys.argv[1])
-want = sys.argv[2]
-for nm, dims, ty, rel in infos:
-    if nm == want:
-        n = int(np.prod(dims))
-        blk = bytes(data[doff+rel: doff+rel + n * {6:22,8:34,12:144,13:176,14:210}[ty] // {6:32,8:32,12:256,13:256,14:256}[ty]])
-        out = DEQ[ty](blk, n)
-        out.astype('<f4').tofile(sys.argv[3])
-        print("%s type=%d n=%d" % (nm, ty, n))
-        break
+
+# Importable: the decoders above are reused by other references (the numpy
+# forward pass reads K-quant weights through them), so the CLI entry point
+# must not run on import.
+if __name__ != '__main__':
+    pass
+else:
+  data, doff, infos = read_gguf(sys.argv[1])
+  want = sys.argv[2]
+  for nm, dims, ty, rel in infos:
+      if nm == want:
+          n = int(np.prod(dims))
+          blk = bytes(data[doff+rel: doff+rel + n * {6:22,8:34,12:144,13:176,14:210}[ty] // {6:32,8:32,12:256,13:256,14:256}[ty]])
+          out = DEQ[ty](blk, n)
+          out.astype('<f4').tofile(sys.argv[3])
+          print("%s type=%d n=%d" % (nm, ty, n))
+          break

@@ -220,6 +220,9 @@ static inline double rsqrt(double x) { return 1.0/sqrt(x); }
         ? ( file_exists ( string_data sopath ) ) {
             : *u h0 ( dlopen ( string_data sopath ) 2 )
             ? != # i h0 0 {
+                // Cache hit — the generated source was only needed to
+                // compute the key; free it on the way out.
+                ( string_free c )
                 ( string_free sopath )
                 ^ h0
             } {}
