@@ -21,7 +21,12 @@
 //
 // The token embedding is dequantised host-side once (its rows upload
 // one at a time), which costs host RAM but no device memory.
-// Prefill runs the decode step per prompt token — batched later.
+// The prompt is processed in CHUNKS: the matmuls run over up to
+// LM_CHUNK positions at once, so a 300-token prompt costs a few hundred
+// kernel launches instead of a few tens of thousands, and each weight is
+// read once per chunk instead of once per token. Attention still runs
+// per position (it is not the bottleneck, and the causal window differs
+// per position anyway) — over a cache the same chunk already filled.
 //
 // Architectures: the llama shape — RMSNorm → GQA attention with
 // NORM-style RoPE → SwiGLU FFN, residuals around both — which `llama`
@@ -161,6 +166,10 @@ $ `src/tokenizer.nu`
 // host-dequantised to f32), so the caller records which matvec kernel
 // the weight needs.
 : ~ i __lm_last_type -1
+
+// Positions per prefill chunk. Bounds the batched activation scratch
+// (chunk × n_ff floats) while keeping the launches amortised.
+: i LM_CHUNK 64
 
 @ __lm_upload * Llm m * Gguf gg s name → i {
     : i ti ( gguf_find_tensor gg name )
@@ -415,16 +424,18 @@ $ `src/tokenizer.nu`
         ( vec_push [i] . m vcache ( __lm_scratch m * . m n_ctx kvdim ) )
         = L + L 1
     }
-    = . m xd ( __lm_scratch m . m n_embd )
-    = . m xnd ( __lm_scratch m . m n_embd )
-    = . m qd ( __lm_scratch m . m n_embd )
-    = . m kd ( __lm_scratch m kvdim )
-    = . m vd ( __lm_scratch m kvdim )
-    = . m aod ( __lm_scratch m . m n_embd )
-    = . m tmpd ( __lm_scratch m . m n_embd )
-    = . m gd ( __lm_scratch m . m n_ff )
-    = . m ud ( __lm_scratch m . m n_ff )
-    = . m scored ( __lm_scratch m * . m n_head . m n_ctx )
+    // Activation scratch is sized for a whole prefill chunk; decode uses
+    // the first row of each.
+    = . m xd ( __lm_scratch m * LM_CHUNK . m n_embd )
+    = . m xnd ( __lm_scratch m * LM_CHUNK . m n_embd )
+    = . m qd ( __lm_scratch m * LM_CHUNK . m n_embd )
+    = . m kd ( __lm_scratch m * LM_CHUNK kvdim )
+    = . m vd ( __lm_scratch m * LM_CHUNK kvdim )
+    = . m aod ( __lm_scratch m * LM_CHUNK . m n_embd )
+    = . m tmpd ( __lm_scratch m * LM_CHUNK . m n_embd )
+    = . m gd ( __lm_scratch m * LM_CHUNK . m n_ff )
+    = . m ud ( __lm_scratch m * LM_CHUNK . m n_ff )
+    = . m scored ( __lm_scratch m * * LM_CHUNK . m n_head . m n_ctx )
     = . m logitsd ( __lm_scratch m . m n_vocab )
     = . m logits_host ( gpu_host_alloc * . m n_vocab 4 )
     ?? ( env_get `NURLLAMA_VERBOSE` ) {
@@ -498,59 +509,99 @@ $ `src/tokenizer.nu`
 // One decode step: token at position pos (0-based; caller feeds
 // positions sequentially). Logits for the NEXT token land in
 // logits_host.
+// One decode step: token at position pos.
 @ llm_eval * Llm m i token i pos → v {
+    : ( Vec i ) one ( vec_new [i] )
+    ( vec_push [i] one token )
+    ( llm_eval_n m one 0 1 pos )
+    ( vec_free [i] one )
+}
+
+// Evaluate `count` tokens — ids[first .. first+count) — starting at
+// absolute position pos0. The matmuls run over the whole batch; attention
+// runs per position over the cache this same batch already filled (its
+// causal window differs per position). Logits are produced for the LAST
+// position only, which is all a prefill or a decode step needs.
+@ llm_eval_n * Llm m ( Vec i ) ids i first i count i pos0 → v {
+    ? < count 1 { ^ v } {}
     : i ne . m n_embd
     : i hd . m head_dim
     : i nh . m n_head
     : i nkv . m n_kv
     : i kvdim * nkv hd
 
-    // x ← the token's embedding row, dequantised on demand out of the
+    // x ← the batch's embedding rows, dequantised on demand out of the
     // still-open GGUF mapping (no full-table expansion)
-    : GpuBuffer xb @ GpuBuffer { . m xd * ne 4 }
-    ?? ( gguf_dequant_range # *Gguf . m gg . m embd_idx * token ne ne ) {
-        T row → {
-            : i _u1 ( gpu_upload xb ( vec_data [u] row ) )
-            ( vec_free [u] row )
+    : ~ i bi 0
+    ~ < bi count {
+        : i tok ( __lm_geti ids + first bi )
+        : GpuBuffer xb @ GpuBuffer { + . m xd * * bi ne 4 * ne 4 }
+        ?? ( gguf_dequant_range # *Gguf . m gg . m embd_idx * tok ne ne ) {
+            T row → {
+                : i _u1 ( gpu_upload xb ( vec_data [u] row ) )
+                ( vec_free [u] row )
+            }
+            F e → { ( string_free e ) }
         }
-        F e → { ( string_free e ) }
+        = bi + bi 1
     }
 
     : ~ i L 0
     ~ < L . m n_layer {
-        // attention block
-        ( lk_rmsnorm . m ks . m xd ( __lm_geti . m attn_norm L ) . m xnd ne . m eps )
-        : b _q1 ( lk_matvec_q . m ks ( __lm_geti . m tq_wq L ) ( __lm_geti . m wq L ) . m xnd . m qd ne ne )
-        : b _q2 ( lk_matvec_q . m ks ( __lm_geti . m tq_wk L ) ( __lm_geti . m wk L ) . m xnd . m kd kvdim ne )
-        : b _q3 ( lk_matvec_q . m ks ( __lm_geti . m tq_wv L ) ( __lm_geti . m wv L ) . m xnd . m vd kvdim ne )
-        // qwen2: Q/K/V biases (llama has none — the pointers are -1)
+        // ── attention ──
+        ( lk_rmsnorm . m ks . m xd ( __lm_geti . m attn_norm L ) . m xnd ne . m eps count )
+        : b _q1 ( lk_matvec_q . m ks ( __lm_geti . m tq_wq L ) ( __lm_geti . m wq L ) . m xnd . m qd ne ne count )
+        : b _q2 ( lk_matvec_q . m ks ( __lm_geti . m tq_wk L ) ( __lm_geti . m wk L ) . m xnd . m kd kvdim ne count )
+        : b _q3 ( lk_matvec_q . m ks ( __lm_geti . m tq_wv L ) ( __lm_geti . m wv L ) . m xnd . m vd kvdim ne count )
+        // qwen2: Q/K/V biases, broadcast over the batch (llama has none)
         : i bqd ( __lm_geti . m bq L )
         : i bkd ( __lm_geti . m bk L )
         : i bvd ( __lm_geti . m bv L )
-        ? >= bqd 0 { ( lk_addv . m ks . m qd bqd ne ) } {}
-        ? >= bkd 0 { ( lk_addv . m ks . m kd bkd kvdim ) } {}
-        ? >= bvd 0 { ( lk_addv . m ks . m vd bvd kvdim ) } {}
-        ( lk_rope . m ks . m qd nh hd . m rope_dim pos . m rope_base . m rope_style )
-        ( lk_rope . m ks . m kd nkv hd . m rope_dim pos . m rope_base . m rope_style )
-        ( lk_copyat . m ks ( __lm_geti . m kcache L ) . m kd * pos kvdim kvdim )
-        ( lk_copyat . m ks ( __lm_geti . m vcache L ) . m vd * pos kvdim kvdim )
+        ? >= bqd 0 { ( lk_addrow . m ks . m qd bqd ne count ) } {}
+        ? >= bkd 0 { ( lk_addrow . m ks . m kd bkd kvdim count ) } {}
+        ? >= bvd 0 { ( lk_addrow . m ks . m vd bvd kvdim count ) } {}
+        ( lk_rope . m ks . m qd nh hd . m rope_dim pos0 . m rope_base . m rope_style count )
+        ( lk_rope . m ks . m kd nkv hd . m rope_dim pos0 . m rope_base . m rope_style count )
+        // the whole batch's K/V rows land in the cache before any position
+        // attends, so a position can see every earlier one in this chunk
+        ( lk_copyat . m ks ( __lm_geti . m kcache L ) . m kd * pos0 kvdim * count kvdim )
+        ( lk_copyat . m ks ( __lm_geti . m vcache L ) . m vd * pos0 kvdim * count kvdim )
         ( lk_attn . m ks . m qd ( __lm_geti . m kcache L ) ( __lm_geti . m vcache L )
-        . m aod . m scored nh nkv hd + pos 1 )
-        : b _q4 ( lk_matvec_q . m ks ( __lm_geti . m tq_wo L ) ( __lm_geti . m wo L ) . m aod . m tmpd ne ne )
-        ( lk_addv . m ks . m xd . m tmpd ne )
+        . m aod . m scored nh nkv hd + pos0 1 count . m n_ctx )
+        : b _q4 ( lk_matvec_q . m ks ( __lm_geti . m tq_wo L ) ( __lm_geti . m wo L ) . m aod . m tmpd ne ne count )
+        ( lk_addv . m ks . m xd . m tmpd * ne count )
 
-        // FFN block (SwiGLU)
-        ( lk_rmsnorm . m ks . m xd ( __lm_geti . m ffn_norm L ) . m xnd ne . m eps )
-        : b _q5 ( lk_matvec_q . m ks ( __lm_geti . m tq_gate L ) ( __lm_geti . m w_gate L ) . m xnd . m gd . m n_ff ne )
-        : b _q6 ( lk_matvec_q . m ks ( __lm_geti . m tq_up L ) ( __lm_geti . m w_up L ) . m xnd . m ud . m n_ff ne )
-        ( lk_silumul . m ks . m gd . m ud . m n_ff )
-        : b _q7 ( lk_matvec_q . m ks ( __lm_geti . m tq_down L ) ( __lm_geti . m w_down L ) . m gd . m tmpd ne . m n_ff )
-        ( lk_addv . m ks . m xd . m tmpd ne )
+        // ── FFN (SwiGLU) ──
+        ( lk_rmsnorm . m ks . m xd ( __lm_geti . m ffn_norm L ) . m xnd ne . m eps count )
+        : b _q5 ( lk_matvec_q . m ks ( __lm_geti . m tq_gate L ) ( __lm_geti . m w_gate L ) . m xnd . m gd . m n_ff ne count )
+        : b _q6 ( lk_matvec_q . m ks ( __lm_geti . m tq_up L ) ( __lm_geti . m w_up L ) . m xnd . m ud . m n_ff ne count )
+        ( lk_silumul . m ks . m gd . m ud * . m n_ff count )
+        : b _q7 ( lk_matvec_q . m ks ( __lm_geti . m tq_down L ) ( __lm_geti . m w_down L ) . m gd . m tmpd ne . m n_ff count )
+        ( lk_addv . m ks . m xd . m tmpd * ne count )
         = L + L 1
     }
 
-    ( lk_rmsnorm . m ks . m xd . m out_norm . m xnd ne . m eps )
-    : b _q8 ( lk_matvec_q . m ks . m tq_output . m w_output . m xnd . m logitsd . m n_vocab ne )
+    // logits for the last position only
+    ( lk_rmsnorm . m ks . m xd . m out_norm . m xnd ne . m eps count )
+    : i last_row + . m xnd * * - count 1 ne 4
+    : b _q8 ( lk_matvec_q . m ks . m tq_output . m w_output last_row . m logitsd . m n_vocab ne 1 )
     : GpuBuffer lb @ GpuBuffer { . m logitsd * . m n_vocab 4 }
     : i _u2 ( gpu_download . m logits_host lb )
+}
+
+// The largest chunk a single llm_eval_n call may take.
+@ llm_chunk → i { ^ LM_CHUNK }
+
+// Prefill: run the whole prompt through the model in chunks, leaving the
+// KV cache filled and the logits set for the LAST prompt token — the
+// distribution the first generated token is drawn from.
+@ llm_prefill * Llm m ( Vec i ) ids → v {
+    : i n ( vec_len [i] ids )
+    : ~ i off 0
+    ~ < off n {
+        : i left - n off
+        : i take ? < left LM_CHUNK left LM_CHUNK
+        ( llm_eval_n m ids off take off )
+        = off + off take
+    }
 }

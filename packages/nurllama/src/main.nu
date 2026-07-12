@@ -488,11 +488,7 @@ $ `stdlib/std/term.nu`
                                     ( vec_free [i] ids )
                                     = running F
                                 } {
-                                    : ~ i k 0
-                                    ~ < k nprompt {
-                                        ( llm_eval m ( __tk_geti ids k 0 ) k )
-                                        = k + k 1
-                                    }
+                                    ( llm_prefill m ids )
                                     ( vec_free [i] ids )
                                     : String reply ( string_new )
                                     : ~ i posn nprompt
@@ -746,12 +742,9 @@ $ `stdlib/std/term.nu`
                 ? > nprompt ( llm_n_ctx m ) {
                     = rc2 ( __nl_err ( string_from `nurllama: prompt longer than the context` ) )
                 } {
-                    // prefill: decode step per prompt token
-                    : ~ i k 0
-                    ~ < k nprompt {
-                        ( llm_eval m ( __tk_geti ids k 0 ) k )
-                        = k + k 1
-                    }
+                    // prefill: the whole prompt in batched chunks
+
+                    ( llm_prefill m ids )
                     ? ( nurl_str_eq cmd `logits` ) {
                         : ~ i j 0
                         ~ < j ( llm_n_vocab m ) {

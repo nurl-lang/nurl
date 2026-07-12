@@ -126,6 +126,20 @@ C=$("$NL" run "$M" "One day" -n 16 --temp 0.8 --seed 8)
 [ "$A" = "$B" ] && ok "same seed → same sample" || bad "sampling determinism"
 [ "$A" != "$C" ] && ok "different seed → different sample" || bad "seed sensitivity"
 
+# batched prefill: a prompt LONGER than one chunk (64 tokens) must give
+# exactly the same continuation the reference does — the chunk boundary is
+# where a batching bug hides
+LONGP=$(python3 -c "print('The quick brown fox jumps over the lazy dog. ' * 30, end='')")
+# tokenise exactly as `run` does (BOS included) so the reference sees the
+# same prompt
+LIDS=$("$NL" tokenize "$M" "$LONGP")
+NP=$(echo $LIDS | wc -w)
+LREF=$(python3 tests/llama_ref.py "$M" "$LIDS" greedy 8)
+LREFTXT=$("$NL" detok "$M" $LREF)
+LOURS=$("$NL" run "$M" "$LONGP" -n 8 --temp 0)
+[ "$LREFTXT" = "$LOURS" ] && ok "batched prefill: $NP-token prompt (crosses chunk boundaries) == numpy greedy" || {
+    bad "batched prefill"; echo "    ours: $LOURS"; echo "    ref : $LREFTXT"; }
+
 # ── qwen2: a different architecture, tokenizer variant and rotary layout ──
 # A 400 MB download per run is unfriendly: point NURLLAMA_TEST_QWEN at an
 # already-fetched Qwen2.5 GGUF to reuse it; otherwise it is fetched once.

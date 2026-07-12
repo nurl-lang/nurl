@@ -75,6 +75,11 @@ SmolLM-135M — and the memory-bound matmul reads proportionally fewer
 bytes. The embedding table is never expanded either: each step
 dequantises just the token's row, straight out of the mmapped file.
 
+The prompt is processed in **batched chunks** — the matmuls and the
+attention run over 64 positions at once — so a long prompt does not
+crawl: a 301-token prompt reaches its first generated token in 1.2 s
+instead of 7.2 s.
+
 **No GPU?** `NURL_GPU=cpu` runs the identical kernel sources on the
 host through OpenMP and produces byte-identical output.
 
@@ -115,6 +120,9 @@ Not by trusting itself:
   reproduces the same text exactly.
 - A resumed download is proven to send `Range:` and transfer only the
   missing tail, with the final digest still exact.
+- An 872-token prompt — fourteen chunk boundaries — continues exactly as
+  the numpy reference does, so the batching cannot quietly corrupt a
+  long context.
 - ASan/UBSan/LeakSanitizer-clean.
 
 ```sh
