@@ -162,9 +162,21 @@ fi
 case "$PREFIX" in
     ""|/|"$HOME"|"$HOME"/) err "refusing to install into '$PREFIX' — set NURL_HOME to a dedicated directory (e.g. ~/.nurl)." ;;
 esac
+# An upgrade must not destroy USER state living in the same prefix:
+#   credentials          the registry publish token (nurlpkg login)
+#   share/               assets of tools installed via nurlpkg
+#   bin/<other tools>    programs installed via nurlpkg install
+# Wiping the whole prefix (as this did) silently logged the user out and
+# removed every installed tool. Remove only the toolchain's OWN paths —
+# the four shipped binaries, build/, stdlib/, zig/, the shims — and let
+# tar overwrite the rest. stdlib/ and build/ are removed wholesale so a
+# module deleted upstream cannot linger.
 if [ -e "$PREFIX" ]; then
     if [ -x "$PREFIX/bin/nurl" ] || [ -x "$PREFIX/bin/nurlc" ] || [ -z "$(ls -A "$PREFIX" 2>/dev/null)" ]; then
-        rm -rf "$PREFIX"
+        rm -rf "$PREFIX/build" "$PREFIX/stdlib" "$PREFIX/zig"
+        rm -f  "$PREFIX/nurl.sh" "$PREFIX/nurl.bat" "$PREFIX/env" \
+               "$PREFIX/bin/nurl" "$PREFIX/bin/nurlc" \
+               "$PREFIX/bin/nurlfmt" "$PREFIX/bin/nurlpkg"
     else
         err "'$PREFIX' exists, is not empty, and is not a NURL install (no bin/nurl) — refusing to overwrite it. Remove it yourself or set NURL_HOME to a fresh path."
     fi
