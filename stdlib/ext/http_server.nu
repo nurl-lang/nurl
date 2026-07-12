@@ -157,6 +157,25 @@ $ `stdlib/ext/http_response.nu`
     = g_ws_upgrade # i u
 }
 
+// ── Streaming-response hook (SSE / NDJSON / chunked bodies) ──────
+// The write-side sibling of the upgrade hook: it runs on every fully
+// parsed request (body included) AFTER the WebSocket hook and BEFORE
+// the normal HttpResponse handler. Return T after writing the whole
+// response yourself — response_begin_chunked / response_write_chunk /
+// response_end_chunked on the TcpConn — and the loop ends so the
+// server closes the finished connection (a streamed response is the
+// connection's last; do NOT close the conn in the hook). Return F for
+// "not mine" and the request falls through to the router untouched.
+// Process-global like the upgrade hook; default unset = neutral.
+: __StreamHook { ( @ b TcpConn HttpRequest ) fn }
+: ~ i g_stream_hook 0
+
+@ server_set_stream ( @ b TcpConn HttpRequest ) f → v {
+    : *__StreamHook u # *__StreamHook ( nurl_alloc Z __StreamHook )
+    = . u fn f
+    = g_stream_hook # i u
+}
+
 // DoS connection caps (server-wide + per-source-IP). All caps are
 // "soft" — a request that exceeds them is rejected with an immediate
 // close (no canned 503), which is the cheapest possible response and
@@ -763,6 +782,13 @@ $ `stdlib/ext/http_response.nu`
                         : *__WsUpgrade __wu # *__WsUpgrade g_ws_upgrade
                         : ( @ b TcpConn HttpRequest ) __upf . __wu fn
                         ? ( __upf conn req ) { = __ws_handled T } {}
+                    } {}
+                    // Streaming hook: same takeover contract as the
+                    // upgrade hook, for chunked/SSE/NDJSON responses.
+                    ? & ! __ws_handled != g_stream_hook 0 {
+                        : *__StreamHook __sh # *__StreamHook g_stream_hook
+                        : ( @ b TcpConn HttpRequest ) __shf . __sh fn
+                        ? ( __shf conn req ) { = __ws_handled T } {}
                     } {}
                     ? __ws_handled { ( request_free req ) = done T } {
                         : b req_close ( __request_says_close req )
