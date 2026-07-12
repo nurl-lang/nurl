@@ -2,20 +2,37 @@
 
 The ollama-shaped engine, built package by package on top of
 [`packages/gguf`](../gguf) and [`packages/gpu`](../gpu).
-**Phase 3 (current): the inference core.**
+**Phase 4 (current): the model store.**
 
 ```
-$ nurllama run model.gguf "Once upon a time" -n 40 --temp 0
+$ nurllama pull hf.co/ggml-org/models/tinyllamas/stories260K.gguf
+pulled stories260K (sha256:270cba1bd510…, 1.1 MB)
+$ nurllama run stories260K "Once upon a time" -n 40 --temp 0
 , there was a little girl named Lily. She loved to play outside in the
 park. One day, she saw a big, red ball.
 
-nurllama run model.gguf "prompt" [-n N] [--temp F] [--topk N] [--topp F] [--seed N]
+nurllama pull <hf.co/ORG/REPO/FILE.gguf | url> [--name N]
+nurllama list · rm <name> · verify <name>
+nurllama run <name|path> "prompt" [-n N] [--temp F] [--topk N] [--topp F] [--seed N]
 nurllama logits model.gguf "prompt"               # verification tap
 nurllama tokenize model.gguf "Once upon a time"   # → 1 403 407 261 378
 nurllama detok model.gguf 1 403 407 261 378       # → " Once upon a time"
 nurllama vocab model.gguf 10                      # first 10 pieces
 nurllama selftest                                 # 17 bit-exact checks
 ```
+
+## Model store
+
+`~/.nurllama` (or `$NURLLAMA_HOME`): content-addressed blobs
+(`blobs/sha256-<hex>`) plus one small manifest per name. The pull is
+streaming end to end — HTTP chunks flow straight to disk while the
+incremental sha256 consumes the same bytes and a tty-gated progress
+bar narrates; nothing is ever fully resident. An interrupted pull
+resumes with `Range: bytes=N-` (the existing part is re-hashed in a
+stream and only the tail transfers; a server without Range support
+triggers a clean restart). `verify` re-hashes the blob and refuses
+drift; `rm` drops the blob only when the last name referencing it is
+gone. `run`/`show`/`tokenize` accept a store name or a plain path.
 
 ## Inference core
 
@@ -104,7 +121,6 @@ $ `src/tokenizer.nu`
 
 ## Roadmap
 
-Phase 4: model store + pull (`~/.nurllama`). Phase 5: CLI chat + an
-ollama-compatible HTTP API. Phase 6: device-side dequant-in-matmul,
-K-quants, batched prefill. See the plan in the repo's development
-notes.
+Phase 5: CLI chat + an ollama-compatible HTTP API. Phase 6:
+device-side dequant-in-matmul, K-quants, batched prefill. See the
+plan in the repo's development notes.
