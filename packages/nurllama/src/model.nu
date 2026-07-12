@@ -327,8 +327,9 @@ $ `src/tokenizer.nu`
     }
     = . m n_vocab ( tok_n_vocab . m tok )
 
-    // device + kernels
-    = . m g ( gpu_open 0 )
+    // device + kernels — the best GPU on the box, not merely the first
+    // one the driver enumerates ($NURL_GPU_DEVICE overrides)
+    = . m g ( gpu_open ( gpu_best_device ) )
     ? ( gpu_ok . m g ) {} {
         ( tok_free . m tok )
         ( nurl_free # s m )
@@ -447,6 +448,10 @@ $ `src/tokenizer.nu`
                 = total + total ( __lm_geti . m wbytes k )
                 = k + k 1
             }
+            : String dmsg ( string_from `[nurllama] device: ` )
+            ( string_push_str dmsg ( gpu_name . m g ) )
+            ( nurl_eprintln ( string_data dmsg ) )
+            ( string_free dmsg )
             : String msg ( string_from `[nurllama] device memory: ` )
             ( string_push_int msg / total 1048576 )
             ( string_push_str msg ` MiB (weights + KV cache + scratch)` )
