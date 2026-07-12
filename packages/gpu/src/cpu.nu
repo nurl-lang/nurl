@@ -40,6 +40,10 @@ static __thread __nurl_dim3 blockIdx, threadIdx, blockDim, gridDim;
 #define __global__
 #define __device__ static
 #define __restrict__
+// CUDA-only math intrinsics that C99 math.h lacks — a kernel using
+// them must run identically on this backend.
+static inline float rsqrtf(float x) { return 1.0f/sqrtf(x); }
+static inline double rsqrt(double x) { return 1.0/sqrt(x); }
 `
 }
 
