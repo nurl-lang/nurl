@@ -2,17 +2,24 @@
 
 The ollama-shaped engine, built package by package on top of
 [`packages/gguf`](../gguf) and [`packages/gpu`](../gpu).
-**Phase 4 (current): the model store.**
+**Phase 5 (current): chat + an ollama-compatible API.**
 
 ```
 $ nurllama pull hf.co/ggml-org/models/tinyllamas/stories260K.gguf
 pulled stories260K (sha256:270cba1bd510…, 1.1 MB)
+$ nurllama serve                      # ollama-compatible, port 11434
+$ curl localhost:11434/api/generate -d '{"model":"stories260K","prompt":"Once upon a time"}'
+{"model":"stories260K","response":",","done":false}
+{"model":"stories260K","response":" there","done":false}
+…
+$ nurllama chat mymodel               # interactive, model's own template
 $ nurllama run stories260K "Once upon a time" -n 40 --temp 0
 , there was a little girl named Lily. She loved to play outside in the
 park. One day, she saw a big, red ball.
 
 nurllama pull <hf.co/ORG/REPO/FILE.gguf | url> [--name N]
 nurllama list · rm <name> · verify <name>
+nurllama serve [--host H] [--port N] · chat <name|path>
 nurllama run <name|path> "prompt" [-n N] [--temp F] [--topk N] [--topp F] [--seed N]
 nurllama logits model.gguf "prompt"               # verification tap
 nurllama tokenize model.gguf "Once upon a time"   # → 1 403 407 261 378
@@ -20,6 +27,27 @@ nurllama detok model.gguf 1 403 407 261 378       # → " Once upon a time"
 nurllama vocab model.gguf 10                      # first 10 pieces
 nurllama selftest                                 # 17 bit-exact checks
 ```
+
+## The API and chat
+
+`nurllama serve` speaks enough of ollama's wire protocol that existing
+clients work unchanged: `POST /api/generate` and `POST /api/chat` emit
+**NDJSON — one object per token, the moment it decodes** (`stream:false`
+returns a single aggregated object instead), plus `GET /api/tags`,
+`POST /api/show` and a health root. Streaming rides a new
+`http_app_stream` hook in the http package: the handler owns the
+TcpConn and writes chunked frames itself.
+
+Chat templates come from **the model's own GGUF metadata**
+(`tokenizer.chat_template` → ChatML / llama3 / llama2). A model with no
+template is a *base* model, and nurllama refuses to invent turns for it
+— it completes text, which is what such a model was trained to do.
+`nurllama chat` runs the same renderer over a live message list with a
+line editor and streaming output.
+
+One model is resident at a time; a request for another swaps it in.
+The server is single-worker, so decode serialisation is structural
+rather than a lock — honest for a single-GPU host.
 
 ## Model store
 
@@ -121,6 +149,6 @@ $ `src/tokenizer.nu`
 
 ## Roadmap
 
-Phase 5: CLI chat + an ollama-compatible HTTP API. Phase 6:
-device-side dequant-in-matmul, K-quants, batched prefill. See the
-plan in the repo's development notes.
+Phase 6: device-side dequant-in-matmul, K-quants, batched prefill,
+per-model BPE pre-tokenizer variants. See the plan in the repo's
+development notes.

@@ -4,6 +4,9 @@
 //                                             (hf.co/ORG/REPO/FILE.gguf or a
 //                                             URL; resumes a broken pull)
 //   nurllama list · rm <name> · verify <name> the local model store
+//   nurllama serve [--host H] [--port N]      ollama-compatible HTTP API
+//   nurllama chat <model|name>                interactive chat (model's
+//                                             own template from GGUF)
 //   nurllama run <model|name> <prompt>        generate (stream to stdout)
 //     -n N (default 64) · --temp F (0 = greedy, default 0.8)
 //     --topk N · --topp F · --seed N · --ctx N
@@ -39,6 +42,9 @@ $ `src/model.nu`
 $ `src/sample.nu`
 $ `src/store.nu`
 $ `src/pull.nu`
+$ `src/chat.nu`
+$ `src/api.nu`
+$ `stdlib/std/term.nu`
 
 @ __nl_err String e → i {
     ( nurl_eprintln ( string_data e ) )
@@ -358,6 +364,48 @@ $ `src/pull.nu`
         }
     }
 
+    // ── chat-template style detection from real GGUF metadata ──
+    // Writes a model file carrying tokenizer.chat_template and reads the
+    // style back through the same path a downloaded model takes.
+    : ~ i si 0
+    ~ < si 4 {
+        : ~ s tpl ``
+        : ~ i want CHAT_PLAIN
+        ? == si 0 {
+            = tpl `{% for m in messages %}<|im_start|>{{ m.role }}\n{{ m.content }}<|im_end|>{% endfor %}`
+            = want CHAT_CHATML
+        } {}
+        ? == si 1 {
+            = tpl `{% for m in messages %}<|start_header_id|>{{ m.role }}<|end_header_id|>{{ m.content }}<|eot_id|>{% endfor %}`
+            = want CHAT_LLAMA3
+        } {}
+        ? == si 2 {
+            = tpl `{% for m in messages %}[INST] {{ m.content }} [/INST]{% endfor %}`
+            = want CHAT_LLAMA2
+        } {}
+        // si == 3: no template at all → PLAIN
+        ?? ( gw_new 32 ) {
+            T w → {
+                ( gw_kv_str w `general.architecture` `llama` )
+                ? > ( nurl_str_len tpl ) 0 { ( gw_kv_str w `tokenizer.chat_template` tpl ) } {}
+                : !v String wr ( gw_write w ( string_data path ) )
+                ( gw_free w )
+                ?? wr { T _ → {} F e → { ( string_free e ) } }
+            }
+            F e → { ( string_free e ) }
+        }
+        : ~ i got -1
+        ?? ( gguf_open ( string_data path ) ) {
+            T gg → {
+                = got ( chat_style_of gg )
+                ( gguf_close gg )
+            }
+            F e → { ( string_free e ) }
+        }
+        ( __nl_ck cn == got want `chat style detected from the model's own metadata` )
+        = si + si 1
+    }
+
     ( file_delete ( string_data path ) )
     ( string_free path )
     : String m ( string_from `selftest: ` )
@@ -373,6 +421,117 @@ $ `src/pull.nu`
 
 // ── CLI ─────────────────────────────────────────────────────────────
 
+// Interactive chat: the model's own template (from its GGUF metadata)
+// renders the running message list each turn; generated pieces stream
+// to stdout as they decode. Ctrl-C / Ctrl-D (or /exit) ends it.
+@ __nl_chat s path ArgParser p → i {
+    : ~ i style CHAT_PLAIN
+    ?? ( gguf_open path ) {
+        T gg → {
+            = style ( chat_style_of gg )
+            ( gguf_close gg )
+        }
+        F e → { ( string_free e ) }
+    }
+    ?? ( llm_open path 0 ) {
+        F e → { ^ ( __nl_err e ) }
+        T m → {
+            : *Tok t ( llm_tok m )
+            : String stmp ( args_value_or p `temp` `0.8` )
+            : ~ f temp 0.8
+            ?? ( string_to_float stmp ) { T v2 → { = temp v2 } F → {} }
+            ( string_free stmp )
+            : String snp ( args_value_or p `n-predict` `256` )
+            : ~ i npredict 256
+            ?? ( string_to_int snp ) { T v2 → { = npredict v2 } F _ → {} }
+            ( string_free snp )
+            : String stk ( args_value_or p `topk` `40` )
+            : ~ i topk 40
+            ?? ( string_to_int stk ) { T v2 → { = topk v2 } F _ → {} }
+            ( string_free stk )
+            : String stp ( args_value_or p `topp` `0.95` )
+            : ~ f topp 0.95
+            ?? ( string_to_float stp ) { T v2 → { = topp v2 } F → {} }
+            ( string_free stp )
+            : String ssd ( args_value_or p `seed` `42` )
+            : ~ i seed 42
+            ?? ( string_to_int ssd ) { T v2 → { = seed v2 } F _ → {} }
+            ( string_free ssd )
+            : Rng rng ( rng_seed seed )
+
+            ? == style CHAT_PLAIN {
+                ( nurl_eprintln `note: this model ships no chat template — completing text, not chatting` )
+            } {}
+            ( nurl_print `chat ready — /exit to quit\n` )
+            : ( Vec ChatMsg ) msgs ( vec_new [ChatMsg] )
+            : ( Vec String ) hist ( vec_new [String] )
+            : ~ b running T
+            ~ running {
+                ?? ( term_read_line `> ` hist ) {
+                    F → { = running F }
+                    T line → {
+                        : s lraw ( string_data line )
+                        ? | ( nurl_str_eq lraw `/exit` ) ( nurl_str_eq lraw `/quit` ) {
+                            = running F
+                            ( string_free line )
+                        } {
+                            ? == 0 ( nurl_str_len lraw ) { ( string_free line ) } {
+                                ( vec_push [ChatMsg] msgs ( chat_msg `user` lraw ) )
+                                ( vec_push [String] hist ( string_from lraw ) )
+                                ( string_free line )
+                                : String prompt ( chat_render style msgs )
+                                : ( Vec i ) ids ( tok_encode t ( string_data prompt ) T )
+                                ( string_free prompt )
+                                : i nprompt ( vec_len [i] ids )
+                                ? > nprompt ( llm_n_ctx m ) {
+                                    ( nurl_eprintln `nurllama: conversation is longer than the context — /exit and restart` )
+                                    ( vec_free [i] ids )
+                                    = running F
+                                } {
+                                    : ~ i k 0
+                                    ~ < k nprompt {
+                                        ( llm_eval m ( __tk_geti ids k 0 ) k )
+                                        = k + k 1
+                                    }
+                                    ( vec_free [i] ids )
+                                    : String reply ( string_new )
+                                    : ~ i posn nprompt
+                                    : ~ i produced 0
+                                    : ~ b stop F
+                                    ~ & & < produced npredict < posn ( llm_n_ctx m ) ! stop {
+                                        : i nt ( sample_next m rng temp topk topp )
+                                        ? == nt ( tok_eos t ) { = stop T } {
+                                            : ( Vec u ) pb ( tok_piece t nt )
+                                            : String piece ( bytes_to_str pb )
+                                            ( vec_free [u] pb )
+                                            ? ( chat_stop_matches style ( string_data piece ) ) { = stop T } {
+                                                ( nurl_print ( string_data piece ) )
+                                                ( flush )
+                                                ( string_push_str reply ( string_data piece ) )
+                                                ( llm_eval m nt posn )
+                                                = posn + posn 1
+                                                = produced + produced 1
+                                            }
+                                            ( string_free piece )
+                                        }
+                                    }
+                                    ( nurl_print `\n` )
+                                    ( vec_push [ChatMsg] msgs ( chat_msg `assistant` ( string_data reply ) ) )
+                                    ( string_free reply )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            ( chat_msgs_free msgs )
+            ( vec_free_with [String] hist \ String s → v { ( string_free s ) } )
+            ( llm_close m )
+            ^ 0
+        }
+    }
+}
+
 @ main → i {
     : ArgParser p ( args_new `nurllama` `Run language models locally — phase 2: the GGUF-vocabulary tokenizer.` )
     ( args_flag p `help` 104 `show this help` )
@@ -385,6 +544,8 @@ $ `src/pull.nu`
     ( args_opt p `seed` 0 `N` `run: RNG seed (default 42)` )
     ( args_opt p `ctx` 0 `N` `run: context length cap (default: model's)` )
     ( args_opt p `name` 0 `NAME` `pull: store under this name` )
+    ( args_opt p `host` 0 `ADDR` `serve: bind address (default 127.0.0.1)` )
+    ( args_opt p `port` 0 `N` `serve: port (default 11434, ollama's)` )
     ? ( args_parse_argv p ) {} {
         ( nurl_eprintln ( args_error p ) )
         ( args_free p )
@@ -393,7 +554,7 @@ $ `src/pull.nu`
     ? ( args_present p `help` ) {
         : String u ( args_usage p )
         ( nurl_print ( string_data u ) )
-        ( nurl_print `\ncommands:\n  pull <hf.co/ORG/REPO/FILE.gguf | url> [--name N] · list · rm <name> · verify <name>\n  run <model|name> <prompt> [-n N] [--temp F] [--topk N] [--topp F] [--seed N]\n  logits <model> <prompt> · tokenize <model> <text>\n  detok <model> <id> [id …] · vocab <model> [n] · selftest\n` )
+        ( nurl_print `\ncommands:\n  pull <hf.co/ORG/REPO/FILE.gguf | url> [--name N] · list · rm <name> · verify <name>\n  serve [--host H] [--port N] · chat <model|name>\n  run <model|name> <prompt> [-n N] [--temp F] [--topk N] [--topp F] [--seed N]\n  logits <model> <prompt> · tokenize <model> <text>\n  detok <model> <id> [id …] · vocab <model> [n] · selftest\n` )
         ( string_free u )
         ( args_free p )
         ^ 0
@@ -427,6 +588,44 @@ $ `src/pull.nu`
         ( string_free root )
         ( args_free p )
         ^ 0
+    } {}
+
+    // Debug tap: render the three-message fixture through one dialect —
+    // gives the template renderers a unit test with no model needed.
+    ? ( nurl_str_eq cmd `chat-template` ) {
+        : ~ s which `plain`
+        ?? ( vec_get [String] pos 1 ) {
+            T c → { = which ( string_data c ) }
+            F → {}
+        }
+        : ~ i style CHAT_PLAIN
+        ? ( nurl_str_eq which `chatml` ) { = style CHAT_CHATML } {}
+        ? ( nurl_str_eq which `llama3` ) { = style CHAT_LLAMA3 } {}
+        ? ( nurl_str_eq which `llama2` ) { = style CHAT_LLAMA2 } {}
+        : ( Vec ChatMsg ) msgs ( vec_new [ChatMsg] )
+        ( vec_push [ChatMsg] msgs ( chat_msg `system` `be brief` ) )
+        ( vec_push [ChatMsg] msgs ( chat_msg `user` `hi` ) )
+        : String out ( chat_render style msgs )
+        ( chat_msgs_free msgs )
+        ( nurl_print ( string_data out ) )
+        ( nurl_print `\n` )
+        ( string_free out )
+        ( args_free p )
+        ^ 0
+    } {}
+
+    ? ( nurl_str_eq cmd `serve` ) {
+        : String root ( nl_store_root )
+        : String host ( args_value_or p `host` `127.0.0.1` )
+        : String sport ( args_value_or p `port` `11434` )
+        : ~ i port 11434
+        ?? ( string_to_int sport ) { T v2 → { = port v2 } F _ → {} }
+        ( string_free sport )
+        : i rc ( api_serve root ( string_data host ) port )
+        ( string_free host )
+        ( string_free root )
+        ( args_free p )
+        ^ rc
     } {}
 
     ? | | ( nurl_str_eq cmd `pull` ) ( nurl_str_eq cmd `rm` ) ( nurl_str_eq cmd `verify` ) {
@@ -472,6 +671,37 @@ $ `src/pull.nu`
     ? < ( args_positional_count p ) 2 {
         ( args_free p )
         ^ ( __nl_err ( string_from `nurllama: this command needs a model file (nurllama --help)` ) )
+    } {}
+
+    ? ( nurl_str_eq cmd `chat` ) {
+        ? < ( args_positional_count p ) 2 {
+            ( args_free p )
+            ^ ( __nl_err ( string_from `nurllama: chat needs a model (nurllama --help)` ) )
+        } {}
+        : ~ s carg ``
+        ?? ( vec_get [String] pos 1 ) {
+            T c → { = carg ( string_data c ) }
+            F → {}
+        }
+        : String croot ( nl_store_root )
+        : ~ String cres ( string_new )
+        ?? ( nl_resolve croot carg ) {
+            T pth → {
+                ( string_free cres )
+                = cres pth
+            }
+            F → {}
+        }
+        ( string_free croot )
+        ? > ( string_len cres ) 0 {} {
+            ( string_free cres )
+            ( args_free p )
+            ^ ( __nl_err ( string_from `nurllama: not a file and not a stored model name (nurllama list)` ) )
+        }
+        : i rc ( __nl_chat ( string_data cres ) p )
+        ( string_free cres )
+        ( args_free p )
+        ^ rc
     } {}
 
     ? | ( nurl_str_eq cmd `run` ) ( nurl_str_eq cmd `logits` ) {
