@@ -8,6 +8,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.1] — 2026-07-13
+
+A patch for the speech release's own hot path: the FFT that computes every
+whisper spectrogram frame.
+
+### Changed
+
+- **`stdlib/std/fft.nu` — "not a power of two" is not one case.** 0.14.0
+  sent every such length through Bluestein; but `400 = 2^4·5^2` is
+  perfectly factorable, and Bluestein pays for TWO radix-2 transforms of
+  length 1024 to produce one transform of length 400 — the fallback for
+  hard lengths, applied to an easy one, 3000 times per 30 seconds of
+  audio. Three paths now, picked by what N actually is: powers of two
+  keep the radix-2 core, **smooth lengths (factors 2/3/5/7) get a direct
+  mixed-radix Cooley-Tukey** with per-level twiddle tables built once in
+  the plan, and Bluestein does only the job it is for — lengths with a
+  large prime factor, where a "radix" would degenerate toward the O(n²)
+  DFT it exists to avoid (997 stays on it, and stays exact).
+- **`fft_rfft` folds a real signal of even length in half**: 400 real
+  samples become a 200-point complex transform (`z[t] = x[2t] +
+  i·x[2t+1]`) plus an O(n) untangle — the even samples' spectrum is
+  conjugate-symmetric where the odd ones' is anti-symmetric, so they
+  separate. Half the transform is half the work, whichever path the
+  half-length takes.
+- Together: whisper's 30-second mel spectrogram **0.52 s → 0.14 s**
+  (the STFT itself 288 → 99 ms). With the packages already on the
+  registry riding this stdlib, distil-large-v3 transcribes a 292-second
+  recording in 3.9 s — 1.3 s with `--vad`.
+
+### Fixed
+
+- The FFT identity suite now pins **every radix the factoriser can hand
+  out** (3, 5, 7, alone and mixed: 105 = 3·5·7, 343 = 7³) with δ[1]
+  cases — the check that catches a conjugated combine step, which
+  round-trips perfectly while transforming wrongly. Forward transforms of
+  pseudo-random signals at N = 400, 360, 105, 343 were verified against
+  `numpy.fft` directly.
+
 ## [0.14.0] — 2026-07-13
 
 The **speech** release: NURL now transcribes real audio with real models,
