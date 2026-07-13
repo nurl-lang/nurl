@@ -190,6 +190,39 @@ else
     echo "  SKIP gemma3 download failed"
 fi
 
+# 5d. phi3 — the llama shape, but Q/K/V arrive as ONE tensor (attn_qkv, rows
+# q|k|v) and the FFN gate and up as one (ffn_up, rows gate|up). Nothing is
+# split: a weight is a device pointer plus a row count, so the parts are row
+# RANGES inside the uploaded buffer, and every range lands on a block boundary
+# because a row is a whole number of quantisation blocks. Getting an offset
+# wrong produces garbage immediately, which is exactly what this checks.
+#
+# The model is 2.4 GB, so this block is opt-in: NURLLAMA_BIG_TESTS=1.
+if [ "${NURLLAMA_BIG_TESTS:-0}" = "1" ]; then
+    PM="$WORK/phi3.gguf"
+    if curl -sL --max-time 3600 -f -o "$PM" \
+        https://huggingface.co/microsoft/Phi-3-mini-4k-instruct-gguf/resolve/main/Phi-3-mini-4k-instruct-q4.gguf; then
+        PIDS=$("$NL" tokenize "$PM" "The capital of France is")
+        PREF=$("$NL" detok "$PM" $(python3 tests/phi_ref.py "$PM" "$PIDS" greedy 12))
+        POURS=$("$NL" run "$PM" "The capital of France is" -n 12 --temp 0)
+        [ "$PREF" = "$POURS" ] && ok "phi3 greedy text == numpy reference (fused qkv + fused gate/up)" || {
+            bad "phi3 forward pass"; echo "    ref: [$PREF]"; echo "    our: [$POURS]"; }
+        PCPU=$(NURL_GPU=cpu "$NL" run "$PM" "The capital of France is" -n 12 --temp 0)
+        [ "$PCPU" = "$POURS" ] && ok "phi3 CPU backend text == device text" || bad "phi3 backend parity"
+        PHOST=$(NURLLAMA_DEQUANT=host "$NL" run "$PM" "The capital of France is" -n 12 --temp 0)
+        [ "$PHOST" = "$POURS" ] && ok "phi3 host-dequant text == device-native text" || bad "phi3 dequant parity"
+        printf -v PPROMPT '<|user|>\nHi<|end|>\n<|assistant|>'
+        PT=$("$NL" tokenize "$PM" "$PPROMPT")
+        [ "$PT" = "1 32010 29871 13 18567 32007 29871 13 32001" ] \
+            && ok "phi3 chat markers tokenise as single special ids" \
+            || { bad "phi3 special-token parsing"; echo "    got: $PT"; }
+    else
+        echo "  SKIP phi3 download failed"
+    fi
+else
+    echo "  SKIP phi3 (2.4 GB model — set NURLLAMA_BIG_TESTS=1 to run it)"
+fi
+
 # 6. seeded sampling determinism
 A=$("$NL" run "$M" "One day" -n 16 --temp 0.8 --seed 7)
 B=$("$NL" run "$M" "One day" -n 16 --temp 0.8 --seed 7)

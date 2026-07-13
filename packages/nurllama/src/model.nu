@@ -234,6 +234,24 @@ $ `src/tokenizer.nu`
     }
 }
 
+// Bytes one weight ROW occupies on the device: a quantised row is
+// cols/block_size blocks, an f32 row (a tensor we had to dequantise) is
+// 4*cols. Needed to point at a row RANGE inside a fused tensor.
+@ __lm_row_bytes i gt i cols → i {
+    ? == gt 0 { ^ * cols 4 } {}
+    : i b ( gguf_type_blck gt )
+    : i sz ( gguf_type_size gt )
+    ? | == b 0 == sz 0 { ^ 0 } {}
+    ^ * / cols b sz
+}
+
+// The row count (ne1) of a tensor, or -1 when it is absent.
+@ __lm_tensor_rows * Gguf gg s name → i {
+    : i ti ( gguf_find_tensor gg name )
+    ? < ti 0 { ^ -1 } {}
+    ?? ( vec_get [GgufTensor] . gg tensors ti ) { T t → { ^ . t d1 } F → { ^ -1 } }
+}
+
 // Allocate an f32 scratch/cache device buffer of n floats (tracked).
 @ __lm_scratch * Llm m i nfloats → i {
     : GpuBuffer b ( gpu_alloc . m g * nfloats 4 )
@@ -300,11 +318,13 @@ $ `src/tokenizer.nu`
     : *Gguf gg # *Gguf ggaddr
     : s arch ( gguf_kv_str_or gg `general.architecture` `` )
     : b is_gemma3 != 0 ( nurl_str_eq arch `gemma3` )
-    ? | | != 0 ( nurl_str_eq arch `llama` ) != 0 ( nurl_str_eq arch `qwen2` ) is_gemma3 {} {
+    : b is_phi3 != 0 ( nurl_str_eq arch `phi3` )
+    ? | | | != 0 ( nurl_str_eq arch `llama` ) != 0 ( nurl_str_eq arch `qwen2` )
+    is_gemma3 is_phi3 {} {
         ( gguf_close gg )
         : String msg ( string_from `nurllama: unsupported architecture '` )
         ( string_push_str msg arch )
-        ( string_push_str msg `' (supported: llama, qwen2, gemma3)` )
+        ( string_push_str msg `' (supported: llama, qwen2, gemma3, phi3)` )
         ^ @ !*Llm String { F msg }
     }
 
@@ -330,7 +350,7 @@ $ `src/tokenizer.nu`
     = . m rope_dim ( __lm_kv_i gg arch `rope.dimension_count` . m head_dim )
     // Rotary layout is architecture-defined: llama rotates adjacent pairs
     // (NORM), qwen2 and gemma rotate the two halves of the span (NEOX).
-    = . m rope_style ? | != 0 ( nurl_str_eq arch `qwen2` ) is_gemma3 1 0
+    = . m rope_style ? | | != 0 ( nurl_str_eq arch `qwen2` ) is_gemma3 is_phi3 1 0
 
     // ── the gemma shape ──────────────────────────────────────────────────
     // The embedding row is scaled by sqrt(n_embd) before the first block; the
@@ -350,11 +370,16 @@ $ `src/tokenizer.nu`
     // gemma3 it equals head_dim, but reading it keeps the kernel honest.
     : i qpre ( __lm_kv_i gg arch `attention.query_pre_attn_scalar` . m head_dim )
     = . m attn_scale ? is_gemma3 / 1.0 ( sqrt # f qpre ) / 1.0 ( sqrt # f . m head_dim )
-    = . m swa_window ? is_gemma3 ( __lm_kv_i gg arch `attention.sliding_window` 0 ) 0
-    // Layer L is a full-attention layer when (L+1) % period == 0; the rest
-    // slide. gemma3's period is 6.
+    // The window is whatever the model states (phi3-mini-4k: 2047; gemma3: 512).
+    = . m swa_window ( __lm_kv_i gg arch `attention.sliding_window` 0 )
+    // How often a FULL-attention layer comes around. gemma3: every sixth.
+    // phi3: never — every layer slides — which is period 0.
     = . m swa_period ? is_gemma3 6 0
-    = . m rope_base_swa ( __lm_kv_f gg arch `rope.local.freq_base` 10000.0 )
+    // gemma3's windowed layers rotate on a smaller base (10000 against a
+    // global 1e6) and the key is absent from the file; every other
+    // architecture uses one base for every layer.
+    = . m rope_base_swa ( __lm_kv_f gg arch `rope.local.freq_base`
+    ? is_gemma3 10000.0 . m rope_base )
     // Context: the KV cache is preallocated, and a modern model advertises
     // a training context far larger than a session needs — Qwen2.5's 32 768
     // would claim 800 MB of device memory for a 0.5 B model whose weights
@@ -450,9 +475,33 @@ $ `src/tokenizer.nu`
     : ~ i L 0
     ~ & ok < L . m n_layer {
         ? ( __lm_upload_layer m gg L `attn_norm.weight` . m attn_norm . m tq_attn_norm ) {} { = ok F }
-        ? ( __lm_upload_layer m gg L `attn_q.weight` . m wq . m tq_wq ) {} { = ok F }
-        ? ( __lm_upload_layer m gg L `attn_k.weight` . m wk . m tq_wk ) {} { = ok F }
-        ? ( __lm_upload_layer m gg L `attn_v.weight` . m wv . m tq_wv ) {} { = ok F }
+        // phi3 ships Q, K and V as ONE tensor (`attn_qkv`, rows q|k|v) and the
+        // FFN gate and up as one (`ffn_up`, rows gate|up). Nothing needs to be
+        // split: a weight is just a device pointer plus a row count, so the
+        // parts are row RANGES inside the uploaded buffer. The row stride comes
+        // from the quantisation type, and every split lands on a block
+        // boundary because a row is a whole number of blocks.
+        : String qkvn ( __lm_tname L `attn_qkv.weight` )
+        : i qkv_rows ( __lm_tensor_rows gg ( string_data qkvn ) )
+        ? >= qkv_rows 0 {
+            : i base ( __lm_upload m gg ( string_data qkvn ) )
+            : i gt __lm_last_type
+            ? < base 0 { = ok F } {
+                : i rb ( __lm_row_bytes gt . m n_embd )
+                : i kvd * . m n_kv . m head_dim
+                ( vec_push [i] . m wq base )
+                ( vec_push [i] . m tq_wq gt )
+                ( vec_push [i] . m wk + base * . m q_dim rb )
+                ( vec_push [i] . m tq_wk gt )
+                ( vec_push [i] . m wv + base * + . m q_dim kvd rb )
+                ( vec_push [i] . m tq_wv gt )
+            }
+        } {
+            ? ( __lm_upload_layer m gg L `attn_q.weight` . m wq . m tq_wq ) {} { = ok F }
+            ? ( __lm_upload_layer m gg L `attn_k.weight` . m wk . m tq_wk ) {} { = ok F }
+            ? ( __lm_upload_layer m gg L `attn_v.weight` . m wv . m tq_wv ) {} { = ok F }
+        }
+        ( string_free qkvn )
         ? ( __lm_upload_layer m gg L `attn_output.weight` . m wo . m tq_wo ) {} { = ok F }
         // qwen2 carries Q/K/V biases; llama does not. Absent = -1 = skip.
         ( vec_push [i] . m bq ( __lm_upload_opt m gg L `attn_q.bias` ) )
@@ -466,9 +515,25 @@ $ `src/tokenizer.nu`
         ( vec_push [i] . m post_attn_norm ( __lm_upload_opt m gg L `post_attention_norm.weight` ) )
         ( vec_push [i] . m post_ffn_norm ( __lm_upload_opt m gg L `post_ffw_norm.weight` ) )
         ? ( __lm_upload_layer m gg L `ffn_norm.weight` . m ffn_norm . m tq_ffn_norm ) {} { = ok F }
-        ? ( __lm_upload_layer m gg L `ffn_gate.weight` . m w_gate . m tq_gate ) {} { = ok F }
         ? ( __lm_upload_layer m gg L `ffn_down.weight` . m w_down . m tq_down ) {} { = ok F }
-        ? ( __lm_upload_layer m gg L `ffn_up.weight` . m w_up . m tq_up ) {} { = ok F }
+        // Fused FFN gate+up (phi3): one tensor of 2*n_ff rows, gate first.
+        : String upn ( __lm_tname L `ffn_up.weight` )
+        : i up_rows ( __lm_tensor_rows gg ( string_data upn ) )
+        ? & > . m n_ff 0 == up_rows * 2 . m n_ff {
+            : i ubase ( __lm_upload m gg ( string_data upn ) )
+            : i ugt __lm_last_type
+            ? < ubase 0 { = ok F } {
+                : i urb ( __lm_row_bytes ugt . m n_embd )
+                ( vec_push [i] . m w_gate ubase )
+                ( vec_push [i] . m tq_gate ugt )
+                ( vec_push [i] . m w_up + ubase * . m n_ff urb )
+                ( vec_push [i] . m tq_up ugt )
+            }
+        } {
+            ? ( __lm_upload_layer m gg L `ffn_gate.weight` . m w_gate . m tq_gate ) {} { = ok F }
+            ? ( __lm_upload_layer m gg L `ffn_up.weight` . m w_up . m tq_up ) {} { = ok F }
+        }
+        ( string_free upn )
         = L + L 1
     }
     // The mapping stays open for the model's lifetime — the embedding
@@ -631,9 +696,15 @@ $ `src/tokenizer.nu`
         // gemma3 attends within a sliding window on every layer but each
         // sixth, and the windowed layers carry their own (smaller) RoPE base.
         // Period 0 = never slide = the llama shape.
-        : b full ? == . m swa_period 0 T == 0 % + L 1 . m swa_period
+        // Sliding-window layers. `swa_window` 0 = no windowing at all (llama,
+        // qwen2). Otherwise `swa_period` says how often a FULL-attention layer
+        // comes around: gemma3 has one every sixth layer, phi3 has none at all
+        // (period 0 = every layer slides). A windowed layer may also carry its
+        // own RoPE base — gemma3's is smaller than its global one.
+        : b full ? == . m swa_window 0 T
+        & > . m swa_period 0 == 0 % + L 1 . m swa_period
         : i window ? full 0 . m swa_window
-        : f rbase ? full . m rope_base ? == . m swa_window 0 . m rope_base . m rope_base_swa
+        : f rbase ? full . m rope_base . m rope_base_swa
 
         // ── attention ──
         ( lk_rmsnorm . m ks . m xd ( __lm_geti . m attn_norm L ) . m xnd ne . m eps count )

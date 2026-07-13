@@ -14,6 +14,7 @@
 //   CHAT_LLAMA2   [INST] <<SYS>>…<</SYS>> user [/INST] assistant </s>
 //   CHAT_LLAMA3   <|start_header_id|>role<|end_header_id|>…<|eot_id|>
 //   CHAT_CHATML   <|im_start|>role\n…<|im_end|>   (qwen, many finetunes)
+//   CHAT_PHI3     <|user|>\n…<|end|>\n<|assistant|>\n  (phi-3/3.5/4)
 //   CHAT_GEMMA    <start_of_turn>user\n…<end_of_turn>  (gemma; the
 //                 assistant's role is spelled "model", and gemma has NO
 //                 system role — the system prompt folds into the first
@@ -33,6 +34,7 @@ $ `deps/gguf/src/gguf.nu`
 : i CHAT_LLAMA3 2
 : i CHAT_CHATML 3
 : i CHAT_GEMMA 4
+: i CHAT_PHI3 5
 
 : ChatMsg {
     String role
@@ -62,6 +64,7 @@ $ `deps/gguf/src/gguf.nu`
         ? >= ( nurl_str_find tpl `<|start_header_id|>` ) 0 { ^ CHAT_LLAMA3 } {}
         ? >= ( nurl_str_find tpl `[INST]` ) 0 { ^ CHAT_LLAMA2 } {}
         ? >= ( nurl_str_find tpl `<start_of_turn>` ) 0 { ^ CHAT_GEMMA } {}
+        ? >= ( nurl_str_find tpl `<|assistant|>` ) 0 { ^ CHAT_PHI3 } {}
     } {}
     ^ CHAT_PLAIN
 }
@@ -159,6 +162,28 @@ $ `deps/gguf/src/gguf.nu`
     ^ out
 }
 
+// phi-3: <|ROLE|>\n … <|end|>\n per turn, system included, then the open
+// <|assistant|> tag the model completes.
+@ __chat_phi3 ( Vec ChatMsg ) msgs → String {
+    : String out ( string_new )
+    : ~ i k 0
+    ~ < k ( vec_len [ChatMsg] msgs ) {
+        ?? ( vec_get [ChatMsg] msgs k ) {
+            T m → {
+                ( string_push_str out `<|` )
+                ( string_push_str out ( __chat_role m ) )
+                ( string_push_str out `|>\n` )
+                ( string_push_str out ( __chat_text m ) )
+                ( string_push_str out `<|end|>\n` )
+            }
+            F → {}
+        }
+        = k + k 1
+    }
+    ( string_push_str out `<|assistant|>\n` )
+    ^ out
+}
+
 // gemma: <start_of_turn>ROLE\n … <end_of_turn>\n, where the assistant is
 // called "model". gemma's own template REJECTS a system role, so a system
 // prompt is prepended to the first user turn (two newlines), exactly as the
@@ -232,6 +257,7 @@ $ `deps/gguf/src/gguf.nu`
     ? == style CHAT_CHATML { ^ ( __chat_chatml msgs ) } {}
     ? == style CHAT_LLAMA2 { ^ ( __chat_llama2 msgs ) } {}
     ? == style CHAT_GEMMA { ^ ( __chat_gemma msgs ) } {}
+    ? == style CHAT_PHI3 { ^ ( __chat_phi3 msgs ) } {}
     ^ ( __chat_plain msgs )
 }
 
@@ -243,5 +269,6 @@ $ `deps/gguf/src/gguf.nu`
     ? == style CHAT_LLAMA3 { ^ ? >= ( nurl_str_find piece `<|eot_id|>` ) 0 T F } {}
     ? == style CHAT_LLAMA2 { ^ ? >= ( nurl_str_find piece `</s>` ) 0 T F } {}
     ? == style CHAT_GEMMA { ^ ? >= ( nurl_str_find piece `<end_of_turn>` ) 0 T F } {}
+    ? == style CHAT_PHI3 { ^ ? >= ( nurl_str_find piece `<|end|>` ) 0 T F } {}
     ^ F
 }
