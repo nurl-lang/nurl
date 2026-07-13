@@ -27,6 +27,7 @@ $ `deps/gpu/src/gpu.nu`
 : WhKernels {
     GpuKernel matvec  // y = W x (+ bias), one thread per row — portable
     GpuKernel matvec_w  // the same, one WARP per row (CUDA only)
+    GpuKernel matvec_t  // one warp per row × EIGHT positions (CUDA only)
     b warp
     GpuKernel layernorm
     GpuKernel gelu
@@ -85,6 +86,51 @@ $ `deps/gpu/src/gpu.nu`
         for (int c = lane; c < cols; c += 32) acc += w[c]*xb[c];
         acc = wh_warp_sum(acc);
         if (lane == 0) y[(long long)b*rows + r] = acc + (bias ? bias[r] : 0.f);
+    }`
+}
+
+// The encoder runs 1500 positions through the same weight matrix, and the
+// warp-per-row kernel above re-reads that matrix FOR EVERY ONE OF THEM: for
+// distil-large-v3 that is 1500 x 840 MB of weight traffic per encoder pass, and
+// it is the whole reason a transcription spent 2.5 s in the encoder.
+//
+// This one gives a warp a row AND EIGHT POSITIONS: w[c] is loaded once and
+// multiplied into eight accumulators. Eight times less weight traffic, the same
+// arithmetic. (nurllama tried the same trick on its DECODE path and it lost —
+// there the batch is 1, so there is nothing to amortise. The regime is what
+// decides, not the trick.)
+@ __wk_matvec_t → s {
+    ^ `
+    __device__ static inline float wh_warp_sum_t(float v) {
+        for (int off = 16; off > 0; off >>= 1) v += __shfl_down_sync(0xffffffffu, v, off);
+        return v;
+    }
+    extern "C" __global__ void matvec_t(
+        const float* __restrict__ W, const float* __restrict__ x,
+        const float* __restrict__ bias, float* __restrict__ y,
+        int rows, int cols, int batch) {
+        int gid  = blockIdx.x*blockDim.x + threadIdx.x;
+        int warp = gid >> 5, lane = gid & 31;
+        int tiles = (batch + 7) / 8;
+        if (warp >= rows*tiles) return;
+        int t = warp / rows, r = warp % rows;
+        int b0 = t*8;
+        const float* w = W + (long long)r*cols;
+        float acc[8];
+        for (int j = 0; j < 8; ++j) acc[j] = 0.f;
+        for (int c = lane; c < cols; c += 32) {
+            float wc = w[c];                       // ONE load, eight uses
+            for (int j = 0; j < 8; ++j) {
+                int b = b0 + j;
+                if (b < batch) acc[j] += wc * x[(long long)b*cols + c];
+            }
+        }
+        float bs = bias ? bias[r] : 0.f;
+        for (int j = 0; j < 8; ++j) {
+            float v = wh_warp_sum_t(acc[j]);
+            int b = b0 + j;
+            if (lane == 0 && b < batch) y[(long long)b*rows + r] = v + bs;
+        }
     }`
 }
 
@@ -295,7 +341,8 @@ $ `deps/gpu/src/gpu.nu`
     : GpuKernel k1 ( gpu_compile g ( __wk_matvec ) `matvec` )
     : b want_warp == ( gpu_backend ) 0
     : GpuKernel k1w ? want_warp ( gpu_compile g ( __wk_matvec_w ) `matvec_w` ) @ GpuKernel { 0 0 }
-    : b warp & want_warp ( gpu_kernel_ok k1w )
+    : GpuKernel k1t ? want_warp ( gpu_compile g ( __wk_matvec_t ) `matvec_t` ) @ GpuKernel { 0 0 }
+    : b warp & want_warp & ( gpu_kernel_ok k1w ) ( gpu_kernel_ok k1t )
     : GpuKernel k2 ( gpu_compile g ( __wk_layernorm ) `layernorm` )
     : GpuKernel k3 ( gpu_compile g ( __wk_gelu ) `gelu` )
     : GpuKernel k4 ( gpu_compile g ( __wk_conv1d ) `conv1d` )
@@ -313,12 +360,15 @@ $ `deps/gpu/src/gpu.nu`
     : b ok3 & ( gpu_kernel_ok k9 ) & ( gpu_kernel_ok k10 ) ( gpu_kernel_ok k11 )
     : b ok4 & ( gpu_kernel_ok k12 ) ( gpu_kernel_ok k13 )
     : b ok & & ok1 ok2 & ok3 ok4
-    ^ @ WhKernels { k1 k1w warp k2 k3 k4 k5 k6 k7 k8 k9 k12 k13 k10 k11 ok }
+    ^ @ WhKernels { k1 k1w k1t warp k2 k3 k4 k5 k6 k7 k8 k9 k12 k13 k10 k11 ok }
 }
 
 @ wk_free WhKernels ks → v {
     ( gpu_kernel_free . ks matvec )
-    ? . ks warp { ( gpu_kernel_free . ks matvec_w ) } {}
+    ? . ks warp {
+        ( gpu_kernel_free . ks matvec_w )
+        ( gpu_kernel_free . ks matvec_t )
+    } {}
     ( gpu_kernel_free . ks layernorm )
     ( gpu_kernel_free . ks gelu )
     ( gpu_kernel_free . ks conv1d )
@@ -346,8 +396,17 @@ $ `deps/gpu/src/gpu.nu`
     ( vec_push [i] a ( gpu_arg_i32 cols ) )
     ( vec_push [i] a ( gpu_arg_i32 batch ) )
     ? . ks warp {
-        : i threads * * rows batch 32
-        : i _r ( gpu_launch . ks matvec_w ( gpu_grid threads 128 ) 128 a )
+        // Many positions at once (the encoder): amortise the weight matrix over
+        // eight of them. One position (the decoder): there is nothing to
+        // amortise, and the plain warp kernel is the right one.
+        ? >= batch 8 {
+            : i tiles / + batch 7 8
+            : i threads * * rows tiles 32
+            : i _r ( gpu_launch . ks matvec_t ( gpu_grid threads 128 ) 128 a )
+        } {
+            : i threads * * rows batch 32
+            : i _r ( gpu_launch . ks matvec_w ( gpu_grid threads 128 ) 128 a )
+        }
     } {
         : i _r ( gpu_launch . ks matvec ( gpu_grid * rows batch 128 ) 128 a )
     }
