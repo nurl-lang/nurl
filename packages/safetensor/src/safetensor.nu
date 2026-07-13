@@ -537,11 +537,24 @@ $ `stdlib/ext/json.nu`
         ^ ( __st_err_vec `safetensor: element range outside the tensor` )
     } {}
     : *u p # *u + # i . s map off
+    // The output is SIZED ONCE and written through a raw pointer.
+    //
+    // The obvious loop — push four bytes per element — pays a capacity check per
+    // byte, and a 378-million-element F16 checkpoint is 1.5 BILLION of them: it
+    // cost 11.3 seconds of a whisper transcription, while reading the same 1.5 GB
+    // off disk takes 0.25 s. Same arithmetic, same result, one allocation.
     : ( Vec u ) out ( vec_with_cap [u] * count 4 )
+    : b _sz ( vec_set_len [u] out * count 4 )
+    : *u q ( vec_data [u] out )
     : ~ i k 0
     ~ < k count {
         : f v ( __st_read_f p dt + first k )
-        ( bytes_push_u32_le out # u32 ( f32_to_bits # f32 v ) )
+        : i bits # i ( f32_to_bits # f32 v )
+        : i o * k 4
+        = . q o # u & bits 255
+        = . q + o 1 # u & >> bits 8 255
+        = . q + o 2 # u & >> bits 16 255
+        = . q + o 3 # u & >> bits 24 255
         = k + k 1
     }
     ^ @ !( Vec u ) String { T out }
