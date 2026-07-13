@@ -1,0 +1,11 @@
+[package]
+name = "whisper"
+version = "0.1.0"
+description = "Speech recognition in pure NURL — whisper, running from the safetensors checkpoint Hugging Face ships, on the GPU or the CPU. Built package by package: packages/audio turns a WAV into the log-mel spectrogram (verified against HF's own WhisperFeatureExtractor), packages/safetensor reads the weights, packages/tokenizer holds the BPE vocabulary, and packages/gpu runs the kernels — the same CUDA-C on the CUDA backend and the CPU/OpenMP one. Whisper is not the llama shape, and every kernel is a place it differs: LayerNorm with a bias rather than RMSNorm, GELU with the error function rather than the tanh approximation, two conv1d layers that turn 3000 spectrogram frames into 1500 encoder positions, and NON-CAUSAL attention — a speech encoder hears the whole 30 seconds at once, where every attention in this ecosystem until now masked the future."
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+gpu = { path = "../gpu", version = "^0.6" }
+safetensor = { path = "../safetensor", version = "^0.1" }
+tokenizer = { path = "../tokenizer", version = "^0.1" }
+audio = { path = "../audio", version = "^0.1" }
