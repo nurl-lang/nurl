@@ -43,6 +43,7 @@ $ `stdlib/std/floatbits.nu`
 $ `stdlib/std/float.nu`
 $ `deps/gguf/src/gguf.nu`
 $ `deps/gguf/src/dequant.nu`
+$ `deps/safetensor/src/safetensor.nu`
 $ `stdlib/ext/env.nu`
 $ `deps/gpu/src/gpu.nu`
 $ `src/kernels.nu`
@@ -75,6 +76,14 @@ $ `src/tokenizer.nu`
     i swa_period
     f rope_base_swa
     i gg
+    // A SECOND weight source: the same model, in the container Hugging Face
+    // ships it in. The GGUF still supplies the hyperparameters and the
+    // tokenizer; the tensors come from here when it is set (0 = not set).
+    // This is how the safetensor reader is proven: run the same model from
+    // both containers and require the logits to agree.
+    i st
+    b st_norm_add1
+    i st_embd
     i embd_idx
     ( Vec u ) embd_host
     ( Vec i ) wdptr
@@ -194,6 +203,14 @@ $ `src/tokenizer.nu`
 : i LM_CHUNK 64
 
 @ __lm_upload * Llm m * Gguf gg s name → i {
+    // A second container, when one was given: same tensor, different file.
+    ? != . m st 0 {
+        : i d ( __lm_upload_st m name )
+        ? >= d 0 { ^ d } {}
+        // fall through: a tensor the safetensors file does not carry (a tied
+        // `output.weight`) is still resolved from the GGUF, so the two paths
+        // agree on what "absent" means.
+    } {}
     : i ti ( gguf_find_tensor gg name )
     ? < ti 0 { ^ -1 } {}
     : ~ i gt -1
@@ -269,11 +286,131 @@ $ `src/tokenizer.nu`
     ^ nm
 }
 
+// ── the safetensors weight source ───────────────────────────────────
+//
+// Hugging Face names a tensor `model.layers.3.self_attn.q_proj.weight` where
+// the GGUF calls it `blk.3.attn_q.weight`. Rather than teach every call site
+// two vocabularies, the mapping happens HERE, inside the loader: the rest of
+// the model code keeps asking for GGUF names and does not know which container
+// answered.
+//
+// `` = this tensor has no safetensors counterpart (`output.weight` on a
+// tied-embedding model, for one), which sends the caller down its normal
+// absent-tensor path.
+@ __lm_hf_name s name → String {
+    ? ( nurl_str_eq name `token_embd.weight` ) { ^ ( string_from `model.embed_tokens.weight` ) } {}
+    ? ( nurl_str_eq name `output_norm.weight` ) { ^ ( string_from `model.norm.weight` ) } {}
+    ? ( nurl_str_eq name `output.weight` ) { ^ ( string_new ) } {}
+    // blk.<L>.<suffix> → model.layers.<L>.<hf suffix>
+    ? != 0 ( nurl_str_starts name `blk.` ) {} { ^ ( string_new ) }
+    : i dot ( __lm_find_from name 4 46 )
+    ? < dot 0 { ^ ( string_new ) } {}
+    : s num ( nurl_str_slice name 4 - dot 4 )
+    : s suf ( nurl_str_slice name + dot 1 - ( nurl_str_len name ) + dot 1 )
+    : ~ s hf ``
+    ? ( nurl_str_eq suf `attn_norm.weight` ) { = hf `input_layernorm.weight` } {}
+    ? ( nurl_str_eq suf `attn_q.weight` ) { = hf `self_attn.q_proj.weight` } {}
+    ? ( nurl_str_eq suf `attn_k.weight` ) { = hf `self_attn.k_proj.weight` } {}
+    ? ( nurl_str_eq suf `attn_v.weight` ) { = hf `self_attn.v_proj.weight` } {}
+    ? ( nurl_str_eq suf `attn_output.weight` ) { = hf `self_attn.o_proj.weight` } {}
+    ? ( nurl_str_eq suf `attn_q_norm.weight` ) { = hf `self_attn.q_norm.weight` } {}
+    ? ( nurl_str_eq suf `attn_k_norm.weight` ) { = hf `self_attn.k_norm.weight` } {}
+    ? ( nurl_str_eq suf `attn_q.bias` ) { = hf `self_attn.q_proj.bias` } {}
+    ? ( nurl_str_eq suf `attn_k.bias` ) { = hf `self_attn.k_proj.bias` } {}
+    ? ( nurl_str_eq suf `attn_v.bias` ) { = hf `self_attn.v_proj.bias` } {}
+    ? ( nurl_str_eq suf `post_attention_norm.weight` ) { = hf `post_attention_layernorm.weight` } {}
+    ? ( nurl_str_eq suf `ffn_norm.weight` ) { = hf `pre_feedforward_layernorm.weight` } {}
+    ? ( nurl_str_eq suf `post_ffw_norm.weight` ) { = hf `post_feedforward_layernorm.weight` } {}
+    ? ( nurl_str_eq suf `ffn_gate.weight` ) { = hf `mlp.gate_proj.weight` } {}
+    ? ( nurl_str_eq suf `ffn_up.weight` ) { = hf `mlp.up_proj.weight` } {}
+    ? ( nurl_str_eq suf `ffn_down.weight` ) { = hf `mlp.down_proj.weight` } {}
+    ? == 0 ( nurl_str_len hf ) { ^ ( string_new ) } {}
+    : String out ( string_from `model.layers.` )
+    ( string_push_str out num )
+    ( string_push_char out 46 )
+    ( string_push_str out hf )
+    ^ out
+}
+
+// Index of byte `ch` at or after `from`, or -1.
+@ __lm_find_from s str i from i ch → i {
+    : i n ( nurl_str_len str )
+    : ~ i k from
+    ~ < k n {
+        ? == ( nurl_str_get str k ) ch { ^ k } {}
+        = k + k 1
+    }
+    ^ -1
+}
+
+// Upload one tensor from the safetensors file, as f32. Returns -1 when the
+// file has no such tensor.
+//
+// gemma's `1 + w` norm weights are a property of the CONTAINER, not of the
+// architecture: the GGUF converter folds the +1 into the stored tensor, and
+// the safetensors file — the original checkpoint — does not. So the fold has
+// to happen here, on this path only. (Getting this wrong is not subtle: the
+// model produces confident nonsense, which is exactly how it was found the
+// first time.)
+@ __lm_upload_st * Llm m s name → i {
+    : String hf ( __lm_hf_name name )
+    ? == 0 ( string_len hf ) {
+        ( string_free hf )
+        ^ -1
+    } {}
+    : *St st # *St . m st
+    : i ti ( st_find_tensor st ( string_data hf ) )
+    : b is_norm != 0 ( nurl_str_ends ( string_data hf ) `norm.weight` )
+    ( string_free hf )
+    ? < ti 0 { ^ -1 } {}
+    ?? ( st_dequant st ti ) {
+        T raw → {
+            ? & . m st_norm_add1 is_norm { ( __lm_add1 raw ) } {}
+            : i n ( vec_len [u] raw )
+            : GpuBuffer b ( gpu_alloc . m g n )
+            : i _u ( gpu_upload b ( vec_data [u] raw ) )
+            ( vec_free [u] raw )
+            ( vec_push [i] . m wdptr . b dptr )
+            ( vec_push [i] . m wbytes . b bytes )
+            = __lm_last_type 0
+            ^ . b dptr
+        }
+        F e → {
+            ( string_free e )
+            ^ -1
+        }
+    }
+}
+
+// x ← x + 1 over a buffer of f32 bytes, in place (see __lm_upload_st).
+@ __lm_add1 ( Vec u ) raw → v {
+    : i n / ( vec_len [u] raw ) 4
+    : *u p ( vec_data [u] raw )
+    : ~ i k 0
+    ~ < k n {
+        : f v # f ( bits_to_f32 ( __st_u32 p * k 4 ) )
+        : i bits # i ( f32_to_bits # f32 + v 1.0 )
+        : i o * k 4
+        = . p o # u & bits 255
+        = . p + o 1 # u & >> bits 8 255
+        = . p + o 2 # u & >> bits 16 255
+        = . p + o 3 # u & >> bits 24 255
+        = k + k 1
+    }
+}
+
 // Optional per-layer tensor: device pointer, or -1 when the model has
 // none (biases are architecture-dependent). Always uploaded as f32 —
 // a bias is a single row, so the dequant cost is nil.
 @ __lm_upload_opt * Llm m * Gguf gg i layer s suffix → i {
     : String nm ( __lm_tname layer suffix )
+    ? != . m st 0 {
+        : i d ( __lm_upload_st m ( string_data nm ) )
+        ? >= d 0 {
+            ( string_free nm )
+            ^ d
+        } {}
+    } {}
     : i ti ( gguf_find_tensor gg ( string_data nm ) )
     ? < ti 0 {
         ( string_free nm )
@@ -309,6 +446,19 @@ $ `src/tokenizer.nu`
 }
 
 @ llm_open s path i want_ctx → !*Llm String {
+    ^ ( llm_open_st path `` want_ctx )
+}
+
+// Same model, weights from a safetensors file instead of the GGUF's own
+// tensors. The GGUF still supplies the hyperparameters and the tokenizer —
+// safetensors carries neither (they live in config.json and tokenizer.json
+// next to it) — so this is a weight SOURCE, not a second model format.
+//
+// It exists to be checked: run one model through both containers and the
+// logits must agree. If the safetensors reader got a dtype, an offset or a
+// row order wrong, that check fails here rather than silently in whatever
+// depends on it next.
+@ llm_open_st s path s weights i want_ctx → !*Llm String {
     : !*Gguf String gr ( gguf_open path )
     : ~ i ggaddr 0
     ?? gr {
@@ -329,6 +479,9 @@ $ `src/tokenizer.nu`
     }
 
     : *Llm m # *Llm ( nurl_alloc Z Llm )
+    = . m st 0
+    = . m st_embd -1
+    = . m st_norm_add1 F
     = . m n_embd ( __lm_kv_i gg arch `embedding_length` 0 )
     = . m n_layer ( __lm_kv_i gg arch `block_count` 0 )
     = . m n_head ( __lm_kv_i gg arch `attention.head_count` 0 )
@@ -420,6 +573,30 @@ $ `src/tokenizer.nu`
         ( gguf_close gg )
         ^ ( __lm_err `nurllama: kernel compilation failed` )
     }
+
+    // The second weight source, when one was named. Opened AFTER the
+    // architecture is known: whether the norm weights need the +1 fold depends
+    // on it (gemma's GGUF has the fold baked in, the checkpoint does not).
+    ? > ( nurl_str_len weights ) 0 {
+        ?? ( st_open weights ) {
+            T stp → {
+                = . m st # i stp
+                = . m st_norm_add1 is_gemma3
+                = . m st_embd ( st_find_tensor stp `model.embed_tokens.weight` )
+                ? < . m st_embd 0 {
+                    ( st_close stp )
+                    ( nurl_free # s m )
+                    ( gguf_close gg )
+                    ^ ( __lm_err `nurllama: the safetensors file has no model.embed_tokens.weight` )
+                } {}
+            }
+            F e → {
+                ( nurl_free # s m )
+                ( gguf_close gg )
+                ^ @ !*Llm String { F e }
+            }
+        }
+    } {}
 
     = . m wdptr ( vec_new [i] )
     = . m wbytes ( vec_new [i] )
@@ -595,6 +772,7 @@ $ `src/tokenizer.nu`
 }
 
 @ llm_close * Llm m → v {
+    ? != . m st 0 { ( st_close # *St . m st ) } {}
     : ~ i k 0
     ~ < k ( vec_len [i] . m wdptr ) {
         ( gpu_free @ GpuBuffer { ( __lm_geti . m wdptr k ) ( __lm_geti . m wbytes k ) } )
@@ -676,12 +854,26 @@ $ `src/tokenizer.nu`
     ~ < bi count {
         : i tok ( __lm_geti ids + first bi )
         : GpuBuffer xb @ GpuBuffer { + . m xd * * bi ne 4 * ne 4 }
-        ?? ( gguf_dequant_range # *Gguf . m gg . m embd_idx * tok ne ne ) {
-            T row → {
-                : i _u1 ( gpu_upload xb ( vec_data [u] row ) )
-                ( vec_free [u] row )
+        // The embedding table is never expanded: exactly this token's row is
+        // decoded, out of whichever container the weights came from. A
+        // safetensors row range is exact (no block quantisation), a GGUF one is
+        // block-aligned — both land here as f32.
+        ? != . m st 0 {
+            ?? ( st_dequant_range # *St . m st . m st_embd * tok ne ne ) {
+                T row → {
+                    : i _u1 ( gpu_upload xb ( vec_data [u] row ) )
+                    ( vec_free [u] row )
+                }
+                F e → { ( string_free e ) }
             }
-            F e → { ( string_free e ) }
+        } {
+            ?? ( gguf_dequant_range # *Gguf . m gg . m embd_idx * tok ne ne ) {
+                T row → {
+                    : i _u1 ( gpu_upload xb ( vec_data [u] row ) )
+                    ( vec_free [u] row )
+                }
+                F e → { ( string_free e ) }
+            }
         }
         = bi + bi 1
     }

@@ -441,7 +441,8 @@ $ `stdlib/std/term.nu`
         }
         F e → { ( string_free e ) }
     }
-    ?? ( llm_open path 0 ) {
+    : String __w ( args_value_or p `weights` `` )
+    ?? ( llm_open_st path ( string_data __w ) 0 ) {
         F e → { ^ ( __nl_err e ) }
         T m → {
             : *Tok t ( llm_tok m )
@@ -542,6 +543,7 @@ $ `stdlib/std/term.nu`
     ( args_flag p `help` 104 `show this help` )
     ( args_flag p `version` 0 `print the version` )
     ( args_flag p `no-special` 0 `tokenize: do not add BOS/EOS` )
+    ( args_opt p `weights` 0 `FILE` `run: take the weights from this safetensors file instead of the GGUF's own tensors (the GGUF still supplies the hyperparameters and the tokenizer)` )
     ( args_opt p `n-predict` 110 `N` `run: max tokens to generate (default 64)` )
     ( args_opt p `temp` 0 `F` `run: temperature; 0 = greedy (default 0.8)` )
     ( args_opt p `topk` 0 `N` `run: top-k filter (default 40; 0 = off)` )
@@ -744,7 +746,8 @@ $ `stdlib/std/term.nu`
         ?? ( string_to_int sctx ) { T v2 → { = want_ctx v2 } F _ → {} }
         ( string_free sctx )
         : ~ i rc2 0
-        ?? ( llm_open mp want_ctx ) {
+        : String wpath ( args_value_or p `weights` `` )
+        ?? ( llm_open_st mp ( string_data wpath ) want_ctx ) {
             T m → {
                 : *Tok t ( llm_tok m )
                 : ( Vec i ) ids ( tok_encode t prompt T )
@@ -813,6 +816,7 @@ $ `stdlib/std/term.nu`
             }
             F e → { = rc2 ( __nl_err e ) }
         }
+        ( string_free wpath )
         ( string_free mres )
         ( args_free p )
         ^ rc2

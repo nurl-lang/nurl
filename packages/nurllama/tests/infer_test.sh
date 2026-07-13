@@ -223,6 +223,35 @@ else
     echo "  SKIP phi3 (2.4 GB model — set NURLLAMA_BIG_TESTS=1 to run it)"
 fi
 
+# 5e. the safetensors weight source — the same model, out of the container
+# Hugging Face ships it in. This is what PROVES packages/safetensor: if the
+# reader got a dtype, an offset or a row order wrong, the forward pass says so.
+if [ -n "${NURLLAMA_HF_GEMMA_ST:-}" ] && [ -f "$NURLLAMA_HF_GEMMA_ST" ] && [ -f "$WORK/gemma3.gguf" ]; then
+    "$NL" logits "$WORK/gemma3.gguf" "The capital of France is" > "$WORK/g_gguf.logits"
+    "$NL" logits "$WORK/gemma3.gguf" "The capital of France is" \
+        --weights "$NURLLAMA_HF_GEMMA_ST" > "$WORK/g_st.logits"
+    python3 - "$WORK" <<'PYEOF6' && ok "safetensors weights are read (and are NOT the GGUF's)" || bad "safetensors weight source"
+import sys, numpy as np
+w = sys.argv[1]
+g = np.loadtxt(w + '/g_gguf.logits')      # our engine, GGUF Q8_0 weights
+t = np.loadtxt(w + '/g_st.logits')        # our engine, safetensors bf16 weights
+# They must DIFFER — identical logits would mean the safetensors file was never
+# read, and this whole check would be passing on the GGUF path.
+assert np.abs(g - t).max() > 1e-3, "safetensors path produced the GGUF's logits — it was not used"
+# ...and the top-1 must still agree: different precision, same model.
+assert np.argmax(g) == np.argmax(t), "the two containers disagree on the model"
+PYEOF6
+    ST_TXT=$("$NL" run "$WORK/gemma3.gguf" "The capital of France is" -n 16 --temp 0 --weights "$NURLLAMA_HF_GEMMA_ST")
+    GG_TXT=$("$NL" run "$WORK/gemma3.gguf" "The capital of France is" -n 16 --temp 0)
+    [ "$ST_TXT" = "$GG_TXT" ] \
+        && ok "safetensors weights give the same greedy text as the GGUF's" \
+        || { bad "safetensors greedy text"; echo "    gguf: [$GG_TXT]"; echo "    st  : [$ST_TXT]"; }
+    ST_CPU=$(NURL_GPU=cpu "$NL" run "$WORK/gemma3.gguf" "The capital of France is" -n 16 --temp 0 --weights "$NURLLAMA_HF_GEMMA_ST")
+    [ "$ST_CPU" = "$ST_TXT" ] && ok "safetensors weights: CPU backend == device" || bad "safetensors backend parity"
+else
+    echo "  SKIP safetensors weight source (set NURLLAMA_HF_GEMMA_ST=/path/to/gemma-3-270m/model.safetensors)"
+fi
+
 # 6. seeded sampling determinism
 A=$("$NL" run "$M" "One day" -n 16 --temp 0.8 --seed 7)
 B=$("$NL" run "$M" "One day" -n 16 --temp 0.8 --seed 7)
