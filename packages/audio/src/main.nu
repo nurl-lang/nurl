@@ -51,6 +51,7 @@ $ `src/resample.nu`
     ( args_opt p `output` 111 `FILE` `for mel: write the f32-LE spectrogram here` )
     ( args_opt p `rate` 0 `HZ` `for resample/tone: the target sample rate (default 16000)` )
     ( args_opt p `seconds` 0 `S` `for tone: length in seconds (default 1)` )
+    ( args_opt p `mels` 0 `N` `for mel: how many mel bands (default 80; whisper large-v3 wants 128)` )
     ( args_flag p `help` 104 `show this help` )
     ? ( args_parse_argv p ) {} {
         ( nurl_eprintln ( args_error p ) )
@@ -133,16 +134,22 @@ $ `src/resample.nu`
                 ( __say m )
             } {}
             ? ( nurl_str_eq cmd `mel` ) {
+                : ~ i nmel 80
+                : String smel ( args_value_or p `mels` `80` )
+                ?? ( string_to_int smel ) { T v → { = nmel v } F _ → {} }
+                ( string_free smel )
                 : ( Vec f ) mono ( wav_mono w )
                 : ( Vec f ) at16 ( resample mono . w rate 16000 )
                 // whisper always feeds its encoder exactly 30 s
                 : ( Vec f ) fixed ( pad_or_trim at16 480000 )
-                : ( Vec f ) mel ( log_mel_whisper fixed 400 160 80 16000 )
+                : ( Vec f ) mel ( log_mel_whisper fixed 400 160 nmel 16000 )
                 : String o ( args_value_or p `output` `mel.f32` )
                 = rc ( __write_f32 ( string_data o ) mel )
                 : String m ( string_from `mel — ` )
-                ( string_push_int m / ( vec_len [f] mel ) 80 )
-                ( string_push_str m ` frames x 80 mels → ` )
+                ( string_push_int m / ( vec_len [f] mel ) nmel )
+                ( string_push_str m ` frames x ` )
+                ( string_push_int m nmel )
+                ( string_push_str m ` mels → ` )
                 ( string_push_str m ( string_data o ) )
                 ( __say m )
                 ( string_free o )

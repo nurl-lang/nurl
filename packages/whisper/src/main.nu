@@ -152,10 +152,21 @@ $ `src/model.nu`
                     : ( Vec f ) at16 ( resample mono . aw rate 16000 )
                     ( wav_free aw )
                     ( vec_free [f] mono )
+                    // The model is opened BEFORE the spectrogram is computed:
+                    // how many mel bands it wants is a property of the model
+                    // (80 for whisper-tiny … large-v2, 128 for large-v3 and
+                    // distil-large-v3), and a hardcoded 80 would feed the
+                    // large-v3 encoder a spectrogram of the wrong shape.
                     ?? ( wh_open ( string_data cfg ) ( string_data wts ) ) {
                         T w → {
+                            : i nmel . w n_mels
                             : i total ( vec_len [f] at16 )
-                            : i window 480000
+                            // the window is the encoder's own length: 1500
+                            // positions × 2 (the stride-2 conv) × 160 samples of
+                            // hop = 30 s at 16 kHz. Derived, not assumed — a
+                            // model with a different context would want a
+                            // different window.
+                            : i window * . w n_ctx_enc 320
                             : i nwin ? > total 0 / + total - window 1 window 1
                             : ( Vec u ) text ( vec_new [u] )
                             : ~ b ok T
@@ -172,7 +183,7 @@ $ `src/model.nu`
                                     = k + k 1
                                 }
                                 : ( Vec f ) fixed ( pad_or_trim chunk window )
-                                : ( Vec f ) mel ( log_mel_whisper fixed 400 160 80 16000 )
+                                : ( Vec f ) mel ( log_mel_whisper fixed 400 160 nmel 16000 )
                                 ( vec_free [f] chunk )
                                 ( vec_free [f] fixed )
                                 ( wh_encode w mel )
@@ -271,14 +282,21 @@ $ `src/model.nu`
         T aw → {
             : ( Vec f ) mono ( wav_mono aw )
             : ( Vec f ) at16 ( resample mono . aw rate 16000 )
-            : ( Vec f ) fixed ( pad_or_trim at16 480000 )
-            : ( Vec f ) mel ( log_mel_whisper fixed 400 160 80 16000 )
             ( wav_free aw )
             ( vec_free [f] mono )
-            ( vec_free [f] at16 )
-            ( vec_free [f] fixed )
+            // at16 is NOT freed here: the model has to be opened first (how many
+            // mel bands it wants and how long a window it sees are ITS
+            // properties), and pad_or_trim reads at16 after that. Freeing it
+            // early was a use-after-free that whisper-tiny survived by luck —
+            // the freed pages were still intact — and distil-large-v3 turned
+            // into a segfault. A Vec is a shared boxed handle; free it once, at
+            // the end, on every path.
             ?? ( wh_open cfg wts ) {
                 T w → {
+                    : ( Vec f ) fixed ( pad_or_trim at16 * . w n_ctx_enc 320 )
+                    : ( Vec f ) mel ( log_mel_whisper fixed 400 160 . w n_mels 16000 )
+                    ( vec_free [f] fixed )
+                    ( vec_free [f] at16 )
                     ( wh_encode w mel )
                     : ( Vec f ) enc ( wh_enc_out w )
                     : String o ( args_value_or p `output` `enc.f32` )
@@ -301,7 +319,7 @@ $ `src/model.nu`
                 F e → {
                     ( nurl_eprintln ( string_data e ) )
                     ( string_free e )
-                    ( vec_free [f] mel )
+                    ( vec_free [f] at16 )
                     ( args_free p )
                     ^ 1
                 }

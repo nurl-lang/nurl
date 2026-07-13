@@ -15,6 +15,16 @@ $ whisper transcribe ./whisper-tiny jfk.wav
 Word for word what HF transformers produces from the same model — and the
 CPU backend produces the same text as CUDA.
 
+Bigger models just work, because nothing is hardcoded to a shape:
+
+```
+$ whisper transcribe ./distil-large-v3 jfk.wav
+ And so, my fellow Americans, ask not what your country can do for you. Ask what you can do for your country.
+```
+
+(128 mel bands instead of 80, 1280-wide, 32 encoder layers and 2 decoder
+layers — every one of those read out of the model's own `config.json`.)
+
 A model directory is what Hugging Face ships: `config.json`,
 `model.safetensors`, `tokenizer.json`, side by side.
 
@@ -30,7 +40,7 @@ independent implementation rather than against my own understanding of it:
 | n_fft = 400 (not a power of two) | `stdlib/std/fft.nu` | numpy's `np.fft` — Bluestein, 1.9e-14 |
 | weights | `safetensor` | 167 tensors bit-exact; a whole forward pass at r = 1.00000000 |
 | vocabulary | `tokenizer` | HF's own tokenizer, 20/20 strings |
-| encoder + decoder | this package | HF's `WhisperModel.encoder` (r = 1.00000000) and its transcription, word for word |
+| encoder + decoder | this package | HF's `WhisperModel.encoder` (r = 1.00000000) and its transcription, word for word — on whisper-tiny **and** distil-large-v3 |
 
 ## Whisper is not the llama shape
 
