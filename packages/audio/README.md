@@ -15,6 +15,11 @@ $ audio resample speech.wav speech16k.wav --rate 16000
 
 $ audio mel speech16k.wav -o mel.f32
 mel — 3000 frames x 80 mels → mel.f32
+
+$ audio vad meeting.wav
+59.85 - 71.2 s
+190.85 - 202.2 s
+vad — 2 segment(s), 7.77 % of the audio is speech
 ```
 
 ## Three places a mistake hides
@@ -59,6 +64,32 @@ Not against my own understanding of it:
   regressions when transformers is not installed
 * every bit depth round-trips; six malformed files are six clean errors;
   ASan/LSan clean
+
+## Finding the speech
+
+A recording is mostly not speech, and a speech model does not get cheaper
+by running over silence — it costs exactly the same. `vad_segments` says
+where the speech is.
+
+It is an **energy** detector, and being clear about that matters, because
+it decides where it fails: it hears "something loud enough, often enough"
+rather than "a human voice", and it will call a slammed door speech.
+faster-whisper reaches for Silero, a small neural VAD, for exactly that
+reason. This is the honest version of what can be done without a second
+model, and the seam is here for one.
+
+What it is *not* is a fixed threshold. A fixed dB threshold works on the
+file it was tuned on and nowhere else. The floor here is the **10th
+percentile of this recording's own frame energies** — whatever the quiet
+part of *this* room sounds like — and speech is what stands 6 dB above it
+for 250 ms. Gaps under 400 ms are bridged (that is a pause between words,
+not between sentences) and 200 ms is kept either side, because speech
+starts before it gets loud and a word's tail is quiet.
+
+`vad_extract` gives back the audio with the silence taken out — keeping at
+most `max_gap` samples of the real room between segments. That cap is not
+a detail: glue two utterances together with *nothing* between them and a
+speech model hears one utterance where there were two.
 
 ## Built on
 

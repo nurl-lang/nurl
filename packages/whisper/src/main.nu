@@ -19,6 +19,7 @@ $ `stdlib/std/floatbits.nu`
 $ `deps/audio/src/wav.nu`
 $ `deps/audio/src/mel.nu`
 $ `deps/audio/src/resample.nu`
+$ `deps/audio/src/vad.nu`
 $ `deps/tokenizer/src/tokenizer.nu`
 $ `deps/tokenizer/src/hf.nu`
 $ `src/model.nu`
@@ -137,7 +138,7 @@ $ `src/model.nu`
 // sees exactly 30 s (that is the length it was trained on and the length its
 // positional embedding has), so a longer clip is split, and each window is
 // decoded from a fresh prompt with its own KV cache.
-@ __wh_transcribe s dir s wavpath s lang i maxtok → i {
+@ __wh_transcribe s dir s wavpath s lang i maxtok b use_vad → i {
     : String cfg ( __wh_path dir `config.json` )
     : String wts ( __wh_path dir `model.safetensors` )
     : String tjs ( __wh_path dir `tokenizer.json` )
@@ -149,9 +150,25 @@ $ `src/model.nu`
             ?? ( wav_read wavpath ) {
                 T aw → {
                     : ( Vec f ) mono ( wav_mono aw )
-                    : ( Vec f ) at16 ( resample mono . aw rate 16000 )
+                    : ~ ( Vec f ) at16 ( resample mono . aw rate 16000 )
                     ( wav_free aw )
                     ( vec_free [f] mono )
+                    // --vad: the model never sees the silence. A speech model
+                    // costs exactly the same over a silent 30 seconds as over a
+                    // spoken one, so on a recording that is mostly not speech
+                    // the whole cost is the silence. The detector keeps 200 ms
+                    // either side of every burst and bridges gaps under 400 ms,
+                    // so what is dropped is pause, not consonant.
+                    ? use_vad {
+                        : ( Vec VadSeg ) segs ( vad_segments at16 16000 ( vad_default_opts ) )
+                        // 0.5 s of the real room is kept between segments —
+                        // enough of a boundary that two sentences do not run
+                        // together, far less than the pause it replaces.
+                        : ( Vec f ) sp ( vad_extract at16 segs 8000 )
+                        ( vec_free [f] at16 )
+                        = at16 sp
+                        ( vec_free [VadSeg] segs )
+                    } {}
                     // The model is opened BEFORE the spectrogram is computed:
                     // how many mel bands it wants is a property of the model
                     // (80 for whisper-tiny … large-v2, 128 for large-v3 and
@@ -167,7 +184,12 @@ $ `src/model.nu`
                             // model with a different context would want a
                             // different window.
                             : i window * . w n_ctx_enc 320
-                            : i nwin ? > total 0 / + total - window 1 window 1
+                            // no audio (or, under --vad, no speech in it) is
+                            // no windows — not one window of silence. Whisper
+                            // asked to transcribe silence does not return
+                            // nothing; it returns "[BLANK_AUDIO]", or worse,
+                            // a sentence it made up.
+                            : i nwin ? > total 0 / + total - window 1 window 0
                             : ( Vec u ) text ( vec_new [u] )
                             : ~ b ok T
                             : ~ i wi 0
@@ -234,6 +256,7 @@ $ `src/model.nu`
     ( args_opt p `output` 111 `FILE` `write the encoder states here (f32 LE)` )
     ( args_opt p `lang` 0 `LANG` `transcribe: the language token (default en)` )
     ( args_opt p `max` 0 `N` `transcribe: stop after N tokens (default 200)` )
+    ( args_flag p `vad` 0 `transcribe: skip the silence (energy VAD) before the model sees it` )
     ( args_flag p `help` 104 `show this help` )
     ? ( args_parse_argv p ) {} {
         ( nurl_eprintln ( args_error p ) )
@@ -266,7 +289,7 @@ $ `src/model.nu`
         : String smax ( args_value_or p `max` `200` )
         ?? ( string_to_int smax ) { T v → { = maxtok v } F _ → {} }
         ( string_free smax )
-        : i rc ( __wh_transcribe dir awav ( string_data lang ) maxtok )
+        : i rc ( __wh_transcribe dir awav ( string_data lang ) maxtok ( args_present p `vad` ) )
         ( string_free lang )
         ( args_free p )
         ^ rc

@@ -57,6 +57,40 @@ Every kernel is a place it differs:
   values — computed **once per clip**, not once per generated token.
 * **`k_proj` has no bias**, alone among the projections.
 
+## `--vad`: the model never sees the silence
+
+```
+$ whisper transcribe distil-large-v3 meeting.wav
+ Thank you. Thank you. And so, my fellow Americans, ask not what your country
+ can do for you. Ask what you can do for your country. Thank you. Thank you.
+ Thank you. […]                                                       13.3 s
+
+$ whisper transcribe distil-large-v3 meeting.wav --vad
+ And so, my fellow Americans, ask not what your country can do for you. Ask
+ what you can do for your country.                                     2.2 s
+```
+
+Two things are wrong with the first one, and only one of them is the clock.
+
+A recording is mostly not speech, and whisper costs exactly the same over a
+silent 30 seconds as over a spoken one — so on a 292-second recording that is
+8 % speech, essentially the whole bill is silence. That is the 13.3 s.
+
+But whisper handed silence does not stay quiet. It was trained on audio that
+had somebody talking in it, so asked what was said when nothing was, it
+answers anyway: `[BLANK_AUDIO]`, `[silence]`, `Thank you.` The `Thank you.`
+above is not a bug in this implementation — it is what the checkpoint says.
+
+`--vad` finds the speech first (packages/audio) and hands the model only that,
+with a half-second of the real room kept between segments so two utterances do
+not run together. Where there is speech the words are unchanged, byte for
+byte. Where there is none, there is now nothing to hallucinate about.
+
+It also rescues speech the windowing would otherwise eat. The encoder sees
+exactly 30 seconds, so an utterance that straddles a window boundary is cut in
+half — and distil, handed the back half of a sentence, returns
+` And so my fellow Americans country.` VAD moves the boundary off the speech.
+
 ## The control tokens are looked up, not hardcoded
 
 A whisper prompt is four tokens — `<|startoftranscript|>`, the language,

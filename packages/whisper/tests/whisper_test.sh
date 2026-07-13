@@ -141,6 +141,46 @@ PYEOF2
     [ "$MS" -lt 8000 ] \
         && ok "11 s of speech transcribes in ${MS} ms (the O(n^2) vocabulary load stays dead)" \
         || bad "transcription took ${MS} ms — something is quadratic again"
+
+    # ── --vad: the model never sees the silence ─────────────────────
+    # A recording is mostly not speech, and a speech model costs exactly the
+    # same over a silent 30 seconds as over a spoken one. Worse, it does not
+    # stay quiet: handed silence, whisper invents "[BLANK_AUDIO]", "[silence]",
+    # or a sentence. Two things are checked here — that the words are unchanged
+    # where there IS speech, and that the silence stops costing anything.
+    python3 - "$WORK" <<'PYEOF3'
+import sys, wave, numpy as np
+W = sys.argv[1]
+x = np.frombuffer(wave.open(W + '/jfk.wav', 'rb').readframes(-1), dtype='<i2')
+rng = np.random.RandomState(3)
+def room(sec):                       # a real noise floor, not digital zero
+    return (rng.randn(int(sec * 16000)) * 40).astype('<i2')
+def put(name, y):
+    o = wave.open(W + '/' + name, 'wb'); o.setnchannels(1); o.setsampwidth(2)
+    o.setframerate(16000); o.writeframes(y.tobytes()); o.close()
+put('padded.wav',  np.concatenate([room(20), x, room(25)]))          # 56 s, 1 utterance
+put('meeting.wav', np.concatenate([room(60), x, room(120), x, room(90)]))  # 292 s, 8 % speech
+put('room.wav',    room(30))                                          # no speech at all
+PYEOF3
+
+    VAD=$("$WH" transcribe "$WORK/model" "$WORK/padded.wav" --vad 2>/dev/null)
+    [ "$VAD" = "$WANT" ] \
+        && ok "--vad: speech buried in 45 s of room noise transcribes word-for-word (and it straddles the 30 s window boundary, which is what eats it without VAD)" \
+        || { bad "--vad transcription"; echo "    got:  [$VAD]"; echo "    want: [$WANT]"; }
+
+    ROOM=$("$WH" transcribe "$WORK/model" "$WORK/room.wav" --vad 2>/dev/null)
+    [ -z "$(printf '%s' "$ROOM" | tr -d '[:space:]')" ] \
+        && ok "--vad: a recording with no speech in it transcribes to nothing (not to [BLANK_AUDIO], which is what the model says when asked)" \
+        || { bad "--vad on silence"; echo "    got: [$ROOM]"; }
+
+    START=$(date +%s%N); "$WH" transcribe "$WORK/model" "$WORK/meeting.wav" --max 400 >/dev/null 2>&1
+    SLOW=$(( ($(date +%s%N) - START) / 1000000 ))
+    START=$(date +%s%N); "$WH" transcribe "$WORK/model" "$WORK/meeting.wav" --max 400 --vad >/dev/null 2>&1
+    FAST=$(( ($(date +%s%N) - START) / 1000000 ))
+    # 292 s of recording, 8 % of it speech: ten 30-second windows become one.
+    [ "$FAST" -lt $(( SLOW * 2 / 3 )) ] \
+        && ok "--vad: a 292 s recording that is 8 % speech takes ${FAST} ms instead of ${SLOW} ms" \
+        || bad "--vad did not pay for itself (${FAST} ms vs ${SLOW} ms)"
 else
     echo "  SKIP transcription (tokenizer.json or the speech sample did not download)"
 fi
@@ -164,6 +204,21 @@ if [ "${WHISPER_BIG_TESTS:-0}" = "1" ]; then
         [ "$GOT_D" = "$WANT_D" ] \
             && ok "distil-large-v3 (128 mels, 1280-wide, 32+2 layers) transcribes as HF does" \
             || { bad "distil-large-v3"; echo "    got:  [$GOT_D]"; echo "    want: [$WANT_D]"; }
+
+        # --vad must not change the words where there is speech. On the clean
+        # clip the two outputs have to be byte-identical; on the padded one the
+        # VAD path is the one that is RIGHT — without it the utterance is cut in
+        # half by the 30 s window boundary and distil returns
+        # " And so my fellow Americans country."
+        GOT_DV=$("$WH" transcribe "$WORK/distil" "$WORK/jfk.wav" --vad 2>/dev/null)
+        [ "$GOT_DV" = "$GOT_D" ] \
+            && ok "distil-large-v3: --vad leaves clean speech untouched, word for word" \
+            || { bad "distil --vad on clean speech"; echo "    got: [$GOT_DV]"; }
+
+        PAD_DV=$("$WH" transcribe "$WORK/distil" "$WORK/padded.wav" --vad 2>/dev/null)
+        [ "$PAD_DV" = "$WANT_D" ] \
+            && ok "distil-large-v3: --vad rescues speech that straddles the 30 s boundary" \
+            || { bad "distil --vad on padded speech"; echo "    got: [$PAD_DV]"; }
     else
         echo "  SKIP distil-large-v3 (download failed)"
     fi
