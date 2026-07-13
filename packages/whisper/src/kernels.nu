@@ -28,10 +28,13 @@ $ `deps/gpu/src/gpu.nu`
     GpuKernel matvec  // y = W x (+ bias), one thread per row — portable
     GpuKernel matvec_w  // the same, one WARP per row (CUDA only)
     GpuKernel matvec_t  // one warp per row × EIGHT positions (CUDA only)
+    GpuKernel matmul  // 64x64 tiles through shared memory (CUDA only)
     b warp
-    GpuKernel layernorm
+    GpuKernel layernorm  // one thread per row — portable
+    GpuKernel layernorm_b  // one block per row, shared reduction (CUDA)
     GpuKernel gelu
     GpuKernel conv1d
+    GpuKernel attn_f  // fused attention, online softmax (CUDA, hd = 64)
     GpuKernel attn_sc  // scores = q·k / sqrt(hd), NO causal mask
     GpuKernel attn_out  // softmax(scores) · v
     GpuKernel addv
@@ -137,14 +140,95 @@ $ `deps/gpu/src/gpu.nu`
 // LayerNorm: subtract the mean, divide by the standard deviation, scale and
 // SHIFT. RMSNorm does none of the mean and none of the shift, which is why a
 // model trained with one cannot be run with the other.
+// ── The encoder is a GEMM, not a matvec ─────────────────────────────
+//
+// The encoder projects 1500 positions at once, and matvec_t reads the whole
+// weight matrix once per EIGHT of them — 187 passes over 6.5 MB of weights per
+// projection. That is not arithmetic, it is memory traffic, and it is where the
+// encoder's time went.
+//
+// A 64x64 output tile held in registers, fed by 64x16 slabs of x and W staged
+// through SHARED memory, reads the weight matrix once per 64 positions: eight
+// times less traffic, and each of the 256 threads keeps 16 accumulators in
+// registers so the arithmetic is dense enough to hide what is left.
+//
+// This is the kernel packages/gpu could not run on its CPU backend until that
+// backend learned __shared__ and __syncthreads() (it runs a block's threads as
+// fibers now). It is still launched on CUDA only — shared memory is a hand-rolled
+// cache, and a CPU already has a real one, so the flat matvec is the better
+// kernel there.
+@ __wk_matmul → s {
+    ^ `
+    #define WH_BM 64
+    #define WH_BN 64
+    #define WH_BK 16
+    extern "C" __global__ void matmul(
+        const float* __restrict__ W, const float* __restrict__ x,
+        const float* __restrict__ bias, float* __restrict__ y,
+        int rows, int cols, int batch) {
+        __shared__ float As[WH_BK][WH_BM];   // x  slab: As[k][position]
+        __shared__ float Bs[WH_BK][WH_BN];   // W  slab: Bs[k][row]
+        int nbb = (batch + WH_BM - 1) / WH_BM;
+        int bm  = blockIdx.x % nbb;          // which 64 positions
+        int bn  = blockIdx.x / nbb;          // which 64 rows
+        int tid = threadIdx.x;               // 256 threads
+        int tx  = tid & 15, ty = tid >> 4;   // this thread owns a 4x4 corner
+        float acc[4][4];
+        for (int i = 0; i < 4; ++i)
+            for (int j = 0; j < 4; ++j) acc[i][j] = 0.f;
+
+        for (int k0 = 0; k0 < cols; k0 += WH_BK) {
+            // 256 threads stage 16x64 of each slab: four elements apiece.
+            // idx splits into (row, k) and NOT (k, row): consecutive threads
+            // must read consecutive ADDRESSES, and x and W are row-major in c.
+            // The other way round, 32 lanes of a warp each touch a different
+            // row — 32 separate memory transactions for what should be one.
+            for (int L = 0; L < 4; ++L) {
+                int idx = tid + L*256;
+                int mm = idx / WH_BK, kk = idx % WH_BK;
+                int gk = k0 + kk;
+                int gm = bm*WH_BM + mm;
+                int gn = bn*WH_BN + mm;
+                As[kk][mm] = (gm < batch && gk < cols) ? x[(long long)gm*cols + gk] : 0.f;
+                Bs[kk][mm] = (gn < rows  && gk < cols) ? W[(long long)gn*cols + gk] : 0.f;
+            }
+            __syncthreads();
+            for (int kk = 0; kk < WH_BK; ++kk) {
+                float a[4], b[4];
+                for (int i = 0; i < 4; ++i) a[i] = As[kk][ty*4 + i];
+                for (int j = 0; j < 4; ++j) b[j] = Bs[kk][tx*4 + j];
+                for (int i = 0; i < 4; ++i)
+                    for (int j = 0; j < 4; ++j) acc[i][j] += a[i] * b[j];
+            }
+            __syncthreads();
+        }
+        for (int i = 0; i < 4; ++i) {
+            int gm = bm*WH_BM + ty*4 + i;
+            if (gm >= batch) continue;
+            for (int j = 0; j < 4; ++j) {
+                int gn = bn*WH_BN + tx*4 + j;
+                if (gn < rows)
+                    y[(long long)gm*rows + gn] = acc[i][j] + (bias ? bias[gn] : 0.f);
+            }
+        }
+    }`
+}
+
+// LayerNorm normalises a ROW, so a row's mean and variance are computed once
+// per row — not once per element of it. The kernel this replaces gave one thread
+// one ELEMENT and had it walk the whole row twice to find them, which is 2n reads
+// to produce one output and 2n² per row: 4.9 BILLION reads for the encoder's
+// 1500 x 1280, and it cost as much as a 19-GFLOP feed-forward layer. Arithmetic
+// is not what a normalisation should be paying for.
+//
+// One thread per row, and the row is walked twice — total.
 @ __wk_layernorm → s {
     ^ `extern "C" __global__ void layernorm(
         const float* __restrict__ x, const float* __restrict__ w,
         const float* __restrict__ b, float* __restrict__ y,
         int n, float eps, int batch) {
-        int idx = blockIdx.x*blockDim.x + threadIdx.x;
-        if (idx >= n*batch) return;
-        int row = idx / n, i = idx % n;
+        int row = blockIdx.x*blockDim.x + threadIdx.x;
+        if (row >= batch) return;
         const float* xr = x + (long long)row*n;
         float mean = 0.f;
         for (int j = 0; j < n; ++j) mean += xr[j];
@@ -153,7 +237,46 @@ $ `deps/gpu/src/gpu.nu`
         for (int j = 0; j < n; ++j) { float d = xr[j] - mean; var += d*d; }
         var /= (float)n;
         float inv = rsqrtf(var + eps);
-        y[(long long)row*n + i] = (xr[i] - mean)*inv*w[i] + b[i];
+        for (int j = 0; j < n; ++j)
+            y[(long long)row*n + j] = (xr[j] - mean)*inv*w[j] + b[j];
+    }`
+}
+
+// And on a GPU, one thread per row is 1500 threads — a rounding error of the
+// machine. One BLOCK per row instead: 256 threads share the row's sums through
+// a shared-memory reduction, so the row is read twice by 256 threads at once and
+// every access is coalesced.
+@ __wk_layernorm_b → s {
+    ^ `extern "C" __global__ void layernorm_b(
+        const float* __restrict__ x, const float* __restrict__ w,
+        const float* __restrict__ b, float* __restrict__ y,
+        int n, float eps, int batch) {
+        __shared__ float red[256];
+        int row = blockIdx.x;
+        if (row >= batch) return;
+        int t = threadIdx.x;
+        const float* xr = x + (long long)row*n;
+        float s = 0.f;
+        for (int j = t; j < n; j += 256) s += xr[j];
+        red[t] = s;
+        __syncthreads();
+        for (int off = 128; off > 0; off >>= 1) {
+            if (t < off) red[t] += red[t + off];
+            __syncthreads();
+        }
+        float mean = red[0] / (float)n;
+        __syncthreads();
+        float v = 0.f;
+        for (int j = t; j < n; j += 256) { float d = xr[j] - mean; v += d*d; }
+        red[t] = v;
+        __syncthreads();
+        for (int off = 128; off > 0; off >>= 1) {
+            if (t < off) red[t] += red[t + off];
+            __syncthreads();
+        }
+        float inv = rsqrtf(red[0] / (float)n + eps);
+        for (int j = t; j < n; j += 256)
+            y[(long long)row*n + j] = (xr[j] - mean)*inv*w[j] + b[j];
     }`
 }
 
@@ -198,6 +321,77 @@ $ `deps/gpu/src/gpu.nu`
 // of keys (the encoder's own length for self-attention, the encoder's length for
 // the decoder's cross-attention, the tokens so far for the decoder's causal
 // self-attention — which passes its own mask through `causal`).
+// ── Attention, fused ────────────────────────────────────────────────
+//
+// The encoder's attention was where the time actually was, and it was not the
+// arithmetic. attn_sc launches nh·nq·nkey threads — 45 MILLION for one layer of
+// distil — and each one re-reads a whole query row and a whole key row from
+// global memory to produce a single score. That is ~23 GB of traffic per layer,
+// 740 GB per 30-second window, and it also materialises an nh × 1500 × 1500
+// score matrix (180 MB) that exists only to be read back by attn_out.
+//
+// This is the flash-attention shape. One block owns 64 queries of one head and
+// keeps them — and its 64 output accumulators — in REGISTERS. Keys and values
+// stream past in 64-row slabs through shared memory, so each is read once per
+// query tile rather than once per query: about a hundred times less traffic. The
+// softmax is computed online (running max and running sum, rescaling the
+// accumulator when the max moves), which is what removes the score matrix
+// entirely — there is nothing left to store.
+//
+// The registers are the constraint, and they are why this asks for head_dim =
+// 64: `qr[64] + acc[64]` only stays in registers if the loops over them are
+// unrollable, so the depth is a compile-time constant. Every whisper has
+// head_dim 64 (384/6, 512/8, 768/12, 1024/16, 1280/20 — all 64). Anything else
+// falls back to the two-kernel path, which is still correct, just slower.
+@ __wk_attn_f → s {
+    ^ `
+    #define WH_BQ 64
+    #define WH_HD 64
+    extern "C" __global__ void attn_f(
+        const float* __restrict__ q, const float* __restrict__ K,
+        const float* __restrict__ V, float* __restrict__ out,
+        int nh, int hd, int nq, int nkey, float qscale) {
+        __shared__ float Ks[WH_BQ][WH_HD];
+        __shared__ float Vs[WH_BQ][WH_HD];
+        int h  = blockIdx.x % nh;
+        int qt = blockIdx.x / nh;
+        int t  = threadIdx.x;
+        int i  = qt*WH_BQ + t;
+        float qr[WH_HD], acc[WH_HD];
+        for (int d = 0; d < WH_HD; ++d) {
+            qr[d]  = (i < nq) ? q[(long long)i*nh*WH_HD + (long long)h*WH_HD + d] : 0.f;
+            acc[d] = 0.f;
+        }
+        float m = -1e30f, l = 0.f;
+        for (int k0 = 0; k0 < nkey; k0 += WH_BQ) {
+            int nn = nkey - k0; if (nn > WH_BQ) nn = WH_BQ;
+            for (int idx = t; idx < nn*WH_HD; idx += WH_BQ) {
+                int r = idx / WH_HD, d = idx % WH_HD;
+                long long o = (long long)(k0 + r)*nh*WH_HD + (long long)h*WH_HD + d;
+                Ks[r][d] = K[o];
+                Vs[r][d] = V[o];
+            }
+            __syncthreads();
+            for (int j = 0; j < nn; ++j) {
+                float s = 0.f;
+                for (int d = 0; d < WH_HD; ++d) s += qr[d]*Ks[j][d];
+                s *= qscale;
+                float mn   = s > m ? s : m;
+                float corr = expf(m - mn);
+                float p    = expf(s - mn);
+                l = l*corr + p;
+                for (int d = 0; d < WH_HD; ++d) acc[d] = acc[d]*corr + p*Vs[j][d];
+                m = mn;
+            }
+            __syncthreads();
+        }
+        if (i < nq) {
+            for (int d = 0; d < WH_HD; ++d)
+                out[(long long)i*nh*WH_HD + (long long)h*WH_HD + d] = acc[d] / l;
+        }
+    }`
+}
+
 @ __wk_attn_sc → s {
     ^ `extern "C" __global__ void attn_sc(
         const float* __restrict__ q, const float* __restrict__ K,
@@ -342,10 +536,13 @@ $ `deps/gpu/src/gpu.nu`
     : b want_warp == ( gpu_backend ) 0
     : GpuKernel k1w ? want_warp ( gpu_compile g ( __wk_matvec_w ) `matvec_w` ) @ GpuKernel { 0 0 }
     : GpuKernel k1t ? want_warp ( gpu_compile g ( __wk_matvec_t ) `matvec_t` ) @ GpuKernel { 0 0 }
-    : b warp & want_warp & ( gpu_kernel_ok k1w ) ( gpu_kernel_ok k1t )
+    : GpuKernel k1m ? want_warp ( gpu_compile g ( __wk_matmul ) `matmul` ) @ GpuKernel { 0 0 }
+    : b warp & want_warp & & ( gpu_kernel_ok k1w ) ( gpu_kernel_ok k1t ) ( gpu_kernel_ok k1m )
     : GpuKernel k2 ( gpu_compile g ( __wk_layernorm ) `layernorm` )
+    : GpuKernel k2b ? want_warp ( gpu_compile g ( __wk_layernorm_b ) `layernorm_b` ) @ GpuKernel { 0 0 }
     : GpuKernel k3 ( gpu_compile g ( __wk_gelu ) `gelu` )
     : GpuKernel k4 ( gpu_compile g ( __wk_conv1d ) `conv1d` )
+    : GpuKernel k5f ? want_warp ( gpu_compile g ( __wk_attn_f ) `attn_f` ) @ GpuKernel { 0 0 }
     : GpuKernel k5 ( gpu_compile g ( __wk_attn_sc ) `attn_sc` )
     : GpuKernel k6 ( gpu_compile g ( __wk_attn_out ) `attn_out` )
     : GpuKernel k7 ( gpu_compile g ( __wk_addv ) `addv` )
@@ -360,7 +557,7 @@ $ `deps/gpu/src/gpu.nu`
     : b ok3 & ( gpu_kernel_ok k9 ) & ( gpu_kernel_ok k10 ) ( gpu_kernel_ok k11 )
     : b ok4 & ( gpu_kernel_ok k12 ) ( gpu_kernel_ok k13 )
     : b ok & & ok1 ok2 & ok3 ok4
-    ^ @ WhKernels { k1 k1w k1t warp k2 k3 k4 k5 k6 k7 k8 k9 k12 k13 k10 k11 ok }
+    ^ @ WhKernels { k1 k1w k1t k1m warp k2 k2b k3 k4 k5f k5 k6 k7 k8 k9 k12 k13 k10 k11 ok }
 }
 
 @ wk_free WhKernels ks → v {
@@ -368,6 +565,9 @@ $ `deps/gpu/src/gpu.nu`
     ? . ks warp {
         ( gpu_kernel_free . ks matvec_w )
         ( gpu_kernel_free . ks matvec_t )
+        ( gpu_kernel_free . ks matmul )
+        ( gpu_kernel_free . ks attn_f )
+        ( gpu_kernel_free . ks layernorm_b )
     } {}
     ( gpu_kernel_free . ks layernorm )
     ( gpu_kernel_free . ks gelu )
@@ -399,13 +599,20 @@ $ `deps/gpu/src/gpu.nu`
         // Many positions at once (the encoder): amortise the weight matrix over
         // eight of them. One position (the decoder): there is nothing to
         // amortise, and the plain warp kernel is the right one.
-        ? >= batch 8 {
-            : i tiles / + batch 7 8
-            : i threads * * rows tiles 32
-            : i _r ( gpu_launch . ks matvec_t ( gpu_grid threads 128 ) 128 a )
+        ? >= batch 64 {
+            // a real GEMM shape: 64x64 output tiles through shared memory
+            : i nbb / + batch 63 64
+            : i nbr / + rows 63 64
+            : i _r ( gpu_launch . ks matmul * nbb nbr 256 a )
         } {
-            : i threads * * rows batch 32
-            : i _r ( gpu_launch . ks matvec_w ( gpu_grid threads 128 ) 128 a )
+            ? >= batch 8 {
+                : i tiles / + batch 7 8
+                : i threads * * rows tiles 32
+                : i _r ( gpu_launch . ks matvec_t ( gpu_grid threads 128 ) 128 a )
+            } {
+                : i threads * * rows batch 32
+                : i _r ( gpu_launch . ks matvec_w ( gpu_grid threads 128 ) 128 a )
+            }
         }
     } {
         : i _r ( gpu_launch . ks matvec ( gpu_grid * rows batch 128 ) 128 a )
@@ -422,7 +629,11 @@ $ `deps/gpu/src/gpu.nu`
     ( vec_push [i] a ( gpu_arg_i32 n ) )
     ( vec_push [i] a ( gpu_arg_f32 eps ) )
     ( vec_push [i] a ( gpu_arg_i32 batch ) )
-    : i _r ( gpu_launch . ks layernorm ( gpu_grid * n batch 256 ) 256 a )
+    ? . ks warp {
+        : i _rb ( gpu_launch . ks layernorm_b batch 256 a )
+    } {
+        : i _r ( gpu_launch . ks layernorm ( gpu_grid batch 256 ) 256 a )
+    }
     ( vec_free [i] a )
 }
 
@@ -454,6 +665,24 @@ $ `deps/gpu/src/gpu.nu`
 // decoder's cross-attention); 1 = a query sees only keys at or before it (the
 // decoder's self-attention).
 @ wk_attn WhKernels ks i qd i kd i vd i scd i outd i nh i hd i nq i nkey f qscale i causal → v {
+    // The encoder: many queries, no mask, head_dim 64 — one fused kernel, no
+    // score matrix. The decoder (one query at a time, causal) has nothing to
+    // amortise and takes the two-kernel path.
+    ? & & & . ks warp == causal 0 == hd 64 >= nq 64 {
+        : ( Vec i ) af ( vec_new [i] )
+        ( vec_push [i] af ( gpu_arg_i64 qd ) )
+        ( vec_push [i] af ( gpu_arg_i64 kd ) )
+        ( vec_push [i] af ( gpu_arg_i64 vd ) )
+        ( vec_push [i] af ( gpu_arg_i64 outd ) )
+        ( vec_push [i] af ( gpu_arg_i32 nh ) )
+        ( vec_push [i] af ( gpu_arg_i32 hd ) )
+        ( vec_push [i] af ( gpu_arg_i32 nq ) )
+        ( vec_push [i] af ( gpu_arg_i32 nkey ) )
+        ( vec_push [i] af ( gpu_arg_f32 qscale ) )
+        : i _rf ( gpu_launch . ks attn_f * nh ( gpu_grid nq 64 ) 64 af )
+        ( vec_free [i] af )
+        ^ {}
+    } {}
     : ( Vec i ) a1 ( vec_new [i] )
     ( vec_push [i] a1 ( gpu_arg_i64 qd ) )
     ( vec_push [i] a1 ( gpu_arg_i64 kd ) )
