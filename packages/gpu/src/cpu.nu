@@ -54,6 +54,58 @@ static __thread __nurl_dim3 blockIdx, threadIdx, blockDim, gridDim;
 // them must run identically on this backend.
 static inline float rsqrtf(float x) { return 1.0f/sqrtf(x); }
 static inline double rsqrt(double x) { return 1.0/sqrt(x); }
+
+// ── Cooperative kernels: __shared__ and __syncthreads() ───────────
+//
+// A block's threads are run as FIBERS on one host thread, so:
+//
+//   __shared__      → storage private to the host thread, hence shared by
+//                     exactly the threads of one block, and reused by the
+//                     next block that host thread picks up (which is what
+//                     CUDA's shared memory is: uninitialised per block).
+//   __syncthreads() → the fiber yields to the scheduler, which resumes it
+//                     only after every other unfinished thread of the block
+//                     has run to ITS next barrier. That is the barrier.
+//
+// Fibers rather than host threads because the barrier has to be free —
+// a block is 256 threads and a kernel crosses a barrier in an inner loop,
+// so a futex per barrier per thread would cost more than the arithmetic.
+// And fibers rather than nothing, because a barrier cannot be expressed at
+// all in a flat "run every (block, thread) pair in one loop" launcher, which
+// is what this backend used to be: it would run thread 0 to completion before
+// thread 1 started, so half of a barrier's threads would already be gone by
+// the time the other half arrived. Any kernel with a __syncthreads() in it
+// silently computed the wrong answer. Now it computes the right one.
+//
+// threadIdx is re-stamped on every resume — a fiber that reads threadIdx.x
+// after a barrier must see its OWN index, not the last one the scheduler set.
+#include <ucontext.h>
+#include <stdlib.h>
+#include <string.h>
+#define __shared__ static __thread
+#define __NURL_STK (64*1024)
+static __thread ucontext_t __nurl_sched, __nurl_tmpl;
+static __thread ucontext_t* __nurl_ctx = 0;
+static __thread char* __nurl_stk = 0;
+static __thread unsigned char* __nurl_fin = 0;
+static __thread long long* __nurl_p = 0;
+static __thread int __nurl_cap = 0, __nurl_cur = 0, __nurl_ready = 0;
+static inline void __syncthreads(void) {
+    swapcontext(&__nurl_ctx[__nurl_cur], &__nurl_sched);
+}
+static void __nurl_ensure(int n) {
+    if (n > __nurl_cap) {
+        free(__nurl_ctx); free(__nurl_stk); free(__nurl_fin);
+        __nurl_ctx = (ucontext_t*)malloc((size_t)n * sizeof(ucontext_t));
+        __nurl_stk = (char*)malloc((size_t)n * __NURL_STK);
+        __nurl_fin = (unsigned char*)malloc((size_t)n);
+        __nurl_cap = n;
+    }
+    // getcontext() is a system call (it reads the signal mask). Taking one
+    // template per host thread and memcpy'ing it per fiber keeps it off the
+    // per-block path.
+    if (!__nurl_ready) { getcontext(&__nurl_tmpl); __nurl_ready = 1; }
+}
 `
 }
 
@@ -201,11 +253,24 @@ static inline double rsqrt(double x) { return 1.0/sqrt(x); }
     : String c ( string_with_cap + 2048 ( nurl_str_len src ) )
     ( string_push_str c ( __cpu_header ) )
     ( string_push_str c src )
-    ( string_push_str c `\nextern "C" void __cpu_launch(long long* p, long long grid, long long block){\nlong long __N=grid*block;\n#pragma omp parallel for schedule(static)\nfor(long long __i=0;__i<__N;__i++){\nlong long __b=__i/block,__t=__i%block;\nblockIdx.x=(int)__b;blockIdx.y=0;blockIdx.z=0;threadIdx.x=(int)__t;threadIdx.y=0;threadIdx.z=0;blockDim.x=(int)block;blockDim.y=1;blockDim.z=1;gridDim.x=(int)grid;gridDim.y=1;gridDim.z=1;\n` )
-    ( string_push_str c name )
-    ( string_push_char c 40 )
-    ( string_push_str c ( string_data casts ) )
-    ( string_push_str c `);\n}\n}\n` )
+    // A kernel with a barrier in it needs its block's threads to be able to
+    // WAIT for each other, so its block runs as fibers on one host thread. A
+    // kernel without one does not, and pays nothing: the flat grid loop, one
+    // OpenMP iteration per (block, thread) pair, is what every kernel in this
+    // ecosystem so far has run on and it stays exactly that.
+    ? >= ( nurl_str_find src `__syncthreads` ) 0 {
+        ( string_push_str c `\nstatic void __nurl_entry(void){\nlong long* p = __nurl_p;\n` )
+        ( string_push_str c name )
+        ( string_push_char c 40 )
+        ( string_push_str c ( string_data casts ) )
+        ( string_push_str c `);\n__nurl_fin[__nurl_cur]=1;\n}\nextern "C" void __cpu_launch(long long* p, long long grid, long long block){\n#pragma omp parallel for schedule(static)\nfor(long long __b=0;__b<grid;__b++){\nint n=(int)block;\n__nurl_ensure(n);\n__nurl_p=p;\nblockIdx.x=(int)__b;blockIdx.y=0;blockIdx.z=0;\nblockDim.x=n;blockDim.y=1;blockDim.z=1;\ngridDim.x=(int)grid;gridDim.y=1;gridDim.z=1;\nfor(int t=0;t<n;t++){\nmemcpy(&__nurl_ctx[t],&__nurl_tmpl,sizeof(ucontext_t));\n__nurl_ctx[t].uc_stack.ss_sp=__nurl_stk+(size_t)t*__NURL_STK;\n__nurl_ctx[t].uc_stack.ss_size=__NURL_STK;\n__nurl_ctx[t].uc_link=&__nurl_sched;\nmakecontext(&__nurl_ctx[t],(void(*)(void))__nurl_entry,0);\n__nurl_fin[t]=0;\n}\nint left=n;\nwhile(left>0){\nfor(int t=0;t<n;t++){\nif(__nurl_fin[t])continue;\n__nurl_cur=t;threadIdx.x=t;threadIdx.y=0;threadIdx.z=0;\nswapcontext(&__nurl_sched,&__nurl_ctx[t]);\nif(__nurl_fin[t])left--;\n}\n}\n}\n}\n` )
+    } {
+        ( string_push_str c `\nextern "C" void __cpu_launch(long long* p, long long grid, long long block){\nlong long __N=grid*block;\n#pragma omp parallel for schedule(static)\nfor(long long __i=0;__i<__N;__i++){\nlong long __b=__i/block,__t=__i%block;\nblockIdx.x=(int)__b;blockIdx.y=0;blockIdx.z=0;threadIdx.x=(int)__t;threadIdx.y=0;threadIdx.z=0;blockDim.x=(int)block;blockDim.y=1;blockDim.z=1;gridDim.x=(int)grid;gridDim.y=1;gridDim.z=1;\n` )
+        ( string_push_str c name )
+        ( string_push_char c 40 )
+        ( string_push_str c ( string_data casts ) )
+        ( string_push_str c `);\n}\n}\n` )
+    }
     ( string_free casts )
 
     // Cache key: the hash of the GENERATED source (kernel + shim +

@@ -88,9 +88,79 @@ $ `src/gpu.nu`
     ( gpu_close g )
 }
 
+// ── cooperative kernels: __shared__ + __syncthreads() ────────────
+//
+// A block reduction. It is not a kernel that merely HAPPENS to use shared
+// memory — it cannot produce the right answer without the barrier: thread 0
+// reads what thread 128 wrote.
+//
+// On the CPU backend this did not compile at all until the launcher learned to
+// run a block's threads as fibers: `__shared__` and `__syncthreads()` were
+// simply not defined, so the host compile failed and the kernel came back
+// unusable. The package's promise is that the SAME CUDA-C runs on both
+// backends, and for any cooperative kernel — which is most real CUDA — it was
+// not true. This test is what holds it true.
+//
+// Runs on whichever backend gpu_open picks, so the suite is run twice.
+@ test_coop → v {
+    ( nurl_print `[cooperative]\n` )
+    : Gpu g ( gpu_open ( gpu_best_device ) )
+    ? ! ( gpu_ok g ) { ( check F `open a device (any backend)` ) ^ {} } {}
+
+    : GpuKernel k ( gpu_compile g `extern "C" __global__ void blocksum(const float* x, float* out, int n){
+        __shared__ float s[256];
+        int t = threadIdx.x;
+        int i = blockIdx.x*blockDim.x + t;
+        s[t] = (i < n) ? x[i] : 0.f;
+        __syncthreads();
+        for (int off = blockDim.x >> 1; off > 0; off >>= 1) {
+            if (t < off) s[t] += s[t + off];
+            __syncthreads();
+        }
+        if (t == 0) out[blockIdx.x] = s[0];
+    }` `blocksum` )
+    ? ! ( gpu_kernel_ok k ) { ( check F `compile a kernel with __shared__ and __syncthreads()` ) ( gpu_close g ) ^ {} } {}
+
+    : i n 4096
+    : i nb / n 256
+    : *u hx ( gpu_host_alloc * n 4 )
+    : *u ho ( gpu_host_alloc * nb 4 )
+    : ~ i i 0
+    ~ < i n { ( gpu_host_set_f32 hx i # f i ) = i + i 1 }
+    : GpuBuffer dx ( gpu_alloc g * n 4 )
+    : GpuBuffer dout ( gpu_alloc g * nb 4 )
+    ( gpu_upload dx hx )
+
+    : ( Vec i ) args ( vec_new [i] )
+    ( vec_push [i] args ( gpu_arg_buffer dx ) )
+    ( vec_push [i] args ( gpu_arg_buffer dout ) )
+    ( vec_push [i] args ( gpu_arg_i32 n ) )
+    ( gpu_launch k nb 256 args )
+    ( gpu_sync g )
+    ( gpu_download ho dout )
+
+    // block b sums i = 256b … 256b+255 → 256*(256b) + (0+…+255)
+    : ~ i bad 0
+    : ~ i b 0
+    ~ < b nb {
+        : f want + * 256.0 # f * 256 b 32640.0
+        : ~ f d - ( gpu_host_get_f32 ho b ) want
+        ? < d 0.0 { = d - 0.0 d } {}
+        ? > d 0.5 { = bad + bad 1 } {}
+        = b + b 1
+    }
+    ( check == bad 0 `a shared-memory block reduction sums every block correctly (16 blocks x 256 threads)` )
+
+    ( gpu_free dx ) ( gpu_free dout )
+    ( gpu_host_free hx ) ( gpu_host_free ho )
+    ( gpu_kernel_free k )
+    ( gpu_close g )
+}
+
 @ main → i {
     ( test_args )
     ( test_device )
+    ( test_coop )
     ? == g_fail 0 { ( nurl_print `\nALL PASS\n` ) ^ 0 }
     { ( nurl_print `\n` ) ( nurl_print ( nurl_str_int g_fail ) ) ( nurl_print ` FAILED\n` ) ^ 1 }
 }
