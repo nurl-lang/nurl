@@ -1,0 +1,74 @@
+# audio
+
+Read WAV, resample it honestly, and compute the log-mel spectrogram a
+speech model actually eats — in pure NURL.
+
+```
+nurlpkg install audio
+```
+
+```
+$ audio info speech.wav
+wav — 44100 Hz, 2 ch, 16 bit, 132300 frames (3 s)
+
+$ audio resample speech.wav speech16k.wav --rate 16000
+
+$ audio mel speech16k.wav -o mel.f32
+mel — 3000 frames x 80 mels → mel.f32
+```
+
+## Three places a mistake hides
+
+**The WAV reader treats the file as untrusted.** Every chunk announces
+its own size, and a file is free to lie: a `data` chunk claiming 2 GB
+behind two bytes, a 0 Hz sample rate, 0 channels, a 12-bit depth nobody
+has ever used, a header that stops mid-chunk. All of them are a clean
+error — none of them is an allocation sized by a number a stranger chose.
+8-bit unsigned, 16/24/32-bit PCM and 32/64-bit IEEE float all come back
+as f32 in [-1, 1].
+
+**Resampling is windowed-sinc, not linear interpolation.** Linear is the
+tempting one-liner and it is a *lousy low-pass filter*: downsampling with
+it folds everything above the new Nyquist frequency back into the speech
+band — precisely where the model is listening. A 12 kHz tone resampled
+44.1 → 16 kHz should vanish, not reappear at 4 kHz. Here it lands at
+**−82.6 dB**, and the test suite fails if it climbs above −60.
+
+**The mel spectrogram is whisper's, to the constant.** Every one of these
+was read out of transformers' source, not remembered — and every one of
+them silently changes what the model hears:
+
+| | |
+|---|---|
+| window | **periodic** Hann, `hanning(N+1)[:-1]` — the symmetric one is a different window |
+| padding | **reflect**, by `n_fft/2` — so frame *k* is *centred* on sample *k·hop*, not started there |
+| mel scale | **Slaney** (linear below 1 kHz, log above) — not HTK's `2595·log10(1+f/700)` |
+| filters | Slaney-normalised, `2/(f[k+2] − f[k])` |
+| after | drop the last frame, `log10`, floor at `max − 8`, then `(x + 4)/4` |
+
+## Verified against the thing itself
+
+Not against my own understanding of it:
+
+* **log-mel == Hugging Face's `WhisperFeatureExtractor`**, on real audio:
+  max |Δ| = **1.8e-5**, mean |Δ| = 8.0e-9, correlation **1.00000000**
+  over all 80 × 3000 values. (The residual is f32 storage rounding.)
+* the resampler tracks scipy's `resample_poly` at r = 0.99992, and kills
+  the out-of-band tone by 82 dB
+* an independent numpy reference (`tests/mel_ref.py`) guards against
+  regressions when transformers is not installed
+* every bit depth round-trips; six malformed files are six clean errors;
+  ASan/LSan clean
+
+## Built on
+
+`stdlib/std/fft.nu`, whose **Bluestein** path makes `n_fft = 400` — which
+is not a power of two — an *exact* transform rather than a padded
+approximation. Padding 400 to 512 does not compute a rounder spectrum; it
+computes a different one.
+
+The whole 30-second mel spectrogram (3000 frames) takes about 0.3 s.
+
+## License
+
+MIT OR Apache-2.0
