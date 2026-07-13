@@ -173,6 +173,23 @@ PYEOF3
         && ok "--vad: a recording with no speech in it transcribes to nothing (not to [BLANK_AUDIO], which is what the model says when asked)" \
         || { bad "--vad on silence"; echo "    got: [$ROOM]"; }
 
+    # ── --timestamps: the model's own clock, in the recording's timeline ──
+    # Two rules are under test. The timestamps come from whisper itself
+    # (constrained decoding — greedy alone never emits one), and under --vad
+    # they must come out in the RECORDING's timeline: the model saw condensed
+    # audio where second 0.2 is second 20 of the file, and a subtitle at
+    # 00:00.20 for words spoken at 00:20 is worse than no subtitle at all.
+    TS=$("$WH" transcribe "$WORK/model" "$WORK/jfk.wav" --timestamps 2>/dev/null)
+    printf '%s' "$TS" | grep -qE '^\[00:00\.00 --> 00:(09|10|11)\.[0-9]{2}\]' \
+        && printf '%s' "$TS" | grep -q "ask not what your country" \
+        && ok "--timestamps: whisper's own timestamp tokens close the utterance at ~11 s" \
+        || { bad "--timestamps"; echo "    got: [$TS]"; }
+
+    TSV=$("$WH" transcribe "$WORK/model" "$WORK/padded.wav" --vad --timestamps 2>/dev/null)
+    printf '%s' "$TSV" | grep -qE '^\[00:(19\.[5-9]|20\.[0-4])[0-9]' \
+        && ok "--vad --timestamps: speech at second 20 of the file is stamped ~00:20, not ~00:00 (condensed clock mapped back)" \
+        || { bad "--vad --timestamps mapping"; echo "    got: [$TSV]"; }
+
     START=$(date +%s%N); "$WH" transcribe "$WORK/model" "$WORK/meeting.wav" --max 400 >/dev/null 2>&1
     SLOW=$(( ($(date +%s%N) - START) / 1000000 ))
     START=$(date +%s%N); "$WH" transcribe "$WORK/model" "$WORK/meeting.wav" --max 400 --vad >/dev/null 2>&1
@@ -219,6 +236,15 @@ if [ "${WHISPER_BIG_TESTS:-0}" = "1" ]; then
         [ "$PAD_DV" = "$WANT_D" ] \
             && ok "distil-large-v3: --vad rescues speech that straddles the 30 s boundary" \
             || { bad "distil --vad on padded speech"; echo "    got: [$PAD_DV]"; }
+
+        # distil is precise enough to split the two sentences at their real
+        # boundary (~8 s), which tiny is not — a second model pinning the same
+        # mechanics at a resolution the first cannot fake.
+        TS_D=$("$WH" transcribe "$WORK/distil" "$WORK/jfk.wav" --timestamps 2>/dev/null)
+        [ "$(printf '%s\n' "$TS_D" | grep -c '^\[')" -ge 2 ] \
+            && printf '%s' "$TS_D" | grep -qE '^\[00:0(7|8)\.[0-9]{2} --> ' \
+            && ok "distil-large-v3: --timestamps splits the two sentences at their ~8 s boundary" \
+            || { bad "distil --timestamps"; echo "    got: [$TS_D]"; }
     else
         echo "  SKIP distil-large-v3 (download failed)"
     fi

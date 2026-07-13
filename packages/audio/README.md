@@ -91,6 +91,12 @@ most `max_gap` samples of the real room between segments. That cap is not
 a detail: glue two utterances together with *nothing* between them and a
 speech model hears one utterance where there were two.
 
+`vad_extract_runs` additionally hands back the condensation **map** — one
+`VadRun { cond, orig, len }` per surviving stretch — because a model
+transcribing the condensed audio reports times in the condensed timeline,
+and a caller who wants to say "this was said at 3:12 of the recording" has
+to walk the map back. `vad_map_sample` does.
+
 ## Built on
 
 `stdlib/std/fft.nu`. Padding 400 to 512 does not compute a rounder

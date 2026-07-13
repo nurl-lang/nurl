@@ -91,6 +91,34 @@ exactly 30 seconds, so an utterance that straddles a window boundary is cut in
 half — and distil, handed the back half of a sentence, returns
 ` And so my fellow Americans country.` VAD moves the boundary off the speech.
 
+## `--timestamps`: the model's own clock, in the recording's timeline
+
+```
+$ whisper transcribe distil-large-v3 meeting.wav --vad --timestamps
+[00:59.85 --> 01:07.49] And so, my fellow Americans, ask not what your country can do for you.
+[01:08.21 --> 01:10.39] Ask what you can do for your country.
+[03:10.84 --> 03:18.48] And so, my fellow Americans, ask not what your country can do for you.
+[03:19.20 --> 03:21.38] Ask what you can do for your country.
+```
+
+The timestamps are whisper's own: leave `<|notimestamps|>` out of the prompt
+and the model interleaves timestamp tokens (`<|0.00|>` … `<|30.00|>`, one per
+20 ms) with the words — it was trained to. But greedy decoding alone almost
+never emits one, and the reason is worth stating: no *single* 20 ms bin ever
+outscores "the". A spoken boundary spreads its probability over dozens of
+bins, so the bins win **collectively or not at all** — which is exactly what
+openai's constrained-decoding rules encode (the summed timestamp probability
+is compared against the best text token; timestamps open every window, never
+run backwards, and come in close-open pairs). Those rules are implemented
+here, on the host, over the same logits either backend produced.
+
+Under `--vad` there is a second translation. The model transcribed *condensed*
+audio — second 0.2 of what it heard may be second 20 of the file — so every
+timestamp is walked back through the condensation map (`VadRun`, from
+packages/audio) before it is printed. A subtitle at `00:00.20` for words
+spoken at `00:20` would be worse than no subtitle at all; the four lines
+above land on the recording's real clock.
+
 ## The control tokens are looked up, not hardcoded
 
 A whisper prompt is four tokens — `<|startoftranscript|>`, the language,

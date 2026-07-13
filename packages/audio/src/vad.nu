@@ -172,8 +172,21 @@ $ `stdlib/std/sort.nu`
     ^ total
 }
 
+// A run of the condensed audio and where it came from: condensed sample
+// `cond` … `cond+len` is original sample `orig` … `orig+len`. What the
+// condensation THREW AWAY is exactly what is not covered by any run — and it
+// is why the runs exist at all: a model transcribing the condensed audio
+// reports times in the CONDENSED timeline, and a caller who wants to say
+// "this was said at 3:12 of the recording" has to walk the map back.
+: VadRun {
+    i cond
+    i orig
+    i len
+}
+
 // The audio with the silence taken out: the segments, with at most `max_gap`
-// samples of the real audio kept between consecutive ones.
+// samples of the real audio kept between consecutive ones, and one VadRun
+// appended to `runs` for every contiguous stretch that survives.
 //
 // The cap is not a detail. Glue two segments together with NOTHING between them
 // and a listener — a speech model included — hears one utterance where there
@@ -182,25 +195,23 @@ $ `stdlib/std/sort.nu`
 // second of the actual room gives it the boundary it needs, and capping that
 // fraction is what keeps the silence from being the cost again. `max_gap` = 0
 // concatenates.
-@ vad_extract ( Vec f ) x ( Vec VadSeg ) segs i max_gap → ( Vec f ) {
+@ vad_extract_runs ( Vec f ) x ( Vec VadSeg ) segs i max_gap ( Vec VadRun ) runs → ( Vec f ) {
     : ( Vec f ) out ( vec_new [f] )
     : ~ i prev_end -1
     : ~ i k 0
     ~ < k ( vec_len [VadSeg] segs ) {
         ?? ( vec_get [VadSeg] segs k ) {
             T s → {
+                : ~ i from . s start
                 ? & >= prev_end 0 > max_gap 0 {
                     : i gap - . s start prev_end
                     : i keep ? < gap max_gap gap max_gap
                     // the tail of the gap, so what is heard is the room right
                     // before the speech resumes
-                    : ~ i g - . s start keep
-                    ~ < g . s start {
-                        ( vec_push [f] out ( __vget x g ) )
-                        = g + g 1
-                    }
+                    = from - . s start keep
                 } {}
-                : ~ i i0 . s start
+                ( vec_push [VadRun] runs @ VadRun { ( vec_len [f] out ) from - . s end from } )
+                : ~ i i0 from
                 ~ < i0 . s end {
                     ( vec_push [f] out ( __vget x i0 ) )
                     = i0 + i0 1
@@ -212,4 +223,34 @@ $ `stdlib/std/sort.nu`
         = k + k 1
     }
     ^ out
+}
+
+@ vad_extract ( Vec f ) x ( Vec VadSeg ) segs i max_gap → ( Vec f ) {
+    : ( Vec VadRun ) runs ( vec_new [VadRun] )
+    : ( Vec f ) out ( vad_extract_runs x segs max_gap runs )
+    ( vec_free [VadRun] runs )
+    ^ out
+}
+
+// A condensed sample position, mapped back to the original recording. Positions
+// past the end of a run but before the next (which cannot arise from a model
+// reading the condensed audio, but can arise from a rounded-up timestamp) clamp
+// to the end of the nearer run.
+@ vad_map_sample ( Vec VadRun ) runs i s → i {
+    : ~ i best s
+    : ~ i k 0
+    ~ < k ( vec_len [VadRun] runs ) {
+        ?? ( vec_get [VadRun] runs k ) {
+            T r → {
+                ? >= s . r cond {
+                    : ~ i off - s . r cond
+                    ? > off . r len { = off . r len } {}
+                    = best + . r orig off
+                } {}
+            }
+            F → {}
+        }
+        = k + k 1
+    }
+    ^ best
 }
