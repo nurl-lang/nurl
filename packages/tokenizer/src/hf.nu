@@ -23,7 +23,12 @@ $ `stdlib/core/vec.nu`
 $ `stdlib/core/string.nu`
 $ `stdlib/std/fs.nu`
 $ `stdlib/ext/json.nu`
-$ `src/tokenizer.nu`
+
+// NOTE: this file does NOT import src/tokenizer.nu. A package's sibling files do
+// not import each other — the CONSUMER imports them in dependency order, because
+// a relative `src/…` path only resolves from the package's own root and would
+// break the moment the package is used as a dependency (deps/tokenizer/src/…).
+// gguf follows the same rule. So: import tokenizer.nu, then hf.nu.
 
 @ __hf_err s msg → !*Tok String {
     ^ @ !*Tok String { F ( string_from msg ) }

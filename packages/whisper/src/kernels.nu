@@ -36,6 +36,8 @@ $ `deps/gpu/src/gpu.nu`
     GpuKernel addv
     GpuKernel addrow
     GpuKernel scale
+    GpuKernel getrow  // one row of the embedding table → the activation
+    GpuKernel setrow  // write a row INTO the KV cache
     b ok
 }
 
@@ -192,6 +194,24 @@ $ `deps/gpu/src/gpu.nu`
     }`
 }
 
+// The embedding table is on the device (it is also the output projection —
+// whisper ties them), so a token's row is a copy, not a host round-trip.
+@ __wk_getrow → s {
+    ^ `extern "C" __global__ void getrow(const float* table, float* y, int row, int n) {
+        int i = blockIdx.x*blockDim.x + threadIdx.x;
+        if (i < n) y[i] = table[(long long)row*n + i];
+    }`
+}
+
+// Append a vector to a cache at `row` — the decoder's KV cache grows one
+// position per token, and the k/v it just computed belong at the end.
+@ __wk_setrow → s {
+    ^ `extern "C" __global__ void setrow(float* cache, const float* v, int row, int n) {
+        int i = blockIdx.x*blockDim.x + threadIdx.x;
+        if (i < n) cache[(long long)row*n + i] = v[i];
+    }`
+}
+
 @ __wk_addv → s {
     ^ `extern "C" __global__ void addv(float* a, const float* b, int n) {
         int i = blockIdx.x*blockDim.x + threadIdx.x;
@@ -228,10 +248,13 @@ $ `deps/gpu/src/gpu.nu`
     : GpuKernel k7 ( gpu_compile g ( __wk_addv ) `addv` )
     : GpuKernel k8 ( gpu_compile g ( __wk_addrow ) `addrow` )
     : GpuKernel k9 ( gpu_compile g ( __wk_scale ) `scale` )
+    : GpuKernel k10 ( gpu_compile g ( __wk_getrow ) `getrow` )
+    : GpuKernel k11 ( gpu_compile g ( __wk_setrow ) `setrow` )
     : b ok1 & & ( gpu_kernel_ok k1 ) ( gpu_kernel_ok k2 ) & ( gpu_kernel_ok k3 ) ( gpu_kernel_ok k4 )
     : b ok2 & & ( gpu_kernel_ok k5 ) ( gpu_kernel_ok k6 ) & ( gpu_kernel_ok k7 ) ( gpu_kernel_ok k8 )
-    : b ok & & ok1 ok2 ( gpu_kernel_ok k9 )
-    ^ @ WhKernels { k1 k1w warp k2 k3 k4 k5 k6 k7 k8 k9 ok }
+    : b ok3 & ( gpu_kernel_ok k9 ) & ( gpu_kernel_ok k10 ) ( gpu_kernel_ok k11 )
+    : b ok & & ok1 ok2 ok3
+    ^ @ WhKernels { k1 k1w warp k2 k3 k4 k5 k6 k7 k8 k9 k10 k11 ok }
 }
 
 @ wk_free WhKernels ks → v {
@@ -245,6 +268,8 @@ $ `deps/gpu/src/gpu.nu`
     ( gpu_kernel_free . ks addv )
     ( gpu_kernel_free . ks addrow )
     ( gpu_kernel_free . ks scale )
+    ( gpu_kernel_free . ks getrow )
+    ( gpu_kernel_free . ks setrow )
 }
 
 // ── launchers ───────────────────────────────────────────────────────
@@ -358,5 +383,25 @@ $ `deps/gpu/src/gpu.nu`
     ( vec_push [i] a ( gpu_arg_f32 s ) )
     ( vec_push [i] a ( gpu_arg_i32 n ) )
     : i _r ( gpu_launch . ks scale ( gpu_grid n 256 ) 256 a )
+    ( vec_free [i] a )
+}
+
+@ wk_getrow WhKernels ks i table i yd i row i n → v {
+    : ( Vec i ) a ( vec_new [i] )
+    ( vec_push [i] a ( gpu_arg_i64 table ) )
+    ( vec_push [i] a ( gpu_arg_i64 yd ) )
+    ( vec_push [i] a ( gpu_arg_i32 row ) )
+    ( vec_push [i] a ( gpu_arg_i32 n ) )
+    : i _r ( gpu_launch . ks getrow ( gpu_grid n 256 ) 256 a )
+    ( vec_free [i] a )
+}
+
+@ wk_setrow WhKernels ks i cache i vd i row i n → v {
+    : ( Vec i ) a ( vec_new [i] )
+    ( vec_push [i] a ( gpu_arg_i64 cache ) )
+    ( vec_push [i] a ( gpu_arg_i64 vd ) )
+    ( vec_push [i] a ( gpu_arg_i32 row ) )
+    ( vec_push [i] a ( gpu_arg_i32 n ) )
+    : i _r ( gpu_launch . ks setrow ( gpu_grid n 256 ) 256 a )
     ( vec_free [i] a )
 }
