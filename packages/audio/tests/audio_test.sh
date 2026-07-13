@@ -148,5 +148,33 @@ d = np.abs(ours - hf).max()
 assert d < 1e-3, f"max|delta| vs HF = {d:.3e}"
 PYEOF
 
+echo "[5/5] VAD — does it find the speech, and only the speech"
+# A signal whose speech regions are KNOWN: bursts at [2,5) and [8,11) over a
+# quiet room. The detector never sees the answer; the test does.
+python3 - "$WORK" <<'PYEOF'
+import sys, wave, struct, numpy as np
+W = sys.argv[1]; sr = 16000
+t = np.arange(13 * sr) / sr
+x = np.random.RandomState(1).randn(t.size) * 0.002        # the room
+for a, b in [(2, 5), (8, 11)]:                            # the "speech"
+    m = (t >= a) & (t < b)
+    x[m] += 0.5 * np.sin(2 * np.pi * 300 * t[m]) * (1 + 0.4 * np.sin(2 * np.pi * 7 * t[m]))
+w = wave.open(W + '/vad.wav', 'wb'); w.setnchannels(1); w.setsampwidth(2); w.setframerate(sr)
+w.writeframes(b''.join(struct.pack('<h', int(np.clip(v, -1, 1) * 32767)) for v in x)); w.close()
+# and a file that is nothing but the room
+s = np.random.RandomState(2).randn(5 * sr) * 0.002
+w = wave.open(W + '/quiet.wav', 'wb'); w.setnchannels(1); w.setsampwidth(2); w.setframerate(sr)
+w.writeframes(b''.join(struct.pack('<h', int(v * 32767)) for v in s)); w.close()
+PYEOF
+
+"$A" vad "$WORK/vad.wav" > "$WORK/vad.txt" 2>&1
+python3 tests/vad_check.py "$WORK/vad.txt" \
+    && ok "the two bursts are found, within a frame of where they are (and nothing else is)" \
+    || { bad "VAD segments"; cat "$WORK/vad.txt"; }
+
+"$A" vad "$WORK/quiet.wav" 2>&1 | grep -q "0 segment(s)" \
+    && ok "a recording that is only room noise has no speech in it (the floor is adaptive, not a fixed dB)" \
+    || { bad "VAD on silence"; "$A" vad "$WORK/quiet.wav"; }
+
 echo "== audio tests: PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

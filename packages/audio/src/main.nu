@@ -4,6 +4,7 @@
 //   audio mel <file.wav> -o mel.f32       whisper log-mel (80 × 3000), raw f32 LE
 //   audio resample <in.wav> <out.wav> --rate 16000
 //   audio tone <out.wav> --rate 16000     a known signal, for tests
+//   audio vad <file.wav>                  where the speech is (and how much is not)
 
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/string.nu`
@@ -15,6 +16,7 @@ $ `stdlib/std/floatbits.nu`
 $ `src/wav.nu`
 $ `src/mel.nu`
 $ `src/resample.nu`
+$ `src/vad.nu`
 
 @ __say String m → v {
     ( nurl_print ( string_data m ) )
@@ -61,7 +63,7 @@ $ `src/resample.nu`
     ? ( args_present p `help` ) {
         : String u ( args_usage p )
         ( nurl_print ( string_data u ) )
-        ( nurl_print `\ncommands:\n  info <file.wav>\n  mel <file.wav> -o mel.f32\n  resample <in.wav> <out.wav> --rate 16000\n  tone <out.wav> [--rate N] [--seconds S]\n` )
+        ( nurl_print `\ncommands:\n  info <file.wav>\n  mel <file.wav> -o mel.f32\n  resample <in.wav> <out.wav> --rate 16000\n  vad <file.wav>\n  tone <out.wav> [--rate N] [--seconds S]\n` )
         ( string_free u )
         ( args_free p )
         ^ 0
@@ -157,6 +159,37 @@ $ `src/resample.nu`
                 ( vec_free [f] at16 )
                 ( vec_free [f] fixed )
                 ( vec_free [f] mel )
+            } {}
+            ? ( nurl_str_eq cmd `vad` ) {
+                : ( Vec f ) mono ( wav_mono w )
+                : ( Vec f ) at16 ( resample mono . w rate 16000 )
+                : ( Vec VadSeg ) segs ( vad_segments at16 16000 ( vad_default_opts ) )
+                : i total ( vec_len [f] at16 )
+                : i voiced ( vad_voiced_samples segs )
+                : ~ i k 0
+                ~ < k ( vec_len [VadSeg] segs ) {
+                    ?? ( vec_get [VadSeg] segs k ) {
+                        T sg → {
+                            : String m ( string_new )
+                            ( string_push_float m / # f . sg start 16000.0 )
+                            ( string_push_str m ` - ` )
+                            ( string_push_float m / # f . sg end 16000.0 )
+                            ( string_push_str m ` s` )
+                            ( __say m )
+                        }
+                        F → {}
+                    }
+                    = k + k 1
+                }
+                : String m ( string_from `vad — ` )
+                ( string_push_int m ( vec_len [VadSeg] segs ) )
+                ( string_push_str m ` segment(s), ` )
+                ( string_push_float m / * 100.0 # f voiced # f ? > total 0 total 1 )
+                ( string_push_str m ` % of the audio is speech` )
+                ( __say m )
+                ( vec_free [f] mono )
+                ( vec_free [f] at16 )
+                ( vec_free [VadSeg] segs )
             } {}
             ? ( nurl_str_eq cmd `resample` ) {
                 : ( Vec f ) mono ( wav_mono w )
