@@ -8,6 +8,76 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.0] — 2026-07-13
+
+The **speech** release: NURL now transcribes real audio with real models,
+and the ecosystem grew the four packages that took it there.
+
+### Added
+
+- **`stdlib/std/fft.nu`** — the discrete Fourier transform, for **any**
+  length. A radix-2 FFT covers powers of two; whisper's spectrogram wants
+  `n_fft = 400`, which is not one, and padding to 512 computes a
+  *different* transform rather than a rounder one. So arbitrary N is
+  handled properly, by **Bluestein's algorithm**: relative error 1.9e-14
+  at N=400 and 7.3e-15 at the prime 997, against numpy — the
+  arbitrary-length path is as accurate as the easy one. A plan
+  precomputes the twiddles and the transformed chirp, so an STFT does not
+  pay the setup per frame: whisper's whole 30-second mel spectrogram
+  (3000 frames) takes 0.30 s.
+  - The test suite pins the transform with **identities**, because its
+    round trip passed while the forward transform was wrong: the inverse
+    was wrong in the compensating way. `δ[1] → e^(−2πik/N)` pins the sign;
+    `ifft(fft(x)) == x` pins nothing on its own.
+
+- **`nurlpkg publish` refuses a package the installed toolchain cannot
+  build.** A package's `$ \`stdlib/…\`` imports are resolved by whatever
+  toolchain the USER has — so a package importing a stdlib file added
+  since the last release publishes cleanly and then fails to install for
+  everyone. It happened (packages/audio against this release's
+  `stdlib/std/fft.nu`), and the gate now names the missing files and the
+  toolchain that lacks them.
+
+### Ecosystem (published to the registry)
+
+- **`safetensor` 0.1.0** — the container Hugging Face ships every model
+  in, parsed as hostile input: the header length is checked against the
+  real file size before the JSON is looked at, every tensor's extent must
+  land inside the data region and be exactly what its dtype and shape
+  need, and element counts accumulate with an overflow check. Proven by a
+  whole forward pass: gemma-3-270m from its checkpoint reproduces HF's
+  own logits at **r = 1.00000000**.
+- **`tokenizer` 0.1.0** — nurllama's SentencePiece and byte-level BPE
+  engines, lifted out and made loader-agnostic: a vocabulary can arrive
+  from a GGUF's metadata or from HF's `tokenizer.json`. The HF oracle
+  found a **years-old bug**: GPT-2's `\s+(?!\S)` gives the last space of
+  a run *back* to the next token, and the default pre-tokenizer was
+  swallowing it.
+- **`audio` 0.1.0** — WAV (untrusted input), windowed-sinc resampling
+  (linear interpolation aliases the speech band), and whisper's log-mel
+  to the constant — matching HF's `WhisperFeatureExtractor` at
+  **r = 1.00000000** on both 80 and 128 bands.
+- **`whisper` 0.1.0** — speech recognition in pure NURL, from a
+  safetensors checkpoint, on the GPU or the CPU. **Word for word what HF
+  transformers produces**, on whisper-tiny *and* distil-large-v3.
+  LayerNorm rather than RMSNorm, error-function GELU rather than tanh,
+  two conv1d layers, cross-attention, and the ecosystem's first
+  **non-causal** attention — a speech encoder hears the whole clip at
+  once.
+- **`nurllama` 0.8.0** — the tokenizer engine now comes from the package;
+  its loader is the 128 lines that read `tokenizer.ggml.*`. Weights can
+  also come from a safetensors file (`--weights`), which is how the
+  safetensor reader is proven.
+
+### Fixed
+
+- **A quadratic vocabulary load.** `whisper transcribe` cost 14.2 s on an
+  11-second clip — and the same 13.7 s whether it generated 1 token or
+  20. A flat cost is never the model: `tokenizer.json` was being read with
+  `json_obj_get` per key, which scans linearly, so a 50 258-entry
+  vocabulary was 2.5 billion string comparisons. 12.88 s → **0.05 s**.
+
+
 ## [0.13.0] — 2026-07-12
 
 The **local-LLM release**. NURL now runs language models end to end — a

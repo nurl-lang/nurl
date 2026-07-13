@@ -7,7 +7,7 @@ Anything marked done here has a regression test in
 [`compiler/tests/`](compiler/tests/) and is covered by the bootstrap fixed
 point.
 
-_Last reviewed: 2026-07-12 · Current release: **0.13.0** · Language: **Grammar
+_Last reviewed: 2026-07-13 · Current release: **0.14.0** · Language: **Grammar
 v2.3** ([`spec/grammar.ebnf`](spec/grammar.ebnf))._
 
 ---
@@ -177,12 +177,27 @@ platform-specific shims.
   Verified against independent references at every layer: token IDs vs a
   SentencePiece implementation, logits and greedy text vs a numpy forward
   pass, dequantisation bit-identical to an independent decoder.
+- **Speech recognition, in pure NURL** (`whisper` + `audio` + `safetensor` +
+  `tokenizer`): a WAV goes in and text comes out — *word for word what
+  Hugging Face transformers produces from the same model*, on whisper-tiny
+  and on distil-large-v3, on the GPU or the CPU. Every stage is verified
+  against an independent implementation rather than against our own
+  understanding of it: the resampler against scipy, the log-mel against HF's
+  own feature extractor (r = 1.00000000, on both 80 and 128 bands), the
+  400-point FFT against numpy (Bluestein, because 400 is not a power of two
+  and padding it computes a *different* transform), the weights bit-exact,
+  the vocabulary against HF's tokenizer, the encoder against HF's encoder,
+  and the transcription against HF's. Whisper is not the llama shape —
+  LayerNorm rather than RMSNorm, error-function GELU rather than tanh, two
+  conv1d layers, cross-attention, and the ecosystem's first **non-causal**
+  attention.
 - **Package ecosystem** on the live registry (`reg.nurl-lang.org`,
   `nurlpkg install`): GPU compute (`gpu` — CUDA driver + NVRTC, a CPU
   fallback backend, a static-kernel backend, and a **WebGPU / WGSL backend**;
   `gpukit`, `tensor`), pure-NURL vision and ML (`image` PNG/JPEG codecs,
   `onnx` runtime, `objdet`, `yoloe`, `iforest`, `anomaly`), local LLMs
-  (`nurllama`, `gguf`), distributed compute (`swarm`, `swarm-mcp`), web
+  (`nurllama`, `gguf`, `tokenizer`, `safetensor`), speech (`whisper`,
+  `audio`), distributed compute (`swarm`, `swarm-mcp`), web
   (`template` HTML templating, `http`), database clients (`psql`, `redis`
   — pure NURL), and application scaffolding (`cli`, `cas`, `wasmbuilder`,
   `nurl-mcp`).
