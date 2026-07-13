@@ -357,24 +357,36 @@ $ `stdlib/ext/json.nu`
     }
 }
 
-// { piece: id } → pieces indexed BY ID (JSON promises no order)
+// { piece: id } → pieces indexed BY ID (JSON promises nothing about order).
+//
+// Two things are load-bearing here.
+//
+// ONE: this walks the object's PAIRS with json_obj_each. The obvious version —
+// take json_obj_keys, then json_obj_get each key — is QUADRATIC, because
+// json_obj_get scans the object linearly: a 50 258-entry vocabulary costs 2.5
+// billion string comparisons, and loaded whisper's vocabulary in 12.9 seconds.
+// It was found by MEASURING: `whisper transcribe` cost the same 13.7 s whether
+// it generated 1 token or 20, and a flat cost is never the model.
+//
+// TWO: the callback accumulates into VECTORS, not into a counter. A NURL closure
+// captures a struct (a Vec is a boxed handle) by reference, but a SCALAR by
+// value — so `= maxid id` inside the callback would update a copy and the
+// vocabulary would come out empty. It did, until this was written the other way:
+// collect keys and ids in one pass, then size and fill the table from them.
 @ __hf_vocab_into Json voc ( Vec String ) pieces ( Vec i ) types → v {
-    : ( Vec String ) keys ( json_obj_keys voc )
+    : ( Vec String ) keys ( vec_new [String] )
+    : ( Vec i ) ids ( vec_new [i] )
+    ( json_obj_each voc \ s key Json v → v {
+        ? ( json_is_num v ) {
+            ( vec_push [String] keys ( string_from key ) )
+            ( vec_push [i] ids ( json_as_int v ) )
+        } {}
+    } )
     : ~ i maxid -1
     : ~ i k 0
-    ~ < k ( vec_len [String] keys ) {
-        ?? ( vec_get [String] keys k ) {
-            T kn → {
-                ?? ( json_obj_get voc ( string_data kn ) ) {
-                    T v → {
-                        ? ( json_is_num v ) {
-                            : i id ( json_as_int v )
-                            ? > id maxid { = maxid id } {}
-                        } {}
-                    }
-                    F → {}
-                }
-            }
+    ~ < k ( vec_len [i] ids ) {
+        ?? ( vec_get [i] ids k ) {
+            T id → { ? > id maxid { = maxid id } {} }
             F → {}
         }
         = k + k 1
@@ -386,30 +398,28 @@ $ `stdlib/ext/json.nu`
         = k + k 1
     }
     = k 0
-    ~ < k ( vec_len [String] keys ) {
-        ?? ( vec_get [String] keys k ) {
-            T kn → {
-                ?? ( json_obj_get voc ( string_data kn ) ) {
-                    T v → {
-                        ? ( json_is_num v ) {
-                            : i id ( json_as_int v )
-                            ? & >= id 0 <= id maxid {
-                                ?? ( vec_get [String] pieces id ) {
-                                    T old → { ( string_free old ) }
-                                    F → {}
-                                }
-                                ( vec_set [String] pieces id ( string_from ( string_data kn ) ) )
-                            } {}
-                        } {}
+    ~ < k ( vec_len [i] ids ) {
+        ?? ( vec_get [i] ids k ) {
+            T id → {
+                ? & >= id 0 <= id maxid {
+                    ?? ( vec_get [String] keys k ) {
+                        T kn → {
+                            ?? ( vec_get [String] pieces id ) {
+                                T old → { ( string_free old ) }
+                                F → {}
+                            }
+                            ( vec_set [String] pieces id ( string_from ( string_data kn ) ) )
+                        }
+                        F → {}
                     }
-                    F → {}
-                }
+                } {}
             }
             F → {}
         }
         = k + k 1
     }
     ( vec_free_with [String] keys \ String x → v { ( string_free x ) } )
+    ( vec_free [i] ids )
 }
 
 // merges: either ["A B", …] or [["A","B"], …] — tokenizers changed the shape

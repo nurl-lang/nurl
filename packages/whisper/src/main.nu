@@ -75,6 +75,68 @@ $ `src/model.nu`
     ^ id
 }
 
+// Decode ONE 30-second window: the encoder has already run over it, and the
+// cross-attention K/V are prepared. Appends the text to `out`.
+@ __wh_decode_window * Whisper w * Tok t s lang i maxtok ( Vec u ) out → b {
+    : String ltok ( string_from `<|` )
+    ( string_push_str ltok lang )
+    ( string_push_str ltok `|>` )
+    : i sot ( __wh_special t `<|startoftranscript|>` )
+    : i lid ( __wh_special t ( string_data ltok ) )
+    : i task ( __wh_special t `<|transcribe|>` )
+    : i nots ( __wh_special t `<|notimestamps|>` )
+    : i eot ( __wh_special t `<|endoftext|>` )
+    ( string_free ltok )
+    ? | | | | < sot 0 < lid 0 < task 0 < nots 0 < eot 0 { ^ F } {}
+
+    : ( Vec i ) prompt ( vec_new [i] )
+    ( vec_push [i] prompt sot )
+    ( vec_push [i] prompt lid )
+    ( vec_push [i] prompt task )
+    ( vec_push [i] prompt nots )
+    : ( Vec i ) outids ( vec_new [i] )
+    : ~ i pos 0
+    : ~ i k 0
+    ~ < k ( vec_len [i] prompt ) {
+        ?? ( vec_get [i] prompt k ) {
+            T tk → { ( wh_decode_step w tk pos ) }
+            F → {}
+        }
+        = pos + pos 1
+        = k + k 1
+    }
+    : ~ b done F
+    : ~ i made 0
+    ~ & ! done < made maxtok {
+        : ( Vec f ) lg ( wh_logits w )
+        : i nt ( wh_argmax lg )
+        ( vec_free [f] lg )
+        ? == nt eot { = done T } {
+            ( vec_push [i] outids nt )
+            ( wh_decode_step w nt pos )
+            = pos + pos 1
+            = made + made 1
+        }
+    }
+    : ( Vec u ) txt ( tok_decode t outids )
+    : ~ i j 0
+    ~ < j ( vec_len [u] txt ) {
+        ?? ( vec_get [u] txt j ) {
+            T b → { ( vec_push [u] out b ) }
+            F → {}
+        }
+        = j + j 1
+    }
+    ( vec_free [u] txt )
+    ( vec_free [i] outids )
+    ( vec_free [i] prompt )
+    ^ T
+}
+
+// Audio longer than 30 seconds is transcribed in 30-second WINDOWS: the encoder
+// sees exactly 30 s (that is the length it was trained on and the length its
+// positional embedding has), so a longer clip is split, and each window is
+// decoded from a fresh prompt with its own KV cache.
 @ __wh_transcribe s dir s wavpath s lang i maxtok → i {
     : String cfg ( __wh_path dir `config.json` )
     : String wts ( __wh_path dir `model.safetensors` )
@@ -88,76 +150,55 @@ $ `src/model.nu`
                 T aw → {
                     : ( Vec f ) mono ( wav_mono aw )
                     : ( Vec f ) at16 ( resample mono . aw rate 16000 )
-                    : ( Vec f ) fixed ( pad_or_trim at16 480000 )
-                    : ( Vec f ) mel ( log_mel_whisper fixed 400 160 80 16000 )
                     ( wav_free aw )
-                    ( vec_free [f] mono ) ( vec_free [f] at16 ) ( vec_free [f] fixed )
+                    ( vec_free [f] mono )
                     ?? ( wh_open ( string_data cfg ) ( string_data wts ) ) {
                         T w → {
-                            ( wh_encode w mel )
-                            ( wh_prepare_cross w )
-                            ( vec_free [f] mel )
-
-                            : String ltok ( string_from `<|` )
-                            ( string_push_str ltok lang )
-                            ( string_push_str ltok `|>` )
-                            : i sot ( __wh_special t `<|startoftranscript|>` )
-                            : i lid ( __wh_special t ( string_data ltok ) )
-                            : i task ( __wh_special t `<|transcribe|>` )
-                            : i nots ( __wh_special t `<|notimestamps|>` )
-                            : i eot ( __wh_special t `<|endoftext|>` )
-                            ( string_free ltok )
-                            ? | | | | < sot 0 < lid 0 < task 0 < nots 0 < eot 0 {
-                                ( nurl_eprintln `whisper: the vocabulary has no control tokens (is this a whisper tokenizer.json?)` )
-                                = rc 1
-                            } {
-                                : ( Vec i ) prompt ( vec_new [i] )
-                                ( vec_push [i] prompt sot )
-                                ( vec_push [i] prompt lid )
-                                ( vec_push [i] prompt task )
-                                ( vec_push [i] prompt nots )
-                                : ( Vec i ) outids ( vec_new [i] )
-                                : ~ i pos 0
-                                // feed the prompt, then generate
+                            : i total ( vec_len [f] at16 )
+                            : i window 480000
+                            : i nwin ? > total 0 / + total - window 1 window 1
+                            : ( Vec u ) text ( vec_new [u] )
+                            : ~ b ok T
+                            : ~ i wi 0
+                            ~ & ok < wi nwin {
+                                : i from * wi window
+                                : ( Vec f ) chunk ( vec_new [f] )
                                 : ~ i k 0
-                                ~ < k ( vec_len [i] prompt ) {
-                                    ?? ( vec_get [i] prompt k ) {
-                                        T tk → { ( wh_decode_step w tk pos ) }
+                                ~ & < k window < + from k total {
+                                    ?? ( vec_get [f] at16 + from k ) {
+                                        T x → { ( vec_push [f] chunk x ) }
                                         F → {}
                                     }
-                                    = pos + pos 1
                                     = k + k 1
                                 }
-                                : ~ b done F
-                                : ~ i made 0
-                                ~ & ! done < made maxtok {
-                                    : ( Vec f ) lg ( wh_logits w )
-                                    : i nt ( wh_argmax lg )
-                                    ( vec_free [f] lg )
-                                    ? == nt eot { = done T } {
-                                        ( vec_push [i] outids nt )
-                                        ( wh_decode_step w nt pos )
-                                        = pos + pos 1
-                                        = made + made 1
-                                    }
-                                }
-                                : ( Vec u ) txt ( tok_decode t outids )
-                                : i n ( vec_len [u] txt )
-                                ? > n 0 { : i _w ( write 1 # *u ( vec_data [u] txt ) n ) } {}
-                                ( nurl_print `\n` )
-                                ( vec_free [u] txt )
-                                ( vec_free [i] outids )
-                                ( vec_free [i] prompt )
+                                : ( Vec f ) fixed ( pad_or_trim chunk window )
+                                : ( Vec f ) mel ( log_mel_whisper fixed 400 160 80 16000 )
+                                ( vec_free [f] chunk )
+                                ( vec_free [f] fixed )
+                                ( wh_encode w mel )
+                                ( wh_prepare_cross w )
+                                ( vec_free [f] mel )
+                                ? ( __wh_decode_window w t lang maxtok text ) {} { = ok F }
+                                = wi + wi 1
                             }
+                            ? ok {
+                                : i n ( vec_len [u] text )
+                                ? > n 0 { : i _w ( write 1 # *u ( vec_data [u] text ) n ) } {}
+                                ( nurl_print `\n` )
+                            } {
+                                ( nurl_eprintln `whisper: the vocabulary has no control tokens (is this a whisper tokenizer.json?)` )
+                                = rc 1
+                            }
+                            ( vec_free [u] text )
                             ( wh_close w )
                         }
                         F e → {
                             ( nurl_eprintln ( string_data e ) )
                             ( string_free e )
-                            ( vec_free [f] mel )
                             = rc 1
                         }
                     }
+                    ( vec_free [f] at16 )
                 }
                 F e → {
                     ( nurl_eprintln ( string_data e ) )
