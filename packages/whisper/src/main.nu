@@ -76,9 +76,142 @@ $ `src/model.nu`
     ^ id
 }
 
+// mm:ss.cc — enough resolution for whisper's own 20 ms grid.
+@ __wh_fmt_time String out f secs → v {
+    : ~ f t2 secs
+    ? < t2 0.0 { = t2 0.0 } {}
+    : i cs # i + * t2 100.0 0.5
+    : i mn / cs 6000
+    : i sec / % cs 6000 100
+    : i frac % cs 100
+    ? < mn 10 { ( string_push_char out 48 ) } {}
+    ( string_push_int out mn )
+    ( string_push_char out 58 )
+    ? < sec 10 { ( string_push_char out 48 ) } {}
+    ( string_push_int out sec )
+    ( string_push_char out 46 )
+    ? < frac 10 { ( string_push_char out 48 ) } {}
+    ( string_push_int out frac )
+}
+
+// A timestamp in the timeline the model SAW, mapped to the recording the caller
+// HAS. They differ twice over: the window offset is added by the caller before
+// this (the model's clock restarts at zero every 30-second window), and --vad
+// removed the silence — so second 12 of the condensed audio may be minute 3 of
+// the recording. The VadRun map is what walks that back.
+@ __wh_map_time ( Vec VadRun ) runs f t → f {
+    ? == ( vec_len [VadRun] runs ) 0 { ^ t } {}
+    ^ / # f ( vad_map_sample runs # i * t 16000.0 ) 16000.0
+}
+
+// One "[a --> b] text" line from a slice of the decoded ids.
+@ __wh_emit_seg * Tok t ( Vec i ) ids i from i to ( Vec VadRun ) runs f t0 f t1 ( Vec u ) out → v {
+    ? <= to from { ^ {} } {}
+    : ( Vec i ) seg ( vec_new [i] )
+    : ~ i k from
+    ~ < k to {
+        ?? ( vec_get [i] ids k ) { T x → { ( vec_push [i] seg x ) } F → {} }
+        = k + k 1
+    }
+    : ( Vec u ) txt ( tok_decode t seg )
+    : String line ( string_from `[` )
+    ( __wh_fmt_time line ( __wh_map_time runs t0 ) )
+    ( string_push_str line ` --> ` )
+    ( __wh_fmt_time line ( __wh_map_time runs t1 ) )
+    ( string_push_str line `]` )
+    : ~ i j 0
+    ~ < j ( string_len line ) {
+        ( vec_push [u] out ( nurl_str_get ( string_data line ) j ) )
+        = j + j 1
+    }
+    = j 0
+    ~ < j ( vec_len [u] txt ) {
+        ?? ( vec_get [u] txt j ) { T b → { ( vec_push [u] out b ) } F → {} }
+        = j + j 1
+    }
+    ( vec_push [u] out 10 )
+    ( string_free line )
+    ( vec_free [u] txt )
+    ( vec_free [i] seg )
+}
+
+// Timestamp decoding is not "leave <|notimestamps|> out and hope": whisper was
+// TRAINED under constraints, and greedy decoding without them almost never
+// emits a timestamp — the text token is always individually likelier than any
+// single one of 1500 timestamp bins. These are openai's own rules:
+//
+//   * the first generated token is a timestamp (capped at <|1.00|> — speech
+//     rarely starts later than that in a window that VAD or a human queued up)
+//   * timestamps never go backwards
+//   * they come in pairs: a timestamp that CLOSES text is followed by the one
+//     that opens the next segment (or by <|endoftext|>); two in a row are
+//     followed by text
+//   * and the one that makes it work at all: the timestamp bins are compared
+//     against the best text token COLLECTIVELY — if their summed probability
+//     beats it, the next token is a timestamp, even though no single bin wins.
+//     One second of speech spreads its boundary over dozens of 20 ms bins, and
+//     asking any single bin to out-score "the" is asking the wrong question.
+@ __wh_next_ts ( Vec f ) lg i ts0 i eot b first b last_ts b penult_ts i min_id → i {
+    : i n ( vec_len [f] lg )
+    // best text token (everything below ts0), best ts token ≥ min_id, and
+    // logsumexp over that same ts range — one pass
+    : ~ i bt -1
+    : ~ f btv -1.0e30
+    : ~ i bts -1
+    : ~ f btsv -1.0e30
+    : ~ f mx -1.0e30
+    : ~ i lo ? > min_id ts0 min_id ts0
+    : ~ i hi n
+    ? first {
+        = lo ts0
+        = hi + ts0 51
+        ? > hi n { = hi n } {}
+    } {}
+    : ~ i k 0
+    ~ < k ts0 {
+        : f v0 ?? ( vec_get [f] lg k ) { T x → x F → -1.0e30 }
+        ? > v0 btv { = btv v0 = bt k } {}
+        = k + k 1
+    }
+    = k lo
+    ~ < k hi {
+        : f v1 ?? ( vec_get [f] lg k ) { T x → x F → -1.0e30 }
+        ? > v1 btsv { = btsv v1 = bts k } {}
+        ? > v1 mx { = mx v1 } {}
+        = k + k 1
+    }
+    ? < bts 0 { ^ bt } {}
+    ? first { ^ bts } {}
+    // after text + one timestamp: the pair's second half, or the end
+    ? & last_ts ! penult_ts {
+        : f ev ?? ( vec_get [f] lg eot ) { T x → x F → -1.0e30 }
+        ^ ? > ev btsv eot bts
+    } {}
+    // two timestamps in a row: text next
+    ? & last_ts penult_ts { ^ bt } {}
+    // open segment: text competes against the timestamp bins COLLECTIVELY
+    : ~ f lse 0.0
+    = k lo
+    ~ < k hi {
+        : f v2 ?? ( vec_get [f] lg k ) { T x → x F → -1.0e30 }
+        = lse + lse ( exp - v2 mx )
+        = k + k 1
+    }
+    : f tsmass + mx ( log lse )
+    ? > tsmass btv { ^ bts } {}
+    ^ ? > btv btsv bt bts
+}
+
 // Decode ONE 30-second window: the encoder has already run over it, and the
-// cross-attention K/V are prepared. Appends the text to `out`.
-@ __wh_decode_window * Whisper w * Tok t s lang i maxtok ( Vec u ) out → b {
+// cross-attention K/V are prepared. Appends the text to `out` — plain, or as
+// "[a --> b] text" lines when `with_ts` is set.
+//
+// The timestamps are the model's own: with <|notimestamps|> left OUT of the
+// prompt, whisper interleaves timestamp tokens (<|0.00|> … <|30.00|>, one per
+// 20 ms) with the words — it was trained to. `win_off` places this window in
+// the condensed timeline; `runs` places the condensed timeline in the
+// recording.
+@ __wh_decode_window * Whisper w * Tok t s lang i maxtok b with_ts f win_off ( Vec VadRun ) runs ( Vec u ) out → b {
     : String ltok ( string_from `<|` )
     ( string_push_str ltok lang )
     ( string_push_str ltok `|>` )
@@ -91,10 +224,15 @@ $ `src/model.nu`
     ? | | | | < sot 0 < lid 0 < task 0 < nots 0 < eot 0 { ^ F } {}
 
     : ( Vec i ) prompt ( vec_new [i] )
+    // <|0.00|> is looked up like every other control token; openai's own code
+    // hardcodes timestamp_begin = notimestamps+1, which is the fallback if a
+    // vocabulary does not list the timestamp tokens outright.
+    : ~ i ts0 ( __wh_special t `<|0.00|>` )
+    ? < ts0 0 { = ts0 + nots 1 } {}
     ( vec_push [i] prompt sot )
     ( vec_push [i] prompt lid )
     ( vec_push [i] prompt task )
-    ( vec_push [i] prompt nots )
+    ? with_ts {} { ( vec_push [i] prompt nots ) }
     : ( Vec i ) outids ( vec_new [i] )
     : ~ i pos 0
     : ~ i k 0
@@ -108,27 +246,67 @@ $ `src/model.nu`
     }
     : ~ b done F
     : ~ i made 0
+    : ~ i last -1
+    : ~ i last2 -1
+    : ~ i mints ts0
     ~ & ! done < made maxtok {
         : ( Vec f ) lg ( wh_logits w )
-        : i nt ( wh_argmax lg )
+        : ~ i nt 0
+        ? with_ts {
+            // openai's exact framing: with FEWER than two sampled tokens the
+            // penultimate counts as a timestamp — getting this edge wrong makes
+            // the "pair or end" rule fire right after the opening <|0.00|> and
+            // the decode ends at one token.
+            : b lts & >= made 1 >= last ts0
+            : b pts | < made 2 >= last2 ts0
+            = nt ( __wh_next_ts lg ts0 eot == made 0 lts pts mints )
+        } {
+            = nt ( wh_argmax lg )
+        }
         ( vec_free [f] lg )
         ? == nt eot { = done T } {
+            = last2 last
+            = last nt
+            ? >= nt ts0 { = mints nt } {}
             ( vec_push [i] outids nt )
             ( wh_decode_step w nt pos )
             = pos + pos 1
             = made + made 1
         }
     }
-    : ( Vec u ) txt ( tok_decode t outids )
-    : ~ i j 0
-    ~ < j ( vec_len [u] txt ) {
-        ?? ( vec_get [u] txt j ) {
-            T b → { ( vec_push [u] out b ) }
-            F → {}
+    ? with_ts {
+        // ids → segments. A timestamp token closes the text gathered since the
+        // previous one (whisper emits them in pairs — <|a|> words <|b|> — and a
+        // bare pair boundary is just two in a row, which leaves no text and
+        // emits nothing).
+        : i nids ( vec_len [i] outids )
+        : ~ f cur win_off
+        : ~ i segfrom 0
+        : ~ i j 0
+        ~ < j nids {
+            : ~ i id -1
+            ?? ( vec_get [i] outids j ) { T x → { = id x } F → {} }
+            ? & >= id ts0 <= id + ts0 1500 {
+                : f tt + win_off * 0.02 # f - id ts0
+                ( __wh_emit_seg t outids segfrom j runs cur tt out )
+                = cur tt
+                = segfrom + j 1
+            } {}
+            = j + j 1
         }
-        = j + j 1
+        ( __wh_emit_seg t outids segfrom nids runs cur + win_off 30.0 out )
+    } {
+        : ( Vec u ) txt ( tok_decode t outids )
+        : ~ i j 0
+        ~ < j ( vec_len [u] txt ) {
+            ?? ( vec_get [u] txt j ) {
+                T b → { ( vec_push [u] out b ) }
+                F → {}
+            }
+            = j + j 1
+        }
+        ( vec_free [u] txt )
     }
-    ( vec_free [u] txt )
     ( vec_free [i] outids )
     ( vec_free [i] prompt )
     ^ T
@@ -138,7 +316,7 @@ $ `src/model.nu`
 // sees exactly 30 s (that is the length it was trained on and the length its
 // positional embedding has), so a longer clip is split, and each window is
 // decoded from a fresh prompt with its own KV cache.
-@ __wh_transcribe s dir s wavpath s lang i maxtok b use_vad → i {
+@ __wh_transcribe s dir s wavpath s lang i maxtok b use_vad b with_ts → i {
     : String cfg ( __wh_path dir `config.json` )
     : String wts ( __wh_path dir `model.safetensors` )
     : String tjs ( __wh_path dir `tokenizer.json` )
@@ -159,12 +337,15 @@ $ `src/model.nu`
                     // the whole cost is the silence. The detector keeps 200 ms
                     // either side of every burst and bridges gaps under 400 ms,
                     // so what is dropped is pause, not consonant.
+                    // where each surviving stretch of condensed audio sits in
+                    // the recording — empty (identity) without --vad
+                    : ( Vec VadRun ) runs ( vec_new [VadRun] )
                     ? use_vad {
                         : ( Vec VadSeg ) segs ( vad_segments at16 16000 ( vad_default_opts ) )
                         // 0.5 s of the real room is kept between segments —
                         // enough of a boundary that two sentences do not run
                         // together, far less than the pause it replaces.
-                        : ( Vec f ) sp ( vad_extract at16 segs 8000 )
+                        : ( Vec f ) sp ( vad_extract_runs at16 segs 8000 runs )
                         ( vec_free [f] at16 )
                         = at16 sp
                         ( vec_free [VadSeg] segs )
@@ -211,7 +392,8 @@ $ `src/model.nu`
                                 ( wh_encode w mel )
                                 ( wh_prepare_cross w )
                                 ( vec_free [f] mel )
-                                ? ( __wh_decode_window w t lang maxtok text ) {} { = ok F }
+                                : f woff / # f * wi window 16000.0
+                                ? ( __wh_decode_window w t lang maxtok with_ts woff runs text ) {} { = ok F }
                                 = wi + wi 1
                             }
                             ? ok {
@@ -232,6 +414,7 @@ $ `src/model.nu`
                         }
                     }
                     ( vec_free [f] at16 )
+                    ( vec_free [VadRun] runs )
                 }
                 F e → {
                     ( nurl_eprintln ( string_data e ) )
@@ -257,6 +440,7 @@ $ `src/model.nu`
     ( args_opt p `lang` 0 `LANG` `transcribe: the language token (default en)` )
     ( args_opt p `max` 0 `N` `transcribe: stop after N tokens (default 200)` )
     ( args_flag p `vad` 0 `transcribe: skip the silence (energy VAD) before the model sees it` )
+    ( args_flag p `timestamps` 0 `transcribe: "[a --> b] text" segments, in the RECORDING's timeline` )
     ( args_flag p `help` 104 `show this help` )
     ? ( args_parse_argv p ) {} {
         ( nurl_eprintln ( args_error p ) )
@@ -289,7 +473,7 @@ $ `src/model.nu`
         : String smax ( args_value_or p `max` `200` )
         ?? ( string_to_int smax ) { T v → { = maxtok v } F _ → {} }
         ( string_free smax )
-        : i rc ( __wh_transcribe dir awav ( string_data lang ) maxtok ( args_present p `vad` ) )
+        : i rc ( __wh_transcribe dir awav ( string_data lang ) maxtok ( args_present p `vad` ) ( args_present p `timestamps` ) )
         ( string_free lang )
         ( args_free p )
         ^ rc
