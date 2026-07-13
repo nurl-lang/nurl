@@ -145,5 +145,31 @@ else
     echo "  SKIP transcription (tokenizer.json or the speech sample did not download)"
 fi
 
+# ── distil-large-v3: 128 mel bands, 1280-wide, 32 encoder layers ────
+# Opt-in: the checkpoint is 1.5 GB. It is the test that catches anything
+# hardcoded to whisper-tiny's shape — and it caught three things (the 80-band
+# spectrogram, the decoder's head count, the decoder's context length) plus a
+# use-after-free that tiny survived by luck.
+if [ "${WHISPER_BIG_TESTS:-0}" = "1" ]; then
+    mkdir -p "$WORK/distil"
+    if curl -sL --max-time 3600 -f -o "$WORK/distil/model.safetensors" \
+        https://huggingface.co/distil-whisper/distil-large-v3/resolve/main/model.safetensors \
+       && curl -sL --max-time 120 -f -o "$WORK/distil/config.json" \
+        https://huggingface.co/distil-whisper/distil-large-v3/resolve/main/config.json \
+       && curl -sL --max-time 120 -f -o "$WORK/distil/tokenizer.json" \
+        https://huggingface.co/distil-whisper/distil-large-v3/resolve/main/tokenizer.json; then
+
+        WANT_D=" And so, my fellow Americans, ask not what your country can do for you. Ask what you can do for your country."
+        GOT_D=$("$WH" transcribe "$WORK/distil" "$WORK/jfk.wav" 2>/dev/null)
+        [ "$GOT_D" = "$WANT_D" ] \
+            && ok "distil-large-v3 (128 mels, 1280-wide, 32+2 layers) transcribes as HF does" \
+            || { bad "distil-large-v3"; echo "    got:  [$GOT_D]"; echo "    want: [$WANT_D]"; }
+    else
+        echo "  SKIP distil-large-v3 (download failed)"
+    fi
+else
+    echo "  SKIP distil-large-v3 (1.5 GB — set WHISPER_BIG_TESTS=1 to run it)"
+fi
+
 echo "== whisper tests: PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

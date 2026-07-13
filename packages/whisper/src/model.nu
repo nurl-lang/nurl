@@ -35,6 +35,8 @@ $ `src/kernels.nu`
     i d_model
     i n_head
     i head_dim
+    i d_head  // the DECODER's head count — the same in every
+    i d_head_dim  // whisper so far, but the config states both
     i n_enc_layer
     i n_dec_layer
     i n_ctx_enc  // 1500 encoder positions
@@ -210,10 +212,12 @@ $ `src/kernels.nu`
     : ~ i n_mels 80
     : ~ i d_model 384
     : ~ i n_head 6
+    : ~ i n_dhead 6
     : ~ i n_enc 4
     : ~ i n_dec 4
     : ~ i n_ctx 1500
     : ~ i n_vocab 51865
+    : ~ i n_dctx 448
     ?? ( read_file config_path ) {
         T txt → {
             ?? ( json_parse ( string_data txt ) ) {
@@ -221,10 +225,12 @@ $ `src/kernels.nu`
                     = n_mels ( __wh_cfg_int root `num_mel_bins` 80 )
                     = d_model ( __wh_cfg_int root `d_model` 384 )
                     = n_head ( __wh_cfg_int root `encoder_attention_heads` 6 )
+                    = n_dhead ( __wh_cfg_int root `decoder_attention_heads` n_head )
                     = n_enc ( __wh_cfg_int root `encoder_layers` 4 )
                     = n_dec ( __wh_cfg_int root `decoder_layers` 4 )
                     = n_ctx ( __wh_cfg_int root `max_source_positions` 1500 )
                     = n_vocab ( __wh_cfg_int root `vocab_size` 51865 )
+                    = n_dctx ( __wh_cfg_int root `max_target_positions` 448 )
                     ( json_free root )
                     ( string_free txt )
                 }
@@ -248,6 +254,8 @@ $ `src/kernels.nu`
     = . w d_model d_model
     = . w n_head n_head
     = . w head_dim / d_model n_head
+    = . w d_head n_dhead
+    = . w d_head_dim / d_model n_dhead
     = . w n_enc_layer n_enc
     = . w n_dec_layer n_dec
     = . w n_ctx_enc n_ctx
@@ -409,7 +417,9 @@ $ `src/kernels.nu`
     = . w sc_d ( __wh_scratch w * * n_head n_ctx n_ctx )
     = . w enc_out ( __wh_scratch w * n_ctx dm )
 
-    = . w n_ctx_dec 448
+    // how many tokens the decoder can hold — its positional embedding's own
+    // length, which the config states
+    = . w n_ctx_dec n_dctx
     = L 0
     ~ < L n_dec {
         ( vec_push [i] . w kcache ( __wh_scratch w * . w n_ctx_dec dm ) )
@@ -586,8 +596,8 @@ $ `src/kernels.nu`
 // you process several positions at once.
 @ wh_decode_step * Whisper w i tok i pos → v {
     : i dm . w d_model
-    : i nh . w n_head
-    : i hd . w head_dim
+    : i nh . w d_head
+    : i hd . w d_head_dim
     : i nc . w n_ctx_enc
     : f qscale / 1.0 ( sqrt # f hd )
     : f eps 0.00001
