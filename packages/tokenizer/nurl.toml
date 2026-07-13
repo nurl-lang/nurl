@@ -1,5 +1,5 @@
 [package]
 name = "tokenizer"
-version = "0.1.0"
+version = "0.1.1"
 description = "The tokenizer that feeds a language model, in pure NURL — and it does not care which file the vocabulary arrived in. Two engines: SentencePiece-style bigram merging for llama-family vocabularies (space-escape, highest-score adjacent merge with llama.cpp's exact selection order and leftmost ties, byte fallback, UNK) and byte-level BPE for gpt2-family ones (the GPT-2 byte-to-unicode remap, contraction/letter/digit/punct/whitespace pre-split with per-model variants, lowest-merge-rank pairing). Special tokens are parsed INLINE: a chat template writes its turn markers into the prompt as text, and each must come back as its own single id — tokenised as ordinary pieces they shred into a dozen tokens and the model answers a question nobody asked. The engine takes PARTS (pieces, scores, token types, merge rules), so a vocabulary can arrive from a GGUF's tokenizer.ggml.* metadata, from Hugging Face's vocab.json + merges.txt + added_tokens.json (src/hf.nu — what whisper and every HF checkpoint ship), or from anywhere else, with nothing about the engine changing. Verified token-for-token against independent python SentencePiece and BPE implementations on real llama.cpp models, and against Hugging Face's own tokenizer on HF checkpoints."
 license = "MIT OR Apache-2.0"
