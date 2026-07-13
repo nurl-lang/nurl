@@ -1,3 +1,7 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
 PASS 1024 is a power of two
 PASS 400 is NOT a power of two (mixed radix: 2^4 * 5^2)
 PASS next_pow2 1000 = 1024
