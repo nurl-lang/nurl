@@ -29,6 +29,10 @@ $ `stdlib/std/float.nu`
 
 : f MEL_PI 3.14159265358979323846
 
+@ __mgeti ( Vec i ) v i k → i {
+    ?? ( vec_get [i] v k ) { T x → { ^ x } F → { ^ 0 } }
+}
+
 @ __mget ( Vec f ) v i k → f {
     ?? ( vec_get [f] v k ) { T x → { ^ x } F → { ^ 0.0 } }
 }
@@ -142,12 +146,13 @@ $ `stdlib/std/float.nu`
     : i n_bins + / n_fft 2 1
     : i frames ? >= n n_fft + 1 / - n n_fft hop 0
     : ( Vec f ) out ( vec_with_cap [f] * frames n_bins )
-    : ( Vec f ) re ( vec_with_cap [f] n_fft )
-    : ( Vec f ) im ( vec_with_cap [f] n_fft )
+    // the windowed frame, and the rfft's n/2+1 bins — reused every frame
+    : ( Vec f ) wf ( vec_with_cap [f] n_fft )
+    : ( Vec f ) sre ( vec_new [f] )
+    : ( Vec f ) sim ( vec_new [f] )
     : ~ i k 0
     ~ < k n_fft {
-        ( vec_push [f] re 0.0 )
-        ( vec_push [f] im 0.0 )
+        ( vec_push [f] wf 0.0 )
         = k + k 1
     }
     : ~ i fr 0
@@ -155,22 +160,24 @@ $ `stdlib/std/float.nu`
         : i base * fr hop
         = k 0
         ~ < k n_fft {
-            ( vec_set [f] re k * ( __mget x + base k ) ( __mget window k ) )
-            ( vec_set [f] im k 0.0 )
+            ( vec_set [f] wf k * ( __mget x + base k ) ( __mget window k ) )
             = k + k 1
         }
-        ( fft_exec p re im )
+        // real input → half-length transform; the imaginary zeros above were
+        // half the arithmetic
+        ( fft_rfft_plan p wf sre sim )
         = k 0
         ~ < k n_bins {
-            : f a ( __mget re k )
-            : f b ( __mget im k )
+            : f a ( __mget sre k )
+            : f b ( __mget sim k )
             ( vec_push [f] out + * a a * b b )
             = k + k 1
         }
         = fr + fr 1
     }
-    ( vec_free [f] re )
-    ( vec_free [f] im )
+    ( vec_free [f] wf )
+    ( vec_free [f] sre )
+    ( vec_free [f] sim )
     ^ out
 }
 
@@ -190,6 +197,31 @@ $ `stdlib/std/float.nu`
     // 3001 frames into the 3000 the encoder expects
     : i keep ? > frames 0 - frames 1 0
     : ( Vec f ) fb ( mel_filters n_fft n_mels rate 0.0 8000.0 )
+    // A mel filter is a TRIANGLE: band m is nonzero over a handful of adjacent
+    // bins and zero over the other ~195. The apply loop walks each band's own
+    // bin range, found once here — walking all n_bins for every band multiplies
+    // the whole spectrogram by a matrix that is 98 % zeros, and that dense loop
+    // cost as much as a third of the mel stage. The sum over an identical bin
+    // range in the same order is the same floats in the same order: bit-exact.
+    : ( Vec i ) blo ( vec_new [i] )
+    : ( Vec i ) bhi ( vec_new [i] )
+    : ~ i mm 0
+    ~ < mm n_mels {
+        : ~ i lo n_bins
+        : ~ i hi 0
+        : ~ i bb 0
+        ~ < bb n_bins {
+            ? > ( __mget fb + * bb n_mels mm ) 0.0 {
+                ? < bb lo { = lo bb } {}
+                = hi + bb 1
+            } {}
+            = bb + bb 1
+        }
+        ? > lo hi { = lo hi } {}
+        ( vec_push [i] blo lo )
+        ( vec_push [i] bhi hi )
+        = mm + mm 1
+    }
     : ( Vec f ) out ( vec_with_cap [f] * keep n_mels )
     : ~ f mx -1.0e30
     : ~ i fr 0
@@ -197,8 +229,9 @@ $ `stdlib/std/float.nu`
         : ~ i m 0
         ~ < m n_mels {
             : ~ f s 0.0
-            : ~ i b 0
-            ~ < b n_bins {
+            : ~ i b ( __mgeti blo m )
+            : i bend ( __mgeti bhi m )
+            ~ < b bend {
                 = s + s * ( __mget pw + * fr n_bins b ) ( __mget fb + * b n_mels m )
                 = b + b 1
             }
@@ -222,6 +255,8 @@ $ `stdlib/std/float.nu`
     }
     ( vec_free [f] pw )
     ( vec_free [f] fb )
+    ( vec_free [i] blo )
+    ( vec_free [i] bhi )
     ^ out
 }
 
