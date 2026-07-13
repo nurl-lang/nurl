@@ -1605,6 +1605,162 @@ $ `stdlib/std/bytes.nu`
 
 // 0 = every deps/ import is declared; 1 = something is missing (message
 // already printed).
+
+// ── gate: does this package build against the RELEASED toolchain? ────
+//
+// A package's `$ `stdlib/…`` imports are resolved by whatever toolchain the
+// USER has installed — not by the repo it was developed in. So a package that
+// imports a stdlib file added since the last release publishes cleanly and then
+// fails to install for everyone, with a `cannot open 'stdlib/std/fft.nu'` that
+// points at the toolchain rather than at the package.
+//
+// That happened: packages/audio was published against a stdlib/std/fft.nu that
+// only existed on main. The fix is not to remember — it is this gate. Every
+// stdlib path a package imports must exist in the INSTALLED toolchain's stdlib
+// ($NURL_STDLIB, or ~/.nurl/stdlib), and publishing is refused when one does
+// not, with the release that is missing named.
+@ __scan_stdlib_imports_file s path ( Vec String ) acc → v {
+    ?? ( read_file path ) {
+        T txt → {
+            : s src ( string_data txt )
+            : i n ( nurl_str_len src )
+            : ~ i i 0
+            ~ < i n {
+                // `$` at the start of a line, then a backtick, then "stdlib/"
+                : ~ b at_line T
+                ? == ( nurl_str_get src i ) 36 {
+                    : ~ i bk - i 1
+                    ~ & >= bk 0 at_line {
+                        : i cb ( nurl_str_get src bk )
+                        ? == cb 10 { = bk -1 } {
+                            ? | == cb 32 == cb 9 { = bk - bk 1 } { = at_line F }
+                        }
+                    }
+                } { = at_line F }
+                ? & at_line == ( nurl_str_get src i ) 36 {
+                    : ~ i q + i 1
+                    ~ & < q n == ( nurl_str_get src q ) 32 { = q + q 1 }
+                    ? & < q n == ( nurl_str_get src q ) 96 {
+                        : i d0 + q 1
+                        : String nm ( string_new )
+                        : ~ i j d0
+                        ~ & < j n != ( nurl_str_get src j ) 96 {
+                            ( string_push_char nm ( nurl_str_get src j ) )
+                            = j + j 1
+                        }
+                        ? != 0 ( nurl_str_starts ( string_data nm ) `stdlib/` ) {
+                            ? ( __vec_has_str acc ( string_data nm ) ) { ( string_free nm ) }
+                            { ( vec_push [String] acc nm ) }
+                        } { ( string_free nm ) }
+                        = i j
+                    } {}
+                } {}
+                = i + i 1
+            }
+            ( string_free txt )
+        }
+        F _ → {}
+    }
+}
+
+@ __scan_stdlib_imports → ( Vec String ) {
+    : ( Vec String ) found ( vec_new [String] )
+    : ( Vec String ) pats ( vec_new [String] )
+    ( vec_push [String] pats ( string_from `src/*.nu` ) )
+    ( vec_push [String] pats ( string_from `src/**/*.nu` ) )
+    : ~ i pi 0
+    ~ < pi ( vec_len [String] pats ) {
+        ?? ( vec_get [String] pats pi ) {
+            T pat → {
+                ?? ( fs_glob ( string_data pat ) ) {
+                    T files → {
+                        : ~ i fi 0
+                        ~ < fi ( vec_len [String] files ) {
+                            ?? ( vec_get [String] files fi ) {
+                                T f → { ( __scan_stdlib_imports_file ( string_data f ) found ) }
+                                F → {}
+                            }
+                            = fi + fi 1
+                        }
+                        ( vec_free_with [String] files \ String x → v { ( string_free x ) } )
+                    }
+                    F _ → {}
+                }
+            }
+            F → {}
+        }
+        = pi + pi 1
+    }
+    ( vec_free_with [String] pats \ String x → v { ( string_free x ) } )
+    ^ found
+}
+
+// The stdlib the USER's toolchain will use: $NURL_STDLIB when set, else
+// ~/.nurl (the installer's prefix).
+@ __toolchain_stdlib_root → String {
+    ?? ( env_get `NURL_STDLIB` ) {
+        T v → {
+            // an EMPTY NURL_STDLIB is not a stdlib — treat it as unset
+            ? > ( string_len v ) 0 { ^ v } {}
+            ( string_free v )
+        }
+        F → {}
+    }
+    ?? ( env_get `HOME` ) {
+        T h → {
+            : String p2 ( string_from ( string_data h ) )
+            ( string_push_str p2 `/.nurl` )
+            ( string_free h )
+            ^ p2
+        }
+        F → {}
+    }
+    ^ ( string_new )
+}
+
+@ __check_stdlib_available → i {
+    : String root ( __toolchain_stdlib_root )
+    ? == 0 ( string_len root ) {
+        ( string_free root )
+        ^ 0
+    } {}
+    : ( Vec String ) used ( __scan_stdlib_imports )
+    : ~ i missing 0
+    : ~ i k 0
+    ~ < k ( vec_len [String] used ) {
+        ?? ( vec_get [String] used k ) {
+            T rel → {
+                : String full ( string_from ( string_data root ) )
+                ( string_push_char full 47 )
+                ( string_push_str full ( string_data rel ) )
+                ? ( file_exists ( string_data full ) ) {} {
+                    ? == missing 0 {
+                        ( nurl_eprintln `nurlpkg: this package imports stdlib files that the INSTALLED toolchain does not have:` )
+                    } {}
+                    : String m ( string_from `  ` )
+                    ( string_push_str m ( string_data rel ) )
+                    ( nurl_eprintln ( string_data m ) )
+                    ( string_free m )
+                    = missing + missing 1
+                }
+                ( string_free full )
+            }
+            F → {}
+        }
+        = k + k 1
+    }
+    ( vec_free_with [String] used \ String x → v { ( string_free x ) } )
+    ? > missing 0 {
+        : String m ( string_from `nurlpkg: they exist in the repo but not in ` )
+        ( string_push_str m ( string_data root ) )
+        ( string_push_str m ` — so this package would publish cleanly and then fail to install for everyone. Cut a toolchain release that ships them first (or set NURL_STDLIB to the toolchain you are targeting).` )
+        ( nurl_eprintln ( string_data m ) )
+        ( string_free m )
+    } {}
+    ( string_free root )
+    ^ ? > missing 0 1 0
+}
+
 @ __check_declared_deps Manifest m → i {
     : ( Vec String ) used ( __scan_dep_imports )
     : ~ i missing 0
@@ -1909,6 +2065,10 @@ $ `stdlib/std/bytes.nu`
                 = rc 1
             } {
                 ? != 0 ( __check_declared_deps m ) {
+                    ( manifest_free m )
+                    ^ 1
+                } {}
+                ? != 0 ( __check_stdlib_available ) {
                     ( manifest_free m )
                     ^ 1
                 } {}
