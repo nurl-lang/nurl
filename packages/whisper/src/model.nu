@@ -141,6 +141,41 @@ $ `src/kernels.nu`
     : *St st # *St . w st
     : i ti ( st_find_tensor st name )
     ? < ti 0 { ^ -1 } {}
+    // A tensor that is ALREADY f32 — which is what a whisper checkpoint is —
+    // needs no conversion at all: upload it straight out of the mapping.
+    //
+    // The obvious path (st_dequant → a Vec of f32 bytes → upload) reads every
+    // element through a function call and pushes four bytes at a time. For
+    // distil-large-v3 that is 378 MILLION of each, and it cost 11.3 of the
+    // 11.6 seconds a transcription took — while reading the whole 1.5 GB file
+    // off disk takes 0.25 s. Don't copy what you can point at.
+    ?? ( vec_get [StTensor] . st tensors ti ) {
+        T t → {
+            ? == . t dtype ST_F32 {
+                : GpuBuffer b ( gpu_alloc . w g . t nbytes )
+                : i _u ( gpu_upload b ( st_tensor_ptr st t ) )
+                ( vec_push [i] . w bufs . b dptr )
+                ( vec_push [i] . w bufsz . b bytes )
+                ^ . b dptr
+            } {}
+            // f16 / bf16 — which is what a whisper checkpoint actually is — go up
+            // as RAW HALVES and are widened by a kernel. Half the bytes over PCIe,
+            // and the widening happens where there are thousands of threads for
+            // it instead of one host loop doing 378 million iterations.
+            ? | == . t dtype ST_F16 == . t dtype ST_BF16 {
+                : GpuBuffer raw ( gpu_alloc . w g . t nbytes )
+                : i _u2 ( gpu_upload raw ( st_tensor_ptr st t ) )
+                : GpuBuffer b ( gpu_alloc . w g * . t nelems 4 )
+                ( wk_cvt . w ks . raw dptr . b dptr . t nelems == . t dtype ST_F16 )
+                ( gpu_free raw )
+                ( vec_push [i] . w bufs . b dptr )
+                ( vec_push [i] . w bufsz . b bytes )
+                ^ . b dptr
+            } {}
+        }
+        F → {}
+    }
+    // anything else (an integer tensor) widens on the host
     ?? ( st_dequant st ti ) {
         T raw → {
             : i n ( vec_len [u] raw )

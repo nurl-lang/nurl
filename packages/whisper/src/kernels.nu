@@ -36,6 +36,8 @@ $ `deps/gpu/src/gpu.nu`
     GpuKernel addv
     GpuKernel addrow
     GpuKernel scale
+    GpuKernel cvt_f16  // f16/bf16 weights → f32, ON THE DEVICE
+    GpuKernel cvt_bf16
     GpuKernel getrow  // one row of the embedding table → the activation
     GpuKernel setrow  // write a row INTO the KV cache
     b ok
@@ -194,6 +196,60 @@ $ `deps/gpu/src/gpu.nu`
     }`
 }
 
+// Widen f16 / bf16 weights to f32 ON THE DEVICE.
+//
+// A whisper checkpoint is f16, and the host loop that widened it — one function
+// call and four byte-writes per element, 378 million of them for
+// distil-large-v3 — was most of what a transcription cost. Uploading the raw
+// halves and widening them here does the same arithmetic where there are
+// thousands of threads for it, and halves the PCIe traffic on the way.
+//
+// The decode is a bit trick rather than __half: NVRTC has no cuda_fp16.h and the
+// CPU backend's shim has no half type at all. Same source, both backends.
+@ __wk_cvt_f16 → s {
+    ^ `extern "C" __global__ void cvt_f16(const unsigned char* src, float* dst, int n) {
+        int i = blockIdx.x*blockDim.x + threadIdx.x;
+        if (i >= n) return;
+        unsigned int h = (unsigned int)src[2*i] | ((unsigned int)src[2*i+1] << 8);
+        unsigned int sign = (h >> 15) << 31;
+        unsigned int e = (h >> 10) & 31u;
+        unsigned int m = h & 1023u;
+        unsigned int bits;
+        if (e == 0u) {
+            if (m == 0u) bits = sign;
+            else {
+                int ex = 113;
+                while (!(m & 1024u)) { m <<= 1; ex--; }
+                m &= 1023u;
+                bits = sign | ((unsigned int)ex << 23) | (m << 13);
+            }
+        } else if (e == 31u) {
+            bits = sign | 0x7F800000u | (m << 13);
+        } else {
+            bits = sign | ((e + 112u) << 23) | (m << 13);
+        }
+        // a UNION, not memcpy and not __half: memcpy needs a header the CPU
+        // shim does not include, and __half needs cuda_fp16.h, which NVRTC does
+        // not have. This compiles identically on both backends — the same trick
+        // nurllama's quant kernels use.
+        union { unsigned int u; float f; } cv;
+        cv.u = bits;
+        dst[i] = cv.f;
+    }`
+}
+
+// bf16 is the top 16 bits of an f32 — the widening is a shift.
+@ __wk_cvt_bf16 → s {
+    ^ `extern "C" __global__ void cvt_bf16(const unsigned char* src, float* dst, int n) {
+        int i = blockIdx.x*blockDim.x + threadIdx.x;
+        if (i >= n) return;
+        unsigned int bits = (((unsigned int)src[2*i] | ((unsigned int)src[2*i+1] << 8))) << 16;
+        union { unsigned int u; float f; } cv;
+        cv.u = bits;
+        dst[i] = cv.f;
+    }`
+}
+
 // The embedding table is on the device (it is also the output projection —
 // whisper ties them), so a token's row is a copy, not a host round-trip.
 @ __wk_getrow → s {
@@ -248,13 +304,16 @@ $ `deps/gpu/src/gpu.nu`
     : GpuKernel k7 ( gpu_compile g ( __wk_addv ) `addv` )
     : GpuKernel k8 ( gpu_compile g ( __wk_addrow ) `addrow` )
     : GpuKernel k9 ( gpu_compile g ( __wk_scale ) `scale` )
+    : GpuKernel k12 ( gpu_compile g ( __wk_cvt_f16 ) `cvt_f16` )
+    : GpuKernel k13 ( gpu_compile g ( __wk_cvt_bf16 ) `cvt_bf16` )
     : GpuKernel k10 ( gpu_compile g ( __wk_getrow ) `getrow` )
     : GpuKernel k11 ( gpu_compile g ( __wk_setrow ) `setrow` )
     : b ok1 & & ( gpu_kernel_ok k1 ) ( gpu_kernel_ok k2 ) & ( gpu_kernel_ok k3 ) ( gpu_kernel_ok k4 )
     : b ok2 & & ( gpu_kernel_ok k5 ) ( gpu_kernel_ok k6 ) & ( gpu_kernel_ok k7 ) ( gpu_kernel_ok k8 )
     : b ok3 & ( gpu_kernel_ok k9 ) & ( gpu_kernel_ok k10 ) ( gpu_kernel_ok k11 )
-    : b ok & & ok1 ok2 ok3
-    ^ @ WhKernels { k1 k1w warp k2 k3 k4 k5 k6 k7 k8 k9 k10 k11 ok }
+    : b ok4 & ( gpu_kernel_ok k12 ) ( gpu_kernel_ok k13 )
+    : b ok & & ok1 ok2 & ok3 ok4
+    ^ @ WhKernels { k1 k1w warp k2 k3 k4 k5 k6 k7 k8 k9 k12 k13 k10 k11 ok }
 }
 
 @ wk_free WhKernels ks → v {
@@ -268,6 +327,8 @@ $ `deps/gpu/src/gpu.nu`
     ( gpu_kernel_free . ks addv )
     ( gpu_kernel_free . ks addrow )
     ( gpu_kernel_free . ks scale )
+    ( gpu_kernel_free . ks cvt_f16 )
+    ( gpu_kernel_free . ks cvt_bf16 )
     ( gpu_kernel_free . ks getrow )
     ( gpu_kernel_free . ks setrow )
 }
@@ -403,5 +464,17 @@ $ `deps/gpu/src/gpu.nu`
     ( vec_push [i] a ( gpu_arg_i32 row ) )
     ( vec_push [i] a ( gpu_arg_i32 n ) )
     : i _r ( gpu_launch . ks setrow ( gpu_grid n 256 ) 256 a )
+    ( vec_free [i] a )
+}
+
+// `half` = 1 for f16, 0 for bf16.
+@ wk_cvt WhKernels ks i srcd i dstd i n b half → v {
+    : ( Vec i ) a ( vec_new [i] )
+    ( vec_push [i] a ( gpu_arg_i64 srcd ) )
+    ( vec_push [i] a ( gpu_arg_i64 dstd ) )
+    ( vec_push [i] a ( gpu_arg_i32 n ) )
+    ? half
+    { : i _r ( gpu_launch . ks cvt_f16 ( gpu_grid n 256 ) 256 a ) }
+    { : i _r ( gpu_launch . ks cvt_bf16 ( gpu_grid n 256 ) 256 a ) }
     ( vec_free [i] a )
 }
