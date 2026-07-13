@@ -95,5 +95,29 @@ else
     bad "CPU backend run"
 fi
 
+# ── the whole thing: real speech, in and out ────────────────────────
+if curl -sL --max-time 120 -f -o "$WORK/tokenizer.json" \
+    https://huggingface.co/openai/whisper-tiny/resolve/main/tokenizer.json \
+   && curl -sL --max-time 180 -f -o "$WORK/jfk.wav" \
+    https://github.com/ggerganov/whisper.cpp/raw/master/samples/jfk.wav; then
+
+    mkdir -p "$WORK/model"
+    cp "$WORK/config.json" "$WORK/tokenizer.json" "$WORK/model/"
+    cp "$WORK/model.safetensors" "$WORK/model/"
+
+    WANT=" And so my fellow Americans ask not what your country can do for you ask what you can do for your country."
+    GOT=$("$WH" transcribe "$WORK/model" "$WORK/jfk.wav" 2>/dev/null)
+    [ "$GOT" = "$WANT" ] \
+        && ok "real speech transcribes word-for-word as HF transformers does" \
+        || { bad "transcription"; echo "    got:  [$GOT]"; echo "    want: [$WANT]"; }
+
+    GOT_CPU=$(NURL_GPU=cpu "$WH" transcribe "$WORK/model" "$WORK/jfk.wav" 2>/dev/null)
+    [ "$GOT_CPU" = "$GOT" ] \
+        && ok "CPU backend transcribes identically to CUDA" \
+        || { bad "transcription backend parity"; echo "    cpu: [$GOT_CPU]"; }
+else
+    echo "  SKIP transcription (tokenizer.json or the speech sample did not download)"
+fi
+
 echo "== whisper tests: PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]
