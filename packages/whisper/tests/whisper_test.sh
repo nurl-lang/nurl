@@ -115,6 +115,32 @@ if curl -sL --max-time 120 -f -o "$WORK/tokenizer.json" \
     [ "$GOT_CPU" = "$GOT" ] \
         && ok "CPU backend transcribes identically to CUDA" \
         || { bad "transcription backend parity"; echo "    cpu: [$GOT_CPU]"; }
+
+    # audio longer than 30 s: the encoder sees exactly 30 s (that is the length
+    # its positional embedding has), so a longer clip is split into windows
+    python3 - "$WORK" <<'PYEOF2'
+import sys, wave, numpy as np
+W = sys.argv[1]
+w = wave.open(W + '/jfk.wav', 'rb')
+x = np.frombuffer(w.readframes(w.getnframes()), dtype='<i2')
+o = wave.open(W + '/long.wav', 'wb'); o.setnchannels(1); o.setsampwidth(2); o.setframerate(16000)
+o.writeframes(np.tile(x, 3).tobytes()); o.close()
+PYEOF2
+    LONG=$("$WH" transcribe "$WORK/model" "$WORK/long.wav" 2>/dev/null)
+    # three copies of the clip → the sentence three times, across two windows
+    HITS=$(printf '%s' "$LONG" | grep -oi "ask not what your country" | wc -l)
+    [ "$HITS" -eq 3 ] \
+        && ok "33 s of audio transcribes across two 30-second windows (3/3 sentences)" \
+        || { bad "long-audio windowing"; echo "    got ($HITS/3): [$LONG]"; }
+
+    # a flat cost is never the model: loading the vocabulary used to be O(n^2)
+    # and took 12.9 s. It must not creep back.
+    START=$(date +%s%N)
+    "$WH" transcribe "$WORK/model" "$WORK/jfk.wav" >/dev/null 2>&1
+    MS=$(( ($(date +%s%N) - START) / 1000000 ))
+    [ "$MS" -lt 8000 ] \
+        && ok "11 s of speech transcribes in ${MS} ms (the O(n^2) vocabulary load stays dead)" \
+        || bad "transcription took ${MS} ms — something is quadratic again"
 else
     echo "  SKIP transcription (tokenizer.json or the speech sample did not download)"
 fi
