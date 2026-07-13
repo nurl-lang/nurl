@@ -182,7 +182,7 @@ $ `stdlib/std/float.nu`
 
 @ main → i {
     ( ck ( fft_is_pow2 1024 ) `1024 is a power of two` )
-    ( ck ! ( fft_is_pow2 400 ) `400 is NOT a power of two (hence Bluestein)` )
+    ( ck ! ( fft_is_pow2 400 ) `400 is NOT a power of two (mixed radix: 2^4 * 5^2)` )
     ( ck == 1024 ( fft_next_pow2 1000 ) `next_pow2 1000 = 1024` )
     ( ck == 1024 ( fft_next_pow2 1024 ) `next_pow2 1024 = 1024` )
 
@@ -194,14 +194,23 @@ $ `stdlib/std/float.nu`
     ( parseval_case 128 )
     ( roundtrip_case 512 )
 
-    // Bluestein lengths: whisper's 400, a prime, a small odd length
+    // mixed-radix lengths: whisper's 400 (2^4·5^2), and every radix the
+    // factoriser can hand out — 3, 5, 7 alone and mixed (105 = 3·5·7,
+    // 343 = 7^3). delta_case at index 1 pins the SIGN at each radix: a
+    // conjugated combine step round-trips perfectly and fails only here.
     ( delta_case 5 1 )
     ( delta_case 400 1 )
+    ( delta_case 105 1 )
+    ( delta_case 343 2 )
     ( cosine_case 400 40 )
     ( cosine_case 12 3 )
+    ( cosine_case 105 13 )
     ( parseval_case 400 )
-    ( parseval_case 997 )
     ( roundtrip_case 400 )
+    ( roundtrip_case 343 )
+
+    // Bluestein lengths: a prime is the one thing mixed radix cannot split
+    ( parseval_case 997 )
     ( roundtrip_case 997 )
 
     // rfft: a real signal's spectrum, n/2+1 bins

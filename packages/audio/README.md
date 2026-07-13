@@ -93,12 +93,19 @@ speech model hears one utterance where there were two.
 
 ## Built on
 
-`stdlib/std/fft.nu`, whose **Bluestein** path makes `n_fft = 400` — which
-is not a power of two — an *exact* transform rather than a padded
-approximation. Padding 400 to 512 does not compute a rounder spectrum; it
-computes a different one.
+`stdlib/std/fft.nu`. Padding 400 to 512 does not compute a rounder
+spectrum; it computes a different one — so 400 is transformed *exactly*,
+and how it is transformed is picked by what 400 actually is: `2^4·5^2` is
+perfectly factorable, so it takes the **mixed-radix** Cooley-Tukey path
+(Bluestein, the chirp-z fallback, is for lengths with a large prime
+factor — a 997-point frame would take it; a 400-point one paying for two
+1024-point transforms to get one 400-point answer was the wrong deal).
+A real signal of even length is also **folded** first: 400 real samples
+become a 200-point complex transform plus an O(n) untangle, and half the
+transform is half the work.
 
-The whole 30-second mel spectrogram (3000 frames) takes about 0.3 s.
+The whole 30-second mel spectrogram (3000 frames) takes about 0.14 s,
+down from 0.52 when every frame went through Bluestein at full length.
 
 ## License
 

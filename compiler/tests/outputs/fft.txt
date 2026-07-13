@@ -1,9 +1,5 @@
-COMPILE OK
-LINK OK
-EXIT 0
-OUTPUT
 PASS 1024 is a power of two
-PASS 400 is NOT a power of two (hence Bluestein)
+PASS 400 is NOT a power of two (mixed radix: 2^4 * 5^2)
 PASS next_pow2 1000 = 1024
 PASS next_pow2 1024 = 1024
 PASS delta at 1 of N=8 → e^(-2pi i k/N), phase runs the right way
@@ -14,12 +10,16 @@ PASS Parseval holds at N=128
 PASS roundtrip ifft(fft(x)) == x at N=512
 PASS delta at 1 of N=5 → e^(-2pi i k/N), phase runs the right way
 PASS delta at 1 of N=400 → e^(-2pi i k/N), phase runs the right way
+PASS delta at 1 of N=105 → e^(-2pi i k/N), phase runs the right way
+PASS delta at 2 of N=343 → e^(-2pi i k/N), phase runs the right way
 PASS cos at bin 40 of N=400 → N/2 at k0 and N-k0, zero elsewhere
 PASS cos at bin 3 of N=12 → N/2 at k0 and N-k0, zero elsewhere
+PASS cos at bin 13 of N=105 → N/2 at k0 and N-k0, zero elsewhere
 PASS Parseval holds at N=400
-PASS Parseval holds at N=997
 PASS roundtrip ifft(fft(x)) == x at N=400
+PASS roundtrip ifft(fft(x)) == x at N=343
+PASS Parseval holds at N=997
 PASS roundtrip ifft(fft(x)) == x at N=997
 PASS rfft of 400 real samples → 201 bins
 PASS rfft peak is N/2 at the signal's bin
-fft: 20 passed, 0 failed
+fft: 24 passed, 0 failed
