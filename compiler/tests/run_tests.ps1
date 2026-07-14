@@ -353,10 +353,25 @@ $results = $names | ForEach-Object -ThrottleLimit $Jobs -Parallel {
     }
 
     # ── compare / update ────────────────────────────────────────
+    # -Update always writes the WINDOWS golden — that part of the two-set
+    # design stays. But for COMPARISON, a test with no Windows golden falls
+    # back to the posix one: 500 of the 524 Windows goldens are byte-identical
+    # to their posix twins, so requiring a hand-run `-Update` on a Windows box
+    # for every new test bought nothing except a permanently lagging suite
+    # (13 MISSING at v0.15.0). With the fallback, a new test is covered on
+    # Windows from the day it lands; a test whose Windows behaviour GENUINELY
+    # differs fails loudly against the posix golden — and that failure is the
+    # deliberate moment to add an outputs-windows/ golden for it. Silent lag
+    # becomes an actionable diff, and an existing Windows golden still always
+    # wins, so a Windows drift can never masquerade as a Linux regression.
     $enc = New-Object System.Text.UTF8Encoding $false
     if ($Update) {
         [System.IO.File]::WriteAllText($gold, $act, $enc)
         return [pscustomobject]@{ Name = $name; Verdict = 'UPDATED'; Diff = '' }
+    }
+    if (-not (Test-Path -LiteralPath $gold)) {
+        $posixGold = Join-Path (Join-Path $ScriptDir 'outputs') "$name.txt"
+        if (Test-Path -LiteralPath $posixGold) { $gold = $posixGold }
     }
     if (-not (Test-Path -LiteralPath $gold)) {
         return [pscustomobject]@{ Name = $name; Verdict = 'MISSING'; Diff = '' }

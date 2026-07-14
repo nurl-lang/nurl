@@ -8,8 +8,21 @@ $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/bytes.nu`
 $ `stdlib/std/fs.nu`
+$ `stdlib/ext/env.nu`
 
-: s TPATH `/tmp/nurl_fswh_test.bin`
+// Temp path from the environment (TMPDIR → TEMP → /tmp) — a hardcoded /tmp
+// works on Windows only while the C runtime's drive-relative mapping holds.
+: ~ s TPATH ``
+
+@ __fswh_path → String {
+    : ~ String tdir ( env_var_or `TMPDIR` `` )
+    ? == ( string_len tdir ) 0 {
+        ( string_free tdir )
+        = tdir ( env_var_or `TEMP` `/tmp` )
+    } {}
+    ( string_push_str tdir `/nurl_fswh_test.bin` )
+    ^ tdir
+}
 
 @ ck b ok s name → v {
     ? ok { ( nurl_print `PASS ` ) } { ( nurl_print `FAIL ` ) }
@@ -18,6 +31,9 @@ $ `stdlib/std/fs.nu`
 }
 
 @ main → i {
+    : String __tp ( __fswh_path )
+    = TPATH ( strdup ( string_data __tp ) )
+    ( string_free __tp )
     ( file_delete TPATH )
 
     // create + two chunks, the first with an embedded NUL
