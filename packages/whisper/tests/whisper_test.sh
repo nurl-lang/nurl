@@ -190,6 +190,51 @@ PYEOF3
         && ok "--vad --timestamps: speech at second 20 of the file is stamped ~00:20, not ~00:00 (condensed clock mapped back)" \
         || { bad "--vad --timestamps mapping"; echo "    got: [$TSV]"; }
 
+    # ── serve: the model held open ──────────────────────────────────
+    # Three things under test: the whisper.cpp-compatible surface (multipart
+    # `file` → {"text":...}), the raw-body path, and the reason the server
+    # exists — the SECOND request must not pay for the model again.
+    PORT=$(( 20000 + $$ % 20000 ))
+    "$WH" serve "$WORK/model" --addr 127.0.0.1:$PORT >"$WORK/serve.log" 2>&1 &
+    SRV_PID=$!
+    for _ in $(seq 1 120); do
+        curl -s "http://127.0.0.1:$PORT/health" 2>/dev/null | grep -q '"ok"' && break
+        sleep 0.5
+    done
+    if curl -s "http://127.0.0.1:$PORT/health" | grep -q '"ok"'; then
+        SRV=$(curl -s -F "file=@$WORK/jfk.wav" "http://127.0.0.1:$PORT/inference")
+        [ "$SRV" = "{\"text\":\"$(printf '%s' "$WANT" | sed 's/^ //')\"}" ] \
+            && ok "serve: POST /inference (multipart, whisper.cpp's shape) returns the words as JSON" \
+            || { bad "serve inference"; echo "    got: [$SRV]"; }
+
+        SRV_T=$(curl -s -F "file=@$WORK/jfk.wav" -F "response_format=text" "http://127.0.0.1:$PORT/inference")
+        [ "$SRV_T" = "$(printf '%s' "$WANT" | sed 's/^ //')" ] \
+            && ok "serve: response_format=text returns the bare text" \
+            || { bad "serve text format"; echo "    got: [$SRV_T]"; }
+
+        SRV_R=$(curl -s --data-binary "@$WORK/jfk.wav" -H "Content-Type: audio/wav" -X POST "http://127.0.0.1:$PORT/inference")
+        [ "$SRV_R" = "$SRV" ] \
+            && ok "serve: a raw WAV body works too — curl --data-binary is not a browser form" \
+            || { bad "serve raw body"; echo "    got: [$SRV_R]"; }
+
+        SRV_TS=$(curl -s -F "file=@$WORK/padded.wav" -F "vad=true" -F "timestamps=true" "http://127.0.0.1:$PORT/inference")
+        printf '%s' "$SRV_TS" | grep -qE '\[00:(19\.[5-9]|20\.[0-4])[0-9]' \
+            && ok "serve: per-request vad+timestamps fields work, in the recording's timeline" \
+            || { bad "serve vad+ts"; echo "    got: [$SRV_TS]"; }
+
+        # the second request must ride the already-loaded model: well under
+        # the CLI's cold time (which includes the model read + kernel build)
+        START=$(date +%s%N)
+        curl -s -F "file=@$WORK/jfk.wav" "http://127.0.0.1:$PORT/inference" >/dev/null
+        WARM_MS=$(( ($(date +%s%N) - START) / 1000000 ))
+        [ "$WARM_MS" -lt 2000 ] \
+            && ok "serve: a warm request takes ${WARM_MS} ms — the model loads once, not per request" \
+            || bad "serve warm request took ${WARM_MS} ms"
+    else
+        bad "serve did not come up"; tail -5 "$WORK/serve.log"
+    fi
+    kill $SRV_PID 2>/dev/null; wait $SRV_PID 2>/dev/null
+
     START=$(date +%s%N); "$WH" transcribe "$WORK/model" "$WORK/meeting.wav" --max 400 >/dev/null 2>&1
     SLOW=$(( ($(date +%s%N) - START) / 1000000 ))
     START=$(date +%s%N); "$WH" transcribe "$WORK/model" "$WORK/meeting.wav" --max 400 --vad >/dev/null 2>&1

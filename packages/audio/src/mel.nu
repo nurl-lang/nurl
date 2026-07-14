@@ -29,11 +29,11 @@ $ `stdlib/std/float.nu`
 
 : f MEL_PI 3.14159265358979323846
 
-@ __mgeti ( Vec i ) v i k → i {
+@ __mel_geti ( Vec i ) v i k → i {
     ?? ( vec_get [i] v k ) { T x → { ^ x } F → { ^ 0 } }
 }
 
-@ __mget ( Vec f ) v i k → f {
+@ __mel_get ( Vec f ) v i k → f {
     ?? ( vec_get [f] v k ) { T x → { ^ x } F → { ^ 0.0 } }
 }
 
@@ -80,15 +80,15 @@ $ `stdlib/std/float.nu`
     ~ < k * n_bins n_mels { ( vec_push [f] w 0.0 ) = k + k 1 }
     : ~ i m 0
     ~ < m n_mels {
-        : f lo ( __mget edges m )
-        : f ce ( __mget edges + m 1 )
-        : f hi ( __mget edges + m 2 )
+        : f lo ( __mel_get edges m )
+        : f ce ( __mel_get edges + m 1 )
+        : f hi ( __mel_get edges + m 2 )
         // Slaney normalisation: each filter carries the same energy, whatever
         // its width — 2/(hi − lo).
         : f enorm / 2.0 - hi lo
         : ~ i b 0
         ~ < b n_bins {
-            : f fz ( __mget fft_hz b )
+            : f fz ( __mel_get fft_hz b )
             : f down / - fz lo - ce lo
             : f up / - hi fz - hi ce
             : f tri ? < down up down up
@@ -123,17 +123,17 @@ $ `stdlib/std/float.nu`
     : ( Vec f ) out ( vec_with_cap [f] + n * 2 pad )
     : ~ i k 0
     ~ < k pad {
-        ( vec_push [f] out ( __mget x - pad k ) )
+        ( vec_push [f] out ( __mel_get x - pad k ) )
         = k + k 1
     }
     = k 0
     ~ < k n {
-        ( vec_push [f] out ( __mget x k ) )
+        ( vec_push [f] out ( __mel_get x k ) )
         = k + k 1
     }
     = k 0
     ~ < k pad {
-        ( vec_push [f] out ( __mget x - - n 2 k ) )
+        ( vec_push [f] out ( __mel_get x - - n 2 k ) )
         = k + k 1
     }
     ^ out
@@ -160,7 +160,7 @@ $ `stdlib/std/float.nu`
         : i base * fr hop
         = k 0
         ~ < k n_fft {
-            ( vec_set [f] wf k * ( __mget x + base k ) ( __mget window k ) )
+            ( vec_set [f] wf k * ( __mel_get x + base k ) ( __mel_get window k ) )
             = k + k 1
         }
         // real input → half-length transform; the imaginary zeros above were
@@ -168,8 +168,8 @@ $ `stdlib/std/float.nu`
         ( fft_rfft_plan p wf sre sim )
         = k 0
         ~ < k n_bins {
-            : f a ( __mget sre k )
-            : f b ( __mget sim k )
+            : f a ( __mel_get sre k )
+            : f b ( __mel_get sim k )
             ( vec_push [f] out + * a a * b b )
             = k + k 1
         }
@@ -211,7 +211,7 @@ $ `stdlib/std/float.nu`
         : ~ i hi 0
         : ~ i bb 0
         ~ < bb n_bins {
-            ? > ( __mget fb + * bb n_mels mm ) 0.0 {
+            ? > ( __mel_get fb + * bb n_mels mm ) 0.0 {
                 ? < bb lo { = lo bb } {}
                 = hi + bb 1
             } {}
@@ -229,10 +229,10 @@ $ `stdlib/std/float.nu`
         : ~ i m 0
         ~ < m n_mels {
             : ~ f s 0.0
-            : ~ i b ( __mgeti blo m )
-            : i bend ( __mgeti bhi m )
+            : ~ i b ( __mel_geti blo m )
+            : i bend ( __mel_geti bhi m )
             ~ < b bend {
-                = s + s * ( __mget pw + * fr n_bins b ) ( __mget fb + * b n_mels m )
+                = s + s * ( __mel_get pw + * fr n_bins b ) ( __mel_get fb + * b n_mels m )
                 = b + b 1
             }
             : f cl ? < s 1.0e-10 1.0e-10 s
@@ -248,7 +248,7 @@ $ `stdlib/std/float.nu`
     : f floor8 - mx 8.0
     : ~ i k 0
     ~ < k ( vec_len [f] out ) {
-        : f v ( __mget out k )
+        : f v ( __mel_get out k )
         : f c ? < v floor8 floor8 v
         ( vec_set [f] out k / + c 4.0 4.0 )
         = k + k 1
@@ -267,7 +267,7 @@ $ `stdlib/std/float.nu`
     : ( Vec f ) out ( vec_with_cap [f] n )
     : ~ i k 0
     ~ < k n {
-        ( vec_push [f] out ? < k have ( __mget x k ) 0.0 )
+        ( vec_push [f] out ? < k have ( __mel_get x k ) 0.0 )
         = k + k 1
     }
     ^ out

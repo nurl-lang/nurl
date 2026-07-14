@@ -126,6 +126,13 @@ $ `stdlib/std/float.nu`
     }
 }
 
+// The same parser, from bytes already in hand — an HTTP server that just
+// received a WAV upload has no path to give. Same hostile-input treatment:
+// the bytes are a stranger's whichever way they arrived.
+@ wav_parse ( Vec u ) data → !Wav String {
+    ^ ( __wav_parse data )
+}
+
 @ __wav_parse ( Vec u ) data → !Wav String {
     : i n ( vec_len [u] data )
     ? < n 12 { ^ ( __wav_err `wav: file too small to be RIFF` ) } {}
@@ -245,7 +252,7 @@ $ `stdlib/std/float.nu`
     ? == ch 1 {
         : ~ i k 0
         ~ < k n {
-            ( vec_push [f] out ( __wget . w samples k ) )
+            ( vec_push [f] out ( __wav_get . w samples k ) )
             = k + k 1
         }
         ^ out
@@ -255,7 +262,7 @@ $ `stdlib/std/float.nu`
         : ~ f s 0.0
         : ~ i c 0
         ~ < c ch {
-            = s + s ( __wget . w samples + * k ch c )
+            = s + s ( __wav_get . w samples + * k ch c )
             = c + c 1
         }
         ( vec_push [f] out / s # f ch )
@@ -264,7 +271,7 @@ $ `stdlib/std/float.nu`
     ^ out
 }
 
-@ __wget ( Vec f ) v i k → f {
+@ __wav_get ( Vec f ) v i k → f {
     ?? ( vec_get [f] v k ) { T x → { ^ x } F → { ^ 0.0 } }
 }
 
@@ -310,7 +317,7 @@ $ `stdlib/std/float.nu`
     ( __wpush_u32 d data_len )
     : ~ i k 0
     ~ < k n {
-        : f v ( __wget samples k )
+        : f v ( __wav_get samples k )
         : f cl ? > v 1.0 1.0 ? < v -1.0 -1.0 v
         : i q # i ( round * cl 32767.0 )
         ( __wpush_u16 d & q 65535 )
