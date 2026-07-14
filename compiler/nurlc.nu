@@ -761,6 +761,10 @@
 : ~ i g_impl_ret_syms 0  // Group F: method##llvm_type → ret_type string
 : ~ i g_impl_name_syms 0  // Group F: method##llvm_type → mangle_suffix string
 : ~ i g_impl_trait_syms 0  // coherence: method##llvm_type → owning trait name
+: ~ s g_void_reason ``  // why the last expression degraded to void (mixed-type
+//   `??`/`?` arms). Consumers that NEED a value (a cast, a let/assign) die
+//   with this appended, so "produced no value" also says WHY — the silent
+//   version handed `undef` to the cast and the program printed a pointer.
 : ~ i g_fn_pos_syms 0  // duplicate-fn check: fname → "file:line" of the first
 //   `@ fname` scan registration. Two files are free to each have a private
 //   `__get`-style helper IN THEIR OWN HEADS, but the compilation unit is one
@@ -6256,6 +6260,12 @@
     : ~ s phi_ty ? != 0 tdr et2 tt2
     ? arms_u { = phi_ty ( ty_to_unsigned phi_ty ) } {}
     : b types_ok | != 0 tdr | != 0 edr ( seq ( nurl_llty tt2 ) ( nurl_llty et2 ) )
+    ? & & == 0 g_did_ret ! types_ok & ! ( seq tt2 `void` ) ! ( seq et2 `void` )
+    { = g_void_reason ( nurl_str_cat ( nurl_str_cat4
+        `the '?' branches yield values of different types ('` ( llvm_to_nurl tt2 )
+        `' vs '` ( llvm_to_nurl et2 ) )
+        `'), so the conditional produces NO value — make the branches agree (e.g. '# T' inside a branch)` )
+    } {}
     : ~ s result `undef`
     ? == 0 g_did_ret
     { ? & ! ( seq phi_ty `void` ) types_ok
@@ -7557,7 +7567,13 @@
                     // keep the unsigned spelling when any arm carries it
                     // (an i64-literal arm beside a u64 arm) — mirrors
                     // gen_cond's `?`-join.
-                    ? & != phi_count 0 ! ( seq ( nurl_llty arm_type ) ( nurl_llty phi_type ) ) { = phi_ok F } {}
+                    ? & != phi_count 0 ! ( seq ( nurl_llty arm_type ) ( nurl_llty phi_type ) )
+                    { = phi_ok F
+                        = g_void_reason ( nurl_str_cat ( nurl_str_cat4
+                        `the '??' arms yield values of different types ('` ( llvm_to_nurl phi_type )
+                        `' vs '` ( llvm_to_nurl arm_type ) )
+                        `'), so the match degrades to a statement and produces NO value — make the arms agree (e.g. cast inside the arm: 'T x → # T2 x')` )
+                    } {}
                     ? ( ty_is_unsigned arm_type ) { = phi_type ( ty_to_unsigned phi_type ) } {}
                     // Ownership transfer out of the arm (see snapshot
                     // above): the value lives on through the phi.
@@ -11099,6 +11115,12 @@
     {}
     : s val ( gen_operand lex syms cg )
     : s st ( nurl_get_last_type )
+    ? ( seq st `void` )
+    { : ~ s vr ``
+        ? != 0 ( nurl_str_len g_void_reason ) { = vr ( nurl_str_cat ` — ` g_void_reason ) } {}
+        ( die lex ( nurl_str_cat ( nurl_str_cat3
+        `'# ` dt `' has no value to convert — the operand expression produces none` ) vr ) ) }
+    {}
     : s res ( nurl_cg_reg cg )
     // Detect pointer source/destination (LLVM type ends with '*')
     : i stlen ( nurl_str_len st )
@@ -12661,6 +12683,20 @@
             ( nurl_print ( nurl_llty from_ty ) ) ( nurl_print ` ` ) ( nurl_print val )
             ( nurl_print ` to ` ) ( nurl_print ( nurl_llty to_ty ) ) ( nurl_print `\n` )
             ^ r } }
+    {}
+    // A void source can NEVER initialise anything — it is not a type clash,
+    // it is the absence of a value. Before this check, `: i x ?? m { T v → v
+    // F → 0.0 }` (arms of different types) bound `undef` and the program
+    // printed whatever was in the register — a pointer, usually.
+    //
+    // EXCEPT when the RHS just RETURNED (`: i x ^ a` — the binding is dead
+    // code past a return, legal and separately warned about): g_did_ret
+    // says the store will never execute, so there is nothing to diagnose.
+    ? & & ( seq from_ty `void` ) == 0 g_did_ret & != 0 ( nurl_str_len to_ty ) ! ( seq to_ty `void` )
+    { : ~ s vr ``
+        ? != 0 ( nurl_str_len g_void_reason ) { = vr ( nurl_str_cat ` — ` g_void_reason ) } {}
+        ( die_stmt lex ( nurl_str_cat ( nurl_str_cat3
+        `the expression produces no value to bind / assign (expected '` to_ty `')` ) vr ) ) }
     {}
     // No coercion above bridged from_ty → to_ty. If they are a never-valid
     // mix — a float and a non-float, or a pointer/string stored into a

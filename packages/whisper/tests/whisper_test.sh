@@ -30,6 +30,7 @@ if ! $NURL src/main.nu "$WORK/whisper" >/dev/null 2>"$WORK/build.err"; then
 fi
 WH="$WORK/whisper"
 (cd ../audio && $NURL src/main.nu "$WORK/audio" >/dev/null 2>&1)
+$NURL tests/ws_client.nu "$WORK/ws_client" >/dev/null 2>&1 || true
 
 echo "[2/3] whisper-tiny + a test clip"
 if ! curl -sL --max-time 900 -f -o "$WORK/model.safetensors" \
@@ -230,6 +231,24 @@ PYEOF3
         [ "$WARM_MS" -lt 2000 ] \
             && ok "serve: a warm request takes ${WARM_MS} ms — the model loads once, not per request" \
             || bad "serve warm request took ${WARM_MS} ms"
+
+        # ── WebSocket streaming, on the SAME port ───────────────────
+        # The client is stdlib's own RFC 6455 client (tests/ws_client.nu) —
+        # both ends of the protocol are the same implementation, under test
+        # against each other. It streams the clip as PCM16, the server's
+        # adaptive-floor VAD closes utterances, and each comes back as
+        # {"text","t0","t1"} on the stream's clock.
+        if [ -x "$WORK/ws_client" ]; then
+            WS_OUT=$("$WORK/ws_client" "ws://127.0.0.1:$PORT/" "$WORK/jfk.wav" 2>/dev/null)
+            printf '%s' "$WS_OUT" | head -1 | grep -q '"status":"ok"' \
+                && printf '%s' "$WS_OUT" | grep -q '"t0":' \
+                && [ "$(printf '%s' "$WS_OUT" | grep -c '"text":')" -ge 1 ] \
+                && printf '%s' "$WS_OUT" | tr -d '\n' | grep -q "your country" \
+                && ok "WS: streamed PCM16 comes back as utterances with stream-clock t0/t1 (same port as HTTP)" \
+                || { bad "WS streaming"; echo "    got: [$WS_OUT]"; }
+        else
+            bad "ws_client did not build"
+        fi
     else
         bad "serve did not come up"; tail -5 "$WORK/serve.log"
     fi
