@@ -8,6 +8,67 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.0] — 2026-07-14
+
+The **joins and guards** release: one new language behaviour, three classes
+of silent failure turned into diagnostics that explain themselves, and a
+release pipeline that tells the truth about its own version.
+
+### Added
+
+- **Integer arms of different widths unify losslessly at `?`/`??` joins.**
+  `?? m { T x → x F → 0 }` over a `( Vec u )` — "the byte, or zero" — used
+  to be impossible: the `u` arm and the `i` literal could not share a phi.
+  Every integer arm now carries a 64-bit shadow extended by its OWN
+  signedness (zext for unsigned and bool, sext for signed), so `u` 200
+  arrives as 200 — never −56 — and `i` −1 arrives as −1: the same number in
+  a wider register, not a conversion. Same-width arms emit bit-for-bit the
+  IR they always did. This is the join catching up with the stores and call
+  sites, which have always bridged integer widths; the join refusing to was
+  the language disagreeing with itself. Float↔int and pointer↔int stay
+  errors — those WOULD change values, and NURL converts nothing implicitly.
+- **Duplicate definitions die in the front end, with both locations.** A
+  NURL compilation unit is one flat namespace — `__` is a convention, not a
+  scope — and a second `@ fn` / `: Type { … }` / `: ~ global` from another
+  file used to die inside LLVM ("invalid redefinition"), location-free in a
+  50k-line generated .ll, or worse: two generic functions sharing a name
+  silently replaced each other's SOURCE, and two files sharing one mutable
+  global by accident is the bug found a week later. All three now report
+  `duplicate <kind> '<name>' — already defined at <file>:<line>`. A file
+  imported by several importers stays legal (same-position re-registration
+  is idempotent), and a generic beside a non-generic of the same name stays
+  legal — the corpus relies on it.
+- **A valueless expression is an error, not a pointer.** When `?`/`??` arms
+  are genuinely incompatible (float beside int), the construct degrades to
+  a statement and produces no value — and a cast or binding consuming it
+  used to receive `undef`: the program printed whatever was in the register.
+  Found live: a WebSocket PCM16 decoder decoded every audio sample to
+  pointer garbage and the failure surfaced three layers away as a timeout.
+  The degrade site now RECORDS why (the two arm types), and the consumer's
+  error carries the reason and the fix.
+
+### Fixed
+
+- **Released binaries no longer report `-dirty`.** Three test goldens were
+  committed with CRLF in the blob while `.gitattributes` demands LF, so
+  every fresh CI clone was "modified" before the build began, and
+  `git describe --dirty` stamped every release accordingly. The blobs are
+  renormalised, and the posix test runner now honours the \r-normalisation
+  contract the attributes always claimed (previously only the Windows
+  runner did).
+
+### Ecosystem
+
+- **whisper 0.6.0 / audio 0.6.0 on the registry**: `whisper serve` holds
+  the model open (0.33 s per warm request where the CLI pays 1.15 s per
+  invocation, distil-large-v3) behind whisper.cpp's own HTTP surface — and
+  the SAME port speaks WebSocket: stream raw PCM16, get utterances back as
+  `{"text","t0","t1"}` on the stream's clock, segmented by an
+  adaptive-floor streaming VAD whose noise floor is the 10th percentile of
+  the trailing minute. One port and a floor that tunes itself, where the
+  whisper.cpp fork needs two ports, a fixed dB threshold and a pile of
+  auto-settings heuristics.
+
 ## [0.14.1] — 2026-07-13
 
 A patch for the speech release's own hot path: the FFT that computes every
