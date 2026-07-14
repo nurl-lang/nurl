@@ -1,0 +1,6 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_match_mixed_arms.nu:22:5: '# i64' has no value to convert — the operand expression produces none — the '??' arms yield values of different types ('u' vs 'i'), so the match degrades to a statement and produces NO value — make the arms agree (e.g. cast inside the arm: 'T x → # T2 x')
+    : i lo2 ?? ( vec_get [u] d 0 ) { T x → x F → 0 }
+    ^
+error: aborting due to 1 previous error

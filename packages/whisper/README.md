@@ -143,6 +143,30 @@ is not a browser form and does not have to pretend to be one), and
 per-request `vad=true` / `timestamps=true` fields override the server
 flags — one server serves both a subtitle pipeline and a bare-text one.
 
+## The same port speaks WebSocket
+
+```
+$ ws://host:6543/          # any path — the Upgrade header is the router
+→ {"format":"pcm16"}                                (optional config first)
+← {"status":"ok","format":"pcm16","vad":"adaptive-floor"}
+→ <binary frames: raw PCM16 @ 16 kHz>
+← {"text":" And so my fellow Americans.","t0":0.09,"t1":2.33}
+← {"text":" Ask what you can do for your country.","t0":7.97,"t1":11.2}
+```
+
+Live audio in, utterances out — segmented by the **streaming** VAD
+(`VadStream`, packages/audio): the noise floor is the 10th percentile of
+the trailing minute, recomputed every second, because a room changes and
+a frozen floor calls the new fan speech forever. `t0`/`t1` are seconds on
+the stream's own clock. A run that reaches 28 s closes forcibly —
+whisper's window is 30 s, and a lecture has no obligation to pause.
+
+The whisper.cpp fork this is modelled on needs a **second port** for its
+WebSocket (its HTTP and WS stacks cannot share one), a **fixed dB
+silence threshold**, and a pile of `auto_settings` heuristics that exist
+to keep re-tuning that threshold per room. One port, and a floor that
+tunes itself, replace all three.
+
 ## The control tokens are looked up, not hardcoded
 
 A whisper prompt is four tokens — `<|startoftranscript|>`, the language,

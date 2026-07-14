@@ -32,6 +32,7 @@ $ `stdlib/core/vec.nu`
 $ `stdlib/core/string.nu`
 $ `stdlib/std/bytes.nu`
 $ `stdlib/ext/json.nu`
+$ `stdlib/std/float.nu`
 $ `deps/http/src/http.nu`
 
 : ~ i g_srv_w 0  // *Whisper, as an address (0 = not serving)
@@ -213,6 +214,189 @@ $ `deps/http/src/http.nu`
     ^ r
 }
 
+// ── WebSocket streaming: the microphone case ────────────────────────
+//
+// The same port. A client that connects with `Upgrade: websocket` streams raw
+// audio (binary frames: PCM16 by default, or float32 — announce with a first
+// JSON text message {"format":"float32"}) and receives one JSON text message
+// per UTTERANCE:
+//
+//   {"text":" ...","t0":12.34,"t1":15.67}
+//
+// t0/t1 are seconds on the STREAM's clock — where in everything sent so far
+// the words were said.
+//
+// Segmentation is the adaptive-floor streaming VAD (packages/audio). The
+// whisper.cpp fork this replaces cuts on a FIXED dB threshold and then grows a
+// pile of "auto settings" heuristics to keep re-tuning that threshold per
+// room — the adaptive floor (10th percentile of the trailing minute) is the
+// shape of the fix rather than a patch on the symptom. And it runs on one
+// port, not two: the fork needs a second listener because its HTTP and WS
+// stacks cannot share one, and ours are the same stack by construction.
+
+: ~ i g_ws_f32 0  // 1 = client sends float32 frames, else PCM16
+: ~ s g_ws_lang ``  // per-connection language override (`` = server default)
+
+@ __srv_ws_ack TcpConn c → v {
+    : Json o ( json_obj_new )
+    : b _a ( json_obj_set o `status` ( json_str_lit `ok` ) )
+    : b _b ( json_obj_set o `format` ( json_str_lit ? != g_ws_f32 0 `float32` `pcm16` ) )
+    : b _c ( json_obj_set o `vad` ( json_str_lit `adaptive-floor` ) )
+    : String body ( json_stringify o )
+    : !v WsErr _w ( ws_send_text c ( string_data body ) )
+    ( string_free body )
+    ( json_free o )
+}
+
+@ __srv_ws_config TcpConn c ( Vec u ) payload → v {
+    : String ps ( string_new )
+    : ~ i k 0
+    ~ < k ( vec_len [u] payload ) {
+        ?? ( vec_get [u] payload k ) {
+            T ch → { ( string_push_char ps ch ) }
+            F → {}
+        }
+        = k + k 1
+    }
+    ?? ( json_parse ( string_data ps ) ) {
+        T j → {
+            ?? ( json_obj_get j `format` ) {
+                T v → {
+                    : s fs ( json_as_str v )
+                    = g_ws_f32 ? ( nurl_str_eq fs `float32` ) 1 0
+                }
+                F → {}
+            }
+            ?? ( json_obj_get j `lang` ) {
+                T v → {
+                    : s ls ( json_as_str v )
+                    ? > ( nurl_str_len ls ) 0 {
+                        ? > ( nurl_str_len g_ws_lang ) 0 { ( nurl_free g_ws_lang ) } {}
+                        = g_ws_lang ( strdup ls )
+                    } {}
+                }
+                F → {}
+            }
+            ( json_free j )
+        }
+        F _ → {}
+    }
+    ( string_free ps )
+    ( __srv_ws_ack c )
+}
+
+// binary frame → f32 samples at 16 kHz (the client's job to resample; a
+// microphone opened at 16 kHz is the normal case)
+@ __srv_ws_samples ( Vec u ) d → ( Vec f ) {
+    : ( Vec f ) out ( vec_new [f] )
+    : i n ( vec_len [u] d )
+    ? != g_ws_f32 0 {
+        : ~ i k 0
+        ~ <= + k 4 n {
+            : ~ i b0 0
+            : ~ i b1 0
+            : ~ i b2 0
+            : ~ i b3 0
+            ?? ( vec_get [u] d k ) { T x0 → { = b0 # i x0 } F → {} }
+            ?? ( vec_get [u] d + k 1 ) { T x1 → { = b1 # i x1 } F → {} }
+            ?? ( vec_get [u] d + k 2 ) { T x2 → { = b2 # i x2 } F → {} }
+            ?? ( vec_get [u] d + k 3 ) { T x3 → { = b3 # i x3 } F → {} }
+            : i bits | | | b0 << b1 8 << b2 16 << b3 24
+            ( vec_push [f] out # f ( bits_to_f32 bits ) )
+            = k + k 4
+        }
+        ^ out
+    } {}
+    : ~ i k 0
+    ~ <= + k 2 n {
+        : ~ i lo 0
+        : ~ i hi 0
+        ?? ( vec_get [u] d k ) { T xl → { = lo # i xl } F → {} }
+        ?? ( vec_get [u] d + k 1 ) { T xh → { = hi # i xh } F → {} }
+        : ~ i v | lo << hi 8
+        ? >= v 32768 { = v - v 65536 } {}
+        ( vec_push [f] out / # f v 32768.0 )
+        = k + k 2
+    }
+    ^ out
+}
+
+// A closed utterance: transcribe it, send {"text","t0","t1"}.
+@ __srv_ws_emit TcpConn c * VadStream vs → v {
+    : VadSeg g ( vad_stream_seg vs )
+    : ( Vec f ) seg ( vad_stream_take vs )
+    : ~ s lang g_srv_lang
+    ? > ( nurl_str_len g_ws_lang ) 0 { = lang g_ws_lang } {}
+    : *Whisper w # *Whisper g_srv_w
+    : *Tok t # *Tok g_srv_t
+    : ( Vec u ) text ( vec_new [u] )
+    // no VAD inside — the stream already segmented; no timestamps — the
+    // segment IS the timestamp, and t0/t1 carry it
+    ? ( wh_run w t seg lang g_srv_max F F text ) {
+        : String st ( string_new )
+        : ~ i k 0
+        ~ < k ( vec_len [u] text ) {
+            ?? ( vec_get [u] text k ) {
+                T ch → { ( string_push_char st ch ) }
+                F → {}
+            }
+            = k + k 1
+        }
+        : Json o ( json_obj_new )
+        : b _a ( json_obj_set o `text` ( json_str_lit ( string_data st ) ) )
+        : b _b ( json_obj_set o `t0` ( json_float / # f . g start 16000.0 ) )
+        : b _c ( json_obj_set o `t1` ( json_float / # f . g end 16000.0 ) )
+        : String body ( json_stringify o )
+        : !v WsErr _w ( ws_send_text c ( string_data body ) )
+        ( string_free body )
+        ( json_free o )
+        ( string_free st )
+    } {}
+    ( vec_free [u] text )
+    = g_srv_reqs + g_srv_reqs 1
+}
+
+// The upgrade hook: T = this was a WebSocket connection and it has been
+// served to completion; F = not an upgrade, fall through to the router.
+@ __srv_ws_hook TcpConn c HttpRequest rq → b {
+    ? ( ws_is_upgrade rq ) {} { ^ F }
+    ?? ( ws_perform_handshake c rq ) {
+        T _ → {}
+        F _ → { ^ T }
+    }
+    = g_ws_f32 0
+    ? > ( nurl_str_len g_ws_lang ) 0 { ( nurl_free g_ws_lang ) } {}
+    = g_ws_lang ``
+    : *VadStream vs ( vad_stream_new 16000 ( vad_default_opts ) )
+    : WsLimits lim ( ws_default_limits )
+    : ~ b open T
+    ~ open {
+        ?? ( ws_read_message c lim ) {
+            T msg → {
+                ? == . msg opcode ( ws_opcode_text ) {
+                    ( __srv_ws_config c . msg payload )
+                } {
+                    : ( Vec f ) x ( __srv_ws_samples . msg payload )
+                    ( vad_stream_push vs x )
+                    ( vec_free [f] x )
+                    ~ ( vad_stream_poll vs ) { ( __srv_ws_emit c vs ) }
+                }
+                ( vec_free [u] . msg payload )
+            }
+            F _ → { = open F }
+        }
+    }
+    // the stream ended: an open utterance is still an utterance — transcribe
+    // and send it before answering the close (RFC 6455 allows pending frames
+    // before the close reply)
+    ? ( vad_stream_flush vs ) { ( __srv_ws_emit c vs ) } {}
+    : !v WsErr _c ( ws_send_close c 1000 `bye` )
+    ( vad_stream_free vs )
+    ? > ( nurl_str_len g_ws_lang ) 0 { ( nurl_free g_ws_lang ) } {}
+    = g_ws_lang ``
+    ^ T
+}
+
 // Load the model, open the port, serve until stopped.
 @ wh_serve s dir s host i port s lang i maxtok b use_vad b with_ts → i {
     : String cfg ( __wh_path dir `config.json` )
@@ -236,6 +420,7 @@ $ `deps/http/src/http.nu`
                     ( http_app_workers a 1 )
                     // a WAV is ~2 MB/min at 16 kHz pcm16; an hour ~115 MB
                     ( http_app_body_max a 268435456 )
+                    ( http_app_stream a \ TcpConn sc HttpRequest srq → b { ^ ( __srv_ws_hook sc srq ) } )
                     ( http_app_post a `/inference` \ HttpRequest rq Params ps → HttpResponse { ^ ( __srv_inference rq ) } )
                     ( http_app_get a `/health` \ HttpRequest rq Params ps → HttpResponse { ^ ( __srv_health rq ) } )
                     ( http_app_get a `/` \ HttpRequest rq Params ps → HttpResponse { ^ ( __srv_health rq ) } )
@@ -244,7 +429,7 @@ $ `deps/http/src/http.nu`
                     ( string_push_str msg host )
                     ( string_push_char msg 58 )
                     ( string_push_int msg port )
-                    ( string_push_str msg ` (POST /inference, GET /health)` )
+                    ( string_push_str msg ` (POST /inference, GET /health, WS: stream audio)` )
                     ( nurl_print ( string_data msg ) )
                     ( nurl_print `\n` )
                     ( string_free msg )
