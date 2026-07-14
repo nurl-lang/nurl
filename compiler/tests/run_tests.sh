@@ -281,6 +281,15 @@ run_one() {
         fi
     fi
 
+    # Byte-compare AFTER stripping trailing \r — the contract .gitattributes
+    # documents ("test goldens are byte-compared after \r-normalisation").
+    # Goldens are checked in as LF (`compiler/tests/outputs/*.txt text eol=lf`),
+    # but three HTTP tests legitimately EMIT \r\n — they golden HTTP wire
+    # output — so a raw cmp can only ever match on a checkout whose goldens
+    # still carry CRLF, i.e. exactly the drift that stamped every release
+    # binary "-dirty". The Windows runner (run_tests.ps1) already normalises;
+    # this makes the posix runner honour the same contract.
+    sed 's/\r$//' "$act" > "$act.nrm" && mv -f "$act.nrm" "$act"
     if [[ "$UPDATE" == "1" ]]; then cp "$act" "$gold"; echo UPDATED; return; fi
     if [[ ! -f "$gold" ]]; then echo MISSING; return; fi
     if cmp -s "$act" "$gold"; then echo PASS; else
