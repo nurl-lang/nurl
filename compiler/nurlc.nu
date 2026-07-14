@@ -15617,6 +15617,20 @@
 
 @ gen_struct_decl s sname i lex i syms → v {
     ( nurl_lex_advance lex )
+    // Same flat-namespace guard as `@` functions (g_fn_pos_syms): a second
+    // `: Name { … }` from a DIFFERENT file:line would emit a second
+    // `%Name = type` and die inside LLVM, location-free. Keyed `ty##` in the
+    // same table; same-position re-registration stays idempotent.
+    : s __tpos ( nurl_str_cat ( vis_current_src_file )
+    ( nurl_str_cat `:` ( nurl_str_int ( nurl_lex_line lex ) ) ) )
+    : s __tkey ( nurl_str_cat `ty##` sname )
+    : s __tprev ( nurl_sym_get g_fn_pos_syms __tkey )
+    ? & != 0 ( nurl_str_len __tprev ) ! ( seq __tprev __tpos )
+    { ( die lex ( nurl_str_cat `duplicate type ': `
+        ( nurl_str_cat sname
+        ( nurl_str_cat `' — already defined at ` __tprev ) ) ) )
+    }
+    { ( nurl_sym_def g_fn_pos_syms __tkey __tpos ) }
     // Grammar v2.0+: consume the parse-program-staged `pub` flag and
     // record per-file origin / public marker so cross-file references
     // can be checked at parse_type_base / gen_agg_lit time.
@@ -15742,6 +15756,21 @@
     : b const_pub ( vis_take_pending_pub )
     ? ( is_ident_tok ( nurl_lex_type lex ) )
     { : s cname ( nurl_lex_val lex )
+        // Flat-namespace guard for globals, twin of the struct one above: a
+        // second `: name` / `: ~ name` from a different file:line is two
+        // `@name = global` emissions — and two files SHARING one mutable
+        // global by accident is worse than the LLVM error it happens to die
+        // with today.
+        : s __gpos ( nurl_str_cat ( vis_current_src_file )
+        ( nurl_str_cat `:` ( nurl_str_int ( nurl_lex_line lex ) ) ) )
+        : s __gkey ( nurl_str_cat `gl##` cname )
+        : s __gprev ( nurl_sym_get g_fn_pos_syms __gkey )
+        ? & != 0 ( nurl_str_len __gprev ) ! ( seq __gprev __gpos )
+        { ( die lex ( nurl_str_cat `duplicate global ': `
+            ( nurl_str_cat cname
+            ( nurl_str_cat `' — already defined at ` __gprev ) ) ) )
+        }
+        { ( nurl_sym_def g_fn_pos_syms __gkey __gpos ) }
         ( vis_record_const cname const_pub )
         ( rec_decl_loc syms cname ( nurl_lex_line lex ) lex )
         ( nurl_lex_advance lex )
