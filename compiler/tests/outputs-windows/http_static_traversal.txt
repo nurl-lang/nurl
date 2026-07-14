@@ -5,6 +5,6 @@ OUTPUT
   ok   GET /ok.txt = 200
   ok   GET / (index) = 200
   ok   GET /../secret.txt = 403
-  ok   GET //<abs>/secret.txt blocked (404)
+  ok   GET //<abs>/secret.txt blocked (403)
   ok   GET //etc/hostname blocked (404)
 http_static_traversal: all checks passed
