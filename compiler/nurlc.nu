@@ -6160,6 +6160,24 @@
     : s t_retid ( nurl_str_cat ( nurl_sym_get syms `__last_ident_name__` ) `` )
     : s tlbl ( nurl_sym_get syms `__cur_lbl__` )
     : i tdr g_did_ret
+    // Lossless 64-bit shadow of an integer branch value, emitted while
+    // instructions still land in this branch's block. If the two branches
+    // turn out to carry DIFFERENT integer widths, the join phi uses the
+    // shadows — each extended by its own signedness (zext for unsigned and
+    // i1, sext for signed), so the VALUE is preserved exactly. When the
+    // widths agree, the shadows are dead code and LLVM drops them.
+    : ~ s tv64 tv
+    ? == tdr 0
+    { : i __tw ( int_width ( nurl_llty tt2 ) )
+        ? & > __tw 0 < __tw 64
+        { : s __tr ( nurl_cg_reg cg )
+            ( nurl_print `  ` ) ( nurl_print __tr ) ( nurl_print ` = ` )
+            ( nurl_print ? == __tw 1 `zext` ? ( ty_is_unsigned tt2 ) `zext` `sext` )
+            ( nurl_print ` ` ) ( nurl_print ( nurl_llty tt2 ) )
+            ( nurl_print ` ` ) ( nurl_print tv ) ( nurl_print ` to i64\n` )
+            = tv64 __tr
+        } {}
+    } {}
     ? == tdr 0
     {  // Phase 2D: arm-local fall-through drop. Only safe when the arm's
         // result type is void — otherwise tv may reference memory backed by
@@ -6205,6 +6223,18 @@
     : s e_retid ( nurl_str_cat ( nurl_sym_get syms `__last_ident_name__` ) `` )
     : s elbl ( nurl_sym_get syms `__cur_lbl__` )
     : i edr g_did_ret
+    : ~ s ev64 ev
+    ? == edr 0
+    { : i __ew ( int_width ( nurl_llty et2 ) )
+        ? & > __ew 0 < __ew 64
+        { : s __er ( nurl_cg_reg cg )
+            ( nurl_print `  ` ) ( nurl_print __er ) ( nurl_print ` = ` )
+            ( nurl_print ? == __ew 1 `zext` ? ( ty_is_unsigned et2 ) `zext` `sext` )
+            ( nurl_print ` ` ) ( nurl_print ( nurl_llty et2 ) )
+            ( nurl_print ` ` ) ( nurl_print ev ) ( nurl_print ` to i64\n` )
+            = ev64 __er
+        } {}
+    } {}
     ? == edr 0
     { ? & != 0 g_auto_drop_strings ( seq et2 `void` )
         { ( mem_drop_new_strings syms cg old_strs_e )
@@ -6259,7 +6289,21 @@
     : b arms_u | ( ty_is_unsigned tt2 ) ( ty_is_unsigned et2 )
     : ~ s phi_ty ? != 0 tdr et2 tt2
     ? arms_u { = phi_ty ( ty_to_unsigned phi_ty ) } {}
-    : b types_ok | != 0 tdr | != 0 edr ( seq ( nurl_llty tt2 ) ( nurl_llty et2 ) )
+    : ~ b types_ok | != 0 tdr | != 0 edr ( seq ( nurl_llty tt2 ) ( nurl_llty et2 ) )
+    // Integer branches of DIFFERENT widths join losslessly at 64 bits via the
+    // shadows above — the store/call sites already bridge integer widths
+    // (coerce_store_val's trunc/zext/sext), so the join erroring here was the
+    // language disagreeing with itself. Only genuinely incompatible mixes
+    // (float vs int, pointer vs int) stay valueless — and diagnosable.
+    : ~ s tvp tv
+    : ~ s evp ev
+    ? & & & ! types_ok == 0 tdr == 0 edr
+    & > ( int_width ( nurl_llty tt2 ) ) 0 > ( int_width ( nurl_llty et2 ) ) 0
+    { = types_ok T
+        = phi_ty ? | ( ty_is_unsigned tt2 ) ( ty_is_unsigned et2 ) `u64` `i64`
+        = tvp tv64
+        = evp ev64
+    } {}
     ? & & == 0 g_did_ret ! types_ok & ! ( seq tt2 `void` ) ! ( seq et2 `void` )
     { = g_void_reason ( nurl_str_cat ( nurl_str_cat4
         `the '?' branches yield values of different types ('` ( llvm_to_nurl tt2 )
@@ -6294,20 +6338,20 @@
             ? & != 0 tdr == 0 edr
             { ( nurl_print `  ` ) ( nurl_print res )
                 ( nurl_print ` = phi ` ) ( nurl_print ( nurl_llty phi_ty ) )
-                ( nurl_print ` [ ` ) ( nurl_print ev )
+                ( nurl_print ` [ ` ) ( nurl_print evp )
                 ( nurl_print `, %` ) ( nurl_print elbl ) ( nurl_print ` ]\n` )
             }
             { ? & == 0 tdr != 0 edr
                 { ( nurl_print `  ` ) ( nurl_print res )
                     ( nurl_print ` = phi ` ) ( nurl_print ( nurl_llty phi_ty ) )
-                    ( nurl_print ` [ ` ) ( nurl_print tv )
+                    ( nurl_print ` [ ` ) ( nurl_print tvp )
                     ( nurl_print `, %` ) ( nurl_print tlbl ) ( nurl_print ` ]\n` )
                 }
                 { ( nurl_print `  ` ) ( nurl_print res )
                     ( nurl_print ` = phi ` ) ( nurl_print ( nurl_llty phi_ty ) )
-                    ( nurl_print ` [ ` ) ( nurl_print tv )
+                    ( nurl_print ` [ ` ) ( nurl_print tvp )
                     ( nurl_print `, %` ) ( nurl_print tlbl )
-                    ( nurl_print ` ], [ ` ) ( nurl_print ev )
+                    ( nurl_print ` ], [ ` ) ( nurl_print evp )
                     ( nurl_print `, %` ) ( nurl_print elbl ) ( nurl_print ` ]\n` )
                 }
             }
@@ -6648,6 +6692,9 @@
     : ~ s phi_type ``
     : ~ b phi_ok T
     : ~ i phi_count 0
+    : ~ s phi_entries64 ``
+    : ~ b all_int64 T
+    : ~ b any_u64 F
     // arms_total / arms_ret count every parsed arm vs. those that ended
     // in `^`. When equal AND a fallback_pred is set, the `match_end`
     // label is reached only through the synthetic last-arm fallthrough
@@ -7533,6 +7580,23 @@
             : s arm_retid ( nurl_str_cat ( nurl_sym_get syms `__last_ident_name__` ) `` )
             : s arm_lbl ( nurl_sym_get syms `__cur_lbl__` )
             : i arm_did_ret g_did_ret
+            // Lossless 64-bit shadow of an integer arm value (see gen_cond's
+            // twin): if the arms turn out to carry different integer widths,
+            // the join phi uses these — each extended by its OWN signedness,
+            // so the value is exact — and when the widths agree the shadows
+            // are dead code LLVM drops.
+            : ~ s arm_res64 arm_result
+            ? == arm_did_ret 0
+            { : i __aw ( int_width ( nurl_llty arm_type ) )
+                ? & > __aw 0 < __aw 64
+                { : s __ar ( nurl_cg_reg cg )
+                    ( nurl_print `  ` ) ( nurl_print __ar ) ( nurl_print ` = ` )
+                    ( nurl_print ? == __aw 1 `zext` ? ( ty_is_unsigned arm_type ) `zext` `sext` )
+                    ( nurl_print ` ` ) ( nurl_print ( nurl_llty arm_type ) )
+                    ( nurl_print ` ` ) ( nurl_print arm_result ) ( nurl_print ` to i64\n` )
+                    = arm_res64 __ar
+                } {}
+            } {}
             = arms_total + arms_total 1
             ? != 0 arm_did_ret { = arms_ret + arms_ret 1 } {}
             // Dangling-borrow tracking: an arm that returns never reaches the
@@ -7586,7 +7650,17 @@
                     entry
                     ( nurl_str_cat phi_entries ( nurl_str_cat `, ` entry ) )
                     = phi_count + phi_count 1
+                    ? == ( int_width ( nurl_llty arm_type ) ) 0 { = all_int64 F } {}
+                    ? ( ty_is_unsigned arm_type ) { = any_u64 T } {}
+                    : s entry64 ( nurl_str_cat `[ ` ( nurl_str_cat arm_res64 ( nurl_str_cat `, %` ( nurl_str_cat arm_lbl ` ]` ) ) ) )
+                    = phi_entries64 ? == 0 ( nurl_str_len phi_entries64 )
+                    entry64
+                    ( nurl_str_cat phi_entries64 ( nurl_str_cat `, ` entry64 ) )
                 } {
+                    : s eu64 ( nurl_str_cat `[ undef, %` ( nurl_str_cat arm_lbl ` ]` ) )
+                    = phi_entries64 ? == 0 ( nurl_str_len phi_entries64 )
+                    eu64
+                    ( nurl_str_cat phi_entries64 ( nurl_str_cat `, ` eu64 ) )
                     : s entry ( nurl_str_cat `[ undef, %` ( nurl_str_cat arm_lbl ` ]` ) )
                     = phi_entries ? == 0 ( nurl_str_len phi_entries )
                     entry
@@ -7679,6 +7753,26 @@
         { ( nurl_sym_def syms `__last_ident_name__` `` ) }
         {}
         ^ final_reg
+    } {}
+    // Arms of DIFFERENT integer widths: join losslessly at 64 bits over the
+    // per-arm shadows. The store/call sites already bridge integer widths
+    // (coerce_store_val's trunc/zext/sext), so the join refusing to was the
+    // language disagreeing with itself — `?? m { T x → x F → 0 }` over a
+    // ( Vec u ) is the natural spelling of "the byte, or zero". Float/pointer
+    // mixes still degrade (and the valueless-consumer diagnostics say why).
+    ? & & != 0 phi_count ! phi_ok all_int64 {
+        : s final64 ( nurl_cg_reg cg )
+        : ~ s phi_full64 phi_entries64
+        ? != 0 ( nurl_str_len fallback_pred ) {
+            = phi_full64 ( nurl_str_cat phi_entries64 ( nurl_str_cat `, [ undef, %` ( nurl_str_cat fallback_pred ` ]` ) ) )
+        } {}
+        ( nurl_print `  ` ) ( nurl_print final64 )
+        ( nurl_print ` = phi i64 ` ) ( nurl_print phi_full64 ) ( nurl_print `\n` )
+        ( nurl_set_last_type ? any_u64 `u64` `i64` )
+        = g_void_reason ``
+        ( nurl_sym_def syms `__last_value_borrow__` `` )
+        ( nurl_sym_def syms `__last_ident_name__` `` )
+        ^ final64
     } {}
     ( nurl_set_last_type `void` )
     ^ `undef`
