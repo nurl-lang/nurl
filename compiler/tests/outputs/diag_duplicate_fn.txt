@@ -1,0 +1,5 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_duplicate_fn.nu:20:19: duplicate function '@ __shared_helper' — already defined at compiler/tests/diag_duplicate_fn_mod.nu:4
+@ __shared_helper i x → i {
+                  ^

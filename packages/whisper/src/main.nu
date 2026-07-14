@@ -23,6 +23,7 @@ $ `deps/audio/src/vad.nu`
 $ `deps/tokenizer/src/tokenizer.nu`
 $ `deps/tokenizer/src/hf.nu`
 $ `src/model.nu`
+$ `src/serve.nu`
 
 @ __wcli_write_f32 s path ( Vec f ) v → i {
     : ( Vec u ) d ( vec_with_cap [u] * 4 ( vec_len [f] v ) )
@@ -316,6 +317,69 @@ $ `src/model.nu`
 // sees exactly 30 s (that is the length it was trained on and the length its
 // positional embedding has), so a longer clip is split, and each window is
 // decoded from a fresh prompt with its own KV cache.
+// The transcription core, from samples to text: VAD (optional), the 30-second
+// window loop, decode. TAKES OWNERSHIP of `at16_in` (16 kHz mono) — the VAD
+// path replaces the buffer wholesale, so the caller's handle is dead either
+// way, and this function frees whichever buffer survives.
+//
+// This is the seam the server stands on: the CLI opens the model, runs this
+// once and exits; `whisper serve` opens the model ONCE and runs this per
+// request — the 1.5 GB read, the f16→f32 conversion and the kernel compile
+// all happen before the first request instead of inside every one.
+@ wh_run * Whisper w * Tok t ( Vec f ) at16_in s lang i maxtok b use_vad b with_ts ( Vec u ) out → b {
+    : ~ ( Vec f ) at16 at16_in
+    // where each surviving stretch of condensed audio sits in the
+    // recording — empty (identity) without VAD
+    : ( Vec VadRun ) runs ( vec_new [VadRun] )
+    ? use_vad {
+        : ( Vec VadSeg ) segs ( vad_segments at16 16000 ( vad_default_opts ) )
+        // 0.5 s of the real room is kept between segments — enough of a
+        // boundary that two sentences do not run together, far less than
+        // the pause it replaces.
+        : ( Vec f ) sp ( vad_extract_runs at16 segs 8000 runs )
+        ( vec_free [f] at16 )
+        = at16 sp
+        ( vec_free [VadSeg] segs )
+    } {}
+    : i nmel . w n_mels
+    : i total ( vec_len [f] at16 )
+    // the window is the encoder's own length: 1500 positions × 2 (the
+    // stride-2 conv) × 160 samples of hop = 30 s at 16 kHz. Derived, not
+    // assumed.
+    : i window * . w n_ctx_enc 320
+    // no audio (or, under VAD, no speech in it) is no windows — not one
+    // window of silence. Whisper asked to transcribe silence does not
+    // return nothing; it returns "[BLANK_AUDIO]", or a sentence it made up.
+    : i nwin ? > total 0 / + total - window 1 window 0
+    : ~ b ok T
+    : ~ i wi 0
+    ~ & ok < wi nwin {
+        : i from * wi window
+        : ( Vec f ) chunk ( vec_new [f] )
+        : ~ i k 0
+        ~ & < k window < + from k total {
+            ?? ( vec_get [f] at16 + from k ) {
+                T x → { ( vec_push [f] chunk x ) }
+                F → {}
+            }
+            = k + k 1
+        }
+        : ( Vec f ) fixed ( pad_or_trim chunk window )
+        : ( Vec f ) mel ( log_mel_whisper fixed 400 160 nmel 16000 )
+        ( vec_free [f] chunk )
+        ( vec_free [f] fixed )
+        ( wh_encode w mel )
+        ( wh_prepare_cross w )
+        ( vec_free [f] mel )
+        : f woff / # f * wi window 16000.0
+        ? ( __wh_decode_window w t lang maxtok with_ts woff runs out ) {} { = ok F }
+        = wi + wi 1
+    }
+    ( vec_free [f] at16 )
+    ( vec_free [VadRun] runs )
+    ^ ok
+}
+
 @ __wh_transcribe s dir s wavpath s lang i maxtok b use_vad b with_ts → i {
     : String cfg ( __wh_path dir `config.json` )
     : String wts ( __wh_path dir `model.safetensors` )
@@ -328,28 +392,9 @@ $ `src/model.nu`
             ?? ( wav_read wavpath ) {
                 T aw → {
                     : ( Vec f ) mono ( wav_mono aw )
-                    : ~ ( Vec f ) at16 ( resample mono . aw rate 16000 )
+                    : ( Vec f ) at16 ( resample mono . aw rate 16000 )
                     ( wav_free aw )
                     ( vec_free [f] mono )
-                    // --vad: the model never sees the silence. A speech model
-                    // costs exactly the same over a silent 30 seconds as over a
-                    // spoken one, so on a recording that is mostly not speech
-                    // the whole cost is the silence. The detector keeps 200 ms
-                    // either side of every burst and bridges gaps under 400 ms,
-                    // so what is dropped is pause, not consonant.
-                    // where each surviving stretch of condensed audio sits in
-                    // the recording — empty (identity) without --vad
-                    : ( Vec VadRun ) runs ( vec_new [VadRun] )
-                    ? use_vad {
-                        : ( Vec VadSeg ) segs ( vad_segments at16 16000 ( vad_default_opts ) )
-                        // 0.5 s of the real room is kept between segments —
-                        // enough of a boundary that two sentences do not run
-                        // together, far less than the pause it replaces.
-                        : ( Vec f ) sp ( vad_extract_runs at16 segs 8000 runs )
-                        ( vec_free [f] at16 )
-                        = at16 sp
-                        ( vec_free [VadSeg] segs )
-                    } {}
                     // The model is opened BEFORE the spectrogram is computed:
                     // how many mel bands it wants is a property of the model
                     // (80 for whisper-tiny … large-v2, 128 for large-v3 and
@@ -357,46 +402,8 @@ $ `src/model.nu`
                     // large-v3 encoder a spectrogram of the wrong shape.
                     ?? ( wh_open ( string_data cfg ) ( string_data wts ) ) {
                         T w → {
-                            : i nmel . w n_mels
-                            : i total ( vec_len [f] at16 )
-                            // the window is the encoder's own length: 1500
-                            // positions × 2 (the stride-2 conv) × 160 samples of
-                            // hop = 30 s at 16 kHz. Derived, not assumed — a
-                            // model with a different context would want a
-                            // different window.
-                            : i window * . w n_ctx_enc 320
-                            // no audio (or, under --vad, no speech in it) is
-                            // no windows — not one window of silence. Whisper
-                            // asked to transcribe silence does not return
-                            // nothing; it returns "[BLANK_AUDIO]", or worse,
-                            // a sentence it made up.
-                            : i nwin ? > total 0 / + total - window 1 window 0
                             : ( Vec u ) text ( vec_new [u] )
-                            : ~ b ok T
-                            : ~ i wi 0
-                            ~ & ok < wi nwin {
-                                : i from * wi window
-                                : ( Vec f ) chunk ( vec_new [f] )
-                                : ~ i k 0
-                                ~ & < k window < + from k total {
-                                    ?? ( vec_get [f] at16 + from k ) {
-                                        T x → { ( vec_push [f] chunk x ) }
-                                        F → {}
-                                    }
-                                    = k + k 1
-                                }
-                                : ( Vec f ) fixed ( pad_or_trim chunk window )
-                                : ( Vec f ) mel ( log_mel_whisper fixed 400 160 nmel 16000 )
-                                ( vec_free [f] chunk )
-                                ( vec_free [f] fixed )
-                                ( wh_encode w mel )
-                                ( wh_prepare_cross w )
-                                ( vec_free [f] mel )
-                                : f woff / # f * wi window 16000.0
-                                ? ( __wh_decode_window w t lang maxtok with_ts woff runs text ) {} { = ok F }
-                                = wi + wi 1
-                            }
-                            ? ok {
+                            ? ( wh_run w t at16 lang maxtok use_vad with_ts text ) {
                                 : i n ( vec_len [u] text )
                                 ? > n 0 { : i _w ( write 1 # *u ( vec_data [u] text ) n ) } {}
                                 ( nurl_print `\n` )
@@ -413,8 +420,6 @@ $ `src/model.nu`
                             = rc 1
                         }
                     }
-                    ( vec_free [f] at16 )
-                    ( vec_free [VadRun] runs )
                 }
                 F e → {
                     ( nurl_eprintln ( string_data e ) )
@@ -437,7 +442,8 @@ $ `src/model.nu`
 @ main → i {
     : ArgParser p ( args_new `whisper` `Speech recognition in pure NURL (encoder stage).` )
     ( args_opt p `output` 111 `FILE` `write the encoder states here (f32 LE)` )
-    ( args_opt p `lang` 0 `LANG` `transcribe: the language token (default en)` )
+    ( args_opt p `lang` 0 `LANG` `transcribe/serve: the language token (default en)` )
+    ( args_opt p `addr` 0 `HOST:PORT` `serve: listen here (default 127.0.0.1:6543)` )
     ( args_opt p `max` 0 `N` `transcribe: stop after N tokens (default 200)` )
     ( args_flag p `vad` 0 `transcribe: skip the silence (energy VAD) before the model sees it` )
     ( args_flag p `timestamps` 0 `transcribe: "[a --> b] text" segments, in the RECORDING's timeline` )
@@ -455,14 +461,62 @@ $ `src/model.nu`
         ( args_free p )
         ^ 0
     } {}
-    ? < ( args_positional_count p ) 3 {
-        ( nurl_eprintln `usage: whisper transcribe <model-dir> <audio.wav> · whisper encode <config.json> <model.safetensors> <audio.wav> -o enc.f32` )
+    ? < ( args_positional_count p ) 2 {
+        ( nurl_eprintln `usage: whisper transcribe <model-dir> <audio.wav> · whisper serve <model-dir> --addr host:port · whisper encode <config.json> <model.safetensors> <audio.wav> -o enc.f32` )
         ( args_free p )
         ^ 2
     } {}
     : ( Vec String ) pos ( args_positionals p )
     : ~ s cmd0 ``
     ?? ( vec_get [String] pos 0 ) { T c → { = cmd0 ( string_data c ) } F → {} }
+    ? ( nurl_str_eq cmd0 `serve` ) {
+        : ~ s dir ``
+        ?? ( vec_get [String] pos 1 ) { T c → { = dir ( string_data c ) } F → {} }
+        : String lang ( args_value_or p `lang` `en` )
+        : ~ i maxtok 200
+        : String smax ( args_value_or p `max` `200` )
+        ?? ( string_to_int smax ) { T v → { = maxtok v } F _ → {} }
+        ( string_free smax )
+        // --addr host:port — the LAST colon splits, so a future [::1]:port
+        // does not shear an IPv6 address in half
+        : String addr ( args_value_or p `addr` `127.0.0.1:6543` )
+        : ~ i colon -1
+        : ~ i ai 0
+        ~ < ai ( string_len addr ) {
+            ? == 58 ( nurl_str_get ( string_data addr ) ai ) { = colon ai } {}
+            = ai + ai 1
+        }
+        : ~ i port 6543
+        : String host ( string_new )
+        ? >= colon 0 {
+            = ai 0
+            ~ < ai colon {
+                ( string_push_char host ( nurl_str_get ( string_data addr ) ai ) )
+                = ai + ai 1
+            }
+            : String ps ( string_new )
+            = ai + colon 1
+            ~ < ai ( string_len addr ) {
+                ( string_push_char ps ( nurl_str_get ( string_data addr ) ai ) )
+                = ai + ai 1
+            }
+            ?? ( string_to_int ps ) { T v → { = port v } F _ → {} }
+            ( string_free ps )
+        } {
+            ( string_push_str host ( string_data addr ) )
+        }
+        : i rc ( wh_serve dir ( string_data host ) port ( string_data lang ) maxtok ( args_present p `vad` ) ( args_present p `timestamps` ) )
+        ( string_free host )
+        ( string_free addr )
+        ( string_free lang )
+        ( args_free p )
+        ^ rc
+    } {}
+    ? < ( args_positional_count p ) 3 {
+        ( nurl_eprintln `usage: whisper transcribe <model-dir> <audio.wav> · whisper serve <model-dir> --addr host:port · whisper encode <config.json> <model.safetensors> <audio.wav> -o enc.f32` )
+        ( args_free p )
+        ^ 2
+    } {}
     ? ( nurl_str_eq cmd0 `transcribe` ) {
         : ~ s dir ``
         : ~ s awav ``

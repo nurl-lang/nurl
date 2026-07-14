@@ -761,6 +761,15 @@
 : ~ i g_impl_ret_syms 0  // Group F: method##llvm_type → ret_type string
 : ~ i g_impl_name_syms 0  // Group F: method##llvm_type → mangle_suffix string
 : ~ i g_impl_trait_syms 0  // coherence: method##llvm_type → owning trait name
+: ~ i g_fn_pos_syms 0  // duplicate-fn check: fname → "file:line" of the first
+//   `@ fname` scan registration. Two files are free to each have a private
+//   `__get`-style helper IN THEIR OWN HEADS, but the compilation unit is one
+//   flat namespace — the second definition used to survive all the way to
+//   LLVM and die there as "invalid redefinition of function '__vget'", an
+//   error with no source location in a 50k-line .ll file. Same-position
+//   re-registration is idempotent (a file imported by several importers is
+//   scanned once per importer); a DIFFERENT position is the real conflict,
+//   and it is reported with both locations while they are still known.
 : ~ i g_impl_pos_syms 0  // coherence: method##llvm_type → "file:line" of the
 //   first registration. A `$`-imported impl is scanned once per importer, so
 //   the SAME (method, type) is registered from the SAME source location more
@@ -18559,6 +18568,8 @@
                     { ( nurl_lex_advance lex )
                         ? ( is_ident_tok ( nurl_lex_type lex ) )
                         { : s fname ( nurl_lex_val lex )
+                            : s __fpos ( nurl_str_cat ( vis_current_src_file )
+                            ( nurl_str_cat `:` ( nurl_str_int ( nurl_lex_line lex ) ) ) )
                             ( nurl_lex_advance lex )
                             // Grammar v2.0: record per-fn source-file origin and (if the
                             // preceding token was `pub`) the public flag. Strict-mode for
@@ -18581,6 +18592,29 @@
                             : b gen2s & & n1s n2s == p3s TT_RBRACK
                             : i p4s ? & at_lbrack & & n1s n2s n3s ( nurl_lex_peek4_type lex ) 0
                             : b gen3s & & & n1s n2s n3s == p4s TT_RBRACK
+                            // One flat namespace: a second `@ fname` from a
+                            // DIFFERENT file:line used to survive the front end
+                            // and die inside LLVM as "invalid redefinition of
+                            // function", location-free in a 50k-line .ll — or,
+                            // for two GENERIC definitions, not die at all: the
+                            // second's source silently replaced the first's for
+                            // every later instantiation. Same-position
+                            // re-registration stays legal (a file imported by
+                            // several importers is scanned once per importer),
+                            // and a generic and a non-generic sharing a name
+                            // stays legal too — the generic only ever emits
+                            // mangled instantiations, so they never collide
+                            // (stdlib's generic vec_eq vs a local one is
+                            // existing, working code).
+                            : b __fgen & at_lbrack | | gen1s gen2s gen3s
+                            : s __fkey ? __fgen ( nurl_str_cat fname `__g` ) fname
+                            : s __fprev ( nurl_sym_get g_fn_pos_syms __fkey )
+                            ? & != 0 ( nurl_str_len __fprev ) ! ( seq __fprev __fpos )
+                            { ( die lex ( nurl_str_cat `duplicate function '@ `
+                                ( nurl_str_cat fname
+                                ( nurl_str_cat `' — already defined at ` __fprev ) ) ) )
+                            }
+                            { ( nurl_sym_def g_fn_pos_syms __fkey __fpos ) }
                             ? & at_lbrack | | gen1s gen2s gen3s
                             { ~ != ( nurl_lex_type lex ) TT_RBRACK { ( nurl_lex_advance lex ) }
                                 ( nurl_lex_advance lex )  // consume ']'
@@ -19106,6 +19140,7 @@
     = g_impl_name_syms ( nurl_sym_new )
     = g_impl_trait_syms ( nurl_sym_new )
     = g_impl_pos_syms ( nurl_sym_new )
+    = g_fn_pos_syms ( nurl_sym_new )
     = g_trait_syms ( nurl_sym_new )
     = g_res_type_syms ( nurl_sym_new )
     = g_closure_defs ( nurl_sym_new )

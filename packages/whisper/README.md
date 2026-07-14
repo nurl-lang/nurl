@@ -119,6 +119,30 @@ packages/audio) before it is printed. A subtitle at `00:00.20` for words
 spoken at `00:20` would be worse than no subtitle at all; the four lines
 above land on the recording's real clock.
 
+## `whisper serve`: the model held open
+
+```
+$ whisper serve distil-large-v3 --addr 0.0.0.0:6543
+whisper serving on http://0.0.0.0:6543 (POST /inference, GET /health)
+
+$ curl -F file=@jfk.wav http://localhost:6543/inference
+{"text":"And so, my fellow Americans, ask not what your country can do for you. Ask what you can do for your country."}
+```
+
+The point of a server is *when the model loads*. The CLI pays the whole
+bill per invocation — read 1.5 GB of safetensors, convert f16 to f32 on
+the device, compile the kernels — and only then hears the audio. The
+server pays it once, before the port opens: the same 11-second clip that
+costs the CLI 1.15 s costs a warm request **0.33 s**.
+
+The HTTP surface is whisper.cpp's server, so its clients work unchanged:
+`POST /inference` with a multipart `file` field, optional `language` and
+`response_format` (`json`|`text`) fields. Two additions, both because
+there was no reason not to: a **raw WAV body** works (`curl --data-binary`
+is not a browser form and does not have to pretend to be one), and
+per-request `vad=true` / `timestamps=true` fields override the server
+flags — one server serves both a subtitle pipeline and a bare-text one.
+
 ## The control tokens are looked up, not hardcoded
 
 A whisper prompt is four tokens — `<|startoftranscript|>`, the language,

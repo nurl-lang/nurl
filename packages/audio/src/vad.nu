@@ -43,7 +43,7 @@ $ `stdlib/std/sort.nu`
     ^ @ VadOpts { 6.0 250 400 200 }
 }
 
-@ __vget ( Vec f ) v i k → f {
+@ __vad_get ( Vec f ) v i k → f {
     ?? ( vec_get [f] v k ) { T x → { ^ x } F → { ^ 0.0 } }
 }
 
@@ -56,7 +56,7 @@ $ `stdlib/std/sort.nu`
         : ~ f e 0.0
         : ~ i k 0
         ~ < k win {
-            : f v ( __vget x + p k )
+            : f v ( __vad_get x + p k )
             = e + e * v v
             = k + k 1
         }
@@ -77,12 +77,12 @@ $ `stdlib/std/sort.nu`
     : ( Vec f ) s ( vec_new [f] )
     : ~ i k 0
     ~ < k n {
-        ( vec_push [f] s ( __vget e k ) )
+        ( vec_push [f] s ( __vad_get e k ) )
         = k + k 1
     }
     ( sort_by [f] s \ f a f b → i { ^ ? < a b -1 ? > a b 1 0 } )
     : i idx / n 10
-    : f v ( __vget s ? < idx n idx - n 1 )
+    : f v ( __vad_get s ? < idx n idx - n 1 )
     ( vec_free [f] s )
     ^ v
 }
@@ -112,7 +112,7 @@ $ `stdlib/std/sort.nu`
     : ~ i last_voiced -1
     : ~ i k 0
     ~ < k nf {
-        : b voiced > ( __vget e k ) thr
+        : b voiced > ( __vad_get e k ) thr
         ? voiced {
             ? < run_start 0 { = run_start k } {}
             = last_voiced k
@@ -213,7 +213,7 @@ $ `stdlib/std/sort.nu`
                 ( vec_push [VadRun] runs @ VadRun { ( vec_len [f] out ) from - . s end from } )
                 : ~ i i0 from
                 ~ < i0 . s end {
-                    ( vec_push [f] out ( __vget x i0 ) )
+                    ( vec_push [f] out ( __vad_get x i0 ) )
                     = i0 + i0 1
                 }
                 = prev_end . s end
