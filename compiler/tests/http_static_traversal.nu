@@ -24,6 +24,7 @@ $ `stdlib/core/vec.nu`
 $ `stdlib/ext/http_request.nu`
 $ `stdlib/ext/http_response.nu`
 $ `stdlib/ext/http_static.nu`
+$ `stdlib/ext/env.nu`
 
 // Build a borrowed request with the given path. Caller frees with
 // request_free.
@@ -105,9 +106,19 @@ $ `stdlib/ext/http_static.nu`
 }
 
 @ main → i {
-    // Unique-ish temp root under /tmp.
+    // Temp root from the environment — TMPDIR (posix), then TEMP (Windows),
+    // then /tmp. A hardcoded /tmp only works on Windows for as long as the
+    // C runtime's drive-relative mapping happens to hold, and when it stops
+    // holding the symptom is 404s three layers away.
+    : ~ String tdir ( env_var_or `TMPDIR` `` )
+    ? == ( string_len tdir ) 0 {
+        ( string_free tdir )
+        = tdir ( env_var_or `TEMP` `/tmp` )
+    } {}
     : String base ( string_new )
-    ( string_push_str base `/tmp/nurl_static_traversal_test` )
+    ( string_push_str base ( string_data tdir ) )
+    ( string_free tdir )
+    ( string_push_str base `/nurl_static_traversal_test` )
     : s b ( string_data base )
 
     : String pubdir ( string_new )
@@ -115,27 +126,27 @@ $ `stdlib/ext/http_static.nu`
     ( string_push_str pubdir `/pubdir` )
 
     : !v IoErr d1 ( dir_create_all ( string_data pubdir ) )
-    ?? d1 { T _ → {} F _ → {} }
+    ?? d1 { T _ → {} F _ → { ( nurl_print `SETUP FAIL: dir_create_all\n` ) } }
 
     // secret OUTSIDE pubdir
     : String secret_path ( string_new )
     ( string_push_str secret_path b )
     ( string_push_str secret_path `/secret.txt` )
     : !v IoErr w1 ( write_file ( string_data secret_path ) `TOP-SECRET\n` )
-    ?? w1 { T _ → {} F _ → {} }
+    ?? w1 { T _ → {} F _ → { ( nurl_print `SETUP FAIL: write secret.txt\n` ) } }
 
     // index.html + ok.txt INSIDE pubdir
     : String idx ( string_new )
     ( string_push_str idx ( string_data pubdir ) )
     ( string_push_str idx `/index.html` )
     : !v IoErr w2 ( write_file ( string_data idx ) `<h1>index</h1>\n` )
-    ?? w2 { T _ → {} F _ → {} }
+    ?? w2 { T _ → {} F _ → { ( nurl_print `SETUP FAIL: write index.html\n` ) } }
 
     : String okp ( string_new )
     ( string_push_str okp ( string_data pubdir ) )
     ( string_push_str okp `/ok.txt` )
     : !v IoErr w3 ( write_file ( string_data okp ) `ok\n` )
-    ?? w3 { T _ → {} F _ → {} }
+    ?? w3 { T _ → {} F _ → { ( nurl_print `SETUP FAIL: write ok.txt\n` ) } }
 
     : i fails ( run b )
 
