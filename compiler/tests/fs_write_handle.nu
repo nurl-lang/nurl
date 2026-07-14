@@ -13,14 +13,14 @@ $ `stdlib/ext/env.nu`
 // Temp path from the environment (TMPDIR → TEMP → /tmp) — a hardcoded /tmp
 // works on Windows only while the C runtime's drive-relative mapping holds.
 : ~ s TPATH ``
+: ~ s TDIR ``
 
-@ __fswh_path → String {
+@ __fswh_tmpdir → String {
     : ~ String tdir ( env_var_or `TMPDIR` `` )
     ? == ( string_len tdir ) 0 {
         ( string_free tdir )
         = tdir ( env_var_or `TEMP` `/tmp` )
     } {}
-    ( string_push_str tdir `/nurl_fswh_test.bin` )
     ^ tdir
 }
 
@@ -31,9 +31,11 @@ $ `stdlib/ext/env.nu`
 }
 
 @ main → i {
-    : String __tp ( __fswh_path )
-    = TPATH ( strdup ( string_data __tp ) )
-    ( string_free __tp )
+    : String __td ( __fswh_tmpdir )
+    = TDIR ( strdup ( string_data __td ) )
+    ( string_push_str __td `/nurl_fswh_test.bin` )
+    = TPATH ( strdup ( string_data __td ) )
+    ( string_free __td )
     ( file_delete TPATH )
 
     // create + two chunks, the first with an embedded NUL
@@ -119,8 +121,12 @@ $ `stdlib/ext/env.nu`
         F _ → { ( ck F `read handle` ) }
     }
 
-    // error path: writing to a directory path fails cleanly
-    ?? ( file_create `/tmp` ) {
+    // error path: writing to a directory path fails cleanly. The directory
+    // is the resolved temp root — guaranteed to EXIST as a directory on
+    // every platform, which a hardcoded /tmp is not on Windows (there
+    // file_create("/tmp") happily created a FILE named \tmp and the
+    // "rejects" check failed against a successful create).
+    ?? ( file_create TDIR ) {
         T f → {
             ( file_close f )
             ( ck F `create on a directory rejects` )

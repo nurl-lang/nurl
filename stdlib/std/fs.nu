@@ -585,6 +585,17 @@ $ `stdlib/core/posix.nu`  // open / lseek / mmap / munmap + posix_const
     ? == rc 0 { ^ @ !v IoErr { T 0 } } {}
     : i k ( errno_kind )
     ? == k 2 { ^ @ !v IoErr { T 0 } } {}
+    // mkdir can refuse an EXISTING directory with something other than
+    // EEXIST: Windows answers "C:" and other roots with EACCES, and
+    // dir_create_all walks an absolute path's every prefix — so without
+    // this, creating ANY absolute path on Windows aborted at its first
+    // component. If the path opens as a directory, it exists; that is
+    // what mkdir -p semantics promise, whatever errno the refusal wore.
+    : i dh ( nurl_dir_list_open p )
+    ? != dh 0 {
+        ( nurl_dir_list_close dh )
+        ^ @ !v IoErr { T 0 }
+    } {}
     ^ @ !v IoErr { F ( __io_err_of_kind k ) }
 }
 

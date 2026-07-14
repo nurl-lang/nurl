@@ -1170,6 +1170,33 @@ int mkstemp(char *tmpl) {
 /* (c) Unreachable on the Windows path (dir listing goes through
  * FindFirstFileA, process/signal/net through Win32) — these exist so
  * lld-link resolves the IR's declare lines. */
+/* Terminal size — the ONE ioctl the stdlib issues (term.nu, TIOCGWINSZ).
+ * 0x5413 is Linux's request value, reused here purely as the sentinel
+ * nurl_native_constant hands out below: the pair only has to agree with
+ * itself. Fills the POSIX `struct winsize` shape (four u16: row, col,
+ * xpixel, ypixel) from the console's real geometry, so term_width /
+ * term_height WORK in a Windows console rather than merely linking and
+ * falling back to $COLUMNS. Every other request is ENOSYS. */
+#define NURL_WIN_TIOCGWINSZ 0x5413
+int ioctl(int fd, long long req, void *argp) {
+    if (req == NURL_WIN_TIOCGWINSZ && argp) {
+        HANDLE h = (HANDLE)_get_osfhandle(fd);
+        CONSOLE_SCREEN_BUFFER_INFO bi;
+        if (h != INVALID_HANDLE_VALUE && GetConsoleScreenBufferInfo(h, &bi)) {
+            unsigned short *ws = (unsigned short *)argp;
+            ws[0] = (unsigned short)(bi.srWindow.Bottom - bi.srWindow.Top + 1);
+            ws[1] = (unsigned short)(bi.srWindow.Right - bi.srWindow.Left + 1);
+            ws[2] = 0;
+            ws[3] = 0;
+            return 0;
+        }
+        errno = ENOTTY;
+        return -1;
+    }
+    (void)fd; (void)argp;
+    errno = ENOSYS;
+    return -1;
+}
 void *opendir(const char *path)            { (void)path; errno = ENOSYS; return NULL; }
 void *readdir(void *d)                     { (void)d; errno = ENOSYS; return NULL; }
 int   closedir(void *d)                    { (void)d; errno = ENOSYS; return -1; }
@@ -1328,6 +1355,11 @@ long long nurl_native_constant(const char *name) {
      * (0x5413 Linux, 0x40087468 BSD/macOS), so surface the real one. */
     if (strcmp(name, "TIOCGWINSZ")      == 0) return (long long)TIOCGWINSZ;
 #  endif
+#endif
+#if defined(_WIN32) && !defined(__MINGW32__)
+    /* The MSVC path's ioctl shim (above) answers this request with
+     * GetConsoleScreenBufferInfo — surface the sentinel it matches on. */
+    if (strcmp(name, "TIOCGWINSZ")      == 0) return 0x5413;
 #endif
     (void)name;
     return -1;
