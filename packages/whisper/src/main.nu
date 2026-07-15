@@ -601,6 +601,7 @@ $ `src/serve.nu`
     ( args_opt p `key` 0 `FILE` `serve: TLS private key PEM` )
     ( args_flag p `tls` 0 `serve: mint a self-signed certificate on the fly (the microphone needs a secure context)` )
     ( args_opt p `nospeech` 0 `P` `drop a window when the model itself is ≥P sure it holds no speech (default 0.6; 1 disables)` )
+    ( args_opt p `token` 0 `TOKEN` `serve: require this bearer token (or set WHISPER_TOKEN); empty = open` )
     ( args_opt p `max` 0 `N` `transcribe: stop after N tokens (default 200)` )
     ( args_flag p `vad` 0 `transcribe: skip the silence (energy VAD) before the model sees it` )
     ( args_flag p `timestamps` 0 `transcribe: "[a --> b] text" segments, in the RECORDING's timeline` )
@@ -686,7 +687,23 @@ $ `src/serve.nu`
             = keyf kpath
             ( nurl_eprintln `whisper: self-signed TLS minted — the browser will warn once; accept it and the microphone works` )
         } {}
-        : i rc ( wh_serve dir ( string_data host ) port ( string_data lang ) maxtok ( args_present p `vad` ) ( args_present p `timestamps` ) ( string_data certf ) ( string_data keyf ) )
+        // Access token: --token wins, else $WHISPER_TOKEN. The flag is
+        // convenient; the env var is the one to use on a shared machine,
+        // where `--token secret` would sit in `ps` output for anyone to read.
+        : ~ String token ( args_value_or p `token` `` )
+        ? == ( string_len token ) 0 {
+            ( string_free token )
+            = token ( env_var_or `WHISPER_TOKEN` `` )
+        } {}
+        // Bind to something other than loopback with no token, and the
+        // server is open to the whole network. That is a real deployment
+        // (a trusted LAN, a container behind a gateway) but it should be a
+        // CHOICE, so it is said out loud.
+        ? & == ( string_len token ) 0 & != 0 ( nurl_str_len ( string_data host ) ) == 0 ( nurl_str_eq ( string_data host ) `127.0.0.1` ) {
+            ( nurl_eprintln `whisper: WARNING — serving on a non-loopback address with NO token; anyone who can reach this port can use the model. Pass --token or set WHISPER_TOKEN.` )
+        } {}
+        : i rc ( wh_serve dir ( string_data host ) port ( string_data lang ) maxtok ( args_present p `vad` ) ( args_present p `timestamps` ) ( string_data certf ) ( string_data keyf ) ( string_data token ) )
+        ( string_free token )
         ( string_free certf )
         ( string_free keyf )
         ( string_free host )

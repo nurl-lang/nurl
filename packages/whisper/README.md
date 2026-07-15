@@ -117,6 +117,16 @@ whisper's window is 30 s, and a lecture has no obligation to pause.
 microphone capture, even on a LAN. `--cert FILE --key FILE` take real
 PEMs; `wss://` works transparently.
 
+**Access control**: by default the server is open, which is right for a
+loopback bind. Give it a token — `--token TOKEN` or the `WHISPER_TOKEN`
+environment variable (prefer the env var on a shared machine, where a
+flag shows up in `ps`) — and every request must present it as
+`Authorization: Bearer TOKEN` or `?token=TOKEN` in the query. `/health`
+and the test page stay open (the page has a field to paste the token
+into, remembered per browser); `/inference` and the WebSocket require it.
+Binding to a non-loopback address with no token prints a warning, because
+it should be a choice, not an accident.
+
 **`GET /health`** reports the model shape and request count as JSON.
 
 ## How it is verified

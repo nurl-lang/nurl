@@ -47,6 +47,85 @@ $ `deps/http/src/http.nu`
 : ~ b g_srv_ts F
 : ~ i g_srv_max 0
 : ~ f g_srv_nospeech 0.6
+: ~ s g_srv_token ``  // empty = open server (loopback default)
+
+// Constant-time-ish token compare: every byte of the CONFIGURED token is
+// examined, and the length mismatch folds in, so response timing does not
+// leak how far a guess matched. (Not a defence against a local attacker
+// with a cycle counter — it defends the realistic case, a token guessed
+// over the network.)
+@ __srv_tok_eq s got s want → b {
+    : i lg ( nurl_str_len got )
+    : i lw ( nurl_str_len want )
+    : ~ i diff ^^ lg lw
+    : ~ i k 0
+    ~ < k lw {
+        : i cw ( nurl_str_get want k )
+        : i cg ? < k lg ( nurl_str_get got k ) 0
+        = diff | diff ^^ cw cg
+        = k + k 1
+    }
+    ^ == diff 0
+}
+
+// `token=` out of a raw query string ("a=1&token=xyz").
+@ __srv_query_token s q → String {
+    : String out ( string_new )
+    : i n ( nurl_str_len q )
+    : ~ i k 0
+    ~ < k n {
+        ? | == k 0 == ( nurl_str_get q - k 1 ) 38 {
+            ? & & & & & <= + k 6 n == ( nurl_str_get q k ) 116 == ( nurl_str_get q + k 1 ) 111
+            == ( nurl_str_get q + k 2 ) 107 == ( nurl_str_get q + k 3 ) 101 == ( nurl_str_get q + k 4 ) 110 {
+                ? == ( nurl_str_get q + k 5 ) 61 {
+                    : ~ i j + k 6
+                    ~ & < j n != ( nurl_str_get q j ) 38 {
+                        ( string_push_char out ( nurl_str_get q j ) )
+                        = j + j 1
+                    }
+                    ^ out
+                } {}
+            } {}
+        } {}
+        = k + k 1
+    }
+    ^ out
+}
+
+// Is this request allowed? No token configured → always. Otherwise the
+// token must arrive as `Authorization: Bearer <t>` (HTTP clients) or
+// `?token=<t>` in the query (a browser cannot set headers on a WebSocket
+// upgrade or an <img>/fetch to a bare URL, so the query form is the one
+// that works everywhere).
+@ __srv_authed HttpRequest req → b {
+    ? == ( nurl_str_len g_srv_token ) 0 { ^ T } {}
+    : ~ b ok F
+    ?? ( header_get . req headers `authorization` ) {
+        T hv → {
+            : s h ( string_data hv )
+            ? & > ( nurl_str_len h ) 7 != 0 ( nurl_str_starts h `Bearer ` ) {
+                ? ( __srv_tok_eq ( nurl_str_slice h 7 - ( nurl_str_len h ) 7 ) g_srv_token ) { = ok T } {}
+            } {}
+            ( string_free hv )
+        }
+        F → {}
+    }
+    ? ok { ^ T } {}
+    : String qt ( __srv_query_token ( string_data . req query ) )
+    ? > ( string_len qt ) 0 {
+        ? ( __srv_tok_eq ( string_data qt ) g_srv_token ) { = ok T } {}
+    } {}
+    ( string_free qt )
+    ^ ok
+}
+
+@ __srv_401 → HttpResponse {
+    : Json o ( json_obj_new )
+    : b _s ( json_obj_set o `error` ( json_str_lit `unauthorized — pass the token as 'Authorization: Bearer <token>' or '?token=<token>'` ) )
+    : HttpResponse r ( response_json 401 o )
+    ( json_free o )
+    ^ r
+}
 
 // The bytes of the multipart part called `name`, copied — or an empty vec.
 @ __srv_part_bytes ( Vec MultipartPart ) parts s name → ( Vec u ) {
@@ -156,6 +235,7 @@ $ `deps/http/src/http.nu`
 
 // POST /inference — the whisper.cpp endpoint.
 @ __srv_inference HttpRequest req → HttpResponse {
+    ? ( __srv_authed req ) {} { ^ ( __srv_401 ) }
     ? == g_srv_w 0 { ^ ( __srv_err 503 `no model loaded` ) } {}
     = g_srv_reqs + g_srv_reqs 1
 
@@ -433,6 +513,10 @@ $ `deps/http/src/http.nu`
 // served to completion; F = not an upgrade, fall through to the router.
 @ __srv_ws_hook TcpConn c HttpRequest rq → b {
     ? ( ws_is_upgrade rq ) {} { ^ F }
+    // An unauthorized upgrade falls through to the ordinary handler: the
+    // client asked for a 101 and gets a 401 page, which every WebSocket
+    // implementation reports as a failed handshake.
+    ? ( __srv_authed rq ) {} { ^ F }
     ?? ( ws_perform_handshake c rq ) {
         T _ → {}
         F _ → { ^ T }
@@ -474,18 +558,38 @@ $ `deps/http/src/http.nu`
 // both containers. Owns neither; the caller closes them.
 // cert/key: PEM paths — both set = HTTPS (and wss: the TcpConn's TLS is
 // transparent to the WebSocket layer). Both empty = plain HTTP.
-@ __wh_serve_run * Whisper w * Tok t s host i port s lang i maxtok b use_vad b with_ts s cert s key → i {
+@ __wh_serve_run * Whisper w * Tok t s host i port s lang i maxtok b use_vad b with_ts s cert s key s token → i {
     = g_srv_w # i w
     = g_srv_t # i t
     = g_srv_lang ( strdup lang )
     = g_srv_vad use_vad
     = g_srv_ts with_ts
     = g_srv_max maxtok
+    ? > ( nurl_str_len g_srv_token ) 0 { ( nurl_free g_srv_token ) } {}
+    = g_srv_token ( strdup token )
 
     : *HttpApp a ( http_app_new )
+    // One inference runs one model on one GPU; a second concurrent request
+    // would serialise on the model mutex anyway, so a single worker is the
+    // honest shape (a WebSocket stream holds its worker for the connection's
+    // life — that is the streaming contract). Production hardening layered
+    // on top: bounded bodies, a header cap, and per-request deadlines so a
+    // slow or hostile client cannot pin the one worker forever.
     ( http_app_workers a 1 )
     // a WAV is ~2 MB/min at 16 kHz pcm16; an hour ~115 MB
     ( http_app_body_max a 268435456 )
+    // a request head past 64 KB is not a browser; refuse it before the body
+    ( http_app_head_max a 65536 )
+    // slowloris: a client that dribbles a request head past 30 s is dropped
+    ( http_app_idle_ms a 30000 )
+    // a whole request (upload + transcription) that outruns 10 minutes is a
+    // stuck client or an hour of audio nobody is waiting for — reclaim the
+    // worker. (0 would disable it; a real hour-long file transcribes in
+    // seconds, so this only ever fires on a wedged connection.)
+    ( http_app_request_timeout a 600000 )
+    // one malformed request must never take the server down with it: a
+    // handler panic becomes a 500, and the next request is served.
+    ( http_app_recover a T )
     ( http_app_stream a \ TcpConn sc HttpRequest srq → b { ^ ( __srv_ws_hook sc srq ) } )
     ( http_app_post a `/inference` \ HttpRequest rq Params ps → HttpResponse { ^ ( __srv_inference rq ) } )
     ( http_app_get a `/health` \ HttpRequest rq Params ps → HttpResponse { ^ ( __srv_health rq ) } )
@@ -516,7 +620,7 @@ $ `deps/http/src/http.nu`
 }
 
 // Load the model, open the port, serve until stopped.
-@ wh_serve s dir s host i port s lang i maxtok b use_vad b with_ts s cert s key → i {
+@ wh_serve s dir s host i port s lang i maxtok b use_vad b with_ts s cert s key s token → i {
     : String cfg ( _wh_path dir `config.json` )
     : String wts ( _wh_path dir `model.safetensors` )
     : String tjs ( _wh_path dir `tokenizer.json` )
@@ -529,7 +633,7 @@ $ `deps/http/src/http.nu`
             T w → {
                 ?? ( gg_build_tok # *Gg . w gg ) {
                     T t → {
-                        : i rc2 ( __wh_serve_run w t host port lang maxtok use_vad with_ts cert key )
+                        : i rc2 ( __wh_serve_run w t host port lang maxtok use_vad with_ts cert key token )
                         ( tok_free t )
                         ( wh_close w )
                         ^ rc2
@@ -554,7 +658,7 @@ $ `deps/http/src/http.nu`
         T t → {
             ?? ( wh_open ( string_data cfg ) ( string_data wts ) ) {
                 T w → {
-                    : i rc2 ( __wh_serve_run w t host port lang maxtok use_vad with_ts cert key )
+                    : i rc2 ( __wh_serve_run w t host port lang maxtok use_vad with_ts cert key token )
                     = rc rc2
                     ( wh_close w )
                 }
