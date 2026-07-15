@@ -397,6 +397,43 @@ $ `deps/http/src/http.nu`
     ^ T
 }
 
+// The server proper, once a model and tokenizer are open — one body for
+// both containers. Owns neither; the caller closes them.
+@ __wh_serve_run * Whisper w * Tok t s host i port s lang i maxtok b use_vad b with_ts → i {
+    = g_srv_w # i w
+    = g_srv_t # i t
+    = g_srv_lang ( strdup lang )
+    = g_srv_vad use_vad
+    = g_srv_ts with_ts
+    = g_srv_max maxtok
+
+    : *HttpApp a ( http_app_new )
+    ( http_app_workers a 1 )
+    // a WAV is ~2 MB/min at 16 kHz pcm16; an hour ~115 MB
+    ( http_app_body_max a 268435456 )
+    ( http_app_stream a \ TcpConn sc HttpRequest srq → b { ^ ( __srv_ws_hook sc srq ) } )
+    ( http_app_post a `/inference` \ HttpRequest rq Params ps → HttpResponse { ^ ( __srv_inference rq ) } )
+    ( http_app_get a `/health` \ HttpRequest rq Params ps → HttpResponse { ^ ( __srv_health rq ) } )
+    ( http_app_get a `/` \ HttpRequest rq Params ps → HttpResponse { ^ ( __srv_health rq ) } )
+
+    : String msg ( string_from `whisper serving on http://` )
+    ( string_push_str msg host )
+    ( string_push_char msg 58 )
+    ( string_push_int msg port )
+    ( string_push_str msg ` (POST /inference, GET /health, WS: stream audio)` )
+    ( nurl_print ( string_data msg ) )
+    ( nurl_print `\n` )
+    ( string_free msg )
+
+    : i rc ( http_app_listen a host port )
+
+    = g_srv_w 0
+    = g_srv_t 0
+    ( nurl_free g_srv_lang )
+    = g_srv_lang ``
+    ^ rc
+}
+
 // Load the model, open the port, serve until stopped.
 @ wh_serve s dir s host i port s lang i maxtok b use_vad b with_ts → i {
     : String cfg ( _wh_path dir `config.json` )
@@ -404,42 +441,40 @@ $ `deps/http/src/http.nu`
     : String tjs ( _wh_path dir `tokenizer.json` )
     : ~ i rc 0
 
+    // a whisper.cpp ggml container serves as itself: one file, no sidecars
+    ? ( __wh_is_ggml dir ) {
+        ( string_free cfg ) ( string_free wts ) ( string_free tjs )
+        ?? ( wh_open_ggml dir ) {
+            T w → {
+                ?? ( gg_build_tok # *Gg . w gg ) {
+                    T t → {
+                        : i rc2 ( __wh_serve_run w t host port lang maxtok use_vad with_ts )
+                        ( tok_free t )
+                        ( wh_close w )
+                        ^ rc2
+                    }
+                    F e → {
+                        ( nurl_eprintln ( string_data e ) )
+                        ( string_free e )
+                        ( wh_close w )
+                        ^ 1
+                    }
+                }
+            }
+            F e → {
+                ( nurl_eprintln ( string_data e ) )
+                ( string_free e )
+                ^ 1
+            }
+        }
+    } {}
     : TokSpec spec @ TokSpec { TOK_BPE PRE_DEFAULT -1 -1 -1 F F F }
     ?? ( tok_from_tokenizer_json ( string_data tjs ) spec ) {
         T t → {
             ?? ( wh_open ( string_data cfg ) ( string_data wts ) ) {
                 T w → {
-                    = g_srv_w # i w
-                    = g_srv_t # i t
-                    = g_srv_lang ( strdup lang )
-                    = g_srv_vad use_vad
-                    = g_srv_ts with_ts
-                    = g_srv_max maxtok
-
-                    : *HttpApp a ( http_app_new )
-                    ( http_app_workers a 1 )
-                    // a WAV is ~2 MB/min at 16 kHz pcm16; an hour ~115 MB
-                    ( http_app_body_max a 268435456 )
-                    ( http_app_stream a \ TcpConn sc HttpRequest srq → b { ^ ( __srv_ws_hook sc srq ) } )
-                    ( http_app_post a `/inference` \ HttpRequest rq Params ps → HttpResponse { ^ ( __srv_inference rq ) } )
-                    ( http_app_get a `/health` \ HttpRequest rq Params ps → HttpResponse { ^ ( __srv_health rq ) } )
-                    ( http_app_get a `/` \ HttpRequest rq Params ps → HttpResponse { ^ ( __srv_health rq ) } )
-
-                    : String msg ( string_from `whisper serving on http://` )
-                    ( string_push_str msg host )
-                    ( string_push_char msg 58 )
-                    ( string_push_int msg port )
-                    ( string_push_str msg ` (POST /inference, GET /health, WS: stream audio)` )
-                    ( nurl_print ( string_data msg ) )
-                    ( nurl_print `\n` )
-                    ( string_free msg )
-
-                    = rc ( http_app_listen a host port )
-
-                    = g_srv_w 0
-                    = g_srv_t 0
-                    ( nurl_free g_srv_lang )
-                    = g_srv_lang ``
+                    : i rc2 ( __wh_serve_run w t host port lang maxtok use_vad with_ts )
+                    = rc rc2
                     ( wh_close w )
                 }
                 F e → {

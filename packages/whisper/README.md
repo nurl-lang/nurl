@@ -186,6 +186,29 @@ matvec, so decoding got slightly faster too. A mixed-precision checkpoint
 (none exists in practice) falls back to the f32 expansion — one probe, one
 predicate, used by both the probe and the upload so they cannot disagree.
 
+## whisper.cpp's ggml models load directly
+
+```
+$ whisper transcribe ggml-large-v3.bin meeting.wav --vad --timestamps
+```
+
+The `ggml-*.bin` files ggerganov ships are how whisper models actually move
+between machines, and one is fully self-contained: hyperparameters, the
+vocabulary and every tensor in a single file. Point any command at one —
+`transcribe`, `serve`, the WebSocket stream — and it just works, with the
+same transcript word-for-word as the HF checkpoint (they are the same
+weights).
+
+Two translations happen at load, and only at load: whisper.cpp keeps
+OpenAI's tensor names (`encoder.blocks.0.attn.query.weight`), which are
+mapped to the HF names the model layer speaks; and the special tokens,
+which the ggml vocabulary does not carry as text at all — whisper.cpp
+derives their ids positionally — are synthesized with their HF spellings
+(`<|startoftranscript|>`, `<|fi|>`, `<|0.00|>` …) at those positions, so
+name-based lookup, the timestamp rules and decoding run unchanged. ggml
+matrices are f16 even in the smallest file, so they ride the half mode
+natively. Quantised ggml files are refused with a clear message, for now.
+
 ## The control tokens are looked up, not hardcoded
 
 A whisper prompt is four tokens — `<|startoftranscript|>`, the language,

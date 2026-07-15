@@ -22,6 +22,7 @@ $ `deps/audio/src/resample.nu`
 $ `deps/audio/src/vad.nu`
 $ `deps/tokenizer/src/tokenizer.nu`
 $ `deps/tokenizer/src/hf.nu`
+$ `src/ggml.nu`
 $ `src/model.nu`
 $ `src/serve.nu`
 
@@ -45,6 +46,37 @@ $ `src/serve.nu`
     }
     ( vec_free [u] d )
     ^ rc
+}
+
+// Is `model` a whisper.cpp ggml container? Decided by the file's own first
+// bytes ('lmgg' on disk), not the extension — a renamed file still works and
+// a directory never opens as a file.
+@ __wh_is_ggml s model → b {
+    ?? ( file_open model ) {
+        T f → {
+            : ~ b yes F
+            ?? ( file_read_at f 0 4 ) {
+                T h → {
+                    ? == ( vec_len [u] h ) 4 {
+                        : ~ i b0 0
+                        : ~ i b1 0
+                        : ~ i b2 0
+                        : ~ i b3 0
+                        ?? ( vec_get [u] h 0 ) { T x0 → { = b0 # i x0 } F → {} }
+                        ?? ( vec_get [u] h 1 ) { T x1 → { = b1 # i x1 } F → {} }
+                        ?? ( vec_get [u] h 2 ) { T x2 → { = b2 # i x2 } F → {} }
+                        ?? ( vec_get [u] h 3 ) { T x3 → { = b3 # i x3 } F → {} }
+                        = yes & & & == b0 108 == b1 109 == b2 103 == b3 103
+                    } {}
+                    ( vec_free [u] h )
+                }
+                F _ → {}
+            }
+            ( file_close f )
+            ^ yes
+        }
+        F _ → { ^ F }
+    }
 }
 
 // <dir>/<name>
@@ -380,7 +412,63 @@ $ `src/serve.nu`
     ^ ok
 }
 
+// The shared tail once the model and tokenizer are open: read the audio,
+// resample, run, print. Owns neither w nor t.
+@ __wh_transcribe_run * Whisper w * Tok t s wavpath s lang i maxtok b use_vad b with_ts → i {
+    : ~ i rc 0
+    ?? ( wav_read wavpath ) {
+        T aw → {
+            : ( Vec f ) mono ( wav_mono aw )
+            : ( Vec f ) at16 ( resample mono . aw rate 16000 )
+            ( wav_free aw )
+            ( vec_free [f] mono )
+            : ( Vec u ) text ( vec_new [u] )
+            ? ( wh_run w t at16 lang maxtok use_vad with_ts text ) {
+                : i n ( vec_len [u] text )
+                ? > n 0 { : i _w ( write 1 # *u ( vec_data [u] text ) n ) } {}
+                ( nurl_print `\n` )
+            } {
+                ( nurl_eprintln `whisper: the vocabulary has no control tokens (is this a whisper model?)` )
+                = rc 1
+            }
+            ( vec_free [u] text )
+        }
+        F e → {
+            ( nurl_eprintln ( string_data e ) )
+            ( string_free e )
+            = rc 1
+        }
+    }
+    ^ rc
+}
+
 @ __wh_transcribe s dir s wavpath s lang i maxtok b use_vad b with_ts → i {
+    // whisper.cpp's ggml container: hyperparameters, tokenizer and weights in
+    // ONE file — no config.json or tokenizer.json beside it
+    ? ( __wh_is_ggml dir ) {
+        ?? ( wh_open_ggml dir ) {
+            T w → {
+                : ~ i rc2 1
+                ?? ( gg_build_tok # *Gg . w gg ) {
+                    T t → {
+                        = rc2 ( __wh_transcribe_run w t wavpath lang maxtok use_vad with_ts )
+                        ( tok_free t )
+                    }
+                    F e → {
+                        ( nurl_eprintln ( string_data e ) )
+                        ( string_free e )
+                    }
+                }
+                ( wh_close w )
+                ^ rc2
+            }
+            F e → {
+                ( nurl_eprintln ( string_data e ) )
+                ( string_free e )
+                ^ 1
+            }
+        }
+    } {}
     : String cfg ( _wh_path dir `config.json` )
     : String wts ( _wh_path dir `model.safetensors` )
     : String tjs ( _wh_path dir `tokenizer.json` )
