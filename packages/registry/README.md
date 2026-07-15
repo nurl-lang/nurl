@@ -41,10 +41,13 @@ Write path (Bearer token):
 
 Plus `GET /api/v1/search?q=` and `GET /api/v1/stats` (JSON), and a
 server-rendered UI: `/` (catalog + search), `/packages/<name>` (owner,
-repository from the tarball's manifest, install snippet, versions,
-dependencies, and the README rendered straight out of the published
-tarball — relative image links rewritten onto the version-pinned
-`/files/<name>/<v>/<path>` asset route, images only, CSP-sandboxed).
+repository from the tarball's manifest, install snippet, versions with
+their publish dates, dependencies, and the README rendered straight out
+of the published tarball — relative image links rewritten onto the
+version-pinned `/files/<name>/<v>/<path>` asset route, images only,
+CSP-sandboxed), and `/packages/<name>/<version>/files` (every file in
+the published tarball with its size — immutable-cacheable, since
+versions are immutable).
 
 ## Design
 

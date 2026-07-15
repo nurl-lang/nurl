@@ -8,6 +8,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Registry package pages show publish dates and a per-version file
+  listing.** Each version row on `/packages/<name>` carries its publish
+  date — read from the authoritative server-side `published_at` recorded
+  at publish since the registry's first day, never from client-controlled
+  tar/gzip timestamps — and links to a new
+  `/packages/<name>/<version>/files` page listing every file in the
+  published tarball with its size (USTAR-prefix and GNU-longname paths
+  reconstructed; immutable-cacheable, since versions are immutable). In
+  both registries: the live Cloudflare Worker and `packages/registry`
+  0.2.0.
+
+### Fixed
+
+- **A diagnostic inside a `?`/`??` arm no longer poisons the rest of a
+  multi-error compile.** `die`'s recovery panic unwinds out of the open
+  function/arm symbol-table scopes; the per-declaration recovery frame now
+  pops those leaked scopes before continuing. Previously gen_match's
+  synthetic `__matchtmp<n>__res_nurl_T` payload keys survived, and — the
+  label counter that numbers them resetting per function — a later
+  same-numbered option match typed its payload with the dead declaration's
+  struct, drowning the one real error under phantom cross-file type errors
+  in modules compiled much later (`diag_match_arm_recover` pins the fix).
+- **`: i pub …` explains itself.** Naming a let binding `pub` now says the
+  word is a reserved keyword (the visibility prefix on top-level
+  declarations) instead of the bare "expected variable name in let".
+
 ## [0.15.0] — 2026-07-14
 
 The **joins and guards** release: one new language behaviour, three classes

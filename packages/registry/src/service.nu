@@ -636,6 +636,122 @@ $ `src/pages.nu`
     }
 }
 
+// "512 B" / "1.2 KB" / "3.4 MB" — display size, integer math only.
+@ __reg_fmt_size i n → String {
+    ? < n 1024 {
+        : String out ( string_from ( nurl_str_int n ) )
+        ( string_push_str out ` B` )
+        ^ out
+    } {}
+    : ~ i tenths / * n 10 1024
+    : ~ s unit ` KB`
+    ? >= n * 1024 1024 {
+        = tenths / * n 10 * 1024 1024
+        = unit ` MB`
+    } {}
+    : String out ( string_from ( nurl_str_int / tenths 10 ) )
+    ( string_push_char out 46 )  // '.'
+    ( string_push_str out ( nurl_str_int % tenths 10 ) )
+    ( string_push_str out unit )
+    ^ out
+}
+
+// GET /packages/:name/:version/files — every file in the published
+// tarball (path + size). Version-pinned and versions are immutable, so
+// the page is immutable-cacheable.
+@ __reg_h_pkg_files HttpRequest req Params p → HttpResponse {
+    : ~ String rawname ( string_new )
+    ?? ( params_get p `name` ) {
+        T v → { ( string_free rawname ) = rawname v }
+        F → {}
+    }
+    : String name ( string_to_lower rawname )
+    ( string_free rawname )
+    : ~ String version ( string_new )
+    ?? ( params_get p `version` ) {
+        T v → { ( string_free version ) = version v }
+        F → {}
+    }
+    ? | ! ( reg_name_valid ( string_data name ) ) ! ( reg_version_valid ( string_data version ) ) {
+        : HttpResponse r ( __reg_notfound_page ( string_data name ) )
+        ( string_free name )
+        ( string_free version )
+        ^ r
+    } {}
+    ?? ( reg_db_open g_reg_dbpath ) {
+        F _ → {
+            ( string_free name )
+            ( string_free version )
+            ^ ( __reg_err 500 `db_unavailable` )
+        }
+        T db → {
+            ? ! ( reg_db_version_exists db ( string_data name ) ( string_data version ) ) {
+                : HttpResponse r ( __reg_notfound_page ( string_data name ) )
+                ( string_free name )
+                ( string_free version )
+                ^ r
+            } {}
+            ^ ( __reg_pkg_files_page name version )
+        }
+    }
+}
+
+// The files page body, once the version is known to exist. Owns (and
+// frees) the validated name/version Strings.
+@ __reg_pkg_files_page String name String version → HttpResponse {
+    : ( Vec u ) gz ( reg_tarball_read g_reg_data ( string_data name ) ( string_data version ) )
+    ? == ( vec_len [u] gz ) 0 {
+        ( vec_free [u] gz )
+        : HttpResponse r ( __reg_notfound_page ( string_data name ) )
+        ( string_free name )
+        ( string_free version )
+        ^ r
+    } {}
+    : Json files ( reg_targz_list gz )
+    ( vec_free [u] gz )
+    // Pre-format sizes for display; count + total while walking.
+    : ~ i total 0
+    : i nf ( json_arr_len files )
+    : ~ i k 0
+    ~ < k nf {
+        ?? ( json_arr_get files k ) {
+            T row → {
+                : ~ i sz 0
+                ?? ( json_obj_get row `size` ) {
+                    T sj → { = sz ( json_as_int sj ) }
+                    F → {}
+                }
+                = total + total sz
+                : String hs ( __reg_fmt_size sz )
+                : b _h ( json_obj_set row `size` ( json_str_lit ( string_data hs ) ) )
+                ( string_free hs )
+            }
+            F → {}
+        }
+        = k + k 1
+    }
+    : Json ctx ( json_obj_new )
+    : b _n ( json_obj_set ctx `name` ( json_str_lit ( string_data name ) ) )
+    : b _v ( json_obj_set ctx `version` ( json_str_lit ( string_data version ) ) )
+    : b _f ( json_obj_set ctx `files` files )
+    : String tot ( __reg_fmt_size total )
+    : b _t ( json_obj_set ctx `total` ( json_str_lit ( string_data tot ) ) )
+    ( string_free tot )
+    : String title ( string_from ( string_data name ) )
+    ( string_push_char title 32 )
+    ( string_push_str title ( string_data version ) )
+    ( string_push_str title ` — files` )
+    : b _ti ( json_obj_set ctx `title` ( json_str_lit ( string_data title ) ) )
+    ( string_free title )
+    ( string_free name )
+    ( string_free version )
+    : String html ( reg_page_files ctx )
+    ( json_free ctx )
+    : HttpResponse r ( __reg_html_resp 200 html )
+    ( response_set_header r `Cache-Control` `public, max-age=86400, immutable` )
+    ^ r
+}
+
 // Image MIME by lowercased extension; "" = not an allowed asset type.
 // (Images only: keeps the asset route from doubling as a file host.)
 @ __reg_asset_mime s path → s {
@@ -955,6 +1071,7 @@ $ `src/pages.nu`
     ( router_get r `/index/:file` \ HttpRequest req Params p → HttpResponse { ^ ( __reg_h_index req p ) } )
     ( router_get r `/pkgs/:name/:file` \ HttpRequest req Params p → HttpResponse { ^ ( __reg_h_tarball req p ) } )
     ( router_get r `/packages/:name` \ HttpRequest req Params p → HttpResponse { ^ ( __reg_h_pkg_detail req p ) } )
+    ( router_get r `/packages/:name/:version/files` \ HttpRequest req Params p → HttpResponse { ^ ( __reg_h_pkg_files req p ) } )
     ( router_get r `/files/:name/:version/*rest` \ HttpRequest req Params p → HttpResponse { ^ ( __reg_h_file req p ) } )
     ( router_get r `/api/v1/search` \ HttpRequest req Params p → HttpResponse { ^ ( __reg_h_search req p ) } )
     ( router_get r `/api/v1/stats` \ HttpRequest req Params p → HttpResponse { ^ ( __reg_h_stats req p ) } )

@@ -22,7 +22,7 @@
 // (miniflare simulates R2 + D1) — no Cloudflare account needed to test.
 
 import { renderMarkdown } from "./markdown.ts";
-import { extractReadme, extractFile, extractManifestRepository, normalizeRelPath } from "./readme.ts";
+import { extractReadme, extractFile, extractManifestRepository, normalizeRelPath, listTarFiles } from "./readme.ts";
 
 export interface Env {
   REG_BUCKET: R2Bucket;
@@ -467,7 +467,9 @@ const PAGE_STYLE =
   `.site-head .wm b{color:#0b62d6}` +
   `.site-head .spacer{flex:1}` +
   `.site-head .home{font-size:.85rem;color:#666;font-weight:400;text-decoration:none;transition:color .15s}` +
-  `.site-head .home:hover{color:#0b62d6}`;
+  `.site-head .home:hover{color:#0b62d6}` +
+  `.files{border-collapse:collapse;width:100%}` +
+  `.files td{border-bottom:1px solid #eee;padding:.25rem .5rem}`;
 
 // Branded header injected on every registry page. The mark is served from
 // the main site (nurl-lang.org) and sits on a dark chip so the neon reads
@@ -545,11 +547,11 @@ async function handlePackageDetail(env: Env, name: string): Promise<Response> {
       WHERE p.name = ?`,
   ).bind(name).first<{ login: string }>();
   const pubRows = await env.REG_DB.prepare(
-    `SELECT v.version AS version, u.login AS login
+    `SELECT v.version AS version, u.login AS login, v.published_at AS published_at
        FROM versions v JOIN users u ON u.id = v.published_by
       WHERE v.name = ?`,
-  ).bind(name).all<{ version: string; login: string }>();
-  const pubBy = new Map((pubRows.results ?? []).map((r) => [r.version, r.login]));
+  ).bind(name).all<{ version: string; login: string; published_at: number }>();
+  const pubBy = new Map((pubRows.results ?? []).map((r) => [r.version, r]));
   const ghLink = (login: string) =>
     `<a href="https://github.com/${esc(login)}">@${esc(login)}</a>`;
   const ownerHtml = ownerRow
@@ -558,9 +560,14 @@ async function handlePackageDetail(env: Env, name: string): Promise<Response> {
 
   const versionsHtml = newestFirst.map((v) => {
     const pub = pubBy.get(v.version);
+    // published_at is epoch MILLISECONDS (server clock at publish; in the
+    // schema since day one, so every version has an authoritative date).
+    const date = pub ? new Date(pub.published_at).toISOString().slice(0, 10) : "";
     return `<li><code>${esc(v.version)}</code>` +
       (v.yanked ? ` <span style="color:#b00">(yanked)</span>` : "") +
-      (pub ? ` <span style="color:#999">· ${ghLink(pub)}</span>` : "") +
+      (date ? ` <span style="color:#999">· ${date}</span>` : "") +
+      (pub ? ` <span style="color:#999">· ${ghLink(pub.login)}</span>` : "") +
+      ` <span style="color:#999">· <a href="/packages/${esc(name)}/${esc(v.version)}/files">files</a></span>` +
       `</li>`;
   }).join("");
   const depsHtml = latest && latest.deps.length
@@ -614,6 +621,47 @@ async function handlePackageDetail(env: Env, name: string): Promise<Response> {
     `<h3>Versions</h3><ul>${versionsHtml}</ul>` +
     `<h3>Dependencies (latest)</h3>${depsHtml}` +
     readmeHtml);
+}
+
+// "1.2 KB" / "3.4 MB" — display sizes for the files page.
+function fmtSize(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+// GET /packages/<name>/<version>/files — every file in the published
+// tarball (path + size). Version-pinned and versions are immutable, so
+// the page is immutable-cacheable.
+async function handlePackageFiles(env: Env, name: string, version: string): Promise<Response> {
+  if (!NAME_RE.test(name) || !VERSION_RE.test(version)) {
+    return htmlPage("not found", `<p>Invalid package or version.</p>`, 404);
+  }
+  const idx = await readIndex(env, name);
+  const ver = idx.versions.find((v) => v.version === version);
+  if (!ver) {
+    return htmlPage("not found",
+      `<p><a href="/packages/${esc(name)}">← ${esc(name)}</a></p><p>Version not found.</p>`, 404);
+  }
+  const obj = await env.REG_BUCKET.get(`pkgs/${name}/${name}-${version}.tar.gz`);
+  if (!obj || !obj.body) {
+    return htmlPage("not found",
+      `<p><a href="/packages/${esc(name)}">← ${esc(name)}</a></p><p>Tarball missing.</p>`, 404);
+  }
+  const ab = await new Response(obj.body.pipeThrough(new DecompressionStream("gzip"))).arrayBuffer();
+  const files = listTarFiles(new Uint8Array(ab));
+  const total = files.reduce((s, f) => s + f.size, 0);
+  const rows = files.map((f) =>
+    `<tr><td><code>${esc(f.path)}</code></td>` +
+    `<td style="text-align:right;color:#666">${fmtSize(f.size)}</td></tr>`).join("");
+  const res = htmlPage(`${name} ${version} — files`,
+    `<p><a href="/packages/${esc(name)}">← ${esc(name)}</a></p>` +
+    `<h1>${esc(name)} <code>${esc(version)}</code></h1>` +
+    `<p style="color:#666">${files.length} file(s) · ${fmtSize(total)} unpacked` +
+    (ver.yanked ? ` · <span style="color:#b00">(yanked)</span>` : "") + `</p>` +
+    `<table class=files>${rows}</table>`);
+  res.headers.set("cache-control", "public, max-age=86400, immutable");
+  return res;
 }
 
 async function handleSearch(req: Request, url: URL, env: Env): Promise<Response> {
@@ -806,7 +854,11 @@ export default {
       if (path === "/api/v1/search") return handleSearch(req, url, env);
       if (path === "/api/v1/stats") return handleStats(env);
       if (path.startsWith("/packages/")) {
-        return handlePackageDetail(env, decodeURIComponent(path.slice("/packages/".length)).toLowerCase());
+        const rest = decodeURIComponent(path.slice("/packages/".length));
+        // /packages/<name>/<version>/files — the tarball's file listing.
+        const m = rest.match(/^([^/]+)\/([^/]+)\/files$/);
+        if (m) return handlePackageFiles(env, m[1].toLowerCase(), m[2]);
+        return handlePackageDetail(env, rest.toLowerCase());
       }
       if (path.startsWith("/index/") && path.endsWith(".json")) {
         const name = path.slice("/index/".length, -".json".length).toLowerCase();
