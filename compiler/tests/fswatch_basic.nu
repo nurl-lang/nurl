@@ -60,7 +60,7 @@ $ `stdlib/std/fswatch.nu`
             ?? ar { T d → = wd d F _ → ( nurl_print `add FAILED\n` ) }
 
             // write_file = create + write + close ⇒ three queued events
-            : String f ( __glob_join root `f.txt` )
+            : String f ( _glob_join root `f.txt` )
             : !v IoErr _w ( write_file ( string_data f ) `hello` )
             ?? _w { T _ → {} F _ → ( nurl_print `write FAILED\n` ) }
             ( show_next w )  // create: f.txt

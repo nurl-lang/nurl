@@ -1,4 +1,4 @@
-// http2_stream_prune.nu — offline regression for __h2_prune_closed and
+// http2_stream_prune.nu — offline regression for _h2_prune_closed and
 // the closed-stream accounting fix in stdlib/ext/http2_conn.nu.
 //
 // Bug: the new-stream admission check counted EVERY entry in the stream
@@ -9,7 +9,7 @@
 // requests are wrongly REFUSED — and the table grows without bound (the
 // memory dimension of Rapid Reset, CVE-2023-44487).
 //
-// Fix: __h2_prune_closed drops closed streams (freeing their buffers)
+// Fix: _h2_prune_closed drops closed streams (freeing their buffers)
 // before each admission count. This test builds a connection table by
 // hand, prunes, and asserts only the active streams survive — with their
 // ids/order intact. No socket: runs on every CI host.
@@ -70,7 +70,7 @@ $ `stdlib/ext/http2_conn.nu`
     ( vec_push [H2Stream] . c streams ( mkstream 7 ( h2_state_half_closed_remote ) ) )
     ( vec_push [H2Stream] . c streams ( mkstream 9 ( h2_state_closed ) ) )
 
-    = c ( __h2_prune_closed c )
+    = c ( _h2_prune_closed c )
     ( assert_eq `mixed: active count` ( vec_len [H2Stream] . c streams ) 2 fails )
 
     : *H2Stream sp ( vec_data [H2Stream] . c streams )
@@ -94,7 +94,7 @@ $ `stdlib/ext/http2_conn.nu`
         ( vec_push [H2Stream] . c2 streams ( mkstream + 1 * k 2 ( h2_state_closed ) ) )
         = k + k 1
     }
-    = c2 ( __h2_prune_closed c2 )
+    = c2 ( _h2_prune_closed c2 )
     ( assert_eq `all-closed: count` ( vec_len [H2Stream] . c2 streams ) 0 fails )
     ( h2_conn_free c2 )
 
@@ -102,7 +102,7 @@ $ `stdlib/ext/http2_conn.nu`
     : ~ H2Connection c3 ( mkconn )
     ( vec_push [H2Stream] . c3 streams ( mkstream 1 ( h2_state_open ) ) )
     ( vec_push [H2Stream] . c3 streams ( mkstream 3 ( h2_state_half_closed_remote ) ) )
-    = c3 ( __h2_prune_closed c3 )
+    = c3 ( _h2_prune_closed c3 )
     ( assert_eq `all-active: count` ( vec_len [H2Stream] . c3 streams ) 2 fails )
     ( h2_conn_free c3 )
 

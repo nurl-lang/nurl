@@ -27,7 +27,7 @@ $ `stdlib/std/hash_blake2b.nu`
 // The second line of a minisign .pub / .minisig text (line index 1: the
 // base64 payload under the "untrusted comment:" header), right-trimmed of
 // CR / spaces. Returns "" if there is no second line.
-@ __ms_line2 s text → String {
+@ _ms_line2 s text → String {
     : i n ( nurl_str_len text )
     : ~ i i 0
     // skip line 0
@@ -115,8 +115,8 @@ $ `stdlib/std/hash_blake2b.nu`
 
 // Verify against full .pub and .minisig file contents.
 @ minisign_verify ( Vec u ) message s pubfile s sigfile → b {
-    : String pl ( __ms_line2 pubfile )
-    : String sl ( __ms_line2 sigfile )
+    : String pl ( _ms_line2 pubfile )
+    : String sl ( _ms_line2 sigfile )
     : b r ( minisign_verify_b64 message ( string_data pl ) ( string_data sl ) )
     ( string_free pl )
     ( string_free sl )

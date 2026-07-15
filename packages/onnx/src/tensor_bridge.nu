@@ -34,10 +34,10 @@ $ `runtime.nu`
         ^ @ RTensor { ( string_new ) 0 ( vec_new [i] ) 0 }
     }
     ( rt_reset e )
-    ( __rt_set_graph e g )
+    ( _rt_set_graph e g )
     ( rt_load_inits e g )
-    ( rt_put e ( string_data . g input_name ) ( gk_arg_dev . d buf ) ( __shape_copy . d shape ) )
-    ^ ( __rt_run_nodes e g )
+    ( rt_put e ( string_data . g input_name ) ( gk_arg_dev . d buf ) ( _shape_copy . d shape ) )
+    ^ ( _rt_run_nodes e g )
 }
 
 // Wrap a run's output as an OWNED device tensor (device-to-device copy —
@@ -57,5 +57,5 @@ $ `runtime.nu`
         ( gk_dbuf_free b )
         ^ @ DTensor { TE_F32 ( vec_new [i] ) @ GkBuf { 0 0 GK_F32 } }
     }
-    ^ @ DTensor { TE_F32 ( __shape_copy . t shape ) b }
+    ^ @ DTensor { TE_F32 ( _shape_copy . t shape ) b }
 }

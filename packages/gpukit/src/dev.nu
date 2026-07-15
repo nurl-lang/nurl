@@ -21,7 +21,7 @@
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/string.nu`
 $ `gpukit.nu`
-$ `kernels.nu`  // __gk_partial_threads / __gk_zeros
+$ `kernels.nu`  // _gk_partial_threads / _gk_zeros
 
 : i GK_F64 0
 : i GK_F32 1
@@ -110,7 +110,7 @@ $ `kernels.nu`  // __gk_partial_threads / __gk_zeros
 
 @ gk_run_dev * GpuKit kit s src s name i grid i block ( Vec i ) args → b {
     ? ( gk_ok kit ) {} { ^ F }
-    : GpuKernel kn ( __gk_get_kernel kit src name )
+    : GpuKernel kn ( _gk_get_kernel kit src name )
     ? ( gpu_kernel_ok kn ) {} { ^ F }
     ? == ( gpu_launch kn grid block args ) 0 {} { ^ F }
     ^ == ( gpu_sync . kit gpu ) 0
@@ -298,7 +298,7 @@ $ `kernels.nu`  // __gk_partial_threads / __gk_zeros
     ? ( gk_buf_ok a ) {} { ^ @ ?f { F } }
     : i n . a n
     ? <= n 0 { ^ @ ?f { T 0.0 } } {}
-    : i threads ( __gk_partial_threads n )
+    : i threads ( _gk_partial_threads n )
     : GkBuf part ( gk_dbuf_new kit threads . a dtype )
     ? ( gk_buf_ok part ) {} { ^ @ ?f { F } }
     : s tn ( __gk_tname . a dtype )
@@ -321,7 +321,7 @@ $ `kernels.nu`  // __gk_partial_threads / __gk_zeros
     ( string_free kname )
     : ~ f acc 0.0
     ? ok {
-        : ( Vec f ) host ( __gk_zeros threads )
+        : ( Vec f ) host ( _gk_zeros threads )
         ? ( gk_dbuf_download kit part host ) {
             : ~ i k 0
             ~ < k threads {

@@ -71,13 +71,13 @@ $ `stdlib/core/vec.nu`
 }
 
 // LCG (Knuth MMIX constants); wraps in i64. Returns a non-negative pseudo-int.
-@ __sim_rand * SimNet net → i {
+@ _sim_rand * SimNet net → i {
     = . net seed + * . net seed 6364136223846793005 1442695040888963407
     : i r . net seed
     ^ ? < r 0 - 0 r r
 }
 
-@ __sim_chance * SimNet net i pct → b { ^ < % ( __sim_rand net ) 100 pct }
+@ __sim_chance * SimNet net i pct → b { ^ < % ( _sim_rand net ) 100 pct }
 
 @ sim_reachable * SimNet net i a i b → b {
     ^ == ?? ( vec_get [i] . net reach + * a . net n b ) { T x → x F → 0 } 1
@@ -105,7 +105,7 @@ $ `stdlib/core/vec.nu`
 @ sim_send * SimNet net i src i dst ( Vec u ) bytes i now → v {
     ? ! ( sim_reachable net src dst ) { = . net dropped + . net dropped 1 ^ v } {}
     ? & > . net drop_pct 0 ( __sim_chance net . net drop_pct ) { = . net dropped + . net dropped 1 ^ v } {}
-    : i extra ? > . net jitter 0 % ( __sim_rand net ) . net jitter 0
+    : i extra ? > . net jitter 0 % ( _sim_rand net ) . net jitter 0
     : *SimMsg m # *SimMsg ( nurl_alloc Z SimMsg )
     = . m src src
     = . m dst dst

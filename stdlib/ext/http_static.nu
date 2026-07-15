@@ -118,7 +118,7 @@ $ `stdlib/core/vec.nu`
 // allowed (collapsed to nothing, which `path_normalize` would also do).
 // Operates on raw bytes — no allocation. Fast path for the common case.
 
-@ __has_dotdot_segment s path → b {
+@ _has_dotdot_segment s path → b {
     : i n ( nurl_str_len path )
     : ~ i seg_start 0
     : ~ i k 0
@@ -198,7 +198,7 @@ $ `stdlib/core/vec.nu`
     // Reject any ".." segment, and reject a tail that is still absolute
     // after separator-stripping (a Windows drive-letter form, which
     // path_join would otherwise honour and serve outside `dir`).
-    ? | ( __has_dotdot_segment rels ) ( path_is_absolute rels ) {
+    ? | ( _has_dotdot_segment rels ) ( path_is_absolute rels ) {
         ( string_free rel )
         ^ ( response_text 403 `forbidden\n` )
     } {}

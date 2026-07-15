@@ -44,7 +44,7 @@ $ `clip_merges_data.nu`
 }
 
 // ── small Vec<i> helpers ─────────────────────────────────────────
-@ __ig ( Vec i ) v i k → i { ?? ( vec_get [i] v k ) { T x → ^ x F _ → ^ 0 } }
+@ _ig ( Vec i ) v i k → i { ?? ( vec_get [i] v k ) { T x → ^ x F _ → ^ 0 } }
 
 @ __is ( Vec i ) v i k i val → v { ( vec_set [i] v k val ) }
 
@@ -100,7 +100,7 @@ $ `clip_merges_data.nu`
     : ~ i n 0
     : ~ i b 0
     ~ < b 256 {
-        ? < ( __ig byte2cp b ) 0 {
+        ? < ( _ig byte2cp b ) 0 {
             ( __is byte2cp b + 256 n )
             ( vec_push [i] order b )
             = n + n 1
@@ -111,7 +111,7 @@ $ `clip_merges_data.nu`
     : ( Vec String ) out ( vec_new [String] )
     : ~ i k 0
     ~ < k 256 {
-        ( vec_push [String] out ( utf8_encode_cp ( __ig byte2cp k ) ) )
+        ( vec_push [String] out ( utf8_encode_cp ( _ig byte2cp k ) ) )
         = k + k 1
     }
     ( vec_free [i] byte2cp )
@@ -152,7 +152,7 @@ $ `clip_merges_data.nu`
     // base vocab: order[j] → id j, plus </w> variant → id 256+j
     : ~ i j 0
     ~ < j 256 {
-        : i b ( __ig order j )
+        : i b ( _ig order j )
         : String sym ?? ( vec_get [String] byte_enc b ) { T s → s F _ → ( string_new ) }
         // base symbol (id j): key = a fresh copy so the arena owns it
         : String k0 ( string_from ( string_data sym ) )
@@ -195,7 +195,7 @@ $ `clip_merges_data.nu`
     }
     : ~ i j 0
     ~ < j 256 {
-        : i b ( __ig order j )
+        : i b ( _ig order j )
         : String sym ?? ( vec_get [String] byte_enc b ) { T s → s F _ → ( string_new ) }
         : String k0 ( string_from ( string_data sym ) )
         ( __enc_put tk k0 j )
@@ -286,7 +286,7 @@ $ `clip_merges_data.nu`
     : ~ ( Vec String ) word ( vec_new [String] )
     : ~ i i 0
     ~ < i nc {
-        : String sym ( utf8_encode_cp ( __ig cps i ) )
+        : String sym ( utf8_encode_cp ( _ig cps i ) )
         ? == i - nc 1 { ( string_push_str sym `</w>` ) } {}
         ( vec_push [String] word sym )
         = i + i 1
@@ -535,7 +535,7 @@ $ `clip_merges_data.nu`
     : ~ i w 1
     : ~ i j 0
     ~ & < j nid < w - ctx 1 {
-        ( __is out w ( __ig ids j ) )
+        ( __is out w ( _ig ids j ) )
         = w + w 1
         = j + j 1
     }

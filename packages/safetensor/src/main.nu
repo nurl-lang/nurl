@@ -71,7 +71,7 @@ $ `src/selftest.nu`
             : ~ f sum 0.0
             : ~ i k 0
             ~ < k n {
-                : f v # f ( bits_to_f32 ( __st_u32 p * k 4 ) )
+                : f v # f ( bits_to_f32 ( _st_u32 p * k 4 ) )
                 ? < v mn { = mn v } {}
                 ? > v mx { = mx v } {}
                 = sum + sum v

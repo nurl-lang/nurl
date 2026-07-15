@@ -67,7 +67,7 @@ $ `stdlib/ext/http2_conn.nu`
                     F _ → {}  // already GOAWAY'd from inside h2_conn_serve
                 }
             } {
-                ( __serve_keepalive_loop s conn )
+                ( _serve_keepalive_loop s conn )
             }
             ( tcp_close_conn conn )
             ^ @ !v NetErr { T 0 }

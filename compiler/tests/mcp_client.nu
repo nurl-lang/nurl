@@ -10,7 +10,7 @@
 //   * mcp_response_is_error / _error_code / _error_message on a
 //     synthetic JSON-RPC error envelope.
 //   * mcp_response_get_result extracts the `result` object on success.
-//   * `__extract_array_field` accessible via tool/prompt/resource list
+//   * `_extract_array_field` accessible via tool/prompt/resource list
 //     extraction is exercised by feeding a synthetic response.
 
 $ `stdlib/ext/mcp_client.nu`
@@ -115,7 +115,7 @@ $ `stdlib/ext/json.nu`
 // Build a response containing { result: { tools: [{name:"echo"},
 // {name:"add"}] } } and call our extraction logic. We can't call
 // mcp_tools_list directly without a network round-trip, but the
-// underlying __extract_array_field is the only meaningful step, and
+// underlying _extract_array_field is the only meaningful step, and
 // it's exposed to test through the same code path mcp_tools_list
 // uses internally — replicate the call shape here.
 
@@ -136,7 +136,7 @@ $ `stdlib/ext/json.nu`
     ( json_obj_set resp `id` ( json_int 3 ) )
     ( json_obj_set resp `result` result )
 
-    : ( Vec Json ) extracted ( __extract_array_field resp `tools` )
+    : ( Vec Json ) extracted ( _extract_array_field resp `tools` )
     ( println_int `  count = ` ( vec_len [Json] extracted ) )
 
     : i n ( vec_len [Json] extracted )

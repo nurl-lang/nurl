@@ -83,7 +83,7 @@ $ `stdlib/std/time.nu`
 }
 
 // "name: 12 ns/op  (1000000 iters, 0 allocs/op)"
-@ __bench_fmt s name i iters i ns_per_op i allocs_per_op → String {
+@ _bench_fmt s name i iters i ns_per_op i allocs_per_op → String {
     : String out ( string_with_cap 64 )
     ( string_push_str out name )
     ( string_push_str out `: ` )
@@ -97,7 +97,7 @@ $ `stdlib/std/time.nu`
 }
 
 @ bench_report BenchResult r → v {
-    : String line ( __bench_fmt ( string_data . r name ) . r iters . r ns_per_op . r allocs_per_op )
+    : String line ( _bench_fmt ( string_data . r name ) . r iters . r ns_per_op . r allocs_per_op )
     ( nurl_print ( string_data line ) )
     ( nurl_print `\n` )
     ( string_free line )

@@ -137,7 +137,7 @@ $ `src/service.nu`
 }
 
 // Print a verdict as one compact JSON object.
-@ __an_print_verdict *Model mo Verdict vd → v {
+@ __an_print_verdict * Model mo Verdict vd → v {
     : Json o ( json_obj_new )
     ? . vd ready {
         ( json_obj_set o `status` ( json_str_lit `success` ) )
@@ -172,7 +172,7 @@ $ `src/service.nu`
 }
 
 // Print (or report the error of) one detect/score result. Exit code.
-@ __an_report *Model mo !Verdict String vr → i {
+@ __an_report * Model mo ! Verdict String vr → i {
     ?? vr {
         T vd → {
             ( __an_print_verdict mo vd )
@@ -267,7 +267,7 @@ $ `src/service.nu`
     : f margin ( ctx_float x `margin` )
     : VerCfg cfg @ VerCfg { ( string_from `batch` ) 0 0 100 256 -1.0 margin T }
     : BatchReport rep ( anomaly_batch . ds data . ds rows . ds cols cfg )
-    ( __an_vercfg_free cfg )
+    ( _an_vercfg_free cfg )
 
     : String out ( string_with_cap * . ds rows 16 )
     : ~ i r 0
@@ -459,22 +459,22 @@ $ `src/service.nu`
 
 @ main → i {
     : *Cli c ( cli_new `anomaly` `Streaming anomaly detection: dynamic self-training models over Isolation Forests.` `0.3.6` )
-    ( cli_flag_str  c `store`   115 `DIR`  `model store (default: $ANOMALY_HOME, else ~/.anomaly)` `` `ANOMALY_HOME` )
-    ( cli_flag_str  c `file`    102 `FILE` `for batch: read CSV from FILE instead of stdin` `` `` )
-    ( cli_flag_str  c `margin`  109 `M`    `for batch: decision margin (default 0 = predict==-1)` `0` `` )
-    ( cli_flag_str  c `addr`    97  `HOST:PORT` `for serve: bind address` `127.0.0.1:8811` `` )
-    ( cli_flag_str  c `webroot` 119 `DIR`  `for serve: dashboard HTML dir (default: <exe>/static, $ANOMALY_WEBROOT)` `` `ANOMALY_WEBROOT` )
-    ( cli_flag_bool c `header`  72  `for batch: skip the first CSV line (header)` )
+    ( cli_flag_str c `store` 115 `DIR` `model store (default: $ANOMALY_HOME, else ~/.anomaly)` `` `ANOMALY_HOME` )
+    ( cli_flag_str c `file` 102 `FILE` `for batch: read CSV from FILE instead of stdin` `` `` )
+    ( cli_flag_str c `margin` 109 `M` `for batch: decision margin (default 0 = predict==-1)` `0` `` )
+    ( cli_flag_str c `addr` 97 `HOST:PORT` `for serve: bind address` `127.0.0.1:8811` `` )
+    ( cli_flag_str c `webroot` 119 `DIR` `for serve: dashboard HTML dir (default: <exe>/static, $ANOMALY_WEBROOT)` `` `ANOMALY_WEBROOT` )
+    ( cli_flag_bool c `header` 72 `for batch: skip the first CSV line (header)` )
 
     ( cli_cmd c `detect` `ingest one point, print the verdict` \ CliCtx x → i { ^ ( __an_cmd_detect x T ) } )
-    ( cli_cmd c `score`  `score only (never ingests or retrains)` \ CliCtx x → i { ^ ( __an_cmd_detect x F ) } )
-    ( cli_cmd c `batch`  `score a CSV, one index<TAB>score per row` \ CliCtx x → i { ^ ( __an_cmd_batch x ) } )
-    ( cli_cmd c `train`  `force a retrain now` \ CliCtx x → i { ^ ( __an_cmd_train x ) } )
-    ( cli_cmd c `reset`  `drop data + forests, keep the name` \ CliCtx x → i { ^ ( __an_cmd_reset x ) } )
-    ( cli_cmd c `rm`     `delete the model entirely` \ CliCtx x → i { ^ ( __an_cmd_rm x ) } )
-    ( cli_cmd c `ls`     `list models` \ CliCtx x → i { ^ ( __an_cmd_ls x ) } )
-    ( cli_cmd c `info`   `print model metadata` \ CliCtx x → i { ^ ( __an_cmd_info x ) } )
-    ( cli_cmd c `serve`  `run the HTTP/JSON service + web dashboard` \ CliCtx x → i { ^ ( __an_cmd_serve x ) } )
+    ( cli_cmd c `score` `score only (never ingests or retrains)` \ CliCtx x → i { ^ ( __an_cmd_detect x F ) } )
+    ( cli_cmd c `batch` `score a CSV, one index<TAB>score per row` \ CliCtx x → i { ^ ( __an_cmd_batch x ) } )
+    ( cli_cmd c `train` `force a retrain now` \ CliCtx x → i { ^ ( __an_cmd_train x ) } )
+    ( cli_cmd c `reset` `drop data + forests, keep the name` \ CliCtx x → i { ^ ( __an_cmd_reset x ) } )
+    ( cli_cmd c `rm` `delete the model entirely` \ CliCtx x → i { ^ ( __an_cmd_rm x ) } )
+    ( cli_cmd c `ls` `list models` \ CliCtx x → i { ^ ( __an_cmd_ls x ) } )
+    ( cli_cmd c `info` `print model metadata` \ CliCtx x → i { ^ ( __an_cmd_info x ) } )
+    ( cli_cmd c `serve` `run the HTTP/JSON service + web dashboard` \ CliCtx x → i { ^ ( __an_cmd_serve x ) } )
 
     : i rc ( cli_run c )
     ( cli_free c )

@@ -39,7 +39,7 @@ $ `tensor.nu`
 
 @ dtensor_dtype DTensor d → i { ^ . d dtype }
 
-@ dtensor_dim DTensor d i ax → i { ^ ( __ti . d shape ax ) }
+@ dtensor_dim DTensor d i ax → i { ^ ( _ti . d shape ax ) }
 
 // ── Residency moves ───────────────────────────────────────────────────
 
@@ -49,17 +49,17 @@ $ `tensor.nu`
     ? ( gk_buf_ok b ) {
         ? ( gk_dbuf_upload kit b . t data ) {} {
             ( gk_dbuf_free b )
-            ^ @ DTensor { . t dtype ( __shape_copy . t shape ) @ GkBuf { 0 0 ( __dt_gk . t dtype ) } }
+            ^ @ DTensor { . t dtype ( _shape_copy . t shape ) @ GkBuf { 0 0 ( __dt_gk . t dtype ) } }
         }
     } {}
-    ^ @ DTensor { . t dtype ( __shape_copy . t shape ) b }
+    ^ @ DTensor { . t dtype ( _shape_copy . t shape ) b }
 }
 
 @ dtensor_to_host * GpuKit kit DTensor d → Tensor {
     : i n ( dtensor_size d )
-    : ( Vec f ) out ( __fvec_t n 0.0 )
+    : ( Vec f ) out ( _fvec_t n 0.0 )
     ( gk_dbuf_download kit . d buf out )
-    ^ @ Tensor { . d dtype ( __shape_copy . d shape ) out }
+    ^ @ Tensor { . d dtype ( _shape_copy . d shape ) out }
 }
 
 // A fresh uninitialised device tensor with the same dtype as `like`,
@@ -75,7 +75,7 @@ $ `tensor.nu`
     ? == . a dtype . b dtype {} { ^ @ ?DTensor { F } }
     : i n ( dtensor_size a )
     ? == n ( dtensor_size b ) {} { ^ @ ?DTensor { F } }
-    : DTensor o ( __dt_new kit a ( __shape_copy . a shape ) n )
+    : DTensor o ( __dt_new kit a ( _shape_copy . a shape ) n )
     ? ( gkd_ew kit opname op . o buf . a buf . b buf ) {} {
         ( dtensor_free o )
         ^ @ ?DTensor { F }
@@ -97,11 +97,11 @@ $ `tensor.nu`
     ? ( dtensor_ok a ) {} { ^ @ ?DTensor { F } }
     : GkBuf sc ( gk_dbuf_new kit 1 ( __dt_gk . a dtype ) )
     ? ( gk_buf_ok sc ) {} { ^ @ ?DTensor { F } }
-    : ( Vec f ) hv ( __fvec_t 1 v )
+    : ( Vec f ) hv ( _fvec_t 1 v )
     : ~ b ok ( gk_dbuf_upload kit sc hv )
     ( vec_free [f] hv )
     : i n ( dtensor_size a )
-    : DTensor o ( __dt_new kit a ( __shape_copy . a shape ) n )
+    : DTensor o ( __dt_new kit a ( _shape_copy . a shape ) n )
     ? ok { = ok ( gkd_ew kit opname op . o buf . a buf sc ) } {}
     ( gk_dbuf_free sc )
     ? ok { ^ @ ?DTensor { T o } } {}
@@ -123,7 +123,7 @@ $ `tensor.nu`
 @ __dt_unary * GpuKit kit i kind DTensor a → ?DTensor {
     ? ( dtensor_ok a ) {} { ^ @ ?DTensor { F } }
     : i n ( dtensor_size a )
-    : DTensor o ( __dt_new kit a ( __shape_copy . a shape ) n )
+    : DTensor o ( __dt_new kit a ( _shape_copy . a shape ) n )
     : ~ b ok F
     ? == kind 0 { = ok ( gkd_relu kit . o buf . a buf ) } {}
     ? == kind 1 { = ok ( gkd_sigmoid kit . o buf . a buf ) } {}
@@ -178,7 +178,7 @@ $ `tensor.nu`
     ? > cols 0 {} { ^ @ ?DTensor { F } }
     : i n ( dtensor_size a )
     : i rows / n cols
-    : DTensor o ( __dt_new kit a ( __shape_copy . a shape ) n )
+    : DTensor o ( __dt_new kit a ( _shape_copy . a shape ) n )
     ? ( gkd_softmax_rows kit . o buf . a buf rows cols ) {} {
         ( dtensor_free o )
         ^ @ ?DTensor { F }

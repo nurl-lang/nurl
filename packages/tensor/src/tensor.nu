@@ -27,7 +27,7 @@ $ `stdlib/std/floatbits.nu`
 
 // ── Small shape helpers ───────────────────────────────────────────────
 
-@ __t_prod ( Vec i ) shape → i {
+@ _t_prod ( Vec i ) shape → i {
     : i n ( vec_len [i] shape )
     : ~ i p 1
     : ~ i k 0
@@ -35,48 +35,48 @@ $ `stdlib/std/floatbits.nu`
     ^ p
 }
 
-@ __ti ( Vec i ) v i k → i { ?? ( vec_get [i] v k ) { T x → { ^ x } F _ → { ^ 0 } } }
+@ _ti ( Vec i ) v i k → i { ?? ( vec_get [i] v k ) { T x → { ^ x } F _ → { ^ 0 } } }
 
-@ __tf ( Vec f ) v i k → f { ?? ( vec_get [f] v k ) { T x → { ^ x } F _ → { ^ 0.0 } } }
+@ _tf ( Vec f ) v i k → f { ?? ( vec_get [f] v k ) { T x → { ^ x } F _ → { ^ 0.0 } } }
 
 // Row-major strides for a shape.
-@ __t_strides ( Vec i ) shape → ( Vec i ) {
+@ _t_strides ( Vec i ) shape → ( Vec i ) {
     : i n ( vec_len [i] shape )
-    : ( Vec i ) st ( __ivec_t n 0 )
+    : ( Vec i ) st ( _ivec_t n 0 )
     : ~ i acc 1
     : ~ i k - n 1
     ~ >= k 0 {
         ( vec_set [i] st k acc )
-        = acc * acc ( __ti shape k )
+        = acc * acc ( _ti shape k )
         = k - k 1
     }
     ^ st
 }
 
-@ __ivec_t i n i fill → ( Vec i ) {
+@ _ivec_t i n i fill → ( Vec i ) {
     : ( Vec i ) v ( vec_with_cap [i] ? > n 0 { n } { 1 } )
     : ~ i k 0
     ~ < k n { ( vec_push [i] v fill ) = k + k 1 }
     ^ v
 }
 
-@ __fvec_t i n f fill → ( Vec f ) {
+@ _fvec_t i n f fill → ( Vec f ) {
     : ( Vec f ) v ( vec_with_cap [f] ? > n 0 { n } { 1 } )
     : ~ i k 0
     ~ < k n { ( vec_push [f] v fill ) = k + k 1 }
     ^ v
 }
 
-@ __shape_copy ( Vec i ) s → ( Vec i ) {
+@ _shape_copy ( Vec i ) s → ( Vec i ) {
     : i n ( vec_len [i] s )
     : ( Vec i ) o ( vec_with_cap [i] ? > n 0 { n } { 1 } )
     : ~ i k 0
-    ~ < k n { ( vec_push [i] o ( __ti s k ) ) = k + k 1 }
+    ~ < k n { ( vec_push [i] o ( _ti s k ) ) = k + k 1 }
     ^ o
 }
 
 // Round an f64 to the nearest float32-representable value.
-@ __t_round32 f x → f { ^ # f ( bits_to_f32 ( f32_to_bits # f32 x ) ) }
+@ _t_round32 f x → f { ^ # f ( bits_to_f32 ( f32_to_bits # f32 x ) ) }
 
 // ── Construction ──────────────────────────────────────────────────────
 
@@ -91,9 +91,9 @@ $ `stdlib/std/floatbits.nu`
 }
 
 @ tensor_full i dtype ( Vec i ) shape f v → Tensor {
-    : f fv ? == dtype TE_F32 { ( __t_round32 v ) } { v }
-    : i n ( __t_prod shape )
-    ^ @ Tensor { dtype shape ( __fvec_t n fv ) }
+    : f fv ? == dtype TE_F32 { ( _t_round32 v ) } { v }
+    : i n ( _t_prod shape )
+    ^ @ Tensor { dtype shape ( _fvec_t n fv ) }
 }
 
 @ tensor_zeros i dtype ( Vec i ) shape → Tensor { ^ ( tensor_full dtype shape 0.0 ) }
@@ -103,12 +103,12 @@ $ `stdlib/std/floatbits.nu`
 // From an explicit row-major f64 buffer (`data` is copied and rounded to the
 // dtype grid; `shape` is adopted — the tensor takes ownership of it).
 @ tensor_from_data i dtype ( Vec i ) shape ( Vec f ) data → Tensor {
-    : i n ( __t_prod shape )
+    : i n ( _t_prod shape )
     : ( Vec f ) d ( vec_with_cap [f] ? > n 0 { n } { 1 } )
     : ~ i k 0
     ~ < k n {
-        : f v ( __tf data k )
-        ( vec_push [f] d ? == dtype TE_F32 { ( __t_round32 v ) } { v } )
+        : f v ( _tf data k )
+        ( vec_push [f] d ? == dtype TE_F32 { ( _t_round32 v ) } { v } )
         = k + k 1
     }
     ^ @ Tensor { dtype shape d }
@@ -116,7 +116,7 @@ $ `stdlib/std/floatbits.nu`
 
 // 1-D [0, 1, …, n-1].
 @ tensor_arange i dtype i n → Tensor {
-    : ( Vec i ) shp ( __ivec_t 1 n )
+    : ( Vec i ) shp ( _ivec_t 1 n )
     : ( Vec f ) d ( vec_with_cap [f] ? > n 0 { n } { 1 } )
     : ~ i k 0
     ~ < k n { ( vec_push [f] d # f k ) = k + k 1 }
@@ -131,16 +131,16 @@ $ `stdlib/std/floatbits.nu`
 
 @ tensor_dtype Tensor t → i { ^ . t dtype }
 
-@ tensor_dim Tensor t i ax → i { ^ ( __ti . t shape ax ) }
+@ tensor_dim Tensor t i ax → i { ^ ( _ti . t shape ax ) }
 
 @ tensor_shape Tensor t → ( Vec i ) { ^ . t shape }  // borrow
 @ tensor_data Tensor t → ( Vec f ) { ^ . t data }  // borrow
 
 // Flat element read/write.
-@ tensor_flat Tensor t i k → f { ^ ( __tf . t data k ) }
+@ tensor_flat Tensor t i k → f { ^ ( _tf . t data k ) }
 
 @ tensor_set_flat Tensor t i k f v → v {
-    ( vec_set [f] . t data k ? == . t dtype TE_F32 { ( __t_round32 v ) } { v } )
+    ( vec_set [f] . t data k ? == . t dtype TE_F32 { ( _t_round32 v ) } { v } )
 }
 
 // ── Shape ops ─────────────────────────────────────────────────────────
@@ -148,14 +148,14 @@ $ `stdlib/std/floatbits.nu`
 // The same data under a new shape (must have equal nelem). Data is copied so
 // the result is independent; `shape` is adopted (or freed on a size mismatch).
 @ tensor_reshape Tensor t ( Vec i ) shape → ?Tensor {
-    ? == ( __t_prod shape ) ( tensor_size t ) {} {
+    ? == ( _t_prod shape ) ( tensor_size t ) {} {
         ( vec_free [i] shape )
         ^ @ ?Tensor { F }
     }
     : i n ( tensor_size t )
     : ( Vec f ) d ( vec_with_cap [f] ? > n 0 { n } { 1 } )
     : ~ i k 0
-    ~ < k n { ( vec_push [f] d ( __tf . t data k ) ) = k + k 1 }
+    ~ < k n { ( vec_push [f] d ( _tf . t data k ) ) = k + k 1 }
     ^ @ ?Tensor { T @ Tensor { . t dtype shape d } }
 }
 
@@ -164,12 +164,12 @@ $ `stdlib/std/floatbits.nu`
     : i n ( tensor_size t )
     : ( Vec f ) d ( vec_with_cap [f] ? > n 0 { n } { 1 } )
     : ~ i k 0
-    ~ < k n { ( vec_push [f] d ( __tf . t data k ) ) = k + k 1 }
-    ^ @ Tensor { . t dtype ( __shape_copy . t shape ) d }
+    ~ < k n { ( vec_push [f] d ( _tf . t data k ) ) = k + k 1 }
+    ^ @ Tensor { . t dtype ( _shape_copy . t shape ) d }
 }
 
 // ── dtype ─────────────────────────────────────────────────────────────
 
 @ tensor_astype Tensor t i dtype → Tensor {
-    ^ ( tensor_from_data dtype ( __shape_copy . t shape ) . t data )
+    ^ ( tensor_from_data dtype ( _shape_copy . t shape ) . t data )
 }

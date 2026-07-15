@@ -110,7 +110,7 @@ $ `stdlib/ext/http.nu`
 }
 
 // `parse_request_head` returns `! ParsedHeadOk HttpReqErr`. The Ok arm
-// carries the parsed `HttpRequest` head (body still empty — `__finish_body`
+// carries the parsed `HttpRequest` head (body still empty — `_finish_body`
 // drains it from the keep-alive carry buffer) plus `consumed`, the byte
 // count covered by the head + closing CRLF. The Err arm carries an
 // `HttpReqErr` variant — distinguishing `HttpReqIncomplete` (caller can
@@ -155,7 +155,7 @@ $ `stdlib/ext/http.nu`
 
 // ── Internal byte-buffer helpers ──────────────────────────────────────
 
-@ __bbyte ( Vec u ) buf i k → i {
+@ _bbyte ( Vec u ) buf i k → i {
     : ?u got ( vec_get [u] buf k )
     ?? got {
         T b → { ^ # i b }
@@ -170,11 +170,11 @@ $ `stdlib/ext/http.nu`
     : ~ i i start
     : i stop - n 3
     ~ <= i stop {
-        : i b0 ( __bbyte buf i )
+        : i b0 ( _bbyte buf i )
         ? == b0 13 {
-            : i b1 ( __bbyte buf + i 1 )
-            : i b2 ( __bbyte buf + i 2 )
-            : i b3 ( __bbyte buf + i 3 )
+            : i b1 ( _bbyte buf + i 1 )
+            : i b2 ( _bbyte buf + i 2 )
+            : i b3 ( _bbyte buf + i 3 )
             ? & & == b1 10 == b2 13 == b3 10 { ^ i } {}
         } {}
         = i + i 1
@@ -183,7 +183,7 @@ $ `stdlib/ext/http.nu`
 }
 
 // Copy bytes [from..to) of `buf` into a fresh owned String.
-@ __bsubstr ( Vec u ) buf i from i to → String {
+@ _bsubstr ( Vec u ) buf i from i to → String {
     : i n ( vec_len [u] buf )
     : ~ i a ? < from 0 0 from
     : i b ? > to n n to
@@ -192,7 +192,7 @@ $ `stdlib/ext/http.nu`
     : String out ( string_with_cap out_n )
     : ~ i k a
     ~ < k b {
-        : i bb ( __bbyte buf k )
+        : i bb ( _bbyte buf k )
         ? >= bb 0 { ( string_push_char out bb ) } {}
         = k + k 1
     }
@@ -203,7 +203,7 @@ $ `stdlib/ext/http.nu`
 @ __bindex_byte ( Vec u ) buf i from i to i target → i {
     : ~ i k from
     ~ < k to {
-        ? == ( __bbyte buf k ) target { ^ k } {}
+        ? == ( _bbyte buf k ) target { ^ k } {}
         = k + k 1
     }
     ^ -1
@@ -215,8 +215,8 @@ $ `stdlib/ext/http.nu`
     : i stop - to 1
     : ~ i k from
     ~ < k stop {
-        ? == ( __bbyte buf k ) 13 {
-            ? == ( __bbyte buf + k 1 ) 10 { ^ k } {}
+        ? == ( _bbyte buf k ) 13 {
+            ? == ( _bbyte buf + k 1 ) 10 { ^ k } {}
         } {}
         = k + k 1
     }
@@ -228,7 +228,7 @@ $ `stdlib/ext/http.nu`
 @ __skip_ows ( Vec u ) buf i from i to → i {
     : ~ i k from
     ~ < k to {
-        : i b ( __bbyte buf k )
+        : i b ( _bbyte buf k )
         ? & != b 32 != b 9 { ^ k } {}
         = k + k 1
     }
@@ -240,7 +240,7 @@ $ `stdlib/ext/http.nu`
 @ __trim_ows_end ( Vec u ) buf i from i to → i {
     : ~ i k to
     ~ > k from {
-        : i b ( __bbyte buf - k 1 )
+        : i b ( _bbyte buf - k 1 )
         ? & != b 32 != b 9 { ^ k } {}
         = k - k 1
     }
@@ -560,9 +560,9 @@ $ `stdlib/ext/http.nu`
         ^ @ ReqLineParts { ( string_new ) ( string_new ) ( string_new ) ( string_new ) F }
     } {}
 
-    : String method ( __bsubstr buf from sp1 )
-    : String target ( __bsubstr buf + sp1 1 sp2 )
-    : String version ( __bsubstr buf + sp2 1 line_end )
+    : String method ( _bsubstr buf from sp1 )
+    : String target ( _bsubstr buf + sp1 1 sp2 )
+    : String version ( _bsubstr buf + sp2 1 line_end )
 
     : UrlSplit us ( parse_url ( string_data target ) )
     ( string_free target )
@@ -609,8 +609,8 @@ $ `stdlib/ext/http.nu`
                         ? > ( vec_len [Header] hs ) header_max {
                             = status 2 = done T
                         } {
-                            : String name ( __bsubstr buf pos name_end )
-                            : String value ( __bsubstr buf v_start v_end )
+                            : String name ( _bsubstr buf pos name_end )
+                            : String value ( _bsubstr buf v_start v_end )
                             // Folding: if a prior header has the same case-insens
                             // name, append ", " + value to its value field.
                             // Direct *Header iteration — `vec_get` would copy
@@ -779,7 +779,7 @@ $ `stdlib/ext/http.nu`
                     ? > clen max_bytes {
                         ^ @ !( Vec u ) HttpReqErr { F # HttpReqErr HttpReqTooLarge }
                     } {}
-                    ^ ( __read_n_bytes conn clen )
+                    ^ ( _read_n_bytes conn clen )
                 }
                 F _ → ^ @ !( Vec u ) HttpReqErr { F # HttpReqErr HttpReqMalformed }
             }
@@ -797,7 +797,7 @@ $ `stdlib/ext/http.nu`
 // HttpReqIo on transport failure (caller can inspect the conn's
 // err_kind via tcp_set_timeout's recovery path), HttpReqMalformed
 // on premature EOF.
-@ __read_n_bytes TcpConn conn i n → !( Vec u ) HttpReqErr {
+@ _read_n_bytes TcpConn conn i n → !( Vec u ) HttpReqErr {
     : ( Vec u ) buf ( vec_with_cap [u] n )
     : ~ i remaining n
     : ~ i status 1  // 1 = ok, 0 = io, 2 = malformed (eof)
@@ -846,7 +846,7 @@ $ `stdlib/ext/http.nu`
         : !String HttpReqErr line_r ( __read_crlf_line conn 32 )
         ?? line_r {
             T line → {
-                : !i ParseErr sz ( __parse_hex_size line )
+                : !i ParseErr sz ( _parse_hex_size line )
                 ( string_free line )
                 ?? sz {
                     T n → {
@@ -876,7 +876,7 @@ $ `stdlib/ext/http.nu`
                             ? > + ( vec_len [u] body ) n max_bytes {
                                 = status 2 = done T
                             } {
-                                : !( Vec u ) HttpReqErr cr ( __read_n_bytes conn n )
+                                : !( Vec u ) HttpReqErr cr ( _read_n_bytes conn n )
                                 ?? cr {
                                     T chunk → {
                                         ( vec_extend [u] body chunk )
@@ -931,7 +931,7 @@ $ `stdlib/ext/http.nu`
                         ( vec_free [u] chunk )
                         = status 0 = done T
                     } {
-                        : i b ( __bbyte chunk 0 )
+                        : i b ( _bbyte chunk 0 )
                         ( vec_free [u] chunk )
                         = seen + seen 1
                         ? & == prev 13 == b 10 {
@@ -962,7 +962,7 @@ $ `stdlib/ext/http.nu`
 
 // Parse a chunk-size line: "<hex>[;extension]". Returns the size as
 // an i. Negative size or trailing junk → BadFormat.
-@ __parse_hex_size String line → !i ParseErr {
+@ _parse_hex_size String line → !i ParseErr {
     : i n ( string_len line )
     ? == n 0 { ^ @ !i ParseErr { F @ ParseErr { Empty } } } {}
     : ~ i acc 0
@@ -1014,20 +1014,20 @@ $ `stdlib/ext/http.nu`
     ~ <= k n {
         : ~ b boundary F
         ? >= k n { = boundary T } {}
-        ? & ! boundary == ( __bbyte buf k ) 38 { = boundary T } {}
+        ? & ! boundary == ( _bbyte buf k ) 38 { = boundary T } {}
         ? boundary {
             : i seg_len - k seg_start
             ? > seg_len 0 {
                 : ~ i eq -1
                 : ~ i j seg_start
                 ~ < j k {
-                    ? == ( __bbyte buf j ) 61 { = eq j = j k } {}
+                    ? == ( _bbyte buf j ) 61 { = eq j = j k } {}
                     = j + j 1
                 }
                 : i key_end ? < eq 0 k eq
                 : i val_start ? < eq 0 k + eq 1
-                : String key_raw ( __bsubstr buf seg_start key_end )
-                : String val_raw ( __bsubstr buf val_start k )
+                : String key_raw ( _bsubstr buf seg_start key_end )
+                : String val_raw ( _bsubstr buf val_start k )
                 : String key ( percent_decode ( string_data key_raw ) )
                 : String val ( percent_decode ( string_data val_raw ) )
                 ( string_free key_raw )

@@ -399,9 +399,9 @@ $ `deps/http/src/http.nu`
 
 // Load the model, open the port, serve until stopped.
 @ wh_serve s dir s host i port s lang i maxtok b use_vad b with_ts → i {
-    : String cfg ( __wh_path dir `config.json` )
-    : String wts ( __wh_path dir `model.safetensors` )
-    : String tjs ( __wh_path dir `tokenizer.json` )
+    : String cfg ( _wh_path dir `config.json` )
+    : String wts ( _wh_path dir `model.safetensors` )
+    : String tjs ( _wh_path dir `tokenizer.json` )
     : ~ i rc 0
 
     : TokSpec spec @ TokSpec { TOK_BPE PRE_DEFAULT -1 -1 -1 F F F }

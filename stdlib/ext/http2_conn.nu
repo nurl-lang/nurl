@@ -358,7 +358,7 @@ $ `stdlib/ext/http2_hpack.nu`
 // the survivors down, and shrink the length via vec_set_len. The
 // abandoned tail slots are outside [0,len) and are never traversed again
 // (their buffers now live in the lower survivor slots — no double free).
-@ __h2_prune_closed H2Connection c → H2Connection {
+@ _h2_prune_closed H2Connection c → H2Connection {
     : ~ H2Connection cur c
     : i n ( vec_len [H2Stream] . cur streams )
     : *H2Stream sp ( vec_data [H2Stream] . cur streams )
@@ -1285,8 +1285,8 @@ $ `stdlib/ext/http2_hpack.nu`
                                 // Reclaim closed streams before counting, so
                                 // the cap reflects only genuinely-active
                                 // streams (RFC 9113 §5.1.2) and the table
-                                // stays bounded (see __h2_prune_closed).
-                                = cur ( __h2_prune_closed cur )
+                                // stays bounded (see _h2_prune_closed).
+                                = cur ( _h2_prune_closed cur )
                                 : i ns ( vec_len [H2Stream] . cur streams )
                                 ? & > . cur our_max_concurrent_streams 0
                                 >= ns . cur our_max_concurrent_streams

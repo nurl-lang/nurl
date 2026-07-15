@@ -59,7 +59,7 @@ $ `stdlib/core/vec.nu`
     : i bn ( vec_len [u] bb )
     : ~ i k 0
     ~ < k bn {
-        : i b ( __bbyte bb k )
+        : i b ( _bbyte bb k )
         : u byte # u b
         ( vec_push [u] . req body byte )
         = k + k 1

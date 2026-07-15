@@ -43,8 +43,8 @@ $ `stdlib/ext/smtp.nu`
 
 @ scan_show s label ( Vec u ) buf → v {
     ( nurl_print label )
-    ( nurl_print ` end=` ) ( nurl_print ( nurl_str_int ( __smtp_reply_scan buf ) ) )
-    ( nurl_print ` code=` ) ( nurl_print ( nurl_str_int ( __smtp_reply_code buf ) ) )
+    ( nurl_print ` end=` ) ( nurl_print ( nurl_str_int ( _smtp_reply_scan buf ) ) )
+    ( nurl_print ` code=` ) ( nurl_print ( nurl_str_int ( _smtp_reply_code buf ) ) )
     ( nurl_print `\n` )
 }
 
@@ -57,7 +57,7 @@ $ `stdlib/ext/smtp.nu`
     ( nurl_print ( smtp_err_name # SmtpErr SmtpNoStartTls ) ) ( nurl_print `\n` )
 
     // ── AUTH PLAIN / LOGIN tokens ──
-    : String ap ( __smtp_auth_plain_token `alice@example.com` `s3cret` )
+    : String ap ( _smtp_auth_plain_token `alice@example.com` `s3cret` )
     ( nurl_print `auth_plain=` ) ( nurl_print ( string_data ap ) ) ( nurl_print `\n` )
     ( string_free ap )
     : String lu ( b64_encode `alice@example.com` )

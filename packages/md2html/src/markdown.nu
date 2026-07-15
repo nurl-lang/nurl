@@ -37,7 +37,7 @@ $ `stdlib/core/vec.nu`
     }
 }
 
-@ __html_escape_into s src String out → v {
+@ _html_escape_into s src String out → v {
     : i n ( nurl_str_len src )
     : ~ i k 0
     ~ < k n {
@@ -51,7 +51,6 @@ $ `stdlib/core/vec.nu`
     ? | < idx 0 >= idx n { ^ 0 } {}
     ^ ( nurl_str_get buf idx )
 }
-
 
 // Render inline elements from `buf[from..to)` into `out`. Inline grammar
 // is recursion-free: walks left→right, handles `` ` `` (code spans),
@@ -281,7 +280,7 @@ $ `stdlib/core/vec.nu`
     : i ilen ( nurl_str_len info )
     ? > ilen 0 {
         ( string_push_str out `<pre><code class="language-` )
-        ( __html_escape_into info out )
+        ( _html_escape_into info out )
         ( string_push_str out `">` )
     } {
         ( string_push_str out `<pre><code>` )
@@ -311,7 +310,7 @@ $ `stdlib/core/vec.nu`
     : i line_end ? & > hard_end pos == ( nurl_str_get src - hard_end 1 ) 13 - hard_end 1 hard_end
     : String line ( string_with_cap + - line_end pos 1 )
     : ~ i k pos ~ < k line_end { ( string_push_char line ( nurl_str_get src k ) ) = k + k 1 }
-    ( __string_seal line )
+    ( _string_seal line )
     ^ line
 }
 
@@ -392,7 +391,7 @@ $ `stdlib/core/vec.nu`
             ( string_push_char line ( nurl_str_get src k ) )
             = k + k 1
         }
-        ( __string_seal line )
+        ( _string_seal line )
 
         : s lp ( string_data line )
 
@@ -405,7 +404,7 @@ $ `stdlib/core/vec.nu`
                 ( string_push_str out `</code></pre>\n` )
                 = in_code F
             } {
-                ( __html_escape_into lp out )
+                ( _html_escape_into lp out )
                 ( string_push_char out 10 )
             }
         } {
@@ -428,7 +427,7 @@ $ `stdlib/core/vec.nu`
                     ? & > hcount 0 == ( __md_byte lp line_len hcount ) 32 {
                         ( __md_close_block state out )
                         ( string_push_str out `<h` )
-                        : String hn ( string_with_cap 2 ) ( string_push_char hn + 48 hcount ) ( __string_seal hn )
+                        : String hn ( string_with_cap 2 ) ( string_push_char hn + 48 hcount ) ( _string_seal hn )
                         ( string_push_str out ( string_data hn ) )
                         ( string_push_char out 62 )
                         : i htxt_start + hcount 1
@@ -550,4 +549,3 @@ $ `stdlib/core/vec.nu`
     ~ < k n { : i c ( nurl_str_get line k ) ? == c 46 { ^ k } {} = k + k 1 }
     ^ - 0 1
 }
-

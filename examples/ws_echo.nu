@@ -46,7 +46,7 @@ $ `stdlib/ext/websocket.nu`
     // carry-buffer pipeline.
     : ( Vec u ) carry ( vec_new [u] )
     : HttpLimits lim ( http_default_limits )
-    : !ParsedHeadOk HttpReqErr ph ( __read_request_head conn carry lim )
+    : !ParsedHeadOk HttpReqErr ph ( _read_request_head conn carry lim )
     ?? ph {
         T pho → {
             : HttpRequest req . pho head

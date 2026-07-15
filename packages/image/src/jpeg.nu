@@ -35,14 +35,14 @@ $ `core.nu`
     ( Vec i ) cbw ( Vec i ) cbh  // padded block-grid dims per comp
 }
 
-@ __ivec i n i fill → ( Vec i ) {
+@ _ivec i n i fill → ( Vec i ) {
     : ( Vec i ) v ( vec_with_cap [i] n )
     : ~ i k 0
     ~ < k n { ( vec_push [i] v fill ) = k + k 1 }
     ^ v
 }
 
-@ __idct_basis → ( Vec f ) {
+@ _idct_basis → ( Vec f ) {
     : ( Vec f ) a ( vec_with_cap [f] 64 )
     ( vec_push [f] a 0.70710678118654746 ) ( vec_push [f] a 0.70710678118654746 ) ( vec_push [f] a 0.70710678118654746 ) ( vec_push [f] a 0.70710678118654746 ) ( vec_push [f] a 0.70710678118654746 ) ( vec_push [f] a 0.70710678118654746 ) ( vec_push [f] a 0.70710678118654746 ) ( vec_push [f] a 0.70710678118654746 )
     ( vec_push [f] a 0.98078528040323043 ) ( vec_push [f] a 0.83146961230254524 ) ( vec_push [f] a 0.55557023301960229 ) ( vec_push [f] a 0.19509032201612833 ) ( vec_push [f] a -0.19509032201612819 ) ( vec_push [f] a -0.55557023301960196 ) ( vec_push [f] a -0.83146961230254535 ) ( vec_push [f] a -0.98078528040323043 )
@@ -55,7 +55,7 @@ $ `core.nu`
     ^ a
 }
 
-@ __zigzag → ( Vec i ) {
+@ _zigzag → ( Vec i ) {
     : ( Vec i ) z ( vec_with_cap [i] 64 )
     ( vec_push [i] z 0 ) ( vec_push [i] z 1 ) ( vec_push [i] z 8 ) ( vec_push [i] z 16 ) ( vec_push [i] z 9 ) ( vec_push [i] z 2 ) ( vec_push [i] z 3 ) ( vec_push [i] z 10 )
     ( vec_push [i] z 17 ) ( vec_push [i] z 24 ) ( vec_push [i] z 32 ) ( vec_push [i] z 25 ) ( vec_push [i] z 18 ) ( vec_push [i] z 11 ) ( vec_push [i] z 4 ) ( vec_push [i] z 5 )
@@ -72,20 +72,20 @@ $ `core.nu`
     : *Jpeg j # *Jpeg ( nurl_malloc Z Jpeg )
     = . j buf buf
     = . j len ( vec_len [u] buf )
-    = . j cid ( __ivec 4 0 )
-    = . j chf ( __ivec 4 1 )
-    = . j cvf ( __ivec 4 1 )
-    = . j ctq ( __ivec 4 0 )
-    = . j ctd ( __ivec 4 0 )
-    = . j cta ( __ivec 4 0 )
-    = . j cpred ( __ivec 4 0 )
-    = . j qt ( __ivec 256 0 )
-    = . j hmin ( __ivec 136 0 )
-    = . j hmaxc ( __ivec 136 -1 )
-    = . j hptr ( __ivec 136 0 )
-    = . j hvals ( __ivec 2048 0 )
-    = . j idct_a ( __idct_basis )
-    = . j zz ( __zigzag )
+    = . j cid ( _ivec 4 0 )
+    = . j chf ( _ivec 4 1 )
+    = . j cvf ( _ivec 4 1 )
+    = . j ctq ( _ivec 4 0 )
+    = . j ctd ( _ivec 4 0 )
+    = . j cta ( _ivec 4 0 )
+    = . j cpred ( _ivec 4 0 )
+    = . j qt ( _ivec 256 0 )
+    = . j hmin ( _ivec 136 0 )
+    = . j hmaxc ( _ivec 136 -1 )
+    = . j hptr ( _ivec 136 0 )
+    = . j hvals ( _ivec 2048 0 )
+    = . j idct_a ( _idct_basis )
+    = . j zz ( _zigzag )
     = . j bcnt 0
     = . j marker 0
     = . j restart 0
@@ -97,10 +97,10 @@ $ `core.nu`
     = . j al 0
     = . j eobrun 0
     = . j nscomp 0
-    = . j scomp ( __ivec 4 0 )
+    = . j scomp ( _ivec 4 0 )
     = . j coefs ( vec_new [( Vec i )] )
-    = . j cbw ( __ivec 4 0 )
-    = . j cbh ( __ivec 4 0 )
+    = . j cbw ( _ivec 4 0 )
+    = . j cbh ( _ivec 4 0 )
     ^ j
 }
 
@@ -122,16 +122,16 @@ $ `core.nu`
 }
 
 // ── 16-bit big-endian at a byte position ──────────────────────────────
-@ __u16 ( Vec u ) buf i p → i { ^ + * ( __b buf p ) 256 ( __b buf + p 1 ) }
+@ __u16 ( Vec u ) buf i p → i { ^ + * ( _byte buf p ) 256 ( _byte buf + p 1 ) }
 
 // ── Entropy bit reader (handles 0xFF00 stuffing; stops at a marker) ────
 @ __jpg_bit * Jpeg j → i {
     ? > . j bcnt 0 {} {
         : i p . j bpos
         ? >= p . j len { = . j marker 217 ^ 0 } {}
-        : i b ( __b . j buf p )
+        : i b ( _byte . j buf p )
         ? == b 255 {
-            : i b2 ( __b . j buf + p 1 )
+            : i b2 ( _byte . j buf + p 1 )
             ? == b2 0 {
                 = . j bpos + p 2
                 = . j bbuf 255
@@ -166,17 +166,17 @@ $ `core.nu`
     : i base * t 17
     : ~ i code ( __jpg_bit j )
     : ~ i len 1
-    ~ & <= len 16 > code ( __b_i . j hmaxc + base len ) {
+    ~ & <= len 16 > code ( _b_i . j hmaxc + base len ) {
         = code | << code 1 ( __jpg_bit j )
         = len + len 1
     }
     ? > len 16 { ^ -1 } {}
-    : i idx + ( __b_i . j hptr + base len ) - code ( __b_i . j hmin + base len )
-    ^ ( __b_i . j hvals + * t 256 idx )
+    : i idx + ( _b_i . j hptr + base len ) - code ( _b_i . j hmin + base len )
+    ^ ( _b_i . j hvals + * t 256 idx )
 }
 
 // int-vector read (0 out of range)
-@ __b_i ( Vec i ) v i p → i {
+@ _b_i ( Vec i ) v i p → i {
     ?? ( vec_get [i] v p ) { T x → { ^ x } F _ → { ^ 0 } }
 }
 
@@ -184,15 +184,15 @@ $ `core.nu`
 @ __jpg_block * Jpeg j i comp ( Vec i ) blk → v {
     : ~ i k 0
     ~ < k 64 { ( vec_set [i] blk k 0 ) = k + k 1 }
-    : i tq * ( __b_i . j ctq comp ) 64
-    : i td ( __b_i . j ctd comp )
-    : i ta + 4 ( __b_i . j cta comp )
+    : i tq * ( _b_i . j ctq comp ) 64
+    : i td ( _b_i . j ctd comp )
+    : i ta + 4 ( _b_i . j cta comp )
     : i s ( __jpg_huff j td )
     ? < s 0 { = . j ok F ^ } {}  // corrupt Huffman table/stream
     : i diff ? > s 0 { ( __jpg_extend ( __jpg_receive j s ) s ) } { 0 }
-    : i pred + ( __b_i . j cpred comp ) diff
+    : i pred + ( _b_i . j cpred comp ) diff
     ( vec_set [i] . j cpred comp pred )
-    ( vec_set [i] blk 0 * pred ( __b_i . j qt tq ) )
+    ( vec_set [i] blk 0 * pred ( _b_i . j qt tq ) )
     : ~ i z 1
     ~ & . j ok <= z 63 {
         : i rs ( __jpg_huff j ta )
@@ -205,7 +205,7 @@ $ `core.nu`
             = z + z r
             ? <= z 63 {
                 : i val ( __jpg_extend ( __jpg_receive j sz ) sz )
-                ( vec_set [i] blk ( __b_i . j zz z ) * val ( __b_i . j qt + tq z ) )
+                ( vec_set [i] blk ( _b_i . j zz z ) * val ( _b_i . j qt + tq z ) )
                 = z + z 1
             } { = z 64 }
         }
@@ -222,7 +222,7 @@ $ `core.nu`
         ~ < x 8 {
             : ~ f s 0.0
             : ~ i u 0
-            ~ < u 8 { = s + s * ( __b_f A + * u 8 x ) # f ( __b_i blk + * y 8 u ) = u + u 1 }
+            ~ < u 8 { = s + s * ( _b_f A + * u 8 x ) # f ( _b_i blk + * y 8 u ) = u + u 1 }
             ( vec_set [f] tmp + * y 8 x * s 0.5 )
             = x + x 1
         }
@@ -235,7 +235,7 @@ $ `core.nu`
         ~ < y2 8 {
             : ~ f s2 0.0
             : ~ i v 0
-            ~ < v 8 { = s2 + s2 * ( __b_f A + * v 8 y2 ) ( __b_f tmp + * v 8 x2 ) = v + v 1 }
+            ~ < v 8 { = s2 + s2 * ( _b_f A + * v 8 y2 ) ( _b_f tmp + * v 8 x2 ) = v + v 1 }
             : f fv + * s2 0.5 128.0
             : ~ i r ? >= fv 0.0 { # i + fv 0.5 } { # i - fv 0.5 }
             ? < r 0 { = r 0 } {}
@@ -247,7 +247,7 @@ $ `core.nu`
     }
 }
 
-@ __b_f ( Vec f ) v i p → f {
+@ _b_f ( Vec f ) v i p → f {
     ?? ( vec_get [f] v p ) { T x → { ^ x } F _ → { ^ 0.0 } }
 }
 
@@ -256,7 +256,7 @@ $ `core.nu`
     = . j bcnt 0
     = . j marker 0
     : i p . j bpos
-    ? & == ( __b . j buf p ) 255 & >= ( __b . j buf + p 1 ) 208 <= ( __b . j buf + p 1 ) 215 {
+    ? & == ( _byte . j buf p ) 255 & >= ( _byte . j buf + p 1 ) 208 <= ( _byte . j buf + p 1 ) 215 {
         = . j bpos + p 2
     } {}
     : ~ i c 0
@@ -268,13 +268,13 @@ $ `core.nu`
 @ __jpg_dqt * Jpeg j i dp i dend → v {
     : ~ i p dp
     ~ < p dend {
-        : i pqtq ( __b . j buf p )
+        : i pqtq ( _byte . j buf p )
         : i pq >> pqtq 4
         : i tq & pqtq 15
         = p + p 1
         : ~ i k 0
         ~ < k 64 {
-            : i val ? == pq 0 { ( __b . j buf + p k ) } { ( __u16 . j buf + p * k 2 ) }
+            : i val ? == pq 0 { ( _byte . j buf + p k ) } { ( __u16 . j buf + p * k 2 ) }
             ( vec_set [i] . j qt + * tq 64 k val )
             = k + k 1
         }
@@ -285,16 +285,16 @@ $ `core.nu`
 @ __jpg_dht * Jpeg j i dp i dend → v {
     : ~ i p dp
     ~ < p dend {
-        : i tcth ( __b . j buf p )
+        : i tcth ( _byte . j buf p )
         : i tc >> tcth 4
         : i th & tcth 15
         : i t + * tc 4 th
         = p + p 1
-        : ( Vec i ) counts ( __ivec 17 0 )
+        : ( Vec i ) counts ( _ivec 17 0 )
         : ~ i total 0
         : ~ i L 1
         ~ <= L 16 {
-            : i c ( __b . j buf + p - L 1 )
+            : i c ( _byte . j buf + p - L 1 )
             ( vec_set [i] counts L c )
             = total + total c
             = L + L 1
@@ -305,7 +305,7 @@ $ `core.nu`
         : ~ i kk 0
         : ~ i LL 1
         ~ <= LL 16 {
-            : i cnt ( __b_i counts LL )
+            : i cnt ( _b_i counts LL )
             ? == cnt 0 {
                 ( vec_set [i] . j hmaxc + base LL -1 )
             } {
@@ -320,7 +320,7 @@ $ `core.nu`
         }
         : ~ i si 0
         ~ < si total {
-            ( vec_set [i] . j hvals + * t 256 si ( __b . j buf + p si ) )
+            ( vec_set [i] . j hvals + * t 256 si ( _byte . j buf + p si ) )
             = si + si 1
         }
         = p + p total
@@ -329,12 +329,12 @@ $ `core.nu`
 }
 
 @ __jpg_sof * Jpeg j i dp → b {
-    ? == ( __b . j buf dp ) 8 {} { ^ F }
+    ? == ( _byte . j buf dp ) 8 {} { ^ F }
     = . j height ( __u16 . j buf + dp 1 )
     = . j width ( __u16 . j buf + dp 3 )
     ? & > . j width 0 > . j height 0 {} { ^ F }
     ? <= * . j width . j height 67108864 {} { ^ F }  // ≤ 64 Mpx
-    : i nc ( __b . j buf + dp 5 )
+    : i nc ( _byte . j buf + dp 5 )
     ? || == nc 1 == nc 3 {} { ^ F }
     = . j ncomp nc
     : ~ i hmax 1
@@ -342,14 +342,14 @@ $ `core.nu`
     : ~ i c 0
     ~ < c nc {
         : i o + dp + 6 * c 3
-        ( vec_set [i] . j cid c ( __b . j buf o ) )
-        : i hv ( __b . j buf + o 1 )
+        ( vec_set [i] . j cid c ( _byte . j buf o ) )
+        : i hv ( _byte . j buf + o 1 )
         : i h >> hv 4
         : i vv & hv 15
         ? & & >= h 1 <= h 4 & >= vv 1 <= vv 4 {} { ^ F }  // T.81 sampling range
         ( vec_set [i] . j chf c h )
         ( vec_set [i] . j cvf c vv )
-        : i tq ( __b . j buf + o 2 )
+        : i tq ( _byte . j buf + o 2 )
         ? <= tq 3 {} { ^ F }
         ( vec_set [i] . j ctq c tq )
         ? > h hmax { = hmax h } {}
@@ -362,17 +362,17 @@ $ `core.nu`
 }
 
 @ __jpg_sos * Jpeg j i dp → v {
-    : ~ i ns ( __b . j buf dp )
+    : ~ i ns ( _byte . j buf dp )
     ? || < ns 1 > ns 4 { = ns 1 } {}
     = . j nscomp ns
     : ~ i s 0
     ~ < s ns {
-        : i cs ( __b . j buf + dp + 1 * s 2 )
-        : i tdta ( __b . j buf + dp + 2 * s 2 )
+        : i cs ( _byte . j buf + dp + 1 * s 2 )
+        : i tdta ( _byte . j buf + dp + 2 * s 2 )
         : ~ i ci 0
         : ~ i cc 0
         ~ < cc . j ncomp {
-            ? == ( __b_i . j cid cc ) cs { = ci cc } {}
+            ? == ( _b_i . j cid cc ) cs { = ci cc } {}
             = cc + cc 1
         }
         ( vec_set [i] . j scomp s ci )
@@ -382,9 +382,9 @@ $ `core.nu`
     }
     // Ss / Se / (Ah<<4 | Al) — baseline writes 0 / 63 / 0 here
     : i base + dp + 1 * ns 2
-    = . j ss ( __b . j buf base )
-    = . j se ( __b . j buf + base 1 )
-    : i aa ( __b . j buf + base 2 )
+    = . j ss ( _byte . j buf base )
+    = . j se ( _byte . j buf + base 1 )
+    : i aa ( _byte . j buf + base 2 )
     = . j ah >> aa 4
     = . j al & aa 15
     ? > . j se 63 { = . j se 63 } {}
@@ -410,11 +410,11 @@ $ `core.nu`
     : i mcuy / + . j height - * . j vmax 8 1 * . j vmax 8
     : ~ i c 0
     ~ < c . j ncomp {
-        : i bw * mcux ( __b_i . j chf c )
-        : i bh * mcuy ( __b_i . j cvf c )
+        : i bw * mcux ( _b_i . j chf c )
+        : i bh * mcuy ( _b_i . j cvf c )
         ( vec_set [i] . j cbw c bw )
         ( vec_set [i] . j cbh c bh )
-        ( vec_push [( Vec i )] . j coefs ( __ivec * * bw bh 64 0 ) )
+        ( vec_push [( Vec i )] . j coefs ( _ivec * * bw bh 64 0 ) )
         = c + c 1
     }
 }
@@ -429,16 +429,16 @@ $ `core.nu`
 @ __jpg_prog_dc * Jpeg j i ci ( Vec i ) cf i bidx → v {
     : i base * bidx 64
     ? == . j ah 0 {
-        : i td ( __b_i . j ctd ci )
+        : i td ( _b_i . j ctd ci )
         : i s ( __jpg_huff j td )
         ? < s 0 { = . j ok F ^ } {}
         : i diff ? > s 0 { ( __jpg_extend ( __jpg_receive j s ) s ) } { 0 }
-        : i pred + ( __b_i . j cpred ci ) diff
+        : i pred + ( _b_i . j cpred ci ) diff
         ( vec_set [i] . j cpred ci pred )
         ( vec_set [i] cf base << pred . j al )
     } {
         ? == ( __jpg_bit j ) 1 {
-            ( vec_set [i] cf base | ( __b_i cf base ) << 1 . j al )
+            ( vec_set [i] cf base | ( _b_i cf base ) << 1 . j al )
         } {}
     }
 }
@@ -447,7 +447,7 @@ $ `core.nu`
 @ __jpg_prog_ac1 * Jpeg j i ci ( Vec i ) cf i bidx → v {
     : i base * bidx 64
     ? > . j eobrun 0 { = . j eobrun - . j eobrun 1 ^ } {}
-    : i ta + 4 ( __b_i . j cta ci )
+    : i ta + 4 ( _b_i . j cta ci )
     : ~ i k . j ss
     : ~ b going T
     ~ & going <= k . j se {
@@ -466,7 +466,7 @@ $ `core.nu`
                 = k + k r
                 ? > k . j se { = going F } {
                     : i val ( __jpg_extend ( __jpg_receive j s ) s )
-                    ( vec_set [i] cf + base ( __b_i . j zz k ) << val . j al )
+                    ( vec_set [i] cf + base ( _b_i . j zz k ) << val . j al )
                     = k + k 1
                 }
             }
@@ -476,7 +476,7 @@ $ `core.nu`
 
 // One correction bit for an already-nonzero coefficient.
 @ __jpg_prog_fix * Jpeg j ( Vec i ) cf i pos i bit → v {
-    : i cur ( __b_i cf pos )
+    : i cur ( _b_i cf pos )
     ? == ( __jpg_bit j ) 1 {
         ? == & cur bit 0 {
             ( vec_set [i] cf pos ? > cur 0 { + cur bit } { - cur bit } )
@@ -493,13 +493,13 @@ $ `core.nu`
         = . j eobrun - . j eobrun 1
         : ~ i k . j ss
         ~ <= k . j se {
-            : i pos + base ( __b_i . j zz k )
-            ? != ( __b_i cf pos ) 0 { ( __jpg_prog_fix j cf pos bit ) } {}
+            : i pos + base ( _b_i . j zz k )
+            ? != ( _b_i cf pos ) 0 { ( __jpg_prog_fix j cf pos bit ) } {}
             = k + k 1
         }
         ^
     } {}
-    : i ta + 4 ( __b_i . j cta ci )
+    : i ta + 4 ( _b_i . j cta ci )
     : ~ i k2 . j ss
     ~ & . j ok <= k2 . j se {
         : i rs ( __jpg_huff j ta )
@@ -518,9 +518,9 @@ $ `core.nu`
         }
         : ~ b walking T
         ~ & walking <= k2 . j se {
-            : i pos + base ( __b_i . j zz k2 )
+            : i pos + base ( _b_i . j zz k2 )
             = k2 + k2 1
-            ? != ( __b_i cf pos ) 0 { ( __jpg_prog_fix j cf pos bit ) } {
+            ? != ( _b_i cf pos ) 0 { ( __jpg_prog_fix j cf pos bit ) } {
                 ? == r 0 {
                     ? != s 0 { ( vec_set [i] cf pos s ) } {}
                     = walking F
@@ -542,12 +542,12 @@ $ `core.nu`
 @ __jpg_prog_scan * Jpeg j → v {
     : i ns . j nscomp
     ? == ns 1 {
-        : i ci ( __b_i . j scomp 0 )
-        : i cw / + * . j width ( __b_i . j chf ci ) - . j hmax 1 . j hmax
-        : i chh / + * . j height ( __b_i . j cvf ci ) - . j vmax 1 . j vmax
+        : i ci ( _b_i . j scomp 0 )
+        : i cw / + * . j width ( _b_i . j chf ci ) - . j hmax 1 . j hmax
+        : i chh / + * . j height ( _b_i . j cvf ci ) - . j vmax 1 . j vmax
         : i nbw / + cw 7 8
         : i nbh / + chh 7 8
-        : i bw ( __b_i . j cbw ci )
+        : i bw ( _b_i . j cbw ci )
         ?? ( vec_get [( Vec i )] . j coefs ci ) {
             T cf → {
                 : ~ i cnt 0
@@ -576,10 +576,10 @@ $ `core.nu`
                 ? & & > . j restart 0 > cnt 0 == % cnt . j restart 0 { ( __jpg_prog_restart j ) } {}
                 : ~ i sc 0
                 ~ < sc ns {
-                    : i ci ( __b_i . j scomp sc )
-                    : i hf ( __b_i . j chf ci )
-                    : i vf ( __b_i . j cvf ci )
-                    : i bw ( __b_i . j cbw ci )
+                    : i ci ( _b_i . j scomp sc )
+                    : i hf ( _b_i . j chf ci )
+                    : i vf ( _b_i . j cvf ci )
+                    : i bw ( _b_i . j cbw ci )
                     ?? ( vec_get [( Vec i )] . j coefs ci ) {
                         T cf → {
                             : ~ i by 0
@@ -610,17 +610,17 @@ $ `core.nu`
     ? & & > . j width 0 > . j height 0 & > . j hmax 0 > . j vmax 0 {} { ^ @ ?Image { F } }
     : i nc . j ncomp
     : ( Vec ( Vec i ) ) planes ( vec_new [( Vec i )] )
-    : ( Vec i ) blk ( __ivec 64 0 )
+    : ( Vec i ) blk ( _ivec 64 0 )
     : ( Vec f ) tmp ( vec_with_cap [f] 64 )
     : ~ i tz 0
     ~ < tz 64 { ( vec_push [f] tmp 0.0 ) = tz + tz 1 }
     : ~ i c 0
     ~ < c nc {
-        : i bw ( __b_i . j cbw c )
-        : i bh ( __b_i . j cbh c )
+        : i bw ( _b_i . j cbw c )
+        : i bh ( _b_i . j cbh c )
         : i pw * bw 8
-        : ( Vec i ) plane ( __ivec * pw * bh 8 0 )
-        : i tq * ( __b_i . j ctq c ) 64
+        : ( Vec i ) plane ( _ivec * pw * bh 8 0 )
+        : i tq * ( _b_i . j ctq c ) 64
         ?? ( vec_get [( Vec i )] . j coefs c ) {
             T cf → {
                 : ~ i by 0
@@ -630,8 +630,8 @@ $ `core.nu`
                         : i base * + * by bw bx 64
                         : ~ i z 0
                         ~ < z 64 {
-                            : i nat ( __b_i . j zz z )
-                            ( vec_set [i] blk nat * ( __b_i cf + base nat ) ( __b_i . j qt + tq z ) )
+                            : i nat ( _b_i . j zz z )
+                            ( vec_set [i] blk nat * ( _b_i cf + base nat ) ( _b_i . j qt + tq z ) )
                             = z + z 1
                         }
                         ( __jpg_idct j blk tmp plane * bx 8 * by 8 pw )
@@ -661,9 +661,9 @@ $ `core.nu`
     : ~ b sawscan F
     : ~ b going T
     ~ & & going . j ok < + p 2 n {
-        ? == ( __b . j buf p ) 255 {} { = . j ok F = going F }
+        ? == ( _byte . j buf p ) 255 {} { = . j ok F = going F }
         ? going {
-            : i m ( __b . j buf + p 1 )
+            : i m ( _byte . j buf + p 1 )
             ? == m 255 { = p + p 1 } {
                 ? || == m 1 & >= m 208 <= m 215 { = p + p 2 } {  // TEM / stray RSTn
                     ? == m 216 { = p + p 2 } {  // stray SOI
@@ -681,13 +681,13 @@ $ `core.nu`
                                             ? == m 221 { = . j restart ( __u16 . j buf dp ) } {
                                                 ? || == m 192 == m 193 {
                                                     ? || sof ! ( __jpg_sof j dp ) {
-                                                        ( __img_set_err `JPEG: unsupported frame (precision, size, components or sampling)` )
+                                                        ( _img_set_err `JPEG: unsupported frame (precision, size, components or sampling)` )
                                                         = . j ok F
                                                     } { = sof T = . j prog F }
                                                 } {
                                                     ? == m 194 {
                                                         ? || sof ! ( __jpg_sof j dp ) {
-                                                            ( __img_set_err `JPEG: unsupported frame (precision, size, components or sampling)` )
+                                                            ( _img_set_err `JPEG: unsupported frame (precision, size, components or sampling)` )
                                                             = . j ok F
                                                         } {
                                                             = sof T
@@ -697,7 +697,7 @@ $ `core.nu`
                                                     } {
                                                         ? & >= m 195 <= m 207 {
                                                             ? == m 204 {} {
-                                                                ( __img_set_err `JPEG: unsupported coding (arithmetic, 12-bit or lossless)` )
+                                                                ( _img_set_err `JPEG: unsupported coding (arithmetic, 12-bit or lossless)` )
                                                                 = . j ok F
                                                             }
                                                         } {
@@ -732,7 +732,7 @@ $ `core.nu`
 @ __jpg_pat ( Vec i ) p i pw i cw i ch i sx i sy → i {
     : i xx ? < sx 0 { 0 } { ? < sx cw { sx } { - cw 1 } }
     : i yy ? < sy 0 { 0 } { ? < sy ch { sy } { - ch 1 } }
-    ^ ( __b_i p + * yy pw xx )
+    ^ ( _b_i p + * yy pw xx )
 }
 
 // One full-resolution sample of a (possibly subsampled) component plane.
@@ -742,7 +742,7 @@ $ `core.nu`
 // biases 1/2 (h2v1, >>2) and 8/7 (h2v2, >>4 on 3:1 column sums); plain box
 // for any other ratio and for tiny components (cw <= 2), as libjpeg does.
 @ __jpg_sample ( Vec i ) plane i pw i cw i ch i hf i vf i hmax i vmax i x i y → i {
-    ? & == hf hmax == vf vmax { ^ ( __b_i plane + * y pw x ) } {}
+    ? & == hf hmax == vf vmax { ^ ( _b_i plane + * y pw x ) } {}
     ? & & == * hf 2 hmax > cw 2 == vf vmax {
         // h2v1 fancy: (3*near + far + 1|2) >> 2
         : i sx / x 2
@@ -771,7 +771,7 @@ $ `core.nu`
     // box upsample (non-2x or fractional ratios)
     : i sx / * x hf hmax
     : i sy / * y vf vmax
-    ^ ( __b_i plane + * sy pw sx )
+    ^ ( _b_i plane + * sy pw sx )
 }
 
 @ __jpg_scan * Jpeg j → ?Image {
@@ -787,13 +787,13 @@ $ `core.nu`
     : ( Vec ( Vec i ) ) planes ( vec_new [( Vec i )] )
     : ~ i c 0
     ~ < c nc {
-        : i pw * * mcux ( __b_i . j chf c ) 8
-        : i ph * * mcuy ( __b_i . j cvf c ) 8
-        ( vec_push [( Vec i )] planes ( __ivec * pw ph 0 ) )
+        : i pw * * mcux ( _b_i . j chf c ) 8
+        : i ph * * mcuy ( _b_i . j cvf c ) 8
+        ( vec_push [( Vec i )] planes ( _ivec * pw ph 0 ) )
         = c + c 1
     }
 
-    : ( Vec i ) blk ( __ivec 64 0 )
+    : ( Vec i ) blk ( _ivec 64 0 )
     : ( Vec f ) tmp ( vec_with_cap [f] 64 )
     : ~ i tz 0
     ~ < tz 64 { ( vec_push [f] tmp 0.0 ) = tz + tz 1 }
@@ -806,8 +806,8 @@ $ `core.nu`
             ? & & > . j restart 0 > mcount 0 == % mcount . j restart 0 { ( __jpg_restart j ) } {}
             : ~ i cc 0
             ~ < cc nc {
-                : i hf ( __b_i . j chf cc )
-                : i vf ( __b_i . j cvf cc )
+                : i hf ( _b_i . j chf cc )
+                : i vf ( _b_i . j cvf cc )
                 : i pw * * mcux hf 8
                 ?? ( vec_get [( Vec i )] planes cc ) {
                     T plane → {
@@ -851,18 +851,18 @@ $ `core.nu`
     : ( Vec u ) out ( vec_with_cap [u] * * W H outch )
     ?? ( vec_get [( Vec i )] planes 0 ) {
         T p0 → {
-            : i hf0 ( __b_i . j chf 0 )
-            : i vf0 ( __b_i . j cvf 0 )
+            : i hf0 ( _b_i . j chf 0 )
+            : i vf0 ( _b_i . j cvf 0 )
             : i pw0 * * mcux hf0 8
             : i cw0 / + * W hf0 - hmax 1 hmax
             : i ch0 / + * H vf0 - vmax 1 vmax
-            : i hf1 ( __b_i . j chf 1 )
-            : i vf1 ( __b_i . j cvf 1 )
+            : i hf1 ( _b_i . j chf 1 )
+            : i vf1 ( _b_i . j cvf 1 )
             : i pw1 * * mcux hf1 8
             : i cw1 / + * W hf1 - hmax 1 hmax
             : i ch1 / + * H vf1 - vmax 1 vmax
-            : i hf2 ( __b_i . j chf 2 )
-            : i vf2 ( __b_i . j cvf 2 )
+            : i hf2 ( _b_i . j chf 2 )
+            : i vf2 ( _b_i . j cvf 2 )
             : i pw2 * * mcux hf2 8
             : i cw2 / + * W hf2 - hmax 1 hmax
             : i ch2 / + * H vf2 - vmax 1 vmax
@@ -871,7 +871,7 @@ $ `core.nu`
                 : ~ i x 0
                 ~ < x W {
                     ? == nc 1 {
-                        ( vec_push [u] out & ( __b_i p0 + * y pw0 x ) 255 )
+                        ( vec_push [u] out & ( _b_i p0 + * y pw0 x ) 255 )
                     } {
                         : i Y ( __jpg_sample p0 pw0 cw0 ch0 hf0 vf0 hmax vmax x y )
                         : ~ i Cb 128
@@ -920,17 +920,17 @@ $ `core.nu`
 // ── Public entry ──────────────────────────────────────────────────────
 
 @ jpeg_decode ( Vec u ) buf → ?Image {
-    ( __img_set_err `` )
+    ( _img_set_err `` )
     : i n ( vec_len [u] buf )
-    ? < n 4 { ( __img_set_err `not a JPEG` ) ^ @ ?Image { F } } {}
-    ? & == ( __b buf 0 ) 255 == ( __b buf 1 ) 216 {} { ( __img_set_err `not a JPEG` ) ^ @ ?Image { F } }
+    ? < n 4 { ( _img_set_err `not a JPEG` ) ^ @ ?Image { F } } {}
+    ? & == ( _byte buf 0 ) 255 == ( _byte buf 1 ) 216 {} { ( _img_set_err `not a JPEG` ) ^ @ ?Image { F } }
     : *Jpeg j ( __jpg_new buf )
     : ?Image im ( __jpg_run j )
     ( __jpg_free j )
     ?? im {
         T x → { ^ @ ?Image { T x } }
         F _ → {
-            ? ( nurl_str_eq ( image_error ) `` ) { ( __img_set_err `JPEG: corrupt or unsupported stream` ) } {}
+            ? ( nurl_str_eq ( image_error ) `` ) { ( _img_set_err `JPEG: corrupt or unsupported stream` ) } {}
             ^ @ ?Image { F }
         }
     }

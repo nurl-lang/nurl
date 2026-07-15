@@ -29,11 +29,11 @@ $ `jpeg.nu`
     : ( Vec i ) out ( vec_new [i] )
     : ~ i p 0
     ~ < p n {
-        : i c ( __b b p )
+        : i c ( _byte b p )
         ? & >= c 48 <= c 57 {
             : ~ i v 0
-            ~ & < p n & >= ( __b b p ) 48 <= ( __b b p ) 57 {
-                = v + * v 10 - ( __b b p ) 48
+            ~ & < p n & >= ( _byte b p ) 48 <= ( _byte b p ) 57 {
+                = v + * v 10 - ( _byte b p ) 48
                 = p + p 1
             }
             ( vec_push [i] out v )
@@ -49,19 +49,26 @@ $ `jpeg.nu`
 @ __jpe_qbase_luma → ( Vec i ) {
     ^ ( __jpe_ints `16 11 10 16 24 40 51 61 12 12 14 19 26 58 60 55 14 13 16 24 40 57 69 56 14 17 22 29 51 87 80 62 18 22 37 56 68 109 103 77 24 35 55 64 81 104 113 92 49 64 78 87 103 121 120 101 72 92 95 98 112 100 103 99` )
 }
+
 @ __jpe_qbase_chroma → ( Vec i ) {
     ^ ( __jpe_ints `17 18 24 47 99 99 99 99 18 21 26 66 99 99 99 99 24 26 56 99 99 99 99 99 47 66 99 99 99 99 99 99 99 99 99 99 99 99 99 99 99 99 99 99 99 99 99 99 99 99 99 99 99 99 99 99 99 99 99 99 99 99 99 99` )
 }
 
 // Standard Huffman specs: 16 length counts, then the symbol list.
 @ __jpe_hbits_dc_l → ( Vec i ) { ^ ( __jpe_ints `0 1 5 1 1 1 1 1 1 0 0 0 0 0 0 0` ) }
+
 @ __jpe_hvals_dc → ( Vec i ) { ^ ( __jpe_ints `0 1 2 3 4 5 6 7 8 9 10 11` ) }
+
 @ __jpe_hbits_dc_c → ( Vec i ) { ^ ( __jpe_ints `0 3 1 1 1 1 1 1 1 1 1 0 0 0 0 0` ) }
+
 @ __jpe_hbits_ac_l → ( Vec i ) { ^ ( __jpe_ints `0 2 1 3 3 2 4 3 5 5 4 4 0 0 1 125` ) }
+
 @ __jpe_hvals_ac_l → ( Vec i ) {
     ^ ( __jpe_ints `1 2 3 0 4 17 5 18 33 49 65 6 19 81 97 7 34 113 20 50 129 145 161 8 35 66 177 193 21 82 209 240 36 51 98 114 130 9 10 22 23 24 25 26 37 38 39 40 41 42 52 53 54 55 56 57 58 67 68 69 70 71 72 73 74 83 84 85 86 87 88 89 90 99 100 101 102 103 104 105 106 115 116 117 118 119 120 121 122 131 132 133 134 135 136 137 138 146 147 148 149 150 151 152 153 154 162 163 164 165 166 167 168 169 170 178 179 180 181 182 183 184 185 186 194 195 196 197 198 199 200 201 202 210 211 212 213 214 215 216 217 218 225 226 227 228 229 230 231 232 233 234 241 242 243 244 245 246 247 248 249 250` )
 }
+
 @ __jpe_hbits_ac_c → ( Vec i ) { ^ ( __jpe_ints `0 2 1 2 4 4 3 4 7 5 4 4 0 1 2 119` ) }
+
 @ __jpe_hvals_ac_c → ( Vec i ) {
     ^ ( __jpe_ints `0 1 2 3 17 4 5 33 49 6 18 65 81 7 97 113 19 34 50 129 8 20 66 145 161 177 193 9 35 51 82 240 21 98 114 209 10 22 36 52 225 37 241 23 24 25 26 38 39 40 41 42 53 54 55 56 57 58 67 68 69 70 71 72 73 74 83 84 85 86 87 88 89 90 99 100 101 102 103 104 105 106 115 116 117 118 119 120 121 122 130 131 132 133 134 135 136 137 138 146 147 148 149 150 151 152 153 154 162 163 164 165 166 167 168 169 170 178 179 180 181 182 183 184 185 186 194 195 196 197 198 199 200 201 202 210 211 212 213 214 215 216 217 218 226 227 228 229 230 231 232 233 234 242 243 244 245 246 247 248 249 250` )
 }
@@ -73,8 +80,8 @@ $ `jpeg.nu`
     : ~ i L 1
     ~ <= L 16 {
         : ~ i c 0
-        ~ < c ( __b_i bits - L 1 ) {
-            : i sym ( __b_i vals k )
+        ~ < c ( _b_i bits - L 1 ) {
+            : i sym ( _b_i vals k )
             ( vec_set [i] co sym code )
             ( vec_set [i] si sym L )
             = code + code 1
@@ -90,13 +97,13 @@ $ `jpeg.nu`
 
 : JEnc {
     ( Vec u ) out
-    i bbuf  i bcnt
-    ( Vec i ) qy  ( Vec i ) qc            // quant tables, zigzag order
+    i bbuf i bcnt
+    ( Vec i ) qy ( Vec i ) qc  // quant tables, zigzag order
     ( Vec i ) ydc_co ( Vec i ) ydc_si
     ( Vec i ) yac_co ( Vec i ) yac_si
     ( Vec i ) cdc_co ( Vec i ) cdc_si
     ( Vec i ) cac_co ( Vec i ) cac_si
-    ( Vec f ) A  ( Vec i ) zz
+    ( Vec f ) A ( Vec i ) zz
 }
 
 // libjpeg quality scaling: 1..100 → per-entry scale, clamped to 1..255.
@@ -108,7 +115,7 @@ $ `jpeg.nu`
     : ( Vec i ) out ( vec_with_cap [i] 64 )
     : ~ i z 0
     ~ < z 64 {
-        : ~ i v / + * ( __b_i base ( __b_i zz z ) ) sf 50 100
+        : ~ i v / + * ( _b_i base ( _b_i zz z ) ) sf 50 100
         ? < v 1 { = v 1 } {}
         ? > v 255 { = v 255 } {}
         ( vec_push [i] out v )
@@ -122,17 +129,17 @@ $ `jpeg.nu`
     = . e out ( vec_new [u] )
     = . e bbuf 0
     = . e bcnt 0
-    = . e A ( __idct_basis )
-    = . e zz ( __zigzag )
+    = . e A ( _idct_basis )
+    = . e zz ( _zigzag )
     : ( Vec i ) bl ( __jpe_qbase_luma )
     : ( Vec i ) bc ( __jpe_qbase_chroma )
     = . e qy ( __jpe_scale_q bl quality . e zz )
     = . e qc ( __jpe_scale_q bc quality . e zz )
     ( vec_free [i] bl ) ( vec_free [i] bc )
-    = . e ydc_co ( __ivec 256 0 )  = . e ydc_si ( __ivec 256 0 )
-    = . e yac_co ( __ivec 256 0 )  = . e yac_si ( __ivec 256 0 )
-    = . e cdc_co ( __ivec 256 0 )  = . e cdc_si ( __ivec 256 0 )
-    = . e cac_co ( __ivec 256 0 )  = . e cac_si ( __ivec 256 0 )
+    = . e ydc_co ( _ivec 256 0 ) = . e ydc_si ( _ivec 256 0 )
+    = . e yac_co ( _ivec 256 0 ) = . e yac_si ( _ivec 256 0 )
+    = . e cdc_co ( _ivec 256 0 ) = . e cdc_si ( _ivec 256 0 )
+    = . e cac_co ( _ivec 256 0 ) = . e cac_si ( _ivec 256 0 )
     : ( Vec i ) b1 ( __jpe_hbits_dc_l )
     : ( Vec i ) v1 ( __jpe_hvals_dc )
     ( __jpe_huff_build b1 v1 . e ydc_co . e ydc_si )
@@ -149,7 +156,7 @@ $ `jpeg.nu`
     ^ e
 }
 
-@ __jpe_free *JEnc e → v {
+@ __jpe_free * JEnc e → v {
     ( vec_free [i] . e qy ) ( vec_free [i] . e qc )
     ( vec_free [i] . e ydc_co ) ( vec_free [i] . e ydc_si )
     ( vec_free [i] . e yac_co ) ( vec_free [i] . e yac_si )
@@ -161,7 +168,7 @@ $ `jpeg.nu`
 
 // ── Bit writer (MSB first, 0xFF byte-stuffed) ─────────────────────────
 
-@ __jpe_bits *JEnc e i code i len → v {
+@ __jpe_bits * JEnc e i code i len → v {
     : ~ i k - len 1
     ~ >= k 0 {
         = . e bbuf | << . e bbuf 1 & >> code k 1
@@ -177,7 +184,7 @@ $ `jpeg.nu`
     }
 }
 
-@ __jpe_flush_bits *JEnc e → v {
+@ __jpe_flush_bits * JEnc e → v {
     ~ != . e bcnt 0 { ( __jpe_bits e 1 1 ) }
 }
 
@@ -193,7 +200,7 @@ $ `jpeg.nu`
 
 // px: 64 samples 0..255 (natural order). out: 64 quantised coefficients in
 // ZIGZAG order (what the entropy coder wants).
-@ __jpe_fdct_quant *JEnc e ( Vec i ) px ( Vec f ) tmp ( Vec i ) out b chroma → v {
+@ __jpe_fdct_quant * JEnc e ( Vec i ) px ( Vec f ) tmp ( Vec i ) out b chroma → v {
     : ( Vec f ) A . e A
     // rows: tmp[y*8+u] = Σ_x (px-128) A[u*8+x]
     : ~ i y 0
@@ -202,7 +209,7 @@ $ `jpeg.nu`
         ~ < u 8 {
             : ~ f s 0.0
             : ~ i x 0
-            ~ < x 8 { = s + s * # f - ( __b_i px + * y 8 x ) 128 ( __b_f A + * u 8 x ) = x + x 1 }
+            ~ < x 8 { = s + s * # f - ( _b_i px + * y 8 x ) 128 ( _b_f A + * u 8 x ) = x + x 1 }
             ( vec_set [f] tmp + * y 8 u s )
             = u + u 1
         }
@@ -212,14 +219,14 @@ $ `jpeg.nu`
     : ( Vec i ) qt ? chroma { . e qc } { . e qy }
     : ~ i z 0
     ~ < z 64 {
-        : i nat ( __b_i . e zz z )
+        : i nat ( _b_i . e zz z )
         : i u & nat 7
         : i vv >> nat 3
         : ~ f s2 0.0
         : ~ i yy 0
-        ~ < yy 8 { = s2 + s2 * ( __b_f tmp + * yy 8 u ) ( __b_f A + * vv 8 yy ) = yy + yy 1 }
+        ~ < yy 8 { = s2 + s2 * ( _b_f tmp + * yy 8 u ) ( _b_f A + * vv 8 yy ) = yy + yy 1 }
         : f coef * s2 0.25
-        : f qf # f ( __b_i qt z )
+        : f qf # f ( _b_i qt z )
         : f r / coef qf
         ( vec_set [i] out z ? >= r 0.0 { # i + r 0.5 } { - 0 # i + - 0.0 r 0.5 } )
         = z + z 1
@@ -229,15 +236,15 @@ $ `jpeg.nu`
 // ── Entropy-code one quantised block (zigzag order) ───────────────────
 
 // Returns the block's DC value so the caller can carry the predictor.
-@ __jpe_code_block *JEnc e ( Vec i ) zq i pred b chroma → i {
+@ __jpe_code_block * JEnc e ( Vec i ) zq i pred b chroma → i {
     : ( Vec i ) dc_co ? chroma { . e cdc_co } { . e ydc_co }
     : ( Vec i ) dc_si ? chroma { . e cdc_si } { . e ydc_si }
     : ( Vec i ) ac_co ? chroma { . e cac_co } { . e yac_co }
     : ( Vec i ) ac_si ? chroma { . e cac_si } { . e yac_si }
-    : i dc ( __b_i zq 0 )
+    : i dc ( _b_i zq 0 )
     : i diff - dc pred
     : i ds ( __jpe_nbits diff )
-    ( __jpe_bits e ( __b_i dc_co ds ) ( __b_i dc_si ds ) )
+    ( __jpe_bits e ( _b_i dc_co ds ) ( _b_i dc_si ds ) )
     ? > ds 0 {
         : i dbits ? < diff 0 { + diff - << 1 ds 1 } { diff }
         ( __jpe_bits e dbits ds )
@@ -245,15 +252,15 @@ $ `jpeg.nu`
     : ~ i run 0
     : ~ i z 1
     ~ < z 64 {
-        : i v ( __b_i zq z )
+        : i v ( _b_i zq z )
         ? == v 0 { = run + run 1 } {
             ~ >= run 16 {
-                ( __jpe_bits e ( __b_i ac_co 240 ) ( __b_i ac_si 240 ) )   // ZRL
+                ( __jpe_bits e ( _b_i ac_co 240 ) ( _b_i ac_si 240 ) )  // ZRL
                 = run - run 16
             }
             : i sz ( __jpe_nbits v )
             : i sym | << run 4 sz
-            ( __jpe_bits e ( __b_i ac_co sym ) ( __b_i ac_si sym ) )
+            ( __jpe_bits e ( _b_i ac_co sym ) ( _b_i ac_si sym ) )
             : i vbits ? < v 0 { + v - << 1 sz 1 } { v }
             ( __jpe_bits e vbits sz )
             = run 0
@@ -261,7 +268,7 @@ $ `jpeg.nu`
         = z + z 1
     }
     ? > run 0 {
-        ( __jpe_bits e ( __b_i ac_co 0 ) ( __b_i ac_si 0 ) )               // EOB
+        ( __jpe_bits e ( _b_i ac_co 0 ) ( _b_i ac_si 0 ) )  // EOB
     } {}
     ^ dc
 }
@@ -272,34 +279,34 @@ $ `jpeg.nu`
     ( vec_push [u] out 255 ) ( vec_push [u] out m )
 }
 
-@ __jpe_headers *JEnc e i W i H i nc i hs i vs → v {
+@ __jpe_headers * JEnc e i W i H i nc i hs i vs → v {
     : ( Vec u ) out . e out
-    ( __jpe_marker out 216 )                        // SOI
+    ( __jpe_marker out 216 )  // SOI
     // APP0 JFIF
     ( __jpe_marker out 224 )
-    ( __push_u16be out 16 )
+    ( _push_u16be out 16 )
     ( bytes_extend_str out `JFIF` )
     ( vec_push [u] out 0 ) ( vec_push [u] out 1 ) ( vec_push [u] out 1 )
     ( vec_push [u] out 0 )
-    ( __push_u16be out 1 ) ( __push_u16be out 1 )
+    ( _push_u16be out 1 ) ( _push_u16be out 1 )
     ( vec_push [u] out 0 ) ( vec_push [u] out 0 )
     // DQT (luma; chroma too when colour)
     ( __jpe_marker out 219 )
-    ( __push_u16be out + 2 * + 1 64 ? == nc 3 { 2 } { 1 } )
+    ( _push_u16be out + 2 * + 1 64 ? == nc 3 { 2 } { 1 } )
     ( vec_push [u] out 0 )
     : ~ i z 0
-    ~ < z 64 { ( vec_push [u] out ( __b_i . e qy z ) ) = z + z 1 }
+    ~ < z 64 { ( vec_push [u] out ( _b_i . e qy z ) ) = z + z 1 }
     ? == nc 3 {
         ( vec_push [u] out 1 )
         : ~ i z2 0
-        ~ < z2 64 { ( vec_push [u] out ( __b_i . e qc z2 ) ) = z2 + z2 1 }
+        ~ < z2 64 { ( vec_push [u] out ( _b_i . e qc z2 ) ) = z2 + z2 1 }
     } {}
     // SOF0
     ( __jpe_marker out 192 )
-    ( __push_u16be out + 8 * nc 3 )
+    ( _push_u16be out + 8 * nc 3 )
     ( vec_push [u] out 8 )
-    ( __push_u16be out H )
-    ( __push_u16be out W )
+    ( _push_u16be out H )
+    ( _push_u16be out W )
     ( vec_push [u] out nc )
     ( vec_push [u] out 1 )
     ( vec_push [u] out | << hs 4 vs )
@@ -317,7 +324,7 @@ $ `jpeg.nu`
     } {}
     // SOS
     ( __jpe_marker out 218 )
-    ( __push_u16be out + 6 * nc 2 )
+    ( _push_u16be out + 6 * nc 2 )
     ( vec_push [u] out nc )
     ( vec_push [u] out 1 ) ( vec_push [u] out 0 )
     ? == nc 3 {
@@ -328,16 +335,16 @@ $ `jpeg.nu`
 }
 
 // Emit one DHT segment; consumes (frees) bits/vals.
-@ __jpe_dht *JEnc e i class i id ( Vec i ) bits ( Vec i ) vals → v {
+@ __jpe_dht * JEnc e i class i id ( Vec i ) bits ( Vec i ) vals → v {
     : ( Vec u ) out . e out
     : i nv ( vec_len [i] vals )
     ( __jpe_marker out 196 )
-    ( __push_u16be out + + 2 17 nv )
+    ( _push_u16be out + + 2 17 nv )
     ( vec_push [u] out | << class 4 id )
     : ~ i L 0
-    ~ < L 16 { ( vec_push [u] out ( __b_i bits L ) ) = L + L 1 }
+    ~ < L 16 { ( vec_push [u] out ( _b_i bits L ) ) = L + L 1 }
     : ~ i k 0
-    ~ < k nv { ( vec_push [u] out ( __b_i vals k ) ) = k + k 1 }
+    ~ < k nv { ( vec_push [u] out ( _b_i vals k ) ) = k + k 1 }
     ( vec_free [i] bits ) ( vec_free [i] vals )
 }
 
@@ -373,9 +380,9 @@ $ `jpeg.nu`
                         : f g # f ( image_get im cx cy 1 )
                         : f b # f ( image_get im cx cy 2 )
                         ? == comp 0 { = acc + acc + + * 0.299 r * 0.587 g * 0.114 b } {
-                        ? == comp 1 { = acc + acc + 128.0 + + * -0.168736 r * -0.331264 g * 0.5 b } {
-                            = acc + acc + 128.0 + + * 0.5 r * -0.418688 g * -0.081312 b
-                        } }
+                            ? == comp 1 { = acc + acc + 128.0 + + * -0.168736 r * -0.331264 g * 0.5 b } {
+                                = acc + acc + 128.0 + + * 0.5 r * -0.418688 g * -0.081312 b
+                            } }
                     }
                     = cnt + cnt 1
                     = sx + sx 1
@@ -404,7 +411,7 @@ $ `jpeg.nu`
         ~ < x 8 {
             : ~ i sx + * bx 8 x
             ? >= sx pw { = sx - pw 1 } {}
-            ( vec_set [i] px + * y 8 x ( __b_i pl + * sy pw sx ) )
+            ( vec_set [i] px + * y 8 x ( _b_i pl + * sy pw sx ) )
             = x + x 1
         }
         = y + y 1
@@ -443,8 +450,8 @@ $ `jpeg.nu`
         = pcr ( __jpe_plane im 2 hs vs cpw cph )
     } {}
 
-    : ( Vec i ) blk ( __ivec 64 0 )
-    : ( Vec i ) zq ( __ivec 64 0 )
+    : ( Vec i ) blk ( _ivec 64 0 )
+    : ( Vec i ) zq ( _ivec 64 0 )
     : ( Vec f ) tmp ( vec_with_cap [f] 64 )
     : ~ i tz 0
     ~ < tz 64 { ( vec_push [f] tmp 0.0 ) = tz + tz 1 }
@@ -481,7 +488,7 @@ $ `jpeg.nu`
     }
 
     ( __jpe_flush_bits e )
-    ( __jpe_marker . e out 217 )                    // EOI
+    ( __jpe_marker . e out 217 )  // EOI
 
     ( vec_free [i] py ) ( vec_free [i] pcb ) ( vec_free [i] pcr )
     ( vec_free [i] blk ) ( vec_free [i] zq ) ( vec_free [f] tmp )

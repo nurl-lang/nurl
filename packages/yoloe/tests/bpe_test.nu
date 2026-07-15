@@ -9,6 +9,7 @@ $ `stdlib/ext/env.nu`
 $ `../src/bpe.nu`
 
 @ p s m → v { ( nurl_print m ) }
+
 @ pn i n → v { ( nurl_print ( nurl_str_int n ) ) }
 
 // Compare encode(text) against a space-free expected id list (Vec i).
@@ -17,11 +18,11 @@ $ `../src/bpe.nu`
     ( p `  ` ) ( p text ) ( p ` -> ` )
     : i ng ( vec_len [i] got )
     : ~ i k 0
-    ~ < k ng { ( pn ( __ig got k ) ) ( p ` ` ) = k + k 1 }
+    ~ < k ng { ( pn ( _ig got k ) ) ( p ` ` ) = k + k 1 }
     : ~ i ok 1
     ? != ng ( vec_len [i] exp ) { = ok 0 } {
         : ~ i j 0
-        ~ < j ng { ? != ( __ig got j ) ( __ig exp j ) { = ok 0 } {} = j + j 1 }
+        ~ < j ng { ? != ( _ig got j ) ( _ig exp j ) { = ok 0 } {} = j + j 1 }
     }
     ( p ? == ok 1 `[ok]\n` `[FAIL]\n` )
     ( vec_free [i] got )
@@ -29,6 +30,7 @@ $ `../src/bpe.nu`
 }
 
 @ mk → ( Vec i ) { ^ ( vec_new [i] ) }
+
 @ add ( Vec i ) v i x → ( Vec i ) { ( vec_push [i] v x ) ^ v }
 
 @ main → i {
@@ -40,15 +42,15 @@ $ `../src/bpe.nu`
     ( p `loaded: sot ` ) ( pn . tk sot ) ( p ` eot ` ) ( pn . tk eot ) ( p `\n` )
 
     : ~ i fails 0
-    = fails + fails ? == 0 ( check tk `dog`              ( add ( mk ) 1929 ) ) 1 0
-    = fails + fails ? == 0 ( check tk `bicycle`          ( add ( mk ) 11652 ) ) 1 0
-    = fails + fails ? == 0 ( check tk `potted plant`     ( add ( add ( mk ) 48581 ) 3912 ) ) 1 0
-    = fails + fails ? == 0 ( check tk `traffic light`    ( add ( add ( mk ) 3399 ) 1395 ) ) 1 0
-    = fails + fails ? == 0 ( check tk `cell phone`       ( add ( add ( mk ) 5533 ) 1951 ) ) 1 0
-    = fails + fails ? == 0 ( check tk `person`           ( add ( mk ) 2533 ) ) 1 0
+    = fails + fails ? == 0 ( check tk `dog` ( add ( mk ) 1929 ) ) 1 0
+    = fails + fails ? == 0 ( check tk `bicycle` ( add ( mk ) 11652 ) ) 1 0
+    = fails + fails ? == 0 ( check tk `potted plant` ( add ( add ( mk ) 48581 ) 3912 ) ) 1 0
+    = fails + fails ? == 0 ( check tk `traffic light` ( add ( add ( mk ) 3399 ) 1395 ) ) 1 0
+    = fails + fails ? == 0 ( check tk `cell phone` ( add ( add ( mk ) 5533 ) 1951 ) ) 1 0
+    = fails + fails ? == 0 ( check tk `person` ( add ( mk ) 2533 ) ) 1 0
     = fails + fails ? == 0 ( check tk `a photo of a cat` ( add ( add ( add ( add ( add ( mk ) 320 ) 1125 ) 539 ) 320 ) 2368 ) ) 1 0
-    = fails + fails ? == 0 ( check tk `hot-dog`          ( add ( add ( add ( mk ) 2069 ) 268 ) 1929 ) ) 1 0
-    = fails + fails ? == 0 ( check tk `don't`            ( add ( add ( mk ) 847 ) 713 ) ) 1 0
+    = fails + fails ? == 0 ( check tk `hot-dog` ( add ( add ( add ( mk ) 2069 ) 268 ) 1929 ) ) 1 0
+    = fails + fails ? == 0 ( check tk `don't` ( add ( add ( mk ) 847 ) 713 ) ) 1 0
 
     ? == fails 0 { ( p `BPE TOKENIZER MATCH\n` ) ^ 0 } { ( p `MISMATCH fails=` ) ( pn fails ) ( p `\n` ) ^ 1 }
 }

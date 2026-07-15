@@ -58,7 +58,7 @@ $ `src/store.nu`
 : Model {
     Store store
     String mname
-    *Meta meta
+    * Meta meta
     ( Vec String ) lines
     ( Vec i ) times
     ( Vec VerModel ) forests
@@ -90,7 +90,7 @@ $ `src/store.nu`
     : !Json JsonError r ( json_parse line )
     ?? r {
         T j → {
-            : i ts ( __an_jint j `timestamp` 0 )
+            : i ts ( _an_jint j `timestamp` 0 )
             ( json_free j )
             ^ ts
         }
@@ -98,7 +98,7 @@ $ `src/store.nu`
     }
 }
 
-@ __an_free_forests *Model mo → v {
+@ __an_free_forests * Model mo → v {
     ( vec_free_with [VerModel] . mo forests \ VerModel vm → v { ( anom_vermodel_free vm ) } )
     = . mo forests ( vec_new [VerModel] )
 }
@@ -108,7 +108,7 @@ $ `src/store.nu`
 }
 
 // The schedule step from the current ring fill: at capacity, retrain less.
-@ __an_sched_step *Model mo → i {
+@ __an_sched_step * Model mo → i {
     : *Meta mm . mo meta
     ? >= ( vec_len [String] . mo lines ) . mo max_points { ^ . mm sched_at_max } {}
     ^ . mm sched_below
@@ -196,7 +196,7 @@ $ `src/store.nu`
     ^ ( model_open_at st name ( now_seconds ) )
 }
 
-@ model_free *Model mo → v {
+@ model_free * Model mo → v {
     ( __an_free_forests mo )
     ( vec_free [VerModel] . mo forests )
     ( __an_free_lines . mo lines )
@@ -210,7 +210,7 @@ $ `src/store.nu`
 
 // Test hook: shrink the warm-up / ring limits so eviction and scheduling
 // are exercisable without 150 000 points.
-@ model_set_limits *Model mo i min_pts i max_pts → v {
+@ model_set_limits * Model mo i min_pts i max_pts → v {
     = . mo min_points min_pts
     = . mo max_points max_pts
     ? == ( vec_len [VerModel] . mo forests ) 0 {
@@ -218,15 +218,15 @@ $ `src/store.nu`
     } {}
 }
 
-@ model_metadata *Model mo → *Meta {
+@ model_metadata * Model mo → *Meta {
     ^ . mo meta
 }
 
-@ model_n_points *Model mo → i {
+@ model_n_points * Model mo → i {
     ^ ( vec_len [String] . mo lines )
 }
 
-@ model_is_trained *Model mo → b {
+@ model_is_trained * Model mo → b {
     ^ > ( vec_len [VerModel] . mo forests ) 0
 }
 
@@ -236,7 +236,7 @@ $ `src/store.nu`
 // not from the forest blob — so margin changes (fine-tune, config PUT)
 // take effect immediately, without a retrain. The blob's stored margin is
 // only the fallback for versions no longer present in the metadata.
-@ __an_margin_of *Meta mm s vname f dflt → f {
+@ __an_margin_of * Meta mm s vname f dflt → f {
     : i nv ( vec_len [VerCfg] . mm versions )
     : ~ i k 0
     ~ < k nv {
@@ -255,7 +255,7 @@ $ `src/store.nu`
 
 // Score an encoded point against every trained version. `ready` is false
 // until the model has trained at least once AND the ring holds min_points.
-@ __an_score_enc *Model mo EncPoint p → Verdict {
+@ __an_score_enc * Model mo EncPoint p → Verdict {
     : ( Vec VerVerdict ) vvs ( vec_new [VerVerdict] )
     : b warm >= ( vec_len [String] . mo lines ) . mo min_points
     ? & ( model_is_trained mo ) warm {} {
@@ -302,7 +302,7 @@ $ `src/store.nu`
 // the feature order), refreshes the authoritative feature order, refits the
 // shared scaler over the full ring, then trains each version on its window.
 // Returns the number of ring points used (0 = not enough data, no change).
-@ model_force_train_at *Model mo i now → i {
+@ model_force_train_at * Model mo i now → i {
     : *Meta mm . mo meta
     : i n ( vec_len [String] . mo lines )
     ? < n . mo min_points { ^ 0 } {}
@@ -434,7 +434,7 @@ $ `src/store.nu`
     ^ ne
 }
 
-@ model_force_train *Model mo → i {
+@ model_force_train * Model mo → i {
     ^ ( model_force_train_at mo ( now_seconds ) )
 }
 
@@ -444,7 +444,7 @@ $ `src/store.nu`
 // ring (evicting the oldest at capacity), persist, retrain if the schedule
 // says so, then score it. Errors (bad numeric / timestamp values) leave the
 // model completely untouched.
-@ model_ingest_at *Model mo Json raw i now → !Verdict String {
+@ model_ingest_at * Model mo Json raw i now → !Verdict String {
     : *Meta mm . mo meta
     : !EncPoint String er ( anomaly_preprocess mm raw )
     ?? er {
@@ -483,13 +483,13 @@ $ `src/store.nu`
     }
 }
 
-@ model_ingest *Model mo Json raw → !Verdict String {
+@ model_ingest * Model mo Json raw → !Verdict String {
     ^ ( model_ingest_at mo raw ( now_seconds ) )
 }
 
 // Score without ingesting: no metadata learning, no ring append, no
 // retrain, no disk writes. Unknown columns/categories project to zeros.
-@ model_detect_only *Model mo Json raw → !Verdict String {
+@ model_detect_only * Model mo Json raw → !Verdict String {
     : !EncPoint String er ( anomaly_preprocess_ro . mo meta raw )
     ?? er {
         T p → {
@@ -522,7 +522,7 @@ $ `src/store.nu`
 // The ring, read-only encoded, projected onto the current feature order and
 // standardised with the current scaler — the exact view scoring uses.
 // Returns a row-major matrix of (result length / nfeat) rows.
-@ __an_ring_scaled *Model mo → ( Vec f ) {
+@ __an_ring_scaled * Model mo → ( Vec f ) {
     : *Meta mm . mo meta
     : i nfeat ( vec_len [String] . mm feats )
     : ( Vec f ) big ( vec_new [f] )
@@ -566,7 +566,7 @@ $ `src/store.nu`
 // inverted comparison against -inf, so it never adjusts anything; we
 // implement what the code meant, in place, per SPEC §5.2.) Margins are
 // persisted and take effect immediately. Returns per-version details.
-@ model_finetune *Model mo → FineTuneReport {
+@ model_finetune * Model mo → FineTuneReport {
     : ( Vec FtVer ) items ( vec_new [FtVer] )
     : *Meta mm . mo meta
     ? ( model_is_trained mo ) {} { ^ @ FineTuneReport { items } }
@@ -618,14 +618,14 @@ $ `src/store.nu`
 
 // Drop all data and trained forests but keep the model's name, schedule
 // and version configs. Learned columns/categories/features/scaler reset.
-@ model_reset *Model mo → v {
+@ model_reset * Model mo → v {
     : *Meta old . mo meta
 
     // Fresh metadata, carrying over identity + configuration.
     : *Meta fresh ( meta_new ( string_data . old name ) ( string_data . old created ) )
     = . fresh sched_below . old sched_below
     = . fresh sched_at_max . old sched_at_max
-    ( vec_free_with [VerCfg] . fresh versions \ VerCfg vc → v { ( __an_vercfg_free vc ) } )
+    ( vec_free_with [VerCfg] . fresh versions \ VerCfg vc → v { ( _an_vercfg_free vc ) } )
     = . fresh versions ( vec_new [VerCfg] )
     : i nv ( vec_len [VerCfg] . old versions )
     : ~ i vi 0
@@ -667,7 +667,7 @@ $ `src/store.nu`
 // Set one version's decision margin in the metadata (persisted, effective
 // immediately at scoring — no retrain needed). Returns F for an unknown
 // version name.
-@ model_set_margin *Model mo s vname f margin → b {
+@ model_set_margin * Model mo s vname f margin → b {
     : *Meta mm . mo meta
     : i nv ( vec_len [VerCfg] . mm versions )
     : ~ i k 0
@@ -690,7 +690,7 @@ $ `src/store.nu`
 }
 
 // Update the retraining schedule (persisted immediately).
-@ model_set_schedule *Model mo i below_max i at_max → v {
+@ model_set_schedule * Model mo i below_max i at_max → v {
     : *Meta mm . mo meta
     ? > below_max 0 { = . mm sched_below below_max } {}
     ? > at_max 0 { = . mm sched_at_max at_max } {}

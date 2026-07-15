@@ -5,7 +5,7 @@
 // regression trips the run_tests baseline diff):
 //   §A  Request header HPACK encode → decode round-trip + pseudo-header
 //       ordering (RFC 7541 / RFC 9113 §8.3).
-//   §B  https:// / http:// URL parsing (__h2_parse_url).
+//   §B  https:// / http:// URL parsing (_h2_parse_url).
 //
 // Live section (gated on NURL_NET_TESTS=1) drives a real loopback
 // round-trip against the in-repo h2c SERVER (http2_serve), proving the
@@ -106,14 +106,14 @@ $ `stdlib/ext/http2_client.nu`
 // ── §B URL parsing ────────────────────────────────────────────────────
 
 @ check_url s url b want_tls s want_host i want_port s want_path → b {
-    : ?H2Url pu ( __h2_parse_url url )
+    : ?H2Url pu ( _h2_parse_url url )
     ?? pu {
         T u → {
             : b ok & & & == . u tls want_tls
             != 0 ( nurl_str_eq ( string_data . u host ) want_host )
             == . u port want_port
             != 0 ( nurl_str_eq ( string_data . u path ) want_path )
-            ( __h2_url_free u )
+            ( _h2_url_free u )
             ^ ok
         }
         F _ → { ^ F }
@@ -132,8 +132,8 @@ $ `stdlib/ext/http2_client.nu`
     : b b3 ( check_url `https://h2.example` T `h2.example` 443 `/` )
     ( print_bool `https_default_path` b3 )
     ? ! b3 { = fails + fails 1 } {}
-    : ?H2Url bad ( __h2_parse_url `ftp://nope` )
-    : b b4 ?? bad { T u → { ( __h2_url_free u ) F } F _ → T }
+    : ?H2Url bad ( _h2_parse_url `ftp://nope` )
+    : b b4 ?? bad { T u → { ( _h2_url_free u ) F } F _ → T }
     ( print_bool `bad_scheme_rejected` b4 )
     ? ! b4 { = fails + fails 1 } {}
     ^ fails

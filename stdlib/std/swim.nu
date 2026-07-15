@@ -85,7 +85,7 @@ $ `stdlib/std/async.nu`
     MtJoinAck
 }
 
-@ __mtype_code SwimMsgType t → i {
+@ _mtype_code SwimMsgType t → i {
     ^ ?? t { MtPing → 1 MtAck → 2 MtPingReq → 3 MtJoin → 4 MtJoinAck → 5 }
 }
 
@@ -157,7 +157,7 @@ $ `stdlib/std/async.nu`
 
 @ swim_msg_encode SwimMsg m → ( Vec u ) {
     : ( Vec u ) b ( vec_new [u] )
-    ( vec_push [u] b # u ( __mtype_code . m mtype ) )
+    ( vec_push [u] b # u ( _mtype_code . m mtype ) )
     ( bytes_push_u32_be b # u32 . m seq )
     ( __sw_put_str b ( string_data . m from_host ) )
     ( bytes_push_u16_be b # u16 . m from_port )
@@ -610,7 +610,7 @@ $ `stdlib/std/async.nu`
 
 @ __handle * SwimNode n SwimMsg m → v {
     ( __apply_gossip n . m gossip )
-    : i ty ( __mtype_code . m mtype )
+    : i ty ( _mtype_code . m mtype )
     ? == ty 1 {  // PING → ACK (echo seq)
         : SwimMsg ack ( __mk_msg n @ SwimMsgType { MtAck } . m seq `` 0 )
         ( __node_send n ( string_data . m from_host ) . m from_port ack )

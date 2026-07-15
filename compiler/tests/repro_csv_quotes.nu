@@ -21,7 +21,7 @@ $ `stdlib/core/string.nu`
                     = i + i 1
                 }
                 ( nurl_print `\n` )
-                ( __csv_row_free row )
+                ( _csv_row_free row )
             }
             F → { = done T }
         }

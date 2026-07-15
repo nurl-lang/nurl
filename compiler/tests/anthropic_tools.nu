@@ -69,7 +69,7 @@ $ `stdlib/ext/anthropic.nu`
     ( pr_json td )
     ( json_free td )
 
-    // ── 3. tool_choice parsing via __claude_build_body_full ──────
+    // ── 3. tool_choice parsing via _claude_build_body_full ──────
     // Indirect: build request bodies with each tool_choice form and
     // stringify. Empty messages array is fine for this offline shape
     // probe. Always include one tool so tool_choice is meaningful.
@@ -80,27 +80,27 @@ $ `stdlib/ext/anthropic.nu`
     ( vec_push [Json] one_tool ( claude_tool_def `noop` `does nothing` schema2 ) )
 
     // tool_choice = "" — no tool_choice field
-    : Json b1 ( __claude_build_body_full `m` `` empty_msgs one_tool `` 16 )
+    : Json b1 ( _claude_build_body_full `m` `` empty_msgs one_tool `` 16 )
     ( pr_json b1 )
     ( json_free b1 )
 
-    : Json b2 ( __claude_build_body_full `m` `` empty_msgs one_tool `auto` 16 )
+    : Json b2 ( _claude_build_body_full `m` `` empty_msgs one_tool `auto` 16 )
     ( pr_json b2 )
     ( json_free b2 )
 
-    : Json b3 ( __claude_build_body_full `m` `` empty_msgs one_tool `any` 16 )
+    : Json b3 ( _claude_build_body_full `m` `` empty_msgs one_tool `any` 16 )
     ( pr_json b3 )
     ( json_free b3 )
 
-    : Json b4 ( __claude_build_body_full `m` `` empty_msgs one_tool `none` 16 )
+    : Json b4 ( _claude_build_body_full `m` `` empty_msgs one_tool `none` 16 )
     ( pr_json b4 )
     ( json_free b4 )
 
-    : Json b5 ( __claude_build_body_full `m` `` empty_msgs one_tool `tool:get_weather` 16 )
+    : Json b5 ( _claude_build_body_full `m` `` empty_msgs one_tool `tool:get_weather` 16 )
     ( pr_json b5 )
     ( json_free b5 )
 
-    : Json b6 ( __claude_build_body_full `m` `sys` empty_msgs one_tool `auto` 32 )
+    : Json b6 ( _claude_build_body_full `m` `sys` empty_msgs one_tool `auto` 32 )
     ( pr_json b6 )
     ( json_free b6 )
 
@@ -216,28 +216,28 @@ $ `stdlib/ext/anthropic.nu`
     ( vec_push [Json] ex_tools ( claude_tool_def `t2` `second` ex_schema_b ) )
 
     // cache_system only — system field becomes the array form, tools stay flat.
-    : Json e1 ( __claude_build_body_full_ex
+    : Json e1 ( _claude_build_body_full_ex
     `m` `you are claude` ex_msgs ex_tools `auto` 64
     T F 0 )
     ( pr_json e1 )
     ( json_free e1 )
 
     // cache_tools only — last tool gets cache_control, system stays bare string.
-    : Json e2 ( __claude_build_body_full_ex
+    : Json e2 ( _claude_build_body_full_ex
     `m` `you are claude` ex_msgs ex_tools `auto` 64
     F T 0 )
     ( pr_json e2 )
     ( json_free e2 )
 
     // Both caches plus extended thinking budget.
-    : Json e3 ( __claude_build_body_full_ex
+    : Json e3 ( _claude_build_body_full_ex
     `m` `you are claude` ex_msgs ex_tools `auto` 1024
     T T 4096 )
     ( pr_json e3 )
     ( json_free e3 )
 
     // Empty system + cache_system flag → field omitted entirely.
-    : Json e4 ( __claude_build_body_full_ex
+    : Json e4 ( _claude_build_body_full_ex
     `m` `` ex_msgs ex_tools `auto` 64
     T F 0 )
     ( pr_json e4 )

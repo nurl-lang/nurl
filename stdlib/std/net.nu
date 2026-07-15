@@ -131,7 +131,7 @@ $ `stdlib/std/pkey.nu`
 // `deflt` is the variant to return for any unmapped err_kind (kept
 // caller-controlled because read/write/listen each have a different
 // "natural" fallback).
-@ __net_err_of i ek → NetErr {
+@ _net_err_of i ek → NetErr {
     ? == ek 1 { ^ # NetErr NetBind } {}
     ? == ek 2 { ^ # NetErr NetAddrInUse } {}
     ? == ek 3 { ^ # NetErr NetAccept } {}
@@ -155,7 +155,7 @@ $ `stdlib/std/pkey.nu`
     : i ek ( nurl_tcp_err_kind raw )
     ? != ek 0 {
         ( nurl_tcp_close raw )
-        ^ @ !TcpListener NetErr { F ( __net_err_of ek ) }
+        ^ @ !TcpListener NetErr { F ( _net_err_of ek ) }
     } {}
     : s rp # s raw
     : TcpListener l @ TcpListener { rp 0 0 0 0 0 0 0 0 0 0 }
@@ -277,14 +277,14 @@ $ `stdlib/std/pkey.nu`
     : i keytype ( __load_tls_creds cert_path key_path cert k1 k2 k3 )
     ? < keytype 0 {
         ( vec_free [u] cert ) ( vec_free [u] k1 ) ( vec_free [u] k2 ) ( vec_free [u] k3 )
-        ^ @ !TcpListener NetErr { F ( __net_err_of - 0 keytype ) }
+        ^ @ !TcpListener NetErr { F ( _net_err_of - 0 keytype ) }
     } {}
     : i raw ( nurl_tcp_listen host port backlog )
     ? == raw 0 { ( vec_free [u] cert ) ( vec_free [u] k1 ) ( vec_free [u] k2 ) ( vec_free [u] k3 ) ^ @ !TcpListener NetErr { F # NetErr NetOther } } {}
     : i ek ( nurl_tcp_err_kind raw )
     ? != ek 0 {
         ( nurl_tcp_close raw ) ( vec_free [u] cert ) ( vec_free [u] k1 ) ( vec_free [u] k2 ) ( vec_free [u] k3 )
-        ^ @ !TcpListener NetErr { F ( __net_err_of ek ) }
+        ^ @ !TcpListener NetErr { F ( _net_err_of ek ) }
     } {}
     // Copy cert list / key material into raw heap buffers, then drop the Vecs.
     : i certp ( __net_dup cert )
@@ -331,7 +331,7 @@ $ `stdlib/std/pkey.nu`
     : i ek ( nurl_tcp_err_kind craw )
     ? != ek 0 {
         ( nurl_tcp_close craw )
-        ^ @ !TcpConn NetErr { F ( __net_err_of ek ) }
+        ^ @ !TcpConn NetErr { F ( _net_err_of ek ) }
     } {}
     : s crp # s craw
     ^ @ !TcpConn NetErr { T @ TcpConn { crp 0 0 } }
@@ -527,7 +527,7 @@ $ `stdlib/std/pkey.nu`
     : i ek ( nurl_tcp_err_kind craw )
     ? != ek 0 {
         ( nurl_tcp_close craw )
-        ^ @ !TcpConn NetErr { F ( __net_err_of ek ) }
+        ^ @ !TcpConn NetErr { F ( _net_err_of ek ) }
     } {}
     ? != . l is_tls 0 {
         : ( Vec u ) cert ( __net_vecview . l certp . l certlen )
@@ -640,7 +640,7 @@ $ `stdlib/std/pkey.nu`
     ? < n 0 {
         ( vec_free [u] v )
         : i ek ( nurl_tcp_err_kind raw )
-        ^ @ !( Vec u ) NetErr { F ( __net_err_of ek ) }
+        ^ @ !( Vec u ) NetErr { F ( _net_err_of ek ) }
     } {}
     ? == n 0 {
         ( vec_free [u] v )
@@ -666,7 +666,7 @@ $ `stdlib/std/pkey.nu`
     : i wn ( nurl_tcp_write raw pbuf n )
     ? < wn 0 {
         : i ek ( nurl_tcp_err_kind raw )
-        ^ @ !v NetErr { F ( __net_err_of ek ) }
+        ^ @ !v NetErr { F ( _net_err_of ek ) }
     } {}
     ^ @ !v NetErr { T 0 }
 }
@@ -688,7 +688,7 @@ $ `stdlib/std/pkey.nu`
     : i wn ( nurl_tcp_write raw text n )
     ? < wn 0 {
         : i ek ( nurl_tcp_err_kind raw )
-        ^ @ !v NetErr { F ( __net_err_of ek ) }
+        ^ @ !v NetErr { F ( _net_err_of ek ) }
     } {}
     ^ @ !v NetErr { T 0 }
 }
@@ -775,7 +775,7 @@ $ `stdlib/std/async_ffi.nu`
                 // shouldn't recur — bail to NetAccept.
                 ? < rc 0 { ^ @ !TcpConn NetErr { F # NetErr NetAccept } } {}
             } {
-                ^ @ !TcpConn NetErr { F ( __net_err_of ek ) }
+                ^ @ !TcpConn NetErr { F ( _net_err_of ek ) }
             }
         }
     }
@@ -815,7 +815,7 @@ $ `stdlib/std/async_ffi.nu`
             } {}
         } {
             ( vec_free [u] v )
-            ^ @ !( Vec u ) NetErr { F ( __net_err_of ek ) }
+            ^ @ !( Vec u ) NetErr { F ( _net_err_of ek ) }
         }
     }
     ( vec_free [u] v )
@@ -850,7 +850,7 @@ $ `stdlib/std/async_ffi.nu`
                         ^ @ !v NetErr { F # NetErr NetTimeout }
                     } {}
                 } {
-                    ^ @ !v NetErr { F ( __net_err_of ek ) }
+                    ^ @ !v NetErr { F ( _net_err_of ek ) }
                 }
             } {
                 // n == 0 — kernel says "wrote nothing" without error.

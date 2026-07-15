@@ -20,7 +20,7 @@ $ `stdlib/core/string.nu`
             : ~ i i 0
             ~ < i nr {
                 : ?( Vec String ) row_opt ( vec_get [( Vec String )] rows i )
-                ?? row_opt { T row → ( __csv_row_free row ) F → {} }
+                ?? row_opt { T row → ( _csv_row_free row ) F → {} }
                 = i + i 1
             }
             ( vec_free [( Vec String )] rows )

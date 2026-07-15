@@ -57,24 +57,24 @@ $ `stdlib/std/ecdsa_p256.nu`
 @ __pk_ec_scalar_der ( Vec u ) der → ?( Vec u ) {
     : DerTlv seq ( der_at der 0 )
     ? == . seq ok 0 { ^ @ ?( Vec u ) { F # ( Vec u ) 0 } } {}
-    : DerTlv e0 ( __der_child der seq )  // INTEGER version
-    : DerTlv e1 ( __der_next der e0 )
+    : DerTlv e0 ( _der_child der seq )  // INTEGER version
+    : DerTlv e1 ( _der_next der e0 )
     ? == . e1 tag 4 {
         // SEC1: e1 is the privateKey OCTET STRING (the scalar).
-        ^ @ ?( Vec u ) { T ( __pk_pad32 ( __der_content der e1 ) ) }
+        ^ @ ?( Vec u ) { T ( __pk_pad32 ( _der_content der e1 ) ) }
     } {}
     ? == . e1 tag 48 {
         // PKCS#8: e1 = AlgorithmIdentifier SEQUENCE, e2 = OCTET STRING that
         // itself contains the SEC1 ECPrivateKey.
-        : DerTlv e2 ( __der_next der e1 )
+        : DerTlv e2 ( _der_next der e1 )
         ? != . e2 tag 4 { ^ @ ?( Vec u ) { F # ( Vec u ) 0 } } {}
-        : ( Vec u ) inner ( __der_content der e2 )
+        : ( Vec u ) inner ( _der_content der e2 )
         : DerTlv iseq ( der_at inner 0 )
         ? == . iseq ok 0 { ( vec_free [u] inner ) ^ @ ?( Vec u ) { F # ( Vec u ) 0 } } {}
-        : DerTlv i0 ( __der_child inner iseq )  // version
-        : DerTlv i1 ( __der_next inner i0 )  // OCTET STRING scalar
+        : DerTlv i0 ( _der_child inner iseq )  // version
+        : DerTlv i1 ( _der_next inner i0 )  // OCTET STRING scalar
         ? != . i1 tag 4 { ( vec_free [u] inner ) ^ @ ?( Vec u ) { F # ( Vec u ) 0 } } {}
-        : ( Vec u ) sc ( __pk_pad32 ( __der_content inner i1 ) )
+        : ( Vec u ) sc ( __pk_pad32 ( _der_content inner i1 ) )
         ( vec_free [u] inner )
         ^ @ ?( Vec u ) { T sc }
     } {}
@@ -135,14 +135,14 @@ $ `stdlib/std/ecdsa_p256.nu`
 @ __pk_rsa_pkcs1 ( Vec u ) der → ?RsaPriv {
     : DerTlv seq ( der_at der 0 )
     ? | == . seq ok 0 != . seq tag 48 { ^ @ ?RsaPriv { F # RsaPriv 0 } } {}
-    : DerTlv v ( __der_child der seq )  // version INTEGER
+    : DerTlv v ( _der_child der seq )  // version INTEGER
     ? == . v ok 0 { ^ @ ?RsaPriv { F # RsaPriv 0 } } {}
-    : DerTlv tn ( __der_next der v )  // modulus
-    : DerTlv te ( __der_next der tn )  // publicExponent
-    : DerTlv td ( __der_next der te )  // privateExponent
+    : DerTlv tn ( _der_next der v )  // modulus
+    : DerTlv te ( _der_next der tn )  // publicExponent
+    : DerTlv td ( _der_next der te )  // privateExponent
     ? | | == . tn ok 0 == . te ok 0 == . td ok 0 { ^ @ ?RsaPriv { F # RsaPriv 0 } } {}
     ? | | != . tn tag 2 != . te tag 2 != . td tag 2 { ^ @ ?RsaPriv { F # RsaPriv 0 } } {}
-    ^ @ ?RsaPriv { T @ RsaPriv { ( __der_uint der tn ) ( __der_uint der te ) ( __der_uint der td ) } }
+    ^ @ ?RsaPriv { T @ RsaPriv { ( _der_uint der tn ) ( _der_uint der te ) ( _der_uint der td ) } }
 }
 
 // Load an RSA private key from a PEM file. Accepts both PKCS#1
@@ -155,13 +155,13 @@ $ `stdlib/std/ecdsa_p256.nu`
         T der → {
             : DerTlv seq ( der_at der 0 )
             ? == . seq ok 0 { ( vec_free [u] der ) ^ @ !RsaPriv ParseErr { F @ ParseErr { BadFormat } } } {}
-            : DerTlv c0 ( __der_child der seq )  // version
-            : DerTlv c1 ( __der_next der c0 )
+            : DerTlv c0 ( _der_child der seq )  // version
+            : DerTlv c1 ( _der_next der c0 )
             // PKCS#8: { version, AlgorithmIdentifier SEQUENCE, OCTET STRING }.
             ? & == . c1 ok 1 == . c1 tag 48 {
-                : DerTlv c2 ( __der_next der c1 )  // privateKey OCTET STRING
+                : DerTlv c2 ( _der_next der c1 )  // privateKey OCTET STRING
                 ? | == . c2 ok 0 != . c2 tag 4 { ( vec_free [u] der ) ^ @ !RsaPriv ParseErr { F @ ParseErr { BadFormat } } } {}
-                : ( Vec u ) inner ( __der_content der c2 )
+                : ( Vec u ) inner ( _der_content der c2 )
                 : ?RsaPriv rp ( __pk_rsa_pkcs1 inner )
                 ( vec_free [u] inner )
                 ( vec_free [u] der )

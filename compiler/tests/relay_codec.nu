@@ -132,7 +132,7 @@ $ `stdlib/net/relay.nu`
     // ── oversize length rejected ─────────────────────────────────
     : ( Vec u ) huge ( vec_new [u] )
     ( vec_push [u] huge # u 2 )
-    ( bytes_push_u32_be huge # u32 20000000 )  // > __relay_max (16 MiB)
+    ( bytes_push_u32_be huge # u32 20000000 )  // > _relay_max (16 MiB)
     ( pb `oversize → None: ` ?? ( relay_parse huge ) { T f → { ( relay_frame_free f ) F } F → T } )
 
     ( vec_free [u] pk ) ( vec_free [u] data )

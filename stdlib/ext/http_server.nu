@@ -12,10 +12,10 @@
 //             ( server_run_once s )      ← one accept + serve, returns
 //                   │
 //                   ▼
-//      tcp_accept → __serve_keepalive_loop → close
+//      tcp_accept → _serve_keepalive_loop → close
 //                       │
 //                       ▼   loops while connection alive
-//      __read_request_head → handler → __write_response
+//      _read_request_head → handler → __write_response
 //
 // API (this revision):
 //
@@ -70,14 +70,14 @@
 // Pipelining (HTTP/1.1 §6.3.2):
 //
 //   * The keep-alive loop owns one connection-level `Vec[u] carry`
-//     that survives across requests. `__read_request_head` reads
+//     that survives across requests. `_read_request_head` reads
 //     into carry until `parse_request_head` succeeds, then drops
 //     the consumed-by-the-head bytes from carry's front — anything
 //     past the head (request body + a pipelined successor's bytes)
-//     stays in carry. `__finish_body` then drains exactly
+//     stays in carry. `_finish_body` then drains exactly
 //     Content-Length bytes off carry's front into `req.body`,
 //     topping up from the socket if short. Any remaining bytes in
-//     carry feed the next iteration's `__read_request_head`
+//     carry feed the next iteration's `_read_request_head`
 //     without a fresh tcp_read.
 //   * Net effect: a peer that pipelines two requests in one send()
 //     is processed correctly — both reach the handler with the
@@ -109,7 +109,7 @@ $ `stdlib/ext/http_response.nu`
 //   * max_keepalive_requests   — per-conn request reuse cap. 0 = no keep-alive.
 //   * limits                   — head / header-count / body byte caps
 //                                (consulted by parse_request_head_with /
-//                                 __finish_body's body-byte loop).
+//                                 _finish_body's body-byte loop).
 //   * request_total_timeout_ms — wall-clock budget for a single request,
 //                                measured from "head parsed" to "response
 //                                serialised". On overrun the handler's
@@ -315,16 +315,16 @@ $ `stdlib/ext/http_response.nu`
 //
 // On success: returns Ok(ParsedHeadOk { head, consumed }). `consumed`
 // bytes are dropped off carry's front, leaving any further bytes (this
-// request's body + pipelined successor) for `__finish_body` / the next
+// request's body + pipelined successor) for `_finish_body` / the next
 // iteration to consume. The returned `head.body` is left untouched
-// (empty) — the body lives in carry until `__finish_body` drains it.
+// (empty) — the body lives in carry until `_finish_body` drains it.
 //
 // On socket error: returns Err(HttpReqIo). On unrecoverable parse
 // error: returns the matching HttpReqErr (TooLarge / Malformed /
 // UnsupportedVersion). Carry's state is unspecified on Err (caller is
 // about to close).
 
-@ __read_request_head TcpConn conn ( Vec u ) carry HttpLimits limits → !ParsedHeadOk HttpReqErr {
+@ _read_request_head TcpConn conn ( Vec u ) carry HttpLimits limits → !ParsedHeadOk HttpReqErr {
     : ~ b done F
     : ~ b had_err F
     : ~ HttpReqErr err # HttpReqErr HttpReqIo
@@ -451,9 +451,9 @@ $ `stdlib/ext/http_response.nu`
     ~ & ok ! done {
         : i crlf ( __carry_find_crlf conn carry 8192 )
         ? < crlf 0 { = ok F } {
-            : String szline ( __bsubstr carry 0 crlf )
+            : String szline ( _bsubstr carry 0 crlf )
             ( __vec_drop_front_u carry + crlf 2 )
-            : !i ParseErr szr ( __parse_hex_size szline )
+            : !i ParseErr szr ( _parse_hex_size szline )
             ( string_free szline )
             ?? szr {
                 T n → {
@@ -493,7 +493,7 @@ $ `stdlib/ext/http_response.nu`
     ^ ok
 }
 
-@ __finish_body TcpConn conn HttpRequest req ( Vec u ) carry i body_max → b {
+@ _finish_body TcpConn conn HttpRequest req ( Vec u ) carry i body_max → b {
     // Transfer-Encoding takes precedence (RFC 7230 §3.3.3). A chunked body
     // MUST be drained here too — otherwise its bytes are left in `carry`,
     // handed to the handler as an empty body, and mis-parsed as the next
@@ -541,7 +541,7 @@ $ `stdlib/ext/http_response.nu`
                     // that — NOT read_body_to, which re-derives the length
                     // from Content-Length and would try to read the whole
                     // `clen` again (and rejects need<clen as HttpReqTooLarge).
-                    : !( Vec u ) HttpReqErr more ( __read_n_bytes conn need )
+                    : !( Vec u ) HttpReqErr more ( _read_n_bytes conn need )
                     ?? more {
                         T extra → {
                             ( vec_extend [u] . req body extra )
@@ -580,7 +580,7 @@ $ `stdlib/ext/http_response.nu`
 }
 
 // Build a stock 4xx error response for parse failures.
-@ __parse_err_response HttpReqErr e → HttpResponse {
+@ _parse_err_response HttpReqErr e → HttpResponse {
     : s nm ( http_req_err_name e )
     ? != 0 ( nurl_str_eq nm `HttpReqTooLarge` ) {
         ^ ( response_text 413 `request entity too large\n` )
@@ -716,7 +716,7 @@ $ `stdlib/ext/http_response.nu`
             } {}
             : i ito . s idle_timeout_ms
             ? > ito 0 { ( tcp_set_timeout conn ito ) } {}
-            ( __serve_keepalive_loop s conn )
+            ( _serve_keepalive_loop s conn )
             ? != ds_raw 0 { ( dos_state_release ds_raw peer_ip ) } {}
             ? != 0 # i ip_ctl { ( string_free @ String { ip_ctl } ) } {}
             ( tcp_close_conn conn )
@@ -729,12 +729,12 @@ $ `stdlib/ext/http_response.nu`
 // The per-connection request loop. Walks request → handler →
 // response → repeat until any of the following happens:
 //
-//   * `__read_request_head` fails with HttpReqIo (peer closed
+//   * `_read_request_head` fails with HttpReqIo (peer closed
 //     cleanly between requests, or the recv timeout fired). No
 //     response is written — connection dies silently.
-//   * `__read_request_head` fails with any other parse error. We
+//   * `_read_request_head` fails with any other parse error. We
 //     write the canned 4xx response, then close.
-//   * `__finish_body` fails. We write a 400, then close.
+//   * `_finish_body` fails. We write a 400, then close.
 //   * The request OR response carries `Connection: close`. We write
 //     the response (forcing `Connection: close`), then close.
 //   * `n_served` reaches `max_keepalive_requests`. Same as the
@@ -746,7 +746,7 @@ $ `stdlib/ext/http_response.nu`
 // these per-request errors are interesting at the listener level —
 // they all just mean "this connection is done, accept the next one".
 
-@ __serve_keepalive_loop HttpServer s TcpConn conn → v {
+@ _serve_keepalive_loop HttpServer s TcpConn conn → v {
     : i max_req . s max_keepalive_requests
     : HttpLimits lim . s limits
     : i body_max . lim body_default_max
@@ -754,13 +754,13 @@ $ `stdlib/ext/http_response.nu`
     // One connection-level carry buffer, owned here, freed at the
     // bottom. Survives across keep-alive iterations so a pipelined
     // successor's bytes (or any leftover past a request's body) are
-    // visible to the next __read_request_head call without re-reading
+    // visible to the next _read_request_head call without re-reading
     // from the socket.
     : ( Vec u ) carry ( vec_with_cap [u] 4096 )
     : ~ b done F
     : ~ i n_served 0
     ~ ! done {
-        : !ParsedHeadOk HttpReqErr ph ( __read_request_head conn carry lim )
+        : !ParsedHeadOk HttpReqErr ph ( _read_request_head conn carry lim )
         ?? ph {
             T pho → {
                 // Snapshot the request-start wall-clock right after the
@@ -772,7 +772,7 @@ $ `stdlib/ext/http_response.nu`
                 // handler runs to completion regardless.
                 : i req_start_ms ? > req_timeout_ms 0 ( now_ms ) 0
                 : HttpRequest req . pho head
-                : b body_ok ( __finish_body conn req carry body_max )
+                : b body_ok ( _finish_body conn req carry body_max )
                 ? body_ok {
                     // Upgrade hook (e.g. WebSocket) gets first crack. If it takes
                     // over the connection, run nothing else and let the loop end
@@ -881,7 +881,7 @@ $ `stdlib/ext/http_response.nu`
                 // we rejected the syntax.
                 : s nm ( http_req_err_name e )
                 ? != 0 ( nurl_str_eq nm `HttpReqIo` ) {} {
-                    : HttpResponse er ( __parse_err_response e )
+                    : HttpResponse er ( _parse_err_response e )
                     : !v NetErr _wr ( __write_response conn er T )
                 }
                 = done T
@@ -1071,7 +1071,7 @@ $ `stdlib/ext/http_response.nu`
 //
 // Per-conn fiber instead of per-conn thread. One accept fiber loops on
 // the listener; each successful accept spawns a *handler fiber* that
-// runs the existing `__serve_keepalive_loop` — which transparently
+// runs the existing `_serve_keepalive_loop` — which transparently
 // goes through `tcp_read_chunk` / `tcp_write_all`, both of which are
 // now context-aware (fiber → park on the reactor; thread → block).
 // So no duplication of the keep-alive loop: same code path, different
@@ -1109,7 +1109,7 @@ $ `stdlib/std/async.nu`
 // stays simple — nested ":"-binding of a closure inside another
 // closure's body provoked an IR-codegen bug in earlier sweeps.
 @ __async_serve_conn HttpServer s TcpConn c → v {
-    ( __serve_keepalive_loop s c )
+    ( _serve_keepalive_loop s c )
     ( tcp_close_conn c )
 }
 

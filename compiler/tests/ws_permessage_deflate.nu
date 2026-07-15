@@ -45,7 +45,7 @@ $ `stdlib/ext/websocket.nu`
     ^ ?? cr {
         T comp → {
             ? . d deflate_no_takeover { ( raw_deflate_reset . d deflater ) } {}
-            ( __ws_strip_deflate_tail comp )
+            ( _ws_strip_deflate_tail comp )
             comp
         }
         F _ → ( vec_new [u] )
@@ -128,7 +128,7 @@ $ `stdlib/ext/websocket.nu`
                     : ( Vec u ) c1 ( compress_msg client m1 )
                     : i c1len ( vec_len [u] c1 )
                     : WsMessage msg1 @ WsMessage { 1 T c1 }
-                    : !WsMessage WsErr r1 ( __ws_inflate_message server lim msg1 )
+                    : !WsMessage WsErr r1 ( _ws_inflate_message server lim msg1 )
                     ?? r1 {
                         T out → {
                             ( pb `m1_round_trip` ( vec_eq m1 . out payload ) )
@@ -143,7 +143,7 @@ $ `stdlib/ext/websocket.nu`
                     : ( Vec u ) c2 ( compress_msg client m2 )
                     : i c2len ( vec_len [u] c2 )
                     : WsMessage msg2 @ WsMessage { 1 T c2 }
-                    : !WsMessage WsErr r2 ( __ws_inflate_message server lim msg2 )
+                    : !WsMessage WsErr r2 ( _ws_inflate_message server lim msg2 )
                     ?? r2 {
                         T out → {
                             ( pb `m2_round_trip` ( vec_eq m2 . out payload ) )
@@ -181,7 +181,7 @@ $ `stdlib/ext/websocket.nu`
                     : ( Vec u ) cbad ( compress_msg client bad )
                     : WsLimits lim ( ws_default_limits )
                     : WsMessage mb @ WsMessage { 1 T cbad }
-                    : !WsMessage WsErr rb ( __ws_inflate_message server lim mb )
+                    : !WsMessage WsErr rb ( _ws_inflate_message server lim mb )
                     ?? rb {
                         T out → { ( nurl_print `utf8_not_rejected\n` ) ( ws_message_free out ) }
                         F e → ( pl `utf8_text_err` ( ws_err_name e ) )
@@ -194,7 +194,7 @@ $ `stdlib/ext/websocket.nu`
                     ( vec_push [u] bin # u 254 )
                     : ( Vec u ) cbin ( compress_msg client bin )
                     : WsMessage mn @ WsMessage { 2 T cbin }
-                    : !WsMessage WsErr rn ( __ws_inflate_message server lim mn )
+                    : !WsMessage WsErr rn ( _ws_inflate_message server lim mn )
                     ?? rn {
                         T out → {
                             ( pb `binary_ok` ( vec_eq bin . out payload ) )
@@ -210,7 +210,7 @@ $ `stdlib/ext/websocket.nu`
                     : ( Vec u ) cbig ( compress_msg client big )
                     : WsLimits tiny @ WsLimits { 16777216 1024 60000 128 }
                     : WsMessage mg @ WsMessage { 2 T cbig }
-                    : !WsMessage WsErr rg ( __ws_inflate_message server tiny mg )
+                    : !WsMessage WsErr rg ( _ws_inflate_message server tiny mg )
                     ?? rg {
                         T out → { ( nurl_print `bomb_not_capped\n` ) ( ws_message_free out ) }
                         F e → ( pl `bomb_capped` ( ws_err_name e ) )

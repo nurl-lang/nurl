@@ -73,7 +73,7 @@ $ `stdlib/std/hashmap.nu`
 
 @ __csv_drop_string String s → v { ( string_free s ) }
 
-@ __csv_row_free ( Vec String ) row → v {
+@ _csv_row_free ( Vec String ) row → v {
     ( vec_free_with [String] row \ String s → v { ( string_free s ) } )
 }
 
@@ -203,7 +203,7 @@ $ `stdlib/std/hashmap.nu`
     ? == ( vec_len [String] row ) 1 {
         : *String rp ( vec_data [String] row )
         ? == ( string_len . rp 0 ) 0 {
-            ( __csv_row_free row )
+            ( _csv_row_free row )
             ^ ( csv_reader_next r )
         } {}
     } {}
@@ -254,7 +254,7 @@ $ `stdlib/std/hashmap.nu`
                 }
                 = i + i 1
             }
-            ( __csv_row_free row )
+            ( _csv_row_free row )
             ^ @ ?( HashMap s String ) { T map }
         }
         F → { ^ @ ?( HashMap s String ) { F # ( HashMap s String ) 0 } }
@@ -262,7 +262,7 @@ $ `stdlib/std/hashmap.nu`
 }
 
 @ csv_dict_reader_free * CSVDictReader dr → v {
-    ( __csv_row_free . dr header )
+    ( _csv_row_free . dr header )
     ( csv_reader_free . dr reader )
     ( nurl_free dr )
 }
@@ -391,11 +391,11 @@ $ `stdlib/std/hashmap.nu`
         = i + i 1
     }
     ( csv_writer_writerow wr line )
-    ( __csv_row_free line )
+    ( _csv_row_free line )
 }
 
 @ csv_dict_writer_close * CSVDictWriter dw → v {
-    ( __csv_row_free . dw fieldnames )
+    ( _csv_row_free . dw fieldnames )
     ( csv_writer_close . dw writer )
     ( nurl_free dw )
 }
@@ -438,7 +438,7 @@ $ `stdlib/std/hashmap.nu`
 
 @ csv_table_free * CSVTable t → v {
     ( string_free . t content )
-    ( __csv_row_free . t headers )
+    ( _csv_row_free . t headers )
     ( vec_free [i] . t flat_cells )
     ( vec_free [i] . t row_starts )
     ( vec_free [i] . t row_lens )
@@ -816,7 +816,7 @@ $ `stdlib/std/hashmap.nu`
             = pos p
         } {
             ? first_row {
-                ( __csv_row_free . t headers )
+                ( _csv_row_free . t headers )
                 = . t headers ( vec_with_cap [String] n_cells )
                 : ~ i k 0
                 ~ < k n_cells {

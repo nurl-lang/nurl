@@ -25,7 +25,8 @@ $ `stdlib/std/bytes.nu`
 : ~ s __img_err ``
 
 @ image_error → s { ^ __img_err }
-@ __img_set_err s msg → v { = __img_err msg }
+
+@ _img_set_err s msg → v { = __img_err msg }
 
 // ── Construction ──────────────────────────────────────────────────────
 
@@ -46,28 +47,32 @@ $ `stdlib/std/bytes.nu`
 @ image_free Image im → v { ( vec_free [u] . im data ) }
 
 @ image_width Image im → i { ^ . im width }
+
 @ image_height Image im → i { ^ . im height }
+
 @ image_channels Image im → i { ^ . im channels }
 
 // ── Byte helpers ──────────────────────────────────────────────────────
 
 // Unsigned byte at `pos` (0 when out of range).
-@ __b ( Vec u ) buf i pos → i {
+@ _byte ( Vec u ) buf i pos → i {
     ?? ( vec_get [u] buf pos ) { T v → { ^ # i v } F _ → { ^ 0 } }
 }
 
-@ __push_u16be ( Vec u ) out i v → v {
+@ _push_u16be ( Vec u ) out i v → v {
     ( vec_push [u] out & / v 256 255 )
     ( vec_push [u] out & v 255 )
 }
-@ __push_u32be ( Vec u ) out i v → v {
+
+@ _push_u32be ( Vec u ) out i v → v {
     ( vec_push [u] out & / v 16777216 255 )
     ( vec_push [u] out & / v 65536 255 )
     ( vec_push [u] out & / v 256 255 )
     ( vec_push [u] out & v 255 )
 }
-@ __u32be ( Vec u ) buf i pos → i {
-    ^ + + + * ( __b buf pos ) 16777216 * ( __b buf + pos 1 ) 65536 * ( __b buf + pos 2 ) 256 ( __b buf + pos 3 )
+
+@ _u32be ( Vec u ) buf i pos → i {
+    ^ + + + * ( _byte buf pos ) 16777216 * ( _byte buf + pos 1 ) 65536 * ( _byte buf + pos 2 ) 256 ( _byte buf + pos 3 )
 }
 
 // ── Pixel access ──────────────────────────────────────────────────────
@@ -81,7 +86,9 @@ $ `stdlib/std/bytes.nu`
     : i pix + * y . im width x
     ^ + * pix . im channels c
 }
-@ image_get Image im i x i y i c → i { ^ ( __b . im data ( __px_idx im x y c ) ) }
+
+@ image_get Image im i x i y i c → i { ^ ( _byte . im data ( __px_idx im x y c ) ) }
+
 @ image_set Image im i x i y i c i v → v {
     ( vec_set [u] . im data ( __px_idx im x y c ) & v 255 )
 }
@@ -94,9 +101,9 @@ $ `stdlib/std/bytes.nu`
     : ~ b going T
     ~ going {
         ? >= q n { = going F } {
-            : i c ( __b buf q )
+            : i c ( _byte buf q )
             ? == c 35 {
-                ~ & < q n != ( __b buf q ) 10 { = q + q 1 }
+                ~ & < q n != ( _byte buf q ) 10 { = q + q 1 }
             } {
                 ? || == c 32 || == c 9 || == c 10 == c 13 { = q + q 1 } { = going F }
             }
@@ -107,11 +114,11 @@ $ `stdlib/std/bytes.nu`
 
 // Read a decimal integer starting at `p` (after skipping ws); the position
 // after the number is written into `posp[0]`.
-@ __ppm_int ( Vec u ) buf i n i p *u posp → i {
+@ __ppm_int ( Vec u ) buf i n i p * u posp → i {
     : ~ i q ( __ppm_skip buf n p )
     : ~ i val 0
-    ~ & < q n & >= ( __b buf q ) 48 <= ( __b buf q ) 57 {
-        = val + * val 10 - ( __b buf q ) 48
+    ~ & < q n & >= ( _byte buf q ) 48 <= ( _byte buf q ) 57 {
+        = val + * val 10 - ( _byte buf q ) 48
         = q + q 1
     }
     ( nurl_poke posp 0 q )
@@ -119,14 +126,14 @@ $ `stdlib/std/bytes.nu`
 }
 
 @ ppm_decode ( Vec u ) buf → ?Image {
-    ( __img_set_err `` )
+    ( _img_set_err `` )
     : i n ( vec_len [u] buf )
-    ? < n 2 { ( __img_set_err `not a PPM` ) ^ @ ?Image { F } } {}
-    ? == ( __b buf 0 ) 80 {} { ( __img_set_err `not a PPM` ) ^ @ ?Image { F } }
-    : i kind ( __b buf 1 )
+    ? < n 2 { ( _img_set_err `not a PPM` ) ^ @ ?Image { F } } {}
+    ? == ( _byte buf 0 ) 80 {} { ( _img_set_err `not a PPM` ) ^ @ ?Image { F } }
+    : i kind ( _byte buf 1 )
     : ~ i ch 3
     ? == kind 54 { = ch 3 } {
-        ? == kind 53 { = ch 1 } { ( __img_set_err `PPM: only binary P5/P6 supported` ) ^ @ ?Image { F } }
+        ? == kind 53 { = ch 1 } { ( _img_set_err `PPM: only binary P5/P6 supported` ) ^ @ ?Image { F } }
     }
     : *u pc ( nurl_alloc 8 )
     : i w ( __ppm_int buf n 2 pc )
@@ -135,14 +142,14 @@ $ `stdlib/std/bytes.nu`
     // pixel data starts one whitespace byte after maxval
     : i start + ( nurl_peek pc 0 ) 1
     ( nurl_free # s pc )
-    ? || <= w 0 || <= h 0 != mx 255 { ( __img_set_err `PPM: malformed header (needs maxval 255)` ) ^ @ ?Image { F } } {}
-    ? || || > w 1000000 > h 1000000 > * w h 268435456 { ( __img_set_err `PPM: dimensions too large` ) ^ @ ?Image { F } } {}
+    ? || <= w 0 || <= h 0 != mx 255 { ( _img_set_err `PPM: malformed header (needs maxval 255)` ) ^ @ ?Image { F } } {}
+    ? || || > w 1000000 > h 1000000 > * w h 268435456 { ( _img_set_err `PPM: dimensions too large` ) ^ @ ?Image { F } } {}
     : i need * * w h ch
-    ? > + start need n {} { } // tolerate exact-or-more
-    ? < - n start need { ( __img_set_err `PPM: truncated pixel data` ) ^ @ ?Image { F } } {}
+    ? > + start need n {} {}  // tolerate exact-or-more
+    ? < - n start need { ( _img_set_err `PPM: truncated pixel data` ) ^ @ ?Image { F } } {}
     : ( Vec u ) d ( vec_with_cap [u] need )
     : ~ i k 0
-    ~ < k need { ( vec_push [u] d ( __b buf + start k ) ) = k + k 1 }
+    ~ < k need { ( vec_push [u] d ( _byte buf + start k ) ) = k + k 1 }
     ^ @ ?Image { T ( image_of w h ch d ) }
 }
 

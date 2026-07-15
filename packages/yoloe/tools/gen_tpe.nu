@@ -24,6 +24,7 @@ $ `deps/onnx/src/runtime.nu`
 $ `../src/bpe.nu`
 
 @ p s m → v { ( nurl_print m ) }
+
 @ pn i n → v { ( nurl_print ( nurl_str_int n ) ) }
 
 @ read_lines s path → ( Vec String ) {
@@ -83,7 +84,7 @@ $ `../src/bpe.nu`
         : ( Vec i ) row ( bpe_tokenize tk nm 77 )
         : ( Vec u ) tb ( vec_new [u] )
         : ~ i t2 0
-        ~ < t2 77 { ( push_i64_le tb ( __ig row t2 ) ) = t2 + t2 1 }
+        ~ < t2 77 { ( push_i64_le tb ( _ig row t2 ) ) = t2 + t2 1 }
         ( vec_free [i] row )
 
         : RTensor out ( rt_run_tokens e g # *u ( vec_data [u] tb ) 1 77 )

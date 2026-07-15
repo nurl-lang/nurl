@@ -46,10 +46,10 @@ $ `stdlib/net/membership.nu`
     ( pktable_suspect t2 b 0 )
     : ( Vec s ) d1 ( pktable_sweep t2 4000 )
     ( pb `lone suspect alive before ceiling (t=4000): ` == ( vec_len [s] d1 ) 0 )
-    ( __pk_dead_free d1 )
+    ( _pk_dead_free d1 )
     : ( Vec s ) d2 ( pktable_sweep t2 6000 )
     ( pb `lone suspect dead after ceiling (t=6000): ` & == ( vec_len [s] d2 ) 1 == ( pktable_state_of t2 b ) ( pk_dead ) )
-    ( __pk_dead_free d2 )
+    ( _pk_dead_free d2 )
     ( pktable_free t2 )
 
     // ── corroborated suspicion: converges to the floor ───────────
@@ -61,7 +61,7 @@ $ `stdlib/net/membership.nu`
     ( pktable_confirm_suspect t3 b )
     : ( Vec s ) d3 ( pktable_sweep t3 1500 )
     ( pb `corroborated dead by t=1500 (floor 1000): ` == ( vec_len [s] d3 ) 1 )
-    ( __pk_dead_free d3 )
+    ( _pk_dead_free d3 )
     ( pktable_free t3 )
 
     // ── unhealthy node (high LHM) is slower to accuse ────────────
@@ -72,7 +72,7 @@ $ `stdlib/net/membership.nu`
     ( pktable_suspect t4 b 0 )
     : ( Vec s ) d4 ( pktable_sweep t4 6000 )
     ( pb `unhealthy node holds off at t=6000 (scaled ceiling 10000): ` == ( vec_len [s] d4 ) 0 )
-    ( __pk_dead_free d4 )
+    ( _pk_dead_free d4 )
     ( pktable_on_probe_ok t4 )  // LHM back to 0
     ( pb `probe ok restores health: ` == ( lh_value_of t4 ) 0 )
     ( pktable_free t4 )

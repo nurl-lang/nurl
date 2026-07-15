@@ -146,7 +146,7 @@ $ `stdlib/std/lifeguard.nu`
 }
 
 // Promote expired suspicions to dead (caller runs each tick); returns the
-// newly-dead as borrowed *PkMember (free the container with __pk_dead_free).
+// newly-dead as borrowed *PkMember (free the container with _pk_dead_free).
 @ fd_sweep * FdState fd i now → ( Vec s ) {
     : *PkMemberTable t # *PkMemberTable . fd table
     ^ ( pktable_sweep t now )

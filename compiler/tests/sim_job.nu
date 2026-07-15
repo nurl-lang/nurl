@@ -82,7 +82,7 @@ $ `stdlib/dist/sim.nu`
             ? == . m mtype ( job_submit_t ) {
                 : *JobNode dn2 ( node nodes . sm dst )
                 ? ( job_owns dn2 . m key ) {
-                    : ( Vec u ) res ( __job_execute dn2 . m kind . m payload )
+                    : ( Vec u ) res ( _job_execute dn2 . m kind . m payload )
                     : i sidx ( pk_to_idx nodes nn . m submitter )
                     : ( Vec u ) reply ( job_build_result . m task_id res )
                     ? >= sidx 0 { ( sim_send net . sm dst sidx reply now ) } {}
@@ -153,7 +153,7 @@ $ `stdlib/dist/sim.nu`
     : ( Vec u ) key ( bytes4 kseed kseed kseed kseed )
     : ( Vec u ) pl ( bytes4 1 2 3 4 )  // sum = 10
     : *JobNode s0 ( node nodes 0 )
-    : i tid ( __job_unique s0 )
+    : i tid ( _job_unique s0 )
     : ~ i now 0
     : ~ i r 0
     ~ < r 80 {
@@ -175,7 +175,7 @@ $ `stdlib/dist/sim.nu`
     : i oidx ( owner_idx_of ring nd nn key2 )
     ( sim_partition net2 0 oidx )  // cut submitter↔owner both ways
     : *JobNode sn0 ( node nd 0 )
-    : i tid2 ( __job_unique sn0 )
+    : i tid2 ( _job_unique sn0 )
     : ~ i now2 0
     : ~ i r2 0
     ~ < r2 30 {

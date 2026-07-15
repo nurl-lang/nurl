@@ -107,7 +107,7 @@ $ `stdlib/std/time.nu`  // smtp_date_now
 // CRLF lines; it ends at the first line whose 4th byte is NOT '-' (the
 // continuation marker), per RFC 5321 §4.2.1. Returns the byte index
 // just past the terminating LF, or -1 if no complete reply is buffered.
-@ __smtp_reply_scan ( Vec u ) buf → i {
+@ _smtp_reply_scan ( Vec u ) buf → i {
     : i n ( vec_len [u] buf )
     : ~ i ls 0
     : ~ i k 0
@@ -130,7 +130,7 @@ $ `stdlib/std/time.nu`  // smtp_date_now
 
 // Parse the 3-digit status code at the front of a reply. -1 if the
 // first three bytes are not digits.
-@ __smtp_reply_code ( Vec u ) buf → i {
+@ _smtp_reply_code ( Vec u ) buf → i {
     ? < ( vec_len [u] buf ) 3 { ^ -1 } {}
     : i d0 ( __smtp_vget buf 0 )
     : i d1 ( __smtp_vget buf 1 )
@@ -163,9 +163,9 @@ $ `stdlib/std/time.nu`  // smtp_date_now
 @ __smtp_read_reply SmtpClient c → !i SmtpErr {
     : ~ i spin 0
     ~ < spin 1000000 {
-        : i end ( __smtp_reply_scan . c rxbuf )
+        : i end ( _smtp_reply_scan . c rxbuf )
         ? >= end 0 {
-            : i code ( __smtp_reply_code . c rxbuf )
+            : i code ( _smtp_reply_code . c rxbuf )
             ( string_clear . c last_reply )
             : ~ i k 0
             ~ < k end { ( string_push_char . c last_reply ( __smtp_vget . c rxbuf k ) ) = k + k 1 }
@@ -280,7 +280,7 @@ $ `stdlib/std/time.nu`  // smtp_date_now
 
 // base64( "\0" user "\0" pass ) — the AUTH PLAIN initial response
 // (RFC 4954 §4). Built over a Vec[u] so the NUL separators survive.
-@ __smtp_auth_plain_token s user s pass → String {
+@ _smtp_auth_plain_token s user s pass → String {
     : ( Vec u ) b ( vec_new [u] )
     ( vec_push [u] b # u 0 )
     : i un ( nurl_str_len user )
@@ -296,7 +296,7 @@ $ `stdlib/std/time.nu`  // smtp_date_now
 }
 
 @ smtp_auth_plain SmtpClient c s user s pass → !v SmtpErr {
-    : String tok ( __smtp_auth_plain_token user pass )
+    : String tok ( _smtp_auth_plain_token user pass )
     : String line ( string_with_cap + ( string_len tok ) 12 )
     ( string_push_str line `AUTH PLAIN ` )
     ( string_push_str line ( string_data tok ) )

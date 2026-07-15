@@ -9,7 +9,7 @@
 //      returned TcpListener as if it were a plain socket. The
 //      runtime's NurlTcp handle now carries an SSL_CTX; accept
 //      transparently performs SSL_accept before handing the conn
-//      to __serve_keepalive_loop.
+//      to _serve_keepalive_loop.
 //   3. python3 client does an HTTPS GET with verify=False against
 //      the self-signed cert; prints status line + body.
 //

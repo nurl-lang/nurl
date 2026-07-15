@@ -1031,7 +1031,7 @@ $ `cudakernel.nu`
     // module cache: keyed by the generated source (params ride argv → the
     // hash — and the worker-side module cache — survive parameter changes)
     : ( Vec u ) srcb ( bytes_from_str ( string_data wrapped ) )
-    : String hex ( __wasm_hash srcb )
+    : String hex ( _wasm_hash srcb )
     ( vec_free [u] srcb )
     : ~ ( Vec u ) wasm ( vec_new [u] )
     : ~ b have F

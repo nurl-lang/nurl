@@ -107,7 +107,7 @@ $ `src/safetensor.nu`
                     : ~ b eq == 16 ( vec_len [u] raw )
                     : ~ i k 0
                     ~ < k 4 {
-                        : f v # f ( bits_to_f32 ( __st_u32 p * k 4 ) )
+                        : f v # f ( bits_to_f32 ( _st_u32 p * k 4 ) )
                         ? != v # f + k 1 { = eq F } {}
                         = k + k 1
                     }
@@ -225,8 +225,8 @@ $ `src/safetensor.nu`
             ?? ( st_dequant st 0 ) {
                 T raw → {
                     : *u p ( vec_data [u] raw )
-                    : f a # f ( bits_to_f32 ( __st_u32 p 0 ) )
-                    : f b # f ( bits_to_f32 ( __st_u32 p 4 ) )
+                    : f a # f ( bits_to_f32 ( _st_u32 p 0 ) )
+                    : f b # f ( bits_to_f32 ( _st_u32 p 4 ) )
                     ( __ok & == a 1.0 == b 2.0 `F16 widens to f32 (1.0, 2.0)` )
                     ( vec_free [u] raw )
                 }
@@ -255,8 +255,8 @@ $ `src/safetensor.nu`
             ?? ( st_dequant st 0 ) {
                 T raw → {
                     : *u p ( vec_data [u] raw )
-                    : f a # f ( bits_to_f32 ( __st_u32 p 0 ) )
-                    : f b # f ( bits_to_f32 ( __st_u32 p 4 ) )
+                    : f a # f ( bits_to_f32 ( _st_u32 p 0 ) )
+                    : f b # f ( bits_to_f32 ( _st_u32 p 4 ) )
                     ( __ok & == a 1.0 == b 2.0 `BF16 widens to f32 (1.0, 2.0)` )
                     ( vec_free [u] raw )
                 }
@@ -284,7 +284,7 @@ $ `src/safetensor.nu`
             ?? ( st_dequant_range st 0 2 2 ) {
                 T raw → {
                     : *u p ( vec_data [u] raw )
-                    : f a # f ( bits_to_f32 ( __st_u32 p 0 ) )
+                    : f a # f ( bits_to_f32 ( _st_u32 p 0 ) )
                     ( __ok & == 8 ( vec_len [u] raw ) == a 3.0 `element range [2,4) is exact` )
                     ( vec_free [u] raw )
                 }

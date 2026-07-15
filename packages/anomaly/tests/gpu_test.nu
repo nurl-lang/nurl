@@ -138,15 +138,15 @@ $ `src/score.nu`
         ? > a b { ^ 1 } {}
         ^ 0
     } )
-    : f want_off ( __an_percentile ss 0.05 )
+    : f want_off ( _an_percentile ss 0.05 )
     ( check == . vm_a offset want_off `gpu: contamination offset bit-identical` )
     ( vec_free [f] ss )
     ( vec_free [f] ref2 )
     ( anom_vermodel_free vm_a )
-    ( __an_vercfg_free cfg2 )
+    ( _an_vercfg_free cfg2 )
 
     ( anom_vermodel_free vm )
-    ( __an_vercfg_free cfg )
+    ( _an_vercfg_free cfg )
     ( scaler_free sc )
     ( vec_free [f] data )
     ( anom_gpu_close )
