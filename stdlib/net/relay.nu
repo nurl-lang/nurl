@@ -61,7 +61,7 @@ $ `stdlib/std/async.nu`
 
 @ relay_gsend → i { ^ 7 }
 
-@ __relay_max → i { ^ 16777216 }  // reject frames larger than this (DoS guard).
+@ _relay_max → i { ^ 16777216 }  // reject frames larger than this (DoS guard).
 // 16 MiB: large enough to forward a compiled wasm compute kernel (a NURL→wasm
 // module bundles the runtime, ~250 KB–1 MB) in one frame, while still bounding a
 // single relayed message. Group/unicast audio and gossip frames are tiny; this
@@ -186,7 +186,7 @@ $ `stdlib/std/async.nu`
     ? < n 5 { ^ @ ?RelayFrame { F # RelayFrame 0 } } {}
     : i ftype ?? ( vec_get [u] buf 0 ) { T x → # i x F → -1 }
     : i len ?? ( bytes_read_u32_be buf 1 ) { T x → # i x F → -1 }
-    ? > len ( __relay_max ) { ^ @ ?RelayFrame { F # RelayFrame 0 } } {}
+    ? > len ( _relay_max ) { ^ @ ?RelayFrame { F # RelayFrame 0 } } {}
     ? < n + 5 len { ^ @ ?RelayFrame { F # RelayFrame 0 } } {}
     : ( Vec u ) body ( vec_with_cap [u] len )
     : ~ i k 0
@@ -223,7 +223,7 @@ $ `stdlib/std/async.nu`
             : i ftype ?? ( vec_get [u] h 0 ) { T x → # i x F → -1 }
             : i len ?? ( bytes_read_u32_be h 1 ) { T x → # i x F → -1 }
             ( vec_free [u] h )
-            ? & >= len 0 <= len ( __relay_max ) {
+            ? & >= len 0 <= len ( _relay_max ) {
                 : ?( Vec u ) bd ( __read_exact c len )
                 ?? bd {
                     T body → { = out @ ?RelayFrame { T @ RelayFrame { ftype body } } }
@@ -544,7 +544,7 @@ $ `stdlib/std/async.nu`
     : i ek ( nurl_tcp_err_kind raw )
     ? != ek 0 {
         ( nurl_tcp_close raw )
-        ^ @ !RelayClient NetErr { F ( __net_err_of ek ) }
+        ^ @ !RelayClient NetErr { F ( _net_err_of ek ) }
     } {}
     : TcpConn c @ TcpConn { # s raw 0 0 }
     ^ @ !RelayClient NetErr { T @ RelayClient { c } }

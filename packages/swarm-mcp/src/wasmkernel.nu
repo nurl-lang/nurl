@@ -49,7 +49,7 @@ $ `token.nu`
 // chunk so the worker knows how to invoke the module and collect its output).
 @ gpu_mode_scalar → i { ^ 0 }  // partial's f64 bits on stdout
 @ gpu_mode_sample → i { ^ 1 }  // hi-lo doubles written to an output file
-@ gpu_mode_hist → i { ^ 2 }    // K bin sums written to an output file
+@ gpu_mode_hist → i { ^ 2 }  // K bin sums written to an output file
 
 @ wasm_chunk_payload i lo i hi ( Vec u ) wasm → ( Vec u ) {
     : ( Vec u ) b ( vec_new [u] )
@@ -156,7 +156,7 @@ $ `token.nu`
 }
 
 // FNV-1a/64 content hash → 16 lowercase hex chars, for the cache filename.
-@ __wasm_hash ( Vec u ) v → String {
+@ _wasm_hash ( Vec u ) v → String {
     : ~ i h -3750763034362895579  // 14695981039346656037 as signed i64
     : i n ( vec_len [u] v )
     : ~ i k 0
@@ -234,7 +234,7 @@ $ `token.nu`
                 : i lo ?? ( bytes_read_u64_be body 0 ) { T x → # i x F → 0 }
                 : i hi ?? ( bytes_read_u64_be body 8 ) { T x → # i x F → 0 }
                 : ( Vec u ) wasm ( bytes_slice body 16 ( vec_len [u] body ) )
-                : String hex ( __wasm_hash wasm )
+                : String hex ( _wasm_hash wasm )
                 : String path ( __wasm_cache_path hex )
                 ? ! ( file_exists ( string_data path ) ) {
                     ?? ( write_file_bytes ( string_data path ) wasm ) { T _ → {} F _ → {} }
@@ -395,7 +395,7 @@ $ `token.nu`
                 : GpuChunk c ( wasm_gpu_chunk_decode body )
                 = mode . c mode
                 ? == . c ok 1 {
-                    : String hex ( __wasm_hash . c wasm )
+                    : String hex ( _wasm_hash . c wasm )
                     : String path ( __wasm_cache_path hex )
                     ? ! ( file_exists ( string_data path ) ) {
                         ?? ( write_file_bytes ( string_data path ) . c wasm ) { T _ → {} F _ → {} }

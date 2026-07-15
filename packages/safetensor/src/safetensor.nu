@@ -470,13 +470,13 @@ $ `stdlib/ext/json.nu`
     ^ | # i . P o << # i . P + o 1 8
 }
 
-@ __st_u32 * u P i o → i {
+@ _st_u32 * u P i o → i {
     ^ | # i . P o | << # i . P + o 1 8 | << # i . P + o 2 16 << # i . P + o 3 24
 }
 
 @ __st_u64 * u P i o → i {
-    : i lo ( __st_u32 P o )
-    : i hi ( __st_u32 P + o 4 )
+    : i lo ( _st_u32 P o )
+    : i hi ( _st_u32 P + o 4 )
     ^ | lo << hi 32
 }
 
@@ -492,7 +492,7 @@ $ `stdlib/ext/json.nu`
 }
 
 @ __st_i32 * u P i o → i {
-    : i v ( __st_u32 P o )
+    : i v ( _st_u32 P o )
     ^ ? > v 2147483647 - v 4294967296 v
 }
 
@@ -500,7 +500,7 @@ $ `stdlib/ext/json.nu`
 // loses precision (by construction: the device runs f32) and an integer
 // tensor becomes its numeric value.
 @ __st_read_f * u P i dt i idx → f {
-    ? == dt ST_F32 { ^ # f ( bits_to_f32 ( __st_u32 P * idx 4 ) ) } {}
+    ? == dt ST_F32 { ^ # f ( bits_to_f32 ( _st_u32 P * idx 4 ) ) } {}
     ? == dt ST_F16 { ^ ( f16_to_f ( __st_u16 P * idx 2 ) ) } {}
     ? == dt ST_BF16 { ^ ( bf16_to_f ( __st_u16 P * idx 2 ) ) } {}
     ? == dt ST_F64 { ^ ( bits_to_f64 ( __st_u64 P * idx 8 ) ) } {}
@@ -510,7 +510,7 @@ $ `stdlib/ext/json.nu`
     ? == dt ST_I16 { ^ # f ( __st_i16 P * idx 2 ) } {}
     ? == dt ST_U16 { ^ # f ( __st_u16 P * idx 2 ) } {}
     ? == dt ST_I32 { ^ # f ( __st_i32 P * idx 4 ) } {}
-    ? == dt ST_U32 { ^ # f ( __st_u32 P * idx 4 ) } {}
+    ? == dt ST_U32 { ^ # f ( _st_u32 P * idx 4 ) } {}
     ? | == dt ST_I64 == dt ST_U64 { ^ # f ( __st_u64 P * idx 8 ) } {}
     ^ 0.0
 }

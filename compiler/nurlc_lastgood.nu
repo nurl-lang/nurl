@@ -765,6 +765,23 @@
 //   `??`/`?` arms). Consumers that NEED a value (a cast, a let/assign) die
 //   with this appended, so "produced no value" also says WHY — the silent
 //   version handed `undef` to the cast and the program printed a pointer.
+// ── File-private functions (`__` prefix) ───────────────────────────
+// A `__`-prefixed top-level function is FILE-SCOPED: its definition is
+// mangled with its file's id (`__x` in file 3 becomes `__x__fp3`), so two
+// files' private helpers can never collide — the LLVM-redefinition class
+// (#487's diagnostic only NAMED it; this removes it). Resolution at a call
+// site: a local closure binding wins; then the CURRENT file's own
+// definition, always — nobody can shadow my private; then, for
+// compatibility with code written under the flat namespace, a private
+// defined in exactly ONE other file still resolves, with a deprecation
+// warning (once per name) — the migration is to drop one underscore, `_x`
+// being the shared-internal convention; and a private defined in SEVERAL
+// other files is an error listing them, because there is no right answer.
+: ~ i g_priv_file_ids 0  // src-file path → private-scope id ("1", "2", …)
+: ~ i g_priv_file_count 0
+: ~ i g_priv_owner_ids 0  // bare __name → space-separated owner file ids
+: ~ i g_priv_owner_files 0  // bare __name → `', '`-joined owner paths (messages)
+: ~ i g_priv_warned 0  // bare __name → "1" once the legacy warning fired
 : ~ i g_fn_pos_syms 0  // duplicate-fn check: fname → "file:line" of the first
 //   `@ fname` scan registration. Two files are free to each have a private
 //   `__get`-style helper IN THEIR OWN HEADS, but the compilation unit is one
@@ -5020,7 +5037,11 @@
 
 @ gen_call i lex i syms i cg → s {
     ( nurl_lex_advance lex )
-    : s fname ( nurl_lex_val lex )
+    : ~ s fname ( nurl_lex_val lex )
+    : s fname_bare fname
+    ? ( priv_is_private fname ) {
+        = fname ( priv_resolve lex syms fname )
+    } {}
     // A call is the only thing that can produce a borrow; clear the
     // side-channel so a stale one from a previous call cannot be read
     // by the `:` that binds THIS call's result.
@@ -5074,7 +5095,7 @@
         : s is_pub ( nurl_sym_get g_vis_syms ( nurl_str_cat fname `__pub` ) )
         ? & ( seq strict `1` ) ! ( seq is_pub `1` )
         { ( die lex ( nurl_str_cat4
-            `private function '` fname `' is not visible across files; defined in '` callee_sf ) ) }
+            `private function '` fname_bare `' is not visible across files; defined in '` callee_sf ) ) }
         {}
     }
     {}
@@ -14880,7 +14901,10 @@
 @ gen_fn_decl i lex i syms i cg → v {
     ( nurl_lex_advance lex )
     ? ( is_ident_tok ( nurl_lex_type lex ) )
-    { : s fname ( nurl_lex_val lex )
+    { : ~ s fname ( nurl_lex_val lex )
+        ? ( priv_is_private fname ) {
+            = fname ( priv_mangle_for fname ( priv_file_id ) )
+        } {}
         // Lint: snapshot the name token's position before advancing past
         // it (used by the unused-function report's warning location).
         : i lint_fn_line ( nurl_lex_line lex )
@@ -15617,6 +15641,20 @@
 
 @ gen_struct_decl s sname i lex i syms → v {
     ( nurl_lex_advance lex )
+    // Same flat-namespace guard as `@` functions (g_fn_pos_syms): a second
+    // `: Name { … }` from a DIFFERENT file:line would emit a second
+    // `%Name = type` and die inside LLVM, location-free. Keyed `ty##` in the
+    // same table; same-position re-registration stays idempotent.
+    : s __tpos ( nurl_str_cat ( vis_current_src_file )
+    ( nurl_str_cat `:` ( nurl_str_int ( nurl_lex_line lex ) ) ) )
+    : s __tkey ( nurl_str_cat `ty##` sname )
+    : s __tprev ( nurl_sym_get g_fn_pos_syms __tkey )
+    ? & != 0 ( nurl_str_len __tprev ) ! ( seq __tprev __tpos )
+    { ( die lex ( nurl_str_cat `duplicate type ': `
+        ( nurl_str_cat sname
+        ( nurl_str_cat `' — already defined at ` __tprev ) ) ) )
+    }
+    { ( nurl_sym_def g_fn_pos_syms __tkey __tpos ) }
     // Grammar v2.0+: consume the parse-program-staged `pub` flag and
     // record per-file origin / public marker so cross-file references
     // can be checked at parse_type_base / gen_agg_lit time.
@@ -15742,6 +15780,21 @@
     : b const_pub ( vis_take_pending_pub )
     ? ( is_ident_tok ( nurl_lex_type lex ) )
     { : s cname ( nurl_lex_val lex )
+        // Flat-namespace guard for globals, twin of the struct one above: a
+        // second `: name` / `: ~ name` from a different file:line is two
+        // `@name = global` emissions — and two files SHARING one mutable
+        // global by accident is worse than the LLVM error it happens to die
+        // with today.
+        : s __gpos ( nurl_str_cat ( vis_current_src_file )
+        ( nurl_str_cat `:` ( nurl_str_int ( nurl_lex_line lex ) ) ) )
+        : s __gkey ( nurl_str_cat `gl##` cname )
+        : s __gprev ( nurl_sym_get g_fn_pos_syms __gkey )
+        ? & != 0 ( nurl_str_len __gprev ) ! ( seq __gprev __gpos )
+        { ( die lex ( nurl_str_cat `duplicate global ': `
+            ( nurl_str_cat cname
+            ( nurl_str_cat `' — already defined at ` __gprev ) ) ) )
+        }
+        { ( nurl_sym_def g_fn_pos_syms __gkey __gpos ) }
         ( vis_record_const cname const_pub )
         ( rec_decl_loc syms cname ( nurl_lex_line lex ) lex )
         ( nurl_lex_advance lex )
@@ -16810,6 +16863,16 @@
     // and restored because nested instantiations re-enter here.
     : s saved_mono_tys g_mono_tparam_tys
     = g_mono_tparam_tys type_args
+    // File-private resolution inside the template body must see the
+    // TEMPLATE'S OWN file as current: a public generic calling its
+    // file's `__` helper is a same-file call in the source, and the
+    // flush re-parses it long after the import walk unwound — without
+    // this, that call mis-resolves through the cross-file legacy path
+    // and warns about code nobody wrote wrong. (The pub/strict check
+    // reads the same state, so it too now judges the template by its
+    // own file.) Saved/restored: nested instantiations re-enter here.
+    : s saved_vis_sf ( vis_current_src_file )
+    ? != 0 ( nurl_str_len sf_s ) { ( vis_set_current_src_file sf_s ) } {}
     // Lint: re-parsing the substituted body records symbol uses; key
     // them to the template's defining file, not the top file (see
     // lint_note_used). Saved/restored around the recursive
@@ -16822,6 +16885,7 @@
         ( nurl_sym_def g_lint_syms `use_file` saved_uf )
     }
     { ( gen_fn_decl lex2 syms cg ) }
+    ( vis_set_current_src_file saved_vis_sf )
     = g_dbg_override_line saved_override
     = g_dbg_override_file saved_override_file
     = g_mono_tparam_tys saved_mono_tys
@@ -18662,6 +18726,77 @@
     ^ ( nurl_str_cat3 t ` ` v )
 }
 
+@ priv_is_private s fname → b {
+    ? < ( nurl_str_len fname ) 3 { ^ F } {}
+    ? | != ( nurl_str_get fname 0 ) 95 != ( nurl_str_get fname 1 ) 95 { ^ F } {}
+    // Already carries a file-scope marker: a generic instantiation's
+    // synthesized `@ <resolved>__<Type>` source re-enters gen_fn_decl and
+    // scan_fn_sigs — mangling it AGAIN would define a symbol no call site
+    // asked for.
+    ? >= ( nurl_str_find fname `__fp` ) 0 { ^ F } {}
+    ^ T
+}
+
+// The current file's private-scope id, assigned on first ask. A counter,
+// not a hash: scan order is deterministic for a given program, so the
+// fixed point holds, and there is nothing to collide.
+@ priv_file_id → s {
+    : s sf ( vis_current_src_file )
+    : s have ( nurl_sym_get g_priv_file_ids sf )
+    ? != 0 ( nurl_str_len have ) { ^ have } {}
+    = g_priv_file_count + g_priv_file_count 1
+    : s fid ( nurl_str_int g_priv_file_count )
+    ( nurl_sym_def g_priv_file_ids sf fid )
+    ^ fid
+}
+
+@ priv_mangle_for s fname s fid → s {
+    ^ ( nurl_str_cat fname ( nurl_str_cat `__fp` fid ) )
+}
+
+@ priv_note_owner s fname → v {
+    : s fid ( priv_file_id )
+    : s ids ( nurl_sym_get g_priv_owner_ids fname )
+    ? ( str_contains_word ids fid ) { ^ {} } {}
+    ( nurl_sym_def g_priv_owner_ids fname
+    ? == 0 ( nurl_str_len ids ) fid ( nurl_str_cat ids ( nurl_str_cat ` ` fid ) ) )
+    : s fls ( nurl_sym_get g_priv_owner_files fname )
+    ( nurl_sym_def g_priv_owner_files fname
+    ? == 0 ( nurl_str_len fls ) ( vis_current_src_file )
+    ( nurl_str_cat fls ( nurl_str_cat `, ` ( vis_current_src_file ) ) ) )
+}
+
+// Call-site resolution for a `__` callee. `syms` is consulted first so a
+// LOCAL closure binding named `__x` keeps winning over any @-definition,
+// exactly as it did under the flat namespace.
+@ priv_resolve i lex i syms s fname → s {
+    ? != 0 ( nurl_str_len ( nurl_sym_get syms ( nurl_str_cat fname `__ptr` ) ) ) { ^ fname } {}
+    : s owners ( nurl_sym_get g_priv_owner_ids fname )
+    ? == 0 ( nurl_str_len owners ) { ^ fname } {}
+    : s fid ( priv_file_id )
+    ? ( str_contains_word owners fid ) { ^ ( priv_mangle_for fname fid ) } {}
+    // count the owners: one space per extra owner
+    : ~ i nsp 0
+    : ~ i k 0
+    ~ < k ( nurl_str_len owners ) {
+        ? == ( nurl_str_get owners k ) 32 { = nsp + nsp 1 } {}
+        = k + k 1
+    }
+    ? == nsp 0 {
+        ? == 0 ( nurl_str_len ( nurl_sym_get g_priv_warned fname ) ) {
+            ( nurl_sym_def g_priv_warned fname `1` )
+            ( warn lex ( nurl_str_cat ( nurl_str_cat4
+            `'` fname `' is file-private (defined in ` ( nurl_sym_get g_priv_owner_files fname ) )
+            `); cross-file use of a '__' function is deprecated — rename it with ONE underscore ('_name') if it is meant to be shared` ) )
+        } {}
+        ^ ( priv_mangle_for fname owners )
+    } {}
+    ( die lex ( nurl_str_cat ( nurl_str_cat4
+    `private function '` fname `' is defined in several files (` ( nurl_sym_get g_priv_owner_files fname ) )
+    `) and this file is not one of them — a '__' function is file-scoped; call it from its own file, or rename the shared one with ONE underscore` ) )
+    ^ fname
+}
+
 @ scan_fn_sigs i lex i syms → v {
     // Brace-depth tracker. A `:` struct decl body or any `@`-function body
     // contains `{ ... }`; the `@` inside a closure-shaped struct field
@@ -18697,7 +18832,14 @@
                     ? == tt TT_AT
                     { ( nurl_lex_advance lex )
                         ? ( is_ident_tok ( nurl_lex_type lex ) )
-                        { : s fname ( nurl_lex_val lex )
+                        { : ~ s fname ( nurl_lex_val lex )
+                            // File-private: register under the mangled name.
+                            // Same-file duplicates still collide on it (the
+                            // dup check below); different files' never do.
+                            ? ( priv_is_private fname ) {
+                                ( priv_note_owner fname )
+                                = fname ( priv_mangle_for fname ( priv_file_id ) )
+                            } {}
                             : s __fpos ( nurl_str_cat ( vis_current_src_file )
                             ( nurl_str_cat `:` ( nurl_str_int ( nurl_lex_line lex ) ) ) )
                             ( nurl_lex_advance lex )
@@ -19271,6 +19413,10 @@
     = g_impl_trait_syms ( nurl_sym_new )
     = g_impl_pos_syms ( nurl_sym_new )
     = g_fn_pos_syms ( nurl_sym_new )
+    = g_priv_file_ids ( nurl_sym_new )
+    = g_priv_owner_ids ( nurl_sym_new )
+    = g_priv_owner_files ( nurl_sym_new )
+    = g_priv_warned ( nurl_sym_new )
     = g_trait_syms ( nurl_sym_new )
     = g_res_type_syms ( nurl_sym_new )
     = g_closure_defs ( nurl_sym_new )

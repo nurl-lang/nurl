@@ -62,13 +62,13 @@ $ `core.nu`
 
 // Raw sample `si` (sample index within the row) from a reconstructed row.
 @ __png_sample ( Vec u ) recon i rowbase i si i depth → i {
-    ? == depth 8 { ^ ( __b recon + rowbase si ) } {}
+    ? == depth 8 { ^ ( _byte recon + rowbase si ) } {}
     ? == depth 16 {
         : i o + rowbase * si 2
-        ^ + * ( __b recon o ) 256 ( __b recon + o 1 )
+        ^ + * ( _byte recon o ) 256 ( _byte recon + o 1 )
     } {}
     : i bitpos * si depth
-    : i byte ( __b recon + rowbase / bitpos 8 )
+    : i byte ( _byte recon + rowbase / bitpos 8 )
     : i shift - - 8 depth % bitpos 8
     ^ & >> byte shift - << 1 depth 1
 }
@@ -94,15 +94,15 @@ $ `core.nu`
     : ~ i y 0
     ~ < y ph {
         : i rowpos + offset * y + sbytes 1
-        : i ft ( __b raw rowpos )
+        : i ft ( _byte raw rowpos )
         ? > ft 4 { ( vec_free [u] recon ) ^ -1 } {}
         : i base + rowpos 1
         : ~ i x 0
         ~ < x sbytes {
-            : i fv ( __b raw + base x )
-            : i left ? >= x bpp { ( __b recon - + * y sbytes x bpp ) } { 0 }
-            : i up ? > y 0 { ( __b recon - + * y sbytes x sbytes ) } { 0 }
-            : i ul ? & > y 0 >= x bpp { ( __b recon - - + * y sbytes x bpp sbytes ) } { 0 }
+            : i fv ( _byte raw + base x )
+            : i left ? >= x bpp { ( _byte recon - + * y sbytes x bpp ) } { 0 }
+            : i up ? > y 0 { ( _byte recon - + * y sbytes x sbytes ) } { 0 }
+            : i ul ? & > y 0 >= x bpp { ( _byte recon - - + * y sbytes x bpp sbytes ) } { 0 }
             : ~ i rv 0
             ? == ft 0 { = rv fv } {}
             ? == ft 1 { = rv + fv left } {}
@@ -129,9 +129,9 @@ $ `core.nu`
                 : i idx ( __png_sample recon rowbase i2 depth )
                 : i pi * idx 3
                 ? < pi plen {
-                    ( vec_set [u] out pos ( __b plte pi ) )
-                    ( vec_set [u] out + pos 1 ( __b plte + pi 1 ) )
-                    ( vec_set [u] out + pos 2 ( __b plte + pi 2 ) )
+                    ( vec_set [u] out pos ( _byte plte pi ) )
+                    ( vec_set [u] out + pos 1 ( _byte plte + pi 1 ) )
+                    ( vec_set [u] out + pos 2 ( _byte plte + pi 2 ) )
                 } {}
                 ? == outch 4 {
                     : i a ? < idx tn { ( __b_it trns idx ) } { 255 }
@@ -170,12 +170,12 @@ $ `core.nu`
 }
 
 @ png_decode ( Vec u ) buf → ?Image {
-    ( __img_set_err `` )
+    ( _img_set_err `` )
     : i n ( vec_len [u] buf )
-    ? < n 8 { ( __img_set_err `not a PNG` ) ^ @ ?Image { F } } {}
+    ? < n 8 { ( _img_set_err `not a PNG` ) ^ @ ?Image { F } } {}
     // signature 137 80 78 71 13 10 26 10
-    ? & == ( __b buf 0 ) 137 & == ( __b buf 1 ) 80 & == ( __b buf 2 ) 78 & == ( __b buf 3 ) 71 & == ( __b buf 4 ) 13 & == ( __b buf 5 ) 10 & == ( __b buf 6 ) 26 == ( __b buf 7 ) 10 {} {
-        ( __img_set_err `not a PNG` )
+    ? & == ( _byte buf 0 ) 137 & == ( _byte buf 1 ) 80 & == ( _byte buf 2 ) 78 & == ( _byte buf 3 ) 71 & == ( _byte buf 4 ) 13 & == ( _byte buf 5 ) 10 & == ( _byte buf 6 ) 26 == ( _byte buf 7 ) 10 {} {
+        ( _img_set_err `not a PNG` )
         ^ @ ?Image { F }
     }
 
@@ -185,57 +185,57 @@ $ `core.nu`
     : ~ i color 0
     : ~ i interlace 0
     : ~ b have_ihdr F
-    : ( Vec u ) zdata ( vec_new [u] )     // concatenated IDAT payloads
-    : ( Vec u ) plte ( vec_new [u] )      // palette (RGB triples)
-    : ( Vec u ) trnsb ( vec_new [u] )     // raw tRNS payload
+    : ( Vec u ) zdata ( vec_new [u] )  // concatenated IDAT payloads
+    : ( Vec u ) plte ( vec_new [u] )  // palette (RGB triples)
+    : ( Vec u ) trnsb ( vec_new [u] )  // raw tRNS payload
 
     : ~ i p 8
     : ~ b going T
     ~ & going < + p 8 n {
-        : i clen ( __u32be buf p )
+        : i clen ( _u32be buf p )
         : i tpos + p 4
-        : i t0 ( __b buf tpos )
-        : i t1 ( __b buf + tpos 1 )
-        : i t2 ( __b buf + tpos 2 )
-        : i t3 ( __b buf + tpos 3 )
+        : i t0 ( _byte buf tpos )
+        : i t1 ( _byte buf + tpos 1 )
+        : i t2 ( _byte buf + tpos 2 )
+        : i t3 ( _byte buf + tpos 3 )
         : i dpos + p 8
         ? || < clen 0 > + dpos clen n { = going F } {
             // IHDR
             ? & == t0 73 & == t1 72 & == t2 68 == t3 82 {
-                = width ( __u32be buf dpos )
-                = height ( __u32be buf + dpos 4 )
-                = depth ( __b buf + dpos 8 )
-                = color ( __b buf + dpos 9 )
-                = interlace ( __b buf + dpos 12 )
+                = width ( _u32be buf dpos )
+                = height ( _u32be buf + dpos 4 )
+                = depth ( _byte buf + dpos 8 )
+                = color ( _byte buf + dpos 9 )
+                = interlace ( _byte buf + dpos 12 )
                 = have_ihdr T
             } {}
             // PLTE
             ? & == t0 80 & == t1 76 & == t2 84 == t3 69 {
                 : ~ i k 0
-                ~ < k clen { ( vec_push [u] plte ( __b buf + dpos k ) ) = k + k 1 }
+                ~ < k clen { ( vec_push [u] plte ( _byte buf + dpos k ) ) = k + k 1 }
             } {}
             // tRNS
             ? & == t0 116 & == t1 82 & == t2 78 == t3 83 {
                 : ~ i k 0
-                ~ < k clen { ( vec_push [u] trnsb ( __b buf + dpos k ) ) = k + k 1 }
+                ~ < k clen { ( vec_push [u] trnsb ( _byte buf + dpos k ) ) = k + k 1 }
             } {}
             // IDAT
             ? & == t0 73 & == t1 68 & == t2 65 == t3 84 {
                 : ~ i k 0
-                ~ < k clen { ( vec_push [u] zdata ( __b buf + dpos k ) ) = k + k 1 }
+                ~ < k clen { ( vec_push [u] zdata ( _byte buf + dpos k ) ) = k + k 1 }
             } {}
             // IEND
             ? & == t0 73 & == t1 69 & == t2 78 == t3 68 { = going F } {}
-            = p + + dpos clen 4      // skip data + CRC
+            = p + + dpos clen 4  // skip data + CRC
         }
     }
 
     : ~ b hdr_ok have_ihdr
     ? & & > width 0 > height 0 & <= width 1000000 <= height 1000000 {} { = hdr_ok F }
-    ? > * width height 268435456 { = hdr_ok F }               // ≤ 256 Mpx
+    ? > * width height 268435456 { = hdr_ok F }  // ≤ 256 Mpx
     ? & hdr_ok & ( __png_depth_ok color depth ) <= interlace 1 {} { = hdr_ok F }
     ? hdr_ok {} {
-        ( __img_set_err `PNG: unsupported or malformed header` )
+        ( _img_set_err `PNG: unsupported or malformed header` )
         ( vec_free [u] zdata ) ( vec_free [u] plte ) ( vec_free [u] trnsb )
         ^ @ ?Image { F }
     }
@@ -245,12 +245,12 @@ $ `core.nu`
     : i tbn ( vec_len [u] trnsb )
     ? == color 3 {
         : ~ i k 0
-        ~ < k tbn { ( vec_push [i] trns ( __b trnsb k ) ) = k + k 1 }
+        ~ < k tbn { ( vec_push [i] trns ( _byte trnsb k ) ) = k + k 1 }
     } {
         // grey / RGB colour keys are 16-bit big-endian samples
         : ~ i k 0
         ~ < + k 1 tbn {
-            ( vec_push [i] trns + * ( __b trnsb k ) 256 ( __b trnsb + k 1 ) )
+            ( vec_push [i] trns + * ( _byte trnsb k ) 256 ( _byte trnsb + k 1 ) )
             = k + k 2
         }
     }
@@ -270,7 +270,7 @@ $ `core.nu`
     : ( Vec u ) defl ( vec_new [u] )
     : i zn ( vec_len [u] zdata )
     : ~ i k 2
-    ~ < k zn { ( vec_push [u] defl ( __b zdata k ) ) = k + k 1 }
+    ~ < k zn { ( vec_push [u] defl ( _byte zdata k ) ) = k + k 1 }
     ( vec_free [u] zdata )
     : !( Vec u ) DeflateErr ir ( inflate defl )
     ( vec_free [u] defl )
@@ -281,7 +281,7 @@ $ `core.nu`
         F _ → {}
     }
     ? infl_ok {} {
-        ( __img_set_err `PNG: corrupt DEFLATE stream` )
+        ( _img_set_err `PNG: corrupt DEFLATE stream` )
         ( vec_free [u] raw ) ( vec_free [u] plte ) ( vec_free [i] trns )
         ^ @ ?Image { F }
     }
@@ -317,7 +317,7 @@ $ `core.nu`
         ( vec_free [i] ax )
     }
     ? < rawlen want {
-        ( __img_set_err `PNG: truncated pixel data` )
+        ( _img_set_err `PNG: truncated pixel data` )
         ( vec_free [u] raw ) ( vec_free [u] plte ) ( vec_free [i] trns )
         ^ @ ?Image { F }
     } {}
@@ -357,7 +357,7 @@ $ `core.nu`
     ( vec_free [u] plte )
     ( vec_free [i] trns )
     ? ok {} {
-        ( __img_set_err `PNG: malformed pixel data` )
+        ( _img_set_err `PNG: malformed pixel data` )
         ( vec_free [u] out )
         ^ @ ?Image { F }
     }
@@ -374,13 +374,13 @@ $ `core.nu`
 }
 
 @ __png_chunk ( Vec u ) out s type ( Vec u ) data → v {
-    ( __push_u32be out ( vec_len [u] data ) )
+    ( _push_u32be out ( vec_len [u] data ) )
     : ( Vec u ) td ( vec_new [u] )
     ( bytes_extend_str td type )
     ( vec_extend [u] td data )
     ( bytes_extend_str out type )
     ( vec_extend [u] out data )
-    ( __push_u32be out ( crc32 td ) )
+    ( _push_u32be out ( crc32 td ) )
     ( vec_free [u] td )
 }
 
@@ -396,8 +396,8 @@ $ `core.nu`
     ( vec_push [u] out 13 ) ( vec_push [u] out 10 ) ( vec_push [u] out 26 ) ( vec_push [u] out 10 )
     // IHDR
     : ( Vec u ) ihdr ( vec_new [u] )
-    ( __push_u32be ihdr w )
-    ( __push_u32be ihdr h )
+    ( _push_u32be ihdr w )
+    ( _push_u32be ihdr h )
     ( vec_push [u] ihdr 8 )
     ( vec_push [u] ihdr ( __png_color_for ch ) )
     ( vec_push [u] ihdr 0 )
@@ -411,15 +411,15 @@ $ `core.nu`
     ~ < y h {
         ( vec_push [u] filt 0 )
         : ~ i x 0
-        ~ < x stride { ( vec_push [u] filt ( __b . im data + * y stride x ) ) = x + x 1 }
+        ~ < x stride { ( vec_push [u] filt ( _byte . im data + * y stride x ) ) = x + x 1 }
         = y + y 1
     }
     : ( Vec u ) comp ( deflate filt )
     : ( Vec u ) idat ( vec_new [u] )
-    ( vec_push [u] idat 120 )       // zlib CMF 0x78
-    ( vec_push [u] idat 156 )       // FLG 0x9c
+    ( vec_push [u] idat 120 )  // zlib CMF 0x78
+    ( vec_push [u] idat 156 )  // FLG 0x9c
     ( vec_extend [u] idat comp )
-    ( __push_u32be idat ( adler32 filt ) )
+    ( _push_u32be idat ( adler32 filt ) )
     ( __png_chunk out `IDAT` idat )
     ( vec_free [u] filt )
     ( vec_free [u] comp )

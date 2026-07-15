@@ -53,7 +53,7 @@ $ `stdlib/core/posix.nu`  // open / lseek / mmap / munmap + posix_const
 // errno-kind → IoErr enum value. Order matches `nurl_errno_kind` in
 // runtime.c (NotFound=0, PermissionDenied=1, AlreadyExists=2,
 // Interrupted=3, UnexpectedEof=4, WriteFailed=5, ReadFailed=6, Other=7).
-@ __io_err_of_kind i k → IoErr {
+@ _io_err_of_kind i k → IoErr {
     ? == k 0 { ^ @ IoErr { NotFound } } {}
     ? == k 1 { ^ @ IoErr { PermissionDenied } } {}
     ? == k 2 { ^ @ IoErr { AlreadyExists } } {}
@@ -160,7 +160,7 @@ $ `stdlib/core/posix.nu`  // open / lseek / mmap / munmap + posix_const
     }
     : i p # i raw
     ? == p 0 {
-        : IoErr e ( __io_err_of_kind ( errno_kind ) )
+        : IoErr e ( _io_err_of_kind ( errno_kind ) )
         ^ @ !String IoErr { F e }
     } {}
     // Wrap the malloc'd buffer in a String WITHOUT copying. The
@@ -212,7 +212,7 @@ $ `stdlib/core/posix.nu`  // open / lseek / mmap / munmap + posix_const
     ? == rc 0 {
         ^ @ !v IoErr { T 0 }
     } {}
-    : IoErr e ( __io_err_of_kind ( errno_kind ) )
+    : IoErr e ( _io_err_of_kind ( errno_kind ) )
     ^ @ !v IoErr { F e }
 }
 
@@ -221,7 +221,7 @@ $ `stdlib/core/posix.nu`  // open / lseek / mmap / munmap + posix_const
     ? == rc 0 {
         ^ @ !v IoErr { T 0 }
     } {}
-    : IoErr e ( __io_err_of_kind ( errno_kind ) )
+    : IoErr e ( _io_err_of_kind ( errno_kind ) )
     ^ @ !v IoErr { F e }
 }
 
@@ -257,7 +257,7 @@ $ `stdlib/core/posix.nu`  // open / lseek / mmap / munmap + posix_const
 @ file_size s path → !i IoErr {
     : i n ( __file_size_pure path )
     ? < n 0 {
-        : IoErr e ( __io_err_of_kind ( errno_kind ) )
+        : IoErr e ( _io_err_of_kind ( errno_kind ) )
         ^ @ !i IoErr { F e }
     } {}
     ^ @ !i IoErr { T n }
@@ -279,7 +279,7 @@ $ `stdlib/core/posix.nu`  // open / lseek / mmap / munmap + posix_const
     ? == rc 0 {
         ^ @ !v IoErr { T 0 }
     } {}
-    : IoErr e ( __io_err_of_kind ( errno_kind ) )
+    : IoErr e ( _io_err_of_kind ( errno_kind ) )
     ^ @ !v IoErr { F e }
 }
 
@@ -299,7 +299,7 @@ $ `stdlib/core/posix.nu`  // open / lseek / mmap / munmap + posix_const
     ? == rc 0 {
         ^ @ !v IoErr { T 0 }
     } {}
-    : IoErr e ( __io_err_of_kind ( errno_kind ) )
+    : IoErr e ( _io_err_of_kind ( errno_kind ) )
     ^ @ !v IoErr { F e }
 }
 
@@ -320,7 +320,7 @@ $ `stdlib/core/posix.nu`  // open / lseek / mmap / munmap + posix_const
     : i n ( readlink path buf cap )
     ? < n 0 {
         ( nurl_free buf )
-        : IoErr e ( __io_err_of_kind ( errno_kind ) )
+        : IoErr e ( _io_err_of_kind ( errno_kind ) )
         ^ @ !String IoErr { F e }
     } {}
     : String out ( string_from buf )
@@ -336,7 +336,7 @@ $ `stdlib/core/posix.nu`  // open / lseek / mmap / munmap + posix_const
     ? == rc 0 {
         ^ @ !v IoErr { T 0 }
     } {}
-    : IoErr e ( __io_err_of_kind ( errno_kind ) )
+    : IoErr e ( _io_err_of_kind ( errno_kind ) )
     ^ @ !v IoErr { F e }
 }
 
@@ -350,7 +350,7 @@ $ `stdlib/core/posix.nu`  // open / lseek / mmap / munmap + posix_const
 @ __dir_list_pure_posix s path → !( Vec String ) IoErr {
     : s d ( opendir path )
     ? == # i d 0 {
-        : IoErr e ( __io_err_of_kind ( errno_kind ) )
+        : IoErr e ( _io_err_of_kind ( errno_kind ) )
         ^ @ !( Vec String ) IoErr { F e }
     } {}
     : ( Vec String ) out ( vec_new [String] )
@@ -394,7 +394,7 @@ $ `stdlib/core/posix.nu`  // open / lseek / mmap / munmap + posix_const
     } {}
     : i h ( nurl_dir_list_open path )
     ? == h 0 {
-        : IoErr e ( __io_err_of_kind ( errno_kind ) )
+        : IoErr e ( _io_err_of_kind ( errno_kind ) )
         ^ @ !( Vec String ) IoErr { F e }
     } {}
     : ( Vec String ) out ( vec_new [String] )
@@ -433,7 +433,7 @@ $ `stdlib/core/posix.nu`  // open / lseek / mmap / munmap + posix_const
 @ read_file_bytes s path → !( Vec u ) IoErr {
     : s f # s ( fopen path `rb` )
     ? == # i f 0 {
-        : IoErr e ( __io_err_of_kind ( errno_kind ) )
+        : IoErr e ( _io_err_of_kind ( errno_kind ) )
         ^ @ !( Vec u ) IoErr { F e }
     } {}
     : i32 _e1 ( fseek f 0 # i32 2 )  // SEEK_END
@@ -441,7 +441,7 @@ $ `stdlib/core/posix.nu`  // open / lseek / mmap / munmap + posix_const
     : i32 _e2 ( fseek f 0 # i32 0 )  // SEEK_SET
     ? < sz 0 {
         : i32 _ ( fclose f )
-        : IoErr e ( __io_err_of_kind ( errno_kind ) )
+        : IoErr e ( _io_err_of_kind ( errno_kind ) )
         ^ @ !( Vec u ) IoErr { F e }
     } {}
     : i cap_n ? > sz 0 sz 1
@@ -464,7 +464,7 @@ $ `stdlib/core/posix.nu`  // open / lseek / mmap / munmap + posix_const
 @ __write_bytes s path ( Vec u ) v s mode → !v IoErr {
     : s f # s ( fopen path mode )
     ? == # i f 0 {
-        : IoErr e ( __io_err_of_kind ( errno_kind ) )
+        : IoErr e ( _io_err_of_kind ( errno_kind ) )
         ^ @ !v IoErr { F e }
     } {}
     : i n ( vec_len [u] v )
@@ -473,13 +473,13 @@ $ `stdlib/core/posix.nu`  // open / lseek / mmap / munmap + posix_const
         : i got ( fwrite # s data 1 n f )
         ? != got n {
             : i32 _ ( fclose f )
-            : IoErr e ( __io_err_of_kind ( errno_kind ) )
+            : IoErr e ( _io_err_of_kind ( errno_kind ) )
             ^ @ !v IoErr { F e }
         } {}
     } {}
     : i32 rc ( fclose f )
     ? != rc # i32 0 {
-        : IoErr e ( __io_err_of_kind ( errno_kind ) )
+        : IoErr e ( _io_err_of_kind ( errno_kind ) )
         ^ @ !v IoErr { F e }
     } {}
     ^ @ !v IoErr { T 0 }
@@ -596,7 +596,7 @@ $ `stdlib/core/posix.nu`  // open / lseek / mmap / munmap + posix_const
         ( nurl_dir_list_close dh )
         ^ @ !v IoErr { T 0 }
     } {}
-    ^ @ !v IoErr { F ( __io_err_of_kind k ) }
+    ^ @ !v IoErr { F ( _io_err_of_kind k ) }
 }
 
 // Create `path` and every missing parent directory. An existing leaf or
@@ -636,7 +636,7 @@ $ `stdlib/core/posix.nu`  // open / lseek / mmap / munmap + posix_const
 @ __unlink_entry s p → !v IoErr {
     : i32 rc ( unlink p )
     ? == rc 0 { ^ @ !v IoErr { T 0 } } {}
-    ^ @ !v IoErr { F ( __io_err_of_kind ( errno_kind ) ) }
+    ^ @ !v IoErr { F ( _io_err_of_kind ( errno_kind ) ) }
 }
 
 // Free a Vec[String] and every String it owns.
@@ -702,7 +702,7 @@ $ `stdlib/core/posix.nu`  // open / lseek / mmap / munmap + posix_const
 @ file_open s path → !File IoErr {
     : *v h ( nurl_file_open path `rb` )
     ? == 0 # i h {
-        ^ @ !File IoErr { F ( __io_err_of_kind ( errno_kind ) ) }
+        ^ @ !File IoErr { F ( _io_err_of_kind ( errno_kind ) ) }
     } {}
     : s rawp # s h
     ^ @ !File IoErr { T @ File { rawp } }
@@ -721,7 +721,7 @@ $ `stdlib/core/posix.nu`  // open / lseek / mmap / munmap + posix_const
     : *u dst ( vec_data [u] out )
     : i got ( fread # s dst 1 n hp )
     ? & == got 0 != 0 # i ( ferror hp ) {
-        ^ @ !( Vec u ) IoErr { F ( __io_err_of_kind ( errno_kind ) ) }
+        ^ @ !( Vec u ) IoErr { F ( _io_err_of_kind ( errno_kind ) ) }
     } {}
     : b _ok ( vec_set_len [u] out got )
     ^ @ !( Vec u ) IoErr { T out }
@@ -767,7 +767,7 @@ $ `stdlib/core/posix.nu`  // open / lseek / mmap / munmap + posix_const
 @ __file_open_mode s path s mode → !File IoErr {
     : *v h ( nurl_file_open path mode )
     ? == 0 # i h {
-        ^ @ !File IoErr { F ( __io_err_of_kind ( errno_kind ) ) }
+        ^ @ !File IoErr { F ( _io_err_of_kind ( errno_kind ) ) }
     } {}
     : s rawp # s h
     ^ @ !File IoErr { T @ File { rawp } }
@@ -794,14 +794,14 @@ $ `stdlib/core/posix.nu`  // open / lseek / mmap / munmap + posix_const
     ? <= n 0 { ^ @ !v IoErr { T 0 } } {}
     : i wrote ( fwrite # s ( vec_data [u] data ) 1 n hp )
     ? == wrote n { ^ @ !v IoErr { T 0 } } {}
-    ^ @ !v IoErr { F ( __io_err_of_kind ( errno_kind ) ) }
+    ^ @ !v IoErr { F ( _io_err_of_kind ( errno_kind ) ) }
 }
 
 @ file_flush File f → !v IoErr {
     : s hp . f raw
     ? == 0 # i hp { ^ @ !v IoErr { F @ IoErr { Other } } } {}
     ? == 0 # i ( fflush hp ) { ^ @ !v IoErr { T 0 } } {}
-    ^ @ !v IoErr { F ( __io_err_of_kind ( errno_kind ) ) }
+    ^ @ !v IoErr { F ( _io_err_of_kind ( errno_kind ) ) }
 }
 
 // Seek to `off` relative to `whence`; returns the new ABSOLUTE offset
@@ -810,11 +810,11 @@ $ `stdlib/core/posix.nu`  // open / lseek / mmap / munmap + posix_const
     : s hp . f raw
     ? == 0 # i hp { ^ @ !i IoErr { F @ IoErr { Other } } } {}
     ? == 0 # i ( fseek hp off # i32 whence ) {} {
-        ^ @ !i IoErr { F ( __io_err_of_kind ( errno_kind ) ) }
+        ^ @ !i IoErr { F ( _io_err_of_kind ( errno_kind ) ) }
     }
     : i posn ( ftell hp )
     ? >= posn 0 { ^ @ !i IoErr { T posn } } {}
-    ^ @ !i IoErr { F ( __io_err_of_kind ( errno_kind ) ) }
+    ^ @ !i IoErr { F ( _io_err_of_kind ( errno_kind ) ) }
 }
 
 @ file_tell File f → !i IoErr {
@@ -822,7 +822,7 @@ $ `stdlib/core/posix.nu`  // open / lseek / mmap / munmap + posix_const
     ? == 0 # i hp { ^ @ !i IoErr { F @ IoErr { Other } } } {}
     : i posn ( ftell hp )
     ? >= posn 0 { ^ @ !i IoErr { T posn } } {}
-    ^ @ !i IoErr { F ( __io_err_of_kind ( errno_kind ) ) }
+    ^ @ !i IoErr { F ( _io_err_of_kind ( errno_kind ) ) }
 }
 
 // Random-access read: up to `n` bytes at absolute offset `off`.
@@ -853,7 +853,7 @@ $ `stdlib/core/posix.nu`  // open / lseek / mmap / munmap + posix_const
 @ fs_rename s from s to → !v IoErr {
     : i32 rc ( rename from to )
     ? == rc # i32 0 { ^ @ !v IoErr { T 0 } } {}
-    ^ @ !v IoErr { F ( __io_err_of_kind ( errno_kind ) ) }
+    ^ @ !v IoErr { F ( _io_err_of_kind ( errno_kind ) ) }
 }
 
 // Copy `src` to `dst` (truncating / creating `dst`). Streams in 64 KiB
@@ -862,11 +862,11 @@ $ `stdlib/core/posix.nu`  // open / lseek / mmap / munmap + posix_const
 // (a plain content copy); layer chmod on top if needed.
 @ fs_copy_file s src s dst → !v IoErr {
     : s rf # s ( fopen src `rb` )
-    ? == # i rf 0 { ^ @ !v IoErr { F ( __io_err_of_kind ( errno_kind ) ) } } {}
+    ? == # i rf 0 { ^ @ !v IoErr { F ( _io_err_of_kind ( errno_kind ) ) } } {}
     : s wf # s ( fopen dst `wb` )
     ? == # i wf 0 {
         : i32 _rc ( fclose rf )
-        ^ @ !v IoErr { F ( __io_err_of_kind ( errno_kind ) ) }
+        ^ @ !v IoErr { F ( _io_err_of_kind ( errno_kind ) ) }
     } {}
     : i chunk 65536
     : ( Vec u ) buf ( vec_with_cap [u] chunk )
@@ -903,7 +903,7 @@ $ `stdlib/core/posix.nu`  // open / lseek / mmap / munmap + posix_const
     : i32 fd ( mkstemp ( string_data tmpl ) )
     ? < # i fd 0 {
         ( string_free tmpl )
-        ^ @ !String IoErr { F ( __io_err_of_kind ( errno_kind ) ) }
+        ^ @ !String IoErr { F ( _io_err_of_kind ( errno_kind ) ) }
     } {}
     : i _c ( close # i fd )
     ^ @ !String IoErr { T tmpl }  // mkstemp filled XXXXXX in place
@@ -1012,7 +1012,7 @@ $ `stdlib/core/posix.nu`  // open / lseek / mmap / munmap + posix_const
 }
 
 // Join `base` + '/' + `name` (base "" → just name; base "/" → "/name").
-@ __glob_join s base s name → String {
+@ _glob_join s base s name → String {
     : i bn ( nurl_str_len base )
     : String out ( string_with_cap + + bn ( nurl_str_len name ) 2 )
     ? > bn 0 {
@@ -1039,7 +1039,7 @@ $ `stdlib/core/posix.nu`  // open / lseek / mmap / munmap + posix_const
                 ?? eo {
                     T name → {
                         ? ( __fnmatch_seg seg ( string_data name ) ) {
-                            : String full ( __glob_join base ( string_data name ) )
+                            : String full ( _glob_join base ( string_data name ) )
                             ? dirs_only {
                                 ? == 2 ( nurl_path_type ( string_data full ) )
                                 { ( vec_push [String] acc full ) }
@@ -1076,7 +1076,7 @@ $ `stdlib/core/posix.nu`  // open / lseek / mmap / munmap + posix_const
                     T name → {
                         // '**' does not descend into dotfile dirs.
                         ? != ( nurl_str_get ( string_data name ) 0 ) 46 {
-                            : String full ( __glob_join base ( string_data name ) )
+                            : String full ( _glob_join base ( string_data name ) )
                             ? == 2 ( nurl_path_type ( string_data full ) )
                             { ( __glob_walk_dirs acc ( string_data full ) ) } {}
                             ( string_free full )
@@ -1153,7 +1153,7 @@ $ `stdlib/core/posix.nu`  // open / lseek / mmap / munmap + posix_const
                         ( __glob_expand_seg next base seg ! is_last )
                     } {
                         // literal segment: extend if the path exists
-                        : String full ( __glob_join base seg )
+                        : String full ( _glob_join base seg )
                         : i ty ( nurl_path_type ( string_data full ) )
                         ? | & is_last > ty 0 & ! is_last == ty 2
                         { ( vec_push [String] next full ) }

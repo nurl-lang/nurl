@@ -44,7 +44,7 @@ $ `../src/bpe.nu`
         : ( Vec i ) ids ( bpe_encode tk nm )
         : i ng ( vec_len [i] ids )
         : ~ i k 0
-        ~ < k ng { ( nurl_print ( nurl_str_int ( __ig ids k ) ) ) ? < k - ng 1 { ( nurl_print ` ` ) } {} = k + k 1 }
+        ~ < k ng { ( nurl_print ( nurl_str_int ( _ig ids k ) ) ) ? < k - ng 1 { ( nurl_print ` ` ) } {} = k + k 1 }
         ( nurl_print `\n` )
         ( vec_free [i] ids )
         = i + i 1

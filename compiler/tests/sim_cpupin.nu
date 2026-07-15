@@ -73,7 +73,7 @@ $ `stdlib/dist/sim.nu`
     ( send_p_gossip net tp now )
     ( send_b_heartbeat net tb now )
     ( deliver net fd tb now )
-    ? probe_on { : ( Vec s ) dead ( fd_sweep fd now ) ( __pk_dead_free dead ) } {}
+    ? probe_on { : ( Vec s ) dead ( fd_sweep fd now ) ( _pk_dead_free dead ) } {}
     ^ ? == ( pktable_state_of tp bpk ) ( pk_suspect ) 1 0
 }
 

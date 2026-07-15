@@ -49,10 +49,10 @@ $ `stdlib/std/bytes.nu`
 }
 
 // First child of a constructed element.
-@ __der_child ( Vec u ) b DerTlv t → DerTlv { ^ ( der_at b . t start ) }
+@ _der_child ( Vec u ) b DerTlv t → DerTlv { ^ ( der_at b . t start ) }
 
 // Next sibling after element `t`.
-@ __der_next ( Vec u ) b DerTlv t → DerTlv { ^ ( der_at b + . t start . t len ) }
+@ _der_next ( Vec u ) b DerTlv t → DerTlv { ^ ( der_at b + . t start . t len ) }
 
 // Raw bytes of the whole element (tag..end).
 @ __der_elem_bytes ( Vec u ) b DerTlv t → ( Vec u ) {
@@ -60,13 +60,13 @@ $ `stdlib/std/bytes.nu`
 }
 
 // Content bytes of the element.
-@ __der_content ( Vec u ) b DerTlv t → ( Vec u ) {
+@ _der_content ( Vec u ) b DerTlv t → ( Vec u ) {
     ^ ( bytes_slice b . t start + . t start . t len )
 }
 
 // INTEGER content as an unsigned magnitude: drop DER's leading sign
 // byte(s) so the byte length equals the true modulus/exponent size.
-@ __der_uint ( Vec u ) b DerTlv t → ( Vec u ) {
+@ _der_uint ( Vec u ) b DerTlv t → ( Vec u ) {
     : ~ i s . t start
     : i end + . t start . t len
     ~ & < s - end 1 == ( __x509_bget b s ) 0 { = s + s 1 }
@@ -125,7 +125,7 @@ $ `stdlib/std/bytes.nu`
 
 // Map an AlgorithmIdentifier SEQ (at `alg`) to a sig_alg code.
 @ __x509_sigalg ( Vec u ) b DerTlv alg → i {
-    : DerTlv oid ( __der_child b alg )
+    : DerTlv oid ( _der_child b alg )
     ? ( __der_oid_is b oid `2a864886f70d01010b` ) { ^ 1 } {}
     ? ( __der_oid_is b oid `2a864886f70d01010c` ) { ^ 2 } {}
     ? ( __der_oid_is b oid `2a864886f70d01010d` ) { ^ 3 } {}
@@ -195,11 +195,11 @@ $ `stdlib/std/bytes.nu`
 // Pull dNSName ([2], 0x82) and iPAddress ([7], 0x87) entries out of a SAN
 // extnValue. dNSNames with an embedded NUL are dropped (spoof guard).
 @ __x509_sans ( Vec u ) b DerTlv san_seq X509 out → v {
-    : ~ DerTlv e ( __der_child b san_seq )
+    : ~ DerTlv e ( _der_child b san_seq )
     ~ == . e ok 1 {
         ? == . e tag 130 {  // [2] dNSName, IA5String
             ? ! ( __x509_has_nul b e ) {
-                : ( Vec u ) nm ( __der_content b e )
+                : ( Vec u ) nm ( _der_content b e )
                 ( vec_push [String] . out sans ( bytes_to_str nm ) )
                 ( vec_free [u] nm )
             } {}
@@ -209,7 +209,7 @@ $ `stdlib/std/bytes.nu`
                 ( vec_push [String] . out ip_sans ( __x509_hex_content b e ) )
             } {}
         } {}
-        = e ( __der_next b e )
+        = e ( _der_next b e )
     }
 }
 
@@ -226,29 +226,29 @@ $ `stdlib/std/bytes.nu`
 @ __x509_extensions ( Vec u ) b DerTlv exts X509 out → ExtInfo {
     : ~ ExtInfo ei @ ExtInfo { F -1 F F F F }
     // exts is [3] EXPLICIT; its child is the SEQUENCE OF Extension.
-    : DerTlv seq ( __der_child b exts )
-    : ~ DerTlv ext ( __der_child b seq )
+    : DerTlv seq ( _der_child b exts )
+    : ~ DerTlv ext ( _der_child b seq )
     ~ == . ext ok 1 {
-        : DerTlv oid ( __der_child b ext )
+        : DerTlv oid ( _der_child b ext )
         : b is_san ( __der_oid_is b oid `551d11` )
         : b is_bc ( __der_oid_is b oid `551d13` )
         : b is_ku ( __der_oid_is b oid `551d0f` )
         : b is_eku ( __der_oid_is b oid `551d25` )
         ? | | | is_san is_bc is_ku is_eku {
             // value is the last child (OCTET STRING), after optional critical BOOLEAN
-            : ~ DerTlv nxt ( __der_next b oid )
-            ? == . nxt tag 1 { = nxt ( __der_next b nxt ) } {}  // skip critical
+            : ~ DerTlv nxt ( _der_next b oid )
+            ? == . nxt tag 1 { = nxt ( _der_next b nxt ) } {}  // skip critical
             // nxt = OCTET STRING extnValue; its content is inner DER
             : DerTlv inner ( der_at b . nxt start )
             ? is_san { ( __x509_sans b inner out ) } {}
             ? is_bc {
                 // BasicConstraints ::= SEQ { cA BOOLEAN DEFAULT FALSE,
                 //                            pathLenConstraint INTEGER OPTIONAL }
-                : DerTlv c0 ( __der_child b inner )
+                : DerTlv c0 ( _der_child b inner )
                 ? & == . c0 ok 1 == . c0 tag 1 {
                     ? != ( __x509_bget b . c0 start ) 0 { = . ei is_ca T } {}
                     // pathLenConstraint, if present, is the next INTEGER sibling.
-                    : DerTlv pl ( __der_next b c0 )
+                    : DerTlv pl ( _der_next b c0 )
                     ? & == . pl ok 1 == . pl tag 2 {
                         = . ei path_len ( __x509_int_val b pl )
                     } {}
@@ -267,17 +267,17 @@ $ `stdlib/std/bytes.nu`
             ? is_eku {
                 // extendedKeyUsage ::= SEQUENCE OF KeyPurposeId (OID).
                 = . ei has_eku T
-                : ~ DerTlv ku ( __der_child b inner )
+                : ~ DerTlv ku ( _der_child b inner )
                 ~ == . ku ok 1 {
                     ? == . ku tag 6 {
                         ? ( __der_oid_is b ku `2b06010505070301` ) { = . ei eku_server T } {}  // serverAuth
                         ? ( __der_oid_is b ku `551d2500` ) { = . ei eku_server T } {}  // anyExtendedKeyUsage
                     } {}
-                    = ku ( __der_next b ku )
+                    = ku ( _der_next b ku )
                 }
             } {}
         } {}
-        = ext ( __der_next b ext )
+        = ext ( _der_next b ext )
     }
     ^ ei
 }
@@ -297,15 +297,15 @@ $ `stdlib/std/bytes.nu`
     ? != . cert ok 1 { ^ out } {}
     ? != . cert tag 48 { ^ out } {}
 
-    : DerTlv tbs ( __der_child der cert )
+    : DerTlv tbs ( _der_child der cert )
     ? != . tbs ok 1 { ^ out } {}
     ( vec_free [u] . out tbs )
     = . out tbs ( __der_elem_bytes der tbs )
 
     // signatureAlgorithm + signatureValue (siblings of tbs)
-    : DerTlv sigalg ( __der_next der tbs )
+    : DerTlv sigalg ( _der_next der tbs )
     = . out sig_alg ( __x509_sigalg der sigalg )
-    : DerTlv sigbits ( __der_next der sigalg )
+    : DerTlv sigbits ( _der_next der sigalg )
     ? == . sigbits tag 3 {
         // BIT STRING: skip the leading "unused bits" byte
         ( vec_free [u] . out sig )
@@ -313,45 +313,45 @@ $ `stdlib/std/bytes.nu`
     } {}
 
     // Walk TBS children.
-    : ~ DerTlv c ( __der_child der tbs )
-    ? & == . c ok 1 == . c tag 160 { = c ( __der_next der c ) } {}  // skip [0] version
-    = c ( __der_next der c )  // skip serialNumber
-    = c ( __der_next der c )  // skip signature alg
+    : ~ DerTlv c ( _der_child der tbs )
+    ? & == . c ok 1 == . c tag 160 { = c ( _der_next der c ) } {}  // skip [0] version
+    = c ( _der_next der c )  // skip serialNumber
+    = c ( _der_next der c )  // skip signature alg
     ? != . c ok 1 { ^ out } {}
     ( vec_free [u] . out issuer )
     = . out issuer ( __der_elem_bytes der c )
-    = c ( __der_next der c )  // validity
+    = c ( _der_next der c )  // validity
     ? != . c ok 1 { ^ out } {}
-    : DerTlv nb ( __der_child der c )
-    : DerTlv na ( __der_next der nb )
+    : DerTlv nb ( _der_child der c )
+    : DerTlv na ( _der_next der nb )
     ? | != . nb ok 1 != . na ok 1 { ^ out } {}
     = . out not_before ( __x509_time der nb )
     = . out not_after ( __x509_time der na )
-    = c ( __der_next der c )
+    = c ( _der_next der c )
     ? != . c ok 1 { ^ out } {}
     ( vec_free [u] . out subject )
     = . out subject ( __der_elem_bytes der c )
-    = c ( __der_next der c )  // subjectPublicKeyInfo
+    = c ( _der_next der c )  // subjectPublicKeyInfo
     ? != . c ok 1 { ^ out } {}
 
-    : DerTlv keyalg ( __der_child der c )
-    : DerTlv keyoid ( __der_child der keyalg )
-    : DerTlv keybits ( __der_next der keyalg )
+    : DerTlv keyalg ( _der_child der c )
+    : DerTlv keyoid ( _der_child der keyalg )
+    : DerTlv keybits ( _der_next der keyalg )
     ? ( __der_oid_is der keyoid `2a864886f70d010101` ) {
         // RSA: BIT STRING content (after unused-bits byte) is SEQ{n,e}
         = . out key_alg 1
         : DerTlv rsaseq ( der_at der + . keybits start 1 )
-        : DerTlv ni ( __der_child der rsaseq )
-        : DerTlv ei ( __der_next der ni )
+        : DerTlv ni ( _der_child der rsaseq )
+        : DerTlv ei ( _der_next der ni )
         ( vec_free [u] . out rsa_n )
-        = . out rsa_n ( __der_uint der ni )
+        = . out rsa_n ( _der_uint der ni )
         ( vec_free [u] . out rsa_e )
-        = . out rsa_e ( __der_uint der ei )
+        = . out rsa_e ( _der_uint der ei )
     } {
         ? ( __der_oid_is der keyoid `2a8648ce3d0201` ) {
             // EC: namedCurve param + uncompressed point in the BIT STRING
             = . out key_alg 2
-            : DerTlv curve ( __der_next der keyoid )
+            : DerTlv curve ( _der_next der keyoid )
             : ~ i cc 0
             ? ( __der_oid_is der curve `2a8648ce3d030107` ) { = cc 256 } {}
             ? ( __der_oid_is der curve `2b81040022` ) { = cc 384 } {}
@@ -368,7 +368,7 @@ $ `stdlib/std/bytes.nu`
     }
 
     // optional extensions [3]
-    = c ( __der_next der c )
+    = c ( _der_next der c )
     ? & == . c ok 1 == . c tag 163 {
         : ExtInfo ei ( __x509_extensions der c out )
         = . out is_ca . ei is_ca

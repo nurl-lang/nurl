@@ -432,7 +432,7 @@ $ `stdlib/std/async.nu`
     : i raw ( nurl_tcp_connect host port )
     ? == raw 0 { ^ @ !RzClient NetErr { F # NetErr NetOther } } {}
     : i ek ( nurl_tcp_err_kind raw )
-    ? != ek 0 { ( nurl_tcp_close raw ) ^ @ !RzClient NetErr { F ( __net_err_of ek ) } } {}
+    ? != ek 0 { ( nurl_tcp_close raw ) ^ @ !RzClient NetErr { F ( _net_err_of ek ) } } {}
     : TcpConn c @ TcpConn { # s raw 0 0 }
     ^ @ !RzClient NetErr { T @ RzClient { c } }
 }

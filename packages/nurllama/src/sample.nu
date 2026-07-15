@@ -55,7 +55,7 @@ $ `src/model.nu`
         : ~ f bvv -1.0e30
         : ~ i j a
         ~ < j n {
-            : i ij ( __lm_geti idx j )
+            : i ij ( _lm_geti idx j )
             ?? ( vec_get [f] p ij ) {
                 T v → {
                     ? > v bvv {
@@ -76,7 +76,7 @@ $ `src/model.nu`
     : ~ f sum 0.0
     = a 0
     ~ < a keep {
-        : i ia ( __lm_geti idx a )
+        : i ia ( _lm_geti idx a )
         : ~ f v 0.0
         ?? ( vec_get [f] p ia ) { T x → { = v x } F → {} }
         : f e ( exp - v mx )
@@ -108,13 +108,13 @@ $ `src/model.nu`
     }
     : f r * ( rng_u01 rng ) psum
     : ~ f acc2 0.0
-    : ~ i pick ( __lm_geti idx 0 )
+    : ~ i pick ( _lm_geti idx 0 )
     : ~ b found F
     = a 0
     ~ & < a last ! found {
         ?? ( vec_get [f] w a ) { T x → { = acc2 + acc2 x } F → {} }
         ? >= acc2 r {
-            = pick ( __lm_geti idx a )
+            = pick ( _lm_geti idx a )
             = found T
         } {}
         = a + a 1

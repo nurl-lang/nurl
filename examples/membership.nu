@@ -89,7 +89,7 @@ $ `stdlib/net/failuredetector.nu`
                 ( fd_action_free a )
                 ( pump tr fd tbl self_pk now )
                 : ( Vec s ) dead ( fd_sweep fd now )
-                ( __pk_dead_free dead )
+                ( _pk_dead_free dead )
                 ( sleep_ms 200 )
                 = ticks + ticks 1
             }

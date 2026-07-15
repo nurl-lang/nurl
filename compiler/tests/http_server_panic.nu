@@ -1,5 +1,5 @@
 // http_server_panic.nu — handler-panic recovery regression for
-// stdlib/ext/http_server.nu's __serve_keepalive_loop.
+// stdlib/ext/http_server.nu's _serve_keepalive_loop.
 //
 // Round trip:
 //   1. Listen on 127.0.0.1:18773.
@@ -8,7 +8,7 @@
 //      dictionary lookup, an unwrapped Result, etc.).
 //   3. Spawn a python3 client that does an HTTP GET; expect a
 //      500 status line on the wire.
-//   4. server_run_once accepts → __serve_keepalive_loop wraps the
+//   4. server_run_once accepts → _serve_keepalive_loop wraps the
 //      handler call in `recover`; the panic is caught, a stock 500
 //      response is substituted, connection closes.
 //

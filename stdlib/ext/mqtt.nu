@@ -227,7 +227,7 @@ $ `stdlib/ext/websocket.nu`
 // ── low-level codec ──────────────────────────────────────────────────
 
 // MQTT UTF-8 string: 2-byte big-endian length prefix + the bytes.
-@ __mqtt_put_str ( Vec u ) buf s text → v {
+@ _mqtt_put_str ( Vec u ) buf s text → v {
     : i n ( nurl_str_len text )
     ( bytes_push_u16_be buf n )
     ( bytes_extend_str buf text )
@@ -235,7 +235,7 @@ $ `stdlib/ext/websocket.nu`
 
 // MQTT "Variable Byte Integer" (1-4 bytes, 7 data bits each, high bit
 // = continuation). Used for the Remaining Length and Property Length.
-@ __mqtt_put_varint ( Vec u ) buf i value → v {
+@ _mqtt_put_varint ( Vec u ) buf i value → v {
     : ~ i v value
     : ~ b done F
     ~ ! done {
@@ -255,7 +255,7 @@ $ `stdlib/ext/websocket.nu`
 // The `& 255` mask is essential: `# i` sign-extends a `u`, so a byte
 // >= 0x80 would otherwise read back negative — which silently breaks
 // length fields and CONNACK/SUBACK reason codes (0x80+).
-@ __mqtt_byte ( Vec u ) v i idx → i {
+@ _mqtt_byte ( Vec u ) v i idx → i {
     ?? ( vec_get [u] v idx ) {
         T b → { ^ & # i b 255 }
         F _ → { ^ -1 }
@@ -267,14 +267,14 @@ $ `stdlib/ext/websocket.nu`
 : MqttVarint { i value i nbytes }
 
 // Decode a Variable Byte Integer from `v` starting at byte `off`.
-@ __mqtt_decode_varint ( Vec u ) v i off → MqttVarint {
+@ _mqtt_decode_varint ( Vec u ) v i off → MqttVarint {
     : ~ i value 0
     : ~ i mult 1
     : ~ i pos off
     : ~ i count 0
     : ~ b done F
     ~ ! done {
-        : i b ( __mqtt_byte v pos )
+        : i b ( _mqtt_byte v pos )
         ? < b 0 {
             = done T
         } {
@@ -293,14 +293,14 @@ $ `stdlib/ext/websocket.nu`
 // Length in bytes of the Variable Byte Integer at `off` IF it
 // terminates within `v`; 0 if the buffer is too short (or it runs
 // past the 4-byte maximum). Used by the framed reader to know when it
-// has enough bytes to trust __mqtt_decode_varint.
-@ __mqtt_varint_len ( Vec u ) v i off → i {
+// has enough bytes to trust _mqtt_decode_varint.
+@ _mqtt_varint_len ( Vec u ) v i off → i {
     : ~ i i off
     : ~ i count 0
     : ~ i result 0
     : ~ b done F
     ~ ! done {
-        : i b ( __mqtt_byte v i )
+        : i b ( _mqtt_byte v i )
         ? < b 0 {
             = done T
         } {
@@ -320,7 +320,7 @@ $ `stdlib/ext/websocket.nu`
 // Emit a v5 property block: a Variable Byte Integer length followed by
 // the property bytes. An empty `props` yields a single 0x00 byte.
 @ __mqtt_emit_props ( Vec u ) out ( Vec u ) props → v {
-    ( __mqtt_put_varint out ( vec_len [u] props ) )
+    ( _mqtt_put_varint out ( vec_len [u] props ) )
     ( vec_extend [u] out props )
 }
 
@@ -328,9 +328,9 @@ $ `stdlib/ext/websocket.nu`
 // carry username / password / will / will-QoS / clean-start; the
 // CONNECT property block carries Session Expiry Interval (0x11) when
 // set; the payload appends the will topic + payload when a will exists.
-@ __mqtt_encode_connect ( Vec u ) out MqttConfig cfg → v {
+@ _mqtt_encode_connect ( Vec u ) out MqttConfig cfg → v {
     : ( Vec u ) vh ( vec_with_cap [u] 32 )
-    ( __mqtt_put_str vh `MQTT` )
+    ( _mqtt_put_str vh `MQTT` )
     ( vec_push [u] vh # u 5 )
 
     : i ulen ( nurl_str_len . cfg username )
@@ -357,18 +357,18 @@ $ `stdlib/ext/websocket.nu`
     ( vec_free [u] cprops )
 
     : ( Vec u ) pl ( vec_with_cap [u] 64 )
-    ( __mqtt_put_str pl . cfg client_id )
+    ( _mqtt_put_str pl . cfg client_id )
     ? > wlen 0 {
         ( vec_push [u] pl # u 0 )
-        ( __mqtt_put_str pl . cfg will_topic )
-        ( __mqtt_put_str pl . cfg will_payload )
+        ( _mqtt_put_str pl . cfg will_topic )
+        ( _mqtt_put_str pl . cfg will_payload )
     } {}
-    ? > ulen 0 { ( __mqtt_put_str pl . cfg username ) } {}
-    ? > plen 0 { ( __mqtt_put_str pl . cfg password ) } {}
+    ? > ulen 0 { ( _mqtt_put_str pl . cfg username ) } {}
+    ? > plen 0 { ( _mqtt_put_str pl . cfg password ) } {}
 
     ( vec_push [u] out # u 16 )
     : i remlen + ( vec_len [u] vh ) ( vec_len [u] pl )
-    ( __mqtt_put_varint out remlen )
+    ( _mqtt_put_varint out remlen )
     ( vec_extend [u] out vh )
     ( vec_extend [u] out pl )
     ( vec_free [u] vh )
@@ -378,8 +378,8 @@ $ `stdlib/ext/websocket.nu`
 // CONNACK reason code (byte 3); negative sentinel if not a CONNACK.
 @ mqtt_connack_reason ( Vec u ) resp → i {
     ? < ( vec_len [u] resp ) 4 { ^ -1 } {}
-    ? != ( __mqtt_byte resp 0 ) 32 { ^ -2 } {}
-    ^ ( __mqtt_byte resp 3 )
+    ? != ( _mqtt_byte resp 0 ) 32 { ^ -2 } {}
+    ^ ( _mqtt_byte resp 3 )
 }
 
 // ── framed packet reader ─────────────────────────────────────────────
@@ -494,17 +494,17 @@ $ `stdlib/ext/websocket.nu`
     : !v MqttErr f1 ( __mqtt_fill cl 2 )
     ?? f1 { T → {} F e → { ^ @ !( Vec u ) MqttErr { F e } } }
 
-    : ~ i vlen ( __mqtt_varint_len . cl rxbuf 1 )
+    : ~ i vlen ( _mqtt_varint_len . cl rxbuf 1 )
     : ~ i probe 3
     ~ == vlen 0 {
         ? > probe 6 { ^ @ !( Vec u ) MqttErr { F # MqttErr MqttProtocol } } {}
         : !v MqttErr fp ( __mqtt_fill cl probe )
         ?? fp { T → {} F e → { ^ @ !( Vec u ) MqttErr { F e } } }
-        = vlen ( __mqtt_varint_len . cl rxbuf 1 )
+        = vlen ( _mqtt_varint_len . cl rxbuf 1 )
         = probe + probe 1
     }
 
-    : MqttVarint mv ( __mqtt_decode_varint . cl rxbuf 1 )
+    : MqttVarint mv ( _mqtt_decode_varint . cl rxbuf 1 )
     : i total + + 1 vlen . mv value
     : !v MqttErr f2 ( __mqtt_fill cl total )
     ?? f2 { T → {} F e → { ^ @ !( Vec u ) MqttErr { F e } } }
@@ -529,7 +529,7 @@ $ `stdlib/ext/websocket.nu`
 // connect entrypoint so the handshake lives in exactly one place.
 @ __mqtt_finish_connect MqttClient cl MqttConfig cfg → !MqttClient MqttErr {
     : ( Vec u ) pkt ( vec_with_cap [u] 96 )
-    ( __mqtt_encode_connect pkt cfg )
+    ( _mqtt_encode_connect pkt cfg )
     : !v NetErr wr ( __mqtt_write_pkt cl pkt )
     ( vec_free [u] pkt )
     ?? wr {
@@ -645,8 +645,8 @@ $ `stdlib/ext/websocket.nu`
         : !( Vec u ) MqttErr rp ( __mqtt_read_packet cl )
         ?? rp {
             T ack → {
-                : i pt & >> ( __mqtt_byte ack 0 ) 4 15
-                : i apid + * ( __mqtt_byte ack 2 ) 256 ( __mqtt_byte ack 3 )
+                : i pt & >> ( _mqtt_byte ack 0 ) 4 15
+                : i apid + * ( _mqtt_byte ack 2 ) 256 ( _mqtt_byte ack 3 )
                 ( vec_free [u] ack )
                 ? & == pt 4 == apid pid { ^ @ !v MqttErr { T 0 } } {}
             }
@@ -666,8 +666,8 @@ $ `stdlib/ext/websocket.nu`
         : !( Vec u ) MqttErr rp ( __mqtt_read_packet cl )
         ?? rp {
             T p → {
-                : i pt & >> ( __mqtt_byte p 0 ) 4 15
-                : i rpid + * ( __mqtt_byte p 2 ) 256 ( __mqtt_byte p 3 )
+                : i pt & >> ( _mqtt_byte p 0 ) 4 15
+                : i rpid + * ( _mqtt_byte p 2 ) 256 ( _mqtt_byte p 3 )
                 ( vec_free [u] p )
                 ? & == pt 5 == rpid pid { = got_rec T } {}
             }
@@ -683,8 +683,8 @@ $ `stdlib/ext/websocket.nu`
         : !( Vec u ) MqttErr rp ( __mqtt_read_packet cl )
         ?? rp {
             T p → {
-                : i pt & >> ( __mqtt_byte p 0 ) 4 15
-                : i cpid + * ( __mqtt_byte p 2 ) 256 ( __mqtt_byte p 3 )
+                : i pt & >> ( _mqtt_byte p 0 ) 4 15
+                : i cpid + * ( _mqtt_byte p 2 ) 256 ( _mqtt_byte p 3 )
                 ( vec_free [u] p )
                 ? & == pt 7 == cpid pid { ^ @ !v MqttErr { T 0 } } {}
             }
@@ -707,7 +707,7 @@ $ `stdlib/ext/websocket.nu`
     ? > qos 0 { = pid ( __mqtt_next_pid cl ) } {}
 
     : ( Vec u ) vh ( vec_with_cap [u] 40 )
-    ( __mqtt_put_str vh topic )
+    ( _mqtt_put_str vh topic )
     ? > qos 0 { ( bytes_push_u16_be vh pid ) } {}
     // PUBLISH property block — one User Property (0x26) per uprops entry
     : ( Vec u ) props ( vec_new [u] )
@@ -717,8 +717,8 @@ $ `stdlib/ext/websocket.nu`
     ~ < pi np {
         : ( Pair String String ) pr . pd pi
         ( vec_push [u] props # u 38 )
-        ( __mqtt_put_str props ( string_data . pr first ) )
-        ( __mqtt_put_str props ( string_data . pr second ) )
+        ( _mqtt_put_str props ( string_data . pr first ) )
+        ( _mqtt_put_str props ( string_data . pr second ) )
         = pi + pi 1
     }
     ( __mqtt_emit_props vh props )
@@ -728,7 +728,7 @@ $ `stdlib/ext/websocket.nu`
     : ( Vec u ) pkt ( vec_with_cap [u] 72 )
     ( vec_push [u] pkt # u b0 )
     : i remlen + ( vec_len [u] vh ) plen
-    ( __mqtt_put_varint pkt remlen )
+    ( _mqtt_put_varint pkt remlen )
     ( vec_extend [u] pkt vh )
     ( bytes_extend_str pkt payload )
 
@@ -781,18 +781,18 @@ $ `stdlib/ext/websocket.nu`
 @ __mqtt_check_suback ( Vec u ) resp i pid i ntopics → !v MqttErr {
     : i n ( vec_len [u] resp )
     ? < n 4 { ^ @ !v MqttErr { F # MqttErr MqttSubFailed } } {}
-    ? != & ( __mqtt_byte resp 0 ) 240 144 { ^ @ !v MqttErr { F # MqttErr MqttSubFailed } } {}
-    : MqttVarint rl ( __mqtt_decode_varint resp 1 )
+    ? != & ( _mqtt_byte resp 0 ) 240 144 { ^ @ !v MqttErr { F # MqttErr MqttSubFailed } } {}
+    : MqttVarint rl ( _mqtt_decode_varint resp 1 )
     : i body + 1 . rl nbytes
-    : i spid + * ( __mqtt_byte resp body ) 256 ( __mqtt_byte resp + body 1 )
+    : i spid + * ( _mqtt_byte resp body ) 256 ( _mqtt_byte resp + body 1 )
     ? != spid pid { ^ @ !v MqttErr { F # MqttErr MqttSubFailed } } {}
-    : MqttVarint pr ( __mqtt_decode_varint resp + body 2 )
+    : MqttVarint pr ( _mqtt_decode_varint resp + body 2 )
     : i rc_start + + + body 2 . pr nbytes . pr value
     : i rc_count - n rc_start
     ? != rc_count ntopics { ^ @ !v MqttErr { F # MqttErr MqttSubFailed } } {}
     : ~ i k 0
     ~ < k rc_count {
-        ? >= ( __mqtt_byte resp + rc_start k ) 128 {
+        ? >= ( _mqtt_byte resp + rc_start k ) 128 {
             ^ @ !v MqttErr { F # MqttErr MqttSubFailed }
         } {}
         = k + k 1
@@ -810,13 +810,13 @@ $ `stdlib/ext/websocket.nu`
     ( vec_push [u] vh # u 0 )
 
     : ( Vec u ) pl ( vec_with_cap [u] 32 )
-    ( __mqtt_put_str pl topic )
+    ( _mqtt_put_str pl topic )
     ( vec_push [u] pl # u & qos 3 )
 
     : ( Vec u ) pkt ( vec_with_cap [u] 48 )
     ( vec_push [u] pkt # u 130 )
     : i remlen + ( vec_len [u] vh ) ( vec_len [u] pl )
-    ( __mqtt_put_varint pkt remlen )
+    ( _mqtt_put_varint pkt remlen )
     ( vec_extend [u] pkt vh )
     ( vec_extend [u] pkt pl )
 
@@ -859,7 +859,7 @@ $ `stdlib/ext/websocket.nu`
     ~ < ti nt {
         ?? ( vec_get [String] topics ti ) {
             T tp → {
-                ( __mqtt_put_str pl ( string_data tp ) )
+                ( _mqtt_put_str pl ( string_data tp ) )
                 ( vec_push [u] pl # u & qos 3 )
             }
             F _ → {}
@@ -870,7 +870,7 @@ $ `stdlib/ext/websocket.nu`
     : ( Vec u ) pkt ( vec_with_cap [u] + 8 ( vec_len [u] pl ) )
     ( vec_push [u] pkt # u 130 )
     : i remlen + ( vec_len [u] vh ) ( vec_len [u] pl )
-    ( __mqtt_put_varint pkt remlen )
+    ( _mqtt_put_varint pkt remlen )
     ( vec_extend [u] pkt vh )
     ( vec_extend [u] pkt pl )
 
@@ -899,12 +899,12 @@ $ `stdlib/ext/websocket.nu`
     ( vec_push [u] vh # u 0 )
 
     : ( Vec u ) pl ( vec_with_cap [u] 32 )
-    ( __mqtt_put_str pl topic )
+    ( _mqtt_put_str pl topic )
 
     : ( Vec u ) pkt ( vec_with_cap [u] 48 )
     ( vec_push [u] pkt # u 162 )
     : i remlen + ( vec_len [u] vh ) ( vec_len [u] pl )
-    ( __mqtt_put_varint pkt remlen )
+    ( _mqtt_put_varint pkt remlen )
     ( vec_extend [u] pkt vh )
     ( vec_extend [u] pkt pl )
 
@@ -917,8 +917,8 @@ $ `stdlib/ext/websocket.nu`
     : !( Vec u ) MqttErr rd ( __mqtt_read_packet cl )
     ?? rd {
         T resp → {
-            : i b0 ( __mqtt_byte resp 0 )
-            : i upid + * ( __mqtt_byte resp 2 ) 256 ( __mqtt_byte resp 3 )
+            : i b0 ( _mqtt_byte resp 0 )
+            : i upid + * ( _mqtt_byte resp 2 ) 256 ( _mqtt_byte resp 3 )
             ( vec_free [u] resp )
             // UNSUBACK type is 11 (0xB0), matching packet id.
             ? & == & b0 240 176 == upid pid {
@@ -949,7 +949,7 @@ $ `stdlib/ext/websocket.nu`
         : !( Vec u ) MqttErr rp ( __mqtt_read_packet cl )
         ?? rp {
             T resp → {
-                : i pt & >> ( __mqtt_byte resp 0 ) 4 15
+                : i pt & >> ( _mqtt_byte resp 0 ) 4 15
                 ( vec_free [u] resp )
                 ? == pt 13 {
                     = . cl ping_deadline + ( now_ms ) . cl keepalive_ms
@@ -1008,7 +1008,7 @@ $ `stdlib/ext/websocket.nu`
             ( vec_clear [i] . cl qos2_rx )
 
             : ( Vec u ) pkt ( vec_with_cap [u] 96 )
-            ( __mqtt_encode_connect pkt cfg )
+            ( _mqtt_encode_connect pkt cfg )
             : !v NetErr wr ( tcp_write_all nc pkt )
             ( vec_free [u] pkt )
             ?? wr { T → {} F we → { ^ @ !v MqttErr { F ( __mqtt_of_net we ) } } }
@@ -1063,7 +1063,7 @@ $ `stdlib/ext/websocket.nu`
 // True iff `pid` is already pending (a duplicate). Otherwise records it
 // and returns F. Evicts the oldest id when the set is at capacity. Takes
 // the id set directly (not the client) so the policy is unit-testable.
-@ __mqtt_qos2_seen_or_add ( Vec i ) s i pid → b {
+@ _mqtt_qos2_seen_or_add ( Vec i ) s i pid → b {
     : i n ( vec_len [i] s )
     : ~ i k 0
     ~ < k n {
@@ -1076,7 +1076,7 @@ $ `stdlib/ext/websocket.nu`
 }
 
 // Drop `pid` from the pending set once its handshake has completed.
-@ __mqtt_qos2_forget ( Vec i ) s i pid → v {
+@ _mqtt_qos2_forget ( Vec i ) s i pid → v {
     : i n ( vec_len [i] s )
     : ~ i k 0
     ~ < k n {
@@ -1103,7 +1103,7 @@ $ `stdlib/ext/websocket.nu`
         : !( Vec u ) MqttErr rp ( __mqtt_read_packet cl )
         ?? rp {
             T pkt → {
-                : i pt & >> ( __mqtt_byte pkt 0 ) 4 15
+                : i pt & >> ( _mqtt_byte pkt 0 ) 4 15
                 ( vec_free [u] pkt )
                 ? == pt 6 { = saw_rel T = stop T } {}
             }
@@ -1120,7 +1120,7 @@ $ `stdlib/ext/websocket.nu`
     : i stop + start len
     : ~ i k start
     ~ < k stop {
-        : i b ( __mqtt_byte pkt k )
+        : i b ( _mqtt_byte pkt k )
         ? >= b 0 { ( string_push_char out b ) } {}
         = k + k 1
     }
@@ -1141,32 +1141,32 @@ $ `stdlib/ext/websocket.nu`
     ? | | == id 2 == id 17 == id 24 { ^ + p 4 } {}
     // variable byte integer (subscription identifier)
     ? == id 11 {
-        : MqttVarint mv ( __mqtt_decode_varint pkt p )
+        : MqttVarint mv ( _mqtt_decode_varint pkt p )
         ^ + p . mv nbytes
     } {}
     // default — UTF-8 string or binary data: 2-byte length + bytes
-    : i th ( __mqtt_byte pkt p )
-    : i tl ( __mqtt_byte pkt + p 1 )
+    : i th ( _mqtt_byte pkt p )
+    : i tl ( _mqtt_byte pkt + p 1 )
     ^ + + p 2 + * th 256 tl
 }
 
 // Walk the property block `pkt[start, end)` and append every User
 // Property (id 0x26 — a UTF-8 string pair) to `out`. Any other
 // property is skipped by its wire length.
-@ __mqtt_parse_props ( Vec u ) pkt i start i end ( Vec ( Pair String String ) ) out → v {
+@ _mqtt_parse_props ( Vec u ) pkt i start i end ( Vec ( Pair String String ) ) out → v {
     : ~ i p start
     ~ < p end {
-        : i id ( __mqtt_byte pkt p )
+        : i id ( _mqtt_byte pkt p )
         ? < id 0 { = p end } {
             = p + p 1
             ? == id 38 {
-                : i kh ( __mqtt_byte pkt p )
-                : i kl ( __mqtt_byte pkt + p 1 )
+                : i kh ( _mqtt_byte pkt p )
+                : i kl ( _mqtt_byte pkt + p 1 )
                 : i klen + * kh 256 kl
                 : String key ( __mqtt_extract_str pkt + p 2 klen )
                 = p + + p 2 klen
-                : i vh ( __mqtt_byte pkt p )
-                : i vl ( __mqtt_byte pkt + p 1 )
+                : i vh ( _mqtt_byte pkt p )
+                : i vl ( _mqtt_byte pkt + p 1 )
                 : i vlen + * vh 256 vl
                 : String val ( __mqtt_extract_str pkt + p 2 vlen )
                 = p + + p 2 vlen
@@ -1182,27 +1182,27 @@ $ `stdlib/ext/websocket.nu`
 // user properties — and free `pkt`. An inbound QoS 1 PUBLISH is PUBACK'd
 // and a QoS 2 PUBLISH gets the PUBREC/PUBCOMP exchange before returning.
 @ __mqtt_parse_publish MqttClient cl ( Vec u ) pkt → ?MqttMessage {
-    : i b0 ( __mqtt_byte pkt 0 )
+    : i b0 ( _mqtt_byte pkt 0 )
     : i qos & >> b0 1 3
-    : MqttVarint rl ( __mqtt_decode_varint pkt 1 )
+    : MqttVarint rl ( _mqtt_decode_varint pkt 1 )
     : i hdr + 1 . rl nbytes
     : i end + hdr . rl value
-    : i th ( __mqtt_byte pkt hdr )
-    : i tl ( __mqtt_byte pkt + hdr 1 )
+    : i th ( _mqtt_byte pkt hdr )
+    : i tl ( _mqtt_byte pkt + hdr 1 )
     : i tlen + * th 256 tl
     : i tstart + hdr 2
     : ~ i p + tstart tlen
-    : i pidhi ( __mqtt_byte pkt p )
-    : i pidlo ( __mqtt_byte pkt + p 1 )
+    : i pidhi ( _mqtt_byte pkt p )
+    : i pidlo ( _mqtt_byte pkt + p 1 )
     ? > qos 0 { = p + p 2 } {}
-    : MqttVarint pr ( __mqtt_decode_varint pkt p )
+    : MqttVarint pr ( _mqtt_decode_varint pkt p )
     : i propstart + p . pr nbytes
     : i propend + propstart . pr value
 
     : String topic ( __mqtt_extract_str pkt tstart tlen )
     : String payload ( __mqtt_extract_str pkt propend - end propend )
     : ( Vec ( Pair String String ) ) props ( vec_new [( Pair String String )] )
-    ( __mqtt_parse_props pkt propstart propend props )
+    ( _mqtt_parse_props pkt propstart propend props )
     ( vec_free [u] pkt )
     : i inpid + * pidhi 256 pidlo
     ? == qos 1 { ( __mqtt_send_ack2 cl 64 inpid ) } {}
@@ -1211,9 +1211,9 @@ $ `stdlib/ext/websocket.nu`
         // in a later receive is recognised; complete PUBREC/PUBREL/PUBCOMP
         // to satisfy the broker either way; forget the id on clean
         // completion. A duplicate is acked but not re-delivered.
-        : b dup ( __mqtt_qos2_seen_or_add . cl qos2_rx inpid )
+        : b dup ( _mqtt_qos2_seen_or_add . cl qos2_rx inpid )
         : b done ( __mqtt_qos2_inbound cl inpid )
-        ? done { ( __mqtt_qos2_forget . cl qos2_rx inpid ) } {}
+        ? done { ( _mqtt_qos2_forget . cl qos2_rx inpid ) } {}
         ? dup {
             ( string_free topic )
             ( string_free payload )
@@ -1236,7 +1236,7 @@ $ `stdlib/ext/websocket.nu`
         : !( Vec u ) MqttErr rp ( __mqtt_read_packet cl )
         ?? rp {
             T pkt → {
-                : i ptype & >> ( __mqtt_byte pkt 0 ) 4 15
+                : i ptype & >> ( _mqtt_byte pkt 0 ) 4 15
                 ? == ptype 3 {
                     // A de-duplicated QoS 2 retransmit yields None — keep
                     // looping for the next real message rather than return.
@@ -1308,7 +1308,7 @@ $ `stdlib/ext/websocket.nu`
         ? >= k len {
             = done T
         } {
-            ? == ( __mqtt_byte v k ) 47 {
+            ? == ( _mqtt_byte v k ) 47 {
                 = e k
                 = done T
             } {
@@ -1327,7 +1327,7 @@ $ `stdlib/ext/websocket.nu`
     : ~ i bi b0
     : ~ b ok T
     ~ & ok < ai a1 {
-        ? != ( __mqtt_byte va ai ) ( __mqtt_byte vb bi ) { = ok F } {}
+        ? != ( _mqtt_byte va ai ) ( _mqtt_byte vb bi ) { = ok F } {}
         = ai + ai 1
         = bi + bi 1
     }
@@ -1341,10 +1341,10 @@ $ `stdlib/ext/websocket.nu`
 @ __mqtt_topic_match_bytes ( Vec u ) f ( Vec u ) t → b {
     : i flen ( vec_len [u] f )
     : i tlen ( vec_len [u] t )
-    : i f0 ( __mqtt_byte f 0 )
+    : i f0 ( _mqtt_byte f 0 )
     // §4.7.2 — a filter whose first level is `+` or `#` never matches a
     // topic whose first level begins with `$` (so `#` skips `$SYS/...`).
-    ? & | == f0 43 == f0 35 == ( __mqtt_byte t 0 ) 36 { ^ F } {}
+    ? & | == f0 43 == f0 35 == ( _mqtt_byte t 0 ) 36 { ^ F } {}
 
     : ~ i fs 0
     : ~ i ts 0
@@ -1354,7 +1354,7 @@ $ `stdlib/ext/websocket.nu`
     ~ == verdict -1 {
         : i fe ( __mqtt_level_end f fs flen )
         : i fseg - fe fs
-        : i fb ( __mqtt_byte f fs )
+        : i fb ( _mqtt_byte f fs )
         ? & == fseg 1 == fb 35 {
             = verdict 1
         } {
@@ -1383,7 +1383,7 @@ $ `stdlib/ext/websocket.nu`
                                 // left: matches only if the remainder
                                 // is exactly a trailing `#`.
                                 : i ne ( __mqtt_level_end f fs flen )
-                                ? & & == - ne fs 1 == ( __mqtt_byte f fs ) 35 >= ne flen {
+                                ? & & == - ne fs 1 == ( _mqtt_byte f fs ) 35 >= ne flen {
                                     = verdict 1
                                 } {
                                     = verdict 0
@@ -1455,7 +1455,7 @@ $ `stdlib/ext/websocket.nu`
             : !( Vec u ) MqttErr rp ( __mqtt_read_packet cl )
             ?? rp {
                 T pkt → {
-                    : i ptype & >> ( __mqtt_byte pkt 0 ) 4 15
+                    : i ptype & >> ( _mqtt_byte pkt 0 ) 4 15
                     ? == ptype 3 {
                         // None = de-duplicated QoS 2 retransmit; skip it.
                         ?? ( __mqtt_parse_publish cl pkt ) {

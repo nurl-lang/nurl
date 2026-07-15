@@ -64,10 +64,10 @@ $ `stdlib/net/failuredetector.nu`
     // sweep: lone suspicion, LHM 1 → ceiling 5000*2 = 10000 from t=600
     : ( Vec s ) sd0 ( fd_sweep fd2 5000 )
     ( pb `not dead before scaled ceiling: ` == ( vec_len [s] sd0 ) 0 )
-    ( __pk_dead_free sd0 )
+    ( _pk_dead_free sd0 )
     : ( Vec s ) sd1 ( fd_sweep fd2 11000 )
     ( pb `dead after scaled ceiling: ` & == ( vec_len [s] sd1 ) 1 == ( pktable_state_of t2 tgt ) ( pk_dead ) )
-    ( __pk_dead_free sd1 )
+    ( _pk_dead_free sd1 )
     ( vec_free [u] tgt )
     ( fd_free fd2 ) ( pktable_free t2 )
 
@@ -87,7 +87,7 @@ $ `stdlib/net/failuredetector.nu`
     ( fd_action_free q2 )
     : ( Vec s ) sd2 ( fd_sweep fd3 50000 )
     ( pb `member stayed ALIVE across the roam: ` & == ( vec_len [s] sd2 ) 0 == ( pktable_state_of t3 b ) ( pk_alive ) )
-    ( __pk_dead_free sd2 )
+    ( _pk_dead_free sd2 )
     ( fd_free fd3 ) ( pktable_free t3 )
 
     ( vec_free [u] me ) ( vec_free [u] b ) ( vec_free [u] c )

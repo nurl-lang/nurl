@@ -995,7 +995,7 @@ $ `stdlib/ext/http2_hpack.nu`
 
 : H2Url { b tls String host i port String path }
 
-@ __h2_url_free H2Url u → v {
+@ _h2_url_free H2Url u → v {
     ( string_free . u host )
     ( string_free . u path )
 }
@@ -1005,7 +1005,7 @@ $ `stdlib/ext/http2_hpack.nu`
 // Delegates the RFC 3986 split to std/url.nu; this wrapper enforces the
 // http/https scheme and maps to H2Url, preserving the request target
 // (path?query) for the :path pseudo-header.
-@ __h2_parse_url s url → ?H2Url {
+@ _h2_parse_url s url → ?H2Url {
     : ?Url pu ( url_parse url )
     ^ ?? pu {
         T u → {
@@ -1028,7 +1028,7 @@ $ `stdlib/ext/http2_hpack.nu`
 // One request over a fresh connection. TAKES OWNERSHIP of `body`;
 // `headers` is borrowed.
 @ h2_request s url s method ( Vec Header ) headers ( Vec u ) body → !HttpResponse H2ClientErr {
-    : ?H2Url pu ( __h2_parse_url url )
+    : ?H2Url pu ( _h2_parse_url url )
     ?? pu {
         T u → {
             : !H2Client H2ClientErr cr ? . u tls
@@ -1054,26 +1054,26 @@ $ `stdlib/ext/http2_hpack.nu`
                                     : !HttpResponse H2ClientErr tr
                                     ( h2_client_take_response client sid )
                                     ( h2_client_disconnect client )
-                                    ( __h2_url_free u )
+                                    ( _h2_url_free u )
                                     ^ tr
                                 }
                                 F e → {
                                     ( h2_client_disconnect client )
-                                    ( __h2_url_free u )
+                                    ( _h2_url_free u )
                                     ^ @ !HttpResponse H2ClientErr { F e }
                                 }
                             }
                         }
                         F e → {
                             ( h2_client_disconnect client )
-                            ( __h2_url_free u )
+                            ( _h2_url_free u )
                             ^ @ !HttpResponse H2ClientErr { F e }
                         }
                     }
                 }
                 F e → {
                     ( vec_free [u] body )
-                    ( __h2_url_free u )
+                    ( _h2_url_free u )
                     ^ @ !HttpResponse H2ClientErr { F e }
                 }
             }

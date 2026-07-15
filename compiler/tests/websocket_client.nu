@@ -107,7 +107,7 @@ $ `stdlib/ext/websocket.nu`
 // ── §C URL parsing ────────────────────────────────────────────────────
 
 @ check_url s url b want_ok b want_tls s want_host i want_port s want_path → i {
-    : ?WsUrl pu ( __ws_parse_url url )
+    : ?WsUrl pu ( _ws_parse_url url )
     : ~ i fails 0
     ?? pu {
         T u → {
@@ -160,7 +160,7 @@ $ `stdlib/ext/websocket.nu`
 @ serve_one_connection TcpConn conn → v {
     : ( Vec u ) carry ( vec_new [u] )
     : HttpLimits lim ( http_default_limits )
-    : !ParsedHeadOk HttpReqErr ph ( __read_request_head conn carry lim )
+    : !ParsedHeadOk HttpReqErr ph ( _read_request_head conn carry lim )
     ?? ph {
         T pho → {
             : HttpRequest req . pho head

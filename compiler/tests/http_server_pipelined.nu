@@ -1,13 +1,13 @@
 // http_server_pipelined.nu — pipelining-correctness acceptance test
 // for stdlib/ext/http_server.nu (carry-buffer refactor).
 //
-// Background: prior to the carry-buffer refactor, `__read_request_head`
+// Background: prior to the carry-buffer refactor, `_read_request_head`
 // allocated a fresh `Vec[u] buf` per call and copied any bytes past the
 // parsed head wholesale into `req.body`. When the peer pipelined two
 // requests in a single send() — i.e. req2's head arrived inside the
 // same TCP read as req1's head/body — req2's bytes silently
 // disappeared into req1.body and the next iteration's
-// `__read_request_head` saw an empty socket / NetClosed. Result: one
+// `_read_request_head` saw an empty socket / NetClosed. Result: one
 // corrupted request processed, the second one lost.
 //
 // This test reproduces that exact wire shape and verifies BOTH requests
@@ -105,7 +105,7 @@ sys.stdout.write('client_total_bytes='+str(len(buf))+chr(10))" > /tmp/http_serve
             }
 
             // Short idle timeout so a buggy server's second
-            // `__read_request_head` call observes the client-side
+            // `_read_request_head` call observes the client-side
             // shutdown(SHUT_WR) → NetClosed promptly. 2s leaves
             // plenty of margin for the python startup + sendall
             // round-trip on slow CI.

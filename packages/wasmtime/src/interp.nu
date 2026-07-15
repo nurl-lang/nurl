@@ -40,26 +40,47 @@ $ `module.nu`
 // guest then just sees nonzero CUresult codes). Handle types match the
 // portable i64 model in packages/gpu/src/cuda.nu.
 & `cuda` @ cuInit i32 flags → i32
+
 & `cuda` @ cuDeviceGetCount *u count → i32
+
 & `cuda` @ cuDeviceGet *u device i32 ordinal → i32
+
 & `cuda` @ cuDeviceGetName *u name i32 len i32 dev → i32
+
 & `cuda` @ cuCtxCreate *u pctx i32 flags i32 dev → i32
+
 & `cuda` @ cuCtxDestroy i ctx → i32
+
 & `cuda` @ cuCtxSynchronize → i32
+
 & `cuda` @ cuModuleLoadData *u module *u image → i32
+
 & `cuda` @ cuModuleUnload i module → i32
+
 & `cuda` @ cuModuleGetFunction *u hfunc i hmod s name → i32
+
 & `cuda` @ cuMemAlloc *u dptr i bytesize → i32
+
 & `cuda` @ cuMemFree i dptr → i32
+
 & `cuda` @ cuMemcpyHtoD i dst *u src i n → i32
+
 & `cuda` @ cuMemcpyDtoH *u dst i src i n → i32
+
 & `cuda` @ cuLaunchKernel i f i32 gx i32 gy i32 gz i32 bx i32 by i32 bz i32 sh i stream *u params i extra → i32
+
 & `nvrtc` @ nvrtcCreateProgram *u prog s src s name i32 nh *u headers *u incs → i32
+
 & `nvrtc` @ nvrtcCompileProgram i prog i32 nopt *u opts → i32
+
 & `nvrtc` @ nvrtcGetPTXSize i prog *u sz → i32
+
 & `nvrtc` @ nvrtcGetPTX i prog *u ptx → i32
+
 & `nvrtc` @ nvrtcGetProgramLogSize i prog *u sz → i32
+
 & `nvrtc` @ nvrtcGetProgramLog i prog *u log → i32
+
 & `nvrtc` @ nvrtcDestroyProgram *u prog → i32
 
 // ── value + control stacks ───────────────────────────────────────
@@ -212,11 +233,11 @@ $ `module.nu`
     ( vec_free [i] . it elem_dropped )
     : i an ( vec_len [s] . it argv )
     : ~ i ai 0
-    ~ < ai an { ?? ( vec_get [s] . it argv ai ) { T pp → ?!= # i pp 0 { : *Arg a # *Arg pp ( vec_free [u] . a bytes ) ( nurl_free # s a ) } {} F → {} } = ai + ai 1 }
+    ~ < ai an { ?? ( vec_get [s] . it argv ai ) { T pp → ? != # i pp 0 { : *Arg a # *Arg pp ( vec_free [u] . a bytes ) ( nurl_free # s a ) } {} F → {} } = ai + ai 1 }
     ( vec_free [s] . it argv )
     : i en ( vec_len [s] . it envp )
     : ~ i ei 0
-    ~ < ei en { ?? ( vec_get [s] . it envp ei ) { T pp → ?!= # i pp 0 { : *Arg a # *Arg pp ( vec_free [u] . a bytes ) ( nurl_free # s a ) } {} F → {} } = ei + ei 1 }
+    ~ < ei en { ?? ( vec_get [s] . it envp ei ) { T pp → ? != # i pp 0 { : *Arg a # *Arg pp ( vec_free [u] . a bytes ) ( nurl_free # s a ) } {} F → {} } = ei + ei 1 }
     ( vec_free [s] . it envp )
     : i fn ( vec_len [s] . it fds )
     : ~ i fi 0
@@ -332,10 +353,10 @@ $ `module.nu`
     // scanning is not thrown off by a 0x0b/0x05 byte living inside them.
     ? == op 253 {
         : i sub ( wc_uleb c )
-        ? | == sub 12 == sub 13 { ( wc_skip c 16 ) } {          // v128.const / i8x16.shuffle
+        ? | == sub 12 == sub 13 { ( wc_skip c 16 ) } {  // v128.const / i8x16.shuffle
             ? & >= sub 84 <= sub 91 { ( wc_uleb c ) ( wc_uleb c ) ( wc_u8 c ) } {  // load/store lane: memarg + lane
                 ? | & >= sub 0 <= sub 11 | == sub 92 == sub 93 { ( wc_uleb c ) ( wc_uleb c ) } {  // memory ops: memarg
-                    ? & >= sub 21 <= sub 34 { ( wc_u8 c ) } {} } } }              // extract/replace lane: 1 byte
+                    ? & >= sub 21 <= sub 34 { ( wc_u8 c ) } {} } } }  // extract/replace lane: 1 byte
         ^ v
     } {}
     // 0xfe prefix (threads / atomics). atomic.fence carries a single reserved
@@ -479,26 +500,36 @@ $ `module.nu`
 
 // Rotates (n masked to the type width by the caller).
 @ __rotl32 i a i n → i { : i s & n 31 ^ ? == s 0 ( __w32 a ) ( __w32 | << ( __u32 a ) s >> ( __u32 a ) - 32 s ) }
+
 @ __rotr32 i a i n → i { ^ ( __rotl32 a - 32 & n 31 ) }
+
 @ __rotl64 i a i n → i { : i s & n 63 ^ ? == s 0 a | << a s ( __lshr64 a - 64 s ) }
+
 @ __rotr64 i a i n → i { ^ ( __rotl64 a - 64 & n 63 ) }
 
 // Count leading / trailing zeros and population count.
 @ __clz32 i x → i { : i v ( __u32 x ) ? == v 0 { ^ 32 } {} : ~ i n 0 : ~ i k 31 ~ & >= k 0 == 0 & >> v k 1 { = n + n 1 = k - k 1 } ^ n }
+
 @ __ctz32 i x → i { : i v ( __u32 x ) ? == v 0 { ^ 32 } {} : ~ i n 0 : ~ i k 0 ~ & < k 32 == 0 & >> v k 1 { = n + n 1 = k + k 1 } ^ n }
+
 @ __popc32 i x → i { : i v ( __u32 x ) : ~ i n 0 : ~ i k 0 ~ < k 32 { = n + n & >> v k 1 = k + k 1 } ^ n }
+
 @ __clz64 i x → i { ? == x 0 { ^ 64 } {} : ~ i n 0 : ~ i k 63 ~ & >= k 0 == 0 & ( __lshr64 x k ) 1 { = n + n 1 = k - k 1 } ^ n }
+
 @ __ctz64 i x → i { ? == x 0 { ^ 64 } {} : ~ i n 0 : ~ i k 0 ~ & < k 64 == 0 & ( __lshr64 x k ) 1 { = n + n 1 = k + k 1 } ^ n }
+
 @ __popc64 i x → i { : ~ i n 0 : ~ i k 0 ~ < k 64 { = n + n & ( __lshr64 x k ) 1 = k + k 1 } ^ n }
 
 // ── float↔int conversion helpers ─────────────────────────────────
 // NaN tests on the IEEE-754 bit patterns. (NURL's float `!=` lowers to
 // `fcmp one` — ordered — so the x≠x trick cannot see NaN; inspect bits.)
 @ __f64_nan i bits → b { ^ > & bits 9223372036854775807 9218868437227405312 }
+
 @ __f32_nan i bits → b { ^ > & bits 2147483647 2139095040 }
 
 // 2^63 and 2^64 as f64 (too big for a float literal's integer part).
 @ __f_2p63 → f { ^ ( bits_to_f64 4890909195324358656 ) }
+
 @ __f_2p64 → f { ^ ( bits_to_f64 4895412794951729152 ) }
 
 // Trapping float→int truncation core (wasm's two distinct traps): NaN →
@@ -640,7 +671,7 @@ $ `module.nu`
 @ __ctrl_pop ( Vec s ) ctrl → v {
     : i n ( vec_len [s] ctrl )
     ? <= n 0 { ^ v } {}
-    ?? ( vec_get [s] ctrl - n 1 ) { T pp → ?!= # i pp 0 { ( nurl_free pp ) } {} F → {} }
+    ?? ( vec_get [s] ctrl - n 1 ) { T pp → ? != # i pp 0 { ( nurl_free pp ) } {} F → {} }
     ( vec_pop [s] ctrl )
 }
 
@@ -721,7 +752,7 @@ $ `module.nu`
     : *Frame fr # *Frame pp
     : i cn ( vec_len [s] . fr ctrl )
     : ~ i ci 0
-    ~ < ci cn { ?? ( vec_get [s] . fr ctrl ci ) { T cp → ?!= # i cp 0 { ( nurl_free cp ) } {} F → {} } = ci + ci 1 }
+    ~ < ci cn { ?? ( vec_get [s] . fr ctrl ci ) { T cp → ? != # i cp 0 { ( nurl_free cp ) } {} F → {} } = ci + ci 1 }
     ( vec_free [s] . fr ctrl )
     ( vec_free [i] . fr locals )
     ( nurl_free # s fr )
@@ -1483,7 +1514,7 @@ $ `module.nu`
     : String hs ( __join_path it # *WFd dp path_p path_len )
     : i rc ( nurl_dir_remove ( string_data hs ) )
     ( string_free hs )
-    ( __push it ? == rc 0 0 ( __ioerr_errno ( __io_err_of_kind ( errno_kind ) ) ) )
+    ( __push it ? == rc 0 0 ( __ioerr_errno ( _io_err_of_kind ( errno_kind ) ) ) )
 }
 
 @ __wasi_path_unlink_file * Interp it → v {
@@ -1495,7 +1526,7 @@ $ `module.nu`
     : String hs ( __join_path it # *WFd dp path_p path_len )
     : i32 rc ( unlink ( string_data hs ) )
     ( string_free hs )
-    ( __push it ? == # i rc 0 0 ( __ioerr_errno ( __io_err_of_kind ( errno_kind ) ) ) )
+    ( __push it ? == # i rc 0 0 ( __ioerr_errno ( _io_err_of_kind ( errno_kind ) ) ) )
 }
 
 @ __wasi_path_rename * Interp it → v {
@@ -1611,6 +1642,7 @@ $ `module.nu`
     : ~ i k 0
     ~ < k 8 { ( vec_push [u] v # u & ( __lshr64 x * 8 k ) 255 ) = k + k 1 }
 }
+
 @ __ent_put32 ( Vec u ) v i x → v {
     : ~ i k 0
     ~ < k 4 { ( vec_push [u] v # u & >> x * 8 k 255 ) = k + k 1 }
@@ -1784,7 +1816,7 @@ $ `module.nu`
 @ interp_flush * Interp it → v {
     : i n ( vec_len [s] . it fds )
     : ~ i k 3
-    ~ < k n { ?? ( vec_get [s] . it fds k ) { T pp → ?!= # i pp 0 { ( __fd_flush # *WFd pp ) } {} F → {} } = k + k 1 }
+    ~ < k n { ?? ( vec_get [s] . it fds k ) { T pp → ? != # i pp 0 { ( __fd_flush # *WFd pp ) } {} F → {} } = k + k 1 }
 }
 
 @ __wasi_fd_close * Interp it → v {
@@ -1922,62 +1954,75 @@ $ `module.nu`
     : i flags ( __pop it )
     ( __push it # i ( cuInit # i32 flags ) )
 }
+
 @ __cu_device_get_count * Interp it → v {
     : i count ( __pop it )
     ( __push it # i ( cuDeviceGetCount ( __gpu_ptr it count ) ) )
 }
+
 @ __cu_device_get * Interp it → v {
     : i ordinal ( __pop it )
     : i device ( __pop it )
     ( __push it # i ( cuDeviceGet ( __gpu_ptr it device ) # i32 ordinal ) )
 }
+
 @ __cu_device_get_name * Interp it → v {
     : i dev ( __pop it )
     : i len ( __pop it )
     : i name ( __pop it )
     ( __push it # i ( cuDeviceGetName ( __gpu_ptr it name ) # i32 len # i32 dev ) )
 }
+
 @ __cu_ctx_create * Interp it → v {
     : i dev ( __pop it )
     : i flags ( __pop it )
     : i pctx ( __pop it )
     ( __push it # i ( cuCtxCreate ( __gpu_ptr it pctx ) # i32 flags # i32 dev ) )
 }
+
 @ __cu_ctx_destroy * Interp it → v {
     : i ctx ( __pop it )
     ( __push it # i ( cuCtxDestroy ctx ) )
 }
+
 @ __cu_ctx_sync * Interp it → v { ( __push it # i ( cuCtxSynchronize ) ) }
+
 @ __cu_module_load * Interp it → v {
     : i image ( __pop it )
     : i module ( __pop it )
     ( __push it # i ( cuModuleLoadData ( __gpu_ptr it module ) ( __gpu_ptr it image ) ) )
 }
+
 @ __cu_module_unload * Interp it → v {
     : i module ( __pop it )
     ( __push it # i ( cuModuleUnload module ) )
 }
+
 @ __cu_module_get_function * Interp it → v {
     : i name ( __pop it )
     : i hmod ( __pop it )
     : i hfunc ( __pop it )
     ( __push it # i ( cuModuleGetFunction ( __gpu_ptr it hfunc ) hmod # s ( __gpu_ptr it name ) ) )
 }
+
 @ __cu_mem_alloc * Interp it → v {
     : i bytesize ( __pop it )
     : i dptr ( __pop it )
     ( __push it # i ( cuMemAlloc ( __gpu_ptr it dptr ) bytesize ) )
 }
+
 @ __cu_mem_free * Interp it → v {
     : i dptr ( __pop it )
     ( __push it # i ( cuMemFree dptr ) )
 }
+
 @ __cu_memcpy_htod * Interp it → v {
     : i n ( __pop it )
     : i src ( __pop it )
     : i dst ( __pop it )
     ( __push it # i ( cuMemcpyHtoD dst ( __gpu_ptr it src ) n ) )
 }
+
 @ __cu_memcpy_dtoh * Interp it → v {
     : i n ( __pop it )
     : i src ( __pop it )
@@ -1995,6 +2040,7 @@ $ `module.nu`
 // (up to __GPU_MAX_ARGS) of entries; CUDA reads only the real count and
 // ignores the rest, and each translated entry is a valid host address.
 @ __GPU_MAX_ARGS → i { ^ 64 }
+
 @ __cu_launch_kernel * Interp it → v {
     : i extra ( __pop it )
     : i params ( __pop it )
@@ -2023,6 +2069,7 @@ $ `module.nu`
     ( nurl_free # s hostp )
     ( __push it rc )
 }
+
 @ __cu_get_error_name * Interp it → v {
     // Writes a HOST const char* into the guest out-slot — unusable as a guest
     // offset. Write NULL so cuda_error_name falls back to a static string;
@@ -2032,6 +2079,7 @@ $ `module.nu`
     ( __mem_store it & pstr 4294967295 8 0 )
     ( __push it 0 )
 }
+
 @ __nvrtc_create * Interp it → v {
     : i incs ( __pop it )
     : i headers ( __pop it )
@@ -2071,26 +2119,31 @@ $ `module.nu`
     ( nurl_free # s hostp )
     ( __push it rc )
 }
+
 @ __nvrtc_ptx_size * Interp it → v {
     : i sz ( __pop it )
     : i prog ( __pop it )
     ( __push it # i ( nvrtcGetPTXSize prog ( __gpu_ptr it sz ) ) )
 }
+
 @ __nvrtc_get_ptx * Interp it → v {
     : i ptx ( __pop it )
     : i prog ( __pop it )
     ( __push it # i ( nvrtcGetPTX prog ( __gpu_ptr it ptx ) ) )
 }
+
 @ __nvrtc_log_size * Interp it → v {
     : i sz ( __pop it )
     : i prog ( __pop it )
     ( __push it # i ( nvrtcGetProgramLogSize prog ( __gpu_ptr it sz ) ) )
 }
+
 @ __nvrtc_get_log * Interp it → v {
     : i log ( __pop it )
     : i prog ( __pop it )
     ( __push it # i ( nvrtcGetProgramLog prog ( __gpu_ptr it log ) ) )
 }
+
 @ __nvrtc_destroy * Interp it → v {
     : i prog ( __pop it )
     ( __push it # i ( nvrtcDestroyProgram ( __gpu_ptr it prog ) ) )
@@ -2208,6 +2261,7 @@ $ `module.nu`
     ? | < k 0 >= k ( vec_len [s] . m datas ) { ^ # s 0 } {}
     ^ ?? ( vec_get [s] . m datas k ) { T x → x F → # s 0 }
 }
+
 @ __elem_at * Module m i k → s {
     ? | < k 0 >= k ( vec_len [s] . m elems ) { ^ # s 0 } {}
     ^ ?? ( vec_get [s] . m elems k ) { T x → x F → # s 0 }

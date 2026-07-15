@@ -234,7 +234,7 @@ $ `stdlib/core/vec.nu`
 // of cloned tool descriptors. Caller frees with vec_free_with /
 // json_free. Empty Vec on shape mismatch (server returned a non-array
 // or omitted the field).
-@ __extract_array_field Json r s field → ( Vec Json ) {
+@ _extract_array_field Json r s field → ( Vec Json ) {
     : ( Vec Json ) out ( vec_new [Json] )
     : ?Json result ( json_obj_get r `result` )
     ?? result {
@@ -258,7 +258,7 @@ $ `stdlib/core/vec.nu`
     : !Json McpErr r ( mcp_call c `tools/list` @ ?Json { F } )
     ?? r {
         T resp → {
-            : ( Vec Json ) tools ( __extract_array_field resp `tools` )
+            : ( Vec Json ) tools ( _extract_array_field resp `tools` )
             ( json_free resp )
             ^ @ !( Vec Json ) McpErr { T tools }
         }
@@ -270,7 +270,7 @@ $ `stdlib/core/vec.nu`
     : !Json McpErr r ( mcp_call c `prompts/list` @ ?Json { F } )
     ?? r {
         T resp → {
-            : ( Vec Json ) ps ( __extract_array_field resp `prompts` )
+            : ( Vec Json ) ps ( _extract_array_field resp `prompts` )
             ( json_free resp )
             ^ @ !( Vec Json ) McpErr { T ps }
         }
@@ -282,7 +282,7 @@ $ `stdlib/core/vec.nu`
     : !Json McpErr r ( mcp_call c `resources/list` @ ?Json { F } )
     ?? r {
         T resp → {
-            : ( Vec Json ) rs ( __extract_array_field resp `resources` )
+            : ( Vec Json ) rs ( _extract_array_field resp `resources` )
             ( json_free resp )
             ^ @ !( Vec Json ) McpErr { T rs }
         }

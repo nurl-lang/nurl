@@ -22,7 +22,7 @@ $ `stdlib/std/swim.nu`
     : !SwimMsg SwimErr d ( swim_msg_decode wire )
     ?? d {
         T m2 → {
-            ( nurl_print `type=` ) ( nurl_print_int ( __mtype_code . m2 mtype ) )
+            ( nurl_print `type=` ) ( nurl_print_int ( _mtype_code . m2 mtype ) )
             ( nurl_print `seq=` ) ( nurl_print_int . m2 seq )
             ( nurl_print `from=` ) ( nurl_print ( string_data . m2 from_host ) )
             ( nurl_print `:` ) ( nurl_print_int . m2 from_port )

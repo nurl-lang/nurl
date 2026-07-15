@@ -15,7 +15,7 @@
 //     missing header, leading/trailing whitespace.
 //   * response_set_cookie: name+value, full-options serialization
 //     (Path, Domain, Max-Age, Secure, HttpOnly, SameSite=Strict).
-//   * __has_dotdot_segment: hits `..` at start / middle / end / mixed
+//   * _has_dotdot_segment: hits `..` at start / middle / end / mixed
 //     separators / nothing-fishy.
 
 $ `stdlib/ext/http_static.nu`
@@ -320,20 +320,20 @@ $ `stdlib/ext/http.nu`
     ( http_response_free c )
 }
 
-// ── __has_dotdot_segment (path traversal) ────────────────────────────
+// ── _has_dotdot_segment (path traversal) ────────────────────────────
 
 @ run_dotdot → v {
-    ( nurl_print `── __has_dotdot_segment ──\n` )
-    ( println_bool `  /a/b/c        = ` ( __has_dotdot_segment `/a/b/c` ) )
-    ( println_bool `  /a/../b       = ` ( __has_dotdot_segment `/a/../b` ) )
-    ( println_bool `  /../etc       = ` ( __has_dotdot_segment `/../etc` ) )
-    ( println_bool `  /a/b/..       = ` ( __has_dotdot_segment `/a/b/..` ) )
-    ( println_bool `  /a/.b/c       = ` ( __has_dotdot_segment `/a/.b/c` ) )  // dotfile, not ..
-    ( println_bool `  /a/...//b     = ` ( __has_dotdot_segment `/a/...//b` ) )  // 3 dots, not ..
-    ( println_bool `  /a\\..\\b     = ` ( __has_dotdot_segment `/a\\..\\b` ) )  // backslash sep
-    ( println_bool `  ..            = ` ( __has_dotdot_segment `..` ) )
-    ( println_bool `  /             = ` ( __has_dotdot_segment `/` ) )
-    ( println_bool `  /favicon.ico  = ` ( __has_dotdot_segment `/favicon.ico` ) )
+    ( nurl_print `── _has_dotdot_segment ──\n` )
+    ( println_bool `  /a/b/c        = ` ( _has_dotdot_segment `/a/b/c` ) )
+    ( println_bool `  /a/../b       = ` ( _has_dotdot_segment `/a/../b` ) )
+    ( println_bool `  /../etc       = ` ( _has_dotdot_segment `/../etc` ) )
+    ( println_bool `  /a/b/..       = ` ( _has_dotdot_segment `/a/b/..` ) )
+    ( println_bool `  /a/.b/c       = ` ( _has_dotdot_segment `/a/.b/c` ) )  // dotfile, not ..
+    ( println_bool `  /a/...//b     = ` ( _has_dotdot_segment `/a/...//b` ) )  // 3 dots, not ..
+    ( println_bool `  /a\\..\\b     = ` ( _has_dotdot_segment `/a\\..\\b` ) )  // backslash sep
+    ( println_bool `  ..            = ` ( _has_dotdot_segment `..` ) )
+    ( println_bool `  /             = ` ( _has_dotdot_segment `/` ) )
+    ( println_bool `  /favicon.ico  = ` ( _has_dotdot_segment `/favicon.ico` ) )
 }
 
 // ── main ─────────────────────────────────────────────────────────────

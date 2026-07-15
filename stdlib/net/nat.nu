@@ -76,7 +76,7 @@ $ `stdlib/net/stun.nu`
 }
 
 // Host part, brackets stripped for IPv6, IPv4-mapped form normalized.
-@ __addr_host String addr → String {
+@ _addr_host String addr → String {
     : s cs ( string_data addr )
     : i n ( string_len addr )
     : *u sp # *u cs
@@ -101,7 +101,7 @@ $ `stdlib/net/stun.nu`
 }
 
 // Port part (after the last ':'). 0 if absent.
-@ __addr_port String addr → i {
+@ _addr_port String addr → i {
     : s cs ( string_data addr )
     : i n ( string_len addr )
     : *u sp # *u cs
@@ -120,7 +120,7 @@ $ `stdlib/net/stun.nu`
 }
 
 // A numeric IP is IPv6 iff it contains a ':'.
-@ __ip_family String ip → i {
+@ _ip_family String ip → i {
     : s cs ( string_data ip )
     : i n ( string_len ip )
     : *u sp # *u cs
@@ -139,7 +139,7 @@ $ `stdlib/net/stun.nu`
             : String ip ?? cr {
                 T _ → {
                     : String la ( udp_local_addr sk )
-                    : String h ( __addr_host la )
+                    : String h ( _addr_host la )
                     ( string_free la )
                     h
                 }
@@ -158,14 +158,14 @@ $ `stdlib/net/stun.nu`
 // can't be determined.
 @ nat_host_candidate UdpSocket sock s ref_host i ref_port → ?Candidate {
     : String la ( udp_local_addr sock )
-    : i app_port ( __addr_port la )
+    : i app_port ( _addr_port la )
     ( string_free la )
     : String ip ( __local_ip_for ref_host ref_port )
     ? == ( string_len ip ) 0 {
         ( string_free ip )
         ^ @ ?Candidate { F # Candidate 0 }
     } {}
-    : i fam ( __ip_family ip )
+    : i fam ( _ip_family ip )
     ^ @ ?Candidate { T @ Candidate { ip app_port fam 0 } }
 }
 

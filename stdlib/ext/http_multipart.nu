@@ -119,7 +119,7 @@ $ `stdlib/ext/http_request.nu`
 
 // ── Internal byte helpers ────────────────────────────────────────────
 //
-// We intentionally don't import `__bbyte` / `__bsubstr` from
+// We intentionally don't import `_bbyte` / `_bsubstr` from
 // http_request.nu — they're already exposed by the `$`-include above,
 // no shadowing needed. The helpers below add buffer-substring search
 // and bounded CRLF-CRLF detection on top of the existing primitives.
@@ -140,7 +140,7 @@ $ `stdlib/ext/http_request.nu`
         : ~ b match T
         : ~ i j 0
         ~ & match < j nlen {
-            ? != ( __bbyte buf + i j ) ( nurl_str_get needle j ) { = match F } {}
+            ? != ( _bbyte buf + i j ) ( nurl_str_get needle j ) { = match F } {}
             = j + j 1
         }
         ? match { ^ i } {}
@@ -157,13 +157,13 @@ $ `stdlib/ext/http_request.nu`
     : i stop - end 3
     : ~ i i start
     ~ <= i stop {
-        : i b0 ( __bbyte buf i )
+        : i b0 ( _bbyte buf i )
         ? == b0 13 {
-            : i b1 ( __bbyte buf + i 1 )
+            : i b1 ( _bbyte buf + i 1 )
             ? == b1 10 {
-                : i b2 ( __bbyte buf + i 2 )
+                : i b2 ( _bbyte buf + i 2 )
                 ? == b2 13 {
-                    : i b3 ( __bbyte buf + i 3 )
+                    : i b3 ( _bbyte buf + i 3 )
                     ? == b3 10 { ^ i } {}
                 } {}
             } {}
@@ -264,9 +264,9 @@ $ `stdlib/ext/http_request.nu`
             : ~ i nl -1
             : ~ i k line_start
             ~ & == nl -1 < k - end 1 {
-                : i b0 ( __bbyte body k )
+                : i b0 ( _bbyte body k )
                 ? == b0 13 {
-                    : i b1 ( __bbyte body + k 1 )
+                    : i b1 ( _bbyte body + k 1 )
                     ? == b1 10 { = nl k } {}
                 } {}
                 = k + k 1
@@ -278,12 +278,12 @@ $ `stdlib/ext/http_request.nu`
                     : ~ i colon -1
                     : ~ i j line_start
                     ~ & == colon -1 < j nl {
-                        ? == ( __bbyte body j ) 58 { = colon j } {}
+                        ? == ( _bbyte body j ) 58 { = colon j } {}
                         = j + j 1
                     }
                     ? >= colon 0 {
-                        : String fname ( __bsubstr body line_start colon )
-                        : String fvalue_raw ( __bsubstr body + colon 1 nl )
+                        : String fname ( _bsubstr body line_start colon )
+                        : String fvalue_raw ( _bsubstr body + colon 1 nl )
                         : String fvalue ( string_trim fvalue_raw )
                         ( string_free fvalue_raw )
                         : String fname_lc ( string_to_lower fname )
@@ -342,7 +342,7 @@ $ `stdlib/ext/http_request.nu`
     : ( Vec u ) data ( vec_with_cap [u] data_len )
     : ~ i k data_start
     ~ < k end {
-        : i bb ( __bbyte body k )
+        : i bb ( _bbyte body k )
         ? >= bb 0 { ( vec_push [u] data # u bb ) } {}
         = k + k 1
     }
@@ -388,8 +388,8 @@ $ `stdlib/ext/http_request.nu`
         //   * "--"   ⇒ closing terminator, stop.
         //   * "\r\n" ⇒ part headers + data follow.
         ? > + pos 1 - n 1 { = done T } {
-            : i a ( __bbyte body pos )
-            : i b ( __bbyte body + pos 1 )
+            : i a ( _bbyte body pos )
+            : i b ( _bbyte body + pos 1 )
             ? & == a 45 == b 45 {
                 // Final boundary "--BOUNDARY--" — graceful termination.
                 = done T

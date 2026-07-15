@@ -25,15 +25,15 @@ $ `jpeg_enc.nu`
 @ image_decode ( Vec u ) buf → ?Image {
     : i n ( vec_len [u] buf )
     ? >= n 8 {
-        ? & == ( __b buf 0 ) 137 == ( __b buf 1 ) 80 { ^ ( png_decode buf ) } {}
+        ? & == ( _byte buf 0 ) 137 == ( _byte buf 1 ) 80 { ^ ( png_decode buf ) } {}
     } {}
     ? >= n 3 {
-        ? & == ( __b buf 0 ) 255 == ( __b buf 1 ) 216 { ^ ( jpeg_decode buf ) } {}
+        ? & == ( _byte buf 0 ) 255 == ( _byte buf 1 ) 216 { ^ ( jpeg_decode buf ) } {}
     } {}
     ? >= n 2 {
-        ? == ( __b buf 0 ) 80 { ^ ( ppm_decode buf ) } {}
+        ? == ( _byte buf 0 ) 80 { ^ ( ppm_decode buf ) } {}
     } {}
-    ( __img_set_err `unknown image format (unrecognised magic bytes)` )
+    ( _img_set_err `unknown image format (unrecognised magic bytes)` )
     ^ @ ?Image { F }
 }
 
@@ -48,7 +48,7 @@ $ `jpeg_enc.nu`
             ^ im
         }
         F _ → {
-            ( __img_set_err `cannot read file` )
+            ( _img_set_err `cannot read file` )
             ^ @ ?Image { F }
         }
     }

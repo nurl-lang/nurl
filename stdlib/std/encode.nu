@@ -129,7 +129,7 @@ $ `stdlib/core/errors.nu`
             ( string_push_char out 61 )  // '='
         } {}
     } {}
-    ( __string_seal out )
+    ( _string_seal out )
 }
 
 @ b64_encode s str → String {
@@ -356,7 +356,7 @@ $ `stdlib/core/errors.nu`
             = p + p 1
         }
     } {}
-    ( __string_seal out )
+    ( _string_seal out )
 }
 
 @ b32_encode s str → String {

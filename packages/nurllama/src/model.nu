@@ -143,7 +143,7 @@ $ `src/tokenizer.nu`
     ^ @ !*Llm String { F ( string_from msg ) }
 }
 
-@ __lm_geti ( Vec i ) v i k → i {
+@ _lm_geti ( Vec i ) v i k → i {
     ?? ( vec_get [i] v k ) { T x → { ^ x } F → { ^ 0 } }
 }
 
@@ -388,7 +388,7 @@ $ `src/tokenizer.nu`
     : *u p ( vec_data [u] raw )
     : ~ i k 0
     ~ < k n {
-        : f v # f ( bits_to_f32 ( __st_u32 p * k 4 ) )
+        : f v # f ( bits_to_f32 ( _st_u32 p * k 4 ) )
         : i bits # i ( f32_to_bits # f32 + v 1.0 )
         : i o * k 4
         = . p o # u & bits 255
@@ -753,7 +753,7 @@ $ `src/tokenizer.nu`
             : ~ i total 0
             : ~ i k 0
             ~ < k ( vec_len [i] . m wbytes ) {
-                = total + total ( __lm_geti . m wbytes k )
+                = total + total ( _lm_geti . m wbytes k )
                 = k + k 1
             }
             : String dmsg ( string_from `[nurllama] device: ` )
@@ -775,7 +775,7 @@ $ `src/tokenizer.nu`
     ? != . m st 0 { ( st_close # *St . m st ) } {}
     : ~ i k 0
     ~ < k ( vec_len [i] . m wdptr ) {
-        ( gpu_free @ GpuBuffer { ( __lm_geti . m wdptr k ) ( __lm_geti . m wbytes k ) } )
+        ( gpu_free @ GpuBuffer { ( _lm_geti . m wdptr k ) ( _lm_geti . m wbytes k ) } )
         = k + k 1
     }
     ( vec_free [i] . m wdptr )
@@ -852,7 +852,7 @@ $ `src/tokenizer.nu`
     // still-open GGUF mapping (no full-table expansion)
     : ~ i bi 0
     ~ < bi count {
-        : i tok ( __lm_geti ids + first bi )
+        : i tok ( _lm_geti ids + first bi )
         : GpuBuffer xb @ GpuBuffer { + . m xd * * bi ne 4 * ne 4 }
         // The embedding table is never expanded: exactly this token's row is
         // decoded, out of whichever container the weights came from. A
@@ -899,22 +899,22 @@ $ `src/tokenizer.nu`
         : f rbase ? full . m rope_base . m rope_base_swa
 
         // ── attention ──
-        ( lk_rmsnorm . m ks . m xd ( __lm_geti . m attn_norm L ) . m xnd ne . m eps count )
-        : b _q1 ( lk_matvec_q . m ks ( __lm_geti . m tq_wq L ) ( __lm_geti . m wq L ) . m xnd . m qd qd_ ne count )
-        : b _q2 ( lk_matvec_q . m ks ( __lm_geti . m tq_wk L ) ( __lm_geti . m wk L ) . m xnd . m kd kvdim ne count )
-        : b _q3 ( lk_matvec_q . m ks ( __lm_geti . m tq_wv L ) ( __lm_geti . m wv L ) . m xnd . m vd kvdim ne count )
+        ( lk_rmsnorm . m ks . m xd ( _lm_geti . m attn_norm L ) . m xnd ne . m eps count )
+        : b _q1 ( lk_matvec_q . m ks ( _lm_geti . m tq_wq L ) ( _lm_geti . m wq L ) . m xnd . m qd qd_ ne count )
+        : b _q2 ( lk_matvec_q . m ks ( _lm_geti . m tq_wk L ) ( _lm_geti . m wk L ) . m xnd . m kd kvdim ne count )
+        : b _q3 ( lk_matvec_q . m ks ( _lm_geti . m tq_wv L ) ( _lm_geti . m wv L ) . m xnd . m vd kvdim ne count )
         // qwen2: Q/K/V biases, broadcast over the batch (llama has none)
-        : i bqd ( __lm_geti . m bq L )
-        : i bkd ( __lm_geti . m bk L )
-        : i bvd ( __lm_geti . m bv L )
+        : i bqd ( _lm_geti . m bq L )
+        : i bkd ( _lm_geti . m bk L )
+        : i bvd ( _lm_geti . m bv L )
         ? >= bqd 0 { ( lk_addrow . m ks . m qd bqd qd_ count ) } {}
         ? >= bkd 0 { ( lk_addrow . m ks . m kd bkd kvdim count ) } {}
         ? >= bvd 0 { ( lk_addrow . m ks . m vd bvd kvdim count ) } {}
         // gemma3: RMSNorm every head's Q and K vector before the rotation.
         // The rows of q are head_dim wide and there are nh of them per
         // position, so this is the ordinary rmsnorm over nh*count rows.
-        : i qnd ( __lm_geti . m q_norm L )
-        : i knd ( __lm_geti . m k_norm L )
+        : i qnd ( _lm_geti . m q_norm L )
+        : i knd ( _lm_geti . m k_norm L )
         : ~ i qbuf . m qd
         : ~ i kbuf . m kd
         ? >= qnd 0 {
@@ -929,13 +929,13 @@ $ `src/tokenizer.nu`
         ( lk_rope . m ks kbuf nkv hd . m rope_dim pos0 rbase . m rope_style count )
         // the whole batch's K/V rows land in the cache before any position
         // attends, so a position can see every earlier one in this chunk
-        ( lk_copyat . m ks ( __lm_geti . m kcache L ) kbuf * pos0 kvdim * count kvdim )
-        ( lk_copyat . m ks ( __lm_geti . m vcache L ) . m vd * pos0 kvdim * count kvdim )
-        ( lk_attn . m ks qbuf ( __lm_geti . m kcache L ) ( __lm_geti . m vcache L )
+        ( lk_copyat . m ks ( _lm_geti . m kcache L ) kbuf * pos0 kvdim * count kvdim )
+        ( lk_copyat . m ks ( _lm_geti . m vcache L ) . m vd * pos0 kvdim * count kvdim )
+        ( lk_attn . m ks qbuf ( _lm_geti . m kcache L ) ( _lm_geti . m vcache L )
         . m aod . m scored nh nkv hd + pos0 1 count . m n_ctx . m attn_scale window )
-        : b _q4 ( lk_matvec_q . m ks ( __lm_geti . m tq_wo L ) ( __lm_geti . m wo L ) . m aod . m tmpd ne qd_ count )
+        : b _q4 ( lk_matvec_q . m ks ( _lm_geti . m tq_wo L ) ( _lm_geti . m wo L ) . m aod . m tmpd ne qd_ count )
         // gemma3 norms the block's OUTPUT as well, before the residual add.
-        : i pan ( __lm_geti . m post_attn_norm L )
+        : i pan ( _lm_geti . m post_attn_norm L )
         : ~ i abuf . m tmpd
         ? >= pan 0 {
             ( lk_rmsnorm . m ks . m tmpd pan . m tn2d ne . m eps count )
@@ -944,14 +944,14 @@ $ `src/tokenizer.nu`
         ( lk_addv . m ks . m xd abuf * ne count )
 
         // ── FFN (SwiGLU for llama/qwen2, GeGLU for gemma) ──
-        ( lk_rmsnorm . m ks . m xd ( __lm_geti . m ffn_norm L ) . m xnd ne . m eps count )
-        : b _q5 ( lk_matvec_q . m ks ( __lm_geti . m tq_gate L ) ( __lm_geti . m w_gate L ) . m xnd . m gd . m n_ff ne count )
-        : b _q6 ( lk_matvec_q . m ks ( __lm_geti . m tq_up L ) ( __lm_geti . m w_up L ) . m xnd . m ud . m n_ff ne count )
+        ( lk_rmsnorm . m ks . m xd ( _lm_geti . m ffn_norm L ) . m xnd ne . m eps count )
+        : b _q5 ( lk_matvec_q . m ks ( _lm_geti . m tq_gate L ) ( _lm_geti . m w_gate L ) . m xnd . m gd . m n_ff ne count )
+        : b _q6 ( lk_matvec_q . m ks ( _lm_geti . m tq_up L ) ( _lm_geti . m w_up L ) . m xnd . m ud . m n_ff ne count )
         ? . m ffn_gelu
         { ( lk_gelumul . m ks . m gd . m ud * . m n_ff count ) }
         { ( lk_silumul . m ks . m gd . m ud * . m n_ff count ) }
-        : b _q7 ( lk_matvec_q . m ks ( __lm_geti . m tq_down L ) ( __lm_geti . m w_down L ) . m gd . m tmpd ne . m n_ff count )
-        : i pfn ( __lm_geti . m post_ffn_norm L )
+        : b _q7 ( lk_matvec_q . m ks ( _lm_geti . m tq_down L ) ( _lm_geti . m w_down L ) . m gd . m tmpd ne . m n_ff count )
+        : i pfn ( _lm_geti . m post_ffn_norm L )
         : ~ i fbuf . m tmpd
         ? >= pfn 0 {
             ( lk_rmsnorm . m ks . m tmpd pfn . m tn2d ne . m eps count )

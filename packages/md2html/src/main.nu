@@ -25,7 +25,7 @@ $ `src/markdown.nu`
     : String out ( string_with_cap + ( string_len body ) 2048 )
     ( string_push_str out `<!doctype html>\n<html lang="en">\n<head>\n<meta charset="utf-8" />\n` )
     ( string_push_str out `<meta name="viewport" content="width=device-width,initial-scale=1" />\n<title>` )
-    ( __html_escape_into title out )
+    ( _html_escape_into title out )
     ( string_push_str out `</title>\n<style>\n` )
     ( string_push_str out `  body{font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;line-height:1.6;` )
     ( string_push_str out `color:#1a1a1a;max-width:46rem;margin:2.5rem auto;padding:0 1.25rem}\n` )
@@ -48,10 +48,10 @@ $ `src/markdown.nu`
 
 @ main → i {
     : ArgParser p ( args_new `md2html` `render Markdown to HTML` )
-    ( args_flag p `full`  70  `emit a complete styled HTML document (not just a fragment)` )  // -F
-    ( args_flag p `help`  104 `show this help` )  // -h
-    ( args_opt  p `file`  102 `FILE`  `read Markdown from FILE instead of stdin` )  // -f
-    ( args_opt  p `title` 116 `TITLE` `document <title> when used with --full (default "Document")` )  // -t
+    ( args_flag p `full` 70 `emit a complete styled HTML document (not just a fragment)` )  // -F
+    ( args_flag p `help` 104 `show this help` )  // -h
+    ( args_opt p `file` 102 `FILE` `read Markdown from FILE instead of stdin` )  // -f
+    ( args_opt p `title` 116 `TITLE` `document <title> when used with --full (default "Document")` )  // -t
 
     : ( Vec String ) argv ( vec_new [String] )
     : i ac ( env_args_count )

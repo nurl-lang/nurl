@@ -260,7 +260,7 @@ $ `stdlib/std/lifeguard.nu`
 // Promote any suspected member whose suspicion has expired to dead. Returns
 // the newly-dead members as BORROWED *PkMember pointers into the table (the
 // table still owns them) — read . m pubkey / . m incarnation, then free only
-// the returned container with __pk_dead_free.
+// the returned container with _pk_dead_free.
 @ pktable_sweep * PkMemberTable t i now_ns → ( Vec s ) {
     : ( Vec s ) dead ( vec_new [s] )
     : i n ( vec_len [s] . t members )
@@ -284,7 +284,7 @@ $ `stdlib/std/lifeguard.nu`
 
 // Free only the container returned by pktable_sweep (members stay owned by
 // the table).
-@ __pk_dead_free ( Vec s ) dead → v { ( vec_free [s] dead ) }
+@ _pk_dead_free ( Vec s ) dead → v { ( vec_free [s] dead ) }
 
 // Round-robin pick an alive member to probe (its pubkey, copied). None if no
 // alive members. Advances the cursor.

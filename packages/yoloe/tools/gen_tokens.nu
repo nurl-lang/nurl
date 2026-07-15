@@ -59,14 +59,14 @@ $ `../src/bpe.nu`
         : s nm ?? ( vec_get [String] names i ) { T s → ( string_data s ) F _ → `` }
         : ( Vec i ) row ( bpe_tokenize tk nm ctx )
         : ~ i k 0
-        ~ < k ctx { ( push_i64_le bytes ( __ig row k ) ) = k + k 1 }
+        ~ < k ctx { ( push_i64_le bytes ( _ig row k ) ) = k + k 1 }
         ( vec_free [i] row )
         = i + i 1
     }
     ?? ( write_file_bytes ( string_data op ) bytes ) {
         T _ → { ( nurl_print `wrote ` ) ( nurl_print ( string_data op ) ) ( nurl_print ` (` )
-                ( nurl_print ( nurl_str_int nn ) ) ( nurl_print ` x ` ) ( nurl_print ( nurl_str_int ctx ) )
-                ( nurl_print ` int64)\n` ) ^ 0 }
+            ( nurl_print ( nurl_str_int nn ) ) ( nurl_print ` x ` ) ( nurl_print ( nurl_str_int ctx ) )
+            ( nurl_print ` int64)\n` ) ^ 0 }
         F _ → { ( nurl_print `write failed\n` ) ^ 1 }
     }
 }

@@ -52,7 +52,7 @@ $ `stdlib/dist/sim.nu`
         : ~ i i 0
         ~ < i 4 {
             ? != i dead_idx {
-                : i peer % ( __sim_rand net ) 4
+                : i peer % ( _sim_rand net ) 4
                 ? != peer i { ( send_gossip net i ( node tables i ) peer now ) } {}
             } {}
             = i + i 1

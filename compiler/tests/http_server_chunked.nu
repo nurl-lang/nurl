@@ -2,7 +2,7 @@
 // a keep-alive connection (stdlib/ext/http_server.nu). Gated behind
 // NURL_NET_TESTS=1 (opens a loopback socket + spawns a server thread).
 //
-// Before the fix, __finish_body only handled Content-Length: a
+// Before the fix, _finish_body only handled Content-Length: a
 // Transfer-Encoding: chunked body was left undrained in the connection
 // carry buffer — the handler saw an EMPTY body, and the leftover bytes
 // were mis-parsed as the next request (a desync / smuggling vector).

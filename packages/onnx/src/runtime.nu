@@ -75,7 +75,7 @@ $ `ops.nu`
 // Install the caller's graph on the engine. The placeholder OGraph that
 // rt_open allocated is freed on the first install; caller graphs are
 // BORROWED (the engine never frees them).
-@ __rt_set_graph * Engine e OGraph g → v {
+@ _rt_set_graph * Engine e OGraph g → v {
     ? . e graph_set {} { ( graph_free . e graph ) }
     = . e graph g
     = . e graph_set T
@@ -791,33 +791,33 @@ $ `ops.nu`
 // tensor shape (e.g. [1,3,416,416]). Returns the output device tensor.
 @ rt_run_shaped * Engine e OGraph g * u input_host ( Vec i ) shape → RTensor {
     ( rt_reset e )
-    ( __rt_set_graph e g )
+    ( _rt_set_graph e g )
     ( rt_load_inits e g )
     : i n ( __prod shape )
     : GpuBuffer ib ( gpu_alloc . e g * n 4 )
     ( rt_own e . ib dptr )
     ( gpu_upload ib input_host )
     ( rt_put e ( string_data . g input_name ) . ib dptr shape )
-    ^ ( __rt_run_nodes e g )
+    ^ ( _rt_run_nodes e g )
 }
 
 // Token run: the single input is an INT64 token matrix [nrow, ncol] already
 // laid out in `tokhost` (8-byte LE). Uploaded as-is for the embedding Gather.
 @ rt_run_tokens * Engine e OGraph g * u tokhost i nrow i ncol → RTensor {
     ( rt_reset e )
-    ( __rt_set_graph e g )
+    ( _rt_set_graph e g )
     ( rt_load_inits e g )
     : GpuBuffer ib ( gpu_alloc . e g * * nrow ncol 8 )
     ( rt_own e . ib dptr )
     ( gpu_upload ib tokhost )
     ( rt_put e ( string_data . g input_name ) . ib dptr ( __shape2 nrow ncol ) )
-    ^ ( __rt_run_nodes e g )
+    ^ ( _rt_run_nodes e g )
 }
 
 // Two-input run (e.g. image + text embeddings for a promptable model).
 @ rt_run_two * Engine e OGraph g s n1 * u h1 ( Vec i ) s1 s n2 * u h2 ( Vec i ) s2 → RTensor {
     ( rt_reset e )
-    ( __rt_set_graph e g )
+    ( _rt_set_graph e g )
     ( rt_load_inits e g )
     : GpuBuffer b1 ( gpu_alloc . e g * ( __prod s1 ) 4 )
     ( rt_own e . b1 dptr )
@@ -825,10 +825,10 @@ $ `ops.nu`
     : GpuBuffer b2 ( gpu_alloc . e g * ( __prod s2 ) 4 )
     ( rt_own e . b2 dptr )
     ( gpu_upload b2 h2 ) ( rt_put e n2 . b2 dptr s2 )
-    ^ ( __rt_run_nodes e g )
+    ^ ( _rt_run_nodes e g )
 }
 
-@ __rt_run_nodes * Engine e OGraph g → RTensor {
+@ _rt_run_nodes * Engine e OGraph g → RTensor {
     : ( Vec ONode ) nodes . g nodes
     : ~ i k 0
     ~ < k ( vec_len [ONode] nodes ) {

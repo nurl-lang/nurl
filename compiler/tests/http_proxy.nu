@@ -4,12 +4,12 @@
 // Coverage:
 //   * proxy_default_opts        — default field values
 //   * proxy_err_name            — every variant renders its tag literally
-//   * __is_hop_by_hop           — RFC 7230 §6.1 set + non-matches
-//   * __build_upstream_url      — slash-collision normalization +
+//   * _is_hop_by_hop           — RFC 7230 §6.1 set + non-matches
+//   * _build_upstream_url      — slash-collision normalization +
 //     query-string suffixing
-//   * __build_request_headers_blob — hop-by-hop + Host + Content-Length
+//   * _build_request_headers_blob — hop-by-hop + Host + Content-Length
 //     are dropped; preserve_host_header keeps Host
-//   * __response_header_dropped — hop-by-hop + Content-Length +
+//   * _response_header_dropped — hop-by-hop + Content-Length +
 //     Content-Encoding stripped; ordinary headers survive
 
 $ `stdlib/ext/http_proxy.nu`
@@ -63,41 +63,41 @@ $ `stdlib/core/vec.nu`
     ( println_s `  e2=` ( proxy_err_name e2 ) )
     ( println_s `  e3=` ( proxy_err_name e3 ) )
 
-    // ── 3. __is_hop_by_hop ───────────────────────────────────────
-    ( nurl_print `── __is_hop_by_hop ──\n` )
-    ( println_b `  connection=` ( __is_hop_by_hop `connection` ) )
-    ( println_b `  keep-alive=` ( __is_hop_by_hop `keep-alive` ) )
-    ( println_b `  proxy-authenticate=` ( __is_hop_by_hop `proxy-authenticate` ) )
-    ( println_b `  proxy-authorization=` ( __is_hop_by_hop `proxy-authorization` ) )
-    ( println_b `  te=` ( __is_hop_by_hop `te` ) )
-    ( println_b `  trailer=` ( __is_hop_by_hop `trailer` ) )
-    ( println_b `  transfer-encoding=` ( __is_hop_by_hop `transfer-encoding` ) )
-    ( println_b `  upgrade=` ( __is_hop_by_hop `upgrade` ) )
-    ( println_b `  authorization=` ( __is_hop_by_hop `authorization` ) )
-    ( println_b `  content-type=` ( __is_hop_by_hop `content-type` ) )
+    // ── 3. _is_hop_by_hop ───────────────────────────────────────
+    ( nurl_print `── _is_hop_by_hop ──\n` )
+    ( println_b `  connection=` ( _is_hop_by_hop `connection` ) )
+    ( println_b `  keep-alive=` ( _is_hop_by_hop `keep-alive` ) )
+    ( println_b `  proxy-authenticate=` ( _is_hop_by_hop `proxy-authenticate` ) )
+    ( println_b `  proxy-authorization=` ( _is_hop_by_hop `proxy-authorization` ) )
+    ( println_b `  te=` ( _is_hop_by_hop `te` ) )
+    ( println_b `  trailer=` ( _is_hop_by_hop `trailer` ) )
+    ( println_b `  transfer-encoding=` ( _is_hop_by_hop `transfer-encoding` ) )
+    ( println_b `  upgrade=` ( _is_hop_by_hop `upgrade` ) )
+    ( println_b `  authorization=` ( _is_hop_by_hop `authorization` ) )
+    ( println_b `  content-type=` ( _is_hop_by_hop `content-type` ) )
 
-    // ── 4. __build_upstream_url ──────────────────────────────────
-    ( nurl_print `── __build_upstream_url ──\n` )
+    // ── 4. _build_upstream_url ──────────────────────────────────
+    ( nurl_print `── _build_upstream_url ──\n` )
     : HttpRequest r1 ( make_req `GET` `/v1/messages` `` )
-    : String u1 ( __build_upstream_url `https://api.example.com` r1 )
+    : String u1 ( _build_upstream_url `https://api.example.com` r1 )
     ( println_s `  no_slash_path=` ( string_data u1 ) )
     ( string_free u1 )
     ( request_free r1 )
 
     : HttpRequest r2 ( make_req `GET` `/v1/messages` `` )
-    : String u2 ( __build_upstream_url `https://api.example.com/` r2 )
+    : String u2 ( _build_upstream_url `https://api.example.com/` r2 )
     ( println_s `  base_slash_path_slash=` ( string_data u2 ) )
     ( string_free u2 )
     ( request_free r2 )
 
     : HttpRequest r3 ( make_req `GET` `v1/messages` `` )
-    : String u3 ( __build_upstream_url `https://api.example.com/` r3 )
+    : String u3 ( _build_upstream_url `https://api.example.com/` r3 )
     ( println_s `  base_slash_no_path_slash=` ( string_data u3 ) )
     ( string_free u3 )
     ( request_free r3 )
 
     : HttpRequest r4 ( make_req `GET` `/search` `q=hello&n=10` )
-    : String u4 ( __build_upstream_url `https://api.example.com` r4 )
+    : String u4 ( _build_upstream_url `https://api.example.com` r4 )
     ( println_s `  with_query=` ( string_data u4 ) )
     ( string_free u4 )
     ( request_free r4 )
@@ -110,19 +110,19 @@ $ `stdlib/core/vec.nu`
     // '/' so the host stays api.example.com and the token lands in the
     // path.
     : HttpRequest r5 ( make_req `GET` `@evil.com/x` `` )
-    : String u5 ( __build_upstream_url `https://api.example.com` r5 )
+    : String u5 ( _build_upstream_url `https://api.example.com` r5 )
     ( println_s `  ssrf_userinfo=` ( string_data u5 ) )
     ( string_free u5 )
     ( request_free r5 )
 
     : HttpRequest r6 ( make_req `GET` `evil.com/x` `` )
-    : String u6 ( __build_upstream_url `https://api.example.com` r6 )
+    : String u6 ( _build_upstream_url `https://api.example.com` r6 )
     ( println_s `  ssrf_hostmerge=` ( string_data u6 ) )
     ( string_free u6 )
     ( request_free r6 )
 
-    // ── 5. __build_request_headers_blob ──────────────────────────
-    ( nurl_print `── __build_request_headers_blob ──\n` )
+    // ── 5. _build_request_headers_blob ──────────────────────────
+    ( nurl_print `── _build_request_headers_blob ──\n` )
     : HttpRequest hr ( make_req `POST` `/v1/messages` `` )
     ( vec_push [Header] . hr headers ( header_new `Authorization` `Bearer xyz` ) )
     ( vec_push [Header] . hr headers ( header_new `Content-Type` `application/json` ) )
@@ -132,7 +132,7 @@ $ `stdlib/core/vec.nu`
     ( vec_push [Header] . hr headers ( header_new `Transfer-Encoding` `chunked` ) )
 
     : ProxyOpts opts1 ( proxy_default_opts )
-    : String b1 ( __build_request_headers_blob hr opts1 )
+    : String b1 ( _build_request_headers_blob hr opts1 )
     ( nurl_print `  default_strip:\n` )
     ( nurl_print ( string_data b1 ) )
     ( nurl_print `  END\n` )
@@ -140,24 +140,24 @@ $ `stdlib/core/vec.nu`
     ( string_free b1 )
 
     : ProxyOpts opts2 @ ProxyOpts { 60000 10000 T T T T }
-    : String b2 ( __build_request_headers_blob hr opts2 )
+    : String b2 ( _build_request_headers_blob hr opts2 )
     ( nurl_print `  preserve_host:\n` )
     ( nurl_print ( string_data b2 ) )
     ( nurl_print `  END\n` )
     ( string_free b2 )
     ( request_free hr )
 
-    // ── 6. __response_header_dropped ─────────────────────────────
-    ( nurl_print `── __response_header_dropped ──\n` )
+    // ── 6. _response_header_dropped ─────────────────────────────
+    ( nurl_print `── _response_header_dropped ──\n` )
     : ProxyOpts opts3 ( proxy_default_opts )
-    ( println_b `  Connection=` ( __response_header_dropped `Connection` opts3 ) )
-    ( println_b `  Keep-Alive=` ( __response_header_dropped `Keep-Alive` opts3 ) )
-    ( println_b `  Transfer-Encoding=` ( __response_header_dropped `Transfer-Encoding` opts3 ) )
-    ( println_b `  Content-Length=` ( __response_header_dropped `Content-Length` opts3 ) )
-    ( println_b `  Content-Encoding=` ( __response_header_dropped `Content-Encoding` opts3 ) )
-    ( println_b `  Set-Cookie=` ( __response_header_dropped `Set-Cookie` opts3 ) )
-    ( println_b `  Content-Type=` ( __response_header_dropped `Content-Type` opts3 ) )
-    ( println_b `  X-Custom=` ( __response_header_dropped `X-Custom` opts3 ) )
+    ( println_b `  Connection=` ( _response_header_dropped `Connection` opts3 ) )
+    ( println_b `  Keep-Alive=` ( _response_header_dropped `Keep-Alive` opts3 ) )
+    ( println_b `  Transfer-Encoding=` ( _response_header_dropped `Transfer-Encoding` opts3 ) )
+    ( println_b `  Content-Length=` ( _response_header_dropped `Content-Length` opts3 ) )
+    ( println_b `  Content-Encoding=` ( _response_header_dropped `Content-Encoding` opts3 ) )
+    ( println_b `  Set-Cookie=` ( _response_header_dropped `Set-Cookie` opts3 ) )
+    ( println_b `  Content-Type=` ( _response_header_dropped `Content-Type` opts3 ) )
+    ( println_b `  X-Custom=` ( _response_header_dropped `X-Custom` opts3 ) )
 
     ( nurl_print `done\n` )
     0

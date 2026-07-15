@@ -531,7 +531,7 @@ $ `stdlib/ext/json.nu`
 // {"thinking":{"type":"enabled","budget_tokens":N}} so Claude runs
 // extended thinking with the given token budget. 0 disables thinking.
 
-@ __claude_build_body_full_ex
+@ _claude_build_body_full_ex
 s model s system_prompt
 ( Vec Json ) messages
 ( Vec Json ) tools
@@ -608,13 +608,13 @@ i thinking_budget → Json {
 }
 
 // Backward-compat shim — same shape as before, no caching, no thinking.
-@ __claude_build_body_full
+@ _claude_build_body_full
 s model s system_prompt
 ( Vec Json ) messages
 ( Vec Json ) tools
 s tool_choice
 i max_tokens → Json {
-    ^ ( __claude_build_body_full_ex
+    ^ ( _claude_build_body_full_ex
     model system_prompt messages tools tool_choice max_tokens
     F F 0 )
 }
@@ -694,7 +694,7 @@ i thinking_budget
     } {}
 
     : Json body
-    ( __claude_build_body_full_ex
+    ( _claude_build_body_full_ex
     model system_prompt messages tools tool_choice max_tokens
     cache_system cache_tools thinking_budget )
     : String body_str ( json_stringify body )
@@ -815,7 +815,7 @@ i thinking_budget
     } {}
 
     : Json body
-    ( __claude_build_body_full_ex
+    ( _claude_build_body_full_ex
     model system_prompt messages tools tool_choice max_tokens
     cache_system cache_tools thinking_budget )
     ( json_obj_set body `stream` ( json_bool T ) )

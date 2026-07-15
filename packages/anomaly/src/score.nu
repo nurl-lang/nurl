@@ -245,7 +245,7 @@ $ `deps/gpukit/src/gpukit.nu`
 // ── Percentile (numpy 'linear' interpolation, for contamination) ──────
 
 // q in [0,1] over an ASCENDING-sorted vector.
-@ __an_percentile ( Vec f ) sorted f q → f {
+@ _an_percentile ( Vec f ) sorted f q → f {
     : i n ( vec_len [f] sorted )
     ? <= n 0 { ^ 0.0 } {}
     : *f dp ( vec_data [f] sorted )
@@ -291,7 +291,7 @@ $ `deps/gpukit/src/gpukit.nu`
             ? > a b { ^ 1 } {}
             ^ 0
         } )
-        = . vm offset ( __an_percentile ss . cfg contamination )
+        = . vm offset ( _an_percentile ss . cfg contamination )
         ( vec_free [f] ss )
     } {}
     ^ vm

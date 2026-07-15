@@ -240,7 +240,7 @@ $ `stdlib/ext/http2_hpack.nu`
     ( vec_push [u] huf # u 144 )
     ( vec_push [u] huf # u 244 )
     ( vec_push [u] huf # u 255 )
-    : !String HpackErr hr ( __hpack_huffman_decode huf 0 12 )
+    : !String HpackErr hr ( _hpack_huffman_decode huf 0 12 )
     ?? hr {
         T s → {
             ( print_label `huffman_www_example` ( string_data s ) )

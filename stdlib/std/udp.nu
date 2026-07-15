@@ -121,7 +121,7 @@ $ `stdlib/std/async_ffi.nu`
     : i ek ( nurl_udp_err_kind raw )
     ? != ek 0 {
         ( nurl_udp_close raw )
-        ^ @ !UdpSocket NetErr { F ( __net_err_of ek ) }
+        ^ @ !UdpSocket NetErr { F ( _net_err_of ek ) }
     } {}
     : s rp # s raw
     : UdpSocket sk @ UdpSocket { rp }
@@ -143,7 +143,7 @@ $ `stdlib/std/async_ffi.nu`
     : i rc ( nurl_udp_connect raw host port )
     ? != rc 0 {
         : i ek ( nurl_udp_err_kind raw )
-        ^ @ !v NetErr { F ( __net_err_of ek ) }
+        ^ @ !v NetErr { F ( _net_err_of ek ) }
     } {}
     ^ @ !v NetErr { T 0 }
 }
@@ -209,7 +209,7 @@ $ `stdlib/std/async_ffi.nu`
     : i rc ( nurl_udp_set_broadcast raw on )
     ? != rc 0 {
         : i ek ( nurl_udp_err_kind raw )
-        ^ @ !v NetErr { F ( __net_err_of ek ) }
+        ^ @ !v NetErr { F ( _net_err_of ek ) }
     } {}
     ^ @ !v NetErr { T 0 }
 }
@@ -222,7 +222,7 @@ $ `stdlib/std/async_ffi.nu`
     : i rc ( nurl_udp_join_group raw group iface )
     ? != rc 0 {
         : i ek ( nurl_udp_err_kind raw )
-        ^ @ !v NetErr { F ( __net_err_of ek ) }
+        ^ @ !v NetErr { F ( _net_err_of ek ) }
     } {}
     ^ @ !v NetErr { T 0 }
 }
@@ -233,7 +233,7 @@ $ `stdlib/std/async_ffi.nu`
     : i rc ( nurl_udp_leave_group raw group iface )
     ? != rc 0 {
         : i ek ( nurl_udp_err_kind raw )
-        ^ @ !v NetErr { F ( __net_err_of ek ) }
+        ^ @ !v NetErr { F ( _net_err_of ek ) }
     } {}
     ^ @ !v NetErr { T 0 }
 }
@@ -244,7 +244,7 @@ $ `stdlib/std/async_ffi.nu`
     : i rc ( nurl_udp_set_multicast_ttl raw ttl )
     ? != rc 0 {
         : i ek ( nurl_udp_err_kind raw )
-        ^ @ !v NetErr { F ( __net_err_of ek ) }
+        ^ @ !v NetErr { F ( _net_err_of ek ) }
     } {}
     ^ @ !v NetErr { T 0 }
 }
@@ -255,7 +255,7 @@ $ `stdlib/std/async_ffi.nu`
     : i rc ( nurl_udp_set_multicast_loop raw on )
     ? != rc 0 {
         : i ek ( nurl_udp_err_kind raw )
-        ^ @ !v NetErr { F ( __net_err_of ek ) }
+        ^ @ !v NetErr { F ( _net_err_of ek ) }
     } {}
     ^ @ !v NetErr { T 0 }
 }
@@ -286,7 +286,7 @@ $ `stdlib/std/async_ffi.nu`
         : i sent ( nurl_udp_send_to raw `` 0 host port )
         ? < sent 0 {
             : i ek ( nurl_udp_err_kind raw )
-            ^ @ !i NetErr { F ( __net_err_of ek ) }
+            ^ @ !i NetErr { F ( _net_err_of ek ) }
         } {}
         ^ @ !i NetErr { T sent }
     } {}
@@ -295,7 +295,7 @@ $ `stdlib/std/async_ffi.nu`
     : i sent ( nurl_udp_send_to raw pbuf n host port )
     ? < sent 0 {
         : i ek ( nurl_udp_err_kind raw )
-        ^ @ !i NetErr { F ( __net_err_of ek ) }
+        ^ @ !i NetErr { F ( _net_err_of ek ) }
     } {}
     ^ @ !i NetErr { T sent }
 }
@@ -308,7 +308,7 @@ $ `stdlib/std/async_ffi.nu`
     : i sent ( nurl_udp_send_to raw text n host port )
     ? < sent 0 {
         : i ek ( nurl_udp_err_kind raw )
-        ^ @ !i NetErr { F ( __net_err_of ek ) }
+        ^ @ !i NetErr { F ( _net_err_of ek ) }
     } {}
     ^ @ !i NetErr { T sent }
 }
@@ -334,7 +334,7 @@ $ `stdlib/std/async_ffi.nu`
     ? < n 0 {
         ( vec_free [u] v )
         : i ek ( nurl_udp_err_kind raw )
-        ^ @ !UdpPacket NetErr { F ( __net_err_of ek ) }
+        ^ @ !UdpPacket NetErr { F ( _net_err_of ek ) }
     } {}
     ( vec_set_len [u] v n )
     : s peer_raw ( nurl_udp_peer_addr raw )
@@ -353,7 +353,7 @@ $ `stdlib/std/async_ffi.nu`
         : i sent ( nurl_udp_send raw `` 0 )
         ? < sent 0 {
             : i ek ( nurl_udp_err_kind raw )
-            ^ @ !i NetErr { F ( __net_err_of ek ) }
+            ^ @ !i NetErr { F ( _net_err_of ek ) }
         } {}
         ^ @ !i NetErr { T sent }
     } {}
@@ -362,7 +362,7 @@ $ `stdlib/std/async_ffi.nu`
     : i sent ( nurl_udp_send raw pbuf n )
     ? < sent 0 {
         : i ek ( nurl_udp_err_kind raw )
-        ^ @ !i NetErr { F ( __net_err_of ek ) }
+        ^ @ !i NetErr { F ( _net_err_of ek ) }
     } {}
     ^ @ !i NetErr { T sent }
 }
@@ -386,7 +386,7 @@ $ `stdlib/std/async_ffi.nu`
     ? < n 0 {
         ( vec_free [u] v )
         : i ek ( nurl_udp_err_kind raw )
-        ^ @ !( Vec u ) NetErr { F ( __net_err_of ek ) }
+        ^ @ !( Vec u ) NetErr { F ( _net_err_of ek ) }
     } {}
     ( vec_set_len [u] v n )
     ^ @ !( Vec u ) NetErr { T v }
@@ -434,7 +434,7 @@ $ `stdlib/std/async_ffi.nu`
             } {}
         } {
             ( vec_free [u] v )
-            ^ @ !UdpPacket NetErr { F ( __net_err_of ek ) }
+            ^ @ !UdpPacket NetErr { F ( _net_err_of ek ) }
         }
     }
     ( vec_free [u] v )
@@ -468,7 +468,7 @@ $ `stdlib/std/async_ffi.nu`
             } {}
         } {
             ( vec_free [u] v )
-            ^ @ !( Vec u ) NetErr { F ( __net_err_of ek ) }
+            ^ @ !( Vec u ) NetErr { F ( _net_err_of ek ) }
         }
     }
     ( vec_free [u] v )
@@ -493,7 +493,7 @@ $ `stdlib/std/async_ffi.nu`
             : i rc ( nurl_reactor_wait_write fd - 0 1 )
             ? < rc 0 { ^ @ !i NetErr { F # NetErr NetTimeout } } {}
         } {
-            ^ @ !i NetErr { F ( __net_err_of ek ) }
+            ^ @ !i NetErr { F ( _net_err_of ek ) }
         }
     }
     ^ @ !i NetErr { F # NetErr NetOther }
@@ -517,7 +517,7 @@ $ `stdlib/std/async_ffi.nu`
             : i rc ( nurl_reactor_wait_write fd - 0 1 )
             ? < rc 0 { ^ @ !i NetErr { F # NetErr NetTimeout } } {}
         } {
-            ^ @ !i NetErr { F ( __net_err_of ek ) }
+            ^ @ !i NetErr { F ( _net_err_of ek ) }
         }
     }
     ^ @ !i NetErr { F # NetErr NetOther }

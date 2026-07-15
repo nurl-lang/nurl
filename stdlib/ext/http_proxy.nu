@@ -128,10 +128,10 @@ $ `stdlib/ext/http_server.nu`
 // ── Hop-by-hop classification ─────────────────────────────────────────
 //
 // `name_lc` is a lowered NUL-terminated raw-`s`; the eight tokens come
-// straight from RFC 7230 §6.1. Compared with the existing `__is_hop_by_hop`
+// straight from RFC 7230 §6.1. Compared with the existing `_is_hop_by_hop`
 // hand-rolled set in middleware code (none today), this central helper
 // makes the policy auditable in one place.
-@ __is_hop_by_hop s name_lc → b {
+@ _is_hop_by_hop s name_lc → b {
     ? != 0 ( nurl_str_eq name_lc `connection` ) { ^ T } {}
     ? != 0 ( nurl_str_eq name_lc `keep-alive` ) { ^ T } {}
     ? != 0 ( nurl_str_eq name_lc `proxy-authenticate` ) { ^ T } {}
@@ -156,7 +156,7 @@ $ `stdlib/ext/http_server.nu`
 // are SSRF — the client picks the upstream host. So we guarantee EXACTLY
 // one `/` between base and path: strip a duplicate when both supply one,
 // and INSERT one when neither does.
-@ __build_upstream_url s base HttpRequest req → String {
+@ _build_upstream_url s base HttpRequest req → String {
     : i bn ( nurl_str_len base )
     : i pn ( string_len . req path )
     : i qn ( string_len . req query )
@@ -188,7 +188,7 @@ $ `stdlib/ext/http_server.nu`
 // Build a libcurl-style headers blob ("Name: Value\r\n…") from the
 // request's headers, applying the request-side filter rules described
 // in the module-header policy block. Caller frees the returned String.
-@ __build_request_headers_blob HttpRequest req ProxyOpts opts → String {
+@ _build_request_headers_blob HttpRequest req ProxyOpts opts → String {
     : String blob ( string_new )
     : i n ( vec_len [Header] . req headers )
     : *Header data ( vec_data [Header] . req headers )
@@ -198,7 +198,7 @@ $ `stdlib/ext/http_server.nu`
         : String name_lc ( string_to_lower . h name )
         : s nm_lc ( string_data name_lc )
         : ~ b drop F
-        ? & . opts strip_hop_by_hop ( __is_hop_by_hop nm_lc ) { = drop T } {}
+        ? & . opts strip_hop_by_hop ( _is_hop_by_hop nm_lc ) { = drop T } {}
         ? & ! . opts preserve_host_header != 0 ( nurl_str_eq nm_lc `host` ) {
             = drop T
         } {}
@@ -218,14 +218,14 @@ $ `stdlib/ext/http_server.nu`
 // Decide whether an upstream-response header should ride back to the
 // downstream client. Inputs are NUL-terminated raw-`s` (the runtime's
 // view) so we lower into a temporary String, compare, and free it.
-@ __response_header_dropped s name ProxyOpts opts → b {
+@ _response_header_dropped s name ProxyOpts opts → b {
     : i nl ( nurl_str_len name )
     ? <= nl 0 { ^ T } {}
     : String name_s ( string_from name )
     : String lc ( string_to_lower name_s )
     : s lcr ( string_data lc )
     : ~ b drop F
-    ? & . opts strip_hop_by_hop ( __is_hop_by_hop lcr ) { = drop T } {}
+    ? & . opts strip_hop_by_hop ( _is_hop_by_hop lcr ) { = drop T } {}
     ? & . opts strip_content_length != 0 ( nurl_str_eq lcr `content-length` ) {
         = drop T
     } {}
@@ -258,7 +258,7 @@ $ `stdlib/ext/http_server.nu`
 }
 
 @ proxy_stream_to_conn_with TcpConn conn HttpRequest req s upstream_url ProxyOpts opts → !v ProxyErr {
-    : String headers_blob ( __build_request_headers_blob req opts )
+    : String headers_blob ( _build_request_headers_blob req opts )
 
     // The request body is a length-carrying ( Vec u ); ship it through
     // the binary-safe stream opener so embedded NUL bytes (binary
@@ -289,7 +289,7 @@ $ `stdlib/ext/http_server.nu`
             ~ < k hcount {
                 : s name ( http_stream_header_name st k )
                 : s value ( http_stream_header_value st k )
-                ? ! ( __response_header_dropped name opts ) {
+                ? ! ( _response_header_dropped name opts ) {
                     ( vec_push [Header] hs ( header_new name value ) )
                 } {}
                 = k + k 1
@@ -382,7 +382,7 @@ $ `stdlib/ext/http_server.nu`
                 // client can't pin us forever.
                 ( tcp_set_timeout conn 30000 )
                 // One-shot connection (no keep-alive on this path) but
-                // __read_request_head + __finish_body still take a carry
+                // _read_request_head + _finish_body still take a carry
                 // Vec[u] — pipelining-correct head/body framing applies
                 // regardless of whether we serve more than one request.
                 // Limits: proxy uses the stdlib defaults; per-request
@@ -391,13 +391,13 @@ $ `stdlib/ext/http_server.nu`
                 // already bounds).
                 : ( Vec u ) carry ( vec_with_cap [u] 4096 )
                 : HttpLimits lim ( http_default_limits )
-                : !ParsedHeadOk HttpReqErr ph ( __read_request_head conn carry lim )
+                : !ParsedHeadOk HttpReqErr ph ( _read_request_head conn carry lim )
                 ?? ph {
                     T pho → {
                         : HttpRequest req . pho head
-                        : b body_ok ( __finish_body conn req carry . lim body_default_max )
+                        : b body_ok ( _finish_body conn req carry . lim body_default_max )
                         ? body_ok {
-                            : String url ( __build_upstream_url upstream_base req )
+                            : String url ( _build_upstream_url upstream_base req )
                             : !v ProxyErr pr ( proxy_stream_to_conn_with conn req
                             ( string_data url ) opts )
                             ( string_free url )
@@ -421,7 +421,7 @@ $ `stdlib/ext/http_server.nu`
                         // 4xx response helps developers debugging through curl.
                         : s nm ( http_req_err_name e )
                         ? != 0 ( nurl_str_eq nm `HttpReqIo` ) {} {
-                            : HttpResponse er ( __parse_err_response e )
+                            : HttpResponse er ( _parse_err_response e )
                             ( response_set_header er `Connection` `close` )
                             : ( Vec u ) wire ( response_serialize er )
                             : !v NetErr _wr ( tcp_write_all conn wire )

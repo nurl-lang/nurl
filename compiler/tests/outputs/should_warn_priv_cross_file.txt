@@ -1,0 +1,8 @@
+COMPILE OK
+WARNINGS
+compiler/tests/should_warn_priv_cross_file.nu:11:11: warning: '__only_here' is file-private (defined in compiler/tests/should_warn_priv_cross_file_mod.nu); cross-file use of a '__' function is deprecated — rename it with ONE underscore ('_name') if it is meant to be shared
+    ^ - ( __only_here 3 ) 30
+          ^
+LINK OK
+EXIT 0
+OUTPUT

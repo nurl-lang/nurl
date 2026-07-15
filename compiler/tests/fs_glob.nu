@@ -72,7 +72,7 @@ $ `stdlib/std/cmp.nu`
 
 // join base+name, write_file, free the joined path (leak-clean)
 @ wfj s base s name s content → v {
-    : String p ( __glob_join base name )
+    : String p ( _glob_join base name )
     : !v IoErr r ( write_file ( string_data p ) content )
     ?? r { T _ → {} F _ → ( nurl_print `write FAILED\n` ) }
     ( string_free p )
@@ -80,7 +80,7 @@ $ `stdlib/std/cmp.nu`
 
 // join base+name, dir_create, free
 @ mkd s base s name → v {
-    : String p ( __glob_join base name )
+    : String p ( _glob_join base name )
     : !v IoErr r ( dir_create ( string_data p ) )
     ?? r { T _ → {} F _ → {} }
     ( string_free p )
@@ -88,7 +88,7 @@ $ `stdlib/std/cmp.nu`
 
 // join root+pat, run a glob report, free the joined pattern
 @ globj s label s root s pat → v {
-    : String p ( __glob_join root pat )
+    : String p ( _glob_join root pat )
     ( show_glob label root ( string_data p ) )
     ( string_free p )
 }
@@ -130,8 +130,8 @@ $ `stdlib/std/cmp.nu`
     // build tree:
     //   root/a.nu root/b.nu root/c.txt root/.hidden
     //   root/src/main.nu root/src/util.nu root/src/sub/deep.nu
-    : String src ( __glob_join root `src` )
-    : String sub ( __glob_join ( string_data src ) `sub` )
+    : String src ( _glob_join root `src` )
+    : String sub ( _glob_join ( string_data src ) `sub` )
     ( mkd root `src` )
     ( mkd ( string_data src ) `sub` )
     ( wfj root `a.nu` `a` )
@@ -155,15 +155,15 @@ $ `stdlib/std/cmp.nu`
     ( globj `nomatch` root `*.md` )
 
     // ── B6 rename + copy ──
-    : String af ( __glob_join root `a.nu` )
-    : String renamed ( __glob_join root `renamed.nu` )
+    : String af ( _glob_join root `a.nu` )
+    : String renamed ( _glob_join root `renamed.nu` )
     : !v IoErr rr ( fs_rename ( string_data af ) ( string_data renamed ) )
     ( nurl_print `rename_ok=` ) ?? rr { T _ → ( nurl_print `T` ) F _ → ( nurl_print `F` ) }
     ( nurl_print ` a_gone=` ) ( nurl_print ? ( file_exists ( string_data af ) ) `F` `T` )
     ( nurl_print ` renamed_exists=` ) ( nurl_print ? ( file_exists ( string_data renamed ) ) `T` `F` ) ( nurl_print `\n` )
 
-    : String csrc ( __glob_join root `c.txt` )
-    : String cf ( __glob_join root `copy.txt` )
+    : String csrc ( _glob_join root `c.txt` )
+    : String cf ( _glob_join root `copy.txt` )
     : !v IoErr cr ( fs_copy_file ( string_data csrc ) ( string_data cf ) )
     ( nurl_print `copy_ok=` ) ?? cr { T _ → ( nurl_print `T` ) F _ → ( nurl_print `F` ) }
     : !String IoErr cc ( read_file ( string_data cf ) )

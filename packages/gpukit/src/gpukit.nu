@@ -46,9 +46,9 @@ $ `deps/gpu/src/gpu.nu`
 //   kind 0 = input buffer   1 = output buffer   2 = scalar
 : GkArg {
     i kind
-    *u host      // host data pointer for a buffer binding
-    i bytes      // buffer byte size
-    i argval     // pre-encoded scalar arg (gpu_arg_*) for a scalar binding
+    * u host  // host data pointer for a buffer binding
+    i bytes  // buffer byte size
+    i argval  // pre-encoded scalar arg (gpu_arg_*) for a scalar binding
 }
 
 : GkKernelEntry {
@@ -77,15 +77,15 @@ $ `deps/gpu/src/gpu.nu`
     ^ kit
 }
 
-@ gk_ok *GpuKit kit → b { ^ . kit ok }
+@ gk_ok * GpuKit kit → b { ^ . kit ok }
 
 // "cuda" or "cpu".
-@ gk_backend *GpuKit kit → s { ? ( gpu_is_cpu ) { ^ `cpu` } { ^ `cuda` } }
+@ gk_backend * GpuKit kit → s { ? ( gpu_is_cpu ) { ^ `cpu` } { ^ `cuda` } }
 
-@ gk_device_name *GpuKit kit → s { ^ ( gpu_name . kit gpu ) }
+@ gk_device_name * GpuKit kit → s { ^ ( gpu_name . kit gpu ) }
 
 // Release every cached kernel, close the device, and free the kit.
-@ gk_close *GpuKit kit → v {
+@ gk_close * GpuKit kit → v {
     : i n ( vec_len [GkKernelEntry] . kit cache )
     : ~ i k 0
     ~ < k n {
@@ -115,6 +115,7 @@ $ `deps/gpu/src/gpu.nu`
     : i by * ( vec_len [f] v ) 8
     ^ @ GkArg { 0 h by 0 }
 }
+
 @ gk_in_i ( Vec i ) v → GkArg {
     : *u h # *u ( vec_data [i] v )
     : i by * ( vec_len [i] v ) 8
@@ -126,6 +127,7 @@ $ `deps/gpu/src/gpu.nu`
     : i by * ( vec_len [f] v ) 8
     ^ @ GkArg { 1 h by 0 }
 }
+
 @ gk_out_i ( Vec i ) v → GkArg {
     : *u h # *u ( vec_data [i] v )
     : i by * ( vec_len [i] v ) 8
@@ -133,17 +135,20 @@ $ `deps/gpu/src/gpu.nu`
 }
 // Raw buffers, for element layouts other than f64/i64 (e.g. a packed float32
 // host buffer): pass the host pointer and byte size directly.
-@ gk_buf_in *u host i bytes → GkArg { ^ @ GkArg { 0 host bytes 0 } }
-@ gk_buf_out *u host i bytes → GkArg { ^ @ GkArg { 1 host bytes 0 } }
+@ gk_buf_in * u host i bytes → GkArg { ^ @ GkArg { 0 host bytes 0 } }
+
+@ gk_buf_out * u host i bytes → GkArg { ^ @ GkArg { 1 host bytes 0 } }
 
 @ gk_i64 i v → GkArg {
     : *u nullp # *u 0
     ^ @ GkArg { 2 nullp 0 ( gpu_arg_i64 v ) }
 }
+
 @ gk_i32 i v → GkArg {
     : *u nullp # *u 0
     ^ @ GkArg { 2 nullp 0 ( gpu_arg_i32 v ) }
 }
+
 @ gk_f32 f v → GkArg {
     : *u nullp # *u 0
     ^ @ GkArg { 2 nullp 0 ( gpu_arg_f32 v ) }
@@ -154,7 +159,7 @@ $ `deps/gpu/src/gpu.nu`
 // Compile `src` (entry `name`) once per kit; subsequent calls with the same
 // `name` reuse the cached kernel. A failed compile returns a not-ok kernel
 // and is not cached (so a fixed source can be retried).
-@ __gk_get_kernel *GpuKit kit s src s name → GpuKernel {
+@ _gk_get_kernel * GpuKit kit s src s name → GpuKernel {
     : i n ( vec_len [GkKernelEntry] . kit cache )
     : ~ i k 0
     ~ < k n {
@@ -176,9 +181,9 @@ $ `deps/gpu/src/gpu.nu`
 // Warm the cache: compile `src` (entry `name`) into the kit now and report
 // whether it succeeded, so a long-lived caller can detect a bad kernel at
 // setup instead of on the first launch.
-@ gk_compile *GpuKit kit s src s name → b {
+@ gk_compile * GpuKit kit s src s name → b {
     ? ( gk_ok kit ) {} { ^ F }
-    ^ ( gpu_kernel_ok ( __gk_get_kernel kit src name ) )
+    ^ ( gpu_kernel_ok ( _gk_get_kernel kit src name ) )
 }
 
 // ── The workhorse ─────────────────────────────────────────────────────
@@ -186,15 +191,15 @@ $ `deps/gpu/src/gpu.nu`
 // Compile-cached, marshal, launch, sync, download, free. `call` lists the
 // kernel's arguments in declaration order (buffers and scalars interleaved
 // exactly as the kernel signature expects). Returns F on any device error.
-@ gk_run *GpuKit kit s src s name i grid i block ( Vec GkArg ) call → b {
+@ gk_run * GpuKit kit s src s name i grid i block ( Vec GkArg ) call → b {
     ? ( gk_ok kit ) {} { ^ F }
-    : GpuKernel kn ( __gk_get_kernel kit src name )
+    : GpuKernel kn ( _gk_get_kernel kit src name )
     ? ( gpu_kernel_ok kn ) {} { ^ F }
 
     : i nc ( vec_len [GkArg] call )
     : ( Vec i ) args ( vec_new [i] )
     : ( Vec GpuBuffer ) bufs ( vec_new [GpuBuffer] )
-    : ( Vec i ) buf_arg ( vec_new [i] )     // call-index that each buffer came from
+    : ( Vec i ) buf_arg ( vec_new [i] )  // call-index that each buffer came from
     : ~ b ok T
 
     : ~ i k 0

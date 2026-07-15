@@ -62,11 +62,11 @@ $ `src/kernels.nu`
     ( nurl_eprintln ( gk_device_name kit ) )
 
     : i N 1000
-    : ( Vec f ) a ( __seq_f N 1.0 )      // 1..1000
-    : ( Vec f ) b ( __seq_f N 3.0 )      // 3..1002
+    : ( Vec f ) a ( __seq_f N 1.0 )  // 1..1000
+    : ( Vec f ) b ( __seq_f N 3.0 )  // 3..1002
 
     // elementwise add
-    : ( Vec f ) out ( __gk_zeros N )
+    : ( Vec f ) out ( _gk_zeros N )
     : ( Vec f ) want ( vec_new [f] )
     : ~ i k 0
     ~ < k N {
@@ -116,7 +116,7 @@ $ `src/kernels.nu`
     : i Nn 2
     : ( Vec f ) ma ( __seq_f * M K 1.0 )
     : ( Vec f ) mb ( __seq_f * K Nn 2.0 )
-    : ( Vec f ) mc ( __gk_zeros * M Nn )
+    : ( Vec f ) mc ( _gk_zeros * M Nn )
     ( __ck `matmul ran` ( gk_matmul_f kit mc ma mb M K Nn ) )
     : ( Vec f ) hm ( __host_matmul ma mb M K Nn )
     ( __ck `matmul == host` ( __eq_vec mc hm ) )

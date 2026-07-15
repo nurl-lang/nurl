@@ -37,7 +37,7 @@ $ `tensor.nu`
     ? == dtype TE_F32 {} { ^ }
     : i n ( vec_len [f] v )
     : ~ i k 0
-    ~ < k n { ( vec_set [f] v k ( __t_round32 ( __tf v k ) ) ) = k + k 1 }
+    ~ < k n { ( vec_set [f] v k ( _t_round32 ( _tf v k ) ) ) = k + k 1 }
 }
 
 @ __t_result_dtype Tensor a Tensor b → i {
@@ -51,13 +51,13 @@ $ `tensor.nu`
     : i na ( vec_len [i] a )
     : i nb ( vec_len [i] b )
     : i nd ? > na nb { na } { nb }
-    : ( Vec i ) out ( __ivec_t nd 1 )
+    : ( Vec i ) out ( _ivec_t nd 1 )
     : ~ i d 0
     ~ < d nd {
         : i ia - - na 1 d
         : i ib - - nb 1 d
-        : i da ? >= ia 0 { ( __ti a ia ) } { 1 }
-        : i db ? >= ib 0 { ( __ti b ib ) } { 1 }
+        : i da ? >= ia 0 { ( _ti a ia ) } { 1 }
+        : i db ? >= ib 0 { ( _ti b ib ) } { 1 }
         : i od - - nd 1 d
         ? | == da db | == da 1 == db 1 {
             ( vec_set [i] out od ? > da db { da } { db } )
@@ -73,12 +73,12 @@ $ `tensor.nu`
 // Effective strides of `shape` aligned into `nd` output dims (0 where broadcast).
 @ __t_eff_strides ( Vec i ) shape i nd → ( Vec i ) {
     : i n ( vec_len [i] shape )
-    : ( Vec i ) base ( __t_strides shape )
-    : ( Vec i ) eff ( __ivec_t nd 0 )
+    : ( Vec i ) base ( _t_strides shape )
+    : ( Vec i ) eff ( _ivec_t nd 0 )
     : ~ i d 0
     ~ < d nd {
         : i j - d - nd n
-        ? & >= j 0 > ( __ti shape j ) 1 { ( vec_set [i] eff d ( __ti base j ) ) } {}
+        ? & >= j 0 > ( _ti shape j ) 1 { ( vec_set [i] eff d ( _ti base j ) ) } {}
         = d + d 1
     }
     ( vec_free [i] base )
@@ -99,10 +99,10 @@ $ `tensor.nu`
     ?? ( __t_bshape . a shape . b shape ) {
         T oshape → {
             : i nd ( vec_len [i] oshape )
-            : ( Vec i ) ost ( __t_strides oshape )
+            : ( Vec i ) ost ( _t_strides oshape )
             : ( Vec i ) ae ( __t_eff_strides . a shape nd )
             : ( Vec i ) be ( __t_eff_strides . b shape nd )
-            : i total ( __t_prod oshape )
+            : i total ( _t_prod oshape )
             : i rdt ( __t_result_dtype a b )
             : ( Vec f ) out ( vec_with_cap [f] ? > total 0 { total } { 1 } )
             : ~ i i 0
@@ -112,15 +112,15 @@ $ `tensor.nu`
                 : ~ i bo 0
                 : ~ i d 0
                 ~ < d nd {
-                    : i sdim ( __ti ost d )
+                    : i sdim ( _ti ost d )
                     : i coord ? > sdim 0 { / rem sdim } { 0 }
                     = rem ? > sdim 0 { % rem sdim } { rem }
-                    = ao + ao * coord ( __ti ae d )
-                    = bo + bo * coord ( __ti be d )
+                    = ao + ao * coord ( _ti ae d )
+                    = bo + bo * coord ( _ti be d )
                     = d + d 1
                 }
-                : f r ( __apply op ( __tf . a data ao ) ( __tf . b data bo ) )
-                ( vec_push [f] out ? == rdt TE_F32 { ( __t_round32 r ) } { r } )
+                : f r ( __apply op ( _tf . a data ao ) ( _tf . b data bo ) )
+                ( vec_push [f] out ? == rdt TE_F32 { ( _t_round32 r ) } { r } )
                 = i + i 1
             }
             ( vec_free [i] ost ) ( vec_free [i] ae ) ( vec_free [i] be )
@@ -151,11 +151,11 @@ $ `tensor.nu`
     : ( Vec f ) out ( vec_with_cap [f] ? > n 0 { n } { 1 } )
     : ~ i k 0
     ~ < k n {
-        : f r ( __apply op ( __tf . t data k ) s )
-        ( vec_push [f] out ? == . t dtype TE_F32 { ( __t_round32 r ) } { r } )
+        : f r ( __apply op ( _tf . t data k ) s )
+        ( vec_push [f] out ? == . t dtype TE_F32 { ( _t_round32 r ) } { r } )
         = k + k 1
     }
-    ^ @ Tensor { . t dtype ( __shape_copy . t shape ) out }
+    ^ @ Tensor { . t dtype ( _shape_copy . t shape ) out }
 }
 
 @ tensor_adds Tensor t f s → Tensor { ^ ( __t_scalar t s 0 ) }
@@ -185,11 +185,11 @@ $ `tensor.nu`
     : ( Vec f ) out ( vec_with_cap [f] ? > n 0 { n } { 1 } )
     : ~ i k 0
     ~ < k n {
-        : f r ( __umap op ( __tf . t data k ) )
-        ( vec_push [f] out ? == . t dtype TE_F32 { ( __t_round32 r ) } { r } )
+        : f r ( __umap op ( _tf . t data k ) )
+        ( vec_push [f] out ? == . t dtype TE_F32 { ( _t_round32 r ) } { r } )
         = k + k 1
     }
-    ^ @ Tensor { . t dtype ( __shape_copy . t shape ) out }
+    ^ @ Tensor { . t dtype ( _shape_copy . t shape ) out }
 }
 
 @ tensor_neg Tensor t → Tensor { ^ ( __t_unary t 0 ) }
@@ -217,7 +217,7 @@ $ `tensor.nu`
     : i N ( tensor_dim b 1 )
     ? == K ( tensor_dim b 0 ) {} { ^ @ ?Tensor { F } }
     : i rdt ( __t_result_dtype a b )
-    : ( Vec f ) c ( __fvec_t * M N 0.0 )
+    : ( Vec f ) c ( _fvec_t * M N 0.0 )
     : ~ b done F
     ? >= * * M N K 100000 {
         ? ( __t_gpu_ready ) {
@@ -231,7 +231,7 @@ $ `tensor.nu`
             ~ < j N {
                 : ~ f s 0.0
                 : ~ i p 0
-                ~ < p K { = s + s * ( __tf . a data + * i K p ) ( __tf . b data + * p N j ) = p + p 1 }
+                ~ < p K { = s + s * ( _tf . a data + * i K p ) ( _tf . b data + * p N j ) = p + p 1 }
                 ( vec_set [f] c + * i N j s )
                 = j + j 1
             }
@@ -239,7 +239,7 @@ $ `tensor.nu`
         }
     }
     ( __round_vec c rdt )
-    : ( Vec i ) shp ( __ivec_t 2 0 )
+    : ( Vec i ) shp ( _ivec_t 2 0 )
     ( vec_set [i] shp 0 M ) ( vec_set [i] shp 1 N )
     ^ @ ?Tensor { T @ Tensor { rdt shp c } }
 }
@@ -250,14 +250,14 @@ $ `tensor.nu`
     ? == ( tensor_ndim t ) 2 {} { ^ @ ?Tensor { F } }
     : i M ( tensor_dim t 0 )
     : i N ( tensor_dim t 1 )
-    : ( Vec f ) d ( __fvec_t * M N 0.0 )
+    : ( Vec f ) d ( _fvec_t * M N 0.0 )
     : ~ i i 0
     ~ < i M {
         : ~ i j 0
-        ~ < j N { ( vec_set [f] d + * j M i ( __tf . t data + * i N j ) ) = j + j 1 }
+        ~ < j N { ( vec_set [f] d + * j M i ( _tf . t data + * i N j ) ) = j + j 1 }
         = i + i 1
     }
-    : ( Vec i ) shp ( __ivec_t 2 0 )
+    : ( Vec i ) shp ( _ivec_t 2 0 )
     ( vec_set [i] shp 0 N ) ( vec_set [i] shp 1 M )
     ^ @ ?Tensor { T @ Tensor { . t dtype shp d } }
 }
@@ -266,17 +266,17 @@ $ `tensor.nu`
 @ tensor_permute Tensor t ( Vec i ) perm → ?Tensor {
     : i nd ( tensor_ndim t )
     ? == ( vec_len [i] perm ) nd {} { ^ @ ?Tensor { F } }
-    : ( Vec i ) ist ( __t_strides . t shape )
-    : ( Vec i ) oshape ( __ivec_t nd 0 )
-    : ( Vec i ) ostr_in ( __ivec_t nd 0 )  // input stride for each output axis
+    : ( Vec i ) ist ( _t_strides . t shape )
+    : ( Vec i ) oshape ( _ivec_t nd 0 )
+    : ( Vec i ) ostr_in ( _ivec_t nd 0 )  // input stride for each output axis
     : ~ i d 0
     ~ < d nd {
-        : i src ( __ti perm d )
-        ( vec_set [i] oshape d ( __ti . t shape src ) )
-        ( vec_set [i] ostr_in d ( __ti ist src ) )
+        : i src ( _ti perm d )
+        ( vec_set [i] oshape d ( _ti . t shape src ) )
+        ( vec_set [i] ostr_in d ( _ti ist src ) )
         = d + d 1
     }
-    : ( Vec i ) ost ( __t_strides oshape )
+    : ( Vec i ) ost ( _t_strides oshape )
     : i total ( tensor_size t )
     : ( Vec f ) out ( vec_with_cap [f] ? > total 0 { total } { 1 } )
     : ~ i i 0
@@ -285,13 +285,13 @@ $ `tensor.nu`
         : ~ i ino 0
         : ~ i d2 0
         ~ < d2 nd {
-            : i sd ( __ti ost d2 )
+            : i sd ( _ti ost d2 )
             : i coord ? > sd 0 { / rem sd } { 0 }
             = rem ? > sd 0 { % rem sd } { rem }
-            = ino + ino * coord ( __ti ostr_in d2 )
+            = ino + ino * coord ( _ti ostr_in d2 )
             = d2 + d2 1
         }
-        ( vec_push [f] out ( __tf . t data ino ) )
+        ( vec_push [f] out ( _tf . t data ino ) )
         = i + i 1
     }
     ( vec_free [i] ist ) ( vec_free [i] ostr_in ) ( vec_free [i] ost )
@@ -320,24 +320,24 @@ $ `tensor.nu`
     : i n ( tensor_size t )
     : ~ f acc ( __rinit op )
     : ~ i k 0
-    ~ < k n { = acc ( __rstep op acc ( __tf . t data k ) ) = k + k 1 }
-    : ( Vec f ) d ( __fvec_t 1 acc )
-    ^ @ Tensor { . t dtype ( __ivec_t 0 0 ) d }
+    ~ < k n { = acc ( __rstep op acc ( _tf . t data k ) ) = k + k 1 }
+    : ( Vec f ) d ( _fvec_t 1 acc )
+    ^ @ Tensor { . t dtype ( _ivec_t 0 0 ) d }
 }
 
 @ __reduce_axis Tensor t i axis i op b keepdim → Tensor {
     : i nd ( tensor_ndim t )
-    : ( Vec i ) ist ( __t_strides . t shape )
+    : ( Vec i ) ist ( _t_strides . t shape )
     // output shape
     : ( Vec i ) oshape ( vec_new [i] )
     : ~ i d 0
     ~ < d nd {
-        ? == d axis { ? keepdim { ( vec_push [i] oshape 1 ) } {} } { ( vec_push [i] oshape ( __ti . t shape d ) ) }
+        ? == d axis { ? keepdim { ( vec_push [i] oshape 1 ) } {} } { ( vec_push [i] oshape ( _ti . t shape d ) ) }
         = d + d 1
     }
-    : i outn ( __t_prod oshape )
-    : ( Vec f ) out ( __fvec_t outn ( __rinit op ) )
-    : ( Vec i ) ost ( __t_strides oshape )
+    : i outn ( _t_prod oshape )
+    : ( Vec f ) out ( _fvec_t outn ( __rinit op ) )
+    : ( Vec i ) ost ( _t_strides oshape )
     : i total ( tensor_size t )
     : ~ i i 0
     ~ < i total {
@@ -347,18 +347,18 @@ $ `tensor.nu`
         : ~ i od 0
         : ~ i d2 0
         ~ < d2 nd {
-            : i sd ( __ti ist d2 )
+            : i sd ( _ti ist d2 )
             : i coord ? > sd 0 { / rem sd } { 0 }
             = rem ? > sd 0 { % rem sd } { rem }
             ? == d2 axis {
                 ? keepdim { = od + od 1 } {}
             } {
-                = oo + oo * coord ( __ti ost od )
+                = oo + oo * coord ( _ti ost od )
                 = od + od 1
             }
             = d2 + d2 1
         }
-        ( vec_set [f] out oo ( __rstep op ( __tf out oo ) ( __tf . t data i ) ) )
+        ( vec_set [f] out oo ( __rstep op ( _tf out oo ) ( _tf . t data i ) ) )
         = i + i 1
     }
     ( vec_free [i] ist ) ( vec_free [i] ost )
@@ -405,12 +405,12 @@ $ `tensor.nu`
 @ __t_batch_eff ( Vec i ) shape i ndb → ( Vec i ) {
     : i n ( vec_len [i] shape )
     : i nbatch - n 2
-    : ( Vec i ) full ( __t_strides shape )
-    : ( Vec i ) eff ( __ivec_t ndb 0 )
+    : ( Vec i ) full ( _t_strides shape )
+    : ( Vec i ) eff ( _ivec_t ndb 0 )
     : ~ i d 0
     ~ < d ndb {
         : i j - d - ndb nbatch
-        ? & >= j 0 > ( __ti shape j ) 1 { ( vec_set [i] eff d ( __ti full j ) ) } {}
+        ? & >= j 0 > ( _ti shape j ) 1 { ( vec_set [i] eff d ( _ti full j ) ) } {}
         = d + d 1
     }
     ( vec_free [i] full )
@@ -420,7 +420,7 @@ $ `tensor.nu`
 @ __t_take_head ( Vec i ) shape i cnt → ( Vec i ) {
     : ( Vec i ) o ( vec_with_cap [i] ? > cnt 0 { cnt } { 1 } )
     : ~ i k 0
-    ~ < k cnt { ( vec_push [i] o ( __ti shape k ) ) = k + k 1 }
+    ~ < k cnt { ( vec_push [i] o ( _ti shape k ) ) = k + k 1 }
     ^ o
 }
 
@@ -429,10 +429,10 @@ $ `tensor.nu`
     : i na ( tensor_ndim a )
     : i nb ( tensor_ndim b )
     ? & >= na 2 >= nb 2 {} { ^ @ ?Tensor { F } }
-    : i M ( __ti . a shape - na 2 )
-    : i K ( __ti . a shape - na 1 )
-    : i N ( __ti . b shape - nb 1 )
-    ? == K ( __ti . b shape - nb 2 ) {} { ^ @ ?Tensor { F } }
+    : i M ( _ti . a shape - na 2 )
+    : i K ( _ti . a shape - na 1 )
+    : i N ( _ti . b shape - nb 1 )
+    ? == K ( _ti . b shape - nb 2 ) {} { ^ @ ?Tensor { F } }
     : ( Vec i ) ba ( __t_take_head . a shape - na 2 )
     : ( Vec i ) bb ( __t_take_head . b shape - nb 2 )
     : ?( Vec i ) bso ( __t_bshape ba bb )
@@ -440,15 +440,15 @@ $ `tensor.nu`
     ?? bso {
         T bshape → {
             : i ndb ( vec_len [i] bshape )
-            : i nbatch ( __t_prod bshape )
-            : ( Vec i ) bst ( __t_strides bshape )
+            : i nbatch ( _t_prod bshape )
+            : ( Vec i ) bst ( _t_strides bshape )
             : ( Vec i ) aeff ( __t_batch_eff . a shape ndb )
             : ( Vec i ) beff ( __t_batch_eff . b shape ndb )
             : i mk * M K
             : i kn * K N
             : i mn * M N
             : i rdt ( __t_result_dtype a b )
-            : ( Vec f ) out ( __fvec_t * nbatch mn 0.0 )
+            : ( Vec f ) out ( _fvec_t * nbatch mn 0.0 )
             : ~ i bi 0
             ~ < bi nbatch {
                 // batch offsets into a and b
@@ -457,11 +457,11 @@ $ `tensor.nu`
                 : ~ i boff 0
                 : ~ i d 0
                 ~ < d ndb {
-                    : i sd ( __ti bst d )
+                    : i sd ( _ti bst d )
                     : i c ? > sd 0 { / rem sd } { 0 }
                     = rem ? > sd 0 { % rem sd } { rem }
-                    = aoff + aoff * c ( __ti aeff d )
-                    = boff + boff * c ( __ti beff d )
+                    = aoff + aoff * c ( _ti aeff d )
+                    = boff + boff * c ( _ti beff d )
                     = d + d 1
                 }
                 : i ooff * bi mn
@@ -471,8 +471,8 @@ $ `tensor.nu`
                     ~ < cc N {
                         : ~ f s 0.0
                         : ~ i p 0
-                        ~ < p K { = s + s * ( __tf . a data + aoff + * r K p ) ( __tf . b data + boff + * p N cc ) = p + p 1 }
-                        ( vec_set [f] out + ooff + * r N cc ? == rdt TE_F32 { ( __t_round32 s ) } { s } )
+                        ~ < p K { = s + s * ( _tf . a data + aoff + * r K p ) ( _tf . b data + boff + * p N cc ) = p + p 1 }
+                        ( vec_set [f] out + ooff + * r N cc ? == rdt TE_F32 { ( _t_round32 s ) } { s } )
                         = cc + cc 1
                     }
                     = r + r 1
@@ -482,7 +482,7 @@ $ `tensor.nu`
             // out shape = bshape ++ [M, N]
             : ( Vec i ) oshape ( vec_with_cap [i] + ndb 2 )
             : ~ i k 0
-            ~ < k ndb { ( vec_push [i] oshape ( __ti bshape k ) ) = k + k 1 }
+            ~ < k ndb { ( vec_push [i] oshape ( _ti bshape k ) ) = k + k 1 }
             ( vec_push [i] oshape M ) ( vec_push [i] oshape N )
             ( vec_free [i] bshape ) ( vec_free [i] bst ) ( vec_free [i] aeff ) ( vec_free [i] beff )
             ^ @ ?Tensor { T @ Tensor { rdt oshape out } }
@@ -506,18 +506,18 @@ $ `tensor.nu`
 @ tensor_slice Tensor t ( Vec i ) starts ( Vec i ) stops → ?Tensor {
     : i nd ( tensor_ndim t )
     ? & == ( vec_len [i] starts ) nd == ( vec_len [i] stops ) nd {} { ^ @ ?Tensor { F } }
-    : ( Vec i ) oshape ( __ivec_t nd 0 )
+    : ( Vec i ) oshape ( _ivec_t nd 0 )
     : ~ i d 0
     ~ < d nd {
-        : i s0 ( __ti starts d )
-        : i s1 ( __ti stops d )
-        ? & >= s0 0 & <= s1 ( __ti . t shape d ) <= s0 s1 {} { ( vec_free [i] oshape ) ^ @ ?Tensor { F } }
+        : i s0 ( _ti starts d )
+        : i s1 ( _ti stops d )
+        ? & >= s0 0 & <= s1 ( _ti . t shape d ) <= s0 s1 {} { ( vec_free [i] oshape ) ^ @ ?Tensor { F } }
         ( vec_set [i] oshape d - s1 s0 )
         = d + d 1
     }
-    : ( Vec i ) ist ( __t_strides . t shape )
-    : ( Vec i ) ost ( __t_strides oshape )
-    : i total ( __t_prod oshape )
+    : ( Vec i ) ist ( _t_strides . t shape )
+    : ( Vec i ) ost ( _t_strides oshape )
+    : i total ( _t_prod oshape )
     : ( Vec f ) out ( vec_with_cap [f] ? > total 0 { total } { 1 } )
     : ~ i i 0
     ~ < i total {
@@ -525,13 +525,13 @@ $ `tensor.nu`
         : ~ i ino 0
         : ~ i d2 0
         ~ < d2 nd {
-            : i sd ( __ti ost d2 )
+            : i sd ( _ti ost d2 )
             : i c ? > sd 0 { / rem sd } { 0 }
             = rem ? > sd 0 { % rem sd } { rem }
-            = ino + ino * + c ( __ti starts d2 ) ( __ti ist d2 )
+            = ino + ino * + c ( _ti starts d2 ) ( _ti ist d2 )
             = d2 + d2 1
         }
-        ( vec_push [f] out ( __tf . t data ino ) )
+        ( vec_push [f] out ( _tf . t data ino ) )
         = i + i 1
     }
     ( vec_free [i] ist ) ( vec_free [i] ost )
@@ -543,15 +543,15 @@ $ `tensor.nu`
     : i nd ( tensor_ndim a )
     ? & == nd ( tensor_ndim b ) & >= axis 0 < axis nd {} { ^ @ ?Tensor { F } }
     : ~ i d 0
-    ~ < d nd { ? | == d axis == ( __ti . a shape d ) ( __ti . b shape d ) {} { ^ @ ?Tensor { F } } = d + d 1 }
-    : ( Vec i ) oshape ( __shape_copy . a shape )
-    ( vec_set [i] oshape axis + ( __ti . a shape axis ) ( __ti . b shape axis ) )
+    ~ < d nd { ? | == d axis == ( _ti . a shape d ) ( _ti . b shape d ) {} { ^ @ ?Tensor { F } } = d + d 1 }
+    : ( Vec i ) oshape ( _shape_copy . a shape )
+    ( vec_set [i] oshape axis + ( _ti . a shape axis ) ( _ti . b shape axis ) )
     : i rdt ( __t_result_dtype a b )
-    : ( Vec i ) ost ( __t_strides oshape )
-    : ( Vec i ) ast ( __t_strides . a shape )
-    : ( Vec i ) bst ( __t_strides . b shape )
-    : i asz ( __ti . a shape axis )
-    : i total ( __t_prod oshape )
+    : ( Vec i ) ost ( _t_strides oshape )
+    : ( Vec i ) ast ( _t_strides . a shape )
+    : ( Vec i ) bst ( _t_strides . b shape )
+    : i asz ( _ti . a shape axis )
+    : i total ( _t_prod oshape )
     : ( Vec f ) out ( vec_with_cap [f] ? > total 0 { total } { 1 } )
     : ~ i i 0
     ~ < i total {
@@ -561,20 +561,20 @@ $ `tensor.nu`
         : ~ i boff 0
         : ~ i d3 0
         ~ < d3 nd {
-            : i sd ( __ti ost d3 )
+            : i sd ( _ti ost d3 )
             : i c ? > sd 0 { / rem sd } { 0 }
             = rem ? > sd 0 { % rem sd } { rem }
             ? == d3 axis { = coord_ax c } {
-                = aoff + aoff * c ( __ti ast d3 )
-                = boff + boff * c ( __ti bst d3 )
+                = aoff + aoff * c ( _ti ast d3 )
+                = boff + boff * c ( _ti bst d3 )
             }
             = d3 + d3 1
         }
         : ~ f v 0.0
         ? < coord_ax asz {
-            = v ( __tf . a data + aoff * coord_ax ( __ti ast axis ) )
+            = v ( _tf . a data + aoff * coord_ax ( _ti ast axis ) )
         } {
-            = v ( __tf . b data + boff * - coord_ax asz ( __ti bst axis ) )
+            = v ( _tf . b data + boff * - coord_ax asz ( _ti bst axis ) )
         }
         ( vec_push [f] out v )
         = i + i 1
@@ -586,14 +586,14 @@ $ `tensor.nu`
 // argmax / argmin along an axis (indices as f64 in an F64 tensor).
 @ __arg_axis Tensor t i axis b want_max b keepdim → Tensor {
     : i nd ( tensor_ndim t )
-    : ( Vec i ) ist ( __t_strides . t shape )
+    : ( Vec i ) ist ( _t_strides . t shape )
     : ( Vec i ) oshape ( vec_new [i] )
     : ~ i d 0
-    ~ < d nd { ? == d axis { ? keepdim { ( vec_push [i] oshape 1 ) } {} } { ( vec_push [i] oshape ( __ti . t shape d ) ) } = d + d 1 }
-    : i outn ( __t_prod oshape )
-    : ( Vec f ) best ( __fvec_t outn ? want_max { -1.0e308 } { 1.0e308 } )
-    : ( Vec f ) idx ( __fvec_t outn 0.0 )
-    : ( Vec i ) ost ( __t_strides oshape )
+    ~ < d nd { ? == d axis { ? keepdim { ( vec_push [i] oshape 1 ) } {} } { ( vec_push [i] oshape ( _ti . t shape d ) ) } = d + d 1 }
+    : i outn ( _t_prod oshape )
+    : ( Vec f ) best ( _fvec_t outn ? want_max { -1.0e308 } { 1.0e308 } )
+    : ( Vec f ) idx ( _fvec_t outn 0.0 )
+    : ( Vec i ) ost ( _t_strides oshape )
     : i total ( tensor_size t )
     : ~ i i 0
     ~ < i total {
@@ -603,14 +603,14 @@ $ `tensor.nu`
         : ~ i axc 0
         : ~ i d2 0
         ~ < d2 nd {
-            : i sd ( __ti ist d2 )
+            : i sd ( _ti ist d2 )
             : i c ? > sd 0 { / rem sd } { 0 }
             = rem ? > sd 0 { % rem sd } { rem }
-            ? == d2 axis { = axc c ? keepdim { = od + od 1 } {} } { = oo + oo * c ( __ti ost od ) = od + od 1 }
+            ? == d2 axis { = axc c ? keepdim { = od + od 1 } {} } { = oo + oo * c ( _ti ost od ) = od + od 1 }
             = d2 + d2 1
         }
-        : f v ( __tf . t data i )
-        : f cur ( __tf best oo )
+        : f v ( _tf . t data i )
+        : f cur ( _tf best oo )
         : b better ? want_max { > v cur } { < v cur }
         ? better { ( vec_set [f] best oo v ) ( vec_set [f] idx oo # f axc ) } {}
         = i + i 1

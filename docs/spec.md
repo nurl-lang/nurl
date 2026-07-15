@@ -194,6 +194,30 @@ FFI declarations (`& "lib" @ name …`) and trait/impl methods are
 intentionally **not** renamed — FFI symbols resolve at the linker by
 literal C-ABI name, and trait dispatch is mangled by impl-target type.
 
+### 3.2b `__` file-private functions
+
+A top-level function whose name begins with `__` is **file-scoped**, in
+every file, with no opt-in: its definition is mangled with its source
+file's id, so two files may each define `__helper` and neither collides
+with — nor can shadow — the other. Resolution at a call site, in order:
+
+1. a **local closure binding** of that name (unchanged from before);
+2. the **current file's own definition** — always, even when other files
+   define the same name;
+3. a definition in exactly **one other file** — resolves, with a
+   deprecation warning (once per name): cross-file use of a `__` function
+   is the flat-namespace era's idiom, and the migration is to rename the
+   shared helper with ONE underscore (`_name`, the shared-internal
+   convention — collision-diagnosed but not scoped);
+4. definitions in **several other files** — a compile error naming every
+   owner, because there is no right answer.
+
+The convention this encodes: `__name` is file-private (compiler-enforced),
+`_name` is internal-but-shared (duplicate definitions are diagnosed with
+both locations), a bare name is the public surface (gate it with `pub`
+below). Pinned by `priv_file_scope.nu`, `should_warn_priv_cross_file.nu`
+and `diag_priv_ambiguous.nu`.
+
 ### 3.3 `pub` visibility (grammar v2.0)
 
 Any top-level declaration except an import may carry a leading `pub`

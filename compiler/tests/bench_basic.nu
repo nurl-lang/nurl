@@ -10,7 +10,7 @@ $ `stdlib/std/bench.nu`
 
 @ main → i {
     // pure formatting
-    : String f ( __bench_fmt `demo` 1000 42 3 )
+    : String f ( _bench_fmt `demo` 1000 42 3 )
     ( nurl_print ( string_data f ) ) ( nurl_print `\n` )
     ( string_free f )
 

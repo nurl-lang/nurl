@@ -185,7 +185,7 @@ $ `stdlib/ext/http.nu`
     ^ 0
 }
 
-// __parse_hex_size must reject overflowing chunk-size lines (a 17-digit
+// _parse_hex_size must reject overflowing chunk-size lines (a 17-digit
 // hex wraps i64 to a small value → request smuggling) and accept valid
 // sizes. Pins the overflow guard.
 @ run_hex → v {
@@ -199,7 +199,7 @@ $ `stdlib/ext/http.nu`
 
 @ show_hex s raw → v {
     : String s ( string_from raw )
-    ?? ( __parse_hex_size s ) {
+    ?? ( _parse_hex_size s ) {
         T n → ( println_int ( nurl_str_cat `  ` ( nurl_str_cat raw ` -> ` ) ) n )
         F _ → ( println_str `  ` ( nurl_str_cat raw ` -> reject` ) )
     }

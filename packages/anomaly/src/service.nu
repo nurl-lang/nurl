@@ -229,7 +229,7 @@ $ `src/csvdata.nu`
 
 // ── Verdict → JSON ────────────────────────────────────────────────────
 
-@ __an_verdict_resp *Model mo s mname Json body Verdict vd → HttpResponse {
+@ __an_verdict_resp * Model mo s mname Json body Verdict vd → HttpResponse {
     ? . vd ready {} {
         : *Meta mm ( model_metadata mo )
         : i n ( model_n_points mo )
@@ -583,8 +583,8 @@ $ `src/csvdata.nu`
     : ?Json bodyo ( __an_body_json req )
     ?? bodyo {
         T body → {
-            : i below ( __an_jint body `below_max_retrain_frequency` 0 )
-            : i atmax ( __an_jint body `at_max_retrain_frequency` 0 )
+            : i below ( _an_jint body `below_max_retrain_frequency` 0 )
+            : i atmax ( _an_jint body `at_max_retrain_frequency` 0 )
             ( json_free body )
             ? || > below 0 > atmax 0 {} {
                 ( store_free st )
@@ -714,7 +714,7 @@ $ `src/csvdata.nu`
                     } {}
                     : VerCfg cfg @ VerCfg { ( string_from `batch` ) 0 0 100 256 -1.0 0.0 T }
                     : BatchReport rep ( anomaly_batch . ds data . ds rows . ds cols cfg )
-                    ( __an_vercfg_free cfg )
+                    ( _an_vercfg_free cfg )
 
                     : Json res ( json_obj_new )
                     ( json_obj_set res `file_path` ( json_str_lit ( string_data fpath ) ) )

@@ -46,23 +46,23 @@ $ `stdlib/std/aes_gcm.nu`
 // Encrypt + send one record under the SERVER write keys (s_key/s_iv/s_seq).
 @ __srv_send_enc * TlsConn c i content_type ( Vec u ) content → !v TlsErr {
     : ( Vec u ) inner ( vec_with_cap [u] + ( vec_len [u] content ) 1 )
-    ( __tls_cat inner content )
+    ( _tls_cat inner content )
     ( vec_push [u] inner # u content_type )
     : i total + ( vec_len [u] inner ) 16
     : ( Vec u ) aad ( vec_with_cap [u] 5 )
     ( vec_push [u] aad # u 23 )
     ( vec_push [u] aad # u 3 )
     ( vec_push [u] aad # u 3 )
-    ( __tls_u16 aad total )
-    : ( Vec u ) nonce ( __nonce . c s_iv . c s_seq )
-    : ( Vec u ) sealed ( __aead_seal . c cipher . c s_key nonce aad inner )
+    ( _tls_u16 aad total )
+    : ( Vec u ) nonce ( _nonce . c s_iv . c s_seq )
+    : ( Vec u ) sealed ( _aead_seal . c cipher . c s_key nonce aad inner )
     : ( Vec u ) rec ( vec_with_cap [u] + total 5 )
     ( vec_push [u] rec # u 23 )
     ( vec_push [u] rec # u 3 )
     ( vec_push [u] rec # u 3 )
-    ( __tls_u16 rec total )
-    ( __tls_cat rec sealed )
-    : b w ( __tls_sock_write . c fd rec )
+    ( _tls_u16 rec total )
+    ( _tls_cat rec sealed )
+    : b w ( _tls_sock_write . c fd rec )
     ( vec_free [u] inner )
     ( vec_free [u] aad )
     ( vec_free [u] nonce )
@@ -79,9 +79,9 @@ $ `stdlib/std/aes_gcm.nu`
     ( vec_push [u] aad # u 23 )
     ( vec_push [u] aad # u 3 )
     ( vec_push [u] aad # u 3 )
-    ( __tls_u16 aad blen )
-    : ( Vec u ) nonce ( __nonce . c c_iv . c c_seq )
-    : ?( Vec u ) pt ( __aead_open . c cipher . c c_key nonce aad body )
+    ( _tls_u16 aad blen )
+    : ( Vec u ) nonce ( _nonce . c c_iv . c c_seq )
+    : ?( Vec u ) pt ( _aead_open . c cipher . c c_key nonce aad body )
     ( vec_free [u] aad )
     ( vec_free [u] nonce )
     = . c c_seq + . c c_seq 1
@@ -96,7 +96,7 @@ $ `stdlib/std/aes_gcm.nu`
     ~ == need 1 {
         : i have ( vec_len [u] . c hsbuf )
         ? >= have 4 {
-            : i mlen ( __rdint . c hsbuf 1 3 )
+            : i mlen ( _rdint . c hsbuf 1 3 )
             ? >= have + 4 mlen {
                 : ( Vec u ) msg ( bytes_slice . c hsbuf 0 + 4 mlen )
                 : ( Vec u ) rest ( bytes_slice . c hsbuf + 4 mlen have )
@@ -105,7 +105,7 @@ $ `stdlib/std/aes_gcm.nu`
                 ^ @ !( Vec u ) TlsErr { T msg }
             } {}
         } {}
-        : !TlsRecord TlsErr rr ( __read_record c )
+        : !TlsRecord TlsErr rr ( _read_record c )
         ?? rr {
             F e → { ^ @ !( Vec u ) TlsErr { F e } }
             T rec → {
@@ -116,9 +116,9 @@ $ `stdlib/std/aes_gcm.nu`
                         ?? ( __srv_decrypt c . rec body ) {
                             T inner → {
                                 ( vec_free [u] . rec body )
-                                : i ct ( __inner_type inner )
+                                : i ct ( _inner_type inner )
                                 ? == ct 22 {
-                                    ( __tls_cat . c hsbuf inner )
+                                    ( _tls_cat . c hsbuf inner )
                                     ( vec_free [u] inner )
                                 } {
                                     ( vec_free [u] inner )
@@ -133,7 +133,7 @@ $ `stdlib/std/aes_gcm.nu`
                         }
                     } {
                         ? == . rec rtype 22 {
-                            ( __tls_cat . c hsbuf . rec body )
+                            ( _tls_cat . c hsbuf . rec body )
                             ( vec_free [u] . rec body )
                         } {
                             ( vec_free [u] . rec body )
@@ -151,13 +151,13 @@ $ `stdlib/std/aes_gcm.nu`
 
 // Find extension `want` in msg's extension block [es, ee); returns the
 // extension-body start offset, or -1. Sets nothing else; caller reads the
-// length via __rdint at off-2.
+// length via _rdint at off-2.
 @ __srv_find_ext ( Vec u ) msg i es i ee i want → i {
     : ~ i p es
     : ~ i found -1
     ~ & < + p 4 + ee 1 == found -1 {
-        : i et ( __rdint msg p 2 )
-        : i el ( __rdint msg + p 2 2 )
+        : i et ( _rdint msg p 2 )
+        : i el ( _rdint msg + p 2 2 )
         ? == et want { = found + p 4 } { = p + + p 4 el }
     }
     ^ found
@@ -168,8 +168,8 @@ $ `stdlib/std/aes_gcm.nu`
 @ __srv_hs_wrap i htype ( Vec u ) body → ( Vec u ) {
     : ( Vec u ) hs ( vec_with_cap [u] + ( vec_len [u] body ) 4 )
     ( vec_push [u] hs # u htype )
-    ( __u24 hs ( vec_len [u] body ) )
-    ( __tls_cat hs body )
+    ( _u24 hs ( vec_len [u] body ) )
+    ( _tls_cat hs body )
     ^ hs
 }
 
@@ -177,14 +177,14 @@ $ `stdlib/std/aes_gcm.nu`
 @ __srv_der_int ( Vec u ) out ( Vec u ) v → v {
     : i n ( vec_len [u] v )
     : ~ i s 0
-    ~ & < s - n 1 == ( __t_bget v s ) 0 { = s + s 1 }
+    ~ & < s - n 1 == ( _t_bget v s ) 0 { = s + s 1 }
     : i mag - n s
-    : b hi != 0 & ( __t_bget v s ) 128
+    : b hi != 0 & ( _t_bget v s ) 128
     ( vec_push [u] out # u 2 )
     ( vec_push [u] out # u ? hi + mag 1 mag )
     ? hi { ( vec_push [u] out # u 0 ) } {}
     : ~ i k s
-    ~ < k n { ( vec_push [u] out # u ( __t_bget v k ) ) = k + k 1 }
+    ~ < k n { ( vec_push [u] out # u ( _t_bget v k ) ) = k + k 1 }
 }
 
 // raw r‖s (64 bytes) → DER SEQUENCE { INTEGER r, INTEGER s }.
@@ -197,7 +197,7 @@ $ `stdlib/std/aes_gcm.nu`
     : ( Vec u ) out ( vec_with_cap [u] + ( vec_len [u] inner ) 2 )
     ( vec_push [u] out # u 48 )
     ( vec_push [u] out # u ( vec_len [u] inner ) )
-    ( __tls_cat out inner )
+    ( _tls_cat out inner )
     ( vec_free [u] r ) ( vec_free [u] sv ) ( vec_free [u] inner )
     ^ out
 }
@@ -210,7 +210,7 @@ $ `stdlib/std/aes_gcm.nu`
     ~ < k 64 { ( vec_push [u] m # u 32 ) = k + k 1 }
     ( bytes_extend_str m `TLS 1.3, server CertificateVerify` )
     ( vec_push [u] m # u 0 )
-    ( __tls_cat m th )
+    ( _tls_cat m th )
     ^ m
 }
 
@@ -221,18 +221,18 @@ $ `stdlib/std/aes_gcm.nu`
 @ __srv_cv_body i keytype ( Vec u ) ec_priv ( Vec u ) rsa_n ( Vec u ) rsa_e ( Vec u ) rsa_d ( Vec u ) cvdig → ( Vec u ) {
     : ( Vec u ) cvbody ( vec_new [u] )
     ? == keytype 1 {
-        : ( Vec u ) salt ( __rand_bytes 32 )
+        : ( Vec u ) salt ( _rand_bytes 32 )
         : ( Vec u ) sig ( rsa_pss_sign_sha256 rsa_n rsa_e rsa_d cvdig salt )
-        ( __tls_u16 cvbody 2052 )  // rsa_pss_rsae_sha256 = 0x0804
-        ( __tls_u16 cvbody ( vec_len [u] sig ) )
-        ( __tls_cat cvbody sig )
+        ( _tls_u16 cvbody 2052 )  // rsa_pss_rsae_sha256 = 0x0804
+        ( _tls_u16 cvbody ( vec_len [u] sig ) )
+        ( _tls_cat cvbody sig )
         ( vec_free [u] salt ) ( vec_free [u] sig )
     } {
         : ( Vec u ) rs ( ecdsa_p256_sign ec_priv cvdig )
         : ( Vec u ) der ( __srv_der_ecdsa rs )
-        ( __tls_u16 cvbody 1027 )  // ecdsa_secp256r1_sha256 = 0x0403
-        ( __tls_u16 cvbody ( vec_len [u] der ) )
-        ( __tls_cat cvbody der )
+        ( _tls_u16 cvbody 1027 )  // ecdsa_secp256r1_sha256 = 0x0403
+        ( _tls_u16 cvbody ( vec_len [u] der ) )
+        ( _tls_cat cvbody der )
         ( vec_free [u] rs ) ( vec_free [u] der )
     }
     ^ cvbody
@@ -244,9 +244,9 @@ $ `stdlib/std/aes_gcm.nu`
 // tls_accept / tls_accept_rsa.
 @ tls_cert_entry ( Vec u ) der → ( Vec u ) {
     : ( Vec u ) e ( vec_new [u] )
-    ( __u24 e ( vec_len [u] der ) )
-    ( __tls_cat e der )
-    ( __tls_u16 e 0 )  // per-cert extensions = empty
+    ( _u24 e ( vec_len [u] der ) )
+    ( _tls_cat e der )
+    ( _tls_u16 e 0 )  // per-cert extensions = empty
     ^ e
 }
 
@@ -284,21 +284,21 @@ $ `stdlib/std/aes_gcm.nu`
     // ── ClientHello ──
     : !( Vec u ) TlsErr chr ( __srv_next_hs c )
     : ( Vec u ) ch ?? chr { T m → m F _ → ( vec_new [u] ) }
-    ? | == ( vec_len [u] ch ) 0 != ( __t_bget ch 0 ) 1 {
+    ? | == ( vec_len [u] ch ) 0 != ( _t_bget ch 0 ) 1 {
         ( vec_free [u] ch ) ( vec_free [u] tr ) ( nurl_free # s c )
         ^ ( __srv_fail raw )
     } {}
-    ( __tls_cat tr ch )
+    ( _tls_cat tr ch )
 
     : ( Vec u ) crand ( bytes_slice ch 6 38 )
-    : i sidlen ( __t_bget ch 38 )
+    : i sidlen ( _t_bget ch 38 )
     : i p1 + 39 sidlen
-    : i cslen ( __rdint ch p1 2 )
+    : i cslen ( _rdint ch p1 2 )
     // choose cipher: prefer AES-128-GCM (0x1301), else ChaCha20 (0x1303)
     : ~ i suite 0
     : ~ i ci 0
     ~ < ci cslen {
-        : i s2 ( __rdint ch + + p1 2 ci 2 )
+        : i s2 ( _rdint ch + + p1 2 ci 2 )
         ? == s2 4865 { ? == suite 0 { = suite 4865 } {} } {}
         ? == s2 4867 { ? == suite 0 { = suite 4867 } {} } {}
         = ci + ci 2
@@ -306,9 +306,9 @@ $ `stdlib/std/aes_gcm.nu`
     ? == suite 0 { = suite 4867 } {}
     = . c cipher ? == suite 4865 1 0
     : i p2 + + p1 2 cslen
-    : i complen ( __t_bget ch p2 )
+    : i complen ( _t_bget ch p2 )
     : i p3 + + p2 1 complen
-    : i extlen ( __rdint ch p3 2 )
+    : i extlen ( _rdint ch p3 2 )
     : i es + p3 2
     : i ee + es extlen
 
@@ -318,14 +318,14 @@ $ `stdlib/std/aes_gcm.nu`
         ( vec_free [u] ch ) ( vec_free [u] crand ) ( vec_free [u] tr ) ( nurl_free # s c )
         ^ ( __srv_fail raw )
     } {}
-    : i kslen ( __rdint ch ks 2 )  // client_shares length (first 2 bytes of ext body)
+    : i kslen ( _rdint ch ks 2 )  // client_shares length (first 2 bytes of ext body)
     : ~ i kp + ks 2
     : i ksend + + ks 2 kslen
     : ~ i grp 0
     : ~ ( Vec u ) cpub ( vec_new [u] )
     ~ & < + kp 4 + ksend 1 == grp 0 {
-        : i g ( __rdint ch kp 2 )
-        : i klen ( __rdint ch + kp 2 2 )
+        : i g ( _rdint ch kp 2 )
+        : i klen ( _rdint ch + kp 2 2 )
         ? | == g 29 == g 23 {
             = grp g
             ( vec_free [u] cpub )
@@ -344,7 +344,7 @@ $ `stdlib/std/aes_gcm.nu`
     : ( Vec u ) ecdhe ? == grp 29 ( x25519 eph cpub ) ( p256_ecdh_shared eph cpub )
     // H3: RFC 8446 §7.4.2 — reject a degenerate (all-zero) ECDHE secret from a
     // low-order client key_share before it can seed the key schedule.
-    ? ( __all_zero ecdhe ) {
+    ? ( _all_zero ecdhe ) {
         ( __srv_cleanup_accept ch crand cpub eph spub ecdhe ( vec_new [u] ) ( vec_new [u] ) tr )
         ( nurl_free # s c ) ^ ( __srv_fail raw )
     } {}
@@ -352,8 +352,8 @@ $ `stdlib/std/aes_gcm.nu`
     // ── ServerHello ──
     : ( Vec u ) srand ( __srv_rand 32 )
     : ( Vec u ) sh ( __srv_build_sh srand ch sidlen suite grp spub )
-    ( __tls_cat tr sh )
-    : !v TlsErr shw ( __send_plain c 22 sh )
+    ( _tls_cat tr sh )
+    : !v TlsErr shw ( _send_plain c 22 sh )
     ?? shw { T _ → {} F _ → {
             ( __srv_cleanup_accept ch crand cpub eph spub ecdhe srand sh tr )
             ( nurl_free # s c ) ^ ( __srv_fail raw )
@@ -362,7 +362,7 @@ $ `stdlib/std/aes_gcm.nu`
     // optional CCS for middlebox compatibility
     : ( Vec u ) ccs ( vec_with_cap [u] 1 )
     ( vec_push [u] ccs # u 1 )
-    : !v TlsErr _ccw ( __send_plain c 20 ccs )
+    : !v TlsErr _ccw ( _send_plain c 20 ccs )
     ?? _ccw { T _ → {} F _ → {} }
     ( vec_free [u] ccs )
 
@@ -376,17 +376,17 @@ $ `stdlib/std/aes_gcm.nu`
     : ( Vec u ) th_sh ( sha256_pure tr )
     : ( Vec u ) c_hs ( derive_secret hs_secret `c hs traffic` th_sh )
     : ( Vec u ) s_hs ( derive_secret hs_secret `s hs traffic` th_sh )
-    ( __set_keys c 0 s_hs )  // server write keys
-    ( __set_keys c 1 c_hs )  // client write keys (server reads with these)
+    ( _set_keys c 0 s_hs )  // server write keys
+    ( _set_keys c 1 c_hs )  // client write keys (server reads with these)
     = . c enc_read 1
     : ( Vec u ) derived2 ( derive_secret hs_secret `derived` ehash )
     : ( Vec u ) master ( hkdf_extract derived2 z32 )
 
     // ── EncryptedExtensions (empty) ──
     : ( Vec u ) eebody ( vec_new [u] )
-    ( __tls_u16 eebody 0 )
+    ( _tls_u16 eebody 0 )
     : ( Vec u ) ee ( __srv_hs_wrap 8 eebody )
-    ( __tls_cat tr ee )
+    ( _tls_cat tr ee )
     : !v TlsErr eew ( __srv_send_enc c 22 ee )
     ?? eew { T _ → {} F _ → {} }
     ( vec_free [u] eebody )
@@ -397,10 +397,10 @@ $ `stdlib/std/aes_gcm.nu`
     // by the caller via tls_cert_entry — leaf first, then intermediates.
     : ( Vec u ) certbody ( vec_new [u] )
     ( vec_push [u] certbody # u 0 )  // certificate_request_context = empty
-    ( __u24 certbody ( vec_len [u] cert_chain ) )  // certificate_list length
-    ( __tls_cat certbody cert_chain )
+    ( _u24 certbody ( vec_len [u] cert_chain ) )  // certificate_list length
+    ( _tls_cat certbody cert_chain )
     : ( Vec u ) certmsg ( __srv_hs_wrap 11 certbody )
-    ( __tls_cat tr certmsg )
+    ( _tls_cat tr certmsg )
     : !v TlsErr cw ( __srv_send_enc c 22 certmsg )
     ?? cw { T _ → {} F _ → {} }
     ( vec_free [u] certbody )
@@ -411,7 +411,7 @@ $ `stdlib/std/aes_gcm.nu`
     : ( Vec u ) cvdig ( sha256_pure cvc )
     : ( Vec u ) cvbody ( __srv_cv_body keytype ec_priv rsa_n rsa_e rsa_d cvdig )
     : ( Vec u ) cvmsg ( __srv_hs_wrap 15 cvbody )
-    ( __tls_cat tr cvmsg )
+    ( _tls_cat tr cvmsg )
     : !v TlsErr cvw ( __srv_send_enc c 22 cvmsg )
     ?? cvw { T _ → {} F _ → {} }
     ( vec_free [u] th_cert ) ( vec_free [u] cvc ) ( vec_free [u] cvdig )
@@ -419,9 +419,9 @@ $ `stdlib/std/aes_gcm.nu`
 
     // ── server Finished ──
     : ( Vec u ) th_cv ( sha256_pure tr )
-    : ( Vec u ) sfin ( __finished_mac s_hs th_cv )
+    : ( Vec u ) sfin ( _finished_mac s_hs th_cv )
     : ( Vec u ) sfmsg ( __srv_hs_wrap 20 sfin )
-    ( __tls_cat tr sfmsg )
+    ( _tls_cat tr sfmsg )
     : !v TlsErr sfw ( __srv_send_enc c 22 sfmsg )
     ?? sfw { T _ → {} F _ → {} }
     ( vec_free [u] th_cv )
@@ -433,12 +433,12 @@ $ `stdlib/std/aes_gcm.nu`
     : ( Vec u ) s_ap ( derive_secret master `s ap traffic` th_sf )
 
     // ── client Finished (under client handshake keys) ──
-    : ( Vec u ) cexp ( __finished_mac c_hs th_sf )
+    : ( Vec u ) cexp ( _finished_mac c_hs th_sf )
     : !( Vec u ) TlsErr cfr ( __srv_next_hs c )
     : ~ i finok 0
     ?? cfr {
         T cf → {
-            ? & == ( __t_bget cf 0 ) 20 ( __cmp_finished cf cexp ) { = finok 1 } {}
+            ? & == ( _t_bget cf 0 ) 20 ( _cmp_finished cf cexp ) { = finok 1 } {}
             ( vec_free [u] cf )
         }
         F _ → {}
@@ -446,8 +446,8 @@ $ `stdlib/std/aes_gcm.nu`
     ( vec_free [u] cexp )
 
     // switch to application keys
-    ( __set_keys c 0 s_ap )
-    ( __set_keys c 1 c_ap )
+    ( _set_keys c 0 s_ap )
+    ( _set_keys c 1 c_ap )
     = . c established 1
 
     // free scratch / handshake secrets
@@ -515,24 +515,24 @@ $ `stdlib/std/aes_gcm.nu`
 // Build the ServerHello handshake message.
 @ __srv_build_sh ( Vec u ) srand ( Vec u ) ch i sidlen i suite i grp ( Vec u ) spub → ( Vec u ) {
     : ( Vec u ) body ( vec_new [u] )
-    ( __tls_u16 body 771 )  // legacy_version 0x0303
-    ( __tls_cat body srand )  // 32-byte random
+    ( _tls_u16 body 771 )  // legacy_version 0x0303
+    ( _tls_cat body srand )  // 32-byte random
     ( vec_push [u] body # u sidlen )  // echo legacy session id
     : ~ i k 0
-    ~ < k sidlen { ( vec_push [u] body # u ( __t_bget ch + 39 k ) ) = k + k 1 }
-    ( __tls_u16 body suite )  // cipher suite
+    ~ < k sidlen { ( vec_push [u] body # u ( _t_bget ch + 39 k ) ) = k + k 1 }
+    ( _tls_u16 body suite )  // cipher suite
     ( vec_push [u] body # u 0 )  // compression = null
     // extensions: supported_versions (0x002b)=0x0304 + key_share (0x0033)
     : ( Vec u ) ext ( vec_new [u] )
-    ( __tls_u16 ext 43 )
-    ( __tls_u16 ext 2 )
-    ( __tls_u16 ext 772 )  // 0x0304 TLS 1.3
-    ( __tls_u16 ext 51 )
-    ( __tls_u16 ext + 4 ( vec_len [u] spub ) )
-    ( __tls_u16 ext grp )
-    ( __tls_u16 ext ( vec_len [u] spub ) )
-    ( __tls_cat ext spub )
-    ( __blk16 body ext )
+    ( _tls_u16 ext 43 )
+    ( _tls_u16 ext 2 )
+    ( _tls_u16 ext 772 )  // 0x0304 TLS 1.3
+    ( _tls_u16 ext 51 )
+    ( _tls_u16 ext + 4 ( vec_len [u] spub ) )
+    ( _tls_u16 ext grp )
+    ( _tls_u16 ext ( vec_len [u] spub ) )
+    ( _tls_cat ext spub )
+    ( _blk16 body ext )
     ( vec_free [u] ext )
     : ( Vec u ) hs ( __srv_hs_wrap 2 body )
     ( vec_free [u] body )
@@ -582,7 +582,7 @@ $ `stdlib/std/aes_gcm.nu`
 
 @ tls_server_read * TlsConn c i max → !( Vec u ) TlsErr {
     ~ & == ( vec_len [u] . c appbuf ) 0 == . c closed 0 {
-        : !TlsRecord TlsErr rr ( __read_record c )
+        : !TlsRecord TlsErr rr ( _read_record c )
         ?? rr {
             F e → {
                 ^ ?? e {
@@ -597,8 +597,8 @@ $ `stdlib/std/aes_gcm.nu`
                     ?? ( __srv_decrypt c . rec body ) {
                         T inner → {
                             ( vec_free [u] . rec body )
-                            : i ct ( __inner_type inner )
-                            ? == ct 23 { ( __tls_cat . c appbuf inner ) } {
+                            : i ct ( _inner_type inner )
+                            ? == ct 23 { ( _tls_cat . c appbuf inner ) } {
                                 ? == ct 21 { = . c closed 1 } {}
                             }
                             ( vec_free [u] inner )

@@ -27,7 +27,7 @@ $ `stdlib/ext/websocket.nu`
 @ serve_one_connection TcpConn conn → v {
     : ( Vec u ) carry ( vec_new [u] )
     : HttpLimits lim ( http_default_limits )
-    : !ParsedHeadOk HttpReqErr ph ( __read_request_head conn carry lim )
+    : !ParsedHeadOk HttpReqErr ph ( _read_request_head conn carry lim )
     ?? ph {
         T pho → {
             : HttpRequest req . pho head
@@ -43,7 +43,7 @@ $ `stdlib/ext/websocket.nu`
                             // compressed, preserving its text/binary opcode.
                             : !v WsErr sr ( ws_serve_messages_deflate dctx conn wlim
                             \ WsMessage msg → !v WsErr {
-                                ^ ( __ws_send_message_deflate dctx conn . msg opcode . msg payload F )
+                                ^ ( _ws_send_message_deflate dctx conn . msg opcode . msg payload F )
                             } )
                             ?? sr { T _ → {} F _ → {} }
                         } {

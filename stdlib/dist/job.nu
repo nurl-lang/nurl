@@ -287,7 +287,7 @@ $ `stdlib/net/transport.nu`
 }
 
 // Run the registered handler for a kind (empty Vec if none registered).
-@ __job_execute * JobNode n i kind ( Vec u ) payload → ( Vec u ) {
+@ _job_execute * JobNode n i kind ( Vec u ) payload → ( Vec u ) {
     : s hp ( __job_handler n kind )
     ? == # i hp 0 { ^ ( vec_new [u] ) } {}
     : *JobHandler jh # *JobHandler hp
@@ -354,7 +354,7 @@ $ `stdlib/net/transport.nu`
     ^ ( __job_owns_ring n . n ring key )
 }
 
-@ __job_unique * JobNode n → i {
+@ _job_unique * JobNode n → i {
     : i id + * . n replica 1000000000 . n next_task
     = . n next_task + . n next_task 1
     ^ id
@@ -366,10 +366,10 @@ $ `stdlib/net/transport.nu`
 // immediately and records the result locally; otherwise it routes a SUBMIT to
 // the current owner. Returns the task_id to await.
 @ job_submit * JobNode n i kind ( Vec u ) key ( Vec u ) payload → i {
-    : i tid ( __job_unique n )
+    : i tid ( _job_unique n )
     : s ring ( __job_ring_for n kind )
     ? ( __job_owns_ring n ring key ) {
-        : ( Vec u ) res ( __job_execute n kind payload )
+        : ( Vec u ) res ( _job_execute n kind payload )
         ( __job_record n tid res )
         ( vec_free [u] res )
     } {
@@ -392,7 +392,7 @@ $ `stdlib/net/transport.nu`
 @ job_on_submit * JobNode n JobMsg m → v {
     : s ring ( __job_ring_for n . m kind )
     ? ( __job_owns_ring n ring . m key ) {
-        : ( Vec u ) res ( __job_execute n . m kind . m payload )
+        : ( Vec u ) res ( _job_execute n . m kind . m payload )
         : ( Vec u ) reply ( job_build_result . m task_id res )
         ?? ( transport_send # *Transport . n transport . m submitter reply ) { T _ → {} F _ → {} }
         ( vec_free [u] res )

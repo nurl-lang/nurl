@@ -120,7 +120,7 @@ $ `stdlib/ext/registry_index.nu`
             : ~ b ok F
             ? == ( httpc_status sresp ) 200 {
                 : String sigbody ( string_from ( httpc_body_str sresp ) )
-                : String sl ( __ms_line2 ( string_data sigbody ) )
+                : String sl ( _ms_line2 ( string_data sigbody ) )
                 : String pubkey ( __pkg_reg_pubkey )
                 = ok ( minisign_verify_b64 gz ( string_data pubkey ) ( string_data sl ) )
                 ( string_free pubkey )

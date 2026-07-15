@@ -22,7 +22,7 @@ $ `stdlib/core/vec.nu`
     : ~ i k 0
     ~ < k n {
         ( nurl_print ` ` )
-        ( nurl_print ( nurl_str_int ( __mqtt_byte v k ) ) )
+        ( nurl_print ( nurl_str_int ( _mqtt_byte v k ) ) )
         = k + k 1
     }
     ( nurl_print `\n` )
@@ -32,9 +32,9 @@ $ `stdlib/core/vec.nu`
 // count, the decoded value + nbytes, and the framed reader's length.
 @ chk_varint i val → v {
     : ( Vec u ) buf ( vec_new [u] )
-    ( __mqtt_put_varint buf val )
-    : MqttVarint mv ( __mqtt_decode_varint buf 0 )
-    : i vl ( __mqtt_varint_len buf 0 )
+    ( _mqtt_put_varint buf val )
+    : MqttVarint mv ( _mqtt_decode_varint buf 0 )
+    : i vl ( _mqtt_varint_len buf 0 )
     ( nurl_print `varint ` )
     ( nurl_print ( nurl_str_int val ) )
     ( nurl_print ` enc=` )
@@ -80,22 +80,22 @@ $ `stdlib/core/vec.nu`
     ( vec_push [u] bb # u 127 )
     ( vec_push [u] bb # u 128 )
     ( vec_push [u] bb # u 255 )
-    ( nurl_print `byte0=` ) ( nurl_print ( nurl_str_int ( __mqtt_byte bb 0 ) ) ) ( nurl_print `\n` )
-    ( nurl_print `byte2=` ) ( nurl_print ( nurl_str_int ( __mqtt_byte bb 2 ) ) ) ( nurl_print `\n` )
-    ( nurl_print `byte3=` ) ( nurl_print ( nurl_str_int ( __mqtt_byte bb 3 ) ) ) ( nurl_print `\n` )
-    ( nurl_print `byteOOB=` ) ( nurl_print ( nurl_str_int ( __mqtt_byte bb 9 ) ) ) ( nurl_print `\n` )
+    ( nurl_print `byte0=` ) ( nurl_print ( nurl_str_int ( _mqtt_byte bb 0 ) ) ) ( nurl_print `\n` )
+    ( nurl_print `byte2=` ) ( nurl_print ( nurl_str_int ( _mqtt_byte bb 2 ) ) ) ( nurl_print `\n` )
+    ( nurl_print `byte3=` ) ( nurl_print ( nurl_str_int ( _mqtt_byte bb 3 ) ) ) ( nurl_print `\n` )
+    ( nurl_print `byteOOB=` ) ( nurl_print ( nurl_str_int ( _mqtt_byte bb 9 ) ) ) ( nurl_print `\n` )
     ( vec_free [u] bb )
 
     ( nurl_print `-- MQTT string framing --\n` )
     : ( Vec u ) sb ( vec_new [u] )
-    ( __mqtt_put_str sb `MQTT` )
+    ( _mqtt_put_str sb `MQTT` )
     ( dump `str` sb )
     ( vec_free [u] sb )
 
     ( nurl_print `-- CONNECT layout --\n` )
     : MqttConfig cfg ( mqtt_config `cid7` `` `` )
     : ( Vec u ) cp ( vec_new [u] )
-    ( __mqtt_encode_connect cp cfg )
+    ( _mqtt_encode_connect cp cfg )
     ( dump `connect` cp )
     ( vec_free [u] cp )
 
@@ -122,10 +122,10 @@ $ `stdlib/core/vec.nu`
     ( nurl_print `-- user-property parse --\n` )
     : ( Vec u ) props ( vec_new [u] )
     ( vec_push [u] props # u 38 )  // 0x26 User Property
-    ( __mqtt_put_str props `unit` )  // key
-    ( __mqtt_put_str props `celsius` )  // value
+    ( _mqtt_put_str props `unit` )  // key
+    ( _mqtt_put_str props `celsius` )  // value
     : ( Vec ( Pair String String ) ) parsed ( vec_new [( Pair String String )] )
-    ( __mqtt_parse_props props 0 ( vec_len [u] props ) parsed )
+    ( _mqtt_parse_props props 0 ( vec_len [u] props ) parsed )
     ( nurl_print `props=` ) ( nurl_print ( nurl_str_int ( vec_len [( Pair String String )] parsed ) ) ) ( nurl_print `\n` )
     ? > ( vec_len [( Pair String String )] parsed ) 0 {
         : *( Pair String String ) pd ( vec_data [( Pair String String )] parsed )

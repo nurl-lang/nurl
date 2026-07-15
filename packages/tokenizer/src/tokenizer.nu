@@ -79,7 +79,7 @@ $ `stdlib/std/utf8.nu`
     ^ ( map_get [s i] m key \ s x → i { ^ ( hash_string x ) } \ s a s b → b { ^ ( eq_string a b ) } )
 }
 
-@ __tk_geti ( Vec i ) v i k i def → i {
+@ _tk_geti ( Vec i ) v i k i def → i {
     ?? ( vec_get [i] v k ) { T x → { ^ x } F → { ^ def } }
 }
 
@@ -88,7 +88,7 @@ $ `stdlib/std/utf8.nu`
 }
 
 // Borrowed data pointer of piece #k ("" when out of range).
-@ __tk_piece_data * Tok t i k → s {
+@ _tk_piece_data * Tok t i k → s {
     ?? ( vec_get [String] . t pieces k ) { T p → { ^ ( string_data p ) } F → { ^ `` } }
 }
 
@@ -213,7 +213,7 @@ $ `stdlib/std/utf8.nu`
     // token_to_id map). Keys borrow the pieces' heap buffers.
     = k 0
     ~ < k nvocab {
-        ( __tk_set . t lookup ( __tk_piece_data t k ) k )
+        ( __tk_set . t lookup ( _tk_piece_data t k ) k )
         = k + k 1
     }
 
@@ -226,9 +226,9 @@ $ `stdlib/std/utf8.nu`
     }
     = k 0
     ~ < k nvocab {
-        : i ty ( __tk_geti . t ttype k TT_NORMAL )
+        : i ty ( _tk_geti . t ttype k TT_NORMAL )
         ? | == ty TT_CONTROL == ty TT_USER {
-            : s pc ( __tk_piece_data t k )
+            : s pc ( _tk_piece_data t k )
             ? > ( nurl_str_len pc ) 0 {
                 ( vec_push [i] . t sp_ids k )
                 ( vec_set [i] . t sp_first ( nurl_str_get pc 0 ) 1 )
@@ -246,7 +246,7 @@ $ `stdlib/std/utf8.nu`
     ? == mode TOK_SPM {
         = k 0
         ~ < k nvocab {
-            : i bv ( __tk_parse_byte_piece ( __tk_piece_data t k ) )
+            : i bv ( __tk_parse_byte_piece ( _tk_piece_data t k ) )
             ? >= bv 0 { ( vec_set [i] . t byte_id bv k ) } {}
             = k + k 1
         }
@@ -316,7 +316,7 @@ $ `stdlib/std/utf8.nu`
             : ~ i j 0
             ~ < j len {
                 : i bv ( nurl_str_get esc + off j )
-                : i bid ( __tk_geti . t byte_id bv -1 )
+                : i bid ( _tk_geti . t byte_id bv -1 )
                 ? >= bid 0 { ( vec_push [i] out bid ) } {
                     ? >= . t unk 0 { ( vec_push [i] out . t unk ) } {}
                 }
@@ -381,11 +381,11 @@ $ `stdlib/std/utf8.nu`
         : ~ f best_score -1.0e30
         : ~ i j 0
         ~ >= j 0 {
-            : i nj ( __tk_geti nxt j -1 )
+            : i nj ( _tk_geti nxt j -1 )
             ? >= nj 0 {
-                : i o1 ( __tk_geti starts j 0 )
-                : i l1 ( __tk_geti lens j 0 )
-                : i l2 ( __tk_geti lens nj 0 )
+                : i o1 ( _tk_geti starts j 0 )
+                : i l1 ( _tk_geti lens j 0 )
+                : i l2 ( _tk_geti lens nj 0 )
                 ( string_clear pair )
                 ( string_push_bytes pair # *u + # i e o1 + l1 l2 )
                 ?? ( __tk_get . t lookup ( string_data pair ) ) {
@@ -402,9 +402,9 @@ $ `stdlib/std/utf8.nu`
             = j nj
         }
         ? >= best 0 {
-            : i nb ( __tk_geti nxt best -1 )
-            ( vec_set [i] lens best + ( __tk_geti lens best 0 ) ( __tk_geti lens nb 0 ) )
-            : i nn ( __tk_geti nxt nb -1 )
+            : i nb ( _tk_geti nxt best -1 )
+            ( vec_set [i] lens best + ( _tk_geti lens best 0 ) ( _tk_geti lens nb 0 ) )
+            : i nn ( _tk_geti nxt nb -1 )
             ( vec_set [i] nxt best nn )
             ? >= nn 0 { ( vec_set [i] prv nn best ) } {}
             = again T
@@ -414,8 +414,8 @@ $ `stdlib/std/utf8.nu`
 
     : ~ i j 0
     ~ >= j 0 {
-        ( __tk_spm_emit t e ( __tk_geti starts j 0 ) ( __tk_geti lens j 0 ) out )
-        = j ( __tk_geti nxt j -1 )
+        ( __tk_spm_emit t e ( _tk_geti starts j 0 ) ( _tk_geti lens j 0 ) out )
+        = j ( _tk_geti nxt j -1 )
     }
     ( vec_free [i] starts ) ( vec_free [i] lens )
     ( vec_free [i] nxt ) ( vec_free [i] prv )
@@ -709,8 +709,8 @@ $ `stdlib/std/utf8.nu`
     : ~ i j 0
     : i ns ( vec_len [i] . t sp_ids )
     ~ < j ns {
-        : i id ( __tk_geti . t sp_ids j -1 )
-        : s pc ( __tk_piece_data t id )
+        : i id ( _tk_geti . t sp_ids j -1 )
+        : s pc ( _tk_piece_data t id )
         : i pl ( nurl_str_len pc )
         ? & > pl best_len <= + p pl n {
             : ~ b eq T
@@ -747,14 +747,14 @@ $ `stdlib/std/utf8.nu`
         ~ < p n {
             : i b0 ( nurl_str_get text p )
             : ~ i hit -1
-            ? != 0 ( __tk_geti . t sp_first b0 0 ) { = hit ( __tk_special_at t text p n ) } {}
+            ? != 0 ( _tk_geti . t sp_first b0 0 ) { = hit ( __tk_special_at t text p n ) } {}
             ? >= hit 0 {
                 ? > ( string_len buf ) 0 {
                     ( __tk_encode_raw t ( string_data buf ) out )
                     ( string_clear buf )
                 } {}
                 ( vec_push [i] out hit )
-                = p + p ( nurl_str_len ( __tk_piece_data t hit ) )
+                = p + p ( nurl_str_len ( _tk_piece_data t hit ) )
             } {
                 ( string_push_char buf b0 )
                 = p + p 1
@@ -775,9 +775,9 @@ $ `stdlib/std/utf8.nu`
 @ tok_piece * Tok t i id → ( Vec u ) {
     : ( Vec u ) out ( vec_new [u] )
     ? | < id 0 >= id ( tok_n_vocab t ) { ^ out } {}
-    : i ty ( __tk_geti . t ttype id TT_NORMAL )
+    : i ty ( _tk_geti . t ttype id TT_NORMAL )
     ? == ty TT_CONTROL { ^ out } {}
-    : s p ( __tk_piece_data t id )
+    : s p ( _tk_piece_data t id )
     ? == . t mode TOK_SPM {
         ? == ty TT_BYTE {
             : i bv ( __tk_parse_byte_piece p )
@@ -831,7 +831,7 @@ $ `stdlib/std/utf8.nu`
     : ( Vec u ) out ( vec_new [u] )
     : ~ i k 0
     ~ < k ( vec_len [i] ids ) {
-        : ( Vec u ) pb ( tok_piece t ( __tk_geti ids k -1 ) )
+        : ( Vec u ) pb ( tok_piece t ( _tk_geti ids k -1 ) )
         ( vec_extend [u] out pb )
         ( vec_free [u] pb )
         = k + k 1

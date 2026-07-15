@@ -369,7 +369,7 @@ $ `stdlib/ext/http2_frame.nu`
     : ~ String s ( string_new )
     ? huffman {
         ( string_free s )
-        : !String HpackErr hr ( __hpack_huffman_decode buf data_off length )
+        : !String HpackErr hr ( _hpack_huffman_decode buf data_off length )
         ?? hr {
             T text → { = s text }
             F e → { ^ @ !HpackString HpackErr { F e } }
@@ -652,7 +652,7 @@ $ `stdlib/ext/http2_frame.nu`
 // codes by length (5..30 bits); first match wins because the codes are
 // prefix-free. EOS (symbol 256) inside data is a protocol error.
 
-@ __hpack_huffman_decode ( Vec u ) buf i from i length → !String HpackErr {
+@ _hpack_huffman_decode ( Vec u ) buf i from i length → !String HpackErr {
     : ~ String out ( string_new )
     : ~ i bit_window 0
     : ~ i bits_avail 0

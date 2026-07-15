@@ -15,7 +15,7 @@
 //   1. cap >= len + 1                 (always room for a trailing NUL)
 //   2. data[len] == 0  between ops    (so `string_data` returns C-safe s)
 //
-// `__string_seal` enforces the invariant after every mutation. NUL bytes
+// `_string_seal` enforces the invariant after every mutation. NUL bytes
 // inside [0, len) are stored verbatim (Vec[u] doesn't truncate); only
 // `string_data`'s C-string consumers see truncation at the first inner
 // NUL, which is the contract of every NUL-terminated API.
@@ -268,7 +268,7 @@ $ `stdlib/core/char.nu`
 }
 
 // Append the raw NUL-terminated bytes of `raw` onto str's buffer. Caller
-// is responsible for the post-mutation `__string_seal`.
+// is responsible for the post-mutation `_string_seal`.
 @ __string_append_raw String str s raw → v {
     : ( Vec u ) b ( __sbuf str )
     : i n ( nurl_str_len raw )
@@ -287,7 +287,7 @@ $ `stdlib/core/char.nu`
 // Ensure cap >= len + 1 and write 0 at data[len]. Call after every
 // mutation (push, extend, clear, …) so `string_data` returns a C-safe
 // pointer.
-@ __string_seal String str → v {
+@ _string_seal String str → v {
     : ( Vec u ) b ( __sbuf str )
     ( vec_reserve [u] b 1 )
     : *u p ( vec_data [u] b )
@@ -446,12 +446,12 @@ $ `stdlib/core/char.nu`
 @ string_push_char String str i c → v {
     : ( Vec u ) b ( __sbuf str )
     ( vec_push [u] b # u c )
-    ( __string_seal str )
+    ( _string_seal str )
 }
 
 @ string_push_str String str s raw → v {
     ( __string_append_raw str raw )
-    ( __string_seal str )
+    ( _string_seal str )
 }
 
 // Append exactly `n` raw bytes from `src` onto str's buffer. Unlike
@@ -469,25 +469,25 @@ $ `stdlib/core/char.nu`
         ( nurl_memcpy dst_at src n )
         : b _ok ( vec_set_len [u] b + len n )
     } {}
-    ( __string_seal str )
+    ( _string_seal str )
 }
 
 @ string_push_int String str i n → v {
     : s raw ( nurl_str_int n )
     ( __string_append_raw str raw )
-    ( __string_seal str )
+    ( _string_seal str )
 }
 
 @ string_push_float String str f x → v {
     : s raw ( nurl_str_float x )
     ( __string_append_raw str raw )
-    ( __string_seal str )
+    ( _string_seal str )
 }
 
 @ string_clear String str → v {
     : ( Vec u ) b ( __sbuf str )
     ( vec_clear [u] b )
-    ( __string_seal str )
+    ( _string_seal str )
 }
 
 @ string_free String str → v {

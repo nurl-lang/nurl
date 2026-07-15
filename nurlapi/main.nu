@@ -977,7 +977,7 @@ s combined_stdout s combined_stderr → v {
 @ get_body_str HttpRequest req → String {
     : i blen ( vec_len [u] . req body )
     : String body_str ( string_with_cap + blen 1 )
-    : ~ i bi 0 ~ < bi blen { : ?u co ( vec_get [u] . req body bi ) ?? co { T c → { ( string_push_char body_str c ) } F → {} } = bi + bi 1 } ( __string_seal body_str )
+    : ~ i bi 0 ~ < bi blen { : ?u co ( vec_get [u] . req body bi ) ?? co { T c → { ( string_push_char body_str c ) } F → {} } = bi + bi 1 } ( _string_seal body_str )
     ^ body_str
 }
 
@@ -2138,7 +2138,7 @@ s combined_stdout s combined_stderr → v {
     ?? bid_opt { T bid → {
             ?? fname_opt { T fname → {
                     // Path-traversal defence — refuse `..` in either segment.
-                    ? | ( __has_dotdot_segment ( string_data bid ) ) ( __has_dotdot_segment ( string_data fname ) ) {
+                    ? | ( _has_dotdot_segment ( string_data bid ) ) ( _has_dotdot_segment ( string_data fname ) ) {
                         ( string_free bid ) ( string_free fname )
                         ^ ( response_text 403 `forbidden\n` )
                     } {}
@@ -2213,7 +2213,7 @@ s combined_stdout s combined_stderr → v {
     ( nurl_print `/` )
     ( nurl_print ( string_data filename ) )
     ( nurl_print `\n` )
-    ? | ( __has_dotdot_segment ( string_data build_id ) ) ( __has_dotdot_segment ( string_data filename ) ) {
+    ? | ( _has_dotdot_segment ( string_data build_id ) ) ( _has_dotdot_segment ( string_data filename ) ) {
         ^ ( response_text 403 `forbidden\n` )
     } {}
     : String out_dir_base ( get_output_dir )
@@ -2239,7 +2239,7 @@ s combined_stdout s combined_stderr → v {
 }
 
 @ h_static_for HttpRequest req String tail → HttpResponse {
-    ? ( __has_dotdot_segment ( string_data tail ) ) {
+    ? ( _has_dotdot_segment ( string_data tail ) ) {
         ^ ( response_text 403 `forbidden\n` )
     } {}
     : String full ( path_join `static` ( string_data tail ) )
@@ -2391,7 +2391,7 @@ s combined_stdout s combined_stderr → v {
     : ?String tail_opt ( params_get params `path` )
     ?? tail_opt {
         T tail → {
-            ? ( __has_dotdot_segment ( string_data tail ) ) {
+            ? ( _has_dotdot_segment ( string_data tail ) ) {
                 ( string_free tail )
                 ^ ( response_text 403 `forbidden\n` )
             } {}
@@ -2446,7 +2446,7 @@ s combined_stdout s combined_stderr → v {
     }
 }
 
-@ __html_escape_into s src String out → v {
+@ _html_escape_into s src String out → v {
     : i n ( nurl_str_len src )
     : ~ i k 0
     ~ < k n {
@@ -2699,7 +2699,7 @@ s combined_stdout s combined_stderr → v {
     : i ilen ( nurl_str_len info )
     ? > ilen 0 {
         ( string_push_str out `<pre><code class="language-` )
-        ( __html_escape_into info out )
+        ( _html_escape_into info out )
         ( string_push_str out `">` )
     } {
         ( string_push_str out `<pre><code>` )
@@ -2729,7 +2729,7 @@ s combined_stdout s combined_stderr → v {
     : i line_end ? & > hard_end pos == ( nurl_str_get src - hard_end 1 ) 13 - hard_end 1 hard_end
     : String line ( string_with_cap + - line_end pos 1 )
     : ~ i k pos ~ < k line_end { ( string_push_char line ( nurl_str_get src k ) ) = k + k 1 }
-    ( __string_seal line )
+    ( _string_seal line )
     ^ line
 }
 
@@ -2810,7 +2810,7 @@ s combined_stdout s combined_stderr → v {
             ( string_push_char line ( nurl_str_get src k ) )
             = k + k 1
         }
-        ( __string_seal line )
+        ( _string_seal line )
 
         : s lp ( string_data line )
 
@@ -2823,7 +2823,7 @@ s combined_stdout s combined_stderr → v {
                 ( string_push_str out `</code></pre>\n` )
                 = in_code F
             } {
-                ( __html_escape_into lp out )
+                ( _html_escape_into lp out )
                 ( string_push_char out 10 )
             }
         } {
@@ -2846,7 +2846,7 @@ s combined_stdout s combined_stderr → v {
                     ? & > hcount 0 == ( __md_byte lp line_len hcount ) 32 {
                         ( __md_close_block state out )
                         ( string_push_str out `<h` )
-                        : String hn ( string_with_cap 2 ) ( string_push_char hn + 48 hcount ) ( __string_seal hn )
+                        : String hn ( string_with_cap 2 ) ( string_push_char hn + 48 hcount ) ( _string_seal hn )
                         ( string_push_str out ( string_data hn ) )
                         ( string_push_char out 62 )
                         : i htxt_start + hcount 1
@@ -2994,7 +2994,7 @@ s combined_stdout s combined_stderr → v {
             : String src ( string_with_cap + blen 1 )
             : ~ i ki 0
             ~ < ki blen { : ?u co ( vec_get [u] body ki ) ?? co { T c → { ( string_push_char src c ) } F → {} } = ki + ki 1 }
-            ( __string_seal src )
+            ( _string_seal src )
             ( vec_free [u] body )
             : String rendered ( md_to_html ( string_data src ) )
             ( string_free src )
@@ -3016,7 +3016,7 @@ s combined_stdout s combined_stderr → v {
 // finds inside a rendered README/doc resolve to a live, rendered target
 // instead of a 404. Path traversal is rejected.
 @ __serve_repo_doc s rel → HttpResponse {
-    ? ( __has_dotdot_segment rel ) { ^ ( response_text 403 `forbidden\n` ) } {}
+    ? ( _has_dotdot_segment rel ) { ^ ( response_text 403 `forbidden\n` ) } {}
     : String root ( get_work_root )
     : String fp ( path_join ( string_data root ) rel )
     : i rn ( nurl_str_len rel )
@@ -3075,7 +3075,7 @@ s combined_stdout s combined_stderr → v {
             : String text ( string_with_cap + blen 1 )
             : ~ i ki 0
             ~ < ki blen { : ?u co ( vec_get [u] body ki ) ?? co { T c → { ( string_push_char text c ) } F → {} } = ki + ki 1 }
-            ( __string_seal text )
+            ( _string_seal text )
             ( vec_free [u] body )
             // Wrap the EBNF as a single fenced code block and pump it through
             // the markdown renderer so we reuse the doc-page chrome.
@@ -3485,7 +3485,7 @@ s combined_stdout s combined_stderr → v {
 // api/'s StdlibContent / TestContent (the viewer pages fetch JSON).
 // Refuses `..` segments.
 @ __serve_module_json HttpRequest req String dir s name → HttpResponse {
-    ? ( __has_dotdot_segment name ) {
+    ? ( _has_dotdot_segment name ) {
         ^ ( response_text 403 `{"error":"forbidden"}` )
     } {}
     : String fpath ( path_join ( string_data dir ) name )
@@ -3495,7 +3495,7 @@ s combined_stdout s combined_stderr → v {
             : i sz ( vec_len [u] body )
             : String src ( string_with_cap + sz 1 )
             : ~ i ki 0 ~ < ki sz { : ?u co ( vec_get [u] body ki ) ?? co { T c → { ( string_push_char src c ) } F → {} } = ki + ki 1 }
-            ( __string_seal src )
+            ( _string_seal src )
             : Json o ( json_obj_new )
             ( json_obj_set o `name` ( json_str_lit name ) )
             ( json_obj_set o `source` ( json_str_lit ( string_data src ) ) )
@@ -3619,7 +3619,7 @@ s combined_stdout s combined_stderr → v {
     ?? tail_opt {
         T tail → {
             ( nurl_print `[srv] GET /stdlib-docs/` ) ( nurl_print ( string_data tail ) ) ( nurl_print `\n` )
-            ? ( __has_dotdot_segment ( string_data tail ) ) {
+            ? ( _has_dotdot_segment ( string_data tail ) ) {
                 ( string_free tail )
                 ^ ( response_text 403 `forbidden\n` )
             } {}
@@ -4431,7 +4431,7 @@ s combined_stdout s combined_stderr → v {
     // traversal — same defensive shape h_static* uses.
     ? != 0 ( nurl_str_eq name `nurl_read_example` ) {
         : s rel ( __mcp_args_get `name` args `` )
-        ? | == ( nurl_str_len rel ) 0 ( __has_dotdot_segment rel ) {
+        ? | == ( nurl_str_len rel ) 0 ( _has_dotdot_segment rel ) {
             ^ ( __mcp_result_error `bad or missing 'name'` )
         } {}
         : String dir ( get_examples_dir )
@@ -4442,7 +4442,7 @@ s combined_stdout s combined_stderr → v {
     } {}
     ? != 0 ( nurl_str_eq name `nurl_read_stdlib` ) {
         : s rel ( __mcp_args_get `name` args `` )
-        ? | == ( nurl_str_len rel ) 0 ( __has_dotdot_segment rel ) {
+        ? | == ( nurl_str_len rel ) 0 ( _has_dotdot_segment rel ) {
             ^ ( __mcp_result_error `bad or missing 'name'` )
         } {}
         : String dir ( get_stdlib_dir )
@@ -4453,7 +4453,7 @@ s combined_stdout s combined_stderr → v {
     } {}
     ? != 0 ( nurl_str_eq name `nurl_read_test` ) {
         : s rel ( __mcp_args_get `name` args `` )
-        ? | == ( nurl_str_len rel ) 0 ( __has_dotdot_segment rel ) {
+        ? | == ( nurl_str_len rel ) 0 ( _has_dotdot_segment rel ) {
             ^ ( __mcp_result_error `bad or missing 'name'` )
         } {}
         : String dir ( get_tests_dir )

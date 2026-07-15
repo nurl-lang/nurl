@@ -63,14 +63,14 @@ $ `stdlib/net/nat.nu`
 
     // ── address-string helpers ───────────────────────────────────
     : String v4 ( string_from `192.168.1.5:55000` )
-    : String h4 ( __addr_host v4 )
-    ( pb `v4 host parsed: ` & != 0 ( nurl_str_eq ( string_data h4 ) `192.168.1.5` ) == ( __addr_port v4 ) 55000 )
-    ( pb `v4 family: ` == ( __ip_family h4 ) 1 )
+    : String h4 ( _addr_host v4 )
+    ( pb `v4 host parsed: ` & != 0 ( nurl_str_eq ( string_data h4 ) `192.168.1.5` ) == ( _addr_port v4 ) 55000 )
+    ( pb `v4 family: ` == ( _ip_family h4 ) 1 )
 
     : String v6 ( string_from `[2001:db8::1]:9999` )
-    : String h6 ( __addr_host v6 )
-    ( pb `v6 host parsed: ` & != 0 ( nurl_str_eq ( string_data h6 ) `2001:db8::1` ) == ( __addr_port v6 ) 9999 )
-    ( pb `v6 family: ` == ( __ip_family h6 ) 2 )
+    : String h6 ( _addr_host v6 )
+    ( pb `v6 host parsed: ` & != 0 ( nurl_str_eq ( string_data h6 ) `2001:db8::1` ) == ( _addr_port v6 ) 9999 )
+    ( pb `v6 family: ` == ( _ip_family h6 ) 2 )
 
     ( string_free v4 ) ( string_free h4 ) ( string_free v6 ) ( string_free h6 )
     ( vec_free [u] tok ) ( vec_free [u] ping ) ( vec_free [u] pong ) ( vec_free [u] junk )

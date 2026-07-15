@@ -1690,7 +1690,7 @@ $ `stdlib/ext/compress.nu`
 // or empty host. Delegates the RFC 3986 split to std/url.nu (url_parse);
 // this wrapper only enforces the ws/wss scheme and maps to WsUrl, with
 // the request target (path?query) preserved for the handshake line.
-@ __ws_parse_url s url → ?WsUrl {
+@ _ws_parse_url s url → ?WsUrl {
     : ?Url pu ( url_parse url )
     ^ ?? pu {
         T u → {
@@ -1733,7 +1733,7 @@ $ `stdlib/ext/compress.nu`
 }
 
 @ ws_connect_with s url ? String subprotocol → !WsClient WsErr {
-    : ?WsUrl pu ( __ws_parse_url url )
+    : ?WsUrl pu ( _ws_parse_url url )
     ?? pu {
         T u → {
             ?? ( __ws_open_conn u ) {
@@ -2023,7 +2023,7 @@ $ `stdlib/ext/compress.nu`
 // Drop the trailing `00 00 FF FF` Z_SYNC_FLUSH marker (RFC 7692 §7.2.1).
 // If that empties the payload, emit a single 0x00 (an empty
 // non-compressed DEFLATE block) so the frame still carries data.
-@ __ws_strip_deflate_tail ( Vec u ) comp → v {
+@ _ws_strip_deflate_tail ( Vec u ) comp → v {
     : i cn ( vec_len [u] comp )
     ? >= cn 4 {
         : *u p ( vec_data [u] comp )
@@ -2068,7 +2068,7 @@ $ `stdlib/ext/compress.nu`
 
 // Compress + send one message. Payloads below `min_size` are sent
 // uncompressed (RSV1=0) since tiny inputs usually grow under DEFLATE.
-@ __ws_send_message_deflate WsDeflate d TcpConn conn i opcode ( Vec u ) payload b client → !v WsErr {
+@ _ws_send_message_deflate WsDeflate d TcpConn conn i opcode ( Vec u ) payload b client → !v WsErr {
     : i n ( vec_len [u] payload )
     ? < n . d min_size {
         ^ ? client
@@ -2080,7 +2080,7 @@ $ `stdlib/ext/compress.nu`
         F e → { ^ @ !v WsErr { F ( __ws_compresserr_to_wserr e ) } }
         T comp → {
             ? . d deflate_no_takeover { ( raw_deflate_reset . d deflater ) } {}
-            ( __ws_strip_deflate_tail comp )
+            ( _ws_strip_deflate_tail comp )
             : !v WsErr r ( __ws_write_deflated_frame conn opcode comp client )
             ( vec_free [u] comp )
             ^ r
@@ -2090,24 +2090,24 @@ $ `stdlib/ext/compress.nu`
 
 @ ws_send_text_deflate WsDeflate d TcpConn conn s text → !v WsErr {
     : ( Vec u ) buf ( bytes_from_str text )
-    : !v WsErr r ( __ws_send_message_deflate d conn ( ws_opcode_text ) buf F )
+    : !v WsErr r ( _ws_send_message_deflate d conn ( ws_opcode_text ) buf F )
     ( vec_free [u] buf )
     ^ r
 }
 
 @ ws_send_binary_deflate WsDeflate d TcpConn conn ( Vec u ) data → !v WsErr {
-    ^ ( __ws_send_message_deflate d conn ( ws_opcode_binary ) data F )
+    ^ ( _ws_send_message_deflate d conn ( ws_opcode_binary ) data F )
 }
 
 @ ws_client_send_text_deflate WsDeflate d TcpConn conn s text → !v WsErr {
     : ( Vec u ) buf ( bytes_from_str text )
-    : !v WsErr r ( __ws_send_message_deflate d conn ( ws_opcode_text ) buf T )
+    : !v WsErr r ( _ws_send_message_deflate d conn ( ws_opcode_text ) buf T )
     ( vec_free [u] buf )
     ^ r
 }
 
 @ ws_client_send_binary_deflate WsDeflate d TcpConn conn ( Vec u ) data → !v WsErr {
-    ^ ( __ws_send_message_deflate d conn ( ws_opcode_binary ) data T )
+    ^ ( _ws_send_message_deflate d conn ( ws_opcode_binary ) data T )
 }
 
 // ── Receive path ──────────────────────────────────────────────────────
@@ -2115,7 +2115,7 @@ $ `stdlib/ext/compress.nu`
 // Inflate a compressed WsMessage in place, validating UTF-8 for text after
 // decompression. The decompressed size is capped at lim.max_message_bytes
 // (decompression-bomb guard). Frees the original compressed payload.
-@ __ws_inflate_message WsDeflate d WsLimits lim WsMessage msg → !WsMessage WsErr {
+@ _ws_inflate_message WsDeflate d WsLimits lim WsMessage msg → !WsMessage WsErr {
     ? ! . msg compressed { ^ @ !WsMessage WsErr { T msg } } {}
     : i op . msg opcode
     : ( Vec u ) comp . msg payload
@@ -2148,7 +2148,7 @@ $ `stdlib/ext/compress.nu`
     : !WsMessage WsErr mr ( __ws_read_message_ex conn lim F T )
     ?? mr {
         F e → { ^ @ !WsMessage WsErr { F e } }
-        T msg → { ^ ( __ws_inflate_message d lim msg ) }
+        T msg → { ^ ( _ws_inflate_message d lim msg ) }
     }
 }
 
@@ -2156,7 +2156,7 @@ $ `stdlib/ext/compress.nu`
     : !WsMessage WsErr mr ( __ws_read_message_ex conn lim T T )
     ?? mr {
         F e → { ^ @ !WsMessage WsErr { F e } }
-        T msg → { ^ ( __ws_inflate_message d lim msg ) }
+        T msg → { ^ ( _ws_inflate_message d lim msg ) }
     }
 }
 
@@ -2377,7 +2377,7 @@ $ `stdlib/ext/compress.nu`
 // is null and ws_deflate_free is a no-op, so the teardown is uniform:
 // ws_deflate_free the context, then ws_client_close the client.
 @ ws_connect_deflate s url ? String subprotocol WsDeflateConfig cfg → !WsDeflateConn WsErr {
-    : ?WsUrl pu ( __ws_parse_url url )
+    : ?WsUrl pu ( _ws_parse_url url )
     ?? pu {
         F _ → { ^ @ !WsDeflateConn WsErr { F WsBadUrl } }
         T u → {

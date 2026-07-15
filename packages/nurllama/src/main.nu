@@ -57,7 +57,7 @@ $ `stdlib/std/term.nu`
     : ~ i k 0
     ~ < k ( vec_len [i] ids ) {
         ? > k 0 { ( string_push_char m 32 ) } {}
-        ( string_push_int m ( __tk_geti ids k -1 ) )
+        ( string_push_int m ( _tk_geti ids k -1 ) )
         = k + k 1
     }
     ( nurl_print ( string_data m ) )
@@ -86,7 +86,7 @@ $ `stdlib/std/term.nu`
     : ~ i k 0
     : ~ b ok T
     ~ < k n {
-        ? == ( __tk_geti got k -1 ) . exp k {} { = ok F }
+        ? == ( _tk_geti got k -1 ) . exp k {} { = ok F }
         = k + k 1
     }
     ^ ok
@@ -897,7 +897,7 @@ $ `stdlib/std/term.nu`
                                     : String m ( string_new )
                                     ( string_push_int m k )
                                     ( string_push_str m `: ` )
-                                    ( string_push_str m ( __tk_piece_data t k ) )
+                                    ( string_push_str m ( _tk_piece_data t k ) )
                                     ( nurl_print ( string_data m ) )
                                     ( nurl_print `\n` )
                                     ( string_free m )

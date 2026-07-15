@@ -48,7 +48,7 @@ $ `src/serve.nu`
 }
 
 // <dir>/<name>
-@ __wh_path s dir s name → String {
+@ _wh_path s dir s name → String {
     : String p2 ( string_from dir )
     ? > ( string_len p2 ) 0 {
         ? != ( nurl_str_get ( string_data p2 ) - ( string_len p2 ) 1 ) 47 {
@@ -381,9 +381,9 @@ $ `src/serve.nu`
 }
 
 @ __wh_transcribe s dir s wavpath s lang i maxtok b use_vad b with_ts → i {
-    : String cfg ( __wh_path dir `config.json` )
-    : String wts ( __wh_path dir `model.safetensors` )
-    : String tjs ( __wh_path dir `tokenizer.json` )
+    : String cfg ( _wh_path dir `config.json` )
+    : String wts ( _wh_path dir `model.safetensors` )
+    : String tjs ( _wh_path dir `tokenizer.json` )
 
     : TokSpec spec @ TokSpec { TOK_BPE PRE_DEFAULT -1 -1 -1 F F F }
     : ~ i rc 0

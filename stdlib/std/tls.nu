@@ -39,7 +39,7 @@ $ `stdlib/std/tls_verify.nu`
 // compiler builtins) so it carries no dependency on stdlib/std/net.nu —
 // that lets net.nu import THIS module and dispatch its polymorphic TcpConn
 // reads/writes to the pure TLS stack without an import cycle.
-@ __tls_sock_write i fd ( Vec u ) data → b {
+@ _tls_sock_write i fd ( Vec u ) data → b {
     : *u dp ( vec_data [u] data )
     : i n ( vec_len [u] data )
     : ~ i off 0
@@ -110,42 +110,42 @@ $ `stdlib/std/tls_verify.nu`
 }
 
 // ── small helpers ─────────────────────────────────────────────────
-@ __t_bget ( Vec u ) v i k → i {
+@ _t_bget ( Vec u ) v i k → i {
     ?? ( vec_get [u] v k ) { T x → ^ # i x F _ → ^ 0 }
 }
 
-@ __tls_u16 ( Vec u ) v i n → v {
+@ _tls_u16 ( Vec u ) v i n → v {
     ( vec_push [u] v # u & >> n 8 255 )
     ( vec_push [u] v # u & n 255 )
 }
 
-@ __u24 ( Vec u ) v i n → v {
+@ _u24 ( Vec u ) v i n → v {
     ( vec_push [u] v # u & >> n 16 255 )
     ( vec_push [u] v # u & >> n 8 255 )
     ( vec_push [u] v # u & n 255 )
 }
 
-@ __tls_cat ( Vec u ) dst ( Vec u ) src → v {
+@ _tls_cat ( Vec u ) dst ( Vec u ) src → v {
     : i n ( vec_len [u] src )
     : ~ i k 0
-    ~ < k n { ( vec_push [u] dst # u ( __t_bget src k ) ) = k + k 1 }
+    ~ < k n { ( vec_push [u] dst # u ( _t_bget src k ) ) = k + k 1 }
 }
 
 // Append a 2-byte length prefix + the block bytes.
-@ __blk16 ( Vec u ) dst ( Vec u ) sub → v {
-    ( __tls_u16 dst ( vec_len [u] sub ) )
-    ( __tls_cat dst sub )
+@ _blk16 ( Vec u ) dst ( Vec u ) sub → v {
+    ( _tls_u16 dst ( vec_len [u] sub ) )
+    ( _tls_cat dst sub )
 }
 
 // Read a big-endian integer of `n` bytes from `v` at `off`.
-@ __rdint ( Vec u ) v i off i n → i {
+@ _rdint ( Vec u ) v i off i n → i {
     : ~ i acc 0
     : ~ i k 0
-    ~ < k n { = acc | << acc 8 ( __t_bget v + off k ) = k + k 1 }
+    ~ < k n { = acc | << acc 8 ( _t_bget v + off k ) = k + k 1 }
     ^ acc
 }
 
-@ __rand_bytes i n → ( Vec u ) {
+@ _rand_bytes i n → ( Vec u ) {
     : ( Vec u ) v ( vec_with_cap [u] ? > n 0 n 1 )
     : ~ i k 0
     ~ < k n { ( vec_push [u] v # u 0 ) = k + k 1 }
@@ -159,12 +159,12 @@ $ `stdlib/std/tls_verify.nu`
 
 // Constant-time all-zero test (OR-accumulate every byte; no early exit). An
 // empty vector counts as zero. Used to reject a degenerate ECDHE secret.
-@ __all_zero ( Vec u ) v → b {
+@ _all_zero ( Vec u ) v → b {
     : i n ( vec_len [u] v )
     ? == n 0 { ^ T } {}
     : ~ i acc 0
     : ~ i k 0
-    ~ < k n { = acc | acc ( __t_bget v k ) = k + k 1 }
+    ~ < k n { = acc | acc ( _t_bget v k ) = k + k 1 }
     ^ == acc 0
 }
 
@@ -175,14 +175,14 @@ $ `stdlib/std/tls_verify.nu`
 @ __downgrade_sentinel ( Vec u ) srand → b {
     ? < ( vec_len [u] srand ) 32 { ^ F } {}
     : ~ b m T
-    ? != ( __t_bget srand 24 ) 68 { = m F } {}  // 'D'
-    ? != ( __t_bget srand 25 ) 79 { = m F } {}  // 'O'
-    ? != ( __t_bget srand 26 ) 87 { = m F } {}  // 'W'
-    ? != ( __t_bget srand 27 ) 78 { = m F } {}  // 'N'
-    ? != ( __t_bget srand 28 ) 71 { = m F } {}  // 'G'
-    ? != ( __t_bget srand 29 ) 82 { = m F } {}  // 'R'
-    ? != ( __t_bget srand 30 ) 68 { = m F } {}  // 'D'
-    : i last ( __t_bget srand 31 )
+    ? != ( _t_bget srand 24 ) 68 { = m F } {}  // 'D'
+    ? != ( _t_bget srand 25 ) 79 { = m F } {}  // 'O'
+    ? != ( _t_bget srand 26 ) 87 { = m F } {}  // 'W'
+    ? != ( _t_bget srand 27 ) 78 { = m F } {}  // 'N'
+    ? != ( _t_bget srand 28 ) 71 { = m F } {}  // 'G'
+    ? != ( _t_bget srand 29 ) 82 { = m F } {}  // 'R'
+    ? != ( _t_bget srand 30 ) 68 { = m F } {}  // 'D'
+    : i last ( _t_bget srand 31 )
     ? & != last 0 != last 1 { = m F } {}
     ^ m
 }
@@ -203,7 +203,7 @@ $ `stdlib/std/tls_verify.nu`
         ? < got 0 { ( vec_free [u] tmp ) ^ @ !i TlsErr { F # TlsErr TlsRead } } {}
         ? == got 0 { ( vec_free [u] tmp ) ^ @ !i TlsErr { F # TlsErr TlsClosed } } {}
         : b _ok ( vec_set_len [u] tmp got )
-        ( __tls_cat . c rxbuf tmp )
+        ( _tls_cat . c rxbuf tmp )
         ( vec_free [u] tmp )
     }
     ^ @ !i TlsErr { T 1 }
@@ -222,11 +222,11 @@ $ `stdlib/std/tls_verify.nu`
 // an owned slice the caller frees.
 : TlsRecord { i rtype ( Vec u ) body }
 
-@ __read_record * TlsConn c → !TlsRecord TlsErr {
+@ _read_record * TlsConn c → !TlsRecord TlsErr {
     : !i TlsErr h ( __fill c 5 )
     ?? h { T _ → {} F e → { ^ @ !TlsRecord TlsErr { F e } } }
-    : i rtype ( __t_bget . c rxbuf 0 )
-    : i len ( __rdint . c rxbuf 3 2 )
+    : i rtype ( _t_bget . c rxbuf 0 )
+    : i len ( _rdint . c rxbuf 3 2 )
     : !i TlsErr b ( __fill c + 5 len )
     ?? b { T _ → {} F e → { ^ @ !TlsRecord TlsErr { F e } } }
     : ( Vec u ) body ( bytes_slice . c rxbuf 5 + 5 len )
@@ -236,26 +236,26 @@ $ `stdlib/std/tls_verify.nu`
 
 // Build the per-record nonce: static IV with the 64-bit sequence number
 // XORed into the low 8 bytes.
-@ __nonce ( Vec u ) iv i seq → ( Vec u ) {
+@ _nonce ( Vec u ) iv i seq → ( Vec u ) {
     : ( Vec u ) n ( vec_with_cap [u] 12 )
     : ~ i k 0
-    ~ < k 12 { ( vec_push [u] n # u ( __t_bget iv k ) ) = k + k 1 }
+    ~ < k 12 { ( vec_push [u] n # u ( _t_bget iv k ) ) = k + k 1 }
     : ~ i b 0
     ~ < b 8 {
         : i sb & >> seq * 8 - 7 b 255
-        ( vec_set [u] n + 4 b # u ^^ ( __t_bget n + 4 b ) sb )
+        ( vec_set [u] n + 4 b # u ^^ ( _t_bget n + 4 b ) sb )
         = b + b 1
     }
     ^ n
 }
 
 // AEAD dispatch on the negotiated cipher suite.
-@ __aead_seal i cipher ( Vec u ) key ( Vec u ) nonce ( Vec u ) aad ( Vec u ) pt → ( Vec u ) {
+@ _aead_seal i cipher ( Vec u ) key ( Vec u ) nonce ( Vec u ) aad ( Vec u ) pt → ( Vec u ) {
     ? == cipher 1 { ^ ( aes128_gcm_encrypt key nonce aad pt ) } {}
     ^ ( aead_encrypt key nonce aad pt )
 }
 
-@ __aead_open i cipher ( Vec u ) key ( Vec u ) nonce ( Vec u ) aad ( Vec u ) ct → ?( Vec u ) {
+@ _aead_open i cipher ( Vec u ) key ( Vec u ) nonce ( Vec u ) aad ( Vec u ) ct → ?( Vec u ) {
     ? == cipher 1 { ^ ( aes128_gcm_decrypt key nonce aad ct ) } {}
     ^ ( aead_decrypt key nonce aad ct )
 }
@@ -267,9 +267,9 @@ $ `stdlib/std/tls_verify.nu`
     ( vec_push [u] aad # u 23 )
     ( vec_push [u] aad # u 3 )
     ( vec_push [u] aad # u 3 )
-    ( __tls_u16 aad blen )
-    : ( Vec u ) nonce ( __nonce . c s_iv . c s_seq )
-    : ?( Vec u ) pt ( __aead_open . c cipher . c s_key nonce aad body )
+    ( _tls_u16 aad blen )
+    : ( Vec u ) nonce ( _nonce . c s_iv . c s_seq )
+    : ?( Vec u ) pt ( _aead_open . c cipher . c s_key nonce aad body )
     ( vec_free [u] aad )
     ( vec_free [u] nonce )
     = . c s_seq + . c s_seq 1
@@ -278,11 +278,11 @@ $ `stdlib/std/tls_verify.nu`
 
 // Strip TLS 1.3 inner padding: trailing zeros then the real content type.
 // Returns the content type; truncates `inner` to the real content length.
-@ __inner_type ( Vec u ) inner → i {
+@ _inner_type ( Vec u ) inner → i {
     : ~ i i - ( vec_len [u] inner ) 1
-    ~ & >= i 0 == ( __t_bget inner i ) 0 { = i - i 1 }
+    ~ & >= i 0 == ( _t_bget inner i ) 0 { = i - i 1 }
     ? < i 0 { ^ 0 } {}
-    : i ct ( __t_bget inner i )
+    : i ct ( _t_bget inner i )
     : b _ok ( vec_set_len [u] inner i )
     ^ ct
 }
@@ -290,23 +290,23 @@ $ `stdlib/std/tls_verify.nu`
 // Encrypt + send one record of `content` under the client keys.
 @ __send_encrypted * TlsConn c i content_type ( Vec u ) content → !v TlsErr {
     : ( Vec u ) inner ( vec_with_cap [u] + ( vec_len [u] content ) 1 )
-    ( __tls_cat inner content )
+    ( _tls_cat inner content )
     ( vec_push [u] inner # u content_type )
     : i total + ( vec_len [u] inner ) 16
     : ( Vec u ) aad ( vec_with_cap [u] 5 )
     ( vec_push [u] aad # u 23 )
     ( vec_push [u] aad # u 3 )
     ( vec_push [u] aad # u 3 )
-    ( __tls_u16 aad total )
-    : ( Vec u ) nonce ( __nonce . c c_iv . c c_seq )
-    : ( Vec u ) sealed ( __aead_seal . c cipher . c c_key nonce aad inner )
+    ( _tls_u16 aad total )
+    : ( Vec u ) nonce ( _nonce . c c_iv . c c_seq )
+    : ( Vec u ) sealed ( _aead_seal . c cipher . c c_key nonce aad inner )
     : ( Vec u ) rec ( vec_with_cap [u] + total 5 )
     ( vec_push [u] rec # u 23 )
     ( vec_push [u] rec # u 3 )
     ( vec_push [u] rec # u 3 )
-    ( __tls_u16 rec total )
-    ( __tls_cat rec sealed )
-    : b w ( __tls_sock_write . c fd rec )
+    ( _tls_u16 rec total )
+    ( _tls_cat rec sealed )
+    : b w ( _tls_sock_write . c fd rec )
     ( vec_free [u] inner )
     ( vec_free [u] aad )
     ( vec_free [u] nonce )
@@ -317,16 +317,16 @@ $ `stdlib/std/tls_verify.nu`
 }
 
 // Write a plaintext record straight to the socket.
-@ __send_plain * TlsConn c i rtype ( Vec u ) body → !v TlsErr {
+@ _send_plain * TlsConn c i rtype ( Vec u ) body → !v TlsErr {
     : ( Vec u ) rec ( vec_with_cap [u] + ( vec_len [u] body ) 5 )
     ( vec_push [u] rec # u rtype )
     // legacy_record_version 0x0303 (RFC 8446 §5.1: required for every
     // record except the initial ClientHello, where 0x0303 is also valid).
     ( vec_push [u] rec # u 3 )
     ( vec_push [u] rec # u 3 )
-    ( __tls_u16 rec ( vec_len [u] body ) )
-    ( __tls_cat rec body )
-    : b w ( __tls_sock_write . c fd rec )
+    ( _tls_u16 rec ( vec_len [u] body ) )
+    ( _tls_cat rec body )
+    : b w ( _tls_sock_write . c fd rec )
     ( vec_free [u] rec )
     ^ ? w @ !v TlsErr { T 0 } @ !v TlsErr { F # TlsErr TlsWrite }
 }
@@ -339,7 +339,7 @@ $ `stdlib/std/tls_verify.nu`
     ~ == need 1 {
         : i have ( vec_len [u] . c hsbuf )
         ? >= have 4 {
-            : i mlen ( __rdint . c hsbuf 1 3 )
+            : i mlen ( _rdint . c hsbuf 1 3 )
             ? >= have + 4 mlen {
                 : ( Vec u ) msg ( bytes_slice . c hsbuf 0 + 4 mlen )
                 : ( Vec u ) rest ( bytes_slice . c hsbuf + 4 mlen have )
@@ -349,7 +349,7 @@ $ `stdlib/std/tls_verify.nu`
             } {}
         } {}
         // Need more bytes: read another record.
-        : !TlsRecord TlsErr rr ( __read_record c )
+        : !TlsRecord TlsErr rr ( _read_record c )
         ?? rr {
             F e → { ^ @ !( Vec u ) TlsErr { F e } }
             T rec → {
@@ -361,9 +361,9 @@ $ `stdlib/std/tls_verify.nu`
                         ?? ( __decrypt_record c . rec body ) {
                             T inner → {
                                 ( vec_free [u] . rec body )
-                                : i ct ( __inner_type inner )
+                                : i ct ( _inner_type inner )
                                 ? == ct 22 {
-                                    ( __tls_cat . c hsbuf inner )
+                                    ( _tls_cat . c hsbuf inner )
                                     ( vec_free [u] inner )
                                 } {
                                     ( vec_free [u] inner )
@@ -379,7 +379,7 @@ $ `stdlib/std/tls_verify.nu`
                     } {
                         // plaintext handshake (ServerHello stage) or alert
                         ? == . rec rtype 22 {
-                            ( __tls_cat . c hsbuf . rec body )
+                            ( _tls_cat . c hsbuf . rec body )
                             ( vec_free [u] . rec body )
                         } {
                             ( vec_free [u] . rec body )
@@ -396,21 +396,21 @@ $ `stdlib/std/tls_verify.nu`
 // ── ClientHello ───────────────────────────────────────────────────
 @ __build_client_hello s host ( Vec u ) pubkey ( Vec u ) p256pub ( Vec u ) random ( Vec u ) sessid s alpn → ( Vec u ) {
     : ( Vec u ) body ( vec_new [u] )
-    ( __tls_u16 body 771 )  // legacy_version 0x0303
-    ( __tls_cat body random )  // 32-byte random
+    ( _tls_u16 body 771 )  // legacy_version 0x0303
+    ( _tls_cat body random )  // 32-byte random
     ( vec_push [u] body # u 32 )  // session id length
-    ( __tls_cat body sessid )
+    ( _tls_cat body sessid )
     // cipher_suites: TLS_AES_128_GCM_SHA256 (0x1301) +
     // TLS_CHACHA20_POLY1305_SHA256 (0x1303) — both use the SHA-256 key
     // schedule, so either keeps the rest of the handshake unchanged.
     // 1.3 suites first, then the TLS 1.2 ECDHE suites for fallback.
-    ( __tls_u16 body 12 )
-    ( __tls_u16 body 4865 )  // 0x1301 TLS_AES_128_GCM_SHA256
-    ( __tls_u16 body 4867 )  // 0x1303 TLS_CHACHA20_POLY1305_SHA256
-    ( __tls_u16 body 49195 )  // 0xc02b ECDHE-ECDSA-AES128-GCM-SHA256
-    ( __tls_u16 body 49199 )  // 0xc02f ECDHE-RSA-AES128-GCM-SHA256
-    ( __tls_u16 body 52393 )  // 0xcca9 ECDHE-ECDSA-CHACHA20-POLY1305
-    ( __tls_u16 body 52392 )  // 0xcca8 ECDHE-RSA-CHACHA20-POLY1305
+    ( _tls_u16 body 12 )
+    ( _tls_u16 body 4865 )  // 0x1301 TLS_AES_128_GCM_SHA256
+    ( _tls_u16 body 4867 )  // 0x1303 TLS_CHACHA20_POLY1305_SHA256
+    ( _tls_u16 body 49195 )  // 0xc02b ECDHE-ECDSA-AES128-GCM-SHA256
+    ( _tls_u16 body 49199 )  // 0xc02f ECDHE-RSA-AES128-GCM-SHA256
+    ( _tls_u16 body 52393 )  // 0xcca9 ECDHE-ECDSA-CHACHA20-POLY1305
+    ( _tls_u16 body 52392 )  // 0xcca8 ECDHE-RSA-CHACHA20-POLY1305
     // compression methods
     ( vec_push [u] body # u 1 )
     ( vec_push [u] body # u 0 )
@@ -421,56 +421,56 @@ $ `stdlib/std/tls_verify.nu`
     // server_name (0x0000)
     : ( Vec u ) sni ( vec_new [u] )
     : i hl ( nurl_str_len host )
-    ( __tls_u16 sni + hl 3 )  // ServerNameList length
+    ( _tls_u16 sni + hl 3 )  // ServerNameList length
     ( vec_push [u] sni # u 0 )  // name_type host_name
-    ( __tls_u16 sni hl )
+    ( _tls_u16 sni hl )
     : ~ i k 0
     ~ < k hl { ( vec_push [u] sni # u ( nurl_str_get host k ) ) = k + k 1 }
-    ( __tls_u16 ext 0 )
-    ( __blk16 ext sni )
+    ( _tls_u16 ext 0 )
+    ( _blk16 ext sni )
     ( vec_free [u] sni )
 
     // supported_groups (0x000a): x25519 (0x001d) + secp256r1 (0x0017).
     // Both are offered so the server can pick whichever it is configured
     // for — PostgreSQL/OpenSSL servers commonly default to P-256.
     : ( Vec u ) grp ( vec_new [u] )
-    ( __tls_u16 grp 4 )
-    ( __tls_u16 grp 29 )  // x25519
-    ( __tls_u16 grp 23 )  // secp256r1
-    ( __tls_u16 ext 10 )
-    ( __blk16 ext grp )
+    ( _tls_u16 grp 4 )
+    ( _tls_u16 grp 29 )  // x25519
+    ( _tls_u16 grp 23 )  // secp256r1
+    ( _tls_u16 ext 10 )
+    ( _blk16 ext grp )
     ( vec_free [u] grp )
 
     // signature_algorithms (0x000d)
     : ( Vec u ) sa ( vec_new [u] )
-    ( __tls_u16 sa 16 )  // list length (8 algs × 2)
-    ( __tls_u16 sa 1027 )  // ecdsa_secp256r1_sha256 0x0403
-    ( __tls_u16 sa 2052 )  // rsa_pss_rsae_sha256    0x0804
-    ( __tls_u16 sa 1025 )  // rsa_pkcs1_sha256       0x0401
-    ( __tls_u16 sa 1283 )  // ecdsa_secp384r1_sha384 0x0503
-    ( __tls_u16 sa 2053 )  // rsa_pss_rsae_sha384    0x0805
-    ( __tls_u16 sa 2054 )  // rsa_pss_rsae_sha512    0x0806
-    ( __tls_u16 sa 2055 )  // ed25519                0x0807
-    ( __tls_u16 sa 1281 )  // rsa_pkcs1_sha384       0x0501
-    ( __tls_u16 ext 13 )
-    ( __blk16 ext sa )
+    ( _tls_u16 sa 16 )  // list length (8 algs × 2)
+    ( _tls_u16 sa 1027 )  // ecdsa_secp256r1_sha256 0x0403
+    ( _tls_u16 sa 2052 )  // rsa_pss_rsae_sha256    0x0804
+    ( _tls_u16 sa 1025 )  // rsa_pkcs1_sha256       0x0401
+    ( _tls_u16 sa 1283 )  // ecdsa_secp384r1_sha384 0x0503
+    ( _tls_u16 sa 2053 )  // rsa_pss_rsae_sha384    0x0805
+    ( _tls_u16 sa 2054 )  // rsa_pss_rsae_sha512    0x0806
+    ( _tls_u16 sa 2055 )  // ed25519                0x0807
+    ( _tls_u16 sa 1281 )  // rsa_pkcs1_sha384       0x0501
+    ( _tls_u16 ext 13 )
+    ( _blk16 ext sa )
     ( vec_free [u] sa )
 
     // supported_versions (0x002b): TLS 1.3 (0x0304) then TLS 1.2 (0x0303)
     : ( Vec u ) sv ( vec_new [u] )
     ( vec_push [u] sv # u 4 )
-    ( __tls_u16 sv 772 )
-    ( __tls_u16 sv 771 )
-    ( __tls_u16 ext 43 )
-    ( __blk16 ext sv )
+    ( _tls_u16 sv 772 )
+    ( _tls_u16 sv 771 )
+    ( _tls_u16 ext 43 )
+    ( _blk16 ext sv )
     ( vec_free [u] sv )
 
     // ec_point_formats (0x000b): uncompressed — some TLS 1.2 servers require it
     : ( Vec u ) epf ( vec_new [u] )
     ( vec_push [u] epf # u 1 )
     ( vec_push [u] epf # u 0 )
-    ( __tls_u16 ext 11 )
-    ( __blk16 ext epf )
+    ( _tls_u16 ext 11 )
+    ( _blk16 ext epf )
     ( vec_free [u] epf )
 
     // key_share (0x0033): both an x25519 (32-byte) and a secp256r1
@@ -478,16 +478,16 @@ $ `stdlib/std/tls_verify.nu`
     // we already supplied a matching public key — no HelloRetryRequest.
     : ( Vec u ) ks ( vec_new [u] )
     : ( Vec u ) entry ( vec_new [u] )
-    ( __tls_u16 entry 29 )  // group x25519
-    ( __tls_u16 entry 32 )  // key_exchange length
-    ( __tls_cat entry pubkey )
-    ( __tls_u16 entry 23 )  // group secp256r1
-    ( __tls_u16 entry ( vec_len [u] p256pub ) )  // 65
-    ( __tls_cat entry p256pub )
-    ( __tls_u16 ks ( vec_len [u] entry ) )
-    ( __tls_cat ks entry )
-    ( __tls_u16 ext 51 )
-    ( __blk16 ext ks )
+    ( _tls_u16 entry 29 )  // group x25519
+    ( _tls_u16 entry 32 )  // key_exchange length
+    ( _tls_cat entry pubkey )
+    ( _tls_u16 entry 23 )  // group secp256r1
+    ( _tls_u16 entry ( vec_len [u] p256pub ) )  // 65
+    ( _tls_cat entry p256pub )
+    ( _tls_u16 ks ( vec_len [u] entry ) )
+    ( _tls_cat ks entry )
+    ( _tls_u16 ext 51 )
+    ( _blk16 ext ks )
     ( vec_free [u] entry )
     ( vec_free [u] ks )
 
@@ -497,23 +497,23 @@ $ `stdlib/std/tls_verify.nu`
     : i al ( nurl_str_len alpn )
     ? > al 0 {
         : ( Vec u ) alp ( vec_new [u] )
-        ( __tls_u16 alp + al 1 )  // ProtocolNameList length
+        ( _tls_u16 alp + al 1 )  // ProtocolNameList length
         ( vec_push [u] alp # u al )  // protocol name length
         : ~ i ak 0
         ~ < ak al { ( vec_push [u] alp # u ( nurl_str_get alpn ak ) ) = ak + ak 1 }
-        ( __tls_u16 ext 16 )
-        ( __blk16 ext alp )
+        ( _tls_u16 ext 16 )
+        ( _blk16 ext alp )
         ( vec_free [u] alp )
     } {}
 
-    ( __blk16 body ext )
+    ( _blk16 body ext )
     ( vec_free [u] ext )
 
     // wrap as handshake message: type=1 (client_hello) + 3-byte length
     : ( Vec u ) hs ( vec_with_cap [u] + ( vec_len [u] body ) 4 )
     ( vec_push [u] hs # u 1 )
-    ( __u24 hs ( vec_len [u] body ) )
-    ( __tls_cat hs body )
+    ( _u24 hs ( vec_len [u] body ) )
+    ( _tls_cat hs body )
     ( vec_free [u] body )
     ^ hs
 }
@@ -527,24 +527,24 @@ $ `stdlib/std/tls_verify.nu`
     ? ( __is_hrr msg ) { ^ @ !( Vec u ) TlsErr { F # TlsErr TlsHRR } } {}
     = p + p 2  // skip legacy_version
     = p + p 32  // skip random
-    : i sidlen ( __t_bget msg p )
+    : i sidlen ( _t_bget msg p )
     = p + + p 1 sidlen
-    : i cipher ( __rdint msg p 2 )
+    : i cipher ( _rdint msg p 2 )
     = p + p 2
     ? & != cipher 4867 != cipher 4865 { ^ @ !( Vec u ) TlsErr { F # TlsErr TlsBadCipher } } {}
     = p + p 1  // skip compression method
-    : i extlen ( __rdint msg p 2 )
+    : i extlen ( _rdint msg p 2 )
     = p + p 2
     : i extend + p extlen
     : ~ ( Vec u ) found ( vec_new [u] )
     : ~ i got 0
     ~ < p extend {
-        : i etype ( __rdint msg p 2 )
-        : i elen ( __rdint msg + p 2 2 )
+        : i etype ( _rdint msg p 2 )
+        : i elen ( _rdint msg + p 2 2 )
         : i edata + p 4
         ? == etype 51 {
             // key_share: group(2) ke_len(2) key_exchange
-            : i klen ( __rdint msg + edata 2 2 )
+            : i klen ( _rdint msg + edata 2 2 )
             : ( Vec u ) key ( bytes_slice msg + edata 4 + + edata 4 klen )
             ( vec_free [u] found )
             = found key
@@ -558,8 +558,8 @@ $ `stdlib/std/tls_verify.nu`
 
 // The raw cipher suite the server selected (2-byte value).
 @ __sh_suite ( Vec u ) msg → i {
-    : i sidlen ( __t_bget msg 38 )
-    ^ ( __rdint msg + 39 sidlen 2 )
+    : i sidlen ( _t_bget msg 38 )
+    ^ ( _rdint msg + 39 sidlen 2 )
 }
 
 // Negotiated TLS version (13/12) from the selected suite: the TLS 1.3
@@ -575,17 +575,17 @@ $ `stdlib/std/tls_verify.nu`
 
 @ __is_hrr ( Vec u ) msg → b {
     // SHA-256("HelloRetryRequest") in the ServerHello random field.
-    : i a ( __t_bget msg 6 )
-    : i b ( __t_bget msg 7 )
-    : i c2 ( __t_bget msg 8 )
-    : i d ( __t_bget msg 9 )
+    : i a ( _t_bget msg 6 )
+    : i b ( _t_bget msg 7 )
+    : i c2 ( _t_bget msg 8 )
+    : i d ( _t_bget msg 9 )
     ^ & & & == a 207 == b 33 == c2 173 == d 116
 }
 
 // ── traffic-key derivation ────────────────────────────────────────
 // From a traffic secret, derive (key, iv) and store on the conn for the
 // given direction. dir 0 = server-read, 1 = client-write.
-@ __set_keys * TlsConn c i dir ( Vec u ) secret → v {
+@ _set_keys * TlsConn c i dir ( Vec u ) secret → v {
     : ( Vec u ) emptyc ( vec_new [u] )
     : i klen ? == . c cipher 1 16 32
     : ( Vec u ) key ( hkdf_expand_label secret `key` emptyc klen )
@@ -607,7 +607,7 @@ $ `stdlib/std/tls_verify.nu`
 }
 
 // HMAC-based Finished verify_data over a traffic secret + transcript hash.
-@ __finished_mac ( Vec u ) secret ( Vec u ) thash → ( Vec u ) {
+@ _finished_mac ( Vec u ) secret ( Vec u ) thash → ( Vec u ) {
     : ( Vec u ) emptyc ( vec_new [u] )
     : ( Vec u ) fkey ( hkdf_expand_label secret `finished` emptyc 32 )
     : ( Vec u ) mac ( hmac_sha256_pure fkey thash )
@@ -642,20 +642,20 @@ $ `stdlib/std/tls_verify.nu`
     : ( Vec u ) out ( vec_new [u] )
     : i n ( vec_len [u] msg )
     ? < n 6 { ^ out } {}
-    : i extlen ( __rdint msg 4 2 )
+    : i extlen ( _rdint msg 4 2 )
     : i end ? > + 6 extlen n n + 6 extlen
     : ~ i p 6
     ~ < p end {
         ? > + p 4 end { ^ out } {}
-        : i et ( __rdint msg p 2 )
-        : i elen ( __rdint msg + p 2 2 )
+        : i et ( _rdint msg p 2 )
+        : i elen ( _rdint msg + p 2 2 )
         : i edata + p 4
         ? == et 16 {
             ? >= elen 3 {
-                : i nl ( __t_bget msg + edata 2 )
+                : i nl ( _t_bget msg + edata 2 )
                 : ~ i j 0
                 ~ < j nl {
-                    ( vec_push [u] out # u ( __t_bget msg + + edata 3 j ) )
+                    ( vec_push [u] out # u ( _t_bget msg + + edata 3 j ) )
                     = j + j 1
                 }
             } {}
@@ -702,14 +702,14 @@ $ `stdlib/std/tls_verify.nu`
     = . c alpn_sel ( vec_new [u] )
 
     // ── key share ──
-    : ( Vec u ) priv ( __rand_bytes 32 )
+    : ( Vec u ) priv ( _rand_bytes 32 )
     : ( Vec u ) cpub ( x25519_base priv )
-    : ( Vec u ) p256priv ( __rand_bytes 32 )
+    : ( Vec u ) p256priv ( _rand_bytes 32 )
     : ( Vec u ) p256pub ( p256_ecdh_keygen p256priv )
     ( vec_free [u] . c kx_p256 )
     = . c kx_p256 p256priv
-    : ( Vec u ) random ( __rand_bytes 32 )
-    : ( Vec u ) sessid ( __rand_bytes 32 )
+    : ( Vec u ) random ( _rand_bytes 32 )
+    : ( Vec u ) sessid ( _rand_bytes 32 )
 
     // ── transcript ──
     : ~ ( Vec u ) tr ( vec_new [u] )
@@ -717,14 +717,14 @@ $ `stdlib/std/tls_verify.nu`
     // ── ClientHello ──
     : ( Vec u ) ch ( __build_client_hello server_name cpub p256pub random sessid alpn )
     ( vec_free [u] p256pub )
-    ( __tls_cat tr ch )
-    : !v TlsErr sw ( __send_plain c 22 ch )
+    ( _tls_cat tr ch )
+    : !v TlsErr sw ( _send_plain c 22 ch )
     ?? sw { T _ → {} F e → { ^ ( __fail c priv cpub random sessid ch tr e ) } }
 
     // ── ServerHello ──
     : !( Vec u ) TlsErr shr ( __next_hs c )
     : ( Vec u ) sh ?? shr { T m → m F e → { ^ ( __fail c priv cpub random sessid ch tr e ) } }
-    ( __tls_cat tr sh )
+    ( _tls_cat tr sh )
     : i suite ( __sh_suite sh )
     = . c version ( __suite_version suite )
     = . c cipher ( __suite_cipher suite )
@@ -743,11 +743,11 @@ $ `stdlib/std/tls_verify.nu`
     : ( Vec u ) ecdhe ? == ( vec_len [u] spub ) 65 ( p256_ecdh_shared . c kx_p256 spub ) ( x25519 priv spub )
     // H3: RFC 8446 §7.4.2 — abort if the ECDHE output is all-zero (peer sent a
     // low-order / small-subgroup point forcing a known shared secret).
-    ? ( __all_zero ecdhe ) {
+    ? ( _all_zero ecdhe ) {
         ( vec_free [u] sh ) ( vec_free [u] spub ) ( vec_free [u] ecdhe )
         ^ ( __fail c priv cpub random sessid ch tr # TlsErr TlsProtocol )
     } {}
-    : ( Vec u ) zeros ( __rand_bytes 0 )
+    : ( Vec u ) zeros ( _rand_bytes 0 )
     : ( Vec u ) z32 ( vec_with_cap [u] 32 )
     : ~ i zk 0
     ~ < zk 32 { ( vec_push [u] z32 # u 0 ) = zk + zk 1 }
@@ -760,8 +760,8 @@ $ `stdlib/std/tls_verify.nu`
     : ( Vec u ) th_sh ( sha256_pure tr )
     : ( Vec u ) c_hs ( derive_secret hs_secret `c hs traffic` th_sh )
     : ( Vec u ) s_hs ( derive_secret hs_secret `s hs traffic` th_sh )
-    ( __set_keys c 0 s_hs )
-    ( __set_keys c 1 c_hs )
+    ( _set_keys c 0 s_hs )
+    ( _set_keys c 1 c_hs )
     = . c enc_read 1
 
     : ( Vec u ) derived2 ( derive_secret hs_secret `derived` ehash )
@@ -775,14 +775,14 @@ $ `stdlib/std/tls_verify.nu`
         ?? mr {
             F _ → { = flighterr 1 }
             T msg → {
-                : i t ( __t_bget msg 0 )
+                : i t ( _t_bget msg 0 )
                 ? == t 20 {
                     : ( Vec u ) th_cv ( sha256_pure tr )
-                    : ( Vec u ) expect ( __finished_mac s_hs th_cv )
-                    : b okfin ( __cmp_finished msg expect )
+                    : ( Vec u ) expect ( _finished_mac s_hs th_cv )
+                    : b okfin ( _cmp_finished msg expect )
                     ( vec_free [u] th_cv )
                     ( vec_free [u] expect )
-                    ( __tls_cat tr msg )
+                    ( _tls_cat tr msg )
                     ? okfin {} { = flighterr 1 }
                     = done 1
                 } {
@@ -796,8 +796,8 @@ $ `stdlib/std/tls_verify.nu`
                         : ( Vec u ) thc ( sha256_pure tr )
                         ( vec_free [u] . c th_cert )
                         = . c th_cert thc
-                        = . c cv_scheme ( __rdint msg 4 2 )
-                        : i siglen ( __rdint msg 6 2 )
+                        = . c cv_scheme ( _rdint msg 4 2 )
+                        : i siglen ( _rdint msg 6 2 )
                         ( vec_free [u] . c cv_sig )
                         = . c cv_sig ( bytes_slice msg 8 + 8 siglen )
                     } {}
@@ -809,7 +809,7 @@ $ `stdlib/std/tls_verify.nu`
                             = . c alpn_sel sel
                         } { ( vec_free [u] sel ) }
                     } {}
-                    ( __tls_cat tr msg )
+                    ( _tls_cat tr msg )
                 }
                 ( vec_free [u] msg )
             }
@@ -825,23 +825,23 @@ $ `stdlib/std/tls_verify.nu`
     : ( Vec u ) s_ap ( derive_secret master `s ap traffic` th_sf )
 
     // ── client Finished (under handshake keys) ──
-    : ( Vec u ) cfin ( __finished_mac c_hs th_sf )
+    : ( Vec u ) cfin ( _finished_mac c_hs th_sf )
     : ( Vec u ) finmsg ( vec_with_cap [u] 36 )
     ( vec_push [u] finmsg # u 20 )
-    ( __u24 finmsg 32 )
-    ( __tls_cat finmsg cfin )
+    ( _u24 finmsg 32 )
+    ( _tls_cat finmsg cfin )
     // change_cipher_spec for middlebox compatibility
     : ( Vec u ) ccs ( vec_with_cap [u] 1 )
     ( vec_push [u] ccs # u 1 )
-    : !v TlsErr cw ( __send_plain c 20 ccs )
+    : !v TlsErr cw ( _send_plain c 20 ccs )
     ?? cw { T _ → {} F _ → {} }
     ( vec_free [u] ccs )
     : !v TlsErr fw ( __send_encrypted c 22 finmsg )
     ?? fw { T _ → {} F _ → {} }
 
     // switch to application traffic keys
-    ( __set_keys c 0 s_ap )
-    ( __set_keys c 1 c_ap )
+    ( _set_keys c 0 s_ap )
+    ( _set_keys c 1 c_ap )
     = . c established 1
 
     // free handshake secrets / scratch
@@ -936,11 +936,11 @@ $ `stdlib/std/tls_verify.nu`
 }
 
 // Compare a Finished message's verify_data (bytes 4..36) against expected.
-@ __cmp_finished ( Vec u ) msg ( Vec u ) expect → b {
+@ _cmp_finished ( Vec u ) msg ( Vec u ) expect → b {
     ? < ( vec_len [u] msg ) 36 { ^ F } {}
     : ~ i diff 0
     : ~ i k 0
-    ~ < k 32 { = diff | diff ^^ ( __t_bget msg + 4 k ) ( __t_bget expect k ) = k + k 1 }
+    ~ < k 32 { = diff | diff ^^ ( _t_bget msg + 4 k ) ( _t_bget expect k ) = k + k 1 }
     ^ == diff 0
 }
 
@@ -993,7 +993,7 @@ $ `stdlib/std/tls_verify.nu`
 // consumed transparently.
 @ tls_read * TlsConn c i max → !( Vec u ) TlsErr {
     ~ & == ( vec_len [u] . c appbuf ) 0 == . c closed 0 {
-        : !TlsRecord TlsErr rr ( __read_record c )
+        : !TlsRecord TlsErr rr ( _read_record c )
         ?? rr {
             F e → {
                 ^ ?? e {
@@ -1010,7 +1010,7 @@ $ `stdlib/std/tls_verify.nu`
                         ?? ( __decrypt_record_12 c . rec rtype . rec body ) {
                             T inner → {
                                 ( vec_free [u] . rec body )
-                                ? == . rec rtype 23 { ( __tls_cat . c appbuf inner ) } {
+                                ? == . rec rtype 23 { ( _tls_cat . c appbuf inner ) } {
                                     ? == . rec rtype 21 { = . c closed 1 } {}
                                     // type 22 (post-handshake, e.g. tickets): ignore
                                 }
@@ -1025,9 +1025,9 @@ $ `stdlib/std/tls_verify.nu`
                         ?? ( __decrypt_record c . rec body ) {
                             T inner → {
                                 ( vec_free [u] . rec body )
-                                : i ct ( __inner_type inner )
+                                : i ct ( _inner_type inner )
                                 ? == ct 23 {
-                                    ( __tls_cat . c appbuf inner )
+                                    ( _tls_cat . c appbuf inner )
                                 } {
                                     ? == ct 21 { = . c closed 1 } {}
                                     // ct == 22 → post-handshake (ticket/key update): ignore
@@ -1100,7 +1100,7 @@ $ `stdlib/std/tls_verify.nu`
         : ( Vec u ) chunk ( hmac_sha256_pure secret cat )
         ( vec_free [u] cat )
         : ~ i j 0
-        ~ & < j 32 < ( vec_len [u] out ) outlen { ( vec_push [u] out # u ( __t_bget chunk j ) ) = j + j 1 }
+        ~ & < j 32 < ( vec_len [u] out ) outlen { ( vec_push [u] out # u ( _t_bget chunk j ) ) = j + j 1 }
         ( vec_free [u] chunk )
     }
     ( vec_free [u] a )
@@ -1116,7 +1116,7 @@ $ `stdlib/std/tls_verify.nu`
     ( vec_push [u] a # u rtype )
     ( vec_push [u] a # u 3 )
     ( vec_push [u] a # u 3 )
-    ( __tls_u16 a ptlen )
+    ( _tls_u16 a ptlen )
     ^ a
 }
 
@@ -1124,7 +1124,7 @@ $ `stdlib/std/tls_verify.nu`
 @ __nonce12_aes ( Vec u ) iv4 i seq → ( Vec u ) {
     : ( Vec u ) n ( vec_with_cap [u] 12 )
     : ~ i k 0
-    ~ < k 4 { ( vec_push [u] n # u ( __t_bget iv4 k ) ) = k + k 1 }
+    ~ < k 4 { ( vec_push [u] n # u ( _t_bget iv4 k ) ) = k + k 1 }
     : ~ i b 0
     ~ < b 8 { ( vec_push [u] n # u & >> seq * 8 - 7 b 255 ) = b + b 1 }
     ^ n
@@ -1134,11 +1134,11 @@ $ `stdlib/std/tls_verify.nu`
 @ __nonce12_chacha ( Vec u ) iv12 i seq → ( Vec u ) {
     : ( Vec u ) n ( vec_with_cap [u] 12 )
     : ~ i k 0
-    ~ < k 12 { ( vec_push [u] n # u ( __t_bget iv12 k ) ) = k + k 1 }
+    ~ < k 12 { ( vec_push [u] n # u ( _t_bget iv12 k ) ) = k + k 1 }
     : ~ i b 0
     ~ < b 8 {
         : i sb & >> seq * 8 - 7 b 255
-        ( vec_set [u] n + 4 b # u ^^ ( __t_bget n + 4 b ) sb )
+        ( vec_set [u] n + 4 b # u ^^ ( _t_bget n + 4 b ) sb )
         = b + b 1
     }
     ^ n
@@ -1155,13 +1155,13 @@ $ `stdlib/std/tls_verify.nu`
         // explicit nonce (= seq) is prepended on the wire
         : ~ i b 0
         ~ < b 8 { ( vec_push [u] body # u & >> . c c_seq * 8 - 7 b 255 ) = b + b 1 }
-        ( __tls_cat body sealed )
+        ( _tls_cat body sealed )
         ( vec_free [u] nonce )
         ( vec_free [u] sealed )
     } {
         : ( Vec u ) nonce ( __nonce12_chacha . c c_iv . c c_seq )
         : ( Vec u ) sealed ( aead_encrypt . c c_key nonce aad content )
-        ( __tls_cat body sealed )
+        ( _tls_cat body sealed )
         ( vec_free [u] nonce )
         ( vec_free [u] sealed )
     }
@@ -1169,9 +1169,9 @@ $ `stdlib/std/tls_verify.nu`
     ( vec_push [u] rec # u rtype )
     ( vec_push [u] rec # u 3 )
     ( vec_push [u] rec # u 3 )
-    ( __tls_u16 rec ( vec_len [u] body ) )
-    ( __tls_cat rec body )
-    : b w ( __tls_sock_write . c fd rec )
+    ( _tls_u16 rec ( vec_len [u] body ) )
+    ( _tls_cat rec body )
+    : b w ( _tls_sock_write . c fd rec )
     ( vec_free [u] aad )
     ( vec_free [u] body )
     ( vec_free [u] rec )
@@ -1185,9 +1185,9 @@ $ `stdlib/std/tls_verify.nu`
         : i explen 8
         : ( Vec u ) nonce ( vec_with_cap [u] 12 )
         : ~ i k 0
-        ~ < k 4 { ( vec_push [u] nonce # u ( __t_bget . c s_iv k ) ) = k + k 1 }
+        ~ < k 4 { ( vec_push [u] nonce # u ( _t_bget . c s_iv k ) ) = k + k 1 }
         : ~ i e 0
-        ~ < e 8 { ( vec_push [u] nonce # u ( __t_bget body e ) ) = e + e 1 }
+        ~ < e 8 { ( vec_push [u] nonce # u ( _t_bget body e ) ) = e + e 1 }
         : ( Vec u ) ct ( bytes_slice body 8 ( vec_len [u] body ) )
         : i ptlen - ( vec_len [u] ct ) 16
         : ( Vec u ) aad ( __aad12 . c s_seq rtype ptlen )
@@ -1259,20 +1259,20 @@ $ `stdlib/std/tls_verify.nu`
         ?? mr {
             F _ → { = err 1 }
             T msg → {
-                : i t ( __t_bget msg 0 )
+                : i t ( _t_bget msg 0 )
                 ? == t 11 {
                     ( vec_free [u] . c cert_msg )
                     = . c cert_msg ( bytes_slice msg 0 ( vec_len [u] msg ) )
                 } {}
                 ? == t 12 {
                     // ServerKeyExchange: curve_type(1) curve(2) pklen(1) pk sig_scheme(2) siglen(2) sig
-                    = kx_curve ( __rdint msg 5 2 )
-                    : i pklen ( __t_bget msg 7 )
+                    = kx_curve ( _rdint msg 5 2 )
+                    : i pklen ( _t_bget msg 7 )
                     ( vec_free [u] spub )
                     = spub ( bytes_slice msg 8 + 8 pklen )
                     : i sp + 8 pklen
-                    = . c cv_scheme ( __rdint msg sp 2 )
-                    : i siglen ( __rdint msg + sp 2 2 )
+                    = . c cv_scheme ( _rdint msg sp 2 )
+                    : i siglen ( _rdint msg + sp 2 2 )
                     ( vec_free [u] . c cv_sig )
                     = . c cv_sig ( bytes_slice msg + sp 4 + + sp 4 siglen )
                     // signed data = client_random || server_random || ecdhe_params
@@ -1280,13 +1280,13 @@ $ `stdlib/std/tls_verify.nu`
                     ( bytes_extend_bytes signed random )
                     ( bytes_extend_bytes signed srand )
                     : ( Vec u ) eparams ( bytes_slice msg 4 + 8 pklen )
-                    ( __tls_cat signed eparams )
+                    ( _tls_cat signed eparams )
                     ( vec_free [u] eparams )
                     ( vec_free [u] . c th_cert )
                     = . c th_cert signed
                 } {}
                 ? == t 14 { = done 1 } {}
-                ( __tls_cat tr msg )
+                ( _tls_cat tr msg )
                 ( vec_free [u] msg )
             }
         }
@@ -1315,20 +1315,20 @@ $ `stdlib/std/tls_verify.nu`
     : i cklen ( vec_len [u] ckpub )
     : ( Vec u ) cke ( vec_with_cap [u] + cklen 5 )
     ( vec_push [u] cke # u 16 )
-    ( __u24 cke + cklen 1 )
+    ( _u24 cke + cklen 1 )
     ( vec_push [u] cke # u cklen )
-    ( __tls_cat cke ckpub )
+    ( _tls_cat cke ckpub )
     // ckpub is a fresh P-256 point we own; the x25519 case aliases cpub
     // (freed with the other handshake scratch later), so only free P-256.
     ? is_p256 { ( vec_free [u] ckpub ) } {}
-    : !v TlsErr ckw ( __send_plain c 22 cke )
+    : !v TlsErr ckw ( _send_plain c 22 cke )
     ?? ckw { T _ → {} F _ → {} }
-    ( __tls_cat tr cke )
+    ( _tls_cat tr cke )
 
     // ── ChangeCipherSpec + client Finished (encrypted) ──
     : ( Vec u ) ccs ( vec_with_cap [u] 1 )
     ( vec_push [u] ccs # u 1 )
-    : !v TlsErr cw ( __send_plain c 20 ccs )
+    : !v TlsErr cw ( _send_plain c 20 ccs )
     ?? cw { T _ → {} F _ → {} }
     ( vec_free [u] ccs )
 
@@ -1337,12 +1337,12 @@ $ `stdlib/std/tls_verify.nu`
     ( vec_free [u] th_c )
     : ( Vec u ) finmsg ( vec_with_cap [u] 16 )
     ( vec_push [u] finmsg # u 20 )
-    ( __u24 finmsg 12 )
-    ( __tls_cat finmsg cfin_vd )
+    ( _u24 finmsg 12 )
+    ( _tls_cat finmsg cfin_vd )
     ( vec_free [u] cfin_vd )
     : !v TlsErr fw ( __send_record_12 c 22 finmsg )
     ?? fw { T _ → {} F _ → {} }
-    ( __tls_cat tr finmsg )
+    ( _tls_cat tr finmsg )
     ( vec_free [u] finmsg )
 
     // ── server ChangeCipherSpec + Finished ──
@@ -1352,7 +1352,7 @@ $ `stdlib/std/tls_verify.nu`
     : ~ i serr 0
     : ~ i sdone 0
     ~ & == sdone 0 == serr 0 {
-        : !TlsRecord TlsErr rr ( __read_record c )
+        : !TlsRecord TlsErr rr ( _read_record c )
         ?? rr {
             F _ → { = serr 1 }
             T rec → {
@@ -1367,7 +1367,7 @@ $ `stdlib/std/tls_verify.nu`
                             // time (OR-accumulate XOR diffs, no early exit).
                             : ~ i diff ? >= ( vec_len [u] inner ) 16 0 1
                             : ~ i vi 0
-                            ~ < vi 12 { = diff | diff ^^ ( __t_bget inner + 4 vi ) ( __t_bget sfin_exp vi ) = vi + vi 1 }
+                            ~ < vi 12 { = diff | diff ^^ ( _t_bget inner + 4 vi ) ( _t_bget sfin_exp vi ) = vi + vi 1 }
                             ? == diff 0 { = sdone 1 } { = serr 1 }
                             ( vec_free [u] inner )
                         }
