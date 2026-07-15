@@ -167,6 +167,25 @@ silence threshold**, and a pile of `auto_settings` heuristics that exist
 to keep re-tuning that threshold per room. One port, and a floor that
 tunes itself, replace all three.
 
+## f16 weights stay f16
+
+An f16 checkpoint's matrix weights — the projections, the FFN layers, the
+embedding, which is where all the parameters live — used to be widened to
+f32 on the device. That doubled the memory for nothing: the halves *are*
+the model. They now stay f16, and the kernels widen at the point of use —
+exactly, denormals included — so the arithmetic is f32 either way and the
+transcripts are identical.
+
+| distil-large-v3 server | VRAM |
+|---|---|
+| before (f32 expansion) | 3.9 GB |
+| now (f16 on device) | **2.4 GB** |
+
+Half the weight bytes is also half the traffic through a memory-bound
+matvec, so decoding got slightly faster too. A mixed-precision checkpoint
+(none exists in practice) falls back to the f32 expansion — one probe, one
+predicate, used by both the probe and the upload so they cannot disagree.
+
 ## The control tokens are looked up, not hardcoded
 
 A whisper prompt is four tokens — `<|startoftranscript|>`, the language,

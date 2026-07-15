@@ -50,17 +50,47 @@ $ `deps/gpu/src/gpu.nu`
 // The portable matvec: one thread per output row. `bias` may be 0 — whisper's
 // k_proj has none, alone among its projections.
 @ __wk_matvec → s {
-    ^ `extern "C" __global__ void matvec(
+    ^ `
+    // f16 -> f32, exact, denormals included — the same conversion cvt_f16 runs
+    // as a widening pass; here it runs at the point of use so the weight can
+    // STAY half in device memory (half the bytes is half the traffic, and the
+    // matvecs are memory-bound). A union for the bit transport: memcpy needs a
+    // header the CPU shim lacks, __half needs cuda_fp16.h NVRTC lacks.
+    __device__ static inline float wh_h2f(unsigned short h) {
+        unsigned int sign = ((unsigned int)h >> 15) << 31;
+        unsigned int e = ((unsigned int)h >> 10) & 31u;
+        unsigned int m = (unsigned int)h & 1023u;
+        unsigned int bits;
+        if (e == 0u) {
+            if (m == 0u) bits = sign;
+            else {
+                int ex = 113;
+                while (!(m & 1024u)) { m <<= 1; ex--; }
+                bits = sign | ((unsigned int)ex << 23) | ((m & 1023u) << 13);
+            }
+        } else if (e == 31u) {
+            bits = sign | 0x7F800000u | (m << 13);
+        } else {
+            bits = sign | ((e + 112u) << 23) | (m << 13);
+        }
+        union { unsigned int u; float f; } c;
+        c.u = bits;
+        return c.f;
+    }
+    __device__ static inline float wh_w(const float* W, int wt, long long i) {
+        return wt ? wh_h2f(((const unsigned short*)W)[i]) : W[i];
+    }
+    extern "C" __global__ void matvec(
         const float* __restrict__ W, const float* __restrict__ x,
         const float* __restrict__ bias, float* __restrict__ y,
-        int rows, int cols, int batch) {
+        int rows, int cols, int batch, int wt) {
         int idx = blockIdx.x*blockDim.x + threadIdx.x;
         if (idx >= rows*batch) return;
         int b = idx / rows, r = idx % rows;
-        const float* w  = W + (long long)r*cols;
         const float* xb = x + (long long)b*cols;
+        long long w0 = (long long)r*cols;
         float acc = 0.f;
-        for (int c = 0; c < cols; ++c) acc += w[c]*xb[c];
+        for (int c = 0; c < cols; ++c) acc += wh_w(W, wt, w0 + c)*xb[c];
         y[(long long)b*rows + r] = acc + (bias ? bias[r] : 0.f);
     }`
 }
@@ -75,18 +105,48 @@ $ `deps/gpu/src/gpu.nu`
         for (int off = 16; off > 0; off >>= 1) v += __shfl_down_sync(0xffffffffu, v, off);
         return v;
     }
+
+    // f16 -> f32, exact, denormals included — the same conversion cvt_f16 runs
+    // as a widening pass; here it runs at the point of use so the weight can
+    // STAY half in device memory (half the bytes is half the traffic, and the
+    // matvecs are memory-bound). A union for the bit transport: memcpy needs a
+    // header the CPU shim lacks, __half needs cuda_fp16.h NVRTC lacks.
+    __device__ static inline float wh_h2f(unsigned short h) {
+        unsigned int sign = ((unsigned int)h >> 15) << 31;
+        unsigned int e = ((unsigned int)h >> 10) & 31u;
+        unsigned int m = (unsigned int)h & 1023u;
+        unsigned int bits;
+        if (e == 0u) {
+            if (m == 0u) bits = sign;
+            else {
+                int ex = 113;
+                while (!(m & 1024u)) { m <<= 1; ex--; }
+                bits = sign | ((unsigned int)ex << 23) | ((m & 1023u) << 13);
+            }
+        } else if (e == 31u) {
+            bits = sign | 0x7F800000u | (m << 13);
+        } else {
+            bits = sign | ((e + 112u) << 23) | (m << 13);
+        }
+        union { unsigned int u; float f; } c;
+        c.u = bits;
+        return c.f;
+    }
+    __device__ static inline float wh_w(const float* W, int wt, long long i) {
+        return wt ? wh_h2f(((const unsigned short*)W)[i]) : W[i];
+    }
     extern "C" __global__ void matvec_w(
         const float* __restrict__ W, const float* __restrict__ x,
         const float* __restrict__ bias, float* __restrict__ y,
-        int rows, int cols, int batch) {
+        int rows, int cols, int batch, int wt) {
         int gid  = blockIdx.x*blockDim.x + threadIdx.x;
         int warp = gid >> 5, lane = gid & 31;
         if (warp >= rows*batch) return;
         int b = warp / rows, r = warp % rows;
-        const float* w  = W + (long long)r*cols;
         const float* xb = x + (long long)b*cols;
+        long long w0 = (long long)r*cols;
         float acc = 0.f;
-        for (int c = lane; c < cols; c += 32) acc += w[c]*xb[c];
+        for (int c = lane; c < cols; c += 32) acc += wh_w(W, wt, w0 + c)*xb[c];
         acc = wh_warp_sum(acc);
         if (lane == 0) y[(long long)b*rows + r] = acc + (bias ? bias[r] : 0.f);
     }`
@@ -108,21 +168,46 @@ $ `deps/gpu/src/gpu.nu`
         for (int off = 16; off > 0; off >>= 1) v += __shfl_down_sync(0xffffffffu, v, off);
         return v;
     }
+
+    __device__ static inline float wh_h2f(unsigned short h) {
+        unsigned int sign = ((unsigned int)h >> 15) << 31;
+        unsigned int e = ((unsigned int)h >> 10) & 31u;
+        unsigned int m = (unsigned int)h & 1023u;
+        unsigned int bits;
+        if (e == 0u) {
+            if (m == 0u) bits = sign;
+            else {
+                int ex = 113;
+                while (!(m & 1024u)) { m <<= 1; ex--; }
+                bits = sign | ((unsigned int)ex << 23) | ((m & 1023u) << 13);
+            }
+        } else if (e == 31u) {
+            bits = sign | 0x7F800000u | (m << 13);
+        } else {
+            bits = sign | ((e + 112u) << 23) | (m << 13);
+        }
+        union { unsigned int u; float f; } c;
+        c.u = bits;
+        return c.f;
+    }
+    __device__ static inline float wh_w(const float* W, int wt, long long i) {
+        return wt ? wh_h2f(((const unsigned short*)W)[i]) : W[i];
+    }
     extern "C" __global__ void matvec_t(
         const float* __restrict__ W, const float* __restrict__ x,
         const float* __restrict__ bias, float* __restrict__ y,
-        int rows, int cols, int batch) {
+        int rows, int cols, int batch, int wt) {
         int gid  = blockIdx.x*blockDim.x + threadIdx.x;
         int warp = gid >> 5, lane = gid & 31;
         int tiles = (batch + 7) / 8;
         if (warp >= rows*tiles) return;
         int t = warp / rows, r = warp % rows;
         int b0 = t*8;
-        const float* w = W + (long long)r*cols;
+        long long w0 = (long long)r*cols;
         float acc[8];
         for (int j = 0; j < 8; ++j) acc[j] = 0.f;
         for (int c = lane; c < cols; c += 32) {
-            float wc = w[c];                       // ONE load, eight uses
+            float wc = wh_w(W, wt, w0 + c);        // ONE load, eight uses
             for (int j = 0; j < 8; ++j) {
                 int b = b0 + j;
                 if (b < batch) acc[j] += wc * x[(long long)b*cols + c];
@@ -162,10 +247,35 @@ $ `deps/gpu/src/gpu.nu`
     #define WH_BM 64
     #define WH_BN 64
     #define WH_BK 16
+
+    __device__ static inline float wh_h2f(unsigned short h) {
+        unsigned int sign = ((unsigned int)h >> 15) << 31;
+        unsigned int e = ((unsigned int)h >> 10) & 31u;
+        unsigned int m = (unsigned int)h & 1023u;
+        unsigned int bits;
+        if (e == 0u) {
+            if (m == 0u) bits = sign;
+            else {
+                int ex = 113;
+                while (!(m & 1024u)) { m <<= 1; ex--; }
+                bits = sign | ((unsigned int)ex << 23) | ((m & 1023u) << 13);
+            }
+        } else if (e == 31u) {
+            bits = sign | 0x7F800000u | (m << 13);
+        } else {
+            bits = sign | ((e + 112u) << 23) | (m << 13);
+        }
+        union { unsigned int u; float f; } c;
+        c.u = bits;
+        return c.f;
+    }
+    __device__ static inline float wh_w(const float* W, int wt, long long i) {
+        return wt ? wh_h2f(((const unsigned short*)W)[i]) : W[i];
+    }
     extern "C" __global__ void matmul(
         const float* __restrict__ W, const float* __restrict__ x,
         const float* __restrict__ bias, float* __restrict__ y,
-        int rows, int cols, int batch) {
+        int rows, int cols, int batch, int wt) {
         __shared__ float As[WH_BK][WH_BM];   // x  slab: As[k][position]
         __shared__ float Bs[WH_BK][WH_BN];   // W  slab: Bs[k][row]
         int nbb = (batch + WH_BM - 1) / WH_BM;
@@ -190,7 +300,7 @@ $ `deps/gpu/src/gpu.nu`
                 int gm = bm*WH_BM + mm;
                 int gn = bn*WH_BN + mm;
                 As[kk][mm] = (gm < batch && gk < cols) ? x[(long long)gm*cols + gk] : 0.f;
-                Bs[kk][mm] = (gn < rows  && gk < cols) ? W[(long long)gn*cols + gk] : 0.f;
+                Bs[kk][mm] = (gn < rows  && gk < cols) ? wh_w(W, wt, (long long)gn*cols + gk) : 0.f;
             }
             __syncthreads();
             for (int kk = 0; kk < WH_BK; ++kk) {
@@ -493,9 +603,34 @@ $ `deps/gpu/src/gpu.nu`
 // The embedding table is on the device (it is also the output projection —
 // whisper ties them), so a token's row is a copy, not a host round-trip.
 @ __wk_getrow → s {
-    ^ `extern "C" __global__ void getrow(const float* table, float* y, int row, int n) {
+    ^ `
+    __device__ static inline float wh_h2f(unsigned short h) {
+        unsigned int sign = ((unsigned int)h >> 15) << 31;
+        unsigned int e = ((unsigned int)h >> 10) & 31u;
+        unsigned int m = (unsigned int)h & 1023u;
+        unsigned int bits;
+        if (e == 0u) {
+            if (m == 0u) bits = sign;
+            else {
+                int ex = 113;
+                while (!(m & 1024u)) { m <<= 1; ex--; }
+                bits = sign | ((unsigned int)ex << 23) | ((m & 1023u) << 13);
+            }
+        } else if (e == 31u) {
+            bits = sign | 0x7F800000u | (m << 13);
+        } else {
+            bits = sign | ((e + 112u) << 23) | (m << 13);
+        }
+        union { unsigned int u; float f; } c;
+        c.u = bits;
+        return c.f;
+    }
+    __device__ static inline float wh_w(const float* W, int wt, long long i) {
+        return wt ? wh_h2f(((const unsigned short*)W)[i]) : W[i];
+    }
+    extern "C" __global__ void getrow(const float* table, float* y, int row, int n, int wt) {
         int i = blockIdx.x*blockDim.x + threadIdx.x;
-        if (i < n) y[i] = table[(long long)row*n + i];
+        if (i < n) y[i] = wh_w(table, wt, (long long)row*n + i);
     }`
 }
 
@@ -586,7 +721,12 @@ $ `deps/gpu/src/gpu.nu`
 // ── launchers ───────────────────────────────────────────────────────
 
 // y[batch][rows] = W[rows][cols] · x[batch][cols] + bias[rows]. `bd` may be 0.
-@ wk_matvec WhKernels ks i wd i xd i bd i yd i rows i cols i batch → v {
+// `wt` = 1 when W's elements are raw f16 halves (the checkpoint's own
+// precision, kept on the device); 0 for f32. The kernels widen at the point
+// of use — exactly, denormals included — so the arithmetic is f32 either way
+// and the result is bit-identical; what changes is that the weight bytes on
+// the device (and through the memory bus of a memory-bound matvec) are half.
+@ wk_matvec WhKernels ks i wd i xd i bd i yd i rows i cols i batch i wt → v {
     : ( Vec i ) a ( vec_new [i] )
     ( vec_push [i] a ( gpu_arg_i64 wd ) )
     ( vec_push [i] a ( gpu_arg_i64 xd ) )
@@ -595,6 +735,7 @@ $ `deps/gpu/src/gpu.nu`
     ( vec_push [i] a ( gpu_arg_i32 rows ) )
     ( vec_push [i] a ( gpu_arg_i32 cols ) )
     ( vec_push [i] a ( gpu_arg_i32 batch ) )
+    ( vec_push [i] a ( gpu_arg_i32 wt ) )
     ? . ks warp {
         // Many positions at once (the encoder): amortise the weight matrix over
         // eight of them. One position (the decoder): there is nothing to
@@ -735,12 +876,13 @@ $ `deps/gpu/src/gpu.nu`
     ( vec_free [i] a )
 }
 
-@ wk_getrow WhKernels ks i table i yd i row i n → v {
+@ wk_getrow WhKernels ks i table i yd i row i n i wt → v {
     : ( Vec i ) a ( vec_new [i] )
     ( vec_push [i] a ( gpu_arg_i64 table ) )
     ( vec_push [i] a ( gpu_arg_i64 yd ) )
     ( vec_push [i] a ( gpu_arg_i32 row ) )
     ( vec_push [i] a ( gpu_arg_i32 n ) )
+    ( vec_push [i] a ( gpu_arg_i32 wt ) )
     : i _r ( gpu_launch . ks getrow ( gpu_grid n 256 ) 256 a )
     ( vec_free [i] a )
 }
