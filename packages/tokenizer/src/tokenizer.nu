@@ -103,7 +103,7 @@ $ `stdlib/std/utf8.nu`
     ^ & >= b2 174 <= b2 255
 }
 
-@ __tk_build_byte_enc → ( Vec String ) {
+@ _tk_build_byte_enc → ( Vec String ) {
     : ( Vec String ) enc ( vec_new [String] )
     : ~ i n 0
     : ~ i b2 0
@@ -174,13 +174,14 @@ $ `stdlib/std/utf8.nu`
         ( vec_free_with [String] merges \ String s → v { ( string_free s ) } )
         ^ ( __tk_err `tokenizer: unknown tokenizer mode` )
     } {}
-    ? & == mode TOK_BPE == 0 ( vec_len [String] merges ) {
-        ( vec_free_with [String] pieces \ String s → v { ( string_free s ) } )
-        ( vec_free [f] scores )
-        ( vec_free [i] types )
-        ( vec_free_with [String] merges \ String s → v { ( string_free s ) } )
-        ^ ( __tk_err `tokenizer: a BPE vocabulary needs merge rules` )
-    } {}
+    // A BPE vocabulary WITHOUT merges is a legitimate thing: a decode-and-
+    // specials vocabulary. tok_decode needs only the pieces, and control /
+    // added tokens match atomically without any merging — which is exactly
+    // what a transcriber needs (whisper.cpp's ggml container ships the
+    // vocabulary and no merge list; the model never encodes free text, only
+    // looks up control tokens by name). Free-text tok_encode on such a
+    // vocabulary falls back to per-byte pieces — lossless, just not the
+    // model's segmentation — so it is not silently wrong, merely unmerged.
 
     : *Tok t # *Tok ( nurl_alloc Z Tok )
     = . t mode mode
@@ -192,7 +193,7 @@ $ `stdlib/std/utf8.nu`
     = . t lookup ( map_new [s i] )
     = . t ranks ( map_new [s i] )
     = . t rankkeys merges
-    = . t byte_enc ? == mode TOK_BPE ( __tk_build_byte_enc ) ( vec_new [String] )
+    = . t byte_enc ? == mode TOK_BPE ( _tk_build_byte_enc ) ( vec_new [String] )
     = . t byte_id ( vec_new [i] )
     = . t pre . spec pre
     = . t bos . spec bos

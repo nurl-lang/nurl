@@ -191,6 +191,28 @@ PYEOF3
         && ok "--vad --timestamps: speech at second 20 of the file is stamped ~00:20, not ~00:00 (condensed clock mapped back)" \
         || { bad "--vad --timestamps mapping"; echo "    got: [$TSV]"; }
 
+    # ── the ggml container: whisper.cpp's model zoo, one file ───────
+    # The SAME weights as HF tiny (ggerganov converts from the same
+    # checkpoint), so the transcript must be word-for-word identical.
+    # Exercises the whole translation layer: OpenAI tensor names, the
+    # positional special-token synthesis (<|startoftranscript|>, <|0.00|>…),
+    # raw-byte vocabulary re-encoding, and the f16 half mode (ggml matrices
+    # are f16 even in the "tiny" file).
+    if curl -sL --max-time 600 -f -o "$WORK/ggml-tiny.bin" \
+        https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin; then
+        GGML=$("$WH" transcribe "$WORK/ggml-tiny.bin" "$WORK/jfk.wav" 2>/dev/null)
+        [ "$GGML" = "$GOT" ] \
+            && ok "ggml-tiny.bin transcribes word-for-word as the HF checkpoint (one file, no sidecars)" \
+            || { bad "ggml transcription"; echo "    ggml: [$GGML]"; echo "    hf:   [$GOT]"; }
+
+        GGTS=$("$WH" transcribe "$WORK/ggml-tiny.bin" "$WORK/padded.wav" --vad --timestamps 2>/dev/null)
+        printf '%s' "$GGTS" | grep -qE '^\[00:(19\.[5-9]|20\.[0-4])[0-9]' \
+            && ok "ggml: --vad --timestamps works — the synthesized <|0.00|> tokens carry the clock" \
+            || { bad "ggml timestamps"; echo "    got: [$GGTS]"; }
+    else
+        echo "  SKIP ggml (download failed)"
+    fi
+
     # ── serve: the model held open ──────────────────────────────────
     # Three things under test: the whisper.cpp-compatible surface (multipart
     # `file` → {"text":...}), the raw-body path, and the reason the server

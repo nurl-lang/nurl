@@ -31,7 +31,8 @@ $ `src/kernels.nu`
     Gpu g
     WhKernels ks
     b w_half  // matrix weights live on the device as raw f16 halves
-    i st  // *St, the safetensors file
+    i st  // *St, the safetensors file (HF checkpoint) — 0 in ggml mode
+    i gg  // *Gg, whisper.cpp's legacy ggml container — 0 in HF mode
     i n_mels
     i d_model
     i n_head
@@ -156,7 +157,43 @@ $ `src/kernels.nu`
 // design — the kernels take one flag per launch and every matvec weight is in
 // the matrix set, so a mixed-precision checkpoint (none exists in practice)
 // simply falls back to the f32 expansion, which is always correct.
+// The ggml twin of __wh_is_matrix — the SAME set, in whisper.cpp's
+// spelling. Two predicates because the two containers name tensors
+// differently; if you touch one, touch the other.
+@ __wh_is_matrix_gg s name → b {
+    ? != 0 ( nurl_str_ends name `attn.query.weight` ) { ^ T } {}
+    ? != 0 ( nurl_str_ends name `attn.key.weight` ) { ^ T } {}
+    ? != 0 ( nurl_str_ends name `attn.value.weight` ) { ^ T } {}
+    ? != 0 ( nurl_str_ends name `attn.out.weight` ) { ^ T } {}
+    ? != 0 ( nurl_str_ends name `mlp.0.weight` ) { ^ T } {}
+    ? != 0 ( nurl_str_ends name `mlp.2.weight` ) { ^ T } {}
+    ^ ? ( nurl_str_eq name `decoder.token_embedding.weight` ) T F
+}
+
+@ __wh_probe_half_gg * Whisper w → b {
+    : *Gg gg # *Gg . w gg
+    : ~ i seen 0
+    : ~ b all16 T
+    : ~ i k 0
+    ~ < k ( vec_len [String] . gg tnames ) {
+        ?? ( vec_get [String] . gg tnames k ) {
+            T nm → {
+                ? ( __wh_is_matrix_gg ( string_data nm ) ) {
+                    = seen + seen 1
+                    : ~ i tt -1
+                    ?? ( vec_get [i] . gg ttypes k ) { T x → { = tt x } F → {} }
+                    ? != tt 1 { = all16 F } {}
+                } {}
+            }
+            F → {}
+        }
+        = k + k 1
+    }
+    ^ & > seen 0 all16
+}
+
 @ __wh_probe_half * Whisper w → b {
+    ? != . w gg 0 { ^ ( __wh_probe_half_gg w ) } {}
     : *St st # *St . w st
     : ~ i seen 0
     : ~ b all16 T
@@ -184,8 +221,39 @@ $ `src/kernels.nu`
 // use. Everything else (norms, biases, convs, positions) still widens here:
 // their bytes are noise, and it keeps every other kernel untouched.
 @ __wh_up * Whisper w s name → i {
-    : *St st # *St . w st
     : b keep16 ( __wh_is_matrix name )
+    ? != . w gg 0 {
+        : *Gg gg # *Gg . w gg
+        : i gi ( gg_find gg name )
+        ? < gi 0 { ^ -1 } {}
+        : i gt ( gg_ttype gg gi )
+        : i ge ( gg_nelems gg gi )
+        ? == gt 0 {
+            : GpuBuffer gb ( gpu_alloc . w g * ge 4 )
+            : i _g ( gpu_upload gb ( gg_ptr gg gi ) )
+            ( vec_push [i] . w bufs . gb dptr )
+            ( vec_push [i] . w bufsz . gb bytes )
+            ^ . gb dptr
+        } {}
+        // f16: half mode keeps the halves; otherwise widen on device,
+        // exactly like the safetensors path
+        ? & keep16 . w w_half {
+            : GpuBuffer gh ( gpu_alloc . w g * ge 2 )
+            : i _h ( gpu_upload gh ( gg_ptr gg gi ) )
+            ( vec_push [i] . w bufs . gh dptr )
+            ( vec_push [i] . w bufsz . gh bytes )
+            ^ . gh dptr
+        } {}
+        : GpuBuffer graw ( gpu_alloc . w g * ge 2 )
+        : i _r ( gpu_upload graw ( gg_ptr gg gi ) )
+        : GpuBuffer gf ( gpu_alloc . w g * ge 4 )
+        ( wk_cvt . w ks . graw dptr . gf dptr ge T )
+        ( gpu_free graw )
+        ( vec_push [i] . w bufs . gf dptr )
+        ( vec_push [i] . w bufsz . gf bytes )
+        ^ . gf dptr
+    } {}
+    : *St st # *St . w st
     : i ti ( st_find_tensor st name )
     ? < ti 0 { ^ -1 } {}
     // A tensor that is ALREADY f32 — which is what a whisper checkpoint is —
@@ -339,6 +407,10 @@ $ `src/kernels.nu`
     }
 
     : *Whisper w # *Whisper ( nurl_alloc Z Whisper )
+    // nurl_alloc does NOT zero: `Z T` is only the size. Every field read
+    // before its assignment must be set here — `gg` stays 0 in HF mode,
+    // and a garbage nonzero would route the probe into the ggml branch.
+    = . w gg 0
     = . w bufs ( vec_new [i] )
     = . w bufsz ( vec_new [i] )
     = . w n_mels n_mels
@@ -363,6 +435,42 @@ $ `src/kernels.nu`
         }
     }
 
+    ^ ( __wh_finish w n_dctx )
+}
+
+// Open a whisper.cpp ggml container: hyperparameters and tokenizer live in
+// the same file as the weights, so the only argument is the file.
+@ wh_open_ggml s path → !*Whisper String {
+    ?? ( gg_open path ) {
+        T gg → {
+            : *Whisper w # *Whisper ( nurl_alloc Z Whisper )
+            = . w st 0
+            = . w bufs ( vec_new [i] )
+            = . w bufsz ( vec_new [i] )
+            = . w gg # i gg
+            = . w n_mels . gg n_mels
+            = . w d_model . gg n_audio_state
+            = . w n_head . gg n_audio_head
+            = . w head_dim / . gg n_audio_state . gg n_audio_head
+            = . w d_head . gg n_text_head
+            = . w d_head_dim / . gg n_text_state . gg n_text_head
+            = . w n_enc_layer . gg n_audio_layer
+            = . w n_dec_layer . gg n_text_layer
+            = . w n_ctx_enc . gg n_audio_ctx
+            = . w n_vocab . gg n_vocab
+            = . w w_half ( __wh_probe_half w )
+            ^ ( __wh_finish w . gg n_text_ctx )
+        }
+        F e → {
+            ^ @ !*Whisper String { F e }
+        }
+    }
+}
+
+// Everything after "the weight source is open and probed" — one body for
+// both containers: device, kernels, every upload (in HF names — the ggml
+// source translates), caches, scratch.
+@ __wh_finish * Whisper w i n_dctx → !*Whisper String {
     = . w g ( gpu_open ( gpu_best_device ) )
     ? ( gpu_ok . w g ) {} {
         ( wh_close w )
@@ -402,7 +510,7 @@ $ `src/kernels.nu`
     < . w enc_pos 0 | < . w e_lnf_w 0 < . w e_lnf_b 0 { = ok F } {}
 
     : ~ i L 0
-    ~ & ok < L n_enc {
+    ~ & ok < L . w n_enc_layer {
         ? ( __wh_up_layer w L `self_attn_layer_norm.weight` . w e_ln1_w ) {} { = ok F }
         ? ( __wh_up_layer w L `self_attn_layer_norm.bias` . w e_ln1_b ) {} { = ok F }
         ? ( __wh_up_layer w L `self_attn.q_proj.weight` . w e_wq ) {} { = ok F }
@@ -463,7 +571,7 @@ $ `src/kernels.nu`
     ? | | | < . w tok_embd 0 < . w dec_pos 0 < . w d_lnf_w 0 < . w d_lnf_b 0 { = ok F } {}
 
     = L 0
-    ~ & ok < L n_dec {
+    ~ & ok < L . w n_dec_layer {
         ? ( __wh_up_dlayer w L `self_attn_layer_norm.weight` . w d_ln1_w ) {} { = ok F }
         ? ( __wh_up_dlayer w L `self_attn_layer_norm.bias` . w d_ln1_b ) {} { = ok F }
         ? ( __wh_up_dlayer w L `self_attn.q_proj.weight` . w d_wq ) {} { = ok F }
@@ -496,32 +604,32 @@ $ `src/kernels.nu`
         ^ ( __wh_err `whisper: the checkpoint is missing decoder tensors` )
     }
 
-    : i nfr * 2 n_ctx
-    : i dm d_model
-    = . w mel_d ( __wh_scratch w * nfr n_mels )
+    : i nfr * 2 . w n_ctx_enc
+    : i dm . w d_model
+    = . w mel_d ( __wh_scratch w * nfr . w n_mels )
     = . w c1_d ( __wh_scratch w * nfr dm )
-    = . w c2_d ( __wh_scratch w * n_ctx dm )
-    = . w xn_d ( __wh_scratch w * n_ctx dm )
-    = . w q_d ( __wh_scratch w * n_ctx dm )
-    = . w k_d ( __wh_scratch w * n_ctx dm )
-    = . w v_d ( __wh_scratch w * n_ctx dm )
-    = . w ao_d ( __wh_scratch w * n_ctx dm )
-    = . w tmp_d ( __wh_scratch w * n_ctx dm )
-    = . w ff_d ( __wh_scratch w * n_ctx * 4 dm )
-    = . w sc_d ( __wh_scratch w * * n_head n_ctx n_ctx )
-    = . w enc_out ( __wh_scratch w * n_ctx dm )
+    = . w c2_d ( __wh_scratch w * . w n_ctx_enc dm )
+    = . w xn_d ( __wh_scratch w * . w n_ctx_enc dm )
+    = . w q_d ( __wh_scratch w * . w n_ctx_enc dm )
+    = . w k_d ( __wh_scratch w * . w n_ctx_enc dm )
+    = . w v_d ( __wh_scratch w * . w n_ctx_enc dm )
+    = . w ao_d ( __wh_scratch w * . w n_ctx_enc dm )
+    = . w tmp_d ( __wh_scratch w * . w n_ctx_enc dm )
+    = . w ff_d ( __wh_scratch w * . w n_ctx_enc * 4 dm )
+    = . w sc_d ( __wh_scratch w * * . w n_head . w n_ctx_enc . w n_ctx_enc )
+    = . w enc_out ( __wh_scratch w * . w n_ctx_enc dm )
 
     // how many tokens the decoder can hold — its positional embedding's own
     // length, which the config states
     = . w n_ctx_dec n_dctx
     = L 0
-    ~ < L n_dec {
+    ~ < L . w n_dec_layer {
         ( vec_push [i] . w kcache ( __wh_scratch w * . w n_ctx_dec dm ) )
         ( vec_push [i] . w vcache ( __wh_scratch w * . w n_ctx_dec dm ) )
-        // the encoder's K and V for cross-attention: 1500 × d_model per layer,
+        // the encoder's K and V for cross-attention: 1500 × . w d_model per layer,
         // computed ONCE per clip rather than once per generated token
-        ( vec_push [i] . w xk ( __wh_scratch w * n_ctx dm ) )
-        ( vec_push [i] . w xv ( __wh_scratch w * n_ctx dm ) )
+        ( vec_push [i] . w xk ( __wh_scratch w * . w n_ctx_enc dm ) )
+        ( vec_push [i] . w xv ( __wh_scratch w * . w n_ctx_enc dm ) )
         = L + L 1
     }
     = . w dx_d ( __wh_scratch w dm )
@@ -532,9 +640,9 @@ $ `src/kernels.nu`
     = . w dao_d ( __wh_scratch w dm )
     = . w dtmp_d ( __wh_scratch w dm )
     = . w dff_d ( __wh_scratch w * 4 dm )
-    = . w dsc_d ( __wh_scratch w * n_head ? > n_ctx . w n_ctx_dec n_ctx . w n_ctx_dec )
-    = . w logits_d ( __wh_scratch w n_vocab )
-    = . w logits_host ( gpu_host_alloc * n_vocab 4 )
+    = . w dsc_d ( __wh_scratch w * . w n_head ? > . w n_ctx_enc . w n_ctx_dec . w n_ctx_enc . w n_ctx_dec )
+    = . w logits_d ( __wh_scratch w . w n_vocab )
+    = . w logits_host ( gpu_host_alloc * . w n_vocab 4 )
     ^ @ !*Whisper String { T w }
 }
 
@@ -571,6 +679,7 @@ $ `src/kernels.nu`
     ( vec_free [i] . w xk ) ( vec_free [i] . w xv )
     ? != . w logits_host 0 { ( gpu_host_free . w logits_host ) } {}
     ? != . w st 0 { ( st_close # *St . w st ) } {}
+    ? != . w gg 0 { ( gg_close # *Gg . w gg ) } {}
     ? ( gpu_ok . w g ) { ( wk_free . w ks ) ( gpu_close . w g ) } {}
     ( nurl_free # s w )
 }
