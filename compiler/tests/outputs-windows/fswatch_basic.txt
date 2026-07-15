@@ -1,5 +1,0 @@
-COMPILE OK
-LINK FAIL
-warning: overriding the module target triple with x86_64-pc-windows-msvc19.51.36248 [-Woverride-module]
-1 warning generated.
-clang: error: linker command failed with exit code 1120 (use -v to see invocation)

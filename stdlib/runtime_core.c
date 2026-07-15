@@ -1078,6 +1078,7 @@ int pthread_cond_destroy(pthread_cond_t *c)   { (void)c; return 0; }
  *       as the mmap/setenv stubs at the top of this file). */
 #  ifndef __MINGW32__
 #    include <io.h>
+#    include <direct.h>   /* _chdir */
 #    include <fcntl.h>
 #    include <share.h>
 #    include <bcrypt.h>
@@ -1177,6 +1178,27 @@ int mkstemp(char *tmpl) {
  * xpixel, ypixel) from the console's real geometry, so term_width /
  * term_height WORK in a Windows console rather than merely linking and
  * falling back to $COLUMNS. Every other request is ENOSYS. */
+/* POSIX names the IR declares that UCRT spells with an underscore (or
+ * lacks). The real ones forward; the termios trio are runtime-gated
+ * link stubs — term.nu's raw mode reports failure cleanly on a console
+ * that has no termios, and the symbols exist so ANY program importing
+ * term.nu links (term_progress only wanted a progress bar and died with
+ * LNK1120 for raw-mode functions it never calls). */
+/* Signatures mirror UCRT's own NONSTDC declarations exactly — when those
+ * are in scope, a mismatched definition is a compile error. The IR calls
+ * `i64 @write`; a 32-bit C return lands zero-extended in RAX on x64, the
+ * same contract every other narrow extern already rides. */
+int isatty(int fd)                         { return _isatty(fd); }
+int write(int fd, const void *buf, unsigned int n) {
+    return _write(fd, buf, n);
+}
+int chdir(const char *path)                { return _chdir(path); }
+int  tcgetattr(int fd, char *buf)          { (void)fd; (void)buf; errno = ENOSYS; return -1; }
+int  tcsetattr(int fd, int act, const char *buf) {
+    (void)fd; (void)act; (void)buf; errno = ENOSYS; return -1;
+}
+void cfmakeraw(char *buf)                  { (void)buf; }
+
 #define NURL_WIN_TIOCGWINSZ 0x5413
 int ioctl(int fd, long long req, void *argp) {
     if (req == NURL_WIN_TIOCGWINSZ && argp) {

@@ -250,6 +250,11 @@ $results = $names | ForEach-Object -ThrottleLimit $Jobs -Parallel {
     # AF_UNIX socketpair. Their link errors are environment text (lld/MSVC
     # version-dependent), so golden-ing the failure is brittle — skip.
     elseif (@('term_basic','unixsock') -contains $name) { $skip = $true }
+    # std/fswatch.nu is Linux-only (inotify is a Linux kernel API) — the
+    # posix runner skips it everywhere but Linux, and so do we. Its old
+    # Windows golden RECORDED the link failure, which is a blessed
+    # breakage, not coverage.
+    elseif ($name -like 'fswatch_*') { $skip = $true }
     elseif ($name -like 'http_*') {
         $httpDefault = @('http_request_parser','http_response_builder','http_options','http_router',
                          'http_static_traversal','http_extras','http_middleware','http_form',
@@ -326,7 +331,11 @@ $results = $names | ForEach-Object -ThrottleLimit $Jobs -Parallel {
             $linkArgs = @('-O2', $ll, $Runtime, '-lwinhttp') + $WinLibs + @('-o', $bin)
             $lr = Run-Proc $Clang $linkArgs $RootDir
             if ($lr.Code -ne 0) {
-                $le = Normalize $lr.Err
+                # link.exe reports the unresolved SYMBOLS (LNK2019) on
+                # STDOUT and clang only relays the exit code on stderr —
+                # capture both, or every link failure reads "exit code
+                # 1120" with the one fact that matters missing.
+                $le = Normalize ($lr.Out + $lr.Err)
                 $act = "COMPILE OK`nLINK FAIL`n" + (Cap-Lines (Strip-Root $le))
             } else {
                 # Each test runs in its OWN scratch dir so relative-path
