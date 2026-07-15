@@ -33,6 +33,8 @@ $ `stdlib/core/string.nu`
 $ `stdlib/std/bytes.nu`
 $ `stdlib/ext/json.nu`
 $ `stdlib/std/float.nu`
+$ `stdlib/std/fs.nu`
+$ `stdlib/std/path.nu`
 $ `deps/http/src/http.nu`
 
 : ~ i g_srv_w 0  // *Whisper, as an address (0 = not serving)
@@ -198,22 +200,53 @@ $ `deps/http/src/http.nu`
     ^ ( __srv_run wav g_srv_lang g_srv_vad g_srv_ts F )
 }
 
-// GET / — the built-in test page: upload a file, or stream the microphone
-// over the same port's WebSocket. Embedded (src/page_data.nu) so an
-// installed binary needs nothing on disk.
-@ __srv_page HttpRequest req → HttpResponse {
-    : ~ String body ( string_with_cap 10240 )
-    : i nch ( wh_page_chunks )
-    : ~ i c 0
-    ~ < c nch {
-        ( string_push_str body ( wh_page_chunk c ) )
-        = c + c 1
+// Where the test page lives on disk. Resolution mirrors packages/anomaly's
+// dashboard (nurlpkg's [install].assets stages `views` into
+// $NURL_HOME/share/whisper/, a sibling of bin/):
+//   <exe-dir>/views/index.html            (a hand-placed page beside the exe)
+//   <exe-dir>/../share/whisper/views/…    (nurlpkg install)
+//   views/index.html                      (running from the package dir)
+@ __srv_page_path → String {
+    : !String IoErr exe ( fs_readlink `/proc/self/exe` )
+    ?? exe {
+        T ep → {
+            : String bindir ( path_dirname ( string_data ep ) )
+            ( string_free ep )
+            : String c1 ( path_join ( string_data bindir ) `views/index.html` )
+            ? ( file_exists ( string_data c1 ) ) {
+                ( string_free bindir )
+                ^ c1
+            } { ( string_free c1 ) }
+            : String share ( path_join ( string_data bindir ) `../share/whisper/views/index.html` )
+            ( string_free bindir )
+            ? ( file_exists ( string_data share ) ) { ^ share } { ( string_free share ) }
+        }
+        F _ → {}
     }
-    : HttpResponse r ( response_new 200 )
-    ( response_set_header r `Content-Type` `text/html; charset=utf-8` )
-    ( response_set_body_str r ( string_data body ) )
-    ( string_free body )
-    ^ r
+    ? ( file_exists `views/index.html` ) { ^ ( string_from `views/index.html` ) } {}
+    ^ ( string_new )
+}
+
+// GET / — the test page: upload a file, or stream the microphone over the
+// same port's WebSocket. Served from disk like every other asset in this
+// ecosystem; a missing page degrades to a pointer, not a broken server.
+@ __srv_page HttpRequest req → HttpResponse {
+    : String pp ( __srv_page_path )
+    ? > ( string_len pp ) 0 {
+        ?? ( read_file_bytes ( string_data pp ) ) {
+            T body → {
+                ( string_free pp )
+                : HttpResponse r ( response_new 200 )
+                ( response_set_header r `Content-Type` `text/html; charset=utf-8` )
+                ( response_set_body_bytes r body )
+                ( vec_free [u] body )
+                ^ r
+            }
+            F _ → {}
+        }
+    } {}
+    ( string_free pp )
+    ^ ( response_text 404 `test page not found — reinstall the package (nurlpkg stages views/ into share/whisper/), or run from the package directory\n` )
 }
 
 @ __srv_health HttpRequest req → HttpResponse {
