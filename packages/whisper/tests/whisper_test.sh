@@ -225,6 +225,13 @@ PYEOF3
         sleep 0.5
     done
     if curl -s "http://127.0.0.1:$PORT/health" | grep -q '"ok"'; then
+        PAGE=$(curl -s "http://127.0.0.1:$PORT/")
+        printf '%s' "$PAGE" | grep -q "<!doctype html>" \
+            && printf '%s' "$PAGE" | grep -q "/inference" \
+            && printf '%s' "$PAGE" | grep -q "getUserMedia" \
+            && ok "GET / serves the built-in test page (upload + live microphone over the same WS)" \
+            || bad "test page"
+
         SRV=$(curl -s -F "file=@$WORK/jfk.wav" "http://127.0.0.1:$PORT/inference")
         [ "$SRV" = "{\"text\":\"$(printf '%s' "$WANT" | sed 's/^ //')\"}" ] \
             && ok "serve: POST /inference (multipart, whisper.cpp's shape) returns the words as JSON" \
