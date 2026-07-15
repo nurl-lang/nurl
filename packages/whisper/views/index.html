@@ -1,0 +1,216 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>whisper — pure NURL</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 15px/1.5 system-ui, sans-serif; background: #0d1117; color: #e6edf3; }
+  .wrap { max-width: 860px; margin: 0 auto; padding: 24px 16px 64px; }
+  h1 { font-size: 22px; margin: 8px 0 2px; }
+  h1 small { color: #7d8590; font-weight: 400; font-size: 14px; }
+  h2 { font-size: 16px; margin: 28px 0 10px; color: #a5b1bd; }
+  .card { background: #161b22; border: 1px solid #30363d; border-radius: 10px; padding: 16px; }
+  .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+  button { background: #238636; color: #fff; border: 0; border-radius: 8px; padding: 9px 16px;
+           font-size: 14px; cursor: pointer; }
+  button:disabled { background: #30363d; color: #7d8590; cursor: default; }
+  button.stop { background: #b62324; }
+  input[type=text] { background: #0d1117; border: 1px solid #30363d; color: #e6edf3;
+                     border-radius: 8px; padding: 8px 10px; width: 70px; }
+  input[type=file] { color: #a5b1bd; }
+  label { display: inline-flex; gap: 6px; align-items: center; color: #a5b1bd; user-select: none; }
+  .out { margin-top: 12px; white-space: pre-wrap; background: #0d1117; border: 1px solid #30363d;
+         border-radius: 8px; padding: 12px; min-height: 44px; font-size: 15px; }
+  .utt { padding: 3px 0; border-bottom: 1px dotted #21262d; }
+  .utt .t { color: #7d8590; font: 12px/1.4 ui-monospace, monospace; margin-right: 8px; }
+  .status { color: #7d8590; font-size: 13px; margin-top: 8px; min-height: 18px; }
+  .status.err { color: #f85149; }
+  .meter { height: 4px; background: #21262d; border-radius: 2px; overflow: hidden; margin-top: 8px; }
+  .meter div { height: 100%; width: 0; background: #238636; transition: width 80ms linear; }
+  a { color: #58a6ff; }
+  code { background: #21262d; border-radius: 4px; padding: 1px 5px; font-size: 13px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>whisper <small>pure-NURL speech recognition — built-in test page</small></h1>
+  <div class="status" id="model"></div>
+
+  <h2>Transcribe a file</h2>
+  <div class="card">
+    <div class="row">
+      <input type="file" id="file" accept="audio/*">
+      <label>lang <input type="text" id="flang" value="en"></label>
+      <label><input type="checkbox" id="fvad"> vad</label>
+      <label><input type="checkbox" id="fts"> timestamps</label>
+      <button id="go">Transcribe</button>
+    </div>
+    <div class="out" id="fout"></div>
+    <div class="status" id="fstat"></div>
+  </div>
+
+  <h2>Live microphone</h2>
+  <div class="card">
+    <div class="row">
+      <button id="mic">Start microphone</button>
+      <label>lang <input type="text" id="mlang" value="en"></label>
+      <span class="status" id="mstat" style="margin-top:0"></span>
+    </div>
+    <div class="meter"><div id="level"></div></div>
+    <div class="out" id="mout"></div>
+  </div>
+
+  <h2>API</h2>
+  <div class="card">
+    <div>POST <code>/inference</code> — multipart <code>file</code> field (or a raw WAV body);
+      optional <code>language</code>, <code>response_format</code> (json|text),
+      <code>vad</code>, <code>timestamps</code>. whisper.cpp clients work unchanged.</div>
+    <div style="margin-top:6px">WebSocket on this same port — send an optional
+      <code>{"format":"pcm16"}</code> text frame, then raw PCM16 @ 16 kHz binary frames;
+      each detected utterance returns as <code>{"text","t0","t1"}</code>.</div>
+    <div style="margin-top:6px">GET <code>/health</code> — model shape and request count.</div>
+  </div>
+</div>
+
+<script>
+"use strict";
+
+function el(id) { return document.getElementById(id); }
+
+fetch("/health").then(function (r) { return r.json(); }).then(function (h) {
+  el("model").textContent = "model: d_model " + h.d_model + ", " + h.encoder_layers +
+    "+" + h.decoder_layers + " layers, " + h.n_mels + " mel bands — requests served: " + h.requests;
+}).catch(function () { el("model").textContent = "health check failed"; });
+
+// ── file upload ─────────────────────────────────────────────────────
+el("go").addEventListener("click", function () {
+  var f = el("file").files[0];
+  if (!f) { el("fstat").textContent = "pick a file first"; return; }
+  var fd = new FormData();
+  fd.append("file", f);
+  fd.append("language", el("flang").value || "en");
+  fd.append("response_format", "text");
+  if (el("fvad").checked) fd.append("vad", "true");
+  if (el("fts").checked) fd.append("timestamps", "true");
+  el("go").disabled = true;
+  el("fstat").className = "status";
+  el("fstat").textContent = "transcribing…";
+  el("fout").textContent = "";
+  var t0 = performance.now();
+  fetch("/inference", { method: "POST", body: fd }).then(function (r) {
+    if (!r.ok) { throw new Error("HTTP " + r.status); }
+    return r.text();
+  }).then(function (text) {
+    el("fout").textContent = text;
+    el("fstat").textContent = ((performance.now() - t0) / 1000).toFixed(2) + " s";
+  }).catch(function (e) {
+    el("fstat").className = "status err";
+    el("fstat").textContent = String(e);
+  }).finally(function () { el("go").disabled = false; });
+});
+
+// ── live microphone over the WebSocket ──────────────────────────────
+//
+// The browser captures at its own rate (usually 48 kHz); the server wants
+// 16 kHz PCM16 mono. Linear resample + clamp in a ScriptProcessor — not
+// fancy, but dependency-free and it works in every current browser.
+var mic = { ws: null, ctx: null, node: null, stream: null, on: false };
+
+function micStatus(msg, err) {
+  el("mstat").className = err ? "status err" : "status";
+  el("mstat").textContent = msg;
+}
+
+function addUtterance(o) {
+  var d = document.createElement("div");
+  d.className = "utt";
+  var t = document.createElement("span");
+  t.className = "t";
+  t.textContent = "[" + o.t0.toFixed(2) + " - " + o.t1.toFixed(2) + "s]";
+  d.appendChild(t);
+  d.appendChild(document.createTextNode(o.text));
+  el("mout").appendChild(d);
+  d.scrollIntoView({ block: "nearest" });
+}
+
+function micStop() {
+  mic.on = false;
+  if (mic.node) { mic.node.disconnect(); mic.node = null; }
+  if (mic.ctx) { mic.ctx.close(); mic.ctx = null; }
+  if (mic.stream) { mic.stream.getTracks().forEach(function (tr) { tr.stop(); }); mic.stream = null; }
+  if (mic.ws && mic.ws.readyState === 1) { mic.ws.close(1000, "done"); }
+  mic.ws = null;
+  el("mic").textContent = "Start microphone";
+  el("mic").className = "";
+  el("level").style.width = "0";
+  micStatus("stopped");
+}
+
+function micStart() {
+  var proto = location.protocol === "https:" ? "wss://" : "ws://";
+  var ws = new WebSocket(proto + location.host + "/");
+  ws.binaryType = "arraybuffer";
+  mic.ws = ws;
+  ws.onopen = function () {
+    ws.send(JSON.stringify({ format: "pcm16", lang: el("mlang").value || "en" }));
+    navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1 } }).then(function (stream) {
+      mic.stream = stream;
+      mic.ctx = new (window.AudioContext || window.webkitAudioContext)();
+      var srcRate = mic.ctx.sampleRate;
+      var source = mic.ctx.createMediaStreamSource(stream);
+      var node = mic.ctx.createScriptProcessor(4096, 1, 1);
+      mic.node = node;
+      var carry = 0; // fractional read position carried across buffers
+      node.onaudioprocess = function (ev) {
+        if (!mic.on || ws.readyState !== 1) { return; }
+        var inb = ev.inputBuffer.getChannelData(0);
+        var ratio = srcRate / 16000;
+        var outLen = Math.floor((inb.length - carry) / ratio);
+        if (outLen <= 0) { return; }
+        var out = new Int16Array(outLen);
+        var peak = 0;
+        for (var i = 0; i < outLen; i++) {
+          var pos = carry + i * ratio;
+          var i0 = Math.floor(pos);
+          var frac = pos - i0;
+          var i1 = Math.min(i0 + 1, inb.length - 1);
+          var v = inb[i0] * (1 - frac) + inb[i1] * frac;
+          if (v > peak) { peak = v; }
+          v = Math.max(-1, Math.min(1, v));
+          out[i] = (v * 32767) | 0;
+        }
+        carry = carry + outLen * ratio - inb.length;
+        el("level").style.width = Math.min(100, peak * 260) + "%";
+        ws.send(out.buffer);
+      };
+      source.connect(node);
+      node.connect(mic.ctx.destination);
+      mic.on = true;
+      el("mic").textContent = "Stop";
+      el("mic").className = "stop";
+      micStatus("listening — utterances appear when you pause");
+    }).catch(function (e) {
+      micStatus("microphone: " + e.message, true);
+      micStop();
+    });
+  };
+  ws.onmessage = function (ev) {
+    try {
+      var o = JSON.parse(ev.data);
+      if (o.text !== undefined && o.t0 !== undefined) { addUtterance(o); }
+      else if (o.status) { micStatus("connected (" + (o.vad || "server") + " vad)"); }
+    } catch (e) { /* non-JSON frame: ignore */ }
+  };
+  ws.onerror = function () { micStatus("websocket error", true); };
+  ws.onclose = function () { if (mic.on) { micStop(); } };
+}
+
+el("mic").addEventListener("click", function () {
+  if (mic.on) { micStop(); } else { micStart(); }
+});
+</script>
+</body>
+</html>

@@ -198,6 +198,24 @@ $ `deps/http/src/http.nu`
     ^ ( __srv_run wav g_srv_lang g_srv_vad g_srv_ts F )
 }
 
+// GET / — the built-in test page: upload a file, or stream the microphone
+// over the same port's WebSocket. Embedded (src/page_data.nu) so an
+// installed binary needs nothing on disk.
+@ __srv_page HttpRequest req → HttpResponse {
+    : ~ String body ( string_with_cap 10240 )
+    : i nch ( wh_page_chunks )
+    : ~ i c 0
+    ~ < c nch {
+        ( string_push_str body ( wh_page_chunk c ) )
+        = c + c 1
+    }
+    : HttpResponse r ( response_new 200 )
+    ( response_set_header r `Content-Type` `text/html; charset=utf-8` )
+    ( response_set_body_str r ( string_data body ) )
+    ( string_free body )
+    ^ r
+}
+
 @ __srv_health HttpRequest req → HttpResponse {
     : Json o ( json_obj_new )
     : b _a ( json_obj_set o `status` ( json_str_lit ? == g_srv_w 0 `loading` `ok` ) )
@@ -414,13 +432,13 @@ $ `deps/http/src/http.nu`
     ( http_app_stream a \ TcpConn sc HttpRequest srq → b { ^ ( __srv_ws_hook sc srq ) } )
     ( http_app_post a `/inference` \ HttpRequest rq Params ps → HttpResponse { ^ ( __srv_inference rq ) } )
     ( http_app_get a `/health` \ HttpRequest rq Params ps → HttpResponse { ^ ( __srv_health rq ) } )
-    ( http_app_get a `/` \ HttpRequest rq Params ps → HttpResponse { ^ ( __srv_health rq ) } )
+    ( http_app_get a `/` \ HttpRequest rq Params ps → HttpResponse { ^ ( __srv_page rq ) } )
 
     : String msg ( string_from `whisper serving on http://` )
     ( string_push_str msg host )
     ( string_push_char msg 58 )
     ( string_push_int msg port )
-    ( string_push_str msg ` (POST /inference, GET /health, WS: stream audio)` )
+    ( string_push_str msg ` (test page at /, POST /inference, GET /health, WS: stream audio)` )
     ( nurl_print ( string_data msg ) )
     ( nurl_print `\n` )
     ( string_free msg )
