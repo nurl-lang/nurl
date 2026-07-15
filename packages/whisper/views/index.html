@@ -201,6 +201,7 @@ function micStart() {
     try {
       var o = JSON.parse(ev.data);
       if (o.text !== undefined && o.t0 !== undefined) { addUtterance(o); }
+      else if (o.error) { micStatus(o.error, true); }
       else if (o.status) { micStatus("connected (" + (o.vad || "server") + " vad)"); }
     } catch (e) { /* non-JSON frame: ignore */ }
   };

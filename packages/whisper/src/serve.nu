@@ -35,6 +35,8 @@ $ `stdlib/ext/json.nu`
 $ `stdlib/std/float.nu`
 $ `stdlib/std/fs.nu`
 $ `stdlib/std/path.nu`
+$ `stdlib/std/x509_gen.nu`
+$ `stdlib/ext/env.nu`
 $ `deps/http/src/http.nu`
 
 : ~ i g_srv_w 0  // *Whisper, as an address (0 = not serving)
@@ -44,6 +46,7 @@ $ `deps/http/src/http.nu`
 : ~ b g_srv_vad F
 : ~ b g_srv_ts F
 : ~ i g_srv_max 0
+: ~ f g_srv_nospeech 0.6
 
 // The bytes of the multipart part called `name`, copied — or an empty vec.
 @ __srv_part_bytes ( Vec MultipartPart ) parts s name → ( Vec u ) {
@@ -108,7 +111,7 @@ $ `deps/http/src/http.nu`
             : *Whisper w # *Whisper g_srv_w
             : *Tok t # *Tok g_srv_t
             : ( Vec u ) text ( vec_new [u] )
-            ? ( wh_run w t at16 lang g_srv_max use_vad with_ts text ) {
+            ? ( wh_run w t at16 lang g_srv_max use_vad with_ts g_srv_nospeech text ) {
                 // trim the leading space the tokenizer writes on plain text
                 : ~ i from 0
                 ? with_ts {} {
@@ -383,7 +386,15 @@ $ `deps/http/src/http.nu`
     : ( Vec u ) text ( vec_new [u] )
     // no VAD inside — the stream already segmented; no timestamps — the
     // segment IS the timestamp, and t0/t1 carry it
-    ? ( wh_run w t seg lang g_srv_max F F text ) {
+    ? ( wh_run w t seg lang g_srv_max F F g_srv_nospeech text ) {
+        // the gate ate it: the window held no speech (a phone mic's AGC
+        // pumping room noise past the energy floor). Nothing to say, and
+        // saying nothing is the right amount.
+        ? == ( vec_len [u] text ) 0 {
+            ( vec_free [u] text )
+            = g_srv_reqs + g_srv_reqs 1
+            ^ {}
+        } {}
         : String st ( string_new )
         : ~ i k 0
         ~ < k ( vec_len [u] text ) {
@@ -402,7 +413,18 @@ $ `deps/http/src/http.nu`
         ( string_free body )
         ( json_free o )
         ( string_free st )
-    } {}
+    } {
+        // The decode failed (an unknown language token, most likely) —
+        // SAY SO on the socket. A client staring at silence cannot tell a
+        // failed request from a quiet room, and "it just did nothing" is
+        // the worst bug report there is.
+        : Json eo ( json_obj_new )
+        : b _e ( json_obj_set eo `error` ( json_str_lit `transcription failed — check the language code (lowercase: fi, en, sv, …); the server log has the detail` ) )
+        : String eb ( json_stringify eo )
+        : !v WsErr _we ( ws_send_text c ( string_data eb ) )
+        ( string_free eb )
+        ( json_free eo )
+    }
     ( vec_free [u] text )
     = g_srv_reqs + g_srv_reqs 1
 }
@@ -450,7 +472,9 @@ $ `deps/http/src/http.nu`
 
 // The server proper, once a model and tokenizer are open — one body for
 // both containers. Owns neither; the caller closes them.
-@ __wh_serve_run * Whisper w * Tok t s host i port s lang i maxtok b use_vad b with_ts → i {
+// cert/key: PEM paths — both set = HTTPS (and wss: the TcpConn's TLS is
+// transparent to the WebSocket layer). Both empty = plain HTTP.
+@ __wh_serve_run * Whisper w * Tok t s host i port s lang i maxtok b use_vad b with_ts s cert s key → i {
     = g_srv_w # i w
     = g_srv_t # i t
     = g_srv_lang ( strdup lang )
@@ -467,7 +491,8 @@ $ `deps/http/src/http.nu`
     ( http_app_get a `/health` \ HttpRequest rq Params ps → HttpResponse { ^ ( __srv_health rq ) } )
     ( http_app_get a `/` \ HttpRequest rq Params ps → HttpResponse { ^ ( __srv_page rq ) } )
 
-    : String msg ( string_from `whisper serving on http://` )
+    : b tls & > ( nurl_str_len cert ) 0 > ( nurl_str_len key ) 0
+    : String msg ( string_from ? tls `whisper serving on https://` `whisper serving on http://` )
     ( string_push_str msg host )
     ( string_push_char msg 58 )
     ( string_push_int msg port )
@@ -476,7 +501,12 @@ $ `deps/http/src/http.nu`
     ( nurl_print `\n` )
     ( string_free msg )
 
-    : i rc ( http_app_listen a host port )
+    : ~ i rc 0
+    ? tls {
+        = rc ( http_app_listen_tls a host port cert key )
+    } {
+        = rc ( http_app_listen a host port )
+    }
 
     = g_srv_w 0
     = g_srv_t 0
@@ -486,7 +516,7 @@ $ `deps/http/src/http.nu`
 }
 
 // Load the model, open the port, serve until stopped.
-@ wh_serve s dir s host i port s lang i maxtok b use_vad b with_ts → i {
+@ wh_serve s dir s host i port s lang i maxtok b use_vad b with_ts s cert s key → i {
     : String cfg ( _wh_path dir `config.json` )
     : String wts ( _wh_path dir `model.safetensors` )
     : String tjs ( _wh_path dir `tokenizer.json` )
@@ -499,7 +529,7 @@ $ `deps/http/src/http.nu`
             T w → {
                 ?? ( gg_build_tok # *Gg . w gg ) {
                     T t → {
-                        : i rc2 ( __wh_serve_run w t host port lang maxtok use_vad with_ts )
+                        : i rc2 ( __wh_serve_run w t host port lang maxtok use_vad with_ts cert key )
                         ( tok_free t )
                         ( wh_close w )
                         ^ rc2
@@ -524,7 +554,7 @@ $ `deps/http/src/http.nu`
         T t → {
             ?? ( wh_open ( string_data cfg ) ( string_data wts ) ) {
                 T w → {
-                    : i rc2 ( __wh_serve_run w t host port lang maxtok use_vad with_ts )
+                    : i rc2 ( __wh_serve_run w t host port lang maxtok use_vad with_ts cert key )
                     = rc rc2
                     ( wh_close w )
                 }

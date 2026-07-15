@@ -235,6 +235,32 @@ $ `src/serve.nu`
     ^ ? > btv btsv bt bts
 }
 
+// p(<|nospeech|>) from a logits vector — softmax'd on the host, one pass
+// for the max, one for the sum. ~50k exps is microseconds next to the
+// forward pass that produced the logits.
+@ __wh_nosp_prob ( Vec f ) lg i nosp → f {
+    : i n ( vec_len [f] lg )
+    : ~ f mx -1.0e30
+    : ~ i k 0
+    ~ < k n {
+        : ~ f v 0.0
+        ?? ( vec_get [f] lg k ) { T x → { = v x } F → {} }
+        ? > v mx { = mx v } {}
+        = k + k 1
+    }
+    : ~ f se 0.0
+    = k 0
+    ~ < k n {
+        : ~ f v2 0.0
+        ?? ( vec_get [f] lg k ) { T x2 → { = v2 x2 } F → {} }
+        = se + se ( exp - v2 mx )
+        = k + k 1
+    }
+    : ~ f ln 0.0
+    ?? ( vec_get [f] lg nosp ) { T xn → { = ln xn } F → {} }
+    ^ / ( exp - ln mx ) se
+}
+
 // Decode ONE 30-second window: the encoder has already run over it, and the
 // cross-attention K/V are prepared. Appends the text to `out` — plain, or as
 // "[a --> b] text" lines when `with_ts` is set.
@@ -244,15 +270,35 @@ $ `src/serve.nu`
 // 20 ms) with the words — it was trained to. `win_off` places this window in
 // the condensed timeline; `runs` places the condensed timeline in the
 // recording.
-@ __wh_decode_window * Whisper w * Tok t s lang i maxtok b with_ts f win_off ( Vec VadRun ) runs ( Vec u ) out → b {
+@ __wh_decode_window * Whisper w * Tok t s lang i maxtok b with_ts f win_off ( Vec VadRun ) runs f nospeech ( Vec u ) out → b {
+    // Language codes are lowercase by definition (<|fi|>, <|en|> …) — a
+    // phone keyboard capitalizes the first letter, and "Fi" failing with
+    // no explanation is a bug report waiting to happen. Normalize here,
+    // at the one place the token text is built.
     : String ltok ( string_from `<|` )
-    ( string_push_str ltok lang )
+    : ~ i lci 0
+    ~ < lci ( nurl_str_len lang ) {
+        : ~ i lc ( nurl_str_get lang lci )
+        ? & >= lc 65 <= lc 90 { = lc + lc 32 } {}
+        ( string_push_char ltok lc )
+        = lci + lci 1
+    }
     ( string_push_str ltok `|>` )
     : i sot ( __wh_special t `<|startoftranscript|>` )
     : i lid ( __wh_special t ( string_data ltok ) )
     : i task ( __wh_special t `<|transcribe|>` )
     : i nots ( __wh_special t `<|notimestamps|>` )
     : i eot ( __wh_special t `<|endoftext|>` )
+    // large-v3-era vocabularies spell it <|nospeech|>; the earlier ones
+    // (tiny…large-v2 as Hugging Face ships them) say <|nocaptions|> for the
+    // SAME positional token. Same token, two names, both asked.
+    : ~ i nosp ( __wh_special t `<|nospeech|>` )
+    ? < nosp 0 { = nosp ( __wh_special t `<|nocaptions|>` ) } {}
+    ? < lid 0 {
+        ( nurl_eprint `whisper: unknown language '` )
+        ( nurl_eprint lang )
+        ( nurl_eprintln `' — whisper language codes are lowercase two-letter (fi, en, sv, de, …)` )
+    } {}
     ( string_free ltok )
     ? | | | | < sot 0 < lid 0 < task 0 < nots 0 < eot 0 { ^ F } {}
 
@@ -269,14 +315,33 @@ $ `src/serve.nu`
     : ( Vec i ) outids ( vec_new [i] )
     : ~ i pos 0
     : ~ i k 0
-    ~ < k ( vec_len [i] prompt ) {
+    : ~ b silent F
+    ~ & ! silent < k ( vec_len [i] prompt ) {
         ?? ( vec_get [i] prompt k ) {
             T tk → { ( wh_decode_step w tk pos ) }
             F → {}
         }
+        // The no-speech gate, measured where openai measures it: at the SOT
+        // position, BEFORE the language/task tokens condition the model
+        // toward producing text. The model is the best voice detector in
+        // the building — an energy VAD upstream can be fooled by a phone
+        // microphone's auto-gain pumping room noise over the floor, but
+        // p(<|nospeech|>) at SOT is not. Past the threshold → this window
+        // produces NOTHING, which is the correct amount of "Thank you.".
+        ? & & == k 0 >= nosp 0 < nospeech 1.0 {
+            : ( Vec f ) lg0 ( wh_logits w )
+            : f pn ( __wh_nosp_prob lg0 nosp )
+            ( vec_free [f] lg0 )
+            ? > pn nospeech { = silent T } {}
+        } {}
         = pos + pos 1
         = k + k 1
     }
+    ? silent {
+        ( vec_free [i] outids )
+        ( vec_free [i] prompt )
+        ^ T
+    } {}
     : ~ b done F
     : ~ i made 0
     : ~ i last -1
@@ -358,7 +423,7 @@ $ `src/serve.nu`
 // once and exits; `whisper serve` opens the model ONCE and runs this per
 // request — the 1.5 GB read, the f16→f32 conversion and the kernel compile
 // all happen before the first request instead of inside every one.
-@ wh_run * Whisper w * Tok t ( Vec f ) at16_in s lang i maxtok b use_vad b with_ts ( Vec u ) out → b {
+@ wh_run * Whisper w * Tok t ( Vec f ) at16_in s lang i maxtok b use_vad b with_ts f nospeech ( Vec u ) out → b {
     : ~ ( Vec f ) at16 at16_in
     // where each surviving stretch of condensed audio sits in the
     // recording — empty (identity) without VAD
@@ -404,7 +469,7 @@ $ `src/serve.nu`
         ( wh_prepare_cross w )
         ( vec_free [f] mel )
         : f woff / # f * wi window 16000.0
-        ? ( __wh_decode_window w t lang maxtok with_ts woff runs out ) {} { = ok F }
+        ? ( __wh_decode_window w t lang maxtok with_ts woff runs nospeech out ) {} { = ok F }
         = wi + wi 1
     }
     ( vec_free [f] at16 )
@@ -414,7 +479,7 @@ $ `src/serve.nu`
 
 // The shared tail once the model and tokenizer are open: read the audio,
 // resample, run, print. Owns neither w nor t.
-@ __wh_transcribe_run * Whisper w * Tok t s wavpath s lang i maxtok b use_vad b with_ts → i {
+@ __wh_transcribe_run * Whisper w * Tok t s wavpath s lang i maxtok b use_vad b with_ts f nospeech → i {
     : ~ i rc 0
     ?? ( wav_read wavpath ) {
         T aw → {
@@ -423,7 +488,7 @@ $ `src/serve.nu`
             ( wav_free aw )
             ( vec_free [f] mono )
             : ( Vec u ) text ( vec_new [u] )
-            ? ( wh_run w t at16 lang maxtok use_vad with_ts text ) {
+            ? ( wh_run w t at16 lang maxtok use_vad with_ts nospeech text ) {
                 : i n ( vec_len [u] text )
                 ? > n 0 { : i _w ( write 1 # *u ( vec_data [u] text ) n ) } {}
                 ( nurl_print `\n` )
@@ -442,7 +507,7 @@ $ `src/serve.nu`
     ^ rc
 }
 
-@ __wh_transcribe s dir s wavpath s lang i maxtok b use_vad b with_ts → i {
+@ __wh_transcribe s dir s wavpath s lang i maxtok b use_vad b with_ts f nospeech → i {
     // whisper.cpp's ggml container: hyperparameters, tokenizer and weights in
     // ONE file — no config.json or tokenizer.json beside it
     ? ( __wh_is_ggml dir ) {
@@ -451,7 +516,7 @@ $ `src/serve.nu`
                 : ~ i rc2 1
                 ?? ( gg_build_tok # *Gg . w gg ) {
                     T t → {
-                        = rc2 ( __wh_transcribe_run w t wavpath lang maxtok use_vad with_ts )
+                        = rc2 ( __wh_transcribe_run w t wavpath lang maxtok use_vad with_ts nospeech )
                         ( tok_free t )
                     }
                     F e → {
@@ -491,7 +556,7 @@ $ `src/serve.nu`
                     ?? ( wh_open ( string_data cfg ) ( string_data wts ) ) {
                         T w → {
                             : ( Vec u ) text ( vec_new [u] )
-                            ? ( wh_run w t at16 lang maxtok use_vad with_ts text ) {
+                            ? ( wh_run w t at16 lang maxtok use_vad with_ts nospeech text ) {
                                 : i n ( vec_len [u] text )
                                 ? > n 0 { : i _w ( write 1 # *u ( vec_data [u] text ) n ) } {}
                                 ( nurl_print `\n` )
@@ -532,6 +597,10 @@ $ `src/serve.nu`
     ( args_opt p `output` 111 `FILE` `write the encoder states here (f32 LE)` )
     ( args_opt p `lang` 0 `LANG` `transcribe/serve: the language token (default en)` )
     ( args_opt p `addr` 0 `HOST:PORT` `serve: listen here (default 127.0.0.1:6543)` )
+    ( args_opt p `cert` 0 `FILE` `serve: TLS certificate PEM (with --key → https)` )
+    ( args_opt p `key` 0 `FILE` `serve: TLS private key PEM` )
+    ( args_flag p `tls` 0 `serve: mint a self-signed certificate on the fly (the microphone needs a secure context)` )
+    ( args_opt p `nospeech` 0 `P` `drop a window when the model itself is ≥P sure it holds no speech (default 0.6; 1 disables)` )
     ( args_opt p `max` 0 `N` `transcribe: stop after N tokens (default 200)` )
     ( args_flag p `vad` 0 `transcribe: skip the silence (energy VAD) before the model sees it` )
     ( args_flag p `timestamps` 0 `transcribe: "[a --> b] text" segments, in the RECORDING's timeline` )
@@ -593,7 +662,33 @@ $ `src/serve.nu`
         } {
             ( string_push_str host ( string_data addr ) )
         }
-        : i rc ( wh_serve dir ( string_data host ) port ( string_data lang ) maxtok ( args_present p `vad` ) ( args_present p `timestamps` ) )
+        : ~ String certf ( args_value_or p `cert` `` )
+        : ~ String keyf ( args_value_or p `key` `` )
+        // --tls: mint a self-signed ECDSA-P256 cert for this host (pure NURL,
+        // std/x509_gen) into the temp dir. A browser will warn once — that is
+        // what self-signed MEANS — but the page then runs in a secure
+        // context, which is what getUserMedia demands.
+        ? & ( args_present p `tls` ) == ( string_len certf ) 0 {
+            : s cn ? > ( string_len host ) 0 ( string_data host ) `localhost`
+            : X509SelfSigned ss ( x509_selfsigned_p256 cn 365 )
+            : ~ String tdir ( env_var_or `TMPDIR` `/tmp` )
+            : String cpath ( path_join ( string_data tdir ) `whisper_self.crt` )
+            : String kpath ( path_join ( string_data tdir ) `whisper_self.key` )
+            ( string_free tdir )
+            : !v IoErr w1 ( write_file ( string_data cpath ) ( string_data . ss cert_pem ) )
+            ?? w1 { T _ → {} F _ → { ( nurl_eprintln `whisper: cannot write the self-signed cert` ) } }
+            : !v IoErr w2 ( write_file ( string_data kpath ) ( string_data . ss key_pem ) )
+            ?? w2 { T _ → {} F _ → { ( nurl_eprintln `whisper: cannot write the self-signed key` ) } }
+            ( x509_selfsigned_free ss )
+            ( string_free certf )
+            ( string_free keyf )
+            = certf cpath
+            = keyf kpath
+            ( nurl_eprintln `whisper: self-signed TLS minted — the browser will warn once; accept it and the microphone works` )
+        } {}
+        : i rc ( wh_serve dir ( string_data host ) port ( string_data lang ) maxtok ( args_present p `vad` ) ( args_present p `timestamps` ) ( string_data certf ) ( string_data keyf ) )
+        ( string_free certf )
+        ( string_free keyf )
         ( string_free host )
         ( string_free addr )
         ( string_free lang )
@@ -615,7 +710,11 @@ $ `src/serve.nu`
         : String smax ( args_value_or p `max` `200` )
         ?? ( string_to_int smax ) { T v → { = maxtok v } F _ → {} }
         ( string_free smax )
-        : i rc ( __wh_transcribe dir awav ( string_data lang ) maxtok ( args_present p `vad` ) ( args_present p `timestamps` ) )
+        : String nsp ( args_value_or p `nospeech` `0.6` )
+        : ~ f nospeech 0.6
+        ?? ( string_to_float nsp ) { T v2 → { = nospeech v2 } F _ → {} }
+        ( string_free nsp )
+        : i rc ( __wh_transcribe dir awav ( string_data lang ) maxtok ( args_present p `vad` ) ( args_present p `timestamps` ) nospeech )
         ( string_free lang )
         ( args_free p )
         ^ rc
