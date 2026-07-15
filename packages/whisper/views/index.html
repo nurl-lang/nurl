@@ -38,6 +38,11 @@
 <div class="wrap">
   <h1>whisper <small>pure-NURL speech recognition — built-in test page</small></h1>
   <div class="status" id="model"></div>
+  <div class="card" style="margin-top:10px">
+    <label style="width:100%">access token (only if the server was started with one)
+      <input type="text" id="token" placeholder="leave blank for an open server" style="flex:1;min-width:180px">
+    </label>
+  </div>
 
   <h2>Transcribe a file</h2>
   <div class="card">
@@ -80,6 +85,23 @@
 
 function el(id) { return document.getElementById(id); }
 
+// The token is remembered per browser and travels two ways: an
+// Authorization header on fetch, a ?token= query on the WebSocket (a
+// browser cannot set headers on a WS upgrade).
+el("token").value = localStorage.getItem("whisperToken") || "";
+el("token").addEventListener("change", function () {
+  localStorage.setItem("whisperToken", el("token").value);
+});
+function authHeaders() {
+  var t = el("token").value;
+  return t ? { Authorization: "Bearer " + t } : {};
+}
+function withToken(url) {
+  var t = el("token").value;
+  if (!t) return url;
+  return url + (url.indexOf("?") < 0 ? "?" : "&") + "token=" + encodeURIComponent(t);
+}
+
 fetch("/health").then(function (r) { return r.json(); }).then(function (h) {
   el("model").textContent = "model: d_model " + h.d_model + ", " + h.encoder_layers +
     "+" + h.decoder_layers + " layers, " + h.n_mels + " mel bands — requests served: " + h.requests;
@@ -100,7 +122,7 @@ el("go").addEventListener("click", function () {
   el("fstat").textContent = "transcribing…";
   el("fout").textContent = "";
   var t0 = performance.now();
-  fetch("/inference", { method: "POST", body: fd }).then(function (r) {
+  fetch("/inference", { method: "POST", body: fd, headers: authHeaders() }).then(function (r) {
     if (!r.ok) { throw new Error("HTTP " + r.status); }
     return r.text();
   }).then(function (text) {
@@ -151,7 +173,7 @@ function micStop() {
 
 function micStart() {
   var proto = location.protocol === "https:" ? "wss://" : "ws://";
-  var ws = new WebSocket(proto + location.host + "/");
+  var ws = new WebSocket(withToken(proto + location.host + "/"));
   ws.binaryType = "arraybuffer";
   mic.ws = ws;
   ws.onopen = function () {

@@ -225,6 +225,28 @@ PYEOF3
         sleep 0.5
     done
     if curl -s "http://127.0.0.1:$PORT/health" | grep -q '"ok"'; then
+        # ── access token ────────────────────────────────────────────
+        # A second server on its own port, token-gated. /health and the page
+        # stay open; /inference is 401 without the token and 200 with it, via
+        # both the Authorization header and the ?token= query.
+        TPORT=$(( PORT + 1 ))
+        "$WH" serve "$WORK/model" --addr 127.0.0.1:$TPORT --token s3cret >/dev/null 2>&1 &
+        TPID=$!
+        for _ in $(seq 1 120); do
+            curl -s "http://127.0.0.1:$TPORT/health" 2>/dev/null | grep -q '"ok"' && break
+            sleep 0.5
+        done
+        H_OPEN=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$TPORT/health")
+        I_NONE=$(curl -s -o /dev/null -w '%{http_code}' -F "file=@$WORK/jfk.wav" "http://127.0.0.1:$TPORT/inference")
+        I_WRONG=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer nope" -F "file=@$WORK/jfk.wav" "http://127.0.0.1:$TPORT/inference")
+        I_HDR=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer s3cret" -F "file=@$WORK/jfk.wav" "http://127.0.0.1:$TPORT/inference")
+        I_QRY=$(curl -s -o /dev/null -w '%{http_code}' -F "file=@$WORK/jfk.wav" "http://127.0.0.1:$TPORT/inference?token=s3cret")
+        kill $TPID 2>/dev/null; wait $TPID 2>/dev/null
+        [ "$H_OPEN" = "200" ] && [ "$I_NONE" = "401" ] && [ "$I_WRONG" = "401" ] \
+            && [ "$I_HDR" = "200" ] && [ "$I_QRY" = "200" ] \
+            && ok "--token gates /inference (401 without, 200 via Bearer and ?token=); /health stays open" \
+            || { bad "token auth"; echo "    health=$H_OPEN none=$I_NONE wrong=$I_WRONG hdr=$I_HDR qry=$I_QRY"; }
+
         PAGE=$(curl -s "http://127.0.0.1:$PORT/")
         printf '%s' "$PAGE" | grep -q "<!doctype html>" \
             && printf '%s' "$PAGE" | grep -q "/inference" \
