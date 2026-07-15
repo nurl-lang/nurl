@@ -22,7 +22,6 @@ $ `deps/audio/src/resample.nu`
 $ `deps/audio/src/vad.nu`
 $ `deps/tokenizer/src/tokenizer.nu`
 $ `deps/tokenizer/src/hf.nu`
-$ `src/page_data.nu`
 $ `src/ggml.nu`
 $ `src/model.nu`
 $ `src/serve.nu`
