@@ -30,6 +30,7 @@ $ `src/kernels.nu`
 : Whisper {
     Gpu g
     WhKernels ks
+    b w_half  // matrix weights live on the device as raw f16 halves
     i st  // *St, the safetensors file
     i n_mels
     i d_model
@@ -135,10 +136,56 @@ $ `src/kernels.nu`
     ?? ( vec_get [i] v k ) { T x → { ^ x } F → { ^ 0 } }
 }
 
+// Is `name` one of the model's MATRIX weights — a projection, an FFN layer,
+// the token embedding? These are where the parameters live (fc1 alone is
+// 4·d_model² per layer), they are consumed only by the matvec/matmul/getrow
+// kernels, and they are the set that stays f16 on the device in half mode.
+// ONE predicate, used by both the probe and the upload, so the two can never
+// disagree about which tensors are in the set.
+@ __wh_is_matrix s name → b {
+    ? != 0 ( nurl_str_ends name `q_proj.weight` ) { ^ T } {}
+    ? != 0 ( nurl_str_ends name `k_proj.weight` ) { ^ T } {}
+    ? != 0 ( nurl_str_ends name `v_proj.weight` ) { ^ T } {}
+    ? != 0 ( nurl_str_ends name `out_proj.weight` ) { ^ T } {}
+    ? != 0 ( nurl_str_ends name `fc1.weight` ) { ^ T } {}
+    ? != 0 ( nurl_str_ends name `fc2.weight` ) { ^ T } {}
+    ^ ? ( nurl_str_eq name `model.decoder.embed_tokens.weight` ) T F
+}
+
+// Half mode: EVERY matrix weight in the checkpoint is f16. All-or-nothing by
+// design — the kernels take one flag per launch and every matvec weight is in
+// the matrix set, so a mixed-precision checkpoint (none exists in practice)
+// simply falls back to the f32 expansion, which is always correct.
+@ __wh_probe_half * Whisper w → b {
+    : *St st # *St . w st
+    : ~ i seen 0
+    : ~ b all16 T
+    : ~ i k 0
+    ~ < k ( vec_len [StTensor] . st tensors ) {
+        ?? ( vec_get [StTensor] . st tensors k ) {
+            T t → {
+                ? ( __wh_is_matrix ( string_data . t name ) ) {
+                    = seen + seen 1
+                    ? != . t dtype ST_F16 { = all16 F } {}
+                } {}
+            }
+            F → {}
+        }
+        = k + k 1
+    }
+    ^ & > seen 0 all16
+}
+
 // Upload a tensor from the safetensors file as f32. -1 when it is not there —
 // which is a fact about the model (k_proj has no bias), not always an error.
+// `keep16`: this is one of the model's MATRIX weights (a projection, an FFN
+// layer, the embedding) and the whole checkpoint's matrices probed as f16 —
+// upload the halves as they are and let the kernels widen at the point of
+// use. Everything else (norms, biases, convs, positions) still widens here:
+// their bytes are noise, and it keeps every other kernel untouched.
 @ __wh_up * Whisper w s name → i {
     : *St st # *St . w st
+    : b keep16 ( __wh_is_matrix name )
     : i ti ( st_find_tensor st name )
     ? < ti 0 { ^ -1 } {}
     // A tensor that is ALREADY f32 — which is what a whisper checkpoint is —
@@ -157,6 +204,15 @@ $ `src/kernels.nu`
                 ( vec_push [i] . w bufs . b dptr )
                 ( vec_push [i] . w bufsz . b bytes )
                 ^ . b dptr
+            } {}
+            // The checkpoint's own precision IS f16: for a matrix weight in
+            // half mode there is nothing to widen — the halves are the model.
+            ? & & keep16 . w w_half == . t dtype ST_F16 {
+                : GpuBuffer hb ( gpu_alloc . w g . t nbytes )
+                : i _uh ( gpu_upload hb ( st_tensor_ptr st t ) )
+                ( vec_push [i] . w bufs . hb dptr )
+                ( vec_push [i] . w bufsz . hb bytes )
+                ^ . hb dptr
             } {}
             // f16 / bf16 — which is what a whisper checkpoint actually is — go up
             // as RAW HALVES and are widened by a kernel. Half the bytes over PCIe,
@@ -297,7 +353,10 @@ $ `src/kernels.nu`
     = . w n_vocab n_vocab
 
     ?? ( st_open weights_path ) {
-        T st → { = . w st # i st }
+        T st → {
+            = . w st # i st
+            = . w w_half ( __wh_probe_half w )
+        }
         F e → {
             ( nurl_free # s w )
             ^ @ !*Whisper String { F e }
@@ -561,22 +620,22 @@ $ `src/kernels.nu`
         // the future — a speech encoder hears the whole clip at once.
         ( wk_layernorm . w ks . w c2_d ( __wh_geti . w e_ln1_w L ) ( __wh_geti . w e_ln1_b L )
         . w xn_d dm eps nc )
-        ( wk_matvec . w ks ( __wh_geti . w e_wq L ) . w xn_d ( __wh_geti . w e_bq L ) . w q_d dm dm nc )
+        ( wk_matvec . w ks ( __wh_geti . w e_wq L ) . w xn_d ( __wh_geti . w e_bq L ) . w q_d dm dm nc ? . w w_half 1 0 )
         // k_proj: no bias, so none is passed
-        ( wk_matvec . w ks ( __wh_geti . w e_wk L ) . w xn_d 0 . w k_d dm dm nc )
-        ( wk_matvec . w ks ( __wh_geti . w e_wv L ) . w xn_d ( __wh_geti . w e_bv L ) . w v_d dm dm nc )
+        ( wk_matvec . w ks ( __wh_geti . w e_wk L ) . w xn_d 0 . w k_d dm dm nc ? . w w_half 1 0 )
+        ( wk_matvec . w ks ( __wh_geti . w e_wv L ) . w xn_d ( __wh_geti . w e_bv L ) . w v_d dm dm nc ? . w w_half 1 0 )
         ( wk_attn . w ks . w q_d . w k_d . w v_d . w sc_d . w ao_d nh hd nc nc qscale 0 )
-        ( wk_matvec . w ks ( __wh_geti . w e_wo L ) . w ao_d ( __wh_geti . w e_bo L ) . w tmp_d dm dm nc )
+        ( wk_matvec . w ks ( __wh_geti . w e_wo L ) . w ao_d ( __wh_geti . w e_bo L ) . w tmp_d dm dm nc ? . w w_half 1 0 )
         ( wk_addv . w ks . w c2_d . w tmp_d * nc dm )
 
         // feed-forward: fc1 → GELU → fc2
         ( wk_layernorm . w ks . w c2_d ( __wh_geti . w e_ln2_w L ) ( __wh_geti . w e_ln2_b L )
         . w xn_d dm eps nc )
         ( wk_matvec . w ks ( __wh_geti . w e_fc1_w L ) . w xn_d ( __wh_geti . w e_fc1_b L )
-        . w ff_d * 4 dm dm nc )
+        . w ff_d * 4 dm dm nc ? . w w_half 1 0 )
         ( wk_gelu . w ks . w ff_d * nc * 4 dm )
         ( wk_matvec . w ks ( __wh_geti . w e_fc2_w L ) . w ff_d ( __wh_geti . w e_fc2_b L )
-        . w tmp_d dm * 4 dm nc )
+        . w tmp_d dm * 4 dm nc ? . w w_half 1 0 )
         ( wk_addv . w ks . w c2_d . w tmp_d * nc dm )
         = L + L 1
     }
@@ -616,9 +675,9 @@ $ `src/kernels.nu`
     : ~ i L 0
     ~ < L . w n_dec_layer {
         ( wk_matvec . w ks ( __wh_geti . w x_wk L ) . w enc_out 0
-        ( __wh_geti . w xk L ) dm dm nc )
+        ( __wh_geti . w xk L ) dm dm nc ? . w w_half 1 0 )
         ( wk_matvec . w ks ( __wh_geti . w x_wv L ) . w enc_out ( __wh_geti . w x_bv L )
-        ( __wh_geti . w xv L ) dm dm nc )
+        ( __wh_geti . w xv L ) dm dm nc ? . w w_half 1 0 )
         = L + L 1
     }
 }
@@ -638,7 +697,7 @@ $ `src/kernels.nu`
     : f eps 0.00001
 
     // token embedding + the position's own vector (a matrix, one row each)
-    ( wk_getrow . w ks . w tok_embd . w dx_d tok dm )
+    ( wk_getrow . w ks . w tok_embd . w dx_d tok dm ? . w w_half 1 0 )
     : ( Vec i ) _unused ( vec_new [i] )
     ( vec_free [i] _unused )
     ( wk_addv_row w pos )
@@ -648,39 +707,39 @@ $ `src/kernels.nu`
         // ── causal self-attention, over the cache ──
         ( wk_layernorm . w ks . w dx_d ( __wh_geti . w d_ln1_w L ) ( __wh_geti . w d_ln1_b L )
         . w dxn_d dm eps 1 )
-        ( wk_matvec . w ks ( __wh_geti . w d_wq L ) . w dxn_d ( __wh_geti . w d_bq L ) . w dq_d dm dm 1 )
-        ( wk_matvec . w ks ( __wh_geti . w d_wk L ) . w dxn_d 0 . w dk_d dm dm 1 )
-        ( wk_matvec . w ks ( __wh_geti . w d_wv L ) . w dxn_d ( __wh_geti . w d_bv L ) . w dv_d dm dm 1 )
+        ( wk_matvec . w ks ( __wh_geti . w d_wq L ) . w dxn_d ( __wh_geti . w d_bq L ) . w dq_d dm dm 1 ? . w w_half 1 0 )
+        ( wk_matvec . w ks ( __wh_geti . w d_wk L ) . w dxn_d 0 . w dk_d dm dm 1 ? . w w_half 1 0 )
+        ( wk_matvec . w ks ( __wh_geti . w d_wv L ) . w dxn_d ( __wh_geti . w d_bv L ) . w dv_d dm dm 1 ? . w w_half 1 0 )
         ( wk_setrow . w ks ( __wh_geti . w kcache L ) . w dk_d pos dm )
         ( wk_setrow . w ks ( __wh_geti . w vcache L ) . w dv_d pos dm )
         ( wk_attn . w ks . w dq_d ( __wh_geti . w kcache L ) ( __wh_geti . w vcache L )
         . w dsc_d . w dao_d nh hd 1 + pos 1 qscale 0 )
-        ( wk_matvec . w ks ( __wh_geti . w d_wo L ) . w dao_d ( __wh_geti . w d_bo L ) . w dtmp_d dm dm 1 )
+        ( wk_matvec . w ks ( __wh_geti . w d_wo L ) . w dao_d ( __wh_geti . w d_bo L ) . w dtmp_d dm dm 1 ? . w w_half 1 0 )
         ( wk_addv . w ks . w dx_d . w dtmp_d dm )
 
         // ── cross-attention into the encoder's 1500 states ──
         ( wk_layernorm . w ks . w dx_d ( __wh_geti . w d_lnx_w L ) ( __wh_geti . w d_lnx_b L )
         . w dxn_d dm eps 1 )
-        ( wk_matvec . w ks ( __wh_geti . w x_wq L ) . w dxn_d ( __wh_geti . w x_bq L ) . w dq_d dm dm 1 )
+        ( wk_matvec . w ks ( __wh_geti . w x_wq L ) . w dxn_d ( __wh_geti . w x_bq L ) . w dq_d dm dm 1 ? . w w_half 1 0 )
         ( wk_attn . w ks . w dq_d ( __wh_geti . w xk L ) ( __wh_geti . w xv L )
         . w dsc_d . w dao_d nh hd 1 nc qscale 0 )
-        ( wk_matvec . w ks ( __wh_geti . w x_wo L ) . w dao_d ( __wh_geti . w x_bo L ) . w dtmp_d dm dm 1 )
+        ( wk_matvec . w ks ( __wh_geti . w x_wo L ) . w dao_d ( __wh_geti . w x_bo L ) . w dtmp_d dm dm 1 ? . w w_half 1 0 )
         ( wk_addv . w ks . w dx_d . w dtmp_d dm )
 
         // ── feed-forward ──
         ( wk_layernorm . w ks . w dx_d ( __wh_geti . w d_ln2_w L ) ( __wh_geti . w d_ln2_b L )
         . w dxn_d dm eps 1 )
         ( wk_matvec . w ks ( __wh_geti . w d_fc1_w L ) . w dxn_d ( __wh_geti . w d_fc1_b L )
-        . w dff_d * 4 dm dm 1 )
+        . w dff_d * 4 dm dm 1 ? . w w_half 1 0 )
         ( wk_gelu . w ks . w dff_d * 4 dm )
         ( wk_matvec . w ks ( __wh_geti . w d_fc2_w L ) . w dff_d ( __wh_geti . w d_fc2_b L )
-        . w dtmp_d dm * 4 dm 1 )
+        . w dtmp_d dm * 4 dm 1 ? . w w_half 1 0 )
         ( wk_addv . w ks . w dx_d . w dtmp_d dm )
         = L + L 1
     }
     ( wk_layernorm . w ks . w dx_d . w d_lnf_w . w d_lnf_b . w dxn_d dm eps 1 )
     // logits: the embedding table again — whisper ties input and output
-    ( wk_matvec . w ks . w tok_embd . w dxn_d 0 . w logits_d . w n_vocab dm 1 )
+    ( wk_matvec . w ks . w tok_embd . w dxn_d 0 . w logits_d . w n_vocab dm 1 ? . w w_half 1 0 )
 }
 
 // x += embed_positions[pos]. The row lives inside a matrix, so it is added by
