@@ -23,7 +23,7 @@ $ `runtime.nu`
 
 // Load a raw little-endian f32 file into a fresh host buffer; returns the
 // buffer and writes the element count through `pcount` (an i64 cell).
-@ load_f32 s path *u pcount → *u {
+@ load_f32 s path * u pcount → *u {
     ?? ( read_file_bytes path ) {
         T bytes → {
             : i n / ( vec_len [u] bytes ) 4
@@ -70,7 +70,9 @@ $ `runtime.nu`
     ( nurl_print `input elements: ` ) ( nurl_print ( nurl_str_int in_n ) ) ( nurl_print `\n` )
 
     : RTensor out ( rt_run e g input 1 in_n )
-    : i out_n * . out rows . out cols
+    // RTensor carries its full shape now (the 0.5.0 tensor bridge replaced
+    // the old rows/cols pair); the element count is a field, not a product.
+    : i out_n . out nelem
     : *u host ( rt_download e out )
 
     ( nurl_print `output [` ) ( nurl_print ( nurl_str_int out_n ) ) ( nurl_print `]: ` )
