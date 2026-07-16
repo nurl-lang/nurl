@@ -8,6 +8,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **MCP: `nurl_api` — a stdlib module's API surface, or a search across
+  all of them.** `module='ext/csv.nu'` returns signatures, doc comments
+  and full type definitions with no function bodies (11 KB where the
+  source is 63 KB); `query='csv quote'` returns just the declarations
+  whose signature/doc/module-path contain every term. Backed by nurldoc,
+  which now omits `__`-private (file-scoped, uncallable) functions and
+  renders a multi-line type declaration's full field list in a fenced
+  code block — the /stdlib-docs pages get both fixes too.
+- **MCP: `nurl_grep`** — case-insensitive substring search across stdlib
+  sources, examples and compiler tests (`path:line: text`, per-file and
+  total caps), plus the package registry by name AND description — "does
+  a package for X exist" is one cheap call.
+- **Registry: package descriptions are stored, served and searchable.**
+  `[package].description` is extracted server-side from the published
+  tarball on every publish (latest wins; never a client header), shown
+  in the catalog, returned by `/api/v1/search`, and matched by it — in
+  both the Cloudflare Worker (D1 migration 0003 +
+  `/api/v1/admin/desc-backfill` for pre-existing packages) and
+  `packages/registry` 0.3.0. `nurlpkg search` prints them.
+
+### Changed
+
+- **MCP: `nurl_changelog` results are ranked, and every match stays
+  visible.** Entries whose TITLE carries the search terms outrank
+  passing mentions; the top `limit` matches return in full and every
+  further match appears as a one-line provenance+title (previously the
+  newest N matches consumed the byte cap and the rest were an opaque
+  "77 omitted" count). `compact=true` gives a titles-only overview.
+
 ## [0.16.0] — 2026-07-16
 
 The **provenance** release: the registry shows what a package contains and

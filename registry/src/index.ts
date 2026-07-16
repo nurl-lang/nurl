@@ -22,7 +22,7 @@
 // (miniflare simulates R2 + D1) — no Cloudflare account needed to test.
 
 import { renderMarkdown } from "./markdown.ts";
-import { extractReadme, extractFile, extractManifestRepository, normalizeRelPath, listTarFiles } from "./readme.ts";
+import { extractReadme, extractFile, extractManifestRepository, extractManifestDescription, normalizeRelPath, listTarFiles } from "./readme.ts";
 
 export interface Env {
   REG_BUCKET: R2Bucket;
@@ -378,9 +378,19 @@ async function handlePublish(req: Request, env: Env): Promise<Response> {
   await env.REG_BUCKET.put(`index/${name}.json`, JSON.stringify(idx));
 
   const now = Date.now();
+  // Description comes from the tarball's own manifest, extracted
+  // server-side (never a client header) — the latest publish wins, so a
+  // wording fix ships with the next version. Extraction failure must not
+  // fail the publish: the description is search metadata, not integrity.
+  const description = await extractManifestDescription(env.REG_BUCKET, name, version)
+    .catch(() => "");
   if (!owner) {
-    await env.REG_DB.prepare(`INSERT INTO packages (name, owner_user_id, created_at) VALUES (?, ?, ?)`)
-      .bind(name, user.id, now).run();
+    await env.REG_DB.prepare(
+      `INSERT INTO packages (name, owner_user_id, created_at, description) VALUES (?, ?, ?, ?)`,
+    ).bind(name, user.id, now, description).run();
+  } else if (description) {
+    await env.REG_DB.prepare(`UPDATE packages SET description = ? WHERE name = ?`)
+      .bind(description, name).run();
   }
   await env.REG_DB.prepare(
     `INSERT INTO versions (name, version, checksum, yanked, published_by, published_at)
@@ -437,6 +447,37 @@ async function handleSignBackfill(req: Request, env: Env): Promise<Response> {
     }
   }
   return json({ ok: failed === 0, signed, skipped, failed, errors });
+}
+
+// POST /api/v1/admin/desc-backfill — re-extract [package].description from
+// each package's newest tarball into D1, for packages published before the
+// description column existed (or whose row is still empty). Idempotent;
+// same key-holder gate as sign-backfill.
+async function handleDescBackfill(req: Request, env: Env): Promise<Response> {
+  if (!env.REG_SIGN_KEY) return json({ error: "signing_not_configured" }, 503);
+  const presented = req.headers.get("x-reg-sign-key") ?? "";
+  if (!ctEq(presented, env.REG_SIGN_KEY)) return json({ error: "unauthorized" }, 401);
+
+  const rows = await env.REG_DB.prepare(
+    `SELECT p.name AS name, ${LATEST_SUBQUERY} AS latest, p.description AS description
+       FROM packages p`,
+  ).all<CatalogRow>();
+  let updated = 0, skipped = 0, failed = 0;
+  const errors: string[] = [];
+  for (const r of rows.results ?? []) {
+    if (r.description || !r.latest) { skipped++; continue; }
+    try {
+      const d = await extractManifestDescription(env.REG_BUCKET, r.name, r.latest);
+      if (!d) { skipped++; continue; }
+      await env.REG_DB.prepare(`UPDATE packages SET description = ? WHERE name = ?`)
+        .bind(d, r.name).run();
+      updated++;
+    } catch (e) {
+      failed++;
+      errors.push(`${r.name}: ${String(e)}`);
+    }
+  }
+  return json({ ok: failed === 0, updated, skipped, failed, errors });
 }
 
 // ── GitHub OAuth (token bootstrap) ────────────────────────────────────
@@ -501,7 +542,7 @@ function esc(s: string): string {
 
 // ── Catalog UI + search ───────────────────────────────────────────────
 
-interface CatalogRow { name: string; latest: string | null; }
+interface CatalogRow { name: string; latest: string | null; description: string; }
 
 // Most-recently-published non-yanked version per package (display only).
 const LATEST_SUBQUERY =
@@ -512,14 +553,16 @@ async function handleCatalog(url: URL, env: Env): Promise<Response> {
   const q = (url.searchParams.get("q") ?? "").toLowerCase().slice(0, 64);
   const like = q ? `%${q.replace(/[%_\\]/g, "")}%` : "%";
   const rows = await env.REG_DB.prepare(
-    `SELECT p.name AS name, ${LATEST_SUBQUERY} AS latest
-       FROM packages p WHERE p.name LIKE ? ORDER BY p.name LIMIT 200`,
+    `SELECT p.name AS name, ${LATEST_SUBQUERY} AS latest, p.description AS description
+       FROM packages p WHERE p.name LIKE ?1 OR p.description LIKE ?1 ORDER BY p.name LIMIT 200`,
   ).bind(like).all<CatalogRow>();
   const items = rows.results ?? [];
   const list = items.length
     ? `<ul>${items.map((p) =>
         `<li><a href="/packages/${esc(p.name)}">${esc(p.name)}</a> ` +
-        (p.latest ? `<code>${esc(p.latest)}</code>` : `<em>(all versions yanked)</em>`) + `</li>`).join("")}</ul>`
+        (p.latest ? `<code>${esc(p.latest)}</code>` : `<em>(all versions yanked)</em>`) +
+        (p.description ? ` <span style="color:#666">— ${esc(p.description.slice(0, 160))}</span>` : "") +
+        `</li>`).join("")}</ul>`
     : `<p>No packages${q ? ` matching “${esc(q)}”` : " published"} yet.</p>`;
   return htmlPage("NURL registry",
     `<h1>Packages</h1>` +
@@ -671,10 +714,13 @@ async function handleSearch(req: Request, url: URL, env: Env): Promise<Response>
   const q = (url.searchParams.get("q") ?? "").toLowerCase().slice(0, 64);
   const like = q ? `%${q.replace(/[%_\\]/g, "")}%` : "%";
   const rows = await env.REG_DB.prepare(
-    `SELECT p.name AS name, ${LATEST_SUBQUERY} AS latest
-       FROM packages p WHERE p.name LIKE ? ORDER BY p.name LIMIT 50`,
+    `SELECT p.name AS name, ${LATEST_SUBQUERY} AS latest, p.description AS description
+       FROM packages p WHERE p.name LIKE ?1 OR p.description LIKE ?1 ORDER BY p.name LIMIT 50`,
   ).bind(like).all<CatalogRow>();
-  return json({ results: (rows.results ?? []).map((r) => ({ name: r.name, version: r.latest })) });
+  return json({
+    results: (rows.results ?? []).map((r) =>
+      ({ name: r.name, version: r.latest, description: r.description ?? "" })),
+  });
 }
 
 // Public counts — powers the "registry packages" figure on nurl-lang.org
@@ -893,6 +939,7 @@ export default {
       if (path === "/api/v1/revoke") return handleRevoke(req, env);
       if (path === "/api/v1/token/new") return handleTokenNew(req, env);
       if (path === "/api/v1/admin/sign-backfill") return handleSignBackfill(req, env);
+      if (path === "/api/v1/admin/desc-backfill") return handleDescBackfill(req, env);
     }
     return json({ error: "not_found" }, 404);
   },

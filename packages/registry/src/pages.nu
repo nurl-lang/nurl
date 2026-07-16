@@ -26,7 +26,7 @@ $ `src/extract.nu`
     ^ `{% include 'head' %}<h1>Packages</h1>
 <form method=get><input name=q value="{{ q }}" placeholder="search packages" style="padding:.4rem;width:60%"> <button>Search</button></form>
 <p class=muted>{{ items | length }} package(s) · <a href="/login">get a publish token →</a></p>
-{% if items %}<ul>{% for p in items %}<li><a href="/packages/{{ p.name }}">{{ p.name }}</a> {% if p.version %}<code>{{ p.version }}</code>{% else %}<em>(all versions yanked)</em>{% end %}</li>{% end %}</ul>{% else %}<p>No packages{% if q %} matching “{{ q }}”{% else %} published{% end %} yet.</p>{% end %}`
+{% if items %}<ul>{% for p in items %}<li><a href="/packages/{{ p.name }}">{{ p.name }}</a> {% if p.version %}<code>{{ p.version }}</code>{% else %}<em>(all versions yanked)</em>{% end %}{% if p.description %} <span class=muted>— {{ p.description }}</span>{% end %}</li>{% end %}</ul>{% else %}<p>No packages{% if q %} matching “{{ q }}”{% else %} published{% end %} yet.</p>{% end %}`
 }
 
 @ __reg_tpl_detail → s {

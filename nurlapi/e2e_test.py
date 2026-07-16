@@ -186,13 +186,15 @@ def t_mcp_info(c: Client) -> None:
     assert_eq("transport", j.get("transport"), "streamable-http")
     assert_eq("url_path", j.get("url_path"), "/mcp")
     tools = j.get("tools", [])
-    assert_eq("16 tools advertised", len(tools), 16)
+    assert_eq("18 tools advertised", len(tools), 18)
     for t in (
         "nurl_build_native",
         "nurl_build_wasm",
         "nurl_list_examples",
         "nurl_read_grammar",
         "nurl_changelog",
+        "nurl_api",
+        "nurl_grep",
     ):
         assert_true(f"tool {t} listed", t in tools)
     assert_true(
@@ -244,7 +246,7 @@ def t_tools_list(c: Client) -> None:
     print("\n[MCP] tools/list")
     _, _, env = c.rpc({"jsonrpc": "2.0", "id": 3, "method": "tools/list"})
     tools = env.get("result", {}).get("tools", [])
-    assert_eq("16 tools", len(tools), 16)
+    assert_eq("18 tools", len(tools), 18)
     names = {t.get("name") for t in tools}
     for required in (
         "nurl_build_native",
@@ -263,6 +265,8 @@ def t_tools_list(c: Client) -> None:
         "nurl_read_roadmap",
         "nurl_read_gotchas",
         "nurl_changelog",
+        "nurl_api",
+        "nurl_grep",
     ):
         assert_true(f"tools/list has {required}", required in names)
     # Each tool has description + inputSchema.
@@ -361,6 +365,48 @@ def t_tools_call_changelog(c: Client) -> None:
     env = _tool_call(c, "nurl_changelog", {"query": "zzz-no-such-term-zzz"})
     text = _tool_text(env)
     assert_true("no-match has guidance", "No matches" in text)
+
+
+def t_tools_call_api(c: Client) -> None:
+    print("\n[MCP] tools/call nurl_api (module / query / errors)")
+
+    # Module mode: csv.nu's API surface — signatures + type definitions,
+    # no function bodies, __-private helpers omitted.
+    env = _tool_call(c, "nurl_api", {"module": "ext/csv.nu"})
+    text = _tool_text(env)
+    assert_true("module renders header prose", "CSV reader/writer" in text)
+    assert_true("module renders signatures", "csv_reader_next" in text)
+    assert_true("module renders type fields", "quote_char" in text)
+    assert_true("module omits function bodies", "string_push_char" not in text)
+    assert_true("module omits __-private helpers", "__csv_drop_string" not in text)
+
+    # Query mode: AND-matched terms over declaration blocks.
+    env = _tool_call(c, "nurl_api", {"query": "csv quote"})
+    text = _tool_text(env)
+    assert_true("query reports match count", "declaration(s) match" in text)
+    assert_true("query finds the dialect struct", "CSVDialect" in text)
+
+    # Errors: unknown module, and neither argument.
+    env = _tool_call(c, "nurl_api", {"module": "ext/zzz-nope.nu"})
+    assert_true("unknown module errors", bool(env.get("result", {}).get("isError")))
+    env = _tool_call(c, "nurl_api", {})
+    assert_true("missing args errors", bool(env.get("result", {}).get("isError")))
+
+
+def t_tools_call_grep(c: Client) -> None:
+    print("\n[MCP] tools/call nurl_grep (stdlib scope / caps / missing pattern)")
+
+    env = _tool_call(c, "nurl_grep", {"pattern": "time_format", "where": "stdlib"})
+    text = _tool_text(env)
+    assert_true("grep reports line count", "line(s) match" in text)
+    assert_true("grep returns path:line hits", "stdlib/std/time.nu:" in text)
+
+    env = _tool_call(c, "nurl_grep", {"pattern": "zzz-no-such-thing-zzz", "where": "stdlib"})
+    text = _tool_text(env)
+    assert_true("grep no-match reports zero", text.startswith("0 line(s)"))
+
+    env = _tool_call(c, "nurl_grep", {})
+    assert_true("missing pattern errors", bool(env.get("result", {}).get("isError")))
 
 
 def t_tools_call_traversal(c: Client) -> None:
@@ -599,6 +645,8 @@ def main() -> int:
     t_tools_call_listing(c)
     t_tools_call_reads(c)
     t_tools_call_changelog(c)
+    t_tools_call_api(c)
+    t_tools_call_grep(c)
     t_tools_call_traversal(c)
     t_tools_call_unknown(c)
     if not args.quick:

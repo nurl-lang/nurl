@@ -1796,6 +1796,16 @@ $ `stdlib/std/bytes.nu`
                                     ?? no { T nm → ( nurl_print ( json_as_str nm ) ) F → {} }
                                     : ?Json vo ( json_obj_get e `version` )
                                     ?? vo { T vv → { ( nurl_print `  ` ) ( nurl_print ( json_as_str vv ) ) } F → {} }
+                                    : ?Json dso ( json_obj_get e `description` )
+                                    ?? dso {
+                                        T dv → {
+                                            ? & ( json_is_str dv ) > ( nurl_str_len ( json_as_str dv ) ) 0 {
+                                                ( nurl_print `  — ` )
+                                                ( nurl_print ( json_as_str dv ) )
+                                            } {}
+                                        }
+                                        F → {}
+                                    }
                                     ( nurl_print `\n` )
                                 }
                                 F → {}

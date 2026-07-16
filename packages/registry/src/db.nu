@@ -39,10 +39,14 @@ $ `stdlib/ext/sqlite.nu`
         name         TEXT    NOT NULL,
         created_at   INTEGER NOT NULL,
         last_used_at INTEGER)` ) )
+    // description = [package].description, extracted SERVER-SIDE from the
+    // published tarball at publish time (latest version wins) so search
+    // and the catalog can match on what a package IS, not just its name.
     ( vec_push [String] out ( string_from `CREATE TABLE IF NOT EXISTS packages (
         name          TEXT    PRIMARY KEY,
         owner_user_id INTEGER NOT NULL REFERENCES users(id),
-        created_at    INTEGER NOT NULL)` ) )
+        created_at    INTEGER NOT NULL,
+        description   TEXT    NOT NULL DEFAULT '')` ) )
     // published_at / created_at are epoch SECONDS (__reg_now). The
     // Cloudflare Worker's D1 stores epoch MILLISECONDS — any data
     // migration from D1 into this schema must divide by 1000.
@@ -91,6 +95,10 @@ $ `stdlib/ext/sqlite.nu`
                 = k + k 1
             }
             ( vec_free [String] stmts )
+            // Migration for pre-description databases: SQLite has no
+            // ADD COLUMN IF NOT EXISTS, so the duplicate-column failure
+            // on a fresh DB (whose CREATE already carries it) is ignored.
+            ?? ( sqlite_exec db `ALTER TABLE packages ADD COLUMN description TEXT NOT NULL DEFAULT ''` ) { T _ → {} F _ → {} }
             ? failed {
                 ^ @ !Database SqliteErr { F # SqliteErr SqliteMisuse }
             } {}
@@ -282,14 +290,33 @@ $ `stdlib/ext/sqlite.nu`
     ^ uid
 }
 
-@ reg_db_pkg_insert Database db s name i owner_uid i now → b {
-    ?? ( sqlite_prepare db `INSERT INTO packages (name, owner_user_id, created_at) VALUES (?1, ?2, ?3)` ) {
+@ reg_db_pkg_insert Database db s name i owner_uid i now s description → b {
+    ?? ( sqlite_prepare db `INSERT INTO packages (name, owner_user_id, created_at, description) VALUES (?1, ?2, ?3, ?4)` ) {
         T st → {
             : String nv ( string_from name )
             ?? ( sqlite_bind_text st 1 nv ) { T _ → {} F _ → {} }
             ( string_free nv )
             ?? ( sqlite_bind_int st 2 owner_uid ) { T _ → {} F _ → {} }
             ?? ( sqlite_bind_int st 3 now ) { T _ → {} F _ → {} }
+            : String dv ( string_from description )
+            ?? ( sqlite_bind_text st 4 dv ) { T _ → {} F _ → {} }
+            ( string_free dv )
+            ^ ( __reg_run st )
+        }
+        F _ → ^ F
+    }
+}
+
+// Refresh a package's description (the latest publish's text wins).
+@ reg_db_pkg_set_description Database db s name s description → b {
+    ?? ( sqlite_prepare db `UPDATE packages SET description = ?1 WHERE name = ?2` ) {
+        T st → {
+            : String dv ( string_from description )
+            ?? ( sqlite_bind_text st 1 dv ) { T _ → {} F _ → {} }
+            ( string_free dv )
+            : String nv ( string_from name )
+            ?? ( sqlite_bind_text st 2 nv ) { T _ → {} F _ → {} }
+            ( string_free nv )
             ^ ( __reg_run st )
         }
         F _ → ^ F
@@ -477,8 +504,10 @@ $ `stdlib/ext/sqlite.nu`
     : Json arr ( json_arr_new )
     ?? ( sqlite_prepare db `SELECT p.name,
             (SELECT v.version FROM versions v WHERE v.name = p.name AND v.yanked = 0
-              ORDER BY v.published_at DESC, v.rowid DESC LIMIT 1) AS latest
-        FROM packages p WHERE p.name LIKE ?1 ORDER BY p.name LIMIT ?2` ) {
+              ORDER BY v.published_at DESC, v.rowid DESC LIMIT 1) AS latest,
+            p.description
+        FROM packages p WHERE p.name LIKE ?1 OR p.description LIKE ?1
+        ORDER BY p.name LIMIT ?2` ) {
         T st → {
             : String pat ( __reg_like_pattern q )
             ?? ( sqlite_bind_text st 1 pat ) { T _ → {} F _ → {} }
@@ -497,6 +526,9 @@ $ `stdlib/ext/sqlite.nu`
                         : b _c ( json_obj_set row `version` ( json_str_lit ( string_data lv ) ) )
                         ( string_free lv )
                     }
+                    : String dsc ( sqlite_column_text st 2 )
+                    : b _e ( json_obj_set row `description` ( json_str_lit ( string_data dsc ) ) )
+                    ( string_free dsc )
                     : b _d ( json_arr_push arr row )
                     ( string_free nm )
                 } { = more F }

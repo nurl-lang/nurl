@@ -3,6 +3,7 @@ $ `stdlib/ext/env.nu`
 $ `stdlib/std/fs.nu`
 $ `stdlib/std/process.nu`
 $ `stdlib/std/path.nu`
+$ `stdlib/std/url.nu`
 $ `stdlib/std/time.nu`
 $ `stdlib/std/encode.nu`
 $ `stdlib/std/int.nu`
@@ -1731,6 +1732,8 @@ s combined_stdout s combined_stderr → v {
     ( __mcp_info_push_str tools `nurl_read_roadmap` )
     ( __mcp_info_push_str tools `nurl_read_gotchas` )
     ( __mcp_info_push_str tools `nurl_changelog` )
+    ( __mcp_info_push_str tools `nurl_api` )
+    ( __mcp_info_push_str tools `nurl_grep` )
     ( json_obj_set j `tools` tools )
 
     : Json resources ( json_arr_new )
@@ -4144,12 +4147,19 @@ s combined_stdout s combined_stderr → v {
 @ __cl_out_cap → i { ^ 32768 }
 
 // Flush one accumulated ent: count it, run the release filter and the
-// term match, and append it to `out` when within `limit` and the byte
-// cap. `ctr` is the shared [total, matched, emitted] counter Vec (Vec is
-// a shared boxed handle — mutations are visible to the caller). Clears
-// `ent` so the caller can keep accumulating into the same String.
+// term match, and COLLECT matches (provenance, body, relevance score)
+// into the m_* vectors — ranking and emission happen after the walk, so
+// the byte cap keeps the most relevant entries, not merely the newest.
+// `ctr` is the shared [total, matched] counter Vec (Vec is a shared
+// boxed handle — mutations are visible to the caller). Clears `ent` so
+// the caller can keep accumulating into the same String.
+//
+// Score: a term hitting the entry's TITLE (the bullet's first line)
+// counts 3, anywhere else 1 — "when did csv quoting change" should
+// surface the entry ABOUT csv quoting above every entry that merely
+// mentions csv in passing.
 @ __cl_flush String ent String cur_rel String cur_rel_lc String cur_cat
-( Vec String ) terms String rel_lc String out i limit ( Vec i ) ctr → v {
+( Vec String ) terms String rel_lc ( Vec String ) m_prov ( Vec String ) m_body ( Vec i ) m_score ( Vec i ) ctr → v {
     ? > ( string_len ent ) 0 {
         // Trim trailing blank lines / whitespace off the body.
         : ~ i e ( string_len ent )
@@ -4179,14 +4189,33 @@ s combined_stdout s combined_stderr → v {
             ? ( __cl_terms_match hay_lc terms ) {
                 : i matched ?? ( vec_get [i] ctr 1 ) { T v → v F _ → 0 }
                 ( vec_set [i] ctr 1 + matched 1 )
-                : i emitted ?? ( vec_get [i] ctr 2 ) { T v → v F _ → 0 }
-                ? & < emitted limit < ( string_len out ) ( __cl_out_cap ) {
-                    ( string_push_str out ( string_data prov ) )
-                    ( string_push_char out 10 )
-                    ( string_push_str out ( string_data body ) )
-                    ( string_push_str out `\n\n` )
-                    ( vec_set [i] ctr 2 + emitted 1 )
-                } {}
+                // Title = the body's first line.
+                : ~ i te 0
+                : i bn ( string_len body )
+                ~ & < te bn != ( string_get body te ) 10 { = te + te 1 }
+                : String title ( string_substr body 0 te )
+                : String title_lc ( string_to_lower title )
+                ( string_free title )
+                : ~ i score 0
+                : i tn ( vec_len [String] terms )
+                : ~ i tk 0
+                ~ < tk tn {
+                    ?? ( vec_get [String] terms tk ) {
+                        T t → {
+                            ? > ( string_len t ) 0 {
+                                ? >= ( nurl_str_find ( string_data title_lc ) ( string_data t ) ) 0 {
+                                    = score + score 3
+                                } { = score + score 1 }
+                            } {}
+                        }
+                        F _ → {}
+                    }
+                    = tk + tk 1
+                }
+                ( string_free title_lc )
+                ( vec_push [String] m_prov ( string_from ( string_data prov ) ) )
+                ( vec_push [String] m_body ( string_from ( string_data body ) ) )
+                ( vec_push [i] m_score score )
             } {}
             ( string_free hay_lc ) ( string_free hay ) ( string_free prov )
         } {}
@@ -4199,7 +4228,7 @@ s combined_stdout s combined_stderr → v {
 // Continuation lines are indented or blank; a non-indented line that is
 // not a bullet or heading (intro prose, the link-reference definitions
 // at the bottom) terminates the open ent without joining it.
-@ __changelog_entries String src ( Vec String ) terms String rel_lc String out i limit ( Vec i ) ctr → v {
+@ __changelog_entries String src ( Vec String ) terms String rel_lc ( Vec String ) m_prov ( Vec String ) m_body ( Vec i ) m_score ( Vec i ) ctr → v {
     : ( Vec String ) lines ( string_split src `\n` )
     : i nl ( vec_len [String] lines )
     : ~ String cur_rel ( string_from `` )
@@ -4212,19 +4241,19 @@ s combined_stdout s combined_stderr → v {
             T line → {
                 : i ln ( string_len line )
                 ? ( string_starts_with line `## ` ) {
-                    ( __cl_flush ent cur_rel cur_rel_lc cur_cat terms rel_lc out limit ctr )
+                    ( __cl_flush ent cur_rel cur_rel_lc cur_cat terms rel_lc m_prov m_body m_score ctr )
                     ( string_free cur_rel ) = cur_rel ( string_substr line 3 - ln 3 )
                     ( string_free cur_rel_lc ) = cur_rel_lc ( string_to_lower cur_rel )
                     ( string_free cur_cat ) = cur_cat ( string_from `` )
                 } {
                     ? ( string_starts_with line `### ` ) {
-                        ( __cl_flush ent cur_rel cur_rel_lc cur_cat terms rel_lc out limit ctr )
+                        ( __cl_flush ent cur_rel cur_rel_lc cur_cat terms rel_lc m_prov m_body m_score ctr )
                         ( string_free cur_cat ) = cur_cat ( string_substr line 4 - ln 4 )
                     } {
                         // Both bullet styles appear in the file: `- ` in the
                         // 0.9.1+ sections, `* ` in the older ones.
                         ? | ( string_starts_with line `- ` ) ( string_starts_with line `* ` ) {
-                            ( __cl_flush ent cur_rel cur_rel_lc cur_cat terms rel_lc out limit ctr )
+                            ( __cl_flush ent cur_rel cur_rel_lc cur_cat terms rel_lc m_prov m_body m_score ctr )
                             ( string_push_str ent ( string_data line ) )
                             ( string_push_char ent 10 )
                         } {
@@ -4239,7 +4268,7 @@ s combined_stdout s combined_stderr → v {
                                     ( string_push_char ent 10 )
                                 } {}
                             } {
-                                ( __cl_flush ent cur_rel cur_rel_lc cur_cat terms rel_lc out limit ctr )
+                                ( __cl_flush ent cur_rel cur_rel_lc cur_cat terms rel_lc m_prov m_body m_score ctr )
                             }
                         }
                     }
@@ -4249,7 +4278,7 @@ s combined_stdout s combined_stderr → v {
         }
         = li + li 1
     }
-    ( __cl_flush ent cur_rel cur_rel_lc cur_cat terms rel_lc out limit ctr )
+    ( __cl_flush ent cur_rel cur_rel_lc cur_cat terms rel_lc m_prov m_body m_score ctr )
     ( string_free cur_rel ) ( string_free cur_rel_lc ) ( string_free cur_cat ) ( string_free ent )
     ( vec_free_with [String] lines \ String l → v { ( string_free l ) } )
 }
@@ -4310,6 +4339,7 @@ s combined_stdout s combined_stderr → v {
 @ __mcp_tool_changelog Json args → Json {
     : s query ( __mcp_args_get `query` args `` )
     : s release ( __mcp_args_get `release` args `` )
+    : b compact ( __mcp_args_get_bool `compact` args F )
     : ~ i limit ( __mcp_args_get_int `limit` args 10 )
     ? < limit 1 { = limit 1 } {}
     ? > limit 50 { = limit 50 } {}
@@ -4330,13 +4360,85 @@ s combined_stdout s combined_stderr → v {
             : String q_lc ( __lc_owned query )
             : ( Vec String ) terms ( string_split q_lc ` ` )
             : String rel_lc ( __lc_owned release )
-            : String out ( string_with_cap 4096 )
+            : ( Vec String ) m_prov ( vec_new [String] )
+            : ( Vec String ) m_body ( vec_new [String] )
+            : ( Vec i ) m_score ( vec_new [i] )
             : ( Vec i ) ctr ( vec_new [i] )
-            ( vec_push [i] ctr 0 ) ( vec_push [i] ctr 0 ) ( vec_push [i] ctr 0 )
-            ( __changelog_entries src terms rel_lc out limit ctr )
+            ( vec_push [i] ctr 0 ) ( vec_push [i] ctr 0 )
+            ( __changelog_entries src terms rel_lc m_prov m_body m_score ctr )
             : i total ?? ( vec_get [i] ctr 0 ) { T v → v F _ → 0 }
             : i matched ?? ( vec_get [i] ctr 1 ) { T v → v F _ → 0 }
-            : i emitted ?? ( vec_get [i] ctr 2 ) { T v → v F _ → 0 }
+
+            // Rank: score descending, walk order (newest-first) among
+            // equals. Insertion sort over an index array — 650 entries max.
+            : ( Vec i ) order ( vec_new [i] )
+            : ~ i oi 0
+            ~ < oi matched {
+                ( vec_push [i] order oi )
+                = oi + oi 1
+            }
+            : ~ i si 1
+            ~ < si matched {
+                : i cur ?? ( vec_get [i] order si ) { T v → v F _ → 0 }
+                : i cur_sc ?? ( vec_get [i] m_score cur ) { T v → v F _ → 0 }
+                : ~ i sj si
+                : ~ b moving T
+                ~ & moving > sj 0 {
+                    : i prev ?? ( vec_get [i] order - sj 1 ) { T v → v F _ → 0 }
+                    : i prev_sc ?? ( vec_get [i] m_score prev ) { T v → v F _ → 0 }
+                    ? < prev_sc cur_sc {
+                        ( vec_set [i] order sj prev )
+                        = sj - sj 1
+                    } { = moving F }
+                }
+                ( vec_set [i] order sj cur )
+                = si + si 1
+            }
+
+            // Emit: full text for the top `limit` (byte-capped); the rest
+            // as one-line provenance+title so nothing relevant is invisible.
+            : String out ( string_with_cap 4096 )
+            : ~ i emitted 0
+            : ~ b other_hdr F
+            : ~ i ek 0
+            ~ < ek matched {
+                : i idx ?? ( vec_get [i] order ek ) { T v → v F _ → 0 }
+                : ~ String prov ( string_new )
+                ?? ( vec_get [String] m_prov idx ) { T v → { ( string_free prov ) = prov v } F _ → {} }
+                : ~ String bod ( string_new )
+                ?? ( vec_get [String] m_body idx ) { T v → { ( string_free bod ) = bod v } F _ → {} }
+                ? & & ! compact < emitted limit < ( string_len out ) ( __cl_out_cap ) {
+                    ( string_push_str out ( string_data prov ) )
+                    ( string_push_char out 10 )
+                    ( string_push_str out ( string_data bod ) )
+                    ( string_push_str out `\n\n` )
+                    = emitted + emitted 1
+                } {
+                    // Compact line: provenance — title (first line, ≤120 b).
+                    ? < ( string_len out ) ( __cl_out_cap ) {
+                        ? & ! compact ! other_hdr {
+                            ( string_push_str out `Other matches (title only — fetch one with a narrower query):\n` )
+                            = other_hdr T
+                        } {}
+                        ( string_push_str out `  · ` )
+                        ( string_push_str out ( string_data prov ) )
+                        ( string_push_str out ` — ` )
+                        : i bn ( string_len bod )
+                        : ~ i te 0
+                        ~ & & < te bn < te 120 != ( string_get bod te ) 10 { = te + te 1 }
+                        : ~ i j 0
+                        : s braw ( string_data bod )
+                        ~ < j te {
+                            ( string_push_char out ( nurl_str_get braw j ) )
+                            = j + j 1
+                        }
+                        ? & < te bn != ( string_get bod te ) 10 { ( string_push_str out `…` ) } {}
+                        ( string_push_char out 10 )
+                        = emitted + emitted 1
+                    } {}
+                }
+                = ek + ek 1
+            }
 
             : String hdr ( string_with_cap + ( string_len out ) 256 )
             ( string_push_int hdr matched )
@@ -4353,7 +4455,7 @@ s combined_stdout s combined_stderr → v {
                 ( string_push_str hdr release )
                 ( string_push_str hdr `'` )
             } {}
-            ( string_push_str hdr `.\n\n` )
+            ( string_push_str hdr ` (ranked: title hits first).\n\n` )
             ( string_push_str hdr ( string_data out ) )
             ? == matched 0 {
                 ( string_push_str hdr `No matches — terms are AND-ed substrings; try fewer or shorter terms, or call without arguments for the release index.\n` )
@@ -4361,11 +4463,14 @@ s combined_stdout s combined_stderr → v {
             ? > matched emitted {
                 ( string_push_str hdr `… ` )
                 ( string_push_int hdr - matched emitted )
-                ( string_push_str hdr ` more matching entries omitted (limit/byte cap) — narrow the query, filter by release, or raise 'limit'.\n` )
+                ( string_push_str hdr ` more matching entries omitted (byte cap) — narrow the query or filter by release.\n` )
             } {}
             : Json result ( __mcp_result_text ( string_data hdr ) )
             ( string_free hdr ) ( string_free out ) ( string_free rel_lc )
             ( vec_free_with [String] terms \ String t → v { ( string_free t ) } )
+            ( vec_free_with [String] m_prov \ String v → v { ( string_free v ) } )
+            ( vec_free_with [String] m_body \ String v → v { ( string_free v ) } )
+            ( vec_free [i] m_score ) ( vec_free [i] order )
             ( string_free q_lc ) ( vec_free [i] ctr ) ( string_free src )
             ^ result
         }
@@ -4384,6 +4489,467 @@ s combined_stdout s combined_stderr → v {
     ( json_obj_set props `limit`
     ( __mcp_prop `integer` `Maximum entries to return (default 10, max 50). Output is also byte-capped at 32 KB.` ) )
     ( json_obj_set schema `properties` props )
+    ^ schema
+}
+
+// Boolean tool argument: JSON true/false → b; absent / other → default.
+@ __mcp_args_get_bool s key Json args b default → b {
+    : ?Json v ( json_obj_get args key )
+    ?? v {
+        T j → { ^ ? ( json_is_bool j ) ( json_as_bool j ) default }
+        F _ → { ^ default }
+    }
+}
+
+// ── nurl_api — a module's API surface, or a search across all of them ─
+//
+// nurl_read_stdlib returns whole modules; ext/csv.nu is 63 KB of which
+// an agent usually needs the ~11 KB doc surface — signatures, doc
+// comments, full type definitions — or just the three declarations that
+// match a question. `module` renders one module through nurldoc (no
+// function bodies; `__`-private helpers omitted). `query` AND-matches
+// terms against every stdlib module's declaration blocks (signature +
+// doc comment + type definition) and returns the matching blocks.
+
+@ __api_out_cap → i { ^ 28672 }
+
+// Render one stdlib module's doc surface; "" when unreadable.
+@ __api_render_module s rel → String {
+    : String dir ( get_stdlib_dir )
+    : String fp ( path_join ( string_data dir ) rel )
+    ( string_free dir )
+    : !( Vec u ) IoErr rd ( read_file_bytes ( string_data fp ) )
+    ( string_free fp )
+    ?? rd {
+        T bytes → {
+            : String src ( bytes_to_str bytes )
+            ( vec_free [u] bytes )
+            : String md ( nurldoc_render ( string_data src ) rel )
+            ( string_free src )
+            ^ md
+        }
+        F _ → ^ ( string_new )
+    }
+}
+
+// AND-match every non-empty lowercase term against hay_lc.
+@ __api_terms_match String hay_lc ( Vec String ) terms → b {
+    : i n ( vec_len [String] terms )
+    : ~ i k 0
+    ~ < k n {
+        ?? ( vec_get [String] terms k ) {
+            T t → {
+                ? & > ( string_len t ) 0 < ( nurl_str_find ( string_data hay_lc ) ( string_data t ) ) 0 { ^ F } {}
+            }
+            F _ → {}
+        }
+        = k + k 1
+    }
+    ^ T
+}
+
+// Match one rendered module's "### "-delimited declaration blocks and
+// append hits to `out`. ctr = [matched, emitted].
+@ __api_match_blocks String md s rel ( Vec String ) terms String out ( Vec i ) ctr → v {
+    : ( Vec String ) parts ( string_split md `\n### ` )
+    : i np ( vec_len [String] parts )
+    : ~ i k 1  // part 0 = title + module header, not a declaration block
+    ~ < k np {
+        ?? ( vec_get [String] parts k ) {
+            T blk → {
+                : String hay ( string_with_cap + ( string_len blk ) 64 )
+                ( string_push_str hay rel )
+                ( string_push_char hay 32 )
+                ( string_push_str hay ( string_data blk ) )
+                : String hay_lc ( string_to_lower hay )
+                ( string_free hay )
+                ? ( __api_terms_match hay_lc terms ) {
+                    : i matched ?? ( vec_get [i] ctr 0 ) { T v → v F _ → 0 }
+                    ( vec_set [i] ctr 0 + matched 1 )
+                    ? < ( string_len out ) ( __api_out_cap ) {
+                        // Block body, trimmed to keep many hits in view.
+                        ( string_push_str out rel )
+                        ( string_push_str out ` › ` )
+                        : i bn ( string_len blk )
+                        : i keep ? > bn 700 700 bn
+                        : ~ i j 0
+                        : s raw ( string_data blk )
+                        ~ < j keep {
+                            ( string_push_char out ( nurl_str_get raw j ) )
+                            = j + j 1
+                        }
+                        ? > bn keep { ( string_push_str out `…` ) } {}
+                        ( string_push_str out `\n\n` )
+                        : i emitted ?? ( vec_get [i] ctr 1 ) { T v → v F _ → 0 }
+                        ( vec_set [i] ctr 1 + emitted 1 )
+                    } {}
+                } {}
+                ( string_free hay_lc )
+            }
+            F _ → {}
+        }
+        = k + k 1
+    }
+    ( vec_free_with [String] parts \ String p → v { ( string_free p ) } )
+}
+
+@ __mcp_tool_api Json args → Json {
+    : s module ( __mcp_args_get `module` args `` )
+    : s query ( __mcp_args_get `query` args `` )
+    ? > ( nurl_str_len module ) 0 {
+        ? ( _has_dotdot_segment module ) { ^ ( __mcp_result_error `bad 'module'` ) } {}
+        : String md ( __api_render_module module )
+        ? == ( string_len md ) 0 {
+            ( string_free md )
+            ^ ( __mcp_result_error `module not found — 'module' is a path from nurl_list_stdlib, e.g. ext/csv.nu` )
+        } {}
+        ? > ( string_len md ) ( __api_out_cap ) {
+            : String cut ( string_substr md 0 ( __api_out_cap ) )
+            ( string_push_str cut `\n… truncated — use nurl_read_stdlib for the full source.\n` )
+            : Json r ( __mcp_result_text ( string_data cut ) )
+            ( string_free cut ) ( string_free md )
+            ^ r
+        } {}
+        : Json r ( __mcp_result_text ( string_data md ) )
+        ( string_free md )
+        ^ r
+    } {}
+    ? == ( nurl_str_len query ) 0 {
+        ^ ( __mcp_result_error `pass 'module' (a nurl_list_stdlib path, e.g. ext/csv.nu) or 'query' (search terms)` )
+    } {}
+
+    : String q_lc ( __lc_owned query )
+    : ( Vec String ) terms ( string_split q_lc ` ` )
+    : String out ( string_with_cap 4096 )
+    : ( Vec i ) ctr ( vec_new [i] )
+    ( vec_push [i] ctr 0 ) ( vec_push [i] ctr 0 )
+
+    : String dir ( get_stdlib_dir )
+    : Json files ( json_arr_new )
+    ( __walk_nu_files files ( string_data dir ) `` )
+    : i nf ( json_arr_len files )
+    : ~ i k 0
+    ~ < k nf {
+        ?? ( json_arr_get files k ) {
+            T fo → {
+                : ~ s rel ``
+                ?? ( json_obj_get fo `path` ) {
+                    T pj → { ? ( json_is_str pj ) { = rel ( json_as_str pj ) } {} }
+                    F _ → {}
+                }
+                ? > ( nurl_str_len rel ) 0 {
+                    // Cheap raw-source pre-filter: skip modules where the
+                    // terms can't all occur (path counts as haystack too).
+                    : String fp ( path_join ( string_data dir ) rel )
+                    : !( Vec u ) IoErr rd ( read_file_bytes ( string_data fp ) )
+                    ( string_free fp )
+                    ?? rd {
+                        T bytes → {
+                            : String src ( bytes_to_str bytes )
+                            ( vec_free [u] bytes )
+                            : String pre ( string_with_cap + ( string_len src ) 64 )
+                            ( string_push_str pre rel )
+                            ( string_push_char pre 32 )
+                            ( string_push_str pre ( string_data src ) )
+                            : String pre_lc ( string_to_lower pre )
+                            ( string_free pre )
+                            ? ( __api_terms_match pre_lc terms ) {
+                                : String md ( nurldoc_render ( string_data src ) rel )
+                                ( __api_match_blocks md rel terms out ctr )
+                                ( string_free md )
+                            } {}
+                            ( string_free pre_lc )
+                            ( string_free src )
+                        }
+                        F _ → {}
+                    }
+                } {}
+            }
+            F _ → {}
+        }
+        = k + k 1
+    }
+    ( json_free files )
+    ( string_free dir )
+
+    : i matched ?? ( vec_get [i] ctr 0 ) { T v → v F _ → 0 }
+    : i emitted ?? ( vec_get [i] ctr 1 ) { T v → v F _ → 0 }
+    : String hdr ( string_with_cap + ( string_len out ) 256 )
+    ( string_push_int hdr matched )
+    ( string_push_str hdr ` stdlib declaration(s) match '` )
+    ( string_push_str hdr query )
+    ( string_push_str hdr `'.\n\n` )
+    ( string_push_str hdr ( string_data out ) )
+    ? == matched 0 {
+        ( string_push_str hdr `No matches — terms are AND-ed substrings over signature + doc comment + module path; try fewer or shorter terms.\n` )
+    } {}
+    ? > matched emitted {
+        ( string_push_str hdr `… ` )
+        ( string_push_int hdr - matched emitted )
+        ( string_push_str hdr ` more matching declarations omitted (byte cap) — narrow the query or read one module with 'module'.\n` )
+    } {}
+    : Json result ( __mcp_result_text ( string_data hdr ) )
+    ( string_free hdr ) ( string_free out ) ( vec_free [i] ctr )
+    ( vec_free_with [String] terms \ String t → v { ( string_free t ) } )
+    ( string_free q_lc )
+    ^ result
+}
+
+@ __mcp_schema_api → Json {
+    : Json schema ( json_obj_new )
+    ( json_obj_set schema `type` ( json_str_lit `object` ) )
+    : Json props ( json_obj_new )
+    ( json_obj_set props `module`
+    ( __mcp_prop `string` `Render ONE module's API surface (signatures, doc comments, full type definitions — no function bodies). A nurl_list_stdlib path, e.g. 'ext/csv.nu'.` ) )
+    ( json_obj_set props `query`
+    ( __mcp_prop `string` `Search every stdlib module's declarations instead: space-separated terms, ALL must occur (case-insensitive) in a declaration's signature + doc comment + module path. Ignored when 'module' is set.` ) )
+    ( json_obj_set schema `properties` props )
+    ^ schema
+}
+
+// ── nurl_grep — substring search across the corpora an agent has ──────
+//
+// grep for the toolchain's source surfaces: stdlib modules, examples,
+// compiler tests — `path:line: text` per hit, per-file and total caps —
+// plus the package registry (name + description via /api/v1/search), so
+// "is there already a package for X" is one cheap call instead of a
+// catalogue crawl.
+
+@ __grep_out_cap → i { ^ 24576 }
+
+@ __grep_file_hits_cap → i { ^ 8 }
+
+// Grep one file; append `<label>/<rel>:<ln>: <text>` lines. ctr =
+// [matched, emitted].
+@ __grep_one_file s root s rel s label String pat_lc String out ( Vec i ) ctr → v {
+    : String fp ( path_join root rel )
+    : !( Vec u ) IoErr rd ( read_file_bytes ( string_data fp ) )
+    ( string_free fp )
+    ?? rd {
+        T bytes → {
+            : String src ( bytes_to_str bytes )
+            ( vec_free [u] bytes )
+            : ( Vec String ) lines ( string_split src `\n` )
+            ( string_free src )
+            : i nl ( vec_len [String] lines )
+            : ~ i file_hits 0
+            : ~ i li 0
+            ~ < li nl {
+                ?? ( vec_get [String] lines li ) {
+                    T line → {
+                        : String line_lc ( string_to_lower line )
+                        ? >= ( nurl_str_find ( string_data line_lc ) ( string_data pat_lc ) ) 0 {
+                            : i matched ?? ( vec_get [i] ctr 0 ) { T v → v F _ → 0 }
+                            ( vec_set [i] ctr 0 + matched 1 )
+                            ? & < file_hits ( __grep_file_hits_cap ) < ( string_len out ) ( __grep_out_cap ) {
+                                ( string_push_str out label )
+                                ( string_push_char out 47 )
+                                ( string_push_str out rel )
+                                ( string_push_char out 58 )
+                                ( string_push_int out + li 1 )
+                                ( string_push_str out `: ` )
+                                // Trim the line to 200 bytes.
+                                : ~ i keep ( string_len line )
+                                ? > keep 200 { = keep 200 } {}
+                                : s lraw ( string_data line )
+                                : ~ i j 0
+                                ~ < j keep {
+                                    : i c ( nurl_str_get lraw j )
+                                    ( string_push_char out ? == c 9 32 c )
+                                    = j + j 1
+                                }
+                                ? > ( string_len line ) 200 { ( string_push_str out `…` ) } {}
+                                ( string_push_char out 10 )
+                                = file_hits + file_hits 1
+                                : i emitted ?? ( vec_get [i] ctr 1 ) { T v → v F _ → 0 }
+                                ( vec_set [i] ctr 1 + emitted 1 )
+                            } {}
+                        } {}
+                        ( string_free line_lc )
+                    }
+                    F _ → {}
+                }
+                = li + li 1
+            }
+            ? >= file_hits ( __grep_file_hits_cap ) {
+                ( string_push_str out `  (…more hits in ` )
+                ( string_push_str out rel )
+                ( string_push_str out ` capped)\n` )
+            } {}
+            ( vec_free_with [String] lines \ String l → v { ( string_free l ) } )
+        }
+        F _ → {}
+    }
+}
+
+// Grep one corpus directory (recursively, .nu files).
+@ __grep_corpus s root s label String pat_lc String out ( Vec i ) ctr → v {
+    : Json files ( json_arr_new )
+    ( __walk_nu_files files root `` )
+    : i nf ( json_arr_len files )
+    : ~ i k 0
+    ~ < k nf {
+        ? < ( string_len out ) ( __grep_out_cap ) {
+            ?? ( json_arr_get files k ) {
+                T fo → {
+                    ?? ( json_obj_get fo `path` ) {
+                        T pj → {
+                            ? ( json_is_str pj ) {
+                                ( __grep_one_file root ( json_as_str pj ) label pat_lc out ctr )
+                            } {}
+                        }
+                        F _ → {}
+                    }
+                }
+                F _ → {}
+            }
+        } {}
+        = k + k 1
+    }
+    ( json_free files )
+}
+
+// Registry package search: /api/v1/search matches name + description.
+@ __grep_packages s pattern String out → v {
+    : String url ( string_with_cap 128 )
+    : String regbase ( env_var_or `NURL_REGISTRY` `https://reg.nurl-lang.org/` )
+    ( string_push_str url ( string_data regbase ) )
+    ( string_free regbase )
+    ? != ( string_get url - ( string_len url ) 1 ) 47 { ( string_push_char url 47 ) } {}
+    ( string_push_str url `api/v1/search?q=` )
+    : String enc ( url_percent_encode pattern )
+    ( string_push_str url ( string_data enc ) )
+    ( string_free enc )
+    : !Response HttpErr r ( http_get ( string_data url ) )
+    ( string_free url )
+    ?? r {
+        T resp → {
+            : s body ( http_body_str resp )
+            ?? ( json_parse body ) {
+                T root → {
+                    ?? ( json_obj_get root `results` ) {
+                        T arr → {
+                            : i n ( json_arr_len arr )
+                            ? > n 0 { ( string_push_str out `\nRegistry packages matching (name/description):\n` ) } {}
+                            : ~ i k 0
+                            ~ < k n {
+                                ?? ( json_arr_get arr k ) {
+                                    T o → {
+                                        ( string_push_str out `  package ` )
+                                        ?? ( json_obj_get o `name` ) {
+                                            T nj → { ( string_push_str out ( json_as_str nj ) ) }
+                                            F _ → {}
+                                        }
+                                        ?? ( json_obj_get o `version` ) {
+                                            T vj → {
+                                                ? ( json_is_str vj ) {
+                                                    ( string_push_char out 32 )
+                                                    ( string_push_str out ( json_as_str vj ) )
+                                                } {}
+                                            }
+                                            F _ → {}
+                                        }
+                                        ?? ( json_obj_get o `description` ) {
+                                            T dj → {
+                                                ? ( json_is_str dj ) {
+                                                    ( string_push_str out ` — ` )
+                                                    // First 200 bytes of the description.
+                                                    : s d ( json_as_str dj )
+                                                    : i dn ( nurl_str_len d )
+                                                    : ~ i keep ? > dn 200 200 dn
+                                                    : ~ i j 0
+                                                    ~ < j keep {
+                                                        : i c ( nurl_str_get d j )
+                                                        ( string_push_char out ? == c 10 32 c )
+                                                        = j + j 1
+                                                    }
+                                                    ? > dn 200 { ( string_push_str out `…` ) } {}
+                                                } {}
+                                            }
+                                            F _ → {}
+                                        }
+                                        ( string_push_char out 10 )
+                                    }
+                                    F _ → {}
+                                }
+                                = k + k 1
+                            }
+                        }
+                        F _ → {}
+                    }
+                    ( json_free root )
+                }
+                F _ → {}
+            }
+            ( response_free resp )
+        }
+        F _ → { ( string_push_str out `\n(registry search unavailable)\n` ) }
+    }
+}
+
+@ __mcp_tool_grep Json args → Json {
+    : s pattern ( __mcp_args_get `pattern` args `` )
+    : s where_s ( __mcp_args_get `where` args `all` )
+    ? == ( nurl_str_len pattern ) 0 {
+        ^ ( __mcp_result_error `missing 'pattern'` )
+    } {}
+    : String pat_lc ( __lc_owned pattern )
+    : b all != 0 ( nurl_str_eq where_s `all` )
+    : b w_stdlib | all >= ( nurl_str_find where_s `stdlib` ) 0
+    : b w_examples | all >= ( nurl_str_find where_s `example` ) 0
+    : b w_tests | all >= ( nurl_str_find where_s `test` ) 0
+    : b w_packages | all >= ( nurl_str_find where_s `package` ) 0
+
+    : String out ( string_with_cap 4096 )
+    : ( Vec i ) ctr ( vec_new [i] )
+    ( vec_push [i] ctr 0 ) ( vec_push [i] ctr 0 )
+    ? w_stdlib {
+        : String dir ( get_stdlib_dir )
+        ( __grep_corpus ( string_data dir ) `stdlib` pat_lc out ctr )
+        ( string_free dir )
+    } {}
+    ? w_examples {
+        : String dir ( get_examples_dir )
+        ( __grep_corpus ( string_data dir ) `examples` pat_lc out ctr )
+        ( string_free dir )
+    } {}
+    ? w_tests {
+        : String dir ( get_tests_dir )
+        ( __grep_corpus ( string_data dir ) `tests` pat_lc out ctr )
+        ( string_free dir )
+    } {}
+    ? w_packages { ( __grep_packages pattern out ) } {}
+
+    : i matched ?? ( vec_get [i] ctr 0 ) { T v → v F _ → 0 }
+    : i emitted ?? ( vec_get [i] ctr 1 ) { T v → v F _ → 0 }
+    : String hdr ( string_with_cap + ( string_len out ) 256 )
+    ( string_push_int hdr matched )
+    ( string_push_str hdr ` line(s) match '` )
+    ( string_push_str hdr pattern )
+    ( string_push_str hdr `' (case-insensitive substring).\n\n` )
+    ( string_push_str hdr ( string_data out ) )
+    ? > matched emitted {
+        ( string_push_str hdr `… ` )
+        ( string_push_int hdr - matched emitted )
+        ( string_push_str hdr ` more matching lines omitted (per-file/total caps) — narrow the pattern or scope with 'where'.\n` )
+    } {}
+    : Json result ( __mcp_result_text ( string_data hdr ) )
+    ( string_free hdr ) ( string_free out ) ( vec_free [i] ctr ) ( string_free pat_lc )
+    ^ result
+}
+
+@ __mcp_schema_grep → Json {
+    : Json schema ( json_obj_new )
+    ( json_obj_set schema `type` ( json_str_lit `object` ) )
+    : Json props ( json_obj_new )
+    ( json_obj_set props `pattern`
+    ( __mcp_prop `string` `Case-insensitive substring to find. Results are path:line: text.` ) )
+    ( json_obj_set props `where`
+    ( __mcp_prop `string` `Scope: 'stdlib', 'examples', 'tests', 'packages' (registry name+description search), or 'all' (default). Combine with commas, e.g. 'stdlib,examples'.` ) )
+    : Json req ( json_arr_new )
+    ( json_arr_push req ( json_str_lit `pattern` ) )
+    ( json_obj_set schema `properties` props )
+    ( json_obj_set schema `required` req )
     ^ schema
 }
 
@@ -4489,6 +5055,13 @@ s combined_stdout s combined_stderr → v {
     ? != 0 ( nurl_str_eq name `nurl_changelog` ) {
         ^ ( __mcp_tool_changelog args )
     } {}
+    // API surface / search.
+    ? != 0 ( nurl_str_eq name `nurl_api` ) {
+        ^ ( __mcp_tool_api args )
+    } {}
+    ? != 0 ( nurl_str_eq name `nurl_grep` ) {
+        ^ ( __mcp_tool_grep args )
+    } {}
 
     ^ ( __mcp_result_error `unknown tool` )
 }
@@ -4557,8 +5130,16 @@ s combined_stdout s combined_stderr → v {
 
     // Changelog.
     ( json_arr_push arr ( __mcp_tool_desc `nurl_changelog`
-    `Targeted CHANGELOG.md retrieval — the changelog is large (240+ KB) and growing, so never fetch it whole. Call with NO arguments first to get a compact index (releases + entry counts). Then pass query (space-separated terms, ALL must occur, case-insensitive) and/or release (e.g. 0.9.6 or Unreleased) to get complete changelog entries, each prefixed with its '[release] — date › category' provenance, newest first. Use this to find out when/whether a feature, fix, or rename happened. Results respect limit (default 10) and a 32 KB byte cap; a trailing note reports omitted match counts.`
+    `Targeted CHANGELOG.md retrieval — the changelog is large (240+ KB) and growing, so never fetch it whole. Call with NO arguments first to get a compact index (releases + entry counts). Then pass query (space-separated terms, ALL must occur, case-insensitive) and/or release (e.g. 0.9.6 or Unreleased) to get complete changelog entries, each prefixed with its '[release] — date › category' provenance, ranked by relevance (title hits first). The top 'limit' matches come in full; every further match is listed as a one-line title so nothing relevant is invisible. Pass compact=true for a titles-only overview. Use this to find out when/whether a feature, fix, or rename happened.`
     ( __mcp_schema_changelog ) ) )
+
+    ( json_arr_push arr ( __mcp_tool_desc `nurl_api`
+    `A stdlib module's API surface, or a search across all of them — strongly prefer this over nurl_read_stdlib (whole modules waste context; ext/csv.nu is 63 KB, its API surface 11 KB, one matching declaration ~0.3 KB). module='ext/csv.nu' renders one module's signatures + doc comments + full type definitions, no function bodies. query='csv quote' finds every stdlib declaration whose signature/doc/module-path contains ALL terms.`
+    ( __mcp_schema_api ) ) )
+
+    ( json_arr_push arr ( __mcp_tool_desc `nurl_grep`
+    `Case-insensitive substring search across the NURL corpora: stdlib sources, examples, compiler tests (path:line: text, per-file and total caps) and the package registry (name + description) — one cheap call to check how something is used in real code, or whether a package for X already exists. Scope with where='stdlib'|'examples'|'tests'|'packages'|'all'.`
+    ( __mcp_schema_grep ) ) )
 
     : Json out ( json_obj_new )
     ( json_obj_set out `tools` arr )

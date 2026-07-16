@@ -121,14 +121,17 @@ export async function extractReadme(
   return findReadmeInTar(new Uint8Array(ab));
 }
 
-// Pull `[package].repository` out of the published tarball's nurl.toml.
-// Returns the URL string, or null when absent/unreadable. Deliberately a
-// tiny line-scan rather than a full TOML parser: we only need one scalar,
-// and the registry must never break a package page over a manifest quirk.
-export async function extractManifestRepository(
+// Pull one `[package]` scalar out of the published tarball's nurl.toml.
+// Returns the string, or null when absent/unreadable. Deliberately a
+// tiny line-scan rather than a full TOML parser: we only need scalars,
+// and the registry must never break over a manifest quirk. `key` values
+// stop at the next table header so a stray key in another section can't
+// be mistaken for it.
+export async function extractManifestKey(
   bucket: R2Bucket,
   name: string,
   version: string,
+  key: string,
 ): Promise<string | null> {
   const obj = await bucket.get(`pkgs/${name}/${name}-${version}.tar.gz`);
   if (!obj || !obj.body) return null;
@@ -136,17 +139,35 @@ export async function extractManifestRepository(
   const hit = findInTar(new Uint8Array(ab), (p) => p.replace(/^\.\//, "") === "nurl.toml");
   if (!hit) return null;
   const toml = new TextDecoder().decode(hit.data);
-  // `repository = "..."` under [package]; stop at the next table header so a
-  // stray `repository` key in another section can't be mistaken for it.
   let inPackage = false;
+  const re = new RegExp(`^${key}\\s*=\\s*"([^"]*)"`);
   for (const raw of toml.split(/\r?\n/)) {
     const line = raw.trim();
     if (line.startsWith("[")) { inPackage = line === "[package]"; continue; }
     if (!inPackage) continue;
-    const m = line.match(/^repository\s*=\s*"([^"]*)"/);
+    const m = line.match(re);
     if (m) return m[1] || null;
   }
   return null;
+}
+
+export function extractManifestRepository(
+  bucket: R2Bucket,
+  name: string,
+  version: string,
+): Promise<string | null> {
+  return extractManifestKey(bucket, name, version, "repository");
+}
+
+// Description as recorded at publish: capped so a runaway manifest can't
+// bloat search rows (yoloe-demo-style long descriptions stay useful).
+export async function extractManifestDescription(
+  bucket: R2Bucket,
+  name: string,
+  version: string,
+): Promise<string> {
+  const d = await extractManifestKey(bucket, name, version, "description");
+  return (d ?? "").slice(0, 500);
 }
 
 // Fetch + gunzip a published tarball and return the bytes of the member at

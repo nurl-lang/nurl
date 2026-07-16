@@ -207,8 +207,9 @@ $ `stdlib/ext/toml.nu`
     ^ arr
 }
 
-// [package].repository from the tarball's root nurl.toml; "" when absent.
-@ reg_targz_repository ( Vec u ) gz → String {
+// One [package] string scalar from the tarball's root nurl.toml, by its
+// toml_get_path path (e.g. `package.repository`); "" when absent.
+@ __rx_targz_pkg_str ( Vec u ) gz s path → String {
     : ( Vec u ) manifest ( reg_targz_member gz `nurl.toml` )
     ? == ( vec_len [u] manifest ) 0 {
         ( vec_free [u] manifest )
@@ -219,10 +220,10 @@ $ `stdlib/ext/toml.nu`
     : ~ String out ( string_new )
     ?? ( toml_parse ( string_data text ) ) {
         T root → {
-            : ?TomlValue rv ( toml_get_path root `package.repository` )
+            : ?TomlValue rv ( toml_get_path root path )
             ?? rv {
-                T repo → {
-                    : ?String rs ( toml_as_str repo )
+                T tv → {
+                    : ?String rs ( toml_as_str tv )
                     ?? rs {
                         T sv → {
                             ( string_free out )
@@ -239,4 +240,19 @@ $ `stdlib/ext/toml.nu`
     }
     ( string_free text )
     ^ out
+}
+
+// [package].repository from the tarball's root nurl.toml; "" when absent.
+@ reg_targz_repository ( Vec u ) gz → String {
+    ^ ( __rx_targz_pkg_str gz `package.repository` )
+}
+
+// [package].description, capped at 500 bytes (search metadata, not a
+// README) — mirrors the Worker's extractManifestDescription.
+@ reg_targz_description ( Vec u ) gz → String {
+    : String raw ( __rx_targz_pkg_str gz `package.description` )
+    ? <= ( string_len raw ) 500 { ^ raw } {}
+    : String cut ( string_substr raw 0 500 )
+    ( string_free raw )
+    ^ cut
 }
