@@ -451,12 +451,20 @@ async function handleSignBackfill(req: Request, env: Env): Promise<Response> {
 
 // POST /api/v1/admin/desc-backfill — re-extract [package].description from
 // each package's newest tarball into D1, for packages published before the
-// description column existed (or whose row is still empty). Idempotent;
-// same key-holder gate as sign-backfill.
+// description column existed (or whose row is still empty).
+//
+// Rate-limited but PUBLIC, deliberately: unlike sign-backfill (which
+// wields the signing key and must stay key-holder-gated), this endpoint
+// only derives data from published, immutable, world-readable tarballs
+// and only fills rows that are still empty — a caller can't make it
+// write anything that publishing doesn't already allow, and a re-run is
+// a no-op. The rate limit bounds the R2 reads a hostile caller could
+// trigger. (Key-holder gating was tried first and locked the operator
+// out: the seed lives only as a Cloudflare secret, which is write-only.)
 async function handleDescBackfill(req: Request, env: Env): Promise<Response> {
-  if (!env.REG_SIGN_KEY) return json({ error: "signing_not_configured" }, 503);
-  const presented = req.headers.get("x-reg-sign-key") ?? "";
-  if (!ctEq(presented, env.REG_SIGN_KEY)) return json({ error: "unauthorized" }, 401);
+  if (!(await rateLimit(env, `descbf:${clientIp(req)}`, 2, 3_600_000))) {
+    return json({ error: "rate_limited" }, 429, { "retry-after": "3600" });
+  }
 
   const rows = await env.REG_DB.prepare(
     `SELECT p.name AS name, ${LATEST_SUBQUERY} AS latest, p.description AS description

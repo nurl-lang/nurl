@@ -96,6 +96,12 @@ printf '[package]\nname = "app"\nversion = "0.1.0"\n\n[dependencies]\nfoo = "^1.
 [[ -f "$WORK/app/deps/foo/nurl.toml" && -f "$WORK/app/deps/foo/src/lib.nu" ]] && echo "deps/foo: OK" || { echo "deps/foo: MISSING"; fail=1; }
 grep -q 'checksum =' "$WORK/app/nurl.lock" && echo "lock checksum: OK" || { echo "lock checksum: MISSING"; fail=1; }
 
+say "desc-backfill is public, rate-limited, idempotent"
+BF=$(curl -s -X POST "${REG%/}/api/v1/admin/desc-backfill")
+echo "$BF" | grep -q '"ok":true' && echo "  backfill ok: OK" || { echo "  backfill FAILED: $BF"; fail=1; }
+BF2=$(curl -s -X POST "${REG%/}/api/v1/admin/desc-backfill")
+echo "$BF2" | grep -qE '"ok":true|rate_limited' && echo "  re-run no-op/limited: OK" || { echo "  re-run unexpected: $BF2"; fail=1; }
+
 say "search matches and returns descriptions"
 SEARCH=$(curl -sf "${REG%/}/api/v1/search?q=frobnicator" || true)
 echo "$SEARCH" | grep -q '"name":"foo"' && echo "  description match: OK" || { echo "  description match: MISSING"; fail=1; }
