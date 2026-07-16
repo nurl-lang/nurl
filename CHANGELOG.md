@@ -8,6 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.16.0] — 2026-07-16
+
+The **provenance** release: the registry shows what a package contains and
+when every version shipped, nurlpkg learns to move requirements forward
+instead of making you hand-edit manifests, and one bad token inside a
+match arm no longer buries the real diagnostic under phantom errors.
+
 ### Added
 
 - **`nurlpkg update` — move dependency requirements to the newest
@@ -22,17 +29,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   requirement the newest version already satisfies is left untouched,
   and edits are surgical: only the version value on the dep's line
   changes, so `path =` keys, formatting and comments survive.
-
-### Fixed
-
-- nurlpkg `add`/`remove` leaked one trimmed String per manifest line
-  walked (the shared dep-line matchers returned through early exits),
-  plus the initial empty buffer when reading `nurl.toml`. All
-  line-machinery commands (`add`, `remove`, `update`) are now
-  LeakSanitizer-clean.
-
-### Added
-
 - **Registry package pages show publish dates and a per-version file
   listing.** Each version row on `/packages/<name>` carries its publish
   date — read from the authoritative server-side `published_at` recorded
@@ -58,6 +54,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`: i pub …` explains itself.** Naming a let binding `pub` now says the
   word is a reserved keyword (the visibility prefix on top-level
   declarations) instead of the bare "expected variable name in let".
+- nurlpkg `add`/`remove` leaked one trimmed String per manifest line
+  walked (the shared dep-line matchers returned through early exits),
+  plus the initial empty buffer when reading `nurl.toml`. All
+  line-machinery commands (`add`, `remove`, `update`) are now
+  LeakSanitizer-clean.
 
 ## [0.15.0] — 2026-07-14
 
