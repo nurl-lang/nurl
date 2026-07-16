@@ -6,6 +6,6 @@ license = "MIT OR Apache-2.0"
 repository = "https://github.com/nurl-lang/nurl-lang"
 
 [dependencies]
-http = { path = "../http", version = "^0.2" }
+http = { path = "../http", version = "^0.3" }
 template = { path = "../template", version = "^0.1" }
 md2html = { path = "../md2html", version = "^0.1" }
