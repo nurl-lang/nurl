@@ -96,6 +96,18 @@ printf '[package]\nname = "app"\nversion = "0.1.0"\n\n[dependencies]\nfoo = "^1.
 [[ -f "$WORK/app/deps/foo/nurl.toml" && -f "$WORK/app/deps/foo/src/lib.nu" ]] && echo "deps/foo: OK" || { echo "deps/foo: MISSING"; fail=1; }
 grep -q 'checksum =' "$WORK/app/nurl.lock" && echo "lock checksum: OK" || { echo "lock checksum: MISSING"; fail=1; }
 
+say "update moves a stale requirement to the newest version"
+mkdir -p "$WORK/upd"
+printf '[package]\nname = "upd"\nversion = "0.1.0"\n\n[dependencies]\nfoo = "^0.9"\n' > "$WORK/upd/nurl.toml"
+# Piped empty stdin + no --all → every prompt defaults to No, nothing mutates.
+( cd "$WORK/upd" && NURL_REGISTRY="$REG" "$NURLPKG" update </dev/null ) >/dev/null || true
+grep -q 'foo = "\^0.9"' "$WORK/upd/nurl.toml" && echo "  default-No left manifest alone: OK" || { echo "  default-No MUTATED"; fail=1; }
+# An interactive y accepts the one offer.
+( cd "$WORK/upd" && printf 'y\n' | NURL_REGISTRY="$REG" "$NURLPKG" update ) >/dev/null || { echo "  update (y) exited non-zero"; fail=1; }
+grep -q 'foo = "\^1.0.0"' "$WORK/upd/nurl.toml" && echo "  y answer updated to ^1.0.0: OK" || { echo "  y answer did NOT update"; fail=1; }
+# --all with an already-satisfied requirement is a no-op.
+( cd "$WORK/upd" && NURL_REGISTRY="$REG" "$NURLPKG" update --all ) | grep -q "up to date" && echo "  --all up-to-date no-op: OK" || { echo "  --all up-to-date FAILED"; fail=1; }
+
 say "package page renders README"
 PAGE=$(curl -sf "${REG}packages/foo" || true)
 check_page() { echo "$PAGE" | grep -qF "$1" && echo "  $2: OK" || { echo "  $2: MISSING"; fail=1; }; }

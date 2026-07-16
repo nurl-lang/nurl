@@ -85,7 +85,10 @@ nurlpkg publish                              # pack + upload (token via
 ```
 
 Subcommands: `init`, `info` (manifest or registry package), `deps`,
-`add`, `remove`, `install` (project deps, or a registry program/library),
+`add`, `remove`, `update` (move dependency requirements to the newest
+versions — confirms each on stdin, `--all` takes everything; registry
+deps follow the newest published version, path deps the local copy's
+`nurl.toml`), `install` (project deps, or a registry program/library),
 `lock`, `verify`, `publish`, `login`, `logout [--revoke]`, `search`,
 `yank` / `unyank`, `test`, `bench`, `version`, `help`.
 

@@ -10,6 +10,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`nurlpkg update` — move dependency requirements to the newest
+  versions.** Walks `[dependencies]` and offers each requirement the
+  newest available version: registry deps follow the newest non-yanked
+  published version, path deps the version in the dep's own local
+  `nurl.toml` (that is the code you build against, and the publish gate
+  requires the requirement to cover it — the registry may not carry that
+  version yet). Each change is confirmed on stdin (`y/N`, default No —
+  and piped/EOF stdin never mutates); `--all` (aliases `-y`/`--yes`)
+  accepts everything, `nurlpkg update <name>…` limits the walk. A
+  requirement the newest version already satisfies is left untouched,
+  and edits are surgical: only the version value on the dep's line
+  changes, so `path =` keys, formatting and comments survive.
+
+### Fixed
+
+- nurlpkg `add`/`remove` leaked one trimmed String per manifest line
+  walked (the shared dep-line matchers returned through early exits),
+  plus the initial empty buffer when reading `nurl.toml`. All
+  line-machinery commands (`add`, `remove`, `update`) are now
+  LeakSanitizer-clean.
+
+### Added
+
 - **Registry package pages show publish dates and a per-version file
   listing.** Each version row on `/packages/<name>` carries its publish
   date — read from the authoritative server-side `published_at` recorded
