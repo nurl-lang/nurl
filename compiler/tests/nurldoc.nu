@@ -1,8 +1,10 @@
 // nurldoc.nu — ext/nurldoc.nu acceptance: render a fixture module's doc
 // surface to Markdown. Exercises: module-header block → prose, doc
 // comment above a decl → description, signature trimmed at `{`, FFI / `:`
-// const / struct / enum decls, and that `:` locals inside a function body
-// (brace depth > 0) are NOT picked up.
+// const / struct / enum decls, that `:` locals inside a function body
+// (brace depth > 0) are NOT picked up, that `__`-private (file-scoped)
+// functions are omitted, and that a multi-line type declaration renders
+// its full field list in a fenced code block.
 
 $ `stdlib/core/string.nu`
 $ `stdlib/ext/nurldoc.nu`
@@ -25,6 +27,17 @@ $ `stdlib/ext/nurldoc.nu`
     ( string_push_str src `\n` )
     ( string_push_str src `// A point.\n` )
     ( string_push_str src `: Point { i x i y }\n` )
+    ( string_push_str src `\n` )
+    ( string_push_str src `// Internal helper — file-scoped, must NOT appear in the docs.\n` )
+    ( string_push_str src `@ __hidden i a → i {\n` )
+    ( string_push_str src `    ^ a\n` )
+    ( string_push_str src `}\n` )
+    ( string_push_str src `\n` )
+    ( string_push_str src `// A rectangle (multi-line: fields must render in a code block).\n` )
+    ( string_push_str src `: Rect {\n` )
+    ( string_push_str src `    i w  // width\n` )
+    ( string_push_str src `    i h\n` )
+    ( string_push_str src `}\n` )
     ( string_push_str src `\n` )
     ( string_push_str src `: | Color { Red Green Blue }\n` )  // no doc comment
     ( string_push_str src `\n` )

@@ -79,6 +79,7 @@ $ `src/service.nu`
     ( vec_push [TarEntry] ents ( tar_entry_file `nurl.toml` ( bytes_from_str `[package]
 name = "demo"
 version = "0.1.0"
+description = "a tiny streaming widget frobnicator"
 repository = "https://example.com/repo"
 ` ) ) )
     ( vec_push [TarEntry] ents ( tar_entry_file `README.md` ( bytes_from_str `# demo
@@ -234,6 +235,18 @@ Hello *there*.
         : HttpResponse resp ( router_handle r req )
         : String b ( resp_body_str resp )
         ( check ( string_contains b `"name":"demo"` ) `search finds demo` )
+        ( check ( string_contains b `widget frobnicator` ) `search returns description` )
+        ( string_free b )
+        ( http_response_free resp )
+        ( request_free req )
+    }
+    {
+        // Description text matches even when the NAME doesn't — a
+        // "does a package for X exist" search works by topic.
+        : HttpRequest req ( mk_req `GET` `/api/v1/search` `q=frobnicator` ( no_headers ) ( vec_new [u] ) )
+        : HttpResponse resp ( router_handle r req )
+        : String b ( resp_body_str resp )
+        ( check ( string_contains b `"name":"demo"` ) `search matches by description` )
         ( string_free b )
         ( http_response_free resp )
         ( request_free req )
@@ -257,6 +270,7 @@ Hello *there*.
         : HttpResponse resp ( router_handle r req )
         : String b ( resp_body_str resp )
         ( check ( string_contains b `/packages/demo` ) `catalog links demo` )
+        ( check ( string_contains b `widget frobnicator` ) `catalog shows description` )
         ( string_free b )
         ( http_response_free resp )
         ( request_free req )

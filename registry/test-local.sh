@@ -68,7 +68,7 @@ trap 'kill $WPID 2>/dev/null; pkill -f "wrangler dev --port $PORT" 2>/dev/null; 
 for i in $(seq 1 60); do curl -sf "$REG" >/dev/null 2>&1 && break; sleep 0.5; done
 
 mkdir -p "$WORK/foo/src"
-printf '[package]\nname = "foo"\nversion = "1.0.0"\n' > "$WORK/foo/nurl.toml"
+printf '[package]\nname = "foo"\nversion = "1.0.0"\ndescription = "a demonstration frobnicator for e2e"\n' > "$WORK/foo/nurl.toml"
 printf '@ answer -> i { ^ 42 }\n' > "$WORK/foo/src/lib.nu"
 # A README that exercises the renderer: heading, code, table, link, and a
 # script-injection attempt that must be neutralised.
@@ -95,6 +95,12 @@ printf '[package]\nname = "app"\nversion = "0.1.0"\n\n[dependencies]\nfoo = "^1.
 ( cd "$WORK/app" && NURL_REGISTRY="$REG" NURL_REGISTRY_PUBKEY="$REG_SIGN_PUB" "$NURLPKG" install ) || fail=1
 [[ -f "$WORK/app/deps/foo/nurl.toml" && -f "$WORK/app/deps/foo/src/lib.nu" ]] && echo "deps/foo: OK" || { echo "deps/foo: MISSING"; fail=1; }
 grep -q 'checksum =' "$WORK/app/nurl.lock" && echo "lock checksum: OK" || { echo "lock checksum: MISSING"; fail=1; }
+
+say "search matches and returns descriptions"
+SEARCH=$(curl -sf "${REG%/}/api/v1/search?q=frobnicator" || true)
+echo "$SEARCH" | grep -q '"name":"foo"' && echo "  description match: OK" || { echo "  description match: MISSING"; fail=1; }
+echo "$SEARCH" | grep -q 'demonstration frobnicator' && echo "  description returned: OK" || { echo "  description returned: MISSING"; fail=1; }
+curl -sf "$REG" | grep -q 'demonstration frobnicator' && echo "  catalog shows description: OK" || { echo "  catalog description: MISSING"; fail=1; }
 
 say "update moves a stale requirement to the newest version"
 mkdir -p "$WORK/upd"

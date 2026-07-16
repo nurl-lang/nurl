@@ -17,6 +17,18 @@ Add two ints.
 
 A point.
 
+### `: Rect`
+
+```nurl
+: Rect {
+    i w  // width
+    i h
+}
+```
+
+A rectangle (multi-line: fields must render in a code block).
+
+
 ### `: | Color { Red Green Blue }`
 
 ### `& `c` @ getpid → i`

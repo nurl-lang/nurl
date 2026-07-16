@@ -364,10 +364,16 @@ $ `src/pages.nu`
             } {}
 
             : i now ( __reg_now )
+            // Description from the tarball's own manifest — server-side
+            // extraction, never a client header; latest publish wins.
+            : String desc ( reg_targz_description . req body )
             : ~ b ok T
             ?? ( sqlite_begin db ) { T _ → {} F _ → { = ok F } }
             ? & ok < owner 0 {
-                ? ! ( reg_db_pkg_insert db ( string_data name ) uid now ) { = ok F } {}
+                ? ! ( reg_db_pkg_insert db ( string_data name ) uid now ( string_data desc ) ) { = ok F } {}
+            } {}
+            ? & & ok >= owner 0 > ( string_len desc ) 0 {
+                ? ! ( reg_db_pkg_set_description db ( string_data name ) ( string_data desc ) ) { = ok F } {}
             } {}
             ? ok {
                 ? ! ( reg_db_version_insert db ( string_data name ) ( string_data version ) ( string_data checksum ) uid now ) { = ok F } {}
@@ -383,6 +389,7 @@ $ `src/pages.nu`
             ? ! ok {
                 ?? ( sqlite_rollback db ) { T _ → {} F _ → {} }
             } {}
+            ( string_free desc )
             ? ! ok {
                 ( string_free name )
                 ( string_free version )
