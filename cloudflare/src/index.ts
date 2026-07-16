@@ -49,10 +49,19 @@ export class NurlContainer extends Container<Env> {
 
   // Self-healing proxy — see the file header for the failure it recovers from.
   override async fetch(request: Request): Promise<Response> {
+    // The container tunnel speaks plain HTTP (it is already secured by the
+    // platform), and the runtime REJECTS container connections described as
+    // https: "Connecting to a container using HTTPS is not currently
+    // supported". containerFetch only rewrites its URL *string* — the
+    // original Request it passes as fetch init still carries the https URL,
+    // which newer runtime validation trips over. Normalize the scheme here,
+    // before anything reaches the proxy.
+    const httpUrl = request.url.replace(/^https:/, "http:");
+
     // WebSocket upgrades (the /pptws voice relay) can't be buffered or
     // replayed — proxy them straight through with no retry.
     if ((request.headers.get("Upgrade") ?? "").toLowerCase() === "websocket") {
-      return super.fetch(request);
+      return super.fetch(new Request(httpUrl, request));
     }
 
     // Buffer the body once so the request can be replayed after a recycle.
@@ -61,7 +70,7 @@ export class NurlContainer extends Container<Env> {
     const hasBody = request.method !== "GET" && request.method !== "HEAD";
     const bodyBuf = hasBody ? await request.arrayBuffer() : undefined;
     const replay = (): Request =>
-      new Request(request.url, {
+      new Request(httpUrl, {
         method: request.method,
         headers: request.headers,
         body: bodyBuf,
