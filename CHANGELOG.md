@@ -8,6 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.17.0] — 2026-07-17
+
+The **findability** release: the MCP server answers "what's in this
+module", "when did this change" and "does a package for X exist" in
+kilobytes instead of context-flooding dumps — and the registry learns
+what its packages are about.
+
 ### Added
 
 - **MCP: `nurl_api` — a stdlib module's API surface, or a search across
