@@ -269,7 +269,37 @@ Hello *there*.
         ( check ( string_contains b `/files/demo/0.1.0/docs/pic.png` ) `README image rewritten` )
         ( check ( string_contains b `https://example.com/repo` ) `repository from manifest` )
         ( check ( string_contains b `@tester` ) `owner login shown` )
+        // published_at is stamped at publish (this run) — the version row
+        // carries today's date. Assert the year prefix rather than a full
+        // date so the test doesn't flake across a midnight boundary.
+        : Time now_t ( time_now )
+        : String yr ( time_format now_t `%Y-` )
+        ( check ( string_contains b ( string_data yr ) ) `detail shows publish date` )
+        ( string_free yr )
+        ( check ( string_contains b `/packages/demo/0.1.0/files` ) `detail links files page` )
         ( string_free b )
+        ( http_response_free resp )
+        ( request_free req )
+    }
+
+    // ── files page (tarball listing) ──
+    {
+        : HttpRequest req ( mk_req `GET` `/packages/demo/0.1.0/files` `` ( no_headers ) ( vec_new [u] ) )
+        : HttpResponse resp ( router_handle r req )
+        ( check == . resp status 200 `files page 200` )
+        : String b ( resp_body_str resp )
+        ( check ( string_contains b `README.md` ) `files page lists README.md` )
+        ( check ( string_contains b `docs/pic.png` ) `files page lists docs/pic.png` )
+        ( check ( string_contains b `nurl.toml` ) `files page lists nurl.toml` )
+        ( check ( string_contains b ` B</td>` ) `files page shows sizes` )
+        ( string_free b )
+        ( http_response_free resp )
+        ( request_free req )
+    }
+    {
+        : HttpRequest req ( mk_req `GET` `/packages/demo/9.9.9/files` `` ( no_headers ) ( vec_new [u] ) )
+        : HttpResponse resp ( router_handle r req )
+        ( check == . resp status 404 `files page unknown version 404` )
         ( http_response_free resp )
         ( request_free req )
     }

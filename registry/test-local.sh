@@ -106,6 +106,18 @@ check_page "<table>"                       "table"
 check_page '<a href="https://nurl-lang.org"' "link"
 check_page "&lt;script&gt;"                "script escaped as text"
 if echo "$PAGE" | grep -qF "<script>alert"; then echo "  xss: LEAKED"; fail=1; else echo "  xss: neutralised"; fi
+# The version row carries its publish date (from D1 published_at) and a
+# link to the per-version file listing.
+echo "$PAGE" | grep -qE '· [0-9]{4}-[0-9]{2}-[0-9]{2}' && echo "  publish date: OK" || { echo "  publish date: MISSING"; fail=1; }
+check_page '/packages/foo/1.0.0/files'      "files link"
+
+say "files page lists the tarball"
+FPAGE=$(curl -sf "${REG}packages/foo/1.0.0/files" || true)
+check_fpage() { echo "$FPAGE" | grep -qF "$1" && echo "  $2: OK" || { echo "  $2: MISSING"; fail=1; }; }
+check_fpage "src/lib.nu" "lists src/lib.nu"
+check_fpage "nurl.toml"  "lists nurl.toml"
+c=$(curl -s -o /dev/null -w '%{http_code}' "${REG}packages/foo/9.9.9/files")
+[[ "$c" == 404 ]] && echo "  unknown version -> 404: OK" || { echo "  unknown version -> $c (want 404)"; fail=1; }
 
 say "republish -> 409"
 ( cd "$WORK/foo" && NURL_REGISTRY="$REG" NURL_TOKEN="$TOKEN" "$NURLPKG" publish ) && { echo "expected failure"; fail=1; } || echo "rejected (correct)"

@@ -19,6 +19,7 @@
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
+$ `stdlib/std/time.nu`
 $ `stdlib/ext/json.nu`
 $ `stdlib/ext/sqlite.nu`
 
@@ -42,6 +43,9 @@ $ `stdlib/ext/sqlite.nu`
         name          TEXT    PRIMARY KEY,
         owner_user_id INTEGER NOT NULL REFERENCES users(id),
         created_at    INTEGER NOT NULL)` ) )
+    // published_at / created_at are epoch SECONDS (__reg_now). The
+    // Cloudflare Worker's D1 stores epoch MILLISECONDS — any data
+    // migration from D1 into this schema must divide by 1000.
     ( vec_push [String] out ( string_from `CREATE TABLE IF NOT EXISTS versions (
         name         TEXT    NOT NULL REFERENCES packages(name),
         version      TEXT    NOT NULL,
@@ -528,9 +532,10 @@ $ `stdlib/ext/sqlite.nu`
 }
 
 // Package detail for the HTML page:
-//   { "name", "owner", "versions": [ { "version", "yanked", "login" } ],
+//   { "name", "owner", "versions": [ { "version", "yanked", "login", "date" } ],
 //     "latest": version-or-null }
 // Versions newest-first (publication order, matching the Worker page).
+// "date" is "YYYY-MM-DD" (UTC) from published_at — epoch seconds here.
 @ reg_db_pkg_detail_json Database db s name → Json {
     : Json root ( json_obj_new )
     : b _a ( json_obj_set root `name` ( json_str_lit name ) )
@@ -544,7 +549,7 @@ $ `stdlib/ext/sqlite.nu`
     }
     : Json varr ( json_arr_new )
     : ~ b have_latest F
-    ?? ( sqlite_prepare db `SELECT v.version, v.yanked, u.login
+    ?? ( sqlite_prepare db `SELECT v.version, v.yanked, u.login, v.published_at
             FROM versions v JOIN users u ON u.id = v.published_by
             WHERE v.name = ?1 ORDER BY v.published_at DESC, v.rowid DESC` ) {
         T st → {
@@ -557,10 +562,15 @@ $ `stdlib/ext/sqlite.nu`
                     : String ver ( sqlite_column_text st 0 )
                     : i yk ( sqlite_column_int st 1 )
                     : String lg ( sqlite_column_text st 2 )
+                    : i pubts ( sqlite_column_int st 3 )
                     : Json row ( json_obj_new )
                     : b _d ( json_obj_set row `version` ( json_str_lit ( string_data ver ) ) )
                     : b _e ( json_obj_set row `yanked` ( json_bool != yk 0 ) )
                     : b _f ( json_obj_set row `login` ( json_str_lit ( string_data lg ) ) )
+                    : Time pt ( time_from_unix pubts )
+                    : String dt ( time_format pt `%Y-%m-%d` )
+                    : b _f2 ( json_obj_set row `date` ( json_str_lit ( string_data dt ) ) )
+                    ( string_free dt )
                     : b _g ( json_arr_push varr row )
                     ? & ! have_latest == yk 0 {
                         : b _h ( json_obj_set root `latest` ( json_str_lit ( string_data ver ) ) )

@@ -56,6 +56,47 @@ export function findReadmeInTar(buf: Uint8Array): string | null {
   return hit ? new TextDecoder().decode(hit.data) : null;
 }
 
+export interface TarFileEntry { path: string; size: number; }
+
+// List every regular file in an uncompressed tar image (path + size),
+// in archive order. Unlike findInTar (which only ever matches root-level
+// members, where the 100-byte name field always suffices), a full listing
+// must reconstruct long paths: honour the USTAR `prefix` field and the
+// GNU longname ('L') extension, and skip PAX/GNU metadata pseudo-entries.
+export function listTarFiles(buf: Uint8Array): TarFileEntry[] {
+  const out: TarFileEntry[] = [];
+  let pos = 0;
+  let gnuLongName: string | null = null;
+  while (pos + BLOCK <= buf.length) {
+    if (isZeroBlock(buf, pos)) break; // end-of-archive marker
+    const sizeRaw = readCStr(buf, pos + 124, 12).trim();
+    const size = parseInt(sizeRaw.replace(/[^0-7]/g, "") || "0", 8);
+    const typeflag = buf[pos + 156];
+    const dataStart = pos + BLOCK;
+    if (typeflag === 0x4c) {
+      // GNU 'L': the data block carries the NEXT entry's full path.
+      gnuLongName = readCStr(buf, dataStart, size);
+    } else if (typeflag === 0x30 || typeflag === 0) {
+      const fromLongName = gnuLongName !== null;
+      let path = gnuLongName ?? readCStr(buf, pos, 100);
+      gnuLongName = null;
+      // The USTAR prefix field only applies to names read from the 100-byte
+      // header field, never to a GNU longname (which is already complete).
+      if (!fromLongName && path && readCStr(buf, pos + 257, 6).startsWith("ustar")) {
+        const prefix = readCStr(buf, pos + 345, 155);
+        if (prefix) path = `${prefix}/${path}`;
+      }
+      path = path.replace(/^\.\//, "");
+      if (path) out.push({ path, size });
+    } else {
+      // 'x'/'g' (PAX), 'K' (GNU longlink), directories, links: not files.
+      gnuLongName = null;
+    }
+    pos = dataStart + Math.ceil(size / BLOCK) * BLOCK;
+  }
+  return out;
+}
+
 // Normalise a README-relative path to a tar member path: drop a leading
 // `./`, collapse repeated slashes, and reject traversal / absolute paths.
 // Returns null if the path is unsafe.

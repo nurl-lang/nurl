@@ -3,7 +3,7 @@
 import { readFileSync } from "node:fs";
 import { gzipSync } from "node:zlib";
 import { renderMarkdown } from "./src/markdown.ts";
-import { findReadmeInTar, normalizeRelPath } from "./src/readme.ts";
+import { findReadmeInTar, normalizeRelPath, listTarFiles } from "./src/readme.ts";
 
 let pass = 0, fail = 0;
 function ok(cond: boolean, msg: string) {
@@ -93,6 +93,61 @@ ok(findReadmeInTar(tarWith("README.md", "# Hi\n")) === "# Hi\n", "extract README
 ok(findReadmeInTar(tarWith("src/main.nu", "x")) === null, "no README -> null");
 // nested-path README is found by basename
 ok(findReadmeInTar(tarWith("nq/README.md", "# nq\n")) === "# nq\n", "README under a dir");
+
+// ── tar file listing (the /packages/<n>/<v>/files page) ───────────────
+// Multi-member archive builder; `typeflag`/`prefix` let one member carry
+// USTAR long-path or GNU-longname metadata.
+function tarMulti(members: { name: string; body: string; typeflag?: number; prefix?: string }[]): Uint8Array {
+  const enc = new TextEncoder();
+  const parts: Uint8Array[] = [];
+  for (const m of members) {
+    const data = enc.encode(m.body);
+    const buf = new Uint8Array(512 + Math.ceil(data.length / 512) * 512);
+    buf.set(enc.encode(m.name), 0);
+    buf.set(enc.encode("0000644\0"), 100);
+    buf.set(enc.encode(data.length.toString(8).padStart(11, "0") + "\0"), 124);
+    buf[156] = m.typeflag ?? 0x30;
+    buf.set(enc.encode("ustar\0"), 257);
+    buf.set(enc.encode("00"), 263);
+    if (m.prefix) buf.set(enc.encode(m.prefix), 345);
+    buf.set(data, 512);
+    parts.push(buf);
+  }
+  parts.push(new Uint8Array(1024)); // end-of-archive
+  const out = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
+  let off = 0;
+  for (const p of parts) { out.set(p, off); off += p.length; }
+  return out;
+}
+{
+  const files = listTarFiles(tarMulti([
+    { name: "nurl.toml", body: "[package]\n" },
+    { name: "./src/main.nu", body: "code" },
+    { name: "docs/", body: "", typeflag: 0x35 },               // directory: skipped
+    { name: "docs/pic.png", body: "png-bytes" },
+  ]));
+  ok(files.length === 3, `listing has 3 files (got ${files.length})`);
+  ok(files[0].path === "nurl.toml" && files[0].size === 10, "member path + size");
+  ok(files[1].path === "src/main.nu", "leading ./ stripped");
+  ok(files.every((f) => f.path !== "docs/"), "directory member skipped");
+}
+{
+  // USTAR prefix reassembly for >100-char paths.
+  const files = listTarFiles(tarMulti([{ name: "leaf.nu", body: "x", prefix: "very/deep/dir" }]));
+  ok(files[0].path === "very/deep/dir/leaf.nu", "ustar prefix joined");
+}
+{
+  // GNU longname: an 'L' pseudo-entry carries the NEXT member's path and
+  // must itself not appear in the listing (nor pick up the ustar prefix).
+  const files = listTarFiles(tarMulti([
+    { name: "././@LongLink", body: "some/very/long/path/file.nu\0", typeflag: 0x4c },
+    { name: "some/very/long/path/", body: "y", prefix: "ignored-for-longname" },
+    { name: "plain.nu", body: "z" },
+  ]));
+  ok(files.length === 2, `longname listing has 2 files (got ${files.length})`);
+  ok(files[0].path === "some/very/long/path/file.nu", "GNU longname applied");
+  ok(files[1].path === "plain.nu", "longname does not leak to later members");
+}
 
 // ── round-trip: real nq README renders without throwing ───────────────
 try {

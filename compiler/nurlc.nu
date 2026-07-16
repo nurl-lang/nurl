@@ -10605,7 +10605,9 @@
                 ^ val
             }
         }
-        { ( die lex `expected variable name in let` ) }
+        { ? == ( nurl_lex_type lex ) TT_PUB
+            { ( die lex `expected variable name in let — 'pub' is a reserved keyword (the visibility prefix on top-level declarations) and cannot name a binding` ) }
+            { ( die lex `expected variable name in let` ) } }
     }
 }
 
@@ -19328,6 +19330,22 @@
                 // buffered closure-IR emission — reset the output stack to
                 // stdout (post-error IR is garbage; the non-zero exit makes
                 // callers discard it) and resync to the next declaration.
+                //
+                // The panic also unwound out of whatever symbol-table scopes
+                // the half-compiled declaration had open (function body,
+                // `?`/`??` arm frames), skipping their nurl_sym_pop calls.
+                // Top-level declarations always compile at scope depth 0 —
+                // pop the leaked frames now, or their entries poison every
+                // later declaration. The concrete hazard: gen_match's
+                // synthetic `__matchtmp<n>__res_nurl_T/…` payload keys leak,
+                // and because the label counter numbering them resets per
+                // function (nurl_cg_reset), a later same-numbered option
+                // match — which defines only `__opt_nurl_T` — reads the dead
+                // declaration's `__res_nurl_T` and types its payload with a
+                // foreign struct. One bad let inside a `?? { T st → … }` arm
+                // then drowned the real diagnostic under phantom cross-file
+                // type errors in modules compiled much later.
+                ~ > ( nurl_peek # s syms 1 ) 0 { ( nurl_sym_pop syms ) }
                 ( nurl_print_buf_unwind )
                 ( __diag_resync lex )
             }

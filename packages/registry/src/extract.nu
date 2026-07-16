@@ -8,6 +8,7 @@
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/ext/compress.nu`
+$ `stdlib/ext/json.nu`
 $ `stdlib/ext/tar.nu`
 $ `stdlib/ext/toml.nu`
 
@@ -163,6 +164,47 @@ $ `stdlib/ext/toml.nu`
         }
     }
     ^ out
+}
+
+// Every regular file in the tarball, in archive order, as a Json array
+// [ { "path", "size" } ] for the files page. Empty array when the archive
+// is malformed. tar_parse reconstructs USTAR prefix long paths already.
+@ reg_targz_list ( Vec u ) gz → Json {
+    : Json arr ( json_arr_new )
+    : !( Vec u ) CompressErr dr ( gzip_decompress gz )
+    ?? dr {
+        F _ → ^ arr
+        T raw → {
+            : !( Vec TarEntry ) TarErr tr ( tar_parse raw )
+            ( vec_free [u] raw )
+            ?? tr {
+                F _ → ^ arr
+                T ents → {
+                    : i n ( vec_len [TarEntry] ents )
+                    : ~ i k 0
+                    ~ < k n {
+                        : ?TarEntry eo ( vec_get [TarEntry] ents k )
+                        ?? eo {
+                            T e → {
+                                ? == . e typeflag 48 {
+                                    : String norm ( __rx_member_norm ( string_data . e path ) )
+                                    : Json row ( json_obj_new )
+                                    : b _p ( json_obj_set row `path` ( json_str_lit ( string_data norm ) ) )
+                                    : b _s ( json_obj_set row `size` ( json_int ( vec_len [u] . e data ) ) )
+                                    : b _r ( json_arr_push arr row )
+                                    ( string_free norm )
+                                } {}
+                            }
+                            F → {}
+                        }
+                        = k + k 1
+                    }
+                    ( tar_entries_free ents )
+                }
+            }
+        }
+    }
+    ^ arr
 }
 
 // [package].repository from the tarball's root nurl.toml; "" when absent.

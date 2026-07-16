@@ -17,7 +17,7 @@ $ `src/extract.nu`
 // ── Chrome (shared head/foot partials) ────────────────────────────────
 
 @ __reg_tpl_head → s {
-    ^ `<!doctype html><meta charset=utf-8><title>{{ title }}</title><meta name=viewport content="width=device-width,initial-scale=1"><style>body{font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;max-width:48rem;margin:3rem auto;padding:0 1rem;line-height:1.6;color:#1a1a1a}a{color:#0b62d6}h1{margin-bottom:.2em}code{background:#f4f4f4;padding:.1em .35em;border-radius:4px;font-size:.92em}pre{background:#f4f4f4;padding:1rem;border-radius:6px;overflow:auto}pre code{background:transparent;padding:0}.readme{border-top:1px solid #e5e5e5;margin-top:2.5rem;padding-top:.5rem}.readme img{max-width:100%}.readme table{border-collapse:collapse;margin:1rem 0}.readme th,.readme td{border:1px solid #ddd;padding:.4rem .7rem;text-align:left}.readme th{background:#f4f4f4}.readme blockquote{border-left:3px solid #ddd;margin:1em 0;padding:.2rem 1rem;color:#555}.readme h1,.readme h2{border-bottom:1px solid #eee;padding-bottom:.2em}.readme hr{border:0;border-top:1px solid #e5e5e5;margin:2rem 0}.site-head{display:flex;align-items:center;gap:.6rem;margin:-1rem 0 1.8rem;padding-bottom:1rem;border-bottom:1px solid #e5e5e5}.site-head .brand{display:flex;align-items:center;gap:.6rem;text-decoration:none;color:#1a1a1a}.site-head .wm{font-size:1.1rem;font-weight:600;letter-spacing:.01em}.site-head .wm b{color:#0b62d6}.site-head .spacer{flex:1}.site-head .home{font-size:.85rem;color:#666;font-weight:400;text-decoration:none}.site-head .home:hover{color:#0b62d6}.muted{color:#666}.yanked{color:#b00}.pub{color:#999}</style><body><div class="site-head"><a class="brand" href="/"><span class="wm">NURL <b>registry</b></span></a><span class="spacer"></span><a class="home" href="https://nurl-lang.org/" target="_blank" rel="noopener">nurl-lang.org →</a></div>`
+    ^ `<!doctype html><meta charset=utf-8><title>{{ title }}</title><meta name=viewport content="width=device-width,initial-scale=1"><style>body{font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;max-width:48rem;margin:3rem auto;padding:0 1rem;line-height:1.6;color:#1a1a1a}a{color:#0b62d6}h1{margin-bottom:.2em}code{background:#f4f4f4;padding:.1em .35em;border-radius:4px;font-size:.92em}pre{background:#f4f4f4;padding:1rem;border-radius:6px;overflow:auto}pre code{background:transparent;padding:0}.readme{border-top:1px solid #e5e5e5;margin-top:2.5rem;padding-top:.5rem}.readme img{max-width:100%}.readme table{border-collapse:collapse;margin:1rem 0}.readme th,.readme td{border:1px solid #ddd;padding:.4rem .7rem;text-align:left}.readme th{background:#f4f4f4}.readme blockquote{border-left:3px solid #ddd;margin:1em 0;padding:.2rem 1rem;color:#555}.readme h1,.readme h2{border-bottom:1px solid #eee;padding-bottom:.2em}.readme hr{border:0;border-top:1px solid #e5e5e5;margin:2rem 0}.site-head{display:flex;align-items:center;gap:.6rem;margin:-1rem 0 1.8rem;padding-bottom:1rem;border-bottom:1px solid #e5e5e5}.site-head .brand{display:flex;align-items:center;gap:.6rem;text-decoration:none;color:#1a1a1a}.site-head .wm{font-size:1.1rem;font-weight:600;letter-spacing:.01em}.site-head .wm b{color:#0b62d6}.site-head .spacer{flex:1}.site-head .home{font-size:.85rem;color:#666;font-weight:400;text-decoration:none}.site-head .home:hover{color:#0b62d6}.muted{color:#666}.yanked{color:#b00}.pub{color:#999}.files{border-collapse:collapse;width:100%}.files td{border-bottom:1px solid #eee;padding:.25rem .5rem}.fsize{text-align:right;color:#666}</style><body><div class="site-head"><a class="brand" href="/"><span class="wm">NURL <b>registry</b></span></a><span class="spacer"></span><a class="home" href="https://nurl-lang.org/" target="_blank" rel="noopener">nurl-lang.org →</a></div>`
 }
 
 // ── Page templates ────────────────────────────────────────────────────
@@ -35,9 +35,15 @@ $ `src/extract.nu`
 {% if repository %}<p class=muted>repository <a href="{{ repository }}">{{ repository }}</a></p>{% end %}
 <h3>Install</h3><pre>[dependencies]
 {{ name }} = "{{ req }}"</pre>
-<h3>Versions</h3><ul>{% for v in versions %}<li><code>{{ v.version }}</code>{% if v.yanked %} <span class=yanked>(yanked)</span>{% end %} <span class=pub>· <a href="https://github.com/{{ v.login }}">@{{ v.login }}</a></span></li>{% end %}</ul>
+<h3>Versions</h3><ul>{% for v in versions %}<li><code>{{ v.version }}</code>{% if v.yanked %} <span class=yanked>(yanked)</span>{% end %}{% if v.date %} <span class=pub>· {{ v.date }}</span>{% end %} <span class=pub>· <a href="https://github.com/{{ v.login }}">@{{ v.login }}</a></span> <span class=pub>· <a href="/packages/{{ name }}/{{ v.version }}/files">files</a></span></li>{% end %}</ul>
 <h3>Dependencies (latest)</h3>{% if deps %}<ul>{% for d in deps %}<li><a href="/packages/{{ d.name }}">{{ d.name }}</a> <code>{{ d.req }}</code></li>{% end %}</ul>{% else %}<p>None.</p>{% end %}
 {% if readme %}<div class="readme">{{ readme | raw }}</div>{% end %}`
+}
+
+@ __reg_tpl_files → s {
+    ^ `{% include 'head' %}<p><a href="/packages/{{ name }}">← {{ name }}</a></p><h1>{{ name }} <code>{{ version }}</code></h1>
+<p class=muted>{{ files | length }} file(s) · {{ total }} unpacked</p>
+<table class=files>{% for f in files %}<tr><td><code>{{ f.path }}</code></td><td class=fsize>{{ f.size }}</td></tr>{% end %}</table>`
 }
 
 @ __reg_tpl_notfound → s {
@@ -94,6 +100,11 @@ nurlpkg publish</pre>`
 //        deps:[{name,req}], readme (pre-rendered HTML, ""=none), title }
 @ reg_page_detail Json ctx → String {
     ^ ( __reg_render ( __reg_tpl_detail ) ctx )
+}
+
+// ctx: { name, version, files:[{path,size}] (size pre-formatted), total, title }
+@ reg_page_files Json ctx → String {
+    ^ ( __reg_render ( __reg_tpl_files ) ctx )
 }
 
 @ reg_page_notfound Json ctx → String {
