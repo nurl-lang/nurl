@@ -217,6 +217,9 @@ $ `stdlib/std/bytes.nu`
     ( nurl_print `  nurlpkg add <name> [--path P] [--version V]\n` )
     ( nurl_print `                         Add a dependency entry to nurl.toml.\n` )
     ( nurl_print `  nurlpkg remove <name>  Delete a dependency entry from nurl.toml.\n` )
+    ( nurl_print `  nurlpkg update [<name>...] [--all]\n` )
+    ( nurl_print `                         Move dependency requirements to the newest versions\n` )
+    ( nurl_print `                         (asks y/N per dependency; --all updates everything).\n` )
     ( nurl_print `  nurlpkg verify         Check deps/ matches nurl.lock (names + versions); exit 1 if drift.\n` )
     ( nurl_print `  nurlpkg test           Build + run every tests/*.nu (exit 0 = pass; optional tests/outputs/ goldens).\n` )
     ( nurl_print `  nurlpkg bench          Build + run every benches/*.nu and stream their std/bench.nu reports.\n` )
@@ -321,7 +324,8 @@ $ `stdlib/std/bytes.nu`
 // True iff `line` (trimmed) is exactly `[dependencies]`.
 @ __is_dependencies_header String line → b {
     : String t ( string_trim line )
-    : b out ( string_eq t ( string_from `[dependencies]` ) )
+    : b out != 0 ( nurl_str_eq ( string_data t ) `[dependencies]` )
+    ( string_free t )
     ^ out
 }
 
@@ -333,21 +337,30 @@ $ `stdlib/std/bytes.nu`
     : s s ( string_data t )
     : i tlen ( string_len t )
     : i nlen ( nurl_str_len name )
-    ? < tlen + nlen 1 { ^ F } {}
+    // Single exit so the trimmed copy is always freed (early `^`s here
+    // used to leak one String per non-matching line on every add/remove).
+    : ~ b out F
+    : ~ b decided F
+    ? < tlen + nlen 1 { = decided T } {}
     : ~ i k 0
-    ~ < k nlen {
-        ? != ( nurl_str_get s k ) ( nurl_str_get name k ) { ^ F } {}
+    ~ & ! decided < k nlen {
+        ? != ( nurl_str_get s k ) ( nurl_str_get name k ) { = decided T } {}
         = k + k 1
     }
-    // After matching `<name>`, skip whitespace and require `=`.
-    : ~ i p nlen
-    ~ < p tlen {
-        : i c ( nurl_str_get s p )
-        ? | == c 32 == c 9 { = p + p 1 } {
-            ^ == c 61
+    ? ! decided {
+        // After matching `<name>`, skip whitespace and require `=`.
+        : ~ i p nlen
+        : ~ b scanning T
+        ~ & scanning < p tlen {
+            : i c ( nurl_str_get s p )
+            ? | == c 32 == c 9 { = p + p 1 } {
+                = out == c 61
+                = scanning F
+            }
         }
-    }
-    ^ F
+    } {}
+    ( string_free t )
+    ^ out
 }
 
 // Build the dependency value string. v1 forms:
@@ -408,7 +421,10 @@ $ `stdlib/std/bytes.nu`
     : !String IoErr rr ( read_file `nurl.toml` )
     : ~ String src ( string_new )
     ?? rr {
-        T s → = src s
+        T s → {
+            ( string_free src )
+            = src s
+        }
         F _ → {
             ( nurl_eprintln `nurlpkg: failed to read nurl.toml` )
             ^ 1
@@ -577,7 +593,10 @@ $ `stdlib/std/bytes.nu`
     : !String IoErr rr ( read_file `nurl.toml` )
     : ~ String src ( string_new )
     ?? rr {
-        T s → = src s
+        T s → {
+            ( string_free src )
+            = src s
+        }
         F _ → {
             ( nurl_eprintln `nurlpkg: failed to read nurl.toml` )
             ^ 1
@@ -664,6 +683,392 @@ $ `stdlib/std/bytes.nu`
         }
     }
     ^ rc
+}
+
+// ── update (move dependency requirements to the newest versions) ─────
+//
+// `nurlpkg update [<name>…] [--all]` walks [dependencies] and offers to
+// move each requirement onto the newest available version:
+//
+//   * registry dep → the newest non-yanked version in the registry index
+//   * path dep     → the version in the dep's own local nurl.toml — that
+//     is the code you build against, and the publish gate requires the
+//     requirement to cover it (see __check_pathdep_drift); the registry
+//     may not carry that version yet, so the index is the wrong oracle
+//
+// A requirement the newest version already satisfies is left untouched
+// (`^0.2` already resolves to 0.2.5 — rewriting it to `^0.2.5` is churn).
+// Each change is confirmed on stdin (y/N, default No); `--all` (aliases
+// `-y` / `--yes`) accepts everything unattended. Edits are surgical and
+// line-oriented like add/remove: only the version value on the dep's
+// line changes, so `path = …` / `registry = …` keys, formatting and
+// comments survive.
+
+// Candidate "newest" version for one dependency; "" when unknown.
+@ __update_candidate Manifest m Dep d → String {
+    ? > ( string_len . d path ) 0 {
+        // Path dep: the local copy is authoritative.
+        : String mf ( string_from ( string_data . d path ) )
+        ( string_push_str mf `/nurl.toml` )
+        : !Manifest ManifestErr mr ( manifest_load ( string_data mf ) )
+        ( string_free mf )
+        ?? mr {
+            T dm → {
+                : String out ( string_from ( string_data . dm version ) )
+                ( manifest_free dm )
+                ^ out
+            }
+            F _ → ^ ( string_new )
+        }
+    } {}
+    // Registry dep: newest non-yanked published version.
+    : ~ String reg ( string_new )
+    ? > ( string_len . d registry ) 0 {
+        ( string_free reg )
+        = reg ( string_from ( string_data . d registry ) )
+    } {
+        ( string_free reg )
+        = reg ( __registry_url m )
+    }
+    : String body ( pkg_fetch_index ( string_data reg ) ( string_data . d name ) )
+    ( string_free reg )
+    : ~ String out ( string_new )
+    ? > ( string_len body ) 0 {
+        ?? ( regindex_parse ( string_data body ) ) {
+            T idx → {
+                : i sel ( regindex_select idx `*` )
+                ? >= sel 0 {
+                    : ?IdxVersion vo ( vec_get [IdxVersion] . idx versions sel )
+                    ?? vo {
+                        T v → {
+                            ( string_free out )
+                            = out ( string_from ( string_data . v version ) )
+                        }
+                        F → {}
+                    }
+                } {}
+                ( regindex_free idx )
+            }
+            F _ → {}
+        }
+    } {}
+    ( string_free body )
+    ^ out
+}
+
+// True when `oldreq` already admits `ver` — nothing to update. An
+// unparsable requirement or version conservatively returns F so the
+// update is offered rather than silently suppressed.
+@ __req_admits s oldreq s ver → b {
+    ?? ( semver_req_parse oldreq ) {
+        F _ → ^ F
+        T req → {
+            ?? ( semver_parse ver ) {
+                F _ → {
+                    ( semver_req_free req )
+                    ^ F
+                }
+                T v → {
+                    : b out ( semver_req_matches req v )
+                    ( semver_free v )
+                    ( semver_req_free req )
+                    ^ out
+                }
+            }
+        }
+    }
+}
+
+// The new requirement, keeping the old one's operator style: `^`/`~`
+// keep their operator, a bare pin stays a pin, and anything more exotic
+// (ranges, comparators, `*`) becomes `^<ver>` — "newest compatible".
+@ __styled_req s oldreq s ver → String {
+    : ~ i op 94  // '^' — the default spelling
+    : i n ( nurl_str_len oldreq )
+    ? > n 0 {
+        : i c0 ( nurl_str_get oldreq 0 )
+        ? == c0 126 { = op 126 } {}  // keep '~'
+        ? & >= c0 48 <= c0 57 { = op 0 } {}  // bare pin → bare pin
+    } {}
+    : String out ( string_with_cap + ( nurl_str_len ver ) 2 )
+    ? != op 0 { ( string_push_char out op ) } {}
+    ( string_push_str out ver )
+    ^ out
+}
+
+// Replace the quoted version value on one dep line, both v1 forms:
+//   name = "^0.2"                             → the value after `=`
+//   name = { path = "..", version = "^0.2" }  → the version key's value
+// Returns the rewritten line, or an empty String when the line has no
+// version slot (a path-only inline table — nothing to rewrite).
+@ __dep_line_set_version String line s newreq → String {
+    : s raw ( string_data line )
+    : i n ( string_len line )
+    // Scan for the quoted value from `anchor`: after the `version` key
+    // in an inline table, after `=` in the bare-string form.
+    : ~ i anchor -1
+    ? ( string_contains line `{` ) {
+        : ?i vk ( string_index_of line `version` )
+        ?? vk {
+            T at → { = anchor + at 7 }
+            F _ → {}
+        }
+    } {
+        : ?i ek ( string_index_of line `=` )
+        ?? ek {
+            T at → { = anchor + at 1 }
+            F _ → {}
+        }
+    }
+    ? < anchor 0 { ^ ( string_new ) } {}
+    : ~ i vstart -1
+    : ~ i k anchor
+    ~ & < k n < vstart 0 {
+        ? == ( nurl_str_get raw k ) 34 { = vstart + k 1 } {}
+        = k + k 1
+    }
+    ? < vstart 0 { ^ ( string_new ) } {}
+    : ~ i vend vstart
+    ~ & < vend n != ( nurl_str_get raw vend ) 34 { = vend + vend 1 }
+    ? >= vend n { ^ ( string_new ) } {}
+    : String out ( string_with_cap + n 16 )
+    = k 0
+    ~ < k vstart {
+        ( string_push_char out ( nurl_str_get raw k ) )
+        = k + k 1
+    }
+    ( string_push_str out newreq )
+    = k vend
+    ~ < k n {
+        ( string_push_char out ( nurl_str_get raw k ) )
+        = k + k 1
+    }
+    ^ out
+}
+
+// Rewrite dependency `name`'s requirement in ./nurl.toml to `newreq`,
+// preserving everything else on the line. 0 = ok.
+@ __rewrite_dep_req s name s newreq → i {
+    : !String IoErr rr ( read_file `nurl.toml` )
+    : ~ String src ( string_new )
+    ?? rr {
+        T s → {
+            ( string_free src )
+            = src s
+        }
+        F _ → {
+            ( nurl_eprintln `nurlpkg: failed to read nurl.toml` )
+            ^ 1
+        }
+    }
+    : ( Vec String ) lines ( string_split src `\n` )
+    ( string_free src )
+    : i nlines ( vec_len [String] lines )
+    : ( Vec String ) out_lines ( vec_new [String] )
+    : ~ b in_deps F
+    : ~ b done F
+    : ~ i k 0
+    ~ < k nlines {
+        : ?String lk ( vec_get [String] lines k )
+        ?? lk {
+            T line → {
+                ? ( __is_section_header line ) {
+                    = in_deps ( __is_dependencies_header line )
+                } {}
+                : ~ b copied F
+                ? & & in_deps ! done ( __dep_line_matches line name ) {
+                    : String nl ( __dep_line_set_version line newreq )
+                    ? > ( string_len nl ) 0 {
+                        ( vec_push [String] out_lines nl )
+                        = copied T
+                        = done T
+                    } { ( string_free nl ) }
+                } {}
+                ? ! copied {
+                    ( vec_push [String] out_lines ( string_from ( string_data line ) ) )
+                } {}
+            }
+            F _ → {}
+        }
+        = k + k 1
+    }
+    : ~ i fk 0
+    ~ < fk nlines {
+        : ?String fpk ( vec_get [String] lines fk )
+        ?? fpk {
+            T s → ( string_free s )
+            F _ → {}
+        }
+        = fk + fk 1
+    }
+    ( vec_free [String] lines )
+    : ~ i rc 0
+    ? done {
+        : String joined ( __join_lines out_lines )
+        : !v IoErr wr ( write_file `nurl.toml` ( string_data joined ) )
+        ( string_free joined )
+        ?? wr {
+            T _ → {}
+            F _ → {
+                ( nurl_eprintln `nurlpkg: failed to write nurl.toml` )
+                = rc 1
+            }
+        }
+    } {
+        ( nurl_eprint `nurlpkg: could not rewrite '` )
+        ( nurl_eprint name )
+        ( nurl_eprintln `' in nurl.toml` )
+        = rc 1
+    }
+    : i jn ( vec_len [String] out_lines )
+    : ~ i jk 0
+    ~ < jk jn {
+        : ?String fpk ( vec_get [String] out_lines jk )
+        ?? fpk {
+            T s → ( string_free s )
+            F _ → {}
+        }
+        = jk + jk 1
+    }
+    ( vec_free [String] out_lines )
+    ^ rc
+}
+
+// One y/N confirmation on stdin. Anything but y/yes is a no — and so is
+// EOF (piped stdin), so a scripted run without --all never mutates.
+@ __confirm_update s name s oldreq s newreq → b {
+    ( nurl_print `update '` )
+    ( nurl_print name )
+    ( nurl_print `' ` )
+    ( nurl_print oldreq )
+    ( nurl_print ` -> ` )
+    ( nurl_print newreq )
+    ( nurl_print `? [y/N] ` )
+    ( flush )
+    : String ans ( read_line )
+    : String t ( string_trim ans )
+    ( string_free ans )
+    : String lo ( string_to_lower t )
+    ( string_free t )
+    : b yes | != 0 ( nurl_str_eq ( string_data lo ) `y` ) != 0 ( nurl_str_eq ( string_data lo ) `yes` )
+    ( string_free lo )
+    ^ yes
+}
+
+@ __cmd_update ( Vec String ) only i all → i {
+    ? ! ( file_exists `nurl.toml` ) {
+        ( nurl_eprintln `nurlpkg: no nurl.toml in the current directory (run 'nurlpkg init <name>' first)` )
+        ^ 1
+    } {}
+    : !Manifest ManifestErr mr ( manifest_load `nurl.toml` )
+    ?? mr {
+        F e → {
+            ( nurl_eprint `nurlpkg: failed to parse nurl.toml (` )
+            ( nurl_eprint ( manifest_err_name e ) )
+            ( nurl_eprintln `)` )
+            ^ 1
+        }
+        T m → {
+            : i n ( vec_len [Dep] . m dependencies )
+            ? == n 0 {
+                ( nurl_print `no dependencies in nurl.toml\n` )
+                ( manifest_free m )
+                ^ 0
+            } {}
+            : ~ i changed 0
+            : ~ i failed 0
+            // Explicitly named packages must actually be dependencies —
+            // a typo silently updating nothing would read as "up to date".
+            : i onlyn ( vec_len [String] only )
+            : ~ i ok 0
+            ~ < ok onlyn {
+                : ?String oo ( vec_get [String] only ok )
+                ?? oo {
+                    T name → {
+                        ? ( __manifest_has_dep m ( string_data name ) ) {} {
+                            ( nurl_eprint `nurlpkg: '` )
+                            ( nurl_eprint ( string_data name ) )
+                            ( nurl_eprintln `' is not declared under [dependencies]` )
+                            = failed + failed 1
+                        }
+                    }
+                    F _ → {}
+                }
+                = ok + ok 1
+            }
+            : ~ i k 0
+            ~ < k n {
+                : ?Dep dk ( vec_get [Dep] . m dependencies k )
+                ?? dk {
+                    T d → {
+                        : s dname ( string_data . d name )
+                        : ~ b want T
+                        ? > ( vec_len [String] only ) 0 { = want ( __vec_has_str only dname ) } {}
+                        ? want {
+                            ? == ( string_len . d version ) 0 {
+                                ( nurl_print `  ` )
+                                ( nurl_print dname )
+                                ( nurl_print `: path-only (no version requirement) — skipped\n` )
+                            } {
+                                : String cand ( __update_candidate m d )
+                                : s oldreq ( string_data . d version )
+                                ? == ( string_len cand ) 0 {
+                                    ( nurl_print `  ` )
+                                    ( nurl_print dname )
+                                    ( nurl_print `: no published version found — skipped\n` )
+                                } {
+                                    ? ( __req_admits oldreq ( string_data cand ) ) {
+                                        ( nurl_print `  ` )
+                                        ( nurl_print dname )
+                                        ( nurl_print ` ` )
+                                        ( nurl_print oldreq )
+                                        ( nurl_print ` — up to date (newest is ` )
+                                        ( nurl_print ( string_data cand ) )
+                                        ( nurl_print `)\n` )
+                                    } {
+                                        : String newreq ( __styled_req oldreq ( string_data cand ) )
+                                        : ~ b go != 0 all
+                                        ? == all 0 {
+                                            = go ( __confirm_update dname oldreq ( string_data newreq ) )
+                                        } {}
+                                        ? go {
+                                            ? == ( __rewrite_dep_req dname ( string_data newreq ) ) 0 {
+                                                ( nurl_print `  ` )
+                                                ( nurl_print dname )
+                                                ( nurl_print `: ` )
+                                                ( nurl_print oldreq )
+                                                ( nurl_print ` -> ` )
+                                                ( nurl_print ( string_data newreq ) )
+                                                ( nurl_print `\n` )
+                                                = changed + changed 1
+                                            } { = failed + failed 1 }
+                                        } {
+                                            ( nurl_print `  ` )
+                                            ( nurl_print dname )
+                                            ( nurl_print `: skipped\n` )
+                                        }
+                                        ( string_free newreq )
+                                    }
+                                }
+                                ( string_free cand )
+                            }
+                        } {}
+                    }
+                    F _ → {}
+                }
+                = k + k 1
+            }
+            ( manifest_free m )
+            ? > changed 0 {
+                ( nurl_print `updated ` )
+                ( nurl_print ( nurl_str_int changed ) )
+                ( nurl_print ` requirement(s) in nurl.toml — run 'nurlpkg install' to refresh deps/ and nurl.lock\n` )
+            } {
+                ( nurl_print `nothing updated\n` )
+            }
+            ^ ? > failed 0 1 0
+        }
+    }
 }
 
 // ── install ─────────────────────────────────────────────────────
@@ -3210,6 +3615,37 @@ $ `stdlib/std/bytes.nu`
         ( string_free sub )
         ^ rc
     } {}
+    ? != 0 ( nurl_str_eq s_sub `update` ) {
+        // nurlpkg update [<name>…] [--all|-y|--yes]
+        : ( Vec String ) only ( vec_new [String] )
+        : ~ i all 0
+        : ~ i ai 2
+        ~ < ai argc {
+            : String a ( env_arg ai )
+            : s a_s ( string_data a )
+            ? | | != 0 ( nurl_str_eq a_s `--all` ) != 0 ( nurl_str_eq a_s `-y` ) != 0 ( nurl_str_eq a_s `--yes` ) {
+                = all 1
+                ( string_free a )
+            } {
+                ( vec_push [String] only a )
+            }
+            = ai + ai 1
+        }
+        : i rc ( __cmd_update only all )
+        : i on ( vec_len [String] only )
+        : ~ i ok 0
+        ~ < ok on {
+            : ?String oo ( vec_get [String] only ok )
+            ?? oo {
+                T s → ( string_free s )
+                F _ → {}
+            }
+            = ok + ok 1
+        }
+        ( vec_free [String] only )
+        ( string_free sub )
+        ^ rc
+    } {}
     ? != 0 ( nurl_str_eq s_sub `verify` ) {
         ( string_free sub )
         ^ ( __cmd_verify )
@@ -3222,17 +3658,8 @@ $ `stdlib/std/bytes.nu`
         ( string_free sub )
         ^ ( __cmd_bench )
     } {}
-    ? != 0 ( nurl_str_eq s_sub `version` ) {
-        ( string_free sub )
-        ( nurl_print `nurlpkg 0.6.1\n` )
-        ^ 0
-    } {}
-    // Accept --version as the conventional spelling too.
-    ? != 0 ( nurl_str_eq s_sub `--version` ) {
-        ( string_free sub )
-        ( nurl_print `nurlpkg 0.6.1\n` )
-        ^ 0
-    } {}
+    // `version` / `--version` are handled at the top of main (they print
+    // the toolchain version) — no duplicate branches here.
     ? != 0 ( nurl_str_eq s_sub `help` ) {
         ( string_free sub )
         ( __print_usage )
