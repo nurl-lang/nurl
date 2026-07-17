@@ -69,11 +69,18 @@ export class NurlContainer extends Container<Env> {
     // survive a retry; their bodies are small.
     const hasBody = request.method !== "GET" && request.method !== "HEAD";
     const bodyBuf = hasBody ? await request.arrayBuffer() : undefined;
+    // redirect: "manual" — a reverse proxy must pass upstream redirects
+    // THROUGH to the client, never follow them itself. The default
+    // ("follow") made the container-port fetcher chase /authorize's 302
+    // Location (https://claude.ai/…) through the container binding, and
+    // the runtime rejects https on that path — which broke the whole
+    // OAuth connect flow while every non-redirecting route worked.
     const replay = (): Request =>
       new Request(httpUrl, {
         method: request.method,
         headers: request.headers,
         body: bodyBuf,
+        redirect: "manual",
       });
 
     for (let attempt = 0; ; attempt++) {
