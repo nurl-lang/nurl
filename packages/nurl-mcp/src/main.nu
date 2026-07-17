@@ -28,6 +28,7 @@ $ `stdlib/std/fs.nu`
 $ `stdlib/ext/env.nu`
 $ `stdlib/core/posix.nu`
 $ `stdlib/std/args.nu`
+$ `stdlib/ext/mcp_search.nu`
 $ `stdlib/std/net.nu`
 $ `stdlib/ext/http_request.nu`
 $ `stdlib/ext/http_response.nu`
@@ -58,7 +59,7 @@ $ `deps/wasmbuilder/src/build.nu`
 // to bump (previously the banners drifted to a stale 0.2.0 while the
 // handshake reported 0.4.0).
 
-@ nm_version → s { ^ `0.4.1` }
+@ nm_version → s { ^ `0.5.0` }
 
 // Log a startup banner "nurl-mcp <version> <suffix>" through mcp_log,
 // building the line from the single-source version so the banners can
@@ -535,6 +536,126 @@ $ `deps/wasmbuilder/src/build.nu`
 
 // ── Tool descriptors ────────────────────────────────────────────────
 
+// ── Tools: nurl_api + nurl_grep (shared engine: stdlib/ext/mcp_search) ─
+//
+// The value locally: an agent reading whole modules through
+// nurl_read_stdlib pays ext/csv.nu's 63 KB for a "what csv functions
+// exist" question — the declaration view is ~11 KB and a query returns
+// just the matching blocks. The registry search rides along: "is there
+// a package for X" works from any editor with only MCP tools.
+
+@ nm_stdlib_root → String {
+    ^ ( env_var_or `NURL_STDLIB` `` )
+}
+
+@ nm_tool_api Json args → Json {
+    : String root ( nm_stdlib_root )
+    ? == ( string_len root ) 0 {
+        ( string_free root )
+        ^ ( mcp_tool_result_error `NURL_STDLIB is not set — run via the installed toolchain shims, or export it manually` )
+    } {}
+    : ~ s module ``
+    ?? ( json_obj_get args `module` ) {
+        T mj → { ? ( json_is_str mj ) { = module ( json_as_str mj ) } {} }
+        F _ → {}
+    }
+    : ~ s query ``
+    ?? ( json_obj_get args `query` ) {
+        T qj → { ? ( json_is_str qj ) { = query ( json_as_str qj ) } {} }
+        F _ → {}
+    }
+    ? > ( nurl_str_len module ) 0 {
+        ? ( nm_has_dotdot module ) {
+            ( string_free root )
+            ^ ( mcp_tool_result_error `bad 'module'` )
+        } {}
+        : String md ( msearch_api_module ( string_data root ) module )
+        ( string_free root )
+        ? == ( string_len md ) 0 {
+            ( string_free md )
+            ^ ( mcp_tool_result_error `module not found — 'module' is a path from nurl_list_stdlib, e.g. ext/csv.nu` )
+        } {}
+        : Json r ( mcp_tool_result_text ( string_data md ) )
+        ( string_free md )
+        ^ r
+    } {}
+    ? == ( nurl_str_len query ) 0 {
+        ( string_free root )
+        ^ ( mcp_tool_result_error `pass 'module' (a nurl_list_stdlib path, e.g. ext/csv.nu) or 'query' (search terms)` )
+    } {}
+    // No local examples corpus in an installed toolchain → "" skips it;
+    // the registry fallback + exact-name footer still apply.
+    : String rb ( msearch_default_registry )
+    : String text ( msearch_api_query ( string_data root ) `` ( string_data rb ) query )
+    ( string_free rb ) ( string_free root )
+    : Json r ( mcp_tool_result_text ( string_data text ) )
+    ( string_free text )
+    ^ r
+}
+
+@ nm_tool_grep Json args → Json {
+    : ~ s pattern ``
+    ?? ( json_obj_get args `pattern` ) {
+        T pj → { ? ( json_is_str pj ) { = pattern ( json_as_str pj ) } {} }
+        F _ → {}
+    }
+    ? == ( nurl_str_len pattern ) 0 {
+        ^ ( mcp_tool_result_error `missing 'pattern'` )
+    } {}
+    : ~ b word F
+    ?? ( json_obj_get args `word` ) {
+        T wj → { ? ( json_is_bool wj ) { = word ( json_as_bool wj ) } {} }
+        F _ → {}
+    }
+    : ~ s where_s `all`
+    ?? ( json_obj_get args `where` ) {
+        T wj → { ? ( json_is_str wj ) { = where_s ( json_as_str wj ) } {} }
+        F _ → {}
+    }
+    : b all != 0 ( nurl_str_eq where_s `all` )
+    : b w_stdlib | all >= ( nurl_str_find where_s `stdlib` ) 0
+    : b w_packages | all >= ( nurl_str_find where_s `package` ) 0
+    : ~ String root ( string_new )
+    ? w_stdlib {
+        ( string_free root )
+        = root ( nm_stdlib_root )
+    } {}
+    : ~ String rb ( string_new )
+    ? w_packages {
+        ( string_free rb )
+        = rb ( msearch_default_registry )
+    } {}
+    : String text ( msearch_grep pattern word ( string_data root ) `` `` ( string_data rb ) )
+    ( string_free root ) ( string_free rb )
+    : Json r ( mcp_tool_result_text ( string_data text ) )
+    ( string_free text )
+    ^ r
+}
+
+@ nm_schema_api → Json {
+    : Json schema ( json_obj_new )
+    ( json_obj_set schema `type` ( json_str_lit `object` ) )
+    : Json props ( json_obj_new )
+    ( nm_prop props `module` `Render ONE installed-stdlib module's API surface (signatures, doc comments, full type definitions — no function bodies). A nurl_list_stdlib path, e.g. 'ext/csv.nu'.` )
+    ( nm_prop props `query` `Search every installed-stdlib module's declarations: space-separated terms, ALL must occur (case-insensitive) in a declaration's signature + doc comment + module path. Zero hits widen to the package registry; an exact package-name term is noted regardless. Ignored when 'module' is set.` )
+    ( json_obj_set schema `properties` props )
+    ^ schema
+}
+
+@ nm_schema_grep → Json {
+    : Json schema ( json_obj_new )
+    ( json_obj_set schema `type` ( json_str_lit `object` ) )
+    : Json props ( json_obj_new )
+    ( nm_prop props `pattern` `Case-insensitive substring to find; results are path:line: text, boundary-clean matches ranked first. For short acronyms (under ~5 chars) pass word=true.` )
+    ( nm_prop props `where` `Scope: 'stdlib' (installed), 'packages' (registry name+description), or 'all' (default).` )
+    ( nm_prop props `word` `true = only word-boundary lines (adjacent byte not a letter; underscore and digits count as boundaries).` )
+    : Json req ( json_arr_new )
+    ( json_arr_push req ( json_str_lit `pattern` ) )
+    ( json_obj_set schema `properties` props )
+    ( json_obj_set schema `required` req )
+    ^ schema
+}
+
 @ nm_prop Json props s name s desc → v {
     : Json p ( json_obj_new )
     ( json_obj_set p `type` ( json_str_lit `string` ) )
@@ -604,6 +725,12 @@ $ `deps/wasmbuilder/src/build.nu`
     ( vec_push [Json] tools ( mcp_tool_descriptor `nurl_read_stdlib`
     `Read one module from the installed standard library by relative path.`
     ( nm_schema_name ) ) )
+    ( vec_push [Json] tools ( mcp_tool_descriptor `nurl_api`
+    `A stdlib module's API surface, or a search across all of them — strongly prefer this over nurl_read_stdlib (whole modules waste context; ext/csv.nu is 63 KB, its API surface 11 KB, one matching declaration ~0.3 KB). module='ext/csv.nu' renders signatures + doc comments + type definitions; query='csv quote' finds matching declarations. Zero hits widen to the package registry; an exact package-name term is footnoted regardless.`
+    ( nm_schema_api ) ) )
+    ( vec_push [Json] tools ( mcp_tool_descriptor `nurl_grep`
+    `Case-insensitive search across the installed stdlib (path:line: text; word-boundary matches ranked first, in-word substring hits in a labeled tail) and the package registry (name + description) — "is there a package for X" works from any MCP-only editor. word=true for short acronyms.`
+    ( nm_schema_grep ) ) )
     ^ tools
 }
 
@@ -624,6 +751,8 @@ $ `deps/wasmbuilder/src/build.nu`
     ? != ( nurl_str_eq name `nurl_fmt` ) 0 { ^ ( nm_tool_fmt args ) } {}
     ? != ( nurl_str_eq name `nurl_list_stdlib` ) 0 { ^ ( nm_tool_list_stdlib args ) } {}
     ? != ( nurl_str_eq name `nurl_read_stdlib` ) 0 { ^ ( nm_tool_read_stdlib args ) } {}
+    ? != ( nurl_str_eq name `nurl_api` ) 0 { ^ ( nm_tool_api args ) } {}
+    ? != ( nurl_str_eq name `nurl_grep` ) 0 { ^ ( nm_tool_grep args ) } {}
     ^ ( mcp_tool_result_error `unknown tool` )
 }
 

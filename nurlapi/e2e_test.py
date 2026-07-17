@@ -447,7 +447,11 @@ def t_tools_call_grep(c: Client) -> None:
     assert_true("in-word tail labeled", "— matches inside longer words" in text)
     sep = text.index("— matches inside longer words")
     assert_true("mcp family ranked before the tail", text.index("ext/mcp") < sep)
-    assert_true("memcpy only in the tail", text.index("memcpy") > sep)
+    # `( memcpy` is the raw libc-call form — it never coexists with a
+    # boundary-clean 'mcp' on the same line (a doc comment ABOUT the
+    # boundary rule legitimately mentions both words, hence not plain
+    # 'memcpy' here).
+    assert_true("memcpy calls only in the tail", "( memcpy" not in text[:sep] and "( memcpy" in text[sep:])
     # Letters-only boundary: 'http' at a digit boundary (http2_*) is clean.
     env = _tool_call(c, "nurl_grep", {"pattern": "http", "where": "stdlib", "word": True})
     text = _tool_text(env)
@@ -455,7 +459,7 @@ def t_tools_call_grep(c: Client) -> None:
     # word=true drops the tail entirely but reports the filtered count.
     env = _tool_call(c, "nurl_grep", {"pattern": "mcp", "where": "stdlib", "word": True})
     text = _tool_text(env)
-    assert_true("word=true drops memcpy", "memcpy" not in text)
+    assert_true("word=true drops memcpy calls", "( memcpy" not in text)
     assert_true("word=true reports filtered count", "filtered out" in text)
 
     env = _tool_call(c, "nurl_grep", {"pattern": "zzz-no-such-thing-zzz", "where": "stdlib"})

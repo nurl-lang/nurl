@@ -10,6 +10,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`stdlib/ext/mcp_search.nu`** — the MCP search surface (module API
+  view via nurldoc, declaration query with registry widening and
+  exact-name footers, boundary-ranked grep, registry name+description
+  search) extracted from nurlapi into a stdlib module with explicit
+  path/registry parameters, so the playground API and the local
+  `nurl-mcp` package share ONE implementation.
+- **`nurl-mcp` 0.5.0** gains `nurl_api` and `nurl_grep` over the
+  installed stdlib + the package registry — the declaration view and
+  package discovery for local, MCP-only editors. (Publish requires the
+  toolchain release that carries `ext/mcp_search.nu`.)
+
 - Playground build endpoints return ABSOLUTE `download_url`s (native,
   windows, macos, cross-target and wasm — wasm keeps its base64 payload
   too): the base comes from `NURL_PUBLIC_URL` (or the already-deployed
