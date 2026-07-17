@@ -415,6 +415,16 @@ def t_tools_call_grep(c: Client) -> None:
     assert_true("grep reports line count", "line(s) match" in text)
     assert_true("grep returns path:line hits", "stdlib/std/time.nu:" in text)
 
+    # word mode: 'mcp' is a memcpy substring — word=true must keep the MCP
+    # family (mcp_*, /mcp) and drop every memcpy/-mcpu line.
+    env = _tool_call(c, "nurl_grep", {"pattern": "mcp", "where": "stdlib", "word": True})
+    text = _tool_text(env)
+    assert_true("word mode still finds mcp modules", "ext/mcp" in text)
+    assert_true("word mode drops memcpy", "memcpy" not in text)
+    assert_true("word mode header says word-boundary", "word-boundary" in text)
+    env = _tool_call(c, "nurl_grep", {"pattern": "mcp", "where": "stdlib"})
+    assert_true("substring mode still matches memcpy", "memcpy" in _tool_text(env))
+
     env = _tool_call(c, "nurl_grep", {"pattern": "zzz-no-such-thing-zzz", "where": "stdlib"})
     text = _tool_text(env)
     assert_true("grep no-match reports zero", text.startswith("0 line(s)"))

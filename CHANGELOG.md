@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- MCP `nurl_grep` gains `word=true`: requires a non-alphanumeric boundary
+  around the match (underscore counts as a boundary), so a short acronym
+  like `mcp` matches `mcp_call` and `/mcp` but no longer drowns in a
+  thousand `memcpy` / `-mcpu` substring hits. The tool description now
+  recommends it for patterns under ~5 characters.
+
 ## [0.17.0] — 2026-07-17
 
 The **findability** release: the MCP server answers "what's in this

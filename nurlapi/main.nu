@@ -4730,9 +4730,49 @@ s combined_stdout s combined_stderr → v {
 
 @ __grep_file_hits_cap → i { ^ 8 }
 
+@ __grep_alnum i c → b {
+    ? & >= c 48 <= c 57 { ^ T } {}
+    ? & >= c 97 <= c 122 { ^ T } {}
+    ^ & >= c 65 <= c 90
+}
+
+// Does the line contain the pattern? word=T additionally requires that
+// the bytes adjacent to the match are NOT alphanumeric (line edges
+// count as boundaries; underscore too — identifier-token semantics, so
+// a short acronym like `mcp` matches `mcp_call` and `/mcp` but not
+// `memcpy` or `-mcpu`, which is what makes 3-letter searches usable).
+// Scans every occurrence: an early substring hit inside a word must not
+// mask a later boundary-clean one on the same line.
+@ __grep_line_hit String line_lc String pat_lc b word → b {
+    : s hay ( string_data line_lc )
+    : s pat ( string_data pat_lc )
+    ? ! word { ^ >= ( nurl_str_find hay pat ) 0 } {}
+    : i n ( string_len line_lc )
+    : i m ( string_len pat_lc )
+    ? | == m 0 > m n { ^ F } {}
+    : ~ i k 0
+    ~ <= k - n m {
+        : ~ b hit T
+        : ~ i j 0
+        ~ & hit < j m {
+            ? != ( nurl_str_get hay + k j ) ( nurl_str_get pat j ) { = hit F } {}
+            = j + j 1
+        }
+        ? hit {
+            : ~ b lb T
+            ? > k 0 { = lb ! ( __grep_alnum ( nurl_str_get hay - k 1 ) ) } {}
+            : ~ b rb T
+            ? < + k m n { = rb ! ( __grep_alnum ( nurl_str_get hay + k m ) ) } {}
+            ? & lb rb { ^ T } {}
+        } {}
+        = k + k 1
+    }
+    ^ F
+}
+
 // Grep one file; append `<label>/<rel>:<ln>: <text>` lines. ctr =
 // [matched, emitted].
-@ __grep_one_file s root s rel s label String pat_lc String out ( Vec i ) ctr → v {
+@ __grep_one_file s root s rel s label String pat_lc b word String out ( Vec i ) ctr → v {
     : String fp ( path_join root rel )
     : !( Vec u ) IoErr rd ( read_file_bytes ( string_data fp ) )
     ( string_free fp )
@@ -4749,7 +4789,7 @@ s combined_stdout s combined_stderr → v {
                 ?? ( vec_get [String] lines li ) {
                     T line → {
                         : String line_lc ( string_to_lower line )
-                        ? >= ( nurl_str_find ( string_data line_lc ) ( string_data pat_lc ) ) 0 {
+                        ? ( __grep_line_hit line_lc pat_lc word ) {
                             : i matched ?? ( vec_get [i] ctr 0 ) { T v → v F _ → 0 }
                             ( vec_set [i] ctr 0 + matched 1 )
                             ? & < file_hits ( __grep_file_hits_cap ) < ( string_len out ) ( __grep_out_cap ) {
@@ -4794,7 +4834,7 @@ s combined_stdout s combined_stderr → v {
 }
 
 // Grep one corpus directory (recursively, .nu files).
-@ __grep_corpus s root s label String pat_lc String out ( Vec i ) ctr → v {
+@ __grep_corpus s root s label String pat_lc b word String out ( Vec i ) ctr → v {
     : Json files ( json_arr_new )
     ( __walk_nu_files files root `` )
     : i nf ( json_arr_len files )
@@ -4806,7 +4846,7 @@ s combined_stdout s combined_stderr → v {
                     ?? ( json_obj_get fo `path` ) {
                         T pj → {
                             ? ( json_is_str pj ) {
-                                ( __grep_one_file root ( json_as_str pj ) label pat_lc out ctr )
+                                ( __grep_one_file root ( json_as_str pj ) label pat_lc word out ctr )
                             } {}
                         }
                         F _ → {}
@@ -4905,6 +4945,7 @@ s combined_stdout s combined_stderr → v {
         ^ ( __mcp_result_error `missing 'pattern'` )
     } {}
     : String pat_lc ( __lc_owned pattern )
+    : b word ( __mcp_args_get_bool `word` args F )
     : b all != 0 ( nurl_str_eq where_s `all` )
     : b w_stdlib | all >= ( nurl_str_find where_s `stdlib` ) 0
     : b w_examples | all >= ( nurl_str_find where_s `example` ) 0
@@ -4916,17 +4957,17 @@ s combined_stdout s combined_stderr → v {
     ( vec_push [i] ctr 0 ) ( vec_push [i] ctr 0 )
     ? w_stdlib {
         : String dir ( get_stdlib_dir )
-        ( __grep_corpus ( string_data dir ) `stdlib` pat_lc out ctr )
+        ( __grep_corpus ( string_data dir ) `stdlib` pat_lc word out ctr )
         ( string_free dir )
     } {}
     ? w_examples {
         : String dir ( get_examples_dir )
-        ( __grep_corpus ( string_data dir ) `examples` pat_lc out ctr )
+        ( __grep_corpus ( string_data dir ) `examples` pat_lc word out ctr )
         ( string_free dir )
     } {}
     ? w_tests {
         : String dir ( get_tests_dir )
-        ( __grep_corpus ( string_data dir ) `tests` pat_lc out ctr )
+        ( __grep_corpus ( string_data dir ) `tests` pat_lc word out ctr )
         ( string_free dir )
     } {}
     ? w_packages { ( __grep_packages pattern out ) } {}
@@ -4937,7 +4978,11 @@ s combined_stdout s combined_stderr → v {
     ( string_push_int hdr matched )
     ( string_push_str hdr ` line(s) match '` )
     ( string_push_str hdr pattern )
-    ( string_push_str hdr `' (case-insensitive substring).\n\n` )
+    ? word {
+        ( string_push_str hdr `' (case-insensitive, word-boundary).\n\n` )
+    } {
+        ( string_push_str hdr `' (case-insensitive substring).\n\n` )
+    }
     ( string_push_str hdr ( string_data out ) )
     ? > matched emitted {
         ( string_push_str hdr `… ` )
@@ -4957,6 +5002,8 @@ s combined_stdout s combined_stderr → v {
     ( __mcp_prop `string` `Case-insensitive substring to find. Results are path:line: text.` ) )
     ( json_obj_set props `where`
     ( __mcp_prop `string` `Scope: 'stdlib', 'examples', 'tests', 'packages' (registry name+description search), or 'all' (default). Combine with commas, e.g. 'stdlib,examples'.` ) )
+    ( json_obj_set props `word`
+    ( __mcp_prop `boolean` `true = require a word boundary (non-alphanumeric or line edge; underscore counts as a boundary) around the match: 'mcp' then matches mcp_call and /mcp but not memcpy. STRONGLY recommended for patterns under ~5 characters. Local corpora only; the registry side always matches substrings.` ) )
     : Json req ( json_arr_new )
     ( json_arr_push req ( json_str_lit `pattern` ) )
     ( json_obj_set schema `properties` props )
@@ -5149,7 +5196,7 @@ s combined_stdout s combined_stderr → v {
     ( __mcp_schema_api ) ) )
 
     ( json_arr_push arr ( __mcp_tool_desc `nurl_grep`
-    `Case-insensitive substring search across the NURL corpora: stdlib sources, examples, compiler tests (path:line: text, per-file and total caps) and the package registry (name + description) — one cheap call to check how something is used in real code, or whether a package for X already exists. Scope with where='stdlib'|'examples'|'tests'|'packages'|'all'.`
+    `Case-insensitive search across the NURL corpora: stdlib sources, examples, compiler tests (path:line: text, per-file and total caps) and the package registry (name + description) — one cheap call to check how something is used in real code, or whether a package for X already exists. Scope with where='stdlib'|'examples'|'tests'|'packages'|'all'. For short acronyms (under ~5 chars) pass word=true so 'mcp' does not drown in memcpy: it requires a non-alphanumeric boundary around the match (underscore counts as a boundary, so mcp_call still hits).`
     ( __mcp_schema_grep ) ) )
 
     : Json out ( json_obj_new )
