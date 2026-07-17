@@ -936,7 +936,16 @@ s combined_stdout s combined_stderr → v {
 // what nurl.sh produces locally so a /build link succeeds against the
 // committed stdlib/runtime.native.o (FFI-rich: libcurl + openssl +
 // sqlite3 + libpq + zlib + zstd).
+//
+// `-Wl,--as-needed` MUST precede the `-l` flags: it makes the linker
+// keep a DT_NEEDED entry only for a library the program actually
+// references a symbol from — without it every downloaded binary carried
+// hard deps on libpq/libsqlite3/libcurl/… and failed to LOAD on any box
+// missing one of them (`error while loading shared libraries:
+// libpq.so.5`), even for a hello world. Same flag, same position, as
+// nurl.sh's local link line.
 @ push_native_runtime_libs ( Vec s ) args → v {
+    ( vec_push [s] args `-Wl,--as-needed` )
     ( vec_push [s] args `-lm` )
     ( vec_push [s] args `-lpthread` )
     ( vec_push [s] args `-lcurl` )
