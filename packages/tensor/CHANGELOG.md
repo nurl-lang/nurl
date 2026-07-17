@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.4.0
+
+M5 — the device layer grows to full ndarray coverage (over gpukit 0.4.0's
+dev-layer op family; one broadcast implementation shared with the host
+tensors — `_t_bshape` / `_t_eff_strides` / `_t_batch_eff` are now the
+package-shared helpers):
+
+- **Broadcast elementwise:** `dtensor_add/sub/mul/div` now broadcast with
+  full numpy rules (≤6 dims). Same-shape pairs keep the plain kernel;
+  everything else runs the stride-broadcast kernel (stride 0 = broadcast
+  dim) in ONE launch — no materialised expansion.
+- **`dtensor_bmm`** — batched matmul `[..,M,K]·[..,K,N] → [..,M,N]` with
+  numpy batch broadcast. Uniform batches (both operands carry the batch,
+  or one is a single matrix) run as one kernel launch; a general broadcast
+  falls back to a per-batch matmul over device-pointer views — the same
+  sequential-K kernel math either way.
+- **`dtensor_gather` / `dtensor_scatter`** — along an axis with a host
+  index vector: negative indices wrap (numpy/ONNX), out-of-range indices
+  are REJECTED before anything touches the device; scatter returns a fresh
+  tensor (duplicate-index write order unspecified, per ONNX).
+- **`dtensor_conv2d` / `dtensor_conv2d_b` / `dtensor_maxpool2d`** — NCHW
+  without the batch dim ([C,H,W]), symmetric zero padding, strides;
+  `OH = (H + 2·ph − kh)/sh + 1`.
+- Every entry point validates dtypes/shapes/axes and fails closed.
+- Tests: 33 device checks vs numpy (f32 true-float32 + f64 + fail-closed
+  guards) on CUDA; f64 rows bit-identical between the CUDA and CPU
+  backends; ASan clean.
+
 ## 0.3.0
 
 M3 — device-resident tensors (`src/dev.nu`).
