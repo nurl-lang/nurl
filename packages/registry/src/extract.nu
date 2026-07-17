@@ -247,10 +247,59 @@ $ `stdlib/ext/toml.nu`
     ^ ( __rx_targz_pkg_str gz `package.repository` )
 }
 
-// [package].description, capped at 500 bytes (search metadata, not a
-// README) — mirrors the Worker's extractManifestDescription.
+// The README's first prose paragraph: heading lines and leading blanks
+// skipped, following non-empty lines joined (newline → space). The
+// pitch a README opens with is exactly what a search row wants.
+@ __rx_readme_first_para String md → String {
+    : String out ( string_with_cap 128 )
+    : s raw ( string_data md )
+    : i n ( string_len md )
+    : ~ i k 0
+    : ~ b started F
+    : ~ b done F
+    ~ & ! done < k n {
+        // line bounds
+        : i ls k
+        : ~ i le k
+        ~ & < le n != ( nurl_str_get raw le ) 10 { = le + le 1 }
+        // first non-ws byte
+        : ~ i sp ls
+        ~ & < sp le | == ( nurl_str_get raw sp ) 32 == ( nurl_str_get raw sp ) 9 { = sp + sp 1 }
+        : b blank == sp le
+        : b heading & ! blank == ( nurl_str_get raw sp ) 35
+        ? | blank heading {
+            ? started { = done T } {}
+        } {
+            ? started { ( string_push_char out 32 ) } {}
+            : ~ i j sp
+            ~ < j le {
+                : i c ( nurl_str_get raw j )
+                // drop bold markers `**`
+                ? & == c 42 & < + j 1 le == ( nurl_str_get raw + j 1 ) 42 { = j + j 2 } {
+                    ( string_push_char out c )
+                    = j + j 1
+                }
+            }
+            = started T
+        }
+        = k ? < le n + le 1 le
+    }
+    ^ out
+}
+
+// [package].description, or — when the manifest omits one — the README's
+// first paragraph. Capped at 500 bytes (search metadata, not a README) —
+// mirrors the Worker's extractManifestDescription.
 @ reg_targz_description ( Vec u ) gz → String {
-    : String raw ( __rx_targz_pkg_str gz `package.description` )
+    : ~ String raw ( __rx_targz_pkg_str gz `package.description` )
+    ? == ( string_len raw ) 0 {
+        : String md ( reg_targz_readme gz )
+        ? > ( string_len md ) 0 {
+            ( string_free raw )
+            = raw ( __rx_readme_first_para md )
+        } {}
+        ( string_free md )
+    } {}
     ? <= ( string_len raw ) 500 { ^ raw } {}
     : String cut ( string_substr raw 0 500 )
     ( string_free raw )

@@ -400,6 +400,15 @@ def t_tools_call_api(c: Client) -> None:
     assert_true("query reports match count", "declaration(s) match" in text)
     assert_true("query finds the dialect struct", "CSVDialect" in text)
 
+    # Exact-name footer: 'http' matches hundreds of stdlib declarations,
+    # AND is a registry package — the reply must carry the one-line note
+    # with the package's real pitch (needs network to reg.nurl-lang.org).
+    env = _tool_call(c, "nurl_api", {"query": "http"})
+    text = _tool_text(env)
+    assert_true("declarations found for http", "declaration(s) match 'http'" in text)
+    assert_true("exact-name footer present", "Note: the registry has a package named 'http'" in text)
+    assert_true("footer carries the README pitch", "unified HTTP server interface" in text)
+
     # 0-hit widening: 'calculator' exists in examples but no stdlib
     # declaration carries it — the same reply must surface the example.
     env = _tool_call(c, "nurl_api", {"query": "calculator"})

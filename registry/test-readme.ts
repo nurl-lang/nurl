@@ -3,7 +3,7 @@
 import { readFileSync } from "node:fs";
 import { gzipSync } from "node:zlib";
 import { renderMarkdown } from "./src/markdown.ts";
-import { findReadmeInTar, normalizeRelPath, listTarFiles } from "./src/readme.ts";
+import { findReadmeInTar, normalizeRelPath, listTarFiles, readmeFirstParagraph } from "./src/readme.ts";
 
 let pass = 0, fail = 0;
 function ok(cond: boolean, msg: string) {
@@ -164,6 +164,12 @@ try {
 } catch (e) {
   fail++; console.log(`FAIL: nq README round-trip threw: ${e}`);
 }
+
+// ── README first paragraph (description fallback) ────────────────────
+ok(readmeFirstParagraph("# t — x\n\nOne dependency for **serving** HTTP.\nSecond line.\n\nNext para.") ===
+  "One dependency for serving HTTP. Second line.", "first paragraph joined, bold stripped, heading skipped");
+ok(readmeFirstParagraph("# only a title") === "", "title-only README yields empty");
+ok(readmeFirstParagraph("no heading at all\n\nrest") === "no heading at all", "headingless README works");
 
 console.log(`\n==== ${pass} passed, ${fail} failed ====`);
 process.exit(fail ? 1 : 0);

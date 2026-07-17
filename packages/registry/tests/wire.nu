@@ -74,6 +74,36 @@ $ `src/service.nu`
 }
 
 // A tiny valid .tar.gz with a README and a manifest.
+// A manifest WITHOUT description but WITH a README pitch — publish must
+// index the README's first paragraph as the description.
+@ mk_tarball_nodesc → ( Vec u ) {
+    : ( Vec TarEntry ) ents ( vec_new [TarEntry] )
+    ( vec_push [TarEntry] ents ( tar_entry_file `nurl.toml` ( bytes_from_str `[package]
+name = "plainpkg"
+version = "1.0.0"
+` ) ) )
+    ( vec_push [TarEntry] ents ( tar_entry_file `README.md` ( bytes_from_str `# plainpkg — bare
+
+A **quiet** little fixture package.
+Second pitch line.
+
+Body prose that must not leak in.
+` ) ) )
+    : !( Vec u ) TarErr tr ( tar_create ents )
+    ( tar_entries_free ents )
+    ?? tr {
+        F _ → ^ ( vec_new [u] )
+        T arc → {
+            : !( Vec u ) CompressErr cr ( gzip_compress arc )
+            ( vec_free [u] arc )
+            ?? cr {
+                F _ → ^ ( vec_new [u] )
+                T gz → ^ gz
+            }
+        }
+    }
+}
+
 @ mk_tarball → ( Vec u ) {
     : ( Vec TarEntry ) ents ( vec_new [TarEntry] )
     ( vec_push [TarEntry] ents ( tar_entry_file `nurl.toml` ( bytes_from_str `[package]
@@ -251,14 +281,34 @@ Hello *there*.
         ( http_response_free resp )
         ( request_free req )
     }
+    // ── description fallback: manifest without description → README pitch ──
+    {
+        : ( Vec u ) gz2 ( mk_tarball_nodesc )
+        : HttpRequest req ( mk_req `POST` `/api/v1/publish` `` ( pub_headers ( string_data token ) `plainpkg` `1.0.0` `` ) gz2 )
+        : HttpResponse resp ( router_handle r req )
+        ( check == . resp status 200 `descless publish 200` )
+        ( http_response_free resp )
+        ( request_free req )
+    }
+    {
+        : HttpRequest req ( mk_req `GET` `/api/v1/search` `q=quiet` ( no_headers ) ( vec_new [u] ) )
+        : HttpResponse resp ( router_handle r req )
+        : String b ( resp_body_str resp )
+        ( check ( string_contains b `"name":"plainpkg"` ) `README-pitch is searchable` )
+        ( check ( string_contains b `A quiet little fixture package. Second pitch line.` ) `pitch joined, bold stripped` )
+        ( check ! ( string_contains b `must not leak` ) `only the first paragraph indexed` )
+        ( string_free b )
+        ( http_response_free resp )
+        ( request_free req )
+    }
 
     // ── stats ──
     {
         : HttpRequest req ( mk_req `GET` `/api/v1/stats` `` ( no_headers ) ( vec_new [u] ) )
         : HttpResponse resp ( router_handle r req )
         : String b ( resp_body_str resp )
-        ( check ( string_contains b `"packages":1` ) `stats packages` )
-        ( check ( string_contains b `"versions":1` ) `stats versions` )
+        ( check ( string_contains b `"packages":2` ) `stats packages` )
+        ( check ( string_contains b `"versions":2` ) `stats versions` )
         ( string_free b )
         ( http_response_free resp )
         ( request_free req )
