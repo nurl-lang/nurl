@@ -400,6 +400,14 @@ def t_tools_call_api(c: Client) -> None:
     assert_true("query reports match count", "declaration(s) match" in text)
     assert_true("query finds the dialect struct", "CSVDialect" in text)
 
+    # 0-hit widening: 'calculator' exists in examples but no stdlib
+    # declaration carries it — the same reply must surface the example.
+    env = _tool_call(c, "nurl_api", {"query": "calculator"})
+    text = _tool_text(env)
+    assert_true("0-hit reports widening", "widened the search" in text)
+    assert_true("0-hit lists the example", "examples/calculator.nu" in text)
+    assert_true("example carries its blurb", "expression evaluator" in text)
+
     # Errors: unknown module, and neither argument.
     env = _tool_call(c, "nurl_api", {"module": "ext/zzz-nope.nu"})
     assert_true("unknown module errors", bool(env.get("result", {}).get("isError")))

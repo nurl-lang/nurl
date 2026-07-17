@@ -10,6 +10,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- MCP `nurl_api` widens a zero-hit query automatically: when no stdlib
+  declaration matches, the same AND-terms are matched against example
+  programs (file granularity, with each file's header blurb) and the
+  package registry (per-term name/description search, de-duplicated) —
+  in the same reply, so "is there anything about X" never needs a second
+  call.
+
 - MCP `nurl_grep` ranks word-boundary matches first, by default and with
   no flags: lines where the pattern's neighbors are not letters (digits,
   underscore, punctuation and line edges all count as boundaries — `mcp`

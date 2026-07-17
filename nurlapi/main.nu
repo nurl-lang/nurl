@@ -4604,6 +4604,200 @@ s combined_stdout s combined_stderr → v {
     ( vec_free_with [String] parts \ String p → v { ( string_free p ) } )
 }
 
+// ── 0-hit widening: examples + the package registry ──────────────────
+//
+// A model asking "is there anything about X" should not need a second
+// tool call when the stdlib has no declaration for X. On a 0-hit query
+// the same AND-terms are matched against each example FILE (path +
+// content — examples are whole programs, so file granularity is the
+// useful one) and against the registry (per-term name/description
+// search, de-duplicated), and whatever exists is appended to the reply.
+
+// List matching examples as `examples/<rel> — <header blurb>`. Returns
+// the number shown (≤ 15).
+@ __api_fallback_examples ( Vec String ) terms String out → i {
+    : String dir ( get_examples_dir )
+    : Json files ( json_arr_new )
+    ( __walk_nu_files files ( string_data dir ) `` )
+    : i nf ( json_arr_len files )
+    : ~ i shown 0
+    : ~ i k 0
+    ~ & < k nf < shown 15 {
+        ?? ( json_arr_get files k ) {
+            T fo → {
+                : ~ s rel ``
+                ?? ( json_obj_get fo `path` ) {
+                    T pj → { ? ( json_is_str pj ) { = rel ( json_as_str pj ) } {} }
+                    F _ → {}
+                }
+                ? > ( nurl_str_len rel ) 0 {
+                    : String fp ( path_join ( string_data dir ) rel )
+                    : !( Vec u ) IoErr rd ( read_file_bytes ( string_data fp ) )
+                    ( string_free fp )
+                    ?? rd {
+                        T bytes → {
+                            : String src ( bytes_to_str bytes )
+                            ( vec_free [u] bytes )
+                            : String hay ( string_with_cap + ( string_len src ) 64 )
+                            ( string_push_str hay rel )
+                            ( string_push_char hay 32 )
+                            ( string_push_str hay ( string_data src ) )
+                            : String hay_lc ( string_to_lower hay )
+                            ( string_free hay )
+                            ? ( __api_terms_match hay_lc terms ) {
+                                ? == shown 0 { ( string_push_str out `Examples containing every term:\n` ) } {}
+                                ( string_push_str out `  examples/` )
+                                ( string_push_str out rel )
+                                // Blurb: the file's first `//` header line.
+                                : s sraw ( string_data src )
+                                ? & >= ( string_len src ) 2 & == ( nurl_str_get sraw 0 ) 47 == ( nurl_str_get sraw 1 ) 47 {
+                                    : ~ i b 2
+                                    ~ & < b ( string_len src ) | == ( nurl_str_get sraw b ) 47 == ( nurl_str_get sraw b ) 32 { = b + b 1 }
+                                    ( string_push_str out ` — ` )
+                                    : ~ i e b
+                                    ~ & & < e ( string_len src ) < - e b 100 != ( nurl_str_get sraw e ) 10 { = e + e 1 }
+                                    : ~ i j b
+                                    ~ < j e {
+                                        ( string_push_char out ( nurl_str_get sraw j ) )
+                                        = j + j 1
+                                    }
+                                } {}
+                                ( string_push_char out 10 )
+                                = shown + shown 1
+                            } {}
+                            ( string_free hay_lc )
+                            ( string_free src )
+                        }
+                        F _ → {}
+                    }
+                } {}
+            }
+            F _ → {}
+        }
+        = k + k 1
+    }
+    ( json_free files )
+    ( string_free dir )
+    ^ shown
+}
+
+// Registry search per term (≤ 3 terms), de-duplicated by package name.
+// Returns the number of packages listed.
+@ __api_fallback_packages ( Vec String ) terms String out → i {
+    : ( Vec String ) seen ( vec_new [String] )
+    : ~ i shown 0
+    : i tn ( vec_len [String] terms )
+    : ~ i tk 0
+    ~ & < tk tn < tk 3 {
+        ?? ( vec_get [String] terms tk ) {
+            T t → {
+                ? > ( string_len t ) 0 {
+                    : String url ( string_with_cap 128 )
+                    : String regbase ( env_var_or `NURL_REGISTRY` `https://reg.nurl-lang.org/` )
+                    ( string_push_str url ( string_data regbase ) )
+                    ( string_free regbase )
+                    ? != ( string_get url - ( string_len url ) 1 ) 47 { ( string_push_char url 47 ) } {}
+                    ( string_push_str url `api/v1/search?q=` )
+                    : String enc ( url_percent_encode ( string_data t ) )
+                    ( string_push_str url ( string_data enc ) )
+                    ( string_free enc )
+                    : !Response HttpErr r ( http_get ( string_data url ) )
+                    ( string_free url )
+                    ?? r {
+                        T resp → {
+                            ?? ( json_parse ( http_body_str resp ) ) {
+                                T root → {
+                                    ?? ( json_obj_get root `results` ) {
+                                        T arr → {
+                                            : i n ( json_arr_len arr )
+                                            : ~ i k 0
+                                            ~ < k n {
+                                                ?? ( json_arr_get arr k ) {
+                                                    T o → {
+                                                        : ~ s nm ``
+                                                        ?? ( json_obj_get o `name` ) {
+                                                            T nj → { ? ( json_is_str nj ) { = nm ( json_as_str nj ) } {} }
+                                                            F _ → {}
+                                                        }
+                                                        ? & > ( nurl_str_len nm ) 0 ! ( __vec_has_str_api seen nm ) {
+                                                            ( vec_push [String] seen ( string_from nm ) )
+                                                            ? == shown 0 { ( string_push_str out `Registry packages matching (name/description):\n` ) } {}
+                                                            ( string_push_str out `  package ` )
+                                                            ( string_push_str out nm )
+                                                            ?? ( json_obj_get o `version` ) {
+                                                                T vj → {
+                                                                    ? ( json_is_str vj ) {
+                                                                        ( string_push_char out 32 )
+                                                                        ( string_push_str out ( json_as_str vj ) )
+                                                                    } {}
+                                                                }
+                                                                F _ → {}
+                                                            }
+                                                            ?? ( json_obj_get o `description` ) {
+                                                                T dj → {
+                                                                    ? ( json_is_str dj ) {
+                                                                        : s d ( json_as_str dj )
+                                                                        : i dn ( nurl_str_len d )
+                                                                        ? > dn 0 {
+                                                                            ( string_push_str out ` — ` )
+                                                                            : ~ i keep ? > dn 160 160 dn
+                                                                            : ~ i j 0
+                                                                            ~ < j keep {
+                                                                                : i c ( nurl_str_get d j )
+                                                                                ( string_push_char out ? == c 10 32 c )
+                                                                                = j + j 1
+                                                                            }
+                                                                            ? > dn 160 { ( string_push_str out `…` ) } {}
+                                                                        } {}
+                                                                    } {}
+                                                                }
+                                                                F _ → {}
+                                                            }
+                                                            ( string_push_char out 10 )
+                                                            = shown + shown 1
+                                                        } {}
+                                                    }
+                                                    F _ → {}
+                                                }
+                                                = k + k 1
+                                            }
+                                        }
+                                        F _ → {}
+                                    }
+                                    ( json_free root )
+                                }
+                                F _ → {}
+                            }
+                            ( response_free resp )
+                        }
+                        F _ → {}
+                    }
+                } {}
+            }
+            F _ → {}
+        }
+        = tk + tk 1
+    }
+    ( vec_free_with [String] seen \ String v → v { ( string_free v ) } )
+    ^ shown
+}
+
+// Borrow-safe contains for the dedupe list above.
+@ __vec_has_str_api ( Vec String ) v s want → b {
+    : i n ( vec_len [String] v )
+    : ~ i k 0
+    ~ < k n {
+        ?? ( vec_get [String] v k ) {
+            T e → {
+                ? != 0 ( nurl_str_eq ( string_data e ) want ) { ^ T } {}
+            }
+            F _ → {}
+        }
+        = k + k 1
+    }
+    ^ F
+}
+
 @ __mcp_tool_api Json args → Json {
     : s module ( __mcp_args_get `module` args `` )
     : s query ( __mcp_args_get `query` args `` )
@@ -4692,7 +4886,15 @@ s combined_stdout s combined_stderr → v {
     ( string_push_str hdr `'.\n\n` )
     ( string_push_str hdr ( string_data out ) )
     ? == matched 0 {
-        ( string_push_str hdr `No matches — terms are AND-ed substrings over signature + doc comment + module path; try fewer or shorter terms.\n` )
+        // Widen rather than shrug: the same terms against example files
+        // and the package registry, in the same reply.
+        ( string_push_str hdr `No stdlib declaration matches — widened the search:\n\n` )
+        : i ex_n ( __api_fallback_examples terms hdr )
+        ? > ex_n 0 { ( string_push_char hdr 10 ) } {}
+        : i pk_n ( __api_fallback_packages terms hdr )
+        ? == + ex_n pk_n 0 {
+            ( string_push_str hdr `Nothing in examples or the registry either — terms are AND-ed substrings; try fewer or shorter terms, or nurl_grep for raw line search.\n` )
+        } {}
     } {}
     ? > matched emitted {
         ( string_push_str hdr `… ` )
@@ -4713,7 +4915,7 @@ s combined_stdout s combined_stderr → v {
     ( json_obj_set props `module`
     ( __mcp_prop `string` `Render ONE module's API surface (signatures, doc comments, full type definitions — no function bodies). A nurl_list_stdlib path, e.g. 'ext/csv.nu'.` ) )
     ( json_obj_set props `query`
-    ( __mcp_prop `string` `Search every stdlib module's declarations instead: space-separated terms, ALL must occur (case-insensitive) in a declaration's signature + doc comment + module path. Ignored when 'module' is set.` ) )
+    ( __mcp_prop `string` `Search every stdlib module's declarations instead: space-separated terms, ALL must occur (case-insensitive) in a declaration's signature + doc comment + module path. On zero hits the search widens automatically to example programs and registry packages (name + description) in the same reply. Ignored when 'module' is set.` ) )
     ( json_obj_set schema `properties` props )
     ^ schema
 }
