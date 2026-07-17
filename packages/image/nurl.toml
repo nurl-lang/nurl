@@ -1,6 +1,6 @@
 [package]
 name = "image"
-version = "0.4.1"
+version = "0.4.2"
 description = "Pure-NURL image codecs + raster ops — decode, encode and transform images with no native library and no ImageMagick/ffmpeg shell-out. PNG decode covers the complete still-image matrix: bit depths 1/2/4/8/16, grey/RGB/palette/grey+alpha/RGBA, Adam7 interlacing, tRNS transparency (palette alpha and colour keys), all five scanline filters; png_encode writes lossless 8-bit PNGs. JPEG decode handles both baseline (SOF0/SOF1) and PROGRESSIVE (SOF2) Huffman JPEGs — any 4:4:4/4:2:2/4:2:0/4:1:1 subsampling, restart intervals, spectral selection + successive approximation — matching libjpeg to within IDCT rounding; jpeg_encode writes baseline JFIF at quality 1-100 (4:4:4/4:2:2/4:2:0, Annex K tables, loss profile matches Pillow's encoder). PPM (P5/P6) both ways. ops.nu has the raster toolkit every vision pipeline hand-rolls: bilinear/box/nearest resize, crop, flips, rotations, channel conversion (BT.601), fill/rect/line drawing, alpha blit, packed 0xRRGGBBAA pixel access — all clipped and bounds-checked. image_load/image_decode sniff the format; image_error says why a decode failed. Ships an img CLI (info/convert/resize with keep-aspect specs). Fuzz-hardened under ASan: truncation/mutation sweeps across all decoders, dimension caps, no OOB/hang/leak — malformed input is a clean None, never a crash. The front door for objdet, yoloe and chart."
 license = "MIT OR Apache-2.0"
 
