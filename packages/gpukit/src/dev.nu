@@ -168,15 +168,28 @@ $ `kernels.nu`  // _gk_partial_threads / _gk_zeros
 // ── Raw device launch (no marshalling) ────────────────────────────────
 
 // Compile-cached launch over pre-built args (device pointers via
-// gk_arg_dev, scalars via gpu_arg_i64/_i32/_f32). Syncs before returning.
+// gk_arg_dev, scalars via gpu_arg_i64/_i32/_f32). Syncs before returning
+// unless autosync is off (below).
 @ gk_arg_dev GkBuf b → i { ^ . b dptr }
+
+// Autosync: gk_run_dev (and every gkd_* kernel on top of it) normally
+// syncs the device after each launch. An executor that chains hundreds of
+// launches can turn this off, launch away, and gk_sync once at the end —
+// the CUDA stream serialises kernels, and downloads synchronise
+// implicitly; the CPU backend runs launches synchronously either way.
+: ~ b g_gk_autosync T
+
+@ gk_autosync b on → v { = g_gk_autosync on }
+
+@ gk_sync * GpuKit kit → b { ^ == ( gpu_sync . kit gpu ) 0 }
 
 @ gk_run_dev * GpuKit kit s src s name i grid i block ( Vec i ) args → b {
     ? ( gk_ok kit ) {} { ^ F }
     : GpuKernel kn ( _gk_get_kernel kit src name )
     ? ( gpu_kernel_ok kn ) {} { ^ F }
     ? == ( gpu_launch kn grid block args ) 0 {} { ^ F }
-    ^ == ( gpu_sync . kit gpu ) 0
+    ? g_gk_autosync { ^ == ( gpu_sync . kit gpu ) 0 } {}
+    ^ T
 }
 
 // ── Elementwise binary with scalar broadcast ──────────────────────────
