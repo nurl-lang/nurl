@@ -47,7 +47,7 @@ $ `tensor.nu`
 
 // ── Broadcasting ──────────────────────────────────────────────────────
 
-@ __t_bshape ( Vec i ) a ( Vec i ) b → ?( Vec i ) {
+@ _t_bshape ( Vec i ) a ( Vec i ) b → ?( Vec i ) {
     : i na ( vec_len [i] a )
     : i nb ( vec_len [i] b )
     : i nd ? > na nb { na } { nb }
@@ -71,7 +71,7 @@ $ `tensor.nu`
 }
 
 // Effective strides of `shape` aligned into `nd` output dims (0 where broadcast).
-@ __t_eff_strides ( Vec i ) shape i nd → ( Vec i ) {
+@ _t_eff_strides ( Vec i ) shape i nd → ( Vec i ) {
     : i n ( vec_len [i] shape )
     : ( Vec i ) base ( _t_strides shape )
     : ( Vec i ) eff ( _ivec_t nd 0 )
@@ -96,12 +96,12 @@ $ `tensor.nu`
 }
 
 @ __t_binop Tensor a Tensor b i op → ?Tensor {
-    ?? ( __t_bshape . a shape . b shape ) {
+    ?? ( _t_bshape . a shape . b shape ) {
         T oshape → {
             : i nd ( vec_len [i] oshape )
             : ( Vec i ) ost ( _t_strides oshape )
-            : ( Vec i ) ae ( __t_eff_strides . a shape nd )
-            : ( Vec i ) be ( __t_eff_strides . b shape nd )
+            : ( Vec i ) ae ( _t_eff_strides . a shape nd )
+            : ( Vec i ) be ( _t_eff_strides . b shape nd )
             : i total ( _t_prod oshape )
             : i rdt ( __t_result_dtype a b )
             : ( Vec f ) out ( vec_with_cap [f] ? > total 0 { total } { 1 } )
@@ -402,7 +402,7 @@ $ `tensor.nu`
 
 // Batch strides of `shape` (its first ndim-2 dims), aligned into `ndb`
 // output batch dims with broadcasting (0 where the batch dim is 1 or padded).
-@ __t_batch_eff ( Vec i ) shape i ndb → ( Vec i ) {
+@ _t_batch_eff ( Vec i ) shape i ndb → ( Vec i ) {
     : i n ( vec_len [i] shape )
     : i nbatch - n 2
     : ( Vec i ) full ( _t_strides shape )
@@ -417,7 +417,7 @@ $ `tensor.nu`
     ^ eff
 }
 
-@ __t_take_head ( Vec i ) shape i cnt → ( Vec i ) {
+@ _t_take_head ( Vec i ) shape i cnt → ( Vec i ) {
     : ( Vec i ) o ( vec_with_cap [i] ? > cnt 0 { cnt } { 1 } )
     : ~ i k 0
     ~ < k cnt { ( vec_push [i] o ( _ti shape k ) ) = k + k 1 }
@@ -433,17 +433,17 @@ $ `tensor.nu`
     : i K ( _ti . a shape - na 1 )
     : i N ( _ti . b shape - nb 1 )
     ? == K ( _ti . b shape - nb 2 ) {} { ^ @ ?Tensor { F } }
-    : ( Vec i ) ba ( __t_take_head . a shape - na 2 )
-    : ( Vec i ) bb ( __t_take_head . b shape - nb 2 )
-    : ?( Vec i ) bso ( __t_bshape ba bb )
+    : ( Vec i ) ba ( _t_take_head . a shape - na 2 )
+    : ( Vec i ) bb ( _t_take_head . b shape - nb 2 )
+    : ?( Vec i ) bso ( _t_bshape ba bb )
     ( vec_free [i] ba ) ( vec_free [i] bb )
     ?? bso {
         T bshape → {
             : i ndb ( vec_len [i] bshape )
             : i nbatch ( _t_prod bshape )
             : ( Vec i ) bst ( _t_strides bshape )
-            : ( Vec i ) aeff ( __t_batch_eff . a shape ndb )
-            : ( Vec i ) beff ( __t_batch_eff . b shape ndb )
+            : ( Vec i ) aeff ( _t_batch_eff . a shape ndb )
+            : ( Vec i ) beff ( _t_batch_eff . b shape ndb )
             : i mk * M K
             : i kn * K N
             : i mn * M N

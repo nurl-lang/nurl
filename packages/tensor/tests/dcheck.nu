@@ -107,12 +107,140 @@ $ `src/ops.nu`
     ( tensor_free a ) ( tensor_free w )
 }
 
+@ dsh3 i a i b i c → ( Vec i ) {
+    : ( Vec i ) v ( vec_new [i] )
+    ( vec_push [i] v a ) ( vec_push [i] v b ) ( vec_push [i] v c )
+    ^ v
+}
+
+@ dsh4 i a i b i c i d → ( Vec i ) {
+    : ( Vec i ) v ( vec_new [i] )
+    ( vec_push [i] v a ) ( vec_push [i] v b ) ( vec_push [i] v c ) ( vec_push [i] v d )
+    ^ v
+}
+
+// arange(n)·mul + add, reshaped (adopts `shape`), uploaded to the device.
+@ mkdev * GpuKit kit i dt i n f mul f add0 ( Vec i ) shape → DTensor {
+    : Tensor t0 ( tensor_arange dt n )
+    : Tensor t1 ( tensor_muls t0 mul )
+    ( tensor_free t0 )
+    : Tensor t2 ( tensor_adds t1 add0 )
+    ( tensor_free t1 )
+    : Tensor t ?? ( tensor_reshape t2 shape ) { T r → r F _ → ( tensor_clone t2 ) }
+    ( tensor_free t2 )
+    : DTensor d ( tensor_to_device kit t )
+    ( tensor_free t )
+    ^ d
+}
+
+// M5 ops: broadcast elementwise, batched matmul (uniform / broadcast /
+// general), gather/scatter, conv2d, maxpool2d. Inputs mirror the gpukit
+// opscheck battery so the references are shared shapes.
+@ run_m5 * GpuKit kit i dt s tag → v {
+    // broadcast add: (2,3) + (3,)  and outer (2,1)+(1,3)
+    : DTensor x23 ( mkdev kit dt 6 1.0 0.0 ( dsh2 2 3 ) )
+    : DTensor y3 ( mkdev kit dt 3 10.0 1.0 ( dsh2 1 3 ) )
+    : DTensor bca ( dun ( dtensor_add kit x23 y3 ) )
+    ( dshow kit tag `_bcadd` bca )
+    : DTensor p21 ( mkdev kit dt 2 1.0 0.0 ( dsh2 2 1 ) )
+    : DTensor q13 ( mkdev kit dt 3 1.0 1.0 ( dsh2 1 3 ) )
+    : DTensor bo ( dun ( dtensor_mul kit p21 q13 ) )
+    ( dshow kit tag `_bcouter` bo )
+
+    // bmm: uniform (2,2,3)@(2,3,2); single-matrix broadcast; general (2,1)×(1,3)
+    : DTensor bA ( mkdev kit dt 12 1.0 0.0 ( dsh3 2 2 3 ) )
+    : DTensor bB ( mkdev kit dt 12 1.0 1.0 ( dsh3 2 3 2 ) )
+    : DTensor bm ( dun ( dtensor_bmm kit bA bB ) )
+    ( dshow kit tag `_bmm` bm )
+    : DTensor bS ( mkdev kit dt 6 1.0 1.0 ( dsh2 3 2 ) )
+    : DTensor bm2 ( dun ( dtensor_bmm kit bA bS ) )
+    ( dshow kit tag `_bmmb` bm2 )
+    : DTensor gA ( mkdev kit dt 12 1.0 0.0 ( dsh4 2 1 2 3 ) )
+    : DTensor gB ( mkdev kit dt 18 1.0 1.0 ( dsh4 1 3 3 2 ) )
+    : DTensor bm3 ( dun ( dtensor_bmm kit gA gB ) )
+    ( dshow kit tag `_bmmg` bm3 )
+
+    // gather / scatter along axis 1 of (2,4,3), idx [2,0,-1]
+    : DTensor gd ( mkdev kit dt 24 1.0 0.0 ( dsh3 2 4 3 ) )
+    : ( Vec i ) idx ( dsh3 2 0 -1 )
+    : DTensor gth ( dun ( dtensor_gather kit gd 1 idx ) )
+    ( dshow kit tag `_gather` gth )
+    : DTensor upd ( mkdev kit dt 18 1.0 100.0 ( dsh3 2 3 3 ) )
+    : DTensor sct ( dun ( dtensor_scatter kit gd 1 idx upd ) )
+    ( dshow kit tag `_scatter` sct )
+    ( vec_free [i] idx )
+
+    // conv2d: x(2,4,4)·0.25, w(3,2,3,3)·0.125−1, bias(3), pad 1 stride 1
+    : DTensor cx ( mkdev kit dt 32 0.25 0.0 ( dsh3 2 4 4 ) )
+    : DTensor cw ( mkdev kit dt 54 0.125 -1.0 ( dsh4 3 2 3 3 ) )
+    : DTensor cb ( mkdev kit dt 3 0.5 0.5 ( dsh2 1 3 ) )
+    : DTensor cv ( dun ( dtensor_conv2d_b kit cx cw cb 1 1 1 1 ) )
+    ( dshow kit tag `_conv` cv )
+    : DTensor cnb ( dun ( dtensor_conv2d kit cx cw 0 0 2 2 ) )
+    ( dshow kit tag `_convs2` cnb )
+
+    // maxpool2d: k2 s2 over the same x
+    : DTensor pl ( dun ( dtensor_maxpool2d kit cx 2 2 2 2 0 0 ) )
+    ( dshow kit tag `_pool` pl )
+
+    ( dtensor_free cx ) ( dtensor_free cw ) ( dtensor_free cb ) ( dtensor_free cv )
+    ( dtensor_free cnb ) ( dtensor_free pl )
+    ( dtensor_free x23 ) ( dtensor_free y3 ) ( dtensor_free bca ) ( dtensor_free p21 )
+    ( dtensor_free q13 ) ( dtensor_free bo )
+    ( dtensor_free bA ) ( dtensor_free bB ) ( dtensor_free bm ) ( dtensor_free bS )
+    ( dtensor_free bm2 ) ( dtensor_free gA ) ( dtensor_free gB ) ( dtensor_free bm3 )
+    ( dtensor_free gd ) ( dtensor_free gth ) ( dtensor_free upd ) ( dtensor_free sct )
+}
+
+// Fail-closed guards: every call is INVALID and must return F. Prints
+// guards|1|<F count>,<expected>.
+@ ck_f ? DTensor o * u cnt → v {
+    ?? o { T d → { ( dtensor_free d ) } F _ → { ( nurl_poke cnt 0 + ( nurl_peek cnt 0 ) 1 ) } }
+}
+
+@ run_guards * GpuKit kit → v {
+    : i want 5
+    : *u cnt ( nurl_alloc 8 )
+    ( nurl_poke cnt 0 0 )
+    : DTensor a ( mkdev kit TE_F32 6 1.0 0.0 ( dsh2 2 3 ) )
+    : DTensor b ( mkdev kit TE_F32 8 1.0 0.0 ( dsh2 2 4 ) )
+    : DTensor w ( mkdev kit TE_F32 54 1.0 0.0 ( dsh4 3 2 3 3 ) )
+    // 1: shapes (2,3) and (2,4) are not broadcast-compatible
+    ( ck_f ( dtensor_add kit a b ) cnt )
+    // 2: mixed dtypes
+    : DTensor a64 ( mkdev kit TE_F64 6 1.0 0.0 ( dsh2 2 3 ) )
+    ( ck_f ( dtensor_add kit a a64 ) cnt )
+    // 3: gather with a bad axis
+    : ( Vec i ) ix ( dsh2 0 1 )
+    ( ck_f ( dtensor_gather kit a 5 ix ) cnt )
+    // 4: gather with an out-of-range index
+    : ( Vec i ) ix2 ( dsh2 0 3 )
+    ( ck_f ( dtensor_gather kit a 1 ix2 ) cnt )
+    // 5: conv with Cin mismatch (x has 2 rows as (1,2,3), w wants Cin 2 → x Cin 1)
+    : DTensor x1 ( mkdev kit TE_F32 6 1.0 0.0 ( dsh3 1 2 3 ) )
+    ( ck_f ( dtensor_conv2d kit x1 w 0 0 1 1 ) cnt )
+    : i got ( nurl_peek cnt 0 )
+    ( nurl_print `guards|1|` )
+    ( nurl_print ( nurl_str_int got ) )
+    ( nurl_print `,` )
+    ( nurl_print ( nurl_str_int want ) )
+    ( nurl_print `\n` )
+    ( nurl_free cnt )
+    ( vec_free [i] ix )
+    ( vec_free [i] ix2 )
+    ( dtensor_free a ) ( dtensor_free b ) ( dtensor_free w )
+    ( dtensor_free a64 ) ( dtensor_free x1 )
+}
+
 @ main → i {
     : *GpuKit kit ( gk_open 0 )
     ? ( gk_ok kit ) {} { ( nurl_print `SKIP no device\n` ) ( gk_close kit ) ^ 0 }
     ( nurl_print `backend|` ) ( nurl_print ( gk_backend kit ) ) ( nurl_print `\n` )
     ( run_dtype kit TE_F32 `f32` )
     ( run_dtype kit TE_F64 `f64` )
+    ( run_m5 kit TE_F32 `f32` )
+    ( run_m5 kit TE_F64 `f64` )
+    ( run_guards kit )
     ( gk_close kit )
     ^ 0
 }
