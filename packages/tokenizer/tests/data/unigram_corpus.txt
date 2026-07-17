@@ -1,0 +1,26 @@
+Hello, world!
+Tämä on suomenkielinen testilause, jossa on ääkkösiä: äöå ÄÖÅ.
+The quick brown fox jumps over the lazy dog.
+你好世界，这是一个测试。
+日本語のテキストもトークン化できます。
+Привет, мир! Это тест на русском языке.
+مرحبا بالعالم، هذا اختبار
+🚀 emojis 😀🎉 and ½ symbols © ™ € — dashes…
+double  spaces   and	tab	characters
+ﬁ ligature ＦＵＬＬＷＩＤＴＨ ｈａｌｆ
+Ｎｏｒｍａｌｉｚａｔｉｏｎ: ①②③ Ⅳ Ⅴ ㎞ ㎡
+naïve café résumé Zürich Åbo
+a
+1234567890 3.14159 -42 1e10
+https://example.com/path?query=value&x=1
+snake_case camelCase kebab-case dot.notation
+<s> special </s> tokens <mask> inline <unk>
+   leading and trailing spaces   
+!"#$%&'()*+,-./:;<=>?@[\]^_`{|}~
+Sekalaista: 你好 mixed العربية scripts кириллица yhdessä lauseessa 🌍
+<mask>x
+x<mask>y
+ x
+a b
+<mask> x
+x <mask>

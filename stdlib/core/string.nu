@@ -132,6 +132,12 @@ $ `stdlib/core/char.nu`
 
 // Return byte at index `idx` (0 if out of range). `& 255` masks the
 // sign-extension that `# i u` introduces — caller gets 0..255.
+//
+// COST: this re-runs strlen(str) on EVERY call for the bounds check, so
+// a loop that walks a string with it is O(n²) — seconds on a 100 KB
+// input. In scan loops, hoist the length once and read through a raw
+// pointer instead:   : i n ( nurl_str_len s )   : *u P # *u s
+//                    … : i c & 255 # i . P k …
 @ nurl_str_get s str i idx → i {
     : i n ( strlen str )
     ? | < idx 0 >= idx n { ^ 0 } {}

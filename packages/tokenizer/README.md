@@ -15,7 +15,7 @@ $ tokenizer decode tokenizer.json 50258 50259 15947 456
 Hello there
 ```
 
-## Two engines, one shape
+## Three engines, one shape
 
 * **SentencePiece** for llama-family vocabularies: space-escape, highest-
   score adjacent merge in llama.cpp's exact selection order (leftmost on
@@ -23,6 +23,20 @@ Hello there
 * **byte-level BPE** for gpt2-family ones: the GPT-2 byte→unicode remap,
   the contraction/letter/digit/punct/whitespace pre-split (with the qwen2
   variant), lowest-merge-rank pairing.
+* **Unigram** for Hugging Face `tokenizer.json` models (XLM-RoBERTa /
+  BGE / multilingual-e5 family, `src/unigram.nu`): the sentencepiece
+  Precompiled charsmap normalizer (a darts-clone double-array trie of
+  NFKC-style replacements, decoded straight from the file), Metaspace
+  pre-tokenization, true Viterbi segmentation over piece
+  log-probabilities with fused unknowns, added tokens with lstrip/rstrip
+  semantics, and TemplateProcessing specials. Verified token-for-token
+  against Hugging Face `tokenizers` on a multilingual corpus:
+
+  ```
+  ( uni_load `tokenizer.json` )        → !*Unigram String
+  ( uni_encode u `text…` T ids )       → ids incl. <s> … </s>
+  ( uni_free u )
+  ```
 
 **Special tokens are parsed inline.** A chat template writes
 `<|im_start|>` or `<start_of_turn>` into the prompt *as text*, and each

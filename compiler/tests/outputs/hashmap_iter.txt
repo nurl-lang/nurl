@@ -5,6 +5,6 @@ OUTPUT
 sum=10
 cnt=4
 keys=alpha bravo charlie delta 
-peek_one=delta
+peek_one=charlie
 empty=ok
 done

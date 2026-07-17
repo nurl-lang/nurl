@@ -7,8 +7,10 @@
 // out-of-range scalars), codepoint counting and indexing, an encoder, and
 // codepoint-aware substring / reverse that never cut a character in half.
 //
-// Bytes are read via `nurl_str_get`, which already masks to 0..255, so the
-// high bytes of a multi-byte sequence arrive unsigned.
+// Bytes are read through a raw pointer with a `& 255` mask, so the high
+// bytes of a multi-byte sequence arrive unsigned — and each access is
+// O(1). `utf8_decode` runs strlen once per call; scan loops should hoist
+// the length and use `utf8_decode_n`.
 //
 // Design: the decoder is total. On malformed input it yields the Unicode
 // replacement scalar U+FFFD with width 1 and ok=0, so a caller may either
@@ -33,10 +35,21 @@ $ `stdlib/core/vec.nu`
 // Decode the scalar starting at byte offset `pos`. `pos` must be a code-
 // point boundary; if it lands inside a sequence the byte is reported as a
 // 1-byte error so the caller can resynchronise.
+//
+// This wrapper runs strlen once per call; a loop that walks a long
+// string should hoist the length and call `utf8_decode_n` instead — the
+// old shape (strlen per byte access, up to five per char) made every
+// utf8 scan quadratic in the string length.
 @ utf8_decode s str i pos → Utf8Dec {
-    : i n ( nurl_str_len str )
+    ^ ( utf8_decode_n str ( nurl_str_len str ) pos )
+}
+
+// Same, with the byte length supplied by the caller (hoist it outside
+// the loop). Bytes are read through a raw pointer — O(1) per access.
+@ utf8_decode_n s str i n i pos → Utf8Dec {
     ? >= pos n { ^ @ Utf8Dec { 0 0 0 } } {}  // end of string
-    : i b0 ( nurl_str_get str pos )
+    : *u P # *u str
+    : i b0 & 255 # i . P pos
 
     // 1-byte: 0xxxxxxx
     ? < b0 128 { ^ @ Utf8Dec { b0 1 1 } } {}
@@ -46,7 +59,7 @@ $ `stdlib/core/vec.nu`
     // 2-byte: 110xxxxx 10xxxxxx
     ? < b0 224 {
         ? >= + pos 1 n { ^ @ Utf8Dec { UTF8_REPLACEMENT 1 0 } } {}
-        : i b1 ( nurl_str_get str + pos 1 )
+        : i b1 & 255 # i . P + pos 1
         ? ! ( __utf8_is_cont b1 ) { ^ @ Utf8Dec { UTF8_REPLACEMENT 1 0 } } {}
         : i cp | << & b0 31 6 & b1 63
         ? < cp 128 { ^ @ Utf8Dec { UTF8_REPLACEMENT 1 0 } } {}  // overlong
@@ -56,8 +69,8 @@ $ `stdlib/core/vec.nu`
     // 3-byte: 1110xxxx 10xxxxxx 10xxxxxx
     ? < b0 240 {
         ? >= + pos 2 n { ^ @ Utf8Dec { UTF8_REPLACEMENT 1 0 } } {}
-        : i b1 ( nurl_str_get str + pos 1 )
-        : i b2 ( nurl_str_get str + pos 2 )
+        : i b1 & 255 # i . P + pos 1
+        : i b2 & 255 # i . P + pos 2
         ? | ! ( __utf8_is_cont b1 ) ! ( __utf8_is_cont b2 )
         { ^ @ Utf8Dec { UTF8_REPLACEMENT 1 0 } } {}
         : i cp | | << & b0 15 12 << & b1 63 6 & b2 63
@@ -70,9 +83,9 @@ $ `stdlib/core/vec.nu`
     // 4-byte: 11110xxx 10xxxxxx 10xxxxxx 10xxxxxx
     ? < b0 248 {
         ? >= + pos 3 n { ^ @ Utf8Dec { UTF8_REPLACEMENT 1 0 } } {}
-        : i b1 ( nurl_str_get str + pos 1 )
-        : i b2 ( nurl_str_get str + pos 2 )
-        : i b3 ( nurl_str_get str + pos 3 )
+        : i b1 & 255 # i . P + pos 1
+        : i b2 & 255 # i . P + pos 2
+        : i b3 & 255 # i . P + pos 3
         ? | | ! ( __utf8_is_cont b1 ) ! ( __utf8_is_cont b2 ) ! ( __utf8_is_cont b3 )
         { ^ @ Utf8Dec { UTF8_REPLACEMENT 1 0 } } {}
         : i cp | | | << & b0 7 18 << & b1 63 12 << & b2 63 6 & b3 63
@@ -91,7 +104,7 @@ $ `stdlib/core/vec.nu`
     : ~ i pos 0
     : ~ b ok T
     ~ & < pos n ok {
-        : Utf8Dec d ( utf8_decode str pos )
+        : Utf8Dec d ( utf8_decode_n str n pos )
         ? == . d ok 0 { = ok F } { = pos + pos . d width }
     }
     ^ ok
@@ -103,7 +116,7 @@ $ `stdlib/core/vec.nu`
     : ~ i pos 0
     : ~ i count 0
     ~ < pos n {
-        : Utf8Dec d ( utf8_decode str pos )
+        : Utf8Dec d ( utf8_decode_n str n pos )
         ? == . d ok 0 { ^ -1 } {}
         = count + count 1
         = pos + pos . d width
@@ -121,7 +134,7 @@ $ `stdlib/core/vec.nu`
     : ~ i k 0
     ~ < k n {
         ? >= pos blen { ^ -1 } {}
-        : Utf8Dec d ( utf8_decode str pos )
+        : Utf8Dec d ( utf8_decode_n str blen pos )
         ? == . d ok 0 { ^ -1 } {}
         = pos + pos . d width
         = k + k 1
@@ -181,7 +194,7 @@ $ `stdlib/core/vec.nu`
     : ( Vec i ) out ( vec_new [i] )
     : ~ i pos 0
     ~ < pos n {
-        : Utf8Dec d ( utf8_decode str pos )
+        : Utf8Dec d ( utf8_decode_n str n pos )
         ( vec_push [i] out . d cp )
         = pos + pos ? > . d width 0 . d width 1
     }
@@ -212,12 +225,13 @@ $ `stdlib/core/vec.nu`
     : ~ i pos start
     : ~ i k 0
     : String out ( string_with_cap 16 )
+    : *u P # *u str
     ~ & < k count < pos blen {
-        : Utf8Dec d ( utf8_decode str pos )
+        : Utf8Dec d ( utf8_decode_n str blen pos )
         : i w ? > . d width 0 . d width 1
         : ~ i j 0
         ~ < j w {
-            ( string_push_char out ( nurl_str_get str + pos j ) )
+            ( string_push_char out & 255 # i . P + pos j )
             = j + j 1
         }
         = pos + pos w
