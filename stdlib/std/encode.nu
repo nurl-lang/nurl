@@ -233,12 +233,16 @@ $ `stdlib/core/errors.nu`
 // returns ! v ParseErr. Active alphabet selected by `url`.
 @ __b64_decode_into String out s str b url → !v ParseErr {
     : i len ( nurl_str_len str )
+    // Read through a raw pointer: nurl_str_get re-runs strlen on every
+    // call, which turns this loop quadratic on big inputs (a 300 KB
+    // charsmap blob took seconds).
+    : *u P # *u str
     : ~ i pad 0
     : ~ i acc 0
     : ~ i nbits 0
     : ~ i i 0
     ~ < i len {
-        : i c ( nurl_str_get str i )
+        : i c & 255 # i . P i
         = i + i 1
         // Skip ASCII whitespace: space, tab, lf, cr, ff, vt
         ? | | | | | == c 32 == c 9 == c 10 == c 13 == c 12 == c 11 {} {

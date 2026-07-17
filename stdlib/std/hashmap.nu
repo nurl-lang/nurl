@@ -77,17 +77,29 @@ $ `stdlib/core/string.nu`
 //
 // Returns 5381 (the djb2 seed) for a NULL or empty string so the
 // caller's downstream code doesn't need to branch.
+// FNV-1a (64-bit) with a murmur-style avalanche finisher. The map masks
+// the hash with a power of two, so only the LOW bits pick the slot — and
+// the previous djb2's low bits carried so little of the key that 250 k
+// real multilingual tokenizer pieces probed ~7× slower than well-spread
+// synthetic keys. FNV-1a plus two xorshift-multiply rounds pushes every
+// input byte into the low bits. (The finisher masks to 63 bits first so
+// the arithmetic `>>` behaves like a logical shift.)
 @ hash_string s str → i {
     ? == # i str 0 { ^ 5381 } {}
     : i n ( strlen str )
     : *u p # *u str
-    : ~ i h 5381
+    : ~ i h -3750763034362895579  // FNV-1a 64-bit offset basis
     : ~ i i 0
     ~ < i n {
-        // h * 33 + byte == (h << 5) + h + byte
-        = h + + << h 5 h & # i . p i 255
+        = h ^^ h & # i . p i 255
+        = h * h 1099511628211  // FNV-1a 64-bit prime
         = i + i 1
     }
+    = h & h 9223372036854775807
+    = h ^^ h >> h 31
+    = h * h -49064778989728563  // 0xff51afd7ed558ccd
+    = h & h 9223372036854775807
+    = h ^^ h >> h 29
     ^ h
 }
 
