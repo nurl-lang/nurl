@@ -6,9 +6,9 @@ license = "MIT OR Apache-2.0"
 
 [dependencies]
 iforest = { path = "../iforest", version = "^0.1" }
-gpu = { path = "../gpu", version = "^0.4" }
-http = { path = "../http", version = "^0.2" }
-cli = { path = "../cli", version = "^0.1" }
+gpu = { path = "../gpu", version = "^0.7.0" }
+http = { path = "../http", version = "^0.3.1" }
+cli = { path = "../cli", version = "^0.2.0" }
 gpukit = { path = "../gpukit", version = "^0.3" }
 
 # Runtime data staged into $NURL_HOME/share/anomaly/ on `nurlpkg install`.

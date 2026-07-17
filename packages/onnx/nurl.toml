@@ -6,4 +6,4 @@ license = "MIT OR Apache-2.0"
 
 [dependencies]
 tensor = { path = "../tensor", version = "^0.3" }
-gpu = { path = "../gpu", version = "^0.4" }
+gpu = { path = "../gpu", version = "^0.7.0" }

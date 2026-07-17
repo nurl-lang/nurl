@@ -6,7 +6,7 @@ license = "MIT OR Apache-2.0"
 
 [dependencies]
 gguf = { path = "../gguf", version = "^0.2" }
-safetensor = { path = "../safetensor", version = "^0.1" }
-tokenizer = { path = "../tokenizer", version = "^0.1" }
-gpu = { path = "../gpu", version = "^0.6" }
+safetensor = { path = "../safetensor", version = "^0.2.1" }
+tokenizer = { path = "../tokenizer", version = "^0.2.0" }
+gpu = { path = "../gpu", version = "^0.7.0" }
 http = { path = "../http", version = "^0.3" }
