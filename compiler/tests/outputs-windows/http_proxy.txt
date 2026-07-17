@@ -13,7 +13,7 @@ OUTPUT
   e1=ProxyUpstream
   e2=ProxyClientWrite
   e3=ProxyOther
-── __is_hop_by_hop ──
+── _is_hop_by_hop ──
   connection=T
   keep-alive=T
   proxy-authenticate=T
@@ -24,14 +24,14 @@ OUTPUT
   upgrade=T
   authorization=F
   content-type=F
-── __build_upstream_url ──
+── _build_upstream_url ──
   no_slash_path=https://api.example.com/v1/messages
   base_slash_path_slash=https://api.example.com/v1/messages
   base_slash_no_path_slash=https://api.example.com/v1/messages
   with_query=https://api.example.com/search?q=hello&n=10
   ssrf_userinfo=https://api.example.com/@evil.com/x
   ssrf_hostmerge=https://api.example.com/evil.com/x
-── __build_request_headers_blob ──
+── _build_request_headers_blob ──
   default_strip:
 Authorization: Bearer xyz
 
@@ -47,7 +47,7 @@ Content-Type: application/json
 Host: client.example.com
 
   END
-── __response_header_dropped ──
+── _response_header_dropped ──
   Connection=T
   Keep-Alive=T
   Transfer-Encoding=T

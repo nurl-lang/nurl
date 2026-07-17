@@ -8,6 +8,107 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.20.0] — 2026-07-18
+
+The **one kernel library** release: the ML stack's device layer is
+unified — gpukit's dev layer becomes the single dtype-generic kernel
+library that tensor, onnx and the new embedding server all run on
+(onnx's private kernel file is deleted outright, byte-identical outputs
+proving the move) — plus a Unigram tokenizer engine, a pure-NURL
+embedding server that is drop-in for a FastAPI/sentence-transformers
+service, three stdlib performance root-causes found by profiling real
+250 k-piece vocabularies, and the documentation site going live at
+docs.nurl-lang.org.
+
+### Added
+
+- **`utf8_decode_n`** (`stdlib/std/utf8.nu`) — `utf8_decode` with the
+  byte length supplied by the caller. The old shape re-ran `strlen` for
+  every byte access (up to five per character), which made every UTF-8
+  scan quadratic in the string length; `utf8_decode` now runs strlen
+  once and delegates, the module's own scan loops use the `_n` form,
+  and `nurl_str_get`'s O(strlen)-per-call cost is documented at its
+  definition with the pointer-read idiom to use in loops.
+- **gpukit 0.4.0** — the dev layer grows the full operator family a
+  CNN / transformer forward pass needs, lifted math-exact from onnx's
+  proven f32 kernels and generalised over the element type: `GK_I64`
+  buffers with exact `Vec i` host views, N-D stride-broadcast
+  elementwise (numpy broadcasting as a stride table, with a host-side
+  proof the strides stay in bounds), batched matmul with per-operand
+  batch broadcast, gather/scatter with ONNX index semantics, gemm
+  (alpha/beta/transB/bias), conv2d / convtranspose2d / maxpool2d,
+  batchnorm, layernorm, softmax over an interior axis, erf, clip,
+  leakyrelu, axis concat/slice, N-D transpose, nearest resize, expand,
+  L2 reduction, argmax, CLIP EOS read-out. Every wrapper validates
+  buffers/dtypes/sizes and fails closed. `gk_autosync`/`gk_sync` let an
+  executor chain hundreds of launches with one device sync at the end.
+  57 numpy-checked tests on CUDA **and** the CPU backend.
+- **tensor 0.4.0 (M5)** — DTensor reaches full ndarray coverage: numpy
+  broadcasting on the elementwise ops (one stride-broadcast launch, no
+  materialised expansion), `dtensor_bmm` with numpy batch broadcast,
+  `dtensor_gather`/`dtensor_scatter` (host indices validated before the
+  device is touched), `dtensor_conv2d`/`dtensor_maxpool2d`. One
+  broadcast implementation shared between host and device tensors.
+  33 device checks vs numpy; f64 results bit-identical CUDA ↔ CPU.
+- **tokenizer 0.3.0** — a third engine: Hugging Face `tokenizer.json`
+  **Unigram** models (XLM-RoBERTa / BGE / multilingual-e5). The
+  sentencepiece Precompiled charsmap normalizer (a darts-clone
+  double-array trie decoded straight from the file), Metaspace with
+  HF's exact prepend rule, true Viterbi segmentation over piece
+  log-probabilities with fused unknowns, added tokens with
+  lstrip/rstrip semantics, TemplateProcessing specials —
+  token-for-token identical to HF `tokenizers` on a 27-line
+  multilingual corpus (committed golden).
+- **embed 0.1.0** — the embedding server, pure NURL. Loads an
+  XLM-RoBERTa-family model directory (config.json + tokenizer.json +
+  f32 model.safetensors) and serves embeddings over HTTP, drop-in
+  compatible with the reference FastAPI/sentence-transformers service
+  (`POST/GET /create_embedding`, `/health`, Bearer auth with a
+  constant-time compare, JSON errors, hardened single-worker serving).
+  The forward pass is wired entirely from gpukit's `gkd_*` kernels —
+  the package ships no kernel sources. Verified at cosine 1.0000000
+  against sentence-transformers per row, cosine 1.00000000 against the
+  reference service container over HTTP, CPU ↔ CUDA cosine 1.0.
+- **Documentation site** — a VitePress site under `web-docs/`, deployed
+  to **docs.nurl-lang.org** by the "Publish Webdocs" workflow
+  (assets-only Cloudflare Worker; deploys on pushes touching
+  `web-docs/`).
+
+### Changed
+
+- **onnx 0.7.0 (M4b)** — `src/ops.nu` (24 private f32 kernels + an
+  eagerly-compiled kernel struct) is **deleted**; the executor
+  dispatches every node to gpukit's shared kernel library, compiles
+  lazily through gpukit's in-process + on-disk caches, and chains the
+  whole graph walk with a single device sync. Migration was gated on
+  byte-identical model outputs at every step (yoloe det+seg, tinyyolov2,
+  CLIP text encoder, promptable two-input) on both backends; wall-clock
+  unchanged. The gkd validation layer also exposed a latent bug: the
+  CLIP text-encoder export hardcodes `[1,77,-1]` reshapes, so token
+  batches > 1 made the old executor read 3× past the out-proj weight —
+  the new path fails closed with a diagnostic.
+- **`hash_string`** (`stdlib/std/hashmap.nu`) — djb2 → FNV-1a with a
+  murmur-style avalanche finisher. The map masks the hash with a power
+  of two, so only the low bits pick a slot — and djb2's low bits carry
+  so little of a real key that 250 002 multilingual tokenizer pieces
+  probed ~7× slower on insert (and ~20× on miss-heavy lookups) than
+  synthetic benchmark keys. Net effect with the utf8/base64 fixes:
+  loading that vocabulary went 3.4 s → 0.24 s and a 7 000-token encode
+  2.4 s → 0.13 s.
+
+### Fixed
+
+- **`b64_decode` was quadratic** — it read every input byte through
+  `nurl_str_get`, which re-runs `strlen` per call; a 300 KB
+  precompiled-charsmap blob took 2.1 s to decode. The loop reads
+  through a raw pointer now: linear.
+- **Windows golden corpus unstuck** — the `outputs-windows/` goldens
+  had not followed the `__`→`_` rename wave (http_extras, http_proxy),
+  the nurldoc multi-line-struct addition, or the `hash_string` change
+  (hashmap_iter's arbitrary-order peek), leaving `windows-tests` red
+  since before 0.19.0. Refreshed; only genuine platform differences
+  remain.
+
 ## [0.19.0] — 2026-07-17
 
 The **reachability** release: search that survives contact with a real

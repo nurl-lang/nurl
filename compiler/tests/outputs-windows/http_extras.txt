@@ -71,7 +71,7 @@ Content-Length: 0
 
 
 
-── __has_dotdot_segment ──
+── _has_dotdot_segment ──
   /a/b/c        = F
   /a/../b       = T
   /../etc       = T
