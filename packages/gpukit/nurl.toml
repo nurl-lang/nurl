@@ -1,6 +1,6 @@
 [package]
 name = "gpukit"
-version = "0.3.2"
+version = "0.3.3"
 description = "The ergonomic GPU-compute toolkit for NURL — a diamond facade over the `gpu` package that kills the marshalling boilerplate every GPU-using package re-invents. Where `gpu` is the low-level interface (open a device, JIT-compile a CUDA-C kernel via NVRTC or the host-C++ CPU backend, allocate/upload/download device buffers, build the argument vector, compute a grid, launch, sync, free), `gpukit` collapses the ~35 lines of that dance per kernel into a list of typed bindings and one `gk_run`: a GpuKit with a per-name kernel cache, `gk_in_f`/`gk_in_i`/`gk_out_f`/`gk_out_i` (and raw-buffer + i32/i64/f32 scalar) bindings, and a workhorse that compiles-once, allocates a device buffer per binding, uploads inputs, marshals args in declaration order, launches, syncs, downloads outputs, and frees everything. Ships a library of ready-made f64 kernels — elementwise add/sub/mul/div, a source-baked unary map, a bit-identical matmul, and reduce-sum / dot — so ML code never writes a kernel or a device buffer for the common cases. Adds no numerics of its own: a kernel runs bit-for-bit the same through gk_run as through hand-written gpu_* calls, preserving the gpu package's CUDA / CPU-backend / pure equivalence. Runs on the CPU backend when no CUDA device is present."
 license = "MIT OR Apache-2.0"
 
