@@ -1,5 +1,41 @@
 # Changelog
 
+## 0.4.0
+
+Dev-layer op family — the kernel library a full CNN / transformer forward
+pass needs, so tensor and onnx can share ONE set of device kernels
+(tensor M5 / onnx M4b groundwork):
+
+- **`GK_I64`** element type (`long long`) for index tensors, with exact
+  `gk_dbuf_upload_i` / `gk_dbuf_download_i` host views (`Vec i`); the f64
+  views convert by C truncation. The f64 upload/download paths now enforce
+  their length contracts (short source pads through staging, short
+  destination fails closed — no out-of-bounds host access in any case).
+- **`gkd_ew_bc`** — elementwise binary with full N-D (≤6 dims) stride
+  broadcast: output dims + per-input stride tables (stride 0 broadcasts a
+  dim = numpy broadcasting). The wrapper proves the largest reachable
+  offset fits inside each input before launching.
+- **`gkd_bmm`** — batched matmul `Y[b,M,N] = A[b,M,K]·B[b,K,N]` with
+  per-operand batch broadcast (a single matrix can serve every batch).
+- **`gkd_gather` / `gkd_scatter`** — axis view (outer, ax, inner) with
+  GK_I64 indices; negative indices wrap per ONNX, out-of-range reads give
+  0 / writes are skipped (never out of bounds).
+- **`src/devops.nu`** — the NN operator family, kernel bodies lifted from
+  packages/onnx's proven f32 operator set and generalised over the element
+  type with IDENTICAL arithmetic order (the GK_F32 instantiation is
+  bit-compatible): `gkd_gemm` (alpha/beta/transB/optional bias),
+  `gkd_conv2d`, `gkd_convtranspose2d`, `gkd_maxpool2d` (NCHW, batch 1),
+  `gkd_batchnorm`, `gkd_leakyrelu`, `gkd_clip`, `gkd_erf`,
+  `gkd_layernorm`, `gkd_softmax_ax` (interior axis), `gkd_copy_ax`,
+  `gkd_slice_ax`, `gkd_perm` (N-D ≤6 transpose), `gkd_resize_nn`,
+  `gkd_expandlast`, `gkd_reducel2`, `gkd_argmax` (any dtype → GK_I64),
+  `gkd_eos_gather` (CLIP EOS read-out). Data-movement ops accept GK_I64;
+  arithmetic ops are float-only.
+- Every wrapper validates buffers, dtypes and sizes and fails closed —
+  a wrong shape never reaches the device. `tests/opscheck.nu`: 57 checks
+  (f32 + f64 + i64 + fail-closed guards) vs numpy on CUDA and the CPU
+  backend, ASan clean.
+
 ## 0.3.1
 
 - Manifest only: the gpu dependency range is `^0.3` (0.3.0 was published
