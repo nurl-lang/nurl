@@ -35,6 +35,11 @@ pass needs, so tensor and onnx can share ONE set of device kernels
   a wrong shape never reaches the device. `tests/opscheck.nu`: 57 checks
   (f32 + f64 + i64 + fail-closed guards) vs numpy on CUDA and the CPU
   backend, ASan clean.
+- **`gk_autosync` / `gk_sync`** — gk_run_dev (and every gkd_* kernel)
+  normally syncs the device after each launch; an executor chaining
+  hundreds of launches (the onnx graph walk) can turn autosync off and
+  sync once at the end. The CUDA stream serialises kernels and downloads
+  synchronise implicitly, so results are unchanged.
 
 ## 0.3.1
 
