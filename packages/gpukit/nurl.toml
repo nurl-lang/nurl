@@ -5,4 +5,4 @@ description = "The ergonomic GPU-compute toolkit for NURL — a diamond facade o
 license = "MIT OR Apache-2.0"
 
 [dependencies]
-gpu = { path = "../gpu", version = "^0.4" }
+gpu = { path = "../gpu", version = "^0.7.0" }
