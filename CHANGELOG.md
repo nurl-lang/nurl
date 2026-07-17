@@ -10,6 +10,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- MCP `nurl_api` notes an exact package-name hit in one footer line
+  regardless of stdlib match count — `query='http'` returns hundreds of
+  declarations AND "Note: the registry has a package named 'http' — the
+  unified HTTP server interface…", so the package's existence never
+  drowns.
+- Registry: a package whose manifest omits `description` gets the
+  README's first paragraph as its searchable pitch (both the Worker and
+  `packages/registry`), instead of an empty search row.
+
+### Fixed
+
+- `http` 0.3.1: the manifest description had a 0.3.0 release note
+  prepended before the actual pitch — and the registry's 500-byte cap
+  kept the note and dropped the pitch. The description is now the stable
+  value proposition ("the unified HTTP server interface … anything that
+  needs to SERVE HTTP"), which also lets a model correctly reject it
+  for client-fetch tasks.
+
 - MCP `nurl_api` widens a zero-hit query automatically: when no stdlib
   declaration matches, the same AND-terms are matched against example
   programs (file granularity, with each file's header blurb) and the

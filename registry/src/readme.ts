@@ -159,15 +159,35 @@ export function extractManifestRepository(
   return extractManifestKey(bucket, name, version, "repository");
 }
 
-// Description as recorded at publish: capped so a runaway manifest can't
-// bloat search rows (yoloe-demo-style long descriptions stay useful).
+// The README's first prose paragraph: heading lines and leading blanks
+// skipped, following non-empty lines joined, bold markers dropped. The
+// pitch a README opens with is exactly what a search row wants.
+export function readmeFirstParagraph(md: string): string {
+  const para: string[] = [];
+  for (const raw of md.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line || line.startsWith("#")) {
+      if (para.length) break;
+      continue;
+    }
+    para.push(line);
+  }
+  return para.join(" ").replace(/\*\*/g, "").trim();
+}
+
+// Description as recorded at publish: the manifest's [package].description,
+// or — when the manifest omits one — the README's first paragraph, so a
+// descriptionless package still gets a searchable pitch. Capped so a
+// runaway manifest can't bloat search rows.
 export async function extractManifestDescription(
   bucket: R2Bucket,
   name: string,
   version: string,
 ): Promise<string> {
   const d = await extractManifestKey(bucket, name, version, "description");
-  return (d ?? "").slice(0, 500);
+  if (d) return d.slice(0, 500);
+  const md = await extractReadme(bucket, name, version).catch(() => null);
+  return md ? readmeFirstParagraph(md).slice(0, 500) : "";
 }
 
 // Fetch + gunzip a published tarball and return the bytes of the member at

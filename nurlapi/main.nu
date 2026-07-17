@@ -4798,6 +4798,94 @@ s combined_stdout s combined_stderr → v {
     ^ F
 }
 
+// Exact-name registry note: when a query TERM is itself a package name,
+// say so in one footer line — regardless of how many stdlib declarations
+// matched. "http" returns 385 declarations; the fact that a package
+// named http exists (and what it IS) must not drown under them.
+@ __api_exact_pkg_note ( Vec String ) terms String out → v {
+    : i tn ( vec_len [String] terms )
+    : ~ i tk 0
+    ~ & < tk tn < tk 2 {
+        ?? ( vec_get [String] terms tk ) {
+            T t → {
+                ? >= ( string_len t ) 2 {
+                    : String url ( string_with_cap 128 )
+                    : String regbase ( env_var_or `NURL_REGISTRY` `https://reg.nurl-lang.org/` )
+                    ( string_push_str url ( string_data regbase ) )
+                    ( string_free regbase )
+                    ? != ( string_get url - ( string_len url ) 1 ) 47 { ( string_push_char url 47 ) } {}
+                    ( string_push_str url `api/v1/search?q=` )
+                    : String enc ( url_percent_encode ( string_data t ) )
+                    ( string_push_str url ( string_data enc ) )
+                    ( string_free enc )
+                    : !Response HttpErr r ( http_get ( string_data url ) )
+                    ( string_free url )
+                    ?? r {
+                        T resp → {
+                            ?? ( json_parse ( http_body_str resp ) ) {
+                                T root → {
+                                    ?? ( json_obj_get root `results` ) {
+                                        T arr → {
+                                            : i n ( json_arr_len arr )
+                                            : ~ i k 0
+                                            ~ < k n {
+                                                ?? ( json_arr_get arr k ) {
+                                                    T o → {
+                                                        : ~ s nm ``
+                                                        ?? ( json_obj_get o `name` ) {
+                                                            T nj → { ? ( json_is_str nj ) { = nm ( json_as_str nj ) } {} }
+                                                            F _ → {}
+                                                        }
+                                                        ? != 0 ( nurl_str_eq nm ( string_data t ) ) {
+                                                            ( string_push_str out `\nNote: the registry has a package named '` )
+                                                            ( string_push_str out nm )
+                                                            ( string_push_str out `'` )
+                                                            ?? ( json_obj_get o `description` ) {
+                                                                T dj → {
+                                                                    ? ( json_is_str dj ) {
+                                                                        : s d ( json_as_str dj )
+                                                                        : i dn ( nurl_str_len d )
+                                                                        ? > dn 0 {
+                                                                            ( string_push_str out ` — ` )
+                                                                            : ~ i keep ? > dn 200 200 dn
+                                                                            : ~ i j 0
+                                                                            ~ < j keep {
+                                                                                : i c ( nurl_str_get d j )
+                                                                                ( string_push_char out ? == c 10 32 c )
+                                                                                = j + j 1
+                                                                            }
+                                                                            ? > dn 200 { ( string_push_str out `…` ) } {}
+                                                                        } {}
+                                                                    } {}
+                                                                }
+                                                                F _ → {}
+                                                            }
+                                                            ( string_push_char out 10 )
+                                                        } {}
+                                                    }
+                                                    F _ → {}
+                                                }
+                                                = k + k 1
+                                            }
+                                        }
+                                        F _ → {}
+                                    }
+                                    ( json_free root )
+                                }
+                                F _ → {}
+                            }
+                            ( response_free resp )
+                        }
+                        F _ → {}
+                    }
+                } {}
+            }
+            F _ → {}
+        }
+        = tk + tk 1
+    }
+}
+
 @ __mcp_tool_api Json args → Json {
     : s module ( __mcp_args_get `module` args `` )
     : s query ( __mcp_args_get `query` args `` )
@@ -4901,6 +4989,9 @@ s combined_stdout s combined_stderr → v {
         ( string_push_int hdr - matched emitted )
         ( string_push_str hdr ` more matching declarations omitted (byte cap) — narrow the query or read one module with 'module'.\n` )
     } {}
+    // The 0-hit path already listed registry matches in full; otherwise an
+    // exact package-name hit still deserves its one-line footer.
+    ? > matched 0 { ( __api_exact_pkg_note terms hdr ) } {}
     : Json result ( __mcp_result_text ( string_data hdr ) )
     ( string_free hdr ) ( string_free out ) ( vec_free [i] ctr )
     ( vec_free_with [String] terms \ String t → v { ( string_free t ) } )
