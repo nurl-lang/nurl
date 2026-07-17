@@ -25,13 +25,13 @@ Below I'll explain a simple way to make edits and additions.
    ```bash
    git remote add upstream git@github.com:nurl-lang/nurl.git
    ```
-3. Create a new branch from the master:
+3. Create a new branch from the main:
    ```bash
    # Have the latest upstream changes
    git fetch upstream
 
    # Create and switch to a new branch
-   git switch --create webdocs-update-describechange upstream/master
+   git switch --create webdocs-update-describechange upstream/main
    ```
 4. Do desired changes
 5. Commit with the following message structure: `web docs: changedescribedhere`
