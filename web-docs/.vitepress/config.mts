@@ -11,8 +11,8 @@ const vitePressSidebarOptions = {
 
 const vitePressOptions: UserConfig = {
   markdown: {
-      typographer: true // Enables smart quotes, replacements, and other typography rules
-    },
+    typographer: true, // Enables smart quotes, replacements, and other typography rules
+  },
   lastUpdated: true,
   srcDir: "docs",
   head: [["link", { rel: "icon", href: "/favicon.svg" }]],
@@ -21,6 +21,10 @@ const vitePressOptions: UserConfig = {
     "Web documentation for Neural Unified Representation Language aka NURL.",
   themeConfig: {
     logo: "./favicon.svg",
+    search: {
+      provider: "local",
+    },
+    externalLinkIcon: true,
     nav: [],
     socialLinks: [
       {
