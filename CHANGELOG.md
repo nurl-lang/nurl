@@ -8,6 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.19.0] — 2026-07-17
+
+The **reachability** release: search that survives contact with a real
+language-model caller (ranked boundaries, zero-hit widening, exact-name
+footers, honest package descriptions), build artifacts addressed by
+absolute URLs, one shared search engine for the playground and the local
+nurl-mcp — and playground deploys that reach the live container
+deterministically instead of waiting for an idle window.
+
 ### Added
 
 - **`stdlib/ext/mcp_search.nu`** — the MCP search surface (module API
