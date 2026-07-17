@@ -58,10 +58,18 @@ export class NurlContainer extends Container<Env> {
     // before anything reaches the proxy.
     const httpUrl = request.url.replace(/^https:/, "http:");
 
+    // Standard reverse-proxy contract: tell the origin what scheme the
+    // CLIENT used, since the tunnel itself is always plain http. nurlapi
+    // reads this when it builds absolute URLs (OAuth issuer/endpoints,
+    // mcp.json snippets) so they say https://, not the tunnel's http://.
+    const fwdHeaders = new Headers(request.headers);
+    fwdHeaders.set("X-Forwarded-Proto", new URL(request.url).protocol.replace(":", ""));
+
     // WebSocket upgrades (the /pptws voice relay) can't be buffered or
-    // replayed — proxy them straight through with no retry.
+    // replayed — proxy them straight through with no retry. Upgrades are
+    // always GET, so a headers-only rebuild loses nothing.
     if ((request.headers.get("Upgrade") ?? "").toLowerCase() === "websocket") {
-      return super.fetch(new Request(httpUrl, request));
+      return super.fetch(new Request(httpUrl, { headers: fwdHeaders }));
     }
 
     // Buffer the body once so the request can be replayed after a recycle.
@@ -78,7 +86,7 @@ export class NurlContainer extends Container<Env> {
     const replay = (): Request =>
       new Request(httpUrl, {
         method: request.method,
-        headers: request.headers,
+        headers: fwdHeaders,
         body: bodyBuf,
         redirect: "manual",
       });

@@ -197,6 +197,20 @@ def t_mcp_info(c: Client) -> None:
         "nurl_grep",
     ):
         assert_true(f"tool {t} listed", t in tools)
+    # Reverse-proxy scheme signal: with X-Forwarded-Proto: https the
+    # advertised absolute URLs must say https (the CF Worker sets this;
+    # without it the http tunnel scheme would leak into OAuth metadata).
+    status, _, raw = c.get("/mcp-info", headers={"X-Forwarded-Proto": "https"})
+    assert_eq("fwd-proto status 200", status, 200)
+    fwd = json.loads(raw)
+    fwd_url = (
+        fwd.get("client_config_example", {})
+        .get("mcpServers", {})
+        .get("nurl", {})
+        .get("url", "")
+    )
+    assert_true("X-Forwarded-Proto: https yields https URL", fwd_url.startswith("https://"))
+
     assert_true(
         "client_config_example.mcpServers.nurl.url ends in /mcp",
         j.get("client_config_example", {})
