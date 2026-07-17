@@ -7,7 +7,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { classifyError, decideAction, stampMismatch } from "./src/recovery.ts";
+import { classifyError, decideAction, stampAction } from "./src/recovery.ts";
 
 // The literal string the user observed at https://play.nurl-lang.org/.
 const PROD_WEDGE =
@@ -58,11 +58,17 @@ test("decideAction: a genuine app 500 is never recycled", () => {
   assert.equal(decideAction(500, "internal error: handler panicked\n", 0, MAX), "return");
 });
 
-test("stampMismatch: recycles only on a known, differing pair", () => {
-  assert.equal(stampMismatch("abc", "def"), true);
-  assert.equal(stampMismatch("abc", "abc"), false);
-  assert.equal(stampMismatch(undefined, "def"), false);
-  assert.equal(stampMismatch("abc", undefined), false);
-  assert.equal(stampMismatch("abc", ""), false);
-  assert.equal(stampMismatch("", "def"), false);
+test("stampAction: known differing stamp always recycles; match never", () => {
+  assert.equal(stampAction("abc", "def", undefined), "recycle");
+  assert.equal(stampAction("abc", "def", "abc"), "recycle");
+  assert.equal(stampAction("abc", "abc", undefined), "skip");
+  assert.equal(stampAction(undefined, "def", undefined), "skip");
+  assert.equal(stampAction("", "def", undefined), "skip");
+});
+
+test("stampAction: missing stamp recycles once per deploy id", () => {
+  assert.equal(stampAction("abc", undefined, undefined), "recycle");
+  assert.equal(stampAction("abc", "", undefined), "recycle");
+  assert.equal(stampAction("abc", undefined, "abc"), "skip");
+  assert.equal(stampAction("abc", undefined, "old-deploy"), "recycle");
 });

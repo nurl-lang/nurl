@@ -56,12 +56,21 @@ export function decideAction(
   return "retry";
 }
 
-// Deploy-stamp policy: recycle only when BOTH identities are known and
-// disagree. An image without a stamp (self-hosted, local dev) or a
-// worker without NURL_DEPLOY_ID must never trigger recycling.
-export function stampMismatch(
+// Deploy-stamp policy. With no NURL_DEPLOY_ID (self-hosted, local dev)
+// nothing ever recycles. With one set:
+//   * a KNOWN, differing build stamp recycles every time — converges to
+//     a match once the image rollout has completed;
+//   * a MISSING stamp (image predates stamping, or was built without
+//     the arg) recycles at most ONCE per deploy id (`recycledFor` is
+//     what the DO remembers) — bootstraps the first stamped deploy onto
+//     a live unstamped instance without risking a permanent recycle
+//     loop against a misconfigured image.
+export function stampAction(
   deployId: string | undefined | null,
   buildId: string | undefined | null,
-): boolean {
-  return Boolean(deployId) && Boolean(buildId) && deployId !== buildId;
+  recycledFor: string | undefined | null,
+): "recycle" | "skip" {
+  if (!deployId) return "skip";
+  if (buildId) return buildId !== deployId ? "recycle" : "skip";
+  return recycledFor === deployId ? "skip" : "recycle";
 }
