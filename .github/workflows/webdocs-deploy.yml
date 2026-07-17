@@ -1,0 +1,58 @@
+name: Publish Webdocs
+
+# Publishes the VitePress documentation site (web-docs/) to Cloudflare at
+# https://docs.nurl-lang.org. Runs on every push to main that touches
+# web-docs/ (or this workflow), and can also be triggered manually from the
+# Actions tab (Run workflow).
+#
+# `pnpm run docs:deploy` builds the site (`vitepress build`) and then runs
+# `wrangler deploy`, which uploads .vitepress/dist as an assets-only Worker
+# and attaches the docs.nurl-lang.org custom domain (see web-docs/wrangler.jsonc).
+#
+# Requires two GitHub Actions repo secrets (shared with the other Cloudflare
+# deploys):
+#   CLOUDFLARE_API_TOKEN   — a token with Workers edit rights
+#   CLOUDFLARE_ACCOUNT_ID  — your Cloudflare account id
+# When the token is unset / still the REPLACE_ME placeholder (e.g. on forks)
+# every step skips and the job is a green no-op.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'web-docs/**'
+      - '.github/workflows/webdocs-deploy.yml'
+  workflow_dispatch: {}
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    # `secrets` can't be used in an `if:` directly, so derive a boolean in
+    # job-level `env` (which may read secrets) and gate each step on it.
+    env:
+      DEPLOY_ENABLED: ${{ secrets.CLOUDFLARE_API_TOKEN != '' && secrets.CLOUDFLARE_API_TOKEN != 'REPLACE_ME' }}
+    defaults:
+      run:
+        working-directory: web-docs
+    steps:
+      - if: env.DEPLOY_ENABLED == 'true'
+        uses: actions/checkout@v4
+      - if: env.DEPLOY_ENABLED == 'true'
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - if: env.DEPLOY_ENABLED == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: web-docs/pnpm-lock.yaml
+      - if: env.DEPLOY_ENABLED == 'true'
+        run: pnpm install --frozen-lockfile
+      # `docs:deploy` = `vitepress build && wrangler deploy`.
+      - name: Deploy
+        if: env.DEPLOY_ENABLED == 'true'
+        run: pnpm run docs:deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}

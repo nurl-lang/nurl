@@ -1,0 +1,17 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "nurl-docs",
+  "compatibility_date": "2025-06-01",
+  // Attaches docs.nurl-lang.org to this Worker on deploy (the zone lives on
+  // the same Cloudflare account as the other nurl-lang.org Workers), so no
+  // manual DNS/dashboard step is needed.
+  "routes": [{ "pattern": "docs.nurl-lang.org", "custom_domain": true }],
+  "observability": {
+    "enabled": true
+  },
+  // Assets-only Worker: serves the VitePress build output, no Worker script.
+  "assets": {
+    "directory": "./.vitepress/dist",
+    "not_found_handling": "404-page"
+  }
+}

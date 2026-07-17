@@ -1,11 +1,16 @@
 {
+  "pnpm": {
+    "onlyBuiltDependencies": ["esbuild", "sharp", "workerd"]
+  },
   "devDependencies": {
     "vitepress": "2.0.0-alpha.18",
-    "vitepress-sidebar": "^1.36.1"
+    "vitepress-sidebar": "^1.36.1",
+    "wrangler": "^4.15.0"
   },
   "scripts": {
     "docs:dev": "vitepress dev",
     "docs:build": "vitepress build",
-    "docs:preview": "vitepress preview"
+    "docs:preview": "vitepress preview",
+    "docs:deploy": "vitepress build && wrangler deploy"
   }
 }
