@@ -266,11 +266,12 @@ $ `ops.nu`
         = ph ( node_attr_int_at n `pads` 0 0 )
         = pw ( node_attr_int_at n `pads` 1 0 )
     }
-    : ~ i bd 0
     : ~ i hasB 0
-    ? > ( vec_len [String] . n inputs ) 2 { : RTensor B ( __in e n 2 ) = bd . B dptr = hasB 1 } {}
+    : ~ GkBuf bb ( __rt_fbuf X )
+    ? > ( vec_len [String] . n inputs ) 2 { : RTensor B ( __in e n 2 ) = bb ( __rt_fbuf B ) = hasB 1 } {}
     : i yd ( rt_alloc_out e ( __out_name n ) ( __shape4 1 Cout OH OW ) )
-    ( op_conv . e g . e ks . X dptr . W dptr bd yd Cin H Wd Cout kh kw OH OW ph pw sh sw hasB )
+    : GkBuf yb @ GkBuf { yd * * Cout OH OW GK_F32 }
+    ? ( gkd_conv2d . e kit yb ( __rt_fbuf X ) ( __rt_fbuf W ) bb hasB Cin H Wd Cout kh kw OH OW ph pw sh sw ) {} { ( __rt_op_fail `Conv` ) }
 }
 
 // Transposed convolution (ConvTranspose). Weight is [Cin, Cout, kh, kw].
@@ -295,11 +296,12 @@ $ `ops.nu`
     : i opw ( node_attr_int_at n `output_padding` 1 0 )
     : i OH - - + + * sh - H 1 oph kh phb phe
     : i OW - - + + * sw - Wd 1 opw kw pwb pwe
-    : ~ i bd 0
     : ~ i hasB 0
-    ? > ( vec_len [String] . n inputs ) 2 { : RTensor B ( __in e n 2 ) = bd . B dptr = hasB 1 } {}
+    : ~ GkBuf bb ( __rt_fbuf X )
+    ? > ( vec_len [String] . n inputs ) 2 { : RTensor B ( __in e n 2 ) = bb ( __rt_fbuf B ) = hasB 1 } {}
     : i yd ( rt_alloc_out e ( __out_name n ) ( __shape4 1 Cout OH OW ) )
-    ( op_convtranspose . e g . e ks . X dptr . W dptr bd yd Cin H Wd Cout kh kw OH OW phb pwb sh sw hasB )
+    : GkBuf yb @ GkBuf { yd * * Cout OH OW GK_F32 }
+    ? ( gkd_convtranspose2d . e kit yb ( __rt_fbuf X ) ( __rt_fbuf W ) bb hasB Cin H Wd Cout kh kw OH OW phb pwb sh sw ) {} { ( __rt_op_fail `ConvTranspose` ) }
 }
 
 @ rt_maxpool * Engine e ONode n → v {
@@ -330,7 +332,8 @@ $ `ops.nu`
         = OW + / - + Wd * 2 pw kw sw 1
     }
     : i yd ( rt_alloc_out e ( __out_name n ) ( __shape4 1 C OH OW ) )
-    ( op_maxpool . e g . e ks . X dptr yd C H Wd kh kw OH OW sh sw ph pw )
+    : GkBuf yb @ GkBuf { yd * * C OH OW GK_F32 }
+    ? ( gkd_maxpool2d . e kit yb ( __rt_fbuf X ) C H Wd kh kw OH OW sh sw ph pw ) {} { ( __rt_op_fail `MaxPool` ) }
 }
 
 @ rt_batchnorm * Engine e ONode n → v {
@@ -343,7 +346,8 @@ $ `ops.nu`
     : i HW / . X nelem C
     : f eps ( node_attr_f n `epsilon` 0.00001 )
     : i yd ( rt_alloc_out e ( __out_name n ) ( __shape_copy_rt . X shape ) )
-    ( op_batchnorm . e g . e ks . X dptr . sc dptr . B dptr . mn dptr . vr dptr yd C HW eps )
+    : GkBuf yb @ GkBuf { yd . X nelem GK_F32 }
+    ? ( gkd_batchnorm . e kit yb ( __rt_fbuf X ) ( __rt_fbuf sc ) ( __rt_fbuf B ) ( __rt_fbuf mn ) ( __rt_fbuf vr ) C HW eps ) {} { ( __rt_op_fail `BatchNormalization` ) }
 }
 
 @ rt_leakyrelu * Engine e ONode n → v {
@@ -381,8 +385,40 @@ $ `ops.nu`
     // attention mask added to [.,H,S,S] scores): out[i] = X[i] op B[i % |B|].
     ? & > . B nelem 0 == 0 % . X nelem . B nelem { = bmode 3 = per . B nelem }
     { = bmode 2 }
+    // bmode → a stride table for the broadcast-elementwise kernel:
+    //   0 scalar       view [n]        X stride 1      B stride 0
+    //   2 full         view [n]        X stride 1      B stride 1
+    //   1 per-channel  view [C, per]   X (per, 1)      B (1, 0)
+    //   3 per-inner    view [n/p, p]   X (p, 1)        B (0, 1)
+    : i nx . X nelem
+    : s opname ? == op 0 { `mul` } { ? == op 1 { `add` } { ? == op 2 { `sub` } { `div` } } }
+    : s opc ? == op 0 { `*` } { ? == op 1 { `+` } { ? == op 2 { `-` } { `/` } } }
+    : ( Vec i ) od ( vec_new [i] )
+    : ( Vec i ) ast ( vec_new [i] )
+    : ( Vec i ) bst ( vec_new [i] )
+    ? == bmode 0 {
+        ( vec_push [i] od nx ) ( vec_push [i] ast 1 ) ( vec_push [i] bst 0 )
+    } {
+        ? == bmode 2 {
+            ( vec_push [i] od nx ) ( vec_push [i] ast 1 ) ( vec_push [i] bst 1 )
+        } {
+            ? == bmode 1 {
+                ( vec_push [i] od C ) ( vec_push [i] od per )
+                ( vec_push [i] ast per ) ( vec_push [i] ast 1 )
+                ( vec_push [i] bst 1 ) ( vec_push [i] bst 0 )
+            } {
+                ( vec_push [i] od / nx per ) ( vec_push [i] od per )
+                ( vec_push [i] ast per ) ( vec_push [i] ast 1 )
+                ( vec_push [i] bst 0 ) ( vec_push [i] bst 1 )
+            }
+        }
+    }
     : i yd ( rt_alloc_out e ( __out_name n ) ( __shape_copy_rt . X shape ) )
-    ( op_eltwise . e g . e ks . X dptr . B dptr yd . X nelem per op bmode )
+    : GkBuf yb @ GkBuf { yd nx GK_F32 }
+    ? ( gkd_ew_bc . e kit opname opc yb ( __rt_fbuf X ) ( __rt_fbuf B ) od ast bst ) {} { ( __rt_op_fail `Mul/Add/Sub/Div` ) }
+    ( vec_free [i] od )
+    ( vec_free [i] ast )
+    ( vec_free [i] bst )
 }
 
 @ rt_sigmoid * Engine e ONode n → v {
@@ -454,8 +490,10 @@ $ `ops.nu`
         : ( Vec i ) os ( vec_new [i] )
         : ~ i d 0
         ~ < d nd0 { ( vec_push [i] os ? == d axis sz ( rt_dim X d ) ) = d + d 1 }
+        : i prodos ( __prod os )
         : i yd ( rt_alloc_out e ( __out_name n ) os )
-        : i _r ( op_slice_ax . e g . e ks . X dptr yd outer sz inner dim_ax sbeg )
+        : GkBuf yb @ GkBuf { yd prodos GK_F32 }
+        ? ( gkd_slice_ax . e kit yb ( __rt_fbuf X ) outer sz inner dim_ax sbeg ) {} { ( __rt_op_fail `Slice` ) }
     }
 }
 
@@ -470,32 +508,30 @@ $ `ops.nu`
     : i OH * H sh
     : i OW * W sw
     : i yd ( rt_alloc_out e ( __out_name n ) ( __shape4 1 C OH OW ) )
-    ( op_resize . e g . e ks . X dptr yd C H W OH OW sh sw )
+    : GkBuf yb @ GkBuf { yd * * C OH OW GK_F32 }
+    ? ( gkd_resize_nn . e kit yb ( __rt_fbuf X ) C H W OH OW sh sw ) {} { ( __rt_op_fail `Resize` ) }
 }
 
-// General transpose (≤6-D). Pad missing trailing dims to size 1 with an
-// identity perm so the 6-D kernel handles any rank.
+// General transpose (≤6-D): input dims + perm straight to gkd_perm (which
+// pads to its 6-D kernel with trailing 1s / identity).
 @ rt_transpose * Engine e ONode n → v {
     : RTensor X ( __in e n 0 )
     : i nd ( rt_ndim X )
-    // perm[k] = attr perm or identity; dims padded to 1 past nd
-    : i p0 ? < 0 nd ( node_attr_int_at n `perm` 0 0 ) 0
-    : i p1 ? < 1 nd ( node_attr_int_at n `perm` 1 1 ) 1
-    : i p2 ? < 2 nd ( node_attr_int_at n `perm` 2 2 ) 2
-    : i p3 ? < 3 nd ( node_attr_int_at n `perm` 3 3 ) 3
-    : i p4 ? < 4 nd ( node_attr_int_at n `perm` 4 4 ) 4
-    : i p5 ? < 5 nd ( node_attr_int_at n `perm` 5 5 ) 5
-    : i d0 ? < 0 nd ( rt_dim X 0 ) 1
-    : i d1 ? < 1 nd ( rt_dim X 1 ) 1
-    : i d2 ? < 2 nd ( rt_dim X 2 ) 1
-    : i d3 ? < 3 nd ( rt_dim X 3 ) 1
-    : i d4 ? < 4 nd ( rt_dim X 4 ) 1
-    : i d5 ? < 5 nd ( rt_dim X 5 ) 1
+    : ( Vec i ) dims ( vec_new [i] )
+    : ( Vec i ) perm ( vec_new [i] )
     : ( Vec i ) os ( vec_new [i] )
     : ~ i k 0
-    ~ < k nd { ( vec_push [i] os ( rt_dim X ( node_attr_int_at n `perm` k k ) ) ) = k + k 1 }
+    ~ < k nd {
+        ( vec_push [i] dims ( rt_dim X k ) )
+        ( vec_push [i] perm ( node_attr_int_at n `perm` k k ) )
+        ( vec_push [i] os ( rt_dim X ( node_attr_int_at n `perm` k k ) ) )
+        = k + k 1
+    }
     : i yd ( rt_alloc_out e ( __out_name n ) os )
-    ( op_perm6 . e g . e ks . X dptr yd d0 d1 d2 d3 d4 d5 p0 p1 p2 p3 p4 p5 )
+    : GkBuf yb @ GkBuf { yd . X nelem GK_F32 }
+    ? ( gkd_perm . e kit yb ( __rt_fbuf X ) dims perm ) {} { ( __rt_op_fail `Transpose` ) }
+    ( vec_free [i] dims )
+    ( vec_free [i] perm )
 }
 
 // Softmax over `axis`, viewing the tensor as (outer, axis, inner).
@@ -515,7 +551,8 @@ $ `ops.nu`
     : ~ i m + ax 1
     ~ < m ( rt_ndim X ) { = inner * inner ( rt_dim X m ) = m + m 1 }
     : i yd ( rt_alloc_out e ( __out_name n ) ( __shape_copy_rt . X shape ) )
-    ( op_softmax . e g . e ks . X dptr yd outer axn inner )
+    : GkBuf yb @ GkBuf { yd . X nelem GK_F32 }
+    ? ( gkd_softmax_ax . e kit yb ( __rt_fbuf X ) outer axn inner ) {} { ( __rt_op_fail `Softmax` ) }
 }
 
 // Concat along `axis`, viewing each input as (outer, axis_i, inner).
@@ -539,13 +576,15 @@ $ `ops.nu`
     : ( Vec i ) os ( vec_new [i] )
     : ~ i d 0
     ~ < d ( rt_ndim first ) { ( vec_push [i] os ? == d axis sumax ( rt_dim first d ) ) = d + d 1 }
+    : i prodos ( __prod os )
     : i yd ( rt_alloc_out e ( __out_name n ) os )
+    : GkBuf yb @ GkBuf { yd prodos GK_F32 }
     : ~ i off 0
     : ~ i ai 0
     ~ < ai nin {
         : RTensor src ( __in e n ai )
         : i sa ( rt_dim src axis )
-        ( op_copy_ax . e g . e ks . src dptr yd outer sa inner sumax off )
+        ? ( gkd_copy_ax . e kit yb ( __rt_fbuf src ) outer sa inner sumax off ) {} { ( __rt_op_fail `Concat` ) }
         = off + off sa
         = ai + ai 1
     }
@@ -585,8 +624,10 @@ $ `ops.nu`
             ( rt_put e onm + . X dptr * * off inner 4 os )
         } {
             // interleaved slice (outer>1) — must copy into a fresh buffer
+            : i prodos ( __prod os )
             : i od ( rt_alloc_out e onm os )
-            ( op_slice_ax . e g . e ks . X dptr od outer sz inner src_ax off )
+            : GkBuf ob @ GkBuf { od prodos GK_F32 }
+            ? ( gkd_slice_ax . e kit ob ( __rt_fbuf X ) outer sz inner src_ax off ) {} { ( __rt_op_fail `Split` ) }
         }
         = off + off sz
         = k + k 1
@@ -633,7 +674,8 @@ $ `ops.nu`
     : i outer / . X nelem ax
     : f eps ( node_attr_f n `epsilon` 0.00001 )
     : i yd ( rt_alloc_out e ( __out_name n ) ( __shape_copy_rt . X shape ) )
-    ( op_layernorm . e g . e ks . X dptr . sc dptr . bi dptr yd outer ax eps )
+    : GkBuf yb @ GkBuf { yd . X nelem GK_F32 }
+    ? ( gkd_layernorm . e kit yb ( __rt_fbuf X ) ( __rt_fbuf sc ) ( __rt_fbuf bi ) outer ax eps ) {} { ( __rt_op_fail `LayerNormalization` ) }
 }
 
 @ rt_erf * Engine e ONode n → v {
@@ -655,7 +697,8 @@ $ `ops.nu`
     : OGraph gr . e graph
     : RTensor tok ( rt_at e ( rt_find e ( string_data . gr input_name ) ) )
     : i yd ( rt_alloc_out e ( __out_name n ) ( __shape2 B D ) )
-    ( op_eos_gather . e g . e ks . data dptr . tok dptr yd B L D )
+    : GkBuf yb @ GkBuf { yd * B D GK_F32 }
+    ? ( gkd_eos_gather . e kit yb ( __rt_fbuf data ) ( __rt_ibuf tok ) B L D ) {} { ( __rt_op_fail `GatherND` ) }
 }
 
 // Gather along `axis`. Two index sources: a device tensor (e.g. the token
@@ -684,15 +727,16 @@ $ `ops.nu`
         : ~ i d 0
         ~ < d axis { ( vec_push [i] os ( rt_dim x d ) ) = d + d 1 }
         ? != keep 0 { ( vec_push [i] os 1 ) } {}
-        : GpuBuffer buf ( gpu_alloc . e g * ( __prod os ) 8 )
+        : i prodos ( __prod os )
+        : GpuBuffer buf ( gpu_alloc . e g * prodos 8 )
         ( rt_own e . buf dptr )
         ( rt_put e ( __out_name n ) . buf dptr os )
+        : GkBuf ob @ GkBuf { . buf dptr prodos GK_I64 }
         : s in0 ( string_data ?? ( vec_get [String] . n inputs 0 ) { T x2 → x2 F _ → ( string_new ) } )
-        ? ( streq2 in0 ( string_data . . e graph input_name ) ) {
-            : i _r1 ( op_argmax_i64 . e g . e ks . x dptr . buf dptr outer ax )
-        } {
-            : i _r2 ( op_argmax . e g . e ks . x dptr . buf dptr outer ax )
-        }
+        // gkd_argmax picks its kernel by the INPUT buffer's element type;
+        // the raw token input is the only int64 tensor in play.
+        : GkBuf xb ? ( streq2 in0 ( string_data . . e graph input_name ) ) { ( __rt_ibuf x ) } { ( __rt_fbuf x ) }
+        ? ( gkd_argmax . e kit ob xb outer ax ) {} { ( __rt_op_fail `ArgMax` ) }
     }
 }
 
@@ -720,16 +764,23 @@ $ `ops.nu`
         ~ < q ( rt_ndim idxt ) { ( vec_push [i] os ( rt_dim idxt q ) ) = q + q 1 }
         : ~ i r + axis 1
         ~ < r ( rt_ndim data ) { ( vec_push [i] os ( rt_dim data r ) ) = r + r 1 }
+        : i prodos ( __prod os )
         : i yd ( rt_alloc_out e ( __out_name n ) os )
-        ( op_gather . e g . e ks . data dptr . idxt dptr yd outer axis_in inner nidx )
+        : GkBuf yb @ GkBuf { yd prodos GK_F32 }
+        : GkBuf ixb @ GkBuf { . idxt dptr nidx GK_I64 }
+        ? ( gkd_gather . e kit yb ( __rt_fbuf data ) ixb outer axis_in inner nidx ) {} { ( __rt_op_fail `Gather` ) }
     } {
-        // host scalar index → slice one element along axis (axis removed)
-        : i s ( __init_i64 e idx_name 0 )
+        // host scalar index → slice one element along axis (axis removed);
+        // a negative index wraps once (ONNX)
+        : ~ i s ( __init_i64 e idx_name 0 )
+        ? < s 0 { = s + s axis_in } {}
         : ( Vec i ) os ( vec_new [i] )
         : ~ i d 0
         ~ < d ( rt_ndim data ) { ? != d axis { ( vec_push [i] os ( rt_dim data d ) ) } {} = d + d 1 }
+        : i prodos ( __prod os )
         : i yd ( rt_alloc_out e ( __out_name n ) os )
-        ( op_slice_ax . e g . e ks . data dptr yd outer 1 inner axis_in s )
+        : GkBuf yb @ GkBuf { yd prodos GK_F32 }
+        ? ( gkd_slice_ax . e kit yb ( __rt_fbuf data ) outer 1 inner axis_in s ) {} { ( __rt_op_fail `Gather` ) }
     }
 }
 
@@ -758,7 +809,8 @@ $ `ops.nu`
     ~ < d - ( rt_ndim X ) 1 { ( vec_push [i] os ( rt_dim X d ) ) = d + d 1 }
     ( vec_push [i] os 1 )
     : i yd ( rt_alloc_out e ( __out_name n ) os )
-    ( op_reducel2 . e g . e ks . X dptr yd outer ax )
+    : GkBuf yb @ GkBuf { yd outer GK_F32 }
+    ? ( gkd_reducel2 . e kit yb ( __rt_fbuf X ) outer ax ) {} { ( __rt_op_fail `ReduceL2` ) }
 }
 
 @ rt_clip * Engine e ONode n → v {
@@ -791,8 +843,10 @@ $ `ops.nu`
     : ( Vec i ) os ( vec_new [i] )
     : ~ i d 0
     ~ < d nd { ( vec_push [i] os ( __init_i64 e shp_name d ) ) = d + d 1 }
+    : i prodos ( __prod os )
     : i yd ( rt_alloc_out e ( __out_name n ) os )
-    ( op_expand . e g . e ks . X dptr yd outer rep )
+    : GkBuf yb @ GkBuf { yd prodos GK_F32 }
+    ? ( gkd_expandlast . e kit yb ( __rt_fbuf X ) outer rep ) {} { ( __rt_op_fail `Expand` ) }
 }
 
 // Unsqueeze: insert size-1 axes — pure reshape (alias). New shape from the
