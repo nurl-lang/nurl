@@ -30,8 +30,8 @@ A 784→128→10 MLP (MNIST-shaped) matches the onnxruntime reference to within
 
 ```
 model.onnx ──pb.nu──▶ ONNX graph ──runtime.nu──▶ GPU execution ──▶ output
-            (protobuf            (value map,        (ops.nu kernels
-             wire decode)         node order)        via gpu.nu/NVRTC)
+            (protobuf            (value map,        (gpukit gkd_*
+             wire decode)         node order)        kernel library)
 ```
 
 - **`src/pb.nu`** — a minimal protobuf wire decoder (varints, the four wire
@@ -41,11 +41,14 @@ model.onnx ──pb.nu──▶ ONNX graph ──runtime.nu──▶ GPU executi
   GraphProto → { NodeProto[], TensorProto initializers, I/O names }`,
   `AttributeProto`, and `TensorProto.raw_data` (little-endian f32) read
   straight into a host buffer.
-- **`src/ops.nu`** — operators as CUDA-C kernels (`Gemm`, `Relu`), compiled
-  once via NVRTC and launched over `gpu.nu`.
 - **`src/runtime.nu`** — the executor: uploads weights + input once, walks
   the graph in node order keeping activations on the GPU, downloads the
-  named output.
+  named output. Each node dispatches to **gpukit's dev-layer kernel
+  library** (`gkd_*`) — the same dtype-generic CUDA-C kernels the tensor
+  package's DTensor uses, so the ML stack shares ONE kernel set and this
+  package carries no kernel sources of its own. Kernels compile lazily
+  (cached in-process by name and on disk by source hash); launches chain
+  on the stream with a single device sync per graph walk.
 
 The CUDA dependency lives **entirely in the `gpu` package** — a GPU-less
 host never pulls it in. This package only knows the neutral

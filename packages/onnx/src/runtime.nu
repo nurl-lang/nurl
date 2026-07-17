@@ -2,9 +2,13 @@
 //
 // Walks the ONNX graph in node order (ONNX guarantees topological order),
 // keeping every intermediate tensor resident on the GPU. Initializers and
-// the input are uploaded once; each node dispatches to a GPU kernel in
-// ops.nu; the named output is downloaded at the end. A value map (name →
-// device tensor) threads activations between nodes.
+// the input are uploaded once; each node dispatches to a gpukit dev-layer
+// kernel (gkd_* — the SAME dtype-generic kernel library the tensor
+// package's DTensor uses; onnx carries no kernel sources of its own); the
+// named output is downloaded at the end. A value map (name → device
+// tensor) threads activations between nodes. Kernels compile lazily and
+// are cached by gpukit (in-process by name, on disk by source hash), and
+// launches chain on the stream with ONE device sync at the end of the walk.
 //
 // Tensors are N-D (shape vector); the dense path reads dims 0,1 as M,K and
 // the conv path reads NCHW from dims 1,2,3 (batch N is assumed 1).
@@ -14,12 +18,12 @@ $ `stdlib/core/string.nu`
 $ `deps/gpu/src/gpu.nu`
 $ `deps/gpukit/src/devops.nu`
 $ `model.nu`
-$ `ops.nu`
 
 // A device-resident tensor: name, CUdeviceptr (i64), shape, element count.
 : RTensor { String name i dptr ( Vec i ) shape i nelem }
 
-: Engine { Gpu g Kernels ks * GpuKit kit ( Vec RTensor ) vals OGraph graph b ok ( Vec i ) owned b graph_set }
+// Engine.g BORROWS the kit's device handle (gk_close releases it).
+: Engine { Gpu g * GpuKit kit ( Vec RTensor ) vals OGraph graph b ok ( Vec i ) owned b graph_set }
 
 // GkBuf views over an RTensor's device allocation, for the gkd_* kernels.
 // Everything on the value map is f32 except the raw token input and ArgMax
@@ -71,17 +75,15 @@ $ `ops.nu`
 
 @ rt_dim RTensor t i ax → i { ^ ( __dim_at . t shape ax ) }
 
-// Open a device and compile the kernels.
+// Open a device. Kernels compile lazily on first use (gpukit caches them
+// in-process by name and on disk by source hash and architecture).
 @ rt_open i ordinal → *Engine {
     : *Engine e # *Engine ( nurl_alloc Z Engine )
-    : Gpu g ( gpu_open ordinal )
-    = . e g g
-    : Kernels ks ( ops_compile g )
-    = . e ks ks
     = . e kit ( gk_open ordinal )
+    = . e g . . e kit gpu
     = . e vals ( vec_new [RTensor] )
     = . e graph @ OGraph { ( vec_new [ONode] ) ( vec_new [OTensor] ) ( string_new ) ( string_new ) ( string_new ) }
-    = . e ok & & ( gpu_ok g ) . ks ok ( gk_ok . e kit )
+    = . e ok ( gk_ok . e kit )
     = . e owned ( vec_new [i] )
     = . e graph_set F
     ^ e
@@ -908,6 +910,9 @@ $ `ops.nu`
 }
 
 @ _rt_run_nodes * Engine e OGraph g → RTensor {
+    // Chain every launch on the stream; one device sync at the end (the
+    // CUDA stream serialises kernels, the CPU backend is synchronous).
+    ( gk_autosync F )
     : ( Vec ONode ) nodes . g nodes
     : ~ i k 0
     ~ < k ( vec_len [ONode] nodes ) {
@@ -961,6 +966,7 @@ $ `ops.nu`
         }
         = k + k 1
     }
+    ( gk_autosync T )
     ( gpu_sync . e g )
     : i oi ( rt_find e ( string_data . g output_name ) )
     ^ ( rt_at e oi )
@@ -994,8 +1000,6 @@ $ `ops.nu`
     ( rt_reset e )
     ( vec_free [i] . e owned )
     ( vec_free [RTensor] . e vals )
-    ( ops_free . e ks )
-    ( gk_close . e kit )
-    ( gpu_close . e g )
+    ( gk_close . e kit )  // releases the device Engine.g borrows
     ( nurl_free # *u e )
 }
