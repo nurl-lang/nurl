@@ -82,7 +82,9 @@ jobs:
           file: nurlapi/Dockerfile
           push: true
           tags: nurllang/nurl:${{ steps.ver.outputs.version }}
-          build-args: NURL_VERSION=${{ steps.ver.outputs.version }}
+          build-args: |
+            NURL_VERSION=${{ steps.ver.outputs.version }}
+            NURL_BUILD_ID=${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -109,7 +111,7 @@ jobs:
       - name: Deploy to Cloudflare
         if: env.DEPLOY_ENABLED == 'true'
         working-directory: cloudflare
-        run: npx wrangler deploy
+        run: npx wrangler deploy --var NURL_DEPLOY_ID:${{ github.sha }}
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}

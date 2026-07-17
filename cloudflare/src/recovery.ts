@@ -55,3 +55,13 @@ export function decideAction(
   if (verdict === "wedged") return "recycle";
   return "retry";
 }
+
+// Deploy-stamp policy: recycle only when BOTH identities are known and
+// disagree. An image without a stamp (self-hosted, local dev) or a
+// worker without NURL_DEPLOY_ID must never trigger recycling.
+export function stampMismatch(
+  deployId: string | undefined | null,
+  buildId: string | undefined | null,
+): boolean {
+  return Boolean(deployId) && Boolean(buildId) && deployId !== buildId;
+}
