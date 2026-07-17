@@ -1682,11 +1682,12 @@ s combined_stdout s combined_stderr → v {
     ( json_arr_push arr ( json_str_lit v ) )
 }
 
-// Resolve the public base URL for the example mcp.json snippet. Prefer
-// the NURL_PUBLIC_URL env var (production deployments behind a proxy
-// terminate TLS upstream and need an absolute URL); fall back to the
-// request's Host header with http://; degrade to http://localhost:8000
-// if even that is missing. Returns an owned String.
+// Resolve the public base URL for absolute links (OAuth issuer/endpoints,
+// the example mcp.json snippet). Prefer the NURL_PUBLIC_URL env var; then
+// the standard reverse-proxy signal X-Forwarded-Proto + Host (a proxy
+// terminates TLS upstream and tunnels plain http to us — the Cloudflare
+// Worker sets the header); then http:// + Host; degrade to
+// http://localhost:8000 if even that is missing. Returns an owned String.
 @ __mcp_info_base_url HttpRequest req → String {
     : String env ( env_var_or `NURL_PUBLIC_URL` `` )
     : i envl ( string_len env )
@@ -1697,11 +1698,21 @@ s combined_stdout s combined_stderr → v {
             ^ trimmed
         } { ^ env }
     } { ( string_free env ) }
+    : ~ s scheme `http`
+    : ?String proto_opt ( header_get . req headers `X-Forwarded-Proto` )
+    ?? proto_opt {
+        T proto → {
+            ? != 0 ( nurl_str_eq ( string_data proto ) `https` ) { = scheme `https` } {}
+            ( string_free proto )
+        }
+        F _ → {}
+    }
     : ?String host_opt ( header_get . req headers `Host` )
     ?? host_opt {
         T host → {
             : String out ( string_with_cap 64 )
-            ( string_push_str out `http://` )
+            ( string_push_str out scheme )
+            ( string_push_str out `://` )
             ( string_push_str out ( string_data host ) )
             ( string_free host )
             ^ out
