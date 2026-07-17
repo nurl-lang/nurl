@@ -4730,26 +4730,27 @@ s combined_stdout s combined_stderr → v {
 
 @ __grep_file_hits_cap → i { ^ 8 }
 
-@ __grep_alnum i c → b {
-    ? & >= c 48 <= c 57 { ^ T } {}
+@ __grep_alpha i c → b {
     ? & >= c 97 <= c 122 { ^ T } {}
     ^ & >= c 65 <= c 90
 }
 
-// Does the line contain the pattern? word=T additionally requires that
-// the bytes adjacent to the match are NOT alphanumeric (line edges
-// count as boundaries; underscore too — identifier-token semantics, so
-// a short acronym like `mcp` matches `mcp_call` and `/mcp` but not
-// `memcpy` or `-mcpu`, which is what makes 3-letter searches usable).
-// Scans every occurrence: an early substring hit inside a word must not
-// mask a later boundary-clean one on the same line.
-@ __grep_line_hit String line_lc String pat_lc b word → b {
+// Classify one line against the pattern:
+//   0 — no substring match at all
+//   1 — at least one occurrence sits at word boundaries: the adjacent
+//       bytes are not LETTERS (line edges qualify; digits, underscore
+//       and punctuation all count as boundaries — `mcp` is clean in
+//       `mcp_call`, `/mcp` and `mcp2`, but not in `memcpy` or `-mcpu`)
+//   2 — substring occurrences only, every one inside a longer word
+// Scans every occurrence: an early in-word hit must not mask a later
+// boundary-clean one on the same line.
+@ __grep_line_class String line_lc String pat_lc → i {
     : s hay ( string_data line_lc )
     : s pat ( string_data pat_lc )
-    ? ! word { ^ >= ( nurl_str_find hay pat ) 0 } {}
+    ? < ( nurl_str_find hay pat ) 0 { ^ 0 } {}
     : i n ( string_len line_lc )
     : i m ( string_len pat_lc )
-    ? | == m 0 > m n { ^ F } {}
+    ? | == m 0 > m n { ^ 2 } {}
     : ~ i k 0
     ~ <= k - n m {
         : ~ b hit T
@@ -4760,19 +4761,49 @@ s combined_stdout s combined_stderr → v {
         }
         ? hit {
             : ~ b lb T
-            ? > k 0 { = lb ! ( __grep_alnum ( nurl_str_get hay - k 1 ) ) } {}
+            ? > k 0 { = lb ! ( __grep_alpha ( nurl_str_get hay - k 1 ) ) } {}
             : ~ b rb T
-            ? < + k m n { = rb ! ( __grep_alnum ( nurl_str_get hay + k m ) ) } {}
-            ? & lb rb { ^ T } {}
+            ? < + k m n { = rb ! ( __grep_alpha ( nurl_str_get hay + k m ) ) } {}
+            ? & lb rb { ^ 1 } {}
         } {}
         = k + k 1
     }
-    ^ F
+    ^ 2
 }
 
-// Grep one file; append `<label>/<rel>:<ln>: <text>` lines. ctr =
-// [matched, emitted].
-@ __grep_one_file s root s rel s label String pat_lc b word String out ( Vec i ) ctr → v {
+// Byte budgets: boundary-clean hits get the lion's share; in-word hits
+// are usually noise for short patterns, so a small tail is enough to
+// show they exist without drowning the signal.
+@ __grep_clean_cap → i { ^ 20480 }
+
+@ __grep_word_cap → i { ^ 4096 }
+
+// Append one `<label>/<rel>:<ln>: <text>` hit line (200-byte trim).
+@ __grep_push_hit String buf s label s rel i lineno String line → v {
+    ( string_push_str buf label )
+    ( string_push_char buf 47 )
+    ( string_push_str buf rel )
+    ( string_push_char buf 58 )
+    ( string_push_int buf lineno )
+    ( string_push_str buf `: ` )
+    : ~ i keep ( string_len line )
+    ? > keep 200 { = keep 200 } {}
+    : s lraw ( string_data line )
+    : ~ i j 0
+    ~ < j keep {
+        : i c ( nurl_str_get lraw j )
+        ( string_push_char buf ? == c 9 32 c )
+        = j + j 1
+    }
+    ? > ( string_len line ) 200 { ( string_push_str buf `…` ) } {}
+    ( string_push_char buf 10 )
+}
+
+// Grep one file into the two class buffers. word=T drops in-word lines
+// entirely (they are still counted, so the header can say how many were
+// filtered). ctr = [matched_clean, emitted_clean, matched_word,
+// emitted_word]; per-file cap applies per class.
+@ __grep_one_file s root s rel s label String pat_lc b word String out_clean String out_word ( Vec i ) ctr → v {
     : String fp ( path_join root rel )
     : !( Vec u ) IoErr rd ( read_file_bytes ( string_data fp ) )
     ( string_free fp )
@@ -4783,37 +4814,32 @@ s combined_stdout s combined_stderr → v {
             : ( Vec String ) lines ( string_split src `\n` )
             ( string_free src )
             : i nl ( vec_len [String] lines )
-            : ~ i file_hits 0
+            : ~ i file_clean 0
+            : ~ i file_word 0
             : ~ i li 0
             ~ < li nl {
                 ?? ( vec_get [String] lines li ) {
                     T line → {
                         : String line_lc ( string_to_lower line )
-                        ? ( __grep_line_hit line_lc pat_lc word ) {
-                            : i matched ?? ( vec_get [i] ctr 0 ) { T v → v F _ → 0 }
-                            ( vec_set [i] ctr 0 + matched 1 )
-                            ? & < file_hits ( __grep_file_hits_cap ) < ( string_len out ) ( __grep_out_cap ) {
-                                ( string_push_str out label )
-                                ( string_push_char out 47 )
-                                ( string_push_str out rel )
-                                ( string_push_char out 58 )
-                                ( string_push_int out + li 1 )
-                                ( string_push_str out `: ` )
-                                // Trim the line to 200 bytes.
-                                : ~ i keep ( string_len line )
-                                ? > keep 200 { = keep 200 } {}
-                                : s lraw ( string_data line )
-                                : ~ i j 0
-                                ~ < j keep {
-                                    : i c ( nurl_str_get lraw j )
-                                    ( string_push_char out ? == c 9 32 c )
-                                    = j + j 1
-                                }
-                                ? > ( string_len line ) 200 { ( string_push_str out `…` ) } {}
-                                ( string_push_char out 10 )
-                                = file_hits + file_hits 1
-                                : i emitted ?? ( vec_get [i] ctr 1 ) { T v → v F _ → 0 }
-                                ( vec_set [i] ctr 1 + emitted 1 )
+                        : i cls ( __grep_line_class line_lc pat_lc )
+                        ? == cls 1 {
+                            : i mc ?? ( vec_get [i] ctr 0 ) { T v → v F _ → 0 }
+                            ( vec_set [i] ctr 0 + mc 1 )
+                            ? & < file_clean ( __grep_file_hits_cap ) < ( string_len out_clean ) ( __grep_clean_cap ) {
+                                ( __grep_push_hit out_clean label rel + li 1 line )
+                                = file_clean + file_clean 1
+                                : i ec ?? ( vec_get [i] ctr 1 ) { T v → v F _ → 0 }
+                                ( vec_set [i] ctr 1 + ec 1 )
+                            } {}
+                        } {}
+                        ? == cls 2 {
+                            : i mw ?? ( vec_get [i] ctr 2 ) { T v → v F _ → 0 }
+                            ( vec_set [i] ctr 2 + mw 1 )
+                            ? & & ! word < file_word ( __grep_file_hits_cap ) < ( string_len out_word ) ( __grep_word_cap ) {
+                                ( __grep_push_hit out_word label rel + li 1 line )
+                                = file_word + file_word 1
+                                : i ew ?? ( vec_get [i] ctr 3 ) { T v → v F _ → 0 }
+                                ( vec_set [i] ctr 3 + ew 1 )
                             } {}
                         } {}
                         ( string_free line_lc )
@@ -4822,10 +4848,15 @@ s combined_stdout s combined_stderr → v {
                 }
                 = li + li 1
             }
-            ? >= file_hits ( __grep_file_hits_cap ) {
-                ( string_push_str out `  (…more hits in ` )
-                ( string_push_str out rel )
-                ( string_push_str out ` capped)\n` )
+            ? >= file_clean ( __grep_file_hits_cap ) {
+                ( string_push_str out_clean `  (…more hits in ` )
+                ( string_push_str out_clean rel )
+                ( string_push_str out_clean ` capped)\n` )
+            } {}
+            ? >= file_word ( __grep_file_hits_cap ) {
+                ( string_push_str out_word `  (…more hits in ` )
+                ( string_push_str out_word rel )
+                ( string_push_str out_word ` capped)\n` )
             } {}
             ( vec_free_with [String] lines \ String l → v { ( string_free l ) } )
         }
@@ -4834,19 +4865,19 @@ s combined_stdout s combined_stderr → v {
 }
 
 // Grep one corpus directory (recursively, .nu files).
-@ __grep_corpus s root s label String pat_lc b word String out ( Vec i ) ctr → v {
+@ __grep_corpus s root s label String pat_lc b word String out_clean String out_word ( Vec i ) ctr → v {
     : Json files ( json_arr_new )
     ( __walk_nu_files files root `` )
     : i nf ( json_arr_len files )
     : ~ i k 0
     ~ < k nf {
-        ? < ( string_len out ) ( __grep_out_cap ) {
+        ? < ( string_len out_clean ) ( __grep_clean_cap ) {
             ?? ( json_arr_get files k ) {
                 T fo → {
                     ?? ( json_obj_get fo `path` ) {
                         T pj → {
                             ? ( json_is_str pj ) {
-                                ( __grep_one_file root ( json_as_str pj ) label pat_lc word out ctr )
+                                ( __grep_one_file root ( json_as_str pj ) label pat_lc word out_clean out_word ctr )
                             } {}
                         }
                         F _ → {}
@@ -4952,45 +4983,66 @@ s combined_stdout s combined_stderr → v {
     : b w_tests | all >= ( nurl_str_find where_s `test` ) 0
     : b w_packages | all >= ( nurl_str_find where_s `package` ) 0
 
-    : String out ( string_with_cap 4096 )
+    : String out_clean ( string_with_cap 4096 )
+    : String out_word ( string_with_cap 1024 )
     : ( Vec i ) ctr ( vec_new [i] )
-    ( vec_push [i] ctr 0 ) ( vec_push [i] ctr 0 )
+    ( vec_push [i] ctr 0 ) ( vec_push [i] ctr 0 ) ( vec_push [i] ctr 0 ) ( vec_push [i] ctr 0 )
     ? w_stdlib {
         : String dir ( get_stdlib_dir )
-        ( __grep_corpus ( string_data dir ) `stdlib` pat_lc word out ctr )
+        ( __grep_corpus ( string_data dir ) `stdlib` pat_lc word out_clean out_word ctr )
         ( string_free dir )
     } {}
     ? w_examples {
         : String dir ( get_examples_dir )
-        ( __grep_corpus ( string_data dir ) `examples` pat_lc word out ctr )
+        ( __grep_corpus ( string_data dir ) `examples` pat_lc word out_clean out_word ctr )
         ( string_free dir )
     } {}
     ? w_tests {
         : String dir ( get_tests_dir )
-        ( __grep_corpus ( string_data dir ) `tests` pat_lc word out ctr )
+        ( __grep_corpus ( string_data dir ) `tests` pat_lc word out_clean out_word ctr )
         ( string_free dir )
     } {}
-    ? w_packages { ( __grep_packages pattern out ) } {}
 
-    : i matched ?? ( vec_get [i] ctr 0 ) { T v → v F _ → 0 }
-    : i emitted ?? ( vec_get [i] ctr 1 ) { T v → v F _ → 0 }
-    : String hdr ( string_with_cap + ( string_len out ) 256 )
-    ( string_push_int hdr matched )
+    : i m_clean ?? ( vec_get [i] ctr 0 ) { T v → v F _ → 0 }
+    : i e_clean ?? ( vec_get [i] ctr 1 ) { T v → v F _ → 0 }
+    : i m_word ?? ( vec_get [i] ctr 2 ) { T v → v F _ → 0 }
+    : i e_word ?? ( vec_get [i] ctr 3 ) { T v → v F _ → 0 }
+
+    // Header + boundary-clean hits first, then the in-word tail (or the
+    // filtered count when word=true) — for a short pattern like `mcp`
+    // this puts the signal on top and the memcpy noise, clearly labeled,
+    // at the bottom.
+    : String hdr ( string_with_cap + + ( string_len out_clean ) ( string_len out_word ) 512 )
+    ( string_push_int hdr m_clean )
     ( string_push_str hdr ` line(s) match '` )
     ( string_push_str hdr pattern )
-    ? word {
-        ( string_push_str hdr `' (case-insensitive, word-boundary).\n\n` )
-    } {
-        ( string_push_str hdr `' (case-insensitive substring).\n\n` )
-    }
-    ( string_push_str hdr ( string_data out ) )
-    ? > matched emitted {
+    ( string_push_str hdr `' at word boundaries` )
+    ? > m_word 0 {
+        ( string_push_str hdr `, plus ` )
+        ( string_push_int hdr m_word )
+        ( string_push_str hdr ` inside longer words` )
+    } {}
+    ( string_push_str hdr ` (case-insensitive).\n\n` )
+    ( string_push_str hdr ( string_data out_clean ) )
+    ? & word > m_word 0 {
+        ( string_push_str hdr `(word=true — ` )
+        ( string_push_int hdr m_word )
+        ( string_push_str hdr ` line(s) with only in-word matches filtered out)\n` )
+    } {}
+    ? & ! word > m_word 0 {
+        ( string_push_str hdr `\n— matches inside longer words (substring only):\n` )
+        ( string_push_str hdr ( string_data out_word ) )
+    } {}
+    ? w_packages { ( __grep_packages pattern hdr ) } {}
+    : i omitted - + m_clean ? word 0 m_word + e_clean e_word
+    ? > omitted 0 {
         ( string_push_str hdr `… ` )
-        ( string_push_int hdr - matched emitted )
+        ( string_push_int hdr omitted )
         ( string_push_str hdr ` more matching lines omitted (per-file/total caps) — narrow the pattern or scope with 'where'.\n` )
     } {}
     : Json result ( __mcp_result_text ( string_data hdr ) )
-    ( string_free hdr ) ( string_free out ) ( vec_free [i] ctr ) ( string_free pat_lc )
+    ( string_free hdr ) ( string_free out_clean ) ( string_free out_word )
+    ( vec_free [i] ctr ) ( string_free pat_lc )
     ^ result
 }
 
@@ -5003,7 +5055,7 @@ s combined_stdout s combined_stderr → v {
     ( json_obj_set props `where`
     ( __mcp_prop `string` `Scope: 'stdlib', 'examples', 'tests', 'packages' (registry name+description search), or 'all' (default). Combine with commas, e.g. 'stdlib,examples'.` ) )
     ( json_obj_set props `word`
-    ( __mcp_prop `boolean` `true = require a word boundary (non-alphanumeric or line edge; underscore counts as a boundary) around the match: 'mcp' then matches mcp_call and /mcp but not memcpy. STRONGLY recommended for patterns under ~5 characters. Local corpora only; the registry side always matches substrings.` ) )
+    ( __mcp_prop `boolean` `true = return ONLY word-boundary lines and drop the in-word tail entirely (the filtered count is still reported). Rarely needed: results are always ranked boundary-first. Local corpora only; the registry side always matches substrings.` ) )
     : Json req ( json_arr_new )
     ( json_arr_push req ( json_str_lit `pattern` ) )
     ( json_obj_set schema `properties` props )
@@ -5196,7 +5248,7 @@ s combined_stdout s combined_stderr → v {
     ( __mcp_schema_api ) ) )
 
     ( json_arr_push arr ( __mcp_tool_desc `nurl_grep`
-    `Case-insensitive search across the NURL corpora: stdlib sources, examples, compiler tests (path:line: text, per-file and total caps) and the package registry (name + description) — one cheap call to check how something is used in real code, or whether a package for X already exists. Scope with where='stdlib'|'examples'|'tests'|'packages'|'all'. For short acronyms (under ~5 chars) pass word=true so 'mcp' does not drown in memcpy: it requires a non-alphanumeric boundary around the match (underscore counts as a boundary, so mcp_call still hits).`
+    `Case-insensitive substring search (grep -F -i) across the NURL corpora: stdlib sources, examples, compiler tests (path:line: text, per-file and total caps) and the package registry (name + description). Results are RANKED: lines where the match sits at word boundaries (adjacent byte is not a letter — mcp_call, /mcp and mcp2 qualify, memcpy does not) come first; in-word substring matches follow under a separate clearly-labeled tail, so short acronyms stay readable without any flags. Scope with where='stdlib'|'examples'|'tests'|'packages'|'all'; word=true drops the in-word tail entirely.`
     ( __mcp_schema_grep ) ) )
 
     : Json out ( json_obj_new )

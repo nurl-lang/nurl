@@ -10,11 +10,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- MCP `nurl_grep` gains `word=true`: requires a non-alphanumeric boundary
-  around the match (underscore counts as a boundary), so a short acronym
-  like `mcp` matches `mcp_call` and `/mcp` but no longer drowns in a
-  thousand `memcpy` / `-mcpu` substring hits. The tool description now
-  recommends it for patterns under ~5 characters.
+- MCP `nurl_grep` ranks word-boundary matches first, by default and with
+  no flags: lines where the pattern's neighbors are not letters (digits,
+  underscore, punctuation and line edges all count as boundaries — `mcp`
+  is clean in `mcp_call`, `/mcp` and `mcp2`, not in `memcpy` or `-mcpu`)
+  come first, and in-word substring hits follow under a clearly-labeled
+  tail with its own small byte budget. Plain-grep substring semantics
+  are preserved — nothing matching is hidden, only ordered. `word=true`
+  drops the in-word tail entirely (the filtered count is still
+  reported).
 
 ## [0.17.0] — 2026-07-17
 
