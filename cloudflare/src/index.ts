@@ -1,5 +1,5 @@
 import { Container, getContainer } from "@cloudflare/containers";
-import { decideAction, stampMismatch } from "./recovery";
+import { decideAction, stampAction } from "./recovery";
 
 // ── Why this file has a custom fetch override ─────────────────────────────
 //
@@ -110,9 +110,11 @@ export class NurlContainer extends Container<Env> {
         try {
           const h = await super.fetch(new Request("http://container/health"));
           const j = (await h.json()) as { build_id?: string };
-          if (stampMismatch(this.env.NURL_DEPLOY_ID, j.build_id)) {
+          const recycledFor = await this.ctx.storage.get<string>("stampRecycledFor");
+          if (stampAction(this.env.NURL_DEPLOY_ID, j.build_id, recycledFor) === "recycle") {
+            await this.ctx.storage.put("stampRecycledFor", this.env.NURL_DEPLOY_ID);
             await this.recycle(
-              `image build ${j.build_id ?? "?"} != deploy ${this.env.NURL_DEPLOY_ID}`,
+              `image build ${j.build_id || "?"} != deploy ${this.env.NURL_DEPLOY_ID}`,
             );
           }
         } catch {
