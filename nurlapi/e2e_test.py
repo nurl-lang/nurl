@@ -415,15 +415,25 @@ def t_tools_call_grep(c: Client) -> None:
     assert_true("grep reports line count", "line(s) match" in text)
     assert_true("grep returns path:line hits", "stdlib/std/time.nu:" in text)
 
-    # word mode: 'mcp' is a memcpy substring — word=true must keep the MCP
-    # family (mcp_*, /mcp) and drop every memcpy/-mcpu line.
+    # Boundary ranking, no flags needed: 'mcp' is a memcpy substring. The
+    # default output must put boundary-clean lines (the ext/mcp family)
+    # FIRST and every memcpy line under the labeled in-word tail.
+    env = _tool_call(c, "nurl_grep", {"pattern": "mcp", "where": "stdlib"})
+    text = _tool_text(env)
+    assert_true("boundary hits found", "ext/mcp" in text)
+    assert_true("in-word tail labeled", "— matches inside longer words" in text)
+    sep = text.index("— matches inside longer words")
+    assert_true("mcp family ranked before the tail", text.index("ext/mcp") < sep)
+    assert_true("memcpy only in the tail", text.index("memcpy") > sep)
+    # Letters-only boundary: 'http' at a digit boundary (http2_*) is clean.
+    env = _tool_call(c, "nurl_grep", {"pattern": "http", "where": "stdlib", "word": True})
+    text = _tool_text(env)
+    assert_true("digit boundary is clean (http2)", "http2" in text)
+    # word=true drops the tail entirely but reports the filtered count.
     env = _tool_call(c, "nurl_grep", {"pattern": "mcp", "where": "stdlib", "word": True})
     text = _tool_text(env)
-    assert_true("word mode still finds mcp modules", "ext/mcp" in text)
-    assert_true("word mode drops memcpy", "memcpy" not in text)
-    assert_true("word mode header says word-boundary", "word-boundary" in text)
-    env = _tool_call(c, "nurl_grep", {"pattern": "mcp", "where": "stdlib"})
-    assert_true("substring mode still matches memcpy", "memcpy" in _tool_text(env))
+    assert_true("word=true drops memcpy", "memcpy" not in text)
+    assert_true("word=true reports filtered count", "filtered out" in text)
 
     env = _tool_call(c, "nurl_grep", {"pattern": "zzz-no-such-thing-zzz", "where": "stdlib"})
     text = _tool_text(env)
