@@ -10,6 +10,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Playground build endpoints return ABSOLUTE `download_url`s (native,
+  windows, macos, cross-target and wasm — wasm keeps its base64 payload
+  too): the base comes from `NURL_PUBLIC_URL` (or the already-deployed
+  `NURL_API_URL`), so an MCP caller on another machine no longer has to
+  guess which host a bare `/download/…` path belongs to. Unset env keeps
+  the old relative form for same-host use.
+
 - MCP `nurl_api` notes an exact package-name hit in one footer line
   regardless of stdlib match count — `query='http'` returns hundreds of
   declarations AND "Note: the registry has a package named 'http' — the

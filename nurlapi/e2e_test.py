@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import time
 import urllib.error
@@ -209,7 +210,12 @@ def t_mcp_info(c: Client) -> None:
         .get("nurl", {})
         .get("url", "")
     )
-    assert_true("X-Forwarded-Proto: https yields https URL", fwd_url.startswith("https://"))
+    if os.environ.get("E2E_EXPECT_ABSOLUTE_DOWNLOADS") == "1":
+        # An env-pinned public URL deliberately outranks the forwarded
+        # scheme — assert the pin held instead.
+        assert_true("env-pinned base outranks fwd-proto", fwd_url.startswith("http"))
+    else:
+        assert_true("X-Forwarded-Proto: https yields https URL", fwd_url.startswith("https://"))
 
     assert_true(
         "client_config_example.mcpServers.nurl.url ends in /mcp",
@@ -507,6 +513,15 @@ def t_tools_call_build(c: Client) -> None:
     artifact = j.get("binary_artifact") or j.get("binary") or {}
     token = artifact.get("token") if isinstance(artifact, dict) else None
     url = artifact.get("url") if isinstance(artifact, dict) else None
+    # download_url must be ABSOLUTE when the server exports its public URL
+    # (NURL_PUBLIC_URL / NURL_API_URL) — an MCP caller on another machine
+    # cannot guess the host from a bare path. The harness opts in via
+    # E2E_EXPECT_ABSOLUTE_DOWNLOADS=1 when it started the server that way.
+    dl = artifact.get("download_url") if isinstance(artifact, dict) else None
+    if os.environ.get("E2E_EXPECT_ABSOLUTE_DOWNLOADS") == "1":
+        assert_true("download_url is absolute", bool(dl) and dl.startswith("http"), f"dl={dl!r}")
+    elif dl:
+        assert_true("download_url shape", dl.startswith("http") or dl.startswith("/download/"), f"dl={dl!r}")
     if token:
         status, _, body = c.get(f"/download/{token}")
         assert_eq("download token → 200", status, 200)

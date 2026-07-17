@@ -756,6 +756,26 @@ $ `nurlapi/pptws.nu`
 
 // ── Build-response helpers (shared by /build*, mirrors api/'s shape) ──
 
+// The server's public base URL from the environment: NURL_PUBLIC_URL
+// first, then NURL_API_URL (the name the playground deployment already
+// exports). Trailing '/' trimmed; "" when neither is set — callers then
+// fall back to relative URLs (fine for same-host browser use) or to the
+// request's forwarded scheme + Host.
+@ __public_base_url → String {
+    : ~ String env ( env_var_or `NURL_PUBLIC_URL` `` )
+    ? == ( string_len env ) 0 {
+        ( string_free env )
+        = env ( env_var_or `NURL_API_URL` `` )
+    } {}
+    : i n ( string_len env )
+    ? & > n 0 ( string_ends_with env `/` ) {
+        : String trimmed ( string_substr env 0 - n 1 )
+        ( string_free env )
+        ^ trimmed
+    } {}
+    ^ env
+}
+
 // Build the standard { name, bytes, download_url, token } artifact object.
 // `token` is `<build_id>/<name>` — the same opaque identifier used by the
 // /download/<build_id>/<name> route, exposed separately so clients can
@@ -768,7 +788,12 @@ $ `nurlapi/pptws.nu`
     ( string_push_str token build_id )
     ( string_push_str token `/` )
     ( string_push_str token name )
-    : String url ( string_with_cap 64 )
+    // Absolute when the deployment exports its public URL — an MCP
+    // caller on another machine cannot guess the host from a bare path.
+    : String base ( __public_base_url )
+    : String url ( string_with_cap 96 )
+    ( string_push_str url ( string_data base ) )
+    ( string_free base )
     ( string_push_str url `/download/` )
     ( string_push_str url ( string_data token ) )
     ( json_obj_set o `download_url` ( json_str_lit ( string_data url ) ) )
@@ -1307,7 +1332,10 @@ s combined_stdout s combined_stderr → v {
                                 ?? wasm_data_res { T w_data → {
                                         : String b ( b64_encode_vec w_data ) ( json_obj_set res `wasm_base64` ( json_str_lit ( string_data b ) ) )
                                         ( string_free b64 ) = b64 b ( vec_free [u] w_data ) } F _ → {} }
-                                = wasm_url ( string_with_cap 64 )
+                                = wasm_url ( string_with_cap 96 )
+                                : String w_base ( __public_base_url )
+                                ( string_push_str wasm_url ( string_data w_base ) )
+                                ( string_free w_base )
                                 ( string_push_str wasm_url `/download/` ) ( string_push_str wasm_url ( string_data build_id ) ) ( string_push_str wasm_url `/` ) ( string_push_str wasm_url ( string_data wasm_name ) )
                                 ( json_obj_set res `download_url` ( json_str_lit ( string_data wasm_url ) ) )
                             } {}
@@ -1689,15 +1717,8 @@ s combined_stdout s combined_stderr → v {
 // Worker sets the header); then http:// + Host; degrade to
 // http://localhost:8000 if even that is missing. Returns an owned String.
 @ __mcp_info_base_url HttpRequest req → String {
-    : String env ( env_var_or `NURL_PUBLIC_URL` `` )
-    : i envl ( string_len env )
-    ? != envl 0 {
-        ? ( string_ends_with env `/` ) {
-            : String trimmed ( string_substr env 0 - envl 1 )
-            ( string_free env )
-            ^ trimmed
-        } { ^ env }
-    } { ( string_free env ) }
+    : String env ( __public_base_url )
+    ? != ( string_len env ) 0 { ^ env } { ( string_free env ) }
     : ~ s scheme `http`
     : ?String proto_opt ( header_get . req headers `X-Forwarded-Proto` )
     ?? proto_opt {
