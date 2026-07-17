@@ -205,6 +205,14 @@ COPY --from=builder /src/nurlapi/static /app/static
 ARG NURL_VERSION=dev
 RUN sed -i "s/__NURL_VERSION__/${NURL_VERSION}/g" /app/static/index.html
 
+# Exact build identity (the git SHA), reported by /health as build_id.
+# The Worker compares it against its NURL_DEPLOY_ID var and recycles a
+# container instance still running an older image — deploys reach the
+# LIVE instance deterministically instead of waiting for an idle window
+# that steady public traffic may never allow.
+ARG NURL_BUILD_ID=dev
+ENV NURL_BUILD_ID=${NURL_BUILD_ID}
+
 # Bring in all cross-compilation artifacts
 RUN mkdir -p /opt/nurl/build /opt/nurl/stdlib /app/output /opt/nurl/examples /opt/nurl/compiler /opt/nurl/spec /opt/nurl/docs
 COPY --from=builder /src/build/nurlc             /opt/nurl/build/nurlc

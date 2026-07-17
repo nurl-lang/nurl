@@ -1692,6 +1692,12 @@ s combined_stdout s combined_stderr → v {
     : String nurlc_path ( get_nurlc_path ) : String stdlib_dir ( get_stdlib_dir ) : String wasi_clang ( get_wasi_clang ) : String runtime_wasm ( get_runtime_wasm_o )
     : Json j ( json_obj_new )
     ( json_obj_set j `status` ( json_str_lit `ok` ) )
+    // Exact image identity (git SHA baked at image build) — the Worker
+    // compares this against its NURL_DEPLOY_ID and recycles an instance
+    // still running an older image.
+    : String build_id ( env_var_or `NURL_BUILD_ID` `` )
+    ( json_obj_set j `build_id` ( json_str_lit ( string_data build_id ) ) )
+    ( string_free build_id )
     ( json_obj_set j `nurlc_available` ( json_bool ( file_exists ( string_data nurlc_path ) ) ) )
     ( json_obj_set j `nurlc_path` ( json_str_lit ( string_data nurlc_path ) ) )
     ( json_obj_set j `wasi_toolchain_available` ( json_bool | ( file_exists ( string_data wasi_clang ) ) ( file_exists ( string_data runtime_wasm ) ) ) )

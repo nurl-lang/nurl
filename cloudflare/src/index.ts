@@ -1,5 +1,5 @@
 import { Container, getContainer } from "@cloudflare/containers";
-import { decideAction } from "./recovery";
+import { decideAction, stampMismatch } from "./recovery";
 
 // ── Why this file has a custom fetch override ─────────────────────────────
 //
@@ -32,6 +32,14 @@ import { decideAction } from "./recovery";
 // How many times to recycle+retry before giving up and surfacing the error.
 // (The classification policy lives in ./recovery, kept pure for unit testing.)
 const MAX_RECYCLES = 2;
+
+// How often (at most) to compare the running image's build stamp against
+// the deployed one. A live instance under steady public traffic never
+// idles long enough to recycle onto a new image on its own — this check
+// makes deploys reach it deterministically, converging even when the
+// image rollout finishes minutes after `wrangler deploy` (a premature
+// recycle lands back on the old image, and the next check fires again).
+const STAMP_CHECK_MS = 5 * 60_000;
 
 export class NurlContainer extends Container<Env> {
   defaultPort = 8000;
@@ -90,6 +98,28 @@ export class NurlContainer extends Container<Env> {
         body: bodyBuf,
         redirect: "manual",
       });
+
+    // Deploy-stamp adoption: /health reports the image's baked build_id;
+    // when it differs from the Worker's NURL_DEPLOY_ID, this instance is
+    // running a pre-deploy image — recycle it (throttled) so the request
+    // is served by the new one.
+    if (this.env.NURL_DEPLOY_ID) {
+      const last = (await this.ctx.storage.get<number>("stampCheckAt")) ?? 0;
+      if (Date.now() - last > STAMP_CHECK_MS) {
+        await this.ctx.storage.put("stampCheckAt", Date.now());
+        try {
+          const h = await super.fetch(new Request("http://container/health"));
+          const j = (await h.json()) as { build_id?: string };
+          if (stampMismatch(this.env.NURL_DEPLOY_ID, j.build_id)) {
+            await this.recycle(
+              `image build ${j.build_id ?? "?"} != deploy ${this.env.NURL_DEPLOY_ID}`,
+            );
+          }
+        } catch {
+          // Probe failure = the normal request path will deal with it.
+        }
+      }
+    }
 
     for (let attempt = 0; ; attempt++) {
       let res: Response;
