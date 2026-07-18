@@ -8,6 +8,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`stdlib/net/relay.nu` — a multi-megabyte frame was dropped mid-read on a
+  blocking relay client.** `__read_exact` treated a recv **timeout**
+  (`SO_RCVTIMEO`, which the relay client sets deliberately) as a connection
+  failure, so a frame whose body spanned more than one recv window was
+  abandoned — and its unread bytes desynced the stream, turning every
+  following frame into garbage. A timeout mid-frame now means "the rest is
+  still coming" and is retried (bounded); a timeout with nothing yet read
+  still reports "no frame available"; a real close/error still fails.
+  New `net_is_timeout` predicate in `stdlib/std/net.nu`.
+
+
 ## [0.20.0] — 2026-07-18
 
 The **one kernel library** release: the ML stack's device layer is

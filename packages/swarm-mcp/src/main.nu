@@ -35,6 +35,7 @@ $ `stdlib/dist/ring.nu`
 $ `stdlib/dist/job.nu`
 $ `stdlib/ext/http_cli.nu`
 $ `token.nu`
+$ `blob.nu`
 $ `census.nu`
 $ `expr.nu`
 $ `work.nu`
@@ -73,6 +74,7 @@ $ `cudakernel.nu`
     i self_caps  // capability bits this node advertises (cap_gpu for --gpu workers)
     ( Vec u ) group  // token-derived 32-byte relay multicast group (cluster isolation)
     ( Vec u ) key  // token-derived HMAC key (compute authenticity)
+    i epoch  // bumps on every ring-membership change (block-seed invalidation)
 }
 
 @ swarm_new RelayClient rc i id i role i caps s token → *Swarm {
@@ -86,6 +88,9 @@ $ `cudakernel.nu`
     // node scopes the kind the same way, so mid-flight re-homing stays inside
     // the domain (dist/job job_set_ring).
     ( job_set_ring jn ( kind_wasm_gpu ) # s gring )
+    // Block seeds must land on the SAME worker as the compute chunk that
+    // references them: same ring, same key -> same owner.
+    ( job_set_ring jn ( kind_blob ) # s gring )
     : *Swarm sw # *Swarm ( nurl_alloc Z Swarm )
     = . sw transport # s tr
     = . sw ring # s ring
@@ -96,6 +101,7 @@ $ `cudakernel.nu`
     = . sw self_id id
     = . sw role role
     = . sw self_caps caps
+    = . sw epoch 0
     = . sw group ( token_group_id token )
     = . sw key ( token_key token )
     ? == role ( role_worker ) {
@@ -133,6 +139,9 @@ $ `cudakernel.nu`
             // A newly-heard GPU-capable worker also joins the GPU domain ring
             // (idempotent via the roster gate — a re-heard HELLO adds nothing).
             ? == & . h caps ( cap_gpu ) ( cap_gpu ) { ( ring_add_member # *Ring . sw gpu_ring . h pubkey ( swarm_vnodes ) ) } {}
+            // ring changed -> chunk keys may re-home; block seeds recorded
+            // under the old epoch are stale and will re-seed once
+            = . sw epoch + . sw epoch 1
         } {}
         ( transport_add_peer # *Transport . sw transport . h pubkey )
     } {}
@@ -226,6 +235,7 @@ $ `cudakernel.nu`
             : *Swarm sw ( swarm_new rc id ( role_worker ) caps token )
             ( job_register # *JobNode . sw job ( kind_kernel ) ( kernel_handler . sw key ) )
             ( job_register # *JobNode . sw job ( kind_wasm ) ( wasm_handler . sw key ) )
+            ( job_register # *JobNode . sw job ( kind_blob ) ( blob_handler . sw key ) )
             ? != gpu 0 { ( job_register # *JobNode . sw job ( kind_wasm_gpu ) ( wasm_gpu_handler . sw key ) ) } {}
             ( swarm_join_group sw )
             ( swarm_announce sw 1 )
@@ -540,6 +550,7 @@ $ `cudakernel.nu`
     ( Vec u ) vres  // vector result bytes (raw LE f64s; sample/hist modes)
     String out_file  // when set, the finished vector result is written here
     i dsid  // dataset id the task maps over (0 = none)
+    i seeded  // dataset blocks seeded by THIS submit (0 = all were cached)
 }
 
 : McpState {
@@ -549,6 +560,7 @@ $ `cudakernel.nu`
     ( Vec s ) wcache  // *WasmCached — compiled kernel modules by source hash
     ( Vec s ) datasets  // *Dataset — uploaded data the CUDA tools map over
     i next_ds
+    ( Vec String ) seeded  // "blockhex|chunk|epoch" — blocks CONFIRMED cached at their owner
 }
 
 // Constructor. The params share the field names (`lo`, `hi`, …); `= . t lo lo`
@@ -572,6 +584,7 @@ $ `cudakernel.nu`
     = . t vres ( vec_new [u] )
     = . t out_file ( string_new )
     = . t dsid 0
+    = . t seeded 0
     ^ t
 }
 
@@ -581,7 +594,7 @@ $ `cudakernel.nu`
 // A dataset is a flat f64 array held at the coordinator as raw LE bytes.
 // Tasks reference it by id; sharding ships each chunk exactly its slice.
 
-: Dataset { i id String name ( Vec u ) bytes }
+: Dataset { i id String name ( Vec u ) bytes ( Vec ( Vec u ) ) blocks }
 
 @ ds_count_of * Dataset d → i { ^ / ( vec_len [u] . d bytes ) 8 }
 
@@ -599,6 +612,117 @@ $ `cudakernel.nu`
 }
 
 // one-pass min/max/mean of raw LE f64 bytes, attached to a JSON object
+// Dataset-backed GPU submit over CONTENT-ADDRESSED blocks (payload v4).
+// Chunking is block-aligned, so every 8 MiB block belongs to exactly one
+// chunk; blocks not yet confirmed at their owner are seeded first as
+// kind_blob tasks carrying the SAME ring key as the compute chunk (same
+// ring + same key → same worker), and per-connection ordering guarantees
+// the worker handles a seed before the compute that references it. A seed
+// is recorded in `seeded` (hash|chunk|epoch) only after an OK result, so
+// a lost seed re-seeds on the next submit instead of wedging.
+// Dataset-backed GPU submit over CONTENT-ADDRESSED blocks (payload v4).
+// Chunking is block-aligned, so every block belongs to exactly one chunk.
+// Blocks not yet confirmed at their owner are seeded FIRST, strictly one at
+// a time — submit a block, pump until its OK result, then the next. A single
+// large frame is ever in flight to a given worker, which keeps the relay's
+// forwarding stream from interleaving multi-frame bursts. Only after every
+// referenced block is confirmed cached are the (small) compute chunks
+// submitted; each references its blocks by hash and the worker assembles the
+// slice from its cache, failing visibly on any missing block.
+@ cluster_submit_wasm_gpu_ds * Swarm sw i mode i rlo i rhi i kbins ( Vec i ) params * Dataset d ( Vec u ) wasm i nchunks_want ( Vec String ) seeded * u nseed_cell → ( Vec i ) {
+    : i bv ( blob_block_vals )
+    : i blo / rlo bv
+    : i bhi / + rhi - bv 1 bv
+    : i nblocks - bhi blo
+    : ~ i nc nchunks_want
+    ? > nc nblocks { = nc nblocks } {}
+    ? < nc 1 { = nc 1 } {}
+    : ~ i nseeded 0
+    // ── phase 1: seed every referenced block, serially + confirmed ──
+    : ~ i i 0
+    ~ < i nc {
+        : i bs + blo / * i nblocks nc
+        : i be + blo / * + i 1 nblocks nc
+        : ( Vec u ) rkey ( chunk_key i )
+        : ~ i b bs
+        ~ < b be {
+            : ( Vec u ) h ?? ( vec_get [( Vec u )] . d blocks b ) { T x → ( bytes_slice x 0 32 ) F → ( vec_new [u] ) }
+            : String hex ( blob_hex h )
+            : String sk ( string_from ( string_data hex ) )
+            ( string_push_char sk 124 )
+            ( string_push_int sk i )
+            ( string_push_char sk 124 )
+            ( string_push_int sk . sw epoch )
+            : ~ b have F
+            : i ns ( vec_len [String] seeded )
+            : ~ i q 0
+            ~ & ! have < q ns {
+                ?? ( vec_get [String] seeded q ) { T e2 → { ? ( string_eq e2 sk ) { = have T } {} } F → {} }
+                = q + q 1
+            }
+            ? have { ( string_free sk ) } {
+                : i off * b * bv 8
+                : i end0 + off * bv 8
+                : i dn ( vec_len [u] . d bytes )
+                : i end ? < end0 dn end0 dn
+                : ( Vec u ) bb ( bytes_slice . d bytes off end )
+                : ( Vec u ) sp ( blob_seed_payload h bb )
+                : ( Vec u ) tg ( token_tag . sw key sp )
+                : i stid ( job_submit # *JobNode . sw job ( kind_blob ) rkey tg )
+                = nseeded + nseeded 1
+                // confirm THIS block before sending the next
+                : ~ i r 0
+                ~ & < r 600 ! ( job_has # *JobNode . sw job stid ) { ( swarm_pump sw 100 ) = r + r 1 }
+                : ~ b okseed F
+                ?? ( job_await # *JobNode . sw job stid ) {
+                    T rr → {
+                        ?? ( token_untag . sw key rr ) {
+                            T bd → { ? == ?? ( vec_get [u] bd 0 ) { T x → # i x F → 0 } 1 { = okseed T } {} ( vec_free [u] bd ) }
+                            F → {}
+                        }
+                        ( vec_free [u] rr )
+                    }
+                    F → {}
+                }
+                ? okseed { ( vec_push [String] seeded sk ) } { ( string_free sk ) }
+                ( vec_free [u] bb ) ( vec_free [u] sp ) ( vec_free [u] tg )
+            }
+            ( string_free hex ) ( vec_free [u] h )
+            = b + b 1
+        }
+        ( vec_free [u] rkey )
+        = i + i 1
+    }
+    // ── phase 2: submit the compute chunks (small, reference by hash) ──
+    : ( Vec i ) tids ( vec_new [i] )
+    = i 0
+    ~ < i nc {
+        : i bs + blo / * i nblocks nc
+        : i be + blo / * + i 1 nblocks nc
+        ? > be bs {
+            : i clo0 * bs bv
+            : i chi0 * be bv
+            : i clo ? > rlo clo0 rlo clo0
+            : i chi ? < rhi chi0 rhi chi0
+            : ( Vec u ) rkey ( chunk_key i )
+            : ( Vec ( Vec u ) ) hashes ( vec_new [( Vec u )] )
+            : ~ i b bs
+            ~ < b be {
+                ?? ( vec_get [( Vec u )] . d blocks b ) { T x → { ( vec_push [( Vec u )] hashes ( bytes_slice x 0 32 ) ) } F → {} }
+                = b + b 1
+            }
+            : ( Vec u ) payload ( wasm_gpu_chunk_payload_blobs mode clo chi kbins params bs hashes wasm )
+            : ( Vec u ) tagged ( token_tag . sw key payload )
+            ( vec_push [i] tids ( job_submit # *JobNode . sw job ( kind_wasm_gpu ) rkey tagged ) )
+            ( blob_manifest_free hashes )
+            ( vec_free [u] rkey ) ( vec_free [u] payload ) ( vec_free [u] tagged )
+        } {}
+        = i + i 1
+    }
+    ( nurl_poke nseed_cell 0 nseeded )
+    ^ tids
+}
+
 @ __stats_json Json o ( Vec u ) bytes → v {
     : i cnt / ( vec_len [u] bytes ) 8
     ? == cnt 0 { ^ v } {}
@@ -736,7 +860,12 @@ $ `cudakernel.nu`
     ( json_obj_set o `lo` ( json_int . t lo ) )
     ( json_obj_set o `hi` ( json_int . t hi ) )
     ( json_obj_set o `chunks` ( json_int . t nchunks ) )
-    ? != . t dsid 0 { ( json_obj_set o `dataset` ( json_int . t dsid ) ) } {}
+    ? != . t dsid 0 {
+        ( json_obj_set o `dataset` ( json_int . t dsid ) )
+        // how many 8 MiB blocks this submit actually shipped — 0 means the
+        // workers already held every block (re-submit / next round is free)
+        ( json_obj_set o `seeded_blocks` ( json_int . t seeded ) )
+    } {}
     ? & == . t done 1 == . t failed 0 {
         ? == . t mode ( gpu_mode_scalar ) {
             ? == . t dtype 1 { ( json_obj_set o `result` ( json_float ( bits_to_f64 . t result ) ) ) }
@@ -1064,32 +1193,36 @@ $ `cudakernel.nu`
         ( vec_free [i] params ) ( vec_free [u] wasm )
         ^ ( mcp_tool_result_error `no GPU workers in the cluster — start some with 'swarm-mcp --worker --gpu' (needs the pure-NURL wasmtime and an NVIDIA GPU)` )
     } {}
-    // chunk count: spread over the GPU workers, keep a dataset slice inside
-    // the relay frame budget (≤ 12 MB per chunk), never shard an empty range
+    // chunk count: spread over the GPU workers; never shard an empty range.
+    // With a dataset the split is BLOCK-ALIGNED inside the v4 submit — the
+    // 12 MiB slice-per-frame budget is gone, blocks (8 MiB) travel once.
     : i nchunks0 ( nchunks_wasm ngpu )
     : i span - rhi rlo
     : ~ i nchunks nchunks0
-    ? != dsid 0 {
-        : i by_size / + * span 8 12582911 12582912  // ceil(bytes / 12 MiB)
-        ? > by_size nchunks { = nchunks by_size } {}
-    } {}
     ? > nchunks span { = nchunks span } {}
-    // dbytes BORROWS the dataset's backing when one is bound (never freed
-    // here); without a dataset it is an owned empty vec.
-    : ~ ( Vec u ) dbytes ( vec_new [u] )
+    : *McpState st0 # *McpState g_mcp
+    : *u nseed ( nurl_alloc 8 )
+    ( nurl_poke nseed 0 0 )
+    : ~ ( Vec i ) tids ( vec_new [i] )
     ? != dsid 0 {
         : *Dataset d # *Dataset dsp
+        ( vec_free [i] tids )
+        = tids ( cluster_submit_wasm_gpu_ds sw mode rlo rhi kbins params d wasm nchunks . st0 seeded nseed )
+    } {
+        : ( Vec u ) dbytes ( vec_new [u] )
+        ( vec_free [i] tids )
+        = tids ( cluster_submit_wasm_gpu sw mode rlo rhi kbins params dbytes wasm nchunks )
         ( vec_free [u] dbytes )
-        = dbytes . d bytes
-    } {}
-    : ( Vec i ) tids ( cluster_submit_wasm_gpu sw mode rlo rhi kbins params dbytes wasm nchunks )
-    ? == dsid 0 { ( vec_free [u] dbytes ) } {}
+    }
+    = nchunks ( vec_len [i] tids )
     ( vec_free [i] params ) ( vec_free [u] wasm )
     : *McpState st # *McpState g_mcp
     : *Task t ( task_new . st next_id ( bytes_from_str cuda ) 1 rlo rhi op nchunks tids )
     = . t mode mode
     = . t kbins kbins
     = . t dsid dsid
+    = . t seeded ( nurl_peek nseed 0 )
+    ( nurl_free nseed )
     ? > ( nurl_str_len out_file ) 0 { ( string_push_str . t out_file out_file ) } {}
     = . st next_id + . st next_id 1
     ( vec_push [s] . st tasks # s t )
@@ -1199,6 +1332,10 @@ $ `cudakernel.nu`
     = . st next_ds + . st next_ds 1
     = . d name ( string_from name )
     = . d bytes bytes
+    // the content-address manifest: BLAKE3 per 8 MiB block (blob.nu) — the
+    // transfer unit workers cache, so re-submits and iteration rounds
+    // reference data by hash instead of re-shipping it
+    = . d blocks ( blob_manifest . d bytes )
     ( vec_push [s] . st datasets # s d )
     : Json o ( json_obj_new )
     ( json_obj_set o `dataset_id` ( json_int . d id ) )
@@ -1437,7 +1574,7 @@ $ `cudakernel.nu`
     `Distributed GPU histogram / binned aggregation: for each x in [lo, hi) your CUDA-C bin(x) picks one of K buckets and val(x) (default 1.0) is added to it — the whole distribution of a computation in ONE pass over billions of x (value distributions, Monte-Carlo densities, class counts, binned integrals). The K bin sums come back (JSON up to 1024 bins, base64 up to 65536, out_file beyond). Supports runtime params (no recompile between calls). Needs a --gpu worker; returns a task_id, poll compute_result.`
     ( ms_schema_hist_cuda ) ) )
     ( vec_push [Json] tools ( mcp_tool_descriptor `compute_upload_data`
-    `Upload a dataset — a flat array of f64 values — for the GPU tools to map over. Pass base64 of raw little-endian f64s, or a file path on the MCP host. Returns a dataset_id plus count and min/max/mean. Then run compute_submit_cuda / compute_sample_cuda / compute_histogram_cuda with {"dataset": id}: your device functions receive each element as double v — e.g. mean/variance via reduce, a pointwise transform via sample, a value distribution via histogram. The cluster shards the data across the GPU workers (each chunk carries exactly its slice). Up to 33.5M values (256 MiB).`
+    `Upload a dataset — a flat array of f64 values — for the GPU tools to map over. Pass base64 of raw little-endian f64s, or a file path on the MCP host. Returns a dataset_id plus count and min/max/mean. Then run compute_submit_cuda / compute_sample_cuda / compute_histogram_cuda with {"dataset": id}: your device functions receive each element as double v — e.g. mean/variance via reduce, a pointwise transform via sample, a value distribution via histogram. The data is cut into content-addressed 8 MiB blocks (BLAKE3) that workers cache on disk: a block travels to its worker ONCE, and every later submit or iteration round over the same dataset ships only hashes — the task response's seeded_blocks shows how many blocks actually moved (0 = free re-run). Up to 33.5M values (256 MiB).`
     ( ms_schema_upload_data ) ) )
     ( vec_push [Json] tools ( mcp_tool_descriptor `compute_list_data`
     `List every uploaded dataset: id, name, element count.`
@@ -1560,6 +1697,7 @@ $ `cudakernel.nu`
             = . st datasets ( vec_new [s] )
             = . st next_ds 1
             = . st next_id 1
+            = . st seeded ( vec_new [String] )
             = g_mcp # i st
             : ( @ HttpResponse HttpRequest ) handler ( mcp_http_handler \ Json req → ?Json { ^ ( dispatch req ) } )
             ?? ( tcp_listen_tls mcp_host mcp_port cert key ) {
@@ -1656,7 +1794,7 @@ $ `cudakernel.nu`
 // path has no directory component.
 @ __cert_dirname s path → String {
     : i n # i ( nurl_str_len path )
-    : ~ i last 0 - 0 1
+    : ~ i last - 0 1
     : ~ i k 0
     ~ < k n {
         ? == ( nurl_str_get path k ) 47 { = last k } {}
