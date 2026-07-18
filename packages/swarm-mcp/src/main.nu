@@ -1503,14 +1503,31 @@ $ `cudakernel.nu`
 }
 
 // ── the shuffle primitive: compute_shuffle (group-by / reduce-by-key) ──
-// map is distributed on the GPU (one (key, value) per element); the shuffle
-// and per-key reduce run on the coordinator, which groups the pairs by key
-// and folds each group with the reduce op. Intermediate pairs are bounded by
-// the coordinator's RAM (16 bytes/element), which caps the input range.
-@ __shuffle_put ( HashMap i f ) m i key f v i op → v {
+// BOTH the map AND the per-key reduce run distributed on the GPU: each chunk
+// maps its elements to (key, value) and reduces them by key on the device,
+// into a compact K-slot open-addressing table (a MapReduce combiner). The
+// coordinator only MERGES the small per-chunk partial tables — the O(N)
+// per-key accumulation never touches the coordinator. The result is still
+// capped at 65 536 distinct keys (a text result can't carry more), and the
+// input range at 8 M elements, but the reduce work now scales with the
+// cluster rather than the coordinator.
+// Merge a partial value (from a worker's per-chunk reduced table) into the
+// running group total. Unlike __shuffle_put (which folded raw pairs and so
+// counted +1 per pair), the workers already reduced their chunk, so EVERY op
+// — count included — combines partials associatively via red_combine_f
+// (count's partials are per-chunk counts, summed).
+@ __shuffle_merge ( HashMap i f ) m i key f v i op → v {
     : f cur ?? ( map_get [i f] m key \ i x → i { ^ ( hash_int x ) } \ i a i b → b { ^ ( eq_int a b ) } ) { T x → x F → ( red_id_f op ) }
-    : f nv ? == op 4 { + cur 1.0 } { ( red_combine_f op cur v ) }
+    : f nv ( red_combine_f op cur v )
     : ?f _o ( map_set [i f] m key nv \ i x → i { ^ ( hash_int x ) } \ i a i b → b { ^ ( eq_int a b ) } )
+}
+
+// Smallest power of two ≥ n (the open-addressing table needs a pow-2 size so
+// the kernel can mask with K−1). n is 2× the distinct-key upper bound.
+@ __next_pow2 i n → i {
+    : ~ i p 1
+    ~ < p n { = p * p 2 }
+    ^ p
 }
 
 @ __shuffle_cap → i { ^ 8388608 }  // ≤ 8 M input elements per shuffle
@@ -1547,8 +1564,18 @@ $ `cudakernel.nu`
     ? > - rhi rlo ( __shuffle_cap ) { ( vec_free [i] params ) ^ ( mcp_tool_result_error `shuffle range too large: hi - lo must be <= 8388608 (the coordinator holds the intermediate (key,value) pairs)` ) } {}
     : i has_params ? > ( vec_len [i] params ) 0 1 0
     : i has_data ? != dsid 0 1 0
-    // build the shuffle_map module once (source-hash cached)
-    : String wrapped ( cuda_wrap cuda 0 ( gpu_mode_shuffle_map ) has_params has_data )
+    // per-chunk hash-table size: a power of two ≥ 2× the distinct-key upper
+    // bound (a chunk can hold no more distinct keys than the whole range, and
+    // the result is capped at __shuffle_keys_cap anyway). Keeps the load
+    // factor ≤ ½ so the open-addressing reduce never probes the full table.
+    : i span0 - rhi rlo
+    : i kkap ( __shuffle_keys_cap )
+    : ~ i ktab ( __next_pow2 * 2 ? < span0 kkap span0 kkap )
+    ? < ktab 256 { = ktab 256 } {}
+    // build the shuffle_reduce module once (source-hash cached); op is baked
+    // into the kernel (the reduce atomic and the identity), so distinct ops
+    // key distinct modules.
+    : String wrapped ( cuda_wrap cuda op ( gpu_mode_shuffle_reduce ) has_params has_data )
     : ( Vec u ) srcb ( bytes_from_str ( string_data wrapped ) )
     : String hex ( _wasm_hash srcb )
     ( vec_free [u] srcb )
@@ -1559,7 +1586,7 @@ $ `cudakernel.nu`
         : !( Vec u ) String cr ( compile_to_wasm ( string_data wrapped ) )
         ?? cr {
             F msg → {
-                : String em ( string_concat ( string_from `the shuffle map program did not compile: ` ) msg )
+                : String em ( string_concat ( string_from `the shuffle reduce program did not compile: ` ) msg )
                 : Json e ( mcp_tool_result_error ( string_data em ) )
                 ( string_free em ) ( string_free msg ) ( string_free wrapped ) ( string_free hex )
                 ( vec_free [i] params ) ( vec_free [u] wasm )
@@ -1574,11 +1601,10 @@ $ `cudakernel.nu`
     ( swarm_discover sw 6 )
     : i ngpu ( roster_count_caps # *Roster . sw roster ( cap_gpu ) )
     ? == ngpu 0 { ( vec_free [i] params ) ( vec_free [u] wasm ) ^ ( mcp_tool_result_error `no GPU workers in the cluster — start some with 'swarm-mcp --worker --gpu'` ) } {}
-    // chunk so each chunk's 16-byte-per-element output rides one relay frame
+    // each chunk returns a compact 16·K-byte partial table (not O(span)), so
+    // chunking is purely about spreading the map+reduce across the ring
     : i span - rhi rlo
     : ~ i nchunks ( nchunks_wasm ngpu )
-    : i by_out / + span 786431 786432
-    ? > by_out nchunks { = nchunks by_out } {}
     ? > nchunks span { = nchunks span } {}
     : *McpState st # *McpState g_mcp
     : *u nseed ( nurl_alloc 8 )
@@ -1587,33 +1613,37 @@ $ `cudakernel.nu`
     ? != dsid 0 {
         : *Dataset d # *Dataset dsp
         ( vec_free [i] tids )
-        = tids ( cluster_submit_wasm_gpu_ds sw ( gpu_mode_shuffle_map ) rlo rhi 0 params d wasm nchunks . st seeded nseed )
+        = tids ( cluster_submit_wasm_gpu_ds sw ( gpu_mode_shuffle_reduce ) rlo rhi ktab params d wasm nchunks . st seeded nseed )
     } {
         : ( Vec u ) dbytes ( vec_new [u] )
         ( vec_free [i] tids )
-        = tids ( cluster_submit_wasm_gpu sw ( gpu_mode_shuffle_map ) rlo rhi 0 params dbytes wasm nchunks )
+        = tids ( cluster_submit_wasm_gpu sw ( gpu_mode_shuffle_reduce ) rlo rhi ktab params dbytes wasm nchunks )
         ( vec_free [u] dbytes )
     }
     ( nurl_free nseed )
     ( vec_free [i] params ) ( vec_free [u] wasm )
-    // drive to completion, collect the concatenated (key, value) pairs
+    // drive to completion, collect the concatenated per-chunk partial tables
     : ~ i r 0
     ~ & < r 6000 ! ( tids_ready sw tids ) { ( swarm_pump sw 100 ) = r + r 1 }
-    : CombinedV cv ( tids_combine_vec sw ( gpu_mode_shuffle_map ) 0 tids )
+    : CombinedV cv ( tids_combine_vec sw ( gpu_mode_shuffle_reduce ) ktab tids )
     ( vec_free [i] tids )
     ? > . cv nfail 0 {
         ( vec_free [u] . cv bytes )
-        ^ ( mcp_tool_result_error `a shuffle map chunk failed on a worker (bad kernel, missing GPU, or a lost block)` )
+        ^ ( mcp_tool_result_error `a shuffle chunk failed on a worker (bad kernel, missing GPU, or a lost block)` )
     } {}
-    // ── the shuffle: group by key, fold each group with the reduce op ──
+    // ── merge the partial tables: fold each key's per-chunk partials ──
+    // slots hold (i64 key, f64 val); an empty slot's key is LLONG_MIN (1<<63)
     : ( HashMap i f ) groups ( map_new [i f] )
     : i nbytes ( vec_len [u] . cv bytes )
-    : i npairs / nbytes 16
+    : i nslots / nbytes 16
+    : i empty_key << 1 63
     : ~ i k 0
-    ~ < k npairs {
+    ~ < k nslots {
         : i key ( __f64le_get . cv bytes * k 16 )
-        : f val ( bits_to_f64 ( __f64le_get . cv bytes + * k 16 8 ) )
-        ( __shuffle_put groups key val op )
+        ? != key empty_key {
+            : f val ( bits_to_f64 ( __f64le_get . cv bytes + * k 16 8 ) )
+            ( __shuffle_merge groups key val op )
+        } {}
         = k + k 1
     }
     ( vec_free [u] . cv bytes )
@@ -1633,7 +1663,8 @@ $ `cudakernel.nu`
     ( json_obj_set o `groups` go )
     ( json_obj_set o `n_groups` ( json_int ngroups ) )
     ( json_obj_set o `reduce` ( json_str_lit ( reduce_op_name op ) ) )
-    ( json_obj_set o `pairs_mapped` ( json_int npairs ) )
+    ( json_obj_set o `pairs_mapped` ( json_int span ) )
+    ( json_obj_set o `distributed_reduce` ( json_bool T ) )
     ^ ( tool_result_json o )
 }
 
@@ -2022,7 +2053,7 @@ $ `cudakernel.nu`
     `Run an ITERATIVE algorithm — gradient descent — with the loop in the ENGINE, not in your messages. You give a CUDA gradient function grad() that scatter-adds each element's contribution into a K-dim vector, an initial parameter vector "state", "rounds" and a learning rate "lr"; the coordinator repeatedly (1) computes the gradient as a distributed GPU vecreduce over the range/dataset with the current parameters, (2) updates state[j] -= lr*gradient[j]/N, (3) stops at "rounds" or when the step falls below "epsilon". Returns the converged "state", "rounds_run", and "converged". Over a dataset the data is cached on the workers after round one, so each further round ships only the parameters — this is the tool for fitting/optimisation without a fragile model-in-the-loop.`
     ( ms_schema_iterate ) ) )
     ( vec_push [Json] tools ( mcp_tool_descriptor `compute_shuffle`
-    `Group-by-key / reduce-by-key — the shuffle primitive. You give a CUDA "map" that emits one (key, value) per element (key() and value() device functions) and a "reduce" op; the map runs distributed on the GPU across the workers, and the coordinator groups the emitted pairs by key and folds each group with the op. Returns { "groups": {key: value, …}, "n_groups", "pairs_mapped" }. This is the building block for word-count, histograms over arbitrary integer keys, and joins (map two datasets to a shared key space and combine per key). The intermediate pairs are held on the coordinator, so hi - lo <= 8388608 and the result is capped at 65536 distinct keys — narrow the range or coarsen the key for more.`
+    `Group-by-key / reduce-by-key — the shuffle primitive. You give a CUDA "map" that emits one (key, value) per element (key() and value() device functions) and a "reduce" op; BOTH the map AND the per-key reduce run distributed on the GPU — each worker reduces its own chunk by key on the device (a MapReduce combiner), and the coordinator only merges the small per-chunk partial tables. Returns { "groups": {key: value, …}, "n_groups", "pairs_mapped" }. This is the building block for word-count, histograms over arbitrary integer keys, and joins (map two datasets to a shared key space and combine per key). hi - lo <= 8388608 and the result is capped at 65536 distinct keys — narrow the range or coarsen the key for more.`
     ( ms_schema_shuffle ) ) )
     ( vec_push [Json] tools ( mcp_tool_descriptor `compute_upload_data`
     `Upload a dataset — a flat array of f64 values — for the GPU tools to map over. Pass base64 of raw little-endian f64s, or a file path on the MCP host. Returns a dataset_id plus count and min/max/mean. Then run compute_submit_cuda / compute_sample_cuda / compute_histogram_cuda with {"dataset": id}: your device functions receive each element as double v — e.g. mean/variance via reduce, a pointwise transform via sample, a value distribution via histogram. The data is cut into content-addressed 8 MiB blocks (BLAKE3) that workers cache on disk: a block travels to its worker ONCE, and every later submit or iteration round over the same dataset ships only hashes — the task response's seeded_blocks shows how many blocks actually moved (0 = free re-run). Up to 33.5M values (256 MiB).`

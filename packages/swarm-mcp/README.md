@@ -66,7 +66,7 @@ Ten tools, with self-describing schemas so a model uses them without docs:
 | `compute_sample_cuda` | `cuda`, `lo`, `hi`, `params`, `out_file`, `dataset` | distributed GPU map that returns **every value** in order — curves, fields, tables (JSON ≤ 1024 values, base64 ≤ 65536, `out_file` beyond) |
 | `compute_histogram_cuda` | `cuda` (`bin(x)` + optional `val(x)`), `lo`, `hi`, `bins`, `params`, `out_file`, `dataset` | distributed GPU **binned aggregation**: a whole distribution in one pass over billions of x |
 | `compute_iterate` | `cuda` (`grad(...)`), `state`, `rounds`, `lr`, `epsilon`, `dataset`/`lo`/`hi` | **gradient descent with the loop in the engine**: each round computes the gradient as a distributed GPU vecreduce with the current parameters and updates them — returns the converged `state` from one call |
-| `compute_shuffle` | `map` (`key(x)`+`value(x)`), `reduce`, `dataset`/`lo`/`hi`, `params` | **group-by-key / reduce-by-key**: the map runs distributed on the GPU emitting (key, value) per element; the coordinator groups by key and folds each group with the op |
+| `compute_shuffle` | `map` (`key(x)`+`value(x)`), `reduce`, `dataset`/`lo`/`hi`, `params` | **group-by-key / reduce-by-key**: both the map and the per-key reduce run distributed on the GPU (each worker reduces its chunk by key — a combiner); the coordinator only merges the compact partial tables |
 | `compute_upload_data` | `data_base64` or `file`, `name` | upload a **dataset** (flat f64 array) the GPU tools map over — returns a `dataset_id` + stats. The data is cut into content-addressed 1 MiB blocks that workers cache on disk, so a block travels **once** and later submits / iteration rounds over the same dataset ship only hashes (`seeded_blocks` in the task response shows how many blocks actually moved). |
 | `compute_list_data` | — | every uploaded dataset: id, name, count |
 | `compute_run_wasm` | `wasm_base64` (string), `lo`, `hi`, `reduce`, `gpu` (bool) | like `compute_submit_kernel` but you pass an **already-compiled** wasm module |
@@ -262,23 +262,24 @@ __device__ long long key(long long x)   { return x % 100; }  // the group key
 __device__ double    value(long long x) { return 1.0; }       // its contribution
 ```
 
-and a **reduce** op (`sum` / `product` / `min` / `max` / `count`). The map
-runs **distributed on the GPU** across the workers, emitting one (key, value)
-per element; the coordinator groups the pairs by key and folds each group
-with the op:
+and a **reduce** op (`sum` / `product` / `min` / `max` / `count`). **Both the
+map and the per-key reduce run distributed on the GPU**: each worker maps its
+chunk *and* reduces it by key on the device — into a compact K-slot
+open-addressing hash table (a MapReduce **combiner**) — and the coordinator
+only merges the small per-chunk partial tables:
 
 ```json
-{ "groups": { "0": 42.0, "1": 37.0, … }, "n_groups": 100, "pairs_mapped": 1000000 }
+{ "groups": { "0": 42.0, "1": 37.0, … }, "n_groups": 100, "pairs_mapped": 1000000, "distributed_reduce": true }
 ```
 
 Over a dataset the `key`/`value` functions take `double v = data[x]` and the
 block cache means the input moves once. A join is two shuffles into a shared
 key space, combined per key.
 
-The intermediate pairs live on the coordinator, so `hi - lo <= 8388608` and
-the result is capped at 65536 distinct keys — narrow the range or coarsen the
-key for more. (The map, the O(N) parallel work, is distributed; pushing the
-per-key reduce onto distributed reducers is a future step.)
+The O(N) per-key accumulation runs on the workers, so the coordinator never
+sees the raw pairs — only the reduced tables (far less data when keys are
+few). `hi - lo <= 8388608` and the result is capped at 65536 distinct keys —
+narrow the range or coarsen the key for more.
 
 ## Iterative algorithms — the loop runs in the engine
 
