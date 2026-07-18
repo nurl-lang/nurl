@@ -54,7 +54,7 @@ $ `src/dynamic.nu`
 }
 
 // Ingest a single-feature {"temp": t} point at absolute time `at`.
-@ ingest_temp *Model mo f temp i at → v {
+@ ingest_temp * Model mo f temp i at → v {
     : Json j ( json_obj_new )
     ( json_obj_set j `temp` ( json_float temp ) )
     : !Verdict String r ( model_ingest_at mo j at )
@@ -77,7 +77,7 @@ $ `src/dynamic.nu`
     f df_seasonal
 }
 
-@ probe_temp *Model mo f temp → ProbeOut {
+@ probe_temp * Model mo f temp → ProbeOut {
     : Json j ( json_obj_new )
     ( json_obj_set j `temp` ( json_float temp ) )
     : !Verdict String r ( model_detect_only mo j )
@@ -162,6 +162,9 @@ $ `src/dynamic.nu`
     : *Model mo ( model_open_at st `agg` T0 )
     ( model_set_limits mo 10 150000 )
     ( model_set_schedule mo 10 1000 )
+    // The sliding-window timevector needs the window to fit in this tiny
+    // ring — 6 points keeps all five versions in play.
+    : b mw ( model_set_version_window mo `timevector` 6 1 )
     : b m1 ( model_set_margin mo `short_term` 0.5 )
     : b m2 ( model_set_margin mo `daily` 0.5 )
     : b m3 ( model_set_margin mo `weekly` 0.5 )

@@ -29,7 +29,7 @@ ok()  { echo "  PASS $1"; PASS=$((PASS+1)); }
 bad() { echo "  FAIL $1"; FAIL=$((FAIL+1)); }
 
 echo "[1/3] unit suites"
-for t in prep model store dynamic versions service gpu; do
+for t in prep model store dynamic versions timevector autoencoder service gpu; do
     if ! $NURL "tests/${t}_test.nu" "$WORK/${t}_test" >/dev/null 2>"$WORK/build.err"; then
         echo "FAIL: could not build ${t}_test:"; tail -5 "$WORK/build.err"; exit 1
     fi
@@ -93,6 +93,15 @@ curl -s "http://127.0.0.1:$PORT/models/dynamic" | grep -q '"live"' && ok "HTTP m
 curl -s "http://127.0.0.1:$PORT/models/dynamic/live/metadata" | grep -q '"model_name":"live"' && ok "HTTP metadata" || bad "HTTP metadata"
 CODE=$(curl -s -o /dev/null -w '%{http_code}' -X POST "http://127.0.0.1:$PORT/detect/bad!name" -d '{"a":1}')
 [ "$CODE" = "400" ] && ok "HTTP invalid name rejected" || bad "HTTP invalid name ($CODE)"
+# top the ring up: the AE pre-filter drops ~10 %, and the survivor count
+# must still clear min_points (50)
+for i in $(seq 51 90); do
+    curl -s -o /dev/null -X POST "http://127.0.0.1:$PORT/detect/live" -d "{\"temp\": 2$((i%10)).5}"
+done
+CODE=$(curl -s -o "$WORK/rae" -w '%{http_code}' -X POST "http://127.0.0.1:$PORT/train/autoencoder/live")
+[ "$CODE" = "200" ] && grep -q '"reconstruction_threshold"' "$WORK/rae" && ok "HTTP autoencoder train" || bad "HTTP AE train ($CODE: $(cat "$WORK/rae" | head -c 120))"
+curl -s -X POST "http://127.0.0.1:$PORT/detect_only/live" -d '{"temp": 24.5}' | grep -q '"autoencoder"' \
+    && ok "HTTP detect carries the autoencoder version" || bad "HTTP AE version in detect"
 CODE=$(curl -s -o /dev/null -w '%{http_code}' -X DELETE "http://127.0.0.1:$PORT/delete_model/live")
 [ "$CODE" = "200" ] && ok "HTTP delete" || bad "HTTP delete ($CODE)"
 

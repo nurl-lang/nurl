@@ -265,7 +265,7 @@ $ `src/service.nu`
         ^ 1
     } {}
     : f margin ( ctx_float x `margin` )
-    : VerCfg cfg @ VerCfg { ( string_from `batch` ) 0 0 100 256 -1.0 margin T }
+    : VerCfg cfg @ VerCfg { ( string_from `batch` ) 0 0 0 0 100 256 -1.0 margin T }
     : BatchReport rep ( anomaly_batch . ds data . ds rows . ds cols cfg )
     ( _an_vercfg_free cfg )
 
@@ -384,6 +384,43 @@ $ `src/service.nu`
     ^ rc
 }
 
+@ __an_cmd_train_ae CliCtx x → i {
+    : String mname ( ctx_arg x 0 )
+    : String root ( __an_store_root x )
+    : Store st ( store_open ( string_data root ) )
+    ( string_free root )
+    : ~ i rc 0
+    ? ( store_exists st ( string_data mname ) ) {
+        : *Model mo ( model_open st ( string_data mname ) )
+        : ( Vec i ) hidden ( vec_new [i] )
+        : String err ( model_train_autoencoder mo hidden -1.0 )
+        ( vec_free [i] hidden )
+        ? == ( string_len err ) 0 {
+            : AeModel tae . mo ae
+            : String msg ( string_from `autoencoder trained on ` )
+            ( string_push_int msg . tae trained_on )
+            ( string_push_str msg ` normal points (` )
+            ( string_push_int msg . tae filtered )
+            ( string_push_str msg ` anomalies filtered)` )
+            ( pline ( string_data msg ) )
+            ( string_free msg )
+        } {
+            ( nurl_eprint `anomaly: ` )
+            ( nurl_eprintln ( string_data err ) )
+            = rc 1
+        }
+        ( string_free err )
+        ( model_free mo )
+    } {
+        ( nurl_eprint `anomaly: model not found: ` )
+        ( nurl_eprintln ( string_data mname ) )
+        = rc 1
+    }
+    ( store_free st )
+    ( string_free mname )
+    ^ rc
+}
+
 @ __an_cmd_train CliCtx x → i {
     : String mname ( ctx_arg x 0 )
     : String root ( __an_store_root x )
@@ -470,6 +507,7 @@ $ `src/service.nu`
     ( cli_cmd c `score` `score only (never ingests or retrains)` \ CliCtx x → i { ^ ( __an_cmd_detect x F ) } )
     ( cli_cmd c `batch` `score a CSV, one index<TAB>score per row` \ CliCtx x → i { ^ ( __an_cmd_batch x ) } )
     ( cli_cmd c `train` `force a retrain now` \ CliCtx x → i { ^ ( __an_cmd_train x ) } )
+    ( cli_cmd c `train-ae` `train the autoencoder version (iforest-filtered)` \ CliCtx x → i { ^ ( __an_cmd_train_ae x ) } )
     ( cli_cmd c `reset` `drop data + forests, keep the name` \ CliCtx x → i { ^ ( __an_cmd_reset x ) } )
     ( cli_cmd c `rm` `delete the model entirely` \ CliCtx x → i { ^ ( __an_cmd_rm x ) } )
     ( cli_cmd c `ls` `list models` \ CliCtx x → i { ^ ( __an_cmd_ls x ) } )

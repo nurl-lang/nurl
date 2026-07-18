@@ -12804,7 +12804,12 @@
     // The void/unit value (a bare type keyword `v`) is never storable —
     // `: i y v` / `= x v` used to emit `store i64 void`. Reject at the source.
     ( die_if_void lex val `initialiser / assignment` )
-    ? & ( seq from_ty `i1` ) ! ( seq to_ty `i1` )
+    // i1 (comparison / short-circuit result) widens ONLY into an integer
+    // target. An aggregate target (`?T`, a slice, a result) used to take
+    // this branch too and emit `zext i1 … to { i1, %T }` — invalid IR that
+    // nurlc accepted and only clang rejected; it now falls through to the
+    // never-valid-mix diagnostic below.
+    ? & & ( seq from_ty `i1` ) ! ( seq to_ty `i1` ) > ( int_width to_ty ) 0
     { : s r ( nurl_cg_reg cg )
         ( nurl_print `  ` ) ( nurl_print r )
         ( nurl_print ` = zext i1 ` ) ( nurl_print val )
@@ -12922,7 +12927,14 @@
     ? & ! ( seq ( nurl_llty from_ty ) ( nurl_llty to_ty ) ) != 0 ( nurl_str_len to_ty )
     { : b csv_sf | ( seq from_ty `double` ) ( seq from_ty `float` )
         : b csv_tf | ( seq to_ty `double` ) ( seq to_ty `float` )
-        ? | != csv_sf csv_tf & ( is_ptr_ty from_ty ) ! ( is_ptr_ty to_ty )
+        // An anonymous-aggregate target (`{ …` — an option, slice or
+        // result shape) can never absorb a bare scalar: every legal wrap
+        // (enum, single-handle) already returned above. Without this arm a
+        // `: ?T x <bool-expr>` stored i1 into { i1, %T } — IR only clang
+        // rejected.
+        : b csv_agg & > ( int_width from_ty ) 0
+        == ( nurl_str_get ( nurl_llty to_ty ) 0 ) 123
+        ? | | != csv_sf csv_tf & ( is_ptr_ty from_ty ) ! ( is_ptr_ty to_ty ) csv_agg
         { ( die_stmt lex ( nurl_str_cat ( nurl_str_cat4
             `value of type '` from_ty `' cannot initialise / assign a binding of type '` to_ty )
             `' — NURL has no implicit conversions; use a matching value or convert with '# T expr'` ) ) }

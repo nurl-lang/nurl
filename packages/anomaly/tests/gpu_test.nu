@@ -73,7 +73,7 @@ $ `src/score.nu`
     : ( Vec f ) data ( make_matrix ROWS COLS )
     : Scaler sc ( scaler_fit data ROWS COLS )
     ( scaler_apply_matrix sc data ROWS COLS )
-    : VerCfg cfg @ VerCfg { ( string_from `gpu` ) 0 0 300 256 -1.0 0.1 T }
+    : VerCfg cfg @ VerCfg { ( string_from `gpu` ) 0 0 0 0 300 256 -1.0 0.1 T }
     : VerModel vm ( anom_train_version data ROWS COLS cfg )
 
     // 1. Raw scores: forced accelerator vs the pure loop, every element ==.
@@ -122,7 +122,7 @@ $ `src/score.nu`
 
     // 3. Contamination percentile (trains through the accelerated scorer at
     //    this size) must equal a training run with the accelerator off.
-    : VerCfg cfg2 @ VerCfg { ( string_from `gpu2` ) 0 0 100 256 0.05 0.0 T }
+    : VerCfg cfg2 @ VerCfg { ( string_from `gpu2` ) 0 0 0 0 100 256 0.05 0.0 T }
     : VerModel vm_a ( anom_train_version data ROWS COLS cfg2 )
     : ( Vec f ) ref2 ( anom_scores_cpu vm_a data ROWS COLS )
     // offset from the pure path, recomputed by hand:
