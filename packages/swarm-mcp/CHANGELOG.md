@@ -1,5 +1,36 @@
 # Changelog
 
+## 0.14.0
+
+**The shuffle's per-key reduce now runs distributed on the GPU (a combiner).**
+
+Where 0.13.0 mapped on the GPU but grouped the (key, value) pairs on the
+coordinator, `compute_shuffle` now reduces each chunk *by key on the device*
+and the coordinator only merges the compact per-chunk partial tables — the
+O(N) per-key accumulation, the part that used to bound the whole primitive on
+one machine's RAM and CPU, now scales with the cluster.
+
+- **`gpu_mode_shuffle_reduce`** — a new CUDA generator mode: a fused
+  map+reduce kernel. Each thread computes `key(x)` and `value(x)` (the same
+  user interface as before) and folds the value into a per-chunk **K-slot
+  open-addressing hash table** (16 bytes/slot: an i64 key, an f64 value) with
+  a portable double-atomic — sum/product via a CAS loop, min/max via
+  fmin/fmax, count via +1. Empty slots carry an `LLONG_MIN` key sentinel and
+  the reduce identity. K is a power of two ≥ 2× the distinct-key bound, so the
+  table stays under half full and never probes to capacity.
+- **The coordinator merges partials, not pairs.** It collects each chunk's
+  compact table (≤ 16·K bytes, not 16·N) and folds every non-empty slot into
+  the final group map with the op — associativity makes the split exact. The
+  result gains `"distributed_reduce": true`.
+- Same interface, same bounds (`hi - lo ≤ 8_388_608`, ≤ 65 536 distinct
+  keys), same op set — but the reduce work is now spread across every GPU
+  worker, and far less data returns to the coordinator when keys are few.
+- Tests: `tests/cudakernel_test.nu` grows 15 shuffle-reduce generator checks
+  (77 total, ASan clean); `tests/shuffle_smoke.sh` adds live group-by-min,
+  group-by-max, and a 1000-key / 500 000-element multi-chunk merge (each
+  chunk builds a partial table the coordinator combines) on top of the
+  existing count and sum.
+
 ## 0.13.0
 
 **The shuffle primitive — group-by-key / reduce-by-key.**

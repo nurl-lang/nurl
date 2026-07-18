@@ -52,6 +52,7 @@ $ `token.nu`
 @ gpu_mode_hist → i { ^ 2 }  // K bin sums written to an output file
 @ gpu_mode_vecreduce → i { ^ 3 }  // K-vector scatter-add (gradient), K doubles to a file
 @ gpu_mode_shuffle_map → i { ^ 4 }  // (key,value) per element: 16 bytes/elem to a file
+@ gpu_mode_shuffle_reduce → i { ^ 5 }  // GPU combiner: chunk reduced by key into a K-slot table (16 bytes/slot: i64 key, f64 val) to a file
 
 @ wasm_chunk_payload i lo i hi ( Vec u ) wasm → ( Vec u ) {
     : ( Vec u ) b ( vec_new [u] )
@@ -380,7 +381,7 @@ $ `token.nu`
 // Runtime params ride argv as f64-bit-pattern decimals.
 @ __wasm_run_gpu String path GpuChunk c → GpuOut {
     : String tmp ( env_var_or `TMPDIR` `/tmp` )
-    : b vecmode | | == . c mode ( gpu_mode_sample ) == . c mode ( gpu_mode_shuffle_map ) | == . c mode ( gpu_mode_hist ) == . c mode ( gpu_mode_vecreduce )
+    : b vecmode | | | == . c mode ( gpu_mode_sample ) == . c mode ( gpu_mode_shuffle_map ) == . c mode ( gpu_mode_shuffle_reduce ) | == . c mode ( gpu_mode_hist ) == . c mode ( gpu_mode_vecreduce )
     : b hasdata > ( vec_len [u] . c data ) 0
     : ~ String outp ( string_new )
     ? vecmode {
@@ -414,8 +415,9 @@ $ `token.nu`
     ( string_push_str blob ( nurl_str_int . c lo ) ) ( string_push_char blob 0 )
     ( vec_push [i] offs ( string_len blob ) )
     ( string_push_str blob ( nurl_str_int . c hi ) ) ( string_push_char blob 0 )
-    // hist AND vecreduce carry K (bin count / gradient dim) in argv
-    ? | == . c mode ( gpu_mode_hist ) == . c mode ( gpu_mode_vecreduce ) {
+    // hist, vecreduce AND shuffle_reduce carry K (bin count / gradient dim /
+    // hash-table slots) in argv
+    ? | | == . c mode ( gpu_mode_hist ) == . c mode ( gpu_mode_vecreduce ) == . c mode ( gpu_mode_shuffle_reduce ) {
         ( vec_push [i] offs ( string_len blob ) )
         ( string_push_str blob ( nurl_str_int . c kbins ) ) ( string_push_char blob 0 )
     } {}
@@ -454,7 +456,7 @@ $ `token.nu`
                 ? vecmode {
                     ?? ( read_file_bytes ( string_data outp ) ) {
                         T bts → {
-                            : i want ? == . c mode ( gpu_mode_shuffle_map ) * 16 - . c hi . c lo * 8 ? | == . c mode ( gpu_mode_hist ) == . c mode ( gpu_mode_vecreduce ) . c kbins - . c hi . c lo
+                            : i want ? == . c mode ( gpu_mode_shuffle_reduce ) * 16 . c kbins ? == . c mode ( gpu_mode_shuffle_map ) * 16 - . c hi . c lo * 8 ? | == . c mode ( gpu_mode_hist ) == . c mode ( gpu_mode_vecreduce ) . c kbins - . c hi . c lo
                             ? == ( vec_len [u] bts ) want {
                                 ( vec_free [u] outb )
                                 = outb bts

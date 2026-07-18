@@ -62,5 +62,40 @@ print('OK' if all(abs(g.get(k,-1)-v)<0.5 for k,v in exp.items()) else 'BAD:'+str
 if [ "$ok2" = OK ]; then echo "[shuffle-smoke] PASS group-by-sum: per-key sums match"; else
     echo "[shuffle-smoke] FAIL sum: $ok2"; fail=1; fi
 
+# group-by-max and group-by-min: key = x mod 4, value = x over [0, 100).
+# Per key k, values are k, k+4, k+8, … so min = k, max = the largest ≤ 99.
+MAP3='__device__ long long key(long long x) { return x % 4; } __device__ double value(long long x) { return (double)x; }'
+for OP in max min; do
+    req3="$(python3 -c "import json,sys; print(json.dumps({'jsonrpc':'2.0','id':3,'method':'tools/call','params':{'name':'compute_shuffle','arguments':{'map':sys.argv[1],'reduce':sys.argv[2],'lo':0,'hi':100}}}))" "$MAP3" "$OP")"
+    res3="$(MCP "$req3")"
+    ok3="$(printf '%s' "$res3" | OP="$OP" python3 -c "
+import json,sys,os
+op=os.environ['OP']
+d=json.load(sys.stdin); t=json.loads(d['result']['content'][0]['text']); g=t['groups']
+exp={}
+for x in range(100):
+    k=str(x%4)
+    exp[k]=x if k not in exp else (max(exp[k],x) if op=='max' else min(exp[k],x))
+dist=t.get('distributed_reduce') is True
+print('OK' if dist and all(abs(g.get(k,-1)-v)<0.5 for k,v in exp.items()) else 'BAD:'+str(g)+' exp '+str(exp)+' dist='+str(dist))
+" 2>/dev/null)"
+    if [ "$ok3" = OK ]; then echo "[shuffle-smoke] PASS group-by-$OP: per-key $OP match (+distributed flag)"; else
+        echo "[shuffle-smoke] FAIL $OP: $ok3"; fail=1; fi
+done
+
+# multi-chunk merge stress: 1000 distinct keys over a large range forces every
+# chunk to build a partial table that the coordinator must MERGE by key. Each
+# key k in [0,1000) occurs 500 times over [0, 500000) → count 500.
+MAP4='__device__ long long key(long long x) { return x % 1000; } __device__ double value(long long x) { return 1.0; }'
+req4="$(python3 -c "import json,sys; print(json.dumps({'jsonrpc':'2.0','id':4,'method':'tools/call','params':{'name':'compute_shuffle','arguments':{'map':sys.argv[1],'reduce':'count','lo':0,'hi':500000}}}))" "$MAP4")"
+res4="$(MCP "$req4")"
+ok4="$(printf '%s' "$res4" | python3 -c "
+import json,sys
+d=json.load(sys.stdin); t=json.loads(d['result']['content'][0]['text']); g=t['groups']
+print('OK' if t['n_groups']==1000 and all(abs(g.get(str(k),-1)-500.0)<0.5 for k in range(1000)) else 'BAD:n='+str(t.get('n_groups')))
+" 2>/dev/null)"
+if [ "$ok4" = OK ]; then echo "[shuffle-smoke] PASS multi-chunk merge: 1000 keys x 500 each"; else
+    echo "[shuffle-smoke] FAIL merge: $ok4"; fail=1; fi
+
 if [ "$fail" = 0 ]; then echo "[shuffle-smoke] ALL PASS"; else echo "[shuffle-smoke] FAILURES"; tail -15 "$TMP/node.log"; fi
 exit $fail
