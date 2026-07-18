@@ -617,6 +617,48 @@ $ `src/csvdata.nu`
     }
 }
 
+@ __an_h_train_ae HttpRequest req Params p → HttpResponse {
+    : String mname ( __an_param_model p )
+    ? ( __an_name_ok ( string_data mname ) ) {} {
+        ( string_free mname )
+        ^ ( __an_bad_name )
+    }
+    : Store st ( store_open g_an_root )
+    ? ( store_exists st ( string_data mname ) ) {} {
+        : HttpResponse r404 ( __an_404_model ( string_data mname ) )
+        ( store_free st )
+        ( string_free mname )
+        ^ r404
+    }
+    : *Model mo ( model_open st ( string_data mname ) )
+    : ( Vec i ) hidden ( vec_new [i] )
+    : String err ( model_train_autoencoder mo hidden -1.0 )
+    ( vec_free [i] hidden )
+    ? == ( string_len err ) 0 {
+        : AeModel tae . mo ae
+        : String msg ( string_from `Autoencoder trained successfully for model ` )
+        ( string_push_str msg ( string_data mname ) )
+        : Json o ( __an_ok_msg ( string_data msg ) )
+        ( string_free msg )
+        ( json_obj_set o `training_data_points` ( json_int . tae trained_on ) )
+        ( json_obj_set o `filtered_anomalies` ( json_int . tae filtered ) )
+        ( json_obj_set o `reconstruction_threshold` ( json_float . tae threshold ) )
+        : HttpResponse rr ( response_json 200 o )
+        ( string_free err )
+        ( model_free mo )
+        ( store_free st )
+        ( string_free mname )
+        ^ rr
+    } {
+        : HttpResponse rr ( __an_json_err 400 ( string_data err ) )
+        ( string_free err )
+        ( model_free mo )
+        ( store_free st )
+        ( string_free mname )
+        ^ rr
+    }
+}
+
 @ __an_h_finetune HttpRequest req Params p → HttpResponse {
     : String mname ( __an_param_model p )
     ? ( __an_name_ok ( string_data mname ) ) {} {
@@ -815,6 +857,7 @@ $ `src/csvdata.nu`
     ( router_get r `/delete_model/:model` \ HttpRequest req Params p → HttpResponse { ^ ( __an_h_delete req p ) } )
     ( router_put r `/api/dynamic/:model/schedule` \ HttpRequest req Params p → HttpResponse { ^ ( __an_h_schedule req p ) } )
     ( router_post r `/api/dynamic/:model/finetune` \ HttpRequest req Params p → HttpResponse { ^ ( __an_h_finetune req p ) } )
+    ( router_post r `/train/autoencoder/:model` \ HttpRequest req Params p → HttpResponse { ^ ( __an_h_train_ae req p ) } )
     ^ r
 }
 

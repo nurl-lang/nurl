@@ -21,6 +21,26 @@ It is a NURL re-implementation of the anomaly-detection interface of a
 Flask + scikit-learn reference service (`model_training.py`), with the same
 HTTP routes and response shapes, so existing dashboards keep working.
 
+## Two versions beyond the forests
+
+- **timevector — the sliding window.** `window_size` consecutive points
+  flatten to one window vector; the forest trains on window vectors and
+  detection scores the window ending at the incoming point. This is the
+  version that sees ORDER: a reversed pattern or a stuck sensor whose
+  every reading is individually in range flags here while the point-based
+  versions stay blind. Configure with `window_size` / `step_size` in the
+  version config (`model_set_version_window` in the library).
+- **autoencoder — the correlation detector** (trained on demand:
+  `anomaly train-ae <model>` / `POST /train/autoencoder/<model>`). A
+  temporary Isolation Forest first drops the ring's anomalies
+  (contamination 10 %), then an MLP autoencoder
+  ([`mlp`](../mlp) package: Adam, early stopping, deterministic restarts)
+  learns to reconstruct the normal rows; the detection threshold is the
+  95th percentile of the training reconstruction errors. It catches what
+  marginals hide — a pressure/flow pair each in range but jointly
+  impossible. Reported as the `autoencoder` version with the standard
+  decision_function orientation (`threshold − mse`; negative ⇒ anomaly).
+
 ## What a model does
 
 - **Heterogeneous features, encoded automatically.** Numbers pass through;

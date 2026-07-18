@@ -34,6 +34,7 @@ $ `stdlib/ext/json.nu`
 $ `src/prep.nu`
 $ `src/model.nu`
 $ `src/score.nu`
+$ `src/autoenc.nu`
 $ `src/store.nu`
 
 // ── Types ─────────────────────────────────────────────────────────────
@@ -63,6 +64,7 @@ $ `src/store.nu`
     ( Vec i ) times
     ( Vec VerModel ) forests
     Scaler sc
+    AeModel ae
     i next_train_at
     i min_points
     i max_points
@@ -185,6 +187,12 @@ $ `src/store.nu`
     // Scaler from persisted metadata (empty scaler if never trained).
     = . mo sc ( meta_scaler mm )
 
+    // The autoencoder version, if one has been trained for this model.
+    ?? ( store_load_ae . mo store name ) {
+        T ae → { = . mo ae ae }
+        F → { = . mo ae ( ae_empty ) }
+    }
+
     // Next scheduled training mark, from the lifetime counter.
     ? == ( vec_len [VerModel] . mo forests ) 0 {
         = . mo next_train_at . mo min_points
@@ -230,6 +238,7 @@ $ `src/store.nu`
     ( __an_free_lines . mo lines )
     ( vec_free [i] . mo times )
     ( scaler_free . mo sc )
+    ( ae_free . mo ae )
     ( meta_free . mo meta )
     ( string_free . mo mname )
     ( store_free . mo store )
@@ -394,6 +403,26 @@ $ `src/store.nu`
         }
         = k + k 1
     }
+    // The autoencoder verdict: reconstruction error against the trained
+    // threshold, on the point projected onto the AE's OWN frozen feature
+    // order (independent of the forests' scaler and current feats).
+    : AeModel cae . mo ae
+    ? . cae trained {
+        : ( Vec f ) araw ( anomaly_project p . cae feats )
+        : f adf ( ae_decision cae araw )
+        : f amargin ( __an_margin_of mm `autoencoder` 0.05 )
+        : b ahit <= adf - 0.0 amargin
+        ? ahit { = any T } {}
+        ? || first < adf worst { = worst adf } {}
+        = first F
+        ( vec_push [VerVerdict] vvs @ VerVerdict {
+            ( string_from `autoencoder` )
+            ahit
+            adf
+            amargin
+        } )
+        ( vec_free [f] araw )
+    } {}
     ( vec_free [f] x )
     ^ @ Verdict { T any worst vvs }
 }
@@ -578,6 +607,104 @@ $ `src/store.nu`
 
 @ model_force_train * Model mo → i {
     ^ ( model_force_train_at mo ( now_seconds ) )
+}
+
+// ── The autoencoder version ───────────────────────────────────────────
+
+// Ensure an `autoencoder` VerCfg exists in the metadata (margin tunable
+// through the same machinery as the forest versions; window fields 0).
+@ __an_ensure_ae_cfg * Model mo → v {
+    : *Meta mm . mo meta
+    : i nv ( vec_len [VerCfg] . mm versions )
+    : ~ i k 0
+    ~ < k nv {
+        ?? ( vec_get [VerCfg] . mm versions k ) {
+            T vc → {
+                ? == ( nurl_str_eq ( string_data . vc vname ) `autoencoder` ) 1 { ^ } {}
+            }
+            F _ → {}
+        }
+        = k + k 1
+    }
+    ( vec_push [VerCfg] . mm versions
+    @ VerCfg { ( string_from `autoencoder` ) 0 0 0 0 0 0 -1.0 0.05 T } )
+}
+
+// Train the autoencoder from the ring: encode + project the raw points
+// (the same pass model_force_train_at runs, minus the standardising
+// scaler — the AE recipe MinMax-scales after anomaly filtering), then
+// hand the matrix to ae_train_matrix. `hidden` empty → 64-32-64.
+// Explicit-only: never part of the retrain schedule. Returns the error
+// text ("" = success).
+@ model_train_autoencoder * Model mo ( Vec i ) hidden f contamination → String {
+    : *Meta mm . mo meta
+    : i n ( vec_len [String] . mo lines )
+    ? < n . mo min_points { ^ ( string_from `not enough data points` ) } {}
+
+    : ( Vec EncPoint ) encs ( vec_new [EncPoint] )
+    : ~ i k 0
+    ~ < k n {
+        ?? ( vec_get [String] . mo lines k ) {
+            T l → {
+                : !Json JsonError jr ( json_parse ( string_data l ) )
+                ?? jr {
+                    T j → {
+                        : !EncPoint String er ( anomaly_preprocess mm j )
+                        ?? er {
+                            T p → { ( vec_push [EncPoint] encs p ) }
+                            F e → { ( string_free e ) }
+                        }
+                        ( json_free j )
+                    }
+                    F _ → {}
+                }
+            }
+            F _ → {}
+        }
+        = k + k 1
+    }
+    : i ne ( vec_len [EncPoint] encs )
+    ? < ne . mo min_points {
+        ( vec_free_with [EncPoint] encs \ EncPoint p → v { ( enc_free p ) } )
+        ^ ( string_from `not enough decodable data points` )
+    } {}
+
+    ( meta_refresh_feats mm )
+    : i nfeat ( vec_len [String] . mm feats )
+    ? <= nfeat 0 {
+        ( vec_free_with [EncPoint] encs \ EncPoint p → v { ( enc_free p ) } )
+        ^ ( string_from `no numeric features` )
+    } {}
+    : ( Vec f ) raw ( vec_with_cap [f] * ne nfeat )
+    = k 0
+    ~ < k ne {
+        ?? ( vec_get [EncPoint] encs k ) {
+            T p → {
+                : ( Vec f ) row ( anomaly_project p . mm feats )
+                ( vec_extend [f] raw row )
+                ( vec_free [f] row )
+            }
+            F _ → {}
+        }
+        = k + k 1
+    }
+    ( vec_free_with [EncPoint] encs \ EncPoint p → v { ( enc_free p ) } )
+
+    : AeTrainOut out ( ae_train_matrix raw ne nfeat . mm feats hidden contamination . mo min_points )
+    ( vec_free [f] raw )
+    : AeModel nae . out ae
+    ? . nae trained {
+        ( ae_free . mo ae )
+        = . mo ae nae
+        ( __an_ensure_ae_cfg mo )
+        ( store_save_ae . mo store ( string_data . mo mname ) . mo ae )
+        ( store_save_meta . mo store ( string_data . mo mname ) mm )
+        ( string_free . out err )
+        ^ ( string_new )
+    } {
+        ( ae_free nae )
+        ^ . out err
+    }
 }
 
 // ── Ingest / detect ───────────────────────────────────────────────────

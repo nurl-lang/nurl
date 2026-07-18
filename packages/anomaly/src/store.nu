@@ -25,6 +25,7 @@ $ `stdlib/std/floatbits.nu`
 $ `stdlib/std/sort.nu`
 $ `src/prep.nu`
 $ `src/model.nu`
+$ `src/autoenc.nu`
 $ `deps/iforest/src/iforest.nu`
 
 // Refuse to load blobs claiming more than this many arena nodes / trees /
@@ -49,7 +50,7 @@ $ `deps/iforest/src/iforest.nu`
     ^ rd
 }
 
-@ __an_rd_u64 *BlobRd rd → i {
+@ __an_rd_u64 * BlobRd rd → i {
     ?? ( bytes_read_u64_le . rd buf . rd pos ) {
         T x → {
             = . rd pos + . rd pos 8
@@ -62,7 +63,7 @@ $ `deps/iforest/src/iforest.nu`
     }
 }
 
-@ __an_rd_f64 *BlobRd rd → f {
+@ __an_rd_f64 * BlobRd rd → f {
     ?? ( bytes_read_f64_le . rd buf . rd pos ) {
         T x → {
             = . rd pos + . rd pos 8
@@ -100,7 +101,7 @@ $ `deps/iforest/src/iforest.nu`
 }
 
 // Read `want` i64s (a count-prefixed vector whose count must equal `want`).
-@ __an_blob_read_ivec *BlobRd rd i want → ( Vec i ) {
+@ __an_blob_read_ivec * BlobRd rd i want → ( Vec i ) {
     : ( Vec i ) out ( vec_new [i] )
     : i n ( __an_rd_u64 rd )
     ? == n want {} { = . rd ok F ^ out }
@@ -113,7 +114,7 @@ $ `deps/iforest/src/iforest.nu`
     ^ out
 }
 
-@ __an_blob_read_fvec *BlobRd rd i want → ( Vec f ) {
+@ __an_blob_read_fvec * BlobRd rd i want → ( Vec f ) {
     : ( Vec f ) out ( vec_new [f] )
     : i n ( __an_rd_u64 rd )
     ? == n want {} { = . rd ok F ^ out }
@@ -324,7 +325,7 @@ $ `deps/iforest/src/iforest.nu`
 }
 
 // Persist metadata (creates the model directory as needed).
-@ store_save_meta Store st s name *Meta m → b {
+@ store_save_meta Store st s name * Meta m → b {
     : String d ( __an_model_dir st name )
     : !v IoErr mk ( dir_create_all ( string_data d ) )
     : ~ b ok T
@@ -371,6 +372,39 @@ $ `deps/iforest/src/iforest.nu`
     } {}
     ( string_free d )
     ^ ok
+}
+
+// Persist / load the autoencoder version (one JSON per model).
+@ store_save_ae Store st s name AeModel ae → b {
+    : String d ( __an_model_dir st name )
+    : !v IoErr mk ( dir_create_all ( string_data d ) )
+    : ~ b ok T
+    ?? mk { T _ → {} F _ → { = ok F } }
+    ? ok {
+        : String txt ( ae_to_json_str ae )
+        : ( Vec u ) data ( bytes_from_str ( string_data txt ) )
+        : String p ( __an_model_file st name `autoencoder.json` )
+        = ok ( __an_write_atomic ( string_data p ) data )
+        ( string_free p )
+        ( vec_free [u] data )
+        ( string_free txt )
+    } {}
+    ( string_free d )
+    ^ ok
+}
+
+@ store_load_ae Store st s name → ?AeModel {
+    : String p ( __an_model_file st name `autoencoder.json` )
+    : !String IoErr r ( read_file ( string_data p ) )
+    ( string_free p )
+    ?? r {
+        T txt → {
+            : ?AeModel m ( ae_from_json_str ( string_data txt ) )
+            ( string_free txt )
+            ^ m
+        }
+        F _ → { ^ @ ?AeModel { F } }
+    }
 }
 
 // Load one version's forest; None if absent or corrupt. The blob's

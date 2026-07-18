@@ -1,5 +1,42 @@
 # Changelog
 
+## 0.4.0
+
+**The timevector is a real sliding window, and the autoencoder version
+arrives.**
+
+- **timevector = sliding window.** Previously the version trained a plain
+  point-based forest on the last 100 ring points. Now `window_size`
+  consecutive points flatten to ONE window vector (stepped by `step_size`
+  during training, both configurable and persisted), the forest trains on
+  the window vectors, and detection scores the window ENDING at the
+  incoming point — the version that sees ORDER. A reversed pattern or a
+  stuck sensor whose every reading is individually in range scores
+  anomalous while the point-based versions stay blind. A ring shorter
+  than the window yields NO timevector verdict (absent, never silently
+  wrong); detection derives the live window from the trained forest's
+  width, so a config change can never desync scoring before the retrain.
+  Legacy metadata upgrades in place (timevector 100/1).
+- **autoencoder version** (over the new [`mlp`](../mlp) package): an
+  explicitly-trained reconstruction detector. Training follows the
+  reference recipe — a temporary Isolation Forest (contamination 10 %)
+  drops the ring's anomalies first, the surviving rows are MinMax-scaled,
+  an MLP autoencoder (64-32-64 default, Adam, early stopping,
+  deterministic restarts) learns to reconstruct them, and the threshold
+  is the 95th percentile of the training errors. Detection reports
+  `threshold − mse` in the standard decision_function orientation, so
+  the any-version aggregation and margin tuning need no special case.
+  It catches CORRELATION breaks the marginals hide (a pressure/flow pair
+  that is individually normal but jointly impossible). Train with
+  `anomaly train-ae <model>` or `POST /train/autoencoder/<model>`;
+  never part of the automatic retrain schedule. Persisted per model
+  (`autoencoder.json`, bit-exact weights) and loaded on model open.
+- `model_set_version_window` — library-level window configuration.
+- Tests: `timevector_test.nu` (19 checks — order-blindness made visible:
+  the reversed run scores WORSE on timevector and BETTER on short_term),
+  `autoencoder_test.nu` (15 checks — detect/persist/errors), live HTTP
+  train + version-in-detect checks. Full suite 30/0; ASan + LSan clean.
+
 ## 0.3.6
 
 - The `serve` dashboard now works out of the box after a registry install.

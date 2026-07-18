@@ -67,7 +67,7 @@ $ `src/dynamic.nu`
     i n_versions
 }
 
-@ ingest_pt *Model mo f temp f load i idx → IngestOut {
+@ ingest_pt * Model mo f temp f load i idx → IngestOut {
     : Json j ( json_obj_new )
     ( json_obj_set j `temp` ( json_float temp ) )
     ( json_obj_set j `load` ( json_float load ) )
@@ -86,7 +86,7 @@ $ `src/dynamic.nu`
     }
 }
 
-@ set_all_margins *Model mo f margin → v {
+@ set_all_margins * Model mo f margin → v {
     : b a ( model_set_margin mo `short_term` margin )
     : b b2 ( model_set_margin mo `daily` margin )
     : b c ( model_set_margin mo `weekly` margin )
