@@ -18,6 +18,7 @@ $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/bytes.nu`
 $ `stdlib/std/floatbits.nu`
+$ `stdlib/std/hashmap.nu`
 $ `stdlib/std/random.nu`
 $ `stdlib/std/fs.nu`
 $ `stdlib/std/x509_gen.nu`
@@ -1501,6 +1502,141 @@ $ `cudakernel.nu`
     ^ ( tool_result_json o )
 }
 
+// ── the shuffle primitive: compute_shuffle (group-by / reduce-by-key) ──
+// map is distributed on the GPU (one (key, value) per element); the shuffle
+// and per-key reduce run on the coordinator, which groups the pairs by key
+// and folds each group with the reduce op. Intermediate pairs are bounded by
+// the coordinator's RAM (16 bytes/element), which caps the input range.
+@ __shuffle_put ( HashMap i f ) m i key f v i op → v {
+    : f cur ?? ( map_get [i f] m key \ i x → i { ^ ( hash_int x ) } \ i a i b → b { ^ ( eq_int a b ) } ) { T x → x F → ( red_id_f op ) }
+    : f nv ? == op 4 { + cur 1.0 } { ( red_combine_f op cur v ) }
+    : ?f _o ( map_set [i f] m key nv \ i x → i { ^ ( hash_int x ) } \ i a i b → b { ^ ( eq_int a b ) } )
+}
+
+@ __shuffle_cap → i { ^ 8388608 }  // ≤ 8 M input elements per shuffle
+@ __shuffle_keys_cap → i { ^ 65536 }  // ≤ 65 536 distinct groups in a text result
+
+@ tool_shuffle Json args → Json {
+    : ?Json cj ( json_obj_get args `map` )
+    : b have_map ?? cj { T _ → T F → F }
+    ? have_map {} { ^ ( mcp_tool_result_error `compute_shuffle needs "map" — a pair of CUDA device functions __device__ long long key(long long x[, double v][, const double* p]) and __device__ double value(...) that emit one (key, value) per element — plus "reduce" (sum|product|min|max|count) and "lo"/"hi" (or "dataset")` ) }
+    : s cuda ?? cj { T x → ( json_str_data x ) F → `` }
+    : i op ?? ( json_obj_get args `reduce` ) { T v → ( reduce_op_of ( json_str_data v ) 0 ) F → 0 }
+    : i dsid ?? ( json_obj_get args `dataset` ) { T x → ?? ( json_num_as_i x ) { T v → v F → 0 } F → 0 }
+    : ?( Vec i ) pp ( __parse_params args )
+    ? ?? pp { T _ → T F → F } {} { ^ ( mcp_tool_result_error `"params" must be an array of numbers` ) }
+    : ( Vec i ) params ?? pp { T v → v F → ( vec_new [i] ) }
+    ? ! ( cuda_src_ok cuda ) { ( vec_free [i] params ) ^ ( mcp_tool_result_error `the CUDA source may not contain a backtick character` ) } {}
+    ? & >= ( nurl_str_find cuda `long long key` ) 0 >= ( nurl_str_find cuda `double value` ) 0 {} {
+        ( vec_free [i] params )
+        ^ ( mcp_tool_result_error `the CUDA source must define __device__ long long key(long long x) and __device__ double value(long long x) — with a dataset both also take double v = data[x]; with params a trailing const double* p` )
+    }
+    : ~ i rlo ?? ( json_obj_get args `lo` ) { T x → ?? ( json_num_as_i x ) { T v → v F → -1 } F → -1 }
+    : ~ i rhi ?? ( json_obj_get args `hi` ) { T x → ?? ( json_num_as_i x ) { T v → v F → -1 } F → -1 }
+    : ~ s dsp # s 0
+    ? != dsid 0 {
+        = dsp ( ds_find dsid )
+        ? == # i dsp 0 { ( vec_free [i] params ) ^ ( mcp_tool_result_error `no such dataset — upload one with compute_upload_data` ) } {}
+        : *Dataset d # *Dataset dsp
+        ? < rlo 0 { = rlo 0 } {}
+        ? < rhi 0 { = rhi ( ds_count_of d ) } {}
+        ? | | < rlo 0 > rhi ( ds_count_of d ) >= rlo rhi { ( vec_free [i] params ) ^ ( mcp_tool_result_error `the range [lo, hi) must lie within the dataset` ) } {}
+    } {
+        ? & >= rlo 0 > rhi rlo {} { ( vec_free [i] params ) ^ ( mcp_tool_result_error `"lo" and "hi" are required without a "dataset" (lo < hi)` ) }
+    }
+    ? > - rhi rlo ( __shuffle_cap ) { ( vec_free [i] params ) ^ ( mcp_tool_result_error `shuffle range too large: hi - lo must be <= 8388608 (the coordinator holds the intermediate (key,value) pairs)` ) } {}
+    : i has_params ? > ( vec_len [i] params ) 0 1 0
+    : i has_data ? != dsid 0 1 0
+    // build the shuffle_map module once (source-hash cached)
+    : String wrapped ( cuda_wrap cuda 0 ( gpu_mode_shuffle_map ) has_params has_data )
+    : ( Vec u ) srcb ( bytes_from_str ( string_data wrapped ) )
+    : String hex ( _wasm_hash srcb )
+    ( vec_free [u] srcb )
+    : ~ ( Vec u ) wasm ( vec_new [u] )
+    : ~ b have F
+    ?? ( __wcache_get ( string_data hex ) ) { T hitw → { ( vec_free [u] wasm ) = wasm hitw = have T } F → {} }
+    ? ! have {
+        : !( Vec u ) String cr ( compile_to_wasm ( string_data wrapped ) )
+        ?? cr {
+            F msg → {
+                : String em ( string_concat ( string_from `the shuffle map program did not compile: ` ) msg )
+                : Json e ( mcp_tool_result_error ( string_data em ) )
+                ( string_free em ) ( string_free msg ) ( string_free wrapped ) ( string_free hex )
+                ( vec_free [i] params ) ( vec_free [u] wasm )
+                ^ e
+            }
+            T builtw → { ( vec_free [u] wasm ) = wasm builtw ( __wcache_put ( string_data hex ) wasm ) }
+        }
+    } {}
+    ( string_free wrapped ) ( string_free hex )
+    ? ( mcp_ensure_relay ) {} {}
+    : *Swarm sw ( mcp_swarm )
+    ( swarm_discover sw 6 )
+    : i ngpu ( roster_count_caps # *Roster . sw roster ( cap_gpu ) )
+    ? == ngpu 0 { ( vec_free [i] params ) ( vec_free [u] wasm ) ^ ( mcp_tool_result_error `no GPU workers in the cluster — start some with 'swarm-mcp --worker --gpu'` ) } {}
+    // chunk so each chunk's 16-byte-per-element output rides one relay frame
+    : i span - rhi rlo
+    : ~ i nchunks ( nchunks_wasm ngpu )
+    : i by_out / + span 786431 786432
+    ? > by_out nchunks { = nchunks by_out } {}
+    ? > nchunks span { = nchunks span } {}
+    : *McpState st # *McpState g_mcp
+    : *u nseed ( nurl_alloc 8 )
+    ( nurl_poke nseed 0 0 )
+    : ~ ( Vec i ) tids ( vec_new [i] )
+    ? != dsid 0 {
+        : *Dataset d # *Dataset dsp
+        ( vec_free [i] tids )
+        = tids ( cluster_submit_wasm_gpu_ds sw ( gpu_mode_shuffle_map ) rlo rhi 0 params d wasm nchunks . st seeded nseed )
+    } {
+        : ( Vec u ) dbytes ( vec_new [u] )
+        ( vec_free [i] tids )
+        = tids ( cluster_submit_wasm_gpu sw ( gpu_mode_shuffle_map ) rlo rhi 0 params dbytes wasm nchunks )
+        ( vec_free [u] dbytes )
+    }
+    ( nurl_free nseed )
+    ( vec_free [i] params ) ( vec_free [u] wasm )
+    // drive to completion, collect the concatenated (key, value) pairs
+    : ~ i r 0
+    ~ & < r 6000 ! ( tids_ready sw tids ) { ( swarm_pump sw 100 ) = r + r 1 }
+    : CombinedV cv ( tids_combine_vec sw ( gpu_mode_shuffle_map ) 0 tids )
+    ( vec_free [i] tids )
+    ? > . cv nfail 0 {
+        ( vec_free [u] . cv bytes )
+        ^ ( mcp_tool_result_error `a shuffle map chunk failed on a worker (bad kernel, missing GPU, or a lost block)` )
+    } {}
+    // ── the shuffle: group by key, fold each group with the reduce op ──
+    : ( HashMap i f ) groups ( map_new [i f] )
+    : i nbytes ( vec_len [u] . cv bytes )
+    : i npairs / nbytes 16
+    : ~ i k 0
+    ~ < k npairs {
+        : i key ( __f64le_get . cv bytes * k 16 )
+        : f val ( bits_to_f64 ( __f64le_get . cv bytes + * k 16 8 ) )
+        ( __shuffle_put groups key val op )
+        = k + k 1
+    }
+    ( vec_free [u] . cv bytes )
+    : i ngroups ( map_len [i f] groups )
+    ? > ngroups ( __shuffle_keys_cap ) {
+        ( map_free [i f] groups )
+        ^ ( mcp_tool_result_error `more than 65536 distinct keys — narrow the range or coarsen the key function (a text result cannot carry a larger group table)` )
+    } {}
+    : Json go ( json_obj_new )
+    ( map_each [i f] groups \ i kk f vv → v {
+        : s ks ( nurl_str_int kk )
+        : b _o ( json_obj_set go ks ( json_float vv ) )
+        ( nurl_free # s ks )
+    } )
+    ( map_free [i f] groups )
+    : Json o ( json_obj_new )
+    ( json_obj_set o `groups` go )
+    ( json_obj_set o `n_groups` ( json_int ngroups ) )
+    ( json_obj_set o `reduce` ( json_str_lit ( reduce_op_name op ) ) )
+    ( json_obj_set o `pairs_mapped` ( json_int npairs ) )
+    ^ ( tool_result_json o )
+}
+
 @ tool_submit_cuda Json args → Json {
     : ?Json cj ( json_obj_get args `cuda` )
     ? ! ?? cj { T _ → T F → F } {
@@ -1779,6 +1915,23 @@ $ `cudakernel.nu`
     ^ schema
 }
 
+@ ms_schema_shuffle → Json {
+    : Json schema ( json_obj_new )
+    ( json_obj_set schema `type` ( json_str_lit `object` ) )
+    : Json props ( json_obj_new )
+    ( ms_prop props `map` `string` `A pair of CUDA-C device functions: __device__ long long key(long long x) and __device__ double value(long long x) — for each element x they emit one (key, value). With a "dataset" both also take double v = data[x]: key(long long x, double v), value(long long x, double v). With "params" add a trailing const double* p. Example word-count-style group-by (count elements per key = x mod 100): "__device__ long long key(long long x) { return x % 100; } __device__ double value(long long x) { return 1.0; }". No backticks, no __global__, no host code.` )
+    ( ms_prop props `reduce` `string` `How to fold the values that share a key: "sum" (default) · "product" · "min" · "max" · "count" (how many pairs per key, ignoring value).` )
+    ( ms_prop props `dataset` `integer` `Optional dataset id (compute_upload_data): key/value map over the data (v = data[x]).` )
+    ( ms_prop props `lo` `integer` `Range start (inclusive); required without a dataset.` )
+    ( ms_prop props `hi` `integer` `Range end (exclusive); required without a dataset. hi - lo <= 8388608.` )
+    ( ms_prop props `params` `array` ( __ms_params_desc ) )
+    ( json_obj_set schema `properties` props )
+    : Json req ( json_arr_new )
+    ( json_arr_push req ( json_str_lit `map` ) )
+    ( json_obj_set schema `required` req )
+    ^ schema
+}
+
 @ ms_schema_iterate → Json {
     : Json schema ( json_obj_new )
     ( json_obj_set schema `type` ( json_str_lit `object` ) )
@@ -1868,6 +2021,9 @@ $ `cudakernel.nu`
     ( vec_push [Json] tools ( mcp_tool_descriptor `compute_iterate`
     `Run an ITERATIVE algorithm — gradient descent — with the loop in the ENGINE, not in your messages. You give a CUDA gradient function grad() that scatter-adds each element's contribution into a K-dim vector, an initial parameter vector "state", "rounds" and a learning rate "lr"; the coordinator repeatedly (1) computes the gradient as a distributed GPU vecreduce over the range/dataset with the current parameters, (2) updates state[j] -= lr*gradient[j]/N, (3) stops at "rounds" or when the step falls below "epsilon". Returns the converged "state", "rounds_run", and "converged". Over a dataset the data is cached on the workers after round one, so each further round ships only the parameters — this is the tool for fitting/optimisation without a fragile model-in-the-loop.`
     ( ms_schema_iterate ) ) )
+    ( vec_push [Json] tools ( mcp_tool_descriptor `compute_shuffle`
+    `Group-by-key / reduce-by-key — the shuffle primitive. You give a CUDA "map" that emits one (key, value) per element (key() and value() device functions) and a "reduce" op; the map runs distributed on the GPU across the workers, and the coordinator groups the emitted pairs by key and folds each group with the op. Returns { "groups": {key: value, …}, "n_groups", "pairs_mapped" }. This is the building block for word-count, histograms over arbitrary integer keys, and joins (map two datasets to a shared key space and combine per key). The intermediate pairs are held on the coordinator, so hi - lo <= 8388608 and the result is capped at 65536 distinct keys — narrow the range or coarsen the key for more.`
+    ( ms_schema_shuffle ) ) )
     ( vec_push [Json] tools ( mcp_tool_descriptor `compute_upload_data`
     `Upload a dataset — a flat array of f64 values — for the GPU tools to map over. Pass base64 of raw little-endian f64s, or a file path on the MCP host. Returns a dataset_id plus count and min/max/mean. Then run compute_submit_cuda / compute_sample_cuda / compute_histogram_cuda with {"dataset": id}: your device functions receive each element as double v — e.g. mean/variance via reduce, a pointwise transform via sample, a value distribution via histogram. The data is cut into content-addressed 8 MiB blocks (BLAKE3) that workers cache on disk: a block travels to its worker ONCE, and every later submit or iteration round over the same dataset ships only hashes — the task response's seeded_blocks shows how many blocks actually moved (0 = free re-run). Up to 33.5M values (256 MiB).`
     ( ms_schema_upload_data ) ) )
@@ -1891,6 +2047,7 @@ $ `cudakernel.nu`
     ? != ( nurl_str_eq name `compute_submit_kernel` ) 0 { ^ ( tool_submit_kernel args ) } {}
     ? != ( nurl_str_eq name `compute_submit_cuda` ) 0 { ^ ( tool_submit_cuda args ) } {}
     ? != ( nurl_str_eq name `compute_iterate` ) 0 { ^ ( tool_iterate args ) } {}
+    ? != ( nurl_str_eq name `compute_shuffle` ) 0 { ^ ( tool_shuffle args ) } {}
     ? != ( nurl_str_eq name `compute_sample_cuda` ) 0 { ^ ( tool_sample_cuda args ) } {}
     ? != ( nurl_str_eq name `compute_histogram_cuda` ) 0 { ^ ( tool_hist_cuda args ) } {}
     ? != ( nurl_str_eq name `compute_upload_data` ) 0 { ^ ( tool_upload_data args ) } {}
@@ -2254,7 +2411,8 @@ $ `cudakernel.nu`
     ( nurl_print `  --mcp                serve the MCP control surface over HTTPS JSON-RPC\n\n` )
     ( nurl_print `Cluster:\n` )
     ( nurl_print `  --token <secret>     shared cluster secret — same token = same cluster (required)\n` )
-    ( nurl_print `  --connect HOST:PORT  relay to join (when this node has no --relay)\n\n` )
+    ( nurl_print `  --connect H:P[,H:P]  relay(s) to join when this node has no --relay; any one\n` )
+    ( nurl_print `                       bootstraps it, and it fails over to the next if a relay dies\n\n` )
     ( nurl_print `Bind addresses & tuning:\n` )
     ( nurl_print `  --listen HOST:PORT       relay bind        (default 0.0.0.0:47700)\n` )
     ( nurl_print `  --mcp-listen HOST:PORT   MCP HTTPS bind    (default 127.0.0.1:8443)\n` )

@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.13.0
+
+**The shuffle primitive — group-by-key / reduce-by-key.**
+
+- **`compute_shuffle`** — the building block for group-by, word-count,
+  histograms over arbitrary integer keys, and joins. You give a CUDA "map"
+  (a `key(x)` and a `value(x)` device function that emit one (key, value) per
+  element) and a "reduce" op (sum/product/min/max/count); the map runs
+  distributed on the GPU across the workers, and the coordinator groups the
+  emitted pairs by key and folds each group with the op. Returns
+  `{ "groups": {key: value, …}, "n_groups", "pairs_mapped" }`. Works over a
+  range or a dataset (with a dataset the block cache means the input moves
+  once).
+- **`gpu_mode_shuffle_map`** — a new CUDA generator mode: the kernel writes
+  one (i64 key, f64 value) pair per element (16 bytes each, the key
+  bit-reinterpreted into the double slot); the coordinator concatenates the
+  per-chunk pair streams and groups them with a hashmap.
+- The intermediate pairs are held on the coordinator, so `hi - lo <=
+  8388608` and the result is capped at 65536 distinct keys — narrow the range
+  or coarsen the key for more. (Pushing the per-key reduce onto distributed
+  reducers is a future step; the map — the O(N) parallel work — is already
+  distributed.)
+- Tests: `tests/cudakernel_test.nu` grows 6 shuffle-map generator checks (62
+  total, ASan clean); `tests/shuffle_smoke.sh` (live — group-by-count over
+  300 k elements into 10 keys, and a group-by-sum, both exact vs the oracle).
+
 ## 0.12.0
 
 **The relay is no longer a single point of failure.**
