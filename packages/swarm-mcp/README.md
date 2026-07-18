@@ -65,6 +65,7 @@ Ten tools, with self-describing schemas so a model uses them without docs:
 | `compute_submit_cuda` | `cuda` (a `__device__ double f(long long x)` function), `lo`, `hi`, `reduce`, `params` (numbers), `dataset` | distributed **GPU** map-reduce: the model writes only the CUDA-C math; the server generates the whole kernel program and the `--gpu` workers run it on real GPUs |
 | `compute_sample_cuda` | `cuda`, `lo`, `hi`, `params`, `out_file`, `dataset` | distributed GPU map that returns **every value** in order — curves, fields, tables (JSON ≤ 1024 values, base64 ≤ 65536, `out_file` beyond) |
 | `compute_histogram_cuda` | `cuda` (`bin(x)` + optional `val(x)`), `lo`, `hi`, `bins`, `params`, `out_file`, `dataset` | distributed GPU **binned aggregation**: a whole distribution in one pass over billions of x |
+| `compute_iterate` | `cuda` (`grad(...)`), `state`, `rounds`, `lr`, `epsilon`, `dataset`/`lo`/`hi` | **gradient descent with the loop in the engine**: each round computes the gradient as a distributed GPU vecreduce with the current parameters and updates them — returns the converged `state` from one call |
 | `compute_upload_data` | `data_base64` or `file`, `name` | upload a **dataset** (flat f64 array) the GPU tools map over — returns a `dataset_id` + stats. The data is cut into content-addressed 1 MiB blocks that workers cache on disk, so a block travels **once** and later submits / iteration rounds over the same dataset ship only hashes (`seeded_blocks` in the task response shows how many blocks actually moved). |
 | `compute_list_data` | — | every uploaded dataset: id, name, count |
 | `compute_run_wasm` | `wasm_base64` (string), `lo`, `hi`, `reduce`, `gpu` (bool) | like `compute_submit_kernel` but you pass an **already-compiled** wasm module |
@@ -232,6 +233,35 @@ The payoff: N submits (or the N rounds of an iterative algorithm) over one
 dataset pay the transfer **once per worker**. The task response's
 `seeded_blocks` is the number of blocks that actually moved — `0` means every
 block was already cached and the re-run shipped nothing but hashes.
+
+## Iterative algorithms — the loop runs in the engine
+
+`compute_iterate` runs **gradient descent** without a model-in-the-loop.
+You give a CUDA gradient function that scatter-adds each element's
+contribution into a K-dim vector:
+
+```
+__device__ void grad(long long x, double v, double* g, const double* p) {
+    // p is the current parameter vector (== state); v = data[x]
+    // fit the mean: minimise sum (theta - v)^2
+    swarm_g_add(g, 0, 2.0 * (p[0] - v));
+}
+```
+
+plus an initial `state` (the K-dim parameter vector), `rounds`, and a
+learning rate `lr`. The **coordinator** then loops, entirely on its own:
+
+1. compute the gradient `g` as a distributed GPU **vecreduce** over the
+   range/dataset with the current `state` as the runtime parameters,
+2. update `state[j] -= lr * g[j] / N`,
+3. stop at `rounds`, or early once the largest step falls below `epsilon`.
+
+It returns the converged `state`, `rounds_run` and `converged` from **one
+tool call** — the model does not run the loop message by message, which
+was slow and fragile. Over a dataset the blocks are cached on the workers
+after round one, so every later round ships only the K parameters:
+`seeded_blocks` reports the blocks moved across the *whole* run (one per
+block, not one per round).
 
 Two ways to get there:
 

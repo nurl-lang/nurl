@@ -9,6 +9,7 @@ $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/bytes.nu`
 $ `src/token.nu`
+$ `src/blob.nu`
 $ `src/cudakernel.nu`
 $ `src/wasmkernel.nu`
 
@@ -61,6 +62,16 @@ $ `src/wasmkernel.nu`
     : String phv ( cuda_wrap `__device__ long long bin(long long x) { return 0; } __device__ double val(long long x) { return 2.0; }` 0 ( gpu_mode_hist ) 0 0 )
     ( pb `user val suppresses the default: ` ? ( has phv `val(long long x) { return 1.0; }` ) F T )
     ( string_free phv )
+    // ── vecreduce (gradient scatter-add) ──────────────────────────
+    : String pvec ( cuda_wrap `__device__ void grad(long long x, double v, double* g, const double* p) { swarm_g_add(g, 0, 2.0 * (p[0] - v)); }` 0 ( gpu_mode_vecreduce ) 1 1 )
+    ( pb `vecreduce forward-decls g_add:   ` ( has pvec `__device__ void swarm_g_add(double* g, long long j, double val);` ) )
+    ( pb `vecreduce defines g_add helper:  ` ( has pvec `if (j >= 0 && j < __swK) swarm_atomic_add(&g[j], val)` ) )
+    ( pb `vecreduce uses CAS atomic add:   ` ( has pvec `atomicCAS(a, assumed,` ) )
+    ( pb `vecreduce kernel calls grad:     ` ( has pvec `grad(x, in[x - lo], out, p)` ) )
+    ( pb `vecreduce sets K for the guard:  ` ( has pvec `__swK = K;` ) )
+    ( pb `vecreduce K rides argv:          ` ( has pvec `nurl_argv_get 5` ) )
+    ( pb `vecreduce writes the K-vec file: ` ( has pvec `fwrite # s host 1 obytes fh` ) )
+    ( string_free pvec )
     : String ppar ( cuda_wrap `__device__ double f(long long x, const double* p) { return p[0]; }` 0 ( gpu_mode_scalar ) 1 0 )
     ( pb `params: kernel takes double* p:  ` ( has ppar `double* out, const double* p` ) )
     ( pb `params: f called as f(x, p):     ` ( has ppar `double v = f(x, p)` ) )
@@ -108,7 +119,7 @@ $ `src/wasmkernel.nu`
     // ── GPU chunk payload v2 codec round-trip ─────────────────────
     : ( Vec i ) prm ( vec_new [i] )
     ( vec_push [i] prm 4611686018427387904 )  // 2.0
-    ( vec_push [i] prm -4616189618054758400 ) // -1.0
+    ( vec_push [i] prm -4616189618054758400 )  // -1.0
     : ( Vec u ) modbytes ( vec_new [u] )
     ( vec_push [u] modbytes 1 ) ( vec_push [u] modbytes 2 ) ( vec_push [u] modbytes 3 )
     : ( Vec u ) nodata ( vec_new [u] )
@@ -132,11 +143,11 @@ $ `src/wasmkernel.nu`
     // program must carry them as the two-character sequences \\ and \n so the
     // generated literal decodes back to the original bytes.
     : String esc ( string_from `line1` )
-    ( string_push_char esc 10 )   // real newline
+    ( string_push_char esc 10 )  // real newline
     ( string_push_str esc `tab:` )
-    ( string_push_char esc 9 )    // real tab
+    ( string_push_char esc 9 )  // real tab
     ( string_push_str esc `bs:` )
-    ( string_push_char esc 92 )   // real backslash
+    ( string_push_char esc 92 )  // real backslash
     ( string_push_str esc ` double f ` )
     : String pe ( cuda_wrap ( string_data esc ) 0 ( gpu_mode_scalar ) 0 0 )
     // expected two-char sequences in the generated TEXT
