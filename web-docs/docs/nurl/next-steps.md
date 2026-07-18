@@ -6,9 +6,9 @@ order: 4
 
 ## Learn the language
 
-- **[Language Guide](../language-guide/index.md)** - prefix syntax, types, control flow, structs & enums, pattern matching,
+- **[Language Guide]()** - prefix syntax, types, control flow, structs & enums, pattern matching,
   memory & ownership, error handling, closures, concurrency.
-- **[Standard Library tour](../standard-library/index.md)** - collections, strings, JSON, HTTP, crypto,
+- **[Standard Library tour]()** - collections, strings, JSON, HTTP, crypto,
   channels, and more.
 - **[examples](https://github.com/nurl-lang/nurl/tree/main/examples)** in
   the repository, runnable `.nu` programs from FizzBuzz to an HTTP

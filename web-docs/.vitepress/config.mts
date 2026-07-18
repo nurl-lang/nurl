@@ -17,6 +17,7 @@ const vitePressOptions: UserConfig = {
   },
   lastUpdated: true,
   srcDir: "docs",
+  srcExclude: ["localdraft/**"],
   head: [["link", { rel: "icon", href: "/favicon.svg" }]],
   title: "NURL Official Documentation",
   description:
