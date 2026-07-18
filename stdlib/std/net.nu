@@ -127,6 +127,12 @@ $ `stdlib/std/pkey.nu`
     }
 }
 
+// True iff a NetErr is a recv/send TIMEOUT (SO_*TIMEO fired) rather than a
+// hard failure — the caller can retry the same operation. A partial-frame
+// reader uses this to distinguish "the rest is still coming" from "the peer
+// is gone".
+@ net_is_timeout NetErr e → b { ^ ?? e { NetTimeout → T _ → F } }
+
 // Internal: classify the runtime err_kind into a NetErr variant.
 // `deflt` is the variant to return for any unmapped err_kind (kept
 // caller-controlled because read/write/listen each have a different

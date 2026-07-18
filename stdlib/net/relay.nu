@@ -196,19 +196,38 @@ $ `stdlib/std/async.nu`
 
 // ── streaming frame reader (TcpConn) ─────────────────────────────
 
+// Read EXACTLY `n` bytes, or fail. On a blocking socket with SO_RCVTIMEO
+// (the relay client sets one), a recv TIMEOUT mid-frame does NOT mean the
+// peer is gone — it means the rest of the frame has not arrived yet, and a
+// multi-megabyte frame routinely takes more than one recv window. Treating
+// that timeout as failure dropped the partial frame AND desynced the stream
+// (its unread body was misread as the next header). So: a NetTimeout with
+// bytes still outstanding is RETRIED; a timeout with nothing yet read means
+// "no frame available" and returns None (the caller polls again); a real
+// close/error always fails. A generous retry bound stops a peer that dies
+// mid-frame from spinning forever.
 @ __read_exact TcpConn c i n → ?( Vec u ) {
     : ( Vec u ) buf ( vec_with_cap [u] n )
     : ~ b fail F
     : ~ i got 0
+    : ~ i idle 0
     ~ & ! fail < got n {
         : !( Vec u ) NetErr r ( tcp_read_chunk c - n got )
         ?? r {
             T chunk → {
                 : i cn ( vec_len [u] chunk )
-                ? == cn 0 { = fail T } { ( vec_extend [u] buf chunk ) = got + got cn }
+                ? == cn 0 { = fail T } { ( vec_extend [u] buf chunk ) = got + got cn = idle 0 }
                 ( vec_free [u] chunk )
             }
-            F _ → { = fail T }
+            F e → {
+                // NetTimeout mid-frame: the peer is still connected and more
+                // bytes are coming — wait. With nothing read, there is simply
+                // no frame right now: report that (do not spin).
+                ? & ( net_is_timeout e ) > got 0 {
+                    = idle + idle 1
+                    ? > idle 2400 { = fail T } {}
+                } { = fail T }
+            }
         }
     }
     ? fail { ( vec_free [u] buf ) ^ @ ?( Vec u ) { F # ( Vec u ) 0 } } {}

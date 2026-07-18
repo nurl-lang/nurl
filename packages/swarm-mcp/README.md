@@ -65,7 +65,7 @@ Ten tools, with self-describing schemas so a model uses them without docs:
 | `compute_submit_cuda` | `cuda` (a `__device__ double f(long long x)` function), `lo`, `hi`, `reduce`, `params` (numbers), `dataset` | distributed **GPU** map-reduce: the model writes only the CUDA-C math; the server generates the whole kernel program and the `--gpu` workers run it on real GPUs |
 | `compute_sample_cuda` | `cuda`, `lo`, `hi`, `params`, `out_file`, `dataset` | distributed GPU map that returns **every value** in order — curves, fields, tables (JSON ≤ 1024 values, base64 ≤ 65536, `out_file` beyond) |
 | `compute_histogram_cuda` | `cuda` (`bin(x)` + optional `val(x)`), `lo`, `hi`, `bins`, `params`, `out_file`, `dataset` | distributed GPU **binned aggregation**: a whole distribution in one pass over billions of x |
-| `compute_upload_data` | `data_base64` or `file`, `name` | upload a **dataset** (flat f64 array) the GPU tools map over — returns a `dataset_id` + stats |
+| `compute_upload_data` | `data_base64` or `file`, `name` | upload a **dataset** (flat f64 array) the GPU tools map over — returns a `dataset_id` + stats. The data is cut into content-addressed 1 MiB blocks that workers cache on disk, so a block travels **once** and later submits / iteration rounds over the same dataset ship only hashes (`seeded_blocks` in the task response shows how many blocks actually moved). |
 | `compute_list_data` | — | every uploaded dataset: id, name, count |
 | `compute_run_wasm` | `wasm_base64` (string), `lo`, `hi`, `reduce`, `gpu` (bool) | like `compute_submit_kernel` but you pass an **already-compiled** wasm module |
 | `compute_list` | — | every task with status (`running`/`done`/`error`), kernel, range, reduce, result |
@@ -213,6 +213,25 @@ The kernel program's `main` reads `lo` and `hi` from argv, folds the kernel over
 shards the range, runs the module on each worker with its sub-range, and
 combines the partials with the reduce op. Workers cache the module by content
 hash, so it is written once per worker.
+
+## Datasets — data moved once, referenced by hash
+
+A dataset uploaded with `compute_upload_data` is cut on a fixed grid into
+**content-addressed 1 MiB blocks** (`blob.nu`): each block is keyed by its
+BLAKE3-256, and the dataset is a manifest of those hashes. When a GPU tool
+runs over a dataset, chunking is block-aligned and each compute chunk
+references its blocks **by hash** (payload v4) rather than carrying the slice.
+Blocks the owning worker does not yet hold are seeded first — a `kind_blob`
+task with the same ring key as the compute chunk, so it lands on the same
+worker — and cached to disk (`$TMPDIR/swarmb_<hex>.blob`), verified against
+the hash on arrival. A worker then assembles its slice from the cache; a
+missing or corrupt block fails the chunk **visibly** (`failed_chunks`), never
+silently.
+
+The payoff: N submits (or the N rounds of an iterative algorithm) over one
+dataset pay the transfer **once per worker**. The task response's
+`seeded_blocks` is the number of blocks that actually moved — `0` means every
+block was already cached and the re-run shipped nothing but hashes.
 
 Two ways to get there:
 

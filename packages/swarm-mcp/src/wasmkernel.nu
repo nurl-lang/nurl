@@ -94,6 +94,39 @@ $ `token.nu`
     ^ b
 }
 
+// v4: the chunk references its dataset blocks by CONTENT HASH instead of
+// carrying the slice —
+//   [4][mode:1][lo:8][hi:8][K:4][nparams:2][f64 bits:8×n]
+//   [b0:4][nblob:2][hash32 × nblob][wasm…]
+// b0 is the absolute index of the first referenced block on the dataset's
+// block grid (blob.nu); the worker assembles data[lo..hi) from its block
+// cache (seeded via kind_blob) and FAILS the chunk on any missing block.
+@ wasm_gpu_chunk_payload_blobs i mode i lo i hi i kbins ( Vec i ) params i b0 ( Vec ( Vec u ) ) hashes ( Vec u ) wasm → ( Vec u ) {
+    : ( Vec u ) b ( vec_new [u] )
+    ( vec_push [u] b 4 )
+    ( vec_push [u] b # u mode )
+    ( bytes_push_u64_be b # u64 lo )
+    ( bytes_push_u64_be b # u64 hi )
+    ( bytes_push_u32_be b # u32 kbins )
+    : i np ( vec_len [i] params )
+    ( bytes_push_u16_be b # u16 np )
+    : ~ i k 0
+    ~ < k np {
+        ( bytes_push_u64_be b # u64 ?? ( vec_get [i] params k ) { T x → x F → 0 } )
+        = k + k 1
+    }
+    ( bytes_push_u32_be b # u32 b0 )
+    : i nb ( vec_len [( Vec u )] hashes )
+    ( bytes_push_u16_be b # u16 nb )
+    = k 0
+    ~ < k nb {
+        ?? ( vec_get [( Vec u )] hashes k ) { T h → { ( vec_extend [u] b h ) } F → {} }
+        = k + k 1
+    }
+    ( vec_extend [u] b wasm )
+    ^ b
+}
+
 : GpuChunk {
     i ok
     i mode
@@ -102,12 +135,15 @@ $ `token.nu`
     i kbins
     ( Vec i ) params
     ( Vec u ) data  // raw LE f64 slice (empty without a dataset)
+    i b0  // v4: first referenced block index on the dataset grid
+    ( Vec ( Vec u ) ) blobs  // v4: 32-byte block hashes (empty otherwise)
     ( Vec u ) wasm
 }
 
 @ gpu_chunk_free GpuChunk c → v {
     ( vec_free [i] . c params )
     ( vec_free [u] . c data )
+    ( blob_manifest_free . c blobs )
     ( vec_free [u] . c wasm )
 }
 
@@ -118,9 +154,40 @@ $ `token.nu`
     : ~ i lo 0
     : ~ i hi 0
     : ~ i kbins 0
+    : ~ i b0 0
+    : ~ ( Vec ( Vec u ) ) blobs ( vec_new [( Vec u )] )
     : ~ ( Vec u ) data ( vec_new [u] )
     : ~ ( Vec u ) wasm ( vec_new [u] )
     : i ver ?? ( vec_get [u] body 0 ) { T x → # i x F → 0 }
+    ? == ver 4 {
+        = mode ?? ( vec_get [u] body 1 ) { T x → # i x F → 0 }
+        = lo ?? ( bytes_read_u64_be body 2 ) { T x → # i x F → 0 }
+        = hi ?? ( bytes_read_u64_be body 10 ) { T x → # i x F → 0 }
+        = kbins ?? ( bytes_read_u32_be body 18 ) { T x → # i x F → 0 }
+        : i np ?? ( bytes_read_u16_be body 22 ) { T x → # i x F → 0 }
+        : i pend + 24 * np 8
+        ? <= + pend 6 ( vec_len [u] body ) {
+            = b0 ?? ( bytes_read_u32_be body pend ) { T x → # i x F → 0 }
+            : i nb ?? ( bytes_read_u16_be body + pend 4 ) { T x → # i x F → 0 }
+            : i hstart + pend 6
+            : i hend + hstart * nb 32
+            ? & > nb 0 <= hend ( vec_len [u] body ) {
+                : ~ i k 0
+                ~ < k np {
+                    ( vec_push [i] params ?? ( bytes_read_u64_be body + 24 * k 8 ) { T x → x F → 0 } )
+                    = k + k 1
+                }
+                = k 0
+                ~ < k nb {
+                    ( vec_push [( Vec u )] blobs ( bytes_slice body + hstart * k 32 + hstart * + k 1 32 ) )
+                    = k + k 1
+                }
+                ( vec_free [u] wasm )
+                = wasm ( bytes_slice body hend ( vec_len [u] body ) )
+                = ok 1
+            } {}
+        } {}
+    } {}
     ? | == ver 2 == ver 3 {
         = mode ?? ( vec_get [u] body 1 ) { T x → # i x F → 0 }
         = lo ?? ( bytes_read_u64_be body 2 ) { T x → # i x F → 0 }
@@ -152,7 +219,35 @@ $ `token.nu`
             = ok 1
         } {}
     } {}
-    ^ @ GpuChunk { ok mode lo hi kbins params data wasm }
+    ^ @ GpuChunk { ok mode lo hi kbins params data b0 blobs wasm }
+}
+
+// v4: assemble data[lo..hi) into c.data from the content-addressed block
+// cache. A v2/v3 chunk (no blob references) is a no-op T. F on ANY missing
+// or corrupt block, or a reference window that does not cover the range —
+// the caller fails the chunk VISIBLY instead of computing on garbage.
+@ gpu_chunk_assemble inout GpuChunk c → b {
+    : i nb ( vec_len [( Vec u )] . c blobs )
+    ? > nb 0 {} { ^ T }
+    ? == . c ok 1 {} { ^ F }
+    : ( Vec u ) whole ( vec_new [u] )
+    : ~ b bok T
+    : ~ i bi 0
+    ~ & bok < bi nb {
+        ?? ( vec_get [( Vec u )] . c blobs bi ) {
+            T h → { ? ( blob_append h whole ) {} { = bok F } }
+            F → { = bok F }
+        }
+        = bi + bi 1
+    }
+    : i skip * - . c lo * . c b0 ( blob_block_vals ) 8
+    : i take * - . c hi . c lo 8
+    ? & bok & >= skip 0 <= + skip take ( vec_len [u] whole ) {
+        ( vec_free [u] . c data )
+        = . c data ( bytes_slice whole skip + skip take )
+    } { = bok F }
+    ( vec_free [u] whole )
+    ^ bok
 }
 
 // FNV-1a/64 content hash → 16 lowercase hex chars, for the cache filename.
@@ -178,9 +273,10 @@ $ `token.nu`
 
 // Where this worker caches modules: $TMPDIR (or /tmp) + /swarmc_<hash>.wasm.
 @ __wasm_cache_path String hex → String {
-    : String dir ( env_var_or `TMPDIR` `/tmp` )
-    : String p ( string_concat dir ( string_from `/swarmc_` ) )
-    ( string_free dir )
+    // env_var_or returns an OWNED String — grow it in place (string_concat
+    // BORROWS its args, so the `/swarmc_` temporary used to leak per call)
+    : String p ( env_var_or `TMPDIR` `/tmp` )
+    ( string_push_str p `/swarmc_` )
     ( string_push_str p ( string_data hex ) )
     ( string_push_str p `.wasm` )
     ^ p
@@ -392,8 +488,9 @@ $ `token.nu`
         ?? ( token_untag key p ) {
             F → {}
             T body → {
-                : GpuChunk c ( wasm_gpu_chunk_decode body )
+                : ~ GpuChunk c ( wasm_gpu_chunk_decode body )
                 = mode . c mode
+                ? ( gpu_chunk_assemble c ) {} { = . c ok 0 }
                 ? == . c ok 1 {
                     : String hex ( _wasm_hash . c wasm )
                     : String path ( __wasm_cache_path hex )
