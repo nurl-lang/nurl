@@ -51,6 +51,8 @@ $ `stdlib/ext/json.nu`
     String vname
     i window_min
     i window_pts
+    i window_size  // sliding-window LENGTH in points (timevector; 0 = plain)
+    i step_size  // sliding-window step during training (timevector)
     i n_estimators
     i max_samples
     f contamination
@@ -97,11 +99,19 @@ $ `stdlib/ext/json.nu`
 // ── Version defaults ──────────────────────────────────────────────────
 //
 // The five default versions of the reference service. `seasonal`'s 90 days
-// are expressed in minutes; `timevector` has no time window — it works on
-// the most recent `window_pts` points.
+// are expressed in minutes; `timevector` is the sliding-window version: it
+// trains on flattened windows of `window_size` consecutive points (stepped
+// by `step_size`) and scores the window ENDING at the incoming point.
 
 @ __an_vc s vname i wmin i wpts i est i samp f margin → VerCfg {
-    ^ @ VerCfg { ( string_from vname ) wmin wpts est samp -1.0 margin T }
+    ^ @ VerCfg { ( string_from vname ) wmin wpts 0 0 est samp -1.0 margin T }
+}
+
+// timevector: a REAL sliding window — window_size consecutive points
+// flatten to one window_size×n_features vector; the forest is trained on
+// the window vectors (stepped by step_size) and scores the LAST window.
+@ __an_vc_tv s vname i wsize i sstep i est i samp f margin → VerCfg {
+    ^ @ VerCfg { ( string_from vname ) 0 0 wsize sstep est samp -1.0 margin T }
 }
 
 @ meta_default_versions → ( Vec VerCfg ) {
@@ -110,7 +120,7 @@ $ `stdlib/ext/json.nu`
     ( vec_push [VerCfg] vs ( __an_vc `daily` 1440 0 300 256 0.12 ) )
     ( vec_push [VerCfg] vs ( __an_vc `weekly` 10080 0 350 256 0.06 ) )
     ( vec_push [VerCfg] vs ( __an_vc `seasonal` 129600 0 400 256 0.08 ) )
-    ( vec_push [VerCfg] vs ( __an_vc `timevector` 0 100 200 256 0.10 ) )
+    ( vec_push [VerCfg] vs ( __an_vc_tv `timevector` 100 1 200 256 0.10 ) )
     ^ vs
 }
 
@@ -749,6 +759,8 @@ $ `stdlib/ext/json.nu`
                 : Json vo ( json_obj_new )
                 ( json_obj_set vo `window_minutes` ( json_int . vc window_min ) )
                 ( json_obj_set vo `window_points` ( json_int . vc window_pts ) )
+                ( json_obj_set vo `window_size` ( json_int . vc window_size ) )
+                ( json_obj_set vo `step_size` ( json_int . vc step_size ) )
                 ( json_obj_set vo `n_estimators` ( json_int . vc n_estimators ) )
                 ( json_obj_set vo `max_samples` ( json_int . vc max_samples ) )
                 ? < . vc contamination 0.0 {
@@ -804,10 +816,13 @@ $ `stdlib/ext/json.nu`
     }
     : ~ b on T
     ?? ( json_obj_get vo `enabled` ) { T ej → { = on ( json_as_bool ej ) } F _ → {} }
+    : b is_tv == ( nurl_str_eq vname `timevector` ) 1
     ^ @ VerCfg {
         ( string_from vname )
         ( _an_jint vo `window_minutes` 0 )
-        ( _an_jint vo `window_points` 0 )
+        ? is_tv 0 ( _an_jint vo `window_points` 0 )
+        ( _an_jint vo `window_size` ? is_tv 100 0 )
+        ( _an_jint vo `step_size` ? is_tv 1 0 )
         ( _an_jint vo `n_estimators` 100 )
         ( _an_jint vo `max_samples` 256 )
         cont

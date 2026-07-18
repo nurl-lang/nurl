@@ -77,6 +77,8 @@ $ `src/store.nu`
         ( string_from ( string_data . vc vname ) )
         . vc window_min
         . vc window_pts
+        . vc window_size
+        . vc step_size
         . vc n_estimators
         . vc max_samples
         . vc contamination
@@ -196,6 +198,32 @@ $ `src/store.nu`
     ^ ( model_open_at st name ( now_seconds ) )
 }
 
+// Set a version's sliding-window geometry (timevector). Takes effect at
+// the NEXT retrain — detect derives the live window from the trained
+// forest's width, so a config change can never desync scoring.
+@ model_set_version_window * Model mo s vname i wsize i sstep → b {
+    : *Meta mm . mo meta
+    : i nv ( vec_len [VerCfg] . mm versions )
+    : ~ i k 0
+    ~ < k nv {
+        ?? ( vec_get [VerCfg] . mm versions k ) {
+            T vc → {
+                ? == ( nurl_str_eq ( string_data . vc vname ) vname ) 1 {
+                    : ~ VerCfg nc vc
+                    = . nc window_size wsize
+                    = . nc step_size sstep
+                    : b _o ( vec_set [VerCfg] . mm versions k nc )
+                    ( store_save_meta . mo store ( string_data . mo mname ) mm )
+                    ^ T
+                } {}
+            }
+            F _ → {}
+        }
+        = k + k 1
+    }
+    ^ F
+}
+
 @ model_free * Model mo → v {
     ( __an_free_forests mo )
     ( vec_free [VerModel] . mo forests )
@@ -255,7 +283,50 @@ $ `src/store.nu`
 
 // Score an encoded point against every trained version. `ready` is false
 // until the model has trained at least once AND the ring holds min_points.
-@ __an_score_enc * Model mo EncPoint p → Verdict {
+// The last window_size−1 ring points before the current one, projected and
+// standardised, concatenated in time order — the sliding window's tail.
+// `skip_last` skips the ring's newest entry (at ingest the current point is
+// already IN the ring; at detect_only it is not). None when the ring is too
+// short or a stored line no longer parses.
+@ __an_window_tail * Model mo i need i skip_last → ?( Vec f ) {
+    : *Meta mm . mo meta
+    : i n - ( vec_len [String] . mo lines ) skip_last
+    ? < n need { ^ @ ?( Vec f ) { F } } {}
+    : ( Vec f ) out ( vec_new [f] )
+    : ~ b ok T
+    : ~ i k - n need
+    ~ & ok < k n {
+        ?? ( vec_get [String] . mo lines k ) {
+            T l → {
+                : !Json JsonError jr ( json_parse ( string_data l ) )
+                ?? jr {
+                    T j → {
+                        : !EncPoint String er ( anomaly_preprocess mm j )
+                        ?? er {
+                            T pt → {
+                                : ( Vec f ) row ( anomaly_project pt . mm feats )
+                                ( scaler_apply . mo sc row )
+                                ( vec_extend [f] out row )
+                                ( vec_free [f] row )
+                                ( enc_free pt )
+                            }
+                            F e → { ( string_free e ) = ok F }
+                        }
+                        ( json_free j )
+                    }
+                    F _ → { = ok F }
+                }
+            }
+            F _ → { = ok F }
+        }
+        = k + k 1
+    }
+    ? ok { ^ @ ?( Vec f ) { T out } } {}
+    ( vec_free [f] out )
+    ^ @ ?( Vec f ) { F }
+}
+
+@ __an_score_enc * Model mo EncPoint p i ring_has_current → Verdict {
     : ( Vec VerVerdict ) vvs ( vec_new [VerVerdict] )
     : b warm >= ( vec_len [String] . mo lines ) . mo min_points
     ? & ( model_is_trained mo ) warm {} {
@@ -263,6 +334,7 @@ $ `src/store.nu`
     }
 
     : *Meta mm . mo meta
+    : i nfeat ( vec_len [String] . mm feats )
     : ( Vec f ) x ( anomaly_project p . mm feats )
     ( scaler_apply . mo sc x )
 
@@ -274,18 +346,49 @@ $ `src/store.nu`
     ~ < k nf {
         ?? ( vec_get [VerModel] . mo forests k ) {
             T vm → {
-                : f df ( anom_decision vm x )
-                : f margin ( __an_margin_of mm ( string_data . vm vname ) . vm margin )
-                : b hit <= df - 0.0 margin
-                ? hit { = any T } {}
-                ? || first < df worst { = worst df } {}
-                = first F
-                ( vec_push [VerVerdict] vvs @ VerVerdict {
-                    ( string_from ( string_data . vm vname ) )
-                    hit
-                    df
-                    margin
-                } )
+                // A forest wider than one point is a timevector forest:
+                // its input is the WINDOW ending at the current point
+                // (W·nfeat features, W derived from the trained forest so
+                // a config change cannot desync until the next retrain).
+                ? & > nfeat 0 != . vm n_cols nfeat {
+                    : i W / . vm n_cols nfeat
+                    ?? ( __an_window_tail mo - W 1 ring_has_current ) {
+                        T tail → {
+                            ( vec_extend [f] tail x )
+                            ? == ( vec_len [f] tail ) . vm n_cols {
+                                : f dfw ( anom_decision vm tail )
+                                : f marginw ( __an_margin_of mm ( string_data . vm vname ) . vm margin )
+                                : b hitw <= dfw - 0.0 marginw
+                                ? hitw { = any T } {}
+                                ? || first < dfw worst { = worst dfw } {}
+                                = first F
+                                ( vec_push [VerVerdict] vvs @ VerVerdict {
+                                    ( string_from ( string_data . vm vname ) )
+                                    hitw
+                                    dfw
+                                    marginw
+                                } )
+                            } {}
+                            ( vec_free [f] tail )
+                        }
+                        F → {}
+                        // ring shorter than the window → the version has
+                        // no verdict this time (absent, never wrong)
+                    }
+                } {
+                    : f df ( anom_decision vm x )
+                    : f margin ( __an_margin_of mm ( string_data . vm vname ) . vm margin )
+                    : b hit <= df - 0.0 margin
+                    ? hit { = any T } {}
+                    ? || first < df worst { = worst df } {}
+                    = first F
+                    ( vec_push [VerVerdict] vvs @ VerVerdict {
+                        ( string_from ( string_data . vm vname ) )
+                        hit
+                        df
+                        margin
+                    } )
+                }
             }
             F _ → {}
         }
@@ -402,23 +505,62 @@ $ `src/store.nu`
                     }
                     : i cnt - ne from
 
-                    : ( Vec f ) sub ( vec_with_cap [f] * cnt nfeat )
-                    : *f subp ( vec_data [f] sub )
-                    : ~ i r 0
-                    ~ < r cnt {
-                        : ~ i c 0
-                        ~ < c nfeat {
-                            = . subp + * r nfeat c . bigp + * + from r nfeat c
-                            = c + c 1
+                    ? > . vc window_size 0 {
+                        // timevector: flatten each run of W consecutive
+                        // rows (stepped by S) into ONE window vector of
+                        // W·nfeat features and train the forest on those.
+                        // The ring is ingest-ordered (timestamps ascend),
+                        // so consecutive rows ARE the time sequence.
+                        : i W . vc window_size
+                        : ~ i S . vc step_size
+                        ? < S 1 { = S 1 } {}
+                        ? >= cnt W {
+                            : i nwin + / - cnt W S 1
+                            : i wdim * W nfeat
+                            : ( Vec f ) wins ( vec_with_cap [f] * nwin wdim )
+                            : *f winp ( vec_data [f] wins )
+                            : ~ i wi 0
+                            ~ < wi nwin {
+                                : i base + from * wi S
+                                : ~ i r2 0
+                                ~ < r2 W {
+                                    : ~ i c2 0
+                                    ~ < c2 nfeat {
+                                        = . winp + * wi wdim + * r2 nfeat c2 . bigp + * + base r2 nfeat c2
+                                        = c2 + c2 1
+                                    }
+                                    = r2 + r2 1
+                                }
+                                = wi + wi 1
+                            }
+                            ( vec_set_len [f] wins * nwin wdim )
+                            : VerModel vm ( anom_train_version wins nwin wdim vc )
+                            ( store_save_forest . mo store ( string_data . mo mname ) vm )
+                            ( vec_push [VerModel] . mo forests vm )
+                            ( vec_free [f] wins )
+                        } {}
+                        // cnt < W: too little data for one window — the
+                        // version simply has no forest this round (its
+                        // verdict is absent, never silently wrong).
+                    } {
+                        : ( Vec f ) sub ( vec_with_cap [f] * cnt nfeat )
+                        : *f subp ( vec_data [f] sub )
+                        : ~ i r 0
+                        ~ < r cnt {
+                            : ~ i c 0
+                            ~ < c nfeat {
+                                = . subp + * r nfeat c . bigp + * + from r nfeat c
+                                = c + c 1
+                            }
+                            = r + r 1
                         }
-                        = r + r 1
-                    }
-                    ( vec_set_len [f] sub * cnt nfeat )
+                        ( vec_set_len [f] sub * cnt nfeat )
 
-                    : VerModel vm ( anom_train_version sub cnt nfeat vc )
-                    ( store_save_forest . mo store ( string_data . mo mname ) vm )
-                    ( vec_push [VerModel] . mo forests vm )
-                    ( vec_free [f] sub )
+                        : VerModel vm ( anom_train_version sub cnt nfeat vc )
+                        ( store_save_forest . mo store ( string_data . mo mname ) vm )
+                        ( vec_push [VerModel] . mo forests vm )
+                        ( vec_free [f] sub )
+                    }
                 } {}
             }
             F _ → {}
@@ -475,7 +617,7 @@ $ `src/store.nu`
                 ( model_force_train_at mo now )
             } {}
 
-            : Verdict vd ( __an_score_enc mo p )
+            : Verdict vd ( __an_score_enc mo p 1 )
             ( enc_free p )
             ^ @ !Verdict String { T vd }
         }
@@ -493,7 +635,7 @@ $ `src/store.nu`
     : !EncPoint String er ( anomaly_preprocess_ro . mo meta raw )
     ?? er {
         T p → {
-            : Verdict vd ( __an_score_enc mo p )
+            : Verdict vd ( __an_score_enc mo p 0 )
             ( enc_free p )
             ^ @ !Verdict String { T vd }
         }

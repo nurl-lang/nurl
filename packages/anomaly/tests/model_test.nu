@@ -52,7 +52,7 @@ $ `src/score.nu`
 }
 
 @ test_cfg f contamination f margin → VerCfg {
-    ^ @ VerCfg { ( string_from `test` ) 0 0 100 256 contamination margin T }
+    ^ @ VerCfg { ( string_from `test` ) 0 0 0 0 100 256 contamination margin T }
 }
 
 // ── Outlier separation, margin rule, report parity ────────────────────

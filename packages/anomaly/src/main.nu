@@ -265,7 +265,7 @@ $ `src/service.nu`
         ^ 1
     } {}
     : f margin ( ctx_float x `margin` )
-    : VerCfg cfg @ VerCfg { ( string_from `batch` ) 0 0 100 256 -1.0 margin T }
+    : VerCfg cfg @ VerCfg { ( string_from `batch` ) 0 0 0 0 100 256 -1.0 margin T }
     : BatchReport rep ( anomaly_batch . ds data . ds rows . ds cols cfg )
     ( _an_vercfg_free cfg )
 

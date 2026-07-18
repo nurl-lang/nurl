@@ -712,7 +712,7 @@ $ `src/csvdata.nu`
                         ( string_free fpath )
                         ^ ( __an_json_err 400 `No numeric rows found in file` )
                     } {}
-                    : VerCfg cfg @ VerCfg { ( string_from `batch` ) 0 0 100 256 -1.0 0.0 T }
+                    : VerCfg cfg @ VerCfg { ( string_from `batch` ) 0 0 0 0 100 256 -1.0 0.0 T }
                     : BatchReport rep ( anomaly_batch . ds data . ds rows . ds cols cfg )
                     ( _an_vercfg_free cfg )
 

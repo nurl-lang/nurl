@@ -54,7 +54,7 @@ $ `src/store.nu`
 }
 
 @ train_one ( Vec f ) scaled → VerModel {
-    : VerCfg cfg @ VerCfg { ( string_from `short_term` ) 180 0 100 256 -1.0 0.1 T }
+    : VerCfg cfg @ VerCfg { ( string_from `short_term` ) 180 0 0 0 100 256 -1.0 0.1 T }
     : VerModel vm ( anom_train_version scaled 208 2 cfg )
     ( _an_vercfg_free cfg )
     ^ vm
