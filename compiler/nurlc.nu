@@ -6734,6 +6734,12 @@
     : ~ s phi_entries64 ``
     : ~ b all_int64 T
     : ~ b any_u64 F
+    // Fresh-owned-slice provenance across the arms: the match yields a fresh
+    // owned slice only when EVERY live (falling-through, non-void) arm did.
+    // A single non-fresh live arm (a borrow/alias) clears it — mixed cases
+    // stay unregistered (leak-not-UAF), mirroring gen_cond.
+    : ~ b all_slice_fresh T
+    : ~ i live_slice_arms 0
     // arms_total / arms_ret count every parsed arm vs. those that ended
     // in `^`. When equal AND a fallback_pred is set, the `match_end`
     // label is reached only through the synthetic last-arm fallthrough
@@ -7616,6 +7622,9 @@
             : s arm_result ( gen_stmt lex syms cg )
             = g_in_match_arm __saved_in_arm
             : s arm_type ( nurl_get_last_type )
+            // Fresh-owned-slice provenance of THIS arm's value (see gen_cond):
+            // snapshot before the arm scope's nurl_sym_pop frees the flag entry.
+            : s arm_slice_flag ( nurl_str_cat ( nurl_sym_get syms `__last_slice_owned__` ) `` )
             : s arm_retid ( nurl_str_cat ( nurl_sym_get syms `__last_ident_name__` ) `` )
             : s arm_lbl ( nurl_sym_get syms `__cur_lbl__` )
             : i arm_did_ret g_did_ret
@@ -7683,6 +7692,12 @@
                     ? ( seq ( nurl_llty arm_type ) `i8*` )
                     { ( mem_remove_owned_str syms
                         ( nurl_sym_get syms ( nurl_str_cat arm_retid `__ptr` ) ) ) }
+                    {}
+                    // Fresh-owned-slice provenance: this live arm feeds the
+                    // phi. Count it, and clear the aggregate if it isn't fresh.
+                    ? ( mem_is_slice_ty arm_type )
+                    { = live_slice_arms + live_slice_arms 1
+                        ? == 0 ( nurl_str_len arm_slice_flag ) { = all_slice_fresh F } {} }
                     {}
                     : s entry ( nurl_str_cat `[ ` ( nurl_str_cat arm_result ( nurl_str_cat `, %` ( nurl_str_cat arm_lbl ` ]` ) ) ) )
                     = phi_entries ? == 0 ( nurl_str_len phi_entries )
@@ -7774,6 +7789,10 @@
         ( nurl_print ` = phi ` ) ( nurl_print ( nurl_llty phi_type ) )
         ( nurl_print ` ` ) ( nurl_print phi_full ) ( nurl_print `\n` )
         ( nurl_set_last_type phi_type )
+        // Forward fresh-owned-slice provenance to a consuming `:` binding, when
+        // every live arm produced a fresh owned slice of the (slice) join type.
+        ( nurl_sym_def syms `__last_slice_owned__`
+        ? & & all_slice_fresh > live_slice_arms 0 ( mem_is_slice_ty phi_type ) `1` `` )
         // Borrow propagation only matters when the match YIELDS an auto-Drop
         // enum (the value a `:`-binding might wrongly drop). For any other
         // result type — String, i, … — reset so a match on a borrowed param
@@ -8229,6 +8248,30 @@
     : s cur ( nurl_sym_get syms `__slice_decls__` )
     ( nurl_sym_def syms `__slice_decls__`
     ? == 0 ( nurl_str_len cur ) name ( nurl_str_cat3 cur ` ` name ) )
+}
+
+// Un-register `name` as an owned slice (both sidebands mem_own_add /
+// mem_slice_decl_add populate). Used when `= dst src` MOVES src's slice into
+// dst: src must no longer free the buffer, or dst and src would both free it
+// (a double-free). Mirrors mem_own_closure_remove for the closure-env list.
+@ mem_own_slice_remove i syms s name → v {
+    ? == 0 ( nurl_str_len name ) { ^ } {}
+    : ~ i li 0
+    ~ < li 2 {
+        : s key ? == li 0 `__owned_slices__` `__slice_decls__`
+        : s cur ( nurl_sym_get syms key )
+        ? ( str_contains_word cur name )
+        { : ~ s out ``
+            : ~ s rest cur
+            ~ != 0 ( nurl_str_len rest ) {
+                : s w ( str_first_word rest ) = rest ( str_skip_word rest )
+                ? ( seq w name ) {}
+                { = out ? == 0 ( nurl_str_len out ) w ( nurl_str_cat3 out ` ` w ) }
+            }
+            ( nurl_sym_def syms key out ) }
+        {}
+        = li + li 1
+    }
 }
 
 // Emit the free of one owned-slice binding's backing buffer: load the
@@ -10023,6 +10066,14 @@
     = g_stmt_line bck_line
     = g_stmt_col ( nurl_lex_col lex )
     = g_stmt_bare_lit 0
+    // Fresh-owned-slice provenance is a per-EXPRESSION signal, so reset it at
+    // every statement boundary: after a block runs, the flag then reflects
+    // ONLY its trailing statement's value (the block's value), never a slice
+    // literal bound by an earlier `:` statement. Without this a block arm like
+    // `{ : t [i | … ] ( use t ) }` would leave the flag set from the inner
+    // literal and mislead gen_cond / gen_match into registering ownership of a
+    // non-fresh result. (Set by gen_slice_literal / gen_cond / gen_match.)
+    ( nurl_sym_def syms `__last_slice_owned__` `` )
     // A statement is a legal `^` position — clear any operand-context
     // guard inherited from an enclosing expression (e.g. a `?`/`??` arm
     // that descends back into statements).
@@ -10703,7 +10754,7 @@
         // NAME — Phase 1 protocol) being overwritten.
         : b lhs_is_owned_slc & ( mem_is_slice_ty vt )
         ( str_contains_word ( nurl_sym_get syms `__owned_slices__` ) name )
-        ? | lhs_is_owned_str lhs_is_owned_slc { ( nurl_sym_def syms `__last_call_ret_owned__` `` ) } {}
+        ? | lhs_is_owned_str lhs_is_owned_slc { ( nurl_sym_def syms `__last_call_ret_owned__` `` ) ( nurl_sym_def syms `__last_slice_owned__` `` ) } {}
         // Escape analysis: snapshot the RHS's
         // first token (a bare identifier may copy a stack reference)
         // and clear the side-channel a closure / aggregate literal
@@ -10713,6 +10764,9 @@
         ( nurl_sym_def syms `__last_expr_refdepth__` `` )
         : s val ( gen_operand lex syms cg )
         : s __asn_rt ( nurl_get_last_type )
+        // A fresh owned slice reaching the RHS through a `?` / `??` (whose
+        // first token isn't `[`) still frees the old buffer below.
+        : b rhs_slice_owned != 0 ( nurl_str_len ( nurl_sym_get syms `__last_slice_owned__` ) )
         // Type-agreement on reassignment (the store dual of the let-binding
         // / call-arg checks): a never-legal clash (float-vs-non-float, a
         // different named struct by value, or String vs raw C-string) would
@@ -10748,8 +10802,9 @@
         // nurl_free auto-forgets the journal entry, so a later panic
         // cannot replay the freed buffer.
         ? & lhs_is_owned_slc
-        | == bck_rhs_tt TT_LBRACK
+        | | == bck_rhs_tt TT_LBRACK
         ( seq ( nurl_sym_get syms `__last_call_ret_owned__` ) `1` )
+        rhs_slice_owned
         { ( mem_emit_slice_free syms cg name ) }
         {}
         // Ownership transfer: `= name x` with a bare-identifier RHS
@@ -10779,6 +10834,14 @@
         ? & ( is_ident_tok bck_rhs_tt )
         ( str_contains_word ( nurl_sym_get syms `__owned_closure_envs__` ) bck_rhs_val )
         { ( mem_own_closure_remove syms bck_rhs_val ) }
+        {}
+        // Slice move (dual of the owned-string transfer above): `= dst src`
+        // with a bare-identifier RHS copies src's { ptr, len } into dst. If
+        // src owned its buffer, MOVE that ownership to dst — otherwise both
+        // src and dst free the same buffer at scope exit (a double-free).
+        ? & & lhs_is_owned_slc ( is_ident_tok bck_rhs_tt )
+        ( str_contains_word ( nurl_sym_get syms `__owned_slices__` ) bck_rhs_val )
+        { ( mem_own_slice_remove syms bck_rhs_val ) }
         {}
         // Widen i1 short-circuit / comparison results to the LHS's
         // declared integer width, so `= myi64 & a b` stores cleanly.
