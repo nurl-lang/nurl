@@ -69,9 +69,9 @@ $ `wasmkernel.nu`
         : i c & # i . src k 255
         ? == c 92 { ( string_push_char w 92 ) ( string_push_char w 92 ) }
         { ? == c 10 { ( string_push_char w 92 ) ( string_push_char w 110 ) }
-        { ? == c 9 { ( string_push_char w 92 ) ( string_push_char w 116 ) }
-        { ? == c 13 { ( string_push_char w 92 ) ( string_push_char w 114 ) }
-        { ( string_push_char w c ) } } } }
+            { ? == c 9 { ( string_push_char w 92 ) ( string_push_char w 116 ) }
+                { ? == c 13 { ( string_push_char w 92 ) ( string_push_char w 114 ) }
+                    { ( string_push_char w c ) } } } }
         = k + k 1
     }
 }
@@ -79,10 +79,10 @@ $ `wasmkernel.nu`
 // ── reduce-op splices (CUDA side, scalar mode) ────────────────────
 
 @ __cu_ident i op → s {
-    ? == op 1 { ^ `1.0` } {}            // product
-    ? == op 2 { ^ `(1.0/0.0)` } {}      // min → +∞
-    ? == op 3 { ^ `(-1.0/0.0)` } {}     // max → −∞
-    ^ `0.0`                             // sum, count
+    ? == op 1 { ^ `1.0` } {}  // product
+    ? == op 2 { ^ `(1.0/0.0)` } {}  // min → +∞
+    ? == op 3 { ^ `(-1.0/0.0)` } {}  // max → −∞
+    ^ `0.0`  // sum, count
 }
 
 // One mapped value: count folds 1.0 per truthy f(…), the rest fold f(…).
@@ -147,6 +147,18 @@ $ `wasmkernel.nu`
     ^ o
 }
 
+// grad()'s call inside the vecreduce kernel: grad(x, [v], out, [p]). Unlike
+// __cu_pcall (whose scatter target is implicit), the gradient sink `out` is
+// passed explicitly so the user writes swarm_g_add(out, j, val).
+@ __cu_pcall_grad i has_params i has_data → String {
+    : String o ( string_from `(x` )
+    ? != has_data 0 { ( string_push_str o `, in[x - lo]` ) } {}
+    ( string_push_str o `, out` )
+    ? != has_params 0 { ( string_push_str o `, p` ) } {}
+    ( string_push_str o `)` )
+    ^ o
+}
+
 // The generated KERNEL's extra formal parameters (device buffers), appended
 // after the mode's fixed ones: the dataset slice, then the runtime params.
 @ __cu_ktail i has_params i has_data → String {
@@ -163,20 +175,22 @@ $ `wasmkernel.nu`
     ( __pl w `@ __cuda_src → String {` )
     ( string_push_str w `    : String c ( string_from ` )
     ( string_push_char w 96 )
+    // vecreduce: the user's grad() calls swarm_g_add, which is defined below
+    // it — forward-declare so C sees it before the definition.
+    ? == mode ( gpu_mode_vecreduce ) {
+        ( __cuda_escape w `__device__ void swarm_g_add(double* g, long long j, double val);` )
+        ( string_push_char w 92 ) ( string_push_char w 110 )
+    } {}
     ( __cuda_escape w user )
     ( string_push_char w 92 ) ( string_push_char w 110 )  // `\n` escape in the generated literal
     : String cu ( string_new )
     : String pt ( __cu_ptail has_params has_data )
     : String pc ( __cu_pcall has_params has_data )
     : String kt ( __cu_ktail has_params has_data )
-    ? == mode ( gpu_mode_hist ) {
-        // default val() when the user only wrote bin(): count per bin
-        ? < ( nurl_str_find user `double val` ) 0 {
-            ( string_push_str cu `__device__ double val(long long x` )
-            ( string_push_str cu ( string_data pt ) )
-            ( string_push_str cu `) { return 1.0; }\n` )
-        } {}
-        // portable double atomicAdd (CAS loop — valid on NVRTC's default arch)
+    ? == mode ( gpu_mode_vecreduce ) {
+        // scatter-add gradient: the user writes grad(...) which calls the
+        // provided swarm_g_add(g, j, val); each thread accumulates into the
+        // shared K-dim out via a portable double atomicAdd (CAS loop).
         ( string_push_str cu `__device__ double swarm_atomic_add(double* addr, double v) {\n` )
         ( string_push_str cu `    unsigned long long* a = (unsigned long long*)addr;\n` )
         ( string_push_str cu `    unsigned long long old = *a, assumed;\n` )
@@ -185,53 +199,85 @@ $ `wasmkernel.nu`
         ( string_push_str cu `    } while (assumed != old);\n` )
         ( string_push_str cu `    return __longlong_as_double(old);\n` )
         ( string_push_str cu `}\n` )
+        ( string_push_str cu `__device__ long long __swK;\n` )
+        ( string_push_str cu `__device__ void swarm_g_add(double* g, long long j, double val) {\n` )
+        ( string_push_str cu `    if (j >= 0 && j < __swK) swarm_atomic_add(&g[j], val);\n` )
+        ( string_push_str cu `}\n` )
         ( string_push_str cu `extern "C" __global__ void swarm_map(long long lo, long long hi, double* out, long long K` )
         ( string_push_str cu ( string_data kt ) )
         ( string_push_str cu `) {\n` )
+        ( string_push_str cu `    __swK = K;\n` )
         ( string_push_str cu `    long long stride = (long long)gridDim.x * blockDim.x;\n` )
         ( string_push_str cu `    for (long long x = lo + (long long)blockIdx.x * blockDim.x + threadIdx.x; x < hi; x += stride) {\n` )
-        ( string_push_str cu `        long long b = bin` )
-        ( string_push_str cu ( string_data pc ) )
-        ( string_push_str cu `;\n` )
-        ( string_push_str cu `        if (b >= 0 && b < K) swarm_atomic_add(&out[b], val` )
-        ( string_push_str cu ( string_data pc ) )
-        ( string_push_str cu `);\n    }\n}\n` )
+        : String gcall ( __cu_pcall_grad has_params has_data )
+        ( string_push_str cu `        grad` )
+        ( string_push_str cu ( string_data gcall ) )
+        ( string_push_str cu `;\n    }\n}\n` )
+        ( string_free gcall )
     } {
-    ? == mode ( gpu_mode_sample ) {
-        ( string_push_str cu `extern "C" __global__ void swarm_map(long long lo, long long hi, double* out` )
-        ( string_push_str cu ( string_data kt ) )
-        ( string_push_str cu `) {\n` )
-        ( string_push_str cu `    long long stride = (long long)gridDim.x * blockDim.x;\n` )
-        ( string_push_str cu `    for (long long x = lo + (long long)blockIdx.x * blockDim.x + threadIdx.x; x < hi; x += stride)\n` )
-        ( string_push_str cu `        out[x - lo] = f` )
-        ( string_push_str cu ( string_data pc ) )
-        ( string_push_str cu `;\n}\n` )
-    } {
-        // scalar reduce
-        : String comb ( __cu_combine `acc` `v` op )
-        : String comb2 ( __cu_combine `sh[t]` `sh[t + s]` op )
-        : String mv ( __cu_mapval op has_params has_data )
-        ( string_push_str cu `extern "C" __global__ void swarm_map(long long lo, long long hi, double* out` )
-        ( string_push_str cu ( string_data kt ) )
-        ( string_push_str cu `) {\n` )
-        ( string_push_str cu `    __shared__ double sh[256];\n` )
-        ( string_push_str cu `    long long stride = (long long)gridDim.x * blockDim.x;\n` )
-        ( string_push_str cu `    long long first = lo + (long long)blockIdx.x * blockDim.x + threadIdx.x;\n` )
-        ( string_push_str cu `    double acc = ` ) ( string_push_str cu ( __cu_ident op ) ) ( string_push_str cu `;\n` )
-        ( string_push_str cu `    for (long long x = first; x < hi; x += stride) { double v = ` )
-        ( string_push_str cu ( string_data mv ) ) ( string_push_str cu `; acc = ` )
-        ( string_push_str cu ( string_data comb ) ) ( string_push_str cu `; }\n` )
-        ( string_push_str cu `    int t = threadIdx.x;\n` )
-        ( string_push_str cu `    sh[t] = acc;\n` )
-        ( string_push_str cu `    __syncthreads();\n` )
-        ( string_push_str cu `    for (int s = blockDim.x / 2; s > 0; s >>= 1) {\n` )
-        ( string_push_str cu `        if (t < s) sh[t] = ` ) ( string_push_str cu ( string_data comb2 ) ) ( string_push_str cu `;\n` )
-        ( string_push_str cu `        __syncthreads();\n` )
-        ( string_push_str cu `    }\n` )
-        ( string_push_str cu `    if (t == 0) out[blockIdx.x] = sh[0];\n` )
-        ( string_push_str cu `}\n` )
-        ( string_free comb ) ( string_free comb2 ) ( string_free mv )
-    } }
+        ? == mode ( gpu_mode_hist ) {
+            // default val() when the user only wrote bin(): count per bin
+            ? < ( nurl_str_find user `double val` ) 0 {
+                ( string_push_str cu `__device__ double val(long long x` )
+                ( string_push_str cu ( string_data pt ) )
+                ( string_push_str cu `) { return 1.0; }\n` )
+            } {}
+            // portable double atomicAdd (CAS loop — valid on NVRTC's default arch)
+            ( string_push_str cu `__device__ double swarm_atomic_add(double* addr, double v) {\n` )
+            ( string_push_str cu `    unsigned long long* a = (unsigned long long*)addr;\n` )
+            ( string_push_str cu `    unsigned long long old = *a, assumed;\n` )
+            ( string_push_str cu `    do { assumed = old;\n` )
+            ( string_push_str cu `         old = atomicCAS(a, assumed, __double_as_longlong(v + __longlong_as_double(assumed)));\n` )
+            ( string_push_str cu `    } while (assumed != old);\n` )
+            ( string_push_str cu `    return __longlong_as_double(old);\n` )
+            ( string_push_str cu `}\n` )
+            ( string_push_str cu `extern "C" __global__ void swarm_map(long long lo, long long hi, double* out, long long K` )
+            ( string_push_str cu ( string_data kt ) )
+            ( string_push_str cu `) {\n` )
+            ( string_push_str cu `    long long stride = (long long)gridDim.x * blockDim.x;\n` )
+            ( string_push_str cu `    for (long long x = lo + (long long)blockIdx.x * blockDim.x + threadIdx.x; x < hi; x += stride) {\n` )
+            ( string_push_str cu `        long long b = bin` )
+            ( string_push_str cu ( string_data pc ) )
+            ( string_push_str cu `;\n` )
+            ( string_push_str cu `        if (b >= 0 && b < K) swarm_atomic_add(&out[b], val` )
+            ( string_push_str cu ( string_data pc ) )
+            ( string_push_str cu `);\n    }\n}\n` )
+        } {
+            ? == mode ( gpu_mode_sample ) {
+                ( string_push_str cu `extern "C" __global__ void swarm_map(long long lo, long long hi, double* out` )
+                ( string_push_str cu ( string_data kt ) )
+                ( string_push_str cu `) {\n` )
+                ( string_push_str cu `    long long stride = (long long)gridDim.x * blockDim.x;\n` )
+                ( string_push_str cu `    for (long long x = lo + (long long)blockIdx.x * blockDim.x + threadIdx.x; x < hi; x += stride)\n` )
+                ( string_push_str cu `        out[x - lo] = f` )
+                ( string_push_str cu ( string_data pc ) )
+                ( string_push_str cu `;\n}\n` )
+            } {
+                // scalar reduce
+                : String comb ( __cu_combine `acc` `v` op )
+                : String comb2 ( __cu_combine `sh[t]` `sh[t + s]` op )
+                : String mv ( __cu_mapval op has_params has_data )
+                ( string_push_str cu `extern "C" __global__ void swarm_map(long long lo, long long hi, double* out` )
+                ( string_push_str cu ( string_data kt ) )
+                ( string_push_str cu `) {\n` )
+                ( string_push_str cu `    __shared__ double sh[256];\n` )
+                ( string_push_str cu `    long long stride = (long long)gridDim.x * blockDim.x;\n` )
+                ( string_push_str cu `    long long first = lo + (long long)blockIdx.x * blockDim.x + threadIdx.x;\n` )
+                ( string_push_str cu `    double acc = ` ) ( string_push_str cu ( __cu_ident op ) ) ( string_push_str cu `;\n` )
+                ( string_push_str cu `    for (long long x = first; x < hi; x += stride) { double v = ` )
+                ( string_push_str cu ( string_data mv ) ) ( string_push_str cu `; acc = ` )
+                ( string_push_str cu ( string_data comb ) ) ( string_push_str cu `; }\n` )
+                ( string_push_str cu `    int t = threadIdx.x;\n` )
+                ( string_push_str cu `    sh[t] = acc;\n` )
+                ( string_push_str cu `    __syncthreads();\n` )
+                ( string_push_str cu `    for (int s = blockDim.x / 2; s > 0; s >>= 1) {\n` )
+                ( string_push_str cu `        if (t < s) sh[t] = ` ) ( string_push_str cu ( string_data comb2 ) ) ( string_push_str cu `;\n` )
+                ( string_push_str cu `        __syncthreads();\n` )
+                ( string_push_str cu `    }\n` )
+                ( string_push_str cu `    if (t == 0) out[blockIdx.x] = sh[0];\n` )
+                ( string_push_str cu `}\n` )
+                ( string_free comb ) ( string_free comb2 ) ( string_free mv )
+            } } }
     ( string_free pt ) ( string_free pc ) ( string_free kt )
     ( __cuda_escape w ( string_data cu ) )
     ( string_free cu )
@@ -253,8 +299,8 @@ $ `wasmkernel.nu`
 // Host-side identity — the f64 bit-pattern constants match work.nu red_id_f.
 @ __host_ident_src i op → s {
     ? == op 1 { ^ `1.0` } {}
-    ? == op 2 { ^ `( bits_to_f64 9218868437227405312 )` } {}   // +∞
-    ? == op 3 { ^ `( bits_to_f64 -4503599627370496 )` } {}     // −∞
+    ? == op 2 { ^ `( bits_to_f64 9218868437227405312 )` } {}  // +∞
+    ? == op 3 { ^ `( bits_to_f64 -4503599627370496 )` } {}  // −∞
     ^ `0.0`
 }
 
@@ -264,7 +310,7 @@ $ `wasmkernel.nu`
 // the chunk carries a dataset slice — argv gains an in-file path right after
 // hi, and the device functions receive v = data[x] as their second argument.
 @ cuda_wrap s user i op i mode i has_params i has_data → String {
-    : b vecmode | == mode ( gpu_mode_sample ) == mode ( gpu_mode_hist )
+    : b vecmode | == mode ( gpu_mode_sample ) | == mode ( gpu_mode_hist ) == mode ( gpu_mode_vecreduce )
     : i hd ? != has_data 0 1 0
     : String w ( string_new )
     ( __pimport w `stdlib/core/io.nu` )
@@ -298,7 +344,8 @@ $ `wasmkernel.nu`
     ( __pl w `    : i argc ( nurl_argv_count )` )
     // fixed argv arity by mode (+1 for the in-file with a dataset); params
     // are everything after: lo hi [inpath] [outpath] [K] [p…]
-    : i base0 ? == mode ( gpu_mode_hist ) 5 ? vecmode 4 3
+    : b needk | == mode ( gpu_mode_hist ) == mode ( gpu_mode_vecreduce )
+    : i base0 ? needk 5 ? vecmode 4 3
     : s minargc ( nurl_str_int + base0 hd )
     ( string_push_str w `    ? < argc ` ) ( string_push_str w minargc ) ( __pl w ` { ^ 1 } {}` )
     ( __pl w `    : i lo ( nurl_str_to_int ( nurl_argv_get 1 ) )` )
@@ -308,7 +355,7 @@ $ `wasmkernel.nu`
         ( string_push_str w `    : s outp ( nurl_argv_get ` )
         ( string_push_str w ( nurl_str_int + 3 hd ) ) ( __pl w ` )` )
     } {}
-    ? == mode ( gpu_mode_hist ) {
+    ? needk {
         ( string_push_str w `    : i kbins ( nurl_str_to_int ( nurl_argv_get ` )
         ( string_push_str w ( nurl_str_int + 4 hd ) ) ( __pl w ` ) )` )
     } {}
@@ -375,7 +422,7 @@ $ `wasmkernel.nu`
         ( __pl w `    ? != # i ( cuMemcpyHtoD din ih ibytes ) 0 { ^ 2 } {}` )
     } {}
     // output device buffer, by mode
-    ? == mode ( gpu_mode_hist ) {
+    ? needk {
         ( __pl w `    ? < kbins 1 { ^ 2 } {}` )
         ( __pl w `    : i obytes * kbins 8` )
         ( __pl w `    : *u zh ( nurl_alloc obytes )` )
@@ -386,29 +433,29 @@ $ `wasmkernel.nu`
         ( __pl w `    : i dout ( nurl_peek os 0 )` )
         ( __pl w `    ? != # i ( cuMemcpyHtoD dout zh obytes ) 0 { ^ 2 } {}` )
     } {
-    ? == mode ( gpu_mode_sample ) {
-        ( __pl w `    ? <= hi lo { ^ 2 } {}` )
-        ( __pl w `    : i obytes * - hi lo 8` )
-        ( __pl w `    : *u os ( __slot )` )
-        ( __pl w `    ? != # i ( cuMemAlloc os obytes ) 0 { ^ 2 } {}` )
-        ( __pl w `    : i dout ( nurl_peek os 0 )` )
-    } {
-        ( __pl w `    : i obytes 2048` )
-        ( __pl w `    : *u os ( __slot )` )
-        ( __pl w `    ? != # i ( cuMemAlloc os obytes ) 0 { ^ 2 } {}` )
-        ( __pl w `    : i dout ( nurl_peek os 0 )` )
-    } }
+        ? == mode ( gpu_mode_sample ) {
+            ( __pl w `    ? <= hi lo { ^ 2 } {}` )
+            ( __pl w `    : i obytes * - hi lo 8` )
+            ( __pl w `    : *u os ( __slot )` )
+            ( __pl w `    ? != # i ( cuMemAlloc os obytes ) 0 { ^ 2 } {}` )
+            ( __pl w `    : i dout ( nurl_peek os 0 )` )
+        } {
+            ( __pl w `    : i obytes 2048` )
+            ( __pl w `    : *u os ( __slot )` )
+            ( __pl w `    ? != # i ( cuMemAlloc os obytes ) 0 { ^ 2 } {}` )
+            ( __pl w `    : i dout ( nurl_peek os 0 )` )
+        } }
     // kernel argument cells + the void** layer (identical layout to
     // packages/gpu gpu_launch — the wt bridge translates each guest entry).
     // Cell order mirrors the kernel signature: lo, hi, out, [K], [in], [p].
     : b hist == mode ( gpu_mode_hist )
-    : i ncells + 3 + ? hist 1 0 + hd ? != has_params 0 1 0
+    : i ncells + 3 + ? needk 1 0 + hd ? != has_params 0 1 0
     ( string_push_str w `    : *u vals ( nurl_alloc ` ) ( string_push_str w ( nurl_str_int * ncells 8 ) ) ( __pl w ` )` )
     ( __pl w `    ( nurl_poke vals 0 lo )` )
     ( __pl w `    ( nurl_poke vals 1 hi )` )
     ( __pl w `    ( nurl_poke vals 2 dout )` )
     : ~ i cell 3
-    ? hist { ( string_push_str w `    ( nurl_poke vals ` ) ( string_push_str w ( nurl_str_int cell ) ) ( __pl w ` kbins )` ) = cell + cell 1 } {}
+    ? needk { ( string_push_str w `    ( nurl_poke vals ` ) ( string_push_str w ( nurl_str_int cell ) ) ( __pl w ` kbins )` ) = cell + cell 1 } {}
     ? != hd 0 { ( string_push_str w `    ( nurl_poke vals ` ) ( string_push_str w ( nurl_str_int cell ) ) ( __pl w ` din )` ) = cell + cell 1 } {}
     ? != has_params 0 { ( string_push_str w `    ( nurl_poke vals ` ) ( string_push_str w ( nurl_str_int cell ) ) ( __pl w ` dp )` ) = cell + cell 1 } {}
     ( string_push_str w `    : *u params ( nurl_alloc ` ) ( string_push_str w ( nurl_str_int * ncells 8 ) ) ( __pl w ` )` )

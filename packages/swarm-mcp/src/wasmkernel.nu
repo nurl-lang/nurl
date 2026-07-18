@@ -50,6 +50,7 @@ $ `token.nu`
 @ gpu_mode_scalar → i { ^ 0 }  // partial's f64 bits on stdout
 @ gpu_mode_sample → i { ^ 1 }  // hi-lo doubles written to an output file
 @ gpu_mode_hist → i { ^ 2 }  // K bin sums written to an output file
+@ gpu_mode_vecreduce → i { ^ 3 }  // K-vector scatter-add (gradient), K doubles to a file
 
 @ wasm_chunk_payload i lo i hi ( Vec u ) wasm → ( Vec u ) {
     : ( Vec u ) b ( vec_new [u] )
@@ -378,7 +379,7 @@ $ `token.nu`
 // Runtime params ride argv as f64-bit-pattern decimals.
 @ __wasm_run_gpu String path GpuChunk c → GpuOut {
     : String tmp ( env_var_or `TMPDIR` `/tmp` )
-    : b vecmode | == . c mode ( gpu_mode_sample ) == . c mode ( gpu_mode_hist )
+    : b vecmode | == . c mode ( gpu_mode_sample ) | == . c mode ( gpu_mode_hist ) == . c mode ( gpu_mode_vecreduce )
     : b hasdata > ( vec_len [u] . c data ) 0
     : ~ String outp ( string_new )
     ? vecmode {
@@ -412,7 +413,8 @@ $ `token.nu`
     ( string_push_str blob ( nurl_str_int . c lo ) ) ( string_push_char blob 0 )
     ( vec_push [i] offs ( string_len blob ) )
     ( string_push_str blob ( nurl_str_int . c hi ) ) ( string_push_char blob 0 )
-    ? == . c mode ( gpu_mode_hist ) {
+    // hist AND vecreduce carry K (bin count / gradient dim) in argv
+    ? | == . c mode ( gpu_mode_hist ) == . c mode ( gpu_mode_vecreduce ) {
         ( vec_push [i] offs ( string_len blob ) )
         ( string_push_str blob ( nurl_str_int . c kbins ) ) ( string_push_char blob 0 )
     } {}
@@ -451,7 +453,7 @@ $ `token.nu`
                 ? vecmode {
                     ?? ( read_file_bytes ( string_data outp ) ) {
                         T bts → {
-                            : i want * 8 ? == . c mode ( gpu_mode_hist ) . c kbins - . c hi . c lo
+                            : i want * 8 ? | == . c mode ( gpu_mode_hist ) == . c mode ( gpu_mode_vecreduce ) . c kbins - . c hi . c lo
                             ? == ( vec_len [u] bts ) want {
                                 ( vec_free [u] outb )
                                 = outb bts

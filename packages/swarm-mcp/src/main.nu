@@ -392,8 +392,9 @@ $ `cudakernel.nu`
 }
 
 @ tids_combine_vec * Swarm sw i mode i kbins ( Vec i ) tids → CombinedV {
+    : b ksum | == mode ( gpu_mode_hist ) == mode ( gpu_mode_vecreduce )
     : ( Vec u ) acc ( vec_new [u] )
-    ? == mode ( gpu_mode_hist ) {
+    ? ksum {
         : ~ i z 0
         ~ < z * kbins 8 { ( vec_push [u] acc 0 ) = z + z 1 }
     } {}
@@ -409,7 +410,7 @@ $ `cudakernel.nu`
                         : i cnt ?? ( bytes_read_u32_be body 1 ) { T x → # i x F → 0 }
                         : b sane == ( vec_len [u] body ) + 5 * cnt 8
                         ? & == ok 1 sane {
-                            ? == mode ( gpu_mode_hist ) {
+                            ? ksum {
                                 ? == cnt kbins {
                                     : ~ i b 0
                                     ~ < b kbins {
@@ -1231,6 +1232,188 @@ $ `cudakernel.nu`
     ^ ( tool_result_json ( task_to_json t ) )
 }
 
+// Parse a JSON number array into a fresh Vec f (F on any non-number).
+@ __parse_farr Json arr ( Vec f ) out → b {
+    : i n ( json_arr_len arr )
+    : ~ i k 0
+    : ~ b ok T
+    ~ & ok < k n {
+        ?? ( json_arr_get arr k ) {
+            T el → { ?? ( json_num_as_f el ) { T fv → { ( vec_push [f] out fv ) } F → { = ok F } } }
+            F → { = ok F }
+        }
+        = k + k 1
+    }
+    ^ ok
+}
+
+// ── the iteration engine: compute_iterate ────────────────────────
+// One vecreduce round: submit the module over [rlo,rhi) with `state` as the
+// runtime params, pump to completion, and combine the per-chunk K-vectors
+// into the summed gradient `grad` (K floats). Returns the failed-chunk count
+// (0 = every chunk reported). The dataset path (dsid != 0) references cached
+// blocks by hash, so after the first round a round ships only the state.
+@ __iterate_round * Swarm sw ( Vec u ) wasm i K i rlo i rhi ( Vec f ) state i dsid ( Vec String ) seeded * u nseed_cell ( Vec f ) grad → i {
+    : ( Vec i ) params ( vec_new [i] )
+    : ~ i j 0
+    ~ < j K { ( vec_push [i] params ( f64_to_bits ?? ( vec_get [f] state j ) { T x → x F → 0.0 } ) ) = j + j 1 }
+    : *McpState st0 # *McpState g_mcp
+    : i ngpu ( roster_count_caps # *Roster . sw roster ( cap_gpu ) )
+    : i nchunks0 ( nchunks_wasm ngpu )
+    : i span - rhi rlo
+    : ~ i nchunks nchunks0
+    ? > nchunks span { = nchunks span } {}
+    : ~ ( Vec i ) tids ( vec_new [i] )
+    ? != dsid 0 {
+        : *Dataset d # *Dataset ( ds_find dsid )
+        ( vec_free [i] tids )
+        = tids ( cluster_submit_wasm_gpu_ds sw ( gpu_mode_vecreduce ) rlo rhi K params d wasm nchunks . st0 seeded nseed_cell )
+    } {
+        : ( Vec u ) dbytes ( vec_new [u] )
+        ( vec_free [i] tids )
+        = tids ( cluster_submit_wasm_gpu sw ( gpu_mode_vecreduce ) rlo rhi K params dbytes wasm nchunks )
+        ( vec_free [u] dbytes )
+    }
+    ( vec_free [i] params )
+    // drive to completion
+    : ~ i r 0
+    ~ & < r 4000 ! ( tids_ready sw tids ) { ( swarm_pump sw 100 ) = r + r 1 }
+    : CombinedV cv ( tids_combine_vec sw ( gpu_mode_vecreduce ) K tids )
+    ( vec_free [i] tids )
+    ( vec_clear [f] grad )
+    : ~ i b 0
+    ~ < b K { ( vec_push [f] grad ( bits_to_f64 ( __f64le_get . cv bytes * b 8 ) ) ) = b + b 1 }
+    ( vec_free [u] . cv bytes )
+    ^ . cv nfail
+}
+
+@ tool_iterate Json args → Json {
+    : ?Json cj ( json_obj_get args `cuda` )
+    : ?Json sj ( json_obj_get args `state` )
+    : b have_cuda ?? cj { T _ → T F → F }
+    : b have_state ?? sj { T _ → T F → F }
+    ? & have_cuda have_state {} {
+        ^ ( mcp_tool_result_error `compute_iterate needs "cuda" (a __device__ void grad(long long x[, double v], double* g[, const double* p]) that scatter-adds via swarm_g_add(g, j, val)), "state" (the initial parameter vector), "rounds", and "lr" (learning rate); "dataset" or "lo"/"hi", and "epsilon" optional` )
+    }
+    : s cuda ?? cj { T x → ( json_str_data x ) F → `` }
+    : ( Vec f ) state ( vec_new [f] )
+    : ~ b spok F
+    ?? sj { T arr → { ? ( json_is_arr arr ) { = spok ( __parse_farr arr state ) } {} } F → {} }
+    ? & spok > ( vec_len [f] state ) 0 {} {
+        ( vec_free [f] state )
+        ^ ( mcp_tool_result_error `"state" must be a non-empty array of numbers (the parameter vector; its length is the gradient dimension K)` )
+    }
+    : i K ( vec_len [f] state )
+    ? > K 4096 { ( vec_free [f] state ) ^ ( mcp_tool_result_error `"state" is limited to 4096 components` ) } {}
+    : i rounds ?? ( json_obj_get args `rounds` ) { T x → ?? ( json_num_as_i x ) { T v → v F → 0 } F → 0 }
+    ? & > rounds 0 <= rounds 100000 {} { ( vec_free [f] state ) ^ ( mcp_tool_result_error `"rounds" must be between 1 and 100000` ) }
+    : f lr ?? ( json_obj_get args `lr` ) { T x → ?? ( json_num_as_f x ) { T v → v F → 0.0 } F → 0.0 }
+    ? == lr 0.0 { ( vec_free [f] state ) ^ ( mcp_tool_result_error `"lr" (learning rate) is required and must be non-zero` ) } {}
+    : f eps ?? ( json_obj_get args `epsilon` ) { T x → ?? ( json_num_as_f x ) { T v → v F → 0.0 } F → 0.0 }
+    : i dsid ?? ( json_obj_get args `dataset` ) { T x → ?? ( json_num_as_i x ) { T v → v F → 0 } F → 0 }
+    // validate the grad entry + backtick-free source
+    ? ! ( cuda_src_ok cuda ) { ( vec_free [f] state ) ^ ( mcp_tool_result_error `the CUDA source may not contain a backtick character` ) } {}
+    ? >= ( nurl_str_find cuda `void grad` ) 0 {} {
+        ( vec_free [f] state )
+        ^ ( mcp_tool_result_error `the CUDA source must define __device__ void grad(long long x[, double v], double* g[, const double* p]) and scatter-add the gradient with swarm_g_add(g, j, val) — with a dataset grad also takes double v = data[x]; p is the current parameter vector (== state)` )
+    }
+    // resolve range (a dataset defaults [0, count))
+    : ~ i rlo ?? ( json_obj_get args `lo` ) { T x → ?? ( json_num_as_i x ) { T v → v F → -1 } F → -1 }
+    : ~ i rhi ?? ( json_obj_get args `hi` ) { T x → ?? ( json_num_as_i x ) { T v → v F → -1 } F → -1 }
+    ? != dsid 0 {
+        : s dsp ( ds_find dsid )
+        ? == # i dsp 0 { ( vec_free [f] state ) ^ ( mcp_tool_result_error `no such dataset — upload one with compute_upload_data` ) } {}
+        : *Dataset d # *Dataset dsp
+        ? < rlo 0 { = rlo 0 } {}
+        ? < rhi 0 { = rhi ( ds_count_of d ) } {}
+        ? | | < rlo 0 > rhi ( ds_count_of d ) >= rlo rhi { ( vec_free [f] state ) ^ ( mcp_tool_result_error `the range [lo, hi) must lie within the dataset` ) } {}
+    } {
+        ? & >= rlo 0 > rhi rlo {} { ( vec_free [f] state ) ^ ( mcp_tool_result_error `"lo" and "hi" are required without a "dataset" (lo < hi)` ) }
+    }
+    : i N - rhi rlo
+    : i has_params 1  // state always rides as params
+    : i has_data ? != dsid 0 1 0
+    // build the vecreduce module ONCE (source-hash cached; state is a param,
+    // so the SAME module serves every round — no rebuild, warm worker cache)
+    : String wrapped ( cuda_wrap cuda 0 ( gpu_mode_vecreduce ) has_params has_data )
+    : ( Vec u ) srcb ( bytes_from_str ( string_data wrapped ) )
+    : String hex ( _wasm_hash srcb )
+    ( vec_free [u] srcb )
+    : ~ ( Vec u ) wasm ( vec_new [u] )
+    : ~ b have F
+    ?? ( __wcache_get ( string_data hex ) ) { T hitw → { ( vec_free [u] wasm ) = wasm hitw = have T } F → {} }
+    ? ! have {
+        : !( Vec u ) String cr ( compile_to_wasm ( string_data wrapped ) )
+        ?? cr {
+            F msg → {
+                : String em ( string_concat ( string_from `the gradient kernel did not compile: ` ) msg )
+                : Json e ( mcp_tool_result_error ( string_data em ) )
+                ( string_free em ) ( string_free msg ) ( string_free wrapped ) ( string_free hex )
+                ( vec_free [f] state ) ( vec_free [u] wasm )
+                ^ e
+            }
+            T builtw → { ( vec_free [u] wasm ) = wasm builtw ( __wcache_put ( string_data hex ) wasm ) }
+        }
+    } {}
+    ( string_free wrapped ) ( string_free hex )
+    : *Swarm sw ( mcp_swarm )
+    ( swarm_discover sw 6 )
+    : i ngpu ( roster_count_caps # *Roster . sw roster ( cap_gpu ) )
+    ? == ngpu 0 { ( vec_free [f] state ) ( vec_free [u] wasm ) ^ ( mcp_tool_result_error `no GPU workers in the cluster — start some with 'swarm-mcp --worker --gpu'` ) } {}
+    // ── the loop, in the coordinator ──
+    : *McpState st # *McpState g_mcp
+    : *u nseed ( nurl_alloc 8 )
+    ( nurl_poke nseed 0 0 )
+    : ~ i total_seeded 0
+    : ( Vec f ) grad ( vec_new [f] )
+    : ~ i ran 0
+    : ~ i failed 0
+    : ~ f last_delta 0.0
+    : ~ b converged F
+    : ~ i rnd 0
+    ~ & < rnd rounds ! converged {
+        ( nurl_poke nseed 0 0 )
+        : i nf ( __iterate_round sw wasm K rlo rhi state dsid . st seeded nseed grad )
+        = total_seeded + total_seeded ( nurl_peek nseed 0 )
+        ? > nf 0 { = failed nf = rnd rounds } {
+            // SGD update: theta[j] -= lr * grad[j] / N ; track max |delta|
+            : ~ f dmax 0.0
+            : ~ i j 0
+            ~ < j K {
+                : f g ?? ( vec_get [f] grad j ) { T x → x F → 0.0 }
+                : f d / * lr g # f N
+                : f cur ?? ( vec_get [f] state j ) { T x → x F → 0.0 }
+                ( vec_set [f] state j - cur d )
+                : f ad ? < d 0.0 - 0.0 d d
+                ? > ad dmax { = dmax ad } {}
+                = j + j 1
+            }
+            = last_delta dmax
+            = ran + ran 1
+            ? & > eps 0.0 < dmax eps { = converged T } {}
+        }
+        = rnd + rnd 1
+    }
+    ( nurl_free nseed )
+    ( vec_free [u] wasm )
+    // ── the result ──
+    ? > failed 0 {
+        ( vec_free [f] grad ) ( vec_free [f] state )
+        ^ ( mcp_tool_result_error `a gradient chunk failed on a worker (bad kernel, missing GPU, or a lost block) — the run was stopped` )
+    } {}
+    : Json o ( json_obj_new )
+    : Json sarr ( json_arr_new )
+    : ~ i j2 0
+    ~ < j2 K { : b _p ( json_arr_push sarr ( json_float ?? ( vec_get [f] state j2 ) { T x → x F → 0.0 } ) ) = j2 + j2 1 }
+    ( json_obj_set o `state` sarr )
+    ( json_obj_set o `rounds_run` ( json_int ran ) )
+    ( json_obj_set o `converged` ( json_bool converged ) )
+    ( json_obj_set o `last_max_delta` ( json_float last_delta ) )
+    ? != dsid 0 { ( json_obj_set o `dataset` ( json_int dsid ) ) ( json_obj_set o `seeded_blocks` ( json_int total_seeded ) ) } {}
+    ( vec_free [f] grad ) ( vec_free [f] state )
+    ^ ( tool_result_json o )
+}
+
 @ tool_submit_cuda Json args → Json {
     : ?Json cj ( json_obj_get args `cuda` )
     ? ! ?? cj { T _ → T F → F } {
@@ -1509,6 +1692,28 @@ $ `cudakernel.nu`
     ^ schema
 }
 
+@ ms_schema_iterate → Json {
+    : Json schema ( json_obj_new )
+    ( json_obj_set schema `type` ( json_str_lit `object` ) )
+    : Json props ( json_obj_new )
+    ( ms_prop props `cuda` `string` `A CUDA-C gradient function: __device__ void grad(long long x, double* g) { ... } that scatter-adds the per-element gradient into the K-dim accumulator g by calling swarm_g_add(g, j, val) for each component j. With a "dataset" the signature is grad(long long x, double v, double* g) where v = data[x]; the current parameter vector is passed as p, so the full form is grad(long long x, double v, double* g, const double* p). Example (fit y = w*i + b over dataset values, state = [w, b]): "__device__ void grad(long long x, double v, double* g, const double* p) { double e = p[0]*(double)x + p[1] - v; swarm_g_add(g, 0, 2.0*(double)x*e); swarm_g_add(g, 1, 2.0*e); }". No backticks, no __global__, no host code.` )
+    ( ms_prop props `state` `array` `The initial parameter vector (numbers). Its length is the gradient dimension K and the size of the vector your grad() scatters into. This is what the engine iterates and returns.` )
+    ( ms_prop props `rounds` `integer` `Maximum number of gradient-descent rounds the coordinator runs (1..100000). The loop runs IN THE ENGINE — you get the converged parameters back from one call, not a round per message.` )
+    ( ms_prop props `lr` `number` `Learning rate. Each round updates state[j] -= lr * gradient[j] / N, where the gradient is the sum of grad() over the range and N is the number of elements.` )
+    ( ms_prop props `epsilon` `number` `Optional convergence threshold: stop early once the largest |state change| in a round is below this. Omit to always run all "rounds".` )
+    ( ms_prop props `dataset` `integer` `Optional dataset id (compute_upload_data): grad() maps over the data (v = data[x]). The dataset's blocks are cached on the workers after the first round, so every later round ships only the K parameters — the payoff of iterating in the engine.` )
+    ( ms_prop props `lo` `integer` `Range start (inclusive); required without a dataset.` )
+    ( ms_prop props `hi` `integer` `Range end (exclusive); required without a dataset.` )
+    ( json_obj_set schema `properties` props )
+    : Json req ( json_arr_new )
+    ( json_arr_push req ( json_str_lit `cuda` ) )
+    ( json_arr_push req ( json_str_lit `state` ) )
+    ( json_arr_push req ( json_str_lit `rounds` ) )
+    ( json_arr_push req ( json_str_lit `lr` ) )
+    ( json_obj_set schema `required` req )
+    ^ schema
+}
+
 @ ms_schema_sample_cuda → Json {
     : Json schema ( json_obj_new )
     ( json_obj_set schema `type` ( json_str_lit `object` ) )
@@ -1573,6 +1778,9 @@ $ `cudakernel.nu`
     ( vec_push [Json] tools ( mcp_tool_descriptor `compute_histogram_cuda`
     `Distributed GPU histogram / binned aggregation: for each x in [lo, hi) your CUDA-C bin(x) picks one of K buckets and val(x) (default 1.0) is added to it — the whole distribution of a computation in ONE pass over billions of x (value distributions, Monte-Carlo densities, class counts, binned integrals). The K bin sums come back (JSON up to 1024 bins, base64 up to 65536, out_file beyond). Supports runtime params (no recompile between calls). Needs a --gpu worker; returns a task_id, poll compute_result.`
     ( ms_schema_hist_cuda ) ) )
+    ( vec_push [Json] tools ( mcp_tool_descriptor `compute_iterate`
+    `Run an ITERATIVE algorithm — gradient descent — with the loop in the ENGINE, not in your messages. You give a CUDA gradient function grad() that scatter-adds each element's contribution into a K-dim vector, an initial parameter vector "state", "rounds" and a learning rate "lr"; the coordinator repeatedly (1) computes the gradient as a distributed GPU vecreduce over the range/dataset with the current parameters, (2) updates state[j] -= lr*gradient[j]/N, (3) stops at "rounds" or when the step falls below "epsilon". Returns the converged "state", "rounds_run", and "converged". Over a dataset the data is cached on the workers after round one, so each further round ships only the parameters — this is the tool for fitting/optimisation without a fragile model-in-the-loop.`
+    ( ms_schema_iterate ) ) )
     ( vec_push [Json] tools ( mcp_tool_descriptor `compute_upload_data`
     `Upload a dataset — a flat array of f64 values — for the GPU tools to map over. Pass base64 of raw little-endian f64s, or a file path on the MCP host. Returns a dataset_id plus count and min/max/mean. Then run compute_submit_cuda / compute_sample_cuda / compute_histogram_cuda with {"dataset": id}: your device functions receive each element as double v — e.g. mean/variance via reduce, a pointwise transform via sample, a value distribution via histogram. The data is cut into content-addressed 8 MiB blocks (BLAKE3) that workers cache on disk: a block travels to its worker ONCE, and every later submit or iteration round over the same dataset ships only hashes — the task response's seeded_blocks shows how many blocks actually moved (0 = free re-run). Up to 33.5M values (256 MiB).`
     ( ms_schema_upload_data ) ) )
@@ -1595,6 +1803,7 @@ $ `cudakernel.nu`
     ? != ( nurl_str_eq name `compute_submit` ) 0 { ^ ( tool_submit args ) } {}
     ? != ( nurl_str_eq name `compute_submit_kernel` ) 0 { ^ ( tool_submit_kernel args ) } {}
     ? != ( nurl_str_eq name `compute_submit_cuda` ) 0 { ^ ( tool_submit_cuda args ) } {}
+    ? != ( nurl_str_eq name `compute_iterate` ) 0 { ^ ( tool_iterate args ) } {}
     ? != ( nurl_str_eq name `compute_sample_cuda` ) 0 { ^ ( tool_sample_cuda args ) } {}
     ? != ( nurl_str_eq name `compute_histogram_cuda` ) 0 { ^ ( tool_hist_cuda args ) } {}
     ? != ( nurl_str_eq name `compute_upload_data` ) 0 { ^ ( tool_upload_data args ) } {}
