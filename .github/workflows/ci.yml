@@ -18,8 +18,34 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  changes:
+    name: classify changed paths
+    runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.filter.outputs.code }}
+      webdocs: ${{ steps.filter.outputs.webdocs }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      # Docs-only PRs (web-docs/**) skip the compiler jobs below and run
+      # webdocs-build instead. The skip is an `if:` on each job rather than
+      # workflow-level `paths-ignore` because skipped jobs still satisfy
+      # branch-protection required checks (freebsd is required), while a
+      # path-filtered workflow that never starts would leave a docs-only PR
+      # blocked forever. A PR touching both classes runs everything.
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            webdocs:
+              - 'web-docs/**'
+            code:
+              - '!web-docs/**'
+
   build-test:
     name: build + bootstrap fixed point + test corpus
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -105,6 +131,8 @@ jobs:
 
   freebsd:
     name: FreeBSD (build + bootstrap fixed point + tests, in a VM)
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     # GitHub has no native FreeBSD runners, so run a real FreeBSD VM inside
@@ -149,6 +177,8 @@ jobs:
 
   sanitizers:
     name: AddressSanitizer + UndefinedBehaviorSanitizer
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 25
 
@@ -195,6 +225,34 @@ jobs:
             struct_nested_field_drop arm_local_drop arm_local_trailing_drop \
             recover_unwind loop_drop_reclaim closure_env_reclaim closure_env_binding \
             ternary_slice_owned match_slice_owned
+
+  webdocs-build:
+    name: web docs build (vitepress)
+    needs: changes
+    if: needs.changes.outputs.webdocs == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # Build-checks the VitePress site so a docs PR can't merge with a broken
+    # build (dead links, bad frontmatter, sidebar config errors) and then
+    # fail in webdocs-deploy.yml after landing on main. Build only — the
+    # deploy itself stays in webdocs-deploy.yml, post-merge.
+    defaults:
+      run:
+        working-directory: web-docs
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: web-docs/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - name: vitepress build
+        run: pnpm run docs:build
 
 # nurlfmt --check now runs as a step in the build-test job above
 # (after the examples gate). The repo-wide `nurlfmt --write` pass that
