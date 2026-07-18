@@ -128,9 +128,17 @@ $ `cudakernel.nu`
 }
 
 @ swarm_announce * Swarm sw i want → v {
+    : b _ok ( swarm_announce_ok sw want )
+}
+
+// Announce presence; returns whether the broadcast reached the relay. A
+// failed send is the reconnect loop's signal that the relay is gone.
+@ swarm_announce_ok * Swarm sw i want → b {
     : ( Vec u ) msg ( hello_build . sw self_id . sw role want . sw self_pk . sw self_caps )
-    ?? ( transport_broadcast # *Transport . sw transport . sw group msg ) { T _ → {} F _ → {} }
+    : ~ b ok F
+    ?? ( transport_broadcast # *Transport . sw transport . sw group msg ) { T _ → { = ok T } F _ → {} }
     ( vec_free [u] msg )
+    ^ ok
 }
 
 @ swarm_on_hello * Swarm sw Hello h → v {
@@ -191,6 +199,44 @@ $ `cudakernel.nu`
 
 // Dial the relay, retrying briefly so a co-located relay that is still binding
 // (or a relay that restarts) doesn't lose its local roles to a startup race.
+// ── relay endpoint list (failover) ───────────────────────────────
+// --connect accepts a comma-separated list "h1:p1,h2:p2,…"; any one being
+// reachable bootstraps the node, and if the connected relay dies the node
+// rotates to the next. A single endpoint is just a one-element list.
+// The list is kept as raw "host:port" String segments (default filled in
+// when a segment omits either); parse_hostport resolves one at dial time.
+@ parse_relay_list String cs s dhost i dport → ( Vec String ) {
+    : ( Vec String ) out ( vec_new [String] )
+    : i n ( string_len cs )
+    : s d ( string_data cs )
+    : ~ i start 0
+    : ~ i k 0
+    ~ <= k n {
+        ? | == k n == ( nurl_str_get d k ) 44 {
+            ? > k start { ( vec_push [String] out ( string_substr cs start - k start ) ) } {}
+            = start + k 1
+        } {}
+        = k + k 1
+    }
+    ? == ( vec_len [String] out ) 0 {
+        : String def ( string_new )
+        ( string_push_str def dhost )
+        ( string_push_char def 58 )
+        ( string_push_str def ( nurl_str_int dport ) )
+        ( vec_push [String] out def )
+    } {}
+    ^ out
+}
+
+@ relay_list_free ( Vec String ) lst → v {
+    : ~ i k 0
+    ~ < k ( vec_len [String] lst ) {
+        ?? ( vec_get [String] lst k ) { T seg → { ( string_free seg ) } F → {} }
+        = k + k 1
+    }
+    ( vec_free [String] lst )
+}
+
 @ relay_dial_retry s host i port i tries → !RelayClient NetErr {
     ?? ( relay_dial host port ) {
         T rc → { ^ @ !RelayClient NetErr { T rc } }
@@ -223,30 +269,59 @@ $ `cudakernel.nu`
 // thread takes a fresh random identity, so `--workers N` spins up N independent
 // ring members in one process. gpu≠0: advertise cap_gpu and register the
 // kind_wasm_gpu handler — wasm chunks of that kind run with --allow-gpu.
-@ node_worker s host i port s token i vflag i gpu → v {
+// A worker keeps its identity across reconnects (same ring member) and, when
+// the relay it is on dies, rotates to the next relay in the list and
+// re-forms — no single relay is a point of failure. Death is detected by a
+// periodic heartbeat announce whose SEND fails when the relay is gone; the
+// on-disk block cache survives the switch, so re-seeding is idempotent.
+@ node_worker ( Vec String ) relays s dhost i dport s token i vflag i gpu → v {
     : i id ( rand_u64 )
-    ?? ( relay_dial_retry host port 60 ) {
-        T rc → {
-            : ( Vec u ) reg ( pk_from_id id )
-            ?? ( relay_register rc reg ) { T _ → {} F _ → {} }
-            ( vec_free [u] reg )
-            ( relay_set_timeout rc 250 )
-            : i caps ? != gpu 0 ( cap_gpu ) 0
-            : *Swarm sw ( swarm_new rc id ( role_worker ) caps token )
-            ( job_register # *JobNode . sw job ( kind_kernel ) ( kernel_handler . sw key ) )
-            ( job_register # *JobNode . sw job ( kind_wasm ) ( wasm_handler . sw key ) )
-            ( job_register # *JobNode . sw job ( kind_blob ) ( blob_handler . sw key ) )
-            ? != gpu 0 { ( job_register # *JobNode . sw job ( kind_wasm_gpu ) ( wasm_gpu_handler . sw key ) ) } {}
-            ( swarm_join_group sw )
-            ( swarm_announce sw 1 )
-            ? == vflag 1 { ( nurl_print `swarm-mcp worker ` ) ( nurl_print ( nurl_str_int id ) ) ( nurl_print ? != gpu 0 ` ready (gpu)\n` ` ready\n` ) } {}
-            : ~ b run T
-            ~ run { ( swarm_pump sw 200 ) }
-            ( swarm_free sw )
-            ( relay_close rc )
+    : *u idxc ( nurl_alloc 8 )
+    ( nurl_poke idxc 0 0 )
+    : i caps ? != gpu 0 ( cap_gpu ) 0
+    : ~ i from 0
+    : ~ b keep T
+    ~ keep {
+        ?? ( relay_dial_list relays dhost dport from idxc ) {
+            F _ → {
+                ( nurl_eprintln `swarm-mcp: worker could not reach any relay in the list — retrying` )
+                ( sleep_ms 1000 )
+            }
+            T rc → {
+                : i cur ( nurl_peek idxc 0 )
+                = from % + cur 1 ( vec_len [String] relays )
+                : ( Vec u ) reg ( pk_from_id id )
+                ?? ( relay_register rc reg ) { T _ → {} F _ → {} }
+                ( vec_free [u] reg )
+                ( relay_set_timeout rc 250 )
+                : *Swarm sw ( swarm_new rc id ( role_worker ) caps token )
+                ( job_register # *JobNode . sw job ( kind_kernel ) ( kernel_handler . sw key ) )
+                ( job_register # *JobNode . sw job ( kind_wasm ) ( wasm_handler . sw key ) )
+                ( job_register # *JobNode . sw job ( kind_blob ) ( blob_handler . sw key ) )
+                ? != gpu 0 { ( job_register # *JobNode . sw job ( kind_wasm_gpu ) ( wasm_gpu_handler . sw key ) ) } {}
+                ( swarm_join_group sw )
+                ( swarm_announce sw 1 )
+                ? == vflag 1 { ( nurl_print `swarm-mcp worker ` ) ( nurl_print ( nurl_str_int id ) ) ( nurl_print ` on relay ` ) ( nurl_print ( nurl_str_int cur ) ) ( nurl_print ? != gpu 0 ` ready (gpu)\n` ` ready\n` ) } {}
+                // pump; a heartbeat every ~2 s doubles as the relay-liveness
+                // probe (its send fails when the relay is gone)
+                : ~ b live T
+                : ~ i beat 0
+                ~ live {
+                    ( swarm_pump sw 200 )
+                    = beat + beat 1
+                    ? >= beat 10 {
+                        = beat 0
+                        ? ( swarm_announce_ok sw 1 ) {} { = live F }
+                    } {}
+                    ( sleep_ms 5 )
+                }
+                ? == vflag 1 { ( nurl_print `swarm-mcp worker ` ) ( nurl_print ( nurl_str_int id ) ) ( nurl_print ` lost its relay — reconnecting\n` ) } {}
+                ( swarm_free sw )
+                ( relay_close rc )
+            }
         }
-        F e → { ( nurl_eprintln `swarm-mcp: worker could not reach the relay` ) }
     }
+    ( nurl_free idxc )
 }
 
 // ── shared submit: shard an expr task across the cluster ──────────
@@ -958,6 +1033,9 @@ $ `cudakernel.nu`
     } {}
 
     // Discover the live workers, then shard + submit.
+    // a dead relay here means the coordinator reconnects to the next in the
+    // list before submitting — a relay failure does not take the API down
+    ? ( mcp_ensure_relay ) {} {}
     : *Swarm sw ( mcp_swarm )
     ( swarm_discover sw 6 )
     : i nworkers ( roster_count # *Roster . sw roster )
@@ -985,6 +1063,9 @@ $ `cudakernel.nu`
 
 @ __ship_wasm ( Vec u ) wasm i lo i hi i op i dtype i gpu → Json {
     ? == ( vec_len [u] wasm ) 0 { ( vec_free [u] wasm ) ^ ( mcp_tool_result_error `empty wasm module` ) } {}
+    // a dead relay here means the coordinator reconnects to the next in the
+    // list before submitting — a relay failure does not take the API down
+    ? ( mcp_ensure_relay ) {} {}
     : *Swarm sw ( mcp_swarm )
     ( swarm_discover sw 6 )
     : i nworkers ? != gpu 0
@@ -1187,6 +1268,9 @@ $ `cudakernel.nu`
         }
     } {}
     ( string_free wrapped ) ( string_free hex )
+    // a dead relay here means the coordinator reconnects to the next in the
+    // list before submitting — a relay failure does not take the API down
+    ? ( mcp_ensure_relay ) {} {}
     : *Swarm sw ( mcp_swarm )
     ( swarm_discover sw 6 )
     : i ngpu ( roster_count_caps # *Roster . sw roster ( cap_gpu ) )
@@ -1356,6 +1440,9 @@ $ `cudakernel.nu`
         }
     } {}
     ( string_free wrapped ) ( string_free hex )
+    // a dead relay here means the coordinator reconnects to the next in the
+    // list before submitting — a relay failure does not take the API down
+    ? ( mcp_ensure_relay ) {} {}
     : *Swarm sw ( mcp_swarm )
     ( swarm_discover sw 6 )
     : i ngpu ( roster_count_caps # *Roster . sw roster ( cap_gpu ) )
@@ -1888,9 +1975,64 @@ $ `cudakernel.nu`
 // transport). Runs the blocking HTTP server off the reactor on its own thread,
 // so a slow TLS handshake never stalls a co-located relay or worker.
 
-@ node_mcp s rhost i rport s mcp_host i mcp_port s cert s key s token → v {
-    ?? ( relay_dial_retry rhost rport 60 ) {
+// The coordinator's relay endpoints and its current index — the submit path
+// rebuilds the swarm against the next relay when the current one dies
+// (mcp_ensure_relay below). Held as globals because the MCP handlers are
+// top-level functions over module state, like the swarm itself.
+: ~ i g_mcp_relays 0  // *( Vec String ) as an address
+: ~ i g_mcp_from 0  // next relay index to try
+: ~ s g_mcp_token ``
+: ~ i g_mcp_reconnects 0
+
+// Build a fresh coordinator swarm on the next reachable relay and swap it
+// into the McpState, preserving tasks / datasets / caches. Returns F when no
+// relay in the list is reachable. Called from the submit path when the
+// current relay looks dead, so a relay failure does not take the API down.
+@ mcp_reconnect → b {
+    : *McpState st # *McpState g_mcp
+    : ( Vec String ) relays # ( Vec String ) g_mcp_relays
+    : *u idxc ( nurl_alloc 8 )
+    ( nurl_poke idxc 0 0 )
+    : ~ b ok F
+    ?? ( relay_dial_list relays `127.0.0.1` 47700 g_mcp_from idxc ) {
         T rc → {
+            : i cur ( nurl_peek idxc 0 )
+            = g_mcp_from % + cur 1 ( vec_len [String] relays )
+            : i myid ( rand_u64 )
+            : ( Vec u ) reg ( pk_from_id myid )
+            ?? ( relay_register rc reg ) { T _ → {} F _ → {} }
+            ( vec_free [u] reg )
+            ( relay_set_timeout rc 150 )
+            : *Swarm nsw ( swarm_new rc myid ( role_client ) 0 g_mcp_token )
+            ( swarm_join_group nsw )
+            ( swarm_discover nsw 6 )
+            : *Swarm old # *Swarm . st swarm
+            = . st swarm # s nsw
+            ( swarm_free old )
+            = g_mcp_reconnects + g_mcp_reconnects 1
+            = ok T
+        }
+        F _ → {}
+    }
+    ( nurl_free idxc )
+    ^ ok
+}
+
+// Before a submit: if a heartbeat to the current relay fails, the relay is
+// gone — reconnect to the next. Returns T once a live relay is in place.
+@ mcp_ensure_relay → b {
+    : *Swarm sw ( mcp_swarm )
+    ? ( swarm_announce_ok sw 0 ) { ^ T } {}
+    ^ ( mcp_reconnect )
+}
+
+@ node_mcp ( Vec String ) relays s rhost i rport s mcp_host i mcp_port s cert s key s token → v {
+    : *u idxc ( nurl_alloc 8 )
+    ( nurl_poke idxc 0 0 )
+    ?? ( relay_dial_list relays `127.0.0.1` 47700 0 idxc ) {
+        T rc → {
+            : i cur ( nurl_peek idxc 0 )
+            ( nurl_free idxc )
             : i myid ( rand_u64 )
             : ( Vec u ) reg ( pk_from_id myid )
             ?? ( relay_register rc reg ) { T _ → {} F _ → {} }
@@ -1908,6 +2050,9 @@ $ `cudakernel.nu`
             = . st next_id 1
             = . st seeded ( vec_new [String] )
             = g_mcp # i st
+            = g_mcp_relays # i relays
+            = g_mcp_from % + cur 1 ( vec_len [String] relays )
+            = g_mcp_token token
             : ( @ HttpResponse HttpRequest ) handler ( mcp_http_handler \ Json req → ?Json { ^ ( dispatch req ) } )
             ?? ( tcp_listen_tls mcp_host mcp_port cert key ) {
                 T lst → {
@@ -1917,10 +2062,9 @@ $ `cudakernel.nu`
                 }
                 F e → { ( nurl_eprintln `swarm-mcp: MCP HTTPS listener failed to start (check --tls-cert/--tls-key and that the port is free)` ) }
             }
-            ( swarm_free sw )
-            ( relay_close rc )
+            ( swarm_free # *Swarm . st swarm )
         }
-        F e → { ( nurl_eprintln `swarm-mcp: MCP could not reach the relay` ) }
+        F e → { ( nurl_free idxc ) ( nurl_eprintln `swarm-mcp: MCP could not reach any relay in the list` ) }
     }
 }
 
@@ -1997,6 +2141,32 @@ $ `cudakernel.nu`
     ( string_free ps )
     : String h ? == 0 ( string_len h0 ) { ( string_free h0 ) ( string_from dhost ) } { h0 }
     ^ @ HostPort { h ? > p 0 p dport }
+}
+
+// Dial the relays in `lst` starting at `from` (wrapping once around the
+// whole list), a few quick retries each. Writes the connected index to
+// `idx_cell`. Returns the live client or F when every endpoint is down.
+@ relay_dial_list ( Vec String ) lst s dhost i dport i from * u idx_cell → !RelayClient NetErr {
+    : i n ( vec_len [String] lst )
+    : ~ i tried 0
+    : ~ ? RelayClient found @ ?RelayClient { F # RelayClient 0 }
+    : ~ b more T
+    ~ & more < tried n {
+        : i i % + from tried n
+        ?? ( vec_get [String] lst i ) {
+            T seg → {
+                : HostPort hp ( parse_hostport seg dhost dport )
+                ?? ( relay_dial_retry ( string_data . hp host ) . hp port 3 ) {
+                    T rc → { = found @ ?RelayClient { T rc } ( nurl_poke idx_cell 0 i ) = more F }
+                    F _ → {}
+                }
+                ( string_free . hp host )
+            }
+            F → {}
+        }
+        = tried + tried 1
+    }
+    ?? found { T rc → { ^ @ !RelayClient NetErr { T rc } } F → { ^ @ !RelayClient NetErr { F # NetErr NetOther } } }
 }
 
 // Directory part of a path (bytes before the last '/'), empty when the
@@ -2132,14 +2302,27 @@ $ `cudakernel.nu`
     : i nworkers0 ( flag_int `--workers` 1 )
     : i nworkers ? > nworkers0 0 nworkers0 1
 
-    // Where this node's local worker/mcp roles reach the relay: a co-located
-    // relay over loopback, otherwise the explicit --connect endpoint.
-    : String drh ? relay_on ( string_from `127.0.0.1` ) ( string_from ( string_data . chp host ) )
-    : i drp ? relay_on . lhp port . chp port
+    // Where this node's local worker/mcp roles reach the relay. With --relay
+    // it is the co-located relay over loopback; otherwise --connect names one
+    // or more relays (comma-separated), any of which bootstraps the node and
+    // to which the node fails over if its current relay dies.
     ? & | worker_on mcp_on & ! relay_on ! have_connect {
-        ( nurl_eprintln `swarm-mcp: --connect HOST:PORT is required for --worker/--mcp when this node has no --relay` )
+        ( nurl_eprintln `swarm-mcp: --connect HOST[:PORT][,HOST:PORT…] is required for --worker/--mcp when this node has no --relay` )
         ^ 1
     } {}
+    : String drh ? relay_on ( string_from `127.0.0.1` ) ( string_from ( string_data . chp host ) )
+    : i drp ? relay_on . lhp port . chp port
+    : ~ ( Vec String ) relays ( vec_new [String] )
+    ? relay_on {
+        : String one ( string_new )
+        ( string_push_str one `127.0.0.1` )
+        ( string_push_char one 58 )
+        ( string_push_str one ( nurl_str_int . lhp port ) )
+        ( vec_push [String] relays one )
+    } {
+        ( relay_list_free relays )
+        = relays ( parse_relay_list cs `127.0.0.1` 47700 )
+    }
 
     // TLS material for the MCP HTTPS endpoint.
     : String home ( env_var_or `HOME` `/tmp` )
@@ -2161,14 +2344,14 @@ $ `cudakernel.nu`
     ? mcp_on { ( nurl_print ` mcp` ) } {}
     ( nurl_print `\n` )
     ? relay_on { ( nurl_print `  relay   listening ` ) ( nurl_print ( string_data . lhp host ) ) ( nurl_print `:` ) ( nurl_print ( nurl_str_int . lhp port ) ) ( nurl_print `\n` ) } {}
-    ? worker_on { ( nurl_print `  worker  x` ) ( nurl_print ( nurl_str_int nworkers ) ) ( nurl_print ? != gpuflag 0 ` (gpu)` `` ) ( nurl_print ` -> relay ` ) ( nurl_print ( string_data drh ) ) ( nurl_print `:` ) ( nurl_print ( nurl_str_int drp ) ) ( nurl_print `\n` ) } {}
+    ? worker_on { ( nurl_print `  worker  x` ) ( nurl_print ( nurl_str_int nworkers ) ) ( nurl_print ? != gpuflag 0 ` (gpu)` `` ) ( nurl_print ` -> ` ) ( nurl_print ( nurl_str_int ( vec_len [String] relays ) ) ) ( nurl_print ` relay(s), first ` ) ( nurl_print ( string_data drh ) ) ( nurl_print `:` ) ( nurl_print ( nurl_str_int drp ) ) ( nurl_print `\n` ) } {}
     ? mcp_on { ( nurl_print `  mcp     https://` ) ( nurl_print ( string_data . mhp host ) ) ( nurl_print `:` ) ( nurl_print ( nurl_str_int . mhp port ) ) ( nurl_print `/  -> relay ` ) ( nurl_print ( string_data drh ) ) ( nurl_print `:` ) ( nurl_print ( nurl_str_int drp ) ) ( nurl_print `\n` ) } {}
 
     // One closure per role (held alive for the process; worker threads share
     // one closure and each takes a fresh identity inside node_worker).
     : ( @ v ) relay_body \ → v { ( node_relay ( string_data . lhp host ) . lhp port vflag ) }
-    : ( @ v ) worker_body \ → v { ( node_worker ( string_data drh ) drp ( string_data tok ) vflag gpuflag ) }
-    : ( @ v ) mcp_body \ → v { ( node_mcp ( string_data drh ) drp ( string_data . mhp host ) . mhp port ( string_data certp ) ( string_data keyp ) ( string_data tok ) ) }
+    : ( @ v ) worker_body \ → v { ( node_worker relays ( string_data drh ) drp ( string_data tok ) vflag gpuflag ) }
+    : ( @ v ) mcp_body \ → v { ( node_mcp relays ( string_data drh ) drp ( string_data . mhp host ) . mhp port ( string_data certp ) ( string_data keyp ) ( string_data tok ) ) }
 
     : ( Vec s ) ths ( vec_new [s] )
     ? relay_on { ?? ( thread_spawn relay_body ) { T t → ( vec_push [s] ths . t raw ) F _ → {} } } {}

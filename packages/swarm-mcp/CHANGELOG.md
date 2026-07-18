@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.12.0
+
+**The relay is no longer a single point of failure.**
+
+- **`--connect` takes a list** — `--connect h1:p1,h2:p2,…`. Any one of the
+  named relays bootstraps the node.
+- **Workers fail over.** A worker keeps its identity across reconnects and
+  runs a ~2 s heartbeat announce; when the send fails (the relay is gone) it
+  rotates to the next relay in the list, re-registers, re-joins the group and
+  re-announces. Its on-disk block cache survives the switch, so re-seeding is
+  idempotent.
+- **The coordinator fails over lazily.** Before each submit the MCP node
+  probes its relay with a heartbeat; if it is dead, it rebuilds its swarm on
+  the next reachable relay (preserving tasks, datasets and caches) and
+  submits there — a relay failure does not take the API down.
+- Run two or more relays and no single one is a point of failure: kill the
+  relay a running cluster is on and the workers and coordinator converge on a
+  survivor, mid-flight.
+- Test: `tests/failover_smoke.sh` (live — two relays, submit, kill the active
+  relay, submit again and still get the right answer; stable across runs).
+
 ## 0.11.0
 
 **The iteration engine — gradient descent with the loop in the coordinator,

@@ -234,6 +234,23 @@ dataset pay the transfer **once per worker**. The task response's
 `seeded_blocks` is the number of blocks that actually moved — `0` means every
 block was already cached and the re-run shipped nothing but hashes.
 
+## No single point of failure — relay failover
+
+`--connect` takes a **list** of relays (`--connect a:47700,b:47700`). Any one
+bootstraps a node; if the relay a node is on dies, the node rotates to the
+next in the list and re-forms.
+
+- **Workers** keep their identity across reconnects and run a ~2 s heartbeat;
+  when it fails to send, the relay is gone, so the worker re-dials the next
+  relay, re-registers and re-announces. Its on-disk block cache survives, so
+  re-seeding a dataset is idempotent.
+- **The coordinator** probes its relay before each submit and, if it is dead,
+  rebuilds its swarm on the next reachable relay — preserving tasks, datasets
+  and caches — and submits there.
+
+Run two or more relays and none is a SPOF: kill the relay a running cluster
+is on and the workers and coordinator converge on a survivor, mid-flight.
+
 ## Iterative algorithms — the loop runs in the engine
 
 `compute_iterate` runs **gradient descent** without a model-in-the-loop.
