@@ -6176,8 +6176,14 @@
     // stale set so the else-arm starts from the pre-`?` state, and join by
     // union at %lend (see __ptr_dead_union).
     : s __ptr_dead_pre ( nurl_str_cat ( __ptr_dead_snapshot ) `` )
+    // Fresh-owned-slice provenance: reset, then snapshot after the arm so we
+    // can tell whether this arm's value is a freshly-allocated owned slice
+    // (a slice literal or a nested `?` that is itself fresh). Only when BOTH
+    // live arms are fresh does the `?`-result carry ownership to the binding.
+    ( nurl_sym_def syms `__last_slice_owned__` `` )
     : s tv ( gen_expr lex syms cg )
     : s tt2 ( nurl_get_last_type )
+    : s t_slice_flag ( nurl_str_cat ( nurl_sym_get syms `__last_slice_owned__` ) `` )
     : s t_retid ( nurl_str_cat ( nurl_sym_get syms `__last_ident_name__` ) `` )
     : s tlbl ( nurl_sym_get syms `__cur_lbl__` )
     : i tdr g_did_ret
@@ -6239,8 +6245,10 @@
     = g_ret_forbidden 0
     // Mirror of the then-arm's escaping-ident snapshot above.
     ( nurl_sym_def syms `__last_ident_name__` `` )
+    ( nurl_sym_def syms `__last_slice_owned__` `` )
     : s ev ( gen_expr lex syms cg )
     : s et2 ( nurl_get_last_type )
+    : s e_slice_flag ( nurl_str_cat ( nurl_sym_get syms `__last_slice_owned__` ) `` )
     : s e_retid ( nurl_str_cat ( nurl_sym_get syms `__last_ident_name__` ) `` )
     : s elbl ( nurl_sym_get syms `__cur_lbl__` )
     : i edr g_did_ret
@@ -6382,6 +6390,16 @@
         { ( nurl_set_last_type `void` ) }
     }
     {}
+    // Forward fresh-owned-slice provenance to a consuming `:` binding: the
+    // `?`-result owns a slice only when every LIVE arm produced a fresh owned
+    // slice and the join type is a slice. A returning (`^`) arm never reaches
+    // the phi, so it does not gate; a borrow/alias arm leaves its flag clear,
+    // keeping mixed cases unregistered (leak-not-UAF) as before.
+    : b __t_slice_ok ? != 0 tdr T != 0 ( nurl_str_len t_slice_flag )
+    : b __e_slice_ok ? != 0 edr T != 0 ( nurl_str_len e_slice_flag )
+    : b __slice_live | == 0 tdr == 0 edr
+    : b __slice_res & & & __t_slice_ok __e_slice_ok __slice_live ( mem_is_slice_ty phi_ty )
+    ( nurl_sym_def syms `__last_slice_owned__` ? __slice_res `1` `` )
     result
 }
 
@@ -10332,6 +10350,7 @@
         ( nurl_sym_def syms `__last_expr_refdepth__` `` )
         ( nurl_sym_def syms `__last_value_borrow__` `` )
         ( nurl_sym_def syms `__last_closure_env__` `` )
+        ( nurl_sym_def syms `__last_slice_owned__` `` )
         : s val ( gen_expr lex syms cg )
         : s vt ( nurl_get_last_type )
         // Closure-env reclamation (§7.4): did the RHS allocate a capturing
@@ -10346,6 +10365,9 @@
         ( bck_record `let` name bck_line )
         ( bck_let_alias syms is_mutable bck_rhs_tt bck_rhs_val vt bck_line )
         : b rhs_is_owned_call != 0 ( nurl_str_len ( nurl_sym_get syms `__last_call_ret_owned__` ) )
+        // A `?`-ternary whose live arms are all fresh owned slices hands the
+        // buffer to this binding (gen_slice_literal / gen_cond set the flag).
+        : b rhs_slice_owned != 0 ( nurl_str_len ( nurl_sym_get syms `__last_slice_owned__` ) )
         // Escape analysis: stamp this binding's
         // region (block depth) and, when the initialiser was a stack
         // reference — a closure literal capturing a binding by
@@ -10368,7 +10390,7 @@
         ? is_mutable
         { ( nurl_sym_def syms ( nurl_str_cat name `__mutable` ) `1` ) }
         {}
-        ? | rhs_is_slice_lit & rhs_is_owned_call ( mem_is_slice_ty vt )
+        ? | | rhs_is_slice_lit & rhs_slice_owned ( mem_is_slice_ty vt ) & rhs_is_owned_call ( mem_is_slice_ty vt )
         { ( mem_own_add syms name )
             ( mem_slice_decl_add syms name )
             ( mem_journal_push_slice cg vt ptr ) }
@@ -10500,6 +10522,7 @@
                 ( nurl_sym_def syms `__last_expr_refdepth__` `` )
                 ( nurl_sym_def syms `__last_value_borrow__` `` )
                 ( nurl_sym_def syms `__last_closure_env__` `` )
+                ( nurl_sym_def syms `__last_slice_owned__` `` )
                 : s val ( gen_expr lex syms cg )
                 : s vt ( nurl_get_last_type )
                 : s rhs_closure_env ( nurl_sym_get syms `__last_closure_env__` )
@@ -10528,6 +10551,9 @@
                 ( bck_record `let` name bck_line )
                 ( bck_let_alias syms is_mutable bck_rhs_tt bck_rhs_val vt bck_line )
                 : b rhs_is_owned_call != 0 ( nurl_str_len ( nurl_sym_get syms `__last_call_ret_owned__` ) )
+                // A `?`-ternary whose live arms are all fresh owned slices
+                // hands the buffer to this binding (see the inference path).
+                : b rhs_slice_owned != 0 ( nurl_str_len ( nurl_sym_get syms `__last_slice_owned__` ) )
                 // Escape analysis: stamp region +
                 // referent depth — see the type-inference path above.
                 ( bck_esc_let syms name ( bck_expr_refdepth syms
@@ -10553,7 +10579,7 @@
                 ? is_mutable
                 { ( nurl_sym_def syms ( nurl_str_cat name `__mutable` ) `1` ) }
                 {}
-                ? | rhs_is_slice_lit & rhs_is_owned_call ( mem_is_slice_ty ptype )
+                ? | | rhs_is_slice_lit & rhs_slice_owned ( mem_is_slice_ty ptype ) & rhs_is_owned_call ( mem_is_slice_ty ptype )
                 { ( mem_own_add syms name )
                     ( mem_slice_decl_add syms name )
                     ( mem_journal_push_slice cg ptype ptr ) }
@@ -12622,6 +12648,12 @@
     ( nurl_print ` ` ) ( nurl_print r0 )
     ( nurl_print `, i64 ` ) ( nurl_print ( nurl_str_int count ) ) ( nurl_print `, 1\n` )
     ( nurl_set_last_type slice_ty )
+    // A slice literal is a FRESH owned buffer. Signal it so a `:` binding whose
+    // RHS reaches this through a `?` ternary (where the syntactic TT_LBRACK
+    // check can't see it) still registers ownership — otherwise the buffer
+    // leaks at function exit. gen_cond forwards the flag when both live arms
+    // carry it; every other reader resets it before its own gen_expr.
+    ( nurl_sym_def syms `__last_slice_owned__` `1` )
     r1
 }
 
