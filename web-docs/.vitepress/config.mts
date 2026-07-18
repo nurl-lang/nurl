@@ -7,6 +7,8 @@ const vitePressSidebarOptions = {
   useFolderTitleFromIndexFile: true,
   hyphenToSpace: true,
   capitalizeFirst: true,
+  sortMenusByFrontmatterOrder: true,
+  excludeByGlobPattern: ["localdraft/**"],
 };
 
 const vitePressOptions: UserConfig = {

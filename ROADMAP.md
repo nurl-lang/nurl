@@ -227,6 +227,10 @@ platform-specific shims.
 The remaining work to declare a stable 1.0 is mostly precision and proof, not
 new language features.
 
+### Brand: Logo, Images
+
+- Switch from generated imagery to a human-designed one.
+
 ### Documentation precision (safety & soundness)
 
 - [x] **State the safety contract exactly** — which bug classes the borrow

@@ -137,3 +137,4 @@ stdlib/runtime.nvrtc
 web-docs/flake.lock
 web-docs/.vitepress/cache
 web-docs/.vitepress/dist
+web-docs/docs/localdraft
