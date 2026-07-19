@@ -8,6 +8,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Web documentation moved from VitePress to Fumadocs.** The
+  `docs.nurl-lang.org` site is now `webdocs/` (Next.js + Fumadocs),
+  replacing the old `web-docs/` (VitePress), which has been removed.
+  Deploys as a static export (`next build` → `wrangler deploy`), the same
+  assets-only Cloudflare Worker pattern the old site used; search runs
+  against a build-time Orama index queried client-side instead of a live
+  API route. Known limitation: the scaffold's automatic markdown
+  content-negotiation for LLM/agent requests (`proxy.ts`) had to be
+  dropped, since Next.js middleware isn't supported under static export.
+  `/llms.txt`, `/llms-full.txt`, and per-page markdown routes are
+  unaffected and still directly fetchable.
+
 ## [0.21.0] — 2026-07-19
 
 The **diffusion** release: `nurllama` grows a whole non-autoregressive

@@ -132,9 +132,3 @@ vendor/
 stdlib/nurl_version_gen.h
 stdlib/runtime.cuda
 stdlib/runtime.nvrtc
-
-# web documentation
-web-docs/flake.lock
-web-docs/.vitepress/cache
-web-docs/.vitepress/dist
-web-docs/docs/localdraft

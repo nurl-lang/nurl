@@ -1,0 +1,73 @@
+---
+title: Compiling and running
+description: How a .nu source file becomes a native binary.
+icon: Terminal
+---
+
+import { Accordion, Accordions } from 'fumadocs-ui/components/accordion';
+
+A NURL source file goes through two stages to become a program you can run:
+
+```
+hello.nu → (nurlc)  → hello.ll   (LLVM IR — a text format, human-readable)
+hello.ll → (clang)  → hello      (native binary for your machine)
+```
+
+`nurlc` (the NURL compiler) never touches your CPU's instruction set
+directly, it emits LLVM IR and hands it to
+`clang` to turn into a real binary. This is the
+same backend Rust and Swift use.
+
+## Script compiling
+
+If you built NURL from source, `./nurl.sh` (or `nurl.bat`) drives
+both stages for you:
+
+```bash
+./nurl.sh hello.nu              # → ./hello
+./nurl.sh hello.nu myprogram    # → ./myprogram
+```
+
+Useful flags (put them *before* the source file):
+
+| Flag | Effect |
+|---|---|
+| `-O0` … `-O3` | Optimization level passed to `clang` (default `-O2`) |
+| `-g`, `--debug` | Include debug info |
+| `--emit-ir` | Stop after stage 1 — just produce the `.ll` file, don't link |
+| `--emit-asm` | Emit native assembly (`.s`), skip linking |
+
+<Accordions>
+  <Accordion title="Why does -O0 matter for debugging?">
+    At the default `-O2`, `clang` inlines and reorders code aggressively
+    enough that a debugger's "break at this source line" can become
+    unreliable — the line may not correspond to a single instruction
+    anymore. `-O0` keeps the generated code close to the source structure,
+    which is what you want while stepping through a bug, at the cost of a
+    slower binary. Reach for `-O2`/`-O3` again once you're past debugging.
+  </Accordion>
+</Accordions>
+
+## Manual compiling
+
+```bash
+./build/nurlc hello.nu > hello.ll
+clang hello.ll stdlib/runtime.native.o -lm -lpthread -o hello
+./hello
+```
+
+Link against `stdlib/runtime.native.o`, not `stdlib/runtime.o` — after a
+normal build the latter is LLVM bitcode (for link-time optimization), and a
+plain `clang` link rejects it with *"file format not recognized"*.
+
+## If you installed the prebuilt toolchain
+
+The prebuilt `curl | sh` installer gives you `nurlc`, `nurlpkg`, and
+`nurlfmt`, but not the `nurl.sh` convenience wrapper or a local runtime. See [Installation from source](./install.mdx#option-b--build-from-source).
+
+## Compiling to WebAssembly
+
+See the [online playground](https://play.nurl-lang.org/)
+to try NURL in the browser without installing anything, and
+[`docs/PLATFORMS.md`](https://github.com/nurl-lang/nurl/blob/main/docs/PLATFORMS.md)
+for the full target list once you're ready to cross-compile.

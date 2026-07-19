@@ -1,0 +1,12 @@
+{
+  "pages": [
+    "index",
+    "---Getting Started---",
+    "install",
+    "compiling-and-running",
+    "next-steps",
+    "---Resources---",
+    "graphics",
+    "contribute"
+  ]
+}
