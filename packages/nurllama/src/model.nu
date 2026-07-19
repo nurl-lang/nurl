@@ -45,6 +45,7 @@ $ `deps/gguf/src/gguf.nu`
 $ `deps/gguf/src/dequant.nu`
 $ `deps/safetensor/src/safetensor.nu`
 $ `stdlib/ext/env.nu`
+$ `stdlib/std/time.nu`
 $ `deps/gpu/src/gpu.nu`
 $ `src/kernels.nu`
 $ `src/tokenizer.nu`
@@ -107,6 +108,16 @@ $ `src/tokenizer.nu`
     i rlogitsd
     * u router_host
     i moe_outd
+    // batched-MoE scratch: the assignment table (expert id + weight per
+    // (position, selected-expert) pair) and the expert hidden/down buffers
+    i moe_expid
+    i moe_wts
+    i moe_gate
+    i moe_up
+    i moe_downb
+    // all layers' expert bias as f32 on the device (n_layer · n_expert),
+    // read at offset L · n_expert by the on-device router
+    i bias_all
     i gg
     // A SECOND weight source: the same model, in the container Hugging Face
     // ships it in. The GGUF still supplies the hyperparameters and the
@@ -169,10 +180,28 @@ $ `src/tokenizer.nu`
     i scored
     i logitsd
     * u logits_host
+    // greedy argmax + confidence per window position (device + host)
+    i amid_d
+    i amprob_d
+    * u amid_h
+    * u amprob_h
+    // coarse phase profiler (NURLLAMA_PROF): sync+timer per phase
+    b prof_on
+    i prof_attn_ns
+    i prof_moe_ns
+    i prof_shexp_ns
+    i prof_dense_ns
 }
 
 @ __lm_err s msg → !*Llm String {
     ^ @ !*Llm String { F ( string_from msg ) }
+}
+
+// Profiler clock: drain the GPU queue, then read the monotonic clock, so a
+// phase's accumulated ns reflect real device work rather than launch return.
+@ __lm_prof_now * Llm m → i {
+    : i _s ( gpu_sync . m g )
+    ^ ( monotonic_ns )
 }
 
 @ _lm_geti ( Vec i ) v i k → i {
@@ -542,6 +571,7 @@ $ `src/tokenizer.nu`
 
     : *Llm m # *Llm ( nurl_alloc Z Llm )
     = __lm_alloc_failed F
+    ?? ( env_get `NURLLAMA_PROF` ) { T v → { ( string_free v ) = . m prof_on T } F → {} }
     = . m st 0
     = . m st_embd -1
     = . m st_norm_add1 F
@@ -925,13 +955,51 @@ $ `src/tokenizer.nu`
     = . m logitsd ( __lm_scratch m * logit_rows . m n_vocab )
     = . m logits_host ( gpu_host_alloc * * logit_rows . m n_vocab 4 )
     ? . m bidir {
+        = . m amid_d ( __lm_scratch m LM_CHUNK )
+        = . m amprob_d ( __lm_scratch m LM_CHUNK )
+        = . m amid_h ( gpu_host_alloc * LM_CHUNK 4 )
+        = . m amprob_h ( gpu_host_alloc * LM_CHUNK 4 )
+    } {
+        = . m amid_d -1
+        = . m amprob_d -1
+        = . m amid_h # *u 0
+        = . m amprob_h # *u 0
+    }
+    ? . m bidir {
         = . m rlogitsd ( __lm_scratch m * LM_CHUNK . m n_expert )
         = . m router_host ( gpu_host_alloc * * LM_CHUNK . m n_expert 4 )
         = . m moe_outd ( __lm_scratch m . m n_embd )
+        // n_assign = LM_CHUNK · n_expert_used at most
+        : i nasn * LM_CHUNK . m n_expert_used
+        = . m moe_expid ( __lm_scratch m nasn )
+        = . m moe_wts ( __lm_scratch m nasn )
+        = . m moe_gate ( __lm_scratch m * nasn . m moe_ff )
+        = . m moe_up ( __lm_scratch m * nasn . m moe_ff )
+        = . m moe_downb ( __lm_scratch m * nasn . m n_embd )
+        // upload all layers' expert bias (f32) for the on-device router
+        : i nbias * . m n_layer . m n_expert
+        = . m bias_all ( __lm_scratch m nbias )
+        : ( Vec u ) bb ( vec_new [u] )
+        : ~ i bi 0
+        ~ < bi nbias {
+            : ~ f bv 0.0
+            ?? ( vec_get [f] . m exp_bias bi ) { T x → { = bv x } F → {} }
+            ( bytes_push_u32_le bb # u32 ( f32_to_bits # f32 bv ) )
+            = bi + bi 1
+        }
+        : GpuBuffer bu @ GpuBuffer { . m bias_all * nbias 4 }
+        : i _ub ( gpu_upload bu ( vec_data [u] bb ) )
+        ( vec_free [u] bb )
     } {
         = . m rlogitsd -1
         = . m router_host # *u 0
         = . m moe_outd -1
+        = . m moe_expid -1
+        = . m moe_wts -1
+        = . m moe_gate -1
+        = . m moe_up -1
+        = . m moe_downb -1
+        = . m bias_all -1
     }
     ? __lm_alloc_failed {
         ( llm_close m )
@@ -962,6 +1030,21 @@ $ `src/tokenizer.nu`
 }
 
 @ llm_close * Llm m → v {
+    ? . m prof_on {
+        : String pm ( string_from `[prof] attn=` )
+        ( string_push_int pm / . m prof_attn_ns 1000000 )
+        ( string_push_str pm `ms shexp=` )
+        ( string_push_int pm / . m prof_shexp_ns 1000000 )
+        ( string_push_str pm `ms moe_total=` )
+        ( string_push_int pm / . m prof_moe_ns 1000000 )
+        ( string_push_str pm `ms (experts=` )
+        ( string_push_int pm / - . m prof_moe_ns . m prof_shexp_ns 1000000 )
+        ( string_push_str pm `ms) dense=` )
+        ( string_push_int pm / . m prof_dense_ns 1000000 )
+        ( string_push_str pm `ms` )
+        ( nurl_eprintln ( string_data pm ) )
+        ( string_free pm )
+    } {}
     ? != . m st 0 { ( st_close # *St . m st ) } {}
     : ~ i k 0
     ~ < k ( vec_len [i] . m wdptr ) {
@@ -1013,6 +1096,8 @@ $ `src/tokenizer.nu`
     ( vec_free [i] . m tq_up_shexp )
     ( vec_free [i] . m tq_down_shexp )
     ? != 0 # i . m router_host { ( gpu_host_free . m router_host ) } {}
+    ? != 0 # i . m amid_h { ( gpu_host_free . m amid_h ) } {}
+    ? != 0 # i . m amprob_h { ( gpu_host_free . m amprob_h ) } {}
     ( vec_free [u] . m embd_host )
     ? != . m gg 0 { ( gguf_close # *Gguf . m gg ) } {}
     ( gpu_host_free . m logits_host )
@@ -1274,6 +1359,7 @@ $ `src/tokenizer.nu`
         : f rbase ? full . m rope_base . m rope_base_swa
 
         // ── attention ──
+        : i _pa ? . m prof_on ( __lm_prof_now m ) 0
         ( lk_rmsnorm . m ks . m xd ( _lm_geti . m attn_norm L ) . m xnd ne . m eps count )
         : b _q1 ( lk_matvec_q . m ks ( _lm_geti . m tq_wq L ) ( _lm_geti . m wq L ) . m xnd . m qd qd_ ne count )
         : b _q2 ( lk_matvec_q . m ks ( _lm_geti . m tq_wk L ) ( _lm_geti . m wk L ) . m xnd . m kd kvdim ne count )
@@ -1317,8 +1403,10 @@ $ `src/tokenizer.nu`
             = abuf . m tn2d
         } {}
         ( lk_addv . m ks . m xd abuf * ne count )
+        ? . m prof_on { = . m prof_attn_ns + . m prof_attn_ns - ( __lm_prof_now m ) _pa } {}
 
         // ── FFN ──
+        : i _pf ? . m prof_on ( __lm_prof_now m ) 0
         ? >= ( _lm_geti . m gate_exps L ) 0 {
             // MoE (llada2): shared expert over the whole batch, then the
             // fp32-sigmoid router picks n_expert_used experts per
@@ -1327,46 +1415,70 @@ $ `src/tokenizer.nu`
             // tensor, exactly the phi3 fused-weight trick — and their
             // weighted down-projections accumulate onto the residual.
             ( lk_rmsnorm . m ks . m xd ( _lm_geti . m ffn_norm L ) . m xnd ne . m eps count )
+            : i _psh ? . m prof_on ( __lm_prof_now m ) 0
             : i shf . m shexp_ff
             : b _s1 ( lk_matvec_q . m ks ( _lm_geti . m tq_gate_shexp L ) ( _lm_geti . m gate_shexp L ) . m xnd . m gd shf ne count )
             : b _s2 ( lk_matvec_q . m ks ( _lm_geti . m tq_up_shexp L ) ( _lm_geti . m up_shexp L ) . m xnd . m ud shf ne count )
             ( lk_silumul . m ks . m gd . m ud * shf count )
             : b _s3 ( lk_matvec_q . m ks ( _lm_geti . m tq_down_shexp L ) ( _lm_geti . m down_shexp L ) . m gd . m tmpd ne shf count )
             ( lk_addv . m ks . m xd . m tmpd * ne count )
-            // router logits for every position, downloaded for the
-            // host-side grouped top-k (256 floats per position)
+            ? . m prof_on { = . m prof_shexp_ns + . m prof_shexp_ns - ( __lm_prof_now m ) _psh } {}
+            // router logits for every position (256 per position)
             : b _s4 ( lk_matvec_q . m ks ( _lm_geti . m tq_gate_inp L ) ( _lm_geti . m gate_inp L ) . m xnd . m rlogitsd . m n_expert ne count )
-            : GpuBuffer rb @ GpuBuffer { . m rlogitsd * * count . m n_expert 4 }
-            : i _d1 ( gpu_download . m router_host rb )
             : i gt_g ( _lm_geti . m tq_gate_exps L )
             : i gt_u ( _lm_geti . m tq_up_exps L )
             : i gt_d ( _lm_geti . m tq_down_exps L )
-            : i stride_g * . m moe_ff ( __lm_row_bytes gt_g ne )
-            : i stride_u * . m moe_ff ( __lm_row_bytes gt_u ne )
-            : i stride_d * ne ( __lm_row_bytes gt_d . m moe_ff )
-            : ~ i b2 0
-            ~ < b2 count {
-                : ( Vec i ) sel ( vec_new [i] )
-                : ( Vec f ) wts ( vec_new [f] )
-                ( __lm_moe_route m L b2 sel wts )
-                : i xrow + . m xnd * * b2 ne 4
-                : i orow + . m xd * * b2 ne 4
-                : ~ i j 0
-                ~ < j ( vec_len [i] sel ) {
-                    : ~ i e2 0
-                    ?? ( vec_get [i] sel j ) { T x → { = e2 x } F → {} }
-                    : ~ f w 0.0
-                    ?? ( vec_get [f] wts j ) { T x → { = w x } F → {} }
-                    : b _e1 ( lk_matvec_q . m ks gt_g + ( _lm_geti . m gate_exps L ) * e2 stride_g xrow . m gd . m moe_ff ne 1 )
-                    : b _e2 ( lk_matvec_q . m ks gt_u + ( _lm_geti . m up_exps L ) * e2 stride_u xrow . m ud . m moe_ff ne 1 )
-                    ( lk_silumul . m ks . m gd . m ud . m moe_ff )
-                    : b _e3 ( lk_matvec_q . m ks gt_d + ( _lm_geti . m down_exps L ) * e2 stride_d . m gd . m moe_outd ne . m moe_ff 1 )
-                    ( lk_axpy . m ks orow . m moe_outd w ne )
-                    = j + j 1
+            : i K . m n_expert_used
+            ? & ( lk_experts_supported . m ks gt_g ) & ( lk_experts_supported . m ks gt_u ) ( lk_experts_supported . m ks gt_d ) {
+                // ── fully on-device path ──────────────────────────────
+                // The router runs on the GPU (one thread per position,
+                // writing the assignment table straight to device memory),
+                // then the whole layer's expert FFN is five launches:
+                // batched gate, batched up, silu, batched down, scatter.
+                // Nothing crosses to the host — the CPU only launches.
+                : i nasn * count K
+                : i biasoff + . m bias_all * * L . m n_expert 4
+                ( lk_moe_route . m ks . m rlogitsd biasoff . m moe_expid . m moe_wts
+                . m n_expert . m n_group . m n_group_used K . m route_scale ? . m weights_norm 1 0 count )
+                // gate/up read x by POSITION (xk = K); down reads the
+                // per-assignment hidden (xk = 1)
+                : b _b1 ( lk_matvec_experts . m ks gt_g ( _lm_geti . m gate_exps L ) . m xnd . m moe_gate . m moe_expid . m moe_ff ne K nasn )
+                : b _b2 ( lk_matvec_experts . m ks gt_u ( _lm_geti . m up_exps L ) . m xnd . m moe_up . m moe_expid . m moe_ff ne K nasn )
+                ( lk_silumul . m ks . m moe_gate . m moe_up * nasn . m moe_ff )
+                : b _b3 ( lk_matvec_experts . m ks gt_d ( _lm_geti . m down_exps L ) . m moe_gate . m moe_downb . m moe_expid ne . m moe_ff 1 nasn )
+                ( lk_moe_scatter . m ks . m moe_downb . m moe_wts . m xd K ne count )
+            } {
+                // ── fallback: host routing + per-(position, expert)
+                // launches (any weight type without a batched kernel) ──
+                : GpuBuffer rb @ GpuBuffer { . m rlogitsd * * count . m n_expert 4 }
+                : i _d1 ( gpu_download . m router_host rb )
+                : i stride_g * . m moe_ff ( __lm_row_bytes gt_g ne )
+                : i stride_u * . m moe_ff ( __lm_row_bytes gt_u ne )
+                : i stride_d * ne ( __lm_row_bytes gt_d . m moe_ff )
+                : ~ i b2 0
+                ~ < b2 count {
+                    : ( Vec i ) sel ( vec_new [i] )
+                    : ( Vec f ) wts ( vec_new [f] )
+                    ( __lm_moe_route m L b2 sel wts )
+                    : i xrow + . m xnd * * b2 ne 4
+                    : i orow + . m xd * * b2 ne 4
+                    : ~ i j 0
+                    ~ < j ( vec_len [i] sel ) {
+                        : ~ i e2 0
+                        ?? ( vec_get [i] sel j ) { T x → { = e2 x } F → {} }
+                        : ~ f w 0.0
+                        ?? ( vec_get [f] wts j ) { T x → { = w x } F → {} }
+                        : b _e1 ( lk_matvec_q . m ks gt_g + ( _lm_geti . m gate_exps L ) * e2 stride_g xrow . m gd . m moe_ff ne 1 )
+                        : b _e2 ( lk_matvec_q . m ks gt_u + ( _lm_geti . m up_exps L ) * e2 stride_u xrow . m ud . m moe_ff ne 1 )
+                        ( lk_silumul . m ks . m gd . m ud . m moe_ff )
+                        : b _e3 ( lk_matvec_q . m ks gt_d + ( _lm_geti . m down_exps L ) * e2 stride_d . m gd . m moe_outd ne . m moe_ff 1 )
+                        ( lk_axpy . m ks orow . m moe_outd w ne )
+                        = j + j 1
+                    }
+                    ( vec_free [i] sel )
+                    ( vec_free [f] wts )
+                    = b2 + b2 1
                 }
-                ( vec_free [i] sel )
-                ( vec_free [f] wts )
-                = b2 + b2 1
             }
         } {
             // dense FFN (SwiGLU for llama/qwen2/llada2 layer 0, GeGLU for gemma)
@@ -1385,6 +1497,11 @@ $ `src/tokenizer.nu`
             } {}
             ( lk_addv . m ks . m xd fbuf * ne count )
         }
+        ? . m prof_on {
+            ? >= ( _lm_geti . m gate_exps L ) 0
+            { = . m prof_moe_ns + . m prof_moe_ns - ( __lm_prof_now m ) _pf }
+            { = . m prof_dense_ns + . m prof_dense_ns - ( __lm_prof_now m ) _pf }
+        } {}
         = L + L 1
     }
 
@@ -1403,6 +1520,29 @@ $ `src/tokenizer.nu`
         : GpuBuffer lb2 @ GpuBuffer { . m logitsd * * count . m n_vocab 4 }
         : i _u3 ( gpu_download . m logits_host lb2 )
     } {}
+    // mode 3: greedy argmax + confidence on the DEVICE for every window
+    // position, so only count·(id,prob) come back — not count·vocab.
+    ? == logits_mode 3 {
+        ( lk_rmsnorm . m ks . m xd . m out_norm . m xnd ne . m eps count )
+        : b _q10 ( lk_matvec_q . m ks . m tq_output . m w_output . m xnd . m logitsd . m n_vocab ne count )
+        ( lk_argmax_conf . m ks . m logitsd . m amid_d . m amprob_d . m n_vocab count )
+        : GpuBuffer ib @ GpuBuffer { . m amid_d * count 4 }
+        : i _u4 ( gpu_download . m amid_h ib )
+        : GpuBuffer pb @ GpuBuffer { . m amprob_d * count 4 }
+        : i _u5 ( gpu_download . m amprob_h pb )
+    } {}
+}
+
+// After a mode-3 (greedy) window eval: the argmax token id and its
+// softmax probability for window row `row`.
+@ llm_win_id * Llm m i row → i { ^ # i ( gpu_host_get_i32 . m amid_h row ) }
+
+@ llm_win_prob * Llm m i row → f { ^ ( gpu_host_get_f32 . m amprob_h row ) }
+
+// Greedy window eval: run the forward and reduce to (id, prob) per
+// position on the device (no full-vocab download).
+@ llm_win_greedy * Llm m ( Vec i ) ids i first i count i pos0 i kvlen → v {
+    ( __lm_eval_core m ids first count pos0 kvlen F 3 )
 }
 
 // Logit `idx` of window row `row` after an all-positions eval

@@ -48,6 +48,11 @@ $ `deps/gpu/src/gpu.nu`
     GpuKernel addrow
     GpuKernel copyat
     GpuKernel axpy
+    GpuKernel mv_exp_f32
+    GpuKernel mv_exp_q8_0
+    GpuKernel moe_scatter
+    GpuKernel moe_route
+    GpuKernel argmax_conf
     b ok
 }
 
@@ -258,6 +263,175 @@ $ `deps/gpu/src/gpu.nu`
     ^ `extern "C" __global__ void axpy(float* y, const float* x, float a, int n) {
         int i = blockIdx.x*blockDim.x + threadIdx.x;
         if (i < n) y[i] += a * x[i];
+    }`
+}
+
+// ── Batched Mixture-of-Experts matvecs ──────────────────────────────
+//
+// The MoE FFN used to launch one batch-1 matvec per (position, expert)
+// — 32 positions × 8 experts × 3 projections × 19 layers ≈ 24 000 tiny
+// kernels per forward, each too small to use the GPU, with the CPU
+// pegged issuing them. These kernels do the whole layer's expert work
+// in ONE launch per projection instead: output row `a` (an assignment,
+// there are n_assign = count·K of them) uses expert `expid[a]`'s weights
+// and reads its input from row `a / xk` of x — xk = K for the gate/up
+// projections (whose input is the per-POSITION activation) and xk = 1
+// for the down projection (whose input is the per-ASSIGNMENT hidden).
+// The 3D expert tensor is expert-major, so expert e's row r is the flat
+// weight row (e·rows + r). Portable: no atomics, no __shared__.
+
+@ __lk_mv_exp_f32 → s {
+    ^ `extern "C" __global__ void mv_exp_f32(
+        const float* __restrict__ W, const float* __restrict__ x, float* __restrict__ y,
+        const int* __restrict__ expid, int rows, int cols, int xk, int n_assign) {
+        int idx = blockIdx.x*blockDim.x + threadIdx.x;
+        if (idx >= rows*n_assign) return;
+        int a = idx / rows, r = idx % rows;
+        int e = expid[a];
+        const float* w = W + (long long)(e*rows + r)*cols;
+        const float* xb = x + (long long)(a/xk)*cols;
+        float acc = 0.f;
+        for (int c = 0; c < cols; ++c) acc += w[c]*xb[c];
+        y[(long long)a*rows + r] = acc;
+    }`
+}
+
+@ __lk_mv_exp_q8_0 → s {
+    ^ ( nurl_str_cat ( __lk_f16_dev ) `extern "C" __global__ void mv_exp_q8_0(
+        const unsigned char* __restrict__ W, const float* __restrict__ x, float* __restrict__ y,
+        const int* __restrict__ expid, int rows, int cols, int xk, int n_assign) {
+        int idx = blockIdx.x*blockDim.x + threadIdx.x;
+        if (idx >= rows*n_assign) return;
+        int a = idx / rows, r = idx % rows;
+        int e = expid[a];
+        int nb = cols / 32;
+        const unsigned char* w = W + (long long)(e*rows + r) * nb * 34;
+        const float* xrow = x + (long long)(a/xk)*cols;
+        float acc = 0.f;
+        for (int blk = 0; blk < nb; ++blk) {
+            const unsigned char* bp = w + blk*34;
+            float d = nl_f16(bp);
+            const signed char* q = (const signed char*)(bp + 2);
+            const float* xb = xrow + blk*32;
+            float sub = 0.f;
+            for (int j = 0; j < 32; ++j) sub += (float)q[j] * xb[j];
+            acc += d * sub;
+        }
+        y[(long long)a*rows + r] = acc;
+    }` )
+}
+
+// On-device MoE router: one thread per position. Computes the sigmoid
+// gating scores, applies the selection-only expert bias, runs the
+// group-limited top-k (the best `topk_group` groups by their top-2 biased
+// sums, then the best `n_used` experts inside them), and writes the
+// assignment table — expid[pos*n_used + j] and its weight (the UNBIASED
+// score, normalised and scaled) — straight to device memory. This
+// replaces the per-position host routing + the router-logits download:
+// the whole MoE stays on the GPU. Fixed local arrays bound n_expert≤256,
+// n_group≤64, n_used≤32 (the LLaDA2 shapes: 256 / 8 / 8).
+@ __lk_moe_route → s {
+    ^ `extern "C" __global__ void moe_route(
+        const float* __restrict__ logits, const float* __restrict__ bias,
+        int* __restrict__ expid, float* __restrict__ wts,
+        int n_expert, int n_group, int topk_group, int n_used, float scale, int norm, int count) {
+        int pos = blockIdx.x*blockDim.x + threadIdx.x;
+        if (pos >= count) return;
+        const float* lg = logits + (long long)pos*n_expert;
+        float sc[256];
+        float bs[256];
+        for (int e = 0; e < n_expert; ++e) {
+            float s = 1.f/(1.f+expf(-lg[e]));
+            sc[e] = s; bs[e] = s + bias[e];
+        }
+        int per = (n_group > 0) ? n_expert / n_group : n_expert;
+        unsigned char allowed[256];
+        if (n_group > 1) {
+            float gsc[64];
+            for (int g = 0; g < n_group; ++g) {
+                float m1 = -1e30f, m2 = -1e30f;
+                for (int k = 0; k < per; ++k) {
+                    float v = bs[g*per + k];
+                    if (v > m1) { m2 = m1; m1 = v; } else if (v > m2) m2 = v;
+                }
+                gsc[g] = m1 + m2;
+            }
+            unsigned char gkeep[64];
+            for (int g = 0; g < n_group; ++g) gkeep[g] = 0;
+            for (int r = 0; r < topk_group; ++r) {
+                int best = -1; float bv = -1e30f;
+                for (int g = 0; g < n_group; ++g)
+                    if (!gkeep[g] && gsc[g] > bv) { bv = gsc[g]; best = g; }
+                if (best >= 0) gkeep[best] = 1;
+            }
+            for (int e = 0; e < n_expert; ++e) allowed[e] = gkeep[e/per];
+        } else {
+            for (int e = 0; e < n_expert; ++e) allowed[e] = 1;
+        }
+        int chosen[32];
+        for (int r = 0; r < n_used; ++r) {
+            int best = -1; float bv = -1e30f;
+            for (int e = 0; e < n_expert; ++e) {
+                if (!allowed[e]) continue;
+                unsigned char taken = 0;
+                for (int t = 0; t < r; ++t) if (chosen[t] == e) { taken = 1; break; }
+                if (taken) continue;
+                if (bs[e] > bv) { bv = bs[e]; best = e; }
+            }
+            chosen[r] = best;
+        }
+        float wsum = 0.f;
+        for (int r = 0; r < n_used; ++r) if (chosen[r] >= 0) wsum += sc[chosen[r]];
+        for (int r = 0; r < n_used; ++r) {
+            int e = chosen[r];
+            float w = (e >= 0) ? sc[e] : 0.f;
+            if (norm) w = w / (wsum + 1e-20f);
+            w *= scale;
+            expid[(long long)pos*n_used + r] = (e >= 0) ? e : 0;
+            wts[(long long)pos*n_used + r] = w;
+        }
+    }`
+}
+
+// Greedy argmax + confidence, on device: one thread per window position
+// scans the vocab once, and writes the argmax token id and its softmax
+// probability (1 / Σ exp(logit − max)). This replaces downloading the
+// whole logit matrix (vocab × positions) and running the softmax on the
+// host every denoise step — the diffusion decode's real hot spot. Only
+// count·2 small values come back instead of count·vocab.
+@ __lk_argmax_conf → s {
+    ^ `extern "C" __global__ void argmax_conf(
+        const float* __restrict__ logits, int* __restrict__ out_id, float* __restrict__ out_prob,
+        int vocab, int count) {
+        int pos = blockIdx.x*blockDim.x + threadIdx.x;
+        if (pos >= count) return;
+        const float* lg = logits + (long long)pos*vocab;
+        float mx = -1e30f; int arg = 0;
+        for (int v = 0; v < vocab; ++v) { float x = lg[v]; if (x > mx) { mx = x; arg = v; } }
+        float sum = 0.f;
+        for (int v = 0; v < vocab; ++v) sum += expf(lg[v] - mx);
+        out_id[pos] = arg;
+        out_prob[pos] = 1.f / sum;
+    }`
+}
+
+// Scatter-accumulate the experts' down-projections onto the residual:
+// for each (position, dim), out[pos*dim + d] += Σ_j wts[pos*K+j] ·
+// down[(pos*K+j)*dim + d]. One thread per (pos, dim); the K assignments
+// of a position are contiguous, so no atomics are needed.
+@ __lk_moe_scatter → s {
+    ^ `extern "C" __global__ void moe_scatter(
+        const float* __restrict__ down, const float* __restrict__ wts, float* __restrict__ out,
+        int K, int dim, int count) {
+        int idx = blockIdx.x*blockDim.x + threadIdx.x;
+        if (idx >= count*dim) return;
+        int pos = idx / dim, d = idx % dim;
+        float acc = 0.f;
+        for (int j = 0; j < K; ++j) {
+            int a = pos*K + j;
+            acc += wts[a] * down[(long long)a*dim + d];
+        }
+        out[(long long)pos*dim + d] += acc;
     }`
 }
 
@@ -907,6 +1081,11 @@ $ `deps/gpu/src/gpu.nu`
     : GpuKernel k6b ( gpu_compile g ( __lk_addrow ) `addrow` )
     : GpuKernel k7 ( gpu_compile g ( __lk_copyat ) `copyat` )
     : GpuKernel k8 ( gpu_compile g ( __lk_axpy ) `axpy` )
+    : GpuKernel me1 ( gpu_compile g ( __lk_mv_exp_f32 ) `mv_exp_f32` )
+    : GpuKernel me2 ( gpu_compile g ( __lk_mv_exp_q8_0 ) `mv_exp_q8_0` )
+    : GpuKernel me3 ( gpu_compile g ( __lk_moe_scatter ) `moe_scatter` )
+    : GpuKernel me4 ( gpu_compile g ( __lk_moe_route ) `moe_route` )
+    : GpuKernel me5 ( gpu_compile g ( __lk_argmax_conf ) `argmax_conf` )
     : GpuKernel q1 ( gpu_compile g ( __lk_mv_q4_0 ) `mv_q4_0` )
     : GpuKernel q2 ( gpu_compile g ( __lk_mv_q8_0 ) `mv_q8_0` )
     : GpuKernel q3 ( gpu_compile g ( __lk_mv_q4_k ) `mv_q4_k` )
@@ -920,7 +1099,8 @@ $ `deps/gpu/src/gpu.nu`
     & & ( gpu_kernel_ok k5 ) ( gpu_kernel_ok k6 ) ( gpu_kernel_ok k7 )
     : b ok1 & & ( gpu_kernel_ok q1 ) ( gpu_kernel_ok q2 )
     & & ( gpu_kernel_ok q3 ) ( gpu_kernel_ok q4 ) ( gpu_kernel_ok q5 )
-    : b ok & & & & & ok0 ( gpu_kernel_ok k3n ) ( gpu_kernel_ok k6b ) ( gpu_kernel_ok k8 )
+    : b okme & & & & ( gpu_kernel_ok me1 ) ( gpu_kernel_ok me2 ) ( gpu_kernel_ok me3 ) ( gpu_kernel_ok me4 ) ( gpu_kernel_ok me5 )
+    : b ok & & & & & & ok0 ( gpu_kernel_ok k3n ) ( gpu_kernel_ok k6b ) ( gpu_kernel_ok k8 ) okme
     & ( gpu_kernel_ok k5g ) ( gpu_kernel_ok k5s ) & ok1 & & ( gpu_kernel_ok q6 ) ( gpu_kernel_ok q7 ) ( gpu_kernel_ok q8 )
     // The warp-per-row matvecs use __shfl_down_sync — CUDA only. On any
     // other backend the portable kernels above stay in charge, and the
@@ -937,7 +1117,7 @@ $ `deps/gpu/src/gpu.nu`
     : b warp & want_warp
     & & & ( gpu_kernel_ok w1 ) ( gpu_kernel_ok w2 ) & ( gpu_kernel_ok w3 ) ( gpu_kernel_ok w4 )
     & & ( gpu_kernel_ok w5 ) ( gpu_kernel_ok w6 ) & ( gpu_kernel_ok w7 ) ( gpu_kernel_ok w8 )
-    ^ @ LlmKernels { k1 q1 q2 q6 q7 q3 q8 q4 q5 w1 w2 w3 w4 w5 w6 w7 w8 warp k2 k3 k3n k4 k4a k4b k5 k5g k5s k6 k6b k7 k8 ok }
+    ^ @ LlmKernels { k1 q1 q2 q6 q7 q3 q8 q4 q5 w1 w2 w3 w4 w5 w6 w7 w8 warp k2 k3 k3n k4 k4a k4b k5 k5g k5s k6 k6b k7 k8 me1 me2 me3 me4 me5 ok }
 }
 
 @ lk_free LlmKernels ks → v {
@@ -973,6 +1153,11 @@ $ `deps/gpu/src/gpu.nu`
     ( gpu_kernel_free . ks addrow )
     ( gpu_kernel_free . ks copyat )
     ( gpu_kernel_free . ks axpy )
+    ( gpu_kernel_free . ks mv_exp_f32 )
+    ( gpu_kernel_free . ks mv_exp_q8_0 )
+    ( gpu_kernel_free . ks moe_scatter )
+    ( gpu_kernel_free . ks moe_route )
+    ( gpu_kernel_free . ks argmax_conf )
 }
 
 // ── launch wrappers (raw device pointers, onnx op idiom) ────────────
@@ -1050,6 +1235,84 @@ $ `deps/gpu/src/gpu.nu`
     ? == which 8 { : i _r ( gpu_launch . ks mv_q5_k grid 64 a ) } {}
     ( vec_free [i] a )
     ^ T
+}
+
+// True when the batched-expert matvec has a kernel for weight type `gt`.
+// Only F32 (0) and Q8_0 (8) so far — the two the converter produces and
+// the reference path uses; other types fall back to the per-position
+// loop in model.nu.
+@ lk_experts_supported LlmKernels ks i gt → b {
+    ^ | == gt 0 == gt 8
+}
+
+// One batched matvec over all n_assign expert assignments. Output row a
+// uses expert expid_dev[a] and input row a/xk of x. Returns F when `gt`
+// has no batched kernel (caller falls back).
+@ lk_matvec_experts LlmKernels ks i gt i wd i xd i yd i expid_dev i rows i cols i xk i n_assign → b {
+    ? | == gt 0 == gt 8 {} { ^ F }
+    : ( Vec i ) a ( vec_new [i] )
+    ( vec_push [i] a ( gpu_arg_i64 wd ) )
+    ( vec_push [i] a ( gpu_arg_i64 xd ) )
+    ( vec_push [i] a ( gpu_arg_i64 yd ) )
+    ( vec_push [i] a ( gpu_arg_i64 expid_dev ) )
+    ( vec_push [i] a ( gpu_arg_i32 rows ) )
+    ( vec_push [i] a ( gpu_arg_i32 cols ) )
+    ( vec_push [i] a ( gpu_arg_i32 xk ) )
+    ( vec_push [i] a ( gpu_arg_i32 n_assign ) )
+    // NOTE: a warp-per-row (coalesced) variant was tried and is SLOWER
+    // for these shapes — the expert rows are short (cols≈2048 → only ~2
+    // q8_0 blocks per lane after the 32-way split), so the shfl reduction
+    // overhead dominates and the full-occupancy scalar kernel wins
+    // (measured: scalar 5.4s vs warp 6.7s over the llada2.1-mini decode).
+    : i grid ( gpu_grid * rows n_assign 64 )
+    ? == gt 0 { : i _r ( gpu_launch . ks mv_exp_f32 grid 64 a ) } {}
+    ? == gt 8 { : i _r ( gpu_launch . ks mv_exp_q8_0 grid 64 a ) } {}
+    ( vec_free [i] a )
+    ^ T
+}
+
+// On-device routing: fills expid_dev / wts_dev [count·n_used] from the
+// router logits and the expert bias. One thread per position.
+@ lk_moe_route LlmKernels ks i logitsd i biasd i expid_dev i wts_dev i n_expert i n_group i topk_group i n_used f scale i norm i count → v {
+    : ( Vec i ) a ( vec_new [i] )
+    ( vec_push [i] a ( gpu_arg_i64 logitsd ) )
+    ( vec_push [i] a ( gpu_arg_i64 biasd ) )
+    ( vec_push [i] a ( gpu_arg_i64 expid_dev ) )
+    ( vec_push [i] a ( gpu_arg_i64 wts_dev ) )
+    ( vec_push [i] a ( gpu_arg_i32 n_expert ) )
+    ( vec_push [i] a ( gpu_arg_i32 n_group ) )
+    ( vec_push [i] a ( gpu_arg_i32 topk_group ) )
+    ( vec_push [i] a ( gpu_arg_i32 n_used ) )
+    ( vec_push [i] a ( gpu_arg_f32 scale ) )
+    ( vec_push [i] a ( gpu_arg_i32 norm ) )
+    ( vec_push [i] a ( gpu_arg_i32 count ) )
+    : i _r ( gpu_launch . ks moe_route ( gpu_grid count 64 ) 64 a )
+    ( vec_free [i] a )
+}
+
+// Greedy argmax + softmax-prob per position, on device.
+@ lk_argmax_conf LlmKernels ks i logitsd i outid i outprob i vocab i count → v {
+    : ( Vec i ) a ( vec_new [i] )
+    ( vec_push [i] a ( gpu_arg_i64 logitsd ) )
+    ( vec_push [i] a ( gpu_arg_i64 outid ) )
+    ( vec_push [i] a ( gpu_arg_i64 outprob ) )
+    ( vec_push [i] a ( gpu_arg_i32 vocab ) )
+    ( vec_push [i] a ( gpu_arg_i32 count ) )
+    : i _r ( gpu_launch . ks argmax_conf ( gpu_grid count 64 ) 64 a )
+    ( vec_free [i] a )
+}
+
+// out[pos] += Σ_j wts[pos*K+j] · down[(pos*K+j)] over `dim` floats.
+@ lk_moe_scatter LlmKernels ks i downd i wtsd i outd i K i dim i count → v {
+    : ( Vec i ) a ( vec_new [i] )
+    ( vec_push [i] a ( gpu_arg_i64 downd ) )
+    ( vec_push [i] a ( gpu_arg_i64 wtsd ) )
+    ( vec_push [i] a ( gpu_arg_i64 outd ) )
+    ( vec_push [i] a ( gpu_arg_i32 K ) )
+    ( vec_push [i] a ( gpu_arg_i32 dim ) )
+    ( vec_push [i] a ( gpu_arg_i32 count ) )
+    : i _r ( gpu_launch . ks moe_scatter ( gpu_grid * count dim 64 ) 64 a )
+    ( vec_free [i] a )
 }
 
 @ lk_rmsnorm LlmKernels ks i xd i wd i yd i n f eps i batch → v {
