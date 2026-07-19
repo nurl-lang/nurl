@@ -831,7 +831,9 @@ $ `deps/safetensor/src/safetensor.nu`
     ( gws_kv_u32 sw `llada2.expert_gating_func` 2 )
     ? > . c n_group 0 { ( gws_kv_u32 sw `llada2.expert_group_count` . c n_group ) } {}
     ? > . c topk_group 0 { ( gws_kv_u32 sw `llada2.expert_group_used_count` . c topk_group ) } {}
+    ( gws_kv_str sw `llada2.rope.scaling.type` `none` )
     ( gws_kv_bool sw `diffusion.shift_logits` F )
+    ( gws_kv_bool sw `diffusion.eos_early_stop` T )
 
     ( gws_kv_str sw `tokenizer.ggml.model` `gpt2` )
     ( gws_kv_str sw `tokenizer.ggml.pre` `bailingmoe2` )
