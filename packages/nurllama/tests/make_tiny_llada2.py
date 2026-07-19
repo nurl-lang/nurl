@@ -12,12 +12,17 @@
 #  can compare the converted GGUF against the same values.
 # ============================================================
 import json
+import shutil
 import struct
 import sys
 
 import numpy as np
 
 OUT = sys.argv[1]
+# Optional: build the checkpoint around a REAL tokenizer (dir holding
+# tokenizer.json + tokenizer_config.json) — vocab_size follows it. Used
+# by the HF-parity tokenizer test; weights stay tiny either way.
+TOK_DIR = sys.argv[2] if len(sys.argv) > 2 else None
 
 # tiny llada2_moe: layer 0 dense, layer 1 MoE
 CFG = {
@@ -47,6 +52,19 @@ CFG = {
     "pad_token_id": 296,
     "tie_word_embeddings": False,
 }
+
+if TOK_DIR:
+    tj = json.load(open(f"{TOK_DIR}/tokenizer.json"))
+    max_id = max(
+        max(tj["model"]["vocab"].values()),
+        max((a["id"] for a in tj.get("added_tokens", [])), default=0),
+    )
+    tc = json.load(open(f"{TOK_DIR}/tokenizer_config.json"))
+    eos = tc.get("eos_token")
+    eos_id = next((a["id"] for a in tj.get("added_tokens", []) if a["content"] == eos), None)
+    CFG["vocab_size"] = max_id + 1 + 31  # pad like the real config does
+    if eos_id is not None:
+        CFG["pad_token_id"] = eos_id
 
 H = CFG["hidden_size"]
 NH = CFG["num_attention_heads"]
@@ -139,6 +157,14 @@ write_shard(f"{OUT}/model-00001-of-00002.safetensors", names[half:], bf16_names)
 
 with open(f"{OUT}/config.json", "w") as f:
     json.dump(CFG, f, indent=1)
+
+if TOK_DIR:
+    shutil.copy(f"{TOK_DIR}/tokenizer.json", f"{OUT}/tokenizer.json")
+    shutil.copy(f"{TOK_DIR}/tokenizer_config.json", f"{OUT}/tokenizer_config.json")
+    for n in names:
+        print("TENSOR", n, ",".join(str(x) for x in tensors[n].shape))
+    np.save(f"{OUT}/source_tensors.npy", tensors, allow_pickle=True)
+    sys.exit(0)
 
 # ── a miniature byte-level BPE tokenizer.json ──
 # base vocab: the 256 byte-level unicode remap chars would be the real
