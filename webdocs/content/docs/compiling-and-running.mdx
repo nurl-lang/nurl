@@ -14,8 +14,8 @@ hello.ll → (clang)  → hello      (native binary for your machine)
 ```
 
 `nurlc` (the NURL compiler) never touches your CPU's instruction set
-directly, it emits LLVM IR and hands it to
-`clang` to turn into a real binary. This is the
+directly. It emits LLVM IR and hands that to
+`clang`, which turns it into a real binary. This is the
 same backend Rust and Swift use.
 
 ## Script compiling
@@ -34,17 +34,17 @@ Useful flags (put them *before* the source file):
 |---|---|
 | `-O0` … `-O3` | Optimization level passed to `clang` (default `-O2`) |
 | `-g`, `--debug` | Include debug info |
-| `--emit-ir` | Stop after stage 1 — just produce the `.ll` file, don't link |
+| `--emit-ir` | Stop after stage 1 — just produce the `.ll` file, do not link |
 | `--emit-asm` | Emit native assembly (`.s`), skip linking |
 
 <Accordions>
   <Accordion title="Why does -O0 matter for debugging?">
-    At the default `-O2`, `clang` inlines and reorders code aggressively
-    enough that a debugger's "break at this source line" can become
-    unreliable — the line may not correspond to a single instruction
-    anymore. `-O0` keeps the generated code close to the source structure,
-    which is what you want while stepping through a bug, at the cost of a
-    slower binary. Reach for `-O2`/`-O3` again once you're past debugging.
+    At the default `-O2`, `clang` inlines and reorders code aggressively.
+    A debugger's "break at this source line" can become unreliable, because
+    the line may not correspond to a single instruction anymore. `-O0` keeps
+    the generated code close to the source structure, which is what you want
+    while stepping through a bug, at the cost of a slower binary. Reach for
+    `-O2`/`-O3` again once you are past debugging.
   </Accordion>
 </Accordions>
 
@@ -70,4 +70,4 @@ The prebuilt `curl | sh` installer gives you `nurlc`, `nurlpkg`, and
 See the [online playground](https://play.nurl-lang.org/)
 to try NURL in the browser without installing anything, and
 [`docs/PLATFORMS.md`](https://github.com/nurl-lang/nurl/blob/main/docs/PLATFORMS.md)
-for the full target list once you're ready to cross-compile.
+for the full target list once you are ready to cross-compile.
