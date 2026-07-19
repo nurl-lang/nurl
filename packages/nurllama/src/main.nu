@@ -44,6 +44,7 @@ $ `src/store.nu`
 $ `src/pull.nu`
 $ `src/chat.nu`
 $ `src/api.nu`
+$ `src/convert.nu`
 $ `stdlib/std/term.nu`
 
 @ __nl_err String e → i {
@@ -551,6 +552,7 @@ $ `stdlib/std/term.nu`
     ( args_opt p `seed` 0 `N` `run: RNG seed (default 42)` )
     ( args_opt p `ctx` 0 `N` `run: context length cap (default: model's)` )
     ( args_opt p `name` 0 `NAME` `pull: store under this name` )
+    ( args_opt p `type` 0 `T` `convert: output tensor type — q8_0 (default), f16, bf16, f32` )
     ( args_opt p `host` 0 `ADDR` `serve: bind address (default 127.0.0.1)` )
     ( args_opt p `port` 0 `N` `serve: port (default 11434, ollama's)` )
     ? ( args_parse_argv p ) {} {
@@ -561,7 +563,7 @@ $ `stdlib/std/term.nu`
     ? ( args_present p `help` ) {
         : String u ( args_usage p )
         ( nurl_print ( string_data u ) )
-        ( nurl_print `\ncommands:\n  pull <hf.co/ORG/REPO/FILE.gguf | url> [--name N] · list · rm <name> · verify <name>\n  serve [--host H] [--port N] · chat <model|name>\n  run <model|name> <prompt> [-n N] [--temp F] [--topk N] [--topp F] [--seed N]\n  logits <model> <prompt> · tokenize <model> <text>\n  detok <model> <id> [id …] · vocab <model> [n] · selftest\n` )
+        ( nurl_print `\ncommands:\n  pull <hf.co/ORG/REPO/FILE.gguf | url> [--name N] · list · rm <name> · verify <name>\n  serve [--host H] [--port N] · chat <model|name>\n  run <model|name> <prompt> [-n N] [--temp F] [--topk N] [--topp F] [--seed N]\n  logits <model> <prompt> · tokenize <model> <text>\n  detok <model> <id> [id …] · vocab <model> [n] · selftest\n  convert <hf-dir> <out.gguf> [--type q8_0|f16|bf16|f32]\n` )
         ( string_free u )
         ( args_free p )
         ^ 0
@@ -633,6 +635,28 @@ $ `stdlib/std/term.nu`
         : i rc ( api_serve root ( string_data host ) port )
         ( string_free host )
         ( string_free root )
+        ( args_free p )
+        ^ rc
+    } {}
+
+    ? ( nurl_str_eq cmd `convert` ) {
+        ? < ( args_positional_count p ) 3 {
+            ( args_free p )
+            ^ ( __nl_err ( string_from `nurllama: convert needs <hf-dir> <out.gguf> [--type q8_0|f16|bf16|f32]` ) )
+        } {}
+        : ~ s hfdir ``
+        : ~ s outp ``
+        ?? ( vec_get [String] pos 1 ) {
+            T c → { = hfdir ( string_data c ) }
+            F → {}
+        }
+        ?? ( vec_get [String] pos 2 ) {
+            T c → { = outp ( string_data c ) }
+            F → {}
+        }
+        : String ot ( args_value_or p `type` `q8_0` )
+        : i rc ( nurllama_convert hfdir outp ( string_data ot ) )
+        ( string_free ot )
         ( args_free p )
         ^ rc
     } {}
