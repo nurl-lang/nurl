@@ -737,6 +737,60 @@ $ `stdlib/std/term.nu`
         ^ rc
     } {}
 
+    // Hidden diffusion tap: evaluate the given ids as ONE bidirectional
+    // window (positions 0.., kvlen = n) and print every position's full
+    // logit row — the seam the numpy oracle test compares against.
+    ? ( nurl_str_eq cmd `dlogits` ) {
+        : ~ s mparg ``
+        ?? ( vec_get [String] pos 1 ) {
+            T c → { = mparg ( string_data c ) }
+            F → {}
+        }
+        ?? ( llm_open mparg 0 ) {
+            T mm → {
+                : ( Vec i ) dids ( vec_new [i] )
+                : ~ i ai 2
+                ~ < ai ( args_positional_count p ) {
+                    ?? ( vec_get [String] pos ai ) {
+                        T c → { ( vec_push [i] dids ( nurl_str_to_int ( string_data c ) ) ) }
+                        F → {}
+                    }
+                    = ai + ai 1
+                }
+                : i nd ( vec_len [i] dids )
+                ? | < nd 1 > nd ( llm_chunk ) {
+                    ( vec_free [i] dids )
+                    ( llm_close mm )
+                    ( args_free p )
+                    ^ ( __nl_err ( string_from `nurllama: dlogits needs 1..64 token ids` ) )
+                } {}
+                ( llm_eval_win mm dids 0 nd 0 nd T )
+                : ~ i r 0
+                ~ < r nd {
+                    : String line ( string_new )
+                    : ~ i v2 0
+                    ~ < v2 ( llm_n_vocab mm ) {
+                        ? > v2 0 { ( string_push_char line 32 ) } {}
+                        ( string_push_float line ( llm_logit_at mm r v2 ) )
+                        = v2 + v2 1
+                    }
+                    ( string_push_char line 10 )
+                    ( nurl_print ( string_data line ) )
+                    ( string_free line )
+                    = r + r 1
+                }
+                ( vec_free [i] dids )
+                ( llm_close mm )
+            }
+            F e → {
+                ( args_free p )
+                ^ ( __nl_err e )
+            }
+        }
+        ( args_free p )
+        ^ 0
+    } {}
+
     ? | ( nurl_str_eq cmd `run` ) ( nurl_str_eq cmd `logits` ) {
         : ~ s mparg ``
         ?? ( vec_get [String] pos 1 ) {
