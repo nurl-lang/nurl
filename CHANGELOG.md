@@ -8,8 +8,110 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.21.0] — 2026-07-19
+
+The **diffusion** release: `nurllama` grows a whole non-autoregressive
+decode and serves LLaDA2.x — a 16B-A1B Mixture-of-Experts diffusion
+language model that converts from its Hugging Face checkpoint and answers
+its own model-card example correctly through the CLI, chat and the ollama
+API — on the back of a new streaming GGUF writer that converts a model
+larger than RAM at constant memory. The toolchain itself ships four
+owned-slice memory-safety fixes across control flow and a new invalid-IR
+diagnostic, so auto-drop is now correct through `?`/`??` arms,
+reassignments and moves. Plus the ecosystem's first *trainable* package
+(`mlp`), an autoencoder anomaly detector, and the distributed compute
+layer's data + iterate + failover + shuffle primitives (`swarm-mcp`
+0.10 – 0.14).
+
+### Added
+
+- **Diffusion language models — `nurllama` serves LLaDA2.x (`nurllama` 0.9.0).**
+  The engine grows a whole non-autoregressive decode: the `llada2`
+  architecture (a 16B-A1B Mixture-of-Experts diffusion LM) converts from its
+  Hugging Face checkpoint and answers the model card's own example correctly
+  through the CLI, chat and the ollama API.
+  - **`nurllama convert <hf-dir> <out.gguf> [--type q8_0|f16|bf16|f32]`** turns
+    a `llada2_moe` checkpoint (config.json + tokenizer.json + safetensors
+    shards) into a GGUF following llama.cpp's `llada2` conventions — fused
+    `attn_qkv` left unpermuted, the 256 per-expert tensors fused into one 3D
+    `ffn_*_exps` per projection, an F32 router and `exp_probs_b`,
+    `tokenizer.ggml.pre = bailingmoe2` — cross-checked key-for-key and
+    shape-for-shape against the community LLaDA2.0 GGUF (interop both ways).
+    The conversion **streams**: a 30 GB checkpoint converts to a 17 GB Q8_0
+    GGUF in ~2½ min at constant memory, on a machine smaller than the model.
+  - The `llada2` forward pass: **bidirectional** attention (a new `causal`
+    flag in the attention kernels), a Mixture-of-Experts FFN (an fp32 sigmoid
+    router with a selection-only bias and group-limited top-k picking 8 of 256
+    experts, evaluated as row ranges inside the still-quantised fused tensors,
+    plus an always-on shared expert), partial NEOX rotary, and per-head Q/K
+    norms.
+  - The **block-diffusion decode** (`src/diffuse.nu`): the LLaDA2.1
+    "JointThreshold + editing" loop — parallel commits above a confidence
+    threshold, revision of already-committed tokens, post-resolution passes,
+    EOS early stop — with completed blocks **freezing** their K/V so a step
+    costs O(window) where the reference recomputes the whole prefix.
+  - The **bailingmoe2** tokenizer pre-split (Ling 2.0 / LLaDA2), proven
+    token-for-token equal to Hugging Face `tokenizers` on a multilingual
+    battery, and the **Bailing** chat dialect
+    (`<role>HUMAN</role>…<|role_end|>`) detected from the model's own template.
+- **`gguf` 0.3.0 — a streaming writer and quantisation encoders.** The `gws_*`
+  streaming writer declares every metadata key and tensor shape up front, then
+  streams payloads to disk in chunks — constant memory, so a model conversion
+  larger than RAM just works — and its output is byte-identical to the
+  in-memory writer's. New `gq_f16_encode` / `gq_bf16_encode` / `gq_q8_0_encode`
+  follow ggml's reference quantisers, verified against the dequant oracle.
+  Selftest 40 → 50 checks. (The foundation `nurllama convert` streams through.)
+- **`mlp` 0.1.0 — the ecosystem's first *trainable* neural-network package.**
+  A seedable, deterministic MLP regressor faithful to sklearn's `MLPRegressor`
+  recipe: Glorot-uniform init from `std/rng` (a fixed seed gives a
+  bit-identical network on every platform), minibatch Adam with bias
+  correction and L2, per-epoch seeded shuffles, and early stopping on a
+  held-out split that restores the best weights seen. Everything else in the
+  stack (onnx, embed, whisper, nurllama) runs inference; this trains.
+- **`anomaly` 0.4.0 — the autoencoder detector.** An explicitly-trained
+  reconstruction model over the new `mlp` package: a temporary Isolation
+  Forest drops the ring's anomalies first (the AE must learn only normal
+  behaviour), the survivors are MinMax-scaled, and an MLP autoencoder learns
+  to reconstruct them; the threshold is the p95 of the training
+  reconstruction errors. `timevector` also became a real, configurable-size
+  sliding window.
+- **`swarm-mcp` 0.10.0 – 0.14.0 — the distributed data + compute layer.**
+  Content-addressed datasets (BLAKE3-256 1 MiB blocks, verified on arrival)
+  so data moves **once** and is referenced by hash instead of re-shipped in
+  every payload; `compute_iterate`, which runs a whole gradient-descent loop
+  inside the coordinator (a distributed GPU `vecreduce` per round) instead of
+  a round per language-model message; relay **failover** (a list of relays,
+  workers rotate to the next and re-form when one dies — no single point of
+  failure); and `compute_shuffle`, the group-by-key / reduce-by-key primitive,
+  whose per-key reduce now runs distributed on the GPU as a MapReduce combiner
+  rather than on the coordinator.
+
 ### Fixed
 
+- **`nurlc` — owned-slice memory-safety fixes across control flow (four in
+  this family).** A `:` binding whose right-hand side is a `?` ternary
+  (#541), a `??` match, an `=` reassignment or a bare-identifier move (#543),
+  or a `?`/`??` arm whose last statement is an assignment (this release)
+  all mishandled owned-slice ownership — the value flowed a slice buffer
+  through the join without the auto-drop machinery seeing it, leaking the
+  buffer at function exit (and, for reassignment/move, risking a double
+  free). Ownership provenance is now tracked through each of these
+  constructs (`__last_slice_owned__`, reset at every statement boundary),
+  the arm-local fall-through drop fires for void **and plain-scalar** arm
+  values (a scalar is copied through the phi, so freeing arm-local buffers
+  behind it can never dangle), and pointer/slice/aggregate arms stay
+  conservative (leak-not-UAF). LSan-pinned regressions.
+- **`nurlc` — a scalar bound into an aggregate target emitted invalid IR.**
+  `: ?T x ( vec_set … )` (where `vec_set` returns `b`) compiled to
+  `zext i1 … to { i1, %T }` — nurlc accepted it (rc 0) and only clang
+  rejected it, with no source location. The i1-widen path now requires an
+  integer target, and the mismatch dies with the standard
+  no-implicit-conversions message and the binding's source location.
+- **`nurllama` — device out-of-memory is now a loud load error.** A failed
+  `cuMemAlloc` during weight upload used to be silent: the load
+  "succeeded", the affected tensors stayed zero on the device, and the model
+  "ran" — emitting token 0 forever. Every device allocation in the loader
+  now checks for a null pointer and fails the load naming the cause.
 - **`stdlib/net/relay.nu` — a multi-megabyte frame was dropped mid-read on a
   blocking relay client.** `__read_exact` treated a recv **timeout**
   (`SO_RCVTIMEO`, which the relay client sets deliberately) as a connection
@@ -19,6 +121,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   still coming" and is retried (bounded); a timeout with nothing yet read
   still reports "no frame available"; a real close/error still fails.
   New `net_is_timeout` predicate in `stdlib/std/net.nu`.
+
+### Changed
+
+- **CI skips the build + test corpus when only web docs changed** — a docs-only
+  PR no longer waits on the full toolchain build.
+- **Playground native builds link with `-Wl,--as-needed`** — a binary a user
+  downloads from the playground runs without the container's libraries.
 
 
 ## [0.20.0] — 2026-07-18
