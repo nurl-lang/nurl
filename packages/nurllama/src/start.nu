@@ -20,6 +20,7 @@ $ `stdlib/ext/uuid.nu`
 $ `src/config.nu`
 $ `src/store.nu`
 $ `src/api.nu`
+$ `src/convert.nu`
 
 : ModelEntry {
     String value
@@ -82,8 +83,39 @@ $ `src/api.nu`
     } )
 }
 
+// Is `dir` a Hugging Face checkpoint — a directory carrying config.json
+// and at least one *.safetensors? Such a directory is not servable as
+// is (a .safetensors file holds only tensors — no hyperparameters, no
+// tokenizer), but it CAN be converted to a GGUF, which is what the
+// wizard offers. A single loose *.safetensors is deliberately NOT
+// listed: on its own it cannot be loaded.
+@ __st_is_checkpoint s dir → b {
+    : String cfg ( path_join dir `config.json` )
+    : b has_cfg ( file_exists ( string_data cfg ) )
+    ( string_free cfg )
+    ? has_cfg {} { ^ F }
+    : ~ b has_st F
+    ?? ( dir_list dir ) {
+        T names → {
+            : ~ i k 0
+            ~ & ! has_st < k ( vec_len [String] names ) {
+                ?? ( vec_get [String] names k ) {
+                    T nm → { ? != 0 ( nurl_str_ends ( string_data nm ) `.safetensors` ) { = has_st T } {} }
+                    F → {}
+                }
+                = k + k 1
+            }
+            ( vec_free_with [String] names \ String s → v { ( string_free s ) } )
+        }
+        F _ → {}
+    }
+    ^ has_st
+}
+
 // Collect selectable models: every *.gguf in `models_dir` (as a full
-// path) and every pull-store manifest name (resolved at serve time).
+// path), every immediate subdirectory that is a Hugging Face checkpoint
+// (offered for conversion, value prefixed `convert:`), and every
+// pull-store manifest name (resolved at serve time).
 @ __st_collect s models_dir String root → ( Vec ModelEntry ) {
     : ( Vec ModelEntry ) out ( vec_new [ModelEntry] )
     ?? ( dir_list models_dir ) {
@@ -106,7 +138,18 @@ $ `src/api.nu`
                             }
                             ( string_push_str label `)` )
                             ( vec_push [ModelEntry] out @ ModelEntry { full label } )
-                        } {}
+                        } {
+                            // a subdirectory that is an HF checkpoint → convert
+                            : String sub ( path_join models_dir ( string_data nm ) )
+                            ? & ( __st_is_dir ( string_data sub ) ) ( __st_is_checkpoint ( string_data sub ) ) {
+                                : String value ( string_from `convert:` )
+                                ( string_push_str value ( string_data sub ) )
+                                : String label ( string_from ( string_data nm ) )
+                                ( string_push_str label `/   (HF checkpoint → convert to GGUF)` )
+                                ( vec_push [ModelEntry] out @ ModelEntry { value label } )
+                            } {}
+                            ( string_free sub )
+                        }
                     }
                     F → {}
                 }
@@ -153,6 +196,71 @@ $ `src/api.nu`
         ( string_push_str s ` MB` )
     }
     ^ s
+}
+
+// The last path segment of String `p` (its basename), without a
+// trailing '/'. String-in / String-out, so ownership is clean.
+@ __st_basename String p → String {
+    : i n ( string_len p )
+    : ~ i end n
+    ~ & > end 0 == ( nurl_str_get ( string_data p ) - end 1 ) 47 { = end - end 1 }
+    : ~ i start end
+    ~ & > start 0 != ( nurl_str_get ( string_data p ) - start 1 ) 47 { = start - start 1 }
+    ^ ( string_substr p start - end start )
+}
+
+// Convert the HF checkpoint named by a `convert:<dir>` value to a Q8_0
+// GGUF beside it in `models_dir`, and return the GGUF path (empty on
+// failure). An already-converted GGUF is reused after confirmation.
+@ __st_convert_checkpoint s models_dir s value → String {
+    : String valS ( string_from value )
+    : String dirS ( string_substr valS 8 - ( string_len valS ) 8 )
+    ( string_free valS )
+    : s dir ( string_data dirS )
+    : String base ( __st_basename dirS )
+    : String out ( path_join models_dir ( string_data base ) )
+    ( string_push_str out `-q8_0.gguf` )
+    ( string_free base )
+    // result: the servable GGUF path, or "" on decline / failure
+    : ~ String result ( string_new )
+    : ~ b resolved F
+    ? ( file_exists ( string_data out ) ) {
+        : String q ( string_from `Found ` )
+        ( string_push_str q ( string_data out ) )
+        ( string_push_str q ` — reuse it (skip conversion)? [Y/n]: ` )
+        : b reuse ( __st_yesno ( string_data q ) T )
+        ( string_free q )
+        ? reuse {
+            ( string_free result )
+            = result ( string_from ( string_data out ) )
+            = resolved T
+        } {}
+    } {}
+    ? resolved {} {
+        : String q2 ( string_from `\nConvert ` )
+        ( string_push_str q2 dir )
+        ( string_push_str q2 ` to Q8_0 GGUF? This can take a few minutes. [Y/n]: ` )
+        : b go ( __st_yesno ( string_data q2 ) T )
+        ( string_free q2 )
+        ? go {
+            ( nurl_print `\nConverting — see progress below.\n` )
+            : i rc ( nurllama_convert dir ( string_data out ) `q8_0` )
+            ? == rc 0 {
+                : String done ( string_from `Converted → ` )
+                ( string_push_str done ( string_data out ) )
+                ( string_push_char done 10 )
+                ( nurl_print ( string_data done ) )
+                ( string_free done )
+                ( string_free result )
+                = result ( string_from ( string_data out ) )
+            } {
+                ( nurl_eprintln `nurllama: conversion failed — pick another model or convert manually` )
+            }
+        } {}
+    }
+    ( string_free out )
+    ( string_free dirS )
+    ^ result
 }
 
 // Prompt for an integer with a default (bare Enter → def).
@@ -234,6 +342,13 @@ $ `src/api.nu`
         }
     }
     ( __st_free_entries models )
+
+    // 2b. a chosen HF checkpoint is converted to a GGUF here
+    ? != 0 ( nurl_str_starts ( string_data model ) `convert:` ) {
+        : String conv ( __st_convert_checkpoint ( string_data models_dir ) ( string_data model ) )
+        ( string_free model )
+        = model conv
+    } {}
 
     // 3. bind scope
     ( nurl_print `\nNetwork:\n  1) localhost only (127.0.0.1)\n  2) reachable from the network (0.0.0.0)\n` )

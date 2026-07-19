@@ -84,6 +84,30 @@ sys.exit(0 if ok else 1)
 EOF
 [ $? = 0 ] && ok "wizard config values" || bad "wizard config values"
 
+# a bare .safetensors is NOT servable (no metadata/tokenizer), but an HF
+# checkpoint DIRECTORY (config.json + a .safetensors) is offered for
+# conversion. Separate dir + a fresh config so this run stands alone.
+mkdir -p "$WORK/ckpt/some-checkpoint"
+echo '{"model_type":"llada2_moe"}' > "$WORK/ckpt/some-checkpoint/config.json"
+: > "$WORK/ckpt/some-checkpoint/model.safetensors"
+: > "$WORK/ckpt/loose.safetensors"
+: > "$WORK/ckpt/plain.gguf"
+rm -f "$NURLLAMA_HOME/config.json"
+printf '%s\n1\nn\n' "$WORK/ckpt" | timeout 8 "$NL" start > "$WORK/wizard2.out" 2>&1 &
+WPID2=$!
+sleep 4
+kill "$WPID2" 2>/dev/null
+grep -q 'HF checkpoint . convert to GGUF' "$WORK/wizard2.out" \
+    && ok "the wizard lists an HF checkpoint directory for conversion" \
+    || bad "checkpoint listing"
+grep -q 'loose.safetensors' "$WORK/wizard2.out" \
+    && bad "a loose .safetensors must not be listed" \
+    || ok "a loose .safetensors is not offered on its own"
+# restore the config for the next stage
+cat > "$NURLLAMA_HOME/config.json" <<CFG
+{ "model": "$WORK/models/tiny-a.gguf", "host": "127.0.0.1", "port": $PORT, "auth": "open", "token": "", "models_dir": "$WORK/models" }
+CFG
+
 echo "[3/4] start -y reuses the config; server + cookies + auth"
 # rewrite the config to localhost + open + a real-or-dummy model on our test port
 MODEL="${NURLLAMA_LLADA_GGUF:-$WORK/models/tiny-a.gguf}"

@@ -175,6 +175,14 @@ The wizard's answers are written to `$NURLLAMA_HOME/config.json`. A second
 without asking. Everything the wizard asks — model, bind scope, access,
 port — you can also just edit in the JSON.
 
+The model list holds `.gguf` files **and** Hugging Face checkpoint
+*directories* (a folder with `config.json` and `*.safetensors`). A bare
+`.safetensors` file is not listed on its own — it carries only tensors,
+no hyperparameters and no tokenizer, so it cannot be served — but a
+checkpoint directory is offered with `(HF checkpoint → convert to GGUF)`,
+and picking it runs `nurllama convert` (Q8_0) and serves the result. An
+already-converted GGUF beside it is reused after a prompt.
+
 The server it launches is the ollama-compatible API **plus** a
 self-contained web chat UI at `/` (no external requests — it embeds its
 own CSS and JS). A programmatic client that hits `/` still gets the
