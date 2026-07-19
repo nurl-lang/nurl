@@ -18,12 +18,12 @@ const vitePressOptions: UserConfig = {
   lastUpdated: true,
   srcDir: "docs",
   srcExclude: ["localdraft/**"],
-  head: [["link", { rel: "icon", href: "/favicon.svg" }]],
-  title: "NURL Official Documentation",
+  head: [["link", { rel: "icon", href: "/graphics/nurl1c.svg" }]],
+  title: "Official Documentation",
   description:
     "Web documentation for Neural Unified Representation Language aka NURL.",
   themeConfig: {
-    logo: "./favicon.svg",
+    logo: "./graphics/nurlfullc.svg",
     search: {
       provider: "local",
     },
