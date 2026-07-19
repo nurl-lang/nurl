@@ -35,6 +35,7 @@ $ `deps/gguf/src/gguf.nu`
 : i CHAT_CHATML 3
 : i CHAT_GEMMA 4
 : i CHAT_PHI3 5
+: i CHAT_BAILING 6
 
 : ChatMsg {
     String role
@@ -65,6 +66,7 @@ $ `deps/gguf/src/gguf.nu`
         ? >= ( nurl_str_find tpl `[INST]` ) 0 { ^ CHAT_LLAMA2 } {}
         ? >= ( nurl_str_find tpl `<start_of_turn>` ) 0 { ^ CHAT_GEMMA } {}
         ? >= ( nurl_str_find tpl `<|assistant|>` ) 0 { ^ CHAT_PHI3 } {}
+        ? >= ( nurl_str_find tpl `<role>HUMAN</role>` ) 0 { ^ CHAT_BAILING } {}
     } {}
     ^ CHAT_PLAIN
 }
@@ -252,12 +254,65 @@ $ `deps/gguf/src/gguf.nu`
     ^ out
 }
 
+// bailing / Ling 2.0 / LLaDA2: every prompt opens with a SYSTEM turn —
+// the (optional) system message, then the template's own literal
+// `detailed thinking off` switch — and each turn closes with
+// <|role_end|>. The generation prompt is a bare ASSISTANT role tag.
+@ __chat_bailing ( Vec ChatMsg ) msgs → String {
+    : String out ( string_from `<role>SYSTEM</role>` )
+    : ~ i k 0
+    : ~ b first_sys T
+    ~ < k ( vec_len [ChatMsg] msgs ) {
+        ?? ( vec_get [ChatMsg] msgs k ) {
+            T m → {
+                ? & first_sys ( __chat_is m `system` ) {
+                    ( string_push_str out ( __chat_text m ) )
+                    ( string_push_str out `\n` )
+                } {}
+            }
+            F → {}
+        }
+        = first_sys F
+        = k + k 1
+    }
+    ( string_push_str out `detailed thinking off<|role_end|>` )
+    = k 0
+    ~ < k ( vec_len [ChatMsg] msgs ) {
+        ?? ( vec_get [ChatMsg] msgs k ) {
+            T m → {
+                ? ( __chat_is m `user` ) {
+                    ( string_push_str out `<role>HUMAN</role>` )
+                    ( string_push_str out ( __chat_text m ) )
+                    ( string_push_str out `<|role_end|>` )
+                } {}
+                ? ( __chat_is m `assistant` ) {
+                    ( string_push_str out `<role>ASSISTANT</role>` )
+                    ( string_push_str out ( __chat_text m ) )
+                    ( string_push_str out `<|role_end|>` )
+                } {}
+                // messages[0]'s system content is already folded into
+                // the opening SYSTEM turn; a later system turn stands
+                ? & ( __chat_is m `system` ) > k 0 {
+                    ( string_push_str out `<role>SYSTEM</role>` )
+                    ( string_push_str out ( __chat_text m ) )
+                    ( string_push_str out `<|role_end|>` )
+                } {}
+            }
+            F → {}
+        }
+        = k + k 1
+    }
+    ( string_push_str out `<role>ASSISTANT</role>` )
+    ^ out
+}
+
 @ chat_render i style ( Vec ChatMsg ) msgs → String {
     ? == style CHAT_LLAMA3 { ^ ( __chat_llama3 msgs ) } {}
     ? == style CHAT_CHATML { ^ ( __chat_chatml msgs ) } {}
     ? == style CHAT_LLAMA2 { ^ ( __chat_llama2 msgs ) } {}
     ? == style CHAT_GEMMA { ^ ( __chat_gemma msgs ) } {}
     ? == style CHAT_PHI3 { ^ ( __chat_phi3 msgs ) } {}
+    ? == style CHAT_BAILING { ^ ( __chat_bailing msgs ) } {}
     ^ ( __chat_plain msgs )
 }
 
@@ -270,5 +325,6 @@ $ `deps/gguf/src/gguf.nu`
     ? == style CHAT_LLAMA2 { ^ ? >= ( nurl_str_find piece `</s>` ) 0 T F } {}
     ? == style CHAT_GEMMA { ^ ? >= ( nurl_str_find piece `<end_of_turn>` ) 0 T F } {}
     ? == style CHAT_PHI3 { ^ ? >= ( nurl_str_find piece `<|end|>` ) 0 T F } {}
+    ? == style CHAT_BAILING { ^ ? >= ( nurl_str_find piece `<|role_end|>` ) 0 T F } {}
     ^ F
 }

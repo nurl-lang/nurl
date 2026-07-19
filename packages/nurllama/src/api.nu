@@ -32,6 +32,7 @@ $ `deps/http/src/http.nu`
 $ `deps/gguf/src/gguf.nu`
 $ `src/tokenizer.nu`
 $ `src/model.nu`
+$ `src/diffuse.nu`
 $ `src/sample.nu`
 $ `src/chat.nu`
 $ `src/store.nu`
@@ -255,6 +256,47 @@ i npredict f temp i topk f topp i seed → b {
         ^ ( __api_error_chunked c 400 `prompt is longer than the model's context` )
     } {}
     ? stream { ? ( __api_begin_ndjson c ) {} { ( vec_free [i] ids ) ^ T } } {}
+
+    // Diffusion model: the block-denoise loop produces the whole
+    // response (src/diffuse.nu); a streaming client then receives the
+    // pieces as ordinary token frames, just all at once.
+    ? ( llm_is_diffusion m ) {
+        : Rng drng ( rng_seed seed )
+        : ( Vec i ) gen ( dz_generate m ids npredict 32 0.7 0.5 16 temp drng )
+        ( rng_free drng )
+        ( vec_free [i] ids )
+        : String dfull ( string_new )
+        : ~ b dbroken F
+        : ~ i gi 0
+        ~ < gi ( vec_len [i] gen ) {
+            : ~ i gid 0
+            ?? ( vec_get [i] gen gi ) { T x → { = gid x } F → {} }
+            : ( Vec u ) pb ( tok_piece t gid )
+            : String piece ( bytes_to_str pb )
+            ( vec_free [u] pb )
+            ( string_push_str dfull ( string_data piece ) )
+            ? & stream ! dbroken {
+                : String fr ( __api_frame_token model field ( string_data piece ) )
+                ? ( __api_write_str c fr ) {} { = dbroken T }
+                ( string_free fr )
+            } {}
+            ( string_free piece )
+            = gi + gi 1
+        }
+        : i dproduced ( vec_len [i] gen )
+        ( vec_free [i] gen )
+        ? dbroken {
+            ( string_free dfull )
+            ^ T
+        } {}
+        ? stream {} { ? ( __api_begin_ndjson c ) {} { ( string_free dfull ) ^ T } }
+        : String dfin ( __api_frame_done model field nprompt dproduced ! stream ( string_data dfull ) )
+        : b _dw ( __api_write_str c dfin )
+        ( string_free dfin )
+        ( string_free dfull )
+        : !v NetErr _de ( response_end_chunked c )
+        ^ T
+    } {}
 
     ( llm_prefill m ids )
     ( vec_free [i] ids )

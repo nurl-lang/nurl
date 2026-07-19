@@ -46,7 +46,7 @@ fi
 [ -e deps/tokenizer ] || { mkdir -p deps && ln -s ../../tokenizer deps/tokenizer; }
 [ -e deps/http ] || { mkdir -p deps && ln -s ../../http deps/http; }
 
-echo "[1/3] build nurllama + craft + convert"
+echo "[1/4] build nurllama + craft + convert"
 if ! $NURL src/main.nu "$WORK/nurllama" >/dev/null 2>"$WORK/build.err"; then
     echo "FAIL: could not build nurllama:"; tail -5 "$WORK/build.err"; exit 1
 fi
@@ -58,7 +58,7 @@ python3 tests/make_tiny_llada2.py "$WORK/hf" >/dev/null || { echo "FAIL: craftin
 
 IDS="5 12 7 200 33 150 299 0"
 
-echo "[2/3] logits vs the numpy oracle"
+echo "[2/4] logits vs the numpy oracle"
 python3 tests/llada_ref.py "$WORK/hf" $IDS > "$WORK/ref.txt" || { echo "FAIL: oracle"; exit 1; }
 "$NL" dlogits "$WORK/tiny-f32.gguf" $IDS > "$WORK/f32.txt" 2>"$WORK/f32.err" \
     || { bad "dlogits f32 runs"; cat "$WORK/f32.err"; exit 1; }
@@ -116,7 +116,7 @@ else
     bad "logit parity battery"
 fi
 
-echo "[3/3] CPU backend parity"
+echo "[3/4] CPU backend parity"
 if NURL_GPU=cpu "$NL" dlogits "$WORK/tiny-f32.gguf" $IDS > "$WORK/cpu.txt" 2>/dev/null; then
     if cmp -s "$WORK/f32.txt" "$WORK/cpu.txt"; then
         ok "NURL_GPU=cpu logits text-identical to the default backend"
@@ -138,6 +138,22 @@ EOF
     fi
 else
     bad "CPU backend runs"
+fi
+
+echo "[4/4] decode loop vs the reference-faithful python loop"
+# mask 297, eos 296 in the crafted tokenizer; small block + gen so the
+# recompute-everything python reference stays quick
+PROMPT="5 12 7 200 33"
+python3 tests/llada_dz_ref.py "$WORK/hf" 16 8 0.7 0.5 4 297 296 $PROMPT > "$WORK/dzref.txt" \
+    || { bad "python decode reference"; exit 1; }
+"$NL" dgen "$WORK/tiny-f32.gguf" $PROMPT -n 16 --block 8 --threshold 0.7 --edit-threshold 0.5 --post-steps 4 \
+    > "$WORK/dzgot.txt" 2>/dev/null || { bad "dgen runs"; exit 1; }
+if [ "$(cat "$WORK/dzref.txt")" = "$(cat "$WORK/dzgot.txt")" ]; then
+    ok "block-denoise ids identical to the reference loop (frozen-KV == full recompute)"
+else
+    bad "decode loop parity"
+    echo "    ref: $(cat "$WORK/dzref.txt")"
+    echo "    got: $(cat "$WORK/dzgot.txt")"
 fi
 
 echo "== llada2 inference tests: PASS=$PASS FAIL=$FAIL"

@@ -45,6 +45,7 @@ $ `src/pull.nu`
 $ `src/chat.nu`
 $ `src/api.nu`
 $ `src/convert.nu`
+$ `src/diffuse.nu`
 $ `stdlib/std/term.nu`
 
 @ __nl_err String e → i {
@@ -553,6 +554,10 @@ $ `stdlib/std/term.nu`
     ( args_opt p `ctx` 0 `N` `run: context length cap (default: model's)` )
     ( args_opt p `name` 0 `NAME` `pull: store under this name` )
     ( args_opt p `type` 0 `T` `convert: output tensor type — q8_0 (default), f16, bf16, f32` )
+    ( args_opt p `block` 0 `N` `diffusion run: block length (default 32)` )
+    ( args_opt p `threshold` 0 `F` `diffusion run: mask-commit confidence (default 0.7)` )
+    ( args_opt p `edit-threshold` 0 `F` `diffusion run: editing confidence (default 0.5)` )
+    ( args_opt p `post-steps` 0 `N` `diffusion run: refinement passes after all masks resolve (default 16)` )
     ( args_opt p `host` 0 `ADDR` `serve: bind address (default 127.0.0.1)` )
     ( args_opt p `port` 0 `N` `serve: port (default 11434, ollama's)` )
     ? ( args_parse_argv p ) {} {
@@ -791,6 +796,72 @@ $ `stdlib/std/term.nu`
         ^ 0
     } {}
 
+    // Hidden diffusion tap #2: run the full block-denoise loop over
+    // prompt IDS and print the generated ids — compared against the
+    // reference-faithful python loop (tests/llada_dz_ref.py).
+    ? ( nurl_str_eq cmd `dgen` ) {
+        : ~ s mparg ``
+        ?? ( vec_get [String] pos 1 ) {
+            T c → { = mparg ( string_data c ) }
+            F → {}
+        }
+        ?? ( llm_open mparg 0 ) {
+            T mm → {
+                : ( Vec i ) dids ( vec_new [i] )
+                : ~ i ai 2
+                ~ < ai ( args_positional_count p ) {
+                    ?? ( vec_get [String] pos ai ) {
+                        T c → { ( vec_push [i] dids ( nurl_str_to_int ( string_data c ) ) ) }
+                        F → {}
+                    }
+                    = ai + ai 1
+                }
+                : String snp ( args_value_or p `n-predict` `16` )
+                : ~ i npredict 16
+                ?? ( string_to_int snp ) { T v2 → { = npredict v2 } F _ → {} }
+                ( string_free snp )
+                : String sbl ( args_value_or p `block` `8` )
+                : ~ i dbl 8
+                ?? ( string_to_int sbl ) { T v2 → { = dbl v2 } F _ → {} }
+                ( string_free sbl )
+                : String sth ( args_value_or p `threshold` `0.7` )
+                : ~ f dthr 0.7
+                ?? ( string_to_float sth ) { T v2 → { = dthr v2 } F → {} }
+                ( string_free sth )
+                : String set2 ( args_value_or p `edit-threshold` `0.5` )
+                : ~ f dethr 0.5
+                ?? ( string_to_float set2 ) { T v2 → { = dethr v2 } F → {} }
+                ( string_free set2 )
+                : String sps ( args_value_or p `post-steps` `16` )
+                : ~ i dpost 16
+                ?? ( string_to_int sps ) { T v2 → { = dpost v2 } F _ → {} }
+                ( string_free sps )
+                : Rng rng ( rng_seed 42 )
+                : ( Vec i ) gen ( dz_generate mm dids npredict dbl dthr dethr dpost 0.0 rng )
+                ( rng_free rng )
+                : String line ( string_new )
+                : ~ i gi 0
+                ~ < gi ( vec_len [i] gen ) {
+                    ? > gi 0 { ( string_push_char line 32 ) } {}
+                    ( string_push_int line ( _dz_geti gen gi ) )
+                    = gi + gi 1
+                }
+                ( string_push_char line 10 )
+                ( nurl_print ( string_data line ) )
+                ( string_free line )
+                ( vec_free [i] gen )
+                ( vec_free [i] dids )
+                ( llm_close mm )
+            }
+            F e → {
+                ( args_free p )
+                ^ ( __nl_err e )
+            }
+        }
+        ( args_free p )
+        ^ 0
+    } {}
+
     ? | ( nurl_str_eq cmd `run` ) ( nurl_str_eq cmd `logits` ) {
         : ~ s mparg ``
         ?? ( vec_get [String] pos 1 ) {
@@ -833,60 +904,107 @@ $ `stdlib/std/term.nu`
                 ? > nprompt ( llm_n_ctx m ) {
                     = rc2 ( __nl_err ( string_from `nurllama: prompt longer than the context` ) )
                 } {
-                    // prefill: the whole prompt in batched chunks
-
-                    ( llm_prefill m ids )
-                    ? ( nurl_str_eq cmd `logits` ) {
-                        : ~ i j 0
-                        ~ < j ( llm_n_vocab m ) {
-                            : String ln ( string_new )
-                            ( string_push_float ln ( llm_logit m j ) )
-                            ( nurl_print ( string_data ln ) )
-                            ( nurl_print `\n` )
-                            ( string_free ln )
-                            = j + j 1
-                        }
-                    } {
-                        : String stmp ( args_value_or p `temp` `0.8` )
-                        : ~ f temp 0.8
-                        ?? ( string_to_float stmp ) { T v2 → { = temp v2 } F → {} }
-                        ( string_free stmp )
-                        : String snp ( args_value_or p `n-predict` `64` )
-                        : ~ i npredict 64
+                    ? & ( llm_is_diffusion m ) ! != 0 ( nurl_str_eq cmd `logits` ) {
+                        // block-diffusion decode: denoise whole blocks, no
+                        // autoregressive loop (see src/diffuse.nu)
+                        : String snp ( args_value_or p `n-predict` `256` )
+                        : ~ i npredict 256
                         ?? ( string_to_int snp ) { T v2 → { = npredict v2 } F _ → {} }
                         ( string_free snp )
-                        : String stk ( args_value_or p `topk` `40` )
-                        : ~ i topk 40
-                        ?? ( string_to_int stk ) { T v2 → { = topk v2 } F _ → {} }
-                        ( string_free stk )
-                        : String stp ( args_value_or p `topp` `0.95` )
-                        : ~ f topp 0.95
-                        ?? ( string_to_float stp ) { T v2 → { = topp v2 } F → {} }
-                        ( string_free stp )
+                        : String stmp ( args_value_or p `temp` `0` )
+                        : ~ f temp 0.0
+                        ?? ( string_to_float stmp ) { T v2 → { = temp v2 } F → {} }
+                        ( string_free stmp )
+                        : String sbl ( args_value_or p `block` `32` )
+                        : ~ i dbl 32
+                        ?? ( string_to_int sbl ) { T v2 → { = dbl v2 } F _ → {} }
+                        ( string_free sbl )
+                        : String sth ( args_value_or p `threshold` `0.7` )
+                        : ~ f dthr 0.7
+                        ?? ( string_to_float sth ) { T v2 → { = dthr v2 } F → {} }
+                        ( string_free sth )
+                        : String set2 ( args_value_or p `edit-threshold` `0.5` )
+                        : ~ f dethr 0.5
+                        ?? ( string_to_float set2 ) { T v2 → { = dethr v2 } F → {} }
+                        ( string_free set2 )
+                        : String sps ( args_value_or p `post-steps` `16` )
+                        : ~ i dpost 16
+                        ?? ( string_to_int sps ) { T v2 → { = dpost v2 } F _ → {} }
+                        ( string_free sps )
                         : String ssd ( args_value_or p `seed` `42` )
                         : ~ i seed 42
                         ?? ( string_to_int ssd ) { T v2 → { = seed v2 } F _ → {} }
                         ( string_free ssd )
                         : Rng rng ( rng_seed seed )
-
-                        : ~ i pos nprompt
-                        : ~ i produced 0
-                        : ~ b stop F
-                        ~ & & < produced npredict < pos ( llm_n_ctx m ) ! stop {
-                            : i nt2 ( sample_next m rng temp topk topp )
-                            ? == nt2 ( tok_eos t ) { = stop T } {
-                                : ( Vec u ) pb ( tok_piece t nt2 )
-                                : i pn ( vec_len [u] pb )
-                                ? > pn 0 { : i _w ( write 1 # *u ( vec_data [u] pb ) pn ) } {}
-                                ( vec_free [u] pb )
-                                ( flush )
-                                ( llm_eval m nt2 pos )
-                                = pos + pos 1
-                                = produced + produced 1
-                            }
+                        : ( Vec i ) gen ( dz_generate m ids npredict dbl dthr dethr dpost temp rng )
+                        : ~ i gi 0
+                        ~ < gi ( vec_len [i] gen ) {
+                            : ( Vec u ) pb ( tok_piece t ( _dz_geti gen gi ) )
+                            : i pn ( vec_len [u] pb )
+                            ? > pn 0 { : i _w ( write 1 # *u ( vec_data [u] pb ) pn ) } {}
+                            ( vec_free [u] pb )
+                            = gi + gi 1
                         }
-                        ( rng_free rng )
+                        ( flush )
                         ( nurl_print `\n` )
+                        ( vec_free [i] gen )
+                        ( rng_free rng )
+                    } {
+                        // prefill: the whole prompt in batched chunks
+
+                        ( llm_prefill m ids )
+                        ? ( nurl_str_eq cmd `logits` ) {
+                            : ~ i j 0
+                            ~ < j ( llm_n_vocab m ) {
+                                : String ln ( string_new )
+                                ( string_push_float ln ( llm_logit m j ) )
+                                ( nurl_print ( string_data ln ) )
+                                ( nurl_print `\n` )
+                                ( string_free ln )
+                                = j + j 1
+                            }
+                        } {
+                            : String stmp ( args_value_or p `temp` `0.8` )
+                            : ~ f temp 0.8
+                            ?? ( string_to_float stmp ) { T v2 → { = temp v2 } F → {} }
+                            ( string_free stmp )
+                            : String snp ( args_value_or p `n-predict` `64` )
+                            : ~ i npredict 64
+                            ?? ( string_to_int snp ) { T v2 → { = npredict v2 } F _ → {} }
+                            ( string_free snp )
+                            : String stk ( args_value_or p `topk` `40` )
+                            : ~ i topk 40
+                            ?? ( string_to_int stk ) { T v2 → { = topk v2 } F _ → {} }
+                            ( string_free stk )
+                            : String stp ( args_value_or p `topp` `0.95` )
+                            : ~ f topp 0.95
+                            ?? ( string_to_float stp ) { T v2 → { = topp v2 } F → {} }
+                            ( string_free stp )
+                            : String ssd ( args_value_or p `seed` `42` )
+                            : ~ i seed 42
+                            ?? ( string_to_int ssd ) { T v2 → { = seed v2 } F _ → {} }
+                            ( string_free ssd )
+                            : Rng rng ( rng_seed seed )
+
+                            : ~ i pos nprompt
+                            : ~ i produced 0
+                            : ~ b stop F
+                            ~ & & < produced npredict < pos ( llm_n_ctx m ) ! stop {
+                                : i nt2 ( sample_next m rng temp topk topp )
+                                ? == nt2 ( tok_eos t ) { = stop T } {
+                                    : ( Vec u ) pb ( tok_piece t nt2 )
+                                    : i pn ( vec_len [u] pb )
+                                    ? > pn 0 { : i _w ( write 1 # *u ( vec_data [u] pb ) pn ) } {}
+                                    ( vec_free [u] pb )
+                                    ( flush )
+                                    ( llm_eval m nt2 pos )
+                                    = pos + pos 1
+                                    = produced + produced 1
+                                }
+                            }
+                            ( rng_free rng )
+                            ( nurl_print `\n` )
+                        }
                     }
                 }
                 ( vec_free [i] ids )
