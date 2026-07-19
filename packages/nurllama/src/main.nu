@@ -1,5 +1,16 @@
 // nurllama — run language models locally.
 //
+//   nurllama start [-y]                       interactive setup wizard:
+//                                             pick a model, choose the bind
+//                                             scope (localhost / network) and
+//                                             access (open / bearer token) and
+//                                             the port, saved to config.json;
+//                                             launches the web chat server. A
+//                                             second run reuses the config
+//                                             (-y = without asking). The server
+//                                             hosts a web chat UI with per-
+//                                             browser cookie sessions and a
+//                                             SQLite conversation history.
 //   nurllama pull <src> [--name N]            download into ~/.nurllama
 //                                             (hf.co/ORG/REPO/FILE.gguf or a
 //                                             URL; resumes a broken pull)
@@ -52,6 +63,8 @@ $ `src/chat.nu`
 $ `src/api.nu`
 $ `src/convert.nu`
 $ `src/diffuse.nu`
+$ `src/config.nu`
+$ `src/start.nu`
 $ `stdlib/std/term.nu`
 
 @ __nl_err String e → i {
@@ -549,6 +562,7 @@ $ `stdlib/std/term.nu`
 @ main → i {
     : ArgParser p ( args_new `nurllama` `Run language models locally — phase 2: the GGUF-vocabulary tokenizer.` )
     ( args_flag p `help` 104 `show this help` )
+    ( args_flag p `yes` 121 `start: reuse the existing config without asking` )
     ( args_flag p `version` 0 `print the version` )
     ( args_flag p `no-special` 0 `tokenize: do not add BOS/EOS` )
     ( args_opt p `weights` 0 `FILE` `run: take the weights from this safetensors file instead of the GGUF's own tensors (the GGUF still supplies the hyperparameters and the tokenizer)` )
@@ -574,7 +588,7 @@ $ `stdlib/std/term.nu`
     ? ( args_present p `help` ) {
         : String u ( args_usage p )
         ( nurl_print ( string_data u ) )
-        ( nurl_print `\ncommands:\n  pull <hf.co/ORG/REPO/FILE.gguf | url> [--name N] · list · rm <name> · verify <name>\n  serve [--host H] [--port N] · chat <model|name>\n  run <model|name> <prompt> [-n N] [--temp F] [--topk N] [--topp F] [--seed N]\n  logits <model> <prompt> · tokenize <model> <text>\n  detok <model> <id> [id …] · vocab <model> [n] · selftest\n  convert <hf-dir> <out.gguf> [--type q8_0|f16|bf16|f32]\n` )
+        ( nurl_print `\ncommands:\n  start [-y]                                interactive setup wizard + web chat server\n  pull <hf.co/ORG/REPO/FILE.gguf | url> [--name N] · list · rm <name> · verify <name>\n  serve [--host H] [--port N] · chat <model|name>\n  run <model|name> <prompt> [-n N] [--temp F] [--topk N] [--topp F] [--seed N]\n  logits <model> <prompt> · tokenize <model> <text>\n  detok <model> <id> [id …] · vocab <model> [n] · selftest\n  convert <hf-dir> <out.gguf> [--type q8_0|f16|bf16|f32]\n` )
         ( string_free u )
         ( args_free p )
         ^ 0
@@ -634,6 +648,12 @@ $ `stdlib/std/term.nu`
         ( string_free out )
         ( args_free p )
         ^ 0
+    } {}
+
+    ? ( nurl_str_eq cmd `start` ) {
+        : i rc ( nurllama_start p )
+        ( args_free p )
+        ^ rc
     } {}
 
     ? ( nurl_str_eq cmd `serve` ) {

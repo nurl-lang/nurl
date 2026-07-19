@@ -42,6 +42,7 @@ single aggregated object instead.
 
 | | |
 |---|---|
+| `start [-y]` | interactive setup wizard → config + a **web chat server** (below). `-y` reuses the saved config. |
 | `pull <src> [--name N]` | `hf.co/ORG/REPO/FILE.gguf` or any URL. Resumes an interrupted download. |
 | `run <model> "<prompt>"` | `-n` tokens, `--temp` (0 = greedy), `--topk`, `--topp`, `--seed`, `--ctx` |
 | `chat <model>` | interactive; uses the model's own chat template |
@@ -145,6 +146,63 @@ The store is content-addressed — `blobs/sha256-<hex>` plus one manifest
 per name — so two names can share a blob, and `verify` re-hashes it in
 a stream and refuses drift.
 
+## `nurllama start` — the web chat server
+
+```sh
+$ nurllama start
+── nurllama setup ──
+Models directory [/home/you/models]:
+Models:
+  1) llada2.1-mini-q8_0.gguf   (16.1 GB)
+  2) qwen2.5-0.5b-instruct-q4_k_m.gguf   (397 MB)
+Choose a model [1]: 1
+Network:
+  1) localhost only (127.0.0.1)
+  2) reachable from the network (0.0.0.0)
+Choose [1]: 2
+Access:
+  1) require a bearer token
+  2) open (anyone who can reach the port)
+Choose [1]: 1
+Token [Enter = generate]:
+Port [11434]:
+Saved config → ~/.nurllama/config.json
+nurllama serving on http://0.0.0.0:11434
+```
+
+The wizard's answers are written to `$NURLLAMA_HOME/config.json`. A second
+`nurllama start` offers to reuse them; `nurllama start -y` reuses them
+without asking. Everything the wizard asks — model, bind scope, access,
+port — you can also just edit in the JSON.
+
+The model list holds `.gguf` files **and** Hugging Face checkpoint
+*directories* (a folder with `config.json` and `*.safetensors`). A bare
+`.safetensors` file is not listed on its own — it carries only tensors,
+no hyperparameters and no tokenizer, so it cannot be served — but a
+checkpoint directory is offered with `(HF checkpoint → convert to GGUF)`,
+and picking it runs `nurllama convert` (Q8_0) and serves the result. An
+already-converted GGUF beside it is reused after a prompt.
+
+The server it launches is the ollama-compatible API **plus** a
+self-contained web chat UI at `/` (no external requests — it embeds its
+own CSS and JS). A programmatic client that hits `/` still gets the
+`nurllama is running` status line; a browser gets the chat page. Each
+browser is issued a GUID in an `nl_client` cookie, and **every
+conversation — each turn, both sides — is persisted to SQLite**
+(`$NURLLAMA_HOME/history.db`) scoped to that GUID, so a client only ever
+sees its own history. When the wizard chose token access, the page is
+served to everyone but every `/web/*` and `/api/*` request must carry
+`Authorization: Bearer <token>` (the UI prompts for it once and
+remembers it).
+
+| endpoint | |
+|---|---|
+| `GET /web/session` | mint/refresh the cookie; returns the client id + model |
+| `GET /web/conversations` | this client's conversations, newest first |
+| `GET /web/conversations/:id/messages` | one conversation (owner-checked) |
+| `DELETE /web/conversations/:id` | delete one (owner-checked) |
+| `POST /web/chat` | `{conversation_id, content}` → generates against the full history, persists both turns, returns `{conversation_id, reply}` |
+
 ## Chat templates
 
 The template comes from the model's own metadata
@@ -185,6 +243,7 @@ Not by trusting itself:
 ./tests/tokenizer_test.sh && ./tests/infer_test.sh   # NURL_NET_TESTS=1 adds real models
 ./tests/store_test.sh && ./tests/api_test.sh
 ./tests/convert_test.sh && ./tests/llada_infer_test.sh && ./tests/bailing_tok_test.sh
+./tests/start_test.sh    # wizard, config, cookie sessions, SQLite scoping, token auth
 ```
 
 ## Built on
