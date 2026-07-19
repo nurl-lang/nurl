@@ -71,6 +71,8 @@ $ `deps/gguf/src/dequant.nu`
 | `gguf_dequant g i` | whole tensor → little-endian f32 |
 | `gguf_dequant_range g i first count` | a block-aligned slice — one row of a 4 GB table |
 | `gw_new` / `gw_kv_*` / `gw_tensor` / `gw_write` | build and emit a spec-exact GGUF v3 file |
+| `gws_create` / `gws_kv_*` / `gws_tensor` / `gws_begin_data` / `gws_data` / `gws_finish` | the STREAMING writer: declare metadata + shapes, then stream payloads straight to disk — constant memory, any file size |
+| `gq_f16_encode` / `gq_bf16_encode` / `gq_q8_0_encode` | f32-LE → tensor payload bytes (ggml reference quantisers, verified against the dequant oracle) |
 
 **Formats.** Metadata: all 13 value types, arrays included (tokenizer
 vocabularies). Tensors: every current ggml id is named and sized, and
