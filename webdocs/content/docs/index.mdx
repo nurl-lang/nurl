@@ -7,16 +7,16 @@ icon: Rocket
 <Callout type="warn" title="Work In Progress">
   NURL web documentation is maintained separately. For up-to-date information
   refer to the repository documentation in
-  [docs.](https://github.com/nurl-lang/nurl/tree/main/docs)
+  [docs](https://github.com/nurl-lang/nurl/tree/main/docs).
 </Callout>
 
-**NURL** is a compiled language without a virtual machine, garbage collector and interpreter. `.nu` files are compiled straight to a native excecutable or a WebAssembly module.
+**NURL** is a compiled language without a virtual machine, garbage collector and interpreter. `.nu` files are compiled straight to a native executable or a WebAssembly module.
 
 ## Features of NURL
 
 NURL is **designed** to be a target for **LLM code generation** specifically. The regular grammar means errors stay local and a whole program fits predictably in a context window.
 
-- **Prefix-arity grammar** -- every construct has a fixed arity and there's no infix/precedence table to learn. This is easier to parse for the AI and results in lower token usage. The grammar fits on one page and parses with at most 4 tokens of lookahead (LL(k≤4)).
+- **Prefix-arity grammar** -- every construct has a fixed arity and there is no infix/precedence table to learn. This is easier to parse for the AI and results in lower token usage. The grammar fits on one page and parses with at most 4 tokens of lookahead (LL(k≤4)).
 - **Reproducible builds** (deterministic compilation) -- same source produces byte-identical output on every supported platform.
 - **Single-owner memory** -- values auto-drop at scope exit.
 - **Static borrow checker** -- rejects use-after-move, alias-double-free, escaping closure-captures, and iterator invalidation at compile time.
@@ -26,18 +26,18 @@ NURL is **designed** to be a target for **LLM code generation** specifically. Th
 
 NURL is actively developed and is now in a **pre-release** state. See [`ROADMAP.md`](https://github.com/nurl-lang/nurl/blob/main/ROADMAP.md) for the latest version.
 
-Major changes are currently less frequent and the stable release is aimed for late 2026.
+Major changes are currently less frequent, and the stable release is planned for late 2026.
 
 ## Requirements
 
-- Only clang / LLVM 15 or newer if you're building from source
+- Only clang / LLVM 15 or newer if you are building from source
 
 ## Get NURL
 
 1. **[Installation](./install.mdx)** — The `nurlc` compiler (and the
    `nurlpkg` / `nurlfmt` tools)
 2. **First program** — write and understand
-   a minimal "hello world"
+   a minimal "hello world" program
 3. **[Compiling and running](./compiling-and-running.mdx)** — the compile
    pipeline, the `nurl` wrapper, and useful flags.
 4. **[Next steps](./next-steps.mdx)** — The
