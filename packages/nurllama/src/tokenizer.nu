@@ -114,9 +114,17 @@ $ `deps/tokenizer/src/tokenizer.nu`
     } {}
 
     : s pre ( gguf_kv_str_or g `tokenizer.ggml.pre` `default` )
+    // bailingmoe2 (Ling 2.0 / LLaDA2) shares qwen2's pre-split exactly:
+    // same case-insensitive contractions, same single-digit `\p{N}`,
+    // and its `\s*[\r\n]` is equivalent to qwen2's `\s*[\r\n]+` under
+    // greedy backtracking ([\r\n] is inside \s, so both take the
+    // longest whitespace run ending in a newline). Its possessive
+    // quantifiers (`?+`, `++`) cannot change any match either — proven
+    // against HF tokenizers by tests/bailing_tok_test.sh.
+    : b pre_q2 | != 0 ( nurl_str_eq pre `qwen2` ) != 0 ( nurl_str_eq pre `bailingmoe2` )
     : TokSpec spec @ TokSpec {
         mode
-        ? ( nurl_str_eq pre `qwen2` ) PRE_QWEN2 PRE_DEFAULT
+        ? pre_q2 PRE_QWEN2 PRE_DEFAULT
         ( gguf_kv_int_or g `tokenizer.ggml.bos_token_id` -1 )
         ( gguf_kv_int_or g `tokenizer.ggml.eos_token_id` -1 )
         ( gguf_kv_int_or g `tokenizer.ggml.unknown_token_id` -1 )

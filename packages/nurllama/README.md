@@ -47,6 +47,7 @@ single aggregated object instead.
 | `chat <model>` | interactive; uses the model's own chat template |
 | `serve [--host] [--port]` | ollama-compatible API on 11434 |
 | `list` · `rm <name>` · `verify <name>` | the local store |
+| `convert <hf-dir> <out.gguf> [--type T]` | HF checkpoint → GGUF (`q8_0` default, `f16`, `bf16`, `f32`) |
 | `tokenize` · `detok` · `vocab` · `logits` | inspection taps |
 
 `<model>` is a name from `nurllama list` or a path to any `.gguf` file.
@@ -79,6 +80,23 @@ nurllama reads them from the file rather than guessing:
   parts are row *ranges* inside the uploaded tensor — and every range
   lands on a block boundary, because a row is a whole number of
   quantisation blocks.
+
+* **llada2** — LLaDA2.x, a **diffusion** MoE, and a different *decode*,
+  not just a different shape. Attention is bidirectional; generation
+  fills a template of mask tokens one block window at a time, committing
+  every position whose confidence clears a threshold in parallel and
+  *revising* already-committed tokens the model changes its mind about
+  (the LLaDA2.1 editing step). Layers 1+ route each position through 8
+  of 256 small experts — an fp32 sigmoid router with a selection-only
+  bias and group-limited top-k — plus one always-on shared expert; the
+  256 experts live fused in one 3D tensor per projection and are
+  evaluated as row ranges, still quantised, the phi3 trick at scale.
+  Completed blocks freeze their K/V into the cache, so a denoise step
+  costs O(window) where the reference implementation recomputes the
+  whole prefix. `nurllama convert` turns the HF checkpoint into the
+  GGUF (llama.cpp's `llada2` conventions); `run`/`chat`/the API detect
+  the diffusion decode from the model's own metadata
+  (`--block`, `--threshold`, `--edit-threshold`, `--post-steps`).
 
 A chat template writes its turn markers (`<start_of_turn>`,
 `<|im_start|>`, …) into the prompt as *text*; nurllama emits each as its
@@ -152,11 +170,21 @@ Not by trusting itself:
 - An 872-token prompt — fourteen chunk boundaries — continues exactly as
   the numpy reference does, so the batching cannot quietly corrupt a
   long context.
+- The llada2 path has its own oracle chain: `convert` round-trips a
+  python-crafted checkpoint tensor-for-tensor (expert fusion order,
+  BF16 widening, Q8_0 error bounds); an f32 conversion's logits match
+  an independent numpy forward — MoE router, groups, shared expert,
+  partial rotary, bidirectional window — to max|Δ| = 1e-6; the
+  bailingmoe2 tokenizer is token-for-token equal to HF `tokenizers` on
+  a 16-case multilingual battery; and the block-denoise loop produces
+  ids **identical** to a reference-faithful python loop that recomputes
+  everything each step — proving the frozen-K/V cache changes nothing.
 - ASan/UBSan/LeakSanitizer-clean.
 
 ```sh
 ./tests/tokenizer_test.sh && ./tests/infer_test.sh   # NURL_NET_TESTS=1 adds real models
 ./tests/store_test.sh && ./tests/api_test.sh
+./tests/convert_test.sh && ./tests/llada_infer_test.sh && ./tests/bailing_tok_test.sh
 ```
 
 ## Built on

@@ -75,6 +75,38 @@ $ `src/tokenizer.nu`
     i swa_window
     i swa_period
     f rope_base_swa
+    // ── llada2 (diffusion MoE) ──────────────────────────────────────
+    // bidir: attention is NOT causal — the diffusion decode evaluates a
+    // whole block window at once and every query sees the full window.
+    b bidir
+    i mask_id
+    i first_dense
+    i n_expert
+    i n_expert_used
+    i n_group
+    i n_group_used
+    i moe_ff
+    i shexp_ff
+    f route_scale
+    b weights_norm
+    ( Vec i ) gate_inp
+    ( Vec i ) tq_gate_inp
+    ( Vec f ) exp_bias
+    ( Vec i ) gate_exps
+    ( Vec i ) up_exps
+    ( Vec i ) down_exps
+    ( Vec i ) tq_gate_exps
+    ( Vec i ) tq_up_exps
+    ( Vec i ) tq_down_exps
+    ( Vec i ) gate_shexp
+    ( Vec i ) up_shexp
+    ( Vec i ) down_shexp
+    ( Vec i ) tq_gate_shexp
+    ( Vec i ) tq_up_shexp
+    ( Vec i ) tq_down_shexp
+    i rlogitsd
+    * u router_host
+    i moe_outd
     i gg
     // A SECOND weight source: the same model, in the container Hugging Face
     // ships it in. The GGUF still supplies the hyperparameters and the
@@ -198,6 +230,12 @@ $ `src/tokenizer.nu`
 // the weight needs.
 : ~ i __lm_last_type -1
 
+// Set when any device allocation comes back null (out of device
+// memory). Checked once at the end of llm_open_st: a silent failure
+// here used to surface as an all-zero forward pass — the model "ran"
+// and produced token 0 forever — instead of an error naming the cause.
+: ~ b __lm_alloc_failed F
+
 // Positions per prefill chunk. Bounds the batched activation scratch
 // (chunk × n_ff floats) while keeping the launches amortised.
 : i LM_CHUNK 64
@@ -226,6 +264,10 @@ $ `src/tokenizer.nu`
     }
     ? & ( __lm_native gt ) > nb 0 {
         : GpuBuffer bq ( gpu_alloc . m g nb )
+        ? == . bq dptr 0 {
+            = __lm_alloc_failed T
+            ^ -1
+        } {}
         : i _uq ( gpu_upload bq # *u addr )
         ( vec_push [i] . m wdptr . bq dptr )
         ( vec_push [i] . m wbytes . bq bytes )
@@ -237,6 +279,11 @@ $ `src/tokenizer.nu`
         T raw → {
             : i n ( vec_len [u] raw )
             : GpuBuffer b ( gpu_alloc . m g n )
+            ? == . b dptr 0 {
+                ( vec_free [u] raw )
+                = __lm_alloc_failed T
+                ^ -1
+            } {}
             : i _u ( gpu_upload b ( vec_data [u] raw ) )
             ( vec_free [u] raw )
             ( vec_push [i] . m wdptr . b dptr )
@@ -272,6 +319,10 @@ $ `src/tokenizer.nu`
 // Allocate an f32 scratch/cache device buffer of n floats (tracked).
 @ __lm_scratch * Llm m i nfloats → i {
     : GpuBuffer b ( gpu_alloc . m g * nfloats 4 )
+    ? == . b dptr 0 {
+        = __lm_alloc_failed T
+        ^ -1
+    } {}
     ( vec_push [i] . m wdptr . b dptr )
     ( vec_push [i] . m wbytes . b bytes )
     ^ . b dptr
@@ -368,6 +419,11 @@ $ `src/tokenizer.nu`
             ? & . m st_norm_add1 is_norm { ( __lm_add1 raw ) } {}
             : i n ( vec_len [u] raw )
             : GpuBuffer b ( gpu_alloc . m g n )
+            ? == . b dptr 0 {
+                ( vec_free [u] raw )
+                = __lm_alloc_failed T
+                ^ -1
+            } {}
             : i _u ( gpu_upload b ( vec_data [u] raw ) )
             ( vec_free [u] raw )
             ( vec_push [i] . m wdptr . b dptr )
@@ -422,6 +478,11 @@ $ `src/tokenizer.nu`
         T raw → {
             : i n ( vec_len [u] raw )
             : GpuBuffer b ( gpu_alloc . m g n )
+            ? == . b dptr 0 {
+                ( vec_free [u] raw )
+                = __lm_alloc_failed T
+                ^ -1
+            } {}
             : i _u ( gpu_upload b ( vec_data [u] raw ) )
             ( vec_free [u] raw )
             ( vec_push [i] . m wdptr . b dptr )
@@ -469,16 +530,18 @@ $ `src/tokenizer.nu`
     : s arch ( gguf_kv_str_or gg `general.architecture` `` )
     : b is_gemma3 != 0 ( nurl_str_eq arch `gemma3` )
     : b is_phi3 != 0 ( nurl_str_eq arch `phi3` )
-    ? | | | != 0 ( nurl_str_eq arch `llama` ) != 0 ( nurl_str_eq arch `qwen2` )
-    is_gemma3 is_phi3 {} {
+    : b is_llada2 != 0 ( nurl_str_eq arch `llada2` )
+    ? | | | | != 0 ( nurl_str_eq arch `llama` ) != 0 ( nurl_str_eq arch `qwen2` )
+    is_gemma3 is_phi3 is_llada2 {} {
         ( gguf_close gg )
         : String msg ( string_from `nurllama: unsupported architecture '` )
         ( string_push_str msg arch )
-        ( string_push_str msg `' (supported: llama, qwen2, gemma3, phi3)` )
+        ( string_push_str msg `' (supported: llama, qwen2, gemma3, phi3, llada2)` )
         ^ @ !*Llm String { F msg }
     }
 
     : *Llm m # *Llm ( nurl_alloc Z Llm )
+    = __lm_alloc_failed F
     = . m st 0
     = . m st_embd -1
     = . m st_norm_add1 F
@@ -502,8 +565,36 @@ $ `src/tokenizer.nu`
     = . m q_dim * . m n_head . m head_dim
     = . m rope_dim ( __lm_kv_i gg arch `rope.dimension_count` . m head_dim )
     // Rotary layout is architecture-defined: llama rotates adjacent pairs
-    // (NORM), qwen2 and gemma rotate the two halves of the span (NEOX).
-    = . m rope_style ? | | != 0 ( nurl_str_eq arch `qwen2` ) is_gemma3 is_phi3 1 0
+    // (NORM), qwen2, gemma and llada2 rotate the two halves of the span
+    // (NEOX). llada2's rotation is PARTIAL on top: rope.dimension_count
+    // (64) covers only half of head_dim (128), the rest passes through —
+    // the rope kernel already takes rope_dim separately.
+    = . m rope_style ? | | | != 0 ( nurl_str_eq arch `qwen2` ) is_gemma3 is_phi3 is_llada2 1 0
+
+    // ── the llada2 shape ────────────────────────────────────────────────
+    // A block-diffusion MoE: bidirectional attention (no causal mask —
+    // the decode loop controls visibility by evaluating block windows),
+    // per-head Q/K RMSNorm (the gemma3 machinery), fused QKV (the phi3
+    // machinery), layer 0 dense, layers 1+ Mixture-of-Experts: a sigmoid
+    // router with a selection-only bias and group-limited top-k picks 8
+    // of 256 small SwiGLU experts, their weighted sum (normalised, then
+    // scaled by expert_weights_scale) joins an always-on shared expert.
+    = . m bidir is_llada2
+    = . m mask_id ( gguf_kv_int_or gg `tokenizer.ggml.mask_token_id` -1 )
+    = . m n_expert ( __lm_kv_i gg arch `expert_count` 0 )
+    = . m n_expert_used ( __lm_kv_i gg arch `expert_used_count` 0 )
+    = . m n_group ( __lm_kv_i gg arch `expert_group_count` 0 )
+    = . m n_group_used ( __lm_kv_i gg arch `expert_group_used_count` 0 )
+    = . m moe_ff ( __lm_kv_i gg arch `expert_feed_forward_length` 0 )
+    = . m shexp_ff ( __lm_kv_i gg arch `expert_shared_feed_forward_length` . m moe_ff )
+    = . m route_scale ( __lm_kv_f gg arch `expert_weights_scale` 1.0 )
+    = . m weights_norm ? != 0 ( __lm_kv_i gg arch `expert_weights_norm` 1 ) T F
+    = . m first_dense ( __lm_kv_i gg arch `leading_dense_block_count` ? is_llada2 1 0 )
+    ? & is_llada2 | | < . m n_expert 1 < . m n_expert_used 1 < . m moe_ff 1 {
+        ( nurl_free # s m )
+        ( gguf_close gg )
+        ^ ( __lm_err `nurllama: llada2 model is missing its MoE hyperparameters` )
+    } {}
 
     // ── the gemma shape ──────────────────────────────────────────────────
     // The embedding row is scaled by sqrt(n_embd) before the first block; the
@@ -628,6 +719,21 @@ $ `src/tokenizer.nu`
     = . m w_up ( vec_new [i] )
     = . m kcache ( vec_new [i] )
     = . m vcache ( vec_new [i] )
+    = . m gate_inp ( vec_new [i] )
+    = . m tq_gate_inp ( vec_new [i] )
+    = . m exp_bias ( vec_new [f] )
+    = . m gate_exps ( vec_new [i] )
+    = . m up_exps ( vec_new [i] )
+    = . m down_exps ( vec_new [i] )
+    = . m tq_gate_exps ( vec_new [i] )
+    = . m tq_up_exps ( vec_new [i] )
+    = . m tq_down_exps ( vec_new [i] )
+    = . m gate_shexp ( vec_new [i] )
+    = . m up_shexp ( vec_new [i] )
+    = . m down_shexp ( vec_new [i] )
+    = . m tq_gate_shexp ( vec_new [i] )
+    = . m tq_up_shexp ( vec_new [i] )
+    = . m tq_down_shexp ( vec_new [i] )
 
     // Embeddings are NOT expanded: the model keeps its GGUF mapping
     // open and dequantises exactly the token's row (n_embd values) per
@@ -692,25 +798,90 @@ $ `src/tokenizer.nu`
         ( vec_push [i] . m post_attn_norm ( __lm_upload_opt m gg L `post_attention_norm.weight` ) )
         ( vec_push [i] . m post_ffn_norm ( __lm_upload_opt m gg L `post_ffw_norm.weight` ) )
         ? ( __lm_upload_layer m gg L `ffn_norm.weight` . m ffn_norm . m tq_ffn_norm ) {} { = ok F }
-        ? ( __lm_upload_layer m gg L `ffn_down.weight` . m w_down . m tq_down ) {} { = ok F }
-        // Fused FFN gate+up (phi3): one tensor of 2*n_ff rows, gate first.
-        : String upn ( __lm_tname L `ffn_up.weight` )
-        : i up_rows ( __lm_tensor_rows gg ( string_data upn ) )
-        ? & > . m n_ff 0 == up_rows * 2 . m n_ff {
-            : i ubase ( __lm_upload m gg ( string_data upn ) )
-            : i ugt __lm_last_type
-            ? < ubase 0 { = ok F } {
-                : i urb ( __lm_row_bytes ugt . m n_embd )
-                ( vec_push [i] . m w_gate ubase )
-                ( vec_push [i] . m tq_gate ugt )
-                ( vec_push [i] . m w_up + ubase * . m n_ff urb )
-                ( vec_push [i] . m tq_up ugt )
-            }
+        : b moe_layer & . m bidir >= L . m first_dense
+        ? moe_layer {
+            // MoE layer: no dense FFN tensors — placeholders keep the
+            // per-layer vectors index-aligned.
+            ( vec_push [i] . m w_down -1 )
+            ( vec_push [i] . m tq_down 0 )
+            ( vec_push [i] . m w_gate -1 )
+            ( vec_push [i] . m tq_gate 0 )
+            ( vec_push [i] . m w_up -1 )
+            ( vec_push [i] . m tq_up 0 )
+            ? ( __lm_upload_layer m gg L `ffn_gate_inp.weight` . m gate_inp . m tq_gate_inp ) {} { = ok F }
+            ? ( __lm_upload_layer m gg L `ffn_gate_exps.weight` . m gate_exps . m tq_gate_exps ) {} { = ok F }
+            ? ( __lm_upload_layer m gg L `ffn_up_exps.weight` . m up_exps . m tq_up_exps ) {} { = ok F }
+            ? ( __lm_upload_layer m gg L `ffn_down_exps.weight` . m down_exps . m tq_down_exps ) {} { = ok F }
+            ? ( __lm_upload_layer m gg L `ffn_gate_shexp.weight` . m gate_shexp . m tq_gate_shexp ) {} { = ok F }
+            ? ( __lm_upload_layer m gg L `ffn_up_shexp.weight` . m up_shexp . m tq_up_shexp ) {} { = ok F }
+            ? ( __lm_upload_layer m gg L `ffn_down_shexp.weight` . m down_shexp . m tq_down_shexp ) {} { = ok F }
+            // the router bias is HOST data: the grouped top-k runs on the
+            // CPU over 256 scores per position
+            : String bn ( __lm_tname L `exp_probs_b.bias` )
+            : i bi ( gguf_find_tensor gg ( string_data bn ) )
+            ( string_free bn )
+            ? >= bi 0 {
+                ?? ( gguf_dequant gg bi ) {
+                    T raw → {
+                        : *u P ( vec_data [u] raw )
+                        : ~ i e 0
+                        ~ < e . m n_expert {
+                            : i o * e 4
+                            : i bits | | | # i . P o << # i . P + o 1 8 << # i . P + o 2 16 << # i . P + o 3 24
+                            ( vec_push [f] . m exp_bias # f ( bits_to_f32 bits ) )
+                            = e + e 1
+                        }
+                        ( vec_free [u] raw )
+                    }
+                    F e2 → {
+                        ( string_free e2 )
+                        = ok F
+                    }
+                }
+            } { = ok F }
         } {
-            ? ( __lm_upload_layer m gg L `ffn_gate.weight` . m w_gate . m tq_gate ) {} { = ok F }
-            ? ( __lm_upload_layer m gg L `ffn_up.weight` . m w_up . m tq_up ) {} { = ok F }
+            ? ( __lm_upload_layer m gg L `ffn_down.weight` . m w_down . m tq_down ) {} { = ok F }
+            // Fused FFN gate+up (phi3): one tensor of 2*n_ff rows, gate first.
+            : String upn ( __lm_tname L `ffn_up.weight` )
+            : i up_rows ( __lm_tensor_rows gg ( string_data upn ) )
+            ? & > . m n_ff 0 == up_rows * 2 . m n_ff {
+                : i ubase ( __lm_upload m gg ( string_data upn ) )
+                : i ugt __lm_last_type
+                ? < ubase 0 { = ok F } {
+                    : i urb ( __lm_row_bytes ugt . m n_embd )
+                    ( vec_push [i] . m w_gate ubase )
+                    ( vec_push [i] . m tq_gate ugt )
+                    ( vec_push [i] . m w_up + ubase * . m n_ff urb )
+                    ( vec_push [i] . m tq_up ugt )
+                }
+            } {
+                ? ( __lm_upload_layer m gg L `ffn_gate.weight` . m w_gate . m tq_gate ) {} { = ok F }
+                ? ( __lm_upload_layer m gg L `ffn_up.weight` . m w_up . m tq_up ) {} { = ok F }
+            }
+            ( string_free upn )
+            // placeholders on the MoE side too
+            ( vec_push [i] . m gate_inp -1 )
+            ( vec_push [i] . m tq_gate_inp 0 )
+            ( vec_push [i] . m gate_exps -1 )
+            ( vec_push [i] . m up_exps -1 )
+            ( vec_push [i] . m down_exps -1 )
+            ( vec_push [i] . m tq_gate_exps 0 )
+            ( vec_push [i] . m tq_up_exps 0 )
+            ( vec_push [i] . m tq_down_exps 0 )
+            ( vec_push [i] . m gate_shexp -1 )
+            ( vec_push [i] . m up_shexp -1 )
+            ( vec_push [i] . m down_shexp -1 )
+            ( vec_push [i] . m tq_gate_shexp 0 )
+            ( vec_push [i] . m tq_up_shexp 0 )
+            ( vec_push [i] . m tq_down_shexp 0 )
+            ? . m bidir {
+                : ~ i e 0
+                ~ < e . m n_expert {
+                    ( vec_push [f] . m exp_bias 0.0 )
+                    = e + e 1
+                }
+            } {}
         }
-        ( string_free upn )
         = L + L 1
     }
     // The mapping stays open for the model's lifetime — the embedding
@@ -719,6 +890,9 @@ $ `src/tokenizer.nu`
     = . m gg # i gg
     ? ok {} {
         ( llm_close m )
+        ? __lm_alloc_failed {
+            ^ ( __lm_err `nurllama: out of device memory while loading the model — free GPU memory (close other GPU programs) or use a smaller quantisation` )
+        } {}
         ^ ( __lm_err `nurllama: model is missing required llama tensors (or dequant failed)` )
     }
 
@@ -745,8 +919,24 @@ $ `src/tokenizer.nu`
     = . m gd ( __lm_scratch m * LM_CHUNK . m n_ff )
     = . m ud ( __lm_scratch m * LM_CHUNK . m n_ff )
     = . m scored ( __lm_scratch m * * LM_CHUNK . m n_head . m n_ctx )
-    = . m logitsd ( __lm_scratch m . m n_vocab )
-    = . m logits_host ( gpu_host_alloc * . m n_vocab 4 )
+    // A diffusion model needs logits for EVERY window position, not just
+    // the last — the denoise step samples all of them at once.
+    : i logit_rows ? . m bidir LM_CHUNK 1
+    = . m logitsd ( __lm_scratch m * logit_rows . m n_vocab )
+    = . m logits_host ( gpu_host_alloc * * logit_rows . m n_vocab 4 )
+    ? . m bidir {
+        = . m rlogitsd ( __lm_scratch m * LM_CHUNK . m n_expert )
+        = . m router_host ( gpu_host_alloc * * LM_CHUNK . m n_expert 4 )
+        = . m moe_outd ( __lm_scratch m . m n_embd )
+    } {
+        = . m rlogitsd -1
+        = . m router_host # *u 0
+        = . m moe_outd -1
+    }
+    ? __lm_alloc_failed {
+        ( llm_close m )
+        ^ ( __lm_err `nurllama: out of device memory while loading the model — free GPU memory (close other GPU programs) or use a smaller quantisation` )
+    } {}
     ?? ( env_get `NURLLAMA_VERBOSE` ) {
         T v → {
             ( string_free v )
@@ -807,6 +997,22 @@ $ `src/tokenizer.nu`
     ( vec_free [i] . m w_up )
     ( vec_free [i] . m kcache )
     ( vec_free [i] . m vcache )
+    ( vec_free [i] . m gate_inp )
+    ( vec_free [i] . m tq_gate_inp )
+    ( vec_free [f] . m exp_bias )
+    ( vec_free [i] . m gate_exps )
+    ( vec_free [i] . m up_exps )
+    ( vec_free [i] . m down_exps )
+    ( vec_free [i] . m tq_gate_exps )
+    ( vec_free [i] . m tq_up_exps )
+    ( vec_free [i] . m tq_down_exps )
+    ( vec_free [i] . m gate_shexp )
+    ( vec_free [i] . m up_shexp )
+    ( vec_free [i] . m down_shexp )
+    ( vec_free [i] . m tq_gate_shexp )
+    ( vec_free [i] . m tq_up_shexp )
+    ( vec_free [i] . m tq_down_shexp )
+    ? != 0 # i . m router_host { ( gpu_host_free . m router_host ) } {}
     ( vec_free [u] . m embd_host )
     ? != . m gg 0 { ( gguf_close # *Gguf . m gg ) } {}
     ( gpu_host_free . m logits_host )
@@ -841,6 +1047,175 @@ $ `src/tokenizer.nu`
 // causal window differs per position). Logits are produced for the LAST
 // position only, which is all a prefill or a decode step needs.
 @ llm_eval_n * Llm m ( Vec i ) ids i first i count i pos0 → v {
+    ( __lm_eval_core m ids first count pos0 0 T 1 )
+}
+
+// Diffusion window evaluation (llada2): the batch is a block window at
+// positions pos0.., every query attends the SAME fixed cache range
+// [0, kvlen) — bidirectional inside the window, all earlier blocks
+// visible — and logits come back for EVERY position when wanted (the
+// denoise step samples all of them). The window's K/V rows land in the
+// cache at pos0.., overwriting the previous step's; earlier (frozen)
+// blocks keep theirs, which is exactly the block-diffusion mask.
+@ llm_eval_win * Llm m ( Vec i ) ids i first i count i pos0 i kvlen b want_logits → v {
+    ( __lm_eval_core m ids first count pos0 kvlen F ? want_logits 2 0 )
+}
+
+// MoE routing for window row `b2` of the just-downloaded router logits:
+// sigmoid scores, a selection-only bias, group-limited top-k (the
+// n_group_used best groups by their top-2 biased sums, then the
+// n_expert_used best experts inside them), weights = the UNBIASED
+// scores of the winners, normalised, times expert_weights_scale.
+// Appends (expert, weight) pairs to sel/wts.
+@ __lm_moe_route * Llm m i L i b2 ( Vec i ) sel ( Vec f ) wts → v {
+    : i nx . m n_expert
+    : i per_grp ? > . m n_group 0 / nx . m n_group nx
+    : ( Vec f ) sc ( vec_new [f] )
+    : ( Vec f ) biased ( vec_new [f] )
+    : ~ i e 0
+    ~ < e nx {
+        : f lg # f ( gpu_host_get_f32 . m router_host + * b2 nx e )
+        : f s / 1.0 + 1.0 ( exp - 0.0 lg )
+        ( vec_push [f] sc s )
+        : ~ f bv 0.0
+        ?? ( vec_get [f] . m exp_bias + * L nx e ) { T x → { = bv x } F → {} }
+        ( vec_push [f] biased + s bv )
+        = e + e 1
+    }
+    // group mask: keep the n_group_used groups with the largest
+    // top-2-sum of biased scores (all groups allowed when n_group ≤ 1)
+    : ( Vec i ) allowed ( vec_new [i] )
+    ? > . m n_group 1 {
+        : ( Vec f ) gsc ( vec_new [f] )
+        : ~ i g 0
+        ~ < g . m n_group {
+            : ~ f m1 -1.0e30
+            : ~ f m2 -1.0e30
+            : ~ i k2 0
+            ~ < k2 per_grp {
+                : ~ f v 0.0
+                ?? ( vec_get [f] biased + * g per_grp k2 ) { T x → { = v x } F → {} }
+                ? > v m1 {
+                    = m2 m1
+                    = m1 v
+                } {
+                    ? > v m2 { = m2 v } {}
+                }
+                = k2 + k2 1
+            }
+            ( vec_push [f] gsc + m1 m2 )
+            = g + g 1
+        }
+        // top n_group_used groups
+        : ( Vec i ) picked ( vec_new [i] )
+        : ~ i r 0
+        ~ < r . m n_group_used {
+            : ~ i best -1
+            : ~ f bestv -1.0e30
+            = g 0
+            ~ < g . m n_group {
+                : ~ b taken F
+                : ~ i t2 0
+                ~ < t2 ( vec_len [i] picked ) {
+                    ?? ( vec_get [i] picked t2 ) { T x → { ? == x g { = taken T } {} } F → {} }
+                    = t2 + t2 1
+                }
+                ? taken {} {
+                    : ~ f v -1.0e30
+                    ?? ( vec_get [f] gsc g ) { T x → { = v x } F → {} }
+                    ? > v bestv {
+                        = best g
+                        = bestv v
+                    } {}
+                }
+                = g + g 1
+            }
+            ? >= best 0 { ( vec_push [i] picked best ) } {}
+            = r + r 1
+        }
+        = e 0
+        ~ < e nx {
+            : i g2 / e per_grp
+            : ~ b in F
+            : ~ i t2 0
+            ~ < t2 ( vec_len [i] picked ) {
+                ?? ( vec_get [i] picked t2 ) { T x → { ? == x g2 { = in T } {} } F → {} }
+                = t2 + t2 1
+            }
+            ( vec_push [i] allowed ? in 1 0 )
+            = e + e 1
+        }
+        ( vec_free [f] gsc )
+        ( vec_free [i] picked )
+    } {
+        = e 0
+        ~ < e nx {
+            ( vec_push [i] allowed 1 )
+            = e + e 1
+        }
+    }
+    // top n_expert_used among allowed, by biased score
+    : ( Vec i ) chosen ( vec_new [i] )
+    : ~ i r 0
+    ~ < r . m n_expert_used {
+        : ~ i best -1
+        : ~ f bestv -1.0e30
+        = e 0
+        ~ < e nx {
+            : ~ i okg 0
+            ?? ( vec_get [i] allowed e ) { T x → { = okg x } F → {} }
+            ? != okg 0 {
+                : ~ b taken F
+                : ~ i t2 0
+                ~ < t2 ( vec_len [i] chosen ) {
+                    ?? ( vec_get [i] chosen t2 ) { T x → { ? == x e { = taken T } {} } F → {} }
+                    = t2 + t2 1
+                }
+                ? taken {} {
+                    : ~ f v -1.0e30
+                    ?? ( vec_get [f] biased e ) { T x → { = v x } F → {} }
+                    ? > v bestv {
+                        = best e
+                        = bestv v
+                    } {}
+                }
+            } {}
+            = e + e 1
+        }
+        ? >= best 0 { ( vec_push [i] chosen best ) } {}
+        = r + r 1
+    }
+    // weights: unbiased scores, normalised, scaled
+    : ~ f wsum 0.0
+    : ~ i t2 0
+    ~ < t2 ( vec_len [i] chosen ) {
+        ?? ( vec_get [i] chosen t2 ) {
+            T e2 → {
+                ?? ( vec_get [f] sc e2 ) { T x → { = wsum + wsum x } F → {} }
+            }
+            F → {}
+        }
+        = t2 + t2 1
+    }
+    = t2 0
+    ~ < t2 ( vec_len [i] chosen ) {
+        : ~ i e2 -1
+        ?? ( vec_get [i] chosen t2 ) { T x → { = e2 x } F → {} }
+        : ~ f w 0.0
+        ?? ( vec_get [f] sc e2 ) { T x → { = w x } F → {} }
+        ? . m weights_norm { = w / w + wsum 0.00000000000000000001 } {}
+        = w * w . m route_scale
+        ( vec_push [i] sel e2 )
+        ( vec_push [f] wts w )
+        = t2 + t2 1
+    }
+    ( vec_free [f] sc )
+    ( vec_free [f] biased )
+    ( vec_free [i] allowed )
+    ( vec_free [i] chosen )
+}
+
+@ __lm_eval_core * Llm m ( Vec i ) ids i first i count i pos0 i kvlen b causal i logits_mode → v {
     ? < count 1 { ^ v } {}
     : i ne . m n_embd
     : i hd . m head_dim
@@ -932,7 +1307,7 @@ $ `src/tokenizer.nu`
         ( lk_copyat . m ks ( _lm_geti . m kcache L ) kbuf * pos0 kvdim * count kvdim )
         ( lk_copyat . m ks ( _lm_geti . m vcache L ) . m vd * pos0 kvdim * count kvdim )
         ( lk_attn . m ks qbuf ( _lm_geti . m kcache L ) ( _lm_geti . m vcache L )
-        . m aod . m scored nh nkv hd + pos0 1 count . m n_ctx . m attn_scale window )
+        . m aod . m scored nh nkv hd ? causal + pos0 1 kvlen count . m n_ctx . m attn_scale window ? causal 1 0 )
         : b _q4 ( lk_matvec_q . m ks ( _lm_geti . m tq_wo L ) ( _lm_geti . m wo L ) . m aod . m tmpd ne qd_ count )
         // gemma3 norms the block's OUTPUT as well, before the residual add.
         : i pan ( _lm_geti . m post_attn_norm L )
@@ -943,31 +1318,102 @@ $ `src/tokenizer.nu`
         } {}
         ( lk_addv . m ks . m xd abuf * ne count )
 
-        // ── FFN (SwiGLU for llama/qwen2, GeGLU for gemma) ──
-        ( lk_rmsnorm . m ks . m xd ( _lm_geti . m ffn_norm L ) . m xnd ne . m eps count )
-        : b _q5 ( lk_matvec_q . m ks ( _lm_geti . m tq_gate L ) ( _lm_geti . m w_gate L ) . m xnd . m gd . m n_ff ne count )
-        : b _q6 ( lk_matvec_q . m ks ( _lm_geti . m tq_up L ) ( _lm_geti . m w_up L ) . m xnd . m ud . m n_ff ne count )
-        ? . m ffn_gelu
-        { ( lk_gelumul . m ks . m gd . m ud * . m n_ff count ) }
-        { ( lk_silumul . m ks . m gd . m ud * . m n_ff count ) }
-        : b _q7 ( lk_matvec_q . m ks ( _lm_geti . m tq_down L ) ( _lm_geti . m w_down L ) . m gd . m tmpd ne . m n_ff count )
-        : i pfn ( _lm_geti . m post_ffn_norm L )
-        : ~ i fbuf . m tmpd
-        ? >= pfn 0 {
-            ( lk_rmsnorm . m ks . m tmpd pfn . m tn2d ne . m eps count )
-            = fbuf . m tn2d
-        } {}
-        ( lk_addv . m ks . m xd fbuf * ne count )
+        // ── FFN ──
+        ? >= ( _lm_geti . m gate_exps L ) 0 {
+            // MoE (llada2): shared expert over the whole batch, then the
+            // fp32-sigmoid router picks n_expert_used experts per
+            // position out of the fused 3D expert tensors — each expert
+            // is a row RANGE inside the uploaded (still quantised)
+            // tensor, exactly the phi3 fused-weight trick — and their
+            // weighted down-projections accumulate onto the residual.
+            ( lk_rmsnorm . m ks . m xd ( _lm_geti . m ffn_norm L ) . m xnd ne . m eps count )
+            : i shf . m shexp_ff
+            : b _s1 ( lk_matvec_q . m ks ( _lm_geti . m tq_gate_shexp L ) ( _lm_geti . m gate_shexp L ) . m xnd . m gd shf ne count )
+            : b _s2 ( lk_matvec_q . m ks ( _lm_geti . m tq_up_shexp L ) ( _lm_geti . m up_shexp L ) . m xnd . m ud shf ne count )
+            ( lk_silumul . m ks . m gd . m ud * shf count )
+            : b _s3 ( lk_matvec_q . m ks ( _lm_geti . m tq_down_shexp L ) ( _lm_geti . m down_shexp L ) . m gd . m tmpd ne shf count )
+            ( lk_addv . m ks . m xd . m tmpd * ne count )
+            // router logits for every position, downloaded for the
+            // host-side grouped top-k (256 floats per position)
+            : b _s4 ( lk_matvec_q . m ks ( _lm_geti . m tq_gate_inp L ) ( _lm_geti . m gate_inp L ) . m xnd . m rlogitsd . m n_expert ne count )
+            : GpuBuffer rb @ GpuBuffer { . m rlogitsd * * count . m n_expert 4 }
+            : i _d1 ( gpu_download . m router_host rb )
+            : i gt_g ( _lm_geti . m tq_gate_exps L )
+            : i gt_u ( _lm_geti . m tq_up_exps L )
+            : i gt_d ( _lm_geti . m tq_down_exps L )
+            : i stride_g * . m moe_ff ( __lm_row_bytes gt_g ne )
+            : i stride_u * . m moe_ff ( __lm_row_bytes gt_u ne )
+            : i stride_d * ne ( __lm_row_bytes gt_d . m moe_ff )
+            : ~ i b2 0
+            ~ < b2 count {
+                : ( Vec i ) sel ( vec_new [i] )
+                : ( Vec f ) wts ( vec_new [f] )
+                ( __lm_moe_route m L b2 sel wts )
+                : i xrow + . m xnd * * b2 ne 4
+                : i orow + . m xd * * b2 ne 4
+                : ~ i j 0
+                ~ < j ( vec_len [i] sel ) {
+                    : ~ i e2 0
+                    ?? ( vec_get [i] sel j ) { T x → { = e2 x } F → {} }
+                    : ~ f w 0.0
+                    ?? ( vec_get [f] wts j ) { T x → { = w x } F → {} }
+                    : b _e1 ( lk_matvec_q . m ks gt_g + ( _lm_geti . m gate_exps L ) * e2 stride_g xrow . m gd . m moe_ff ne 1 )
+                    : b _e2 ( lk_matvec_q . m ks gt_u + ( _lm_geti . m up_exps L ) * e2 stride_u xrow . m ud . m moe_ff ne 1 )
+                    ( lk_silumul . m ks . m gd . m ud . m moe_ff )
+                    : b _e3 ( lk_matvec_q . m ks gt_d + ( _lm_geti . m down_exps L ) * e2 stride_d . m gd . m moe_outd ne . m moe_ff 1 )
+                    ( lk_axpy . m ks orow . m moe_outd w ne )
+                    = j + j 1
+                }
+                ( vec_free [i] sel )
+                ( vec_free [f] wts )
+                = b2 + b2 1
+            }
+        } {
+            // dense FFN (SwiGLU for llama/qwen2/llada2 layer 0, GeGLU for gemma)
+            ( lk_rmsnorm . m ks . m xd ( _lm_geti . m ffn_norm L ) . m xnd ne . m eps count )
+            : b _q5 ( lk_matvec_q . m ks ( _lm_geti . m tq_gate L ) ( _lm_geti . m w_gate L ) . m xnd . m gd . m n_ff ne count )
+            : b _q6 ( lk_matvec_q . m ks ( _lm_geti . m tq_up L ) ( _lm_geti . m w_up L ) . m xnd . m ud . m n_ff ne count )
+            ? . m ffn_gelu
+            { ( lk_gelumul . m ks . m gd . m ud * . m n_ff count ) }
+            { ( lk_silumul . m ks . m gd . m ud * . m n_ff count ) }
+            : b _q7 ( lk_matvec_q . m ks ( _lm_geti . m tq_down L ) ( _lm_geti . m w_down L ) . m gd . m tmpd ne . m n_ff count )
+            : i pfn ( _lm_geti . m post_ffn_norm L )
+            : ~ i fbuf . m tmpd
+            ? >= pfn 0 {
+                ( lk_rmsnorm . m ks . m tmpd pfn . m tn2d ne . m eps count )
+                = fbuf . m tn2d
+            } {}
+            ( lk_addv . m ks . m xd fbuf * ne count )
+        }
         = L + L 1
     }
 
-    // logits for the last position only
-    ( lk_rmsnorm . m ks . m xd . m out_norm . m xnd ne . m eps count )
-    : i last_row + . m xnd * * - count 1 ne 4
-    : b _q8 ( lk_matvec_q . m ks . m tq_output . m w_output last_row . m logitsd . m n_vocab ne 1 )
-    : GpuBuffer lb @ GpuBuffer { . m logitsd * . m n_vocab 4 }
-    : i _u2 ( gpu_download . m logits_host lb )
+    // logits: 0 = none (a prefill block), 1 = last position only
+    // (autoregressive decode), 2 = every position (diffusion denoise)
+    ? == logits_mode 1 {
+        ( lk_rmsnorm . m ks . m xd . m out_norm . m xnd ne . m eps count )
+        : i last_row + . m xnd * * - count 1 ne 4
+        : b _q8 ( lk_matvec_q . m ks . m tq_output . m w_output last_row . m logitsd . m n_vocab ne 1 )
+        : GpuBuffer lb @ GpuBuffer { . m logitsd * . m n_vocab 4 }
+        : i _u2 ( gpu_download . m logits_host lb )
+    } {}
+    ? == logits_mode 2 {
+        ( lk_rmsnorm . m ks . m xd . m out_norm . m xnd ne . m eps count )
+        : b _q9 ( lk_matvec_q . m ks . m tq_output . m w_output . m xnd . m logitsd . m n_vocab ne count )
+        : GpuBuffer lb2 @ GpuBuffer { . m logitsd * * count . m n_vocab 4 }
+        : i _u3 ( gpu_download . m logits_host lb2 )
+    } {}
 }
+
+// Logit `idx` of window row `row` after an all-positions eval
+// (llm_eval_win with logits). Row 0 = the window's first position.
+@ llm_logit_at * Llm m i row i idx → f {
+    ^ ( gpu_host_get_f32 . m logits_host + * row . m n_vocab idx )
+}
+
+@ llm_mask_id * Llm m → i { ^ . m mask_id }
+
+@ llm_is_diffusion * Llm m → b { ^ . m bidir }
 
 // The largest chunk a single llm_eval_n call may take.
 @ llm_chunk → i { ^ LM_CHUNK }

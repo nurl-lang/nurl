@@ -6176,8 +6176,14 @@
     // stale set so the else-arm starts from the pre-`?` state, and join by
     // union at %lend (see __ptr_dead_union).
     : s __ptr_dead_pre ( nurl_str_cat ( __ptr_dead_snapshot ) `` )
+    // Fresh-owned-slice provenance: reset, then snapshot after the arm so we
+    // can tell whether this arm's value is a freshly-allocated owned slice
+    // (a slice literal or a nested `?` that is itself fresh). Only when BOTH
+    // live arms are fresh does the `?`-result carry ownership to the binding.
+    ( nurl_sym_def syms `__last_slice_owned__` `` )
     : s tv ( gen_expr lex syms cg )
     : s tt2 ( nurl_get_last_type )
+    : s t_slice_flag ( nurl_str_cat ( nurl_sym_get syms `__last_slice_owned__` ) `` )
     : s t_retid ( nurl_str_cat ( nurl_sym_get syms `__last_ident_name__` ) `` )
     : s tlbl ( nurl_sym_get syms `__cur_lbl__` )
     : i tdr g_did_ret
@@ -6200,12 +6206,13 @@
         } {}
     } {}
     ? == tdr 0
-    {  // Phase 2D: arm-local fall-through drop. Only safe when the arm's
-        // result type is void — otherwise tv may reference memory backed by
-        // one of the arm-local allocas we're about to free (UAF in the phi
-        // consumer at %lend). Arm-result ownership transfer would require
-        // Phase 2A-style tracking; out of scope here.
-        ? & != 0 g_auto_drop_strings ( seq tt2 `void` )
+    {  // Phase 2D: arm-local fall-through drop. Safe when the arm's result
+        // is void OR a plain scalar (mem_arm_drop_safe) — otherwise tv may
+        // reference memory backed by one of the arm-local allocas we're
+        // about to free (UAF in the phi consumer at %lend). Arm-result
+        // ownership transfer would require Phase 2A-style tracking; out of
+        // scope here.
+        ? & != 0 g_auto_drop_strings ( mem_arm_drop_safe tt2 )
         { ( mem_drop_new_strings syms cg old_strs_t )
             ( mem_drop_new_struct_fields syms cg old_structs_t )
             ( mem_drop_new_user_drops syms cg old_user_t )
@@ -6239,8 +6246,10 @@
     = g_ret_forbidden 0
     // Mirror of the then-arm's escaping-ident snapshot above.
     ( nurl_sym_def syms `__last_ident_name__` `` )
+    ( nurl_sym_def syms `__last_slice_owned__` `` )
     : s ev ( gen_expr lex syms cg )
     : s et2 ( nurl_get_last_type )
+    : s e_slice_flag ( nurl_str_cat ( nurl_sym_get syms `__last_slice_owned__` ) `` )
     : s e_retid ( nurl_str_cat ( nurl_sym_get syms `__last_ident_name__` ) `` )
     : s elbl ( nurl_sym_get syms `__cur_lbl__` )
     : i edr g_did_ret
@@ -6257,7 +6266,7 @@
         } {}
     } {}
     ? == edr 0
-    { ? & != 0 g_auto_drop_strings ( seq et2 `void` )
+    { ? & != 0 g_auto_drop_strings ( mem_arm_drop_safe et2 )
         { ( mem_drop_new_strings syms cg old_strs_e )
             ( mem_drop_new_struct_fields syms cg old_structs_e )
             ( mem_drop_new_user_drops syms cg old_user_e )
@@ -6382,6 +6391,16 @@
         { ( nurl_set_last_type `void` ) }
     }
     {}
+    // Forward fresh-owned-slice provenance to a consuming `:` binding: the
+    // `?`-result owns a slice only when every LIVE arm produced a fresh owned
+    // slice and the join type is a slice. A returning (`^`) arm never reaches
+    // the phi, so it does not gate; a borrow/alias arm leaves its flag clear,
+    // keeping mixed cases unregistered (leak-not-UAF) as before.
+    : b __t_slice_ok ? != 0 tdr T != 0 ( nurl_str_len t_slice_flag )
+    : b __e_slice_ok ? != 0 edr T != 0 ( nurl_str_len e_slice_flag )
+    : b __slice_live | == 0 tdr == 0 edr
+    : b __slice_res & & & __t_slice_ok __e_slice_ok __slice_live ( mem_is_slice_ty phi_ty )
+    ( nurl_sym_def syms `__last_slice_owned__` ? __slice_res `1` `` )
     result
 }
 
@@ -6716,6 +6735,12 @@
     : ~ s phi_entries64 ``
     : ~ b all_int64 T
     : ~ b any_u64 F
+    // Fresh-owned-slice provenance across the arms: the match yields a fresh
+    // owned slice only when EVERY live (falling-through, non-void) arm did.
+    // A single non-fresh live arm (a borrow/alias) clears it — mixed cases
+    // stay unregistered (leak-not-UAF), mirroring gen_cond.
+    : ~ b all_slice_fresh T
+    : ~ i live_slice_arms 0
     // arms_total / arms_ret count every parsed arm vs. those that ended
     // in `^`. When equal AND a fallback_pred is set, the `match_end`
     // label is reached only through the synthetic last-arm fallthrough
@@ -7598,6 +7623,9 @@
             : s arm_result ( gen_stmt lex syms cg )
             = g_in_match_arm __saved_in_arm
             : s arm_type ( nurl_get_last_type )
+            // Fresh-owned-slice provenance of THIS arm's value (see gen_cond):
+            // snapshot before the arm scope's nurl_sym_pop frees the flag entry.
+            : s arm_slice_flag ( nurl_str_cat ( nurl_sym_get syms `__last_slice_owned__` ) `` )
             : s arm_retid ( nurl_str_cat ( nurl_sym_get syms `__last_ident_name__` ) `` )
             : s arm_lbl ( nurl_sym_get syms `__cur_lbl__` )
             : i arm_did_ret g_did_ret
@@ -7627,10 +7655,11 @@
                 = __ptr_dead_acc_m ( nurl_str_cat ( __ptr_dead_snapshot ) `` )
             } {}
 
-            // Phase 2D arm-local fall-through drop — only safe when the arm
-            // type is void (an arm-local heap object may back a value flowing
-            // through to the phi consumer; freeing here would UAF).
-            ? & & != 0 g_auto_drop_strings ( seq arm_type `void` ) == arm_did_ret 0
+            // Phase 2D arm-local fall-through drop — safe when the arm type
+            // is void or a plain scalar (an arm-local heap object may back a
+            // pointer/slice/aggregate value flowing through to the phi
+            // consumer; freeing here would UAF — see mem_arm_drop_safe).
+            ? & & != 0 g_auto_drop_strings ( mem_arm_drop_safe arm_type ) == arm_did_ret 0
             { ( mem_drop_new_strings syms cg old_strs_m )
                 ( mem_drop_new_struct_fields syms cg old_structs_m )
                 ( mem_drop_new_user_drops syms cg old_user_m )
@@ -7665,6 +7694,12 @@
                     ? ( seq ( nurl_llty arm_type ) `i8*` )
                     { ( mem_remove_owned_str syms
                         ( nurl_sym_get syms ( nurl_str_cat arm_retid `__ptr` ) ) ) }
+                    {}
+                    // Fresh-owned-slice provenance: this live arm feeds the
+                    // phi. Count it, and clear the aggregate if it isn't fresh.
+                    ? ( mem_is_slice_ty arm_type )
+                    { = live_slice_arms + live_slice_arms 1
+                        ? == 0 ( nurl_str_len arm_slice_flag ) { = all_slice_fresh F } {} }
                     {}
                     : s entry ( nurl_str_cat `[ ` ( nurl_str_cat arm_result ( nurl_str_cat `, %` ( nurl_str_cat arm_lbl ` ]` ) ) ) )
                     = phi_entries ? == 0 ( nurl_str_len phi_entries )
@@ -7756,6 +7791,10 @@
         ( nurl_print ` = phi ` ) ( nurl_print ( nurl_llty phi_type ) )
         ( nurl_print ` ` ) ( nurl_print phi_full ) ( nurl_print `\n` )
         ( nurl_set_last_type phi_type )
+        // Forward fresh-owned-slice provenance to a consuming `:` binding, when
+        // every live arm produced a fresh owned slice of the (slice) join type.
+        ( nurl_sym_def syms `__last_slice_owned__`
+        ? & & all_slice_fresh > live_slice_arms 0 ( mem_is_slice_ty phi_type ) `1` `` )
         // Borrow propagation only matters when the match YIELDS an auto-Drop
         // enum (the value a `:`-binding might wrongly drop). For any other
         // result type — String, i, … — reset so a match on a borrowed param
@@ -8211,6 +8250,30 @@
     : s cur ( nurl_sym_get syms `__slice_decls__` )
     ( nurl_sym_def syms `__slice_decls__`
     ? == 0 ( nurl_str_len cur ) name ( nurl_str_cat3 cur ` ` name ) )
+}
+
+// Un-register `name` as an owned slice (both sidebands mem_own_add /
+// mem_slice_decl_add populate). Used when `= dst src` MOVES src's slice into
+// dst: src must no longer free the buffer, or dst and src would both free it
+// (a double-free). Mirrors mem_own_closure_remove for the closure-env list.
+@ mem_own_slice_remove i syms s name → v {
+    ? == 0 ( nurl_str_len name ) { ^ } {}
+    : ~ i li 0
+    ~ < li 2 {
+        : s key ? == li 0 `__owned_slices__` `__slice_decls__`
+        : s cur ( nurl_sym_get syms key )
+        ? ( str_contains_word cur name )
+        { : ~ s out ``
+            : ~ s rest cur
+            ~ != 0 ( nurl_str_len rest ) {
+                : s w ( str_first_word rest ) = rest ( str_skip_word rest )
+                ? ( seq w name ) {}
+                { = out ? == 0 ( nurl_str_len out ) w ( nurl_str_cat3 out ` ` w ) }
+            }
+            ( nurl_sym_def syms key out ) }
+        {}
+        = li + li 1
+    }
 }
 
 // Emit the free of one owned-slice binding's backing buffer: load the
@@ -8721,6 +8784,26 @@
         }
     }
     {}
+}
+
+// Phase 2D gate: an arm's fall-through drop is safe when the arm's
+// VALUE cannot reference arm-local heap memory. That is: void (no
+// value at all), or a plain scalar — integers, floats, bool are copied
+// through the join phi, so freeing arm-local buffers behind them can
+// never dangle. Pointer, slice and aggregate arm values stay
+// conservative (leak-not-UAF): the value may be backed by exactly the
+// arm-local allocation the drop would free (`{ : String t … t }`).
+// This closes the gap where an arm whose LAST statement is an
+// assignment (`= total …` publishes the stored value's type, see
+// gen_assign's tail comment) looked value-typed and skipped every
+// arm-local drop — leaking any owned string/slice declared in the arm.
+@ mem_arm_drop_safe s t → b {
+    ? ( seq t `void` ) { ^ T } {}
+    : s ll ( nurl_llty t )
+    ? > ( int_width ll ) 0 { ^ T } {}
+    ? ( seq ll `double` ) { ^ T } {}
+    ? ( seq ll `float` ) { ^ T } {}
+    ^ F
 }
 
 // Slice counterpart of mem_drop_new_strings: at an arm's fall-through,
@@ -10005,6 +10088,14 @@
     = g_stmt_line bck_line
     = g_stmt_col ( nurl_lex_col lex )
     = g_stmt_bare_lit 0
+    // Fresh-owned-slice provenance is a per-EXPRESSION signal, so reset it at
+    // every statement boundary: after a block runs, the flag then reflects
+    // ONLY its trailing statement's value (the block's value), never a slice
+    // literal bound by an earlier `:` statement. Without this a block arm like
+    // `{ : t [i | … ] ( use t ) }` would leave the flag set from the inner
+    // literal and mislead gen_cond / gen_match into registering ownership of a
+    // non-fresh result. (Set by gen_slice_literal / gen_cond / gen_match.)
+    ( nurl_sym_def syms `__last_slice_owned__` `` )
     // A statement is a legal `^` position — clear any operand-context
     // guard inherited from an enclosing expression (e.g. a `?`/`??` arm
     // that descends back into statements).
@@ -10332,6 +10423,7 @@
         ( nurl_sym_def syms `__last_expr_refdepth__` `` )
         ( nurl_sym_def syms `__last_value_borrow__` `` )
         ( nurl_sym_def syms `__last_closure_env__` `` )
+        ( nurl_sym_def syms `__last_slice_owned__` `` )
         : s val ( gen_expr lex syms cg )
         : s vt ( nurl_get_last_type )
         // Closure-env reclamation (§7.4): did the RHS allocate a capturing
@@ -10346,6 +10438,9 @@
         ( bck_record `let` name bck_line )
         ( bck_let_alias syms is_mutable bck_rhs_tt bck_rhs_val vt bck_line )
         : b rhs_is_owned_call != 0 ( nurl_str_len ( nurl_sym_get syms `__last_call_ret_owned__` ) )
+        // A `?`-ternary whose live arms are all fresh owned slices hands the
+        // buffer to this binding (gen_slice_literal / gen_cond set the flag).
+        : b rhs_slice_owned != 0 ( nurl_str_len ( nurl_sym_get syms `__last_slice_owned__` ) )
         // Escape analysis: stamp this binding's
         // region (block depth) and, when the initialiser was a stack
         // reference — a closure literal capturing a binding by
@@ -10368,7 +10463,7 @@
         ? is_mutable
         { ( nurl_sym_def syms ( nurl_str_cat name `__mutable` ) `1` ) }
         {}
-        ? | rhs_is_slice_lit & rhs_is_owned_call ( mem_is_slice_ty vt )
+        ? | | rhs_is_slice_lit & rhs_slice_owned ( mem_is_slice_ty vt ) & rhs_is_owned_call ( mem_is_slice_ty vt )
         { ( mem_own_add syms name )
             ( mem_slice_decl_add syms name )
             ( mem_journal_push_slice cg vt ptr ) }
@@ -10500,6 +10595,7 @@
                 ( nurl_sym_def syms `__last_expr_refdepth__` `` )
                 ( nurl_sym_def syms `__last_value_borrow__` `` )
                 ( nurl_sym_def syms `__last_closure_env__` `` )
+                ( nurl_sym_def syms `__last_slice_owned__` `` )
                 : s val ( gen_expr lex syms cg )
                 : s vt ( nurl_get_last_type )
                 : s rhs_closure_env ( nurl_sym_get syms `__last_closure_env__` )
@@ -10528,6 +10624,9 @@
                 ( bck_record `let` name bck_line )
                 ( bck_let_alias syms is_mutable bck_rhs_tt bck_rhs_val vt bck_line )
                 : b rhs_is_owned_call != 0 ( nurl_str_len ( nurl_sym_get syms `__last_call_ret_owned__` ) )
+                // A `?`-ternary whose live arms are all fresh owned slices
+                // hands the buffer to this binding (see the inference path).
+                : b rhs_slice_owned != 0 ( nurl_str_len ( nurl_sym_get syms `__last_slice_owned__` ) )
                 // Escape analysis: stamp region +
                 // referent depth — see the type-inference path above.
                 ( bck_esc_let syms name ( bck_expr_refdepth syms
@@ -10553,7 +10652,7 @@
                 ? is_mutable
                 { ( nurl_sym_def syms ( nurl_str_cat name `__mutable` ) `1` ) }
                 {}
-                ? | rhs_is_slice_lit & rhs_is_owned_call ( mem_is_slice_ty ptype )
+                ? | | rhs_is_slice_lit & rhs_slice_owned ( mem_is_slice_ty ptype ) & rhs_is_owned_call ( mem_is_slice_ty ptype )
                 { ( mem_own_add syms name )
                     ( mem_slice_decl_add syms name )
                     ( mem_journal_push_slice cg ptype ptr ) }
@@ -10605,7 +10704,9 @@
                 ^ val
             }
         }
-        { ( die lex `expected variable name in let` ) }
+        { ? == ( nurl_lex_type lex ) TT_PUB
+            { ( die lex `expected variable name in let — 'pub' is a reserved keyword (the visibility prefix on top-level declarations) and cannot name a binding` ) }
+            { ( die lex `expected variable name in let` ) } }
     }
 }
 
@@ -10675,7 +10776,7 @@
         // NAME — Phase 1 protocol) being overwritten.
         : b lhs_is_owned_slc & ( mem_is_slice_ty vt )
         ( str_contains_word ( nurl_sym_get syms `__owned_slices__` ) name )
-        ? | lhs_is_owned_str lhs_is_owned_slc { ( nurl_sym_def syms `__last_call_ret_owned__` `` ) } {}
+        ? | lhs_is_owned_str lhs_is_owned_slc { ( nurl_sym_def syms `__last_call_ret_owned__` `` ) ( nurl_sym_def syms `__last_slice_owned__` `` ) } {}
         // Escape analysis: snapshot the RHS's
         // first token (a bare identifier may copy a stack reference)
         // and clear the side-channel a closure / aggregate literal
@@ -10685,6 +10786,9 @@
         ( nurl_sym_def syms `__last_expr_refdepth__` `` )
         : s val ( gen_operand lex syms cg )
         : s __asn_rt ( nurl_get_last_type )
+        // A fresh owned slice reaching the RHS through a `?` / `??` (whose
+        // first token isn't `[`) still frees the old buffer below.
+        : b rhs_slice_owned != 0 ( nurl_str_len ( nurl_sym_get syms `__last_slice_owned__` ) )
         // Type-agreement on reassignment (the store dual of the let-binding
         // / call-arg checks): a never-legal clash (float-vs-non-float, a
         // different named struct by value, or String vs raw C-string) would
@@ -10720,8 +10824,9 @@
         // nurl_free auto-forgets the journal entry, so a later panic
         // cannot replay the freed buffer.
         ? & lhs_is_owned_slc
-        | == bck_rhs_tt TT_LBRACK
+        | | == bck_rhs_tt TT_LBRACK
         ( seq ( nurl_sym_get syms `__last_call_ret_owned__` ) `1` )
+        rhs_slice_owned
         { ( mem_emit_slice_free syms cg name ) }
         {}
         // Ownership transfer: `= name x` with a bare-identifier RHS
@@ -10751,6 +10856,14 @@
         ? & ( is_ident_tok bck_rhs_tt )
         ( str_contains_word ( nurl_sym_get syms `__owned_closure_envs__` ) bck_rhs_val )
         { ( mem_own_closure_remove syms bck_rhs_val ) }
+        {}
+        // Slice move (dual of the owned-string transfer above): `= dst src`
+        // with a bare-identifier RHS copies src's { ptr, len } into dst. If
+        // src owned its buffer, MOVE that ownership to dst — otherwise both
+        // src and dst free the same buffer at scope exit (a double-free).
+        ? & & lhs_is_owned_slc ( is_ident_tok bck_rhs_tt )
+        ( str_contains_word ( nurl_sym_get syms `__owned_slices__` ) bck_rhs_val )
+        { ( mem_own_slice_remove syms bck_rhs_val ) }
         {}
         // Widen i1 short-circuit / comparison results to the LHS's
         // declared integer width, so `= myi64 & a b` stores cleanly.
@@ -12620,6 +12733,12 @@
     ( nurl_print ` ` ) ( nurl_print r0 )
     ( nurl_print `, i64 ` ) ( nurl_print ( nurl_str_int count ) ) ( nurl_print `, 1\n` )
     ( nurl_set_last_type slice_ty )
+    // A slice literal is a FRESH owned buffer. Signal it so a `:` binding whose
+    // RHS reaches this through a `?` ternary (where the syntactic TT_LBRACK
+    // check can't see it) still registers ownership — otherwise the buffer
+    // leaks at function exit. gen_cond forwards the flag when both live arms
+    // carry it; every other reader resets it before its own gen_expr.
+    ( nurl_sym_def syms `__last_slice_owned__` `1` )
     r1
 }
 
@@ -12707,7 +12826,12 @@
     // The void/unit value (a bare type keyword `v`) is never storable —
     // `: i y v` / `= x v` used to emit `store i64 void`. Reject at the source.
     ( die_if_void lex val `initialiser / assignment` )
-    ? & ( seq from_ty `i1` ) ! ( seq to_ty `i1` )
+    // i1 (comparison / short-circuit result) widens ONLY into an integer
+    // target. An aggregate target (`?T`, a slice, a result) used to take
+    // this branch too and emit `zext i1 … to { i1, %T }` — invalid IR that
+    // nurlc accepted and only clang rejected; it now falls through to the
+    // never-valid-mix diagnostic below.
+    ? & & ( seq from_ty `i1` ) ! ( seq to_ty `i1` ) > ( int_width to_ty ) 0
     { : s r ( nurl_cg_reg cg )
         ( nurl_print `  ` ) ( nurl_print r )
         ( nurl_print ` = zext i1 ` ) ( nurl_print val )
@@ -12825,7 +12949,14 @@
     ? & ! ( seq ( nurl_llty from_ty ) ( nurl_llty to_ty ) ) != 0 ( nurl_str_len to_ty )
     { : b csv_sf | ( seq from_ty `double` ) ( seq from_ty `float` )
         : b csv_tf | ( seq to_ty `double` ) ( seq to_ty `float` )
-        ? | != csv_sf csv_tf & ( is_ptr_ty from_ty ) ! ( is_ptr_ty to_ty )
+        // An anonymous-aggregate target (`{ …` — an option, slice or
+        // result shape) can never absorb a bare scalar: every legal wrap
+        // (enum, single-handle) already returned above. Without this arm a
+        // `: ?T x <bool-expr>` stored i1 into { i1, %T } — IR only clang
+        // rejected.
+        : b csv_agg & > ( int_width from_ty ) 0
+        == ( nurl_str_get ( nurl_llty to_ty ) 0 ) 123
+        ? | | != csv_sf csv_tf & ( is_ptr_ty from_ty ) ! ( is_ptr_ty to_ty ) csv_agg
         { ( die_stmt lex ( nurl_str_cat ( nurl_str_cat4
             `value of type '` from_ty `' cannot initialise / assign a binding of type '` to_ty )
             `' — NURL has no implicit conversions; use a matching value or convert with '# T expr'` ) ) }
@@ -19328,6 +19459,22 @@
                 // buffered closure-IR emission — reset the output stack to
                 // stdout (post-error IR is garbage; the non-zero exit makes
                 // callers discard it) and resync to the next declaration.
+                //
+                // The panic also unwound out of whatever symbol-table scopes
+                // the half-compiled declaration had open (function body,
+                // `?`/`??` arm frames), skipping their nurl_sym_pop calls.
+                // Top-level declarations always compile at scope depth 0 —
+                // pop the leaked frames now, or their entries poison every
+                // later declaration. The concrete hazard: gen_match's
+                // synthetic `__matchtmp<n>__res_nurl_T/…` payload keys leak,
+                // and because the label counter numbering them resets per
+                // function (nurl_cg_reset), a later same-numbered option
+                // match — which defines only `__opt_nurl_T` — reads the dead
+                // declaration's `__res_nurl_T` and types its payload with a
+                // foreign struct. One bad let inside a `?? { T st → … }` arm
+                // then drowned the real diagnostic under phantom cross-file
+                // type errors in modules compiled much later.
+                ~ > ( nurl_peek # s syms 1 ) 0 { ( nurl_sym_pop syms ) }
                 ( nurl_print_buf_unwind )
                 ( __diag_resync lex )
             }

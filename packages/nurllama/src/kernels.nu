@@ -47,6 +47,7 @@ $ `deps/gpu/src/gpu.nu`
     GpuKernel addv
     GpuKernel addrow
     GpuKernel copyat
+    GpuKernel axpy
     b ok
 }
 
@@ -196,18 +197,22 @@ $ `deps/gpu/src/gpu.nu`
 // gemma3 does this on five of every six layers. `window` = 0 is full causal
 // attention. attn_sc and attn_out compute the same lower bound `lo`, so the
 // masked score slots are never read rather than being written with -inf.
+// `causal` — 1: batch element b attends its own causal window
+// (npos0 + b cache rows, autoregressive decode). 0: every element
+// attends the SAME fixed range npos0 (block-diffusion: a query in the
+// active block sees the whole window, later positions included).
 @ __lk_attn_sc → s {
     ^ `extern "C" __global__ void attn_sc(
         const float* q, const float* K, float* scores,
         int nh, int nkv, int hd, int npos0, int batch, int maxpos,
-        float qscale, int window) {
+        float qscale, int window, int causal) {
         int idx = blockIdx.x*blockDim.x + threadIdx.x;
         int total = nh*batch*maxpos;
         if (idx >= total) return;
         int t  = idx % maxpos;
         int hb = idx / maxpos;
         int h  = hb % nh, b = hb / nh;
-        int npos = npos0 + b;
+        int npos = causal ? npos0 + b : npos0;
         if (t >= npos) return;
         int lo = (window > 0 && npos - 1 - window > 0) ? (npos - 1 - window) : 0;
         if (t < lo) return;
@@ -224,13 +229,14 @@ $ `deps/gpu/src/gpu.nu`
 @ __lk_attn_out → s {
     ^ `extern "C" __global__ void attn_out(
         const float* V, const float* scores, float* out,
-        int nh, int nkv, int hd, int npos0, int batch, int maxpos, int window) {
+        int nh, int nkv, int hd, int npos0, int batch, int maxpos, int window,
+        int causal) {
         int idx = blockIdx.x*blockDim.x + threadIdx.x;
         if (idx >= nh*batch*hd) return;
         int d  = idx % hd;
         int hb = idx / hd;
         int h  = hb % nh, b = hb / nh;
-        int npos = npos0 + b;
+        int npos = causal ? npos0 + b : npos0;
         int lo = (window > 0 && npos - 1 - window > 0) ? (npos - 1 - window) : 0;
         int kvdim = nkv*hd;
         int kh = h / (nh/nkv);
@@ -244,6 +250,14 @@ $ `deps/gpu/src/gpu.nu`
             acc += p * V[(long long)t*kvdim + kh*hd + d];
         }
         out[(long long)b*nh*hd + h*hd + d] = acc / sum;
+    }`
+}
+
+// y ← y + a·x (see lk_axpy).
+@ __lk_axpy → s {
+    ^ `extern "C" __global__ void axpy(float* y, const float* x, float a, int n) {
+        int i = blockIdx.x*blockDim.x + threadIdx.x;
+        if (i < n) y[i] += a * x[i];
     }`
 }
 
@@ -892,6 +906,7 @@ $ `deps/gpu/src/gpu.nu`
     : GpuKernel k6 ( gpu_compile g ( __lk_addv ) `addv` )
     : GpuKernel k6b ( gpu_compile g ( __lk_addrow ) `addrow` )
     : GpuKernel k7 ( gpu_compile g ( __lk_copyat ) `copyat` )
+    : GpuKernel k8 ( gpu_compile g ( __lk_axpy ) `axpy` )
     : GpuKernel q1 ( gpu_compile g ( __lk_mv_q4_0 ) `mv_q4_0` )
     : GpuKernel q2 ( gpu_compile g ( __lk_mv_q8_0 ) `mv_q8_0` )
     : GpuKernel q3 ( gpu_compile g ( __lk_mv_q4_k ) `mv_q4_k` )
@@ -905,7 +920,7 @@ $ `deps/gpu/src/gpu.nu`
     & & ( gpu_kernel_ok k5 ) ( gpu_kernel_ok k6 ) ( gpu_kernel_ok k7 )
     : b ok1 & & ( gpu_kernel_ok q1 ) ( gpu_kernel_ok q2 )
     & & ( gpu_kernel_ok q3 ) ( gpu_kernel_ok q4 ) ( gpu_kernel_ok q5 )
-    : b ok & & & & ok0 ( gpu_kernel_ok k3n ) ( gpu_kernel_ok k6b )
+    : b ok & & & & & ok0 ( gpu_kernel_ok k3n ) ( gpu_kernel_ok k6b ) ( gpu_kernel_ok k8 )
     & ( gpu_kernel_ok k5g ) ( gpu_kernel_ok k5s ) & ok1 & & ( gpu_kernel_ok q6 ) ( gpu_kernel_ok q7 ) ( gpu_kernel_ok q8 )
     // The warp-per-row matvecs use __shfl_down_sync — CUDA only. On any
     // other backend the portable kernels above stay in charge, and the
@@ -922,7 +937,7 @@ $ `deps/gpu/src/gpu.nu`
     : b warp & want_warp
     & & & ( gpu_kernel_ok w1 ) ( gpu_kernel_ok w2 ) & ( gpu_kernel_ok w3 ) ( gpu_kernel_ok w4 )
     & & ( gpu_kernel_ok w5 ) ( gpu_kernel_ok w6 ) & ( gpu_kernel_ok w7 ) ( gpu_kernel_ok w8 )
-    ^ @ LlmKernels { k1 q1 q2 q6 q7 q3 q8 q4 q5 w1 w2 w3 w4 w5 w6 w7 w8 warp k2 k3 k3n k4 k4a k4b k5 k5g k5s k6 k6b k7 ok }
+    ^ @ LlmKernels { k1 q1 q2 q6 q7 q3 q8 q4 q5 w1 w2 w3 w4 w5 w6 w7 w8 warp k2 k3 k3n k4 k4a k4b k5 k5g k5s k6 k6b k7 k8 ok }
 }
 
 @ lk_free LlmKernels ks → v {
@@ -957,6 +972,7 @@ $ `deps/gpu/src/gpu.nu`
     ( gpu_kernel_free . ks addv )
     ( gpu_kernel_free . ks addrow )
     ( gpu_kernel_free . ks copyat )
+    ( gpu_kernel_free . ks axpy )
 }
 
 // ── launch wrappers (raw device pointers, onnx op idiom) ────────────
@@ -1070,7 +1086,7 @@ $ `deps/gpu/src/gpu.nu`
 // npos0 = the causal window of the FIRST batch element (element b sees
 // npos0 + b rows). maxpos strides the per-(batch,head) score scratch.
 // Two-pass attention: scores, then softmax + value-weighted sum.
-@ lk_attn LlmKernels ks i qd i kcd i vcd i outd i scd i nh i nkv i hd i npos0 i batch i maxpos f qscale i window → v {
+@ lk_attn LlmKernels ks i qd i kcd i vcd i outd i scd i nh i nkv i hd i npos0 i batch i maxpos f qscale i window i causal → v {
     : ( Vec i ) a1 ( vec_new [i] )
     ( vec_push [i] a1 ( gpu_arg_i64 qd ) )
     ( vec_push [i] a1 ( gpu_arg_i64 kcd ) )
@@ -1083,6 +1099,7 @@ $ `deps/gpu/src/gpu.nu`
     ( vec_push [i] a1 ( gpu_arg_i32 maxpos ) )
     ( vec_push [i] a1 ( gpu_arg_f32 qscale ) )
     ( vec_push [i] a1 ( gpu_arg_i32 window ) )
+    ( vec_push [i] a1 ( gpu_arg_i32 causal ) )
     : i _r1 ( gpu_launch . ks attn_sc ( gpu_grid * * * nh batch maxpos 1 256 ) 256 a1 )
     ( vec_free [i] a1 )
     : ( Vec i ) a2 ( vec_new [i] )
@@ -1096,8 +1113,21 @@ $ `deps/gpu/src/gpu.nu`
     ( vec_push [i] a2 ( gpu_arg_i32 batch ) )
     ( vec_push [i] a2 ( gpu_arg_i32 maxpos ) )
     ( vec_push [i] a2 ( gpu_arg_i32 window ) )
+    ( vec_push [i] a2 ( gpu_arg_i32 causal ) )
     : i _r2 ( gpu_launch . ks attn_out ( gpu_grid * * nh batch hd 256 ) 256 a2 )
     ( vec_free [i] a2 )
+}
+
+// y ← y + a·x — the routed-expert accumulator (each selected expert's
+// down-projection lands weighted onto the residual stream).
+@ lk_axpy LlmKernels ks i yd i xd f a i n → v {
+    : ( Vec i ) ar ( vec_new [i] )
+    ( vec_push [i] ar ( gpu_arg_i64 yd ) )
+    ( vec_push [i] ar ( gpu_arg_i64 xd ) )
+    ( vec_push [i] ar ( gpu_arg_f32 a ) )
+    ( vec_push [i] ar ( gpu_arg_i32 n ) )
+    : i _r ( gpu_launch . ks axpy ( gpu_grid n 256 ) 256 ar )
+    ( vec_free [i] ar )
 }
 
 // GeGLU: g ← gelu(g) * u, in place. Same shape as lk_silumul.
