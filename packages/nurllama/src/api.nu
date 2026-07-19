@@ -36,6 +36,10 @@ $ `src/diffuse.nu`
 $ `src/sample.nu`
 $ `src/chat.nu`
 $ `src/store.nu`
+$ `src/config.nu`
+$ `src/history.nu`
+$ `src/webui.nu`
+$ `stdlib/ext/uuid.nu`
 
 // The resident model + the store root, reachable from the handlers.
 // Globals may only carry scalar/`s` literals, so the two strings are
@@ -45,6 +49,29 @@ $ `src/store.nu`
 : ~ i g_api_style 0
 : ~ s g_api_name ``
 : ~ s g_api_root ``
+
+// Config for the wizard-started server (`nurllama start`): the default
+// model the web UI chats with, the bearer token (empty = open access),
+// and the SQLite history path. All scalar/`s` (globals hold no structs).
+: ~ i g_api_auth 0
+: ~ s g_api_token ``
+: ~ s g_api_model ``
+: ~ s g_api_histpath ``
+
+@ __api_set_token s tok → v {
+    ? != 0 ( nurl_str_len g_api_token ) { ( nurl_free g_api_token ) } {}
+    = g_api_token ( strdup tok )
+}
+
+@ __api_set_model s m → v {
+    ? != 0 ( nurl_str_len g_api_model ) { ( nurl_free g_api_model ) } {}
+    = g_api_model ( strdup m )
+}
+
+@ __api_set_histpath s p → v {
+    ? != 0 ( nurl_str_len g_api_histpath ) { ( nurl_free g_api_histpath ) } {}
+    = g_api_histpath ( strdup p )
+}
 
 @ __api_set_name s name → v {
     ? != 0 ( nurl_str_len g_api_name ) { ( nurl_free g_api_name ) } {}
@@ -516,29 +543,381 @@ i npredict f temp i topk f topp i seed → b {
     }
 }
 
+// ── the web chat UI: cookie sessions + SQLite history ───────────────
+
+// The per-client GUID. Read from the `nl_client` cookie; minted (and
+// set on the response) on first contact. Each browser thereby carries
+// its own identity, and conversations are scoped to it.
+@ __web_guid HttpRequest req HttpResponse resp → String {
+    ?? ( request_cookie req `nl_client` ) {
+        T c → { ? > ( string_len c ) 0 { ^ c } { ( string_free c ) } }
+        F → {}
+    }
+    : String guid ( uuid_v4 )
+    : String sc ( string_from `nl_client=` )
+    ( string_push_str sc ( string_data guid ) )
+    ( string_push_str sc `; Path=/; Max-Age=34560000; SameSite=Lax; HttpOnly` )
+    ( response_set_header resp `Set-Cookie` ( string_data sc ) )
+    ( string_free sc )
+    ^ guid
+}
+
+// True when the request may touch the data endpoints: always, for an
+// open server; otherwise it must carry `Authorization: Bearer <token>`.
+@ __web_authed HttpRequest req → b {
+    ? == g_api_auth 0 { ^ T } {}
+    ?? ( header_get . req headers `Authorization` ) {
+        T h → {
+            : String want ( string_from `Bearer ` )
+            ( string_push_str want g_api_token )
+            : b ok ( nurl_str_eq ( string_data h ) ( string_data want ) )
+            ( string_free want )
+            ( string_free h )
+            ^ ok
+        }
+        F → {}
+    }
+    ^ F
+}
+
+@ __web_unauth → HttpResponse {
+    ^ ( response_text 401 `{"error":"unauthorized"}\n` )
+}
+
+@ __web_json HttpResponse resp s txt → HttpResponse {
+    ( response_set_header resp `Content-Type` `application/json` )
+    ( response_set_body_str resp txt )
+    ^ resp
+}
+
+// Synchronous full-reply generation: run the model over `ids` and
+// return the decoded text (no streaming — the web UI wants one reply).
+// Diffusion models denoise a block; others sample autoregressively.
+@ __web_gen_reply * Llm m ( Vec i ) ids i npredict f temp i seed → String {
+    : *Tok t ( llm_tok m )
+    : String out ( string_new )
+    ? > ( vec_len [i] ids ) ( llm_n_ctx m ) { ^ out } {}
+    ? ( llm_is_diffusion m ) {
+        // Conservative diffusion defaults that produce correct output on
+        // EVERY llada2 variant: block 32, a high mask-commit threshold,
+        // and editing OFF (edit-threshold 1.1). The token-editing pass is
+        // a LLaDA2.1 capability — enabling it on a 2.0 model (not trained
+        // for it) degrades into repetition ("France France"). Power users
+        // tune per-call via the CLI `run` command.
+        : Rng drng ( rng_seed seed )
+        : ( Vec i ) gen ( dz_generate m ids npredict 32 0.9 1.1 8 temp drng )
+        ( rng_free drng )
+        : ~ i gi 0
+        ~ < gi ( vec_len [i] gen ) {
+            : ~ i gid 0
+            ?? ( vec_get [i] gen gi ) { T x → { = gid x } F → {} }
+            : ( Vec u ) pb ( tok_piece t gid )
+            : String piece ( bytes_to_str pb )
+            ( vec_free [u] pb )
+            ( string_push_str out ( string_data piece ) )
+            ( string_free piece )
+            = gi + gi 1
+        }
+        ( vec_free [i] gen )
+        ^ out
+    } {}
+    // autoregressive
+    ( llm_prefill m ids )
+    : Rng rng ( rng_seed seed )
+    : i nprompt ( vec_len [i] ids )
+    : ~ i pos nprompt
+    : ~ i produced 0
+    : ~ b stop F
+    ~ & & < produced npredict < pos ( llm_n_ctx m ) ! stop {
+        : i nt ( sample_next m rng temp 40 0.95 )
+        ? == nt ( tok_eos t ) { = stop T } {
+            : ( Vec u ) pb ( tok_piece t nt )
+            : String piece ( bytes_to_str pb )
+            ( vec_free [u] pb )
+            ? ( chat_stop_matches g_api_style ( string_data piece ) ) { = stop T } {
+                ( string_push_str out ( string_data piece ) )
+                ( llm_eval m nt pos )
+                = pos + pos 1
+                = produced + produced 1
+            }
+            ( string_free piece )
+        }
+    }
+    ( rng_free rng )
+    ^ out
+}
+
+// Ensure the configured model is loaded, render the message history
+// through its chat template, and return the assistant's reply — or
+// None when the model cannot be loaded.
+@ __web_reply Json history s new_content → ?String {
+    ? == 0 ( nurl_str_len g_api_model ) { ^ @ ?String { F } } {}
+    : String lerr ( __api_ensure g_api_model )
+    ? > ( string_len lerr ) 0 {
+        ( string_free lerr )
+        ^ @ ?String { F }
+    } {}
+    ( string_free lerr )
+    : *Llm m # *Llm g_api_llm
+    : *Tok t ( llm_tok m )
+    // message list = stored history + the new user turn
+    : ( Vec ChatMsg ) msgs ( vec_new [ChatMsg] )
+    : ~ i k 0
+    ~ < k ( json_arr_len history ) {
+        ?? ( json_arr_get history k ) {
+            T mo → {
+                : String role ( __api_str mo `role` `user` )
+                : String content ( __api_str mo `content` `` )
+                ( vec_push [ChatMsg] msgs ( chat_msg ( string_data role ) ( string_data content ) ) )
+                ( string_free role )
+                ( string_free content )
+            }
+            F → {}
+        }
+        = k + k 1
+    }
+    ( vec_push [ChatMsg] msgs ( chat_msg `user` new_content ) )
+    : String prompt ( chat_render g_api_style msgs )
+    ( chat_msgs_free msgs )
+    : ( Vec i ) ids ( tok_encode t ( string_data prompt ) T )
+    ( string_free prompt )
+    : String reply ( __web_gen_reply m ids 512 0.0 42 )
+    ( vec_free [i] ids )
+    ^ @ ?String { T reply }
+}
+
+// GET /web/session — mint/refresh the cookie, return the client id and
+// the configured model.
+@ __web_session HttpRequest req Params ps → HttpResponse {
+    ? ( __web_authed req ) {} { ^ ( __web_unauth ) }
+    : HttpResponse resp ( response_new 200 )
+    : String guid ( __web_guid req resp )
+    : b _e ( hist_ensure_client g_api_histpath ( string_data guid ) ( hist_now ) )
+    : Json o ( json_obj_new )
+    : b _1 ( json_obj_set o `client` ( json_str_lit ( string_data guid ) ) )
+    : b _2 ( json_obj_set o `model` ( json_str_lit g_api_model ) )
+    : String txt ( json_stringify o )
+    ( json_free o )
+    ( string_free guid )
+    : HttpResponse r ( __web_json resp ( string_data txt ) )
+    ( string_free txt )
+    ^ r
+}
+
+// GET /web/conversations — this client's conversations, newest first.
+@ __web_conversations HttpRequest req Params ps → HttpResponse {
+    ? ( __web_authed req ) {} { ^ ( __web_unauth ) }
+    : HttpResponse resp ( response_new 200 )
+    : String guid ( __web_guid req resp )
+    : Json arr ( hist_list_conversations g_api_histpath ( string_data guid ) )
+    : String txt ( json_stringify arr )
+    ( json_free arr )
+    ( string_free guid )
+    : HttpResponse r ( __web_json resp ( string_data txt ) )
+    ( string_free txt )
+    ^ r
+}
+
+// GET /web/conversations/:id/messages — only if this client owns it.
+@ __web_messages HttpRequest req Params ps → HttpResponse {
+    ? ( __web_authed req ) {} { ^ ( __web_unauth ) }
+    : HttpResponse resp ( response_new 200 )
+    : String guid ( __web_guid req resp )
+    : ~ i conv -1
+    ?? ( params_get ps `id` ) {
+        T idv → {
+            ?? ( string_to_int idv ) { T n → { = conv n } F _ → {} }
+            ( string_free idv )
+        }
+        F → {}
+    }
+    : String owner ( hist_conversation_owner g_api_histpath conv )
+    : b owns ( nurl_str_eq ( string_data owner ) ( string_data guid ) )
+    ( string_free owner )
+    ( string_free guid )
+    ? owns {} {
+        ( http_response_free resp )
+        ^ ( response_text 404 `{"error":"not found"}\n` )
+    }
+    : Json arr ( hist_get_messages g_api_histpath conv )
+    : String txt ( json_stringify arr )
+    ( json_free arr )
+    : HttpResponse r ( __web_json resp ( string_data txt ) )
+    ( string_free txt )
+    ^ r
+}
+
+// DELETE /web/conversations/:id — only if this client owns it.
+@ __web_delete HttpRequest req Params ps → HttpResponse {
+    ? ( __web_authed req ) {} { ^ ( __web_unauth ) }
+    : HttpResponse resp ( response_new 200 )
+    : String guid ( __web_guid req resp )
+    : ~ i conv -1
+    ?? ( params_get ps `id` ) {
+        T idv → {
+            ?? ( string_to_int idv ) { T n → { = conv n } F _ → {} }
+            ( string_free idv )
+        }
+        F → {}
+    }
+    : b ok ( hist_delete_conversation g_api_histpath conv ( string_data guid ) )
+    ( string_free guid )
+    : Json o ( json_obj_new )
+    : b _1 ( json_obj_set o `ok` ( json_bool ok ) )
+    : String txt ( json_stringify o )
+    ( json_free o )
+    : HttpResponse r ( __web_json resp ( string_data txt ) )
+    ( string_free txt )
+    ^ r
+}
+
+// POST /web/chat  { "conversation_id": N|null, "content": "…" }
+// Persists the user turn, generates a reply against the conversation's
+// full history, persists that too, and returns { conversation_id, reply }.
+@ __web_chat HttpRequest req Params ps → HttpResponse {
+    ? ( __web_authed req ) {} { ^ ( __web_unauth ) }
+    : HttpResponse resp ( response_new 200 )
+    : String guid ( __web_guid req resp )
+    : b _e ( hist_ensure_client g_api_histpath ( string_data guid ) ( hist_now ) )
+    : ~ i rc_status 200
+    : ~ String out_txt ( string_new )
+    ?? ( __api_body_json req ) {
+        F _ → {
+            = rc_status 400
+            ( string_free out_txt )
+            = out_txt ( string_from `{"error":"invalid JSON body"}` )
+        }
+        T j → {
+            : String content ( __api_str j `content` `` )
+            ? == 0 ( string_len content ) {
+                = rc_status 400
+                ( string_free out_txt )
+                = out_txt ( string_from `{"error":"empty content"}` )
+                ( string_free content )
+            } {
+                : ~ i conv -1
+                ?? ( json_obj_get j `conversation_id` ) {
+                    T cv → { ?? ( json_num_as_i cv ) { T n → { = conv n } F → {} } }
+                    F → {}
+                }
+                // an unknown or someone-else's conversation starts a new one
+                ? >= conv 0 {
+                    : String own ( hist_conversation_owner g_api_histpath conv )
+                    ? ( nurl_str_eq ( string_data own ) ( string_data guid ) ) {} { = conv -1 }
+                    ( string_free own )
+                } {}
+                ? < conv 0 {
+                    = conv ( hist_new_conversation g_api_histpath ( string_data guid ) g_api_model ( hist_now ) )
+                } {}
+                // the prior turns (before adding this one) are the context
+                : Json history ( hist_get_messages g_api_histpath conv )
+                : b _u ( hist_add_message g_api_histpath conv `user` ( string_data content ) ( hist_now ) )
+                ?? ( __web_reply history ( string_data content ) ) {
+                    T reply → {
+                        : b _a ( hist_add_message g_api_histpath conv `assistant` ( string_data reply ) ( hist_now ) )
+                        : Json o ( json_obj_new )
+                        : b _1 ( json_obj_set o `conversation_id` ( json_int conv ) )
+                        : b _2 ( json_obj_set o `reply` ( json_str_lit ( string_data reply ) ) )
+                        ( string_free out_txt )
+                        = out_txt ( json_stringify o )
+                        ( json_free o )
+                        ( string_free reply )
+                    }
+                    F → {
+                        = rc_status 500
+                        ( string_free out_txt )
+                        = out_txt ( string_from `{"error":"model unavailable"}` )
+                    }
+                }
+                ( json_free history )
+                ( string_free content )
+            }
+            ( json_free j )
+        }
+    }
+    ( string_free guid )
+    ? == rc_status 200 {
+        : HttpResponse r ( __web_json resp ( string_data out_txt ) )
+        ( string_free out_txt )
+        ^ r
+    } {}
+    ( http_response_free resp )
+    : HttpResponse er ( response_text rc_status `` )
+    ( response_set_header er `Content-Type` `application/json` )
+    ( response_set_body_str er ( string_data out_txt ) )
+    ( string_free out_txt )
+    ^ er
+}
+
+// GET / — the web chat app for a browser (Accept: text/html), or the
+// ollama-compatible status line for a programmatic client, so existing
+// tooling that probes `/` is undisturbed.
 @ __api_root HttpRequest req Params ps → HttpResponse {
+    : ~ b wants_html F
+    ?? ( header_get . req headers `Accept` ) {
+        T a → {
+            ? >= ( nurl_str_find ( string_data a ) `text/html` ) 0 { = wants_html T } {}
+            ( string_free a )
+        }
+        F → {}
+    }
+    ? wants_html {
+        : HttpResponse resp ( response_new 200 )
+        : String guid ( __web_guid req resp )
+        ( string_free guid )
+        ( response_set_header resp `Content-Type` `text/html; charset=utf-8` )
+        ( response_set_body_str resp ( webui_html ) )
+        ^ resp
+    } {}
     ^ ( response_text 200 `nurllama is running\n` )
 }
 
 // Serve on `host:port`. Single worker: the decode loop owns the device,
 // so serialisation is structural rather than a lock.
 @ api_serve String root s host i port → i {
+    // The bare `serve` command: open, localhost-shaped defaults, no
+    // preconfigured model (each /api request names its own).
+    : NlConfig cfg @ NlConfig {
+        ( string_new ) ( string_from host ) port
+        ( string_from `open` ) ( string_new ) ( string_new )
+    }
+    : i rc ( api_serve_cfg root cfg )
+    ( cfg_free cfg )
+    ^ rc
+}
+
+// Serve with a full wizard config: a default model for the web UI, an
+// optional bearer token, and the conversation-history database.
+@ api_serve_cfg String root NlConfig cfg → i {
     ( api_set_root root )
+    = g_api_auth ? ( nurl_str_eq ( string_data . cfg auth ) `token` ) 1 0
+    ( __api_set_token ( string_data . cfg token ) )
+    ( __api_set_model ( string_data . cfg model ) )
+    : String hp ( hist_db_path root )
+    ( __api_set_histpath ( string_data hp ) )
+    ( string_free hp )
+
     : *HttpApp a ( http_app_new )
     ( http_app_workers a 1 )
     ( http_app_body_max a 4194304 )
     ( http_app_get a `/` \ HttpRequest rq Params ps → HttpResponse { ^ ( __api_root rq ps ) } )
     ( http_app_get a `/api/tags` \ HttpRequest rq Params ps → HttpResponse { ^ ( __api_tags rq ps ) } )
     ( http_app_post a `/api/show` \ HttpRequest rq Params ps → HttpResponse { ^ ( __api_show rq ps ) } )
+    ( http_app_get a `/web/session` \ HttpRequest rq Params ps → HttpResponse { ^ ( __web_session rq ps ) } )
+    ( http_app_get a `/web/conversations` \ HttpRequest rq Params ps → HttpResponse { ^ ( __web_conversations rq ps ) } )
+    ( http_app_get a `/web/conversations/:id/messages` \ HttpRequest rq Params ps → HttpResponse { ^ ( __web_messages rq ps ) } )
+    ( http_app_delete a `/web/conversations/:id` \ HttpRequest rq Params ps → HttpResponse { ^ ( __web_delete rq ps ) } )
+    ( http_app_post a `/web/chat` \ HttpRequest rq Params ps → HttpResponse { ^ ( __web_chat rq ps ) } )
     ( http_app_stream a \ TcpConn c HttpRequest rq → b { ^ ( __api_stream_hook c rq ) } )
+
     : String msg ( string_from `nurllama serving on http://` )
-    ( string_push_str msg host )
+    ( string_push_str msg ( string_data . cfg host ) )
     ( string_push_char msg 58 )
-    ( string_push_int msg port )
+    ( string_push_int msg . cfg port )
     ( nurl_print ( string_data msg ) )
     ( nurl_print `\n` )
     ( string_free msg )
-    : i rc ( http_app_listen a host port )
+    : i rc ( http_app_listen a ( string_data . cfg host ) . cfg port )
     ( __api_unload )
     ^ rc
 }
