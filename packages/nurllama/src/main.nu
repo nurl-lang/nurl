@@ -10,8 +10,14 @@
 //   nurllama run <model|name> <prompt>        generate (stream to stdout)
 //     -n N (default 64) · --temp F (0 = greedy, default 0.8)
 //     --topk N · --topp F · --seed N · --ctx N
+//     diffusion models add: --block N · --threshold F ·
+//     --edit-threshold F · --post-steps N (temp defaults to 0)
+//   nurllama convert <hf-dir> <out.gguf>      HF checkpoint → GGUF
+//     --type q8_0 (default) | f16 | bf16 | f32
 //   nurllama logits <model.gguf> <prompt>     final-position logits, one
 //                                             per line (verification tap)
+//   nurllama dlogits / dgen                   diffusion verification taps
+//                                             (window logits / denoise ids)
 //   nurllama tokenize <model.gguf> <text>     encode → token ids
 //   nurllama detok <model.gguf> <id> [id …]   decode ids → bytes
 //   nurllama vocab <model.gguf> [n]           dump the first n pieces
