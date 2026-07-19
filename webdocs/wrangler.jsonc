@@ -1,0 +1,21 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "nurl-docs",
+  "compatibility_date": "2026-07-20",
+  // Attaches docs.nurl-lang.org to this Worker on deploy (the zone lives on
+  // the same Cloudflare account as the other nurl-lang.org Workers), so no
+  // manual DNS/dashboard step is needed. Same domain the old VitePress
+  // Worker used, reattached here on cutover.
+  "routes": [{ "pattern": "docs.nurl-lang.org", "custom_domain": true }],
+  "observability": {
+    "enabled": true
+  },
+  // Assets-only Worker: serves the static `next build` (output: 'export')
+  // output, no Worker script. Search runs against a build-time Orama index
+  // fetched and queried client-side (see components/search.tsx) instead of
+  // a live API route — see content/docs/fumadocs-migration.mdx for why.
+  "assets": {
+    "directory": "./out",
+    "not_found_handling": "404-page"
+  }
+}

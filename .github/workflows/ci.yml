@@ -27,7 +27,7 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-      # Docs-only PRs (web-docs/**) skip the compiler jobs below and run
+      # Docs-only PRs (webdocs/**) skip the compiler jobs below and run
       # webdocs-build instead. The skip is an `if:` on each job rather than
       # workflow-level `paths-ignore` because skipped jobs still satisfy
       # branch-protection required checks (freebsd is required), while a
@@ -38,9 +38,9 @@ jobs:
         with:
           filters: |
             webdocs:
-              - 'web-docs/**'
+              - 'webdocs/**'
             code:
-              - '!web-docs/**'
+              - '!webdocs/**'
 
   build-test:
     name: build + bootstrap fixed point + test corpus
@@ -227,18 +227,19 @@ jobs:
             ternary_slice_owned match_slice_owned arm_assign_tail_drop
 
   webdocs-build:
-    name: web docs build (vitepress)
+    name: web docs build (fumadocs)
     needs: changes
     if: needs.changes.outputs.webdocs == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    # Build-checks the VitePress site so a docs PR can't merge with a broken
-    # build (dead links, bad frontmatter, sidebar config errors) and then
-    # fail in webdocs-deploy.yml after landing on main. Build only — the
-    # deploy itself stays in webdocs-deploy.yml, post-merge.
+    # Build-checks the Fumadocs (Next.js) site so a docs PR can't merge with a
+    # broken build (bad MDX/frontmatter, broken TypeScript, page-tree errors)
+    # and then fail in webdocs-deploy.yml after landing on main. Build only —
+    # the OpenNext/Cloudflare adapt-and-deploy step stays in
+    # webdocs-deploy.yml, post-merge.
     defaults:
       run:
-        working-directory: web-docs
+        working-directory: webdocs
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -247,12 +248,12 @@ jobs:
           version: 10
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 24
           cache: pnpm
-          cache-dependency-path: web-docs/pnpm-lock.yaml
+          cache-dependency-path: webdocs/pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile
-      - name: vitepress build
-        run: pnpm run docs:build
+      - name: next build
+        run: pnpm run build
 
 # nurlfmt --check now runs as a step in the build-test job above
 # (after the examples gate). The repo-wide `nurlfmt --write` pass that

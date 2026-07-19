@@ -1,13 +1,17 @@
 name: Publish Webdocs
 
-# Publishes the VitePress documentation site (web-docs/) to Cloudflare at
+# Publishes the Fumadocs documentation site (webdocs/) to Cloudflare at
 # https://docs.nurl-lang.org. Runs on every push to main that touches
-# web-docs/ (or this workflow), and can also be triggered manually from the
+# webdocs/ (or this workflow), and can also be triggered manually from the
 # Actions tab (Run workflow).
 #
-# `pnpm run docs:deploy` builds the site (`vitepress build`) and then runs
-# `wrangler deploy`, which uploads .vitepress/dist as an assets-only Worker
-# and attaches the docs.nurl-lang.org custom domain (see web-docs/wrangler.jsonc).
+# `pnpm run deploy` runs `next build && wrangler deploy` — Next.js's static
+# export (`output: 'export'` in next.config.mjs) builds the site to `out/`,
+# which `wrangler deploy` uploads as an assets-only Worker and attaches the
+# docs.nurl-lang.org custom domain (see webdocs/wrangler.jsonc), same
+# pattern the old VitePress site used. Search runs against a build-time
+# Orama index fetched and queried client-side instead of a live API route
+# (see webdocs' own migration notes, content/docs/fumadocs-migration.mdx).
 #
 # Requires two GitHub Actions repo secrets (shared with the other Cloudflare
 # deploys):
@@ -20,7 +24,7 @@ on:
   push:
     branches: [main]
     paths:
-      - 'web-docs/**'
+      - 'webdocs/**'
       - '.github/workflows/webdocs-deploy.yml'
   workflow_dispatch: {}
 
@@ -33,7 +37,7 @@ jobs:
       DEPLOY_ENABLED: ${{ secrets.CLOUDFLARE_API_TOKEN != '' && secrets.CLOUDFLARE_API_TOKEN != 'REPLACE_ME' }}
     defaults:
       run:
-        working-directory: web-docs
+        working-directory: webdocs
     steps:
       - if: env.DEPLOY_ENABLED == 'true'
         uses: actions/checkout@v4
@@ -44,15 +48,15 @@ jobs:
       - if: env.DEPLOY_ENABLED == 'true'
         uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 24
           cache: pnpm
-          cache-dependency-path: web-docs/pnpm-lock.yaml
+          cache-dependency-path: webdocs/pnpm-lock.yaml
       - if: env.DEPLOY_ENABLED == 'true'
         run: pnpm install --frozen-lockfile
-      # `docs:deploy` = `vitepress build && wrangler deploy`.
+      # `deploy` = `next build && wrangler deploy`.
       - name: Deploy
         if: env.DEPLOY_ENABLED == 'true'
-        run: pnpm run docs:deploy
+        run: pnpm run deploy
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
