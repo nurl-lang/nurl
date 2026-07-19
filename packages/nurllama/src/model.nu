@@ -230,6 +230,12 @@ $ `src/tokenizer.nu`
 // the weight needs.
 : ~ i __lm_last_type -1
 
+// Set when any device allocation comes back null (out of device
+// memory). Checked once at the end of llm_open_st: a silent failure
+// here used to surface as an all-zero forward pass — the model "ran"
+// and produced token 0 forever — instead of an error naming the cause.
+: ~ b __lm_alloc_failed F
+
 // Positions per prefill chunk. Bounds the batched activation scratch
 // (chunk × n_ff floats) while keeping the launches amortised.
 : i LM_CHUNK 64
@@ -258,6 +264,10 @@ $ `src/tokenizer.nu`
     }
     ? & ( __lm_native gt ) > nb 0 {
         : GpuBuffer bq ( gpu_alloc . m g nb )
+        ? == . bq dptr 0 {
+            = __lm_alloc_failed T
+            ^ -1
+        } {}
         : i _uq ( gpu_upload bq # *u addr )
         ( vec_push [i] . m wdptr . bq dptr )
         ( vec_push [i] . m wbytes . bq bytes )
@@ -269,6 +279,11 @@ $ `src/tokenizer.nu`
         T raw → {
             : i n ( vec_len [u] raw )
             : GpuBuffer b ( gpu_alloc . m g n )
+            ? == . b dptr 0 {
+                ( vec_free [u] raw )
+                = __lm_alloc_failed T
+                ^ -1
+            } {}
             : i _u ( gpu_upload b ( vec_data [u] raw ) )
             ( vec_free [u] raw )
             ( vec_push [i] . m wdptr . b dptr )
@@ -304,6 +319,10 @@ $ `src/tokenizer.nu`
 // Allocate an f32 scratch/cache device buffer of n floats (tracked).
 @ __lm_scratch * Llm m i nfloats → i {
     : GpuBuffer b ( gpu_alloc . m g * nfloats 4 )
+    ? == . b dptr 0 {
+        = __lm_alloc_failed T
+        ^ -1
+    } {}
     ( vec_push [i] . m wdptr . b dptr )
     ( vec_push [i] . m wbytes . b bytes )
     ^ . b dptr
@@ -400,6 +419,11 @@ $ `src/tokenizer.nu`
             ? & . m st_norm_add1 is_norm { ( __lm_add1 raw ) } {}
             : i n ( vec_len [u] raw )
             : GpuBuffer b ( gpu_alloc . m g n )
+            ? == . b dptr 0 {
+                ( vec_free [u] raw )
+                = __lm_alloc_failed T
+                ^ -1
+            } {}
             : i _u ( gpu_upload b ( vec_data [u] raw ) )
             ( vec_free [u] raw )
             ( vec_push [i] . m wdptr . b dptr )
@@ -454,6 +478,11 @@ $ `src/tokenizer.nu`
         T raw → {
             : i n ( vec_len [u] raw )
             : GpuBuffer b ( gpu_alloc . m g n )
+            ? == . b dptr 0 {
+                ( vec_free [u] raw )
+                = __lm_alloc_failed T
+                ^ -1
+            } {}
             : i _u ( gpu_upload b ( vec_data [u] raw ) )
             ( vec_free [u] raw )
             ( vec_push [i] . m wdptr . b dptr )
@@ -512,6 +541,7 @@ $ `src/tokenizer.nu`
     }
 
     : *Llm m # *Llm ( nurl_alloc Z Llm )
+    = __lm_alloc_failed F
     = . m st 0
     = . m st_embd -1
     = . m st_norm_add1 F
@@ -860,6 +890,9 @@ $ `src/tokenizer.nu`
     = . m gg # i gg
     ? ok {} {
         ( llm_close m )
+        ? __lm_alloc_failed {
+            ^ ( __lm_err `nurllama: out of device memory while loading the model — free GPU memory (close other GPU programs) or use a smaller quantisation` )
+        } {}
         ^ ( __lm_err `nurllama: model is missing required llama tensors (or dequant failed)` )
     }
 
@@ -900,6 +933,10 @@ $ `src/tokenizer.nu`
         = . m router_host # *u 0
         = . m moe_outd -1
     }
+    ? __lm_alloc_failed {
+        ( llm_close m )
+        ^ ( __lm_err `nurllama: out of device memory while loading the model — free GPU memory (close other GPU programs) or use a smaller quantisation` )
+    } {}
     ?? ( env_get `NURLLAMA_VERBOSE` ) {
         T v → {
             ( string_free v )
