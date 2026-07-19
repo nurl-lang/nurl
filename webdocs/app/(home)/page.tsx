@@ -1,6 +1,9 @@
 import Link from 'next/link';
 import { Cpu, Zap, Target } from 'lucide-react';
 import { Card, Cards } from 'fumadocs-ui/components/card';
+import { Pill } from '@/components/version-badges';
+import { siteFacts } from '@/lib/site-facts';
+import { gitConfig } from '@/lib/shared';
 
 const features = [
   {
@@ -29,6 +32,9 @@ export default function HomePage() {
       <section className="flex flex-col items-center gap-6 px-6 py-24 text-center">
         <img src="/graphics/nurl1c.svg" alt="NURL" className="h-20 w-20" />
         <h1 className="text-4xl font-bold tracking-tight sm:text-5xl">NURL</h1>
+        <Pill href={`https://github.com/${gitConfig.user}/${gitConfig.repo}/blob/${gitConfig.branch}/CHANGELOG.md`}>
+          NURL {siteFacts.nurlVersion}
+        </Pill>
         <p className="max-w-2xl text-fd-muted-foreground text-lg">
           A compiled language without a virtual machine, garbage collector, or
           interpreter — designed as a target for LLM code generation, with
