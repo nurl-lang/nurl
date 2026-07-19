@@ -6206,12 +6206,13 @@
         } {}
     } {}
     ? == tdr 0
-    {  // Phase 2D: arm-local fall-through drop. Only safe when the arm's
-        // result type is void — otherwise tv may reference memory backed by
-        // one of the arm-local allocas we're about to free (UAF in the phi
-        // consumer at %lend). Arm-result ownership transfer would require
-        // Phase 2A-style tracking; out of scope here.
-        ? & != 0 g_auto_drop_strings ( seq tt2 `void` )
+    {  // Phase 2D: arm-local fall-through drop. Safe when the arm's result
+        // is void OR a plain scalar (mem_arm_drop_safe) — otherwise tv may
+        // reference memory backed by one of the arm-local allocas we're
+        // about to free (UAF in the phi consumer at %lend). Arm-result
+        // ownership transfer would require Phase 2A-style tracking; out of
+        // scope here.
+        ? & != 0 g_auto_drop_strings ( mem_arm_drop_safe tt2 )
         { ( mem_drop_new_strings syms cg old_strs_t )
             ( mem_drop_new_struct_fields syms cg old_structs_t )
             ( mem_drop_new_user_drops syms cg old_user_t )
@@ -6265,7 +6266,7 @@
         } {}
     } {}
     ? == edr 0
-    { ? & != 0 g_auto_drop_strings ( seq et2 `void` )
+    { ? & != 0 g_auto_drop_strings ( mem_arm_drop_safe et2 )
         { ( mem_drop_new_strings syms cg old_strs_e )
             ( mem_drop_new_struct_fields syms cg old_structs_e )
             ( mem_drop_new_user_drops syms cg old_user_e )
@@ -7654,10 +7655,11 @@
                 = __ptr_dead_acc_m ( nurl_str_cat ( __ptr_dead_snapshot ) `` )
             } {}
 
-            // Phase 2D arm-local fall-through drop — only safe when the arm
-            // type is void (an arm-local heap object may back a value flowing
-            // through to the phi consumer; freeing here would UAF).
-            ? & & != 0 g_auto_drop_strings ( seq arm_type `void` ) == arm_did_ret 0
+            // Phase 2D arm-local fall-through drop — safe when the arm type
+            // is void or a plain scalar (an arm-local heap object may back a
+            // pointer/slice/aggregate value flowing through to the phi
+            // consumer; freeing here would UAF — see mem_arm_drop_safe).
+            ? & & != 0 g_auto_drop_strings ( mem_arm_drop_safe arm_type ) == arm_did_ret 0
             { ( mem_drop_new_strings syms cg old_strs_m )
                 ( mem_drop_new_struct_fields syms cg old_structs_m )
                 ( mem_drop_new_user_drops syms cg old_user_m )
@@ -8782,6 +8784,26 @@
         }
     }
     {}
+}
+
+// Phase 2D gate: an arm's fall-through drop is safe when the arm's
+// VALUE cannot reference arm-local heap memory. That is: void (no
+// value at all), or a plain scalar — integers, floats, bool are copied
+// through the join phi, so freeing arm-local buffers behind them can
+// never dangle. Pointer, slice and aggregate arm values stay
+// conservative (leak-not-UAF): the value may be backed by exactly the
+// arm-local allocation the drop would free (`{ : String t … t }`).
+// This closes the gap where an arm whose LAST statement is an
+// assignment (`= total …` publishes the stored value's type, see
+// gen_assign's tail comment) looked value-typed and skipped every
+// arm-local drop — leaking any owned string/slice declared in the arm.
+@ mem_arm_drop_safe s t → b {
+    ? ( seq t `void` ) { ^ T } {}
+    : s ll ( nurl_llty t )
+    ? > ( int_width ll ) 0 { ^ T } {}
+    ? ( seq ll `double` ) { ^ T } {}
+    ? ( seq ll `float` ) { ^ T } {}
+    ^ F
 }
 
 // Slice counterpart of mem_drop_new_strings: at an arm's fall-through,
