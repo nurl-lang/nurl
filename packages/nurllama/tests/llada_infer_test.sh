@@ -140,7 +140,7 @@ else
     bad "CPU backend runs"
 fi
 
-echo "[4/4] decode loop vs the reference-faithful python loop"
+echo "[4/5] decode loop vs the reference-faithful python loop"
 # mask 297, eos 296 in the crafted tokenizer; small block + gen so the
 # recompute-everything python reference stays quick
 PROMPT="5 12 7 200 33"
@@ -154,6 +154,25 @@ else
     bad "decode loop parity"
     echo "    ref: $(cat "$WORK/dzref.txt")"
     echo "    got: $(cat "$WORK/dzgot.txt")"
+fi
+
+# [5] a REAL llada2 model, end to end — opt-in: point NURLLAMA_LLADA_GGUF
+# at a local llada2 GGUF (e.g. the community LLaDA2.0-mini-preview Q4_0,
+# 8.6 GB) and the whole stack must solve the HF README's arithmetic
+# prompt: tokenizer, Q4_0 MoE kernels, block-diffusion decode.
+if [ -n "${NURLLAMA_LLADA_GGUF:-}" ] && [ -f "$NURLLAMA_LLADA_GGUF" ]; then
+    echo "[5/5] real model ($NURLLAMA_LLADA_GGUF)"
+    RPROMPT=$'<role>SYSTEM</role>detailed thinking off<|role_end|><role>HUMAN</role>Calculate 1+5-28*0.5-200=?<|role_end|><role>ASSISTANT</role>'
+    ROUT=$(timeout 570 "$NL" run "$NURLLAMA_LLADA_GGUF" "$RPROMPT" -n 256 --block 32 \
+        --threshold 0.95 --edit-threshold 1.1 --post-steps 4 --temp 0 2>/dev/null)
+    if printf '%s' "$ROUT" | grep -q -- "-208"; then
+        ok "real model solves the arithmetic prompt (-208)"
+    else
+        bad "real model arithmetic"
+        printf '%s\n' "$ROUT" | tail -5
+    fi
+else
+    echo "  SKIP real-model e2e (set NURLLAMA_LLADA_GGUF=/path/to/llada2.gguf)"
 fi
 
 echo "== llada2 inference tests: PASS=$PASS FAIL=$FAIL"
