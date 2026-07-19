@@ -6,7 +6,7 @@ hero:
   text: "Documentation"
   tagline: All texts for the Neural Unified Representation Language
   image:
-      src: /nurl.png
+      src: /graphics/nurl1c.svg
       alt: nurl logo
   actions:
     - theme: brand
