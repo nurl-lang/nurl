@@ -1,5 +1,5 @@
 import Link from 'next/link';
-import { Cpu, Zap, Target } from 'lucide-react';
+import { Bot, Rabbit, IterationCcw } from 'lucide-react';
 import { Card, Cards } from 'fumadocs-ui/components/card';
 import { Pill } from '@/components/version-badges';
 import { siteFacts } from '@/lib/site-facts';
@@ -7,19 +7,19 @@ import { gitConfig } from '@/lib/shared';
 
 const features = [
   {
-    icon: Cpu,
+    icon: Bot,
     title: 'Designed for LLMs',
     description:
       "Every operator takes a fixed number of arguments. There are no infix operators or precedence rules. Only about 50 grammar rules, NURL is simple for both humans and AI to parse.",
   },
   {
-    icon: Zap,
+    icon: Rabbit,
     title: 'LLVM Native Performance',
     description:
       'Compile to optimized native binaries through LLVM with support for Linux, Windows, macOS, WebAssembly, ARM64, RISC-V, and embedded targets.',
   },
   {
-    icon: Target,
+    icon: IterationCcw,
     title: 'Deterministic Compiler',
     description:
       "NURL's compiler is designed to produce reproducible builds. Given the same source code, compiler version, and target, you'll get identical output every time.",
@@ -33,7 +33,7 @@ export default function HomePage() {
         <img src="/graphics/nurl1c.svg" alt="NURL" className="h-20 w-20" />
         <h1 className="text-4xl font-bold tracking-tight sm:text-5xl">NURL</h1>
         <Pill href={`https://github.com/${gitConfig.user}/${gitConfig.repo}/blob/${gitConfig.branch}/CHANGELOG.md`}>
-          NURL {siteFacts.nurlVersion}
+          {siteFacts.nurlVersion}
         </Pill>
         <p className="max-w-2xl text-fd-muted-foreground text-lg">
           A compiled language without a virtual machine, garbage collector, or
