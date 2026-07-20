@@ -67,7 +67,7 @@ $ `src/wasmkernel.nu`
     ( pb `vecreduce forward-decls g_add:   ` ( has pvec `__device__ void swarm_g_add(double* g, long long j, double val);` ) )
     ( pb `vecreduce defines g_add helper:  ` ( has pvec `if (j >= 0 && j < __swK) swarm_atomic_add(&g[j], val)` ) )
     ( pb `vecreduce uses CAS atomic add:   ` ( has pvec `atomicCAS(a, assumed,` ) )
-    ( pb `vecreduce kernel calls grad:     ` ( has pvec `grad(x, in[x - lo], out, p)` ) )
+    ( pb `vecreduce kernel calls grad:     ` ( has pvec `grad(x, (double)in[x - lo], out, p)` ) )
     ( pb `vecreduce sets K for the guard:  ` ( has pvec `__swK = K;` ) )
     ( pb `vecreduce K rides argv:          ` ( has pvec `nurl_argv_get 5` ) )
     ( pb `vecreduce writes the K-vec file: ` ( has pvec `fwrite # s host 1 obytes fh` ) )
@@ -94,7 +94,7 @@ $ `src/wasmkernel.nu`
     ( pb `shuffle writes the pair file:     ` ( has psh `fwrite # s host 1 obytes fh` ) )
     ( string_free psh )
     : String pshd ( cuda_wrap `__device__ long long key(long long x, double v) { return (long long)v; } __device__ double value(long long x, double v) { return v; }` 0 ( gpu_mode_shuffle_map ) 0 1 )
-    ( pb `shuffle+data: key(x, in[x-lo]):   ` ( has pshd `key(x, in[x - lo])` ) )
+    ( pb `shuffle+data: key(x, in[x-lo]):   ` ( has pshd `key(x, (double)in[x - lo])` ) )
     ( string_free pshd )
     // ── shuffle reduce: the GPU combiner (per-chunk reduce-by-key) ─────
     : String prd ( cuda_wrap `__device__ long long key(long long x) { return x % 5; } __device__ double value(long long x) { return 1.0; }` 4 ( gpu_mode_shuffle_reduce ) 0 0 )
@@ -118,7 +118,7 @@ $ `src/wasmkernel.nu`
     // reduce over a dataset: key/value take v = in[x - lo]
     : String prds ( cuda_wrap `__device__ long long key(long long x, double v) { return (long long)v % 7; } __device__ double value(long long x, double v) { return v; }` 0 ( gpu_mode_shuffle_reduce ) 0 1 )
     ( pb `reduce+data: kernel takes in ptr:  ` ( has prds `double* out, long long K, const double* in` ) )
-    ( pb `reduce+data: key(x, in[x - lo]):   ` ( has prds `key(x, in[x - lo])` ) )
+    ( pb `reduce+data: key(x, (double)in[x - lo]):   ` ( has prds `key(x, (double)in[x - lo])` ) )
     ( string_free prds )
     : String ppar ( cuda_wrap `__device__ double f(long long x, const double* p) { return p[0]; }` 0 ( gpu_mode_scalar ) 1 0 )
     ( pb `params: kernel takes double* p:  ` ( has ppar `double* out, const double* p` ) )
@@ -130,19 +130,36 @@ $ `src/wasmkernel.nu`
     // ── dataset splices (has_data) ────────────────────────────────
     : String pdat ( cuda_wrap `__device__ double f(long long x, double v) { return v; }` 0 ( gpu_mode_scalar ) 0 1 )
     ( pb `data: kernel takes double* in:   ` ( has pdat `double* out, const double* in` ) )
-    ( pb `data: f called with in[x - lo]:  ` ( has pdat `f(x, in[x - lo])` ) )
+    ( pb `data: f called with in[x - lo]:  ` ( has pdat `f(x, (double)in[x - lo])` ) )
     ( pb `data: inpath read from argv 3:   ` ( has pdat `nurl_argv_get 3` ) )
     ( pb `data: slice read with fread:     ` ( has pdat `fread # s ih 1 ibytes ifh` ) )
     ( pb `data: slice uploaded HtoD:       ` ( has pdat `cuMemcpyHtoD din ih ibytes` ) )
     ( string_free pdat )
     : String pdp ( cuda_wrap `__device__ double f(long long x, double v, const double* p) { return v * p[0]; }` 0 ( gpu_mode_scalar ) 1 1 )
-    ( pb `data+params call order:          ` ( has pdp `f(x, in[x - lo], p)` ) )
+    ( pb `data+params call order:          ` ( has pdp `f(x, (double)in[x - lo], p)` ) )
     ( pb `data+params kernel sig order:    ` ( has pdp `const double* in, const double* p` ) )
     ( string_free pdp )
     : String pdh ( cuda_wrap `__device__ long long bin(long long x, double v) { return (long long)v; }` 0 ( gpu_mode_hist ) 0 1 )
-    ( pb `hist+data bin(x, in[x - lo]):    ` ( has pdh `bin(x, in[x - lo])` ) )
+    ( pb `hist+data bin(x, (double)in[x - lo]):    ` ( has pdh `bin(x, (double)in[x - lo])` ) )
     ( pb `hist+data default val matches:   ` ( has pdh `val(long long x, double v) { return 1.0; }` ) )
     ( string_free pdh )
+
+    // ── typed datasets (has_data = dtype code): f32 / i32 / i64 ───────
+    // The buffer is declared in its native width and each element cast to
+    // double; the in-file byte count uses the element size.
+    : String pf32 ( cuda_wrap `__device__ double f(long long x, double v) { return v; }` 0 ( gpu_mode_scalar ) 0 ( data_dtype_f32 ) )
+    ( pb `f32: buffer is const float* in:   ` ( has pf32 `const float* in` ) )
+    ( pb `f32: load cast to double:         ` ( has pf32 `f(x, (double)in[x - lo])` ) )
+    ( pb `f32: in-file bytes use esz 4:     ` ( has pf32 `: i ibytes * - hi lo 4` ) )
+    ( string_free pf32 )
+    : String pi32 ( cuda_wrap `__device__ double f(long long x, double v) { return v; }` 0 ( gpu_mode_scalar ) 0 ( data_dtype_i32 ) )
+    ( pb `i32: buffer is const int* in:     ` ( has pi32 `const int* in` ) )
+    ( pb `i32: in-file bytes use esz 4:     ` ( has pi32 `: i ibytes * - hi lo 4` ) )
+    ( string_free pi32 )
+    : String pi64 ( cuda_wrap `__device__ double f(long long x, double v) { return v; }` 0 ( gpu_mode_scalar ) 0 ( data_dtype_i64 ) )
+    ( pb `i64: buffer is const long long* in:` ( has pi64 `const long long* in` ) )
+    ( pb `i64: in-file bytes use esz 8:     ` ( has pi64 `: i ibytes * - hi lo 8` ) )
+    ( string_free pi64 )
 
     // ── GPU chunk payload v3 (dataset slice) round-trip ───────────
     : ( Vec u ) dslice ( vec_new [u] )

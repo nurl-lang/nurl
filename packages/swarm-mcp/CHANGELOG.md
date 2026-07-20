@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.18.0
+
+**Typed datasets — f32 / i32 / i64, not just f64.** Real data is usually 32-bit;
+storing it natively halves the transfer and GPU memory of the f64-everything path.
+
+- `compute_upload_data` takes a **`dtype`**: `"f64"` (default), `"f32"`, `"i32"`,
+  or `"i64"`. The data is stored and shipped in its **native width**, and each
+  element is **promoted to a `double` on the GPU** — so the kernel is always
+  `f(long long x, double v)` regardless of storage. The upload reports the
+  `dtype` and a `count` scaled by the element size.
+- The whole dataset path is now element-size aware: block↔element mapping, the
+  content-address grid, size-aware sharding, min/max/mean, and the range checks
+  all scale by the storage width (an element never straddles a 1 MiB block, since
+  4 and 8 both divide 1 MiB).
+- The generated GPU kernel declares the input buffer in its native type
+  (`const float*` / `const int*` / `const long long*` / `const double*`) and
+  casts each load to `double`; the chunk payload carries the dtype (packed into
+  the mode byte's high nibble, so the wire format and the f64 default are
+  unchanged), and the worker reads its slice at the right stride.
+- Tests: `tests/cudakernel_test.nu` gains f32/i32/i64 generator checks (94
+  total); new `tests/typed_smoke.sh` reduces a **3 M-element f32 dataset** and an
+  **i32 dataset** live on the GPU and checks each sum against numpy (accumulated
+  in float64, as the GPU does). The f64 smokes (`gpu_smoke`, `data_smoke`,
+  `iterate`, `general`) are unchanged and green.
+
 ## 0.17.0
 
 **Datasets far larger than coordinator RAM — streamed from disk (up to 64 GiB).**

@@ -54,6 +54,24 @@ $ `token.nu`
 @ gpu_mode_shuffle_map → i { ^ 4 }  // (key,value) per element: 16 bytes/elem to a file
 @ gpu_mode_shuffle_reduce → i { ^ 5 }  // GPU combiner: chunk reduced by key into a K-slot table (16 bytes/slot: i64 key, f64 val) to a file
 
+// Dataset storage-type codes (shared by the worker and the generator). A
+// dataset element is stored in its native width and promoted to a double on the
+// GPU. Defined here (the lowest shared module) so both wasmkernel and cudakernel
+// see them. Code 1 = f64 keeps the original single-width behaviour.
+@ data_dtype_f64 → i { ^ 1 }
+
+@ data_dtype_f32 → i { ^ 2 }
+
+@ data_dtype_i32 → i { ^ 3 }
+
+@ data_dtype_i64 → i { ^ 4 }
+
+@ data_dtype_esz i dtype → i {
+    ? == dtype 2 { ^ 4 } {}
+    ? == dtype 3 { ^ 4 } {}
+    ^ 8
+}
+
 @ wasm_chunk_payload i lo i hi ( Vec u ) wasm → ( Vec u ) {
     : ( Vec u ) b ( vec_new [u] )
     ( bytes_push_u64_be b # u64 lo )
@@ -104,10 +122,11 @@ $ `token.nu`
 // b0 is the absolute index of the first referenced block on the dataset's
 // block grid (blob.nu); the worker assembles data[lo..hi) from its block
 // cache (seeded via kind_blob) and FAILS the chunk on any missing block.
-@ wasm_gpu_chunk_payload_blobs i mode i lo i hi i kbins ( Vec i ) params i b0 ( Vec ( Vec u ) ) hashes ( Vec u ) wasm → ( Vec u ) {
+@ wasm_gpu_chunk_payload_blobs i mode i lo i hi i kbins ( Vec i ) params i b0 i dtype ( Vec ( Vec u ) ) hashes ( Vec u ) wasm → ( Vec u ) {
     : ( Vec u ) b ( vec_new [u] )
     ( vec_push [u] b 4 )
-    ( vec_push [u] b # u mode )
+    // byte 1: mode in the low nibble, dataset dtype in the high nibble
+    ( vec_push [u] b # u | & mode 15 << & dtype 15 4 )
     ( bytes_push_u64_be b # u64 lo )
     ( bytes_push_u64_be b # u64 hi )
     ( bytes_push_u32_be b # u32 kbins )
@@ -139,6 +158,7 @@ $ `token.nu`
     ( Vec i ) params
     ( Vec u ) data  // raw LE f64 slice (empty without a dataset)
     i b0  // v4: first referenced block index on the dataset grid
+    i dtype  // v4: storage type code (1 f64 · 2 f32 · 3 i32 · 4 i64)
     ( Vec ( Vec u ) ) blobs  // v4: 32-byte block hashes (empty otherwise)
     ( Vec u ) wasm
 }
@@ -158,12 +178,17 @@ $ `token.nu`
     : ~ i hi 0
     : ~ i kbins 0
     : ~ i b0 0
+    : ~ i dtype 1
     : ~ ( Vec ( Vec u ) ) blobs ( vec_new [( Vec u )] )
     : ~ ( Vec u ) data ( vec_new [u] )
     : ~ ( Vec u ) wasm ( vec_new [u] )
     : i ver ?? ( vec_get [u] body 0 ) { T x → # i x F → 0 }
     ? == ver 4 {
-        = mode ?? ( vec_get [u] body 1 ) { T x → # i x F → 0 }
+        // byte 1 packs mode (low nibble) and the dataset dtype (high nibble)
+        : i raw ?? ( vec_get [u] body 1 ) { T x → # i x F → 0 }
+        = mode & raw 15
+        : i dt >> raw 4
+        = dtype ? > dt 0 dt 1
         = lo ?? ( bytes_read_u64_be body 2 ) { T x → # i x F → 0 }
         = hi ?? ( bytes_read_u64_be body 10 ) { T x → # i x F → 0 }
         = kbins ?? ( bytes_read_u32_be body 18 ) { T x → # i x F → 0 }
@@ -222,7 +247,7 @@ $ `token.nu`
             = ok 1
         } {}
     } {}
-    ^ @ GpuChunk { ok mode lo hi kbins params data b0 blobs wasm }
+    ^ @ GpuChunk { ok mode lo hi kbins params data b0 dtype blobs wasm }
 }
 
 // v4: assemble data[lo..hi) into c.data from the content-addressed block
@@ -243,8 +268,11 @@ $ `token.nu`
         }
         = bi + bi 1
     }
-    : i skip * - . c lo * . c b0 ( blob_block_vals ) 8
-    : i take * - . c hi . c lo 8
+    // Byte window of [lo, hi) inside the assembled blocks. Block b0 starts at
+    // byte b0·(1 MiB) = b0·blob_block_vals·8; each element occupies esz bytes.
+    : i esz ( data_dtype_esz . c dtype )
+    : i skip - * . c lo esz * . c b0 * ( blob_block_vals ) 8
+    : i take * - . c hi . c lo esz
     ? & bok & >= skip 0 <= + skip take ( vec_len [u] whole ) {
         ( vec_free [u] . c data )
         = . c data ( bytes_slice whole skip + skip take )

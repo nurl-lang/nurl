@@ -808,11 +808,36 @@ $ `cudakernel.nu`
 // its content-address manifest (`blocks`) and total byte count (`nbytes`); the
 // coordinator never needs the whole thing in RAM for a file-backed set — it
 // streams block bytes from the file only when seeding a worker that lacks them.
-: Dataset { i id String name ( Vec u ) bytes ( Vec ( Vec u ) ) blocks String path i nbytes }
+: Dataset { i id String name ( Vec u ) bytes ( Vec ( Vec u ) ) blocks String path i nbytes i dtype }
 
-@ ds_count_of * Dataset d → i { ^ / . d nbytes 8 }
+// `dtype` is the storage type code (== the kernel's has_data value): 1 f64 · 2
+// f32 · 3 i32 · 4 i64. Elements are stored in their native width; the count and
+// all byte offsets scale by that width. The GPU promotes each to a double.
+@ ds_esz_of * Dataset d → i { ^ ( data_dtype_esz . d dtype ) }
+
+@ ds_count_of * Dataset d → i { ^ / . d nbytes ( ds_esz_of d ) }
 
 @ ds_is_file * Dataset d → b { ^ > ( string_len . d path ) 0 }
+
+// The dtype code for a dataset id (1 f64 default if unknown) — the has_data
+// value the CUDA generator and the chunk payload carry for this dataset.
+@ ds_dtype_id i dsid → i {
+    : s p ( ds_find dsid )
+    ? == # i p 0 { ^ ( data_dtype_f64 ) } {}
+    : *Dataset d # *Dataset p
+    ^ . d dtype
+}
+
+// Read one element at byte offset `off` as a double, honouring the dtype.
+@ ds_read_f ( Vec u ) bytes i off i dtype → f {
+    ? == dtype 2 { ^ # f ( bits_to_f32 # i ?? ( bytes_read_u32_le bytes off ) { T x → # i x F → 0 } ) } {}
+    ? == dtype 3 {
+        : i u ?? ( bytes_read_u32_le bytes off ) { T x → # i x F → 0 }
+        ^ # f ? >= u 2147483648 - u 4294967296 u
+    } {}
+    ? == dtype 4 { ^ # f ?? ( bytes_read_u64_le bytes off ) { T x → # i x F → 0 } } {}
+    ^ ( bits_to_f64 ?? ( bytes_read_u64_le bytes off ) { T x → # i x F → 0 } )
+}
 
 // Block b's raw bytes: sliced from RAM, or read from the source file at the
 // block's fixed grid offset (file-backed). One block (≤ 1 MiB) at a time — the
@@ -840,9 +865,10 @@ $ `cudakernel.nu`
 // Stream a file into its block manifest AND min/max/mean in ONE pass, holding
 // at most one block (≤ 1 MiB) at a time. This is what lets a dataset be far
 // larger than coordinator RAM: only the manifest (32 bytes/block) is retained.
-@ ds_file_manifest_stats s path i nbytes Json o → ( Vec ( Vec u ) ) {
+@ ds_file_manifest_stats s path i nbytes i dtype Json o → ( Vec ( Vec u ) ) {
     : ( Vec ( Vec u ) ) out ( vec_new [( Vec u )] )
     : i bb * ( blob_block_vals ) 8
+    : i esz ( data_dtype_esz dtype )
     : ~ f mn 0.0
     : ~ f mx 0.0
     : ~ f sum 0.0
@@ -855,10 +881,10 @@ $ `cudakernel.nu`
                 ?? ( file_read_at f off want ) {
                     T blk → {
                         ( vec_push [( Vec u )] out ( blob_hash blk ) )
-                        : i vc / ( vec_len [u] blk ) 8
+                        : i vc / ( vec_len [u] blk ) esz
                         : ~ i k 0
                         ~ < k vc {
-                            : f v ( bits_to_f64 ( __f64le_get blk * k 8 ) )
+                            : f v ( ds_read_f blk * k esz dtype )
                             ? first { = mn v = mx v = first F } { ? < v mn { = mn v } {} ? > v mx { = mx v } {} }
                             = sum + sum v
                             = k + k 1
@@ -873,7 +899,7 @@ $ `cudakernel.nu`
         }
         F e → {}
     }
-    : i cnt / nbytes 8
+    : i cnt / nbytes esz
     ? > cnt 0 {
         ( json_obj_set o `min` ( __jf mn ) )
         ( json_obj_set o `max` ( __jf mx ) )
@@ -914,7 +940,11 @@ $ `cudakernel.nu`
 // submitted; each references its blocks by hash and the worker assembles the
 // slice from its cache, failing visibly on any missing block.
 @ cluster_submit_wasm_gpu_ds * Swarm sw i mode i rlo i rhi i kbins ( Vec i ) params * Dataset d ( Vec u ) wasm i nchunks_want ( Vec String ) seeded * u nseed_cell → ( Vec i ) {
-    : i bv ( blob_block_vals )
+    // Elements per 1 MiB block depends on the storage width (f64/i64 = 131072,
+    // f32/i32 = 262144). Blocks stay byte-aligned (esz divides 1 MiB), so an
+    // element never straddles two blocks.
+    : i esz ( ds_esz_of d )
+    : i bv / * ( blob_block_vals ) 8 esz
     : i blo / rlo bv
     : i bhi / + rhi - bv 1 bv
     : i nblocks - bhi blo
@@ -923,7 +953,7 @@ $ `cudakernel.nu`
     // uploaded to its GPU, so cap chunk BYTES (not just spread over the workers).
     // Without this a multi-GB dataset over a few workers would build multi-GB
     // chunks no GPU can hold — here the block count grows with the data.
-    : i span_bytes * - rhi rlo 8
+    : i span_bytes * - rhi rlo esz
     : i want_by_size / + span_bytes - ( __max_chunk_bytes ) 1 ( __max_chunk_bytes )
     ? > want_by_size nc { = nc want_by_size } {}
     ? > nc nblocks { = nc nblocks } {}
@@ -998,7 +1028,7 @@ $ `cudakernel.nu`
                 ?? ( vec_get [( Vec u )] . d blocks b ) { T x → { ( vec_push [( Vec u )] hashes ( bytes_slice x 0 32 ) ) } F → {} }
                 = b + b 1
             }
-            : ( Vec u ) payload ( wasm_gpu_chunk_payload_blobs mode clo chi kbins params bs hashes wasm )
+            : ( Vec u ) payload ( wasm_gpu_chunk_payload_blobs mode clo chi kbins params bs . d dtype hashes wasm )
             : ( Vec u ) tagged ( token_tag . sw key payload )
             ( vec_push [i] tids ( job_submit # *JobNode . sw job ( kind_wasm_gpu ) rkey tagged ) )
             ( blob_manifest_free hashes )
@@ -1045,15 +1075,16 @@ $ `cudakernel.nu`
     ^ j
 }
 
-@ __stats_json Json o ( Vec u ) bytes → v {
-    : i cnt / ( vec_len [u] bytes ) 8
+@ __stats_json Json o ( Vec u ) bytes i dtype → v {
+    : i esz ( data_dtype_esz dtype )
+    : i cnt / ( vec_len [u] bytes ) esz
     ? == cnt 0 { ^ v } {}
-    : ~ f mn ( bits_to_f64 ( __f64le_get bytes 0 ) )
+    : ~ f mn ( ds_read_f bytes 0 dtype )
     : ~ f mx mn
     : ~ f sum 0.0
     : ~ i k 0
     ~ < k cnt {
-        : f v ( bits_to_f64 ( __f64le_get bytes * k 8 ) )
+        : f v ( ds_read_f bytes * k esz dtype )
         ? < v mn { = mn v } {}
         ? > v mx { = mx v } {}
         = sum + sum v
@@ -1550,7 +1581,7 @@ $ `cudakernel.nu`
         } {}
     } {}
     : i has_params ? > ( vec_len [i] params ) 0 1 0
-    : i has_data ? != dsid 0 1 0
+    : i has_data ? != dsid 0 ( ds_dtype_id dsid ) 0
     : String wrapped ( cuda_wrap cuda op mode has_params has_data )
     // module cache: keyed by the generated source (params ride argv → the
     // hash — and the worker-side module cache — survive parameter changes)
@@ -1802,7 +1833,7 @@ $ `cudakernel.nu`
     }
     : i N - rhi rlo
     : i has_params 1  // state (+ params) always rides as params
-    : i has_data ? != dsid 0 1 0
+    : i has_data ? != dsid 0 ( ds_dtype_id dsid ) 0
     // build the vecreduce (accumulate) module ONCE (source-hash cached; the
     // state is a param, so the SAME module serves every round — no rebuild,
     // warm worker cache). In general mode also build the update module.
@@ -1996,7 +2027,7 @@ $ `cudakernel.nu`
     }
     ? > - rhi rlo ( __shuffle_cap ) { ( vec_free [i] params ) ^ ( mcp_tool_result_error `shuffle range too large: hi - lo must be <= 8388608 (the coordinator holds the intermediate (key,value) pairs)` ) } {}
     : i has_params ? > ( vec_len [i] params ) 0 1 0
-    : i has_data ? != dsid 0 1 0
+    : i has_data ? != dsid 0 ( ds_dtype_id dsid ) 0
     // per-chunk hash-table size: a power of two ≥ 2× the distinct-key upper
     // bound (a chunk can hold no more distinct keys than the whole range, and
     // the result is capped at __shuffle_keys_cap anyway). Keeps the load
@@ -2169,9 +2200,26 @@ $ `cudakernel.nu`
 @ __ds_file_max_bytes → i { ^ 68719476736 }  // 64 GiB — the file-backed cap
 @ __max_chunk_bytes → i { ^ 268435456 }  // 256 MiB — cap on a single chunk's data
 
+// dtype string <-> code. "f64" (default), "f32", "i32", "i64". 0 = invalid.
+@ __dtype_code s name → i {
+    ? == ( nurl_str_len name ) 0 { ^ ( data_dtype_f64 ) } {}
+    ? != 0 ( nurl_str_eq name `f64` ) { ^ ( data_dtype_f64 ) } {}
+    ? != 0 ( nurl_str_eq name `f32` ) { ^ ( data_dtype_f32 ) } {}
+    ? != 0 ( nurl_str_eq name `i32` ) { ^ ( data_dtype_i32 ) } {}
+    ? != 0 ( nurl_str_eq name `i64` ) { ^ ( data_dtype_i64 ) } {}
+    ^ 0
+}
+
+@ __dtype_name i code → s {
+    ? == code 2 { ^ `f32` } {}
+    ? == code 3 { ^ `i32` } {}
+    ? == code 4 { ^ `i64` } {}
+    ^ `f64`
+}
+
 // Register a dataset from its manifest, augmenting the already-built stats
-// object `o` (min/max/mean) with dataset_id/name/count, and returning it.
-@ __ds_register s name ( Vec u ) bytes String path i nbytes ( Vec ( Vec u ) ) blocks Json o → Json {
+// object `o` (min/max/mean) with dataset_id/name/count/dtype, and returning it.
+@ __ds_register s name ( Vec u ) bytes String path i nbytes i dtype ( Vec ( Vec u ) ) blocks Json o → Json {
     : *McpState st # *McpState g_mcp
     : *Dataset d # *Dataset ( nurl_alloc Z Dataset )
     = . d id . st next_ds
@@ -2180,11 +2228,13 @@ $ `cudakernel.nu`
     = . d bytes bytes
     = . d path path
     = . d nbytes nbytes
+    = . d dtype dtype
     = . d blocks blocks
     ( vec_push [s] . st datasets # s d )
     ( json_obj_set o `dataset_id` ( json_int . d id ) )
     ? > ( nurl_str_len name ) 0 { ( json_obj_set o `name` ( json_str_lit name ) ) } {}
     ( json_obj_set o `count` ( json_int ( ds_count_of d ) ) )
+    ( json_obj_set o `dtype` ( json_str_lit ( __dtype_name dtype ) ) )
     ? ( ds_is_file d ) { ( json_obj_set o `file_backed` ( json_bool T ) ) } {}
     ^ o
 }
@@ -2193,25 +2243,29 @@ $ `cudakernel.nu`
     : s b64 ?? ( json_obj_get args `data_base64` ) { T v → ( json_str_data v ) F → `` }
     : s fpath ?? ( json_obj_get args `file` ) { T v → ( json_str_data v ) F → `` }
     : s name ?? ( json_obj_get args `name` ) { T v → ( json_str_data v ) F → `` }
+    : s dts ?? ( json_obj_get args `dtype` ) { T v → ( json_str_data v ) F → `` }
     ? & == ( nurl_str_len b64 ) 0 == ( nurl_str_len fpath ) 0 {
-        ^ ( mcp_tool_result_error `compute_upload_data needs "data_base64" (raw little-endian f64s) or "file" (a path on the MCP host); "name" optional` )
+        ^ ( mcp_tool_result_error `compute_upload_data needs "data_base64" or "file" (a path on the MCP host); "dtype" (f64 default, f32, i32, i64) and "name" optional` )
     } {}
+    : i dtc ( __dtype_code dts )
+    ? == dtc 0 { ^ ( mcp_tool_result_error `"dtype" must be one of "f64" (default), "f32", "i32", "i64"` ) } {}
+    : i esz ( data_dtype_esz dtc )
     // FILE path: stream the manifest + stats from disk (bounded memory — the
     // whole file is never held), so a dataset can be far larger than RAM.
     ? > ( nurl_str_len fpath ) 0 {
         : ~ i fsz -1
         ?? ( file_size fpath ) { T n → { = fsz n } F e → {} }
         ? < fsz 0 { ^ ( mcp_tool_result_error `could not stat the file (unreadable on the MCP host, or no such path)` ) } {}
-        ? | | == fsz 0 != % fsz 8 0 > fsz ( __ds_file_max_bytes ) {
-            ^ ( mcp_tool_result_error `a file dataset must be a non-empty multiple of 8 bytes (raw little-endian f64s), at most 64 GiB` )
+        ? | | == fsz 0 != % fsz esz 0 > fsz ( __ds_file_max_bytes ) {
+            ^ ( mcp_tool_result_error `a file dataset must be a non-empty multiple of the element size (raw little-endian, matching "dtype"), at most 64 GiB` )
         } {}
         : Json o ( json_obj_new )
-        : ( Vec ( Vec u ) ) blocks ( ds_file_manifest_stats fpath fsz o )
+        : ( Vec ( Vec u ) ) blocks ( ds_file_manifest_stats fpath fsz dtc o )
         ? == ( vec_len [( Vec u )] blocks ) 0 {
             ( blob_manifest_free blocks ) ( json_free o )
             ^ ( mcp_tool_result_error `could not read the file for hashing (it may have changed or become unreadable)` )
         } {}
-        : Json idj ( __ds_register name ( vec_new [u] ) ( string_from fpath ) fsz blocks o )
+        : Json idj ( __ds_register name ( vec_new [u] ) ( string_from fpath ) fsz dtc blocks o )
         ^ ( tool_result_json idj )
     } {}
     // BASE64 path: the raw bytes ride the request, so they stay in RAM (capped).
@@ -2226,14 +2280,14 @@ $ `cudakernel.nu`
         ^ ( mcp_tool_result_error `could not decode "data_base64" (invalid base64)` )
     } {}
     : i blen ( vec_len [u] bytes )
-    ? | | == blen 0 != % blen 8 0 > blen ( __ds_max_bytes ) {
+    ? | | == blen 0 != % blen esz 0 > blen ( __ds_max_bytes ) {
         ( vec_free [u] bytes )
-        ^ ( mcp_tool_result_error `an inline (base64) dataset must be 1..33554432 f64 values: non-empty, a multiple of 8 bytes, at most 256 MiB — use "file" for larger data (up to 64 GiB)` )
+        ^ ( mcp_tool_result_error `an inline (base64) dataset must be non-empty, a multiple of the "dtype" element size, and at most 256 MiB — use "file" for larger data (up to 64 GiB)` )
     } {}
     : ( Vec ( Vec u ) ) blocks ( blob_manifest bytes )
     : Json o ( json_obj_new )
-    ( __stats_json o bytes )
-    : Json idj ( __ds_register name bytes ( string_new ) blen blocks o )
+    ( __stats_json o bytes dtc )
+    : Json idj ( __ds_register name bytes ( string_new ) blen dtc blocks o )
     ^ ( tool_result_json idj )
 }
 
@@ -2486,8 +2540,9 @@ $ `cudakernel.nu`
     : Json schema ( json_obj_new )
     ( json_obj_set schema `type` ( json_str_lit `object` ) )
     : Json props ( json_obj_new )
-    ( ms_prop props `data_base64` `string` `The dataset as base64 of raw LITTLE-ENDIAN f64 values, held in memory (≤ 256 MiB). Use this XOR "file".` )
-    ( ms_prop props `file` `string` `A path ON THE MCP HOST to read the dataset from (raw little-endian f64s), streamed from disk (≤ 64 GiB — preferred for large data). Use this XOR "data_base64".` )
+    ( ms_prop props `data_base64` `string` `The dataset as base64 of raw LITTLE-ENDIAN values of the given "dtype", held in memory (≤ 256 MiB). Use this XOR "file".` )
+    ( ms_prop props `file` `string` `A path ON THE MCP HOST to read the dataset from (raw little-endian values of "dtype"), streamed from disk (≤ 64 GiB — preferred for large data). Use this XOR "data_base64".` )
+    ( ms_prop props `dtype` `string` `Storage element type: "f64" (default) · "f32" · "i32" · "i64". Data is stored in its native width (f32/i32 halve transfer + GPU memory) and each element is promoted to a double on the GPU, so your device function is always f(long long x, double v).` )
     ( ms_prop props `name` `string` `Optional human-readable label shown by compute_list_data.` )
     ( json_obj_set schema `properties` props )
     ^ schema
@@ -2526,7 +2581,7 @@ $ `cudakernel.nu`
 }
 
 @ __help_datasets → s {
-    ^ `compute_upload_data brings your data to the cluster: a flat f64 array, as {"data_base64": <raw little-endian f64>} (in memory, up to 256 MiB) or {"file": <path on the MCP host>} (STREAMED from disk, up to 64 GiB — the coordinator never holds the whole file, only the block manifest). Returns {dataset_id, count, min, max, mean, file_backed}; compute_list_data lists them.\nThe data is cut into content-addressed 1 MiB blocks (BLAKE3). Each block travels to its owning worker ONCE and is cached on disk, verified against its hash on arrival; a file-backed dataset reads each block straight from the file when it seeds a worker that lacks it. Later submits or iteration rounds over the same dataset ship only hashes — a task's seeded_blocks is how many blocks actually moved (0 = fully cached, a free re-run). A missing or corrupt block fails the chunk visibly, never silently.\nUse it: pass "dataset":id to compute_submit_cuda / _sample_cuda / _histogram_cuda / compute_iterate; the device functions then receive double v = data[x]. Omit lo/hi to process the whole dataset (a given range must lie within it). A big dataset is sharded into worker-sized chunks automatically. Data is f64 only — encode mixed/categorical data as doubles yourself (topic "limits").`
+    ^ `compute_upload_data brings your data to the cluster: a flat array, as {"data_base64": <raw little-endian>} (in memory, up to 256 MiB) or {"file": <path on the MCP host>} (STREAMED from disk, up to 64 GiB — the coordinator never holds the whole file, only the block manifest). "dtype" picks the storage element type: "f64" (default), "f32", "i32", or "i64" — data is stored in its native width (f32/i32 halve transfer + GPU memory), and each element is promoted to a double on the GPU so your device function is always f(long long x, double v). Returns {dataset_id, count, dtype, min, max, mean, file_backed}; compute_list_data lists them.\nThe data is cut into content-addressed 1 MiB blocks (BLAKE3). Each block travels to its owning worker ONCE and is cached on disk, verified against its hash on arrival; a file-backed dataset reads each block straight from the file when it seeds a worker that lacks it. Later submits or iteration rounds over the same dataset ship only hashes — a task's seeded_blocks is how many blocks actually moved (0 = fully cached, a free re-run). A missing or corrupt block fails the chunk visibly, never silently.\nUse it: pass "dataset":id to compute_submit_cuda / _sample_cuda / _histogram_cuda / compute_iterate; the device functions then receive double v = data[x] (whatever the storage dtype). Omit lo/hi to process the whole dataset (a given range must lie within it). A big dataset is sharded into worker-sized chunks automatically. For categorical/struct data, encode it into one of the numeric dtypes yourself (topic "limits").`
 }
 
 @ __help_gpu → s {
@@ -2534,7 +2589,7 @@ $ `cudakernel.nu`
 }
 
 @ __help_limits → s {
-    ^ `Read this before scaling. The current envelope and the edges that are NOT yet supported:\n  Dataset size: an inline "data_base64" upload is <= 256 MiB (held in memory); a "file" upload is STREAMED from disk and can be up to 64 GiB (the coordinator keeps only the block manifest, not the data). Big datasets shard into worker-sized chunks automatically.\n  Data type: f64 ONLY — no int/f32/struct datasets. Encode categorical or mixed data as doubles yourself.\n  Shuffle: <= 8,388,608 input elements AND <= 65,536 distinct keys per call (the intermediate/result bound). High-cardinality group-by (e.g. per-user over millions of users) must be partitioned or the key coarsened, which changes semantics.\n  Sample: <= 1,048,576 values returned (inline <= 65,536; beyond needs out_file). Histogram: <= 1,048,576 bins.\n  Iterate: state <= 4096 components, acc_dim <= 65,536, rounds <= 100,000. SGD is built in; any other step rule goes through an "update" device function (topic "iterate").\n  Fault tolerance: a RELAY failure is survived (--connect several relays → the cluster converges on a survivor mid-flight). A WORKER that dies or traps mid-task is now auto-redispatched for the non-dataset GPU tools (compute_submit_cuda / _sample_cuda / _histogram_cuda): the coordinator re-routes the lost chunk to another worker (the task's "retries" field counts this), and only reports failed_chunks if the chunk fails everywhere after several attempts. NOT yet auto-redispatched: dataset-backed tasks (a fresh worker would need the data blocks re-seeded — resubmit to retry; blocks stay cached so it is cheap), and the in-call loops compute_iterate / compute_shuffle (a chunk failure ends the call — resubmit).\n  Coordinator: the single --mcp node runs the iterate/shuffle loop and merges partials; it is not yet redundant — if it dies mid-run that run is lost, though a fresh submit on a new coordinator is fine (worker datasets and caches persist).\nThese are known edges, not bugs — design around them or split the work.`
+    ^ `Read this before scaling. The current envelope and the edges that are NOT yet supported:\n  Dataset size: an inline "data_base64" upload is <= 256 MiB (held in memory); a "file" upload is STREAMED from disk and can be up to 64 GiB (the coordinator keeps only the block manifest, not the data). Big datasets shard into worker-sized chunks automatically.\n  Data type: numeric only — "dtype" is f64 (default), f32, i32, or i64 (stored natively, promoted to double on the GPU). No struct/record datasets; encode categorical/mixed data into one of these numeric widths yourself.\n  Shuffle: <= 8,388,608 input elements AND <= 65,536 distinct keys per call (the intermediate/result bound). High-cardinality group-by (e.g. per-user over millions of users) must be partitioned or the key coarsened, which changes semantics.\n  Sample: <= 1,048,576 values returned (inline <= 65,536; beyond needs out_file). Histogram: <= 1,048,576 bins.\n  Iterate: state <= 4096 components, acc_dim <= 65,536, rounds <= 100,000. SGD is built in; any other step rule goes through an "update" device function (topic "iterate").\n  Fault tolerance: a RELAY failure is survived (--connect several relays → the cluster converges on a survivor mid-flight). A WORKER that dies or traps mid-task is now auto-redispatched for the non-dataset GPU tools (compute_submit_cuda / _sample_cuda / _histogram_cuda): the coordinator re-routes the lost chunk to another worker (the task's "retries" field counts this), and only reports failed_chunks if the chunk fails everywhere after several attempts. NOT yet auto-redispatched: dataset-backed tasks (a fresh worker would need the data blocks re-seeded — resubmit to retry; blocks stay cached so it is cheap), and the in-call loops compute_iterate / compute_shuffle (a chunk failure ends the call — resubmit).\n  Coordinator: the single --mcp node runs the iterate/shuffle loop and merges partials; it is not yet redundant — if it dies mid-run that run is lost, though a fresh submit on a new coordinator is fine (worker datasets and caches persist).\nThese are known edges, not bugs — design around them or split the work.`
 }
 
 @ __help_troubleshooting → s {
@@ -2592,7 +2647,7 @@ $ `cudakernel.nu`
     `Group-by-key / reduce-by-key. A CUDA key(x)+value(x) map plus a reduce op; both the map AND the per-key reduce run distributed on the GPU (a combiner), and the coordinator merges compact per-chunk tables. Returns { "groups": {…}, "n_groups", "pairs_mapped" }. Word-count, keyed histograms, joins. hi - lo ≤ 8388608, ≤ 65536 distinct keys. Needs a --gpu worker. Details: swarm_help "shuffle".`
     ( ms_schema_shuffle ) ) )
     ( vec_push [Json] tools ( mcp_tool_descriptor `compute_upload_data`
-    `Upload a dataset (flat f64 array) the GPU tools map over: {"data_base64": raw little-endian f64} (in memory, ≤ 256 MiB) or {"file": path on the MCP host} (STREAMED from disk, ≤ 64 GiB — the coordinator holds only the block manifest, not the file). Returns {dataset_id, count, min, max, mean, file_backed}. Then pass "dataset":id to the CUDA tools — device functions receive double v = data[x]. Cut into content-addressed 1 MiB blocks cached per worker, so the data moves ONCE (seeded_blocks reports blocks moved). Details: swarm_help "datasets".`
+    `Upload a dataset the GPU tools map over: {"data_base64": raw little-endian} (in memory, ≤ 256 MiB) or {"file": path on the MCP host} (STREAMED from disk, ≤ 64 GiB). "dtype" is the element type — f64 (default), f32, i32, i64 (native width; f32/i32 halve memory), promoted to double on the GPU so your kernel is always f(long long x, double v). Returns {dataset_id, count, dtype, min, max, mean, file_backed}. Then pass "dataset":id to the CUDA tools. Data is cut into content-addressed 1 MiB blocks cached per worker, so it moves ONCE. Details: swarm_help "datasets".`
     ( ms_schema_upload_data ) ) )
     ( vec_push [Json] tools ( mcp_tool_descriptor `compute_list_data`
     `List every uploaded dataset: id, name, element count.`
@@ -2629,7 +2684,7 @@ $ `cudakernel.nu`
 // ── JSON-RPC method handlers ─────────────────────────────────────
 
 @ handle_initialize Json id → Json {
-    : Json result ( mcp_initialize_result `swarm-mcp` `0.17.0` )
+    : Json result ( mcp_initialize_result `swarm-mcp` `0.18.0` )
     ^ ( mcp_response_result id result )
 }
 
