@@ -62,6 +62,18 @@ $ `stdlib/core/string.nu`
 
 & `cuda` @ cuMemcpyDtoD_v2 i dst i src i n → i32
 
+& `cuda` @ cuMemHostAlloc *u pp i bytes i32 flags → i32
+
+& `cuda` @ cuMemFreeHost *u p → i32
+
+& `cuda` @ cuMemHostRegister_v2 *u p i bytes i32 flags → i32
+
+& `cuda` @ cuMemHostUnregister *u p → i32
+
+& `cuda` @ cuMemcpyHtoDAsync_v2 i dst *u src i n i stream → i32
+
+& `cuda` @ cuStreamSynchronize i stream → i32
+
 & `cuda` @ cuLaunchKernel i f i32 gx i32 gy i32 gz i32 bx i32 by i32 bz i32 sh i stream *u params i extra → i32
 
 & `cuda` @ cuGetErrorName i32 err *u pstr → i32
@@ -314,6 +326,31 @@ $ `stdlib/core/string.nu`
 @ cuda_dtoh * u host i dptr i bytes → i { ^ # i ( cuMemcpyDtoH_v2 host dptr bytes ) }
 
 @ cuda_dtod i dst i src i bytes → i { ^ # i ( cuMemcpyDtoD_v2 dst src bytes ) }
+
+// Page-locked (pinned) host memory: DMA-able, so an HtoD from it is a
+// straight PCIe transfer with no driver-internal staging copy, and an
+// ASYNC HtoD from it actually overlaps with host work. 0 on failure.
+@ cuda_host_alloc i bytes → *u {
+    : *u s ( __outslot )
+    ? != # i ( cuMemHostAlloc s bytes 0 ) 0 { ( nurl_free s ) ^ # *u 0 } {}
+    : i p ( nurl_peek s 0 )
+    ( nurl_free s )
+    ^ # *u p
+}
+
+@ cuda_host_free * u p → i { ^ # i ( cuMemFreeHost p ) }
+
+// Page-lock an EXISTING host range (e.g. an mmap'd model file) so HtoD
+// copies out of it are direct DMA instead of driver-staged. Flag 8 =
+// CU_MEMHOSTREGISTER_READ_ONLY — required for PROT_READ mappings, which
+// is exactly what a model file is. `p` must be page-aligned (mmap is).
+@ cuda_host_register * u p i bytes → i { ^ # i ( cuMemHostRegister_v2 p bytes 8 ) }
+
+@ cuda_host_unregister * u p → i { ^ # i ( cuMemHostUnregister p ) }
+
+@ cuda_htod_async i dptr * u host i bytes i stream → i { ^ # i ( cuMemcpyHtoDAsync_v2 dptr host bytes stream ) }
+
+@ cuda_stream_sync i stream → i { ^ # i ( cuStreamSynchronize stream ) }
 
 // ── launch ────────────────────────────────────────────────────────
 // `params` is a void** array of pointers to the argument values (built

@@ -1487,11 +1487,16 @@ $ `deps/gpu/src/gpu.nu`
     ( vec_push [i] a ( gpu_arg_i32 cols ) )
     ( vec_push [i] a ( gpu_arg_i32 xk ) )
     ( vec_push [i] a ( gpu_arg_i32 n_assign ) )
-    // NOTE: a warp-per-row (coalesced) variant was tried and is SLOWER
-    // for these shapes — the expert rows are short (cols≈2048 → only ~2
-    // q8_0 blocks per lane after the 32-way split), so the shfl reduction
-    // overhead dominates and the full-occupancy scalar kernel wins
-    // (measured: scalar 5.4s vs warp 6.7s over the llada2.1-mini decode).
+    // NOTE: two "better" shapes were tried and measured SLOWER, so this
+    // stays the plain one-thread-per-(assignment, row) kernel:
+    //   - warp-per-row (coalesced): shfl reduction overhead beats the
+    //     coalescing win at these short rows (5.4s vs 6.7s).
+    //   - expert-grouped (assignments sharing an expert read its weights
+    //     once — a llada2 window shares each selected expert between ~4.2
+    //     positions): one-thread-per-group collapsed occupancy (9.9s) and
+    //     a padded 4-assignment-tile mapping still lost slightly (4.44s
+    //     vs 4.18s) — the phase is NOT weight-bandwidth-bound, so traffic
+    //     reduction buys nothing here.
     : i grid ( gpu_grid * rows n_assign 64 )
     ? == gt 0 { : i _r ( gpu_launch . ks mv_exp_f32 grid 64 a ) } {}
     ? == gt 8 { : i _r ( gpu_launch . ks mv_exp_q8_0 grid 64 a ) } {}

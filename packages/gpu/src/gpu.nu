@@ -18,6 +18,7 @@ $ `stdlib/std/fs.nu`
 $ `stdlib/std/path.nu`
 $ `stdlib/std/hash.nu`
 $ `stdlib/ext/env.nu`
+$ `stdlib/std/thread.nu`
 $ `cuda.nu`
 $ `cpu.nu`
 
@@ -359,7 +360,8 @@ $ `cpu.nu`
         // compile straight to a device-specific cubin (no JIT at load);
         // any failure falls through to the PTX path below, which is the
         // one that reports compile errors
-        : *u cszs ( __outslot )
+        : *u cszs ( nurl_alloc 8 )
+        ( nurl_poke cszs 0 0 )
         : *u cb ( cuda_compile_cubin src name ( cuda_device_cc . g dev ) cszs )
         ? != # i cb 0 {
             : i cn ( nurl_peek cszs 0 )
@@ -455,10 +457,154 @@ $ `cpu.nu`
         ? != __gpu_backend 0 { ( cpu_free . b dptr ) } { ( cuda_free . b dptr ) } }
 }
 
+// ── pinned staging for large uploads (CUDA) ─────────────────────────
+//
+// cuMemcpyHtoD from PAGEABLE memory makes the driver stage every chunk
+// through its own small pinned buffer on one thread — ~5 GB/s, so a
+// 17 GB model spends ~3.5 s of pure CPU in the driver. Staging through
+// two of our own pinned buffers instead lets the host memcpy of chunk
+// N+1 overlap the DMA of chunk N (async copies from pinned memory are
+// truly asynchronous), which approaches max(memcpy, PCIe) rather than
+// their sum. The buffers are lazy-allocated on the first large upload
+// and reused; gpu_staging_free releases them (a loader should call it
+// once the weights are up — 128 MB of page-locked memory is not free).
+: ~ i __gpu_stage_a 0
+
+: ~ i __gpu_stage_b 0
+
+@ __GPU_STAGE_CHUNK → i { ^ 67108864 }
+
+// memcpy a chunk in four parallel stripes (three pthreads + the caller).
+// A single thread copying out of the page cache tops out around 5 GB/s,
+// and at model sizes that — not PCIe — is the upload wall; stripes
+// scale it. Any failed spawn falls back to copying that stripe inline,
+// so the copy is correct with no threads at all (WASI).
+@ __gpu_par_memcpy i dst i src i n → v {
+    ? < n 8388608 {
+        ( nurl_memcpy # *u dst # *u src n )
+        ^ {}
+    } {}
+    : i q / n 4
+    : i o2 * q 2
+    : i o3 * q 3
+    : ( @ v ) w1 \ → v { ( nurl_memcpy # *u + dst q # *u + src q q ) }
+    : ( @ v ) w2 \ → v { ( nurl_memcpy # *u + dst o2 # *u + src o2 q ) }
+    : ( @ v ) w3 \ → v { ( nurl_memcpy # *u + dst o3 # *u + src o3 - n o3 ) }
+    ?? ( thread_spawn w1 ) {
+        T t1 → {
+            ?? ( thread_spawn w2 ) {
+                T t2 → {
+                    ?? ( thread_spawn w3 ) {
+                        T t3 → {
+                            ( nurl_memcpy # *u dst # *u src q )
+                            : i _j3 ( thread_join t3 )
+                        }
+                        F _ → {
+                            ( nurl_memcpy # *u dst # *u src q )
+                            ( w3 )
+                        }
+                    }
+                    : i _j2 ( thread_join t2 )
+                }
+                F _ → {
+                    ( nurl_memcpy # *u dst # *u src q )
+                    ( w2 )
+                    ( w3 )
+                }
+            }
+            : i _j1 ( thread_join t1 )
+        }
+        F _ → {
+            ( nurl_memcpy # *u dst # *u src q )
+            ( w1 )
+            ( w2 )
+            ( w3 )
+        }
+    }
+}
+
+@ gpu_staging_free → v {
+    ? != __gpu_stage_a 0 { : i _f1 ( cuda_host_free # *u __gpu_stage_a ) = __gpu_stage_a 0 } {}
+    ? != __gpu_stage_b 0 { : i _f2 ( cuda_host_free # *u __gpu_stage_b ) = __gpu_stage_b 0 } {}
+}
+
+@ __gpu_upload_staged i dptr * u host i bytes → i {
+    ? == __gpu_stage_a 0 { = __gpu_stage_a # i ( cuda_host_alloc ( __GPU_STAGE_CHUNK ) ) } {}
+    ? == __gpu_stage_b 0 { = __gpu_stage_b # i ( cuda_host_alloc ( __GPU_STAGE_CHUNK ) ) } {}
+    ? | == __gpu_stage_a 0 == __gpu_stage_b 0 {
+        // pinned allocation failed — the plain path still works
+        ( gpu_staging_free )
+        ^ ( cuda_htod dptr host bytes )
+    } {}
+    : ~ i off 0
+    : ~ i k 0
+    : ~ b pend_a F
+    : ~ b pend_b F
+    : ~ i rc 0
+    ~ & == rc 0 < off bytes {
+        : ~ i n - bytes off
+        ? > n ( __GPU_STAGE_CHUNK ) { = n ( __GPU_STAGE_CHUNK ) } {}
+        : i buf ? == k 0 __gpu_stage_a __gpu_stage_b
+        // the DMA that last read this buffer must be done before the
+        // memcpy below overwrites it
+        : b pend ? == k 0 pend_a pend_b
+        ? pend {
+            = rc ( cuda_stream_sync 0 )
+            = pend_a F
+            = pend_b F
+        } {}
+        ? == rc 0 {
+            ( __gpu_par_memcpy buf + # i host off n )
+            = rc ( cuda_htod_async + dptr off # *u buf n 0 )
+            ? == k 0 { = pend_a T } { = pend_b T }
+        } {}
+        = k - 1 k
+        = off + off n
+    }
+    ? == rc 0 { = rc ( cuda_stream_sync 0 ) } {}
+    ^ rc
+}
+
+// A host range the caller page-locked with gpu_host_register: copies
+// whose source lies inside it are direct DMA already, so the staged
+// path (an extra pass through DRAM) must NOT intercept them.
+: ~ i __gpu_reg_base 0
+
+: ~ i __gpu_reg_size 0
+
+// Page-lock an existing host range (an mmap'd model file) so uploads
+// from it become direct DMA at PCIe rate — no host memcpy at all. At
+// most ONE range is tracked; returns F when registration fails (not a
+// CUDA backend, read-only registration unsupported, out of lockable
+// memory) and uploads simply keep their staged path.
+@ gpu_host_register * u p i bytes → b {
+    ? != __gpu_backend 0 { ^ F } {}
+    ? != ( cuda_host_register p bytes ) 0 { ^ F } {}
+    = __gpu_reg_base # i p
+    = __gpu_reg_size bytes
+    ^ T
+}
+
+@ gpu_host_unregister * u p → v {
+    ? != __gpu_backend 0 { ^ {} } {}
+    ? == # i p __gpu_reg_base {
+        : i _u ( cuda_host_unregister p )
+        = __gpu_reg_base 0
+        = __gpu_reg_size 0
+    } {}
+}
+
+@ __gpu_in_reg i addr i bytes → b {
+    ? == __gpu_reg_base 0 { ^ F } {}
+    ^ & >= addr __gpu_reg_base <= + addr bytes + __gpu_reg_base __gpu_reg_size
+}
+
 // Copy the buffer's worth of bytes host → device. 0 == success.
 @ gpu_upload GpuBuffer dst * u host → i {
     ? == __gpu_backend 3 { ^ ( wgpu_upload . dst dptr host . dst bytes ) } {}
     ? != __gpu_backend 0 { ^ ( cpu_htod . dst dptr host . dst bytes ) } {}
+    ? ( __gpu_in_reg # i host . dst bytes ) { ^ ( cuda_htod . dst dptr host . dst bytes ) } {}
+    ? >= . dst bytes ( __GPU_STAGE_CHUNK ) { ^ ( __gpu_upload_staged . dst dptr host . dst bytes ) } {}
     ^ ( cuda_htod . dst dptr host . dst bytes )
 }
 

@@ -260,6 +260,10 @@ $ `src/tokenizer.nu`
 // the weight needs.
 : ~ i __lm_last_type -1
 
+: ~ i __lm_up_ns 0
+
+: ~ i __lm_rp_ns 0
+
 // Set when any device allocation comes back null (out of device
 // memory). Checked once at the end of llm_open_st: a silent failure
 // here used to surface as an all-zero forward pass — the model "ran"
@@ -300,7 +304,9 @@ $ `src/tokenizer.nu`
             = __lm_alloc_failed T
             ^ -1
         } {}
+        : i _t0 ( monotonic_ns )
         : i _uq ( gpu_upload bq # *u addr )
+        = __lm_up_ns + __lm_up_ns - ( monotonic_ns ) _t0
         // q8_0 goes to the device in the SPLIT per-row layout the
         // matvec kernels read (scales together, 4-aligned quants) —
         // a one-time on-device repack, then the interleaved copy is
@@ -312,9 +318,11 @@ $ `src/tokenizer.nu`
                 = __lm_alloc_failed T
                 ^ -1
             } {}
+            : i _t1 ( monotonic_ns )
             ( lk_q8_repack . m ks . bq dptr . br dptr / ne0 32 / nb 34 )
             : i _rs ( gpu_sync . m g )
             ( gpu_free bq )
+            = __lm_rp_ns + __lm_rp_ns - ( monotonic_ns ) _t1
             ( vec_push [i] . m wdptr . br dptr )
             ( vec_push [i] . m wbytes . br bytes )
             = __lm_last_type gt
@@ -570,7 +578,32 @@ $ `src/tokenizer.nu`
 // logits must agree. If the safetensors reader got a dtype, an offset or a
 // row order wrong, that check fails here rather than silently in whatever
 // depends on it next.
+// Load-phase stopwatch (NURLLAMA_PROF): prints `[load] <what>=<ms>ms`.
+: ~ b __lm_lprof F
+
+: ~ i __lm_lt 0
+
+@ __lm_lp_start → v {
+    = __lm_lprof F
+    ?? ( env_get `NURLLAMA_PROF` ) { T v → { ( string_free v ) = __lm_lprof T } F → {} }
+    = __lm_lt ( monotonic_ns )
+}
+
+@ __lm_lp s what → v {
+    ? __lm_lprof {} { ^ {} }
+    : i now ( monotonic_ns )
+    : String msg ( string_from `[load] ` )
+    ( string_push_str msg what )
+    ( string_push_str msg `=` )
+    ( string_push_int msg / - now __lm_lt 1000000 )
+    ( string_push_str msg `ms` )
+    ( nurl_eprintln ( string_data msg ) )
+    ( string_free msg )
+    = __lm_lt now
+}
+
 @ llm_open_st s path s weights i want_ctx → !*Llm String {
+    ( __lm_lp_start )
     : !*Gguf String gr ( gguf_open path )
     : ~ i ggaddr 0
     ?? gr {
@@ -578,6 +611,7 @@ $ `src/tokenizer.nu`
         F e → { ^ @ !*Llm String { F e } }
     }
     : *Gguf gg # *Gguf ggaddr
+    ( __lm_lp `gguf_open` )
     : s arch ( gguf_kv_str_or gg `general.architecture` `` )
     : b is_gemma3 != 0 ( nurl_str_eq arch `gemma3` )
     : b is_phi3 != 0 ( nurl_str_eq arch `phi3` )
@@ -697,6 +731,7 @@ $ `src/tokenizer.nu`
     = . m n_ctx ctx
 
     // tokenizer first (it copies out of gg)
+    ( __lm_lp `kv+cfg` )
     : !*Tok String tr ( tok_new gg )
     ?? tr {
         T t → { = . m tok t }
@@ -710,7 +745,9 @@ $ `src/tokenizer.nu`
 
     // device + kernels — the best GPU on the box, not merely the first
     // one the driver enumerates ($NURL_GPU_DEVICE overrides)
+    ( __lm_lp `tok` )
     = . m g ( gpu_open ( gpu_best_device ) )
+    ( __lm_lp `gpu_open` )
     ? ( gpu_ok . m g ) {} {
         ( tok_free . m tok )
         ( nurl_free # s m )
@@ -718,6 +755,7 @@ $ `src/tokenizer.nu`
         ^ ( __lm_err `nurllama: no compute device (set NURL_GPU=cpu for the host backend)` )
     }
     = . m ks ( lk_build . m g )
+    ( __lm_lp `kernels` )
     ? . . m ks ok {} {
         ( tok_free . m tok )
         ( nurl_free # s m )
@@ -956,6 +994,16 @@ $ `src/tokenizer.nu`
         ^ ( __lm_err `nurllama: model is missing required llama tensors (or dequant failed)` )
     }
 
+    ( __lm_lp `weights_upload` )
+    ? __lm_lprof {
+        : String um ( string_from `[load]   copy=` )
+        ( string_push_int um / __lm_up_ns 1000000 )
+        ( string_push_str um `ms repack+free=` )
+        ( string_push_int um / __lm_rp_ns 1000000 )
+        ( string_push_str um `ms` )
+        ( nurl_eprintln ( string_data um ) )
+        ( string_free um )
+    } {}
     // KV cache + activation scratch
     : i kvdim * . m n_kv . m head_dim
     = L 0
@@ -1035,6 +1083,9 @@ $ `src/tokenizer.nu`
         ( llm_close m )
         ^ ( __lm_err `nurllama: out of device memory while loading the model — free GPU memory (close other GPU programs) or use a smaller quantisation` )
     } {}
+    // the weights are up — release the upload path's pinned staging
+    ( gpu_staging_free )
+    ( __lm_lp `scratch+bias` )
     ?? ( env_get `NURLLAMA_VERBOSE` ) {
         T v → {
             ( string_free v )
