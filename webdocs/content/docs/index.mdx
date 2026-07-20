@@ -1,17 +1,17 @@
 ---
 title: Introduction
-description: What NURL is and where to go next.
 icon: Rocket
 ---
+import { Step, Steps } from 'fumadocs-ui/components/steps';
+
+
+<img src="/graphics/nurlfullc.svg" alt="NURL colored full logo" className="h-16 m-auto" />
+**NURL** (Neural Unified Representation Language) is a compiled language without a virtual machine, garbage collector and interpreter. `.nu` files are compiled straight to a native executable or a WebAssembly module.
 
 <Callout type="warn" title="Work In Progress">
-  NURL web documentation is maintained separately. For up-to-date information
-  refer to the repository documentation in
-  [docs](https://github.com/nurl-lang/nurl/tree/main/docs).
+  * NURL web documentation is maintained separately.
+  * For up-to-date information refer to the repository documentation in [docs](https://github.com/nurl-lang/nurl/tree/main/docs).
 </Callout>
-
-**NURL** is a compiled language without a virtual machine, garbage collector and interpreter. `.nu` files are compiled straight to a native executable or a WebAssembly module.
-
 ## Features of NURL
 
 NURL is **designed** to be a target for **LLM code generation** specifically. The regular grammar means errors stay local and a whole program fits predictably in a context window.
@@ -22,24 +22,30 @@ NURL is **designed** to be a target for **LLM code generation** specifically. Th
 - **Static borrow checker** -- rejects use-after-move, alias-double-free, escaping closure-captures, and iterator invalidation at compile time.
 - **One LLVM pipeline** -- the same codegen path targets Linux, macOS, Windows, wasm32-wasi, RISC-V, and ARM64 without per-platform ports.
 
-## State of NURL
+### State of NURL
 
 NURL is actively developed and is now in a **pre-release** state. See [`ROADMAP.md`](https://github.com/nurl-lang/nurl/blob/main/ROADMAP.md) for the latest version.
 
 Major changes are currently less frequent, and the stable release is planned for late 2026.
 
-## Requirements
+### Requirements
 
 - Only clang / LLVM 15 or newer if you are building from source
 
 ## Get NURL
 
-1. **[Installation](./install.mdx)** — The `nurlc` compiler (and the
-   `nurlpkg` / `nurlfmt` tools)
-2. **First program** — write and understand
-   a minimal "hello world" program
-3. **[Compiling and running](./compiling-and-running.mdx)** — the compile
-   pipeline, the `nurl` wrapper, and useful flags.
-4. **[Next steps](./next-steps.mdx)** — The
-   language guide, the standard library, the examples folder, and the
-   online playground.
+<Steps>
+<Step>
+**[Installation](./install.mdx)** — The `nurlc` compiler (and the `nurlpkg` / `nurlfmt` tools)
+</Step>
+<Step>
+**First program** — write and understand a minimal "hello world" program
+</Step>
+<Step>
+**[Compiling and running](./compiling-and-running.mdx)** — the compile pipeline, the `nurl` wrapper, and useful flags.
+</Step>
+<Step>
+**[Next steps](./next-steps.mdx)** — The language guide, the standard library, the examples folder, and the online playground.
+</Step>
+</Steps>
+
