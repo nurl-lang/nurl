@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.8.0
+
+- **CUBIN kernel cache (CUDA).** `gpu_compile` now compiles straight to a
+  device-specific CUBIN (`nvrtcGetCUBIN` with `-arch=sm_<cc>`) and caches
+  that, so `cuModuleLoadData` needs no driver JIT — loading the previous
+  PTX cache made the driver re-JIT every kernel on every process start,
+  which was the exact latency the cache existed to remove. Falls back to
+  the old PTX path (and its cache) on any failure, e.g. an NVRTC too old
+  to emit CUBINs. New binding: `cuda_compile_cubin`.
+
 ## 0.3.0
 
 - **Primary CUDA context.** `gpu_open` now retains the device's PRIMARY

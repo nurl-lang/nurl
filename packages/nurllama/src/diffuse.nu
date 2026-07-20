@@ -129,6 +129,13 @@ $ `src/model.nu`
         : i be + bs bl
         : ~ i post 0
         : ~ b block_done F
+        // T when the LAST window eval ran on exactly the x the block
+        // settles with (a pass that made no commits and no edits): the
+        // K/V rows that eval wrote to the cache already ARE the frozen
+        // block, so the freeze re-eval below is skipped — one whole
+        // forward saved per cleanly-converged block, with an identical
+        // cache to show for it.
+        : ~ b kv_settled F
         ~ ! block_done {
             // masks as of THIS pass's start (the reference computes its
             // break condition on the pre-commit view)
@@ -140,13 +147,26 @@ $ `src/model.nu`
             }
             ? == n_active 0 { = post + post 1 } {}
             ? > post max_post { = block_done T } {
-                ( llm_eval_win m x bs bl bs be T )
                 : ( Vec i ) x0 ( vec_new [i] )
                 : ( Vec f ) confs ( vec_new [f] )
-                = k 0
-                ~ < k bl {
-                    ( __dz_sample_row m k temp rng x0 confs )
-                    = k + k 1
+                ? <= temp 0.0 {
+                    // greedy: argmax + confidence reduced on the DEVICE, so
+                    // only bl·(id,prob) come back — the whole-vocab softmax
+                    // no longer runs on the host every step.
+                    ( llm_win_greedy m x bs bl bs be )
+                    = k 0
+                    ~ < k bl {
+                        ( vec_push [i] x0 ( llm_win_id m k ) )
+                        ( vec_push [f] confs ( llm_win_prob m k ) )
+                        = k + k 1
+                    }
+                } {
+                    ( llm_eval_win m x bs bl bs be T )
+                    = k 0
+                    ~ < k bl {
+                        ( __dz_sample_row m k temp rng x0 confs )
+                        = k + k 1
+                    }
                 }
                 // masked-position commits
                 ? > n_active 0 {
@@ -197,11 +217,15 @@ $ `src/model.nu`
                 }
                 ( vec_free [i] x0 )
                 ( vec_free [f] confs )
-                ? & == n_active 0 ! edited { = block_done T } {}
+                ? & == n_active 0 ! edited {
+                    = block_done T
+                    = kv_settled T
+                } {}
             }
         }
-        // freeze: write the settled block's K/V from its FINAL content
-        ( llm_eval_win m x bs bl bs be F )
+        // freeze: write the settled block's K/V from its FINAL content —
+        // unless the last eval already did (kv_settled)
+        ? kv_settled {} { ( llm_eval_win m x bs bl bs be F ) }
         // eos_early_stop: a fully-resolved generation containing an EOS
         // has nothing left to say
         : ~ b any_mask F
