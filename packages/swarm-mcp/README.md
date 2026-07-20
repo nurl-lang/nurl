@@ -285,6 +285,24 @@ Not yet covered (documented in `swarm_help "limits"`): dataset-backed tasks (a
 fresh worker would need the data blocks re-seeded first — resubmit to retry,
 blocks stay cached) and the in-call loops `compute_iterate` / `compute_shuffle`.
 
+## Surviving a coordinator restart — dataset persistence
+
+The `--mcp` node holds the dataset registry in memory; a crash used to lose it.
+Datasets are now **persisted to `$HOME/.swarm-mcp/datasets/`** on upload (a small
+manifest of block hashes plus a pointer to the bytes — the file you uploaded, or
+a written copy for a base64 upload) and **reloaded on startup**. So a coordinator
+that crashes and restarts **recovers its datasets**, and a resubmit re-seeds the
+blocks from the persisted bytes — the workers' cached blocks are confirmed by
+hash, not recomputed, so recovery is cheap.
+
+This is not hot standby — an iterate/shuffle call that was *in flight* when the
+coordinator died must be resubmitted — but the datasets, and the ability to
+resume, survive the restart:
+
+```
+swarm-mcp: recovered 3 dataset(s) from disk
+```
+
 ## Group-by-key — the shuffle primitive
 
 `compute_shuffle` is the building block for group-by, word-count, histograms
@@ -593,9 +611,11 @@ The envelope, stated plainly (and queryable at run time via `swarm_help
   cheap) and the in-call loops `compute_iterate` / `compute_shuffle` (a chunk
   failure ends the call — resubmit).
 - **The coordinator** (the `--mcp` node) runs the iterate/shuffle loop and
-  merges partials; it is **not yet redundant** — if it dies mid-run that run is
-  lost, though a fresh submit on a new coordinator is fine (worker datasets and
-  caches persist).
+  merges partials; it is **not hot-redundant** — an *in-flight* call is lost if
+  it crashes mid-run. But it is **crash-restartable**: datasets are persisted to
+  `$HOME/.swarm-mcp/datasets/` and reloaded on startup, so a restarted
+  coordinator recovers its registry and a resubmit re-seeds from the persisted
+  bytes. Only the interrupted call needs resubmitting.
 
 ## Tests
 
@@ -637,6 +657,10 @@ NURL_STDLIB=<repo> ../../nurl.sh tests/cudakernel_test.nu /tmp/ck && /tmp/ck
 # shuffle at the lifted limits (needs a GPU): 10 M-row group-by, 200k-key result
 # via out_file, and rejection of a chunk that overflows its table
 ./tests/shuffle_bigkeys_smoke.sh
+
+# coordinator crash-restart recovery (needs a GPU): upload a dataset, SIGKILL the
+# node, restart with the same $HOME, and reduce over the recovered dataset
+./tests/persist_smoke.sh
 
 # wasm path (needs wasmtime): compile a kernel to module.wasm, then
 swarm-mcp runwasm 127.0.0.1 47700 sum 1 1000000 module.wasm --token mysecret
