@@ -129,8 +129,21 @@ $ `wasmkernel.nu`
     ( string_push_str w `\n` )
 }
 
+// Dataset element type. `has_data` is 0 (no dataset) or a dtype code (== the
+// data_dtype_* codes in wasmkernel.nu), so the plain `!= 0` tests still mean
+// "has a dataset" and 1 stays f64 (the original behaviour). The GPU stores the
+// data in its native width and the kernel promotes each element to a `double`,
+// so the model always writes f(long long x, double v) regardless of storage.
+@ __data_ctype i hd → s {
+    ? == hd 2 { ^ `float` } {}
+    ? == hd 3 { ^ `int` } {}
+    ? == hd 4 { ^ `long long` } {}
+    ^ `double`
+}
+
 // The device-fn signature tail: `, double v` when a dataset feeds the kernel
-// (v = data[x]), `, const double* p` with runtime params — in that order.
+// (v = data[x]), `, const double* p` with runtime params — in that order. The
+// element is always promoted to `double` regardless of the storage dtype.
 @ __cu_ptail i has_params i has_data → String {
     : String o ( string_new )
     ? != has_data 0 { ( string_push_str o `, double v` ) } {}
@@ -138,10 +151,11 @@ $ `wasmkernel.nu`
     ^ o
 }
 
-// The matching call site (inside the generated kernel, x and in in scope).
+// The matching call site (inside the generated kernel, x and in in scope). The
+// element is cast to double so the device fn's `double v` is dtype-agnostic.
 @ __cu_pcall i has_params i has_data → String {
     : String o ( string_from `(x` )
-    ? != has_data 0 { ( string_push_str o `, in[x - lo]` ) } {}
+    ? != has_data 0 { ( string_push_str o `, (double)in[x - lo]` ) } {}
     ? != has_params 0 { ( string_push_str o `, p` ) } {}
     ( string_push_str o `)` )
     ^ o
@@ -152,7 +166,7 @@ $ `wasmkernel.nu`
 // passed explicitly so the user writes swarm_g_add(out, j, val).
 @ __cu_pcall_grad i has_params i has_data → String {
     : String o ( string_from `(x` )
-    ? != has_data 0 { ( string_push_str o `, in[x - lo]` ) } {}
+    ? != has_data 0 { ( string_push_str o `, (double)in[x - lo]` ) } {}
     ( string_push_str o `, out` )
     ? != has_params 0 { ( string_push_str o `, p` ) } {}
     ( string_push_str o `)` )
@@ -160,10 +174,15 @@ $ `wasmkernel.nu`
 }
 
 // The generated KERNEL's extra formal parameters (device buffers), appended
-// after the mode's fixed ones: the dataset slice, then the runtime params.
+// after the mode's fixed ones: the dataset slice (in its native dtype), then
+// the runtime params.
 @ __cu_ktail i has_params i has_data → String {
     : String o ( string_new )
-    ? != has_data 0 { ( string_push_str o `, const double* in` ) } {}
+    ? != has_data 0 {
+        ( string_push_str o `, const ` )
+        ( string_push_str o ( __data_ctype has_data ) )
+        ( string_push_str o `* in` )
+    } {}
     ? != has_params 0 { ( string_push_str o `, const double* p` ) } {}
     ^ o
 }
@@ -476,11 +495,13 @@ $ `wasmkernel.nu`
         ( __pl w `    = dp ( nurl_peek dps 0 )` )
         ( __pl w `    ? != # i ( cuMemcpyHtoD dp ph pbytes ) 0 { ^ 2 } {}` )
     } {}
-    // dataset slice: read the in-file (exactly 8·(hi−lo) bytes) → device
+    // dataset slice: read the in-file (exactly esz·(hi−lo) bytes) → device.
+    // esz is the storage width (f64/i64 = 8, f32/i32 = 4); the kernel reads the
+    // buffer as its native type and promotes each element to double.
     ( __pl w `    : ~ i din 0` )
     ? != hd 0 {
         ( __pl w `    ? <= hi lo { ^ 2 } {}` )
-        ( __pl w `    : i ibytes * - hi lo 8` )
+        ( string_push_str w `    : i ibytes * - hi lo ` ) ( __pl w ( nurl_str_int ( data_dtype_esz has_data ) ) )
         ( string_push_str w `    : s ifh ( fopen inpath ` ) ( __pq w `rb` ) ( __pl w ` )` )
         ( __pl w `    ? == # i ifh 0 { ^ 2 } {}` )
         ( __pl w `    : *u ih ( nurl_alloc ibytes )` )

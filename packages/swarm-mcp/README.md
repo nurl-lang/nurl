@@ -493,18 +493,23 @@ carries it home over the same HMAC-tagged wire.
 
 ### Real data: datasets
 
-`compute_upload_data` brings **your data** to the cluster — a flat f64 array,
-as base64 (raw little-endian, in memory, up to 256 MiB) or a **file on the MCP
-host** (up to **64 GiB**). A file is **streamed from disk**: the coordinator
-hashes it block by block into the content-address manifest and never holds the
-whole thing in memory, and later seeds each block straight from the file — so a
-dataset's size is bounded by disk, not coordinator RAM. Big datasets shard into
-worker-sized chunks automatically. The CUDA tools then take `dataset: id`, and
-the device functions receive each element as a second argument:
+`compute_upload_data` brings **your data** to the cluster — a flat numeric
+array, as base64 (raw little-endian, in memory, up to 256 MiB) or a **file on
+the MCP host** (up to **64 GiB**). A file is **streamed from disk**: the
+coordinator hashes it block by block into the content-address manifest and never
+holds the whole thing in memory, and later seeds each block straight from the
+file — so a dataset's size is bounded by disk, not coordinator RAM. Big datasets
+shard into worker-sized chunks automatically.
+
+**`dtype` picks the element type** — `f64` (default), `f32`, `i32`, or `i64`.
+Data is stored in its **native width** (so `f32`/`i32` halve the transfer and
+GPU memory of real 32-bit data), and each element is **promoted to a `double`
+on the GPU** — so your device function is always `f(long long x, double v)`
+regardless of how the data is stored. The CUDA tools then take `dataset: id`:
 
 ```jsonc
-// → compute_upload_data {"file": "/data/readings.bin", "name": "sensor-a"}
-// ← {"dataset_id": 1, "count": 100000, "min": -4.27, "max": 14.54, "mean": 5.0}
+// → compute_upload_data {"file": "/data/readings.f32", "dtype": "f32", "name": "sensor-a"}
+// ← {"dataset_id": 1, "count": 100000, "dtype": "f32", "min": -4.27, "max": 14.54, "mean": 5.0}
 
 // GPU variance numerator over the data, mean passed as a runtime param:
 {"cuda": "__device__ double f(long long x, double v, const double* p) { double d = v - p[0]; return d * d; }",
@@ -558,8 +563,9 @@ The envelope, stated plainly (and queryable at run time via `swarm_help
 
 - **Dataset size** — an inline base64 upload is ≤ 256 MiB (held in memory); a
   **file** upload is streamed from disk and can be up to **64 GiB** (the
-  coordinator keeps only the block manifest). **Data is f64 only** — encode
-  categorical / mixed data as doubles yourself.
+  coordinator keeps only the block manifest). **Element type** is `f64`
+  (default), `f32`, `i32`, or `i64` via `dtype`; struct/record data must be
+  encoded into one of these numeric widths yourself.
 - **Shuffle** ≤ 8,388,608 input elements *and* ≤ 65,536 distinct keys per call
   (the intermediate/result bound). High-cardinality group-by must be
   partitioned or the key coarsened.
@@ -612,6 +618,10 @@ NURL_STDLIB=<repo> ../../nurl.sh tests/cudakernel_test.nu /tmp/ck && /tmp/ck
 # file-backed datasets bigger than coordinator RAM: upload a >256 MiB file,
 # reduce it exactly, and confirm the coordinator's RSS stays far below its size
 ./tests/bigdata_smoke.sh
+
+# typed datasets (needs a GPU): reduce an f32 and an i32 dataset on the GPU and
+# check each sum matches numpy (accumulated in float64, as the GPU does)
+./tests/typed_smoke.sh
 
 # wasm path (needs wasmtime): compile a kernel to module.wasm, then
 swarm-mcp runwasm 127.0.0.1 47700 sum 1 1000000 module.wasm --token mysecret

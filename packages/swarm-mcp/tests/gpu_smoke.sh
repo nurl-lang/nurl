@@ -53,7 +53,7 @@ tid="$(printf '%s' "$sub" | grep -oE 'task_id[^0-9]*[0-9]+' | grep -oE '[0-9]+' 
 ok=0
 for _ in 1 2 3 4 5 6 7 8 9 10 11 12; do
     res="$(MCP "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"compute_result\",\"arguments\":{\"task_id\":$tid}}}")"
-    if printf '%s' "$res" | grep -q '3.14159e+08'; then ok=1; break; fi
+    if printf '%s' "$res" | grep -qE 'result[^0-9]{1,4}31415926'; then ok=1; break; fi
     sleep 2
 done
 if [ "$ok" = 1 ]; then echo "[gpu-smoke] PASS compute_submit_cuda π·1e8 on the GPU"; else
