@@ -494,9 +494,13 @@ carries it home over the same HMAC-tagged wire.
 ### Real data: datasets
 
 `compute_upload_data` brings **your data** to the cluster — a flat f64 array,
-as base64 (raw little-endian) or a file on the MCP host, up to 256 MiB. The
-CUDA tools then take `dataset: id`, and the device functions receive each
-element as a second argument:
+as base64 (raw little-endian, in memory, up to 256 MiB) or a **file on the MCP
+host** (up to **64 GiB**). A file is **streamed from disk**: the coordinator
+hashes it block by block into the content-address manifest and never holds the
+whole thing in memory, and later seeds each block straight from the file — so a
+dataset's size is bounded by disk, not coordinator RAM. Big datasets shard into
+worker-sized chunks automatically. The CUDA tools then take `dataset: id`, and
+the device functions receive each element as a second argument:
 
 ```jsonc
 // → compute_upload_data {"file": "/data/readings.bin", "name": "sensor-a"}
@@ -552,9 +556,10 @@ a module whose GPU calls run on the workers' hardware.
 The envelope, stated plainly (and queryable at run time via `swarm_help
 "limits"`) — these are current edges to design around, not bugs:
 
-- **Dataset size** ≤ 256 MiB (≤ 33.5 M f64) per dataset; split larger data
-  across datasets. **Data is f64 only** — encode categorical / mixed data as
-  doubles yourself.
+- **Dataset size** — an inline base64 upload is ≤ 256 MiB (held in memory); a
+  **file** upload is streamed from disk and can be up to **64 GiB** (the
+  coordinator keeps only the block manifest). **Data is f64 only** — encode
+  categorical / mixed data as doubles yourself.
 - **Shuffle** ≤ 8,388,608 input elements *and* ≤ 65,536 distinct keys per call
   (the intermediate/result bound). High-cardinality group-by must be
   partitioned or the key coarsened.
@@ -603,6 +608,10 @@ NURL_STDLIB=<repo> ../../nurl.sh tests/cudakernel_test.nu /tmp/ck && /tmp/ck
 # in-computation fault tolerance (needs 2 GPUs): kill a worker mid-task and
 # verify its chunk is re-dispatched so the result is still exact
 ./tests/faulttol_smoke.sh
+
+# file-backed datasets bigger than coordinator RAM: upload a >256 MiB file,
+# reduce it exactly, and confirm the coordinator's RSS stays far below its size
+./tests/bigdata_smoke.sh
 
 # wasm path (needs wasmtime): compile a kernel to module.wasm, then
 swarm-mcp runwasm 127.0.0.1 47700 sum 1 1000000 module.wasm --token mysecret

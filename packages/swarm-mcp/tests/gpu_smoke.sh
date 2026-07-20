@@ -71,7 +71,7 @@ tid2="$(printf '%s' "$sub2" | grep -oE 'task_id[^0-9]*[0-9]+' | grep -oE '[0-9]+
 ok2=0
 for _ in 1 2 3 4 5 6 7 8; do
     res2="$(MCP "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"tools/call\",\"params\":{\"name\":\"compute_result\",\"arguments\":{\"task_id\":$tid2}}}")"
-    if printf '%s' "$res2" | grep -qF '1e+06'; then ok2=1; break; fi
+    if printf '%s' "$res2" | grep -qE 'result[^0-9]{1,4}1000000'; then ok2=1; break; fi
     sleep 2
 done
 kill -9 "$cpu_pid" 2>/dev/null
@@ -85,7 +85,7 @@ t0=$(date +%s)
 p2="$(MCP '{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"compute_submit_cuda","arguments":{"cuda":"__device__ double f(long long x, const double* p) { return p[0] * (double)x; }","lo":0,"hi":1000,"reduce":"sum","params":[3.0]}}}')"
 t1=$(date +%s)
 ok3=0
-if printf '%s' "$p1" | grep -qF '999000' && printf '%s' "$p2" | grep -qF '1.4985e+06' && [ $((t1 - t0)) -le 10 ]; then ok3=1; fi
+if printf '%s' "$p1" | grep -qF '999000' && printf '%s' "$p2" | grep -qF '1498500' && [ $((t1 - t0)) -le 10 ]; then ok3=1; fi
 if [ "$ok3" = 1 ]; then echo "[gpu-smoke] PASS runtime params + warm module cache ($((t1 - t0))s warm submit)"; else
     echo "[gpu-smoke] FAIL params/cache — p1: $p1 p2: $p2 warm=$((t1 - t0))s"; fail=1; fi
 
