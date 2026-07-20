@@ -484,7 +484,7 @@ $ `token.nu`
                 ? vecmode {
                     ?? ( read_file_bytes ( string_data outp ) ) {
                         T bts → {
-                            : i want ? == . c mode ( gpu_mode_shuffle_reduce ) * 16 . c kbins ? == . c mode ( gpu_mode_shuffle_map ) * 16 - . c hi . c lo * 8 ? | == . c mode ( gpu_mode_hist ) == . c mode ( gpu_mode_vecreduce ) . c kbins - . c hi . c lo
+                            : i want ? == . c mode ( gpu_mode_shuffle_reduce ) * 16 + . c kbins 1 ? == . c mode ( gpu_mode_shuffle_map ) * 16 - . c hi . c lo * 8 ? | == . c mode ( gpu_mode_hist ) == . c mode ( gpu_mode_vecreduce ) . c kbins - . c hi . c lo
                             ? == ( vec_len [u] bts ) want {
                                 ( vec_free [u] outb )
                                 = outb bts

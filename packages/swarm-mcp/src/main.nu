@@ -1994,8 +1994,18 @@ $ `cudakernel.nu`
     ^ p
 }
 
-@ __shuffle_cap → i { ^ 8388608 }  // ≤ 8 M input elements per shuffle
-@ __shuffle_keys_cap → i { ^ 65536 }  // ≤ 65 536 distinct groups in a text result
+@ __shuffle_cap → i { ^ 134217728 }  // ≤ 128 M input elements per shuffle
+// Per-chunk hash-table half-capacity. Each chunk reduces its keys into a
+// K = next_pow2(2·kkap)-slot table (16 B/slot) it must ship back in ONE relay
+// frame; frames past ~2 MiB are unreliable through the unified node's blocking
+// relay client (the same limit that makes datasets travel in 1 MiB blocks).
+// kkap = 65536 → K = 131072 → a 2 MiB table (the safe frame ceiling), holding up
+// to ~131072 distinct keys per chunk before it overflows. TOTAL distinct keys
+// therefore scales with the chunk count (≈ workers·2), reaching millions on a
+// cluster; a single chunk exceeding K is detected and rejected, never dropped.
+@ __shuffle_keys_cap → i { ^ 65536 }
+
+@ __shuffle_keys_inline → i { ^ 8192 }  // more groups than this must go to out_file
 
 @ tool_shuffle Json args → Json {
     : ?Json cj ( json_obj_get args `map` )
@@ -2025,13 +2035,15 @@ $ `cudakernel.nu`
     } {
         ? & >= rlo 0 > rhi rlo {} { ( vec_free [i] params ) ^ ( mcp_tool_result_error `"lo" and "hi" are required without a "dataset" (lo < hi)` ) }
     }
-    ? > - rhi rlo ( __shuffle_cap ) { ( vec_free [i] params ) ^ ( mcp_tool_result_error `shuffle range too large: hi - lo must be <= 8388608 (the coordinator holds the intermediate (key,value) pairs)` ) } {}
+    ? > - rhi rlo ( __shuffle_cap ) { ( vec_free [i] params ) ^ ( mcp_tool_result_error `shuffle range too large: hi - lo must be <= 134217728 (128 M)` ) } {}
+    : s out_file ?? ( json_obj_get args `out_file` ) { T v → ( json_str_data v ) F → `` }
     : i has_params ? > ( vec_len [i] params ) 0 1 0
     : i has_data ? != dsid 0 ( ds_dtype_id dsid ) 0
-    // per-chunk hash-table size: a power of two ≥ 2× the distinct-key upper
-    // bound (a chunk can hold no more distinct keys than the whole range, and
-    // the result is capped at __shuffle_keys_cap anyway). Keeps the load
-    // factor ≤ ½ so the open-addressing reduce never probes the full table.
+    // per-chunk hash-table size: a power of two ≥ 2× the distinct-key bound (a
+    // chunk holds no more distinct keys than its range, nor than the cap). Load
+    // factor ≤ ½ so the open-addressing reduce rarely probes far; if a chunk's
+    // real cardinality still exceeds the cap the table fills, and that is COUNTED
+    // and rejected (never silently dropped) — see the overflow check below.
     : i span0 - rhi rlo
     : i kkap ( __shuffle_keys_cap )
     : ~ i ktab ( __next_pow2 * 2 ? < span0 kkap span0 kkap )
@@ -2096,25 +2108,62 @@ $ `cudakernel.nu`
         ^ ( mcp_tool_result_error `a shuffle chunk failed on a worker (bad kernel, missing GPU, or a lost block)` )
     } {}
     // ── merge the partial tables: fold each key's per-chunk partials ──
-    // slots hold (i64 key, f64 val); an empty slot's key is LLONG_MIN (1<<63)
+    // Each chunk returns (ktab + 1) slots of 16 bytes: ktab data slots (i64 key,
+    // f64 val; an empty slot's key is LLONG_MIN) plus one CONTROL slot at index
+    // ktab whose key position counts keys that overflowed the table.
     : ( HashMap i f ) groups ( map_new [i f] )
     : i nbytes ( vec_len [u] . cv bytes )
-    : i nslots / nbytes 16
+    : i blkslots + ktab 1
+    : i nblk ? > blkslots 0 / nbytes * blkslots 16 0
     : i empty_key << 1 63
-    : ~ i k 0
-    ~ < k nslots {
-        : i key ( __f64le_get . cv bytes * k 16 )
-        ? != key empty_key {
-            : f val ( bits_to_f64 ( __f64le_get . cv bytes + * k 16 8 ) )
-            ( __shuffle_merge groups key val op )
-        } {}
-        = k + k 1
+    : ~ i overflow 0
+    : ~ i c 0
+    ~ < c nblk {
+        : i base * c blkslots
+        = overflow + overflow ( __f64le_get . cv bytes * + base ktab 16 )
+        : ~ i s 0
+        ~ < s ktab {
+            : i slot + base s
+            : i key ( __f64le_get . cv bytes * slot 16 )
+            ? != key empty_key {
+                : f val ( bits_to_f64 ( __f64le_get . cv bytes + * slot 16 8 ) )
+                ( __shuffle_merge groups key val op )
+            } {}
+            = s + s 1
+        }
+        = c + c 1
     }
     ( vec_free [u] . cv bytes )
-    : i ngroups ( map_len [i f] groups )
-    ? > ngroups ( __shuffle_keys_cap ) {
+    ? > overflow 0 {
         ( map_free [i f] groups )
-        ^ ( mcp_tool_result_error `more than 65536 distinct keys — narrow the range or coarsen the key function (a text result cannot carry a larger group table)` )
+        ^ ( mcp_tool_result_error `a chunk's group table overflowed — a single chunk saw more distinct keys than its hash table holds (~131072). Total cardinality scales with the number of chunks, so add GPU workers (each chunk then covers fewer keys), or coarsen the key / narrow the range. Never a silent drop — the keys were counted and the run rejected.` )
+    } {}
+    : i ngroups ( map_len [i f] groups )
+    // A moderate group table rides the JSON text result; a larger one (or when
+    // out_file is given) is written as raw little-endian (i64 key, f64 value)
+    // pairs to out_file, and the result carries only a summary.
+    ? | > ( nurl_str_len out_file ) 0 > ngroups ( __shuffle_keys_inline ) {
+        ? == ( nurl_str_len out_file ) 0 {
+            ( map_free [i f] groups )
+            ^ ( mcp_tool_result_error `more than 8192 groups needs "out_file" (an absolute path on the MCP host) — the group table is written there as raw little-endian (i64 key, f64 value) pairs` )
+        } {}
+        : ( Vec u ) buf ( vec_new [u] )
+        ( map_each [i f] groups \ i kk f vv → v {
+            ( bytes_push_u64_le buf # u64 kk )
+            ( bytes_push_u64_le buf # u64 ( f64_to_bits vv ) )
+        } )
+        ( map_free [i f] groups )
+        : ~ b wok F
+        ?? ( write_file_bytes out_file buf ) { T _ → { = wok T } F e → {} }
+        ( vec_free [u] buf )
+        ? ! wok { ^ ( mcp_tool_result_error `could not write out_file on the MCP host` ) } {}
+        : Json o ( json_obj_new )
+        ( json_obj_set o `saved_to` ( json_str_lit out_file ) )
+        ( json_obj_set o `n_groups` ( json_int ngroups ) )
+        ( json_obj_set o `reduce` ( json_str_lit ( reduce_op_name op ) ) )
+        ( json_obj_set o `pairs_mapped` ( json_int span ) )
+        ( json_obj_set o `distributed_reduce` ( json_bool T ) )
+        ^ ( tool_result_json o )
     } {}
     : Json go ( json_obj_new )
     ( map_each [i f] groups \ i kk f vv → v {
@@ -2467,8 +2516,9 @@ $ `cudakernel.nu`
     ( ms_prop props `reduce` `string` `Fold values that share a key: "sum" (default) · product · min · max · count (pairs per key).` )
     ( ms_prop props `dataset` `integer` ( __ms_dataset_desc ) )
     ( ms_prop props `lo` `integer` `Range start (inclusive); required without a dataset.` )
-    ( ms_prop props `hi` `integer` `Range end (exclusive); required without a dataset. hi - lo ≤ 8388608, ≤ 65536 keys.` )
+    ( ms_prop props `hi` `integer` `Range end (exclusive); required without a dataset. hi - lo ≤ 134217728 (128 M).` )
     ( ms_prop props `params` `array` ( __ms_params_desc ) )
+    ( ms_prop props `out_file` `string` `Optional absolute path ON THE MCP HOST: beyond 8192 groups the table is written there as raw little-endian (i64 key, f64 value) pairs and the result carries a summary (n_groups, saved_to). Required when there are more than 8192 groups.` )
     ( json_obj_set schema `properties` props )
     : Json req ( json_arr_new )
     ( json_arr_push req ( json_str_lit `map` ) )
@@ -2577,7 +2627,7 @@ $ `cudakernel.nu`
 }
 
 @ __help_shuffle → s {
-    ^ `compute_shuffle is group-by-key / reduce-by-key. Give a CUDA map — __device__ long long key(long long x) and __device__ double value(long long x) — plus a reduce op. BOTH the map AND the per-key reduce run distributed on the GPU: each worker maps its chunk and reduces it by key on the device into a compact table (a MapReduce combiner), and the coordinator only merges the small per-chunk tables. Returns {"groups":{key:value, …}, "n_groups", "pairs_mapped", "distributed_reduce":true}.\nOver a dataset, key/value take double v = data[x]. A join is two shuffles into a shared key space, merged per key.\nLimits: hi - lo <= 8,388,608 per call, and <= 65,536 distinct keys (the group table rides a text result). For more, narrow the range or coarsen the key — see topic "limits".`
+    ^ `compute_shuffle is group-by-key / reduce-by-key. Give a CUDA map — __device__ long long key(long long x) and __device__ double value(long long x) — plus a reduce op. BOTH the map AND the per-key reduce run distributed on the GPU: each worker maps its chunk and reduces it by key on the device into a compact table (a MapReduce combiner), and the coordinator only merges the small per-chunk tables. Returns {"groups":{key:value, …}, "n_groups", "pairs_mapped", "distributed_reduce":true}.\nOver a dataset, key/value take double v = data[x]. A join is two shuffles into a shared key space, merged per key.\nResult: up to 8192 groups inline as {"groups":{…}}; beyond that pass "out_file" (an absolute path on the MCP host) and the (i64 key, f64 value) pairs are written there as raw little-endian binary, with {"n_groups","saved_to"} in the result.\nLimits: hi - lo <= 134,217,728 (128 M) input elements. Distinct keys are bounded PER CHUNK (~131072, the size of the table a chunk ships back in one frame), so TOTAL cardinality scales with the chunk count (~2 per GPU worker) — add workers for more keys. A chunk that exceeds its table is rejected with an error (never a silent drop); coarsen the key or narrow the range if so. See topic "limits".`
 }
 
 @ __help_datasets → s {
@@ -2589,7 +2639,7 @@ $ `cudakernel.nu`
 }
 
 @ __help_limits → s {
-    ^ `Read this before scaling. The current envelope and the edges that are NOT yet supported:\n  Dataset size: an inline "data_base64" upload is <= 256 MiB (held in memory); a "file" upload is STREAMED from disk and can be up to 64 GiB (the coordinator keeps only the block manifest, not the data). Big datasets shard into worker-sized chunks automatically.\n  Data type: numeric only — "dtype" is f64 (default), f32, i32, or i64 (stored natively, promoted to double on the GPU). No struct/record datasets; encode categorical/mixed data into one of these numeric widths yourself.\n  Shuffle: <= 8,388,608 input elements AND <= 65,536 distinct keys per call (the intermediate/result bound). High-cardinality group-by (e.g. per-user over millions of users) must be partitioned or the key coarsened, which changes semantics.\n  Sample: <= 1,048,576 values returned (inline <= 65,536; beyond needs out_file). Histogram: <= 1,048,576 bins.\n  Iterate: state <= 4096 components, acc_dim <= 65,536, rounds <= 100,000. SGD is built in; any other step rule goes through an "update" device function (topic "iterate").\n  Fault tolerance: a RELAY failure is survived (--connect several relays → the cluster converges on a survivor mid-flight). A WORKER that dies or traps mid-task is now auto-redispatched for the non-dataset GPU tools (compute_submit_cuda / _sample_cuda / _histogram_cuda): the coordinator re-routes the lost chunk to another worker (the task's "retries" field counts this), and only reports failed_chunks if the chunk fails everywhere after several attempts. NOT yet auto-redispatched: dataset-backed tasks (a fresh worker would need the data blocks re-seeded — resubmit to retry; blocks stay cached so it is cheap), and the in-call loops compute_iterate / compute_shuffle (a chunk failure ends the call — resubmit).\n  Coordinator: the single --mcp node runs the iterate/shuffle loop and merges partials; it is not yet redundant — if it dies mid-run that run is lost, though a fresh submit on a new coordinator is fine (worker datasets and caches persist).\nThese are known edges, not bugs — design around them or split the work.`
+    ^ `Read this before scaling. The current envelope and the edges that are NOT yet supported:\n  Dataset size: an inline "data_base64" upload is <= 256 MiB (held in memory); a "file" upload is STREAMED from disk and can be up to 64 GiB (the coordinator keeps only the block manifest, not the data). Big datasets shard into worker-sized chunks automatically.\n  Data type: numeric only — "dtype" is f64 (default), f32, i32, or i64 (stored natively, promoted to double on the GPU). No struct/record datasets; encode categorical/mixed data into one of these numeric widths yourself.\n  Shuffle: <= 128 M input elements per call. Distinct keys are bounded PER CHUNK (~131072 — the table a chunk ships back in one relay frame), so TOTAL cardinality scales with the chunk count (~2 per GPU worker): a few hundred thousand on one GPU, into the millions across a cluster. A chunk exceeding its table is rejected (never a silent drop) — add workers, coarsen the key, or narrow the range. Group tables past 8192 entries come back via out_file (raw i64/f64 pairs).\n  Sample: <= 1,048,576 values returned (inline <= 65,536; beyond needs out_file). Histogram: <= 1,048,576 bins.\n  Iterate: state <= 4096 components, acc_dim <= 65,536, rounds <= 100,000. SGD is built in; any other step rule goes through an "update" device function (topic "iterate").\n  Fault tolerance: a RELAY failure is survived (--connect several relays → the cluster converges on a survivor mid-flight). A WORKER that dies or traps mid-task is now auto-redispatched for the non-dataset GPU tools (compute_submit_cuda / _sample_cuda / _histogram_cuda): the coordinator re-routes the lost chunk to another worker (the task's "retries" field counts this), and only reports failed_chunks if the chunk fails everywhere after several attempts. NOT yet auto-redispatched: dataset-backed tasks (a fresh worker would need the data blocks re-seeded — resubmit to retry; blocks stay cached so it is cheap), and the in-call loops compute_iterate / compute_shuffle (a chunk failure ends the call — resubmit).\n  Coordinator: the single --mcp node runs the iterate/shuffle loop and merges partials; it is not yet redundant — if it dies mid-run that run is lost, though a fresh submit on a new coordinator is fine (worker datasets and caches persist).\nThese are known edges, not bugs — design around them or split the work.`
 }
 
 @ __help_troubleshooting → s {
@@ -2644,7 +2694,7 @@ $ `cudakernel.nu`
     `Iterative solver with the loop IN THE ENGINE — one call returns the converged "state". Each round reduces a CUDA grad() into an accumulator, then applies a step rule. DEFAULT is gradient descent (give "lr", state[j] -= lr*grad[j]/N); for k-means, EM, power iteration, PageRank, momentum/Adam give an "update" device function (and "acc_dim" when the accumulator is wider than the state). Over a dataset the data caches after round one. Needs a --gpu worker. Recipes and the swarm_state/swarm_acc/swarm_N accessors: swarm_help "iterate".`
     ( ms_schema_iterate ) ) )
     ( vec_push [Json] tools ( mcp_tool_descriptor `compute_shuffle`
-    `Group-by-key / reduce-by-key. A CUDA key(x)+value(x) map plus a reduce op; both the map AND the per-key reduce run distributed on the GPU (a combiner), and the coordinator merges compact per-chunk tables. Returns { "groups": {…}, "n_groups", "pairs_mapped" }. Word-count, keyed histograms, joins. hi - lo ≤ 8388608, ≤ 65536 distinct keys. Needs a --gpu worker. Details: swarm_help "shuffle".`
+    `Group-by-key / reduce-by-key. A CUDA key(x)+value(x) map plus a reduce op; both the map AND the per-key reduce run distributed on the GPU (a combiner), and the coordinator merges compact per-chunk tables. Returns { "groups": {…}, "n_groups", "pairs_mapped" } (or {n_groups, saved_to} with out_file, required past 8192 groups). Word-count, keyed histograms, joins. hi - lo ≤ 128 M; distinct keys are per-chunk-bounded (~131072) so total cardinality scales with the worker count (hundreds of thousands to millions). Needs a --gpu worker. Details: swarm_help "shuffle".`
     ( ms_schema_shuffle ) ) )
     ( vec_push [Json] tools ( mcp_tool_descriptor `compute_upload_data`
     `Upload a dataset the GPU tools map over: {"data_base64": raw little-endian} (in memory, ≤ 256 MiB) or {"file": path on the MCP host} (STREAMED from disk, ≤ 64 GiB). "dtype" is the element type — f64 (default), f32, i32, i64 (native width; f32/i32 halve memory), promoted to double on the GPU so your kernel is always f(long long x, double v). Returns {dataset_id, count, dtype, min, max, mean, file_backed}. Then pass "dataset":id to the CUDA tools. Data is cut into content-addressed 1 MiB blocks cached per worker, so it moves ONCE. Details: swarm_help "datasets".`
@@ -2684,7 +2734,7 @@ $ `cudakernel.nu`
 // ── JSON-RPC method handlers ─────────────────────────────────────
 
 @ handle_initialize Json id → Json {
-    : Json result ( mcp_initialize_result `swarm-mcp` `0.18.0` )
+    : Json result ( mcp_initialize_result `swarm-mcp` `0.19.0` )
     ^ ( mcp_response_result id result )
 }
 
