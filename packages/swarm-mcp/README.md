@@ -56,16 +56,21 @@ deterministically (no coordination):
 
 ## The control surface (what the LLM sees)
 
-Ten tools, with self-describing schemas so a model uses them without docs:
+Thirteen tools, with self-describing schemas kept **deliberately short** so a
+model uses them without wasting context. The depth an LLM needs beyond a
+one-line schema — the CUDA-C ABI, the iterate/shuffle recipes, dataset caching,
+and the honest size/support limits — lives in **`swarm_help`**, fetched one
+topic at a time. Start there if unsure how a tool works.
 
 | tool | arguments | does |
 |------|-----------|------|
+| `swarm_help` | `topic` (string, optional) | on-demand guidance, one topic at a time: `overview`, `workflow`, `expr`, `cuda`, `iterate`, `shuffle`, `datasets`, `gpu`, `limits`, `troubleshooting`. Omit `topic` for the index. The reference an LLM reaches for mid-task |
 | `compute_submit` | `expr` (string), `lo` (int), `hi` (int), `reduce` (string, default `sum`), `dtype` (string, `int` default or `float`) | shard + run an **expression** kernel over `[lo,hi)`; returns a `task_id`. `dtype:"float"` evaluates the same kernel in **f64** (`x` is the index as a double, float literals like `0.5` allowed) |
 | `compute_submit_kernel` | `source` (NURL program), `lo`, `hi`, `reduce`, `kind` (`element` default or `chunk`), `gpu` (bool) | run an **arbitrary NURL kernel given as source** — the server compiles it to wasm and runs it; for anything the expression language can't express (loops, helpers) |
 | `compute_submit_cuda` | `cuda` (a `__device__ double f(long long x)` function), `lo`, `hi`, `reduce`, `params` (numbers), `dataset` | distributed **GPU** map-reduce: the model writes only the CUDA-C math; the server generates the whole kernel program and the `--gpu` workers run it on real GPUs |
 | `compute_sample_cuda` | `cuda`, `lo`, `hi`, `params`, `out_file`, `dataset` | distributed GPU map that returns **every value** in order — curves, fields, tables (JSON ≤ 1024 values, base64 ≤ 65536, `out_file` beyond) |
 | `compute_histogram_cuda` | `cuda` (`bin(x)` + optional `val(x)`), `lo`, `hi`, `bins`, `params`, `out_file`, `dataset` | distributed GPU **binned aggregation**: a whole distribution in one pass over billions of x |
-| `compute_iterate` | `cuda` (`grad(...)`), `state`, `rounds`, `lr`, `epsilon`, `dataset`/`lo`/`hi` | **gradient descent with the loop in the engine**: each round computes the gradient as a distributed GPU vecreduce with the current parameters and updates them — returns the converged `state` from one call |
+| `compute_iterate` | `cuda` (`grad(...)`), `state`, `rounds`, `lr` **or** `update`, `acc_dim`, `params`, `epsilon`, `dataset`/`lo`/`hi` | **an iterative solver with the loop in the engine**: each round reduces a CUDA `grad()` into an accumulator, then applies a step rule — gradient descent by default (`lr`), or any fixpoint (k-means, EM, power iteration, momentum/Adam) via an `update` device function — and returns the converged `state` from one call |
 | `compute_shuffle` | `map` (`key(x)`+`value(x)`), `reduce`, `dataset`/`lo`/`hi`, `params` | **group-by-key / reduce-by-key**: both the map and the per-key reduce run distributed on the GPU (each worker reduces its chunk by key — a combiner); the coordinator only merges the compact partial tables |
 | `compute_upload_data` | `data_base64` or `file`, `name` | upload a **dataset** (flat f64 array) the GPU tools map over — returns a `dataset_id` + stats. The data is cut into content-addressed 1 MiB blocks that workers cache on disk, so a block travels **once** and later submits / iteration rounds over the same dataset ship only hashes (`seeded_blocks` in the task response shows how many blocks actually moved). |
 | `compute_list_data` | — | every uploaded dataset: id, name, count |
@@ -283,9 +288,25 @@ narrow the range or coarsen the key for more.
 
 ## Iterative algorithms — the loop runs in the engine
 
-`compute_iterate` runs **gradient descent** without a model-in-the-loop.
-You give a CUDA gradient function that scatter-adds each element's
-contribution into a K-dim vector:
+`compute_iterate` runs a **fixpoint solver** without a model-in-the-loop. The
+**coordinator** loops entirely on its own:
+
+1. reduce a CUDA `grad()` into an **accumulator** vector — a distributed GPU
+   vecreduce over the range/dataset with the current `state` as the runtime
+   parameters,
+2. apply a **step rule** to get the next `state`,
+3. stop at `rounds`, or early once the largest `|state change|` falls below
+   `epsilon`.
+
+It returns the converged `state`, `rounds_run` and `converged` from **one tool
+call** — the model does not run the loop message by message, which was slow and
+fragile. Over a dataset the blocks are cached on the workers after round one, so
+every later round ships only the `state`: `seeded_blocks` reports the blocks
+moved across the *whole* run (one per block, not one per round).
+
+**The default step rule is gradient descent.** Give a `grad()` that scatter-adds
+each element's contribution and a learning rate `lr`; the engine does
+`state[j] -= lr * grad[j] / N`:
 
 ```
 __device__ void grad(long long x, double v, double* g, const double* p) {
@@ -293,22 +314,45 @@ __device__ void grad(long long x, double v, double* g, const double* p) {
     // fit the mean: minimise sum (theta - v)^2
     swarm_g_add(g, 0, 2.0 * (p[0] - v));
 }
+// state:[0], lr:0.4, dataset:id  →  converges to the mean
 ```
 
-plus an initial `state` (the K-dim parameter vector), `rounds`, and a
-learning rate `lr`. The **coordinator** then loops, entirely on its own:
+**Any other step rule is an `update` device function** — this is what turns the
+engine into a general solver (k-means, EM, power iteration, PageRank,
+momentum/Adam). `update` returns the new `state[j]` and reads the packed inputs
+through named accessors: `swarm_state(i)`, `swarm_acc(i)` (the reduced
+accumulator), `swarm_N`, `swarm_param(i)`, with `swarm_dim` / `swarm_adim` for
+loops. Two things it unlocks:
 
-1. compute the gradient `g` as a distributed GPU **vecreduce** over the
-   range/dataset with the current `state` as the runtime parameters,
-2. update `state[j] -= lr * g[j] / N`,
-3. stop at `rounds`, or early once the largest step falls below `epsilon`.
+- **The accumulator can be wider than the state** (`acc_dim`). A grad that
+  scatters *sufficient statistics* and an update that reduces them expresses
+  algorithms SGD cannot. 1-D k-means, `K=2`, is a 2-vector `state` over a
+  4-wide accumulator `[sum0, sum1, count0, count1]`:
 
-It returns the converged `state`, `rounds_run` and `converged` from **one
-tool call** — the model does not run the loop message by message, which
-was slow and fragile. Over a dataset the blocks are cached on the workers
-after round one, so every later round ships only the K parameters:
-`seeded_blocks` reports the blocks moved across the *whole* run (one per
-block, not one per round).
+  ```
+  // grad: assign each point to its nearest centroid, accumulate (sum, count)
+  __device__ void grad(long long x, double v, double* g, const double* p) {
+      double d0 = v-p[0]; if (d0<0) d0=-d0;
+      double d1 = v-p[1]; if (d1<0) d1=-d1;
+      long long c = (d0<=d1) ? 0 : 1;
+      swarm_g_add(g, c, v); swarm_g_add(g, 2+c, 1.0);
+  }
+  // update: new centroid = sum / count
+  __device__ double update(long long j, const double* p) {
+      double s = swarm_acc(j), n = swarm_acc(swarm_dim + j);
+      return (n > 0.0) ? (s / n) : swarm_state(j);
+  }
+  // state:[0,50], acc_dim:4  →  matches numpy Lloyd exactly
+  ```
+
+- **A global reduction inside a step** (a norm for power iteration, a
+  renormalisation for EM) is just a loop over `swarm_acc` inside `update` —
+  `swarm_adim` is small, so each thread recomputing it is free. Optimizer state
+  (momentum, Adam moments) rides as extra components of `state` that `update`
+  rewrites — no engine support needed.
+
+Full ABI, more recipes, and the size bounds (`state ≤ 4096`, `acc_dim ≤ 65536`):
+**`swarm_help "iterate"`**.
 
 Two ways to get there:
 
@@ -475,6 +519,29 @@ a module whose GPU calls run on the workers' hardware.
 > from them natively. Pick the device with `CUDA_VISIBLE_DEVICES` in the
 > worker's environment (the kernel program binds device ordinal 0).
 
+## Known limits
+
+The envelope, stated plainly (and queryable at run time via `swarm_help
+"limits"`) — these are current edges to design around, not bugs:
+
+- **Dataset size** ≤ 256 MiB (≤ 33.5 M f64) per dataset; split larger data
+  across datasets. **Data is f64 only** — encode categorical / mixed data as
+  doubles yourself.
+- **Shuffle** ≤ 8,388,608 input elements *and* ≤ 65,536 distinct keys per call
+  (the intermediate/result bound). High-cardinality group-by must be
+  partitioned or the key coarsened.
+- **Sample** ≤ 1,048,576 values returned; **histogram** ≤ 1,048,576 bins.
+  **Iterate** `state ≤ 4096`, `acc_dim ≤ 65,536`, `rounds ≤ 100,000`.
+- **Fault tolerance:** a **relay** failure is survived (failover — workers and
+  the coordinator converge on another relay mid-flight). A **worker** that dies
+  mid-task is **not** auto-redispatched: its chunk fails visibly
+  (`failed_chunks`) and the task errors; resubmit to retry (datasets stay
+  cached, so a resubmit is cheap).
+- **The coordinator** (the `--mcp` node) runs the iterate/shuffle loop and
+  merges partials; it is **not yet redundant** — if it dies mid-run that run is
+  lost, though a fresh submit on a new coordinator is fine (worker datasets and
+  caches persist).
+
 ## Tests
 
 ```sh
@@ -494,6 +561,11 @@ NURL_STDLIB=<repo> ../../nurl.sh tests/cudakernel_test.nu /tmp/ck && /tmp/ck
 # live GPU end-to-end (skips cleanly without an NVIDIA GPU): compute_submit_cuda
 # on real hardware + mixed CPU/GPU cluster routing
 ./tests/gpu_smoke.sh
+
+# live compute_iterate: gradient descent (fit the mean) and — the general
+# fixpoint path — 1-D k-means, each checked against a numpy oracle
+./tests/iterate_smoke.sh
+./tests/general_smoke.sh
 
 # wasm path (needs wasmtime): compile a kernel to module.wasm, then
 swarm-mcp runwasm 127.0.0.1 47700 sum 1 1000000 module.wasm --token mysecret

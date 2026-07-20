@@ -690,7 +690,7 @@ $ `cudakernel.nu`
 
 // one-pass min/max/mean of raw LE f64 bytes, attached to a JSON object
 // Dataset-backed GPU submit over CONTENT-ADDRESSED blocks (payload v4).
-// Chunking is block-aligned, so every 8 MiB block belongs to exactly one
+// Chunking is block-aligned, so every 1 MiB block belongs to exactly one
 // chunk; blocks not yet confirmed at their owner are seeded first as
 // kind_blob tasks carrying the SAME ring key as the compute chunk (same
 // ring + same key → same worker), and per-connection ordering guarantees
@@ -939,7 +939,7 @@ $ `cudakernel.nu`
     ( json_obj_set o `chunks` ( json_int . t nchunks ) )
     ? != . t dsid 0 {
         ( json_obj_set o `dataset` ( json_int . t dsid ) )
-        // how many 8 MiB blocks this submit actually shipped — 0 means the
+        // how many 1 MiB blocks this submit actually shipped — 0 means the
         // workers already held every block (re-submit / next round is free)
         ( json_obj_set o `seeded_blocks` ( json_int . t seeded ) )
     } {}
@@ -1281,7 +1281,7 @@ $ `cudakernel.nu`
     } {}
     // chunk count: spread over the GPU workers; never shard an empty range.
     // With a dataset the split is BLOCK-ALIGNED inside the v4 submit — the
-    // 12 MiB slice-per-frame budget is gone, blocks (8 MiB) travel once.
+    // 12 MiB slice-per-frame budget is gone, blocks (1 MiB) travel once.
     : i nchunks0 ( nchunks_wasm ngpu )
     : i span - rhi rlo
     : ~ i nchunks nchunks0
@@ -1338,10 +1338,19 @@ $ `cudakernel.nu`
 // into the summed gradient `grad` (K floats). Returns the failed-chunk count
 // (0 = every chunk reported). The dataset path (dsid != 0) references cached
 // blocks by hash, so after the first round a round ships only the state.
-@ __iterate_round * Swarm sw ( Vec u ) wasm i K i rlo i rhi ( Vec f ) state i dsid ( Vec String ) seeded * u nseed_cell ( Vec f ) grad → i {
+// One accumulate round: submit the vecreduce module over [rlo,rhi) with the
+// current `state` (S floats) plus any user `xparams` as the runtime params, and
+// combine the per-chunk A-vectors into the summed accumulator `grad` (A floats).
+// The accumulator dimension A is decoupled from the state length S — the
+// gradient of a fit and the state it updates coincide, but k-means sufficient
+// statistics, EM stats and A·v for power iteration do not. Returns the
+// failed-chunk count (0 = every chunk reported).
+@ __iterate_round * Swarm sw ( Vec u ) wasm i S i A ( Vec i ) xparams i rlo i rhi ( Vec f ) state i dsid ( Vec String ) seeded * u nseed_cell ( Vec f ) grad → i {
     : ( Vec i ) params ( vec_new [i] )
     : ~ i j 0
-    ~ < j K { ( vec_push [i] params ( f64_to_bits ?? ( vec_get [f] state j ) { T x → x F → 0.0 } ) ) = j + j 1 }
+    ~ < j S { ( vec_push [i] params ( f64_to_bits ?? ( vec_get [f] state j ) { T x → x F → 0.0 } ) ) = j + j 1 }
+    : ~ i xj 0
+    ~ < xj ( vec_len [i] xparams ) { ( vec_push [i] params ?? ( vec_get [i] xparams xj ) { T x → x F → 0 } ) = xj + xj 1 }
     : *McpState st0 # *McpState g_mcp
     : i ngpu ( roster_count_caps # *Roster . sw roster ( cap_gpu ) )
     : i nchunks0 ( nchunks_wasm ngpu )
@@ -1352,74 +1361,133 @@ $ `cudakernel.nu`
     ? != dsid 0 {
         : *Dataset d # *Dataset ( ds_find dsid )
         ( vec_free [i] tids )
-        = tids ( cluster_submit_wasm_gpu_ds sw ( gpu_mode_vecreduce ) rlo rhi K params d wasm nchunks . st0 seeded nseed_cell )
+        = tids ( cluster_submit_wasm_gpu_ds sw ( gpu_mode_vecreduce ) rlo rhi A params d wasm nchunks . st0 seeded nseed_cell )
     } {
         : ( Vec u ) dbytes ( vec_new [u] )
         ( vec_free [i] tids )
-        = tids ( cluster_submit_wasm_gpu sw ( gpu_mode_vecreduce ) rlo rhi K params dbytes wasm nchunks )
+        = tids ( cluster_submit_wasm_gpu sw ( gpu_mode_vecreduce ) rlo rhi A params dbytes wasm nchunks )
         ( vec_free [u] dbytes )
     }
     ( vec_free [i] params )
     // drive to completion
     : ~ i r 0
     ~ & < r 4000 ! ( tids_ready sw tids ) { ( swarm_pump sw 100 ) = r + r 1 }
-    : CombinedV cv ( tids_combine_vec sw ( gpu_mode_vecreduce ) K tids )
+    : CombinedV cv ( tids_combine_vec sw ( gpu_mode_vecreduce ) A tids )
     ( vec_free [i] tids )
     ( vec_clear [f] grad )
     : ~ i b 0
-    ~ < b K { ( vec_push [f] grad ( bits_to_f64 ( __f64le_get . cv bytes * b 8 ) ) ) = b + b 1 }
+    ~ < b A { ( vec_push [f] grad ( bits_to_f64 ( __f64le_get . cv bytes * b 8 ) ) ) = b + b 1 }
     ( vec_free [u] . cv bytes )
     ^ . cv nfail
+}
+
+// One update round: run the model's update() as a sample over [0, S) on a GPU
+// worker, gather the S new state components, and overwrite `state` in place.
+// The packed param buffer the update kernel reads is state ++ acc ++ [N] ++
+// xparams. Returns the failed-chunk count (0 = the whole state came back).
+@ __iterate_update * Swarm sw ( Vec u ) uwasm i S i A ( Vec f ) grad i N ( Vec i ) xparams ( Vec f ) state → i {
+    : ( Vec i ) up ( vec_new [i] )
+    : ~ i j 0
+    ~ < j S { ( vec_push [i] up ( f64_to_bits ?? ( vec_get [f] state j ) { T x → x F → 0.0 } ) ) = j + j 1 }
+    : ~ i a 0
+    ~ < a A { ( vec_push [i] up ( f64_to_bits ?? ( vec_get [f] grad a ) { T x → x F → 0.0 } ) ) = a + a 1 }
+    ( vec_push [i] up ( f64_to_bits # f N ) )
+    : ~ i xj 0
+    ~ < xj ( vec_len [i] xparams ) { ( vec_push [i] up ?? ( vec_get [i] xparams xj ) { T x → x F → 0 } ) = xj + xj 1 }
+    : ( Vec u ) nodata ( vec_new [u] )
+    : ( Vec i ) tids ( cluster_submit_wasm_gpu sw ( gpu_mode_sample ) 0 S 0 up nodata uwasm 1 )
+    ( vec_free [i] up ) ( vec_free [u] nodata )
+    : ~ i r 0
+    ~ & < r 4000 ! ( tids_ready sw tids ) { ( swarm_pump sw 100 ) = r + r 1 }
+    : CombinedV cv ( tids_combine_vec sw ( gpu_mode_sample ) 0 tids )
+    ( vec_free [i] tids )
+    ? == . cv nfail 0 {
+        ? == ( vec_len [u] . cv bytes ) * S 8 {
+            : ~ i b 0
+            ~ < b S { ( vec_set [f] state b ( bits_to_f64 ( __f64le_get . cv bytes * b 8 ) ) ) = b + b 1 }
+        } {}
+    } {}
+    : i nf . cv nfail
+    ( vec_free [u] . cv bytes )
+    ^ nf
 }
 
 @ tool_iterate Json args → Json {
     : ?Json cj ( json_obj_get args `cuda` )
     : ?Json sj ( json_obj_get args `state` )
+    : ?Json uj ( json_obj_get args `update` )
     : b have_cuda ?? cj { T _ → T F → F }
     : b have_state ?? sj { T _ → T F → F }
+    : b have_update ?? uj { T _ → T F → F }
     ? & have_cuda have_state {} {
-        ^ ( mcp_tool_result_error `compute_iterate needs "cuda" (a __device__ void grad(long long x[, double v], double* g[, const double* p]) that scatter-adds via swarm_g_add(g, j, val)), "state" (the initial parameter vector), "rounds", and "lr" (learning rate); "dataset" or "lo"/"hi", and "epsilon" optional` )
+        ^ ( mcp_tool_result_error `compute_iterate needs "cuda" (a __device__ void grad(long long x[, double v], double* g[, const double* p]) that scatter-adds via swarm_g_add(g, j, val)), "state" (the initial parameter vector), and "rounds". Default (SGD) mode also needs "lr"; general mode instead takes an "update" device function (and optional "acc_dim"). "dataset" or "lo"/"hi", "params" and "epsilon" optional` )
     }
     : s cuda ?? cj { T x → ( json_str_data x ) F → `` }
+    : s upd ?? uj { T x → ( json_str_data x ) F → `` }
     : ( Vec f ) state ( vec_new [f] )
     : ~ b spok F
     ?? sj { T arr → { ? ( json_is_arr arr ) { = spok ( __parse_farr arr state ) } {} } F → {} }
     ? & spok > ( vec_len [f] state ) 0 {} {
         ( vec_free [f] state )
-        ^ ( mcp_tool_result_error `"state" must be a non-empty array of numbers (the parameter vector; its length is the gradient dimension K)` )
+        ^ ( mcp_tool_result_error `"state" must be a non-empty array of numbers — the parameter vector that iterates and is returned` )
     }
-    : i K ( vec_len [f] state )
-    ? > K 4096 { ( vec_free [f] state ) ^ ( mcp_tool_result_error `"state" is limited to 4096 components` ) } {}
+    : i S ( vec_len [f] state )
+    ? > S 4096 { ( vec_free [f] state ) ^ ( mcp_tool_result_error `"state" is limited to 4096 components` ) } {}
+    // accumulator dimension: defaults to the state length (a fit's gradient),
+    // but the reduction that feeds the update can be wider (k-means sufficient
+    // statistics, EM stats, A·v) — decouple it with "acc_dim".
+    : i A ?? ( json_obj_get args `acc_dim` ) { T x → ?? ( json_num_as_i x ) { T v → v F → S } F → S }
+    ? & > A 0 <= A 65536 {} { ( vec_free [f] state ) ^ ( mcp_tool_result_error `"acc_dim" must be between 1 and 65536 (the accumulator dimension your grad scatters into)` ) }
+    ? & ! have_update != A S { ( vec_free [f] state ) ^ ( mcp_tool_result_error `default (SGD) mode requires "acc_dim" == the state length; to reduce into a wider accumulator provide an "update" device function` ) } {}
+    // runtime params (constant across rounds), packed as f64 bits — grad reads
+    // them at p[S..], update via swarm_param(i)
+    : ( Vec i ) xparams ( vec_new [i] )
+    ?? ( json_obj_get args `params` ) { T pj → { ? ( json_is_arr pj ) {
+                : ( Vec f ) pf ( vec_new [f] )
+                ? ( __parse_farr pj pf ) {
+                    : ~ i pk 0
+                    ~ < pk ( vec_len [f] pf ) { ( vec_push [i] xparams ( f64_to_bits ?? ( vec_get [f] pf pk ) { T x → x F → 0.0 } ) ) = pk + pk 1 }
+                } {}
+                ( vec_free [f] pf )
+            } {} } F → {} }
     : i rounds ?? ( json_obj_get args `rounds` ) { T x → ?? ( json_num_as_i x ) { T v → v F → 0 } F → 0 }
-    ? & > rounds 0 <= rounds 100000 {} { ( vec_free [f] state ) ^ ( mcp_tool_result_error `"rounds" must be between 1 and 100000` ) }
+    ? & > rounds 0 <= rounds 100000 {} { ( vec_free [f] state ) ( vec_free [i] xparams ) ^ ( mcp_tool_result_error `"rounds" must be between 1 and 100000` ) }
     : f lr ?? ( json_obj_get args `lr` ) { T x → ?? ( json_num_as_f x ) { T v → v F → 0.0 } F → 0.0 }
-    ? == lr 0.0 { ( vec_free [f] state ) ^ ( mcp_tool_result_error `"lr" (learning rate) is required and must be non-zero` ) } {}
+    ? & ! have_update == lr 0.0 { ( vec_free [f] state ) ( vec_free [i] xparams ) ^ ( mcp_tool_result_error `default (SGD) mode requires "lr" (learning rate) — non-zero — or provide an "update" device function for a custom step rule` ) } {}
     : f eps ?? ( json_obj_get args `epsilon` ) { T x → ?? ( json_num_as_f x ) { T v → v F → 0.0 } F → 0.0 }
     : i dsid ?? ( json_obj_get args `dataset` ) { T x → ?? ( json_num_as_i x ) { T v → v F → 0 } F → 0 }
     // validate the grad entry + backtick-free source
-    ? ! ( cuda_src_ok cuda ) { ( vec_free [f] state ) ^ ( mcp_tool_result_error `the CUDA source may not contain a backtick character` ) } {}
+    ? ! ( cuda_src_ok cuda ) { ( vec_free [f] state ) ( vec_free [i] xparams ) ^ ( mcp_tool_result_error `the CUDA source may not contain a backtick character` ) } {}
     ? >= ( nurl_str_find cuda `void grad` ) 0 {} {
-        ( vec_free [f] state )
-        ^ ( mcp_tool_result_error `the CUDA source must define __device__ void grad(long long x[, double v], double* g[, const double* p]) and scatter-add the gradient with swarm_g_add(g, j, val) — with a dataset grad also takes double v = data[x]; p is the current parameter vector (== state)` )
+        ( vec_free [f] state ) ( vec_free [i] xparams )
+        ^ ( mcp_tool_result_error `the CUDA source must define __device__ void grad(long long x[, double v], double* g[, const double* p]) and scatter-add the accumulator with swarm_g_add(g, j, val) — with a dataset grad also takes double v = data[x]; p[0..state] is the current state, p[state..] your "params"` )
     }
+    ? have_update {
+        ? ! ( cuda_src_ok upd ) { ( vec_free [f] state ) ( vec_free [i] xparams ) ^ ( mcp_tool_result_error `the "update" source may not contain a backtick character` ) } {}
+        ? >= ( nurl_str_find upd `double update` ) 0 {} {
+            ( vec_free [f] state ) ( vec_free [i] xparams )
+            ^ ( mcp_tool_result_error `"update" must define __device__ double update(long long j, const double* p) returning the new state[j]; read swarm_state(i), swarm_acc(i), swarm_N and swarm_param(i)` )
+        }
+    } {}
     // resolve range (a dataset defaults [0, count))
     : ~ i rlo ?? ( json_obj_get args `lo` ) { T x → ?? ( json_num_as_i x ) { T v → v F → -1 } F → -1 }
     : ~ i rhi ?? ( json_obj_get args `hi` ) { T x → ?? ( json_num_as_i x ) { T v → v F → -1 } F → -1 }
     ? != dsid 0 {
         : s dsp ( ds_find dsid )
-        ? == # i dsp 0 { ( vec_free [f] state ) ^ ( mcp_tool_result_error `no such dataset — upload one with compute_upload_data` ) } {}
+        ? == # i dsp 0 { ( vec_free [f] state ) ( vec_free [i] xparams ) ^ ( mcp_tool_result_error `no such dataset — upload one with compute_upload_data` ) } {}
         : *Dataset d # *Dataset dsp
         ? < rlo 0 { = rlo 0 } {}
         ? < rhi 0 { = rhi ( ds_count_of d ) } {}
-        ? | | < rlo 0 > rhi ( ds_count_of d ) >= rlo rhi { ( vec_free [f] state ) ^ ( mcp_tool_result_error `the range [lo, hi) must lie within the dataset` ) } {}
+        ? | | < rlo 0 > rhi ( ds_count_of d ) >= rlo rhi { ( vec_free [f] state ) ( vec_free [i] xparams ) ^ ( mcp_tool_result_error `the range [lo, hi) must lie within the dataset` ) } {}
     } {
-        ? & >= rlo 0 > rhi rlo {} { ( vec_free [f] state ) ^ ( mcp_tool_result_error `"lo" and "hi" are required without a "dataset" (lo < hi)` ) }
+        ? & >= rlo 0 > rhi rlo {} { ( vec_free [f] state ) ( vec_free [i] xparams ) ^ ( mcp_tool_result_error `"lo" and "hi" are required without a "dataset" (lo < hi)` ) }
     }
     : i N - rhi rlo
-    : i has_params 1  // state always rides as params
+    : i has_params 1  // state (+ params) always rides as params
     : i has_data ? != dsid 0 1 0
-    // build the vecreduce module ONCE (source-hash cached; state is a param,
-    // so the SAME module serves every round — no rebuild, warm worker cache)
+    // build the vecreduce (accumulate) module ONCE (source-hash cached; the
+    // state is a param, so the SAME module serves every round — no rebuild,
+    // warm worker cache). In general mode also build the update module.
     : String wrapped ( cuda_wrap cuda 0 ( gpu_mode_vecreduce ) has_params has_data )
     : ( Vec u ) srcb ( bytes_from_str ( string_data wrapped ) )
     : String hex ( _wasm_hash srcb )
@@ -1431,29 +1499,53 @@ $ `cudakernel.nu`
         : !( Vec u ) String cr ( compile_to_wasm ( string_data wrapped ) )
         ?? cr {
             F msg → {
-                : String em ( string_concat ( string_from `the gradient kernel did not compile: ` ) msg )
+                : String em ( string_concat ( string_from `the accumulate (grad) kernel did not compile: ` ) msg )
                 : Json e ( mcp_tool_result_error ( string_data em ) )
                 ( string_free em ) ( string_free msg ) ( string_free wrapped ) ( string_free hex )
-                ( vec_free [f] state ) ( vec_free [u] wasm )
+                ( vec_free [f] state ) ( vec_free [i] xparams ) ( vec_free [u] wasm )
                 ^ e
             }
             T builtw → { ( vec_free [u] wasm ) = wasm builtw ( __wcache_put ( string_data hex ) wasm ) }
         }
     } {}
     ( string_free wrapped ) ( string_free hex )
+    : ~ ( Vec u ) uwasm ( vec_new [u] )
+    ? have_update {
+        : String uwrapped ( cuda_wrap_update upd S A )
+        : ( Vec u ) usrcb ( bytes_from_str ( string_data uwrapped ) )
+        : String uhex ( _wasm_hash usrcb )
+        ( vec_free [u] usrcb )
+        : ~ b uhave F
+        ?? ( __wcache_get ( string_data uhex ) ) { T hitw → { ( vec_free [u] uwasm ) = uwasm hitw = uhave T } F → {} }
+        ? ! uhave {
+            : !( Vec u ) String ucr ( compile_to_wasm ( string_data uwrapped ) )
+            ?? ucr {
+                F msg → {
+                    : String em ( string_concat ( string_from `the update kernel did not compile: ` ) msg )
+                    : Json e ( mcp_tool_result_error ( string_data em ) )
+                    ( string_free em ) ( string_free msg ) ( string_free uwrapped ) ( string_free uhex )
+                    ( vec_free [f] state ) ( vec_free [i] xparams ) ( vec_free [u] wasm ) ( vec_free [u] uwasm )
+                    ^ e
+                }
+                T builtw → { ( vec_free [u] uwasm ) = uwasm builtw ( __wcache_put ( string_data uhex ) uwasm ) }
+            }
+        } {}
+        ( string_free uwrapped ) ( string_free uhex )
+    } {}
     // a dead relay here means the coordinator reconnects to the next in the
     // list before submitting — a relay failure does not take the API down
     ? ( mcp_ensure_relay ) {} {}
     : *Swarm sw ( mcp_swarm )
     ( swarm_discover sw 6 )
     : i ngpu ( roster_count_caps # *Roster . sw roster ( cap_gpu ) )
-    ? == ngpu 0 { ( vec_free [f] state ) ( vec_free [u] wasm ) ^ ( mcp_tool_result_error `no GPU workers in the cluster — start some with 'swarm-mcp --worker --gpu'` ) } {}
+    ? == ngpu 0 { ( vec_free [f] state ) ( vec_free [i] xparams ) ( vec_free [u] wasm ) ( vec_free [u] uwasm ) ^ ( mcp_tool_result_error `no GPU workers in the cluster — start some with 'swarm-mcp --worker --gpu'` ) } {}
     // ── the loop, in the coordinator ──
     : *McpState st # *McpState g_mcp
     : *u nseed ( nurl_alloc 8 )
     ( nurl_poke nseed 0 0 )
     : ~ i total_seeded 0
     : ( Vec f ) grad ( vec_new [f] )
+    : ( Vec f ) prev ( vec_new [f] )
     : ~ i ran 0
     : ~ i failed 0
     : ~ f last_delta 0.0
@@ -1461,38 +1553,61 @@ $ `cudakernel.nu`
     : ~ i rnd 0
     ~ & < rnd rounds ! converged {
         ( nurl_poke nseed 0 0 )
-        : i nf ( __iterate_round sw wasm K rlo rhi state dsid . st seeded nseed grad )
+        : i nf ( __iterate_round sw wasm S A xparams rlo rhi state dsid . st seeded nseed grad )
         = total_seeded + total_seeded ( nurl_peek nseed 0 )
         ? > nf 0 { = failed nf = rnd rounds } {
-            // SGD update: theta[j] -= lr * grad[j] / N ; track max |delta|
-            : ~ f dmax 0.0
-            : ~ i j 0
-            ~ < j K {
-                : f g ?? ( vec_get [f] grad j ) { T x → x F → 0.0 }
-                : f d / * lr g # f N
-                : f cur ?? ( vec_get [f] state j ) { T x → x F → 0.0 }
-                ( vec_set [f] state j - cur d )
-                : f ad ? < d 0.0 - 0.0 d d
-                ? > ad dmax { = dmax ad } {}
-                = j + j 1
+            ? have_update {
+                // general step: new_state = update(acc, state, N, params) as a
+                // sample over [0, S) on a GPU worker; delta vs the snapshot.
+                ( vec_clear [f] prev )
+                : ~ i sj 0
+                ~ < sj S { ( vec_push [f] prev ?? ( vec_get [f] state sj ) { T x → x F → 0.0 } ) = sj + sj 1 }
+                : i nfu ( __iterate_update sw uwasm S A grad N xparams state )
+                ? > nfu 0 { = failed nfu = rnd rounds } {
+                    : ~ f dmax 0.0
+                    : ~ i j 0
+                    ~ < j S {
+                        : f nv ?? ( vec_get [f] state j ) { T x → x F → 0.0 }
+                        : f ov ?? ( vec_get [f] prev j ) { T x → x F → 0.0 }
+                        : f d - nv ov
+                        : f ad ? < d 0.0 - 0.0 d d
+                        ? > ad dmax { = dmax ad } {}
+                        = j + j 1
+                    }
+                    = last_delta dmax = ran + ran 1
+                    ? & > eps 0.0 < dmax eps { = converged T } {}
+                }
+            } {
+                // SGD update: theta[j] -= lr * grad[j] / N ; track max |delta|
+                : ~ f dmax 0.0
+                : ~ i j 0
+                ~ < j S {
+                    : f g ?? ( vec_get [f] grad j ) { T x → x F → 0.0 }
+                    : f d / * lr g # f N
+                    : f cur ?? ( vec_get [f] state j ) { T x → x F → 0.0 }
+                    ( vec_set [f] state j - cur d )
+                    : f ad ? < d 0.0 - 0.0 d d
+                    ? > ad dmax { = dmax ad } {}
+                    = j + j 1
+                }
+                = last_delta dmax
+                = ran + ran 1
+                ? & > eps 0.0 < dmax eps { = converged T } {}
             }
-            = last_delta dmax
-            = ran + ran 1
-            ? & > eps 0.0 < dmax eps { = converged T } {}
         }
         = rnd + rnd 1
     }
     ( nurl_free nseed )
-    ( vec_free [u] wasm )
+    ( vec_free [u] wasm ) ( vec_free [u] uwasm ) ( vec_free [i] xparams ) ( vec_free [f] prev )
     // ── the result ──
     ? > failed 0 {
         ( vec_free [f] grad ) ( vec_free [f] state )
-        ^ ( mcp_tool_result_error `a gradient chunk failed on a worker (bad kernel, missing GPU, or a lost block) — the run was stopped` )
+        ^ ( mcp_tool_result_error `a chunk failed on a worker (bad kernel, missing GPU, or a lost block) — the run was stopped` )
     } {}
     : Json o ( json_obj_new )
     : Json sarr ( json_arr_new )
     : ~ i j2 0
-    ~ < j2 K { : b _p ( json_arr_push sarr ( json_float ?? ( vec_get [f] state j2 ) { T x → x F → 0.0 } ) ) = j2 + j2 1 }
+    ~ < j2 S { : b _p ( json_arr_push sarr ( json_float ?? ( vec_get [f] state j2 ) { T x → x F → 0.0 } ) ) = j2 + j2 1 }
     ( json_obj_set o `state` sarr )
     ( json_obj_set o `rounds_run` ( json_int ran ) )
     ( json_obj_set o `converged` ( json_bool converged ) )
@@ -1769,7 +1884,7 @@ $ `cudakernel.nu`
     = . st next_ds + . st next_ds 1
     = . d name ( string_from name )
     = . d bytes bytes
-    // the content-address manifest: BLAKE3 per 8 MiB block (blob.nu) — the
+    // the content-address manifest: BLAKE3 per 1 MiB block (blob.nu) — the
     // transfer unit workers cache, so re-submits and iteration rounds
     // reference data by hash instead of re-shipping it
     = . d blocks ( blob_manifest . d bytes )
@@ -1853,11 +1968,11 @@ $ `cudakernel.nu`
     : Json schema ( json_obj_new )
     ( json_obj_set schema `type` ( json_str_lit `object` ) )
     : Json props ( json_obj_new )
-    ( ms_prop props `expr` `string` `Kernel: an expression in the variable x. Operators + - * / % (truncated div), comparisons < <= > >= == != (yield 1/0), logical & | , ternary cond ? a : b ; functions min(a,b) max(a,b) abs(a). Numeric literals may be integer ("3") or float ("0.5"). Examples: "x*x" · "x%2==0" · "x>1 & x<100" · "x>5 ? x : 0" · (with dtype "float") "1.0/(x*x)".` )
+    ( ms_prop props `expr` `string` `The kernel: an expression in x — operators + - * / %, comparisons, logical & |, ternary ?:, min/max/abs; int or float literals. E.g. "x*x", "x%2==0", "x>5 ? x : 0". Full grammar: swarm_help "expr".` )
     ( ms_prop props `lo` `integer` `Range start (inclusive).` )
     ( ms_prop props `hi` `integer` `Range end (exclusive). Must be > lo.` )
-    ( ms_prop props `reduce` `string` `How to fold the mapped values across the whole range: "sum" (default) · "product" · "min" · "max" · "count" (how many x make the kernel non-zero).` )
-    ( ms_prop props `dtype` `string` `Numeric domain: "int" (default, all arithmetic is i64) or "float" (all arithmetic is f64; x is the integer index cast to double; result is a float). The integer range [lo, hi) is unchanged in both. Use "float" for real-valued kernels, e.g. {"expr":"1.0/(x*x)","lo":1,"hi":1000000,"reduce":"sum","dtype":"float"} ≈ π²/6.` )
+    ( ms_prop props `reduce` `string` `Fold: "sum" (default) · product · min · max · count (how many x make the kernel nonzero).` )
+    ( ms_prop props `dtype` `string` `"int" (default, i64; x is the index) or "float" (f64; x is the index as a double). E.g. {"expr":"1.0/(x*x)",…,"dtype":"float"} ≈ π²/6.` )
     ( json_obj_set schema `properties` props )
     : Json req ( json_arr_new )
     ( json_arr_push req ( json_str_lit `expr` ) )
@@ -1889,12 +2004,12 @@ $ `cudakernel.nu`
     : Json schema ( json_obj_new )
     ( json_obj_set schema `type` ( json_str_lit `object` ) )
     : Json props ( json_obj_new )
-    ( ms_prop props `wasm_base64` `string` `A base64-encoded wasm32-wasi module — the compiled kernel. Build it from NURL with the nurl_build_wasm tool. The module's main must read two integers lo and hi from argv, fold your kernel over x in [lo, hi), and print the partial result as a decimal integer to stdout. The cluster shards [lo, hi), runs the module on each worker with its sub-range, and combines the partials with the reduce op.` )
+    ( ms_prop props `wasm_base64` `string` `Base64 wasm32-wasi module (e.g. from nurl_build_wasm). Its main reads lo, hi from argv, folds your kernel over [lo, hi), and prints the partial as a decimal integer.` )
     ( ms_prop props `lo` `integer` `Range start (inclusive).` )
     ( ms_prop props `hi` `integer` `Range end (exclusive). Must be > lo.` )
-    ( ms_prop props `reduce` `string` `How to combine the per-worker partials: "sum" (default), "product", "min", "max", or "count". Must match what the module's main reduces with.` )
-    ( ms_prop props `dtype` `string` `Partial domain: "int" (default) or "float". With "float" the module must print its partial as the f64 bit pattern (a decimal integer — e.g. via floatbits f64_to_bits) and the coordinator combines the partials in f64. With "int" it prints a plain decimal integer.` )
-    ( ms_prop props `gpu` `boolean` `Route this task ONLY to GPU-capable workers (started with --gpu) and run the module with GPU host imports enabled: CUDA/NVRTC FFI calls in the module (compiled with --ffi-host-imports) execute on the worker's real GPU. Default false.` )
+    ( ms_prop props `reduce` `string` `Combine the per-worker partials: "sum" (default) · product · min · max · count. Must match what the module reduces with.` )
+    ( ms_prop props `dtype` `string` `"int" (default; prints a decimal-integer partial) or "float" (prints the f64 bit pattern, e.g. floatbits f64_to_bits; combined in f64).` )
+    ( ms_prop props `gpu` `boolean` `Route only to --gpu workers and run with GPU host imports live (cuda/nvrtc FFI in the module hits the real GPU). Default false. See swarm_help "gpu".` )
     ( json_obj_set schema `properties` props )
     : Json req ( json_arr_new )
     ( json_arr_push req ( json_str_lit `wasm_base64` ) )
@@ -1908,13 +2023,13 @@ $ `cudakernel.nu`
     : Json schema ( json_obj_new )
     ( json_obj_set schema `type` ( json_str_lit `object` ) )
     : Json props ( json_obj_new )
-    ( ms_prop props `source` `string` `NURL source defining a per-element kernel: @ kernel i x → i { … } — it takes one integer x and returns one integer. You may also import stdlib and define helper functions; do NOT define main (the server generates it). The cluster evaluates kernel(x) for every x in [lo, hi) and folds the results with the reduce op. Example (counts primes): @ is_prime i n → b { … }  @ kernel i x → i { ? ( is_prime x ) 1 0 }. The server compiles this to wasm and runs it sharded across the workers. For dtype "float", write @ kernel i x → f { … } (takes the integer index x, returns a double); the result is a float.` )
+    ( ms_prop props `source` `string` `NURL source with a per-element kernel @ kernel i x → i { … } (+ optional imports/helpers; no main — the server generates it and compiles to wasm). For dtype "float" use → f. E.g. @ is_prime i n → b { … }  @ kernel i x → i { ? ( is_prime x ) 1 0 } with reduce "sum" counts primes.` )
     ( ms_prop props `lo` `integer` `Range start (inclusive).` )
     ( ms_prop props `hi` `integer` `Range end (exclusive). Must be > lo.` )
-    ( ms_prop props `reduce` `string` `How to combine the per-worker partials: "sum" (default), "product", "min", "max", or "count". Must match what your main reduces with.` )
-    ( ms_prop props `dtype` `string` `Numeric domain: "int" (default; kernel returns i) or "float" (kernel returns f, folded in f64, result is a float). The server generates all argv/loop/fold/print boilerplate either way.` )
-    ( ms_prop props `gpu` `boolean` `Route to GPU-capable workers only (--gpu) and run with GPU host imports live: cuda/nvrtc FFI declarations in your source execute on the worker's real GPU. Default false.` )
-    ( ms_prop props `kind` `string` `Kernel granularity: "element" (default — @ kernel i x → i/f, evaluated per x and folded by generated code) or "chunk" (@ kernel i lo i hi → i/f, called ONCE with the worker's whole sub-range — the kernel owns the loop and returns the chunk partial; the reduce op combines partials across chunks). Use "chunk" when the kernel has per-invocation setup cost — e.g. GPU context creation + JIT — or wants to vectorise the range itself.` )
+    ( ms_prop props `reduce` `string` `Combine the per-worker partials: "sum" (default) · product · min · max · count.` )
+    ( ms_prop props `dtype` `string` `"int" (default; kernel returns i) or "float" (kernel returns f, folded in f64).` )
+    ( ms_prop props `gpu` `boolean` `Route only to --gpu workers, GPU host imports live (cuda/nvrtc FFI in your source hits the real GPU). Default false.` )
+    ( ms_prop props `kind` `string` `"element" (default; @ kernel i x → i/f per x) or "chunk" (@ kernel i lo i hi → i/f, called once per sub-range — the kernel owns the loop). Use "chunk" for per-invocation setup (GPU ctx + JIT).` )
     ( json_obj_set schema `properties` props )
     : Json req ( json_arr_new )
     ( json_arr_push req ( json_str_lit `source` ) )
@@ -1926,18 +2041,22 @@ $ `cudakernel.nu`
 
 // The params property text is shared by all three CUDA tools.
 @ __ms_params_desc → s {
-    ^ `Optional runtime parameters: an array of numbers available to your device function(s) as a second argument — write f(long long x, const double* p) (or bin/val(long long x, const double* p)) and read p[0], p[1], …. Parameter VALUES do not recompile anything: resubmitting the same cuda source with different params reuses the compiled module (coordinator + worker caches), so parameter scans run at interactive speed.`
+    ^ `Optional numbers passed to your device functions as a trailing const double* p (read p[0], p[1], …). Values never recompile the kernel, so parameter scans stay interactive. See swarm_help "cuda".`
+}
+// The dataset property text is shared by the CUDA map tools.
+@ __ms_dataset_desc → s {
+    ^ `Optional dataset id (compute_upload_data): map over the DATA — device functions gain a second argument double v = data[x]. Omit lo/hi for the whole dataset. See swarm_help "datasets".`
 }
 
 @ ms_schema_submit_cuda → Json {
     : Json schema ( json_obj_new )
     ( json_obj_set schema `type` ( json_str_lit `object` ) )
     : Json props ( json_obj_new )
-    ( ms_prop props `cuda` `string` `A CUDA-C map function: __device__ double f(long long x) { ... } — pure math from the 64-bit index x to a double (with params: f(long long x, const double* p)). You may add __device__ helpers; no __global__ kernel, no host code, no #includes (NVRTC builtins like sin, cos, exp, sqrt, fmin, fmax are available). Backtick characters are not allowed. Example: "__device__ double f(long long x) { double t = (double)x * 1e-9; return 4.0 / (1.0 + t*t); }"` )
+    ( ms_prop props `cuda` `string` `A CUDA-C __device__ double f(long long x) (with params: f(long long x, const double* p)). __device__ only — no __global__/host/#includes; NVRTC builtins (sin, exp, sqrt, fmin…) available; no backticks. E.g. "__device__ double f(long long x){ double t=(double)x*1e-9; return 4.0/(1.0+t*t); }". Full ABI: swarm_help "cuda".` )
     ( ms_prop props `lo` `integer` `Range start (inclusive).` )
     ( ms_prop props `hi` `integer` `Range end (exclusive). Must be > lo.` )
-    ( ms_prop props `reduce` `string` `How to fold f(x) over the range: "sum" (default) · "product" · "min" · "max" · "count" (how many x give f(x) != 0). Applied on-device per block, per chunk on the worker, and across chunks on the coordinator — the op must be associative, which these all are.` )
-    ( ms_prop props `dataset` `integer` `Optional dataset id (from compute_upload_data): the kernel maps over the DATA — your device function(s) become f(long long x, double v) (etc.), where v = data[x] and x is the element index. Without "lo"/"hi" the whole dataset is processed; a given range must lie within it.` )
+    ( ms_prop props `reduce` `string` `Fold f(x): "sum" (default) · product · min · max · count (how many f(x) != 0).` )
+    ( ms_prop props `dataset` `integer` ( __ms_dataset_desc ) )
     ( ms_prop props `params` `array` ( __ms_params_desc ) )
     ( json_obj_set schema `properties` props )
     : Json req ( json_arr_new )
@@ -1950,11 +2069,11 @@ $ `cudakernel.nu`
     : Json schema ( json_obj_new )
     ( json_obj_set schema `type` ( json_str_lit `object` ) )
     : Json props ( json_obj_new )
-    ( ms_prop props `map` `string` `A pair of CUDA-C device functions: __device__ long long key(long long x) and __device__ double value(long long x) — for each element x they emit one (key, value). With a "dataset" both also take double v = data[x]: key(long long x, double v), value(long long x, double v). With "params" add a trailing const double* p. Example word-count-style group-by (count elements per key = x mod 100): "__device__ long long key(long long x) { return x % 100; } __device__ double value(long long x) { return 1.0; }". No backticks, no __global__, no host code.` )
-    ( ms_prop props `reduce` `string` `How to fold the values that share a key: "sum" (default) · "product" · "min" · "max" · "count" (how many pairs per key, ignoring value).` )
-    ( ms_prop props `dataset` `integer` `Optional dataset id (compute_upload_data): key/value map over the data (v = data[x]).` )
+    ( ms_prop props `map` `string` `CUDA-C __device__ long long key(long long x) and __device__ double value(long long x) — emit (key, value) per element (with a dataset both take double v = data[x]). E.g. "__device__ long long key(long long x){ return x%100; } __device__ double value(long long x){ return 1.0; }". Details: swarm_help "shuffle".` )
+    ( ms_prop props `reduce` `string` `Fold values that share a key: "sum" (default) · product · min · max · count (pairs per key).` )
+    ( ms_prop props `dataset` `integer` ( __ms_dataset_desc ) )
     ( ms_prop props `lo` `integer` `Range start (inclusive); required without a dataset.` )
-    ( ms_prop props `hi` `integer` `Range end (exclusive); required without a dataset. hi - lo <= 8388608.` )
+    ( ms_prop props `hi` `integer` `Range end (exclusive); required without a dataset. hi - lo ≤ 8388608, ≤ 65536 keys.` )
     ( ms_prop props `params` `array` ( __ms_params_desc ) )
     ( json_obj_set schema `properties` props )
     : Json req ( json_arr_new )
@@ -1967,12 +2086,15 @@ $ `cudakernel.nu`
     : Json schema ( json_obj_new )
     ( json_obj_set schema `type` ( json_str_lit `object` ) )
     : Json props ( json_obj_new )
-    ( ms_prop props `cuda` `string` `A CUDA-C gradient function: __device__ void grad(long long x, double* g) { ... } that scatter-adds the per-element gradient into the K-dim accumulator g by calling swarm_g_add(g, j, val) for each component j. With a "dataset" the signature is grad(long long x, double v, double* g) where v = data[x]; the current parameter vector is passed as p, so the full form is grad(long long x, double v, double* g, const double* p). Example (fit y = w*i + b over dataset values, state = [w, b]): "__device__ void grad(long long x, double v, double* g, const double* p) { double e = p[0]*(double)x + p[1] - v; swarm_g_add(g, 0, 2.0*(double)x*e); swarm_g_add(g, 1, 2.0*e); }". No backticks, no __global__, no host code.` )
-    ( ms_prop props `state` `array` `The initial parameter vector (numbers). Its length is the gradient dimension K and the size of the vector your grad() scatters into. This is what the engine iterates and returns.` )
-    ( ms_prop props `rounds` `integer` `Maximum number of gradient-descent rounds the coordinator runs (1..100000). The loop runs IN THE ENGINE — you get the converged parameters back from one call, not a round per message.` )
-    ( ms_prop props `lr` `number` `Learning rate. Each round updates state[j] -= lr * gradient[j] / N, where the gradient is the sum of grad() over the range and N is the number of elements.` )
-    ( ms_prop props `epsilon` `number` `Optional convergence threshold: stop early once the largest |state change| in a round is below this. Omit to always run all "rounds".` )
-    ( ms_prop props `dataset` `integer` `Optional dataset id (compute_upload_data): grad() maps over the data (v = data[x]). The dataset's blocks are cached on the workers after the first round, so every later round ships only the K parameters — the payoff of iterating in the engine.` )
+    ( ms_prop props `cuda` `string` `CUDA-C __device__ void grad(long long x, double* g, const double* p) that scatter-adds via swarm_g_add(g, j, val) (with a dataset: grad(long long x, double v, double* g, const double* p), v = data[x]); p[0..state_len) is the current state, p[state_len..) your "params". Full ABI + examples: swarm_help "iterate".` )
+    ( ms_prop props `state` `array` `Initial parameter vector (numbers), ≤ 4096. What the engine iterates and returns. Carry optimizer state (momentum/Adam moments) as extra components.` )
+    ( ms_prop props `rounds` `integer` `Max rounds (1..100000). The loop runs IN THE ENGINE — you get the converged parameters back from one call.` )
+    ( ms_prop props `lr` `number` `Default (SGD) mode: learning rate; each round state[j] -= lr*grad[j]/N. Required unless "update" is given (then ignored).` )
+    ( ms_prop props `update` `string` `Optional CUDA-C step rule for a general fixpoint (k-means, EM, power iteration, Adam): __device__ double update(long long j, const double* p) returns the new state[j], reading swarm_state(i)/swarm_acc(i)/swarm_N/swarm_param(i) (swarm_dim, swarm_adim for loops). With it the accumulator may be wider than the state (set "acc_dim"). Recipes: swarm_help "iterate".` )
+    ( ms_prop props `acc_dim` `integer` `Accumulator width (1..65536) when grad() scatters into more slots than the state length (k-means sum+count, EM stats, A·v). Defaults to the state length; needs "update" when different.` )
+    ( ms_prop props `params` `array` `Optional constant numbers (same every round): grad reads p[state_len..], update reads swarm_param(i).` )
+    ( ms_prop props `epsilon` `number` `Optional: stop early once the largest |state change| in a round is below this. Omit to run all "rounds".` )
+    ( ms_prop props `dataset` `integer` `Optional dataset id: grad maps over the data (v = data[x]); blocks cache after round one, so later rounds ship only the state.` )
     ( ms_prop props `lo` `integer` `Range start (inclusive); required without a dataset.` )
     ( ms_prop props `hi` `integer` `Range end (exclusive); required without a dataset.` )
     ( json_obj_set schema `properties` props )
@@ -1980,7 +2102,6 @@ $ `cudakernel.nu`
     ( json_arr_push req ( json_str_lit `cuda` ) )
     ( json_arr_push req ( json_str_lit `state` ) )
     ( json_arr_push req ( json_str_lit `rounds` ) )
-    ( json_arr_push req ( json_str_lit `lr` ) )
     ( json_obj_set schema `required` req )
     ^ schema
 }
@@ -1989,12 +2110,12 @@ $ `cudakernel.nu`
     : Json schema ( json_obj_new )
     ( json_obj_set schema `type` ( json_str_lit `object` ) )
     : Json props ( json_obj_new )
-    ( ms_prop props `cuda` `string` `A CUDA-C map function: __device__ double f(long long x) { ... } (with params: f(long long x, const double* p)). Same rules as compute_submit_cuda; here every value comes back instead of being reduced.` )
+    ( ms_prop props `cuda` `string` `CUDA-C __device__ double f(long long x) (with params/dataset: extra args) — same rules as compute_submit_cuda, but every value comes back instead of being reduced. ABI: swarm_help "cuda".` )
     ( ms_prop props `lo` `integer` `Range start (inclusive).` )
-    ( ms_prop props `hi` `integer` `Range end (exclusive). hi - lo values are returned; at most 1048576 (and at most 65536 without out_file).` )
-    ( ms_prop props `dataset` `integer` `Optional dataset id (from compute_upload_data): the kernel maps over the DATA — your device function(s) become f(long long x, double v) (etc.), where v = data[x] and x is the element index. Without "lo"/"hi" the whole dataset is processed; a given range must lie within it.` )
+    ( ms_prop props `hi` `integer` `Range end (exclusive). hi - lo values returned; ≤ 1048576 (≤ 65536 without out_file).` )
+    ( ms_prop props `dataset` `integer` ( __ms_dataset_desc ) )
     ( ms_prop props `params` `array` ( __ms_params_desc ) )
-    ( ms_prop props `out_file` `string` `Optional absolute path ON THE MCP HOST: the finished values are written there as raw little-endian f64s (count = hi - lo) and the text result carries only count + min/max/mean. Required beyond 65536 values.` )
+    ( ms_prop props `out_file` `string` `Optional absolute path ON THE MCP HOST: values written there as raw LE f64s (count = hi - lo), the text result carrying only count + min/max/mean. Required beyond 65536 values.` )
     ( json_obj_set schema `properties` props )
     : Json req ( json_arr_new )
     ( json_arr_push req ( json_str_lit `cuda` ) )
@@ -2006,13 +2127,13 @@ $ `cudakernel.nu`
     : Json schema ( json_obj_new )
     ( json_obj_set schema `type` ( json_str_lit `object` ) )
     : Json props ( json_obj_new )
-    ( ms_prop props `cuda` `string` `CUDA-C device functions: __device__ long long bin(long long x) { ... } picks the bucket for x (out-of-range buckets are skipped), and optionally __device__ double val(long long x) { ... } gives the weight added to that bucket (omit it for plain counting, weight 1.0). With params both take (long long x, const double* p). Same source rules as compute_submit_cuda.` )
+    ( ms_prop props `cuda` `string` `CUDA-C __device__ long long bin(long long x) picks the bucket (out-of-range skipped); optional __device__ double val(long long x) is the weight (default 1.0 = counting). With params/dataset: extra args. ABI: swarm_help "cuda".` )
     ( ms_prop props `lo` `integer` `Range start (inclusive).` )
     ( ms_prop props `hi` `integer` `Range end (exclusive). Must be > lo.` )
-    ( ms_prop props `bins` `integer` `The bucket count K (1..1048576; at most 65536 without out_file). The result is K sums.` )
-    ( ms_prop props `dataset` `integer` `Optional dataset id (from compute_upload_data): the kernel maps over the DATA — your device function(s) become f(long long x, double v) (etc.), where v = data[x] and x is the element index. Without "lo"/"hi" the whole dataset is processed; a given range must lie within it.` )
+    ( ms_prop props `bins` `integer` `Bucket count K (1..1048576; ≤ 65536 without out_file). The result is K sums.` )
+    ( ms_prop props `dataset` `integer` ( __ms_dataset_desc ) )
     ( ms_prop props `params` `array` ( __ms_params_desc ) )
-    ( ms_prop props `out_file` `string` `Optional absolute path ON THE MCP HOST: the finished bins are written there as raw little-endian f64s and the text result carries only count + min/max/mean. Required beyond 65536 bins.` )
+    ( ms_prop props `out_file` `string` `Optional absolute path ON THE MCP HOST: bins written there as raw LE f64s, the text result carrying only count + min/max/mean. Required beyond 65536 bins.` )
     ( json_obj_set schema `properties` props )
     : Json req ( json_arr_new )
     ( json_arr_push req ( json_str_lit `cuda` ) )
@@ -2032,31 +2153,106 @@ $ `cudakernel.nu`
     ^ schema
 }
 
+// ── swarm_help: on-demand, topic-queryable guidance ──────────────────
+// The tool schemas stay short (cheap on every tools/list); the depth an LLM
+// needs — the CUDA ABI, the iterate/shuffle recipes, and the honest size/
+// support envelope — lives here, fetched one topic at a time.
+@ __help_index → s {
+    ^ `swarm-mcp help. The tool schemas are deliberately short; call swarm_help with a "topic" for depth on one area.\nTopics:\n  overview        — what this is: nodes, roles, the token, the compute model\n  workflow        — submit -> poll compute_result -> done/error; failed_chunks\n  expr            — the compute_submit expression language (int/float)\n  cuda            — the CUDA-C device-function ABI shared by every GPU tool\n  iterate         — compute_iterate: gradient descent AND general fixpoints (k-means, EM, power iteration)\n  shuffle         — compute_shuffle: group-by-key / reduce-by-key\n  datasets        — compute_upload_data: bring data once, referenced by hash\n  gpu             — --gpu workers, task routing, the trust boundary\n  limits          — sizes, caps, and what is NOT yet supported (read before scaling)\n  troubleshooting — common errors and what they mean\nExample: {"name":"swarm_help","arguments":{"topic":"iterate"}}`
+}
+
+@ __help_overview → s {
+    ^ `swarm-mcp is a distributed compute cluster you drive over MCP. Every node runs the same binary; role flags compose: --relay (rendezvous point), --worker [--gpu] (runs kernels), --mcp (this control surface) — one process can be all three. A --token defines and secures a cluster: the same token forms one cluster (relay-group isolation + HMAC auth on every payload and result); nodes with different tokens are mutually invisible.\nYou set a workload; the cluster shards [lo,hi) across the eligible workers, runs a map kernel per element (or per chunk), and combines the partials with a reduce op (sum/product/min/max/count) — every op is associative, so the answer is independent of the worker count. Kernel flavours: a small integer/float EXPRESSION in x (compute_submit; topic "expr"), an arbitrary NURL program (compute_submit_kernel / compute_run_wasm), or CUDA-C device functions the server wraps into a GPU program (compute_submit_cuda and the sample/histogram/iterate/shuffle family; topic "cuda"). See topic "workflow" for the task lifecycle.`
+}
+
+@ __help_workflow → s {
+    ^ `A submit tool returns immediately with a task_id and status "running" (or "done" for tiny work). Poll compute_result {"task_id":N} until status is "done" (result present) or "error". compute_list shows every task.\nThe coordinator drains cluster traffic on each tool call, so tasks advance as you poll — poll compute_result rather than sleeping.\nFailure is explicit: a chunk that traps (bad kernel, missing runtime or GPU, a lost dataset block) is COUNTED, never folded into the answer as zero. The task then finishes status "error" with failed_chunks>0 and withholds the result — a returned result always covers every chunk.\ncompute_iterate and compute_shuffle instead run their whole loop inside the single call and return the final answer directly (no polling).`
+}
+
+@ __help_expr → s {
+    ^ `compute_submit evaluates an expression in one variable x over the integer range [lo,hi):\n  operators   + - * / %       (truncated division; /0 and %0 give 0)\n  comparisons < <= > >= == !=  (yield 1 or 0)\n  logical     & |             (on 0/1; nonzero is true)\n  ternary     cond ? a : b\n  functions   min(a,b) max(a,b) abs(a)\n  x, and integer or float literals\ndtype (default "int"): "int" = all i64, x is the index; "float" = all f64, x is the index cast to double, float literals like 0.5 allowed. The range [lo,hi) is integer in both.\nreduce: sum | product | min | max | count (count = how many x make map(x) nonzero).\nExamples: {"expr":"x*x","reduce":"sum"} ; {"expr":"x%2==0","reduce":"count"} ; {"expr":"x>100 ? x : 0","reduce":"sum"} ; {"expr":"1.0/(x*x)","reduce":"sum","dtype":"float"} ~ pi^2/6.\nFor loops or helper functions the expression cannot express, use compute_submit_kernel (arbitrary NURL) or the CUDA tools.`
+}
+
+@ __help_cuda → s {
+    ^ `The GPU tools (compute_submit_cuda / _sample_cuda / _histogram_cuda / compute_iterate / compute_shuffle) take CUDA-C DEVICE FUNCTIONS only — you write the math and the server generates the whole program (NVRTC JIT, grid-stride map over the range, on-device reduction/atomics); the --gpu workers run it. Rules: __device__ functions only — no __global__, no host/main code, and NO backtick character anywhere.\nSignatures (x is the element index, a long long):\n  reduce    : __device__ double f(long long x)\n  sample    : the same f — every value is returned in order\n  histogram : __device__ long long bin(long long x)  [+ optional __device__ double val(long long x), default 1.0]\n  iterate   : __device__ void grad(long long x, double* g, const double* p)   (topic "iterate")\n  shuffle   : __device__ long long key(long long x) + __device__ double value(long long x)   (topic "shuffle")\nparams: pass "params":[numbers] and add a trailing const double* p, then read p[0], p[1], … . Parameter VALUES never recompile the kernel (cached by source hash and by content hash), so parameter scans run at interactive speed.\ndataset: pass "dataset":id and every device function gains a second argument double v = data[x] — e.g. f(long long x, double v, const double* p). See topic "datasets".`
+}
+
+@ __help_iterate → s {
+    ^ `compute_iterate runs an iterative algorithm with the LOOP IN THE ENGINE: one call returns the converged "state". Each round (1) reduces a CUDA grad() over the range/dataset with the current state as params into an accumulator vector, (2) applies a step rule to get the next state, (3) stops at "rounds" or once the largest |state change| falls below "epsilon".\n\ngrad() scatter-adds each element's contribution:\n  __device__ void grad(long long x, double* g, const double* p) { swarm_g_add(g, j, val); ... }\n  with a dataset: grad(long long x, double v, double* g, const double* p), where v = data[x].\n  p[0..state_len) is the current state; p[state_len..) is your "params". swarm_g_add(g, j, val) adds val to accumulator component j (bounds-checked).\n\nTwo step rules:\n  DEFAULT (SGD) — give "lr". Each round: state[j] -= lr * grad[j] / N (N = element count). Here the accumulator must be the same length as state.\n  GENERAL — give an "update" device function; then anything works: k-means, EM, power iteration, PageRank, momentum/Adam.\n    __device__ double update(long long j, const double* p)   // returns the new state[j]\n    accessors inside update: swarm_state(i) = current state, swarm_acc(i) = the reduced accumulator (0..acc_dim), swarm_N = element count, swarm_param(i) = your "params"; swarm_dim (=state length) and swarm_adim (=acc_dim) are available for loops.\n    The accumulator may be WIDER than the state — set "acc_dim". A global reduction (e.g. a norm for power iteration) is just a loop over swarm_acc inside update. Carry optimizer state (momentum, Adam moments) as extra components of state and let update rewrite them.\n\nBounds: state <= 4096, acc_dim <= 65536, rounds <= 100000. Over a dataset the blocks cache on the workers after round one, so every later round ships only the state (seeded_blocks counts blocks moved over the whole run, not per round).\n\nExamples:\n  Fit the mean (SGD): grad "__device__ void grad(long long x, double v, double* g, const double* p){ swarm_g_add(g,0,2.0*(p[0]-v)); }", state [0], lr 0.4, dataset id.\n  1D k-means K=2 (general): state [c0,c1], acc_dim 4 (= [sum0,sum1,count0,count1]),\n    grad "__device__ void grad(long long x, double v, double* g, const double* p){ double d0=v-p[0]; if(d0<0)d0=-d0; double d1=v-p[1]; if(d1<0)d1=-d1; long long c=(d0<=d1)?0:1; swarm_g_add(g,c,v); swarm_g_add(g,2+c,1.0); }",\n    update "__device__ double update(long long j, const double* p){ double s=swarm_acc(j), n=swarm_acc(swarm_dim+j); return (n>0.0)?(s/n):swarm_state(j); }".\n  Power iteration (general): state = v (length n), grad builds A*v into acc_dim = n, update normalizes: loop swarm_acc for the norm, return swarm_acc(j)/norm.`
+}
+
+@ __help_shuffle → s {
+    ^ `compute_shuffle is group-by-key / reduce-by-key. Give a CUDA map — __device__ long long key(long long x) and __device__ double value(long long x) — plus a reduce op. BOTH the map AND the per-key reduce run distributed on the GPU: each worker maps its chunk and reduces it by key on the device into a compact table (a MapReduce combiner), and the coordinator only merges the small per-chunk tables. Returns {"groups":{key:value, …}, "n_groups", "pairs_mapped", "distributed_reduce":true}.\nOver a dataset, key/value take double v = data[x]. A join is two shuffles into a shared key space, merged per key.\nLimits: hi - lo <= 8,388,608 per call, and <= 65,536 distinct keys (the group table rides a text result). For more, narrow the range or coarsen the key — see topic "limits".`
+}
+
+@ __help_datasets → s {
+    ^ `compute_upload_data brings your data to the cluster: a flat f64 array, as {"data_base64": <raw little-endian f64>} or {"file": <path on the MCP host>}, up to 256 MiB (<= 33.5M values). Returns {dataset_id, count, min, max, mean}; compute_list_data lists them.\nThe data is cut into content-addressed 1 MiB blocks (BLAKE3). Each block travels to its owning worker ONCE and is cached on disk, verified against its hash on arrival. Later submits or iteration rounds over the same dataset ship only hashes — a task's seeded_blocks is how many blocks actually moved (0 = fully cached, a free re-run). A missing or corrupt block fails the chunk visibly, never silently.\nUse it: pass "dataset":id to compute_submit_cuda / _sample_cuda / _histogram_cuda / compute_iterate; the device functions then receive double v = data[x]. Omit lo/hi to process the whole dataset (a given range must lie within it). Data is f64 only — encode mixed/categorical data as doubles yourself (topic "limits").`
+}
+
+@ __help_gpu → s {
+    ^ `GPU work needs workers started with --worker --gpu (and a wasmtime on PATH — the toolchain's pure-NURL packages/wasmtime is a drop-in). A --gpu worker advertises a capability bit, and GPU tasks route ONLY to such workers on a GPU-only consistent-hash ring, so a mixed CPU/GPU cluster just works; a CUDA tool on a CPU-only cluster returns a clear "no GPU workers" error.\nNo CUDA toolkit is needed on any node — only the driver's libcuda + libnvrtc. Kernels JIT at run time via NVRTC. Select the device with CUDA_VISIBLE_DEVICES in the worker's environment (the kernel binds device ordinal 0).\nTrust boundary: GPU host imports pierce the wasm sandbox by design (device pointers are raw host handles), so they are per-worker (--gpu) and, for the hand-written wasm paths, per-task (gpu:true) opt-in, on top of the cluster token — only token-authentic tasks reach a worker at all. Enable --gpu only for clusters whose token holders you trust.`
+}
+
+@ __help_limits → s {
+    ^ `Read this before scaling. The current envelope and the edges that are NOT yet supported:\n  Dataset size: <= 256 MiB (<= 33.5M f64) per dataset; split larger data across datasets.\n  Data type: f64 ONLY — no int/f32/struct datasets. Encode categorical or mixed data as doubles yourself.\n  Shuffle: <= 8,388,608 input elements AND <= 65,536 distinct keys per call (the intermediate/result bound). High-cardinality group-by (e.g. per-user over millions of users) must be partitioned or the key coarsened, which changes semantics.\n  Sample: <= 1,048,576 values returned (inline <= 65,536; beyond needs out_file). Histogram: <= 1,048,576 bins.\n  Iterate: state <= 4096 components, acc_dim <= 65,536, rounds <= 100,000. SGD is built in; any other step rule goes through an "update" device function (topic "iterate").\n  Fault tolerance: a RELAY failure is survived — with --connect listing several relays, workers and the coordinator converge on a survivor mid-flight. But a WORKER that dies mid-task is NOT auto-redispatched: its chunk fails visibly (failed_chunks) and the task errors; resubmit to retry (datasets stay cached, so a resubmit is cheap).\n  Coordinator: the single --mcp node runs the iterate/shuffle loop and merges partials; it is not yet redundant — if it dies mid-run that run is lost, though a fresh submit on a new coordinator is fine (worker datasets and caches persist).\nThese are known edges, not bugs — design around them or split the work.`
+}
+
+@ __help_troubleshooting → s {
+    ^ `Common errors and what they mean:\n  "no workers found" / "no GPU workers in the cluster" — no eligible worker has joined. Start one with the SAME --token (add --gpu for the CUDA tools) and give discovery a moment; a different token is invisible.\n  "the … kernel did not compile: …" — your CUDA-C or NURL source had an error; the compiler message is included. Fix it and resubmit.\n  "a chunk failed on a worker" — a worker trapped (bad kernel, no GPU, a lost block). Check the kernel and that --gpu workers exist, then resubmit.\n  task stays "running" — keep polling compute_result; the coordinator advances tasks on each call, and very large ranges simply take longer.\n  dataset range errors — with "dataset", lo/hi must lie within [0, count); omit them to use the whole dataset.\n  HTTPS / cert — the server self-signs on first run; trust the cert or use curl -k. The endpoint path is /mcp.\n  "may not contain a backtick character" — CUDA and NURL kernel sources cannot contain a backtick.`
+}
+
+@ tool_help Json args → Json {
+    : s topic ?? ( json_obj_get args `topic` ) { T x → ( json_str_data x ) F → `` }
+    ? != ( nurl_str_eq topic `overview` ) 0 { ^ ( mcp_tool_result_text ( __help_overview ) ) } {}
+    ? != ( nurl_str_eq topic `workflow` ) 0 { ^ ( mcp_tool_result_text ( __help_workflow ) ) } {}
+    ? != ( nurl_str_eq topic `expr` ) 0 { ^ ( mcp_tool_result_text ( __help_expr ) ) } {}
+    ? != ( nurl_str_eq topic `cuda` ) 0 { ^ ( mcp_tool_result_text ( __help_cuda ) ) } {}
+    ? != ( nurl_str_eq topic `iterate` ) 0 { ^ ( mcp_tool_result_text ( __help_iterate ) ) } {}
+    ? != ( nurl_str_eq topic `shuffle` ) 0 { ^ ( mcp_tool_result_text ( __help_shuffle ) ) } {}
+    ? != ( nurl_str_eq topic `datasets` ) 0 { ^ ( mcp_tool_result_text ( __help_datasets ) ) } {}
+    ? != ( nurl_str_eq topic `gpu` ) 0 { ^ ( mcp_tool_result_text ( __help_gpu ) ) } {}
+    ? != ( nurl_str_eq topic `limits` ) 0 { ^ ( mcp_tool_result_text ( __help_limits ) ) } {}
+    ? != ( nurl_str_eq topic `troubleshooting` ) 0 { ^ ( mcp_tool_result_text ( __help_troubleshooting ) ) } {}
+    ^ ( mcp_tool_result_text ( __help_index ) )
+}
+
+@ ms_schema_help → Json {
+    : Json schema ( json_obj_new )
+    ( json_obj_set schema `type` ( json_str_lit `object` ) )
+    : Json props ( json_obj_new )
+    ( ms_prop props `topic` `string` `One of: overview, workflow, expr, cuda, iterate, shuffle, datasets, gpu, limits, troubleshooting. Omit to get the topic index.` )
+    ( json_obj_set schema `properties` props )
+    ^ schema
+}
+
 @ build_tools_list → ( Vec Json ) {
     : ( Vec Json ) tools ( vec_new [Json] )
+    ( vec_push [Json] tools ( mcp_tool_descriptor `swarm_help`
+    `Guidance for using this server, one topic at a time — the tool schemas are kept short, so call this for depth: the CUDA-C ABI, the compute_iterate and compute_shuffle recipes, dataset caching, and the honest size/support limits. Pass a "topic" (overview, workflow, expr, cuda, iterate, shuffle, datasets, gpu, limits, troubleshooting) or omit it for the index. Start here if unsure how a tool works.`
+    ( ms_schema_help ) ) )
     ( vec_push [Json] tools ( mcp_tool_descriptor `compute_submit`
-    `Run a distributed map-reduce on the cluster: evaluate the expression kernel for every integer x in [lo, hi) and fold the results with the reduce op. Sharded across all live workers and computed in parallel. Returns a task_id immediately; poll compute_result for the value. Example: {"expr":"x*x","lo":1,"hi":1000000,"reduce":"sum"} gives the sum of squares.`
+    `Distributed map-reduce over an integer/float EXPRESSION in x across [lo, hi): evaluate the kernel per x, fold with reduce (sum/product/min/max/count). Returns a task_id; poll compute_result. E.g. {"expr":"x*x","lo":1,"hi":1000000,"reduce":"sum"}. Grammar, dtype and examples: swarm_help "expr".`
     ( ms_schema_submit ) ) )
     ( vec_push [Json] tools ( mcp_tool_descriptor `compute_submit_kernel`
-    `Run an arbitrary NURL kernel on the cluster for workloads the compute_submit expression language cannot express (loops, helper functions, anything). Provide just the per-element kernel as NURL source — @ kernel i x → i { … } plus any imports/helpers; no main needed, the server generates the argv-reading, fold, and print boilerplate. The server compiles the wrapped program to wasm itself (via the NURL build service) and runs it sharded across the workers, folding kernel(x) over [lo, hi) with the reduce op. Compile errors are returned to you. Returns a task_id; poll compute_result. (Use compute_run_wasm if you already have a compiled module.)`
+    `Run an arbitrary NURL kernel for what the expression language can't express (loops, helpers). Give just the per-element kernel as NURL source (@ kernel i x → i { … }); the server wraps it, compiles to wasm, shards it, and folds kernel(x) over [lo, hi) with reduce. Compile errors are returned. Returns a task_id; poll compute_result. Already-compiled module: compute_run_wasm.`
     ( ms_schema_submit_kernel ) ) )
     ( vec_push [Json] tools ( mcp_tool_descriptor `compute_submit_cuda`
-    `Run a distributed GPU map-reduce: you write ONLY the math — a CUDA-C __device__ double f(long long x) — and the cluster does everything else. The server generates a complete GPU kernel around it (NVRTC JIT, grid-stride map over the range, on-device block reduction), compiles it to wasm, and shards [lo, hi) across every GPU-capable worker (started with --gpu); each worker JIT-compiles and runs the kernel on its real GPU and returns its chunk partial; the reduce op combines them. Use this for heavy numeric ranges (millions to billions of x) — integrals, Monte-Carlo-style sums with a hash of x as the noise source, parameter scans. The result is a float (f64). Needs at least one --gpu worker; returns a task_id, poll compute_result.`
+    `Distributed GPU map-reduce — write only a CUDA-C __device__ double f(long long x); the server generates the whole GPU program and the --gpu workers run it, folding f(x) over [lo, hi) with reduce (a float). For heavy numeric ranges, millions to billions of x: integrals, Monte-Carlo sums, parameter scans. Needs a --gpu worker; returns a task_id, poll compute_result. CUDA ABI, params and datasets: swarm_help "cuda".`
     ( ms_schema_submit_cuda ) ) )
     ( vec_push [Json] tools ( mcp_tool_descriptor `compute_sample_cuda`
-    `Distributed GPU map that returns EVERY value: the cluster evaluates your CUDA-C f(x) for each x in [lo, hi) on the GPU workers and gathers the results into one array, in order — sample a function, render a field or an image row block, tabulate a curve. Results come back inline (JSON array up to 1024 values, base64 raw f64 LE up to 65536) or are written to out_file on the MCP host for anything bigger; min/max/mean always included. Supports runtime params (no recompile between calls). Needs a --gpu worker; returns a task_id, poll compute_result.`
+    `Distributed GPU map that returns EVERY value in order — sample a curve, render a field, tabulate a function. CUDA-C f(x) over [lo, hi); results inline (JSON ≤ 1024, base64 ≤ 65536) or to out_file (≤ 1M); min/max/mean included. Needs a --gpu worker; returns a task_id, poll compute_result. ABI & params: swarm_help "cuda".`
     ( ms_schema_sample_cuda ) ) )
     ( vec_push [Json] tools ( mcp_tool_descriptor `compute_histogram_cuda`
-    `Distributed GPU histogram / binned aggregation: for each x in [lo, hi) your CUDA-C bin(x) picks one of K buckets and val(x) (default 1.0) is added to it — the whole distribution of a computation in ONE pass over billions of x (value distributions, Monte-Carlo densities, class counts, binned integrals). The K bin sums come back (JSON up to 1024 bins, base64 up to 65536, out_file beyond). Supports runtime params (no recompile between calls). Needs a --gpu worker; returns a task_id, poll compute_result.`
+    `Distributed GPU binned aggregation in ONE pass: CUDA-C bin(x) picks one of K buckets, val(x) (default 1.0) is added — value distributions, densities, class counts, binned integrals. K bin sums come back (JSON ≤ 1024, base64 ≤ 65536, out_file beyond). Needs a --gpu worker; returns a task_id, poll compute_result. ABI & params: swarm_help "cuda".`
     ( ms_schema_hist_cuda ) ) )
     ( vec_push [Json] tools ( mcp_tool_descriptor `compute_iterate`
-    `Run an ITERATIVE algorithm — gradient descent — with the loop in the ENGINE, not in your messages. You give a CUDA gradient function grad() that scatter-adds each element's contribution into a K-dim vector, an initial parameter vector "state", "rounds" and a learning rate "lr"; the coordinator repeatedly (1) computes the gradient as a distributed GPU vecreduce over the range/dataset with the current parameters, (2) updates state[j] -= lr*gradient[j]/N, (3) stops at "rounds" or when the step falls below "epsilon". Returns the converged "state", "rounds_run", and "converged". Over a dataset the data is cached on the workers after round one, so each further round ships only the parameters — this is the tool for fitting/optimisation without a fragile model-in-the-loop.`
+    `Iterative solver with the loop IN THE ENGINE — one call returns the converged "state". Each round reduces a CUDA grad() into an accumulator, then applies a step rule. DEFAULT is gradient descent (give "lr", state[j] -= lr*grad[j]/N); for k-means, EM, power iteration, PageRank, momentum/Adam give an "update" device function (and "acc_dim" when the accumulator is wider than the state). Over a dataset the data caches after round one. Needs a --gpu worker. Recipes and the swarm_state/swarm_acc/swarm_N accessors: swarm_help "iterate".`
     ( ms_schema_iterate ) ) )
     ( vec_push [Json] tools ( mcp_tool_descriptor `compute_shuffle`
-    `Group-by-key / reduce-by-key — the shuffle primitive. You give a CUDA "map" that emits one (key, value) per element (key() and value() device functions) and a "reduce" op; BOTH the map AND the per-key reduce run distributed on the GPU — each worker reduces its own chunk by key on the device (a MapReduce combiner), and the coordinator only merges the small per-chunk partial tables. Returns { "groups": {key: value, …}, "n_groups", "pairs_mapped" }. This is the building block for word-count, histograms over arbitrary integer keys, and joins (map two datasets to a shared key space and combine per key). hi - lo <= 8388608 and the result is capped at 65536 distinct keys — narrow the range or coarsen the key for more.`
+    `Group-by-key / reduce-by-key. A CUDA key(x)+value(x) map plus a reduce op; both the map AND the per-key reduce run distributed on the GPU (a combiner), and the coordinator merges compact per-chunk tables. Returns { "groups": {…}, "n_groups", "pairs_mapped" }. Word-count, keyed histograms, joins. hi - lo ≤ 8388608, ≤ 65536 distinct keys. Needs a --gpu worker. Details: swarm_help "shuffle".`
     ( ms_schema_shuffle ) ) )
     ( vec_push [Json] tools ( mcp_tool_descriptor `compute_upload_data`
-    `Upload a dataset — a flat array of f64 values — for the GPU tools to map over. Pass base64 of raw little-endian f64s, or a file path on the MCP host. Returns a dataset_id plus count and min/max/mean. Then run compute_submit_cuda / compute_sample_cuda / compute_histogram_cuda with {"dataset": id}: your device functions receive each element as double v — e.g. mean/variance via reduce, a pointwise transform via sample, a value distribution via histogram. The data is cut into content-addressed 8 MiB blocks (BLAKE3) that workers cache on disk: a block travels to its worker ONCE, and every later submit or iteration round over the same dataset ships only hashes — the task response's seeded_blocks shows how many blocks actually moved (0 = free re-run). Up to 33.5M values (256 MiB).`
+    `Upload a dataset (flat f64 array) the GPU tools map over: {"data_base64": raw little-endian f64} or {"file": path on the MCP host}, ≤ 256 MiB. Returns {dataset_id, count, min, max, mean}. Then pass "dataset":id to the CUDA tools — device functions receive double v = data[x]. Cut into content-addressed 1 MiB blocks cached per worker, so the data moves ONCE (seeded_blocks reports blocks moved). Details: swarm_help "datasets".`
     ( ms_schema_upload_data ) ) )
     ( vec_push [Json] tools ( mcp_tool_descriptor `compute_list_data`
     `List every uploaded dataset: id, name, element count.`
@@ -2074,6 +2270,7 @@ $ `cudakernel.nu`
 }
 
 @ dispatch_tool s name Json args → Json {
+    ? != ( nurl_str_eq name `swarm_help` ) 0 { ^ ( tool_help args ) } {}
     ? != ( nurl_str_eq name `compute_submit` ) 0 { ^ ( tool_submit args ) } {}
     ? != ( nurl_str_eq name `compute_submit_kernel` ) 0 { ^ ( tool_submit_kernel args ) } {}
     ? != ( nurl_str_eq name `compute_submit_cuda` ) 0 { ^ ( tool_submit_cuda args ) } {}
@@ -2092,7 +2289,7 @@ $ `cudakernel.nu`
 // ── JSON-RPC method handlers ─────────────────────────────────────
 
 @ handle_initialize Json id → Json {
-    : Json result ( mcp_initialize_result `swarm-mcp` `0.9.0` )
+    : Json result ( mcp_initialize_result `swarm-mcp` `0.15.0` )
     ^ ( mcp_response_result id result )
 }
 
