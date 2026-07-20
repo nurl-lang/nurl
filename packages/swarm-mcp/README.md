@@ -257,6 +257,34 @@ next in the list and re-forms.
 Run two or more relays and none is a SPOF: kill the relay a running cluster
 is on and the workers and coordinator converge on a survivor, mid-flight.
 
+## Surviving a worker death — chunk re-dispatch
+
+A relay is not the only thing that can fail: a **worker** can crash or trap
+mid-task. For the non-dataset GPU tools (`compute_submit_cuda`,
+`compute_sample_cuda`, `compute_histogram_cuda`) the coordinator no longer loses
+the job — it re-dispatches the lost chunk to a surviving worker.
+
+Each chunk is dispatched with a small **retry plan**: its (immutable, HMAC-tagged)
+payload and the worker it routed to. On every poll the coordinator checks each
+chunk, and one that either **traps** (a chunk result with `ok=0`) or goes
+**silent past a deadline** (its worker presumed dead) is re-dispatched — to a
+*different* worker, by salting the ring key until it maps to an owner other than
+the one that just failed (no membership mutation, so a transient blip never
+corrupts the ring). A chunk finalises only once every chunk has settled, so a
+returned result still covers the whole range — now surviving a worker death
+instead of erroring out. The task reports how many re-dispatches it took as
+`retries`; only a chunk that fails on every worker across all attempts is
+reported as a `failed_chunks` error, exactly as before.
+
+```jsonc
+// a --gpu worker is killed mid-task; its chunk is re-routed and the sum is exact
+{"task_id":1, "status":"done", "result":800000000, "retries":4}
+```
+
+Not yet covered (documented in `swarm_help "limits"`): dataset-backed tasks (a
+fresh worker would need the data blocks re-seeded first — resubmit to retry,
+blocks stay cached) and the in-call loops `compute_iterate` / `compute_shuffle`.
+
 ## Group-by-key — the shuffle primitive
 
 `compute_shuffle` is the building block for group-by, word-count, histograms
@@ -534,9 +562,14 @@ The envelope, stated plainly (and queryable at run time via `swarm_help
   **Iterate** `state ≤ 4096`, `acc_dim ≤ 65,536`, `rounds ≤ 100,000`.
 - **Fault tolerance:** a **relay** failure is survived (failover — workers and
   the coordinator converge on another relay mid-flight). A **worker** that dies
-  mid-task is **not** auto-redispatched: its chunk fails visibly
-  (`failed_chunks`) and the task errors; resubmit to retry (datasets stay
-  cached, so a resubmit is cheap).
+  or traps mid-task is **auto-redispatched** for the non-dataset GPU tools
+  (`compute_submit_cuda` / `_sample_cuda` / `_histogram_cuda`): the coordinator
+  re-routes the lost chunk to another worker (the task's `retries` field counts
+  it) and only reports `failed_chunks` if it fails everywhere after several
+  attempts. **Not yet** auto-redispatched: dataset-backed tasks (a fresh worker
+  would need the blocks re-seeded — resubmit; blocks stay cached, so it is
+  cheap) and the in-call loops `compute_iterate` / `compute_shuffle` (a chunk
+  failure ends the call — resubmit).
 - **The coordinator** (the `--mcp` node) runs the iterate/shuffle loop and
   merges partials; it is **not yet redundant** — if it dies mid-run that run is
   lost, though a fresh submit on a new coordinator is fine (worker datasets and
@@ -566,6 +599,10 @@ NURL_STDLIB=<repo> ../../nurl.sh tests/cudakernel_test.nu /tmp/ck && /tmp/ck
 # fixpoint path — 1-D k-means, each checked against a numpy oracle
 ./tests/iterate_smoke.sh
 ./tests/general_smoke.sh
+
+# in-computation fault tolerance (needs 2 GPUs): kill a worker mid-task and
+# verify its chunk is re-dispatched so the result is still exact
+./tests/faulttol_smoke.sh
 
 # wasm path (needs wasmtime): compile a kernel to module.wasm, then
 swarm-mcp runwasm 127.0.0.1 47700 sum 1 1000000 module.wasm --token mysecret

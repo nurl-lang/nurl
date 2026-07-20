@@ -369,6 +369,134 @@ $ `cudakernel.nu`
     ^ tids
 }
 
+// ── fault-tolerant chunk dispatch ────────────────────────────────────
+// A worker that dies (or traps) mid-task must not lose the whole job. Each
+// chunk is dispatched with its own RETRY PLAN — the tagged payload (immutable
+// across attempts) plus the owner it last routed to — so the coordinator can
+// re-dispatch a failed or unanswered chunk to a DIFFERENT worker. Routing is
+// steered by salting the ring key until it maps to an owner other than the one
+// that failed; no membership mutation, so a transient failure never corrupts
+// the ring. Bounded attempts: a chunk that fails everywhere finally reports as
+// a failed_chunk (never a silent zero), exactly as before.
+@ __ft_max_attempts → i { ^ 4 }  // initial dispatch + 3 re-dispatches
+@ __ft_deadline_ms → i { ^ 12000 }  // no result within this → owner presumed lost
+
+: ChunkJob {
+    i kind  // job kind (kind_wasm_gpu)
+    ( Vec u ) payload  // tagged, immutable across retries
+    i idx  // chunk index (base of the ring key)
+    i salt  // key salt — bumped to re-route away from a failed owner
+    i tid  // current attempt's job task id
+    ( Vec u ) owner  // the owner this attempt routed to (empty if unknown)
+    i attempts  // dispatches made (1 = initial)
+    i submit_ms  // wall-clock ms of the current dispatch (deadline base)
+    i state  // 0 pending · 1 ok · 2 exhausted (failed after max attempts)
+}
+
+// Ring key for chunk `idx` under retry `salt`. Both idx and salt are folded
+// into a bit-MIXED 64-bit value (multiply by large odd constants — a Fibonacci
+// / splitmix pair) so every (idx, salt) pair lands at a well-separated ring
+// point. A plain [idx][salt] byte layout does NOT work: the ring hash (FNV-1a)
+// has poor avalanche on trailing bytes, so consecutive salts would map to the
+// same arc and a re-dispatch could never escape the failed owner.
+@ chunk_key_salted i idx i salt → ( Vec u ) {
+    : i mixed + * + idx 1 0x9E3779B97F4A7C15 * + salt 1 0xD1B54A32D192ED03
+    : ( Vec u ) b ( vec_new [u] )
+    ( bytes_push_u64_be b # u64 mixed )
+    ^ b
+}
+
+// The GPU-ring owner pubkey for `key` (copied; empty on an empty ring). GPU
+// tasks route on the capability ring, so ownership resolves against it.
+@ __cj_gpu_owner * Swarm sw ( Vec u ) key → ( Vec u ) {
+    ^ ?? ( ring_owner_pk # *Ring . sw gpu_ring key ) { T pk → pk F → ( vec_new [u] ) }
+}
+
+@ cj_tids ( Vec s ) jobs → ( Vec i ) {
+    : ( Vec i ) t ( vec_new [i] )
+    : i n ( vec_len [s] jobs )
+    : ~ i k 0
+    ~ < k n {
+        : s pp ?? ( vec_get [s] jobs k ) { T x → x F → # s 0 }
+        ? != # i pp 0 { : *ChunkJob cj # *ChunkJob pp ( vec_push [i] t . cj tid ) } {}
+        = k + k 1
+    }
+    ^ t
+}
+
+@ chunkjobs_free ( Vec s ) jobs → v {
+    : i n ( vec_len [s] jobs )
+    : ~ i k 0
+    ~ < k n {
+        : s pp ?? ( vec_get [s] jobs k ) { T x → x F → # s 0 }
+        ? != # i pp 0 { : *ChunkJob cj # *ChunkJob pp ( vec_free [u] . cj payload ) ( vec_free [u] . cj owner ) ( nurl_free # s cj ) } {}
+        = k + k 1
+    }
+    ( vec_free [s] jobs )
+}
+
+// Dispatch a non-dataset GPU task WITH a retry plan: same wire as
+// cluster_submit_wasm_gpu, but each chunk keeps its tagged payload and owner so
+// task_refresh can re-dispatch it. Returns the *ChunkJob vector (the caller
+// derives tids with cj_tids and stores the plan on the Task).
+@ cluster_dispatch_gpu_ft * Swarm sw i mode i lo i hi i kbins ( Vec i ) params ( Vec u ) wasm i nchunks → ( Vec s ) {
+    : ( Vec s ) chunks ( shard lo hi nchunks )
+    : ( Vec s ) jobs ( vec_new [s] )
+    : i now ( now_ms )
+    : ~ i i 0
+    ~ < i nchunks {
+        : s cp ?? ( vec_get [s] chunks i ) { T x → x F → # s 0 }
+        : *Chunk c # *Chunk cp
+        : ( Vec u ) rkey ( chunk_key_salted i 0 )
+        : ( Vec u ) slice ( vec_new [u] )
+        : ( Vec u ) payload ( wasm_gpu_chunk_payload mode . c lo . c hi kbins params slice wasm )
+        : ( Vec u ) tagged ( token_tag . sw key payload )
+        : ( Vec u ) owner ( __cj_gpu_owner sw rkey )
+        : i tid ( job_submit # *JobNode . sw job ( kind_wasm_gpu ) rkey tagged )
+        : *ChunkJob cj # *ChunkJob ( nurl_alloc Z ChunkJob )
+        = . cj kind ( kind_wasm_gpu )
+        = . cj payload tagged
+        = . cj idx i
+        = . cj salt 0
+        = . cj tid tid
+        = . cj owner owner
+        = . cj attempts 1
+        = . cj submit_ms now
+        = . cj state 0
+        ( vec_push [s] jobs # s cj )
+        ( vec_free [u] rkey ) ( vec_free [u] slice ) ( vec_free [u] payload )
+        = i + i 1
+    }
+    ( shard_free chunks )
+    ^ jobs
+}
+
+// Re-dispatch one failed/lost chunk: salt the key until it maps to an owner
+// other than the one that just failed (bounded probes), resubmit the retained
+// payload there, and refresh the plan. No ring mutation — steering only.
+@ __cj_redispatch * Swarm sw * ChunkJob cj → v {
+    : *JobNode jn # *JobNode . sw job
+    : ~ i s + . cj salt 1
+    : ~ ( Vec u ) newkey ( chunk_key_salted . cj idx s )
+    : ~ ( Vec u ) newowner ( __cj_gpu_owner sw newkey )
+    : ~ i probes 0
+    ~ & < probes 16 & > ( vec_len [u] newowner ) 0 & > ( vec_len [u] . cj owner ) 0 ( bytes_eq newowner . cj owner ) {
+        ( vec_free [u] newkey ) ( vec_free [u] newowner )
+        = s + s 1
+        = newkey ( chunk_key_salted . cj idx s )
+        = newowner ( __cj_gpu_owner sw newkey )
+        = probes + probes 1
+    }
+    : i tid ( job_submit jn . cj kind newkey . cj payload )
+    ( vec_free [u] . cj owner )
+    = . cj owner newowner
+    = . cj salt s
+    = . cj tid tid
+    = . cj attempts + . cj attempts 1
+    = . cj submit_ms ( now_ms )
+    ( vec_free [u] newkey )
+}
+
 // Shard a GPU task (payload v2/v3): mode, K, runtime params and the module
 // ride every chunk under kind_wasm_gpu — routed on the GPU capability ring.
 // `data` is the WHOLE dataset's raw LE f64 bytes (empty when the task has no
@@ -628,6 +756,8 @@ $ `cudakernel.nu`
     String out_file  // when set, the finished vector result is written here
     i dsid  // dataset id the task maps over (0 = none)
     i seeded  // dataset blocks seeded by THIS submit (0 = all were cached)
+    ( Vec s ) chunkjobs  // *ChunkJob — per-chunk retry plan (empty = no auto-retry)
+    i retries  // total chunk re-dispatches performed (fault tolerance)
 }
 
 : McpState {
@@ -662,6 +792,8 @@ $ `cudakernel.nu`
     = . t out_file ( string_new )
     = . t dsid 0
     = . t seeded 0
+    = . t chunkjobs ( vec_new [s] )
+    = . t retries 0
     ^ t
 }
 
@@ -886,28 +1018,94 @@ $ `cudakernel.nu`
 
 // Refresh one task's status; combine if every chunk has landed. A finished
 // vector task with an out_file writes the raw LE f64s there (once).
+// Finalize a ready task: combine partials, write an out_file if requested,
+// mark done. Shared by the plain and fault-tolerant refresh paths.
+@ __task_finalize * Task t → v {
+    : *Swarm sw ( mcp_swarm )
+    ? == . t mode ( gpu_mode_scalar ) {
+        : Combined cb ( tids_combine sw . t dtype . t op . t tids )
+        = . t result . cb value
+        = . t failed . cb nfail
+    } {
+        : CombinedV cv ( tids_combine_vec sw . t mode . t kbins . t tids )
+        ( vec_free [u] . t vres )
+        = . t vres . cv bytes
+        = . t failed . cv nfail
+        ? & == . t failed 0 > ( string_len . t out_file ) 0 {
+            ?? ( write_file_bytes ( string_data . t out_file ) . t vres ) {
+                T _ → {}
+                F e → { = . t failed 1 }
+            }
+        } {}
+    }
+    = . t done 1
+}
+
+// Fault-tolerant refresh: advance each chunk's retry plan. A chunk whose result
+// arrived ok is settled; one that trapped (ok=0) or went silent past the
+// deadline (owner presumed lost) is re-dispatched to another worker while it
+// has attempts left, else marked exhausted. Only when every chunk is settled do
+// we combine — so a returned result still covers every chunk, now surviving a
+// worker death mid-task instead of erroring out.
+@ __task_ft_refresh * Task t → v {
+    : *Swarm sw ( mcp_swarm )
+    : *JobNode jn # *JobNode . sw job
+    : i n ( vec_len [s] . t chunkjobs )
+    : i now ( now_ms )
+    : ~ i pending 0
+    : ~ i k 0
+    ~ < k n {
+        : s pp ?? ( vec_get [s] . t chunkjobs k ) { T x → x F → # s 0 }
+        ? != # i pp 0 {
+            : *ChunkJob cj # *ChunkJob pp
+            ? == . cj state 0 {
+                : ~ i out 0  // 0 still waiting · 1 ok · 2 failed this attempt
+                ? ( job_has jn . cj tid ) {
+                    ?? ( job_await jn . cj tid ) {
+                        T r → {
+                            ?? ( token_untag . sw key r ) {
+                                T body → {
+                                    : i okb ?? ( vec_get [u] body 0 ) { T x → # i x F → 0 }
+                                    = out ? == okb 1 1 2
+                                    ( vec_free [u] body )
+                                }
+                                F → { = out 2 }
+                            }
+                            ( vec_free [u] r )
+                        }
+                        F → { = out 2 }
+                    }
+                } {
+                    ? > - now . cj submit_ms ( __ft_deadline_ms ) { = out 2 } {}
+                }
+                ? == out 1 { = . cj state 1 } {}
+                ? == out 2 {
+                    ? < . cj attempts ( __ft_max_attempts ) {
+                        ( __cj_redispatch sw cj )
+                        = . t retries + . t retries 1
+                        = pending + pending 1
+                    } { = . cj state 2 }
+                } {}
+                ? == out 0 { = pending + pending 1 } {}
+            } {}
+        } {}
+        = k + k 1
+    }
+    ? == pending 0 {
+        ( vec_free [i] . t tids )
+        = . t tids ( cj_tids . t chunkjobs )
+        ( __task_finalize t )
+        // the retry plan (retained payloads) is no longer needed
+        ( chunkjobs_free . t chunkjobs )
+        = . t chunkjobs ( vec_new [s] )
+    } {}
+}
+
 @ task_refresh * Task t → v {
     ? == . t done 1 { ^ v } {}
+    ? > ( vec_len [s] . t chunkjobs ) 0 { ( __task_ft_refresh t ) ^ v } {}
     : *Swarm sw ( mcp_swarm )
-    ? ( tids_ready sw . t tids ) {
-        ? == . t mode ( gpu_mode_scalar ) {
-            : Combined cb ( tids_combine sw . t dtype . t op . t tids )
-            = . t result . cb value
-            = . t failed . cb nfail
-        } {
-            : CombinedV cv ( tids_combine_vec sw . t mode . t kbins . t tids )
-            ( vec_free [u] . t vres )
-            = . t vres . cv bytes
-            = . t failed . cv nfail
-            ? & == . t failed 0 > ( string_len . t out_file ) 0 {
-                ?? ( write_file_bytes ( string_data . t out_file ) . t vres ) {
-                    T _ → {}
-                    F e → { = . t failed 1 }
-                }
-            } {}
-        }
-        = . t done 1
-    } {}
+    ? ( tids_ready sw . t tids ) { ( __task_finalize t ) } {}
 }
 
 @ task_find i id → s {
@@ -929,6 +1127,7 @@ $ `cudakernel.nu`
     ( json_obj_set o `task_id` ( json_int . t id ) )
     ( json_obj_set o `status` ( json_str_lit ? == . t done 1 ? > . t failed 0 `error` `done` `running` ) )
     ? > . t failed 0 { ( json_obj_set o `failed_chunks` ( json_int . t failed ) ) } {}
+    ? > . t retries 0 { ( json_obj_set o `retries` ( json_int . t retries ) ) } {}
     : String es ( bytes_to_str . t expr )
     ( json_obj_set o `kernel` ( json_str_lit ( string_data es ) ) )
     ( string_free es )
@@ -1290,15 +1489,20 @@ $ `cudakernel.nu`
     : *u nseed ( nurl_alloc 8 )
     ( nurl_poke nseed 0 0 )
     : ~ ( Vec i ) tids ( vec_new [i] )
+    // Non-dataset GPU tasks get a per-chunk retry plan (fault tolerance): a
+    // failed or unanswered chunk is re-dispatched to another worker. Dataset
+    // tasks keep the plain path — re-seeding a fresh worker's block cache on
+    // failure is a follow-up, so they stay non-retryable (documented).
+    : ~ ( Vec s ) ftjobs ( vec_new [s] )
     ? != dsid 0 {
         : *Dataset d # *Dataset dsp
         ( vec_free [i] tids )
         = tids ( cluster_submit_wasm_gpu_ds sw mode rlo rhi kbins params d wasm nchunks . st0 seeded nseed )
     } {
-        : ( Vec u ) dbytes ( vec_new [u] )
+        ( vec_free [s] ftjobs )
+        = ftjobs ( cluster_dispatch_gpu_ft sw mode rlo rhi kbins params wasm nchunks )
         ( vec_free [i] tids )
-        = tids ( cluster_submit_wasm_gpu sw mode rlo rhi kbins params dbytes wasm nchunks )
-        ( vec_free [u] dbytes )
+        = tids ( cj_tids ftjobs )
     }
     = nchunks ( vec_len [i] tids )
     ( vec_free [i] params ) ( vec_free [u] wasm )
@@ -1308,6 +1512,7 @@ $ `cudakernel.nu`
     = . t kbins kbins
     = . t dsid dsid
     = . t seeded ( nurl_peek nseed 0 )
+    ? > ( vec_len [s] ftjobs ) 0 { ( vec_free [s] . t chunkjobs ) = . t chunkjobs ftjobs } { ( vec_free [s] ftjobs ) }
     ( nurl_free nseed )
     ? > ( nurl_str_len out_file ) 0 { ( string_push_str . t out_file out_file ) } {}
     = . st next_id + . st next_id 1
@@ -2194,11 +2399,11 @@ $ `cudakernel.nu`
 }
 
 @ __help_limits → s {
-    ^ `Read this before scaling. The current envelope and the edges that are NOT yet supported:\n  Dataset size: <= 256 MiB (<= 33.5M f64) per dataset; split larger data across datasets.\n  Data type: f64 ONLY — no int/f32/struct datasets. Encode categorical or mixed data as doubles yourself.\n  Shuffle: <= 8,388,608 input elements AND <= 65,536 distinct keys per call (the intermediate/result bound). High-cardinality group-by (e.g. per-user over millions of users) must be partitioned or the key coarsened, which changes semantics.\n  Sample: <= 1,048,576 values returned (inline <= 65,536; beyond needs out_file). Histogram: <= 1,048,576 bins.\n  Iterate: state <= 4096 components, acc_dim <= 65,536, rounds <= 100,000. SGD is built in; any other step rule goes through an "update" device function (topic "iterate").\n  Fault tolerance: a RELAY failure is survived — with --connect listing several relays, workers and the coordinator converge on a survivor mid-flight. But a WORKER that dies mid-task is NOT auto-redispatched: its chunk fails visibly (failed_chunks) and the task errors; resubmit to retry (datasets stay cached, so a resubmit is cheap).\n  Coordinator: the single --mcp node runs the iterate/shuffle loop and merges partials; it is not yet redundant — if it dies mid-run that run is lost, though a fresh submit on a new coordinator is fine (worker datasets and caches persist).\nThese are known edges, not bugs — design around them or split the work.`
+    ^ `Read this before scaling. The current envelope and the edges that are NOT yet supported:\n  Dataset size: <= 256 MiB (<= 33.5M f64) per dataset; split larger data across datasets.\n  Data type: f64 ONLY — no int/f32/struct datasets. Encode categorical or mixed data as doubles yourself.\n  Shuffle: <= 8,388,608 input elements AND <= 65,536 distinct keys per call (the intermediate/result bound). High-cardinality group-by (e.g. per-user over millions of users) must be partitioned or the key coarsened, which changes semantics.\n  Sample: <= 1,048,576 values returned (inline <= 65,536; beyond needs out_file). Histogram: <= 1,048,576 bins.\n  Iterate: state <= 4096 components, acc_dim <= 65,536, rounds <= 100,000. SGD is built in; any other step rule goes through an "update" device function (topic "iterate").\n  Fault tolerance: a RELAY failure is survived (--connect several relays → the cluster converges on a survivor mid-flight). A WORKER that dies or traps mid-task is now auto-redispatched for the non-dataset GPU tools (compute_submit_cuda / _sample_cuda / _histogram_cuda): the coordinator re-routes the lost chunk to another worker (the task's "retries" field counts this), and only reports failed_chunks if the chunk fails everywhere after several attempts. NOT yet auto-redispatched: dataset-backed tasks (a fresh worker would need the data blocks re-seeded — resubmit to retry; blocks stay cached so it is cheap), and the in-call loops compute_iterate / compute_shuffle (a chunk failure ends the call — resubmit).\n  Coordinator: the single --mcp node runs the iterate/shuffle loop and merges partials; it is not yet redundant — if it dies mid-run that run is lost, though a fresh submit on a new coordinator is fine (worker datasets and caches persist).\nThese are known edges, not bugs — design around them or split the work.`
 }
 
 @ __help_troubleshooting → s {
-    ^ `Common errors and what they mean:\n  "no workers found" / "no GPU workers in the cluster" — no eligible worker has joined. Start one with the SAME --token (add --gpu for the CUDA tools) and give discovery a moment; a different token is invisible.\n  "the … kernel did not compile: …" — your CUDA-C or NURL source had an error; the compiler message is included. Fix it and resubmit.\n  "a chunk failed on a worker" — a worker trapped (bad kernel, no GPU, a lost block). Check the kernel and that --gpu workers exist, then resubmit.\n  task stays "running" — keep polling compute_result; the coordinator advances tasks on each call, and very large ranges simply take longer.\n  dataset range errors — with "dataset", lo/hi must lie within [0, count); omit them to use the whole dataset.\n  HTTPS / cert — the server self-signs on first run; trust the cert or use curl -k. The endpoint path is /mcp.\n  "may not contain a backtick character" — CUDA and NURL kernel sources cannot contain a backtick.`
+    ^ `Common errors and what they mean:\n  "no workers found" / "no GPU workers in the cluster" — no eligible worker has joined. Start one with the SAME --token (add --gpu for the CUDA tools) and give discovery a moment; a different token is invisible.\n  "the … kernel did not compile: …" — your CUDA-C or NURL source had an error; the compiler message is included. Fix it and resubmit.\n  "a chunk failed on a worker" — a chunk failed on EVERY worker it was tried on. For the non-dataset GPU tools the coordinator already re-dispatched it (see the task's "retries"); a remaining failure means the kernel itself traps (bad kernel, no GPU on any worker) or, for a dataset task, a block was lost — fix the kernel / check --gpu workers, then resubmit.\n  task stays "running" — keep polling compute_result; the coordinator advances tasks on each call, and very large ranges simply take longer.\n  dataset range errors — with "dataset", lo/hi must lie within [0, count); omit them to use the whole dataset.\n  HTTPS / cert — the server self-signs on first run; trust the cert or use curl -k. The endpoint path is /mcp.\n  "may not contain a backtick character" — CUDA and NURL kernel sources cannot contain a backtick.`
 }
 
 @ tool_help Json args → Json {
@@ -2289,7 +2494,7 @@ $ `cudakernel.nu`
 // ── JSON-RPC method handlers ─────────────────────────────────────
 
 @ handle_initialize Json id → Json {
-    : Json result ( mcp_initialize_result `swarm-mcp` `0.15.0` )
+    : Json result ( mcp_initialize_result `swarm-mcp` `0.16.0` )
     ^ ( mcp_response_result id result )
 }
 
