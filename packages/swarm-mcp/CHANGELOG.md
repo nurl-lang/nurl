@@ -1,5 +1,43 @@
 # Changelog
 
+## 0.16.0
+
+**In-computation fault tolerance: a worker death mid-task no longer loses the job.**
+
+Until now a failed chunk was reported honestly (`failed_chunks`, never a silent
+zero) but never retried — one worker crashing mid-task errored the whole job.
+The non-dataset GPU tools (`compute_submit_cuda`, `compute_sample_cuda`,
+`compute_histogram_cuda`) now **auto-re-dispatch** a lost chunk to a surviving
+worker.
+
+- **Per-chunk retry plan.** Each chunk is dispatched with its immutable,
+  HMAC-tagged payload and the worker it routed to. On every poll the coordinator
+  advances each chunk: one that **traps** (`ok=0`) or goes **silent past a
+  deadline** (its worker presumed dead) is re-dispatched while it has attempts
+  left; a chunk finalises only once every chunk has settled, so a returned
+  result still covers the whole range.
+- **Steer around the failed worker, no membership mutation.** The re-dispatch
+  salts the ring key until it maps to an owner *other* than the one that just
+  failed — so a transient blip never corrupts the ring, and there is no reliance
+  on death-detection gossip.
+  - Fixes a subtle hazard found while building this: the ring hash (FNV-1a) has
+    poor avalanche on trailing key bytes, so a naive `[idx][salt]` key left
+    consecutive salts on the same ring arc and the steer could never escape the
+    failed owner. Keys now fold idx and salt through a splitmix-style bit mixer,
+    so every attempt lands at a well-separated ring point.
+- **Observable.** The task reports `retries` (re-dispatches performed); only a
+  chunk that fails on every worker across all attempts is reported as a
+  `failed_chunks` error, exactly as before. `swarm_help "limits"` and
+  `"troubleshooting"` document the new behaviour and what it does *not* yet cover
+  (dataset-backed tasks need block re-seeding on a fresh worker; the in-call
+  `compute_iterate` / `compute_shuffle` loops end the call on a chunk failure —
+  resubmit).
+- Tests: new `tests/faulttol_smoke.sh` (needs 2 GPUs) submits a GPU reduce whose
+  exact answer is known, **kills a worker mid-task**, and asserts the result is
+  still exact with `retries > 0` and `failed_chunks == 0`. The happy path
+  (`gpu_smoke.sh`) and the in-call tools (`iterate_smoke.sh`,
+  `general_smoke.sh`) are unchanged and green.
+
 ## 0.15.0
 
 **`compute_iterate` is now a general fixpoint solver, not just gradient descent.**
