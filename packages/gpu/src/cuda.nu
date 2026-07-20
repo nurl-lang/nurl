@@ -79,6 +79,10 @@ $ `stdlib/core/string.nu`
 
 & `nvrtc` @ nvrtcGetPTX i prog *u ptx → i32
 
+& `nvrtc` @ nvrtcGetCUBINSize i prog *u sz → i32
+
+& `nvrtc` @ nvrtcGetCUBIN i prog *u cubin → i32
+
 & `nvrtc` @ nvrtcGetProgramLogSize i prog *u sz → i32
 
 & `nvrtc` @ nvrtcGetProgramLog i prog *u log → i32
@@ -220,6 +224,59 @@ $ `stdlib/core/string.nu`
     ( nvrtcDestroyProgram ps )
     ( nurl_free ps )
     ^ ptx
+}
+
+// Compile straight to a device-specific CUBIN (`-arch=sm_<cc>`), so
+// cuModuleLoadData needs no driver JIT — the JIT of a dozen PTX modules
+// is seconds of pure start-up latency, every run. Returns 0 on ANY
+// failure (old NVRTC without nvrtcGetCUBIN, unknown arch, compile
+// error) and the caller falls back to the PTX path, which reports
+// errors properly. `szout` (8 bytes) receives the cubin length — cubin
+// is binary, there is no NUL to measure it by.
+@ cuda_compile_cubin s src s name i cc * u szout → *u {
+    : *u ps ( __outslot )
+    ? != # i ( nvrtcCreateProgram ps src name 0 0 0 ) 0 {
+        ( nurl_free ps )
+        ^ # *u 0
+    } {}
+    : i prog ( nurl_peek ps 0 )
+    : String arch ( string_from `-arch=sm_` )
+    ( string_push_int arch cc )
+    : *u opts ( nurl_alloc 8 )
+    ( nurl_poke opts 0 # i ( string_data arch ) )
+    : i cr # i ( nvrtcCompileProgram prog 1 opts )
+    ( nurl_free opts )
+    ( string_free arch )
+    ? != cr 0 {
+        ( nvrtcDestroyProgram ps )
+        ( nurl_free ps )
+        ^ # *u 0
+    } {}
+    : *u szs ( __outslot )
+    ? != # i ( nvrtcGetCUBINSize prog szs ) 0 {
+        ( nurl_free szs )
+        ( nvrtcDestroyProgram ps )
+        ( nurl_free ps )
+        ^ # *u 0
+    } {}
+    : i csz ( nurl_peek szs 0 )
+    ( nurl_free szs )
+    ? <= csz 0 {
+        ( nvrtcDestroyProgram ps )
+        ( nurl_free ps )
+        ^ # *u 0
+    } {}
+    : *u cb ( nurl_alloc csz )
+    ? != # i ( nvrtcGetCUBIN prog cb ) 0 {
+        ( nurl_free cb )
+        ( nvrtcDestroyProgram ps )
+        ( nurl_free ps )
+        ^ # *u 0
+    } {}
+    ( nurl_poke szout 0 csz )
+    ( nvrtcDestroyProgram ps )
+    ( nurl_free ps )
+    ^ cb
 }
 
 // ── module / function ─────────────────────────────────────────────

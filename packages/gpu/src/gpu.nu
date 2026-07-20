@@ -333,12 +333,53 @@ $ `cpu.nu`
         ? == fn 0 { ( cpu_module_free h ) ^ @ GpuKernel { 0 0 } } {}
         ^ @ GpuKernel { # i h fn }
     } {}
-    // CUDA: serve the PTX from the on-disk cache when the source hash
-    // matches, so a process start costs a file read instead of an NVRTC
-    // compile (a dozen kernels is a second or two of pure latency).
+    // CUDA: serve the compiled module from the on-disk cache when the
+    // source hash matches, so a process start costs a file read instead
+    // of an NVRTC compile (a dozen kernels is a second or two of pure
+    // latency). CUBIN is preferred over PTX: loading PTX makes the
+    // DRIVER JIT-compile it on every start, which is the same latency
+    // the cache was built to remove.
     : ~ b cached F
     : ~ i mod 0
     ? ( __gpu_cache_off ) {} {
+        : String ctag ( __gpu_cuda_tag g )
+        : String ccp ( __gpu_cache_path src ( string_data ctag ) `.cubin` )
+        ( string_free ctag )
+        ?? ( read_file_bytes ( string_data ccp ) ) {
+            T cbb → {
+                = mod ( cuda_module_load ( vec_data [u] cbb ) )
+                ( vec_free [u] cbb )
+                ? != mod 0 { = cached T } {}
+            }
+            F _ → {}
+        }
+        ( string_free ccp )
+    }
+    ? cached {} {
+        // compile straight to a device-specific cubin (no JIT at load);
+        // any failure falls through to the PTX path below, which is the
+        // one that reports compile errors
+        : *u cszs ( __outslot )
+        : *u cb ( cuda_compile_cubin src name ( cuda_device_cc . g dev ) cszs )
+        ? != # i cb 0 {
+            : i cn ( nurl_peek cszs 0 )
+            ? ( __gpu_cache_off ) {} {
+                : ( Vec u ) cbv ( vec_with_cap [u] cn )
+                ( bytes_extend_raw cbv # s cb cn )
+                : String ctag2 ( __gpu_cuda_tag g )
+                : String ccp2 ( __gpu_cache_path src ( string_data ctag2 ) `.cubin` )
+                ( string_free ctag2 )
+                ( __gpu_cache_store ( string_data ccp2 ) cbv )
+                ( string_free ccp2 )
+                ( vec_free [u] cbv )
+            }
+            = mod ( cuda_module_load cb )
+            ( nurl_free cb )
+            ? != mod 0 { = cached T } {}
+        } {}
+        ( nurl_free cszs )
+    }
+    ? | cached ( __gpu_cache_off ) {} {
         : String tag ( __gpu_cuda_tag g )
         : String cp ( __gpu_cache_path src ( string_data tag ) `.ptx` )
         ( string_free tag )

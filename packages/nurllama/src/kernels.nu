@@ -20,6 +20,8 @@ $ `deps/gpu/src/gpu.nu`
     GpuKernel matvec
     GpuKernel mv_q4_0
     GpuKernel mv_q8_0
+    GpuKernel mv_f32_b
+    GpuKernel mv_q8_0_b
     GpuKernel mv_q5_0
     GpuKernel mv_q5_1
     GpuKernel mv_q4_k
@@ -53,6 +55,8 @@ $ `deps/gpu/src/gpu.nu`
     GpuKernel moe_scatter
     GpuKernel moe_route
     GpuKernel argmax_conf
+    GpuKernel argmax_conf_w
+    GpuKernel q8_repack
     b ok
 }
 
@@ -297,7 +301,7 @@ $ `deps/gpu/src/gpu.nu`
 }
 
 @ __lk_mv_exp_q8_0 → s {
-    ^ ( nurl_str_cat ( __lk_f16_dev ) `extern "C" __global__ void mv_exp_q8_0(
+    ^ ( nurl_str_cat ( nurl_str_cat ( __lk_f16_dev ) ( __lk_q8s_dev ) ) `extern "C" __global__ void mv_exp_q8_0(
         const unsigned char* __restrict__ W, const float* __restrict__ x, float* __restrict__ y,
         const int* __restrict__ expid, int rows, int cols, int xk, int n_assign) {
         int idx = blockIdx.x*blockDim.x + threadIdx.x;
@@ -306,16 +310,27 @@ $ `deps/gpu/src/gpu.nu`
         int e = expid[a];
         int nb = cols / 32;
         const unsigned char* w = W + (long long)(e*rows + r) * nb * 34;
+        const signed char* qrow = (const signed char*)(w + nb*2);
         const float* xrow = x + (long long)(a/xk)*cols;
         float acc = 0.f;
-        for (int blk = 0; blk < nb; ++blk) {
-            const unsigned char* bp = w + blk*34;
-            float d = nl_f16(bp);
-            const signed char* q = (const signed char*)(bp + 2);
-            const float* xb = xrow + blk*32;
-            float sub = 0.f;
-            for (int j = 0; j < 32; ++j) sub += (float)q[j] * xb[j];
-            acc += d * sub;
+        if ((nb & 1) == 0) {
+            for (int blk = 0; blk < nb; ++blk) {
+                float d = nl_f16(w + blk*2);
+                const int* qi = (const int*)(qrow + blk*32);
+                const float4* x4 = (const float4*)(xrow + blk*32);
+                float sub = 0.f;
+                NL_Q8_DOT(sub, qi, x4)
+                acc += d * sub;
+            }
+        } else {
+            for (int blk = 0; blk < nb; ++blk) {
+                float d = nl_f16(w + blk*2);
+                const signed char* q = qrow + blk*32;
+                const float* xb = xrow + blk*32;
+                float sub = 0.f;
+                for (int j = 0; j < 32; ++j) sub += (float)q[j] * xb[j];
+                acc += d * sub;
+            }
         }
         y[(long long)a*rows + r] = acc;
     }` )
@@ -413,6 +428,35 @@ $ `deps/gpu/src/gpu.nu`
         out_id[pos] = arg;
         out_prob[pos] = 1.f / sum;
     }`
+}
+
+// Warp version (CUDA): one WARP per position. The scalar kernel above
+// puts the whole window in a single warp — 32 threads serially scanning
+// vocab-sized rows twice was the output phase's real cost. The lowest-
+// index tie-break reproduces the serial first-max argmax exactly.
+@ __lk_argmax_conf_w → s {
+    ^ ( nurl_str_cat ( __lk_warp_red ) `extern "C" __global__ void argmax_conf_w(
+        const float* __restrict__ logits, int* __restrict__ out_id, float* __restrict__ out_prob,
+        int vocab, int count) {
+        NL_WARP_PROLOGUE(count, 1)
+        (void)b;
+        const float* lg = logits + (long long)r*vocab;
+        float mx = -1e30f; int arg = 0x7fffffff;
+        for (int v = lane; v < vocab; v += 32) {
+            float x = lg[v];
+            if (x > mx || (x == mx && v < arg)) { mx = x; arg = v; }
+        }
+        for (int off = 16; off > 0; off >>= 1) {
+            float omx = __shfl_down_sync(0xffffffffu, mx, off);
+            int oarg = __shfl_down_sync(0xffffffffu, arg, off);
+            if (omx > mx || (omx == mx && oarg < arg)) { mx = omx; arg = oarg; }
+        }
+        mx = __shfl_sync(0xffffffffu, mx, 0);
+        float sum = 0.f;
+        for (int v = lane; v < vocab; v += 32) sum += expf(lg[v] - mx);
+        sum = nl_warp_sum(sum);
+        if (lane == 0) { out_id[r] = (arg == 0x7fffffff) ? 0 : arg; out_prob[r] = 1.f / sum; }
+    }` )
 }
 
 // Scatter-accumulate the experts' down-projections onto the residual:
@@ -535,6 +579,52 @@ $ `deps/gpu/src/gpu.nu`
     `
 }
 
+// float4 for the CPU backend's C compiler (CUDA has it built in) plus
+// NL_Q8_DOT: one split-layout q8_0 quant block dotted against 32 x
+// floats. The quants are read as 8 ints and x as 8 float4s — 16 load
+// instructions instead of 64 — and the accumulation statements keep the
+// scalar loop's exact left-fold order, so the result is bit-identical
+// to the byte-at-a-time form.
+@ __lk_q8s_dev → s {
+    ^ `
+    #ifndef __CUDACC_RTC__
+    typedef struct { float x, y, z, w; } float4;
+    #endif
+    #define NL_Q8_DOT(SUB, QI, X4)                          \
+        for (int k8 = 0; k8 < 8; ++k8) {                    \
+            int qq = (QI)[k8];                              \
+            float4 xv = (X4)[k8];                           \
+            SUB += (float)(signed char)(qq)       * xv.x;   \
+            SUB += (float)(signed char)(qq >> 8)  * xv.y;   \
+            SUB += (float)(signed char)(qq >> 16) * xv.z;   \
+            SUB += (float)(signed char)(qq >> 24) * xv.w;   \
+        }
+    `
+}
+
+// Repack an uploaded q8_0 tensor from ggml's interleaved 34-byte blocks
+// ([d q0..q31] [d q0..q31] …) into a split per-row layout:
+// [d0 d1 … d_{nb-1}] [q-block0 … q-block_{nb-1}], same nb·34-byte row
+// stride. With an even nb the quant region is 4-byte aligned, which is
+// what lets the matvec kernels read ints and float4s instead of bytes
+// (their limit is load-instruction count, not bandwidth). One thread
+// per 34-byte block, run once at model load.
+@ __lk_q8_repack → s {
+    ^ `extern "C" __global__ void q8_repack(
+        const unsigned char* __restrict__ src, unsigned char* __restrict__ dst, int nb, long long nblk) {
+        long long i = (long long)blockIdx.x*blockDim.x + threadIdx.x;
+        if (i >= nblk) return;
+        long long row = i / nb;
+        int blk = (int)(i - row*nb);
+        const unsigned char* s = src + i*34;
+        unsigned char* drow = dst + row*(long long)nb*34;
+        drow[blk*2] = s[0];
+        drow[blk*2 + 1] = s[1];
+        unsigned char* q = drow + nb*2 + blk*32;
+        for (int j = 0; j < 32; ++j) q[j] = s[2 + j];
+    }`
+}
+
 @ __lk_mv_q4_0 → s {
     ^ ( nurl_str_cat ( __lk_f16_dev ) `extern "C" __global__ void mv_q4_0(
         const unsigned char* __restrict__ W, const float* __restrict__ x, float* __restrict__ y, int rows, int cols, int batch) {
@@ -560,8 +650,12 @@ $ `deps/gpu/src/gpu.nu`
     }` )
 }
 
+// Q8_0 weights are stored in the SPLIT per-row layout (see
+// __lk_q8_repack): scales first, then 4-byte-aligned quant blocks.
+// Even nb takes the int/float4 fast path; odd nb (possible only in
+// tiny test models) reads bytes from the same layout.
 @ __lk_mv_q8_0 → s {
-    ^ ( nurl_str_cat ( __lk_f16_dev ) `extern "C" __global__ void mv_q8_0(
+    ^ ( nurl_str_cat ( nurl_str_cat ( __lk_f16_dev ) ( __lk_q8s_dev ) ) `extern "C" __global__ void mv_q8_0(
         const unsigned char* __restrict__ W, const float* __restrict__ x, float* __restrict__ y, int rows, int cols, int batch) {
         int idx = blockIdx.x*blockDim.x + threadIdx.x;
         if (idx >= rows*batch) return;
@@ -570,17 +664,96 @@ $ `deps/gpu/src/gpu.nu`
         y += (long long)b*rows;
         int nb = cols / 32;
         const unsigned char* w = W + (long long)r * nb * 34;
+        const signed char* qrow = (const signed char*)(w + nb*2);
         float acc = 0.f;
-        for (int blk = 0; blk < nb; ++blk) {
-            const unsigned char* bp = w + blk*34;
-            float d = nl_f16(bp);
-            const signed char* q = (const signed char*)(bp + 2);
-            const float* xb = x + blk*32;
-            float sub = 0.f;
-            for (int j = 0; j < 32; ++j) sub += (float)q[j] * xb[j];
-            acc += d * sub;
+        if ((nb & 1) == 0) {
+            for (int blk = 0; blk < nb; ++blk) {
+                float d = nl_f16(w + blk*2);
+                const int* qi = (const int*)(qrow + blk*32);
+                const float4* x4 = (const float4*)(x + blk*32);
+                float sub = 0.f;
+                NL_Q8_DOT(sub, qi, x4)
+                acc += d * sub;
+            }
+        } else {
+            for (int blk = 0; blk < nb; ++blk) {
+                float d = nl_f16(w + blk*2);
+                const signed char* q = qrow + blk*32;
+                const float* xb = x + blk*32;
+                float sub = 0.f;
+                for (int j = 0; j < 32; ++j) sub += (float)q[j] * xb[j];
+                acc += d * sub;
+            }
         }
         y[r] = acc;
+    }` )
+}
+
+// Batch-reuse matvecs: one thread per output ROW, looping over the
+// batch positions in register tiles, so each weight element is read
+// from DRAM once per 32-position tile instead of once per position.
+// The dense per-(row,position) kernels above re-read the whole weight
+// matrix for every position — at window sizes (batch 32) that is 32×
+// the necessary traffic and it is where the decode's memory time goes.
+// The per-output summation order (ascending block, ascending j / c) is
+// IDENTICAL to the scalar kernels', so results are bit-exact and the
+// CPU backend runs the same source.
+@ __lk_mv_f32_b → s {
+    ^ `extern "C" __global__ void mv_f32_b(
+        const float* __restrict__ W, const float* __restrict__ x, float* __restrict__ y, int rows, int cols, int batch) {
+        int r = blockIdx.x*blockDim.x + threadIdx.x;
+        if (r >= rows) return;
+        const float* w = W + (long long)r*cols;
+        for (int b0 = 0; b0 < batch; b0 += 32) {
+            int bn = batch - b0; if (bn > 32) bn = 32;
+            float acc[32];
+            for (int t = 0; t < bn; ++t) acc[t] = 0.f;
+            for (int c = 0; c < cols; ++c) {
+                float wv = w[c];
+                for (int t = 0; t < bn; ++t) acc[t] += wv * x[(long long)(b0+t)*cols + c];
+            }
+            for (int t = 0; t < bn; ++t) y[(long long)(b0+t)*rows + r] = acc[t];
+        }
+    }`
+}
+
+@ __lk_mv_q8_0_b → s {
+    ^ ( nurl_str_cat ( nurl_str_cat ( __lk_f16_dev ) ( __lk_q8s_dev ) ) `extern "C" __global__ void mv_q8_0_b(
+        const unsigned char* __restrict__ W, const float* __restrict__ x, float* __restrict__ y, int rows, int cols, int batch) {
+        int r = blockIdx.x*blockDim.x + threadIdx.x;
+        if (r >= rows) return;
+        int nb = cols / 32;
+        const unsigned char* w = W + (long long)r * nb * 34;
+        const signed char* qrow = (const signed char*)(w + nb*2);
+        for (int b0 = 0; b0 < batch; b0 += 32) {
+            int bn = batch - b0; if (bn > 32) bn = 32;
+            float acc[32];
+            for (int t = 0; t < bn; ++t) acc[t] = 0.f;
+            if ((nb & 1) == 0) {
+                for (int blk = 0; blk < nb; ++blk) {
+                    float d = nl_f16(w + blk*2);
+                    const int* qi = (const int*)(qrow + blk*32);
+                    for (int t = 0; t < bn; ++t) {
+                        const float4* x4 = (const float4*)(x + (long long)(b0+t)*cols + blk*32);
+                        float sub = 0.f;
+                        NL_Q8_DOT(sub, qi, x4)
+                        acc[t] += d * sub;
+                    }
+                }
+            } else {
+                for (int blk = 0; blk < nb; ++blk) {
+                    float d = nl_f16(w + blk*2);
+                    const signed char* q = qrow + blk*32;
+                    for (int t = 0; t < bn; ++t) {
+                        const float* xb = x + (long long)(b0+t)*cols + blk*32;
+                        float sub = 0.f;
+                        for (int j = 0; j < 32; ++j) sub += (float)q[j] * xb[j];
+                        acc[t] += d * sub;
+                    }
+                }
+            }
+            for (int t = 0; t < bn; ++t) y[(long long)(b0+t)*rows + r] = acc[t];
+        }
     }` )
 }
 
@@ -863,21 +1036,32 @@ $ `deps/gpu/src/gpu.nu`
 }
 
 @ __lk_mv_q8_0_w → s {
-    ^ ( nurl_str_cat ( nurl_str_cat ( __lk_warp_red ) ( __lk_f16_dev ) ) `extern "C" __global__ void mv_q8_0_w(
+    ^ ( nurl_str_cat ( nurl_str_cat ( nurl_str_cat ( __lk_warp_red ) ( __lk_f16_dev ) ) ( __lk_q8s_dev ) ) `extern "C" __global__ void mv_q8_0_w(
         const unsigned char* __restrict__ W, const float* __restrict__ x, float* __restrict__ y, int rows, int cols, int batch) {
         NL_WARP_PROLOGUE(rows, batch)
         int nb = cols / 32;
         const unsigned char* w = W + (long long)r * nb * 34;
+        const signed char* qrow = (const signed char*)(w + nb*2);
         const float* xb = x + (long long)b*cols;
         float acc = 0.f;
-        for (int blk = lane; blk < nb; blk += 32) {
-            const unsigned char* bp = w + blk*34;
-            float d = nl_f16(bp);
-            const signed char* q = (const signed char*)(bp + 2);
-            const float* xs = xb + blk*32;
-            float sub = 0.f;
-            for (int j = 0; j < 32; ++j) sub += (float)q[j] * xs[j];
-            acc += d * sub;
+        if ((nb & 1) == 0) {
+            for (int blk = lane; blk < nb; blk += 32) {
+                float d = nl_f16(w + blk*2);
+                const int* qi = (const int*)(qrow + blk*32);
+                const float4* x4 = (const float4*)(xb + blk*32);
+                float sub = 0.f;
+                NL_Q8_DOT(sub, qi, x4)
+                acc += d * sub;
+            }
+        } else {
+            for (int blk = lane; blk < nb; blk += 32) {
+                float d = nl_f16(w + blk*2);
+                const signed char* q = qrow + blk*32;
+                const float* xs = xb + blk*32;
+                float sub = 0.f;
+                for (int j = 0; j < 32; ++j) sub += (float)q[j] * xs[j];
+                acc += d * sub;
+            }
         }
         acc = nl_warp_sum(acc);
         if (lane == 0) y[(long long)b*rows + r] = acc;
@@ -1088,6 +1272,8 @@ $ `deps/gpu/src/gpu.nu`
     : GpuKernel me5 ( gpu_compile g ( __lk_argmax_conf ) `argmax_conf` )
     : GpuKernel q1 ( gpu_compile g ( __lk_mv_q4_0 ) `mv_q4_0` )
     : GpuKernel q2 ( gpu_compile g ( __lk_mv_q8_0 ) `mv_q8_0` )
+    : GpuKernel qb1 ( gpu_compile g ( __lk_mv_f32_b ) `mv_f32_b` )
+    : GpuKernel qb2 ( gpu_compile g ( __lk_mv_q8_0_b ) `mv_q8_0_b` )
     : GpuKernel q3 ( gpu_compile g ( __lk_mv_q4_k ) `mv_q4_k` )
     : GpuKernel q4 ( gpu_compile g ( __lk_mv_q6_k ) `mv_q6_k` )
     : GpuKernel q5 ( gpu_compile g ( __lk_mv_f16 ) `mv_f16` )
@@ -1099,7 +1285,8 @@ $ `deps/gpu/src/gpu.nu`
     & & ( gpu_kernel_ok k5 ) ( gpu_kernel_ok k6 ) ( gpu_kernel_ok k7 )
     : b ok1 & & ( gpu_kernel_ok q1 ) ( gpu_kernel_ok q2 )
     & & ( gpu_kernel_ok q3 ) ( gpu_kernel_ok q4 ) ( gpu_kernel_ok q5 )
-    : b okme & & & & ( gpu_kernel_ok me1 ) ( gpu_kernel_ok me2 ) ( gpu_kernel_ok me3 ) ( gpu_kernel_ok me4 ) ( gpu_kernel_ok me5 )
+    : GpuKernel rp ( gpu_compile g ( __lk_q8_repack ) `q8_repack` )
+    : b okme & & & & & ( gpu_kernel_ok me1 ) ( gpu_kernel_ok me2 ) ( gpu_kernel_ok me3 ) ( gpu_kernel_ok me4 ) ( gpu_kernel_ok me5 ) ( gpu_kernel_ok rp )
     : b ok & & & & & & ok0 ( gpu_kernel_ok k3n ) ( gpu_kernel_ok k6b ) ( gpu_kernel_ok k8 ) okme
     & ( gpu_kernel_ok k5g ) ( gpu_kernel_ok k5s ) & ok1 & & ( gpu_kernel_ok q6 ) ( gpu_kernel_ok q7 ) ( gpu_kernel_ok q8 )
     // The warp-per-row matvecs use __shfl_down_sync — CUDA only. On any
@@ -1114,16 +1301,19 @@ $ `deps/gpu/src/gpu.nu`
     : GpuKernel w6 ? want_warp ( gpu_compile g ( __lk_mv_q5_0_w ) `mv_q5_0_w` ) @ GpuKernel { 0 0 }
     : GpuKernel w7 ? want_warp ( gpu_compile g ( __lk_mv_q5_1_w ) `mv_q5_1_w` ) @ GpuKernel { 0 0 }
     : GpuKernel w8 ? want_warp ( gpu_compile g ( __lk_mv_q5_k_w ) `mv_q5_k_w` ) @ GpuKernel { 0 0 }
-    : b warp & want_warp
+    : GpuKernel me5w ? want_warp ( gpu_compile g ( __lk_argmax_conf_w ) `argmax_conf_w` ) @ GpuKernel { 0 0 }
+    : b warp & & want_warp ( gpu_kernel_ok me5w )
     & & & ( gpu_kernel_ok w1 ) ( gpu_kernel_ok w2 ) & ( gpu_kernel_ok w3 ) ( gpu_kernel_ok w4 )
     & & ( gpu_kernel_ok w5 ) ( gpu_kernel_ok w6 ) & ( gpu_kernel_ok w7 ) ( gpu_kernel_ok w8 )
-    ^ @ LlmKernels { k1 q1 q2 q6 q7 q3 q8 q4 q5 w1 w2 w3 w4 w5 w6 w7 w8 warp k2 k3 k3n k4 k4a k4b k5 k5g k5s k6 k6b k7 k8 me1 me2 me3 me4 me5 ok }
+    ^ @ LlmKernels { k1 q1 q2 qb1 qb2 q6 q7 q3 q8 q4 q5 w1 w2 w3 w4 w5 w6 w7 w8 warp k2 k3 k3n k4 k4a k4b k5 k5g k5s k6 k6b k7 k8 me1 me2 me3 me4 me5 me5w rp ok }
 }
 
 @ lk_free LlmKernels ks → v {
     ( gpu_kernel_free . ks matvec )
     ( gpu_kernel_free . ks mv_q4_0 )
     ( gpu_kernel_free . ks mv_q8_0 )
+    ( gpu_kernel_free . ks mv_f32_b )
+    ( gpu_kernel_free . ks mv_q8_0_b )
     ( gpu_kernel_free . ks mv_q5_0 )
     ( gpu_kernel_free . ks mv_q5_1 )
     ( gpu_kernel_free . ks mv_q4_k )
@@ -1139,6 +1329,7 @@ $ `deps/gpu/src/gpu.nu`
         ( gpu_kernel_free . ks w_q5_0 )
         ( gpu_kernel_free . ks w_q5_1 )
         ( gpu_kernel_free . ks w_q5_k )
+        ( gpu_kernel_free . ks argmax_conf_w )
     } {}
     ( gpu_kernel_free . ks rmsnorm )
     ( gpu_kernel_free . ks rope )
@@ -1158,6 +1349,7 @@ $ `deps/gpu/src/gpu.nu`
     ( gpu_kernel_free . ks moe_scatter )
     ( gpu_kernel_free . ks moe_route )
     ( gpu_kernel_free . ks argmax_conf )
+    ( gpu_kernel_free . ks q8_repack )
 }
 
 // ── launch wrappers (raw device pointers, onnx op idiom) ────────────
@@ -1189,6 +1381,42 @@ $ `deps/gpu/src/gpu.nu`
     ? == gt 7 { = which 7 } {}
     ? == gt 13 { = which 8 } {}
     ? < which 0 { ^ F } {}
+    // Batch >= 4 routing for f32/Q8_0, from measurement at the llada2
+    // shapes (RTX 4090, 20-run means):
+    //   157184×2048: batch-reuse 4.4 ms vs warp-per-row 32 ms — a huge
+    //     weight matrix busts L2, so re-reading it per position is the
+    //     whole cost, and `rows` threads is already full occupancy.
+    //   2048×2048 / 512×2048: warp-per-row wins — the weights FIT in
+    //     L2, so batch-reuse saves nothing and its low thread count
+    //     loses; a warp-batched hybrid tied with plain warp (deleted).
+    //   2048×512: cols/32 = 16 blocks < 32 lanes starves the warp
+    //     kernels (110 us) — the plain scalar kernel wins (45 us).
+    // The CPU backend always takes the batch-reuse kernel: the row
+    // stays in cache across the batch.
+    ? & >= batch 4 | == which 0 == which 2 {
+        : b use_b | ! . ks warp >= rows 16384
+        : b use_sp & . ks warp < cols 1024
+        ? | use_b use_sp {
+            : ( Vec i ) ba ( vec_new [i] )
+            ( vec_push [i] ba ( gpu_arg_i64 wd ) )
+            ( vec_push [i] ba ( gpu_arg_i64 xd ) )
+            ( vec_push [i] ba ( gpu_arg_i64 yd ) )
+            ( vec_push [i] ba ( gpu_arg_i32 rows ) )
+            ( vec_push [i] ba ( gpu_arg_i32 cols ) )
+            ( vec_push [i] ba ( gpu_arg_i32 batch ) )
+            ? use_b {
+                : i bg ( gpu_grid rows 64 )
+                ? == which 0 { : i _r ( gpu_launch . ks mv_f32_b bg 64 ba ) } {}
+                ? == which 2 { : i _r ( gpu_launch . ks mv_q8_0_b bg 64 ba ) } {}
+            } {
+                : i sg ( gpu_grid * rows batch 64 )
+                ? == which 0 { : i _r ( gpu_launch . ks matvec sg 64 ba ) } {}
+                ? == which 2 { : i _r ( gpu_launch . ks mv_q8_0 sg 64 ba ) } {}
+            }
+            ( vec_free [i] ba )
+            ^ T
+        } {}
+    } {}
     // warp-per-row variants (CUDA): f32, Q4_0, Q8_0, Q4_K, Q6_K, Q5_0, Q5_1, Q5_K
     ? & . ks warp | | | | | | | == which 0 == which 1 == which 2 == which 3 == which 4
     == which 6 == which 7 == which 8 {
@@ -1291,6 +1519,18 @@ $ `deps/gpu/src/gpu.nu`
 }
 
 // Greedy argmax + softmax-prob per position, on device.
+// Repack one uploaded q8_0 tensor into the split per-row layout (see
+// __lk_q8_repack). `nb` = quant blocks per row, `nblk` = blocks total.
+@ lk_q8_repack LlmKernels ks i srcd i dstd i nb i nblk → v {
+    : ( Vec i ) a ( vec_new [i] )
+    ( vec_push [i] a ( gpu_arg_i64 srcd ) )
+    ( vec_push [i] a ( gpu_arg_i64 dstd ) )
+    ( vec_push [i] a ( gpu_arg_i32 nb ) )
+    ( vec_push [i] a ( gpu_arg_i64 nblk ) )
+    : i _r ( gpu_launch . ks q8_repack ( gpu_grid nblk 256 ) 256 a )
+    ( vec_free [i] a )
+}
+
 @ lk_argmax_conf LlmKernels ks i logitsd i outid i outprob i vocab i count → v {
     : ( Vec i ) a ( vec_new [i] )
     ( vec_push [i] a ( gpu_arg_i64 logitsd ) )
@@ -1298,7 +1538,11 @@ $ `deps/gpu/src/gpu.nu`
     ( vec_push [i] a ( gpu_arg_i64 outprob ) )
     ( vec_push [i] a ( gpu_arg_i32 vocab ) )
     ( vec_push [i] a ( gpu_arg_i32 count ) )
-    : i _r ( gpu_launch . ks argmax_conf ( gpu_grid count 64 ) 64 a )
+    ? . ks warp {
+        : i _r ( gpu_launch . ks argmax_conf_w ( gpu_grid * count 32 128 ) 128 a )
+    } {
+        : i _r ( gpu_launch . ks argmax_conf ( gpu_grid count 64 ) 64 a )
+    }
     ( vec_free [i] a )
 }
 

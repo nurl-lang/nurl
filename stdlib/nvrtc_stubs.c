@@ -8,6 +8,8 @@ int nvrtcCreateProgram()      { return 1; }
 int nvrtcCompileProgram()     { return 1; }
 int nvrtcGetPTXSize(void *a, void *b) { if (b) *(long*)b = 0; return 1; }
 int nvrtcGetPTX()             { return 1; }
+int nvrtcGetCUBINSize(void *a, void *b) { if (b) *(long*)b = 0; return 1; }
+int nvrtcGetCUBIN()           { return 1; }
 int nvrtcGetProgramLogSize(void *a, void *b) { if (b) *(long*)b = 0; return 1; }
 int nvrtcGetProgramLog()      { return 1; }
 int nvrtcDestroyProgram()     { return 1; }

@@ -191,6 +191,7 @@ $ `src/tokenizer.nu`
     i prof_moe_ns
     i prof_shexp_ns
     i prof_dense_ns
+    i prof_out_ns
 }
 
 @ __lm_err s msg → !*Llm String {
@@ -283,11 +284,13 @@ $ `src/tokenizer.nu`
     : ~ i gt -1
     : ~ i nb -1
     : ~ i addr 0
+    : ~ i ne0 0
     ?? ( vec_get [GgufTensor] . gg tensors ti ) {
         T t → {
             = gt . t gtype
             = nb . t nbytes
             = addr # i ( gguf_tensor_ptr gg t )
+            = ne0 . t d0
         }
         F → {}
     }
@@ -298,6 +301,25 @@ $ `src/tokenizer.nu`
             ^ -1
         } {}
         : i _uq ( gpu_upload bq # *u addr )
+        // q8_0 goes to the device in the SPLIT per-row layout the
+        // matvec kernels read (scales together, 4-aligned quants) —
+        // a one-time on-device repack, then the interleaved copy is
+        // freed. Every q8_0 kernel expects this layout.
+        ? & == gt 8 & > ne0 0 == % ne0 32 0 {
+            : GpuBuffer br ( gpu_alloc . m g nb )
+            ? == . br dptr 0 {
+                ( gpu_free bq )
+                = __lm_alloc_failed T
+                ^ -1
+            } {}
+            ( lk_q8_repack . m ks . bq dptr . br dptr / ne0 32 / nb 34 )
+            : i _rs ( gpu_sync . m g )
+            ( gpu_free bq )
+            ( vec_push [i] . m wdptr . br dptr )
+            ( vec_push [i] . m wbytes . br bytes )
+            = __lm_last_type gt
+            ^ . br dptr
+        } {}
         ( vec_push [i] . m wdptr . bq dptr )
         ( vec_push [i] . m wbytes . bq bytes )
         = __lm_last_type gt
@@ -571,6 +593,14 @@ $ `src/tokenizer.nu`
 
     : *Llm m # *Llm ( nurl_alloc Z Llm )
     = __lm_alloc_failed F
+    // nurl_alloc Z = sizeof — plain malloc, so every field must be
+    // assigned; the prof counters are the only ones no later code sets
+    = . m prof_on F
+    = . m prof_attn_ns 0
+    = . m prof_moe_ns 0
+    = . m prof_shexp_ns 0
+    = . m prof_dense_ns 0
+    = . m prof_out_ns 0
     ?? ( env_get `NURLLAMA_PROF` ) { T v → { ( string_free v ) = . m prof_on T } F → {} }
     = . m st 0
     = . m st_embd -1
@@ -1041,6 +1071,8 @@ $ `src/tokenizer.nu`
         ( string_push_int pm / - . m prof_moe_ns . m prof_shexp_ns 1000000 )
         ( string_push_str pm `ms) dense=` )
         ( string_push_int pm / . m prof_dense_ns 1000000 )
+        ( string_push_str pm `ms out=` )
+        ( string_push_int pm / . m prof_out_ns 1000000 )
         ( string_push_str pm `ms` )
         ( nurl_eprintln ( string_data pm ) )
         ( string_free pm )
@@ -1523,6 +1555,7 @@ $ `src/tokenizer.nu`
     // mode 3: greedy argmax + confidence on the DEVICE for every window
     // position, so only count·(id,prob) come back — not count·vocab.
     ? == logits_mode 3 {
+        : i _po ? . m prof_on ( __lm_prof_now m ) 0
         ( lk_rmsnorm . m ks . m xd . m out_norm . m xnd ne . m eps count )
         : b _q10 ( lk_matvec_q . m ks . m tq_output . m w_output . m xnd . m logitsd . m n_vocab ne count )
         ( lk_argmax_conf . m ks . m logitsd . m amid_d . m amprob_d . m n_vocab count )
@@ -1530,6 +1563,7 @@ $ `src/tokenizer.nu`
         : i _u4 ( gpu_download . m amid_h ib )
         : GpuBuffer pb @ GpuBuffer { . m amprob_d * count 4 }
         : i _u5 ( gpu_download . m amprob_h pb )
+        ? . m prof_on { = . m prof_out_ns + . m prof_out_ns - ( __lm_prof_now m ) _po } {}
     } {}
 }
 
