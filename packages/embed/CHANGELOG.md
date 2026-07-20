@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.1
+
+- Widen the gpu requirement to ^0.9: the CUBIN kernel cache removes the
+  driver JIT at start-up, and large model uploads ride the pinned-staged
+  parallel-stripe path. No API change.
+
 ## 0.1.0
 
 Initial release — the pure-NURL embedding server.

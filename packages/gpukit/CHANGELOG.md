@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.1
+
+- Widen the gpu requirement to ^0.9 (shipped with the gpu 0.9.0 publish):
+  device-specific CUBIN kernel cache (no driver JIT at process start) and
+  pinned-staged parallel uploads for large device buffers. No API change.
+
 ## 0.4.0
 
 Dev-layer op family — the kernel library a full CNN / transformer forward

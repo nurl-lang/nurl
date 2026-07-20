@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.4.1
+
+- Widen the gpu requirement to ^0.9 (device-specific CUBIN kernel cache =
+  faster process start; pinned-staged uploads). No API change.
+
 ## 0.4.0
 
 **The timevector is a real sliding window, and the autoencoder version
