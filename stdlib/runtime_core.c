@@ -495,9 +495,26 @@ const char* nurl_str_int(long long n) {
 }
 
 /* Float formatting via printf %g. Kept in C until variadic FFI lands. */
+/* Decimal text for a double. "%g" alone is fixed at 6 significant digits, which
+ * SILENTLY truncates any value needing more — e.g. 41943040 -> "4.1943e+07" =
+ * 41943000, losing the low digits (and it never round-trips). Instead:
+ *   - integer-valued doubles within the exactly-representable range print as a
+ *     plain integer ("41943040") — readable and exact;
+ *   - everything else uses the SHORTEST "%g" form that parses back to the same
+ *     double (1..17 significant digits), so the text always round-trips.
+ * Non-finite values get stable spellings. */
 const char* nurl_str_float(double d) {
     char buf[64];
-    snprintf(buf, sizeof(buf), "%g", d);
+    if (isnan(d)) return strdup("nan");
+    if (isinf(d)) return strdup(d < 0.0 ? "-inf" : "inf");
+    if (d == floor(d) && fabs(d) < 9007199254740992.0) {
+        snprintf(buf, sizeof(buf), "%lld", (long long)d);
+        return strdup(buf);
+    }
+    for (int p = 1; p <= 17; p++) {
+        snprintf(buf, sizeof(buf), "%.*g", p, d);
+        if (strtod(buf, NULL) == d) break;
+    }
     return strdup(buf);
 }
 

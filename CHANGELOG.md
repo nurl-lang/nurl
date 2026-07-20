@@ -8,6 +8,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`nurl_str_float` now round-trips instead of truncating to 6 significant
+  digits.** The runtime formatted every float with `"%g"`, whose default
+  precision is 6 significant digits — so any value needing more was silently
+  truncated and could not be parsed back. A sum of `41943040` printed as
+  `4.1943e+07` (= `41943000`), and `π` printed as `3.14159`. This corrupted
+  float output everywhere it mattered: JSON serialization (`json_float`),
+  `std/fmt`, `std/log`, `std/bytes`, string building. Now an integer-valued
+  double within the exactly-representable range prints as a plain integer
+  (`41943040` — readable and exact), and every other value uses the *shortest*
+  `%g` form that parses back to the identical double (1–17 significant digits),
+  so the text always round-trips. Non-finite values get stable spellings
+  (`nan`, `inf`, `-inf`). Only one test golden changed (`cbor`'s `double_pi`,
+  now the full `3.141592653589793`).
+
 ### Changed
 
 - **Web documentation moved from VitePress to Fumadocs.** The

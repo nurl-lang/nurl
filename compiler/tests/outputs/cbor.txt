@@ -29,7 +29,7 @@ half_neg4: -4
 half_0: 0
 single_100000: 100000
 double_1.1: 1.1
-double_pi: 3.14159
+double_pi: 3.141592653589793
 bytestring: unsupported
 tag: unsupported
 indefinite_arr: unsupported
