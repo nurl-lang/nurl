@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.19.0
+
+**compute_shuffle: cardinality that scales with the cluster, a 16× larger input,
+and a silent-drop bug fixed.** The old caps (8.4 M elements, 65 536 keys) blocked
+real high-cardinality group-by.
+
+- **Overflow detection (correctness fix).** Each chunk reduces its keys into an
+  open-addressing GPU hash table; if the table filled, keys were **silently
+  dropped** and the result was quietly wrong. The kernel now counts probe
+  exhaustions into a dedicated control slot, and the coordinator **rejects** a
+  run whose any chunk overflowed — never a silent drop.
+- **Cardinality scales with the chunk count.** The distinct-key limit is now
+  **per chunk** (~131072, the size of the table a chunk ships back in one relay
+  frame — the ~2 MiB frame ceiling, the same reason datasets travel in 1 MiB
+  blocks), so TOTAL cardinality is that times the chunk count (~2 per GPU
+  worker): hundreds of thousands of keys on one GPU, into the millions across a
+  cluster. (Verified: 200 000 distinct keys on a single GPU, up from 65 536.)
+- **`out_file` for large group tables.** Past 8192 groups the table can't ride a
+  text result, so it is written to `out_file` as raw little-endian `(i64 key,
+  f64 value)` pairs and the result carries `{n_groups, saved_to}`.
+- **Input range 8 388 608 → 134 217 728 (128 M).** The coordinator only merges
+  compact per-chunk tables (not raw pairs), so the row count is no longer the
+  bottleneck — high-VOLUME group-by (many rows, moderate cardinality) now works.
+- Tests: `tests/cudakernel_test.nu` gains overflow-counter generator checks (96
+  total); new `tests/shuffle_bigkeys_smoke.sh` covers a 10 M-row group-by, a
+  200 000-key result via `out_file` (parsed and verified), and rejection of a
+  chunk that overflows its table. `tests/shuffle_smoke.sh` unchanged and green.
+
 ## 0.18.0
 
 **Typed datasets — f32 / i32 / i64, not just f64.** Real data is usually 32-bit;

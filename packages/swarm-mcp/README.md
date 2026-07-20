@@ -310,9 +310,18 @@ block cache means the input moves once. A join is two shuffles into a shared
 key space, combined per key.
 
 The O(N) per-key accumulation runs on the workers, so the coordinator never
-sees the raw pairs — only the reduced tables (far less data when keys are
-few). `hi - lo <= 8388608` and the result is capped at 65536 distinct keys —
-narrow the range or coarsen the key for more.
+sees the raw pairs — only the reduced tables (far less data when keys are few).
+
+**Cardinality scales with the cluster.** Each chunk reduces its keys into a
+hash table it ships back in one relay frame, so distinct keys are bounded
+**per chunk** (~131072). Total cardinality is that times the chunk count
+(~2 per GPU worker) — a few hundred thousand keys on one GPU, into the millions
+across a cluster. A chunk that overflows its table is **rejected with an error**
+(the keys are counted, never silently dropped) — add `--gpu` workers, coarsen
+the key, or narrow the range. The input range goes up to **128 M** elements
+(`hi - lo`). Group tables past 8192 entries are returned via **`out_file`** as
+raw little-endian `(i64 key, f64 value)` pairs (`{n_groups, saved_to}`), since
+a large table can't ride a text result.
 
 ## Iterative algorithms — the loop runs in the engine
 
@@ -566,9 +575,11 @@ The envelope, stated plainly (and queryable at run time via `swarm_help
   coordinator keeps only the block manifest). **Element type** is `f64`
   (default), `f32`, `i32`, or `i64` via `dtype`; struct/record data must be
   encoded into one of these numeric widths yourself.
-- **Shuffle** ≤ 8,388,608 input elements *and* ≤ 65,536 distinct keys per call
-  (the intermediate/result bound). High-cardinality group-by must be
-  partitioned or the key coarsened.
+- **Shuffle** ≤ 128 M input elements per call; distinct keys are bounded **per
+  chunk** (~131072), so total cardinality scales with the worker count (hundreds
+  of thousands on one GPU, millions across a cluster). A chunk exceeding its
+  table errors (never a silent drop); group tables past 8192 entries return via
+  `out_file`.
 - **Sample** ≤ 1,048,576 values returned; **histogram** ≤ 1,048,576 bins.
   **Iterate** `state ≤ 4096`, `acc_dim ≤ 65,536`, `rounds ≤ 100,000`.
 - **Fault tolerance:** a **relay** failure is survived (failover — workers and
@@ -622,6 +633,10 @@ NURL_STDLIB=<repo> ../../nurl.sh tests/cudakernel_test.nu /tmp/ck && /tmp/ck
 # typed datasets (needs a GPU): reduce an f32 and an i32 dataset on the GPU and
 # check each sum matches numpy (accumulated in float64, as the GPU does)
 ./tests/typed_smoke.sh
+
+# shuffle at the lifted limits (needs a GPU): 10 M-row group-by, 200k-key result
+# via out_file, and rejection of a chunk that overflows its table
+./tests/shuffle_bigkeys_smoke.sh
 
 # wasm path (needs wasmtime): compile a kernel to module.wasm, then
 swarm-mcp runwasm 127.0.0.1 47700 sum 1 1000000 module.wasm --token mysecret

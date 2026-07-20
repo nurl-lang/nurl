@@ -244,12 +244,18 @@ $ `wasmkernel.nu`
         ( string_push_str cu `        unsigned long long h = (unsigned long long)kk;\n` )
         ( string_push_str cu `        h ^= h >> 33; h *= 0xff51afd7ed558ccdULL; h ^= h >> 33;\n` )
         ( string_push_str cu `        long long start = (long long)(h & (unsigned long long)(K - 1));\n` )
-        ( string_push_str cu `        for (long long probe = 0; probe < K; probe++) {\n` )
+        ( string_push_str cu `        long long probe;\n` )
+        ( string_push_str cu `        for (probe = 0; probe < K; probe++) {\n` )
         ( string_push_str cu `            long long s = (start + probe) & (K - 1);\n` )
         ( string_push_str cu `            unsigned long long* kp = (unsigned long long*)&ok[2*s];\n` )
         ( string_push_str cu `            unsigned long long cur = atomicCAS(kp, (unsigned long long)EMPTY, (unsigned long long)kk);\n` )
         ( string_push_str cu `            if (cur == (unsigned long long)EMPTY || (long long)cur == kk) { swarm_atomic_op(&out[2*s + 1], vv); break; }\n` )
-        ( string_push_str cu `        }\n    }\n}\n` )
+        ( string_push_str cu `        }\n` )
+        // probe exhausted the whole table → the key did not fit. Count it in a
+        // dedicated control slot at index K so the coordinator can reject the
+        // result instead of silently dropping keys (needs a bigger max_keys).
+        ( string_push_str cu `        if (probe == K) atomicAdd((unsigned long long*)&ok[2*K], 1ULL);\n` )
+        ( string_push_str cu `    }\n}\n` )
         ( string_free rc )
     } {
         ? == mode ( gpu_mode_vecreduce ) {
@@ -519,12 +525,15 @@ $ `wasmkernel.nu`
         ? == mode ( gpu_mode_shuffle_reduce ) {
             // K-slot open-addressing table: 16 bytes/slot (i64 key, f64 val).
             // Pre-init keys to EMPTY (LLONG_MIN) and vals to the reduce identity.
-            ( __pl w `    : i obytes * kbins 16` )
+            // One EXTRA slot (index K) is an overflow counter, zero-initialised.
+            ( __pl w `    : i obytes * + kbins 1 16` )
             ( __pl w `    : *u zh ( nurl_alloc obytes )` )
             ( __pl w `    : ~ i zk 0` )
             ( string_push_str w `    ~ < zk kbins { ( nurl_poke zh * zk 2 << 1 63 ) ( nurl_poke zh + * zk 2 1 ` )
             ( string_push_str w ( __reduce_ident_bits op ) )
             ( __pl w ` ) = zk + zk 1 }` )
+            ( __pl w `    ( nurl_poke zh * kbins 2 0 )` )
+            ( __pl w `    ( nurl_poke zh + * kbins 2 1 0 )` )
         } {
             ( __pl w `    : i obytes * kbins 8` )
             ( __pl w `    : *u zh ( nurl_alloc obytes )` )
