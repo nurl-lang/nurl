@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.9.0
+
+- **Pinned-staged uploads.** `gpu_upload` copies of 64 MB or more go
+  through two page-locked staging buffers with `cuMemcpyHtoDAsync`, so
+  the host memcpy of chunk N+1 overlaps the DMA of chunk N, and the
+  chunk memcpy itself runs as four parallel stripes (a single thread
+  copying out of the page cache tops out around 5 GB/s, which — not
+  PCIe — is the upload wall at model sizes). Serial fallback when
+  thread spawn or pinned allocation fails; `gpu_staging_free` releases
+  the buffers once a loader is done. New bindings: `cuda_host_alloc`,
+  `cuda_host_free`, `cuda_htod_async`, `cuda_stream_sync`.
+- **`gpu_host_register` / `gpu_host_unregister`** — page-lock an
+  existing host range (e.g. a small mmap'd region) so uploads out of it
+  are direct DMA; uploads whose source lies in the registered range
+  skip the staging path. Note: registering a whole multi-GB model file
+  measures ~1 GB/s on Linux, so for big files staging wins.
+
 ## 0.8.0
 
 - **CUBIN kernel cache (CUDA).** `gpu_compile` now compiles straight to a
