@@ -19,7 +19,7 @@ export function VersionBadges() {
   const repoUrl = `https://github.com/${gitConfig.user}/${gitConfig.repo}`;
 
   return (
-    <div className="mt-2 flex flex-wrap items-center gap-2">
+    <div className="m-2 flex flex-wrap items-center gap-2 jusify-between">
       <Pill href={`${repoUrl}/blob/${gitConfig.branch}/CHANGELOG.md`}>
         NURL {siteFacts.nurlVersion}
       </Pill>
