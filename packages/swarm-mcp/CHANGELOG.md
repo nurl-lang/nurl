@@ -1,5 +1,61 @@
 # Changelog
 
+## 0.15.0
+
+**`compute_iterate` is now a general fixpoint solver, not just gradient descent.**
+
+The iteration engine already ran the whole loop in the coordinator — distributed
+accumulate, block-cached data, convergence — but the *step rule* was hardcoded to
+`state[j] -= lr*grad[j]/N`, and the accumulator was forced to be the same width as
+the state. That made it a one-trick gradient-descent tool: k-means, EM, power
+iteration, PageRank, or any optimizer with its own state (momentum, Adam) had no
+native path. Two changes lift that ceiling, without a workaround and without
+breaking the existing SGD path:
+
+- **A pluggable `update` device function.** Provide
+  `__device__ double update(long long j, const double* p)` returning the new
+  `state[j]`, and it replaces the built-in SGD step. Inside it, named accessors
+  read the packed inputs — `swarm_state(i)`, `swarm_acc(i)` (the reduced
+  accumulator from `grad()`), `swarm_N`, `swarm_param(i)`, with `swarm_dim` and
+  `swarm_adim` for loops (a norm or per-group reduce over the accumulator). It
+  runs as a tiny GPU pass over `[0, S)` each round, reusing the sample mode — so a
+  global reduction like a normalization is just a loop over `swarm_acc` inside
+  `update`. Omit it and the default `lr`-driven SGD step is unchanged.
+- **The accumulator dimension is decoupled from the state.** `acc_dim` (default:
+  the state length) sizes the vector `grad()` scatters into, so a 2-centroid
+  k-means can reduce into a 4-wide `[sum0, sum1, count0, count1]` accumulator and
+  the update reads `sum/count`. Optimizer state (momentum, Adam moments) rides
+  inside `state` and the update rewrites it — no engine support needed.
+- **Constant runtime `params`.** An optional array, the same every round,
+  readable by `grad()` at `p[state_len..]` and by `update()` via `swarm_param(i)`
+  — a learning rate for a custom step, a damping factor, a small fixed matrix.
+- `lr` is no longer required (only in the default SGD mode); `state` and the
+  result stay indexed by the state length `S`. Fully backward compatible: an
+  existing `{cuda, state, lr, ...}` call runs the identical SGD loop.
+- Tests: `tests/cudakernel_test.nu` grows 10 update-kernel generator checks (87
+  total); new `tests/general_smoke.sh` fits **1D k-means live on the GPU** (a
+  4-wide accumulator, `sum/count` update) and matches a faithful numpy Lloyd
+  oracle over the identical data. `tests/iterate_smoke.sh` (the SGD path) is
+  unchanged and still green.
+
+**A `swarm_help` tool, and a leaner tool surface.**
+
+- **`swarm_help`** — on-demand, topic-queryable guidance so the model can learn
+  the parts an LLM won't infer from a one-line schema: `overview`, `workflow`,
+  `expr`, `cuda` (the shared device-function ABI), `iterate`, `shuffle`,
+  `datasets`, `gpu`, `limits`, and `troubleshooting`. Omit the topic for the
+  index. The `limits` topic states the honest envelope (dataset ≤ 256 MiB and
+  f64-only, shuffle ≤ 65 536 keys, no worker-level chunk redispatch, the
+  single-coordinator run) so a caller designs around the edges instead of
+  hitting them blind.
+- **The tool schemas are now deliberately short**, deferring depth to
+  `swarm_help`: `tools/list` dropped from ~5.7k to ~3.9k tokens (−31%) *with the
+  new help tool included* — each tool still carries its signature, an example,
+  and a pointer to the relevant help topic.
+- Doc fix: the dataset block size is **1 MiB** (it always was, in code); several
+  comments and the `compute_upload_data` description that said "8 MiB" are
+  corrected. `serverInfo.version` now reports the package version.
+
 ## 0.14.0
 
 **The shuffle's per-key reduce now runs distributed on the GPU (a combiner).**

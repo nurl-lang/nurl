@@ -578,3 +578,32 @@ $ `wasmkernel.nu`
     ( __pl w `@ main → i { ^ ( __swarmc_main ) }` )
     ^ w
 }
+
+// ── the update kernel (compute_iterate's general step rule) ───────────
+// The iteration engine's per-round update — new_state[j] = update(j, …) — is
+// nothing but a sample over [0, S): the model's update() runs once per state
+// component with the whole state, the reduced accumulator, N and the runtime
+// params in scope. It rides the ordinary sample mode; we only wrap the model's
+// update() in the sample interface (f(x, p)) and expose named accessors into
+// the packed param buffer p = [state (S) | acc (A) | N | params…].
+//
+//   __device__ double update(long long j, const double* p)
+//       swarm_state(i)  — the current parameter vector, p[0..S)
+//       swarm_acc(i)    — the reduced accumulator from grad(), p[S..S+A)
+//       swarm_N         — the element count over the range/dataset
+//       swarm_param(i)  — the runtime params (learning rate, etc.)
+//       swarm_dim/swarm_adim — S and A, for looping (norms, per-group reduce)
+@ cuda_wrap_update s user i S i A → String {
+    : String eff ( string_new )
+    ( string_push_str eff `#define swarm_dim ` ) ( string_push_str eff ( nurl_str_int S ) ) ( string_push_char eff 10 )
+    ( string_push_str eff `#define swarm_adim ` ) ( string_push_str eff ( nurl_str_int A ) ) ( string_push_char eff 10 )
+    ( string_push_str eff `#define swarm_state(i) (p[(i)])` ) ( string_push_char eff 10 )
+    ( string_push_str eff `#define swarm_acc(i) (p[swarm_dim + (i)])` ) ( string_push_char eff 10 )
+    ( string_push_str eff `#define swarm_N (p[swarm_dim + swarm_adim])` ) ( string_push_char eff 10 )
+    ( string_push_str eff `#define swarm_param(i) (p[swarm_dim + swarm_adim + 1 + (i)])` ) ( string_push_char eff 10 )
+    ( string_push_str eff user ) ( string_push_char eff 10 )
+    ( string_push_str eff `__device__ double f(long long x, const double* p) { return update(x, p); }` )
+    : String out ( cuda_wrap ( string_data eff ) 0 ( gpu_mode_sample ) 1 0 )
+    ( string_free eff )
+    ^ out
+}

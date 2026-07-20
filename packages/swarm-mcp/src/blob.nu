@@ -5,7 +5,7 @@
 // N times. This layer makes data transfer content-addressed and one-shot:
 //
 //   * a dataset is cut on a FIXED absolute grid of blocks
-//     (BLOB_BLOCK_VALS f64 values = 8 MiB; the last block may be short);
+//     (BLOB_BLOCK_VALS f64 values = 1 MiB; the last block may be short);
 //     each block is keyed by its BLAKE3-256 (stdlib/std/hash_blake3.nu),
 //   * a worker caches blocks on disk ($TMPDIR/swarmb_<hex>.blob), verified
 //     against the hash on arrival — a re-submit or the next iteration
