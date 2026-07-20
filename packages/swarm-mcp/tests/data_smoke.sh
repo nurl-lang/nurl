@@ -46,7 +46,7 @@ with open(path, "wb") as f:
         f.write(struct.pack("<d", k * 1e-3))
 print("expected sum: %g" % (1e-3 * n * (n - 1) / 2))
 PY
-EXPECT="1.125e+09"
+EXPECT="1124999250"
 
 echo "[data-smoke] starting node on :$PORT / :$MCPP"
 WASMTIME="$WT" "$BIN" --token "$TOKEN" --relay --worker --gpu --mcp \

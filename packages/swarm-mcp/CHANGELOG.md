@@ -1,5 +1,43 @@
 # Changelog
 
+## 0.17.0
+
+**Datasets far larger than coordinator RAM — streamed from disk (up to 64 GiB).**
+
+A dataset was capped at 256 MiB because `compute_upload_data` held the whole
+thing in the coordinator's memory. Yet the transfer/cache unit is already a
+content-addressed 1 MiB block, so holding the raw bytes was never necessary.
+
+- **File uploads now stream.** A `{"file": …}` upload is hashed block by block
+  straight from disk into the content-address manifest (min/max/mean computed in
+  the same one pass), and later block seeds are read from the file on demand. The
+  coordinator retains only the manifest (32 bytes/block), never the data — so a
+  dataset is bounded by disk, not RAM. The cap rises from 256 MiB to **64 GiB**
+  for file uploads (base64 uploads stay 256 MiB, since those bytes ride the
+  request into memory). The result reports `file_backed: true`.
+- **Size-aware sharding.** A chunk's data is assembled in a worker's RAM and
+  uploaded to its GPU, so the chunk count now grows with the dataset (chunk bytes
+  capped at 256 MiB) — a multi-GB dataset shards into worker-sized pieces instead
+  of a few multi-GB chunks no GPU could hold.
+
+**Fixed a precision bug in result serialization (affected any large float).**
+
+While verifying the above, large reduce results came back subtly wrong — e.g. a
+sum of 41,943,040 reported as 41,943,000. Root cause: the runtime's
+`nurl_str_float` formats with `"%g"` (6 significant digits), silently truncating
+any float past ~1e6. This hit every float result, not just datasets. Results are
+now rendered **exactly** for integer-valued numbers (formatted via i64), so
+reduce/count sums are precise; genuinely fractional values still use `%g` for
+now (the deeper fix — a round-trip `nurl_str_float` — belongs in the runtime and
+is tracked separately). `gpu_smoke.sh`'s assertions were updated from the old
+lossy strings to the exact values.
+
+- Tests: new `tests/bigdata_smoke.sh` (needs a GPU) uploads a **320 MiB file**
+  (over the old cap), reduces it to the exact sum, and asserts the coordinator's
+  **peak RSS stays far below the file size** (proving it streams — measured ~181
+  MiB for a 320 MiB file). All existing smokes (`gpu_smoke`, `iterate`,
+  `general`, `faulttol`, `data`) remain green; offline generator 87/0.
+
 ## 0.16.0
 
 **In-computation fault tolerance: a worker death mid-task no longer loses the job.**
