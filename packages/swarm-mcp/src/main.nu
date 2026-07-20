@@ -1761,6 +1761,35 @@ $ `cudakernel.nu`
     ^ nf
 }
 
+// Retry a round / update a few times before giving up. A round is idempotent
+// (grad is a pure function of the current state; the update only overwrites
+// state on success), so re-running recovers a TRANSIENT chunk failure — a GPU
+// hiccup, a briefly-overloaded worker, a dropped frame — without losing the
+// whole iterate run. (A permanently-dead worker on a dataset round still needs a
+// resubmit; see swarm_help "limits".)
+@ __ft_round_retries → i { ^ 3 }
+
+@ __iterate_round_ft * Swarm sw ( Vec u ) wasm i S i A ( Vec i ) xparams i rlo i rhi ( Vec f ) state i dsid ( Vec String ) seeded * u nseed_cell ( Vec f ) grad → i {
+    : ~ i nf 1
+    : ~ i att 0
+    ~ & > nf 0 < att ( __ft_round_retries ) {
+        ( nurl_poke nseed_cell 0 0 )
+        = nf ( __iterate_round sw wasm S A xparams rlo rhi state dsid seeded nseed_cell grad )
+        = att + att 1
+    }
+    ^ nf
+}
+
+@ __iterate_update_ft * Swarm sw ( Vec u ) uwasm i S i A ( Vec f ) grad i N ( Vec i ) xparams ( Vec f ) state → i {
+    : ~ i nf 1
+    : ~ i att 0
+    ~ & > nf 0 < att ( __ft_round_retries ) {
+        = nf ( __iterate_update sw uwasm S A grad N xparams state )
+        = att + att 1
+    }
+    ^ nf
+}
+
 @ tool_iterate Json args → Json {
     : ?Json cj ( json_obj_get args `cuda` )
     : ?Json sj ( json_obj_get args `state` )
@@ -1902,7 +1931,7 @@ $ `cudakernel.nu`
     : ~ i rnd 0
     ~ & < rnd rounds ! converged {
         ( nurl_poke nseed 0 0 )
-        : i nf ( __iterate_round sw wasm S A xparams rlo rhi state dsid . st seeded nseed grad )
+        : i nf ( __iterate_round_ft sw wasm S A xparams rlo rhi state dsid . st seeded nseed grad )
         = total_seeded + total_seeded ( nurl_peek nseed 0 )
         ? > nf 0 { = failed nf = rnd rounds } {
             ? have_update {
@@ -1911,7 +1940,7 @@ $ `cudakernel.nu`
                 ( vec_clear [f] prev )
                 : ~ i sj 0
                 ~ < sj S { ( vec_push [f] prev ?? ( vec_get [f] state sj ) { T x → x F → 0.0 } ) = sj + sj 1 }
-                : i nfu ( __iterate_update sw uwasm S A grad N xparams state )
+                : i nfu ( __iterate_update_ft sw uwasm S A grad N xparams state )
                 ? > nfu 0 { = failed nfu = rnd rounds } {
                     : ~ f dmax 0.0
                     : ~ i j 0
@@ -2769,7 +2798,7 @@ $ `cudakernel.nu`
 }
 
 @ __help_limits → s {
-    ^ `Read this before scaling. The current envelope and the edges that are NOT yet supported:\n  Dataset size: an inline "data_base64" upload is <= 256 MiB (held in memory); a "file" upload is STREAMED from disk and can be up to 64 GiB (the coordinator keeps only the block manifest, not the data). Big datasets shard into worker-sized chunks automatically.\n  Data type: numeric only — "dtype" is f64 (default), f32, i32, or i64 (stored natively, promoted to double on the GPU). No struct/record datasets; encode categorical/mixed data into one of these numeric widths yourself.\n  Shuffle: <= 128 M input elements per call. Distinct keys are bounded PER CHUNK (~131072 — the table a chunk ships back in one relay frame), so TOTAL cardinality scales with the chunk count (~2 per GPU worker): a few hundred thousand on one GPU, into the millions across a cluster. A chunk exceeding its table is rejected (never a silent drop) — add workers, coarsen the key, or narrow the range. Group tables past 8192 entries come back via out_file (raw i64/f64 pairs).\n  Sample: <= 1,048,576 values returned (inline <= 65,536; beyond needs out_file). Histogram: <= 1,048,576 bins.\n  Iterate: state <= 4096 components, acc_dim <= 65,536, rounds <= 100,000. SGD is built in; any other step rule goes through an "update" device function (topic "iterate").\n  Fault tolerance: a RELAY failure is survived (--connect several relays → the cluster converges on a survivor mid-flight). A WORKER that dies or traps mid-task is now auto-redispatched for the non-dataset GPU tools (compute_submit_cuda / _sample_cuda / _histogram_cuda): the coordinator re-routes the lost chunk to another worker (the task's "retries" field counts this), and only reports failed_chunks if the chunk fails everywhere after several attempts. NOT yet auto-redispatched: dataset-backed tasks (a fresh worker would need the data blocks re-seeded — resubmit to retry; blocks stay cached so it is cheap), and the in-call loops compute_iterate / compute_shuffle (a chunk failure ends the call — resubmit).\n  Coordinator: the single --mcp node runs the iterate/shuffle loop and merges partials; it is not hot-redundant, so an IN-FLIGHT iterate/shuffle call is lost if it crashes mid-run. But it is now CRASH-RESTARTABLE: datasets are persisted to $HOME/.swarm-mcp/datasets/ and reloaded on startup, so a restarted coordinator recovers its dataset registry and a resubmit re-seeds from the persisted bytes (workers' cached blocks are confirmed, not recomputed). Recovery is a restart away; only the interrupted call must be resubmitted.\nThese are known edges, not bugs — design around them or split the work.`
+    ^ `Read this before scaling. The current envelope and the edges that are NOT yet supported:\n  Dataset size: an inline "data_base64" upload is <= 256 MiB (held in memory); a "file" upload is STREAMED from disk and can be up to 64 GiB (the coordinator keeps only the block manifest, not the data). Big datasets shard into worker-sized chunks automatically.\n  Data type: numeric only — "dtype" is f64 (default), f32, i32, or i64 (stored natively, promoted to double on the GPU). No struct/record datasets; encode categorical/mixed data into one of these numeric widths yourself.\n  Shuffle: <= 128 M input elements per call. Distinct keys are bounded PER CHUNK (~131072 — the table a chunk ships back in one relay frame), so TOTAL cardinality scales with the chunk count (~2 per GPU worker): a few hundred thousand on one GPU, into the millions across a cluster. A chunk exceeding its table is rejected (never a silent drop) — add workers, coarsen the key, or narrow the range. Group tables past 8192 entries come back via out_file (raw i64/f64 pairs).\n  Sample: <= 1,048,576 values returned (inline <= 65,536; beyond needs out_file). Histogram: <= 1,048,576 bins.\n  Iterate: state <= 4096 components, acc_dim <= 65,536, rounds <= 100,000. SGD is built in; any other step rule goes through an "update" device function (topic "iterate").\n  Fault tolerance: a RELAY failure is survived (--connect several relays → the cluster converges on a survivor mid-flight). A WORKER that dies or traps mid-task is now auto-redispatched for the non-dataset GPU tools (compute_submit_cuda / _sample_cuda / _histogram_cuda): the coordinator re-routes the lost chunk to another worker (the task's "retries" field counts this), and only reports failed_chunks if the chunk fails everywhere after several attempts. compute_iterate retries a failed round a few times in place (recovering a transient GPU/worker/frame hiccup without losing the whole run). NOT yet auto-redispatched: dataset-backed tasks routed to a permanently-dead worker (a fresh worker would need the data blocks re-seeded — resubmit to retry; blocks stay cached so it is cheap), and compute_shuffle (a chunk failure ends the call — resubmit).\n  Coordinator: the single --mcp node runs the iterate/shuffle loop and merges partials; it is not hot-redundant, so an IN-FLIGHT iterate/shuffle call is lost if it crashes mid-run. But it is now CRASH-RESTARTABLE: datasets are persisted to $HOME/.swarm-mcp/datasets/ and reloaded on startup, so a restarted coordinator recovers its dataset registry and a resubmit re-seeds from the persisted bytes (workers' cached blocks are confirmed, not recomputed). Recovery is a restart away; only the interrupted call must be resubmitted.\nThese are known edges, not bugs — design around them or split the work.`
 }
 
 @ __help_troubleshooting → s {

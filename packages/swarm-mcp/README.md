@@ -281,9 +281,13 @@ reported as a `failed_chunks` error, exactly as before.
 {"task_id":1, "status":"done", "result":800000000, "retries":4}
 ```
 
-Not yet covered (documented in `swarm_help "limits"`): dataset-backed tasks (a
-fresh worker would need the data blocks re-seeded first — resubmit to retry,
-blocks stay cached) and the in-call loops `compute_iterate` / `compute_shuffle`.
+`compute_iterate` additionally **retries a failed round in place** a few times —
+a round is idempotent (the gradient is a pure function of the state; the update
+only writes state on success), so a transient hiccup doesn't throw away a whole
+multi-round run. Not yet covered (documented in `swarm_help "limits"`):
+dataset-backed tasks routed to a *permanently-dead* worker (a fresh worker would
+need the blocks re-seeded — resubmit to retry, blocks stay cached) and
+`compute_shuffle`.
 
 ## Surviving a coordinator restart — dataset persistence
 

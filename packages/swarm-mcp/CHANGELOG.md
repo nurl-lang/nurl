@@ -26,6 +26,14 @@ single point of failure for datasets.
   persisted copy). `gpu_smoke` / `data_smoke` (which also persist now) unchanged
   and green.
 
+**compute_iterate retries a transient round failure in place.** A round is
+idempotent (the gradient is a pure function of the current state; the update only
+overwrites state on success), so a failed round is re-run a few times before the
+call gives up — a GPU hiccup, a briefly-overloaded worker, or a dropped frame no
+longer throws away a whole multi-round GD/fixpoint run. (A permanently-dead
+worker on a dataset round still needs a resubmit; `compute_shuffle` likewise.)
+`iterate_smoke` / `general_smoke` unchanged and green.
+
 ## 0.19.0
 
 **compute_shuffle: cardinality that scales with the cluster, a 16× larger input,
