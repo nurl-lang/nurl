@@ -1761,6 +1761,35 @@ $ `cudakernel.nu`
     ^ nf
 }
 
+// Retry a round / update a few times before giving up. A round is idempotent
+// (grad is a pure function of the current state; the update only overwrites
+// state on success), so re-running recovers a TRANSIENT chunk failure — a GPU
+// hiccup, a briefly-overloaded worker, a dropped frame — without losing the
+// whole iterate run. (A permanently-dead worker on a dataset round still needs a
+// resubmit; see swarm_help "limits".)
+@ __ft_round_retries → i { ^ 3 }
+
+@ __iterate_round_ft * Swarm sw ( Vec u ) wasm i S i A ( Vec i ) xparams i rlo i rhi ( Vec f ) state i dsid ( Vec String ) seeded * u nseed_cell ( Vec f ) grad → i {
+    : ~ i nf 1
+    : ~ i att 0
+    ~ & > nf 0 < att ( __ft_round_retries ) {
+        ( nurl_poke nseed_cell 0 0 )
+        = nf ( __iterate_round sw wasm S A xparams rlo rhi state dsid seeded nseed_cell grad )
+        = att + att 1
+    }
+    ^ nf
+}
+
+@ __iterate_update_ft * Swarm sw ( Vec u ) uwasm i S i A ( Vec f ) grad i N ( Vec i ) xparams ( Vec f ) state → i {
+    : ~ i nf 1
+    : ~ i att 0
+    ~ & > nf 0 < att ( __ft_round_retries ) {
+        = nf ( __iterate_update sw uwasm S A grad N xparams state )
+        = att + att 1
+    }
+    ^ nf
+}
+
 @ tool_iterate Json args → Json {
     : ?Json cj ( json_obj_get args `cuda` )
     : ?Json sj ( json_obj_get args `state` )
@@ -1902,7 +1931,7 @@ $ `cudakernel.nu`
     : ~ i rnd 0
     ~ & < rnd rounds ! converged {
         ( nurl_poke nseed 0 0 )
-        : i nf ( __iterate_round sw wasm S A xparams rlo rhi state dsid . st seeded nseed grad )
+        : i nf ( __iterate_round_ft sw wasm S A xparams rlo rhi state dsid . st seeded nseed grad )
         = total_seeded + total_seeded ( nurl_peek nseed 0 )
         ? > nf 0 { = failed nf = rnd rounds } {
             ? have_update {
@@ -1911,7 +1940,7 @@ $ `cudakernel.nu`
                 ( vec_clear [f] prev )
                 : ~ i sj 0
                 ~ < sj S { ( vec_push [f] prev ?? ( vec_get [f] state sj ) { T x → x F → 0.0 } ) = sj + sj 1 }
-                : i nfu ( __iterate_update sw uwasm S A grad N xparams state )
+                : i nfu ( __iterate_update_ft sw uwasm S A grad N xparams state )
                 ? > nfu 0 { = failed nfu = rnd rounds } {
                     : ~ f dmax 0.0
                     : ~ i j 0
@@ -2266,6 +2295,135 @@ $ `cudakernel.nu`
     ^ `f64`
 }
 
+// ── coordinator dataset persistence (crash-restart recovery) ─────────
+// The coordinator holds the dataset registry (manifests) in RAM; if the --mcp
+// node restarts, that is lost even though the workers still cache the blocks.
+// Persist each dataset to $HOME/.swarm-mcp/datasets/ on upload and reload it on
+// startup, so a restarted coordinator recovers its datasets and a resubmit
+// re-seeds from the persisted bytes (cheap — content-addressed, cached blocks
+// are confirmed, not recomputed). This does not make an in-flight run survive a
+// coordinator crash (no hot standby), but recovery is a restart away.
+@ __ds_dir → String {
+    : String home ( env_var_or `HOME` `/tmp` )
+    : String d ( string_new )
+    ( string_push_str d ( string_data home ) )
+    ( string_push_str d `/.swarm-mcp/datasets` )
+    ^ d
+}
+
+@ __ds_file String dir i id s ext → String {
+    : String p ( string_new )
+    ( string_push_str p ( string_data dir ) )
+    ( string_push_str p `/ds_` )
+    ( string_push_int p id )
+    ( string_push_char p 46 )
+    ( string_push_str p ext )
+    ^ p
+}
+
+@ __free_strvec ( Vec String ) v → v {
+    : i n ( vec_len [String] v )
+    : ~ i k 0
+    ~ < k n { ?? ( vec_get [String] v k ) { T s → ( string_free s ) F → {} } = k + k 1 }
+    ( vec_free [String] v )
+}
+
+@ __strvec_at ( Vec String ) v i i → s { ^ ?? ( vec_get [String] v i ) { T x → ( string_data x ) F → `` } }
+
+@ __ds_persist * Dataset d ( Vec u ) rawbytes → v {
+    : String dir ( __ds_dir )
+    ?? ( dir_create_all ( string_data dir ) ) { T _ → {} F e → { ( string_free dir ) ^ v } }
+    // where the bytes live on disk: the original file, or a written .data copy
+    : ~ String dpath ( string_from ( string_data . d path ) )
+    ? & == ( string_len . d path ) 0 > ( vec_len [u] rawbytes ) 0 {
+        : String df ( __ds_file dir . d id `data` )
+        ?? ( write_file_bytes ( string_data df ) rawbytes ) { T _ → { ( string_free dpath ) = dpath ( string_from ( string_data df ) ) } F e → {} }
+        ( string_free df )
+    } {}
+    // manifest: concatenated 32-byte block hashes
+    : ( Vec u ) man ( vec_new [u] )
+    : i nb ( vec_len [( Vec u )] . d blocks )
+    : ~ i k 0
+    ~ < k nb { ?? ( vec_get [( Vec u )] . d blocks k ) { T h → { ( vec_extend [u] man h ) } F → {} } = k + k 1 }
+    : String mf ( __ds_file dir . d id `manifest` )
+    ?? ( write_file_bytes ( string_data mf ) man ) { T _ → {} F e → {} }
+    ( vec_free [u] man ) ( string_free mf )
+    // meta: id / dtype / nbytes / data-path / name, one per line
+    : String meta ( string_new )
+    ( string_push_int meta . d id ) ( string_push_char meta 10 )
+    ( string_push_int meta . d dtype ) ( string_push_char meta 10 )
+    ( string_push_int meta . d nbytes ) ( string_push_char meta 10 )
+    ( string_push_str meta ( string_data dpath ) ) ( string_push_char meta 10 )
+    ( string_push_str meta ( string_data . d name ) ) ( string_push_char meta 10 )
+    : String mef ( __ds_file dir . d id `meta` )
+    ?? ( write_file ( string_data mef ) ( string_data meta ) ) { T _ → {} F e → {} }
+    ( string_free meta ) ( string_free mef ) ( string_free dpath ) ( string_free dir )
+}
+
+// Reload every persisted dataset into the (freshly initialised) McpState.
+@ __ds_load_all → v {
+    : *McpState st # *McpState g_mcp
+    : String dir ( __ds_dir )
+    : ~ i maxid 0
+    : ~ i loaded 0
+    ?? ( dir_list ( string_data dir ) ) {
+        T entries → {
+            : i n ( vec_len [String] entries )
+            : ~ i e 0
+            ~ < e n {
+                : s en ( __strvec_at entries e )
+                ? >= ( nurl_str_find en `.meta` ) 0 {
+                    : String full ( string_new )
+                    ( string_push_str full ( string_data dir ) ) ( string_push_char full 47 ) ( string_push_str full en )
+                    ?? ( read_file ( string_data full ) ) {
+                        T txt → {
+                            : ( Vec String ) lines ( string_split txt `\n` )
+                            ? >= ( vec_len [String] lines ) 5 {
+                                : i id ( nurl_str_to_int ( __strvec_at lines 0 ) )
+                                : i dtype ( nurl_str_to_int ( __strvec_at lines 1 ) )
+                                : i nbytes ( nurl_str_to_int ( __strvec_at lines 2 ) )
+                                : String mf ( __ds_file dir id `manifest` )
+                                ?? ( read_file_bytes ( string_data mf ) ) {
+                                    T manbytes → {
+                                        : ( Vec ( Vec u ) ) blocks ( vec_new [( Vec u )] )
+                                        : i nblk / ( vec_len [u] manbytes ) 32
+                                        : ~ i b 0
+                                        ~ < b nblk { ( vec_push [( Vec u )] blocks ( bytes_slice manbytes * b 32 + * b 32 32 ) ) = b + b 1 }
+                                        : *Dataset ds # *Dataset ( nurl_alloc Z Dataset )
+                                        = . ds id id
+                                        = . ds name ( string_from ( __strvec_at lines 4 ) )
+                                        = . ds bytes ( vec_new [u] )
+                                        = . ds path ( string_from ( __strvec_at lines 3 ) )
+                                        = . ds nbytes nbytes
+                                        = . ds dtype dtype
+                                        = . ds blocks blocks
+                                        ( vec_push [s] . st datasets # s ds )
+                                        ? > id maxid { = maxid id } {}
+                                        = loaded + loaded 1
+                                        ( vec_free [u] manbytes )
+                                    }
+                                    F e → {}
+                                }
+                                ( string_free mf )
+                            } {}
+                            ( __free_strvec lines )
+                            ( string_free txt )
+                        }
+                        F e → {}
+                    }
+                    ( string_free full )
+                } {}
+                = e + e 1
+            }
+            ( __free_strvec entries )
+        }
+        F e → {}
+    }
+    ? > maxid 0 { = . st next_ds + maxid 1 } {}
+    ( string_free dir )
+    ? > loaded 0 { ( nurl_print `swarm-mcp: recovered ` ) ( nurl_print ( nurl_str_int loaded ) ) ( nurl_print ` dataset(s) from disk\n` ) } {}
+}
+
 // Register a dataset from its manifest, augmenting the already-built stats
 // object `o` (min/max/mean) with dataset_id/name/count/dtype, and returning it.
 @ __ds_register s name ( Vec u ) bytes String path i nbytes i dtype ( Vec ( Vec u ) ) blocks Json o → Json {
@@ -2280,6 +2438,7 @@ $ `cudakernel.nu`
     = . d dtype dtype
     = . d blocks blocks
     ( vec_push [s] . st datasets # s d )
+    ( __ds_persist d . d bytes )
     ( json_obj_set o `dataset_id` ( json_int . d id ) )
     ? > ( nurl_str_len name ) 0 { ( json_obj_set o `name` ( json_str_lit name ) ) } {}
     ( json_obj_set o `count` ( json_int ( ds_count_of d ) ) )
@@ -2639,7 +2798,7 @@ $ `cudakernel.nu`
 }
 
 @ __help_limits → s {
-    ^ `Read this before scaling. The current envelope and the edges that are NOT yet supported:\n  Dataset size: an inline "data_base64" upload is <= 256 MiB (held in memory); a "file" upload is STREAMED from disk and can be up to 64 GiB (the coordinator keeps only the block manifest, not the data). Big datasets shard into worker-sized chunks automatically.\n  Data type: numeric only — "dtype" is f64 (default), f32, i32, or i64 (stored natively, promoted to double on the GPU). No struct/record datasets; encode categorical/mixed data into one of these numeric widths yourself.\n  Shuffle: <= 128 M input elements per call. Distinct keys are bounded PER CHUNK (~131072 — the table a chunk ships back in one relay frame), so TOTAL cardinality scales with the chunk count (~2 per GPU worker): a few hundred thousand on one GPU, into the millions across a cluster. A chunk exceeding its table is rejected (never a silent drop) — add workers, coarsen the key, or narrow the range. Group tables past 8192 entries come back via out_file (raw i64/f64 pairs).\n  Sample: <= 1,048,576 values returned (inline <= 65,536; beyond needs out_file). Histogram: <= 1,048,576 bins.\n  Iterate: state <= 4096 components, acc_dim <= 65,536, rounds <= 100,000. SGD is built in; any other step rule goes through an "update" device function (topic "iterate").\n  Fault tolerance: a RELAY failure is survived (--connect several relays → the cluster converges on a survivor mid-flight). A WORKER that dies or traps mid-task is now auto-redispatched for the non-dataset GPU tools (compute_submit_cuda / _sample_cuda / _histogram_cuda): the coordinator re-routes the lost chunk to another worker (the task's "retries" field counts this), and only reports failed_chunks if the chunk fails everywhere after several attempts. NOT yet auto-redispatched: dataset-backed tasks (a fresh worker would need the data blocks re-seeded — resubmit to retry; blocks stay cached so it is cheap), and the in-call loops compute_iterate / compute_shuffle (a chunk failure ends the call — resubmit).\n  Coordinator: the single --mcp node runs the iterate/shuffle loop and merges partials; it is not yet redundant — if it dies mid-run that run is lost, though a fresh submit on a new coordinator is fine (worker datasets and caches persist).\nThese are known edges, not bugs — design around them or split the work.`
+    ^ `Read this before scaling. The current envelope and the edges that are NOT yet supported:\n  Dataset size: an inline "data_base64" upload is <= 256 MiB (held in memory); a "file" upload is STREAMED from disk and can be up to 64 GiB (the coordinator keeps only the block manifest, not the data). Big datasets shard into worker-sized chunks automatically.\n  Data type: numeric only — "dtype" is f64 (default), f32, i32, or i64 (stored natively, promoted to double on the GPU). No struct/record datasets; encode categorical/mixed data into one of these numeric widths yourself.\n  Shuffle: <= 128 M input elements per call. Distinct keys are bounded PER CHUNK (~131072 — the table a chunk ships back in one relay frame), so TOTAL cardinality scales with the chunk count (~2 per GPU worker): a few hundred thousand on one GPU, into the millions across a cluster. A chunk exceeding its table is rejected (never a silent drop) — add workers, coarsen the key, or narrow the range. Group tables past 8192 entries come back via out_file (raw i64/f64 pairs).\n  Sample: <= 1,048,576 values returned (inline <= 65,536; beyond needs out_file). Histogram: <= 1,048,576 bins.\n  Iterate: state <= 4096 components, acc_dim <= 65,536, rounds <= 100,000. SGD is built in; any other step rule goes through an "update" device function (topic "iterate").\n  Fault tolerance: a RELAY failure is survived (--connect several relays → the cluster converges on a survivor mid-flight). A WORKER that dies or traps mid-task is now auto-redispatched for the non-dataset GPU tools (compute_submit_cuda / _sample_cuda / _histogram_cuda): the coordinator re-routes the lost chunk to another worker (the task's "retries" field counts this), and only reports failed_chunks if the chunk fails everywhere after several attempts. compute_iterate retries a failed round a few times in place (recovering a transient GPU/worker/frame hiccup without losing the whole run). NOT yet auto-redispatched: dataset-backed tasks routed to a permanently-dead worker (a fresh worker would need the data blocks re-seeded — resubmit to retry; blocks stay cached so it is cheap), and compute_shuffle (a chunk failure ends the call — resubmit).\n  Coordinator: the single --mcp node runs the iterate/shuffle loop and merges partials; it is not hot-redundant, so an IN-FLIGHT iterate/shuffle call is lost if it crashes mid-run. But it is now CRASH-RESTARTABLE: datasets are persisted to $HOME/.swarm-mcp/datasets/ and reloaded on startup, so a restarted coordinator recovers its dataset registry and a resubmit re-seeds from the persisted bytes (workers' cached blocks are confirmed, not recomputed). Recovery is a restart away; only the interrupted call must be resubmitted.\nThese are known edges, not bugs — design around them or split the work.`
 }
 
 @ __help_troubleshooting → s {
@@ -2734,7 +2893,7 @@ $ `cudakernel.nu`
 // ── JSON-RPC method handlers ─────────────────────────────────────
 
 @ handle_initialize Json id → Json {
-    : Json result ( mcp_initialize_result `swarm-mcp` `0.19.0` )
+    : Json result ( mcp_initialize_result `swarm-mcp` `0.20.0` )
     ^ ( mcp_response_result id result )
 }
 
@@ -2883,6 +3042,8 @@ $ `cudakernel.nu`
             = g_mcp_relays # i relays
             = g_mcp_from % + cur 1 ( vec_len [String] relays )
             = g_mcp_token token
+            // recover any datasets persisted by a previous run of this coordinator
+            ( __ds_load_all )
             : ( @ HttpResponse HttpRequest ) handler ( mcp_http_handler \ Json req → ?Json { ^ ( dispatch req ) } )
             ?? ( tcp_listen_tls mcp_host mcp_port cert key ) {
                 T lst → {

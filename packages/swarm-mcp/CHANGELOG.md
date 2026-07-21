@@ -1,5 +1,39 @@
 # Changelog
 
+## 0.20.0
+
+**Coordinator crash-restart recovery — datasets persist across a coordinator
+restart.** The `--mcp` node held the dataset registry only in RAM, so a crash
+lost it even though the workers still cached the blocks; the coordinator was a
+single point of failure for datasets.
+
+- Each dataset is **persisted to `$HOME/.swarm-mcp/datasets/`** on upload: a
+  small `meta` (id, dtype, byte count, a pointer to the bytes, name), a
+  `manifest` of the block hashes, and — for a base64 upload — a `.data` copy of
+  the bytes (a file upload just records the original path). Persist failures are
+  non-fatal (the dataset still works in memory this session).
+- On startup the coordinator **reloads every persisted dataset** (`recovered N
+  dataset(s) from disk`), so after a crash + restart the registry is intact and
+  a resubmit **re-seeds the blocks from the persisted bytes** — the workers'
+  cached blocks are confirmed by hash, not recomputed, so recovery is cheap.
+- This is not hot standby: an iterate/shuffle call that was *in flight* when the
+  coordinator died must be resubmitted. But the datasets, and the ability to
+  resume, survive the restart — the coordinator SPOF is now a restart, not a
+  data-loss.
+- Tests: new `tests/persist_smoke.sh` uploads a dataset, **SIGKILLs the node**,
+  restarts it with the same `$HOME`, and checks the dataset is recovered (count
+  + name) and a GPU reduce over it is still exact (blocks re-seeded from the
+  persisted copy). `gpu_smoke` / `data_smoke` (which also persist now) unchanged
+  and green.
+
+**compute_iterate retries a transient round failure in place.** A round is
+idempotent (the gradient is a pure function of the current state; the update only
+overwrites state on success), so a failed round is re-run a few times before the
+call gives up — a GPU hiccup, a briefly-overloaded worker, or a dropped frame no
+longer throws away a whole multi-round GD/fixpoint run. (A permanently-dead
+worker on a dataset round still needs a resubmit; `compute_shuffle` likewise.)
+`iterate_smoke` / `general_smoke` unchanged and green.
+
 ## 0.19.0
 
 **compute_shuffle: cardinality that scales with the cluster, a 16× larger input,
