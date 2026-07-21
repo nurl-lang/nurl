@@ -56,7 +56,6 @@ $ `stdlib/ext/json.nu`
     ( Vec f ) vw
     ( Vec f ) mb
     ( Vec f ) vb
-    i t  // Adam step counter
 }
 
 : MlpCfg {
@@ -165,7 +164,7 @@ $ `stdlib/ext/json.nu`
     }
     ( rng_free g )
     ^ @ Mlp { nl sz woff boff aoff nw nb na w b
-        ( __zeros nw ) ( __zeros nw ) ( __zeros nb ) ( __zeros nb ) 0 }
+        ( __zeros nw ) ( __zeros nw ) ( __zeros nb ) ( __zeros nb ) }
 }
 
 @ mlp_cfg_default → MlpCfg {
@@ -332,9 +331,12 @@ $ `stdlib/ext/json.nu`
 // One Adam update from gradient sums over a batch of `bsz` samples:
 // g = (Σg + α·param) / bsz for weights (sklearn adds the L2 term before
 // the batch divide), g = Σg / bsz for biases. Zeroes gw / gb after.
-@ __mlp_adam Mlp m ( Vec f ) gw ( Vec f ) gb i bsz f lr f alpha → v {
-    = . m t + . m t 1
-    : f t # f . m t
+// `tstep` is the 1-based Adam step count, owned by mlp_train: NURL structs
+// pass by value (only their Vec fields alias), so a counter FIELD on Mlp
+// could never advance across calls — it silently froze the bias correction
+// at t = 1 for every batch after the first.
+@ __mlp_adam Mlp m ( Vec f ) gw ( Vec f ) gb i bsz f lr f alpha i tstep → v {
+    : f t # f tstep
     : f b1 0.9
     : f b2 0.999
     : f eps 0.00000001
@@ -422,6 +424,7 @@ $ `stdlib/ext/json.nu`
     : ~ i epoch 0
     : ~ f train_loss 0.0
     : ~ b stopped F
+    : ~ i adam_t 0  // Adam step count (see __mlp_adam)
     ~ & < epoch . cfg max_iter ! stopped {
         // Shuffle the TRAIN region only; the val tail stays fixed.
         : ~ i k 0
@@ -451,7 +454,8 @@ $ `stdlib/ext/json.nu`
                 ( __mlp_backprop m acts yp * r dout deltas gw gb )
                 = s + s 1
             }
-            ( __mlp_adam m gw gb - bend at . cfg lr . cfg alpha )
+            = adam_t + adam_t 1
+            ( __mlp_adam m gw gb - bend at . cfg lr . cfg alpha adam_t )
             = at bend
         }
         = train_loss / se # f * n_train dout

@@ -33,6 +33,7 @@ $ `stdlib/ext/json.nu`
 $ `src/prep.nu`
 $ `src/model.nu`
 $ `src/score.nu`
+$ `src/aegpu.nu`
 $ `deps/mlp/src/mlp.nu`
 
 // ── The trained artifact ──────────────────────────────────────────────
@@ -154,7 +155,9 @@ $ `deps/mlp/src/mlp.nu`
     }
     ( vec_push [i] sz d )
     : ~ MlpCfg cfg ( mlp_cfg_default )
-    : MlpFit fit ( mlp_fit sz Xn nk d Xn d cfg 3 )
+    // GPU when a CUDA device is present, CPU otherwise — bit-identical either
+    // way (aegpu.nu), so the backend can never change the trained model.
+    : MlpFit fit ( aegpu_fit sz Xn nk d cfg 3 )
     ( vec_free [i] sz )
 
     // 3. threshold = p95 (nearest-rank) of the training errors.
