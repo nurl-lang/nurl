@@ -54,8 +54,13 @@ M1+M2 (this release, CPU):
   `g_transpose`, `g_reshape`, `g_softmax(axis)`, `g_slice`, `g_concat`;
 - `backward`, the arena lifecycle.
 
-Optimizers (SGD/Adam) land in M3; the GPU backward (gpukit, aegpu-style
-bit-exactness) in M5. Forwards for matmul/bmm/broadcast/softmax/slice/concat
+M3 optimizers (`src/opt.nu`): **SGD** and **Adam** over the tape's
+parameters, per-parameter L2 (`opt_add o tp p alpha` — weights carry alpha,
+biases 0), optional **global-norm gradient clipping** (`opt_set_clip`). The
+Adam step count lives behind the `*Opt` heap pointer so it advances — and the
+trajectory is pinned bit-for-bit against a hand-computed reference in the
+tests, the regression guard for the frozen-Adam-t bug class. The GPU backward
+(gpukit, aegpu-style bit-exactness) lands in M5. Forwards for matmul/bmm/broadcast/softmax/slice/concat
 go THROUGH the tensor package, so grad inherits its semantics — and its GPU
 matmul path — verbatim.
 
@@ -75,7 +80,12 @@ Every backward rule is checked two independent ways in `tests/grad_test.nu`:
   through every op — relu/softmax MLP + mse, tanh∘transpose∘reshape∘slice∘
   concat chain, sigmoid∘bmm — rebuilt in float64 torch from the exact same
   input bits; loss agrees to ~1e-16 relative, every parameter gradient to
-  ~1e-13.
+  ~1e-13, and
+- an **end-to-end training proof** (`tests/train_test.nu`): the classic
+  d-64-32-64-d autoencoder trained with the tape + Adam on a noisy 2-D
+  manifold in 6-D — 60 epochs of the mark/reset minibatch loop drive the MSE
+  from 0.319 to 5.7e-5, past the noise floor, with the Adam/SGD/clip updates
+  themselves asserted bit-exact against hand computations.
 
 ## License
 

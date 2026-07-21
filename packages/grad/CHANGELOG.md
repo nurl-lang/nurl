@@ -36,4 +36,19 @@ M2 (same release): the linear-algebra spine.
   from the exact same input bits: loss agrees to ~1e-16 relative, every
   parameter gradient to ~1e-13.
 
-Next: M3 SGD/Adam; M4 mlp 0.3.0 refactored onto grad; M5 GPU backward.
+M3 (same release): optimizers + the training-loop proof.
+
+- `src/opt.nu`: SGD and Adam over tape parameters, per-parameter L2
+  (`opt_add` — the param-groups need in miniature), optional global-norm
+  clipping. Adam's step count lives behind the `*Opt` heap pointer (the
+  frozen-t bug class cannot recur) and shares the ecosystem's Adam
+  arithmetic (runtime `1−β` forms, matching mlp and the aegpu kernels).
+- A parameter whose gradient backward() never touched is skipped, not
+  decayed (PyTorch's None-grad rule).
+- Verification: the two-step Adam trajectory, the SGD+weight-decay update
+  and the clipped step are each asserted BIT-EXACT against hand-computed
+  references; end to end, the d-64-32-64-d autoencoder trained with the
+  mark/reset minibatch loop reaches 5.7e-5 MSE from 0.319 on a noisy 2-D
+  manifold in 6-D (60 epochs, 360 episodes, arena healthy throughout).
+
+Next: M4 mlp 0.3.0 refactored onto grad; M5 GPU backward.
