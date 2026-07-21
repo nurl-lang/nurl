@@ -1,5 +1,37 @@
 # Changelog
 
+## 0.3.0
+
+**Requires-grad propagation (PyTorch's rule), on both engines.** A node
+gets a gradient only if a PARAMETER lies in its ancestor cone. `backward`
+computes a need set before the sweep and neither processes nodes outside
+it nor accumulates into no-need inputs; the device engine additionally
+allocates gradient BUFFERS only for backward-active nodes. Consequences:
+
+- A frozen-const branch now costs nothing: no backward compute, no
+  gradient memory. For LoRA over a large frozen model this is the
+  difference between duplicating every base weight's size in gradient
+  buffers (plus a full dW matmul per step for weights nobody updates)
+  and paying only for the adapters. Parameter gradients and optimizer
+  trajectories are bit-identical to 0.2.0 — const-side gradients never
+  influenced them (leaves propagate nothing).
+- Observable change: `grad_of` on an intermediate node with no parameter
+  upstream now reports zeros (previously the true local gradient). The
+  device engine's `gput_grad` mirrors that exactly.
+- The const-zeroing backward epilogue is gone — nothing writes into
+  no-need slots in the first place.
+
+**The M6a LoRA transformer-block proof** (tests only): a Qwen2-style block
+— RMSNorm, GQA attention with q/k/v bias + NEOX rotary embeddings + causal
+mask, SwiGLU, lm_head, softmax cross-entropy — with LoRA pairs on
+q/k/v/o/gate/up/down as the only parameters, expressed ENTIRELY in
+existing ops (row reductions via ones-matmul, rotate-half via slice+concat,
+GQA via per-head slices, CE pick via one-hot). Proven by finite differences
+through the whole block (2e-7), the PEFT B=0 identity to the bit, a PyTorch
+float64 oracle fed bit patterns (loss 3e-16, grads 1e-13), device replay
+(bitwise on the CPU backend, 4e-14 on CUDA), and a 60-step on-device Adam
+run (CE 2.65 → 0.92).
+
 ## 0.2.0
 
 **The GPU replay engine (`src/gput.nu`) — device training, bit-exact.**

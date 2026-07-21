@@ -111,6 +111,11 @@ Device restrictions (capture fails closed, with a message): TE_F64 tapes;
 A shape mismatch **poisons the tape** (`tape_ok` → `F`, `backward` refuses)
 rather than half-computing.
 
+Gradients follow **requires-grad propagation** (PyTorch's rule): they are
+computed and stored only where a parameter lies upstream. Frozen-const
+branches — a LoRA base model, input batches — cost no backward compute and
+no gradient memory on either engine; `grad_of` on such nodes reports zeros.
+
 ## Verification
 
 Every backward rule is checked several independent ways:
