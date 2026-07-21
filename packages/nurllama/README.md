@@ -210,6 +210,21 @@ The template comes from the model's own metadata
 template is a **base** model, and nurllama will not invent turns for it
 — it completes your text, which is what such a model was trained to do.
 
+## Finetuning (in progress — the M6 arc)
+
+`src/finetune.nu` trains **LoRA adapters** on a model over the [`grad`](../grad)
+autograd tape: `ft_open` lifts the GGUF weights into f64 host tensors and
+`ft_graph` builds the whole transformer forward + next-token cross-entropy as
+one tape graph — LoRA pairs on q/k/v/o and gate/up/down are the only
+parameters, and grad's requires-grad propagation makes the frozen base free.
+Training replays the captured episode on the GPU (`gput`). Proven on a real
+SmolLM-135M: the tape's logits match the inference engine's (top-1 identical,
+2e-7 on the top logit), and 40 device Adam steps overfit a sentence from CE
+2.75 to 8.7e-6. llama-family NORM rope is handled by un-permuting q/k columns
+at load (half-split rope then reproduces the exact rotations; scores are
+permutation-invariant). The `finetune --lora` CLI, the PEFT reference curve
+and safetensor adapter save/merge land next in this arc.
+
 ## How it is checked
 
 Not by trusting itself:
