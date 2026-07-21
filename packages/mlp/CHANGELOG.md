@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.3.0
+
+**New: `mlp_fit_grad` / `mlp_train_grad` — the same training recipe driven by
+the `grad` autograd engine.** mlp is now the first consumer of the ecosystem's
+reverse-mode autodiff package: instead of hand-derived layer deltas, the loss
+is written once as a tape expression — `L = (Σ‖x̂−y‖² + α·Σ‖W‖²)/(2·B)` — and
+`backward` produces exactly the gradient the hand path feeds Adam
+(`(Σδa + αW)/B`). Everything else is shared with `mlp_fit`: same Glorot init
+from the same seeded PRNG draws, same shuffles, same validation split, early
+stopping, best-weight restore, and restart selection.
+
+- The engines are recipe-equal, not bit-equal (batched matmuls accumulate in
+  a different order than per-row loops) — in practice they land within ~14
+  significant digits of each other on the oracle workload, flag the same
+  outliers, and BOTH pass the sklearn oracle independently (`tests/oracle.sh`
+  now runs each engine against the reference).
+- The hand-written path is unchanged and remains the default — `mlp_fit` /
+  `mlp_train` produce bit-identical results to 0.2.0, so the `anomaly`
+  package's GPU-training parity guarantee is untouched.
+- New dependency: `grad ^0.1` (which brings `tensor`). Only the `_grad`
+  entry points touch it.
+
 ## 0.2.0
 
 **Fixed: Adam's bias correction was frozen at t = 1.** `__mlp_adam` kept its

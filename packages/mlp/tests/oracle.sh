@@ -10,6 +10,8 @@
 #      constant factor),
 #   2. both discriminate the same injected outliers with the p95-threshold
 #      rule (≥ 90 % label agreement on the outlier set).
+# Runs the NURL side TWICE — once per training engine (hand, grad) — and
+# each must clear the oracle bar independently.
 # Skips (exit 0) when the reference venv with sklearn is missing.
 set -uo pipefail
 
@@ -81,6 +83,7 @@ $ `stdlib/std/bytes.nu`
 $ `stdlib/std/floatbits.nu`
 $ `stdlib/std/sort.nu`
 $ `src/mlp.nu`
+$ `src/gradfit.nu`
 
 // Raw little-endian f64 file → flat ( Vec f ); rows = len / d.
 @ load_f64 s path i d *u nrow → ( Vec f ) {
@@ -120,7 +123,7 @@ $ `src/mlp.nu`
 
 @ main → i {
     : i argc ( nurl_argv_count )
-    ? < argc 3 { ( nurl_print `usage: nurl_ae train.f64 outliers.f64\n` ) ^ 1 } {}
+    ? < argc 3 { ( nurl_print `usage: nurl_ae train.f64 outliers.f64 [hand|grad]\n` ) ^ 1 } {}
     : *u nc1 ( nurl_alloc 8 )
     : *u nc2 ( nurl_alloc 8 )
     : ( Vec f ) X ( load_f64 ( nurl_argv_get 1 ) 6 nc1 )
@@ -136,7 +139,10 @@ $ `src/mlp.nu`
     ( vec_push [i] sz d ) ( vec_push [i] sz 64 ) ( vec_push [i] sz 32 )
     ( vec_push [i] sz 64 ) ( vec_push [i] sz d )
     : ~ MlpCfg cfg ( mlp_cfg_default )
-    : MlpFit fit ( mlp_fit sz X n d X d cfg 3 )
+    // argv[3]: "hand" (default) or "grad" — which training engine to use
+    : ~ b use_grad F
+    ? >= argc 4 { ? == ( nurl_str_eq ( nurl_argv_get 3 ) `grad` ) 1 { = use_grad T } {} } {}
+    : MlpFit fit ? use_grad ( mlp_fit_grad sz X n d X d cfg 3 ) ( mlp_fit sz X n d X d cfg 3 )
     : Mlp ae . fit model
     // per-row train MSE → p95 threshold (nearest-rank)
     : ( Vec f ) mses ( vec_new [f] )
@@ -174,29 +180,37 @@ $ `src/mlp.nu`
 NUEOF
 ( cd "$HERE" && "$REPO/nurl.sh" "$TMP/nurl_ae.nu" "$TMP/nurl_ae" >/dev/null 2>&1 ) \
     || { echo "[mlp-oracle] FAIL build"; ( cd "$HERE" && "$REPO/nurl.sh" "$TMP/nurl_ae.nu" "$TMP/nurl_ae" 2>&1 | tail -5 ); exit 1; }
-"$TMP/nurl_ae" "$TMP/train.f64" "$TMP/outliers.f64" > "$TMP/nu.out" || { echo "[mlp-oracle] FAIL run"; exit 1; }
-cat "$TMP/nu.out"
+# both engines against the same oracle: the hand-written backprop and the
+# grad autograd engine must EACH clear the sklearn bar independently
+for engine in hand grad; do
+    "$TMP/nurl_ae" "$TMP/train.f64" "$TMP/outliers.f64" "$engine" > "$TMP/nu_$engine.out" \
+        || { echo "[mlp-oracle] FAIL run ($engine)"; exit 1; }
+    echo "── engine: $engine ──"
+    cat "$TMP/nu_$engine.out"
+done
 
 # ── 4. compare ───────────────────────────────────────────────────────
-python3 - "$TMP" <<'PYEOF' || fail=1
+for engine in hand grad; do
+python3 - "$TMP" "$engine" <<'PYEOF' || fail=1
 import sys
-tmp = sys.argv[1]
+tmp, engine = sys.argv[1], sys.argv[2]
 def parse(p):
     d = {}
     for line in open(p):
         k, _, v = line.partition(' ')
         d[k.strip()] = v.strip()
     return d
-sk, nu = parse(f"{tmp}/sk.out"), parse(f"{tmp}/nu.out")
+sk, nu = parse(f"{tmp}/sk.out"), parse(f"{tmp}/nu_{engine}.out")
 sk_mse, nu_mse = float(sk['train_mse']), float(nu['train_mse'])
 ratio = max(sk_mse, nu_mse) / max(min(sk_mse, nu_mse), 1e-12)
 sk_fl, nu_fl = sk['flags'], nu['flags']
 agree = sum(a == b for a, b in zip(sk_fl, nu_fl)) / len(sk_fl)
 sk_n = sk_fl.count('1'); nu_n = nu_fl.count('1')
-print(f"[mlp-oracle] mse ratio {ratio:.2f}x  flag agreement {agree:.0%}  (sk {sk_n}, nurl {nu_n} of {len(sk_fl)})")
+print(f"[mlp-oracle] {engine}: mse ratio {ratio:.2f}x  flag agreement {agree:.0%}  (sk {sk_n}, nurl {nu_n} of {len(sk_fl)})")
 ok = ratio < 5.0 and agree >= 0.9
-print("[mlp-oracle]", "PASS" if ok else "FAIL")
+print(f"[mlp-oracle] {engine}:", "PASS" if ok else "FAIL")
 sys.exit(0 if ok else 1)
 PYEOF
+done
 
 exit $fail
