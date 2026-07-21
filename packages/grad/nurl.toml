@@ -1,0 +1,8 @@
+[package]
+name = "grad"
+version = "0.1.0"
+description = "Reverse-mode automatic differentiation over the tensor package — the training keystone. Build a computation eagerly with tape-recording ops (g_add, g_matmul, g_relu, ...) that mirror tensor's surface, call backward(loss) once, and read exact gradients for every registered parameter: backward passes are derived, not hand-written. The tape is a flat single-owner arena (indices as edges, deterministic reverse order, no per-node closures): it owns every intermediate and gradient, one tape_free releases everything, and tape_reset_to keeps the parameters while dropping the episode so a minibatch loop never re-mallocs. Ships SGD/Adam optimizers over the parameter list. Every backward rule is verified two independent ways: a central finite-difference harness and hand-derived analytic identities."
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+tensor = { path = "../tensor", version = "^0.4" }
