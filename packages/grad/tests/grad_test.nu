@@ -42,6 +42,14 @@ $ `deps/tensor/src/tensor.nu`
     ^ ( tensor_from_data TE_F64 shp x )
 }
 
+// First n elements of a vec (owned copy — for shaping FD inputs).
+@ vslice ( Vec f ) x i n → ( Vec f ) {
+    : ( Vec f ) o ( vec_with_cap [f] n )
+    : ~ i k 0
+    ~ < k n { ( vec_push [f] o ( _tf x k ) ) = k + k 1 }
+    ^ o
+}
+
 // Evaluate a builder's loss at `x` on a throwaway tape.
 @ loss_at ( @ GVar * GTape ( Vec f ) ) build ( Vec f ) x → f {
     : *GTape tp ( tape_new )
@@ -168,6 +176,164 @@ $ `deps/tensor/src/tensor.nu`
         ( tensor_free tt )
         ^ ( g_mse tp p c )
     } xb )
+
+    ( nurl_print `— finite differences: M2 linear algebra / shape —\n` )
+    // 7. matmul, param as A: sum(A[4,3]·W[3,2])
+    ( fd_check `sum(matmul(A, W))` \ * GTape tp ( Vec f ) x → GVar {
+        : ( Vec i ) sa ( vec_new [i] )
+        ( vec_push [i] sa 4 ) ( vec_push [i] sa 3 )
+        : Tensor t ( tensor_from_data TE_F64 sa x )
+        : GVar p ( grad_param tp t )
+        ( tensor_free t )
+        : ( Vec f ) wv ( vec_new [f] )
+        : ~ i q 0
+        ~ < q 6 { ( vec_push [f] wv - * 0.3 # f q 0.7 ) = q + q 1 }
+        : ( Vec i ) sw ( vec_new [i] )
+        ( vec_push [i] sw 3 ) ( vec_push [i] sw 2 )
+        : Tensor w ( tensor_from_data TE_F64 sw wv )
+        ( vec_free [f] wv )
+        : GVar cw ( grad_const tp w )
+        ( tensor_free w )
+        ^ ( g_sum tp ( g_matmul tp p cw ) )
+    } ( vslice xa 12 ) )
+    // 8. matmul, param as B: sum(C[2,4]·B[4,3]) with a nonlinear head
+    ( fd_check `sum(tanh(matmul(C, B)))` \ * GTape tp ( Vec f ) x → GVar {
+        : ( Vec f ) cv ( vec_new [f] )
+        : ~ i q 0
+        ~ < q 8 { ( vec_push [f] cv + 0.1 * 0.2 # f q ) = q + q 1 }
+        : ( Vec i ) sc ( vec_new [i] )
+        ( vec_push [i] sc 2 ) ( vec_push [i] sc 4 )
+        : Tensor c ( tensor_from_data TE_F64 sc cv )
+        ( vec_free [f] cv )
+        : ( Vec i ) sb ( vec_new [i] )
+        ( vec_push [i] sb 4 ) ( vec_push [i] sb 3 )
+        : Tensor t ( tensor_from_data TE_F64 sb x )
+        : GVar p ( grad_param tp t )
+        ( tensor_free t )
+        : GVar cc ( grad_const tp c )
+        ( tensor_free c )
+        ^ ( g_sum tp ( g_tanh tp ( g_matmul tp cc p ) ) )
+    } ( vslice xb 12 ) )
+    // 9. bmm: sum(bmm(P[2,2,3], Q[2,3,2]))
+    ( fd_check `sum(bmm(P, Q))` \ * GTape tp ( Vec f ) x → GVar {
+        : ( Vec i ) sp ( vec_new [i] )
+        ( vec_push [i] sp 2 ) ( vec_push [i] sp 2 ) ( vec_push [i] sp 3 )
+        : Tensor t ( tensor_from_data TE_F64 sp x )
+        : GVar p ( grad_param tp t )
+        ( tensor_free t )
+        : ( Vec f ) qv ( vec_new [f] )
+        : ~ i q 0
+        ~ < q 12 { ( vec_push [f] qv - * 0.25 # f q 1.1 ) = q + q 1 }
+        : ( Vec i ) sq ( vec_new [i] )
+        ( vec_push [i] sq 2 ) ( vec_push [i] sq 3 ) ( vec_push [i] sq 2 )
+        : Tensor qt ( tensor_from_data TE_F64 sq qv )
+        ( vec_free [f] qv )
+        : GVar cq ( grad_const tp qt )
+        ( tensor_free qt )
+        ^ ( g_sum tp ( g_bmm tp p cq ) )
+    } ( vslice xa 12 ) )
+    // 10. transpose + reshape chain: sum(sigmoid(reshape(transpose(A))))
+    ( fd_check `sum(sigmoid(reshape(transpose(A))))` \ * GTape tp ( Vec f ) x → GVar {
+        : ( Vec i ) sa ( vec_new [i] )
+        ( vec_push [i] sa 3 ) ( vec_push [i] sa 4 )
+        : Tensor t ( tensor_from_data TE_F64 sa x )
+        : GVar p ( grad_param tp t )
+        ( tensor_free t )
+        : GVar tt ( g_transpose tp p )
+        : ( Vec i ) ns ( vec_new [i] )
+        ( vec_push [i] ns 2 ) ( vec_push [i] ns 6 )
+        : GVar rs ( g_reshape tp tt ns )
+        ( vec_free [i] ns )
+        ^ ( g_sum tp ( g_sigmoid tp rs ) )
+    } ( vslice xb 12 ) )
+    // 11. softmax over axis 1 of [3,4], weighted so the grad is nonzero
+    ( fd_check `sum(softmax(A,1)*W)` \ * GTape tp ( Vec f ) x → GVar {
+        : ( Vec i ) sa ( vec_new [i] )
+        ( vec_push [i] sa 3 ) ( vec_push [i] sa 4 )
+        : Tensor t ( tensor_from_data TE_F64 sa x )
+        : GVar p ( grad_param tp t )
+        ( tensor_free t )
+        : ( Vec f ) wv ( vec_new [f] )
+        : ~ i q 0
+        ~ < q 12 { ( vec_push [f] wv * 0.5 # f + q 1 ) = q + q 1 }
+        : ( Vec i ) sw ( vec_new [i] )
+        ( vec_push [i] sw 3 ) ( vec_push [i] sw 4 )
+        : Tensor w ( tensor_from_data TE_F64 sw wv )
+        ( vec_free [f] wv )
+        : GVar cw ( grad_const tp w )
+        ( tensor_free w )
+        ^ ( g_sum tp ( g_mul tp ( g_softmax tp p 1 ) cw ) )
+    } ( vslice xa 12 ) )
+    // 12. slice + concat round trip: sum(concat(slice(A), 2*slice2(A)))
+    ( fd_check `sum(concat(slices))` \ * GTape tp ( Vec f ) x → GVar {
+        : ( Vec i ) sa ( vec_new [i] )
+        ( vec_push [i] sa 4 ) ( vec_push [i] sa 3 )
+        : Tensor t ( tensor_from_data TE_F64 sa x )
+        : GVar p ( grad_param tp t )
+        ( tensor_free t )
+        : ( Vec i ) st1 ( vec_new [i] )
+        ( vec_push [i] st1 0 ) ( vec_push [i] st1 0 )
+        : ( Vec i ) sp1 ( vec_new [i] )
+        ( vec_push [i] sp1 2 ) ( vec_push [i] sp1 3 )
+        : GVar s1 ( g_slice tp p st1 sp1 )
+        ( vec_free [i] st1 ) ( vec_free [i] sp1 )
+        : ( Vec i ) st2 ( vec_new [i] )
+        ( vec_push [i] st2 1 ) ( vec_push [i] st2 0 )
+        : ( Vec i ) sp2 ( vec_new [i] )
+        ( vec_push [i] sp2 4 ) ( vec_push [i] sp2 3 )
+        : GVar s2 ( g_slice tp p st2 sp2 )
+        ( vec_free [i] st2 ) ( vec_free [i] sp2 )
+        ^ ( g_sum tp ( g_concat tp s1 ( g_muls tp s2 2.0 ) 0 ) )
+    } ( vslice xb 12 ) )
+    // 13. broadcast bias-add: mse(X[4,5] + b[5], target) — param is the bias
+    ( fd_check `mse(X + bias[5])` \ * GTape tp ( Vec f ) x → GVar {
+        : Tensor t ( mk1d x )
+        : GVar p ( grad_param tp t )
+        ( tensor_free t )
+        : ( Vec f ) xv ( vec_new [f] )
+        : ~ i q 0
+        ~ < q 20 { ( vec_push [f] xv - * 0.15 # f q 1.4 ) = q + q 1 }
+        : ( Vec i ) sx ( vec_new [i] )
+        ( vec_push [i] sx 4 ) ( vec_push [i] sx 5 )
+        : Tensor xt ( tensor_from_data TE_F64 sx xv )
+        ( vec_free [f] xv )
+        : GVar cx ( grad_const tp xt )
+        ( tensor_free xt )
+        : GVar z ( g_add tp cx p )
+        ^ ( g_mean tp ( g_mul tp z z ) )
+    } ( vslice xa 5 ) )
+    // 14. broadcast mul row-vs-matrix: sum(M[3,4] * r[4]) — param is r
+    ( fd_check `sum(M * row[4])` \ * GTape tp ( Vec f ) x → GVar {
+        : Tensor t ( mk1d x )
+        : GVar p ( grad_param tp t )
+        ( tensor_free t )
+        : ( Vec f ) mv ( vec_new [f] )
+        : ~ i q 0
+        ~ < q 12 { ( vec_push [f] mv + 0.2 * 0.3 # f q ) = q + q 1 }
+        : ( Vec i ) sm ( vec_new [i] )
+        ( vec_push [i] sm 3 ) ( vec_push [i] sm 4 )
+        : Tensor mt ( tensor_from_data TE_F64 sm mv )
+        ( vec_free [f] mv )
+        : GVar cm ( grad_const tp mt )
+        ( tensor_free mt )
+        ^ ( g_sum tp ( g_mul tp cm p ) )
+    } ( vslice xa 4 ) )
+    // 15. broadcast div: sum(M[3,4] / d[4]) — param is the divisor
+    ( fd_check `sum(M / div[4])` \ * GTape tp ( Vec f ) x → GVar {
+        : Tensor t ( mk1d x )
+        : GVar p ( grad_param tp t )
+        ( tensor_free t )
+        : ( Vec f ) mv ( vec_new [f] )
+        : ~ i q 0
+        ~ < q 12 { ( vec_push [f] mv + 0.5 * 0.3 # f q ) = q + q 1 }
+        : ( Vec i ) sm ( vec_new [i] )
+        ( vec_push [i] sm 3 ) ( vec_push [i] sm 4 )
+        : Tensor mt ( tensor_from_data TE_F64 sm mv )
+        ( vec_free [f] mv )
+        : GVar cm ( grad_const tp mt )
+        ( tensor_free mt )
+        ^ ( g_sum tp ( g_div tp cm p ) )
+    } ( vslice xa 4 ) )
 
     ( nurl_print `— analytic identities —\n` )
     // d/dx sum(x*x) = 2x, exact to the bit (x+x)

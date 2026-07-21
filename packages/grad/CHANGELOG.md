@@ -22,5 +22,18 @@ parameter.
   the bit (`d/dx Σx² == 2x` bitwise; a post-reset episode bitwise equal to
   the pre-reset one).
 
-Next: M2 broadcasting + matmul/bmm/softmax backward with a PyTorch oracle;
-M3 SGD/Adam; M4 mlp 0.3.0 refactored onto grad; M5 GPU backward.
+M2 (same release): the linear-algebra spine.
+
+- Binary ops broadcast with full numpy rules (forward through the tensor
+  package); backward sums each input's contribution over its broadcast axes
+  (`_g_acc_reduce`, one documented row-major accumulation order).
+- `g_matmul` / `g_bmm` (dA = g·Bᵀ, dB = Aᵀ·g, serial inner sums),
+  `g_transpose`, `g_reshape`, `g_softmax(axis)` (dx = y⊙(g − Σ g⊙y)),
+  `g_slice` (backward scatters into the source window), `g_concat` (backward
+  splits at the axis).
+- Verification: 9 new finite-difference cases (23 checks total) and a
+  **PyTorch float64 oracle** — one graph through every op, rebuilt in torch
+  from the exact same input bits: loss agrees to ~1e-16 relative, every
+  parameter gradient to ~1e-13.
+
+Next: M3 SGD/Adam; M4 mlp 0.3.0 refactored onto grad; M5 GPU backward.

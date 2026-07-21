@@ -73,6 +73,20 @@ $ `deps/tensor/src/ops.nu`
 
 @ gop_mean → i { ^ 16 }
 
+@ gop_matmul → i { ^ 17 }
+
+@ gop_bmm → i { ^ 18 }
+
+@ gop_transpose → i { ^ 19 }
+
+@ gop_reshape → i { ^ 20 }
+
+@ gop_softmax → i { ^ 21 }
+
+@ gop_slice → i { ^ 22 }
+
+@ gop_concat → i { ^ 23 }
+
 // One tape node: the op, its input node ids (-1 = none), a scalar operand.
 : GNode {
     i op
@@ -91,6 +105,12 @@ $ `deps/tensor/src/ops.nu`
     ( Vec GNode ) nodes
     ( Vec s ) vals  // *Tensor per node (tape-owned)
     ( Vec s ) grads  // *Tensor per node, 0 until backward touches it
+    ( Vec s ) aux  // *GAux per node, 0 for ops that need none (slice starts)
+}
+
+// Per-node auxiliary payload (only g_slice uses one today).
+: GAux {
+    ( Vec i ) starts
 }
 
 // ── construction / lifecycle ─────────────────────────────────────────
@@ -101,6 +121,7 @@ $ `deps/tensor/src/ops.nu`
     = . tp nodes ( vec_new [GNode] )
     = . tp vals ( vec_new [s] )
     = . tp grads ( vec_new [s] )
+    = . tp aux ( vec_new [s] )
     ^ tp
 }
 
@@ -113,16 +134,26 @@ $ `deps/tensor/src/ops.nu`
     } {}
 }
 
+@ _g_auxfree s pp → v {
+    ? != # i pp 0 {
+        : *GAux a # *GAux pp
+        ( vec_free [i] . a starts )
+        ( nurl_free pp )
+    } {}
+}
+
 @ tape_free * GTape tp → v {
     : i n ( vec_len [s] . tp vals )
     : ~ i k 0
     ~ < k n {
         ( _g_tfree ?? ( vec_get [s] . tp vals k ) { T x → x F → # s 0 } )
         ( _g_tfree ?? ( vec_get [s] . tp grads k ) { T x → x F → # s 0 } )
+        ( _g_auxfree ?? ( vec_get [s] . tp aux k ) { T x → x F → # s 0 } )
         = k + k 1
     }
     ( vec_free [s] . tp vals )
     ( vec_free [s] . tp grads )
+    ( vec_free [s] . tp aux )
     ( vec_free [GNode] . tp nodes )
     ( nurl_free # s tp )
 }
@@ -143,11 +174,13 @@ $ `deps/tensor/src/ops.nu`
     ~ < k n {
         ( _g_tfree ?? ( vec_get [s] . tp vals k ) { T x → x F → # s 0 } )
         ( _g_tfree ?? ( vec_get [s] . tp grads k ) { T x → x F → # s 0 } )
+        ( _g_auxfree ?? ( vec_get [s] . tp aux k ) { T x → x F → # s 0 } )
         = k + k 1
     }
     : b _t1 ( vec_set_len [GNode] . tp nodes mark )
     : b _t2 ( vec_set_len [s] . tp vals mark )
     : b _t3 ( vec_set_len [s] . tp grads mark )
+    : b _t4 ( vec_set_len [s] . tp aux mark )
     // zero the surviving grads in place (keep their buffers)
     = k 0
     ~ < k mark {
@@ -198,6 +231,7 @@ $ `deps/tensor/src/ops.nu`
     ( vec_push [GNode] . tp nodes @ GNode { op a b sc } )
     ( vec_push [s] . tp vals ( _g_heap val ) )
     ( vec_push [s] . tp grads # s 0 )
+    ( vec_push [s] . tp aux # s 0 )
     ^ @ GVar { id }
 }
 
@@ -255,12 +289,31 @@ $ `deps/tensor/src/ops.nu`
 
 // ── ops: binary (equal shapes) ───────────────────────────────────────
 
+// A borrowed Tensor view of a tape value (alias — never free).
+@ _g_view s pp → Tensor {
+    : *Tensor p # *Tensor pp
+    ^ @ Tensor { . p dtype . p shape . p data }
+}
+
 @ _g_binop * GTape tp GVar a GVar b i op → GVar {
     ? == . tp ok 1 {} { ^ @ GVar { -1 } }
     ? & >= . a id 0 >= . b id 0 {} { ^ ( _g_poison tp `binop on a poisoned input` ) }
     : s pa ( _g_val tp . a id )
     : s pb ( _g_val tp . b id )
-    ? ( _g_same_shape pa pb ) {} { ^ ( _g_poison tp `binop shape mismatch (broadcast lands in M2 — use g_adds/g_muls for scalars)` ) }
+    ? ( _g_same_shape pa pb ) {} {
+        // shapes differ → numpy broadcast through the tensor package
+        : Tensor va ( _g_view pa )
+        : Tensor vb ( _g_view pb )
+        : ~ ? Tensor r @ ?Tensor { F }
+        ? == op ( gop_add ) { = r ( tensor_add va vb ) } {}
+        ? == op ( gop_sub ) { = r ( tensor_sub va vb ) } {}
+        ? == op ( gop_mul ) { = r ( tensor_mul va vb ) } {}
+        ? == op ( gop_div ) { = r ( tensor_div va vb ) } {}
+        ?? r {
+            T out → { ^ ( _g_push tp op . a id . b id 0.0 out ) }
+            F → { ^ ( _g_poison tp `binop shapes are not broadcast-compatible` ) }
+        }
+    }
     : *Tensor ta # *Tensor pa
     : *Tensor tb # *Tensor pb
     : i n ( vec_len [f] . ta data )
@@ -375,7 +428,112 @@ $ `deps/tensor/src/ops.nu`
     ^ ( g_mean tp d2 )
 }
 
+// ── ops: linear algebra / shape (M2) ────────────────────────────────
+// Forwards go THROUGH the tensor package (borrowed views in, owned tensor
+// out), so grad's results are the tensor package's results — including its
+// GPU matmul path and any future backend work.
+
+@ g_matmul * GTape tp GVar a GVar b → GVar {
+    ? == . tp ok 1 {} { ^ @ GVar { -1 } }
+    ? & >= . a id 0 >= . b id 0 {} { ^ ( _g_poison tp `matmul on a poisoned input` ) }
+    ?? ( tensor_matmul ( _g_view ( _g_val tp . a id ) ) ( _g_view ( _g_val tp . b id ) ) ) {
+        T out → { ^ ( _g_push tp ( gop_matmul ) . a id . b id 0.0 out ) }
+        F → { ^ ( _g_poison tp `matmul shape mismatch (needs [m,k]x[k,n])` ) }
+    }
+}
+
+@ g_bmm * GTape tp GVar a GVar b → GVar {
+    ? == . tp ok 1 {} { ^ @ GVar { -1 } }
+    ? & >= . a id 0 >= . b id 0 {} { ^ ( _g_poison tp `bmm on a poisoned input` ) }
+    ?? ( tensor_bmm ( _g_view ( _g_val tp . a id ) ) ( _g_view ( _g_val tp . b id ) ) ) {
+        T out → { ^ ( _g_push tp ( gop_bmm ) . a id . b id 0.0 out ) }
+        F → { ^ ( _g_poison tp `bmm shape mismatch (needs [B,m,k]x[B,k,n])` ) }
+    }
+}
+
+@ g_transpose * GTape tp GVar a → GVar {
+    ? == . tp ok 1 {} { ^ @ GVar { -1 } }
+    ? >= . a id 0 {} { ^ ( _g_poison tp `transpose on a poisoned input` ) }
+    ?? ( tensor_transpose ( _g_view ( _g_val tp . a id ) ) ) {
+        T out → { ^ ( _g_push tp ( gop_transpose ) . a id -1 0.0 out ) }
+        F → { ^ ( _g_poison tp `transpose needs a 2-D input` ) }
+    }
+}
+
+// `shape` is borrowed (copied here; tensor_reshape adopts the copy).
+@ g_reshape * GTape tp GVar a ( Vec i ) shape → GVar {
+    ? == . tp ok 1 {} { ^ @ GVar { -1 } }
+    ? >= . a id 0 {} { ^ ( _g_poison tp `reshape on a poisoned input` ) }
+    ?? ( tensor_reshape ( _g_view ( _g_val tp . a id ) ) ( vec_clone [i] shape ) ) {
+        T out → { ^ ( _g_push tp ( gop_reshape ) . a id -1 0.0 out ) }
+        F → { ^ ( _g_poison tp `reshape element count mismatch` ) }
+    }
+}
+
+@ g_softmax * GTape tp GVar a i axis → GVar {
+    ? == . tp ok 1 {} { ^ @ GVar { -1 } }
+    ? >= . a id 0 {} { ^ ( _g_poison tp `softmax on a poisoned input` ) }
+    : Tensor out ( tensor_softmax ( _g_view ( _g_val tp . a id ) ) axis )
+    ^ ( _g_push tp ( gop_softmax ) . a id -1 # f axis out )
+}
+
+// starts/stops are borrowed; starts is retained (aux) for the backward scatter.
+@ g_slice * GTape tp GVar a ( Vec i ) starts ( Vec i ) stops → GVar {
+    ? == . tp ok 1 {} { ^ @ GVar { -1 } }
+    ? >= . a id 0 {} { ^ ( _g_poison tp `slice on a poisoned input` ) }
+    ?? ( tensor_slice ( _g_view ( _g_val tp . a id ) ) starts stops ) {
+        T out → {
+            : GVar v ( _g_push tp ( gop_slice ) . a id -1 0.0 out )
+            : *GAux ax # *GAux ( nurl_alloc Z GAux )
+            = . ax starts ( vec_clone [i] starts )
+            ( vec_set [s] . tp aux . v id # s ax )
+            ^ v
+        }
+        F → { ^ ( _g_poison tp `slice window out of range` ) }
+    }
+}
+
+@ g_concat * GTape tp GVar a GVar b i axis → GVar {
+    ? == . tp ok 1 {} { ^ @ GVar { -1 } }
+    ? & >= . a id 0 >= . b id 0 {} { ^ ( _g_poison tp `concat on a poisoned input` ) }
+    ?? ( tensor_concat2 ( _g_view ( _g_val tp . a id ) ) ( _g_view ( _g_val tp . b id ) ) axis ) {
+        T out → { ^ ( _g_push tp ( gop_concat ) . a id . b id # f axis out ) }
+        F → { ^ ( _g_poison tp `concat shapes differ off-axis` ) }
+    }
+}
+
 // ── backward ─────────────────────────────────────────────────────────
+
+// Accumulate an out-shaped contribution `c` into node `dst`'s gradient,
+// summing over broadcast axes (numpy alignment: trailing dims line up, a
+// size-1 or missing dst dim receives the sum over that out axis). sgn is
+// +1/-1 (sub/div's second input negates). Row-major walk of `c` — one
+// documented, deterministic accumulation order.
+@ _g_acc_reduce * GTape tp i dst Tensor c f sgn → v {
+    ( _g_ensure_grad tp dst )
+    : *Tensor gd # *Tensor ( _g_grad_ptr tp dst )
+    : i nd ( vec_len [i] . c shape )
+    : ( Vec i ) cst ( _t_strides . c shape )
+    : ( Vec i ) eff ( _t_eff_strides . gd shape nd )
+    : i total ( vec_len [f] . c data )
+    : ~ i lin 0
+    ~ < lin total {
+        : ~ i rem lin
+        : ~ i off 0
+        : ~ i d 0
+        ~ < d nd {
+            : i st ( _ti cst d )
+            : i ix / rem st
+            = rem % rem st
+            = off + off * ix ( _ti eff d )
+            = d + d 1
+        }
+        ( vec_set [f] . gd data off + ( _tf . gd data off ) * sgn ( _tf . c data lin ) )
+        = lin + lin 1
+    }
+    ( vec_free [i] cst )
+    ( vec_free [i] eff )
+}
 
 // Allocate node id's gradient as zeros (same shape as its value) if absent.
 @ _g_ensure_grad * GTape tp i id → v {
@@ -418,53 +576,61 @@ $ `deps/tensor/src/ops.nu`
             : i ib . nd b
             ? >= ia 0 { ( _g_ensure_grad tp ia ) } {}
             ? >= ib 0 { ( _g_ensure_grad tp ib ) } {}
+            // binops: broadcast-aware. Contributions are built through the
+            // tensor package (broadcasting), then summed over broadcast axes
+            // into each input's own shape by _g_acc_reduce.
             ? == op ( gop_add ) {
-                : *Tensor ga # *Tensor ( _g_grad_ptr tp ia )
-                : *Tensor gb # *Tensor ( _g_grad_ptr tp ib )
-                : ~ i j 0
-                ~ < j n {
-                    : f gj ( _tf . g data j )
-                    ( vec_set [f] . ga data j + ( _tf . ga data j ) gj )
-                    ( vec_set [f] . gb data j + ( _tf . gb data j ) gj )
-                    = j + j 1
-                }
+                : Tensor gv @ Tensor { . g dtype . g shape . g data }
+                ( _g_acc_reduce tp ia gv 1.0 )
+                ( _g_acc_reduce tp ib gv 1.0 )
             } {}
             ? == op ( gop_sub ) {
-                : *Tensor ga # *Tensor ( _g_grad_ptr tp ia )
-                : *Tensor gb # *Tensor ( _g_grad_ptr tp ib )
-                : ~ i j 0
-                ~ < j n {
-                    : f gj ( _tf . g data j )
-                    ( vec_set [f] . ga data j + ( _tf . ga data j ) gj )
-                    ( vec_set [f] . gb data j - ( _tf . gb data j ) gj )
-                    = j + j 1
-                }
+                : Tensor gv @ Tensor { . g dtype . g shape . g data }
+                ( _g_acc_reduce tp ia gv 1.0 )
+                ( _g_acc_reduce tp ib gv -1.0 )
             } {}
             ? == op ( gop_mul ) {
-                : *Tensor ga # *Tensor ( _g_grad_ptr tp ia )
-                : *Tensor gb # *Tensor ( _g_grad_ptr tp ib )
-                : *Tensor av # *Tensor ( _g_val tp ia )
-                : *Tensor bv # *Tensor ( _g_val tp ib )
-                : ~ i j 0
-                ~ < j n {
-                    : f gj ( _tf . g data j )
-                    ( vec_set [f] . ga data j + ( _tf . ga data j ) * gj ( _tf . bv data j ) )
-                    ( vec_set [f] . gb data j + ( _tf . gb data j ) * gj ( _tf . av data j ) )
-                    = j + j 1
+                : Tensor gv @ Tensor { . g dtype . g shape . g data }
+                : Tensor av2 ( _g_view ( _g_val tp ia ) )
+                : Tensor bv2 ( _g_view ( _g_val tp ib ) )
+                ?? ( tensor_mul gv bv2 ) {
+                    T ca → {
+                        ( _g_acc_reduce tp ia ca 1.0 )
+                        ( tensor_free ca )
+                    }
+                    F → {}
+                }
+                ?? ( tensor_mul gv av2 ) {
+                    T cb → {
+                        ( _g_acc_reduce tp ib cb 1.0 )
+                        ( tensor_free cb )
+                    }
+                    F → {}
                 }
             } {}
             ? == op ( gop_div ) {
-                : *Tensor ga # *Tensor ( _g_grad_ptr tp ia )
-                : *Tensor gb # *Tensor ( _g_grad_ptr tp ib )
-                : *Tensor bv # *Tensor ( _g_val tp ib )
-                : ~ i j 0
-                ~ < j n {
-                    : f gj ( _tf . g data j )
-                    : f bj ( _tf . bv data j )
-                    : f yj ( _tf . yv data j )
-                    ( vec_set [f] . ga data j + ( _tf . ga data j ) / gj bj )
-                    ( vec_set [f] . gb data j - ( _tf . gb data j ) / * gj yj bj )
-                    = j + j 1
+                : Tensor gv @ Tensor { . g dtype . g shape . g data }
+                : Tensor bv2 ( _g_view ( _g_val tp ib ) )
+                : Tensor yv2 @ Tensor { . yv dtype . yv shape . yv data }
+                ?? ( tensor_div gv bv2 ) {
+                    T ca → {
+                        ( _g_acc_reduce tp ia ca 1.0 )
+                        ( tensor_free ca )
+                    }
+                    F → {}
+                }
+                ?? ( tensor_mul gv yv2 ) {
+                    T t1 → {
+                        ?? ( tensor_div t1 bv2 ) {
+                            T cb → {
+                                ( _g_acc_reduce tp ib cb -1.0 )
+                                ( tensor_free cb )
+                            }
+                            F → {}
+                        }
+                        ( tensor_free t1 )
+                    }
+                    F → {}
                 }
             } {}
             ? == op ( gop_neg ) {
@@ -564,6 +730,208 @@ $ `deps/tensor/src/ops.nu`
                 ~ < j an {
                     ( vec_set [f] . ga data j + ( _tf . ga data j ) gper )
                     = j + j 1
+                }
+            } {}
+            ? == op ( gop_matmul ) {
+                // C[m,n] = A[m,k]·B[k,n]: dA[i,p] += Σ_j g[i,j]·B[p,j];
+                // dB[p,j] += Σ_i A[i,p]·g[i,j]. Serial inner sums, row-major.
+                : *Tensor ga # *Tensor ( _g_grad_ptr tp ia )
+                : *Tensor gb # *Tensor ( _g_grad_ptr tp ib )
+                : *Tensor av # *Tensor ( _g_val tp ia )
+                : *Tensor bv # *Tensor ( _g_val tp ib )
+                : i M ( _ti . av shape 0 )
+                : i K ( _ti . av shape 1 )
+                : i N2 ( _ti . bv shape 1 )
+                : ~ i i2 0
+                ~ < i2 M {
+                    : ~ i p 0
+                    ~ < p K {
+                        : ~ f acc 0.0
+                        : ~ i j 0
+                        ~ < j N2 { = acc + acc * ( _tf . g data + * i2 N2 j ) ( _tf . bv data + * p N2 j ) = j + j 1 }
+                        : i o + * i2 K p
+                        ( vec_set [f] . ga data o + ( _tf . ga data o ) acc )
+                        = p + p 1
+                    }
+                    = i2 + i2 1
+                }
+                : ~ i p2 0
+                ~ < p2 K {
+                    : ~ i j2 0
+                    ~ < j2 N2 {
+                        : ~ f acc2 0.0
+                        : ~ i i3 0
+                        ~ < i3 M { = acc2 + acc2 * ( _tf . av data + * i3 K p2 ) ( _tf . g data + * i3 N2 j2 ) = i3 + i3 1 }
+                        : i o2 + * p2 N2 j2
+                        ( vec_set [f] . gb data o2 + ( _tf . gb data o2 ) acc2 )
+                        = j2 + j2 1
+                    }
+                    = p2 + p2 1
+                }
+            } {}
+            ? == op ( gop_bmm ) {
+                // per-batch matmul backward, identical index math + batch offset
+                : *Tensor ga # *Tensor ( _g_grad_ptr tp ia )
+                : *Tensor gb # *Tensor ( _g_grad_ptr tp ib )
+                : *Tensor av # *Tensor ( _g_val tp ia )
+                : *Tensor bv # *Tensor ( _g_val tp ib )
+                : i B2 ( _ti . av shape 0 )
+                : i M ( _ti . av shape 1 )
+                : i K ( _ti . av shape 2 )
+                : i N2 ( _ti . bv shape 2 )
+                : ~ i bb 0
+                ~ < bb B2 {
+                    : i ao * bb * M K
+                    : i bo * bb * K N2
+                    : i go * bb * M N2
+                    : ~ i i2 0
+                    ~ < i2 M {
+                        : ~ i p 0
+                        ~ < p K {
+                            : ~ f acc 0.0
+                            : ~ i j 0
+                            ~ < j N2 { = acc + acc * ( _tf . g data + go + * i2 N2 j ) ( _tf . bv data + bo + * p N2 j ) = j + j 1 }
+                            : i o + ao + * i2 K p
+                            ( vec_set [f] . ga data o + ( _tf . ga data o ) acc )
+                            = p + p 1
+                        }
+                        = i2 + i2 1
+                    }
+                    : ~ i p2 0
+                    ~ < p2 K {
+                        : ~ i j2 0
+                        ~ < j2 N2 {
+                            : ~ f acc2 0.0
+                            : ~ i i3 0
+                            ~ < i3 M { = acc2 + acc2 * ( _tf . av data + ao + * i3 K p2 ) ( _tf . g data + go + * i3 N2 j2 ) = i3 + i3 1 }
+                            : i o2 + bo + * p2 N2 j2
+                            ( vec_set [f] . gb data o2 + ( _tf . gb data o2 ) acc2 )
+                            = j2 + j2 1
+                        }
+                        = p2 + p2 1
+                    }
+                    = bb + bb 1
+                }
+            } {}
+            ? == op ( gop_transpose ) {
+                // out is [N,M] of input [M,N]: ga[i,j] += g[j,i]
+                : *Tensor ga # *Tensor ( _g_grad_ptr tp ia )
+                : i M ( _ti . ga shape 0 )
+                : i N2 ( _ti . ga shape 1 )
+                : ~ i i2 0
+                ~ < i2 M {
+                    : ~ i j 0
+                    ~ < j N2 {
+                        : i o + * i2 N2 j
+                        ( vec_set [f] . ga data o + ( _tf . ga data o ) ( _tf . g data + * j M i2 ) )
+                        = j + j 1
+                    }
+                    = i2 + i2 1
+                }
+            } {}
+            ? == op ( gop_reshape ) {
+                // same row-major order, flat pass-through
+                : *Tensor ga # *Tensor ( _g_grad_ptr tp ia )
+                : ~ i j 0
+                ~ < j n {
+                    ( vec_set [f] . ga data j + ( _tf . ga data j ) ( _tf . g data j ) )
+                    = j + j 1
+                }
+            } {}
+            ? == op ( gop_softmax ) {
+                // dx = y ⊙ (g − Σ_axis(g⊙y)), per slice along the axis
+                : *Tensor ga # *Tensor ( _g_grad_ptr tp ia )
+                : i axis # i . nd s
+                : i ndim ( vec_len [i] . yv shape )
+                : ~ i outer 1
+                : ~ i inner 1
+                : i axlen ( _ti . yv shape axis )
+                : ~ i d 0
+                ~ < d axis { = outer * outer ( _ti . yv shape d ) = d + d 1 }
+                = d + axis 1
+                ~ < d ndim { = inner * inner ( _ti . yv shape d ) = d + d 1 }
+                : ~ i o 0
+                ~ < o outer {
+                    : ~ i in2 0
+                    ~ < in2 inner {
+                        : ~ f dot 0.0
+                        : ~ i t2 0
+                        ~ < t2 axlen {
+                            : i ix + + * * o axlen inner * t2 inner in2
+                            = dot + dot * ( _tf . g data ix ) ( _tf . yv data ix )
+                            = t2 + t2 1
+                        }
+                        = t2 0
+                        ~ < t2 axlen {
+                            : i ix + + * * o axlen inner * t2 inner in2
+                            : f yj ( _tf . yv data ix )
+                            ( vec_set [f] . ga data ix + ( _tf . ga data ix ) * yj - ( _tf . g data ix ) dot )
+                            = t2 + t2 1
+                        }
+                        = in2 + in2 1
+                    }
+                    = o + o 1
+                }
+            } {}
+            ? == op ( gop_slice ) {
+                // scatter g back into the input window at aux.starts
+                : *Tensor ga # *Tensor ( _g_grad_ptr tp ia )
+                : s axp ?? ( vec_get [s] . tp aux k ) { T x → x F → # s 0 }
+                : *GAux ax # *GAux axp
+                : i ndim ( vec_len [i] . yv shape )
+                : ( Vec i ) ost ( _t_strides . yv shape )
+                : ( Vec i ) ist ( _t_strides . ga shape )
+                : ~ i lin 0
+                ~ < lin n {
+                    : ~ i rem lin
+                    : ~ i ioff 0
+                    : ~ i d 0
+                    ~ < d ndim {
+                        : i st ( _ti ost d )
+                        : i ix / rem st
+                        = rem % rem st
+                        = ioff + ioff * + ix ( _ti . ax starts d ) ( _ti ist d )
+                        = d + d 1
+                    }
+                    ( vec_set [f] . ga data ioff + ( _tf . ga data ioff ) ( _tf . g data lin ) )
+                    = lin + lin 1
+                }
+                ( vec_free [i] ost )
+                ( vec_free [i] ist )
+            } {}
+            ? == op ( gop_concat ) {
+                // split g along the axis at a's extent
+                : *Tensor ga # *Tensor ( _g_grad_ptr tp ia )
+                : *Tensor gb # *Tensor ( _g_grad_ptr tp ib )
+                : i axis # i . nd s
+                : i ndim ( vec_len [i] . yv shape )
+                : i da ( _ti . ga shape axis )
+                : i axlen ( _ti . yv shape axis )
+                : ~ i outer 1
+                : ~ i inner 1
+                : ~ i d 0
+                ~ < d axis { = outer * outer ( _ti . yv shape d ) = d + d 1 }
+                = d + axis 1
+                ~ < d ndim { = inner * inner ( _ti . yv shape d ) = d + d 1 }
+                : ~ i o 0
+                ~ < o outer {
+                    : ~ i t2 0
+                    ~ < t2 axlen {
+                        : ~ i in2 0
+                        ~ < in2 inner {
+                            : i six + + * * o axlen inner * t2 inner in2
+                            ? < t2 da {
+                                : i dix + + * * o da inner * t2 inner in2
+                                ( vec_set [f] . ga data dix + ( _tf . ga data dix ) ( _tf . g data six ) )
+                            } {
+                                : i dix2 + + * * o - axlen da inner * - t2 da inner in2
+                                ( vec_set [f] . gb data dix2 + ( _tf . gb data dix2 ) ( _tf . g data six ) )
+                            }
+                            = in2 + in2 1
+                        }
+                        = t2 + t2 1
+                    }
+                    = o + o 1
                 }
             } {}
         } {}

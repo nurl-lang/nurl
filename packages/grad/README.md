@@ -44,12 +44,20 @@ node); `tape_free` releases everything.
 
 ## Status
 
-M1 (this release): CPU elementwise + all-axes reductions —
-`g_add/sub/mul/div` (equal shapes), `g_neg/adds/muls`,
-`g_relu/sigmoid/tanh/exp/log/sqrt` (forwards bit-identical to tensor's
-`__umap` formulas), `g_sum/mean/mse`, `backward`, the arena lifecycle.
-Binary broadcasting, matmul/bmm, softmax/reshape/slice and optimizers land in
-M2–M3; the GPU backward (gpukit, aegpu-style bit-exactness) in M5.
+M1+M2 (this release, CPU):
+
+- elementwise `g_add/sub/mul/div` with full **numpy broadcasting** (backward
+  sums over the broadcast axes), `g_neg/adds/muls`,
+  `g_relu/sigmoid/tanh/exp/log/sqrt` (forwards bit-identical to tensor's
+  `__umap` formulas), `g_sum/mean/mse`;
+- the linear-algebra spine: `g_matmul` / `g_bmm` (dA = g·Bᵀ, dB = Aᵀ·g),
+  `g_transpose`, `g_reshape`, `g_softmax(axis)`, `g_slice`, `g_concat`;
+- `backward`, the arena lifecycle.
+
+Optimizers (SGD/Adam) land in M3; the GPU backward (gpukit, aegpu-style
+bit-exactness) in M5. Forwards for matmul/bmm/broadcast/softmax/slice/concat
+go THROUGH the tensor package, so grad inherits its semantics — and its GPU
+matmul path — verbatim.
 
 A shape mismatch **poisons the tape** (`tape_ok` → `F`, `backward` refuses)
 rather than half-computing.
@@ -59,10 +67,15 @@ rather than half-computing.
 Every backward rule is checked two independent ways in `tests/grad_test.nu`:
 
 - **central finite differences** over composite graphs (every op covered,
-  fan-out included — worst observed relative error ~1e-8 at f64), and
+  fan-out included — worst observed relative error ~1e-8 at f64),
 - **analytic identities**, exact to the bit where the arithmetic is exact:
   `d/dx Σx² == 2x` bitwise, forward sums bitwise equal to plain loops, an
-  episode after `tape_reset_to` bitwise equal to the one before it.
+  episode after `tape_reset_to` bitwise equal to the one before it, and
+- a **PyTorch oracle** (`tests/oracle.sh`, skips without torch): one graph
+  through every op — relu/softmax MLP + mse, tanh∘transpose∘reshape∘slice∘
+  concat chain, sigmoid∘bmm — rebuilt in float64 torch from the exact same
+  input bits; loss agrees to ~1e-16 relative, every parameter gradient to
+  ~1e-13.
 
 ## License
 
