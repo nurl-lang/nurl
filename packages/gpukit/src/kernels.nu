@@ -75,13 +75,15 @@ $ `gpukit.nu`
 }
 
 // ── Matrix multiply: C[M×N] = A[M×K] · B[K×N] (row-major) ──────────────
-// Each output element sums t=0..K in order, exactly as a host loop — so this
-// is bit-identical to a naive sequential matmul.
+// Each output element sums t=0..K in order with EXPLICIT round-to-nearest
+// intrinsics (NVRTC's default fmad contraction would fuse `s+=a*b` into an
+// FMA and change the bits) — so this is bit-identical to a naive sequential
+// host matmul, which is what tensor_matmul's fast path substitutes it for.
 @ gk_matmul_f * GpuKit kit ( Vec f ) c ( Vec f ) a ( Vec f ) b i m i k i n → b {
     : String src ( string_from `extern "C" __global__ void gk_matmul(const double* A, const double* B, double* C, long long M, long long K, long long N){` )
     ( string_push_str src `long long idx=blockIdx.x*blockDim.x+threadIdx.x;` )
     ( string_push_str src `if(idx<M*N){long long row=idx/N,col=idx%N;double s=0.0;` )
-    ( string_push_str src `for(long long t=0;t<K;t++)s+=A[row*K+t]*B[t*N+col];C[idx]=s;}}` )
+    ( string_push_str src `for(long long t=0;t<K;t++)s=__dadd_rn(s,__dmul_rn(A[row*K+t],B[t*N+col]));C[idx]=s;}}` )
     : i total * m n
     : ( Vec GkArg ) call ( vec_new [GkArg] )
     ( vec_push [GkArg] call ( gk_in_f a ) )

@@ -423,7 +423,15 @@ $ `kernels.nu`  // _gk_partial_threads / _gk_zeros
     ( string_push_str src `long long idx=blockIdx.x*blockDim.x+threadIdx.x;` )
     ( string_push_str src `if(idx<M*N){long long r=idx/N,cx=idx%N;` )
     ( string_push_str src tn ) ( string_push_str src ` s=0;` )
-    ( string_push_str src `for(long long t=0;t<K;t++)s+=A[r*K+t]*B[t*N+cx];C[idx]=s;}}` )
+    // F64 spells the accumulation with explicit round-to-nearest intrinsics
+    // (NVRTC's fmad contraction would otherwise fuse and change the bits);
+    // F32 keeps the plain form — its contract is true-float32 semantics
+    // (numpy/onnxruntime), which the verified model goldens pin.
+    ? == . c dtype GK_F64 {
+        ( string_push_str src `for(long long t=0;t<K;t++)s=__dadd_rn(s,__dmul_rn(A[r*K+t],B[t*N+cx]));C[idx]=s;}}` )
+    } {
+        ( string_push_str src `for(long long t=0;t<K;t++)s+=A[r*K+t]*B[t*N+cx];C[idx]=s;}}` )
+    }
     : i total * m n
     : ( Vec i ) args ( vec_new [i] )
     ( vec_push [i] args ( gk_arg_dev a ) )
@@ -467,7 +475,12 @@ $ `kernels.nu`  // _gk_partial_threads / _gk_zeros
     ( string_push_str src `const ` ) ( string_push_str src tn ) ( string_push_str src `* a=A+b*as;const ` )
     ( string_push_str src tn ) ( string_push_str src `* bb=B+b*bs;` )
     ( string_push_str src tn ) ( string_push_str src ` acc=0;` )
-    ( string_push_str src `for(long long k=0;k<K;k++)acc+=a[r*K+k]*bb[k*N+c];Y[idx]=acc;}` )
+    // F64: explicit rn intrinsics (see gkd_matmul); F32 stays true-float32.
+    ? == . y dtype GK_F64 {
+        ( string_push_str src `for(long long k=0;k<K;k++)acc=__dadd_rn(acc,__dmul_rn(a[r*K+k],bb[k*N+c]));Y[idx]=acc;}` )
+    } {
+        ( string_push_str src `for(long long k=0;k<K;k++)acc+=a[r*K+k]*bb[k*N+c];Y[idx]=acc;}` )
+    }
     : i total * * batch m n
     : ( Vec i ) args ( vec_new [i] )
     ( vec_push [i] args ( gk_arg_dev a ) )

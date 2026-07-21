@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.9.1
+
+- **The CPU backend honours the bit-exactness discipline.** The host shim
+  now defines the CUDA round-to-nearest arithmetic intrinsics
+  (`__dadd_rn/__dsub_rn/__dmul_rn/__ddiv_rn` and the `__f*_rn` float
+  forms), so kernels written the aegpu way — explicit rounding, no fmad
+  fusion — compile and run on this backend too; previously they only
+  built under NVRTC. The backend also compiles kernels with
+  `-ffp-contract=off`, so a plain `a*b+c` in kernel source cannot be
+  fused into an FMA on hosts whose baseline has one (ARM64; x86-64 with
+  -march) — one IEEE rounding per written operation, matching what the
+  intrinsics promise.
+
 ## 0.9.0
 
 - **Pinned-staged uploads.** `gpu_upload` copies of 64 MB or more go

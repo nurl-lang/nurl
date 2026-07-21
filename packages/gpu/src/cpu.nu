@@ -54,6 +54,19 @@ static __thread __nurl_dim3 blockIdx, threadIdx, blockDim, gridDim;
 // them must run identically on this backend.
 static inline float rsqrtf(float x) { return 1.0f/sqrtf(x); }
 static inline double rsqrt(double x) { return 1.0/sqrt(x); }
+// Explicit round-to-nearest arithmetic (the bit-exactness discipline:
+// kernels spell accumulation chains with these so NVRTC cannot fmad-fuse
+// them). On the host one IEEE double op IS round-to-nearest, and the
+// backend compiles with -ffp-contract=off, so plain expressions cannot
+// be re-fused here either.
+static inline double __dadd_rn(double a, double b) { return a + b; }
+static inline double __dsub_rn(double a, double b) { return a - b; }
+static inline double __dmul_rn(double a, double b) { return a * b; }
+static inline double __ddiv_rn(double a, double b) { return a / b; }
+static inline float __fadd_rn(float a, float b) { return a + b; }
+static inline float __fsub_rn(float a, float b) { return a - b; }
+static inline float __fmul_rn(float a, float b) { return a * b; }
+static inline float __fdiv_rn(float a, float b) { return a / b; }
 
 // ── Cooperative kernels: __shared__ and __syncthreads() ───────────
 //
@@ -308,13 +321,13 @@ static void __nurl_ensure(int n) {
 
     // Prefer OpenMP; fall back to a serial build if -fopenmp isn't available.
     : String base ( string_with_cap 256 )
-    ( string_push_str base `${CXX:-c++} -O2 -fPIC -shared -o ` )
+    ( string_push_str base `${CXX:-c++} -O2 -ffp-contract=off -fPIC -shared -o ` )
     ( string_push_str base ( string_data sopath ) )
     ( string_push_char base 32 )
     ( string_push_str base ( string_data cpath ) )
     ( string_push_str base ` 2>/tmp/nurlcpu_cc.log` )
     : String omp ( string_with_cap 256 )
-    ( string_push_str omp `${CXX:-c++} -O2 -fPIC -shared -fopenmp -o ` )
+    ( string_push_str omp `${CXX:-c++} -O2 -ffp-contract=off -fPIC -shared -fopenmp -o ` )
     ( string_push_str omp ( string_data sopath ) )
     ( string_push_char omp 32 )
     ( string_push_str omp ( string_data cpath ) )
@@ -393,6 +406,14 @@ static __nurl_dim3 blockIdx, threadIdx, blockDim, gridDim;
 // own storage class stand.
 #define __device__
 #define __restrict__
+static inline double __dadd_rn(double a, double b) { return a + b; }
+static inline double __dsub_rn(double a, double b) { return a - b; }
+static inline double __dmul_rn(double a, double b) { return a * b; }
+static inline double __ddiv_rn(double a, double b) { return a / b; }
+static inline float __fadd_rn(float a, float b) { return a + b; }
+static inline float __fsub_rn(float a, float b) { return a - b; }
+static inline float __fmul_rn(float a, float b) { return a * b; }
+static inline float __fdiv_rn(float a, float b) { return a / b; }
 `
 }
 
