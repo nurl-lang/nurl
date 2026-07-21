@@ -109,6 +109,20 @@ rows × 300 trees: pure NURL 9.6 s, host C++ backend 1.1 s (~9×), RTX 4090
 213 ms (~45×). `ANOMALY_GPU=0` disables the accelerator; `NURL_GPU=cpu`
 forces the CPU backend on a CUDA machine.
 
+**Autoencoder training** (`/train/autoencoder/<model>`) also runs on the
+GPU by default when a CUDA device is present — and training is where the
+autoencoder's time goes (the scoring passes are milliseconds). The device
+mirror (`src/aegpu.nu`) keeps the training loop on the host (same seeded
+shuffles, validation split, early stopping, restarts) and reproduces the
+CPU's floating-point rounding and accumulation order in its kernels, so the
+GPU-trained network is **bit-for-bit identical** to the CPU-trained one —
+same weights, same p95 threshold, same verdicts, just **~34× faster**
+(6 k rows × 12 features, 64-32-64, 3 restarts: 7.6 s → 0.22 s on an
+RTX 4090). Without a CUDA device (or with `ANOMALY_GPU=0`) training uses
+the pure `mlp` path — the same result at CPU pace.
+`tests/aegpu_parity_test.nu` asserts the bit-identity: weights, biases,
+the full Adam state, epoch count and losses.
+
 ## CLI
 
 ```

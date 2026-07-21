@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.2.0
+
+**Fixed: Adam's bias correction was frozen at t = 1.** `__mlp_adam` kept its
+step counter as a scalar field on the `Mlp` struct — but NURL structs pass by
+value (only their `Vec` fields alias), so `= . m t + . m t 1` incremented a
+copy and the counter never advanced. Every minibatch after the first ran with
+the t = 1 correction, i.e. a permanently inflated effective learning rate
+(lr·√(1−β₂)/(1−β₁) ≈ 0.316·lr·√10 instead of the documented, sklearn-matching
+schedule that decays toward lr).
+
+- The step count now lives in `mlp_train` as a local and is passed to the
+  Adam step explicitly; the vestigial `t` field is removed from `Mlp` (nothing
+  outside the Adam step ever read it, and `mlp_save` never persisted it).
+- **Trained networks change** versus 0.1.x for any multi-batch training run —
+  that is the fix. The sklearn oracle still passes with 100 % outlier-flag
+  agreement (and a tighter MSE ratio); persisted models load unchanged
+  (`mlp_save`/`mlp_load` round-trip only sizes + weights).
+- Found by the `anomaly` package's GPU-training parity work: a bit-exact GPU
+  mirror of `mlp_train` disagreed with the CPU only from the second minibatch
+  on, and the diff isolated the frozen counter.
+
 ## 0.1.0
 
 Initial release — a trainable MLP in pure NURL, faithful to sklearn's

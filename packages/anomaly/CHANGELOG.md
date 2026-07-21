@@ -1,5 +1,35 @@
 # Changelog
 
+## 0.5.0
+
+**The autoencoder trains on the GPU when one is present — bit-exactly.**
+Training was the autoencoder's whole cost (~20 s for 20 k rows on the CPU;
+the scoring passes are milliseconds), and it now runs on a CUDA device by
+default, with the package's standing guarantee intact: **backend choice can
+never change a result**. The GPU-trained network is bit-for-bit identical to
+the CPU-trained one — same weights, same threshold, same verdicts — so GPU is
+pure speed: **~34× faster** end-to-end on the parity benchmark (6 k × 12,
+64-32-64, 3 restarts: 7.6 s → 0.22 s).
+
+- `src/aegpu.nu`: a bit-exact device mirror of `mlp_fit`. Control flow (the
+  seeded shuffles, validation split, early stopping, best-weights restore,
+  restarts, Adam scalars via host `pow`/`sqrt`) stays on the host; five
+  kernels (forward / backprop / gradient / Adam / eval-diff) reproduce the
+  CPU's rounding and accumulation order exactly — explicit `__dadd_rn`/
+  `__dmul_rn` (no FMA contraction), serial dot products in the CPU's k-order,
+  per-weight gradient sums in the CPU's row order. Weights and Adam state
+  stay device-resident across the whole run.
+- Selection: CUDA present → GPU; otherwise (no device, `ANOMALY_GPU=0`, or
+  any mid-setup failure) the pure `mlp_fit` — identical results either way.
+  The gpu package's host-C++ backend is deliberately not used for training:
+  native `mlp_fit` already is the optimised CPU path.
+- `tests/aegpu_parity_test.nu` (+ `tests/aegpu_smoke.sh`) pins the guarantee:
+  weights, biases, the full Adam state, epoch count and both loss figures
+  are asserted BIT-IDENTICAL between `mlp_fit` and `aegpu_fit`.
+- Requires `mlp` ≥ 0.2 — whose frozen-Adam-bias-correction fix this parity
+  work uncovered (a scalar step-counter field on a by-value struct never
+  advanced; see the mlp changelog).
+
 ## 0.4.1
 
 - Widen the gpu requirement to ^0.9 (device-specific CUBIN kernel cache =
