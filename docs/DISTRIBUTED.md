@@ -385,6 +385,15 @@ Milk-V Duo becomes a real compute node in the ring, not merely a relay.
 [`examples/distributed_map.nu`](../examples/distributed_map.nu) shards a
 word-count across workers by key and aggregates the result.
 
+**Capability domains.** `job_set_ring(kind, ring)` scopes a task kind to its own
+routing ring — so submit, ownership, and re-homing for that kind all resolve
+against a *subset* of nodes rather than the main ring. A node that advertises a
+capability (e.g. a GPU) is folded into a second, capability-only ring; a task
+kind bound to it can never be owned by — or forwarded to — a node that lacks the
+capability. Every node must scope a kind identically, or re-homing would cross
+domains. This is how a mixed cluster runs heterogeneous work: general keys spread
+over everyone, GPU keys only over GPU nodes, on one transport.
+
 ### `dist/lease.nu` — fencing for side-effecting tasks
 
 During membership convergence two nodes can briefly both believe they own a
@@ -555,5 +564,13 @@ Known deep follow-ups (no workarounds — these are tracked for a genuine fix):
   without a timer-wheel deadline, so a recv timeout is ignored under the fiber
   reactor; single-process multi-node demos use process-per-node until fiber
   reads are registered on the timer wheel.
+- **Large relay frames.** `_relay_max` caps a forwarded frame at 16 MiB (a DoS
+  guard), and `__read_exact` now rides out a mid-frame recv timeout so a large
+  body is no longer abandoned. But a *single* multi-MiB frame is still fragile
+  through the blocking relay client in a same-process multi-thread node
+  (a not-fully-root-caused send/recv-scheduling interaction), so the reliable
+  transfer unit is ~1 MiB — higher layers that move bulk data chunk it to that
+  size rather than sending one giant frame. A genuine fix (reliable large-frame
+  transfer, or the reactor deadline above) would lift that.
 
 The mesh PSK is node-wide today (per-peer PSK is a follow-up).
