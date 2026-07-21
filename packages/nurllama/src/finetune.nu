@@ -873,7 +873,7 @@ $ `deps/gpukit/src/dev.nu`
 // Merge every adapter into its base weight and write the FULL model as a
 // safetensors file — run it with nurllama's --weights path (llm_open_st).
 @ ft_merge_st s path * FtModel m FtTrain t i r f alpha → !v String {
-    ^ ( ft_merge_st_mask path m t r alpha 7 )
+    ^ ( ft_merge_st_mask path m t r alpha 15 )
 }
 
 // mask bit0 = embeddings, bit1 = attention projections, bit2 = mlp
@@ -884,6 +884,8 @@ $ `deps/gpukit/src/dev.nu`
     // embeddings + final norm (frozen; [V,H] is already [out,in])
     ? == % mask 2 1 {
         = so ( __sto_f32 so `model.embed_tokens.weight` . m embd . m n_vocab . m n_embd )
+    } {}
+    ? == % / mask 8 2 1 {
         = so ( __sto_f32 so `model.norm.weight` . m norm_f . m n_embd 0 )
     } {}
     : i nslot * 7 . m n_layer
@@ -895,8 +897,8 @@ $ `deps/gpukit/src/dev.nu`
         : i w % sl 7
         : i in ( __ft_ain m sl )
         : i out ( __ft_aout m sl )
-        // the per-layer norms, once per layer (at slot 0)
-        ? == w 0 {
+        // the per-layer norms, once per layer (at slot 0; norm mask bit3)
+        ? & == w 0 == % / mask 8 2 1 {
             : s anp ?? ( vec_get [s] . m an L ) { T x → x F → # s 0 }
             : *FtV anv # *FtV anp
             : String n1 ( string_from `model.layers.` )
@@ -979,4 +981,125 @@ $ `deps/gpukit/src/dev.nu`
         = sl + sl 1
     }
     ^ ( __sto_write so path )
+}
+
+// ── the CLI driver ───────────────────────────────────────────────────
+// nurllama finetune <model.gguf> <data.txt>: tokenize the corpus with the
+// model's own tokenizer, LoRA-train on the DEVICE over the first `seq`
+// tokens (v1 trains one fixed window — the captured graph has a fixed
+// shape; multi-window scheduling lands with gput_set_input plumbing),
+// save the adapters, and optionally write a merged full-model safetensors
+// runnable via `nurllama run model.gguf PROMPT --weights merged.st`.
+@ nurllama_finetune s modp s datap s outp s mergedp i steps f lr i rank f alpha i seq i seed → i {
+    : ~ s text ``
+    : ~ b haderr F
+    : ~ String textS ( string_new )
+    ?? ( read_file datap ) {
+        T t → { ( string_free textS ) = textS t = text ( string_data textS ) }
+        F _ → {
+            ( nurl_eprintln `nurllama: cannot read the data file` )
+            = haderr T
+        }
+    }
+    ? haderr { ( string_free textS ) ^ 1 } {}
+    : ( Vec i ) ids ( vec_new [i] )
+    ?? ( gguf_open modp ) {
+        T gg → {
+            ?? ( tok_new gg ) {
+                T tk → {
+                    : ( Vec i ) enc ( tok_encode tk text T )
+                    : i n ? < ( vec_len [i] enc ) seq ( vec_len [i] enc ) seq
+                    : ~ i k 0
+                    ~ < k n { ( vec_push [i] ids ( _ti enc k ) ) = k + k 1 }
+                    ( vec_free [i] enc )
+                    ( tok_free tk )
+                }
+                F e → {
+                    ( nurl_eprintln ( string_data e ) )
+                    ( string_free e )
+                    = haderr T
+                }
+            }
+            ( gguf_close gg )
+        }
+        F e → {
+            ( nurl_eprintln ( string_data e ) )
+            ( string_free e )
+            = haderr T
+        }
+    }
+    ( string_free textS )
+    ? | haderr < ( vec_len [i] ids ) 4 {
+        ( vec_free [i] ids )
+        ( nurl_eprintln `nurllama: need at least 4 tokens of training data` )
+        ^ 1
+    } {}
+    ( nurl_print `finetune: ` )
+    ( nurl_print ( nurl_str_int ( vec_len [i] ids ) ) )
+    ( nurl_print ` tokens · rank ` )
+    ( nurl_print ( nurl_str_int rank ) )
+    ( nurl_print ` · alpha ` )
+    ( nurl_print ( nurl_str_float alpha ) )
+    ( nurl_print ` · ` )
+    ( nurl_print ( nurl_str_int steps ) )
+    ( nurl_print ` steps\n` )
+    ?? ( ft_open modp ) {
+        T m → {
+            ( nurl_print `model: ` )
+            ( nurl_print ( nurl_str_int . m n_layer ) )
+            ( nurl_print ` layers · hidden ` )
+            ( nurl_print ( nurl_str_int . m n_embd ) )
+            ( nurl_print ` · building the tape + capturing onto the device\n` )
+            : FtTrain tr ( ft_train m ids rank alpha seed steps lr T )
+            ? . tr ok {} {
+                ( nurl_eprintln `nurllama: finetune training failed (no device? poisoned graph?)` )
+                ( ft_train_free tr ) ( ft_free m ) ( vec_free [i] ids )
+                ^ 1
+            }
+            ( nurl_print `CE ` )
+            ( nurl_print ( nurl_str_float . tr l0 ) )
+            ( nurl_print ` → ` )
+            ( nurl_print ( nurl_str_float . tr l1 ) )
+            ( nurl_print `\n` )
+            : ~ i rc 0
+            ?? ( ft_adapters_save outp m tr rank ) {
+                T _ → {
+                    ( nurl_print `adapters → ` )
+                    ( nurl_print outp )
+                    ( nurl_print `\n` )
+                }
+                F e → {
+                    ( nurl_eprintln ( string_data e ) )
+                    ( string_free e )
+                    = rc 1
+                }
+            }
+            ? > ( nurl_str_len mergedp ) 0 {
+                ?? ( ft_merge_st mergedp m tr rank alpha ) {
+                    T _ → {
+                        ( nurl_print `merged model → ` )
+                        ( nurl_print mergedp )
+                        ( nurl_print `  (run: nurllama run <model.gguf> PROMPT --weights ` )
+                        ( nurl_print mergedp )
+                        ( nurl_print `)\n` )
+                    }
+                    F e → {
+                        ( nurl_eprintln ( string_data e ) )
+                        ( string_free e )
+                        = rc 1
+                    }
+                }
+            } {}
+            ( ft_train_free tr )
+            ( ft_free m )
+            ( vec_free [i] ids )
+            ^ rc
+        }
+        F e → {
+            ( nurl_eprintln ( string_data e ) )
+            ( string_free e )
+            ( vec_free [i] ids )
+            ^ 1
+        }
+    }
 }

@@ -407,7 +407,7 @@ $ `src/tokenizer.nu`
 // `` = this tensor has no safetensors counterpart (`output.weight` on a
 // tied-embedding model, for one), which sends the caller down its normal
 // absent-tensor path.
-@ __lm_hf_name s name → String {
+@ __lm_hf_name s name b gemma → String {
     ? ( nurl_str_eq name `token_embd.weight` ) { ^ ( string_from `model.embed_tokens.weight` ) } {}
     ? ( nurl_str_eq name `output_norm.weight` ) { ^ ( string_from `model.norm.weight` ) } {}
     ? ( nurl_str_eq name `output.weight` ) { ^ ( string_new ) } {}
@@ -428,9 +428,19 @@ $ `src/tokenizer.nu`
     ? ( nurl_str_eq suf `attn_q.bias` ) { = hf `self_attn.q_proj.bias` } {}
     ? ( nurl_str_eq suf `attn_k.bias` ) { = hf `self_attn.k_proj.bias` } {}
     ? ( nurl_str_eq suf `attn_v.bias` ) { = hf `self_attn.v_proj.bias` } {}
-    ? ( nurl_str_eq suf `post_attention_norm.weight` ) { = hf `post_attention_layernorm.weight` } {}
-    ? ( nurl_str_eq suf `ffn_norm.weight` ) { = hf `pre_feedforward_layernorm.weight` } {}
-    ? ( nurl_str_eq suf `post_ffw_norm.weight` ) { = hf `post_feedforward_layernorm.weight` } {}
+    // The post-attention/pre-FFN norm NAMES collide across architectures:
+    // HF llama/qwen2/phi3 call the PRE-FFN norm (GGUF ffn_norm)
+    // `post_attention_layernorm`, while HF gemma3 uses that name for its
+    // EXTRA norm on the attention output (GGUF post_attention_norm) and
+    // calls the pre-FFN norm `pre_feedforward_layernorm`. Mapping them
+    // gemma-style unconditionally made a llama checkpoint's pre-FFN norm
+    // load as gemma's post-attention norm — silently ENABLING an extra
+    // normalization and shredding the forward pass.
+    ? & gemma != 0 ( nurl_str_eq suf `post_attention_norm.weight` ) { = hf `post_attention_layernorm.weight` } {}
+    ? ( nurl_str_eq suf `ffn_norm.weight` ) {
+        = hf ? gemma `pre_feedforward_layernorm.weight` `post_attention_layernorm.weight`
+    } {}
+    ? & gemma != 0 ( nurl_str_eq suf `post_ffw_norm.weight` ) { = hf `post_feedforward_layernorm.weight` } {}
     ? ( nurl_str_eq suf `ffn_gate.weight` ) { = hf `mlp.gate_proj.weight` } {}
     ? ( nurl_str_eq suf `ffn_up.weight` ) { = hf `mlp.up_proj.weight` } {}
     ? ( nurl_str_eq suf `ffn_down.weight` ) { = hf `mlp.down_proj.weight` } {}
@@ -463,7 +473,7 @@ $ `src/tokenizer.nu`
 // model produces confident nonsense, which is exactly how it was found the
 // first time.)
 @ __lm_upload_st * Llm m s name → i {
-    : String hf ( __lm_hf_name name )
+    : String hf ( __lm_hf_name name . m st_norm_add1 )
     ? == 0 ( string_len hf ) {
         ( string_free hf )
         ^ -1
