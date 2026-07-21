@@ -6,3 +6,4 @@ license = "MIT OR Apache-2.0"
 
 [dependencies]
 grad = "^0.1"
+tensor = "^0.4"
