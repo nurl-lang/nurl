@@ -516,7 +516,10 @@ extern "C" __global__ void gp_opt(double* w, const double* g, double* m, double*
     ? & ( tape_ok tp ) >= . loss id 0 {} { ( _gp_fail pg `tape is poisoned or loss invalid` ) ^ pg }
     ? ( gk_ok kit ) {} { ( _gp_fail pg `no device` ) ^ pg }
     : i nn ( tape_len tp )
-    // reach = loss-ancestor set (mirrors "grad exists" on the CPU sweep)
+    // reach = loss-ancestor set; need = requires-grad propagation (a param
+    // in the ancestor cone). The backward sweep and the gradient BUFFERS
+    // exist only where both hold — grad.nu's rule mirrored, and a frozen
+    // 4 GB const costs no device gradient memory and no backward launch.
     : ( Vec i ) reach ( vec_new [i] )
     : ~ i k 0
     ~ < k nn { ( vec_push [i] reach 0 ) = k + k 1 }
@@ -530,6 +533,37 @@ extern "C" __global__ void gp_opt(double* w, const double* g, double* m, double*
         } {}
         = k - k 1
     }
+    : ( Vec i ) needv ( vec_new [i] )
+    = k 0
+    ~ < k nn {
+        : GNode nd ?? ( vec_get [GNode] . tp nodes k ) { T x → x F → @ GNode { -1 -1 -1 0.0 } }
+        : ~ i nv 0
+        ? == . nd op ( gop_param ) { = nv 1 } {
+            ? & >= . nd a 0 == ( _ti needv . nd a ) 1 { = nv 1 } {}
+            ? & >= . nd b 0 == ( _ti needv . nd b ) 1 { = nv 1 } {}
+        }
+        ( vec_push [i] needv nv )
+        // the stored per-node flag = BW-active (reach AND need)
+        ? & == ( _ti reach k ) 1 == nv 1 {} { ( vec_set [i] reach k 0 ) }
+        = k + k 1
+    }
+    ( vec_free [i] needv )
+    // gbuf = which nodes get a gradient BUFFER: every BW-active node, plus
+    // both inputs of a BW-active concat (its fused backward kernel writes
+    // both sides; an inactive side's buffer is pure workspace — gput_grad
+    // still reports zeros for it, like the CPU tape)
+    : ( Vec i ) gbuf ( vec_new [i] )
+    = k 0
+    ~ < k nn { ( vec_push [i] gbuf ( _ti reach k ) ) = k + k 1 }
+    = k 0
+    ~ < k nn {
+        : GNode nd ?? ( vec_get [GNode] . tp nodes k ) { T x → x F → @ GNode { -1 -1 -1 0.0 } }
+        ? & == . nd op ( gop_concat ) == ( _ti reach k ) 1 {
+            ( vec_set [i] gbuf . nd a 1 )
+            ( vec_set [i] gbuf . nd b 1 )
+        } {}
+        = k + k 1
+    }
     = k 0
     ~ & < k nn . pg ok {
         : GNode nd ?? ( vec_get [GNode] . tp nodes k ) { T x → x F → @ GNode { -1 -1 -1 0.0 } }
@@ -537,11 +571,15 @@ extern "C" __global__ void gp_opt(double* w, const double* g, double* m, double*
         ? == . tv dtype TE_F64 {} { ( _gp_fail pg `only TE_F64 tapes` ) }
         : i n ( vec_len [f] . tv data )
         : GkBuf val ( _gp_upload_tensor kit tv )
-        : GkBuf grad ( gk_dbuf_new kit n GK_F64 )
+        : ~ GkBuf grad ( _gp_nobuf )
+        ? == ( _ti gbuf k ) 1 { = grad ( gk_dbuf_new kit n GK_F64 ) } {}
         : ~ GkBuf scr ( _gp_nobuf )
         : ~ GkBuf meta ( _gp_nobuf )
         : ( Vec i ) dims ( vec_new [i] )
-        ? & ( gk_buf_ok val ) ( gk_buf_ok grad ) {} { ( _gp_fail pg `device alloc failed` ) }
+        ? ( gk_buf_ok val ) {} { ( _gp_fail pg `device alloc failed` ) }
+        ? == ( _ti gbuf k ) 1 {
+            ? ( gk_buf_ok grad ) {} { ( _gp_fail pg `device alloc failed` ) }
+        } {}
         : i op . nd op
         ? & >= op ( gop_add ) <= op ( gop_div ) {
             // binop: ew blocks B0(fwd) B1(g,b) B2(g,a) B3(g,g) + accred A/B
@@ -649,6 +687,7 @@ extern "C" __global__ void gp_opt(double* w, const double* g, double* m, double*
         = k + k 1
     }
     ( vec_free [i] reach )
+    ( vec_free [i] gbuf )
     ^ pg
 }
 
@@ -918,26 +957,36 @@ extern "C" __global__ void gp_opt(double* w, const double* g, double* m, double*
         : i offBB ( _ti . nd dims 4 )
         : i tfa ( _ti . nd dims 5 )
         : i tfb ( _ti . nd dims 6 )
+        : b needa == . na reach 1
+        : b needb == . nb reach 1
         ? == op ( gop_add ) {
-            = r & r ( _gp_accred pg na nd . nd grad offBA tfa 1.0 )
-            = r & r ( _gp_accred pg nb nd . nd grad offBB tfb 1.0 )
+            ? needa { = r & r ( _gp_accred pg na nd . nd grad offBA tfa 1.0 ) } {}
+            ? needb { = r & r ( _gp_accred pg nb nd . nd grad offBB tfb 1.0 ) } {}
         } {}
         ? == op ( gop_sub ) {
-            = r & r ( _gp_accred pg na nd . nd grad offBA tfa 1.0 )
-            = r & r ( _gp_accred pg nb nd . nd grad offBB tfb -1.0 )
+            ? needa { = r & r ( _gp_accred pg na nd . nd grad offBA tfa 1.0 ) } {}
+            ? needb { = r & r ( _gp_accred pg nb nd . nd grad offBB tfb -1.0 ) } {}
         } {}
         ? == op ( gop_mul ) {
-            = r & r ( _gp_scr_ew pg nd . nd grad . nb val offB1 ( gop_mul ) )
-            = r & r ( _gp_accred pg na nd . nd scr offBA tfa 1.0 )
-            = r & r ( _gp_scr_ew pg nd . nd grad . na val offB2 ( gop_mul ) )
-            = r & r ( _gp_accred pg nb nd . nd scr offBB tfb 1.0 )
+            ? needa {
+                = r & r ( _gp_scr_ew pg nd . nd grad . nb val offB1 ( gop_mul ) )
+                = r & r ( _gp_accred pg na nd . nd scr offBA tfa 1.0 )
+            } {}
+            ? needb {
+                = r & r ( _gp_scr_ew pg nd . nd grad . na val offB2 ( gop_mul ) )
+                = r & r ( _gp_accred pg nb nd . nd scr offBB tfb 1.0 )
+            } {}
         } {}
         ? == op ( gop_div ) {
-            = r & r ( _gp_scr_ew pg nd . nd grad . nb val offB1 ( gop_div ) )
-            = r & r ( _gp_accred pg na nd . nd scr offBA tfa 1.0 )
-            = r & r ( _gp_scr_ew pg nd . nd grad . nd val offB3 ( gop_mul ) )
-            = r & r ( _gp_scr_ew pg nd . nd scr . nb val offB1 ( gop_div ) )
-            = r & r ( _gp_accred pg nb nd . nd scr offBB tfb -1.0 )
+            ? needa {
+                = r & r ( _gp_scr_ew pg nd . nd grad . nb val offB1 ( gop_div ) )
+                = r & r ( _gp_accred pg na nd . nd scr offBA tfa 1.0 )
+            } {}
+            ? needb {
+                = r & r ( _gp_scr_ew pg nd . nd grad . nd val offB3 ( gop_mul ) )
+                = r & r ( _gp_scr_ew pg nd . nd scr . nb val offB1 ( gop_div ) )
+                = r & r ( _gp_accred pg nb nd . nd scr offBB tfb -1.0 )
+            } {}
         } {}
         ^ r
     } {}
@@ -979,7 +1028,7 @@ extern "C" __global__ void gp_opt(double* w, const double* g, double* m, double*
         ( vec_push [i] a ( gpu_arg_i64 M ) )
         ( vec_push [i] a ( gpu_arg_i64 K ) )
         ( vec_push [i] a ( gpu_arg_i64 N2 ) )
-        = r ( _gp_run pg `gp_bw_mm_a` ( gk_grid * M K 256 ) 256 a )
+        ? == . na reach 1 { = r ( _gp_run pg `gp_bw_mm_a` ( gk_grid * M K 256 ) 256 a ) } {}
         ( vec_free [i] a )
         : ( Vec i ) a2 ( vec_new [i] )
         ( vec_push [i] a2 ( gk_arg_dev . nb grad ) )
@@ -988,7 +1037,7 @@ extern "C" __global__ void gp_opt(double* w, const double* g, double* m, double*
         ( vec_push [i] a2 ( gpu_arg_i64 M ) )
         ( vec_push [i] a2 ( gpu_arg_i64 K ) )
         ( vec_push [i] a2 ( gpu_arg_i64 N2 ) )
-        = r & r ( _gp_run pg `gp_bw_mm_b` ( gk_grid * K N2 256 ) 256 a2 )
+        ? == . nb reach 1 { = r & r ( _gp_run pg `gp_bw_mm_b` ( gk_grid * K N2 256 ) 256 a2 ) } {}
         ( vec_free [i] a2 )
         ^ r
     } {}
@@ -1007,7 +1056,7 @@ extern "C" __global__ void gp_opt(double* w, const double* g, double* m, double*
         ( vec_push [i] a ( gpu_arg_i64 M ) )
         ( vec_push [i] a ( gpu_arg_i64 K ) )
         ( vec_push [i] a ( gpu_arg_i64 N2 ) )
-        = r ( _gp_run pg `gp_bw_bmm_a` ( gk_grid * B2 * M K 256 ) 256 a )
+        ? == . na reach 1 { = r ( _gp_run pg `gp_bw_bmm_a` ( gk_grid * B2 * M K 256 ) 256 a ) } {}
         ( vec_free [i] a )
         : ( Vec i ) a2 ( vec_new [i] )
         ( vec_push [i] a2 ( gk_arg_dev . nb grad ) )
@@ -1017,7 +1066,7 @@ extern "C" __global__ void gp_opt(double* w, const double* g, double* m, double*
         ( vec_push [i] a2 ( gpu_arg_i64 M ) )
         ( vec_push [i] a2 ( gpu_arg_i64 K ) )
         ( vec_push [i] a2 ( gpu_arg_i64 N2 ) )
-        = r & r ( _gp_run pg `gp_bw_bmm_b` ( gk_grid * B2 * K N2 256 ) 256 a2 )
+        ? == . nb reach 1 { = r & r ( _gp_run pg `gp_bw_bmm_b` ( gk_grid * B2 * K N2 256 ) 256 a2 ) } {}
         ( vec_free [i] a2 )
         ^ r
     } {}
@@ -1097,24 +1146,19 @@ extern "C" __global__ void gp_opt(double* w, const double* g, double* m, double*
     : ~ i k 0
     ~ & < k n r {
         : GpNode nd ( _gp_node pg k )
-        = r ( _gp_fill_buf pg . nd grad 0.0 )
+        : GkBuf gb2 . nd grad
+        ? ( gk_buf_ok gb2 ) { = r ( _gp_fill_buf pg gb2 0.0 ) } {}
         = k + k 1
     }
     ? r {
         : GpNode lo ( _gp_node pg . pg loss )
-        = r ( _gp_fill_buf pg . lo grad 1.0 )
+        : GkBuf lg . lo grad
+        ? ( gk_buf_ok lg ) { = r ( _gp_fill_buf pg lg 1.0 ) } {}
     } {}
     = k . pg loss
     ~ & >= k 0 r {
         = r ( _gp_bwd_node pg k )
         = k - k 1
-    }
-    // epilogue: constants report zero gradients
-    = k 0
-    ~ & <= k . pg loss r {
-        : GpNode nd ( _gp_node pg k )
-        ? == . nd op ( gop_const ) { = r ( _gp_fill_buf pg . nd grad 0.0 ) } {}
-        = k + k 1
     }
     ( gk_autosync T )
     ? r { ^ ( gk_sync . pg kit ) } {}
@@ -1137,6 +1181,13 @@ extern "C" __global__ void gp_opt(double* w, const double* g, double* m, double*
     ? & >= . v id 0 < . v id ( vec_len [GpNode] . pg nodes ) {} { ^ F }
     : GpNode nd ( _gp_node pg . v id )
     ? == ( vec_len [f] out ) . nd n {} { ^ F }
+    // no gradient flows here (const branch / not a loss ancestor): report
+    // zeros, exactly like the CPU tape's grad_of
+    ? == . nd reach 1 {} {
+        : ~ i k 0
+        ~ < k . nd n { ( vec_set [f] out k 0.0 ) = k + k 1 }
+        ^ T
+    }
     ^ ( gk_dbuf_download . pg kit . nd grad out )
 }
 
