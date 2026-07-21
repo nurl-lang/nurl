@@ -130,6 +130,17 @@ Every backward rule is checked several independent ways:
   manifold in 6-D — 60 epochs of the mark/reset minibatch loop drive the MSE
   from 0.319 to 5.7e-5, past the noise floor, with the Adam/SGD/clip updates
   themselves asserted bit-exact against hand computations, and
+- the **LoRA transformer-block proof** (`tests/lora_block_test.nu` +
+  `tests/lora_oracle.sh`): a Qwen2-style block — RMSNorm, GQA attention with
+  NEOX rotary embeddings and causal masking, SwiGLU, softmax cross-entropy —
+  with LoRA adapter pairs on q/k/v/o/gate/up/down as the only parameters,
+  expressed ENTIRELY in existing ops (row reductions via ones-matmul,
+  rotate-half via slice+concat, CE pick via one-hot). Central differences
+  through the whole block on all 14 adapters (worst ~2e-7), the PEFT B=0
+  init identity bitwise (dL/dA ≡ 0, dL/dB ≠ 0), a PyTorch float64 oracle
+  fed bit patterns (loss ~3e-16, grads ~1e-13), device replay of the block
+  (~4e-14 on CUDA, bitwise on the CPU backend), and a 60-step on-device
+  Adam run driving the CE loss from 2.65 to 0.92, and
 - the **device parity suite** (`tests/gput_parity_test.nu`, skips without a
   backend): every exact-tier node's forward value AND backward gradient
   bitwise-equal to the CPU tape on both backends; the transcendental tier
