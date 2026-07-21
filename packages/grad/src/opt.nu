@@ -33,7 +33,7 @@
 $ `stdlib/core/io.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/float.nu`
-$ `src/grad.nu`
+$ `grad.nu`
 $ `deps/tensor/src/tensor.nu`
 
 : Opt {
