@@ -59,17 +59,61 @@ parameters, per-parameter L2 (`opt_add o tp p alpha` — weights carry alpha,
 biases 0), optional **global-norm gradient clipping** (`opt_set_clip`). The
 Adam step count lives behind the `*Opt` heap pointer so it advances — and the
 trajectory is pinned bit-for-bit against a hand-computed reference in the
-tests, the regression guard for the frozen-Adam-t bug class. The GPU backward
-(gpukit, aegpu-style bit-exactness) lands in M5. Forwards for matmul/bmm/broadcast/softmax/slice/concat
-go THROUGH the tensor package, so grad inherits its semantics — and its GPU
-matmul path — verbatim.
+tests, the regression guard for the frozen-Adam-t bug class. Forwards for
+matmul/bmm/broadcast/softmax/slice/concat go THROUGH the tensor package, so
+grad inherits its semantics — and its GPU matmul path — verbatim.
+
+## The GPU replay engine (M5, `src/gput.nu`)
+
+The CPU tape stays the semantic reference; the device runs a bit-exact
+REPLAY of it. Capture one recorded episode, then per minibatch upload fresh
+input rows, replay forward + backward (one kernel launch per node), and step
+the device optimizer — only the loss scalar comes back:
+
+```nurl
+: *GProg pg ( gput_capture kit tp loss )    // after ONE CPU-built episode
+: *GpOpt go ( gpopt_adam_new lr )
+( gpopt_add go pg W1 alpha ) …               // opt.nu mirrored, on-device m/v
+~ training {
+    ( gput_set_input pg X batch_rows )       // fresh minibatch
+    ( gput_forward pg ) ( gput_backward pg )
+    ( gpopt_step go pg )                     // lr_t from host pow, like opt.nu
+}
+( gput_param_sync_host pg tp )               // trained weights → the tape
+```
+
+**Bit-exactness, two documented tiers** (the anomaly/aegpu discipline
+generalized per op): every kernel reproduces the CPU implementation's
+rounding and order — explicit `__d*_rn` intrinsics so NVRTC cannot
+fmad-fuse, serial inner products/reductions in the CPU's index order,
+broadcast-reduce in the CPU's row-major subsequence order per slot. The
+**exact tier** — relu, +,−,×,÷, sqrt, matmul/bmm, sum/mean, transpose/
+reshape/slice/concat, SGD/Adam — is **bit-identical to the CPU tape on both
+backends** (CUDA and the gpu package's CPU backend): a whole autoencoder
+trains to a bit-equal loss trace and bit-equal final weights. The
+**transcendental tier** (sigmoid/tanh/exp/log/softmax) mirrors the CPU
+formulas exactly but calls the device's exp()/log(): bit-identical on the
+CPU backend, ~1 ulp on real CUDA hardware.
+
+Speed, honestly: the d-64-32-64-d / batch-200 autoencoder benchmark
+(`tests/gput_bench.nu`) runs ~5× faster than the CPU tape on an RTX 4090.
+Per-node launches cannot fuse the way anomaly's hand-written aegpu pipeline
+does (4 launches per minibatch vs ~40 here), so on tiny nets aegpu keeps its
+34× crown; the replay engine's win grows with layer width and batch — and it
+works for EVERY graph the tape can record, not one hard-coded architecture.
+On the gpu CPU backend the replay is far SLOWER than the CPU tape (per-launch
+fiber-grid orchestration dwarfs the arithmetic): that backend exists so the
+bit-exactness contract can be verified anywhere, not for training speed.
+
+Device restrictions (capture fails closed, with a message): TE_F64 tapes;
+`g_bmm` needs both operands to carry the full batch.
 
 A shape mismatch **poisons the tape** (`tape_ok` → `F`, `backward` refuses)
 rather than half-computing.
 
 ## Verification
 
-Every backward rule is checked two independent ways in `tests/grad_test.nu`:
+Every backward rule is checked several independent ways:
 
 - **central finite differences** over composite graphs (every op covered,
   fan-out included — worst observed relative error ~1e-8 at f64),
@@ -85,7 +129,13 @@ Every backward rule is checked two independent ways in `tests/grad_test.nu`:
   d-64-32-64-d autoencoder trained with the tape + Adam on a noisy 2-D
   manifold in 6-D — 60 epochs of the mark/reset minibatch loop drive the MSE
   from 0.319 to 5.7e-5, past the noise floor, with the Adam/SGD/clip updates
-  themselves asserted bit-exact against hand computations.
+  themselves asserted bit-exact against hand computations, and
+- the **device parity suite** (`tests/gput_parity_test.nu`, skips without a
+  backend): every exact-tier node's forward value AND backward gradient
+  bitwise-equal to the CPU tape on both backends; the transcendental tier
+  bitwise on the CPU backend and within 1e-12 relative on CUDA (measured
+  ~2e-16); and a 40-episode Adam+L2+clip training run whose loss trace and
+  final parameters are bit-equal to the CPU path.
 
 ## License
 

@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.4.2
+
+- **f64 matmul/bmm are now genuinely bit-identical to a sequential host
+  loop.** `gk_matmul_f`, and the F64 instantiations of `gkd_matmul` and
+  `gkd_bmm`, spell their K-accumulation with explicit `__dadd_rn/__dmul_rn`
+  intrinsics. The kernels always CLAIMED bit-identity ("sums t=0..K in
+  order, exactly as a host loop"), but NVRTC compiles with fmad contraction
+  ON by default, so `s+=a*b` fused into FMAs and the claim was false on
+  real CUDA hardware — found by the grad package's device-replay parity
+  suite, where tensor_matmul's silent >=100k-flop fast path made "CPU"
+  results depend on whether a GPU was present. F32 kernels are unchanged:
+  their contract is true-float32 semantics (numpy/onnxruntime), which the
+  verified model goldens pin. Requires gpu ^0.9.1 for the intrinsics on
+  the CPU backend.
+
 ## 0.4.1
 
 - Widen the gpu requirement to ^0.9 (shipped with the gpu 0.9.0 publish):

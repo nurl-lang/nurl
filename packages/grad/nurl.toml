@@ -1,8 +1,10 @@
 [package]
 name = "grad"
-version = "0.1.0"
-description = "Reverse-mode automatic differentiation over the tensor package — the training keystone. Build a computation eagerly with tape-recording ops (g_add, g_matmul, g_relu, ...) that mirror tensor's surface, call backward(loss) once, and read exact gradients for every registered parameter: backward passes are derived, not hand-written. The tape is a flat single-owner arena (indices as edges, deterministic reverse order, no per-node closures): it owns every intermediate and gradient, one tape_free releases everything, and tape_reset_to keeps the parameters while dropping the episode so a minibatch loop never re-mallocs. Ships SGD/Adam optimizers over the parameter list. Every backward rule is verified two independent ways: a central finite-difference harness and hand-derived analytic identities."
+version = "0.2.0"
+description = "Reverse-mode automatic differentiation over the tensor package — the training keystone. Build a computation eagerly with tape-recording ops (g_add, g_matmul, g_relu, ...) that mirror tensor's surface, call backward(loss) once, and read exact gradients for every registered parameter: backward passes are derived, not hand-written. The tape is a flat single-owner arena (indices as edges, deterministic reverse order, no per-node closures): it owns every intermediate and gradient, one tape_free releases everything, and tape_reset_to keeps the parameters while dropping the episode so a minibatch loop never re-mallocs. Ships SGD/Adam optimizers over the parameter list. Every backward rule is verified three independent ways: a central finite-difference harness, hand-derived analytic identities, and a PyTorch float64 oracle fed bit patterns. A GPU replay engine (gput_capture) mirrors a recorded episode onto the device — one kernel launch per node, device-resident Adam/SGD — under the ecosystem's bit-exactness discipline: the relu/linear-algebra tier is bit-identical to the CPU tape on CUDA and the CPU backend alike (a whole autoencoder trains to bit-equal weights, ~5x wall clock), transcendentals within an ulp on CUDA."
 license = "MIT OR Apache-2.0"
 
 [dependencies]
 tensor = { path = "../tensor", version = "^0.4" }
+gpukit = { path = "../gpukit", version = "^0.4.2" }
+gpu = { path = "../gpu", version = "^0.9.1" }
