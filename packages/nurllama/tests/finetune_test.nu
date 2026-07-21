@@ -26,6 +26,7 @@ $ `src/finetune.nu`
 $ `src/model.nu`
 $ `src/tokenizer.nu`
 $ `deps/gguf/src/gguf.nu`
+$ `deps/safetensor/src/safetensor.nu`
 $ `deps/grad/src/grad.nu`
 $ `deps/grad/src/opt.nu`
 $ `deps/grad/src/gput.nu`
@@ -141,45 +142,71 @@ $ `deps/gpukit/src/dev.nu`
                 }
             }
 
-            // ── 3. device LoRA overfit ───────────────────────────────
-            : *GpuKit kit ( gk_open 0 )
-            ? ( gk_ok kit ) {
-                : *GProg pg ( gput_capture kit tp . fg loss )
-                ( check ( gput_ok pg ) `30-layer graph captures onto the device` )
-                : *GpOpt go ( gpopt_adam_new 0.002 )
-                : i np * 2 * 7 . m n_layer
-                : ~ i pi 0
-                ~ < pi np {
-                    ( gpopt_add go pg @ GVar { ( nurl_peek pids pi ) } 0.0 )
-                    = pi + pi 1
+            // ── 3. train → save → merge → run the merged model ──────
+            : FtTrain tr ( ft_train m ids 8 16.0 42 60 0.002 F )
+            ( check . tr ok `ft_train: 60 device Adam steps over 420 adapters` )
+            ( nurl_print `  train CE ` )
+            ( nurl_print ( nurl_str_float . tr l0 ) )
+            ( nurl_print ` → ` )
+            ( nurl_print ( nurl_str_float . tr l1 ) )
+            ( nurl_print `\n` )
+            ( check < . tr l1 * 0.1 . tr l0 `training cuts the CE loss by 10x+` )
+            : ~ f drel / ( float_abs - . tr l0 ce ) ? > ( float_abs ce ) 1.0 ( float_abs ce ) 1.0
+            ( check < drel 0.000001 `step-0 device loss matches the CPU build (1e-6)` )
+            // adapters: save + round-trip
+            : s apath `/tmp/nurl_ft_adapters.safetensors`
+            : ~ b saok F
+            ?? ( ft_adapters_save apath m tr 8 ) { T _ → { = saok T } F e2 → { ( string_free e2 ) } }
+            ( check saok `adapters save as safetensors` )
+            ?? ( st_open apath ) {
+                T st → {
+                    ( check == ( st_n_tensors st ) * 2 * 7 . m n_layer `adapter file holds 2 tensors per slot (420)` )
+                    ( check >= ( st_find_tensor st `blk.0.q.lora_a` ) 0 `blk.0.q.lora_a present` )
+                    ( st_close st )
                 }
-                : ~ b tok2 ( gput_ok pg )
-                : ~ f l0 0.0
-                : ~ f l1 0.0
-                : ~ i st 0
-                ~ & < st 40 tok2 {
-                    = tok2 & tok2 ( gput_forward pg )
-                    = tok2 & tok2 ( gput_backward pg )
-                    ? == st 0 { = l0 ( gput_loss pg ) } {}
-                    ? == st 39 { = l1 ( gput_loss pg ) } {}
-                    = tok2 & tok2 ( gpopt_step go pg )
-                    = st + st 1
-                }
-                ( check tok2 `40-step device LoRA loop runs (420 adapters)` )
-                ( nurl_print `  overfit CE ` )
-                ( nurl_print ( nurl_str_float l0 ) )
-                ( nurl_print ` → ` )
-                ( nurl_print ( nurl_str_float l1 ) )
-                ( nurl_print `\n` )
-                ( check < l1 * 0.5 l0 `LoRA overfit halves the CE loss on-device` )
-                : ~ f drel / ( float_abs - l0 ce ) ? > ( float_abs ce ) 1.0 ( float_abs ce ) 1.0
-                ( check < drel 0.000001 `device step-0 loss matches the CPU build (1e-6; trans-tier ulps over 30 layers)` )
-                ( gpopt_free go )
-                ( gput_free pg )
-            } {
-                ( nurl_print `  (no compute backend — device checks skipped)\n` )
+                F e2 → { ( string_free e2 ) = g_fail + g_fail 1 }
             }
-            ( gk_close kit )
+            // merge + run through nurllama's --weights path
+            : s mpath `/tmp/nurl_ft_merged.safetensors`
+            : ~ b meok F
+            ?? ( ft_merge_st mpath m tr 8 16.0 ) { T _ → { = meok T } F e2 → { ( string_free e2 ) } }
+            ( check meok `merged full-model safetensors written` )
+            ? meok {
+                ?? ( llm_open_st ( string_data mp ) mpath 256 ) {
+                    T lm2 → {
+                        : ~ i hits 0
+                        : ~ i t2 0
+                        ~ < t2 - T2 1 {
+                            ( llm_eval lm2 ( _ti ids t2 ) t2 )
+                            : ~ i barg 0
+                            : ~ f bbest -1000000000.0
+                            : ~ i c2 0
+                            ~ < c2 V {
+                                : f v ( llm_logit lm2 c2 )
+                                ? > v bbest { = bbest v = barg c2 } {}
+                                = c2 + c2 1
+                            }
+                            ? == barg ( _ti ids + t2 1 ) { = hits + hits 1 } {}
+                            = t2 + t2 1
+                        }
+                        ( nurl_print `  merged-model greedy: ` )
+                        ( nurl_print_int hits )
+                        ( nurl_print ` / ` )
+                        ( nurl_print_int - T2 1 )
+                        ( nurl_print ` positions reproduce the training targets\n` )
+                        ( check >= hits - T2 2 `merged model reproduces the overfitted sentence (>= T-2 greedy hits)` )
+                        ( llm_close lm2 )
+                    }
+                    F e2 → {
+                        ( nurl_print `  llm_open_st FAILED: ` )
+                        ( nurl_print ( string_data e2 ) )
+                        ( nurl_print `\n` )
+                        ( string_free e2 )
+                        = g_fail + g_fail 1
+                    }
+                }
+            } {}
+            ( ft_train_free tr )
             ( nurl_free pids )
             ( tape_free tp )
             ( vec_free [i] ids )
