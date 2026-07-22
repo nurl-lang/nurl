@@ -1790,6 +1790,168 @@ $ `cudakernel.nu`
     ^ nf
 }
 
+// ── async iterate runs ────────────────────────────────────────────────
+// compute_iterate's loop can also run as a RUN OBJECT advanced in bounded
+// slices by compute_iterate_status polls — the same drain-as-you-poll
+// contract the submit tools follow, so a long training is never at the
+// mercy of one HTTP call's timeout. The run keeps everything a round
+// needs; the compiled modules are freed the moment the run finishes.
+: IterRun {
+    i id
+    i status  // 0 running · 1 done · 2 error
+    b have_update
+    ( Vec u ) wasm
+    ( Vec u ) uwasm
+    i S
+    i A
+    i N
+    i rlo
+    i rhi
+    i dsid
+    f lr
+    f eps
+    i rounds
+    i rnd
+    i ran
+    i failed
+    i total_seeded
+    f last_delta
+    b converged
+    ( Vec i ) xparams
+    ( Vec f ) state
+    ( Vec f ) grad
+    ( Vec f ) prev
+}
+
+: IterRuns {
+    ( Vec s ) v
+}
+
+: ~ i g_iter_runs 0
+
+: ~ i g_iter_next 1
+
+@ __iter_runs → *IterRuns {
+    ? == g_iter_runs 0 {
+        : *IterRuns b # *IterRuns ( nurl_alloc Z IterRuns )
+        = . b v ( vec_new [s] )
+        = g_iter_runs # i b
+    } {}
+    ^ # *IterRuns g_iter_runs
+}
+
+@ __iter_find i id → s {
+    : *IterRuns rs ( __iter_runs )
+    : ~ i k 0
+    ~ < k ( vec_len [s] . rs v ) {
+        : s p ?? ( vec_get [s] . rs v k ) { T x → x F → # s 0 }
+        ? != # i p 0 {
+            : *IterRun r # *IterRun p
+            ? == . r id id { ^ p } {}
+        } {}
+        = k + k 1
+    }
+    ^ # s 0
+}
+
+// One full round (accumulate + step), updating the run in place — the exact
+// body the synchronous loop used to inline.
+@ __iterate_step * Swarm sw * IterRun r → v {
+    : *McpState st # *McpState g_mcp
+    : *u nseed ( nurl_alloc 8 )
+    ( nurl_poke nseed 0 0 )
+    : i nf ( __iterate_round_ft sw . r wasm . r S . r A . r xparams . r rlo . r rhi . r state . r dsid . st seeded nseed . r grad )
+    = . r total_seeded + . r total_seeded ( nurl_peek nseed 0 )
+    ( nurl_free nseed )
+    ? > nf 0 {
+        = . r failed nf
+        = . r rnd . r rounds
+        ^ v
+    } {}
+    ? . r have_update {
+        ( vec_clear [f] . r prev )
+        : ~ i sj 0
+        ~ < sj . r S { ( vec_push [f] . r prev ?? ( vec_get [f] . r state sj ) { T x → x F → 0.0 } ) = sj + sj 1 }
+        : i nfu ( __iterate_update_ft sw . r uwasm . r S . r A . r grad . r N . r xparams . r state )
+        ? > nfu 0 { = . r failed nfu = . r rnd . r rounds } {
+            : ~ f dmax 0.0
+            : ~ i j 0
+            ~ < j . r S {
+                : f nv2 ?? ( vec_get [f] . r state j ) { T x → x F → 0.0 }
+                : f ov ?? ( vec_get [f] . r prev j ) { T x → x F → 0.0 }
+                : f d - nv2 ov
+                : f ad ? < d 0.0 - 0.0 d d
+                ? > ad dmax { = dmax ad } {}
+                = j + j 1
+            }
+            = . r last_delta dmax
+            = . r ran + . r ran 1
+            ? & > . r eps 0.0 < dmax . r eps { = . r converged T } {}
+        }
+    } {
+        : ~ f dmax 0.0
+        : ~ i j 0
+        ~ < j . r S {
+            : f g2 ?? ( vec_get [f] . r grad j ) { T x → x F → 0.0 }
+            : f d / * . r lr g2 # f . r N
+            : f cur ?? ( vec_get [f] . r state j ) { T x → x F → 0.0 }
+            ( vec_set [f] . r state j - cur d )
+            : f ad ? < d 0.0 - 0.0 d d
+            ? > ad dmax { = dmax ad } {}
+            = j + j 1
+        }
+        = . r last_delta dmax
+        = . r ran + . r ran 1
+        ? & > . r eps 0.0 < dmax . r eps { = . r converged T } {}
+    }
+    = . r rnd + . r rnd 1
+}
+
+// Advance until done / converged / a chunk failure — or, with budget_ns > 0,
+// until the slice's time is up. Finalizes the status and releases the
+// compiled modules when the run leaves "running".
+@ __iter_advance * Swarm sw * IterRun r i budget_ns → v {
+    ? == . r status 0 {} { ^ v }
+    : i t0 ( monotonic_ns )
+    : ~ b more T
+    ~ & & & more < . r rnd . r rounds ! . r converged == . r failed 0 {
+        ( __iterate_step sw r )
+        ? & > budget_ns 0 > - ( monotonic_ns ) t0 budget_ns { = more F } {}
+    }
+    ? | | >= . r rnd . r rounds . r converged > . r failed 0 {
+        = . r status ? > . r failed 0 2 1
+        ( vec_free [u] . r wasm )
+        = . r wasm ( vec_new [u] )
+        ( vec_free [u] . r uwasm )
+        = . r uwasm ( vec_new [u] )
+    } {}
+}
+
+// The result object both the synchronous return and the status poll share.
+@ __iter_result_json * IterRun r b with_id → Json {
+    : Json o ( json_obj_new )
+    ? with_id {
+        ( json_obj_set o `task_id` ( json_int . r id ) )
+        : ~ s stxt `running`
+        ? == . r status 1 { = stxt `done` } {}
+        ? == . r status 2 { = stxt `error` } {}
+        ( json_obj_set o `status` ( json_str_lit stxt ) )
+    } {}
+    : Json sarr ( json_arr_new )
+    : ~ i j2 0
+    ~ < j2 . r S { : b _p ( json_arr_push sarr ( __jf ?? ( vec_get [f] . r state j2 ) { T x → x F → 0.0 } ) ) = j2 + j2 1 }
+    ( json_obj_set o `state` sarr )
+    ( json_obj_set o `rounds_run` ( json_int . r ran ) )
+    ( json_obj_set o `rounds_total` ( json_int . r rounds ) )
+    ( json_obj_set o `converged` ( json_bool . r converged ) )
+    ( json_obj_set o `last_max_delta` ( __jf . r last_delta ) )
+    ? != . r dsid 0 {
+        ( json_obj_set o `dataset` ( json_int . r dsid ) )
+        ( json_obj_set o `seeded_blocks` ( json_int . r total_seeded ) )
+    } {}
+    ^ o
+}
+
 @ tool_iterate Json args → Json {
     : ?Json cj ( json_obj_get args `cuda` )
     : ?Json sj ( json_obj_get args `state` )
@@ -1917,81 +2079,73 @@ $ `cudakernel.nu`
     ( swarm_discover sw 6 )
     : i ngpu ( roster_count_caps # *Roster . sw roster ( cap_gpu ) )
     ? == ngpu 0 { ( vec_free [f] state ) ( vec_free [i] xparams ) ( vec_free [u] wasm ) ( vec_free [u] uwasm ) ^ ( mcp_tool_result_error `no GPU workers in the cluster — start some with 'swarm-mcp --worker --gpu'` ) } {}
-    // ── the loop, in the coordinator ──
-    : *McpState st # *McpState g_mcp
-    : *u nseed ( nurl_alloc 8 )
-    ( nurl_poke nseed 0 0 )
-    : ~ i total_seeded 0
-    : ( Vec f ) grad ( vec_new [f] )
-    : ( Vec f ) prev ( vec_new [f] )
-    : ~ i ran 0
-    : ~ i failed 0
-    : ~ f last_delta 0.0
-    : ~ b converged F
-    : ~ i rnd 0
-    ~ & < rnd rounds ! converged {
-        ( nurl_poke nseed 0 0 )
-        : i nf ( __iterate_round_ft sw wasm S A xparams rlo rhi state dsid . st seeded nseed grad )
-        = total_seeded + total_seeded ( nurl_peek nseed 0 )
-        ? > nf 0 { = failed nf = rnd rounds } {
-            ? have_update {
-                // general step: new_state = update(acc, state, N, params) as a
-                // sample over [0, S) on a GPU worker; delta vs the snapshot.
-                ( vec_clear [f] prev )
-                : ~ i sj 0
-                ~ < sj S { ( vec_push [f] prev ?? ( vec_get [f] state sj ) { T x → x F → 0.0 } ) = sj + sj 1 }
-                : i nfu ( __iterate_update_ft sw uwasm S A grad N xparams state )
-                ? > nfu 0 { = failed nfu = rnd rounds } {
-                    : ~ f dmax 0.0
-                    : ~ i j 0
-                    ~ < j S {
-                        : f nv ?? ( vec_get [f] state j ) { T x → x F → 0.0 }
-                        : f ov ?? ( vec_get [f] prev j ) { T x → x F → 0.0 }
-                        : f d - nv ov
-                        : f ad ? < d 0.0 - 0.0 d d
-                        ? > ad dmax { = dmax ad } {}
-                        = j + j 1
-                    }
-                    = last_delta dmax = ran + ran 1
-                    ? & > eps 0.0 < dmax eps { = converged T } {}
-                }
-            } {
-                // SGD update: theta[j] -= lr * grad[j] / N ; track max |delta|
-                : ~ f dmax 0.0
-                : ~ i j 0
-                ~ < j S {
-                    : f g ?? ( vec_get [f] grad j ) { T x → x F → 0.0 }
-                    : f d / * lr g # f N
-                    : f cur ?? ( vec_get [f] state j ) { T x → x F → 0.0 }
-                    ( vec_set [f] state j - cur d )
-                    : f ad ? < d 0.0 - 0.0 d d
-                    ? > ad dmax { = dmax ad } {}
-                    = j + j 1
-                }
-                = last_delta dmax
-                = ran + ran 1
-                ? & > eps 0.0 < dmax eps { = converged T } {}
-            }
-        }
-        = rnd + rnd 1
-    }
-    ( nurl_free nseed )
-    ( vec_free [u] wasm ) ( vec_free [u] uwasm ) ( vec_free [i] xparams ) ( vec_free [f] prev )
-    // ── the result ──
-    ? > failed 0 {
-        ( vec_free [f] grad ) ( vec_free [f] state )
+    // ── the run object (shared by the sync path and async polls) ──
+    : *IterRun r # *IterRun ( nurl_alloc Z IterRun )
+    = . r id 0
+    = . r status 0
+    = . r have_update have_update
+    = . r wasm wasm
+    = . r uwasm uwasm
+    = . r S S
+    = . r A A
+    = . r N N
+    = . r rlo rlo
+    = . r rhi rhi
+    = . r dsid dsid
+    = . r lr lr
+    = . r eps eps
+    = . r rounds rounds
+    = . r rnd 0
+    = . r ran 0
+    = . r failed 0
+    = . r total_seeded 0
+    = . r last_delta 0.0
+    = . r converged F
+    = . r xparams xparams
+    = . r state state
+    = . r grad ( vec_new [f] )
+    = . r prev ( vec_new [f] )
+    : b want_async ?? ( json_obj_get args `async` ) { T x → ( json_bool_val x ) F → F }
+    ? want_async {
+        // register + return immediately; compute_iterate_status advances it
+        = . r id g_iter_next
+        = g_iter_next + g_iter_next 1
+        : *IterRuns rs ( __iter_runs )
+        ( vec_push [s] . rs v # s r )
+        : Json o0 ( __iter_result_json r T )
+        ^ ( tool_result_json o0 )
+    } {}
+    ( __iter_advance sw r 0 )
+    ? > . r failed 0 {
+        ( vec_free [f] . r grad ) ( vec_free [f] . r state ) ( vec_free [f] . r prev )
+        ( vec_free [i] . r xparams )
+        ( vec_free [u] . r wasm ) ( vec_free [u] . r uwasm )
+        ( nurl_free # s r )
         ^ ( mcp_tool_result_error `a chunk failed on a worker (bad kernel, missing GPU, or a lost block) — the run was stopped` )
     } {}
-    : Json o ( json_obj_new )
-    : Json sarr ( json_arr_new )
-    : ~ i j2 0
-    ~ < j2 S { : b _p ( json_arr_push sarr ( __jf ?? ( vec_get [f] state j2 ) { T x → x F → 0.0 } ) ) = j2 + j2 1 }
-    ( json_obj_set o `state` sarr )
-    ( json_obj_set o `rounds_run` ( json_int ran ) )
-    ( json_obj_set o `converged` ( json_bool converged ) )
-    ( json_obj_set o `last_max_delta` ( __jf last_delta ) )
-    ? != dsid 0 { ( json_obj_set o `dataset` ( json_int dsid ) ) ( json_obj_set o `seeded_blocks` ( json_int total_seeded ) ) } {}
-    ( vec_free [f] grad ) ( vec_free [f] state )
+    : Json o ( __iter_result_json r F )
+    ( vec_free [f] . r grad ) ( vec_free [f] . r state ) ( vec_free [f] . r prev )
+    ( vec_free [i] . r xparams )
+    ( vec_free [u] . r wasm ) ( vec_free [u] . r uwasm )
+    ( nurl_free # s r )
+    ^ ( tool_result_json o )
+}
+
+// Advance an async iterate run by a bounded time slice and report it.
+@ tool_iterate_status Json args → Json {
+    : i id ?? ( json_obj_get args `task_id` ) { T x → ?? ( json_num_as_i x ) { T v → v F → 0 } F → 0 }
+    : s rp ( __iter_find id )
+    ? != # i rp 0 {} { ^ ( mcp_tool_result_error `no such iterate run — start one with compute_iterate {"async":true,...}` ) }
+    : *IterRun r # *IterRun rp
+    ? == . r status 0 {
+        : ~ i budget_ms ?? ( json_obj_get args `budget_ms` ) { T x → ?? ( json_num_as_i x ) { T v → v F → 8000 } F → 8000 }
+        ? < budget_ms 100 { = budget_ms 100 } {}
+        ? > budget_ms 60000 { = budget_ms 60000 } {}
+        ? ( mcp_ensure_relay ) {} {}
+        : *Swarm sw ( mcp_swarm )
+        ( __iter_advance sw r * budget_ms 1000000 )
+    } {}
+    : Json o ( __iter_result_json r T )
     ^ ( tool_result_json o )
 }
 
@@ -2698,6 +2852,7 @@ $ `cudakernel.nu`
     ( ms_prop props `params` `array` `Optional constant numbers (same every round): grad reads p[state_len..], update reads swarm_param(i).` )
     ( ms_prop props `epsilon` `number` `Optional: stop early once the largest |state change| in a round is below this. Omit to run all "rounds".` )
     ( ms_prop props `dataset` `integer` `Optional dataset id: grad maps over the data (v = data[x]); blocks cache after round one, so later rounds ship only the state.` )
+    ( ms_prop props `async` `boolean` `true → return immediately with a task_id and advance the loop through compute_iterate_status polls (bounded work per call — use for long trainings). Default false: the whole loop runs inside this call.` )
     ( ms_prop props `lo` `integer` `Range start (inclusive); required without a dataset.` )
     ( ms_prop props `hi` `integer` `Range end (exclusive); required without a dataset.` )
     ( json_obj_set schema `properties` props )
@@ -2705,6 +2860,19 @@ $ `cudakernel.nu`
     ( json_arr_push req ( json_str_lit `cuda` ) )
     ( json_arr_push req ( json_str_lit `state` ) )
     ( json_arr_push req ( json_str_lit `rounds` ) )
+    ( json_obj_set schema `required` req )
+    ^ schema
+}
+
+@ ms_schema_iterate_status → Json {
+    : Json schema ( json_obj_new )
+    ( json_obj_set schema `type` ( json_str_lit `object` ) )
+    : Json props ( json_obj_new )
+    ( ms_prop props `task_id` `integer` `The id compute_iterate {"async":true} returned.` )
+    ( ms_prop props `budget_ms` `integer` `Max time this poll may spend advancing rounds (100..60000, default 8000). The run keeps its exact position between polls.` )
+    ( json_obj_set schema `properties` props )
+    : Json req ( json_arr_new )
+    ( json_arr_push req ( json_str_lit `task_id` ) )
     ( json_obj_set schema `required` req )
     ^ schema
 }
@@ -2770,7 +2938,7 @@ $ `cudakernel.nu`
 }
 
 @ __help_workflow → s {
-    ^ `A submit tool returns immediately with a task_id and status "running" (or "done" for tiny work). Poll compute_result {"task_id":N} until status is "done" (result present) or "error". compute_list shows every task.\nThe coordinator drains cluster traffic on each tool call, so tasks advance as you poll — poll compute_result rather than sleeping.\nFailure is explicit: a chunk that traps (bad kernel, missing runtime or GPU, a lost dataset block) is COUNTED, never folded into the answer as zero. The task then finishes status "error" with failed_chunks>0 and withholds the result — a returned result always covers every chunk.\ncompute_iterate and compute_shuffle instead run their whole loop inside the single call and return the final answer directly (no polling).`
+    ^ `A submit tool returns immediately with a task_id and status "running" (or "done" for tiny work). Poll compute_result {"task_id":N} until status is "done" (result present) or "error". compute_list shows every task.\nThe coordinator drains cluster traffic on each tool call, so tasks advance as you poll — poll compute_result rather than sleeping.\nFailure is explicit: a chunk that traps (bad kernel, missing runtime or GPU, a lost dataset block) is COUNTED, never folded into the answer as zero. The task then finishes status "error" with failed_chunks>0 and withholds the result — a returned result always covers every chunk.\ncompute_shuffle runs its whole loop inside the single call. compute_iterate does too by DEFAULT, but pass {\"async\":true} and it returns a task_id immediately; each compute_iterate_status poll then advances the loop by a bounded time slice (budget_ms) and reports {status, state, rounds_run} — use async for any training long enough to threaten an HTTP timeout.`
 }
 
 @ __help_expr → s {
@@ -2852,6 +3020,9 @@ $ `cudakernel.nu`
     ( vec_push [Json] tools ( mcp_tool_descriptor `compute_iterate`
     `Iterative solver with the loop IN THE ENGINE — one call returns the converged "state". Each round reduces a CUDA grad() into an accumulator, then applies a step rule. DEFAULT is gradient descent (give "lr", state[j] -= lr*grad[j]/N); for k-means, EM, power iteration, PageRank, momentum/Adam give an "update" device function (and "acc_dim" when the accumulator is wider than the state). Over a dataset the data caches after round one. Needs a --gpu worker. Recipes and the swarm_state/swarm_acc/swarm_N accessors: swarm_help "iterate".`
     ( ms_schema_iterate ) ) )
+    ( vec_push [Json] tools ( mcp_tool_descriptor `compute_iterate_status`
+    `Advance and inspect an ASYNC iterate run. Start one with compute_iterate {"async":true, ...} (returns task_id immediately); each status call advances the loop by a bounded time slice ("budget_ms", default 8000, max 60000) and returns {status: running|done|error, state, rounds_run, rounds_total, last_max_delta, seeded_blocks}. Poll until "done" — a long training is never at the mercy of one HTTP call's timeout.`
+    ( ms_schema_iterate_status ) ) )
     ( vec_push [Json] tools ( mcp_tool_descriptor `compute_shuffle`
     `Group-by-key / reduce-by-key. A CUDA key(x)+value(x) map plus a reduce op; both the map AND the per-key reduce run distributed on the GPU (a combiner), and the coordinator merges compact per-chunk tables. Returns { "groups": {…}, "n_groups", "pairs_mapped" } (or {n_groups, saved_to} with out_file, required past 8192 groups). Word-count, keyed histograms, joins. hi - lo ≤ 128 M; distinct keys are per-chunk-bounded (~131072) so total cardinality scales with the worker count (hundreds of thousands to millions). Needs a --gpu worker. Details: swarm_help "shuffle".`
     ( ms_schema_shuffle ) ) )
@@ -2879,6 +3050,7 @@ $ `cudakernel.nu`
     ? != ( nurl_str_eq name `compute_submit_kernel` ) 0 { ^ ( tool_submit_kernel args ) } {}
     ? != ( nurl_str_eq name `compute_submit_cuda` ) 0 { ^ ( tool_submit_cuda args ) } {}
     ? != ( nurl_str_eq name `compute_iterate` ) 0 { ^ ( tool_iterate args ) } {}
+    ? != ( nurl_str_eq name `compute_iterate_status` ) 0 { ^ ( tool_iterate_status args ) } {}
     ? != ( nurl_str_eq name `compute_shuffle` ) 0 { ^ ( tool_shuffle args ) } {}
     ? != ( nurl_str_eq name `compute_sample_cuda` ) 0 { ^ ( tool_sample_cuda args ) } {}
     ? != ( nurl_str_eq name `compute_histogram_cuda` ) 0 { ^ ( tool_hist_cuda args ) } {}
