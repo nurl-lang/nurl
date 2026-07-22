@@ -116,6 +116,56 @@ computed and stored only where a parameter lies upstream. Frozen-const
 branches — a LoRA base model, input batches — cost no backward compute and
 no gradient memory on either engine; `grad_of` on such nodes reports zeros.
 
+## The demo ladder — what grad unlocked, bottom to top
+
+Each rung is a shipped, oracle-verified consumer; together they are the
+registry's training story, and none of them hand-writes a backward pass:
+
+1. **An autoencoder from one loss expression** (`tests/train_test.nu`,
+   `mlp 0.3.0`'s `mlp_fit_grad`): the d-64-32-64-d AE trains through the
+   tape to sklearn's own bar — the hand-written and derived engines agree
+   to ~14 significant digits on the oracle workload.
+2. **Bit-exact GPU training** (`src/gput.nu`, M5): capture the episode
+   once, replay it on the device — an entire training run lands on
+   bit-equal weights, both on CUDA and the gpu package's CPU backend.
+3. **A real LLM finetunes** (`nurllama 0.12.0`, M6): `nurllama finetune`
+   builds the whole transformer + cross-entropy as one tape graph, trains
+   LoRA adapters on the GPU (the frozen base is free — requires-grad
+   propagation), and the merged model reproduces its training text
+   through the production inference path.
+4. **The cluster's kernels are derived** (`src/emitc.nu` + swarm-mcp, M7):
+   `gemit_cuda_grad` emits a scalar tape as `compute_iterate`'s
+   `__device__ grad()`; the emitted C is bit-equal to the tape under gcc
+   (`tests/emitc_oracle.sh`), and a live-swarm linear regression landed
+   bit-identical to the local tape run (`swarm-mcp/tests/
+   grad_iterate_smoke.sh`).
+
+## Honest limits
+
+- **f64 only.** The tape computes in double throughout; f32 training
+  (LoRA at real scale wants it) is a tensor-level dtype question, out of
+  grad's hands until tensor grows a data plane for it.
+- **The device replay is a static graph.** `gput_capture` freezes one
+  episode's structure; new shapes mean a new capture. Refreshing inputs
+  (`gput_set_input`) covers the minibatch/window pattern — data changes,
+  the graph does not.
+- **Per-node kernel launches.** The replay engine cannot fuse the way a
+  hand-written pipeline can: anomaly's aegpu keeps its 34× on a tiny AE
+  (4 launches vs ~40). The replay wins on width/batch and on generality —
+  every recordable graph, not one architecture. On the gpu CPU backend
+  the replay exists to VERIFY the bit-exactness contract, not for speed.
+- **The C emitter is scalar.** `gemit_cuda_grad` refuses non-[1] nodes
+  and linear algebra — its target (`compute_iterate`) is a per-example
+  scalar loss by design. Distributed tensor training is a different
+  machine (all-reduce over gput shards) and intentionally not faked here.
+- **Transcendentals on CUDA are ~1 ulp off the CPU tape** (exp/log/
+  sigmoid/tanh/softmax — device libm). The exact tier (relu, arithmetic,
+  sqrt, matmul, reductions, Adam/SGD) is bit-identical everywhere; the
+  parity suite pins both tiers.
+- **Adam's ε placement follows sklearn** (`lr_t·m/(√v+ε)`), not PyTorch's
+  corrected-v̂ form — identical to mlp and anomaly's kernels, a few ulp
+  from torch when gradients are tiny.
+
 ## Verification
 
 Every backward rule is checked several independent ways:
