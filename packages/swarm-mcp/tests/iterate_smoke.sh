@@ -80,4 +80,25 @@ else
 fi
 
 if [ "$fail" = 0 ]; then echo "[iterate-smoke] ALL PASS"; else echo "[iterate-smoke] FAILURES"; tail -20 "$TMP/node.log"; fi
+
+# ── async: the same fit through compute_iterate {"async":true} + polls ──
+req2="$(python3 -c "import json,sys; print(json.dumps({'jsonrpc':'2.0','id':10,'method':'tools/call','params':{'name':'compute_iterate','arguments':{'cuda':sys.argv[1],'state':[0.0],'rounds':80,'lr':0.4,'epsilon':1e-4,'dataset':int(sys.argv[2]),'async':True}}}))" "$GRAD" "$ds")"
+tid="$(MCP "$req2" | python3 -c "import json,sys; d=json.load(sys.stdin); o=json.loads(d['result']['content'][0]['text']); print(o['task_id'])" 2>/dev/null)"
+if [ -z "$tid" ]; then echo "[iterate-smoke] FAIL async submit"; fail=1; else
+  echo "[iterate-smoke] async task_id=$tid — polling with budget_ms=1500"
+  polls=0; astate=""; astatus="running"
+  while [ "$astatus" = "running" ] && [ $polls -lt 120 ]; do
+    out="$(MCP "{\"jsonrpc\":\"2.0\",\"id\":11,\"method\":\"tools/call\",\"params\":{\"name\":\"compute_iterate_status\",\"arguments\":{\"task_id\":$tid,\"budget_ms\":1500}}}")"
+    astatus="$(printf '%s' "$out" | python3 -c "import json,sys; d=json.load(sys.stdin); o=json.loads(d['result']['content'][0]['text']); print(o['status'])" 2>/dev/null)"
+    astate="$(printf '%s' "$out" | python3 -c "import json,sys; d=json.load(sys.stdin); o=json.loads(d['result']['content'][0]['text']); print('%.4f' % o['state'][0])" 2>/dev/null)"
+    polls=$((polls+1))
+  done
+  echo "[iterate-smoke] async done after $polls polls, theta=$astate (status=$astatus)"
+  if [ "$astatus" = "done" ] && [ "$polls" -ge 2 ] && python3 -c "import sys; exit(0 if abs(float('$astate') - float('$MEAN')) < 1.0 else 1)"; then
+    echo "[iterate-smoke] PASS async — bounded polls advanced the run to the same answer"
+  else
+    echo "[iterate-smoke] FAIL async (status=$astatus polls=$polls theta=$astate vs $MEAN)"; fail=1
+  fi
+fi
+
 exit $fail
