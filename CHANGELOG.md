@@ -8,6 +8,72 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.22.0] — 2026-07-22
+
+The **training** release: the registry's inference-only stack becomes a
+training stack. A new reverse-mode autodiff package (`grad`) is the
+keystone; `mlp` derives its backprop from it, `nurllama` finetunes real
+models with it on the GPU, and `swarm-mcp` runs gradient kernels *emitted
+from it* across a cluster — no backward pass in the ecosystem is
+hand-written anymore.
+
+### Added
+
+- **`packages/grad` 0.4.0 — reverse-mode automatic differentiation over
+  `tensor`** (new package, four releases in one arc). Define-by-run
+  tape-recording ops (`g_add`, `g_matmul`, `g_softmax`, …) with one flat
+  single-owner arena; `backward(loss)` is a deterministic reverse sweep
+  with requires-grad propagation (a frozen-const branch costs no compute
+  and no gradient memory). SGD/Adam optimizers with per-parameter L2 and
+  global-norm clipping. A **bit-exact GPU replay engine** (`gput_capture`)
+  mirrors a recorded episode onto the device — one kernel launch per node
+  under the aegpu rounding discipline — so an entire training run lands on
+  bit-equal weights on CUDA and the CPU backend alike (~5× the CPU tape on
+  an RTX 4090 for the AE benchmark). A **CUDA-C emitter**
+  (`gemit_cuda_grad`) prints a scalar tape as `compute_iterate`'s
+  `__device__ grad()`; the emitted C is bit-equal to the tape under
+  `gcc -ffp-contract=off`, and a live-swarm linear regression landed
+  bit-identical to the local tape run. Verified by central finite
+  differences, hand-derived bit-exact identities, and a PyTorch float64
+  oracle fed raw bit patterns (loss ~1e-16, grads ~1e-13).
+- **`nurllama` 0.12.1 — the engine now trains.** `nurllama finetune
+  <model.gguf> <data.txt>` learns LoRA adapters on the GPU over the grad
+  tape: the whole transformer forward + cross-entropy is one tape graph
+  (llama-family NORM rope handled by un-permuting q/k at load; qwen2
+  native), the corpus round-robins through fixed windows with two device
+  uploads per switch, adapters save as safetensors, and `--merged` writes
+  a genuine HF-layout full-model safetensors runnable via `--weights`.
+  Proven by a wiring oracle against the inference engine (top-1 identical,
+  2e-7 on the top logit) and by the merged model reproducing its training
+  text verbatim through greedy decode.
+- **`packages/mlp` 0.3.1 — two training engines.** `mlp_fit_grad` runs the
+  exact sklearn recipe with gradients from the grad tape instead of
+  hand-derived layer deltas; both engines pass the sklearn oracle
+  independently and agree to ~14 significant digits.
+- **`packages/anomaly` 0.5.1 — GPU autoencoder training, bit-exact.** The
+  `/train/autoencoder` path runs on a CUDA device when present at ~34× the
+  CPU, with the standing guarantee intact: backend choice can never change
+  a result (explicit `__d*_rn` kernels, serial accumulation in the CPU's
+  order, host-side transcendentals).
+- **`swarm-mcp` 0.21.0** (six releases): `compute_iterate` — GD *and*
+  general fixpoints (k-means, EM, power iteration) with the loop in the
+  engine, now also **async** (`{"async":true}` returns a task_id;
+  `compute_iterate_status` advances the run in bounded time slices, so a
+  long training never dies to an HTTP timeout); typed datasets
+  (f32/i32/i64); file-backed datasets streamed from disk up to 64 GiB;
+  automatic chunk re-dispatch when a worker dies mid-task; shuffle
+  cardinality that scales with the cluster (per-chunk tables, overflow
+  detected rather than dropped); coordinator crash-restart recovery with
+  dataset persistence; `swarm_help` topic help for driving agents.
+- **`nurlpkg`: help never acts, `publish --dry-run`, unknown-flag
+  rejection, `nurlpkg build`.** `nurlpkg publish --help` used to PUBLISH —
+  help is now resolved before dispatch, every subcommand has its own
+  `--help`, `--dry-run`/`--dryrun` runs every publish gate and uploads
+  nothing (no token needed), a typo'd flag is an error instead of being
+  silently ignored, and `nurlpkg build [<dep>]` compiles an installed
+  application package in place (arranging the deps link its root-relative
+  imports need).
+
 ### Fixed
 
 - **`nurl_str_float` now round-trips instead of truncating to 6 significant
@@ -23,6 +89,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   so the text always round-trips. Non-finite values get stable spellings
   (`nan`, `inf`, `-inf`). Only one test golden changed (`cbor`'s `double_pi`,
   now the full `3.141592653589793`).
+- **nurlc: a float↔double width mismatch at a store miscompiled to invalid
+  IR.** `: f a ( bits_to_f32 b )` — or any f32 value bound/assigned to an
+  `f` slot, or the reverse — fell through every branch of the store
+  coercion (the never-valid-mix check fires only when exactly one side is
+  a float) and emitted `store double %float_val`, which nurlc accepted and
+  only clang rejected, with no source location. Float widths now follow
+  the integer-width rule in the same helper: `fpext` on widen, `fptrunc`
+  on narrow, at lets, `=` reassignment and result-field stores.
+- **nurlc: a bare integer supplied for a plain named-struct field in an
+  aggregate literal is now a source-located error** (previously invalid
+  IR only clang caught). Enum-typed fields and single-pointer-handle
+  structs still coerce legally. Also: `: i T 5` now explains that `T`/`F`
+  are the boolean literals.
+- **mlp: Adam's bias correction was frozen at t = 1** — the step counter
+  lived as a scalar field on a by-value struct, so every minibatch after
+  the first ran with a permanently inflated effective learning rate.
+  Found by the anomaly package's bit-exact GPU parity mirror. Trained
+  networks change versus 0.1.x; the sklearn oracle passes with 100 %
+  flag agreement.
+- **gpu/gpukit: f64 matmul determinism.** gpukit's f64 matmul/bmm kernels
+  claimed bit-identity with a sequential host loop, but NVRTC's default
+  fmad contraction fused `s+=a*b` — through tensor's silent ≥100k-flop
+  GPU fast path, "CPU" results depended on whether a GPU was present. The
+  kernels now spell their accumulation with explicit `__d*_rn` intrinsics
+  (F32 kernels unchanged: their contract is true-float32, pinned by the
+  verified model goldens); the gpu CPU backend gained the intrinsics and
+  compiles with `-ffp-contract=off`, so the bit-exactness discipline holds
+  on both backends.
+- **nurllama: two safetensors-path correctness holes**, both of the
+  "runs fine, silently produces nonsense" class. (1) The HF norm-name
+  table was gemma3-centric: HF llama/qwen2 call the pre-FFN norm
+  `post_attention_layernorm`, gemma3 uses that name for its *extra*
+  attention-output norm — so a llama checkpoint's norms loaded as gemma
+  norms and enabled a spurious per-layer normalization. (2) A genuine HF
+  llama-family checkpoint stores rotary q/k lanes half-split while the
+  NORM rope kernel rotates adjacent lanes; llama.cpp permutes at
+  GGUF-conversion time, the `--weights` path never did. The loader now
+  applies the converter's interleave at load. Every real HF
+  llama/SmolLM/TinyLlama checkpoint through `--weights` was affected;
+  both paths are pinned by the finetune merge round-trip (12/12 greedy).
+- **stdlib/net/relay: a multi-MiB frame spanning several recv windows was
+  dropped on a mid-frame timeout**, leaving its unread body in the socket
+  and desyncing every following frame — the root cause behind large
+  dataset blocks never arriving. A mid-frame timeout with partial data now
+  retries (bounded); `net_is_timeout` joined `std/net`.
 
 ### Changed
 
@@ -8120,7 +8231,8 @@ releases are measured.
   compile-server (`api/`), browser playground (`nurlweb/`).
 * Dual license: MIT (LICENSE-MIT) or Apache-2.0 (LICENSE-APACHE).
 
-[Unreleased]: https://github.com/nurl-lang/nurl/compare/v0.13.0...HEAD
+[Unreleased]: https://github.com/nurl-lang/nurl/compare/v0.22.0...HEAD
+[0.22.0]: https://github.com/nurl-lang/nurl/compare/v0.21.0...v0.22.0
 [0.13.0]: https://github.com/nurl-lang/nurl/compare/v0.12.0...v0.13.0
 [0.12.0]: https://github.com/nurl-lang/nurl/compare/v0.11.3...v0.12.0
 [0.10.12]: https://github.com/nurl-lang/nurl/compare/v0.10.11...v0.10.12
