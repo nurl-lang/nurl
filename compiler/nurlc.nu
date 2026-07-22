@@ -10706,7 +10706,9 @@
         }
         { ? == ( nurl_lex_type lex ) TT_PUB
             { ( die lex `expected variable name in let — 'pub' is a reserved keyword (the visibility prefix on top-level declarations) and cannot name a binding` ) }
-            { ( die lex `expected variable name in let` ) } }
+            { ? == ( nurl_lex_type lex ) TT_BOOL
+                { ( die lex `expected variable name in let — 'T' and 'F' are the boolean literals and cannot name a binding; pick another name` ) }
+                { ( die lex `expected variable name in let` ) } } }
     }
 }
 
@@ -12901,8 +12903,7 @@
     //   * Widen, source signed (default): emit `sext`.
     // Shipped 2026-05-14 with the fixed-size types Phase 1 — `: i32 x 5`,
     // `: i32 width  ( fn → i32 )`, and FFI-style narrow returns now store
-    // cleanly without manual `# T` casts. Float-width adjustment (f32 ↔
-    // double) lives in gen_cast since it needs explicit `#` syntax.
+    // cleanly without manual `# T` casts.
     : i fw ( int_width from_ty )
     : i tw ( int_width to_ty )
     ? & & > fw 0 > tw 0 != fw tw
@@ -12922,6 +12923,27 @@
             ( nurl_print ( nurl_llty from_ty ) ) ( nurl_print ` ` ) ( nurl_print val )
             ( nurl_print ` to ` ) ( nurl_print ( nurl_llty to_ty ) ) ( nurl_print `\n` )
             ^ r } }
+    {}
+    // Float width adjustment, the exact mirror of the integer case above:
+    // an `f32` value stores into an `f` slot via `fpext`, an `f` value into
+    // an `f32` slot via `fptrunc` — `: f x ( bits_to_f32 b )` and
+    // `: f32 y ( float_sqrt v )` now store cleanly, like their integer
+    // counterparts have since 2026-05-14. Before this, the float↔double
+    // pair fell through EVERY branch here (the never-valid-mix check below
+    // fires only when exactly ONE side is a float), so the caller emitted
+    // `store double %float_val` — invalid IR that nurlc accepted (rc 0)
+    // and only clang rejected, with no source location.
+    : s csv_fll ( nurl_llty from_ty )
+    : s csv_tll ( nurl_llty to_ty )
+    ? | & ( seq csv_fll `float` ) ( seq csv_tll `double` )
+    & ( seq csv_fll `double` ) ( seq csv_tll `float` )
+    { : s inst ? ( seq csv_fll `float` ) `fpext` `fptrunc`
+        : s r ( nurl_cg_reg cg )
+        ( nurl_print `  ` ) ( nurl_print r )
+        ( nurl_print ` = ` ) ( nurl_print inst ) ( nurl_print ` ` )
+        ( nurl_print csv_fll ) ( nurl_print ` ` ) ( nurl_print val )
+        ( nurl_print ` to ` ) ( nurl_print csv_tll ) ( nurl_print `\n` )
+        ^ r }
     {}
     // A void source can NEVER initialise anything — it is not a type clash,
     // it is the absence of a value. Before this check, `: i x ?? m { T v → v
