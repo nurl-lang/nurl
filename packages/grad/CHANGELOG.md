@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.4.0
+
+**`src/emitc.nu` — emit a recorded scalar tape as CUDA-C.**
+`gemit_cuda_grad` walks a tape whose nodes are all single-element tensors
+and prints the `__device__ void grad(long long x, double v, double* g,
+const double* p)` function swarm-mcp's `compute_iterate` runs on every
+worker: forward locals mirroring each op's exact arithmetic, a reverse
+sweep under requires-grad propagation, and a `swarm_g_add` scatter per
+parameter. Parameters bind to `p[j]` in list order; data leaves bind to
+caller-supplied C expressions; frozen consts inline as round-trip float
+literals. Distributed backward passes are now DERIVED from the tape, not
+hand-written CUDA-C — the keystone plan's last missing verb.
+
+- The C forms mirror grad.nu expression by expression, so a host build
+  with `-ffp-contract=off` reproduces the tape bit for bit:
+  `tests/emitc_oracle.sh` compiles the emitted function with gcc and
+  asserts every parameter gradient is BIT-EQUAL to the tape's, on a loss
+  touching every supported scalar op.
+- Non-scalar nodes and linear-algebra ops are refused (emit returns F) —
+  the per-example scalar loss is compute_iterate's shape.
+
 ## 0.3.0
 
 **Requires-grad propagation (PyTorch's rule), on both engines.** A node
