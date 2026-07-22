@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.4.1
+
+**The matmul GPU route is now explicit about its rules.** Since gpukit
+0.4.2 the route is bit-identical to the sequential host loop (pure
+speed); what remained was the hidden machinery around it:
+
+- AUTO engages only on a REAL CUDA device. The lazy probe used to fall
+  back to the gpu package's CPU backend, which silently spawned a C++
+  compile + dlopen on the first big matmul of a GPU-less machine — a
+  hidden side effect with no clear win over the plain loop. Gone.
+- `NURL_TENSOR_GPU=0` disables the auto-probe (env opt-out).
+- `tensor_use_gpu(kit)` opts in explicitly with a caller-opened kit
+  (any backend — the caller chose); tensor adopts and later releases it.
+- `tensor_gpu_off()` disables the route; `tensor_gpu_active()` reports
+  it; `tensor_gpu_close()` (existing) releases and allows a re-probe.
+
 ## 0.4.0
 
 M5 — the device layer grows to full ndarray coverage (over gpukit 0.4.0's
