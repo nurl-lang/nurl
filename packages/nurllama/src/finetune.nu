@@ -883,9 +883,9 @@ $ `deps/gpukit/src/dev.nu`
 // ── merge: base + (α/r)·A·B → a full-weights safetensors file ────────
 // nurllama's verified `--weights` path (llm_open_st) then runs the merged
 // model with the GGUF supplying metadata + tokenizer. Weights are emitted
-// [out, in] F32 under HF names; for NORM-rope models the q/k columns are
-// RE-permuted back to the interleaved layout the arch's rope kernel
-// expects (the loader's inverse).
+// [out, in] F32 under HF names in TRUE HF lane order — llm_open_st
+// interleaves NORM-rope q/k at load, exactly like llama.cpp's converter
+// does for GGUFs, so the file is a genuine HF checkpoint.
 
 // merged tape-layout [in,out] → emit [out,in] rows; q/k: NORM re-permute.
 @ __ft_emit_w StOut so s name FtW w b reperm i heads i hd → StOut {
@@ -997,7 +997,11 @@ $ `deps/gpukit/src/dev.nu`
         ( string_push_str nm ( nurl_str_int L ) )
         ( string_push_str nm `.` )
         ( string_push_str nm pn )
-        : b reperm & == . m rope_style 0 | == w 0 == w 1
+        // TRUE HF layout: the tape's un-permuted half-split q/k IS the HF
+        // lane order, and llm_open_st now interleaves NORM-rope q/k at load
+        // (the same permutation llama.cpp's converter bakes into GGUFs) —
+        // so the file stays a genuine HF checkpoint, runnable anywhere.
+        : b reperm F
         : i heads ? == w 0 . m n_head . m n_kv
         : b want ? <= w 3 == % / mask 2 2 1 == % / mask 4 2 1
         ? want { = so ( __ft_emit_w so ( string_data nm ) mw reperm heads . m head_dim ) } {}
