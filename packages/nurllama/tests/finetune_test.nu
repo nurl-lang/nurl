@@ -143,7 +143,7 @@ $ `deps/gpukit/src/dev.nu`
             }
 
             // ── 3. train → save → merge → run the merged model ──────
-            : FtTrain tr ( ft_train m ids 8 16.0 42 60 0.002 F )
+            : FtTrain tr ( ft_train m ids ( vec_len [i] ids ) 8 16.0 42 60 0.002 F )
             ( check . tr ok `ft_train: 60 device Adam steps over 420 adapters` )
             ( nurl_print `  train CE ` )
             ( nurl_print ( nurl_str_float . tr l0 ) )
@@ -207,6 +207,18 @@ $ `deps/gpukit/src/dev.nu`
                 }
             } {}
             ( ft_train_free tr )
+            // multi-window: halve the window → 2 windows round-robin; the
+            // trained model must reproduce BOTH windows' targets
+            : i HW / T2 2
+            : FtTrain tr2 ( ft_train m ids HW 8 16.0 42 120 0.002 F )
+            ( check . tr2 ok `multi-window ft_train runs (2 windows round-robin)` )
+            ( nurl_print `  2-window CE ` )
+            ( nurl_print ( nurl_str_float . tr2 l0 ) )
+            ( nurl_print ` → ` )
+            ( nurl_print ( nurl_str_float . tr2 l1 ) )
+            ( nurl_print `\n` )
+            ( check < . tr2 l1 * 0.2 . tr2 l0 `2-window training cuts the CE by 5x+` )
+            ( ft_train_free tr2 )
             ( nurl_free pids )
             ( tape_free tp )
             ( vec_free [i] ids )

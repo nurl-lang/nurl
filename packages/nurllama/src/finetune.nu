@@ -465,6 +465,8 @@ $ `deps/gpukit/src/dev.nu`
 : FtG {
     GVar loss
     GVar logits
+    GVar xin  // the input-rows const — refresh per window via gput_set_input
+    GVar ohin  // the one-hot target const — refreshed together with xin
     i n_pairs  // LoRA pairs registered (7 per layer)
 }
 
@@ -480,7 +482,7 @@ $ `deps/gpukit/src/dev.nu`
     : f scale / alpha # f r
     ? == . m rope_dim hd {} {
         : GVar bad ( _g_poison tp `finetune: partial rotary not supported` )
-        ^ @ FtG { bad bad 0 }
+        ^ @ FtG { bad bad bad bad 0 }
     }
     // adapters first (stable ids for the optimizer)
     : Rng rg ( rng_seed seed )
@@ -500,6 +502,7 @@ $ `deps/gpukit/src/dev.nu`
     // shared consts
     : ( Vec f ) xrows ( ft_embed m ids )
     : ~ GVar x ( __ft_const tp xrows T2 H )
+    : GVar xin @ GVar { . x id }
     ( vec_free [f] xrows )
     : GVar onesH ( __ft_ones tp H )
     : GVar onesF ( __ft_ones tp . m n_ff )
@@ -617,6 +620,7 @@ $ `deps/gpukit/src/dev.nu`
         = t + t 1
     }
     : GVar Oh ( __ft_const tp oh T2 . m n_vocab )
+    : GVar ohin @ GVar { . Oh id }
     ( vec_free [f] oh )
     : GVar probs ( g_softmax tp logits 1 )
     : GVar picked ( g_matmul tp ( g_mul tp probs Oh ) onesV )  // [T,1]
@@ -627,7 +631,21 @@ $ `deps/gpukit/src/dev.nu`
     : GVar pick2 ( g_slice tp picked st sp )
     ( vec_free [i] st ) ( vec_free [i] sp )
     : GVar loss ( g_neg tp ( g_mean tp ( g_log tp pick2 ) ) )
-    ^ @ FtG { loss logits * 7 . m n_layer }
+    ^ @ FtG { loss logits xin ohin * 7 . m n_layer }
+}
+
+// The one-hot rows for a window's ids (row t = ids[t+1]; last row zero).
+@ ft_onehot * FtModel m ( Vec i ) ids → ( Vec f ) {
+    : i T2 ( vec_len [i] ids )
+    : ( Vec f ) oh ( vec_with_cap [f] * T2 . m n_vocab )
+    : ~ i t 0
+    ~ < t T2 {
+        : i tgt ? < t - T2 1 ( _ti ids + t 1 ) -1
+        : ~ i u 0
+        ~ < u . m n_vocab { ( vec_push [f] oh ? == u tgt 1.0 0.0 ) = u + u 1 }
+        = t + t 1
+    }
+    ^ oh
 }
 
 // ── training driver + adapter I/O + merge ────────────────────────────
@@ -663,8 +681,19 @@ $ `deps/gpukit/src/dev.nu`
     ^ . m n_embd
 }
 
-// Build, capture, train `steps` of device Adam, download the adapters.
-@ ft_train * FtModel m ( Vec i ) ids i r f alpha i seed i steps f lr b verbose → FtTrain {
+// Build once from the first window, capture, then train `steps` of device
+// Adam ROUND-ROBIN over every `win`-token window of the corpus: the graph
+// is static (fixed T), so a window switch is two gput_set_input uploads
+// (the embedded rows + the one-hot targets) — no rebuild, no recapture.
+@ ft_train * FtModel m ( Vec i ) corpus i win i r f alpha i seed i steps f lr b verbose → FtTrain {
+    : i total ( vec_len [i] corpus )
+    : ~ i T2 win
+    ? > T2 total { = T2 total } {}
+    : ~ i nwin / total T2
+    ? < nwin 1 { = nwin 1 } {}
+    : ( Vec i ) ids ( vec_with_cap [i] T2 )
+    : ~ i k0 0
+    ~ < k0 T2 { ( vec_push [i] ids ( _ti corpus k0 ) ) = k0 + k0 1 }
     : i nslot * 7 . m n_layer
     : *u pids ( nurl_alloc * * 2 nslot 8 )
     : *GTape tp ( tape_new )
@@ -688,8 +717,24 @@ $ `deps/gpukit/src/dev.nu`
             ( gpopt_add go pg @ GVar { ( nurl_peek pids pi ) } 0.0 )
             = pi + pi 1
         }
+        : ~ i cur 0
         : ~ i st 0
         ~ & < st steps ok {
+            // round-robin window switch: refresh the two input consts
+            : i w % st nwin
+            ? & > nwin 1 != w cur {
+                : ( Vec i ) wids ( vec_with_cap [i] T2 )
+                : ~ i q 0
+                ~ < q T2 { ( vec_push [i] wids ( _ti corpus + * w T2 q ) ) = q + q 1 }
+                : ( Vec f ) xr ( ft_embed m wids )
+                = ok & ok ( gput_set_input pg . fg xin xr )
+                ( vec_free [f] xr )
+                : ( Vec f ) ohr ( ft_onehot m wids )
+                = ok & ok ( gput_set_input pg . fg ohin ohr )
+                ( vec_free [f] ohr )
+                ( vec_free [i] wids )
+                = cur w
+            } {}
             = ok & ok ( gput_forward pg )
             = ok & ok ( gput_backward pg )
             : f lc ( gput_loss pg )
@@ -723,6 +768,7 @@ $ `deps/gpukit/src/dev.nu`
     }
     ( nurl_free pids )
     ( tape_free tp )
+    ( vec_free [i] ids )
     ^ @ FtTrain { ok l0 l1 aflat bflat }
 }
 
@@ -1008,9 +1054,8 @@ $ `deps/gpukit/src/dev.nu`
             ?? ( tok_new gg ) {
                 T tk → {
                     : ( Vec i ) enc ( tok_encode tk text T )
-                    : i n ? < ( vec_len [i] enc ) seq ( vec_len [i] enc ) seq
                     : ~ i k 0
-                    ~ < k n { ( vec_push [i] ids ( _ti enc k ) ) = k + k 1 }
+                    ~ < k ( vec_len [i] enc ) { ( vec_push [i] ids ( _ti enc k ) ) = k + k 1 }
                     ( vec_free [i] enc )
                     ( tok_free tk )
                 }
@@ -1036,7 +1081,9 @@ $ `deps/gpukit/src/dev.nu`
     } {}
     ( nurl_print `finetune: ` )
     ( nurl_print ( nurl_str_int ( vec_len [i] ids ) ) )
-    ( nurl_print ` tokens · rank ` )
+    ( nurl_print ` tokens · window ` )
+    ( nurl_print ( nurl_str_int seq ) )
+    ( nurl_print ` · rank ` )
     ( nurl_print ( nurl_str_int rank ) )
     ( nurl_print ` · alpha ` )
     ( nurl_print ( nurl_str_float alpha ) )
@@ -1050,7 +1097,7 @@ $ `deps/gpukit/src/dev.nu`
             ( nurl_print ` layers · hidden ` )
             ( nurl_print ( nurl_str_int . m n_embd ) )
             ( nurl_print ` · building the tape + capturing onto the device\n` )
-            : FtTrain tr ( ft_train m ids rank alpha seed steps lr T )
+            : FtTrain tr ( ft_train m ids seq rank alpha seed steps lr T )
             ? . tr ok {} {
                 ( nurl_eprintln `nurllama: finetune training failed (no device? poisoned graph?)` )
                 ( ft_train_free tr ) ( ft_free m ) ( vec_free [i] ids )
