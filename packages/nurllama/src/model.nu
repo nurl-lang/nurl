@@ -463,6 +463,73 @@ $ `src/tokenizer.nu`
     ^ -1
 }
 
+// HF → llama.cpp rope-lane permutation for a NORM-rope (llama-family)
+// model's q/k tensors loaded from a safetensors checkpoint. HF stores the
+// rotary lanes HALF-SPLIT (the pair is (j, j+rd/2)); the NORM rope kernel
+// rotates ADJACENT lanes (2j, 2j+1) — llama.cpp's GGUF converter permutes
+// at conversion time, so the GGUF carries interleaved lanes and the kernel
+// matches. A checkpoint loaded via --weights got NO such permutation: every
+// genuine HF llama-family checkpoint ran with misrotated q/k and produced
+// fluent-looking garbage (the qwen2/gemma3/phi3 verifications never caught
+// it — those are NEOX, which needs no permute). Interleave here, on the
+// dequanted f32 bytes, before upload: out-lane (h·hd + 2j) ← (h·hd + j),
+// (h·hd + 2j+1) ← (h·hd + rd/2 + j) for j < rd/2; lanes ≥ rd untouched.
+// A weight permutes ROW blocks of the [out, in] tensor; a bias, elements.
+@ __lm_st_rope_permute * Llm m s name ( Vec u ) raw → v {
+    ? == . m rope_style 0 {} { ^ v }
+    : b isq | != 0 ( nurl_str_ends name `attn_q.weight` ) != 0 ( nurl_str_ends name `attn_q.bias` )
+    : b isk | != 0 ( nurl_str_ends name `attn_k.weight` ) != 0 ( nurl_str_ends name `attn_k.bias` )
+    ? | isq isk {} { ^ v }
+    : i heads ? isq . m n_head . m n_kv
+    : i hd . m head_dim
+    : i rd . m rope_dim
+    : i out * heads hd
+    : i total ( vec_len [u] raw )
+    ? & > out 0 == % total * out 4 0 {} { ^ v }
+    : i rowb / total out
+    : i half / rd 2
+    : ( Vec u ) tmp ( vec_with_cap [u] * hd rowb )
+    : ~ i k 0
+    ~ < k * hd rowb { ( vec_push [u] tmp # u 0 ) = k + k 1 }
+    : ~ i h 0
+    ~ < h heads {
+        : i base * * h hd rowb
+        // stage the head's permuted lanes
+        : ~ i j 0
+        ~ < j half {
+            : ~ i c 0
+            ~ < c rowb {
+                : u ve ?? ( vec_get [u] raw + base + * j rowb c ) { T x → x F → # u 0 }
+                ( vec_set [u] tmp + * * 2 j rowb c ve )
+                : u vo ?? ( vec_get [u] raw + base + * + half j rowb c ) { T x → x F → # u 0 }
+                ( vec_set [u] tmp + * + * 2 j 1 rowb c vo )
+                = c + c 1
+            }
+            = j + j 1
+        }
+        // lanes past the rotary span pass through
+        = j rd
+        ~ < j hd {
+            : ~ i c2 0
+            ~ < c2 rowb {
+                : u vv ?? ( vec_get [u] raw + base + * j rowb c2 ) { T x → x F → # u 0 }
+                ( vec_set [u] tmp + * j rowb c2 vv )
+                = c2 + c2 1
+            }
+            = j + j 1
+        }
+        // write back
+        = k 0
+        ~ < k * hd rowb {
+            : u wv ?? ( vec_get [u] tmp k ) { T x → x F → # u 0 }
+            ( vec_set [u] raw + base k wv )
+            = k + k 1
+        }
+        = h + h 1
+    }
+    ( vec_free [u] tmp )
+}
+
 // Upload one tensor from the safetensors file, as f32. Returns -1 when the
 // file has no such tensor.
 //
@@ -485,6 +552,7 @@ $ `src/tokenizer.nu`
     ? < ti 0 { ^ -1 } {}
     ?? ( st_dequant st ti ) {
         T raw → {
+            ( __lm_st_rope_permute m name raw )
             ? & . m st_norm_add1 is_norm { ( __lm_add1 raw ) } {}
             : i n ( vec_len [u] raw )
             : GpuBuffer b ( gpu_alloc . m g n )
