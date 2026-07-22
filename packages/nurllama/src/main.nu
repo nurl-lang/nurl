@@ -24,6 +24,9 @@
 //     diffusion models add: --block N · --threshold F ·
 //     --edit-threshold F · --post-steps N (temp defaults to 0)
 //   nurllama convert <hf-dir> <out.gguf>      HF checkpoint → GGUF
+//   nurllama finetune <model.gguf> <data.txt>  LoRA finetune on the GPU
+//                     [--out a.st] [--merged m.st] [--steps N] [--lr X]
+//                     [--rank R] [--alpha A] [--seq T] [--seed S]
 //     --type q8_0 (default) | f16 | bf16 | f32
 //   nurllama logits <model.gguf> <prompt>     final-position logits, one
 //                                             per line (verification tap)
@@ -62,6 +65,7 @@ $ `src/pull.nu`
 $ `src/chat.nu`
 $ `src/api.nu`
 $ `src/convert.nu`
+$ `src/finetune.nu`
 $ `src/diffuse.nu`
 $ `src/config.nu`
 $ `src/start.nu`
@@ -566,6 +570,14 @@ $ `stdlib/std/term.nu`
     ( args_flag p `version` 0 `print the version` )
     ( args_flag p `no-special` 0 `tokenize: do not add BOS/EOS` )
     ( args_opt p `weights` 0 `FILE` `run: take the weights from this safetensors file instead of the GGUF's own tensors (the GGUF still supplies the hyperparameters and the tokenizer)` )
+    ( args_opt p `out` 0 `FILE` `finetune: adapter output (default adapters.safetensors)` )
+    ( args_opt p `merged` 0 `FILE` `finetune: also write the merged full-model safetensors here` )
+    ( args_opt p `steps` 0 `N` `finetune: Adam steps (default 200)` )
+    ( args_opt p `lr` 0 `F` `finetune: learning rate (default 0.002)` )
+    ( args_opt p `rank` 0 `N` `finetune: LoRA rank (default 8)` )
+    ( args_opt p `alpha` 0 `F` `finetune: LoRA alpha (default 16)` )
+    ( args_opt p `seq` 0 `N` `finetune: training window in tokens (default 64)` )
+    ( args_opt p `seed` 0 `N` `finetune: adapter init seed (default 42)` )
     ( args_opt p `n-predict` 110 `N` `run: max tokens to generate (default 64)` )
     ( args_opt p `temp` 0 `F` `run: temperature; 0 = greedy (default 0.8)` )
     ( args_opt p `topk` 0 `N` `run: top-k filter (default 40; 0 = off)` )
@@ -688,6 +700,43 @@ $ `stdlib/std/term.nu`
         : String ot ( args_value_or p `type` `q8_0` )
         : i rc ( nurllama_convert hfdir outp ( string_data ot ) )
         ( string_free ot )
+        ( args_free p )
+        ^ rc
+    } {}
+
+    ? ( nurl_str_eq cmd `finetune` ) {
+        ? < ( args_positional_count p ) 3 {
+            ( args_free p )
+            ^ ( __nl_err ( string_from `nurllama: finetune needs <model.gguf> <data.txt> (nurllama --help)` ) )
+        } {}
+        : ~ s modp ``
+        : ~ s datap ``
+        ?? ( vec_get [String] pos 1 ) { T c → { = modp ( string_data c ) } F → {} }
+        ?? ( vec_get [String] pos 2 ) { T c → { = datap ( string_data c ) } F → {} }
+        : String souts ( args_value_or p `out` `adapters.safetensors` )
+        : String smerged ( args_value_or p `merged` `` )
+        : String ssteps ( args_value_or p `steps` `200` )
+        : String slr ( args_value_or p `lr` `0.002` )
+        : String srank ( args_value_or p `rank` `8` )
+        : String salpha ( args_value_or p `alpha` `16` )
+        : String sseq ( args_value_or p `seq` `64` )
+        : String sseed ( args_value_or p `seed` `42` )
+        : ~ i steps 200
+        ?? ( string_to_int ssteps ) { T v → { = steps v } F _ → {} }
+        : ~ i rank 8
+        ?? ( string_to_int srank ) { T v → { = rank v } F _ → {} }
+        : ~ i seq 64
+        ?? ( string_to_int sseq ) { T v → { = seq v } F _ → {} }
+        : ~ i seed 42
+        ?? ( string_to_int sseed ) { T v → { = seed v } F _ → {} }
+        : ~ f lr 0.002
+        ?? ( string_to_float slr ) { T v → { = lr v } F _ → {} }
+        : ~ f alpha 16.0
+        ?? ( string_to_float salpha ) { T v → { = alpha v } F _ → {} }
+        : i rc ( nurllama_finetune modp datap ( string_data souts ) ( string_data smerged ) steps lr rank alpha seq seed )
+        ( string_free souts ) ( string_free smerged ) ( string_free ssteps )
+        ( string_free slr ) ( string_free srank ) ( string_free salpha )
+        ( string_free sseq ) ( string_free sseed )
         ( args_free p )
         ^ rc
     } {}

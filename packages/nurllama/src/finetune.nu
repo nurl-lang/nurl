@@ -29,10 +29,16 @@ $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/float.nu`
 $ `stdlib/std/rng.nu`
+$ `stdlib/std/fs.nu`
+$ `stdlib/std/floatbits.nu`
 $ `deps/gguf/src/gguf.nu`
 $ `deps/gguf/src/dequant.nu`
 $ `deps/grad/src/grad.nu`
+$ `deps/grad/src/gput.nu`
 $ `deps/tensor/src/tensor.nu`
+$ `deps/gpu/src/gpu.nu`
+$ `deps/gpukit/src/gpukit.nu`
+$ `deps/gpukit/src/dev.nu`
 
 // A heap-boxed f64 vector (NURL has no bare deref for *( Vec f ) — field
 // access through a struct pointer is the idiom).
@@ -622,4 +628,478 @@ $ `deps/tensor/src/tensor.nu`
     ( vec_free [i] st ) ( vec_free [i] sp )
     : GVar loss ( g_neg tp ( g_mean tp ( g_log tp pick2 ) ) )
     ^ @ FtG { loss logits * 7 . m n_layer }
+}
+
+// ── training driver + adapter I/O + merge ────────────────────────────
+
+// One trained run's result: per-slot adapter values, flat in slot order
+// (slot = layer·7 + {q k v o gate up down}); A blocks then B blocks.
+: FtTrain {
+    b ok
+    f l0
+    f l1
+    ( Vec f ) aflat
+    ( Vec f ) bflat
+}
+
+@ ft_train_free FtTrain t → v {
+    ( vec_free [f] . t aflat )
+    ( vec_free [f] . t bflat )
+}
+
+@ __ft_ain * FtModel m i slot → i {
+    : i w % slot 7
+    ? == w 3 { ^ * . m n_head . m head_dim } {}
+    ? == w 6 { ^ . m n_ff } {}
+    ^ . m n_embd
+}
+
+@ __ft_aout * FtModel m i slot → i {
+    : i w % slot 7
+    ? == w 0 { ^ * . m n_head . m head_dim } {}
+    ? | == w 1 == w 2 { ^ * . m n_kv . m head_dim } {}
+    ? == w 3 { ^ . m n_embd } {}
+    ? | == w 4 == w 5 { ^ . m n_ff } {}
+    ^ . m n_embd
+}
+
+// Build, capture, train `steps` of device Adam, download the adapters.
+@ ft_train * FtModel m ( Vec i ) ids i r f alpha i seed i steps f lr b verbose → FtTrain {
+    : i nslot * 7 . m n_layer
+    : *u pids ( nurl_alloc * * 2 nslot 8 )
+    : *GTape tp ( tape_new )
+    : FtG fg ( ft_graph m tp ids r alpha seed pids )
+    : ( Vec f ) aflat ( vec_new [f] )
+    : ( Vec f ) bflat ( vec_new [f] )
+    ? ( tape_ok tp ) {} {
+        ( nurl_free pids ) ( tape_free tp )
+        ^ @ FtTrain { F 0.0 0.0 aflat bflat }
+    }
+    : *GpuKit kit ( gk_open 0 )
+    : ~ b ok ( gk_ok kit )
+    : ~ f l0 0.0
+    : ~ f l1 0.0
+    ? ok {
+        : *GProg pg ( gput_capture kit tp . fg loss )
+        = ok ( gput_ok pg )
+        : *GpOpt go ( gpopt_adam_new lr )
+        : ~ i pi 0
+        ~ < pi * 2 nslot {
+            ( gpopt_add go pg @ GVar { ( nurl_peek pids pi ) } 0.0 )
+            = pi + pi 1
+        }
+        : ~ i st 0
+        ~ & < st steps ok {
+            = ok & ok ( gput_forward pg )
+            = ok & ok ( gput_backward pg )
+            : f lc ( gput_loss pg )
+            ? == st 0 { = l0 lc } {}
+            ? == st - steps 1 { = l1 lc } {}
+            ? & verbose == % st 10 0 {
+                ( nurl_print `step ` ) ( nurl_print ( nurl_str_int st ) )
+                ( nurl_print ` loss ` ) ( nurl_print ( nurl_str_float lc ) )
+                ( nurl_print `\n` )
+            } {}
+            = ok & ok ( gpopt_step go pg )
+            = st + st 1
+        }
+        = ok & ok ( gput_param_sync_host pg tp )
+        ( gpopt_free go )
+        ( gput_free pg )
+    } {}
+    ( gk_close kit )
+    // download the trained values from the tape
+    : ~ i sl 0
+    ~ < sl nslot {
+        : GVar pa @ GVar { ( nurl_peek pids * sl 2 ) }
+        : GVar pb @ GVar { ( nurl_peek pids + * sl 2 1 ) }
+        : Tensor ta ( gvar_value tp pa )
+        : Tensor tb ( gvar_value tp pb )
+        : ~ i k 0
+        ~ < k ( vec_len [f] . ta data ) { ( vec_push [f] aflat ( _tf . ta data k ) ) = k + k 1 }
+        = k 0
+        ~ < k ( vec_len [f] . tb data ) { ( vec_push [f] bflat ( _tf . tb data k ) ) = k + k 1 }
+        = sl + sl 1
+    }
+    ( nurl_free pids )
+    ( tape_free tp )
+    ^ @ FtTrain { ok l0 l1 aflat bflat }
+}
+
+// ── a minimal safetensors emitter (JSON header + raw LE data) ────────
+
+: StOut {
+    String hdr
+    ( Vec u ) data
+    b first
+}
+
+@ __sto_new → StOut { ^ @ StOut { ( string_from `{` ) ( vec_new [u] ) T } }
+
+// Append one F32 tensor (values given as f64, rounded on write).
+@ __sto_f32 StOut o s name ( Vec f ) v i d0 i d1 → StOut {
+    : ~ StOut so o
+    ? . so first { = . so first F } { ( string_push_str . so hdr `,` ) }
+    : i at ( vec_len [u] . so data )
+    : ~ i k 0
+    ~ < k ( vec_len [f] v ) {
+        ( bytes_push_f32_le . so data # f32 ( _tf v k ) )
+        = k + k 1
+    }
+    ( string_push_str . so hdr `"` )
+    ( string_push_str . so hdr name )
+    ( string_push_str . so hdr `":{"dtype":"F32","shape":[` )
+    ( string_push_str . so hdr ( nurl_str_int d0 ) )
+    ? > d1 0 {
+        ( string_push_str . so hdr `,` )
+        ( string_push_str . so hdr ( nurl_str_int d1 ) )
+    } {}
+    ( string_push_str . so hdr `],"data_offsets":[` )
+    ( string_push_str . so hdr ( nurl_str_int at ) )
+    ( string_push_str . so hdr `,` )
+    ( string_push_str . so hdr ( nurl_str_int ( vec_len [u] . so data ) ) )
+    ( string_push_str . so hdr `]}` )
+    ^ so
+}
+
+@ __sto_write StOut o s path → !v String {
+    : ~ StOut so o
+    ( string_push_str . so hdr `}` )
+    : ( Vec u ) out ( vec_new [u] )
+    ( bytes_push_u64_le out # u64 ( string_len . so hdr ) )
+    : ~ i k 0
+    ~ < k ( string_len . so hdr ) {
+        ( vec_push [u] out ( nurl_str_get ( string_data . so hdr ) k ) )
+        = k + k 1
+    }
+    = k 0
+    ~ < k ( vec_len [u] . so data ) {
+        ( vec_push [u] out ?? ( vec_get [u] . so data k ) { T x → x F → # u 0 } )
+        = k + k 1
+    }
+    : ~ b wok T
+    ?? ( write_file_bytes path out ) {
+        T _ → {}
+        F _ → { = wok F }
+    }
+    ( vec_free [u] out )
+    ( string_free . so hdr )
+    ( vec_free [u] . so data )
+    ? wok { ^ @ !v String { T } }
+    ^ @ !v String { F ( string_from `finetune: cannot write file` ) }
+}
+
+// Save trained adapters as a safetensors file: per slot,
+// blk.<L>.<which>.lora_a [in,r] and .lora_b [r,out], F32.
+@ ft_adapters_save s path * FtModel m FtTrain t i r → !v String {
+    : ~ StOut so ( __sto_new )
+    : i nslot * 7 . m n_layer
+    : ~ i sl 0
+    : ~ i aoff 0
+    : ~ i boff 0
+    ~ < sl nslot {
+        : i in ( __ft_ain m sl )
+        : i out ( __ft_aout m sl )
+        : i L / sl 7
+        : i w % sl 7
+        : ~ s wn `q`
+        ? == w 1 { = wn `k` } {}
+        ? == w 2 { = wn `v` } {}
+        ? == w 3 { = wn `o` } {}
+        ? == w 4 { = wn `gate` } {}
+        ? == w 5 { = wn `up` } {}
+        ? == w 6 { = wn `down` } {}
+        : String na ( string_from `blk.` )
+        ( string_push_str na ( nurl_str_int L ) )
+        ( string_push_str na `.` )
+        ( string_push_str na wn )
+        : String nb ( string_from ( string_data na ) )
+        ( string_push_str na `.lora_a` )
+        ( string_push_str nb `.lora_b` )
+        : ( Vec f ) av ( vec_with_cap [f] * in r )
+        : ~ i k 0
+        ~ < k * in r { ( vec_push [f] av ( _tf . t aflat + aoff k ) ) = k + k 1 }
+        = so ( __sto_f32 so ( string_data na ) av in r )
+        ( vec_free [f] av )
+        : ( Vec f ) bv ( vec_with_cap [f] * r out )
+        = k 0
+        ~ < k * r out { ( vec_push [f] bv ( _tf . t bflat + boff k ) ) = k + k 1 }
+        = so ( __sto_f32 so ( string_data nb ) bv r out )
+        ( vec_free [f] bv )
+        ( string_free na ) ( string_free nb )
+        = aoff + aoff * in r
+        = boff + boff * r out
+        = sl + sl 1
+    }
+    ^ ( __sto_write so path )
+}
+
+// ── merge: base + (α/r)·A·B → a full-weights safetensors file ────────
+// nurllama's verified `--weights` path (llm_open_st) then runs the merged
+// model with the GGUF supplying metadata + tokenizer. Weights are emitted
+// [out, in] F32 under HF names; for NORM-rope models the q/k columns are
+// RE-permuted back to the interleaved layout the arch's rope kernel
+// expects (the loader's inverse).
+
+// merged tape-layout [in,out] → emit [out,in] rows; q/k: NORM re-permute.
+@ __ft_emit_w StOut so s name FtW w b reperm i heads i hd → StOut {
+    : i in . w rows
+    : i out . w cols
+    : ( Vec f ) e ( vec_with_cap [f] * out in )
+    : ~ i k 0
+    ~ < k * out in { ( vec_push [f] e 0.0 ) = k + k 1 }
+    : i half / hd 2
+    : ~ i o 0
+    ~ < o out {
+        // source column in the (possibly half-split) tape layout
+        : ~ i src o
+        ? reperm {
+            : i h / o hd
+            : i j % o hd
+            ? == % j 2 0 { = src + * h hd / j 2 } { = src + * h hd + half / j 2 }
+        } {}
+        : ~ i i2 0
+        ~ < i2 in {
+            ( vec_set [f] e + * o in i2 ( _tf . w data + * i2 out src ) )
+            = i2 + i2 1
+        }
+        = o + o 1
+    }
+    : StOut so2 ( __sto_f32 so name e out in )
+    ( vec_free [f] e )
+    ^ so2
+}
+
+// Merge every adapter into its base weight and write the FULL model as a
+// safetensors file — run it with nurllama's --weights path (llm_open_st).
+@ ft_merge_st s path * FtModel m FtTrain t i r f alpha → !v String {
+    ^ ( ft_merge_st_mask path m t r alpha 15 )
+}
+
+// mask bit0 = embeddings, bit1 = attention projections, bit2 = mlp
+// projections (a bisect handle for the merged-path diagnostics).
+@ ft_merge_st_mask s path * FtModel m FtTrain t i r f alpha i mask → !v String {
+    : f scale / alpha # f r
+    : ~ StOut so ( __sto_new )
+    // embeddings + final norm (frozen; [V,H] is already [out,in])
+    ? == % mask 2 1 {
+        = so ( __sto_f32 so `model.embed_tokens.weight` . m embd . m n_vocab . m n_embd )
+    } {}
+    ? == % / mask 8 2 1 {
+        = so ( __sto_f32 so `model.norm.weight` . m norm_f . m n_embd 0 )
+    } {}
+    : i nslot * 7 . m n_layer
+    : ~ i sl 0
+    : ~ i aoff 0
+    : ~ i boff 0
+    ~ < sl nslot {
+        : i L / sl 7
+        : i w % sl 7
+        : i in ( __ft_ain m sl )
+        : i out ( __ft_aout m sl )
+        // the per-layer norms, once per layer (at slot 0; norm mask bit3)
+        ? & == w 0 == % / mask 8 2 1 {
+            : s anp ?? ( vec_get [s] . m an L ) { T x → x F → # s 0 }
+            : *FtV anv # *FtV anp
+            : String n1 ( string_from `model.layers.` )
+            ( string_push_str n1 ( nurl_str_int L ) )
+            ( string_push_str n1 `.input_layernorm.weight` )
+            = so ( __sto_f32 so ( string_data n1 ) . anv v . m n_embd 0 )
+            ( string_free n1 )
+            : s fnp ?? ( vec_get [s] . m fn L ) { T x → x F → # s 0 }
+            : *FtV fnv # *FtV fnp
+            : String n2 ( string_from `model.layers.` )
+            ( string_push_str n2 ( nurl_str_int L ) )
+            ( string_push_str n2 `.post_attention_layernorm.weight` )
+            = so ( __sto_f32 so ( string_data n2 ) . fnv v . m n_embd 0 )
+            ( string_free n2 )
+        } {}
+        : ~ FtW w0 @ FtW { 0 0 ( vec_new [f] ) }
+        ? == w 0 { = w0 ?? ( vec_get [FtW] . m wq L ) { T x → x F → w0 } } {}
+        ? == w 1 { = w0 ?? ( vec_get [FtW] . m wk L ) { T x → x F → w0 } } {}
+        ? == w 2 { = w0 ?? ( vec_get [FtW] . m wv L ) { T x → x F → w0 } } {}
+        ? == w 3 { = w0 ?? ( vec_get [FtW] . m wo L ) { T x → x F → w0 } } {}
+        ? == w 4 { = w0 ?? ( vec_get [FtW] . m wg L ) { T x → x F → w0 } } {}
+        ? == w 5 { = w0 ?? ( vec_get [FtW] . m wu L ) { T x → x F → w0 } } {}
+        ? == w 6 { = w0 ?? ( vec_get [FtW] . m wd L ) { T x → x F → w0 } } {}
+        // merged = W0 + scale·A·B, in tape layout [in,out]
+        : ( Vec f ) md ( vec_with_cap [f] * in out )
+        : ~ i i2 0
+        ~ < i2 in {
+            : ~ i o 0
+            ~ < o out {
+                : ~ f acc 0.0
+                : ~ i k 0
+                ~ < k r {
+                    = acc + acc * ( _tf . t aflat + aoff + * i2 r k ) ( _tf . t bflat + boff + * k out o )
+                    = k + k 1
+                }
+                ( vec_push [f] md + ( _tf . w0 data + * i2 out o ) * scale acc )
+                = o + o 1
+            }
+            = i2 + i2 1
+        }
+        : FtW mw @ FtW { in out md }
+        : ~ s pn `self_attn.q_proj.weight`
+        ? == w 1 { = pn `self_attn.k_proj.weight` } {}
+        ? == w 2 { = pn `self_attn.v_proj.weight` } {}
+        ? == w 3 { = pn `self_attn.o_proj.weight` } {}
+        ? == w 4 { = pn `mlp.gate_proj.weight` } {}
+        ? == w 5 { = pn `mlp.up_proj.weight` } {}
+        ? == w 6 { = pn `mlp.down_proj.weight` } {}
+        : String nm ( string_from `model.layers.` )
+        ( string_push_str nm ( nurl_str_int L ) )
+        ( string_push_str nm `.` )
+        ( string_push_str nm pn )
+        : b reperm & == . m rope_style 0 | == w 0 == w 1
+        : i heads ? == w 0 . m n_head . m n_kv
+        : b want ? <= w 3 == % / mask 2 2 1 == % / mask 4 2 1
+        ? want { = so ( __ft_emit_w so ( string_data nm ) mw reperm heads . m head_dim ) } {}
+        ( string_free nm )
+        ( vec_free [f] md )
+        // qwen2 q/k/v biases pass through unmerged (NEOX: no reperm)
+        ? <= w 2 {
+            : ~ s bp # s 0
+            ? == w 0 { = bp ?? ( vec_get [s] . m bq L ) { T x → x F → # s 0 } } {}
+            ? == w 1 { = bp ?? ( vec_get [s] . m bk L ) { T x → x F → # s 0 } } {}
+            ? == w 2 { = bp ?? ( vec_get [s] . m bv L ) { T x → x F → # s 0 } } {}
+            ? != # i bp 0 {
+                : *FtV bv2 # *FtV bp
+                : ~ s bn `self_attn.q_proj.bias`
+                ? == w 1 { = bn `self_attn.k_proj.bias` } {}
+                ? == w 2 { = bn `self_attn.v_proj.bias` } {}
+                : String nb ( string_from `model.layers.` )
+                ( string_push_str nb ( nurl_str_int L ) )
+                ( string_push_str nb `.` )
+                ( string_push_str nb bn )
+                = so ( __sto_f32 so ( string_data nb ) . bv2 v out 0 )
+                ( string_free nb )
+            } {}
+        } {}
+        = aoff + aoff * in r
+        = boff + boff * r out
+        = sl + sl 1
+    }
+    ^ ( __sto_write so path )
+}
+
+// ── the CLI driver ───────────────────────────────────────────────────
+// nurllama finetune <model.gguf> <data.txt>: tokenize the corpus with the
+// model's own tokenizer, LoRA-train on the DEVICE over the first `seq`
+// tokens (v1 trains one fixed window — the captured graph has a fixed
+// shape; multi-window scheduling lands with gput_set_input plumbing),
+// save the adapters, and optionally write a merged full-model safetensors
+// runnable via `nurllama run model.gguf PROMPT --weights merged.st`.
+@ nurllama_finetune s modp s datap s outp s mergedp i steps f lr i rank f alpha i seq i seed → i {
+    : ~ s text ``
+    : ~ b haderr F
+    : ~ String textS ( string_new )
+    ?? ( read_file datap ) {
+        T t → { ( string_free textS ) = textS t = text ( string_data textS ) }
+        F _ → {
+            ( nurl_eprintln `nurllama: cannot read the data file` )
+            = haderr T
+        }
+    }
+    ? haderr { ( string_free textS ) ^ 1 } {}
+    : ( Vec i ) ids ( vec_new [i] )
+    ?? ( gguf_open modp ) {
+        T gg → {
+            ?? ( tok_new gg ) {
+                T tk → {
+                    : ( Vec i ) enc ( tok_encode tk text T )
+                    : i n ? < ( vec_len [i] enc ) seq ( vec_len [i] enc ) seq
+                    : ~ i k 0
+                    ~ < k n { ( vec_push [i] ids ( _ti enc k ) ) = k + k 1 }
+                    ( vec_free [i] enc )
+                    ( tok_free tk )
+                }
+                F e → {
+                    ( nurl_eprintln ( string_data e ) )
+                    ( string_free e )
+                    = haderr T
+                }
+            }
+            ( gguf_close gg )
+        }
+        F e → {
+            ( nurl_eprintln ( string_data e ) )
+            ( string_free e )
+            = haderr T
+        }
+    }
+    ( string_free textS )
+    ? | haderr < ( vec_len [i] ids ) 4 {
+        ( vec_free [i] ids )
+        ( nurl_eprintln `nurllama: need at least 4 tokens of training data` )
+        ^ 1
+    } {}
+    ( nurl_print `finetune: ` )
+    ( nurl_print ( nurl_str_int ( vec_len [i] ids ) ) )
+    ( nurl_print ` tokens · rank ` )
+    ( nurl_print ( nurl_str_int rank ) )
+    ( nurl_print ` · alpha ` )
+    ( nurl_print ( nurl_str_float alpha ) )
+    ( nurl_print ` · ` )
+    ( nurl_print ( nurl_str_int steps ) )
+    ( nurl_print ` steps\n` )
+    ?? ( ft_open modp ) {
+        T m → {
+            ( nurl_print `model: ` )
+            ( nurl_print ( nurl_str_int . m n_layer ) )
+            ( nurl_print ` layers · hidden ` )
+            ( nurl_print ( nurl_str_int . m n_embd ) )
+            ( nurl_print ` · building the tape + capturing onto the device\n` )
+            : FtTrain tr ( ft_train m ids rank alpha seed steps lr T )
+            ? . tr ok {} {
+                ( nurl_eprintln `nurllama: finetune training failed (no device? poisoned graph?)` )
+                ( ft_train_free tr ) ( ft_free m ) ( vec_free [i] ids )
+                ^ 1
+            }
+            ( nurl_print `CE ` )
+            ( nurl_print ( nurl_str_float . tr l0 ) )
+            ( nurl_print ` → ` )
+            ( nurl_print ( nurl_str_float . tr l1 ) )
+            ( nurl_print `\n` )
+            : ~ i rc 0
+            ?? ( ft_adapters_save outp m tr rank ) {
+                T _ → {
+                    ( nurl_print `adapters → ` )
+                    ( nurl_print outp )
+                    ( nurl_print `\n` )
+                }
+                F e → {
+                    ( nurl_eprintln ( string_data e ) )
+                    ( string_free e )
+                    = rc 1
+                }
+            }
+            ? > ( nurl_str_len mergedp ) 0 {
+                ?? ( ft_merge_st mergedp m tr rank alpha ) {
+                    T _ → {
+                        ( nurl_print `merged model → ` )
+                        ( nurl_print mergedp )
+                        ( nurl_print `  (run: nurllama run <model.gguf> PROMPT --weights ` )
+                        ( nurl_print mergedp )
+                        ( nurl_print `)\n` )
+                    }
+                    F e → {
+                        ( nurl_eprintln ( string_data e ) )
+                        ( string_free e )
+                        = rc 1
+                    }
+                }
+            } {}
+            ( ft_train_free tr )
+            ( ft_free m )
+            ( vec_free [i] ids )
+            ^ rc
+        }
+        F e → {
+            ( nurl_eprintln ( string_data e ) )
+            ( string_free e )
+            ( vec_free [i] ids )
+            ^ 1
+        }
+    }
 }
