@@ -11,14 +11,38 @@ $ `stdlib/std/floatbits.nu`
 $ `deps/gpukit/src/kernels.nu`
 $ `tensor.nu`
 
-// ── GPU singleton (probed lazily; matmul only) ────────────────────────
-: ~ i g_t_gpu 0  // 0 unprobed, 1 ready, -1 unavailable
+// ── GPU singleton (matmul fast path) ─────────────────────────────────
+// tensor_matmul routes >=100k-flop products through a gpukit kernel. Since
+// the gpukit 0.4.2 fmad fix the kernel is BIT-IDENTICAL to the sequential
+// host loop, so the route can never change a result — it is pure speed.
+// The rules, stated rather than implied:
+//   * AUTO only on a REAL CUDA device. The probe used to fall back to the
+//     gpu package's CPU backend, which silently spawned a C++ compile +
+//     dlopen on the first big matmul of a GPU-less machine — a hidden
+//     side effect with no clear win over the plain loop. Gone: auto now
+//     requires gk_backend == cuda.
+//   * NURL_TENSOR_GPU=0 disables the auto-probe outright (env opt-out).
+//   * tensor_use_gpu(kit) opts IN explicitly with a caller-opened kit —
+//     any backend, the caller decided. tensor adopts it: tensor_gpu_close
+//     releases it.
+//   * tensor_gpu_off() disables the route (closing an open kit);
+//     tensor_gpu_active() reports the current state.
+: ~ i g_t_gpu 0  // 0 unprobed, 1 ready, -1 unavailable/disabled
 : ~ i g_t_kit 0  // *GpuKit as an int
 
 @ __t_gpu_ready → b {
     ? != g_t_gpu 0 { ^ == g_t_gpu 1 } {}
+    : s ev ( getenv `NURL_TENSOR_GPU` )
+    ? & != # i ev 0 == ( nurl_str_eq ev `0` ) 1 {
+        = g_t_gpu -1
+        ^ F
+    } {}
     : *GpuKit kit ( gk_open 0 )
-    ? ( gk_ok kit ) { = g_t_kit # i kit = g_t_gpu 1 ^ T } {}
+    ? & ( gk_ok kit ) == ( nurl_str_eq ( gk_backend kit ) `cuda` ) 1 {
+        = g_t_kit # i kit
+        = g_t_gpu 1
+        ^ T
+    } {}
     ( gk_close kit )
     = g_t_gpu -1
     ^ F
@@ -26,7 +50,24 @@ $ `tensor.nu`
 
 @ __t_kit → *GpuKit { ^ # *GpuKit g_t_kit }
 
-// Release the tensor GPU singleton (tests call this so leak checkers are happy).
+// Opt IN with a caller-opened kit (any backend — the caller chose it).
+// tensor ADOPTS the kit: tensor_gpu_close / tensor_gpu_off releases it.
+@ tensor_use_gpu * GpuKit kit → v {
+    ( tensor_gpu_close )
+    ? ( gk_ok kit ) { = g_t_kit # i kit = g_t_gpu 1 } { = g_t_gpu -1 }
+}
+
+// Disable the matmul GPU route for this process (idempotent).
+@ tensor_gpu_off → v {
+    ( tensor_gpu_close )
+    = g_t_gpu -1
+}
+
+// Is the route currently open?
+@ tensor_gpu_active → b { ^ == g_t_gpu 1 }
+
+// Release the tensor GPU singleton (tests call this so leak checkers are
+// happy). The next big matmul may re-probe (unlike tensor_gpu_off).
 @ tensor_gpu_close → v {
     ? == g_t_gpu 1 { ( gk_close ( __t_kit ) ) } {}
     = g_t_gpu 0
