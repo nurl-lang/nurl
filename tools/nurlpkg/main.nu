@@ -208,7 +208,11 @@ $ `stdlib/std/bytes.nu`
     ( nurl_print `  nurlpkg install        Resolve this project's deps and symlink them under ./deps/.\n` )
     ( nurl_print `  nurlpkg install <name> Program: fetch, build + install onto $PATH. Library: install under ./deps/ (no nurl.toml needed).\n` )
     ( nurl_print `  nurlpkg lock           Regenerate nurl.lock from the current deps/ tree.\n` )
-    ( nurl_print `  nurlpkg publish        Pack + upload this package to the registry.\n` )
+    ( nurl_print `  nurlpkg publish [--dry-run]  Pack + upload this package to the registry\n` )
+    ( nurl_print `                         (--dry-run: run every gate, upload nothing).\n` )
+    ( nurl_print `  nurlpkg build [<dep>] [--out PATH]\n` )
+    ( nurl_print `                         Compile a package's src/main.nu in place (this\n` )
+    ( nurl_print `                         package, or an installed deps/<dep> application).\n` )
     ( nurl_print `  nurlpkg login          Store a publish token in ~/.nurl/credentials.\n` )
     ( nurl_print `  nurlpkg logout [--revoke]  Forget the local token (and optionally revoke it).\n` )
     ( nurl_print `  nurlpkg search <q>     Search the registry for packages.\n` )
@@ -224,7 +228,372 @@ $ `stdlib/std/bytes.nu`
     ( nurl_print `  nurlpkg test           Build + run every tests/*.nu (exit 0 = pass; optional tests/outputs/ goldens).\n` )
     ( nurl_print `  nurlpkg bench          Build + run every benches/*.nu and stream their std/bench.nu reports.\n` )
     ( nurl_print `  nurlpkg version        Print the nurlpkg version.\n` )
-    ( nurl_print `  nurlpkg help           Show this message.\n` )
+    ( nurl_print `  nurlpkg help [<cmd>]   This message, or one command's own help.\n` )
+    ( nurl_print `\nEvery command also takes --help / -h (help never runs the command).\n` )
+}
+
+// ── per-command help + flag safety ──────────────────────────────
+// `nurlpkg <cmd> --help` (or -h, or `nurlpkg help <cmd>`) prints the
+// command's own help and DOES NOTHING ELSE. This is checked before any
+// command runs — an agent probing `nurlpkg publish --help` must never
+// trigger a publish. Returns F for an unknown command.
+@ __cmd_help s cmd → b {
+    ? != 0 ( nurl_str_eq cmd `publish` ) {
+        ( nurl_print `nurlpkg publish — pack this package and upload it to the registry
+
+` )
+        ( nurl_print `Usage: nurlpkg publish [--dry-run]
+
+` )
+        ( nurl_print `Runs every gate first, in order:
+` )
+        ( nurl_print `  1. nurl.toml parses; name + version present
+` )
+        ( nurl_print `  2. every deps/... import is declared in [dependencies]
+` )
+        ( nurl_print `  3. required stdlib symbols exist in the RELEASED toolchain
+` )
+        ( nurl_print `  4. path-deps carry a version requirement
+` )
+        ( nurl_print `  5. requirements match the LOCAL copies you built against
+` )
+        ( nurl_print `then packs the tarball, prints name/version/size/sha256, and uploads.
+
+` )
+        ( nurl_print `Flags:
+` )
+        ( nurl_print `  --dry-run   Run every gate and pack, print exactly what WOULD be
+` )
+        ( nurl_print `              uploaded and where — but upload nothing. Needs no token.
+` )
+        ( nurl_print `  --help      This message (nothing is published).
+
+` )
+        ( nurl_print `Publishing is IRREVERSIBLE (a version can be yanked but not replaced).
+` )
+        ( nurl_print `Auth: 'nurlpkg login' or $NURL_TOKEN. Tokens expire after 90 days.
+` )
+        ^ T
+    } {}
+    ? != 0 ( nurl_str_eq cmd `install` ) {
+        ( nurl_print `nurlpkg install — resolve dependencies, or install a tool
+
+` )
+        ( nurl_print `Usage: nurlpkg install            resolve this project's [dependencies]
+` )
+        ( nurl_print `                                  into ./deps/ (registry + path deps)
+` )
+        ( nurl_print `       nurlpkg install <name>     fetch a published package; a PROGRAM
+` )
+        ( nurl_print `                                  (has src/main.nu) is built + put on
+` )
+        ( nurl_print `                                  $PATH, a LIBRARY lands under ./deps/
+` )
+        ^ T
+    } {}
+    ? != 0 ( nurl_str_eq cmd `build` ) {
+        ( nurl_print `nurlpkg build — compile a package's src/main.nu in place
+
+` )
+        ( nurl_print `Usage: nurlpkg build              this package: deps resolve, then
+` )
+        ( nurl_print `                                  src/main.nu -> ./<name>
+` )
+        ( nurl_print `       nurlpkg build <dep>        an installed deps/<dep> (application
+` )
+        ( nurl_print `                                  packages build from their own root —
+` )
+        ( nurl_print `                                  the deps link is arranged for you)
+` )
+        ( nurl_print `       ... [--out PATH]           write the binary somewhere else
+` )
+        ^ T
+    } {}
+    ? != 0 ( nurl_str_eq cmd `add` ) {
+        ( nurl_print `nurlpkg add — add a dependency to nurl.toml
+
+` )
+        ( nurl_print `Usage: nurlpkg add <name> [--path P] [--version V]
+
+` )
+        ( nurl_print `Registry dep by default (newest version becomes the requirement);
+` )
+        ( nurl_print `--path makes a local path dep. Follow with 'nurlpkg install'.
+` )
+        ^ T
+    } {}
+    ? != 0 ( nurl_str_eq cmd `update` ) {
+        ( nurl_print `nurlpkg update — move requirements to the newest published versions
+
+` )
+        ( nurl_print `Usage: nurlpkg update [<name>...] [--all]
+
+` )
+        ( nurl_print `Asks y/N per dependency; --all updates everything without asking.
+` )
+        ( nurl_print `Path deps re-read their local nurl.toml; registry deps ask the index.
+` )
+        ^ T
+    } {}
+    ? != 0 ( nurl_str_eq cmd `logout` ) {
+        ( nurl_print `nurlpkg logout — forget the stored registry token
+
+` )
+        ( nurl_print `Usage: nurlpkg logout [--revoke]
+
+` )
+        ( nurl_print `--revoke also invalidates the token server-side.
+` )
+        ^ T
+    } {}
+    ? != 0 ( nurl_str_eq cmd `yank` ) {
+        ( nurl_print `nurlpkg yank — hide a published version from resolution
+
+` )
+        ( nurl_print `Usage: nurlpkg yank <name> <version>
+
+` )
+        ( nurl_print `Yanking hides; it never deletes. 'nurlpkg unyank' restores.
+` )
+        ^ T
+    } {}
+    ? != 0 ( nurl_str_eq cmd `unyank` ) {
+        ( nurl_print `nurlpkg unyank — restore a yanked version
+
+Usage: nurlpkg unyank <name> <version>
+` )
+        ^ T
+    } {}
+    ? != 0 ( nurl_str_eq cmd `init` ) {
+        ( nurl_print `nurlpkg init — create a nurl.toml here
+
+Usage: nurlpkg init <name>
+` )
+        ^ T
+    } {}
+    ? != 0 ( nurl_str_eq cmd `info` ) {
+        ( nurl_print `nurlpkg info — manifest / registry info
+
+` )
+        ( nurl_print `Usage: nurlpkg info           parsed nurl.toml of this directory
+` )
+        ( nurl_print `       nurlpkg info <name>    a package's published versions
+` )
+        ^ T
+    } {}
+    ? != 0 ( nurl_str_eq cmd `search` ) {
+        ( nurl_print `nurlpkg search — search the registry
+
+Usage: nurlpkg search <query>
+` )
+        ^ T
+    } {}
+    ? != 0 ( nurl_str_eq cmd `deps` ) {
+        ( nurl_print `nurlpkg deps — list this package's dependencies
+
+Usage: nurlpkg deps
+` )
+        ^ T
+    } {}
+    ? != 0 ( nurl_str_eq cmd `lock` ) {
+        ( nurl_print `nurlpkg lock — regenerate nurl.lock from ./deps/
+
+Usage: nurlpkg lock
+` )
+        ^ T
+    } {}
+    ? != 0 ( nurl_str_eq cmd `verify` ) {
+        ( nurl_print `nurlpkg verify — check deps/ against nurl.lock
+
+Usage: nurlpkg verify   (exit 1 on drift)
+` )
+        ^ T
+    } {}
+    ? != 0 ( nurl_str_eq cmd `remove` ) {
+        ( nurl_print `nurlpkg remove — delete a dependency entry
+
+Usage: nurlpkg remove <name>
+` )
+        ^ T
+    } {}
+    ? != 0 ( nurl_str_eq cmd `test` ) {
+        ( nurl_print `nurlpkg test — build + run every tests/*.nu
+
+Usage: nurlpkg test   (optional tests/outputs/ goldens; exit 0 = pass)
+` )
+        ^ T
+    } {}
+    ? != 0 ( nurl_str_eq cmd `bench` ) {
+        ( nurl_print `nurlpkg bench — build + run every benches/*.nu
+
+Usage: nurlpkg bench
+` )
+        ^ T
+    } {}
+    ? != 0 ( nurl_str_eq cmd `login` ) {
+        ( nurl_print `nurlpkg login — store a publish token
+
+Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/credentials)
+` )
+        ^ T
+    } {}
+    ^ F
+}
+
+// T when any argv[from..] is --help / -h. Checked before dispatch, so a
+// help probe can never execute the command it asks about.
+@ __wants_help i from → b {
+    : i argc ( env_args_count )
+    : ~ i k from
+    ~ < k argc {
+        : String a ( env_arg k )
+        : b hit | != 0 ( nurl_str_eq ( string_data a ) `--help` ) != 0 ( nurl_str_eq ( string_data a ) `-h` )
+        ( string_free a )
+        ? hit { ^ T } {}
+        = k + k 1
+    }
+    ^ F
+}
+
+// Reject any --flag in argv[from..] that is not in `allowed` (space-
+// separated). A typo like `publish --dryrun` must FAIL, not fall through
+// to the real action.
+@ __reject_unknown_flags s cmd s allowed i from → i {
+    : i argc ( env_args_count )
+    : ~ i k from
+    ~ < k argc {
+        : String a ( env_arg k )
+        : s av ( string_data a )
+        ? & >= ( nurl_str_len av ) 2 & == ( nurl_str_get av 0 ) 45 == ( nurl_str_get av 1 ) 45 {
+            // `allowed` is space-separated exact flags
+            : ~ b okflag F
+            : ~ String pad ( string_from ` ` )
+            ( string_push_str pad allowed )
+            ( string_push_str pad ` ` )
+            : ~ String needle ( string_from ` ` )
+            ( string_push_str needle av )
+            ( string_push_str needle ` ` )
+            ? >= ( nurl_str_find ( string_data pad ) ( string_data needle ) ) 0 { = okflag T } {}
+            ( string_free pad ) ( string_free needle )
+            ? okflag {} {
+                ( nurl_eprint `nurlpkg: unknown option '` )
+                ( nurl_eprint av )
+                ( nurl_eprint `' for '` )
+                ( nurl_eprint cmd )
+                ( nurl_eprintln `' — nothing was done` )
+                ( nurl_eprint `hint: nurlpkg ` )
+                ( nurl_eprint cmd )
+                ( nurl_eprintln ` --help` )
+                ( string_free a )
+                ^ 1
+            }
+        } {}
+        ( string_free a )
+        = k + k 1
+    }
+    ^ 0
+}
+
+// ── build: compile a package's entry point in place ─────────────
+// The missing rung between `install` (deps) and `install <name>` (PATH):
+// application packages import root-relative (`src/...`), so in a consumer
+// tree deps/<app> would not compile without a deps link back to its
+// siblings. `nurlpkg build <app>` arranges that link and builds; bare
+// `nurlpkg build` builds the current package.
+@ __cmd_build s name s outp → i {
+    : ~ String dir ( string_from `.` )
+    ? > ( nurl_str_len name ) 0 {
+        ( string_free dir )
+        = dir ( string_from `deps/` )
+        ( string_push_str dir name )
+        ? ( file_exists ( string_data dir ) ) {} {
+            ( nurl_eprint `nurlpkg: no deps/` )
+            ( nurl_eprint name )
+            ( nurl_eprintln ` — run 'nurlpkg install' first (or 'nurlpkg add' + install)` )
+            ( string_free dir )
+            ^ 1
+        }
+    } {}
+    : String entry ( string_from ( string_data dir ) )
+    ( string_push_str entry `/src/main.nu` )
+    ? ( file_exists ( string_data entry ) ) {} {
+        ( nurl_eprintln `nurlpkg: the package has no src/main.nu — it is a library, not a program` )
+        ( string_free entry ) ( string_free dir )
+        ^ 1
+    }
+    ( string_free entry )
+    // an installed application's deps are its SIBLINGS under ./deps — give
+    // it the link its root-relative imports expect (idempotent)
+    ? > ( nurl_str_len name ) 0 {
+        : String dl ( string_from ( string_data dir ) )
+        ( string_push_str dl `/deps` )
+        ? ( file_exists ( string_data dl ) ) {} {
+            ?? ( fs_symlink `..` ( string_data dl ) ) {
+                T _ → {}
+                F _ → { ( nurl_eprintln `nurlpkg: warning — could not create the deps link` ) }
+            }
+        }
+        ( string_free dl )
+    } {}
+    // binary name: --out, else the manifest's name (this dir) / the dep name
+    : ~ String binout ( string_new )
+    ? > ( nurl_str_len outp ) 0 {
+        ( string_push_str binout outp )
+    } {
+        ? > ( nurl_str_len name ) 0 { ( string_push_str binout name ) } {
+            : !Manifest ManifestErr mr0 ( manifest_load `nurl.toml` )
+            ?? mr0 {
+                T m0 → {
+                    ( string_push_str binout ( string_data . m0 name ) )
+                    ( manifest_free m0 )
+                }
+                F _ → { ( string_push_str binout `a.out` ) }
+            }
+        }
+    }
+    // absolute-ish output path from the build cwd (the package dir): the
+    // caller's name/--out is relative to WHERE THEY RAN nurlpkg
+    : ~ String absout ( string_new )
+    ? == ( nurl_str_get ( string_data binout ) 0 ) 47 { ( string_push_str absout ( string_data binout ) ) } {
+        ?? ( env_cwd ) {
+            T c → {
+                ( string_push_str absout ( string_data c ) )
+                ( string_push_str absout `/` )
+                ( string_push_str absout ( string_data binout ) )
+                ( string_free c )
+            }
+            F _ → { ( string_push_str absout ( string_data binout ) ) }
+        }
+    }
+    : String nurl ( __env_or `NURL` `nurl` )
+    : ~ String orig ( string_new )
+    ?? ( env_cwd ) { T c → { ( string_free orig ) = orig c } F _ → {} }
+    : ~ i rc 1
+    ?? ( env_chdir ( string_data dir ) ) {
+        F _ → { ( nurl_eprintln `nurlpkg: cannot enter the package directory` ) }
+        T _ → {
+            // resolve the package's own deps first when building in place
+            : ~ i drc 0
+            ? == ( nurl_str_len name ) 0 { = drc ( __cmd_install ) } {}
+            ? != drc 0 { = rc 1 } {
+                : ( Vec s ) cargs ( vec_new [s] )
+                ( vec_push [s] cargs `src/main.nu` )
+                ( vec_push [s] cargs ( string_data absout ) )
+                : i ok2 ( __spawn ( string_data nurl ) cargs `compile` )
+                ( vec_free [s] cargs )
+                ? == ok2 0 { = rc 1 } {
+                    = rc 0
+                    ( nurl_print `built ` )
+                    ( nurl_print ( string_data binout ) )
+                    ( nurl_print `\n` )
+                }
+            }
+        }
+    }
+    ? > ( string_len orig ) 0 { ?? ( env_chdir ( string_data orig ) ) { T _ → {} F _ → {} } } {}
+    ( string_free absout ) ( string_free binout )
+    ( string_free nurl ) ( string_free orig ) ( string_free dir )
+    ^ rc
 }
 
 // ── init ────────────────────────────────────────────────────────
@@ -2458,7 +2827,7 @@ $ `stdlib/std/bytes.nu`
     ^ drift
 }
 
-@ __cmd_publish → i {
+@ __cmd_publish b dry → i {
     ? ! ( file_exists `nurl.toml` ) {
         ( nurl_eprintln `nurlpkg: no nurl.toml in the current directory` )
         ^ 1
@@ -2475,7 +2844,7 @@ $ `stdlib/std/bytes.nu`
         T m → {
             : String reg ( __registry_url m )
             : String token ( __resolve_token ( string_data reg ) )
-            ? == ( string_len token ) 0 {
+            ? & ! dry == ( string_len token ) 0 {
                 ( nurl_eprintln `nurlpkg: no auth token — run 'nurlpkg login' or set $NURL_TOKEN` )
                 = rc 1
             } {
@@ -2506,7 +2875,7 @@ $ `stdlib/std/bytes.nu`
                     T tarball → {
                         : ( Vec u ) digest ( sha256_pure tarball )
                         : String hex ( bytes_to_hex digest )
-                        ( nurl_print `publishing ` )
+                        ( nurl_print ? dry `dry-run: would publish ` `publishing ` )
                         ( nurl_print ( string_data . m name ) )
                         ( nurl_print ` ` )
                         ( nurl_print ( string_data . m version ) )
@@ -2517,6 +2886,16 @@ $ `stdlib/std/bytes.nu`
                         ( nurl_print `)\nto ` )
                         ( nurl_print ( string_data reg ) )
                         ( nurl_print `\n` )
+                        ? dry {
+                            ( nurl_print `dry-run: every gate passed; nothing was uploaded.\n` )
+                            ( vec_free [u] digest )
+                            ( string_free hex )
+                            ( vec_free [u] tarball )
+                            ( string_free reg )
+                            ( string_free token )
+                            ( manifest_free m )
+                            ^ 0
+                        } {}
                         : String deps_json ( __deps_json m )
                         : !i PublishErr ur ( pkg_publish ( string_data reg ) ( string_data token ) tarball ( string_data . m name ) ( string_data . m version ) ( string_data deps_json ) )
                         ( string_free deps_json )
@@ -3498,6 +3877,27 @@ $ `stdlib/std/bytes.nu`
     } {}
     : String sub ( env_arg 1 )
     : s s_sub ( string_data sub )
+    // help FIRST — before any command can act. `nurlpkg <cmd> --help`,
+    // `nurlpkg help <cmd>`, `nurlpkg --help` / -h all end here.
+    ? | != 0 ( nurl_str_eq s_sub `--help` ) != 0 ( nurl_str_eq s_sub `-h` ) {
+        ( __print_usage )
+        ( string_free sub )
+        ^ 0
+    } {}
+    ? & != 0 ( nurl_str_eq s_sub `help` ) >= argc 3 {
+        : String hc ( env_arg 2 )
+        : b known ( __cmd_help ( string_data hc ) )
+        ? known {} { ( __print_usage ) }
+        ( string_free hc )
+        ( string_free sub )
+        ^ 0
+    } {}
+    ? ( __wants_help 2 ) {
+        : b known2 ( __cmd_help s_sub )
+        ? known2 {} { ( __print_usage ) }
+        ( string_free sub )
+        ^ 0
+    } {}
     ? | != 0 ( nurl_str_eq s_sub `--version` ) != 0 ( nurl_str_eq s_sub `version` ) {
         ( nurl_print ( nurl_version ) ) ( nurl_print `\n` )
         ( string_free sub )
@@ -3524,6 +3924,7 @@ $ `stdlib/std/bytes.nu`
     } {}
     ? != 0 ( nurl_str_eq s_sub `deps` ) {
         ( string_free sub )
+        ? != 0 ( __reject_unknown_flags `deps` `` 2 ) { ^ 1 } {}
         ^ ( __cmd_deps )
     } {}
     ? != 0 ( nurl_str_eq s_sub `install` ) {
@@ -3539,11 +3940,49 @@ $ `stdlib/std/bytes.nu`
     } {}
     ? != 0 ( nurl_str_eq s_sub `lock` ) {
         ( string_free sub )
+        ? != 0 ( __reject_unknown_flags `lock` `` 2 ) { ^ 1 } {}
         ^ ( __cmd_lock )
+    } {}
+    ? != 0 ( nurl_str_eq s_sub `build` ) {
+        ( string_free sub )
+        ? != 0 ( __reject_unknown_flags `build` `--out` 2 ) { ^ 1 } {}
+        : ~ String bname ( string_new )
+        : ~ String bout ( string_new )
+        : ~ i bk 2
+        ~ < bk argc {
+            : String ba ( env_arg bk )
+            ? != 0 ( nurl_str_eq ( string_data ba ) `--out` ) {
+                ? < + bk 1 argc {
+                    : String bo ( env_arg + bk 1 )
+                    ( string_free bout )
+                    = bout bo
+                    = bk + bk 1
+                } {}
+            } {
+                ? == ( nurl_str_get ( string_data ba ) 0 ) 45 {} {
+                    ( string_free bname )
+                    = bname ( string_from ( string_data ba ) )
+                }
+            }
+            ( string_free ba )
+            = bk + bk 1
+        }
+        : i brc ( __cmd_build ( string_data bname ) ( string_data bout ) )
+        ( string_free bname ) ( string_free bout )
+        ^ brc
     } {}
     ? != 0 ( nurl_str_eq s_sub `publish` ) {
         ( string_free sub )
-        ^ ( __cmd_publish )
+        ? != 0 ( __reject_unknown_flags `publish` `--dry-run --dryrun` 2 ) { ^ 1 } {}
+        : ~ b dry F
+        : ~ i pk 2
+        ~ < pk argc {
+            : String pa ( env_arg pk )
+            ? | != 0 ( nurl_str_eq ( string_data pa ) `--dry-run` ) != 0 ( nurl_str_eq ( string_data pa ) `--dryrun` ) { = dry T } {}
+            ( string_free pa )
+            = pk + pk 1
+        }
+        ^ ( __cmd_publish dry )
     } {}
     ? != 0 ( nurl_str_eq s_sub `login` ) {
         ( string_free sub )
