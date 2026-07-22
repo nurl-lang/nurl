@@ -12055,7 +12055,29 @@
                 ? != 0 ( nurl_str_len __sldft )
                 { : b __slvf | ( seq fty `double` ) ( seq fty `float` )
                     : b __sldf | ( seq __sldft `double` ) ( seq __sldft `float` )
-                    ? | != __slvf __sldf ( __arg_named_struct_mismatch fty __sldft )
+                    // (c) a bare integer into a PLAIN named-struct field.
+                    // Enum fields (variant names lower to i64 tags) and
+                    // single-pointer-handle structs (Vec/String — an i64
+                    // wraps via inttoptr) coerce legally and are excluded;
+                    // anything else would emit `insertvalue %S i64` —
+                    // invalid IR that only clang used to reject, with no
+                    // source location (found by an FtG literal that kept an
+                    // old arity after the struct grew).
+                    : ~ b __slint_ps F
+                    ? & > ( int_width fty ) 0 == ( nurl_str_get __sldft 0 ) 37
+                    { : s __sltn ( nurl_str_slice __sldft 1 - ( nurl_str_len __sldft ) 1 )
+                        ? == 0 ( nurl_str_len ( nurl_sym_get syms ( nurl_str_cat __sltn `__variants` ) ) )
+                        { : s __slf0 ( nurl_sym_get syms ( nurl_str_cat3 __sltn `__idx_0` `__type` ) )
+                            : s __slf1 ( nurl_sym_get syms ( nurl_str_cat3 __sltn `__idx_1` `__type` ) )
+                            : b __slsh & & != 0 ( nurl_str_len __slf0 )
+                            == ( nurl_str_get __slf0 - ( nurl_str_len __slf0 ) 1 ) 42
+                            == 0 ( nurl_str_len __slf1 )
+                            ? __slsh {} { = __slint_ps T }
+                        }
+                        {}
+                    }
+                    {}
+                    ? | | != __slvf __sldf ( __arg_named_struct_mismatch fty __sldft ) __slint_ps
                     { ( die lex ( nurl_str_cat3
                         ( nurl_str_cat4 `field ` ( nurl_str_int idx ) ` of struct literal '` cur_sname )
                         ( nurl_str_cat4 `' expects type '` __sldft `' but the value has type '` fty )
