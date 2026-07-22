@@ -1,0 +1,10 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+call_widen=1.5
+var_widen=2.5
+cast_chain=3.25
+lit_narrow=1.25
+assign_narrow=1.5
+assign_widen=2.5
