@@ -74,6 +74,20 @@ $ `stdlib/core/string.nu`
 
 & `cuda` @ cuStreamSynchronize i stream → i32
 
+& `cuda` @ cuStreamCreate *u out i32 flags → i32
+
+& `cuda` @ cuStreamBeginCapture_v2 i stream i32 mode → i32
+
+& `cuda` @ cuStreamEndCapture i stream *u graph_out → i32
+
+& `cuda` @ cuGraphInstantiateWithFlags *u exec_out i graph i flags → i32
+
+& `cuda` @ cuGraphLaunch i exec i stream → i32
+
+& `cuda` @ cuGraphExecDestroy i exec → i32
+
+& `cuda` @ cuGraphDestroy i graph → i32
+
 & `cuda` @ cuLaunchKernel i f i32 gx i32 gy i32 gz i32 bx i32 by i32 bz i32 sh i stream *u params i extra → i32
 
 & `cuda` @ cuGetErrorName i32 err *u pstr → i32
@@ -355,8 +369,13 @@ $ `stdlib/core/string.nu`
 // ── launch ────────────────────────────────────────────────────────
 // `params` is a void** array of pointers to the argument values (built
 // by gpu.nu from a Vec of i64-encoded args). 1-D grid/block for now.
+// The stream launches ride. 0 (the legacy default stream) outside graph
+// capture; during capture every launch must go to the CAPTURED stream —
+// cuda_graph_begin points this at one, cuda_graph_end restores 0.
+: ~ i g_cuda_stream 0
+
 @ cuda_launch i func i grid i block * u params → i {
-    ^ # i ( cuLaunchKernel func # i32 grid 1 1 # i32 block 1 1 0 0 params 0 )
+    ^ # i ( cuLaunchKernel func # i32 grid 1 1 # i32 block 1 1 0 g_cuda_stream params 0 )
 }
 
 // CUresult code → driver error-name string (e.g. "CUDA_ERROR_INVALID_VALUE").
@@ -368,4 +387,69 @@ $ `stdlib/core/string.nu`
     : i namep ( nurl_peek s 0 )
     ( nurl_free s )
     ^ # s namep
+}
+
+// ── CUDA Graphs: capture a launch sequence once, replay it as ONE call ──
+// The per-node replay engine's cost on small graphs is pure launch
+// overhead; a captured graph turns N launches into one cuGraphLaunch with
+// the SAME kernels, argument values and order — bit-identical results,
+// driver-level dispatch. The capture stream is created once and kept for
+// the process (like the context); capture mode is THREAD_LOCAL so other
+// threads' work cannot invalidate a capture.
+: ~ i g_cuda_gstream 0
+
+@ __cuda_gstream → i {
+    ? != g_cuda_gstream 0 { ^ g_cuda_gstream } {}
+    : *u out ( nurl_alloc 8 )
+    // CU_STREAM_NON_BLOCKING: a blocking stream forms implicit dependencies
+    // with the legacy default stream, and ANY legacy-stream touch during a
+    // blocking-stream capture fails with CUDA_ERROR_STREAM_CAPTURE_IMPLICIT
+    // (906). Non-blocking has no such coupling.
+    : i rc # i ( cuStreamCreate out # i32 1 )
+    ? == rc 0 { = g_cuda_gstream ( nurl_peek out 0 ) } {}
+    ( nurl_free out )
+    ^ g_cuda_gstream
+}
+
+// Begin capturing: every cuda_launch until cuda_graph_end records into the
+// graph instead of executing. 0 = ok.
+@ cuda_graph_begin → i {
+    : i st ( __cuda_gstream )
+    ? != st 0 {} { ^ 1 }
+    : i rc # i ( cuStreamBeginCapture_v2 st # i32 1 )
+    ? == rc 0 { = g_cuda_stream st } {}
+    ^ rc
+}
+
+// End the capture and instantiate an executable graph. Returns the exec
+// handle (0 on failure). The interior CUgraph is destroyed after
+// instantiation — the exec carries everything needed to launch.
+@ cuda_graph_end → i {
+    : i st g_cuda_stream
+    = g_cuda_stream 0
+    ? != st 0 {} { ^ 0 }
+    : *u gout ( nurl_alloc 8 )
+    : i rc # i ( cuStreamEndCapture st gout )
+    : i graph ( nurl_peek gout 0 )
+    ( nurl_free gout )
+    ? & == rc 0 != graph 0 {} { ^ 0 }
+    : *u eout ( nurl_alloc 8 )
+    : i rc2 # i ( cuGraphInstantiateWithFlags eout graph 0 )
+    : i exec ( nurl_peek eout 0 )
+    ( nurl_free eout )
+    : i _d # i ( cuGraphDestroy graph )
+    ? & == rc2 0 != exec 0 { ^ exec } {}
+    ^ 0
+}
+
+// Launch the captured sequence and wait for it. 0 = ok.
+@ cuda_graph_launch i exec → i {
+    : i st ( __cuda_gstream )
+    : i rc # i ( cuGraphLaunch exec st )
+    ? == rc 0 { ^ # i ( cuStreamSynchronize st ) } {}
+    ^ rc
+}
+
+@ cuda_graph_free i exec → v {
+    ? != exec 0 { : i _d # i ( cuGraphExecDestroy exec ) } {}
 }
