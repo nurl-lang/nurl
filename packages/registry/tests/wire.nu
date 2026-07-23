@@ -119,6 +119,14 @@ Hello *there*.
 ![pic](docs/pic.png)
 ` ) ) )
     ( vec_push [TarEntry] ents ( tar_entry_file `docs/pic.png` ( bytes_from_str `not-really-a-png` ) ) )
+    ( vec_push [TarEntry] ents ( tar_entry_file `src/demo.nu` ( bytes_from_str `// demo.nu — the fixture module.
+
+// A friendly greeting for @who.
+@ demo_hello s who → i { ^ 0 }
+
+// file-private, must NOT appear in the API docs.
+@ __demo_secret i x → i { ^ x }
+` ) ) )
     : !( Vec u ) TarErr tr ( tar_create ents )
     ( tar_entries_free ents )
     ?? tr {
@@ -341,6 +349,7 @@ Hello *there*.
         ( check ( string_contains b ( string_data yr ) ) `detail shows publish date` )
         ( string_free yr )
         ( check ( string_contains b `/packages/demo/0.1.0/files` ) `detail links files page` )
+        ( check ( string_contains b `/packages/demo/0.1.0/api` ) `detail links api page` )
         ( string_free b )
         ( http_response_free resp )
         ( request_free req )
@@ -357,6 +366,27 @@ Hello *there*.
         ( check ( string_contains b `nurl.toml` ) `files page lists nurl.toml` )
         ( check ( string_contains b ` B</td>` ) `files page shows sizes` )
         ( string_free b )
+        ( http_response_free resp )
+        ( request_free req )
+    }
+
+    // ── API docs page (nurldoc over src/*.nu) ──
+    {
+        : HttpRequest req ( mk_req `GET` `/packages/demo/0.1.0/api` `` ( no_headers ) ( vec_new [u] ) )
+        : HttpResponse resp ( router_handle r req )
+        ( check == . resp status 200 `api page 200` )
+        : String b ( resp_body_str resp )
+        ( check ( string_contains b `demo_hello` ) `api page documents the public function` )
+        ( check ( string_contains b `friendly greeting` ) `api page includes the doc comment` )
+        ( check == F ( string_contains b `__demo_secret` ) `api page omits file-private functions` )
+        ( string_free b )
+        ( http_response_free resp )
+        ( request_free req )
+    }
+    {
+        : HttpRequest req ( mk_req `GET` `/packages/demo/9.9.9/api` `` ( no_headers ) ( vec_new [u] ) )
+        : HttpResponse resp ( router_handle r req )
+        ( check == . resp status 404 `api page unknown version 404` )
         ( http_response_free resp )
         ( request_free req )
     }

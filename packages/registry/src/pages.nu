@@ -35,9 +35,14 @@ $ `src/extract.nu`
 {% if repository %}<p class=muted>repository <a href="{{ repository }}">{{ repository }}</a></p>{% end %}
 <h3>Install</h3><pre>[dependencies]
 {{ name }} = "{{ req }}"</pre>
-<h3>Versions</h3><ul>{% for v in versions %}<li><code>{{ v.version }}</code>{% if v.yanked %} <span class=yanked>(yanked)</span>{% end %}{% if v.date %} <span class=pub>· {{ v.date }}</span>{% end %} <span class=pub>· <a href="https://github.com/{{ v.login }}">@{{ v.login }}</a></span> <span class=pub>· <a href="/packages/{{ name }}/{{ v.version }}/files">files</a></span></li>{% end %}</ul>
+<h3>Versions</h3><ul>{% for v in versions %}<li><code>{{ v.version }}</code>{% if v.yanked %} <span class=yanked>(yanked)</span>{% end %}{% if v.date %} <span class=pub>· {{ v.date }}</span>{% end %} <span class=pub>· <a href="https://github.com/{{ v.login }}">@{{ v.login }}</a></span> <span class=pub>· <a href="/packages/{{ name }}/{{ v.version }}/files">files</a></span> <span class=pub>· <a href="/packages/{{ name }}/{{ v.version }}/api">api</a></span></li>{% end %}</ul>
 <h3>Dependencies (latest)</h3>{% if deps %}<ul>{% for d in deps %}<li><a href="/packages/{{ d.name }}">{{ d.name }}</a> <code>{{ d.req }}</code></li>{% end %}</ul>{% else %}<p>None.</p>{% end %}
 {% if readme %}<div class="readme">{{ readme | raw }}</div>{% end %}`
+}
+
+@ __reg_tpl_api → s {
+    ^ `{% include 'head' %}<p><a href="/packages/{{ name }}">← {{ name }}</a></p><h1>{{ name }} <span class=muted>{{ version }}</span> API</h1>
+{% if api %}<div class="readme">{{ api | raw }}</div>{% else %}<p class=muted>No <code>src/*.nu</code> modules in this release.</p>{% end %}`
 }
 
 @ __reg_tpl_files → s {
@@ -105,6 +110,17 @@ nurlpkg publish</pre>`
 // ctx: { name, version, files:[{path,size}] (size pre-formatted), total, title }
 @ reg_page_files Json ctx → String {
     ^ ( __reg_render ( __reg_tpl_files ) ctx )
+}
+
+// ctx: { name, version, api (pre-rendered HTML, ""=none), title }
+@ reg_page_api Json ctx → String {
+    ^ ( __reg_render ( __reg_tpl_api ) ctx )
+}
+
+// nurldoc Markdown → HTML (self-contained; no README-style link rewrite).
+@ reg_api_html s md → String {
+    ? == ( nurl_str_len md ) 0 { ^ ( string_new ) } {}
+    ^ ( md_to_html md )
 }
 
 @ reg_page_notfound Json ctx → String {
