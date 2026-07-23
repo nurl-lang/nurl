@@ -59,7 +59,7 @@ $ `deps/wasmbuilder/src/build.nu`
 // to bump (previously the banners drifted to a stale 0.2.0 while the
 // handshake reported 0.4.0).
 
-@ nm_version → s { ^ `0.5.0` }
+@ nm_version → s { ^ `0.7.0` }
 
 // Log a startup banner "nurl-mcp <version> <suffix>" through mcp_log,
 // building the line from the single-source version so the banners can
@@ -247,6 +247,219 @@ $ `deps/wasmbuilder/src/build.nu`
         F → {}
     }
     ^ ( nm_missing_input )
+}
+
+// ── Tool: nurl_build_project (multi-file + registry dependencies) ────
+//
+// The single-source build tools can't compile anything that USES a
+// published package — no manifest, no dependency resolution. This one
+// closes that: it lays out a throwaway workspace (the given files + a
+// synthesized nurl.toml with [dependencies]), runs `nurlpkg install` to
+// resolve the full transitive graph from the registry (signature- and
+// checksum-verified — reusing nurlpkg's supply-chain checks verbatim),
+// then `nurl <entry>` to compile. Nothing is executed; the binary is
+// returned base64. So an agent that found `nn` (nurl_grep), learned its
+// API (nurl_api package=nn), can now compile a program that calls it.
+//
+//   args: { source | files:{path:content}, deps:{name:req}, entry?, run? }
+
+// Reject a workspace-relative path that escapes the workspace or is absolute.
+@ nm_safe_rel s p → b {
+    ? == ( nurl_str_len p ) 0 { ^ F } {}
+    ? == ( nurl_str_get p 0 ) 47 { ^ F } {}
+    ^ ! ( nm_has_dotdot p )
+}
+
+// Write one workspace file, creating parent directories under `ws`.
+@ nm_ws_write s ws s rel s content * u okb → v {
+    : String full ( string_from ws )
+    ( string_push_char full 47 )
+    ( string_push_str full rel )
+    // parent dir
+    : i sl ( nm_last_slash ( string_data full ) )
+    ? > sl 0 {
+        : String dir ( string_substr full 0 sl )
+        ?? ( dir_create_all ( string_data dir ) ) { T _ → {} F _ → { ( nurl_poke okb 0 0 ) } }
+        ( string_free dir )
+    } {}
+    ?? ( write_file ( string_data full ) content ) { T _ → {} F _ → { ( nurl_poke okb 0 0 ) } }
+    ( string_free full )
+}
+
+// Index of the last '/' in `p`, or 0.
+@ nm_last_slash s p → i {
+    : i n ( nurl_str_len p )
+    : ~ i last 0
+    : ~ i k 0
+    ~ < k n { ? == ( nurl_str_get p k ) 47 { = last k } {} = k + k 1 }
+    ^ last
+}
+
+@ nm_tool_build_project Json args → Json {
+    : String ws ( nm_tmp_path `-proj` )
+    ?? ( dir_create_all ( string_data ws ) ) {
+        T _ → {}
+        F _ → { ( string_free ws ) ^ ( mcp_tool_result_error `could not create a build workspace` ) }
+    }
+    : *u okb ( nurl_alloc 8 )
+    ( nurl_poke okb 0 1 )
+    // ── nurl.toml with [dependencies] ──
+    : String toml ( string_from `[package]
+name = "mcp_build"
+version = "0.0.0"
+
+[dependencies]
+` )
+    ?? ( json_obj_get args `deps` ) {
+        T dv → {
+            ? ( json_is_obj dv ) {
+                : ( Vec String ) keys ( json_obj_keys dv )
+                : ~ i k 0
+                ~ < k ( vec_len [String] keys ) {
+                    : s kn ?? ( vec_get [String] keys k ) { T x → ( string_data x ) F → `` }
+                    ?? ( json_obj_get dv kn ) {
+                        T vv → {
+                            ? ( json_is_str vv ) {
+                                ( string_push_str toml kn )
+                                ( string_push_str toml ` = "` )
+                                ( string_push_str toml ( json_str_data vv ) )
+                                ( string_push_str toml `"
+` )
+                            } {}
+                        }
+                        F → {}
+                    }
+                    = k + k 1
+                }
+                ( vec_free [String] keys )
+            } {}
+        }
+        F → {}
+    }
+    ( nm_ws_write ( string_data ws ) `nurl.toml` ( string_data toml ) okb )
+    ( string_free toml )
+    // ── source files ──
+    : ~ b wrote_any F
+    ?? ( json_obj_get args `files` ) {
+        T fv → {
+            ? ( json_is_obj fv ) {
+                : ( Vec String ) fk ( json_obj_keys fv )
+                : ~ i k 0
+                ~ < k ( vec_len [String] fk ) {
+                    : s rel ?? ( vec_get [String] fk k ) { T x → ( string_data x ) F → `` }
+                    ? ( nm_safe_rel rel ) {
+                        ?? ( json_obj_get fv rel ) {
+                            T cv → { ? ( json_is_str cv ) { ( nm_ws_write ( string_data ws ) rel ( json_str_data cv ) okb ) = wrote_any T } {} }
+                            F → {}
+                        }
+                    } { ( nurl_poke okb 0 0 ) }
+                    = k + k 1
+                }
+                ( vec_free [String] fk )
+            } {}
+        }
+        F → {}
+    }
+    ? wrote_any {} {
+        ?? ( json_obj_get args `source` ) {
+            T sv → { ? ( json_is_str sv ) { ( nm_ws_write ( string_data ws ) `main.nu` ( json_str_data sv ) okb ) = wrote_any T } {} }
+            F → {}
+        }
+    }
+    ? & wrote_any == ( nurl_peek okb 0 ) 1 {} {
+        ( nurl_free okb )
+        ?? ( dir_remove_all ( string_data ws ) ) { T _ → {} F _ → {} }
+        ( string_free ws )
+        ^ ( mcp_tool_result_error `pass 'files' {path: content} or 'source', with safe relative paths` )
+    }
+    ( nurl_free okb )
+    // ── entry ──
+    : ~ s entry `main.nu`
+    ?? ( json_obj_get args `entry` ) {
+        T ej → { ? ( json_is_str ej ) { = entry ( json_str_data ej ) } {} }
+        F → {}
+    }
+    ? ( nm_safe_rel entry ) {} {
+        ?? ( dir_remove_all ( string_data ws ) ) { T _ → {} F _ → {} }
+        ( string_free ws )
+        ^ ( mcp_tool_result_error `bad 'entry' — a safe workspace-relative .nu path` )
+    }
+    // ── nurlpkg install (verified registry resolution) ──
+    : String icmd ( string_from `cd '` )
+    ( string_push_str icmd ( string_data ws ) )
+    ( string_push_str icmd `' && nurlpkg install 2>&1` )
+    : !Output ProcessErr ir ( process_run_shell ( string_data icmd ) )
+    ( string_free icmd )
+    ?? ir {
+        T io → {
+            ? ( output_success io ) { ( output_free io ) } {
+                : Json j ( nm_fail_from_output `dependency resolution failed (nurlpkg install)` io T )
+                ( output_free io )
+                ?? ( dir_remove_all ( string_data ws ) ) { T _ → {} F _ → {} }
+                ( string_free ws )
+                ^ j
+            }
+        }
+        F e → {
+            ?? ( dir_remove_all ( string_data ws ) ) { T _ → {} F _ → {} }
+            ( string_free ws )
+            ^ ( nm_proc_err e )
+        }
+    }
+    // ── compile ──
+    : String out ( nm_tmp_path `-bin` )
+    : String ccmd ( string_from `cd '` )
+    ( string_push_str ccmd ( string_data ws ) )
+    ( string_push_str ccmd `' && nurl '` )
+    ( string_push_str ccmd entry )
+    ( string_push_str ccmd `' '` )
+    ( string_push_str ccmd ( string_data out ) )
+    ( string_push_str ccmd `' 2>&1` )
+    : !Output ProcessErr cr ( process_run_shell ( string_data ccmd ) )
+    ( string_free ccmd )
+    ?? ( dir_remove_all ( string_data ws ) ) { T _ → {} F _ → {} }
+    ( string_free ws )
+    ?? cr {
+        T co → {
+            ? ( output_success co ) {
+                ( output_free co )
+                : !( Vec u ) IoErr br ( read_file_bytes ( string_data out ) )
+                ( nm_unlink_artifacts ( string_data out ) )
+                ( nm_unlink ( string_data out ) )
+                ( string_free out )
+                ?? br {
+                    T bytes → {
+                        : i sz ( vec_len [u] bytes )
+                        : String b64 ( b64_encode_vec bytes )
+                        ( vec_free [u] bytes )
+                        : Json res ( json_obj_new )
+                        ( json_obj_set res `status` ( json_str_lit `ok` ) )
+                        ( json_obj_set res `binary_bytes` ( json_int sz ) )
+                        ( json_obj_set res `binary_base64` ( json_str_lit ( string_data b64 ) ) )
+                        ( string_free b64 )
+                        : String body ( json_stringify res )
+                        ( json_free res )
+                        : Json j ( mcp_tool_result_text ( string_data body ) )
+                        ( string_free body )
+                        ^ j
+                    }
+                    F _ → { ^ ( mcp_tool_result_error `compiled, but the binary could not be read back` ) }
+                }
+            } {
+                : Json j ( nm_fail_from_output `build failed` co T )
+                ( output_free co )
+                ( nm_unlink ( string_data out ) )
+                ( string_free out )
+                ^ j
+            }
+        }
+        F e → {
+            ( nm_unlink ( string_data out ) )
+            ( string_free out )
+            ^ ( nm_proc_err e )
+        }
+    }
+    ^ ( mcp_tool_result_error `build_project: internal error` )
 }
 
 // ── Tool: nurl_build_wasm (compile to wasm32-wasi, fully local) ──────
@@ -699,6 +912,18 @@ $ `deps/wasmbuilder/src/build.nu`
     ^ schema
 }
 
+@ nm_schema_project → Json {
+    : Json schema ( json_obj_new )
+    ( json_obj_set schema `type` ( json_str_lit `object` ) )
+    : Json props ( json_obj_new )
+    ( nm_prop props `source` `Inline NURL source for a single-file program (written as main.nu). Provide this OR "files".` )
+    ( nm_prop props `files` `A {relative-path: content} object for a multi-file project, e.g. {"main.nu": "...", "src/util.nu": "..."}. Paths must stay inside the workspace.` )
+    ( nm_prop props `deps` `A {name: version-requirement} object of registry dependencies, e.g. {"nn": "^0.1.1"}. Resolved (transitively, signature-verified) with nurlpkg install; a program imports one as $ 'deps/<name>/src/<module>.nu' (see nurl_api package=<name> for the module path).` )
+    ( nm_prop props `entry` `The .nu file to compile (default main.nu).` )
+    ( json_obj_set schema `properties` props )
+    ^ schema
+}
+
 @ nm_schema_name → Json {
     : Json schema ( json_obj_new )
     ( json_obj_set schema `type` ( json_str_lit `object` ) )
@@ -728,6 +953,9 @@ $ `deps/wasmbuilder/src/build.nu`
         ( vec_push [Json] tools ( mcp_tool_descriptor `nurl_build`
         `Compile NURL (inline "source" or a "path") with the local toolchain; reports success or compiler diagnostics. Does not run the program.`
         ( nm_schema_src_path ) ) )
+        ( vec_push [Json] tools ( mcp_tool_descriptor `nurl_build_project`
+        `Compile a program that USES registry packages: give "source" (or "files") plus "deps" ({name: req}); the tool resolves them (nurlpkg install — transitive, checksum + signature verified) and compiles with the local toolchain, returning the binary as base64. The bridge from nurl_api/nurl_grep discovery to a working build. Does not run the program.`
+        ( nm_schema_project ) ) )
     } {}
     ? ( nm_build_ok ) {
         ( vec_push [Json] tools ( mcp_tool_descriptor `nurl_build_wasm`
@@ -764,6 +992,10 @@ $ `deps/wasmbuilder/src/build.nu`
     ? != ( nurl_str_eq name `nurl_build` ) 0 {
         ? ( nm_build_ok ) { ^ ( nm_tool_build args ) }
         { ^ ( mcp_tool_result_error `nurl_build is disabled (--read-only)` ) }
+    } {}
+    ? != ( nurl_str_eq name `nurl_build_project` ) 0 {
+        ? ( nm_build_ok ) { ^ ( nm_tool_build_project args ) }
+        ^ ( mcp_tool_result_error `the local toolchain (nurl/nurlpkg) is not on PATH` )
     } {}
     ? != ( nurl_str_eq name `nurl_build_wasm` ) 0 {
         ? ( nm_build_ok ) { ^ ( nm_tool_build_wasm args ) }
