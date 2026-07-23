@@ -759,6 +759,82 @@ $ `src/pages.nu`
     ^ r
 }
 
+// GET /packages/:name/:version/api — nurldoc-rendered API docs for the
+// release's src/*.nu modules. Version-pinned → immutable-cacheable.
+@ __reg_h_pkg_api HttpRequest req Params p → HttpResponse {
+    : ~ String rawname ( string_new )
+    ?? ( params_get p `name` ) {
+        T v → { ( string_free rawname ) = rawname v }
+        F → {}
+    }
+    : String name ( string_to_lower rawname )
+    ( string_free rawname )
+    : ~ String version ( string_new )
+    ?? ( params_get p `version` ) {
+        T v → { ( string_free version ) = version v }
+        F → {}
+    }
+    ? | ! ( reg_name_valid ( string_data name ) ) ! ( reg_version_valid ( string_data version ) ) {
+        : HttpResponse r ( __reg_notfound_page ( string_data name ) )
+        ( string_free name )
+        ( string_free version )
+        ^ r
+    } {}
+    ?? ( reg_db_open g_reg_dbpath ) {
+        F _ → {
+            ( string_free name )
+            ( string_free version )
+            ^ ( __reg_err 500 `db_unavailable` )
+        }
+        T db → {
+            ? ! ( reg_db_version_exists db ( string_data name ) ( string_data version ) ) {
+                : HttpResponse r ( __reg_notfound_page ( string_data name ) )
+                ( string_free name )
+                ( string_free version )
+                ^ r
+            } {}
+            ^ ( __reg_pkg_api_page name version )
+        }
+    }
+}
+
+// The API page body, once the version is known to exist. Owns (and frees)
+// the validated name/version Strings.
+@ __reg_pkg_api_page String name String version → HttpResponse {
+    : ( Vec u ) gz ( reg_tarball_read g_reg_data ( string_data name ) ( string_data version ) )
+    ? == ( vec_len [u] gz ) 0 {
+        ( vec_free [u] gz )
+        : HttpResponse r ( __reg_notfound_page ( string_data name ) )
+        ( string_free name )
+        ( string_free version )
+        ^ r
+    } {}
+    : String md ( reg_targz_api_md gz )
+    ( vec_free [u] gz )
+    : Json ctx ( json_obj_new )
+    : b _n ( json_obj_set ctx `name` ( json_str_lit ( string_data name ) ) )
+    : b _v ( json_obj_set ctx `version` ( json_str_lit ( string_data version ) ) )
+    ? & > ( string_len md ) 0 <= ( string_len md ) 2097152 {
+        : String ah ( reg_api_html ( string_data md ) )
+        : b _a ( json_obj_set ctx `api` ( json_str_lit ( string_data ah ) ) )
+        ( string_free ah )
+    } {}
+    ( string_free md )
+    : String title ( string_from ( string_data name ) )
+    ( string_push_char title 32 )
+    ( string_push_str title ( string_data version ) )
+    ( string_push_str title ` — API` )
+    : b _ti ( json_obj_set ctx `title` ( json_str_lit ( string_data title ) ) )
+    ( string_free title )
+    ( string_free name )
+    ( string_free version )
+    : String html ( reg_page_api ctx )
+    ( json_free ctx )
+    : HttpResponse r ( __reg_html_resp 200 html )
+    ( response_set_header r `Cache-Control` `public, max-age=86400, immutable` )
+    ^ r
+}
+
 // Image MIME by lowercased extension; "" = not an allowed asset type.
 // (Images only: keeps the asset route from doubling as a file host.)
 @ __reg_asset_mime s path → s {
@@ -1079,6 +1155,7 @@ $ `src/pages.nu`
     ( router_get r `/pkgs/:name/:file` \ HttpRequest req Params p → HttpResponse { ^ ( __reg_h_tarball req p ) } )
     ( router_get r `/packages/:name` \ HttpRequest req Params p → HttpResponse { ^ ( __reg_h_pkg_detail req p ) } )
     ( router_get r `/packages/:name/:version/files` \ HttpRequest req Params p → HttpResponse { ^ ( __reg_h_pkg_files req p ) } )
+    ( router_get r `/packages/:name/:version/api` \ HttpRequest req Params p → HttpResponse { ^ ( __reg_h_pkg_api req p ) } )
     ( router_get r `/files/:name/:version/*rest` \ HttpRequest req Params p → HttpResponse { ^ ( __reg_h_file req p ) } )
     ( router_get r `/api/v1/search` \ HttpRequest req Params p → HttpResponse { ^ ( __reg_h_search req p ) } )
     ( router_get r `/api/v1/stats` \ HttpRequest req Params p → HttpResponse { ^ ( __reg_h_stats req p ) } )

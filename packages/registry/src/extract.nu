@@ -11,6 +11,7 @@ $ `stdlib/ext/compress.nu`
 $ `stdlib/ext/json.nu`
 $ `stdlib/ext/tar.nu`
 $ `stdlib/ext/toml.nu`
+$ `stdlib/ext/nurldoc.nu`
 
 // Normalize a tarball member path for matching: strip a leading "./".
 @ __rx_member_norm s path → String {
@@ -304,4 +305,63 @@ $ `stdlib/ext/toml.nu`
     : String cut ( string_substr raw 0 500 )
     ( string_free raw )
     ^ cut
+}
+
+// ── API documentation (nurldoc over the tarball's src/*.nu) ───────────
+
+// The basename after the last '/' of a member path.
+@ __rx_basename s path → String {
+    : i n ( nurl_str_len path )
+    : ~ i start 0
+    : ~ i k 0
+    ~ < k n { ? == ( nurl_str_get path k ) 47 { = start + k 1 } {} = k + k 1 }
+    : String out ( string_with_cap - n start )
+    = k start
+    ~ < k n { ( string_push_char out ( nurl_str_get path k ) ) = k + k 1 }
+    ^ out
+}
+
+// Rendered API docs (Markdown) for every src/*.nu in the tarball, in
+// archive order, each run through nurldoc. "" when the archive is
+// malformed or has no src modules.
+@ reg_targz_api_md ( Vec u ) gz → String {
+    : String md ( string_new )
+    : !( Vec u ) CompressErr dr ( gzip_decompress gz )
+    ?? dr {
+        F _ → ^ md
+        T raw → {
+            : !( Vec TarEntry ) TarErr tr ( tar_parse raw )
+            ( vec_free [u] raw )
+            ?? tr {
+                F _ → ^ md
+                T ents → {
+                    : i n ( vec_len [TarEntry] ents )
+                    : ~ i k 0
+                    ~ < k n {
+                        : ?TarEntry eo ( vec_get [TarEntry] ents k )
+                        ?? eo {
+                            T e → {
+                                ? == . e typeflag 48 {
+                                    : String norm ( __rx_member_norm ( string_data . e path ) )
+                                    ? & ( string_starts_with norm `src/` ) ( string_ends_with norm `.nu` ) {
+                                        : String base ( __rx_basename ( string_data norm ) )
+                                        : String content ( bytes_to_str . e data )
+                                        : String one ( nurldoc_render ( string_data content ) ( string_data base ) )
+                                        ? > ( string_len md ) 0 { ( string_push_str md `\n\n---\n\n` ) } {}
+                                        ( string_push_str md ( string_data one ) )
+                                        ( string_free one ) ( string_free content ) ( string_free base )
+                                    } {}
+                                    ( string_free norm )
+                                } {}
+                            }
+                            F → {}
+                        }
+                        = k + k 1
+                    }
+                    ( tar_entries_free ents )
+                }
+            }
+        }
+    }
+    ^ md
 }
