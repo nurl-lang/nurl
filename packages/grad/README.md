@@ -142,9 +142,13 @@ registry's training story, and none of them hand-writes a backward pass:
 
 ## Honest limits
 
-- **f64 only.** The tape computes in double throughout; f32 training
-  (LoRA at real scale wants it) is a tensor-level dtype question, out of
-  grad's hands until tensor grows a data plane for it.
+- **The CPU tape is f64.** It computes in double throughout — the
+  reference every check is measured against. The DEVICE replay can run
+  in float32 (`gput_capture_dt(..., 1)`): half the device memory, f32
+  ALUs, at float32 precision (loss trajectory ~1e-5, params ~4e-4
+  relative to the f64 tape over a training run — verified, not
+  bit-equal). The enabler for large-model finetune where f64 base
+  weights would not fit.
 - **The device replay is a static graph.** `gput_capture` freezes one
   episode's structure; new shapes mean a new capture. Refreshing inputs
   (`gput_set_input`) covers the minibatch/window pattern — data changes,
