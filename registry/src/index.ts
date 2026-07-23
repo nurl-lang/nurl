@@ -601,10 +601,10 @@ const LATEST_SUBQUERY =
 
 async function handleCatalog(url: URL, env: Env): Promise<Response> {
   const q = (url.searchParams.get("q") ?? "").toLowerCase().slice(0, 64);
-  const like = q ? `%${q.replace(/[%_\\]/g, "")}%` : "%";
+  const like = q ? `%${q.replace(/[\\%_]/g, (c) => "\\" + c)}%` : "%";
   const rows = await env.REG_DB.prepare(
     `SELECT p.name AS name, ${LATEST_SUBQUERY} AS latest, p.description AS description
-       FROM packages p WHERE p.name LIKE ?1 OR p.description LIKE ?1 OR p.symbols LIKE ?1 ORDER BY p.name LIMIT 200`,
+       FROM packages p WHERE p.name LIKE ?1 ESCAPE '\\' OR p.description LIKE ?1 ESCAPE '\\' OR p.symbols LIKE ?1 ESCAPE '\\' ORDER BY p.name LIMIT 200`,
   ).bind(like).all<CatalogRow>();
   const items = rows.results ?? [];
   const list = items.length
@@ -797,10 +797,10 @@ async function handleSearch(req: Request, url: URL, env: Env): Promise<Response>
     return json({ error: "rate_limited" }, 429, { "retry-after": "60" });
   }
   const q = (url.searchParams.get("q") ?? "").toLowerCase().slice(0, 64);
-  const like = q ? `%${q.replace(/[%_\\]/g, "")}%` : "%";
+  const like = q ? `%${q.replace(/[\\%_]/g, (c) => "\\" + c)}%` : "%";
   const rows = await env.REG_DB.prepare(
     `SELECT p.name AS name, ${LATEST_SUBQUERY} AS latest, p.description AS description, p.symbols AS symbols
-       FROM packages p WHERE p.name LIKE ?1 OR p.description LIKE ?1 OR p.symbols LIKE ?1 ORDER BY p.name LIMIT 50`,
+       FROM packages p WHERE p.name LIKE ?1 ESCAPE '\\' OR p.description LIKE ?1 ESCAPE '\\' OR p.symbols LIKE ?1 ESCAPE '\\' ORDER BY p.name LIMIT 50`,
   ).bind(like).all<CatalogRow>();
   return json({
     results: (rows.results ?? []).map((r) => {
