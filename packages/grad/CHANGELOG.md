@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.5.0
+
+**Graph-fused episodes.** `gput_graph_capture(pg)` records one forward +
+backward as a CUDA graph; `gput_graph_capture_train(pg, opt)` records the
+WHOLE training episode including the optimizer update; `gput_episode(pg)`
+replays it as ONE launch. The optimizer's per-step scalars (Adam lr_t,
+the clip scale) moved into a small device ctl buffer — `gpopt_prepare` is
+one 16-byte upload per step, and the clip scale is now computed ON the
+device (`gp_clipcs`), so nothing inside the episode needs the host.
+Bit-exactness is untouched: same kernels, same order, same values —
+the bench gates the graph path's loss endpoints bitwise.
+
+Honestly measured on the d-64-32-64-d AE bench (RTX 4090): per-node
+replay 297 ms → graph-fused 236 ms (6.2× the CPU tape). The remaining
+wall on tiny nets is GPU-side per-kernel latency (~40 small dependent
+kernels), not host overhead — true kernel fusion is a future arc; the
+graph win compounds with bigger nets where kernels do real work.
+
+Requires gpu ^0.10 (CUDA Graphs). CPU-backend callers keep the
+per-launch path automatically.
+
 ## 0.4.0
 
 **`src/emitc.nu` — emit a recorded scalar tape as CUDA-C.**

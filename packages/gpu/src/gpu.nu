@@ -202,6 +202,30 @@ $ `cpu.nu`
 // The CPU backend runs kernels synchronously, so there is nothing to await.
 @ gpu_sync Gpu g → i { ? != __gpu_backend 0 { ^ 0 } { ^ ( cuda_sync ) } }
 
+// ── CUDA Graphs (CUDA backend only; every other backend reports F/0) ──
+// Capture the launches between begin and end, then replay them all with
+// ONE gpu_graph_launch — same kernels, same argument values, same order,
+// bit-identical results. Callers must not sync between begin and end.
+@ gpu_graph_begin Gpu g → b {
+    ? != __gpu_backend 0 { ^ F } {}
+    ^ == ( cuda_graph_begin ) 0
+}
+
+// The executable-graph handle, or 0 when capture/instantiation failed.
+@ gpu_graph_end Gpu g → i {
+    ? != __gpu_backend 0 { ^ 0 } {}
+    ^ ( cuda_graph_end )
+}
+
+@ gpu_graph_launch Gpu g i exec → i {
+    ? != __gpu_backend 0 { ^ 1 } {}
+    ^ ( cuda_graph_launch exec )
+}
+
+@ gpu_graph_free i exec → v {
+    ? != __gpu_backend 0 {} { ( cuda_graph_free exec ) }
+}
+
 // ── kernels ───────────────────────────────────────────────────────
 
 // Compile CUDA-C `src` at runtime (NVRTC) and load entry point `name`.

@@ -370,10 +370,25 @@ extern "C" __global__ void gp_gnorm(const long long* ptab, long long np, double*
     }
     o[0] = sqrt(ss);
 }
-extern "C" __global__ void gp_opt(double* w, const double* g, double* m, double* v, long long n, long long kind, double lrt, double alpha, double cs, double lr)
+extern "C" __global__ void gp_clipcs(const long long* ptab, long long np, double clip, double* ctl)
+{
+    if (blockIdx.x != 0 || threadIdx.x != 0) return;
+    double ss = 0.0;
+    for (long long p = 0; p < np; p++) {
+        const double* g = (const double*)(unsigned long long)ptab[2 * p];
+        long long n = ptab[2 * p + 1];
+        for (long long k = 0; k < n; k++)
+            ss = __dadd_rn(ss, __dmul_rn(g[k], g[k]));
+    }
+    double gn = sqrt(ss);
+    ctl[1] = (gn > clip) ? (clip / gn) : 1.0;
+}
+extern "C" __global__ void gp_opt(double* w, const double* g, double* m, double* v, long long n, long long kind, const double* ctl, double alpha, double lr)
 {
     long long k = (long long)blockIdx.x * blockDim.x + threadIdx.x;
     if (k >= n) return;
+    double lrt = ctl[0];
+    double cs = ctl[1];
     double gk = __dadd_rn(__dmul_rn(g[k], cs), __dmul_rn(alpha, w[k]));
     if (kind == 0) {
         w[k] = __dsub_rn(w[k], __dmul_rn(lr, gk));
@@ -413,6 +428,7 @@ extern "C" __global__ void gp_opt(double* w, const double* g, double* m, double*
     * GpuKit kit
     ( Vec GpNode ) nodes
     i loss
+    i gexec  // CUDA-graph exec handle for one fwd+bwd episode (0 = none)
 }
 
 // Device optimizer over a captured program's parameters — opt.nu mirrored:
@@ -430,6 +446,7 @@ extern "C" __global__ void gp_opt(double* w, const double* g, double* m, double*
     ( Vec GkBuf ) v
     GkBuf ptab  // [dptr len]* per param (built lazily for the clip norm)
     GkBuf nrm  // 1-elem norm result
+    GkBuf ctl  // [lrt, cs] the update kernels read (graph-capturable)
 }
 
 @ _gp_nobuf → GkBuf { ^ @ GkBuf { 0 0 0 } }
@@ -513,6 +530,7 @@ extern "C" __global__ void gp_opt(double* w, const double* g, double* m, double*
     = . pg kit kit
     = . pg nodes ( vec_new [GpNode] )
     = . pg loss . loss id
+    = . pg gexec 0
     ? & ( tape_ok tp ) >= . loss id 0 {} { ( _gp_fail pg `tape is poisoned or loss invalid` ) ^ pg }
     ? ( gk_ok kit ) {} { ( _gp_fail pg `no device` ) ^ pg }
     : i nn ( tape_len tp )
@@ -710,6 +728,7 @@ extern "C" __global__ void gp_opt(double* w, const double* g, double* m, double*
         = k + k 1
     }
     ( vec_free [GpNode] . pg nodes )
+    ? != . pg gexec 0 { ( gpu_graph_free . pg gexec ) } {}
     ( nurl_free # s pg )
 }
 
@@ -892,10 +911,7 @@ extern "C" __global__ void gp_opt(double* w, const double* g, double* m, double*
     ^ r
 }
 
-// Recompute every non-leaf value on the device, in tape order.
-@ gput_forward * GProg pg → b {
-    ? . pg ok {} { ^ F }
-    ( gk_autosync F )
+@ __gput_fwd_launches * GProg pg → b {
     : i n ( vec_len [GpNode] . pg nodes )
     : ~ b r T
     : ~ i k 0
@@ -903,6 +919,14 @@ extern "C" __global__ void gp_opt(double* w, const double* g, double* m, double*
         = r ( _gp_fwd_node pg k )
         = k + k 1
     }
+    ^ r
+}
+
+// Recompute every non-leaf value on the device, in tape order.
+@ gput_forward * GProg pg → b {
+    ? . pg ok {} { ^ F }
+    ( gk_autosync F )
+    : b r ( __gput_fwd_launches pg )
     ( gk_autosync T )
     ? r { ^ ( gk_sync . pg kit ) } {}
     ^ F
@@ -1138,9 +1162,7 @@ extern "C" __global__ void gp_opt(double* w, const double* g, double* m, double*
 
 // Zero every gradient, seed dL/d(loss) = 1, sweep the tape in reverse over
 // the loss-ancestor set, then zero const-leaf gradients (grad.nu's epilogue).
-@ gput_backward * GProg pg → b {
-    ? . pg ok {} { ^ F }
-    ( gk_autosync F )
+@ __gput_bwd_launches * GProg pg → b {
     : i n ( vec_len [GpNode] . pg nodes )
     : ~ b r T
     : ~ i k 0
@@ -1160,9 +1182,77 @@ extern "C" __global__ void gp_opt(double* w, const double* g, double* m, double*
         = r ( _gp_bwd_node pg k )
         = k - k 1
     }
+    ^ r
+}
+
+@ gput_backward * GProg pg → b {
+    ? . pg ok {} { ^ F }
+    ( gk_autosync F )
+    : b r ( __gput_bwd_launches pg )
     ( gk_autosync T )
     ? r { ^ ( gk_sync . pg kit ) } {}
     ^ F
+}
+
+// ── graph fusion: one episode (forward + backward) as ONE launch ────
+// CUDA only; every kernel, argument value and launch order is IDENTICAL
+// to the per-node path (bit-identical results) — the graph merely removes
+// ~2N launch round-trips per episode. Inputs still refresh normally with
+// gput_set_input (plain HtoD; the recorded kernels read the buffers).
+// Returns F where graphs are unavailable (CPU backend) — callers keep
+// using gput_forward/gput_backward.
+@ gput_graph_capture * GProg pg → b {
+    ? . pg ok {} { ^ F }
+    ? == . pg gexec 0 {} { ^ T }
+    : *GpuKit kit . pg kit
+    ? ( gpu_graph_begin . kit gpu ) {} { ^ F }
+    ( gk_autosync F )
+    : ~ b r ( __gput_fwd_launches pg )
+    = r & r ( __gput_bwd_launches pg )
+    ( gk_autosync T )
+    : i exec ( gpu_graph_end . kit gpu )
+    ? & r != exec 0 {
+        = . pg gexec exec
+        ^ T
+    } {}
+    ? != exec 0 { ( gpu_graph_free exec ) } {}
+    ^ F
+}
+
+// Capture a whole TRAINING episode — forward + backward + the optimizer
+// update — as one graph. Per episode the host then does: refresh inputs
+// (gput_set_input), gpopt_prepare (one 16-byte ctl upload), and ONE
+// gput_episode launch. The optimizer's per-step scalars ride the ctl
+// buffer, so the captured launches never change.
+@ gput_graph_capture_train * GProg pg * GpOpt go → b {
+    ? & . pg ok . go ok {} { ^ F }
+    ? == . pg gexec 0 {} { ^ T }
+    ? ( __gpopt_ensure go pg ) {} { ^ F }
+    : *GpuKit kit . pg kit
+    ? ( gpu_graph_begin . kit gpu ) {} { ^ F }
+    ( gk_autosync F )
+    : ~ b r ( __gput_fwd_launches pg )
+    = r & r ( __gput_bwd_launches pg )
+    = r & r ( __gpopt_launches go pg )
+    ( gk_autosync T )
+    : i exec ( gpu_graph_end . kit gpu )
+    ? & r != exec 0 {
+        = . pg gexec exec
+        ^ T
+    } {}
+    ? != exec 0 { ( gpu_graph_free exec ) } {}
+    ^ F
+}
+
+// Run one fused episode (falls back to the per-node path without a graph).
+@ gput_episode * GProg pg → b {
+    ? . pg ok {} { ^ F }
+    ? != . pg gexec 0 {
+        : *GpuKit kit . pg kit
+        ^ == ( gpu_graph_launch . kit gpu . pg gexec ) 0
+    } {}
+    ? ( gput_forward pg ) {} { ^ F }
+    ^ ( gput_backward pg )
 }
 
 // ── readback ─────────────────────────────────────────────────────────
@@ -1236,6 +1326,7 @@ extern "C" __global__ void gp_opt(double* w, const double* g, double* m, double*
     = . o v ( vec_new [GkBuf] )
     = . o ptab ( _gp_nobuf )
     = . o nrm ( _gp_nobuf )
+    = . o ctl ( _gp_nobuf )
     ^ o
 }
 
@@ -1257,6 +1348,7 @@ extern "C" __global__ void gp_opt(double* w, const double* g, double* m, double*
     ( vec_free [f] . o alphas )
     ( _gp_bfree . o ptab )
     ( _gp_bfree . o nrm )
+    ( _gp_bfree . o ctl )
     ( nurl_free # s o )
 }
 
@@ -1281,59 +1373,69 @@ extern "C" __global__ void gp_opt(double* w, const double* g, double* m, double*
     ( vec_push [GkBuf] . o v vb )
 }
 
-// One update step from the gradients on the device — opt.nu's semantics:
-// untouched params (not loss ancestors) are SKIPPED, the clip norm covers
-// every registered ancestor's gradient in registration order, Adam's lr_t
-// comes from host pow exactly like the CPU path.
-@ gpopt_step * GpOpt o * GProg pg → b {
-    ? & . o ok . pg ok {} { ^ F }
-    : i np ( vec_len [i] . o ids )
-    : ~ f cs 1.0
-    ? > . o clip 0.0 {
-        ? ( gk_buf_ok . o ptab ) {} {
-            // build the [dptr len] table over the ancestor params once
-            : ( Vec i ) tv ( vec_new [i] )
-            : ~ i k 0
-            ~ < k np {
-                : GpNode nd ( _gp_node pg ( _ti . o ids k ) )
-                ? == . nd reach 1 {
-                    : GkBuf gb . nd grad
-                    ( vec_push [i] tv . gb dptr )
-                    ( vec_push [i] tv . nd n )
-                } {}
-                = k + k 1
-            }
-            = . o ptab ( gk_dbuf_new . pg kit ( vec_len [i] tv ) GK_I64 )
-            = . o nrm ( gk_dbuf_new . pg kit 1 GK_F64 )
-            : ~ b up ( gk_buf_ok . o ptab )
-            = up & up ( gk_buf_ok . o nrm )
-            = up & up ( gk_dbuf_upload_i . pg kit . o ptab tv )
-            ? up {} { = . o ok F }
-            ( vec_free [i] tv )
+// Ensure the ctl buffer and (with clipping) the [dptr len] table exist.
+@ __gpopt_ensure * GpOpt o * GProg pg → b {
+    ? ( gk_buf_ok . o ctl ) {} {
+        = . o ctl ( gk_dbuf_new . pg kit 2 GK_F64 )
+        ? ( gk_buf_ok . o ctl ) {} { = . o ok F ^ F }
+    }
+    ? & > . o clip 0.0 ! ( gk_buf_ok . o ptab ) {
+        : ( Vec i ) tv ( vec_new [i] )
+        : i np ( vec_len [i] . o ids )
+        : ~ i k 0
+        ~ < k np {
+            : GpNode nd ( _gp_node pg ( _ti . o ids k ) )
+            ? == . nd reach 1 {
+                : GkBuf gb . nd grad
+                ( vec_push [i] tv . gb dptr )
+                ( vec_push [i] tv . nd n )
+            } {}
+            = k + k 1
         }
-        ? . o ok {} { ^ F }
-        : ( Vec i ) a ( vec_new [i] )
-        ( vec_push [i] a ( gk_arg_dev . o ptab ) )
-        ( vec_push [i] a ( gpu_arg_i64 / ( gk_buf_len . o ptab ) 2 ) )
-        ( vec_push [i] a ( gk_arg_dev . o nrm ) )
-        : ~ b r ( _gp_run pg `gp_gnorm` 1 1 a )
-        ( vec_free [i] a )
-        : ( Vec f ) nv ( vec_new [f] )
-        ( vec_push [f] nv 0.0 )
-        = r & r ( gk_dbuf_download . pg kit . o nrm nv )
-        ? r {} { ( vec_free [f] nv ) ^ F }
-        : f gn ( _tf nv 0 )
-        ( vec_free [f] nv )
-        ? > gn . o clip { = cs / . o clip gn } {}
+        = . o ptab ( gk_dbuf_new . pg kit ( vec_len [i] tv ) GK_I64 )
+        : ~ b up ( gk_buf_ok . o ptab )
+        = up & up ( gk_dbuf_upload_i . pg kit . o ptab tv )
+        ( vec_free [i] tv )
+        ? up {} { = . o ok F ^ F }
     } {}
+    ^ T
+}
+
+// The HOST half of a step: advance t, compute Adam's lr_t (host pow, like
+// opt.nu), and upload [lrt, 1.0] into ctl. The device half then overwrites
+// ctl[1] with the clip scale when clipping is on. Graph-safe: per episode
+// this is ONE 16-byte upload.
+@ gpopt_prepare * GpOpt o * GProg pg → b {
+    ? & . o ok . pg ok {} { ^ F }
+    ? ( __gpopt_ensure o pg ) {} { ^ F }
     : ~ f lrt . o lr
     ? == . o kind 1 {
         = . o t + . o t 1
         : f tf # f . o t
         = lrt * . o lr / ( float_sqrt - 1.0 ( pow 0.999 tf ) ) - 1.0 ( pow 0.9 tf )
     } {}
-    ( gk_autosync F )
+    : ( Vec f ) cv ( vec_new [f] )
+    ( vec_push [f] cv lrt )
+    ( vec_push [f] cv 1.0 )
+    : b up ( gk_dbuf_upload . pg kit . o ctl cv )
+    ( vec_free [f] cv )
+    ^ up
+}
+
+// The DEVICE half: (clip-scale kernel when clipping) + one gp_opt launch
+// per backward-active parameter. Pure launches — capturable into a graph.
+@ __gpopt_launches * GpOpt o * GProg pg → b {
     : ~ b r T
+    ? > . o clip 0.0 {
+        : ( Vec i ) a ( vec_new [i] )
+        ( vec_push [i] a ( gk_arg_dev . o ptab ) )
+        ( vec_push [i] a ( gpu_arg_i64 / ( gk_buf_len . o ptab ) 2 ) )
+        ( vec_push [i] a ( gpu_arg_i64 ( f64_to_bits . o clip ) ) )
+        ( vec_push [i] a ( gk_arg_dev . o ctl ) )
+        = r ( _gp_run pg `gp_clipcs` 1 1 a )
+        ( vec_free [i] a )
+    } {}
+    : i np ( vec_len [i] . o ids )
     : ~ i pi 0
     ~ & < pi np r {
         : i id ( _ti . o ids pi )
@@ -1348,15 +1450,25 @@ extern "C" __global__ void gp_opt(double* w, const double* g, double* m, double*
             ( vec_push [i] a ( gk_arg_dev vb ) )
             ( vec_push [i] a ( gpu_arg_i64 . nd n ) )
             ( vec_push [i] a ( gpu_arg_i64 . o kind ) )
-            ( vec_push [i] a ( gpu_arg_i64 ( f64_to_bits lrt ) ) )
+            ( vec_push [i] a ( gk_arg_dev . o ctl ) )
             ( vec_push [i] a ( gpu_arg_i64 ( f64_to_bits ( _tf . o alphas pi ) ) ) )
-            ( vec_push [i] a ( gpu_arg_i64 ( f64_to_bits cs ) ) )
             ( vec_push [i] a ( gpu_arg_i64 ( f64_to_bits . o lr ) ) )
             = r ( _gp_run pg `gp_opt` ( gk_grid . nd n 256 ) 256 a )
             ( vec_free [i] a )
         } {}
         = pi + pi 1
     }
+    ^ r
+}
+
+// One update step from the gradients on the device — opt.nu's semantics:
+// untouched params (not loss ancestors) are SKIPPED, the clip norm covers
+// every registered ancestor's gradient in registration order, Adam's lr_t
+// comes from host pow exactly like the CPU path.
+@ gpopt_step * GpOpt o * GProg pg → b {
+    ? ( gpopt_prepare o pg ) {} { ^ F }
+    ( gk_autosync F )
+    : b r ( __gpopt_launches o pg )
     ( gk_autosync T )
     ? r { ^ ( gk_sync . pg kit ) } {}
     ^ F

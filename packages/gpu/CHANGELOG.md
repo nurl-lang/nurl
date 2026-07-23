@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.10.0
+
+- **CUDA Graphs.** `gpu_graph_begin/end/launch/free`: capture a launch
+  sequence once, replay it as ONE call — same kernels, argument values
+  and order, bit-identical results, minus N launch round-trips. The
+  capture stream is CU_STREAM_NON_BLOCKING (a blocking stream's implicit
+  legacy-stream coupling fails captures with error 906) and capture mode
+  is THREAD_LOCAL. Non-CUDA backends report unsupported and callers fall
+  back to per-launch dispatch. `cuda_launch` now routes through a
+  current-stream global so captured launches ride the capture stream.
+
 ## 0.9.1
 
 - **The CPU backend honours the bit-exactness discipline.** The host shim

@@ -182,6 +182,59 @@ $ `deps/gpukit/src/dev.nu`
     : i t3 ( monotonic_ns )
     ? devok {} { ( nurl_print `gput_bench: device loop failed\n` ) }
 
+    // — graph-fused device path (CUDA only; same run, one launch/episode) —
+    // fresh params so the trajectory starts identically
+    : ~ b gok F
+    : ~ i t4 0
+    : ~ i t5 0
+    : ~ f gfirst 0.0
+    : ~ f glast 0.0
+    ? devok {
+        : *GTape tp3 ( tape_new )
+        : GVar W1g ( param2 tp3 w1v D H1 )
+        : GVar B1g ( param1 tp3 H1 )
+        : GVar W2g ( param2 tp3 w2v H1 H2 )
+        : GVar B2g ( param1 tp3 H2 )
+        : GVar W3g ( param2 tp3 w3v H2 D )
+        : GVar B3g ( param1 tp3 D )
+        : ( Vec f ) rows0g ( vec_with_cap [f] * BSZ D )
+        : ~ i qg 0
+        ~ < qg * BSZ D { ( vec_push [f] rows0g ( _tf all qg ) ) = qg + qg 1 }
+        : ( Vec i ) rshg ( vec_new [i] )
+        ( vec_push [i] rshg BSZ ) ( vec_push [i] rshg D )
+        : Tensor rtg ( tensor_from_data TE_F64 rshg rows0g )
+        : GVar Xg ( grad_const tp3 rtg )
+        ( tensor_free rtg ) ( vec_free [f] rows0g )
+        : GVar lossg ( episode tp3 Xg W1g B1g W2g B2g W3g B3g ALPHA BSZ )
+        : *GProg pgg ( gput_capture kit tp3 lossg )
+        : *GpOpt gog ( gpopt_adam_new LR )
+        ( gpopt_add gog pgg W1g ALPHA ) ( gpopt_add gog pgg B1g 0.0 )
+        ( gpopt_add gog pgg W2g ALPHA ) ( gpopt_add gog pgg B2g 0.0 )
+        ( gpopt_add gog pgg W3g ALPHA ) ( gpopt_add gog pgg B3g 0.0 )
+        // the WHOLE episode — forward, backward, Adam — is one graph launch
+        = gok & ( gput_ok pgg ) ( gput_graph_capture_train pgg gog )
+        ? gok {
+            = t4 ( monotonic_ns )
+            : ~ i ep3 0
+            ~ & < ep3 EPISODES gok {
+                : ( Vec f ) rows ( vec_with_cap [f] * BSZ D )
+                : ~ i q 0
+                ~ < q * BSZ D { ( vec_push [f] rows ( _tf all + * * ep3 BSZ D q ) ) = q + q 1 }
+                = gok & gok ( gput_set_input pgg Xg rows )
+                ( vec_free [f] rows )
+                = gok & gok ( gpopt_prepare gog pgg )
+                = gok & gok ( gput_episode pgg )
+                ? == ep3 0 { = gfirst ( gput_loss pgg ) } {}
+                ? == ep3 - EPISODES 1 { = glast ( gput_loss pgg ) } {}
+                = ep3 + ep3 1
+            }
+            = t5 ( monotonic_ns )
+        } {}
+        ( gpopt_free gog )
+        ( gput_free pgg )
+        ( tape_free tp3 )
+    } {}
+
     : i cms / - t1 t0 1000000
     : i dms / - t3 t2 1000000
     ( nurl_print `cpu tape:      ` ) ( nurl_print_int cms ) ( nurl_print ` ms\n` )
@@ -197,6 +250,20 @@ $ `deps/gpukit/src/dev.nu`
     ( nurl_print ` → ` ) ( nurl_print ( nurl_str_float dlast ) ) ( nurl_print `\n` )
     : b agree & == ( f64_to_bits cfirst ) ( f64_to_bits dfirst ) == ( f64_to_bits clast ) ( f64_to_bits dlast )
     ( nurl_print ? agree `loss endpoints BIT-EQUAL\n` `loss endpoints DIFFER\n` )
+    ? gok {
+        : i gms / - t5 t4 1000000
+        ( nurl_print `graph-fused:   ` ) ( nurl_print_int gms ) ( nurl_print ` ms\n` )
+        ? > gms 0 {
+            ( nurl_print `graph ratio vs cpu: ` )
+            ( nurl_print ( nurl_str_float / # f cms # f gms ) )
+            ( nurl_print `x\n` )
+        } {}
+        : b gagree & == ( f64_to_bits gfirst ) ( f64_to_bits cfirst ) == ( f64_to_bits glast ) ( f64_to_bits clast )
+        ( nurl_print ? gagree `graph endpoints BIT-EQUAL\n` `graph endpoints DIFFER\n` )
+        ? gagree {} { ^ 1 }
+    } {
+        ( nurl_print `graph-fused:   unavailable on this backend\n` )
+    }
     ( gpopt_free go )
     ( gput_free pg )
     ( opt_free co )
