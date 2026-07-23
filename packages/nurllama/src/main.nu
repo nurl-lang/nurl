@@ -578,7 +578,8 @@ $ `stdlib/std/term.nu`
     ( args_opt p `alpha` 0 `F` `finetune: LoRA alpha (default 16)` )
     ( args_opt p `seq` 0 `N` `finetune: training window in tokens (default 64)` )
     ( args_opt p `seed` 0 `N` `finetune: adapter init seed (default 42)` )
-    ( args_flag p `f32` 0 `finetune: run the device replay in float32 (half the base-weight VRAM; float32 precision, not bit-exact to f64)` )
+    ( args_flag p `f32` 0 `finetune: run the device replay in float32 (half VRAM; float32 precision, not bit-exact to f64)` )
+    ( args_flag p `mixed` 0 `finetune: mixed precision — f32 storage, f64 accumulation (half VRAM, near-f64 accuracy; preferred over --f32 at scale)` )
     ( args_opt p `n-predict` 110 `N` `run: max tokens to generate (default 64)` )
     ( args_opt p `temp` 0 `F` `run: temperature; 0 = greedy (default 0.8)` )
     ( args_opt p `topk` 0 `N` `run: top-k filter (default 40; 0 = off)` )
@@ -735,7 +736,8 @@ $ `stdlib/std/term.nu`
         : ~ f alpha 16.0
         ?? ( string_to_float salpha ) { T v → { = alpha v } F _ → {} }
         : b f32 ? == ( args_present p `f32` ) 1 T F
-        : i rc ( nurllama_finetune modp datap ( string_data souts ) ( string_data smerged ) steps lr rank alpha seq seed f32 )
+        : b mixed ? == ( args_present p `mixed` ) 1 T F
+        : i rc ( nurllama_finetune modp datap ( string_data souts ) ( string_data smerged ) steps lr rank alpha seq seed f32 mixed )
         ( string_free souts ) ( string_free smerged ) ( string_free ssteps )
         ( string_free slr ) ( string_free srank ) ( string_free salpha )
         ( string_free sseq ) ( string_free sseed )

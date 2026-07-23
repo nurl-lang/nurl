@@ -945,7 +945,7 @@ $ `deps/gpukit/src/dev.nu`
 // shape; multi-window scheduling lands with gput_set_input plumbing),
 // save the adapters, and optionally write a merged full-model safetensors
 // runnable via `nurllama run model.gguf PROMPT --weights merged.st`.
-@ nurllama_finetune s modp s datap s outp s mergedp i steps f lr i rank f alpha i seq i seed b f32 → i {
+@ nurllama_finetune s modp s datap s outp s mergedp i steps f lr i rank f alpha i seq i seed b f32 b mixed → i {
     : ~ s text ``
     : ~ b haderr F
     : ~ String textS ( string_new )
@@ -1006,8 +1006,9 @@ $ `deps/gpukit/src/dev.nu`
             ( nurl_print ` layers · hidden ` )
             ( nurl_print ( nurl_str_int . m n_embd ) )
             ( nurl_print ` · building the tape + capturing onto the device\n` )
-            : i dt ? f32 1 0
-            ? f32 { ( nurl_print `precision: float32 device replay (base weights halved)\n` ) } {}
+            : i dt ? mixed 2 ? f32 1 0
+            ? mixed { ( nurl_print `precision: mixed (f32 storage, f64 accumulation — half VRAM, near-f64 accuracy)\n` ) } {}
+            ? & f32 == mixed F { ( nurl_print `precision: float32 device replay (half VRAM; float32 precision, not bit-exact to f64)\n` ) } {}
             : FtTrain tr ( ft_train m ids seq rank alpha seed steps lr dt T )
             ? . tr ok {} {
                 ( nurl_eprintln `nurllama: finetune training failed (no device? poisoned graph?)` )

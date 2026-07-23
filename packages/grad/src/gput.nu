@@ -494,27 +494,60 @@ extern "C" __global__ void gp_opt(double* w, const double* g, double* m, double*
     ^ # s g_gp_src_f32
 }
 
-// Kernel source for a program's dtype.
-@ _gp_src * GProg pg → s { ? == . pg dtype 1 { ^ ( __gp_src_f32c ) } {} ^ ( __gp_src_f64 ) }
+// MIXED precision (dtype 2): f32 STORAGE, f64 ACCUMULATION. Every buffer
+// pointer (`double*`) becomes `float*` — so val/grad/moment tensors are
+// f32 in device memory, exactly halving VRAM like pure f32 — but the
+// arithmetic is untouched: accumulator LOCALS stay `double`, and every op
+// stays a `__d*_rn` f64 intrinsic. A float loaded from a buffer promotes to
+// double for the math and narrows back on store. So a matmul dot over K, a
+// reduction over N, the global-norm over every parameter, and the Adam
+// update all accumulate in f64 while storing f32 — killing the matmul-K
+// swamping and clip-norm degeneracy that pure f32 (dtype 1, which narrows
+// the accumulators too) suffers at scale. (The C style makes this a pure
+// substitution: pointers are written `double*`, locals `double `.)
+@ __gp_src_mixed → s {
+    : ~ s x ( __gp_src_f64 )
+    = x ( _str_replace_all x `double*` `float*` )
+    = x ( _str_replace_all x `__global__ void gp_` `__global__ void gpm_` )
+    ^ x
+}
 
-// A kernel's name for the dtype (gp_ -> gpf_ in f32).
+: ~ i g_gp_src_mixed 0
+
+@ __gp_src_mixedc → s {
+    ? != g_gp_src_mixed 0 { ^ # s g_gp_src_mixed } {}
+    : String o ( string_from ( __gp_src_mixed ) )
+    = g_gp_src_mixed # i ( string_data o )
+    ^ # s g_gp_src_mixed
+}
+
+// Kernel source for a program's dtype.
+@ _gp_src * GProg pg → s {
+    ? == . pg dtype 1 { ^ ( __gp_src_f32c ) } {}
+    ? == . pg dtype 2 { ^ ( __gp_src_mixedc ) } {}
+    ^ ( __gp_src_f64 )
+}
+
+// A kernel's name for the dtype (gp_ -> gpf_ in f32, gpm_ in mixed).
 @ __gp_kn * GProg pg s name → s {
-    ? == . pg dtype 1 {
-        : String o ( string_from `gpf_` )
+    ? | == . pg dtype 1 == . pg dtype 2 {
+        : String o ( string_from ? == . pg dtype 2 `gpm_` `gpf_` )
         ( string_push_str o # s + # i name 3 )
         ^ ( string_data o )
     } {}
     ^ name
 }
 
-// A scalar float arg for the dtype (f32 bits + 4-byte, or f64 bits + 8).
+// A scalar float arg for the dtype. Only pure f32 (dtype 1) narrows scalars
+// to 4-byte; mixed (dtype 2) keeps the f64 8-byte scalar args (the kernel
+// signatures leave scalar `double` params untouched — only pointers change).
 @ __gp_argf * GProg pg f v → i {
     ? == . pg dtype 1 { ^ ( gpu_arg_i32 ( f32_to_bits # f32 v ) ) } {}
     ^ ( gpu_arg_i64 ( f64_to_bits v ) )
 }
 
-// The element buffer dtype (GK_F32 / GK_F64) for a program.
-@ __gp_edt * GProg pg → i { ? == . pg dtype 1 { ^ GK_F32 } {} ^ GK_F64 }
+// The element buffer dtype: f32 storage for both pure-f32 and mixed.
+@ __gp_edt * GProg pg → i { ? | == . pg dtype 1 == . pg dtype 2 { ^ GK_F32 } {} ^ GK_F64 }
 
 // Device optimizer over a captured program's parameters — opt.nu mirrored:
 // per-param L2, global-norm clip, the same runtime 1−β Adam arithmetic, the
