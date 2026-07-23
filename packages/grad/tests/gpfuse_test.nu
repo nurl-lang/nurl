@@ -222,6 +222,107 @@ $ `deps/gpukit/src/dev.nu`
     }
     ( vec_free [f] fusedv ) ( vec_free [i] fusedo )
 
+    // ── backward ─────────────────────────────────────────────────────
+    : ~ b anybwd F
+    = k 0
+    ~ < k ( vec_len [String] . pl bnames ) {
+        ?? ( vec_get [String] . pl bnames k ) {
+            T x → { ? > ( nurl_str_len ( string_data x ) ) 0 { = anybwd T } {} }
+            F → {}
+        }
+        = k + k 1
+    }
+    ( check anybwd `the segment's backward fuses (row+param kernels emitted)` )
+
+    // CPU reference gradients
+    ( check ( backward tp loss ) `CPU backward runs` )
+
+    : b br ( gpfuse_backward pg pl )
+    ( check br `fused backward runs` )
+
+    // snapshot fused grads, then per-node backward, then compare bitwise
+    : ( Vec f ) fgv ( vec_new [f] )
+    : ( Vec i ) fgo ( vec_new [i] )
+    = k 0
+    ~ < k nv {
+        : GVar cv @ GVar { k }
+        : Tensor ct ( gvar_value tp cv )
+        : i n ( vec_len [f] . ct data )
+        ( vec_push [i] fgo ( vec_len [f] fgv ) )
+        ? > n 0 {
+            : ( Vec f ) dv ( vec_with_cap [f] n )
+            : ~ i q 0
+            ~ < q n { ( vec_push [f] dv 0.0 ) = q + q 1 }
+            : b _g ( gput_grad pg cv dv )
+            = q 0
+            ~ < q n { ( vec_push [f] fgv ( _tf dv q ) ) = q + q 1 }
+            ( vec_free [f] dv )
+        } {}
+        = k + k 1
+    }
+    ( check ( gput_backward pg ) `per-node backward re-runs` )
+    : ~ b gbits T
+    : ~ i gbad -1
+    = k 0
+    ~ < k nv {
+        : GVar cv @ GVar { k }
+        : Tensor ct ( gvar_value tp cv )
+        : i n ( vec_len [f] . ct data )
+        ? > n 0 {
+            : ( Vec f ) dv ( vec_with_cap [f] n )
+            : ~ i q 0
+            ~ < q n { ( vec_push [f] dv 0.0 ) = q + q 1 }
+            ? ( gput_grad pg cv dv ) {
+                = q 0
+                ~ < q n {
+                    ? == ( f64_to_bits ( _tf fgv + ( _ti fgo k ) q ) ) ( f64_to_bits ( _tf dv q ) ) {} {
+                        ? gbits { = gbad k } {}
+                        = gbits F
+                    }
+                    = q + q 1
+                }
+            } { = gbits F ? < gbad 0 { = gbad k } {} }
+            ( vec_free [f] dv )
+        } {}
+        = k + k 1
+    }
+    ? gbits {} {
+        ( nurl_print `  first fused-vs-pernode GRAD mismatch at node ` ) ( nurl_print_int gbad ) ( nurl_print `\n` )
+    }
+    ( check gbits `fused backward == per-node backward, BIT-IDENTICAL (every grad)` )
+
+    // grads vs the CPU tape: the same tiering as the values
+    : ~ f gwrel 0.0
+    : ~ b gcbits T
+    = k 0
+    ~ < k nv {
+        : GVar cv @ GVar { k }
+        : Tensor gt2 ( grad_of tp cv )
+        : i n ( vec_len [f] . gt2 data )
+        : ~ i q 0
+        ~ < q n {
+            : f a2 ( _tf . gt2 data q )
+            : f b2 ( _tf fgv + ( _ti fgo k ) q )
+            ? == ( f64_to_bits a2 ) ( f64_to_bits b2 ) {} {
+                = gcbits F
+                : ~ f den ( float_abs a2 )
+                ? > ( float_abs b2 ) den { = den ( float_abs b2 ) } {}
+                ? < den 0.000001 { = den 0.000001 } {}
+                : f re / ( float_abs - a2 b2 ) den
+                ? > re gwrel { = gwrel re } {}
+            }
+            = q + q 1
+        }
+        = k + k 1
+    }
+    ? cpub {
+        ( check gcbits `fused grads == CPU tape bit-identical (cpu backend)` )
+    } {
+        ( nurl_print `  worst GRAD rel vs CPU tape on cuda: ` ) ( nurl_print ( nurl_str_float gwrel ) ) ( nurl_print `\n` )
+        ( check < gwrel 0.000000000001 `fused grads within 1e-12 of the CPU tape (cuda)` )
+    }
+    ( vec_free [f] fgv ) ( vec_free [i] fgo )
+
     ( gpfuse_free pl )
     ( gput_free pg )
     ( tape_free tp )
@@ -236,6 +337,7 @@ $ `deps/gpukit/src/dev.nu`
     ( check . plf ok `f32 fusion plan builds` )
     : b fr2 ( gpfuse_forward pf plf )
     ( check fr2 `f32 fused forward runs` )
+    ( check ( gpfuse_backward pf plf ) `f32 fused backward runs` )
     : f fl ( gput_loss pf )
     : ~ f den ( float_abs cl )
     ? < den 0.001 { = den 0.001 } {}
