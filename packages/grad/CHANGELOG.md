@@ -1,5 +1,37 @@
 # Changelog
 
+## 0.8.1
+
+**Mixed precision — `gput_capture_dt(..., 2)` (Phase 3, piece 2).** A third
+capture dtype: **f32 storage, f64 accumulation.** Every device buffer
+(val / grad / optimizer moment) is f32 — exactly halving VRAM like pure
+f32 (dtype 1) — but the arithmetic is untouched: accumulator locals stay
+`double` and every op stays a `__d*_rn` f64 intrinsic (a float loaded from
+a buffer promotes to double for the math and narrows on store). So a
+matmul dot over K, a reduction over N, the global-norm over every
+parameter, and the Adam update all accumulate in f64 while storing f32 —
+killing the matmul-K swamping and clip-norm degeneracy that pure f32
+suffers at scale, at zero extra memory.
+
+Implemented as a targeted source substitution (`double*` → `float*` on
+the buffer pointers only; the C style writes pointers `double*` and locals
+`double `, so it is a pure text transform — no hand-authored kernels).
+Kernel names carry a `gpm_` prefix; `gput_capture_dt`'s signature is
+unchanged (dtype 2 is a new accepted value).
+
+Measured (`gput_mixed_test`, RTX 4090 + CPU backend, wide AE, 80 steps),
+worst parameter drift vs the f64 reference:
+
+    pure f32 (dtype 1)   6.2e-4
+    mixed    (dtype 2)   1.8e-5     (~35x closer, identical VRAM)
+
+Pure f32 stays for short/small runs; mixed is the preferred path at scale.
+(A follow-up can keep the Adam moments in f64 *storage* too — mixed
+already accumulates the update in f64, but the m/v state is f32-stored,
+the one remaining precision gap at extreme step counts.) Additive; the
+f64 (dtype 0) and pure-f32 (dtype 1) paths are byte-unchanged
+(gput_parity / gput_f32 / gpfuse tests green). Version 0.8.0 -> 0.8.1.
+
 ## 0.8.0
 
 **`tape_drop_consts` — reclaim host RAM after a device capture (Phase 3,
