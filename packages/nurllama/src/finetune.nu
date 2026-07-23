@@ -35,6 +35,7 @@ $ `deps/gguf/src/gguf.nu`
 $ `deps/gguf/src/dequant.nu`
 $ `deps/grad/src/grad.nu`
 $ `deps/grad/src/gput.nu`
+$ `deps/nn/src/nn.nu`
 $ `deps/tensor/src/tensor.nu`
 $ `deps/gpu/src/gpu.nu`
 $ `deps/gpukit/src/gpukit.nu`
@@ -396,13 +397,6 @@ $ `deps/gpukit/src/dev.nu`
     ^ o
 }
 
-@ __ft_rms * GTape tp GVar x GVar w GVar ones i h f eps → GVar {
-    : GVar x2 ( g_mul tp x x )
-    : GVar mn ( g_muls tp ( g_matmul tp x2 ones ) / 1.0 # f h )
-    : GVar d ( g_sqrt tp ( g_adds tp mn eps ) )
-    ^ ( g_mul tp ( g_div tp x d ) w )
-}
-
 // LoRA pair registration: A [in,r] seeded small, B [r,out] zero.
 @ __ft_lora_pair * GTape tp Rng rg i in i r i out * u pids i slot → v {
     : ( Vec f ) av ( vec_with_cap [f] * in r )
@@ -426,39 +420,12 @@ $ `deps/gpukit/src/dev.nu`
     ( nurl_poke pids + * slot 2 1 . pb id )
 }
 
+// LoRA linear over the pids-registered adapter for `slot` (the plumbing;
+// the math is nn_lora_linear).
 @ __ft_lora_lin * GTape tp GVar x GVar w0 * u pids i slot f scale → GVar {
     : GVar pa @ GVar { ( nurl_peek pids * slot 2 ) }
     : GVar pb @ GVar { ( nurl_peek pids + * slot 2 1 ) }
-    : GVar base ( g_matmul tp x w0 )
-    ^ ( g_add tp base ( g_muls tp ( g_matmul tp ( g_matmul tp x pa ) pb ) scale ) )
-}
-
-@ __ft_headslice * GTape tp GVar q i T2 i off i hd → GVar {
-    : ( Vec i ) st ( vec_new [i] )
-    ( vec_push [i] st 0 ) ( vec_push [i] st off )
-    : ( Vec i ) sp ( vec_new [i] )
-    ( vec_push [i] sp T2 ) ( vec_push [i] sp + off hd )
-    : GVar o ( g_slice tp q st sp )
-    ( vec_free [i] st ) ( vec_free [i] sp )
-    ^ o
-}
-
-@ __ft_rope * GTape tp GVar h GVar cosc GVar sinc i T2 i hd → GVar {
-    : i half / hd 2
-    : ( Vec i ) st1 ( vec_new [i] )
-    ( vec_push [i] st1 0 ) ( vec_push [i] st1 0 )
-    : ( Vec i ) sp1 ( vec_new [i] )
-    ( vec_push [i] sp1 T2 ) ( vec_push [i] sp1 half )
-    : GVar x1 ( g_slice tp h st1 sp1 )
-    : ( Vec i ) st2 ( vec_new [i] )
-    ( vec_push [i] st2 0 ) ( vec_push [i] st2 half )
-    : ( Vec i ) sp2 ( vec_new [i] )
-    ( vec_push [i] sp2 T2 ) ( vec_push [i] sp2 hd )
-    : GVar x2 ( g_slice tp h st2 sp2 )
-    ( vec_free [i] st1 ) ( vec_free [i] sp1 ) ( vec_free [i] st2 ) ( vec_free [i] sp2 )
-    : GVar r1 ( g_sub tp ( g_mul tp x1 cosc ) ( g_mul tp x2 sinc ) )
-    : GVar r2 ( g_add tp ( g_mul tp x2 cosc ) ( g_mul tp x1 sinc ) )
-    ^ ( g_concat tp r1 r2 1 )
+    ^ ( nn_lora_linear tp x w0 pa pb scale )
 }
 
 // The result handles of one built graph.
@@ -560,7 +527,7 @@ $ `deps/gpukit/src/dev.nu`
         : *FtV fnv # *FtV fnp
         : GVar N2 ( __ft_const tp . fnv v 0 H )
         // attention
-        : GVar xn ( __ft_rms tp x N1 onesH H . m eps )
+        : GVar xn ( nn_rmsnorm tp x N1 onesH H . m eps )
         : ~ GVar q ( __ft_lora_lin tp xn Wq pids + s7 0 scale )
         : ~ GVar kk ( __ft_lora_lin tp xn Wk pids + s7 1 scale )
         : ~ GVar vv ( __ft_lora_lin tp xn Wv pids + s7 2 scale )
@@ -579,23 +546,11 @@ $ `deps/gpukit/src/dev.nu`
             : *FtV bvv # *FtV bvp
             = vv ( g_add tp vv ( __ft_const tp . bvv v 0 * NKV hd ) )
         } {}
-        : ~ GVar ctx @ GVar { -1 }
-        : ~ i hI 0
-        ~ < hI NH {
-            : i kvi / hI / NH NKV
-            : GVar qh ( __ft_rope tp ( __ft_headslice tp q T2 * hI hd hd ) Cos Sin T2 hd )
-            : GVar kh ( __ft_rope tp ( __ft_headslice tp kk T2 * kvi hd hd ) Cos Sin T2 hd )
-            : GVar vh ( __ft_headslice tp vv T2 * kvi hd hd )
-            : GVar sc ( g_muls tp ( g_matmul tp qh ( g_transpose tp kh ) ) iscale )
-            : GVar aw ( g_softmax tp ( g_add tp sc Mask ) 1 )
-            : GVar ch ( g_matmul tp aw vh )
-            ? < . ctx id 0 { = ctx ch } { = ctx ( g_concat tp ctx ch 1 ) }
-            = hI + hI 1
-        }
+        : GVar ctx ( nn_gqa_attention tp q kk vv Cos Sin Mask T2 NH NKV hd iscale )
         : GVar attn ( __ft_lora_lin tp ctx Wo pids + s7 3 scale )
         : GVar x1 ( g_add tp x attn )
         // mlp
-        : GVar x1n ( __ft_rms tp x1 N2 onesH H . m eps )
+        : GVar x1n ( nn_rmsnorm tp x1 N2 onesH H . m eps )
         : GVar gate ( __ft_lora_lin tp x1n Wg pids + s7 4 scale )
         : GVar up ( __ft_lora_lin tp x1n Wu pids + s7 5 scale )
         : GVar act ( g_mul tp ( g_mul tp gate ( g_sigmoid tp gate ) ) up )
@@ -604,7 +559,7 @@ $ `deps/gpukit/src/dev.nu`
         = L + L 1
     }
     : GVar NF ( __ft_const tp . m norm_f 0 H )
-    : GVar xf ( __ft_rms tp x NF onesH H . m eps )
+    : GVar xf ( nn_rmsnorm tp x NF onesH H . m eps )
     : FtW wo2 . m wout
     : GVar WOUT ( __ft_const tp . wo2 data . wo2 rows . wo2 cols )
     : GVar logits ( g_matmul tp xf WOUT )
@@ -622,15 +577,8 @@ $ `deps/gpukit/src/dev.nu`
     : GVar Oh ( __ft_const tp oh T2 . m n_vocab )
     : GVar ohin @ GVar { . Oh id }
     ( vec_free [f] oh )
-    : GVar probs ( g_softmax tp logits 1 )
-    : GVar picked ( g_matmul tp ( g_mul tp probs Oh ) onesV )  // [T,1]
-    : ( Vec i ) st ( vec_new [i] )
-    ( vec_push [i] st 0 ) ( vec_push [i] st 0 )
-    : ( Vec i ) sp ( vec_new [i] )
-    ( vec_push [i] sp - T2 1 ) ( vec_push [i] sp 1 )
-    : GVar pick2 ( g_slice tp picked st sp )
-    ( vec_free [i] st ) ( vec_free [i] sp )
-    : GVar loss ( g_neg tp ( g_mean tp ( g_log tp pick2 ) ) )
+    // next-token CE over rows 0..T-2 (the last position has no target)
+    : GVar loss ( nn_cross_entropy_rows tp logits Oh onesV - T2 1 )
     ^ @ FtG { loss logits xin ohin * 7 . m n_layer }
 }
 
