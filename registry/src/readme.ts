@@ -205,3 +205,39 @@ export async function extractFile(
   const hit = findInTar(new Uint8Array(ab), (p) => p.replace(/^\.\//, "") === rel);
   return hit ? hit.data : null;
 }
+
+// Every `src/*.nu` module in an uncompressed tar image (path + decoded
+// text), in archive order — the input to the API-docs renderer. Mirrors
+// listTarFiles' walk (USTAR prefix + GNU longname) but keeps the data of
+// the matched members.
+export function listTarSrcModules(buf: Uint8Array): { path: string; text: string }[] {
+  const out: { path: string; text: string }[] = [];
+  let pos = 0;
+  let gnuLongName: string | null = null;
+  while (pos + BLOCK <= buf.length) {
+    if (isZeroBlock(buf, pos)) break;
+    const sizeRaw = readCStr(buf, pos + 124, 12).trim();
+    const size = parseInt(sizeRaw.replace(/[^0-7]/g, "") || "0", 8);
+    const typeflag = buf[pos + 156];
+    const dataStart = pos + BLOCK;
+    if (typeflag === 0x4c) {
+      gnuLongName = readCStr(buf, dataStart, size);
+    } else if (typeflag === 0x30 || typeflag === 0) {
+      const fromLongName = gnuLongName !== null;
+      let path = gnuLongName ?? readCStr(buf, pos, 100);
+      gnuLongName = null;
+      if (!fromLongName && path && readCStr(buf, pos + 257, 6).startsWith("ustar")) {
+        const prefix = readCStr(buf, pos + 345, 155);
+        if (prefix) path = `${prefix}/${path}`;
+      }
+      path = path.replace(/^\.\//, "");
+      if (path.startsWith("src/") && path.endsWith(".nu")) {
+        out.push({ path, text: new TextDecoder().decode(buf.subarray(dataStart, dataStart + size)) });
+      }
+    } else {
+      gnuLongName = null;
+    }
+    pos = dataStart + Math.ceil(size / BLOCK) * BLOCK;
+  }
+  return out;
+}

@@ -22,7 +22,8 @@
 // (miniflare simulates R2 + D1) — no Cloudflare account needed to test.
 
 import { renderMarkdown } from "./markdown.ts";
-import { extractReadme, extractFile, extractManifestRepository, extractManifestDescription, normalizeRelPath, listTarFiles } from "./readme.ts";
+import { extractReadme, extractFile, extractManifestRepository, extractManifestDescription, normalizeRelPath, listTarFiles, listTarSrcModules } from "./readme.ts";
+import { renderNurldoc } from "./nurldoc.ts";
 
 export interface Env {
   REG_BUCKET: R2Bucket;
@@ -619,6 +620,7 @@ async function handlePackageDetail(env: Env, name: string): Promise<Response> {
       (date ? ` <span style="color:#999">· ${date}</span>` : "") +
       (pub ? ` <span style="color:#999">· ${ghLink(pub.login)}</span>` : "") +
       ` <span style="color:#999">· <a href="/packages/${esc(name)}/${esc(v.version)}/files">files</a></span>` +
+      ` <span style="color:#999">· <a href="/packages/${esc(name)}/${esc(v.version)}/api">api</a></span>` +
       `</li>`;
   }).join("");
   const depsHtml = latest && latest.deps.length
@@ -711,6 +713,40 @@ async function handlePackageFiles(env: Env, name: string, version: string): Prom
     `<p style="color:#666">${files.length} file(s) · ${fmtSize(total)} unpacked` +
     (ver.yanked ? ` · <span style="color:#b00">(yanked)</span>` : "") + `</p>` +
     `<table class=files>${rows}</table>`);
+  res.headers.set("cache-control", "public, max-age=86400, immutable");
+  return res;
+}
+
+// GET /packages/<name>/<version>/api — nurldoc-rendered API docs for the
+// release's src/*.nu modules. Version-pinned → immutable-cacheable.
+async function handlePackageApi(env: Env, name: string, version: string): Promise<Response> {
+  if (!NAME_RE.test(name) || !VERSION_RE.test(version)) {
+    return htmlPage("not found", `<p>Invalid package or version.</p>`, 404);
+  }
+  const idx = await readIndex(env, name);
+  const ver = idx.versions.find((v) => v.version === version);
+  if (!ver) {
+    return htmlPage("not found",
+      `<p><a href="/packages/${esc(name)}">← ${esc(name)}</a></p><p>Version not found.</p>`, 404);
+  }
+  const obj = await env.REG_BUCKET.get(`pkgs/${name}/${name}-${version}.tar.gz`);
+  if (!obj || !obj.body) {
+    return htmlPage("not found",
+      `<p><a href="/packages/${esc(name)}">← ${esc(name)}</a></p><p>Tarball missing.</p>`, 404);
+  }
+  const ab = await new Response(obj.body.pipeThrough(new DecompressionStream("gzip"))).arrayBuffer();
+  const mods = listTarSrcModules(new Uint8Array(ab));
+  let bodyHtml =
+    `<p><a href="/packages/${esc(name)}">← ${esc(name)}</a></p>` +
+    `<h1>${esc(name)} <span style="color:#666">${esc(version)}</span> API</h1>`;
+  if (mods.length === 0) {
+    bodyHtml += `<p style="color:#666">No <code>src/*.nu</code> modules in this release.</p>`;
+  } else {
+    const md = mods.map((m) => renderNurldoc(m.text, m.path.replace(/^src\//, "")))
+      .join("\n\n---\n\n");
+    bodyHtml += `<div class="readme">${renderMarkdown(md)}</div>`;
+  }
+  const res = htmlPage(`${name} ${version} — API`, bodyHtml);
   res.headers.set("cache-control", "public, max-age=86400, immutable");
   return res;
 }
@@ -912,6 +948,9 @@ export default {
         // /packages/<name>/<version>/files — the tarball's file listing.
         const m = rest.match(/^([^/]+)\/([^/]+)\/files$/);
         if (m) return handlePackageFiles(env, m[1].toLowerCase(), m[2]);
+        // /packages/<name>/<version>/api — nurldoc API docs.
+        const ma = rest.match(/^([^/]+)\/([^/]+)\/api$/);
+        if (ma) return handlePackageApi(env, ma[1].toLowerCase(), ma[2]);
         return handlePackageDetail(env, rest.toLowerCase());
       }
       if (path.startsWith("/index/") && path.endsWith(".json")) {
