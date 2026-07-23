@@ -412,22 +412,22 @@ extern "C" __global__ void gp_opt(double* w, const double* g, double* m, double*
 // stays the f64 reference and the parity test bounds the gap.
 @ __gp_src_f32 → s {
     : ~ s x ( __gp_src_f64 )
-    = x ( __str_replace_all x `__dadd_rn` `__fadd_rn` )
-    = x ( __str_replace_all x `__dsub_rn` `__fsub_rn` )
-    = x ( __str_replace_all x `__dmul_rn` `__fmul_rn` )
-    = x ( __str_replace_all x `__ddiv_rn` `__fdiv_rn` )
-    = x ( __str_replace_all x `exp(` `expf(` )
-    = x ( __str_replace_all x `log(` `logf(` )
-    = x ( __str_replace_all x `sqrt(` `sqrtf(` )
-    = x ( __str_replace_all x `(double)` `(float)` )
-    = x ( __str_replace_all x `double` `float` )
-    = x ( __str_replace_all x `__global__ void gp_` `__global__ void gpf_` )
+    = x ( _str_replace_all x `__dadd_rn` `__fadd_rn` )
+    = x ( _str_replace_all x `__dsub_rn` `__fsub_rn` )
+    = x ( _str_replace_all x `__dmul_rn` `__fmul_rn` )
+    = x ( _str_replace_all x `__ddiv_rn` `__fdiv_rn` )
+    = x ( _str_replace_all x `exp(` `expf(` )
+    = x ( _str_replace_all x `log(` `logf(` )
+    = x ( _str_replace_all x `sqrt(` `sqrtf(` )
+    = x ( _str_replace_all x `(double)` `(float)` )
+    = x ( _str_replace_all x `double` `float` )
+    = x ( _str_replace_all x `__global__ void gp_` `__global__ void gpf_` )
     ^ x
 }
 
 // Every simple textual replacement of `needle` with `rep` in `hay`. `needle`
 // must be non-empty; used only on the fixed kernel source above.
-@ __str_replace_all s hay s needle s rep → s {
+@ _str_replace_all s hay s needle s rep → s {
     : i nl ( nurl_str_len needle )
     ? > nl 0 {} { ^ ( string_data ( string_from hay ) ) }
     : String out ( string_new )
@@ -463,6 +463,8 @@ extern "C" __global__ void gp_opt(double* w, const double* g, double* m, double*
     f s
     i n  // value element count
     i reach  // 1 = loss ancestor (backward touches it)
+    i rows  // shape[0] when the value is 2-D, else 0 (fusion analysis)
+    i cols  // shape[1] when 2-D; the length when 1-D; else 0
     ( Vec i ) dims
     GkBuf val
     GkBuf grad
@@ -819,8 +821,14 @@ extern "C" __global__ void gp_opt(double* w, const double* g, double* m, double*
             ? & ( gk_buf_ok meta ) ( gk_dbuf_upload_i kit meta mv ) {} { ( _gp_fail pg `meta upload failed` ) }
             ( vec_free [i] mv ) ( vec_free [i] ost ) ( vec_free [i] ist )
         } {}
+        : i tnd ( vec_len [i] . tv shape )
+        : ~ i trows 0
+        : ~ i tcols 0
+        ? == tnd 2 { = trows ( _ti . tv shape 0 ) = tcols ( _ti . tv shape 1 ) } {
+            ? == tnd 1 { = tcols ( _ti . tv shape 0 ) } {}
+        }
         ( vec_push [GpNode] . pg nodes @ GpNode {
-            op . nd a . nd b . nd s n ( _ti reach k ) dims val grad scr meta
+            op . nd a . nd b . nd s n ( _ti reach k ) trows tcols dims val grad scr meta
         } )
         = k + k 1
     }
@@ -855,7 +863,7 @@ extern "C" __global__ void gp_opt(double* w, const double* g, double* m, double*
 @ _gp_node * GProg pg i id → GpNode {
     ^ ?? ( vec_get [GpNode] . pg nodes id ) {
         T x → x
-        F → @ GpNode { -1 -1 -1 0.0 0 0 ( vec_new [i] ) ( _gp_nobuf ) ( _gp_nobuf ) ( _gp_nobuf ) ( _gp_nobuf ) }
+        F → @ GpNode { -1 -1 -1 0.0 0 0 0 0 ( vec_new [i] ) ( _gp_nobuf ) ( _gp_nobuf ) ( _gp_nobuf ) ( _gp_nobuf ) }
     }
 }
 
