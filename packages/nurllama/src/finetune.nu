@@ -76,6 +76,9 @@ $ `deps/gpukit/src/dev.nu`
     ( Vec FtW ) wg ( Vec FtW ) wu ( Vec FtW ) wd
     ( Vec s ) bq ( Vec s ) bk ( Vec s ) bv  // *( Vec f ) or 0 (qwen2 bias)
     ( Vec s ) an ( Vec s ) fn  // attn_norm / ffn_norm, *( Vec f ) per layer
+    String src_path  // the GGUF path — so the per-layer base matrices can be
+    // freed after device capture (ft_drop_base) and streamed back for the
+    // merge (ft_reload_base), keeping host RAM off the base during training
 }
 
 @ __ft_wfree FtW w → v { ( vec_free [f] . w data ) }
@@ -114,6 +117,7 @@ $ `deps/gpukit/src/dev.nu`
     ( vec_free [FtW] . m wd )
     ( __ft_vfree . m bq ) ( __ft_vfree . m bk ) ( __ft_vfree . m bv )
     ( __ft_vfree . m an ) ( __ft_vfree . m fn )
+    ( string_free . m src_path )
     ( nurl_free # s m )
 }
 
@@ -233,6 +237,107 @@ $ `deps/gpukit/src/dev.nu`
 }
 
 // Open a GGUF and lift every weight into tape-ready f64 host tensors.
+// Load every per-layer base matrix (q/k/v/o + gate/up/down) and the biases
+// / norms into `m`'s (already-created) vecs, un-permuting NORM-rope q/k the
+// same way whether called at open or at merge-time reload. `gg` stays the
+// caller's to close. Poisons m.ok on a missing tensor.
+@ __ft_load_bases * Gguf gg * FtModel m → v {
+    : *u okb ( nurl_alloc 8 )
+    ( nurl_poke okb 0 1 )
+    // ffn size read from the first gate tensor
+    = . m n_ff 0
+    : ~ i L 0
+    ~ < L . m n_layer {
+        : FtW q ( __ft_lw gg L `attn_q.weight` okb )
+        : FtW k2 ( __ft_lw gg L `attn_k.weight` okb )
+        ? == . m rope_style 0 {
+            ( __ft_unperm q . m n_head . m head_dim )
+            ( __ft_unperm k2 . m n_kv . m head_dim )
+        } {}
+        ( vec_push [FtW] . m wq q )
+        ( vec_push [FtW] . m wk k2 )
+        ( vec_push [FtW] . m wv ( __ft_lw gg L `attn_v.weight` okb ) )
+        ( vec_push [FtW] . m wo ( __ft_lw gg L `attn_output.weight` okb ) )
+        : FtW g2 ( __ft_lw gg L `ffn_gate.weight` okb )
+        ? == . m n_ff 0 { = . m n_ff . g2 cols } {}
+        ( vec_push [FtW] . m wg g2 )
+        ( vec_push [FtW] . m wu ( __ft_lw gg L `ffn_up.weight` okb ) )
+        ( vec_push [FtW] . m wd ( __ft_lw gg L `ffn_down.weight` okb ) )
+        : s bqp ( __ft_lvec gg L `attn_q.bias` )
+        : s bkp ( __ft_lvec gg L `attn_k.bias` )
+        ? & == . m rope_style 0 != # i bqp 0 {
+            : *FtV pq # *FtV bqp
+            ( __ft_unperm_vec pq . m n_head . m head_dim )
+        } {}
+        ? & == . m rope_style 0 != # i bkp 0 {
+            : *FtV pk # *FtV bkp
+            ( __ft_unperm_vec pk . m n_kv . m head_dim )
+        } {}
+        ( vec_push [s] . m bq bqp )
+        ( vec_push [s] . m bk bkp )
+        ( vec_push [s] . m bv ( __ft_lvec gg L `attn_v.bias` ) )
+        ( vec_push [s] . m an ( __ft_lvec gg L `attn_norm.weight` ) )
+        ( vec_push [s] . m fn ( __ft_lvec gg L `ffn_norm.weight` ) )
+        = L + L 1
+    }
+    ? == ( nurl_peek okb 0 ) 1 {} { = . m ok F }
+    ( nurl_free okb )
+}
+
+// Free the *FtV entries of `v` and EMPTY the vec (keep the handle valid so
+// it can be re-pushed or finally vec_free'd).
+@ __ft_clear_svec ( Vec s ) v → v {
+    : ~ i k 0
+    ~ < k ( vec_len [s] v ) {
+        : s p ?? ( vec_get [s] v k ) { T x → x F → # s 0 }
+        ? != # i p 0 {
+            : *FtV pv # *FtV p
+            ( vec_free [f] . pv v )
+            ( nurl_free p )
+        } {}
+        = k + k 1
+    }
+    ( vec_clear [s] v )
+}
+
+// Drop the per-layer base matrices + biases/norms (the bulk of host RAM),
+// emptying their vecs. embd / wout / norm_f are KEPT (embd feeds the
+// per-window input recompute; the rest are small). Idempotent — a second
+// call over empty vecs is a no-op — and reversible via ft_reload_base.
+@ ft_drop_base * FtModel m → v {
+    : ~ i k 0
+    ~ < k ( vec_len [FtW] . m wq ) {
+        ?? ( vec_get [FtW] . m wq k ) { T w → { ( __ft_wfree w ) } F _ → {} }
+        ?? ( vec_get [FtW] . m wk k ) { T w → { ( __ft_wfree w ) } F _ → {} }
+        ?? ( vec_get [FtW] . m wv k ) { T w → { ( __ft_wfree w ) } F _ → {} }
+        ?? ( vec_get [FtW] . m wo k ) { T w → { ( __ft_wfree w ) } F _ → {} }
+        ?? ( vec_get [FtW] . m wg k ) { T w → { ( __ft_wfree w ) } F _ → {} }
+        ?? ( vec_get [FtW] . m wu k ) { T w → { ( __ft_wfree w ) } F _ → {} }
+        ?? ( vec_get [FtW] . m wd k ) { T w → { ( __ft_wfree w ) } F _ → {} }
+        = k + k 1
+    }
+    ( vec_clear [FtW] . m wq ) ( vec_clear [FtW] . m wk ) ( vec_clear [FtW] . m wv )
+    ( vec_clear [FtW] . m wo ) ( vec_clear [FtW] . m wg ) ( vec_clear [FtW] . m wu )
+    ( vec_clear [FtW] . m wd )
+    ( __ft_clear_svec . m bq ) ( __ft_clear_svec . m bk ) ( __ft_clear_svec . m bv )
+    ( __ft_clear_svec . m an ) ( __ft_clear_svec . m fn )
+}
+
+// Re-stream the per-layer base from the source GGUF into `m`'s (empty)
+// vecs — the reverse of ft_drop_base, using the SAME loader path so the
+// NORM-rope un-permute is identical byte-for-byte. T on success.
+@ ft_reload_base * FtModel m → b {
+    ?? ( gguf_open ( string_data . m src_path ) ) {
+        T gg → {
+            ( __ft_load_bases gg m )
+            ( gguf_close gg )
+            ^ . m ok
+        }
+        F e → { ( string_free e ) ^ F }
+    }
+    ^ F
+}
+
 @ ft_open s path → !*FtModel String {
     ?? ( gguf_open path ) {
         T gg → {
@@ -309,46 +414,8 @@ $ `deps/gpukit/src/dev.nu`
             = . m bv ( vec_new [s] )
             = . m an ( vec_new [s] )
             = . m fn ( vec_new [s] )
-            : *u okb ( nurl_alloc 8 )
-            ( nurl_poke okb 0 1 )
-            // ffn size read from the first gate tensor
-            = . m n_ff 0
-            : ~ i L 0
-            ~ < L . m n_layer {
-                : FtW q ( __ft_lw gg L `attn_q.weight` okb )
-                : FtW k2 ( __ft_lw gg L `attn_k.weight` okb )
-                ? == . m rope_style 0 {
-                    ( __ft_unperm q . m n_head . m head_dim )
-                    ( __ft_unperm k2 . m n_kv . m head_dim )
-                } {}
-                ( vec_push [FtW] . m wq q )
-                ( vec_push [FtW] . m wk k2 )
-                ( vec_push [FtW] . m wv ( __ft_lw gg L `attn_v.weight` okb ) )
-                ( vec_push [FtW] . m wo ( __ft_lw gg L `attn_output.weight` okb ) )
-                : FtW g2 ( __ft_lw gg L `ffn_gate.weight` okb )
-                ? == . m n_ff 0 { = . m n_ff . g2 cols } {}
-                ( vec_push [FtW] . m wg g2 )
-                ( vec_push [FtW] . m wu ( __ft_lw gg L `ffn_up.weight` okb ) )
-                ( vec_push [FtW] . m wd ( __ft_lw gg L `ffn_down.weight` okb ) )
-                : s bqp ( __ft_lvec gg L `attn_q.bias` )
-                : s bkp ( __ft_lvec gg L `attn_k.bias` )
-                ? & == . m rope_style 0 != # i bqp 0 {
-                    : *FtV pq # *FtV bqp
-                    ( __ft_unperm_vec pq . m n_head . m head_dim )
-                } {}
-                ? & == . m rope_style 0 != # i bkp 0 {
-                    : *FtV pk # *FtV bkp
-                    ( __ft_unperm_vec pk . m n_kv . m head_dim )
-                } {}
-                ( vec_push [s] . m bq bqp )
-                ( vec_push [s] . m bk bkp )
-                ( vec_push [s] . m bv ( __ft_lvec gg L `attn_v.bias` ) )
-                ( vec_push [s] . m an ( __ft_lvec gg L `attn_norm.weight` ) )
-                ( vec_push [s] . m fn ( __ft_lvec gg L `ffn_norm.weight` ) )
-                = L + L 1
-            }
-            ? == ( nurl_peek okb 0 ) 1 {} { = . m ok F }
-            ( nurl_free okb )
+            = . m src_path ( string_from path )
+            ( __ft_load_bases gg m )
             ( gguf_close gg )
             ? . m ok {} {
                 : *FtModel m2 m
@@ -646,6 +713,9 @@ $ `deps/gpukit/src/dev.nu`
     ~ < k0 T2 { ( vec_push [i] ids ( _ti corpus k0 ) ) = k0 + k0 1 }
     : i nslot * 7 . m n_layer
     : *u pids ( nurl_alloc * * 2 nslot 8 )
+    // ft_graph needs the base matrices; a prior ft_train may have dropped
+    // them (they only live host-side to build the graph). Stream them back.
+    ? == ( vec_len [FtW] . m wq ) 0 { : b _r ( ft_reload_base m ) } {}
     : *GTape tp ( tape_new )
     : FtG fg ( ft_graph m tp ids r alpha seed pids )
     : ( Vec f ) aflat ( vec_new [f] )
@@ -661,10 +731,12 @@ $ `deps/gpukit/src/dev.nu`
     ? ok {
         : *GProg pg ( gput_capture_dt kit tp . fg loss dtype )
         = ok ( gput_ok pg )
-        // The base weights (const nodes) are now on the device; their f64
-        // host copies are dead weight — free them so host RAM drops to the
-        // adapters + activations. Training reads device buffers only.
-        ? ok { ( tape_drop_consts tp ) } {}
+        // The base weights are now on the device; their f64 host copies are
+        // dead weight during training. Free BOTH the tape's const nodes and
+        // the model's per-layer base matrices — host RAM drops to the
+        // adapters + activations. The base streams back from the GGUF for the
+        // merge (ft_reload_base). Training reads device buffers only.
+        ? ok { ( tape_drop_consts tp ) ( ft_drop_base m ) } {}
         : *GpOpt go ( gpopt_adam_new lr )
         : ~ i pi 0
         ~ < pi * 2 nslot {
@@ -829,6 +901,14 @@ $ `deps/gpukit/src/dev.nu`
 // projections (a bisect handle for the merged-path diagnostics).
 @ ft_merge_st_mask s path * FtModel m FtTrain t i r f alpha i mask → !v String {
     : f scale / alpha # f r
+    // The per-layer base matrices were freed after device capture
+    // (ft_drop_base); stream them back for the merge (identical loader path,
+    // so the NORM-rope un-permute matches byte-for-byte). No-op if resident.
+    ? == ( vec_len [FtW] . m wq ) 0 {
+        ? ( ft_reload_base m ) {} {
+            ^ @ !v String { F ( string_from `finetune: cannot reload base weights for merge` ) }
+        }
+    } {}
     : *StWriter so ( stw_new )
     // embeddings + final norm (frozen; [V,H] is already [out,in])
     ? == % mask 2 1 {
