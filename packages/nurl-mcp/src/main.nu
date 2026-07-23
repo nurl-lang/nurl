@@ -564,6 +564,30 @@ $ `deps/wasmbuilder/src/build.nu`
         T qj → { ? ( json_is_str qj ) { = query ( json_as_str qj ) } {} }
         F _ → {}
     }
+    : ~ s package ``
+    ?? ( json_obj_get args `package` ) {
+        T pj → { ? ( json_is_str pj ) { = package ( json_as_str pj ) } {} }
+        F _ → {}
+    }
+    : ~ s version ``
+    ?? ( json_obj_get args `version` ) {
+        T vj → { ? ( json_is_str vj ) { = version ( json_as_str vj ) } {} }
+        F _ → {}
+    }
+    // A PUBLISHED package's API surface, streamed from its registry tarball
+    // and rendered with the same nurldoc engine as the stdlib module path.
+    ? > ( nurl_str_len package ) 0 {
+        : String rb0 ( msearch_default_registry )
+        : String md0 ( msearch_api_package ( string_data rb0 ) package version )
+        ( string_free rb0 ) ( string_free root )
+        ? == ( string_len md0 ) 0 {
+            ( string_free md0 )
+            ^ ( mcp_tool_result_error `package not found or has no src/*.nu — check the name (see nurl_grep where='packages'); 'version' defaults to the latest` )
+        } {}
+        : Json r0 ( mcp_tool_result_text ( string_data md0 ) )
+        ( string_free md0 )
+        ^ r0
+    } {}
     ? > ( nurl_str_len module ) 0 {
         ? ( nm_has_dotdot module ) {
             ( string_free root )
@@ -637,7 +661,9 @@ $ `deps/wasmbuilder/src/build.nu`
     ( json_obj_set schema `type` ( json_str_lit `object` ) )
     : Json props ( json_obj_new )
     ( nm_prop props `module` `Render ONE installed-stdlib module's API surface (signatures, doc comments, full type definitions — no function bodies). A nurl_list_stdlib path, e.g. 'ext/csv.nu'.` )
-    ( nm_prop props `query` `Search every installed-stdlib module's declarations: space-separated terms, ALL must occur (case-insensitive) in a declaration's signature + doc comment + module path. Zero hits widen to the package registry; an exact package-name term is noted regardless. Ignored when 'module' is set.` )
+    ( nm_prop props `package` `Render a PUBLISHED registry package's API surface — nurldoc over its src/*.nu, streamed from the tarball. The name from a registry search, e.g. 'nn'. Use this after a registry hit to learn the functions/types a package exposes (their names are not otherwise searchable).` )
+    ( nm_prop props `version` `Optional package version (e.g. '0.1.1'); defaults to the latest. Only meaningful with 'package'.` )
+    ( nm_prop props `query` `Search every installed-stdlib module's declarations: space-separated terms, ALL must occur (case-insensitive) in a declaration's signature + doc comment + module path. Zero hits widen to the package registry; an exact package-name term is noted regardless. Ignored when 'module' or 'package' is set.` )
     ( json_obj_set schema `properties` props )
     ^ schema
 }

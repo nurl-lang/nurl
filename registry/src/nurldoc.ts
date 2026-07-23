@@ -158,3 +158,44 @@ export function renderNurldoc(content: string, title: string): string {
   if (anyDecl) out += "## API\n\n" + body;
   return out;
 }
+
+// The public symbol NAMES a module exposes — function names, type/enum
+// names, trait names, constants — for the registry's symbol search index.
+// Reuses renderNurldoc's decl detection (brace depth, __-private exclusion,
+// type/enum handling) by scanning its `### `…`` headings for the leading
+// identifier. So `@ nn_gqa_attention …` -> "nn_gqa_attention", `: DataSet {`
+// -> "DataSet".
+export function extractSymbols(content: string): string[] {
+  const md = renderNurldoc(content, "");
+  const out = new Set<string>();
+  const re = /^### `([^`]+)`/gm;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(md)) !== null) {
+    let s = m[1].trim();
+    if (s.startsWith("pub ")) s = s.slice(4).trimStart();
+    if (s.startsWith("&")) {
+      s = s.slice(1).trimStart();
+      if (s.startsWith("`")) {
+        const e = s.indexOf("`", 1);
+        if (e >= 0) s = s.slice(e + 1).trimStart();
+      }
+    }
+    if (s.startsWith("@") || s.startsWith("%")) s = s.slice(1).trimStart();
+    else if (s.startsWith(":")) {
+      s = s.slice(1).trimStart();
+      if (s.startsWith("~")) s = s.slice(1).trimStart();
+      if (s.startsWith("|")) s = s.slice(1).trimStart();
+    }
+    const id = s.match(/^([A-Za-z_][A-Za-z0-9_]*)/);
+    if (id) out.add(id[1]);
+  }
+  return [...out];
+}
+
+// Every public symbol across a set of src modules, space-joined and capped
+// for the searchable `packages.symbols` column.
+export function symbolsIndex(modules: { path: string; text: string }[], cap = 8000): string {
+  const all = new Set<string>();
+  for (const mod of modules) for (const s of extractSymbols(mod.text)) all.add(s);
+  return [...all].join(" ").slice(0, cap);
+}

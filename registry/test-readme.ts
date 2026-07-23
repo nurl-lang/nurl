@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import { gzipSync } from "node:zlib";
 import { renderMarkdown } from "./src/markdown.ts";
 import { findReadmeInTar, normalizeRelPath, listTarFiles, listTarSrcModules, readmeFirstParagraph } from "./src/readme.ts";
-import { renderNurldoc } from "./src/nurldoc.ts";
+import { renderNurldoc, extractSymbols, symbolsIndex } from "./src/nurldoc.ts";
 
 let pass = 0, fail = 0;
 function ok(cond: boolean, msg: string) {
@@ -208,6 +208,18 @@ const NUDOC = `// demo.nu — the fixture module.
   ok(mods.length === 1, "listTarSrcModules finds exactly the src/*.nu module");
   ok(mods.length === 1 && mods[0].path === "src/demo.nu", "listTarSrcModules returns the src path");
   ok(mods.length === 1 && mods[0].text.includes("demo_hello"), "listTarSrcModules returns the module text");
+}
+
+// ── nurldoc: symbol index (registry search) ──────────────
+{
+  const syms = extractSymbols(NUDOC);
+  ok(syms.includes("demo_hello"), "extractSymbols finds the public function");
+  ok(syms.includes("Point"), "extractSymbols finds the type");
+  ok(!syms.includes("__demo_secret"), "extractSymbols omits file-private functions");
+  const idx = symbolsIndex([{ path: "src/demo.nu", text: NUDOC }]);
+  ok(idx.includes("demo_hello") && idx.includes("Point"), "symbolsIndex joins the module symbols");
+  // a caller searching a symbol substring finds it
+  ok(idx.toLowerCase().includes("hello"), "symbol index is substring-searchable");
 }
 
 console.log(`\n==== ${pass} passed, ${fail} failed ====`);

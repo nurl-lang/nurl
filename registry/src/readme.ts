@@ -241,3 +241,18 @@ export function listTarSrcModules(buf: Uint8Array): { path: string; text: string
   }
   return out;
 }
+
+// The public symbol names across a published package's src/*.nu, space-
+// joined for the searchable `packages.symbols` column. "" if the tarball is
+// missing or carries no src modules.
+export async function extractPackageSymbols(
+  bucket: R2Bucket,
+  name: string,
+  version: string,
+): Promise<string> {
+  const obj = await bucket.get(`pkgs/${name}/${name}-${version}.tar.gz`);
+  if (!obj || !obj.body) return "";
+  const ab = await new Response(obj.body.pipeThrough(new DecompressionStream("gzip"))).arrayBuffer();
+  const { symbolsIndex } = await import("./nurldoc.ts");
+  return symbolsIndex(listTarSrcModules(new Uint8Array(ab)));
+}

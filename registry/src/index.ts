@@ -22,8 +22,8 @@
 // (miniflare simulates R2 + D1) — no Cloudflare account needed to test.
 
 import { renderMarkdown } from "./markdown.ts";
-import { extractReadme, extractFile, extractManifestRepository, extractManifestDescription, normalizeRelPath, listTarFiles, listTarSrcModules } from "./readme.ts";
-import { renderNurldoc } from "./nurldoc.ts";
+import { extractReadme, extractFile, extractManifestRepository, extractManifestDescription, normalizeRelPath, listTarFiles, listTarSrcModules, extractPackageSymbols } from "./readme.ts";
+import { renderNurldoc, symbolsIndex } from "./nurldoc.ts";
 
 export interface Env {
   REG_BUCKET: R2Bucket;
@@ -385,13 +385,24 @@ async function handlePublish(req: Request, env: Env): Promise<Response> {
   // fail the publish: the description is search metadata, not integrity.
   const description = await extractManifestDescription(env.REG_BUCKET, name, version)
     .catch(() => "");
+  // The public symbol names (nurldoc over src/*.nu) — same failure policy:
+  // search metadata, never integrity, so extraction failure can't fail the
+  // publish. The latest version's surface wins.
+  const symbols = await extractPackageSymbols(env.REG_BUCKET, name, version)
+    .catch(() => "");
   if (!owner) {
     await env.REG_DB.prepare(
-      `INSERT INTO packages (name, owner_user_id, created_at, description) VALUES (?, ?, ?, ?)`,
-    ).bind(name, user.id, now, description).run();
-  } else if (description) {
-    await env.REG_DB.prepare(`UPDATE packages SET description = ? WHERE name = ?`)
-      .bind(description, name).run();
+      `INSERT INTO packages (name, owner_user_id, created_at, description, symbols) VALUES (?, ?, ?, ?, ?)`,
+    ).bind(name, user.id, now, description, symbols).run();
+  } else {
+    // Only overwrite with a non-empty value — a failed extraction must not
+    // wipe a good description/symbol index from an earlier publish.
+    await env.REG_DB.prepare(
+      `UPDATE packages SET
+         description = CASE WHEN ?1 != '' THEN ?1 ELSE description END,
+         symbols     = CASE WHEN ?2 != '' THEN ?2 ELSE symbols END
+       WHERE name = ?3`,
+    ).bind(description, symbols, name).run();
   }
   await env.REG_DB.prepare(
     `INSERT INTO versions (name, version, checksum, yanked, published_by, published_at)
@@ -489,6 +500,36 @@ async function handleDescBackfill(req: Request, env: Env): Promise<Response> {
   return json({ ok: failed === 0, updated, skipped, failed, errors });
 }
 
+// POST /api/v1/admin/symbols-backfill — extract the src/*.nu symbol index
+// for every package published before the `symbols` column existed (or whose
+// index is still empty). Same rate-limited, idempotent shape as
+// desc-backfill; re-running only fills the blanks.
+async function handleSymbolsBackfill(req: Request, env: Env): Promise<Response> {
+  if (!(await rateLimit(env, `symbf:${clientIp(req)}`, 2, 3_600_000))) {
+    return json({ error: "rate_limited" }, 429, { "retry-after": "3600" });
+  }
+  const rows = await env.REG_DB.prepare(
+    `SELECT p.name AS name, ${LATEST_SUBQUERY} AS latest, p.symbols AS symbols
+       FROM packages p`,
+  ).all<CatalogRow>();
+  let updated = 0, skipped = 0, failed = 0;
+  const errors: string[] = [];
+  for (const r of rows.results ?? []) {
+    if (r.symbols || !r.latest) { skipped++; continue; }
+    try {
+      const sym = await extractPackageSymbols(env.REG_BUCKET, r.name, r.latest);
+      if (!sym) { skipped++; continue; }
+      await env.REG_DB.prepare(`UPDATE packages SET symbols = ? WHERE name = ?`)
+        .bind(sym, r.name).run();
+      updated++;
+    } catch (e) {
+      failed++;
+      errors.push(`${r.name}: ${String(e)}`);
+    }
+  }
+  return json({ ok: failed === 0, updated, skipped, failed, errors });
+}
+
 // ── GitHub OAuth (token bootstrap) ────────────────────────────────────
 
 const PAGE_STYLE =
@@ -551,7 +592,7 @@ function esc(s: string): string {
 
 // ── Catalog UI + search ───────────────────────────────────────────────
 
-interface CatalogRow { name: string; latest: string | null; description: string; }
+interface CatalogRow { name: string; latest: string | null; description: string; symbols?: string; }
 
 // Most-recently-published non-yanked version per package (display only).
 const LATEST_SUBQUERY =
@@ -563,7 +604,7 @@ async function handleCatalog(url: URL, env: Env): Promise<Response> {
   const like = q ? `%${q.replace(/[%_\\]/g, "")}%` : "%";
   const rows = await env.REG_DB.prepare(
     `SELECT p.name AS name, ${LATEST_SUBQUERY} AS latest, p.description AS description
-       FROM packages p WHERE p.name LIKE ?1 OR p.description LIKE ?1 ORDER BY p.name LIMIT 200`,
+       FROM packages p WHERE p.name LIKE ?1 OR p.description LIKE ?1 OR p.symbols LIKE ?1 ORDER BY p.name LIMIT 200`,
   ).bind(like).all<CatalogRow>();
   const items = rows.results ?? [];
   const list = items.length
@@ -758,12 +799,19 @@ async function handleSearch(req: Request, url: URL, env: Env): Promise<Response>
   const q = (url.searchParams.get("q") ?? "").toLowerCase().slice(0, 64);
   const like = q ? `%${q.replace(/[%_\\]/g, "")}%` : "%";
   const rows = await env.REG_DB.prepare(
-    `SELECT p.name AS name, ${LATEST_SUBQUERY} AS latest, p.description AS description
-       FROM packages p WHERE p.name LIKE ?1 OR p.description LIKE ?1 ORDER BY p.name LIMIT 50`,
+    `SELECT p.name AS name, ${LATEST_SUBQUERY} AS latest, p.description AS description, p.symbols AS symbols
+       FROM packages p WHERE p.name LIKE ?1 OR p.description LIKE ?1 OR p.symbols LIKE ?1 ORDER BY p.name LIMIT 50`,
   ).bind(like).all<CatalogRow>();
   return json({
-    results: (rows.results ?? []).map((r) =>
-      ({ name: r.name, version: r.latest, description: r.description ?? "" })),
+    results: (rows.results ?? []).map((r) => {
+      // Which of this package's symbols the query hit — so a caller that
+      // searched "gqa attention" sees it matched via `nn_gqa_attention`,
+      // not just that `nn` came back. (Only when the match wasn't on name.)
+      const matched = q && r.symbols
+        ? r.symbols.split(/\s+/).filter((sym) => sym.toLowerCase().includes(q)).slice(0, 12)
+        : [];
+      return { name: r.name, version: r.latest, description: r.description ?? "", matched_symbols: matched };
+    }),
   });
 }
 
@@ -987,6 +1035,7 @@ export default {
       if (path === "/api/v1/token/new") return handleTokenNew(req, env);
       if (path === "/api/v1/admin/sign-backfill") return handleSignBackfill(req, env);
       if (path === "/api/v1/admin/desc-backfill") return handleDescBackfill(req, env);
+      if (path === "/api/v1/admin/symbols-backfill") return handleSymbolsBackfill(req, env);
     }
     return json({ error: "not_found" }, 404);
   },
