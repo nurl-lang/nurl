@@ -685,7 +685,7 @@ $ `deps/gpukit/src/dev.nu`
 // Adam ROUND-ROBIN over every `win`-token window of the corpus: the graph
 // is static (fixed T), so a window switch is two gput_set_input uploads
 // (the embedded rows + the one-hot targets) — no rebuild, no recapture.
-@ ft_train * FtModel m ( Vec i ) corpus i win i r f alpha i seed i steps f lr b verbose → FtTrain {
+@ ft_train * FtModel m ( Vec i ) corpus i win i r f alpha i seed i steps f lr i dtype b verbose → FtTrain {
     : i total ( vec_len [i] corpus )
     : ~ i T2 win
     ? > T2 total { = T2 total } {}
@@ -709,7 +709,7 @@ $ `deps/gpukit/src/dev.nu`
     : ~ f l0 0.0
     : ~ f l1 0.0
     ? ok {
-        : *GProg pg ( gput_capture kit tp . fg loss )
+        : *GProg pg ( gput_capture_dt kit tp . fg loss dtype )
         = ok ( gput_ok pg )
         : *GpOpt go ( gpopt_adam_new lr )
         : ~ i pi 0
@@ -1040,7 +1040,7 @@ $ `deps/gpukit/src/dev.nu`
 // shape; multi-window scheduling lands with gput_set_input plumbing),
 // save the adapters, and optionally write a merged full-model safetensors
 // runnable via `nurllama run model.gguf PROMPT --weights merged.st`.
-@ nurllama_finetune s modp s datap s outp s mergedp i steps f lr i rank f alpha i seq i seed → i {
+@ nurllama_finetune s modp s datap s outp s mergedp i steps f lr i rank f alpha i seq i seed b f32 → i {
     : ~ s text ``
     : ~ b haderr F
     : ~ String textS ( string_new )
@@ -1101,7 +1101,9 @@ $ `deps/gpukit/src/dev.nu`
             ( nurl_print ` layers · hidden ` )
             ( nurl_print ( nurl_str_int . m n_embd ) )
             ( nurl_print ` · building the tape + capturing onto the device\n` )
-            : FtTrain tr ( ft_train m ids seq rank alpha seed steps lr T )
+            : i dt ? f32 1 0
+            ? f32 { ( nurl_print `precision: float32 device replay (base weights halved)\n` ) } {}
+            : FtTrain tr ( ft_train m ids seq rank alpha seed steps lr dt T )
             ? . tr ok {} {
                 ( nurl_eprintln `nurllama: finetune training failed (no device? poisoned graph?)` )
                 ( ft_train_free tr ) ( ft_free m ) ( vec_free [i] ids )

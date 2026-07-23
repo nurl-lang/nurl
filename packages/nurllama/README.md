@@ -222,8 +222,9 @@ SmolLM-135M: the tape's logits match the inference engine's (top-1 identical,
 2e-7 on the top logit), and 40 device Adam steps overfit a sentence from CE
 2.75 to 8.7e-6. llama-family NORM rope is handled by un-permuting q/k columns
 at load (half-split rope then reproduces the exact rotations; scores are
-permutation-invariant). The `finetune --lora` CLI, the PEFT reference curve
-and safetensor adapter save/merge land next in this arc.
+permutation-invariant). `--f32` runs the device replay in float32 (half the base-weight VRAM;
+float32 precision, not bit-exact to the f64 tape) for larger models. The
+PEFT reference curve lands next in this arc.
 
 ## How it is checked
 
