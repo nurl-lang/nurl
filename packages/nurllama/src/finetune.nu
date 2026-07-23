@@ -661,6 +661,10 @@ $ `deps/gpukit/src/dev.nu`
     ? ok {
         : *GProg pg ( gput_capture_dt kit tp . fg loss dtype )
         = ok ( gput_ok pg )
+        // The base weights (const nodes) are now on the device; their f64
+        // host copies are dead weight — free them so host RAM drops to the
+        // adapters + activations. Training reads device buffers only.
+        ? ok { ( tape_drop_consts tp ) } {}
         : *GpOpt go ( gpopt_adam_new lr )
         : ~ i pi 0
         ~ < pi * 2 nslot {
