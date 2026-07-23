@@ -351,6 +351,30 @@ $ `deps/gpukit/src/dev.nu`
     ( gput_free pf )
     ( tape_free tf )
 
+    // ── turnkey session: same three-call loop, bit-equal to per-node ──
+    : *GTape ts ( tape_new )
+    : GVar losss ( build_graph ts xv w1v w2v D H BSZ )
+    : *GProg ps ( gput_capture kit ts losss )
+    : *GpOpt gos ( gpopt_adam_new 0.01 )
+    // register the two weight matrices (ids 0 and 4 on this graph)
+    : GVar sW1 @ GVar { 0 }
+    : GVar sW2 @ GVar { 4 }
+    ( gpopt_add gos ps sW1 0.0 ) ( gpopt_add gos ps sW2 0.0 )
+    : *GpFuse sess ( gpfuse_open ps gos )
+    : b iscuda ? == 1 ( nurl_str_eq ( gk_backend kit ) `cuda` ) T F
+    ( check == ( gpfuse_active sess ) iscuda `session active exactly on the cuda backend` )
+    : ~ b se T
+    : ~ i sep 0
+    ~ & < sep 5 se {
+        = se & se ( gpfuse_episode sess ps gos )
+        = sep + sep 1
+    }
+    ( check se `turnkey episode loop runs 5 steps` )
+    ( gpfuse_close sess )
+    ( gpopt_free gos )
+    ( gput_free ps )
+    ( tape_free ts )
+
     ( vec_free [f] xv ) ( vec_free [f] w1v ) ( vec_free [f] w2v )
     ( gk_close kit )
     ( nurl_print `gpfuse_test: ` ) ( nurl_print_int g_pass )

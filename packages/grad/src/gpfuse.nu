@@ -1580,3 +1580,78 @@ $ `deps/gpukit/src/dev.nu`
     ( vec_free [i] gids )
     ^ T
 }
+
+// ── turnkey session ──────────────────────────────────────────────────
+// A consumer that just wants "train this captured program fast" builds a
+// session once and drives the same three-call episode loop as the graph
+// path — set inputs, prepare the optimizer, run the episode — without
+// hand-rolling plan + capture + fallback. When fusion is not worthwhile
+// (cpu backend) or the plan is empty, every call transparently forwards
+// to the per-node path, so the loop is identical either way.
+
+: GpFuse {
+    b active  // T when a worthwhile plan drives the episode
+    * GpPlan pl
+}
+
+@ gpfuse_open * GProg pg * GpOpt go → *GpFuse {
+    : *GpFuse s # *GpFuse ( nurl_alloc Z GpFuse )
+    = . s active F
+    = . s pl ( _gpfuse_nullplan )
+    ? & ( gpfuse_worthwhile pg ) . pg ok {} { ^ s }
+    : *GpPlan pl ( gpfuse_plan pg )
+    ? . pl ok {
+        = . s pl pl
+        = . s active ( gpfuse_graph_capture_train pg pl go )
+        // even without a graph (capture unavailable) the direct fused
+        // path still helps — mark active so the episode uses it
+        = . s active T
+    } { ( gpfuse_free pl ) }
+    ^ s
+}
+
+@ _gpfuse_nullplan → *GpPlan {
+    : *GpPlan pl # *GpPlan ( nurl_alloc Z GpPlan )
+    = . pl ok F
+    = . pl segs ( vec_new [i] )
+    = . pl src ( string_new )
+    = . pl knames ( vec_new [String] )
+    = . pl bnames ( vec_new [String] )
+    = . pl pnames ( vec_new [String] )
+    = . pl pgrid ( vec_new [i] )
+    = . pl vtab ( _gp_nobuf )
+    = . pl gtab ( _gp_nobuf )
+    = . pl ftab ( _gp_nobuf )
+    = . pl fcnt 0
+    = . pl fillk ( string_new )
+    = . pl ssegs ( vec_new [i] )
+    = . pl snames ( vec_new [String] )
+    = . pl sbnames ( vec_new [String] )
+    ^ pl
+}
+
+@ gpfuse_active * GpFuse s → b { ^ . s active }
+
+// One training episode. With a captured graph this is a single launch;
+// with a live plan it is the fused forward + backward + optimizer step;
+// otherwise the per-node forward/backward/step. Bit-identical either way.
+@ gpfuse_episode * GpFuse s * GProg pg * GpOpt go → b {
+    : *GpPlan pl . s pl
+    ? & . s active . pl ok {} {
+        ? ( gput_forward pg ) {} { ^ F }
+        ? ( gput_backward pg ) {} { ^ F }
+        ^ ( gpopt_step go pg )
+    }
+    ? != . pg gexec 0 {
+        ? ( gpopt_prepare go pg ) {} { ^ F }
+        ^ ( gput_episode pg )
+    } {}
+    ? ( gpfuse_forward pg pl ) {} { ^ F }
+    ? ( gpfuse_backward pg pl ) {} { ^ F }
+    ^ ( gpopt_step go pg )
+}
+
+@ gpfuse_close * GpFuse s → v {
+    ( gpfuse_free . s pl )
+    ( nurl_free # s s )
+}
