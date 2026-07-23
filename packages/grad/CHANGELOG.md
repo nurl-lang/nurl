@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.6.0
+
+**Float32 device replay.** `gput_capture_dt(kit, tp, loss, 1)` captures a
+tape whose DEVICE replay runs in float32 — value, gradient, scratch and
+optimizer-moment buffers are GK_F32, the kernels are the f32 variants
+(derived from the f64 source by swapping the element type, the
+round-to-nearest intrinsics and the libm transcendentals, and by
+prefixing kernel names gp_ -> gpf_ so the two never collide in gpukit's
+name-keyed cache). Device memory HALVES and the f32 ALUs run.
+
+The CPU tape stays the f64 reference: an f32 program is NOT bit-equal
+(that is the point). `tests/gput_f32_test.nu` trains a full AE both ways
+and gates the gap at float32 tolerance — measured worst loss-trajectory
+1e-5 relative and worst final-parameter 4e-4 relative over 30 Adam steps,
+on CUDA and the CPU backend. The default (`gput_capture`) is unchanged
+and stays bit-exact to the tape.
+
+The host interface is untouched: `gput_set_input` / `gput_loss` /
+`gput_grad` take and return f64, and gk_dbuf up/download convert. This is
+the enabler for large-model finetune where f64 base weights would not fit
+(a 0.5B model's ~4 GB of f64 consts becomes ~2 GB).
+
 ## 0.5.0
 
 **Graph-fused episodes.** `gput_graph_capture(pg)` records one forward +

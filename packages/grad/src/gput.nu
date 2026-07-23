@@ -53,7 +53,7 @@ $ `deps/gpukit/src/dev.nu`
 
 // ── the kernels ───────────────────────────────────────────────────────
 // One source, compiled once per kit (cached by entry name). All f64.
-@ _gp_src → s {
+@ __gp_src_f64 → s {
     ^ `extern "C" __global__ void gp_fill(double* o, long long n, double v)
 {
     long long i = (long long)blockIdx.x * blockDim.x + threadIdx.x;
@@ -403,6 +403,53 @@ extern "C" __global__ void gp_opt(double* w, const double* g, double* m, double*
 `
 }
 
+// The f32 kernel source: the same kernels computed in float32. Derived
+// from the f64 source by swapping the element type, the round-to-nearest
+// intrinsics, and the libm transcendentals, and by PREFIXING every kernel
+// name gp_ -> gpf_ so the two never collide in gpukit's name-keyed cache.
+// The scalar interface goes float too (the callers pass f32 bits), so the
+// substitution is uniform. Storage halves and f32 ALUs run; the CPU tape
+// stays the f64 reference and the parity test bounds the gap.
+@ __gp_src_f32 → s {
+    : ~ s x ( __gp_src_f64 )
+    = x ( __str_replace_all x `__dadd_rn` `__fadd_rn` )
+    = x ( __str_replace_all x `__dsub_rn` `__fsub_rn` )
+    = x ( __str_replace_all x `__dmul_rn` `__fmul_rn` )
+    = x ( __str_replace_all x `__ddiv_rn` `__fdiv_rn` )
+    = x ( __str_replace_all x `exp(` `expf(` )
+    = x ( __str_replace_all x `log(` `logf(` )
+    = x ( __str_replace_all x `sqrt(` `sqrtf(` )
+    = x ( __str_replace_all x `(double)` `(float)` )
+    = x ( __str_replace_all x `double` `float` )
+    = x ( __str_replace_all x `__global__ void gp_` `__global__ void gpf_` )
+    ^ x
+}
+
+// Every simple textual replacement of `needle` with `rep` in `hay`. `needle`
+// must be non-empty; used only on the fixed kernel source above.
+@ __str_replace_all s hay s needle s rep → s {
+    : i nl ( nurl_str_len needle )
+    ? > nl 0 {} { ^ ( string_data ( string_from hay ) ) }
+    : String out ( string_new )
+    : i hl ( nurl_str_len hay )
+    : ~ i i2 0
+    ~ < i2 hl {
+        : i rel ( nurl_str_find # s + # i hay i2 needle )
+        : i f ? < rel 0 -1 + i2 rel
+        ? < f 0 {
+            : ~ i k i2
+            ~ < k hl { ( string_push_char out ( nurl_str_get hay k ) ) = k + k 1 }
+            = i2 hl
+        } {
+            : ~ i k i2
+            ~ < k f { ( string_push_char out ( nurl_str_get hay k ) ) = k + k 1 }
+            ( string_push_str out rep )
+            = i2 + f nl
+        }
+    }
+    ^ ( string_data out )
+}
+
 // ── the captured program ─────────────────────────────────────────────
 
 // One mirrored node. dims caches per-op host-side launch geometry:
@@ -429,7 +476,30 @@ extern "C" __global__ void gp_opt(double* w, const double* g, double* m, double*
     ( Vec GpNode ) nodes
     i loss
     i gexec  // CUDA-graph exec handle for one fwd+bwd episode (0 = none)
+    i dtype  // 0 GK_F64 (default) · 1 GK_F32 (device replay in float32)
 }
+
+// Kernel source for a program's dtype.
+@ _gp_src * GProg pg → s { ? == . pg dtype 1 { ^ ( __gp_src_f32 ) } {} ^ ( __gp_src_f64 ) }
+
+// A kernel's name for the dtype (gp_ -> gpf_ in f32).
+@ __gp_kn * GProg pg s name → s {
+    ? == . pg dtype 1 {
+        : String o ( string_from `gpf_` )
+        ( string_push_str o # s + # i name 3 )
+        ^ ( string_data o )
+    } {}
+    ^ name
+}
+
+// A scalar float arg for the dtype (f32 bits + 4-byte, or f64 bits + 8).
+@ __gp_argf * GProg pg f v → i {
+    ? == . pg dtype 1 { ^ ( gpu_arg_i32 ( f32_to_bits # f32 v ) ) } {}
+    ^ ( gpu_arg_i64 ( f64_to_bits v ) )
+}
+
+// The element buffer dtype (GK_F32 / GK_F64) for a program.
+@ __gp_edt * GProg pg → i { ? == . pg dtype 1 { ^ GK_F32 } {} ^ GK_F64 }
 
 // Device optimizer over a captured program's parameters — opt.nu mirrored:
 // per-param L2, global-norm clip, the same runtime 1−β Adam arithmetic, the
@@ -512,10 +582,11 @@ extern "C" __global__ void gp_opt(double* w, const double* g, double* m, double*
     = . pg ok F
 }
 
-// Upload a CPU tensor's data into a fresh f64 device buffer.
-@ _gp_upload_tensor * GpuKit kit * Tensor t → GkBuf {
+// Upload a CPU tensor's data into a fresh device buffer of the given dtype
+// (gk_dbuf_upload converts the f64 host data to f32 when edt == GK_F32).
+@ _gp_upload_tensor * GpuKit kit * Tensor t i edt → GkBuf {
     : i n ( vec_len [f] . t data )
-    : GkBuf b ( gk_dbuf_new kit n GK_F64 )
+    : GkBuf b ( gk_dbuf_new kit n edt )
     ? ( gk_buf_ok b ) {
         ? ( gk_dbuf_upload kit b . t data ) {} { ( gk_dbuf_free b ) ^ ( _gp_nobuf ) }
     } {}
@@ -525,8 +596,17 @@ extern "C" __global__ void gp_opt(double* w, const double* g, double* m, double*
 // Mirror one recorded episode ([0, tape_len)) onto the device. `loss` is the
 // node backward seeds from. Check gput_ok before use.
 @ gput_capture * GpuKit kit * GTape tp GVar loss → *GProg {
+    ^ ( gput_capture_dt kit tp loss 0 )
+}
+
+// As gput_capture, but the DEVICE replay runs in the given element dtype
+// (0 GK_F64 · 1 GK_F32). The CPU tape stays f64: an f32 program halves
+// device memory and runs f32 ALUs, at float32 precision (the parity test
+// bounds the gap ~1e-5 rel; it is NOT bit-equal to the tape like f64 is).
+@ gput_capture_dt * GpuKit kit * GTape tp GVar loss i dtype → *GProg {
     : *GProg pg # *GProg ( nurl_alloc Z GProg )
     = . pg ok T
+    = . pg dtype dtype
     = . pg kit kit
     = . pg nodes ( vec_new [GpNode] )
     = . pg loss . loss id
@@ -588,9 +668,9 @@ extern "C" __global__ void gp_opt(double* w, const double* g, double* m, double*
         : *Tensor tv # *Tensor ( _g_val tp k )
         ? == . tv dtype TE_F64 {} { ( _gp_fail pg `only TE_F64 tapes` ) }
         : i n ( vec_len [f] . tv data )
-        : GkBuf val ( _gp_upload_tensor kit tv )
+        : GkBuf val ( _gp_upload_tensor kit tv ( __gp_edt pg ) )
         : ~ GkBuf grad ( _gp_nobuf )
-        ? == ( _ti gbuf k ) 1 { = grad ( gk_dbuf_new kit n GK_F64 ) } {}
+        ? == ( _ti gbuf k ) 1 { = grad ( gk_dbuf_new kit n ( __gp_edt pg ) ) } {}
         : ~ GkBuf scr ( _gp_nobuf )
         : ~ GkBuf meta ( _gp_nobuf )
         : ( Vec i ) dims ( vec_new [i] )
@@ -631,7 +711,7 @@ extern "C" __global__ void gp_opt(double* w, const double* g, double* m, double*
             ? & ( gk_buf_ok meta ) ( gk_dbuf_upload_i kit meta mv ) {} { ( _gp_fail pg `meta upload failed` ) }
             // mul/div backward materializes an out-shaped contribution
             ? | == op ( gop_mul ) == op ( gop_div ) {
-                = scr ( gk_dbuf_new kit n GK_F64 )
+                = scr ( gk_dbuf_new kit n ( __gp_edt pg ) )
                 ? ( gk_buf_ok scr ) {} { ( _gp_fail pg `scratch alloc failed` ) }
             } {}
             ( vec_free [i] mv ) ( vec_free [i] ost )
@@ -751,14 +831,14 @@ extern "C" __global__ void gp_opt(double* w, const double* g, double* m, double*
 // ── replay: forward ──────────────────────────────────────────────────
 
 @ _gp_run * GProg pg s name i grid i block ( Vec i ) args → b {
-    ^ ( gk_run_dev . pg kit ( _gp_src ) name grid block args )
+    ^ ( gk_run_dev . pg kit ( _gp_src pg ) ( __gp_kn pg name ) grid block args )
 }
 
 @ _gp_fill_buf * GProg pg GkBuf b f v → b {
     : ( Vec i ) a ( vec_new [i] )
     ( vec_push [i] a ( gk_arg_dev b ) )
     ( vec_push [i] a ( gpu_arg_i64 . b n ) )
-    ( vec_push [i] a ( gpu_arg_i64 ( f64_to_bits v ) ) )
+    ( vec_push [i] a ( __gp_argf pg v ) )
     : b r ( _gp_run pg `gp_fill` ( gk_grid . b n 256 ) 256 a )
     ( vec_free [i] a )
     ^ r
@@ -792,7 +872,7 @@ extern "C" __global__ void gp_opt(double* w, const double* g, double* m, double*
         ( vec_push [i] a ( gk_arg_dev . nd val ) )
         ( vec_push [i] a ( gpu_arg_i64 . nd n ) )
         ( vec_push [i] a ( gpu_arg_i64 op ) )
-        ( vec_push [i] a ( gpu_arg_i64 ( f64_to_bits . nd s ) ) )
+        ( vec_push [i] a ( __gp_argf pg . nd s ) )
         = r ( _gp_run pg `gp_scal` ( gk_grid . nd n 256 ) 256 a )
         ( vec_free [i] a )
         ^ r
@@ -944,7 +1024,7 @@ extern "C" __global__ void gp_opt(double* w, const double* g, double* m, double*
     ( vec_push [i] a ( gpu_arg_i64 moff ) )
     ( vec_push [i] a ( gpu_arg_i64 . dst n ) )
     ( vec_push [i] a ( gpu_arg_i64 tfree ) )
-    ( vec_push [i] a ( gpu_arg_i64 ( f64_to_bits sgn ) ) )
+    ( vec_push [i] a ( __gp_argf pg sgn ) )
     : b r ( _gp_run pg `gp_bw_accred` ( gk_grid . dst n 256 ) 256 a )
     ( vec_free [i] a )
     ^ r
@@ -1023,7 +1103,7 @@ extern "C" __global__ void gp_opt(double* w, const double* g, double* m, double*
         ( vec_push [i] a ( gk_arg_dev . na val ) )
         ( vec_push [i] a ( gpu_arg_i64 . nd n ) )
         ( vec_push [i] a ( gpu_arg_i64 op ) )
-        ( vec_push [i] a ( gpu_arg_i64 ( f64_to_bits . nd s ) ) )
+        ( vec_push [i] a ( __gp_argf pg . nd s ) )
         = r ( _gp_run pg `gp_bw_unary` ( gk_grid . nd n 256 ) 256 a )
         ( vec_free [i] a )
         ^ r
@@ -1358,8 +1438,8 @@ extern "C" __global__ void gp_opt(double* w, const double* g, double* m, double*
 @ gpopt_add * GpOpt o * GProg pg GVar p f alpha → v {
     ? & . o ok >= . p id 0 {} { ^ v }
     : GpNode nd ( _gp_node pg . p id )
-    : GkBuf mb ( gk_dbuf_new . pg kit . nd n GK_F64 )
-    : GkBuf vb ( gk_dbuf_new . pg kit . nd n GK_F64 )
+    : GkBuf mb ( gk_dbuf_new . pg kit . nd n ( __gp_edt pg ) )
+    : GkBuf vb ( gk_dbuf_new . pg kit . nd n ( __gp_edt pg ) )
     ? & ( gk_buf_ok mb ) ( gk_buf_ok vb ) {} {
         ( _gp_bfree mb )
         ( _gp_bfree vb )
@@ -1376,7 +1456,7 @@ extern "C" __global__ void gp_opt(double* w, const double* g, double* m, double*
 // Ensure the ctl buffer and (with clipping) the [dptr len] table exist.
 @ __gpopt_ensure * GpOpt o * GProg pg → b {
     ? ( gk_buf_ok . o ctl ) {} {
-        = . o ctl ( gk_dbuf_new . pg kit 2 GK_F64 )
+        = . o ctl ( gk_dbuf_new . pg kit 2 ( __gp_edt pg ) )
         ? ( gk_buf_ok . o ctl ) {} { = . o ok F ^ F }
     }
     ? & > . o clip 0.0 ! ( gk_buf_ok . o ptab ) {
@@ -1430,7 +1510,7 @@ extern "C" __global__ void gp_opt(double* w, const double* g, double* m, double*
         : ( Vec i ) a ( vec_new [i] )
         ( vec_push [i] a ( gk_arg_dev . o ptab ) )
         ( vec_push [i] a ( gpu_arg_i64 / ( gk_buf_len . o ptab ) 2 ) )
-        ( vec_push [i] a ( gpu_arg_i64 ( f64_to_bits . o clip ) ) )
+        ( vec_push [i] a ( __gp_argf pg . o clip ) )
         ( vec_push [i] a ( gk_arg_dev . o ctl ) )
         = r ( _gp_run pg `gp_clipcs` 1 1 a )
         ( vec_free [i] a )
@@ -1451,8 +1531,8 @@ extern "C" __global__ void gp_opt(double* w, const double* g, double* m, double*
             ( vec_push [i] a ( gpu_arg_i64 . nd n ) )
             ( vec_push [i] a ( gpu_arg_i64 . o kind ) )
             ( vec_push [i] a ( gk_arg_dev . o ctl ) )
-            ( vec_push [i] a ( gpu_arg_i64 ( f64_to_bits ( _tf . o alphas pi ) ) ) )
-            ( vec_push [i] a ( gpu_arg_i64 ( f64_to_bits . o lr ) ) )
+            ( vec_push [i] a ( __gp_argf pg ( _tf . o alphas pi ) ) )
+            ( vec_push [i] a ( __gp_argf pg . o lr ) )
             = r ( _gp_run pg `gp_opt` ( gk_grid . nd n 256 ) 256 a )
             ( vec_free [i] a )
         } {}
