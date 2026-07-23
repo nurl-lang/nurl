@@ -160,6 +160,30 @@ $ `deps/tensor/src/ops.nu`
 
 @ tape_ok * GTape tp → b { ^ == . tp ok 1 }
 
+// Free the host VALUE tensors of every const (gop_const) node — the frozen
+// base weights and the input consts. After a device capture (gput_capture)
+// has uploaded them, nothing on the host reads them again: device replay
+// reads device buffers, param sync-back touches only gop_param nodes, and
+// gput_set_input uploads freshly-recomputed rows straight to the device.
+// So this reclaims the single largest host allocation in a finetune (the
+// base weights, held f64) with no effect on device training.
+//
+// ONLY call it after a successful device capture: the CPU tape can no longer
+// forward/backward once its const values are gone. Freeing is null-safe —
+// tape_free / tape_reset_to re-read through the same guarded idiom.
+@ tape_drop_consts * GTape tp → v {
+    : i n ( vec_len [GNode] . tp nodes )
+    : ~ i k 0
+    ~ < k n {
+        : GNode nd ?? ( vec_get [GNode] . tp nodes k ) { T x → x F → @ GNode { -1 -1 -1 0.0 } }
+        ? == . nd op ( gop_const ) {
+            ( _g_tfree ?? ( vec_get [s] . tp vals k ) { T x → x F → # s 0 } )
+            ( vec_set [s] . tp vals k # s 0 )
+        } {}
+        = k + k 1
+    }
+}
+
 @ tape_len * GTape tp → i { ^ ( vec_len [GNode] . tp nodes ) }
 
 // Watermark for tape_reset_to: everything appended after `mark` is dropped.

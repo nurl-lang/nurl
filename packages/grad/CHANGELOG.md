@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.8.0
+
+**`tape_drop_consts` — reclaim host RAM after a device capture (Phase 3,
+piece 1).** A finetune holds its frozen base weights TWICE in f64 on the
+host: once in the caller's model and again on the tape as `gop_const`
+nodes. After `gput_capture` uploads every const to the device, the tape's
+const value tensors are dead weight — device replay reads device buffers,
+param sync-back touches only `gop_param` nodes, and `gput_set_input`
+uploads freshly-recomputed rows straight to the device. `tape_drop_consts`
+frees those const value tensors (null-safe: `tape_free`/`tape_reset_to`
+re-read through the same guarded idiom), reclaiming the single largest
+host allocation in a finetune.
+
+Device `--f32` already halved VRAM; this attacks the HOST-RAM wall that
+gates whether a large model's graph can even be built (peak host was ~2×
+model-in-f64 — 0.5B ≈ 7 GB before activations). Only valid after a
+successful device capture (the CPU tape can no longer forward/backward
+once its const values are gone).
+
+Verified: `drop_consts_test` (params + gradients survive, idempotent,
+clean teardown) and `nurllama finetune_test` on SmolLM-135M — 17/17
+byte-identical (CE 2.7488 → 4.38e-6, merged model 12/12), so freeing the
+base does not perturb training. Version 0.7.0 -> 0.8.0.
+
 ## 0.7.0
 
 **Megakernel fusion (`src/gpfuse.nu`, M8).** The GPU replay's wall on
