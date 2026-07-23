@@ -449,6 +449,29 @@ $ `stdlib/ext/nurldoc.nu`
 // package, and how to read its API surface (whose symbol names it cannot
 // otherwise guess). `nm` is the already-known name; `o` carries the version.
 @ __ms_push_reg_next String out s nm Json o → v {
+    // Which of the package's symbols the query hit (registry symbol index) —
+    // so a term the agent couldn't map to a package (e.g. 'gqa attention')
+    // shows WHY 'nn' came back: it exports nn_gqa_attention.
+    ?? ( json_obj_get o `matched_symbols` ) {
+        T sa → {
+            ? ( json_is_arr sa ) {
+                : i sn ( json_arr_len sa )
+                ? > sn 0 {
+                    ( string_push_str out `    matched symbols: ` )
+                    : ~ i si 0
+                    ~ < si sn {
+                        ?? ( json_arr_get sa si ) {
+                            T sj → { ? ( json_is_str sj ) { ? > si 0 { ( string_push_char out 32 ) } {} ( string_push_str out ( json_as_str sj ) ) } {} }
+                            F → {}
+                        }
+                        = si + si 1
+                    }
+                    ( string_push_char out 10 )
+                } {}
+            } {}
+        }
+        F → {}
+    }
     ( string_push_str out `    add:  ` )
     ( string_push_str out nm )
     ( string_push_str out ` = "^` )
