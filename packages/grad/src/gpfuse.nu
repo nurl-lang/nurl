@@ -452,10 +452,9 @@ $ `deps/gpukit/src/dev.nu`
     ^ pl
 }
 
-// Fused forward: segments as one kernel each, everything else per-node.
-@ gpfuse_forward * GProg pg * GpPlan pl → b {
-    ? & . pg ok . pl ok {} { ^ F }
-    ( gk_autosync F )
+// Launches only (no sync policy) — shared by the direct path and the
+// CUDA-graph capture.
+@ _gpfuse_fwd_launches * GProg pg * GpPlan pl → b {
     : i nn ( vec_len [GpNode] . pg nodes )
     : i nseg / ( vec_len [i] . pl segs ) 2
     : ~ b r T
@@ -476,6 +475,14 @@ $ `deps/gpukit/src/dev.nu`
             = k + k 1
         }
     }
+    ^ r
+}
+
+// Fused forward: segments as one kernel each, everything else per-node.
+@ gpfuse_forward * GProg pg * GpPlan pl → b {
+    ? & . pg ok . pl ok {} { ^ F }
+    ( gk_autosync F )
+    : b r ( _gpfuse_fwd_launches pg pl )
     ( gk_autosync T )
     ? r { ^ ( gk_sync . pg kit ) } {}
     ^ F
@@ -1017,9 +1024,7 @@ $ `deps/gpukit/src/dev.nu`
 
 // Fused backward: one zero-fill launch, the seed, then the reverse walk
 // with row-space + param-space kernels standing in for fused segments.
-@ gpfuse_backward * GProg pg * GpPlan pl → b {
-    ? & . pg ok . pl ok {} { ^ F }
-    ( gk_autosync F )
+@ _gpfuse_bwd_launches * GProg pg * GpPlan pl → b {
     : ~ b r T
     ? > . pl fcnt 0 {
         : ( Vec i ) a ( vec_new [i] )
@@ -1076,7 +1081,38 @@ $ `deps/gpukit/src/dev.nu`
             = k - k 1
         }
     }
+    ^ r
+}
+
+@ gpfuse_backward * GProg pg * GpPlan pl → b {
+    ? & . pg ok . pl ok {} { ^ F }
+    ( gk_autosync F )
+    : b r ( _gpfuse_bwd_launches pg pl )
     ( gk_autosync T )
     ? r { ^ ( gk_sync . pg kit ) } {}
+    ^ F
+}
+
+// The megakernel episode as ONE CUDA graph: fused forward + fused
+// backward + the optimizer, captured once. Per episode the host does
+// gput_set_input + gpopt_prepare + gput_episode — the identical driver
+// loop as the per-node graph, just with ~5 kernels inside instead of ~40.
+@ gpfuse_graph_capture_train * GProg pg * GpPlan pl * GpOpt go → b {
+    ? & & . pg ok . pl ok . go ok {} { ^ F }
+    ? == . pg gexec 0 {} { ^ T }
+    ? ( _gpopt_ensure go pg ) {} { ^ F }
+    : *GpuKit kit . pg kit
+    ? ( gpu_graph_begin . kit gpu ) {} { ^ F }
+    ( gk_autosync F )
+    : ~ b r ( _gpfuse_fwd_launches pg pl )
+    = r & r ( _gpfuse_bwd_launches pg pl )
+    = r & r ( _gpopt_launches go pg )
+    ( gk_autosync T )
+    : i exec ( gpu_graph_end . kit gpu )
+    ? & r != exec 0 {
+        = . pg gexec exec
+        ^ T
+    } {}
+    ? != exec 0 { ( gpu_graph_free exec ) } {}
     ^ F
 }

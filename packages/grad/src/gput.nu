@@ -1355,13 +1355,13 @@ extern "C" __global__ void gp_opt(double* w, const double* g, double* m, double*
 @ gput_graph_capture_train * GProg pg * GpOpt go → b {
     ? & . pg ok . go ok {} { ^ F }
     ? == . pg gexec 0 {} { ^ T }
-    ? ( __gpopt_ensure go pg ) {} { ^ F }
+    ? ( _gpopt_ensure go pg ) {} { ^ F }
     : *GpuKit kit . pg kit
     ? ( gpu_graph_begin . kit gpu ) {} { ^ F }
     ( gk_autosync F )
     : ~ b r ( __gput_fwd_launches pg )
     = r & r ( __gput_bwd_launches pg )
-    = r & r ( __gpopt_launches go pg )
+    = r & r ( _gpopt_launches go pg )
     ( gk_autosync T )
     : i exec ( gpu_graph_end . kit gpu )
     ? & r != exec 0 {
@@ -1502,7 +1502,7 @@ extern "C" __global__ void gp_opt(double* w, const double* g, double* m, double*
 }
 
 // Ensure the ctl buffer and (with clipping) the [dptr len] table exist.
-@ __gpopt_ensure * GpOpt o * GProg pg → b {
+@ _gpopt_ensure * GpOpt o * GProg pg → b {
     ? ( gk_buf_ok . o ctl ) {} {
         = . o ctl ( gk_dbuf_new . pg kit 2 ( __gp_edt pg ) )
         ? ( gk_buf_ok . o ctl ) {} { = . o ok F ^ F }
@@ -1535,7 +1535,7 @@ extern "C" __global__ void gp_opt(double* w, const double* g, double* m, double*
 // this is ONE 16-byte upload.
 @ gpopt_prepare * GpOpt o * GProg pg → b {
     ? & . o ok . pg ok {} { ^ F }
-    ? ( __gpopt_ensure o pg ) {} { ^ F }
+    ? ( _gpopt_ensure o pg ) {} { ^ F }
     : ~ f lrt . o lr
     ? == . o kind 1 {
         = . o t + . o t 1
@@ -1552,7 +1552,7 @@ extern "C" __global__ void gp_opt(double* w, const double* g, double* m, double*
 
 // The DEVICE half: (clip-scale kernel when clipping) + one gp_opt launch
 // per backward-active parameter. Pure launches — capturable into a graph.
-@ __gpopt_launches * GpOpt o * GProg pg → b {
+@ _gpopt_launches * GpOpt o * GProg pg → b {
     : ~ b r T
     ? > . o clip 0.0 {
         : ( Vec i ) a ( vec_new [i] )
@@ -1596,7 +1596,7 @@ extern "C" __global__ void gp_opt(double* w, const double* g, double* m, double*
 @ gpopt_step * GpOpt o * GProg pg → b {
     ? ( gpopt_prepare o pg ) {} { ^ F }
     ( gk_autosync F )
-    : b r ( __gpopt_launches o pg )
+    : b r ( _gpopt_launches o pg )
     ( gk_autosync T )
     ? r { ^ ( gk_sync . pg kit ) } {}
     ^ F
