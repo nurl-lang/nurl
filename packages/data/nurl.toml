@@ -1,0 +1,7 @@
+[package]
+name = "data"
+version = "0.1.0"
+description = "A training DataLoader in pure NURL — the batching layer the training stack was missing. Wrap an in-memory dataset (flat f64 features + optional labels) or stream one straight off disk, and iterate minibatches with a seeded, reproducible Fisher-Yates shuffle, epoch reshuffling, drop-last, and worker sharding (each of N shards sees a disjoint, exactly-once slice). The on-disk .ndf format (magic + n/d/l header + little-endian f64 rows) is read with random-access preads, so a corpus larger than RAM never loads whole — dl_next pulls only the rows a batch needs. Determinism is a gate, not a hope: the same seed yields the same batch order byte-for-byte, streamed batches equal in-memory batches, and the shard union covers every example once. No dependencies beyond the standard library (rng, fs, bytes)."
+license = "MIT OR Apache-2.0"
+
+[dependencies]
