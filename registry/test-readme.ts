@@ -3,7 +3,8 @@
 import { readFileSync } from "node:fs";
 import { gzipSync } from "node:zlib";
 import { renderMarkdown } from "./src/markdown.ts";
-import { findReadmeInTar, normalizeRelPath, listTarFiles, readmeFirstParagraph } from "./src/readme.ts";
+import { findReadmeInTar, normalizeRelPath, listTarFiles, listTarSrcModules, readmeFirstParagraph } from "./src/readme.ts";
+import { renderNurldoc } from "./src/nurldoc.ts";
 
 let pass = 0, fail = 0;
 function ok(cond: boolean, msg: string) {
@@ -170,6 +171,44 @@ ok(readmeFirstParagraph("# t — x\n\nOne dependency for **serving** HTTP.\nSeco
   "One dependency for serving HTTP. Second line.", "first paragraph joined, bold stripped, heading skipped");
 ok(readmeFirstParagraph("# only a title") === "", "title-only README yields empty");
 ok(readmeFirstParagraph("no heading at all\n\nrest") === "no heading at all", "headingless README works");
+
+// ── nurldoc: doc surface extraction ──────────────────────
+const NUDOC = `// demo.nu — the fixture module.
+
+// A friendly greeting for @who.
+@ demo_hello s who -> i { ^ 0 }
+
+// file-private, must NOT appear in the API docs.
+@ __demo_secret i x -> i { ^ x }
+
+// A record with fields.
+: Point {
+    i x
+    i y
+}
+`;
+{
+  const md = renderNurldoc(NUDOC, "demo.nu");
+  has(md, "# demo.nu", "nurldoc emits the module title");
+  has(md, "the fixture module", "nurldoc emits the header prose");
+  has(md, "demo_hello", "nurldoc documents the public function");
+  has(md, "friendly greeting", "nurldoc keeps the doc comment");
+  absent(md, "__demo_secret", "nurldoc omits file-private functions");
+  has(md, "Point", "nurldoc documents a type");
+  has(md, "```nurl", "nurldoc fences the type definition");
+  has(md, "i x", "nurldoc includes the type fields");
+}
+{
+  const gz = tarMulti([
+    { name: "README.md", body: "# demo\n" },
+    { name: "src/demo.nu", body: NUDOC },
+    { name: "nurl.toml", body: "[package]\nname=x\n" },
+  ]);
+  const mods = listTarSrcModules(gz);
+  ok(mods.length === 1, "listTarSrcModules finds exactly the src/*.nu module");
+  ok(mods.length === 1 && mods[0].path === "src/demo.nu", "listTarSrcModules returns the src path");
+  ok(mods.length === 1 && mods[0].text.includes("demo_hello"), "listTarSrcModules returns the module text");
+}
 
 console.log(`\n==== ${pass} passed, ${fail} failed ====`);
 process.exit(fail ? 1 : 0);
