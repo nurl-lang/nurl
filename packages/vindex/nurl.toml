@@ -1,0 +1,7 @@
+[package]
+name = "vindex"
+version = "0.1.0"
+description = "A vector index in pure NURL — the retrieval middle between embeddings and generation (the RAG piece). Build an index over n d-dimensional vectors and search the k nearest by cosine or L2: an EXACT brute-force index (the ground truth), and an IVF-flat approximate index (k-means coarse quantiser + inverted lists, probe the nprobe nearest clusters) that trades recall for speed on a knob. Cosine precomputes per-vector norms so a query is one dot product per candidate. The index serialises to a single .vix file (vectors + centroids + inverted lists) and loads back to identical results. Recall is a gate, not a hope: IVF recall@k is measured against the exact index on a fixed corpus, save/load round-trips bit-identically, and cosine/L2 top-1 matches the analytic nearest neighbour. Pairs with embed (vectors in) and nurllama (grounded answers out). No dependencies beyond the standard library."
+license = "MIT OR Apache-2.0"
+
+[dependencies]
