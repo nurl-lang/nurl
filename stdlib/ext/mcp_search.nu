@@ -29,6 +29,8 @@ $ `stdlib/std/url.nu`
 $ `stdlib/ext/env.nu`
 $ `stdlib/ext/json.nu`
 $ `stdlib/ext/http.nu`
+$ `stdlib/ext/compress.nu`
+$ `stdlib/ext/tar.nu`
 $ `stdlib/ext/nurldoc.nu`
 
 // The registry to search: $NURL_REGISTRY, else the public default.
@@ -328,6 +330,7 @@ $ `stdlib/ext/nurldoc.nu`
                                                                 F _ → {}
                                                             }
                                                             ( string_push_char out 10 )
+                                                            ( __ms_push_reg_next out nm o )
                                                             = shown + shown 1
                                                         } {}
                                                     }
@@ -442,6 +445,24 @@ $ `stdlib/ext/nurldoc.nu`
     }
 }
 
+// The two lines an agent needs after a registry hit: how to depend on the
+// package, and how to read its API surface (whose symbol names it cannot
+// otherwise guess). `nm` is the already-known name; `o` carries the version.
+@ __ms_push_reg_next String out s nm Json o → v {
+    ( string_push_str out `    add:  ` )
+    ( string_push_str out nm )
+    ( string_push_str out ` = "^` )
+    : ~ b hasv F
+    ?? ( json_obj_get o `version` ) {
+        T vj → { ? ( json_is_str vj ) { ( string_push_str out ( json_as_str vj ) ) = hasv T } {} }
+        F → {}
+    }
+    ? hasv {} { ( string_push_char out 42 ) }
+    ( string_push_str out `"   ·   API: nurl_api package=` )
+    ( string_push_str out nm )
+    ( string_push_char out 10 )
+}
+
 // Registry package search: /api/v1/search matches name + description.
 @ __ms_grep_packages s regbase s pattern String out → v {
     : String url ( string_with_cap 128 )
@@ -466,11 +487,13 @@ $ `stdlib/ext/nurldoc.nu`
                             ~ < k n {
                                 ?? ( json_arr_get arr k ) {
                                     T o → {
-                                        ( string_push_str out `  package ` )
+                                        : ~ s nm ``
                                         ?? ( json_obj_get o `name` ) {
-                                            T nj → { ( string_push_str out ( json_as_str nj ) ) }
+                                            T nj → { ? ( json_is_str nj ) { = nm ( json_as_str nj ) } {} }
                                             F _ → {}
                                         }
+                                        ( string_push_str out `  package ` )
+                                        ( string_push_str out nm )
                                         ?? ( json_obj_get o `version` ) {
                                             T vj → {
                                                 ? ( json_is_str vj ) {
@@ -500,6 +523,7 @@ $ `stdlib/ext/nurldoc.nu`
                                             F _ → {}
                                         }
                                         ( string_push_char out 10 )
+                                        ( __ms_push_reg_next out nm o )
                                     }
                                     F _ → {}
                                 }
@@ -859,4 +883,161 @@ $ `stdlib/ext/nurldoc.nu`
     ( string_free out_clean ) ( string_free out_word )
     ( vec_free [i] ctr ) ( string_free pat_lc )
     ^ hdr
+}
+
+// ── Registry package API surface (item: nurl_api package=<name>) ───────
+
+// <regbase>/pkgs/<name>/<name>-<version>.tar.gz
+@ __ms_tarball_url s regbase s name s version → String {
+    : String u ( string_with_cap 160 )
+    ( string_push_str u regbase )
+    ? != ( string_get u - ( string_len u ) 1 ) 47 { ( string_push_char u 47 ) } {}
+    ( string_push_str u `pkgs/` )
+    ( string_push_str u name )
+    ( string_push_char u 47 )
+    ( string_push_str u name )
+    ( string_push_char u 45 )
+    ( string_push_str u version )
+    ( string_push_str u `.tar.gz` )
+    ^ u
+}
+
+// The newest non-yanked version from /index/<name>.json, or "" when the
+// package is unknown / the index is unreachable.
+@ __ms_latest_version s regbase s name → String {
+    : String u ( string_with_cap 128 )
+    ( string_push_str u regbase )
+    ? != ( string_get u - ( string_len u ) 1 ) 47 { ( string_push_char u 47 ) } {}
+    ( string_push_str u `index/` )
+    ( string_push_str u name )
+    ( string_push_str u `.json` )
+    : ~ String out ( string_new )
+    : !Response HttpErr r ( http_get ( string_data u ) )
+    ( string_free u )
+    ?? r {
+        T resp → {
+            ?? ( json_parse ( http_body_str resp ) ) {
+                T root → {
+                    ?? ( json_obj_get root `versions` ) {
+                        T arr → {
+                            : i n ( json_arr_len arr )
+                            : ~ i k 0
+                            ~ < k n {
+                                ?? ( json_arr_get arr k ) {
+                                    T o → {
+                                        : ~ b yanked F
+                                        ?? ( json_obj_get o `yanked` ) { T yj → { ? ( json_is_bool yj ) { = yanked ( json_as_bool yj ) } {} } F → {} }
+                                        ? yanked {} {
+                                            ?? ( json_obj_get o `version` ) {
+                                                T vj → { ? ( json_is_str vj ) { ( string_free out ) = out ( string_from ( json_as_str vj ) ) } {} }
+                                                F → {}
+                                            }
+                                        }
+                                    }
+                                    F → {}
+                                }
+                                = k + k 1
+                            }
+                        }
+                        F → {}
+                    }
+                    ( json_free root )
+                }
+                F → {}
+            }
+            ( response_free resp )
+        }
+        F → {}
+    }
+    ^ out
+}
+
+// The API surface (nurldoc over every src/*.nu) of a PUBLISHED package,
+// streamed from its registry tarball — the ecosystem counterpart of
+// msearch_api_module. `version` "" resolves to the latest. "" on failure.
+@ msearch_api_package s regbase s name s version → String {
+    : ~ String ver ( string_from version )
+    ? == ( string_len ver ) 0 {
+        ( string_free ver )
+        = ver ( __ms_latest_version regbase name )
+    } {}
+    ? == ( string_len ver ) 0 { ( string_free ver ) ^ ( string_new ) } {}
+    : String url ( __ms_tarball_url regbase name ( string_data ver ) )
+    : ~ String md ( string_new )
+    : !Response HttpErr r ( http_get ( string_data url ) )
+    ( string_free url )
+    ?? r {
+        T resp → {
+            ? == ( http_status resp ) 200 {
+                : ( Vec u ) gz ( http_body_bytes resp )
+                ?? ( gzip_decompress gz ) {
+                    T raw → {
+                        ?? ( tar_parse raw ) {
+                            T ents → {
+                                : String hdr ( string_with_cap 64 )
+                                ( string_push_str hdr name )
+                                ( string_push_char hdr 32 )
+                                ( string_push_str hdr ( string_data ver ) )
+                                ( string_push_str hdr ` — package API surface (published src/*.nu)\n` )
+                                ( string_push_str md ( string_data hdr ) )
+                                ( string_free hdr )
+                                : i n ( vec_len [TarEntry] ents )
+                                : ~ i k 0
+                                ~ < k n {
+                                    ?? ( vec_get [TarEntry] ents k ) {
+                                        T e → {
+                                            ? == . e typeflag 48 {
+                                                : ~ String pnorm ( string_from ( string_data . e path ) )
+                                                ? ( string_starts_with pnorm `./` ) {
+                                                    : String c2 ( string_substr pnorm 2 - ( string_len pnorm ) 2 )
+                                                    ( string_free pnorm )
+                                                    = pnorm c2
+                                                } {}
+                                                ? & ( string_starts_with pnorm `src/` ) ( string_ends_with pnorm `.nu` ) {
+                                                    : String content ( bytes_to_str . e data )
+                                                    : String base ( __ms_basename ( string_data pnorm ) )
+                                                    : String one ( nurldoc_render ( string_data content ) ( string_data base ) )
+                                                    ( string_push_str md `\n---\n\n` )
+                                                    ( string_push_str md ( string_data one ) )
+                                                    ( string_free one ) ( string_free content ) ( string_free base )
+                                                } {}
+                                                ( string_free pnorm )
+                                            } {}
+                                        }
+                                        F → {}
+                                    }
+                                    = k + k 1
+                                }
+                                ( tar_entries_free ents )
+                            }
+                            F → {}
+                        }
+                        ( vec_free [u] raw )
+                    }
+                    F → {}
+                }
+                ( vec_free [u] gz )
+            } {}
+            ( response_free resp )
+        }
+        F → {}
+    }
+    ( string_free ver )
+    ? > ( string_len md ) ( __ms_api_out_cap ) {
+        : String cut ( string_substr md 0 ( __ms_api_out_cap ) )
+        ( string_push_str cut `\n… truncated — fetch the tarball for the full source.\n` )
+        ( string_free md )
+        ^ cut
+    } {}
+    ^ md
+}
+
+// basename after the last '/'
+@ __ms_basename s path → String {
+    : i n ( nurl_str_len path )
+    : ~ i start 0
+    : ~ i k 0
+    ~ < k n { ? == ( nurl_str_get path k ) 47 { = start + k 1 } {} = k + k 1 }
+    : s p2 # s + # i path start
+    ^ ( string_from p2 )
 }
