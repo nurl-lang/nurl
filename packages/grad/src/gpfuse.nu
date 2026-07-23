@@ -58,6 +58,9 @@ $ `deps/gpukit/src/dev.nu`
     GkBuf ftab  // i64 pairs (grad ptr, n) — the one-launch zero fill
     i fcnt  // pair count in ftab
     String fillk  // fill kernel name
+    ( Vec i ) ssegs  // serial-space (lo, hi) ranges — the scalar tail
+    ( Vec String ) snames  // serial fwd kernel per serial segment
+    ( Vec String ) sbnames  // serial bwd kernel (empty = per-node)
 }
 
 : ~ i g_gpm_next 1
@@ -277,6 +280,19 @@ $ `deps/gpukit/src/dev.nu`
     ( vec_free [String] . pl pnames )
     ( vec_free [i] . pl pgrid )
     ( string_free . pl fillk )
+    ( vec_free [i] . pl ssegs )
+    = k 0
+    ~ < k ( vec_len [String] . pl snames ) {
+        ?? ( vec_get [String] . pl snames k ) { T x → { ( string_free x ) } F → {} }
+        = k + k 1
+    }
+    ( vec_free [String] . pl snames )
+    = k 0
+    ~ < k ( vec_len [String] . pl sbnames ) {
+        ?? ( vec_get [String] . pl sbnames k ) { T x → { ( string_free x ) } F → {} }
+        = k + k 1
+    }
+    ( vec_free [String] . pl sbnames )
     : GkBuf vb . pl vtab
     ? != . vb dptr 0 { ( gk_dbuf_free vb ) } {}
     : GkBuf gb . pl gtab
@@ -304,6 +320,9 @@ $ `deps/gpukit/src/dev.nu`
     = . pl ftab ( _gp_nobuf )
     = . pl fcnt 0
     = . pl fillk ( string_new )
+    = . pl ssegs ( vec_new [i] )
+    = . pl snames ( vec_new [String] )
+    = . pl sbnames ( vec_new [String] )
     ? . pg ok {} { ^ pl }
     // B = the most common 2-D row count among non-leaf nodes (the batch)
     : i nn ( vec_len [GpNode] . pg nodes )
@@ -389,6 +408,45 @@ $ `deps/gpukit/src/dev.nu`
         ( vec_push [i] . pl pgrid pgr )
         = k + k 1
     }
+    // serial-space segments claim the leftovers (the scalar tail)
+    = k 0
+    ~ < k nn {
+        ? & == ( _gpf_in_rowseg pl k ) F ( _gpf_serial_ok pg k ) {
+            : ~ i hi2 k
+            ~ & < + hi2 1 nn & == ( _gpf_in_rowseg pl + hi2 1 ) F ( _gpf_serial_ok pg + hi2 1 ) { = hi2 + hi2 1 }
+            ? > hi2 k {
+                ( vec_push [i] . pl ssegs k )
+                ( vec_push [i] . pl ssegs hi2 )
+            } {}
+            = k + hi2 1
+        } { = k + k 1 }
+    }
+    : i nser / ( vec_len [i] . pl ssegs ) 2
+    = k 0
+    ~ < k nser {
+        : i slo ( _ti . pl ssegs * k 2 )
+        : i shi ( _ti . pl ssegs + * k 2 1 )
+        : String sn ( string_from `gpm` )
+        ( string_push_str sn ( nurl_str_int . pl kid ) )
+        ( string_push_str sn ? == . pg dtype 1 `f` `d` )
+        ( string_push_str sn `_t` )
+        ( string_push_str sn ( nurl_str_int k ) )
+        : b _e ( _gpf_emit_ser_seg pg slo shi ( string_data sn ) . pl src )
+        ( vec_push [String] . pl snames sn )
+        : String sb ( string_new )
+        : String cand2 ( string_from `gpm` )
+        ( string_push_str cand2 ( nurl_str_int . pl kid ) )
+        ( string_push_str cand2 ? == . pg dtype 1 `f` `d` )
+        ( string_push_str cand2 `_u` )
+        ( string_push_str cand2 ( nurl_str_int k ) )
+        ? ( _gpf_emit_ser_bwd_seg pg slo shi ( string_data cand2 ) . pl src ) {
+            ( string_push_str sb ( string_data cand2 ) )
+        } {}
+        ( string_free cand2 )
+        ( vec_push [String] . pl sbnames sb )
+        = k + k 1
+    }
+
     ( string_push_str . pl fillk `gpm` )
     ( string_push_str . pl fillk ( nurl_str_int . pl kid ) )
     ( string_push_str . pl fillk ? == . pg dtype 1 `f` `d` )
@@ -471,8 +529,25 @@ $ `deps/gpukit/src/dev.nu`
             = k + ( _ti . pl segs + * si 2 1 ) 1
             = si + si 1
         } {
-            = r ( _gp_fwd_node pg k )
-            = k + k 1
+            : ~ i ssi -1
+            : i nser2 / ( vec_len [i] . pl ssegs ) 2
+            : ~ i w2 0
+            ~ < w2 nser2 {
+                ? == ( _ti . pl ssegs * w2 2 ) k { = ssi w2 } {}
+                = w2 + w2 1
+            }
+            ? >= ssi 0 {
+                : s sn2 ?? ( vec_get [String] . pl snames ssi ) { T x → ( string_data x ) F → `` }
+                : ( Vec i ) a3 ( vec_new [i] )
+                ( vec_push [i] a3 ( gk_arg_dev . pl vtab ) )
+                ( vec_push [i] a3 ( gpu_arg_i64 . pl rows ) )
+                = r ( gk_run_dev . pg kit ( string_data . pl src ) sn2 1 256 a3 )
+                ( vec_free [i] a3 )
+                = k + ( _ti . pl ssegs + * ssi 2 1 ) 1
+            } {
+                = r ( _gp_fwd_node pg k )
+                = k + k 1
+            }
         }
     }
     ^ r
@@ -1077,8 +1152,29 @@ $ `deps/gpukit/src/dev.nu`
             } {}
             = k - ( _ti . pl segs * si 2 ) 1
         } {
-            = r ( _gp_bwd_node pg k )
-            = k - k 1
+            : ~ i ssi -1
+            : i nser2 / ( vec_len [i] . pl ssegs ) 2
+            : ~ i w2 0
+            ~ < w2 nser2 {
+                ? == ( _ti . pl ssegs + * w2 2 1 ) k {
+                    : s sn3 ?? ( vec_get [String] . pl sbnames w2 ) { T x → ( string_data x ) F → `` }
+                    ? > ( nurl_str_len sn3 ) 0 { = ssi w2 } {}
+                } {}
+                = w2 + w2 1
+            }
+            ? >= ssi 0 {
+                : s sb2 ?? ( vec_get [String] . pl sbnames ssi ) { T x → ( string_data x ) F → `` }
+                : ( Vec i ) a3 ( vec_new [i] )
+                ( vec_push [i] a3 ( gk_arg_dev . pl vtab ) )
+                ( vec_push [i] a3 ( gk_arg_dev . pl gtab ) )
+                ( vec_push [i] a3 ( gpu_arg_i64 . pl rows ) )
+                = r ( gk_run_dev . pg kit ( string_data . pl src ) sb2 1 256 a3 )
+                ( vec_free [i] a3 )
+                = k - ( _ti . pl ssegs * ssi 2 ) 1
+            } {
+                = r ( _gp_bwd_node pg k )
+                = k - k 1
+            }
         }
     }
     ^ r
@@ -1091,6 +1187,18 @@ $ `deps/gpukit/src/dev.nu`
     ( gk_autosync T )
     ? r { ^ ( gk_sync . pg kit ) } {}
     ^ F
+}
+
+// Fusion pays where kernel LAUNCH LATENCY dominates — the cuda backend.
+// The cpu backend has no launch latency and simulates a block's threads
+// as fibers, so a barrier-heavy fused kernel only adds swapcontext cost
+// there; the per-node path is already the optimal cpu execution. The
+// planner still builds (the bit gates run everywhere) — this is the
+// production selector.
+@ gpfuse_worthwhile * GProg pg → b {
+    ? . pg ok {} { ^ F }
+    : *GpuKit kit . pg kit
+    ^ == 1 ( nurl_str_eq ( gk_backend kit ) `cuda` )
 }
 
 // The megakernel episode as ONE CUDA graph: fused forward + fused
@@ -1115,4 +1223,360 @@ $ `deps/gpukit/src/dev.nu`
     } {}
     ? != exec 0 { ( gpu_graph_free exec ) } {}
     ^ F
+}
+
+// ── serial-space fusion ──────────────────────────────────────────────
+// The scalar tail — L2 terms, sum/mean reductions, the loss chain — is a
+// string of tiny per-node kernels (gp_reduce already runs single-thread).
+// A maximal consecutive run of SERIAL-fusable nodes becomes one
+// single-thread kernel with the nodes' exact per-element expressions in
+// program order; elements are independent (or serially reduced exactly
+// like gp_reduce), so values stay bit-identical. Row segments take
+// priority; serial segments claim what is left.
+
+@ _gpf_smax → i { ^ 16384 }
+
+@ _gpf_in_rowseg * GpPlan pl i k → b {
+    : i nseg / ( vec_len [i] . pl segs ) 2
+    : ~ i w 0
+    ~ < w nseg {
+        ? & >= k ( _ti . pl segs * w 2 ) <= k ( _ti . pl segs + * w 2 1 ) { ^ T } {}
+        = w + w 1
+    }
+    ^ F
+}
+
+@ _gpf_serial_ok * GProg pg i k → b {
+    : GpNode nd ( _gp_node pg k )
+    : i op . nd op
+    ? <= op ( gop_const ) { ^ F }
+    ? | == op ( gop_sum ) == op ( gop_mean ) { ^ T } {}
+    ? > . nd n ( _gpf_smax ) { ^ F }
+    ? & >= op ( gop_add ) <= op ( gop_div ) {
+        : GpNode na ( _gp_node pg . nd a )
+        : GpNode nb ( _gp_node pg . nd b )
+        ? & & == . na rows . nd rows == . na cols . nd cols == . na n . nd n {} { ^ F }
+        ? == . nb n 1 { ^ T } {}
+        ^ & & == . nb rows . nd rows == . nb cols . nd cols == . nb n . nd n
+    } {}
+    ? & >= op ( gop_neg ) <= op ( gop_sqrt ) { ^ T } {}
+    ^ F
+}
+
+// v<id>[<ix>] / g<id>[<ix>]
+@ _gpf_sel String o i id s ix → v {
+    ( _gpf_t o id )
+    ( string_push_str o `[` )
+    ( string_push_str o ix )
+    ( string_push_str o `]` )
+}
+
+@ _gpf_sgel String o i id s ix → v {
+    ( _gpf_g o id )
+    ( string_push_str o `[` )
+    ( string_push_str o ix )
+    ( string_push_str o `]` )
+}
+
+// b-side element with the scalar-[1] broadcast collapsed to [0].
+@ _gpf_sinb String o * GProg pg i inid s ix → v {
+    : GpNode nb ( _gp_node pg inid )
+    ( _gpf_sel o inid ? == . nb n 1 `0` ix )
+}
+
+// Serial forward stages; node values in program order, exact expressions.
+@ _gpf_emit_ser_stages * GProg pg i lo i hi String o ( Vec i ) vids → i {
+    : ~ i stages 0
+    : ~ i k lo
+    ~ <= k hi {
+        : GpNode nd ( _gp_node pg k )
+        : i op . nd op
+        : b _s ( _gpf_seen vids k )
+        = stages + stages 1
+        ? | == op ( gop_sum ) == op ( gop_mean ) {
+            : GpNode na ( _gp_node pg . nd a )
+            : b _a ( _gpf_seen vids . nd a )
+            // gp_reduce verbatim — serial in thread 0, exact order
+            ( string_push_str o `    if (threadIdx.x == 0) { double acc = 0.0;\n      for (long long q = 0; q < ` )
+            ( string_push_str o ( nurl_str_int . na n ) )
+            ( string_push_str o `; q++) acc = __dadd_rn(acc, ` )
+            ( _gpf_sel o . nd a `q` )
+            ( string_push_str o `);\n      ` )
+            ? == op ( gop_mean ) {
+                ( string_push_str o `acc = __ddiv_rn(acc, (double)` )
+                ( string_push_str o ( nurl_str_int . na n ) )
+                ( string_push_str o `);\n      ` )
+            } {}
+            ( _gpf_sel o k `0` )
+            ( string_push_str o ` = acc; }\n    __syncthreads();\n` )
+        } {
+            : b _a2 ( _gpf_seen vids . nd a )
+            ? >= . nd b 0 { : b _b2 ( _gpf_seen vids . nd b ) } {}
+            ( string_push_str o `    for (long long e = threadIdx.x; e < ` )
+            ( string_push_str o ( nurl_str_int . nd n ) )
+            ( string_push_str o `; e += blockDim.x) ` )
+            ( _gpf_sel o k `e` )
+            ( string_push_str o ` = ` )
+            ( _gpf_sexpr pg k o )
+            ( string_push_str o `;\n    __syncthreads();\n` )
+        }
+        = k + k 1
+    }
+    ^ stages
+}
+
+// The serial per-element expression at flat index e (gp_ew_bc / gp_scal /
+// gp_trans forms with the trivial layouts this class permits).
+@ _gpf_sexpr * GProg pg i k String o → v {
+    : GpNode nd ( _gp_node pg k )
+    : i op . nd op
+    ? == op ( gop_add ) { ( string_push_str o `__dadd_rn(` ) ( _gpf_sel o . nd a `e` ) ( string_push_str o `, ` ) ( _gpf_sinb o pg . nd b `e` ) ( string_push_str o `)` ) ^ v } {}
+    ? == op ( gop_sub ) { ( string_push_str o `__dsub_rn(` ) ( _gpf_sel o . nd a `e` ) ( string_push_str o `, ` ) ( _gpf_sinb o pg . nd b `e` ) ( string_push_str o `)` ) ^ v } {}
+    ? == op ( gop_mul ) { ( string_push_str o `__dmul_rn(` ) ( _gpf_sel o . nd a `e` ) ( string_push_str o `, ` ) ( _gpf_sinb o pg . nd b `e` ) ( string_push_str o `)` ) ^ v } {}
+    ? == op ( gop_div ) { ( string_push_str o `__ddiv_rn(` ) ( _gpf_sel o . nd a `e` ) ( string_push_str o `, ` ) ( _gpf_sinb o pg . nd b `e` ) ( string_push_str o `)` ) ^ v } {}
+    ? == op ( gop_neg ) { ( string_push_str o `__dsub_rn(0.0, ` ) ( _gpf_sel o . nd a `e` ) ( string_push_str o `)` ) ^ v } {}
+    ? == op ( gop_adds ) { ( string_push_str o `__dadd_rn(` ) ( _gpf_sel o . nd a `e` ) ( string_push_str o `, ` ) ( _gpf_lit o . nd s ) ( string_push_str o `)` ) ^ v } {}
+    ? == op ( gop_muls ) { ( string_push_str o `__dmul_rn(` ) ( _gpf_sel o . nd a `e` ) ( string_push_str o `, ` ) ( _gpf_lit o . nd s ) ( string_push_str o `)` ) ^ v } {}
+    ? == op ( gop_relu ) { ( _gpf_sel o . nd a `e` ) ( string_push_str o ` > 0.0 ? ` ) ( _gpf_sel o . nd a `e` ) ( string_push_str o ` : 0.0` ) ^ v } {}
+    ? == op ( gop_sigmoid ) { ( string_push_str o `__ddiv_rn(1.0, __dadd_rn(1.0, exp(__dsub_rn(0.0, ` ) ( _gpf_sel o . nd a `e` ) ( string_push_str o `))))` ) ^ v } {}
+    ? == op ( gop_tanh ) {
+        ( string_push_str o `__ddiv_rn(__dsub_rn(exp(__dmul_rn(2.0, ` )
+        ( _gpf_sel o . nd a `e` )
+        ( string_push_str o `)), 1.0), __dadd_rn(exp(__dmul_rn(2.0, ` )
+        ( _gpf_sel o . nd a `e` )
+        ( string_push_str o `)), 1.0))` )
+        ^ v
+    } {}
+    ? == op ( gop_exp ) { ( string_push_str o `exp(` ) ( _gpf_sel o . nd a `e` ) ( string_push_str o `)` ) ^ v } {}
+    ? == op ( gop_log ) { ( string_push_str o `log(` ) ( _gpf_sel o . nd a `e` ) ( string_push_str o `)` ) ^ v } {}
+    ? == op ( gop_sqrt ) { ( string_push_str o `sqrt(` ) ( _gpf_sel o . nd a `e` ) ( string_push_str o `)` ) ^ v } {}
+    ( string_push_str o `0.0 /* unreachable */` )
+}
+
+// Serial backward stages hi→lo — gp_bw_reduce / gp_bw_unary / accred
+// element order, one thread, exact accumulate order per element.
+@ _gpf_emit_ser_bwd_stages * GProg pg i lo i hi String o ( Vec i ) vids ( Vec i ) gids → i {
+    : ~ i stages 0
+    : ~ i k hi
+    ~ >= k lo {
+        : GpNode nd ( _gp_node pg k )
+        : i op . nd op
+        ? == . nd reach 1 {
+            ? | == op ( gop_sum ) == op ( gop_mean ) {
+                : GpNode na ( _gp_node pg . nd a )
+                ? == . na reach 1 {
+                    = stages + stages 1
+                    : b _g ( _gpf_seen gids k )
+                    : b _t ( _gpf_seen gids . nd a )
+                    ( string_push_str o `    { double g0 = ` )
+                    ( _gpf_sgel o k `0` )
+                    ( string_push_str o `;\n      ` )
+                    ? == op ( gop_mean ) {
+                        ( string_push_str o `g0 = __ddiv_rn(g0, (double)` )
+                        ( string_push_str o ( nurl_str_int . na n ) )
+                        ( string_push_str o `);\n      ` )
+                    } {}
+                    ( string_push_str o `for (long long e = threadIdx.x; e < ` )
+                    ( string_push_str o ( nurl_str_int . na n ) )
+                    ( string_push_str o `; e += blockDim.x) ` )
+                    ( _gpf_sgel o . nd a `e` )
+                    ( string_push_str o ` = __dadd_rn(` )
+                    ( _gpf_sgel o . nd a `e` )
+                    ( string_push_str o `, g0); }\n    __syncthreads();\n` )
+                } {}
+            } {}
+            ? & >= op ( gop_add ) <= op ( gop_div ) {
+                : GpNode na ( _gp_node pg . nd a )
+                : GpNode nb ( _gp_node pg . nd b )
+                : b needa == . na reach 1
+                : b needb == . nb reach 1
+                ? | needa needb {
+                    = stages + stages 1
+                    : b _g ( _gpf_seen gids k )
+                    ? needa {
+                        : b _t ( _gpf_seen gids . nd a )
+                        ( string_push_str o `    for (long long e = threadIdx.x; e < ` )
+                        ( string_push_str o ( nurl_str_int . nd n ) )
+                        ( string_push_str o `; e += blockDim.x) ` )
+                        ( _gpf_sgel o . nd a `e` )
+                        ( string_push_str o ` = __dadd_rn(` )
+                        ( _gpf_sgel o . nd a `e` )
+                        ( string_push_str o `, __dmul_rn(1.0, ` )
+                        ? == op ( gop_add ) { ( _gpf_sgel o k `e` ) } {}
+                        ? == op ( gop_sub ) { ( _gpf_sgel o k `e` ) } {}
+                        ? == op ( gop_mul ) {
+                            : b _v ( _gpf_seen vids . nd b )
+                            ( string_push_str o `__dmul_rn(` )
+                            ( _gpf_sgel o k `e` )
+                            ( string_push_str o `, ` )
+                            ( _gpf_sinb o pg . nd b `e` )
+                            ( string_push_str o `)` )
+                        } {}
+                        ? == op ( gop_div ) {
+                            : b _v ( _gpf_seen vids . nd b )
+                            ( string_push_str o `__ddiv_rn(` )
+                            ( _gpf_sgel o k `e` )
+                            ( string_push_str o `, ` )
+                            ( _gpf_sinb o pg . nd b `e` )
+                            ( string_push_str o `)` )
+                        } {}
+                        ( string_push_str o `));\n    __syncthreads();\n` )
+                    } {}
+                    ? needb {
+                        : b _t2 ( _gpf_seen gids . nd b )
+                        : s sg2 ? | == op ( gop_sub ) == op ( gop_div ) `-1.0` `1.0`
+                        ? == . nb n 1 {
+                            // scalar target: accred's serial odometer
+                            ( string_push_str o `    if (threadIdx.x == 0) { double g0 = ` )
+                            ( _gpf_sgel o . nd b `0` )
+                            ( string_push_str o `;\n      for (long long e = 0; e < ` )
+                            ( string_push_str o ( nurl_str_int . nd n ) )
+                            ( string_push_str o `; e++) g0 = __dadd_rn(g0, __dmul_rn(` )
+                            ( string_push_str o sg2 )
+                            ( string_push_str o `, ` )
+                            ( _gpf_ser_bsrc pg k o )
+                            ( string_push_str o `));\n      ` )
+                            ( _gpf_sgel o . nd b `0` )
+                            ( string_push_str o ` = g0; }\n    __syncthreads();\n` )
+                        } {
+                            ( string_push_str o `    for (long long e = threadIdx.x; e < ` )
+                            ( string_push_str o ( nurl_str_int . nd n ) )
+                            ( string_push_str o `; e += blockDim.x) ` )
+                            ( _gpf_sgel o . nd b `e` )
+                            ( string_push_str o ` = __dadd_rn(` )
+                            ( _gpf_sgel o . nd b `e` )
+                            ( string_push_str o `, __dmul_rn(` )
+                            ( string_push_str o sg2 )
+                            ( string_push_str o `, ` )
+                            ( _gpf_ser_bsrc pg k o )
+                            ( string_push_str o `));\n    __syncthreads();\n` )
+                        }
+                    } {}
+                } {}
+            } {}
+            ? & >= op ( gop_neg ) <= op ( gop_sqrt ) {
+                : GpNode na ( _gp_node pg . nd a )
+                ? == . na reach 1 {
+                    = stages + stages 1
+                    : b _g ( _gpf_seen gids k )
+                    : b _t ( _gpf_seen gids . nd a )
+                    ( string_push_str o `    for (long long e = threadIdx.x; e < ` )
+                    ( string_push_str o ( nurl_str_int . nd n ) )
+                    ( string_push_str o `; e += blockDim.x) { double gi = ` )
+                    ( _gpf_sgel o k `e` )
+                    ( string_push_str o `; ` )
+                    ( _gpf_sgel o . nd a `e` )
+                    ( string_push_str o ` = ` )
+                    ( _gpf_ser_unary pg k o )
+                    ( string_push_str o `; }\n    __syncthreads();\n` )
+                } {}
+            } {}
+        } {}
+        = k - k 1
+    }
+    ^ stages
+}
+
+// mul/div/add/sub b-side source element (accred's scr chain, inline).
+@ _gpf_ser_bsrc * GProg pg i k String o → v {
+    : GpNode nd ( _gp_node pg k )
+    : i op . nd op
+    ? == op ( gop_mul ) {
+        ( string_push_str o `__dmul_rn(` )
+        ( _gpf_sgel o k `e` )
+        ( string_push_str o `, ` )
+        ( _gpf_sel o . nd a `e` )
+        ( string_push_str o `)` )
+        ^ v
+    } {}
+    ? == op ( gop_div ) {
+        ( string_push_str o `__ddiv_rn(__dmul_rn(` )
+        ( _gpf_sgel o k `e` )
+        ( string_push_str o `, ` )
+        ( _gpf_sel o k `e` )
+        ( string_push_str o `), ` )
+        ( _gpf_sinb o pg . nd b `e` )
+        ( string_push_str o `)` )
+        ^ v
+    } {}
+    ( _gpf_sgel o k `e` )
+}
+
+// gp_bw_unary's accumulate expression with gi bound, serial index e.
+@ _gpf_ser_unary * GProg pg i k String o → v {
+    : GpNode nd ( _gp_node pg k )
+    : i op . nd op
+    ? == op ( gop_neg ) { ( string_push_str o `__dsub_rn(` ) ( _gpf_sgel o . nd a `e` ) ( string_push_str o `, gi)` ) ^ v } {}
+    ? == op ( gop_adds ) { ( string_push_str o `__dadd_rn(` ) ( _gpf_sgel o . nd a `e` ) ( string_push_str o `, gi)` ) ^ v } {}
+    ? == op ( gop_muls ) { ( string_push_str o `__dadd_rn(` ) ( _gpf_sgel o . nd a `e` ) ( string_push_str o `, __dmul_rn(gi, ` ) ( _gpf_lit o . nd s ) ( string_push_str o `))` ) ^ v } {}
+    ? == op ( gop_relu ) { ( _gpf_sel o k `e` ) ( string_push_str o ` > 0.0 ? __dadd_rn(` ) ( _gpf_sgel o . nd a `e` ) ( string_push_str o `, gi) : ` ) ( _gpf_sgel o . nd a `e` ) ^ v } {}
+    ? == op ( gop_sigmoid ) { ( string_push_str o `__dadd_rn(` ) ( _gpf_sgel o . nd a `e` ) ( string_push_str o `, __dmul_rn(gi, __dmul_rn(` ) ( _gpf_sel o k `e` ) ( string_push_str o `, __dsub_rn(1.0, ` ) ( _gpf_sel o k `e` ) ( string_push_str o `))))` ) ^ v } {}
+    ? == op ( gop_tanh ) { ( string_push_str o `__dadd_rn(` ) ( _gpf_sgel o . nd a `e` ) ( string_push_str o `, __dmul_rn(gi, __dsub_rn(1.0, __dmul_rn(` ) ( _gpf_sel o k `e` ) ( string_push_str o `, ` ) ( _gpf_sel o k `e` ) ( string_push_str o `))))` ) ^ v } {}
+    ? == op ( gop_exp ) { ( string_push_str o `__dadd_rn(` ) ( _gpf_sgel o . nd a `e` ) ( string_push_str o `, __dmul_rn(gi, ` ) ( _gpf_sel o k `e` ) ( string_push_str o `))` ) ^ v } {}
+    ? == op ( gop_log ) { ( string_push_str o `__dadd_rn(` ) ( _gpf_sgel o . nd a `e` ) ( string_push_str o `, __ddiv_rn(gi, ` ) ( _gpf_sel o . nd a `e` ) ( string_push_str o `))` ) ^ v } {}
+    ( string_push_str o `__dadd_rn(` )
+    ( _gpf_sgel o . nd a `e` )
+    ( string_push_str o `, __ddiv_rn(gi, __dmul_rn(2.0, ` )
+    ( _gpf_sel o k `e` )
+    ( string_push_str o `)))` )
+}
+
+// Assemble the serial fwd kernel (T on success — always has stages).
+@ _gpf_emit_ser_seg * GProg pg i lo i hi s kname String o → b {
+    : String body ( string_new )
+    : ( Vec i ) vids ( vec_new [i] )
+    : i stages ( _gpf_emit_ser_stages pg lo hi body vids )
+    ? > stages 0 {} {
+        ( string_free body )
+        ( vec_free [i] vids )
+        ^ F
+    }
+    ( string_push_str o `extern "C" __global__ void ` )
+    ( string_push_str o kname )
+    ( string_push_str o `(const long long* vt, long long B)\n{\n` )
+    ( string_push_str o `    if (blockIdx.x != 0) return;\n` )
+    : ~ i q 0
+    ~ < q ( vec_len [i] vids ) {
+        ( _gpf_decl o ( _ti vids q ) T )
+        = q + q 1
+    }
+    ( string_push_str o ( string_data body ) )
+    ( string_push_str o `}\n` )
+    ( string_free body )
+    ( vec_free [i] vids )
+    ^ T
+}
+
+// Assemble the serial bwd kernel (F when no reach-1 stages).
+@ _gpf_emit_ser_bwd_seg * GProg pg i lo i hi s kname String o → b {
+    : String body ( string_new )
+    : ( Vec i ) vids ( vec_new [i] )
+    : ( Vec i ) gids ( vec_new [i] )
+    : i stages ( _gpf_emit_ser_bwd_stages pg lo hi body vids gids )
+    ? > stages 0 {} {
+        ( string_free body )
+        ( vec_free [i] vids )
+        ( vec_free [i] gids )
+        ^ F
+    }
+    ( string_push_str o `extern "C" __global__ void ` )
+    ( string_push_str o kname )
+    ( string_push_str o `(const long long* vt, const long long* gt, long long B)\n{\n` )
+    ( string_push_str o `    if (blockIdx.x != 0) return;\n` )
+    : ~ i q 0
+    ~ < q ( vec_len [i] vids ) {
+        ( _gpf_decl o ( _ti vids q ) F )
+        = q + q 1
+    }
+    = q 0
+    ~ < q ( vec_len [i] gids ) {
+        ( _gpf_gdecl o ( _ti gids q ) )
+        = q + q 1
+    }
+    ( string_push_str o ( string_data body ) )
+    ( string_push_str o `}\n` )
+    ( string_free body )
+    ( vec_free [i] vids )
+    ( vec_free [i] gids )
+    ^ T
 }

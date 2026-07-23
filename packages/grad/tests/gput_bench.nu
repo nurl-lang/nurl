@@ -268,7 +268,7 @@ $ `deps/gpukit/src/dev.nu`
         ( gpopt_add gom pgm W3m ALPHA ) ( gpopt_add gom pgm B3m 0.0 )
         : *GpPlan plm ( gpfuse_plan pgm )
         = msegs / ( vec_len [i] . plm segs ) 2
-        ? & ( gput_ok pgm ) . plm ok {
+        ? & & ( gput_ok pgm ) . plm ok ( gpfuse_worthwhile pgm ) {
             = mok T
             = mgraph ( gpfuse_graph_capture_train pgm plm gom )
             = t6 ( monotonic_ns )
@@ -343,7 +343,7 @@ $ `deps/gpukit/src/dev.nu`
         ( nurl_print ? magree `mega endpoints BIT-EQUAL\n` `mega endpoints DIFFER\n` )
         ? magree {} { ^ 1 }
     } {
-        ( nurl_print `megakernel:    plan unavailable\n` )
+        ( nurl_print `megakernel:    skipped (no launch latency to remove on this backend)\n` )
     }
     ( gpopt_free go )
     ( gput_free pg )
