@@ -36,6 +36,8 @@ $ `deps/gguf/src/dequant.nu`
 $ `deps/grad/src/grad.nu`
 $ `deps/grad/src/gput.nu`
 $ `deps/nn/src/nn.nu`
+$ `deps/safetensor/src/safetensor.nu`
+$ `deps/safetensor/src/write.nu`
 $ `deps/tensor/src/tensor.nu`
 $ `deps/gpu/src/gpu.nu`
 $ `deps/gpukit/src/gpukit.nu`
@@ -720,73 +722,21 @@ $ `deps/gpukit/src/dev.nu`
     ^ @ FtTrain { ok l0 l1 aflat bflat }
 }
 
-// ── a minimal safetensors emitter (JSON header + raw LE data) ────────
+// ── safetensors output (via the safetensor package's writer) ─────────
 
-: StOut {
-    String hdr
-    ( Vec u ) data
-    b first
-}
-
-@ __sto_new → StOut { ^ @ StOut { ( string_from `{` ) ( vec_new [u] ) T } }
-
-// Append one F32 tensor (values given as f64, rounded on write).
-@ __sto_f32 StOut o s name ( Vec f ) v i d0 i d1 → StOut {
-    : ~ StOut so o
-    ? . so first { = . so first F } { ( string_push_str . so hdr `,` ) }
-    : i at ( vec_len [u] . so data )
-    : ~ i k 0
-    ~ < k ( vec_len [f] v ) {
-        ( bytes_push_f32_le . so data # f32 ( _tf v k ) )
-        = k + k 1
-    }
-    ( string_push_str . so hdr `"` )
-    ( string_push_str . so hdr name )
-    ( string_push_str . so hdr `":{"dtype":"F32","shape":[` )
-    ( string_push_str . so hdr ( nurl_str_int d0 ) )
-    ? > d1 0 {
-        ( string_push_str . so hdr `,` )
-        ( string_push_str . so hdr ( nurl_str_int d1 ) )
-    } {}
-    ( string_push_str . so hdr `],"data_offsets":[` )
-    ( string_push_str . so hdr ( nurl_str_int at ) )
-    ( string_push_str . so hdr `,` )
-    ( string_push_str . so hdr ( nurl_str_int ( vec_len [u] . so data ) ) )
-    ( string_push_str . so hdr `]}` )
-    ^ so
-}
-
-@ __sto_write StOut o s path → !v String {
-    : ~ StOut so o
-    ( string_push_str . so hdr `}` )
-    : ( Vec u ) out ( vec_new [u] )
-    ( bytes_push_u64_le out # u64 ( string_len . so hdr ) )
-    : ~ i k 0
-    ~ < k ( string_len . so hdr ) {
-        ( vec_push [u] out ( nurl_str_get ( string_data . so hdr ) k ) )
-        = k + k 1
-    }
-    = k 0
-    ~ < k ( vec_len [u] . so data ) {
-        ( vec_push [u] out ?? ( vec_get [u] . so data k ) { T x → x F → # u 0 } )
-        = k + k 1
-    }
-    : ~ b wok T
-    ?? ( write_file_bytes path out ) {
-        T _ → {}
-        F _ → { = wok F }
-    }
-    ( vec_free [u] out )
-    ( string_free . so hdr )
-    ( vec_free [u] . so data )
-    ? wok { ^ @ !v String { T } }
-    ^ @ !v String { F ( string_from `finetune: cannot write file` ) }
+// Add one F32 tensor with shape [d0] (d1==0) or [d0,d1].
+@ __ft_st_add * StWriter w s name ( Vec f ) v i d0 i d1 → v {
+    : ( Vec i ) sh ( vec_new [i] )
+    ( vec_push [i] sh d0 )
+    ? > d1 0 { ( vec_push [i] sh d1 ) } {}
+    ( stw_add_f32 w name sh v )
+    ( vec_free [i] sh )
 }
 
 // Save trained adapters as a safetensors file: per slot,
 // blk.<L>.<which>.lora_a [in,r] and .lora_b [r,out], F32.
 @ ft_adapters_save s path * FtModel m FtTrain t i r → !v String {
-    : ~ StOut so ( __sto_new )
+    : *StWriter so ( stw_new )
     : i nslot * 7 . m n_layer
     : ~ i sl 0
     : ~ i aoff 0
@@ -813,19 +763,21 @@ $ `deps/gpukit/src/dev.nu`
         : ( Vec f ) av ( vec_with_cap [f] * in r )
         : ~ i k 0
         ~ < k * in r { ( vec_push [f] av ( _tf . t aflat + aoff k ) ) = k + k 1 }
-        = so ( __sto_f32 so ( string_data na ) av in r )
+        ( __ft_st_add so ( string_data na ) av in r )
         ( vec_free [f] av )
         : ( Vec f ) bv ( vec_with_cap [f] * r out )
         = k 0
         ~ < k * r out { ( vec_push [f] bv ( _tf . t bflat + boff k ) ) = k + k 1 }
-        = so ( __sto_f32 so ( string_data nb ) bv r out )
+        ( __ft_st_add so ( string_data nb ) bv r out )
         ( vec_free [f] bv )
         ( string_free na ) ( string_free nb )
         = aoff + aoff * in r
         = boff + boff * r out
         = sl + sl 1
     }
-    ^ ( __sto_write so path )
+    : !v String res ( stw_write so path )
+    ( stw_free so )
+    ^ res
 }
 
 // ── merge: base + (α/r)·A·B → a full-weights safetensors file ────────
@@ -836,7 +788,7 @@ $ `deps/gpukit/src/dev.nu`
 // does for GGUFs, so the file is a genuine HF checkpoint.
 
 // merged tape-layout [in,out] → emit [out,in] rows; q/k: NORM re-permute.
-@ __ft_emit_w StOut so s name FtW w b reperm i heads i hd → StOut {
+@ __ft_emit_w * StWriter so s name FtW w b reperm i heads i hd → v {
     : i in . w rows
     : i out . w cols
     : ( Vec f ) e ( vec_with_cap [f] * out in )
@@ -859,9 +811,8 @@ $ `deps/gpukit/src/dev.nu`
         }
         = o + o 1
     }
-    : StOut so2 ( __sto_f32 so name e out in )
+    ( __ft_st_add so name e out in )
     ( vec_free [f] e )
-    ^ so2
 }
 
 // Merge every adapter into its base weight and write the FULL model as a
@@ -874,13 +825,13 @@ $ `deps/gpukit/src/dev.nu`
 // projections (a bisect handle for the merged-path diagnostics).
 @ ft_merge_st_mask s path * FtModel m FtTrain t i r f alpha i mask → !v String {
     : f scale / alpha # f r
-    : ~ StOut so ( __sto_new )
+    : *StWriter so ( stw_new )
     // embeddings + final norm (frozen; [V,H] is already [out,in])
     ? == % mask 2 1 {
-        = so ( __sto_f32 so `model.embed_tokens.weight` . m embd . m n_vocab . m n_embd )
+        ( __ft_st_add so `model.embed_tokens.weight` . m embd . m n_vocab . m n_embd )
     } {}
     ? == % / mask 8 2 1 {
-        = so ( __sto_f32 so `model.norm.weight` . m norm_f . m n_embd 0 )
+        ( __ft_st_add so `model.norm.weight` . m norm_f . m n_embd 0 )
     } {}
     : i nslot * 7 . m n_layer
     : ~ i sl 0
@@ -898,14 +849,14 @@ $ `deps/gpukit/src/dev.nu`
             : String n1 ( string_from `model.layers.` )
             ( string_push_str n1 ( nurl_str_int L ) )
             ( string_push_str n1 `.input_layernorm.weight` )
-            = so ( __sto_f32 so ( string_data n1 ) . anv v . m n_embd 0 )
+            ( __ft_st_add so ( string_data n1 ) . anv v . m n_embd 0 )
             ( string_free n1 )
             : s fnp ?? ( vec_get [s] . m fn L ) { T x → x F → # s 0 }
             : *FtV fnv # *FtV fnp
             : String n2 ( string_from `model.layers.` )
             ( string_push_str n2 ( nurl_str_int L ) )
             ( string_push_str n2 `.post_attention_layernorm.weight` )
-            = so ( __sto_f32 so ( string_data n2 ) . fnv v . m n_embd 0 )
+            ( __ft_st_add so ( string_data n2 ) . fnv v . m n_embd 0 )
             ( string_free n2 )
         } {}
         : ~ FtW w0 @ FtW { 0 0 ( vec_new [f] ) }
@@ -952,7 +903,7 @@ $ `deps/gpukit/src/dev.nu`
         : b reperm F
         : i heads ? == w 0 . m n_head . m n_kv
         : b want ? <= w 3 == % / mask 2 2 1 == % / mask 4 2 1
-        ? want { = so ( __ft_emit_w so ( string_data nm ) mw reperm heads . m head_dim ) } {}
+        ? want { ( __ft_emit_w so ( string_data nm ) mw reperm heads . m head_dim ) } {}
         ( string_free nm )
         ( vec_free [f] md )
         // qwen2 q/k/v biases pass through unmerged (NEOX: no reperm)
@@ -970,7 +921,7 @@ $ `deps/gpukit/src/dev.nu`
                 ( string_push_str nb ( nurl_str_int L ) )
                 ( string_push_str nb `.` )
                 ( string_push_str nb bn )
-                = so ( __sto_f32 so ( string_data nb ) . bv2 v out 0 )
+                ( __ft_st_add so ( string_data nb ) . bv2 v out 0 )
                 ( string_free nb )
             } {}
         } {}
@@ -978,7 +929,9 @@ $ `deps/gpukit/src/dev.nu`
         = boff + boff * r out
         = sl + sl 1
     }
-    ^ ( __sto_write so path )
+    : !v String res ( stw_write so path )
+    ( stw_free so )
+    ^ res
 }
 
 // ── the CLI driver ───────────────────────────────────────────────────
