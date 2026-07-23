@@ -26,7 +26,7 @@
 //   nurllama convert <hf-dir> <out.gguf>      HF checkpoint → GGUF
 //   nurllama finetune <model.gguf> <data.txt>  LoRA finetune on the GPU
 //                     [--out a.st] [--merged m.st] [--steps N] [--lr X]
-//                     [--rank R] [--alpha A] [--seq T] [--seed S]
+//                     [--rank R] [--alpha A] [--seq T] [--seed S] [--f32]
 //     --type q8_0 (default) | f16 | bf16 | f32
 //   nurllama logits <model.gguf> <prompt>     final-position logits, one
 //                                             per line (verification tap)
@@ -578,6 +578,7 @@ $ `stdlib/std/term.nu`
     ( args_opt p `alpha` 0 `F` `finetune: LoRA alpha (default 16)` )
     ( args_opt p `seq` 0 `N` `finetune: training window in tokens (default 64)` )
     ( args_opt p `seed` 0 `N` `finetune: adapter init seed (default 42)` )
+    ( args_flag p `f32` 0 `finetune: run the device replay in float32 (half the base-weight VRAM; float32 precision, not bit-exact to f64)` )
     ( args_opt p `n-predict` 110 `N` `run: max tokens to generate (default 64)` )
     ( args_opt p `temp` 0 `F` `run: temperature; 0 = greedy (default 0.8)` )
     ( args_opt p `topk` 0 `N` `run: top-k filter (default 40; 0 = off)` )
@@ -606,7 +607,7 @@ $ `stdlib/std/term.nu`
         ^ 0
     } {}
     ? ( args_present p `version` ) {
-        ( nurl_print `nurllama 0.12.2\n` )
+        ( nurl_print `nurllama 0.12.3\n` )
         ( args_free p )
         ^ 0
     } {}
@@ -733,7 +734,8 @@ $ `stdlib/std/term.nu`
         ?? ( string_to_float slr ) { T v → { = lr v } F _ → {} }
         : ~ f alpha 16.0
         ?? ( string_to_float salpha ) { T v → { = alpha v } F _ → {} }
-        : i rc ( nurllama_finetune modp datap ( string_data souts ) ( string_data smerged ) steps lr rank alpha seq seed )
+        : b f32 ? == ( args_present p `f32` ) 1 T F
+        : i rc ( nurllama_finetune modp datap ( string_data souts ) ( string_data smerged ) steps lr rank alpha seq seed f32 )
         ( string_free souts ) ( string_free smerged ) ( string_free ssteps )
         ( string_free slr ) ( string_free srank ) ( string_free salpha )
         ( string_free sseq ) ( string_free sseed )

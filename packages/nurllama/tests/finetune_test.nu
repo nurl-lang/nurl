@@ -143,7 +143,7 @@ $ `deps/gpukit/src/dev.nu`
             }
 
             // ── 3. train → save → merge → run the merged model ──────
-            : FtTrain tr ( ft_train m ids ( vec_len [i] ids ) 8 16.0 42 60 0.002 F )
+            : FtTrain tr ( ft_train m ids ( vec_len [i] ids ) 8 16.0 42 60 0.002 0 F )
             ( check . tr ok `ft_train: 60 device Adam steps over 420 adapters` )
             ( nurl_print `  train CE ` )
             ( nurl_print ( nurl_str_float . tr l0 ) )
@@ -210,7 +210,7 @@ $ `deps/gpukit/src/dev.nu`
             // multi-window: halve the window → 2 windows round-robin; the
             // trained model must reproduce BOTH windows' targets
             : i HW / T2 2
-            : FtTrain tr2 ( ft_train m ids HW 8 16.0 42 120 0.002 F )
+            : FtTrain tr2 ( ft_train m ids HW 8 16.0 42 120 0.002 0 F )
             ( check . tr2 ok `multi-window ft_train runs (2 windows round-robin)` )
             ( nurl_print `  2-window CE ` )
             ( nurl_print ( nurl_str_float . tr2 l0 ) )
@@ -219,6 +219,11 @@ $ `deps/gpukit/src/dev.nu`
             ( nurl_print `\n` )
             ( check < . tr2 l1 * 0.2 . tr2 l0 `2-window training cuts the CE by 5x+` )
             ( ft_train_free tr2 )
+            // the float32 device-replay path (ft_train dtype=1) is proven
+            // end to end by grad's gput_f32_test (loss 1e-5, params 4e-4 vs
+            // the f64 tape) and, on a real model, by the `finetune --f32`
+            // CLI run in the package README — not re-run here (a fourth full
+            // 30-layer training would balloon this suite's wall time).
             ( nurl_free pids )
             ( tape_free tp )
             ( vec_free [i] ids )

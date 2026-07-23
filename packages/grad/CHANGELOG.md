@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.6.1
+
+**f32 replay is now fast enough for a real model.** Two capture-time
+costs that made f32 mode unusable on a 30-layer transformer are gone:
+
+- `_gp_src` regenerated the entire f32 kernel source — ten full-source
+  string passes over ~15 KB — on EVERY kernel launch (though only the
+  kernel NAME feeds gpukit's cache), so a training run spent thousands of
+  regenerations there. The source is constant; it is now built once and
+  memoized. This was the whole slowdown: a nurllama LoRA finetune that
+  stalled before step 10 now runs full speed (CE 5.86 -> 8.4e-5 in 40
+  steps on SmolLM-135M).
+- `_gp_upload_tensor`'s f32 path converted f64 -> f32 element-by-element
+  on the host; it now uploads with a straight memcpy into a transient
+  device buffer and converts with a kernel (`gp_f2f`), bounding both the
+  host cost and the peak VRAM spike for large frozen weights.
+
+No API or numerics change; gput_f32_test / gput_parity unchanged (5/5,
+15/15).
+
 ## 0.6.0
 
 **Float32 device replay.** `gput_capture_dt(kit, tp, loss, 1)` captures a

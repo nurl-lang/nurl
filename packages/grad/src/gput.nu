@@ -479,8 +479,21 @@ extern "C" __global__ void gp_opt(double* w, const double* g, double* m, double*
     i dtype  // 0 GK_F64 (default) · 1 GK_F32 (device replay in float32)
 }
 
+// The f32 source is constant but building it runs 10 full-source string
+// passes, so cache it — otherwise _gp_src (called on EVERY kernel launch,
+// though only the NAME feeds gpukit's cache) would regenerate ~15 KB of
+// string ops thousands of times per training and dominate the run.
+: ~ i g_gp_src_f32 0
+
+@ __gp_src_f32c → s {
+    ? != g_gp_src_f32 0 { ^ # s g_gp_src_f32 } {}
+    : String o ( string_from ( __gp_src_f32 ) )
+    = g_gp_src_f32 # i ( string_data o )
+    ^ # s g_gp_src_f32
+}
+
 // Kernel source for a program's dtype.
-@ _gp_src * GProg pg → s { ? == . pg dtype 1 { ^ ( __gp_src_f32 ) } {} ^ ( __gp_src_f64 ) }
+@ _gp_src * GProg pg → s { ? == . pg dtype 1 { ^ ( __gp_src_f32c ) } {} ^ ( __gp_src_f64 ) }
 
 // A kernel's name for the dtype (gp_ -> gpf_ in f32).
 @ __gp_kn * GProg pg s name → s {
@@ -582,9 +595,36 @@ extern "C" __global__ void gp_opt(double* w, const double* g, double* m, double*
     = . pg ok F
 }
 
-// Upload a CPU tensor's data into a fresh device buffer of the given dtype
-// (gk_dbuf_upload converts the f64 host data to f32 when edt == GK_F32).
+// A one-shot f64->f32 device converter. gk_dbuf_upload's f32 path converts
+// element-by-element on the HOST (one FFI per element) — fine for a small
+// vector, catastrophic for a large frozen weight (a 30-layer model's ~150M
+// consts turned capture into a >8-minute host loop). Instead: upload the
+// f64 data with a straight memcpy (the fast GK_F64 path) into a transient
+// staging buffer, then convert on the DEVICE.
+@ __gp_upload_f32 * GpuKit kit * Tensor t → GkBuf {
+    : i n ( vec_len [f] . t data )
+    : GkBuf out ( gk_dbuf_new kit n GK_F32 )
+    ? ( gk_buf_ok out ) {} { ^ ( _gp_nobuf ) }
+    : GkBuf stg ( gk_dbuf_new kit n GK_F64 )
+    ? ( gk_buf_ok stg ) {} { ( gk_dbuf_free out ) ^ ( _gp_nobuf ) }
+    ? ( gk_dbuf_upload kit stg . t data ) {} { ( gk_dbuf_free stg ) ( gk_dbuf_free out ) ^ ( _gp_nobuf ) }
+    : s src `extern "C" __global__ void gp_f2f(const double* in, float* out, long long n){ long long i = (long long)blockIdx.x * blockDim.x + threadIdx.x; if (i < n) out[i] = (float)in[i]; }`
+    : ( Vec i ) a ( vec_new [i] )
+    ( vec_push [i] a ( gk_arg_dev stg ) )
+    ( vec_push [i] a ( gk_arg_dev out ) )
+    ( vec_push [i] a ( gpu_arg_i64 n ) )
+    : b r ( gk_run_dev kit src `gp_f2f` ( gk_grid n 256 ) 256 a )
+    ( vec_free [i] a )
+    ( gk_dbuf_free stg )
+    ? r { ^ out } {}
+    ( gk_dbuf_free out )
+    ^ ( _gp_nobuf )
+}
+
+// Upload a CPU tensor's data into a fresh device buffer of the given dtype.
+// GK_F64 is a straight memcpy; GK_F32 converts on the device (see above).
 @ _gp_upload_tensor * GpuKit kit * Tensor t i edt → GkBuf {
+    ? == edt GK_F32 { ^ ( __gp_upload_f32 kit t ) } {}
     : i n ( vec_len [f] . t data )
     : GkBuf b ( gk_dbuf_new kit n edt )
     ? ( gk_buf_ok b ) {
