@@ -1,8 +1,8 @@
 [package]
 name = "gpukit"
-version = "0.4.2"
+version = "0.4.3"
 description = "The ergonomic GPU-compute toolkit for NURL — a diamond facade over the `gpu` package that kills the marshalling boilerplate every GPU-using package re-invents. Where `gpu` is the low-level interface (open a device, JIT-compile a CUDA-C kernel via NVRTC or the host-C++ CPU backend, allocate/upload/download device buffers, build the argument vector, compute a grid, launch, sync, free), `gpukit` collapses the ~35 lines of that dance per kernel into a list of typed bindings and one `gk_run`: a GpuKit with a per-name kernel cache, `gk_in_f`/`gk_in_i`/`gk_out_f`/`gk_out_i` (and raw-buffer + i32/i64/f32 scalar) bindings, and a workhorse that compiles-once, allocates a device buffer per binding, uploads inputs, marshals args in declaration order, launches, syncs, downloads outputs, and frees everything. The device-resident layer (GkBuf: GK_F32 | GK_F64 | GK_I64) keeps data on the GPU between ops and ships a dtype-generic kernel library that covers a full CNN / transformer forward pass: elementwise (including full N-D stride-broadcast — numpy broadcasting as a stride table), unary maps, matmul and batched matmul with batch broadcast, gather/scatter with ONNX index semantics, gemm (alpha/beta/transB/bias), conv2d / convtranspose2d / maxpool2d (NCHW), batchnorm, layernorm, leakyrelu, clip, erf, axis softmax, axis concat/slice, N-D transpose, nearest-neighbour resize, expand, L2 reduction, argmax and CLIP EOS read-out. Every wrapper validates buffers, dtypes and sizes and fails closed, so a wrong shape never reaches the device. True float32 semantics on GK_F32 (accumulation included, matching numpy float32 / onnxruntime); adds no numerics of its own — a kernel runs bit-for-bit the same through gk_run as through hand-written gpu_* calls, preserving the gpu package's CUDA / CPU-backend equivalence. Runs on the CPU backend when no CUDA device is present."
 license = "MIT OR Apache-2.0"
 
 [dependencies]
-gpu = { path = "../gpu", version = "^0.9.1" }
+gpu = { path = "../gpu", version = "^0.10" }
