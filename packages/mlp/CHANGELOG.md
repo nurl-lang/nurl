@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.4
+
+Widen the `grad` requirement to `^0.7` (megakernel fusion release). mlp's
+grad-driven training is unchanged; 0.x carets are minor-locked, so the
+range must move in lockstep for a joint install of mlp + grad 0.7 to
+resolve.
+
 ## 0.3.0
 
 **New: `mlp_fit_grad` / `mlp_train_grad` — the same training recipe driven by

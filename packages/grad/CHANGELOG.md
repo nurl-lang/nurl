@@ -1,5 +1,51 @@
 # Changelog
 
+## 0.7.0
+
+**Megakernel fusion (`src/gpfuse.nu`, M8).** The GPU replay's wall on
+small graphs is per-kernel launch latency — ~40 tiny dependent kernels
+per episode, even under a CUDA graph. This generates anomaly's fused
+aegpu shape FROM the captured tape instead of hand-writing it:
+
+- **Row-space fusion** — a maximal consecutive run of row-local nodes
+  (elementwise add/sub/mul/div, every unary, matmul `act[B,k]·W[k,c]`
+  with a leaf `W`) becomes ONE generated kernel: block per row, threads
+  stride each node's columns, `__syncthreads` between nodes. Backward
+  splits into a row kernel (dActivations, hi→lo) and a param kernel
+  (matmul dW and broadcast ew operands, serial over rows in
+  `gp_bw_mm_b`/`gp_bw_accred` order).
+- **Serial-space fusion** — the scalar tail (L2 sums, the final
+  reduction, the loss ew chain) fuses into one single-block kernel.
+- The whole episode — fused forward + backward + optimizer — runs under
+  ONE CUDA graph (`gpfuse_graph_capture_train`). The N gradient zero
+  fills collapse into one pointer-table kernel.
+
+Every fused element uses the same intrinsic and inner-loop order as its
+per-node kernel, so results are **bit-identical to the per-node replay**
+and hold the same CPU-tape contract; `tests/gpfuse_test.nu` gates values
+and gradients on both backends (bit-equal on cpu, 1e-12 on cuda). Nodes
+outside the row/serial classes (attention bmm, softmax, slice/concat)
+keep their per-node kernel automatically — a graph that fuses nothing
+runs exactly as before.
+
+Turnkey `gpfuse_open`/`gpfuse_episode`/`gpfuse_close` drive the same
+three-call loop as the graph path with automatic fallback;
+`gpfuse_worthwhile` gates production use to CUDA (the cpu backend has no
+launch latency to remove). RTX 4090, d-64-32-64-d AE, batch 200, 360
+episodes, all endpoints bit-equal to the CPU tape:
+
+    cpu tape          1388 ms
+    device replay      303 ms   4.6x
+    per-node graph     236 ms   5.9x
+    megakernel+graph    78 ms  17.8x
+
+Fusion pays where a dense chain dominates (MLP/AE episodes). A graph whose
+every segment is split by attention (bmm/softmax/slice) produces many tiny
+fused kernels whose NVRTC compile cost can exceed the launch savings, so
+such workloads are best left on the per-node path — the capability is an
+explicit `gpfuse_open` call, not automatic, precisely so the caller
+chooses per graph.
+
 ## 0.6.1
 
 **f32 replay is now fast enough for a real model.** Two capture-time

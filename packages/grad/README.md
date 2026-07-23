@@ -96,14 +96,30 @@ formulas exactly but calls the device's exp()/log(): bit-identical on the
 CPU backend, ~1 ulp on real CUDA hardware.
 
 Speed, honestly: the d-64-32-64-d / batch-200 autoencoder benchmark
-(`tests/gput_bench.nu`) runs ~5× faster than the CPU tape on an RTX 4090.
-Per-node launches cannot fuse the way anomaly's hand-written aegpu pipeline
-does (4 launches per minibatch vs ~40 here), so on tiny nets aegpu keeps its
-34× crown; the replay engine's win grows with layer width and batch — and it
-works for EVERY graph the tape can record, not one hard-coded architecture.
-On the gpu CPU backend the replay is far SLOWER than the CPU tape (per-launch
-fiber-grid orchestration dwarfs the arithmetic): that backend exists so the
-bit-exactness contract can be verified anywhere, not for training speed.
+(`tests/gput_bench.nu`, RTX 4090) runs the per-node replay ~5× faster than
+the CPU tape, ~6× under one CUDA graph — and **~18× with megakernel fusion**
+(`src/gpfuse.nu`), all landing on bit-equal weights.
+
+Megakernel fusion (`src/gpfuse.nu`) closes the tiny-net gap. It derives
+anomaly's hand-written aegpu shape FROM the captured tape: a maximal run of
+row-local nodes (elementwise, unaries, matmul act·W with a leaf W) becomes
+ONE generated kernel — block per row, `__syncthreads` between nodes — and
+the scalar tail (L2 terms, reductions, the loss chain) becomes a serial
+kernel, so an episode is ~5 launches instead of ~40. The whole thing runs
+under one CUDA graph (`gpfuse_graph_capture_train`). Every fused element is
+computed with the same intrinsic and inner-loop order as its per-node
+kernel, so results are **bit-identical to the per-node replay** and hold the
+same CPU-tape contract (bit-equal arithmetic, ~1 ulp transcendentals);
+`tests/gpfuse_test.nu` gates all of it on both backends. It works for EVERY
+graph the tape can record — nodes that do not fit the row/serial classes
+(attention bmm, softmax, slice/concat) keep their per-node kernel
+automatically, so a graph that fuses nothing simply runs as before.
+
+On the gpu CPU backend there is no launch latency to remove and a block is
+simulated as fibers, so fusion only adds barrier cost — `gpfuse_worthwhile`
+gates production use to CUDA, while the planner and every bit gate still run
+everywhere. The CPU backend exists so the bit-exactness contract can be
+verified anywhere, not for training speed.
 
 Device restrictions (capture fails closed, with a message): TE_F64 tapes;
 `g_bmm` needs both operands to carry the full batch.
@@ -133,7 +149,14 @@ registry's training story, and none of them hand-writes a backward pass:
    LoRA adapters on the GPU (the frozen base is free — requires-grad
    propagation), and the merged model reproduces its training text
    through the production inference path.
-4. **The cluster's kernels are derived** (`src/emitc.nu` + swarm-mcp, M7):
+4. **The episode fuses into a megakernel** (`src/gpfuse.nu`, M8): the
+   captured program's row-local chain and scalar tail are generated as ~5
+   fused kernels under one CUDA graph — ~18× the CPU tape on the AE bench,
+   bit-identical to the per-node replay. Turnkey via
+   `gpfuse_open`/`gpfuse_episode`; best on dense MLP/AE episodes (a graph
+   whose every segment is broken by attention fuses less and is left on
+   the per-node path — see Honest limits).
+5. **The cluster's kernels are derived** (`src/emitc.nu` + swarm-mcp, M7):
    `gemit_cuda_grad` emits a scalar tape as `compute_iterate`'s
    `__device__ grad()`; the emitted C is bit-equal to the tape under gcc
    (`tests/emitc_oracle.sh`), and a live-swarm linear regression landed
@@ -153,11 +176,18 @@ registry's training story, and none of them hand-writes a backward pass:
   episode's structure; new shapes mean a new capture. Refreshing inputs
   (`gput_set_input`) covers the minibatch/window pattern — data changes,
   the graph does not.
-- **Per-node kernel launches.** The replay engine cannot fuse the way a
-  hand-written pipeline can: anomaly's aegpu keeps its 34× on a tiny AE
-  (4 launches vs ~40). The replay wins on width/batch and on generality —
-  every recordable graph, not one architecture. On the gpu CPU backend
-  the replay exists to VERIFY the bit-exactness contract, not for speed.
+- **Kernel launches.** The per-node replay is one launch per node; on tiny
+  nets that launch latency dominates. Megakernel fusion (`src/gpfuse.nu`)
+  removes it by generating the fused row/serial kernels from the tape (~5
+  launches per episode, one CUDA graph, ~18× on the AE bench), bit-identical
+  to the per-node path. Non-fusable nodes (attention bmm, softmax, slice)
+  fall back automatically. The trade-off is compile cost: a graph whose
+  every segment is broken by attention fuses into MANY tiny kernels, and
+  NVRTC compiling all of them can cost more than the launches it saves —
+  so fusion is an explicit `gpfuse_open` call the caller makes per graph,
+  best on dense MLP/AE episodes, not a blanket default. The fused path is
+  CUDA-only (`gpfuse_worthwhile`); on the gpu CPU backend the replay exists
+  to VERIFY the bit-exactness contract, not for speed.
 - **The C emitter is scalar.** `gemit_cuda_grad` refuses non-[1] nodes
   and linear algebra — its target (`compute_iterate`) is a per-example
   scalar loss by design. Distributed tensor training is a different

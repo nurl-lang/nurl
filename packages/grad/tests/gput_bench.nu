@@ -20,6 +20,7 @@ $ `stdlib/std/time.nu`
 $ `src/grad.nu`
 $ `src/opt.nu`
 $ `src/gput.nu`
+$ `src/gpfuse.nu`
 $ `deps/tensor/src/tensor.nu`
 $ `deps/gpu/src/gpu.nu`
 $ `deps/gpukit/src/gpukit.nu`
@@ -235,6 +236,69 @@ $ `deps/gpukit/src/dev.nu`
         ( tape_free tp3 )
     } {}
 
+    // — MEGAKERNEL path: fused row/param kernels (+ graph when available) —
+    : ~ b mok F
+    : ~ b mgraph F
+    : ~ i t6 0
+    : ~ i t7 0
+    : ~ f mfirst 0.0
+    : ~ f mlast 0.0
+    : ~ i msegs 0
+    ? devok {
+        : *GTape tp4 ( tape_new )
+        : GVar W1m ( param2 tp4 w1v D H1 )
+        : GVar B1m ( param1 tp4 H1 )
+        : GVar W2m ( param2 tp4 w2v H1 H2 )
+        : GVar B2m ( param1 tp4 H2 )
+        : GVar W3m ( param2 tp4 w3v H2 D )
+        : GVar B3m ( param1 tp4 D )
+        : ( Vec f ) rows0m ( vec_with_cap [f] * BSZ D )
+        : ~ i qm 0
+        ~ < qm * BSZ D { ( vec_push [f] rows0m ( _tf all qm ) ) = qm + qm 1 }
+        : ( Vec i ) rshm ( vec_new [i] )
+        ( vec_push [i] rshm BSZ ) ( vec_push [i] rshm D )
+        : Tensor rtm ( tensor_from_data TE_F64 rshm rows0m )
+        : GVar Xm ( grad_const tp4 rtm )
+        ( tensor_free rtm ) ( vec_free [f] rows0m )
+        : GVar lossm ( episode tp4 Xm W1m B1m W2m B2m W3m B3m ALPHA BSZ )
+        : *GProg pgm ( gput_capture kit tp4 lossm )
+        : *GpOpt gom ( gpopt_adam_new LR )
+        ( gpopt_add gom pgm W1m ALPHA ) ( gpopt_add gom pgm B1m 0.0 )
+        ( gpopt_add gom pgm W2m ALPHA ) ( gpopt_add gom pgm B2m 0.0 )
+        ( gpopt_add gom pgm W3m ALPHA ) ( gpopt_add gom pgm B3m 0.0 )
+        : *GpPlan plm ( gpfuse_plan pgm )
+        = msegs / ( vec_len [i] . plm segs ) 2
+        ? & & ( gput_ok pgm ) . plm ok ( gpfuse_worthwhile pgm ) {
+            = mok T
+            = mgraph ( gpfuse_graph_capture_train pgm plm gom )
+            = t6 ( monotonic_ns )
+            : ~ i ep4 0
+            ~ & < ep4 EPISODES mok {
+                : ( Vec f ) rows ( vec_with_cap [f] * BSZ D )
+                : ~ i q 0
+                ~ < q * BSZ D { ( vec_push [f] rows ( _tf all + * * ep4 BSZ D q ) ) = q + q 1 }
+                = mok & mok ( gput_set_input pgm Xm rows )
+                ( vec_free [f] rows )
+                ? mgraph {
+                    = mok & mok ( gpopt_prepare gom pgm )
+                    = mok & mok ( gput_episode pgm )
+                } {
+                    = mok & mok ( gpfuse_forward pgm plm )
+                    = mok & mok ( gpfuse_backward pgm plm )
+                    = mok & mok ( gpopt_step gom pgm )
+                }
+                ? == ep4 0 { = mfirst ( gput_loss pgm ) } {}
+                ? == ep4 - EPISODES 1 { = mlast ( gput_loss pgm ) } {}
+                = ep4 + ep4 1
+            }
+            = t7 ( monotonic_ns )
+        } {}
+        ( gpfuse_free plm )
+        ( gpopt_free gom )
+        ( gput_free pgm )
+        ( tape_free tp4 )
+    } {}
+
     : i cms / - t1 t0 1000000
     : i dms / - t3 t2 1000000
     ( nurl_print `cpu tape:      ` ) ( nurl_print_int cms ) ( nurl_print ` ms\n` )
@@ -263,6 +327,23 @@ $ `deps/gpukit/src/dev.nu`
         ? gagree {} { ^ 1 }
     } {
         ( nurl_print `graph-fused:   unavailable on this backend\n` )
+    }
+    ? mok {
+        : i mms / - t7 t6 1000000
+        ( nurl_print `megakernel` )
+        ( nurl_print ? mgraph `+graph: ` ` (direct): ` )
+        ( nurl_print_int mms ) ( nurl_print ` ms (segments ` )
+        ( nurl_print_int msegs ) ( nurl_print `)\n` )
+        ? > mms 0 {
+            ( nurl_print `mega ratio vs cpu: ` )
+            ( nurl_print ( nurl_str_float / # f cms # f mms ) )
+            ( nurl_print `x\n` )
+        } {}
+        : b magree & == ( f64_to_bits mfirst ) ( f64_to_bits cfirst ) == ( f64_to_bits mlast ) ( f64_to_bits clast )
+        ( nurl_print ? magree `mega endpoints BIT-EQUAL\n` `mega endpoints DIFFER\n` )
+        ? magree {} { ^ 1 }
+    } {
+        ( nurl_print `megakernel:    skipped (no launch latency to remove on this backend)\n` )
     }
     ( gpopt_free go )
     ( gput_free pg )
