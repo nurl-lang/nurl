@@ -10,6 +10,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **stdlib hot paths — the per-byte `nurl_str_get` / `vec_get` walks are
+  gone.** `nurl_str_get` re-runs `strlen` on every call, so a loop that
+  scans a string with it is O(n²). In a read-only loop LLVM hoists that
+  `strlen` away, which is why the cost hid for so long — but every real
+  parser *writes* while it scans, and the store blocks the hoist. Six
+  stdlib functions were paying it, plus four more that walked a byte
+  buffer through an `?u`-returning `vec_get` (a bounds check and an
+  Option per byte) where a `memcpy` / `memcmp` / `memmem` was available.
+  Measured (`std/bench.nu`, `-O2`, ns/op, same machine):
+
+  | | before | after | |
+  |---|---|---|---|
+  | `bytes_from_str` 4 KB | 117 497 | 179 | **656×** |
+  | `bytes_to_str` 4 KB | 16 820 | 171 | **98×** |
+  | `bytes_eq` 4 KB | 1 481 | 55 | **27×** |
+  | `bytes_from_hex` 2 KB | 20 047 | 3 322 | 6.0× |
+  | `parse_request_head` 4 KB | 16 776 | 5 244 | 3.2× |
+  | `url_percent_decode` 768 B | 6 216 | 1 764 | 3.5× |
+  | `url_percent_encode` 768 B | 11 248 | 4 000 | 2.8× |
+  | `fmt1`, 512 B template | 5 092 | 1 845 | 2.8× |
+  | `bytes_to_hex` 1 KB | 9 122 | 6 895 | 1.32× |
+  | `string_push_char` ×1024 | 4 035 | 2 693 | 1.50× |
+
+  `string_push_char` also gained an inline fast path: it used to run two
+  independent capacity checks per byte (one in `vec_push`, one in
+  `_string_seal`'s `vec_reserve`) even on a pre-sized buffer. It is the
+  most-called mutator in the stdlib, so every text builder — JSON, CBOR,
+  YAML, TOML, `fmt`, hex — gets the 1.5×. No API or allocation-count
+  change anywhere.
+
 - **`stdlib/std/sort.nu` — insertion-sort cutoff for small subranges.**
   `sort_by` / `binary_search`'s quicksort now hands ranges of ≤16 elements to
   a straight insertion sort instead of partitioning them all the way down.
@@ -21,6 +51,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   in NURL is already essentially free. As a side effect small all-equal
   ranges now keep their input order (insertion sort is stable below the
   cutoff); `sort_by` still makes no general stability guarantee.
+
+### Fixed
+
+- **`string_eq` compared with `strcmp`, ignoring everything after an
+  embedded NUL.** `String` stores inner NUL bytes verbatim, so two
+  strings of equal length differing only past a NUL compared *equal*.
+  Now `memcmp` over the full byte range — which is also 1.3× faster.
 
 The **ecosystem** release. v0.22.0 made the registry a training stack;
 v0.23.0 closes the loop around it — the missing packages that turn "train
