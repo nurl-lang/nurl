@@ -497,13 +497,12 @@ $ `stdlib/core/errors.nu`
     ? > hi n { = hi n } {}
     : i len - hi lo
     : ( Vec u ) out ( vec_with_cap [u] len )
+    // memcpy, not a per-byte push loop: the TLS record layer slices every
+    // received record twice (body out, remainder back into rxbuf), so a
+    // byte-at-a-time copy here shows up directly in download throughput.
     ? > len 0 {
         : *u p ( vec_data [u] v )
-        : ~ i k 0
-        ~ < k len {
-            ( vec_push [u] out . p + lo k )
-            = k + k 1
-        }
+        ( bytes_extend_raw out # s + # i p lo len )
     } {}
     ^ out
 }

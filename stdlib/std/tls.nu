@@ -125,10 +125,11 @@ $ `stdlib/std/tls_verify.nu`
     ( vec_push [u] v # u & n 255 )
 }
 
+// Bulk append — memcpy via bytes_extend_bytes rather than a per-byte
+// push loop; this runs over every received record (socket → rxbuf,
+// plaintext → appbuf) on the download hot path.
 @ _tls_cat ( Vec u ) dst ( Vec u ) src → v {
-    : i n ( vec_len [u] src )
-    : ~ i k 0
-    ~ < k n { ( vec_push [u] dst # u ( _t_bget src k ) ) = k + k 1 }
+    ( bytes_extend_bytes dst src )
 }
 
 // Append a 2-byte length prefix + the block bytes.
@@ -400,17 +401,23 @@ $ `stdlib/std/tls_verify.nu`
     ( _tls_cat body random )  // 32-byte random
     ( vec_push [u] body # u 32 )  // session id length
     ( _tls_cat body sessid )
-    // cipher_suites: TLS_AES_128_GCM_SHA256 (0x1301) +
-    // TLS_CHACHA20_POLY1305_SHA256 (0x1303) — both use the SHA-256 key
+    // cipher_suites: TLS_CHACHA20_POLY1305_SHA256 (0x1303) +
+    // TLS_AES_128_GCM_SHA256 (0x1301) — both use the SHA-256 key
     // schedule, so either keeps the rest of the handshake unchanged.
+    // ChaCha is listed FIRST on purpose: our AES is the constant-time
+    // (table-free) software S-box, ~0.5 MB/s, while ChaCha20-Poly1305
+    // runs ~25 MB/s — a 50× record-layer difference that is the sole
+    // throughput limit on large downloads. Servers honouring client
+    // preference (Cloudflare et al.) pick ChaCha; AES-only peers still
+    // get 0x1301 from the same list.
     // 1.3 suites first, then the TLS 1.2 ECDHE suites for fallback.
     ( _tls_u16 body 12 )
-    ( _tls_u16 body 4865 )  // 0x1301 TLS_AES_128_GCM_SHA256
     ( _tls_u16 body 4867 )  // 0x1303 TLS_CHACHA20_POLY1305_SHA256
-    ( _tls_u16 body 49195 )  // 0xc02b ECDHE-ECDSA-AES128-GCM-SHA256
-    ( _tls_u16 body 49199 )  // 0xc02f ECDHE-RSA-AES128-GCM-SHA256
+    ( _tls_u16 body 4865 )  // 0x1301 TLS_AES_128_GCM_SHA256
     ( _tls_u16 body 52393 )  // 0xcca9 ECDHE-ECDSA-CHACHA20-POLY1305
     ( _tls_u16 body 52392 )  // 0xcca8 ECDHE-RSA-CHACHA20-POLY1305
+    ( _tls_u16 body 49195 )  // 0xc02b ECDHE-ECDSA-AES128-GCM-SHA256
+    ( _tls_u16 body 49199 )  // 0xc02f ECDHE-RSA-AES128-GCM-SHA256
     // compression methods
     ( vec_push [u] body # u 1 )
     ( vec_push [u] body # u 0 )

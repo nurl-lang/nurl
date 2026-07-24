@@ -10,6 +10,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`stdlib/std/tls.nu` — offer ChaCha20-Poly1305 ahead of AES-128-GCM
+  (~3× faster HTTPS downloads).** The record layer, not the network, was
+  the ceiling on every large `https://` transfer: our AES-128-GCM is the
+  deliberately table-free constant-time S-box (recomputed per byte, ~160
+  S-box evaluations per 16-byte block), which measures **0.5 MB/s**,
+  while the pure-NURL ChaCha20-Poly1305 next to it runs **~25 MB/s** —
+  a 50× difference the ClientHello was throwing away by listing 0x1301
+  first. Both TLS 1.3 suites use the same SHA-256 key schedule, so the
+  reorder touches nothing else in the handshake, and AES-only peers
+  still get 0x1301 from the same list. Measured end-to-end on
+  `nurllama run LumiOpen/Llama-Poro-2-8B-Instruct` (Hugging Face → its
+  CloudFront CDN, which honours client preference), same 8 MB back to
+  back: **188 KB/s → 594 KB/s**, with per-transfer CPU dropping
+  **25.1 s → 2.0 s** — i.e. the client went from CPU-bound to
+  network-bound, and now tracks `curl` on the same link (675 KB/s).
+  Against `speed.cloudflare.com`: 487 KB/s → 1185 KB/s (curl:
+  1174 KB/s). The per-byte CPU ceiling is now ~8.5 MB/s rather than
+  ~0.34 MB/s, so the download-side numbers vary with what the far end
+  will give. Servers that pin their own preference to AES (e.g.
+  `huggingface.co`'s API host, which serves only the small metadata
+  files and the redirect) still negotiate AES-128-GCM and remain slow —
+  a bitsliced constant-time AES is the fix there, not a lookup table.
+- **`stdlib/std/tls.nu` / `stdlib/std/bytes.nu` — memcpy the record-layer
+  copies.** `_tls_cat` and `bytes_slice` were per-byte `vec_push` loops
+  sitting on the receive hot path, where every TLS record is copied four
+  times (socket → `rxbuf`, body out, remainder back, plaintext →
+  `appbuf`). Both now go through `nurl_memcpy` (`bytes_extend_bytes` /
+  `bytes_extend_raw`): ~0.3 s less CPU per 10 MB downloaded, and the
+  slice+concat cost for 10 MB of 16 KB records is now 1 ms. (Companion
+  to the `nurl_str_get` / `vec_get` sweep below, which left `bytes_slice`
+  untouched.)
 - **stdlib hot paths — the per-byte `nurl_str_get` / `vec_get` walks are
   gone.** `nurl_str_get` re-runs `strlen` on every call, so a loop that
   scans a string with it is O(n²). In a read-only loop LLVM hoists that
