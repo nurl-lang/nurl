@@ -24,7 +24,8 @@ $ `stdlib/std/path.nu`
 $ `stdlib/std/hash_sha256.nu`
 $ `stdlib/std/progress.nu`
 $ `stdlib/ext/http.nu`
-$ `src/store.nu`
+// siblings (store: hub_blob_path, _hub_safe_name) are provided by the entry
+// point that imports every hub file — see the note in hub.nu.
 
 // case-insensitive response-header lookup → owned value ("" if absent)
 @ __hub_find_header HttpStream st s want → String {

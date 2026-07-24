@@ -29,21 +29,23 @@ A **ref** is a Hugging Face shorthand or a URL:
 
 ## From NURL
 
+The one call a consumer wants is `hub_get` — hand it whatever the user typed
+and get back a usable local path:
+
 ```nurl
 $ `deps/hub/src/hub.nu`
 
-// ensure a whole model repo is local; get a directory an existing loader opens
-: !String String d ( hub_dir `Qwen/Qwen2.5-0.5B-Instruct` )
-?? d { T dir → { /* pass ( string_data dir ) to embed / whisper / a checkpoint loader */ } F e → { /* … */ } }
-
-// ensure a single file is local; get its path
-: !String String f ( hub_file `bartowski/SmolLM-135M-Instruct-GGUF/SmolLM-135M-Instruct-Q4_K_M.gguf` )
-?? f { T path → { /* open ( string_data path ) with gguf / nurllama */ } F e → { /* … */ } }
+// a local path passes straight through; an HF ref is fetched (a bare
+// org/repo → a directory, a ref with a file → that file's path)
+: !String String m ( hub_get user_arg )
+?? m { T path → { /* open ( string_data path ) — a dir for embed/whisper, a file for gguf */ } F e → { /* … */ } }
 ```
 
-`hub_dir` returns a real directory of the repo's files; `hub_file` returns one
-file's path. Both are idempotent — a second call with everything cached touches
-no network.
+So `embed serve BAAI/bge-m3`, `embed serve ./my-model`, and
+`nurllama run org/repo/model.gguf` all resolve through one call. When you need
+to force the shape, `hub_dir` returns a repo directory and `hub_file` returns a
+single file's path. All three are idempotent — a second call with everything
+cached touches no network.
 
 ## The cache
 

@@ -1,14 +1,16 @@
 // packages/whisper/src/main.nu — the CLI (encoder stage).
 //
-//   whisper transcribe <model-dir> <audio.wav> [--lang en] [--max N]
+//   whisper transcribe <model> <audio.wav> [--lang en] [--max N]
 //   whisper encode     <config.json> <model.safetensors> <audio.wav> -o enc.f32
 //
 // `transcribe` is the whole thing: WAV → log-mel → encoder → decoder → text.
 // `encode` stops after the encoder and writes its 1500 × d_model states, which
 // is what the test suite compares against HF's WhisperModel.encoder.
 //
-// A model directory is what Hugging Face ships: config.json, model.safetensors
-// and tokenizer.json, side by side.
+// <model> is a local directory (config.json, model.safetensors, tokenizer.json
+// side by side), a whisper.cpp ggml file, OR a Hugging Face ref (e.g.
+// openai/whisper-base) — a ref is fetched into ~/.nurl/models via the hub
+// package and the downloaded path is used.
 
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/string.nu`
@@ -22,9 +24,23 @@ $ `deps/audio/src/resample.nu`
 $ `deps/audio/src/vad.nu`
 $ `deps/tokenizer/src/tokenizer.nu`
 $ `deps/tokenizer/src/hf.nu`
+$ `deps/hub/src/store.nu`
+$ `deps/hub/src/hf.nu`
+$ `deps/hub/src/pull.nu`
+$ `deps/hub/src/hub.nu`
 $ `src/ggml.nu`
 $ `src/model.nu`
 $ `src/serve.nu`
+
+// Resolve the model argument to a local path — an existing directory or ggml
+// file is used as is, a Hugging Face ref is fetched into ~/.nurl/models via
+// the hub package. Returns "" (after reporting) on a fetch error.
+@ __wh_resolve s arg → String {
+    ?? ( hub_get arg ) {
+        T p → { ^ p }
+        F e → { ( nurl_eprintln ( string_data e ) ) ( string_free e ) ^ ( string_new ) }
+    }
+}
 
 @ __wcli_write_f32 s path ( Vec f ) v → i {
     : ( Vec u ) d ( vec_with_cap [u] * 4 ( vec_len [f] v ) )
@@ -630,6 +646,9 @@ $ `src/serve.nu`
     ? ( nurl_str_eq cmd0 `serve` ) {
         : ~ s dir ``
         ?? ( vec_get [String] pos 1 ) { T c → { = dir ( string_data c ) } F → {} }
+        : String __mdl ( __wh_resolve dir )
+        ? == ( string_len __mdl ) 0 { ( string_free __mdl ) ( args_free p ) ^ 1 } {}
+        = dir ( string_data __mdl )
         : String lang ( args_value_or p `lang` `en` )
         : ~ i maxtok 200
         : String smax ( args_value_or p `max` `200` )
@@ -709,6 +728,7 @@ $ `src/serve.nu`
         ( string_free host )
         ( string_free addr )
         ( string_free lang )
+        ( string_free __mdl )
         ( args_free p )
         ^ rc
     } {}
@@ -722,6 +742,9 @@ $ `src/serve.nu`
         : ~ s awav ``
         ?? ( vec_get [String] pos 1 ) { T c → { = dir ( string_data c ) } F → {} }
         ?? ( vec_get [String] pos 2 ) { T c → { = awav ( string_data c ) } F → {} }
+        : String __mdl ( __wh_resolve dir )
+        ? == ( string_len __mdl ) 0 { ( string_free __mdl ) ( args_free p ) ^ 1 } {}
+        = dir ( string_data __mdl )
         : String lang ( args_value_or p `lang` `en` )
         : ~ i maxtok 200
         : String smax ( args_value_or p `max` `200` )
@@ -733,6 +756,7 @@ $ `src/serve.nu`
         ( string_free nsp )
         : i rc ( __wh_transcribe dir awav ( string_data lang ) maxtok ( args_present p `vad` ) ( args_present p `timestamps` ) nospeech )
         ( string_free lang )
+        ( string_free __mdl )
         ( args_free p )
         ^ rc
     } {}

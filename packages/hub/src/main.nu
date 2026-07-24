@@ -16,8 +16,10 @@ $ `stdlib/core/io.nu`
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/args.nu`
-$ `src/hub.nu`
+$ `src/store.nu`
 $ `src/hf.nu`
+$ `src/pull.nu`
+$ `src/hub.nu`
 
 @ __hub_cli_err String e → i {
     ( nurl_eprintln ( string_data e ) )

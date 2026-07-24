@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.4
+
+- The model argument to `embed serve` / `embed text` can now be a Hugging Face
+  ref (e.g. `embed serve BAAI/bge-m3`), not only a local directory. A ref is
+  fetched into the shared `~/.nurl/models` cache via the new `hub` dependency
+  (resumable, sha256-verified) and the downloaded directory is used; an existing
+  local path is passed straight through unchanged. New dependency: `hub ^0.1`.
+
 ## 0.1.1
 
 - Widen the gpu requirement to ^0.9: the CUBIN kernel cache removes the
