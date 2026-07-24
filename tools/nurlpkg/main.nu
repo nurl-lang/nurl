@@ -2903,14 +2903,29 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
                         ?? ur {
                             T _ → ( nurl_print `published.\n` )
                             F ue → {
-                                ( nurl_eprint `nurlpkg: publish failed (` )
-                                ( nurl_eprint ( publish_err_name ue ) )
-                                ( nurl_eprintln `)` )
-                                // Tokens expire after 90 days — the most common
-                                // cause of a 401 on a previously working setup.
                                 ?? ue {
-                                    PubAuth → ( nurl_eprintln `hint: registry tokens expire after 90 days - run 'nurlpkg login' to mint a fresh one` )
-                                    _ → {}
+                                    // 401: a real auth failure — tokens expire
+                                    // after 90 days, the usual cause on a setup
+                                    // that used to work.
+                                    PubAuth → {
+                                        ( nurl_eprintln `nurlpkg: publish failed (auth)` )
+                                        ( nurl_eprintln `hint: registry tokens expire after 90 days - run 'nurlpkg login' to mint a fresh one` )
+                                    }
+                                    // 403: NOT auth. The registry refused the
+                                    // name/version — point at the real causes
+                                    // instead of sending them to re-login.
+                                    PubForbidden → {
+                                        ( nurl_eprintln `nurlpkg: publish forbidden (the registry refused this package)` )
+                                        ( nurl_eprintln `hint: the name may be reserved, too similar to an existing package, or outside your token's package scope — it is NOT a token problem` )
+                                    }
+                                    PubConflict → {
+                                        ( nurl_eprintln `nurlpkg: this version is already published (versions are immutable — bump the version)` )
+                                    }
+                                    _ → {
+                                        ( nurl_eprint `nurlpkg: publish failed (` )
+                                        ( nurl_eprint ( publish_err_name ue ) )
+                                        ( nurl_eprintln `)` )
+                                    }
                                 }
                                 = rc 1
                             }
