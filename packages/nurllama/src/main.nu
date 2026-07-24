@@ -16,14 +16,19 @@
 //                                             URL; resumes a broken pull)
 //   nurllama list · rm <name> · verify <name> the local model store
 //   nurllama serve [--host H] [--port N]      ollama-compatible HTTP API
-//   nurllama chat <model|name>                interactive chat (model's
+//   nurllama chat <model|name|hf-ref>         interactive chat (model's
 //                                             own template from GGUF)
-//   nurllama run <model|name> <prompt>        generate (stream to stdout)
+//   nurllama run <model|name|hf-ref> <prompt> generate (stream to stdout)
+//     a model that is neither a local file nor a name in the store is a
+//     Hugging Face ref (org/repo/file.gguf) fetched on demand into the
+//     shared ~/.nurl/models cache via the hub package — no separate pull
 //     -n N (default 64) · --temp F (0 = greedy, default 0.8)
 //     --topk N · --topp F · --seed N · --ctx N
 //     diffusion models add: --block N · --threshold F ·
 //     --edit-threshold F · --post-steps N (temp defaults to 0)
-//   nurllama convert <hf-dir> <out.gguf>      HF checkpoint → GGUF
+//   nurllama convert <hf-dir|hf-ref> <out.gguf>  HF checkpoint → GGUF (the
+//                                             checkpoint may be a local dir or
+//                                             an org/repo ref fetched via hub)
 //   nurllama finetune <model.gguf> <data.txt>  LoRA finetune on the GPU
 //                     [--out a.st] [--merged m.st] [--steps N] [--lr X]
 //                     [--rank R] [--alpha A] [--seq T] [--seed S] [--f32]
@@ -56,6 +61,10 @@ $ `stdlib/std/rng.nu`
 $ `deps/gguf/src/gguf.nu`
 $ `deps/gguf/src/write.nu`
 $ `deps/gpu/src/gpu.nu`
+$ `deps/hub/src/store.nu`
+$ `deps/hub/src/hf.nu`
+$ `deps/hub/src/pull.nu`
+$ `deps/hub/src/hub.nu`
 $ `src/tokenizer.nu`
 $ `src/kernels.nu`
 $ `src/model.nu`
@@ -75,6 +84,23 @@ $ `stdlib/std/term.nu`
     ( nurl_eprintln ( string_data e ) )
     ( string_free e )
     ^ 1
+}
+
+// Resolve a model argument to a local path. An existing file/path or a name
+// in the local ~/.nurllama store resolves through nl_resolve (unchanged);
+// anything else is treated as a Hugging Face ref and fetched on demand into
+// the shared ~/.nurl/models cache via the hub package — so `nurllama run
+// org/repo/model.gguf` just works without a separate pull. None on a fetch
+// error (already reported).
+@ __nl_resolve_or_fetch String root s arg → ?String {
+    ?? ( nl_resolve root arg ) {
+        T p → { ^ @ ?String { T p } }
+        F → {}
+    }
+    ?? ( hub_get arg ) {
+        T p → { ^ @ ?String { T p } }
+        F e → { ( nurl_eprintln ( string_data e ) ) ( string_free e ) ^ @ ?String { F } }
+    }
 }
 
 @ __nl_print_ids ( Vec i ) ids → v {
@@ -700,7 +726,16 @@ $ `stdlib/std/term.nu`
             F → {}
         }
         : String ot ( args_value_or p `type` `q8_0` )
-        : i rc ( nurllama_convert hfdir outp ( string_data ot ) )
+        // the HF checkpoint directory may be a local path or a Hugging Face
+        // ref (`nurllama convert Qwen/Qwen2.5-0.5B out.gguf`) fetched via hub
+        : ~ i rc 0
+        ?? ( hub_get hfdir ) {
+            T hd → {
+                = rc ( nurllama_convert ( string_data hd ) outp ( string_data ot ) )
+                ( string_free hd )
+            }
+            F e → { = rc ( __nl_err e ) }
+        }
         ( string_free ot )
         ( args_free p )
         ^ rc
@@ -802,7 +837,7 @@ $ `stdlib/std/term.nu`
         }
         : String croot ( nl_store_root )
         : ~ String cres ( string_new )
-        ?? ( nl_resolve croot carg ) {
+        ?? ( __nl_resolve_or_fetch croot carg ) {
             T pth → {
                 ( string_free cres )
                 = cres pth
@@ -950,7 +985,7 @@ $ `stdlib/std/term.nu`
         // an existing path wins; otherwise the store resolves the name
         : String mroot ( nl_store_root )
         : ~ String mres ( string_new )
-        ?? ( nl_resolve mroot mparg ) {
+        ?? ( __nl_resolve_or_fetch mroot mparg ) {
             T pth → {
                 ( string_free mres )
                 = mres pth
@@ -1103,7 +1138,7 @@ $ `stdlib/std/term.nu`
     }
     : String mroot2 ( nl_store_root )
     : ~ String mres2 ( string_new )
-    ?? ( nl_resolve mroot2 mparg2 ) {
+    ?? ( __nl_resolve_or_fetch mroot2 mparg2 ) {
         T pth → {
             ( string_free mres2 )
             = mres2 pth
