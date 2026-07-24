@@ -174,8 +174,8 @@ $ `stdlib/core/vec.nu`
     : ~ i pos 0
     : String scheme ( string_with_cap 8 )
     : ~ b ok_scheme F
-    ~ & < pos n != ( nurl_str_get in pos ) 58 {
-        : i c ( nurl_str_get in pos )
+    ~ & < pos n != ( nurl_str_at in n pos ) 58 {
+        : i c ( nurl_str_at in n pos )
         // scheme char = ALPHA / DIGIT / '+' / '-' / '.'  (RFC 3986 §3.1)
         : b sc | ( __url_is_alpha c ) | ( __url_is_digit c ) | == c 43 | == c 45 == c 46
         ? sc {
@@ -188,8 +188,8 @@ $ `stdlib/core/vec.nu`
         }
     }
     // require "://"
-    ? & & < + pos 2 n == ( nurl_str_get in pos ) 58
-    & == ( nurl_str_get in + pos 1 ) 47 == ( nurl_str_get in + pos 2 ) 47
+    ? & & < + pos 2 n == ( nurl_str_at in n pos ) 58
+    & == ( nurl_str_at in n + pos 1 ) 47 == ( nurl_str_at in n + pos 2 ) 47
     { = pos + pos 3 = ok_scheme T } {}
     ? ! ok_scheme { ( string_free scheme ) ^ @ ?Url { F # Url 0 } } {}
     ? == 0 ( string_len scheme ) { ( string_free scheme ) ^ @ ?Url { F # Url 0 } } {}
@@ -197,38 +197,38 @@ $ `stdlib/core/vec.nu`
     // authority = [userinfo "@"] host [":" port], up to '/' '?' '#'
     : i auth_start pos
     : ~ i auth_end pos
-    ~ & < auth_end n & != ( nurl_str_get in auth_end ) 47
-    & != ( nurl_str_get in auth_end ) 63 != ( nurl_str_get in auth_end ) 35 {
+    ~ & < auth_end n & != ( nurl_str_at in n auth_end ) 47
+    & != ( nurl_str_at in n auth_end ) 63 != ( nurl_str_at in n auth_end ) 35 {
         = auth_end + auth_end 1
     }
     // userinfo: split on the LAST '@' within the authority
     : ~ i at -1
     : ~ i scan auth_start
     ~ < scan auth_end {
-        ? == ( nurl_str_get in scan ) 64 { = at scan } {}
+        ? == ( nurl_str_at in n scan ) 64 { = at scan } {}
         = scan + scan 1
     }
     : String userinfo ( string_with_cap 1 )
     : ~ i host_start auth_start
     ? >= at 0 {
         : ~ i ui auth_start
-        ~ < ui at { ( string_push_char userinfo ( nurl_str_get in ui ) ) = ui + ui 1 }
+        ~ < ui at { ( string_push_char userinfo ( nurl_str_at in n ui ) ) = ui + ui 1 }
         = host_start + at 1
     } {}
     // host: bracketed IPv6 [..]  OR  up to ':' (port) / authority end
     : String host ( string_with_cap 16 )
     : ~ i hp host_start
-    ? & < hp auth_end == ( nurl_str_get in hp ) 91 {
+    ? & < hp auth_end == ( nurl_str_at in n hp ) 91 {
         // [IPv6] — copy inside the brackets, skip past ']'
         = hp + hp 1
-        ~ & < hp auth_end != ( nurl_str_get in hp ) 93 {
-            ( string_push_char host ( nurl_str_get in hp ) )
+        ~ & < hp auth_end != ( nurl_str_at in n hp ) 93 {
+            ( string_push_char host ( nurl_str_at in n hp ) )
             = hp + hp 1
         }
-        ? & < hp auth_end == ( nurl_str_get in hp ) 93 { = hp + hp 1 } {}
+        ? & < hp auth_end == ( nurl_str_at in n hp ) 93 { = hp + hp 1 } {}
     } {
-        ~ & < hp auth_end != ( nurl_str_get in hp ) 58 {
-            ( string_push_char host ( nurl_str_get in hp ) )
+        ~ & < hp auth_end != ( nurl_str_at in n hp ) 58 {
+            ( string_push_char host ( nurl_str_at in n hp ) )
             = hp + hp 1
         }
     }
@@ -241,13 +241,13 @@ $ `stdlib/core/vec.nu`
     // overflowing port rejects the whole URL rather than wrapping into a
     // plausible-looking small number.
     : ~ i port -1
-    ? & < hp auth_end == ( nurl_str_get in hp ) 58 {
+    ? & < hp auth_end == ( nurl_str_at in n hp ) 58 {
         = hp + hp 1
         : ~ i pv 0
         : ~ b anyd F
         : ~ b over F
-        ~ & < hp auth_end ( __url_is_digit ( nurl_str_get in hp ) ) {
-            = pv + * pv 10 - ( nurl_str_get in hp ) 48
+        ~ & < hp auth_end ( __url_is_digit ( nurl_str_at in n hp ) ) {
+            = pv + * pv 10 - ( nurl_str_at in n hp ) 48
             ? > pv 65535 { = over T } {}
             = anyd T
             = hp + hp 1
@@ -265,24 +265,24 @@ $ `stdlib/core/vec.nu`
 
     // path: up to '?' or '#'
     : String path ( string_with_cap 16 )
-    ~ & < pos n & != ( nurl_str_get in pos ) 63 != ( nurl_str_get in pos ) 35 {
-        ( string_push_char path ( nurl_str_get in pos ) )
+    ~ & < pos n & != ( nurl_str_at in n pos ) 63 != ( nurl_str_at in n pos ) 35 {
+        ( string_push_char path ( nurl_str_at in n pos ) )
         = pos + pos 1
     }
     // query: '?' up to '#'
     : String query ( string_with_cap 8 )
-    ? & < pos n == ( nurl_str_get in pos ) 63 {
+    ? & < pos n == ( nurl_str_at in n pos ) 63 {
         = pos + pos 1
-        ~ & < pos n != ( nurl_str_get in pos ) 35 {
-            ( string_push_char query ( nurl_str_get in pos ) )
+        ~ & < pos n != ( nurl_str_at in n pos ) 35 {
+            ( string_push_char query ( nurl_str_at in n pos ) )
             = pos + pos 1
         }
     } {}
     // fragment: '#' to end
     : String fragment ( string_with_cap 8 )
-    ? & < pos n == ( nurl_str_get in pos ) 35 {
+    ? & < pos n == ( nurl_str_at in n pos ) 35 {
         = pos + pos 1
-        ~ < pos n { ( string_push_char fragment ( nurl_str_get in pos ) ) = pos + pos 1 }
+        ~ < pos n { ( string_push_char fragment ( nurl_str_at in n pos ) ) = pos + pos 1 }
     } {}
 
     ^ @ ?Url { T @ Url { scheme userinfo host port path query fragment } }
@@ -339,21 +339,21 @@ $ `stdlib/core/vec.nu`
     ~ <= start n {
         // find next '&' or end
         : ~ i e start
-        ~ & < e n != ( nurl_str_get query e ) 38 { = e + e 1 }
+        ~ & < e n != ( nurl_str_at query n e ) 38 { = e + e 1 }
         ? > - e start 0 {
             // split [start,e) on first '='
             : ~ i eq start
             : ~ b has_eq F
             ~ & < eq e ! has_eq {
-                ? == ( nurl_str_get query eq ) 61 { = has_eq T } { = eq + eq 1 }
+                ? == ( nurl_str_at query n eq ) 61 { = has_eq T } { = eq + eq 1 }
             }
             : String kraw ( string_with_cap + - eq start 1 )
             : ~ i ki start
-            ~ < ki eq { ( string_push_char kraw ( nurl_str_get query ki ) ) = ki + ki 1 }
+            ~ < ki eq { ( string_push_char kraw ( nurl_str_at query n ki ) ) = ki + ki 1 }
             : String vraw ( string_with_cap 8 )
             ? has_eq {
                 : ~ i vi + eq 1
-                ~ < vi e { ( string_push_char vraw ( nurl_str_get query vi ) ) = vi + vi 1 }
+                ~ < vi e { ( string_push_char vraw ( nurl_str_at query n vi ) ) = vi + vi 1 }
             } {}
             : String key ( __url_form_decode ( string_data kraw ) )
             : String val ( __url_form_decode ( string_data vraw ) )

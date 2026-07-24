@@ -106,7 +106,7 @@ $ `stdlib/core/vec.nu`
 
 @ __yaml_skip_sp s text i pos i n → i {
     : ~ i k pos
-    ~ & < k n ( __yaml_is_sp ( nurl_str_get text k ) ) { = k + k 1 }
+    ~ & < k n ( __yaml_is_sp ( nurl_str_at text n k ) ) { = k + k 1 }
     ^ k
 }
 
@@ -118,8 +118,8 @@ $ `stdlib/core/vec.nu`
     : ~ i k 0
     : ~ b ok T
     ~ & ok < k na {
-        : i ca ( __yaml_lower ( nurl_str_get a k ) )
-        : i cb ( __yaml_lower ( nurl_str_get b k ) )
+        : i ca ( __yaml_lower ( nurl_str_at a na k ) )
+        : i cb ( __yaml_lower ( nurl_str_at b nb k ) )
         ? != ca cb { = ok F } {}
         = k + k 1
     }
@@ -133,7 +133,7 @@ $ `stdlib/core/vec.nu`
     : ~ i e n
     : ~ b t T
     ~ & t > e 0 {
-        : i c ( nurl_str_get raw - e 1 )
+        : i c ( nurl_str_at raw n - e 1 )
         ? | == c 32 == c 9 { = e - e 1 } { = t F }
     }
     ^ ( __yaml_substr raw 0 e )
@@ -144,20 +144,20 @@ $ `stdlib/core/vec.nu`
     : i n ( nurl_str_len text )
     ? == n 0 { ^ F } {}
     : ~ i k 0
-    : i c0 ( nurl_str_get text 0 )
+    : i c0 ( nurl_str_at text n 0 )
     ? ( __yaml_is_sign c0 ) { = k 1 } {}
     : ~ i digits 0
-    ~ & < k n ( __yaml_is_digit ( nurl_str_get text k ) ) { = k + k 1 = digits + digits 1 }
-    ? & < k n == ( nurl_str_get text k ) 46 {
+    ~ & < k n ( __yaml_is_digit ( nurl_str_at text n k ) ) { = k + k 1 = digits + digits 1 }
+    ? & < k n == ( nurl_str_at text n k ) 46 {
         = k + k 1
-        ~ & < k n ( __yaml_is_digit ( nurl_str_get text k ) ) { = k + k 1 = digits + digits 1 }
+        ~ & < k n ( __yaml_is_digit ( nurl_str_at text n k ) ) { = k + k 1 = digits + digits 1 }
     } {}
     ? == digits 0 { ^ F } {}
-    ? & < k n ( __yaml_is_e ( nurl_str_get text k ) ) {
+    ? & < k n ( __yaml_is_e ( nurl_str_at text n k ) ) {
         = k + k 1
-        ? & < k n ( __yaml_is_sign ( nurl_str_get text k ) ) { = k + k 1 } {}
+        ? & < k n ( __yaml_is_sign ( nurl_str_at text n k ) ) { = k + k 1 } {}
         : ~ i ed 0
-        ~ & < k n ( __yaml_is_digit ( nurl_str_get text k ) ) { = k + k 1 = ed + ed 1 }
+        ~ & < k n ( __yaml_is_digit ( nurl_str_at text n k ) ) { = k + k 1 = ed + ed 1 }
         ? == ed 0 { ^ F } {}
     } {}
     ^ == k n
@@ -175,7 +175,7 @@ $ `stdlib/core/vec.nu`
     : ~ i res n
     : ~ b done F
     ~ & ! done < k n {
-        : i c ( nurl_str_get raw k )
+        : i c ( nurl_str_at raw n k )
         ? insq {
             ? == c 39 { = insq F } {}
         } {
@@ -188,7 +188,7 @@ $ `stdlib/core/vec.nu`
                     ? == c 34 { = indq T } {
                         ? == c 35 {
                             : b atstart == k start
-                            : i prev ( nurl_str_get raw - k 1 )
+                            : i prev ( nurl_str_at raw n - k 1 )
                             : b aftersp | == prev 32 == prev 9
                             ? | atstart aftersp { = res k = done T } {}
                         } {} }
@@ -207,18 +207,18 @@ $ `stdlib/core/vec.nu`
     : s raw ( string_data line )
     : i n ( string_len line )
     : ~ i ind 0
-    ~ & < ind n == ( nurl_str_get raw ind ) 32 { = ind + ind 1 }
-    ? & < ind n == ( nurl_str_get raw ind ) 9 {
+    ~ & < ind n == ( nurl_str_at raw n ind ) 32 { = ind + ind 1 }
+    ? & < ind n == ( nurl_str_at raw n ind ) 9 {
         : i probe ( __yaml_skip_sp raw ind n )
         ? >= probe n { ^ 0 } {}
-        ? == ( nurl_str_get raw probe ) 35 { ^ 0 } {}
+        ? == ( nurl_str_at raw n probe ) 35 { ^ 0 } {}
         ^ 2
     } {}
     : i cend ( __yaml_content_end raw ind n )
     : ~ i e cend
     : ~ b trimming T
     ~ & trimming > e ind {
-        : i ch ( nurl_str_get raw - e 1 )
+        : i ch ( nurl_str_at raw n - e 1 )
         ? | == ch 32 == ch 9 { = e - e 1 } { = trimming F }
     }
     : i clen - e ind
@@ -281,12 +281,12 @@ $ `stdlib/core/vec.nu`
     : ~ b done F
     : ~ b ok F
     ~ & ! done < k n {
-        : i c ( nurl_str_get text k )
+        : i c ( nurl_str_at text n k )
         ? == c 34 { = done T = ok T = k + k 1 } {
             ? == c 92 {
                 = k + k 1
                 ? >= k n { = done T } {
-                    ( __yaml_dq_escape out ( nurl_str_get text k ) )
+                    ( __yaml_dq_escape out ( nurl_str_at text n k ) )
                     = k + k 1
                 }
             } {
@@ -305,9 +305,9 @@ $ `stdlib/core/vec.nu`
     : ~ b done F
     : ~ b ok F
     ~ & ! done < k n {
-        : i c ( nurl_str_get text k )
+        : i c ( nurl_str_at text n k )
         ? == c 39 {
-            : i nx ( nurl_str_get text + k 1 )
+            : i nx ( nurl_str_at text n + k 1 )
             ? & < + k 1 n == nx 39 {
                 ( string_push_char out 39 )
                 = k + k 2
@@ -343,7 +343,7 @@ $ `stdlib/core/vec.nu`
 @ __yaml_scalar_to_json * YamlParser p s text → Json {
     : i n ( nurl_str_len text )
     ? == n 0 { ^ @ Json { JNull } } {}
-    : i c0 ( nurl_str_get text 0 )
+    : i c0 ( nurl_str_at text n 0 )
     ? == c0 34 {
         : __YStr r ( __yaml_scan_dquote text n 0 )
         ? . r ok { ^ @ Json { JStr . r str } } {}
@@ -374,10 +374,10 @@ $ `stdlib/core/vec.nu`
     : ~ i k pos
     : ~ b done F
     ~ & ! done < k n {
-        : i c ( nurl_str_get text k )
+        : i c ( nurl_str_at text n k )
         ? | | == c 44 == c 93 == c 125 { = done T } {
             ? & stop_colon == c 58 {
-                : i nx ( nurl_str_get text + k 1 )
+                : i nx ( nurl_str_at text n + k 1 )
                 : b atend == + k 1 n
                 : b sep | | atend == nx 32 == nx 9
                 ? sep { = done T } { = k + k 1 }
@@ -388,7 +388,7 @@ $ `stdlib/core/vec.nu`
 }
 
 @ __yaml_flow_scalar s text i n i pos b stop_colon → __YFlow {
-    : i c ( nurl_str_get text pos )
+    : i c ( nurl_str_at text n pos )
     ? == c 34 {
         : __YStr r ( __yaml_scan_dquote text n pos )
         ^ @ __YFlow { @ Json { JStr . r str } . r pos . r ok }
@@ -427,7 +427,7 @@ $ `stdlib/core/vec.nu`
     ? >= depth YAML_MAX_DEPTH { ^ @ __YFlow { @ Json { JNull } pos F } } {}
     : i p ( __yaml_skip_sp text pos n )
     ? >= p n { ^ @ __YFlow { @ Json { JNull } p F } } {}
-    : i c ( nurl_str_get text p )
+    : i c ( nurl_str_at text n p )
     ? == c 91 { ^ ( __yaml_flow_seq text n p depth ) } {}
     ? == c 123 { ^ ( __yaml_flow_map text n p depth ) } {}
     ^ ( __yaml_flow_scalar text n p F )
@@ -439,14 +439,14 @@ $ `stdlib/core/vec.nu`
     : ~ b done F
     : ~ b ok T
     = p ( __yaml_skip_sp text p n )
-    ? & < p n == ( nurl_str_get text p ) 93 { ^ @ __YFlow { arr + p 1 T } } {}
+    ? & < p n == ( nurl_str_at text n p ) 93 { ^ @ __YFlow { arr + p 1 T } } {}
     ~ & ! done ok {
         : __YFlow ev ( __yaml_flow_value text n p + depth 1 )
         ? ! . ev ok { = ok F = done T ( json_free . ev val ) } {
             ( json_arr_push arr . ev val )
             = p ( __yaml_skip_sp text . ev pos n )
             ? >= p n { = ok F = done T } {
-                : i c ( nurl_str_get text p )
+                : i c ( nurl_str_at text n p )
                 ? == c 44 { = p ( __yaml_skip_sp text + p 1 n ) } {
                     ? == c 93 { = p + p 1 = done T } {
                         = ok F = done T
@@ -464,7 +464,7 @@ $ `stdlib/core/vec.nu`
     : ~ b done F
     : ~ b ok T
     = p ( __yaml_skip_sp text p n )
-    ? & < p n == ( nurl_str_get text p ) 125 { ^ @ __YFlow { obj + p 1 T } } {}
+    ? & < p n == ( nurl_str_at text n p ) 125 { ^ @ __YFlow { obj + p 1 T } } {}
     ~ & ! done ok {
         = p ( __yaml_skip_sp text p n )
         : __YFlow kv ( __yaml_flow_scalar text n p T )
@@ -472,7 +472,7 @@ $ `stdlib/core/vec.nu`
             : String keystr ( __yaml_json_as_key . kv val )
             ( json_free . kv val )
             = p ( __yaml_skip_sp text . kv pos n )
-            : b nocolon | >= p n != ( nurl_str_get text p ) 58
+            : b nocolon | >= p n != ( nurl_str_at text n p ) 58
             ? nocolon { = ok F = done T ( string_free keystr ) } {
                 = p ( __yaml_skip_sp text + p 1 n )
                 : __YFlow vv ( __yaml_flow_value text n p + depth 1 )
@@ -481,7 +481,7 @@ $ `stdlib/core/vec.nu`
                     ( string_free keystr )
                     = p ( __yaml_skip_sp text . vv pos n )
                     ? >= p n { = ok F = done T } {
-                        : i c ( nurl_str_get text p )
+                        : i c ( nurl_str_at text n p )
                         ? == c 44 { = p + p 1 } {
                             ? == c 125 { = p + p 1 = done T } {
                                 = ok F = done T
@@ -543,9 +543,9 @@ $ `stdlib/core/vec.nu`
 @ __yaml_is_seq_item s text → b {
     : i n ( nurl_str_len text )
     ? == n 0 { ^ F } {}
-    ? != ( nurl_str_get text 0 ) 45 { ^ F } {}
+    ? != ( nurl_str_at text n 0 ) 45 { ^ F } {}
     ? == n 1 { ^ T } {}
-    : i c ( nurl_str_get text 1 )
+    : i c ( nurl_str_at text n 1 )
     ^ | == c 32 == c 9
 }
 
@@ -560,7 +560,7 @@ $ `stdlib/core/vec.nu`
     : ~ i res -1
     : ~ b done F
     ~ & ! done < k n {
-        : i c ( nurl_str_get text k )
+        : i c ( nurl_str_at text n k )
         ? insq {
             ? == c 39 { = insq F } {}
         } {
@@ -574,7 +574,7 @@ $ `stdlib/core/vec.nu`
                         ? | == c 91 == c 123 { = depth + depth 1 } {
                             ? | == c 93 == c 125 { = depth - depth 1 } {
                                 ? & == c 58 == depth 0 {
-                                    : i nx ( nurl_str_get text + k 1 )
+                                    : i nx ( nurl_str_at text n + k 1 )
                                     : b atend == + k 1 n
                                     : b spc | == nx 32 == nx 9
                                     ? | atend spc { = res k = done T } {}
@@ -727,22 +727,22 @@ $ `stdlib/core/vec.nu`
 @ __yaml_plain_safe s raw → b {
     : i n ( nurl_str_len raw )
     ? == n 0 { ^ F } {}
-    : i c0 ( nurl_str_get raw 0 )
+    : i c0 ( nurl_str_at raw n 0 )
     ? ( __yaml_is_indicator c0 ) { ^ F } {}
-    : i clast ( nurl_str_get raw - n 1 )
+    : i clast ( nurl_str_at raw n - n 1 )
     ? | | | == c0 32 == clast 32 == c0 9 == clast 9 { ^ F } {}
     : ~ i k 0
     : ~ b safe T
     ~ & safe < k n {
-        : i c ( nurl_str_get raw k )
+        : i c ( nurl_str_at raw n k )
         ? | == c 10 == c 9 { = safe F } {
             ? == c 58 {
-                : i nx ( nurl_str_get raw + k 1 )
+                : i nx ( nurl_str_at raw n + k 1 )
                 : b atend == + k 1 n
                 ? | atend | == nx 32 == nx 9 { = safe F } {}
             } {
                 ? == c 35 {
-                    : i pv ( nurl_str_get raw - k 1 )
+                    : i pv ( nurl_str_at raw n - k 1 )
                     ? | == pv 32 == pv 9 { = safe F } {}
                 } {}
             }
@@ -763,7 +763,7 @@ $ `stdlib/core/vec.nu`
     : i n ( nurl_str_len raw )
     : ~ i k 0
     ~ < k n {
-        : i c ( nurl_str_get raw k )
+        : i c ( nurl_str_at raw n k )
         ? == c 34 { ( string_push_char out 92 ) ( string_push_char out 34 ) } {
             ? == c 92 { ( string_push_char out 92 ) ( string_push_char out 92 ) } {
                 ? == c 10 { ( string_push_char out 92 ) ( string_push_char out 110 ) } {

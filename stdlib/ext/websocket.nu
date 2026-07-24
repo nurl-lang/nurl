@@ -265,7 +265,7 @@ $ `stdlib/ext/compress.nu`
     : ~ i k 0
     ~ < k la {
         : ~ i ca ( string_get a k )
-        : ~ i cb ( nurl_str_get b k )
+        : ~ i cb ( nurl_str_at b lb k )
         ? & >= ca 65 <= ca 90 { = ca + ca 32 } {}
         ? & >= cb 65 <= cb 90 { = cb + cb 32 } {}
         ? != ca cb { ^ F } {}
@@ -291,7 +291,7 @@ $ `stdlib/ext/compress.nu`
         : ~ b match T
         ~ & match < j nl {
             : ~ i ca ( string_get value + start j )
-            : ~ i cb ( nurl_str_get needle j )
+            : ~ i cb ( nurl_str_at needle nl j )
             ? & >= ca 65 <= ca 90 { = ca + ca 32 } {}
             ? & >= cb 65 <= cb 90 { = cb + cb 32 } {}
             ? != ca cb { = match F } {}
@@ -1491,7 +1491,7 @@ $ `stdlib/ext/compress.nu`
     : ~ i k 0
     ~ < k namelen {
         : ~ i a & 255 # i . p + ls k
-        : ~ i b ( nurl_str_get name k )
+        : ~ i b ( nurl_str_at name namelen k )
         ? & >= a 65 <= a 90 { = a + a 32 } {}
         ? & >= b 65 <= b 90 { = b + b 32 } {}
         ? != a b { ^ F } {}
@@ -1861,7 +1861,7 @@ $ `stdlib/ext/compress.nu`
         : ~ i j 0
         : ~ b match T
         ~ & match < j nl {
-            ? != ( __ws_lc ( nurl_str_get hay + i j ) ) ( __ws_lc ( nurl_str_get needle j ) ) {
+            ? != ( __ws_lc ( nurl_str_at hay hl + i j ) ) ( __ws_lc ( nurl_str_at needle nl j ) ) {
                 = match F
             } {}
             = j + j 1
@@ -1877,7 +1877,7 @@ $ `stdlib/ext/compress.nu`
     : i hl ( nurl_str_len hay )
     : ~ i k from
     ~ < k hl {
-        ? == ( nurl_str_get hay k ) 44 { ^ k } {}
+        ? == ( nurl_str_at hay hl k ) 44 { ^ k } {}
         = k + k 1
     }
     ^ hl
@@ -1888,16 +1888,16 @@ $ `stdlib/ext/compress.nu`
 // the parameter carried no value.
 @ __ws_window_after s hay i pos i segend → i {
     : ~ i k pos
-    ~ & < k segend | == ( nurl_str_get hay k ) 32 == ( nurl_str_get hay k ) 9 { = k + k 1 }
+    ~ & < k segend | == ( nurl_str_at hay segend k ) 32 == ( nurl_str_at hay segend k ) 9 { = k + k 1 }
     ? >= k segend { ^ -1 } {}
-    ? != ( nurl_str_get hay k ) 61 { ^ -1 } {}  // '='
+    ? != ( nurl_str_at hay segend k ) 61 { ^ -1 } {}  // '='
     = k + k 1
-    ~ & < k segend | == ( nurl_str_get hay k ) 32 == ( nurl_str_get hay k ) 9 { = k + k 1 }
-    ? & < k segend == ( nurl_str_get hay k ) 34 { = k + k 1 } {}  // optional '"'
+    ~ & < k segend | == ( nurl_str_at hay segend k ) 32 == ( nurl_str_at hay segend k ) 9 { = k + k 1 }
+    ? & < k segend == ( nurl_str_at hay segend k ) 34 { = k + k 1 } {}  // optional '"'
     : ~ i val 0
     : ~ b any F
-    ~ & < k segend & >= ( nurl_str_get hay k ) 48 <= ( nurl_str_get hay k ) 57 {
-        = val + * val 10 - ( nurl_str_get hay k ) 48
+    ~ & < k segend & >= ( nurl_str_at hay segend k ) 48 <= ( nurl_str_at hay segend k ) 57 {
+        = val + * val 10 - ( nurl_str_at hay segend k ) 48
         = any T
         = k + k 1
     }

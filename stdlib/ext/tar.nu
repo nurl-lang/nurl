@@ -119,7 +119,7 @@ $ `stdlib/std/fs.nu`
     : i lim ? < n maxlen n maxlen
     : ~ i k 0
     ~ < k lim {
-        = . p + off k # u ( nurl_str_get str k )
+        = . p + off k # u ( nurl_str_at str n k )
         = k + k 1
     }
 }
@@ -351,15 +351,15 @@ $ `stdlib/std/fs.nu`
     : i n ( string_len path )
     ? == n 0 { ^ F } {}
     : s d ( string_data path )
-    ? == ( nurl_str_get d 0 ) 47 { ^ F } {}  // absolute
+    ? == ( nurl_str_at d n 0 ) 47 { ^ F } {}  // absolute
     : ~ i k 0
     : ~ i comp_start 0
     : ~ i bad 0
     ~ <= k n {
-        : i c ? < k n ( nurl_str_get d k ) 47  // treat end-of-string as '/'
+        : i c ? < k n ( nurl_str_at d n k ) 47  // treat end-of-string as '/'
         ? == c 47 {
             ? == - k comp_start 2 {
-                ? & == ( nurl_str_get d comp_start ) 46 == ( nurl_str_get d + comp_start 1 ) 46 {
+                ? & == ( nurl_str_at d n comp_start ) 46 == ( nurl_str_at d n + comp_start 1 ) 46 {
                     = bad 1
                 } {}
             } {}
@@ -378,14 +378,14 @@ $ `stdlib/std/fs.nu`
     : ~ i last -1
     : ~ i k 0
     ~ < k n {
-        ? == ( nurl_str_get d k ) 47 { = last k } {}
+        ? == ( nurl_str_at d n k ) 47 { = last k } {}
         = k + k 1
     }
     ? < last 0 { ^ ( string_from `.` ) } {}
     : String out ( string_with_cap + last 1 )
     : ~ i j 0
     ~ < j last {
-        ( string_push_char out ( nurl_str_get d j ) )
+        ( string_push_char out ( nurl_str_at d n j ) )
         = j + j 1
     }
     ^ out

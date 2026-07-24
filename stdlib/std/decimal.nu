@@ -217,15 +217,16 @@ $ `stdlib/std/bigint.nu`
 @ dec_to_string Decimal d → String {
     : String signed ( bigint_to_string . d coeff )
     : s ss ( string_data signed )
-    : b neg & > ( nurl_str_len ss ) 0 == ( nurl_str_get ss 0 ) 45
+    : i ssn ( string_len signed )
+    : b neg & > ssn 0 == ( nurl_str_at ss ssn 0 ) 45
     : i dstart ? neg 1 0
-    : i dlen - ( nurl_str_len ss ) dstart  // count of magnitude digits
+    : i dlen - ssn dstart  // count of magnitude digits
     : i scale . d scale
     : String out ( string_with_cap + + dlen scale 4 )
     ? neg { ( string_push_char out 45 ) } {}
     ? == scale 0 {
         : ~ i k dstart
-        ~ < k ( nurl_str_len ss ) { ( string_push_char out ( nurl_str_get ss k ) ) = k + k 1 }
+        ~ < k ssn { ( string_push_char out ( nurl_str_at ss ssn k ) ) = k + k 1 }
         ( string_free signed )
         ^ out
     } {}
@@ -233,10 +234,10 @@ $ `stdlib/std/bigint.nu`
         // integer part has (dlen - scale) digits
         : i split + dstart - dlen scale
         : ~ i k dstart
-        ~ < k split { ( string_push_char out ( nurl_str_get ss k ) ) = k + k 1 }
+        ~ < k split { ( string_push_char out ( nurl_str_at ss ssn k ) ) = k + k 1 }
         ( string_push_char out 46 )  // '.'
         = k split
-        ~ < k ( nurl_str_len ss ) { ( string_push_char out ( nurl_str_get ss k ) ) = k + k 1 }
+        ~ < k ssn { ( string_push_char out ( nurl_str_at ss ssn k ) ) = k + k 1 }
     } {
         // |value| < 1 : "0." then (scale - dlen) leading zeros then digits
         ( string_push_char out 48 )  // '0'
@@ -244,7 +245,7 @@ $ `stdlib/std/bigint.nu`
         : ~ i z 0
         ~ < z - scale dlen { ( string_push_char out 48 ) = z + z 1 }
         : ~ i k dstart
-        ~ < k ( nurl_str_len ss ) { ( string_push_char out ( nurl_str_get ss k ) ) = k + k 1 }
+        ~ < k ssn { ( string_push_char out ( nurl_str_at ss ssn k ) ) = k + k 1 }
     }
     ( string_free signed )
     ^ out
@@ -255,7 +256,7 @@ $ `stdlib/std/bigint.nu`
     ? == n 0 { ^ @ !Decimal ParseErr { F @ ParseErr { Empty } } } {}
     : ~ i pos 0
     : String digits ( string_with_cap + n 1 )  // sign + all coefficient digits
-    : i c0 ( nurl_str_get str 0 )
+    : i c0 ( nurl_str_at str n 0 )
     ? | == c0 45 == c0 43 {
         ? == c0 45 { ( string_push_char digits 45 ) } {}
         = pos 1
@@ -265,7 +266,7 @@ $ `stdlib/std/bigint.nu`
     : ~ b seen_dot F
     : ~ b bad F
     ~ & < pos n ! bad {
-        : i c ( nurl_str_get str pos )
+        : i c ( nurl_str_at str n pos )
         ? & >= c 48 <= c 57 {
             ( string_push_char digits c )
             ? seen_dot { = frac_digits + frac_digits 1 } { = int_digits + int_digits 1 }

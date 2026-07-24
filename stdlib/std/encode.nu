@@ -37,7 +37,7 @@ $ `stdlib/core/errors.nu`
     : String out ( string_with_cap * len 2 )
     : ~ i i 0
     ~ < i len {
-        : i b ( nurl_str_get str i )
+        : i b ( nurl_str_at str len i )
         : i hi ( __hex_digit & 15 / b 16 )
         : i lo ( __hex_digit & b 15 )
         ( string_push_char out hi )
@@ -64,8 +64,8 @@ $ `stdlib/core/errors.nu`
     : String out ( string_with_cap / len 2 )
     : ~ i i 0
     ~ < i len {
-        : i hi ( __hex_value ( nurl_str_get str i ) )
-        : i lo ( __hex_value ( nurl_str_get str + i 1 ) )
+        : i hi ( __hex_value ( nurl_str_at str len i ) )
+        : i lo ( __hex_value ( nurl_str_at str len + i 1 ) )
         ? | < hi 0 < lo 0 {
             ( string_free out )
             ^ @ !String ParseErr { F @ ParseErr { BadFormat } }
@@ -399,7 +399,7 @@ $ `stdlib/core/errors.nu`
     : ~ i nbits 0
     : ~ i i 0
     ~ < i len {
-        : i c ( nurl_str_get str i )
+        : i c ( nurl_str_at str len i )
         = i + i 1
         // Skip ASCII whitespace: space, tab, lf, cr, ff, vt
         ? | | | | | == c 32 == c 9 == c 10 == c 13 == c 12 == c 11 {} {

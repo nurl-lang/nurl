@@ -262,7 +262,7 @@ $ `stdlib/ext/http.nu`
     : ~ i k 0
     ~ < k la {
         : i ca ( __ascii_lower ( string_get s k ) )
-        : i cb ( __ascii_lower ( nurl_str_get raw k ) )
+        : i cb ( __ascii_lower ( nurl_str_at raw lb k ) )
         ? != ca cb { ^ F } {}
         = k + k 1
     }
@@ -382,11 +382,11 @@ $ `stdlib/ext/http.nu`
     : String out ( string_with_cap n )
     : ~ i k 0
     ~ < k n {
-        : i c ( nurl_str_get in k )
+        : i c ( nurl_str_at in n k )
         ? == c 37 {
             ? <= + k 2 - n 1 {
-                : i hi ( __hex_val ( nurl_str_get in + k 1 ) )
-                : i lo ( __hex_val ( nurl_str_get in + k 2 ) )
+                : i hi ( __hex_val ( nurl_str_at in n + k 1 ) )
+                : i lo ( __hex_val ( nurl_str_at in n + k 2 ) )
                 ? & >= hi 0 >= lo 0 {
                     ( string_push_char out + * hi 16 lo )
                     = k + k 3
@@ -425,7 +425,7 @@ $ `stdlib/ext/http.nu`
     : String out ( string_with_cap n )
     : ~ i k 0
     ~ < k n {
-        : i c & 255 ( nurl_str_get in k )
+        : i c & 255 ( nurl_str_at in n k )
         ? ( __is_unreserved c ) {
             ( string_push_char out c )
         } {
@@ -457,14 +457,14 @@ $ `stdlib/ext/http.nu`
     : String path ( string_with_cap q )
     : ~ i k 0
     ~ < k q {
-        ( string_push_char path ( nurl_str_get url k ) )
+        ( string_push_char path ( nurl_str_at url n k ) )
         = k + k 1
     }
     : i qrest - n - q 1
     : String query ( string_with_cap qrest )
     = k + q 1
     ~ < k n {
-        ( string_push_char query ( nurl_str_get url k ) )
+        ( string_push_char query ( nurl_str_at url n k ) )
         = k + k 1
     }
     ^ @ UrlSplit { path query }
@@ -482,14 +482,14 @@ $ `stdlib/ext/http.nu`
     ~ <= k n {
         : ~ b boundary F
         ? >= k n { = boundary T } {}
-        ? & ! boundary == ( nurl_str_get qs k ) 38 { = boundary T } {}
+        ? & ! boundary == ( nurl_str_at qs n k ) 38 { = boundary T } {}
         ? boundary {
             : i seg_len - k seg_start
             ? > seg_len 0 {
                 : ~ i eq -1
                 : ~ i j seg_start
                 ~ < j k {
-                    ? == ( nurl_str_get qs j ) 61 { = eq j = j k } {}
+                    ? == ( nurl_str_at qs n j ) 61 { = eq j = j k } {}
                     = j + j 1
                 }
                 : i key_end ? < eq 0 k eq
@@ -497,13 +497,13 @@ $ `stdlib/ext/http.nu`
                 : String val_raw ( string_with_cap seg_len )
                 : ~ i kk seg_start
                 ~ < kk key_end {
-                    ( string_push_char key_raw ( nurl_str_get qs kk ) )
+                    ( string_push_char key_raw ( nurl_str_at qs n kk ) )
                     = kk + kk 1
                 }
                 ? >= eq 0 {
                     = kk + eq 1
                     ~ < kk k {
-                        ( string_push_char val_raw ( nurl_str_get qs kk ) )
+                        ( string_push_char val_raw ( nurl_str_at qs n kk ) )
                         = kk + kk 1
                     }
                 } {}
@@ -1054,7 +1054,7 @@ $ `stdlib/ext/http.nu`
     ? < n tn { ^ F } {}
     : ~ i k 0
     ~ < k tn {
-        ? != ( string_get lc k ) ( nurl_str_get target k ) { ^ F } {}
+        ? != ( string_get lc k ) ( nurl_str_at target tn k ) { ^ F } {}
         = k + k 1
     }
     ? == n tn { ^ T } {}

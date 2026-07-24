@@ -114,15 +114,16 @@ $ `stdlib/core/vec.nu`
 
 @ __xml_skip_ws s src i pos i n → i {
     : ~ i p pos
-    ~ & < p n ( __xml_is_space ( nurl_str_get src p ) ) { = p + p 1 }
+    ~ & < p n ( __xml_is_space ( nurl_str_at src n p ) ) { = p + p 1 }
     ^ p
 }
 
 @ __xml_substr s src i start i len → String {
+    : i n ( nurl_str_len src )
     : String out ( string_with_cap len )
     : ~ i k 0
     ~ < k len {
-        ( string_push_char out ( nurl_str_get src + start k ) )
+        ( string_push_char out ( nurl_str_at src n + start k ) )
         = k + k 1
     }
     ^ out
@@ -135,7 +136,7 @@ $ `stdlib/core/vec.nu`
     : ~ i k 0
     : ~ b ok T
     ~ & ok < k ln {
-        ? != ( nurl_str_get src + pos k ) ( nurl_str_get lit k ) { = ok F } {}
+        ? != ( nurl_str_at src n + pos k ) ( nurl_str_at lit ln k ) { = ok F } {}
         = k + k 1
     }
     ^ ok
@@ -180,11 +181,12 @@ $ `stdlib/core/vec.nu`
 // predefined entities and numeric char refs. An unrecognized `&…` is
 // passed through verbatim (lenient).
 @ __xml_decode_text s src i start i len → String {
+    : i n ( nurl_str_len src )
     : String out ( string_with_cap len )
     : i end + start len
     : ~ i p start
     ~ < p end {
-        : i c ( nurl_str_get src p )
+        : i c ( nurl_str_at src n p )
         ? != c 38 {  // not '&'
             ( string_push_char out c )
             = p + p 1
@@ -195,20 +197,20 @@ $ `stdlib/core/vec.nu`
                 = p + p 1
             } {
                 : i inner + p 1
-                ? == ( nurl_str_get src inner ) 35 {  // '#'
+                ? == ( nurl_str_at src n inner ) 35 {  // '#'
                     : ~ i cp 0
                     : ~ i q + inner 1
-                    ? == ( nurl_str_get src q ) 120 {  // 'x' hex
+                    ? == ( nurl_str_at src n q ) 120 {  // 'x' hex
                         = q + q 1
                         ~ < q semi {
-                            : i hc ( nurl_str_get src q )
+                            : i hc ( nurl_str_at src n q )
                             : i hv ? & >= hc 48 <= hc 57 - hc 48 ? & >= hc 97 <= hc 102 + 10 - hc 97 ? & >= hc 65 <= hc 70 + 10 - hc 65 0
                             = cp + * cp 16 hv
                             = q + q 1
                         }
                     } {
                         ~ < q semi {
-                            : i dc ( nurl_str_get src q )
+                            : i dc ( nurl_str_at src n q )
                             = cp + * cp 10 - dc 48
                             = q + q 1
                         }
@@ -228,7 +230,7 @@ $ `stdlib/core/vec.nu`
                                     ? is_apos { ( string_push_char out 39 ) } {
                                         ( string_push_char out 38 )
                                         : ~ i z inner
-                                        ~ <= z semi { ( string_push_char out ( nurl_str_get src z ) ) = z + z 1 }
+                                        ~ <= z semi { ( string_push_char out ( nurl_str_at src n z ) ) = z + z 1 }
                                     }
                                 }
                             }
@@ -248,7 +250,7 @@ $ `stdlib/core/vec.nu`
     : i n ( nurl_str_len raw )
     : ~ i k 0
     ~ < k n {
-        : i c ( nurl_str_get raw k )
+        : i c ( nurl_str_at raw n k )
         ? == c 60 { ( string_push_str out `&lt;` ) } {
             ? == c 62 { ( string_push_str out `&gt;` ) } {
                 ? == c 38 { ( string_push_str out `&amp;` ) } {
@@ -467,30 +469,30 @@ $ `stdlib/core/vec.nu`
     : ~ i res -1
     ~ & ! done < p n {
         = p ( __xml_skip_ws src p n )
-        : i c ( nurl_str_get src p )
+        : i c ( nurl_str_at src n p )
         ? | == c 62 == c 47 {  // '>' or '/'
             = res p
             = done T
         } {
             ? ! ( __xml_is_name_start c ) { = done T } {
                 : i nstart p
-                ~ & < p n ( __xml_is_name ( nurl_str_get src p ) ) { = p + p 1 }
+                ~ & < p n ( __xml_is_name ( nurl_str_at src n p ) ) { = p + p 1 }
                 : String aname ( __xml_substr src nstart - p nstart )
                 = p ( __xml_skip_ws src p n )
-                ? != ( nurl_str_get src p ) 61 {  // '='
+                ? != ( nurl_str_at src n p ) 61 {  // '='
                     ( string_free aname )
                     = done T
                 } {
                     = p + p 1
                     = p ( __xml_skip_ws src p n )
-                    : i q ( nurl_str_get src p )
+                    : i q ( nurl_str_at src n p )
                     ? & != q 34 != q 39 {  // not a quote
                         ( string_free aname )
                         = done T
                     } {
                         = p + p 1
                         : i vstart p
-                        ~ & < p n != ( nurl_str_get src p ) q { = p + p 1 }
+                        ~ & < p n != ( nurl_str_at src n p ) q { = p + p 1 }
                         ? >= p n {
                             ( string_free aname )
                             = done T
@@ -515,11 +517,11 @@ $ `stdlib/core/vec.nu`
         ^ @ __XmlNode { ( __xml_empty ) pos -1 }
     } {}
     : i nstart + pos 1
-    ? ! ( __xml_is_name_start ( nurl_str_get src nstart ) ) {
+    ? ! ( __xml_is_name_start ( nurl_str_at src n nstart ) ) {
         ^ @ __XmlNode { ( __xml_empty ) pos -1 }
     } {}
     : ~ i p nstart
-    ~ & < p n ( __xml_is_name ( nurl_str_get src p ) ) { = p + p 1 }
+    ~ & < p n ( __xml_is_name ( nurl_str_at src n p ) ) { = p + p 1 }
     : String tag ( __xml_substr src nstart - p nstart )
     : ( Vec XmlAttr ) attrs ( vec_new [XmlAttr] )
     : i close ( __xml_parse_attrs src p n attrs )
@@ -530,7 +532,7 @@ $ `stdlib/core/vec.nu`
     } {}
     : ( Vec Xml ) children ( vec_new [Xml] )
     : ~ i after close
-    ? == ( nurl_str_get src close ) 47 {  // '/>' self-closing
+    ? == ( nurl_str_at src n close ) 47 {  // '/>' self-closing
         = after + close 2
     } {
         : ~ i cp + close 1
@@ -579,7 +581,7 @@ $ `stdlib/core/vec.nu`
         : String txt ( __xml_substr src cstart - cend cstart )
         ^ @ __XmlNode { ( __xml_mk_text txt ) + cend 3 1 }
     } {}
-    ? == ( nurl_str_get src p ) 60 {  // '<' → element
+    ? == ( nurl_str_at src n p ) 60 {  // '<' → element
         ^ ( __xml_parse_element src p n depth )
     } {}
     // text run up to the next '<'
@@ -593,7 +595,7 @@ $ `stdlib/core/vec.nu`
     : i n ( nurl_str_len src )
     : i p ( __xml_skip_misc src 0 n )
     ? >= p n { ^ @ !Xml XmlErr { F @ XmlErr { XmlOther } } } {}
-    ? != ( nurl_str_get src p ) 60 { ^ @ !Xml XmlErr { F @ XmlErr { XmlSyntax } } } {}
+    ? != ( nurl_str_at src n p ) 60 { ^ @ !Xml XmlErr { F @ XmlErr { XmlSyntax } } } {}
     : __XmlNode nd ( __xml_parse_element src p n 0 )
     ? < . nd ok 0 {
         ( xml_free . nd node )

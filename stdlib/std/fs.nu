@@ -367,7 +367,7 @@ $ `stdlib/core/posix.nu`  // open / lseek / mmap / munmap + posix_const
                 : ~ b skip F
                 ? == c0 46 {
                     ? == n 1 { = skip T } {
-                        ? & == n 2 == ( nurl_str_get name 1 ) 46 { = skip T } {}
+                        ? & == n 2 == ( nurl_str_at name n 1 ) 46 { = skip T } {}
                     }
                 } {}
                 ? ! skip {
@@ -930,8 +930,8 @@ $ `stdlib/core/posix.nu`  // open / lseek / mmap / munmap + posix_const
     : i pn ( nurl_str_len pat )
     : i nn ( nurl_str_len name )
     // Dotfile rule: '*'/'?'/'[' never match a leading '.'.
-    ? & > nn 0 == ( nurl_str_get name 0 ) 46 {
-        ? & > pn 0 != ( nurl_str_get pat 0 ) 46 { ^ F } {}
+    ? & > nn 0 == ( nurl_str_at name nn 0 ) 46 {
+        ? & > pn 0 != ( nurl_str_at pat pn 0 ) 46 { ^ F } {}
     } {}
     ^ ( __fnmatch_at pat 0 pn name 0 nn )
 }
@@ -941,10 +941,10 @@ $ `stdlib/core/posix.nu`  // open / lseek / mmap / munmap + posix_const
     : ~ i p pi
     : ~ i k ni
     ~ < p pn {
-        : i pc ( nurl_str_get pat p )
+        : i pc ( nurl_str_at pat pn p )
         ? == pc 42 {
             // '*' — collapse runs, then try every split (no '/' allowed).
-            ~ & < p pn == ( nurl_str_get pat p ) 42 { = p + p 1 }
+            ~ & < p pn == ( nurl_str_at pat pn p ) 42 { = p + p 1 }
             ? >= p pn { ^ T } {}  // trailing '*' matches the rest
             : ~ i j k
             ~ <= j nn {
@@ -954,7 +954,7 @@ $ `stdlib/core/posix.nu`  // open / lseek / mmap / munmap + posix_const
             ^ F
         } {
             ? >= k nn { ^ F } {}
-            : i nc ( nurl_str_get name k )
+            : i nc ( nurl_str_at name nn k )
             ? == pc 63 {
                 = p + p 1 = k + k 1
             } {
@@ -977,16 +977,16 @@ $ `stdlib/core/posix.nu`  // open / lseek / mmap / munmap + posix_const
 @ __fnmatch_class s pat i start i pn i c → i {
     : ~ i p start
     : ~ b neg F
-    ? & < p pn | == ( nurl_str_get pat p ) 33 == ( nurl_str_get pat p ) 94 {
+    ? & < p pn | == ( nurl_str_at pat pn p ) 33 == ( nurl_str_at pat pn p ) 94 {
         = neg T = p + p 1
     } {}
     : ~ b hit F
     : ~ i first p
-    ~ & < p pn ! & > p first == ( nurl_str_get pat p ) 93 {
-        : i lo ( nurl_str_get pat p )
+    ~ & < p pn ! & > p first == ( nurl_str_at pat pn p ) 93 {
+        : i lo ( nurl_str_at pat pn p )
         // range "a-z" when a '-' with a following non-']' char
-        ? & & < + p 2 pn == ( nurl_str_get pat + p 1 ) 45 != ( nurl_str_get pat + p 2 ) 93 {
-            : i hi ( nurl_str_get pat + p 2 )
+        ? & & < + p 2 pn == ( nurl_str_at pat pn + p 1 ) 45 != ( nurl_str_at pat pn + p 2 ) 93 {
+            : i hi ( nurl_str_at pat pn + p 2 )
             ? & >= c lo <= c hi { = hit T } {}
             = p + p 3
         } {
@@ -994,7 +994,7 @@ $ `stdlib/core/posix.nu`  // open / lseek / mmap / munmap + posix_const
             = p + p 1
         }
     }
-    ? & < p pn == ( nurl_str_get pat p ) 93 {} { ^ -1 }  // unterminated class
+    ? & < p pn == ( nurl_str_at pat pn p ) 93 {} { ^ -1 }  // unterminated class
     : b matched ? neg ! hit hit
     ? matched { ^ + p 1 } { ^ -1 }
 }
@@ -1004,7 +1004,7 @@ $ `stdlib/core/posix.nu`  // open / lseek / mmap / munmap + posix_const
     : i n ( nurl_str_len seg )
     : ~ i k 0
     ~ < k n {
-        : i c ( nurl_str_get seg k )
+        : i c ( nurl_str_at seg n k )
         ? | | == c 42 == c 63 == c 91 { ^ T } {}
         = k + k 1
     }
@@ -1017,7 +1017,7 @@ $ `stdlib/core/posix.nu`  // open / lseek / mmap / munmap + posix_const
     : String out ( string_with_cap + + bn ( nurl_str_len name ) 2 )
     ? > bn 0 {
         ( string_push_str out base )
-        ? != ( nurl_str_get base - bn 1 ) 47 { ( string_push_char out 47 ) } {}
+        ? != ( nurl_str_at base bn - bn 1 ) 47 { ( string_push_char out 47 ) } {}
     } {}
     ( string_push_str out name )
     ^ out
@@ -1103,10 +1103,10 @@ $ `stdlib/core/posix.nu`  // open / lseek / mmap / munmap + posix_const
     : ~ i start 0
     : ~ i k 0
     ~ <= k n {
-        ? | == k n == ( nurl_str_get pattern k ) 47 {
+        ? | == k n == ( nurl_str_at pattern n k ) 47 {
             : String seg ( string_with_cap + - k start 1 )
             : ~ i j start
-            ~ < j k { ( string_push_char seg ( nurl_str_get pattern j ) ) = j + j 1 }
+            ~ < j k { ( string_push_char seg ( nurl_str_at pattern n j ) ) = j + j 1 }
             ( vec_push [String] out seg )
             = start + k 1
         } {}

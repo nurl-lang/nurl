@@ -135,12 +135,32 @@ $ `stdlib/core/char.nu`
 //
 // COST: this re-runs strlen(str) on EVERY call for the bounds check, so
 // a loop that walks a string with it is O(n²) — seconds on a 100 KB
-// input. In scan loops, hoist the length once and read through a raw
-// pointer instead:   : i n ( nurl_str_len s )   : *u P # *u s
-//                    … : i c & 255 # i . P k …
+// input. Use `nurl_str_at` below in any loop: hoist the length once and
+// pass it in. Reach for `nurl_str_get` only for a one-off read where no
+// length is at hand.
 @ nurl_str_get s str i idx → i {
     : i n ( strlen str )
     ? | < idx 0 >= idx n { ^ 0 } {}
+    : *u p # *u str
+    : u b . p idx
+    ^ & # i b 255
+}
+
+// O(1) sibling of `nurl_str_get`: the caller passes the length it
+// already knows, so no strlen runs. Identical contract otherwise —
+// returns 0 when `idx` falls outside [0, len), which is what parsers
+// rely on when they read one or two bytes past the cursor.
+//
+// This is the accessor scan loops want. `nurl_str_get` re-runs strlen
+// per call, and in any loop that also writes (i.e. every parser) LLVM
+// cannot hoist that strlen out, so the loop is quadratic — measured
+// 120 µs vs 11 µs over a 4 KB input, and the gap grows with the input.
+// Hoist the length once, then index with this:
+//
+//   : i n ( nurl_str_len src )
+//   ~ < k n { : i c ( nurl_str_at src n k ) … }
+@ nurl_str_at s str i len i idx → i {
+    ? | < idx 0 >= idx len { ^ 0 } {}
     : *u p # *u str
     : u b . p idx
     ^ & # i b 255

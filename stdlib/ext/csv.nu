@@ -300,7 +300,7 @@ $ `stdlib/std/hashmap.nu`
         : i len ( nurl_str_len data )
         : ~ i i 0
         ~ & ! need_quote < i len {
-            : i c ( nurl_str_get data i )
+            : i c ( nurl_str_at data len i )
             ? | | | == c delim == c quote == c 10 == c 13 { = need_quote T } {}
             = i + i 1
         }
@@ -311,7 +311,7 @@ $ `stdlib/std/hashmap.nu`
         : i len ( nurl_str_len data )
         : ~ i i 0
         ~ < i len {
-            : i c ( nurl_str_get data i )
+            : i c ( nurl_str_at data len i )
             ? == c quote { ( nurl_file_write_byte file quote ) } {}
             ( nurl_file_write_byte file c )
             = i + i 1
@@ -1779,7 +1779,7 @@ $ `stdlib/std/hashmap.nu`
         : i len ( nurl_str_len data )
         : ~ i i 0
         ~ & ! need_quote < i len {
-            : i c ( nurl_str_get data i )
+            : i c ( nurl_str_at data len i )
             ? | | | == c delim == c quote == c 10 == c 13 { = need_quote T } {}
             = i + i 1
         }
@@ -1790,7 +1790,7 @@ $ `stdlib/std/hashmap.nu`
         : i len ( nurl_str_len data )
         : ~ i i 0
         ~ < i len {
-            : i c ( nurl_str_get data i )
+            : i c ( nurl_str_at data len i )
             ? == c quote { ( string_push_char out quote ) } {}
             ( string_push_char out c )
             = i + i 1
