@@ -99,15 +99,20 @@ $ `stdlib/core/vec.nu`
 // path/generic component). url_query_decode handles the
 // form-urlencoded '+'→space rule for query strings.
 
+// Reads the input through a raw pointer with the length hoisted once.
+// `nurl_str_get` re-runs strlen per call, and the `string_push_char`
+// in this loop stores, so LLVM cannot hoist that strlen out — the byte
+// walk was O(n²) in the length of every decoded URL / query value.
 @ url_percent_decode s in → String {
     : i n ( nurl_str_len in )
+    : *u p # *u in
     : String out ( string_with_cap + n 1 )
     : ~ i k 0
     ~ < k n {
-        : i c ( nurl_str_get in k )
+        : i c & # i . p k 255
         ? & == c 37 <= + k 2 - n 1 {
-            : i hi ( __url_hex_val ( nurl_str_get in + k 1 ) )
-            : i lo ( __url_hex_val ( nurl_str_get in + k 2 ) )
+            : i hi ( __url_hex_val & # i . p + k 1 255 )
+            : i lo ( __url_hex_val & # i . p + k 2 255 )
             ? & >= hi 0 >= lo 0 {
                 ( string_push_char out + * hi 16 lo )
                 = k + k 3
@@ -123,12 +128,14 @@ $ `stdlib/core/vec.nu`
     ^ out
 }
 
+// Same hoisted-length / raw-pointer walk as url_percent_decode.
 @ url_percent_encode s in → String {
     : i n ( nurl_str_len in )
+    : *u p # *u in
     : String out ( string_with_cap + n 1 )
     : ~ i k 0
     ~ < k n {
-        : i c & 255 ( nurl_str_get in k )
+        : i c & # i . p k 255
         ? ( __url_is_unreserved c ) {
             ( string_push_char out c )
         } {
@@ -308,14 +315,15 @@ $ `stdlib/core/vec.nu`
 @ __url_form_decode s in → String {
     // like url_percent_decode but '+' → space (form-urlencoded)
     : i n ( nurl_str_len in )
+    : *u p # *u in
     : String out ( string_with_cap + n 1 )
     : ~ i k 0
     ~ < k n {
-        : i c ( nurl_str_get in k )
+        : i c & # i . p k 255
         ? == c 43 { ( string_push_char out 32 ) = k + k 1 } {
             ? & == c 37 <= + k 2 - n 1 {
-                : i hi ( __url_hex_val ( nurl_str_get in + k 1 ) )
-                : i lo ( __url_hex_val ( nurl_str_get in + k 2 ) )
+                : i hi ( __url_hex_val & # i . p + k 1 255 )
+                : i lo ( __url_hex_val & # i . p + k 2 255 )
                 ? & >= hi 0 >= lo 0 { ( string_push_char out + * hi 16 lo ) = k + k 3 }
                 { ( string_push_char out c ) = k + k 1 }
             } { ( string_push_char out c ) = k + k 1 }

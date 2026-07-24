@@ -436,23 +436,42 @@ $ `stdlib/core/char.nu`
     }
 }
 
+// Content equality over the FULL byte range [0, len). The lengths are
+// compared first, then the bytes with `memcmp` — not `strcmp`, which
+// stops at the first embedded NUL and would report two strings equal
+// when they differ only after it. `String` stores inner NULs verbatim
+// (see the module header), so the comparison has to honour them.
 @ string_eq String a String b → b {
     : ( Vec u ) ba ( __sbuf a )
     : ( Vec u ) bb ( __sbuf b )
     : i la ( vec_len [u] ba )
     : i lb ( vec_len [u] bb )
     ? != la lb { ^ F } {}
+    ? == la 0 { ^ T } {}
     : *u pa ( vec_data [u] ba )
     : *u pb ( vec_data [u] bb )
-    ^ == ( nurl_str_eq # s pa # s pb ) 1
+    ^ == 0 # i ( memcmp # s pa # s pb la )
 }
 
 // ── Mutators ────────────────────────────────────────────────────────
 
 @ string_push_char String str i c → v {
-    : ( Vec u ) b ( __sbuf str )
-    ( vec_push [u] b # u c )
-    ( _string_seal str )
+    : s ctl . str ctl
+    : i len ( nurl_peek ctl 1 )
+    : i cap ( nurl_peek ctl 2 )
+    // Fast path: room for the byte AND the trailing NUL already exists,
+    // so no grow-check and no _string_seal re-reserve is needed.
+    ? >= cap + len 2 {
+        : *u p # *u ( nurl_peek ctl 0 )
+        : u zero # u 0
+        = . p len # u c
+        = . p + len 1 zero
+        ( nurl_poke ctl 1 + len 1 )
+    } {
+        : ( Vec u ) b ( __sbuf str )
+        ( vec_push [u] b # u c )
+        ( _string_seal str )
+    }
 }
 
 @ string_push_str String str s raw → v {

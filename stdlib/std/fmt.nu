@@ -37,18 +37,24 @@ $ `stdlib/core/vec.nu`
 
 // ── Core engine ────────────────────────────────────────────────────
 
+// The template is walked through a raw pointer with its length hoisted
+// once. `nurl_str_get` re-runs strlen on every call, and the pushes
+// into `out` keep LLVM from hoisting it, so the scan used to be
+// quadratic in template length — 9.4 ns per byte on a 512-byte
+// template. Short templates hid the cost; HTML-sized ones do not.
 @ __fmt_emit String out s tmpl ( Vec s ) args → v {
     : i tlen ( nurl_str_len tmpl )
+    : *u tp # *u tmpl
     : i nargs ( vec_len [s] args )
     : ~ i i 0
     : ~ i ai 0
     ~ < i tlen {
-        : i c ( nurl_str_get tmpl i )
+        : i c & # i . tp i 255
         // '{' = 123, '}' = 125
         ? == c 123 {
             : i nxt + i 1
             ? < nxt tlen {
-                : i c2 ( nurl_str_get tmpl nxt )
+                : i c2 & # i . tp nxt 255
                 ? == c2 123 {
                     ( string_push_char out 123 )
                     = i + i 2
@@ -79,7 +85,7 @@ $ `stdlib/core/vec.nu`
             ? == c 125 {
                 : i nxt + i 1
                 ? < nxt tlen {
-                    : i c2 ( nurl_str_get tmpl nxt )
+                    : i c2 & # i . tp nxt 255
                     ? == c2 125 {
                         ( string_push_char out 125 )
                         = i + i 2

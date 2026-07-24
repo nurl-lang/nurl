@@ -164,25 +164,27 @@ $ `stdlib/ext/http.nu`
 }
 
 // First index in [start..len-3] at which buf contains \r\n\r\n.
+//
+// One `memmem` over the tail instead of a per-byte `_bbyte` walk (a
+// bounds check plus an `?u` Option per byte). This runs on every
+// inbound request, over the whole received buffer, until the header
+// terminator arrives — libc's SIMD search is the right tool.
 @ __find_head_end ( Vec u ) buf i start → i {
     : i n ( vec_len [u] buf )
-    ? < n + start 4 { ^ -1 } {}
-    : ~ i i start
-    : i stop - n 3
-    ~ <= i stop {
-        : i b0 ( _bbyte buf i )
-        ? == b0 13 {
-            : i b1 ( _bbyte buf + i 1 )
-            : i b2 ( _bbyte buf + i 2 )
-            : i b3 ( _bbyte buf + i 3 )
-            ? & & == b1 10 == b2 13 == b3 10 { ^ i } {}
-        } {}
-        = i + i 1
-    }
-    ^ -1
+    : i st ? > start 0 start 0
+    ? < n + st 4 { ^ -1 } {}
+    : *u data ( vec_data [u] buf )
+    : s hay # s + # i data st
+    : i rel ( nurl_memmem_range hay - n st `\r\n\r\n` 4 )
+    ? < rel 0 { ^ -1 } {}
+    ^ + st rel
 }
 
-// Copy bytes [from..to) of `buf` into a fresh owned String.
+// Copy bytes [from..to) of `buf` into a fresh owned String. Bulk
+// `string_push_bytes` (one memcpy) rather than a per-byte push — this
+// is called for the request line and for every header of every
+// request. The range is already clamped into [0, len), so the per-byte
+// bounds check the old `_bbyte` loop paid for was dead weight.
 @ _bsubstr ( Vec u ) buf i from i to → String {
     : i n ( vec_len [u] buf )
     : ~ i a ? < from 0 0 from
@@ -190,12 +192,11 @@ $ `stdlib/ext/http.nu`
     ? > a b { = a b } {}
     : i out_n - b a
     : String out ( string_with_cap out_n )
-    : ~ i k a
-    ~ < k b {
-        : i bb ( _bbyte buf k )
-        ? >= bb 0 { ( string_push_char out bb ) } {}
-        = k + k 1
-    }
+    ? > out_n 0 {
+        : *u data ( vec_data [u] buf )
+        : *u at # *u + # i data a
+        ( string_push_bytes out at out_n )
+    } {}
     ^ out
 }
 
