@@ -8,7 +8,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.23.0] — 2026-07-24
+### Changed
+
+- **`stdlib/std/sort.nu` — insertion-sort cutoff for small subranges.**
+  `sort_by` / `binary_search`'s quicksort now hands ranges of ≤16 elements to
+  a straight insertion sort instead of partitioning them all the way down.
+  Measured ~22% faster end-to-end on the `benchmark` suite's `sort i64` row
+  (18 → 22 M/s) and ~15% on a 2 M-element i64 sort, with no allocation or API
+  change. Investigation note: the win is the algorithm, not closure
+  elimination — a monomorphic comparator closure is branch-predicted and
+  costs ~1-2% over a hand-inlined compare (measured), so higher-order sorting
+  in NURL is already essentially free. As a side effect small all-equal
+  ranges now keep their input order (insertion sort is stable below the
+  cutoff); `sort_by` still makes no general stability guarantee.
 
 The **ecosystem** release. v0.22.0 made the registry a training stack;
 v0.23.0 closes the loop around it — the missing packages that turn "train

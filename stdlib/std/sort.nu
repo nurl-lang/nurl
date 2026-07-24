@@ -53,10 +53,42 @@ $ `stdlib/core/vec.nu`
     }
 }
 
+// Straight insertion sort over data[lo..hi] (inclusive). Quicksort hands off
+// to this once a subrange is small: below the cutoff a partition's overhead
+// (median-of-three, two scanning pointers, the recursive frame) costs more
+// than a few shifts, and the branch-predictable inner loop wins on real data.
+// Same comparator convention as the rest of the file: cmp a b > 0 ⇔ a > b, so
+// this produces the identical ascending order as the quicksort path.
+@ __sort_insertion [A] * A data i lo i hi ( @ i A A ) cmp → v {
+    : ~ i i + lo 1
+    ~ <= i hi {
+        : A x . data i
+        : ~ i j i
+        ~ & > j lo > ( cmp . data - j 1 x ) 0 {
+            = . data j . data - j 1
+            = j - j 1
+        }
+        = . data j x
+        = i + i 1
+    }
+}
+
+// Cutoff below which insertion sort beats partitioning. 16 is the usual sweet
+// spot (glibc/libc++ use 16, Go uses 12). A local i64 sweep was flat from 16
+// to 32 (a cheap comparator favours a larger cutoff); 16 is chosen because a
+// larger cutoff runs more insertion-sort comparisons per block, which costs
+// more when the comparator is expensive (string/struct keys).
+@ __SORT_INSERTION_CUTOFF → i { ^ 16 }
+
 @ __sort_qs [A] * A data i lo i hi ( @ i A A ) cmp → v {
     : ~ i l lo
     : ~ i h hi
     ~ < l h {
+        // Small subrange: insertion-sort it and we're done with [l..h].
+        ? <= - h l ( __SORT_INSERTION_CUTOFF ) {
+            ( __sort_insertion [A] data l h cmp )
+            ^ v
+        } {}
         : i p ( __sort_partition_hoare [A] data l h cmp )
         // Guarantee O(log N) stack depth by recursing on the smaller partition
         // and looping on the larger one.

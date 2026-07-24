@@ -126,10 +126,14 @@ $ `src/report.nu`
 }
 
 // Inline i64 quicksort — the same Hoare-partition / median-of-three /
-// recurse-the-smaller-half shape as std/sort, but comparing i64 values
-// directly instead of through a `( @ i A A )` closure. That one change is
-// the whole point: a closure call per comparison (~20 M of them) is what
-// makes the generic sort_by path several times slower here.
+// recurse-the-smaller-half shape as std/sort, comparing i64 values directly
+// with a small-range insertion-sort cutoff. The win here is NOT closure
+// elimination: a monomorphic closure call is branch-predicted and costs ~1-2%
+// (measured), and std/sort inlines its comparator well. The win is that the
+// sort keys are packed into one i64 ONCE up front (see bench_csv_sort) so no
+// comparison re-derives (type, date, uuid) — the comparator would otherwise
+// re-parse strings on every one of ~20 M calls. That is the several-times gap;
+// the direct i64 compare vs the closure's `x - y` sign is a rounding error.
 @ __swp_i * i a i i i j → v {
     : i x . a i
     : i y . a j
