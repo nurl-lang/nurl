@@ -10,6 +10,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`stdlib/std/tls.nu` — offer ChaCha20-Poly1305 ahead of AES-128-GCM
+  (~6× faster HTTPS downloads).** The record layer, not the network, was
+  the ceiling on every large `https://` transfer: our AES-128-GCM is the
+  deliberately table-free constant-time S-box (recomputed per byte, ~160
+  S-box evaluations per 16-byte block), which measures **0.5 MB/s**,
+  while the pure-NURL ChaCha20-Poly1305 next to it runs **~25 MB/s** —
+  a 50× difference the ClientHello was throwing away by listing 0x1301
+  first. Both TLS 1.3 suites use the same SHA-256 key schedule, so the
+  reorder touches nothing else in the handshake, and AES-only peers
+  still get 0x1301 from the same list. Measured end-to-end on
+  `nurllama run LumiOpen/Llama-Poro-2-8B-Instruct` (Hugging Face → its
+  CloudFront CDN, which honours client preference): **188 KB/s → 468
+  KB/s**, with per-transfer CPU dropping **25.1 s → 1.74 s per 8 MB** —
+  i.e. the client went from CPU-bound to network-bound, and now tracks
+  `curl` on the same link. Against `speed.cloudflare.com`: 487 KB/s →
+  1185 KB/s (curl: 1174 KB/s). The CPU ceiling is now ~8.5 MB/s rather
+  than ~0.34 MB/s. Servers that pin their own preference to AES (e.g.
+  `huggingface.co`'s API host) still negotiate AES-128-GCM and remain
+  slow — a bitsliced constant-time AES is the fix there, not a table.
+- **`stdlib/std/tls.nu` / `stdlib/std/bytes.nu` — memcpy the record-layer
+  copies.** `_tls_cat` and `bytes_slice` were per-byte `vec_push` loops
+  sitting on the receive hot path, where every TLS record is copied four
+  times (socket → `rxbuf`, body out, remainder back, plaintext →
+  `appbuf`). Both now go through `nurl_memcpy` (`bytes_extend_bytes` /
+  `bytes_extend_raw`): ~0.3 s less CPU per 10 MB downloaded, and the
+  slice+concat cost for 10 MB of 16 KB records is now 1 ms.
+
 - **`stdlib/std/sort.nu` — insertion-sort cutoff for small subranges.**
   `sort_by` / `binary_search`'s quicksort now hands ranges of ≤16 elements to
   a straight insertion sort instead of partitioning them all the way down.
