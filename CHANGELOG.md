@@ -8,6 +8,84 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.23.0] — 2026-07-24
+
+The **ecosystem** release. v0.22.0 made the registry a training stack;
+v0.23.0 closes the loop around it — the missing packages that turn "train
+a model" into "train it, save it, serve it, retrieve with it", the
+host-memory and mixed-precision work that makes f32 training usable at
+scale, browsable API docs on the registry, and the MCP tooling that lets
+an LLM *discover, read, and build against every package in the ecosystem*.
+The compiler is unchanged from 0.22.0; the one toolchain-level change is
+`ext/mcp_search` (below). Everything else ships as registry packages and
+the live registry Worker.
+
+### Added
+
+- **`packages/nn` 0.1.0 — neural-network layers on the grad tape.** The
+  reusable middle the training stack was missing: `nn_linear` /
+  `nn_lora_linear`, `nn_rmsnorm` / `nn_layernorm`, `nn_silu` / `nn_swiglu`,
+  NEOX `nn_rope`, grouped-query `nn_gqa_attention`, `nn_cross_entropy` —
+  each a pure tape builder, so backward is derived and device replay +
+  megakernel fusion come free. Lifted from grad's PyTorch-f64-verified LoRA
+  block and gated against the same oracle (loss 3.3e-16, adapter grads
+  1e-13); nurllama's finetune now consumes it, byte-for-byte unchanged.
+- **`packages/safetensor` 0.3.0 — a writer** (round-trip partner of the
+  reader). `stw_add_f32` / `_f64` / `_f16` / `_bf16` / `_i64` +
+  `stw_finish` / `stw_write`; the reference `safetensors` Python library
+  reads NURL-written files bit-exact across every dtype. Closes the loop:
+  train on the tape → save through the package writer → serve through
+  nurllama (nurllama's inline emitter folded into it).
+- **`packages/data` 0.1.0 — a training DataLoader.** Seeded reproducible
+  Fisher-Yates shuffle, epoch reshuffling, drop-last, worker sharding, and
+  disk streaming (the `.ndf` format, random-access preads so a corpus
+  larger than RAM never loads whole). Determinism is a gate: same seed →
+  same batch order; N shards partition exactly once; streamed batches equal
+  in-memory batches.
+- **`packages/vindex` 0.1.0 — a vector index (the RAG piece).** Exact
+  brute-force + IVF-flat (k-means coarse quantiser + inverted lists),
+  cosine/L2, `.vix` save/load. Recall@10 vs the exact index is a measured
+  gate. Completes embed → vindex → nurllama.
+- **`grad` megakernel fusion (0.7.0) + mixed precision (0.8.1).** Fusion
+  generates the fused-kernel shape from the captured tape — a row-local
+  chain plus the scalar tail become ~5 kernels under one CUDA graph
+  (~18× the CPU tape on the AE bench, bit-identical to the per-node
+  replay). Mixed precision (`gput_capture_dt(…, 2)`: f32 storage, f64
+  accumulation) makes the half-VRAM f32 path numerically usable at scale —
+  ~35× closer to the f64 reference than pure f32 at identical memory.
+- **`grad` 0.8.0 + `nurllama` 0.12.9 — host-memory training.**
+  `tape_drop_consts` frees the tape's const nodes after device capture, and
+  nurllama frees + streams the model's base weights (identical loader path,
+  so the merge stays byte-exact) — the host-RAM wall that gated building a
+  large model's graph is gone. `nurllama finetune --f32 / --mixed`.
+- **Registry API documentation** (`registry` 0.4.0 + the deployed Worker).
+  Every published release now has a browsable API page — nurldoc over its
+  `src/*.nu`, at `/packages/<name>/<version>/api` — plus a symbol index so
+  search matches a package by a function whose name you couldn't guess
+  (`?q=gqa_attention` → `nn`, with `matched_symbols`).
+- **MCP ecosystem discovery** (`nurl-mcp` + `ext/mcp_search`). `nurl_api`
+  gains a `package` param — streams a published tarball and renders its API
+  surface with the same nurldoc engine. Registry hits now carry the next
+  step (`add: nn = "^0.1.1" · API: nurl_api package=nn`) and the matched
+  symbols. And **`nurl_build_project`** compiles a program that *uses* a
+  registry package: it synthesises a workspace + manifest, resolves the
+  deps with `nurlpkg install` (transitive, checksum + signature verified),
+  and compiles with the local toolchain — closing the loop from discovery
+  to a working binary.
+
+### Changed
+
+- **`ext/mcp_search`** (the one toolchain-level change) gains
+  `msearch_api_package` (registry-package API surface) and the actionable
+  registry-hit footer. This is why nurl-mcp 0.6.0+ needs this toolchain.
+
+### Fixed
+
+- **Registry symbol search escaping.** The query sanitiser stripped
+  underscores (to neutralise the LIKE `_` wildcard), so every underscored
+  symbol name was unfindable; it now escapes the LIKE metacharacters
+  (`\ % _`) with `ESCAPE '\'` instead of dropping them.
+
 ## [0.22.0] — 2026-07-22
 
 The **training** release: the registry's inference-only stack becomes a
@@ -8231,7 +8309,8 @@ releases are measured.
   compile-server (`api/`), browser playground (`nurlweb/`).
 * Dual license: MIT (LICENSE-MIT) or Apache-2.0 (LICENSE-APACHE).
 
-[Unreleased]: https://github.com/nurl-lang/nurl/compare/v0.22.0...HEAD
+[Unreleased]: https://github.com/nurl-lang/nurl/compare/v0.23.0...HEAD
+[0.23.0]: https://github.com/nurl-lang/nurl/compare/v0.22.0...v0.23.0
 [0.22.0]: https://github.com/nurl-lang/nurl/compare/v0.21.0...v0.22.0
 [0.13.0]: https://github.com/nurl-lang/nurl/compare/v0.12.0...v0.13.0
 [0.12.0]: https://github.com/nurl-lang/nurl/compare/v0.11.3...v0.12.0
