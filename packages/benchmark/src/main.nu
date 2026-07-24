@@ -1,10 +1,10 @@
-// packages/bench — the CLI.
+// packages/benchmark — the CLI.
 //
-//   bench                 run the whole suite, print a table
-//   bench <name…>         run only the named benchmarks
-//   bench --list          list the benchmark names
-//   bench --json          emit the measurements as JSON
-//   bench --help
+//   benchmark                 run the whole suite, print a table
+//   benchmark <name…>         run only the named benchmarks
+//   benchmark --list          list the benchmark names
+//   benchmark --json          emit the measurements as JSON
+//   benchmark --help
 //
 // Every number is measured on the machine it runs on. Pure NURL, zero
 // dependencies beyond the standard library — no GPU, model or network.
@@ -78,11 +78,11 @@ $ `src/suite.nu`
     }
 
     ? do_help {
-        ( nurl_print `bench — reproduce NURL's throughput claims on this machine.\n\n` )
-        ( nurl_print `  bench              run the whole suite\n` )
-        ( nurl_print `  bench <name…>      run only the named benchmarks\n` )
-        ( nurl_print `  bench --list       list the benchmark names\n` )
-        ( nurl_print `  bench --json       emit the measurements as JSON\n\n` )
+        ( nurl_print `benchmark — reproduce NURL's throughput claims on this machine.\n\n` )
+        ( nurl_print `  benchmark              run the whole suite\n` )
+        ( nurl_print `  benchmark <name…>      run only the named benchmarks\n` )
+        ( nurl_print `  benchmark --list       list the benchmark names\n` )
+        ( nurl_print `  benchmark --json       emit the measurements as JSON\n\n` )
         ( nurl_print `Pure NURL, no GPU / model / network. Throughput is MB/s, M/s (millions\nof elements or iterations per second), measured with std/bench.\n` )
         ( __bench_free_args av filters )
         ^ 0

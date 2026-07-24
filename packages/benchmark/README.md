@@ -1,11 +1,11 @@
-# bench
+# benchmark
 
 Reproduce NURL's performance claims on your own machine — a runnable benchmark
 suite, not a number in a README.
 
 ```
-$ nurlpkg install bench
-$ bench
+$ nurlpkg install benchmark
+$ benchmark
 NURL benchmark suite — pure-NURL throughput on this machine
 
   sha256                88 MB/s    (11829677 ns/op, 16390 allocs/op)
@@ -71,17 +71,17 @@ rather than assuming.)
 
 ## Zero setup, runs anywhere
 
-No GPU, no model download, no network, no configuration. `bench` has **no
+No GPU, no model download, no network, no configuration. `benchmark` has **no
 dependencies beyond the standard library** and runs anywhere NURL runs.
 
 ## Usage
 
 ```
-bench                 run the whole suite
-bench <name…>         run only the named benchmarks   (bench sha256 "utf8 decode")
-bench --list          list the benchmark names
-bench --json          emit the measurements as JSON — a CI baseline or a
-                      regression gate
+benchmark                 run the whole suite
+benchmark <name…>         run only the named benchmarks   (benchmark sha256 "utf8 decode")
+benchmark --list          list the benchmark names
+benchmark --json          emit the measurements as JSON — a CI baseline or a
+                          regression gate
 ```
 
 `--json` gives one object per benchmark (`name`, `ns_per_op`, `allocs_per_op`,
@@ -90,7 +90,7 @@ baseline and fail on a regression.
 
 ## Scope
 
-`bench` proves the *stdlib* throughput story — the layer every package shares.
+`benchmark` proves the *stdlib* throughput story — the layer every package shares.
 Package-specific claims (a model's tokens/s, a gradient's parity, an HTTP
 server's conformance) live as `benches/*.nu` in their own packages, run with
 `nurlpkg bench`, where they have the model, GPU or fixture they need.

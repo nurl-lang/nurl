@@ -2,7 +2,7 @@
 # Copyright (c) 2026 The NURL Project Developers
 # SPDX-License-Identifier: MIT OR Apache-2.0
 # ============================================================
-#  tests/bench_test.sh — the bench CLI runs and reports.
+#  tests/benchmark_test.sh — the benchmark CLI runs and reports.
 #    1. build
 #    2. --list names all benchmarks
 #    3. a full run prints a row per benchmark with a throughput unit
@@ -11,7 +11,7 @@
 #  Wall-time numbers are machine-dependent, so nothing here asserts a
 #  specific throughput — only that every benchmark runs and reports.
 #
-#  Run from the package dir:  ./tests/bench_test.sh
+#  Run from the package dir:  ./tests/benchmark_test.sh
 # ============================================================
 set -u
 cd "$(dirname "$0")/.."
@@ -21,7 +21,7 @@ elif [ -x "$REPO_ROOT/nurl.sh" ]; then NURL="$REPO_ROOT/nurl.sh"; export NURL_ST
 else NURL="nurl"; fi
 
 WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT
-BIN="$WORK/bench"
+BIN="$WORK/benchmark"
 fail() { echo "FAIL: $1"; exit 1; }
 
 echo "[1/5] build"
@@ -57,4 +57,4 @@ F="$("$BIN" sha256)"
 echo "$F" | grep -qF sha256 || fail "filter dropped sha256"
 echo "$F" | grep -qF "int loop" && fail "filter should NOT run int loop"
 
-echo "PASS: bench runs and reports"
+echo "PASS: benchmark runs and reports"
