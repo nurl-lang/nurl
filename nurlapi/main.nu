@@ -4506,6 +4506,41 @@ s combined_stdout s combined_stderr → v {
 @ __mcp_tool_api Json args → Json {
     : s module ( __mcp_args_get `module` args `` )
     : s query ( __mcp_args_get `query` args `` )
+    : s package ( __mcp_args_get `package` args `` )
+    : s version ( __mcp_args_get `version` args `` )
+    // A PUBLISHED registry package's API surface — nurldoc over its src/*.nu,
+    // streamed from the tarball, same engine as the stdlib `module` path.
+    // Package function/type names are not otherwise searchable, so this is the
+    // step after a registry hit (nurl_grep where='packages' / a 0-hit query).
+    ? > ( nurl_str_len package ) 0 {
+        : String rb0 ( msearch_default_registry )
+        : String md0 ( msearch_api_package ( string_data rb0 ) package version )
+        ( string_free rb0 )
+        ? == ( string_len md0 ) 0 {
+            ( string_free md0 )
+            ^ ( __mcp_result_error `package not found or has no src/*.nu — check the name (see nurl_grep where='packages'); 'version' defaults to the latest` )
+        } {}
+        // Prepend the import recipe: the module headings below are '# <mod>.nu';
+        // a program adds the package to its nurl.toml [dependencies] and imports
+        // one as $ `deps/<name>/src/<module>`. The bridge from reading the API
+        // to a working build.
+        : String hint ( string_from `To USE this package: add it to your project's nurl.toml [dependencies] ({"` )
+        ( string_push_str hint package )
+        ( string_push_str hint `" = "^<version>"}), then import a module below as  $ ` )
+        ( string_push_char hint 96 )
+        ( string_push_str hint `deps/` )
+        ( string_push_str hint package )
+        ( string_push_str hint `/src/<MODULE>` )
+        ( string_push_char hint 96 )
+        ( string_push_str hint `  (e.g. the '# nn.nu' module → deps/` )
+        ( string_push_str hint package )
+        ( string_push_str hint `/src/nn.nu).\n\n` )
+        ( string_push_str hint ( string_data md0 ) )
+        : Json r0 ( __mcp_result_text ( string_data hint ) )
+        ( string_free hint )
+        ( string_free md0 )
+        ^ r0
+    } {}
     ? > ( nurl_str_len module ) 0 {
         ? ( _has_dotdot_segment module ) { ^ ( __mcp_result_error `bad 'module'` ) } {}
         : String sd ( get_stdlib_dir )
@@ -4520,7 +4555,7 @@ s combined_stdout s combined_stderr → v {
         ^ r
     } {}
     ? == ( nurl_str_len query ) 0 {
-        ^ ( __mcp_result_error `pass 'module' (a nurl_list_stdlib path, e.g. ext/csv.nu) or 'query' (search terms)` )
+        ^ ( __mcp_result_error `pass one of: 'module' (a stdlib path, e.g. ext/csv.nu), 'package' (a registry package name, e.g. nn), or 'query' (search terms). To read what a registry package exposes, use package=<name> (from a nurl_grep hit).` )
     } {}
     : String sd ( get_stdlib_dir )
     : String ed ( get_examples_dir )
@@ -4537,9 +4572,13 @@ s combined_stdout s combined_stderr → v {
     ( json_obj_set schema `type` ( json_str_lit `object` ) )
     : Json props ( json_obj_new )
     ( json_obj_set props `module`
-    ( __mcp_prop `string` `Render ONE module's API surface (signatures, doc comments, full type definitions — no function bodies). A nurl_list_stdlib path, e.g. 'ext/csv.nu'.` ) )
+    ( __mcp_prop `string` `Render ONE installed-stdlib module's API surface (signatures, doc comments, full type definitions — no function bodies). A nurl_list_stdlib path, e.g. 'ext/csv.nu'.` ) )
+    ( json_obj_set props `package`
+    ( __mcp_prop `string` `Render a PUBLISHED registry package's API surface — nurldoc over its src/*.nu, streamed from the tarball. The name from a registry search, e.g. 'nn'. Use this after a registry hit (nurl_grep where='packages', or a 0-hit query) to learn the functions/types a package exposes — their names are not otherwise searchable.` ) )
+    ( json_obj_set props `version`
+    ( __mcp_prop `string` `Optional package version (e.g. '0.1.1'); defaults to the latest. Only meaningful with 'package'.` ) )
     ( json_obj_set props `query`
-    ( __mcp_prop `string` `Search every stdlib module's declarations instead: space-separated terms, ALL must occur (case-insensitive) in a declaration's signature + doc comment + module path. On zero hits the search widens automatically to example programs and registry packages (name + description) in the same reply. Ignored when 'module' is set.` ) )
+    ( __mcp_prop `string` `Search every stdlib module's declarations instead: space-separated terms, ALL must occur (case-insensitive) in a declaration's signature + doc comment + module path. On zero hits the search widens automatically to example programs and registry packages (name + description) in the same reply. Ignored when 'module' or 'package' is set.` ) )
     ( json_obj_set schema `properties` props )
     ^ schema
 }
@@ -4777,7 +4816,7 @@ s combined_stdout s combined_stderr → v {
     ( __mcp_schema_changelog ) ) )
 
     ( json_arr_push arr ( __mcp_tool_desc `nurl_api`
-    `A stdlib module's API surface, or a search across all of them — strongly prefer this over nurl_read_stdlib (whole modules waste context; ext/csv.nu is 63 KB, its API surface 11 KB, one matching declaration ~0.3 KB). module='ext/csv.nu' renders one module's signatures + doc comments + full type definitions, no function bodies. query='csv quote' finds every stdlib declaration whose signature/doc/module-path contains ALL terms.`
+    `A stdlib module's API surface, a published package's API surface, or a search across all stdlib modules — strongly prefer this over nurl_read_stdlib (whole modules waste context; ext/csv.nu is 63 KB, its API surface 11 KB, one matching declaration ~0.3 KB). module='ext/csv.nu' renders one stdlib module's signatures + doc comments + full type definitions, no function bodies. package='nn' renders a registry package's API the same way (streamed from its tarball) — the step after a registry hit to see the functions/types it exposes. query='csv quote' finds every stdlib declaration whose signature/doc/module-path contains ALL terms (0 hits widen to examples + registry).`
     ( __mcp_schema_api ) ) )
 
     ( json_arr_push arr ( __mcp_tool_desc `nurl_grep`
