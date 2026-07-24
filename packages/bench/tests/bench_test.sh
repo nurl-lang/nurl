@@ -34,7 +34,7 @@ N=$("$BIN" --list | grep -c .)
 
 echo "[3/5] full run prints a throughput row per benchmark"
 OUT="$("$BIN")" || fail "run exited non-zero"
-for name in sha256 "json parse" "sort i64" "cbor decode" "utf8 decode" "int loop"; do
+for name in sha256 "json parse" "sort i64" "cbor decode" "utf8 decode" "int loop" "csv sort 1M×8"; do
     echo "$OUT" | grep -qF "$name" || fail "no row for '$name'"
 done
 echo "$OUT" | grep -qE 'MB/s|M/s' || fail "no throughput unit in the table"

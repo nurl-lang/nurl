@@ -14,6 +14,7 @@ NURL benchmark suite — pure-NURL throughput on this machine
   cbor decode           20 MB/s    (293288 ns/op, 2002 allocs/op)
   utf8 decode         1002 MB/s    (261573 ns/op, 0 allocs/op)
   int loop             693 M/s     (2883927 ns/op, 0 allocs/op)
+  csv sort 1M×8         18 M/s     (54789071 ns/op, 2 allocs/op)
 ```
 
 (Your numbers will differ — that's the point. These are from one machine.)
@@ -30,6 +31,25 @@ Pure-NURL throughput for the primitives the rest of the ecosystem is built on:
 | `cbor decode` | decode a CBOR array | MB/s |
 | `utf8 decode` | walk a multi-byte UTF-8 string | MB/s |
 | `int loop` | a tight data-dependent integer loop | M iters/s |
+| `csv sort 1M×8` | sort 1 000 000 8-column CSV rows by (type, date, uuid) | M rows/s |
+
+The `csv sort` benchmark parses a generated 1 M-row, 8-column CSV with the
+standard library's arena CSV reader (`csv_table_from_string`) at setup, packs
+each row's `(type, date, uuid)` keys into one non-negative i64, then times an
+in-place integer sort of those keys. On the machine above it sorts a million
+rows in ~55 ms — matching a hand-tuned pre-1.0 reference that a comparison-based
+`sort_by` closure was several times slower than. Two things made the difference,
+both worth knowing:
+
+- **Read cells off the view pointer, never with `nurl_str_get`.** A CSV cell
+  view is a bare pointer into one big arena buffer with no interior NUL, and
+  `nurl_str_get` bounds-checks with `strlen` — so a single read scans to the end
+  of the file. Doing that per byte turned a sub-second extract into *minutes*
+  (O(N²)). Byte access is `# i . p k` on the `*u` view.
+- **Sort integers, not through a comparator closure.** Parse each row's keys
+  *once* into a packed integer (the "parse keys once" lesson), and sort with an
+  inline quicksort/insertion-sort — a closure call per comparison, ~20 M of
+  them, is the whole gap between fast and slow.
 
 Each row also reports **allocations per op** — the NURL-level heap allocations
 the operation costs — alongside wall time, because how much a routine allocates

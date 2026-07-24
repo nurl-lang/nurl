@@ -17,7 +17,7 @@ $ `src/report.nu`
 $ `src/suite.nu`
 
 // the registry of benchmarks: name → thunk producing its row
-@ __bench_count → i { ^ 6 }
+@ __bench_count → i { ^ 7 }
 
 @ __bench_name i idx → s {
     ? == idx 0 { ^ `sha256` } {}
@@ -25,7 +25,8 @@ $ `src/suite.nu`
     ? == idx 2 { ^ `sort i64` } {}
     ? == idx 3 { ^ `cbor decode` } {}
     ? == idx 4 { ^ `utf8 decode` } {}
-    ^ `int loop`
+    ? == idx 5 { ^ `int loop` } {}
+    ^ `csv sort 1M×8`
 }
 
 @ __bench_run_one i idx → BenchRow {
@@ -34,7 +35,8 @@ $ `src/suite.nu`
     ? == idx 2 { ^ ( bench_sort ) } {}
     ? == idx 3 { ^ ( bench_cbor_decode ) } {}
     ? == idx 4 { ^ ( bench_utf8_decode ) } {}
-    ^ ( bench_int_loop )
+    ? == idx 5 { ^ ( bench_int_loop ) } {}
+    ^ ( bench_csv_sort )
 }
 
 // was `name` asked for? (no positional filters → everything)
