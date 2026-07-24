@@ -45,6 +45,7 @@ $ `stdlib/ext/pkg_publish.nu`
 $ `stdlib/ext/semver.nu`
 $ `stdlib/ext/credentials.nu`
 $ `stdlib/ext/json.nu`
+$ `stdlib/ext/update_check.nu`
 $ `stdlib/core/io.nu`
 $ `stdlib/std/hash_sha256.nu`
 $ `stdlib/std/bytes.nu`
@@ -3869,7 +3870,15 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
 
 // ── dispatch ─────────────────────────────────────────────────────
 
+// Run the command, then print a best-effort "a newer toolchain is out" notice
+// AFTER its output (stderr; cached, opt-out — see stdlib/ext/update_check.nu).
 @ main → i {
+    : i rc ( __nurlpkg_run )
+    ( update_check_notice ( nurl_version ) )
+    ^ rc
+}
+
+@ __nurlpkg_run → i {
     : i argc ( env_args_count )
     ? < argc 2 {
         ( __print_usage )
