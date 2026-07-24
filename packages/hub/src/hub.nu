@@ -17,9 +17,12 @@ $ `stdlib/std/fs.nu`
 $ `stdlib/std/path.nu`
 $ `stdlib/std/progress.nu`
 $ `stdlib/ext/json.nu`
-$ `src/store.nu`
-$ `src/pull.nu`
-$ `src/hf.nu`
+
+// This package is multiple files (store / hf / pull / hub). Following the
+// ecosystem convention for a CONSUMED library, a source file does not
+// `$`-import its siblings — the entry point (this package's main.nu / tests,
+// or a consumer) imports every file, so a consumer can `$ deps/hub/src/*.nu`
+// without a src/-relative path breaking against its own build root.
 
 // canonical handle for a ref: the URL, or org/repo@rev[/subpath]
 @ __hub_handle HubRef r → String {
@@ -333,6 +336,26 @@ $ `src/hf.nu`
     }
     ( string_free mdir )
     ( string_free root )
+}
+
+// The one call a consumer wants: turn a model argument into a usable local
+// path, fetching it if need be. An argument that already names an existing
+// file or directory is passed straight through (so a local model keeps
+// working); otherwise it is a Hugging Face ref — a single file (a URL, or a
+// ref with a subpath) resolves through hub_file, a bare org/repo through
+// hub_dir. `embed serve BAAI/bge-m3` and `embed serve ./my-model` both just
+// work.
+@ hub_get s ref → !String String {
+    ? != ( nurl_path_type ref ) 0 {
+        ^ @ !String String { T ( string_from ref ) }
+    } {}
+    : HubRef r ( hub_ref_parse ref )
+    : ~ b isfile F
+    ? . r is_url { = isfile T } {}
+    ? > ( string_len . r subpath ) 0 { = isfile T } {}
+    ( hub_ref_free r )
+    ? isfile { ^ ( hub_file ref ) } {}
+    ^ ( hub_dir ref )
 }
 
 // Resolve a ref to its local path WITHOUT fetching — the blob path for a

@@ -6,7 +6,10 @@
 //
 // A model directory is the Hugging Face layout: config.json +
 // tokenizer.json + model.safetensors (f32). BGE-M3 works as-is; any
-// XLM-RoBERTa-family encoder does (multilingual-e5: --pool mean).
+// XLM-RoBERTa-family encoder does (multilingual-e5: --pool mean). The
+// model argument can be a local directory OR a Hugging Face ref
+// (`embed serve BAAI/bge-m3`): a ref is fetched into the shared ~/.nurl
+// cache via the hub package and the downloaded directory is used.
 
 $ `stdlib/core/io.nu`
 $ `stdlib/core/string.nu`
@@ -14,13 +17,28 @@ $ `stdlib/core/vec.nu`
 $ `stdlib/std/fs.nu`
 $ `stdlib/ext/env.nu`
 $ `serve.nu`
+$ `deps/hub/src/store.nu`
+$ `deps/hub/src/hf.nu`
+$ `deps/hub/src/pull.nu`
+$ `deps/hub/src/hub.nu`
+
+// Resolve a model argument to a local path — an existing directory is used
+// as is, a Hugging Face ref is fetched. Returns "" (after reporting) on a
+// fetch error; a real resolved path is never empty.
+@ __embed_resolve s arg → String {
+    ?? ( hub_get arg ) {
+        T p → { ^ p }
+        F e → { ( nurl_eprint ( string_data e ) ) ( nurl_eprint `\n` ) ( string_free e ) ^ ( string_new ) }
+    }
+}
 
 @ __cli_usage → v {
     ( nurl_print `embed — pure-NURL embedding server (XLM-RoBERTa family: BGE-M3, multilingual-e5, …)\n\n` )
-    ( nurl_print `  embed serve <model-dir> [--addr HOST:PORT] [--token T] [--maxseq N]\n` )
-    ( nurl_print `                          [--pool cls|mean] [--no-normalize]\n` )
-    ( nurl_print `  embed text  <model-dir> <text…>\n\n` )
-    ( nurl_print `model-dir: config.json + tokenizer.json + model.safetensors (f32)\n` )
+    ( nurl_print `  embed serve <model> [--addr HOST:PORT] [--token T] [--maxseq N]\n` )
+    ( nurl_print `                      [--pool cls|mean] [--no-normalize]\n` )
+    ( nurl_print `  embed text  <model> <text…>\n\n` )
+    ( nurl_print `model: a local directory (config.json + tokenizer.json + model.safetensors, f32)\n` )
+    ( nurl_print `       or a Hugging Face ref (e.g. BAAI/bge-m3), fetched into ~/.nurl/models\n` )
     ( nurl_print `default addr 127.0.0.1:8000; no --token = open server (loopback only!)\n` )
 }
 
@@ -88,47 +106,18 @@ $ `serve.nu`
     : s cmd ( __cli_arg av 1 )
     : ~ i rc 0
     ? & >= n 3 != 0 ( nurl_str_eq cmd `serve` ) {
-        : s dir ( __cli_arg av 2 )
-        ?? ( embed_open dir ) {
-            T e → {
-                ( __cli_apply_opts e av 3 )
-                : String host ( string_new )
-                : s addr ( __cli_opt av 3 `--addr` )
-                : ~ i port 8000
-                ? > ( nurl_str_len addr ) 0 { = port ( __cli_addr addr host port ) } { ( string_push_str host `127.0.0.1` ) }
-                = rc ( embed_serve e dir ( string_data host ) port ( __cli_opt av 3 `--token` ) )
-                ( string_free host )
-                ( embed_close e )
-            }
-            F err → {
-                ( nurl_eprint ( string_data err ) ) ( nurl_eprint `\n` )
-                ( string_free err )
-                = rc 1
-            }
-        }
-    } {
-        ? & >= n 4 != 0 ( nurl_str_eq cmd `text` ) {
-            : s dir ( __cli_arg av 2 )
+        : String dirS ( __embed_resolve ( __cli_arg av 2 ) )
+        ? == ( string_len dirS ) 0 { = rc 1 } {
+            : s dir ( string_data dirS )
             ?? ( embed_open dir ) {
                 T e → {
-                    ( __cli_apply_opts e av 4 )
-                    : ( Vec f ) emb ( vec_new [f] )
-                    ? ( embed_encode e ( __cli_arg av 3 ) emb ) {
-                        : String o ( string_new )
-                        : i dn ( vec_len [f] emb )
-                        : ~ i k 0
-                        ~ < k dn {
-                            ? > k 0 { ( string_push_char o 44 ) } {}
-                            ?? ( vec_get [f] emb k ) { T x → { ( string_push_float o x ) } F → {} }
-                            = k + k 1
-                        }
-                        ( nurl_print ( string_data o ) ) ( nurl_print `\n` )
-                        ( string_free o )
-                    } {
-                        ( nurl_eprint `embed: encode failed\n` )
-                        = rc 1
-                    }
-                    ( vec_free [f] emb )
+                    ( __cli_apply_opts e av 3 )
+                    : String host ( string_new )
+                    : s addr ( __cli_opt av 3 `--addr` )
+                    : ~ i port 8000
+                    ? > ( nurl_str_len addr ) 0 { = port ( __cli_addr addr host port ) } { ( string_push_str host `127.0.0.1` ) }
+                    = rc ( embed_serve e dir ( string_data host ) port ( __cli_opt av 3 `--token` ) )
+                    ( string_free host )
                     ( embed_close e )
                 }
                 F err → {
@@ -137,6 +126,43 @@ $ `serve.nu`
                     = rc 1
                 }
             }
+        }
+        ( string_free dirS )
+    } {
+        ? & >= n 4 != 0 ( nurl_str_eq cmd `text` ) {
+            : String dirS ( __embed_resolve ( __cli_arg av 2 ) )
+            ? == ( string_len dirS ) 0 { = rc 1 } {
+                : s dir ( string_data dirS )
+                ?? ( embed_open dir ) {
+                    T e → {
+                        ( __cli_apply_opts e av 4 )
+                        : ( Vec f ) emb ( vec_new [f] )
+                        ? ( embed_encode e ( __cli_arg av 3 ) emb ) {
+                            : String o ( string_new )
+                            : i dn ( vec_len [f] emb )
+                            : ~ i k 0
+                            ~ < k dn {
+                                ? > k 0 { ( string_push_char o 44 ) } {}
+                                ?? ( vec_get [f] emb k ) { T x → { ( string_push_float o x ) } F → {} }
+                                = k + k 1
+                            }
+                            ( nurl_print ( string_data o ) ) ( nurl_print `\n` )
+                            ( string_free o )
+                        } {
+                            ( nurl_eprint `embed: encode failed\n` )
+                            = rc 1
+                        }
+                        ( vec_free [f] emb )
+                        ( embed_close e )
+                    }
+                    F err → {
+                        ( nurl_eprint ( string_data err ) ) ( nurl_eprint `\n` )
+                        ( string_free err )
+                        = rc 1
+                    }
+                }
+            }
+            ( string_free dirS )
         } {
             ( __cli_usage )
             = rc ? | == n 1 != 0 ( nurl_str_eq cmd `--help` ) { 0 } { 2 }

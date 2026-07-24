@@ -12,8 +12,10 @@ $ `stdlib/std/fs.nu`
 $ `stdlib/std/path.nu`
 $ `stdlib/ext/env.nu`
 $ `stdlib/ext/json.nu`
-$ `src/hf.nu`
 $ `src/store.nu`
+$ `src/hf.nu`
+$ `src/pull.nu`
+$ `src/hub.nu`
 
 : ~ i g_pass 0
 : ~ i g_fail 0
@@ -62,6 +64,17 @@ $ `src/store.nu`
     : String sn ( _hub_safe_name `org/repo@main/a b.gguf` )
     ( check ( streq ( string_data sn ) `org_repo_main_a_b.gguf` ) `safe_name: only [A-Za-z0-9._-] survive` )
     ( string_free sn )
+
+    // ---- hub_get: an existing local path passes straight through ----
+    : String here ( string_from `/tmp/hub-test-store` )
+    ( dir_remove_all ( string_data here ) )
+    ?? ( dir_create_all ( string_data here ) ) { T _ → {} F _ → {} }
+    ?? ( hub_get ( string_data here ) ) {
+        T p → { ( check ( streq ( string_data p ) ( string_data here ) ) `hub_get: existing local dir passes through (no fetch)` ) ( string_free p ) }
+        F _ → { ( check F `hub_get: existing local dir passes through (no fetch)` ) }
+    }
+    ( dir_remove_all ( string_data here ) )
+    ( string_free here )
 
     // ---- store: manifest round-trip + blob GC sharing ----
     : String root ( string_from `/tmp/hub-test-store` )
