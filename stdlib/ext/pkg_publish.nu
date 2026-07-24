@@ -43,9 +43,11 @@ $ `stdlib/ext/http_cli.nu`
 : | PublishErr {
     PubNoToken  // empty auth token
     PubHttp  // transport failure
-    PubAuth  // 401 / 403
+    PubAuth  // 401 — a real auth/token failure (expired, wrong, or missing)
+    PubForbidden  // 403 — reserved name, typosquat lookalike, or the token's
+    // package scope. NOT an auth problem, so it must not suggest re-login.
     PubConflict  // 409 — version already published (immutability)
-    PubRejected  // other non-2xx
+    PubRejected  // any other non-2xx
 }
 
 @ pack_err_name PackErr e → s {
@@ -62,6 +64,7 @@ $ `stdlib/ext/http_cli.nu`
         PubNoToken → `PubNoToken`
         PubHttp → `PubHttp`
         PubAuth → `PubAuth`
+        PubForbidden → `PubForbidden`
         PubConflict → `PubConflict`
         PubRejected → `PubRejected`
     }
@@ -205,10 +208,7 @@ $ `stdlib/ext/http_cli.nu`
         T resp → {
             : i st ( httpc_status resp )
             ( httpc_resp_free resp )
-            ? & >= st 200 < st 300 { ^ @ !i PublishErr { T 0 } } {}
-            ? | == st 401 == st 403 { ^ @ !i PublishErr { F # PublishErr PubAuth } } {}
-            ? == st 409 { ^ @ !i PublishErr { F # PublishErr PubConflict } } {}
-            ^ @ !i PublishErr { F # PublishErr PubRejected }
+            ^ ( __pub_status_map st )
         }
     }
 }
@@ -224,9 +224,13 @@ $ `stdlib/ext/http_cli.nu`
     ^ out
 }
 
+// Map an HTTP status to a PublishErr. Only 401 is an auth failure; 403
+// (reserved_name / token_scope / name_too_similar) is a distinct, non-auth
+// rejection, so a name problem is never mislabelled as an expired token.
 @ __pub_status_map i st → !i PublishErr {
     ? & >= st 200 < st 300 { ^ @ !i PublishErr { T 0 } } {}
-    ? | == st 401 == st 403 { ^ @ !i PublishErr { F # PublishErr PubAuth } } {}
+    ? == st 401 { ^ @ !i PublishErr { F # PublishErr PubAuth } } {}
+    ? == st 403 { ^ @ !i PublishErr { F # PublishErr PubForbidden } } {}
     ? == st 409 { ^ @ !i PublishErr { F # PublishErr PubConflict } } {}
     ^ @ !i PublishErr { F # PublishErr PubRejected }
 }
