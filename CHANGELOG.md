@@ -11,7 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - **`stdlib/std/tls.nu` — offer ChaCha20-Poly1305 ahead of AES-128-GCM
-  (~6× faster HTTPS downloads).** The record layer, not the network, was
+  (~3× faster HTTPS downloads).** The record layer, not the network, was
   the ceiling on every large `https://` transfer: our AES-128-GCM is the
   deliberately table-free constant-time S-box (recomputed per byte, ~160
   S-box evaluations per 16-byte block), which measures **0.5 MB/s**,
@@ -21,21 +21,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reorder touches nothing else in the handshake, and AES-only peers
   still get 0x1301 from the same list. Measured end-to-end on
   `nurllama run LumiOpen/Llama-Poro-2-8B-Instruct` (Hugging Face → its
-  CloudFront CDN, which honours client preference): **188 KB/s → 468
-  KB/s**, with per-transfer CPU dropping **25.1 s → 1.74 s per 8 MB** —
-  i.e. the client went from CPU-bound to network-bound, and now tracks
-  `curl` on the same link. Against `speed.cloudflare.com`: 487 KB/s →
-  1185 KB/s (curl: 1174 KB/s). The CPU ceiling is now ~8.5 MB/s rather
-  than ~0.34 MB/s. Servers that pin their own preference to AES (e.g.
-  `huggingface.co`'s API host) still negotiate AES-128-GCM and remain
-  slow — a bitsliced constant-time AES is the fix there, not a table.
+  CloudFront CDN, which honours client preference), same 8 MB back to
+  back: **188 KB/s → 594 KB/s**, with per-transfer CPU dropping
+  **25.1 s → 2.0 s** — i.e. the client went from CPU-bound to
+  network-bound, and now tracks `curl` on the same link (675 KB/s).
+  Against `speed.cloudflare.com`: 487 KB/s → 1185 KB/s (curl:
+  1174 KB/s). The per-byte CPU ceiling is now ~8.5 MB/s rather than
+  ~0.34 MB/s, so the download-side numbers vary with what the far end
+  will give. Servers that pin their own preference to AES (e.g.
+  `huggingface.co`'s API host, which serves only the small metadata
+  files and the redirect) still negotiate AES-128-GCM and remain slow —
+  a bitsliced constant-time AES is the fix there, not a lookup table.
 - **`stdlib/std/tls.nu` / `stdlib/std/bytes.nu` — memcpy the record-layer
   copies.** `_tls_cat` and `bytes_slice` were per-byte `vec_push` loops
   sitting on the receive hot path, where every TLS record is copied four
   times (socket → `rxbuf`, body out, remainder back, plaintext →
   `appbuf`). Both now go through `nurl_memcpy` (`bytes_extend_bytes` /
   `bytes_extend_raw`): ~0.3 s less CPU per 10 MB downloaded, and the
-  slice+concat cost for 10 MB of 16 KB records is now 1 ms.
+  slice+concat cost for 10 MB of 16 KB records is now 1 ms. (Companion
+  to the `nurl_str_get` / `vec_get` sweep below, which left `bytes_slice`
+  untouched.)
+- **stdlib hot paths — the per-byte `nurl_str_get` / `vec_get` walks are
+  gone.** `nurl_str_get` re-runs `strlen` on every call, so a loop that
+  scans a string with it is O(n²). In a read-only loop LLVM hoists that
+  `strlen` away, which is why the cost hid for so long — but every real
+  parser *writes* while it scans, and the store blocks the hoist. Six
+  stdlib functions were paying it, plus four more that walked a byte
+  buffer through an `?u`-returning `vec_get` (a bounds check and an
+  Option per byte) where a `memcpy` / `memcmp` / `memmem` was available.
+  Measured (`std/bench.nu`, `-O2`, ns/op, same machine):
+
+  | | before | after | |
+  |---|---|---|---|
+  | `bytes_from_str` 4 KB | 117 497 | 179 | **656×** |
+  | `bytes_to_str` 4 KB | 16 820 | 171 | **98×** |
+  | `bytes_eq` 4 KB | 1 481 | 55 | **27×** |
+  | `bytes_from_hex` 2 KB | 20 047 | 3 322 | 6.0× |
+  | `parse_request_head` 4 KB | 16 776 | 5 244 | 3.2× |
+  | `url_percent_decode` 768 B | 6 216 | 1 764 | 3.5× |
+  | `url_percent_encode` 768 B | 11 248 | 4 000 | 2.8× |
+  | `fmt1`, 512 B template | 5 092 | 1 845 | 2.8× |
+  | `bytes_to_hex` 1 KB | 9 122 | 6 895 | 1.32× |
+  | `string_push_char` ×1024 | 4 035 | 2 693 | 1.50× |
+
+  `string_push_char` also gained an inline fast path: it used to run two
+  independent capacity checks per byte (one in `vec_push`, one in
+  `_string_seal`'s `vec_reserve`) even on a pre-sized buffer. It is the
+  most-called mutator in the stdlib, so every text builder — JSON, CBOR,
+  YAML, TOML, `fmt`, hex — gets the 1.5×. No API or allocation-count
+  change anywhere.
 
 - **`stdlib/std/sort.nu` — insertion-sort cutoff for small subranges.**
   `sort_by` / `binary_search`'s quicksort now hands ranges of ≤16 elements to
@@ -48,6 +82,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   in NURL is already essentially free. As a side effect small all-equal
   ranges now keep their input order (insertion sort is stable below the
   cutoff); `sort_by` still makes no general stability guarantee.
+
+### Fixed
+
+- **`string_eq` compared with `strcmp`, ignoring everything after an
+  embedded NUL.** `String` stores inner NUL bytes verbatim, so two
+  strings of equal length differing only past a NUL compared *equal*.
+  Now `memcmp` over the full byte range — which is also 1.3× faster.
 
 The **ecosystem** release. v0.22.0 made the registry a training stack;
 v0.23.0 closes the loop around it — the missing packages that turn "train
