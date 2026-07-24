@@ -331,7 +331,7 @@ $ `src/report.nu`
         : ~ i pos 0
         : ~ i cps 0
         ~ < pos bytes {
-            : Utf8Dec d ( utf8_decode sd pos )
+            : Utf8Dec d ( utf8_decode_n sd bytes pos )
             : i w ? > . d width 0 . d width 1
             = pos + pos w
             = cps + cps 1
