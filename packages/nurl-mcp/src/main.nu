@@ -59,7 +59,7 @@ $ `deps/wasmbuilder/src/build.nu`
 // to bump (previously the banners drifted to a stale 0.2.0 while the
 // handshake reported 0.4.0).
 
-@ nm_version → s { ^ `0.7.0` }
+@ nm_version → s { ^ `0.7.1` }
 
 // Log a startup banner "nurl-mcp <version> <suffix>" through mcp_log,
 // building the line from the single-source version so the banners can
@@ -797,7 +797,24 @@ version = "0.0.0"
             ( string_free md0 )
             ^ ( mcp_tool_result_error `package not found or has no src/*.nu — check the name (see nurl_grep where='packages'); 'version' defaults to the latest` )
         } {}
-        : Json r0 ( mcp_tool_result_text ( string_data md0 ) )
+        // Prepend the import + build recipe: the module headings below are
+        // '# <module>.nu'; a program imports one and compiles via
+        // nurl_build_project. This is the bridge from reading the API to a
+        // working build.
+        : String hint ( string_from `To USE this package: add it under nurl_build_project deps ({"` )
+        ( string_push_str hint package )
+        ( string_push_str hint `": "^<version>"}), then import a module below as  $ ` )
+        ( string_push_char hint 96 )
+        ( string_push_str hint `deps/` )
+        ( string_push_str hint package )
+        ( string_push_str hint `/src/<MODULE>` )
+        ( string_push_char hint 96 )
+        ( string_push_str hint `  (e.g. the '# nn.nu' module → deps/` )
+        ( string_push_str hint package )
+        ( string_push_str hint `/src/nn.nu).\n\n` )
+        ( string_push_str hint ( string_data md0 ) )
+        : Json r0 ( mcp_tool_result_text ( string_data hint ) )
+        ( string_free hint )
         ( string_free md0 )
         ^ r0
     } {}
@@ -818,7 +835,7 @@ version = "0.0.0"
     } {}
     ? == ( nurl_str_len query ) 0 {
         ( string_free root )
-        ^ ( mcp_tool_result_error `pass 'module' (a nurl_list_stdlib path, e.g. ext/csv.nu) or 'query' (search terms)` )
+        ^ ( mcp_tool_result_error `pass one of: 'module' (a stdlib path, e.g. ext/csv.nu), 'package' (a registry package name, e.g. nn), or 'query' (search terms). To read what a registry package exposes, use package=<name> (from a nurl_grep hit).` )
     } {}
     // No local examples corpus in an installed toolchain → "" skips it;
     // the registry fallback + exact-name footer still apply.
