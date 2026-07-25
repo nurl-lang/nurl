@@ -1,6 +1,6 @@
 [package]
 name = "benchmark"
-version = "0.1.1"
+version = "0.1.2"
 description = "Reproduce NURL's performance claims on your own machine — a runnable benchmark suite, not a number in a README. `benchmark` measures pure-NURL throughput for the primitives the rest of the ecosystem is built on — SHA-256 hashing, JSON parsing, sorting, CBOR decoding, a dense f64 matmul, UTF-8 decoding — and prints a table of MB/s, million-ops/s and MFLOP/s as measured RIGHT NOW on the box it runs on. Built on the standard library's std/bench harness (auto-scaled iteration counts, a monotonic clock immune to NTP slew, and NURL-level allocations/op counted alongside wall time), so every row reports both throughput and how many heap allocations the operation costs. There is nothing to trust and nothing to set up: no GPU, no model download, no network, no configuration — `benchmark` installs with zero dependencies beyond the standard library and runs anywhere NURL runs. `benchmark` runs the whole suite, `benchmark <name…>` runs only the named benchmarks, `benchmark --list` shows them, and `benchmark --json` emits the same measurements as machine-readable JSON for a CI baseline or a regression gate. The answer to 'is it actually fast?' is a command a skeptic can run, not a story."
 license = "MIT OR Apache-2.0"
 

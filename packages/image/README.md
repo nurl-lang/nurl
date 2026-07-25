@@ -76,6 +76,7 @@ Shrinking box-averages (clean thumbnails), growing is bilinear. Extensions:
 | Call | |
 | --- | --- |
 | `( image_resize im w h )` | bilinear, edge-clamped — upscale & mild shrink |
+| `( image_resize_bicubic im w h )` | Pillow's bicubic — anti-aliased down, byte-identical to PIL (no alpha) |
 | `( image_resize_area im w h )` | box average — thumbnails, exact for integer factors |
 | `( image_resize_nearest im w h )` | blocky, exact |
 | `( image_crop im x y w h )` | clipped window copy |
