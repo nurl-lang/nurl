@@ -51,10 +51,10 @@ a per-kernel GPU profile.
 
 | | before | after |
 | --- | --- | --- |
-| 8 frames, end to end | 38.2 s | **4.0 s** |
+| 8 frames, end to end | 38.2 s | **3.6 s** |
 | loading the 4.6 GB checkpoint | ~25 s | **1.6 s** |
-| per frame, steady state | ~1.25 s | **0.25–0.30 s** |
-| 30 frames, end to end | — | **12.4 s** |
+| per frame, steady state | ~1.25 s | **0.20–0.24 s** |
+| 30 frames, end to end | — | **10.7 s** |
 | `tests/depthcheck.nu` (load + a frame + dumps) | 25.8 s | **2.1 s** |
 
 Identical output: the same 237 123 points, and `depthcheck`'s dump is
@@ -75,15 +75,18 @@ the checkpoint load excluded, which is the same slice the port's
 
 | | reference | port |
 | --- | --- | --- |
-| aggregator | 79 ms | 173 ms |
+| aggregator | 79 ms | 117 ms |
 | camera head | 53 ms | **16 ms** |
 | depth head | 11 ms | 39 ms |
-| **total** | **143 ms** | **228 ms** |
+| **total** | **143 ms** | **172 ms** |
 
-So **1.6x off the reference overall** — ahead of it on the camera head,
-behind on the other two. That is the honest state: this is not yet as
-fast as the reference, and the gap is in the aggregator's GEMMs and the
-depth head's convolutions. The reference as `demo.py` ships it — the
+So **1.2x off the reference** — ahead of it on the camera head, behind
+on the other two. That is the honest state: not yet parity, and what is
+left of the gap is in the aggregator's GEMMs and the depth head's
+convolutions, both of which are ordinary (if fiddly) kernel work rather
+than anything structural. The port's own preprocessing — PNG decode and
+the bicubic resize, ~33 ms — is outside this table on both sides, as
+`load_and_preprocess_images` is for the reference. The reference as `demo.py` ships it — the
 aggregator cast to bf16 — measures 155 ms here, slower than its own
 fp32 path: at one frame of 783 tokens this model is latency-bound in
 eager mode, and bf16 only pays off with the `torch.compile` and CUDA
@@ -92,7 +95,7 @@ graphs `demo.py` also turns on.
 **Where a frame goes now** (frame 4 of a sequence, `--profile`):
 
 ```
-prep 33 ms  aggregator 173 ms  camera 16 ms  depth 39 ms  cloud 1 ms
+prep 33 ms  aggregator 117 ms  camera 16 ms  depth 39 ms  cloud 1 ms
   34%  gk32_gemm_smem     1152 calls    198 us each
   21%  gk32_conv2d         120 calls   1153 us
   20%  gk32_attn64_64      288 calls    458 us
@@ -150,11 +153,16 @@ every GPU package gets them. In rough order of what it bought:
   working arrays in local memory, which is why moving 9 MB took 87 us.
   The kernel source is generated per call anyway, so the dims and the
   permutation go in as literals and it takes 15 us.
-* **The positional-embedding grid is built once**, not per frame. It is
-  a pure function of (channels, height, width, aspect) and every frame
-  of a run has the same geometry; rebuilding it was ~10 million host
-  `sin`/`cos` per frame, a fifth of the frame, for a bit-identical
-  answer.
+* **Two per-frame constants are now built once.** The DPT
+  positional-embedding grid is a pure function of (channels, height,
+  width, aspect); rebuilding it was ~10 million host `sin`/`cos` a
+  frame, a fifth of the frame. The DINOv2 position grid is a bicubic
+  resample over 1024 channels and a pure function of (gh, gw);
+  rebuilding it was another 53 ms a frame — a *quarter* of what the
+  frame had shrunk to by then. Both were found the same way, by
+  profiling a build without LTO so the inlined frame loop resolves into
+  named functions, and both are bit-identical: the eight-frame cloud is
+  byte-for-byte unchanged.
 * **The point cloud is binary PLY by default.** ASCII cost 15 us per
   point — 470 ms a frame at the default stride, more than the depth
   head. `--ascii` still writes the text form, and the two agree exactly.
