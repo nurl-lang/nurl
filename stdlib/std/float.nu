@@ -20,6 +20,8 @@
 //   ( float_hypot x y )     → f      sqrt(x²+y²) without over/underflow
 //   ( float_log2  x )       → f      base-2 log
 //   ( float_log10 x )       → f      base-10 log
+//   ( float_erf   x )       → f      Gauss error function
+//   ( float_erfc  x )       → f      1 − erf(x), accurate in the tail
 //   ( float_sign  x )       → f      -1.0 / 0.0 / +1.0 (0 and NaN → 0.0)
 //
 // Predicates (no libm needed — pure NURL):
@@ -97,6 +99,10 @@ $ `stdlib/core/posix.nu`  // posix_const + nurl_errno_get for strtod ERANGE dete
 
 & `m` @ log10 f x → f
 
+& `m` @ erf f x → f
+
+& `m` @ erfc f x → f
+
 // ── float_* wrappers ──────────────────────────────────────────────
 
 @ float_abs f x → f { ^ ( fabs x ) }
@@ -130,6 +136,17 @@ $ `stdlib/core/posix.nu`  // posix_const + nurl_errno_get for strtod ERANGE dete
 // Real cube root — handles negative inputs (cbrt(-8) = -2.0), unlike
 // pow(x, 1.0/3.0) which is NaN for x < 0.
 @ float_cbrt f x → f { ^ ( cbrt x ) }
+
+// The Gauss error function, erf(x) = 2/√π ∫₀ˣ e^{−t²} dt. The building
+// block of the normal distribution's CDF — and of exact GELU,
+// 0.5x(1 + erf(x/√2)), which is what torch's nn.GELU computes by
+// default (its `approximate="tanh"` form is a different function that
+// differs in the fourth decimal).
+@ float_erf f x → f { ^ ( erf x ) }
+
+// 1 − erf(x), computed directly. For x ≳ 3 the subtraction in
+// `1 − erf(x)` cancels almost everything; this keeps the precision.
+@ float_erfc f x → f { ^ ( erfc x ) }
 
 // sqrt(x*x + y*y) without intermediate overflow/underflow (libm hypot).
 @ float_hypot f x f y → f { ^ ( hypot x y ) }

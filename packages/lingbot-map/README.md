@@ -35,7 +35,7 @@ and is what the port has to reproduce exactly, not approximately.
 |---|---|---|
 | 1 | read the `.pt` checkpoint | **done** — see [`torchpt`](../torchpt), verified against `torch.load` |
 | 2 | image loading and preprocessing | **done** — byte-identical to the reference pipeline on real frames |
-| 3 | ViT layers: patch embed, 2-D RoPE, qk-norm attention, block | patch embed, position-grid resample and 2-D RoPE **done**; attention and block pending |
+| 3 | ViT layers: patch embed, 2-D RoPE, qk-norm attention, block | **done** — the full block matches the reference to 4e-15 |
 | 4 | streaming aggregator + KV cache | pending |
 | 5 | camera head, DPT heads | pending |
 | 6 | camera geometry | **done** — matches torch to 2.4e-16 |
@@ -79,7 +79,37 @@ worst relative error **2.4e-16** across six random pose encodings — the
 last bit, and it comes from torch's vectorised `tan` disagreeing with
 glibc's, not from the port.
 
-### Stage 3 (partial) — patch embedding (`src/patchembed.nu`)
+### Stage 3 — the transformer block (`src/block.nu`)
+
+The unit this model is 72 of (24 DINOv2 + 24 frame + 24 global):
+
+```
+x = x + ls1 · attn(norm1(x))
+x = x + ls2 · mlp(norm2(x))
+```
+
+pre-norm LayerNorm, LayerScale on both branches, exact (erf) GELU, and
+attention that layer-normalises q and k **per head** before rotating
+them. Matches the reference to 4e-15.
+
+Two things the reference does that a careful reading still misses:
+
+* **`qk_norm=True` uses a different epsilon.** `Block` builds its
+  `Attention` without passing `norm_layer`, so `norm1`/`norm2` get
+  DINOv2's `partial(LayerNorm, eps=1e-6)` while `q_norm`/`k_norm` fall
+  back to `nn.LayerNorm`'s own default of `1e-5`. Two constants, and
+  the port has to carry both.
+* q/k/v are `[heads, n, head_dim]`, so a head's stride is `n·head_dim`,
+  **not** `n·dim`. Getting that wrong leaves every head past the first
+  reading zeros — and attention still produces plausible numbers, so it
+  surfaces as a few percent of error rather than as anything obviously
+  broken. (It did, here, until the intermediates were dumped.)
+
+`erf` was missing from `stdlib/std/float.nu` and is now there
+(`float_erf` / `float_erfc`) — exact GELU needs it, and so does any
+normal-distribution CDF.
+
+### Stage 3 — patch embedding (`src/patchembed.nu`)
 
 `Conv2d(3, 1024, kernel=14, stride=14)`. Kernel equals stride, so the
 patches do not overlap and the convolution is exactly a matmul: im2col
@@ -90,7 +120,7 @@ im2col is written out rather than fused into the multiply, because the
 multiply is what moves to a device kernel later and the layout is what
 has to be right first.
 
-### Stage 3 (partial) — 2-D RoPE (`src/rope.nu`)
+### Stage 3 — 2-D RoPE (`src/rope.nu`)
 
 Attention rotates q and k by the token's position in the patch **grid**,
 not its index in the sequence: the head dimension splits in half, the
@@ -102,7 +132,7 @@ at half/2 (not the full head dim at D/2), and `positions` is (row, col)
 with row driving the first half — swapping them transposes the model's
 idea of the image without changing a single shape.
 
-### Stage 3 (partial) — weight access (`src/weights.nu`)
+### Stage 3 — weight access (`src/weights.nu`)
 
 `lw_require` declares the shape a module expects and accumulates
 failures, so a mismatched checkpoint names the first thing actually
