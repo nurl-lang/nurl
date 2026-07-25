@@ -8,6 +8,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Canvas examples that call libc `rand` died on the playground with
+  "runtime error: unreachable".** `doomfire.nu`, `sand.nu` and
+  `starfield.nu` compiled (BUILD OK, a well-formed .wasm) and then
+  trapped — doomfire and starfield on their first frame, sand on the
+  first mouse-drawn grain. `gameoflife.nu` declares `rand` but never
+  calls it, which is why it kept working and made the failure look like
+  a canvas problem.
+
+  The wasm32 libc ABI shims in the `/build_wasm` IR rewriter
+  (`nurlapi/main.nu`, mirrored in `packages/wasmbuilder/src/wasi_ir.nu`)
+  hardcoded each shim's signature from a letter table. But the signature
+  the call sites use comes from the NURL source: nurlc's own prelude
+  declares `puts` / `strcmp` / `fseek` with C-accurate i32 returns, while
+  `& \`libc\` @ rand → i` emits `declare i64 @rand()`. Since v0.9.x the
+  table's `i` letter meant "shim returns i32", so every FFI-declared
+  `→ i` libc function got an i32 shim under i64 call sites. wasm-ld does
+  not reject that mismatch — it resolves it with a stub whose body is a
+  single `unreachable`, so the module links and traps at the call.
+
+  The rewriter now reads the `declare` line back out of the IR and
+  mirrors it, converting widths in the wrapper (trunc on the way in,
+  sext/zext on the way out); the letters only describe the wasm32 libc
+  side. This also repairs `open` / `close` / `read` / `write`, whose
+  shims were mismatched the same way for every `std/fs.nu` and
+  `core/posix.nu` caller on wasm, and stops `%r = tail call void @exit(…)`
+  — invalid IR — from being emitted for the void-returning entries.
+  `nurlapi/e2e_test.py` now asserts every `__nurl_*_shim` definition
+  matches its call sites.
+
 ## [0.24.1] — 2026-07-25
 
 A patch for a display bug that read as a transfer bug: model downloads

@@ -22,6 +22,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 import time
 import urllib.error
@@ -647,6 +648,66 @@ def t_batch(c: Client) -> None:
     assert_eq("batch reply ids", ids, ["a", "b"])
 
 
+def _sig_types(arglist: str) -> list[str]:
+    """Leading type token of every comma-separated LLVM argument."""
+    return [a.strip().split()[0] for a in arglist.split(",") if a.strip()]
+
+
+_SHIM_DEF = re.compile(r"define (\S+) @(__nurl_\w+_shim)\(([^)]*)\)")
+_SHIM_CALL = re.compile(r"call (\S+) @(__nurl_\w+_shim)\(([^)]*)\)")
+
+
+def _shim_signature_mismatches(ir: str) -> list[str]:
+    """Shims whose definition disagrees with how the IR calls them.
+
+    wasm-ld does not reject that disagreement — it resolves it with a stub
+    whose body is a single `unreachable`. The module links, the playground
+    prints BUILD OK, and the program traps the moment the call is reached.
+    """
+    defs: dict[str, tuple[str, list[str]]] = {}
+    for ret, name, args in _SHIM_DEF.findall(ir):
+        defs[name] = (ret, _sig_types(args))
+    out: list[str] = []
+    for ret, name, args in _SHIM_CALL.findall(ir):
+        want = defs.get(name)
+        if want is None:
+            out.append(f"{name}: called but never defined")
+        elif (ret, _sig_types(args)) != want:
+            out.append(f"{name}: defined {want}, called {(ret, _sig_types(args))}")
+    return sorted(set(out))
+
+
+def t_build_wasm_libc_shims(c: Client) -> None:
+    print("\n[REST] /build_wasm — libc shims match their call sites")
+    # `& `libc` @ rand → i` makes nurlc emit `declare i64 @rand()`, so the
+    # shim wrapping wasm32's i32 `rand` has to return i64 as well. When it
+    # didn't, doomfire / sand / starfield built fine and then died with
+    # "runtime error: unreachable" on their first ( rand ).
+    src = "& `libc` @ rand → i\n\n@ main → i {\n  : i r ( rand )\n  ^ % r 7\n}\n"
+    status, _, raw = c.post(
+        "/build_wasm",
+        {"source": src, "filename": "randshim.nu", "emit_ll": True},
+        timeout=180.0,
+    )
+    assert_eq("build_wasm status 200", status, 200)
+    try:
+        j = json.loads(raw)
+    except json.JSONDecodeError:
+        bad("build_wasm result is JSON", f"got {raw[:200]!r}")
+        return
+    assert_eq("build_wasm ok", j.get("status"), "ok")
+    assert_true("wasm bytes returned", bool(j.get("wasm_base64")), f"keys={list(j)}")
+    ir = j.get("llvm_ir") or ""
+    assert_true("emit_ll returned the rewritten IR", "__nurl_rand_shim" in ir, "no shim in IR")
+    assert_true(
+        "rand shim returns i64, like its call sites",
+        "define i64 @__nurl_rand_shim(" in ir,
+        "; ".join(l for l in ir.splitlines() if "__nurl_rand_shim" in l)[:200],
+    )
+    mismatched = _shim_signature_mismatches(ir)
+    assert_true("no shim/call-site signature mismatch", not mismatched, "; ".join(mismatched))
+
+
 def t_get_sse_and_delete(c: Client) -> None:
     print("\n[MCP] GET /mcp (SSE stub) + DELETE /mcp")
     status, hdrs, raw = c.get("/mcp")
@@ -721,8 +782,10 @@ def main() -> int:
     t_tools_call_unknown(c)
     if not args.quick:
         t_tools_call_build(c)
+        t_build_wasm_libc_shims(c)
     else:
         print("\n[MCP] tools/call nurl_build_native — skipped (--quick)")
+        print("[REST] /build_wasm libc shims — skipped (--quick)")
 
     t_resources(c)
     t_prompts(c)
