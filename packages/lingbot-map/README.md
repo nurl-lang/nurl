@@ -35,7 +35,7 @@ and is what the port has to reproduce exactly, not approximately.
 |---|---|---|
 | 1 | read the `.pt` checkpoint | **done** — see [`torchpt`](../torchpt), verified against `torch.load` |
 | 2 | image loading and preprocessing | **done** — byte-identical to the reference pipeline on real frames |
-| 3 | ViT layers: patch embed, 2-D RoPE, qk-norm attention, block | position-grid resample and 2-D RoPE **done**; patch embed, attention, block pending |
+| 3 | ViT layers: patch embed, 2-D RoPE, qk-norm attention, block | patch embed, position-grid resample and 2-D RoPE **done**; attention and block pending |
 | 4 | streaming aggregator + KV cache | pending |
 | 5 | camera head, DPT heads | pending |
 | 6 | camera geometry | **done** — matches torch to 2.4e-16 |
@@ -78,6 +78,17 @@ Verified against the upstream `quat_to_mat` / `mat_to_quat` /
 worst relative error **2.4e-16** across six random pose encodings — the
 last bit, and it comes from torch's vectorised `tan` disagreeing with
 glibc's, not from the port.
+
+### Stage 3 (partial) — patch embedding (`src/patchembed.nu`)
+
+`Conv2d(3, 1024, kernel=14, stride=14)`. Kernel equals stride, so the
+patches do not overlap and the convolution is exactly a matmul: im2col
+each 14×14×3 patch into a 588-wide row, multiply by the reshaped
+weight. Matches torch's `conv2d` to 4e-15.
+
+im2col is written out rather than fused into the multiply, because the
+multiply is what moves to a device kernel later and the layout is what
+has to be right first.
 
 ### Stage 3 (partial) — 2-D RoPE (`src/rope.nu`)
 

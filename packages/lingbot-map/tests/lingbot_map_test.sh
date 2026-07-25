@@ -61,7 +61,7 @@ print("worst relative error %.3e" % worst)
 PY
 }
 
-echo "[1/4] camera geometry vs the reference torch code"
+echo "[1/5] camera geometry vs the reference torch code"
 if ! $NURL tests/geomcheck.nu "$WORK/geomcheck" >/dev/null 2>"$WORK/build.err"; then
     bad "geomcheck build"; cat "$WORK/build.err"
 elif [ -z "$PYTORCH_PY" ] || ! "$PYTORCH_PY" -c "import torch" 2>/dev/null; then
@@ -78,7 +78,7 @@ else
     fi
 fi
 
-echo "[2/4] frame preprocessing vs the reference load_fn pipeline"
+echo "[2/5] frame preprocessing vs the reference load_fn pipeline"
 # Real frames, not synthetic ones: the resize ratio, the patch-multiple
 # rounding and the centre crop only interact on an actual aspect ratio.
 FRAMES=""
@@ -107,7 +107,7 @@ else
     fi
 fi
 
-echo "[3/4] position-grid resample vs torch bicubic+antialias"
+echo "[3/5] position-grid resample vs torch bicubic+antialias"
 if ! $NURL tests/interpcheck.nu "$WORK/ic" >/dev/null 2>"$WORK/ic_build.err"; then
     bad "interpcheck build"; tail -6 "$WORK/ic_build.err"
 elif [ -z "$PYTORCH_PY" ] || ! "$PYTORCH_PY" -c "import torch" 2>/dev/null; then
@@ -122,7 +122,7 @@ else
     fi
 fi
 
-echo "[4/4] 2-D rotary position embedding vs the reference"
+echo "[4/5] 2-D rotary position embedding vs the reference"
 if ! $NURL tests/ropecheck.nu "$WORK/rc" >/dev/null 2>"$WORK/rc_build.err"; then
     bad "ropecheck build"; tail -6 "$WORK/rc_build.err"
 elif [ -z "$PYTORCH_PY" ] || ! "$PYTORCH_PY" -c "import torch" 2>/dev/null; then
@@ -134,6 +134,21 @@ else
         ok "rope2d matches RotaryPositionEmbedding2D — $out"
     else
         bad "rope2d differs from the reference"; echo "$out"
+    fi
+fi
+
+echo "[5/5] patch embedding vs torch Conv2d"
+if ! $NURL tests/pecheck.nu "$WORK/pe" >/dev/null 2>"$WORK/pe_build.err"; then
+    bad "pecheck build"; tail -6 "$WORK/pe_build.err"
+elif [ -z "$PYTORCH_PY" ] || ! "$PYTORCH_PY" -c "import torch" 2>/dev/null; then
+    skip "patch-embed oracle — needs python + torch"
+else
+    "$WORK/pe" > "$WORK/pe_nurl.txt" 2>&1
+    "$PYTORCH_PY" tests/pe_oracle.py > "$WORK/pe_ref.txt" 2>&1
+    if out="$(cmp_rows "$WORK/pe_ref.txt" "$WORK/pe_nurl.txt" 1e-12)"; then
+        ok "im2col + project matches Conv2d — $out"
+    else
+        bad "patch embedding differs from torch"; echo "$out"
     fi
 fi
 
