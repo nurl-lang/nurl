@@ -111,7 +111,7 @@ $ `gpukit.nu`
 }
 
 @ __gk_matmul_src_cpu → String {
-    : String src ( string_from `#define RT 8\n#define CT 32\n` )
+    : String src ( string_from `enum{RT=8,CT=32};` )
     ( string_push_str src `extern "C" __global__ void gk_matmul_tiled(const double* A, const double* B, double* C, long long M, long long K, long long N){` )
     ( string_push_str src `long long idx=blockIdx.x*blockDim.x+threadIdx.x;` )
     ( string_push_str src `long long ncb=(N+CT-1)/CT, nrb=(M+RT-1)/RT;` )
