@@ -244,6 +244,12 @@ hard-coded, so the `-long` and `-stage1` checkpoints load too.
 cd packages/lingbot-map && ./tests/lingbot_map_test.sh
 ```
 
+**It is slow.** Eleven steps, each with its own NURL build, and the last
+two run the model on real weights (35 s for the trunk, 105 s for the
+aggregator). Budget ~45 minutes on a CPU. The steps that need the
+checkpoint or the upstream package skip cleanly when those are absent,
+which is the fast path.
+
 Needs a python with torch (any CPU build) for the oracle; set
 `PYTORCH_PY`, or drop a venv at the repo root as `.venv-oracle`. Without
 one the oracle steps skip and the code is only smoke-run.
