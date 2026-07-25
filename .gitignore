@@ -67,6 +67,7 @@ _venv/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+.venv-cuda/
 
 # ─── Cloudflare Workers / Wrangler ────────────────────────────
 .wrangler/

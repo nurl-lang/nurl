@@ -61,6 +61,7 @@ Lifecycle:
 | Call | |
 | --- | --- |
 | `( gk_open ordinal )` → `GpuKit` | open a device (CUDA, else CPU backend) |
+| `( gk_open_best )` → `GpuKit` | the device a caller who does not care should get: `$NURL_GPU_DEVICE`, else highest compute capability, memory breaking ties |
 | `( gk_ok kit )` → `b`, `( gk_backend kit )` → `s`, `( gk_device_name kit )` → `s` | |
 | `( gk_close kit )` | free cached kernels + close the device |
 | `( gk_grid n block )` → `i` | grid size for `n` threads |
@@ -86,6 +87,60 @@ order (buffers and scalars interleaved exactly as the signature expects).
 Ready-made f64 kernels: `gk_add_f` / `gk_sub_f` / `gk_mul_f` / `gk_div_f`,
 `gk_map_f`, `gk_matmul_f`, `gk_reduce_sum_f`, `gk_dot_f`.
 
+## Performance
+
+Three things matter more than any individual kernel, and all three are
+handled here rather than in every caller:
+
+**Memory is pooled.** `cuMemAlloc`/`cuMemFree` synchronise and cost
+~315 us per 12 MB pair on a 4090. `gk_dbuf_free` retires a block for
+reuse by the next `gk_dbuf_new` of the same size instead of returning it
+to the driver — a forward pass that allocates its scratch per layer was
+otherwise spending a third of its time in the allocator with the device
+idle. `gk_pool F` turns it off; `gk_pool_release kit` hands idle blocks
+back, which is also what an allocation failure does before reporting
+out-of-memory.
+
+**You can see where the time went.** `gk_prof kit T` brackets every
+launch with a CUDA event pair and accumulates device time per kernel;
+`gk_prof_report kit` prints them slowest-first with call counts and
+shares. Events measure the GPU — a host clock around an asynchronous
+launch measures the launch.
+
+```
+gpukit profile: 1113 ms of device time over 26 kernels
+  30%  342121 us  1728 calls  197987 ns/call  gk32_gemm_smem
+  21%  240305 us   432 calls  556263 ns/call  gk32_attn64_64
+  18%  207653 us   180 calls 1153633 ns/call  gk32_conv2d
+```
+
+**The kernels are shaped for the machine.** Two different machines, in
+fact: matmul/bmm/gemm carry a register-tiled body for the CPU backend
+(one thread owns an 8x32 block of C — see 0.5.0) and a shared-memory
+tiled one for CUDA, because 256 accumulators per thread is right on a
+core and far past a CUDA thread's register budget. The CUDA numbers,
+measured on an RTX 4090 in f32, all bit-identical to the per-element
+kernels they replaced (see Numerics):
+
+| | before | after |
+| --- | --- | --- |
+| `gkd_gemm` 783x1024x1024 | 3.1 TFLOP/s | **19.1** |
+| the same with `transb=1` | 0.6 | **20.1** |
+| `gkd_bmm` 16 x 783x64x783 | 3.9 | **16.0** |
+| `gkd_layernorm` [783, 1024] | 300 us | **53** |
+| `gkd_conv2d` 3x3 256→256 | 2.5 ms | **1.15** |
+| `gkd_convtranspose2d` 4x4 stride 4 | 14.2 ms | **0.35** |
+| `gkd_perm` [783,3,16,64] → [3,16,783,64] | 87 us | **15** |
+
+`gkd_attention` is the fused scaled-dot-product attention:
+`softmax(scale · Q·Kᵀ)·V` over `[heads, n, hd]` operands, without ever
+materialising the `[heads, n, nkv]` score matrix. Against the composed
+bmm/scale/softmax/bmm it is 1.7x at `nkv = n`, 2.8x at `nkv = 4n` and
+5.1x at `nkv = 50n` — and at a 72-frame streaming window the score
+matrix it does not allocate is 2.8 GB. `gkd_attention_ok kit hd` reports
+in advance whether it will run, so a caller can size its workspace
+before the first call.
+
 ## Numerics
 
 gpukit adds no numerics of its own — it only marshals — so a kernel runs
@@ -93,7 +148,14 @@ bit-for-bit the same through `gk_run` as through hand-written `gpu_*` calls,
 and the gpu package's **CUDA / CPU-backend / pure equivalence is preserved**.
 The elementwise ops and `gk_matmul_f` accumulate in the same order a
 sequential host loop would, so they are **bit-identical** to a naive host
-implementation. `gk_reduce_sum_f` / `gk_dot_f` combine per-thread partial sums
+implementation. That holds for the tiled kernels too: blocking a matmul
+over shared memory changes which thread visits an element and when, not
+the order the products are summed in, and an out-of-range staging slot
+holds an exact zero. The one deliberate exception is **`gkd_attention`**,
+whose online softmax rescales a running sum over key tiles rather than
+running left to right — the same value to f32 rounding, and the same
+algorithm torch's SDPA uses, but a golden taken with
+`gkd_bmm` + `gkd_softmax_ax` will not reproduce bit for bit. `gk_reduce_sum_f` / `gk_dot_f` combine per-thread partial sums
 (a parallel order), matching a host sum to rounding but not guaranteed
 bit-identical to a strictly sequential accumulation.
 
@@ -111,6 +173,9 @@ STAY on the device. `GkBuf` is an element-typed device allocation
 copies. Ready-made dtype-generic kernels: `gkd_add/sub/mul/div`
 (1-element scalar broadcast via the same kernel), `gkd_relu/sigmoid/
 exp/tanh/sqrt/log`, `gkd_matmul`, `gkd_softmax_rows`, `gkd_sum`.
+`gk_dbuf_upload_raw` takes bytes already in the buffer's element type —
+a memory-mapped f32 checkpoint straight to an f32 buffer, no conversion
+and no staging copy.
 GK_F32 computes in true float32 (accumulation included);
 `tests/devcheck.nu` verifies 12/12 vs numpy per dtype on CUDA and the
 CPU backend.

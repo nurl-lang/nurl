@@ -62,6 +62,14 @@ $ `src/patchembed.nu`
     ( Vec f ) cls
     ( Vec f ) reg
     ( Vec f ) pos  // [1370, 1024]
+    // The resampled grid for the frame geometry this run uses. It is a
+    // bicubic resample of `pos` over 1024 channels and a pure function
+    // of (gh, gw) — every frame of a sequence asks for the same one, and
+    // recomputing it per frame was one of the larger host costs left in
+    // the frame loop. `Vec` is a handle to one control block, so a
+    // Dino passed by value shares this with its caller.
+    ( Vec i ) poskey  // [gh, gw] of what `poscache` holds, or empty
+    ( Vec f ) poscache
 }
 
 @ dn_free Dino d → v {
@@ -71,6 +79,8 @@ $ `src/patchembed.nu`
     ( vec_free [f] . d cls )
     ( vec_free [f] . d reg )
     ( vec_free [f] . d pos )
+    ( vec_free [i] . d poskey )
+    ( vec_free [f] . d poscache )
 }
 
 @ dn_load * Lw w * GpuKit kit → Dino {
@@ -90,7 +100,9 @@ $ `src/patchembed.nu`
         ( lmw_upload w kit `aggregator.patch_embed.norm.bias` )
         ( _dn_host w `aggregator.patch_embed.cls_token` )
         ( _dn_host w `aggregator.patch_embed.register_tokens` )
-        ( _dn_host w `aggregator.patch_embed.pos_embed` ) }
+        ( _dn_host w `aggregator.patch_embed.pos_embed` )
+        ( vec_new [i] )
+        ( vec_new [f] ) }
 }
 
 // A tensor read into a host vector, sized from the checkpoint.
@@ -113,6 +125,33 @@ $ `src/patchembed.nu`
 // The reference reads `pos_embed[:, 0]` for cls and interpolates
 // `pos_embed[:, 1:]` reshaped to 37×37 — with the ROW axis first, so a
 // 518-wide 294-high frame resamples 37×37 → 21×37, not 37×21.
+// The resampled grid, from the cache when the geometry has not changed.
+// The returned Vec is BORROWED — it is the Dino's, and the caller must
+// not free it.
+@ dn_pos_cached Dino d i gh i gw → ( Vec f ) {
+    : b hit & == 2 ( vec_len [i] . d poskey )
+    & == gh ?? ( vec_get [i] . d poskey 0 ) { T v → v F → -1 }
+    == gw ?? ( vec_get [i] . d poskey 1 ) { T v → v F → -1 }
+    ? hit { ^ . d poscache } {}
+    : ( Vec f ) fresh ( dn_pos_for d gh gw )
+    // The CONTENTS are copied into the Dino's own vector rather than
+    // the handle replaced: a Vec is one control block, so writing
+    // through it is visible to the caller's Dino, but assigning a new
+    // handle to a field of a by-value struct is not.
+    : i n ( vec_len [f] fresh )
+    : b _t ( vec_set_len [f] . d poscache 0 )
+    : ~ i j 0
+    ~ < j n {
+        ( vec_push [f] . d poscache ?? ( vec_get [f] fresh j ) { T v → v F → 0.0 } )
+        = j + j 1
+    }
+    ( vec_free [f] fresh )
+    : b _k ( vec_set_len [i] . d poskey 0 )
+    ( vec_push [i] . d poskey gh )
+    ( vec_push [i] . d poskey gw )
+    ^ . d poscache
+}
+
 @ dn_pos_for Dino d i gh i gw → ( Vec f ) {
     : i n + 1 * gh gw
     : ( Vec f ) out ( vec_with_cap [f] * n DN_DIM )
@@ -189,7 +228,7 @@ $ `src/patchembed.nu`
     // pos_embed is added to cls and to the patches but NOT to the
     // registers — they are spliced in after the addition, which is why
     // the head is assembled here rather than folded into one buffer.
-    : ( Vec f ) pos ( dn_pos_for d gh gw )
+    : ( Vec f ) pos ( dn_pos_cached d gh gw )
     : ( Vec f ) head ( vec_with_cap [f] * 5 DN_DIM )
     : b _c2 ( vec_set_len [f] head * 5 DN_DIM )
     : *f hp ( vec_data [f] head )
@@ -207,7 +246,7 @@ $ `src/patchembed.nu`
     : GkBuf hview ( lm_view tok 0 * 5 DN_DIM )
     : b okh ( gk_dbuf_upload kit hview head )
     ( vec_free [f] head )
-    ? okh {} { ( vec_free [f] pos ) ^ F }
+    ? okh {} { ^ F }
 
     // patch position rows, added to what the projection produced
     : ( Vec f ) pgrid ( vec_with_cap [f] * np DN_DIM )
@@ -215,7 +254,8 @@ $ `src/patchembed.nu`
     : *f gp ( vec_data [f] pgrid )
     : ~ i j 0
     ~ < j * np DN_DIM { = . gp j . pp + DN_DIM j = j + j 1 }
-    ( vec_free [f] pos )
+    // `pos` is the Dino's cached grid, not ours to free
+
     : GkBuf dpos ( gk_dbuf_new kit * np DN_DIM GK_F32 )
     : b okp ( gk_dbuf_upload kit dpos pgrid )
     ( vec_free [f] pgrid )

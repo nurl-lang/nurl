@@ -51,7 +51,7 @@ $ `src/preproc.nu`
     : i kvs ( nurl_str_to_int ( string_data kss ) )
     : i kvw ( nurl_str_to_int ( string_data kws ) )
     ( string_free kss ) ( string_free kws )
-    : *GpuKit kit ( gk_open 0 )
+    : *GpuKit kit ( gk_open_best )
     ? ( gk_ok kit ) {} { ( nurl_print `no gpukit backend\n` ) ^ 1 }
     : !*Lw String o ( lw_open ( nurl_argv 1 ) )
     ?? o {

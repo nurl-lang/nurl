@@ -21,6 +21,8 @@ $ `stdlib/std/float.nu`
 $ `stdlib/std/fs.nu`
 $ `stdlib/std/bytes.nu`
 $ `stdlib/std/sort.nu`
+$ `stdlib/std/time.nu`
+$ `stdlib/std/floatbits.nu`
 $ `deps/gpukit/src/gpukit.nu`
 $ `deps/gpukit/src/dev.nu`
 $ `deps/gpukit/src/devops.nu`
@@ -48,6 +50,8 @@ $ `src/preproc.nu`
     i pixstride
     i maxframes
     i verbose
+    i profile
+    i ascii
     ( Vec String ) frames
     i bad
 }
@@ -60,6 +64,8 @@ $ `src/preproc.nu`
     ( nurl_print `  --frames <dir>     every .png/.jpg in a directory, in name order\n` )
     ( nurl_print `  --max-frames <n>   stop after n frames\n` )
     ( nurl_print `  --quiet            no per-frame progress\n` )
+    ( nurl_print `  --profile          per-frame timings and a per-kernel GPU profile\n` )
+    ( nurl_print `  --ascii            write an ASCII PLY instead of binary_little_endian\n` )
 }
 
 @ __lm_streq s a s b → b { ^ == 0 ( nurl_str_cmp a b ) }
@@ -120,6 +126,8 @@ $ `src/preproc.nu`
     : ~ i pstride 2
     : ~ i maxf 0
     : ~ i verbose 1
+    : ~ i profile 0
+    : ~ i ascii 0
     : ~ i bad 0
     : i argc ( nurl_argc )
     : ~ i i0 1
@@ -149,8 +157,12 @@ $ `src/preproc.nu`
                                     = i0 + i0 1
                                 } {
                                     ? ( __lm_streq a `--quiet` ) { = verbose 0 } {
-                                        ? ( __lm_streq a `--help` ) { = bad 2 } {
-                                            ( vec_push [String] fr ( string_from a ) )
+                                        ? ( __lm_streq a `--profile` ) { = profile 1 } {
+                                            ? ( __lm_streq a `--ascii` ) { = ascii 1 } {
+                                                ? ( __lm_streq a `--help` ) { = bad 2 } {
+                                                    ( vec_push [String] fr ( string_from a ) )
+                                                }
+                                            }
                                         }
                                     }
                                 }
@@ -163,7 +175,7 @@ $ `src/preproc.nu`
         }
     }
     ? < pstride 1 { = pstride 1 } {}
-    ^ @ Opts { model out conf pstride maxf verbose fr bad }
+    ^ @ Opts { model out conf pstride maxf verbose profile ascii fr bad }
 }
 
 @ __lm_free_opts Opts o → v {
@@ -172,7 +184,17 @@ $ `src/preproc.nu`
 
 // ── PLY ─────────────────────────────────────────────────────────────
 
-: Ply { File f i n }
+: Ply { File f i n i ascii }
+
+// The header, up to (but excluding) the vertex-count field. Both
+// formats keep a fixed-width count so it can be patched at the end,
+// and __lm_ply_close needs the same prefix length to seek back to it.
+@ __lm_ply_head i ascii → String {
+    : String h ( string_from `ply\nformat ` )
+    ( string_push_str h ? != ascii 0 `ascii` `binary_little_endian` )
+    ( string_push_str h ` 1.0\ncomment lingbot-map, pure NURL\nelement vertex ` )
+    ^ h
+}
 
 @ __lm_wr File f String s → b {
     : ( Vec u ) b ( bytes_from_str ( string_data s ) )
@@ -192,7 +214,7 @@ $ `src/preproc.nu`
     ^ s
 }
 
-@ __lm_ply_open s path → !Ply String {
+@ __lm_ply_open s path i ascii → !Ply String {
     ?? ( file_create path ) {
         F _e → {
             : String m ( string_from `lingbot-map: cannot write ` )
@@ -200,7 +222,7 @@ $ `src/preproc.nu`
             ^ @ !Ply String { F m }
         }
         T f → {
-            : String h ( string_from `ply\nformat ascii 1.0\ncomment lingbot-map, pure NURL\nelement vertex ` )
+            : String h ( __lm_ply_head ascii )
             : String c ( __lm_count_field 0 )
             ( string_push_str h ( string_data c ) )
             ( string_free c )
@@ -211,7 +233,7 @@ $ `src/preproc.nu`
                 ( file_close f )
                 ^ @ !Ply String { F ( string_from `lingbot-map: cannot write the PLY header` ) }
             }
-            ^ @ !Ply String { T @ Ply { f 0 } }
+            ^ @ !Ply String { T @ Ply { f 0 ascii } }
         }
     }
 }
@@ -219,7 +241,7 @@ $ `src/preproc.nu`
 // Rewind to the count field and overwrite it in place. The field starts
 // right after the fixed prefix, whose length is what this counts.
 @ __lm_ply_close Ply p → b {
-    : String pre ( string_from `ply\nformat ascii 1.0\ncomment lingbot-map, pure NURL\nelement vertex ` )
+    : String pre ( __lm_ply_head . p ascii )
     : i off ( string_len pre )
     ( string_free pre )
     : File f . p f
@@ -260,12 +282,27 @@ $ `src/preproc.nu`
 
 // Emit the points of one frame. `rgb` is the un-normalised CHW image,
 // `dep` and `cf` are the head's outputs, `kinv` and `c2w` the camera.
+// One little-endian float32, appended to a byte buffer.
+@ __lm_put_f32 ( Vec u ) b f v → v {
+    : i w ( f32_to_bits # f32 v )
+    ( vec_push [u] b # u & w 255 )
+    ( vec_push [u] b # u & >> w 8 255 )
+    ( vec_push [u] b # u & >> w 16 255 )
+    ( vec_push [u] b # u & >> w 24 255 )
+}
+
+@ __lm_wrb File f ( Vec u ) b → b {
+    ?? ( file_write_chunk f b ) { T _x → { ^ T } F _e → { ^ F } }
+}
+
 @ __lm_emit Ply p * f rgb * f dep * f cf * f kinv * f c2w
 i h i w f cmin i stride → Ply {
     : *f wp # *f ( nurl_zalloc 24 )
     : ~ i n . p n
     : File fh . p f
+    : b ascii != . p ascii 0
     : ~ String buf ( string_from `` )
+    : ( Vec u ) bin ( vec_new [u] )
     : i plane * h w
     : ~ i y 0
     ~ < y h {
@@ -276,34 +313,54 @@ i h i w f cmin i stride → Ply {
                 // INTEGER pixel coordinates: the reference builds its
                 // grid with np.arange(W), not sample centres
                 ( unproject # f x # f y . dep idx kinv c2w wp )
-                ( string_push_str buf ( nurl_str_float . wp 0 ) )
-                ( string_push_char buf 32 )
-                ( string_push_str buf ( nurl_str_float . wp 1 ) )
-                ( string_push_char buf 32 )
-                ( string_push_str buf ( nurl_str_float . wp 2 ) )
-                ( string_push_char buf 32 )
-                ( string_push_int buf ( __lm_u8 . rgb idx ) )
-                ( string_push_char buf 32 )
-                ( string_push_int buf ( __lm_u8 . rgb + plane idx ) )
-                ( string_push_char buf 32 )
-                ( string_push_int buf ( __lm_u8 . rgb + * 2 plane idx ) )
-                ( string_push_char buf 10 )
+                : i r ( __lm_u8 . rgb idx )
+                : i g ( __lm_u8 . rgb + plane idx )
+                : i bl ( __lm_u8 . rgb + * 2 plane idx )
+                ? ascii {
+                    ( string_push_str buf ( nurl_str_float . wp 0 ) )
+                    ( string_push_char buf 32 )
+                    ( string_push_str buf ( nurl_str_float . wp 1 ) )
+                    ( string_push_char buf 32 )
+                    ( string_push_str buf ( nurl_str_float . wp 2 ) )
+                    ( string_push_char buf 32 )
+                    ( string_push_int buf r )
+                    ( string_push_char buf 32 )
+                    ( string_push_int buf g )
+                    ( string_push_char buf 32 )
+                    ( string_push_int buf bl )
+                    ( string_push_char buf 10 )
+                } {
+                    ( __lm_put_f32 bin . wp 0 )
+                    ( __lm_put_f32 bin . wp 1 )
+                    ( __lm_put_f32 bin . wp 2 )
+                    ( vec_push [u] bin # u r )
+                    ( vec_push [u] bin # u g )
+                    ( vec_push [u] bin # u bl )
+                }
                 = n + n 1
             } {}
             = x + x stride
         }
         // Flushing per row keeps the buffer at a row's worth rather than
         // a frame's; a 518-wide row is a few kilobytes.
-        ? > ( string_len buf ) 0 {
-            ( __lm_wr fh buf )
-            ( string_free buf )
-            = buf ( string_from `` )
-        } {}
+        ? ascii {
+            ? > ( string_len buf ) 0 {
+                ( __lm_wr fh buf )
+                ( string_free buf )
+                = buf ( string_from `` )
+            } {}
+        } {
+            ? > ( vec_len [u] bin ) 0 {
+                : b _w ( __lm_wrb fh bin )
+                : b _t ( vec_set_len [u] bin 0 )
+            } {}
+        }
         = y + y stride
     }
     ( string_free buf )
+    ( vec_free [u] bin )
     ( nurl_free # s wp )
-    ^ @ Ply { fh n }
+    ^ @ Ply { fh n ? ascii 1 0 }
 }
 
 @ main → i {
@@ -319,8 +376,19 @@ i h i w f cmin i stride → Ply {
     // half-ran and exited 0 is worse than one that failed loudly: the
     // caller writes the cloud into a pipeline and never learns.
     : ~ i rc 0
-    : *GpuKit kit ( gk_open 0 )
+    : *GpuKit kit ( gk_open_best )
     ? ( gk_ok kit ) {} { ( nurl_print `lingbot-map: no gpukit backend\n` ) ^ 1 }
+    // Every gkd_* launch syncs the device by default, which is right for
+    // one-shot compute and wrong for a model: a frame is thousands of
+    // launches, and the stream already serialises them. Downloads sync
+    // implicitly, and the frame's only reads are the three downloads at
+    // the end, so one sync per frame is all the ordering this needs.
+    ( gk_autosync F )
+    ? != . o profile 0 {
+        ( nurl_print `backend ` ) ( nurl_print ( gk_backend kit ) )
+        ( nurl_print ` ` ) ( nurl_print ( gk_device_name kit ) ) ( nurl_print `\n` )
+        ( gk_prof kit T )
+    } {}
 
     : !*Lw String lo ( lw_open . o model )
     ?? lo {
@@ -335,7 +403,7 @@ i h i w f cmin i stride → Ply {
             ? ( lw_ok lw ) {} {
                 ( nurl_print ( lw_error lw ) ) ( nurl_print `\n` ) ^ 1
             }
-            : !Ply String po ( __lm_ply_open . o out )
+            : !Ply String po ( __lm_ply_open . o out . o ascii )
             ?? po {
                 F e → {
                     ( nurl_print ( string_data e ) ) ( nurl_print `\n` ) ( string_free e ) ^ 1
@@ -357,6 +425,8 @@ i h i w f cmin i stride → Ply {
                             T s → { = path ( string_data s ) }
                             F → { = failed 1 }
                         }
+                        : i t_frame0 ( monotonic_ns )
+                        : i dev0 ( gk_prof_total kit )
                         ? == failed 0 {
                             : !*Frame String fro ( pp_load path LM_SIZE LM_PATCH )
                             ?? fro {
@@ -396,18 +466,27 @@ i h i w f cmin i stride → Ply {
                                     : GkBuf dtok ( gk_dbuf_new kit * dn 1024 GK_F32 )
                                     : GkBuf tok ( gk_dbuf_new kit * p 1024 GK_F32 )
                                     : GkBuf out ( gk_dbuf_new kit * 4 * p 2048 GK_F32 )
+                                    // a phase boundary is only a boundary when it is
+                                    // being timed; without --profile the host runs
+                                    // ahead and the stages overlap as they should
+                                    ? != . o profile 0 { : b _sy0 ( gk_sync kit ) } {}
+                                    : i t_prep ( monotonic_ns )
                                     ? ( ag_forward_one kit a ws dtok tok src
                                     h w gh gw fi 1 AG_KV_SCALE AG_KV_WINDOW -1 taps out ) {} {
                                         ( nurl_print `lingbot-map: aggregator failed\n` )
                                         = failed 1
                                     }
 
+                                    ? != . o profile 0 { : b _sy1 ( gk_sync kit ) } {}
+                                    : i t_agg ( monotonic_ns )
                                     : GkBuf camtok ( lm_view out * 3 * p 2048 2048 )
                                     : GkBuf pose ( gk_dbuf_new kit 9 GK_F32 )
                                     ? & == failed 0 ( ch_forward kit chd cws camtok fi pose ) {} {
                                         ( nurl_print `lingbot-map: camera head failed\n` )
                                         = failed 1
                                     }
+                                    ? != . o profile 0 { : b _sy2 ( gk_sync kit ) } {}
+                                    : i t_cam ( monotonic_ns )
                                     : GkBuf depth ( gk_dbuf_new kit * h w GK_F32 )
                                     : GkBuf conf ( gk_dbuf_new kit * h w GK_F32 )
                                     ? & == failed 0 ( dp_forward kit dp out gh gw h w 0 depth conf ) {} {
@@ -415,6 +494,8 @@ i h i w f cmin i stride → Ply {
                                         = failed 1
                                     }
 
+                                    ? != . o profile 0 { : b _sy3 ( gk_sync kit ) } {}
+                                    : i t_dpt ( monotonic_ns )
                                     ? == failed 0 {
                                         : ( Vec f ) pv ( vec_with_cap [f] 9 )
                                         : b _pl ( vec_set_len [f] pv 9 )
@@ -429,6 +510,7 @@ i h i w f cmin i stride → Ply {
                                             ( nurl_print `lingbot-map: download failed\n` )
                                             = failed 1
                                         }
+                                        : i t_dl ( monotonic_ns )
                                         ? == failed 0 {
                                             : *f pe ( vec_data [f] pv )
                                             : *f kk # *f ( nurl_zalloc 128 )
@@ -441,6 +523,23 @@ i h i w f cmin i stride → Ply {
                                             ( vec_data [f] cv ) ki c2w h w . o conf . o pixstride )
                                             ( nurl_free # s kk ) ( nurl_free # s ki )
                                             ( nurl_free # s c2w )
+                                            ? != . o profile 0 {
+                                                ( nurl_print `   prep ` )
+                                                ( nurl_print ( nurl_str_int / - t_prep t_frame0 1000000 ) )
+                                                ( nurl_print ` ms  aggregator ` )
+                                                ( nurl_print ( nurl_str_int / - t_agg t_prep 1000000 ) )
+                                                ( nurl_print ` ms  camera ` )
+                                                ( nurl_print ( nurl_str_int / - t_cam t_agg 1000000 ) )
+                                                ( nurl_print ` ms  depth ` )
+                                                ( nurl_print ( nurl_str_int / - t_dpt t_cam 1000000 ) )
+                                                ( nurl_print ` ms  download ` )
+                                                ( nurl_print ( nurl_str_int / - t_dl t_dpt 1000000 ) )
+                                                ( nurl_print ` ms  cloud ` )
+                                                ( nurl_print ( nurl_str_int / - ( monotonic_ns ) t_dl 1000000 ) )
+                                                ( nurl_print ` ms  [device ` )
+                                                ( nurl_print ( nurl_str_int / - ( gk_prof_total kit ) dev0 1000000 ) )
+                                                ( nurl_print ` ms]\n` )
+                                            } {}
                                             ? != . o verbose 0 {
                                                 ( nurl_print `frame ` )
                                                 ( nurl_print ( nurl_str_int + fi 1 ) )
@@ -449,6 +548,9 @@ i h i w f cmin i stride → Ply {
                                                 ( nurl_print `  ` )
                                                 ( nurl_print ( nurl_str_int . ply n ) )
                                                 ( nurl_print ` points  ` )
+                                                ( nurl_print ( nurl_str_int
+                                                / - ( monotonic_ns ) t_frame0 1000000 ) )
+                                                ( nurl_print ` ms  ` )
                                                 ( nurl_print path )
                                                 ( nurl_print `\n` )
                                             } {}
@@ -479,6 +581,7 @@ i h i w f cmin i stride → Ply {
                         ( nurl_print ` points to ` ) ( nurl_print . o out )
                         ( nurl_print `\n` )
                     } {}
+                    ? != . o profile 0 { ( gk_prof_report kit ) } {}
                     ( nurl_free # s taps )
                     ( ch_ws_free cws )
                     ? != failed 0 { = rc 1 } {}

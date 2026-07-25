@@ -279,8 +279,9 @@ elif ! $NURL tests/aggcheck.nu "$WORK/ac" >/dev/null 2>"$WORK/ac_build.err"; the
 else
     if "$WORK/ac" "$CKPT" "$FRAME0" > "$WORK/agg.txt" 2>"$WORK/agg.err"; then
         if grep -q "nan=0" "$WORK/agg.txt"; then
+            grep agg_out "$WORK/agg.txt" > "$WORK/agg_out.txt"
             if out="$("$PYTORCH_PY" tests/cmp_dump.py tests/agg_ref_courthouse0.txt \
-                      <(grep agg_out "$WORK/agg.txt") 1e-5)"; then
+                      "$WORK/agg_out.txt" 1e-5)"; then
                 ok "four tapped layers — $out"
             else
                 bad "aggregator differs from the real model"; echo "$out"
@@ -329,8 +330,9 @@ elif ! $NURL tests/posecheck.nu "$WORK/pc" >/dev/null 2>"$WORK/pc_build.err"; th
 else
     if "$WORK/pc" "$CKPT" "$FRAME0" > "$WORK/pose.txt" 2>"$WORK/pose.err"; then
         grep pose_iter_3 tests/agg_ref_courthouse0.txt > "$WORK/pose_ref.txt"
+        grep pose_iter_3 "$WORK/pose.txt" > "$WORK/pose_iter3.txt"
         if out="$("$PYTORCH_PY" tests/cmp_dump.py "$WORK/pose_ref.txt" \
-                  <(grep pose_iter_3 "$WORK/pose.txt") 1e-5)"; then
+                  "$WORK/pose_iter3.txt" 1e-5)"; then
             ok "pose_enc after 4 refinement passes — $out"
             sed -n "s/^extrinsics/     extrinsics/p;s/^intrinsics/     intrinsics/p" \
                 "$WORK/pose.txt" | cut -c1-100
@@ -399,12 +401,21 @@ if [ ! -f "$CKPT" ] || [ ! -f "$FRAME0" ]; then
 elif ! $NURL src/main.nu "$WORK/lingbot-map" >/dev/null 2>"$WORK/cli_build.err"; then
     bad "CLI build"; tail -6 "$WORK/cli_build.err"
 elif ! "$WORK/lingbot-map" --model "$CKPT" --out "$WORK/cloud.ply" --quiet \
-        "$FRAME0" >"$WORK/cli.txt" 2>&1; then
+        --ascii "$FRAME0" >"$WORK/cli.txt" 2>&1; then
     bad "CLI failed to run"; tail -4 "$WORK/cli.txt"
+elif ! "$WORK/lingbot-map" --model "$CKPT" --out "$WORK/cloudb.ply" --quiet \
+        "$FRAME0" >"$WORK/clib.txt" 2>&1; then
+    bad "CLI failed to run (binary)"; tail -4 "$WORK/clib.txt"
 else
     declared=$(sed -n "s/^element vertex 0*\([0-9][0-9]*\)$/\1/p" "$WORK/cloud.ply")
     body=$(sed "1,/^end_header$/d" "$WORK/cloud.ply" | grep -c .)
     nonfinite=$(sed "1,/^end_header$/d" "$WORK/cloud.ply" | grep -ci "nan\|inf" || true)
+    # the default format is binary_little_endian: same count, and a body
+    # of exactly 3 floats + 3 bytes per vertex
+    bdeclared=$(sed -n "s/^element vertex 0*\([0-9][0-9]*\)$/\1/p" "$WORK/cloudb.ply")
+    bhdr=$(head -c 512 "$WORK/cloudb.ply" | sed -n "1,/^end_header$/p" | wc -c)
+    btotal=$(wc -c < "$WORK/cloudb.ply")
+    bbody=$((btotal - bhdr))
     if [ -z "$declared" ]; then
         bad "no vertex count in the PLY header"
     elif [ "$declared" != "$body" ]; then
@@ -413,8 +424,12 @@ else
         bad "only $declared points — the confidence gate cannot be right"
     elif [ "$nonfinite" != "0" ]; then
         bad "$nonfinite non-finite coordinates in the cloud"
+    elif [ "$bdeclared" != "$declared" ]; then
+        bad "binary PLY has $bdeclared vertices, ASCII has $declared"
+    elif [ "$bbody" != "$((declared * 15))" ]; then
+        bad "binary body is $bbody bytes, expected $((declared * 15))"
     else
-        ok "$declared points written, header and body agree"
+        ok "$declared points written, ASCII and binary agree"
     fi
 fi
 
@@ -469,9 +484,10 @@ else
         wait $evpid
         if [ "$evrc" != "0" ]; then
             bad "streamcheck failed to run"; tail -4 "$WORK/ev.err"
-        elif out="$("$PYTORCH_PY" tests/cmp_dump.py \
-                    <(grep "^stream" "$WORK/ev_ref.txt") \
-                    <(grep "^stream" "$WORK/ev.txt") 1e-4)"; then
+        elif grep "^stream" "$WORK/ev_ref.txt" > "$WORK/ev_ref_s.txt";
+             grep "^stream" "$WORK/ev.txt" > "$WORK/ev_s.txt";
+             out="$("$PYTORCH_PY" tests/cmp_dump.py \
+                    "$WORK/ev_ref_s.txt" "$WORK/ev_s.txt" 1e-4)"; then
             ok "six frames, three of them past eviction — $out"
         else
             bad "eviction differs from the real model"; echo "$out"

@@ -1,5 +1,80 @@
 # Changelog
 
+## 0.6.0
+
+Performance work driven by a real model (packages/lingbot-map, a 1.16 B
+parameter streaming transformer): every number below is measured on an
+RTX 4090 in f32, and every kernel rewrite except `gkd_attention` is
+**bit-identical** to what it replaced — the accumulation order is
+unchanged, only the memory and thread shape are.
+
+- **Shared-memory tiled GEMM / BMM on CUDA.** One thread per output
+  element costs a global load of B per multiply-add, which is 4% of what
+  the card can do. A 256-thread block now owns a 64x64 tile of Y, stages
+  A and B through shared memory, keeps a 4x4 register tile per thread,
+  and reads shared in `float4` (which also removes a 2-way bank conflict
+  on every inner iteration). At 783x1024x1024: **3.1 -> 19.1 TFLOP/s**,
+  and **0.6 -> 20.1** with B transposed, where the old kernel read the
+  transposed operand along the wrong axis entirely. Batched matmul gets
+  the same body: **3.9 -> 16.0 TFLOP/s** on 16x783x64x783.
+- **`gkd_attention`** — fused scaled-dot-product attention over
+  [heads, n, hd] operands, with the online softmax FlashAttention and
+  torch's SDPA use. The composed form (bmm, scale, softmax, bmm) has to
+  materialise a [heads, n, nkv] score matrix, which for a 72-frame
+  window of 783 tokens is 2.8 GB written once and read five times; this
+  writes nothing of that size. Measured against the composed path:
+  1.7x at nkv = n, 2.8x at nkv = 4n, **5.1x at nkv = 50n**. It is the
+  ONE op here that is not bit-identical to its composed equivalent —
+  the sum over keys is blocked and rescaled — and `gkd_attention_ok`
+  reports in advance whether it will run, so a caller can decide
+  whether it still needs to allocate the score buffer.
+- **A caching device allocator.** `cuMemAlloc`/`cuMemFree` synchronise
+  and cost ~315 us per 12 MB pair; a model that allocates its scratch
+  per layer and per frame spent a third of every frame in the allocator
+  with the device idle. `gk_dbuf_free` now retires a block for reuse by
+  the next same-size `gk_dbuf_new`. Exact-size matching, because every
+  `gkd_*` wrapper validates element counts exactly. `gk_pool F` disables
+  it, `gk_pool_release` hands idle blocks back — which is also what an
+  allocation failure does before it reports out-of-memory.
+- **Per-kernel profiling.** `gk_prof`, `gk_prof_report`, `gk_prof_total`,
+  `gk_prof_reset`: with profiling on, every launch is bracketed by a CUDA
+  event pair and the device time accumulates into the kernel's cache
+  slot. "The model is slow" is not actionable; "62% of the frame is in
+  one kernel" is.
+- **`gk_open_best`** opens the device a caller who does not care should
+  get — `$NURL_GPU_DEVICE`, else the highest compute capability with
+  memory breaking ties. `gk_open 0` binds ordinal 0, which on a box with
+  an old card beside a new one is whichever the driver enumerated first.
+- **`gk_dbuf_upload_raw`** uploads bytes already in the buffer's element
+  type: no conversion, no staging allocation. The converting entry point
+  walks every element through f64 twice, which on a 4.6 GB f32
+  checkpoint is most of the load time.
+- **Layernorm: a row per block** instead of a row per thread. ~800 rows
+  is three blocks on a 128-SM card, and neighbouring threads walking
+  their own rows coalesce nothing. The two sums stay in one thread, in
+  ascending order, which is what keeps them bit-identical. **6.3x**.
+- **Convolution: a 4x4 output tile per thread** (four positions along
+  the row, four output channels). The old body was one multiply-add
+  wrapped in four 64-bit index multiplies; now four input pixels are
+  loaded once and feed four channels each. **2.2x**. Transposed
+  convolution grew a fast path for stride == kernel (an exact upsample,
+  what a DPT reassemble stage runs), where exactly one tap contributes
+  per output and the general body was doing two 64-bit modulos per tap
+  to discover that: **14.2 ms -> 0.35 ms** at 256->256, 37x21 -> 148x84.
+- **A shape-specialised permute.** `gkd_perm` decomposed each output
+  index with a runtime loop over six 64-bit divisions and modulos and
+  held its working arrays in dynamically indexed local memory, so a
+  9 MB permute ran at a fourteenth of the bandwidth it should. The dims
+  and the permutation are literals in the generated source now, for any
+  tensor of 65 536 elements or more: **87 us -> 15 us**.
+- **GEMV shape for small M.** A [1,K]x[K,N] projection ran as M*N
+  threads — eight blocks for a 2048-wide output. Now one block per
+  output element stages both operands coalesced into shared memory and
+  keeps the dot product a single ascending sum in one thread.
+- Requires **gpu ^0.11** for `gpu_timer_*`, which the profiler is built
+  on. None of the above touches the CPU backend's register-tiled kernels
+  from 0.5.0 — the two tilings are for different machines and coexist.
+
 ## 0.5.0
 
 - **Register-tiled matmul/GEMM on the CPU backend — 24x.** One thread per

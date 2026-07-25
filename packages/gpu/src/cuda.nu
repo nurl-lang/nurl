@@ -92,6 +92,20 @@ $ `stdlib/core/string.nu`
 
 & `cuda` @ cuGetErrorName i32 err *u pstr → i32
 
+// Events — the only honest way to time a kernel. A host clock around a
+// launch measures the launch, not the work; an event pair recorded on the
+// launch stream measures the GPU. cuEventElapsedTime writes a **float**
+// (4 bytes) into its out slot, not a double.
+& `cuda` @ cuEventCreate *u phe i32 flags → i32
+
+& `cuda` @ cuEventRecord i hev i stream → i32
+
+& `cuda` @ cuEventSynchronize i hev → i32
+
+& `cuda` @ cuEventElapsedTime *u pms i hstart i hend → i32
+
+& `cuda` @ cuEventDestroy_v2 i hev → i32
+
 // ── NVRTC (runtime CUDA-C → PTX) ──────────────────────────────────
 // nvrtcCreateProgram / nvrtcDestroyProgram take nvrtcProgram* (a pointer to
 // the handle slot) → *u out-slot offset. The rest take the nvrtcProgram
@@ -388,6 +402,36 @@ $ `stdlib/core/string.nu`
     ( nurl_free s )
     ^ # s namep
 }
+
+// ── events (timing) ───────────────────────────────────────────────
+// Handles are plain i64 like every other CUDA handle; 0 means the create
+// failed. Events are recorded on the SAME stream the launches ride, so a
+// begin/end pair brackets exactly the work between them.
+
+@ cuda_event_create → i {
+    : *u s ( __outslot )
+    ? != # i ( cuEventCreate s 0 ) 0 { ( nurl_free s ) ^ 0 } {}
+    : i ev ( nurl_peek s 0 )
+    ( nurl_free s )
+    ^ ev
+}
+
+@ cuda_event_record i ev → i { ^ # i ( cuEventRecord ev g_cuda_stream ) }
+
+@ cuda_event_sync i ev → i { ^ # i ( cuEventSynchronize ev ) }
+
+// Milliseconds between two recorded events, as the raw 32-bit float
+// pattern the driver writes — the caller widens it (bits_to_f32). A
+// float-typed out parameter is why this cannot just nurl_peek a double.
+@ cuda_event_elapsed_bits i start i end → i {
+    : *u s ( __outslot )
+    ? != # i ( cuEventElapsedTime s start end ) 0 { ( nurl_free s ) ^ 0 } {}
+    : i bits ( nurl_peek s 0 )
+    ( nurl_free s )
+    ^ & bits 4294967295
+}
+
+@ cuda_event_free i ev → v { ? != ev 0 { : i32 _r ( cuEventDestroy_v2 ev ) } {} }
 
 // ── CUDA Graphs: capture a launch sequence once, replay it as ONE call ──
 // The per-node replay engine's cost on small graphs is pure launch

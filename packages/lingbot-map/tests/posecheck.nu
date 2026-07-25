@@ -47,7 +47,7 @@ $ `src/geom.nu`
 
 @ main → i {
     ? < ( nurl_argc ) 3 { ( nurl_print `usage: posecheck <ckpt.pt> <frame>\n` ) ^ 2 } {}
-    : *GpuKit kit ( gk_open 0 )
+    : *GpuKit kit ( gk_open_best )
     ? ( gk_ok kit ) {} { ( nurl_print `no gpukit backend\n` ) ^ 1 }
     : !*Frame String fr ( pp_load ( nurl_argv 2 ) 518 14 )
     ?? fr {

@@ -92,8 +92,16 @@ $ `src/load.nu`
 // nothing to fuse with and therefore no first unit.
 : DpFuse { DpRcu u1 DpRcu u2 DpConv outc i has1 }
 
+// One built positional-embedding grid, kept for the frames after the
+// first. It is a pure function of (channels, height, width, aspect) —
+// no frame data enters it — and every frame of a run has the same
+// geometry, so rebuilding it per frame was ~10 million host-side sin/cos
+// per frame (145 ms, a fifth of the frame) for a bit-identical answer.
+: DpPe { i ch i h i w f aspect GkBuf pe }
+
 : Dpt {
     GkBuf normg GkBuf normb
+    ( Vec DpPe ) pecache
     ( Vec DpConv ) projects  // 4, channel counts differ
     ( Vec DpConv ) resizes  // index 0,1 transpose; 2 unused; 3 strided
     ( Vec DpConv ) rns  // 4, 3x3 no bias, → 256
@@ -161,6 +169,7 @@ $ `src/load.nu`
     ^ @ Dpt {
         ( lmw_upload lw kit `depth_head.norm.weight` )
         ( lmw_upload lw kit `depth_head.norm.bias` )
+        ( vec_new [DpPe] )
         pj rz rn fs
         ( __dp_conv lw kit `depth_head.scratch.` `output_conv1` T )
         ( __dp_conv lw kit `depth_head.scratch.output_conv2.` `0` T )
@@ -171,6 +180,7 @@ $ `src/load.nu`
 
 @ dp_free Dpt d → v {
     ( gk_dbuf_free . d normg ) ( gk_dbuf_free . d normb )
+    ( vec_free_with [DpPe] . d pecache \ DpPe e → v { ( gk_dbuf_free . e pe ) } )
     ( vec_free_with [DpConv] . d projects \ DpConv c → v { ( __dp_conv_free c ) } )
     ( vec_free_with [DpConv] . d resizes \ DpConv c → v { ( __dp_conv_free c ) } )
     ( vec_free_with [DpConv] . d rns \ DpConv c → v { ( __dp_conv_free c ) } )
@@ -220,7 +230,28 @@ $ `src/load.nu`
 // so the embedding is the same physical field regardless of resolution —
 // which is why it can be added at two different sizes and mean the same
 // thing.
-@ dp_pos_embed * GpuKit kit GkBuf x i ch i h i w f aspect → b {
+// The cache lookup. `Vec` is a handle to one control block, so pushing
+// through the Dpt the forward pass was handed is visible to the caller's
+// Dpt — the entry outlives the frame.
+@ __dp_pe_find ( Vec DpPe ) cache i ch i h i w f aspect → GkBuf {
+    : ~ i k 0
+    ~ < k ( vec_len [DpPe] cache ) {
+        ?? ( vec_get [DpPe] cache k ) {
+            T e → {
+                ? & & & == . e ch ch == . e h h == . e w w == . e aspect aspect {
+                    ^ . e pe
+                } {}
+            }
+            F _ → {}
+        }
+        = k + k 1
+    }
+    ^ @ GkBuf { 0 0 GK_F32 }
+}
+
+@ dp_pos_embed * GpuKit kit ( Vec DpPe ) cache GkBuf x i ch i h i w f aspect → b {
+    : GkBuf hit ( __dp_pe_find cache ch h w aspect )
+    ? ( gk_buf_ok hit ) { ^ ( gkd_add kit x x hit ) } {}
     : f diag ( float_sqrt + * aspect aspect 1.0 )
     : f spanx / aspect diag
     : f spany / 1.0 diag
@@ -271,9 +302,8 @@ $ `src/load.nu`
     : b ok ( gk_dbuf_upload kit pe hv )
     ( vec_free [f] hv )
     ? ok {} { ( gk_dbuf_free pe ) ^ F }
-    : b r ( gkd_add kit x x pe )
-    ( gk_dbuf_free pe )
-    ^ r
+    ( vec_push [DpPe] cache @ DpPe { ch h w aspect pe } )
+    ^ ( gkd_add kit x x pe )
 }
 
 // One fusion step. `out` is the coarser path (or the only input, for
@@ -419,7 +449,7 @@ GkBuf depth GkBuf conf → b {
             ( __dp_dump kit ( string_data l ) proj cout gh gw )
             ( string_free l )
         } {}
-        ? & ok ( dp_pos_embed kit proj cout gh gw aspect ) {} { = ok F }
+        ? & ok ( dp_pos_embed kit . d pecache proj cout gh gw aspect ) {} { = ok F }
         ? & ok != trace 0 {
             : String l ( __dp_lbl `dpt_pos_` t )
             ( __dp_dump kit ( string_data l ) proj cout gh gw )
@@ -535,7 +565,7 @@ GkBuf depth GkBuf conf → b {
     : GkBuf full ( gk_dbuf_new kit * 128 * h w GK_F32 )
     ? ( gkd_resize_bilinear kit full o1 128 ch cw h w 1 ) {} { = ok F }
     ( gk_dbuf_free o1 )
-    ? & ok ( dp_pos_embed kit full 128 h w aspect ) {} { = ok F }
+    ? & ok ( dp_pos_embed kit . d pecache full 128 h w aspect ) {} { = ok F }
     : GkBuf o2 ( gk_dbuf_new kit * 32 * h w GK_F32 )
     : DpConv c2a . d oc2a
     ? & ok ( gkd_conv2d kit o2 full . c2a w . c2a b . c2a hasb

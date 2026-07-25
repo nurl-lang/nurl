@@ -121,14 +121,23 @@ $ `deps/gpukit/src/devops.nu`
 
 @ lm_ws_new * GpuKit kit i n i dim i heads i hidden i maxkv i maxpos → LmWs {
     : i hd / dim heads
+    // `att` and `kt` exist only for the composed attention fallback. On
+    // a backend where gkd_attention runs, nothing ever writes a score
+    // matrix, and sizing one for the whole KV window is what makes a
+    // long sequence not fit: 16 heads x 783 tokens x a 72-frame window
+    // is 2.8 GB. n x n is what the fallback would need for a single
+    // frame and costs 39 MB, so it is kept as a floor rather than
+    // dropped entirely.
+    : b fused ( gkd_attention_ok kit hd )
+    : i attkv ? fused n maxkv
     ^ @ LmWs {
         ( gk_dbuf_new kit * n dim GK_F32 )
         ( gk_dbuf_new kit * n * 3 dim GK_F32 )
         ( gk_dbuf_new kit * n * 3 dim GK_F32 )
-        ( gk_dbuf_new kit * heads * hd maxkv GK_F32 )
+        ( gk_dbuf_new kit * heads * hd attkv GK_F32 )
         ( gk_dbuf_new kit * heads * maxkv hd GK_F32 )
         ( gk_dbuf_new kit * heads * maxkv hd GK_F32 )
-        ( gk_dbuf_new kit * heads * n maxkv GK_F32 )
+        ( gk_dbuf_new kit * heads * n attkv GK_F32 )
         ( gk_dbuf_new kit * n dim GK_F32 )
         ( gk_dbuf_new kit * n dim GK_F32 )
         ( gk_dbuf_new kit * n dim GK_F32 )
@@ -382,26 +391,41 @@ i n i dim i heads i hidden → b {
     } {}
     : GkBuf kuse ? cached kpk kall
     : GkBuf vuse ? cached vpk vall
-    // scores = q · kᵀ / sqrt(hd)
-    : GkBuf kt ( lm_view . ws kt 0 * heads * nkv hd )
-    : ( Vec i ) kd ( _lm_i3 heads nkv hd )
-    : ( Vec i ) kp ( _lm_i3 0 2 1 )
-    : b okk ( gkd_perm kit kt kuse kd kp )
-    ( vec_free [i] kd ) ( vec_free [i] kp )
-    ? okk {} { ^ F }
-    : GkBuf att ( lm_view . ws att 0 * heads * n nkv )
-    ? ( gkd_bmm kit att q kt heads n hd nkv 1 1 ) {} { ^ F }
-    // 1/sqrt(head_dim), applied to the SCORES rather than folded into q —
+    // scores = q · kᵀ / sqrt(hd), then softmax, then · v.
+    //
+    // 1/sqrt(head_dim) goes on the SCORES rather than folded into q —
     // algebraically the same, but it is where torch's SDPA puts it, and
     // the host reference this is checked against does the same.
-    : ( Vec f ) sv ( vec_with_cap [f] 1 )
-    ( vec_push [f] sv / 1.0 ( float_sqrt # f hd ) )
-    : b oks ( gk_dbuf_upload kit . ws scal sv )
-    ( vec_free [f] sv )
-    ? oks {} { ^ F }
-    ? ( gkd_ew kit `mul` `*` att att . ws scal ) {} { ^ F }
-    ? ( gkd_softmax_ax kit att att * heads n nkv 1 ) {} { ^ F }
-    ? ( gkd_bmm kit ctx att vuse heads n nkv hd 1 1 ) {} { ^ F }
+    : f scale / 1.0 ( float_sqrt # f hd )
+    // Fused first: gkd_attention never materialises [heads, n, nkv],
+    // which past a few frames is both the whole cost of this block and
+    // the thing that bounds how long a sequence fits in memory. It
+    // declines (F) on a backend or head width it has no shape for, and
+    // then the composed path below runs — same value to f32 rounding,
+    // via a score matrix.
+    ? ( gkd_attention kit ctx q kuse vuse heads n nkv hd scale ) {} {
+        // The workspace only carries a score matrix when the fused path
+        // was unavailable at lm_ws_new time. If it fell through here
+        // anyway, say so instead of viewing past the allocation.
+        ? >= ( gk_buf_len . ws att ) * heads * n nkv {} { ^ F }
+        ? >= ( gk_buf_len . ws kt ) * heads * nkv hd {} { ^ F }
+        : GkBuf kt ( lm_view . ws kt 0 * heads * nkv hd )
+        : ( Vec i ) kd ( _lm_i3 heads nkv hd )
+        : ( Vec i ) kp ( _lm_i3 0 2 1 )
+        : b okk ( gkd_perm kit kt kuse kd kp )
+        ( vec_free [i] kd ) ( vec_free [i] kp )
+        ? okk {} { ^ F }
+        : GkBuf att ( lm_view . ws att 0 * heads * n nkv )
+        ? ( gkd_bmm kit att q kt heads n hd nkv 1 1 ) {} { ^ F }
+        : ( Vec f ) sv ( vec_with_cap [f] 1 )
+        ( vec_push [f] sv scale )
+        : b oks ( gk_dbuf_upload kit . ws scal sv )
+        ( vec_free [f] sv )
+        ? oks {} { ^ F }
+        ? ( gkd_ew kit `mul` `*` att att . ws scal ) {} { ^ F }
+        ? ( gkd_softmax_ax kit att att * heads n nkv 1 ) {} { ^ F }
+        ? ( gkd_bmm kit ctx att vuse heads n nkv hd 1 1 ) {} { ^ F }
+    }
     // [heads, n, hd] → [n, heads·hd]
     : ( Vec i ) cd ( _lm_i3 heads n hd )
     : ( Vec i ) cp ( _lm_i3 1 0 2 )

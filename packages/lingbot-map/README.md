@@ -36,10 +36,153 @@ and is what the port has to reproduce exactly, not approximately.
 | 1 | read the `.pt` checkpoint | **done** — [`torchpt`](../torchpt); the real 4.6 GB file in 0.01 s / 31 MB RSS, values identical to `torch.load` |
 | 2 | image loading and preprocessing | **done** — byte-identical to the reference pipeline on real frames |
 | 3 | ViT layers: patch embed, 2-D RoPE, qk-norm attention, block | **done** — the full block matches the reference to 4e-15 |
-| 4 | streaming aggregator + KV cache | **done** — 5.4e-6 vs the real model; sliding-window eviction 7.7e-6, checked against the model past the eviction point |
-| 5 | camera head, DPT heads | **done** — camera head 5.7e-7, DPT depth head 1.6e-6 |
+| 4 | streaming aggregator + KV cache | **done** — 5.9e-6 vs the real model; sliding-window eviction 8.5e-6, checked against the model past the eviction point |
+| 5 | camera head, DPT heads | **done** — camera head 2.2e-7, DPT depth head 1.6e-6 |
 | 6 | camera geometry | **done** — matches torch to 2.4e-16 |
 | 7 | CLI, point-cloud export, end-to-end check | **done** — `src/main.nu`; world points 1.5e-6 vs the real model |
+
+## Performance
+
+Everything below is one machine — an RTX 4090, f32 on both sides — and
+the port's numbers are with `--profile`, which prints per-stage times and
+a per-kernel GPU profile.
+
+**The same eight-frame reconstruction, before and after the speed work:**
+
+| | before | after |
+| --- | --- | --- |
+| 8 frames, end to end | 38.2 s | **3.6 s** |
+| loading the 4.6 GB checkpoint | ~25 s | **1.6 s** |
+| per frame, steady state | ~1.25 s | **0.20–0.24 s** |
+| 30 frames, end to end | — | **10.7 s** |
+| `tests/depthcheck.nu` (load + a frame + dumps) | 25.8 s | **2.1 s** |
+
+Identical output: the same 237 123 points, and `depthcheck`'s dump is
+byte-for-byte what the pre-optimisation build produced. (Worth knowing
+before reading anything into a tolerance number: the end-to-end
+depth/confidence/world-points check reports 1.6e-5, on the CUDA and CPU
+backends alike, and reported the same 1.646e-5 from a pristine build of
+`HEAD` — it is what that three-row comparison has always been, not
+something the speed work moved. The 1.6e-6 in the stage table is the
+depth map on its own.) Every kernel
+rewrite kept its accumulation order, so this is the same arithmetic run
+in a better shape — with one deliberate exception, noted below.
+
+**Against the reference on the same card.** `tests/ref_timing.py` runs
+the reference's aggregator, camera head and depth head on one frame with
+the checkpoint load excluded, which is the same slice the port's
+`--profile` reports:
+
+| | reference | port |
+| --- | --- | --- |
+| aggregator | 79 ms | 117 ms |
+| camera head | 53 ms | **16 ms** |
+| depth head | 11 ms | 39 ms |
+| **total** | **143 ms** | **172 ms** |
+
+So **1.2x off the reference** — ahead of it on the camera head, behind
+on the other two. That is the honest state: not yet parity, and what is
+left of the gap is in the aggregator's GEMMs and the depth head's
+convolutions, both of which are ordinary (if fiddly) kernel work rather
+than anything structural. The port's own preprocessing — PNG decode and
+the bicubic resize, ~33 ms — is outside this table on both sides, as
+`load_and_preprocess_images` is for the reference. The reference as `demo.py` ships it — the
+aggregator cast to bf16 — measures 155 ms here, slower than its own
+fp32 path: at one frame of 783 tokens this model is latency-bound in
+eager mode, and bf16 only pays off with the `torch.compile` and CUDA
+graphs `demo.py` also turns on.
+
+**Where a frame goes now** (frame 4 of a sequence, `--profile`):
+
+```
+prep 33 ms  aggregator 117 ms  camera 16 ms  depth 39 ms  cloud 1 ms
+  34%  gk32_gemm_smem     1152 calls    198 us each
+  21%  gk32_conv2d         120 calls   1153 us
+  20%  gk32_attn64_64      288 calls    458 us
+   7%  gk32_gemv           304 calls    153 us
+```
+
+What is left is all in three kernels, and none of it is mysterious: the
+tiled GEMM runs at 19–27 TFLOP/s where cuBLAS would do ~50, the direct
+convolution averages ~4.6 TFLOP/s across a resolution pyramid whose
+small levels do not fill the card, and the fused attention still reads
+shared memory more than a warp-tiled version would. Closing those is
+ordinary (if fiddly) kernel work, not a redesign.
+
+### What made the difference
+
+Nearly all of it is in [`gpukit`](../gpukit) rather than here — this port
+was the thing that made the gaps visible, and the fixes belong where
+every GPU package gets them. In rough order of what it bought:
+
+* **Tiled GEMM.** One thread per output element costs a global load of B
+  per multiply-add; a 64x64 shared-memory tile with a 4x4 register tile
+  and `float4` shared reads costs a fraction of one. 3.1 → 19.1 TFLOP/s
+  (and 0.6 → 20.1 with a transposed B, which the old kernel read along
+  the wrong axis entirely). Bit-identical: blocking changes when a
+  product is computed, not the order the sum runs in.
+* **Fused attention.** The composed form materialises a
+  `[heads, n, nkv]` score matrix, writes it once and reads it five
+  times. `gkd_attention` never writes it. 1.7x at `nkv = n`, 5.1x at
+  `nkv = 50n` — and, more to the point for a *streaming* model, the
+  buffer it does not allocate is 2.8 GB at a 72-frame window. This is
+  the one change that is not bit-identical (an online softmax rescales a
+  running sum rather than summing left to right); it moved the whole
+  aggregator from 5.385e-6 to 5.853e-6 against the real model, and the
+  end-to-end depth agreement *improved*, from 1.646e-5 to 1.591e-5 —
+  which figures, since the reference uses SDPA and so does this.
+* **A caching device allocator.** `cuMemAlloc`/`cuMemFree` synchronise
+  and cost ~315 us per 12 MB pair. A frame allocates its scratch a few
+  hundred times, so a third of every frame was the allocator, with the
+  device idle for all of it.
+* **The checkpoint is read straight into device memory.** The load path
+  widened every f32 weight to f64, transposed the four hot Linear
+  weights on the host with a column-strided write per element, and
+  narrowed them again on upload. Now the mapped bytes go to the device
+  as they are and the transpose is a permute kernel: 25 s → 1.6 s.
+* **Layernorm a row per block, not per thread** (~800 rows is three
+  blocks on a 128-SM card): 6.3x. **Convolution with a 4x4 output tile
+  per thread**: 2.2x. **Transposed convolution** with a fast path for
+  stride == kernel, where the general body was doing two 64-bit modulos
+  per tap to discover that fifteen of every sixteen taps contribute
+  nothing: 14.2 ms → 0.35 ms. **GEMV shape for M = 1**, which the camera
+  head runs twenty times per frame and which was eight blocks on a
+  128-SM card.
+* **The permute is shape-specialised.** The generic body decomposed
+  each output index with six 64-bit divisions and modulos and kept its
+  working arrays in local memory, which is why moving 9 MB took 87 us.
+  The kernel source is generated per call anyway, so the dims and the
+  permutation go in as literals and it takes 15 us.
+* **Two per-frame constants are now built once.** The DPT
+  positional-embedding grid is a pure function of (channels, height,
+  width, aspect); rebuilding it was ~10 million host `sin`/`cos` a
+  frame, a fifth of the frame. The DINOv2 position grid is a bicubic
+  resample over 1024 channels and a pure function of (gh, gw);
+  rebuilding it was another 53 ms a frame — a *quarter* of what the
+  frame had shrunk to by then. Both were found the same way, by
+  profiling a build without LTO so the inlined frame loop resolves into
+  named functions, and both are bit-identical: the eight-frame cloud is
+  byte-for-byte unchanged.
+* **The point cloud is binary PLY by default.** ASCII cost 15 us per
+  point — 470 ms a frame at the default stride, more than the depth
+  head. `--ascii` still writes the text form, and the two agree exactly.
+  The float formatting behind it was worth fixing on its own:
+  `nurl_str_float` searched 1..17 significant digits linearly for the
+  shortest round-trip, which is ~2.5 us for a value that came from an
+  f32 (the worst case). It binary-searches now — the property is
+  monotone in the digit count — which is five probes instead of
+  seventeen, for every float any NURL program prints.
+
+Three things this did NOT need, all measured and dropped: double
+buffering the GEMM's global loads (neutral — the kernel is not
+latency-bound), a 128x128 tile (worse — at these shapes it halves the
+block count on a 128-SM card, and idle SMs cost more than the better
+reuse gains), and 16-byte global loads in the staging phase (also
+neutral-to-worse, so it is not issue-bound on those either). Three
+negative results in a row is itself the finding: at ~25 TFLOP/s this
+kernel is not short of any one resource, and the next step is a
+different structure — warp-level tiling with register-resident
+fragments — rather than another parameter.
 
 ### Stage 2 — preprocessing (`src/preproc.nu`)
 
@@ -168,6 +311,8 @@ lingbot-map --model <checkpoint.pt> [options] <frame> ...
   --pixel-stride <n>  take every nth pixel on both axes (default 2)
   --max-frames <n>    stop after n frames
   --quiet             no per-frame progress
+  --profile           per-stage frame timings and a per-kernel GPU profile
+  --ascii             write an ASCII PLY instead of binary_little_endian
 ```
 
 Each frame goes through preprocessing, the DINOv2 trunk and the
@@ -192,12 +337,18 @@ stating, because both are silent:
   Handing it the already-inverted one gives a plausible-looking cloud
   that is in the wrong frame.
 
-Output is ASCII PLY, which every viewer reads. The vertex count is not
-known until the last frame is done, so the header is written with a
-fixed-width zero-padded placeholder and patched by seeking back at the
-end — the alternative is holding the whole cloud in memory, and a
-300-frame sequence is tens of millions of points. Points are flushed a
-row at a time.
+Output is `binary_little_endian` PLY, which every viewer reads, with
+`--ascii` for the text form. Binary is the default because ASCII is not
+a rounding cost here: formatting three coordinates per point ran at
+15 us a point, 470 ms a frame at the default stride — more than the
+depth head. The two formats produce the same points exactly, which the
+end-to-end test checks by writing both.
+
+The vertex count is not known until the last frame is done, so the
+header is written with a fixed-width zero-padded placeholder and patched
+by seeking back at the end — the alternative is holding the whole cloud
+in memory, and a 300-frame sequence is tens of millions of points.
+Points are flushed a row at a time.
 
 On two consecutive courthouse frames at the defaults: 61 458 points,
 frame centroids 0.0095 apart in a scene 2.82 across — the two frames

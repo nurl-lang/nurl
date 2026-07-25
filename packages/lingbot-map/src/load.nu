@@ -36,6 +36,14 @@ $ `src/devblock.nu`
         : b _r ( lw_require w name -1 -1 -1 -1 )
         ^ ( __lmw_none )
     } {}
+    // the checkpoint is float32 and the device buffer is float32, so
+    // the fast path is a straight copy out of the mapping
+    : *u raw ( lw_f32_ptr w name n )
+    ? != # i raw 0 {
+        : GkBuf rb ( gk_dbuf_new kit n GK_F32 )
+        ? ( gk_dbuf_upload_raw kit rb raw ) { ^ rb } {}
+        ( gk_dbuf_free rb )
+    } {}
     : ( Vec f ) host ( vec_with_cap [f] n )
     : b _sl ( vec_set_len [f] host n )
     ? ! ( lw_read w name ( vec_data [f] host ) n ) {
@@ -61,6 +69,27 @@ $ `src/devblock.nu`
     ? | <= n 0 != n * rows cols {
         : b _r ( lw_require w name rows cols -1 -1 )
         ^ ( __lmw_none )
+    } {}
+    // Straight out of the mapping, transposed on the DEVICE. The host
+    // path below widens 4.2 M floats to double, transposes them with a
+    // column-strided write per element, and narrows them again on
+    // upload; this is one memcpy and one permute kernel. It is what
+    // takes the 4.6 GB checkpoint from ~25 s to load to under ten.
+    : *u raw ( lw_f32_ptr w name n )
+    ? != # i raw 0 {
+        : GkBuf src ( gk_dbuf_new kit n GK_F32 )
+        ? ( gk_dbuf_upload_raw kit src raw ) {
+            : GkBuf dst ( gk_dbuf_new kit n GK_F32 )
+            : ( Vec i ) dims ( vec_new [i] )
+            ( vec_push [i] dims rows ) ( vec_push [i] dims cols )
+            : ( Vec i ) perm ( vec_new [i] )
+            ( vec_push [i] perm 1 ) ( vec_push [i] perm 0 )
+            : b okp ( gkd_perm kit dst src dims perm )
+            ( vec_free [i] dims ) ( vec_free [i] perm )
+            ( gk_dbuf_free src )
+            ? okp { ^ dst } {}
+            ( gk_dbuf_free dst )
+        } { ( gk_dbuf_free src ) }
     } {}
     : ( Vec f ) host ( vec_with_cap [f] n )
     : b _sl ( vec_set_len [f] host n )

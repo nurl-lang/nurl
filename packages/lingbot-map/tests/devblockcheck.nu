@@ -196,7 +196,7 @@ $ `src/devblock.nu`
 }
 
 @ main → i {
-    : *GpuKit kit ( gk_open 0 )
+    : *GpuKit kit ( gk_open_best )
     ? ( gk_ok kit ) {} { ( nurl_print `no gpukit backend\n` ) ^ 1 }
     ( nurl_print `backend ` ) ( nurl_print ( gk_backend kit ) ) ( nurl_print `\n` )
     ( case kit 3 2 1 16 2 32 T T )  // aggregator block: qk-norm + rope
