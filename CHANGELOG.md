@@ -8,6 +8,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **`nurlc` recomputed the current line number by rescanning the source
+  from byte 0 on every parser backtrack — 3.3× faster self-compile.**
+  `nurl_lex_set_pos` counted newlines from the start of the file to
+  derive `LX_LINE`, so each backtrack cost O(source size). The parser
+  backtracks per closure body, per `??` guard arm and per
+  paren-disambiguation probe, which makes the total quadratic in file
+  size for closure- and match-heavy sources. `nurl_lex_new` now builds a
+  newline-offset index once (one O(n) pass) and `set_pos` binary-searches
+  it.
+
+  Measured: nurlc compiling **its own 1 MB source drops 3.43 s → 1.03 s**.
+  Emitted IR is byte-identical, and the bootstrap fixed point still
+  holds. The effect scales with source size — on a synthetic
+  closure-heavy file, 32 KB is unchanged while 264 KB goes 0.58 s →
+  0.30 s and the growth curve turns from super-linear to linear:
+
+  | source | before | after |
+  |---|---|---|
+  | 32 KB | 0.05 s | 0.04 s |
+  | 65 KB | 0.09 s | 0.07 s |
+  | 131 KB | 0.28 s | 0.14 s |
+  | 264 KB | 0.58 s | 0.30 s |
+  | 1 017 KB (nurlc.nu) | 3.43 s | 1.03 s |
+
+  Whole-build wall-clock moves less than this suggests: `./build.sh` is
+  dominated by clang/LTO, and nurlc is ~10 s of it across the bootstrap
+  stages. Found by profiling (gprof) rather than by reading — the old
+  `set_pos` was 89% of nurlc's self-compile profile.
+
 ### Added
 
 - **`string_reserve_at` / `string_commit` (`stdlib/core/string.nu`) — a

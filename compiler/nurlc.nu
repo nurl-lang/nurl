@@ -3961,6 +3961,11 @@
 : i LX_PEEK2 17
 : i LX_PEEK3 23
 : i LX_PEEK4 29
+// Line index: `*i` of every '\n' offset in src (ascending) + its count.
+// Built once in nurl_lex_new so nurl_lex_set_pos can binary-search the
+// line number instead of rescanning the source from byte 0.
+: i LX_LINETAB 35
+: i LX_NLINES 36
 
 : i TF_TYPE 0
 : i TF_VAL 1
@@ -3969,7 +3974,7 @@
 : i TF_START 4
 : i TF_VALID 5
 
-: i LX_SIZE 280  // 35 slots × 8 bytes
+: i LX_SIZE 296  // 37 slots × 8 bytes
 
 // ── ASCII byte-class predicates ──────────────────────────────────
 
@@ -4463,6 +4468,34 @@
 
 // ── Public API ───────────────────────────────────────────────────
 
+// Build the newline-offset index for a lexer whose SRC/LEN are set.
+// One O(n) pass at construction; nurl_lex_set_pos then resolves any
+// position to a line with a binary search. Allocated for the process
+// lifetime, like the lexer itself (which is never freed).
+@ __lex_build_linetab s lx → v {
+    : i len ( nurl_peek lx LX_LEN )
+    : *u src # *u # s ( nurl_peek lx LX_SRC )
+    : ~ i count 0
+    : ~ i i 0
+    ~ < i len {
+        ? == & # i . src i 255 10 { = count + count 1 } {}
+        = i + i 1
+    }
+    : s tab # s ( malloc * 8 ? > count 0 count 1 )
+    : *i tp # *i tab
+    : ~ i k 0
+    = i 0
+    ~ < i len {
+        ? == & # i . src i 255 10 {
+            = . tp k i
+            = k + k 1
+        } {}
+        = i + i 1
+    }
+    ( nurl_poke lx LX_LINETAB # i tab )
+    ( nurl_poke lx LX_NLINES count )
+}
+
 @ nurl_lex_new s src s filename → i {
     : s lx # s ( nurl_zalloc LX_SIZE )
     ( nurl_poke lx LX_SRC # i ( strdup src ) )
@@ -4470,6 +4503,7 @@
     ( nurl_poke lx LX_POS 0 )
     ( nurl_poke lx LX_LEN ( strlen src ) )
     ( nurl_poke lx LX_LINE 1 )
+    ( __lex_build_linetab lx )
     // Prime cur token.
     ( __lex_one # i lx LX_CUR )
     ^ # i lx
@@ -4628,7 +4662,6 @@
 
 @ nurl_lex_set_pos i h i new_pos → v {
     : s p # s h
-    : *u src # *u # s ( nurl_peek p LX_SRC )
     : i len ( nurl_peek p LX_LEN )
     : ~ i np new_pos
     ? < np 0 { = np 0 } {}
@@ -4638,13 +4671,20 @@
     ( nurl_poke p + LX_PEEK2 TF_VALID 0 )
     ( nurl_poke p + LX_PEEK3 TF_VALID 0 )
     ( nurl_poke p + LX_PEEK4 TF_VALID 0 )
-    // Recompute line by scanning from start of src.
-    : ~ i line 1
-    : ~ i i 0
-    ~ & < i np < i len {
-        ? == & # i . src i 255 10 { = line + line 1 } {}
-        = i + i 1
+    // Line = 1 + the number of newlines strictly before np. Binary
+    // search the index built in nurl_lex_new: this used to rescan the
+    // source from byte 0 on EVERY call, which on a 1 MB input made the
+    // parser's backtracking quadratic — it was 89% of nurlc's own
+    // runtime when compiling itself.
+    : *i tab # *i # s ( nurl_peek p LX_LINETAB )
+    : i ntab ( nurl_peek p LX_NLINES )
+    : ~ i lo 0
+    : ~ i hi ntab
+    ~ < lo hi {
+        : i mid / + lo hi 2
+        ? < . tab mid np { = lo + mid 1 } { = hi mid }
     }
+    : i line + 1 lo
     ( nurl_poke p LX_POS np )
     ( nurl_poke p LX_LINE line )
     ( __lex_one # i p LX_CUR )
