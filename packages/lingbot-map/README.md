@@ -35,7 +35,7 @@ and is what the port has to reproduce exactly, not approximately.
 |---|---|---|
 | 1 | read the `.pt` checkpoint | **done** — see [`torchpt`](../torchpt), verified against `torch.load` |
 | 2 | image loading and preprocessing | **done** — byte-identical to the reference pipeline on real frames |
-| 3 | ViT layers: patch embed, 2-D RoPE, qk-norm attention, block | position-grid resample **done**; rest pending |
+| 3 | ViT layers: patch embed, 2-D RoPE, qk-norm attention, block | position-grid resample and 2-D RoPE **done**; patch embed, attention, block pending |
 | 4 | streaming aggregator + KV cache | pending |
 | 5 | camera head, DPT heads | pending |
 | 6 | camera geometry | **done** — matches torch to 2.4e-16 |
@@ -78,6 +78,25 @@ Verified against the upstream `quat_to_mat` / `mat_to_quat` /
 worst relative error **2.4e-16** across six random pose encodings — the
 last bit, and it comes from torch's vectorised `tan` disagreeing with
 glibc's, not from the port.
+
+### Stage 3 (partial) — 2-D RoPE (`src/rope.nu`)
+
+Attention rotates q and k by the token's position in the patch **grid**,
+not its index in the sequence: the head dimension splits in half, the
+first half rotated by the row coordinate and the second by the column.
+Bit-exact against `RotaryPositionEmbedding2D`.
+
+Two things here are silent when wrong: the rotation splits each *half*
+at half/2 (not the full head dim at D/2), and `positions` is (row, col)
+with row driving the first half — swapping them transposes the model's
+idea of the image without changing a single shape.
+
+### Stage 3 (partial) — weight access (`src/weights.nu`)
+
+`lw_require` declares the shape a module expects and accumulates
+failures, so a mismatched checkpoint names the first thing actually
+wrong at load time. Layer counts are read off the file rather than
+hard-coded, so the `-long` and `-stage1` checkpoints load too.
 
 ## Running the tests
 
