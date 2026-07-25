@@ -8,6 +8,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **The transfer progress bar reported a falling rate on a transfer that
+  was not slowing down.** `stdlib/std/progress.nu` derived its rate from
+  `cur / (now - started)` — an average over the whole transfer. Two
+  consequences, both visible on a model download:
+
+  * On a **resume**, the caller sets the already-downloaded bytes with
+    `progress_set` immediately after `progress_new`, so the first render
+    divided (say) 400 MB by 0.2 s and printed **3.7 GB/s**, then decayed
+    continuously — 763 MB/s, 381 MB/s, 191 MB/s — while the actual
+    throughput sat at a constant 1 MB/s. That is the "starts at full
+    speed and steadily declines" report.
+  * Even from zero, a cumulative average cannot react: a transfer that
+    settles at its real rate after a fast first second spends minutes
+    crawling down toward the truth.
+
+  The rate is now the **current** throughput — an exponential moving
+  average over roughly the last second of samples, the number `curl` and
+  `wget` show — measured from the resume point, so bytes that came off
+  the disk never count as network throughput. `progress_done` reports the
+  average over this session's bytes.
+
+  Measured on the same synthetic resume (400 MB present, steady 1 MB/s):
+  before `3.7 GB/s → 763 → 381 → 191 → 127 MB/s`; after a flat
+  `975 KB/s`.
+
+  The transfer itself was never slow: a 4-minute, 195 MB download through
+  the same stdlib path (TLS + `file_write_chunk` + `sha256_update`) held
+  462 → 939 KB/s with no trend, at 15% CPU and flat RSS, against 725 KB/s
+  for `curl` on the same URL at the same time.
+
 ## [0.24.0] — 2026-07-25
 
 The **performance** release. No new language surface — this one is about
