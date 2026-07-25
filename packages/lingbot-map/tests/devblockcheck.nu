@@ -39,6 +39,28 @@ $ `src/devblock.nu`
     ^ b
 }
 
+// A Linear weight, uploaded TRANSPOSED. lm_block_forward asks gkd_gemm
+// for transb=0, so LmBlk holds [in, out] where the checkpoint and the
+// host reference in src/block.nu both use [out, in]. The host side here
+// keeps the original layout on purpose — the two must disagree in memory
+// and agree in result, which is exactly what this test is checking.
+@ upt * GpuKit kit * f p i rows i cols → GkBuf {
+    : i n * rows cols
+    : GkBuf b ( gk_dbuf_new kit n GK_F32 )
+    : ( Vec f ) v ( vec_with_cap [f] n )
+    : b _sl ( vec_set_len [f] v n )
+    : *f d ( vec_data [f] v )
+    : ~ i r 0
+    ~ < r rows {
+        : ~ i c 0
+        ~ < c cols { = . d + * c rows r . p + * r cols c = c + c 1 }
+        = r + r 1
+    }
+    : b _o ( gk_dbuf_upload kit b v )
+    ( vec_free [f] v )
+    ^ b
+}
+
 @ upi * GpuKit kit * i p i n → GkBuf {
     : GkBuf b ( gk_dbuf_new kit n GK_I64 )
     : ( Vec i ) v ( vec_with_cap [i] n )
@@ -106,16 +128,16 @@ $ `src/devblock.nu`
     : GkBuf zero ( gk_dbuf_new kit 1 GK_F32 )
     : LmBlk w @ LmBlk {
         ( up kit n1g dim ) ( up kit n1b dim )
-        ( up kit qw * * 3 dim dim ) ( up kit qb * 3 dim )
+        ( upt kit qw * 3 dim dim ) ( up kit qb * 3 dim )
         ? qk ( up kit qng hd ) @ GkBuf { 0 0 GK_F32 }
         ? qk ( up kit qnb hd ) @ GkBuf { 0 0 GK_F32 }
         ? qk ( up kit kng hd ) @ GkBuf { 0 0 GK_F32 }
         ? qk ( up kit knb hd ) @ GkBuf { 0 0 GK_F32 }
-        ( up kit pw * dim dim ) ( up kit pb dim )
+        ( upt kit pw dim dim ) ( up kit pb dim )
         ( up kit ls1 dim )
         ( up kit n2g dim ) ( up kit n2b dim )
-        ( up kit f1w * hidden dim ) ( up kit f1b hidden )
-        ( up kit f2w * dim hidden ) ( up kit f2b dim )
+        ( upt kit f1w hidden dim ) ( up kit f1b hidden )
+        ( upt kit f2w dim hidden ) ( up kit f2b dim )
         ( up kit ls2 dim ) 0.000001 }
     : LmWs ws ( lm_ws_new kit n dim heads hidden n maxpos )
     ( gk_dbuf_free . ws rows )
