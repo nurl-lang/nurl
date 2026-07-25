@@ -82,10 +82,35 @@ glibc's, not from the port.
 ### Stage 5 — the DPT depth head (`src/dpthead.nu`) — NOT CORRECT YET
 
 Written, loads, and runs end to end in ~150 s, but the numbers are
-wrong: depth comes out in the hundreds where the reference is around 1,
-and the confidence channel saturates at its floor of 1. Both point at a
-value ~7 in log space where the reference has ~0.1, so something
-structural is off rather than a rounding issue.
+wrong. **The bisect has already localised it**, and the answer is
+narrow:
+
+| stage | scaled error vs the reference |
+|---|---|
+| `dpt_proj_0..3`, `dpt_pos_0..3`, `dpt_rs_0..3` | 1.3e-6 … 8.4e-6 |
+| `dpt_rn_0..3` | 5.9e-7 … 6.6e-6 |
+| **`dpt_f4`** | **6.8e+2** |
+| `dpt_f3`, `dpt_f2`, `dpt_f1`, `dpt_oc1` | 23 … 47 |
+| `depth` | 1.2e+3 |
+
+Everything up to and including the four `layerN_rn` convolutions is
+**correct to float32 noise** — the token norm, all four projections
+with their different channel counts, the position embedding, all four
+resize layers (both ConvTransposes and the strided conv), and the
+reduction to 256 channels.
+
+The divergence starts at **`dpt_f4`**, the very first fusion block, so
+the bug is inside `__dp_fuse_fwd` on the `has1 = 0` path (refinenet4:
+resConfUnit2 → bilinear upsample → 1×1 out_conv) or in how step 0 of
+the fusion loop is set up. Everything after it is that error carried
+forward.
+
+Worth knowing while chasing it: the reference genuinely compresses
+`dpt_rn_3` from |616| down to |0.775| across refinenet4, and
+`resConfUnit2` cannot be doing it — its input is largely negative, so
+`relu(x)` is ~0 and the unit returns approximately `x` unchanged. That
+puts the ~1000× reduction on `out_conv`, which is worth confirming
+before assuming the port's version of it is the thing that is wrong.
 
 It is committed in this state deliberately — with the bisect harness
 rather than without it:
