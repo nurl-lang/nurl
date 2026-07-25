@@ -466,7 +466,10 @@ i h i w f cmin i stride → Ply {
                                     : GkBuf dtok ( gk_dbuf_new kit * dn 1024 GK_F32 )
                                     : GkBuf tok ( gk_dbuf_new kit * p 1024 GK_F32 )
                                     : GkBuf out ( gk_dbuf_new kit * 4 * p 2048 GK_F32 )
-                                    : b _sy0 ( gk_sync kit )
+                                    // a phase boundary is only a boundary when it is
+                                    // being timed; without --profile the host runs
+                                    // ahead and the stages overlap as they should
+                                    ? != . o profile 0 { : b _sy0 ( gk_sync kit ) } {}
                                     : i t_prep ( monotonic_ns )
                                     ? ( ag_forward_one kit a ws dtok tok src
                                     h w gh gw fi 1 AG_KV_SCALE AG_KV_WINDOW -1 taps out ) {} {
@@ -474,7 +477,7 @@ i h i w f cmin i stride → Ply {
                                         = failed 1
                                     }
 
-                                    : b _sy1 ( gk_sync kit )
+                                    ? != . o profile 0 { : b _sy1 ( gk_sync kit ) } {}
                                     : i t_agg ( monotonic_ns )
                                     : GkBuf camtok ( lm_view out * 3 * p 2048 2048 )
                                     : GkBuf pose ( gk_dbuf_new kit 9 GK_F32 )
@@ -482,7 +485,7 @@ i h i w f cmin i stride → Ply {
                                         ( nurl_print `lingbot-map: camera head failed\n` )
                                         = failed 1
                                     }
-                                    : b _sy2 ( gk_sync kit )
+                                    ? != . o profile 0 { : b _sy2 ( gk_sync kit ) } {}
                                     : i t_cam ( monotonic_ns )
                                     : GkBuf depth ( gk_dbuf_new kit * h w GK_F32 )
                                     : GkBuf conf ( gk_dbuf_new kit * h w GK_F32 )
@@ -491,7 +494,7 @@ i h i w f cmin i stride → Ply {
                                         = failed 1
                                     }
 
-                                    : b _sy3 ( gk_sync kit )
+                                    ? != . o profile 0 { : b _sy3 ( gk_sync kit ) } {}
                                     : i t_dpt ( monotonic_ns )
                                     ? == failed 0 {
                                         : ( Vec f ) pv ( vec_with_cap [f] 9 )
