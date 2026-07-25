@@ -245,19 +245,19 @@ i heads i n i dim i nt i nh → b {
 
 // ── helpers ─────────────────────────────────────────────────────────
 
-@ __lm_i2 i a i b → ( Vec i ) {
+@ _lm_i2 i a i b → ( Vec i ) {
     : ( Vec i ) v ( vec_with_cap [i] 2 )
     ( vec_push [i] v a ) ( vec_push [i] v b )
     ^ v
 }
 
-@ __lm_i3 i a i b i c → ( Vec i ) {
+@ _lm_i3 i a i b i c → ( Vec i ) {
     : ( Vec i ) v ( vec_with_cap [i] 3 )
     ( vec_push [i] v a ) ( vec_push [i] v b ) ( vec_push [i] v c )
     ^ v
 }
 
-@ __lm_i4 i a i b i c i d → ( Vec i ) {
+@ _lm_i4 i a i b i c i d → ( Vec i ) {
     : ( Vec i ) v ( vec_with_cap [i] 4 )
     ( vec_push [i] v a ) ( vec_push [i] v b ) ( vec_push [i] v c ) ( vec_push [i] v d )
     ^ v
@@ -272,9 +272,9 @@ i heads i n i dim i nt i nh → b {
 
 // y[rows, cols] += ls[cols] * b[rows, cols], the LayerScale residual.
 @ __lm_res * GpuKit kit GkBuf y GkBuf b GkBuf ls GkBuf tmp i rows i cols → b {
-    : ( Vec i ) od ( __lm_i2 rows cols )
-    : ( Vec i ) as ( __lm_i2 cols 1 )
-    : ( Vec i ) bs ( __lm_i2 0 1 )
+    : ( Vec i ) od ( _lm_i2 rows cols )
+    : ( Vec i ) as ( _lm_i2 cols 1 )
+    : ( Vec i ) bs ( _lm_i2 0 1 )
     : b ok1 ( gkd_ew_bc kit `mul` `*` tmp b ls od as bs )
     ( vec_free [i] od ) ( vec_free [i] as ) ( vec_free [i] bs )
     ? ok1 {} { ^ F }
@@ -332,8 +332,8 @@ i n i dim i heads i hidden → b {
     ? ( gkd_layernorm kit norm x . w n1g . w n1b n dim . w eps ) {} { ^ F }
     ? ( gkd_gemm kit qkv norm . w qkvw . w qkvb 1 n * 3 dim dim 1.0 1.0 1 ) {} { ^ F }
     // [n, 3, heads, hd] → [3, heads, n, hd]
-    : ( Vec i ) qd ( __lm_i4 n 3 heads hd )
-    : ( Vec i ) qp ( __lm_i4 1 2 0 3 )
+    : ( Vec i ) qd ( _lm_i4 n 3 heads hd )
+    : ( Vec i ) qp ( _lm_i4 1 2 0 3 )
     : b okp ( gkd_perm kit qkvp qkv qd qp )
     ( vec_free [i] qd ) ( vec_free [i] qp )
     ? okp {} { ^ F }
@@ -375,8 +375,8 @@ i n i dim i heads i hidden → b {
     : GkBuf vuse ? cached vpk vall
     // scores = q · kᵀ / sqrt(hd)
     : GkBuf kt ( lm_view . ws kt 0 * heads * nkv hd )
-    : ( Vec i ) kd ( __lm_i3 heads nkv hd )
-    : ( Vec i ) kp ( __lm_i3 0 2 1 )
+    : ( Vec i ) kd ( _lm_i3 heads nkv hd )
+    : ( Vec i ) kp ( _lm_i3 0 2 1 )
     : b okk ( gkd_perm kit kt kuse kd kp )
     ( vec_free [i] kd ) ( vec_free [i] kp )
     ? okk {} { ^ F }
@@ -394,8 +394,8 @@ i n i dim i heads i hidden → b {
     ? ( gkd_softmax_ax kit att att * heads n nkv 1 ) {} { ^ F }
     ? ( gkd_bmm kit ctx att vuse heads n nkv hd 1 1 ) {} { ^ F }
     // [heads, n, hd] → [n, heads·hd]
-    : ( Vec i ) cd ( __lm_i3 heads n hd )
-    : ( Vec i ) cp ( __lm_i3 1 0 2 )
+    : ( Vec i ) cd ( _lm_i3 heads n hd )
+    : ( Vec i ) cp ( _lm_i3 1 0 2 )
     : b okc ( gkd_perm kit ctxp ctx cd cp )
     ( vec_free [i] cd ) ( vec_free [i] cp )
     ? okc {} { ^ F }

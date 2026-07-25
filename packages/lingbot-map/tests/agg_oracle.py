@@ -92,6 +92,43 @@ def main():
     for i, p in enumerate(poses):
         dump("pose_iter_%d" % i, p)
 
+    depth, depth_conf = model.depth_head([o.float() for o in outs],
+                                         images=imgs.float(), patch_start_idx=psi)
+    dump("depth", depth)
+    dump("depth_conf", depth_conf)
+
+    if os.environ.get("LINGBOT_DPT_TRACE"):
+        # Re-walk the head's own submodules so each stage can be compared
+        # against the port. Same code path, just observable.
+        dh = model.depth_head
+        ph, pw = images.shape[-2] // 14, images.shape[-1] // 14
+        feats = []
+        for i in range(4):
+            x = outs[i].float()[:, :, psi:].reshape(-1, ph * pw, outs[i].shape[-1])
+            x = dh.norm(x)
+            x = x.permute(0, 2, 1).reshape(x.shape[0], x.shape[-1], ph, pw)
+            x = dh.projects[i](x)
+            dump("dpt_proj_%d" % i, x)
+            x = dh._apply_pos_embed(x, images.shape[-1], images.shape[-2])
+            dump("dpt_pos_%d" % i, x)
+            x = dh.resize_layers[i](x)
+            dump("dpt_rs_%d" % i, x)
+            feats.append(x)
+        rns = [dh.scratch.layer1_rn(feats[0]), dh.scratch.layer2_rn(feats[1]),
+               dh.scratch.layer3_rn(feats[2]), dh.scratch.layer4_rn(feats[3])]
+        for i, r in enumerate(rns):
+            dump("dpt_rn_%d" % i, r)
+        o = dh.scratch.refinenet4(rns[3], size=rns[2].shape[2:])
+        dump("dpt_f4", o)
+        o = dh.scratch.refinenet3(o, rns[2], size=rns[1].shape[2:])
+        dump("dpt_f3", o)
+        o = dh.scratch.refinenet2(o, rns[1], size=rns[0].shape[2:])
+        dump("dpt_f2", o)
+        o = dh.scratch.refinenet1(o, rns[0])
+        dump("dpt_f1", o)
+        o = dh.scratch.output_conv1(o)
+        dump("dpt_oc1", o)
+
 
 if __name__ == "__main__":
     main()

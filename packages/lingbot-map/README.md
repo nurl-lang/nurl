@@ -37,7 +37,7 @@ and is what the port has to reproduce exactly, not approximately.
 | 2 | image loading and preprocessing | **done** — byte-identical to the reference pipeline on real frames |
 | 3 | ViT layers: patch embed, 2-D RoPE, qk-norm attention, block | **done** — the full block matches the reference to 4e-15 |
 | 4 | streaming aggregator + KV cache | **done** — two frames streamed through the cache, 5.4e-6 vs the real model. Eviction (past 72 frames) pending |
-| 5 | camera head, DPT heads | camera head **done** — a pose end to end, 5.7e-7 vs the real model. DPT depth head pending |
+| 5 | camera head, DPT heads | camera head **done** (5.7e-7). DPT depth head **written and running, but WRONG** — see below |
 | 6 | camera geometry | **done** — matches torch to 2.4e-16 |
 | 7 | CLI, point-cloud export, end-to-end check | pending |
 
@@ -79,10 +79,30 @@ worst relative error **2.4e-16** across six random pose encodings — the
 last bit, and it comes from torch's vectorised `tan` disagreeing with
 glibc's, not from the port.
 
-### Stage 5 — what the DPT depth head needs
+### Stage 5 — the DPT depth head (`src/dpthead.nu`) — NOT CORRECT YET
 
-Not started. The shapes below are read off the real checkpoint, so
-whoever writes it does not have to guess:
+Written, loads, and runs end to end in ~150 s, but the numbers are
+wrong: depth comes out in the hundreds where the reference is around 1,
+and the confidence channel saturates at its floor of 1. Both point at a
+value ~7 in log space where the reference has ~0.1, so something
+structural is off rather than a rounding issue.
+
+It is committed in this state deliberately — with the bisect harness
+rather than without it:
+
+* `LINGBOT_DPT_TRACE=1 tests/agg_oracle.py …` re-walks the reference
+  head's own submodules and dumps every stage: `dpt_proj_N`,
+  `dpt_pos_N`, `dpt_rs_N`, `dpt_rn_N`, `dpt_f4..f1`, `dpt_oc1`.
+* `dp_forward`'s `trace` argument prints the same stages from the port,
+  in the same format, so a single run localises the divergence. A
+  150 s forward is not something to bisect by adding one print at a
+  time.
+
+The reference stage values are recorded below for orientation; note how
+large `dpt_rs_3` and `dpt_rn_3` legitimately get (−170 … −447), which
+is *not* the bug.
+
+The shapes below are read off the real checkpoint:
 
 | piece | shape | note |
 |---|---|---|
@@ -100,10 +120,11 @@ whoever writes it does not have to guess:
 Config: `intermediate_layer_idx = [0,1,2,3]`, `pos_embed=True`,
 `activation="exp"`, `conf_activation="expp1"`.
 
-Ops still missing from gpukit: **bilinear** resize (`gkd_resize_nn` is
-nearest only) — the fusion blocks upsample between stages and the final
-output is interpolated with `align_corners=True`. `gkd_conv2d` and
-`gkd_convtranspose2d` already exist.
+`gkd_resize_bilinear` was added to gpukit for this (both corner
+conventions, verified against torch); `gkd_conv2d` and
+`gkd_convtranspose2d` already existed. `gkd_convtranspose2d` indexes its
+weight as `[cin, cout, kh, kw]`, which is PyTorch's ConvTranspose2d
+layout — checked, and not the bug.
 
 Also needed: `_apply_pos_embed`, which builds a UV grid and a sinusoidal
 embedding scaled by 0.1 and adds it **twice** — after each project and
