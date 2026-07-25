@@ -831,21 +831,100 @@ i heads i n i nkv i hd f scale → b {
     ? good {} { ^ F }
     ? & == . x n total == . y n total {} { ^ F }
     : s tn ( _gk_tname . y dtype )
+    // Shape-specialised body. The generic one decomposes the output
+    // index with six 64-bit divisions and modulos per element and holds
+    // D/P/O/oc/in in dynamically indexed local arrays, which live in
+    // LOCAL memory — a permute of 9 MB was running at a fourteenth of
+    // the bandwidth it should. The source is generated per call anyway,
+    // so the dims and the permutation go in as literals: the divisions
+    // become multiply-shifts, the loops unroll, and every intermediate
+    // is a register. Only for tensors big enough to be worth a compile;
+    // the kernel name carries the shape, so each distinct one is
+    // compiled and cached once (and the on-disk kernel cache makes that
+    // once per machine, not once per process).
+    : b lit >= total 65536
     : String kname ( __gkd_name . y dtype )
-    : String src ( __gkd_head kname `perm6` )
+    ( string_push_str kname `perm6` )
+    ? lit {
+        : ~ i q 0
+        ~ < q 6 {
+            ( string_push_char kname 95 )
+            ( string_push_int kname ? < q nd { ( _gk_vi dims q ) } { 1 } )
+            = q + q 1
+        }
+        = q 0
+        ~ < q 6 {
+            ( string_push_char kname 95 )
+            ( string_push_int kname ? < q nd { ( _gk_vi perm q ) } { q } )
+            = q + q 1
+        }
+    } {}
+    : String src ( string_from `extern "C" __global__ void ` )
+    ( string_push_str src ( string_data kname ) )
+    ( string_push_char src 40 )
     ( string_push_str src `const ` ) ( string_push_str src tn ) ( string_push_str src `* X, ` )
     ( string_push_str src tn ) ( string_push_str src `* Y, long long d0,long long d1,long long d2,long long d3,long long d4,long long d5,long long p0,long long p1,long long p2,long long p3,long long p4,long long p5){` )
-    ( string_push_str src `long long D[6]={d0,d1,d2,d3,d4,d5};` )
-    ( string_push_str src `long long P[6]={p0,p1,p2,p3,p4,p5};` )
-    ( string_push_str src `long long O[6];for(int i=0;i<6;i++)O[i]=D[P[i]];` )
-    ( string_push_str src `long long tot=O[0]*O[1]*O[2]*O[3]*O[4]*O[5];` )
-    ( string_push_str src `long long idx=blockIdx.x*blockDim.x+threadIdx.x;` )
-    ( string_push_str src `if(idx>=tot)return;` )
-    ( string_push_str src `long long oc[6];long long t=idx;` )
-    ( string_push_str src `for(int i=5;i>=0;i--){oc[i]=t%O[i];t/=O[i];}` )
-    ( string_push_str src `long long in[6];for(int i=0;i<6;i++)in[P[i]]=oc[i];` )
-    ( string_push_str src `long long si=((((in[0]*d1+in[1])*d2+in[2])*d3+in[3])*d4+in[4])*d5+in[5];` )
-    ( string_push_str src `Y[idx]=X[si];}` )
+    ? lit {
+        ( string_push_str src `(void)d0;(void)d1;(void)d2;(void)d3;(void)d4;(void)d5;` )
+        ( string_push_str src `(void)p0;(void)p1;(void)p2;(void)p3;(void)p4;(void)p5;` )
+        ( string_push_str src `enum{` )
+        : ~ i q 0
+        ~ < q 6 {
+            ( string_push_str src ? == q 0 `D0=` `,D` )
+            ? > q 0 { ( string_push_int src q ) ( string_push_char src 61 ) } {}
+            ( string_push_int src ? < q nd { ( _gk_vi dims q ) } { 1 } )
+            = q + q 1
+        }
+        ( string_push_str src `};` )
+        // output extents, in output-axis order
+        : ~ i q 0
+        ~ < q 6 {
+            ( string_push_str src ? == q 0 `enum{O0=D` `,O` )
+            ? > q 0 { ( string_push_int src q ) ( string_push_str src `=D` ) } {}
+            ( string_push_int src ? < q nd { ( _gk_vi perm q ) } { q } )
+            = q + q 1
+        }
+        ( string_push_str src `};` )
+        ( string_push_str src `long long idx=blockIdx.x*blockDim.x+threadIdx.x;` )
+        ( string_push_str src `if(idx>=(long long)O0*O1*O2*O3*O4*O5)return;` )
+        ( string_push_str src `long long t=idx;` )
+        ( string_push_str src `long long c5=t%O5;t/=O5;long long c4=t%O4;t/=O4;` )
+        ( string_push_str src `long long c3=t%O3;t/=O3;long long c2=t%O2;t/=O2;` )
+        ( string_push_str src `long long c1=t%O1;long long c0=t/O1;` )
+        // in-axis order is a compile-time permutation of c0..c5
+        // ((((c_a0*D1+c_a1)*D2+c_a2)*D3+c_a3)*D4+c_a4)*D5+c_a5, where
+        // c_aq is the output coordinate of the axis that permutes to
+        // input axis q — four opening parens for six axes.
+        ( string_push_str src `long long si=((((` )
+        : ~ i q 0
+        ~ < q 6 {
+            // which output axis maps to input axis q
+            : ~ i which 0
+            : ~ i j2 0
+            ~ < j2 6 {
+                : i pv ? < j2 nd { ( _gk_vi perm j2 ) } { j2 }
+                ? == pv q { = which j2 } {}
+                = j2 + j2 1
+            }
+            ? > q 0 { ( string_push_str src `*D` ) ( string_push_int src q ) ( string_push_char src 43 ) } {}
+            ( string_push_str src `c` ) ( string_push_int src which )
+            ? & > q 0 < q 5 { ( string_push_char src 41 ) } {}
+            = q + q 1
+        }
+        ( string_push_str src `;Y[idx]=X[si];}` )
+    } {
+        ( string_push_str src `long long D[6]={d0,d1,d2,d3,d4,d5};` )
+        ( string_push_str src `long long P[6]={p0,p1,p2,p3,p4,p5};` )
+        ( string_push_str src `long long O[6];for(int i=0;i<6;i++)O[i]=D[P[i]];` )
+        ( string_push_str src `long long tot=O[0]*O[1]*O[2]*O[3]*O[4]*O[5];` )
+        ( string_push_str src `long long idx=blockIdx.x*blockDim.x+threadIdx.x;` )
+        ( string_push_str src `if(idx>=tot)return;` )
+        ( string_push_str src `long long oc[6];long long t=idx;` )
+        ( string_push_str src `for(int i=5;i>=0;i--){oc[i]=t%O[i];t/=O[i];}` )
+        ( string_push_str src `long long in[6];for(int i=0;i<6;i++)in[P[i]]=oc[i];` )
+        ( string_push_str src `long long si=((((in[0]*d1+in[1])*d2+in[2])*d3+in[3])*d4+in[4])*d5+in[5];` )
+        ( string_push_str src `Y[idx]=X[si];}` )
+    }
     : ( Vec i ) args ( vec_new [i] )
     ( vec_push [i] args ( gk_arg_dev x ) )
     ( vec_push [i] args ( gk_arg_dev y ) )
