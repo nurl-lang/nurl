@@ -11684,6 +11684,23 @@
                         ? & > ( int_width st ) 0 | == ( nurl_str_get dt 0 ) 123 == ( nurl_str_get dt 0 ) 91
                         { ( nurl_set_last_type dt ) ^ `zeroinitializer` }
                         {}
+                        // Anonymous aggregate SOURCE (`{ … }` option /
+                        // result / slice / tuple, or `[ … ]` array).
+                        // Unlike `%Struct` / `%Enum` — handled far above
+                        // by extracting field 0 — an anonymous aggregate
+                        // has no such convention and no width to convert,
+                        // so every remaining path is a no-op that would
+                        // hand the aggregate register onward wearing the
+                        // target's type. That is not a value of type dt:
+                        // it is IR the verifier rejects. Diagnose it here.
+                        // Overwhelmingly the source is a `?A` that was
+                        // meant to be unwrapped first — `# i ( vec_get v 0 )`.
+                        ? & > stlen 0 & | == ( nurl_str_get st 0 ) 123 == ( nurl_str_get st 0 ) 91
+                        ! ( seq st dt )
+                        { ( die lex ( nurl_str_cat ( nurl_str_cat3
+                            `cannot cast '` st ( nurl_str_cat3 `' to '` dt `'` ) )
+                            ` — the operand is an aggregate (option / result / slice), not a scalar. Unwrap it first: '?? expr { T x → … F _ → … }'.` ) ) }
+                        {}
                         // Integer-width conversion (iN → iM).  Sub-cases:
                         //   * Narrow (sw > dw): trunc.
                         //   * Widen, source is i1 (a boolean from a
@@ -11993,6 +12010,25 @@
 @ gen_agg_lit i lex i syms i cg → s {
     ( nurl_lex_advance lex )  // consume '@'
     : s agg_ty ( parse_type lex )  // parse the aggregate type
+    // A POINTER target has no fields to insert into: `@ *T { … }` reads
+    // as "heap-allocate a T with these fields", which NURL does not
+    // have. Left alone, the field loop below inserted into a pointer
+    // type and the only thing that noticed was the LLVM verifier
+    // ("insertvalue operand must be aggregate type"), a stage later and
+    // pointing at generated IR rather than at the source. Name the
+    // working idiom instead. (`!*T`/`?*T` are fine — those ARE
+    // aggregates whose payload happens to be a pointer, and their
+    // llty starts with `{`, not `%…*`.)
+    ? & > ( nurl_str_len agg_ty ) 1
+    == ( nurl_str_get agg_ty - ( nurl_str_len agg_ty ) 1 ) 42
+    { : s bare ( nurl_str_slice agg_ty 0 - ( nurl_str_len agg_ty ) 1 )
+        : s sname ? == ( nurl_str_get bare 0 ) 37
+        ( nurl_str_slice bare 1 - ( nurl_str_len bare ) 1 ) bare
+        : s head ( nurl_str_cat3 `'@ ` agg_ty ` { ... }' has no meaning: the target is a pointer, not an aggregate. Allocate it, then assign the fields: ': ` )
+        : s mid ( nurl_str_cat3 agg_ty ` x # ` agg_ty )
+        : s tail ( nurl_str_cat3 ` ( nurl_alloc Z ` sname ` )', then '= . x <field> <value>' per field.` )
+        ( die lex ( nurl_str_cat3 head mid tail ) ) }
+    {}
     ( expect lex TT_LBRACE )  // consume '{'
     // zeroinitializer (not undef) so fields the literal leaves out are
     // all-zero. Matters for payload-less None — `@ ?T { F }` — where the

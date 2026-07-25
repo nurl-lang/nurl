@@ -1,0 +1,13 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+arc_len=409
+count=2
+entry 0: a.txt size=11 csize=11 method=0
+entry 1: dir/b.bin size=64 csize=64 method=0
+a.txt=hello zip64
+b.bin_len=64 b0=0 b63=63
+find_a=0
+inplace=hello zip64
+find_missing=-1
