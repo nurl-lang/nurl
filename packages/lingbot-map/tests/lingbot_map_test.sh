@@ -61,7 +61,7 @@ print("worst relative error %.3e" % worst)
 PY
 }
 
-echo "[1/11] camera geometry vs the reference torch code"
+echo "[1/12] camera geometry vs the reference torch code"
 if ! $NURL tests/geomcheck.nu "$WORK/geomcheck" >/dev/null 2>"$WORK/build.err"; then
     bad "geomcheck build"; cat "$WORK/build.err"
 elif [ -z "$PYTORCH_PY" ] || ! "$PYTORCH_PY" -c "import torch" 2>/dev/null; then
@@ -78,7 +78,7 @@ else
     fi
 fi
 
-echo "[2/11] frame preprocessing vs the reference load_fn pipeline"
+echo "[2/12] frame preprocessing vs the reference load_fn pipeline"
 # Real frames, not synthetic ones: the resize ratio, the patch-multiple
 # rounding and the centre crop only interact on an actual aspect ratio.
 FRAMES=""
@@ -107,7 +107,7 @@ else
     fi
 fi
 
-echo "[3/11] position-grid resample vs torch bicubic+antialias"
+echo "[3/12] position-grid resample vs torch bicubic+antialias"
 if ! $NURL tests/interpcheck.nu "$WORK/ic" >/dev/null 2>"$WORK/ic_build.err"; then
     bad "interpcheck build"; tail -6 "$WORK/ic_build.err"
 elif [ -z "$PYTORCH_PY" ] || ! "$PYTORCH_PY" -c "import torch" 2>/dev/null; then
@@ -122,7 +122,7 @@ else
     fi
 fi
 
-echo "[4/11] 2-D rotary position embedding vs the reference"
+echo "[4/12] 2-D rotary position embedding vs the reference"
 if ! $NURL tests/ropecheck.nu "$WORK/rc" >/dev/null 2>"$WORK/rc_build.err"; then
     bad "ropecheck build"; tail -6 "$WORK/rc_build.err"
 elif [ -z "$PYTORCH_PY" ] || ! "$PYTORCH_PY" -c "import torch" 2>/dev/null; then
@@ -137,7 +137,7 @@ else
     fi
 fi
 
-echo "[5/11] patch embedding vs torch Conv2d"
+echo "[5/12] patch embedding vs torch Conv2d"
 if ! $NURL tests/pecheck.nu "$WORK/pe" >/dev/null 2>"$WORK/pe_build.err"; then
     bad "pecheck build"; tail -6 "$WORK/pe_build.err"
 elif [ -z "$PYTORCH_PY" ] || ! "$PYTORCH_PY" -c "import torch" 2>/dev/null; then
@@ -152,7 +152,7 @@ else
     fi
 fi
 
-echo "[6/11] full transformer block vs the reference Block"
+echo "[6/12] full transformer block vs the reference Block"
 if ! $NURL tests/blockcheck.nu "$WORK/bc" >/dev/null 2>"$WORK/bc_build.err"; then
     bad "blockcheck build"; tail -6 "$WORK/bc_build.err"
 elif [ -z "$PYTORCH_PY" ] || ! "$PYTORCH_PY" -c "import torch" 2>/dev/null; then
@@ -168,7 +168,7 @@ else
 fi
 
 CKPT="${LINGBOT_CKPT:-$HOME/.nurl/models/lingbot-map/lingbot-map.pt}"
-echo "[7/11] the real 4.6 GB checkpoint (skipped when absent)"
+echo "[7/12] the real 4.6 GB checkpoint (skipped when absent)"
 if [ ! -f "$CKPT" ]; then
     skip "no checkpoint at $CKPT — set LINGBOT_CKPT"
 elif ! $NURL tests/wcheck.nu "$WORK/wc" >/dev/null 2>"$WORK/wc_build.err"; then
@@ -190,7 +190,7 @@ else
     fi
 fi
 
-echo "[8/11] the block on the DEVICE (f32) vs the host reference"
+echo "[8/12] the block on the DEVICE (f32) vs the host reference"
 # Tolerance is float32's, not float64's: the device path computes in f32
 # on purpose. 1e-4 is two orders above what is observed (~3e-6) and two
 # orders below what any real stride bug produces (a wrong head stride
@@ -214,7 +214,7 @@ else
     fi
 fi
 
-echo "[9/11] 3-D rope vs the real WanRotaryPosEmbed"
+echo "[9/12] 3-D rope vs the real WanRotaryPosEmbed"
 # This one imports the upstream package rather than re-implementing it:
 # the 3-D rope is fiddly enough (three axes, interleaved pairs, a 20/22/22
 # head split) that a hand-written oracle would just be a second chance to
@@ -234,7 +234,7 @@ else
     fi
 fi
 
-echo "[10/11] the DINOv2 trunk on a real frame vs the real model"
+echo "[10/12] the DINOv2 trunk on a real frame vs the real model"
 # 24 blocks and 300M real weights against tests/agg_ref_courthouse0.txt,
 # which tests/agg_oracle.py produced by running the actual model. Takes
 # ~35 s and ~2.5 GB. Tolerance is float32's.
@@ -259,7 +259,7 @@ else
     fi
 fi
 
-echo "[11/11] the WHOLE aggregator on a real frame vs the real model"
+echo "[11/12] the WHOLE aggregator on a real frame vs the real model"
 # 72 blocks and 909M real weights: DINOv2 trunk, then 24 frame/global
 # pairs with 2-D and 3-D rope and the six special tokens. ~105 s, 7.3 GB.
 if [ ! -f "$CKPT" ]; then
@@ -284,6 +284,30 @@ else
         fi
     else
         bad "aggcheck failed to run"; tail -4 "$WORK/agg.err"
+    fi
+fi
+
+echo "[12/12] two frames STREAMED through the KV cache"
+# The cache is the whole point of the model: frame 2's global blocks
+# attend over frame 1's keys as well as their own. ~200 s.
+FRAME1="$HOME/dev/lingbot-map/example/courthouse/000001.png"
+if [ ! -f "$CKPT" ] || [ ! -f "$FRAME0" ] || [ ! -f "$FRAME1" ]; then
+    skip "needs the checkpoint and two example frames"
+elif [ -z "$PYTORCH_PY" ]; then
+    skip "needs python for the reference and the comparison"
+elif ! $NURL tests/streamcheck.nu "$WORK/sc" >/dev/null 2>"$WORK/sc_build.err"; then
+    bad "streamcheck build"; tail -6 "$WORK/sc_build.err"
+else
+    LINGBOT_STREAM=1 "$PYTORCH_PY" tests/agg_oracle.py "$CKPT" "$FRAME0" "$FRAME1" \
+        2>/dev/null | grep stream > "$WORK/stream_ref.txt"
+    if "$WORK/sc" "$CKPT" "$FRAME0" "$FRAME1" > "$WORK/stream.txt" 2>"$WORK/stream.err"; then
+        if out="$("$PYTORCH_PY" tests/cmp_dump.py "$WORK/stream_ref.txt" "$WORK/stream.txt" 1e-5)"; then
+            ok "streaming with the KV cache — $out"
+        else
+            bad "streaming differs from the real model"; echo "$out"
+        fi
+    else
+        bad "streamcheck failed to run"; tail -4 "$WORK/stream.err"
     fi
 fi
 

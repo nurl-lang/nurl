@@ -36,7 +36,7 @@ and is what the port has to reproduce exactly, not approximately.
 | 1 | read the `.pt` checkpoint | **done** — [`torchpt`](../torchpt); the real 4.6 GB file in 0.01 s / 31 MB RSS, values identical to `torch.load` |
 | 2 | image loading and preprocessing | **done** — byte-identical to the reference pipeline on real frames |
 | 3 | ViT layers: patch embed, 2-D RoPE, qk-norm attention, block | **done** — the full block matches the reference to 4e-15 |
-| 4 | streaming aggregator + KV cache | single frame **verified** end-to-end (5.4e-6 vs the real model); multi-frame KV cache **written but NOT yet verified** |
+| 4 | streaming aggregator + KV cache | **done** — two frames streamed through the cache, 5.4e-6 vs the real model. Eviction (past 72 frames) pending |
 | 5 | camera head, DPT heads | pending |
 | 6 | camera geometry | **done** — matches torch to 2.4e-16 |
 | 7 | CLI, point-cloud export, end-to-end check | pending |
@@ -90,26 +90,31 @@ four outputs.
 That is 909M parameters and 72 transformer blocks agreeing to float32's
 noise floor.
 
-**The single-frame path is the verified one.** With no cache the global
-blocks attend to their own frame's tokens, which is exactly what the
-reference does on frame 0.
+Streaming works: `LmKv` holds each global block's keys and values as
+`[heads, maxkv, hd]`, each frame appends its rotated k/v at row `kvused`
+and attends over everything stored. **Two frames through the cache match
+the real model to 5.4e-6** — the same figure as one frame, which is what
+a correct cache should give.
 
-A multi-frame KV cache is implemented (`LmKv`, `ag_kv_alloc`, the
-`kvused` argument) and `tests/streamcheck.nu` compares it against a
-two-frame reference from `agg_oracle.py` under `LINGBOT_STREAM=1` — but
-**that comparison has not been run to completion yet**, so nothing here
-claims the cache is right. It is also missing eviction: the reference
-evicts down to `scale_frames + sliding_window` = 72 frames, so a cache
-sized for the whole sequence is exactly right up to that length and
-merely too large beyond it. Past 72 frames the sliding window is needed
-for correctness, not just for memory.
+`used` is read by the block and never written by it: one frame passes
+through 24 separate caches, so the count belongs to the frame and is
+passed in per call rather than stored 24 times and kept in step by hand.
 
-Worth knowing before running it: frame 2 is *much* slower than frame 1.
-Its global attention is over 1566 keys instead of 783, and the cache is
-repacked per block, so on the CPU backend a second frame takes many
-minutes rather than the ~100 s the first one does. That is a real cost
-to design around — batching the repack, or keeping the cache tight — and
-not something the single-frame timing predicts.
+One subtlety in the layout: a cache is `[heads, maxkv, hd]` but only
+`nkv` rows are live, so a prefix view is **not** contiguous per head.
+The live rows are repacked into a tight `[heads, nkv, hd]` before the
+permute. Correct, and the obvious thing to make cheaper later.
+
+Cost is close to linear so far: 103 s for one frame, 201 s for two on
+the CPU backend. Frame 2 attends over 1566 keys instead of 783 and pays
+the repack, and it still comes in at about what frame 1 costs — the
+per-frame DINOv2 trunk dominates at this length.
+
+**Eviction is not implemented.** The reference evicts down to
+`scale_frames + sliding_window` = 72 frames, so a cache sized for the
+whole sequence is exactly right up to that length and merely too large
+beyond it. Past 72 frames the sliding window is needed for
+*correctness*, not just for memory.
 
 **Three different LayerNorm epsilons in one model**, and getting one
 wrong is worth ~1e-3:
