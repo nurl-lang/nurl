@@ -126,6 +126,7 @@ Numerics):
 | `gkd_layernorm` [783, 1024] | 300 us | **53** |
 | `gkd_conv2d` 3x3 256→256 | 2.5 ms | **1.15** |
 | `gkd_convtranspose2d` 4x4 stride 4 | 14.2 ms | **0.35** |
+| `gkd_perm` [783,3,16,64] → [3,16,783,64] | 87 us | **15** |
 
 `gkd_attention` is the fused scaled-dot-product attention:
 `softmax(scale · Q·Kᵀ)·V` over `[heads, n, hd]` operands, without ever

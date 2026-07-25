@@ -61,6 +61,12 @@ unchanged, only the memory and thread shape are.
   what a DPT reassemble stage runs), where exactly one tap contributes
   per output and the general body was doing two 64-bit modulos per tap
   to discover that: **14.2 ms -> 0.35 ms** at 256->256, 37x21 -> 148x84.
+- **A shape-specialised permute.** `gkd_perm` decomposed each output
+  index with a runtime loop over six 64-bit divisions and modulos and
+  held its working arrays in dynamically indexed local memory, so a
+  9 MB permute ran at a fourteenth of the bandwidth it should. The dims
+  and the permutation are literals in the generated source now, for any
+  tensor of 65 536 elements or more: **87 us -> 15 us**.
 - **GEMV shape for small M.** A [1,K]x[K,N] projection ran as M*N
   threads — eight blocks for a 2048-wide output. Now one block per
   output element stages both operands coalesced into shared memory and
