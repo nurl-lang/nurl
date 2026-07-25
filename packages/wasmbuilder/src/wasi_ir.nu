@@ -80,6 +80,242 @@ $ `stdlib/core/vec.nu`
     ^ out
 }
 
+// ── libc shim signatures come from the IR, not from a guess ─────────
+//
+// A shim has to carry EXACTLY the signature its call sites use, and that
+// signature is decided by the NURL source — not by the letter table in
+// `wb_prepare_ir_for_wasi`. nurlc's own prelude declares `puts` /
+// `strcmp` / `fseek` with C-accurate i32 returns, while a program that
+// FFI-declares a libc function itself gets NURL's widths: `& `libc`
+// @ rand → i` emits `declare i64 @rand()`. One hardcoded shim shape
+// cannot serve both — an i32 shim under an i64 call site (or the
+// reverse) is a wasm signature mismatch, and wasm-ld answers those with
+// a stub whose body is a single `unreachable`. The module links and
+// reports BUILD OK, then traps on the first call: "runtime error:
+// unreachable". doomfire / sand / starfield all died there on their
+// first `( rand )`.
+//
+// So the helpers below read the declaration back out of the IR and the
+// shim mirrors it; the letters now only describe the wasm32 libc side
+// ('p' pointer, 'v' void, 's' size_t → zext, anything else a signed int).
+
+// The `declare <ret> @<name>(<params>)` line for `@<name>`, newline
+// stripped. nurlc emits every prelude and `&`-FFI symbol above the first
+// define, so the first occurrence of `@<name>(` is that declaration.
+// Empty String when there is none.
+@ __wb_ir_decl_line String ir s name → String {
+    : String pat ( string_from `@` ) ( string_push_str pat name ) ( string_push_char pat 40 )
+    : ~ String out ( string_new )
+    : ?i pos_o ( string_index_of ir ( string_data pat ) )
+    ( string_free pat )
+    ?? pos_o {
+        T pos → {
+            : i n ( string_len ir )
+            : ~ i ls pos
+            ~ & > ls 0 != ( string_get ir - ls 1 ) 10 { = ls - ls 1 }
+            : ~ i le pos
+            ~ & < le n != ( string_get ir le ) 10 { = le + le 1 }
+            : String line ( string_substr ir ls - le ls )
+            ? ( string_starts_with line `declare ` ) { ( string_free out ) = out line } { ( string_free line ) }
+        }
+        F _ → {}
+    }
+    ^ out
+}
+
+// Return type of a `declare` line: what sits between `declare ` and the
+// ` @<name>`, with nurlc's column padding trimmed off.
+@ __wb_ir_decl_ret String line → String {
+    : ~ String out ( string_new )
+    : ?i at_o ( string_index_of line `@` )
+    ?? at_o {
+        T at → {
+            ? > at 8 {
+                : String raw ( string_substr line 8 - at 8 )
+                : String t ( string_trim raw )
+                ( string_free raw ) ( string_free out ) = out t
+            } {}
+        }
+        F _ → {}
+    }
+    ^ out
+}
+
+// Parameter types of a `declare` line, in order, trimmed. `()` → empty.
+@ __wb_ir_decl_params String line → ( Vec String ) {
+    : ( Vec String ) out ( vec_new [String] )
+    : ?i lp_o ( string_index_of line `(` )
+    ?? lp_o {
+        T lp → {
+            : i n ( string_len line )
+            : ~ i rp - n 1
+            ~ & > rp lp != ( string_get line rp ) 41 { = rp - rp 1 }
+            : i first + lp 1
+            ? > rp first {
+                : String inner ( string_substr line first - rp first )
+                : ( Vec String ) parts ( string_split inner `,` )
+                : ~ i i 0
+                ~ < i ( vec_len [String] parts ) {
+                    ?? ( vec_get [String] parts i ) { T p → { ( vec_push [String] out ( string_trim p ) ) } F → {} }
+                    = i + i 1
+                }
+                ( vec_free_with [String] parts \ String s → v { ( string_free s ) } )
+                ( string_free inner )
+            } {}
+        }
+        F _ → {}
+    }
+    ^ out
+}
+
+// Fallbacks for IR that carries no declaration for the symbol: the
+// widths the table's letters imply (what this code assumed before).
+@ __wb_shim_ret_from_letters i r_char → String {
+    ^ ( string_from ? == r_char 112 `i8*` ? == r_char 118 `void` ? == r_char 105 `i32` `i64` )
+}
+
+@ __wb_shim_pms_from_letters String pms → ( Vec String ) {
+    : ( Vec String ) out ( vec_new [String] )
+    : ~ i k 0
+    ~ < k ( string_len pms ) {
+        : i p ( string_get pms k )
+        ( vec_push [String] out ( string_from ? == p 112 `i8*` ? == p 119 `i32` `i64` ) )
+        = k + k 1
+    }
+    ^ out
+}
+
+// wasm32 libc type of parameter k, per the table letter.
+@ __wb_libc_pm_ty String pms i k → s { ^ ? == ( string_get pms k ) 112 `i8*` `i32` }
+
+// IR-side type of parameter k (what the call sites pass).
+@ __wb_ir_pm_ty ( Vec String ) ir_pms i k → s {
+    : ~ s out `i64`
+    ?? ( vec_get [String] ir_pms k ) { T t → { = out ( string_data t ) } F → {} }
+    ^ out
+}
+
+@ __wb_ir_ty_is_ptr s ty → b {
+    : i n ( nurl_str_len ty )
+    ? == n 0 { ^ F } {}
+    ^ == ( nurl_str_at ty n - n 1 ) 42
+}
+
+// How to get a value of type `from` into type `to`:
+//   0 = pass through   1 = trunc i64→i32   2 = ptrtoint
+//   3 = inttoptr       4 = widen i32→i64 (sext/zext, caller picks)
+// Every pointer is the same `ptr` after LLVM's typed-pointer upgrade, so
+// pointer→pointer needs no instruction.
+@ __wb_shim_conv_kind s from s to → i {
+    ? != 0 ( nurl_str_eq from to ) { ^ 0 } {}
+    : b fp ( __wb_ir_ty_is_ptr from )
+    : b tp ( __wb_ir_ty_is_ptr to )
+    ? & fp tp { ^ 0 } {}
+    ? fp { ^ 2 } {}
+    ? tp { ^ 3 } {}
+    ? & != 0 ( nurl_str_eq from `i64` ) != 0 ( nurl_str_eq to `i32` ) { ^ 1 } {}
+    ? & != 0 ( nurl_str_eq from `i32` ) != 0 ( nurl_str_eq to `i64` ) { ^ 4 } {}
+    ^ 0
+}
+
+@ __wb_shim_conv_op i kind → s { ^ ? == kind 1 `trunc` ? == kind 2 `ptrtoint` ? == kind 3 `inttoptr` `sext` }
+
+// `  %tK = <op> <from> %aK to <to>` — the argument-side conversion.
+@ __wb_emit_shim_pm_conv String shims i kind s from s to i k → v {
+    ? == kind 0 { ^ v } {}
+    ( string_push_str shims `  %t` ) ( string_push_int shims k )
+    ( string_push_str shims ` = ` ) ( string_push_str shims ( __wb_shim_conv_op kind ) )
+    ( string_push_char shims 32 ) ( string_push_str shims from )
+    ( string_push_str shims ` %a` ) ( string_push_int shims k )
+    ( string_push_str shims ` to ` ) ( string_push_str shims to )
+    ( string_push_char shims 10 )
+}
+
+// One wasm32 ABI shim: a `declare` for the real libc entry point plus a
+// `define` whose signature mirrors the IR's, converting in between.
+@ __wb_emit_libc_shim String shims s name i r_char String pms String ir_ret ( Vec String ) ir_pms → v {
+    : s tgt_ret ? == r_char 112 `i8*` ? == r_char 118 `void` `i32`
+    : i np ( vec_len [String] ir_pms )
+    : b ret_void != 0 ( nurl_str_eq ( string_data ir_ret ) `void` )
+    : b tgt_void != 0 ( nurl_str_eq tgt_ret `void` )
+
+    // 1. The real libc entry point, in wasm32 widths.
+    ( string_push_str shims `\ndeclare ` ) ( string_push_str shims tgt_ret )
+    ( string_push_str shims ` @` ) ( string_push_str shims name ) ( string_push_char shims 40 )
+    : ~ i k 0
+    ~ < k np {
+        ? > k 0 { ( string_push_str shims `, ` ) } {}
+        ( string_push_str shims ( __wb_libc_pm_ty pms k ) )
+        = k + k 1
+    }
+    ( string_push_str shims `)\n` )
+
+    // 2. The shim, in the IR's own widths. External linkage (no
+    // `internal`) so the define also satisfies any renamed
+    // `declare @__nurl_<name>_shim(...)` that survived the strip below.
+    ( string_push_str shims `define ` ) ( string_push_str shims ( string_data ir_ret ) )
+    ( string_push_str shims ` @__nurl_` ) ( string_push_str shims name ) ( string_push_str shims `_shim(` )
+    = k 0
+    ~ < k np {
+        ? > k 0 { ( string_push_str shims `, ` ) } {}
+        ( string_push_str shims ( __wb_ir_pm_ty ir_pms k ) )
+        ( string_push_str shims ` %a` ) ( string_push_int shims k )
+        = k + k 1
+    }
+    ( string_push_str shims `) {\n` )
+
+    // 3. i64 argument → the i32 the wasm32 entry point takes. Pointers,
+    // and params the IR already emits as i32, pass through untouched.
+    = k 0
+    ~ < k np {
+        ( __wb_emit_shim_pm_conv shims ( __wb_shim_conv_kind ( __wb_ir_pm_ty ir_pms k ) ( __wb_libc_pm_ty pms k ) )
+        ( __wb_ir_pm_ty ir_pms k ) ( __wb_libc_pm_ty pms k ) k )
+        = k + k 1
+    }
+
+    ( string_push_str shims `  ` )
+    // A void call can't be named — `%r = tail call void @exit(...)` is a
+    // parse error, which used to fail the whole build for exit/srand.
+    ? tgt_void {} { ( string_push_str shims `%r = ` ) }
+    ( string_push_str shims `tail call ` ) ( string_push_str shims tgt_ret )
+    ( string_push_str shims ` @` ) ( string_push_str shims name ) ( string_push_char shims 40 )
+    = k 0
+    ~ < k np {
+        ? > k 0 { ( string_push_str shims `, ` ) } {}
+        ( string_push_str shims ( __wb_libc_pm_ty pms k ) )
+        ( string_push_str shims ? == 0 ( __wb_shim_conv_kind ( __wb_ir_pm_ty ir_pms k ) ( __wb_libc_pm_ty pms k ) ) ` %a` ` %t` )
+        ( string_push_int shims k )
+        = k + k 1
+    }
+    ( string_push_str shims `)\n` )
+
+    // 4. …and the result back the other way.
+    ? ret_void { ( string_push_str shims `  ret void\n` ) } {
+        ? tgt_void {
+            // libc hands back nothing but the IR reads a value: return a
+            // zero of the declared type rather than a dangling %r.
+            ( string_push_str shims `  ret ` ) ( string_push_str shims ( string_data ir_ret ) )
+            ( string_push_str shims ? ( string_ends_with ir_ret `*` ) ` null\n` ` 0\n` )
+        } {
+            : i rk ( __wb_shim_conv_kind tgt_ret ( string_data ir_ret ) )
+            ? == rk 0 {
+                ( string_push_str shims `  ret ` ) ( string_push_str shims ( string_data ir_ret ) )
+                ( string_push_str shims ` %r\n` )
+            } {
+                ( string_push_str shims `  %rw = ` )
+                // Widening a C int: 's' is a size_t, everything else is
+                // signed — read / write / open all hand back -1.
+                ( string_push_str shims ? == rk 4 ? == r_char 115 `zext` `sext` ( __wb_shim_conv_op rk ) )
+                ( string_push_char shims 32 ) ( string_push_str shims tgt_ret )
+                ( string_push_str shims ` %r to ` ) ( string_push_str shims ( string_data ir_ret ) )
+                ( string_push_str shims `\n  ret ` ) ( string_push_str shims ( string_data ir_ret ) )
+                ( string_push_str shims ` %rw\n` )
+            }
+        }
+    }
+    ( string_push_str shims `}\n` )
+}
+
 @ wb_prepare_ir_for_wasi String ir → String {
     : ~ String res ( string_from ( string_data ir ) )
 
@@ -151,6 +387,36 @@ $ `stdlib/core/vec.nu`
                         }
 
                         ? == already_shimmed F {
+                            // 0. Read the signature the IR itself uses, while the
+                            // symbol still carries its libc name. The shim has to
+                            // match it exactly — see the note above
+                            // `__wb_ir_decl_line`.
+                            : i r_char ? > ( string_len ret ) 0 ( string_get ret 0 ) 0
+                            : ~ String ir_ret ( __wb_shim_ret_from_letters r_char )
+                            : ~ ( Vec String ) ir_pms ( __wb_shim_pms_from_letters pms )
+                            : String decl ( __wb_ir_decl_line res ( string_data name ) )
+                            ? > ( string_len decl ) 0 {
+                                : String d_ret ( __wb_ir_decl_ret decl )
+                                ? > ( string_len d_ret ) 0 { ( string_free ir_ret ) = ir_ret d_ret } { ( string_free d_ret ) }
+                                : ( Vec String ) d_pms ( __wb_ir_decl_params decl )
+                                // A count mismatch means the table and the IR
+                                // disagree about the function — trust the table
+                                // rather than emit a call with the wrong arity.
+                                ? == ( vec_len [String] d_pms ) ( string_len pms ) {
+                                    ( vec_free_with [String] ir_pms \ String s → v { ( string_free s ) } )
+                                    = ir_pms d_pms
+                                } { ( vec_free_with [String] d_pms \ String s → v { ( string_free s ) } ) }
+                                // Drop the declaration now: the shim below defines
+                                // this symbol, and clang rejects a `declare` +
+                                // `define` pair for one name. (Step 2 keeps the
+                                // prefix-matching strip as a backstop for IR whose
+                                // last line has no trailing newline.)
+                                : String decl_nl ( string_from ( string_data decl ) ) ( string_push_char decl_nl 10 )
+                                : String d_stripped ( string_replace res ( string_data decl_nl ) `` )
+                                ( string_free res ) = res d_stripped ( string_free decl_nl )
+                            } {}
+                            ( string_free decl )
+
                             // 1. Rename ALL occurrences (including the original
                             // `declare X @<libc>(...)` line emitted by nurlc).
                             : String tmp ( string_replace res ( string_data pat ) ( string_data sname ) )
@@ -221,50 +487,9 @@ $ `stdlib/core/vec.nu`
                             // existing DEFINITION and silently dropping the shim body.
                             // Without the body, wasm-ld fails with `undefined symbol:
                             // __nurl_<fn>_shim`. Tracked separately by `shimmed` Vec.
-                            : String sname_def ( string_from `@__nurl_` ) ( string_push_str sname_def ( string_data name ) ) ( string_push_str sname_def `_shim(` )
-                            ? T {
-                                ( string_push_str shims `\ndeclare ` )
-                                : i r_char ? > ( string_len ret ) 0 ( string_get ret 0 ) 0
-                                ( string_push_str shims ? == r_char 112 `i8*` ? == r_char 118 `void` `i32` )
-                                ( string_push_str shims ` @` ) ( string_push_str shims ( string_data name ) ) ( string_push_char shims 40 )
-                                : ~ i k 0 ~ < k ( string_len pms ) { ? > k 0 { ( string_push_str shims `, ` ) } {} : i p ( string_get pms k ) ( string_push_str shims ? == p 112 `i8*` `i32` ) = k + k 1 }
-                                // External linkage (no `internal`) so the shim define
-                                // satisfies any pre-existing `declare @__nurl_<name>_shim(...)`
-                                // lines that step 1 might have produced by renaming the
-                                // original `declare @<libc>(...)`. Step 2's regex-based
-                                // declaration-restore uses a `^`-anchored pattern which
-                                // only matches start-of-string in NURL regex, so the old
-                                // renamed `declare` survives and would conflict with an
-                                // `internal`-linkage define.
-                                ( string_push_str shims `)\ndefine ` )
-                                // Return type must match nurlc's call sites: `int`-returning
-                                // libc fns (ret char 'i') are declared i32 by nurlc, so the
-                                // shim must return i32 — only size_t-like 's' widens to i64.
-                                // (A i64 shim vs an i32 call site is a wasm signature mismatch
-                                // → `unreachable` trap; nurl_str_eq→strcmp hits this.)
-                                ( string_push_str shims ? == r_char 112 `i8*` ? == r_char 118 `void` ? == r_char 105 `i32` `i64` )
-                                ( string_push_str shims ` @__nurl_` ) ( string_push_str shims ( string_data name ) ) ( string_push_str shims `_shim(` )
-                                // Param char: 'p' = i8* (pointer, pass through), 'w' = i32
-                                // (a param nurlc already emits as i32 — e.g. fseek's `whence`
-                                // — so the wrapper must accept i32, NOT i64, or the call type
-                                // won't match and wasm-ld stubs it), any other = i64 narrowed
-                                // to i32 for the wasi call.
-                                : ~ i k2 0 ~ < k2 ( string_len pms ) { ? > k2 0 { ( string_push_str shims `, ` ) } {} : i p ( string_get pms k2 ) ( string_push_str shims ? == p 112 `i8* %a` ? == p 119 `i32 %a` `i64 %a` ) ( string_push_int shims k2 ) = k2 + k2 1 }
-                                ( string_push_str shims `) {\n` )
-                                : ~ i k3 0 ~ < k3 ( string_len pms ) { : i p ( string_get pms k3 ) ? & != p 112 != p 119 { ( string_push_str shims `  %t` ) ( string_push_int shims k3 ) ( string_push_str shims ` = trunc i64 %a` ) ( string_push_int shims k3 ) ( string_push_str shims ` to i32\n` ) } {} = k3 + k3 1 }
-                                ( string_push_str shims `  %r = tail call ` )
-                                ( string_push_str shims ? == r_char 112 `i8*` ? == r_char 118 `void` `i32` )
-                                ( string_push_str shims ` @` ) ( string_push_str shims ( string_data name ) ) ( string_push_char shims 40 )
-                                : ~ i k4 0 ~ < k4 ( string_len pms ) {
-                                    ? > k4 0 { ( string_push_str shims `, ` ) } {}
-                                    : i p ( string_get pms k4 ) ? == p 112 { ( string_push_str shims `i8* %a` ) ( string_push_int shims k4 ) } { ? == p 119 { ( string_push_str shims `i32 %a` ) ( string_push_int shims k4 ) } { ( string_push_str shims `i32 %t` ) ( string_push_int shims k4 ) } }
-                                    = k4 + k4 1
-                                }
-                                ( string_push_str shims `)\n` )
-                                ? == r_char 118 { ( string_push_str shims `  ret void\n` ) } { ? == r_char 112 { ( string_push_str shims `  ret i8* %r\n` ) } { ? == r_char 105 { ( string_push_str shims `  ret i32 %r\n` ) } { ( string_push_str shims `  %rw = zext i32 %r to i64\n  ret i64 %rw\n` ) } } }
-                                ( string_push_str shims `}\n` )
-                            } {}
-                            ( string_free sname_def )
+                            ( __wb_emit_libc_shim shims ( string_data name ) r_char pms ir_ret ir_pms )
+                            ( string_free ir_ret )
+                            ( vec_free_with [String] ir_pms \ String s → v { ( string_free s ) } )
                         } {}
                         ( string_free sname )
                     } {}
