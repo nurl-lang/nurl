@@ -69,6 +69,11 @@ $ `kernels.nu`  // _gk_partial_threads / _gk_zeros
 
 @ gk_buf_dtype GkBuf b → i { ^ . b dtype }
 
+// Bytes per element. Needed by anyone addressing a sub-range of a buffer
+// (the device pointer is byte-addressed), which is why it is public
+// rather than the file-private __gk_esz it wraps.
+@ gk_buf_esz GkBuf b → i { ^ ( __gk_esz . b dtype ) }
+
 // ── Lifecycle ─────────────────────────────────────────────────────────
 
 @ gk_dbuf_new * GpuKit kit i n i dtype → GkBuf {

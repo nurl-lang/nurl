@@ -174,7 +174,7 @@ i heads i n i dim → b {
 // pointer is byte-addressed, so a sub-range is just an offset — no copy,
 // and nothing to free (the parent owns the allocation).
 @ lm_view GkBuf b i off i len → GkBuf {
-    ^ @ GkBuf { + . b dptr * off ( __gk_esz . b dtype ) len . b dtype }
+    ^ @ GkBuf { + . b dptr * off ( gk_buf_esz b ) len . b dtype }
 }
 
 // y[rows, cols] += ls[cols] * b[rows, cols], the LayerScale residual.

@@ -61,7 +61,7 @@ print("worst relative error %.3e" % worst)
 PY
 }
 
-echo "[1/9] camera geometry vs the reference torch code"
+echo "[1/10] camera geometry vs the reference torch code"
 if ! $NURL tests/geomcheck.nu "$WORK/geomcheck" >/dev/null 2>"$WORK/build.err"; then
     bad "geomcheck build"; cat "$WORK/build.err"
 elif [ -z "$PYTORCH_PY" ] || ! "$PYTORCH_PY" -c "import torch" 2>/dev/null; then
@@ -78,7 +78,7 @@ else
     fi
 fi
 
-echo "[2/9] frame preprocessing vs the reference load_fn pipeline"
+echo "[2/10] frame preprocessing vs the reference load_fn pipeline"
 # Real frames, not synthetic ones: the resize ratio, the patch-multiple
 # rounding and the centre crop only interact on an actual aspect ratio.
 FRAMES=""
@@ -107,7 +107,7 @@ else
     fi
 fi
 
-echo "[3/9] position-grid resample vs torch bicubic+antialias"
+echo "[3/10] position-grid resample vs torch bicubic+antialias"
 if ! $NURL tests/interpcheck.nu "$WORK/ic" >/dev/null 2>"$WORK/ic_build.err"; then
     bad "interpcheck build"; tail -6 "$WORK/ic_build.err"
 elif [ -z "$PYTORCH_PY" ] || ! "$PYTORCH_PY" -c "import torch" 2>/dev/null; then
@@ -122,7 +122,7 @@ else
     fi
 fi
 
-echo "[4/9] 2-D rotary position embedding vs the reference"
+echo "[4/10] 2-D rotary position embedding vs the reference"
 if ! $NURL tests/ropecheck.nu "$WORK/rc" >/dev/null 2>"$WORK/rc_build.err"; then
     bad "ropecheck build"; tail -6 "$WORK/rc_build.err"
 elif [ -z "$PYTORCH_PY" ] || ! "$PYTORCH_PY" -c "import torch" 2>/dev/null; then
@@ -137,7 +137,7 @@ else
     fi
 fi
 
-echo "[5/9] patch embedding vs torch Conv2d"
+echo "[5/10] patch embedding vs torch Conv2d"
 if ! $NURL tests/pecheck.nu "$WORK/pe" >/dev/null 2>"$WORK/pe_build.err"; then
     bad "pecheck build"; tail -6 "$WORK/pe_build.err"
 elif [ -z "$PYTORCH_PY" ] || ! "$PYTORCH_PY" -c "import torch" 2>/dev/null; then
@@ -152,7 +152,7 @@ else
     fi
 fi
 
-echo "[6/9] full transformer block vs the reference Block"
+echo "[6/10] full transformer block vs the reference Block"
 if ! $NURL tests/blockcheck.nu "$WORK/bc" >/dev/null 2>"$WORK/bc_build.err"; then
     bad "blockcheck build"; tail -6 "$WORK/bc_build.err"
 elif [ -z "$PYTORCH_PY" ] || ! "$PYTORCH_PY" -c "import torch" 2>/dev/null; then
@@ -167,8 +167,8 @@ else
     fi
 fi
 
-echo "[7/9] the real 4.6 GB checkpoint (skipped when absent)"
 CKPT="${LINGBOT_CKPT:-$HOME/.nurl/models/lingbot-map/lingbot-map.pt}"
+echo "[7/10] the real 4.6 GB checkpoint (skipped when absent)"
 if [ ! -f "$CKPT" ]; then
     skip "no checkpoint at $CKPT — set LINGBOT_CKPT"
 elif ! $NURL tests/wcheck.nu "$WORK/wc" >/dev/null 2>"$WORK/wc_build.err"; then
@@ -190,7 +190,7 @@ else
     fi
 fi
 
-echo "[8/9] the block on the DEVICE (f32) vs the host reference"
+echo "[8/10] the block on the DEVICE (f32) vs the host reference"
 # Tolerance is float32's, not float64's: the device path computes in f32
 # on purpose. 1e-4 is two orders above what is observed (~3e-6) and two
 # orders below what any real stride bug produces (a wrong head stride
@@ -214,7 +214,7 @@ else
     fi
 fi
 
-echo "[9/9] 3-D rope vs the real WanRotaryPosEmbed"
+echo "[9/10] 3-D rope vs the real WanRotaryPosEmbed"
 # This one imports the upstream package rather than re-implementing it:
 # the 3-D rope is fiddly enough (three axes, interleaved pairs, a 20/22/22
 # head split) that a hand-written oracle would just be a second chance to
@@ -231,6 +231,31 @@ else
         ok "rope3d matches WanRotaryPosEmbed + apply_rotary_emb — $out"
     else
         bad "rope3d differs from the reference"; echo "$out"
+    fi
+fi
+
+echo "[10/10] the DINOv2 trunk on a real frame vs the real model"
+# 24 blocks and 300M real weights against tests/agg_ref_courthouse0.txt,
+# which tests/agg_oracle.py produced by running the actual model. Takes
+# ~35 s and ~2.5 GB. Tolerance is float32's.
+FRAME0="$HOME/dev/lingbot-map/example/courthouse/000000.png"
+if [ ! -f "$CKPT" ]; then
+    skip "no checkpoint — set LINGBOT_CKPT"
+elif [ ! -f "$FRAME0" ]; then
+    skip "no example frame at $FRAME0"
+elif [ -z "$PYTORCH_PY" ]; then
+    skip "needs python to compare the dumps"
+elif ! $NURL tests/dinocheck.nu "$WORK/dc" >/dev/null 2>"$WORK/dc_build.err"; then
+    bad "dinocheck build"; tail -6 "$WORK/dc_build.err"
+else
+    if "$WORK/dc" "$CKPT" "$FRAME0" > "$WORK/dino.txt" 2>"$WORK/dino.err"; then
+        if out="$("$PYTORCH_PY" tests/cmp_dump.py tests/agg_ref_courthouse0.txt "$WORK/dino.txt" 1e-4)"; then
+            ok "dino_patchtokens — $out"
+        else
+            bad "DINOv2 trunk differs from the real model"; echo "$out"
+        fi
+    else
+        bad "dinocheck failed to run"; tail -4 "$WORK/dino.err"
     fi
 fi
 

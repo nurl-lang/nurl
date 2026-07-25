@@ -36,7 +36,7 @@ and is what the port has to reproduce exactly, not approximately.
 | 1 | read the `.pt` checkpoint | **done** — [`torchpt`](../torchpt); the real 4.6 GB file in 0.01 s / 31 MB RSS, values identical to `torch.load` |
 | 2 | image loading and preprocessing | **done** — byte-identical to the reference pipeline on real frames |
 | 3 | ViT layers: patch embed, 2-D RoPE, qk-norm attention, block | **done** — the full block matches the reference to 4e-15 |
-| 4 | streaming aggregator + KV cache | device block **done** (f32, matches the f64 reference to 3e-6); aggregator wiring + KV cache pending |
+| 4 | streaming aggregator + KV cache | DINOv2 trunk **running on real weights** (3.9e-6 vs the real model); frame/global blocks + KV cache pending |
 | 5 | camera head, DPT heads | pending |
 | 6 | camera geometry | **done** — matches torch to 2.4e-16 |
 | 7 | CLI, point-cloud export, end-to-end check | pending |
@@ -78,6 +78,29 @@ Verified against the upstream `quat_to_mat` / `mat_to_quat` /
 worst relative error **2.4e-16** across six random pose encodings — the
 last bit, and it comes from torch's vectorised `tan` disagreeing with
 glibc's, not from the port.
+
+### Stage 4 (partial) — the DINOv2 trunk (`src/dino.nu`)
+
+The aggregator's "patch embedding" is a whole frozen 24-block ViT-L/14,
+and it now runs on the real checkpoint: **35 s, 2.5 GB, 3.9e-6** against
+the actual model's `x_norm_patchtokens` for an example frame.
+
+The token order matters and is easy to get subtly wrong, because the
+position embedding is added *in the middle* of building it:
+
+```
+[cls] + patches            ← pos_embed added HERE
+[cls] + [reg×4] + patches  ← register tokens spliced in AFTER
+```
+
+so the four register tokens get no position embedding at all, and the
+patch tokens the aggregator wants start at index 5.
+
+`src/load.nu` maps the checkpoint onto device buffers with nothing
+transposed — torch stores a `Linear` weight as `[out, in]` and
+`gkd_gemm` reads it with `transb=1` — and stages one tensor at a time,
+so peak extra memory is the largest single weight (32 MB) rather than
+the model.
 
 ### Stage 4 (partial) — 3-D RoPE (`src/rope.nu`)
 
