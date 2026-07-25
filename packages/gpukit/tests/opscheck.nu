@@ -203,6 +203,15 @@ $ `src/devops.nu`
     ( gkd_resize_nn kit ry rx 1 2 2 4 4 2 2 )
     ( show kit tag `_resize` ry )
 
+    // ── resize_bilinear: (1,3,4) → (1,5,7), both corner conventions ──
+    : GkBuf blx ( dbuf kit dt 12 1.0 0.7 )
+    : GkBuf bly ( gk_dbuf_new kit 35 dt )
+    ( gkd_resize_bilinear kit bly blx 1 3 4 5 7 1 )
+    ( show kit tag `_bilac` bly )
+    ( gkd_resize_bilinear kit bly blx 1 3 4 5 7 0 )
+    ( show kit tag `_bilhc` bly )
+    ( gk_dbuf_free blx ) ( gk_dbuf_free bly )
+
     // ── expandlast: (3,1) → (3,4) ───────────────────────────────────
     : GkBuf xx ( dbuf kit dt 3 1.0 2.0 )
     : GkBuf xy ( gk_dbuf_new kit 12 dt )

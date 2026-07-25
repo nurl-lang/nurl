@@ -542,6 +542,61 @@ $ `dev.nu`
 
 // Nearest-neighbour upsample by integer factors (NCHW):
 // Y[c,oy,ox] = X[c, oy/sh, ox/sw].
+// ── Bilinear resize, NCHW (batch folded into C) ──────────────────────
+//
+// The resampler every decoder upsamples with, and the one
+// `gkd_resize_nn` is not. `align` picks the coordinate convention, and
+// the two are NOT interchangeable:
+//
+//   align_corners=1 : src = dst · (in−1)/(out−1)   endpoints pinned
+//   align_corners=0 : src = (dst + 0.5)·in/out − 0.5, clamped
+//
+// A single output pixel (out == 1) maps to src 0 under align_corners,
+// which is what torch does rather than dividing by zero.
+//
+// Edge taps are clamped, so a coordinate that lands on the last row or
+// column interpolates with itself rather than reading past the end.
+@ gkd_resize_bilinear * GpuKit kit GkBuf y GkBuf x i c i h i wd i oh i ow i align → b {
+    ? & ( gk_buf_ok y ) ( gk_buf_ok x ) {} { ^ F }
+    ? == . y dtype . x dtype {} { ^ F }
+    ? ( __gkd_isfloat y ) {} { ^ F }
+    ? & & & > c 0 > h 0 > wd 0 & > oh 0 > ow 0 {} { ^ F }
+    ? & == . x n * * c h wd == . y n * * c oh ow {} { ^ F }
+    : s tn ( _gk_tname . y dtype )
+    : String kname ( __gkd_name . y dtype )
+    ( string_push_str kname ? != align 0 `ac` `` )
+    : String src ( __gkd_head kname `resizebilin` )
+    ( string_push_str src `const ` ) ( string_push_str src tn ) ( string_push_str src `* X, ` )
+    ( string_push_str src tn ) ( string_push_str src `* Y, long long C, long long H, long long W, long long OH, long long OW, long long align){` )
+    ( string_push_str src `long long idx=blockIdx.x*blockDim.x+threadIdx.x;` )
+    ( string_push_str src `if(idx>=C*OH*OW)return;` )
+    ( string_push_str src `long long ox=idx%OW,oy=(idx/OW)%OH,c=idx/(OW*OH);` )
+    ( string_push_str src `double fy,fx;` )
+    ( string_push_str src `if(align){fy=(OH>1)?((double)oy*(double)(H-1)/(double)(OH-1)):0.0;` )
+    ( string_push_str src `fx=(OW>1)?((double)ox*(double)(W-1)/(double)(OW-1)):0.0;}` )
+    ( string_push_str src `else{fy=((double)oy+0.5)*(double)H/(double)OH-0.5;if(fy<0)fy=0;` )
+    ( string_push_str src `fx=((double)ox+0.5)*(double)W/(double)OW-0.5;if(fx<0)fx=0;}` )
+    ( string_push_str src `long long y0=(long long)fy; if(y0>H-1)y0=H-1; long long y1=(y0+1<H)?(y0+1):(H-1);` )
+    ( string_push_str src `long long x0=(long long)fx; if(x0>W-1)x0=W-1; long long x1=(x0+1<W)?(x0+1):(W-1);` )
+    ( string_push_str src `double wy=fy-(double)y0, wx=fx-(double)x0;` )
+    ( string_push_str src `const ` ) ( string_push_str src tn ) ( string_push_str src `* p=X+c*H*W;` )
+    ( string_push_str src `double v00=(double)p[y0*W+x0],v01=(double)p[y0*W+x1];` )
+    ( string_push_str src `double v10=(double)p[y1*W+x0],v11=(double)p[y1*W+x1];` )
+    ( string_push_str src `double top=v00+(v01-v00)*wx, bot=v10+(v11-v10)*wx;` )
+    ( string_push_str src `Y[idx]=(` ) ( string_push_str src tn )
+    ( string_push_str src `)(top+(bot-top)*wy);}` )
+    : ( Vec i ) args ( vec_new [i] )
+    ( vec_push [i] args ( gk_arg_dev x ) )
+    ( vec_push [i] args ( gk_arg_dev y ) )
+    ( vec_push [i] args ( gpu_arg_i64 c ) )
+    ( vec_push [i] args ( gpu_arg_i64 h ) )
+    ( vec_push [i] args ( gpu_arg_i64 wd ) )
+    ( vec_push [i] args ( gpu_arg_i64 oh ) )
+    ( vec_push [i] args ( gpu_arg_i64 ow ) )
+    ( vec_push [i] args ( gpu_arg_i64 align ) )
+    ^ ( __gkd_launch kit src kname ( gk_grid * * c oh ow 256 ) args )
+}
+
 @ gkd_resize_nn * GpuKit kit GkBuf y GkBuf x i c i h i wd i oh i ow i sh i sw → b {
     ? & ( gk_buf_ok y ) ( gk_buf_ok x ) {} { ^ F }
     ? == . y dtype . x dtype {} { ^ F }
