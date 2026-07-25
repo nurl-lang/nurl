@@ -37,7 +37,7 @@ and is what the port has to reproduce exactly, not approximately.
 | 2 | image loading and preprocessing | **done** — byte-identical to the reference pipeline on real frames |
 | 3 | ViT layers: patch embed, 2-D RoPE, qk-norm attention, block | **done** — the full block matches the reference to 4e-15 |
 | 4 | streaming aggregator + KV cache | **done** — two frames streamed through the cache, 5.4e-6 vs the real model. Eviction (past 72 frames) pending |
-| 5 | camera head, DPT heads | pending |
+| 5 | camera head, DPT heads | camera head **done** — a pose end to end, 5.7e-7 vs the real model. DPT depth head pending |
 | 6 | camera geometry | **done** — matches torch to 2.4e-16 |
 | 7 | CLI, point-cloud export, end-to-end check | pending |
 
@@ -78,6 +78,47 @@ Verified against the upstream `quat_to_mat` / `mat_to_quat` /
 worst relative error **2.4e-16** across six random pose encodings — the
 last bit, and it comes from torch's vectorised `tan` disagreeing with
 glibc's, not from the port.
+
+### Stage 5 (partial) — the camera head (`src/camhead.nu`)
+
+**This is where a pose comes out.** It reads one token per frame — the
+camera token, row 0 of the last tapped aggregator layer — and refines a
+9-vector over four passes:
+
+```
+pred ← 0
+repeat 4:
+    cond               = embed_pose(pred)                9 → 2048
+    shift, scale, gate = Linear(SiLU(cond))              2048 → 3·2048
+    x                  = gate · (adaLN(tok)·(1+scale) + shift) + tok
+    x                  = trunk(x)                        4 blocks, dim 2048
+    pred               = pred + pose_branch(trunk_norm(x))
+```
+
+A DiT-style adaptive-LayerNorm loop: each pass sees its own previous
+answer, so the trunk is asked *what is wrong with this pose* rather than
+*what is the pose*.
+
+End to end on the real checkpoint — preprocess, DINOv2, aggregator,
+camera head — **106 s, 5.7e-7** against the real model's `pose_enc`, and
+the decoded result is what frame 0 should be: identity rotation,
+zero translation, fx ≈ 290.8 / fy ≈ 290.9 for a 518×294 frame.
+
+Details that bite:
+
+* the trunk is dim 2048 with 16 heads, so head_dim is **128** and its
+  3-D rope splits **40/44/44** — not the 20/22/22 the aggregator's
+  64-dim heads use. Same kernel, different geometry, so the axis widths
+  are a parameter now.
+* `adaln_norm` has **no affine parameters** and eps **1e-6**, while
+  `token_norm`, `trunk_norm` and the trunk's own norms are plain
+  `nn.LayerNorm` at 1e-5. That is a *fourth* epsilon.
+* only the field of view is activated (ReLU — it cannot be negative).
+  Translation and quaternion pass through linear, which is why the
+  quaternion is never unit and why `src/geom.nu` divides by its own
+  squared norm.
+* `poseLN_modulation` is `Sequential(SiLU, Linear)`, so the checkpoint
+  only carries `.1.weight` / `.1.bias` — element 0 is the SiLU.
 
 ### Stage 4 — the aggregator, one frame (`src/aggregator.nu`)
 

@@ -163,21 +163,31 @@ $ `stdlib/std/float.nu`
     }
 }
 
-// [maxpos, 32] cos and sin, laid out t(10) | h(11) | w(11).
+// [maxpos, (t+h+w)/2] cos and sin, laid out t | h | w.
+//
+// The split is a parameter because this model uses TWO of them: the
+// aggregator's global blocks have head_dim 64 and split 20/22/22, the
+// camera head's trunk has head_dim 128 and splits 40/44/44. Same
+// kernel, same theta, different geometry.
+@ rope3d_tables_fhw i td i hd i wd i maxpos * f cos_t * f sin_t → v {
+    : i width / + + td hd wd 2
+    ( __r3_axis td maxpos 0 width cos_t sin_t )
+    ( __r3_axis hd maxpos / td 2 width cos_t sin_t )
+    : i woff + / td 2 / hd 2
+    ( __r3_axis wd maxpos woff width cos_t sin_t )
+}
+
+// The aggregator's split: 20/22/22 over a 64-dim head.
 @ rope3d_tables i maxpos * f cos_t * f sin_t → v {
-    : i width ( rope3d_width )
-    ( __r3_axis R3_T maxpos 0 width cos_t sin_t )
-    ( __r3_axis R3_H maxpos ( rope3d_nt ) width cos_t sin_t )
-    ( __r3_axis R3_W maxpos + ( rope3d_nt ) ( rope3d_nh ) width cos_t sin_t )
+    ( rope3d_tables_fhw R3_T R3_H R3_W maxpos cos_t sin_t )
 }
 
 // Rotate `x` [heads, n, dim] in place. `fr` / `rw` / `cl` hold each
 // token's (frame, row, column) position. dim must be 2·width (64).
-@ rope3d_apply * f x i heads i n i dim * i fr * i rw * i cl * f cos_t * f sin_t → v {
-    : i width ( rope3d_width )
-    ? | | <= heads 0 <= n 0 != dim * 2 width { ^ v } {}
-    : i nt ( rope3d_nt )
-    : i nh ( rope3d_nh )
+@ rope3d_apply_fhw * f x i heads i n i dim i nt i nh * i fr * i rw * i cl
+* f cos_t * f sin_t → v {
+    : i width / dim 2
+    ? | <= heads 0 <= n 0 { ^ v } {}
     : ~ i h 0
     ~ < h heads {
         : ~ i t 0
@@ -200,4 +210,8 @@ $ `stdlib/std/float.nu`
         }
         = h + h 1
     }
+}
+
+@ rope3d_apply * f x i heads i n i dim * i fr * i rw * i cl * f cos_t * f sin_t → v {
+    ( rope3d_apply_fhw x heads n dim ( rope3d_nt ) ( rope3d_nh ) fr rw cl cos_t sin_t )
 }

@@ -34,7 +34,9 @@ def fmt(v):
 
 def dump(label, t):
     flat = t.reshape(-1).to(torch.float64)
-    vals = flat[::STRIDE].tolist()
+    # Small tensors are dumped whole — a 9-element pose sampled every
+    # 9973rd element is one number, which compares nothing.
+    vals = flat.tolist() if flat.numel() <= 64 else flat[::STRIDE].tolist()
     print("%s %s | %s" % (label, "x".join(str(d) for d in t.shape),
                           " ".join(fmt(v) for v in vals)))
 
@@ -84,6 +86,11 @@ def main():
     print("patch_start_idx %d outputs %d" % (psi, len(outs)))
     for i, o in enumerate(outs):
         dump("agg_out_%d" % i, o)
+
+    # the camera head reads the LAST tapped layer's camera token
+    poses = model.camera_head([o.float() for o in outs], num_iterations=4)
+    for i, p in enumerate(poses):
+        dump("pose_iter_%d" % i, p)
 
 
 if __name__ == "__main__":
