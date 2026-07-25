@@ -116,7 +116,16 @@ bit-for-bit-ish or the reconstruction drifts:
 They are different kernels. Getting one of them wrong is a plausible,
 quiet source of a few-percent pose error.
 
-**Checkpoint layout.** Tensor names come out of `torchpt` as the dotted
-path from the pickle root, so a checkpoint saved as `{"model": sd, …}`
-gives `model.aggregator.frame_blocks.0.attn.qkv.weight`. Nothing is
-stripped.
+**Checkpoint layout.** [`docs/checkpoint.md`](docs/checkpoint.md) is the
+full inventory read out of the real 4.6 GB file: every tensor name, dtype
+and shape, 1342 of them, 1.16 B parameters, all f32. Worth reading before
+writing any of stages 3–5 — a few things are not what the Python source
+suggests:
+
+* the root is a **bare `OrderedDict`**, not `{"model": …}`, so names come
+  out of `torchpt` unprefixed (`aggregator.frame_blocks.0.attn.qkv.weight`);
+* there is **no `point_head`** — `enable_point` is off, which is
+  `GCTStream`'s default. World points come from unprojecting the depth
+  map, not from a second DPT head;
+* `aggregator.patch_embed.pos_embed` is `1×1370×1024` = 1 cls + 37×37
+  patches, which is what forces the position-grid resample.
