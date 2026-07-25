@@ -1,0 +1,127 @@
+---
+title: Distributed computing
+description: A peer-to-peer stack for churning, NAT'd, mobile peer sets.
+icon: Waypoints
+---
+
+import { Accordion, Accordions } from 'fumadocs-ui/components/accordion';
+
+`stdlib/net/` and `stdlib/dist/` build a self-contained stack. The stack
+runs distributed computation on a churning, NAT'd, mobile peer set. The
+set includes laptops and phones. They have no public IP and no open
+inbound ports. They roam between wifi and cellular. The stack sits on the
+plain socket layer from [Networking](./networking). It sits on the fiber
+runtime from [Concurrency](./concurrency). There is no external framework
+and no OS VPN tunnel.
+
+<Callout type="warn" title="Advanced, opt-in layer">
+  This is a deep part of the standard library. An ordinary NURL program
+  does not need it. Use it when you build a peer-to-peer application. If
+  not, use the plain [Networking](./networking) layer.
+</Callout>
+
+## Three invariants
+
+- **A peer is a static public key, not an address.** Every layer above the
+  wire addresses a peer by its X25519 public key. The transport keeps the
+  `pubkey → endpoint` mapping current as the peer roams.
+- **Reachability is never zero.** A pair tries a direct, hole-punched UDP
+  path first. If the NAT topology blocks it, traffic falls back to a
+  relay. Layers above never see the difference.
+- **State is eventually consistent.** No Raft, no Paxos. Convergence
+  comes from commutative, idempotent CRDT merges over gossip. Gossip
+  tolerates a mesh. The mesh re-partitions each time a phone changes
+  cells.
+
+## The stack, bottom to top
+
+| Layer | Modules | Job |
+|---|---|---|
+| Secure datagrams | `net/noise.nu`, `net/session.nu`, `net/securedgram.nu` | a Noise handshake, an AEAD record layer, and pubkey-addressed encrypted UDP with roaming |
+| NAT traversal | `net/stun.nu`, `net/nat.nu`, `net/relay.nu` | candidate gathering, NAT-type probing, UDP hole punching, and a dumb relay fallback |
+| Rendezvous | `net/rendezvous.nu` | a directory: peers register `pubkey → candidates`, others look them up |
+| Transport seam | `net/transport.nu` | the one API everything above addresses peers through |
+| Membership | `net/membership.nu`, `net/failuredetector.nu`, `std/lifeguard.nu` | a pubkey-keyed SWIM table with false-positive suppression for flaky mobile links |
+| Distributed data | `dist/ring.nu`, `dist/crdt.nu`, `dist/replicator.nu` | consistent-hash key ownership and convergent replicated types |
+| Compute (the Crown) | `dist/job.nu`, `dist/lease.nu`, `dist/identity.nu` | distributed work dispatch, at-least-once with fencing for side effects |
+
+### The transport seam
+
+Everything above `net/transport.nu` addresses peers by public key and
+calls three functions, with no knowledge of NAT, relays, endpoints, or
+roaming:
+
+```nu
+transport_send(t, peer_pubkey, payload)        // unicast
+transport_broadcast(t, group_id, payload)      // broadcast to a group
+transport_recv(t, max) → ?TransportMsg{src, payload}
+```
+
+Underneath, each peer uses a direct encrypted path when one is reachable.
+When it is not reachable, the peer uses a relay. The transport promotes
+to direct the moment direct data arrives. It demotes back to relay after
+a path goes quiet.
+
+### Distributed data: CRDTs
+
+`dist/crdt.nu` gives three state-based CRDTs. Their merge is commutative,
+associative, and idempotent. Replicas converge when they exchange state:
+
+- **PNCounter** — an increment/decrement counter. Merge by element-wise
+  max.
+- **LwwReg** — a last-writer-wins register.
+- **OrSet** — an observed-remove set. A concurrent add wins over a
+  remove.
+
+`dist/ring.nu` maps keys to owning members with consistent hashing. A
+key's state and gossip traffic stay scoped to its replica set. They do
+not flood the whole group.
+
+### Distributed compute (the Crown)
+
+`dist/job.nu` submits a task keyed by `k`. The node that owns `k` on the
+consistent-hash ring runs it. It returns the result over the transport. A
+node that no longer owns a key forwards the task. The task goes to
+whoever owns it now. If you kill a worker, its keys re-home. The job
+still completes. `dist/lease.nu` adds fencing tokens. A side-effecting
+task still runs at most once. It does so even when two nodes both believe
+they own a key.
+
+## A working example
+
+[`examples/replicated_counter.nu`](https://github.com/nurl-lang/nurl/blob/main/examples/replicated_counter.nu)
+is the whole top of the stack in about 80 lines. Each node increments its
+own replica slot. It broadcasts its encoded counter. It merges every
+counter it receives.
+
+```bash
+# terminal 1
+./nurl.sh examples/relay.nu 0.0.0.0 47700
+# terminals 2..n
+./nurl.sh examples/replicated_counter.nu 127.0.0.1 47700 0
+./nurl.sh examples/replicated_counter.nu 127.0.0.1 47700 1
+```
+
+Run a few of these. They all converge to the sum of all increments.
+Other runnable pieces: `stun.nu`, `nat.nu`, `relay.nu`, `rendezvous.nu`,
+`transport.nu`, and `membership.nu` under `examples/`.
+
+<Accordions>
+  <Accordion title="How this is tested">
+    Beyond ordinary unit tests, the stack has a deterministic
+    chaos-simulation harness (`dist/sim.nu`). A virtual clock, an
+    in-process message bus, and seeded fault injection drive the real
+    logic. The fault injection includes drop, latency, partition, and
+    heal. The real membership, gossip, ring, CRDT, and job-dispatch logic
+    run inside a fully simulated world. A run is byte-reproducible.
+    FoundationDB and TigerBeetle use the same approach. It is possible
+    only because every layer here is a pure, time-injected state machine.
+  </Accordion>
+</Accordions>
+
+## Next
+
+- [Networking](./networking) and [Concurrency](./concurrency) — the layers
+  underneath this stack.
+- The full phase-by-phase design, status, and known follow-ups live in
+  [`docs/DISTRIBUTED.md`](https://github.com/nurl-lang/nurl/blob/main/docs/DISTRIBUTED.md).

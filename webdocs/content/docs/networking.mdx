@@ -1,0 +1,92 @@
+---
+title: Networking
+description: TCP, UDP, DNS, HTTP, TLS, and MQTT.
+icon: Globe
+---
+
+NURL reaches the network through a pure-POSIX socket layer in the C
+runtime. No external framework exists at that layer. Every primitive is
+dual-stack IPv4/IPv6. Each integrates with the [fiber reactor](./concurrency)
+for async I/O.
+
+## TCP, UDP, and DNS
+
+| Layer | Functions | Notes |
+|---|---|---|
+| TCP server | `tcp_listen` / `tcp_listen_tls`, `tcp_accept` | full HTTP/1.1 stack layers on top (routing, static files, middleware, WebSockets) |
+| TCP client | `tcp_connect`, `tcp_connect_tls` | the `verify` flag on the TLS variant turns on certificate-chain and hostname verification |
+| UDP | `udp_bind`, `udp_connect`, `udp_send_to` / `udp_recv_from`, multicast helpers | sync and fiber-aware async on every call |
+| DNS | `dns_resolve host`, `dns_resolve_port host port`, `dns_reverse ip` | wraps the system resolver (`getaddrinfo` / `getnameinfo`) |
+
+`stdlib/std/net.nu`, `stdlib/std/udp.nu`, and `stdlib/std/dns.nu` hold
+these.
+
+## HTTP
+
+[`stdlib/ext/http_server.nu`](https://github.com/nurl-lang/nurl/blob/main/stdlib/ext/http_server.nu)
+and its neighbors (`http_router.nu`, `http_middleware.nu`,
+`http_static.nu`, `http_multipart.nu`) build a routing HTTP/1.1 server on
+top of the TCP layer. `server_run_pool` drives it on a thread pool.
+`server_run_async` drives the same handlers on fibers with no code
+changes. Routing, middleware, and the request parser are ordinary
+functions either way.
+
+`stdlib/ext/http.nu` / `http_cli.nu` are the HTTP **client** side, and
+`http2_client.nu` / `http2_server.nu` / `http2_frame.nu` / `http2_hpack.nu`
+implement HTTP/2.
+
+## TLS
+
+You can use TLS in two ways:
+
+- **`libssl`-backed**, via `tcp_listen_tls` / `tcp_connect_tls` — the
+  HTTP server stack picks this up transparently by swapping `tcp_listen`
+  for `tcp_listen_tls`. Covers SNI (multi-tenant certs on one listener),
+  ALPN (needed for HTTP/2), mutual TLS, and live certificate reload for
+  Let's-Encrypt-style rotation.
+- **Pure-NURL TLS 1.3**, in `stdlib/std/tls.nu` / `tls_server.nu` — a
+  from-scratch handshake, record layer, and certificate verification with
+  no OpenSSL and no FFI beyond the plain TCP socket. It negotiates
+  ChaCha20-Poly1305 or AES-128-GCM over X25519 or P-256. It verifies
+  against the system trust store by default. `tls_attach` upgrades an
+  already-connected socket, for STARTTLS-style protocols.
+
+A program that never calls the `_tls` functions, or only uses the
+pure-NURL client, links `libc` only.
+
+## MQTT
+
+[`stdlib/ext/mqtt.nu`](https://github.com/nurl-lang/nurl/blob/main/stdlib/ext/mqtt.nu)
+is a full MQTT 5.0 client over the TCP/TLS layer, with no dependency
+beyond the runtime's libssl:
+
+```nu
+$ `stdlib/ext/mqtt.nu`
+
+@ main → i {
+    : !MqttClient MqttErr r ( mqtt_connect
+        `broker.example.com` 8883 `client-id` `user` `pass` )
+    ?? r {
+        T cl → {
+            ( mqtt_subscribe cl `sensors/#` )
+            ( mqtt_publish1 cl `sensors/temp` `21.4` )
+            ( mqtt_disconnect cl )
+            ^ 0
+        }
+        F e → { ( nurl_eprint ( mqtt_err_name e ) ) ^ 1 }
+    }
+}
+```
+
+It covers QoS 0/1/2 publishing with the full acknowledgment handshake,
+multi-topic subscribe, TLS by default (`tls_verify` on), and typed errors
+that separate transport faults from broker rejections. NURL does not yet support pipelined
+(multiple-in-flight) publishing. One packet is in
+flight at a time.
+
+## Next
+
+- [Cryptography](./cryptography) — the primitives TLS and MQTT sit on.
+- [Concurrency](./concurrency) — how these calls behave inside a fiber.
+- For the exhaustive endpoint and flag list, see
+  [`docs/NETWORKING.md`](https://github.com/nurl-lang/nurl/blob/main/docs/NETWORKING.md).

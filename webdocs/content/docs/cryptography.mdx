@@ -1,0 +1,67 @@
+---
+title: Cryptography
+description: A pure-NURL crypto and TLS stack, built on libc only.
+icon: Lock
+---
+
+NURL ships its own cryptography and TLS implementation. The
+implementation uses only NURL on top of `libc`. No OpenSSL, no
+libcrypto, no libssl. A binary
+that only uses this stack links `libc` (and `libm`) alone. All of it is
+under `stdlib/std/`.
+
+## What's implemented
+
+| Area | Modules | Notes |
+|---|---|---|
+| Hashes | `hash_sha256`, `hash_sha512`, `hash_sha1`, `hash_md5`, `hash_blake3` | SHA-1 and MD5 are for legacy interop only, never for signatures |
+| HMAC / KDF | `hkdf`, `pbkdf2`, `scrypt` | |
+| AEAD | `aes_gcm` (AES-128/256-GCM), `chacha20poly1305` | the two TLS 1.3 record ciphers |
+| ECDH / signatures | `x25519`, `ed25519`, `ecdsa_p256` (P-256 + P-384) | `p256_field` is a dedicated constant-time field implementation for the P-256 secret path |
+| RSA | `rsa` (PKCS#1 v1.5 verify, PSS verify + sign) | built on the `bigint` module |
+| X.509 | `x509`, `tls_verify` | DER parsing plus chain, hostname, and policy verification |
+| TLS | `tls` (client, 1.3 with 1.2 fallback), `tls_server` (1.3) | |
+| Randomness | `random` (CSPRNG), `rng` (xoshiro256\*\*) | `rng` is explicitly **not** cryptographic — simulations only |
+| Constant-time compare | `subtle` | length-independent secret comparison |
+
+## Randomness
+
+Every cryptographic draw — keys, nonces, salts, blinding factors — goes
+through one runtime bridge that selects the OS CSPRNG per platform
+(`getrandom(2)` on Linux, `arc4random_buf` on macOS, `BCryptGenRandom` on
+Windows). If a draw fails, the system panics. It does not silently fall back to
+predictable bytes. The xoshiro256\*\* generator in `std/rng.nu` is a separate,
+non-cryptographic PRNG. The crypto and TLS code never uses it.
+
+## Correctness
+
+Every primitive has a known-answer test that runs on every build. 
+Interoperability tests check the stack against OpenSSL, curl,
+browsers, and the `badssl.com` negative test suite. ECDSA signing uses a
+deterministic nonce (RFC 6979), so a signature is reproducible and never
+reuses a nonce. This is independent of the random per-signature blinding
+factor for side-channel hardening.
+
+## Side-channel posture
+
+<Callout type="info" title="Timing vs. power/EM side-channels">
+By construction, the elliptic-curve and symmetric primitives run in
+constant time. This includes operand timing. RSA's big-integer arithmetic
+has one residual: operand-dependent timing. Blinding covers this.
+Power/electromagnetic (DPA/template) side-channels are out of scope for
+the whole stack. You need hardware, not software, to defend against those.
+</Callout>
+
+## TLS
+
+`tcp_connect_tls` verifies the full certificate chain and hostname by
+default. You skip verification with a separate, explicitly named function
+(`tls_connect_insecure`). It is not a flag on the normal path. An
+insecure connection cannot happen by accident. See
+[Networking](./networking#tls) for the connection-level API.
+
+## Next
+
+- [Networking](./networking) — TLS, MQTT, and the socket layer this stack sits under.
+- The full trust model, KAT list, and what is explicitly out of scope is in
+  [`docs/CRYPTO.md`](https://github.com/nurl-lang/nurl/blob/main/docs/CRYPTO.md).

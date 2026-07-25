@@ -1,0 +1,197 @@
+---
+title: "Tutorial: a word-count CLI"
+description: Build a small, real NURL program end to end.
+icon: GraduationCap
+---
+
+import { Step, Steps } from 'fumadocs-ui/components/steps';
+
+This tutorial builds a `wc`-style tool that counts lines, words, and characters in a file. It introduces each piece
+of syntax as it comes up. Make sure [NURL is installed](./install) first. The
+finished program is presented also in the repository as [`examples/wordcount.nu`](https://github.com/nurl-lang/nurl/blob/main/examples/wordcount.nu)
+
+<Steps>
+<Step>
+
+## Start with the shape
+
+Every program has one `main`, and a struct to hold the three numbers
+we're computing:
+
+```nu title="wc.nu"
+: Stats {
+    i lines
+    i words
+    i chars
+}
+
+@ main → i {
+    ^ 0
+}
+```
+
+`: Stats { ... }` declares a struct with three `i` (64-bit integer)
+fields. See [Structs, enums, and traits](./structs-enums-traits).
+
+</Step>
+<Step>
+
+## Read the file
+
+Command-line arguments come from `nurl_argv_count` / `nurl_argv_get`, and
+`nurl_read_file` reads a whole file into a string:
+
+```nu title="wc.nu"
+@ main → i {
+    : i argc ( nurl_argv_count )
+
+    ? < argc 2 {
+        ( nurl_print `Usage: wc <file>\n` )
+        ^ 1
+    } {}
+
+    : s filename ( nurl_argv_get 1 )
+    : s content ( nurl_read_file filename )
+
+    ^ 0
+}
+```
+
+`?  cond then else` is the ternary. We use it here for its side effect (an
+early return), with an empty `{}` else block. `nurl_read_file` prints an
+error and exits the process if the file cannot open, so there is no
+Option/Result to unwrap here. See [Error handling](./error-handling) for
+the pattern where a function's own return type carries the failure
+instead.
+
+</Step>
+<Step>
+
+## Walk the string
+
+`count_stats` scans the text one character at a time with a `while` loop.
+It tracks whether the scan is now inside a word:
+
+```nu title="wc.nu"
+@ count_stats s text → Stats {
+    : i len ( nurl_str_len text )
+    : ~ i lines 0
+    : ~ i words 0
+    : ~ i chars len
+    : ~ b in_word F
+
+    : ~ i idx 0
+    ~ < idx len {
+        : i ch ( nurl_str_get text idx )
+        // ch 10 is the newline character code (\n)
+        ? == ch 10 {
+            = lines + lines 1
+            = in_word F
+        } {
+            ? | == ch 32 | == ch 9 == ch 13 {
+                = in_word F
+            } {
+                ? ! in_word {
+                    = words + words 1
+                    = in_word T
+                } {}
+            }
+        }
+
+        = idx + idx 1
+    }
+
+    ? & > len 0 != ( nurl_str_get text - len 1 ) 10 {
+        = lines + lines 1
+    } {}
+
+    ^ @ Stats { lines words chars }
+}
+```
+
+A few things worth noticing:
+
+- `~ < idx len { ... }` is the while loop: prefix condition, then body.
+  See [Control flow](./control-flow).
+- `10`, `32`, `9`, `13` are raw character codes (newline, space, tab,
+  carriage return). NURL has no character literal syntax, so comparisons
+  go against the byte value directly.
+- `| == ch 32 | == ch 9 == ch 13` is the n-ary-or pattern from
+  [Control flow](./control-flow#binary-operators): `|` is strictly
+  binary, so you write a 3-way OR as two `|` operators.
+- `@ Stats { lines words chars }` builds the return value field by field,
+  in declaration order.
+
+</Step>
+<Step>
+
+## Print the result and wire it together
+
+```nu title="wc.nu"
+@ print_stats Stats st s filename → v {
+    ( nurl_print `  ` ) ( nurl_print_int . st lines )
+    ( nurl_print `  ` ) ( nurl_print_int . st words )
+    ( nurl_print `  ` ) ( nurl_print_int . st chars )
+    ( nurl_print `  ` ) ( nurl_print filename )
+    ( nurl_print `\n` )
+}
+```
+
+`. st lines` reads the `lines` field off the `st` struct parameter — see
+[Structs, enums, and traits](./structs-enums-traits#structs). Now call
+both from `main`:
+
+```nu title="wc.nu"
+@ main → i {
+    : i argc ( nurl_argv_count )
+    ? < argc 2 { ( nurl_print `Usage: wc <file>\n` ) ^ 1 } {}
+
+    : s filename ( nurl_argv_get 1 )
+    : s content ( nurl_read_file filename )
+
+    : Stats st ( count_stats content )
+    ( print_stats st filename )
+
+    ^ 0
+}
+```
+
+</Step>
+<Step>
+
+## Compile and run
+
+Compile and run the program to make it read its own source code and count.
+```bash
+./build/nurlc wc.nu > /tmp/wc.ll
+clang /tmp/wc.ll stdlib/runtime.o -o /tmp/wc
+/tmp/wc wc.nu 
+```
+
+Or, if you built from source, the one-step wrapper:
+
+```bash
+./nurl.sh wc.nu
+./wordcount wc.nu
+```
+
+See [Compiling and running](./compiling-and-running) for what each stage
+does and the available flags.
+
+</Step>
+</Steps>
+
+## What this covered
+
+Prefix function calls, mutable (~) vs. immutable bindings, `while` loops,
+ternaries used for control flow, structs, and field access. Nothing here touches ownership explicitly,
+because none of these values need heap allocation.
+[Memory and ownership](./memory-and-ownership) covers what changes once a
+program starts to allocate.
+
+## Next
+
+- [Language basics](./language-basics) and [Control flow](./control-flow) for the full reference of this tutorial.
+- [Standard library](./standard-library) for what else is available beyond `nurl_read_file` / `nurl_print`.
+- More runnable programs, from FizzBuzz to an HTTP server, are in
+  [`examples/`](https://github.com/nurl-lang/nurl/tree/main/examples).

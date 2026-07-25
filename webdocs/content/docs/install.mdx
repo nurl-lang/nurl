@@ -1,14 +1,14 @@
 ---
 title: Installation
-description: Get the nurlc compiler via a prebuilt toolchain or by building from source.
+description: Get the nurlc compiler via a prebuilt toolchain or build it from source.
 icon: Download
 ---
 
 import { Accordion, Accordions } from 'fumadocs-ui/components/accordion';
 
-NURL can be obtained in two ways: by installing a prebuilt toolchain, or by building it from the source code.
+You can get NURL in two ways: install a prebuilt toolchain, or build it from the source code.
 
-## Prebuilt toolchain (Linux / FreeBSD / Windows)
+## Option A — Prebuilt toolchain (Linux / FreeBSD / Windows)
 
 This gives you `nurlc` (compiler), `nurlpkg` (package manager), and
 `nurlfmt` (source formatter) on your `PATH`.
@@ -29,22 +29,22 @@ irm https://nurl-lang.org/install.ps1 | iex
 
 <Accordions>
   <Accordion title="Why is there no prebuilt path for macOS?">
-    NURL's CI currently builds and tests on **Linux and FreeBSD** only. macOS
-    support exists, but there is no CI coverage or prebuilt toolchain for
-    *running on* macOS yet, so building from source is the macOS path
-    for now.
+     NURL's CI now builds and tests on **Linux and FreeBSD** only. NURL
+     supports macOS, but has no CI coverage or prebuilt toolchain for
+     *running on* macOS yet. You must build from source on macOS
+     for now.
   </Accordion>
 </Accordions>
 
 ## Option B — Build from source
 
-Needed for macOS, and generally recommended if you want to compile your
+You need this for macOS. We also recommend this if you want to compile your
 own `.nu` files right away.
 
 ### Prerequisites
 
 NURL's compiler emits LLVM IR text; `clang` turns that into a native binary.
-It is the **only** required build-time dependency.
+`clang` is the **only** build-time dependency.
 
 | OS | Command |
 |---|---|
@@ -53,7 +53,7 @@ It is the **only** required build-time dependency.
 | Windows | Install from [llvm.org/releases](https://llvm.org/releases/) |
 | FreeBSD | already ships `clang`; also install `bash` for `build.sh` |
 
-macOS's brew-installed LLVM is not symlinked onto `PATH` by default. Add this line to `~/.zshrc` to persist it.
+On macOS, brew does not symlink LLVM onto `PATH` by default. Add this line to `~/.zshrc` to persist it.
 
 ```bash
 export PATH="$(brew --prefix llvm)/bin:$PATH"
@@ -68,21 +68,21 @@ cd nurl
 build.bat           # Windows
 ```
 
-`./build.sh` performs a full **bootstrap**: it compiles the C runtime,
+`./build.sh` does a full **bootstrap**: it compiles the C runtime,
 links a committed known-good compiler snapshot, and uses that snapshot to
 compile the current compiler source. It then compiles the result *again*
 and checks that both self-compiles produce byte-for-byte identical output
-before accepting the build. On success it prints `BUILD SUCCESS & TESTS PASSED`
-and leaves the compiler at `build/nurlc` (symlinked at the repo root).
+before it accepts the build. On success it prints `BUILD SUCCESS & TESTS PASSED`
+and puts the compiler at `build/nurlc` (symlinked at the repo root).
 
 <Accordions>
   <Accordion title="Why compile the compiler with itself, twice?">
-    The compiler (`compiler/nurlc.nu`) is written in NURL. To prove a change
-    to the compiler did not silently break itself, `build.sh` compiles the
-    compiler source with itself, then does it *again* using the result of
-    the first pass, and requires the two outputs to be byte-identical. This
-    "fixed point" check is the same idea GCC and Zig use to validate a
-    self-hosting compiler.
+     The compiler (`compiler/nurlc.nu`) is written in NURL. To show that a change
+     to the compiler did not silently break itself, `build.sh` compiles the
+     compiler source with itself, then does it *again* with the result of
+     the first pass, and needs the two outputs to be byte-identical. This
+     "fixed point" check is the same idea GCC and Zig use to validate a
+     self-hosting compiler.
   </Accordion>
 </Accordions>
 

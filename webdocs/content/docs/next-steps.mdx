@@ -4,30 +4,50 @@ description: Where to go after installing NURL.
 icon: Compass
 ---
 
+## Build a program
+
+- **[Tutorial: a word-count CLI](./tutorial)** - a small, real program, built end to end.
+
 ## Learn the language
 
-- **Language Guide** - prefix syntax, types, control flow, structs and enums, pattern matching,
-  memory and ownership, error handling, closures, concurrency.
-- **Standard Library tour** - collections, strings, JSON, HTTP, crypto,
-  channels, and more.
+- **[Language basics](./language-basics)** - prefix syntax, literals, variables, functions.
+- **[Control flow and pattern matching](./control-flow)** - conditionals, loops, `match`.
+- **[Structs, enums, and traits](./structs-enums-traits)** - data types and generics.
+- **[Memory and ownership](./memory-and-ownership)** - single-owner auto-drop, parameter conventions, the borrow checker.
+- **[Error handling](./error-handling)** - `Option`, `Result`, and the try operator.
+- **[Concurrency](./concurrency)** - threads, the async fiber runtime, and channels.
+- **[Common pitfalls](./common-pitfalls)** - the handful of things worth knowing up front.
+- **[Cheat sheet](./cheat-sheet)** - the syntax above, condensed to one page.
+
+## Explore the standard library
+
+- **[Standard library tour](./standard-library)** - collections, strings, time, crypto, and more, grouped by category.
+- **[Networking](./networking)** - TCP, UDP, DNS, HTTP, TLS, MQTT.
+- **[Cryptography](./cryptography)** - hashes, AEAD, signatures, and TLS, built on libc only.
+- **[Distributed computing](./distributed-computing)** - a peer-to-peer stack for churning, NAT'd, mobile peer sets.
 - **[examples](https://github.com/nurl-lang/nurl/tree/main/examples)** in
   the repository, runnable `.nu` programs from FizzBuzz to an HTTP
   server to a Game Boy emulator. `examples/README.md` tags each one with
   where it can run (the browser playground, or locally only).
 
-## Try without installing anything
+## Tooling
 
-The [online playground](playground-ai) compiles and runs NURL
-in your browser via WebAssembly. It is good for testing a snippet, or for using a machine where you have not set up NURL yet.
+- **[Formatting](./formatting)** - the `nurlfmt` canonical style.
+- **[Editor and tooling](./editor-and-tooling)** - the language server, `nurlpkg`, and the local MCP server.
+- **[Testing and benchmarking](./testing-and-benchmarking)** - `nurlpkg test` / `nurlpkg bench`, and how the compiler's own suite works.
+- **[Platforms](./platforms)** - host support and cross-compile targets.
+- **[Embedded targets](./embedded-targets)** - bare-metal NURL, starting with ESP32.
+
+## Try without installing
+
+The [online playground](playground-ai) compiles and runs NURL in your browser via WebAssembly. Use it to test a snippet, or on a machine where you have not set up NURL yet.
 
 ## NURL Errors
 
-NURL treats compiler errors as the primary way to learn what is allowed. Every diagnostic names the problem and the fix. If you hit an error you do not understand, read it fully before
-searching elsewhere. It is designed to be the answer.
+NURL uses compiler errors to teach you the language. Every diagnostic names the problem and gives the fix. If you do not understand an error, read it fully before you search elsewhere. The compiler is the answer.
 
-For anything the compiler itself cannot catch, or model-level questions like
-"what exactly does the borrow checker check," the two normative references
-are:
+For anything the compiler cannot catch, or model-level questions like
+"what exactly does the borrow checker check," use these two references:
 
 - [`docs/spec.md`](https://github.com/nurl-lang/nurl/blob/main/docs/spec.md) — the language reference.
 - [`docs/MEMORY.md`](https://github.com/nurl-lang/nurl/blob/main/docs/MEMORY.md) — the memory model and borrow checker, in depth.

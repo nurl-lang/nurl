@@ -1,0 +1,151 @@
+---
+title: Memory and ownership
+description: Single-owner auto-drop, parameter conventions, and the borrow checker.
+icon: MemoryStick
+---
+
+import { Accordion, Accordions } from 'fumadocs-ui/components/accordion';
+
+NURL has no garbage collector and no reference counting. NURL uses
+**single-owner auto-drop** to manage heap memory. The compiler tracks which
+binding owns each heap allocation and inserts the matching free at the end
+of that binding's scope.
+
+## Ownership
+
+A `:` binding becomes the owner of a heap resource when its value is a
+fresh allocation. This includes a slice literal, a slice-returning call, an
+allocating string call, or a struct literal whose fields are fresh
+allocations. At the end of that binding's scope, the compiler frees it
+automatically. A function that returns a fresh allocation transfers
+ownership to the caller. It does not free the allocation locally.
+
+```nu
+@ main → i {
+    : String s ( string_from `hi` )   // s owns this allocation
+    ( puts ( string_data s ) )
+    ^ 0
+}   // s is freed here, automatically
+```
+
+Copying an already-owned binding into another binding does not register a
+second drop. The compiler only tracks drops for allocations it directly sees
+created. This makes the base model conservative. It never double-frees on
+its own.
+
+## Parameter conventions
+
+A function parameter is one of three conventions, written as a keyword
+before the type:
+
+| Convention | Meaning |
+|---|---|
+| *(default)* / `in` | immutable borrow by value — the callee gets a copy |
+| `inout` | exclusive mutable borrow — the callee writes through to the caller |
+| `sink` | ownership transfer — the caller may not use the value afterward |
+
+### `in` (default)
+
+The runtime copies a struct-typed parameter into the callee at entry.
+Writes to it inside the callee do not reach the caller.
+
+### `inout`
+
+```nu
+@ bump inout Counter c → v { = . c n + . c n 1 }
+
+: ~ Counter c @ Counter { 0 10 }
+( bump c )                       // c.n is now 1, in the caller
+```
+
+The argument must be a mutable (`: ~`) binding, and the callee's writes
+land on the caller's storage. You must define an `inout` function before
+you call it.
+
+### `sink`
+
+```nu
+@ give_away sink ( Vec i ) g → v { ( vec_free [i] g ) }
+
+: ( Vec i ) xs ( vec_new [i] )
+( give_away xs )     // xs is consumed; using it afterward is a compile error
+```
+
+`sink` applies to manually-managed handles like `Vec`. If you pass a value
+the compiler already auto-drops (an owned string, an owned slice, a `Drop`
+value) to a `sink` parameter, the compiler rejects it by design. This
+prevents two different scopes from both thinking they own the same free.
+
+## Manually-managed handles
+
+The compiler frees most values for you. A small, explicit set is not. You
+free it by hand, the same way as C's `malloc`/`free`:
+
+- `Vec` and similar container handles
+- a `sink` argument, once consumed
+- a closure environment that **escapes** its creating frame (returned,
+  stored in a container or struct field, captured by another closure, or
+  moved onto a thread)
+
+For a closure that does not escape, the compiler reclaims its environment
+automatically. It frees the environment right after the call for an inline
+closure. It frees the environment at scope exit for a `:`-bound closure.
+
+## The borrow checker
+
+A static analysis pass runs by default (`--no-borrowck` turns it off). It
+catches the mistakes the auto-drop layer alone cannot find. These mistakes
+include using a value after a move, aliasing a value that has a mutable
+borrow, and a closure capture that would outlive the stack frame it points
+into. Diagnostics produce hard compile errors. The checker never changes the
+generated code. A program compiles to the same output whether the checker
+runs or not.
+
+What it checks, briefly:
+
+- **Use-after-move** — reading a binding after you consume it (by freeing
+  it, sending it to a `sink` parameter, or copying it into another owning
+  binding).
+- **Alias / double-free** — the checker treats an immutable copy of an owned
+  binding as a move, not a second owner.
+- **Escaping closures** — you cannot return, store, or send a closure to a
+  thread if it captures a mutable struct by reference.
+- **Exclusive access at a call site** — a binding you pass `inout` cannot
+  also have an alias from another plain argument in the same call.
+- **Iterator invalidation** — you cannot mutate a foreach loop's collection
+  from inside the loop body.
+- **Loop-carried moves** — the checker rejects consuming a binding inside a
+  loop body and reading it again on the next iteration. This catches the
+  same problem as a free-inside-a-loop double-free in C.
+
+<Callout type="info" title="This is diagnostic, not Rust's ownership system">
+The checker is a pass over an already-memory-safe base. Auto-drop never
+double-frees on its own. The checker has no false positives by design. It
+flags only what it can prove is a bug. But it also does not catch
+everything. Raw `*T` pointers act as the FFI escape hatch. The checker does
+not track them at all. The full soundness contract is in
+[`docs/MEMORY.md` §6](https://github.com/nurl-lang/nurl/blob/main/docs/MEMORY.md).
+</Callout>
+
+## Threads and shared state
+
+Sending a value across a thread boundary follows the same ownership rules.
+The compiler rejects an `Rc` (non-atomic reference count) captured by a
+`thread_spawn` closure. Two threads racing on its count is undefined
+behavior. Use `Arc` (atomic reference count) for any handle a thread needs
+to share.
+
+## Reading NURL's compiler errors
+
+NURL treats compiler diagnostics as the primary place to learn the rules.
+A rejected program's error names the problem and, in most cases, the fix.
+Read it before you search elsewhere. See
+[Common pitfalls](./common-pitfalls) for the handful of surprises the
+diagnostics point at most often.
+
+## Next
+
+- [Common pitfalls](./common-pitfalls) — the practical cases worth knowing up front.
+- [Concurrency](./concurrency) — threads, fibers, and channels.
+- For the exact rule-by-rule semantics and the soundness contract, see
+  [`docs/MEMORY.md`](https://github.com/nurl-lang/nurl/blob/main/docs/MEMORY.md).

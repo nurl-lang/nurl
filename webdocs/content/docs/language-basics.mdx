@@ -1,0 +1,197 @@
+---
+title: Language basics
+description: Prefix syntax, literals, variables, types, and functions.
+icon: CodeXml
+---
+
+import { Accordion, Accordions } from 'fumadocs-ui/components/accordion';
+
+NURL source files use the `.nu` extension and are UTF-8 text.
+
+## Prefix notation
+
+Every expression is **operator first, operands after**. There is no operator
+precedence table to learn, because every operator has a fixed, known number
+of operands (its *arity*).
+
+```nu
++ 1 2          // 3
+* + 1 2 3      // (1 + 2) * 3 = 9
+== a b         // a equals b, yields a bool
+```
+
+NURL does not use parentheses for grouping. They appear only around function
+calls, function-type literals, and generic-type arguments:
+
+```nu
+( puts `hello` )        // function call
+(@ i i)                  // a function type: takes i, returns i
+( Pair i s )              // a generic type instantiated with i and s
+```
+
+<Callout type="info" title="Why no grouping parentheses?">
+It keeps the grammar regular and cheap to parse: at most 4 tokens of
+lookahead, no precedence climbing. A call still needs parens; a bare
+operator chain does not.
+</Callout>
+
+## Comments
+
+```nu
+// a line comment — runs to end of line
+```
+
+There are no block comments.
+
+## Literals
+
+| Kind | Form | Example |
+|---|---|---|
+| Integer | `-?DIGIT+` | `42`, `-7` |
+| Float | `-?DIGIT+.DIGIT+([eE][+-]?DIGIT+)?` | `3.14`, `-2.5e10` |
+| String | backtick-delimited | `` `hello\n` `` |
+| Boolean | `T` / `F` | `T` |
+
+String literals recognize four escapes: `\n`, `\t`, `\r`, `\\`. Any other
+`\X` passes through unchanged (`\d` stays as the two characters `\` and
+`d`, which helps with regex source strings). A string cannot
+contain a literal backtick.
+
+A `-` glued directly to a digit, with no space, is a negative literal.
+A `-` with space on either side is the binary minus operator.
+
+## Base types
+
+| Type | Meaning |
+|---|---|
+| `v` | unit / no value |
+| `i` | signed 64-bit integer |
+| `u` | unsigned 8-bit byte |
+| `f` | 64-bit float |
+| `b` | boolean |
+| `s` | UTF-8 C-string (`i8*`, NUL-terminated) |
+| `i8` `i16` `i32` `i64` | signed sized integers |
+| `u16` `u32` `u64` | unsigned sized integers |
+| `f32` | 32-bit float |
+
+There are no implicit conversions. A width or sign change needs an explicit
+cast with `#` (see below).
+
+`s` is a raw C string, and the standard library's `String` (from
+[`stdlib/core/string.nu`](https://github.com/nurl-lang/nurl/blob/main/stdlib/core/string.nu))
+is a separate, managed, length-tracked type. They are not interchangeable —
+convert with `string_data` (`String → s`) or `string_from` (`s → String`).
+
+## Variables: `:` and `=`
+
+`:` declares a new binding. Bindings are immutable by default; `~` makes one
+mutable. You can write the type explicitly, or leave it for the compiler to
+infer from the right-hand side.
+
+```nu
+: i n 0                      // explicit type
+: ~ i x 0                    // mutable
+: String s ( string_new )    // named type
+: total ( add 1 2 )          // inferred
+```
+
+`=` reassigns an existing mutable binding, or writes into a struct field,
+array slot, or slice element:
+
+```nu
+= x 5                        // reassign x
+= . point x 10               // write field x of struct point
+```
+
+Reassigning an immutable binding is a compile-time error.
+
+## Functions
+
+```nu
+@ name param* → return_type { body }
+```
+
+Parameters are `type IDENT`, separated by whitespace, with no commas. `^`
+returns a value from the enclosing function.
+
+```nu
+@ add i a i b → i {
+    ^ + a b
+}
+
+@ main → i {
+    ( puts `hello\n` )
+    ^ 0
+}
+```
+
+Every program has exactly one `main`. It returns either `i` for the process
+exit code or `v` (exits `0`).
+
+Calls always use parentheses, with the function name first: `( add 1 2 )`.
+A bare identifier is a name lookup, never a call — writing `add 1 2` without
+parentheses is a compile error that names the missing parens.
+
+<Accordions>
+  <Accordion title="Full worked example">
+    From [`examples/fizzbuzz.nu`](https://github.com/nurl-lang/nurl/blob/main/examples/fizzbuzz.nu):
+
+    ```nu
+    @ fizzbuzz i n → v {
+        : ~ i i 1
+        ~ <= i n {
+            : b div3 == 0 % i 3
+            : b div5 == 0 % i 5
+
+            ? & div3 div5
+            { ( nurl_print `FizzBuzz\n` ) }
+            ? div3
+            { ( nurl_print `Fizz\n` ) }
+            ? div5
+            { ( nurl_print `Buzz\n` ) }
+            { ( nurl_print_int i ) ( nurl_print `\n` ) }
+
+            = i + i 1
+        }
+    }
+
+    @ main → i {
+        ( fizzbuzz 30 )
+        ^ 0
+    }
+    ```
+  </Accordion>
+</Accordions>
+
+## Casts and sizeof
+
+`#` does an explicit type coercion — widening/narrowing integers,
+reinterpreting signedness, or casting pointers:
+
+```nu
+# i ( some_f32_returning_call )   // widen to i64
+# *Point ( nurl_alloc 16 )        // reinterpret i8* as *Point
+```
+
+`Z type` returns the byte size of a type as an `i64`. Note that `Z u` is
+`1`, not `8` — `u` is a single byte, not the default integer.
+
+## Imports
+
+`$ "path"` inline-compiles another `.nu` file into the current module.
+NURL imports the same file only once. An alias scopes the imported names:
+
+```nu
+$ `stdlib/core/mem.nu` m
+( m::alloc 16 )     // calls the imported file's alloc, renamed m__alloc
+```
+
+Without an alias, the imported file's top-level names join the current
+file's namespace directly.
+
+## Next
+
+- [Control flow and pattern matching](./control-flow) — conditionals, loops, `match`.
+- [Structs, enums, and traits](./structs-enums-traits) — data types and generics.
+- For the full, normative grammar see
+  [`docs/spec.md`](https://github.com/nurl-lang/nurl/blob/main/docs/spec.md).

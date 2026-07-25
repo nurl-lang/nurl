@@ -6,14 +6,14 @@ icon: BrainCircuit
 
 import { FlaskConical } from 'lucide-react';
 
-NURL has an official **online playground** where you can run NURL code directly in your browser. Same site provides HTTP APIs and an MCP server for integration with AI assistants.
+NURL has an official **online playground** where you can run NURL code directly in your browser. The same site gives HTTP APIs and an MCP server to integrate with AI assistants.
 
 <Card icon={<FlaskConical />} href="https://play.nurl-lang.org" title="Go to play.nurl-lang.org">
-    Write NURL code in a web editor, run and build programs, download native binaries browse examples and share your code.
+    Write NURL code in a web editor, run and build programs, download native binaries, browse examples, and share your code.
 </Card>
 
 <Callout type="warn" title="Security & Availability">
-- The hosted playground is **unauthenticated and public**-don't send secrets
+- The hosted playground is **unauthenticated and public** — do not send secrets
 - Build logs may be recorded; assume source code is logged
 - For production or sensitive work, [self-host](#selfhosting)
 - Build endpoints sandbox compilation with container-level isolation
@@ -24,7 +24,7 @@ NURL has an official **online playground** where you can run NURL code directly 
 - The tool and resource catalog tracks the `main` branch
 - Breaking changes to tool signatures are announced in [`CHANGELOG.md`](https://github.com/nurl-lang/nurl/blob/main/CHANGELOG.md)
 </Callout>
-The playground runs entirely in your browser-once compiled, WebAssembly is executed using a WASI shim with no server-side execution.
+The playground runs in your browser. It uses a WASI shim to run WebAssembly after compilation. There is no server-side execution.
 ## HTTP API Endpoints
 
 The playground server exposes the following endpoints:
@@ -66,7 +66,7 @@ Cross-compiles via mingw-w64. FFI functions like canvas and audio are rejected.
 ```bash
 POST /build_macos
 ```
-Cross-compiles via zig cc, linking only libSystem. Binaries are unsigned-clear the quarantine attribute before running.
+Cross-compiles via zig cc, linking only libSystem. These are unsigned binaries. Clear the quarantine attribute before you run them.
 
 **Cross-platform targets**
 ```bash
@@ -97,7 +97,7 @@ Canvas, audio, and HTTP are unsupported on these targets.
 
 ## MCP Server Integration
 
-The playground exposes a **public [Model Context Protocol](https://modelcontextprotocol.io/)** endpoint, enabling AI assistants to build and inspect NURL code.
+The playground has a **public [Model Context Protocol](https://modelcontextprotocol.io/)** endpoint. It lets AI assistants build and inspect NURL code.
 
 ```
 https://play.nurl-lang.org/mcp
@@ -161,15 +161,11 @@ docker run --rm -p 8000:8000 nurl-api:dev
 
 ...
 
-### nurlpkg?
-
-...
-
 See [`nurlapi/README.md`](https://github.com/nurl-lang/nurl/tree/main/nurlapi) for environment variables and configuration.
 
 ## Compiler-in-WebAssembly
 
-You can compile the NURL compiler itself to WebAssembly, creating an offline, embeddable `nurlc.wasm`:
+You can compile the NURL compiler itself to WebAssembly. This makes an offline, embeddable `nurlc.wasm`:
 
 ```bash
 ./startdev.sh        # start the API container

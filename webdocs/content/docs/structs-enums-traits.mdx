@@ -1,0 +1,187 @@
+---
+title: Structs, enums, and traits
+description: NURL's data types, generics, and trait dispatch.
+icon: Boxes
+---
+
+import { Accordion, Accordions } from 'fumadocs-ui/components/accordion';
+
+## Structs
+
+```nu
+: Name {
+    type field?
+    ...
+}
+```
+
+A field is a type, with an optional name. You read and write fields with
+`.`:
+
+```nu
+: Pair {
+    s key
+    i value
+}
+
+@ mk_pair s k i x → Pair {
+    ^ @ Pair { k x }
+}
+
+: Pair p ( mk_pair `answer` 42 )
+( puts . p key )
+```
+
+`@ Name { v0 v1 ... }` constructs a struct value field by field, in
+declaration order. Omitted trailing fields zero-initialize.
+
+You pass struct parameters **by value** by default. The callee gets a
+copy. Writes to it do not reach the caller. To mutate the caller's
+struct, the parameter needs the `inout` convention. See
+[Memory and ownership](./memory-and-ownership).
+
+## Enums
+
+```nu
+: | Name {
+    Variant type*
+    ...
+}
+```
+
+Each variant is a name followed by zero or more payload types.
+
+```nu
+: | Ast {
+    Num i
+    Neg * Ast
+    Bin i * Ast * Ast
+}
+```
+
+Build a value by prefixing the payload with the variant name inside
+`@ Name { ... }`, and read it back with `??` match:
+
+```nu
+: Ast n @ Ast { Num 3 }
+
+?? n {
+    Num v        → ( nurl_print_int v )
+    Neg inner    → ( puts `negated\n` )
+    Bin op l r   → ( puts `binary\n` )
+}
+```
+
+`?T` (Option) and `!T E` (Result) are enums. The language builds them the
+same way. See [Error handling](./error-handling).
+
+## Generics
+
+A type parameter list `[T]` after a function or struct name parameterizes
+it. Each distinct set of type arguments used in the program produces one
+compiled, monomorphic copy:
+
+```nu
+@ id [T] T x → T { ^ x }
+
+( id [i] 42 )      // instantiates id for i
+( id [s] `hi` )    // instantiates id for s, a separate copy
+```
+
+A type parameter can require an implementation of a trait with `: Trait`:
+
+```nu
+@ my_max [A: Ord] A x A y → A {
+    ? > ( ord_cmp x y ) 0 x y
+}
+```
+
+## Traits
+
+A trait names a set of methods; an impl supplies them for one type. Both
+use `%`:
+
+```nu
+% Show {
+    @ show i n → s
+}
+
+% Show i {
+    @ show i n → s { ^ ( nurl_str_int n ) }
+}
+
+% Show b {
+    @ show b x → s { ^ ? x `T` `F` }
+}
+```
+
+Calling `( show 42 )` dispatches on the type of the first argument. The
+compiler resolves this dispatch **at compile time**. Each `(method, type)`
+pair becomes its own function (`show__i64`, `show__i1`). There is no vtable
+and no runtime type tag for a value used this way.
+
+A trait method with a body is a **default**; an impl that does not
+override it inherits that body, specialized to the implementing type.
+
+You can use at most one impl block per `(method, type)` pair.
+Implementing the same method for the same type twice causes a compile error.
+
+### Supertraits
+
+```nu
+% Ord [T] : Eq { @ cmp T a T b → i }
+```
+
+Any type that implements `Ord` must also implement `Eq`. The compiler checks
+this across the whole program. It does this after it collects every file's
+declarations. Import order does not matter.
+
+### Dynamic dispatch: trait objects
+
+Static dispatch needs the concrete type at the call
+site. When a caller needs to hold values of *different* concrete types
+behind one interface — a heterogeneous collection, for example — you can
+use a trait as a **dynamic object type**, written `%Trait`:
+
+```nu
+% Speaker [T] { @ speak T self i vol → i }
+% Speaker Dog   { @ speak Dog d   i vol → i { … } }
+% Speaker Robot { @ speak Robot r i vol → i { … } }
+
+@ announce %Speaker s i vol → i { ^ ( speak s vol ) }
+
+: %Speaker sd ( dyn Speaker d )   // box a Dog as a Speaker object
+( announce sd 5 )                 // reaches Dog's speak, no static type needed
+```
+
+`( dyn Trait value )` heap-boxes `value` together with a vtable for that
+impl. You can use a trait this way only if you can dispatch every method from
+an opaque receiver. The compiler rejects a trait with an associated type, or
+a method that consumes `self` by value. It names the reason in the error.
+
+<Accordions>
+  <Accordion title="Associated types">
+    A trait may declare a per-impl type member with `type Elem`, bound by
+    each impl:
+
+    ```nu
+    % Boxed [T] {
+        type Elem
+        @ unwrap T self → Elem
+    }
+    % Boxed IntBox { type Elem i  @ unwrap IntBox self → i { … } } // Elem = i
+    ```
+
+    You can only use the associated type inside the trait's own method
+    bodies and signatures. You cannot name it as `A::Elem` at a generic
+    call site. You also cannot use a trait with an associated type as a
+    `%Trait` dynamic object.
+  </Accordion>
+</Accordions>
+
+## Next
+
+- [Error handling](./error-handling) — `?T` and `!T E` are enums, matched the same way.
+- [Memory and ownership](./memory-and-ownership) — how struct fields and enum payloads are owned.
+- The full grammar for generics, traits, and dynamic dispatch is in
+  [`docs/spec.md` §4](https://github.com/nurl-lang/nurl/blob/main/docs/spec.md).
