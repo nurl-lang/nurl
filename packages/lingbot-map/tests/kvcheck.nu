@@ -32,7 +32,7 @@ $ `src/aggregator.nu`
     ( row `kv_frames` KV_FRAMES )
     : ~ i f 0
     ~ < f KV_FRAMES {
-        : i ns ( ag_kv_evicted f )
+        : i ns ( ag_kv_evicted f AG_KV_SCALE AG_KV_WINDOW )
         : i full ? == ns 0 + f 1 - + f 1 ns
         ( nurl_print ` ` ) ( nurl_print ( nurl_str_int full ) )
         = f + f 1
@@ -42,7 +42,7 @@ $ `src/aggregator.nu`
     ( row `kv_specials` KV_FRAMES )
     = f 0
     ~ < f KV_FRAMES {
-        ( nurl_print ` ` ) ( nurl_print ( nurl_str_int ( ag_kv_evicted f ) ) )
+        ( nurl_print ` ` ) ( nurl_print ( nurl_str_int ( ag_kv_evicted f AG_KV_SCALE AG_KV_WINDOW ) ) )
         = f + f 1
     }
     ( nurl_print `\n` )
@@ -50,34 +50,34 @@ $ `src/aggregator.nu`
     ( row `kv_live` KV_FRAMES )
     = f 0
     ~ < f KV_FRAMES {
-        ( nurl_print ` ` ) ( nurl_print ( nurl_str_int ( ag_kv_nvalid f KV_P ) ) )
+        ( nurl_print ` ` ) ( nurl_print ( nurl_str_int ( ag_kv_nvalid f KV_P AG_KV_SCALE AG_KV_WINDOW ) ) )
         = f + f 1
     }
     ( nurl_print `\n` )
 
     ( row `kv_rows` 1 )
     ( nurl_print ` ` )
-    ( nurl_print ( nurl_str_int ( ag_kv_rows KV_FRAMES KV_P ) ) )
+    ( nurl_print ( nurl_str_int ( ag_kv_rows KV_FRAMES KV_P AG_KV_SCALE AG_KV_WINDOW ) ) )
     ( nurl_print `\n` )
 
     // Every frame must land inside the cache it was allocated for, and
     // the six rows it displaces must land somewhere else entirely.
-    : i cap ( ag_kv_rows KV_FRAMES KV_P )
+    : i cap ( ag_kv_rows KV_FRAMES KV_P AG_KV_SCALE AG_KV_WINDOW )
     : ~ i badw 0
     : ~ i bade 0
     = f 0
     ~ < f KV_FRAMES {
-        : i wo ( ag_kv_woff f KV_P )
-        ? > + wo KV_P ( ag_kv_nvalid f KV_P ) { = badw + badw 1 } {}
+        : i wo ( ag_kv_woff f KV_P AG_KV_SCALE AG_KV_WINDOW )
+        ? > + wo KV_P ( ag_kv_nvalid f KV_P AG_KV_SCALE AG_KV_WINDOW ) { = badw + badw 1 } {}
         ? > + wo KV_P cap { = badw + badw 1 } {}
-        : i ns ( ag_kv_evicted f )
+        : i ns ( ag_kv_evicted f AG_KV_SCALE AG_KV_WINDOW )
         ? > ns 0 {
-            : i dst + + * AG_KV_SCALE KV_P * ( ag_kv_ring ) KV_P * - ns 1 AG_SPECIAL
+            : i dst + + * AG_KV_SCALE KV_P * ( ag_kv_ring AG_KV_WINDOW ) KV_P * - ns 1 AG_SPECIAL
             // the preserved rows go past every full-frame slot, and stay
             // inside what the cache was allocated for
-            ? < dst + * AG_KV_SCALE KV_P * ( ag_kv_ring ) KV_P { = bade + bade 1 } {}
+            ? < dst + * AG_KV_SCALE KV_P * ( ag_kv_ring AG_KV_WINDOW ) KV_P { = bade + bade 1 } {}
             ? > + dst AG_SPECIAL cap { = bade + bade 1 } {}
-            ? > + dst AG_SPECIAL ( ag_kv_nvalid f KV_P ) { = bade + bade 1 } {}
+            ? > + dst AG_SPECIAL ( ag_kv_nvalid f KV_P AG_KV_SCALE AG_KV_WINDOW ) { = bade + bade 1 } {}
         } {}
         = f + f 1
     }

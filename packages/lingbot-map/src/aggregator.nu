@@ -28,7 +28,8 @@
 //   ( ag_free a )            → v
 //   ( ag_ntokens gh gw )     → i
 //   ( ag_kv_alloc kit a maxtok )  once, before the first frame
-//   ( ag_forward_one kit a ws dtok tok img h w gh gw fidx nscale stopat taps out ) → b
+//   ( ag_forward_one kit a ws dtok tok img h w gh gw fidx nscale
+//     kvscale kvwindow stopat taps out ) → b
 //     out: [4, P, 2048] f32 device — the four tapped layers
 
 $ `stdlib/core/string.nu`
@@ -152,15 +153,19 @@ $ `src/rope.nu`
 : i AG_KV_SCALE 8
 : i AG_KV_WINDOW 64
 
-@ ag_kv_ring → i { ^ + AG_KV_WINDOW 1 }
+// The window sizes are parameters, not constants, so a test can drive
+// eviction at a size that fits in a few frames. The reference takes them
+// as constructor arguments for the same reason.
+@ ag_kv_ring i kvwindow → i { ^ + kvwindow 1 }
 
 // Rows a cache needs for a sequence of `nframes` frames of `p` tokens.
 // Short sequences never evict and just need every row; long ones need
 // the two full-frame regions plus six rows per evicted frame.
-@ ag_kv_rows i nframes i p → i {
-    : i span + AG_KV_SCALE ( ag_kv_ring )
+@ ag_kv_rows i nframes i p i kvscale i kvwindow → i {
+    : i r ( ag_kv_ring kvwindow )
+    : i span + kvscale r
     ? <= nframes span { ^ * nframes p } {}
-    ^ + + * AG_KV_SCALE p * ( ag_kv_ring ) p * - nframes span AG_SPECIAL
+    ^ + + * kvscale p * r p * - nframes span AG_SPECIAL
 }
 
 // Where frame `fidx` writes its rows, and how many rows are live once it
@@ -168,29 +173,29 @@ $ `src/rope.nu`
 // end, everything so far is live. After it wraps the frame overwrites
 // the oldest ring slot, and the live region is the two full-frame
 // regions plus the preserved specials that trail them.
-@ ag_kv_woff i fidx i p → i {
-    ? < fidx AG_KV_SCALE { ^ * fidx p } {}
-    ^ + * AG_KV_SCALE p * % - fidx AG_KV_SCALE ( ag_kv_ring ) p
+@ ag_kv_woff i fidx i p i kvscale i kvwindow → i {
+    ? < fidx kvscale { ^ * fidx p } {}
+    ^ + * kvscale p * % - fidx kvscale ( ag_kv_ring kvwindow ) p
 }
 
 // How many frames have been evicted once frame `fidx` is in place.
-@ ag_kv_evicted i fidx → i {
-    : i span + AG_KV_SCALE ( ag_kv_ring )
+@ ag_kv_evicted i fidx i kvscale i kvwindow → i {
+    : i span + kvscale ( ag_kv_ring kvwindow )
     ? < fidx span { ^ 0 } {}
     ^ + - fidx span 1
 }
 
-@ ag_kv_nvalid i fidx i p → i {
-    : i ns ( ag_kv_evicted fidx )
+@ ag_kv_nvalid i fidx i p i kvscale i kvwindow → i {
+    : i ns ( ag_kv_evicted fidx kvscale kvwindow )
     ? == ns 0 { ^ * + fidx 1 p } {}
-    ^ + + * AG_KV_SCALE p * ( ag_kv_ring ) p * ns AG_SPECIAL
+    ^ + + * kvscale p * ( ag_kv_ring kvwindow ) p * ns AG_SPECIAL
 }
 
 // Allocate the 24 global-block caches for a sequence of `nframes`
 // frames of `p` tokens. Call once, before the first frame.
-@ ag_kv_alloc * GpuKit kit Agg a i nframes i p → v {
+@ ag_kv_alloc * GpuKit kit Agg a i nframes i p i kvscale i kvwindow → v {
     : i hd / AG_DIM AG_HEADS
-    : i rows ( ag_kv_rows nframes p )
+    : i rows ( ag_kv_rows nframes p kvscale kvwindow )
     : ~ i i0 0
     ~ < i0 AG_DEPTH {
         ( vec_push [LmKv] . a kv ( lm_kv_new kit AG_HEADS rows hd ) )
@@ -203,12 +208,12 @@ $ `src/rope.nu`
 // Runs over all 24 caches before any of them is written, because the
 // frame passes through them one after another and the rows have to be
 // out of the way before the first write, not the last.
-@ ag_kv_evict * GpuKit kit Agg a i fidx i p → b {
-    : i ns ( ag_kv_evicted fidx )
+@ ag_kv_evict * GpuKit kit Agg a i fidx i p i kvscale i kvwindow → b {
+    : i ns ( ag_kv_evicted fidx kvscale kvwindow )
     ? == ns 0 { ^ T } {}
     : i hd / AG_DIM AG_HEADS
-    : i src ( ag_kv_woff fidx p )
-    : i dst + + * AG_KV_SCALE p * ( ag_kv_ring ) p * - ns 1 AG_SPECIAL
+    : i src ( ag_kv_woff fidx p kvscale kvwindow )
+    : i dst + + * kvscale p * ( ag_kv_ring kvwindow ) p * - ns 1 AG_SPECIAL
     : GkBuf sk ( gk_dbuf_new kit * AG_HEADS * AG_SPECIAL hd GK_F32 )
     : GkBuf sv ( gk_dbuf_new kit * AG_HEADS * AG_SPECIAL hd GK_F32 )
     : ~ b ok T
@@ -337,14 +342,15 @@ $ `src/rope.nu`
 // Where this frame's rows go in the caches, and how much of them is
 // live, follows from `fidx` alone — see ag_kv_woff / ag_kv_nvalid.
 @ ag_forward_one * GpuKit kit Agg a LmWs ws GkBuf dtok GkBuf tok
-* f img i h i w i gh i gw i fidx i nscale i stopat * i taps GkBuf out → b {
+* f img i h i w i gh i gw i fidx i nscale i kvscale i kvwindow
+i stopat * i taps GkBuf out → b {
     : i np * gh gw
     : i p ( ag_ntokens gh gw )
     : i hd / AG_DIM AG_HEADS
 
     // Before anything is written: make room in the caches by preserving
     // the special tokens of the frame this one displaces.
-    ? ( ag_kv_evict kit a fidx p ) {} { ^ F }
+    ? ( ag_kv_evict kit a fidx p kvscale kvwindow ) {} { ^ F }
 
     // DINOv2 trunk → patch tokens
     ? ( dn_forward kit . a dino ws img h w gh gw dtok ) {} { ^ F }
@@ -408,7 +414,8 @@ $ `src/rope.nu`
                 T blk → {
                     : LmKv kvb ?? ( vec_get [LmKv] . a kv i0 ) {
                         T c → @ LmKv { . c k . c v . c maxkv
-                            ( ag_kv_woff fidx p ) ( ag_kv_nvalid fidx p ) }
+                            ( ag_kv_woff fidx p kvscale kvwindow )
+                            ( ag_kv_nvalid fidx p kvscale kvwindow ) }
                         F → ( lm_kv_none )
                     }
                     ? ( lm_block_forward kit blk ws rp3 kvb tok p AG_DIM AG_HEADS AG_HIDDEN ) {} { = ok F }

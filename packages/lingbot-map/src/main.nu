@@ -20,6 +20,7 @@ $ `stdlib/core/vec.nu`
 $ `stdlib/std/float.nu`
 $ `stdlib/std/fs.nu`
 $ `stdlib/std/bytes.nu`
+$ `stdlib/std/sort.nu`
 $ `deps/gpukit/src/gpukit.nu`
 $ `deps/gpukit/src/dev.nu`
 $ `deps/gpukit/src/devops.nu`
@@ -56,11 +57,60 @@ $ `src/preproc.nu`
     ( nurl_print `  --out <file.ply>   where to write the cloud (default cloud.ply)\n` )
     ( nurl_print `  --conf <f>         keep pixels with confidence above this (default 2.0)\n` )
     ( nurl_print `  --pixel-stride <n> take every nth pixel on both axes (default 2)\n` )
+    ( nurl_print `  --frames <dir>     every .png/.jpg in a directory, in name order\n` )
     ( nurl_print `  --max-frames <n>   stop after n frames\n` )
     ( nurl_print `  --quiet            no per-frame progress\n` )
 }
 
 @ __lm_streq s a s b → b { ^ == 0 ( nurl_str_cmp a b ) }
+
+// Every .png and .jpg in a directory, appended in NAME order. Order is
+// not a nicety here: the aggregator's KV cache makes frame N depend on
+// every frame before it, so a shuffled directory listing reconstructs a
+// different scene. fs_glob's order is the filesystem's, so it is sorted
+// explicitly.
+@ __lm_dir ( Vec String ) into s dir → b {
+    : ~ i found 0
+    : ~ i k 0
+    ~ < k 2 {
+        : String pat ( string_from dir )
+        ? > ( string_len pat ) 0 {
+            : i pl ( string_len pat )
+            ? != ( nurl_str_at ( string_data pat ) pl - pl 1 ) 47 {
+                ( string_push_char pat 47 )
+            } {}
+        } {}
+        ( string_push_str pat ? == k 0 `*.png` `*.jpg` )
+        ?? ( fs_glob ( string_data pat ) ) {
+            T hits → {
+                = found + found ( vec_len [String] hits )
+                // A MOVE of the handles: vec_extend documents itself as
+                // safe only for trivial element types, so the Strings are
+                // pushed across and only the source container is dropped.
+                : ~ i g 0
+                ~ < g ( vec_len [String] hits ) {
+                    ?? ( vec_get [String] hits g ) {
+                        T h → { ( vec_push [String] into h ) }
+                        F → {}
+                    }
+                    = g + g 1
+                }
+                ( vec_free [String] hits )
+            }
+            F _e → {}
+        }
+        ( string_free pat )
+        = k + k 1
+    }
+    ? == found 0 {
+        ( nurl_print `lingbot-map: no .png or .jpg in ` )
+        ( nurl_print dir ) ( nurl_print `\n` )
+        ^ F
+    } {}
+    ( sort_by [String] into \ String x String y → i {
+        ^ ( nurl_str_cmp ( string_data x ) ( string_data y ) ) } )
+    ^ T
+}
 
 @ __lm_parse → Opts {
     : ( Vec String ) fr ( vec_new [String] )
@@ -77,7 +127,7 @@ $ `src/preproc.nu`
         : s a ( nurl_argv i0 )
         : b wants | | ( __lm_streq a `--model` ) ( __lm_streq a `--out` )
         | ( __lm_streq a `--conf` ) | ( __lm_streq a `--pixel-stride` )
-        ( __lm_streq a `--max-frames` )
+        | ( __lm_streq a `--max-frames` ) ( __lm_streq a `--frames` )
         ? & wants >= + i0 1 argc {
             ( nurl_print a ) ( nurl_print ` needs a value\n` )
             = bad 1
@@ -94,9 +144,14 @@ $ `src/preproc.nu`
                             ? ( __lm_streq a `--max-frames` ) {
                                 = maxf ( nurl_str_to_int ( nurl_argv + i0 1 ) ) = i0 + i0 1
                             } {
-                                ? ( __lm_streq a `--quiet` ) { = verbose 0 } {
-                                    ? ( __lm_streq a `--help` ) { = bad 2 } {
-                                        ( vec_push [String] fr ( string_from a ) )
+                                ? ( __lm_streq a `--frames` ) {
+                                    ? ( __lm_dir fr ( nurl_argv + i0 1 ) ) {} { = bad 1 }
+                                    = i0 + i0 1
+                                } {
+                                    ? ( __lm_streq a `--quiet` ) { = verbose 0 } {
+                                        ? ( __lm_streq a `--help` ) { = bad 2 } {
+                                            ( vec_push [String] fr ( string_from a ) )
+                                        }
                                     }
                                 }
                             }
@@ -260,6 +315,10 @@ i h i w f cmin i stride → Ply {
     } {}
     ? & > . o maxframes 0 < . o maxframes nframes { = nframes . o maxframes } {}
 
+    // Set by any frame that fails, and returned. A reconstruction that
+    // half-ran and exited 0 is worse than one that failed loudly: the
+    // caller writes the cloud into a pipeline and never learns.
+    : ~ i rc 0
     : *GpuKit kit ( gk_open 0 )
     ? ( gk_ok kit ) {} { ( nurl_print `lingbot-map: no gpukit backend\n` ) ^ 1 }
 
@@ -313,7 +372,7 @@ i h i w f cmin i stride → Ply {
                                         = gw / w LM_PATCH
                                         = p ( ag_ntokens gh gw )
                                         = dn ( dn_tokens gh gw )
-                                        ( ag_kv_alloc kit a nframes p )
+                                        ( ag_kv_alloc kit a nframes p AG_KV_SCALE AG_KV_WINDOW )
                                     } {}
                                     // the RGB has to be kept before the
                                     // normalisation eats it in place
@@ -326,12 +385,19 @@ i h i w f cmin i stride → Ply {
                                     ( __lm_norm src h w )
 
                                     : i big ? > p dn p dn
-                                    : LmWs ws ( lm_ws_new kit big 1024 16 4096 * nframes p 64 )
+                                    // sized for what the cache can actually
+                                    // hold, not for nframes x p: eviction caps
+                                    // it, and at 300 frames the difference is
+                                    // 4x on kpack/vpack/kt and on the attention
+                                    // matrix, which is the term that would not
+                                    // fit at all
+                                    : LmWs ws ( lm_ws_new kit big 1024 16 4096
+                                    ( ag_kv_rows nframes p AG_KV_SCALE AG_KV_WINDOW ) 64 )
                                     : GkBuf dtok ( gk_dbuf_new kit * dn 1024 GK_F32 )
                                     : GkBuf tok ( gk_dbuf_new kit * p 1024 GK_F32 )
                                     : GkBuf out ( gk_dbuf_new kit * 4 * p 2048 GK_F32 )
                                     ? ( ag_forward_one kit a ws dtok tok src
-                                    h w gh gw fi 1 -1 taps out ) {} {
+                                    h w gh gw fi 1 AG_KV_SCALE AG_KV_WINDOW -1 taps out ) {} {
                                         ( nurl_print `lingbot-map: aggregator failed\n` )
                                         = failed 1
                                     }
@@ -415,7 +481,7 @@ i h i w f cmin i stride → Ply {
                     } {}
                     ( nurl_free # s taps )
                     ( ch_ws_free cws )
-                    ? != failed 0 { = failed 1 } {}
+                    ? != failed 0 { = rc 1 } {}
                 }
             }
             ( dp_free dp )
@@ -426,5 +492,5 @@ i h i w f cmin i stride → Ply {
     }
     ( gk_close kit )
     ( __lm_free_opts o )
-    ^ 0
+    ^ rc
 }

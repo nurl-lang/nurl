@@ -11129,8 +11129,17 @@
                             ( nurl_print `* ` ) ( nurl_print gep ) ( nurl_print `\n` )
                             ^ rhs
                         }
-                        {  // Neither integer variable nor field: check for non-integer variable index (error likely but follow general path)
-                            ? != 0 ( nurl_str_len var_t )
+                        {  // Neither integer variable nor field. Two cases
+                            // reach here and both are a general index
+                            // expression: a non-integer variable, and a token
+                            // that is not an identifier at all — `= . p + k 0 v`,
+                            // where the read path already accepts the same
+                            // expression. Without the second case the store
+                            // died with "unknown field or variable: +", naming
+                            // the operator as if it were a field, which is what
+                            // stdlib/core/vec.nu's vec_extend hits the moment
+                            // its element type is an aggregate.
+                            ? | != 0 ( nurl_str_len var_t ) ! is_field_ident
                             { : s idx_val ( gen_expr lex syms cg )
                                 : s idx_type ( nurl_get_last_type )
                                 : s rhs ( gen_expr lex syms cg )

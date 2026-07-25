@@ -123,7 +123,7 @@ $ `src/preproc.nu`
                     : GkBuf out ( gk_dbuf_new kit * 4 * p 2048 GK_F32 )
                     : *i taps # *i ( nurl_zalloc 32 )
                     ( ag_default_taps taps )
-                    ? ( ag_forward_one kit a ws dtok tok ( pp_data f ) h w gh gw 0 1 -1 taps out ) {}
+                    ? ( ag_forward_one kit a ws dtok tok ( pp_data f ) h w gh gw 0 1 AG_KV_SCALE AG_KV_WINDOW -1 taps out ) {}
                     { ( nurl_print `aggregator FAILED\n` ) ^ 1 }
                     : GkBuf depth ( gk_dbuf_new kit * h w GK_F32 )
                     : GkBuf conf ( gk_dbuf_new kit * h w GK_F32 )

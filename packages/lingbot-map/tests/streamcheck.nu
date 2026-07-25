@@ -15,6 +15,7 @@ $ `src/weights.nu`
 $ `src/devblock.nu`
 $ `src/load.nu`
 $ `src/dino.nu`
+$ `stdlib/ext/env.nu`
 $ `src/aggregator.nu`
 $ `src/preproc.nu`
 
@@ -42,6 +43,14 @@ $ `src/preproc.nu`
     : i argc ( nurl_argc )
     ? < argc 3 { ( nurl_print `usage: streamcheck <ckpt.pt> <frame>...\n` ) ^ 2 } {}
     : i nframes - argc 2
+    // The eviction window is overridable so eviction can be driven in a
+    // handful of frames instead of the 73 the shipped 8 + 64 needs. The
+    // oracle takes the same two variables.
+    : String kss ( env_var_or `LINGBOT_KV_SCALE` `8` )
+    : String kws ( env_var_or `LINGBOT_KV_WINDOW` `64` )
+    : i kvs ( nurl_str_to_int ( string_data kss ) )
+    : i kvw ( nurl_str_to_int ( string_data kws ) )
+    ( string_free kss ) ( string_free kws )
     : *GpuKit kit ( gk_open 0 )
     ? ( gk_ok kit ) {} { ( nurl_print `no gpukit backend\n` ) ^ 1 }
     : !*Lw String o ( lw_open ( nurl_argv 1 ) )
@@ -74,15 +83,16 @@ $ `src/preproc.nu`
                             = gw / w 14
                             = p ( ag_ntokens gh gw )
                             = dn ( dn_tokens gh gw )
-                            ( ag_kv_alloc kit a nframes p )
+                            ( ag_kv_alloc kit a nframes p kvs kvw )
                         } {}
                         : i big ? > p dn p dn
-                        : LmWs ws ( lm_ws_new kit big 1024 16 4096 * nframes p 64 )
+                        : LmWs ws ( lm_ws_new kit big 1024 16 4096
+                        ( ag_kv_rows nframes p kvs kvw ) 64 )
                         : GkBuf dtok ( gk_dbuf_new kit * dn 1024 GK_F32 )
                         : GkBuf tok ( gk_dbuf_new kit * p 1024 GK_F32 )
                         : GkBuf out ( gk_dbuf_new kit * 4 * p 2048 GK_F32 )
                         : b ok ( ag_forward_one kit a ws dtok tok ( pp_data f )
-                        h w gh gw fi 1 -1 taps out )
+                        h w gh gw fi 1 kvs kvw -1 taps out )
                         ? ok {} { ( nurl_print `frame FAILED\n` ) ^ 1 }
                         : ( Vec f ) hv ( vec_with_cap [f] * 4 * p 2048 )
                         : b _sl ( vec_set_len [f] hv * 4 * p 2048 )

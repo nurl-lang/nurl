@@ -43,9 +43,14 @@ def dump(label, t):
 
 def main():
     ckpt_path, frames = sys.argv[1], sys.argv[2:]
+    # The eviction window is overridable so a test can drive eviction in
+    # a handful of frames. At the shipped 8 + 64 it first bites at frame
+    # 73, and 73 frames through a 909M-parameter transformer is hours.
+    kvw = int(os.environ.get("LINGBOT_KV_WINDOW", "64"))
+    kvs = int(os.environ.get("LINGBOT_KV_SCALE", "8"))
     model = GCTStream(img_size=518, patch_size=14, enable_3d_rope=True,
-                      max_frame_num=1024, kv_cache_sliding_window=64,
-                      kv_cache_scale_frames=8, kv_cache_cross_frame_special=True,
+                      max_frame_num=1024, kv_cache_sliding_window=kvw,
+                      kv_cache_scale_frames=kvs, kv_cache_cross_frame_special=True,
                       kv_cache_include_scale_frames=True, use_sdpa=True,
                       camera_num_iterations=4)
     ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=False)
