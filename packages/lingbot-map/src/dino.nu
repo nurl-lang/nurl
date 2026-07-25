@@ -229,7 +229,7 @@ $ `src/patchembed.nu`
     ~ < bi DN_DEPTH {
         ?? ( vec_get [LmBlk] . d blocks bi ) {
             T blk → {
-                ? ( lm_block_forward kit blk ws ( lm_rope_none ) tok n DN_DIM DN_HEADS DN_HIDDEN ) {}
+                ? ( lm_block_forward kit blk ws ( lm_rope_none ) ( lm_kv_none ) tok n DN_DIM DN_HEADS DN_HIDDEN ) {}
                 { ^ F }
             }
             F → { ^ F }

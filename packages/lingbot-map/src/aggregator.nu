@@ -27,7 +27,8 @@
 //   ( ag_load w kit )        → Agg
 //   ( ag_free a )            → v
 //   ( ag_ntokens gh gw )     → i
-//   ( ag_forward_one kit a ws dtok tok img h w gh gw fidx nscale stopat taps out ) → b
+//   ( ag_kv_alloc kit a maxtok )  once, before the first frame
+//   ( ag_forward_one kit a ws dtok tok img h w gh gw fidx nscale kvused stopat taps out ) → b
 //     out: [4, P, 2048] f32 device — the four tapped layers
 
 $ `stdlib/core/string.nu`
@@ -62,6 +63,10 @@ $ `src/rope.nu`
     ( Vec f ) scltok  // [2, 1024]
     GkBuf cos3
     GkBuf sin3
+    // One KV cache per GLOBAL block. The `used` field in each is ignored
+    // — all 24 advance together, so the count is the frame's, passed in
+    // per call rather than stored 24 times and kept in step by hand.
+    ( Vec LmKv ) kv
 }
 
 @ ag_ntokens i gh i gw → i { ^ + AG_SPECIAL * gh gw }
@@ -90,6 +95,7 @@ $ `src/rope.nu`
     ( vec_free [f] . a scltok )
     ( gk_dbuf_free . a cos3 )
     ( gk_dbuf_free . a sin3 )
+    ( vec_free_with [LmKv] . a kv \ LmKv c → v { ( lm_kv_free c ) } )
 }
 
 @ ag_load * Lw w * GpuKit kit → Agg {
@@ -131,7 +137,24 @@ $ `src/rope.nu`
         ( _dn_host w `aggregator.camera_token` )
         ( _dn_host w `aggregator.register_token` )
         ( _dn_host w `aggregator.scale_token` )
-        c3 s3 }
+        c3 s3 ( vec_new [LmKv] ) }
+}
+
+// Allocate the 24 global-block caches, sized for `maxtok` tokens each
+// (frames x tokens-per-frame). Call once, before the first frame.
+//
+// No eviction yet: the reference evicts down to
+// kv_cache_scale_frames + kv_cache_sliding_window = 72 frames, so a
+// cache sized for the whole sequence is EXACTLY right up to that length
+// and simply too big beyond it. Sequences past 72 frames need the
+// sliding window before they are correct, not just before they fit.
+@ ag_kv_alloc * GpuKit kit Agg a i maxtok → v {
+    : i hd / AG_DIM AG_HEADS
+    : ~ i i0 0
+    ~ < i0 AG_DEPTH {
+        ( vec_push [LmKv] . a kv ( lm_kv_new kit AG_HEADS maxtok hd ) )
+        = i0 + i0 1
+    }
 }
 
 // The six special-token rows for frame `fidx`, as a host vector.
@@ -238,15 +261,16 @@ $ `src/rope.nu`
 // in columns 0..1023 and the global block's in 1024..2047 — the order
 // the reference concatenates them in.
 //
-// SINGLE FRAME ONLY so far: with no cache the global blocks attend to
-// their own frame's tokens, which is exactly what the reference does on
-// the first frame. Frames 2+ need the KV cache and its eviction.
+// `kvused` is how many token rows the global caches already hold — 0 for
+// the first frame, fidx*P afterwards. With no caches allocated at all
+// the global blocks fall back to attending to their own frame, which is
+// what the reference does on frame 0 anyway.
 // `stopat` bounds how many block groups run: negative for all of them,
 // 0 for none (just the token assembly), k to stop after k. It exists
 // because a 72-block pipeline that produces NaN tells you nothing about
 // WHERE, and adding the bound afterwards means rebuilding to find out.
 @ ag_forward_one * GpuKit kit Agg a LmWs ws GkBuf dtok GkBuf tok
-* f img i h i w i gh i gw i fidx i nscale i stopat * i taps GkBuf out → b {
+* f img i h i w i gh i gw i fidx i nscale i kvused i stopat * i taps GkBuf out → b {
     : i np * gh gw
     : i p ( ag_ntokens gh gw )
     : i hd / AG_DIM AG_HEADS
@@ -300,7 +324,7 @@ $ `src/rope.nu`
     ~ & ok < i0 ? >= stopat 0 stopat AG_DEPTH {
         ?? ( vec_get [LmBlk] . a fb i0 ) {
             T blk → {
-                ? ( lm_block_forward kit blk ws rp2 tok p AG_DIM AG_HEADS AG_HIDDEN ) {} { = ok F }
+                ? ( lm_block_forward kit blk ws rp2 ( lm_kv_none ) tok p AG_DIM AG_HEADS AG_HIDDEN ) {} { = ok F }
             }
             F → { = ok F }
         }
@@ -311,7 +335,11 @@ $ `src/rope.nu`
         ? ok {
             ?? ( vec_get [LmBlk] . a gb i0 ) {
                 T blk → {
-                    ? ( lm_block_forward kit blk ws rp3 tok p AG_DIM AG_HEADS AG_HIDDEN ) {} { = ok F }
+                    : LmKv kvb ?? ( vec_get [LmKv] . a kv i0 ) {
+                        T c → @ LmKv { . c k . c v . c maxkv kvused }
+                        F → ( lm_kv_none )
+                    }
+                    ? ( lm_block_forward kit blk ws rp3 kvb tok p AG_DIM AG_HEADS AG_HIDDEN ) {} { = ok F }
                 }
                 F → { = ok F }
             }

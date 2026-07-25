@@ -129,7 +129,7 @@ $ `src/devblock.nu`
     : LmRope rp ? rope
     @ LmRope { LM_ROPE_2D . ws rows . ws cols @ GkBuf { 0 0 GK_F32 } . ws cosb . ws sinb }
     ( lm_rope_none )
-    : b ok ( lm_block_forward kit w ws rp dx n dim heads hidden )
+    : b ok ( lm_block_forward kit w ws rp ( lm_kv_none ) dx n dim heads hidden )
 
     : ( Vec f ) out ( vec_with_cap [f] * n dim )
     : ~ i j 0

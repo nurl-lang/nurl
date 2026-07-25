@@ -36,7 +36,7 @@ and is what the port has to reproduce exactly, not approximately.
 | 1 | read the `.pt` checkpoint | **done** — [`torchpt`](../torchpt); the real 4.6 GB file in 0.01 s / 31 MB RSS, values identical to `torch.load` |
 | 2 | image loading and preprocessing | **done** — byte-identical to the reference pipeline on real frames |
 | 3 | ViT layers: patch embed, 2-D RoPE, qk-norm attention, block | **done** — the full block matches the reference to 4e-15 |
-| 4 | streaming aggregator + KV cache | **single frame end-to-end on real weights** — all 72 blocks, 5.4e-6 vs the real model. Multi-frame KV cache pending |
+| 4 | streaming aggregator + KV cache | single frame **verified** end-to-end (5.4e-6 vs the real model); multi-frame KV cache **written but NOT yet verified** |
 | 5 | camera head, DPT heads | pending |
 | 6 | camera geometry | **done** — matches torch to 2.4e-16 |
 | 7 | CLI, point-cloud export, end-to-end check | pending |
@@ -90,9 +90,26 @@ four outputs.
 That is 909M parameters and 72 transformer blocks agreeing to float32's
 noise floor.
 
-Single frame so far. With no cache the global blocks attend to their own
-frame's tokens, which is exactly what the reference does on frame 0;
-frames 2+ need the KV cache and its sliding-window eviction.
+**The single-frame path is the verified one.** With no cache the global
+blocks attend to their own frame's tokens, which is exactly what the
+reference does on frame 0.
+
+A multi-frame KV cache is implemented (`LmKv`, `ag_kv_alloc`, the
+`kvused` argument) and `tests/streamcheck.nu` compares it against a
+two-frame reference from `agg_oracle.py` under `LINGBOT_STREAM=1` — but
+**that comparison has not been run to completion yet**, so nothing here
+claims the cache is right. It is also missing eviction: the reference
+evicts down to `scale_frames + sliding_window` = 72 frames, so a cache
+sized for the whole sequence is exactly right up to that length and
+merely too large beyond it. Past 72 frames the sliding window is needed
+for correctness, not just for memory.
+
+Worth knowing before running it: frame 2 is *much* slower than frame 1.
+Its global attention is over 1566 keys instead of 783, and the cache is
+repacked per block, so on the CPU backend a second frame takes many
+minutes rather than the ~100 s the first one does. That is a real cost
+to design around — batching the repack, or keeping the cache tight — and
+not something the single-frame timing predicts.
 
 **Three different LayerNorm epsilons in one model**, and getting one
 wrong is worth ~1e-3:

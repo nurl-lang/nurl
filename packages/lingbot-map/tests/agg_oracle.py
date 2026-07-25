@@ -71,6 +71,15 @@ def main():
     dump("dino_patchtokens", pt)
 
     taps = [int(x) for x in os.environ.get("LINGBOT_TAPS", "4,11,17,23").split(",")]
+    if os.environ.get("LINGBOT_STREAM"):
+        # Streaming: one frame per call, the KV cache carrying context
+        # forward. This is what the model is FOR, and the second frame's
+        # outputs are the first thing a cache bug shows up in.
+        for fi in range(images.shape[0]):
+            outs, psi = agg(imgs[:, fi:fi + 1], selected_idx=taps)
+            for i, o in enumerate(outs):
+                dump("stream%d_out_%d" % (fi, i), o)
+        return
     outs, psi = agg(imgs, selected_idx=taps)
     print("patch_start_idx %d outputs %d" % (psi, len(outs)))
     for i, o in enumerate(outs):

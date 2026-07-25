@@ -102,6 +102,8 @@ $ `deps/gpukit/src/devops.nu`
     GkBuf qkv
     GkBuf qkvp
     GkBuf kt
+    GkBuf kpack
+    GkBuf vpack
     GkBuf att
     GkBuf ctx
     GkBuf ctxp
@@ -122,6 +124,8 @@ $ `deps/gpukit/src/devops.nu`
         ( gk_dbuf_new kit * n * 3 dim GK_F32 )
         ( gk_dbuf_new kit * n * 3 dim GK_F32 )
         ( gk_dbuf_new kit * heads * hd maxkv GK_F32 )
+        ( gk_dbuf_new kit * heads * maxkv hd GK_F32 )
+        ( gk_dbuf_new kit * heads * maxkv hd GK_F32 )
         ( gk_dbuf_new kit * heads * n maxkv GK_F32 )
         ( gk_dbuf_new kit * n dim GK_F32 )
         ( gk_dbuf_new kit * n dim GK_F32 )
@@ -138,6 +142,7 @@ $ `deps/gpukit/src/devops.nu`
 @ lm_ws_free LmWs ws → v {
     ( gk_dbuf_free . ws norm ) ( gk_dbuf_free . ws qkv )
     ( gk_dbuf_free . ws qkvp ) ( gk_dbuf_free . ws kt )
+    ( gk_dbuf_free . ws kpack ) ( gk_dbuf_free . ws vpack )
     ( gk_dbuf_free . ws att ) ( gk_dbuf_free . ws ctx )
     ( gk_dbuf_free . ws ctxp ) ( gk_dbuf_free . ws branch )
     ( gk_dbuf_free . ws hid ) ( gk_dbuf_free . ws scal )
@@ -278,9 +283,34 @@ i heads i n i dim i nt i nh → b {
 
 // ── the block ───────────────────────────────────────────────────────
 
-// Self-attention block over `n` tokens. `x` is [n, dim] and is updated
-// in place.
-@ lm_block_forward * GpuKit kit LmBlk w LmWs ws LmRope rp GkBuf x
+// A KV cache for one global block: k and v as [heads, maxkv, hd], with
+// `used` rows already valid. A cache whose buffers are absent means
+// plain self-attention — the frame blocks, and the very first frame.
+: LmKv {
+    GkBuf k
+    GkBuf v
+    i maxkv
+    i used
+}
+
+@ lm_kv_none → LmKv { ^ @ LmKv { @ GkBuf { 0 0 GK_F32 } @ GkBuf { 0 0 GK_F32 } 0 0 } }
+
+@ lm_kv_new * GpuKit kit i heads i maxkv i hd → LmKv {
+    ^ @ LmKv { ( gk_dbuf_new kit * heads * maxkv hd GK_F32 )
+        ( gk_dbuf_new kit * heads * maxkv hd GK_F32 ) maxkv 0 }
+}
+
+@ lm_kv_free LmKv c → v { ( gk_dbuf_free . c k ) ( gk_dbuf_free . c v ) }
+
+// Transformer block over `n` tokens; `x` is [n, dim], updated in place.
+//
+// With a cache, this frame's keys and values are appended at row
+// `kv.used` and attention runs over everything stored so far — the
+// streaming global blocks. Without one it is plain self-attention.
+// APPENDING IS THE CALLER'S BOOKKEEPING: `used` is read here and not
+// written, because one frame passes through 24 different caches and the
+// count belongs to the frame, not to any one of them.
+@ lm_block_forward * GpuKit kit LmBlk w LmWs ws LmRope rp LmKv kv GkBuf x
 i n i dim i heads i hidden → b {
     : i hd / dim heads
     : i nd * n dim
@@ -318,15 +348,40 @@ i n i dim i heads i hidden → b {
     } {}
     ? ( lm_rope_apply kit rp q heads n hd ) {} { ^ F }
     ? ( lm_rope_apply kit rp k heads n hd ) {} { ^ F }
+    // With a cache: append this frame's rotated k/v, then attend over
+    // everything stored. gkd_copy_ax writes a [heads, n, hd] run into a
+    // [heads, maxkv, hd] cache at row offset `used` — one call, no
+    // per-head loop.
+    : b cached ( gk_buf_ok . kv k )
+    : i nkv ? cached + . kv used n n
+    ? cached {
+        ? ( gkd_copy_ax kit . kv k k heads n hd . kv maxkv . kv used ) {} { ^ F }
+        ? ( gkd_copy_ax kit . kv v v heads n hd . kv maxkv . kv used ) {} { ^ F }
+    } {}
+    // keys and values attention actually reads: the cache prefix, or
+    // just this frame's
+    : GkBuf kall ? cached ( lm_view . kv k 0 * heads * nkv hd ) k
+    : GkBuf vall ? cached ( lm_view . kv v 0 * heads * nkv hd ) v
+    // A cache row is [heads, maxkv, hd] but only `nkv` rows are live, so
+    // the view above is NOT contiguous per head unless nkv == maxkv.
+    // Repack into a tight [heads, nkv, hd] before the permute.
+    : GkBuf kpk ( lm_view . ws kpack 0 * heads * nkv hd )
+    : GkBuf vpk ( lm_view . ws vpack 0 * heads * nkv hd )
+    ? cached {
+        ? ( gkd_slice_ax kit kpk . kv k heads nkv hd . kv maxkv 0 ) {} { ^ F }
+        ? ( gkd_slice_ax kit vpk . kv v heads nkv hd . kv maxkv 0 ) {} { ^ F }
+    } {}
+    : GkBuf kuse ? cached kpk kall
+    : GkBuf vuse ? cached vpk vall
     // scores = q · kᵀ / sqrt(hd)
-    : GkBuf kt ( lm_view . ws kt 0 * heads * n hd )
-    : ( Vec i ) kd ( __lm_i3 heads n hd )
+    : GkBuf kt ( lm_view . ws kt 0 * heads * nkv hd )
+    : ( Vec i ) kd ( __lm_i3 heads nkv hd )
     : ( Vec i ) kp ( __lm_i3 0 2 1 )
-    : b okk ( gkd_perm kit kt k kd kp )
+    : b okk ( gkd_perm kit kt kuse kd kp )
     ( vec_free [i] kd ) ( vec_free [i] kp )
     ? okk {} { ^ F }
-    : GkBuf att ( lm_view . ws att 0 * heads * n n )
-    ? ( gkd_bmm kit att q kt heads n hd n 1 1 ) {} { ^ F }
+    : GkBuf att ( lm_view . ws att 0 * heads * n nkv )
+    ? ( gkd_bmm kit att q kt heads n hd nkv 1 1 ) {} { ^ F }
     // 1/sqrt(head_dim), applied to the SCORES rather than folded into q —
     // algebraically the same, but it is where torch's SDPA puts it, and
     // the host reference this is checked against does the same.
@@ -336,8 +391,8 @@ i n i dim i heads i hidden → b {
     ( vec_free [f] sv )
     ? oks {} { ^ F }
     ? ( gkd_ew kit `mul` `*` att att . ws scal ) {} { ^ F }
-    ? ( gkd_softmax_ax kit att att * heads n n 1 ) {} { ^ F }
-    ? ( gkd_bmm kit ctx att v heads n n hd 1 1 ) {} { ^ F }
+    ? ( gkd_softmax_ax kit att att * heads n nkv 1 ) {} { ^ F }
+    ? ( gkd_bmm kit ctx att vuse heads n nkv hd 1 1 ) {} { ^ F }
     // [heads, n, hd] → [n, heads·hd]
     : ( Vec i ) cd ( __lm_i3 heads n hd )
     : ( Vec i ) cp ( __lm_i3 1 0 2 )
