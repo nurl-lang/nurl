@@ -1,0 +1,158 @@
+---
+title: Control flow and pattern matching
+description: Conditionals, loops, and match, all in prefix form.
+icon: GitBranch
+---
+
+import { Accordion, Accordions } from 'fumadocs-ui/components/accordion';
+
+Like every NURL expression, control flow uses prefix form: the keyword
+comes first, then its operands.
+
+## Conditionals: `?`
+
+```nu
+? cond then else
+```
+
+Both `then` and `else` are full expressions. A block `{ ... }` is the usual
+form. Both branches must give the same type.
+
+```nu
+? > x 0 { ( puts `positive\n` ) } { ( puts `non-positive\n` ) }
+```
+
+Chained conditionals read top to bottom. Each `else` slot holds the next
+`?`:
+
+```nu
+? div3
+{ ( nurl_print `Fizz\n` ) }
+? div5
+{ ( nurl_print `Buzz\n` ) }
+{ ( nurl_print_int i ) }
+```
+
+<Callout type="warn" title="Count the operands">
+`?` takes exactly three operands. It is easy to get a chain of `& a b c d`
+inside a condition wrong. See [Binary operators](#binary-operators) below.
+</Callout>
+
+## Loops
+
+### While
+
+```nu
+~ cond { body }
+```
+
+```nu
+: ~ i i 1
+~ <= i 10 {
+    ( nurl_print_int i )
+    = i + i 1
+}
+```
+
+### Foreach
+
+```nu
+~ item collection { body }
+```
+
+`collection` must be a slice. The element binding is a borrow. It is not
+owned, the runtime does not drop it at the end of the iteration, and you
+cannot reassign it.
+
+```nu
+: [i nums [i | 1 2 3 4 5]
+~ n nums {
+    ( puts ( nurl_str_int n ) )
+}
+```
+
+The loop body may not mutate `collection` itself. The borrow checker rejects
+push, remove, clear, and similar calls on it. See
+[Memory and ownership](./memory-and-ownership).
+
+## Binary operators
+
+Arithmetic, comparison, shift, and logical operators are all strictly
+binary — they take exactly two operands. For a chain of more than two,
+write one operator per pair, n−1 operators for n values:
+
+```nu
+& a & b c        // a && b && c
+| | a b c d      // a || b || c || d
+```
+
+The compiler warns on the common mistake of writing an n-ary chain as flat
+arguments to `?`. The extra values silently become the `?`'s then/else
+operands. They do not become more operands to `&`.
+
+## Match: `??`
+
+```nu
+?? expr { arm* }
+```
+
+Matches an enum value, an `?T` option, or a `!T E` result. You must cover
+every variant. Use an explicit arm or a `_` wildcard. The compiler
+checks this at compile time.
+
+```nu
+?? val {
+    JNull        → `null`
+    JNum n       → ( nurl_str_int n )
+    KeyPress c m → ( key_event c m )   // binds two payload values
+    Ok 200       → `ok`                 // matches only when payload == 200
+    _            → `other`
+}
+```
+
+A pattern can be a variant name, `_` for wildcard, or `A | B` (an or-pattern
+that covers several variants with no payload binding). A payload slot can be
+an identifier that binds the value, or an integer literal that must match
+exactly.
+
+An arm may add a guard — `? condition` between the payload and `→`. The
+runtime checks the guard after it binds the payload. A guarded arm does not
+by itself satisfy exhaustiveness for its variant. You still need a plain arm
+or `_` to cover the case where the guard is false.
+
+```nu
+?? msg {
+    Move n ? > n 0 → `forward`
+    Move n         → `back-or-stay`
+    _              → `other`
+}
+```
+
+<Accordions>
+  <Accordion title="Matching Option and Result directly">
+    `?T` and `!T E` are ordinary enums, so they match the
+    same way. Use `T` / `F` as the tag pattern for `?T`:
+
+    ```nu
+    ?? maybe_n {
+        T n → ( nurl_print_int n )
+        F   → ( nurl_print `nothing\n` )
+    }
+    ```
+
+    See [Error handling](./error-handling) for the full picture, including
+    the `\` try-propagate shortcut.
+  </Accordion>
+</Accordions>
+
+## Channel select
+
+A `??` immediately followed by `{` (no scrutinee expression) starts a
+different construct — a Go-style channel select. It runs the body of
+whichever channel becomes ready first. See
+[Concurrency](./concurrency#channel-select).
+
+## Next
+
+- [Structs, enums, and traits](./structs-enums-traits)
+- [Error handling](./error-handling)

@@ -1,0 +1,114 @@
+---
+title: Testing and benchmarking
+description: nurlpkg test/bench for your own package, and how the compiler's own suite works.
+icon: TestTube
+---
+
+## Testing your own package
+
+`nurlpkg test` compiles and runs every `.nu` file under `tests/` in your
+package:
+
+```
+your-package/
+├── nurl.toml
+├── src/
+└── tests/
+    └── basic.nu
+```
+
+A test file is an ordinary NURL program. The pass/fail signal is the
+process exit code. Exit code 0 means pass. A non-zero exit code means
+fail. This is the same convention `main` already uses. There is no
+separate assertion framework to import for a simple check. Use `panic` on
+a failed condition. Or use `opt_expect` / `res_expect` from
+[Error handling](./error-handling) on the value you check.
+
+```bash
+nurlpkg test
+```
+
+## Benchmarking your own package
+
+`nurlpkg bench` compiles and runs every `.nu` file under `benches/`. It
+streams each program's own output. Unlike `test`, there is no pass/fail
+golden. Wall time is machine-dependent. A bench only "fails" if it does
+not compile. It also fails if it exits non-zero.
+
+Write a benchmark with
+[`stdlib/std/bench.nu`](https://github.com/nurl-lang/nurl/blob/main/stdlib/std/bench.nu),
+a micro-benchmark harness that reports nanoseconds per operation and
+allocations per operation:
+
+```nu
+$ `stdlib/std/bench.nu`
+
+@ main → i {
+    : BenchResult r ( bench_auto `vec_push` \ → v {
+        : ( Vec i ) v ( vec_new [i] )
+        ( vec_push [i] v 1 )
+        ( vec_free [i] v )
+    } )
+    ( bench_report r )
+    ( bench_result_free r )
+    ^ 0
+}
+```
+
+`bench_auto` auto-scales the iteration count. It runs until a timed run
+clears about 50ms. This gives a stable reading on cheap operations.
+`bench_run` takes an explicit iteration count instead. Each run does a
+short untimed warmup first. Then it measures wall time from the monotonic
+clock. It also measures allocations from the runtime's allocation counter.
+Both measurements exclude the warmup.
+
+```bash
+nurlpkg bench
+```
+
+## How the compiler's own test suite works
+
+The compiler's regression suite
+([`compiler/tests/`](https://github.com/nurl-lang/nurl/tree/main/compiler/tests))
+follows the same "a test is a `.nu` program" idea, but at a larger scale.
+Know this if you contribute to NURL itself.
+
+Every `.nu` file in that directory is a test. The runner compiles it. It
+links it. It runs it. It compares the outcome against a **golden file**
+in `outputs/<name>.txt`. The golden file holds the exit code and captured
+stdout/stderr. A run is green only when every test matches its golden. No
+goldens can be missing. No goldens can be orphaned.
+
+The test's expected outcome is read from its filename:
+
+| Prefix | Expected outcome |
+|---|---|
+| *(none)* | compiles, links, runs — golden records exit code and output |
+| `should_fail_*` | compilation fails |
+| `borrow_*` | the borrow checker rejects it; the diagnostic is baselined |
+| `should_warn_*` | compiles, but the warning text is baselined |
+| `*_mod` / `*_helper` / `*_lib` | not a test — a module imported by another test |
+| `http_*` / `net_*` | network-dependent, skipped unless explicitly enabled |
+
+```bash
+./build.sh                      # builds nurlc, then runs the suite
+./compiler/tests/run_tests.sh   # just the suite
+
+./compiler/tests/run_tests.sh --update              # rewrite all goldens
+./compiler/tests/run_tests.sh --update vec_basic     # just one
+```
+
+Add a test: put `my_feature.nu` into the directory. Run `--update
+my_feature` to mint its golden. Commit both files together. Tests run in
+parallel. Each runs in its own scratch directory. Keep tests free of
+wall-clock, randomness, and network dependence. Exceptions must be
+explicitly gated.
+
+`compiler/tests/run_san_tests.sh` re-runs the corpus under
+AddressSanitizer/UBSan. It checks for leaks and undefined behavior. It
+has its own pass/fail logic. This logic is separate from the goldens.
+
+## Next
+
+- [Common pitfalls](./common-pitfalls)
+- [Editor and tooling](./editor-and-tooling) — the rest of `nurlpkg`'s subcommands.

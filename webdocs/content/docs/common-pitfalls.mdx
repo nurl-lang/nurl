@@ -1,0 +1,79 @@
+---
+title: Common pitfalls
+description: The handful of things worth knowing before the compiler tells you.
+icon: TriangleAlert
+---
+
+The compiler catches and explains every source-level trap. NURL's errors
+are the first place to look. Do not memorize a list in advance. This
+page shows the few patterns worth learning up front. You can see the fix
+more easily when you know the rule.
+
+## Calls always need parentheses
+
+```nu
+nurl_print `hello`     // error: bare identifier as a statement has no effect
+( nurl_print `hello` )  // correct
+```
+
+A bare identifier is always a name lookup, never a call. If you write a call
+without parentheses, it is a dead statement with no effect. The compiler
+rejects it.
+
+## `^` is return, not XOR
+
+```nu
+^ a b     // "return a", then a separate, likely-unintended statement "b"
+^^ a b    // XOR of a and b
+```
+
+`^` is the unary return operator. `^^` — two carets with no space between
+them — is binary XOR. A stray space between two carets silently becomes
+two return statements instead of one XOR; the compiler warns when this
+shape appears on one line.
+
+## Struct parameters are copies by default
+
+NURL copies struct parameters into the callee. If you write to a field
+inside the callee, you do not change the caller's value. Declare the
+parameter `inout` to change the caller's value. See
+[Memory and ownership](./memory-and-ownership#parameter-conventions).
+
+## Closures capture by value by default
+
+A closure snapshots its captured variables when you create it.
+Later changes to the outer variable do not show inside the closure.
+Use the mutable-struct-by-reference form to see later changes. See
+[Memory and ownership](./memory-and-ownership) and
+[`docs/MEMORY.md`](https://github.com/nurl-lang/nurl/blob/main/docs/MEMORY.md).
+
+## `Rc` cannot cross a thread boundary
+
+Capturing an `Rc` (a non-atomic reference count) in a `thread_spawn` or
+`spawn` closure is a compile error. If two threads update the count at
+the same time, the behavior is undefined. Use `Arc` for anything shared
+across threads or fibers. See [Concurrency](./concurrency).
+
+## Single-letter type keywords cannot be inferred variable names
+
+`i u f b s v` are type keywords, not ordinary identifiers. `: n 0` infers
+`n`'s type from `0`. If you name the binding `i` the same way, the
+compiler rejects it. `i` is a reserved type name. Give the binding an
+explicit type annotation: `: i n 0` works as a type annotation on a
+differently-named variable. But a binding named `i` must have a different
+spelling.
+
+## Import paths are resolved from the working directory
+
+`$ "path"` resolves relative to the compiler's current working directory
+— not relative to the file that contains the `$`. Run `nurlc` from the
+project root, and write import paths as project-root-relative
+(`stdlib/foo.nu`). This way imports behave the same no matter which file
+imports them.
+
+## Next
+
+- [Memory and ownership](./memory-and-ownership) — the borrow checker rules behind several of these.
+- [Cheat sheet](./cheat-sheet) — the syntax these pitfalls are exceptions to.
+- The full, compiler-level limitations list is in
+  [`docs/LIMITATIONS.md`](https://github.com/nurl-lang/nurl/blob/main/docs/LIMITATIONS.md).

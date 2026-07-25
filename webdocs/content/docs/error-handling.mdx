@@ -1,0 +1,124 @@
+---
+title: Error handling
+description: Option, Result, the try operator, and panics.
+icon: ShieldAlert
+---
+
+import { Accordion, Accordions } from 'fumadocs-ui/components/accordion';
+
+NURL has no exceptions. A function that can fail says so in its return
+type. It uses one of two built-in types.
+
+## Option: `?T`
+
+`?T` represents a value that may be absent.
+
+```nu
+@ ?T { T payload }   // Some
+@ ?T { F 0 }          // None (the second value is ignored on the None tag)
+```
+
+Match it with `??`, using `T` / `F` as the tag pattern:
+
+```nu
+?? maybe_n {
+    T n → ( nurl_print_int n )
+    F   → ( nurl_print `nothing\n` )
+}
+```
+
+## Result: `!T E`
+
+`!T E` carries either a success value of type `T` or an error value of
+type `E`.
+
+```nu
+@ !T E { T v }   // Ok
+@ !T E { F e }   // Err
+```
+
+```nu
+?? result {
+    T v → ( use v )
+    F e → ( handle e )
+}
+```
+
+## The try operator: `\`
+
+`\ expr` unwraps a `?T` or `!T E` in place. On success it evaluates to
+the payload. On failure it returns early from the *enclosing function* and
+forwards the `None` / `Err`. The enclosing function's return type must
+be a compatible `?` / `!` shape.
+
+```nu
+@ parse_pair s src → ?i {
+    : a \ ( parse_int src )     // returns None from parse_pair if this fails
+    ^ @ ?i { T a }
+}
+```
+
+This is the same idea as Rust's `?` or Go's early-return-on-error pattern.
+NURL uses it as a prefix operator instead of postfix.
+
+## Leaf-site combinators
+
+At a place that cannot use `\` — a `main` that returns a fixed `i`, or a
+callback with a signature you cannot change — use a combinator. Do not
+nest `??` by hand. The common ones, for both `?T`
+([`stdlib/core/option.nu`](https://github.com/nurl-lang/nurl/blob/main/stdlib/core/option.nu))
+and `!T E`
+([`stdlib/core/result.nu`](https://github.com/nurl-lang/nurl/blob/main/stdlib/core/result.nu)):
+
+| Option | Result | Meaning |
+|---|---|---|
+| `opt_unwrap_or o default` | `res_unwrap_or r default` | payload, or a fallback value |
+| `opt_expect o msg` | `res_expect r msg` | payload, or panic with `msg` |
+| `opt_ok_or o err` | `res_ok r` / `res_err r` | bridge between `?T` and `!T E` |
+| `opt_map o f` | `res_map r f` | transform the success payload |
+| `opt_and_then o f` | `res_and_then r f` | chain another fallible step |
+
+```nu
+: i n ( opt_expect maybe_n `expected a parsed number` )
+```
+
+Prefer `_expect` with a message that names what you tried to do. It shows
+the message if the panic fires.
+
+## Panics
+
+`panic msg` aborts the current logical operation. If nothing watches for it,
+the process prints `msg` to stderr and exits. `recover` wraps a closure call
+and turns a panic inside it into an `Err`, from
+[`stdlib/std/panic.nu`](https://github.com/nurl-lang/nurl/blob/main/stdlib/std/panic.nu):
+
+```nu
+: ~ HttpResponse resp ( response_text 500 `internal\n` )
+: !v PanicInfo r ( recover \ → v {
+    = resp ( risky_handler req )
+} )
+?? r {
+    T _ → { /* resp holds risky_handler's return value */ }
+    F p → { /* resp still holds the 500 default; p.msg has the reason */
+            ( panic_info_free p ) }
+}
+```
+
+<Callout type="warn" title="Panics are a crash-mitigation tool, not a routine error path">
+Prefer `!T E` + `\` for anything an expected, ordinary caller has to
+handle. Reach for `panic` / `recover` at a boundary like an HTTP request
+handler, where one request failing unexpectedly should not take down the
+whole process.
+</Callout>
+
+Recover is not exception handling in the C++ sense. There is no stack
+unwinding with destructor calls. A thread-local journal tracks every owned
+allocation the runtime made since the recover point. It reclaims the
+allocations if a panic fires. So ordinary owned strings, slices, and struct
+fields do not leak across a panic. It does not catch signal faults
+(`SIGSEGV`, `SIGFPE`, and similar signals still abort the process).
+
+## Next
+
+- [Memory and ownership](./memory-and-ownership) — what a panic does and does not reclaim.
+- [Control flow and pattern matching](./control-flow) — `??` in full.

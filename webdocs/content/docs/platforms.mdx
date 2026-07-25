@@ -1,0 +1,61 @@
+---
+title: Platforms
+description: Where the toolchain runs, and where compiled programs run.
+icon: Layers
+---
+
+Two separate questions: where the **toolchain** builds and runs (host
+platforms), and where a **compiled program** can run (codegen targets).
+Support is stated in tiers. The tiers are defined by what CI actually
+verifies:
+
+- **Tier 1 — CI-tested.** Built, bootstrapped, and the full test corpus
+  runs on every change. A failure blocks a merge.
+- **Tier 2 — CI-built, untested.** CI produces a release artifact. CI
+  verifies its bootstrap fixed point. The test corpus does not run there.
+- **Tier 3 — cross-compile target / best effort.** Code paths exist. Ad
+  hoc use exercises them. Nothing in CI gates them.
+
+## Host platforms
+
+| Host | Tier | Install |
+|---|---|---|
+| Linux x86_64 (glibc ≥ 2.28) | 1 | `install.sh` |
+| FreeBSD x86_64 | 1 | `install.sh` |
+| Linux ARM64 (glibc) | 2 | `install.sh` |
+| Windows x86_64 | 2 | `install.ps1` |
+| macOS (x86_64 / ARM64) | 3 | build from source |
+| Alpine / musl | 3 | build from source |
+
+The shipped `nurlc` / `nurlpkg` binaries link libc only. A program pulls
+in optional FFI libraries only when it uses them. A program that uses
+none stays libc-only. `nurl.sh` is a POSIX `sh` script. It needs no bash,
+make, or Python.
+
+## Codegen targets
+
+The compiler emits LLVM IR. It hands native codegen to `clang`. Any
+target `clang` supports is reachable. NURL's IR carries no target triple.
+A single `clang --target=` (or `zig cc --target=`) drives every cross
+build.
+
+| Target | Tier | Notes |
+|---|---|---|
+| Linux x86_64 | 1 | the primary target — `build.sh` and the full test corpus |
+| Windows x86_64 | 2 | separate Windows goldens, run on every push to `main` |
+| macOS x86_64 | 3 | via the playground's `/build_macos`; links only libSystem, no canvas/audio/HTTP |
+| macOS ARM64 | 3 | via `/build_target`; native Apple Silicon, unsigned — clear the quarantine attribute before running |
+| WebAssembly (wasm32-wasi) | 3 | via the playground container, or locally with `wasmbuilder` — see [Editor and tooling](./editor-and-tooling) |
+| Linux ARM64 / RISC-V64 | 3 | via `/build_target`; fully static musl, or dynamic glibc for ARM64 |
+| Android / iOS, embedded (no_std) | — | planned |
+
+[Playground and APIs](./playground-ai) covers local cross-compiling and
+the playground's cross-compile endpoints.
+
+## Next
+
+- [Editor and tooling](./editor-and-tooling)
+- [Embedded targets](./embedded-targets) — bare-metal NURL, beyond the table above.
+- [Playground and APIs](./playground-ai)
+- Full CI details are in
+  [`docs/BUILDING.md`](https://github.com/nurl-lang/nurl/blob/main/docs/BUILDING.md).

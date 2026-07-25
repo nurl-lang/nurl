@@ -1,0 +1,67 @@
+---
+title: Embedded targets
+description: Bare-metal NURL on microcontrollers, starting with ESP32.
+icon: Microchip
+---
+
+NURL compiles to LLVM IR with no target triple baked in. This makes it
+reachable on bare-metal targets. It reaches them the same way it reaches
+any cross-compile target. Hand the IR to the right backend. `stdlib/hal/`
+holds the hardware-facing layer this needs.
+
+## Memory-mapped I/O
+
+[`stdlib/hal/mmio.nu`](https://github.com/nurl-lang/nurl/blob/main/stdlib/hal/mmio.nu)
+You use this primitive to build every register-level driver. It reads or
+writes a 32-bit word at a fixed physical address.
+
+```nu
+( mmio_read32  i addr )          → i    // load  *(u32*)addr
+( mmio_write32 i addr i32 val )  → v    // store *(u32*)addr = val
+( mmio_set32   i addr i32 mask ) → v    // *(u32*)addr |= mask
+( mmio_clear32 i addr i32 mask ) → v    // *(u32*)addr &= ~mask
+```
+
+These compile to LLVM's `load volatile` / `store volatile`. The optimizer
+never hoists, reorders, or coalesces an MMIO access. A spin on a device
+status register is correct at any optimization level. It is pure IR with
+no runtime call. It works on a freestanding target with no OS underneath
+it.
+
+## ESP32
+
+[`stdlib/hal/esp32.nu`](https://github.com/nurl-lang/nurl/blob/main/stdlib/hal/esp32.nu)
+is a register-level HAL for the classic ESP32 (Xtensa). You build it
+entirely on `mmio.nu`. There is no ESP-IDF. There is no FFI beyond the
+memory-mapped registers themselves. Register addresses are cross-checked
+against Espressif's technical reference manual.
+
+```nu
+( esp32_gpio_enable_output i mask ) → v   // drive these pins as outputs
+( esp32_gpio_set   i mask ) → v            // set pins high
+( esp32_gpio_clear i mask ) → v            // set pins low
+
+( esp32_uart_putc i ch ) → v               // blocking write, UART0
+( esp32_uart_getc )      → i               // blocking read, UART0
+```
+
+Both CPU families on the chip are covered, through two different
+toolchains:
+
+| Chip family | ISA | Toolchain |
+|---|---|---|
+| ESP32 / S2 / S3 (classic) | Xtensa LX6/LX7 | esp-clang + ESP-IDF |
+| ESP32-C3 / C6 / H2 | RISC-V (RV32IMC) | stock LLVM `llc` |
+
+The Xtensa path has been flashed to real ESP32 silicon. It is verified
+over serial. A GPIO blink uses only NURL's register writes. A call
+crosses from C into NURL and back. `examples/esp32/` has both paths.
+`idf-blink/` is a complete ESP-IDF project. All GPIO access is NURL. C
+supplies only `app_main`. `blink.nu` targets the RISC-V chips directly
+through stock LLVM. It needs no vendor fork.
+
+## Next
+
+- [Platforms](./platforms) — the rest of NURL's cross-compile targets.
+- Build steps, prerequisites, and both toolchains in full are in
+  [`examples/esp32/README.md`](https://github.com/nurl-lang/nurl/blob/main/examples/esp32/README.md).

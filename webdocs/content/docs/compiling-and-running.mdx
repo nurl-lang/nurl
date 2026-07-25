@@ -39,12 +39,12 @@ Useful flags (put them *before* the source file):
 
 <Accordions>
   <Accordion title="Why does -O0 matter for debugging?">
-    At the default `-O2`, `clang` inlines and reorders code aggressively.
-    A debugger's "break at this source line" can become unreliable, because
-    the line may not correspond to a single instruction anymore. `-O0` keeps
-    the generated code close to the source structure, which is what you want
-    while stepping through a bug, at the cost of a slower binary. Reach for
-    `-O2`/`-O3` again once you are past debugging.
+     At the default `-O2`, `clang` inlines and reorders code aggressively.
+     A debugger's "break at this source line" becomes unreliable, because
+     the line may not correspond to a single instruction anymore. `-O0` keeps
+     the generated code close to the source structure, which you want
+     when you step through a bug, at the cost of a slower binary. Reach for
+     `-O2`/`-O3` again after debugging.
   </Accordion>
 </Accordions>
 
@@ -68,6 +68,6 @@ The prebuilt `curl | sh` installer gives you `nurlc`, `nurlpkg`, and
 ## Compiling to WebAssembly
 
 See the [online playground](https://play.nurl-lang.org/)
-to try NURL in the browser without installing anything, and
+to try NURL in the browser without an install, and
 [`docs/PLATFORMS.md`](https://github.com/nurl-lang/nurl/blob/main/docs/PLATFORMS.md)
-for the full target list once you are ready to cross-compile.
+for the full target list when you are ready to cross-compile.
