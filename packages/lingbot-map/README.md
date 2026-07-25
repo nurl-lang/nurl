@@ -34,12 +34,37 @@ and is what the port has to reproduce exactly, not approximately.
 | # | stage | state |
 |---|---|---|
 | 1 | read the `.pt` checkpoint | **done** — see [`torchpt`](../torchpt), verified against `torch.load` |
-| 2 | image loading and preprocessing | in progress |
+| 2 | image loading and preprocessing | **done** — byte-identical to the reference pipeline on real frames |
 | 3 | ViT layers: patch embed, 2-D RoPE, qk-norm attention, block | pending |
 | 4 | streaming aggregator + KV cache | pending |
 | 5 | camera head, DPT heads | pending |
 | 6 | camera geometry | **done** — matches torch to 2.4e-16 |
 | 7 | CLI, point-cloud export, end-to-end check | pending |
+
+### Stage 2 — preprocessing (`src/preproc.nu`)
+
+`load_and_preprocess_images(mode="crop", image_size=518, patch_size=14)`,
+which is what `demo.py` runs: alpha onto white, RGB, bicubic resize to
+width 518 with the height snapped to a whole number of patches, centre
+crop, scale to [0, 1], CHW. ImageNet normalisation is *not* done here —
+the aggregator does it, and doing it twice is a quiet way to get a
+plausible but wrong reconstruction.
+
+That needed a **PIL-compatible bicubic resampler**, which the `image`
+package did not have (only nearest, bilinear and box). It has one now:
+`image_resize_bicubic`, byte-identical to Pillow — same `a = −0.5`
+kernel, same support scaling, same 22-bit fixed-point two-pass
+arithmetic. Note that this is a *different kernel* from the one stage 3
+needs for the position grid (torch's `a = −0.75`); they are not
+interchangeable.
+
+Verified on the repo's own example frames: six frames, every sampled
+value identical to the reference pipeline.
+
+EXIF orientation is deliberately **not** applied — the reference calls
+`exif_transpose`, `image` does not surface EXIF, and silently ignoring a
+rotation beats silently applying the wrong one. Video-derived frames,
+which is what streaming reconstruction is actually fed, carry none.
 
 ### Stage 6 — camera geometry (`src/geom.nu`)
 

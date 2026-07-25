@@ -35,6 +35,26 @@ if NURL_SAN=1 $NURL tests/ops.nu "$WORK/ops_san" >/dev/null 2>&1; then
     fi
 fi
 
+echo "[bicubic] image_resize_bicubic vs Pillow, byte for byte"
+if ! $NURL tests/bicubic_check.nu "$WORK/bicubic" >/dev/null 2>"$WORK/bic_build.err"; then
+    echo "  FAIL bicubic build"; tail -8 "$WORK/bic_build.err"; exit 1
+fi
+BIC_PY="${PYTORCH_PY:-python3}"
+if "$BIC_PY" -c "import PIL" 2>/dev/null; then
+    "$WORK/bicubic" > "$WORK/bic_nurl.txt" 2>&1
+    "$BIC_PY" tests/bicubic_oracle.py > "$WORK/bic_ref.txt" 2>&1
+    if cmp -s "$WORK/bic_ref.txt" "$WORK/bic_nurl.txt"; then
+        echo "  PASS bicubic identical to Pillow ($(wc -l < "$WORK/bic_ref.txt" | tr -d ' ') cases)"
+    else
+        echo "  FAIL bicubic differs from Pillow"
+        diff "$WORK/bic_ref.txt" "$WORK/bic_nurl.txt" | head -4 | cut -c1-200
+        exit 1
+    fi
+else
+    "$WORK/bicubic" >/dev/null 2>&1 && echo "  (bicubic Pillow check skipped — no PIL)" \
+        || { echo "  FAIL bicubic crashed"; exit 1; }
+fi
+
 if ! python3 -c "import PIL, numpy" 2>/dev/null; then
     echo "  (codec reference checks skipped — python3 + Pillow + numpy not available)"; exit 0
 fi

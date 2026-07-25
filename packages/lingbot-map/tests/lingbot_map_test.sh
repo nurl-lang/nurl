@@ -61,7 +61,7 @@ print("worst relative error %.3e" % worst)
 PY
 }
 
-echo "[1/1] camera geometry vs the reference torch code"
+echo "[1/2] camera geometry vs the reference torch code"
 if ! $NURL tests/geomcheck.nu "$WORK/geomcheck" >/dev/null 2>"$WORK/build.err"; then
     bad "geomcheck build"; cat "$WORK/build.err"
 elif [ -z "$PYTORCH_PY" ] || ! "$PYTORCH_PY" -c "import torch" 2>/dev/null; then
@@ -75,6 +75,35 @@ else
         ok "quat/extri/intri/c2w/unproject match torch — $out"
     else
         bad "geometry differs from torch"; echo "$out"
+    fi
+fi
+
+echo "[2/2] frame preprocessing vs the reference load_fn pipeline"
+# Real frames, not synthetic ones: the resize ratio, the patch-multiple
+# rounding and the centre crop only interact on an actual aspect ratio.
+FRAMES=""
+for d in courthouse loop university; do
+    for n in 000000 000001; do
+        p="$HOME/dev/lingbot-map/example/$d/$n.png"
+        [ -f "$p" ] && FRAMES="$FRAMES $p"
+    done
+done
+if ! $NURL tests/preproccheck.nu "$WORK/ppc" >/dev/null 2>"$WORK/pp_build.err"; then
+    bad "preproccheck build"; tail -6 "$WORK/pp_build.err"
+elif [ -z "$FRAMES" ]; then
+    skip "no example frames (expected under ~/dev/lingbot-map/example/)"
+elif [ -z "$PYTORCH_PY" ] || ! "$PYTORCH_PY" -c "import PIL" 2>/dev/null; then
+    skip "preprocessing oracle — needs python + Pillow"
+else
+    # shellcheck disable=SC2086
+    "$WORK/ppc" $FRAMES > "$WORK/pp_nurl.txt" 2>&1
+    # shellcheck disable=SC2086
+    "$PYTORCH_PY" tests/preproc_oracle.py $FRAMES > "$WORK/pp_ref.txt" 2>&1
+    if cmp -s "$WORK/pp_ref.txt" "$WORK/pp_nurl.txt"; then
+        ok "$(wc -l < "$WORK/pp_ref.txt" | tr -d ' ') frames identical to the reference pipeline"
+    else
+        bad "preprocessing differs from the reference"
+        diff "$WORK/pp_ref.txt" "$WORK/pp_nurl.txt" | head -4 | cut -c1-200
     fi
 fi
 
