@@ -290,7 +290,6 @@ i h i w f cmin i stride → Ply {
                     : ~ i dn 0
                     : ~ i gh 0
                     : ~ i gw 0
-                    : ~ i kvused 0
                     : ~ i failed 0
                     : ~ i fi 0
                     ~ & == failed 0 < fi nframes {
@@ -314,7 +313,7 @@ i h i w f cmin i stride → Ply {
                                         = gw / w LM_PATCH
                                         = p ( ag_ntokens gh gw )
                                         = dn ( dn_tokens gh gw )
-                                        ( ag_kv_alloc kit a * nframes p )
+                                        ( ag_kv_alloc kit a nframes p )
                                     } {}
                                     // the RGB has to be kept before the
                                     // normalisation eats it in place
@@ -332,7 +331,7 @@ i h i w f cmin i stride → Ply {
                                     : GkBuf tok ( gk_dbuf_new kit * p 1024 GK_F32 )
                                     : GkBuf out ( gk_dbuf_new kit * 4 * p 2048 GK_F32 )
                                     ? ( ag_forward_one kit a ws dtok tok src
-                                    h w gh gw fi 1 kvused -1 taps out ) {} {
+                                    h w gh gw fi 1 -1 taps out ) {} {
                                         ( nurl_print `lingbot-map: aggregator failed\n` )
                                         = failed 1
                                     }
@@ -399,7 +398,6 @@ i h i w f cmin i stride → Ply {
                                     ( lm_ws_free ws )
                                     ( vec_free [f] rgbv )
                                     ( pp_free f )
-                                    = kvused + kvused p
                                 }
                             }
                         } {}

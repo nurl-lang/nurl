@@ -283,33 +283,40 @@ i heads i n i dim i nt i nh → b {
 
 // ── the block ───────────────────────────────────────────────────────
 
-// A KV cache for one global block: k and v as [heads, maxkv, hd], with
-// `used` rows already valid. A cache whose buffers are absent means
-// plain self-attention — the frame blocks, and the very first frame.
+// A KV cache for one global block: k and v as [heads, maxkv, hd]. A
+// cache whose buffers are absent means plain self-attention — the frame
+// blocks, and the very first frame.
 : LmKv {
     GkBuf k
     GkBuf v
     i maxkv
-    i used
+    // Where THIS frame's rows go, and how many rows of the cache are
+    // live once they are there. They used to be one number, because a
+    // frame's rows always went on the end. With sliding-window eviction
+    // a frame can be written into the middle of a ring while the live
+    // region also covers the preserved special tokens past it, so the
+    // write offset and the live count are genuinely different things.
+    i woff
+    i nvalid
 }
 
-@ lm_kv_none → LmKv { ^ @ LmKv { @ GkBuf { 0 0 GK_F32 } @ GkBuf { 0 0 GK_F32 } 0 0 } }
+@ lm_kv_none → LmKv { ^ @ LmKv { @ GkBuf { 0 0 GK_F32 } @ GkBuf { 0 0 GK_F32 } 0 0 0 } }
 
 @ lm_kv_new * GpuKit kit i heads i maxkv i hd → LmKv {
     ^ @ LmKv { ( gk_dbuf_new kit * heads * maxkv hd GK_F32 )
-        ( gk_dbuf_new kit * heads * maxkv hd GK_F32 ) maxkv 0 }
+        ( gk_dbuf_new kit * heads * maxkv hd GK_F32 ) maxkv 0 0 }
 }
 
 @ lm_kv_free LmKv c → v { ( gk_dbuf_free . c k ) ( gk_dbuf_free . c v ) }
 
 // Transformer block over `n` tokens; `x` is [n, dim], updated in place.
 //
-// With a cache, this frame's keys and values are appended at row
-// `kv.used` and attention runs over everything stored so far — the
+// With a cache, this frame's keys and values are written at row
+// `kv.woff` and attention runs over the first `kv.nvalid` rows — the
 // streaming global blocks. Without one it is plain self-attention.
-// APPENDING IS THE CALLER'S BOOKKEEPING: `used` is read here and not
-// written, because one frame passes through 24 different caches and the
-// count belongs to the frame, not to any one of them.
+// PLACEMENT IS THE CALLER'S BOOKKEEPING: both numbers are read here and
+// not written, because one frame passes through 24 different caches and
+// where it goes belongs to the frame, not to any one of them.
 @ lm_block_forward * GpuKit kit LmBlk w LmWs ws LmRope rp LmKv kv GkBuf x
 i n i dim i heads i hidden → b {
     : i hd / dim heads
@@ -348,15 +355,15 @@ i n i dim i heads i hidden → b {
     } {}
     ? ( lm_rope_apply kit rp q heads n hd ) {} { ^ F }
     ? ( lm_rope_apply kit rp k heads n hd ) {} { ^ F }
-    // With a cache: append this frame's rotated k/v, then attend over
-    // everything stored. gkd_copy_ax writes a [heads, n, hd] run into a
-    // [heads, maxkv, hd] cache at row offset `used` — one call, no
+    // With a cache: place this frame's rotated k/v, then attend over the
+    // live prefix. gkd_copy_ax writes a [heads, n, hd] run into a
+    // [heads, maxkv, hd] cache at row offset `woff` — one call, no
     // per-head loop.
     : b cached ( gk_buf_ok . kv k )
-    : i nkv ? cached + . kv used n n
+    : i nkv ? cached . kv nvalid n
     ? cached {
-        ? ( gkd_copy_ax kit . kv k k heads n hd . kv maxkv . kv used ) {} { ^ F }
-        ? ( gkd_copy_ax kit . kv v v heads n hd . kv maxkv . kv used ) {} { ^ F }
+        ? ( gkd_copy_ax kit . kv k k heads n hd . kv maxkv . kv woff ) {} { ^ F }
+        ? ( gkd_copy_ax kit . kv v v heads n hd . kv maxkv . kv woff ) {} { ^ F }
     } {}
     // keys and values attention actually reads: the cache prefix, or
     // just this frame's

@@ -74,7 +74,7 @@ $ `src/geom.nu`
                     : GkBuf out ( gk_dbuf_new kit * 4 * p 2048 GK_F32 )
                     : *i taps # *i ( nurl_zalloc 32 )
                     ( ag_default_taps taps )
-                    ? ( ag_forward_one kit a ws dtok tok ( pp_data f ) h w gh gw 0 1 0 -1 taps out ) {}
+                    ? ( ag_forward_one kit a ws dtok tok ( pp_data f ) h w gh gw 0 1 -1 taps out ) {}
                     { ( nurl_print `aggregator FAILED\n` ) ^ 1 }
                     // the camera token is row 0 of the LAST tapped layer
                     : GkBuf camtok ( lm_view out * 3 * p 2048 2048 )

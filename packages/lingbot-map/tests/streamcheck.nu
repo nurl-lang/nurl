@@ -57,7 +57,6 @@ $ `src/preproc.nu`
             : ~ i gw 0
             : *i taps # *i ( nurl_zalloc 32 )
             ( ag_default_taps taps )
-            : ~ i kvused 0
             : ~ i fi 0
             ~ < fi nframes {
                 : !*Frame String fr ( pp_load ( nurl_argv + 2 fi ) 518 14 )
@@ -75,7 +74,7 @@ $ `src/preproc.nu`
                             = gw / w 14
                             = p ( ag_ntokens gh gw )
                             = dn ( dn_tokens gh gw )
-                            ( ag_kv_alloc kit a * nframes p )
+                            ( ag_kv_alloc kit a nframes p )
                         } {}
                         : i big ? > p dn p dn
                         : LmWs ws ( lm_ws_new kit big 1024 16 4096 * nframes p 64 )
@@ -83,7 +82,7 @@ $ `src/preproc.nu`
                         : GkBuf tok ( gk_dbuf_new kit * p 1024 GK_F32 )
                         : GkBuf out ( gk_dbuf_new kit * 4 * p 2048 GK_F32 )
                         : b ok ( ag_forward_one kit a ws dtok tok ( pp_data f )
-                        h w gh gw fi 1 kvused -1 taps out )
+                        h w gh gw fi 1 -1 taps out )
                         ? ok {} { ( nurl_print `frame FAILED\n` ) ^ 1 }
                         : ( Vec f ) hv ( vec_with_cap [f] * 4 * p 2048 )
                         : b _sl ( vec_set_len [f] hv * 4 * p 2048 )
@@ -109,7 +108,6 @@ $ `src/preproc.nu`
                         ( gk_dbuf_free out ) ( gk_dbuf_free tok ) ( gk_dbuf_free dtok )
                         ( lm_ws_free ws )
                         ( pp_free f )
-                        = kvused + kvused p
                     }
                 }
                 = fi + fi 1

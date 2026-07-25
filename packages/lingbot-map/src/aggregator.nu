@@ -28,7 +28,7 @@
 //   ( ag_free a )            → v
 //   ( ag_ntokens gh gw )     → i
 //   ( ag_kv_alloc kit a maxtok )  once, before the first frame
-//   ( ag_forward_one kit a ws dtok tok img h w gh gw fidx nscale kvused stopat taps out ) → b
+//   ( ag_forward_one kit a ws dtok tok img h w gh gw fidx nscale stopat taps out ) → b
 //     out: [4, P, 2048] f32 device — the four tapped layers
 
 $ `stdlib/core/string.nu`
@@ -140,21 +140,94 @@ $ `src/rope.nu`
         c3 s3 ( vec_new [LmKv] ) }
 }
 
-// Allocate the 24 global-block caches, sized for `maxtok` tokens each
-// (frames x tokens-per-frame). Call once, before the first frame.
+// The reference's KV-cache eviction policy, as sizes.
 //
-// No eviction yet: the reference evicts down to
-// kv_cache_scale_frames + kv_cache_sliding_window = 72 frames, so a
-// cache sized for the whole sequence is EXACTLY right up to that length
-// and simply too big beyond it. Sequences past 72 frames need the
-// sliding window before they are correct, not just before they fit.
-@ ag_kv_alloc * GpuKit kit Agg a i maxtok → v {
+// It keeps the first `AG_KV_SCALE` frames forever, keeps the last
+// `AG_KV_WINDOW` frames before the current one, and from every frame it
+// drops it preserves the six special-token rows. Counting the current
+// frame, the live window is AG_KV_WINDOW + 1 frames wide, which is why
+// `ag_kv_ring` is one more than the window: at the step where eviction
+// first bites, the cache holds the scale frames plus frames
+// f-AG_KV_WINDOW .. f inclusive.
+: i AG_KV_SCALE 8
+: i AG_KV_WINDOW 64
+
+@ ag_kv_ring → i { ^ + AG_KV_WINDOW 1 }
+
+// Rows a cache needs for a sequence of `nframes` frames of `p` tokens.
+// Short sequences never evict and just need every row; long ones need
+// the two full-frame regions plus six rows per evicted frame.
+@ ag_kv_rows i nframes i p → i {
+    : i span + AG_KV_SCALE ( ag_kv_ring )
+    ? <= nframes span { ^ * nframes p } {}
+    ^ + + * AG_KV_SCALE p * ( ag_kv_ring ) p * - nframes span AG_SPECIAL
+}
+
+// Where frame `fidx` writes its rows, and how many rows are live once it
+// has. Before the ring wraps these are the obvious ones — append at the
+// end, everything so far is live. After it wraps the frame overwrites
+// the oldest ring slot, and the live region is the two full-frame
+// regions plus the preserved specials that trail them.
+@ ag_kv_woff i fidx i p → i {
+    ? < fidx AG_KV_SCALE { ^ * fidx p } {}
+    ^ + * AG_KV_SCALE p * % - fidx AG_KV_SCALE ( ag_kv_ring ) p
+}
+
+// How many frames have been evicted once frame `fidx` is in place.
+@ ag_kv_evicted i fidx → i {
+    : i span + AG_KV_SCALE ( ag_kv_ring )
+    ? < fidx span { ^ 0 } {}
+    ^ + - fidx span 1
+}
+
+@ ag_kv_nvalid i fidx i p → i {
+    : i ns ( ag_kv_evicted fidx )
+    ? == ns 0 { ^ * + fidx 1 p } {}
+    ^ + + * AG_KV_SCALE p * ( ag_kv_ring ) p * ns AG_SPECIAL
+}
+
+// Allocate the 24 global-block caches for a sequence of `nframes`
+// frames of `p` tokens. Call once, before the first frame.
+@ ag_kv_alloc * GpuKit kit Agg a i nframes i p → v {
     : i hd / AG_DIM AG_HEADS
+    : i rows ( ag_kv_rows nframes p )
     : ~ i i0 0
     ~ < i0 AG_DEPTH {
-        ( vec_push [LmKv] . a kv ( lm_kv_new kit AG_HEADS maxtok hd ) )
+        ( vec_push [LmKv] . a kv ( lm_kv_new kit AG_HEADS rows hd ) )
         = i0 + i0 1
     }
+}
+
+// Preserve the special-token rows of the frame that frame `fidx` is
+// about to overwrite, moving them past the ring where they stay live.
+// Runs over all 24 caches before any of them is written, because the
+// frame passes through them one after another and the rows have to be
+// out of the way before the first write, not the last.
+@ ag_kv_evict * GpuKit kit Agg a i fidx i p → b {
+    : i ns ( ag_kv_evicted fidx )
+    ? == ns 0 { ^ T } {}
+    : i hd / AG_DIM AG_HEADS
+    : i src ( ag_kv_woff fidx p )
+    : i dst + + * AG_KV_SCALE p * ( ag_kv_ring ) p * - ns 1 AG_SPECIAL
+    : GkBuf sk ( gk_dbuf_new kit * AG_HEADS * AG_SPECIAL hd GK_F32 )
+    : GkBuf sv ( gk_dbuf_new kit * AG_HEADS * AG_SPECIAL hd GK_F32 )
+    : ~ b ok T
+    : ~ i i0 0
+    ~ & ok < i0 AG_DEPTH {
+        ?? ( vec_get [LmKv] . a kv i0 ) {
+            T c → {
+                : i mk . c maxkv
+                ? & & & ( gkd_slice_ax kit sk . c k AG_HEADS AG_SPECIAL hd mk src )
+                ( gkd_slice_ax kit sv . c v AG_HEADS AG_SPECIAL hd mk src )
+                ( gkd_copy_ax kit . c k sk AG_HEADS AG_SPECIAL hd mk dst )
+                ( gkd_copy_ax kit . c v sv AG_HEADS AG_SPECIAL hd mk dst ) {} { = ok F }
+            }
+            F → { = ok F }
+        }
+        = i0 + i0 1
+    }
+    ( gk_dbuf_free sk ) ( gk_dbuf_free sv )
+    ^ ok
 }
 
 // The six special-token rows for frame `fidx`, as a host vector.
@@ -261,19 +334,17 @@ $ `src/rope.nu`
 // in columns 0..1023 and the global block's in 1024..2047 — the order
 // the reference concatenates them in.
 //
-// `kvused` is how many token rows the global caches already hold — 0 for
-// the first frame, fidx*P afterwards. With no caches allocated at all
-// the global blocks fall back to attending to their own frame, which is
-// what the reference does on frame 0 anyway.
-// `stopat` bounds how many block groups run: negative for all of them,
-// 0 for none (just the token assembly), k to stop after k. It exists
-// because a 72-block pipeline that produces NaN tells you nothing about
-// WHERE, and adding the bound afterwards means rebuilding to find out.
+// Where this frame's rows go in the caches, and how much of them is
+// live, follows from `fidx` alone — see ag_kv_woff / ag_kv_nvalid.
 @ ag_forward_one * GpuKit kit Agg a LmWs ws GkBuf dtok GkBuf tok
-* f img i h i w i gh i gw i fidx i nscale i kvused i stopat * i taps GkBuf out → b {
+* f img i h i w i gh i gw i fidx i nscale i stopat * i taps GkBuf out → b {
     : i np * gh gw
     : i p ( ag_ntokens gh gw )
     : i hd / AG_DIM AG_HEADS
+
+    // Before anything is written: make room in the caches by preserving
+    // the special tokens of the frame this one displaces.
+    ? ( ag_kv_evict kit a fidx p ) {} { ^ F }
 
     // DINOv2 trunk → patch tokens
     ? ( dn_forward kit . a dino ws img h w gh gw dtok ) {} { ^ F }
@@ -336,7 +407,8 @@ $ `src/rope.nu`
             ?? ( vec_get [LmBlk] . a gb i0 ) {
                 T blk → {
                     : LmKv kvb ?? ( vec_get [LmKv] . a kv i0 ) {
-                        T c → @ LmKv { . c k . c v . c maxkv kvused }
+                        T c → @ LmKv { . c k . c v . c maxkv
+                            ( ag_kv_woff fidx p ) ( ag_kv_nvalid fidx p ) }
                         F → ( lm_kv_none )
                     }
                     ? ( lm_block_forward kit blk ws rp3 kvb tok p AG_DIM AG_HEADS AG_HIDDEN ) {} { = ok F }

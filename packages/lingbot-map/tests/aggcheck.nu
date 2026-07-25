@@ -77,7 +77,7 @@ $ `src/preproc.nu`
                         : ~ i tk 0
                         ~ < tk 4 { = . taps tk + t0 tk = tk + tk 1 }
                     } {}
-                    : b ok ( ag_forward_one kit a ws dtok tok ( pp_data f ) h w gh gw 0 1 0 stopat taps out )
+                    : b ok ( ag_forward_one kit a ws dtok tok ( pp_data f ) h w gh gw 0 1 stopat taps out )
                     ? ok {} { ( nurl_print `ag_forward_one FAILED\n` ) ^ 1 }
                     : ( Vec f ) hv ( vec_with_cap [f] * 4 * p 2048 )
                     : b _sl ( vec_set_len [f] hv * 4 * p 2048 )
