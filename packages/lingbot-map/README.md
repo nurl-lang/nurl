@@ -79,6 +79,29 @@ worst relative error **2.4e-16** across six random pose encodings — the
 last bit, and it comes from torch's vectorised `tan` disagreeing with
 glibc's, not from the port.
 
+### Stage 4 (partial) — 3-D RoPE (`src/rope.nu`)
+
+The aggregator's **global** blocks do not use the 2-D rope the frame
+blocks use. With `enable_3d_rope` — which is `demo.py`'s default — they
+use `WanRotaryPosEmbed`, and it differs on three axes at once:
+
+| | 2-D (frame blocks) | 3-D (global blocks) |
+|---|---|---|
+| axes | row, column | frame, row, column |
+| head split | half / half | 20 / 22 / 22 |
+| theta | 100 | 10000 |
+| pairs | split each half at half/2 | **interleaved** (x₀,x₁), (x₂,x₃), … |
+
+Same idea, incompatible memory order, and nothing about picking the
+wrong one looks wrong. Bit-exact against the real `WanRotaryPosEmbed` —
+that test imports the upstream package rather than re-implementing it,
+because a hand-written oracle for this would just be a second chance to
+make the same mistake.
+
+Token positions are fixed by the layout: special token *j* sits at
+`(f, j, j)` and patch `(py, px)` at `(f, 6+py, 6+px)`, so the six
+special tokens run down a diagonal that the patch grid never reaches.
+
 ### Stage 4 (partial) — the block on the device (`src/devblock.nu`)
 
 The block again, this time in **f32 over gpukit's `gkd_*` ops** — gemm,
@@ -170,6 +193,15 @@ cd packages/lingbot-map && ./tests/lingbot_map_test.sh
 Needs a python with torch (any CPU build) for the oracle; set
 `PYTORCH_PY`, or drop a venv at the repo root as `.venv-oracle`. Without
 one the oracle steps skip and the code is only smoke-run.
+
+Two steps go further and import the **upstream package** from
+`~/dev/lingbot-map` (needs `torch torchvision pillow numpy scipy einops
+huggingface_hub`): the 3-D rope check, and `tests/agg_oracle.py`, which
+loads the real checkpoint and runs the actual model end to end. That
+last one is how `tests/agg_ref_courthouse0.txt` was produced — the
+aggregator's four outputs for one example frame, which is the ground
+truth the rest of stage 4 is built against. Regenerating it takes the
+4.6 GB checkpoint and a few minutes of CPU, so it is committed.
 
 ## Notes for whoever picks this up
 

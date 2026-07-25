@@ -104,3 +104,100 @@ $ `stdlib/std/float.nu`
         = h + h 1
     }
 }
+
+// ── 3-D rotary position embedding (the global blocks) ───────────────
+//
+// The aggregator's GLOBAL blocks do not use the 2-D rope above. With
+// `enable_3d_rope` — which is demo.py's default — they use
+// `WanRotaryPosEmbed`, and it differs in three ways at once:
+//
+//   * three axes, not two: (frame, row, column), with the 64-dim head
+//     split 20 / 22 / 22 rather than in half;
+//   * theta 10000, not 100;
+//   * the rotation pairs are INTERLEAVED — (x₀,x₁), (x₂,x₃), … — where
+//     the 2-D rope splits each half at half/2. Same idea, incompatible
+//     memory order, and nothing about a wrong choice looks wrong.
+//
+// A position is a triple, and the token layout fixes it:
+//
+//   special token j  → (f, j, j)                    j = 0 … 5
+//   patch (py, px)   → (f, psi + py, psi + px)      psi = 6
+//
+// so the special tokens sit on the diagonal below the patch grid and
+// never collide with it.
+//
+//   ( rope3d_tables maxpos cos sin )    → v   [maxpos, 32] each
+//   ( rope3d_apply x heads n dim fr rw cl cos sin ) → v   in place
+
+: f ROPE3_THETA 10000.0
+: i R3_T 20  // head-dim slice for the frame axis
+: i R3_H 22  // … for the row axis
+: i R3_W 22  // … for the column axis
+
+// Half-widths, i.e. how many complex frequencies each axis contributes.
+@ rope3d_nt → i { ^ / R3_T 2 }
+
+@ rope3d_nh → i { ^ / R3_H 2 }
+
+@ rope3d_nw → i { ^ / R3_W 2 }
+
+@ rope3d_width → i { ^ + ( rope3d_nt ) + ( rope3d_nh ) ( rope3d_nw ) }
+
+// cos/sin for one axis, written into `out` at column `col0` of a row of
+// `width` — the three axes share one table so a token's 32 frequencies
+// are contiguous.
+@ __r3_axis i dim i maxpos i col0 i width * f cos_t * f sin_t → v {
+    : i half / dim 2
+    : ~ i p 0
+    ~ < p maxpos {
+        : ~ i i0 0
+        ~ < i0 half {
+            : f expo / # f * 2 i0 # f dim
+            : f inv / 1.0 ( float_pow ROPE3_THETA expo )
+            : f ang * # f p inv
+            = . cos_t + * p width + col0 i0 ( float_cos ang )
+            = . sin_t + * p width + col0 i0 ( float_sin ang )
+            = i0 + i0 1
+        }
+        = p + p 1
+    }
+}
+
+// [maxpos, 32] cos and sin, laid out t(10) | h(11) | w(11).
+@ rope3d_tables i maxpos * f cos_t * f sin_t → v {
+    : i width ( rope3d_width )
+    ( __r3_axis R3_T maxpos 0 width cos_t sin_t )
+    ( __r3_axis R3_H maxpos ( rope3d_nt ) width cos_t sin_t )
+    ( __r3_axis R3_W maxpos + ( rope3d_nt ) ( rope3d_nh ) width cos_t sin_t )
+}
+
+// Rotate `x` [heads, n, dim] in place. `fr` / `rw` / `cl` hold each
+// token's (frame, row, column) position. dim must be 2·width (64).
+@ rope3d_apply * f x i heads i n i dim * i fr * i rw * i cl * f cos_t * f sin_t → v {
+    : i width ( rope3d_width )
+    ? | | <= heads 0 <= n 0 != dim * 2 width { ^ v } {}
+    : i nt ( rope3d_nt )
+    : i nh ( rope3d_nh )
+    : ~ i h 0
+    ~ < h heads {
+        : ~ i t 0
+        ~ < t n {
+            : i base + * h * n dim * t dim
+            : ~ i j 0
+            ~ < j width {
+                // which axis this frequency belongs to picks the position
+                : i pos ? < j nt . fr t ? < j + nt nh . rw t . cl t
+                : i tbl + * pos width j
+                : f c . cos_t tbl
+                : f s . sin_t tbl
+                : f x1 . x + base * 2 j
+                : f x2 . x + base + * 2 j 1
+                = . x + base * 2 j - * x1 c * x2 s
+                = . x + base + * 2 j 1 + * x1 s * x2 c
+                = j + j 1
+            }
+            = t + t 1
+        }
+        = h + h 1
+    }
+}

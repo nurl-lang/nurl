@@ -61,7 +61,7 @@ print("worst relative error %.3e" % worst)
 PY
 }
 
-echo "[1/8] camera geometry vs the reference torch code"
+echo "[1/9] camera geometry vs the reference torch code"
 if ! $NURL tests/geomcheck.nu "$WORK/geomcheck" >/dev/null 2>"$WORK/build.err"; then
     bad "geomcheck build"; cat "$WORK/build.err"
 elif [ -z "$PYTORCH_PY" ] || ! "$PYTORCH_PY" -c "import torch" 2>/dev/null; then
@@ -78,7 +78,7 @@ else
     fi
 fi
 
-echo "[2/8] frame preprocessing vs the reference load_fn pipeline"
+echo "[2/9] frame preprocessing vs the reference load_fn pipeline"
 # Real frames, not synthetic ones: the resize ratio, the patch-multiple
 # rounding and the centre crop only interact on an actual aspect ratio.
 FRAMES=""
@@ -107,7 +107,7 @@ else
     fi
 fi
 
-echo "[3/8] position-grid resample vs torch bicubic+antialias"
+echo "[3/9] position-grid resample vs torch bicubic+antialias"
 if ! $NURL tests/interpcheck.nu "$WORK/ic" >/dev/null 2>"$WORK/ic_build.err"; then
     bad "interpcheck build"; tail -6 "$WORK/ic_build.err"
 elif [ -z "$PYTORCH_PY" ] || ! "$PYTORCH_PY" -c "import torch" 2>/dev/null; then
@@ -122,7 +122,7 @@ else
     fi
 fi
 
-echo "[4/8] 2-D rotary position embedding vs the reference"
+echo "[4/9] 2-D rotary position embedding vs the reference"
 if ! $NURL tests/ropecheck.nu "$WORK/rc" >/dev/null 2>"$WORK/rc_build.err"; then
     bad "ropecheck build"; tail -6 "$WORK/rc_build.err"
 elif [ -z "$PYTORCH_PY" ] || ! "$PYTORCH_PY" -c "import torch" 2>/dev/null; then
@@ -137,7 +137,7 @@ else
     fi
 fi
 
-echo "[5/8] patch embedding vs torch Conv2d"
+echo "[5/9] patch embedding vs torch Conv2d"
 if ! $NURL tests/pecheck.nu "$WORK/pe" >/dev/null 2>"$WORK/pe_build.err"; then
     bad "pecheck build"; tail -6 "$WORK/pe_build.err"
 elif [ -z "$PYTORCH_PY" ] || ! "$PYTORCH_PY" -c "import torch" 2>/dev/null; then
@@ -152,7 +152,7 @@ else
     fi
 fi
 
-echo "[6/8] full transformer block vs the reference Block"
+echo "[6/9] full transformer block vs the reference Block"
 if ! $NURL tests/blockcheck.nu "$WORK/bc" >/dev/null 2>"$WORK/bc_build.err"; then
     bad "blockcheck build"; tail -6 "$WORK/bc_build.err"
 elif [ -z "$PYTORCH_PY" ] || ! "$PYTORCH_PY" -c "import torch" 2>/dev/null; then
@@ -167,7 +167,7 @@ else
     fi
 fi
 
-echo "[7/8] the real 4.6 GB checkpoint (skipped when absent)"
+echo "[7/9] the real 4.6 GB checkpoint (skipped when absent)"
 CKPT="${LINGBOT_CKPT:-$HOME/.nurl/models/lingbot-map/lingbot-map.pt}"
 if [ ! -f "$CKPT" ]; then
     skip "no checkpoint at $CKPT — set LINGBOT_CKPT"
@@ -190,7 +190,7 @@ else
     fi
 fi
 
-echo "[8/8] the block on the DEVICE (f32) vs the host reference"
+echo "[8/9] the block on the DEVICE (f32) vs the host reference"
 # Tolerance is float32's, not float64's: the device path computes in f32
 # on purpose. 1e-4 is two orders above what is observed (~3e-6) and two
 # orders below what any real stride bug produces (a wrong head stride
@@ -211,6 +211,26 @@ else
         else
             bad "device block differs: worst=$WORST over $NCASE cases"; cat "$WORK/dbc.txt"
         fi
+    fi
+fi
+
+echo "[9/9] 3-D rope vs the real WanRotaryPosEmbed"
+# This one imports the upstream package rather than re-implementing it:
+# the 3-D rope is fiddly enough (three axes, interleaved pairs, a 20/22/22
+# head split) that a hand-written oracle would just be a second chance to
+# make the same mistake.
+if ! $NURL tests/rope3check.nu "$WORK/r3" >/dev/null 2>"$WORK/r3_build.err"; then
+    bad "rope3check build"; tail -6 "$WORK/r3_build.err"
+elif [ -z "$PYTORCH_PY" ] ||
+     ! "$PYTORCH_PY" -c "import sys,os;sys.path.insert(0,os.path.expanduser('~/dev/lingbot-map'));import lingbot_map.layers.rope" 2>/dev/null; then
+    skip "needs the upstream lingbot_map package importable (~/dev/lingbot-map)"
+else
+    "$WORK/r3" > "$WORK/r3_nurl.txt" 2>&1
+    "$PYTORCH_PY" tests/rope3_oracle.py 2>/dev/null | grep -E "^w[0-9]" > "$WORK/r3_ref.txt"
+    if out="$(cmp_rows "$WORK/r3_ref.txt" "$WORK/r3_nurl.txt" 1e-14)"; then
+        ok "rope3d matches WanRotaryPosEmbed + apply_rotary_emb — $out"
+    else
+        bad "rope3d differs from the reference"; echo "$out"
     fi
 fi
 
