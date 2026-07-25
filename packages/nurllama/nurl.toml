@@ -12,7 +12,7 @@ gpu = { path = "../gpu", version = "^0.11" }
 http = { path = "../http", version = "^0.3" }
 grad = { path = "../grad", version = "^0.8" }
 nn = { path = "../nn", version = "^0.1" }
-gpukit = { path = "../gpukit", version = "^0.5" }
+gpukit = { path = "../gpukit", version = "^0.6" }
 tensor = { path = "../tensor", version = "^0.4" }
 
 hub = { path = "../hub", version = "^0.1" }

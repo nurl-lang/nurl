@@ -1,0 +1,98 @@
+---
+title: Editor and tooling
+description: The language server, package manager, and MCP server.
+icon: Wrench
+---
+
+Beyond the compiler, NURL ships a formatter, a language server, a package
+manager, and a local MCP server. You can build each one separately from
+the repo.
+
+## Editor support
+
+[`tooling/vscode-nurl/`](https://github.com/nurl-lang/nurl/tree/main/tooling/vscode-nurl)
+is a VS Code extension. It also works in Cursor and Windsurf. It has
+syntax highlighting and a full language server. The language server gives:
+go-to-definition, hover, document outline, completion, workspace symbol
+search, folding, and `nurlfmt`-backed formatting on save.
+
+```bash
+git clone https://github.com/nurl-lang/nurl.git
+cd nurl
+./install.sh
+```
+
+`install.sh` is idempotent. It is safe to re-run. It bootstraps the
+compiler. It builds `nurl-lsp`. It symlinks it onto your `PATH`. It
+installs the VS Code extension if `code` / `cursor` / `windsurf` is
+available. Flags: `--no-vscode`, `--no-path`, `--force`, `--uninstall`.
+
+The browser [playground](./playground-ai) ships the same tokenizer. The
+playground ports it to Monaco. Syntax highlighting works there with no
+install.
+
+## Language server (`nurl-lsp`)
+
+`./tools/nurl-lsp/build.sh` builds a stdio JSON-RPC server. It has
+diagnostics, go-to-definition, hover, document symbols, completion,
+formatting, workspace symbol search, and folding ranges. This is the
+engine behind the editor extension above.
+
+## Package manager (`nurlpkg`)
+
+`./tools/nurlpkg/build.sh` builds a Cargo-shaped package manager. It
+handles path dependencies and registry dependencies. The registry is at
+[reg.nurl-lang.org](https://reg.nurl-lang.org). Manifests work in a repo
+checkout and from a published tarball.
+
+```bash
+mkdir demo-app && cd demo-app
+nurlpkg init demo-app                  # write nurl.toml
+nurlpkg add http-router --path ../router --version 0.2.0
+nurlpkg install                        # symlink deps/, write nurl.lock
+nurlpkg verify                         # CI gate: exit 1 on lockfile drift
+
+nurlpkg install nq                     # fetch + build a registry program
+nurlpkg publish                        # pack + upload
+```
+
+Other subcommands: `info`, `deps`, `remove`, `update`, `lock`, `login`,
+`logout`, `search`, `yank` / `unyank`, `test`, `bench`, `version`.
+
+## MCP server (`nurl-mcp`)
+
+`nurlpkg install nurl-mcp` gives an LLM agent a local MCP server. The
+server uses the installed toolchain. It can build, run, type-check,
+format, and compile to WebAssembly. It also gives read access to the
+installed standard library.
+
+```bash
+claude mcp add nurl -- nurl-mcp
+```
+
+Stdio is the default. The flag `--http` adds a token-authenticated
+network transport. Code execution is gated behind `--allow-run`. The flag
+`--read-only` strips everything but the analysis tools. This is the local
+counterpart to the hosted MCP endpoint. That endpoint is covered in
+[Playground and APIs](./playground-ai).
+
+## WebAssembly toolchain
+
+```bash
+nurlpkg install wasmbuilder     # NURL → wasm32-wasi, fully local
+nurlpkg install wasmtime        # pure-NURL wasm runtime
+
+wasmbuilder program.nu          # → program.wasm
+wasmtime run program.wasm
+```
+
+`wasmbuilder` drives `nurlc`. It retargets the emitted IR for wasm32-wasi.
+It links with a bundled `zig cc`. `wasmbuilder --doctor` diagnoses a local
+setup.
+
+## Next
+
+- [Formatting](./formatting) — the rules `nurlfmt` enforces.
+- [Testing and benchmarking](./testing-and-benchmarking) — `nurlpkg test` / `nurlpkg bench` in full.
+- [Platforms](./platforms) — where the toolchain runs and what it can target.
+- [Playground and APIs](./playground-ai) — the hosted equivalent of the MCP server.

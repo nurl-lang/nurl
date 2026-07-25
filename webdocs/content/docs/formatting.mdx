@@ -1,0 +1,65 @@
+---
+title: Formatting
+description: nurlfmt — the canonical, non-configurable source formatter.
+icon: TextAlignStart
+---
+
+`nurlfmt` produces one canonical layout per source file. The rules are
+opinionated and not configurable — the same idea as `gofmt` or `zig fmt`.
+`./build.sh` builds it to `build/nurlfmt`.
+
+```bash
+./nurlfmt.sh <file.nu>              # format, print to stdout
+./nurlfmt.sh --write   <file.nu> …  # rewrite in place
+./nurlfmt.sh --check   <file.nu> …  # CI gate — exit 1 if not canonical
+cat src.nu | ./nurlfmt.sh           # stdin → stdout
+```
+
+## The rules
+
+- **4 spaces per nesting level, no tabs.** `{` opens a level and
+  `}` closes it. Parentheses and brackets do not add a level — call
+  arguments stay on one line by default.
+- **Exactly one space between adjacent tokens.** No alignment whitespace.
+- **One statement per line** inside a block, and one match arm per line.
+- **Opening `{` stays on the construct's line; closing `}` gets its own
+  line**, aligned with the opener.
+- **Delimiters get one inner space on each side when non-empty**:
+  `( fn arg arg )`, `[ T | 1 2 3 ]`, `@ Rect { 3 7 }` — and collapse to no
+  space when empty: `( fn )`, `{}`.
+- **One blank line between top-level declarations**; multiple blank
+  lines collapse to one. Do not put blank lines right after `{` or right
+  before `}`.
+- **No trailing whitespace**, and the file ends with exactly one newline.
+- **No automatic line wrapping.** A long expression stays on one line
+  unless the author already broke it across lines — `nurlfmt` preserves
+  a user-introduced newline inside an expression. It does not fight it.
+
+```nu
+@ fizzbuzz i n → v {
+    : ~ i i 1
+    ~ <= i n {
+        : b div3 == 0 % i 3
+        : b div5 == 0 % i 5
+        ? & div3 div5
+            { ( nurl_print `FizzBuzz\n` ) }
+            ? div3
+                { ( nurl_print `Fizz\n` ) }
+                { ( nurl_print `\n` ) }
+        = i + i 1
+    }
+}
+```
+
+## Idempotence
+
+Formatting is a fixed point: `nurlfmt(nurlfmt(x)) == nurlfmt(x)`. Every
+shipped `.nu` file round-trips byte-for-byte. Compiling the formatted
+output produces the same result as compiling the original. The build
+system checks this on every build.
+
+## Next
+
+- [Editor and tooling](./editor-and-tooling) — the language server that runs `nurlfmt` on save.
+- For the complete rule set with worked before/after examples, see
+  [`docs/FORMAT.md`](https://github.com/nurl-lang/nurl/blob/main/docs/FORMAT.md).

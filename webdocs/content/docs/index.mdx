@@ -6,15 +6,15 @@ import { Step, Steps } from 'fumadocs-ui/components/steps';
 
 
 <img src="/graphics/nurlfullc.svg" alt="NURL colored full logo" className="h-16 m-auto" />
-**NURL** (Neural Unified Representation Language) is a compiled language without a virtual machine, garbage collector and interpreter. `.nu` files are compiled straight to a native executable or a WebAssembly module.
+**NURL** (Neural Unified Representation Language) has no virtual machine, garbage collector, or interpreter. The `nurlc` compiler compiles `.nu` files straight to a native executable or a WebAssembly module.
 
 <Callout type="warn" title="Work In Progress">
-  * NURL web documentation is maintained separately.
-  * For up-to-date information refer to the repository documentation in [docs](https://github.com/nurl-lang/nurl/tree/main/docs).
+  * This site is a simplified, hand-maintained companion to the repository documentation, and does not yet cover everything.
+  * For the exhaustive, normative reference, see [docs](https://github.com/nurl-lang/nurl/tree/main/docs) in the repository.
 </Callout>
 ## Features of NURL
 
-NURL is **designed** to be a target for **LLM code generation** specifically. The regular grammar means errors stay local and a whole program fits predictably in a context window.
+NURL targets **LLM code generation** specifically. The regular grammar means errors stay local and a whole program fits predictably in a context window.
 
 - **Prefix-arity grammar** -- every construct has a fixed arity and there is no infix/precedence table to learn. This is easier to parse for the AI and results in lower token usage. The grammar fits on one page and parses with at most 4 tokens of lookahead (LL(k≤4)).
 - **Reproducible builds** (deterministic compilation) -- same source produces byte-identical output on every supported platform.
@@ -26,11 +26,11 @@ NURL is **designed** to be a target for **LLM code generation** specifically. Th
 
 NURL is actively developed and is now in a **pre-release** state. See [`ROADMAP.md`](https://github.com/nurl-lang/nurl/blob/main/ROADMAP.md) for the latest version.
 
-Major changes are currently less frequent, and the stable release is planned for late 2026.
+Major changes now happen less often. The team plans a stable release for late 2026.
 
 ### Requirements
 
-- Only clang / LLVM 15 or newer if you are building from source
+- Only clang / LLVM 15 or newer if you build from source
 
 ## Get NURL
 
@@ -39,13 +39,13 @@ Major changes are currently less frequent, and the stable release is planned for
 **[Installation](./install.mdx)** — The `nurlc` compiler (and the `nurlpkg` / `nurlfmt` tools)
 </Step>
 <Step>
-**First program** — write and understand a minimal "hello world" program
+**[Language basics](./language-basics.mdx)** — write and understand a minimal "hello world" program
 </Step>
 <Step>
 **[Compiling and running](./compiling-and-running.mdx)** — the compile pipeline, the `nurl` wrapper, and useful flags.
 </Step>
 <Step>
-**[Next steps](./next-steps.mdx)** — The language guide, the standard library, the examples folder, and the online playground.
+**[Next steps](./next-steps.mdx)** — the language guide, the standard library, the examples folder, and the online playground.
 </Step>
 </Steps>
 

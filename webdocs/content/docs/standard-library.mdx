@@ -1,0 +1,114 @@
+---
+title: Standard library tour
+description: What lives in core/, std/, and ext/, grouped by category.
+icon: Library
+---
+
+The standard library is plain `.nu` source. You pull it in with `$`-imports.
+No separate package step is necessary. It has three layers:
+
+| Layer | Path | Contents |
+|---|---|---|
+| `core` | `stdlib/core/` | Built into every program's assumptions: strings, vectors, Option/Result, memory helpers |
+| `std` | `stdlib/std/` | The general-purpose standard library: collections, I/O, time, threads, crypto primitives |
+| `ext` | `stdlib/ext/` | Higher-level, optional modules: HTTP, JSON, package management, MCP |
+
+Every module is plain-text and readable. The fastest way to see a module's
+exact function signatures: use `nurl_read_stdlib` (via the
+[NURL MCP server](./playground-ai#mcp-server-integration)) or open the file
+under `stdlib/` directly.
+
+## Core
+
+| Module | Contents |
+|---|---|
+| `string.nu` | the managed `String` type and its operations |
+| `vec.nu` | `Vec[T]`, a growable array |
+| `option.nu` / `result.nu` | combinators for `?T` and `!T E` — see [Error handling](./error-handling) |
+| `slice.nu` | slice helpers |
+| `mem.nu` | low-level allocation helpers |
+| `box.nu` / `cell.nu` / `pair.nu` | small owned-value wrappers |
+| `char.nu` | character classification |
+| `io.nu` | basic input/output |
+| `errors.nu` | shared error-value shapes |
+| `symtab.nu` / `posix.nu` | compiler/runtime-facing helpers |
+
+## Collections
+
+`hashmap.nu`, `btree.nu`, `ordmap.nu` (insertion-ordered map), `set.nu`,
+`deque.nu`, `heap.nu`, `bitset.nu`, `lru.nu` — plus `arena.nu` for
+bump-allocated batches, and `arc.nu` / `rc.nu` for shared ownership
+(`Arc` is thread-safe, `Rc` is single-threaded — see
+[Concurrency](./concurrency)).
+
+## Numbers and encoding
+
+`int.nu`, `float.nu`, `floatbits.nu`, `bigint.nu`, `decimal.nu`, `fft.nu`
+for numeric work; `encode.nu` and `utf8.nu` for text encoding; `fmt.nu`
+for formatted output.
+
+## I/O and the operating system
+
+`fs.nu` (filesystem), `bufio.nu` (buffered I/O), `path.nu`, `process.nu`,
+`args.nu`, `env.nu` (`ext/`), `signal.nu`, `term.nu`, `progress.nu`,
+`fswatch.nu`.
+
+## Time and concurrency
+
+`time.nu`, `thread.nu`, `channel.nu`, `async.nu`, `async_ffi.nu` — see
+[Concurrency](./concurrency) for the full picture.
+
+## Networking
+
+`net.nu`, `dns.nu`, `udp.nu`, `unixsock.nu`, `url.nu`, `tls.nu`,
+`tls_server.nu`, `tls_verify.nu` in `std/`; the HTTP/1.1 and HTTP/2 stack
+(`http.nu`, `http_server.nu`, `http_router.nu`, `http_middleware.nu`,
+`http2_*.nu`, and more), `websocket.nu`, `mqtt.nu` in `ext/`. See
+[Networking](./networking) for a guided tour.
+
+## Cryptography
+
+`aes_gcm.nu`, `chacha20poly1305.nu`, `ecdsa_p256.nu`, `ed25519.nu`,
+`x25519.nu`, the `hash_*.nu` family (SHA-1/2, MD5, BLAKE2b, BLAKE3),
+`hkdf.nu`, `pbkdf2.nu`, `scrypt.nu`, `rsa.nu`, `minisign.nu`,
+`subtle.nu` (constant-time comparisons), `x509.nu` / `x509_gen.nu` in
+`std/`; `crypto.nu`, `jwt.nu`, `http_jwt.nu` in `ext/`. See
+[Cryptography](./cryptography).
+
+## Data formats and serialization
+
+`json.nu`, `msgpack.nu`, `cbor.nu`, `toml.nu`, `yaml.nu`, `xml.nu`,
+`csv.nu`, `serde.nu` (a `Serialize` trait), `zip.nu`, `tar.nu`,
+`compress.nu`, `deflate.nu`.
+
+## Packages and the registry
+
+`manifest.nu`, `resolver.nu`, `semver.nu`, `lockfile.nu`,
+`registry_index.nu`, `pkg_fetch.nu`, `pkg_publish.nu`, `update_check.nu` —
+the pieces `nurlpkg` is built from. See
+[Editor and tooling](./editor-and-tooling).
+
+## Diagnostics and dev tools
+
+`bench.nu`, `log.nu`, `trace.nu`, `panic.nu` (see
+[Error handling](./error-handling)), `sort.nu`, `cmp.nu`, `random.nu`,
+`rng.nu`, `lifeguard.nu` (false-positive suppression for failure
+detectors), `dos.nu` (abuse-resistance limits), `nurldoc.nu`.
+
+## Distributed computing and embedded
+
+`stdlib/net/` and `stdlib/dist/` build a peer-to-peer stack — encrypted
+transport, NAT traversal, membership/failure detection, and CRDTs — on
+top of the socket layer above. See [Distributed computing](./distributed-computing).
+`stdlib/hal/` holds hardware-facing code (now an ESP32
+memory-mapped I/O layer) for embedded targets — see
+[Embedded targets](./embedded-targets). Both are advanced, opt-in layers.
+
+## Next
+
+- [Networking](./networking)
+- [Cryptography](./cryptography)
+- [Distributed computing](./distributed-computing) and [Embedded targets](./embedded-targets)
+- Runnable examples for many of these modules are in
+  [`examples/`](https://github.com/nurl-lang/nurl/tree/main/examples) — see
+  [Next steps](./next-steps).

@@ -1,0 +1,108 @@
+---
+title: Concurrency
+description: OS threads, the async fiber runtime, and channels.
+icon: Cpu
+---
+
+import { Accordion, Accordions } from 'fumadocs-ui/components/accordion';
+
+NURL offers two concurrency models that share the same channel type:
+plain OS threads, and an M:N fiber runtime for I/O-heavy workloads.
+The same borrow-checker rules cover both to share state safely.
+
+## Threads
+
+[`stdlib/std/thread.nu`](https://github.com/nurl-lang/nurl/blob/main/stdlib/std/thread.nu)
+wraps libpthread directly: `thread_spawn`, mutexes, condition variables,
+and semaphores.
+
+```nu
+( thread_spawn ( @ v ) f )     → !Thread ThreadErr
+( thread_join  Thread t )      → i
+( mutex_new )                  → Mutex
+( mutex_with Mutex m ( @ v ) body ) → v   // lock, run, unlock
+```
+
+The runtime copies a `thread_spawn` closure's captured environment to the worker
+thread. The compiler rejects capturing an `Rc` (a non-atomic reference count) at
+compile time. If two threads race on its count, the result is undefined behavior. Use
+`Arc` (`stdlib/std/arc.nu`, atomic reference count) for any handle that you share
+across threads, and `Arc[Mutex]` for shared mutable state.
+
+## Async fibers
+
+[`stdlib/std/async.nu`](https://github.com/nurl-lang/nurl/blob/main/stdlib/std/async.nu)
+ships an M:N stackful-fiber runtime: many lightweight fibers multiplex
+onto a small pool of OS worker threads, with an I/O reactor that parks a
+fiber on a socket and resumes it when the socket is ready.
+
+There is no `async` keyword and no colored functions — ordinary code runs
+unchanged inside a fiber, and blocking I/O calls become cooperative
+automatically when they run in a fiber context.
+
+```nu
+$ `stdlib/std/async.nu`
+
+@ main → i {
+    ( runtime_init 0 )      // 0 = worker count from $NURL_WORKERS, default cores
+    ( spawn \ → v { ( nurl_print `hello from a fiber\n` ) } )
+    ( runtime_run )          // blocks until every fiber is done
+    ^ 0
+}
+```
+
+| Function | Meaning |
+|---|---|
+| `runtime_init workers` | start the worker pool |
+| `runtime_run` | block until the pending-fiber count reaches 0 |
+| `spawn body` | fire-and-forget fiber |
+| `spawn_joinable body` | fiber whose completion can be awaited with `fiber_join` |
+| `yield` | cooperative reschedule point |
+
+Fibers need `ucontext`, available on Linux (glibc), macOS, and the BSDs.
+On platforms where it is not reliable (Linux musl, Windows, WASI) the
+runtime stubs fibers transparently: `spawn` and the async I/O calls fall
+back to their blocking equivalents, so the same program still runs.
+
+<Callout type="warn" title="Spawn is not a new thread">
+A spawned closure runs on some worker's fiber. A CPU-bound fiber that
+never yields occupies its worker until it does — call `yield` inside long
+computations to keep other fibers responsive.
+</Callout>
+
+## Channels
+
+[`stdlib/std/channel.nu`](https://github.com/nurl-lang/nurl/blob/main/stdlib/std/channel.nu)
+provides `Channel[A]`, one generic thread-safe FIFO queue that works from
+both plain threads and fibers — a fiber caller parks without blocking its
+worker; a thread caller blocks on a condition variable.
+
+```nu
+( chan_new [A] )                       → ( Channel A )
+( chan_send [A] ( Channel A ) ch A v )  → b    // false if closed
+( chan_recv [A] ( Channel A ) ch )      → ?A   // None when closed and drained
+( chan_close [A] ( Channel A ) ch )     → v
+```
+
+## Channel select
+
+A `??` that has `{` immediately after it — with no scrutinee — is a Go-style
+select: it runs the body of whichever channel arm becomes ready first, in
+source order.
+
+```nu
+?? {
+    [i]      jobs    → o { ?? o { T n → ( work n )  F → ( quit ) } }
+    [String] control → o { ?? o { T s → ( handle s ) F → ( quit ) } }
+    _                → { /* nothing ready */ }
+}
+```
+
+With no `_` arm, the select blocks until some channel is ready. With a
+`_` arm, it never blocks. The default runs immediately when nothing is ready.
+
+## Next
+
+- [Memory and ownership](./memory-and-ownership) — the escape-analysis rules that apply to `thread_spawn` and `spawn` closures.
+- [Networking](./networking) — the async-aware socket layer these primitives sit under.
+- For the full runtime design, see [`docs/ASYNC.md`](https://github.com/nurl-lang/nurl/blob/main/docs/ASYNC.md).

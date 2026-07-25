@@ -1,0 +1,124 @@
+---
+title: Cheat sheet
+description: NURL's syntax on one page.
+icon: ClipboardList
+---
+
+A condensed reference. Each section links to the full page it comes from.
+
+## Types
+
+| Type | Meaning |
+|---|---|
+| `v` | unit |
+| `i` | signed 64-bit integer |
+| `u` | unsigned byte |
+| `f` | 64-bit float |
+| `b` | boolean |
+| `s` | C string (`i8*`) |
+| `i8 i16 i32 i64` / `u16 u32 u64` / `f32` | sized integers / float |
+| `*T` | raw pointer |
+| `?T` | option |
+| `!T E` | result |
+| `[T` | slice |
+| `(@ R P*)` | closure type |
+
+## Literals and bindings
+
+```nu
+42          -7           3.14        -2.5e10
+`text\n`    T   F                          // string, true, false
+
+: i n 0          // let, explicit type
+: ~ i x 0        // mutable
+: total ( f )    // inferred
+= x 5            // reassign (x must be mutable)
+```
+
+## Functions and calls
+
+```nu
+@ add i a i b → i { ^ + a b }     // declare
+( add 1 2 )                        // call — always parenthesized
+: (@ i i) sq \ i x → i { * x x }  // closure literal
+```
+
+| Parameter form | Meaning |
+|---|---|
+| `T x` | immutable borrow (default) |
+| `inout T x` | mutable borrow, caller's storage |
+| `sink T x` | takes ownership |
+
+## Operators — all prefix, fixed arity
+
+```nu
++ - * / %        < > <= >= == !=        << >>
+& |  (bool or bitwise)     ^^ (xor)     && || (strict bool)
+! expr    (not)      ~ expr  (complement)
+^ expr    (return)   \ expr  (try-propagate)
+# type expr   (cast)          Z type   (sizeof)
+```
+
+Binary operators take exactly 2 operands — chain with `& a & b c` for
+`a && b && c`.
+
+## Control flow
+
+```nu
+? cond then else                  // ternary
+~ cond { body }                   // while
+~ item collection { body }        // foreach
+?? expr { Variant x → ... _ → ... }   // match, exhaustive
+```
+
+## Structs and enums
+
+```nu
+: Point { i x  i y }
+@ Point { 1 2 }                       // construct
+. p x                                 // field access
+
+: | Shape { Circle f  Rect f f }
+?? shape { Circle r → ... Rect w h → ... }
+```
+
+## Error handling
+
+```nu
+@ ?T { T v }   @ ?T { F 0 }        // Option: Some / None
+@ !T E { T v }  @ !T E { F e }     // Result: Ok / Err
+: x \ ( might_fail )                // try-propagate, returns early on failure
+( opt_expect o `msg` )  ( res_expect r `msg` )   // unwrap or panic
+```
+
+## Memory
+
+- A `:` binding owns a fresh allocation. The compiler frees it
+  automatically at scope exit.
+- `inout` mutates the caller's value. `sink` takes ownership.
+- You must manage `Vec`, `String`, and an escaping closure environment by
+  hand. Free them yourself.
+- Use `Arc` (not `Rc`) for anything shared across threads.
+
+## Common stdlib entry points
+
+```nu
+$ `stdlib/core/string.nu`
+$ `stdlib/std/vec.nu` v          // aliased import
+( v::vec_new [i] )
+```
+
+| Need | Module |
+|---|---|
+| Strings | `core/string.nu` |
+| Growable array | `core/vec.nu` |
+| Hash map | `std/hashmap.nu` |
+| JSON | `ext/json.nu` |
+| HTTP client/server | `ext/http.nu`, `ext/http_server.nu` |
+| Threads / channels | `std/thread.nu`, `std/channel.nu` |
+| Async fibers | `std/async.nu` |
+
+## Next
+
+- [Language basics](./language-basics) for the full walkthrough this sheet summarizes.
+- The normative grammar is [`docs/spec.md`](https://github.com/nurl-lang/nurl/blob/main/docs/spec.md).

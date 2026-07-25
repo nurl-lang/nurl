@@ -114,9 +114,13 @@ gpukit profile: 1113 ms of device time over 26 kernels
   18%  207653 us   180 calls 1153633 ns/call  gk32_conv2d
 ```
 
-**The kernels are shaped for the machine.** Measured on an RTX 4090 in
-f32, all bit-identical to the per-element kernels they replaced (see
-Numerics):
+**The kernels are shaped for the machine.** Two different machines, in
+fact: matmul/bmm/gemm carry a register-tiled body for the CPU backend
+(one thread owns an 8x32 block of C — see 0.5.0) and a shared-memory
+tiled one for CUDA, because 256 accumulators per thread is right on a
+core and far past a CUDA thread's register budget. The CUDA numbers,
+measured on an RTX 4090 in f32, all bit-identical to the per-element
+kernels they replaced (see Numerics):
 
 | | before | after |
 | --- | --- | --- |
