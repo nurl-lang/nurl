@@ -10,6 +10,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Two more quadratics inside `nurlc` — self-compile 1.01 s → 0.86 s.**
+  Found with `perf` (the previous compiler fix came from gprof), which
+  showed 20% of the compiler's runtime inside libc `strlen` and named
+  the two callers:
+
+  * `emit_hoisted` materialised **every IR line** with `nurl_str_slice`,
+    which re-runs `strlen` over the *whole function body* and mallocs a
+    copy — per line, and twice, since the pass runs once for allocas and
+    once for everything else. That is quadratic in function-body size
+    (8.7% of total runtime in `strlen` alone, plus a leaked allocation
+    per emitted line). Lines are now printed in place: write a NUL over
+    the terminating newline, print from the buffer, restore the byte.
+    `nurl_print` consumes its argument synchronously and
+    `nurl_print_buf_stop` returns an independent `strdup`, so the swap is
+    never observable.
+  * `__bck_st_get_at` — the borrow checker's per-binding state lookup,
+    called 14.8M times per self-compile — scanned its space-separated
+    state string with `nurl_str_get`, i.e. a `strlen` per byte examined
+    (17% of the profile, plus 5% more inside `strlen`). The token walk
+    now runs on `memmem` + `memcmp`.
+
+  Emitted IR is byte-identical and the bootstrap fixed point holds. Peak
+  RSS is unchanged. `memchr` was tried in place of `memmem` for the
+  one-byte needles and made no measurable difference, so it was dropped
+  rather than carried for the extra FFI declaration.
+
 - **`nurlc` recomputed the current line number by rescanning the source
   from byte 0 on every parser backtrack — 3.3× faster self-compile.**
   `nurl_lex_set_pos` counted newlines from the start of the file to
