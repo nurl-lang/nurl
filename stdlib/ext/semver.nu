@@ -101,7 +101,7 @@ $ `stdlib/core/vec.nu`
 @ __sv_index s text i from i end i ch → i {
     : ~ i k from
     ~ < k end {
-        ? == ( nurl_str_get text k ) ch { ^ k } {}
+        ? == ( nurl_str_at text end k ) ch { ^ k } {}
         = k + k 1
     }
     ^ -1
@@ -112,7 +112,7 @@ $ `stdlib/core/vec.nu`
     : String out ( string_new )
     : ~ i k from
     ~ < k to {
-        ( string_push_char out ( nurl_str_get text k ) )
+        ( string_push_char out ( nurl_str_at text to k ) )
         = k + k 1
     }
     ^ out
@@ -126,7 +126,7 @@ $ `stdlib/core/vec.nu`
     : ~ i k from
     : ~ i bad 0
     ~ < k to {
-        : i c ( nurl_str_get text k )
+        : i c ( nurl_str_at text to k )
         ? & >= c 48 <= c 57 {
             = r + * r 10 - c 48
         } {
@@ -207,7 +207,7 @@ $ `stdlib/core/vec.nu`
     ? == n 0 { ^ 0 } {}
     : ~ i k 0
     ~ < k n {
-        : i c ( nurl_str_get a k )
+        : i c ( nurl_str_at a n k )
         ? | < c 48 > c 57 { ^ 0 } {}
         = k + k 1
     }
@@ -219,7 +219,7 @@ $ `stdlib/core/vec.nu`
     : ~ i r 0
     : ~ i k 0
     ~ < k n {
-        = r + * r 10 - ( nurl_str_get a k ) 48
+        = r + * r 10 - ( nurl_str_at a n k ) 48
         = k + k 1
     }
     ^ r
@@ -231,8 +231,8 @@ $ `stdlib/core/vec.nu`
     : i m ? < an bn an bn
     : ~ i k 0
     ~ < k m {
-        : i ca ( nurl_str_get a k )
-        : i cb ( nurl_str_get b k )
+        : i ca ( nurl_str_at a an k )
+        : i cb ( nurl_str_at b bn k )
         ? < ca cb { ^ -1 } {}
         ? > ca cb { ^ 1 } {}
         = k + k 1
@@ -351,7 +351,7 @@ $ `stdlib/core/vec.nu`
     ~ & & == err 0 == wild 0 & == more 1 < pos n {
         : i dot ( __sv_index text pos n 46 )
         : i fieldend ? >= dot 0 dot n
-        ? & == - fieldend pos 1 ( __sv_is_wild ( nurl_str_get text pos ) ) {
+        ? & == - fieldend pos 1 ( __sv_is_wild ( nurl_str_at text n pos ) ) {
             = wild 1
         } {
             : !i SemverErr pv ( __sv_parse_uint text pos fieldend )
@@ -414,9 +414,9 @@ $ `stdlib/core/vec.nu`
 // (bare full version = exact; bare partial = the X-range interval).
 @ __sv_comparator s text i from i to → !SvInterval SemverErr {
     : ~ i start from
-    ~ & < start to == ( nurl_str_get text start ) 32 { = start + start 1 }
+    ~ & < start to == ( nurl_str_at text to start ) 32 { = start + start 1 }
     ? >= start to { ^ @ !SvInterval SemverErr { T ( __sv_any_interval ) } } {}
-    : i c0 ( nurl_str_get text start )
+    : i c0 ( nurl_str_at text to start )
     ? ( __sv_is_wild c0 ) { ^ @ !SvInterval SemverErr { T ( __sv_any_interval ) } } {}
 
     : ~ i op 9  // 9 bare/X-range; 0 ^ ; 1 ~ ; 2 = ; 3 > ; 4 >= ; 5 < ; 6 <=
@@ -424,9 +424,9 @@ $ `stdlib/core/vec.nu`
     ? == c0 94 { = op 0 = vpos + start 1 } {}
     ? == c0 126 { = op 1 = vpos + start 1 } {}
     ? == c0 61 { = op 2 = vpos + start 1 } {}
-    ? == c0 62 { ? & < + start 1 to == ( nurl_str_get text + start 1 ) 61 { = op 4 = vpos + start 2 } { = op 3 = vpos + start 1 } } {}
-    ? == c0 60 { ? & < + start 1 to == ( nurl_str_get text + start 1 ) 61 { = op 6 = vpos + start 2 } { = op 5 = vpos + start 1 } } {}
-    ~ & < vpos to == ( nurl_str_get text vpos ) 32 { = vpos + vpos 1 }
+    ? == c0 62 { ? & < + start 1 to == ( nurl_str_at text to + start 1 ) 61 { = op 4 = vpos + start 2 } { = op 3 = vpos + start 1 } } {}
+    ? == c0 60 { ? & < + start 1 to == ( nurl_str_at text to + start 1 ) 61 { = op 6 = vpos + start 2 } { = op 5 = vpos + start 1 } } {}
+    ~ & < vpos to == ( nurl_str_at text to vpos ) 32 { = vpos + vpos 1 }
 
     : PartialVer p ( __sv_parse_partial text vpos to )
     ? < . p count 0 { ^ @ !SvInterval SemverErr { F # SemverErr SvBadReq } } {}
@@ -520,10 +520,10 @@ $ `stdlib/core/vec.nu`
     : ( Vec i ) te ( vec_new [i] )
     : ~ i p from
     ~ < p to {
-        ~ & < p to == ( nurl_str_get text p ) 32 { = p + p 1 }
+        ~ & < p to == ( nurl_str_at text to p ) 32 { = p + p 1 }
         ? < p to {
             : i s p
-            ~ & < p to != ( nurl_str_get text p ) 32 { = p + p 1 }
+            ~ & < p to != ( nurl_str_at text to p ) 32 { = p + p 1 }
             ( vec_push [i] ts s )
             ( vec_push [i] te p )
         } {}
@@ -564,7 +564,7 @@ $ `stdlib/core/vec.nu`
 @ __sv_tok_is_dash s text ( Vec i ) ts ( Vec i ) te i idx → b {
     : i s ?? ( vec_get [i] ts idx ) { T x → x F → 0 }
     : i e ?? ( vec_get [i] te idx ) { T x → x F → 0 }
-    ^ & == - e s 1 == ( nurl_str_get text s ) 45
+    ^ & == - e s 1 == ( nurl_str_at text e s ) 45
 }
 
 // Parse a full npm-style range: OR ("||") of comparator-sets.
@@ -577,7 +577,7 @@ $ `stdlib/core/vec.nu`
     : ~ b going T
     ~ going {
         : b at_end == p n
-        : b at_or ? & & < + p 1 n == ( nurl_str_get text p ) 124 == ( nurl_str_get text + p 1 ) 124 { T } { F }
+        : b at_or ? & & < + p 1 n == ( nurl_str_at text n p ) 124 == ( nurl_str_at text n + p 1 ) 124 { T } { F }
         ? | at_end at_or {
             : !SvInterval SemverErr sr ( __sv_and_set text seg p )
             ?? sr { T iv → { ( vec_push [SvInterval] alts iv ) } F _ → { = err 1 } }

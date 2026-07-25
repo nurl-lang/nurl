@@ -123,7 +123,7 @@ $ `stdlib/core/vec.nu`
 
 @ __t_get s src i p i n → i {
     ? >= p n { ^ - 0 1 } {}
-    ^ ( nurl_str_get src p )
+    ^ ( nurl_str_at src n p )
 }
 
 // ── Whitespace + comment skipping ────────────────────────────────
@@ -139,7 +139,7 @@ $ `stdlib/core/vec.nu`
         : i c ( __t_get src p n )
         ? ( __t_is_ws c ) { = p + p 1 } {
             ? == c 35 {
-                ~ & < p n != ( nurl_str_get src p ) 10 {
+                ~ & < p n != ( nurl_str_at src n p ) 10 {
                     = p + p 1
                 }
             } { = going F }
@@ -155,7 +155,7 @@ $ `stdlib/core/vec.nu`
         : i c ( __t_get src p n )
         ? | ( __t_is_ws c ) == c 10 { = p + p 1 } {
             ? == c 35 {
-                ~ & < p n != ( nurl_str_get src p ) 10 {
+                ~ & < p n != ( nurl_str_at src n p ) 10 {
                     = p + p 1
                 }
             } { = going F }
@@ -205,7 +205,7 @@ $ `stdlib/core/vec.nu`
 @ __t_parse_key s src i n i pos → KeyResult {
     : i p pos
     ? >= p n { ^ ( __keyresult_err # TomlErr TomlSyntax p ) } {}
-    : i c ( nurl_str_get src p )
+    : i c ( nurl_str_at src n p )
     ? == c 34 {
         // Quoted key.
         ^ ( __t_parse_quoted_string src n p )
@@ -214,13 +214,13 @@ $ `stdlib/core/vec.nu`
         ^ ( __keyresult_err # TomlErr TomlSyntax p )
     } {}
     : ~ i k p
-    ~ & < k n ( __t_is_bare ( nurl_str_get src k ) ) {
+    ~ & < k n ( __t_is_bare ( nurl_str_at src n k ) ) {
         = k + k 1
     }
     : String key ( string_with_cap - k p )
     : ~ i j p
     ~ < j k {
-        ( string_push_char key ( nurl_str_get src j ) )
+        ( string_push_char key ( nurl_str_at src n j ) )
         = j + j 1
     }
     ^ ( __keyresult_ok key k )
@@ -239,7 +239,7 @@ $ `stdlib/core/vec.nu`
         ? >= cur n {
             = err T = ek # TomlErr TomlUnterminated = done T
         } {
-            : i c ( nurl_str_get src cur )
+            : i c ( nurl_str_at src n cur )
             ? == c 34 {
                 = cur + cur 1
                 = done T
@@ -248,7 +248,7 @@ $ `stdlib/core/vec.nu`
                     ? >= + cur 1 n {
                         = err T = ek # TomlErr TomlUnterminated = done T
                     } {
-                        : i nc ( nurl_str_get src + cur 1 )
+                        : i nc ( nurl_str_at src n + cur 1 )
                         ? == nc 110 { ( string_push_char out 10 ) = cur + cur 2 } {
                             ? == nc 116 { ( string_push_char out 9 ) = cur + cur 2 } {
                                 ? == nc 114 { ( string_push_char out 13 ) = cur + cur 2 } {
@@ -282,7 +282,7 @@ $ `stdlib/core/vec.nu`
     ? >= p n {
         ^ ( __valresult_err # TomlErr TomlSyntax p )
     } {}
-    : i c ( nurl_str_get src p )
+    : i c ( nurl_str_at src n p )
     // String.
     ? == c 34 {
         : KeyResult kr ( __t_parse_quoted_string src n p )
@@ -297,18 +297,18 @@ $ `stdlib/core/vec.nu`
     ? ( __t_is_alpha c ) {
         : i tlen ? <= + p 4 n 4 - n p
         ? & == tlen 4
-        & == ( nurl_str_get src p ) 116
-        & == ( nurl_str_get src + p 1 ) 114
-        & == ( nurl_str_get src + p 2 ) 117
-        == ( nurl_str_get src + p 3 ) 101 {
+        & == ( nurl_str_at src n p ) 116
+        & == ( nurl_str_at src n + p 1 ) 114
+        & == ( nurl_str_at src n + p 2 ) 117
+        == ( nurl_str_at src n + p 3 ) 101 {
             ^ ( __valresult_ok @ TomlValue { TBool T } + p 4 )
         } {}
         ? & >= - n p 5
-        & == ( nurl_str_get src p ) 102
-        & == ( nurl_str_get src + p 1 ) 97
-        & == ( nurl_str_get src + p 2 ) 108
-        & == ( nurl_str_get src + p 3 ) 115
-        == ( nurl_str_get src + p 4 ) 101 {
+        & == ( nurl_str_at src n p ) 102
+        & == ( nurl_str_at src n + p 1 ) 97
+        & == ( nurl_str_at src n + p 2 ) 108
+        & == ( nurl_str_at src n + p 3 ) 115
+        == ( nurl_str_at src n + p 4 ) 101 {
             ^ ( __valresult_ok @ TomlValue { TBool F } + p 5 )
         } {}
         ^ ( __valresult_err # TomlErr TomlSyntax p )
@@ -320,13 +320,13 @@ $ `stdlib/core/vec.nu`
         ? ! ( __t_is_digit ( __t_get src k n ) ) {
             ^ ( __valresult_err # TomlErr TomlSyntax p )
         } {}
-        ~ & < k n ( __t_is_digit ( nurl_str_get src k ) ) {
+        ~ & < k n ( __t_is_digit ( nurl_str_at src n k ) ) {
             = k + k 1
         }
         : String num_s ( string_with_cap - k p )
         : ~ i j p
         ~ < j k {
-            ( string_push_char num_s ( nurl_str_get src j ) )
+            ( string_push_char num_s ( nurl_str_at src n j ) )
             = j + j 1
         }
         : !i ParseErr nr ( string_to_int num_s )
@@ -359,7 +359,7 @@ $ `stdlib/core/vec.nu`
         ? >= cur n {
             = err T = ek # TomlErr TomlUnterminated = done T
         } {
-            : i c ( nurl_str_get src cur )
+            : i c ( nurl_str_at src n cur )
             ? == c 93 {
                 = cur + cur 1
                 = done T
@@ -554,7 +554,7 @@ $ `stdlib/core/vec.nu`
     : ( Vec String ) path ( vec_new [String] )
     : ~ i p + pos 1
     : ~ b as_array F
-    ? & < p n == ( nurl_str_get src p ) 91 {
+    ? & < p n == ( nurl_str_at src n p ) 91 {
         = p + p 1
         = as_array T
     } {}
@@ -614,7 +614,7 @@ $ `stdlib/core/vec.nu`
     ~ & < pos n ! err {
         = pos ( __t_skip_all src n pos )
         ? >= pos n {} {
-            : i c ( nurl_str_get src pos )
+            : i c ( nurl_str_at src n pos )
             ? == c 91 {
                 : HeaderResult hr ( __t_parse_header src n pos )
                 ? . hr ok {
@@ -694,13 +694,13 @@ $ `stdlib/core/vec.nu`
     : ~ b ok T
     ~ & ok < start n {
         : ~ i end start
-        ~ & < end n != ( nurl_str_get path end ) 46 {
+        ~ & < end n != ( nurl_str_at path n end ) 46 {
             = end + end 1
         }
         : String seg ( string_with_cap - end start )
         : ~ i j start
         ~ < j end {
-            ( string_push_char seg ( nurl_str_get path j ) )
+            ( string_push_char seg ( nurl_str_at path n j ) )
             = j + j 1
         }
         : ?TomlValue nx ( toml_get cur ( string_data seg ) )

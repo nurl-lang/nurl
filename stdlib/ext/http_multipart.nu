@@ -140,7 +140,7 @@ $ `stdlib/ext/http_request.nu`
         : ~ b match T
         : ~ i j 0
         ~ & match < j nlen {
-            ? != ( _bbyte buf + i j ) ( nurl_str_get needle j ) { = match F } {}
+            ? != ( _bbyte buf + i j ) ( nurl_str_at needle nlen j ) { = match F } {}
             = j + j 1
         }
         ? match { ^ i } {}
@@ -190,21 +190,21 @@ $ `stdlib/ext/http_request.nu`
     ~ & ! found <= k n {
         : ~ b at_end F
         ? == k n { = at_end T } {
-            ? == ( nurl_str_get text k ) 59 { = at_end T } {}
+            ? == ( nurl_str_at text n k ) 59 { = at_end T } {}
         }
         ? at_end {
             // Trim leading whitespace from segment.
             : ~ i sp seg_start
             : ~ b sp_done F
             ~ & ! sp_done < sp k {
-                : i c ( nurl_str_get text sp )
+                : i c ( nurl_str_at text n sp )
                 ? | == c 32 == c 9 { = sp + sp 1 } { = sp_done T }
             }
             // Locate '=' inside [sp, k).
             : ~ i eq -1
             : ~ i j sp
             ~ & == eq -1 < j k {
-                ? == ( nurl_str_get text j ) 61 { = eq j } {}
+                ? == ( nurl_str_at text n j ) 61 { = eq j } {}
                 = j + j 1
             }
             ? >= eq 0 {
@@ -214,8 +214,8 @@ $ `stdlib/ext/http_request.nu`
                     : ~ b match T
                     : ~ i ci 0
                     ~ & match < ci klen {
-                        : ~ i a ( nurl_str_get text + sp ci )
-                        : ~ i b ( nurl_str_get key ci )
+                        : ~ i a ( nurl_str_at text n + sp ci )
+                        : ~ i b ( nurl_str_at key klen ci )
                         ? & >= a 65 <= a 90 { = a + a 32 } {}
                         ? & >= b 65 <= b 90 { = b + b 32 } {}
                         ? != a b { = match F } {}
@@ -225,15 +225,15 @@ $ `stdlib/ext/http_request.nu`
                         : ~ i v_start + eq 1
                         : ~ i v_end k
                         // Strip surrounding double quotes.
-                        ? & < v_start v_end == ( nurl_str_get text v_start ) 34 {
+                        ? & < v_start v_end == ( nurl_str_at text n v_start ) 34 {
                             = v_start + v_start 1
-                            ? & < v_start v_end == ( nurl_str_get text - v_end 1 ) 34 {
+                            ? & < v_start v_end == ( nurl_str_at text n - v_end 1 ) 34 {
                                 = v_end - v_end 1
                             } {}
                         } {}
                         : ~ i copy_i v_start
                         ~ < copy_i v_end {
-                            ( string_push_char out ( nurl_str_get text copy_i ) )
+                            ( string_push_char out ( nurl_str_at text n copy_i ) )
                             = copy_i + copy_i 1
                         }
                         = found T
@@ -438,7 +438,7 @@ $ `stdlib/ext/http_request.nu`
     : ~ i semi -1
     : ~ i k 0
     ~ & == semi -1 < k n {
-        ? == ( nurl_str_get ct k ) 59 { = semi k } {}
+        ? == ( nurl_str_at ct n k ) 59 { = semi k } {}
         = k + k 1
     }
 
@@ -460,23 +460,25 @@ $ `stdlib/ext/http_request.nu`
 // Trim ASCII spaces / tabs from a slice of a raw `s`. Used for the
 // media-type and parameter halves of a Content-Type header.
 @ __subraw_trim s text i from i to → String {
+    : i n ( nurl_str_len text )
     : ~ i a ? < from 0 0 from
-    : i b ? > to ( nurl_str_len text ) ( nurl_str_len text ) to
+    : i b ? > to n n to
     ~ < a b {
-        : i c ( nurl_str_get text a )
+        : i c ( nurl_str_at text n a )
         ? | == c 32 == c 9 { = a + a 1 } { ^ ( __subraw_copy text a b ) }
     }
     ^ ( __subraw_copy text a b )
 }
 
 @ __subraw_copy s text i from i to → String {
+    : i n ( nurl_str_len text )
     : i a ? < from 0 0 from
-    : i b ? > to ( nurl_str_len text ) ( nurl_str_len text ) to
+    : i b ? > to n n to
     : i len ? > b a - b a 0
     : String out ( string_with_cap len )
     : ~ i k a
     ~ < k b {
-        : i c ( nurl_str_get text k )
+        : i c ( nurl_str_at text n k )
         // Trim trailing whitespace by stopping early when k is past last
         // non-space char. Cheap second pass: re-check tail per char.
         ? & == k - b 1 | == c 32 == c 9 { = k b } {

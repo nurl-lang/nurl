@@ -8,7 +8,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`nurl_str_at str len idx` (`stdlib/core/string.nu`) — the O(1) byte
+  accessor scan loops want.** Same contract as `nurl_str_get` (0 when
+  `idx` is outside `[0, len)`, which is what parsers rely on when they
+  peek one or two bytes past the cursor), but the caller passes the
+  length it already knows, so no `strlen` runs. `nurl_str_get` stays for
+  one-off reads where no length is at hand.
+
 ### Changed
+
+- **The `nurl_str_get` scan loops are gone from the parsers — 278 of the
+  426 call sites migrated to `nurl_str_at`.** Follow-up to the hot-path
+  work in the previous entry: `nurl_str_get` re-runs `strlen` per call,
+  and in any loop that also writes (i.e. every parser) LLVM cannot hoist
+  that `strlen`, so the scan is quadratic in input size. Migrated
+  `ext/{yaml,toml,xml,nurldoc,websocket,http_router,http_request,
+  http_multipart,regex,tar,csv,json,semver}` and
+  `std/{url,time,path,fs,decimal,encode}`. Measured (`std/bench.nu`,
+  `-O2`, ns/op):
+
+  | | before | after | |
+  |---|---|---|---|
+  | `toml_parse` 2 KB | 82 965 | 21 018 | **3.9×** |
+  | `url_parse` 600 B | 6 195 | 2 581 | **2.4×** |
+  | `xml_parse` 3 KB | 152 096 | 74 278 | **2.05×** |
+  | `path_normalize` 450 B | 24 872 | 19 883 | 1.25× |
+  | `regex_replace` 2 KB | 610 963 | 501 084 | 1.22× |
+  | `http_date_parse` | 165 | 159 | 1.04× |
+  | `semver_req_parse` | 3 106 | 3 090 | ~1× |
+  | `yaml_parse` 2 KB | 51 535 | 52 095 | ~1× |
+
+  The two flat rows are expected and worth recording: `semver` inputs are
+  a few dozen bytes, and `yaml_parse` splits the document into short
+  lines through an accessor that was already O(1) before scanning them —
+  so neither was quadratic in practice. The gain tracks input size, so
+  the parsers fed whole files (`toml`, `xml`, `nurldoc`, `tar`, `csv`)
+  are where it shows. No API or behaviour change: `nurl_str_at` keeps
+  `nurl_str_get`'s out-of-range-returns-0 contract, and every migrated
+  site passes a length that is already the string's own.
 
 - **`stdlib/std/tls.nu` — offer ChaCha20-Poly1305 ahead of AES-128-GCM
   (~3× faster HTTPS downloads).** The record layer, not the network, was

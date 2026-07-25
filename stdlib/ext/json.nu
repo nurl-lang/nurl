@@ -1524,7 +1524,7 @@ $ `stdlib/core/vec.nu`
     : ~ i k 0
     : ~ b ok T
     ~ & ok < k n {
-        : i c ( nurl_str_get seg k )
+        : i c ( nurl_str_at seg n k )
         ? == 0 ( is_digit c ) { = ok F } {}
         = k + k 1
     }
@@ -1542,7 +1542,7 @@ $ `stdlib/core/vec.nu`
     : ~ b miss F
     ~ & ! miss <= k pn {
         // Treat '.' or end-of-string as a segment boundary.
-        : b boundary | == k pn == ( nurl_str_get path k ) 46
+        : b boundary | == k pn == ( nurl_str_at path pn k ) 46
         ? boundary {
             : i seg_len - k seg_start
             ? == seg_len 0 {
@@ -1552,7 +1552,7 @@ $ `stdlib/core/vec.nu`
                 : String seg ( string_with_cap seg_len )
                 : ~ i si seg_start
                 ~ < si k {
-                    ( string_push_char seg ( nurl_str_get path si ) )
+                    ( string_push_char seg ( nurl_str_at path pn si ) )
                     = si + si 1
                 }
                 : s seg_raw ( string_data seg )

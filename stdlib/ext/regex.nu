@@ -233,7 +233,7 @@ $ `stdlib/core/vec.nu`
 
 @ __rx_peek * RxParser p → i {
     ? ( __rx_eof p ) { ^ -1 } {}
-    ^ ( nurl_str_get . p pat . p pos )
+    ^ ( nurl_str_at . p pat . p len . p pos )
 }
 
 @ __rx_bump * RxParser p → i {
@@ -417,7 +417,7 @@ $ `stdlib/core/vec.nu`
                     ? & ! ( __rx_eof p ) == ( __rx_peek p ) 45 {
                         // Look ahead: '-' must not be ']' otherwise treat as literal '-'.
                         : i p2 + . p pos 1
-                        ? & < p2 . p len != ( nurl_str_get . p pat p2 ) 93 {
+                        ? & < p2 . p len != ( nurl_str_at . p pat . p len p2 ) 93 {
                             = . p pos + . p pos 1  // consume '-'
                             : i nx ( __rx_peek p )
                             ? == nx 92 {
@@ -688,7 +688,7 @@ $ `stdlib/core/vec.nu`
     : ~ b done F
     ~ ! done {
         ? >= pos text_len { = done T } {
-            : i ch ( nurl_str_get text pos )
+            : i ch ( nurl_str_at text text_len pos )
             ( __rx_clear_marked marked_nxt nstates )
             ( vec_clear [i] nxt )
             : ~ i ki 0
@@ -799,13 +799,13 @@ $ `stdlib/core/vec.nu`
             ( string_push_str out repl )
             ? == m 0 {
                 ? < pos n {
-                    ( string_push_char out ( nurl_str_get text pos ) )
+                    ( string_push_char out ( nurl_str_at text n pos ) )
                     = pos + pos 1
                 } { = pos + pos 1 }
             } { = pos + pos m }
         } {
             ? < pos n {
-                ( string_push_char out ( nurl_str_get text pos ) )
+                ( string_push_char out ( nurl_str_at text n pos ) )
             } {}
             = pos + pos 1
         }
@@ -826,7 +826,7 @@ $ `stdlib/core/vec.nu`
             : String s1 ( string_with_cap seg_len )
             : ~ i k seg_start
             ~ < k pos {
-                ( string_push_char s1 ( nurl_str_get text k ) )
+                ( string_push_char s1 ( nurl_str_at text n k ) )
                 = k + k 1
             }
             ( vec_push [String] out s1 )
@@ -839,7 +839,7 @@ $ `stdlib/core/vec.nu`
     : String tail ( string_with_cap tail_len )
     : ~ i k seg_start
     ~ < k n {
-        ( string_push_char tail ( nurl_str_get text k ) )
+        ( string_push_char tail ( nurl_str_at text n k ) )
         = k + k 1
     }
     ( vec_push [String] out tail )

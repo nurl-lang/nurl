@@ -30,7 +30,7 @@ $ `stdlib/core/vec.nu`
 // [from,end); returns `end` when the run is all whitespace.
 @ __nd_skip_ws s p i from i end → i {
     : ~ i k from
-    ~ & < k end | == ( nurl_str_get p k ) 32 == ( nurl_str_get p k ) 9 { = k + k 1 }
+    ~ & < k end | == ( nurl_str_at p end k ) 32 == ( nurl_str_at p end k ) 9 { = k + k 1 }
     ^ k
 }
 
@@ -39,7 +39,7 @@ $ `stdlib/core/vec.nu`
     : i pn ( nurl_str_len pre )
     ? > + st pn en { ^ F } {}
     : ~ i k 0
-    ~ < k pn { ? != ( nurl_str_get p + st k ) ( nurl_str_get pre k ) { ^ F } {} = k + k 1 }
+    ~ < k pn { ? != ( nurl_str_at p en + st k ) ( nurl_str_at pre pn k ) { ^ F } {} = k + k 1 }
     ^ T
 }
 
@@ -51,12 +51,12 @@ $ `stdlib/core/vec.nu`
     : ~ i depth 0
     : ~ i in_str 0
     ~ < k en {
-        : i c ( nurl_str_get p k )
+        : i c ( nurl_str_at p en k )
         ? != in_str 0 {
             ? == c 96 { = in_str 0 } {}
         } {
             ? == c 96 { = in_str 1 } {
-                ? & == c 47 & < + k 1 en == ( nurl_str_get p + k 1 ) 47 { ^ depth } {}  // `//` → rest is comment
+                ? & == c 47 & < + k 1 en == ( nurl_str_at p en + k 1 ) 47 { ^ depth } {}  // `//` → rest is comment
                 ? == c 123 { = depth + depth 1 } {}
                 ? == c 125 { = depth - depth 1 } {}
             }
@@ -70,8 +70,8 @@ $ `stdlib/core/vec.nu`
 // stripped) to `out`, plus a newline.
 @ __nd_push_comment_body String out s p i st i en → v {
     : ~ i k + st 2  // past `//`
-    ? & < k en == ( nurl_str_get p k ) 32 { = k + k 1 } {}  // one optional space
-    ~ < k en { ( string_push_char out ( nurl_str_get p k ) ) = k + k 1 }
+    ? & < k en == ( nurl_str_at p en k ) 32 { = k + k 1 } {}  // one optional space
+    ~ < k en { ( string_push_char out ( nurl_str_at p en k ) ) = k + k 1 }
     ( string_push_char out 10 )
 }
 
@@ -86,7 +86,7 @@ $ `stdlib/core/vec.nu`
         : ~ i in_str 0
         : ~ b found F
         ~ & < k en ! found {
-            : i c ( nurl_str_get p k )
+            : i c ( nurl_str_at p en k )
             ? != in_str 0 { ? == c 96 { = in_str 0 } {} } {
                 ? == c 96 { = in_str 1 } {
                     ? == c 123 { = brace k = found T } {}
@@ -97,9 +97,9 @@ $ `stdlib/core/vec.nu`
     } {}
     // trim trailing whitespace before the cut point
     : ~ i e brace
-    ~ & > e st | | == ( nurl_str_get p - e 1 ) 32 == ( nurl_str_get p - e 1 ) 9 == ( nurl_str_get p - e 1 ) 10 { = e - e 1 }
+    ~ & > e st | | == ( nurl_str_at p en - e 1 ) 32 == ( nurl_str_at p en - e 1 ) 9 == ( nurl_str_at p en - e 1 ) 10 { = e - e 1 }
     : ~ i j st
-    ~ < j e { ( string_push_char out ( nurl_str_get p j ) ) = j + j 1 }
+    ~ < j e { ( string_push_char out ( nurl_str_at p en j ) ) = j + j 1 }
 }
 
 // First declaration byte at/after `sp`, skipping a leading `pub `, or 0
@@ -108,7 +108,7 @@ $ `stdlib/core/vec.nu`
     : ~ i k sp
     ? ( __nd_starts_with p k en `pub ` ) { = k ( __nd_skip_ws p + k 4 en ) } {}
     ? >= k en { ^ 0 } {}
-    ^ ( nurl_str_get p k )
+    ^ ( nurl_str_at p en k )
 }
 
 // Does the line starting at `sp` (first non-ws index) begin a top-level
@@ -135,17 +135,17 @@ $ `stdlib/core/vec.nu`
     ? ( __nd_starts_with p k en `pub ` ) { = k ( __nd_skip_ws p + k 4 en ) } {}
     ? >= k en { ^ F } {}
     // FFI form: `& `lib` @ name …` — advance past the backtick-quoted lib.
-    ? == ( nurl_str_get p k ) 38 {
+    ? == ( nurl_str_at p en k ) 38 {
         = k ( __nd_skip_ws p + k 1 en )
-        ? & < k en == ( nurl_str_get p k ) 96 {
+        ? & < k en == ( nurl_str_at p en k ) 96 {
             = k + k 1
-            ~ & < k en != ( nurl_str_get p k ) 96 { = k + k 1 }
+            ~ & < k en != ( nurl_str_at p en k ) 96 { = k + k 1 }
             ? < k en { = k ( __nd_skip_ws p + k 1 en ) } {}
         } {}
     } {}
-    ? | >= k en != ( nurl_str_get p k ) 64 { ^ F } {}  // expect `@`
+    ? | >= k en != ( nurl_str_at p en k ) 64 { ^ F } {}  // expect `@`
     = k ( __nd_skip_ws p + k 1 en )
-    ^ & < + k 1 en & == ( nurl_str_get p k ) 95 == ( nurl_str_get p + k 1 ) 95
+    ^ & < + k 1 en & == ( nurl_str_at p en k ) 95 == ( nurl_str_at p en + k 1 ) 95
 }
 
 // Append a Markdown code-fence line: ```nurl\n (open) or ```\n\n (close).
@@ -192,7 +192,7 @@ $ `stdlib/core/vec.nu`
         // line bounds [ls, le); advance pos past the newline
         : i ls pos
         : ~ i le pos
-        ~ & < le n != ( nurl_str_get content le ) 10 { = le + le 1 }
+        ~ & < le n != ( nurl_str_at content n le ) 10 { = le + le 1 }
         : i sp ( __nd_skip_ws content ls le )
         : b blank == sp le
         : b is_comment & ! blank ( __nd_starts_with content sp le `//` )
@@ -239,7 +239,7 @@ $ `stdlib/core/vec.nu`
                                 } {}
                                 ( __nd_push_fence body T )
                                 : ~ i j ls
-                                ~ < j le { ( string_push_char body ( nurl_str_get content j ) ) = j + j 1 }
+                                ~ < j le { ( string_push_char body ( nurl_str_at content n j ) ) = j + j 1 }
                                 ( string_push_char body 10 )
                             } {
                                 ? > pending_n 0 {
@@ -258,7 +258,7 @@ $ `stdlib/core/vec.nu`
         } {
             ? in_type {
                 : ~ i j ls
-                ~ < j le { ( string_push_char body ( nurl_str_get content j ) ) = j + j 1 }
+                ~ < j le { ( string_push_char body ( nurl_str_at content n j ) ) = j + j 1 }
                 ( string_push_char body 10 )
             } {}
         }

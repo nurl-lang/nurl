@@ -238,11 +238,11 @@ $ `stdlib/ext/http_response.nu`
         } {
             // Pattern-segment bounds: pi → p_end (not inclusive of '/').
             : ~ i p_end pi
-            ~ & < p_end pn != ( nurl_str_get pattern p_end ) 47 {
+            ~ & < p_end pn != ( nurl_str_at pattern pn p_end ) 47 {
                 = p_end + p_end 1
             }
             // First byte of pattern segment classifies its kind.
-            : i first ? < pi p_end ( nurl_str_get pattern pi ) 0
+            : i first ? < pi p_end ( nurl_str_at pattern pn pi ) 0
 
             ? == first 42 {
                 // Wildcard tail: pattern[pi+1..p_end] is the capture name,
@@ -258,7 +258,7 @@ $ `stdlib/ext/http_response.nu`
             } {
                 // Path-segment bounds: si → s_end.
                 : ~ i s_end si
-                ~ & < s_end sn != ( nurl_str_get path s_end ) 47 {
+                ~ & < s_end sn != ( nurl_str_at path sn s_end ) 47 {
                     = s_end + s_end 1
                 }
 
@@ -284,7 +284,7 @@ $ `stdlib/ext/http_response.nu`
                     } {
                         : ~ i k 0
                         ~ & ok < k p_len {
-                            ? != ( nurl_str_get pattern + pi k ) ( nurl_str_get path + si k ) {
+                            ? != ( nurl_str_at pattern pn + pi k ) ( nurl_str_at path sn + si k ) {
                                 = ok F
                             } {}
                             = k + k 1
@@ -300,8 +300,8 @@ $ `stdlib/ext/http_response.nu`
                 // present in BOTH strings, or fail if one has '/' and the
                 // other doesn't (mismatched segment counts).
                 ? ok {
-                    : b p_has_slash & < pi pn == ( nurl_str_get pattern pi ) 47
-                    : b s_has_slash & < si sn == ( nurl_str_get path si ) 47
+                    : b p_has_slash & < pi pn == ( nurl_str_at pattern pn pi ) 47
+                    : b s_has_slash & < si sn == ( nurl_str_at path sn si ) 47
                     ? p_has_slash {
                         ? s_has_slash {
                             = pi + pi 1
@@ -330,12 +330,13 @@ $ `stdlib/ext/http_response.nu`
 // Used by the pattern matcher to extract capture names + values. Empty
 // or inverted ranges yield an empty String.
 @ __subraw_to_string s raw i from i to → String {
+    : i n ( nurl_str_len raw )
     : i len - to from
     ? <= len 0 { ^ ( string_new ) } {}
     : String out ( string_with_cap len )
     : ~ i k from
     ~ < k to {
-        ( string_push_char out ( nurl_str_get raw k ) )
+        ( string_push_char out ( nurl_str_at raw n k ) )
         = k + k 1
     }
     ^ out
@@ -437,7 +438,7 @@ $ `stdlib/ext/http_response.nu`
         // 404-fallbacks during regular GET dispatch above.
         : i plen ( nurl_str_len pattern )
         : ~ b is_root_catchall F
-        ? & >= plen 2 & == ( nurl_str_get pattern 0 ) 47 == ( nurl_str_get pattern 1 ) 42 {
+        ? & >= plen 2 & == ( nurl_str_at pattern plen 0 ) 47 == ( nurl_str_at pattern plen 1 ) 42 {
             = is_root_catchall T
         } {}
         : Params params ( params_new )

@@ -65,8 +65,8 @@ $ `stdlib/core/vec.nu`
 @ __has_drive s p → b {
     : i n ( nurl_str_len p )
     ? < n 2 { ^ F } {}
-    : i c0 ( nurl_str_get p 0 )
-    : i c1 ( nurl_str_get p 1 )
+    : i c0 ( nurl_str_at p n 0 )
+    : i c1 ( nurl_str_at p n 1 )
     ? != c1 58 { ^ F } {}
     ? & <= 65 c0 <= c0 90 { ^ T } {}
     ? & <= 97 c0 <= c0 122 { ^ T } {}
@@ -76,7 +76,7 @@ $ `stdlib/core/vec.nu`
 @ path_is_absolute s p → b {
     : i n ( nurl_str_len p )
     ? == n 0 { ^ F } {}
-    : i c0 ( nurl_str_get p 0 )
+    : i c0 ( nurl_str_at p n 0 )
     ? ( __is_sep c0 ) { ^ T } {}
     ? ( __has_drive p ) { ^ T } {}
     ^ F
@@ -90,7 +90,7 @@ $ `stdlib/core/vec.nu`
     : ~ b going T
     ~ going {
         ? < i 0 { = going F } {
-            : i c ( nurl_str_get p i )
+            : i c ( nurl_str_at p n i )
             ? ( __is_sep c ) {
                 = out i
                 = going F
@@ -103,10 +103,11 @@ $ `stdlib/core/vec.nu`
 }
 
 @ __substr_to_string s p i from i len → String {
+    : i n ( nurl_str_len p )
     : String out ( string_with_cap len )
     : ~ i i 0
     ~ < i len {
-        ( string_push_char out ( nurl_str_get p + from i ) )
+        ( string_push_char out ( nurl_str_at p n + from i ) )
         = i + i 1
     }
     ^ out
@@ -146,7 +147,7 @@ $ `stdlib/core/vec.nu`
     : ~ b going T
     ~ going {
         ? <= end 0 { = going F } {
-            : i c ( nurl_str_get p - end 1 )
+            : i c ( nurl_str_at p n - end 1 )
             ? ( __is_sep c ) {
                 = end - end 1
             } { = going F }
@@ -170,7 +171,7 @@ $ `stdlib/core/vec.nu`
     : ~ b going T
     ~ going {
         ? < i base_start { = going F } {
-            : i c ( nurl_str_get p i )
+            : i c ( nurl_str_at p n i )
             ? == c 46 {
                 = found i
                 = going F
@@ -196,7 +197,7 @@ $ `stdlib/core/vec.nu`
     : ~ b going T
     ~ going {
         ? <= ae 1 { = going F } {
-            : i c ( nurl_str_get a - ae 1 )
+            : i c ( nurl_str_at a la - ae 1 )
             ? ( __is_sep c ) { = ae - ae 1 } { = going F }
         }
     }
@@ -205,20 +206,20 @@ $ `stdlib/core/vec.nu`
     = going T
     ~ going {
         ? >= bs lb { = going F } {
-            : i c ( nurl_str_get b bs )
+            : i c ( nurl_str_at b lb bs )
             ? ( __is_sep c ) { = bs + bs 1 } { = going F }
         }
     }
     : String out ( string_with_cap + + ae - lb bs 1 )
     : ~ i i 0
     ~ < i ae {
-        ( string_push_char out ( nurl_str_get a i ) )
+        ( string_push_char out ( nurl_str_at a la i ) )
         = i + i 1
     }
     ( string_push_char out 47 )
     : ~ i j bs
     ~ < j lb {
-        ( string_push_char out ( nurl_str_get b j ) )
+        ( string_push_char out ( nurl_str_at b lb j ) )
         = j + j 1
     }
     ^ out
@@ -238,7 +239,7 @@ $ `stdlib/core/vec.nu`
             : ~ b in_seg T
             ~ in_seg {
                 ? >= i n { = in_seg F } {
-                    : i c ( nurl_str_get p i )
+                    : i c ( nurl_str_at p n i )
                     ? ( __is_sep c ) { = in_seg F } { = i + i 1 }
                 }
             }
@@ -250,7 +251,7 @@ $ `stdlib/core/vec.nu`
                 : ~ b skip_sep T
                 ~ skip_sep {
                     ? >= i n { = skip_sep F } {
-                        : i c2 ( nurl_str_get p i )
+                        : i c2 ( nurl_str_at p n i )
                         ? ( __is_sep c2 ) { = i + i 1 } { = skip_sep F }
                     }
                 }
@@ -283,14 +284,14 @@ $ `stdlib/core/vec.nu`
     : ~ i pos drive_end
     : ~ b absolute F
     ? < pos n {
-        : i c ( nurl_str_get p pos )
+        : i c ( nurl_str_at p n pos )
         ? ( __is_sep c ) {
             = absolute T
             = pos + pos 1
             : ~ b skip_sep T
             ~ skip_sep {
                 ? >= pos n { = skip_sep F } {
-                    : i c2 ( nurl_str_get p pos )
+                    : i c2 ( nurl_str_at p n pos )
                     ? ( __is_sep c2 ) { = pos + pos 1 } { = skip_sep F }
                 }
             }
@@ -352,7 +353,7 @@ $ `stdlib/core/vec.nu`
     : String out ( string_with_cap n )
     : ~ i di 0
     ~ < di drive_end {
-        ( string_push_char out ( nurl_str_get p di ) )
+        ( string_push_char out ( nurl_str_at p n di ) )
         = di + di 1
     }
     ? absolute { ( string_push_char out 47 ) } {}
