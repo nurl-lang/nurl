@@ -99,11 +99,22 @@ with their different channel counts, the position embedding, all four
 resize layers (both ConvTransposes and the strided conv), and the
 reduction to 256 channels.
 
-The divergence starts at **`dpt_f4`**, the very first fusion block, so
-the bug is inside `__dp_fuse_fwd` on the `has1 = 0` path (refinenet4:
-resConfUnit2 → bilinear upsample → 1×1 out_conv) or in how step 0 of
-the fusion loop is set up. Everything after it is that error carried
-forward.
+The divergence starts at **`dpt_f4`**, the very first fusion block, and
+everything after it is that error carried forward.
+
+`tests/fusecheck.nu` then narrowed it further: the fusion block's three
+operations — `resConfUnit2`, the bilinear upsample, the 1×1 `out_conv` —
+are **correct in isolation**, matching torch to 3.4e-6 on synthetic
+weights, in a test that runs in seconds rather than 150. So the bug is
+not in the ops but in how `dp_forward` composes them at fusion step 0:
+which buffer goes in as `out`, the `ch/cw` versus `oh/ow` sizes, or the
+initial copy of `rns[3]` into `path`.
+
+The magnitude is a clue: the port's `dpt_f4` comes out around 530 where
+`rns[3]` peaks at 616 and the reference's `dpt_f4` is 0.775. An output
+that stayed at roughly its *input* scale is what you would see if
+`out_conv` never applied — but `out_conv` demonstrably works, so the
+question is whether it ran on what it was supposed to.
 
 Worth knowing while chasing it: the reference genuinely compresses
 `dpt_rn_3` from |616| down to |0.775| across refinenet4, and

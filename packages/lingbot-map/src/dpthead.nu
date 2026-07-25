@@ -433,7 +433,7 @@ GkBuf depth GkBuf conf → b {
         ( vec_free_with [GkBuf] rns \ GkBuf b → v { ( gk_dbuf_free b ) } )
         ( nurl_free # s chs ) ( nurl_free # s ohs ) ( nurl_free # s ows )
         ^ F
-    } {}
+    }
 
     // fuse coarse → fine. refinenet4 first (index 3 in `fuse`), then 3,
     // 2, 1 — each upsampling to the next finer tap's size, and the last
