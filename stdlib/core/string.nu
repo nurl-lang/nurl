@@ -473,6 +473,53 @@ $ `stdlib/core/char.nu`
     ^ == 0 # i ( memcmp # s pa # s pb la )
 }
 
+// ── Bulk emission cursor ────────────────────────────────────────────
+//
+// `string_push_char` is a call, three `nurl_peek`s and a `nurl_poke`
+// per byte — ~1.7 ns even on its fast path, because the compiler has to
+// re-read the control block every time (the store could alias it). An
+// encoder that knows how many bytes it is about to produce can instead
+// reserve the room once, write straight through a `*u`, and commit the
+// length at the end: measured 4096 bytes in 565 ns versus 7061 ns
+// through `string_push_char` — 12.5×.
+//
+//   : *u w ( string_reserve_at out n )     // room for n bytes + NUL
+//   … = . w k # u byte …                   // k in [0, n)
+//   ( string_commit out n )                // len += n, NUL re-sealed
+//
+// CONTRACT — the returned pointer is valid only until the next
+// operation that can grow the buffer. Between `string_reserve_at` and
+// `string_commit`, do NOT call any other mutator on `str` (push_char,
+// push_str, push_bytes, clear, …) and do NOT write past index n-1: a
+// realloc would move the buffer and leave the cursor dangling. Write
+// the bytes, commit, then go back to the normal API.
+//
+// Committing fewer bytes than reserved is fine (encoders whose output
+// size is only an upper bound reserve the bound and commit the truth).
+
+@ string_reserve_at String str i n → *u {
+    : ( Vec u ) b ( __sbuf str )
+    ( vec_reserve [u] b + n 1 )
+    // Re-read the control block rather than deriving the result from
+    // `b`: `b` is a VIEW of str's ctl (see __sbuf), but strict borrowck
+    // cannot know that and would flag a raw pointer escaping an owned
+    // local. Going through nurl_peek keeps the provenance on `str`.
+    : s ctl . str ctl
+    : i len ( nurl_peek ctl 1 )
+    : *u p # *u ( nurl_peek ctl 0 )
+    ^ # *u + # i p len
+}
+
+@ string_commit String str i n → v {
+    ? <= n 0 { ^ } {}
+    : s ctl . str ctl
+    : i len ( nurl_peek ctl 1 )
+    ( nurl_poke ctl 1 + len n )
+    : *u p # *u ( nurl_peek ctl 0 )
+    : u zero # u 0
+    = . p + len n zero
+}
+
 // ── Mutators ────────────────────────────────────────────────────────
 
 @ string_push_char String str i c → v {
@@ -700,31 +747,44 @@ $ `stdlib/core/char.nu`
     ^ @ String { . tmp ctl }
 }
 
-// Copy all bytes with ASCII 'A'..'Z' mapped to 'a'..'z'.
+// Copy all bytes with ASCII 'A'..'Z' mapped to 'a'..'z'. The output is
+// exactly as long as the input, so it is emitted straight through a
+// reserved cursor instead of n separate `string_push_char` calls.
 @ string_to_lower String str → String {
     : i n ( string_len str )
     : String out ( string_with_cap n )
-    : ~ i i 0
-    ~ < i n {
-        : ~ i c ( string_get str i )
-        ? & >= c 65 <= c 90 { = c + c 32 } {}
-        ( string_push_char out c )
-        = i + i 1
-    }
+    ? > n 0 {
+        : *u src ( vec_data [u] ( __sbuf str ) )
+        : *u w ( string_reserve_at out n )
+        : ~ i i 0
+        ~ < i n {
+            : ~ i c & # i . src i 255
+            ? & >= c 65 <= c 90 { = c + c 32 } {}
+            = . w i # u c
+            = i + i 1
+        }
+        ( string_commit out n )
+    } {}
     ^ out
 }
 
-// Copy all bytes with ASCII 'a'..'z' mapped to 'A'..'Z'.
+// Copy all bytes with ASCII 'a'..'z' mapped to 'A'..'Z'. Cursor-emitted
+// like `string_to_lower`.
 @ string_to_upper String str → String {
     : i n ( string_len str )
     : String out ( string_with_cap n )
-    : ~ i i 0
-    ~ < i n {
-        : ~ i c ( string_get str i )
-        ? & >= c 97 <= c 122 { = c - c 32 } {}
-        ( string_push_char out c )
-        = i + i 1
-    }
+    ? > n 0 {
+        : *u src ( vec_data [u] ( __sbuf str ) )
+        : *u w ( string_reserve_at out n )
+        : ~ i i 0
+        ~ < i n {
+            : ~ i c & # i . src i 255
+            ? & >= c 97 <= c 122 { = c - c 32 } {}
+            = . w i # u c
+            = i + i 1
+        }
+        ( string_commit out n )
+    } {}
     ^ out
 }
 
@@ -732,11 +792,16 @@ $ `stdlib/core/char.nu`
 @ string_reverse String str → String {
     : i n ( string_len str )
     : String out ( string_with_cap n )
-    : ~ i i - n 1
-    ~ >= i 0 {
-        ( string_push_char out ( string_get str i ) )
-        = i - i 1
-    }
+    ? > n 0 {
+        : *u src ( vec_data [u] ( __sbuf str ) )
+        : *u w ( string_reserve_at out n )
+        : ~ i i 0
+        ~ < i n {
+            = . w i . src - - n 1 i
+            = i + i 1
+        }
+        ( string_commit out n )
+    } {}
     ^ out
 }
 

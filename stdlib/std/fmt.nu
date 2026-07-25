@@ -98,8 +98,15 @@ $ `stdlib/core/vec.nu`
                     = i + i 1
                 }
             } {
-                ( string_push_char out c )
-                = i + i 1
+                // Literal run: copy everything up to the next brace in
+                // one memcpy instead of a string_push_char per byte.
+                : ~ i run + i 1
+                ~ & < run tlen & != & # i . tp run 255 123 != & # i . tp run 255 125 {
+                    = run + run 1
+                }
+                : *u at # *u + # i tp i
+                ( string_push_bytes out at - run i )
+                = i run
             }
         }
     }

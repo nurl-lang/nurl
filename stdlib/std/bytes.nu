@@ -180,13 +180,17 @@ $ `stdlib/core/errors.nu`
     : String out ( string_with_cap * n 2 )
     ? > n 0 {
         : *u p ( vec_data [u] v )
+        // Output length is exactly 2n, so reserve once and write through
+        // the cursor rather than paying string_push_char per nibble.
+        : *u w ( string_reserve_at out * n 2 )
         : ~ i k 0
         ~ < k n {
             : i ib & # i . p k 255
-            ( string_push_char out ( __byte_hex_hi ib ) )
-            ( string_push_char out ( __byte_hex_lo ib ) )
+            = . w * k 2 # u ( __byte_hex_hi ib )
+            = . w + * k 2 1 # u ( __byte_hex_lo ib )
             = k + k 1
         }
+        ( string_commit out * n 2 )
     } {}
     ^ out
 }

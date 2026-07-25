@@ -653,26 +653,72 @@ $ `stdlib/core/vec.nu`
     }
 }
 
+// Per-search scratch: the four Vec[i] the NFA simulation needs. These
+// used to be allocated (and freed) inside __rx_run_at, i.e. once per
+// START POSITION — 8005 allocations for a 2 KB subject in
+// `regex_replace`. They carry no state between runs, so every public
+// entry point now builds one scratch up front and reuses it across the
+// whole scan. Passing it explicitly (rather than caching it in the
+// Regex) keeps a compiled Regex reentrant: two searches can run over
+// the same Regex at once, each with its own scratch.
+: RxScratch {
+    ( Vec i ) cur
+    ( Vec i ) nxt
+    ( Vec i ) marked_cur
+    ( Vec i ) marked_nxt
+    i nstates
+}
+
+@ __rx_nstates Regex r → i {
+    : *RegexImpl impl # *RegexImpl . r ctl
+    ^ / ( vec_len [i] . impl states ) 4
+}
+
+// A Vec[i] of `n` zeros — the marked-set shape __vi_set writes into.
+@ __rx_zeros i n → ( Vec i ) {
+    : ( Vec i ) v ( vec_with_cap [i] n )
+    : ~ i k 0
+    ~ < k n { ( vec_push [i] v 0 ) = k + k 1 }
+    ^ v
+}
+
+@ __rx_scratch_new Regex r → RxScratch {
+    : i ns ( __rx_nstates r )
+    ^ @ RxScratch {
+        ( vec_with_cap [i] ns )
+        ( vec_with_cap [i] ns )
+        ( __rx_zeros ns )
+        ( __rx_zeros ns )
+        ns
+    }
+}
+
+@ __rx_scratch_free RxScratch sc → v {
+    ( vec_free [i] . sc cur )
+    ( vec_free [i] . sc nxt )
+    ( vec_free [i] . sc marked_cur )
+    ( vec_free [i] . sc marked_nxt )
+}
+
 // Try to match starting at text_pos. Returns the longest match length
-// found at this start (≥0), or -1 if no match.
-@ __rx_run_at Regex r s text i text_len i text_pos → i {
+// found at this start (≥0), or -1 if no match. `sc` is scratch owned by
+// the caller; its contents are reset here, so the same scratch can be
+// handed to every start position of a scan.
+@ __rx_run_at Regex r s text i text_len i text_pos RxScratch sc → i {
     : *RegexImpl impl # *RegexImpl . r ctl
     : ( Vec i ) states . impl states
     : ( Vec i ) classes . impl classes
     : ( Vec i ) class_starts . impl class_starts
     : i start . impl start
-    : i nstates / ( vec_len [i] states ) 4
-    : ~ ( Vec i ) cur ( vec_with_cap [i] nstates )
-    : ~ ( Vec i ) nxt ( vec_with_cap [i] nstates )
-    : ~ ( Vec i ) marked_cur ( vec_with_cap [i] nstates )
-    : ~ ( Vec i ) marked_nxt ( vec_with_cap [i] nstates )
-    // Initialize marked vectors to length nstates with 0.
-    : ~ i k 0
-    ~ < k nstates {
-        ( vec_push [i] marked_cur 0 )
-        ( vec_push [i] marked_nxt 0 )
-        = k + k 1
-    }
+    : i nstates . sc nstates
+    : ~ ( Vec i ) cur . sc cur
+    : ~ ( Vec i ) nxt . sc nxt
+    : ~ ( Vec i ) marked_cur . sc marked_cur
+    : ~ ( Vec i ) marked_nxt . sc marked_nxt
+    ( vec_clear [i] cur )
+    ( vec_clear [i] nxt )
+    ( __rx_clear_marked marked_cur nstates )
+    ( __rx_clear_marked marked_nxt nstates )
     ( __rx_add_active_v states cur marked_cur start text_pos text_len )
 
     : ~ i best -1
@@ -734,10 +780,6 @@ $ `stdlib/core/vec.nu`
         }
     }
 
-    ( vec_free [i] cur )
-    ( vec_free [i] nxt )
-    ( vec_free [i] marked_cur )
-    ( vec_free [i] marked_nxt )
     ^ best
 }
 
@@ -745,40 +787,47 @@ $ `stdlib/core/vec.nu`
 
 @ regex_test Regex r s text → b {
     : i n ( nurl_str_len text )
+    : RxScratch sc ( __rx_scratch_new r )
     : ~ i pos 0
-    ~ <= pos n {
-        : i m ( __rx_run_at r text n pos )
-        ? >= m 0 { ^ T } {}
-        = pos + pos 1
+    : ~ b hit F
+    ~ & ! hit <= pos n {
+        : i m ( __rx_run_at r text n pos sc )
+        ? >= m 0 { = hit T } { = pos + pos 1 }
     }
-    ^ F
+    ( __rx_scratch_free sc )
+    ^ hit
 }
 
 @ regex_match Regex r s text → b {
     : i n ( nurl_str_len text )
-    : i m ( __rx_run_at r text n 0 )
+    : RxScratch sc ( __rx_scratch_new r )
+    : i m ( __rx_run_at r text n 0 sc )
+    ( __rx_scratch_free sc )
     ^ == m n
 }
 
 @ regex_find Regex r s text → ?Match {
     : i n ( nurl_str_len text )
+    : RxScratch sc ( __rx_scratch_new r )
     : ~ i pos 0
-    ~ <= pos n {
-        : i m ( __rx_run_at r text n pos )
-        ? >= m 0 {
-            ^ @ ?Match { T @ Match { pos m } }
-        } {}
-        = pos + pos 1
+    : ~ i hit_at -1
+    : ~ i hit_len 0
+    ~ & < hit_at 0 <= pos n {
+        : i m ( __rx_run_at r text n pos sc )
+        ? >= m 0 { = hit_at pos = hit_len m } { = pos + pos 1 }
     }
+    ( __rx_scratch_free sc )
+    ? >= hit_at 0 { ^ @ ?Match { T @ Match { hit_at hit_len } } } {}
     ^ @ ?Match { F @ Match { 0 0 } }
 }
 
 @ regex_find_all Regex r s text → ( Vec Match ) {
     : ( Vec Match ) out ( vec_new [Match] )
     : i n ( nurl_str_len text )
+    : RxScratch sc ( __rx_scratch_new r )
     : ~ i pos 0
     ~ <= pos n {
-        : i m ( __rx_run_at r text n pos )
+        : i m ( __rx_run_at r text n pos sc )
         ? >= m 0 {
             ( vec_push [Match] out @ Match { pos m } )
             ? == m 0 { = pos + pos 1 } { = pos + pos m }
@@ -786,15 +835,17 @@ $ `stdlib/core/vec.nu`
             = pos + pos 1
         }
     }
+    ( __rx_scratch_free sc )
     ^ out
 }
 
 @ regex_replace Regex r s text s repl → String {
     : String out ( string_with_cap ( nurl_str_len text ) )
     : i n ( nurl_str_len text )
+    : RxScratch sc ( __rx_scratch_new r )
     : ~ i pos 0
     ~ <= pos n {
-        : i m ( __rx_run_at r text n pos )
+        : i m ( __rx_run_at r text n pos sc )
         ? >= m 0 {
             ( string_push_str out repl )
             ? == m 0 {
@@ -810,16 +861,18 @@ $ `stdlib/core/vec.nu`
             = pos + pos 1
         }
     }
+    ( __rx_scratch_free sc )
     ^ out
 }
 
 @ regex_split Regex r s text → ( Vec String ) {
     : ( Vec String ) out ( vec_new [String] )
     : i n ( nurl_str_len text )
+    : RxScratch sc ( __rx_scratch_new r )
     : ~ i seg_start 0
     : ~ i pos 0
     ~ <= pos n {
-        : i m ( __rx_run_at r text n pos )
+        : i m ( __rx_run_at r text n pos sc )
         ? & >= m 0 > m 0 {
             // Emit segment [seg_start..pos)
             : i seg_len - pos seg_start
@@ -834,6 +887,7 @@ $ `stdlib/core/vec.nu`
             = seg_start pos
         } { = pos + pos 1 }
     }
+    ( __rx_scratch_free sc )
     // Emit final segment [seg_start..n)
     : i tail_len - n seg_start
     : String tail ( string_with_cap tail_len )

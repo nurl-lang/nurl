@@ -10,6 +10,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`string_reserve_at` / `string_commit` (`stdlib/core/string.nu`) — a
+  bulk emission cursor.** `string_push_char` costs a call, three
+  `nurl_peek`s and a `nurl_poke` per byte — ~1.7 ns even on its fast
+  path, because the compiler must re-read the control block every time
+  (the store could alias it). An encoder that knows how many bytes it is
+  about to produce can now reserve the room once, write straight through
+  a `*u`, and commit at the end: measured **565 ns vs 7 061 ns** for
+  4096 bytes (12.5×). The reserved pointer is valid only until the next
+  operation that can grow the buffer — the contract is spelled out at
+  the definition. Committing fewer bytes than reserved is allowed, so
+  encoders whose output size is only an upper bound (percent-encoding)
+  can use it too.
+
 - **`nurl_str_at str len idx` (`stdlib/core/string.nu`) — the O(1) byte
   accessor scan loops want.** Same contract as `nurl_str_get` (0 when
   `idx` is outside `[0, len)`, which is what parsers rely on when they
@@ -18,6 +31,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   one-off reads where no length is at hand.
 
 ### Changed
+
+- **Per-item overhead removed from the hot emitters and from the regex
+  engine.** Two distinct costs, same shape — work repeated per byte or
+  per loop iteration that only needed doing once:
+
+  *Cursor emission.* `bytes_to_hex`, `hex_encode`, `__b64_emit`,
+  `url_percent_encode`, `string_to_lower` / `_to_upper` / `_reverse` and
+  `__fmt_emit` produced their output one `string_push_char` at a time.
+  They now reserve the exact (or upper-bound) output length once and
+  write through the new cursor; `__fmt_emit` additionally copies each
+  literal run between placeholders in one `string_push_bytes` instead of
+  a push per byte.
+
+  *Scratch reuse.* `__rx_run_at` allocated **four `Vec[i]` on every start
+  position** of a search — 8 005 allocations for a 2 KB `regex_replace` —
+  and re-zeroed them with a per-state loop each time. The four buffers
+  carry no state between runs, so every public regex entry point now
+  builds one `RxScratch` up front and reuses it for the whole scan.
+  Passing the scratch explicitly (rather than caching it inside the
+  `Regex`) keeps a compiled `Regex` reentrant.
+
+  Measured (`std/bench.nu`, `-O2`, ns/op):
+
+  | | before | after | |
+  |---|---|---|---|
+  | `string_to_lower` 4 KB | 14 325 | 366 | **39×** |
+  | `hex_encode` 4 KB | 25 573 | 1 004 | **25×** |
+  | `bytes_to_hex` 4 KB | 25 342 | 1 058 | **24×** |
+  | `regex_replace` 2 KB | 557 647 | 77 382 | **7.2×** |
+  | `b64_encode` 4 KB | 16 349 | 4 270 | **3.8×** |
+  | `url_percent_encode` 1 KB | 6 902 | 2 157 | **3.2×** |
+  | `regex_test` 2 KB | 1 924 | 595 | **3.2×** |
+  | `fmt1`, 512 B template | 1 758 | 548 | **3.2×** |
+
+  `regex_replace` drops from 8 005 to 5 allocations per call and
+  `regex_test` from 28 to 4. Byte-for-byte output is unchanged: the
+  encoders are covered by the RFC known-answer vectors in the corpus
+  (blake2b, chacha20poly1305, x25519, ed25519, aes-gcm, hkdf, pbkdf2,
+  ecdsa-p256), and the whole suite is ASan/UBSan-clean — the check that
+  matters for an API that hands out a raw write cursor.
 
 - **The `nurl_str_get` scan loops are gone from the parsers — 278 of the
   426 call sites migrated to `nurl_str_at`.** Follow-up to the hot-path
