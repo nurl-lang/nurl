@@ -173,6 +173,23 @@ def refs():
     out['sliceax']=ddz[:,1:3,:]
     out['perm']=a.transpose(2,0,1)
     out['resize']=(1+np.arange(4.)).reshape(1,2,2).repeat(2,1).repeat(2,2)
+    # bilinear, both corner conventions. These are torch's own numbers,
+    # embedded rather than recomputed: align_corners changes the
+    # coordinate mapping and not just the endpoints, so re-deriving the
+    # expectation here would only restate the implementation. numpy has
+    # no interpolate, and this suite must not need torch.
+    #   torch.nn.functional.interpolate((1+0.7*arange(12)).reshape(1,1,3,4),
+    #                                   size=(5,7), mode='bilinear', align_corners=…)
+    out['bilac']=np.array([1.0,1.35,1.7,2.05,2.4,2.75,3.0999999999999996,2.4,2.75,3.1,
+      3.4499999999999997,3.8,4.1499999999999995,4.5,3.8,4.15,4.5,4.85,5.199999999999999,
+      5.549999999999999,5.8999999999999995,5.199999999999999,5.55,5.9,6.25,6.6,
+      6.949999999999999,7.299999999999999,6.6,6.949999999999999,7.3,7.65,8.0,8.35,8.7])
+    out['bilhc']=np.array([1.0,1.25,1.65,2.05,2.4499999999999997,2.8499999999999996,
+      3.0999999999999996,2.12,2.3699999999999997,2.77,3.17,3.57,3.9699999999999998,4.22,
+      3.8,4.05,4.449999999999999,4.85,5.249999999999999,5.6499999999999995,
+      5.8999999999999995,5.4799999999999995,5.7299999999999995,6.129999999999999,
+      6.529999999999999,6.929999999999999,7.329999999999999,7.579999999999999,6.6,6.85,
+      7.249999999999999,7.6499999999999995,8.05,8.45,8.7])
     out['expand']=np.repeat(1+2*np.arange(3.),4)
     out['rl2']=np.sqrt((nx**2).sum(1))
     out['argmax']=np.array([4.,4.])

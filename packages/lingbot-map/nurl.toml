@@ -1,0 +1,10 @@
+[package]
+name = "lingbot-map"
+version = "0.1.0"
+description = "LingBot-Map in pure NURL — the Geometric Context Transformer for streaming 3D reconstruction, ported from the reference PyTorch implementation. Feed it a folder of frames and it returns per-frame camera poses, depth and a world-space point cloud."
+license = "Apache-2.0"
+
+[dependencies]
+torchpt = { path = "../torchpt", version = "^0.1" }
+gpukit = { path = "../gpukit", version = "^0.4" }
+image = { path = "../image", version = "^0.4" }

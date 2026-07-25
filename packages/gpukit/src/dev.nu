@@ -69,6 +69,11 @@ $ `kernels.nu`  // _gk_partial_threads / _gk_zeros
 
 @ gk_buf_dtype GkBuf b → i { ^ . b dtype }
 
+// Bytes per element. Needed by anyone addressing a sub-range of a buffer
+// (the device pointer is byte-addressed), which is why it is public
+// rather than the file-private __gk_esz it wraps.
+@ gk_buf_esz GkBuf b → i { ^ ( __gk_esz . b dtype ) }
+
 // ── Lifecycle ─────────────────────────────────────────────────────────
 
 @ gk_dbuf_new * GpuKit kit i n i dtype → GkBuf {
@@ -408,31 +413,143 @@ $ `kernels.nu`  // _gk_partial_threads / _gk_zeros
 
 // ── Matmul: C[M×N] = A[M×K]·B[K×N], row-major, sequential-k accumulate ─
 
+// Rows / columns of C one CPU-backend thread owns. See __gkd_mm_tiled.
+: i GKD_RT 8
+: i GKD_CT 32
+
+@ __gkd_ceil i x i q → i { ^ / + x - q 1 q }
+
+// The multiply-accumulate step, spelled the way each element type's
+// contract requires: F64 with explicit round-to-nearest intrinsics
+// (NVRTC's fmad contraction would otherwise fuse and change the bits),
+// F32 plain (its contract is true-float32 semantics, which the verified
+// model goldens pin). `dst` and the product operands are C expressions.
+@ __gkd_mac i dtype s dst s x s y → String {
+    : String s ( string_from dst )
+    ? == dtype GK_F64 {
+        ( string_push_str s `=__dadd_rn(` )
+        ( string_push_str s dst )
+        ( string_push_str s `,__dmul_rn(` )
+        ( string_push_str s x ) ( string_push_char s 44 ) ( string_push_str s y )
+        ( string_push_str s `));` )
+    } {
+        ( string_push_str s `+=` )
+        ( string_push_str s x ) ( string_push_char s 42 ) ( string_push_str s y )
+        ( string_push_char s 59 )
+    }
+    ^ s
+}
+
+// Register-tiled matmul body for the CPU backend.
+//
+// One thread per output element is right on a GPU, where thousands of
+// threads hide the strided read of B. On the CPU it is the wrong shape
+// by more than an order of magnitude: `B[t*N+col]` walks a column, so
+// every iteration misses cache, and a scalar accumulator gives the
+// vectoriser nothing. Here one thread owns an 8x32 block of C, keeps its
+// accumulators in registers, and reads B along a ROW — 32 contiguous
+// elements, reused by all 8 rows of the tile. Measured on a 6-core
+// i7-5930K at 512x1024x1024 f64: 1.7 -> 42 GFLOP/s.
+//
+// Per output element the sum still runs t = 0..K ascending with the same
+// arithmetic, so every value is bit-identical to the per-element kernel
+// and to a naive sequential host matmul. Only the visit order changes.
+//
+// CPU-only on purpose: 256 accumulators per thread is far past a CUDA
+// thread's register budget and would spill to local memory.
+@ __gkd_mm_tiled s tn i dtype → String {
+    : String s ( string_from `enum{RT=8,CT=32};` )
+    ( string_push_str s `long long idx=blockIdx.x*blockDim.x+threadIdx.x;` )
+    ( string_push_str s `long long ncb=(N+CT-1)/CT,nrb=(M+RT-1)/RT;if(idx>=nrb*ncb)return;` )
+    ( string_push_str s `long long rb=(idx/ncb)*RT,cb=(idx%ncb)*CT;` )
+    ( string_push_str s `long long rlim=(M-rb<RT)?(M-rb):RT,clim=(N-cb<CT)?(N-cb):CT;` )
+    ( string_push_str s tn ) ( string_push_str s ` acc[RT][CT];` )
+    ( string_push_str s `for(int r=0;r<RT;r++)for(int c=0;c<CT;c++)acc[r][c]=0;` )
+    : String mac ( __gkd_mac dtype `acc[r][c]` `av` `Bt[c]` )
+    // The full-tile path is spelled out separately so the trip counts are
+    // compile-time constants and the inner loop vectorises; the ragged
+    // edge takes the general path.
+    ( string_push_str s `if(rlim==RT&&clim==CT){for(long long t=0;t<K;t++){const ` )
+    ( string_push_str s tn ) ( string_push_str s `* Bt=B+t*N+cb;for(int r=0;r<RT;r++){` )
+    ( string_push_str s tn ) ( string_push_str s ` av=A[(rb+r)*K+t];for(int c=0;c<CT;c++)` )
+    ( string_push_str s ( string_data mac ) )
+    ( string_push_str s `}}}else{for(long long t=0;t<K;t++){const ` )
+    ( string_push_str s tn ) ( string_push_str s `* Bt=B+t*N+cb;for(int r=0;r<rlim;r++){` )
+    ( string_push_str s tn ) ( string_push_str s ` av=A[(rb+r)*K+t];for(int c=0;c<clim;c++)` )
+    ( string_push_str s ( string_data mac ) )
+    ( string_push_str s `}}}` )
+    ( string_free mac )
+    ( string_push_str s `for(int r=0;r<rlim;r++)for(int c=0;c<clim;c++)C[(rb+r)*N+cb+c]=acc[r][c];}` )
+    ^ s
+}
+
+// The register-tiled body with a GEMM epilogue: alpha, beta and an
+// optional per-column bias. Kept separate from __gkd_mm_tiled rather
+// than parameterised, because the inner loop is what has to stay simple
+// enough to vectorise and the epilogue runs once per output.
+//
+// Wants B as [K,N], i.e. transb=0. That is the layout the tiling exists
+// for — `B+t*N+cb` is 32 contiguous elements reused by all 8 rows of the
+// tile. Staging a transb=1 weight into it at CALL time was measured and
+// is a LOSS: the transpose is a full memory round trip over a cold
+// weight that is then used once, and the model came out 2.4x slower even
+// though an isolated benchmark said 1.5x faster (the benchmark kept the
+// weight in L3 across repeats). Transpose at load time instead.
+@ __gkd_gemm_tiled s tn i dtype → String {
+    : String s ( string_from `enum{RT=8,CT=32};` )
+    ( string_push_str s `long long idx=blockIdx.x*blockDim.x+threadIdx.x;` )
+    ( string_push_str s `long long ncb=(N+CT-1)/CT,nrb=(M+RT-1)/RT;if(idx>=nrb*ncb)return;` )
+    ( string_push_str s `long long rb=(idx/ncb)*RT,cb=(idx%ncb)*CT;` )
+    ( string_push_str s `long long rlim=(M-rb<RT)?(M-rb):RT,clim=(N-cb<CT)?(N-cb):CT;` )
+    ( string_push_str s tn ) ( string_push_str s ` acc[RT][CT];` )
+    ( string_push_str s `for(int r=0;r<RT;r++)for(int c=0;c<CT;c++)acc[r][c]=0;` )
+    : String mac ( __gkd_mac dtype `acc[r][c]` `av` `Bt[c]` )
+    ( string_push_str s `if(rlim==RT&&clim==CT){for(long long t=0;t<K;t++){const ` )
+    ( string_push_str s tn ) ( string_push_str s `* Bt=B+t*N+cb;for(int r=0;r<RT;r++){` )
+    ( string_push_str s tn ) ( string_push_str s ` av=A[(rb+r)*K+t];for(int c=0;c<CT;c++)` )
+    ( string_push_str s ( string_data mac ) )
+    ( string_push_str s `}}}else{for(long long t=0;t<K;t++){const ` )
+    ( string_push_str s tn ) ( string_push_str s `* Bt=B+t*N+cb;for(int r=0;r<rlim;r++){` )
+    ( string_push_str s tn ) ( string_push_str s ` av=A[(rb+r)*K+t];for(int c=0;c<clim;c++)` )
+    ( string_push_str s ( string_data mac ) )
+    ( string_push_str s `}}}` )
+    ( string_free mac )
+    ( string_push_str s `for(int r=0;r<rlim;r++)for(int c=0;c<clim;c++){` )
+    ( string_push_str s tn ) ( string_push_str s ` bias=(C!=0)?C[cb+c]:0;` )
+    ( string_push_str s `Y[(rb+r)*N+cb+c]=alpha*acc[r][c]+beta*bias;}}` )
+    ^ s
+}
+
 @ gkd_matmul * GpuKit kit GkBuf c GkBuf a GkBuf b i m i k i n → b {
     ? & & ( gk_buf_ok c ) ( gk_buf_ok a ) ( gk_buf_ok b ) {} { ^ F }
     ? & == . c dtype . a dtype == . a dtype . b dtype {} { ^ F }
     ? & & == . a n * m k == . b n * k n == . c n * m n {} { ^ F }
+    : b on_cpu ( nurl_str_eq ( gk_backend kit ) `cpu` )
     : s tn ( _gk_tname . c dtype )
     : String kname ( string_from ( _gk_pfx . c dtype ) )
-    ( string_push_str kname `matmul` )
+    ( string_push_str kname ? on_cpu `matmul_tiled` `matmul` )
     : String src ( string_from `extern "C" __global__ void ` )
     ( string_push_str src ( string_data kname ) )
     ( string_push_str src `(const ` ) ( string_push_str src tn ) ( string_push_str src `* A, const ` )
     ( string_push_str src tn ) ( string_push_str src `* B, ` )
     ( string_push_str src tn ) ( string_push_str src `* C, long long M, long long K, long long N){` )
-    ( string_push_str src `long long idx=blockIdx.x*blockDim.x+threadIdx.x;` )
-    ( string_push_str src `if(idx<M*N){long long r=idx/N,cx=idx%N;` )
-    ( string_push_str src tn ) ( string_push_str src ` s=0;` )
-    // F64 spells the accumulation with explicit round-to-nearest intrinsics
-    // (NVRTC's fmad contraction would otherwise fuse and change the bits);
-    // F32 keeps the plain form — its contract is true-float32 semantics
-    // (numpy/onnxruntime), which the verified model goldens pin.
-    ? == . c dtype GK_F64 {
-        ( string_push_str src `for(long long t=0;t<K;t++)s=__dadd_rn(s,__dmul_rn(A[r*K+t],B[t*N+cx]));C[idx]=s;}}` )
+    ? on_cpu {
+        : String body ( __gkd_mm_tiled tn . c dtype )
+        ( string_push_str src ( string_data body ) )
+        ( string_free body )
     } {
-        ( string_push_str src `for(long long t=0;t<K;t++)s+=A[r*K+t]*B[t*N+cx];C[idx]=s;}}` )
+        ( string_push_str src `long long idx=blockIdx.x*blockDim.x+threadIdx.x;` )
+        ( string_push_str src `if(idx<M*N){long long r=idx/N,cx=idx%N;` )
+        ( string_push_str src tn ) ( string_push_str src ` s=0;` )
+        : String mac ( __gkd_mac . c dtype `s` `A[r*K+t]` `B[t*N+cx]` )
+        ( string_push_str src `for(long long t=0;t<K;t++)` )
+        ( string_push_str src ( string_data mac ) )
+        ( string_free mac )
+        ( string_push_str src `C[idx]=s;}}` )
     }
-    : i total * m n
+    : i total ? on_cpu
+    * ( __gkd_ceil m GKD_RT ) ( __gkd_ceil n GKD_CT )
+    * m n
     : ( Vec i ) args ( vec_new [i] )
     ( vec_push [i] args ( gk_arg_dev a ) )
     ( vec_push [i] args ( gk_arg_dev b ) )
@@ -462,26 +579,57 @@ $ `kernels.nu`  // _gk_partial_threads / _gk_zeros
     ? & & == . a n asz == . b n bsz == . y n * * batch m n {} { ^ F }
     : i astep ? != abatch 0 { * m kk } { 0 }
     : i bstep ? != bbatch 0 { * kk n } { 0 }
+    : b on_cpu ( nurl_str_eq ( gk_backend kit ) `cpu` )
     : s tn ( _gk_tname . y dtype )
     : String kname ( string_from ( _gk_pfx . y dtype ) )
-    ( string_push_str kname `bmm` )
+    ( string_push_str kname ? on_cpu `bmm_tiled` `bmm` )
     : String src ( string_from `extern "C" __global__ void ` )
     ( string_push_str src ( string_data kname ) )
     ( string_push_str src `(const ` ) ( string_push_str src tn ) ( string_push_str src `* A, const ` )
     ( string_push_str src tn ) ( string_push_str src `* B, ` )
     ( string_push_str src tn ) ( string_push_str src `* Y, long long M, long long N, long long K, long long as, long long bs, long long total){` )
-    ( string_push_str src `long long idx=blockIdx.x*blockDim.x+threadIdx.x;if(idx>=total)return;` )
-    ( string_push_str src `long long c=idx%N;long long t=idx/N;long long r=t%M;long long b=t/M;` )
-    ( string_push_str src `const ` ) ( string_push_str src tn ) ( string_push_str src `* a=A+b*as;const ` )
-    ( string_push_str src tn ) ( string_push_str src `* bb=B+b*bs;` )
-    ( string_push_str src tn ) ( string_push_str src ` acc=0;` )
-    // F64: explicit rn intrinsics (see gkd_matmul); F32 stays true-float32.
-    ? == . y dtype GK_F64 {
-        ( string_push_str src `for(long long k=0;k<K;k++)acc=__dadd_rn(acc,__dmul_rn(a[r*K+k],bb[k*N+c]));Y[idx]=acc;}` )
+    ? on_cpu {
+        // Same register tile as gkd_matmul, with the batch folded into the
+        // thread index; per output element the K sum is unchanged, so the
+        // values are bit-identical to the per-element form.
+        ( string_push_str src `enum{RT=8,CT=32};` )
+        ( string_push_str src `long long idx=blockIdx.x*blockDim.x+threadIdx.x;` )
+        ( string_push_str src `long long ncb=(N+CT-1)/CT,nrb=(M+RT-1)/RT;` )
+        ( string_push_str src `if(idx>=total)return;` )
+        ( string_push_str src `long long tile=idx%(nrb*ncb),bi=idx/(nrb*ncb);` )
+        ( string_push_str src `long long rb=(tile/ncb)*RT,cb=(tile%ncb)*CT;` )
+        ( string_push_str src `long long rlim=(M-rb<RT)?(M-rb):RT,clim=(N-cb<CT)?(N-cb):CT;` )
+        ( string_push_str src `const ` ) ( string_push_str src tn ) ( string_push_str src `* a=A+bi*as;const ` )
+        ( string_push_str src tn ) ( string_push_str src `* bb=B+bi*bs;` )
+        ( string_push_str src tn ) ( string_push_str src ` acc[RT][CT];` )
+        ( string_push_str src `for(int r=0;r<RT;r++)for(int c=0;c<CT;c++)acc[r][c]=0;` )
+        : String mac ( __gkd_mac . y dtype `acc[r][c]` `av` `Bt[c]` )
+        ( string_push_str src `if(rlim==RT&&clim==CT){for(long long k=0;k<K;k++){const ` )
+        ( string_push_str src tn ) ( string_push_str src `* Bt=bb+k*N+cb;for(int r=0;r<RT;r++){` )
+        ( string_push_str src tn ) ( string_push_str src ` av=a[(rb+r)*K+k];for(int c=0;c<CT;c++)` )
+        ( string_push_str src ( string_data mac ) )
+        ( string_push_str src `}}}else{for(long long k=0;k<K;k++){const ` )
+        ( string_push_str src tn ) ( string_push_str src `* Bt=bb+k*N+cb;for(int r=0;r<rlim;r++){` )
+        ( string_push_str src tn ) ( string_push_str src ` av=a[(rb+r)*K+k];for(int c=0;c<clim;c++)` )
+        ( string_push_str src ( string_data mac ) )
+        ( string_push_str src `}}}` )
+        ( string_free mac )
+        ( string_push_str src `for(int r=0;r<rlim;r++)for(int c=0;c<clim;c++)Y[(bi*M+rb+r)*N+cb+c]=acc[r][c];}` )
     } {
-        ( string_push_str src `for(long long k=0;k<K;k++)acc+=a[r*K+k]*bb[k*N+c];Y[idx]=acc;}` )
+        ( string_push_str src `long long idx=blockIdx.x*blockDim.x+threadIdx.x;if(idx>=total)return;` )
+        ( string_push_str src `long long c=idx%N;long long t=idx/N;long long r=t%M;long long b=t/M;` )
+        ( string_push_str src `const ` ) ( string_push_str src tn ) ( string_push_str src `* a=A+b*as;const ` )
+        ( string_push_str src tn ) ( string_push_str src `* bb=B+b*bs;` )
+        ( string_push_str src tn ) ( string_push_str src ` acc=0;` )
+        : String mac ( __gkd_mac . y dtype `acc` `a[r*K+k]` `bb[k*N+c]` )
+        ( string_push_str src `for(long long k=0;k<K;k++)` )
+        ( string_push_str src ( string_data mac ) )
+        ( string_free mac )
+        ( string_push_str src `Y[idx]=acc;}` )
     }
-    : i total * * batch m n
+    : i total ? on_cpu
+    * batch * ( __gkd_ceil m GKD_RT ) ( __gkd_ceil n GKD_CT )
+    * * batch m n
     : ( Vec i ) args ( vec_new [i] )
     ( vec_push [i] args ( gk_arg_dev a ) )
     ( vec_push [i] args ( gk_arg_dev b ) )

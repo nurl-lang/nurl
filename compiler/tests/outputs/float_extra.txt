@@ -6,6 +6,13 @@ trunc(2.7)     ok
 trunc(-2.7)    ok
 cbrt(8)        ok
 cbrt(-27)      ok
+erf(0)         ok
+erf(1)         ok
+erf(-1)        ok
+erfc(1)        ok
+1-erf(10)==0   ok
+erfc(10)>0     ok
+erfc(10) mag   ok
 hypot(3,4)     ok
 hypot(0,0)     ok
 log2(8)        ok

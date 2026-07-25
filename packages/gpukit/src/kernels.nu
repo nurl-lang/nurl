@@ -75,16 +75,73 @@ $ `gpukit.nu`
 }
 
 // ── Matrix multiply: C[M×N] = A[M×K] · B[K×N] (row-major) ──────────────
-// Each output element sums t=0..K in order with EXPLICIT round-to-nearest
-// intrinsics (NVRTC's default fmad contraction would fuse `s+=a*b` into an
-// FMA and change the bits) — so this is bit-identical to a naive sequential
-// host matmul, which is what tensor_matmul's fast path substitutes it for.
-@ gk_matmul_f * GpuKit kit ( Vec f ) c ( Vec f ) a ( Vec f ) b i m i k i n → b {
+//
+// Both kernels below sum t = 0..K in ascending order per output element,
+// with EXPLICIT round-to-nearest intrinsics (NVRTC's default fmad
+// contraction would fuse `s += a*b` into an FMA and change the bits).
+// That makes them bit-identical to each other AND to a naive sequential
+// host matmul — which is exactly what tensor_matmul's fast path
+// substitutes them for. Only the ORDER IN WHICH OUTPUTS ARE VISITED
+// differs, and that changes no sum.
+//
+// One thread per output element is the right shape on a GPU, where
+// thousands of threads hide the strided read of B. On the CPU backend
+// it is the wrong shape by more than an order of magnitude: `B[t*N+col]`
+// walks a column, so every iteration is a cache miss, and a scalar
+// accumulator gives the vectoriser nothing to work with. Measured on a
+// 6-core i7-5930K, 512x1024x1024: 1.7 GFLOP/s.
+//
+// So the CPU backend gets a register-tiled variant: one thread owns an
+// 8x32 block of C, keeps its 256 accumulators in registers, and reads B
+// along a ROW (32 contiguous doubles = 4 AVX2 vectors) reused by all 8
+// rows of the tile. Same machine, same numbers, bit for bit: 42 GFLOP/s.
+//
+// The tile is CPU-only on purpose — 256 doubles per thread is far past a
+// CUDA thread's register budget and would spill to local memory.
+
+: i GK_MM_RT 8  // rows of C per thread (CPU tile)
+: i GK_MM_CT 32  // cols of C per thread (CPU tile)
+
+@ __gk_matmul_src_gpu → String {
     : String src ( string_from `extern "C" __global__ void gk_matmul(const double* A, const double* B, double* C, long long M, long long K, long long N){` )
     ( string_push_str src `long long idx=blockIdx.x*blockDim.x+threadIdx.x;` )
     ( string_push_str src `if(idx<M*N){long long row=idx/N,col=idx%N;double s=0.0;` )
     ( string_push_str src `for(long long t=0;t<K;t++)s=__dadd_rn(s,__dmul_rn(A[row*K+t],B[t*N+col]));C[idx]=s;}}` )
-    : i total * m n
+    ^ src
+}
+
+@ __gk_matmul_src_cpu → String {
+    : String src ( string_from `enum{RT=8,CT=32};` )
+    ( string_push_str src `extern "C" __global__ void gk_matmul_tiled(const double* A, const double* B, double* C, long long M, long long K, long long N){` )
+    ( string_push_str src `long long idx=blockIdx.x*blockDim.x+threadIdx.x;` )
+    ( string_push_str src `long long ncb=(N+CT-1)/CT, nrb=(M+RT-1)/RT;` )
+    ( string_push_str src `if(idx>=nrb*ncb)return;` )
+    ( string_push_str src `long long rb=(idx/ncb)*RT, cb=(idx%ncb)*CT;` )
+    ( string_push_str src `long long rlim=(M-rb<RT)?(M-rb):RT, clim=(N-cb<CT)?(N-cb):CT;` )
+    ( string_push_str src `double acc[RT][CT];` )
+    ( string_push_str src `for(int r=0;r<RT;r++)for(int c=0;c<CT;c++)acc[r][c]=0.0;` )
+    // The full-tile path is spelled out separately so the trip counts are
+    // compile-time constants and the inner loop actually vectorises; the
+    // ragged edge takes the general path.
+    ( string_push_str src `if(rlim==RT&&clim==CT){` )
+    ( string_push_str src `for(long long t=0;t<K;t++){const double* Bt=B+t*N+cb;` )
+    ( string_push_str src `for(int r=0;r<RT;r++){double a=A[(rb+r)*K+t];` )
+    ( string_push_str src `for(int c=0;c<CT;c++)acc[r][c]=__dadd_rn(acc[r][c],__dmul_rn(a,Bt[c]));}}` )
+    ( string_push_str src `}else{` )
+    ( string_push_str src `for(long long t=0;t<K;t++){const double* Bt=B+t*N+cb;` )
+    ( string_push_str src `for(int r=0;r<rlim;r++){double a=A[(rb+r)*K+t];` )
+    ( string_push_str src `for(int c=0;c<clim;c++)acc[r][c]=__dadd_rn(acc[r][c],__dmul_rn(a,Bt[c]));}}}` )
+    ( string_push_str src `for(int r=0;r<rlim;r++)for(int c=0;c<clim;c++)C[(rb+r)*N+cb+c]=acc[r][c];}` )
+    ^ src
+}
+
+@ gk_matmul_f * GpuKit kit ( Vec f ) c ( Vec f ) a ( Vec f ) b i m i k i n → b {
+    : b on_cpu ( nurl_str_eq ( gk_backend kit ) `cpu` )
+    : String src ? on_cpu ( __gk_matmul_src_cpu ) ( __gk_matmul_src_gpu )
+    : s entry ? on_cpu `gk_matmul_tiled` `gk_matmul`
+    : i nrb / + m - GK_MM_RT 1 GK_MM_RT
+    : i ncb / + n - GK_MM_CT 1 GK_MM_CT
+    : i tiles ? on_cpu * nrb ncb * m n
     : ( Vec GkArg ) call ( vec_new [GkArg] )
     ( vec_push [GkArg] call ( gk_in_f a ) )
     ( vec_push [GkArg] call ( gk_in_f b ) )
@@ -92,7 +149,7 @@ $ `gpukit.nu`
     ( vec_push [GkArg] call ( gk_i64 m ) )
     ( vec_push [GkArg] call ( gk_i64 k ) )
     ( vec_push [GkArg] call ( gk_i64 n ) )
-    : b r ( gk_run kit ( string_data src ) `gk_matmul` ( gk_grid total 256 ) 256 call )
+    : b r ( gk_run kit ( string_data src ) entry ( gk_grid tiles 256 ) 256 call )
     ( vec_free [GkArg] call )
     ( string_free src )
     ^ r

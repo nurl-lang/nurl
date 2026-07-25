@@ -243,10 +243,27 @@ static void __nurl_ensure(int n) {
     ^ p
 }
 
+// Compiler flags, best first. `cpu_compile` walks this list and keeps the
+// first set that builds, so a toolchain missing -march=native or OpenMP
+// degrades instead of failing.
+@ __cpu_cc_flags i n → s {
+    ? == n 0 { ^ `-O3 -march=native -fopenmp` } {}
+    ? == n 1 { ^ `-O3 -fopenmp` } {}
+    ? == n 2 { ^ `-O2 -fopenmp` } {}
+    ^ `-O2`
+}
+
 @ __cpu_cache_path s src → String {
     : String dir ( __cpu_cache_dir )
     : !v IoErr _mk ( dir_create_all ( string_data dir ) )
-    : ( Vec u ) sb ( bytes_from_str src )
+    // The flags are part of the key: an object built by an older, slower
+    // flag set must not be re-dlopened after the flags change, and
+    // -march=native means the object is only valid for THIS host anyway.
+    : String keyed ( string_from ( __cpu_cc_flags 0 ) )
+    ( string_push_char keyed 10 )
+    ( string_push_str keyed src )
+    : ( Vec u ) sb ( bytes_from_str ( string_data keyed ) )
+    ( string_free keyed )
     : String hex ( blake3_hex sb )
     ( vec_free [u] sb )
     : String nm ( string_from `cpu-` )
@@ -319,23 +336,30 @@ static void __nurl_ensure(int n) {
         ^ # *u 0
     } {}
 
-    // Prefer OpenMP; fall back to a serial build if -fopenmp isn't available.
-    : String base ( string_with_cap 256 )
-    ( string_push_str base `${CXX:-c++} -O2 -ffp-contract=off -fPIC -shared -o ` )
-    ( string_push_str base ( string_data sopath ) )
-    ( string_push_char base 32 )
-    ( string_push_str base ( string_data cpath ) )
-    ( string_push_str base ` 2>/tmp/nurlcpu_cc.log` )
-    : String omp ( string_with_cap 256 )
-    ( string_push_str omp `${CXX:-c++} -O2 -ffp-contract=off -fPIC -shared -fopenmp -o ` )
-    ( string_push_str omp ( string_data sopath ) )
-    ( string_push_char omp 32 )
-    ( string_push_str omp ( string_data cpath ) )
-    ( string_push_str omp ` 2>/tmp/nurlcpu_cc.log` )
-    : ~ i rc ( system ( string_data omp ) )
-    ? != rc 0 { = rc ( system ( string_data base ) ) } {}
-    ( string_free omp )
-    ( string_free base )
+    // Optimisation level matters far more here than for a GPU: this is the
+    // only backend where the arithmetic actually runs on the host, and a
+    // register-tiled kernel is ~5x faster at -O3 -march=native than at -O2
+    // (the vector unit is unreachable without knowing the target ISA).
+    // -ffp-contract=off stays in every variant — it is what keeps a host
+    // kernel bit-identical to the CUDA one, which the whole ecosystem's
+    // CPU-vs-GPU equality tests rest on. Candidates are tried in order and
+    // the first that compiles wins, so a toolchain without -march=native
+    // (or without OpenMP) still builds.
+    : ~ i rc -1
+    : ~ i cand 0
+    ~ & != rc 0 < cand 4 {
+        : String cmd ( string_with_cap 256 )
+        ( string_push_str cmd `${CXX:-c++} ` )
+        ( string_push_str cmd ( __cpu_cc_flags cand ) )
+        ( string_push_str cmd ` -ffp-contract=off -fPIC -shared -o ` )
+        ( string_push_str cmd ( string_data sopath ) )
+        ( string_push_char cmd 32 )
+        ( string_push_str cmd ( string_data cpath ) )
+        ( string_push_str cmd ` 2>/tmp/nurlcpu_cc.log` )
+        = rc ( system ( string_data cmd ) )
+        ( string_free cmd )
+        = cand + cand 1
+    }
     ( string_free cpath )
     ? != rc 0 {
         ( nurl_eprint `[gpu/cpu] host compile failed for ` ) ( nurl_eprint name )

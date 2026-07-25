@@ -17,6 +17,7 @@
 // which source-over-blends when the source has an alpha channel.
 
 $ `stdlib/core/vec.nu`
+$ `stdlib/std/float.nu`
 $ `core.nu`
 
 // BT.601 integer luma (77 + 150 + 29 = 256).
@@ -145,10 +146,13 @@ $ `core.nu`
 }
 
 @ image_flip_h Image im → Image { ^ ( __image_map_px im . im width . im height F T F ) }
+
 @ image_flip_v Image im → Image { ^ ( __image_map_px im . im width . im height F F T ) }
 // Clockwise quarter turns.
-@ image_rot90  Image im → Image { ^ ( __image_map_px im . im height . im width T F T ) }
+@ image_rot90 Image im → Image { ^ ( __image_map_px im . im height . im width T F T ) }
+
 @ image_rot180 Image im → Image { ^ ( __image_map_px im . im width . im height F T T ) }
+
 @ image_rot270 Image im → Image { ^ ( __image_map_px im . im height . im width T T F ) }
 
 // ── Resize ────────────────────────────────────────────────────────────
@@ -257,6 +261,184 @@ $ `core.nu`
     ^ out
 }
 
+// ── Bicubic resample (Pillow-compatible) ──────────────────────────────
+//
+// The resampler every image pipeline outside this repo means by "resize":
+// a cubic convolution kernel, separable, with the kernel's support scaled
+// by the reduction factor when downscaling so the result is genuinely
+// anti-aliased rather than merely interpolated.
+//
+// This is Pillow's algorithm, deliberately down to its arithmetic, because
+// the reason to want bicubic here is usually to reproduce what some other
+// tool already produced — a model's preprocessing, a reference render — and
+// "close enough" is exactly what such a comparison cannot use. So:
+//
+//   * the Catmull-Rom-ish cubic with a = −0.5 (Pillow's constant; note
+//     torch's `interpolate(mode='bicubic')` uses a = −0.75 and will NOT
+//     agree — they are different kernels, not different roundings);
+//   * `support = 2 · max(1, in/out)` per axis, coefficients normalised to
+//     sum to 1 over the clipped window;
+//   * two passes, horizontal then vertical, each on 8-bit values with the
+//     coefficients in 22-bit fixed point, rounded half-away-from-zero, and
+//     the accumulator pre-loaded with half an lsb — which is what makes the
+//     output byte-identical to Pillow rather than off by one here and there.
+//
+// Verified byte-identical to Pillow across up-, down- and mixed scaling
+// and the degenerate 1-pixel cases, for images with NO alpha channel
+// (1 and 3 channels).
+//
+// With an alpha channel (2 or 4 channels) it deliberately does NOT match
+// Pillow, and the difference is worth knowing rather than discovering:
+// Pillow PREMULTIPLIES alpha before resampling an LA/RGBA image and
+// un-premultiplies afterwards, so a pixel's colour is weighted by how
+// opaque it is. That is the right answer when the alpha channel means
+// transparency — it stops transparent pixels' colours bleeding into
+// opaque ones — and the wrong answer when the four channels are just
+// four independent signals. This function does the latter: every channel
+// is resampled on its own. Premultiply before the call and divide after
+// if you want the former.
+
+: i __IMG_PREC 22  // fixed-point fraction bits (Pillow's PRECISION_BITS)
+
+// Pillow's bicubic kernel, a = −0.5.
+@ __img_cubic f x → f {
+    : f t ? < x 0.0 - 0.0 x x
+    ? < t 1.0 { ^ + * * t t - * 1.5 t 2.5 1.0 } {}
+    ? < t 2.0 { ^ * -0.5 - * t + * t - t 5.0 8.0 4.0 } {}
+    ^ 0.0
+}
+
+// Round half away from zero, matching Pillow's coefficient quantisation.
+@ __img_fix f w → i {
+    : f s * w # f << 1 __IMG_PREC
+    ^ ? < s 0.0 # i - s 0.5 # i + s 0.5
+}
+
+// Per-output-pixel coefficient window for one axis.
+//
+// Returns a control block: slot 0 = ksize, then per output pixel a run of
+// (1 + ksize) slots holding `xmin` followed by ksize fixed-point weights.
+// One allocation, freed by the caller.
+@ __img_coeffs i insize i outsize → s {
+    : f scale / # f insize # f outsize
+    : f fscale ? < scale 1.0 1.0 scale
+    : f support * 2.0 fscale
+    : i ksize + * 2 # i ( float_ceil support ) 1
+    : i stride + ksize 1
+    : s kk ( nurl_zalloc * 8 + 1 * outsize stride )
+    ( nurl_poke kk 0 ksize )
+    : f ss / 1.0 fscale
+    : ~ i xx 0
+    ~ < xx outsize {
+        : f center * + # f xx 0.5 scale
+        : ~ i xmin # i + - center support 0.5
+        ? < xmin 0 { = xmin 0 } {}
+        : ~ i xmax # i + + center support 0.5
+        ? > xmax insize { = xmax insize } {}
+        = xmax - xmax xmin
+        ? < xmax 0 { = xmax 0 } {}
+        : i base + 1 * xx stride
+        ( nurl_poke kk base xmin )
+        // Normalise in floating point, quantise after — quantising first
+        // and normalising the integers is what makes a naive port drift.
+        : *f w ( nurl_zalloc * 8 ? > ksize 0 ksize 1 )
+        : ~ f wsum 0.0
+        : ~ i x 0
+        ~ < x xmax {
+            : f v ( __img_cubic * ss - + # f + x xmin 0.5 center )
+            = . w x v
+            = wsum + wsum v
+            = x + x 1
+        }
+        = x 0
+        ~ < x xmax {
+            : f v ? != wsum 0.0 / . w x wsum 0.0
+            ( nurl_poke kk + + base 1 x ( __img_fix v ) )
+            = x + x 1
+        }
+        // ksize is the worst case; a clipped window leaves a shorter run,
+        // marked by its own length so the passes know where to stop.
+        ( nurl_poke kk + base 0 + xmin * xmax 1048576 )
+        ( nurl_free # s w )
+        = xx + xx 1
+    }
+    ^ kk
+}
+
+@ __img_clip8 i acc → i {
+    : i v >> acc __IMG_PREC
+    ? < v 0 { ^ 0 } {}
+    ? > v 255 { ^ 255 } {}
+    ^ v
+}
+
+// Catmull-Rom-family bicubic resize, Pillow-compatible.
+@ image_resize_bicubic Image im i nw i nh → Image {
+    : i w . im width
+    : i h . im height
+    : i c . im channels
+    ? | | | <= nw 0 <= nh 0 <= w 0 <= h 0 { ^ ( image_new 0 0 c ) } {}
+    : i half << 1 - __IMG_PREC 1
+    // horizontal pass: w → nw, height unchanged
+    : s kx ( __img_coeffs w nw )
+    : i ksx ( nurl_peek kx 0 )
+    : Image tmp ( image_new nw h c )
+    : ~ i y 0
+    ~ < y h {
+        : ~ i ox 0
+        ~ < ox nw {
+            : i base + 1 * ox + ksx 1
+            : i packed ( nurl_peek kx base )
+            : i xmin % packed 1048576
+            : i xlen / packed 1048576
+            : ~ i k 0
+            ~ < k c {
+                : ~ i acc half
+                : ~ i x 0
+                ~ < x xlen {
+                    = acc + acc * ( image_get im + xmin x y k ) ( nurl_peek kx + + base 1 x )
+                    = x + x 1
+                }
+                ( image_set tmp ox y k ( __img_clip8 acc ) )
+                = k + k 1
+            }
+            = ox + ox 1
+        }
+        = y + y 1
+    }
+    ( nurl_free kx )
+    // vertical pass: h → nh
+    : s ky ( __img_coeffs h nh )
+    : i ksy ( nurl_peek ky 0 )
+    : Image out ( image_new nw nh c )
+    : ~ i oy 0
+    ~ < oy nh {
+        : i base + 1 * oy + ksy 1
+        : i packed ( nurl_peek ky base )
+        : i ymin % packed 1048576
+        : i ylen / packed 1048576
+        : ~ i ox 0
+        ~ < ox nw {
+            : ~ i k 0
+            ~ < k c {
+                : ~ i acc half
+                : ~ i yy 0
+                ~ < yy ylen {
+                    = acc + acc * ( image_get tmp ox + ymin yy k ) ( nurl_peek ky + + base 1 yy )
+                    = yy + yy 1
+                }
+                ( image_set out ox oy k ( __img_clip8 acc ) )
+                = k + k 1
+            }
+            = ox + ox 1
+        }
+        = oy + oy 1
+    }
+    ( nurl_free ky )
+    ( image_free tmp )
+    ^ out
+}
+
 // ── Fill and drawing (in place, clipped, overwrite) ───────────────────
 
 @ image_fill Image im i rgba → v {
@@ -301,7 +483,7 @@ $ `core.nu`
 // Bresenham line from (x0,y0) to (x1,y1), clipped per pixel.
 @ image_draw_line Image im i x0 i y0 i x1 i y1 i rgba → v {
     : i dx ? > x1 x0 { - x1 x0 } { - x0 x1 }
-    : i dy ? > y1 y0 { - y0 y1 } { - y1 y0 }     // -abs(dy)
+    : i dy ? > y1 y0 { - y0 y1 } { - y1 y0 }  // -abs(dy)
     : i stx ? < x0 x1 { 1 } { -1 }
     : i sty ? < y0 y1 { 1 } { -1 }
     : ~ i err + dx dy
@@ -338,14 +520,14 @@ $ `core.nu`
                     ? blend {
                         : i a & sp 255
                         ? == a 0 {} {
-                        ? == a 255 { ( image_set_rgba dst tx ty sp ) } {
-                            : i dp ( image_get_rgba dst tx ty )
-                            : i r ( __blend8 & >> sp 24 255 & >> dp 24 255 a )
-                            : i g ( __blend8 & >> sp 16 255 & >> dp 16 255 a )
-                            : i b ( __blend8 & >> sp 8 255 & >> dp 8 255 a )
-                            : i oa ( __blend8 255 & dp 255 a )
-                            ( image_set_rgba dst tx ty | | | << r 24 << g 16 << b 8 oa )
-                        } }
+                            ? == a 255 { ( image_set_rgba dst tx ty sp ) } {
+                                : i dp ( image_get_rgba dst tx ty )
+                                : i r ( __blend8 & >> sp 24 255 & >> dp 24 255 a )
+                                : i g ( __blend8 & >> sp 16 255 & >> dp 16 255 a )
+                                : i b ( __blend8 & >> sp 8 255 & >> dp 8 255 a )
+                                : i oa ( __blend8 255 & dp 255 a )
+                                ( image_set_rgba dst tx ty | | | << r 24 << g 16 << b 8 oa )
+                            } }
                     } {
                         ( image_set_rgba dst tx ty sp )
                     }
