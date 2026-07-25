@@ -79,6 +79,36 @@ worst relative error **2.4e-16** across six random pose encodings — the
 last bit, and it comes from torch's vectorised `tan` disagreeing with
 glibc's, not from the port.
 
+### Stage 5 — what the DPT depth head needs
+
+Not started. The shapes below are read off the real checkpoint, so
+whoever writes it does not have to guess:
+
+| piece | shape | note |
+|---|---|---|
+| `norm` | LayerNorm(2048) | over the tapped tokens, patches only (from index 6) |
+| `projects.0..3` | 1×1 conv 2048 → **256, 512, 1024, 1024** | one per tapped layer; the four differ |
+| `resize_layers.0` | ConvTranspose2d 256→256, k4 s4 | ×4 up |
+| `resize_layers.1` | ConvTranspose2d 512→512, k2 s2 | ×2 up |
+| `resize_layers.2` | Identity | — |
+| `resize_layers.3` | Conv2d 1024→1024, k3 s2 p1 | ×2 down |
+| `scratch.layer{1..4}_rn` | 3×3 conv → 256, **no bias** | 256/512/1024/1024 in |
+| `scratch.refinenet{1..4}` | fusion blocks | refinenet4 has **no** `resConfUnit1` |
+| `scratch.output_conv1` | 3×3 conv 256 → 128 | |
+| `scratch.output_conv2` | 3×3 conv 128→32, ReLU, 1×1 conv 32→**2** | depth + confidence |
+
+Config: `intermediate_layer_idx = [0,1,2,3]`, `pos_embed=True`,
+`activation="exp"`, `conf_activation="expp1"`.
+
+Ops still missing from gpukit: **bilinear** resize (`gkd_resize_nn` is
+nearest only) — the fusion blocks upsample between stages and the final
+output is interpolated with `align_corners=True`. `gkd_conv2d` and
+`gkd_convtranspose2d` already exist.
+
+Also needed: `_apply_pos_embed`, which builds a UV grid and a sinusoidal
+embedding scaled by 0.1 and adds it **twice** — after each project and
+after the final interpolate.
+
 ### Stage 5 (partial) — the camera head (`src/camhead.nu`)
 
 **This is where a pose comes out.** It reads one token per frame — the
