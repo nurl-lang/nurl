@@ -173,11 +173,16 @@ every GPU package gets them. In rough order of what it bought:
   monotone in the digit count — which is five probes instead of
   seventeen, for every float any NURL program prints.
 
-Two things this did NOT need, both measured and dropped: double
-buffering the GEMM's global loads (neutral — the kernel was not
-latency-bound), and a 128x128 tile (worse — at these shapes it halves
-the block count on a 128-SM card, and idle SMs cost more than the better
-reuse gains).
+Three things this did NOT need, all measured and dropped: double
+buffering the GEMM's global loads (neutral — the kernel is not
+latency-bound), a 128x128 tile (worse — at these shapes it halves the
+block count on a 128-SM card, and idle SMs cost more than the better
+reuse gains), and 16-byte global loads in the staging phase (also
+neutral-to-worse, so it is not issue-bound on those either). Three
+negative results in a row is itself the finding: at ~25 TFLOP/s this
+kernel is not short of any one resource, and the next step is a
+different structure — warp-level tiling with register-resident
+fragments — rather than another parameter.
 
 ### Stage 2 — preprocessing (`src/preproc.nu`)
 
