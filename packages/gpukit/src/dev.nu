@@ -483,6 +483,43 @@ $ `kernels.nu`  // _gk_partial_threads / _gk_zeros
     ^ s
 }
 
+// The register-tiled body with a GEMM epilogue: alpha, beta and an
+// optional per-column bias. Kept separate from __gkd_mm_tiled rather
+// than parameterised, because the inner loop is what has to stay simple
+// enough to vectorise and the epilogue runs once per output.
+//
+// Wants B as [K,N], i.e. transb=0. That is the layout the tiling exists
+// for — `B+t*N+cb` is 32 contiguous elements reused by all 8 rows of the
+// tile. Staging a transb=1 weight into it at CALL time was measured and
+// is a LOSS: the transpose is a full memory round trip over a cold
+// weight that is then used once, and the model came out 2.4x slower even
+// though an isolated benchmark said 1.5x faster (the benchmark kept the
+// weight in L3 across repeats). Transpose at load time instead.
+@ __gkd_gemm_tiled s tn i dtype → String {
+    : String s ( string_from `enum{RT=8,CT=32};` )
+    ( string_push_str s `long long idx=blockIdx.x*blockDim.x+threadIdx.x;` )
+    ( string_push_str s `long long ncb=(N+CT-1)/CT,nrb=(M+RT-1)/RT;if(idx>=nrb*ncb)return;` )
+    ( string_push_str s `long long rb=(idx/ncb)*RT,cb=(idx%ncb)*CT;` )
+    ( string_push_str s `long long rlim=(M-rb<RT)?(M-rb):RT,clim=(N-cb<CT)?(N-cb):CT;` )
+    ( string_push_str s tn ) ( string_push_str s ` acc[RT][CT];` )
+    ( string_push_str s `for(int r=0;r<RT;r++)for(int c=0;c<CT;c++)acc[r][c]=0;` )
+    : String mac ( __gkd_mac dtype `acc[r][c]` `av` `Bt[c]` )
+    ( string_push_str s `if(rlim==RT&&clim==CT){for(long long t=0;t<K;t++){const ` )
+    ( string_push_str s tn ) ( string_push_str s `* Bt=B+t*N+cb;for(int r=0;r<RT;r++){` )
+    ( string_push_str s tn ) ( string_push_str s ` av=A[(rb+r)*K+t];for(int c=0;c<CT;c++)` )
+    ( string_push_str s ( string_data mac ) )
+    ( string_push_str s `}}}else{for(long long t=0;t<K;t++){const ` )
+    ( string_push_str s tn ) ( string_push_str s `* Bt=B+t*N+cb;for(int r=0;r<rlim;r++){` )
+    ( string_push_str s tn ) ( string_push_str s ` av=A[(rb+r)*K+t];for(int c=0;c<clim;c++)` )
+    ( string_push_str s ( string_data mac ) )
+    ( string_push_str s `}}}` )
+    ( string_free mac )
+    ( string_push_str s `for(int r=0;r<rlim;r++)for(int c=0;c<clim;c++){` )
+    ( string_push_str s tn ) ( string_push_str s ` bias=(C!=0)?C[cb+c]:0;` )
+    ( string_push_str s `Y[(rb+r)*N+cb+c]=alpha*acc[r][c]+beta*bias;}}` )
+    ^ s
+}
+
 @ gkd_matmul * GpuKit kit GkBuf c GkBuf a GkBuf b i m i k i n → b {
     ? & & ( gk_buf_ok c ) ( gk_buf_ok a ) ( gk_buf_ok b ) {} { ^ F }
     ? & == . c dtype . a dtype == . a dtype . b dtype {} { ^ F }

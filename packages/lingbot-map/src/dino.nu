@@ -78,7 +78,7 @@ $ `src/patchembed.nu`
     : ~ i i0 0
     ~ < i0 DN_DEPTH {
         : String p ( lmw_prefix `aggregator.patch_embed.blocks` i0 )
-        ( vec_push [LmBlk] bs ( lmw_block w kit ( string_data p ) F DN_EPS ) )
+        ( vec_push [LmBlk] bs ( lmw_block w kit ( string_data p ) F DN_EPS DN_DIM DN_HIDDEN ) )
         ( string_free p )
         = i0 + i0 1
     }

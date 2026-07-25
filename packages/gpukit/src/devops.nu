@@ -64,21 +64,40 @@ $ `dev.nu`
         ? & & ( gk_buf_ok c ) == . c dtype . y dtype >= . c n n {} { ^ F }
     } {}
     : s tn ( _gk_tname . y dtype )
+    // CPU with B already [K,N] (transb=0): one output per thread with a
+    // scalar accumulator walks a COLUMN of B and gives the vectoriser
+    // nothing — the same shape problem __gkd_mm_tiled was written for.
+    // Bit-identical to the per-element kernel: the sum still runs
+    // t = 0..K ascending, only the visit order over outputs changes.
+    //
+    // transb=1 deliberately stays on the per-element kernel. Staging a
+    // transpose at CALL time to reach the tiled body was measured and is
+    // a LOSS — see __gkd_gemm_tiled. Callers that want the tiled path
+    // transpose their weights ONCE, at load.
+    : b on_cpu ( nurl_str_eq ( gk_backend kit ) `cpu` )
+    : b tiled & on_cpu == transb 0
     : String kname ( __gkd_name . y dtype )
-    : String src ( __gkd_head kname `gemm` )
+    : String src ( __gkd_head kname ? tiled `gemm_tiled` `gemm` )
     ( string_push_str src `const ` ) ( string_push_str src tn ) ( string_push_str src `* A, const ` )
     ( string_push_str src tn ) ( string_push_str src `* B, const ` )
     ( string_push_str src tn ) ( string_push_str src `* C, ` )
     ( string_push_str src tn ) ( string_push_str src `* Y, long long M, long long N, long long K, ` )
     ( string_push_str src tn ) ( string_push_str src ` alpha, ` )
     ( string_push_str src tn ) ( string_push_str src ` beta, long long transB){` )
-    ( string_push_str src `long long idx=blockIdx.x*blockDim.x+threadIdx.x;` )
-    ( string_push_str src `if(idx<M*N){long long r=idx/N,c=idx%N;` )
-    ( string_push_str src tn ) ( string_push_str src ` acc=0;` )
-    ( string_push_str src `for(long long k=0;k<K;++k){` )
-    ( string_push_str src tn ) ( string_push_str src ` b=transB?B[c*K+k]:B[k*N+c];acc+=A[r*K+k]*b;}` )
-    ( string_push_str src tn ) ( string_push_str src ` bias=(C!=0)?C[c]:0;` )
-    ( string_push_str src `Y[idx]=alpha*acc+beta*bias;}}` )
+    ( string_push_str src `(void)transB;` )
+    ? tiled {
+        : String body ( __gkd_gemm_tiled tn . y dtype )
+        ( string_push_str src ( string_data body ) )
+        ( string_free body )
+    } {
+        ( string_push_str src `long long idx=blockIdx.x*blockDim.x+threadIdx.x;` )
+        ( string_push_str src `if(idx<M*N){long long r=idx/N,c=idx%N;` )
+        ( string_push_str src tn ) ( string_push_str src ` acc=0;` )
+        ( string_push_str src `for(long long k=0;k<K;++k){` )
+        ( string_push_str src tn ) ( string_push_str src ` b=transB?B[c*K+k]:B[k*N+c];acc+=A[r*K+k]*b;}` )
+        ( string_push_str src tn ) ( string_push_str src ` bias=(C!=0)?C[c]:0;` )
+        ( string_push_str src `Y[idx]=alpha*acc+beta*bias;}}` )
+    }
     : i cd ? != hasb 0 { ( gk_arg_dev c ) } { 0 }
     : ( Vec i ) args ( vec_new [i] )
     ( vec_push [i] args ( gk_arg_dev a ) )
@@ -91,7 +110,8 @@ $ `dev.nu`
     ( vec_push [i] args ( _gk_scal . y dtype alpha ) )
     ( vec_push [i] args ( _gk_scal . y dtype beta ) )
     ( vec_push [i] args ( gpu_arg_i64 transb ) )
-    ^ ( __gkd_launch kit src kname ( gk_grid * m n 256 ) args )
+    : i total ? tiled * ( __gkd_ceil m GKD_RT ) ( __gkd_ceil n GKD_CT ) * m n
+    ^ ( __gkd_launch kit src kname ( gk_grid total 256 ) args )
 }
 
 // ── 2-D convolution, NCHW, batch 1, group 1 ──────────────────────────

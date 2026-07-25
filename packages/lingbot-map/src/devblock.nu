@@ -14,7 +14,9 @@
 // is 2-D RoPE, which is specific to how this model indexes a patch grid.
 //
 // Weight layouts are torch's, unchanged: a Linear weight is [out, in] and
-// goes into `gkd_gemm` with transb=1, so nothing is transposed at load.
+// goes into `gkd_gemm` with transb=0: the four Linear weights are uploaded
+// TRANSPOSED (see lmw_block), which is what lets the CPU backend take
+// its register-tiled kernel.
 //
 //   ( lm_ws_new kit n dim heads hidden maxkv maxpos )  → LmWs
 //   ( lm_ws_free ws )                                  → v
@@ -337,7 +339,7 @@ i n i dim i heads i hidden → b {
 
     // ── attention branch ──
     ? ( gkd_layernorm kit norm x . w n1g . w n1b n dim . w eps ) {} { ^ F }
-    ? ( gkd_gemm kit qkv norm . w qkvw . w qkvb 1 n * 3 dim dim 1.0 1.0 1 ) {} { ^ F }
+    ? ( gkd_gemm kit qkv norm . w qkvw . w qkvb 1 n * 3 dim dim 1.0 1.0 0 ) {} { ^ F }
     // [n, 3, heads, hd] → [3, heads, n, hd]
     : ( Vec i ) qd ( _lm_i4 n 3 heads hd )
     : ( Vec i ) qp ( _lm_i4 1 2 0 3 )
@@ -406,15 +408,15 @@ i n i dim i heads i hidden → b {
     : b okc ( gkd_perm kit ctxp ctx cd cp )
     ( vec_free [i] cd ) ( vec_free [i] cp )
     ? okc {} { ^ F }
-    ? ( gkd_gemm kit branch ctxp . w pw . w pb 1 n dim dim 1.0 1.0 1 ) {} { ^ F }
+    ? ( gkd_gemm kit branch ctxp . w pw . w pb 1 n dim dim 1.0 1.0 0 ) {} { ^ F }
     ? ( __lm_res kit x branch . w ls1 norm n dim ) {} { ^ F }
 
     // ── MLP branch ──
     ? ( gkd_layernorm kit norm x . w n2g . w n2b n dim . w eps ) {} { ^ F }
-    ? ( gkd_gemm kit hid norm . w f1w . w f1b 1 n hidden dim 1.0 1.0 1 ) {} { ^ F }
+    ? ( gkd_gemm kit hid norm . w f1w . w f1b 1 n hidden dim 1.0 1.0 0 ) {} { ^ F }
     // exact GELU, x·Φ(x) — torch's nn.GELU default, not the tanh form
     ? ( gkd_map kit `gelu` `0.5f*x*(1.0f+erff(x*0.70710678118654752f))` hid hid ) {} { ^ F }
-    ? ( gkd_gemm kit branch hid . w f2w . w f2b 1 n dim hidden 1.0 1.0 1 ) {} { ^ F }
+    ? ( gkd_gemm kit branch hid . w f2w . w f2b 1 n dim hidden 1.0 1.0 0 ) {} { ^ F }
     ? ( __lm_res kit x branch . w ls2 norm n dim ) {} { ^ F }
     ^ T
 }

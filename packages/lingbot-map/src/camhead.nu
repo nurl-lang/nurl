@@ -104,7 +104,7 @@ $ `src/rope.nu`
     : ~ i i0 0
     ~ < i0 CH_DEPTH {
         : String p ( lmw_prefix `camera_head.trunk` i0 )
-        ( vec_push [LmBlk] tr ( lmw_block w kit ( string_data p ) F CH_EPS ) )
+        ( vec_push [LmBlk] tr ( lmw_block w kit ( string_data p ) F CH_EPS CH_DIM CH_HIDDEN ) )
         ( string_free p )
         = i0 + i0 1
     }

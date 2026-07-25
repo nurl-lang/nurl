@@ -105,10 +105,10 @@ $ `src/rope.nu`
     : ~ i i0 0
     ~ < i0 AG_DEPTH {
         : String pf ( lmw_prefix `aggregator.frame_blocks` i0 )
-        ( vec_push [LmBlk] fb ( lmw_block w kit ( string_data pf ) T AG_EPS ) )
+        ( vec_push [LmBlk] fb ( lmw_block w kit ( string_data pf ) T AG_EPS AG_DIM AG_HIDDEN ) )
         ( string_free pf )
         : String pg ( lmw_prefix `aggregator.global_blocks` i0 )
-        ( vec_push [LmBlk] gb ( lmw_block w kit ( string_data pg ) T AG_EPS ) )
+        ( vec_push [LmBlk] gb ( lmw_block w kit ( string_data pg ) T AG_EPS AG_DIM AG_HIDDEN ) )
         ( string_free pg )
         = i0 + i0 1
     }
