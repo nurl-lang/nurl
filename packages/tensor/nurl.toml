@@ -5,4 +5,4 @@ description = "The reusable n-dimensional array for NURL — the shared ML layer
 license = "MIT OR Apache-2.0"
 
 [dependencies]
-gpukit = { path = "../gpukit", version = "^0.4" }
+gpukit = { path = "../gpukit", version = "^0.5" }

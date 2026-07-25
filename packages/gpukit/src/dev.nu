@@ -78,13 +78,29 @@ $ `kernels.nu`  // _gk_partial_threads / _gk_zeros
 
 @ gk_dbuf_new * GpuKit kit i n i dtype → GkBuf {
     ? & ( gk_ok kit ) > n 0 {} { ^ @ GkBuf { 0 0 dtype } }
-    : GpuBuffer gb ( gpu_alloc . kit gpu * n ( __gk_esz dtype ) )
+    : i bytes * n ( __gk_esz dtype )
+    // a block this size that an earlier gk_dbuf_free retired
+    : i cached ( _gk_pool_take bytes )
+    ? != cached 0 { ^ @ GkBuf { cached n dtype } } {}
+    : GpuBuffer gb ( gpu_alloc . kit gpu bytes )
+    // out of memory: the pool is holding blocks nothing is using — give
+    // them back and ask once more before reporting failure
+    ? == . gb dptr 0 {
+        ( gk_pool_release kit )
+        : GpuBuffer gb2 ( gpu_alloc . kit gpu bytes )
+        ( _gk_pool_add . gb2 dptr bytes )
+        ^ @ GkBuf { . gb2 dptr n dtype }
+    } {}
+    ( _gk_pool_add . gb dptr bytes )
     ^ @ GkBuf { . gb dptr n dtype }
 }
 
 @ gk_dbuf_free GkBuf b → v {
     ? != . b dptr 0 {
-        ( gpu_free @ GpuBuffer { . b dptr * . b n ( __gk_esz . b dtype ) } )
+        : i bytes * . b n ( __gk_esz . b dtype )
+        ? ( _gk_pool_give . b dptr bytes ) {} {
+            ( gpu_free @ GpuBuffer { . b dptr bytes } )
+        }
     } {}
 }
 
@@ -142,6 +158,22 @@ $ `kernels.nu`  // _gk_partial_threads / _gk_zeros
     ^ == rc 0
 }
 
+// Upload bytes that are ALREADY in the buffer's element type: no
+// conversion, no staging allocation, one memcpy to the device. `src`
+// must address b.n elements of that type and stay valid for the call —
+// a memory-mapped file is exactly the intended source.
+//
+// The converting entry point above is the general one, but for a
+// checkpoint whose storage dtype already matches the device buffer it
+// walks every element through f64 twice (widen on read, narrow on
+// upload) and allocates two host buffers the size of the tensor to do
+// it. On a 4.6 GB model that is most of the load.
+@ gk_dbuf_upload_raw * GpuKit kit GkBuf b * u src → b {
+    ? & ( gk_buf_ok b ) != # i src 0 {} { ^ F }
+    : GpuBuffer gb @ GpuBuffer { . b dptr * . b n ( __gk_esz . b dtype ) }
+    ^ == ( gpu_upload gb src ) 0
+}
+
 // Exact i64 host view (GK_I64 buffers only — index tensors must never make
 // a round trip through f64). Same length contracts as the f64 view.
 @ gk_dbuf_upload_i * GpuKit kit GkBuf b ( Vec i ) src → b {
@@ -188,11 +220,153 @@ $ `kernels.nu`  // _gk_partial_threads / _gk_zeros
 
 @ gk_sync * GpuKit kit → b { ^ == ( gpu_sync . kit gpu ) 0 }
 
+// ── Per-kernel profiling ──────────────────────────────────────────────
+// "The model is slow" is not actionable; "78% of the frame is in three
+// kernels" is. With profiling on, every gk_run_dev launch is bracketed by
+// a CUDA event pair and the device time is accumulated into the kernel's
+// cache slot, so gk_prof_report ranks the kernels by where the time
+// actually went. Events measure the GPU, not the launch — a host clock
+// around an async launch measures neither.
+//
+// It is not free: each launch waits for its own end event, which
+// serialises the stream. Turn it on to find the hot kernel, off to time
+// the program.
+: ~ b g_gk_prof F
+: ~ i g_gk_ev0 0
+: ~ i g_gk_ev1 0
+
+@ gk_prof * GpuKit kit b on → v {
+    ? & on ( gk_ok kit ) {
+        ? == g_gk_ev0 0 {
+            = g_gk_ev0 ( gpu_timer_new . kit gpu )
+            = g_gk_ev1 ( gpu_timer_new . kit gpu )
+        } {}
+        = g_gk_prof != g_gk_ev0 0
+    } { = g_gk_prof F }
+}
+
+@ gk_prof_on → b { ^ g_gk_prof }
+
+// Drop every accumulated count — e.g. after a warm-up frame, so the
+// numbers describe the steady state and not the compiles.
+@ gk_prof_reset * GpuKit kit → v {
+    : i n ( vec_len [GkKernelEntry] . kit cache )
+    : ~ i k 0
+    ~ < k n {
+        ?? ( vec_get [GkKernelEntry] . kit cache k ) {
+            T e → {
+                : b _s ( vec_set [GkKernelEntry] . kit cache k
+                @ GkKernelEntry { . e name . e kernel 0 0 } )
+            }
+            F _ → {}
+        }
+        = k + k 1
+    }
+}
+
+@ __gk_prof_add * GpuKit kit i slot i ns → v {
+    ?? ( vec_get [GkKernelEntry] . kit cache slot ) {
+        T e → {
+            : b _s ( vec_set [GkKernelEntry] . kit cache slot
+            @ GkKernelEntry { . e name . e kernel + . e calls 1 + . e ns ns } )
+        }
+        F _ → {}
+    }
+}
+
+// Total device time accumulated so far, in nanoseconds.
+@ gk_prof_total * GpuKit kit → i {
+    : i n ( vec_len [GkKernelEntry] . kit cache )
+    : ~ i total 0
+    : ~ i k 0
+    ~ < k n {
+        ?? ( vec_get [GkKernelEntry] . kit cache k ) {
+            T e → { = total + total . e ns }
+            F _ → {}
+        }
+        = k + k 1
+    }
+    ^ total
+}
+
+// Kernels by device time, slowest first, with the share of the total.
+@ gk_prof_report * GpuKit kit → v {
+    : i n ( vec_len [GkKernelEntry] . kit cache )
+    : ~ i total 0
+    : ~ i k 0
+    ~ < k n {
+        ?? ( vec_get [GkKernelEntry] . kit cache k ) {
+            T e → { = total + total . e ns }
+            F _ → {}
+        }
+        = k + k 1
+    }
+    ( nurl_print `gpukit profile: ` )
+    ( nurl_print ( nurl_str_int / total 1000000 ) )
+    ( nurl_print ` ms of device time over ` )
+    ( nurl_print ( nurl_str_int n ) )
+    ( nurl_print ` kernels\n` )
+    ? == total 0 { ^ } {}
+    // selection sort over the slot indices: a dozen entries, printed once
+    : ( Vec i ) done ( vec_new [i] )
+    : ~ i shown 0
+    ~ < shown n {
+        : ~ i best - 0 1
+        : ~ i bestns - 0 1
+        : ~ i j 0
+        ~ < j n {
+            : ~ b seen F
+            : ~ i q 0
+            ~ < q ( vec_len [i] done ) {
+                ?? ( vec_get [i] done q ) { T d → { ? == d j { = seen T } {} } F → {} }
+                = q + q 1
+            }
+            ? seen {} {
+                ?? ( vec_get [GkKernelEntry] . kit cache j ) {
+                    T e → { ? > . e ns bestns { = bestns . e ns = best j } {} }
+                    F _ → {}
+                }
+            }
+            = j + j 1
+        }
+        ? < best 0 { = shown n } {
+            ( vec_push [i] done best )
+            ?? ( vec_get [GkKernelEntry] . kit cache best ) {
+                T e → {
+                    ? > . e calls 0 {
+                        ( nurl_print `  ` )
+                        ( nurl_print ( nurl_str_int / * . e ns 100 total ) )
+                        ( nurl_print `%  ` )
+                        ( nurl_print ( nurl_str_int / . e ns 1000 ) )
+                        ( nurl_print ` us  ` )
+                        ( nurl_print ( nurl_str_int . e calls ) )
+                        ( nurl_print ` calls  ` )
+                        ( nurl_print ( nurl_str_int / . e ns ? > . e calls 0 . e calls 1 ) )
+                        ( nurl_print ` ns/call  ` )
+                        ( nurl_print ( string_data . e name ) )
+                        ( nurl_print `\n` )
+                    } {}
+                }
+                F _ → {}
+            }
+            = shown + shown 1
+        }
+    }
+    ( vec_free [i] done )
+}
+
 @ gk_run_dev * GpuKit kit s src s name i grid i block ( Vec i ) args → b {
     ? ( gk_ok kit ) {} { ^ F }
-    : GpuKernel kn ( _gk_get_kernel kit src name )
+    : i slot ( _gk_kernel_slot kit src name )
+    ? >= slot 0 {} { ^ F }
+    : GpuKernel kn ( _gk_slot_kernel kit slot )
     ? ( gpu_kernel_ok kn ) {} { ^ F }
+    ? g_gk_prof { ( gpu_timer_mark . kit gpu g_gk_ev0 ) } {}
     ? == ( gpu_launch kn grid block args ) 0 {} { ^ F }
+    ? g_gk_prof {
+        ( gpu_timer_mark . kit gpu g_gk_ev1 )
+        ( __gk_prof_add kit slot ( gpu_timer_ns . kit gpu g_gk_ev0 g_gk_ev1 ) )
+    } {}
     ? g_gk_autosync { ^ == ( gpu_sync . kit gpu ) 0 } {}
     ^ T
 }
@@ -424,7 +598,7 @@ $ `kernels.nu`  // _gk_partial_threads / _gk_zeros
 // (NVRTC's fmad contraction would otherwise fuse and change the bits),
 // F32 plain (its contract is true-float32 semantics, which the verified
 // model goldens pin). `dst` and the product operands are C expressions.
-@ __gkd_mac i dtype s dst s x s y → String {
+@ _gkd_mac i dtype s dst s x s y → String {
     : String s ( string_from dst )
     ? == dtype GK_F64 {
         ( string_push_str s `=__dadd_rn(` )
@@ -465,7 +639,7 @@ $ `kernels.nu`  // _gk_partial_threads / _gk_zeros
     ( string_push_str s `long long rlim=(M-rb<RT)?(M-rb):RT,clim=(N-cb<CT)?(N-cb):CT;` )
     ( string_push_str s tn ) ( string_push_str s ` acc[RT][CT];` )
     ( string_push_str s `for(int r=0;r<RT;r++)for(int c=0;c<CT;c++)acc[r][c]=0;` )
-    : String mac ( __gkd_mac dtype `acc[r][c]` `av` `Bt[c]` )
+    : String mac ( _gkd_mac dtype `acc[r][c]` `av` `Bt[c]` )
     // The full-tile path is spelled out separately so the trip counts are
     // compile-time constants and the inner loop vectorises; the ragged
     // edge takes the general path.
@@ -503,7 +677,7 @@ $ `kernels.nu`  // _gk_partial_threads / _gk_zeros
     ( string_push_str s `long long rlim=(M-rb<RT)?(M-rb):RT,clim=(N-cb<CT)?(N-cb):CT;` )
     ( string_push_str s tn ) ( string_push_str s ` acc[RT][CT];` )
     ( string_push_str s `for(int r=0;r<RT;r++)for(int c=0;c<CT;c++)acc[r][c]=0;` )
-    : String mac ( __gkd_mac dtype `acc[r][c]` `av` `Bt[c]` )
+    : String mac ( _gkd_mac dtype `acc[r][c]` `av` `Bt[c]` )
     ( string_push_str s `if(rlim==RT&&clim==CT){for(long long t=0;t<K;t++){const ` )
     ( string_push_str s tn ) ( string_push_str s `* Bt=B+t*N+cb;for(int r=0;r<RT;r++){` )
     ( string_push_str s tn ) ( string_push_str s ` av=A[(rb+r)*K+t];for(int c=0;c<CT;c++)` )
@@ -517,6 +691,129 @@ $ `kernels.nu`  // _gk_partial_threads / _gk_zeros
     ( string_push_str s `for(int r=0;r<rlim;r++)for(int c=0;c<clim;c++){` )
     ( string_push_str s tn ) ( string_push_str s ` bias=(C!=0)?C[cb+c]:0;` )
     ( string_push_str s `Y[(rb+r)*N+cb+c]=alpha*acc[r][c]+beta*bias;}}` )
+    ^ s
+}
+
+// Shared-memory tiled matmul body for the CUDA backend — the body behind
+// gkd_gemm and gkd_bmm both.
+//
+// One thread per output element (the shape this file shipped with) is
+// bandwidth-bound: every MAC costs a fresh global load of B, so a 4090
+// runs it at ~3 TFLOP/s, about 4% of what its FP32 units can do. Here a
+// 256-thread block owns a 64x64 tile of Y, stages 64x16 of A and 16x64
+// of B into shared memory, and each thread keeps a 4x4 register tile. B
+// is read once per tile instead of once per output row, and the
+// arithmetic intensity goes from 1 MAC per load to 32. Measured on a
+// 4090 at 783x1024x1024 f32: 3.1 -> 11.5 TFLOP/s, and 0.6 -> 11.1 with
+// B transposed (the per-element kernel reads a transposed B along the
+// wrong axis entirely).
+//
+// **The accumulation order is unchanged**: each output still sums
+// t = 0..K-1 ascending, only blocked. Out-of-range staging slots hold a
+// zero, so a ragged tail adds exact 0.0 terms — the value is
+// bit-identical to the per-element kernel, which is what the verified
+// model goldens pin. Nothing here reassociates.
+//
+// transb is baked into the body (and into the kernel name) rather than
+// branched on per k: with B as [N,K] the staging loop walks k contiguously
+// per column, so transb=1 loads coalesced too — which is why, unlike the
+// CPU path, this one does not care which layout the weight arrives in.
+//
+// `batched` picks the bmm signature (per-batch A/B strides `as`/`bs`, a
+// bare store) over the gemm one (alpha/beta and a per-column bias).
+// The tile: a block owns GKD_BM x GKD_BN of Y and each of its 256
+// threads a GKD_TM x GKD_TN register block, stepping K in GKD_BK.
+//
+// Why 128x64x16 with an 8x4 register tile and not the obvious 64x64 with
+// 4x4: at 4x4 a thread reads 8 floats from shared per k step to do 16
+// MACs, and Ada's 128 B/clk of shared bandwidth cannot keep 128 FMA
+// lanes fed at that ratio — the kernel stalls on shared, not on math.
+// 8x4 halves the ratio to 12 reads per 32 MACs. Going the whole way to
+// 128x128/8x8 halves it again, but M here is ~800 rows and N is often
+// 1024, which is 56 blocks — under half of a 4090's 128 SMs, so the
+// wider tile loses more to idle SMs than it gains per SM.
+: i GKD_BM 64
+: i GKD_BN 64
+: i GKD_BK 16
+: i GKD_TM 4
+: i GKD_TN 4
+
+@ _gkd_smem_body s tn i dtype i transb i batched → String {
+    // 16-byte shared loads on f32. Two things at once: `Bs[kk][tc*4+j]`
+    // read one float at a time makes threads tc and tc+8 hit the same
+    // bank (4 floats apart, 32 banks) on EVERY read of the inner loop,
+    // and one LDS per float is three extra instructions per four FMAs.
+    // A float4 read is one conflict-free 16-byte access. It needs the
+    // shared rows 16-byte aligned, hence the +4 pad rather than the +1
+    // that only separates banks.
+    : b vec4 == dtype GK_F32
+    : String s ( string_from `enum{BM=64,BN=64,BK=16,TM=4,TN=4,NT=256};` )
+    // __align__(16) is not decoration: the float4 reads below are only
+    // defined if the array base is 16-byte aligned, and a __shared__
+    // array is only guaranteed its element's alignment.
+    ( string_push_str s ? vec4 `__shared__ __align__(16) ` `__shared__ ` )
+    ( string_push_str s tn )
+    ( string_push_str s ? vec4 ` As[BK][BM+4];__shared__ __align__(16) ` ` As[BK][BM+1];__shared__ ` )
+    ( string_push_str s tn )
+    ( string_push_str s ? vec4 ` Bs[BK][BN+4];` ` Bs[BK][BN+1];` )
+    ( string_push_str s `long long nbx=(N+BN-1)/BN;` )
+    ? != batched 0 {
+        ( string_push_str s `long long nby=(M+BM-1)/BM,tpb=nbx*nby;` )
+        ( string_push_str s `long long bi=blockIdx.x/tpb,tile=blockIdx.x%tpb;` )
+        ( string_push_str s `long long rb=(tile/nbx)*BM,cb=(tile%nbx)*BN;` )
+        ( string_push_str s `const ` ) ( string_push_str s tn )
+        ( string_push_str s `* A=Ab+bi*as;const ` )
+        ( string_push_str s tn ) ( string_push_str s `* B=Bb+bi*bs;` )
+    } {
+        ( string_push_str s `long long rb=(blockIdx.x/nbx)*BM,cb=(blockIdx.x%nbx)*BN;` )
+    }
+    ( string_push_str s `int tx=threadIdx.x,tr=tx/(BN/TN),tc=tx%(BN/TN);` )
+    ( string_push_str s tn ) ( string_push_str s ` acc[TM][TN];` )
+    ( string_push_str s `for(int i=0;i<TM;i++)for(int j=0;j<TN;j++)acc[i][j]=0;` )
+    ( string_push_str s `for(long long k0=0;k0<K;k0+=BK){` )
+    // stage A[BM,BK] — 4 elements per thread, k contiguous within a row
+    ( string_push_str s `for(int l=0;l<BM*BK/NT;l++){int id=l*NT+tx;` )
+    ( string_push_str s `int ar=id/BK,ak=id%BK;long long gr=rb+ar,gk=k0+ak;` )
+    ( string_push_str s `As[ak][ar]=(gr<M&&gk<K)?A[gr*K+gk]:(` )
+    ( string_push_str s tn ) ( string_push_str s `)0;}` )
+    // stage B[BK,BN]
+    ( string_push_str s `for(int l=0;l<BK*BN/NT;l++){int id=l*NT+tx;` )
+    ? != transb 0 {
+        ( string_push_str s `int bn=id/BK,bk=id%BK;long long gk=k0+bk,gc=cb+bn;` )
+        ( string_push_str s `Bs[bk][bn]=(gk<K&&gc<N)?B[gc*K+gk]:(` )
+    } {
+        ( string_push_str s `int bk=id/BN,bn=id%BN;long long gk=k0+bk,gc=cb+bn;` )
+        ( string_push_str s `Bs[bk][bn]=(gk<K&&gc<N)?B[gk*N+gc]:(` )
+    }
+    ( string_push_str s tn ) ( string_push_str s `)0;}` )
+    ( string_push_str s `__syncthreads();` )
+    ( string_push_str s `for(int kk=0;kk<BK;kk++){` )
+    ? vec4 {
+        ( string_push_str s `float4 av4=*(const float4*)&As[kk][tr*TM];` )
+        ( string_push_str s `float4 bv4=*(const float4*)&Bs[kk][tc*TN];` )
+        ( string_push_str s `float av[TM]={av4.x,av4.y,av4.z,av4.w};` )
+        ( string_push_str s `float bv[TN]={bv4.x,bv4.y,bv4.z,bv4.w};` )
+    } {
+        ( string_push_str s tn ) ( string_push_str s ` av[TM];` )
+        ( string_push_str s tn ) ( string_push_str s ` bv[TN];` )
+        ( string_push_str s `for(int i=0;i<TM;i++)av[i]=As[kk][tr*TM+i];` )
+        ( string_push_str s `for(int j=0;j<TN;j++)bv[j]=Bs[kk][tc*TN+j];` )
+    }
+    ( string_push_str s `for(int i=0;i<TM;i++)` )
+    ( string_push_str s `for(int j=0;j<TN;j++)` )
+    : String mac ( _gkd_mac dtype `acc[i][j]` `av[i]` `bv[j]` )
+    ( string_push_str s ( string_data mac ) )
+    ( string_free mac )
+    ( string_push_str s `}__syncthreads();}` )
+    ( string_push_str s `for(int i=0;i<TM;i++){long long gr=rb+tr*TM+i;if(gr<M)` )
+    ( string_push_str s `for(int j=0;j<TN;j++){long long gc=cb+tc*TN+j;if(gc<N){` )
+    ? != batched 0 {
+        ( string_push_str s `Y[(bi*M+gr)*N+gc]=acc[i][j];}}}}` )
+    } {
+        ( string_push_str s tn ) ( string_push_str s ` bias=(C!=0)?C[gc]:(` )
+        ( string_push_str s tn ) ( string_push_str s `)0;` )
+        ( string_push_str s `Y[gr*N+gc]=alpha*acc[i][j]+beta*bias;}}}}` )
+    }
     ^ s
 }
 
@@ -541,7 +838,7 @@ $ `kernels.nu`  // _gk_partial_threads / _gk_zeros
         ( string_push_str src `long long idx=blockIdx.x*blockDim.x+threadIdx.x;` )
         ( string_push_str src `if(idx<M*N){long long r=idx/N,cx=idx%N;` )
         ( string_push_str src tn ) ( string_push_str src ` s=0;` )
-        : String mac ( __gkd_mac . c dtype `s` `A[r*K+t]` `B[t*N+cx]` )
+        : String mac ( _gkd_mac . c dtype `s` `A[r*K+t]` `B[t*N+cx]` )
         ( string_push_str src `for(long long t=0;t<K;t++)` )
         ( string_push_str src ( string_data mac ) )
         ( string_free mac )
@@ -580,52 +877,65 @@ $ `kernels.nu`  // _gk_partial_threads / _gk_zeros
     : i astep ? != abatch 0 { * m kk } { 0 }
     : i bstep ? != bbatch 0 { * kk n } { 0 }
     : b on_cpu ( nurl_str_eq ( gk_backend kit ) `cpu` )
+    // The attention matmuls a transformer runs are exactly the shapes the
+    // shared-memory tile exists for; see _gkd_smem_body. Same threshold as
+    // gkd_gemm: a 64x64 tile has to be worth filling.
+    : b on_cuda ( nurl_str_eq ( gk_backend kit ) `cuda` )
+    : b smem & & & on_cuda >= m 16 >= n 32 >= kk 16
     : s tn ( _gk_tname . y dtype )
     : String kname ( string_from ( _gk_pfx . y dtype ) )
-    ( string_push_str kname ? on_cpu `bmm_tiled` `bmm` )
+    ( string_push_str kname ? smem `bmm_smem` ? on_cpu `bmm_tiled` `bmm` )
     : String src ( string_from `extern "C" __global__ void ` )
     ( string_push_str src ( string_data kname ) )
-    ( string_push_str src `(const ` ) ( string_push_str src tn ) ( string_push_str src `* A, const ` )
-    ( string_push_str src tn ) ( string_push_str src `* B, ` )
+    ( string_push_str src `(const ` ) ( string_push_str src tn )
+    ( string_push_str src ? smem `* Ab, const ` `* A, const ` )
+    ( string_push_str src tn ) ( string_push_str src ? smem `* Bb, ` `* B, ` )
     ( string_push_str src tn ) ( string_push_str src `* Y, long long M, long long N, long long K, long long as, long long bs, long long total){` )
-    ? on_cpu {
-        // Same register tile as gkd_matmul, with the batch folded into the
-        // thread index; per output element the K sum is unchanged, so the
-        // values are bit-identical to the per-element form.
-        ( string_push_str src `enum{RT=8,CT=32};` )
-        ( string_push_str src `long long idx=blockIdx.x*blockDim.x+threadIdx.x;` )
-        ( string_push_str src `long long ncb=(N+CT-1)/CT,nrb=(M+RT-1)/RT;` )
-        ( string_push_str src `if(idx>=total)return;` )
-        ( string_push_str src `long long tile=idx%(nrb*ncb),bi=idx/(nrb*ncb);` )
-        ( string_push_str src `long long rb=(tile/ncb)*RT,cb=(tile%ncb)*CT;` )
-        ( string_push_str src `long long rlim=(M-rb<RT)?(M-rb):RT,clim=(N-cb<CT)?(N-cb):CT;` )
-        ( string_push_str src `const ` ) ( string_push_str src tn ) ( string_push_str src `* a=A+bi*as;const ` )
-        ( string_push_str src tn ) ( string_push_str src `* bb=B+bi*bs;` )
-        ( string_push_str src tn ) ( string_push_str src ` acc[RT][CT];` )
-        ( string_push_str src `for(int r=0;r<RT;r++)for(int c=0;c<CT;c++)acc[r][c]=0;` )
-        : String mac ( __gkd_mac . y dtype `acc[r][c]` `av` `Bt[c]` )
-        ( string_push_str src `if(rlim==RT&&clim==CT){for(long long k=0;k<K;k++){const ` )
-        ( string_push_str src tn ) ( string_push_str src `* Bt=bb+k*N+cb;for(int r=0;r<RT;r++){` )
-        ( string_push_str src tn ) ( string_push_str src ` av=a[(rb+r)*K+k];for(int c=0;c<CT;c++)` )
-        ( string_push_str src ( string_data mac ) )
-        ( string_push_str src `}}}else{for(long long k=0;k<K;k++){const ` )
-        ( string_push_str src tn ) ( string_push_str src `* Bt=bb+k*N+cb;for(int r=0;r<rlim;r++){` )
-        ( string_push_str src tn ) ( string_push_str src ` av=a[(rb+r)*K+k];for(int c=0;c<clim;c++)` )
-        ( string_push_str src ( string_data mac ) )
-        ( string_push_str src `}}}` )
-        ( string_free mac )
-        ( string_push_str src `for(int r=0;r<rlim;r++)for(int c=0;c<clim;c++)Y[(bi*M+rb+r)*N+cb+c]=acc[r][c];}` )
+    ? smem {
+        ( string_push_str src `(void)total;` )
+        : String body ( _gkd_smem_body tn . y dtype 0 1 )
+        ( string_push_str src ( string_data body ) )
+        ( string_free body )
     } {
-        ( string_push_str src `long long idx=blockIdx.x*blockDim.x+threadIdx.x;if(idx>=total)return;` )
-        ( string_push_str src `long long c=idx%N;long long t=idx/N;long long r=t%M;long long b=t/M;` )
-        ( string_push_str src `const ` ) ( string_push_str src tn ) ( string_push_str src `* a=A+b*as;const ` )
-        ( string_push_str src tn ) ( string_push_str src `* bb=B+b*bs;` )
-        ( string_push_str src tn ) ( string_push_str src ` acc=0;` )
-        : String mac ( __gkd_mac . y dtype `acc` `a[r*K+k]` `bb[k*N+c]` )
-        ( string_push_str src `for(long long k=0;k<K;k++)` )
-        ( string_push_str src ( string_data mac ) )
-        ( string_free mac )
-        ( string_push_str src `Y[idx]=acc;}` )
+        ? on_cpu {
+            // Same register tile as gkd_matmul, with the batch folded into the
+            // thread index; per output element the K sum is unchanged, so the
+            // values are bit-identical to the per-element form.
+            ( string_push_str src `enum{RT=8,CT=32};` )
+            ( string_push_str src `long long idx=blockIdx.x*blockDim.x+threadIdx.x;` )
+            ( string_push_str src `long long ncb=(N+CT-1)/CT,nrb=(M+RT-1)/RT;` )
+            ( string_push_str src `if(idx>=total)return;` )
+            ( string_push_str src `long long tile=idx%(nrb*ncb),bi=idx/(nrb*ncb);` )
+            ( string_push_str src `long long rb=(tile/ncb)*RT,cb=(tile%ncb)*CT;` )
+            ( string_push_str src `long long rlim=(M-rb<RT)?(M-rb):RT,clim=(N-cb<CT)?(N-cb):CT;` )
+            ( string_push_str src `const ` ) ( string_push_str src tn ) ( string_push_str src `* a=A+bi*as;const ` )
+            ( string_push_str src tn ) ( string_push_str src `* bb=B+bi*bs;` )
+            ( string_push_str src tn ) ( string_push_str src ` acc[RT][CT];` )
+            ( string_push_str src `for(int r=0;r<RT;r++)for(int c=0;c<CT;c++)acc[r][c]=0;` )
+            : String mac ( _gkd_mac . y dtype `acc[r][c]` `av` `Bt[c]` )
+            ( string_push_str src `if(rlim==RT&&clim==CT){for(long long k=0;k<K;k++){const ` )
+            ( string_push_str src tn ) ( string_push_str src `* Bt=bb+k*N+cb;for(int r=0;r<RT;r++){` )
+            ( string_push_str src tn ) ( string_push_str src ` av=a[(rb+r)*K+k];for(int c=0;c<CT;c++)` )
+            ( string_push_str src ( string_data mac ) )
+            ( string_push_str src `}}}else{for(long long k=0;k<K;k++){const ` )
+            ( string_push_str src tn ) ( string_push_str src `* Bt=bb+k*N+cb;for(int r=0;r<rlim;r++){` )
+            ( string_push_str src tn ) ( string_push_str src ` av=a[(rb+r)*K+k];for(int c=0;c<clim;c++)` )
+            ( string_push_str src ( string_data mac ) )
+            ( string_push_str src `}}}` )
+            ( string_free mac )
+            ( string_push_str src `for(int r=0;r<rlim;r++)for(int c=0;c<clim;c++)Y[(bi*M+rb+r)*N+cb+c]=acc[r][c];}` )
+        } {
+            ( string_push_str src `long long idx=blockIdx.x*blockDim.x+threadIdx.x;if(idx>=total)return;` )
+            ( string_push_str src `long long c=idx%N;long long t=idx/N;long long r=t%M;long long b=t/M;` )
+            ( string_push_str src `const ` ) ( string_push_str src tn ) ( string_push_str src `* a=A+b*as;const ` )
+            ( string_push_str src tn ) ( string_push_str src `* bb=B+b*bs;` )
+            ( string_push_str src tn ) ( string_push_str src ` acc=0;` )
+            : String mac ( _gkd_mac . y dtype `acc` `a[r*K+k]` `bb[k*N+c]` )
+            ( string_push_str src `for(long long k=0;k<K;k++)` )
+            ( string_push_str src ( string_data mac ) )
+            ( string_free mac )
+            ( string_push_str src `Y[idx]=acc;}` )
+        }
     }
     : i total ? on_cpu
     * batch * ( __gkd_ceil m GKD_RT ) ( __gkd_ceil n GKD_CT )
@@ -640,7 +950,12 @@ $ `kernels.nu`  // _gk_partial_threads / _gk_zeros
     ( vec_push [i] args ( gpu_arg_i64 astep ) )
     ( vec_push [i] args ( gpu_arg_i64 bstep ) )
     ( vec_push [i] args ( gpu_arg_i64 total ) )
-    : b r ( gk_run_dev kit ( string_data src ) ( string_data kname ) ( gk_grid total 256 ) 256 args )
+    // the smem body maps ONE BLOCK to a 64x64 tile of one batch item, so
+    // its launch is a block count, not a thread count
+    : i grid ? smem
+    * batch * ( __gkd_ceil m GKD_BM ) ( __gkd_ceil n GKD_BN )
+    ( gk_grid total 256 )
+    : b r ( gk_run_dev kit ( string_data src ) ( string_data kname ) grid 256 args )
     ( vec_free [i] args )
     ( string_free src )
     ( string_free kname )

@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.11.0
+
+- **Event timers.** `gpu_timer_new/mark/ns/free` (and the `cuda_event_*`
+  driver bindings under them) measure what the GPU did, not what the
+  host asked it to do. A clock around an asynchronous launch times the
+  launch; an event pair recorded on the launch stream times the work.
+  Non-CUDA backends report 0 and every call is a no-op on a 0 handle, so
+  a caller need not branch on the backend. This is what gpukit's
+  per-kernel profiler is built on.
+
 ## 0.10.0
 
 - **CUDA Graphs.** `gpu_graph_begin/end/launch/free`: capture a launch

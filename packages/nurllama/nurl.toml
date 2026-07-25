@@ -8,11 +8,11 @@ license = "MIT OR Apache-2.0"
 gguf = { path = "../gguf", version = "^0.3" }
 safetensor = { path = "../safetensor", version = "^0.3" }
 tokenizer = { path = "../tokenizer", version = "^0.3.0" }
-gpu = { path = "../gpu", version = "^0.10" }
+gpu = { path = "../gpu", version = "^0.11" }
 http = { path = "../http", version = "^0.3" }
 grad = { path = "../grad", version = "^0.8" }
 nn = { path = "../nn", version = "^0.1" }
-gpukit = { path = "../gpukit", version = "^0.4.2" }
+gpukit = { path = "../gpukit", version = "^0.5" }
 tensor = { path = "../tensor", version = "^0.4" }
 
 hub = { path = "../hub", version = "^0.1" }

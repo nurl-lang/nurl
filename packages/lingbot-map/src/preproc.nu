@@ -111,14 +111,33 @@ $ `deps/image/src/image.nu`
                 ( image_free fit )
                 ^ ( __pp_err `lingbot-map: empty frame after resize: ` path )
             } {}
+            // Interleaved bytes to planar floats, through the two data
+            // pointers rather than image_get + vec_push per element: at
+            // three planes of a 518x294 frame that is 457k calls a
+            // frame, each with its own bounds test and grow check, and
+            // the frame loop notices.
+            : i ch . fit channels
+            // __pp_flatten always hands back three channels; the planar
+            // copy below indexes on that, so say so rather than read
+            // past a row if it ever stops being true.
+            ? != ch 3 {
+                ( image_free fit )
+                ^ ( __pp_err `lingbot-map: expected an RGB frame from ` path )
+            } {}
             : ( Vec f ) data ( vec_with_cap [f] * 3 * w h )
+            : b _dl ( vec_set_len [f] data * 3 * w h )
+            : *f dp ( vec_data [f] data )
+            : *u sp ( vec_data [u] . fit data )
             : ~ i k 0
             ~ < k 3 {
+                : i plane * k * w h
                 : ~ i y 0
                 ~ < y h {
+                    : i row * * y w ch
+                    : i orow + plane * y w
                     : ~ i x 0
                     ~ < x w {
-                        ( vec_push [f] data / # f ( image_get fit x y k ) 255.0 )
+                        = . dp + orow x / # f # i . sp + + row * x ch k 255.0
                         = x + x 1
                     }
                     = y + y 1

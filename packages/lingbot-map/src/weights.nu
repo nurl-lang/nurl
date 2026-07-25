@@ -93,6 +93,20 @@ $ `deps/torchpt/src/torchpt.nu`
 // Read a whole tensor into a caller-owned f64 buffer of at least
 // `n` elements. Records a failure and returns F if the tensor is absent,
 // the wrong size, or unreadable.
+// The tensor's own bytes inside the mapping, when they are already
+// contiguous float32 — which is the layout a GK_F32 device buffer
+// wants, so it can be uploaded with no conversion at all. Returns 0
+// when the tensor is absent, strided, a different dtype or a different
+// length, and the caller falls back to the converting read.
+@ lw_f32_ptr * Lw w s name i n → *u {
+    : i i0 ( pt_find . w pt name )
+    ? < i0 0 { ^ # *u 0 } {}
+    ? == ( pt_dtype . w pt i0 ) PKS_F32 {} { ^ # *u 0 }
+    ? ( pt_is_contiguous . w pt i0 ) {} { ^ # *u 0 }
+    ? == ( pt_nelems . w pt i0 ) n {} { ^ # *u 0 }
+    ^ ( pt_tensor_ptr . w pt i0 )
+}
+
 @ lw_read * Lw w s name * f dst i n → b {
     : i i0 ( pt_find . w pt name )
     ? < i0 0 {

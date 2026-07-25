@@ -18,6 +18,7 @@ $ `stdlib/std/fs.nu`
 $ `stdlib/std/path.nu`
 $ `stdlib/std/hash.nu`
 $ `stdlib/ext/env.nu`
+$ `stdlib/std/floatbits.nu`
 $ `stdlib/std/thread.nu`
 $ `cuda.nu`
 $ `cpu.nu`
@@ -201,6 +202,36 @@ $ `cpu.nu`
 // Block until all submitted work on the context completes. 0 == success.
 // The CPU backend runs kernels synchronously, so there is nothing to await.
 @ gpu_sync Gpu g → i { ? != __gpu_backend 0 { ^ 0 } { ^ ( cuda_sync ) } }
+
+// ── Timers (CUDA backend only; every other backend reports 0) ─────────
+// A begin/end pair of events recorded on the launch stream. Timing a
+// launch from the host measures the launch; these measure the GPU. The
+// handle is 0 when the backend has no events, and every call below is a
+// no-op on a 0 handle, so a caller need not branch on the backend.
+@ gpu_timer_new Gpu g → i {
+    ? != __gpu_backend 0 { ^ 0 } {}
+    ^ ( cuda_event_create )
+}
+
+@ gpu_timer_mark Gpu g i ev → v {
+    ? | != __gpu_backend 0 == ev 0 { ^ } {}
+    : i _r ( cuda_event_record ev )
+}
+
+// Nanoseconds between two marks. Blocks until the end event has
+// completed on the device, so it is a measurement point, not free.
+@ gpu_timer_ns Gpu g i start i end → i {
+    ? | | != __gpu_backend 0 == start 0 == end 0 { ^ 0 } {}
+    : i _s ( cuda_event_sync end )
+    : i bits ( cuda_event_elapsed_bits start end )
+    : f ms # f ( bits_to_f32 bits )
+    ^ # i * ms 1000000.0
+}
+
+@ gpu_timer_free Gpu g i ev → v {
+    ? | != __gpu_backend 0 == ev 0 { ^ } {}
+    ( cuda_event_free ev )
+}
 
 // ── CUDA Graphs (CUDA backend only; every other backend reports F/0) ──
 // Capture the launches between begin and end, then replay them all with

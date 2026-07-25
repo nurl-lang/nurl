@@ -511,10 +511,20 @@ const char* nurl_str_float(double d) {
         snprintf(buf, sizeof(buf), "%lld", (long long)d);
         return strdup(buf);
     }
-    for (int p = 1; p <= 17; p++) {
-        snprintf(buf, sizeof(buf), "%.*g", p, d);
-        if (strtod(buf, NULL) == d) break;
+    /* Smallest p in 1..17 whose "%.*g" parses back to d. "p digits round
+     * trip" is monotone in p — more significant digits never lose a value
+     * that fewer already pinned — so this is a binary search, not a scan.
+     * It matters: a double that came from a float needs ~17 digits, which
+     * is the WORST case for a scan (17 snprintf + 17 strtod, ~2.5 us),
+     * and a point cloud or a JSON dump does that per number. Five probes
+     * instead of seventeen. */
+    int lo = 1, hi = 17;
+    while (lo < hi) {
+        int mid = (lo + hi) / 2;
+        snprintf(buf, sizeof(buf), "%.*g", mid, d);
+        if (strtod(buf, NULL) == d) hi = mid; else lo = mid + 1;
     }
+    snprintf(buf, sizeof(buf), "%.*g", lo, d);
     return strdup(buf);
 }
 

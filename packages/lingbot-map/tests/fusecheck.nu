@@ -50,7 +50,7 @@ $ `src/dpthead.nu`
 }
 
 @ main → i {
-    : *GpuKit kit ( gk_open 0 )
+    : *GpuKit kit ( gk_open_best )
     ? ( gk_ok kit ) {} { ( nurl_print `no gpukit backend\n` ) ^ 1 }
     : i h 3
     : i w 5

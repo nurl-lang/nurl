@@ -8,6 +8,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **`nurl_str_float` searched linearly for the shortest round-tripping
+  decimal.** It tried `%.1g`, `%.2g`, … up to `%.17g`, parsing each back
+  with `strtod` until one matched — seventeen `snprintf` + `strtod` pairs
+  for the worst case, which is *the common case*: a double that came from
+  an f32 needs ~17 significant digits. That is ~2.5 us per number, and it
+  is on the path of every float any NURL program prints. "p digits round
+  trip" is monotone in p, so it is a binary search: five probes instead
+  of seventeen. Found by profiling a point-cloud writer, where formatting
+  three coordinates per point cost more than the neural network that
+  produced them.
+
 ### Fixed
 
 - **Canvas examples that call libc `rand` died on the playground with
