@@ -61,7 +61,7 @@ print("worst relative error %.3e" % worst)
 PY
 }
 
-echo "[1/2] camera geometry vs the reference torch code"
+echo "[1/3] camera geometry vs the reference torch code"
 if ! $NURL tests/geomcheck.nu "$WORK/geomcheck" >/dev/null 2>"$WORK/build.err"; then
     bad "geomcheck build"; cat "$WORK/build.err"
 elif [ -z "$PYTORCH_PY" ] || ! "$PYTORCH_PY" -c "import torch" 2>/dev/null; then
@@ -78,7 +78,7 @@ else
     fi
 fi
 
-echo "[2/2] frame preprocessing vs the reference load_fn pipeline"
+echo "[2/3] frame preprocessing vs the reference load_fn pipeline"
 # Real frames, not synthetic ones: the resize ratio, the patch-multiple
 # rounding and the centre crop only interact on an actual aspect ratio.
 FRAMES=""
@@ -104,6 +104,21 @@ else
     else
         bad "preprocessing differs from the reference"
         diff "$WORK/pp_ref.txt" "$WORK/pp_nurl.txt" | head -4 | cut -c1-200
+    fi
+fi
+
+echo "[3/3] position-grid resample vs torch bicubic+antialias"
+if ! $NURL tests/interpcheck.nu "$WORK/ic" >/dev/null 2>"$WORK/ic_build.err"; then
+    bad "interpcheck build"; tail -6 "$WORK/ic_build.err"
+elif [ -z "$PYTORCH_PY" ] || ! "$PYTORCH_PY" -c "import torch" 2>/dev/null; then
+    skip "resample oracle — needs python + torch"
+else
+    "$WORK/ic" > "$WORK/ic_nurl.txt" 2>&1
+    "$PYTORCH_PY" tests/interp_oracle.py > "$WORK/ic_ref.txt" 2>&1
+    if out="$(cmp_rows "$WORK/ic_ref.txt" "$WORK/ic_nurl.txt" 1e-12)"; then
+        ok "bicubic+antialias matches torch — $out"
+    else
+        bad "resample differs from torch"; echo "$out"
     fi
 fi
 

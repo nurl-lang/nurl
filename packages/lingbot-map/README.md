@@ -35,7 +35,7 @@ and is what the port has to reproduce exactly, not approximately.
 |---|---|---|
 | 1 | read the `.pt` checkpoint | **done** — see [`torchpt`](../torchpt), verified against `torch.load` |
 | 2 | image loading and preprocessing | **done** — byte-identical to the reference pipeline on real frames |
-| 3 | ViT layers: patch embed, 2-D RoPE, qk-norm attention, block | pending |
+| 3 | ViT layers: patch embed, 2-D RoPE, qk-norm attention, block | position-grid resample **done**; rest pending |
 | 4 | streaming aggregator + KV cache | pending |
 | 5 | camera head, DPT heads | pending |
 | 6 | camera geometry | **done** — matches torch to 2.4e-16 |
@@ -105,16 +105,27 @@ A frame is roughly 2 TFLOP, so expect ~1–2 minutes per frame on a CPU
 and design the CLI around that (stream, checkpoint, resume) rather than
 around interactive use.
 
-**Numerics that will bite.** Two resamplers have to match the reference
-bit-for-bit-ish or the reconstruction drifts:
+**Two resamplers, and the trap between them.** Preprocessing resizes
+frames with **PIL's** bicubic; `interpolate_pos_encoding` resamples
+DINOv2's 37×37 position grid to the frame's patch grid with **torch's
+`bicubic` + `antialias=True`**. Both are implemented and both are
+verified — `image_resize_bicubic` and `src/interp.nu`.
 
-* `interpolate_pos_encoding` resamples DINOv2's 37×37 position grid to
-  the frame's patch grid with **bicubic + antialias** (torch's
-  `a = -0.75`, antialias support scaled by 1/scale on downsample).
-* preprocessing resizes with **PIL's** bicubic, which uses `a = -0.5`.
+The trap is the kernel constant. torch has *two* bicubic
+implementations that disagree on it:
 
-They are different kernels. Getting one of them wrong is a plausible,
-quiet source of a few-percent pose error.
+| | kernel `a` | arithmetic |
+|---|---|---|
+| PIL (preprocessing) | −0.5 | 8-bit fixed point, clamped |
+| torch `antialias=True` | **−0.5** | float, unclamped |
+| torch `antialias=False` | **−0.75** | float, border-replicated |
+
+Every reference to "torch bicubic" means the −0.75 one, and the
+antialias path — which is what this model uses — is −0.5, because it
+was written to reproduce PIL. Building the position-grid resample from
+the documented −0.75 gives a kernel that is a few percent wrong
+everywhere and right nowhere, with nothing to notice. (Recovered by
+probing torch with unit impulses and solving for `a`: −0.49997.)
 
 **Checkpoint layout.** [`docs/checkpoint.md`](docs/checkpoint.md) is the
 full inventory read out of the real 4.6 GB file: every tensor name, dtype
