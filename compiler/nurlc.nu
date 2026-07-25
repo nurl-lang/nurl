@@ -9488,21 +9488,33 @@
 // name to look up lives at src[at .. at+wl) so bck_join_state can probe
 // with a name that is still embedded in the other state string — no
 // copy of the name either.
+// Reads through hoisted `*u` pointers: `nurl_str_get` re-runs strlen on
+// EVERY call, so scanning the state string with it cost a strlen per
+// byte examined — O(state_len^2) per lookup, at 14.8M lookups per
+// self-compile. That single loop was 17% of nurlc's profile plus most
+// of the 20% spent inside libc strlen. Both indices are already bounded
+// by the loop guards (`e < n`) and by the caller's `wl` (the name it
+// probes with is embedded in a NUL-terminated string), so the bounds
+// check nurl_str_get performed was dead weight here.
+// The token walk runs on `memmem` (next separator) + `memcmp` (name
+// compare) rather than a NURL byte loop through `nurl_str_get`. This
+// lookup is called 14.8M times per self-compile and was 17% of nurlc's
+// profile, plus 5% more inside libc strlen — `nurl_str_get` re-runs
+// strlen on EVERY byte it reads. Both indices are bounded by `n` and by
+// the caller's `wl`, so the per-byte bounds check bought nothing.
 @ __bck_st_get_at s state s src i at i wl → i {
     : i n ( nurl_str_len state )
+    : *u sp # *u state
+    : *u qp # *u src
     : ~ i i 0
     ~ < i n {
         // token spans [i, e)
-        : ~ i e i
-        ~ & < e n != ( nurl_str_get state e ) 32 { = e + e 1 }
+        : i r ( nurl_memmem_range # s + # i sp i - n i ` ` 1 )
+        : i e ? < r 0 n + i r
         ? == - - e i 2 wl {
-            : ~ i k 0
-            : ~ b eq T
-            ~ & eq < k wl {
-                ? != ( nurl_str_get state + i k ) ( nurl_str_get src + at k ) { = eq F } {}
-                = k + k 1
-            }
-            ? eq { ^ - ( nurl_str_get state - e 1 ) 48 } {}
+            ? == 0 # i ( memcmp # s + # i sp i # s + # i qp at wl ) {
+                ^ - & # i . sp - e 1 255 48
+            } {}
         } {}
         = i + e 1
     }
@@ -15046,13 +15058,15 @@
 
 // Index of the '\n' ending the line starting at `p`, or `flen` if the
 // text has no further newline.
+// Offset of the newline at or after `p`, or flen. `memmem` with a
+// one-byte needle, not a NURL byte loop: the old version called
+// nurl_str_get per byte, i.e. a strlen over the whole function body per
+// byte examined.
 @ __ha_line_end s text i p i flen → i {
-    : ~ i q p
-    ~ < q flen {
-        ? == ( nurl_str_get text q ) 10 { ^ q } {}
-        = q + q 1
-    }
-    ^ flen
+    : *u tp # *u text
+    : i r ( nurl_memmem_range # s + # i tp p - flen p `\n` 1 )
+    ? < r 0 { ^ flen } {}
+    ^ + p r
 }
 
 // True when `line` is an alloca INSTRUCTION (`  %reg = alloca <ty>`).
@@ -15061,9 +15075,10 @@
 // operand, no SSA reference), which is what makes hoisting sound.
 @ __ha_is_alloca s line → b {
     ? < ( strlen line ) 3 { ^ F } {}
-    ? != ( nurl_str_get line 0 ) 32 { ^ F } {}
-    ? != ( nurl_str_get line 1 ) 32 { ^ F } {}
-    ? != ( nurl_str_get line 2 ) 37 { ^ F } {}
+    : *u p # *u line
+    ? != & # i . p 0 255 32 { ^ F } {}
+    ? != & # i . p 1 255 32 { ^ F } {}
+    ? != & # i . p 2 255 37 { ^ F } {}
     ^ ? >= ( nurl_str_find line ` = alloca ` ) 0 T F
 }
 
@@ -15072,26 +15087,47 @@
 // relative order preserved); all other instructions — including each
 // alloca's matching `store` — stay exactly where they were. A function
 // with no `entry:` label (should not happen) is emitted verbatim.
+// Each line used to be materialised with `nurl_str_slice`, which
+// re-runs strlen over the WHOLE function body and mallocs a copy — per
+// line, twice (both passes). On a large function that is quadratic in
+// body size, and it was 8.7% of nurlc's total runtime in strlen alone
+// plus a leaked allocation per emitted IR line.
+//
+// Instead we print each line in place: write a NUL over its terminating
+// newline, print from the buffer, put the byte back. `nurl_print`
+// consumes the string synchronously (fputs, or a memcpy into the output
+// buffer), so the swap is never observable, and no line is copied.
 @ emit_hoisted s funcdef → v {
     : i flen ( strlen funcdef )
     : i ei ( nurl_str_find funcdef `\nentry:\n` )
     ? < ei 0 { ( nurl_print funcdef ) ^ v } {}
     : i hdr_end + ei 8  // past "\nentry:\n"
-    ( nurl_print ( nurl_str_slice funcdef 0 hdr_end ) )
+    : *u fp # *u funcdef
+    // Header [0, hdr_end).
+    : u sv_h . fp hdr_end
+    = . fp hdr_end # u 0
+    ( nurl_print funcdef )
+    = . fp hdr_end sv_h
     // Pass 1: the alloca instructions, hoisted into the entry block.
     : ~ i p hdr_end
     ~ < p flen {
         : i le ( __ha_line_end funcdef p flen )
-        : s line ( nurl_str_slice funcdef p - le p )
+        : u sv . fp le
+        = . fp le # u 0
+        : s line # s + # i fp p
         ? ( __ha_is_alloca line ) { ( nurl_print line ) ( nurl_print `\n` ) } {}
+        = . fp le sv
         = p + le 1
     }
     // Pass 2: everything else, in original order.
     = p hdr_end
     ~ < p flen {
         : i le ( __ha_line_end funcdef p flen )
-        : s line ( nurl_str_slice funcdef p - le p )
+        : u sv2 . fp le
+        = . fp le # u 0
+        : s line # s + # i fp p
         ? ! ( __ha_is_alloca line ) { ( nurl_print line ) ( nurl_print `\n` ) } {}
+        = . fp le sv2
         = p + le 1
     }
 }
