@@ -36,7 +36,7 @@ and is what the port has to reproduce exactly, not approximately.
 | 1 | read the `.pt` checkpoint | **done** — [`torchpt`](../torchpt); the real 4.6 GB file in 0.01 s / 31 MB RSS, values identical to `torch.load` |
 | 2 | image loading and preprocessing | **done** — byte-identical to the reference pipeline on real frames |
 | 3 | ViT layers: patch embed, 2-D RoPE, qk-norm attention, block | **done** — the full block matches the reference to 4e-15 |
-| 4 | streaming aggregator + KV cache | DINOv2 trunk **running on real weights** (3.9e-6 vs the real model); frame/global blocks + KV cache pending |
+| 4 | streaming aggregator + KV cache | **single frame end-to-end on real weights** — all 72 blocks, 5.4e-6 vs the real model. Multi-frame KV cache pending |
 | 5 | camera head, DPT heads | pending |
 | 6 | camera geometry | **done** — matches torch to 2.4e-16 |
 | 7 | CLI, point-cloud export, end-to-end check | pending |
@@ -78,6 +78,37 @@ Verified against the upstream `quat_to_mat` / `mat_to_quat` /
 worst relative error **2.4e-16** across six random pose encodings — the
 last bit, and it comes from torch's vectorised `tan` disagreeing with
 glibc's, not from the port.
+
+### Stage 4 — the aggregator, one frame (`src/aggregator.nu`)
+
+DINOv2's patch tokens, six special tokens prepended, then 24 **frame**
+and 24 **global** blocks alternating, with four pairs tapped and
+concatenated into [P, 2048] feature maps. On the real checkpoint, for
+one 518×294 frame: **103 s, 7.3 GB, 5.4e-6** against the actual model's
+four outputs.
+
+That is 909M parameters and 72 transformer blocks agreeing to float32's
+noise floor.
+
+Single frame so far. With no cache the global blocks attend to their own
+frame's tokens, which is exactly what the reference does on frame 0;
+frames 2+ need the KV cache and its sliding-window eviction.
+
+**Three different LayerNorm epsilons in one model**, and getting one
+wrong is worth ~1e-3:
+
+| | ε |
+|---|---|
+| DINOv2's blocks and final norm | 1e-6 |
+| aggregator frame/global `norm1`/`norm2` | **1e-5** |
+| `q_norm` / `k_norm` everywhere | 1e-5 |
+
+Only `DinoVisionTransformer` passes `partial(LayerNorm, eps=1e-6)` to
+its blocks. `Block` and `Attention` both default to plain
+`nn.LayerNorm`, so everything the aggregator builds gets 1e-5. Using
+1e-6 throughout produced a *constant* 4e-3 absolute error that appeared
+in the very first block group and never grew — which is how it was
+found: real accumulation grows with depth, a systematic error does not.
 
 ### Stage 4 (partial) — the DINOv2 trunk (`src/dino.nu`)
 

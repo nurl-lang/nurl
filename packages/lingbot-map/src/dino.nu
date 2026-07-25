@@ -44,6 +44,10 @@ $ `src/patchembed.nu`
 : i DN_PATCH 14
 : i DN_REG 4
 : i DN_GRID 37  // the grid pos_embed ships for: 37×37 + 1 cls = 1370
+// DinoVisionTransformer builds its blocks with partial(LayerNorm,
+// eps=1e-6). The aggregator's own blocks do not pass a norm_layer at
+// all and so get nn.LayerNorm's default, 1e-5 — see AG_EPS.
+: f DN_EPS 0.000001
 
 : Dino {
     ( Vec LmBlk ) blocks
@@ -74,7 +78,7 @@ $ `src/patchembed.nu`
     : ~ i i0 0
     ~ < i0 DN_DEPTH {
         : String p ( lmw_prefix `aggregator.patch_embed.blocks` i0 )
-        ( vec_push [LmBlk] bs ( lmw_block w kit ( string_data p ) F ) )
+        ( vec_push [LmBlk] bs ( lmw_block w kit ( string_data p ) F DN_EPS ) )
         ( string_free p )
         = i0 + i0 1
     }
@@ -84,13 +88,13 @@ $ `src/patchembed.nu`
         ( lmw_upload w kit `aggregator.patch_embed.patch_embed.proj.bias` )
         ( lmw_upload w kit `aggregator.patch_embed.norm.weight` )
         ( lmw_upload w kit `aggregator.patch_embed.norm.bias` )
-        ( __dn_host w `aggregator.patch_embed.cls_token` )
-        ( __dn_host w `aggregator.patch_embed.register_tokens` )
-        ( __dn_host w `aggregator.patch_embed.pos_embed` ) }
+        ( _dn_host w `aggregator.patch_embed.cls_token` )
+        ( _dn_host w `aggregator.patch_embed.register_tokens` )
+        ( _dn_host w `aggregator.patch_embed.pos_embed` ) }
 }
 
 // A tensor read into a host vector, sized from the checkpoint.
-@ __dn_host * Lw w s name → ( Vec f ) {
+@ _dn_host * Lw w s name → ( Vec f ) {
     : i n ( lw_nelems w name )
     : i cap ? > n 0 n 1
     : ( Vec f ) v ( vec_with_cap [f] cap )
@@ -225,12 +229,12 @@ $ `src/patchembed.nu`
     ~ < bi DN_DEPTH {
         ?? ( vec_get [LmBlk] . d blocks bi ) {
             T blk → {
-                ? ( lm_block_forward kit blk ws tok n DN_DIM DN_HEADS DN_HIDDEN F ) {}
+                ? ( lm_block_forward kit blk ws ( lm_rope_none ) tok n DN_DIM DN_HEADS DN_HIDDEN ) {}
                 { ^ F }
             }
             F → { ^ F }
         }
         = bi + bi 1
     }
-    ^ ( gkd_layernorm kit tok tok . d normg . d normb n DN_DIM 0.000001 )
+    ^ ( gkd_layernorm kit tok tok . d normg . d normb n DN_DIM DN_EPS )
 }

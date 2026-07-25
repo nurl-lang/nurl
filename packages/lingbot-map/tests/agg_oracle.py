@@ -70,7 +70,8 @@ def main():
         pt = pt["x_norm_patchtokens"]
     dump("dino_patchtokens", pt)
 
-    outs, psi = agg(imgs, selected_idx=[4, 11, 17, 23])
+    taps = [int(x) for x in os.environ.get("LINGBOT_TAPS", "4,11,17,23").split(",")]
+    outs, psi = agg(imgs, selected_idx=taps)
     print("patch_start_idx %d outputs %d" % (psi, len(outs)))
     for i, o in enumerate(outs):
         dump("agg_out_%d" % i, o)

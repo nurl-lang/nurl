@@ -11,7 +11,7 @@
 // 4096x1024, 32 MB) rather than the model.
 //
 //   ( lmw_upload w kit name )              → GkBuf   empty on failure
-//   ( lmw_block w kit prefix qk )          → LmBlk
+//   ( lmw_block w kit prefix qk eps )      → LmBlk
 //   ( lmw_ok w )                           → b       nothing failed yet
 //
 // A missing tensor is recorded in the Lw error list rather than thrown,
@@ -59,9 +59,10 @@ $ `src/devblock.nu`
 }
 
 // Every parameter of one transformer block. `qk` selects whether the
-// attention has q_norm/k_norm: DINOv2's own 24 blocks do not, the
-// aggregator's 48 do.
-@ lmw_block * Lw w * GpuKit kit s prefix b qk → LmBlk {
+// attention has q_norm/k_norm — DINOv2's own 24 blocks do not, the
+// aggregator's 48 do — and `eps` is norm1/norm2's, which is 1e-6 for
+// DINOv2's blocks and 1e-5 for the aggregator's.
+@ lmw_block * Lw w * GpuKit kit s prefix b qk f eps → LmBlk {
     ^ @ LmBlk {
         ( __lmw_at w kit prefix `norm1.weight` )
         ( __lmw_at w kit prefix `norm1.bias` )
@@ -80,7 +81,7 @@ $ `src/devblock.nu`
         ( __lmw_at w kit prefix `mlp.fc1.bias` )
         ( __lmw_at w kit prefix `mlp.fc2.weight` )
         ( __lmw_at w kit prefix `mlp.fc2.bias` )
-        ( __lmw_at w kit prefix `ls2.gamma` ) }
+        ( __lmw_at w kit prefix `ls2.gamma` ) eps }
 }
 
 // `<base>.<idx>.` — the prefix of an indexed block.

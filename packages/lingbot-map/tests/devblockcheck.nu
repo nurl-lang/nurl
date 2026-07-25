@@ -116,7 +116,7 @@ $ `src/devblock.nu`
         ( up kit n2g dim ) ( up kit n2b dim )
         ( up kit f1w * hidden dim ) ( up kit f1b hidden )
         ( up kit f2w * dim hidden ) ( up kit f2b dim )
-        ( up kit ls2 dim ) }
+        ( up kit ls2 dim ) 0.000001 }
     : LmWs ws ( lm_ws_new kit n dim heads hidden n maxpos )
     ( gk_dbuf_free . ws rows )
     ( gk_dbuf_free . ws cols )
@@ -126,7 +126,10 @@ $ `src/devblock.nu`
     ( gk_dbuf_free . ws sinb )
     = . ws cosb ( up kit ct * maxpos / hd 2 )
     = . ws sinb ( up kit st * maxpos / hd 2 )
-    : b ok ( lm_block_forward kit w ws dx n dim heads hidden rope )
+    : LmRope rp ? rope
+    @ LmRope { LM_ROPE_2D . ws rows . ws cols @ GkBuf { 0 0 GK_F32 } . ws cosb . ws sinb }
+    ( lm_rope_none )
+    : b ok ( lm_block_forward kit w ws rp dx n dim heads hidden )
 
     : ( Vec f ) out ( vec_with_cap [f] * n dim )
     : ~ i j 0

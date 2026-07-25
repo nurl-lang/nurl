@@ -1,8 +1,15 @@
 #!/usr/bin/env python3
 """Compare "<label> <shape> | <values…>" dumps: the reference produced by
 tests/agg_oracle.py against what the port produced. Shapes must match
-exactly; values to a relative tolerance, because the port computes in
-float32 on purpose."""
+exactly; values to a tolerance, because the port computes in float32 on
+purpose.
+
+Errors are scaled by the ROW's largest reference magnitude, not by each
+element's own. Deep in a transformer the activations span orders of
+magnitude within one tensor, and dividing a fixed absolute error by a
+near-zero element reports a huge "relative" error that says nothing
+about the layer. Per-row scaling is what actually tracks whether a
+layer agrees."""
 import sys
 
 ref_path, got_path, tol = sys.argv[1], sys.argv[2], float(sys.argv[3])
@@ -25,7 +32,8 @@ for line in open(got_path):
     if len(r) != len(g):
         print("%s sample count %d vs %d" % (key, len(r), len(g)))
         sys.exit(1)
-    w = max((abs(a - b) / max(1.0, abs(a)) for a, b in zip(r, g)), default=0.0)
+    scale = max((abs(x) for x in r), default=1.0) or 1.0
+    w = max((abs(a - b) / scale for a, b in zip(r, g)), default=0.0)
     worst_all = max(worst_all, w)
     n += 1
 if n == 0:
