@@ -185,12 +185,45 @@ $ `dev.nu`
         ? & & ( gk_buf_ok bias ) == . bias dtype . y dtype >= . bias n cout {} { ^ F }
     } {}
     : s tn ( _gk_tname . y dtype )
+    // Shape-specialised, for the same reason gkd_perm is: the loop
+    // bounds and every stride here are kernel ARGUMENTS, so a 3x3 layer
+    // pays a 64-bit multiply-add chain per tap to compute an address
+    // the compiler could have folded, and cannot unroll a nine-tap
+    // window it does not know is nine taps. The source is generated per
+    // call, so the twelve dimensions go in as literals. Each distinct
+    // layer geometry compiles once (and the on-disk kernel cache makes
+    // that once per machine); a model runs a handful.
+    : b lit ( nurl_str_eq ( gk_backend kit ) `cuda` )
     : String kname ( __gkd_name . y dtype )
-    : String src ( __gkd_head kname `conv2d` )
+    ( string_push_str kname `conv2d` )
+    ? lit {
+        ( string_push_char kname 95 ) ( string_push_int kname cin )
+        ( string_push_char kname 95 ) ( string_push_int kname h )
+        ( string_push_char kname 95 ) ( string_push_int kname wd )
+        ( string_push_char kname 95 ) ( string_push_int kname cout )
+        ( string_push_char kname 95 ) ( string_push_int kname kh )
+        ( string_push_char kname 95 ) ( string_push_int kname kw )
+        ( string_push_char kname 95 ) ( string_push_int kname oh )
+        ( string_push_char kname 95 ) ( string_push_int kname ow )
+        ( string_push_char kname 95 ) ( string_push_int kname ph )
+        ( string_push_char kname 95 ) ( string_push_int kname pw )
+        ( string_push_char kname 95 ) ( string_push_int kname sh )
+        ( string_push_char kname 95 ) ( string_push_int kname sw )
+        ( string_push_char kname 95 ) ( string_push_int kname hasb )
+    } {}
+    : String src ( string_from `extern "C" __global__ void ` )
+    ( string_push_str src ( string_data kname ) )
+    ( string_push_char src 40 )
     ( string_push_str src `const ` ) ( string_push_str src tn ) ( string_push_str src `* X, const ` )
     ( string_push_str src tn ) ( string_push_str src `* Wt, const ` )
     ( string_push_str src tn ) ( string_push_str src `* B, ` )
-    ( string_push_str src tn ) ( string_push_str src `* Y, long long Cin, long long H, long long W, long long Cout, long long kh, long long kw, long long OH, long long OW, long long ph, long long pw, long long sh, long long sw, long long hasB){` )
+    ( string_push_str src tn )
+    // the specialised body owns the dimension NAMES as enum constants,
+    // so the (now unused) runtime parameters take an underscore rather
+    // than redeclaring them in the same scope
+    ( string_push_str src ? lit
+    `* Y, long long Cin_, long long H_, long long W_, long long Cout_, long long kh_, long long kw_, long long OH_, long long OW_, long long ph_, long long pw_, long long sh_, long long sw_, long long hasB_){`
+    `* Y, long long Cin, long long H, long long W, long long Cout, long long kh, long long kw, long long OH, long long OW, long long ph, long long pw, long long sh, long long sw, long long hasB){` )
     // Sixteen outputs per thread: four along the output row, four
     // output channels deep.
     //
@@ -206,6 +239,24 @@ $ `dev.nu`
     //
     // Each output still sums ic, then r, then s, ascending, over exactly
     // the taps it summed before — bit-identical, on both backends.
+    ? lit {
+        ( string_push_str src `(void)Cin_;(void)H_;(void)W_;(void)Cout_;(void)kh_;(void)kw_;` )
+        ( string_push_str src `(void)OH_;(void)OW_;(void)ph_;(void)pw_;(void)sh_;(void)sw_;(void)hasB_;` )
+        ( string_push_str src `enum{Cin=` ) ( string_push_int src cin )
+        ( string_push_str src `,H=` ) ( string_push_int src h )
+        ( string_push_str src `,W=` ) ( string_push_int src wd )
+        ( string_push_str src `,Cout=` ) ( string_push_int src cout )
+        ( string_push_str src `,kh=` ) ( string_push_int src kh )
+        ( string_push_str src `,kw=` ) ( string_push_int src kw )
+        ( string_push_str src `,OH=` ) ( string_push_int src oh )
+        ( string_push_str src `,OW=` ) ( string_push_int src ow )
+        ( string_push_str src `,ph=` ) ( string_push_int src ph )
+        ( string_push_str src `,pw=` ) ( string_push_int src pw )
+        ( string_push_str src `,sh=` ) ( string_push_int src sh )
+        ( string_push_str src `,sw=` ) ( string_push_int src sw )
+        ( string_push_str src `,hasB=` ) ( string_push_int src hasb )
+        ( string_push_str src `};` )
+    } {}
     ( string_push_str src `enum{TW=4,TC=4};` )
     ( string_push_str src `long long idx=blockIdx.x*blockDim.x+threadIdx.x;` )
     ( string_push_str src `long long nwb=(OW+TW-1)/TW,ncb=(Cout+TC-1)/TC;` )
@@ -590,12 +641,20 @@ i heads i n i nkv i hd f scale → b {
     // better shape there.
     ? ( nurl_str_eq ( gk_backend kit ) `cuda` ) {} { ^ F }
     : i esz ( gk_buf_esz o )
-    // key tile: as many rows as ~16 KB of K plus V will hold, rounded
-    // down to a multiple of 16 so BQ*BK stays a multiple of 256
-    : ~ i bk / / 16384 esz hd
+    // BQ is chosen so each thread owns exactly QT*DT = 16 accumulators
+    // (BQ*hd / 256 threads), which is what the register tiles below are
+    // sized for. BK is then whatever the 48 KB of shared memory has
+    // left after Qs[BQ][hd+1], Ks[BK][hd+1], Vs[BK][hd+1] and
+    // S[BQ][BK+1] — get this wrong and the launch fails, silently, as a
+    // fail-closed F.
+    : i bq ? <= hd 64 64 32
+    : i fixed + * * bq + hd 1 esz * bq esz
+    : i per * + * 2 + hd 1 bq esz
+    : ~ i bk / - 49152 fixed per
     = bk * / bk 16 16
     ? > bk 64 { = bk 64 } {}
     ? < bk 16 { = bk 16 } {}
+    ? >= * bq hd * 16 256 {} { ^ F }
     : s tn ( _gk_tname . o dtype )
     : s sfx ( __gkd_sfx . o dtype )
     : String kname ( __gkd_name . o dtype )
@@ -611,11 +670,13 @@ i heads i n i nkv i hd f scale → b {
     ( string_push_str src `* V, ` ) ( string_push_str src tn )
     ( string_push_str src `* O, long long heads, long long n, long long nkv, ` )
     ( string_push_str src tn ) ( string_push_str src ` scale){` )
-    ( string_push_str src `enum{BQ=16,NT=256,HD=` )
+    ( string_push_str src `enum{BQ=` )
+    ( string_push_int src bq )
+    ( string_push_str src `,NT=256,HD=` )
     ( string_push_int src hd )
     ( string_push_str src `,BK=` )
     ( string_push_int src bk )
-    ( string_push_str src `,DT=4,NK=BK/DT,ND=HD/DT,AT=BQ*HD/(DT*NT)};` )
+    ( string_push_str src `,DT=4,QT=4,SK=2,NK=BK/SK,ND=HD/DT};` )
     // +1 on every row so a column read walks distinct banks
     ( string_push_str src `__shared__ ` ) ( string_push_str src tn )
     ( string_push_str src ` Qs[BQ][HD+1];__shared__ ` )
@@ -635,11 +696,11 @@ i heads i n i nkv i hd f scale → b {
     ( string_push_str src `for(int idx=tid;idx<BQ*HD;idx+=NT){int i=idx/HD,d=idx%HD;` )
     ( string_push_str src `long long gq=qb+i;Qs[i][d]=(gq<n)?Qh[gq*HD+d]:(` )
     ( string_push_str src tn ) ( string_push_str src `)0;}` )
-    ( string_push_str src tn ) ( string_push_str src ` acc[AT*DT];` )
-    ( string_push_str src `for(int t=0;t<AT*DT;t++)acc[t]=0;` )
-    ( string_push_str src `if(tid<BQ){mrow[tid]=` )
+    ( string_push_str src tn ) ( string_push_str src ` acc[QT*DT];` )
+    ( string_push_str src `for(int t=0;t<QT*DT;t++)acc[t]=0;` )
+    ( string_push_str src `for(int r=tid;r<BQ;r+=NT)mrow[r]=` )
     ( string_push_str src ( __gkd_neg . o dtype ) )
-    ( string_push_str src `;lrow[tid]=0;}__syncthreads();` )
+    ( string_push_str src `,lrow[r]=0;__syncthreads();` )
     ( string_push_str src `for(long long k0=0;k0<nkv;k0+=BK){` )
     ( string_push_str src `for(int idx=tid;idx<BK*HD;idx+=NT){int j=idx/HD,d=idx%HD;` )
     ( string_push_str src `long long gk=k0+j;` )
@@ -648,51 +709,60 @@ i heads i n i nkv i hd f scale → b {
     ( string_push_str src `Vs[j][d]=(gk<nkv)?Vh[gk*HD+d]:(` )
     ( string_push_str src tn ) ( string_push_str src `)0;}__syncthreads();` )
     // scores for this tile, straight into shared
-    // Four keys per thread for one query: the query's element is read
-    // from shared once and multiplied four ways, so the inner step is
-    // five shared reads per four multiply-adds instead of eight. One
-    // entry per thread is the obvious mapping and it is shared-memory
-    // bound by a factor of eight.
-    ( string_push_str src `for(int idx=tid;idx<BQ*NK;idx+=NT){` )
-    ( string_push_str src `int i=idx/NK,j0=(idx%NK)*DT;` )
-    ( string_push_str src tn ) ( string_push_str src ` sc[DT];` )
-    ( string_push_str src `for(int t=0;t<DT;t++)sc[t]=0;` )
+    // A QTxDT block of the score tile per thread. One entry per thread
+    // is two shared reads per multiply-add — eight times what an SM can
+    // serve — and even one query by four keys is 1.25. Four by four is
+    // eight reads per sixteen, which is what makes this arithmetic
+    // rather than a shared-memory queue.
+    ( string_push_str src `for(int idx=tid;idx<(BQ/QT)*NK;idx+=NT){` )
+    ( string_push_str src `int i0=(idx/NK)*QT,j0=(idx%NK)*SK;` )
+    ( string_push_str src tn ) ( string_push_str src ` sc[QT][SK];` )
+    ( string_push_str src `for(int q=0;q<QT;q++)for(int t=0;t<SK;t++)sc[q][t]=0;` )
     ( string_push_str src `for(int d=0;d<HD;d++){` )
-    ( string_push_str src tn ) ( string_push_str src ` qv=Qs[i][d];` )
-    ( string_push_str src `for(int t=0;t<DT;t++)sc[t]+=qv*Ks[j0+t][d];}` )
-    ( string_push_str src `for(int t=0;t<DT;t++)S[i][j0+t]=(k0+j0+t<nkv)?sc[t]*scale:` )
+    ( string_push_str src tn ) ( string_push_str src ` qv[QT];` )
+    ( string_push_str src `for(int q=0;q<QT;q++)qv[q]=Qs[i0+q][d];` )
+    ( string_push_str src tn ) ( string_push_str src ` kv[SK];` )
+    ( string_push_str src `for(int t=0;t<SK;t++)kv[t]=Ks[j0+t][d];` )
+    ( string_push_str src `for(int q=0;q<QT;q++)for(int t=0;t<SK;t++)sc[q][t]+=qv[q]*kv[t];}` )
+    ( string_push_str src `for(int q=0;q<QT;q++)for(int t=0;t<SK;t++)` )
+    ( string_push_str src `S[i0+q][j0+t]=(k0+j0+t<nkv)?sc[q][t]*scale:` )
     ( string_push_str src ( __gkd_neg . o dtype ) )
     ( string_push_str src `;}__syncthreads();` )
     // online softmax bookkeeping, one thread per query row
-    ( string_push_str src `if(tid<BQ){` )
-    ( string_push_str src tn ) ( string_push_str src ` m=mrow[tid],l=lrow[tid],mt=` )
+    ( string_push_str src `for(int r=tid;r<BQ;r+=NT){` )
+    ( string_push_str src tn ) ( string_push_str src ` m=mrow[r],l=lrow[r],mt=` )
     ( string_push_str src ( __gkd_neg . o dtype ) )
-    ( string_push_str src `;for(int j=0;j<BK;j++)if(S[tid][j]>mt)mt=S[tid][j];` )
+    ( string_push_str src `;for(int j=0;j<BK;j++)if(S[r][j]>mt)mt=S[r][j];` )
     ( string_push_str src tn ) ( string_push_str src ` mn=(mt>m)?mt:m;` )
     ( string_push_str src tn ) ( string_push_str src ` corr=exp` )
     ( string_push_str src sfx ) ( string_push_str src `(m-mn);` )
     ( string_push_str src tn ) ( string_push_str src ` sum=0;` )
     ( string_push_str src `for(int j=0;j<BK;j++){` )
     ( string_push_str src tn ) ( string_push_str src ` p=exp` )
-    ( string_push_str src sfx ) ( string_push_str src `(S[tid][j]-mn);S[tid][j]=p;sum+=p;}` )
-    ( string_push_str src `mrow[tid]=mn;lrow[tid]=l*corr+sum;crow[tid]=corr;}` )
+    ( string_push_str src sfx ) ( string_push_str src `(S[r][j]-mn);S[r][j]=p;sum+=p;}` )
+    ( string_push_str src `mrow[r]=mn;lrow[r]=l*corr+sum;crow[r]=corr;}` )
     ( string_push_str src `__syncthreads();` )
     // rescale what is accumulated, then add this tile's contribution
-    // and four dims per thread for one query, for the same reason: the
-    // probability is read once and applied to four output channels
-    ( string_push_str src `for(int t=0;t<AT;t++){int idx=t*NT+tid;` )
-    ( string_push_str src `int i=idx/ND,d0=(idx%ND)*DT;` )
-    ( string_push_str src tn ) ( string_push_str src ` a[DT];` )
-    ( string_push_str src tn ) ( string_push_str src ` cr=crow[i];` )
-    ( string_push_str src `for(int u=0;u<DT;u++)a[u]=acc[t*DT+u]*cr;` )
+    // and a QTxDT block of the output for the same reason: four
+    // probabilities and four value channels, read once, feed sixteen
+    // multiply-adds
+    ( string_push_str src `{int idx=tid;int i0=(idx/ND)*QT,d0=(idx%ND)*DT;` )
+    ( string_push_str src tn ) ( string_push_str src ` a[QT][DT];` )
+    ( string_push_str src `for(int q=0;q<QT;q++){` )
+    ( string_push_str src tn ) ( string_push_str src ` cr=crow[i0+q];` )
+    ( string_push_str src `for(int u=0;u<DT;u++)a[q][u]=acc[q*DT+u]*cr;}` )
     ( string_push_str src `for(int j=0;j<BK;j++){` )
-    ( string_push_str src tn ) ( string_push_str src ` pv=S[i][j];` )
-    ( string_push_str src `for(int u=0;u<DT;u++)a[u]+=pv*Vs[j][d0+u];}` )
-    ( string_push_str src `for(int u=0;u<DT;u++)acc[t*DT+u]=a[u];}` )
+    ( string_push_str src tn ) ( string_push_str src ` pv[QT];` )
+    ( string_push_str src `for(int q=0;q<QT;q++)pv[q]=S[i0+q][j];` )
+    ( string_push_str src tn ) ( string_push_str src ` vv[DT];` )
+    ( string_push_str src `for(int u=0;u<DT;u++)vv[u]=Vs[j][d0+u];` )
+    ( string_push_str src `for(int q=0;q<QT;q++)for(int u=0;u<DT;u++)a[q][u]+=pv[q]*vv[u];}` )
+    ( string_push_str src `for(int q=0;q<QT;q++)for(int u=0;u<DT;u++)acc[q*DT+u]=a[q][u];}` )
     ( string_push_str src `__syncthreads();}` )
-    ( string_push_str src `for(int t=0;t<AT;t++){int idx=t*NT+tid;` )
-    ( string_push_str src `int i=idx/ND,d0=(idx%ND)*DT;long long gq=qb+i;if(gq<n)` )
-    ( string_push_str src `for(int u=0;u<DT;u++)O[h*n*HD+gq*HD+d0+u]=acc[t*DT+u]/lrow[i];}}` )
+    ( string_push_str src `{int idx=tid;int i0=(idx/ND)*QT,d0=(idx%ND)*DT;` )
+    ( string_push_str src `for(int q=0;q<QT;q++){long long gq=qb+i0+q;if(gq<n){` )
+    ( string_push_str src tn ) ( string_push_str src ` li=lrow[i0+q];` )
+    ( string_push_str src `for(int u=0;u<DT;u++)O[h*n*HD+gq*HD+d0+u]=acc[q*DT+u]/li;}}}}` )
     : ( Vec i ) args ( vec_new [i] )
     ( vec_push [i] args ( gk_arg_dev q ) )
     ( vec_push [i] args ( gk_arg_dev k ) )
@@ -702,7 +772,7 @@ i heads i n i nkv i hd f scale → b {
     ( vec_push [i] args ( gpu_arg_i64 n ) )
     ( vec_push [i] args ( gpu_arg_i64 nkv ) )
     ( vec_push [i] args ( _gk_scal . o dtype scale ) )
-    ^ ( __gkd_launch kit src kname * heads ( __gkd_ceil n 16 ) args )
+    ^ ( __gkd_launch kit src kname * heads ( __gkd_ceil n bq ) args )
 }
 
 @ gkd_softmax_ax * GpuKit kit GkBuf y GkBuf x i outer i ax i inner → b {

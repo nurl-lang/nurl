@@ -129,14 +129,15 @@ kernels they replaced (see Numerics):
 | `gkd_bmm` 16 x 783x64x783 | 3.9 | **16.0** |
 | `gkd_layernorm` [783, 1024] | 300 us | **53** |
 | `gkd_conv2d` 3x3 256→256 | 2.5 ms | **1.15** |
+| a DPT depth head's 30 convolutions | 39 ms | **22** |
 | `gkd_convtranspose2d` 4x4 stride 4 | 14.2 ms | **0.35** |
 | `gkd_perm` [783,3,16,64] → [3,16,783,64] | 87 us | **15** |
 
 `gkd_attention` is the fused scaled-dot-product attention:
 `softmax(scale · Q·Kᵀ)·V` over `[heads, n, hd]` operands, without ever
 materialising the `[heads, n, nkv]` score matrix. Against the composed
-bmm/scale/softmax/bmm it is 1.7x at `nkv = n`, 2.8x at `nkv = 4n` and
-5.1x at `nkv = 50n` — and at a 72-frame streaming window the score
+bmm/scale/softmax/bmm it is 3.8x at `nkv = n` and 6.2x at `nkv = 4n`
+— and at a 72-frame streaming window the score
 matrix it does not allocate is 2.8 GB. `gkd_attention_ok kit hd` reports
 in advance whether it will run, so a caller can size its workspace
 before the first call.

@@ -23,7 +23,11 @@ unchanged, only the memory and thread shape are.
   materialise a [heads, n, nkv] score matrix, which for a 72-frame
   window of 783 tokens is 2.8 GB written once and read five times; this
   writes nothing of that size. Measured against the composed path:
-  1.7x at nkv = n, 2.8x at nkv = 4n, **5.1x at nkv = 50n**. It is the
+  Each thread owns a 4x4 block of the score tile and of the output, so
+  four probabilities and four value channels feed sixteen multiply-adds
+  instead of one feeding one — the difference between arithmetic and a
+  shared-memory queue. **3.8x at nkv = n, 6.2x at nkv = 4n**, and 1.6x
+  even at hd 128, where the composed form used to win. It is the
   ONE op here that is not bit-identical to its composed equivalent —
   the sum over keys is blocked and rescaled — and `gkd_attention_ok`
   reports in advance whether it will run, so a caller can decide
@@ -61,6 +65,14 @@ unchanged, only the memory and thread shape are.
   what a DPT reassemble stage runs), where exactly one tap contributes
   per output and the general body was doing two 64-bit modulos per tap
   to discover that: **14.2 ms -> 0.35 ms** at 256->256, 37x21 -> 148x84.
+- **A shape-specialised convolution.** Same story as the permute below:
+  every loop bound and stride in `gkd_conv2d` was a kernel argument, so
+  a 3x3 layer paid a 64-bit multiply-add chain per tap for an address
+  the compiler could have folded, and could not unroll a window it did
+  not know was nine taps. The twelve dimensions are literals in the
+  generated source now (CUDA only), each geometry compiled once: a DPT
+  depth head's 30 convolutions a frame went **39 ms -> 22 ms**, and the
+  output is byte-identical with the specialisation forced off.
 - **A shape-specialised permute.** `gkd_perm` decomposed each output
   index with a runtime loop over six 64-bit divisions and modulos and
   held its working arrays in dynamically indexed local memory, so a
