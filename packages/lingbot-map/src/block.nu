@@ -150,10 +150,18 @@ $ `src/rope.nu`
     }
     ( nurl_free # s qkv )
     // qk LayerNorm is per HEAD, over head_dim — heads·n independent rows
-    ( bk_layernorm q * heads n hd qn_g qn_b BK_QK_EPS q )
-    ( bk_layernorm k * heads n hd kn_g kn_b BK_QK_EPS k )
-    ( rope2d_apply q heads n hd grow gcol cos_t sin_t )
-    ( rope2d_apply k heads n hd grow gcol cos_t sin_t )
+    // qk-norm and rope are both optional and both signalled by a null
+    // pointer: DINOv2's own blocks have neither (they add a position
+    // embedding at the input instead), the aggregator's frame and global
+    // blocks have both.
+    ? != # i qn_g 0 {
+        ( bk_layernorm q * heads n hd qn_g qn_b BK_QK_EPS q )
+        ( bk_layernorm k * heads n hd kn_g kn_b BK_QK_EPS k )
+    } {}
+    ? != # i cos_t 0 {
+        ( rope2d_apply q heads n hd grow gcol cos_t sin_t )
+        ( rope2d_apply k heads n hd grow gcol cos_t sin_t )
+    } {}
     // scaled dot-product attention, per head
     : *f att # *f + # i scratch * 8 * 3 nd
     : f scale / 1.0 ( float_sqrt # f hd )

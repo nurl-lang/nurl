@@ -36,7 +36,7 @@ and is what the port has to reproduce exactly, not approximately.
 | 1 | read the `.pt` checkpoint | **done** — [`torchpt`](../torchpt); the real 4.6 GB file in 0.01 s / 31 MB RSS, values identical to `torch.load` |
 | 2 | image loading and preprocessing | **done** — byte-identical to the reference pipeline on real frames |
 | 3 | ViT layers: patch embed, 2-D RoPE, qk-norm attention, block | **done** — the full block matches the reference to 4e-15 |
-| 4 | streaming aggregator + KV cache | pending |
+| 4 | streaming aggregator + KV cache | device block **done** (f32, matches the f64 reference to 3e-6); aggregator wiring + KV cache pending |
 | 5 | camera head, DPT heads | pending |
 | 6 | camera geometry | **done** — matches torch to 2.4e-16 |
 | 7 | CLI, point-cloud export, end-to-end check | pending |
@@ -78,6 +78,28 @@ Verified against the upstream `quat_to_mat` / `mat_to_quat` /
 worst relative error **2.4e-16** across six random pose encodings — the
 last bit, and it comes from torch's vectorised `tan` disagreeing with
 glibc's, not from the port.
+
+### Stage 4 (partial) — the block on the device (`src/devblock.nu`)
+
+The block again, this time in **f32 over gpukit's `gkd_*` ops** — gemm,
+layernorm, bmm, softmax, permute, broadcast-elementwise — so the same
+code runs on CUDA and on the CPU backend. This is the one that will
+actually run the model; `src/block.nu` stays as the reference it is
+checked against.
+
+Keeping both is the point. A device block is ~15 kernel launches, every
+one with a stride or a permutation that can be silently wrong, and
+comparing against one slow implementation that is known correct catches
+all of them at once. Measured difference: **3e-6**, which is what f32
+accumulation over these sizes should give — against ~9e-2 for the head
+stride bug that was in the host version.
+
+Torch's weight layouts are used unchanged: a `Linear` weight is
+`[out, in]` and goes straight into `gkd_gemm` with `transb=1`, so
+nothing is transposed at load time.
+
+The one kernel that had to be written is 2-D RoPE — the rest of the
+block is composition.
 
 ### Stage 3 — the transformer block (`src/block.nu`)
 
