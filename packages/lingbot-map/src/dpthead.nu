@@ -192,11 +192,22 @@ $ `src/load.nu`
     ^ ( gkd_conv2d kit y x . c w . c b . c hasb cin h w cout 3 3 h w 1 1 1 1 )
 }
 
-// relu → conv3x3 → relu → conv3x3, added back to the input. Runs in
-// place on `x`; `t1` and `t2` are scratch of the same size.
-@ __dp_rcu_fwd * GpuKit kit DpRcu r GkBuf x GkBuf t1 GkBuf t2 i ch i h i w → b {
-    ? ( gkd_relu kit t1 x ) {} { ^ F }
-    ? ( __dp_c3 kit t2 t1 . r c1 ch ch h w ) {} { ^ F }
+// relu → conv3x3 → relu → conv3x3, added back to the RELU'd input.
+// Runs in place on `x`; `t1` and `t2` are scratch of the same size.
+//
+// The reference builds this unit with nn.ReLU(inplace=True), so its
+// first activation overwrites the tensor it was handed and the residual
+// added at the end is relu(x), not x. That is not a detail: the input
+// here averages −473 and peaks at 974, and clipping it is what takes
+// the block's output down to a peak of 0.14. Adding back the original x
+// leaves the whole negative bulk in place and the depth map is wrong by
+// three orders of magnitude, with nothing failing along the way.
+//
+// The caller's buffer is left relu'd, exactly as the reference leaves
+// its own. Both the port and the reference are done with it by then.
+@ _dp_rcu_fwd * GpuKit kit DpRcu r GkBuf x GkBuf t1 GkBuf t2 i ch i h i w → b {
+    ? ( gkd_relu kit x x ) {} { ^ F }
+    ? ( __dp_c3 kit t2 x . r c1 ch ch h w ) {} { ^ F }
     ? ( gkd_relu kit t1 t2 ) {} { ^ F }
     ? ( __dp_c3 kit t2 t1 . r c2 ch ch h w ) {} { ^ F }
     ^ ( gkd_add kit x x t2 )
@@ -273,19 +284,32 @@ $ `src/load.nu`
 // dst is separate from out because the block CHANGES resolution — the
 // upsample happens between resConfUnit2 and out_conv, so the 1x1 cannot
 // write back over its own input.
-@ __dp_fuse_fwd * GpuKit kit DpFuse f GkBuf out GkBuf skip GkBuf up
-GkBuf t1 GkBuf t2 GkBuf dst i h i w i oh i ow → b {
+// `ch` is 256 for every block the real head builds, but taking it as an
+// argument rather than reading DP_FEAT lets a unit test run this at a
+// size a human can read.
+@ _dp_fuse_fwd * GpuKit kit DpFuse f GkBuf out GkBuf skip GkBuf up
+GkBuf t1 GkBuf t2 GkBuf dst i ch i h i w i oh i ow i trace i tag → b {
     ? == . f has1 1 {
         // resConfUnit1 runs on the SKIP, in place, then adds into out
-        ? ( __dp_rcu_fwd kit . f u1 skip t1 t2 DP_FEAT h w ) {} { ^ F }
+        ? ( _dp_rcu_fwd kit . f u1 skip t1 t2 ch h w ) {} { ^ F }
         ? ( gkd_add kit out out skip ) {} { ^ F }
     } {}
-    ? ( __dp_rcu_fwd kit . f u2 out t1 t2 DP_FEAT h w ) {} { ^ F }
-    ? ( gkd_resize_bilinear kit up out DP_FEAT h w oh ow 1 ) {} { ^ F }
+    ? ( _dp_rcu_fwd kit . f u2 out t1 t2 ch h w ) {} { ^ F }
+    ? != trace 0 {
+        : String l ( __dp_lbl `dpt_rcu` tag )
+        ( __dp_dump kit ( string_data l ) out ch h w )
+        ( string_free l )
+    } {}
+    ? ( gkd_resize_bilinear kit up out ch h w oh ow 1 ) {} { ^ F }
+    ? != trace 0 {
+        : String l ( __dp_lbl `dpt_up` tag )
+        ( __dp_dump kit ( string_data l ) up ch oh ow )
+        ( string_free l )
+    } {}
     // out_conv is 1x1, so it is a conv with kernel 1 and no padding
     : DpConv oc . f outc
     ^ ( gkd_conv2d kit dst up . oc w . oc b . oc hasb
-    DP_FEAT oh ow DP_FEAT 1 1 oh ow 0 0 1 1 )
+    ch oh ow ch 1 1 oh ow 0 0 1 1 )
 }
 
 // Tokens → a 2-D feature map. `src` is [P, 2048] for one tapped layer;
@@ -321,6 +345,20 @@ i gh i gw → b {
     : *f p ( vec_data [f] hv )
     : ~ i j 0
     ~ < j n { ( nurl_print ` ` ) ( nurl_print ( nurl_str_float . p j ) ) = j + j DP_STRIDE }
+    // A strided sample of a 53k-element tensor is six numbers, and six
+    // numbers can agree while the tensor does not. These two cover every
+    // element, so a partial error cannot hide between the samples.
+    : ~ f sum 0.0
+    : ~ f amax 0.0
+    : ~ i k 0
+    ~ < k n {
+        = sum + sum . p k
+        : f a ( float_abs . p k )
+        ? > a amax { = amax a } {}
+        = k + k 1
+    }
+    ( nurl_print ` ` ) ( nurl_print ( nurl_str_float sum ) )
+    ( nurl_print ` ` ) ( nurl_print ( nurl_str_float amax ) )
     ( nurl_print `\n` )
     ( vec_free [f] hv )
 }
@@ -465,7 +503,7 @@ GkBuf depth GkBuf conf → b {
                 // fuse the tap one level finer than the current path
                 : i si ? > step 0 - 3 step 3
                 : GkBuf skip ?? ( vec_get [GkBuf] rns si ) { T b → b F → cbuf }
-                ? ( __dp_fuse_fwd kit f cbuf skip up t1 t2 nxt ch cw oh ow ) {} { = ok F }
+                ? ( _dp_fuse_fwd kit f cbuf skip up t1 t2 nxt DP_FEAT ch cw oh ow trace + fi 1 ) {} { = ok F }
             }
             F → { = ok F }
         }

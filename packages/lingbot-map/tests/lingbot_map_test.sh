@@ -61,7 +61,7 @@ print("worst relative error %.3e" % worst)
 PY
 }
 
-echo "[1/14] camera geometry vs the reference torch code"
+echo "[1/15] camera geometry vs the reference torch code"
 if ! $NURL tests/geomcheck.nu "$WORK/geomcheck" >/dev/null 2>"$WORK/build.err"; then
     bad "geomcheck build"; cat "$WORK/build.err"
 elif [ -z "$PYTORCH_PY" ] || ! "$PYTORCH_PY" -c "import torch" 2>/dev/null; then
@@ -78,7 +78,7 @@ else
     fi
 fi
 
-echo "[2/14] frame preprocessing vs the reference load_fn pipeline"
+echo "[2/15] frame preprocessing vs the reference load_fn pipeline"
 # Real frames, not synthetic ones: the resize ratio, the patch-multiple
 # rounding and the centre crop only interact on an actual aspect ratio.
 FRAMES=""
@@ -107,7 +107,7 @@ else
     fi
 fi
 
-echo "[3/14] position-grid resample vs torch bicubic+antialias"
+echo "[3/15] position-grid resample vs torch bicubic+antialias"
 if ! $NURL tests/interpcheck.nu "$WORK/ic" >/dev/null 2>"$WORK/ic_build.err"; then
     bad "interpcheck build"; tail -6 "$WORK/ic_build.err"
 elif [ -z "$PYTORCH_PY" ] || ! "$PYTORCH_PY" -c "import torch" 2>/dev/null; then
@@ -122,7 +122,7 @@ else
     fi
 fi
 
-echo "[4/14] 2-D rotary position embedding vs the reference"
+echo "[4/15] 2-D rotary position embedding vs the reference"
 if ! $NURL tests/ropecheck.nu "$WORK/rc" >/dev/null 2>"$WORK/rc_build.err"; then
     bad "ropecheck build"; tail -6 "$WORK/rc_build.err"
 elif [ -z "$PYTORCH_PY" ] || ! "$PYTORCH_PY" -c "import torch" 2>/dev/null; then
@@ -137,7 +137,7 @@ else
     fi
 fi
 
-echo "[5/14] patch embedding vs torch Conv2d"
+echo "[5/15] patch embedding vs torch Conv2d"
 if ! $NURL tests/pecheck.nu "$WORK/pe" >/dev/null 2>"$WORK/pe_build.err"; then
     bad "pecheck build"; tail -6 "$WORK/pe_build.err"
 elif [ -z "$PYTORCH_PY" ] || ! "$PYTORCH_PY" -c "import torch" 2>/dev/null; then
@@ -152,7 +152,7 @@ else
     fi
 fi
 
-echo "[6/14] full transformer block vs the reference Block"
+echo "[6/15] full transformer block vs the reference Block"
 if ! $NURL tests/blockcheck.nu "$WORK/bc" >/dev/null 2>"$WORK/bc_build.err"; then
     bad "blockcheck build"; tail -6 "$WORK/bc_build.err"
 elif [ -z "$PYTORCH_PY" ] || ! "$PYTORCH_PY" -c "import torch" 2>/dev/null; then
@@ -168,7 +168,7 @@ else
 fi
 
 CKPT="${LINGBOT_CKPT:-$HOME/.nurl/models/lingbot-map/lingbot-map.pt}"
-echo "[7/14] the real 4.6 GB checkpoint (skipped when absent)"
+echo "[7/15] the real 4.6 GB checkpoint (skipped when absent)"
 if [ ! -f "$CKPT" ]; then
     skip "no checkpoint at $CKPT — set LINGBOT_CKPT"
 elif ! $NURL tests/wcheck.nu "$WORK/wc" >/dev/null 2>"$WORK/wc_build.err"; then
@@ -190,7 +190,7 @@ else
     fi
 fi
 
-echo "[8/14] the block on the DEVICE (f32) vs the host reference"
+echo "[8/15] the block on the DEVICE (f32) vs the host reference"
 # Tolerance is float32's, not float64's: the device path computes in f32
 # on purpose. 1e-4 is two orders above what is observed (~3e-6) and two
 # orders below what any real stride bug produces (a wrong head stride
@@ -214,7 +214,7 @@ else
     fi
 fi
 
-echo "[9/14] 3-D rope vs the real WanRotaryPosEmbed"
+echo "[9/15] 3-D rope vs the real WanRotaryPosEmbed"
 # This one imports the upstream package rather than re-implementing it:
 # the 3-D rope is fiddly enough (three axes, interleaved pairs, a 20/22/22
 # head split) that a hand-written oracle would just be a second chance to
@@ -234,7 +234,7 @@ else
     fi
 fi
 
-echo "[10/14] the DINOv2 trunk on a real frame vs the real model"
+echo "[10/15] the DINOv2 trunk on a real frame vs the real model"
 # 24 blocks and 300M real weights against tests/agg_ref_courthouse0.txt,
 # which tests/agg_oracle.py produced by running the actual model. Takes
 # ~35 s and ~2.5 GB. Tolerance is float32's.
@@ -259,7 +259,7 @@ else
     fi
 fi
 
-echo "[11/14] the WHOLE aggregator on a real frame vs the real model"
+echo "[11/15] the WHOLE aggregator on a real frame vs the real model"
 # 72 blocks and 909M real weights: DINOv2 trunk, then 24 frame/global
 # pairs with 2-D and 3-D rope and the six special tokens. ~105 s, 7.3 GB.
 if [ ! -f "$CKPT" ]; then
@@ -287,7 +287,7 @@ else
     fi
 fi
 
-echo "[12/14] two frames STREAMED through the KV cache"
+echo "[12/15] two frames STREAMED through the KV cache"
 # The cache is the whole point of the model: frame 2's global blocks
 # attend over frame 1's keys as well as their own. ~200 s.
 FRAME1="$HOME/dev/lingbot-map/example/courthouse/000001.png"
@@ -311,7 +311,7 @@ else
     fi
 fi
 
-echo "[13/14] a camera POSE, end to end, vs the real model"
+echo "[13/15] a camera POSE, end to end, vs the real model"
 # preprocess -> DINOv2 -> aggregator -> camera head -> 9-vector, then
 # decoded to extrinsics and intrinsics. ~106 s.
 if [ ! -f "$CKPT" ] || [ ! -f "$FRAME0" ]; then
@@ -336,7 +336,7 @@ else
     fi
 fi
 
-echo "[14/14] one DPT fusion block, on synthetic weights"
+echo "[14/15] one DPT fusion block, on synthetic weights"
 # Seconds, not the ~150 s the real head takes: resConfUnit2 -> bilinear
 # upsample -> 1x1 out_conv against torch, so a fix to the fusion can be
 # checked without a 909M-parameter transformer in front of it.
@@ -355,6 +355,30 @@ else
         else
             bad "fusion block differs from torch"; echo "$out"
         fi
+    fi
+fi
+
+echo "[15/15] a DEPTH MAP, end to end, vs the real model"
+# preprocess -> DINOv2 -> aggregator -> DPT head -> depth + confidence
+# at full frame resolution. ~150 s on top of the aggregator.
+if [ ! -f "$CKPT" ] || [ ! -f "$FRAME0" ]; then
+    skip "needs the checkpoint and an example frame"
+elif [ -z "$PYTORCH_PY" ]; then
+    skip "needs python to compare the dumps"
+elif ! $NURL tests/depthcheck.nu "$WORK/dp" >/dev/null 2>"$WORK/dp_build.err"; then
+    bad "depthcheck build"; tail -6 "$WORK/dp_build.err"
+else
+    if "$WORK/dp" "$CKPT" "$FRAME0" > "$WORK/depth.txt" 2>"$WORK/depth.err"; then
+        grep -E "^(depth|depth_conf) " tests/agg_ref_courthouse0.txt \
+            > "$WORK/depth_ref.txt"
+        if out="$("$PYTORCH_PY" tests/cmp_dump.py "$WORK/depth_ref.txt" \
+                  "$WORK/depth.txt" 1e-4)"; then
+            ok "depth + confidence from the DPT head — $out"
+        else
+            bad "depth differs from the real model"; echo "$out"
+        fi
+    else
+        bad "depthcheck failed to run"; tail -4 "$WORK/depth.err"
     fi
 fi
 

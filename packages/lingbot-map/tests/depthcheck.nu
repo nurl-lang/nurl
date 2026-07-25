@@ -38,14 +38,14 @@ $ `src/preproc.nu`
     ( nurl_free # s mean ) ( nurl_free # s std )
 }
 
-@ dump s label GkBuf b * GpuKit kit i h i w → v {
+@ dump s label GkBuf b * GpuKit kit i h i w s tail → v {
     : ( Vec f ) hv ( vec_with_cap [f] * h w )
     : b _sl ( vec_set_len [f] hv * h w )
     ? ( gk_dbuf_download kit b hv ) {} { ( nurl_print `download FAILED\n` ) ^ v }
     ( nurl_print label )
     ( nurl_print ` 1x1x` ) ( nurl_print ( nurl_str_int h ) )
     ( nurl_print `x` ) ( nurl_print ( nurl_str_int w ) )
-    ( nurl_print `x1 |` )
+    ( nurl_print tail ) ( nurl_print ` |` )
     : *f p ( vec_data [f] hv )
     : ~ i j 0
     ~ < j * h w {
@@ -91,8 +91,8 @@ $ `src/preproc.nu`
                     : GkBuf conf ( gk_dbuf_new kit * h w GK_F32 )
                     ? ( dp_forward kit dp out gh gw h w ? > ( nurl_argc ) 3 1 0 depth conf ) {}
                     { ( nurl_print `depth head FAILED\n` ) ^ 1 }
-                    ( dump `depth` depth kit h w )
-                    ( dump `depth_conf` conf kit h w )
+                    ( dump `depth` depth kit h w `x1` )
+                    ( dump `depth_conf` conf kit h w `` )
                     ( gk_dbuf_free depth ) ( gk_dbuf_free conf )
                     ( nurl_free # s taps )
                     ( gk_dbuf_free out ) ( gk_dbuf_free tok ) ( gk_dbuf_free dtok )

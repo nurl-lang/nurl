@@ -172,6 +172,18 @@ Indexed modules are collapsed to `N`; every index has the same shapes.
 | `depth_head.scratch.refinenet4.resConfUnit2.conv1.bias` | f32 | 256 | 1 |
 | `depth_head.scratch.refinenet4.resConfUnit2.conv2.weight` | f32 | 256×256×3×3 | 1 |
 | `depth_head.scratch.refinenet4.resConfUnit2.conv2.bias` | f32 | 256 | 1 |
+
+> `refinenet4` has **no `resConfUnit1`** — it is built with
+> `has_residual=False` because it is the coarsest block and has nothing
+> to fuse with, and the unit is not constructed at all rather than
+> constructed and left unused. A loader that reads `resConfUnit1` for
+> all four blocks will fail on this one.
+>
+> The residual units are built with `nn.ReLU(inplace=True)`, so the
+> first activation overwrites the tensor handed in and the residual
+> added at the end is `relu(x)`, not `x`. This is not visible in the
+> checkpoint at all, and getting it wrong is silent — see the stage 5
+> notes in the README.
 | `depth_head.scratch.output_conv1.weight` | f32 | 128×256×3×3 | 1 |
 | `depth_head.scratch.output_conv1.bias` | f32 | 128 | 1 |
 | `depth_head.scratch.output_conv2.N.weight` | f32 | 32×128×3×3 | 2 |

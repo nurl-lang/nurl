@@ -37,7 +37,7 @@ and is what the port has to reproduce exactly, not approximately.
 | 2 | image loading and preprocessing | **done** — byte-identical to the reference pipeline on real frames |
 | 3 | ViT layers: patch embed, 2-D RoPE, qk-norm attention, block | **done** — the full block matches the reference to 4e-15 |
 | 4 | streaming aggregator + KV cache | **done** — two frames streamed through the cache, 5.4e-6 vs the real model. Eviction (past 72 frames) pending |
-| 5 | camera head, DPT heads | camera head **done** (5.7e-7). DPT depth head **written and running, but WRONG** — see below |
+| 5 | camera head, DPT heads | **done** — camera head 5.7e-7, DPT depth head 1.6e-6 |
 | 6 | camera geometry | **done** — matches torch to 2.4e-16 |
 | 7 | CLI, point-cloud export, end-to-end check | pending |
 
@@ -79,56 +79,70 @@ worst relative error **2.4e-16** across six random pose encodings — the
 last bit, and it comes from torch's vectorised `tan` disagreeing with
 glibc's, not from the port.
 
-### Stage 5 — the DPT depth head (`src/dpthead.nu`) — NOT CORRECT YET
+### Stage 5 — the DPT depth head (`src/dpthead.nu`)
 
-Written, loads, and runs end to end in ~150 s, but the numbers are
-wrong. **The bisect has already localised it**, and the answer is
-narrow:
+Loads and runs end to end in ~150 s and matches the reference: `depth`
+to **1.6e-6** and `depth_conf` to **7.8e-6**, with every intermediate —
+the token norm, the four projections, the position embedding, all four
+resize layers (both ConvTransposes and the strided conv), the four
+`layerN_rn` reductions, all four fusion blocks and `output_conv1` —
+inside 5e-6.
 
-| stage | scaled error vs the reference |
-|---|---|
-| `dpt_proj_0..3`, `dpt_pos_0..3`, `dpt_rs_0..3` | 1.3e-6 … 8.4e-6 |
-| `dpt_rn_0..3` | 5.9e-7 … 6.6e-6 |
-| **`dpt_f4`** | **6.8e+2** |
-| `dpt_f3`, `dpt_f2`, `dpt_f1`, `dpt_oc1` | 23 … 47 |
-| `depth` | 1.2e+3 |
+Getting there took a bisect worth writing down, because the bug was
+invisible to everything except the reference itself.
 
-Everything up to and including the four `layerN_rn` convolutions is
-**correct to float32 noise** — the token norm, all four projections
-with their different channel counts, the position embedding, all four
-resize layers (both ConvTransposes and the strided conv), and the
-reduction to 256 channels.
+The divergence started at `dpt_f4`, the first fusion block, at a scaled
+error of 6.8e+2. Every stage before it was already correct to float32
+noise. Three things were ruled out in turn:
 
-The divergence starts at **`dpt_f4`**, the very first fusion block, and
-everything after it is that error carried forward.
+* **The ops.** `tests/fusecheck.nu` runs one fusion block on synthetic
+  weights at 8×3×5 — seconds instead of 150 — and `resConfUnit2`, the
+  bilinear upsample and the 1×1 `out_conv` each matched.
+* **The plumbing.** The real head keeps its blocks in a `Vec DpFuse`,
+  36 scalars deep, and pulls them out by index through an `Option`
+  match. Four blocks with distinguishable weights came back correct.
+* **The weights.** Every DPT tensor read through `Lw` matched torch's
+  sum and absolute maximum exactly.
 
-`tests/fusecheck.nu` then narrowed it further: the fusion block's three
-operations — `resConfUnit2`, the bilinear upsample, the 1×1 `out_conv` —
-are **correct in isolation**, matching torch to 3.4e-6 on synthetic
-weights, in a test that runs in seconds rather than 150. So the bug is
-not in the ops but in how `dp_forward` composes them at fusion step 0:
-which buffer goes in as `out`, the `ch/cw` versus `oh/ow` sizes, or the
-initial copy of `rns[3]` into `path`.
+Right input, right ops, right plumbing, right weights, wrong output.
+What broke the deadlock was strengthening the dumps: a strided sample of
+a 53 504-element tensor is six numbers, and six numbers can agree while
+the tensor does not, so `__dp_dump` and the oracle's DPT trace both
+gained a whole-tensor sum and absolute maximum. That confirmed the input
+was right over every element, and — once probes went *inside* the block
+— that the reference's `resConfUnit2` takes an input peaking at 974 and
+returns one peaking at **0.144**, while the port returned its input
+essentially unchanged.
 
-The magnitude is a clue: the port's `dpt_f4` comes out around 530 where
-`rns[3]` peaks at 616 and the reference's `dpt_f4` is 0.775. An output
-that stayed at roughly its *input* scale is what you would see if
-`out_conv` never applied — but `out_conv` demonstrably works, so the
-question is whether it ran on what it was supposed to.
+No residual unit of the form `x + g(x)` can do that. The reference's is
+not that form:
 
-Worth knowing while chasing it: the reference genuinely compresses
-`dpt_rn_3` from |616| down to |0.775| across refinenet4, and
-`resConfUnit2` cannot be doing it — its input is largely negative, so
-`relu(x)` is ~0 and the unit returns approximately `x` unchanged. That
-puts the ~1000× reduction on `out_conv`, which is worth confirming
-before assuming the port's version of it is the thing that is wrong.
+```python
+self.activation = nn.ReLU(inplace=True)   # _make_fusion_block
+...
+out = self.activation(x)      # OVERWRITES x
+out = self.conv1(out); out = self.activation(out); out = self.conv2(out)
+return self.skip_add.add(out, x)          # x is relu(x) by now
+```
 
-It is committed in this state deliberately — with the bisect harness
-rather than without it:
+The residual added back is `relu(x)`, not `x`. The input to refinenet4
+averages −473, so clipping it is the whole point — and adding back the
+original `x` instead leaves that entire negative bulk in the output.
+Nothing fails, no shape is wrong, no weight is missing; the depth map is
+just wrong by three orders of magnitude.
+
+The lesson is about the oracle, not the language. `tests/fuse_oracle.py`
+originally re-implemented the block from a *reading* of the reference
+source and reproduced the same misreading, so the unit test passed while
+the head was wrong. It now imports `_make_fusion_block` and drives the
+reference's own module, which cannot drift from it.
+
+The bisect harness is kept:
 
 * `LINGBOT_DPT_TRACE=1 tests/agg_oracle.py …` re-walks the reference
   head's own submodules and dumps every stage: `dpt_proj_N`,
-  `dpt_pos_N`, `dpt_rs_N`, `dpt_rn_N`, `dpt_f4..f1`, `dpt_oc1`.
+  `dpt_pos_N`, `dpt_rs_N`, `dpt_rn_N`, `dpt_rcu4`, `dpt_up4`,
+  `dpt_f4..f1`, `dpt_oc1`, each with a whole-tensor sum and absmax.
 * `dp_forward`'s `trace` argument prints the same stages from the port,
   in the same format, so a single run localises the divergence. A
   150 s forward is not something to bisect by adding one print at a

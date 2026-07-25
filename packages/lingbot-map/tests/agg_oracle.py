@@ -101,6 +101,19 @@ def main():
         # Re-walk the head's own submodules so each stage can be compared
         # against the port. Same code path, just observable.
         dh = model.depth_head
+
+        def dumpd(label, t):
+            # The DPT trace uses its own dumper. A strided sample of a
+            # 53k-element tensor is six numbers, and six numbers can
+            # agree while the tensor does not, so the sum and the max
+            # absolute value — which cover every element — are appended
+            # as two more values. The port's __dp_dump appends the same
+            # two, so the comparison needs no special case for them.
+            flat = t.reshape(-1).to(torch.float64)
+            vals = flat[::STRIDE].tolist() + [flat.sum().item(),
+                                              flat.abs().max().item()]
+            print("%s %s | %s" % (label, "x".join(str(d) for d in t.shape),
+                                  " ".join(fmt(v) for v in vals)))
         ph, pw = images.shape[-2] // 14, images.shape[-1] // 14
         feats = []
         for i in range(4):
@@ -108,26 +121,35 @@ def main():
             x = dh.norm(x)
             x = x.permute(0, 2, 1).reshape(x.shape[0], x.shape[-1], ph, pw)
             x = dh.projects[i](x)
-            dump("dpt_proj_%d" % i, x)
+            dumpd("dpt_proj_%d" % i, x)
             x = dh._apply_pos_embed(x, images.shape[-1], images.shape[-2])
-            dump("dpt_pos_%d" % i, x)
+            dumpd("dpt_pos_%d" % i, x)
             x = dh.resize_layers[i](x)
-            dump("dpt_rs_%d" % i, x)
+            dumpd("dpt_rs_%d" % i, x)
             feats.append(x)
         rns = [dh.scratch.layer1_rn(feats[0]), dh.scratch.layer2_rn(feats[1]),
                dh.scratch.layer3_rn(feats[2]), dh.scratch.layer4_rn(feats[3])]
         for i, r in enumerate(rns):
-            dump("dpt_rn_%d" % i, r)
+            dumpd("dpt_rn_%d" % i, r)
+        # The fusion block's own steps, so a divergence lands on one op
+        # rather than on the block as a whole.
+        rf = dh.scratch.refinenet4
+        r = rf.resConfUnit2(rns[3])
+        dumpd("dpt_rcu4", r)
+        u = torch.nn.functional.interpolate(
+            r, size=tuple(rns[2].shape[2:]), mode="bilinear",
+            align_corners=rf.align_corners)
+        dumpd("dpt_up4", u)
         o = dh.scratch.refinenet4(rns[3], size=rns[2].shape[2:])
-        dump("dpt_f4", o)
+        dumpd("dpt_f4", o)
         o = dh.scratch.refinenet3(o, rns[2], size=rns[1].shape[2:])
-        dump("dpt_f3", o)
+        dumpd("dpt_f3", o)
         o = dh.scratch.refinenet2(o, rns[1], size=rns[0].shape[2:])
-        dump("dpt_f2", o)
+        dumpd("dpt_f2", o)
         o = dh.scratch.refinenet1(o, rns[0])
-        dump("dpt_f1", o)
+        dumpd("dpt_f1", o)
         o = dh.scratch.output_conv1(o)
-        dump("dpt_oc1", o)
+        dumpd("dpt_oc1", o)
 
 
 if __name__ == "__main__":
