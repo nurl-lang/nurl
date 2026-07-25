@@ -1,5 +1,39 @@
 # Changelog
 
+## 0.5.0
+
+- **Register-tiled matmul/GEMM on the CPU backend — 24x.** One thread per
+  output element is the right shape on a GPU, where thousands of threads
+  hide the strided read of B; on the CPU backend it is the wrong shape by
+  more than an order of magnitude, because `B[t*N+col]` walks a column so
+  every iteration misses cache, and a scalar accumulator gives the
+  vectoriser nothing. `gk_matmul_f`, `gkd_matmul`, `gkd_bmm` and `gkd_gemm`
+  now emit a tiled kernel when the backend is CPU: one thread owns an 8x32
+  block of C, keeps its 256 accumulators in registers, and reads B along a
+  ROW — 32 contiguous elements reused by all 8 rows of the tile. Measured
+  on a 6-core i7-5930K at 512x1024x1024 f64: 1.7 -> 42 GFLOP/s (610 ms ->
+  41 ms). CUDA is untouched — 256 accumulators per thread is far past a
+  CUDA thread's register budget and would spill to local memory.
+- **Bit-identity is preserved, not merely approximately.** Each output's
+  sum still runs t = 0..K ascending with the same explicit
+  round-to-nearest intrinsics; only the order in which OUTPUTS are visited
+  changes, and that changes no sum. Results stay bit-identical to the
+  per-element kernel, to the CUDA kernel, and to a naive sequential host
+  matmul — pinned by gpukit's and tensor's existing CPU-vs-numpy batteries.
+- `gkd_gemm` with `transb=1` deliberately stays on the per-element kernel:
+  staging a transpose at call time to reach the tiled body was measured
+  and is a LOSS. Callers who want the tiled path transpose their weights
+  once, at load.
+- **`gkd_resize_bilinear`** — NCHW bilinear resize with both corner
+  conventions (`align_corners` on and off), the resampler decoders
+  actually upsample with and the one `gkd_resize_nn` is not.
+- **`gk_buf_esz`** — bytes per element of a `GkBuf`, now public: the device
+  pointer is byte-addressed, so anyone slicing a sub-range of a buffer
+  needs it.
+- Requires **gpu ^0.10.1** — the tile only reaches those numbers when the
+  CPU backend compiles at `-O3 -march=native`, which is that release's
+  flag ladder (and its flags-in-the-cache-key fix).
+
 ## 0.4.2
 
 - **f64 matmul/bmm are now genuinely bit-identical to a sequential host

@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.5.0
+
+- **`image_resize_bicubic` — Pillow's resampler, byte for byte.** The
+  resize every image pipeline outside this repo means by "resize": a
+  separable cubic convolution whose kernel support scales with the
+  reduction factor, so downscaling is genuinely anti-aliased rather than
+  merely interpolated. Deliberately Pillow's arithmetic and not something
+  close to it — the a = −0.5 kernel (torch's `interpolate(mode='bicubic')`
+  uses a = −0.75 and will NOT agree; different kernels, not different
+  roundings), `support = 2·max(1, in/out)` per axis, coefficients
+  normalised over the clipped window, two 8-bit passes with 22-bit
+  fixed-point coefficients rounded half-away-from-zero and the accumulator
+  pre-loaded with half an lsb. Verified byte-identical to Pillow across
+  up-, down- and mixed scaling and the degenerate 1-pixel cases for images
+  with no alpha (1 and 3 channels). The point of matching exactly is that
+  the reason to reach for bicubic is usually to reproduce what another
+  tool already produced — a model's preprocessing, a reference render —
+  and "close enough" is what such a comparison cannot use.
+- **With alpha (2 or 4 channels) it deliberately does not match Pillow**,
+  and the difference is worth knowing rather than discovering: Pillow
+  PREMULTIPLIES alpha before resampling and un-premultiplies after, so a
+  pixel's colour is weighted by its opacity. That is right when alpha
+  means transparency and wrong when the channels are independent signals.
+  This function does the latter — each channel resampled on its own.
+  Premultiply before the call and divide after if you want Pillow's.
+- First consumer: lingbot-map's frame preprocessing.
+
 ## 0.4.0
 
 - **libjpeg-exact "fancy" chroma upsampling** — 2x1/2x2 expansion now uses
