@@ -8,6 +8,68 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.24.0] — 2026-07-25
+
+The **performance** release. No new language surface — this one is about
+making what already exists fast, and about how the slow parts were found.
+Three discovery routes, each catching a class the others would have missed:
+reading the primitives, surveying allocations per operation, and finally
+profiling a real workload. The last one turned on the compiler itself.
+
+`nurlc` compiles its own 1 MB source **4× faster** (3.43 s → 0.86 s), and
+the stdlib's byte-level paths — hex, base64, percent-encoding, case
+mapping, the TOML/XML/URL parsers, regex — are between 2× and 656× faster.
+Emitted IR is byte-identical throughout: every change here is a
+same-output, less-work change, and the bootstrap fixed point holds.
+
+One correctness fix rode along: `string_eq` compared with `strcmp`, so two
+Strings differing only after an embedded NUL compared equal.
+
+### Added
+
+- **`nurlpkg` tells you when your toolchain is behind.**
+  `stdlib/ext/update_check.nu` prints at most one line to stderr *after*
+  a command's output when a newer release exists. Best-effort and
+  non-fatal (never blocks the command, never changes its exit code),
+  cached to at most one network probe per day (`$NURL_HOME/
+  .update-check`), and silent where the notice would be noise: opt-out
+  via `$NURL_NO_UPDATE_CHECK`, in CI, when stderr is not a terminal, and
+  on a dev/dirty build. This closes the real hazard behind the
+  "`publish --dry-run` published for real" scare — a stale binary
+  predating `--dry-run` running against today's registry.
+
+- **`packages/benchmark` 0.1.1 — reproduce NURL's performance claims on
+  your own machine.** sha256 / json / sort / cbor / utf8 / int-loop plus
+  a 1 M-row CSV sort (parse with the stdlib CSV reader, sort by
+  `(type, date, uuid)`). Renamed from `bench` — the registry reserves
+  that name. 0.1.1 fixes an O(N²) in the utf8 benchmark that reported
+  0 MB/s in the wild.
+
+- **`packages/hub` 0.1.1 — fetch models from Hugging Face into one
+  shared, verified cache** (`~/.nurl/models`). `embed` 0.1.4,
+  `whisper` 1.0.4 and `nurllama` 0.12.10 now accept a Hugging Face ref
+  directly and fetch through it.
+
+- **`string_reserve_at` / `string_commit` (`stdlib/core/string.nu`) — a
+  bulk emission cursor.** `string_push_char` costs a call, three
+  `nurl_peek`s and a `nurl_poke` per byte — ~1.7 ns even on its fast
+  path, because the compiler must re-read the control block every time
+  (the store could alias it). An encoder that knows how many bytes it is
+  about to produce can now reserve the room once, write straight through
+  a `*u`, and commit at the end: measured **565 ns vs 7 061 ns** for
+  4096 bytes (12.5×). The reserved pointer is valid only until the next
+  operation that can grow the buffer — the contract is spelled out at
+  the definition. Committing fewer bytes than reserved is allowed, so
+  encoders whose output size is only an upper bound (percent-encoding)
+  can use it too.
+
+- **`nurl_str_at str len idx` (`stdlib/core/string.nu`) — the O(1) byte
+  accessor scan loops want.** Same contract as `nurl_str_get` (0 when
+  `idx` is outside `[0, len)`, which is what parsers rely on when they
+  peek one or two bytes past the cursor), but the caller passes the
+  length it already knows, so no `strlen` runs. `nurl_str_get` stays for
+  one-off reads where no length is at hand.
+
 ### Changed
 
 - **Two more quadratics inside `nurlc` — self-compile 1.01 s → 0.86 s.**
@@ -64,30 +126,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   dominated by clang/LTO, and nurlc is ~10 s of it across the bootstrap
   stages. Found by profiling (gprof) rather than by reading — the old
   `set_pos` was 89% of nurlc's self-compile profile.
-
-### Added
-
-- **`string_reserve_at` / `string_commit` (`stdlib/core/string.nu`) — a
-  bulk emission cursor.** `string_push_char` costs a call, three
-  `nurl_peek`s and a `nurl_poke` per byte — ~1.7 ns even on its fast
-  path, because the compiler must re-read the control block every time
-  (the store could alias it). An encoder that knows how many bytes it is
-  about to produce can now reserve the room once, write straight through
-  a `*u`, and commit at the end: measured **565 ns vs 7 061 ns** for
-  4096 bytes (12.5×). The reserved pointer is valid only until the next
-  operation that can grow the buffer — the contract is spelled out at
-  the definition. Committing fewer bytes than reserved is allowed, so
-  encoders whose output size is only an upper bound (percent-encoding)
-  can use it too.
-
-- **`nurl_str_at str len idx` (`stdlib/core/string.nu`) — the O(1) byte
-  accessor scan loops want.** Same contract as `nurl_str_get` (0 when
-  `idx` is outside `[0, len)`, which is what parsers rely on when they
-  peek one or two bytes past the cursor), but the caller passes the
-  length it already knows, so no `strlen` runs. `nurl_str_get` stays for
-  one-off reads where no length is at hand.
-
-### Changed
 
 - **Per-item overhead removed from the hot emitters and from the regex
   engine.** Two distinct costs, same shape — work repeated per byte or
@@ -238,6 +276,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   embedded NUL.** `String` stores inner NUL bytes verbatim, so two
   strings of equal length differing only past a NUL compared *equal*.
   Now `memcmp` over the full byte range — which is also 1.3× faster.
+
+- **A 403 from the registry is not an expired token.** `pkg_publish`
+  mapped both 401 and 403 to `PubAuth`, so `nurlpkg` answered a refused
+  *name* (reserved, typosquat lookalike, or outside the token's scope)
+  with "registry tokens expire after 90 days — run `nurlpkg login`",
+  sending the user to re-authenticate a perfectly valid token. 401 keeps
+  the token-expiry hint; 403 is now `PubForbidden` and names the real
+  causes.
+
+- **The `## [0.23.0]` heading in this file.** It was replaced, rather
+  than pushed down, by an entry added after that release was tagged, so
+  0.23.0's notes had silently become part of `[Unreleased]`. Restored.
+
+## [0.23.0] — 2026-07-24
 
 The **ecosystem** release. v0.22.0 made the registry a training stack;
 v0.23.0 closes the loop around it — the missing packages that turn "train
@@ -8538,7 +8590,8 @@ releases are measured.
   compile-server (`api/`), browser playground (`nurlweb/`).
 * Dual license: MIT (LICENSE-MIT) or Apache-2.0 (LICENSE-APACHE).
 
-[Unreleased]: https://github.com/nurl-lang/nurl/compare/v0.23.0...HEAD
+[Unreleased]: https://github.com/nurl-lang/nurl/compare/v0.24.0...HEAD
+[0.24.0]: https://github.com/nurl-lang/nurl/compare/v0.23.0...v0.24.0
 [0.23.0]: https://github.com/nurl-lang/nurl/compare/v0.22.0...v0.23.0
 [0.22.0]: https://github.com/nurl-lang/nurl/compare/v0.21.0...v0.22.0
 [0.13.0]: https://github.com/nurl-lang/nurl/compare/v0.12.0...v0.13.0
