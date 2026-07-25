@@ -33,7 +33,7 @@ and is what the port has to reproduce exactly, not approximately.
 
 | # | stage | state |
 |---|---|---|
-| 1 | read the `.pt` checkpoint | **done** — see [`torchpt`](../torchpt), verified against `torch.load` |
+| 1 | read the `.pt` checkpoint | **done** — [`torchpt`](../torchpt); the real 4.6 GB file in 0.01 s / 31 MB RSS, values identical to `torch.load` |
 | 2 | image loading and preprocessing | **done** — byte-identical to the reference pipeline on real frames |
 | 3 | ViT layers: patch embed, 2-D RoPE, qk-norm attention, block | **done** — the full block matches the reference to 4e-15 |
 | 4 | streaming aggregator + KV cache | pending |

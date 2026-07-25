@@ -61,7 +61,7 @@ print("worst relative error %.3e" % worst)
 PY
 }
 
-echo "[1/6] camera geometry vs the reference torch code"
+echo "[1/7] camera geometry vs the reference torch code"
 if ! $NURL tests/geomcheck.nu "$WORK/geomcheck" >/dev/null 2>"$WORK/build.err"; then
     bad "geomcheck build"; cat "$WORK/build.err"
 elif [ -z "$PYTORCH_PY" ] || ! "$PYTORCH_PY" -c "import torch" 2>/dev/null; then
@@ -78,7 +78,7 @@ else
     fi
 fi
 
-echo "[2/6] frame preprocessing vs the reference load_fn pipeline"
+echo "[2/7] frame preprocessing vs the reference load_fn pipeline"
 # Real frames, not synthetic ones: the resize ratio, the patch-multiple
 # rounding and the centre crop only interact on an actual aspect ratio.
 FRAMES=""
@@ -107,7 +107,7 @@ else
     fi
 fi
 
-echo "[3/6] position-grid resample vs torch bicubic+antialias"
+echo "[3/7] position-grid resample vs torch bicubic+antialias"
 if ! $NURL tests/interpcheck.nu "$WORK/ic" >/dev/null 2>"$WORK/ic_build.err"; then
     bad "interpcheck build"; tail -6 "$WORK/ic_build.err"
 elif [ -z "$PYTORCH_PY" ] || ! "$PYTORCH_PY" -c "import torch" 2>/dev/null; then
@@ -122,7 +122,7 @@ else
     fi
 fi
 
-echo "[4/6] 2-D rotary position embedding vs the reference"
+echo "[4/7] 2-D rotary position embedding vs the reference"
 if ! $NURL tests/ropecheck.nu "$WORK/rc" >/dev/null 2>"$WORK/rc_build.err"; then
     bad "ropecheck build"; tail -6 "$WORK/rc_build.err"
 elif [ -z "$PYTORCH_PY" ] || ! "$PYTORCH_PY" -c "import torch" 2>/dev/null; then
@@ -137,7 +137,7 @@ else
     fi
 fi
 
-echo "[5/6] patch embedding vs torch Conv2d"
+echo "[5/7] patch embedding vs torch Conv2d"
 if ! $NURL tests/pecheck.nu "$WORK/pe" >/dev/null 2>"$WORK/pe_build.err"; then
     bad "pecheck build"; tail -6 "$WORK/pe_build.err"
 elif [ -z "$PYTORCH_PY" ] || ! "$PYTORCH_PY" -c "import torch" 2>/dev/null; then
@@ -152,7 +152,7 @@ else
     fi
 fi
 
-echo "[6/6] full transformer block vs the reference Block"
+echo "[6/7] full transformer block vs the reference Block"
 if ! $NURL tests/blockcheck.nu "$WORK/bc" >/dev/null 2>"$WORK/bc_build.err"; then
     bad "blockcheck build"; tail -6 "$WORK/bc_build.err"
 elif [ -z "$PYTORCH_PY" ] || ! "$PYTORCH_PY" -c "import torch" 2>/dev/null; then
@@ -164,6 +164,29 @@ else
         ok "layernorm + qk-norm attention + rope + gelu MLP + layerscale — $out"
     else
         bad "block differs from the reference"; echo "$out"
+    fi
+fi
+
+echo "[7/7] the real 4.6 GB checkpoint (skipped when absent)"
+CKPT="${LINGBOT_CKPT:-$HOME/.nurl/models/lingbot-map/lingbot-map.pt}"
+if [ ! -f "$CKPT" ]; then
+    skip "no checkpoint at $CKPT — set LINGBOT_CKPT"
+elif ! $NURL tests/wcheck.nu "$WORK/wc" >/dev/null 2>"$WORK/wc_build.err"; then
+    bad "wcheck build"; tail -6 "$WORK/wc_build.err"
+else
+    "$WORK/wc" "$CKPT" > "$WORK/wc.txt" 2>&1
+    # The architecture the file actually describes — a zip64 archive past
+    # 4 GiB, read through mmap without loading it.
+    if grep -q "^tensors 1342$" "$WORK/wc.txt" &&
+       grep -q "^dino_blocks 24$" "$WORK/wc.txt" &&
+       grep -q "^frame_blocks 24$" "$WORK/wc.txt" &&
+       grep -q "^global_blocks 24$" "$WORK/wc.txt" &&
+       grep -q "^shape_contract OK$" "$WORK/wc.txt" &&
+       grep -q "^point_head_present F$" "$WORK/wc.txt" &&
+       grep -q "^read_ls1 OK n=1024 v0=0.0011749680852517486 v1023=0.000993272173218429$" "$WORK/wc.txt"; then
+        ok "1342 tensors, 24/24/24 blocks, values identical to torch.load"
+    else
+        bad "real checkpoint reads wrong"; cat "$WORK/wc.txt"
     fi
 fi
 
