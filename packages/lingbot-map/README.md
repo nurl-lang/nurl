@@ -36,7 +36,7 @@ and is what the port has to reproduce exactly, not approximately.
 | 1 | read the `.pt` checkpoint | **done** — [`torchpt`](../torchpt); the real 4.6 GB file in 0.01 s / 31 MB RSS, values identical to `torch.load` |
 | 2 | image loading and preprocessing | **done** — byte-identical to the reference pipeline on real frames |
 | 3 | ViT layers: patch embed, 2-D RoPE, qk-norm attention, block | **done** — the full block matches the reference to 4e-15 |
-| 4 | streaming aggregator + KV cache | **done** — two frames streamed through the cache, 5.4e-6 vs the real model; sliding-window eviction matches the reference policy exactly |
+| 4 | streaming aggregator + KV cache | **done** — 5.4e-6 vs the real model; sliding-window eviction 7.7e-6, checked against the model past the eviction point |
 | 5 | camera head, DPT heads | **done** — camera head 5.7e-7, DPT depth head 1.6e-6 |
 | 6 | camera geometry | **done** — matches torch to 2.4e-16 |
 | 7 | CLI, point-cloud export, end-to-end check | **done** — `src/main.nu`; world points 1.5e-6 vs the real model |
@@ -79,46 +79,85 @@ worst relative error **2.4e-16** across six random pose encodings — the
 last bit, and it comes from torch's vectorised `tan` disagreeing with
 glibc's, not from the port.
 
+### Stage 7 — the CLI, hardening pass
+
+Three defects the finishing pass turned up, all in `src/main.nu`:
+
+* **It always exited 0.** A frame could fail, the message went to
+  stdout, and the process reported success — a caller piping the cloud
+  into a build would never learn. Failures now set `rc` and it is
+  returned.
+* **The workspace was sized `nframes · P`.** Eviction caps the cache far
+  below that, and the attention matrix is `heads · n · nkv`: at 300
+  frames the oversized version wants ~12 GB for that term alone and
+  would not run at all. It is now sized by `ag_kv_rows`, a 4× cut at
+  300 frames.
+* **No way to name a directory.** A 324-frame scene meant 324 paths on
+  the command line. `--frames <dir>` takes every `.png`/`.jpg`, **sorted
+  by name** — order is not a nicety, the KV cache makes frame N depend
+  on every frame before it, so a raw `readdir` order reconstructs a
+  different scene.
+
+`vec_extend` looked like the way to append the glob results, and it
+exposed a compiler bug: `= . p + k 0 v` for an aggregate element type
+died with *"unknown field or variable: +"*. Fixed in `nurlc` with a
+regression test (`compiler/tests/ptr_agg_index_store.nu`). `vec_extend`
+documents itself as safe only for trivial element types, so the CLI
+pushes the handles across instead.
+
 ### Stage 4 (partial) — KV-cache eviction (`src/aggregator.nu`)
 
 The reference keeps the first `kv_cache_scale_frames` = 8 frames
-forever, keeps the last `kv_cache_sliding_window` = 64 frames before the
-current one, and from every frame it drops it preserves the six
-special-token rows. Past 73 frames a cache that just grows is not merely
-wasteful, it is **wrong** — the model attends to frames it should not.
-The example scenes are 237–324 frames.
+forever, keeps the last `kv_cache_sliding_window` = 64 frames
+**including the current one**, and from every frame it drops it
+preserves the six special-token rows. Past 72 frames a cache that just
+grows is not merely wasteful, it is **wrong** — the model attends to
+frames it should not. The example scenes are 237–324 frames.
 
-The port implements this as a ring rather than as the reference's
+That "including the current one" is the whole subtlety, and it is not
+visible in the eviction function. `attention.py:239-244` concatenates
+the frame into the cache and only *then* calls
+`_apply_kv_cache_eviction_causal`, so `num_cached` already counts it:
+the trigger is `f ≥ S + W` and the live set is the scale frames plus
+`f−W+1 … f`. The port first read the function alone, got a window one
+frame too wide starting one frame too late, and was wrong from the very
+first eviction — by **2.7e-2**.
+
+The port implements the policy as a ring rather than as the reference's
 repeated `torch.cat`. Each cache is laid out as
 
 ```
 [0, S·P)              the scale frames, never moved
-[S·P, S·P + R·P)      a ring of R = window + 1 frames
-[S·P + R·P, …)        six preserved rows per evicted frame
+[S·P, S·P + W·P)      a ring of the last W frames
+[S·P + W·P, …)        six preserved rows per evicted frame
 ```
 
-`R` is one more than the window because the current frame is in the live
-set too: at the step where eviction first bites, frames `f−64 … f` are
-all live, which is 65. The live region is always a **prefix**, so
-attention still reads a contiguous run and nothing in the attention path
-had to learn about eviction. Shifting the survivors down instead, which
-is what `torch.cat` amounts to, would move about 5 GB per frame across
-24 blocks.
+The live region is always a **prefix**, so attention still reads a
+contiguous run and nothing in the attention path had to learn about
+eviction. Shifting the survivors down instead, which is what
+`torch.cat` amounts to, would move about 5 GB per frame across 24
+blocks.
 
 That did force one honest change: `LmKv`'s single `used` became `woff`
 and `nvalid`. Where a frame writes and how much of the cache is live are
 the same number only while frames go on the end.
 
-`tests/kvcheck.nu` checks the bookkeeping against
-`tests/kv_oracle.py`, which replays the reference's own
-`_apply_kv_cache_eviction_causal` on frame indices — its control flow,
-not a restatement of the port's formulas. 120 frames, exact match, and
-it runs in a second.
+Two tests, and it took both:
 
-What is **not** validated is eviction against the model's activations:
-that needs 73+ frames through a 909M-parameter transformer on both
-sides, which is hours per side. The two-frame streaming check still
-matches at 5.4e-6, so the short path is unchanged.
+* `tests/kvcheck.nu` vs `tests/kv_oracle.py` — the bookkeeping, 120
+  frames, exact, one second. `kv_oracle.py` replays the reference's own
+  eviction; it needs no torch and no checkpoint.
+* `tests/streamcheck.nu` vs the real model with the window shrunk to
+  **1 + 2 on both sides** (`LINGBOT_KV_SCALE` / `LINGBOT_KV_WINDOW`,
+  which the reference takes as constructor arguments) — six frames,
+  three of them past eviction, **7.7e-6**.
+
+The bookkeeping test alone was not enough, and the reason is worth
+keeping: `kv_oracle.py` replayed the reference's eviction *function*
+faithfully but placed the *call* where the port placed it. It agreed
+with the port's wrong window and reported an exact match. Only running
+the activations caught it. **A replay has to reproduce the call site,
+not just the callee.**
 
 ### Stage 7 — the CLI and the point cloud (`src/main.nu`)
 
@@ -338,7 +377,7 @@ the repack, and it still comes in at about what frame 1 costs — the
 per-frame DINOv2 trunk dominates at this length.
 
 **Eviction is implemented as a ring, not as repeated `torch.cat`** —
-see the stage 4 eviction section. Past 73 frames the sliding window is
+see the stage 4 eviction section. Past 72 frames the sliding window is
 needed for *correctness*, not just for memory: without it the model
 attends to frames the reference has already dropped.
 

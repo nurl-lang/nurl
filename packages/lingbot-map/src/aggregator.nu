@@ -144,28 +144,31 @@ $ `src/rope.nu`
 // The reference's KV-cache eviction policy, as sizes.
 //
 // It keeps the first `AG_KV_SCALE` frames forever, keeps the last
-// `AG_KV_WINDOW` frames before the current one, and from every frame it
-// drops it preserves the six special-token rows. Counting the current
-// frame, the live window is AG_KV_WINDOW + 1 frames wide, which is why
-// `ag_kv_ring` is one more than the window: at the step where eviction
-// first bites, the cache holds the scale frames plus frames
-// f-AG_KV_WINDOW .. f inclusive.
+// `AG_KV_WINDOW` frames INCLUDING the current one, and from every frame
+// it drops it preserves the six special-token rows.
+//
+// "Including the current one" is the whole subtlety, and it is not
+// visible in the eviction function itself. attention.py:239-244
+// concatenates the frame into the cache and only THEN calls
+// _apply_kv_cache_eviction_causal, so `num_cached` already counts it:
+// the trigger is f >= AG_KV_SCALE + AG_KV_WINDOW and the live set is
+// scale frames plus f-AG_KV_WINDOW+1 .. f. Reading the function alone
+// gives a window one frame too wide that starts one frame too late,
+// which is wrong from the very first eviction and by 2.7e-2.
 : i AG_KV_SCALE 8
 : i AG_KV_WINDOW 64
 
 // The window sizes are parameters, not constants, so a test can drive
 // eviction at a size that fits in a few frames. The reference takes them
 // as constructor arguments for the same reason.
-@ ag_kv_ring i kvwindow → i { ^ + kvwindow 1 }
 
 // Rows a cache needs for a sequence of `nframes` frames of `p` tokens.
 // Short sequences never evict and just need every row; long ones need
 // the two full-frame regions plus six rows per evicted frame.
 @ ag_kv_rows i nframes i p i kvscale i kvwindow → i {
-    : i r ( ag_kv_ring kvwindow )
-    : i span + kvscale r
+    : i span + kvscale kvwindow
     ? <= nframes span { ^ * nframes p } {}
-    ^ + + * kvscale p * r p * - nframes span AG_SPECIAL
+    ^ + + * kvscale p * kvwindow p * - nframes span AG_SPECIAL
 }
 
 // Where frame `fidx` writes its rows, and how many rows are live once it
@@ -175,12 +178,12 @@ $ `src/rope.nu`
 // regions plus the preserved specials that trail them.
 @ ag_kv_woff i fidx i p i kvscale i kvwindow → i {
     ? < fidx kvscale { ^ * fidx p } {}
-    ^ + * kvscale p * % - fidx kvscale ( ag_kv_ring kvwindow ) p
+    ^ + * kvscale p * % - fidx kvscale kvwindow p
 }
 
 // How many frames have been evicted once frame `fidx` is in place.
 @ ag_kv_evicted i fidx i kvscale i kvwindow → i {
-    : i span + kvscale ( ag_kv_ring kvwindow )
+    : i span + kvscale kvwindow
     ? < fidx span { ^ 0 } {}
     ^ + - fidx span 1
 }
@@ -188,7 +191,7 @@ $ `src/rope.nu`
 @ ag_kv_nvalid i fidx i p i kvscale i kvwindow → i {
     : i ns ( ag_kv_evicted fidx kvscale kvwindow )
     ? == ns 0 { ^ * + fidx 1 p } {}
-    ^ + + * kvscale p * ( ag_kv_ring kvwindow ) p * ns AG_SPECIAL
+    ^ + + * kvscale p * kvwindow p * ns AG_SPECIAL
 }
 
 // Allocate the 24 global-block caches for a sequence of `nframes`
@@ -213,7 +216,7 @@ $ `src/rope.nu`
     ? == ns 0 { ^ T } {}
     : i hd / AG_DIM AG_HEADS
     : i src ( ag_kv_woff fidx p kvscale kvwindow )
-    : i dst + + * kvscale p * ( ag_kv_ring kvwindow ) p * - ns 1 AG_SPECIAL
+    : i dst + + * kvscale p * kvwindow p * - ns 1 AG_SPECIAL
     : GkBuf sk ( gk_dbuf_new kit * AG_HEADS * AG_SPECIAL hd GK_F32 )
     : GkBuf sv ( gk_dbuf_new kit * AG_HEADS * AG_SPECIAL hd GK_F32 )
     : ~ b ok T

@@ -28,7 +28,13 @@ def main():
     cache, specials = [], 0
     rows = []
     for f in range(FRAMES):
-        # --- the reference's eviction, before this frame is appended ---
+        # ORDER MATTERS, and it is not the order the function's own body
+        # suggests: attention.py:239-244 concatenates this frame into the
+        # cache and THEN calls _apply_kv_cache_eviction_causal, so the
+        # eviction counts the current frame. Evicting first would leave
+        # the live set one frame too wide and start it one frame too
+        # late.
+        cache.append(f)
         num_cached = len(cache)
         if num_cached > WINDOW + SCALE_FRAMES:
             evict_start = SCALE_FRAMES
@@ -37,8 +43,6 @@ def main():
                 evicted = cache[evict_start:evict_end]
                 specials += len(evicted)            # cross_frame_special
                 cache = cache[:SCALE_FRAMES] + cache[-WINDOW:]
-        # --- then this frame's keys and values go in ---
-        cache.append(f)
         live = len(cache) * P + specials * SPECIAL
         rows.append((f, len(cache), specials, live))
 

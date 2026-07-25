@@ -72,10 +72,10 @@ $ `src/aggregator.nu`
         ? > + wo KV_P cap { = badw + badw 1 } {}
         : i ns ( ag_kv_evicted f AG_KV_SCALE AG_KV_WINDOW )
         ? > ns 0 {
-            : i dst + + * AG_KV_SCALE KV_P * ( ag_kv_ring AG_KV_WINDOW ) KV_P * - ns 1 AG_SPECIAL
+            : i dst + + * AG_KV_SCALE KV_P * AG_KV_WINDOW KV_P * - ns 1 AG_SPECIAL
             // the preserved rows go past every full-frame slot, and stay
             // inside what the cache was allocated for
-            ? < dst + * AG_KV_SCALE KV_P * ( ag_kv_ring AG_KV_WINDOW ) KV_P { = bade + bade 1 } {}
+            ? < dst + * AG_KV_SCALE KV_P * AG_KV_WINDOW KV_P { = bade + bade 1 } {}
             ? > + dst AG_SPECIAL cap { = bade + bade 1 } {}
             ? > + dst AG_SPECIAL ( ag_kv_nvalid f KV_P AG_KV_SCALE AG_KV_WINDOW ) { = bade + bade 1 } {}
         } {}
