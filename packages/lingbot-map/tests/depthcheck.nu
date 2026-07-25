@@ -16,6 +16,8 @@ $ `src/load.nu`
 $ `src/dino.nu`
 $ `src/aggregator.nu`
 $ `src/dpthead.nu`
+$ `src/camhead.nu`
+$ `src/geom.nu`
 $ `src/preproc.nu`
 
 : i STRIDE 9973
@@ -56,6 +58,41 @@ $ `src/preproc.nu`
     ( vec_free [f] hv )
 }
 
+// world_points, in the reference's own layout: H x W x 3, unprojected
+// at INTEGER pixel coordinates the way np.arange builds the grid.
+@ wdump * GpuKit kit GkBuf pose GkBuf depth i h i w → v {
+    : ( Vec f ) pv ( vec_with_cap [f] 9 )
+    : b _pl ( vec_set_len [f] pv 9 )
+    : ( Vec f ) dv ( vec_with_cap [f] * h w )
+    : b _dl ( vec_set_len [f] dv * h w )
+    ? & ( gk_dbuf_download kit pose pv ) ( gk_dbuf_download kit depth dv ) {} {
+        ( nurl_print `download FAILED\n` ) ^ v
+    }
+    : *f pe ( vec_data [f] pv )
+    : *f dep ( vec_data [f] dv )
+    : *f kk # *f ( nurl_zalloc 128 )
+    : *f ki # *f ( nurl_zalloc 128 )
+    : *f c2w # *f ( nurl_zalloc 128 )
+    : *f wp # *f ( nurl_zalloc 24 )
+    ( pose_enc_to_intri pe h w kk )
+    ( intri_inverse kk ki )
+    ( pose_enc_to_c2w pe c2w )
+    ( nurl_print `world_points 1x` ) ( nurl_print ( nurl_str_int h ) )
+    ( nurl_print `x` ) ( nurl_print ( nurl_str_int w ) )
+    ( nurl_print `x3 |` )
+    : ~ i j 0
+    ~ < j * 3 * h w {
+        : i px / j 3
+        ( unproject # f % px w # f / px w . dep px ki c2w wp )
+        ( nurl_print ` ` ) ( nurl_print ( nurl_str_float . wp % j 3 ) )
+        = j + j STRIDE
+    }
+    ( nurl_print `\n` )
+    ( nurl_free # s wp ) ( nurl_free # s c2w )
+    ( nurl_free # s ki ) ( nurl_free # s kk )
+    ( vec_free [f] dv ) ( vec_free [f] pv )
+}
+
 @ main → i {
     ? < ( nurl_argc ) 3 { ( nurl_print `usage: depthcheck <ckpt.pt> <frame>\n` ) ^ 2 } {}
     : *GpuKit kit ( gk_open 0 )
@@ -75,6 +112,7 @@ $ `src/preproc.nu`
                 T lw → {
                     : Agg a ( ag_load lw kit )
                     : Dpt dp ( dp_load lw kit )
+                    : CamHead chd ( ch_load lw kit )
                     ? ( lw_ok lw ) {} { ( nurl_print ( lw_error lw ) ) ( nurl_print `\n` ) ^ 1 }
                     : i p ( ag_ntokens gh gw )
                     : i dn ( dn_tokens gh gw )
@@ -93,11 +131,22 @@ $ `src/preproc.nu`
                     { ( nurl_print `depth head FAILED\n` ) ^ 1 }
                     ( dump `depth` depth kit h w `x1` )
                     ( dump `depth_conf` conf kit h w `` )
+                    // and the same depth turned into world points, which
+                    // is what the CLI writes out as a cloud
+                    : GkBuf camtok ( lm_view out * 3 * p 2048 2048 )
+                    : ChWs cws ( ch_ws_new kit )
+                    : GkBuf pose ( gk_dbuf_new kit 9 GK_F32 )
+                    ? ( ch_forward kit chd cws camtok 0 pose ) {}
+                    { ( nurl_print `camera head FAILED\n` ) ^ 1 }
+                    ( wdump kit pose depth h w )
+                    ( gk_dbuf_free pose )
+                    ( ch_ws_free cws )
                     ( gk_dbuf_free depth ) ( gk_dbuf_free conf )
                     ( nurl_free # s taps )
                     ( gk_dbuf_free out ) ( gk_dbuf_free tok ) ( gk_dbuf_free dtok )
                     ( lm_ws_free ws )
                     ( dp_free dp )
+                    ( ch_free chd )
                     ( ag_free a )
                     ( lw_close lw )
                 }

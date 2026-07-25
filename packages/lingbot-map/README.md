@@ -39,7 +39,7 @@ and is what the port has to reproduce exactly, not approximately.
 | 4 | streaming aggregator + KV cache | **done** — two frames streamed through the cache, 5.4e-6 vs the real model. Eviction (past 72 frames) pending |
 | 5 | camera head, DPT heads | **done** — camera head 5.7e-7, DPT depth head 1.6e-6 |
 | 6 | camera geometry | **done** — matches torch to 2.4e-16 |
-| 7 | CLI, point-cloud export, end-to-end check | pending |
+| 7 | CLI, point-cloud export, end-to-end check | **done** — `src/main.nu`; world points 1.5e-6 vs the real model |
 
 ### Stage 2 — preprocessing (`src/preproc.nu`)
 
@@ -78,6 +78,50 @@ Verified against the upstream `quat_to_mat` / `mat_to_quat` /
 worst relative error **2.4e-16** across six random pose encodings — the
 last bit, and it comes from torch's vectorised `tan` disagreeing with
 glibc's, not from the port.
+
+### Stage 7 — the CLI and the point cloud (`src/main.nu`)
+
+```
+lingbot-map --model <checkpoint.pt> [options] <frame> ...
+  --out <file.ply>    where to write the cloud (default cloud.ply)
+  --conf <f>          keep pixels with confidence above this (default 2.0)
+  --pixel-stride <n>  take every nth pixel on both axes (default 2)
+  --max-frames <n>    stop after n frames
+  --quiet             no per-frame progress
+```
+
+Each frame goes through preprocessing, the DINOv2 trunk and the
+streaming aggregator — which keeps its KV cache across frames, so the
+poses land in one shared world frame — then the camera head for a pose
+and the DPT head for depth and confidence. Depth plus intrinsics plus
+the camera-to-world transform unprojects to world points, which is the
+cloud.
+
+`world_points` matches the reference's own
+`unproject_depth_map_to_point_map` to **1.5e-6**, and is checked as part
+of the end-to-end test rather than assumed from the depth agreeing.
+
+Two things about the geometry are easy to get wrong and are worth
+stating, because both are silent:
+
+* The reference builds its pixel grid with `np.arange(W)` — **integer**
+  pixel coordinates, not sample centres. Half a pixel of offset is not
+  visible in any single number.
+* `unproject_depth_map_to_point_map` takes the **world-from-camera**
+  extrinsic that the pose encoding decodes to and inverts it itself.
+  Handing it the already-inverted one gives a plausible-looking cloud
+  that is in the wrong frame.
+
+Output is ASCII PLY, which every viewer reads. The vertex count is not
+known until the last frame is done, so the header is written with a
+fixed-width zero-padded placeholder and patched by seeking back at the
+end — the alternative is holding the whole cloud in memory, and a
+300-frame sequence is tens of millions of points. Points are flushed a
+row at a time.
+
+On two consecutive courthouse frames at the defaults: 61 458 points,
+frame centroids 0.0095 apart in a scene 2.82 across — the two frames
+land on top of each other, which is what a shared world frame means.
 
 ### Stage 5 — the DPT depth head (`src/dpthead.nu`)
 
