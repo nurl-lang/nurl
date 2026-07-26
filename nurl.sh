@@ -211,7 +211,22 @@ resolve_clang() {
 # whitespace-safe regardless of the prefix path.
 ZIG_BIN="${NURL_ZIG:-$SCRIPT_DIR/zig/zig}"
 OPAQUE_FLAGS=""
+# `zig cc` drops -O for LLVM IR inputs. Not for C — `zig cc -O2 -c x.c`
+# forwards -O2 to cc1 as expected — but for a `.ll` it passes NOTHING,
+# and cc1's default is -O0. NURL compiles to `.ll` and hands it to the
+# compiler, so every program built with the bundled zig came out
+# UNOPTIMISED: no vectorisation, no inlining of vec_get / nurl_peek.
+# Measured on a real package's host code (image decode + bicubic
+# resample): 179 ms a frame against 68 with the level restored, and 33
+# for a clang build with LTO. Since zig is bundled precisely for boxes
+# with no clang, that was the DEFAULT path for anyone installing the
+# toolchain.
+#
+# `-Xclang <level>` goes straight to cc1 and survives, so it is appended
+# after the driver's own -O. Harmless for C inputs (same level twice).
+USING_ZIG=0
 if [ -x "$ZIG_BIN" ]; then
+    USING_ZIG=1
     cc_run() { "$ZIG_BIN" cc "$@"; }
 else
     resolve_clang
@@ -490,7 +505,10 @@ echo "[2/2] $LLFILE → $OUTBASE  ($OPT${LTO_FLAG:+ $LTO_FLAG}${DEBUG_FLAGS:+ $D
 # because the build machine had them. Positional: it must precede the
 # `-l` libraries to govern them.
 # shellcheck disable=SC2086
-cc_run $OPT $LTO_FLAG -Wl,--as-needed $OPAQUE_FLAGS $DEBUG_FLAGS $COVERAGE_FLAGS $SAN_LINK_FLAGS "$LLFILE" "$RUNTIME_TO_LINK" $EXTRA_OBJS -o "$OUTBASE" -lm -lpthread $DL_LIB $EXTRA_LIBS
+ZIG_OPT_FIX=""
+[ "$USING_ZIG" = "1" ] && ZIG_OPT_FIX="-Xclang $OPT"
+# shellcheck disable=SC2086
+cc_run $OPT $ZIG_OPT_FIX $LTO_FLAG -Wl,--as-needed $OPAQUE_FLAGS $DEBUG_FLAGS $COVERAGE_FLAGS $SAN_LINK_FLAGS "$LLFILE" "$RUNTIME_TO_LINK" $EXTRA_OBJS -o "$OUTBASE" -lm -lpthread $DL_LIB $EXTRA_LIBS
 
 echo ""
 echo "Done: $OUTBASE"

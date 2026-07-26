@@ -314,6 +314,36 @@ jobs:
           set "NURL_BUNDLE_ZIG=%CD%\vendor\zig"
           call tools\install-toolchain.bat
 
+      # The Linux legs smoke-test the assembled prefix; Windows never did,
+      # which is how nurl.bat came to ship without ever using the zig it
+      # bundles — every native build needed a system LLVM, and nothing
+      # noticed because CI installs one. Build and RUN a program with the
+      # assembled toolchain, from a directory whose name contains a space
+      # so a quoting regression in the driver fails here rather than on a
+      # user's machine.
+      - name: Smoke test the assembled toolchain
+        shell: pwsh
+        run: |
+          # A directory with a space in the name on purpose: the driver
+          # builds its compiler command by string concatenation, and an
+          # install path like C:\Users\First Last\.nurl\ is the normal
+          # case, not the exotic one.
+          $dir = "dist\smoke dir"
+          New-Item -ItemType Directory -Path $dir | Out-Null
+          # single-quoted here-string: NURL uses backticks for strings and
+          # PowerShell would otherwise eat them as escapes
+          $src = @'
+          $ `stdlib/core/io.nu`
+          @ main → i { ( nurl_print `ok` ) ^ 0 }
+          '@
+          ($src -split "`n" | ForEach-Object { $_.TrimStart() }) -join "`n" |
+            Set-Content -Path "$dir\s.nu" -Encoding utf8NoBOM
+          & cmd /c "call dist\nurl\bin\nurl.bat `"$dir\s.nu`" `"$dir\s`""
+          if ($LASTEXITCODE -ne 0) { throw "nurl.bat failed" }
+          $out = & "$dir\s.exe"
+          if ($LASTEXITCODE -ne 0) { throw "the built program failed" }
+          if ($out -ne "ok") { throw "unexpected output: $out" }
+
       - name: Package
         shell: pwsh
         run: |

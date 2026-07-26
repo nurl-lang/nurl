@@ -91,10 +91,32 @@ if not exist "%NURLC%" (
     )
 )
 
-REM ── Locate clang ─────────────────────────────────────────────
+REM ── Pick the compiler: bundled zig (preferred) or system clang ──
+REM The Windows archive ships a zig at <prefix>\zig\zig.exe, exactly as
+REM the Linux one does, but this driver used to look only for clang — so
+REM a blank Windows box with no system LLVM could not build a program
+REM natively even though the compiler it needed was sitting in the
+REM install. Prefer the bundled zig, fall back to clang.
+REM
+REM CC_OPT_FIX: `zig cc` drops the -O level for LLVM IR inputs. It
+REM forwards it for C (`zig cc -O2 -c x.c` reaches cc1 as -O2) but for a
+REM `.ll` it passes nothing and cc1 defaults to -O0 — and NURL compiles
+REM to `.ll`. `-Xclang <level>` goes straight to cc1 and survives. See
+REM the same handling in nurl.sh.
 set "CLANG=clang"
 if exist "C:\Program Files\LLVM\bin\clang.exe" (
     set "CLANG=C:\Program Files\LLVM\bin\clang.exe"
+)
+set "ZIG_BIN=%NURL_ZIG%"
+if "%ZIG_BIN%"=="" set "ZIG_BIN=%SCRIPTDIR%zig\zig.exe"
+set "USING_ZIG=0"
+REM The quotes live INSIDE the variable: an install path with a space
+REM (C:\Users\First Last\.nurl\) otherwise splits the command.
+if exist "%ZIG_BIN%" (
+    set "USING_ZIG=1"
+    set "CC="%ZIG_BIN%" cc"
+) else (
+    set "CC="%CLANG%""
 )
 
 REM ── Locate runtime.o ─────────────────────────────────────────
@@ -136,6 +158,10 @@ if defined CLI_OPT (
     set "NURL_OPT=-O2"
 )
 
+REM zig needs the level restated for cc1 (see the CC selection above).
+set "CC_OPT_FIX="
+if "%USING_ZIG%"=="1" set "CC_OPT_FIX=-Xclang %NURL_OPT%"
+
 REM Debug flag passthrough. With no `!dbg` metadata in the IR, `-g` yields
 REM only crude line info from the inlined .ll filename; still useful in
 REM debuggers for frame isolation and symbol demangling.
@@ -145,9 +171,9 @@ if "%DEBUG_INFO%"=="1" set "DEBUG_FLAG=-g"
 REM --emit-asm: stop after clang -S, skip linking.
 if "%EMIT_ASM%"=="1" (
     echo [2/2] %LLFILE% → %SFILE%  ^(%NURL_OPT% %DEBUG_FLAG% -S^)
-    "%CLANG%" %NURL_OPT% %DEBUG_FLAG% -S "%LLFILE%" -o "%SFILE%"
+    %CC% %NURL_OPT% %CC_OPT_FIX% %DEBUG_FLAG% -S "%LLFILE%" -o "%SFILE%"
     if !errorlevel! neq 0 (
-        echo ERROR: clang -S failed
+        echo ERROR: -S step failed
         exit /b 1
     )
     echo.
@@ -225,7 +251,7 @@ REM so every program linked against runtime.o needs winhttp.lib even if it
 REM doesn't import stdlib/ext/http.nu — unreferenced functions still end up
 REM in runtime.o and their WinHttp* calls must resolve at link time.
 echo [2/2] %LLFILE% → %EXEFILE%  (%NURL_OPT% %DEBUG_FLAG% %EXTRA_LIBS%)
-"%CLANG%" %NURL_OPT% %DEBUG_FLAG% "%LLFILE%" "%RUNTIME%" %EXTRA_OBJS% -o "%EXEFILE%" %EXTRA_LIBS% -lwinhttp
+%CC% %NURL_OPT% %CC_OPT_FIX% %DEBUG_FLAG% "%LLFILE%" "%RUNTIME%" %EXTRA_OBJS% -o "%EXEFILE%" %EXTRA_LIBS% -lwinhttp
 if !errorlevel! neq 0 (
     echo ERROR: clang linking failed
     exit /b 1
