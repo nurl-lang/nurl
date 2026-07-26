@@ -146,6 +146,36 @@ set "LABEL=runtime"
 "%CLANG%" -c stdlib/runtime.c !ZLIB_CFLAGS! -o stdlib/runtime.o >>"%LOG%" 2>&1
 if errorlevel 1 goto :failed
 
+REM ── A second runtime, for the MinGW ABI ──────────────────────
+REM The object above is clang-built and therefore MSVC-ABI: it references
+REM _setjmp, __chkstk and _fltused, none of which MinGW's CRT provides.
+REM `zig cc` targets x86_64-windows-gnu, so a program linked by the
+REM bundled zig against it dies on exactly those three symbols. The two
+REM ABIs cannot share one object, so build a second one with zig when a
+REM zig is around; nurl.bat picks whichever matches the compiler it uses,
+REM and install-toolchain ships the whole stdlib tree, so it travels.
+REM
+REM No !ZLIB_CFLAGS! here: it is an MSVC vcpkg include path, and there is
+REM nothing left in the runtime for it to feed — gzip/deflate became pure
+REM NURL in §8 P6, so -DNURL_HAVE_ZLIB no longer selects anything. The
+REM object references neither zlib nor zstd, which is what lets nurl.bat
+REM drop stdlib\winlib from a MinGW link without leaving a dangling
+REM symbol behind.
+set "ZIG_MINGW="
+if defined NURL_BUNDLE_ZIG if exist "%NURL_BUNDLE_ZIG%\zig.exe" set "ZIG_MINGW=%NURL_BUNDLE_ZIG%\zig.exe"
+if not defined ZIG_MINGW if defined NURL_ZIG if exist "%NURL_ZIG%" set "ZIG_MINGW=%NURL_ZIG%"
+if not defined ZIG_MINGW if exist "%SCRIPT_DIR%\vendor\zig\zig.exe" set "ZIG_MINGW=%SCRIPT_DIR%\vendor\zig\zig.exe"
+if defined ZIG_MINGW (
+    >>"%LOG%" echo [%LABEL%] "!ZIG_MINGW!" cc -target x86_64-windows-gnu -O2 -c stdlib/runtime.c -o stdlib\runtime.mingw.o
+    "!ZIG_MINGW!" cc -target x86_64-windows-gnu -O2 -c stdlib/runtime.c -o stdlib\runtime.mingw.o >>"%LOG%" 2>&1
+    if errorlevel 1 goto :failed
+    echo [info] MinGW runtime: stdlib\runtime.mingw.o ^(via "!ZIG_MINGW!"^)
+) else (
+    if exist stdlib\runtime.mingw.o del /q stdlib\runtime.mingw.o
+    >>"%LOG%" echo [info] no zig found - stdlib\runtime.mingw.o not built
+    echo [info] no zig found - programs will need clang to link
+)
+
 REM Persist the accumulated link fragment for the FFI consumers.
 if defined WINLIBS (
     > stdlib\runtime.winlibs echo !WINLIBS!

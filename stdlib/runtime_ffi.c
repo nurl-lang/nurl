@@ -590,7 +590,18 @@ void nurl_proc_spawn_free(long long h) {
 
 #ifdef _WIN32
 #  include <bcrypt.h>
-#  pragma comment(lib, "bcrypt.lib")
+/* MSVC-only. The pragma emits a /DEFAULTLIB:bcrypt.lib directive into this
+ * object's .drectve section, which is how the MSVC toolchain finds the
+ * import lib without anyone naming it on the link line. Under MinGW
+ * (`zig cc`, x86_64-w64-mingw32) that directive still reaches lld-link,
+ * which mangles the name the MinGW way and tries to open libbcrypt.a — a
+ * file no MinGW toolchain here produces (zig synthesises bcrypt.lib), so
+ * the link dies on a file it can never find. MinGW builds name the import
+ * libs on the link line instead: nurl.bat and nurlapi/main.nu both do.
+ * runtime_core.c guards its copy of this pragma the same way. */
+#  ifndef __MINGW32__
+#    pragma comment(lib, "bcrypt.lib")
+#  endif
 #endif
 
 #if defined(__linux__)
@@ -697,7 +708,9 @@ long long nurl_rand_fill(unsigned char *buf, long long n) {
 
 #if !defined(__wasi__)
 #  ifdef _WIN32
-#    pragma comment(lib, "ws2_32.lib")
+#    ifndef __MINGW32__          /* MSVC-only; see the bcrypt pragma above */
+#      pragma comment(lib, "ws2_32.lib")
+#    endif
 #    include <ws2tcpip.h>          /* getaddrinfo — client-side connect */
 typedef SOCKET nurl_sockfd_t;
 #    define NURL_INVALID_SOCK INVALID_SOCKET

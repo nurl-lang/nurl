@@ -37,14 +37,12 @@ jobs:
         run: choco install llvm --no-progress -y
         shell: cmd
 
-      - name: build.bat (bootstrap fixed point + Windows golden corpus)
-        # pwsh 7 is preinstalled on windows-latest, so build.bat runs
-        # run_tests.ps1; a missing pwsh now exits non-zero by design.
-        if: ${{ !inputs.update_goldens }}
-        run: call build.bat
-        shell: cmd
-
       # ── The DRIVER, which nothing else on Windows exercises ────────
+      # Fetched BEFORE build.bat on purpose: build.bat only emits the
+      # MinGW-ABI stdlib\runtime.mingw.o when it can see a zig, and
+      # without that object nurl.bat falls back to clang and the whole
+      # bundled-zig path silently goes untested — which is how it
+      # reached a release with three undefined CRT symbols in it.
       # build.bat compiles the toolchain with clang; nurl.bat is what a
       # USER runs to build a program, and it was never under test here.
       # That is how it came to ship looking only for a system clang while
@@ -61,6 +59,13 @@ jobs:
           Invoke-WebRequest $url -OutFile zig.zip
           Expand-Archive zig.zip -DestinationPath vendor
           Move-Item "vendor/zig-windows-x86_64-$zigVer" vendor/zig
+
+      - name: build.bat (bootstrap fixed point + Windows golden corpus)
+        # pwsh 7 is preinstalled on windows-latest, so build.bat runs
+        # run_tests.ps1; a missing pwsh now exits non-zero by design.
+        if: ${{ !inputs.update_goldens }}
+        run: call build.bat
+        shell: cmd
 
       - name: nurl.bat builds and runs a program (zig, then clang)
         if: ${{ !inputs.update_goldens }}
