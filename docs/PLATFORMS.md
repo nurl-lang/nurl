@@ -26,6 +26,13 @@ verifies — not by intent:
 | macOS (x86_64 / ARM64) | **3** | expected to build from source with Homebrew LLVM; unverified — no CI job, no release artifact, and the installer rejects Darwin | build from source |
 | Alpine / musl | **3** | build from source only. The shipped Linux archives are glibc-linked and do **not** load under musl | build from source |
 
+On **Windows**, building a program works with no Visual Studio and no
+LLVM: the archive bundles a `zig cc`, and carries a MinGW-ABI runtime
+object (`stdlib\runtime.mingw.o`) for it alongside the MSVC one that a
+system clang uses — the two ABIs cannot share an object. Programs built
+through the bundled zig cannot use the canvas or zstd FFI (both need MSVC
+import libs); everything else, gzip included, is unaffected.
+
 The shipped `nurlc` / `nurlpkg` binaries link **libc only** (optional FFI
 libraries are pulled in `--as-needed`, so a program that uses none stays
 libc-only), and the `nurl.sh` wrapper is POSIX `sh` — no bash, no make, no

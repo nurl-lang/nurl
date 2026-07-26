@@ -102,6 +102,28 @@ works".)
   LLVM 15 emits opaque-pointer IR by default); on no compiler at all, exit
   with install guidance instead of a raw `clang: command not found`.
 
+`nurl.bat`'s selection follows the same shape, with one Windows-only
+complication: **the two compilers do not share an ABI.** A system clang
+targets MSVC; the bundled `zig cc` targets `x86_64-windows-gnu`. An object
+built for one cannot be linked by the other — a clang-built `runtime.o`
+references `_setjmp`, `__chkstk` and `_fltused`, and MinGW's CRT provides
+none of them. So `build.bat` produces **two** runtime objects, `runtime.o`
+(clang/MSVC) and `runtime.mingw.o` (zig/MinGW), and the driver links
+whichever matches the compiler it selected. Both ship in the archive;
+`install-toolchain.bat` copies the whole `stdlib` tree, so no packaging
+step needs to know about it.
+
+Consequences worth knowing:
+
+- The zig fetch must come **before** `build.bat` in any workflow that
+  builds a shippable prefix, or the MinGW object is silently absent and
+  everything still passes on a runner that has LLVM installed.
+- Two things stay MSVC-only, because their libraries are MSVC import
+  libs: the **canvas** FFI (`canvas.o` + `SDL2.lib`) and the **zstd** FFI
+  in `stdlib/ext/compress.nu`. A program using either needs clang; the
+  driver refuses with that message rather than leaving it to the linker.
+  gzip/deflate are unaffected — those are pure NURL.
+
 `nurl.sh` also links a feature library (`-lcurl` / `-lssl` / `-lsqlite3` /
 `-lpq` / `-lz` / `-lzstd`) **only when the emitted IR actually references
 that back-end's symbols** — so a feature-free program (the common tool)
