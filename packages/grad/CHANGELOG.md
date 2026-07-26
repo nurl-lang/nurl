@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.8.2
+
+- Requirements widened to gpu `^0.11` / gpukit `^0.6`. No source change.
+
 ## 0.8.1
 
 **Mixed precision — `gput_capture_dt(..., 2)` (Phase 3, piece 2).** A third
