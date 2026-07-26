@@ -286,17 +286,18 @@ jobs:
         # the produced exes carry no zlib1.dll / zstd.dll dependency.
         run: vcpkg install zlib:x64-windows-static zstd:x64-windows-static
 
-      - name: Build toolchain (nurlc + nurlpkg)
-        shell: cmd
-        run: |
-          call build.bat --no-tests || exit /b 1
-          call tools\nurlpkg\build.bat || exit /b 1
-
       # Bundle a self-contained zig, mirroring the Linux jobs. Windows
       # installs otherwise depend on a system LLVM for native builds, and
       # the wasmbuilder package needs zig's wasi-libc + wasm-ld for local
       # wasm32-wasi builds — bundling makes `nurlpkg install wasmbuilder`
       # work on a blank machine with no extra downloads.
+      #
+      # Fetched BEFORE the build: build.bat emits the MinGW-ABI
+      # stdlib\runtime.mingw.o only when it can see a zig, and that
+      # object is what the bundled zig links user programs against.
+      # Without it the archive ships a zig that cannot link anything,
+      # and the smoke test below would not catch it — this runner has
+      # LLVM installed, so nurl.bat would quietly fall back to clang.
       - name: Fetch bundled zig backend
         shell: pwsh
         run: |
@@ -306,6 +307,12 @@ jobs:
           Expand-Archive zig.zip -DestinationPath vendor
           Move-Item "vendor/zig-windows-x86_64-$zigVer" vendor/zig
           & vendor/zig/zig.exe version
+
+      - name: Build toolchain (nurlc + nurlpkg)
+        shell: cmd
+        run: |
+          call build.bat --no-tests || exit /b 1
+          call tools\nurlpkg\build.bat || exit /b 1
 
       - name: Assemble relocatable prefix
         shell: cmd
@@ -338,11 +345,28 @@ jobs:
           '@
           ($src -split "`n" | ForEach-Object { $_.TrimStart() }) -join "`n" |
             Set-Content -Path "$dir\s.nu" -Encoding utf8NoBOM
-          & cmd /c "call dist\nurl\bin\nurl.bat `"$dir\s.nu`" `"$dir\s`""
-          if ($LASTEXITCODE -ne 0) { throw "nurl.bat failed" }
-          $out = & "$dir\s.exe"
-          if ($LASTEXITCODE -ne 0) { throw "the built program failed" }
-          if ($out -ne "ok") { throw "unexpected output: $out" }
+          # The archive must carry the MinGW-ABI runtime, or the zig it
+          # bundles cannot link a thing. Assert it directly: this runner
+          # has LLVM, so nurl.bat would otherwise fall back to clang and
+          # the smoke test would pass while shipping a broken zig path.
+          if (-not (Test-Path "dist\nurl\stdlib\runtime.mingw.o")) {
+            throw "archive has no stdlib\runtime.mingw.o — the bundled zig cannot link"
+          }
+          # Build BOTH ways from the assembled prefix: bundled zig (what a
+          # machine without LLVM gets) and clang (what one with it gets).
+          # They link different runtime objects, so a break in one says
+          # nothing about the other.
+          foreach ($mode in @("zig", "clang")) {
+            if ($mode -eq "zig") { $env:NURL_ZIG = "$PWD\dist\nurl\zig\zig.exe" }
+            else                 { $env:NURL_ZIG = "$PWD\does-not-exist.exe" }
+            Remove-Item "$dir\s.exe" -ErrorAction SilentlyContinue
+            & cmd /c "call dist\nurl\bin\nurl.bat `"$dir\s.nu`" `"$dir\s`""
+            if ($LASTEXITCODE -ne 0) { throw "$mode : nurl.bat failed" }
+            $out = & "$dir\s.exe"
+            if ($LASTEXITCODE -ne 0) { throw "$mode : the built program failed" }
+            if ($out -ne "ok") { throw "$mode : unexpected output: $out" }
+            Write-Host "$mode OK"
+          }
 
       - name: Package
         shell: pwsh

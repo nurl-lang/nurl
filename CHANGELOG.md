@@ -8,6 +8,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Windows: the bundled zig could not link a program at all.** The
+  archive ships a zig so a machine with no Visual Studio can still build,
+  and 0.25.0 taught `nurl.bat` to prefer it — but nothing had ever driven
+  that path end to end. It failed three ways, each hidden behind the one
+  before it. `zig cc` targets `x86_64-windows-gnu`, so:
+  - `bcrypt` and `ws2_32` were requested only by `#pragma comment(lib,
+    ...)` directives inside `runtime.o`, which is how the MSVC toolchain
+    finds an import lib without anyone naming it. Under MinGW those
+    directives are mangled to `libbcrypt.a`, a name nothing in this
+    toolchain produces (zig synthesises `bcrypt.lib`), so the link died
+    on a file it could never open. The pragmas are now MSVC-only, as
+    `runtime_core.c` has always had them, and `nurl.bat` names the import
+    libs the way `nurlapi`'s mingw-w64 cross link always has.
+  - Underneath that, `runtime.o` is clang-built and therefore MSVC-ABI:
+    it references `_setjmp`, `__chkstk` and `_fltused`, none of which
+    MinGW's CRT provides. The two ABIs cannot share one object, so
+    `build.bat` now also emits `stdlib\runtime.mingw.o` with zig when a
+    zig is present, and `nurl.bat` links whichever object matches the
+    compiler it chose. Programs built through the bundled zig cannot use
+    the canvas FFI or the zstd FFI (both MSVC-only artifacts); the driver
+    now says so instead of leaving it to the linker.
+  - The release workflow fetched its zig *after* running `build.bat`, so
+    the archive would have shipped without the MinGW runtime — and its
+    smoke test would not have caught it, because the release runner has
+    LLVM and the driver falls back to clang. Both workflows now fetch zig
+    first, and the release smoke test asserts the object is in the
+    archive and builds a program both ways.
+- **A stale Windows golden.** `float_extra`'s expected output was written
+  in June and never grew the seven `erf`/`erfc` lines 0.25.0 added, so
+  Windows CI went red one push later. `tools/check_windows_goldens.sh`
+  now catches that shape from Linux — a Windows golden missing lines its
+  Linux counterpart has — since the Windows leg only runs on `main`.
+
 ## [0.25.0] — 2026-07-26
 
 The release that makes `packages/torchpt` and everything above it

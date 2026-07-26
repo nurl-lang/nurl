@@ -119,11 +119,38 @@ if exist "%ZIG_BIN%" (
     set "CC="%CLANG%""
 )
 
-REM ── Locate runtime.o ─────────────────────────────────────────
+REM ── Locate the runtime object matching that compiler's ABI ───
+REM Windows has two, and they are not interchangeable. runtime.o is
+REM clang-built, so MSVC-ABI: it references _setjmp, __chkstk and
+REM _fltused, none of which MinGW's CRT provides. The zig above targets
+REM x86_64-windows-gnu, so linking it against runtime.o fails on exactly
+REM those three. build.bat builds stdlib\runtime.mingw.o with zig for
+REM this path; pick whichever object matches the compiler chosen above.
 set "RUNTIME=%SCRIPTDIR%stdlib\runtime.o"
+set "MINGW_ABI=0"
+if "%USING_ZIG%"=="1" (
+    if exist "%SCRIPTDIR%stdlib\runtime.mingw.o" (
+        set "RUNTIME=%SCRIPTDIR%stdlib\runtime.mingw.o"
+        set "MINGW_ABI=1"
+    ) else (
+        REM Built on a box with no zig, so no MinGW runtime was produced.
+        REM clang's ABI matches the object we do have — use it rather than
+        REM emitting a link that cannot possibly resolve.
+        "%CLANG%" --version >nul 2>&1
+        if errorlevel 1 (
+            echo ERROR: the bundled zig needs stdlib\runtime.mingw.o, which this
+            echo        toolchain does not carry, and no clang was found either.
+            echo        Rebuild with build.bat on a box that has zig, or install
+            echo        LLVM ^(https://releases.llvm.org^) to link with clang.
+            exit /b 1
+        )
+        set "USING_ZIG=0"
+        set "CC="%CLANG%""
+    )
+)
 if not exist "%RUNTIME%" (
-    echo ERROR: stdlib\runtime.o not found at %RUNTIME%
-    echo        Run: clang -c stdlib\runtime.c -o stdlib\runtime.o
+    echo ERROR: !RUNTIME! not found
+    echo        Run build.bat to build the NURL stdlib first.
     exit /b 1
 )
 
@@ -189,6 +216,17 @@ set "SDL2_LIBDIR="
 set "SDL2_BINDIR="
 findstr /R /C:"@canvas_open\>" /C:"@canvas_present\>" /C:"@canvas_sleep\>" /C:"@canvas_should_close\>" /C:"@canvas_close\>" /C:"@canvas_mouse_x\>" /C:"@canvas_mouse_y\>" /C:"@canvas_mouse_btn\>" "%LLFILE%" >nul 2>&1
 if not errorlevel 1 (
+    REM canvas.o is clang-built and SDL2.lib is an MSVC import lib, so
+    REM neither can go into a MinGW image. Say so here rather than let the
+    REM linker report it as a pile of undefined symbols.
+    if "!MINGW_ABI!"=="1" (
+        echo ERROR: this program uses the canvas FFI, which needs canvas.o and
+        echo        SDL2 — both MSVC-ABI, while the bundled zig links MinGW.
+        echo        Build it with clang instead: install LLVM and re-run with
+        echo        NURL_ZIG set to a path that does not exist, e.g.
+        echo            set NURL_ZIG=none
+        exit /b 1
+    )
     set "CANVAS_O=%SCRIPTDIR%stdlib\canvas.o"
     if not exist "!CANVAS_O!" (
         echo ERROR: program uses canvas FFI but !CANVAS_O! is missing.
@@ -229,9 +267,10 @@ if not errorlevel 1 (
     )
 )
 
-REM Auto-link the FFI libs build.bat detected (issue #229). runtime.o is built
-REM with -DNURL_HAVE_ZLIB, so it references zlib's deflate/inflate and EVERY
-REM program needs zlib (zstd too for compress.nu users) at link time.
+REM Auto-link the FFI libs build.bat detected (issue #229). These are for
+REM programs whose own IR declares the zstd FFI (stdlib\ext\compress.nu);
+REM the runtime itself no longer needs them, since gzip/deflate became
+REM pure NURL in §8 P6 and -DNURL_HAVE_ZLIB stopped meaning anything.
 REM   - A shipped toolchain carries the static libs in stdlib\winlib\ plus a
 REM     relocatable fragment (winlibs.reloc) whose $NURL_LIB$ placeholder is
 REM     resolved against THIS prefix — self-contained, no vcpkg on the box.
@@ -244,6 +283,14 @@ if exist "%SCRIPTDIR%stdlib\winlib\winlibs.reloc" (
 ) else if exist "%SCRIPTDIR%stdlib\runtime.winlibs" (
     set /p WINLIBS=<"%SCRIPTDIR%stdlib\runtime.winlibs"
 )
+REM Those are vcpkg's MSVC static libs, which cannot go into a MinGW
+REM image. Nothing in the runtime references them (gzip/deflate have been
+REM pure NURL since §8 P6 — stdlib\std\deflate.nu), so dropping them
+REM leaves no dangling symbol here. What it does cost is a program that
+REM declares the zstd FFI itself (stdlib\ext\compress.nu's `& `zstd``):
+REM that one needs the import lib and so needs clang. It fails at link
+REM naming ZSTD_compress, which is at least a symbol worth searching for.
+if "!MINGW_ABI!"=="1" set "WINLIBS="
 if defined WINLIBS set "EXTRA_LIBS=!EXTRA_LIBS! !WINLIBS!"
 
 REM System import libs. The whole of runtime.o is linked in, so every
