@@ -102,7 +102,11 @@ jobs:
         env:
           # Both are read by bench.sh and land in the results file, so the
           # published table can say where its numbers came from.
-          BENCH_HOST_LABEL: GitHub Actions ubuntu-latest (2-vCPU / 7 GiB)
+          # Name the environment only. The core count, memory and CPU model
+          # are measured by bench.sh and land in the results file, so a
+          # hardcoded "2-vCPU / 7 GiB" here would eventually contradict them
+          # — as it did the first time this ran, on a runner reporting 4.
+          BENCH_HOST_LABEL: GitHub Actions ubuntu-latest runner
           BENCH_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         # A row whose five implementations disagree makes bench.sh exit
         # non-zero: the timings would be comparing different computations.

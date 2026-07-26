@@ -4,7 +4,7 @@
   "commit": "d127ed8c699807f512950a769695a997615dfc7c",
   "run_url": "https://github.com/nurl-lang/nurl/actions/runs/30219089921",
   "host": {
-    "label": "GitHub Actions ubuntu-latest (2-vCPU / 7 GiB)",
+    "label": "GitHub Actions ubuntu-latest runner",
     "kernel": "Linux 6.17.0-1020-azure x86_64",
     "cpu": "AMD EPYC 7763 64-Core Processor",
     "cores": 4,

@@ -9,7 +9,7 @@ page renders its table from.
 
 | Item | Value |
 |---|---|
-| Host | `GitHub Actions ubuntu-latest (2-vCPU / 7 GiB)` |
+| Host | `GitHub Actions ubuntu-latest runner` |
 | Kernel | `Linux 6.17.0-1020-azure x86_64` |
 | CPU | AMD EPYC 7763 64-Core Processor (4 logical cores) |
 | Memory | 16373460 KiB |
