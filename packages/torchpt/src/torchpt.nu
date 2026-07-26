@@ -50,7 +50,7 @@ $ `stdlib/std/fs.nu`
 $ `stdlib/std/bytes.nu`
 $ `stdlib/std/floatbits.nu`
 $ `stdlib/ext/zip.nu`
-$ `packages/torchpt/src/pickle.nu`
+$ `pickle.nu`
 
 // Up to 8 dimensions is more than any real checkpoint tensor uses; the
 // limit keeps the per-tensor record a fixed size.
