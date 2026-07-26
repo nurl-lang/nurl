@@ -101,6 +101,16 @@ jobs:
         # __free_str_vec class). Assert every stdlib @-function name is
         # globally unique.
         run: ./tools/check_stdlib_symbols.sh
+      - name: Windows goldens not stale (they are checked on main, not per-PR)
+        # outputs-windows/ is a parallel corpus and windows-tests.yml runs
+        # on pushes to main, so a PR that adds assertions updates outputs/
+        # and the Windows copy silently keeps the old expectation — the
+        # break lands on main, on whoever pushes next. float_extra went
+        # seven lines stale in July and reported FAIL weeks later. The
+        # shape (Windows missing lines, adding none) is detectable here,
+        # without a Windows machine.
+        run: ./tools/check_windows_goldens.sh
+
       - name: no packages/… self-imports (breaks registry installs)
         # In this repo every build runs from the root, so a
         # `$ \`packages/<name>/src/x.nu\`` import resolves and every test
