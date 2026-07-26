@@ -17535,8 +17535,49 @@
     ( emit `declare void @nurl_memcpy(i8*, i8*, i64)` )
     ( emit `declare void @nurl_memmove(i8*, i8*, i64)` )
     ( emit `declare void @nurl_memset(i8*, i64, i64)` )
-    ( emit `declare i64  @nurl_peek(i8*, i64)` )
-    ( emit `declare void @nurl_poke(i8*, i64, i64)` )
+    // ── The memory accessors are DEFINED here, not declared ───────
+    //
+    // `nurl_peek` is a null check and a load, and it is what every Vec
+    // index, every control-block read and every raw-pointer walk in the
+    // language goes through. Declared, it stays a CALL unless link-time
+    // optimisation inlines it — and LTO is exactly what is missing on
+    // the paths that matter: the bundled zig's LTO backend cannot be
+    // told to optimise, the wasm and static backends do not use it at
+    // all, and a user linking by hand rarely passes -flto. Measured on a
+    // real package's host-side work, per frame: 63 ms with these as
+    // calls, 31 ms with them inlined — and the 31 beats what clang WITH
+    // full LTO produced (33), because a definition in the module needs
+    // no cross-module reasoning at all.
+    //
+    // `linkonce_odr` + `alwaysinline` is the C++ inline-function shape:
+    // the module gets its own copy to inline, and runtime.o's strong
+    // definition still wins at link, so behaviour is unchanged and the
+    // symbol never conflicts. Target-independent IR, so every backend
+    // gets it.
+    ( emit `define linkonce_odr i64 @nurl_peek(i8* %p, i64 %i) alwaysinline {` )
+    ( emit `entry:` )
+    ( emit `  %pk.n = icmp eq i8* %p, null` )
+    ( emit `  br i1 %pk.n, label %pk.zero, label %pk.load` )
+    ( emit `pk.load:` )
+    ( emit `  %pk.b = bitcast i8* %p to i64*` )
+    ( emit `  %pk.e = getelementptr inbounds i64, i64* %pk.b, i64 %i` )
+    ( emit `  %pk.v = load i64, i64* %pk.e` )
+    ( emit `  ret i64 %pk.v` )
+    ( emit `pk.zero:` )
+    ( emit `  ret i64 0` )
+    ( emit `}` )
+    ( emit `define linkonce_odr void @nurl_poke(i8* %p, i64 %i, i64 %v) alwaysinline {` )
+    ( emit `entry:` )
+    ( emit `  %pw.n = icmp eq i8* %p, null` )
+    ( emit `  br i1 %pw.n, label %pw.done, label %pw.store` )
+    ( emit `pw.store:` )
+    ( emit `  %pw.b = bitcast i8* %p to i64*` )
+    ( emit `  %pw.e = getelementptr inbounds i64, i64* %pw.b, i64 %i` )
+    ( emit `  store i64 %v, i64* %pw.e` )
+    ( emit `  br label %pw.done` )
+    ( emit `pw.done:` )
+    ( emit `  ret void` )
+    ( emit `}` )
     ( emit `declare void @nurl_vec_drop(i8*, ptr, i64)` )
     // nurl_file_* (open/write/write_range/write_byte/close/read_chunk
     // /eof/exists/del/dir_create/dir_remove) are pure-NURL @-fns in
