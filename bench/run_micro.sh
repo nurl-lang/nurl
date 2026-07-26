@@ -86,6 +86,17 @@ have_rs=0;   command -v "$RUSTC" >/dev/null && have_rs=1
 # Optimisation flags. NURL's line is the one nurl.sh uses for a release
 # build: -flto is not a tuning choice, stdlib/runtime.o *is* LLVM
 # bitcode and will not link without it.
+#
+# Why the two stages are driven directly instead of through `nurl.sh`:
+# the driver runs the same `nurlc` and the same `clang` line and produces
+# a byte-identical binary, but it first probes the environment — link
+# probes against -lsqlite3, -lzstd and friends to decide which optional
+# libraries exist. That is ~200 ms of fixed cost per invocation, the same
+# for every input, and it is environment detection rather than
+# compilation of the program. Charging it to NURL's compile column
+# against a bare `clang x.c` (which has no analogue) would measure the
+# wrong thing. Anyone reproducing a single binary by hand with `nurl.sh`
+# gets the same output, just ~200 ms later.
 NURL_LL_FLAGS=(-O2 -flto -Wl,--as-needed)
 C_FLAGS=(-O2)
 RS_FLAGS=(-O)

@@ -55,7 +55,7 @@
     : ~ u64 k 0
     ~ < k iterations {
         = state & + * state 1664525 1013904223 0xffffffff
-        = . buf # i & k 63 | << state 32 state
+        = . buf & k 63 | << state 32 state
         = k + k 1
     }
 
