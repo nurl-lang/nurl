@@ -8,6 +8,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.25.1] — 2026-07-26
+
+A Windows repair release. 0.25.0 taught the driver to prefer the zig the
+archive has always bundled — the whole point of bundling it being that a
+machine with no Visual Studio can still build a program — and nothing had
+ever driven that path end to end. It could not link anything, in three
+different ways, each hidden behind the one before it. The release
+workflow would not have caught it either: that runner has LLVM, so the
+driver fell back to clang and passed.
+
+Nothing here changes the compiler or the language; every fix is in the
+Windows build and link path, plus the CI that was supposed to be watching
+it.
+
 ### Fixed
 
 - **Windows: the bundled zig could not link a program at all.** The
@@ -8785,7 +8799,9 @@ releases are measured.
   compile-server (`api/`), browser playground (`nurlweb/`).
 * Dual license: MIT (LICENSE-MIT) or Apache-2.0 (LICENSE-APACHE).
 
-[Unreleased]: https://github.com/nurl-lang/nurl/compare/v0.24.1...HEAD
+[Unreleased]: https://github.com/nurl-lang/nurl/compare/v0.25.1...HEAD
+[0.25.1]: https://github.com/nurl-lang/nurl/compare/v0.25.0...v0.25.1
+[0.25.0]: https://github.com/nurl-lang/nurl/compare/v0.24.1...v0.25.0
 [0.24.1]: https://github.com/nurl-lang/nurl/compare/v0.24.0...v0.24.1
 [0.24.0]: https://github.com/nurl-lang/nurl/compare/v0.23.0...v0.24.0
 [0.23.0]: https://github.com/nurl-lang/nurl/compare/v0.22.0...v0.23.0
