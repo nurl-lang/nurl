@@ -56,7 +56,7 @@
     : ~ u64 k 0
     ~ < k iterations {
         = state & + * state 1664525 1013904223 0xffffffff
-        : i index # i & state 63
+        : u64 index & state 63
         = . bins index + . bins index # u64 1
         = k + k 1
     }

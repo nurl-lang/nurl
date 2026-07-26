@@ -148,11 +148,30 @@ speed number for a program computing something else is worthless.
   rest is the `-flto` link against `stdlib/runtime.o`, a fixed cost every
   NURL binary pays. The report's floor row (an empty program) makes that
   visible so the marginal cost is readable.
+* The runner drives those two stages directly rather than going through
+  `nurl.sh`. The driver runs the same `nurlc` and the same `clang` line and
+  produces a **byte-identical** binary, but it first probes the environment
+  (trial links against `-lsqlite3`, `-lzstd`, …) for about **200 ms** per
+  invocation — fixed, input-independent, and environment detection rather
+  than compilation. Charging that to NURL's column against a bare
+  `clang x.c`, which has no analogue, would measure the wrong thing.
 * All three back ends are LLVM and all three are allowed to be clever —
   LLVM composes the affine LCG recurrence and folds several iterations
   into one multiply-add. A cell measures optimised throughput, not the
   source-level iteration count, and differing unroll factors between the
   languages are part of what is being measured.
+
+**Toolchain requirement.** `bloom_filter`, `hash_join`, `ring_write` and
+`histogram_bins` store at an index whose type is `u64`, which needs a
+`nurlc` that lowers the index operand of a store `getelementptr` — fixed
+in this tree, broken in 0.25.0 and earlier, where `nurlc` emits
+`getelementptr i64, i64* %p, u64 %idx` and the C compiler rejects the
+module with `error: expected type`. Build the set with the tree's
+`build/nurlc`, which is what `run_micro.sh` does. A second reason not to
+reach for an older installed toolchain: 0.25.0's driver prefers its
+bundled `zig cc`, which silently drops `-O` for `.ll` inputs, so its
+binaries come out `-O0` — measured here at 20× slower on `stream_lcg`
+and 4.4× on `sort_window`.
 
 `bench/allocator_stress.rs` was considered for this set and dropped: it
 was not self-contained (it `#[path]`-included a file from another

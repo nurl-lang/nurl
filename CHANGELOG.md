@@ -8,7 +8,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Fixed
 
 - **An array store at an unsigned index emitted invalid IR.** `= . p idx v`
   where `idx` had a sized unsigned type printed the NURL type name into
@@ -26,7 +25,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   implementations of each kernel, plus `bench/run_micro.sh` — a runner
   that times compilation and execution separately, gates the three
   languages against a byte-exact checksum, and writes a dated Markdown
-  report. See `bench/README.md`.
+  report. See `bench/README.md`. The runner sweeps `-O2` and `-O0` for
+  all three languages, extends the checksum gate across optimisation
+  levels as well as languages, and reports what the optimiser is worth
+  per language.
 
 ## [0.25.1] — 2026-07-26
 
