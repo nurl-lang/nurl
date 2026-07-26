@@ -1,8 +1,16 @@
 # NURL benchmarks
 
-Comparative micro-benchmarks between NURL and three peer languages:
-**Python 3** (interpreter), **Rust** (LLVM-backed compiled
-systems language), and **Node.js** (V8 JIT).
+Two independent benchmark sets live here:
+
+1. **The four-language set** — NURL against **Python 3** (interpreter),
+   **Rust** (LLVM-backed compiled systems language) and **Node.js**
+   (V8 JIT). Driven by [`run.sh`](run.sh); results in
+   [`RESULTS.md`](RESULTS.md).
+2. **The u64 kernel set** — NURL against **C** and **Rust** only, ten
+   deterministic integer kernels with a byte-exact cross-language
+   checksum gate, measuring **both compile time and run time**. Driven by
+   [`run_micro.sh`](run_micro.sh); see
+   [the u64 kernel set](#the-u64-kernel-set) below.
 
 ## Layout
 
@@ -34,6 +42,24 @@ bench/
 ├── rust_http_server/            — Rust hyper sibling (Cargo manifest + main.rs)
 ├── run_http.sh                  — HTTP-peer runner (uses oha for load gen)
 └── HTTP_RESULTS.md              — HTTP-peer captured numbers
+```
+
+The u64 kernel set sits alongside it, one file per language per kernel:
+
+```
+bench/
+├── affine_mix.{nu,c,rs}         — 50M chained affine steps over a 58-bit state
+├── stream_lcg.{nu,c,rs}         — 50M steps of a 32-bit LCG (the tightest loop)
+├── ring_write.{nu,c,rs}         — 50M LCG steps, each storing into a 64-slot ring
+├── packet_classifier.{nu,c,rs}  — 50M iterations picking one of two LCGs (50/50 branch)
+├── histogram_bins.{nu,c,rs}     — 20M increments of 64 bins at a data-dependent index
+├── prefix_scan.{nu,c,rs}        — 1M batches of "fill 16 slots, then running-sum them"
+├── binary_search.{nu,c,rs}      — 5M lower-bound searches over a 64-entry table
+├── sort_window.{nu,c,rs}        — 5M bubble-sorts of an 8-element window
+├── bloom_filter.{nu,c,rs}       — 256-word split-block Bloom filter, 1M queries
+├── hash_join.{nu,c,rs}          — 256-slot group-probed hash table behind a Bloom filter
+├── run_micro.sh                 — compile-time + run-time runner, writes the report below
+└── bench_results_YYYYMMDDHHMM.md — captured compile + run numbers
 ```
 
 ## Running
@@ -83,6 +109,56 @@ The four string tasks (`words`/`brackets`/`csv_sum`/`histogram`) were added as a
 
 The five algorithmic benches use a float64-safe LCG fill (modulus 2²⁰) so
 every language stays bit-exact without any i64-wrap special-casing.
+
+## The u64 kernel set
+
+Ten kernels, each with a NURL, C and Rust implementation of the *same*
+algorithm on `u64` arithmetic. Unlike the four-language set above, this
+one is aimed squarely at the compiled-language comparison, and it
+measures compile time as well as run time:
+
+```sh
+./bench/run_micro.sh                    # 5 timed compiles + 9 timed runs per cell
+./bench/run_micro.sh --bench hash_join  # one kernel
+./bench/run_micro.sh --reps 3 --compile-reps 1
+```
+
+The runner compiles everything first, writes the compile-time table, runs
+the correctness gate, then runs the binaries and appends the run-time
+table — all into `bench_results_YYYYMMDDHHMM.md`.
+
+**Protocol.** Every kernel is silent and returns `checksum & 0x7f` as its
+exit status, so nothing measures I/O. Built in verify mode it instead
+writes the 8 little-endian checksum bytes to stdout:
+
+| Language | Verify build | Verify invocation |
+|---|---|---|
+| NURL | (same binary) | `./x --verify` |
+| C | `clang -O2 -DBENCH_VERIFY x.c` | `./x` |
+| Rust | `rustc -O --cfg bench_verify x.rs` | `./x` |
+
+The three dumps must be byte-identical; the report says so per kernel.
+All ten currently agree, which is what makes the timings comparable — a
+speed number for a program computing something else is worthless.
+
+**Reading the numbers.** Two caveats the report repeats:
+
+* NURL's compile time is two stages, `nurlc` (IR) then `clang` (codegen +
+  link). The `nurlc` stage is single-digit milliseconds; nearly all of the
+  rest is the `-flto` link against `stdlib/runtime.o`, a fixed cost every
+  NURL binary pays. The report's floor row (an empty program) makes that
+  visible so the marginal cost is readable.
+* All three back ends are LLVM and all three are allowed to be clever —
+  LLVM composes the affine LCG recurrence and folds several iterations
+  into one multiply-add. A cell measures optimised throughput, not the
+  source-level iteration count, and differing unroll factors between the
+  languages are part of what is being measured.
+
+`bench/allocator_stress.rs` was considered for this set and dropped: it
+was not self-contained (it `#[path]`-included a file from another
+project), and a multi-threaded allocator stress test cannot have the
+deterministic byte-exact checksum gate the rest of the set relies on, so
+there was nothing honest to compare.
 
 ## Verifying correctness
 
