@@ -18,11 +18,17 @@ NURL takes a few design positions that are uncommon together:
 - **Single-owner memory + default-on static borrow checker** — auto-drop at scope exit, plus a diagnostic pass (on by default, `--no-borrowck` to disable) that catches use-after-move, alias-double-free, escaping closure-captures, and iterator invalidation as hard errors.
 - **LLVM-based codegen, broad platform reach** — one pipeline targets Linux, macOS, Windows, wasm32-wasi, RISC-V, and ARM64.
 
-A reproducible micro-benchmark suite lives in [`bench/`](bench/) — `bench/run.sh`
-compiles and runs one source file per language N times and prints a median-ms
-table. Captured numbers (compute and HTTP-server peer benchmarks) are in
-[`bench/RESULTS.md`](bench/RESULTS.md) and [`bench/HTTP_RESULTS.md`](bench/HTTP_RESULTS.md);
-they are machine-specific, so run the suite locally for figures you can trust.
+A reproducible benchmark suite lives in [`bench/`](bench/): 15 benchmarks
+implemented five times each — NURL, C, Rust, Node and Python — with every row
+gated on all five printing the same result before any of them is timed.
+`bench/bench.sh` runs the lot and writes [`bench/RESULTS.md`](bench/RESULTS.md)
+(run times, compile times, correctness gate, process-start-up floor) plus a
+machine-readable `bench/results/latest.json`, which is what nurl-lang.org
+renders its table from. The
+[`bench` workflow](.github/workflows/bench.yml) refreshes both weekly on a
+fixed CI runner. Numbers are machine-specific, so run the suite locally for
+figures you can trust. The HTTP-server peer benchmark is separate:
+[`bench/HTTP_RESULTS.md`](bench/HTTP_RESULTS.md).
 
 ---
 

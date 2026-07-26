@@ -1,18 +1,18 @@
-// benchmark-contract: branch-lcg32;seed=123456789;iterations=50000000;threshold=2147483648
+// benchmark-contract: branch-lcg32;seed=123456789;iterations=25000000;threshold=2147483648
 #include <inttypes.h>
 #include <stdint.h>
 #include <stdio.h>
 
-static inline void verify_checksum(uint64_t value) {
-#ifdef BENCH_VERIFY
-  fwrite(&value, sizeof(value), 1, stdout);
-#else
-  (void)value;
-#endif
+static inline void emit_checksum(uint64_t value) {
+  // Every peer prints this one line and nothing else; the 63-bit mask
+  // keeps the value printable by the languages without unsigned 64-bit
+  // integers (NURL's `i`, Python's signed int, JS BigInt) so the five
+  // outputs can be compared byte for byte.
+  printf("%llu\n", (unsigned long long)(value & 0x7fffffffffffffffULL));
 }
 
 int main(void) {
-  const uint64_t iterations = 50000000ULL;
+  const uint64_t iterations = 25000000ULL;
   const uint64_t threshold = 1ULL << 31;
   uint64_t state = 123456789ULL;
   uint64_t i = 0;
@@ -26,6 +26,6 @@ int main(void) {
     ++i;
   }
 
-  verify_checksum(state);
-  return (int)(state & 0x7fULL);
+  emit_checksum(state);
+  return 0;
 }

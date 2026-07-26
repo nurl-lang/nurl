@@ -1,7 +1,7 @@
-// benchmark-contract: bloom-filter;seed=123456789;build=10000;queries=1000000;words=256;lanes=4
+// benchmark-contract: bloom-filter;seed=123456789;build=10000;queries=4000000;words=256;lanes=4
 //
 // bloom_filter — build a 256-word split-block Bloom filter from 10k
-// 64-bit hashes, then run 1M membership queries against it. Each
+// 64-bit hashes, then run 4M membership queries against it. Each
 // operation touches 4 lanes, and every lane's word index and bit index
 // come from a different slice of the hash: 4 unpredictable loads per
 // query over a 2 KB working set that fits in L1.
@@ -11,37 +11,10 @@
 // `uint64_t filter[256]` / `[u64; 256]` on the stack. `lcg_step` takes
 // the state by pointer, mirroring the peers' `uint64_t*` / `&mut u64`.
 //
-// Peer protocol (matches bloom_filter.c / bloom_filter.rs): the process
-// normally prints nothing and reports the checksum through its exit
-// status (`checksum & 0x7f`). Passing `--verify` writes the 8
-// little-endian checksum bytes to stdout — the C peer spells that
-// `-DBENCH_VERIFY`, the Rust peer `--cfg bench_verify`.
-& `c` @ putchar i c → i
-
-@ emit_checksum u64 value → v {
-    : ~ u64 x value
-    : ~ i k 0
-    ~ < k 8 {
-        ( putchar # i & x 255 )
-        = x >> x 8
-        = k + k 1
-    }
-}
-
-@ verify_requested → b {
-    : i argc ( nurl_argc )
-    : ~ i k 1
-    ~ < k argc {
-        ? == ( strcmp ( nurl_argv k ) `--verify` ) 0 { ^ T } {}
-        = k + k 1
-    }
-    ^ F
-}
-
-@ finish u64 value → i {
-    ? ( verify_requested ) { ( emit_checksum value ) } {}
-    ^ # i & value 0x7f
-}
+// Contract: the process prints exactly one line — the checksum in
+// decimal, masked to 63 bits — and nothing else. `bench/bench.sh` gates
+// on all five language implementations printing the same line before it
+// reports a single timing number for the row.
 
 // One step of the 32-bit LCG, state held by pointer so a single stream
 // feeds both halves of every 64-bit hash.
@@ -96,7 +69,7 @@
 
     : ~ u64 hits 0
     = k 0
-    ~ < k 1000000 {
+    ~ < k 4000000 {
         : u64 high ( lcg_step st )
         : u64 low ( lcg_step st )
         = hits + hits ( split_block_maybe_contains filter | << high 32 low )
@@ -105,5 +78,6 @@
 
     ( free filter )
     ( free st )
-    ^ ( finish hits )
+    ( nurl_print_int # i & hits 0x7fffffffffffffff )
+    ^ 0
 }

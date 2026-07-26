@@ -1,13 +1,13 @@
-// benchmark-contract: ring-write;seed=123456789;iterations=50000000;words=64;value=state32x2
-const ITERATIONS: u64 = 50_000_000;
+// benchmark-contract: ring-write;seed=123456789;iterations=20000000;words=64;value=state32x2
+const ITERATIONS: u64 = 20_000_000;
 const WORDS: usize = 64;
 const SEED: u64 = 123_456_789;
 const MASK: u64 = 0xffff_ffff;
 
 fn finish(value: u64) -> ! {
-    #[cfg(bench_verify)]
-    std::io::Write::write_all(&mut std::io::stdout(), &value.to_le_bytes()).unwrap();
-    std::process::exit((value & 0x7f) as i32)
+    // See the C peer: one decimal line, masked to 63 bits.
+    println!("{}", value & 0x7fff_ffff_ffff_ffff);
+    std::process::exit(0)
 }
 
 fn main() {

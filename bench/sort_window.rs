@@ -1,12 +1,12 @@
-// benchmark-contract: sort-window;seed=123456789;iterations=5000000;width=8;algorithm=bubble
-const ITERATIONS: u64 = 5_000_000;
+// benchmark-contract: sort-window;seed=123456789;iterations=2000000;width=8;algorithm=bubble
+const ITERATIONS: u64 = 2_000_000;
 const SEED: u64 = 123_456_789;
 const MASK: u64 = 0xffff_ffff;
 
 fn finish(value: u64) -> ! {
-    #[cfg(bench_verify)]
-    std::io::Write::write_all(&mut std::io::stdout(), &value.to_le_bytes()).unwrap();
-    std::process::exit((value & 0x7f) as i32)
+    // See the C peer: one decimal line, masked to 63 bits.
+    println!("{}", value & 0x7fff_ffff_ffff_ffff);
+    std::process::exit(0)
 }
 
 fn bubble_sort8(arr: &mut [u64; 8]) {

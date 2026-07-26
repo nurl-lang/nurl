@@ -2,7 +2,7 @@
 # bench/perfstat.sh — build the u64 micro set with the current `build/nurlc`
 # and report retired instructions and core cycles for each binary.
 #
-# Why not wall clock: `bench/run_micro.sh` measures the whole process with
+# Why not wall clock: `bench/bench.sh` measures the whole process with
 # a millisecond-ish resolution and several per cent of run-to-run drift, so
 # anything under ~10 % there is indistinguishable from noise (the first
 # report of this set showed `histogram_bins` at 1.15× against C when the
@@ -20,7 +20,7 @@
 #   ./bench/perfstat.sh --cpu 4             # pin to a core (default: none)
 #   ./bench/perfstat.sh --no-build          # measure what is already built
 #
-# The build directory is bench/_build/perf, kept apart from run_micro.sh's.
+# The build directory is bench/_build/perf, kept apart from bench.sh's.
 set -u
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -36,8 +36,14 @@ AGAINST=""
 CPU=""
 DO_BUILD=1
 
-BENCHES=(affine_mix stream_lcg ring_write packet_classifier histogram_bins
-         prefix_scan binary_search sort_window bloom_filter hash_join)
+# The roster comes from bench/manifest.tsv, the same list bench.sh times,
+# so a benchmark added or retired there shows up here without a second
+# edit.
+BENCHES=()
+while IFS=$'\t' read -r name _rest; do
+    [[ -z "${name:-}" || "$name" == \#* ]] && continue
+    BENCHES+=("$name")
+done < "$BENCH/manifest.tsv"
 
 while (( $# > 0 )); do
     case "$1" in
@@ -65,13 +71,13 @@ if (( DO_BUILD )); then
     printf '                              \r' >&2
 fi
 
-# The checksum gate, cheaply: every binary must still report the same
-# `checksum & 0x7f` exit status it did before. A speed number for a
-# program that stopped computing the right thing is worthless.
+# The checksum gate, cheaply: every binary must still print the same line
+# it printed before. A speed number for a program that stopped computing
+# the right thing is worthless.
 declare -A INSTR CYCLES SUMS
 for n in "${BENCHES[@]}"; do
     printf '  …measuring %s\r' "$n" >&2
-    SUMS[$n]=$("$BUILD/${n}_nu" --verify | xxd -p)
+    SUMS[$n]=$(cd "$ROOT" && "$BUILD/${n}_nu")
     out=$("${PIN[@]}" perf stat -r "$REPS" -x, -e instructions,cycles "$BUILD/${n}_nu" 2>&1)
     INSTR[$n]=$(awk -F, '/instructions/{print $1}' <<< "$out")
     CYCLES[$n]=$(awk -F, '/cycles/{print $1}' <<< "$out")

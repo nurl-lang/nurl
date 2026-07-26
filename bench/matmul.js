@@ -1,5 +1,5 @@
-// matmul — multiply two 128x128 integer matrices, print the trace.
-const N = 128;
+// matmul — multiply two 256x256 integer matrices, print the trace.
+const N = 256;
 const a = new Array(N * N).fill(0);
 const b = new Array(N * N).fill(0);
 const c = new Array(N * N).fill(0);

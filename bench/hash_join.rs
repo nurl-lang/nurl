@@ -1,14 +1,15 @@
-// benchmark-contract: hash-join;seed=123456789;build=160;queries=500000;cap=256;bloom=64;group=16
+// benchmark-contract: hash-join;seed=123456789;build=160;queries=500000;cap=256;bloom=64;group=16;probe=alternating-built-random
 const CAP: usize = 256;
 const GROUP: u64 = 16;
 const BLOOM_WORDS: usize = 64;
 const COMPACT_CHUNK: usize = 64;
+const BUILD_ROWS: usize = 160;
 const SEED: u64 = 123_456_789;
 
 fn finish(value: u64) -> ! {
-    #[cfg(bench_verify)]
-    std::io::Write::write_all(&mut std::io::stdout(), &value.to_le_bytes()).unwrap();
-    std::process::exit((value & 0x7f) as i32)
+    // See the C peer: one decimal line, masked to 63 bits.
+    println!("{}", value & 0x7fff_ffff_ffff_ffff);
+    std::process::exit(0)
 }
 
 fn lcg_step(state: &mut u64) -> u64 {
@@ -171,8 +172,9 @@ fn main() {
     let mut table_vals = [0u64; CAP];
     let mut reducer_bloom = [0u64; BLOOM_WORDS];
     let mut compact = [0u64; COMPACT_CHUNK];
+    let mut built_keys = [0u64; BUILD_ROWS];
 
-    let build_rows = 160u64;
+    let build_rows = BUILD_ROWS as u64;
     let total_queries = 500_000u64;
     let use_partitioned = build_rows >= 128 && total_queries >= 200_000;
 
@@ -180,6 +182,7 @@ fn main() {
     while i < build_rows {
         let key = (lcg_step(&mut state) << 32) | lcg_step(&mut state);
         let val = (lcg_step(&mut state) << 32) | lcg_step(&mut state);
+        built_keys[i as usize] = key;
         bloom_add(&mut reducer_bloom, key);
         grouped_insert(
             &mut ctrl,
@@ -196,7 +199,16 @@ fn main() {
     let mut compact_len = 0usize;
     i = 0;
     while i < total_queries {
-        let probe_key = (lcg_step(&mut state) << 32) | lcg_step(&mut state);
+        // See the C peer: both LCG words are always drawn so the stream
+        // stays identical, and every second query probes a key that was
+        // actually built — a random 64-bit key never matches 160 rows.
+        let drawn_high = lcg_step(&mut state);
+        let drawn_low = lcg_step(&mut state);
+        let probe_key = if i & 1 == 0 {
+            built_keys[((i >> 1) % build_rows) as usize]
+        } else {
+            (drawn_high << 32) | drawn_low
+        };
         if bloom_maybe(&reducer_bloom, probe_key) {
             if let Some(v) =
                 grouped_probe(&ctrl, &table_keys, &table_vals, probe_key, use_partitioned)

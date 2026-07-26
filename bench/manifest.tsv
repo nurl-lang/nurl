@@ -1,0 +1,29 @@
+# bench/manifest.tsv — the timing roster.
+#
+# One row per benchmark, in report order. Every listed benchmark MUST have
+# all five implementations (<name>.nu, .c, .rs, .js, .py) and all five must
+# print the same single line; `bench/bench.sh` refuses to time a row whose
+# outputs disagree.
+#
+# Columns: name <TAB> blurb <TAB> what it measures
+#
+# Benchmarks that live in this directory but are NOT listed here are not
+# part of the timing suite: brackets, csv_sum, histogram, quicksort, rot13
+# and words are the held-out corpus for the generation-accuracy study in
+# genacc/ (their workloads are single short strings — they measure process
+# start-up, not a language), and http_server belongs to run_http.sh.
+lcg	100M-step 64-bit LCG	Loop-carried integer dependency; 64-bit wrap-around
+affine_mix	20M chained affine steps	Shift/add/mask chain over a 58-bit state, no multiply
+packet_classifier	25M unpredictable branches	A data-dependent 50/50 branch the predictor cannot learn
+ring_write	20M ring-buffer stores	Dependent store per iteration plus address computation
+histogram_bins	20M binned increments	Read-modify-write at a data-dependent index
+prefix_scan	1M 16-wide prefix scans	Store-bound fill then a serial load/add dependency chain
+binary_search	5M lower-bound searches	Pointer-chasing: each load address depends on the last compare
+sort_window	2M 8-element bubble sorts	Compare/branch/store mill over a 64-byte window
+bloom_filter	4M Bloom-filter queries	Four unpredictable loads per query over a 2 KB working set
+hash_join	500k hash-table probes	Cheap Bloom early-out plus a rare, branchy join path
+sieve	Sieve of Eratosthenes to 10M	Irregular-stride byte writes, then one linear scan
+fib	Recursive fib(35)	The function-call path: ~29.8M calls, no memoisation
+collatz	Longest Collatz chain below 100k	Control-flow-heavy inner loop with no array at all
+matmul	256x256 integer matrix product	Triple-nested loop, flat indexing, column-strided reads
+json_parse	20 parses of a 64 KB document	Allocator pressure, string handling, recursive descent

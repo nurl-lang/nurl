@@ -10,37 +10,10 @@
 // `bench/histogram.{nu,py,rs,js}` is an unrelated, older benchmark
 // (highest single-digit count in a string).
 //
-// Peer protocol (matches histogram_bins.c / histogram_bins.rs): the
-// process normally prints nothing and reports the checksum through its
-// exit status (`checksum & 0x7f`). Passing `--verify` writes the 8
-// little-endian checksum bytes to stdout — the C peer spells that
-// `-DBENCH_VERIFY`, the Rust peer `--cfg bench_verify`.
-& `c` @ putchar i c → i
-
-@ emit_checksum u64 value → v {
-    : ~ u64 x value
-    : ~ i k 0
-    ~ < k 8 {
-        ( putchar # i & x 255 )
-        = x >> x 8
-        = k + k 1
-    }
-}
-
-@ verify_requested → b {
-    : i argc ( nurl_argc )
-    : ~ i k 1
-    ~ < k argc {
-        ? == ( strcmp ( nurl_argv k ) `--verify` ) 0 { ^ T } {}
-        = k + k 1
-    }
-    ^ F
-}
-
-@ finish u64 value → i {
-    ? ( verify_requested ) { ( emit_checksum value ) } {}
-    ^ # i & value 0x7f
-}
+// Contract: the process prints exactly one line — the checksum in
+// decimal, masked to 63 bits — and nothing else. `bench/bench.sh` gates
+// on all five language implementations printing the same line before it
+// reports a single timing number for the row.
 
 @ main → i {
     : i bin_count 64
@@ -69,5 +42,6 @@
     }
 
     ( free bins )
-    ^ ( finish checksum )
+    ( nurl_print_int # i & checksum 0x7fffffffffffffff )
+    ^ 0
 }

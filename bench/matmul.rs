@@ -1,6 +1,6 @@
-// matmul — multiply two 128x128 integer matrices, print the trace.
+// matmul — multiply two 256x256 integer matrices, print the trace.
 fn main() {
-    let n = 128usize;
+    let n = 256usize;
     let mut a = vec![0i64; n * n];
     let mut b = vec![0i64; n * n];
     let mut c = vec![0i64; n * n];

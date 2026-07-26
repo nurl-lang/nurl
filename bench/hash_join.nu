@@ -1,4 +1,4 @@
-// benchmark-contract: hash-join;seed=123456789;build=160;queries=500000;cap=256;bloom=64;group=16
+// benchmark-contract: hash-join;seed=123456789;build=160;queries=500000;cap=256;bloom=64;group=16;probe=alternating-built-random
 //
 // hash_join — build a 256-slot open-addressed hash table (7-bit control
 // fingerprints, 16-wide group probing, partitioned into 4 sub-tables) from
@@ -12,37 +12,10 @@
 // `grouped_probe` returns `int` + out-param (C) / `Option<u64>` (Rust);
 // this file follows the C shape — `→ i` plus a one-slot `*u64` out.
 //
-// Peer protocol (matches hash_join.c / hash_join.rs): the process
-// normally prints nothing and reports the checksum through its exit
-// status (`checksum & 0x7f`). Passing `--verify` writes the 8
-// little-endian checksum bytes to stdout — the C peer spells that
-// `-DBENCH_VERIFY`, the Rust peer `--cfg bench_verify`.
-& `c` @ putchar i c → i
-
-@ emit_checksum u64 value → v {
-    : ~ u64 x value
-    : ~ i k 0
-    ~ < k 8 {
-        ( putchar # i & x 255 )
-        = x >> x 8
-        = k + k 1
-    }
-}
-
-@ verify_requested → b {
-    : i argc ( nurl_argc )
-    : ~ i k 1
-    ~ < k argc {
-        ? == ( strcmp ( nurl_argv k ) `--verify` ) 0 { ^ T } {}
-        = k + k 1
-    }
-    ^ F
-}
-
-@ finish u64 value → i {
-    ? ( verify_requested ) { ( emit_checksum value ) } {}
-    ^ # i & value 0x7f
-}
+// Contract: the process prints exactly one line — the checksum in
+// decimal, masked to 63 bits — and nothing else. `bench/bench.sh` gates
+// on all five language implementations printing the same line before it
+// reports a single timing number for the row.
 
 @ lcg_step * u64 st → u64 {
     : ~ u64 s . st 0
@@ -175,12 +148,14 @@
     : *u64 vals # *u64 ( malloc * cap 8 )
     : *u64 reducer_bloom # *u64 ( malloc * bloom_words 8 )
     : *u64 compact # *u64 ( malloc * compact_chunk 8 )
+    : *u64 built_keys # *u64 ( malloc * 160 8 )
     : *u64 out # *u64 ( malloc 8 )
     ( zero_block ctrl cap )
     ( zero_block keys cap )
     ( zero_block vals cap )
     ( zero_block reducer_bloom bloom_words )
     ( zero_block compact compact_chunk )
+    ( zero_block built_keys 160 )
     = . out 0 # u64 0
 
     : u64 build_rows 160
@@ -195,6 +170,7 @@
         : u64 val_high ( lcg_step st )
         : u64 val_low ( lcg_step st )
         : u64 val | << val_high 32 val_low
+        = . built_keys # i row key
         ( bloom_add reducer_bloom key )
         ( grouped_insert ctrl keys vals key val use_partitioned )
         = row + row 1
@@ -204,9 +180,17 @@
     : ~ i compact_len 0
     : ~ u64 query 0
     ~ < query total_queries {
-        : u64 probe_high ( lcg_step st )
-        : u64 probe_low ( lcg_step st )
-        : u64 probe_key | << probe_high 32 probe_low
+        // Both words are drawn on every query so the LCG stream advances
+        // identically down either side of the branch; every second query
+        // then probes a key that was actually built. A random 64-bit key
+        // never matches a 160-row table, which is why this benchmark used
+        // to checksum to zero: it measured only the Bloom reject path.
+        : u64 drawn_high ( lcg_step st )
+        : u64 drawn_low ( lcg_step st )
+        : ~ u64 probe_key | << drawn_high 32 drawn_low
+        ? == & query 1 0 {
+            = probe_key . built_keys # i % >> query 1 build_rows
+        } {}
 
         ? ( bloom_maybe reducer_bloom probe_key ) {
             ? == 1 ( grouped_probe ctrl keys vals probe_key use_partitioned out ) {
@@ -233,11 +217,13 @@
     }
 
     ( free out )
+    ( free built_keys )
     ( free compact )
     ( free reducer_bloom )
     ( free vals )
     ( free keys )
     ( free ctrl )
     ( free st )
-    ^ ( finish sum )
+    ( nurl_print_int # i & sum 0x7fffffffffffffff )
+    ^ 0
 }

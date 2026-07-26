@@ -1,26 +1,32 @@
 name: bench
 
-# Reproducible micro-benchmark runner. Closes the falsifiability gap
-# flagged in the external critic / TODO Tier 1.2: the README's
-# headline NURL-vs-Python/Rust/Node numbers were captured on one
-# specific machine (12-core Intel @ 3.5 GHz). This workflow runs the
-# same `bench/run.sh` script on a fixed `ubuntu-latest` runner (2-vCPU
-# / 7 GB RAM, GitHub's standard hosted spec) so anyone can compare
-# their local numbers against a stable baseline, and so a regression
-# that breaks one cell shows up as a commit-level diff in
-# `bench/RESULTS_CI.md` rather than going silently unnoticed.
+# Runs the whole benchmark suite — 15 benchmarks × 5 languages (NURL, C,
+# Rust, Node, Python) — on a fixed `ubuntu-latest` runner and commits the
+# result back to the repository:
 #
-# The CI numbers will NOT match the README table — the runner is
-# slower, noisier, and shares physical hardware with other tenants.
-# That is the point. README numbers stay as the "best known" figure
-# from real hardware; RESULTS_CI.md is the falsifiable, reproducible
-# baseline.
+#   bench/results/latest.json   machine-readable; nurlweb's publish step
+#                               (tools/gen-bench-table.mjs) renders the
+#                               landing page's table straight from it, so
+#                               the site's numbers are whatever this
+#                               workflow last measured
+#   bench/RESULTS.md            the same run for humans, including the
+#                               compile-time and correctness tables the
+#                               web page deliberately leaves out
+#
+# The numbers are runner numbers: a shared 2-vCPU VM is slower and noisier
+# than a workstation. That is the point — they are reproducible, anyone
+# can re-run this workflow on the same spec, and a regression shows up as
+# a commit-level diff instead of going unnoticed.
+#
+# Closes the falsifiability gap flagged in the external critic / TODO
+# Tier 1.2: the headline numbers used to come from one specific machine
+# with no way for a reader to check them.
 
 on:
-  # Source-change runs: any commit on main that touches the bench
-  # corpus, the compiler, the runtime, or this workflow. Uploads
-  # results as a workflow artifact but does NOT commit them back —
-  # avoids a commit storm during active development.
+  # Source-change runs: any commit on main that touches the benchmark
+  # corpus, the compiler or the runtime. Uploads an artifact but does NOT
+  # commit results back — that would be a commit storm during active
+  # development, and would re-trigger this workflow on every push.
   push:
     branches: [main]
     paths:
@@ -29,41 +35,41 @@ on:
       - 'stdlib/**'
       - '.github/workflows/bench.yml'
 
-  # Manual run + weekly drift check both commit results back to
-  # bench/RESULTS_CI.md so the visible numbers stay fresh even when
-  # the source code has not changed (runner microarchitecture drift,
-  # GitHub-side noise floor changes).
+  # Manual run + weekly drift check both commit the refreshed numbers, so
+  # the published table stays fresh even when nothing in the source moved
+  # (runner microarchitecture drift, toolchain bumps, noise-floor changes).
   workflow_dispatch:
   schedule:
     - cron: '0 6 * * 1'    # Monday 06:00 UTC
 
-# Cancel an older in-flight run when a new push lands on the same ref.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
-  contents: write          # for committing bench/RESULTS_CI.md back
+  contents: write          # for committing the refreshed results back
 
 jobs:
   bench:
-    name: lcg / sieve / json_parse on ubuntu-latest 2-vCPU
+    name: 15 benchmarks × NURL / C / Rust / Node / Python
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    # The suite is bounded by its slowest language, not by NURL: several
+    # of the u64 kernels take tens of seconds under CPython and Node
+    # BigInt. bench.sh keeps that finite by giving a slow cell fewer
+    # repetitions (its --budget-ms), but the matrix still needs room.
+    timeout-minutes: 120
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          # Need the full history so we can `git commit` + `git push`
-          # the refreshed RESULTS_CI.md back to main on manual /
-          # scheduled runs without rejecting on the upstream tip.
+          # Full history so the results commit can be pushed onto the
+          # upstream tip without a rejected non-fast-forward.
           fetch-depth: 0
 
-      - name: Install build deps (clang + Node + optional FFI libs)
-        # Same FFI-lib block as ci.yml so the bootstrap path is
-        # identical to the regular build. Node ships in the runner's
-        # base image; we just confirm the version we used.
+      - name: Install build deps (clang + FFI libs)
+        # Same FFI-lib block as ci.yml so the bootstrap path is identical
+        # to a regular build. Node and Python ship in the runner image.
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
@@ -75,118 +81,67 @@ jobs:
             libpq-dev \
             zlib1g-dev \
             libzstd-dev
-          clang --version
-          node --version
-          python3 --version
 
       - name: Install Rust (stable, minimal profile)
-        # rustup is faster + leaner than apt's rustc package and
-        # matches what bench/RESULTS.md was originally captured
-        # against.
         run: |
           curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
             | sh -s -- -y --default-toolchain stable --profile minimal
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
 
+      - name: Record toolchain versions
+        run: |
+          clang --version | head -1
+          rustc --version
+          node --version
+          python3 --version
+
       - name: Build nurlc (bootstrap fixed point + runtime.o)
         run: ./build.sh --no-tests
 
-      - name: Capture runner spec (kernel, CPU, RAM)
-        id: spec
-        # Stashed as a tiny Markdown blob so the results file can
-        # quote the exact runner config alongside the numbers. Pinned
-        # to the first matching `model name` line because the GH
-        # runner can occasionally list mixed SKUs across vCPUs.
-        run: |
-          {
-            echo 'KERNEL='"$(uname -srm)"
-            echo 'CPU='"$(grep -m1 'model name' /proc/cpuinfo | sed 's/.*: //')"
-            echo 'NPROC='"$(nproc)"
-            echo 'RAM_KB='"$(grep -m1 MemTotal /proc/meminfo | awk '{print $2}')"
-          } >> "$GITHUB_OUTPUT"
-
-      - name: Run bench/run.sh (5 iters per cell, 60 s per-run timeout)
-        id: bench
-        run: |
-          ./bench/run.sh --timeout 60 5 | tee /tmp/bench_output.md
-
-      - name: Compose bench/RESULTS_CI.md
+      - name: Run the suite
         env:
-          GH_SHA: ${{ github.sha }}
-          GH_SERVER: ${{ github.server_url }}
-          GH_REPO: ${{ github.repository }}
-          GH_RUN_ID: ${{ github.run_id }}
-          GH_OS: ${{ runner.os }}
-          SPEC_KERNEL: ${{ steps.spec.outputs.KERNEL }}
-          SPEC_CPU: ${{ steps.spec.outputs.CPU }}
-          SPEC_NPROC: ${{ steps.spec.outputs.NPROC }}
-          SPEC_RAM_KB: ${{ steps.spec.outputs.RAM_KB }}
-        run: |
-          NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-          {
-            echo "# Reproducible CI bench results"
-            echo
-            echo "> **Auto-generated by \`.github/workflows/bench.yml\`.** Do not edit"
-            echo "> by hand — your changes will be overwritten on the next run. For"
-            echo "> the hand-captured \"best-known\" numbers on real hardware see"
-            echo "> [\`RESULTS.md\`](RESULTS.md); this file is the reproducible"
-            echo "> falsifiable baseline."
-            echo
-            echo "| Field      | Value                                                         |"
-            echo "|------------|---------------------------------------------------------------|"
-            echo "| Captured   | ${NOW}                                                        |"
-            echo "| Commit     | [\`${GH_SHA}\`](${GH_SERVER}/${GH_REPO}/commit/${GH_SHA})      |"
-            echo "| Workflow   | [\`bench.yml\`](${GH_SERVER}/${GH_REPO}/actions/runs/${GH_RUN_ID}) |"
-            echo "| Runner     | \`${GH_OS}\` (\`ubuntu-latest\` / 2-vCPU / 7 GiB RAM)           |"
-            echo "| Kernel     | \`${SPEC_KERNEL}\`                                             |"
-            echo "| CPU        | \`${SPEC_CPU}\`                                                |"
-            echo "| nproc      | ${SPEC_NPROC}                                                 |"
-            echo "| MemTotal   | ${SPEC_RAM_KB} KiB                                            |"
-            echo "| Iterations | 5 per cell, median wall-clock ms                              |"
-            echo "| Timeout    | 60 s per run                                                  |"
-            echo
-            echo "## Numbers"
-            echo
-            echo '```'
-            cat /tmp/bench_output.md
-            echo '```'
-            echo
-            echo "## What these numbers say (and don't)"
-            echo
-            echo "* The runner is shared, virtualised, and noisier than dedicated"
-            echo "  hardware — expect cell-to-cell variance of 5-15 % across runs."
-            echo "* The point of this baseline is **direction**: a 2× regression in"
-            echo "  one cell between two runs of this workflow on the same runner spec"
-            echo "  is a real signal, even if the absolute numbers are noisier than the"
-            echo "  reference numbers in [\`RESULTS.md\`](RESULTS.md)."
-            echo "* Go is not in the table because it isn't installed by default on"
-            echo "  \`ubuntu-latest\` and we haven't yet committed to adding the"
-            echo "  install step."
-          } > bench/RESULTS_CI.md
+          # Both are read by bench.sh and land in the results file, so the
+          # published table can say where its numbers came from.
+          BENCH_HOST_LABEL: GitHub Actions ubuntu-latest (2-vCPU / 7 GiB)
+          BENCH_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        # A row whose five implementations disagree makes bench.sh exit
+        # non-zero: the timings would be comparing different computations.
+        run: ./bench/bench.sh --timeout 300
 
-      - name: Upload bench output as workflow artifact
-        # Always uploaded — covers push-triggered runs that don't
-        # commit results back.
+      - name: Publish the report to the run summary
+        # So the numbers are readable in the Actions UI without
+        # downloading an artifact or waiting for the site to publish.
+        if: always()
+        run: |
+          if [[ -f bench/RESULTS.md ]]; then
+            cat bench/RESULTS.md >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo '`bench/RESULTS.md` was not produced — the run failed before the report stage.' \
+              >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload results as a workflow artifact
+        # Always uploaded — this is how push-triggered runs surface their
+        # numbers without committing them.
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: bench-results-${{ github.run_id }}
           path: |
-            bench/RESULTS_CI.md
-            /tmp/bench_output.md
+            bench/results/latest.json
+            bench/RESULTS.md
           retention-days: 90
 
-      - name: Commit RESULTS_CI.md back to main
-        # Only on manual / scheduled runs — push-triggered runs would
-        # ping-pong forever if every commit re-triggered the bench
-        # workflow which then committed itself back.
+      - name: Commit refreshed results
+        # Manual / scheduled runs only; see the trigger comment above.
         if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
         run: |
-          if git diff --quiet bench/RESULTS_CI.md; then
-            echo "RESULTS_CI.md unchanged — nothing to commit."
+          if git diff --quiet -- bench/results/latest.json bench/RESULTS.md; then
+            echo "results unchanged — nothing to commit."
             exit 0
           fi
           git config user.name 'github-actions[bot]'
           git config user.email 'github-actions[bot]@users.noreply.github.com'
-          git add bench/RESULTS_CI.md
-          git commit -m "bench: refresh CI numbers ($(date -u +%Y-%m-%d))"
+          git add bench/results/latest.json bench/RESULTS.md
+          git commit -m "bench: refresh measured numbers ($(date -u +%Y-%m-%d))"
           git push

@@ -1,14 +1,14 @@
-// benchmark-contract: sort-window;seed=123456789;iterations=5000000;width=8;algorithm=bubble
+// benchmark-contract: sort-window;seed=123456789;iterations=2000000;width=8;algorithm=bubble
 #include <inttypes.h>
 #include <stdint.h>
 #include <stdio.h>
 
-static inline void verify_checksum(uint64_t value) {
-#ifdef BENCH_VERIFY
-  fwrite(&value, sizeof(value), 1, stdout);
-#else
-  (void)value;
-#endif
+static inline void emit_checksum(uint64_t value) {
+  // Every peer prints this one line and nothing else; the 63-bit mask
+  // keeps the value printable by the languages without unsigned 64-bit
+  // integers (NURL's `i`, Python's signed int, JS BigInt) so the five
+  // outputs can be compared byte for byte.
+  printf("%llu\n", (unsigned long long)(value & 0x7fffffffffffffffULL));
 }
 
 static inline void bubble_sort8(uint64_t arr[8]) {
@@ -24,7 +24,7 @@ static inline void bubble_sort8(uint64_t arr[8]) {
 }
 
 int main(void) {
-  const uint64_t iterations = 5000000ULL;
+  const uint64_t iterations = 2000000ULL;
   uint64_t state = 123456789ULL;
   uint64_t i = 0;
   uint64_t window[8] = {0ULL, 1ULL, 2ULL, 3ULL, 4ULL, 5ULL, 6ULL, 7ULL};
@@ -46,6 +46,6 @@ int main(void) {
     ++i;
   }
 
-  verify_checksum(state);
-  return (int)(state & 0x7fULL);
+  emit_checksum(state);
+  return 0;
 }

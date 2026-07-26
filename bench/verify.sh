@@ -1,10 +1,16 @@
 #!/usr/bin/env bash
-# bench/verify.sh — compile + run one benchmark in every available
-# language and assert their stdout is byte-identical. This is the
-# correctness gate for the token-efficiency corpus: a token comparison
-# only means something if every language computes the *same answer*.
+# bench/verify.sh — compile + run one program in every available language
+# and assert their stdout is byte-identical. This is the correctness gate
+# for the token-efficiency and generation-accuracy corpora (genacc/): a
+# token or accuracy comparison only means something if every language
+# computes the *same answer*.
 #
-# Usage:  ./bench/verify.sh fib collatz ...   (default: all *.nu benches)
+# The timing suite has its own gate built into `bench/bench.sh`, which
+# refuses to time a row whose five implementations disagree. This script
+# covers the other direction — the genacc tasks, several of which are
+# short string programs that are deliberately not benchmarks.
+#
+# Usage:  ./bench/verify.sh fib collatz ...   (default: the genacc tasks)
 set -u
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -34,7 +40,10 @@ run_js() { node "$BENCH/$1.js"; }
 
 benches=("$@")
 if (( ${#benches[@]} == 0 )); then
-    for f in "$BENCH"/*.nu; do benches+=("$(basename "$f" .nu)"); done
+    # The genacc task list (bench/genacc/tasks.json). Not every .nu file
+    # in this directory belongs here: http_server.nu never exits, and
+    # stdlib_hotpath.nu has no peers to compare against.
+    benches=(fib collatz rot13 matmul quicksort sieve lcg words brackets csv_sum histogram)
 fi
 
 fail=0

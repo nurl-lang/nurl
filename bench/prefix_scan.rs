@@ -3,9 +3,9 @@ const BATCHES: u64 = 1_000_000;
 const SEED: u64 = 123_456_789;
 
 fn finish(value: u64) -> ! {
-    #[cfg(bench_verify)]
-    std::io::Write::write_all(&mut std::io::stdout(), &value.to_le_bytes()).unwrap();
-    std::process::exit((value & 0x7f) as i32)
+    // See the C peer: one decimal line, masked to 63 bits.
+    println!("{}", value & 0x7fff_ffff_ffff_ffff);
+    std::process::exit(0)
 }
 
 fn main() {
