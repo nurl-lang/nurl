@@ -8,6 +8,67 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **One benchmark suite instead of two, five languages instead of
+  three-or-four, and the landing page's table now comes out of the
+  measurements instead of out of someone's memory.** `bench/` carried two
+  runners with overlapping corpora — `run.sh` (3 benchmarks × NURL /
+  Python / Rust / Node) and `run_micro.sh` (10 u64 kernels × NURL / C /
+  Rust) — each with its own protocol, its own report format, and no
+  language in common across the whole set. They are replaced by
+  `bench/bench.sh`: one runner, one roster (`bench/manifest.tsv`), one
+  contract, and every benchmark implemented in **all five** of NURL, C,
+  Rust, Node and Python.
+
+  - **The contract is now uniform.** Every implementation prints exactly
+    one line — its checksum in decimal, masked to 63 bits so the
+    languages without an unsigned 64-bit type can print it. The runner
+    compares all five lines and refuses to time a row whose
+    implementations disagree, which replaces the u64 set's dual-build
+    `--verify` / `-DBENCH_VERIFY` / `--cfg bench_verify` machinery (and
+    halves its compiles).
+  - **31 implementations written** to fill the matrix: C for `lcg`,
+    `sieve`, `fib`, `collatz`, `matmul` and `json_parse`; Python and Node
+    for the nine u64 kernels. Where a kernel is genuinely 64-bit wide,
+    the Node port uses `BigInt`, and where 32 bits suffice it uses
+    Numbers with `Math.imul`; each file states which and why, and the
+    checksum gate is what keeps "each language at its fastest exact
+    representation" from drifting into "each language computing
+    something else".
+  - **`hash_join` was measuring nothing.** Its checksum was all-zero in
+    every report because probe keys were drawn at random from a 64-bit
+    space and a 160-row table never matched one — so the benchmark only
+    ever exercised the Bloom filter's reject path, which the report
+    dutifully noted and nobody acted on. Every second query now probes a
+    key that was actually built, with the LCG stream advanced identically
+    on both sides of the branch.
+  - **`stream_lcg` removed** as a duplicate: it was `lcg` with 32-bit
+    constants, so it made the table longer without making it say
+    anything new. No two rows in the suite now measure the same shape.
+  - **Workloads retuned** so the compiled languages land in a range wall
+    clock can resolve and the interpreted ones stay finite: `matmul`
+    128 → 256, `json_parse` 5 → 20 parses, `bloom_filter` 1M → 4M
+    queries, `sort_window` 5M → 2M, `affine_mix` / `ring_write` 50M →
+    20M, `packet_classifier` 50M → 25M. Slow cells get fewer repetitions
+    (`--budget-ms`) rather than a shorter workload, so every language
+    runs the same computation.
+  - **Two artefacts per run**: `bench/results/latest.json`
+    (machine-readable) and `bench/RESULTS.md` (run times, compile times,
+    correctness gate, and a process-start-up floor row to subtract).
+    `.github/workflows/bench.yml` runs the suite weekly and on demand and
+    commits both.
+  - **nurl-lang.org's "Measured, not promised" table is generated** from
+    that JSON at publish time by `tools/gen-bench-table.mjs`, wired into
+    nurlweb's `predeploy` hook. The page stays 100 % static at serve time
+    and can no longer drift from the measurements: the three hand-typed
+    rows are gone, replaced by all fifteen, with the fastest cell in each
+    row highlighted.
+  - `bench/verify.sh` now defaults to the `genacc/` task list (it is the
+    correctness gate for the generation-accuracy and token studies, whose
+    string tasks are deliberately not benchmarks), and `bench/perfstat.sh`
+    reads the roster from `manifest.tsv` and the new one-line checksum.
+
 ### Performance
 
 - **The runtime's allocation counters cost more than the allocations

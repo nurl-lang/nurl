@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-# matmul — multiply two 128x128 integer matrices, print the trace.
-N = 128
+# matmul — multiply two 256x256 integer matrices, print the trace.
+N = 256
 a = [0] * (N * N)
 b = [0] * (N * N)
 c = [0] * (N * N)

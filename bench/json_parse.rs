@@ -1,4 +1,4 @@
-// json_parse — parse bench/data.json 50 times.
+// json_parse — parse bench/data.json 20 times.
 // No serde_json (it's a separate crate); we link a tiny embedded
 // recursive-descent parser to match the "what's in the box" baseline:
 // each language uses the parser shipped with its stdlib + this file,
@@ -103,7 +103,7 @@ fn main() {
     let mut src = Vec::new();
     File::open(&path).unwrap().read_to_end(&mut src).unwrap();
     let mut ok = 0u32;
-    for _ in 0..5 {
+    for _ in 0..20 {
         let mut p = P { s: &src, i: 0 };
         if p.parse().is_some() { ok += 1; }
     }

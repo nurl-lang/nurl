@@ -2,12 +2,12 @@
 #include <stdint.h>
 #include <stdio.h>
 
-static inline void verify_checksum(uint64_t value) {
-#ifdef BENCH_VERIFY
-  fwrite(&value, sizeof(value), 1, stdout);
-#else
-  (void)value;
-#endif
+static inline void emit_checksum(uint64_t value) {
+  // Every peer prints this one line and nothing else; the 63-bit mask
+  // keeps the value printable by the languages without unsigned 64-bit
+  // integers (NURL's `i`, Python's signed int, JS BigInt) so the five
+  // outputs can be compared byte for byte.
+  printf("%llu\n", (unsigned long long)(value & 0x7fffffffffffffffULL));
 }
 
 int main(void) {
@@ -35,6 +35,6 @@ int main(void) {
   }
 
   uint64_t result = state ^ checksum;
-  verify_checksum(result);
-  return (int)(result & 0x7fULL);
+  emit_checksum(result);
+  return 0;
 }

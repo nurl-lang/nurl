@@ -6,7 +6,8 @@
     "dev": "wrangler dev",
     "facts": "bash ../tools/gen-site-facts.sh",
     "sync-installers": "cp ../tools/get-nurl.sh public/install.sh && cp ../tools/get-nurl.ps1 public/install.ps1",
-    "predeploy": "bash ../tools/gen-site-facts.sh && npm run sync-installers",
+    "bench-table": "node ../tools/gen-bench-table.mjs",
+    "predeploy": "bash ../tools/gen-site-facts.sh && npm run bench-table && npm run sync-installers",
     "deploy": "wrangler deploy"
   },
   "devDependencies": {

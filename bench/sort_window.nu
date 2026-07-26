@@ -1,6 +1,6 @@
-// benchmark-contract: sort-window;seed=123456789;iterations=5000000;width=8;algorithm=bubble
+// benchmark-contract: sort-window;seed=123456789;iterations=2000000;width=8;algorithm=bubble
 //
-// sort_window — 5M iterations of "derive 8 values from the LCG state,
+// sort_window — 2M iterations of "derive 8 values from the LCG state,
 // bubble-sort them, fold the extremes back into the state". 8 passes ×
 // up to 7 compare-and-maybe-swap steps per iteration, all on the same
 // 64-byte window: a compare/branch/store mill with a loop-carried
@@ -10,37 +10,10 @@
 // `*u64` block, where the C and Rust peers use `uint64_t window[8]` /
 // `[u64; 8]` on the stack.
 //
-// Peer protocol (matches sort_window.c / sort_window.rs): the process
-// normally prints nothing and reports the checksum through its exit
-// status (`checksum & 0x7f`). Passing `--verify` writes the 8
-// little-endian checksum bytes to stdout — the C peer spells that
-// `-DBENCH_VERIFY`, the Rust peer `--cfg bench_verify`.
-& `c` @ putchar i c → i
-
-@ emit_checksum u64 value → v {
-    : ~ u64 x value
-    : ~ i k 0
-    ~ < k 8 {
-        ( putchar # i & x 255 )
-        = x >> x 8
-        = k + k 1
-    }
-}
-
-@ verify_requested → b {
-    : i argc ( nurl_argc )
-    : ~ i k 1
-    ~ < k argc {
-        ? == ( strcmp ( nurl_argv k ) `--verify` ) 0 { ^ T } {}
-        = k + k 1
-    }
-    ^ F
-}
-
-@ finish u64 value → i {
-    ? ( verify_requested ) { ( emit_checksum value ) } {}
-    ^ # i & value 0x7f
-}
+// Contract: the process prints exactly one line — the checksum in
+// decimal, masked to 63 bits — and nothing else. `bench/bench.sh` gates
+// on all five language implementations printing the same line before it
+// reports a single timing number for the row.
 
 // Textbook bubble sort over 8 slots: 8 passes, each shrinking the
 // unsorted prefix by one. Kept deliberately naive so every language
@@ -63,7 +36,7 @@
 }
 
 @ main → i {
-    : u64 iterations 5000000
+    : u64 iterations 2000000
     : u64 mask 0xffffffff
     : *u64 window # *u64 ( malloc * 8 8 )
     : ~ i z 0
@@ -93,5 +66,6 @@
     }
 
     ( free window )
-    ^ ( finish state )
+    ( nurl_print_int # i & state 0x7fffffffffffffff )
+    ^ 0
 }
