@@ -10,6 +10,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The compiler is 34% faster and uses a third of the memory.** A
+  self-compile went 0.83 s → 0.55 s and peak RSS 405 MB → 122 MB, with
+  the IR and diagnostics of all 1121 `.nu` files in the tree byte-for-byte
+  unchanged. The borrow checker was 56% of a compile; it is now 40%.
+  Four findings, all of them shape rather than constant:
+  - **The symbol table was being used as an accumulator, and `def`
+    shadows rather than replaces.** `bck_record` appended one line per
+    statement by fetching the whole accumulated list (a `strdup`),
+    concatenating, and defining it back (another `strdup`) — three
+    copies of the entire list per statement, with every older copy left
+    in the table because a define pushes a new entry. That is O(N²) time
+    AND O(N²) live memory per function. `nurl_sym_set` overwrites in
+    place when the newest entry is at the current depth (which is always,
+    for a table that is never pushed or popped), and `nurl_sym_append`
+    grows the value with one `nurl_realloc`. This is where most of both
+    wins came from.
+  - **62% of symbol lookups built their key just to hash it.**
+    Metadata queries are keyed `<name>__field_count`,
+    `<name>__variants` and so on — 740k per self-compile, each
+    materialising the key with a malloc, two memcpys and a free.
+    `nurl_sym_get2` takes the two parts and never joins them: FNV-1a is
+    a streaming hash, so the hash of the parts IS the hash of the
+    concatenation, and the chain compare comes apart the same way.
+  - **`str_contains_word` re-sliced the tail per word.** The same shape
+    already found and fixed inside the borrow checker's state lookup was
+    still in the helper 87 call sites use: `str_first_word` scans with
+    `nurl_str_get` (strlen per byte) and allocates the word,
+    `str_skip_word` allocates a copy of the whole remaining tail. O(L²)
+    bytes and 2W mallocs per containment test. It searches for the word
+    and checks the boundaries now, allocating nothing.
+  - **The borrow checker's state lookup walked token by token**, calling
+    `memmem` once per token to find the next separator — ~100 calls per
+    lookup on a 1 KB state, 41M of them per self-compile, each scanning
+    ten bytes, where the call overhead *is* the cost. One search for the
+    name replaces the whole walk.
+  - Also: `nurl_sym_len` / `nurl_sym_len2` answer "is this set?" without
+    copying the value out, at the 77 sites that asked
+    `nurl_str_len ( nurl_sym_get … )`.
+
+### Changed
+
 - **`nurl_str_float` searched linearly for the shortest round-tripping
   decimal.** It tried `%.1g`, `%.2g`, … up to `%.17g`, parsing each back
   with `strtod` until one matched — seventeen `snprintf` + `strtod` pairs
