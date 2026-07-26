@@ -52,8 +52,8 @@ and `perfstat.sh` read.
 
 | Benchmark | Shape |
 |---|---|
-| `lcg` | Loop-carried integer dependency, 64-bit wrap-around |
-| `affine_mix` | Shift/add/mask chain over a 58-bit state, no multiply |
+| `lcg` | Loop-carried mul/add/shift/xor dependency the unroller cannot compose |
+| `affine_mix` | Shift/add/mask/xor chain over a 58-bit state, no multiply |
 | `packet_classifier` | A data-dependent 50/50 branch the predictor cannot learn |
 | `ring_write` | Dependent store per iteration plus address computation |
 | `histogram_bins` | Read-modify-write at a data-dependent index |

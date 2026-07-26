@@ -798,11 +798,183 @@ static unsigned long long nurl__actr_total(int freed) {
     return t;
 }
 
+/* ── §9a  Small-allocation cache ────────────────────────────────
+ *
+ * Allocation-heavy NURL code (every String and Vec buffer routes
+ * through nurl_alloc / nurl_free) spends most of its allocator time in
+ * libc's malloc/free slow paths: parsing bench/data.json is ~9 000
+ * nurl_alloc calls per pass and _int_malloc + _int_free alone were
+ * ~45 % of the whole parse. Nearly all of those blocks are small and
+ * short-lived, so freed blocks are recycled here instead of returned to
+ * libc: per-thread singly-linked freelists in six power-of-two size
+ * classes, 16..512 bytes. A freed block still carries its libc chunk
+ * (we never touch the malloc header), so the class is recovered from
+ * malloc_usable_size at free time and a cached block can always be
+ * handed back to libc later — realloc on a recycled block also keeps
+ * working unchanged.
+ *
+ *   - alloc: try the floor class of the request first (its head block
+ *     might be big enough — glibc's minimum 24-byte-usable chunk serves
+ *     most string buffers this way), else the next class up, whose
+ *     blocks are all guaranteed to fit. Miss → plain malloc.
+ *   - free: push into the floor class of the block's usable size,
+ *     unless that class already holds 1 MB — then give it to libc.
+ *   - the panic-unwind journal drains with raw free() and is unaffected;
+ *     nurl_free removes journal entries before recycling, same as
+ *     before.
+ *
+ * Per-thread heads mean no locking; a block may migrate threads through
+ * the cache, which is fine — it stays an ordinary libc chunk. The cache
+ * is compiled out under AddressSanitizer (recycling would blind ASan's
+ * use-after-free and leak checks) and on libcs with no usable-size
+ * query; NURL_ALLOC_CACHE=0 disables it at run time. */
+#if defined(__SANITIZE_ADDRESS__)
+#  define NURL__SC_ASAN 1
+#elif defined(__has_feature)
+#  if __has_feature(address_sanitizer)
+#    define NURL__SC_ASAN 1
+#  endif
+#endif
+#if !defined(NURL__SC_ASAN) && !defined(__wasi__) && \
+    (defined(__GLIBC__) || defined(__APPLE__) || defined(_WIN32) || defined(__linux__))
+#  define NURL__SC_ENABLED 1
+#  if defined(__APPLE__)
+#    include <malloc/malloc.h>
+#    define nurl__sc_usable(p) malloc_size(p)
+#  elif defined(_WIN32)
+#    include <malloc.h>
+#    define nurl__sc_usable(p) _msize(p)
+#  else
+#    include <malloc.h>
+#    define nurl__sc_usable(p) malloc_usable_size(p)
+#  endif
+/* A thread's cached blocks must go back to libc when the thread exits,
+ * or a thread-churning server strands up to the class budgets per
+ * exited thread. pthread_key destructors run in the exiting thread with
+ * its TLS intact, which is exactly the hook needed. MSVC-target clang
+ * has no <pthread.h> (see the §13 mutex shims) and no equivalent
+ * destructor hook here — the cache stays off there rather than leak. */
+#  ifdef _WIN32
+#    if defined(__has_include) && __has_include(<pthread.h>)
+#      include <pthread.h>   /* winpthreads (mingw-w64) */
+#    else
+#      undef NURL__SC_ENABLED
+#    endif
+#  else
+#    include <pthread.h>
+#  endif
+#endif
+
+#ifdef NURL__SC_ENABLED
+enum {
+    NURL__SC_MIN_SHIFT = 4,                    /* smallest class: 16 B  */
+    NURL__SC_MAX_SHIFT = 9,                    /* largest class:  512 B */
+    NURL__SC_CLASSES   = NURL__SC_MAX_SHIFT - NURL__SC_MIN_SHIFT + 1,
+    NURL__SC_CLASS_BUDGET_SHIFT = 20,          /* 1 MB cached per class */
+};
+static __thread void     *nurl__sc_head [NURL__SC_CLASSES];
+static __thread unsigned  nurl__sc_count[NURL__SC_CLASSES];
+static __thread int       nurl__sc_registered;
+static int nurl__sc_on = -1;   /* -1 unknown, 0 off, 1 on; benign race */
+
+static pthread_key_t  nurl__sc_key;
+static pthread_once_t nurl__sc_once = PTHREAD_ONCE_INIT;
+static void nurl__sc_thread_flush(void *unused) {
+    (void)unused;
+    for (int c = 0; c < NURL__SC_CLASSES; c++) {
+        void *p = nurl__sc_head[c];
+        while (p) { void *n = *(void**)p; free(p); p = n; }
+        nurl__sc_head[c]  = NULL;
+        nurl__sc_count[c] = 0;
+    }
+}
+static void nurl__sc_make_key(void) {
+    pthread_key_create(&nurl__sc_key, nurl__sc_thread_flush);
+}
+__attribute__((noinline, cold))
+static void nurl__sc_register(void) {
+    nurl__sc_registered = 1;
+    pthread_once(&nurl__sc_once, nurl__sc_make_key);
+    /* Any non-NULL value: the destructor only needs to fire. If the
+     * key failed to create this is a no-op and thread exit strands the
+     * cache — best effort, bounded by the class budgets. */
+    pthread_setspecific(nurl__sc_key, (void*)1);
+}
+
+__attribute__((noinline, cold))
+static int nurl__sc_init(void) {
+    const char *e = getenv("NURL_ALLOC_CACHE");
+    nurl__sc_on = !(e && e[0] == '0' && e[1] == '\0');
+    return nurl__sc_on;
+}
+static inline int nurl__sc_live(void) {
+    int on = nurl__sc_on;
+    return __builtin_expect(on >= 0, 1) ? on : nurl__sc_init();
+}
+/* Floor size class of n (clamped to class 0 below 16), or -1 above the
+ * largest class. */
+static inline int nurl__sc_floor_class(size_t n) {
+    if (n < (1u << (NURL__SC_MIN_SHIFT + 1))) return 0;
+    if (n > (1u << NURL__SC_MAX_SHIFT))       return -1;
+    return (63 - __builtin_clzll((unsigned long long)n)) - NURL__SC_MIN_SHIFT;
+}
+/* A cached block holds its freelist link in bytes [0,8) and its libc
+ * usable size in bytes [8,16) — every class block is ≥ 16 bytes, and
+ * caching the size means the alloc path never calls into libc's
+ * usable-size query (a PLT call that showed up at ~7 % of an
+ * allocation-heavy parse). */
+static inline void *nurl__sc_pop(size_t n) {
+    int c = nurl__sc_floor_class(n);
+    if (c < 0 || !nurl__sc_live()) return NULL;
+    void *p = nurl__sc_head[c];
+    /* The floor class holds blocks of usable size [2^k, 2^(k+1)) with
+     * n in the same range, so the head merely MIGHT fit — check its
+     * stored size. One class up every block fits by construction. */
+    if (p && ((size_t*)p)[1] >= n) {
+        nurl__sc_head[c] = *(void**)p;
+        nurl__sc_count[c]--;
+        return p;
+    }
+    if (++c < NURL__SC_CLASSES && (p = nurl__sc_head[c]) != NULL) {
+        nurl__sc_head[c] = *(void**)p;
+        nurl__sc_count[c]--;
+        return p;
+    }
+    return NULL;
+}
+static inline int nurl__sc_push(void *p) {
+    if (!nurl__sc_live()) return 0;
+    size_t u = nurl__sc_usable(p);
+    int c = nurl__sc_floor_class(u);
+    if (c < 0 || u < (1u << NURL__SC_MIN_SHIFT)) return 0;
+    if (nurl__sc_count[c] >=
+        (1u << (NURL__SC_CLASS_BUDGET_SHIFT - (c + NURL__SC_MIN_SHIFT)))) return 0;
+    if (__builtin_expect(!nurl__sc_registered, 0)) nurl__sc_register();
+    *(void**)p = nurl__sc_head[c];
+    ((size_t*)p)[1] = u;
+    nurl__sc_head[c] = p;
+    nurl__sc_count[c]++;
+    return 1;
+}
+#else
+static inline void *nurl__sc_pop(size_t n)  { (void)n; return NULL; }
+static inline int   nurl__sc_push(void *p)  { (void)p; return 0; }
+#endif
+
 /* OOM aborts inside the checked wrappers at the top of this file (see
  * "OOM is fatal, loudly") — malloc/calloc here are already the checked
  * forms via the file-wide macros. */
-void* nurl_alloc(long long bytes)              { nurl__actr_bump(&nurl__actr_slot()->alloc); return malloc((size_t)bytes); }
-void* nurl_zalloc(long long bytes)             { nurl__actr_bump(&nurl__actr_slot()->alloc); return calloc(1, (size_t)bytes); }
+void* nurl_alloc(long long bytes) {
+    nurl__actr_bump(&nurl__actr_slot()->alloc);
+    void *p = nurl__sc_pop((size_t)bytes);
+    return p ? p : malloc((size_t)bytes);
+}
+void* nurl_zalloc(long long bytes) {
+    nurl__actr_bump(&nurl__actr_slot()->alloc);
+    void *p = nurl__sc_pop((size_t)bytes);
+    if (p) { memset(p, 0, (size_t)bytes); return p; }
+    return calloc(1, (size_t)bytes);
+}
 long long nurl_alloc_count(void)               { return (long long)nurl__actr_total(0); }
 long long nurl_free_count(void)                { return (long long)nurl__actr_total(1); }
 void* nurl_realloc(void *ptr, long long bytes) { return realloc(ptr, (size_t)bytes); }
@@ -927,7 +1099,7 @@ static void nurl__jrnl_drain(long long mark) {
     nurl__jrnl_len = mark;
 }
 
-void  nurl_free(void *ptr)                     { if (!ptr) return; nurl__actr_bump(&nurl__actr_slot()->freed); if (nurl__jrnl_len) nurl__jrnl_remove(ptr); free(ptr); }
+void  nurl_free(void *ptr)                     { if (!ptr) return; nurl__actr_bump(&nurl__actr_slot()->freed); if (nurl__jrnl_len) nurl__jrnl_remove(ptr); if (!nurl__sc_push(ptr)) free(ptr); }
 void  nurl_memcpy(void *dst, const void *src, long long bytes) {
     memcpy(dst, src, (size_t)bytes);
 }

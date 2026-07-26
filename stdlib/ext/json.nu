@@ -234,9 +234,24 @@ $ `stdlib/core/vec.nu`
 // ── Recursive free ───────────────────────────────────────────────────
 //
 // Walks the tree and releases owned strings, then releases the Vec
-// buffers. Containers iterate via vec_free_with so each element gets
-// its own json_free. Caller passes the Json by value (handles inside
-// are pointers); after the call, the handle should not be reused.
+// buffers. Containers iterate over the raw element buffer and recurse
+// directly — a `vec_free_with` closure here would cost a closure
+// allocation per container and an indirect call per element, on what is
+// the second-hottest path of a parse-heavy program (right after the
+// parse that built the tree). Caller passes the Json by value (handles
+// inside are pointers); after the call, the handle should not be
+// reused.
+
+@ __json_free_vec ( Vec Json ) v → v {
+    : i len ( vec_len [Json] v )
+    : *Json buf ( vec_data [Json] v )
+    : ~ i k 0
+    ~ < k len {
+        ( json_free . buf k )
+        = k + k 1
+    }
+    ( vec_free [Json] v )
+}
 
 @ json_free Json j → v {
     ?? j {
@@ -244,14 +259,8 @@ $ `stdlib/core/vec.nu`
         JBool _ → {}
         JNum s → ( string_free s )
         JStr s → ( string_free s )
-        JArr v → {
-            : ( @ v Json ) drop \ Json e → v { ( json_free e ) }
-            ( vec_free_with [Json] v drop )
-        }
-        JObj v → {
-            : ( @ v Json ) drop \ Json e → v { ( json_free e ) }
-            ( vec_free_with [Json] v drop )
-        }
+        JArr v → ( __json_free_vec v )
+        JObj v → ( __json_free_vec v )
     }
 }
 
@@ -717,7 +726,10 @@ $ `stdlib/core/vec.nu`
 
 @ __jp_parse_array_body * JsonParser p → !Json JsonError {
     = . p pos + . p pos 1  // consume '['
-    : ( Vec Json ) elems ( vec_new [Json] )
+    // Start at capacity 8: a non-empty array almost always outgrows the
+    // default 0->4->8 doubling walk, and each step of that walk is a
+    // realloc on the parser's hottest path.
+    : ( Vec Json ) elems ( vec_with_cap [Json] 8 )
     ( __jp_skip_ws p )
     ? ( __jp_eof p ) {
         : ( @ v Json ) drop1 \ Json e → v { ( json_free e ) }
@@ -776,7 +788,9 @@ $ `stdlib/core/vec.nu`
 
 @ __jp_parse_object_body * JsonParser p → !Json JsonError {
     = . p pos + . p pos 1  // consume '{'
-    : ( Vec Json ) kvs ( vec_new [Json] )
+    // Capacity 8 = four key/value pairs before the first realloc; see
+    // the array body above.
+    : ( Vec Json ) kvs ( vec_with_cap [Json] 8 )
     ( __jp_skip_ws p )
     ? ( __jp_eof p ) {
         : ( @ v Json ) drop1 \ Json e → v { ( json_free e ) }

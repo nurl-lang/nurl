@@ -12,8 +12,8 @@
 # and words are the held-out corpus for the generation-accuracy study in
 # genacc/ (their workloads are single short strings — they measure process
 # start-up, not a language), and http_server belongs to run_http.sh.
-lcg	100M-step 64-bit LCG	Loop-carried integer dependency; 64-bit wrap-around
-affine_mix	20M chained affine steps	Shift/add/mask chain over a 58-bit state, no multiply
+lcg	20M-step 64-bit LCG + xorshift	Loop-carried mul/add/shift/xor dependency the unroller cannot compose
+affine_mix	20M affine steps + xorshift	Shift/add/mask/xor chain over a 58-bit state, no multiply
 packet_classifier	25M unpredictable branches	A data-dependent 50/50 branch the predictor cannot learn
 ring_write	20M ring-buffer stores	Dependent store per iteration plus address computation
 histogram_bins	20M binned increments	Read-modify-write at a data-dependent index
