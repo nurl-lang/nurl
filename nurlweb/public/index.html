@@ -251,123 +251,123 @@
         <tbody>
           <tr>
             <td class="lang"><code>lcg</code><span class="bench-blurb">100M-step 64-bit LCG</span></td>
-            <td class="num nurl-col fastest">4.3 ms</td>
-            <td class="num">20 ms</td>
+            <td class="num nurl-col fastest">3.7 ms</td>
+            <td class="num">17 ms</td>
             <td class="num">18 ms</td>
-            <td class="num">6,422 ms</td>
-            <td class="num">19,399 ms</td>
+            <td class="num">6,371 ms</td>
+            <td class="num">16,095 ms</td>
           </tr>
           <tr>
             <td class="lang"><code>affine_mix</code><span class="bench-blurb">20M chained affine steps</span></td>
             <td class="num nurl-col fastest">14 ms</td>
-            <td class="num">15 ms</td>
             <td class="num">19 ms</td>
-            <td class="num">1,531 ms</td>
-            <td class="num">5,828 ms</td>
+            <td class="num">19 ms</td>
+            <td class="num">1,433 ms</td>
+            <td class="num">5,008 ms</td>
           </tr>
           <tr>
             <td class="lang"><code>packet_classifier</code><span class="bench-blurb">25M unpredictable branches</span></td>
-            <td class="num nurl-col">70 ms</td>
-            <td class="num">68 ms</td>
-            <td class="num fastest">61 ms</td>
-            <td class="num">145 ms</td>
-            <td class="num">5,268 ms</td>
+            <td class="num nurl-col fastest">56 ms</td>
+            <td class="num fastest">56 ms</td>
+            <td class="num">57 ms</td>
+            <td class="num">163 ms</td>
+            <td class="num">4,230 ms</td>
           </tr>
           <tr>
             <td class="lang"><code>ring_write</code><span class="bench-blurb">20M ring-buffer stores</span></td>
-            <td class="num nurl-col fastest">34 ms</td>
-            <td class="num">35 ms</td>
-            <td class="num">35 ms</td>
-            <td class="num">69 ms</td>
-            <td class="num">5,575 ms</td>
+            <td class="num nurl-col fastest">33 ms</td>
+            <td class="num fastest">33 ms</td>
+            <td class="num fastest">33 ms</td>
+            <td class="num">54 ms</td>
+            <td class="num">4,749 ms</td>
           </tr>
           <tr>
             <td class="lang"><code>histogram_bins</code><span class="bench-blurb">20M binned increments</span></td>
-            <td class="num nurl-col">31 ms</td>
-            <td class="num">30 ms</td>
+            <td class="num nurl-col fastest">27 ms</td>
+            <td class="num">28 ms</td>
             <td class="num fastest">27 ms</td>
-            <td class="num">69 ms</td>
-            <td class="num">5,432 ms</td>
+            <td class="num">57 ms</td>
+            <td class="num">4,334 ms</td>
           </tr>
           <tr>
             <td class="lang"><code>prefix_scan</code><span class="bench-blurb">1M 16-wide prefix scans</span></td>
-            <td class="num nurl-col fastest">24 ms</td>
-            <td class="num">25 ms</td>
-            <td class="num">25 ms</td>
-            <td class="num">78 ms</td>
-            <td class="num">5,914 ms</td>
+            <td class="num nurl-col fastest">22 ms</td>
+            <td class="num fastest">22 ms</td>
+            <td class="num fastest">22 ms</td>
+            <td class="num">65 ms</td>
+            <td class="num">4,706 ms</td>
           </tr>
           <tr>
             <td class="lang"><code>binary_search</code><span class="bench-blurb">5M lower-bound searches</span></td>
-            <td class="num nurl-col fastest">35 ms</td>
-            <td class="num">37 ms</td>
-            <td class="num">47 ms</td>
-            <td class="num">179 ms</td>
-            <td class="num">8,196 ms</td>
+            <td class="num nurl-col">40 ms</td>
+            <td class="num fastest">38 ms</td>
+            <td class="num">43 ms</td>
+            <td class="num">106 ms</td>
+            <td class="num">6,152 ms</td>
           </tr>
           <tr>
             <td class="lang"><code>sort_window</code><span class="bench-blurb">2M 8-element bubble sorts</span></td>
-            <td class="num nurl-col fastest">49 ms</td>
-            <td class="num">72 ms</td>
-            <td class="num">54 ms</td>
-            <td class="num">188 ms</td>
-            <td class="num">13,575 ms</td>
+            <td class="num nurl-col fastest">27 ms</td>
+            <td class="num">64 ms</td>
+            <td class="num fastest">27 ms</td>
+            <td class="num">197 ms</td>
+            <td class="num">11,159 ms</td>
           </tr>
           <tr>
             <td class="lang"><code>bloom_filter</code><span class="bench-blurb">4M Bloom-filter queries</span></td>
-            <td class="num nurl-col">18 ms</td>
-            <td class="num fastest">14 ms</td>
-            <td class="num">16 ms</td>
-            <td class="num">3,151 ms</td>
-            <td class="num">8,815 ms</td>
+            <td class="num nurl-col fastest">18 ms</td>
+            <td class="num fastest">18 ms</td>
+            <td class="num">19 ms</td>
+            <td class="num">2,866 ms</td>
+            <td class="num">7,626 ms</td>
           </tr>
           <tr>
             <td class="lang"><code>hash_join</code><span class="bench-blurb">500k hash-table probes</span></td>
-            <td class="num nurl-col fastest">6.0 ms</td>
-            <td class="num">6.3 ms</td>
-            <td class="num">7.0 ms</td>
-            <td class="num">429 ms</td>
-            <td class="num">918 ms</td>
+            <td class="num nurl-col fastest">4.5 ms</td>
+            <td class="num">4.7 ms</td>
+            <td class="num">4.8 ms</td>
+            <td class="num">372 ms</td>
+            <td class="num">845 ms</td>
           </tr>
           <tr>
             <td class="lang"><code>sieve</code><span class="bench-blurb">Sieve of Eratosthenes to 10M</span></td>
-            <td class="num nurl-col">44 ms</td>
-            <td class="num">42 ms</td>
-            <td class="num fastest">38 ms</td>
-            <td class="num">99 ms</td>
-            <td class="num">4,036 ms</td>
+            <td class="num nurl-col">19 ms</td>
+            <td class="num fastest">18 ms</td>
+            <td class="num fastest">18 ms</td>
+            <td class="num">65 ms</td>
+            <td class="num">3,213 ms</td>
           </tr>
           <tr>
             <td class="lang"><code>fib</code><span class="bench-blurb">Recursive fib(35)</span></td>
-            <td class="num nurl-col fastest">34 ms</td>
-            <td class="num fastest">34 ms</td>
-            <td class="num fastest">34 ms</td>
-            <td class="num">172 ms</td>
-            <td class="num">1,362 ms</td>
+            <td class="num nurl-col fastest">25 ms</td>
+            <td class="num">30 ms</td>
+            <td class="num">28 ms</td>
+            <td class="num">131 ms</td>
+            <td class="num">1,374 ms</td>
           </tr>
           <tr>
             <td class="lang"><code>collatz</code><span class="bench-blurb">Longest Collatz chain below 100k</span></td>
-            <td class="num nurl-col">19 ms</td>
-            <td class="num fastest">18 ms</td>
-            <td class="num">19 ms</td>
-            <td class="num">63 ms</td>
-            <td class="num">807 ms</td>
+            <td class="num nurl-col fastest">12 ms</td>
+            <td class="num fastest">12 ms</td>
+            <td class="num fastest">12 ms</td>
+            <td class="num">49 ms</td>
+            <td class="num">716 ms</td>
           </tr>
           <tr>
             <td class="lang"><code>matmul</code><span class="bench-blurb">256x256 integer matrix product</span></td>
             <td class="num nurl-col fastest">34 ms</td>
-            <td class="num">35 ms</td>
-            <td class="num">36 ms</td>
-            <td class="num">121 ms</td>
-            <td class="num">4,238 ms</td>
+            <td class="num fastest">34 ms</td>
+            <td class="num fastest">34 ms</td>
+            <td class="num">77 ms</td>
+            <td class="num">3,310 ms</td>
           </tr>
           <tr>
             <td class="lang"><code>json_parse</code><span class="bench-blurb">20 parses of a 64 KB document</span></td>
-            <td class="num nurl-col">15 ms</td>
-            <td class="num fastest">3.8 ms</td>
-            <td class="num">16 ms</td>
-            <td class="num">49 ms</td>
-            <td class="num">46 ms</td>
+            <td class="num nurl-col">11 ms</td>
+            <td class="num fastest">2.9 ms</td>
+            <td class="num">12 ms</td>
+            <td class="num">38 ms</td>
+            <td class="num">37 ms</td>
           </tr>
         </tbody>
       </table>
@@ -378,13 +378,13 @@
       cell in each row is highlighted. Same algorithm in every language — each row is
       timed only after all five implementations print the same result, so a cell can
       never be fast by computing something else.
-      Measured on Intel Core i7-5930K @ 3.50 GHz, Ubuntu 24.04 (12 logical cores)
+      Measured on GitHub Actions ubuntu-latest runner (4 logical cores)
       with NURL 0.25.1 ·
       clang 18.1.3 ·
-      rustc 1.82.0 ·
-      Node 24.15.0 ·
+      rustc 1.97.1 ·
+      Node 22.23.1 ·
       Python 3.12.3,
-      generated 2026-07-26 from commit <a href="https://github.com/nurl-lang/nurl/commit/9f8058d034a4f136ab682ed81e5e515d32f06d33" target="_blank" rel="noopener"><code>9f8058d</code></a>.
+      generated 2026-07-26 from commit <a href="https://github.com/nurl-lang/nurl/commit/d127ed8c699807f512950a769695a997615dfc7c" target="_blank" rel="noopener"><code>d127ed8</code></a>.
       Reproduce it with <code>./bench/bench.sh</code>; sources, compile times, the
       correctness gate and the process-start-up floor are in
       <a href="https://github.com/nurl-lang/nurl/tree/main/bench" target="_blank" rel="noopener">bench/</a>.

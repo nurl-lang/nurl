@@ -6,7 +6,30 @@ are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.26.0] — 2026-07-26
+
+A measurement release. Nothing here changes the language; what changes is
+what the project can prove about itself.
+
+The benchmark corpus is rebuilt into one suite — 15 benchmarks, each
+implemented in NURL, C, Rust, Node **and** Python, each row timed only
+after all five implementations print the same result — and the landing
+page's table is now generated from the last run of that suite instead of
+being typed by hand. Building it out to five languages turned up two
+defects in the corpus itself: `hash_join` had been checksumming to zero
+in every report it ever produced, because a random 64-bit probe key never
+matches a 160-row table, so it was timing nothing but a Bloom filter's
+reject path — and one C draw depended on the unspecified evaluation order
+of `|`, i.e. on which compiler happened to build it.
+
+The same instinct runs through the performance work: two hot paths were
+paying for something nobody read (a `lock xadd` per allocation) or doing
+work quadratically that they described removing elsewhere (four
+borrow-checker scans re-running `strlen` per byte), and a self-compile is
+11.6 % fewer instructions for it. One real miscompile is fixed —
+an array *store* at a `u64` index emitted invalid IR that only clang
+rejected, so a program could read at an unsigned index but not write at
+one.
 
 ### Changed
 
@@ -101,6 +124,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The benchmark workflow could not publish its own results.** Its
+  refresh step pushed `bench/results/latest.json` and `bench/RESULTS.md`
+  straight to `main`, which a repository ruleset declines with GH013:
+  changes to `main` must arrive through a pull request. The suite ran,
+  the gate passed, the report was written — and the last step threw it
+  away with a red X. It now commits to a `bench-results/<date>-<run>`
+  branch and opens a PR (pushing a new branch is allowed), so the
+  numbers reach `main` the way every other change does. The step
+  documents what is still needed for that PR to merge itself: a PR
+  opened with the built-in `GITHUB_TOKEN` does not trigger workflow
+  runs, so the required checks never start and `--auto` cannot complete
+  — either the Actions bot needs a ruleset bypass, or the step needs a
+  PAT.
+
 - **`bench_auto` could report a regression for a build that got
   faster.** Its iteration ramp multiplies by 4 and stops at the first
   pass clearing 50 ms, so a body whose cost sits near that threshold
@@ -123,16 +160,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- `bench/` gains a ten-kernel u64 benchmark set with NURL, C and Rust
-  implementations of each kernel, plus `bench/run_micro.sh` — a runner
-  that times compilation and execution separately, gates the three
-  languages against a byte-exact checksum, and writes a dated Markdown
-  report. See `bench/README.md`. The runner sweeps `-O2` and `-O0` for
-  all three languages, extends the checksum gate across optimisation
-  levels as well as languages, and reports what the optimiser is worth
-  per language.
+- `bench/` gains nine u64 kernels — `affine_mix`, `packet_classifier`,
+  `ring_write`, `histogram_bins`, `prefix_scan`, `binary_search`,
+  `sort_window`, `bloom_filter`, `hash_join` — each a deliberately
+  different shape (branch misprediction, dependent stores, pointer
+  chasing, a compare/branch mill, an early-out plus a rare slow path).
+  They are part of the five-language suite described above, so each ships
+  with a NURL, C, Rust, Node and Python implementation.
 
-- `bench/perfstat.sh` — the same u64 set measured in retired
+- `bench/perfstat.sh` — the same kernels measured in retired
   instructions and core cycles instead of wall clock, with a
   save/compare mode for A/B-ing a compiler or runtime change. Wall clock
   on this set drifts by several per cent between runs, which is enough
@@ -8932,7 +8968,8 @@ releases are measured.
   compile-server (`api/`), browser playground (`nurlweb/`).
 * Dual license: MIT (LICENSE-MIT) or Apache-2.0 (LICENSE-APACHE).
 
-[Unreleased]: https://github.com/nurl-lang/nurl/compare/v0.25.1...HEAD
+[Unreleased]: https://github.com/nurl-lang/nurl/compare/v0.26.0...HEAD
+[0.26.0]: https://github.com/nurl-lang/nurl/compare/v0.25.1...v0.26.0
 [0.25.1]: https://github.com/nurl-lang/nurl/compare/v0.25.0...v0.25.1
 [0.25.0]: https://github.com/nurl-lang/nurl/compare/v0.24.1...v0.25.0
 [0.24.1]: https://github.com/nurl-lang/nurl/compare/v0.24.0...v0.24.1
