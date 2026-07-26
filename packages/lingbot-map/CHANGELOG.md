@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.2.1
+
+- **Parity.** 0.2.0 shipped without the two gpukit kernels that close the
+  last of the gap — the retiled fused attention and the shape-specialised
+  convolution — because the commit carrying them missed the merge. With
+  gpukit 0.6.1 the comparable slice is **138 ms a frame against the
+  reference's 141**, f32 on both sides, where 0.2.0 was 172 ms. Requires
+  gpukit `^0.6.1`; no source change here beyond the requirement and the
+  README's numbers.
+
 ## 0.2.0
 
 The port was correct and slow; this is the release where it is fast.

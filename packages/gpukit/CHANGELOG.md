@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.6.1
+
+Two kernels that 0.6.0 left short of something specific, each measured.
+Together they took packages/lingbot-map from 1.2x the reference to
+**parity** on the same card — 138 ms a frame against its 141.
+
+- **`gkd_attention` was reading shared memory more than it was
+  multiplying.** One query by four keys is 1.25 shared reads per
+  multiply-add and an SM can serve a quarter of that. Sixty-four queries
+  a block instead of sixteen gives every thread a 4x4 block of the score
+  tile and of the output, so four probabilities and four value channels
+  feed sixteen multiply-adds: **157 us where it took 359** at a
+  transformer's shape, 3.8x the composed path where it was 1.7x, and now
+  ahead of the composed path at hd 128 too, where it used to lose. The
+  shared budget is computed from BQ, BK, hd and the element size rather
+  than guessed — getting it wrong is a launch that fails silently as a
+  fail-closed F.
+- **`gkd_conv2d` was computing addresses it could have folded.** Every
+  loop bound and stride was a kernel argument, so a 3x3 layer paid a
+  64-bit multiply-add chain per tap and the compiler could not unroll a
+  window it did not know was nine taps. The twelve dimensions are
+  literals in the generated source now, one compile per geometry — the
+  same trick `gkd_perm` got in 0.6.0, and the same size of win: a DPT
+  depth head went **39 ms -> 22 ms**. Verified bit-identical by building
+  with the specialisation forced off and diffing the dump.
+
 ## 0.6.0
 
 Performance work driven by a real model (packages/lingbot-map, a 1.16 B
