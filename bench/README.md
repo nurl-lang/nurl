@@ -179,6 +179,42 @@ project), and a multi-threaded allocator stress test cannot have the
 deterministic byte-exact checksum gate the rest of the set relies on, so
 there was nothing honest to compare.
 
+## Telling a speed-up from noise
+
+Wall clock on this hardware drifts by several per cent between runs of the
+same binary, and `run_micro.sh` reports a median of a handful of runs — so
+any ratio it prints inside roughly ±10 % is not evidence of anything. The
+first report of the u64 set showed `histogram_bins` at 1.15× against C;
+the two binaries retire the same instructions in the same cycles, and the
+generated inner loops are instruction-for-instruction the same.
+
+`bench/perfstat.sh` measures the same set with the CPU's own counters:
+
+```sh
+./bench/perfstat.sh --cpu 4 --save ref.tsv        # baseline
+#   … change the compiler or the runtime, rebuild …
+./bench/perfstat.sh --cpu 4 --against ref.tsv     # A/B
+```
+
+Retired instructions are essentially deterministic for these
+single-threaded kernels (±0.1 % run to run) and core cycles do not move
+with the frequency governor (±1 %, and ±2–3 % for the sub-10 ms rows,
+whose code layout shifts between links). A change that does not clear
+those bands has not been demonstrated. The comparison mode re-checks each
+binary's checksum as well, so a "speed-up" that stopped computing the
+right answer is reported rather than celebrated.
+
+Two further rules that this set has already had to learn:
+
+- **Pin the core and idle the machine.** A background build was enough to
+  inflate `binary_search` by 58 % and `bloom_filter` by 73 %.
+- **Compare like with like when a harness auto-calibrates.**
+  `std/bench.nu`'s `bench_auto` ramps its iteration count ×4 and stops at
+  the first pass over 50 ms; two builds of the same body can therefore be
+  timed over runs 4× apart in length. That reported a 5 % regression for a
+  build that was 8 % faster. `bench_auto` now re-runs on the target window
+  before reporting.
+
 ## Verifying correctness
 
 A token or speed comparison only means something if every language computes

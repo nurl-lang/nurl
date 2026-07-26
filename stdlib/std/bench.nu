@@ -63,22 +63,49 @@ $ `stdlib/std/time.nu`
     ^ @ BenchResult { nm n total / total n / - a1 a0 n }
 }
 
-// Auto-scale iters until a timed pass clears ~50 ms, so ns/op is stable
-// even for sub-microsecond operations. Caps the ramp so a slow body
-// cannot run away.
+// Auto-scale iters until a timed pass clears ~50 ms, then re-run once at
+// the count that lands ON that window, so ns/op is stable even for
+// sub-microsecond operations. Caps the ramp so a slow body cannot run
+// away.
+//
+// The ramp alone is not enough to compare two builds. It multiplies by
+// 4, so a body whose cost sits near the threshold clears it for one
+// build and misses it for the next, and the two results then come from
+// runs 4× apart in length — different amounts of warm-up, frequency
+// ramp and timer overhead amortised over the ops. Measured on
+// `bench/stdlib_hotpath.nu`'s `sort_32_desc`, that reported a 5 %
+// REGRESSION for a build that was 8 % faster on both cycle count and
+// wall clock. The final calibrated pass removes the dependence on where
+// the ramp happened to stop: every reported number comes from a run of
+// about `target` nanoseconds.
 @ bench_auto s name ( @ v ) body → BenchResult {
+    : i target 50000000
+    : i cap 100000000
     : ~ i iters 1
     : ~ b done F
     : ~ BenchResult best ( bench_run name 1 body )
     ~ ! done {
         ( bench_result_free best )
         = best ( bench_run name iters body )
-        ? | >= ( bench_result_total_ns best ) 50000000 >= iters 100000000 {
+        ? | >= ( bench_result_total_ns best ) target >= iters cap {
             = done T
         } {
             = iters * iters 4
         }
     }
+    // The clearing pass may have overshot by up to the ramp factor.
+    // Scale back onto the target window and measure once more; skip it
+    // when the ramp hit its cap (the body is slow enough that the window
+    // is already the best available) or when one iteration alone is
+    // longer than the target.
+    : i total ( bench_result_total_ns best )
+    ? & > total target & > iters 1 < iters cap {
+        : i want / * iters target total
+        ? & > want 0 < want iters {
+            ( bench_result_free best )
+            = best ( bench_run name want body )
+        } {}
+    } {}
     ^ best
 }
 
