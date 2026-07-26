@@ -11195,6 +11195,14 @@
             ^ rhs
         }
         { : s idx_val ( gen_expr lex syms cg )
+            // `nurl_get_last_type` yields a NURL type name, so the GEP's
+            // index operand has to be lowered like every other type on
+            // the line. Printing it raw emitted `getelementptr i64, i64*
+            // %p, u64 %idx` for an unsigned index — IR that nurlc
+            // accepted (rc 0) and only clang rejected ("expected type").
+            // All four index-store paths share this shape; the matching
+            // load paths were already correct, so a program could read at
+            // an unsigned index but not write at one.
             : s idx_type ( nurl_get_last_type )
             : s rhs ( gen_expr lex syms cg )
             : s gep ( nurl_cg_reg cg )
@@ -11202,7 +11210,7 @@
             ( nurl_print ` = getelementptr ` ) ( nurl_print ( nurl_llty elem_ty ) )
             ( nurl_print `, ` ) ( nurl_print ( nurl_llty ptr_ty ) )
             ( nurl_print ` ` ) ( nurl_print data_ptr )
-            ( nurl_print `, ` ) ( nurl_print idx_type ) ( nurl_print ` ` ) ( nurl_print idx_val ) ( nurl_print `\n` )
+            ( nurl_print `, ` ) ( nurl_print ( nurl_llty idx_type ) ) ( nurl_print ` ` ) ( nurl_print idx_val ) ( nurl_print `\n` )
             ( nurl_print `  store ` ) ( nurl_print ( nurl_llty elem_ty ) )
             ( nurl_print ` ` ) ( nurl_print rhs )
             ( nurl_print `, ` ) ( nurl_print ( nurl_llty elem_ty ) )
@@ -11284,7 +11292,7 @@
                         ( nurl_print ` = getelementptr ` ) ( nurl_print ( nurl_llty st ) )
                         ( nurl_print `, ` ) ( nurl_print ( nurl_llty pt ) )
                         ( nurl_print ` ` ) ( nurl_print pv )
-                        ( nurl_print `, ` ) ( nurl_print idx_type ) ( nurl_print ` ` ) ( nurl_print idx_val ) ( nurl_print `\n` )
+                        ( nurl_print `, ` ) ( nurl_print ( nurl_llty idx_type ) ) ( nurl_print ` ` ) ( nurl_print idx_val ) ( nurl_print `\n` )
                         ( nurl_print `  store ` ) ( nurl_print ( nurl_llty st ) )
                         ( nurl_print ` ` ) ( nurl_print rhs )
                         ( nurl_print `, ` ) ( nurl_print ( nurl_llty st ) )
@@ -11334,7 +11342,7 @@
                                 ( nurl_print ` = getelementptr ` ) ( nurl_print ( nurl_llty st ) )
                                 ( nurl_print `, ` ) ( nurl_print ( nurl_llty pt ) )
                                 ( nurl_print ` ` ) ( nurl_print pv )
-                                ( nurl_print `, ` ) ( nurl_print idx_type ) ( nurl_print ` ` ) ( nurl_print idx_val ) ( nurl_print `\n` )
+                                ( nurl_print `, ` ) ( nurl_print ( nurl_llty idx_type ) ) ( nurl_print ` ` ) ( nurl_print idx_val ) ( nurl_print `\n` )
                                 ( nurl_print `  store ` ) ( nurl_print ( nurl_llty st ) )
                                 ( nurl_print ` ` ) ( nurl_print rhs )
                                 ( nurl_print `, ` ) ( nurl_print ( nurl_llty st ) )
@@ -11354,7 +11362,7 @@
                     ( nurl_print ` = getelementptr ` ) ( nurl_print ( nurl_llty st ) )
                     ( nurl_print `, ` ) ( nurl_print ( nurl_llty pt ) )
                     ( nurl_print ` ` ) ( nurl_print pv )
-                    ( nurl_print `, ` ) ( nurl_print idx_type ) ( nurl_print ` ` ) ( nurl_print idx_val ) ( nurl_print `\n` )
+                    ( nurl_print `, ` ) ( nurl_print ( nurl_llty idx_type ) ) ( nurl_print ` ` ) ( nurl_print idx_val ) ( nurl_print `\n` )
                     ( nurl_print `  store ` ) ( nurl_print ( nurl_llty st ) )
                     ( nurl_print ` ` ) ( nurl_print rhs )
                     ( nurl_print `, ` ) ( nurl_print ( nurl_llty st ) )

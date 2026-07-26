@@ -8,6 +8,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **An array store at an unsigned index emitted invalid IR.** `= . p idx v`
+  where `idx` had a sized unsigned type printed the NURL type name into
+  the getelementptr — `getelementptr i64, i64* %p, u64 %idx` — instead of
+  lowering it like every other type on the line. nurlc accepted it with
+  rc 0 and only clang rejected it, with a bare `error: expected type` and
+  no NURL source location. The four index-store paths in `gen_stmt` now
+  lower the index operand through `nurl_llty`, as the matching load paths
+  already did; before this, a program could *read* at a `u64` index but
+  not *write* at one. Regression: `compiler/tests/gep_unsigned_index_store.nu`.
+
+### Added
+
+- `bench/` gains a ten-kernel u64 benchmark set with NURL, C and Rust
+  implementations of each kernel, plus `bench/run_micro.sh` — a runner
+  that times compilation and execution separately, gates the three
+  languages against a byte-exact checksum, and writes a dated Markdown
+  report. See `bench/README.md`.
+
 ## [0.25.1] — 2026-07-26
 
 A Windows repair release. 0.25.0 taught the driver to prefer the zig the
