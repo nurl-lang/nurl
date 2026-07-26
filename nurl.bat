@@ -246,12 +246,22 @@ if exist "%SCRIPTDIR%stdlib\winlib\winlibs.reloc" (
 )
 if defined WINLIBS set "EXTRA_LIBS=!EXTRA_LIBS! !WINLIBS!"
 
-REM The runtime's HTTP client uses WinHTTP on Windows (stdlib/runtime.c §14),
-REM so every program linked against runtime.o needs winhttp.lib even if it
-REM doesn't import stdlib/ext/http.nu — unreferenced functions still end up
-REM in runtime.o and their WinHttp* calls must resolve at link time.
+REM System import libs. The whole of runtime.o is linked in, so every
+REM program needs the libraries behind every OS bridge it contains, even
+REM one that imports none of them:
+REM   winhttp  — the HTTP client (stdlib/runtime.c §14)
+REM   ws2_32   — the TCP/socket layer
+REM   bcrypt, advapi32 — the OS-entropy bridge (BCryptGenRandom)
+REM Under clang's MSVC target the last three arrive on their own, via the
+REM `#pragma comment(lib, ...)` directives in runtime_ffi.c. Under MinGW —
+REM which is what `zig cc` targets — those directives cannot be satisfied
+REM (they name bcrypt.lib, and lld-link goes looking for libbcrypt.a), so
+REM they are compiled out there and the libs must be named here instead.
+REM Naming them is harmless for clang: they are all in the Windows SDK.
+REM This is the same set, for the same reason, as the mingw-w64 cross link
+REM in nurlapi/main.nu.
 echo [2/2] %LLFILE% → %EXEFILE%  (%NURL_OPT% %DEBUG_FLAG% %EXTRA_LIBS%)
-%CC% %NURL_OPT% %CC_OPT_FIX% %DEBUG_FLAG% "%LLFILE%" "%RUNTIME%" %EXTRA_OBJS% -o "%EXEFILE%" %EXTRA_LIBS% -lwinhttp
+%CC% %NURL_OPT% %CC_OPT_FIX% %DEBUG_FLAG% "%LLFILE%" "%RUNTIME%" %EXTRA_OBJS% -o "%EXEFILE%" %EXTRA_LIBS% -lwinhttp -lws2_32 -lbcrypt -ladvapi32
 if !errorlevel! neq 0 (
     echo ERROR: clang linking failed
     exit /b 1
