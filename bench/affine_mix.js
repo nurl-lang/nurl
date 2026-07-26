@@ -1,4 +1,4 @@
-// benchmark-contract: affine-mix;seed=123456789;iterations=20000000;mask=0x03ffffffffffffff
+// benchmark-contract: affine-mix-xs9;seed=123456789;iterations=20000000;mask=0x03ffffffffffffff;xorshift=9
 //
 // affine_mix — 20M rounds of two chained affine steps over a 58-bit
 // state.
@@ -16,6 +16,7 @@ const ITERATIONS = 20000000n;
 let state = 123456789n;
 for (let i = 0n; i < ITERATIONS; i++) {
     state = ((state << 3n) + i) & MASK;
+    state ^= state >> 9n;
     state = ((state << 2n) - 3n) & MASK;
 }
 

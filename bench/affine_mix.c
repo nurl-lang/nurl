@@ -1,4 +1,4 @@
-// benchmark-contract: affine-mix;seed=123456789;iterations=20000000;mask=0x03ffffffffffffff
+// benchmark-contract: affine-mix-xs9;seed=123456789;iterations=20000000;mask=0x03ffffffffffffff;xorshift=9
 #include <inttypes.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -18,6 +18,7 @@ int main(void) {
 
   while (i < iterations) {
     state = ((state << 3) + i) & 0x03ffffffffffffffULL;
+    state ^= state >> 9;
     state = ((state << 2) - 3ULL) & 0x03ffffffffffffffULL;
     ++i;
   }

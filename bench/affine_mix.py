@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# benchmark-contract: affine-mix;seed=123456789;iterations=20000000;mask=0x03ffffffffffffff
+# benchmark-contract: affine-mix-xs9;seed=123456789;iterations=20000000;mask=0x03ffffffffffffff;xorshift=9
 #
 # affine_mix — 20M rounds of two chained affine steps over a 58-bit
 # state. Python integers are arbitrary precision, so every step masks
@@ -12,6 +12,7 @@ MASK = 0x03FFFFFFFFFFFFFF
 state = 123456789
 for i in range(20_000_000):
     state = ((state << 3) + i) & MASK
+    state ^= state >> 9
     state = ((state << 2) - 3) & MASK
 
 print(state & 0x7FFFFFFFFFFFFFFF)
