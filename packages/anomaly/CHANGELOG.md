@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.5.3
+
+- Requirements widened to gpu `^0.11` / gpukit `^0.6`. No source change:
+  the published 0.5.2 asked for versions that predate them.
+
 ## 0.5.0
 
 **The autoencoder trains on the GPU when one is present — bit-exactly.**

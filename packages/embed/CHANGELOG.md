@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.5
+
+- Requirements widened to gpu `^0.11` / gpukit `^0.6`. No source change.
+
 ## 0.1.4
 
 - The model argument to `embed serve` / `embed text` can now be a Hugging Face

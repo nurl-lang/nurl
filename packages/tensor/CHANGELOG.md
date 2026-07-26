@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.4.3
+
+- Requirement widened to gpukit `^0.6`. No source change.
+
 ## 0.4.1
 
 **The matmul GPU route is now explicit about its rules.** Since gpukit
