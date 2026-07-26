@@ -75,18 +75,22 @@ the checkpoint load excluded, which is the same slice the port's
 
 | | reference | port |
 | --- | --- | --- |
-| aggregator | 79 ms | 117 ms |
-| camera head | 53 ms | **16 ms** |
-| depth head | 11 ms | 39 ms |
-| **total** | **143 ms** | **172 ms** |
+| aggregator | 77 ms | 100 ms |
+| camera head | 54 ms | **16 ms** |
+| depth head | 10 ms | 22 ms |
+| **total** | **141 ms** | **138 ms** |
 
-So **1.2x off the reference** — ahead of it on the camera head, behind
-on the other two. That is the honest state: not yet parity, and what is
-left of the gap is in the aggregator's GEMMs and the depth head's
-convolutions, both of which are ordinary (if fiddly) kernel work rather
-than anything structural. The port's own preprocessing — PNG decode and
-the bicubic resize, ~33 ms — is outside this table on both sides, as
-`load_and_preprocess_images` is for the reference. The reference as `demo.py` ships it — the
+**So the port is at parity** — 138 ms against 141, best of four runs on
+each side, with the port's three numbers stable to a millisecond across
+runs. It is well ahead on the camera head, behind on the other two, and
+the sum lands where the reference does. The port's own preprocessing —
+PNG decode and the bicubic resize, ~33 ms — is outside this table on
+both sides, as `load_and_preprocess_images` is for the reference.
+
+Worth saying plainly what this is and is not: torch here is eager mode,
+which is what `ref_timing.py` measures on both sides. `demo.py` also
+turns on `torch.compile` and CUDA graphs, and that is a different (and
+faster) reference this has not been measured against. The reference as `demo.py` ships it — the
 aggregator cast to bf16 — measures 155 ms here, slower than its own
 fp32 path: at one frame of 783 tokens this model is latency-bound in
 eager mode, and bf16 only pays off with the `torch.compile` and CUDA
@@ -95,19 +99,18 @@ graphs `demo.py` also turns on.
 **Where a frame goes now** (frame 4 of a sequence, `--profile`):
 
 ```
-prep 33 ms  aggregator 117 ms  camera 16 ms  depth 39 ms  cloud 1 ms
-  34%  gk32_gemm_smem     1152 calls    198 us each
-  21%  gk32_conv2d         120 calls   1153 us
-  20%  gk32_attn64_64      288 calls    458 us
-   7%  gk32_gemv           304 calls    153 us
+prep 33 ms  aggregator 100 ms  camera 16 ms  depth 22 ms  cloud 1 ms
+  44%  gk32_gemm_smem     1152 calls    201 us each
+  11%  gk32_attn64_32      288 calls    206 us
+   9%  gk32_gemv           304 calls    156 us
+   7%  gk32_lnormrow       760 calls     53 us
 ```
 
-What is left is all in three kernels, and none of it is mysterious: the
-tiled GEMM runs at 19–27 TFLOP/s where cuBLAS would do ~50, the direct
-convolution averages ~4.6 TFLOP/s across a resolution pyramid whose
-small levels do not fill the card, and the fused attention still reads
-shared memory more than a warp-tiled version would. Closing those is
-ordinary (if fiddly) kernel work, not a redesign.
+Nearly half of it is now one kernel, the tiled GEMM, at 19–27 TFLOP/s
+where cuBLAS would do ~50. That is where a further gain would come from,
+and it needs a different structure — warp-level tiling with
+register-resident fragments — rather than another parameter; four
+parameter changes were measured and none helped (see below).
 
 ### What made the difference
 
@@ -123,8 +126,8 @@ every GPU package gets them. In rough order of what it bought:
   product is computed, not the order the sum runs in.
 * **Fused attention.** The composed form materialises a
   `[heads, n, nkv]` score matrix, writes it once and reads it five
-  times. `gkd_attention` never writes it. 1.7x at `nkv = n`, 5.1x at
-  `nkv = 50n` — and, more to the point for a *streaming* model, the
+  times. `gkd_attention` never writes it. 3.8x at `nkv = n`, 6.2x at
+  `nkv = 4n` — and, more to the point for a *streaming* model, the
   buffer it does not allocate is 2.8 GB at a 72-frame window. This is
   the one change that is not bit-identical (an online softmax rescales a
   running sum rather than summing left to right); it moved the whole
@@ -148,6 +151,14 @@ every GPU package gets them. In rough order of what it bought:
   nothing: 14.2 ms → 0.35 ms. **GEMV shape for M = 1**, which the camera
   head runs twenty times per frame and which was eight blocks on a
   128-SM card.
+* **The convolution is shape-specialised too**, for the same reason as
+  the permute: every loop bound and stride was a kernel argument, so a
+  3x3 layer paid a 64-bit multiply-add chain per tap to compute an
+  address the compiler could have folded, and could not unroll a
+  nine-tap window it did not know was nine taps. The twelve dimensions
+  go in as literals; each layer geometry compiles once. The depth head
+  went 39 ms → 22 ms, and the dumps are byte-identical with the
+  specialisation forced off.
 * **The permute is shape-specialised.** The generic body decomposed
   each output index with six 64-bit divisions and modulos and kept its
   working arrays in local memory, which is why moving 9 MB took 87 us.
@@ -173,16 +184,22 @@ every GPU package gets them. In rough order of what it bought:
   monotone in the digit count — which is five probes instead of
   seventeen, for every float any NURL program prints.
 
-Three things this did NOT need, all measured and dropped: double
+Four things this did NOT need, all measured and dropped: double
 buffering the GEMM's global loads (neutral — the kernel is not
-latency-bound), a 128x128 tile (worse — at these shapes it halves the
-block count on a 128-SM card, and idle SMs cost more than the better
-reuse gains), and 16-byte global loads in the staging phase (also
-neutral-to-worse, so it is not issue-bound on those either). Three
-negative results in a row is itself the finding: at ~25 TFLOP/s this
-kernel is not short of any one resource, and the next step is a
-different structure — warp-level tiling with register-resident
-fragments — rather than another parameter.
+latency-bound), a 128x128 tile with an 8x8 register tile (worse — at
+these shapes it halves the block count on a 128-SM card, and idle SMs
+cost more than the better reuse gains; worse again when re-tried after
+the `float4` change, this time on register pressure), and 16-byte global
+loads in the staging phase (also neutral-to-worse, so it is not
+issue-bound on those either). Four negative results on one kernel is
+itself the finding: at ~25 TFLOP/s it is not short of any single
+resource, and the next step is warp-level tiling with register-resident
+fragments rather than another parameter.
+
+The convolution and the attention, by contrast, were both short of
+something specific and both moved a lot when it was fixed — which is the
+argument for measuring each kernel rather than assuming the biggest one
+is the one to work on.
 
 ### Stage 2 — preprocessing (`src/preproc.nu`)
 
