@@ -1,4 +1,4 @@
-// benchmark-contract: histogram;seed=123456789;iterations=20000000;bins=64;index=state&63
+// benchmark-contract: histogram-xs13;seed=123456789;iterations=20000000;bins=64;index=state&63;xorshift=13
 //
 // histogram_bins — 20M LCG steps, each incrementing one of 64 bins at a
 // data-dependent index, then a weighted XOR fold over the bins.
@@ -15,6 +15,7 @@ const bins = new Uint32Array(64);
 let state = 123456789;
 for (let i = 0; i < ITERATIONS; i++) {
     state = (Math.imul(state, 1664525) + 1013904223) >>> 0;
+    state = (state ^ (state >>> 13)) >>> 0;
     bins[state & 63] += 1;
 }
 

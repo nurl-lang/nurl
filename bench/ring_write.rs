@@ -1,4 +1,4 @@
-// benchmark-contract: ring-write;seed=123456789;iterations=20000000;words=64;value=state32x2
+// benchmark-contract: ring-write-xs13;seed=123456789;iterations=20000000;words=64;value=state32x2;xorshift=13
 const ITERATIONS: u64 = 20_000_000;
 const WORDS: usize = 64;
 const SEED: u64 = 123_456_789;
@@ -21,6 +21,7 @@ fn main() {
             .wrapping_mul(1_664_525)
             .wrapping_add(1_013_904_223)
             & MASK;
+        state ^= state >> 13;
         buf[(i & mask) as usize] = (state << 32) | state;
         i += 1;
     }

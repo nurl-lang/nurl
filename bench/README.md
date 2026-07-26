@@ -126,6 +126,28 @@ these single-threaded kernels and cycles do not move with the frequency
 governor, which makes a 1 % regression visible. Use `bench.sh` to compare
 languages, `perfstat.sh` to compare two versions of NURL.
 
+## Physical floors — `chaincheck.sh`
+
+A serial-chain row must not run faster than its dependency chain's
+hardware minimum: `lcg`'s step is `imul(3)+add(1)+shr(1)+xor(1)` = 6
+cycles, so 20M iterations cannot legitimately finish under 120M cycles.
+`./bench/chaincheck.sh` builds the NURL, C and Rust binaries the way
+`bench.sh` does and verifies every chain row against its documented
+floor — with exact PMU cycle counts where `perf` works (a healthy row
+sits within ~10 % of its floor; the current table measures 6.02–6.03
+cyc/iter on `lcg` for all three languages), and as a wall-clock lower
+bound at 6 GHz on PMU-less CI runners. The bench workflow runs it after
+every suite run: a table with an impossible number in it fails the run
+instead of getting published.
+
+This gate exists because the pre-xorshift `lcg` was exactly such a
+number — LLVM composed k affine steps into one (`x·aᵏ + cₖ`), the NURL
+binary ran 100M "iterations" in 3.7 ms (a 162 GHz clock, had the chain
+been real), and the row was silently measuring the compiler's
+composition factor. The xorshift mix in `lcg`, `affine_mix`,
+`ring_write` and `histogram_bins` breaks the affinity that transform
+needs; `chaincheck.sh` keeps it broken.
+
 ## Reading the numbers
 
 * Compare a cell against the **floor row** in `RESULTS.md` (an empty

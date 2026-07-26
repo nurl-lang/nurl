@@ -1,4 +1,4 @@
-// benchmark-contract: ring-write;seed=123456789;iterations=20000000;words=64;value=state32x2
+// benchmark-contract: ring-write-xs13;seed=123456789;iterations=20000000;words=64;value=state32x2;xorshift=13
 //
 // ring_write — 20M LCG steps, each storing a 64-bit word into a 64-slot
 // ring buffer. Same arithmetic as stream_lcg plus one dependent store
@@ -28,6 +28,7 @@
     : ~ u64 k 0
     ~ < k iterations {
         = state & + * state 1664525 1013904223 0xffffffff
+        = state ^^ state >> state 13
         = . buf & k 63 | << state 32 state
         = k + k 1
     }
