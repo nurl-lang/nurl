@@ -59,11 +59,11 @@ and `perfstat.sh` read.
 | `histogram_bins` | Read-modify-write at a data-dependent index |
 | `prefix_scan` | Store-bound fill, then a serial load/add dependency chain |
 | `binary_search` | Pointer-chasing: each load address depends on the last compare |
-| `sort_window` | Compare/branch/store mill over a 64-byte window |
+| `sort_window` | Branchless compare/exchange mill over a 64-byte window |
 | `bloom_filter` | Four unpredictable loads per query over a 2 KB working set |
 | `hash_join` | Cheap Bloom early-out plus a rare, branchy join path |
 | `sieve` | Irregular-stride byte writes, then one linear scan |
-| `fib` | The function-call path: ~29.8M calls, no memoisation |
+| `fib` | The call/return path: ~15M calls after LLVM turns one recursion into a loop |
 | `collatz` | Control-flow-heavy inner loop with no array at all |
 | `matmul` | Triple-nested loop, flat indexing, column-strided reads |
 | `json_parse` | Allocator pressure, string handling, recursive descent |

@@ -19,11 +19,11 @@ ring_write	20M ring-buffer stores	Dependent store per iteration plus address com
 histogram_bins	20M binned increments	Read-modify-write at a data-dependent index
 prefix_scan	1M 16-wide prefix scans	Store-bound fill then a serial load/add dependency chain
 binary_search	5M lower-bound searches	Pointer-chasing: each load address depends on the last compare
-sort_window	2M 8-element bubble sorts	Compare/branch/store mill over a 64-byte window
+sort_window	2M 8-element bubble sorts	Branchless compare/exchange mill over a 64-byte window (~50 cmovs/iter)
 bloom_filter	4M Bloom-filter queries	Four unpredictable loads per query over a 2 KB working set
 hash_join	500k hash-table probes	Cheap Bloom early-out plus a rare, branchy join path
 sieve	Sieve of Eratosthenes to 10M	Irregular-stride byte writes, then one linear scan
-fib	Recursive fib(35)	The function-call path: ~29.8M calls, no memoisation
+fib	Recursive fib(35)	The call/return path: ~15M calls after LLVM turns one recursion into a loop
 collatz	Longest Collatz chain below 100k	Control-flow-heavy inner loop with no array at all
 matmul	256x256 integer matrix product	Triple-nested loop, flat indexing, column-strided reads
 json_parse	20 parses of a 64 KB document	Allocator pressure, string handling, recursive descent
