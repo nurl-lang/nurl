@@ -3,7 +3,8 @@
 // sort_window — 2M iterations of "derive 8 values from the LCG state,
 // bubble-sort them, fold the extremes back into the state". 8 passes ×
 // up to 7 compare-and-maybe-swap steps per iteration, all on the same
-// 64-byte window: a compare/branch/store mill with a loop-carried
+// 64-byte window: a branchless compare/exchange mill (the compilers
+// unroll the sort and if-convert every swap to cmov) with a loop-carried
 // dependency through the state.
 //
 // NURL has no fixed-size stack array: the window lives in a `malloc`ed
