@@ -8,6 +8,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.25.0] — 2026-07-26
+
+The release that makes `packages/torchpt` and everything above it
+installable: the zip64 reading a 4.6 GB PyTorch checkpoint needs landed
+an hour after 0.24.1 was tagged, so every package built on it has been
+unbuildable by the released toolchain until now.
+
+Also the largest compiler speed-up so far, and a codegen fix that made
+`vec_extend` uncompilable for struct elements.
+
+### Added
+
+- **zip64 reading, and archives over a pointer.** `stdlib/ext/zip.nu`
+  gained `zip_open_ptr` (open an archive over a memory-mapped range
+  without copying it into a `Vec u` first), `zip_find`, `zip_csize_at`,
+  `zip_method_at`, `zip_data_off`, and zip64 central-directory support —
+  the 64-bit size/offset extra field, so an archive over 4 GB is
+  readable at all. A PyTorch `.pt` checkpoint is a zip, and a 4.6 GB one
+  needs every part of that: `packages/torchpt` reads the 1342 tensors of
+  a real checkpoint in 0.01 s and 31 MB of RSS by mapping the file and
+  never copying an entry it is not asked for.
+- **`erf` / `erfc`** in `stdlib/std/float.nu` — the exact GELU a
+  transformer wants (`x·Φ(x)`), not the tanh approximation.
+
 ### Changed
 
 - **The compiler is 34% faster and uses a third of the memory.** A
@@ -63,6 +87,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   produced them.
 
 ### Fixed
+
+- **`= . p + k 0 v` did not compile when the element type was a
+  struct.** A store through a computed pointer index died with
+  `unknown field or variable: +`, naming the operator as if it were a
+  field. The READ path had always accepted the same expression; only the
+  store peeked at the token after the pointer and, finding something
+  that was not an identifier, fell through to the error.
+  `stdlib/core/vec.nu`'s `vec_extend` hits it the moment its element
+  type is an aggregate — the generic monomorphises and fails with a
+  diagnostic pointing at nothing the caller wrote.
+- **wasm builds trapped at runtime for programs calling libc `rand`.**
+  The wasm32 ABI shims hardcoded each shim's signature from a letter
+  table, but the signature the CALL SITES use comes from the NURL
+  source. They are derived from the IR now.
 
 - **Canvas examples that call libc `rand` died on the playground with
   "runtime error: unreachable".** `doomfire.nu`, `sand.nu` and
