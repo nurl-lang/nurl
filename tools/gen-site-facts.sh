@@ -46,8 +46,10 @@ examples="$(find "$ROOT/examples" -maxdepth 1 -name '*.nu' | wc -l | tr -d ' ')"
 # place instead of aborting the deploy (or zeroing the figure).
 registry_url="${NURL_REGISTRY_URL:-https://reg.nurl-lang.org}"
 registry_packages=""
+registry_versions=""
 if stats="$(curl -fsS --max-time 8 "$registry_url/api/v1/stats" 2>/dev/null)"; then
     registry_packages="$(printf '%s' "$stats" | grep -oE '"packages"[[:space:]]*:[[:space:]]*[0-9]+' | grep -oE '[0-9]+' | head -1)"
+    registry_versions="$(printf '%s' "$stats" | grep -oE '"versions"[[:space:]]*:[[:space:]]*[0-9]+' | grep -oE '[0-9]+' | head -1)"
 fi
 
 # ── Inject into every data-fact="<key>" element ────────────────────────
@@ -63,9 +65,12 @@ inject compiler_lines "$compiler_lines"
 inject tests          "$tests"
 inject stdlib_modules "$stdlib_modules"
 inject examples       "$examples"
-# Only overwrite the registry figure when the fetch actually produced one.
+# Only overwrite the registry figures when the fetch actually produced them.
 if [[ -n "$registry_packages" ]]; then
     inject registry_packages "$(comma "$registry_packages")"
+fi
+if [[ -n "$registry_versions" ]]; then
+    inject registry_versions "$(comma "$registry_versions")"
 fi
 
 echo "site facts → $HTML"

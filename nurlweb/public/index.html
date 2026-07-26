@@ -36,6 +36,7 @@
       <a href="#targets">Targets</a>
       <a href="#proof">Built with it</a>
       <a href="#start">Get started</a>
+      <a href="#packages">Packages</a>
       <a href="#mcp">MCP</a>
       <a class="btn-link" href="https://play.nurl-lang.org" target="_blank" rel="noopener">Playground →</a>
       <a class="btn-link btn-link-lg" href="https://docs.nurl-lang.org" target="_blank" rel="noopener">Docs</a>
@@ -64,7 +65,7 @@
     </a>
   </div>
   <div class="stats">
-    <div class="stat"><strong data-fact="version">v0.25.1</strong><span>current release</span></div>
+    <div class="stat"><strong data-fact="version">v0.26.0</strong><span>current release</span></div>
     <div class="stat"><strong data-fact="compiler_lines">20,101</strong><span>lines of NURL in the compiler</span></div>
     <div class="stat"><strong data-fact="tests">588</strong><span>compiler test programs</span></div>
     <div class="stat"><strong data-fact="stdlib_modules">174</strong><span>stdlib modules</span></div>
@@ -561,6 +562,57 @@ cd nurl
   </div>
 </section>
 
+<!-- ───── Package registry ─────────────────────────────── -->
+<section id="packages">
+  <div class="container">
+    <div class="section-head">
+      <h2><span data-fact="registry_packages">45</span> packages, one command away</h2>
+      <p><a href="https://reg.nurl-lang.org" target="_blank" rel="noopener">reg.nurl-lang.org</a> is the package registry — <span data-fact="registry_versions">251</span> published versions of real libraries and tools, not placeholders. Semver ranges in <code>nurl.toml</code>, a lockfile for reproducible installs, and a signature on every tarball that <code>nurlpkg</code> checks before it unpacks anything.</p>
+    </div>
+
+    <div class="pkg-layout">
+      <div class="pkg-cmds">
+        <div class="cmd-label">Find, install, publish</div>
+        <div class="cmd-block">
+          <button class="copy-btn" data-copy-target="#pkg-cmd">Copy</button>
+<pre id="pkg-cmd">nurlpkg search whisper   # search
+nurlpkg install nq       # program → your PATH
+nurlpkg add tensor       # library → deps/
+nurlpkg publish          # your turn</pre>
+        </div>
+        <a class="btn btn-primary" href="https://reg.nurl-lang.org" target="_blank" rel="noopener">Browse the registry</a>
+      </div>
+
+      <ul class="pkg-facts">
+        <li><strong>Signed, and verified in pure NURL.</strong> The registry signs every tarball with Ed25519; <code>nurlpkg</code> verifies that signature against a pinned public key, and the SHA-256, before a single file is written.</li>
+        <li><strong>Readable before you install it.</strong> Every published version gets generated API docs and a file browser on the registry — you can read a package's source without downloading it.</li>
+        <li><strong>Reproducible.</strong> <code>nurl.lock</code> pins what you resolved, <code>nurlpkg verify</code> fails on drift, and a bad version can be yanked without breaking the ones that pinned it.</li>
+        <li><strong>Your own packages.</strong> Sign in with GitHub, mint a token with <code>nurlpkg login</code>, and <code>nurlpkg publish</code> — with <code>--dry-run</code> to walk every gate first.</li>
+      </ul>
+    </div>
+
+    <div class="grid pkg-grid">
+      <div class="card"><h3><code>nurllama</code></h3><p>Run language models locally: pull a GGUF model, chat with it, or serve an ollama-compatible API your existing clients already speak.</p></div>
+      <div class="card"><h3><code>whisper</code></h3><p>Speech recognition in pure NURL — real audio in, real text out, running OpenAI's Whisper checkpoints as shipped.</p></div>
+      <div class="card"><h3><code>onnx</code></h3><p>Load a trained ONNX model and run inference on the GPU, written entirely in NURL.</p></div>
+      <div class="card"><h3><code>tensor</code></h3><p>The n-dimensional array the ML packages share — the reusable ndarray, GPU-backed.</p></div>
+      <div class="card"><h3><code>grad</code></h3><p>Reverse-mode autograd over <code>tensor</code>: record a tape with ops that mirror its surface, call backward, train.</p></div>
+      <div class="card"><h3><code>yoloe</code></h3><p>Promptable open-vocabulary object detection and segmentation — a NURL port of YOLOE, on the GPU.</p></div>
+      <div class="card"><h3><code>wasmtime</code></h3><p>A WebAssembly runtime written from scratch in NURL — no libwasm, no embedded engine.</p></div>
+      <div class="card"><h3><code>image</code></h3><p>PNG and JPEG decode, encode and raster ops with no native library and no shell-out.</p></div>
+      <div class="card"><h3><code>nq</code></h3><p>jq-lite: filter JSON on stdin with a small query language. The one-liner in the install block above.</p></div>
+    </div>
+
+    <p class="bench-note">
+      Also published: <code>gpu</code> and <code>gpukit</code> (CUDA driver API + NVRTC, with an OpenMP CPU backend),
+      <code>tls</code>, <code>psql</code>, <code>redis</code>, <code>http</code>, <code>swarm</code>,
+      <code>embed</code>, <code>safetensor</code>, <code>vindex</code>, <code>cli</code>, <code>chart</code>,
+      <code>template</code>, <code>cas</code> and more — the full list, with docs and sources for every version, is at
+      <a href="https://reg.nurl-lang.org" target="_blank" rel="noopener">reg.nurl-lang.org</a>.
+    </p>
+  </div>
+</section>
+
 <!-- ───── MCP server ───────────────────────────────────── -->
 <section id="mcp">
   <div class="container">
@@ -644,7 +696,7 @@ cd nurl
       </div>
       <div class="card">
         <h3>Changelog</h3>
-        <p>Every release documented in Keep-a-Changelog format with the reasoning behind each fix — currently at <span data-fact="version">v0.25.1</span>.</p>
+        <p>Every release documented in Keep-a-Changelog format with the reasoning behind each fix — currently at <span data-fact="version">v0.26.0</span>.</p>
         <p style="margin-top: 0.8rem;"><a href="https://github.com/nurl-lang/nurl/blob/main/CHANGELOG.md" target="_blank" rel="noopener">CHANGELOG.md</a></p>
       </div>
       <div class="card">
@@ -667,6 +719,7 @@ cd nurl
     <a href="https://github.com/nurl-lang/nurl" target="_blank" rel="noopener">GitHub</a>
     <a href="https://docs.nurl-lang.org" target="_blank" rel="noopener">Docs</a>
     <a href="https://play.nurl-lang.org" target="_blank" rel="noopener">Playground</a>
+    <a href="https://reg.nurl-lang.org" target="_blank" rel="noopener">Package registry</a>
     <a href="https://play.nurl-lang.org/gameboydemo" target="_blank" rel="noopener">Game Boy demo</a>
     <a href="https://github.com/nurl-lang/nurl#readme" target="_blank" rel="noopener">README</a>
     <a href="https://github.com/nurl-lang/nurl/blob/main/spec/grammar.ebnf" target="_blank" rel="noopener">Grammar</a>
