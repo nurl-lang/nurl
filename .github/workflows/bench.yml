@@ -132,16 +132,52 @@ jobs:
             bench/RESULTS.md
           retention-days: 90
 
-      - name: Commit refreshed results
+      - name: Open a pull request with the refreshed results
         # Manual / scheduled runs only; see the trigger comment above.
+        #
+        # This opens a PR rather than pushing to main, because main carries a
+        # repository ruleset that requires one ("Changes must be made through
+        # a pull request" + 3 required checks). A direct `git push` from here
+        # is declined with GH013 — which is how the first scheduled-style run
+        # of this workflow failed. Pushing a *new branch* is allowed, so the
+        # results reach main the same way every other change does.
+        #
+        # Note for whoever wires this up further: a PR opened with the
+        # built-in GITHUB_TOKEN does not trigger workflow runs, so the
+        # required checks stay "expected" and `--auto` cannot complete on its
+        # own. To make the weekly refresh self-merging, either add the
+        # Actions bot as a bypass actor on the ruleset, or hand this step a
+        # PAT in a secret. Until then the PR waits for a human, which is
+        # visible rather than silent.
         if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           if git diff --quiet -- bench/results/latest.json bench/RESULTS.md; then
-            echo "results unchanged — nothing to commit."
+            echo "results unchanged — nothing to open."
             exit 0
           fi
+
+          today="$(date -u +%Y-%m-%d)"
+          branch="bench-results/${today}-${{ github.run_id }}"
+
           git config user.name 'github-actions[bot]'
-          git config user.email 'github-actions[bot]@users.noreply.github.com'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git checkout -b "$branch"
           git add bench/results/latest.json bench/RESULTS.md
-          git commit -m "bench: refresh measured numbers ($(date -u +%Y-%m-%d))"
-          git push
+          git commit -m "bench: refresh measured numbers ($today)"
+          git push -u origin "$branch"
+
+          gh pr create --base main --head "$branch" \
+            --title "bench: refresh measured numbers ($today)" \
+            --body "$(cat <<BODY
+          Automated refresh from [\`bench.yml\` run ${{ github.run_id }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}).
+
+          All 15 benchmarks passed the correctness gate — every row's five implementations printed the same result — before any of them was timed. The full report, including compile times and the process-start-up floor, is in the run summary and in \`bench/RESULTS.md\` below.
+
+          Merging this updates what nurl-lang.org publishes: \`tools/gen-bench-table.mjs\` renders \`bench/results/latest.json\` into the landing page's table at the next deploy.
+          BODY
+          )"
+
+          gh pr merge --auto --squash "$branch" \
+            || echo "auto-merge not available — the PR is open and waiting for a review."

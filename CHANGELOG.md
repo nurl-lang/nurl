@@ -124,6 +124,20 @@ one.
 
 ### Fixed
 
+- **The benchmark workflow could not publish its own results.** Its
+  refresh step pushed `bench/results/latest.json` and `bench/RESULTS.md`
+  straight to `main`, which a repository ruleset declines with GH013:
+  changes to `main` must arrive through a pull request. The suite ran,
+  the gate passed, the report was written — and the last step threw it
+  away with a red X. It now commits to a `bench-results/<date>-<run>`
+  branch and opens a PR (pushing a new branch is allowed), so the
+  numbers reach `main` the way every other change does. The step
+  documents what is still needed for that PR to merge itself: a PR
+  opened with the built-in `GITHUB_TOKEN` does not trigger workflow
+  runs, so the required checks never start and `--auto` cannot complete
+  — either the Actions bot needs a ruleset bypass, or the step needs a
+  PAT.
+
 - **`bench_auto` could report a regression for a build that got
   faster.** Its iteration ramp multiplies by 4 and stops at the first
   pass clearing 50 ms, so a body whose cost sits near that threshold
