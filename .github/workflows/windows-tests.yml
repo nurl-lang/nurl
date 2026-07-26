@@ -44,6 +44,50 @@ jobs:
         run: call build.bat
         shell: cmd
 
+      # ── The DRIVER, which nothing else on Windows exercises ────────
+      # build.bat compiles the toolchain with clang; nurl.bat is what a
+      # USER runs to build a program, and it was never under test here.
+      # That is how it came to ship looking only for a system clang while
+      # the archive bundled a zig it never used — CI installs LLVM, so the
+      # clang path always worked. Fetch a zig and drive nurl.bat both
+      # ways, from a directory whose name contains a space (the normal
+      # install path is C:\Users\First Last\.nurl\).
+      - name: Fetch zig (to exercise the bundled-compiler path)
+        if: ${{ !inputs.update_goldens }}
+        shell: pwsh
+        run: |
+          $zigVer = "0.13.0"
+          $url = "https://ziglang.org/download/$zigVer/zig-windows-x86_64-$zigVer.zip"
+          Invoke-WebRequest $url -OutFile zig.zip
+          Expand-Archive zig.zip -DestinationPath vendor
+          Move-Item "vendor/zig-windows-x86_64-$zigVer" vendor/zig
+
+      - name: nurl.bat builds and runs a program (zig, then clang)
+        if: ${{ !inputs.update_goldens }}
+        shell: pwsh
+        run: |
+          $dir = "smoke dir"
+          New-Item -ItemType Directory -Path $dir -Force | Out-Null
+          # single-quoted here-string: NURL uses backticks for strings and
+          # PowerShell would otherwise eat them as escapes
+          $src = @'
+          $ `stdlib/core/io.nu`
+          @ main → i { ( nurl_print `ok` ) ^ 0 }
+          '@
+          ($src -split "`n" | ForEach-Object { $_.TrimStart() }) -join "`n" |
+            Set-Content -Path "$dir\s.nu" -Encoding utf8NoBOM
+          foreach ($mode in @("zig", "clang")) {
+            if ($mode -eq "zig") { $env:NURL_ZIG = "$PWD\vendor\zig\zig.exe" }
+            else                 { $env:NURL_ZIG = "$PWD\does-not-exist.exe" }
+            Remove-Item "$dir\s.exe" -ErrorAction SilentlyContinue
+            & cmd /c "call nurl.bat `"$dir\s.nu`" `"$dir\s`""
+            if ($LASTEXITCODE -ne 0) { throw "$mode : nurl.bat failed" }
+            $out = & "$dir\s.exe"
+            if ($LASTEXITCODE -ne 0) { throw "$mode : the built program failed" }
+            if ($out -ne "ok") { throw "$mode : unexpected output: $out" }
+            Write-Host "$mode OK"
+          }
+
       # ── Golden regeneration mode (workflow_dispatch only) ──────────
       # The Windows goldens can only be produced on Windows; this runner
       # IS the canonical environment. Build without tests, then rewrite
