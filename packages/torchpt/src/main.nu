@@ -12,7 +12,7 @@ $ `stdlib/core/vec.nu`
 $ `stdlib/std/fs.nu`
 $ `stdlib/std/bytes.nu`
 $ `stdlib/std/floatbits.nu`
-$ `packages/torchpt/src/torchpt.nu`
+$ `torchpt.nu`
 
 @ usage → i {
     ( nurl_print `torchpt — read PyTorch .pt/.pth checkpoints\n\n` )

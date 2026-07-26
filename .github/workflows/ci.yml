@@ -101,6 +101,14 @@ jobs:
         # __free_str_vec class). Assert every stdlib @-function name is
         # globally unique.
         run: ./tools/check_stdlib_symbols.sh
+      - name: no packages/… self-imports (breaks registry installs)
+        # In this repo every build runs from the root, so a
+        # `$ \`packages/<name>/src/x.nu\`` import resolves and every test
+        # passes. Installed from the registry the package lands under
+        # deps/<name>/src/ and that path does not exist — torchpt 0.1.0
+        # shipped that way and was uninstallable from the day it was
+        # published. No in-repo test can catch it; this can.
+        run: ./tools/check_package_imports.sh
 
       - name: nurlfmt --check (canonical-form gate)
         # Every first-party .nu file must be in canonical nurlfmt
