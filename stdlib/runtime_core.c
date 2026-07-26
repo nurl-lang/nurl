@@ -733,25 +733,78 @@ long long nurl_path_type(const char *path) {
 
 /* ── §9  Memory allocation ─────────────────────────────────────── */
 
-/* Process-wide count of NURL-level allocations (every nurl_alloc /
- * nurl_zalloc — which is what stdlib vec/string/struct ctl blocks route
- * through). Exposed via nurl_alloc_count() for std/bench.nu's per-op
- * allocation metric. A relaxed atomic so the increment is correct under
- * threads while costing nothing measurable next to the malloc itself. */
-static unsigned long long g_nurl_alloc_count = 0;
+/* Count of NURL-level allocations (every nurl_alloc / nurl_zalloc —
+ * which is what stdlib vec/string/struct ctl blocks route through) and
+ * the symmetric count of nurl_free calls on a non-NULL pointer.
+ * nurl_alloc_count() feeds std/bench.nu's per-op allocation metric;
+ * together the two let a test bracket a scope and assert leak-freedom
+ * deterministically without a sanitizer — see
+ * compiler/tests/trait_owned_ret_no_leak.nu.
+ *
+ * These were one global each, bumped with a RELAXED atomic on the
+ * grounds that it "costs nothing measurable next to the malloc itself".
+ * It is not free: on x86 a relaxed read-modify-write is still a `lock
+ * xadd`, ~20 cycles plus a store-buffer stall, and every NURL program
+ * pays it twice per allocate/free pair whether or not anything ever
+ * reads the counter. Parsing bench/data.json makes 9 004 nurl_alloc
+ * calls per pass, and those two increments were 6.5 % of the parse.
+ *
+ * Instead every thread counts into a block of its own with plain
+ * arithmetic, and a reader sums the blocks. The blocks are heap
+ * allocated rather than __thread objects because a thread's counts must
+ * outlive it: the list is only ever pushed to, so a node freed at thread
+ * exit would leave the reader walking into freed memory. One 24-byte
+ * block per thread that ever allocates is the whole cost.
+ *
+ * Only the owning thread writes a block, so its updates are a relaxed
+ * load/store pair (no lock prefix); readers load relaxed as well. A
+ * reader racing a live thread may therefore observe a count one behind,
+ * which is exactly the latitude the RELAXED atomic already gave it. */
+struct nurl__actr {
+    unsigned long long alloc;
+    unsigned long long freed;
+    struct nurl__actr *next;
+};
+static struct nurl__actr        *nurl__actr_list = NULL;  /* push-only */
+static __thread struct nurl__actr *nurl__actr_self = NULL;
+
+/* First allocation on this thread: publish a block for it. Kept out of
+ * line and marked cold so nurl_alloc / nurl_free stay small enough for
+ * the inliner — folding this once-per-thread path into them costs more
+ * at every call site than the atomic it replaces. */
+__attribute__((noinline, cold))
+static struct nurl__actr *nurl__actr_join(void) {
+    struct nurl__actr *self = (struct nurl__actr *)calloc(1, sizeof *self);
+    struct nurl__actr *head = __atomic_load_n(&nurl__actr_list, __ATOMIC_RELAXED);
+    do { self->next = head; }
+    while (!__atomic_compare_exchange_n(&nurl__actr_list, &head, self, 1,
+                                        __ATOMIC_RELEASE, __ATOMIC_RELAXED));
+    nurl__actr_self = self;
+    return self;
+}
+static inline struct nurl__actr *nurl__actr_slot(void) {
+    struct nurl__actr *c = nurl__actr_self;
+    return __builtin_expect(c != NULL, 1) ? c : nurl__actr_join();
+}
+static inline void nurl__actr_bump(unsigned long long *slot) {
+    __atomic_store_n(slot, __atomic_load_n(slot, __ATOMIC_RELAXED) + 1, __ATOMIC_RELAXED);
+}
+/* Sum over every thread that has ever allocated, live or exited. */
+static unsigned long long nurl__actr_total(int freed) {
+    unsigned long long t = 0;
+    for (struct nurl__actr *c = __atomic_load_n(&nurl__actr_list, __ATOMIC_ACQUIRE);
+         c; c = c->next)
+        t += __atomic_load_n(freed ? &c->freed : &c->alloc, __ATOMIC_RELAXED);
+    return t;
+}
 
 /* OOM aborts inside the checked wrappers at the top of this file (see
  * "OOM is fatal, loudly") — malloc/calloc here are already the checked
  * forms via the file-wide macros. */
-void* nurl_alloc(long long bytes)              { __atomic_fetch_add(&g_nurl_alloc_count, 1, __ATOMIC_RELAXED); return malloc((size_t)bytes); }
-void* nurl_zalloc(long long bytes)             { __atomic_fetch_add(&g_nurl_alloc_count, 1, __ATOMIC_RELAXED); return calloc(1, (size_t)bytes); }
-long long nurl_alloc_count(void)               { return (long long)__atomic_load_n(&g_nurl_alloc_count, __ATOMIC_RELAXED); }
-/* Symmetric free counter: every nurl_free of a non-NULL pointer. Together with
- * nurl_alloc_count() the difference (alloc - free) is the live-allocation count,
- * which a test can bracket around a scope to assert leak-freedom deterministically
- * (no sanitizer needed) — see compiler/tests/trait_owned_ret_no_leak.nu. */
-static unsigned long long g_nurl_free_count = 0;
-long long nurl_free_count(void)                { return (long long)__atomic_load_n(&g_nurl_free_count, __ATOMIC_RELAXED); }
+void* nurl_alloc(long long bytes)              { nurl__actr_bump(&nurl__actr_slot()->alloc); return malloc((size_t)bytes); }
+void* nurl_zalloc(long long bytes)             { nurl__actr_bump(&nurl__actr_slot()->alloc); return calloc(1, (size_t)bytes); }
+long long nurl_alloc_count(void)               { return (long long)nurl__actr_total(0); }
+long long nurl_free_count(void)                { return (long long)nurl__actr_total(1); }
 void* nurl_realloc(void *ptr, long long bytes) { return realloc(ptr, (size_t)bytes); }
 
 /* ── §9b  Panic-unwind allocation journal ──────────────────────────
@@ -874,7 +927,7 @@ static void nurl__jrnl_drain(long long mark) {
     nurl__jrnl_len = mark;
 }
 
-void  nurl_free(void *ptr)                     { if (!ptr) return; __atomic_fetch_add(&g_nurl_free_count, 1, __ATOMIC_RELAXED); if (nurl__jrnl_len) nurl__jrnl_remove(ptr); free(ptr); }
+void  nurl_free(void *ptr)                     { if (!ptr) return; nurl__actr_bump(&nurl__actr_slot()->freed); if (nurl__jrnl_len) nurl__jrnl_remove(ptr); free(ptr); }
 void  nurl_memcpy(void *dst, const void *src, long long bytes) {
     memcpy(dst, src, (size_t)bytes);
 }

@@ -8,6 +8,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Performance
+
+- **The runtime's allocation counters cost more than the allocations
+  they counted.** `nurl_alloc` / `nurl_zalloc` / `nurl_free` each bumped
+  a process-wide `unsigned long long` with a RELAXED atomic, on the
+  recorded grounds that it "costs nothing measurable next to the malloc
+  itself". On x86 a relaxed read-modify-write is still a `lock xadd` —
+  ~20 cycles plus a store-buffer stall — and every NURL program paid it
+  twice per allocate/free pair whether or not anything ever read the
+  counter. Each thread now counts into a heap block of its own with
+  plain arithmetic and readers sum the blocks, so the totals and their
+  monotonicity are unchanged (verified across threads) and the lock
+  prefix is gone. Measured on a pinned core: `bench/stdlib_hotpath.nu`'s
+  `sort_32_desc` −10.0 % cycles, `string_build_16` −9.7 %,
+  `vec_push_64` −3.9 %; parsing `bench/data.json` −8.1 % cycles / −9.4 %
+  wall clock.
+
+- **Four borrow-checker scans were quadratic in their own input.**
+  `bck_st_set`, `bck_join_state`, `bck_field` and `bck_explode` walked
+  their strings with `nurl_str_get`, which re-runs `strlen` on every
+  call — so each byte examined cost a pass over the whole string, in the
+  functions whose own comments described removing exactly that cost
+  elsewhere. They now read through hoisted `*u` pointers, like the
+  neighbouring `__bck_st_get_at`. A nurlc self-compile drops 3.69 G →
+  3.26 G instructions (−11.6 %) and 552 ms → 514 ms (−7.0 %); the borrow
+  checker was 42 % of the compiler's run time before the change. Gate:
+  all 1122 `.nu` files under `compiler/tests`, `stdlib`, `examples` and
+  `packages` compile to byte-identical IR *and* byte-identical
+  diagnostics.
+
+### Fixed
+
+- **`bench_auto` could report a regression for a build that got
+  faster.** Its iteration ramp multiplies by 4 and stops at the first
+  pass clearing 50 ms, so a body whose cost sits near that threshold
+  lands on opposite sides for two builds and the two results then come
+  from runs 4× apart in length. On `sort_32_desc` that reported +5 %
+  ns/op for a build that was 8 % faster on both cycle count and wall
+  clock. `bench_auto` now scales back onto the target window and
+  measures once more, so every reported number comes from a run of about
+  the same length.
 
 - **An array store at an unsigned index emitted invalid IR.** `= . p idx v`
   where `idx` had a sized unsigned type printed the NURL type name into
@@ -29,6 +70,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   all three languages, extends the checksum gate across optimisation
   levels as well as languages, and reports what the optimiser is worth
   per language.
+
+- `bench/perfstat.sh` — the same u64 set measured in retired
+  instructions and core cycles instead of wall clock, with a
+  save/compare mode for A/B-ing a compiler or runtime change. Wall clock
+  on this set drifts by several per cent between runs, which is enough
+  to invent a language difference that is not there: the first report
+  showed `histogram_bins` at 1.15× against C when the two binaries
+  retire the same instructions in the same cycles. Counters make a 1 %
+  change legible and a regression impossible to miss.
 
 ## [0.25.1] — 2026-07-26
 
