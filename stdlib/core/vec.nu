@@ -139,9 +139,19 @@
             ( nurl_poke ctl 0 # i fresh )
             ( nurl_poke ctl 2 new_cap )
         } {
-            : s fresh ( nurl_realloc cur bytes )
-            ( nurl_poke ctl 0 # i fresh )
-            ( nurl_poke ctl 2 new_cap )
+            ? == 0 # i cur {
+                // First growth: nurl_alloc, not realloc(NULL, n) — the
+                // runtime's small-allocation cache sits behind
+                // nurl_alloc/nurl_free, and a Vec's first buffer is the
+                // most recycled block shape there is.
+                : s fresh ( nurl_alloc bytes )
+                ( nurl_poke ctl 0 # i fresh )
+                ( nurl_poke ctl 2 new_cap )
+            } {
+                : s fresh ( nurl_realloc cur bytes )
+                ( nurl_poke ctl 0 # i fresh )
+                ( nurl_poke ctl 2 new_cap )
+            }
         }
     } {}
 }
@@ -203,7 +213,11 @@
 @ vec_push [A] ( Vec A ) v A x → v {
     : s ctl . v ctl
     : i len ( __vec_len_raw ctl )
-    ( __vec_grow [A] ctl + len 1 )
+    // Only call into __vec_grow when the buffer is actually full: the
+    // grow path is too big to inline, and paying a call per push showed
+    // up at ~6 % of a parse-heavy profile. The common push is then a
+    // load, a compare, a store and a length bump.
+    ? >= len ( __vec_cap_raw ctl ) { ( __vec_grow [A] ctl + len 1 ) } {}
     : *A data # *A ( nurl_peek ctl 0 )
     = . data len x
     ( nurl_poke ctl 1 + len 1 )
