@@ -1,4 +1,4 @@
-// benchmark-contract: ring-write;seed=123456789;iterations=20000000;words=64;value=state32x2
+// benchmark-contract: ring-write-xs13;seed=123456789;iterations=20000000;words=64;value=state32x2;xorshift=13
 //
 // ring_write — 20M LCG steps, each storing one 64-bit word into a
 // 64-slot ring buffer.
@@ -19,6 +19,7 @@ const buf = new Uint32Array(128); // 64 slots × (low, high)
 let state = 123456789;
 for (let i = 0; i < ITERATIONS; i++) {
     state = (Math.imul(state, 1664525) + 1013904223) >>> 0;
+    state = (state ^ (state >>> 13)) >>> 0;
     const slot = (i & 63) << 1;
     buf[slot] = state;
     buf[slot + 1] = state;

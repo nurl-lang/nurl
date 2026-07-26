@@ -112,6 +112,17 @@ jobs:
         # non-zero: the timings would be comparing different computations.
         run: ./bench/bench.sh --timeout 300
 
+      - name: Physical-floor check (chaincheck)
+        # Every serial-chain row must run no faster than its dependency
+        # chain's hardware minimum — a cell below that line means a
+        # compiler shortcut the recurrence and the row is no longer
+        # measuring what its blurb claims. GitHub's Azure VMs expose no
+        # PMU, so this runs in wall-clock mode: measured time must be
+        # >= iterations x floor-cycles at 6 GHz, a clock no shipping
+        # CPU sustains. Publishing a table with an impossible number in
+        # it is worse than failing the run.
+        run: ./bench/chaincheck.sh
+
       - name: Publish the report to the run summary
         # So the numbers are readable in the Actions UI without
         # downloading an artifact or waiting for the site to publish.

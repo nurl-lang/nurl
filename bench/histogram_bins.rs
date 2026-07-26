@@ -1,4 +1,4 @@
-// benchmark-contract: histogram;seed=123456789;iterations=20000000;bins=64;index=state&63
+// benchmark-contract: histogram-xs13;seed=123456789;iterations=20000000;bins=64;index=state&63;xorshift=13
 const ITERATIONS: u64 = 20_000_000;
 const BINS: usize = 64;
 const SEED: u64 = 123_456_789;
@@ -20,6 +20,7 @@ fn main() {
             .wrapping_mul(1_664_525)
             .wrapping_add(1_013_904_223)
             & MASK;
+        state ^= state >> 13;
         let index = (state & 63) as usize;
         bins[index] = bins[index].wrapping_add(1);
         i += 1;

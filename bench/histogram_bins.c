@@ -1,4 +1,4 @@
-// benchmark-contract: histogram;seed=123456789;iterations=20000000;bins=64;index=state&63
+// benchmark-contract: histogram-xs13;seed=123456789;iterations=20000000;bins=64;index=state&63;xorshift=13
 #include <stdint.h>
 #include <stdio.h>
 
@@ -18,6 +18,7 @@ int main(void) {
   uint64_t i = 0;
   while (i < iterations) {
     state = (state * 1664525ULL + 1013904223ULL) & 0xffffffffULL;
+    state ^= state >> 13;
     uint64_t index = state & 63ULL;
     bins[index] += 1ULL;
     ++i;

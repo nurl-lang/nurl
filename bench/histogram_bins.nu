@@ -1,4 +1,4 @@
-// benchmark-contract: histogram;seed=123456789;iterations=20000000;bins=64;index=state&63
+// benchmark-contract: histogram-xs13;seed=123456789;iterations=20000000;bins=64;index=state&63;xorshift=13
 //
 // histogram_bins — 20M LCG steps, each incrementing one of 64 bins at a
 // data-dependent index, then a weighted XOR fold of the bins. The
@@ -29,6 +29,7 @@
     : ~ u64 k 0
     ~ < k iterations {
         = state & + * state 1664525 1013904223 0xffffffff
+        = state ^^ state >> state 13
         : u64 index & state 63
         = . bins index + . bins index # u64 1
         = k + k 1

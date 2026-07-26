@@ -1,4 +1,4 @@
-// benchmark-contract: ring-write;seed=123456789;iterations=20000000;words=64;value=state32x2
+// benchmark-contract: ring-write-xs13;seed=123456789;iterations=20000000;words=64;value=state32x2;xorshift=13
 #include <inttypes.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -20,6 +20,7 @@ int main(void) {
 
   while (i < iterations) {
     state = (state * 1664525ULL + 1013904223ULL) & 0xffffffffULL;
+    state ^= state >> 13;
     buf[i & mask] = (state << 32) | state;
     ++i;
   }
