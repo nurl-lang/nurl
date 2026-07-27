@@ -46,10 +46,10 @@ wrote 8602925 points to cloud.ply  (286 frames, 108624 ms)
 
 ![286 frames of the courthouse walk, in the built-in viewer](docs/viewer.png)
 
-> 8 602 925 points from 286 frames, drawn in the browser by the viewer
-> below. Facades, shopfronts, the crossing, the parked cars — and the
+> The viewer as it opens: 8 602 925 points from 286 frames, drawn in the
+> browser. Facades, shopfronts, the crossing, the parked cars — and the
 > white haze through the middle is sky, which is what the **trim** control
-> is for.
+> is for. (Captured headlessly, hence the blank frame rate.)
 
 Point it at a cloud:
 

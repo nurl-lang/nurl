@@ -1,5 +1,42 @@
 # Changelog
 
+## 0.4.2
+
+**The viewer looked like it hung, at every cloud size.** The cloud
+downloaded, the message changed to "building the point buffer...", and
+that is where it stayed — for ever. Reported from a real browser; every
+automated check had been passing throughout.
+
+The cloud was in fact loading and rendering perfectly the whole time,
+behind an opaque overlay that never went away. `el.hidden = true` sets an
+attribute, and the UA stylesheet turns that into `display: none` with a
+plain type selector — which **any** author rule outranks. `#status` set
+`display: grid`, an ID rule, so it won. The loading screen stayed on top
+of a finished render at `z-index: 5`.
+
+One line fixes it, and every page should carry it:
+
+```css
+[hidden] { display: none !important; }
+```
+
+**Two things about how this got missed, because they are the real
+lesson.** The render check reads the GL framebuffer with `gl.readPixels`,
+so it saw a perfect cloud and never saw the DOM stacked on top of it — it
+answers "did the GPU draw", not "can a person see it". And when Chrome's
+`--screenshot` kept returning the loading screen while `--dump-dom`
+showed the page settled with 590 002 points parsed, that was diagnosed as
+a stale compositor frame in Chrome. It was not. The screenshot was
+photographing the actual bug, faithfully, every time; the DOM check was
+reading the `hidden` attribute, which was the one thing that was true and
+meaningless. The comments and notes that blamed Chrome are corrected.
+
+`tests/viewer_shot.sh` now also asserts the overlay's **computed**
+`display` is `none`, which is the thing the attribute could not tell it.
+Verified against a copy of the 0.4.1 page: it fails with `the loading
+overlay is still VISIBLE (display: grid)` while simultaneously reporting
+138 304 lit pixels — the exact shape of the bug.
+
 ## 0.4.1
 
 **0.4.0 printed the wrong version.** `--version` said `lingbot-map 0.3.0`
