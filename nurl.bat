@@ -35,6 +35,20 @@ set "EMIT_ASM=0"
 set "DEBUG_INFO=0"
 set "CLI_OPT="
 
+REM -- version / upgrade: whole-toolchain commands, no source file --
+REM `nurl upgrade` is the canonical name for a toolchain upgrade (it is
+REM what the "a newer NURL toolchain is available" notice prints). The
+REM implementation lives in nurlpkg; every spelling a user might guess
+REM lands there. `nurlpkg update` is NOT one of them - that moves a
+REM project's dependency requirements.
+if /i "%~1"=="--version"    goto show_version
+if /i "%~1"=="-v"           goto show_version
+if /i "%~1"=="version"      goto show_version
+if /i "%~1"=="upgrade"      goto do_upgrade
+if /i "%~1"=="update"       goto do_upgrade
+if /i "%~1"=="self-update"  goto do_upgrade
+if /i "%~1"=="self-upgrade" goto do_upgrade
+
 :parse_flags
 if /i "%~1"=="--emit-ir"  set "EMIT_IR=1"     & shift & goto parse_flags
 if /i "%~1"=="--emit=ir"  set "EMIT_IR=1"     & shift & goto parse_flags
@@ -53,6 +67,9 @@ if "%~1"=="" (
     echo  Flags: --emit-ir ^| --emit-asm ^| -O0..-O3 ^| -g ^| --debug
     echo.
     echo  Compiles a NURL source file to a native Windows executable.
+    echo.
+    echo  nurl --version ^| -v         Print the toolchain version.
+    echo  nurl upgrade [--check]      Upgrade the toolchain in place.
     echo  The intermediate .ll file is kept alongside the output.
     exit /b 1
 )
@@ -323,3 +340,33 @@ if defined SDL2_BINDIR if exist "%SDL2_BINDIR%\SDL2.dll" (
 echo.
 echo Done: %EXEFILE%
 endlocal
+
+goto :eof
+
+:show_version
+set "SDIR=%~dp0"
+if exist "%SDIR%build\nurlc.exe" (
+    "%SDIR%build\nurlc.exe" --version
+) else (
+    nurlc.exe --version
+)
+exit /b %ERRORLEVEL%
+
+:do_upgrade
+set "SDIR=%~dp0"
+shift
+set "PKGARGS="
+:collect_upgrade_args
+if not "%~1"=="" (
+    set "PKGARGS=!PKGARGS! %~1"
+    shift
+    goto collect_upgrade_args
+)
+if exist "%SDIR%bin\nurlpkg.bat" (
+    call "%SDIR%bin\nurlpkg.bat" self-update !PKGARGS!
+) else if exist "%SDIR%build\nurlpkg.exe" (
+    "%SDIR%build\nurlpkg.exe" self-update !PKGARGS!
+) else (
+    nurlpkg self-update !PKGARGS!
+)
+exit /b %ERRORLEVEL%

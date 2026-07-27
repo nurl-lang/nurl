@@ -90,7 +90,15 @@ versions — confirms each on stdin, `--all` takes everything; registry
 deps follow the newest published version, path deps the local copy's
 `nurl.toml`), `install` (project deps, or a registry program/library),
 `lock`, `verify`, `publish`, `login`, `logout [--revoke]`, `search`,
-`yank` / `unyank`, `test`, `bench`, `version`, `help`.
+`yank` / `unyank`, `test`, `bench`, `self-update`, `version`, `help`.
+
+`self-update` is the odd one out: it upgrades the **toolchain**, not a
+package, and `nurl upgrade` is its canonical spelling (that is what the
+"a newer NURL toolchain is available" notice prints). It runs the installer
+bundled at `$NURL_HOME/libexec/get-nurl.sh`, so the checksum/signature
+gates and the "replace the toolchain's files, keep the rest of the prefix"
+rule have exactly one implementation. Take care not to read it as a synonym
+for `nurlpkg update`, which moves a project's dependency requirements.
 
 ## MCP server (`nurl-mcp`)
 

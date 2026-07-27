@@ -57,7 +57,13 @@ nurlpkg publish                        # pack + upload
 ```
 
 Other subcommands: `info`, `deps`, `remove`, `update`, `lock`, `login`,
-`logout`, `search`, `yank` / `unyank`, `test`, `bench`, `version`.
+`logout`, `search`, `yank` / `unyank`, `test`, `bench`, `version`,
+`self-update`.
+
+`self-update` upgrades the **toolchain** rather than a package — normally
+you spell it `nurl upgrade` (see [Install](/docs/install#keeping-it-up-to-date)).
+`nurlpkg update` is a different thing entirely: it moves your project's
+dependency requirements.
 
 ## MCP server (`nurl-mcp`)
 

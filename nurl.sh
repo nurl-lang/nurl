@@ -6,6 +6,10 @@
 #  nurl.sh — compile a .nu file to a native executable
 #
 #  Usage:  ./nurl.sh [flags] <file.nu> [output_name]
+#          ./nurl.sh --version | -v          print the toolchain version
+#          ./nurl.sh upgrade [--check]       upgrade the toolchain in place
+#                                            (--version vX.Y.Z, --force;
+#                                             runs `nurlpkg self-update`)
 #
 #  Flags (all must come before the source file):
 #    --emit-ir | --emit=ir     Stop after stage 1, leave only the .ll
@@ -73,9 +77,32 @@ fi
 
 # ── --version ────────────────────────────────────────────────
 # The version is baked into nurlc (runtime.o), so this needs no stdlib/env.
-if [ "${1:-}" = "--version" ] || [ "${1:-}" = "-v" ]; then
+if [ "${1:-}" = "--version" ] || [ "${1:-}" = "-v" ] || [ "${1:-}" = "version" ]; then
     exec "$NURLC" --version
 fi
+
+# ── upgrade ──────────────────────────────────────────────────
+# `nurl upgrade` is the canonical name for a toolchain upgrade — it is what
+# the "a newer NURL toolchain is available" notice tells you to run. The
+# implementation lives in nurlpkg (stdlib/ext/toolchain.nu); this is one
+# dispatch so that all the spellings a user might guess land in one place:
+#   nurl upgrade  ·  nurl update  ·  nurlpkg self-update
+# (`nurlpkg update` is NOT one of them — that moves a project's dependency
+# requirements, and has since 0.4.)
+case "${1:-}" in
+    upgrade|update|self-update|self-upgrade)
+        shift
+        for __pkg in "$SCRIPT_DIR/bin/nurlpkg" "$SCRIPT_DIR/build/nurlpkg"; do
+            [ -x "$__pkg" ] && exec "$__pkg" self-update "$@"
+        done
+        if command -v nurlpkg >/dev/null 2>&1; then
+            exec nurlpkg self-update "$@"
+        fi
+        echo "ERROR: nurlpkg not found next to this script or on PATH — cannot upgrade." >&2
+        echo "       Reinstall the toolchain: curl -fsSL https://nurl-lang.org/install.sh | sh" >&2
+        exit 1
+        ;;
+esac
 
 # ── Locate runtime.o ─────────────────────────────────────────
 RUNTIME="$SCRIPT_DIR/stdlib/runtime.o"
@@ -113,6 +140,10 @@ if [ $# -eq 0 ]; then
     echo "" >&2
     echo "  Compiles a NURL source file to a native binary." >&2
     echo "  The intermediate .ll file is kept alongside the output." >&2
+    echo "" >&2
+    echo "  nurl --version | -v          Print the toolchain version." >&2
+    echo "  nurl upgrade [--check]       Upgrade the toolchain in place" >&2
+    echo "                               (--version vX.Y.Z pins a release, --force reinstalls)." >&2
     exit 1
 fi
 

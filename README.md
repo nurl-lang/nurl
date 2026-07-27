@@ -91,7 +91,14 @@ Then:
 
 ```bash
 nurlpkg install <name>     # fetch & build a program from reg.nurl-lang.org
+nurl --version             # what you have
+nurl upgrade               # move to the newest release, in place
 ```
+
+`nurl upgrade` keeps everything else in `~/.nurl` — your registry token, the
+model cache, and every program installed with `nurlpkg install`. (Aliases:
+`nurl update`, `nurlpkg self-update`. Not `nurlpkg update` — that one is
+about a project's dependencies.)
 
 ### Build from source
 
