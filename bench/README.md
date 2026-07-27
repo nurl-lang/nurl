@@ -161,13 +161,11 @@ gate, because a runtime that gets the wrong answer quickly is not a fast
 runtime. Results: [`WASMRESULTS.md`](WASMRESULTS.md) and
 [`results/wasm-latest.json`](results/wasm-latest.json).
 
-The tenth cell is the NURL module relinked with `--gc-sections`, which
-`wasmbuilder` leaves off by default because NURL closures store function
-table indices that section GC renumbers. None of these benchmarks uses a
-closure, so the suite can put a number on what that default costs — see
-section 5 of the report, and
-[`packages/wasmbuilder`](../packages/wasmbuilder/README.md#--gc-sections)
-for when it is safe to turn on.
+The tenth cell is the NURL module relinked with `--no-gc-sections` —
+`wasmbuilder`'s pre-0.1.4 default, kept measured so the price of its
+escape hatch stays a number (section 5 of the report). See
+[`packages/wasmbuilder`](../packages/wasmbuilder/README.md#--gc-sections-is-the-default-and---no-gc-sections-the-escape-hatch)
+for why the default flipped and what would justify flipping it back.
 
 C and Rust are there as the control. Without them a wasm-vs-native ratio
 cannot distinguish "wasm is slower here" from "NURL's wasm pipeline is

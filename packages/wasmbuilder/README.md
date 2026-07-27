@@ -66,7 +66,7 @@ wasmbuilder <file.nu> [options]
                            resolve statically instead of becoming imports)
       --cflags FLAGS       extra compile/link flags, space-separated
                            (e.g. "-msimd128" for wasm SIMD)
-      --gc-sections        drop unreachable code at link time — see below
+      --no-gc-sections     keep unreachable code at link time — see below
       --no-host-imports    don't pass --ffi-host-imports to nurlc
   -q, --quiet              suppress progress output
       --doctor             show how nurlc / zig / runtime resolve here
@@ -77,26 +77,33 @@ wasmbuilder <file.nu> [options]
 each resolution step (nurlc, stdlib C sources, wasm compiler, cache dir)
 and what would happen next.
 
-### `--gc-sections`
+### `--gc-sections` is the default (and `--no-gc-sections` the escape hatch)
 
-Off by default, and the default is not timidity. NURL closures store
-**function-table indices**, and `--gc-sections` renumbers that table, so a
-closure captured before the collection can call the wrong function after
-it — a `call_indirect` trap at run time, with no link error to warn you.
-That was observed on `nurlc.wasm` (>150 functions).
+Since 0.1.4 modules are linked with `-Wl,--gc-sections`: unreachable
+code — mostly the part of the NURL runtime a program never calls — is
+dropped at link time. It is worth ~25 % of the module (`bench/lcg.nu`:
+1064 KiB → 820 KiB) and most of a JIT runtime's load-the-module floor
+(an empty program under the reference `wasmtime`: ~60 ms → ~10 ms),
+because the runtime stops translating code nothing reaches.
 
-It is worth turning on for a program that uses no closures, because what
-it drops is most of the NURL runtime the module never calls. On
-`bench/lcg.nu` the module goes 1064 KiB → 819 KiB and a reference
-`wasmtime` run goes ~120 ms → ~85 ms, because the runtime no longer
-translates code nothing reaches. [`bench/wasmbench.sh`](../../bench/wasmbench.sh)
-measures both forms of every benchmark and gates them on identical
-output.
+Earlier versions defaulted to `--no-gc-sections`, citing a real trap:
+NURL closures store function-table indices, section GC renumbers that
+table, and `nurlc.wasm` (>150 functions) was observed to `call_indirect`
+-trap under it. That blocker was re-tested at exactly the documented
+scale on 2026-07-27 and does not reproduce: a `--gc-sections`-linked
+`nurlc.wasm` **self-compiles the 65k-line compiler byte-identically to
+the native binary** under both the reference `wasmtime` and the
+pure-NURL `wt`, and the closure corpus (`test_05_closures_and_capture`,
+`test_06_torture_chamber`) passes. Today's `wasm-ld` relocates
+address-taken functions correctly through GC.
 
-The rule is: turn it on, run the program, check the output. Do not
-assume — and note that `--cflags "-Wl,--gc-sections"` is *not* the same
-thing: that appends a flag after the `--no-gc-sections` this builder
-already passes, leaving the outcome to wasm-ld's last-one-wins ordering.
+`--no-gc-sections` (library: `WbOpts.no_gc_sections`) restores the old
+behaviour. If a program ever traps on an indirect call *only* under the
+default, that is a table-renumbering bug resurfacing: switch it off and
+please report it. Use the flag rather than
+`--cflags "-Wl,--no-gc-sections"` — the latter appends after the flag
+this builder already passes and leaves the outcome to wasm-ld's
+last-one-wins ordering.
 
 ## Library use (embed the builder)
 

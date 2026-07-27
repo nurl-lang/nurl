@@ -5,17 +5,24 @@
 //   .nu ──nurlc──▶ LLVM IR ──wb_prepare_ir_for_wasi──▶ wasm32 IR
 //        ──[zig] cc --target=wasm32-wasi + runtime.wasm.o──▶ .wasm
 //
-// Link flags mirror nurlapi's production /build_wasm handler:
-//   -Wl,--no-gc-sections   NURL closures store function-table indices;
-//                          gc-sections renumbers the table → call_indirect
-//                          traps at scale (proven on nurlc.wasm >150 fns).
-//                          Opt back in per build with `. opts gc_sections`
-//                          / `--gc-sections` when the program has no
-//                          closures: it is worth ~25 % of the module and
-//                          about as much of a runtime's load time
-//                          (bench/wasmbench.sh measures both). Verify the
-//                          output, do not assume — the failure mode is a
-//                          call_indirect trap at run time, not a link error.
+// Link flags:
+//   -Wl,--gc-sections      The DEFAULT since 2026-07: drops the unreachable
+//                          part of the NURL runtime from every module —
+//                          ~25 % of the bytes and ~80 % of a JIT's
+//                          load-the-module floor. An old note here said NURL
+//                          closures (function-table indices) could not
+//                          survive the table renumbering, "proven on
+//                          nurlc.wasm >150 fns"; re-tested 2026-07-27 at
+//                          exactly that scale — a --gc-sections nurlc.wasm
+//                          SELF-COMPILES byte-identically to the native
+//                          compiler under both the reference wasmtime and
+//                          the pure-NURL wt, and the closure corpus
+//                          (test_05/test_06) passes. Wherever that trap came
+//                          from, today's wasm-ld relocates address-taken
+//                          functions correctly through GC. `--no-gc-sections`
+//                          / `. opts no_gc_sections` remains as the escape
+//                          hatch; a trap that appears only without it would
+//                          be a table-renumbering bug — please report it.
 //   (nurlapi's -Wl,--allow-undefined is replaced by per-declare
 //   "wasm-import-module"="env" IR attributes — zig cc's driver rejects
 //   the linker flag; see wasi_ir.nu. Same semantics: undefined symbols
@@ -54,11 +61,11 @@ $ `toolchain.nu`
     // — e.g. `-msimd128` for wasm SIMD
     s asyncify_imports  // comma-separated async import names (`` = none);
     // e.g. `env.wgpu_download` for the WebGPU backend's async readback
-    b gc_sections  // link with --gc-sections instead of the safe default
-    // --no-gc-sections. Opt-in, and read the note above the link
-    // stage before turning it on: it drops unreachable code (~25 %
-    // off a small module, and as much again off the runtime's
-    // load time) but renumbers the function table.
+    b no_gc_sections  // link with --no-gc-sections instead of the default
+    // --gc-sections — the escape hatch if a call_indirect trap
+    // ever points at table renumbering again (see the link-flags
+    // note at the top of this file). Costs ~25 % module size and
+    // most of a JIT runtime's module-load floor.
 }
 
 // Split a space-separated flag string into owned Strings (caller frees).
@@ -233,15 +240,15 @@ $ `toolchain.nu`
     // wasm side of it. `-Xclang <level>` goes straight to cc1 and survives.
     ? . cc is_zig { ( vec_push [s] args `-Xclang` ) ( vec_push [s] args . opts opt ) } {}
     ( vec_push [s] args `-Wno-override-module` )
-    // Section GC is off by default and opt-in per build, not per flag
-    // string: a caller who passes `-Wl,--gc-sections` through
-    // extra_cflags would be relying on wasm-ld's last-one-wins ordering
-    // to defeat the `--no-` we push here, which is not a contract worth
-    // depending on. `. opts gc_sections` picks one flag or the other, so
-    // the argv says what was meant.
-    ? . opts gc_sections
-    { ( vec_push [s] args `-Wl,--gc-sections` ) }
+    // Section GC is a single explicit choice, not a flag-string fight: a
+    // caller layering `-Wl,--(no-)gc-sections` through extra_cflags would
+    // be relying on wasm-ld's last-one-wins ordering to defeat the one we
+    // push here. `. opts no_gc_sections` picks one flag or the other, so
+    // the argv says what was meant. GC is the default; the field is the
+    // escape hatch.
+    ? . opts no_gc_sections
     { ( vec_push [s] args `-Wl,--no-gc-sections` ) }
+    { ( vec_push [s] args `-Wl,--gc-sections` ) }
     ? > ( nurl_str_len . opts extra_cflags ) 0 {
         // split the space-separated flag string into separate argv slots
         : ( Vec String ) fl ( string_split_borrow . opts extra_cflags )

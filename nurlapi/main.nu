@@ -1465,6 +1465,14 @@ s combined_stdout s combined_stderr → v {
                     // longer maps to its function, trapping at scale (e.g. nurlc.wasm
                     // compiling >150-function programs). --no-gc-sections keeps the
                     // table stable so indices stay valid.
+                    //
+                    // 2026-07-27: that trap no longer reproduces — packages/
+                    // wasmbuilder (this same pipeline, zig's wasm-ld) now defaults
+                    // to --gc-sections, validated by a byte-identical nurlc.wasm
+                    // SELF-COMPILE under two runtimes plus the closure corpus.
+                    // This service still links --no-gc-sections only because its
+                    // wasi-sdk container path has not been re-validated the same
+                    // way; flipping it is a measured ~25 % module-size win.
                     ( vec_push [s] clang_args `-Wl,--no-gc-sections` )
                     // Undefined symbols become wasm IMPORTS the host
                     // runtime resolves (WASI, and — via the GPU

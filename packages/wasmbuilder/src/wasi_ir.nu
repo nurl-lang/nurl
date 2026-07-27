@@ -542,6 +542,13 @@ $ `stdlib/core/vec.nu`
     ( vec_push [s] posix_names `pipe` ) ( vec_push [s] posix_bodies `i64 @__nurl_pipe_stub(i8*) { ret i64 -1 }` )
     ( vec_push [s] posix_names `dup2` ) ( vec_push [s] posix_bodies `i64 @__nurl_dup2_stub(i64, i64) { ret i64 -1 }` )
     ( vec_push [s] posix_names `signal` ) ( vec_push [s] posix_bodies `i8* @__nurl_signal_stub(i64, i8*) { ret i8* null }` )
+    // realpath(3) — wasi-libc doesn't ship it (no symlink story on wasi).
+    // stdlib/std/path.nu's path_canonical treats a NULL return as "path not
+    // resolvable" and answers None, which is the honest wasm answer. Without
+    // this stub the symbol becomes an env import and the reference wasmtime
+    // refuses to *instantiate* the module — nurlc.wasm broke this way the
+    // moment path_canonical entered the compiler's import graph.
+    ( vec_push [s] posix_names `realpath` ) ( vec_push [s] posix_bodies `i8* @__nurl_realpath_stub(i8*, i8*) { ret i8* null }` )
     // pthread family — wasi-libc doesn't ship pthread at all. std/thread.nu
     // + std/arc.nu + the M:N async runtime declare these unconditionally.
     // Single-threaded wasm stubs: lock/unlock/signal/broadcast/wait become
@@ -576,7 +583,8 @@ $ `stdlib/core/vec.nu`
                 : String needle ( string_from ` @` ) ( string_push_str needle name ) ( string_push_char needle 40 )
                 ? ( string_contains res ( string_data needle ) ) {
                     // 1. Rename ` @<name>(` → ` @__nurl_<name>_stub(` everywhere.
-                    : String repl ( string_from ` @__nurl_` ) ( string_push_str repl name ) ( string_push_str repl `_stub(` )
+                    : String repl_name ( string_from `__nurl_` ) ( string_push_str repl_name name ) ( string_push_str repl_name `_stub` )
+                    : String repl ( string_from ` @` ) ( string_push_str repl ( string_data repl_name ) ) ( string_push_char repl 40 )
                     : String tmp ( string_replace res ( string_data needle ) ( string_data repl ) )
                     ( string_free res ) = res tmp ( string_free repl )
 
@@ -587,30 +595,32 @@ $ `stdlib/core/vec.nu`
                     //    even though logically the define satisfies the declare.
                     //    The declare comes from nurlc emitting the FFI prototype;
                     //    we don't want it once we provide our own definition.
+                    //
+                    //    Find the line rather than reconstructing it: nurlc's two
+                    //    declare emitters space differently (`declare i64 @fork()`
+                    //    from the FFI path, `declare i8*  @realpath(i8*, i8*)` from
+                    //    the column-aligned prelude), and a rebuilt one-space line
+                    //    silently missed the second kind — leaving the declare in
+                    //    place and failing every wasm build of a program whose
+                    //    import graph reached path_canonical. __wb_ir_decl_line
+                    //    locates the actual line by symbol, whatever its spacing.
                     ?? body_o { T body → {
-                            // body is `s` (string literal). Locate ` {` via nurl_str_find
-                            // — string_index_of needs a String, not a raw `s`. The IR
-                            // template strings we declared above always end in ` { … }`
-                            // so the find returns ≥ 0.
-                            : i sp_idx ( nurl_str_find body ` {` )
-                            ? >= sp_idx 0 {
-                                // Build `declare ` + body[0..sp_idx] + `\n` and delete it
-                                // from `res`. The renamed declare lives there from step 1.
-                                : String body_str ( string_from body )
-                                : String prefix ( string_substr body_str 0 sp_idx )
-                                : String declare_line ( string_from `declare ` )
-                                ( string_push_str declare_line ( string_data prefix ) )
-                                ( string_push_char declare_line 10 )
-                                : String tmp2 ( string_replace res ( string_data declare_line ) `` )
+                            : String decl ( __wb_ir_decl_line res ( string_data repl_name ) )
+                            ? > ( string_len decl ) 0 {
+                                : String decl_nl ( string_from ( string_data decl ) )
+                                ( string_push_char decl_nl 10 )
+                                : String tmp2 ( string_replace res ( string_data decl_nl ) `` )
                                 ( string_free res ) = res tmp2
-                                ( string_free declare_line ) ( string_free prefix ) ( string_free body_str )
+                                ( string_free decl_nl )
                             } {}
+                            ( string_free decl )
 
                             // 3. Append the stub definition.
                             ( string_push_str shims `define internal ` )
                             ( string_push_str shims body )
                             ( string_push_str shims `\n` )
                         } F _ → {} }
+                    ( string_free repl_name )
                 } {}
                 ( string_free needle )
             } F _ → {} }
