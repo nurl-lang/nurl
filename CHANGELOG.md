@@ -8,6 +8,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **`wasmbuilder` links with `--gc-sections` by default.** The previous
+  default, `--no-gc-sections`, guarded against a real trap: NURL closures
+  store function-table indices, section GC renumbers that table, and
+  `nurlc.wasm` was observed to `call_indirect`-trap under it at >150
+  functions. Before flipping, that blocker was re-tested at exactly the
+  documented scale — a `--gc-sections`-linked `nurlc.wasm` **self-compiles
+  the 65k-line compiler byte-identically to the native binary** under both
+  the reference `wasmtime` and the pure-NURL `wt`, and the closure corpus
+  (`test_05_closures_and_capture`, `test_06_torture_chamber`) passes.
+  Whatever produced the historical trap, today's `wasm-ld` relocates
+  address-taken functions correctly through GC.
+
+  What the old default cost, measured by `bench/wasmbench.sh`: ~25 % of
+  every module (`lcg`: 1064 → 820 KiB) and ~83 % of an empty program's
+  module-load floor on the reference JIT (~60 → ~10 ms) — the single
+  largest start-up gap between NURL wasm and C wasm. `--no-gc-sections`
+  (library: `WbOpts.no_gc_sections`, replacing the short-lived
+  `gc_sections` field) remains as the escape hatch; an indirect-call trap
+  that appears only under the default would be the renumbering bug
+  resurfacing and should be reported. The suite now measures the escape
+  hatch as its tenth cell instead of the GC build, so its price stays a
+  number. `nurlapi`'s `/build_wasm` still links `--no-gc-sections` — its
+  wasi-sdk container path has not been re-validated the same way; the
+  comment there now records the evidence for flipping it.
+
 ### Added
 
 - **`nurl upgrade` — the toolchain updates itself.** Until now the only way
@@ -98,6 +125,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   record which runtime produced a result.
 
 ### Fixed
+
+- **Every wasm build of a program whose imports reached `path_canonical`
+  failed — including `nurlc.wasm` itself.** Two stacked defects, one seam.
+  wasi-libc ships no `realpath(3)`, and it was missing from `wasi_ir.nu`'s
+  POSIX stub list, so the symbol became an `env` wasm import and the
+  reference `wasmtime` refused to *instantiate* the module (`unknown
+  import: env::realpath`). Adding the stub exposed the second defect: the
+  stub machinery removes the now-renamed `declare` line by *reconstructing*
+  it with single spacing, but nurlc has two declare emitters — the FFI path
+  prints `declare i64 @fork()`, the column-aligned prelude prints
+  `declare i8*  @realpath(i8*, i8*)` — so the rebuilt line missed the
+  padded kind, the stale declare collided with the appended define, and
+  clang rejected the module ("invalid redefinition"). The stripper now
+  locates the actual line by symbol (`__wb_ir_decl_line`) instead of
+  guessing its spelling. The stub returns NULL, which `path_canonical`
+  already maps to `None` — the honest wasm answer. `find_clone` (whose
+  import graph spans the whole POSIX-stub surface) joins the wasmbuilder
+  corpus so this seam stays covered.
 
 - **The installer served from nurl-lang.org still wiped the whole install
   prefix.** `tools/get-nurl.{sh,ps1}` stopped doing that in July —

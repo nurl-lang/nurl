@@ -49,7 +49,13 @@ echo "[2/3] corpus: native vs wasm output"
 # enum_payload_64bit_slots compiler test guard the i64 enum-payload
 # slots: both carry f64 / >2^32 payloads that a pre-fix nurlc truncated
 # on wasm32 (they need a toolchain with the i64-slot enum layout).
-CORPUS="fizzbuzz collatz math_basic json_basic showcase serde_demo msgpack_demo dict_coder enigma rule30 slice_test test_05_closures_and_capture test_06_torture_chamber chaotic-showcase tests:enum_payload_64bit_slots"
+# find_clone is here for its import graph, not its no-args usage run: it
+# pulls std/path.nu (realpath) and std/process.nu (fork/waitpid/mmap), the
+# POSIX-stub surface of wasi_ir.nu. Its wasm build broke silently when
+# path_canonical entered the stdlib import graph — realpath's prelude
+# declare is column-padded ("i8*  @realpath") and the stub stripper
+# rebuilt the line with single spacing, so nothing in this corpus caught it.
+CORPUS="fizzbuzz collatz math_basic json_basic showcase serde_demo msgpack_demo dict_coder enigma rule30 slice_test test_05_closures_and_capture test_06_torture_chamber chaotic-showcase find_clone tests:enum_payload_64bit_slots"
 for name in $CORPUS; do
     case "$name" in
         tests:*) src="$REPO_ROOT/compiler/tests/${name#tests:}.nu" ;;

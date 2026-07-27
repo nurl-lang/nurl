@@ -21,7 +21,7 @@
 #                         column on its left is the cost of *this runtime*.
 #
 #  Ten timed cells per row — 3 languages x {native, JIT, interpreter}, plus
-#  the NURL module relinked with --gc-sections — all gated on printing the
+#  the NURL module relinked with --no-gc-sections — all gated on printing the
 #  same line as the native NURL binary. A speed number for a program
 #  computing something else is worthless.
 #
@@ -276,19 +276,16 @@ compile_nurl_wasm() {      # <src.nu> <outbase> -> "<ms>" or FAIL
     median "${res[@]}"
 }
 
-# The same pipeline with `--gc-sections`, which wasmbuilder leaves off by
-# default: NURL closures store function-table indices and section GC
-# renumbers that table, so a closure captured before the collection can call
-# the wrong function after it — a run-time `call_indirect` trap, with no
-# link error to warn anyone. What it drops is most of the NURL runtime a
-# small program never calls, which on the reference runtime is code being
-# translated for nothing. None of these benchmarks uses a closure, so the
-# variant is built for all of them, gated on identical output like every
-# other cell, and reported beside the default in section 5.
-compile_nurl_wasm_gc() {   # <src.nu> <outbase> -> "<ms>" or FAIL
-    local src="$1" out="$2.nugc.wasm" res=() r t
+# The same pipeline with `--no-gc-sections` — what wasmbuilder's default
+# USED to be, kept measured so the cost of ever needing the escape hatch
+# (a call_indirect trap under table renumbering, not seen since the flip)
+# stays a number instead of a memory. Built for every benchmark, gated on
+# identical output like every other cell, reported beside the default in
+# section 5.
+compile_nurl_wasm_nogc() { # <src.nu> <outbase> -> "<ms>" or FAIL
+    local src="$1" out="$2.nunogc.wasm" res=() r t
     for ((r = 0; r < COMPILE_REPS; r++)); do
-        t="$(cd "$ROOT" && time_ms "$WASMBUILDER" -q --gc-sections "$src" -o "$out")"
+        t="$(cd "$ROOT" && time_ms "$WASMBUILDER" -q --no-gc-sections "$src" -o "$out")"
         [[ "$t" == FAIL || "$t" == TIMEOUT ]] && { echo FAIL; return 1; }
         res+=("$t")
     done
@@ -397,7 +394,7 @@ printf 'fn main() {}\n'                  > "$floor_dir/floor.rs"
 echo "  measuring the floor …" >&2
 read -r floor_cc_nurl_fe floor_cc_nurl <<<"$(compile_nurl_native "$floor_dir/floor.nu" "$floor_dir/floor")"
 floor_cc_nurl_wasm="$(compile_nurl_wasm "$floor_dir/floor.nu" "$floor_dir/floor")"
-floor_cc_nurl_wasm_gc="$(compile_nurl_wasm_gc "$floor_dir/floor.nu" "$floor_dir/floor")"
+floor_cc_nurl_wasm_nogc="$(compile_nurl_wasm_nogc "$floor_dir/floor.nu" "$floor_dir/floor")"
 floor_cc_c="$(compile_c_native "$floor_dir/floor.c" "$floor_dir/floor")"
 floor_cc_c_wasm="$(compile_c_wasm "$floor_dir/floor.c" "$floor_dir/floor")"
 floor_cc_rust="$(compile_rust_native "$floor_dir/floor.rs" "$floor_dir/floor")"
@@ -407,7 +404,7 @@ read -r floor_nurl _      <<<"$(cd "$ROOT" && time_cell "$floor_dir/floor.nurl.b
 read -r floor_c _         <<<"$(cd "$ROOT" && time_cell "$floor_dir/floor.c.bin")"
 read -r floor_rust _      <<<"$(cd "$ROOT" && time_cell "$floor_dir/floor.rs.bin")"
 read -r floor_nurl_ref _  <<<"$(cd "$ROOT" && time_cell "${REF_RUN[@]}" "$floor_dir/floor.nu.wasm")"
-read -r floor_nurl_ref_gc _ <<<"$(cd "$ROOT" && time_cell "${REF_RUN[@]}" "$floor_dir/floor.nugc.wasm")"
+read -r floor_nurl_ref_nogc _ <<<"$(cd "$ROOT" && time_cell "${REF_RUN[@]}" "$floor_dir/floor.nunogc.wasm")"
 read -r floor_c_ref _     <<<"$(cd "$ROOT" && time_cell "${REF_RUN[@]}" "$floor_dir/floor.c.wasm")"
 read -r floor_rust_ref _  <<<"$(cd "$ROOT" && time_cell "${REF_RUN[@]}" "$floor_dir/floor.rs.wasm")"
 read -r floor_nurl_wt _   <<<"$(cd "$ROOT" && time_cell "${WT_RUN[@]}" "$floor_dir/floor.nu.wasm")"
@@ -430,8 +427,8 @@ r_nurl_wt_reps=(); r_c_wt_reps=(); r_rust_wt_reps=()
 r_cc_nurl_fe=(); r_cc_nurl=(); r_cc_nurl_wasm=()
 r_cc_c=(); r_cc_c_wasm=(); r_cc_rust=(); r_cc_rust_wasm=()
 r_sz_nurl=(); r_sz_nurl_wasm=(); r_sz_c=(); r_sz_c_wasm=(); r_sz_rust=(); r_sz_rust_wasm=()
-# the --gc-sections variant of the NURL module (section 5)
-r_cc_nurl_wasm_gc=(); r_sz_nurl_wasm_gc=(); r_nurl_ref_gc=(); r_nurl_ref_gc_reps=()
+# the --no-gc-sections variant of the NURL module (section 5)
+r_cc_nurl_wasm_nogc=(); r_sz_nurl_wasm_nogc=(); r_nurl_ref_nogc=(); r_nurl_ref_nogc_reps=()
 
 progress() { printf '\r\033[K  %-18s %s' "$1" "$2" >&2; }
 
@@ -444,17 +441,17 @@ for idx in "${!names[@]}"; do
     cc_rust="$(compile_rust_native "$BENCH/$b.rs" "$BUILD/$b")"
     progress "$b" "compiling wasm…"
     cc_nurl_wasm="$(compile_nurl_wasm "$BENCH/$b.nu" "$BUILD/$b")"
-    cc_nurl_wasm_gc="$(compile_nurl_wasm_gc "$BENCH/$b.nu" "$BUILD/$b")"
+    cc_nurl_wasm_nogc="$(compile_nurl_wasm_nogc "$BENCH/$b.nu" "$BUILD/$b")"
     cc_c_wasm="$(compile_c_wasm "$BENCH/$b.c" "$BUILD/$b")"
     cc_rust_wasm="$(compile_rust_wasm "$BENCH/$b.rs" "$BUILD/$b")"
     r_cc_nurl_fe+=("${cc_fe:-FAIL}"); r_cc_nurl+=("${cc_nurl:-FAIL}")
-    r_cc_nurl_wasm+=("$cc_nurl_wasm"); r_cc_nurl_wasm_gc+=("$cc_nurl_wasm_gc")
+    r_cc_nurl_wasm+=("$cc_nurl_wasm"); r_cc_nurl_wasm_nogc+=("$cc_nurl_wasm_nogc")
     r_cc_c+=("$cc_c"); r_cc_c_wasm+=("$cc_c_wasm")
     r_cc_rust+=("$cc_rust"); r_cc_rust_wasm+=("$cc_rust_wasm")
 
     r_sz_nurl+=("$(fsize "$BUILD/$b.nurl.bin")")
     r_sz_nurl_wasm+=("$(fsize "$BUILD/$b.nu.wasm")")
-    r_sz_nurl_wasm_gc+=("$(fsize "$BUILD/$b.nugc.wasm")")
+    r_sz_nurl_wasm_nogc+=("$(fsize "$BUILD/$b.nunogc.wasm")")
     r_sz_c+=("$(fsize "$BUILD/$b.c.bin")")
     r_sz_c_wasm+=("$(fsize "$BUILD/$b.c.wasm")")
     r_sz_rust+=("$(fsize "$BUILD/$b.rs.bin")")
@@ -472,7 +469,7 @@ for idx in "${!names[@]}"; do
     out_nurl_ref="$(cd "$ROOT" && timeout "${TIMEOUT_S}s" "${REF_RUN[@]}" "$BUILD/$b.nu.wasm" 2>/dev/null)"
     out_c_ref="$(cd "$ROOT" && timeout "${TIMEOUT_S}s" "${REF_RUN[@]}" "$BUILD/$b.c.wasm" 2>/dev/null)"
     out_rust_ref="$(cd "$ROOT" && timeout "${TIMEOUT_S}s" "${REF_RUN[@]}" "$BUILD/$b.rs.wasm" 2>/dev/null)"
-    out_nurl_ref_gc="$(cd "$ROOT" && timeout "${TIMEOUT_S}s" "${REF_RUN[@]}" "$BUILD/$b.nugc.wasm" 2>/dev/null)"
+    out_nurl_ref_nogc="$(cd "$ROOT" && timeout "${TIMEOUT_S}s" "${REF_RUN[@]}" "$BUILD/$b.nunogc.wasm" 2>/dev/null)"
 
     progress "$b" "verifying interpreter…"
     out_nurl_wt="$(cd "$ROOT" && timeout "${TIMEOUT_S}s" "${WT_RUN[@]}" "$BUILD/$b.nu.wasm" 2>/dev/null)"
@@ -486,7 +483,7 @@ for idx in "${!names[@]}"; do
     verified=true; detail=""
     for pair in "NURL:$out_nurl" "C:$out_c" "Rust:$out_rust" \
                 "NURL/wasm:$out_nurl_ref" "C/wasm:$out_c_ref" "Rust/wasm:$out_rust_ref" \
-                "NURL/wasm+gc:$out_nurl_ref_gc" \
+                "NURL/wasm+nogc:$out_nurl_ref_nogc" \
                 "NURL/wt:$out_nurl_wt" "C/wt:$out_c_wt" "Rust/wt:$out_rust_wt"; do
         lang="${pair%%:*}"; got="${pair#*:}"
         # An empty line fails the gate even when every cell agrees on it:
@@ -504,7 +501,7 @@ for idx in "${!names[@]}"; do
         r_nurl+=(SKIPPED); r_c+=(SKIPPED); r_rust+=(SKIPPED)
         r_nurl_ref+=(SKIPPED); r_c_ref+=(SKIPPED); r_rust_ref+=(SKIPPED)
         r_nurl_wt+=(SKIPPED); r_c_wt+=(SKIPPED); r_rust_wt+=(SKIPPED)
-        r_nurl_ref_gc+=(SKIPPED); r_nurl_ref_gc_reps+=(0)
+        r_nurl_ref_nogc+=(SKIPPED); r_nurl_ref_nogc_reps+=(0)
         r_nurl_reps+=(0); r_c_reps+=(0); r_rust_reps+=(0)
         r_nurl_ref_reps+=(0); r_c_ref_reps+=(0); r_rust_ref_reps+=(0)
         r_nurl_wt_reps+=(0); r_c_wt_reps+=(0); r_rust_wt_reps+=(0)
@@ -524,8 +521,8 @@ for idx in "${!names[@]}"; do
     r_c_ref+=("$ms"); r_c_ref_reps+=("$reps")
     progress "$b" "timing Rust wasm (JIT)…"; read -r ms reps <<<"$(cd "$ROOT" && time_cell "${REF_RUN[@]}" "$BUILD/$b.rs.wasm")"
     r_rust_ref+=("$ms"); r_rust_ref_reps+=("$reps")
-    progress "$b" "timing NURL wasm+gc (JIT)…"; read -r ms reps <<<"$(cd "$ROOT" && time_cell "${REF_RUN[@]}" "$BUILD/$b.nugc.wasm")"
-    r_nurl_ref_gc+=("$ms"); r_nurl_ref_gc_reps+=("$reps")
+    progress "$b" "timing NURL wasm+nogc (JIT)…"; read -r ms reps <<<"$(cd "$ROOT" && time_cell "${REF_RUN[@]}" "$BUILD/$b.nunogc.wasm")"
+    r_nurl_ref_nogc+=("$ms"); r_nurl_ref_nogc_reps+=("$reps")
 
     progress "$b" "timing NURL wasm (wt)…"; read -r ms reps <<<"$(cd "$ROOT" && time_cell "${WT_RUN[@]}" "$BUILD/$b.nu.wasm")"
     r_nurl_wt+=("$ms"); r_nurl_wt_reps+=("$reps")
@@ -606,15 +603,15 @@ emit_json() {
     printf '  "floor_ms": {\n'
     printf '    "native": { "nurl": %s, "c": %s, "rust": %s },\n' \
         "$(jnum "$floor_nurl")" "$(jnum "$floor_c")" "$(jnum "$floor_rust")"
-    printf '    "wasm_ref": { "nurl": %s, "c": %s, "rust": %s, "nurl_gc_sections": %s },\n' \
+    printf '    "wasm_ref": { "nurl": %s, "c": %s, "rust": %s, "nurl_no_gc_sections": %s },\n' \
         "$(jnum "$floor_nurl_ref")" "$(jnum "$floor_c_ref")" "$(jnum "$floor_rust_ref")" \
-        "$(jnum "$floor_nurl_ref_gc")"
+        "$(jnum "$floor_nurl_ref_nogc")"
     printf '    "wasm_wt": { "nurl": %s, "c": %s, "rust": %s }\n' \
         "$(jnum "$floor_nurl_wt")" "$(jnum "$floor_c_wt")" "$(jnum "$floor_rust_wt")"
     printf '  },\n'
-    printf '  "floor_compile_ms": { "nurl_frontend": %s, "nurl_native": %s, "nurl_wasm": %s, "nurl_wasm_gc_sections": %s, "c_native": %s, "c_wasm": %s, "rust_native": %s, "rust_wasm": %s },\n' \
+    printf '  "floor_compile_ms": { "nurl_frontend": %s, "nurl_native": %s, "nurl_wasm": %s, "nurl_wasm_no_gc_sections": %s, "c_native": %s, "c_wasm": %s, "rust_native": %s, "rust_wasm": %s },\n' \
         "$(jnum "$floor_cc_nurl_fe")" "$(jnum "$floor_cc_nurl")" "$(jnum "$floor_cc_nurl_wasm")" \
-        "$(jnum "$floor_cc_nurl_wasm_gc")" \
+        "$(jnum "$floor_cc_nurl_wasm_nogc")" \
         "$(jnum "$floor_cc_c")" "$(jnum "$floor_cc_c_wasm")" \
         "$(jnum "$floor_cc_rust")" "$(jnum "$floor_cc_rust_wasm")"
     printf '  "benchmarks": [\n'
@@ -629,28 +626,28 @@ emit_json() {
         printf '      "run_ms": {\n'
         printf '        "native":   { "nurl": %s, "c": %s, "rust": %s },\n' \
             "$(jnum "${r_nurl[$i]}")" "$(jnum "${r_c[$i]}")" "$(jnum "${r_rust[$i]}")"
-        printf '        "wasm_ref": { "nurl": %s, "c": %s, "rust": %s, "nurl_gc_sections": %s },\n' \
+        printf '        "wasm_ref": { "nurl": %s, "c": %s, "rust": %s, "nurl_no_gc_sections": %s },\n' \
             "$(jnum "${r_nurl_ref[$i]}")" "$(jnum "${r_c_ref[$i]}")" "$(jnum "${r_rust_ref[$i]}")" \
-            "$(jnum "${r_nurl_ref_gc[$i]}")"
+            "$(jnum "${r_nurl_ref_nogc[$i]}")"
         printf '        "wasm_wt":  { "nurl": %s, "c": %s, "rust": %s }\n' \
             "$(jnum "${r_nurl_wt[$i]}")" "$(jnum "${r_c_wt[$i]}")" "$(jnum "${r_rust_wt[$i]}")"
         printf '      },\n'
         printf '      "reps": {\n'
         printf '        "native":   { "nurl": %s, "c": %s, "rust": %s },\n' \
             "${r_nurl_reps[$i]}" "${r_c_reps[$i]}" "${r_rust_reps[$i]}"
-        printf '        "wasm_ref": { "nurl": %s, "c": %s, "rust": %s, "nurl_gc_sections": %s },\n' \
+        printf '        "wasm_ref": { "nurl": %s, "c": %s, "rust": %s, "nurl_no_gc_sections": %s },\n' \
             "${r_nurl_ref_reps[$i]}" "${r_c_ref_reps[$i]}" "${r_rust_ref_reps[$i]}" \
-            "${r_nurl_ref_gc_reps[$i]}"
+            "${r_nurl_ref_nogc_reps[$i]}"
         printf '        "wasm_wt":  { "nurl": %s, "c": %s, "rust": %s }\n' \
             "${r_nurl_wt_reps[$i]}" "${r_c_wt_reps[$i]}" "${r_rust_wt_reps[$i]}"
         printf '      },\n'
-        printf '      "compile_ms": { "nurl_frontend": %s, "nurl_native": %s, "nurl_wasm": %s, "nurl_wasm_gc_sections": %s, "c_native": %s, "c_wasm": %s, "rust_native": %s, "rust_wasm": %s },\n' \
+        printf '      "compile_ms": { "nurl_frontend": %s, "nurl_native": %s, "nurl_wasm": %s, "nurl_wasm_no_gc_sections": %s, "c_native": %s, "c_wasm": %s, "rust_native": %s, "rust_wasm": %s },\n' \
             "$(jnum "${r_cc_nurl_fe[$i]}")" "$(jnum "${r_cc_nurl[$i]}")" "$(jnum "${r_cc_nurl_wasm[$i]}")" \
-            "$(jnum "${r_cc_nurl_wasm_gc[$i]}")" \
+            "$(jnum "${r_cc_nurl_wasm_nogc[$i]}")" \
             "$(jnum "${r_cc_c[$i]}")" "$(jnum "${r_cc_c_wasm[$i]}")" \
             "$(jnum "${r_cc_rust[$i]}")" "$(jnum "${r_cc_rust_wasm[$i]}")"
-        printf '      "bytes": { "nurl_native": %s, "nurl_wasm": %s, "nurl_wasm_gc_sections": %s, "c_native": %s, "c_wasm": %s, "rust_native": %s, "rust_wasm": %s }\n' \
-            "${r_sz_nurl[$i]}" "${r_sz_nurl_wasm[$i]}" "${r_sz_nurl_wasm_gc[$i]}" \
+        printf '      "bytes": { "nurl_native": %s, "nurl_wasm": %s, "nurl_wasm_no_gc_sections": %s, "c_native": %s, "c_wasm": %s, "rust_native": %s, "rust_wasm": %s }\n' \
+            "${r_sz_nurl[$i]}" "${r_sz_nurl_wasm[$i]}" "${r_sz_nurl_wasm_nogc[$i]}" \
             "${r_sz_c[$i]}" "${r_sz_c_wasm[$i]}" \
             "${r_sz_rust[$i]}" "${r_sz_rust_wasm[$i]}"
         printf '    }%s\n' "$( (( i < last )) && echo ',' )"
@@ -741,17 +738,15 @@ emit_md() {
     printf 'where it is most of the run.\n\n'
     printf 'A `—` means the subtraction has no signal left in it: the floor is more\n'
     printf 'than half of that cell, so the remainder is a difference of two similar\n'
-    printf 'numbers carrying both their errors. That is not a rare edge case in the\n'
-    printf "**NURL x** column — a 1 MB module's compilation is comparable to the\n"
-    printf 'benchmarks themselves, which is exactly why the `+gc` column beside it\n'
-    printf 'exists: the same NURL programs linked with `--gc-sections` (section 5)\n'
-    printf 'have a floor small enough to subtract cleanly, so they are where the\n'
-    printf "steady-state throughput of NURL's wasm can actually be read.\n\n"
-    printf '| Benchmark | NURL x | NURL +gc x | C x | Rust x |\n|---|---:|---:|---:|---:|\n'
+    printf 'numbers carrying both their errors. The `no gc` column is the\n'
+    printf 'pre-0.1.4 default relinked with `--no-gc-sections` (section 5); its\n'
+    printf 'floor is big enough that most of its rows land there, which is one of\n'
+    printf 'the reasons it is no longer the default.\n\n'
+    printf '| Benchmark | NURL x | NURL no-gc x | C x | Rust x |\n|---|---:|---:|---:|---:|\n'
     for i in "${!names[@]}"; do
         printf '| `%s` | %s | %s | %s | %s |\n' "${names[$i]}" \
             "$(ratio_net "${r_nurl_ref[$i]}" "$floor_nurl_ref" "${r_nurl[$i]}" "$floor_nurl")" \
-            "$(ratio_net "${r_nurl_ref_gc[$i]}" "$floor_nurl_ref_gc" "${r_nurl[$i]}" "$floor_nurl")" \
+            "$(ratio_net "${r_nurl_ref_nogc[$i]}" "$floor_nurl_ref_nogc" "${r_nurl[$i]}" "$floor_nurl")" \
             "$(ratio_net "${r_c_ref[$i]}" "$floor_c_ref" "${r_c[$i]}" "$floor_c")" \
             "$(ratio_net "${r_rust_ref[$i]}" "$floor_rust_ref" "${r_rust[$i]}" "$floor_rust")"
     done
@@ -812,39 +807,36 @@ emit_md() {
     done
     printf '\n'
 
-    printf '## 5. Dead code — what `--gc-sections` costs and buys\n\n'
-    printf 'Every NURL module above was linked with `-Wl,--no-gc-sections`, the\n'
-    printf 'default `wasmbuilder` ships. NURL closures store **function-table indices**\n'
-    printf 'and section GC renumbers that table, so a closure captured before the\n'
-    printf 'collection can call the wrong function after it — a run-time\n'
-    printf '`call_indirect` trap with no link error to warn anyone. The cost of that\n'
-    printf 'default is that most of the NURL runtime ships in, and is translated by\n'
-    printf 'the runtime, in every module that never calls it.\n\n'
-    printf 'These rows are the same benchmarks rebuilt with `--gc-sections`, run on\n'
-    printf 'the reference runtime, and held to the same output — none of them uses a\n'
-    printf 'closure, so the hazard does not apply and the saving is measurable.\n\n'
-    printf '| Benchmark | Size | Size +gc | Δ | JIT | JIT +gc | Δ |\n'
+    printf '## 5. Dead code — what `--no-gc-sections` would cost\n\n'
+    printf 'Every NURL module above was linked with `-Wl,--gc-sections`, the\n'
+    printf '`wasmbuilder` default since 0.1.4: the unreachable part of the NURL\n'
+    printf 'runtime is dropped instead of shipped and JIT-translated for nothing.\n'
+    printf 'The old default, `--no-gc-sections`, exists as an escape hatch for a\n'
+    printf 'closure/table-renumbering hazard that no longer reproduces — a\n'
+    printf '`--gc-sections` `nurlc.wasm` self-compiles byte-identically under both\n'
+    printf 'runtimes. These rows are the same benchmarks relinked with the escape\n'
+    printf 'hatch, held to the same output, so its price stays a number: what you\n'
+    printf 'pay in bytes and module-load time if you ever have to reach for it.\n\n'
+    printf '| Benchmark | Size | Size no-gc | Δ | JIT | JIT no-gc | Δ |\n'
     printf '|---|---:|---:|---:|---:|---:|---:|\n'
     printf '| _(floor: empty program)_ | _%s_ | _%s_ | _%s_ | _%s_ | _%s_ | _%s_ |\n' \
-        "$(kib "$(fsize "$floor_dir/floor.nu.wasm")")" "$(kib "$(fsize "$floor_dir/floor.nugc.wasm")")" \
-        "$(pct "$(fsize "$floor_dir/floor.nu.wasm")" "$(fsize "$floor_dir/floor.nugc.wasm")")" \
-        "$floor_nurl_ref" "$floor_nurl_ref_gc" "$(pct "$floor_nurl_ref" "$floor_nurl_ref_gc")"
+        "$(kib "$(fsize "$floor_dir/floor.nu.wasm")")" "$(kib "$(fsize "$floor_dir/floor.nunogc.wasm")")" \
+        "$(pct "$(fsize "$floor_dir/floor.nu.wasm")" "$(fsize "$floor_dir/floor.nunogc.wasm")")" \
+        "$floor_nurl_ref" "$floor_nurl_ref_nogc" "$(pct "$floor_nurl_ref" "$floor_nurl_ref_nogc")"
     for i in "${!names[@]}"; do
         printf '| `%s` | %s | %s | %s | %s | %s | %s |\n' "${names[$i]}" \
-            "$(kib "${r_sz_nurl_wasm[$i]}")" "$(kib "${r_sz_nurl_wasm_gc[$i]}")" \
-            "$(pct "${r_sz_nurl_wasm[$i]}" "${r_sz_nurl_wasm_gc[$i]}")" \
-            "${r_nurl_ref[$i]}" "${r_nurl_ref_gc[$i]}" \
-            "$(pct "${r_nurl_ref[$i]}" "${r_nurl_ref_gc[$i]}")"
+            "$(kib "${r_sz_nurl_wasm[$i]}")" "$(kib "${r_sz_nurl_wasm_nogc[$i]}")" \
+            "$(pct "${r_sz_nurl_wasm[$i]}" "${r_sz_nurl_wasm_nogc[$i]}")" \
+            "${r_nurl_ref[$i]}" "${r_nurl_ref_nogc[$i]}" \
+            "$(pct "${r_nurl_ref[$i]}" "${r_nurl_ref_nogc[$i]}")"
     done
     printf '\n'
-    printf 'The saving is almost all fixed cost, so it is largest where the benchmark\n'
+    printf 'The cost is almost all fixed, so it is largest where the benchmark\n'
     printf 'itself is smallest — compare each row against the floor. It is reported\n'
     printf 'on the JIT and not on the interpreter because the interpreter is\n'
     printf 'execution-bound, not decode-bound: its floor row in section 3 is a few\n'
-    printf 'tens of milliseconds against cells in the tens of *seconds*, so shrinking\n'
-    printf 'the module cannot move it. This is a real optimisation, and what stands\n'
-    printf 'between it and being the default is making closure function-table indices\n'
-    printf 'survive renumbering — not the linker flag.\n\n'
+    printf 'tens of milliseconds against cells in the tens of *seconds*, so module\n'
+    printf 'size cannot move it either way.\n\n'
 
     printf '## 6. Compile time (median, ms)\n\n'
     printf 'The NURL wasm build is `wasmbuilder`: `nurlc` emits host LLVM IR, the IR\n'
@@ -871,7 +863,7 @@ emit_md() {
     printf '| Benchmark | Output | Verdict |\n|---|---|---|\n'
     for i in "${!names[@]}"; do
         if [[ "${r_verified[$i]}" == true ]]; then
-            printf '| `%s` | `%s` | identical: 3 languages x {native, JIT%s}, + NURL wasm `--gc-sections` |\n' \
+            printf '| `%s` | `%s` | identical: 3 languages x {native, JIT%s}, + NURL wasm `--no-gc-sections` |\n' \
                 "${names[$i]}" "${r_checksum[$i]}" \
                 "$( (( WT_ALL_LANGS )) && echo ', interpreter' || echo ', interpreter (NURL only)' )"
         else

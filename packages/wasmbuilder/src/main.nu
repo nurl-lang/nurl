@@ -79,7 +79,8 @@ $ `build.nu`
     ( args_opt p `obj` 0 `FILE` `extra wasm object linked into the module (e.g. kernels_static.wasm.o)` )
     ( args_opt p `cflags` 0 `FLAGS` `extra compile/link flags, space-separated (e.g. "-msimd128")` )
     ( args_opt p `asyncify-imports` 0 `LIST` `comma-separated async import names (e.g. env.wgpu_download); implies --asyncify` )
-    ( args_flag p `gc-sections` 0 `link with --gc-sections: drops unreachable code (~25% smaller, loads faster), but renumbers the function table — verify closure-using programs still run` )
+    ( args_flag p `no-gc-sections` 0 `keep unreachable code: link with --no-gc-sections (the pre-0.1.4 default) — the escape hatch if an indirect call ever traps only under the default --gc-sections` )
+    ( args_flag p `gc-sections` 0 `link with --gc-sections (the default; flag kept for compatibility)` )
     ( args_flag p `no-host-imports` 0 `do not pass --ffi-host-imports to nurlc` )
     ( args_flag p `quiet` 113 `suppress progress output` )
     ( args_flag p `doctor` 0 `print how nurlc/zig/runtime resolve on this machine` )
@@ -139,7 +140,7 @@ $ `build.nu`
     ? ( args_present p `no-host-imports` ) { = . opts host_imports F } {}
     ? ( args_present p `emit-ll` ) { = . opts keep_ll T } {}
     ? ( args_present p `asyncify` ) { = . opts asyncify T } {}
-    ? ( args_present p `gc-sections` ) { = . opts gc_sections T } {}
+    ? ( args_present p `no-gc-sections` ) { = . opts no_gc_sections T } {}
     : ~ String objv ( string_new )
     ?? ( args_value p `obj` ) { T v → { ( string_free objv ) = objv v = . opts extra_obj ( string_data objv ) } F _ → {} }
     : ~ String cflv ( string_new )
