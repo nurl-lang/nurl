@@ -10,6 +10,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`packages/wasmtime`: linear-memory access in words, frames from a
+  pool.** Two follow-ups to the register core, measured separately. Memory
+  first: `__mem_load`/`__mem_store` did a bounds-checked `Vec` access per
+  *byte* — an `i64.load` was eight of them. Now one bounds check up front,
+  then raw word access: any access that fits inside one 8-byte word (every
+  naturally-aligned load and store) is a single machine load or one
+  read-modify-write, and `memory.copy`/`fill` are `memmove`/`memset` on
+  the raw buffer. Worth ~5 % on store-heavy rows — the dispatch loop, not
+  the memory path, is what remains. Second: every call allocated and
+  zero-filled a fresh slot array and freed it on return. Frames now
+  recycle through a per-function pool; a reused frame only re-zeroes its
+  declared locals (parameters are overwritten and register form writes
+  stack slots before reading them). `fib` — pure call/return — drops
+  5.7 s → 2.3 s, `json_parse` 2.1 s → 1.6 s, and the self-host compile
+  30.5 s → 24.0 s, still byte-identical. The pool's high-water mark is the
+  deepest recursion into that one function, already capped by max_depth.
+
 - **`packages/wasmtime` executes in register form — the value stack is gone
   from the hot path.** wasm validation guarantees a static stack height at
   every instruction, so predecode now assigns the value at height h to slot
