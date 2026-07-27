@@ -19948,7 +19948,7 @@
     ( nurl_print `usage: nurlc [flags] <file.nu>  >out.ll\n\n` )
     ( nurl_print `flags:\n` )
     ( nurl_print `  --help, -h          print this help and exit\n` )
-    ( nurl_print `  --version           print the compiler version and exit\n` )
+    ( nurl_print `  --version, -v       print the toolchain version and exit\n` )
     ( nurl_print `  --g, -g             emit DWARF debug info (nurl.sh --debug forwards this)\n` )
     ( nurl_print `  --lint              run lint-only diagnostics (e.g. unused imports)\n` )
     ( nurl_print `  --no-borrowck       disable the borrow-checker pass (on by default)\n` )
@@ -19971,7 +19971,7 @@
     : ~ i ai 1
     ~ < ai ( nurl_argc ) {
         : s a ( nurl_argv ai )
-        ? ( seq a `--version` )
+        ? | ( seq a `--version` ) ( seq a `-v` )
         { ( nurl_print ( nurl_version ) ) ( nurl_print `\n` ) ( nurl_exit 0 ) }
         { ? | ( seq a `--help` ) ( seq a `-h` )
             { ( nurlc_print_help ) ( nurl_exit 0 ) }

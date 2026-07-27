@@ -27,6 +27,34 @@ Windows (PowerShell)
 irm https://nurl-lang.org/install.ps1 | iex
 ```
 
+### Keeping it up to date
+
+Once the toolchain is installed it upgrades itself — you never need the
+one-liner again:
+
+```bash
+nurl upgrade              # fetch + install the newest release
+nurl upgrade --check      # is there a newer one? (installs nothing)
+```
+
+`nurl update` and `nurlpkg self-update` are the same command under the
+names people tend to guess. It is *not* `nurlpkg update`, which moves your
+**project's** dependency requirements.
+
+The upgrade replaces only the toolchain's own files. Everything else in
+`$NURL_HOME` (default `~/.nurl`) is left alone: your registry token, the
+model cache under `models/`, and every program you installed with
+`nurlpkg install`. Two other flags matter occasionally:
+
+| Flag | Effect |
+|---|---|
+| `--version vX.Y.Z` | Install one specific release — pin it, or go back |
+| `--force` | Reinstall the version you already have, or replace a source build |
+
+Each release archive is checked against its published SHA-256, and against
+its minisign signature when `minisign` is on your `PATH`; a mismatch aborts
+before anything is unpacked.
+
 <Accordions>
   <Accordion title="Why is there no prebuilt path for macOS?">
      NURL's CI now builds and tests on **Linux and FreeBSD** only. NURL

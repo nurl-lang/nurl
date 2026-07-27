@@ -164,16 +164,22 @@ case "$PREFIX" in
 esac
 # An upgrade must not destroy USER state living in the same prefix:
 #   credentials          the registry publish token (nurlpkg login)
+#   models/              the model cache (hub / nurllama — tens of GB)
 #   share/               assets of tools installed via nurlpkg
 #   bin/<other tools>    programs installed via nurlpkg install
 # Wiping the whole prefix (as this did) silently logged the user out and
 # removed every installed tool. Remove only the toolchain's OWN paths —
-# the four shipped binaries, build/, stdlib/, zig/, the shims — and let
-# tar overwrite the rest. stdlib/ and build/ are removed wholesale so a
-# module deleted upstream cannot linger.
+# the four shipped binaries, build/, stdlib/, zig/, libexec/, the shims —
+# and let tar overwrite the rest. Those directories are removed wholesale
+# so a file deleted upstream cannot linger.
+#
+# Unlinking a RUNNING binary is fine on POSIX (the kernel keeps the inode
+# alive for the running process), which is what makes `nurl upgrade` —
+# nurlpkg upgrading the very tree it is executing from — safe here. The
+# Windows installer has to work around the same case differently.
 if [ -e "$PREFIX" ]; then
     if [ -x "$PREFIX/bin/nurl" ] || [ -x "$PREFIX/bin/nurlc" ] || [ -z "$(ls -A "$PREFIX" 2>/dev/null)" ]; then
-        rm -rf "$PREFIX/build" "$PREFIX/stdlib" "$PREFIX/zig"
+        rm -rf "$PREFIX/build" "$PREFIX/stdlib" "$PREFIX/zig" "$PREFIX/libexec"
         rm -f  "$PREFIX/nurl.sh" "$PREFIX/nurl.bat" "$PREFIX/env" \
                "$PREFIX/bin/nurl" "$PREFIX/bin/nurlc" \
                "$PREFIX/bin/nurlfmt" "$PREFIX/bin/nurlpkg"
@@ -294,7 +300,7 @@ info "The shims self-locate the stdlib, so PATH is all you need — no 'source"
 info "env' required. (bash/zsh users may instead 'source $PREFIX/env', which"
 info "also exports NURL_HOME.)"
 info ""
-info "Then:  nurlc --version   ·   nurlpkg install nq"
+info "Then:  nurl --version   ·   nurlpkg install nq   ·   nurl upgrade  (later)"
 
 # Building a program (and therefore `nurlpkg install <tool>`, which compiles
 # the package from source) needs an LLVM compiler. The archive bundles a

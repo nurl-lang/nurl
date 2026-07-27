@@ -29,6 +29,26 @@ param(
 )
 if ($env:NURL_INSTALL_INSECURE -eq "1") { $Insecure = $true }
 $ErrorActionPreference = "Stop"
+
+# Delete a toolchain-owned path. Anything Windows refuses to delete because
+# it is IN USE (the running nurlpkg.exe during `nurl upgrade`) is renamed
+# out of the way instead — a rename is permitted where a delete is not —
+# and swept the next time the installer runs.
+function New-StalePath($p) {
+    return ($p + ".old-" + [System.Guid]::NewGuid().ToString("N").Substring(0, 8))
+}
+function Remove-ToolchainPath($p) {
+    if (-not (Test-Path $p)) { return }
+    try { Remove-Item -Recurse -Force -ErrorAction Stop $p; return } catch { }
+    # Something under $p is in use. Clear what we can, rename what we can't.
+    Get-ChildItem -Recurse -File -Force $p -ErrorAction SilentlyContinue | ForEach-Object {
+        try { Remove-Item -Force -ErrorAction Stop $_.FullName }
+        catch { Move-Item -Force $_.FullName (New-StalePath $_.FullName) }
+    }
+    try { Remove-Item -Recurse -Force -ErrorAction Stop $p }
+    catch { Move-Item -Force $p (New-StalePath $p) }
+}
+
 $repo = "nurl-lang/nurl"
 $target = "windows-x86_64"
 
@@ -109,7 +129,36 @@ try {
     if (Test-Path $Prefix) {
         $isNurl  = (Test-Path (Join-Path $Prefix "bin\nurl.bat")) -or (Test-Path (Join-Path $Prefix "bin\nurlc.exe"))
         $isEmpty = -not (Get-ChildItem -Force $Prefix -ErrorAction SilentlyContinue)
-        if ($isNurl -or $isEmpty) { Remove-Item -Recurse -Force $Prefix }
+        # Preserve USER state in the prefix across an upgrade: the
+        # registry token (credentials), the model cache (models\), tool
+        # assets (share\), and any program installed with `nurlpkg install`
+        # (bin\<other>). Only the toolchain's own paths are removed; the
+        # archive overwrites the rest. build\, stdlib\, zig\ and libexec\
+        # go wholesale so a file deleted upstream cannot linger.
+        #
+        # Windows cannot DELETE a running executable — and `nurl upgrade`
+        # is exactly that case: nurlpkg.exe upgrading the tree it runs
+        # from. It CAN be renamed, so anything undeletable is moved aside
+        # as <name>.old-<id> and swept on the next run. (POSIX needs none
+        # of this: unlinking a running binary is legal there.)
+        if ($isNurl -or $isEmpty) {
+            foreach ($d in @($Prefix, (Join-Path $Prefix "bin"), (Join-Path $Prefix "build"))) {
+                if (Test-Path $d) {
+                    Get-ChildItem -Force $d -Filter "*.old-*" -ErrorAction SilentlyContinue |
+                        Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+                }
+            }
+            foreach ($d in @("build", "stdlib", "zig", "libexec")) {
+                Remove-ToolchainPath (Join-Path $Prefix $d)
+            }
+            foreach ($f in @("nurl.bat", "nurl.sh", "env",
+                             "bin\nurl.bat", "bin\nurlc.bat",
+                             "bin\nurlfmt.bat", "bin\nurlpkg.bat",
+                             "bin\nurl.exe", "bin\nurlc.exe",
+                             "bin\nurlfmt.exe", "bin\nurlpkg.exe")) {
+                Remove-ToolchainPath (Join-Path $Prefix $f)
+            }
+        }
         else { throw "'$Prefix' exists, is not empty, and is not a NURL install — refusing to overwrite it. Remove it yourself or set -Prefix to a fresh path." }
     }
     New-Item -ItemType Directory -Force -Path $Prefix | Out-Null
@@ -161,7 +210,7 @@ try {
     }
 
     Write-Host ""
-    Write-Host "Then:  nurlc --version   ·   nurlpkg install nq"
+    Write-Host "Then:  nurl --version   ·   nurlpkg install nq   ·   nurl upgrade  (later)"
 }
 finally {
     Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue

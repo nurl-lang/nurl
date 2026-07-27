@@ -71,6 +71,19 @@ cp -a "$ROOT/stdlib/." "$PREFIX/stdlib/"
 # Build driver (resolves build/nurlc + stdlib/runtime.o relative to itself).
 install -m755 "$ROOT/nurl.sh" "$PREFIX/nurl.sh"
 
+# ── Bundled installer — this is what `nurl upgrade` runs ───────────────
+# Shipping it means an in-place upgrade executes the script that came WITH
+# the toolchain you already trust, instead of downloading a script and
+# piping it to a shell. It is also the single implementation of "verify the
+# archive, then replace the toolchain's own paths and keep everything else
+# in the prefix" — nothing reimplements that in NURL.
+mkdir -p "$PREFIX/libexec"
+if [[ -f "$ROOT/tools/get-nurl.sh" ]]; then
+    install -m755 "$ROOT/tools/get-nurl.sh" "$PREFIX/libexec/get-nurl.sh"
+else
+    echo "Note: tools/get-nurl.sh absent — 'nurl upgrade' will not be available."
+fi
+
 # ── Bundle a self-contained zig backend (optional but recommended) ─────
 # `nurl.sh` prefers a bundled `zig cc` over a system clang: zig carries its
 # own modern LLVM (parses nurlc's opaque-pointer IR), its own lld linker
@@ -183,3 +196,5 @@ echo "    # and add that line to your ~/.bashrc / ~/.zshrc"
 echo
 echo "Then, from anywhere:"
 echo "    nurlpkg install nq             # fetch + build + install a registry program"
+echo "    nurl --version                 # what you have"
+echo "    nurl upgrade                   # move to the newest release, in place"

@@ -101,6 +101,16 @@ jobs:
         # __free_str_vec class). Assert every stdlib @-function name is
         # globally unique.
         run: ./tools/check_stdlib_symbols.sh
+
+      - name: served installers match the canonical ones
+        # nurlweb/public/install.{sh,ps1} are copies of tools/get-nurl.*
+        # made by a MANUAL npm script, and they are what nurl-lang.org
+        # actually serves. They drifted once already: the fix that stopped
+        # an upgrade from wiping the prefix (registry token, models/,
+        # every installed tool) sat in tools/ for weeks while the website
+        # kept handing out the destructive version.
+        run: ./tools/check_installer_sync.sh
+
       - name: Windows goldens not stale (they are checked on main, not per-PR)
         # outputs-windows/ is a parallel corpus and windows-tests.yml runs
         # on pushes to main, so a PR that adds assertions updates outputs/

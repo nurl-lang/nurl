@@ -184,9 +184,45 @@ $ `stdlib/ext/http_cli.nu`
     ( string_push_str m latest )
     ( string_push_str m ` (you have ` )
     ( string_push_str m current )
-    ( string_push_str m `).\n  update:  curl -fsSL https://nurl-lang.org/install.sh | sh\n` )
+    ( string_push_str m `).\n  update:  nurl upgrade\n` )
     ( nurl_eprint ( string_data m ) )
     ( string_free m )
+}
+
+// ── public helpers ───────────────────────────────────────────────────
+//
+// The notice above is the passive half of the story; `nurl upgrade`
+// (stdlib/ext/toolchain.nu) is the active one and needs the same three
+// primitives — probe, release-tag test, compare. They are exported here
+// rather than duplicated so both halves always agree on what "newer"
+// means.
+
+// Probe GitHub for the newest release tag, IGNORING the once-a-day cache.
+// None when the network / API is unavailable. Owned String on Some.
+@ update_check_latest → ?String {
+    ^ ( __uc_fetch_latest )
+}
+
+// Is `ver` a clean release tag (vX.Y.Z), as opposed to a dev build
+// (vX.Y.Z-<n>-g<sha>[-dirty])? Upgrading only makes sense for the former.
+@ update_check_is_release s ver → b {
+    ^ ( __uc_is_release ver )
+}
+
+// Strictly-greater release comparison, tolerant of a leading 'v'.
+@ update_check_newer s latest s current → b {
+    ^ ( __uc_newer latest current )
+}
+
+// Drop the cached probe. Called right after a successful upgrade so the
+// next command re-probes instead of repeating a notice for the version
+// the user just installed.
+@ update_check_forget → v {
+    : String cp ( __uc_cache_path )
+    ? ( file_exists ( string_data cp ) ) {
+        ?? ( file_delete ( string_data cp ) ) { T _ → {} F _ → {} }
+    } {}
+    ( string_free cp )
 }
 
 @ update_check_notice s current → v {

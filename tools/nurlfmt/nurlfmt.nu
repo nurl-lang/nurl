@@ -68,6 +68,7 @@ $ `tools/nurlfmt/pretty.nu`
     ( nurl_eprint `    --write    Reformat each FILE in place.\n` )
     ( nurl_eprint `    --stdin    Read from stdin, write to stdout.\n` )
     ( nurl_eprint `    --help     Print this message.\n` )
+    ( nurl_eprint `    --version  Print the toolchain version (-v too).\n` )
     ( nurl_eprint `\n` )
     ( nurl_eprint `Without FILE and without --stdin, reads stdin → writes stdout.\n` )
 }
@@ -136,6 +137,19 @@ $ `tools/nurlfmt/pretty.nu`
     : ~ b stdin_mode F
     : ~ b help_mode F
     : ( Vec String ) paths ( vec_with_cap [String] 4 )
+
+    // --version / -v, like every other binary in the toolchain. Checked
+    // before the parse loop so it can never be mistaken for a file path.
+    : ~ i vi 1
+    ~ < vi argc {
+        : s va ( nurl_argv_get vi )
+        ? | | != 0 ( nurl_str_eq va `--version` ) != 0 ( nurl_str_eq va `-v` ) != 0 ( nurl_str_eq va `version` ) {
+            ( nurl_print ( nurl_version ) )
+            ( nurl_print `\n` )
+            ^ 0
+        } {}
+        = vi + vi 1
+    }
 
     : ~ i idx 1
     ~ < idx argc {

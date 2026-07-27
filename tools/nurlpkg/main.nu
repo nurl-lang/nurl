@@ -46,6 +46,7 @@ $ `stdlib/ext/semver.nu`
 $ `stdlib/ext/credentials.nu`
 $ `stdlib/ext/json.nu`
 $ `stdlib/ext/update_check.nu`
+$ `stdlib/ext/toolchain.nu`
 $ `stdlib/core/io.nu`
 $ `stdlib/std/hash_sha256.nu`
 $ `stdlib/std/bytes.nu`
@@ -228,7 +229,10 @@ $ `stdlib/std/bytes.nu`
     ( nurl_print `  nurlpkg verify         Check deps/ matches nurl.lock (names + versions); exit 1 if drift.\n` )
     ( nurl_print `  nurlpkg test           Build + run every tests/*.nu (exit 0 = pass; optional tests/outputs/ goldens).\n` )
     ( nurl_print `  nurlpkg bench          Build + run every benches/*.nu and stream their std/bench.nu reports.\n` )
-    ( nurl_print `  nurlpkg version        Print the nurlpkg version.\n` )
+    ( nurl_print `  nurlpkg self-update [--check] [--version vX.Y.Z] [--force]\n` )
+    ( nurl_print `                         Upgrade the NURL TOOLCHAIN itself (same as 'nurl upgrade').\n` )
+    ( nurl_print `                         Note: 'nurlpkg update' is about this project's dependencies.\n` )
+    ( nurl_print `  nurlpkg version        Print the toolchain version (--version / -v too).\n` )
     ( nurl_print `  nurlpkg help [<cmd>]   This message, or one command's own help.\n` )
     ( nurl_print `\nEvery command also takes --help / -h (help never runs the command).\n` )
 }
@@ -239,6 +243,43 @@ $ `stdlib/std/bytes.nu`
 // command runs — an agent probing `nurlpkg publish --help` must never
 // trigger a publish. Returns F for an unknown command.
 @ __cmd_help s cmd → b {
+    ? | | != 0 ( nurl_str_eq cmd `self-update` ) != 0 ( nurl_str_eq cmd `upgrade` ) != 0 ( nurl_str_eq cmd `self-upgrade` ) {
+        ( nurl_print `nurlpkg self-update — upgrade the NURL toolchain itself
+
+` )
+        ( nurl_print `Usage: nurlpkg self-update [--check] [--version vX.Y.Z] [--force]
+` )
+        ( nurl_print `       nurl upgrade [...]          the canonical spelling; same command
+
+` )
+        ( nurl_print `Downloads the release that matches this machine and unpacks it over the
+` )
+        ( nurl_print `current install prefix ($NURL_HOME), verifying the checksum and (when
+` )
+        ( nurl_print `minisign is present) the signature. USER STATE in the prefix is kept:
+` )
+        ( nurl_print `the registry token, ~/.nurl/models, and every program you installed
+` )
+        ( nurl_print `with 'nurlpkg install' stay exactly where they are.
+
+` )
+        ( nurl_print `Flags:
+` )
+        ( nurl_print `  --check            Report whether an update exists; install nothing.
+` )
+        ( nurl_print `  --version <tag>    Install a specific release (pin, or go back).
+` )
+        ( nurl_print `  --force            Reinstall the same version, or replace a dev build.
+` )
+        ( nurl_print `  --help             This message (nothing is installed).
+
+` )
+        ( nurl_print `Not to be confused with 'nurlpkg update', which moves THIS PROJECT's
+` )
+        ( nurl_print `dependency requirements to newer versions.
+` )
+        ^ T
+    } {}
     ? != 0 ( nurl_str_eq cmd `publish` ) {
         ( nurl_print `nurlpkg publish — pack this package and upload it to the registry
 
@@ -3883,13 +3924,76 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
     }
 }
 
+// ── self-update: upgrade the toolchain itself ───────────────────
+//
+// Deliberately NOT spelled `nurlpkg update`: that has moved this project's
+// dependency requirements since 0.4, and silently changing what it means
+// would be worse than any naming win. The canonical spelling is
+// `nurl upgrade` (what the update notice prints); this is the same command
+// under the name other package managers use for it, so either guess lands.
+
+// The value that follows `--name` in argv[from..], or an empty String.
+@ __flag_value s name i from → String {
+    : i argc ( env_args_count )
+    : ~ i k from
+    : ~ String out ( string_new )
+    ~ < k argc {
+        : String a ( env_arg k )
+        : i nx + k 1
+        ? & != 0 ( nurl_str_eq ( string_data a ) name ) < nx argc {
+            ( string_free out )
+            = out ( env_arg nx )
+        } {}
+        ( string_free a )
+        = k + k 1
+    }
+    ^ out
+}
+
+// T when `--name` appears anywhere in argv[from..].
+@ __has_flag s name i from → b {
+    : i argc ( env_args_count )
+    : ~ i k from
+    ~ < k argc {
+        : String a ( env_arg k )
+        : b hit != 0 ( nurl_str_eq ( string_data a ) name )
+        ( string_free a )
+        ? hit { ^ T } {}
+        = k + k 1
+    }
+    ^ F
+}
+
+@ __cmd_self_update → i {
+    ? != 0 ( __reject_unknown_flags `self-update` `--check --force --version` 2 ) { ^ 1 } {}
+    : b check_only ( __has_flag `--check` 2 )
+    : b force ( __has_flag `--force` 2 )
+    : String want ( __flag_value `--version` 2 )
+    : i rc ( toolchain_upgrade ( string_data want ) ( nurl_version ) check_only force )
+    ( string_free want )
+    ^ rc
+}
+
 // ── dispatch ─────────────────────────────────────────────────────
+
+// Was this invocation the self-update itself? If so, skip the trailing
+// "a newer toolchain is out" notice: the version baked into THIS process
+// is the one we just replaced on disk, so the notice would fire against
+// the toolchain the user has already upgraded away from.
+@ __is_self_update → b {
+    ? < ( env_args_count ) 2 { ^ F } {}
+    : String a ( env_arg 1 )
+    : s v ( string_data a )
+    : b hit | | != 0 ( nurl_str_eq v `self-update` ) != 0 ( nurl_str_eq v `upgrade` ) != 0 ( nurl_str_eq v `self-upgrade` )
+    ( string_free a )
+    ^ hit
+}
 
 // Run the command, then print a best-effort "a newer toolchain is out" notice
 // AFTER its output (stderr; cached, opt-out — see stdlib/ext/update_check.nu).
 @ main → i {
     : i rc ( __nurlpkg_run )
-    ( update_check_notice ( nurl_version ) )
+    ? ( __is_self_update ) {} { ( update_check_notice ( nurl_version ) ) }
     ^ rc
 }
 
@@ -3922,10 +4026,15 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
         ( string_free sub )
         ^ 0
     } {}
-    ? | != 0 ( nurl_str_eq s_sub `--version` ) != 0 ( nurl_str_eq s_sub `version` ) {
+    ? | | != 0 ( nurl_str_eq s_sub `--version` ) != 0 ( nurl_str_eq s_sub `-v` ) != 0 ( nurl_str_eq s_sub `version` ) {
         ( nurl_print ( nurl_version ) ) ( nurl_print `\n` )
         ( string_free sub )
         ^ 0
+    } {}
+    // Upgrade the toolchain. `nurl upgrade` routes here too.
+    ? | | != 0 ( nurl_str_eq s_sub `self-update` ) != 0 ( nurl_str_eq s_sub `upgrade` ) != 0 ( nurl_str_eq s_sub `self-upgrade` ) {
+        ( string_free sub )
+        ^ ( __cmd_self_update )
     } {}
     ? != 0 ( nurl_str_eq s_sub `init` ) {
         : String name ? >= argc 3 ( env_arg 2 ) ( string_new )

@@ -73,6 +73,17 @@ xcopy /e /i /y /q "%ROOT%\stdlib" "%PREFIX%\stdlib" >nul
 REM Build driver (resolves build\nurlc.exe + stdlib\runtime.o relative to itself).
 copy /y "%ROOT%\nurl.bat" "%PREFIX%\nurl.bat" >nul
 
+REM -- Bundled installer - this is what `nurl upgrade` runs ------
+REM Shipping it means an in-place upgrade executes the script that came
+REM WITH the toolchain you already trust, instead of downloading one and
+REM piping it to a shell. Mirrors install-toolchain.sh.
+if not exist "%PREFIX%\libexec" mkdir "%PREFIX%\libexec"
+if exist "%ROOT%\tools\get-nurl.ps1" (
+  copy /y "%ROOT%\tools\get-nurl.ps1" "%PREFIX%\libexec\get-nurl.ps1" >nul
+) else (
+  echo Note: tools\get-nurl.ps1 absent - "nurl upgrade" will not be available.
+)
+
 REM ── Bundled zig backend (optional but recommended) ─────────────
 REM Mirrors install-toolchain.sh: point NURL_BUNDLE_ZIG at an extracted
 REM zig dist (the dir with zig.exe + lib\) and it is staged at

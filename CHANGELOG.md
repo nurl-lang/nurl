@@ -6,6 +6,62 @@ are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **`nurl upgrade` — the toolchain updates itself.** Until now the only way
+  to move to a new release was to re-run the website's one-liner, which the
+  "a newer NURL toolchain is available" notice duly printed at you. There is
+  now a command, and it is the one the notice prints:
+
+  ```
+  nurl upgrade                    # install the newest release, in place
+  nurl upgrade --check            # report only; install nothing
+  nurl upgrade --version v0.25.0  # pin a release (or go back to one)
+  nurl upgrade --force            # reinstall this version / replace a dev build
+  ```
+
+  `nurl update`, `nurlpkg self-update` and `nurlpkg upgrade` are the same
+  command — the spellings people guess all land in one place. `nurlpkg
+  update` deliberately keeps its existing meaning (a *project's* dependency
+  requirements); quietly repurposing it would have been worse than any
+  naming win.
+
+  It does not reimplement the installer: the release archive's checksum
+  gate, signature gate and "replace the toolchain's files, keep the rest of
+  the prefix" rule live in one script, and that script now ships *inside*
+  the toolchain at `<prefix>/libexec/get-nurl.sh`. So an upgrade runs the
+  installer that came with the version you already trust, rather than
+  downloading a script and piping it to a shell — and there is no second
+  implementation to keep in step. On Windows the same command drives the
+  bundled `get-nurl.ps1`.
+
+- **`--version` / `-v` on every binary in the toolchain.** `nurlfmt` had no
+  version flag at all; `nurlc` only had the long form; `nurl` and `nurlpkg`
+  accepted `--version` but never mentioned it. All four now answer to
+  `--version`, `-v` and (where it isn't ambiguous) the bare word `version`,
+  and say so in their usage text.
+
+### Fixed
+
+- **The installer served from nurl-lang.org still wiped the whole install
+  prefix.** `tools/get-nurl.{sh,ps1}` stopped doing that in July —
+  an upgrade had been deleting the registry token, `models/`, `share/` and
+  every program installed with `nurlpkg install`. But `nurlweb/public/
+  install.{sh,ps1}`, the copies actually downloaded by
+  `curl … | sh`, are made by a *manual* npm script that nobody re-ran, so
+  the one-liner on the website kept handing out the destructive version.
+  The copies are re-synced, and `tools/check_installer_sync.sh` now runs in
+  CI so this class of drift cannot outlive a pull request.
+
+- The prefix's `models/` cache and `libexec/` are now named explicitly in
+  the installers' keep/remove rules, and the Windows installer renames a
+  file it cannot delete instead of failing: `nurl upgrade` is a process
+  upgrading the tree it is executing from, and Windows refuses to unlink a
+  running `.exe` (POSIX allows it, which is why the same code path is
+  uneventful there).
+
 ## [0.26.0] — 2026-07-26
 
 A measurement release. Nothing here changes the language; what changes is
