@@ -1,5 +1,76 @@
 # Changelog
 
+## 0.3.0
+
+The model was right and the front door was not. `lingbot-map --model
+<ckpt>` printed the usage and left the reader to work out which line
+applied to them; this is the release where the command explains itself.
+
+- **`lingbot-map <frames-dir>` is the whole command.** A directory as a
+  positional argument is the frames; `--model` is now optional and
+  resolves through [hub](../hub) — `$LINGBOT_MAP_MODEL`, else
+  `~/.nurl/models/lingbot-map/lingbot-map.pt`, else
+  `robbyant/lingbot-map/lingbot-map.pt` is fetched once and cached. A
+  Hugging Face ref works as `--model` too.
+- **Errors name what is wrong.** No frames, an unknown option, a missing
+  value, a frame that does not exist, a directory with nothing in it —
+  each says so and shows the command that would have worked, instead of
+  reprinting the usage. `--help` is a real help page with examples and
+  exits 0; `--version` was missing entirely.
+- **A mistyped option is an error**, not a frame filename that fails
+  much later as a missing file. Frame paths are all checked *before* the
+  4.6 GB checkpoint is read, so a typo costs nothing.
+- **The reference's spellings are accepted** — `--model_path`,
+  `--image_folder`, `--conf_threshold`, `--first_k` — so a `demo.py`
+  command line mostly transfers.
+- **`--stride <n>`**, the reference's own frame subsampling, which had no
+  equivalent here: `--stride 20` reconstructs a 286-frame walk from 15
+  frames in 4 s. It applies *after* `--max-frames`, in the order
+  `demo.py` applies `--first_k` and `--stride`, so thirty frames at a
+  stride of three is ten.
+- **`--conf` defaults to 1.5**, which is `demo.py`'s own
+  `--conf_threshold`. It was 2.0, described in a comment as the
+  reference's default, which it is not. At the same threshold the cloud
+  is byte-for-byte what 0.2.1 produced.
+- **Frame directories are listed with `dir_list`, not `fs_glob`.** The
+  glob did not descend through a symlinked directory, so pointing at a
+  linked frame folder reported "no .png or .jpg" and stopped. `.jpeg` is
+  recognised now, and the extension match is case-insensitive. Each
+  directory is sorted on its own before being appended, so naming two of
+  them keeps them in the order given.
+- **The run says what it is doing**: the checkpoint it chose, the frame
+  count and the output path up front, and frames, points and elapsed time
+  at the end.
+- The README is now about using it. The porting war stories moved to
+  [`docs/porting-notes.md`](docs/porting-notes.md) intact.
+
+No change to the model, the kernels or the numerics.
+
+**And one thing that is not a feature.** Turning "as fast as the
+reference" into a measurement — `tests/ref_cloud.py` drives
+`~/dev/lingbot-map` through its own `inference_streaming` and writes the
+same cloud, `tests/cmp_cloud.py` compares them, and both are step 20 of
+the suite — turned up something the per-module tests cannot see:
+
+- **The port is 3.4–9.2x faster end to end**, mostly because the 4.6 GB
+  checkpoint reads in 1.6 s against `torch.load`'s ~12.6 s. On inference
+  alone the two are within about 5%.
+- **One frame agrees to 2.3e-5.** Over a sequence the reconstruction
+  drifts: by 20 frames the centroid is 1.8e-1 of the scene's own scale
+  away and the cloud is ~9% smaller. The depth is right — point counts
+  agree to one part in 30 000 — and the poses are not.
+- **That drift is not the arithmetic.** Perturbing the reference's input
+  by 3e-4, the size of the port's own activation-level disagreement,
+  moves the reference's 20-frame cloud by 3.9e-5. The port is ~600x
+  further away than the model's conditioning explains.
+- Separately, `demo.py` runs the first 8 frames as one bidirectional
+  block (`--num_scale_frames`); the port is causal from frame 0, which is
+  worth 3.3% of the cloud on 12 frames.
+
+Neither is a regression — both predate 0.2.0 — and neither is fixed here.
+They are now measured, written down in the README under "How close is it
+really", and pinned by a test, which is the prerequisite for fixing them.
+
 ## 0.2.1
 
 - **Parity.** 0.2.0 shipped without the two gpukit kernels that close the

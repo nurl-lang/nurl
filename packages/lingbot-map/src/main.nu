@@ -1,7 +1,8 @@
 // lingbot-map — streaming 3-D reconstruction from a sequence of frames,
 // in pure NURL.
 //
-//   lingbot-map --model <checkpoint.pt> [options] <frame.png> ...
+//   lingbot-map [options] <frames-dir>
+//   lingbot-map [options] <frame.png> <frame.png> ...
 //
 // Each frame is preprocessed, run through the DINOv2 trunk and the
 // streaming aggregator (which keeps a KV cache across frames), and then
@@ -10,19 +11,25 @@
 // pose plus intrinsics unprojects to world-space points, which is what
 // the point cloud is.
 //
-// Output is an ASCII PLY, which every viewer reads. The vertex count is
-// not known until the last frame is done, so the header is written with
-// a fixed-width placeholder and patched at the end rather than holding
-// the whole cloud in memory.
+// Output is a PLY, which every viewer reads. The vertex count is not
+// known until the last frame is done, so the header is written with a
+// fixed-width placeholder and patched at the end rather than holding the
+// whole cloud in memory.
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/float.nu`
 $ `stdlib/std/fs.nu`
+$ `stdlib/std/path.nu`
 $ `stdlib/std/bytes.nu`
 $ `stdlib/std/sort.nu`
 $ `stdlib/std/time.nu`
 $ `stdlib/std/floatbits.nu`
+$ `stdlib/ext/env.nu`
+$ `deps/hub/src/store.nu`
+$ `deps/hub/src/hf.nu`
+$ `deps/hub/src/pull.nu`
+$ `deps/hub/src/hub.nu`
 $ `deps/gpukit/src/gpukit.nu`
 $ `deps/gpukit/src/dev.nu`
 $ `deps/gpukit/src/devops.nu`
@@ -38,9 +45,10 @@ $ `src/preproc.nu`
 
 : i LM_SIZE 518
 : i LM_PATCH 14
-// The reference's own default for what to draw: confidence is 1+exp(x),
-// so 1.0 is "no information" and anything above ~2 is a real surface.
-: f LM_CONF 2.0
+// demo.py's own --conf_threshold default. Confidence is 1+exp(x), so 1.0
+// is "no information"; the reference draws everything above 1.5 and so
+// does this.
+: f LM_CONF 1.5
 : i LM_COUNT_WIDTH 12
 
 : Opts {
@@ -57,64 +65,177 @@ $ `src/preproc.nu`
 }
 
 @ __lm_usage → v {
-    ( nurl_print `usage: lingbot-map --model <checkpoint.pt> [options] <frame> ...\n` )
-    ( nurl_print `  --out <file.ply>   where to write the cloud (default cloud.ply)\n` )
-    ( nurl_print `  --conf <f>         keep pixels with confidence above this (default 2.0)\n` )
-    ( nurl_print `  --pixel-stride <n> take every nth pixel on both axes (default 2)\n` )
-    ( nurl_print `  --frames <dir>     every .png/.jpg in a directory, in name order\n` )
-    ( nurl_print `  --max-frames <n>   stop after n frames\n` )
-    ( nurl_print `  --quiet            no per-frame progress\n` )
-    ( nurl_print `  --profile          per-frame timings and a per-kernel GPU profile\n` )
-    ( nurl_print `  --ascii            write an ASCII PLY instead of binary_little_endian\n` )
+    ( nurl_print `usage: lingbot-map [options] <frames-dir>\n` )
+    ( nurl_print `       lingbot-map [options] <frame.png> <frame.png> ...\n` )
+    ( nurl_print `try 'lingbot-map --help' for the options and some examples\n` )
 }
+
+@ __lm_help → v {
+    ( nurl_print `lingbot-map -- streaming 3-D reconstruction from a sequence of frames.\n` )
+    ( nurl_print `Give it frames in order; it writes a world-space point cloud as a PLY.\n` )
+    ( nurl_print `\n` )
+    ( nurl_print `usage: lingbot-map [options] <frames-dir>\n` )
+    ( nurl_print `       lingbot-map [options] <frame.png> <frame.png> ...\n` )
+    ( nurl_print `\n` )
+    ( nurl_print `examples:\n` )
+    ( nurl_print `  # a folder of frames -> cloud.ply. The checkpoint is downloaded once,\n` )
+    ( nurl_print `  # on the first run, and cached under ~/.nurl/models.\n` )
+    ( nurl_print `  lingbot-map ~/dev/lingbot-map/example/courthouse\n` )
+    ( nurl_print `\n` )
+    ( nurl_print `  # the first 30 frames, every pixel, written where you want it\n` )
+    ( nurl_print `  lingbot-map --max-frames 30 --pixel-stride 1 --out courthouse.ply \\\n` )
+    ( nurl_print `      ~/dev/lingbot-map/example/courthouse\n` )
+    ( nurl_print `\n` )
+    ( nurl_print `  # a checkpoint you already have, plus per-stage timings\n` )
+    ( nurl_print `  lingbot-map --model ~/.nurl/models/lingbot-map/lingbot-map.pt --profile \\\n` )
+    ( nurl_print `      ~/dev/lingbot-map/example/courthouse\n` )
+    ( nurl_print `\n` )
+    ( nurl_print `  # a handful of individual frames\n` )
+    ( nurl_print `  lingbot-map shot0.png shot1.png shot2.png\n` )
+    ( nurl_print `\n` )
+    ( nurl_print `options:\n` )
+    ( nurl_print `  --model <path|ref>  checkpoint to run: a local .pt, or a Hugging Face ref\n` )
+    ( nurl_print `                      such as robbyant/lingbot-map/lingbot-map.pt. Default:\n` )
+    ( nurl_print `                      $LINGBOT_MAP_MODEL, else ~/.nurl/models/lingbot-map/\n` )
+    ( nurl_print `                      lingbot-map.pt, else that ref is fetched (4.6 GB).\n` )
+    ( nurl_print `  --out <file.ply>    where to write the cloud (default cloud.ply)\n` )
+    ( nurl_print `  --conf <f>          keep pixels whose confidence exceeds this\n` )
+    ( nurl_print `                      (default 1.5, the reference's own --conf_threshold)\n` )
+    ( nurl_print `  --pixel-stride <n>  take every nth pixel on both axes (default 2)\n` )
+    ( nurl_print `  --max-frames <n>    stop after n frames\n` )
+    ( nurl_print `  --stride <n>        use every nth frame (applied after --max-frames)\n` )
+    ( nurl_print `  --frames <dir>      a directory of frames; same as naming it positionally\n` )
+    ( nurl_print `  --ascii             write an ASCII PLY instead of binary_little_endian\n` )
+    ( nurl_print `  --quiet, -q         no per-frame progress\n` )
+    ( nurl_print `  --profile           per-stage frame timings and a per-kernel GPU profile\n` )
+    ( nurl_print `  --version           print the version\n` )
+    ( nurl_print `  --help, -h          this\n` )
+    ( nurl_print `\n` )
+    ( nurl_print `The reference's spellings are accepted too: --model_path, --image_folder,\n` )
+    ( nurl_print `--conf_threshold, --first_k.\n` )
+    ( nurl_print `\n` )
+    ( nurl_print `Frames are read in name order, and the order is the trajectory: the model\n` )
+    ( nurl_print `keeps a cache across frames, so each one is placed relative to the ones\n` )
+    ( nurl_print `before it. A shuffled directory reconstructs a different scene.\n` )
+    ( nurl_print `\n` )
+    ( nurl_print `The cloud is a PLY. MeshLab, CloudCompare, Blender and f3d all open it.\n` )
+}
+
+@ __lm_version → v { ( nurl_print `lingbot-map 0.3.0\n` ) }
 
 @ __lm_streq s a s b → b { ^ == 0 ( nurl_str_cmp a b ) }
 
-// Every .png and .jpg in a directory, appended in NAME order. Order is
-// not a nicety here: the aggregator's KV cache makes frame N depend on
-// every frame before it, so a shuffled directory listing reconstructs a
-// different scene. fs_glob's order is the filesystem's, so it is sorted
-// explicitly.
-@ __lm_dir ( Vec String ) into s dir → b {
-    : ~ i found 0
-    : ~ i k 0
-    ~ < k 2 {
-        : String pat ( string_from dir )
-        ? > ( string_len pat ) 0 {
-            : i pl ( string_len pat )
-            ? != ( nurl_str_at ( string_data pat ) pl - pl 1 ) 47 {
-                ( string_push_char pat 47 )
-            } {}
-        } {}
-        ( string_push_str pat ? == k 0 `*.png` `*.jpg` )
-        ?? ( fs_glob ( string_data pat ) ) {
-            T hits → {
-                = found + found ( vec_len [String] hits )
-                // A MOVE of the handles: vec_extend documents itself as
-                // safe only for trivial element types, so the Strings are
-                // pushed across and only the source container is dropped.
-                : ~ i g 0
-                ~ < g ( vec_len [String] hits ) {
-                    ?? ( vec_get [String] hits g ) {
-                        T h → { ( vec_push [String] into h ) }
-                        F → {}
-                    }
-                    = g + g 1
-                }
-                ( vec_free [String] hits )
-            }
-            F _e → {}
+// Anything that looks like an option, so a typo is reported as one
+// instead of being taken for a frame and failing later as a missing file.
+@ __lm_is_flag s a → b {
+    : i n ( nurl_str_len a )
+    ^ & > n 1 == 45 ( nurl_str_at a n 0 )
+}
+
+// The options that take a value, in one place: the argument loop needs to
+// know before it can tell "--out" from a frame called "--out".
+@ __lm_wants s a → b {
+    ? | ( __lm_streq a `--model` ) ( __lm_streq a `--model_path` ) { ^ T } {}
+    ? | ( __lm_streq a `--out` ) ( __lm_streq a `--conf` ) { ^ T } {}
+    ? | ( __lm_streq a `--conf_threshold` ) ( __lm_streq a `--pixel-stride` ) { ^ T } {}
+    ? | ( __lm_streq a `--max-frames` ) ( __lm_streq a `--first_k` ) { ^ T } {}
+    ? | ( __lm_streq a `--frames` ) ( __lm_streq a `--image_folder` ) { ^ T } {}
+    ? ( __lm_streq a `--stride` ) { ^ T } {}
+    ^ F
+}
+
+// A directory, following symlinks — `nurl_path_type` lstats, so a linked
+// frame folder reports as a link rather than as the directory it is.
+@ __lm_is_dir s p → b {
+    ?? ( dir_list p ) {
+        T v → {
+            ( vec_free_with [String] v \ String s → v { ( string_free s ) } )
+            ^ T
         }
-        ( string_free pat )
+        F _e → { ^ F }
+    }
+}
+
+@ __lm_lower i c → i { ^ ? & >= c 65 <= c 90 + c 32 c }
+
+// Case-insensitive suffix test. The reference globs ".jpg,.png,.JPG"; a
+// frame folder off a phone or out of a video split is as likely to hold
+// .JPEG, and there is no reason for the case to matter.
+@ __lm_ext_is s name s ext → b {
+    : i n ( nurl_str_len name )
+    : i m ( nurl_str_len ext )
+    ? <= n m { ^ F } {}
+    : ~ i k 0
+    ~ < k m {
+        ? != ( __lm_lower ( nurl_str_at name n + - n m k ) ) ( nurl_str_at ext m k ) {
+            ^ F
+        } {}
         = k + k 1
     }
-    ? == found 0 {
-        ( nurl_print `lingbot-map: no .png or .jpg in ` )
+    ^ T
+}
+
+@ __lm_is_frame s name → b {
+    ? ( __lm_ext_is name `.png` ) { ^ T } {}
+    ? ( __lm_ext_is name `.jpg` ) { ^ T } {}
+    ? ( __lm_ext_is name `.jpeg` ) { ^ T } {}
+    ^ F
+}
+
+// Every frame in a directory, appended in NAME order. Order is not a
+// nicety here: the aggregator's KV cache makes frame N depend on every
+// frame before it, so a shuffled directory listing reconstructs a
+// different scene, and a readdir order is the filesystem's.
+//
+// dir_list rather than fs_glob, because the glob does not descend through
+// a symlinked directory and pointing at a linked frame folder is an
+// ordinary thing to do. The batch is sorted on its own and only then
+// appended, so naming two directories keeps them in the order given.
+@ __lm_dir ( Vec String ) into s dir → b {
+    : ( Vec String ) hits ( vec_new [String] )
+    ?? ( dir_list dir ) {
+        F _e → {
+            ( vec_free [String] hits )
+            ( nurl_print `lingbot-map: cannot read the directory ` )
+            ( nurl_print dir ) ( nurl_print `\n` )
+            ^ F
+        }
+        T names → {
+            : ~ i k 0
+            ~ < k ( vec_len [String] names ) {
+                ?? ( vec_get [String] names k ) {
+                    T nm → {
+                        ? ( __lm_is_frame ( string_data nm ) ) {
+                            ( vec_push [String] hits ( path_join dir ( string_data nm ) ) )
+                        } {}
+                    }
+                    F → {}
+                }
+                = k + k 1
+            }
+            ( vec_free_with [String] names \ String s → v { ( string_free s ) } )
+        }
+    }
+    ? == ( vec_len [String] hits ) 0 {
+        ( vec_free [String] hits )
+        ( nurl_print `lingbot-map: no .png, .jpg or .jpeg frames in ` )
         ( nurl_print dir ) ( nurl_print `\n` )
         ^ F
     } {}
-    ( sort_by [String] into \ String x String y → i {
+    ( sort_by [String] hits \ String x String y → i {
         ^ ( nurl_str_cmp ( string_data x ) ( string_data y ) ) } )
+    // A MOVE of the handles: vec_extend documents itself as safe only for
+    // trivial element types, so the Strings are pushed across and only the
+    // source container is dropped.
+    : ~ i g 0
+    ~ < g ( vec_len [String] hits ) {
+        ?? ( vec_get [String] hits g ) {
+            T h → { ( vec_push [String] into h ) }
+            F → {}
+        }
+        = g + g 1
+    }
+    ( vec_free [String] hits )
     ^ T
 }
 
@@ -125,61 +246,159 @@ $ `src/preproc.nu`
     : ~ f conf LM_CONF
     : ~ i pstride 2
     : ~ i maxf 0
+    : ~ i fstride 1
     : ~ i verbose 1
     : ~ i profile 0
     : ~ i ascii 0
     : ~ i bad 0
     : i argc ( nurl_argc )
     : ~ i i0 1
-    ~ < i0 argc {
+    ~ & == bad 0 < i0 argc {
         : s a ( nurl_argv i0 )
-        : b wants | | ( __lm_streq a `--model` ) ( __lm_streq a `--out` )
-        | ( __lm_streq a `--conf` ) | ( __lm_streq a `--pixel-stride` )
-        | ( __lm_streq a `--max-frames` ) ( __lm_streq a `--frames` )
-        ? & wants >= + i0 1 argc {
-            ( nurl_print a ) ( nurl_print ` needs a value\n` )
-            = bad 1
-            = i0 argc
-        } {
-            ? ( __lm_streq a `--model` ) { = model ( nurl_argv + i0 1 ) = i0 + i0 1 } {
-                ? ( __lm_streq a `--out` ) { = out ( nurl_argv + i0 1 ) = i0 + i0 1 } {
-                    ? ( __lm_streq a `--conf` ) {
-                        = conf ( nurl_str_to_float ( nurl_argv + i0 1 ) ) = i0 + i0 1
+        : ~ i take 0
+        ? ( __lm_wants a ) {
+            ? >= + i0 1 argc {
+                ( nurl_print `lingbot-map: ` ) ( nurl_print a )
+                ( nurl_print ` needs a value\n` )
+                = bad 1
+            } { = take 1 }
+        } {}
+        ? == take 1 {
+            : s v ( nurl_argv + i0 1 )
+            ? | ( __lm_streq a `--model` ) ( __lm_streq a `--model_path` ) { = model v } {}
+            ? ( __lm_streq a `--out` ) { = out v } {}
+            ? | ( __lm_streq a `--conf` ) ( __lm_streq a `--conf_threshold` ) {
+                = conf ( nurl_str_to_float v )
+            } {}
+            ? ( __lm_streq a `--pixel-stride` ) { = pstride ( nurl_str_to_int v ) } {}
+            ? | ( __lm_streq a `--max-frames` ) ( __lm_streq a `--first_k` ) {
+                = maxf ( nurl_str_to_int v )
+            } {}
+            ? ( __lm_streq a `--stride` ) { = fstride ( nurl_str_to_int v ) } {}
+            ? | ( __lm_streq a `--frames` ) ( __lm_streq a `--image_folder` ) {
+                ? ( __lm_dir fr v ) {} { = bad 1 }
+            } {}
+            = i0 + i0 1
+        } {}
+        ? & == bad 0 == take 0 {
+            : ~ i hit 0
+            ? | ( __lm_streq a `--quiet` ) ( __lm_streq a `-q` ) { = verbose 0 = hit 1 } {}
+            ? ( __lm_streq a `--profile` ) { = profile 1 = hit 1 } {}
+            ? ( __lm_streq a `--ascii` ) { = ascii 1 = hit 1 } {}
+            ? | ( __lm_streq a `--help` ) ( __lm_streq a `-h` ) { = bad 2 = hit 1 } {}
+            ? ( __lm_streq a `--version` ) { = bad 3 = hit 1 } {}
+            ? == hit 0 {
+                ? ( __lm_is_flag a ) {
+                    ( nurl_print `lingbot-map: unknown option ` ) ( nurl_print a )
+                    ( nurl_print `\n` )
+                    = bad 1
+                } {
+                    // A positional is either a directory of frames or one
+                    // frame. Naming the directory is what people try first.
+                    ? ( __lm_is_dir a ) {
+                        ? ( __lm_dir fr a ) {} { = bad 1 }
                     } {
-                        ? ( __lm_streq a `--pixel-stride` ) {
-                            = pstride ( nurl_str_to_int ( nurl_argv + i0 1 ) ) = i0 + i0 1
-                        } {
-                            ? ( __lm_streq a `--max-frames` ) {
-                                = maxf ( nurl_str_to_int ( nurl_argv + i0 1 ) ) = i0 + i0 1
-                            } {
-                                ? ( __lm_streq a `--frames` ) {
-                                    ? ( __lm_dir fr ( nurl_argv + i0 1 ) ) {} { = bad 1 }
-                                    = i0 + i0 1
-                                } {
-                                    ? ( __lm_streq a `--quiet` ) { = verbose 0 } {
-                                        ? ( __lm_streq a `--profile` ) { = profile 1 } {
-                                            ? ( __lm_streq a `--ascii` ) { = ascii 1 } {
-                                                ? ( __lm_streq a `--help` ) { = bad 2 } {
-                                                    ( vec_push [String] fr ( string_from a ) )
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
+                        ( vec_push [String] fr ( string_from a ) )
                     }
                 }
-            }
-            = i0 + i0 1
-        }
+            } {}
+        } {}
+        = i0 + i0 1
     }
     ? < pstride 1 { = pstride 1 } {}
+
+    // --max-frames caps the sequence and --stride then subsamples what is
+    // left, which is the order the reference applies its own --first_k and
+    // --stride in: thirty frames at a stride of three is ten, not ninety.
+    ? & > maxf 0 < maxf ( vec_len [String] fr ) {
+        : ~ i d maxf
+        ~ < d ( vec_len [String] fr ) {
+            ?? ( vec_get [String] fr d ) { T s → { ( string_free s ) } F → {} }
+            = d + d 1
+        }
+        : b _c ( vec_set_len [String] fr maxf )
+    } {}
+    // Compacted in place: the kept handles move down to fill the gaps and
+    // the dropped ones are freed as they are passed. The stale duplicates
+    // left past the new length are never freed, so nothing is freed twice.
+    ? > fstride 1 {
+        : ~ i r 0
+        : ~ i w 0
+        ~ < r ( vec_len [String] fr ) {
+            ?? ( vec_get [String] fr r ) {
+                T s → {
+                    ? == 0 % r fstride {
+                        : b _s ( vec_set [String] fr w s )
+                        = w + w 1
+                    } { ( string_free s ) }
+                }
+                F → {}
+            }
+            = r + r 1
+        }
+        : b _c ( vec_set_len [String] fr w )
+    } {}
     ^ @ Opts { model out conf pstride maxf verbose profile ascii fr bad }
 }
 
 @ __lm_free_opts Opts o → v {
     ( vec_free_with [String] . o frames \ String s → v { ( string_free s ) } )
+}
+
+// ── the checkpoint ──────────────────────────────────────────────────
+
+// A `/`- or `.`- or `~`-led argument is a filename the user meant, so a
+// typo in it is a missing file and not a repository to go looking for on
+// Hugging Face. Without this, `--model ~/typo.pt` reports whatever the
+// network said about a repository named `~`.
+@ __lm_looks_local s a → b {
+    : i n ( nurl_str_len a )
+    ? == n 0 { ^ F } {}
+    : i c0 ( nurl_str_at a n 0 )
+    ^ | | == c0 47 == c0 46 == c0 126
+}
+
+// `hub_get` passes an existing local path straight through and otherwise
+// treats the argument as a Hugging Face ref. Announce the download first,
+// because 4.6 GB arriving unannounced looks like a hang.
+@ __lm_fetch s ref i verbose i isdefault → !String String {
+    ? != 0 ( nurl_path_type ref ) { ^ ( hub_get ref ) } {}
+    ? ( __lm_looks_local ref ) {
+        : String m ( string_from `no such file: ` )
+        ( string_push_str m ref )
+        ^ @ !String String { F m }
+    } {}
+    ? != verbose 0 {
+        ( nurl_print `fetching ` ) ( nurl_print ref )
+        ? != isdefault 0 { ( nurl_print ` — 4.6 GB` ) } {}
+        ( nurl_print `, once. Cached under ` )
+        : String root ( hub_store_root )
+        ( nurl_print ( string_data root ) ) ( nurl_print `\n` )
+        ( string_free root )
+    } {}
+    ^ ( hub_get ref )
+}
+
+// Where the checkpoint comes from when --model did not say: the
+// environment, then the conventional spot in the model cache, then
+// Hugging Face. The point is that a first run needs frames and nothing
+// else.
+@ __lm_model s arg i verbose → !String String {
+    ? > ( nurl_str_len arg ) 0 { ^ ( __lm_fetch arg verbose 0 ) } {}
+    ?? ( env_get `LINGBOT_MAP_MODEL` ) {
+        T v → {
+            : !String String r ( __lm_fetch ( string_data v ) verbose 0 )
+            ( string_free v )
+            ^ r
+        }
+        F → {}
+    }
+    : String root ( hub_store_root )
+    : String p ( path_join ( string_data root ) `lingbot-map/lingbot-map.pt` )
+    ( string_free root )
+    ? == 1 ( nurl_path_type ( string_data p ) ) { ^ @ !String String { T p } } {}
+    ( string_free p )
+    ^ ( __lm_fetch `robbyant/lingbot-map/lingbot-map.pt` verbose 1 )
 }
 
 // ── PLY ─────────────────────────────────────────────────────────────
@@ -365,19 +584,86 @@ i h i w f cmin i stride → Ply {
 
 @ main → i {
     : Opts o ( __lm_parse )
-    ? != . o bad 0 { ( __lm_usage ) ( __lm_free_opts o ) ^ ? == . o bad 2 0 2 } {}
+    ? == . o bad 2 { ( __lm_help ) ( __lm_free_opts o ) ^ 0 } {}
+    ? == . o bad 3 { ( __lm_version ) ( __lm_free_opts o ) ^ 0 } {}
+    ? != . o bad 0 { ( __lm_usage ) ( __lm_free_opts o ) ^ 2 } {}
     : ~ i nframes ( vec_len [String] . o frames )
-    ? | ( __lm_streq . o model `` ) == nframes 0 {
-        ( __lm_usage ) ( __lm_free_opts o ) ^ 2
+    // Say what is missing. The old behaviour here was to print the usage
+    // and leave the reader to spot which line applied to them.
+    ? == nframes 0 {
+        ( nurl_print `lingbot-map: no frames to reconstruct.\n` )
+        ( nurl_print `Point it at a folder of frames, in order:\n` )
+        ( nurl_print `    lingbot-map ~/dev/lingbot-map/example/courthouse\n` )
+        ( nurl_print `or name the frames yourself:\n` )
+        ( nurl_print `    lingbot-map shot0.png shot1.png shot2.png\n` )
+        ( nurl_print `'lingbot-map --help' has the rest.\n` )
+        ( __lm_free_opts o ) ^ 2
     } {}
-    ? & > . o maxframes 0 < . o maxframes nframes { = nframes . o maxframes } {}
+    // Every frame is checked before the 4.6 GB checkpoint is read. A
+    // mistyped path used to cost a full model load and then fail on the
+    // first decode.
+    : ~ i missing 0
+    : ~ i vi 0
+    ~ < vi nframes {
+        ?? ( vec_get [String] . o frames vi ) {
+            T s → {
+                ? == 0 ( nurl_path_type ( string_data s ) ) {
+                    ? == missing 0 {
+                        ( nurl_print `lingbot-map: no such frame: ` )
+                        ( nurl_print ( string_data s ) ) ( nurl_print `\n` )
+                    } {}
+                    = missing + missing 1
+                } {}
+            }
+            F → {}
+        }
+        = vi + vi 1
+    }
+    ? != missing 0 {
+        ? > missing 1 {
+            ( nurl_print `(and ` ) ( nurl_print ( nurl_str_int - missing 1 ) )
+            ( nurl_print ` more of the ` ) ( nurl_print ( nurl_str_int nframes ) )
+            ( nurl_print ` frames)\n` )
+        } {}
+        ( __lm_free_opts o ) ^ 2
+    } {}
+
+    // What is about to be reconstructed, said BEFORE the checkpoint is
+    // resolved: on a first run that line is the last thing printed for as
+    // long as 4.6 GB takes to arrive, so it had better be there.
+    ? != . o verbose 0 {
+        ( nurl_print `frames ` ) ( nurl_print ( nurl_str_int nframes ) )
+        ( nurl_print ` -> ` ) ( nurl_print . o out ) ( nurl_print `\n` )
+    } {}
+
+    // Resolved before the GPU is touched: a checkpoint that is missing or
+    // still downloading has nothing to do with the device, and failing in
+    // that order is what a reader expects.
+    : ~ String model ( string_new )
+    ?? ( __lm_model . o model . o verbose ) {
+        F e → {
+            ( nurl_print `lingbot-map: no checkpoint: ` )
+            ( nurl_print ( string_data e ) ) ( nurl_print `\n` )
+            ( nurl_print `Fetch it once with:\n` )
+            ( nurl_print `    hub pull robbyant/lingbot-map/lingbot-map.pt\n` )
+            ( nurl_print `or download lingbot-map.pt from\n` )
+            ( nurl_print `    https://huggingface.co/robbyant/lingbot-map\n` )
+            ( nurl_print `and name it with --model <path>.\n` )
+            ( string_free e ) ( __lm_free_opts o ) ^ 1
+        }
+        T p → { ( string_free model ) = model p }
+    }
 
     // Set by any frame that fails, and returned. A reconstruction that
     // half-ran and exited 0 is worse than one that failed loudly: the
     // caller writes the cloud into a pipeline and never learns.
     : ~ i rc 0
     : *GpuKit kit ( gk_open_best )
-    ? ( gk_ok kit ) {} { ( nurl_print `lingbot-map: no gpukit backend\n` ) ^ 1 }
+    ? ( gk_ok kit ) {} {
+        ( nurl_print `lingbot-map: no GPU backend — no CUDA device is visible, and this\n` )
+        ( nurl_print `build has no CPU fallback compiled in.\n` )
+        ( string_free model ) ( __lm_free_opts o ) ^ 1
+    }
     // Every gkd_* launch syncs the device by default, which is right for
     // one-shot compute and wrong for a model: a frame is thousands of
     // launches, and the stream already serialises them. Downloads sync
@@ -390,11 +676,19 @@ i h i w f cmin i stride → Ply {
         ( gk_prof kit T )
     } {}
 
-    : !*Lw String lo ( lw_open . o model )
+    : i t_start ( monotonic_ns )
+    ? != . o verbose 0 {
+        ( nurl_print `model  ` ) ( nurl_print ( string_data model ) ) ( nurl_print `\n` )
+    } {}
+    : !*Lw String lo ( lw_open ( string_data model ) )
     ?? lo {
         F e → {
+            ( nurl_print `lingbot-map: cannot read the checkpoint ` )
+            ( nurl_print ( string_data model ) ) ( nurl_print `\n` )
             ( nurl_print ( string_data e ) ) ( nurl_print `\n` ) ( string_free e )
-            ( gk_close kit ) ( __lm_free_opts o ) ^ 1
+            ( nurl_print `It should be lingbot-map.pt (or -long / -stage1) from\n` )
+            ( nurl_print `    https://huggingface.co/robbyant/lingbot-map\n` )
+            ( gk_close kit ) ( string_free model ) ( __lm_free_opts o ) ^ 1
         }
         T lw → {
             : Agg a ( ag_load lw kit )
@@ -579,7 +873,11 @@ i h i w f cmin i stride → Ply {
                     ? == failed 0 {
                         ( nurl_print `wrote ` ) ( nurl_print ( nurl_str_int total ) )
                         ( nurl_print ` points to ` ) ( nurl_print . o out )
-                        ( nurl_print `\n` )
+                        ( nurl_print `  (` ) ( nurl_print ( nurl_str_int nframes ) )
+                        ( nurl_print ` frames, ` )
+                        ( nurl_print ( nurl_str_int
+                        / - ( monotonic_ns ) t_start 1000000 ) )
+                        ( nurl_print ` ms)\n` )
                     } {}
                     ? != . o profile 0 { ( gk_prof_report kit ) } {}
                     ( nurl_free # s taps )
@@ -594,6 +892,7 @@ i h i w f cmin i stride → Ply {
         }
     }
     ( gk_close kit )
+    ( string_free model )
     ( __lm_free_opts o )
     ^ rc
 }
