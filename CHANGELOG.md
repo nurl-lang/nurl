@@ -43,6 +43,60 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `--version`, `-v` and (where it isn't ambiguous) the bare word `version`,
   and say so in their usage text.
 
+- **A wasm benchmark suite: `bench/wasmbench.sh` → `bench/WASMRESULTS.md`.**
+  The sibling of `bench.sh`, same roster and same protocol, one axis
+  rotated. `bench.sh` asks how fast NURL is against four other languages;
+  this asks what *targeting wasm* costs, and what running that wasm on
+  **NURL's own runtime** costs. Every benchmark's NURL, C and Rust sources
+  are compiled twice — native and `wasm32-wasi` — and each module is run
+  on two runtimes: the reference `wasmtime` (Cranelift JIT) and
+  `packages/wasmtime`, the WebAssembly interpreter written in pure NURL.
+  Ten timed cells per row, all gated on printing the same line as the
+  native NURL binary, the interpreter *inside* the gate rather than beside
+  it — a runtime that gets the wrong answer quickly is not a fast runtime.
+
+  - **C and Rust are the control, not decoration.** A NURL-only
+    wasm-vs-native ratio cannot tell "wasm is slower here" from "NURL's
+    wasm pipeline is slower here". And modules emitted by two other LLVM
+    frontends are the only honest test of a runtime developed against
+    NURL's own output: `packages/wasmtime` runs all 15 benchmarks from all
+    three languages with output identical to native.
+  - **Everything under test is built from the working tree** — `nurlc`,
+    `stdlib/runtime.o`, `packages/wasmbuilder` and `packages/wasmtime` —
+    so the numbers describe this repo and not whatever is in `$NURL_HOME`.
+  - **Running both runtimes is what found the bug.** A JIT re-optimises
+    whatever it is given, so it reports roughly the same number for a good
+    module and a bad one; an interpreter executes exactly what is in the
+    module and reports the difference. The `-Xclang -O2` defect below had
+    been shipping in every wasm build and was invisible in the reference
+    column — it showed up as a 5.5× gap in the interpreter column.
+  - **The reference runtime's compiled-module cache is turned off**
+    (`-C cache=n`). Its CLI enables that cache by default, which made a
+    cell mean "Cranelift ran" or "Cranelift did not run" depending on what
+    happened to be in `~/.cache/wasmtime` — including for the floor row,
+    whose whole job is to be subtracted from the others. Measured across
+    that boundary, `lcg` came out *ten times faster* than its own empty
+    program. Off, both runtimes are measured doing the same work: read the
+    module, translate it, run it.
+
+- **`wasmbuilder --gc-sections`**, and `WbOpts.gc_sections` for embedders.
+  The builder has always passed `-Wl,--no-gc-sections`, because NURL
+  closures store function-table indices and section GC renumbers that
+  table — a `call_indirect` trap at run time with no link error to warn
+  anyone, observed on `nurlc.wasm`. The flag was not the problem; having no
+  way to opt out of it was. What it drops is most of the NURL runtime a
+  program never calls: on `bench/lcg.nu` the module goes 1064 KiB → 819 KiB
+  and a reference `wasmtime` run goes ~120 ms → ~85 ms, because the runtime
+  stops translating code nothing reaches. `wasmbench.sh` builds every
+  benchmark both ways and holds both to the same output, so the size of the
+  prize is now a measured number rather than an argument. It is an opt-in,
+  not a new default: what stands between it and being one is making closure
+  indices survive renumbering.
+
+- **`wasmtime --version` / `--help`.** The package had neither, while its
+  sibling `wasmbuilder` had both, so nothing that shelled out to it could
+  record which runtime produced a result.
+
 ### Fixed
 
 - **The installer served from nurl-lang.org still wiped the whole install
@@ -61,6 +115,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   upgrading the tree it is executing from, and Windows refuses to unlink a
   running `.exe` (POSIX allows it, which is why the same code path is
   uneventful there).
+
+- **Every wasm module `wasmbuilder` ever produced shipped unoptimised code.**
+  `zig cc` drops `-O` for LLVM IR inputs — it forwards the level for C, but
+  for a `.ll` it passes nothing to cc1 and cc1 defaults to `-O0`. This
+  pipeline hands zig a `.ll`, so nothing the user wrote was optimised: no
+  mem2reg, so a loop counter stayed a linear-memory load/store pair, and
+  `bench/lcg.nu`'s inner loop reloaded the same value twice per iteration.
+
+  `nurl.sh` has carried the workaround for native builds since it was
+  discovered there (`-Xclang <level>`, which reaches cc1 and survives);
+  `wasmbuilder` never got the wasm half of it. Now it does.
+
+  A JIT hid this completely, which is why it lasted: Cranelift re-optimises
+  whatever it is handed, so the reference `wasmtime` timings moved by
+  nothing. An interpreter cannot — `packages/wasmtime` ran `lcg` at 1M
+  iterations in 1.09 s before and 0.20 s after, and the full 20M-iteration
+  benchmark went **17.86 s → 2.77 s**. The gap between those two columns is
+  what made the bug visible at all, and it is the reason the wasm suite runs
+  both runtimes rather than only the fast one.
+
+- **`packages/wasmtime`: the interpreter loop re-read its frame on every
+  instruction.** The frame stack only moves on a call, a return, or falling
+  off the end of a body, but the loop did a bounds-checked `vec_get`, an
+  Option unwrap and a dependent load per *instruction*, then copied
+  `pos`/`end` into the cursor and back out again. The cursor is now the
+  authority on where execution is and the frame is cached until the stack
+  moves; `pos` is written back exactly where something reads it (a call
+  suspending the frame, a trap printing a backtrace). Worth 3–4 %.
+
+  Two other candidates were tried and reverted, both measured: bisecting the
+  opcode dispatch chain (−5 %) and a single-byte fast path in the LEB128
+  reader (−12 %). The dispatch chain reads like a 177-comparison linear scan
+  in the source but LLVM already lowers it to jump tables — one indirect jump
+  in `__exec_op`, two in `__exec_num` — so "reordering by frequency" only
+  split a working table into five. At 3.4 IPC and a 0.05 % branch-miss rate
+  the interpreter is not stalling anywhere; it retires ~191 host
+  instructions per wasm instruction, and that cost is spread across
+  decode-at-execution and bounds-checked container access on every stack and
+  local touch. Bringing it down needs a pre-decoded instruction
+  representation, not local edits.
+
+- **`wasmbuilder --version` reported 0.1.1 when the package was 0.1.3.** A
+  version string is what a bug report quotes; a stale one misattributes the
+  bug. Both this and the new `wasmtime` version literal carry a comment
+  saying to keep them in step with `nurl.toml`.
+
+- **`wasmbuilder`'s `--cflags`, `--obj` and `--asyncify-imports` were
+  undocumented** — implemented in the CLI, absent from the README, so the
+  only way to find them was `--help` or the source.
 
 ## [0.26.0] — 2026-07-26
 

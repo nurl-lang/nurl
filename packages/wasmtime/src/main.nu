@@ -39,13 +39,33 @@ $ `interp.nu`
     ^ ?? ( vec_get [i] . ft results 0 ) { T x → x F → 127 }
 }
 
+// Keep in step with nurl.toml's [package] version — `--version` is what a
+// bug report quotes, so a stale literal here misattributes the bug.
+@ __wt_version → s { ^ `wasmtime 0.6.2 (pure NURL)` }
+
 @ usage → v {
     ( nurl_print `wasmtime — a WebAssembly runtime in pure NURL\n\n` )
-    ( nurl_print `  wasmtime run [--dir <path>]… [--env NAME=VALUE]… <module.wasm> [args…]\n` )
-    ( nurl_print `  wasmtime run --invoke <export> <module.wasm> [args…]\n\n` )
+    ( nurl_print `  wasmtime run [--dir <path>]… [--env NAME=VALUE]… [--fuel N] [--allow-gpu] <module.wasm> [args…]\n` )
+    ( nurl_print `  wasmtime run --invoke <export> <module.wasm> [args…]\n` )
+    ( nurl_print `  wasmtime --version | --help\n\n` )
     ( nurl_print `Command mode runs a wasm32-wasi module's _start with the given preopened\n` )
     ( nurl_print `directories and environment. Invoke mode calls an exported function with\n` )
     ( nurl_print `integer / floating-point arguments and prints the result.\n` )
+}
+
+// Is `flag` anywhere in argv, position 1 included? __arg_index starts at 2
+// because every flag it looks for follows the `run` subcommand; `--version`
+// and `--help` are the two that stand in the subcommand's place instead.
+@ __has_flag i argc s flag → i {
+    : ~ i found 0
+    : ~ i k 1
+    ~ & == found 0 < k argc {
+        : String a ( env_arg k )
+        ? != 0 ( nurl_str_eq ( string_data a ) flag ) { = found 1 } {}
+        ( string_free a )
+        = k + k 1
+    }
+    ^ found
 }
 
 // Find the index of `flag` in argv (after position 1); -1 if absent.
@@ -164,6 +184,9 @@ $ `interp.nu`
 
 @ main → i {
     : i argc ( env_args_count )
+    ? != 0 ( __has_flag argc `--version` ) { ( nurl_print ( __wt_version ) ) ( nurl_print `\n` ) ^ 0 } {}
+    ? != 0 ( __has_flag argc `--help` ) { ( usage ) ^ 0 } {}
+    ? != 0 ( __has_flag argc `-h` ) { ( usage ) ^ 0 } {}
     ? < argc 2 { ( usage ) ^ 1 } {}
     // Direct-call mode: `[run] --invoke <export> <module> [args]`.
     : i allow_gpu ? >= ( __arg_index argc `--allow-gpu` ) 0 1 0

@@ -54,20 +54,49 @@ and fail instead.
 ```
 wasmbuilder <file.nu> [options]
 
-  -o, --output FILE      output path (default: <input>.wasm)
-  -O, --opt LEVEL        0..3 or z (default 2; z = size)
-      --emit-ll          keep the rewritten wasm32 .ll next to the output
-      --asyncify         wasm-opt asyncify wrap for canvas programs
-                         (needs binaryen's wasm-opt on PATH)
-      --no-host-imports  don't pass --ffi-host-imports to nurlc
-  -q, --quiet            suppress progress output
-      --doctor           show how nurlc / zig / runtime resolve here
+  -o, --output FILE        output path (default: <input>.wasm)
+  -O, --opt LEVEL          0..3 or z (default 2; z = size)
+      --emit-ll            keep the rewritten wasm32 .ll next to the output
+      --asyncify           wasm-opt asyncify wrap for canvas programs
+                           (needs binaryen's wasm-opt on PATH)
+      --asyncify-imports L comma-separated async import names
+                           (e.g. env.wgpu_download); implies --asyncify
+      --obj FILE           extra wasm object(s) linked in, space-separated
+                           (e.g. a kernels_static.wasm.o, so `& c` symbols
+                           resolve statically instead of becoming imports)
+      --cflags FLAGS       extra compile/link flags, space-separated
+                           (e.g. "-msimd128" for wasm SIMD)
+      --gc-sections        drop unreachable code at link time — see below
+      --no-host-imports    don't pass --ffi-host-imports to nurlc
+  -q, --quiet              suppress progress output
+      --doctor             show how nurlc / zig / runtime resolve here
       --version, -h
 ```
 
 `--doctor` is the first thing to run when something is off — it prints
 each resolution step (nurlc, stdlib C sources, wasm compiler, cache dir)
 and what would happen next.
+
+### `--gc-sections`
+
+Off by default, and the default is not timidity. NURL closures store
+**function-table indices**, and `--gc-sections` renumbers that table, so a
+closure captured before the collection can call the wrong function after
+it — a `call_indirect` trap at run time, with no link error to warn you.
+That was observed on `nurlc.wasm` (>150 functions).
+
+It is worth turning on for a program that uses no closures, because what
+it drops is most of the NURL runtime the module never calls. On
+`bench/lcg.nu` the module goes 1064 KiB → 819 KiB and a reference
+`wasmtime` run goes ~120 ms → ~85 ms, because the runtime no longer
+translates code nothing reaches. [`bench/wasmbench.sh`](../../bench/wasmbench.sh)
+measures both forms of every benchmark and gates them on identical
+output.
+
+The rule is: turn it on, run the program, check the output. Do not
+assume — and note that `--cflags "-Wl,--gc-sections"` is *not* the same
+thing: that appends a flag after the `--no-gc-sections` this builder
+already passes, leaving the outcome to wasm-ld's last-one-wins ordering.
 
 ## Library use (embed the builder)
 

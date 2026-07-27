@@ -5,6 +5,10 @@ Fifteen benchmarks. Five languages each — **NURL**, **C**, **Rust**,
 report. A row is timed only when all five implementations print the same
 line, so no cell can be fast by computing something else.
 
+Two runners read the same roster: `bench.sh` compares languages on the
+native target, and [`wasmbench.sh`](#the-wasm-suite--wasmbenchsh) compares
+native against `wasm32-wasi` on two runtimes.
+
 ```sh
 ./build.sh                 # build/nurlc + stdlib/runtime.o must exist first
 ./bench/bench.sh           # the whole suite (~10 min; Python is the long pole)
@@ -24,6 +28,25 @@ Both are refreshed by [`.github/workflows/bench.yml`](../.github/workflows/bench
 on a fixed `ubuntu-latest` runner — weekly, and on demand from the Actions
 tab. Those runs commit the refreshed files, which is how nurl-lang.org's
 numbers stay honest without anyone typing a figure into HTML.
+
+## On Windows — `bench.ps1`
+
+[`bench.ps1`](bench.ps1) is the same suite, same manifest, same protocol,
+for a Windows box. It needs `build.bat` to have run, plus clang, rustc,
+node and a Python the `py` launcher can find.
+
+```powershell
+build.bat --no-tests               # build\nurlc.exe + stdlib\runtime.o
+pwsh bench\bench.ps1               # the whole suite
+pwsh bench\bench.ps1 -Quick        # one run per cell, for a smoke test
+pwsh bench\bench.ps1 -Bench lcg,sieve
+pwsh bench\bench.ps1 -Stdout       # print the report, write nothing
+```
+
+It writes [`results/latest-windows.json`](results/latest-windows.json) and
+`RESULTS-WINDOWS.md`, deliberately **not** the two files above: those are
+the Linux CI numbers the landing page publishes, and a local Windows run
+must not be able to end up in that table by accident.
 
 ## The contract
 
@@ -109,6 +132,56 @@ checksum gate is what keeps "fastest" from drifting into "different".
   load generator; results in [`HTTP_RESULTS.md`](HTTP_RESULTS.md). It
   measures requests per second, not wall clock, so it has its own runner.
 * `stdlib_hotpath.nu` is a NURL-only profiling probe with no peers.
+
+## The wasm suite — `wasmbench.sh`
+
+[`wasmbench.sh`](wasmbench.sh) is the same corpus with one axis rotated.
+`bench.sh` asks how fast NURL is against four other languages;
+`wasmbench.sh` asks what **targeting wasm** costs, and what running that
+wasm on **NURL's own runtime** costs:
+
+```sh
+./bench/wasmbench.sh                 # the whole suite (~15 min)
+./bench/wasmbench.sh --wt-all-langs  # + C/Rust on the interpreter (~45 min)
+./bench/wasmbench.sh --quick --bench lcg
+```
+
+Everything but the interpreter column costs about what `bench.sh` does;
+the interpreter is ~500× native, so it is the whole budget. Running the C
+and Rust modules on it too — the cross-frontend control — triples that, so
+it is opt-in.
+
+Each benchmark's NURL, C and Rust sources are compiled **twice** — native
+and `wasm32-wasi` — and each module is run on **two** runtimes: the
+reference `wasmtime` (Cranelift JIT) and
+[`packages/wasmtime`](../packages/wasmtime), a WebAssembly interpreter
+written in pure NURL. Ten timed cells per row, all gated on printing the
+same line as the native NURL binary — the interpreter is *inside* the
+gate, because a runtime that gets the wrong answer quickly is not a fast
+runtime. Results: [`WASMRESULTS.md`](WASMRESULTS.md) and
+[`results/wasm-latest.json`](results/wasm-latest.json).
+
+The tenth cell is the NURL module relinked with `--gc-sections`, which
+`wasmbuilder` leaves off by default because NURL closures store function
+table indices that section GC renumbers. None of these benchmarks uses a
+closure, so the suite can put a number on what that default costs — see
+section 5 of the report, and
+[`packages/wasmbuilder`](../packages/wasmbuilder/README.md#--gc-sections)
+for when it is safe to turn on.
+
+C and Rust are there as the control. Without them a wasm-vs-native ratio
+cannot distinguish "wasm is slower here" from "NURL's wasm pipeline is
+slower here", and modules from two other LLVM frontends are the only
+honest test of a runtime written against NURL's own output.
+
+The pieces are all built from this repo rather than from an installed
+toolchain — `nurlc`, `stdlib/runtime.o`,
+[`packages/wasmbuilder`](../packages/wasmbuilder) (NURL → wasm) and
+`packages/wasmtime` (the runtime) — so the numbers describe this working
+tree. What it additionally needs on the host is `zig` (wasi-libc +
+`wasm-ld`, and the NURL toolchain bundles one), `rustup target add
+wasm32-wasip1`, and a reference `wasmtime`, which is deliberately *not*
+vendored here: its whole job is to be the outside opinion.
 
 ## Beyond wall clock
 

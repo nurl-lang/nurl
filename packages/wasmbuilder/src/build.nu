@@ -8,7 +8,14 @@
 // Link flags mirror nurlapi's production /build_wasm handler:
 //   -Wl,--no-gc-sections   NURL closures store function-table indices;
 //                          gc-sections renumbers the table → call_indirect
-//                          traps at scale (proven on nurlc.wasm >150 fns)
+//                          traps at scale (proven on nurlc.wasm >150 fns).
+//                          Opt back in per build with `. opts gc_sections`
+//                          / `--gc-sections` when the program has no
+//                          closures: it is worth ~25 % of the module and
+//                          about as much of a runtime's load time
+//                          (bench/wasmbench.sh measures both). Verify the
+//                          output, do not assume — the failure mode is a
+//                          call_indirect trap at run time, not a link error.
 //   (nurlapi's -Wl,--allow-undefined is replaced by per-declare
 //   "wasm-import-module"="env" IR attributes — zig cc's driver rejects
 //   the linker flag; see wasi_ir.nu. Same semantics: undefined symbols
@@ -47,6 +54,11 @@ $ `toolchain.nu`
     // — e.g. `-msimd128` for wasm SIMD
     s asyncify_imports  // comma-separated async import names (`` = none);
     // e.g. `env.wgpu_download` for the WebGPU backend's async readback
+    b gc_sections  // link with --gc-sections instead of the safe default
+    // --no-gc-sections. Opt-in, and read the note above the link
+    // stage before turning it on: it drops unreachable code (~25 %
+    // off a small module, and as much again off the runtime's
+    // load time) but renumbers the function table.
 }
 
 // Split a space-separated flag string into owned Strings (caller frees).
@@ -76,7 +88,7 @@ $ `toolchain.nu`
 }
 
 @ wb_opts_default → WbOpts {
-    ^ @ WbOpts { `-O2` T F F F `` `` `` }
+    ^ @ WbOpts { `-O2` T F F F `` `` `` F }
 }
 
 @ __wb_say b quiet s msg → v {
@@ -208,8 +220,28 @@ $ `toolchain.nu`
     ? . cc is_zig { ( vec_push [s] args `cc` ) } {}
     ( vec_push [s] args `--target=wasm32-wasi` )
     ( vec_push [s] args . opts opt )
+    // `zig cc` drops -O for LLVM IR inputs. Not for C — `zig cc -O2 -c x.c`
+    // forwards -O2 to cc1 as expected — but for a `.ll` it passes NOTHING
+    // and cc1 defaults to -O0. This pipeline hands zig a `.ll`, so every
+    // wasm module wasmbuilder produced shipped UNOPTIMISED user code: no
+    // mem2reg, so a loop counter stayed a linear-memory load/store pair.
+    // A JIT hides it (Cranelift re-optimises what it is given, so the
+    // reference wasmtime timings barely moved) and an interpreter cannot:
+    // bench/lcg.nu at 1M iterations ran 1.09 s on packages/wasmtime before
+    // this line and 0.20 s after it — 5.5x, from two argv tokens.
+    // `nurl.sh` carries the same workaround for native builds; this is the
+    // wasm side of it. `-Xclang <level>` goes straight to cc1 and survives.
+    ? . cc is_zig { ( vec_push [s] args `-Xclang` ) ( vec_push [s] args . opts opt ) } {}
     ( vec_push [s] args `-Wno-override-module` )
-    ( vec_push [s] args `-Wl,--no-gc-sections` )
+    // Section GC is off by default and opt-in per build, not per flag
+    // string: a caller who passes `-Wl,--gc-sections` through
+    // extra_cflags would be relying on wasm-ld's last-one-wins ordering
+    // to defeat the `--no-` we push here, which is not a contract worth
+    // depending on. `. opts gc_sections` picks one flag or the other, so
+    // the argv says what was meant.
+    ? . opts gc_sections
+    { ( vec_push [s] args `-Wl,--gc-sections` ) }
+    { ( vec_push [s] args `-Wl,--no-gc-sections` ) }
     ? > ( nurl_str_len . opts extra_cflags ) 0 {
         // split the space-separated flag string into separate argv slots
         : ( Vec String ) fl ( string_split_borrow . opts extra_cflags )
