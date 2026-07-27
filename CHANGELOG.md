@@ -10,6 +10,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Each bench results commit fired a second full CI round.** Now that the
+  suite re-measures on every merge to main, the commit it pushes back — two
+  data files, no code — re-triggered `ci.yml` (three required checks, one of
+  them a FreeBSD VM) and `windows-tests.yml`, neither of which has a paths
+  filter. Not a loop: `bench.yml` already excludes the results files from its
+  own filter, so it never re-triggered itself. Just a doubling of CI cost per
+  merge, against code that did not change. The results commits now carry
+  `[skip ci]`; the numbers in them come from a run that passed the correctness
+  gate and chaincheck before committing.
+
 - **The bench results push authenticated as the wrong actor, and its retry
   destroyed the run's numbers.** Two defects in the freshly-landed direct-push
   path, both caught on its first real run. `actions/checkout` writes an
