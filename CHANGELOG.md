@@ -196,6 +196,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`wasmbuilder`'s version stayed at 0.1.3 while its behaviour changed under
+  it.** 0.1.3 is already published; the `--gc-sections` default flip, the
+  `-Xclang` optimisation fix, the `realpath` stub and the declare-stripper fix
+  all landed without a bump, and the README and `--help` text had already been
+  written against "0.1.4". Now 0.1.4 in the manifest and in `--version`
+  together — the same trap as the earlier 0.1.1/0.1.3 mismatch, in the other
+  direction: there the literal lagged the manifest, here both lagged the code.
+
 - **Every wasm build of a program whose imports reached `path_canonical`
   failed — including `nurlc.wasm` itself.** Two stacked defects, one seam.
   wasi-libc ships no `realpath(3)`, and it was missing from `wasi_ir.nu`'s
