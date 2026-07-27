@@ -123,23 +123,29 @@ $ `module.nu`
 // its control stack, and the instruction cursor [pos, end) — pos/end are
 // *record indices* into the function's predecoded instruction array, not byte
 // positions; `pins` borrows the *PFunc owned by it.pfuncs.
-: Frame { i fidx ( Vec i ) locals ( Vec s ) ctrl i pos i end i code_start s pins }
+: Frame { i fidx ( Vec i ) regs i pos i end i code_start s pins i ret_dst }
 
-// A predecoded function body: the byte stream decoded ONCE into fixed-width
-// records so the execution loop never touches LEB128 or scans for a matching
-// `end` again. Layout: 5 x i64 per instruction —
-//   [0] opcode   (0xfc/0xfd/0xfe prefixed ops keep the prefix byte as opcode)
-//   [1] A        first operand  (local/global idx, const bits, end-target, …)
-//   [2] B        second operand (else-target, memarg offset, params, …)
-//   [3] C        third operand  (results, packed if-counts, …)
-//   [4] BYTE     the instruction's byte offset in the module image, for
-//                trap backtraces — the one thing byte positions were
-//                still good for
-// Branch targets are record indices, resolved at predecode by a patch
-// stack (open block/loop/if records get their end/else slots filled in
-// when the matching `else`/`end` arrives). `aux` holds br_table label
-// vectors: [target0 … targetN default], record A = start index, B = N.
-: PFunc { ( Vec i ) code ( Vec i ) aux i count }
+// A predecoded function body in REGISTER FORM. wasm validation guarantees a
+// static stack height at every instruction, so the value at stack position h
+// lives in slot (nlocals + h) of one flat per-frame array — locals first,
+// stack after — and predecode resolves every operand to an absolute slot
+// index. There is no value-stack traffic and no runtime control stack left:
+// `local.get`/`set`/`tee` become register moves, `block`/`loop`/`end` emit
+// nothing at all, and branches are direct jumps that carry (dst, src, n)
+// result-move triples computed statically. Layout: 6 x i64 per record —
+//   [0] micro-op   (wasm opcodes for numeric/load/store arms; 300+ for the
+//                  register/control forms — see the constants below)
+//   [1..4] A B C D operands: slot indices, jump targets (record indices),
+//                  immediates, packed move triples
+//   [5] BYTE       the instruction's byte offset in the module image, for
+//                  trap backtraces — the one thing byte positions are
+//                  still good for
+// `aux` holds br_table rows, 4 words per label: target, dst, src, n.
+// Cold ops (floats, conversions, the 0xfc family) bridge through the old
+// value stack: the record copies their operands from slots onto it.vs, runs
+// the existing executor arm, and copies the result back — correctness
+// identical, speed unchanged for them, and no duplicated semantics.
+: PFunc { ( Vec i ) code ( Vec i ) aux i count i nlocals i nslots }
 
 @ __page → i { ^ 65536 }
 
@@ -600,96 +606,36 @@ $ `module.nu`
 }
 
 // Execute a memory instruction (0x28..0x40). memarg = align + offset ulebs.
-// `off` arrives predecoded (and already u32-masked, so a huge offset cannot
-// make the effective address wrap negative and slip past the bounds check);
-// the alignment hint was dropped at predecode — it carried no semantics here.
-@ __exec_mem * Interp it i off i op → v {
-    ? == op 63 { ( __push it . it mem_pages ) ^ v } {}  // memory.size
-    ? == op 64 { : i d ( __u32 ( __pop it ) ) ( __push it ( __mem_grow it d ) ) ^ v } {}  // memory.grow
-    ? & >= op 54 <= op 62 {  // stores: pop value, then addr
-        : i val ( __pop it )
-        : i ea + & ( __pop it ) 4294967295 off
-        ? == op 54 { ( __mem_store it ea 4 val ) } {}  // i32.store
-        ? == op 55 { ( __mem_store it ea 8 val ) } {}  // i64.store
-        ? == op 56 { ( __mem_store it ea 4 val ) } {}  // f32.store
-        ? == op 57 { ( __mem_store it ea 8 val ) } {}  // f64.store
-        ? == op 58 { ( __mem_store it ea 1 val ) } {}  // i32.store8
-        ? == op 59 { ( __mem_store it ea 2 val ) } {}  // i32.store16
-        ? == op 60 { ( __mem_store it ea 1 val ) } {}  // i64.store8
-        ? == op 61 { ( __mem_store it ea 2 val ) } {}  // i64.store16
-        ? == op 62 { ( __mem_store it ea 4 val ) } {}  // i64.store32
-        ^ v
-    } {}
-    : i ea + & ( __pop it ) 4294967295 off
-    ? == op 40 { ( __push it ( __w32 ( __mem_load it ea 4 0 ) ) ) } {}  // i32.load
-    ? == op 41 { ( __push it ( __mem_load it ea 8 0 ) ) } {}  // i64.load
-    ? == op 42 { ( __push it ( __mem_load it ea 4 0 ) ) } {}  // f32.load (raw 4-byte pattern)
-    ? == op 43 { ( __push it ( __mem_load it ea 8 0 ) ) } {}  // f64.load
-    ? == op 44 { ( __push it ( __w32 ( __mem_load it ea 1 1 ) ) ) } {}  // i32.load8_s
-    ? == op 45 { ( __push it ( __mem_load it ea 1 0 ) ) } {}  // i32.load8_u
-    ? == op 46 { ( __push it ( __w32 ( __mem_load it ea 2 1 ) ) ) } {}  // i32.load16_s
-    ? == op 47 { ( __push it ( __mem_load it ea 2 0 ) ) } {}  // i32.load16_u
-    ? == op 48 { ( __push it ( __mem_load it ea 1 1 ) ) } {}  // i64.load8_s
-    ? == op 49 { ( __push it ( __mem_load it ea 1 0 ) ) } {}  // i64.load8_u
-    ? == op 50 { ( __push it ( __mem_load it ea 2 1 ) ) } {}  // i64.load16_s
-    ? == op 51 { ( __push it ( __mem_load it ea 2 0 ) ) } {}  // i64.load16_u
-    ? == op 52 { ( __push it ( __mem_load it ea 4 1 ) ) } {}  // i64.load32_s
-    ? == op 53 { ( __push it ( __mem_load it ea 4 0 ) ) } {}  // i64.load32_u
+// Register-form memory access: effective address in, value in/out. The
+// memarg offset was u32-masked at predecode so `ea` cannot wrap negative
+// past the bounds check in __mem_load/__mem_store.
+@ __rload * Interp it i op i ea → i {
+    ? == op 40 { ^ ( __w32 ( __mem_load it ea 4 0 ) ) } {}  // i32.load
+    ? == op 41 { ^ ( __mem_load it ea 8 0 ) } {}  // i64.load
+    ? == op 42 { ^ ( __mem_load it ea 4 0 ) } {}  // f32.load (raw pattern)
+    ? == op 43 { ^ ( __mem_load it ea 8 0 ) } {}  // f64.load
+    ? == op 44 { ^ ( __w32 ( __mem_load it ea 1 1 ) ) } {}  // i32.load8_s
+    ? == op 45 { ^ ( __mem_load it ea 1 0 ) } {}  // i32.load8_u
+    ? == op 46 { ^ ( __w32 ( __mem_load it ea 2 1 ) ) } {}  // i32.load16_s
+    ? == op 47 { ^ ( __mem_load it ea 2 0 ) } {}  // i32.load16_u
+    ? == op 48 { ^ ( __mem_load it ea 1 1 ) } {}  // i64.load8_s
+    ? == op 49 { ^ ( __mem_load it ea 1 0 ) } {}  // i64.load8_u
+    ? == op 50 { ^ ( __mem_load it ea 2 1 ) } {}  // i64.load16_s
+    ? == op 51 { ^ ( __mem_load it ea 2 0 ) } {}  // i64.load16_u
+    ? == op 52 { ^ ( __mem_load it ea 4 1 ) } {}  // i64.load32_s
+    ^ ( __mem_load it ea 4 0 )  // 53 i64.load32_u
 }
 
-// ── control-stack helpers ────────────────────────────────────────
-
-@ __ctrl_push ( Vec s ) ctrl i is_loop i start_pc i end_pc i height i arity → v {
-    : *Ctrl e # *Ctrl ( nurl_alloc Z Ctrl )
-    = . e is_loop is_loop
-    = . e start_pc start_pc
-    = . e end_pc end_pc
-    = . e height height
-    = . e arity arity
-    ( vec_push [s] ctrl # s e )
-}
-
-@ __ctrl_pop ( Vec s ) ctrl → v {
-    : i n ( vec_len [s] ctrl )
-    ? <= n 0 { ^ v } {}
-    ?? ( vec_get [s] ctrl - n 1 ) { T pp → ? != # i pp 0 { ( nurl_free pp ) } {} F → {} }
-    ( vec_pop [s] ctrl )
-}
-
-@ __ctrl_at ( Vec s ) ctrl i k → s {
-    : i ix - - ( vec_len [s] ctrl ) 1 k
-    ? < ix 0 { ^ # s 0 } {}
-    ^ ?? ( vec_get [s] ctrl ix ) { T x → x F → # s 0 }
-}
-
-// Truncate the value stack to `height`, preserving the top `arity` values (the
-// branch payload: a block's results / a loop's parameters).
-@ __br_keep * Interp it i height i arity → v {
-    : ( Vec i ) kept ( vec_new [i] )
-    : ~ i k 0
-    ~ < k arity { ( vec_push [i] kept ( __pop it ) ) = k + k 1 }
-    ( __vtrunc it height )
-    : ~ i j arity
-    ~ > j 0 { = j - j 1 ( __push it ?? ( vec_get [i] kept j ) { T x → x F → 0 } ) }
-    ( vec_free [i] kept )
-}
-
-// Take branch to label depth k: re-enter a loop (carrying its parameters), or
-// exit a block past its `end` (carrying its results).
-@ __do_branch * Interp it ( Vec s ) ctrl * Wc c i k → v {
-    : s tp ( __ctrl_at ctrl k )
-    ? == # i tp 0 { ( __trap it `branch label out of range` ) ^ v } {}
-    : *Ctrl target # *Ctrl tp
-    ( __br_keep it . target height . target arity )
-    ? == . target is_loop 1 {
-        : ~ i pops k
-        ~ > pops 0 { ( __ctrl_pop ctrl ) = pops - pops 1 }
-        = . c pos . target start_pc
-    } {
-        : ~ i pops + k 1
-        ~ > pops 0 { ( __ctrl_pop ctrl ) = pops - pops 1 }
-        = . c pos + . target end_pc 1
-    }
+@ __rstore * Interp it i op i ea i val → v {
+    ? == op 54 { ( __mem_store it ea 4 val ) ^ v } {}  // i32.store
+    ? == op 55 { ( __mem_store it ea 8 val ) ^ v } {}  // i64.store
+    ? == op 56 { ( __mem_store it ea 4 val ) ^ v } {}  // f32.store
+    ? == op 57 { ( __mem_store it ea 8 val ) ^ v } {}  // f64.store
+    ? == op 58 { ( __mem_store it ea 1 val ) ^ v } {}  // i32.store8
+    ? == op 59 { ( __mem_store it ea 2 val ) ^ v } {}  // i32.store16
+    ? == op 60 { ( __mem_store it ea 1 val ) ^ v } {}  // i64.store8
+    ? == op 61 { ( __mem_store it ea 2 val ) ^ v } {}  // i64.store16
+    ( __mem_store it ea 4 val )  // 62 i64.store32
 }
 
 // ── the executor ─────────────────────────────────────────────────
@@ -702,53 +648,48 @@ $ `module.nu`
     ? != # i wp 0 { : *WImport w # *WImport wp ( __wasi_dispatch it . w module . w field ) } { ( __trap it `bad import index` ) }
 }
 
-// Build a frame for defined function `fidx`: locals = params (popped from the
-// value stack, in order) ++ declared locals (zeroed). #s 0 on a bad index.
-@ __frame_new * Interp it * Module m i fidx → s {
+// Build a frame for defined function `fidx`. `ret_dst` is the caller slot
+// the results are copied back to (-1 = outermost frame: arguments arrive on
+// it.vs and results leave on it.vs — the embedder protocol). Register form:
+// one flat array, locals first, stack slots after; the driver copies call
+// arguments straight from the caller's slots, so only the outermost frame
+// touches the value stack.
+@ __frame_new * Interp it * Module m i fidx i ret_dst → s {
     : s fp ?? ( vec_get [s] . m funcs - fidx . m num_import_funcs ) { T x → x F → # s 0 }
     ? == # i fp 0 { ( __trap it `bad function index` ) ^ # s 0 } {}
     : *WFunc f # *WFunc fp
-    : s tp ?? ( vec_get [s] . m types . f typeidx ) { T x → x F → # s 0 }
-    ? == # i tp 0 { ( __trap it `bad type index` ) ^ # s 0 } {}
-    : *FuncType ft # *FuncType tp
-    : i nparams ( vec_len [i] . ft params )
-    : i nlocals_decl ( vec_len [i] . f locals )
-    : ( Vec i ) locals ( vec_new [i] )
-    : ~ i k 0
-    ~ < k + nparams nlocals_decl { ( vec_push [i] locals 0 ) = k + k 1 }
-    : ~ i p nparams
-    ~ > p 0 { = p - p 1 ( vec_set [i] locals p ( __pop it ) ) }
     : s pins ( __pfunc_for it m fidx )
-    ? == # i pins 0 { ( __trap it `bad function index` ) ( vec_free [i] locals ) ^ # s 0 } {}
+    ? == # i pins 0 { ( __trap it `bad function index` ) ^ # s 0 } {}
     : *PFunc pfc # *PFunc pins
+    : ( Vec i ) regs ( vec_new [i] )
+    : ~ i k 0
+    ~ < k . pfc nslots { ( vec_push [i] regs 0 ) = k + k 1 }
+    ? < ret_dst 0 {
+        // outermost: pop the arguments off the value stack, last first
+        : s tp ?? ( vec_get [s] . m types . f typeidx ) { T x → x F → # s 0 }
+        ? != # i tp 0 {
+            : *FuncType ft # *FuncType tp
+            : ~ i pk ( vec_len [i] . ft params )
+            ~ > pk 0 { = pk - pk 1 ( vec_set [i] regs pk ( __pop it ) ) }
+        } {}
+    } {}
     : *Frame fr # *Frame ( nurl_alloc Z Frame )
     = . fr fidx fidx
-    = . fr locals locals
-    = . fr ctrl ( vec_new [s] )
+    = . fr regs regs
     = . fr pos 0
     = . fr end . pfc count
     = . fr code_start . f code_start
     = . fr pins pins
+    = . fr ret_dst ret_dst
     ^ # s fr
 }
 
 @ __frame_free s pp → v {
     ? == # i pp 0 { ^ v } {}
     : *Frame fr # *Frame pp
-    : i cn ( vec_len [s] . fr ctrl )
-    : ~ i ci 0
-    ~ < ci cn { ?? ( vec_get [s] . fr ctrl ci ) { T cp → ? != # i cp 0 { ( nurl_free cp ) } {} F → {} } = ci + ci 1 }
-    ( vec_free [s] . fr ctrl )
-    ( vec_free [i] . fr locals )
+    ( vec_free [i] . fr regs )
     ( nurl_free # s fr )
 }
-
-// ── predecode ────────────────────────────────────────────────────
-// Decode a function body ONCE into PFunc records (layout at the struct).
-// Everything position-like in a record is an index into the record array,
-// which is what lets the executor drop the byte cursor: `loop` no longer
-// re-scans its body for the matching `end` on entry, `if` doesn't run two
-// scans per execution, and no operand is LEB-decoded twice.
 
 @ __pf_free s pp → v {
     ? == # i pp 0 { ^ v } {}
@@ -758,120 +699,349 @@ $ `module.nu`
     ( nurl_free # s pf )
 }
 
-// Emit one 5-slot record; returns its index.
-@ __pf_emit ( Vec i ) code i op i a i b i cc i byte → i {
-    : i idx / ( vec_len [i] code ) 5
+// ── the register-form micro-ops (record slot [0]) ────────────────
+// Numeric, load and store records keep their wasm opcode; everything that
+// changed shape in register form gets a number ≥ 300 so the two spaces can
+// never collide.
+@ __R_MOV → i { ^ 300 }  // A=dst B=src
+@ __R_CONST → i { ^ 301 }  // A=dst B=imm (f32/f64 consts carry raw bits)
+@ __R_GG → i { ^ 302 }  // global.get: A=dst B=gidx
+@ __R_GS → i { ^ 303 }  // global.set: A=gidx B=src
+@ __R_SEL → i { ^ 304 }  // A=dst B=srcT C=srcF D=cond
+@ __R_MEMSZ → i { ^ 305 }  // A=dst
+@ __R_MEMGROW → i { ^ 306 }  // A=dst B=src
+@ __R_TABGET → i { ^ 307 }  // A=dst B=idxslot
+@ __R_TABSET → i { ^ 308 }  // A=idxslot B=valslot
+@ __R_ISNULL → i { ^ 309 }  // A=dst B=src
+@ __R_BR → i { ^ 310 }  // A=target
+@ __R_BRM → i { ^ 311 }  // A=target B=dst C=src D=n
+@ __R_BRIF → i { ^ 312 }  // A=target B=cond
+@ __R_BRIFM → i { ^ 313 }  // A=target B=cond C=dst<<20|src D=n
+@ __R_BRTBL → i { ^ 314 }  // A=aux base B=idxslot C=n labels (default row last)
+@ __R_RET → i { ^ 315 }  // A=src base B=n results
+@ __R_CALL → i { ^ 316 }  // A=fidx B=argbase (args in, results out)
+@ __R_CALLIND → i { ^ 317 }  // A=typeidx B=argbase C=idxslot
+@ __R_UNREACH → i { ^ 318 }
+
+@ __R_TRAPUN → i { ^ 319 }  // unsupported opcode (0xfd/0xfe/unknown)
+@ __R_FLOATB → i { ^ 320 }  // vs bridge: A=wasm op B=srcbase C=npops (dst=srcbase)
+@ __R_FCB → i { ^ 321 }  // vs bridge: A=sub B=idx-imm C=srcbase D=pops<<1|push
+@ __R_IFZ → i { ^ 322 }  // A=target B=cond — jump when cond == 0
+
+// Emit one 6-slot record; returns its index.
+@ __pf_emit ( Vec i ) code i op i a i b i cc i dd i byte → i {
+    : i idx / ( vec_len [i] code ) 6
     ( vec_push [i] code op ) ( vec_push [i] code a ) ( vec_push [i] code b )
-    ( vec_push [i] code cc ) ( vec_push [i] code byte )
+    ( vec_push [i] code cc ) ( vec_push [i] code dd ) ( vec_push [i] code byte )
     ^ idx
 }
 
-// The patch stack: one i per open block/loop/if — the record index, with
-// bit 62 set when the frame is an `if` (so `else` knows whom to patch).
-@ __predecode * Module m i code_start i code_end → s {
+// One open block/loop/if during predecode. `patches` holds forward-branch
+// sites that must learn "the record index just past this frame's end":
+// value site*2 → record A-field, site*2+1 → aux word `site`.
+: PBlk { i kind i base i params i results i live_entry i t0 i else_br ( Vec i ) patches }
+
+@ __pblk_new i kind i base i params i results i live i t0 → s {
+    : *PBlk k # *PBlk ( nurl_alloc Z PBlk )
+    = . k kind kind = . k base base = . k params params = . k results results
+    = . k live_entry live = . k t0 t0 = . k else_br -1
+    = . k patches ( vec_new [i] )
+    ^ # s k
+}
+
+@ __pblk_free s pp → v {
+    ? == # i pp 0 { ^ v } {}
+    : *PBlk k # *PBlk pp
+    ( vec_free [i] . k patches )
+    ( nurl_free # s k )
+}
+
+// npops of the vs-bridged float/conversion family: compares and the binary
+// arithmetic groups take two operands, everything else one.
+@ __float_pops i op → i {
+    ? & >= op 91 <= op 102 { ^ 2 } {}
+    ? & >= op 146 <= op 152 { ^ 2 } {}
+    ? & >= op 160 <= op 166 { ^ 2 } {}
+    ^ 1
+}
+
+// Emit a branch to label depth `k` (top of `open` = depth 0). `cond` is the
+// condition slot for br_if (-1 = unconditional). `h` is the height AFTER any
+// condition pop. Fills patch sites for forward targets. Returns nothing; the
+// caller handles liveness.
+@ __emit_branch * PFunc pf ( Vec s ) open i k i cond i L i h i byte → v {
+    : i n ( vec_len [s] open )
+    ? >= k n { ( __pf_emit . pf code ( __R_TRAPUN ) 0 0 0 0 byte ) ^ v } {}
+    : s bp ?? ( vec_get [s] open - - n 1 k ) { T x → x F → # s 0 }
+    ? == # i bp 0 { ( __pf_emit . pf code ( __R_TRAPUN ) 0 0 0 0 byte ) ^ v } {}
+    : *PBlk blk # *PBlk bp
+    : i arity ? == . blk kind 1 . blk params . blk results
+    : i dst + L . blk base
+    : i src + L - h arity
+    : i tgt ? == . blk kind 1 . blk t0 -1
+    : ~ i rec 0
+    ? | == arity 0 == dst src {
+        ? < cond 0 { = rec ( __pf_emit . pf code ( __R_BR ) tgt 0 0 0 byte ) }
+        { = rec ( __pf_emit . pf code ( __R_BRIF ) tgt cond 0 0 byte ) }
+    } {
+        ? < cond 0 { = rec ( __pf_emit . pf code ( __R_BRM ) tgt dst src arity byte ) }
+        { = rec ( __pf_emit . pf code ( __R_BRIFM ) tgt cond | << dst 20 src arity byte ) }
+    }
+    ? != . blk kind 1 { ( vec_push [i] . blk patches * rec 2 ) } {}
+}
+
+// ── the predecoder ───────────────────────────────────────────────
+// One linear pass with an abstract stack height `h`: every reachable
+// instruction knows exactly where its operands live, so records carry
+// absolute slot indices. Code made unreachable by br/return/unreachable is
+// parsed structurally (blocks still nest, immediates still skipped — record
+// alignment survives hostile bytes exactly as before) but emits nothing;
+// heights resume at the statically-known values at `else` and `end`.
+@ __predecode * Module m * WFunc f → s {
     : *PFunc pf # *PFunc ( nurl_alloc Z PFunc )
     = . pf code ( vec_new [i] )
     = . pf aux ( vec_new [i] )
-    : ( Vec i ) open ( vec_new [i] )
+    : s ftp ?? ( vec_get [s] . m types . f typeidx ) { T x → x F → # s 0 }
+    : ~ i nparams 0
+    : ~ i nresults 0
+    ? != # i ftp 0 {
+        : *FuncType ftt # *FuncType ftp
+        = nparams ( vec_len [i] . ftt params )
+        = nresults ( vec_len [i] . ftt results )
+    } {}
+    : i L + nparams ( vec_len [i] . f locals )
+    = . pf nlocals L
+    : ( Vec s ) open ( vec_new [s] )
+    // the function body behaves as one enclosing block returning the results
+    ( vec_push [s] open ( __pblk_new 0 0 0 nresults 1 -1 ) )
     : *Wc c ( wc_new . m code )
-    = . c pos code_start
-    = . c len code_end
-    ~ < . c pos code_end {
+    = . c pos . f code_start
+    = . c len . f code_end
+    : ~ i h 0
+    : ~ i maxh 0
+    : ~ i live 1
+    ~ & < . c pos . f code_end > ( vec_len [s] open ) 0 {
         : i byte . c pos
         : i op ( wc_u8 c )
-        ? | == op 2 == op 3 {  // block / loop: A=end (patched), B=params, C=results
+        ? | == op 2 == op 3 {  // block / loop
             : i bt ( wc_sleb c )
-            : i rec ( __pf_emit . pf code op -1 ( __bt_params m bt ) ( __bt_results m bt ) byte )
-            ( vec_push [i] open rec )
+            : i p ( __bt_params m bt )
+            : i r ( __bt_results m bt )
+            : i t0 ? == op 3 / ( vec_len [i] . pf code ) 6 -1
+            ( vec_push [s] open ( __pblk_new ? == op 3 1 0 - h p p r live t0 ) )
         } {
-            ? == op 4 {  // if: A=end (patched), B=else (-1), C=params<<16|results
+            ? == op 4 {  // if: pop cond, IFZ to else/end (patched)
                 : i bt ( wc_sleb c )
-                : i packed | << ( __bt_params m bt ) 16 & ( __bt_results m bt ) 65535
-                : i rec ( __pf_emit . pf code 4 -1 -1 packed byte )
-                ( vec_push [i] open | rec 4611686018427387904 )
+                : i p ( __bt_params m bt )
+                : i r ( __bt_results m bt )
+                ? != 0 live {
+                    = h - h 1
+                    : i rec ( __pf_emit . pf code ( __R_IFZ ) -1 + L h 0 0 byte )
+                    : s kp ( __pblk_new 2 - h p p r 1 rec )
+                    ( vec_push [s] open kp )
+                } { ( vec_push [s] open ( __pblk_new 2 h p r 0 -1 ) ) }
             } {
-                ? == op 5 {  // else: patch the open if's B; A here = its end (patched too)
-                    : i rec ( __pf_emit . pf code 5 -1 0 0 byte )
-                    : i n ( vec_len [i] open )
-                    ? > n 0 {
-                        : i top ?? ( vec_get [i] open - n 1 ) { T x → x F → 0 }
-                        : i orec & top 4611686018427387903
-                        ( vec_set [i] . pf code + * orec 5 2 rec )
+                ? == op 5 {  // else
+                    : i n ( vec_len [s] open )
+                    : s bp ?? ( vec_get [s] open - n 1 ) { T x → x F → # s 0 }
+                    ? != # i bp 0 {
+                        : *PBlk blk # *PBlk bp
+                        ? != 0 . blk live_entry {
+                            // end of a live then-arm jumps past the else arm
+                            ? != 0 live { = . blk else_br ( __pf_emit . pf code ( __R_BR ) -1 0 0 0 byte ) } {}
+                            // the cond==0 edge lands here
+                            ? >= . blk t0 0 { ( vec_set [i] . pf code + * . blk t0 6 1 / ( vec_len [i] . pf code ) 6 ) = . blk t0 -1 } {}
+                            = h + . blk base . blk params
+                            = live 1
+                        } {}
                     } {}
                 } {
-                    ? == op 11 {  // end: patch the open frame's A (and an else's A) to here
-                        : i rec ( __pf_emit . pf code 11 0 0 0 byte )
-                        : i n ( vec_len [i] open )
-                        ? > n 0 {
-                            : i top ?? ( vec_get [i] open - n 1 ) { T x → x F → 0 }
-                            ( vec_pop [i] open )
-                            : i orec & top 4611686018427387903
-                            ( vec_set [i] . pf code + * orec 5 1 rec )
-                            // an if with an else: the else record jumps to this end
-                            ? != 0 & top 4611686018427387904 {
-                                : i erec ?? ( vec_get [i] . pf code + * orec 5 2 ) { T x → x F → -1 }
-                                ? >= erec 0 { ( vec_set [i] . pf code + * erec 5 1 rec ) } {}
+                    ? == op 11 {  // end: close the frame, patch all forward targets here
+                        : i n ( vec_len [s] open )
+                        : s bp ?? ( vec_get [s] open - n 1 ) { T x → x F → # s 0 }
+                        ( vec_pop [s] open )
+                        ? != # i bp 0 {
+                            : *PBlk blk # *PBlk bp
+                            : i here / ( vec_len [i] . pf code ) 6
+                            : ~ i out live
+                            // no-else if: the cond==0 edge lands past the construct
+                            ? & == . blk kind 2 >= . blk t0 0 {
+                                ( vec_set [i] . pf code + * . blk t0 6 1 here )
+                                ? != 0 . blk live_entry { = out 1 } {}
                             } {}
+                            ? >= . blk else_br 0 { ( vec_set [i] . pf code + * . blk else_br 6 1 here ) = out 1 } {}
+                            : i np ( vec_len [i] . blk patches )
+                            ? > np 0 { = out 1 } {}
+                            : ~ i pk 0
+                            ~ < pk np {
+                                : i site ?? ( vec_get [i] . blk patches pk ) { T x → x F → 0 }
+                                ? == 0 & site 1 { ( vec_set [i] . pf code + * / site 2 6 1 here ) }
+                                { ( vec_set [i] . pf aux / site 2 here ) }
+                                = pk + pk 1
+                            }
+                            ? != 0 out { = h + . blk base . blk results = live 1 } { = live 0 }
+                            ( __pblk_free bp )
                         } {}
                     } {
-                        ? | == op 12 == op 13 {  // br / br_if: A=label depth
-                            ( __pf_emit . pf code op ( wc_uleb c ) 0 0 byte )
+                        ? == op 12 {  // br
+                            : i k ( wc_uleb c )
+                            ? != 0 live { ( __emit_branch pf open k -1 L h byte ) = live 0 } {}
                         } {
-                            ? == op 14 {  // br_table: A=aux start, B=label count (default at aux[A+B])
-                                : i astart ( vec_len [i] . pf aux )
-                                : i n ( wc_uleb c )
-                                : ~ i k 0
-                                ~ <= k n { ( vec_push [i] . pf aux ( wc_uleb c ) ) = k + k 1 }
-                                ( __pf_emit . pf code 14 astart n 0 byte )
+                            ? == op 13 {  // br_if: pop cond, branch on it, fall through otherwise
+                                : i k ( wc_uleb c )
+                                ? != 0 live {
+                                    = h - h 1
+                                    ( __emit_branch pf open k + L h L h byte )
+                                } {}
                             } {
-                                ? == op 16 { ( __pf_emit . pf code 16 ( wc_uleb c ) 0 0 byte ) } {  // call: A=fidx
-                                    ? == op 17 {  // call_indirect: A=typeidx (single table; tableidx ignored)
-                                        : i ti ( wc_uleb c ) ( wc_uleb c )
-                                        ( __pf_emit . pf code 17 ti 0 0 byte )
+                                ? == op 14 {  // br_table
+                                    : i nl ( wc_uleb c )
+                                    ? == 0 live { : ~ i sk 0 ~ <= sk nl { ( wc_uleb c ) = sk + sk 1 } } {
+                                        = h - h 1
+                                        : i astart ( vec_len [i] . pf aux )
+                                        : i non ( vec_len [s] open )
+                                        : ~ i lk 0
+                                        ~ <= lk nl {
+                                            : i dep ( wc_uleb c )
+                                            ? >= dep non { ( vec_push [i] . pf aux -1 ) ( vec_push [i] . pf aux 0 ) ( vec_push [i] . pf aux 0 ) ( vec_push [i] . pf aux 0 ) } {
+                                                : s bp2 ?? ( vec_get [s] open - - non 1 dep ) { T x → x F → # s 0 }
+                                                : *PBlk b2 # *PBlk bp2
+                                                : i ar ? == . b2 kind 1 . b2 params . b2 results
+                                                : i tg ? == . b2 kind 1 . b2 t0 -1
+                                                : i auxpos ( vec_len [i] . pf aux )
+                                                ( vec_push [i] . pf aux tg )
+                                                ( vec_push [i] . pf aux + L . b2 base )
+                                                ( vec_push [i] . pf aux + L - h ar )
+                                                ( vec_push [i] . pf aux ar )
+                                                ? != . b2 kind 1 { ( vec_push [i] . b2 patches + * auxpos 2 1 ) } {}
+                                            }
+                                            = lk + lk 1
+                                        }
+                                        ( __pf_emit . pf code ( __R_BRTBL ) astart + L h nl 0 byte )
+                                        = live 0
+                                    }
+                                } {
+                                    ? == op 15 {  // return
+                                        ? != 0 live {
+                                            ( __pf_emit . pf code ( __R_RET ) + L - h nresults nresults 0 0 byte )
+                                            = live 0
+                                        } {}
                                     } {
-                                        ? == op 28 {  // select t: value semantics identical to bare select
-                                            : i tc ( wc_uleb c ) ( wc_skip c tc )
-                                            ( __pf_emit . pf code 27 0 0 0 byte )
+                                        ? == op 16 {  // call
+                                            : i fi ( wc_uleb c )
+                                            ? != 0 live {
+                                                : s ct ( module_func_type m fi )
+                                                : ~ i cp 0
+                                                : ~ i cr 0
+                                                ? != # i ct 0 { : *FuncType ctt # *FuncType ct = cp ( vec_len [i] . ctt params ) = cr ( vec_len [i] . ctt results ) } {}
+                                                ( __pf_emit . pf code ( __R_CALL ) fi + L - h cp 0 0 byte )
+                                                = h + - h cp cr
+                                                ? > h maxh { = maxh h } {}
+                                            } {}
                                         } {
-                                            ? == op 208 { ( wc_u8 c ) ( __pf_emit . pf code 208 0 0 0 byte ) } {  // ref.null
-                                                ? | == op 32 | == op 33 | == op 34 | == op 35 | == op 36 | == op 37 | == op 38 == op 210 {
-                                                    // local/global/table get-set/tee / ref.func: A=index
-                                                    ( __pf_emit . pf code op ( wc_uleb c ) 0 0 byte )
-                                                } {
-                                                    ? | == op 65 == op 66 { ( __pf_emit . pf code op ( wc_sleb c ) 0 0 byte ) } {  // i32/i64.const: A=value
-                                                        ? == op 67 { ( __pf_emit . pf code 67 ( __read_le c 4 ) 0 0 byte ) } {  // f32.const: A=raw bits
-                                                            ? == op 68 { ( __pf_emit . pf code 68 ( __read_le c 8 ) 0 0 byte ) } {  // f64.const: A=raw bits
-                                                                ? & >= op 40 <= op 62 {  // loads/stores: A=offset (u32-masked; align dropped)
-                                                                    ( wc_uleb c )
-                                                                    ( __pf_emit . pf code op & ( wc_uleb c ) 4294967295 0 0 byte )
-                                                                } {
-                                                                    ? | == op 63 == op 64 { ( wc_u8 c ) ( __pf_emit . pf code op 0 0 0 byte ) } {  // memory.size/grow
-                                                                        ? == op 252 {  // bulk memory / table ops / trunc_sat: A=sub, B=first idx operand
-                                                                            : i sub ( wc_uleb c )
-                                                                            : ~ i bop 0
-                                                                            ? == sub 8 { = bop ( wc_uleb c ) ( wc_u8 c ) } {  // memory.init: dataidx
-                                                                                ? == sub 9 { = bop ( wc_uleb c ) } {  // data.drop
-                                                                                    ? == sub 10 { ( wc_u8 c ) ( wc_u8 c ) } {  // memory.copy
-                                                                                        ? == sub 11 { ( wc_u8 c ) } {  // memory.fill
-                                                                                            ? == sub 12 { = bop ( wc_uleb c ) ( wc_uleb c ) } {  // table.init: elemidx
-                                                                                                ? == sub 13 { = bop ( wc_uleb c ) } {  // elem.drop
-                                                                                                    ? == sub 14 { ( wc_uleb c ) ( wc_uleb c ) } {  // table.copy
-                                                                                                        ? | | == sub 15 == sub 16 == sub 17 { ( wc_uleb c ) } {} } } } } } } }  // table.grow/size/fill
-                                                                            ( __pf_emit . pf code 252 sub bop 0 byte )
-                                                                        } {
-                                                                            // no-immediate ops (numeric, parametric, sign-ext, ref.is_null, …)
-                                                                            // and the unsupported 0xfd/0xfe prefixes: skip their immediates so
-                                                                            // record alignment survives, execute-time still traps on them.
-                                                                            ? | == op 253 == op 254 { ( __skip_imm c op ) } {}
-                                                                            ( __pf_emit . pf code op 0 0 0 byte )
-                                                                        } } } } } } } } } } } } } } } } }
+                                            ? == op 17 {  // call_indirect
+                                                : i ti ( wc_uleb c ) ( wc_uleb c )
+                                                ? != 0 live {
+                                                    = h - h 1
+                                                    : s ct ?? ( vec_get [s] . m types ti ) { T x → x F → # s 0 }
+                                                    : ~ i cp 0
+                                                    : ~ i cr 0
+                                                    ? != # i ct 0 { : *FuncType ctt # *FuncType ct = cp ( vec_len [i] . ctt params ) = cr ( vec_len [i] . ctt results ) } {}
+                                                    ( __pf_emit . pf code ( __R_CALLIND ) ti + L - h cp + L h 0 byte )
+                                                    = h + - h cp cr
+                                                    ? > h maxh { = maxh h } {}
+                                                } {}
+                                            } {
+                                                ? == op 0 { ? != 0 live { ( __pf_emit . pf code ( __R_UNREACH ) 0 0 0 0 byte ) = live 0 } {} } {
+                                                    ? == op 1 {} {  // nop
+                                                        ? == op 26 { ? != 0 live { = h - h 1 } {} } {  // drop
+                                                            ? | == op 27 == op 28 {  // select (typed select folds to the same record)
+                                                                ? == op 28 { : i tc ( wc_uleb c ) ( wc_skip c tc ) } {}
+                                                                ? != 0 live {
+                                                                    ( __pf_emit . pf code ( __R_SEL ) + L - h 3 + L - h 3 + L - h 2 + L - h 1 byte )
+                                                                    = h - h 2
+                                                                } {}
+                                                            } {
+                                                                ? == op 32 { : i li ( wc_uleb c ) ? != 0 live { ( __pf_emit . pf code ( __R_MOV ) + L h li 0 0 byte ) = h + h 1 ? > h maxh { = maxh h } {} } {} } {
+                                                                    ? == op 33 { : i li ( wc_uleb c ) ? != 0 live { ( __pf_emit . pf code ( __R_MOV ) li + L - h 1 0 0 byte ) = h - h 1 } {} } {
+                                                                        ? == op 34 { : i li ( wc_uleb c ) ? != 0 live { ( __pf_emit . pf code ( __R_MOV ) li + L - h 1 0 0 byte ) } {} } {
+                                                                            ? == op 35 { : i gi ( wc_uleb c ) ? != 0 live { ( __pf_emit . pf code ( __R_GG ) + L h gi 0 0 byte ) = h + h 1 ? > h maxh { = maxh h } {} } {} } {
+                                                                                ? == op 36 { : i gi ( wc_uleb c ) ? != 0 live { ( __pf_emit . pf code ( __R_GS ) gi + L - h 1 0 0 byte ) = h - h 1 } {} } {
+                                                                                    ? == op 37 { ( wc_uleb c ) ? != 0 live { ( __pf_emit . pf code ( __R_TABGET ) + L - h 1 + L - h 1 0 0 byte ) } {} } {
+                                                                                        ? == op 38 { ( wc_uleb c ) ? != 0 live { ( __pf_emit . pf code ( __R_TABSET ) + L - h 2 + L - h 1 0 0 byte ) = h - h 2 } {} } {
+                                                                                            ? == op 65 { : i cv ( wc_sleb c ) ? != 0 live { ( __pf_emit . pf code ( __R_CONST ) + L h ( __w32 cv ) 0 0 byte ) = h + h 1 ? > h maxh { = maxh h } {} } {} } {
+                                                                                                ? == op 66 { : i cv ( wc_sleb c ) ? != 0 live { ( __pf_emit . pf code ( __R_CONST ) + L h cv 0 0 byte ) = h + h 1 ? > h maxh { = maxh h } {} } {} } {
+                                                                                                    ? == op 67 { : i cv ( __read_le c 4 ) ? != 0 live { ( __pf_emit . pf code ( __R_CONST ) + L h cv 0 0 byte ) = h + h 1 ? > h maxh { = maxh h } {} } {} } {
+                                                                                                        ? == op 68 { : i cv ( __read_le c 8 ) ? != 0 live { ( __pf_emit . pf code ( __R_CONST ) + L h cv 0 0 byte ) = h + h 1 ? > h maxh { = maxh h } {} } {} } {
+                                                                                                            ? & >= op 40 <= op 53 {  // loads: A=dst B=addr C=off
+                                                                                                                ( wc_uleb c )
+                                                                                                                : i off & ( wc_uleb c ) 4294967295
+                                                                                                                ? != 0 live { ( __pf_emit . pf code op + L - h 1 + L - h 1 off 0 byte ) } {}
+                                                                                                            } {
+                                                                                                                ? & >= op 54 <= op 62 {  // stores: A=addr B=val C=off
+                                                                                                                    ( wc_uleb c )
+                                                                                                                    : i off & ( wc_uleb c ) 4294967295
+                                                                                                                    ? != 0 live { ( __pf_emit . pf code op + L - h 2 + L - h 1 off 0 byte ) = h - h 2 } {}
+                                                                                                                } {
+                                                                                                                    ? == op 63 { ( wc_u8 c ) ? != 0 live { ( __pf_emit . pf code ( __R_MEMSZ ) + L h 0 0 0 byte ) = h + h 1 ? > h maxh { = maxh h } {} } {} } {
+                                                                                                                        ? == op 64 { ( wc_u8 c ) ? != 0 live { ( __pf_emit . pf code ( __R_MEMGROW ) + L - h 1 + L - h 1 0 0 byte ) } {} } {
+                                                                                                                            ? | == op 69 | == op 80 | & >= op 103 <= op 105 | & >= op 121 <= op 123 & >= op 192 <= op 196 {
+                                                                                                                                // integer unary: in place at the top slot
+                                                                                                                                ? != 0 live { ( __pf_emit . pf code op + L - h 1 + L - h 1 0 0 byte ) } {}
+                                                                                                                            } {
+                                                                                                                                ? | & >= op 70 <= op 79 | & >= op 81 <= op 90 | & >= op 106 <= op 120 & >= op 124 <= op 138 {
+                                                                                                                                    // integer binary: dst = h-2, operands h-2 / h-1
+                                                                                                                                    ? != 0 live { ( __pf_emit . pf code op + L - h 2 + L - h 2 + L - h 1 0 byte ) = h - h 1 } {}
+                                                                                                                                } {
+                                                                                                                                    ? | & >= op 91 <= op 102 & >= op 139 <= op 191 {  // float / conversion: vs bridge
+                                                                                                                                        ? != 0 live {
+                                                                                                                                            : i np ( __float_pops op )
+                                                                                                                                            ( __pf_emit . pf code ( __R_FLOATB ) op + L - h np np 0 byte )
+                                                                                                                                            = h + - h np 1
+                                                                                                                                            ? > h maxh { = maxh h } {}
+                                                                                                                                        } {}
+                                                                                                                                    } {
+                                                                                                                                        ? == op 208 { ( wc_u8 c ) ? != 0 live { ( __pf_emit . pf code ( __R_CONST ) + L h -1 0 0 byte ) = h + h 1 ? > h maxh { = maxh h } {} } {} } {
+                                                                                                                                            ? == op 209 { ? != 0 live { ( __pf_emit . pf code ( __R_ISNULL ) + L - h 1 + L - h 1 0 0 byte ) } {} } {
+                                                                                                                                                ? == op 210 { : i rfi ( wc_uleb c ) ? != 0 live { ( __pf_emit . pf code ( __R_CONST ) + L h rfi 0 0 byte ) = h + h 1 ? > h maxh { = maxh h } {} } {} } {
+                                                                                                                                                    ? == op 252 {  // 0xfc family: vs bridge, pops/pushes per sub
+                                                                                                                                                        : i sub ( wc_uleb c )
+                                                                                                                                                        : ~ i bop 0
+                                                                                                                                                        ? == sub 8 { = bop ( wc_uleb c ) ( wc_u8 c ) } {
+                                                                                                                                                            ? == sub 9 { = bop ( wc_uleb c ) } {
+                                                                                                                                                                ? == sub 10 { ( wc_u8 c ) ( wc_u8 c ) } {
+                                                                                                                                                                    ? == sub 11 { ( wc_u8 c ) } {
+                                                                                                                                                                        ? == sub 12 { = bop ( wc_uleb c ) ( wc_uleb c ) } {
+                                                                                                                                                                            ? == sub 13 { = bop ( wc_uleb c ) } {
+                                                                                                                                                                                ? == sub 14 { ( wc_uleb c ) ( wc_uleb c ) } {
+                                                                                                                                                                                    ? | | == sub 15 == sub 16 == sub 17 { ( wc_uleb c ) } {} } } } } } } }
+                                                                                                                                                        ? != 0 live {
+                                                                                                                                                            : ~ i pops 0
+                                                                                                                                                            : ~ i push 0
+                                                                                                                                                            ? <= sub 7 { = pops 1 = push 1 } {
+                                                                                                                                                                ? | == sub 8 | == sub 10 | == sub 11 | == sub 12 | == sub 14 == sub 17 { = pops 3 } {
+                                                                                                                                                                    ? == sub 15 { = pops 2 = push 1 } {
+                                                                                                                                                                        ? == sub 16 { = push 1 } {} } } }
+                                                                                                                                                            ( __pf_emit . pf code ( __R_FCB ) sub bop + L - h pops | << pops 1 push byte )
+                                                                                                                                                            = h + - h pops push
+                                                                                                                                                            ? > h maxh { = maxh h } {}
+                                                                                                                                                        } {}
+                                                                                                                                                    } {
+                                                                                                                                                        // unsupported (0xfd/0xfe and anything unknown): keep alignment,
+                                                                                                                                                        // trap if ever executed
+                                                                                                                                                        ? | == op 253 == op 254 { ( __skip_imm c op ) } {}
+                                                                                                                                                        ? != 0 live { ( __pf_emit . pf code ( __R_TRAPUN ) 0 0 0 0 byte ) } {}
+                                                                                                                                                    } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } } }
     }
-    ( vec_free [i] open )
+    : i on ( vec_len [s] open )
+    : ~ i ok 0
+    ~ < ok on { ?? ( vec_get [s] open ok ) { T pp → ( __pblk_free pp ) F → {} } = ok + ok 1 }
+    ( vec_free [s] open )
     ( wc_free c )
-    = . pf count / ( vec_len [i] . pf code ) 5
+    = . pf count / ( vec_len [i] . pf code ) 6
+    = . pf nslots + L + maxh 4
     ^ # s pf
 }
-
 // Get-or-build the PFunc for defined function `fidx`.
 @ __pfunc_for * Interp it * Module m i fidx → s {
     : i di - fidx . m num_import_funcs
@@ -881,7 +1051,7 @@ $ `module.nu`
     : s fp ?? ( vec_get [s] . m funcs di ) { T x → x F → # s 0 }
     ? == # i fp 0 { ^ # s 0 } {}
     : *WFunc f # *WFunc fp
-    : s built ( __predecode m . f code_start . f code_end )
+    : s built ( __predecode m f )
     ( vec_set [s] . it pfuncs di built )
     ^ built
 }
@@ -912,7 +1082,7 @@ $ `module.nu`
             : ~ i bpos . fr pos
             ? >= bpos . bpf count { = bpos - . bpf count 1 } {}
             : ~ i boff 0
-            ? >= bpos 0 { = boff - ?? ( vec_get [i] . bpf code + * bpos 5 4 ) { T x → x F → . fr code_start } . fr code_start } {}
+            ? >= bpos 0 { = boff - ?? ( vec_get [i] . bpf code + * bpos 6 5 ) { T x → x F → . fr code_start } . fr code_start } {}
             ( __msg_push_int msg boff )
             ( __msg_push_str msg `)` )
         } {}
@@ -950,26 +1120,20 @@ $ `module.nu`
     // Imported functions occupy the low indices → dispatch to the host (WASI).
     ? < fidx . m num_import_funcs { ( __call_import it m fidx ) ^ v } {}
     : ( Vec s ) frames ( vec_new [s] )
-    : s fr0 ( __frame_new it m fidx )
+    : s fr0 ( __frame_new it m fidx -1 )
     ? != # i fr0 0 { ( vec_push [s] frames fr0 ) } {}
     : *Wc c ( wc_new . m code )
-    // The frame stack changes only on a call, a return, or falling off the end
-    // of a body — but this loop used to re-read the top frame out of `frames`
-    // on every *instruction*: a bounds-checked vec_get, an Option unwrap and a
-    // dependent load, then two stores copying pos/end into the cursor and one
-    // copying pos back. At instruction-level profile that was the single
-    // hottest line in the interpreter (14.5 % of all cycles on the vec_get's
-    // load alone, ~8 % more on the cursor store) — pure bookkeeping, none of it
-    // the guest's work.
-    //
-    // So the cursor is now the authority on where execution is, and the top
-    // frame is cached in `tp` and refreshed only when `reload` says the frame
-    // stack moved. `. fr pos` is written back exactly at the transitions where
-    // something else will read it: before a call suspends this frame, and
-    // before a trap prints a backtrace off it.
+    // Register-form driver. The cursor is the pc in record units; `rbase` is
+    // the raw base of the top frame's flat register array (locals first,
+    // stack slots after), refreshed only when the frame stack moves. Every
+    // hot op is three raw word accesses: read operands, write the result.
+    // There is no runtime control stack — branches carry their targets and
+    // their statically-computed result moves in the record.
     : ~ s tp # s 0
     : ~ s pbase # s 0
     : ~ s abase # s 0
+    : ~ s rbase # s 0
+    : ~ i lloc 0
     : ~ i reload 1
     ~ & & > ( vec_len [s] frames ) 0 ! . it exited ! . it trap {
         ? != reload 0 {
@@ -978,55 +1142,178 @@ $ `module.nu`
             : *PFunc npf # *PFunc . nfr pins
             = pbase # s ( vec_data [i] . npf code )
             = abase # s ( vec_data [i] . npf aux )
+            = rbase # s ( vec_data [i] . nfr regs )
+            = lloc . npf nlocals
             = . c pos . nfr pos
             = . c len . nfr end
             = reload 0
         } {}
         : *Frame fr # *Frame tp
-        ? >= . c pos . c len {  // fell off the end of the body → return
-            ( __frame_free tp ) ( vec_pop [s] frames ) = reload 1
+        ? >= . c pos . c len {
+            // fell off the end → return: results sit at slots lloc.. by
+            // construction (the body ends at height = result count)
+            : s ct ( module_func_type m . fr fidx )
+            : ~ i nres 0
+            ? != # i ct 0 { : *FuncType ctt # *FuncType ct = nres ( vec_len [i] . ctt results ) } {}
+            : i rdst . fr ret_dst
+            ( vec_pop [s] frames )
+            ? < rdst 0 {
+                // outermost frame: results leave on the value stack
+                : ~ i rk 0
+                ~ < rk nres { ( __push it ( nurl_peek rbase + lloc rk ) ) = rk + rk 1 }
+            } {
+                : s cp2 ?? ( vec_get [s] frames - ( vec_len [s] frames ) 1 ) { T x → x F → # s 0 }
+                ? != # i cp2 0 {
+                    : *Frame cfr # *Frame cp2
+                    : s crb # s ( vec_data [i] . cfr regs )
+                    : ~ i rk 0
+                    ~ < rk nres { ( nurl_poke crb + rdst rk ( nurl_peek rbase + lloc rk ) ) = rk + rk 1 }
+                } {}
+            }
+            ( __frame_free tp )
+            = reload 1
         } {
             ? == . it fuel 0 { ( __trap it `fuel exhausted` ) } {
                 ? > . it fuel 0 { = . it fuel - . it fuel 1 } {}
-                // One record: five raw word reads off the frozen predecoded
-                // array — no bounds check, no Option, no LEB. The record
-                // array cannot move (nothing appends after predecode), which
-                // is what makes the borrowed vec_data pointer sound.
-                : i rbase * . c pos 5
-                : i op ( nurl_peek pbase rbase )
-                : i ra ( nurl_peek pbase + rbase 1 )
-                : i rb ( nurl_peek pbase + rbase 2 )
-                : i rc ( nurl_peek pbase + rbase 3 )
+                : i rrec * . c pos 6
+                : i op ( nurl_peek pbase rrec )
+                : i ra ( nurl_peek pbase + rrec 1 )
+                : i rb ( nurl_peek pbase + rrec 2 )
+                : i rc ( nurl_peek pbase + rrec 3 )
                 = . c pos + . c pos 1
-                ( __pexec_op it m c abase . fr ctrl . fr locals op ra rb rc )
-                ? == op 15 { ( __frame_free tp ) ( vec_pop [s] frames ) = reload 1 } {  // return
-                    ? >= . it pending_call 0 {  // call / call_indirect
-                        : i callee . it pending_call
-                        = . it pending_call -1
-                        = . fr pos . c pos  // this frame resumes here
-                        = reload 1
-                        ? < callee . m num_import_funcs { ( __call_import it m callee ) } {
-                            ? >= ( vec_len [s] frames ) . it max_depth { ( __trap it `call stack exhausted` ) } {
-                                : s nf ( __frame_new it m callee )
-                                ? != # i nf 0 { ( vec_push [s] frames nf ) } {}
-                            }
-                        }
-                    } {}
-                }
+                // ── hot register ops, inline ──
+                ? == op 300 { ( nurl_poke rbase ra ( nurl_peek rbase rb ) ) } {  // MOV
+                    ? == op 301 { ( nurl_poke rbase ra rb ) } {  // CONST
+                        ? & >= op 124 <= op 138 {  // i64 arithmetic/bitwise
+                            : i x ( nurl_peek rbase rb )
+                            : i y ( nurl_peek rbase rc )
+                            ( nurl_poke rbase ra ( __rnum64 it op x y ) )
+                        } {
+                            ? & >= op 106 <= op 120 {  // i32 arithmetic/bitwise
+                                : i x ( nurl_peek rbase rb )
+                                : i y ( nurl_peek rbase rc )
+                                ( nurl_poke rbase ra ( __rnum32 it op x y ) )
+                            } {
+                                ? | & >= op 70 <= op 79 & >= op 81 <= op 90 {  // comparisons
+                                    : i x ( nurl_peek rbase rb )
+                                    : i y ( nurl_peek rbase rc )
+                                    ( nurl_poke rbase ra ( __rcmp op x y ) )
+                                } {
+                                    ? == op 322 { ? == ( nurl_peek rbase rb ) 0 { = . c pos ra } {} } {  // IFZ
+                                        ? == op 310 { = . c pos ra } {  // BR
+                                            ? == op 312 { ? != ( nurl_peek rbase rb ) 0 { = . c pos ra } {} } {  // BRIF
+                                                ? == op 311 {  // BR_MOVE
+                                                    : i dd ( nurl_peek pbase + rrec 4 )
+                                                    : ~ i mk 0
+                                                    ~ < mk dd { ( nurl_poke rbase + rb mk ( nurl_peek rbase + rc mk ) ) = mk + mk 1 }
+                                                    = . c pos ra
+                                                } {
+                                                    ? == op 313 {  // BRIF_MOVE
+                                                        ? != ( nurl_peek rbase rb ) 0 {
+                                                            : i dd ( nurl_peek pbase + rrec 4 )
+                                                            : i mdst >> rc 20
+                                                            : i msrc & rc 1048575
+                                                            : ~ i mk 0
+                                                            ~ < mk dd { ( nurl_poke rbase + mdst mk ( nurl_peek rbase + msrc mk ) ) = mk + mk 1 }
+                                                            = . c pos ra
+                                                        } {}
+                                                    } {
+                                                        ? & >= op 40 <= op 53 {  // loads
+                                                            : i ea + & ( nurl_peek rbase rb ) 4294967295 rc
+                                                            ( nurl_poke rbase ra ( __rload it op ea ) )
+                                                        } {
+                                                            ? & >= op 54 <= op 62 {  // stores
+                                                                : i ea + & ( nurl_peek rbase ra ) 4294967295 rc
+                                                                ( __rstore it op ea ( nurl_peek rbase rb ) )
+                                                            } {
+                                                                ? | == op 69 == op 80 { : i x ( nurl_peek rbase rb ) ( nurl_poke rbase ra ? == x 0 1 0 ) } {  // eqz
+                                                                    ? | & >= op 103 <= op 105 | & >= op 121 <= op 123 & >= op 192 <= op 196 {
+                                                                        ( nurl_poke rbase ra ( __runary op ( nurl_peek rbase rb ) ) )
+                                                                    } {
+                                                                        ? == op 304 {  // SELECT
+                                                                            : i dd ( nurl_peek pbase + rrec 4 )
+                                                                            : i cond ( nurl_peek rbase dd )
+                                                                            ( nurl_poke rbase ra ? != cond 0 ( nurl_peek rbase rb ) ( nurl_peek rbase rc ) )
+                                                                        } {
+                                                                            ? == op 316 {  // CALL
+                                                                                = . fr pos . c pos
+                                                                                ( __rdo_call it m frames ra rb rbase )
+                                                                                = reload 1
+                                                                            } {
+                                                                                ? == op 317 {  // CALL_INDIRECT
+                                                                                    : i ei & ( nurl_peek rbase rc ) 4294967295
+                                                                                    ? | < ei 0 >= ei ( vec_len [i] . it table ) { ( __trap it `call_indirect: index out of range` ) } {
+                                                                                        : i cfi ?? ( vec_get [i] . it table ei ) { T x → x F → -1 }
+                                                                                        ? < cfi 0 { ( __trap it `call_indirect: null table element` ) } {
+                                                                                            : s want ?? ( vec_get [s] . m types ra ) { T x → x F → # s 0 }
+                                                                                            : s have ( module_func_type m cfi )
+                                                                                            ? | == # i want 0 == # i have 0 { ( __trap it `call_indirect: bad type index` ) } {
+                                                                                                ? ! ( functype_eq # *FuncType want # *FuncType have ) { ( __trap it `call_indirect: signature mismatch` ) } {
+                                                                                                    = . fr pos . c pos
+                                                                                                    ( __rdo_call it m frames cfi rb rbase )
+                                                                                                    = reload 1
+                                                                                                }
+                                                                                            }
+                                                                                        }
+                                                                                    }
+                                                                                } {
+                                                                                    ? == op 315 {  // RETURN: move results to the canonical slots, fall off
+                                                                                        : ~ i rk 0
+                                                                                        ~ < rk rb { ( nurl_poke rbase + lloc rk ( nurl_peek rbase + ra rk ) ) = rk + rk 1 }
+                                                                                        = . c pos . c len
+                                                                                    } {
+                                                                                        ? == op 314 {  // BR_TABLE: aux rows of (target, dst, src, n)
+                                                                                            : i ui ( __u32 ( nurl_peek rbase rb ) )
+                                                                                            : i pick ? < ui rc ui rc
+                                                                                            : i rowb + ra * pick 4
+                                                                                            : i tgt ( nurl_peek abase rowb )
+                                                                                            : i mdst ( nurl_peek abase + rowb 1 )
+                                                                                            : i msrc ( nurl_peek abase + rowb 2 )
+                                                                                            : i mn ( nurl_peek abase + rowb 3 )
+                                                                                            : ~ i mk 0
+                                                                                            ~ < mk mn { ( nurl_poke rbase + mdst mk ( nurl_peek rbase + msrc mk ) ) = mk + mk 1 }
+                                                                                            = . c pos tgt
+                                                                                        } {
+                                                                                            ? == op 302 { ( nurl_poke rbase ra ?? ( vec_get [i] . it globals rb ) { T x → x F → 0 } ) } {  // global.get
+                                                                                                ? == op 303 { ( vec_set [i] . it globals ra ( nurl_peek rbase rb ) ) } {  // global.set
+                                                                                                    ? == op 305 { ( nurl_poke rbase ra . it mem_pages ) } {  // memory.size
+                                                                                                        ? == op 306 { ( nurl_poke rbase ra ( __mem_grow it ( __u32 ( nurl_peek rbase rb ) ) ) ) } {  // memory.grow
+                                                                                                            ? == op 307 {  // table.get
+                                                                                                                : i ei ( __u32 ( nurl_peek rbase rb ) )
+                                                                                                                ? >= ei ( vec_len [i] . it table ) { ( __trap it `out of bounds table access` ) } {
+                                                                                                                    ( nurl_poke rbase ra ?? ( vec_get [i] . it table ei ) { T x → x F → -1 } ) }
+                                                                                                            } {
+                                                                                                                ? == op 308 {  // table.set
+                                                                                                                    : i ei ( __u32 ( nurl_peek rbase ra ) )
+                                                                                                                    ? >= ei ( vec_len [i] . it table ) { ( __trap it `out of bounds table access` ) } {
+                                                                                                                        ( vec_set [i] . it table ei ( nurl_peek rbase rb ) ) }
+                                                                                                                } {
+                                                                                                                    ? == op 309 { ( nurl_poke rbase ra ? == ( nurl_peek rbase rb ) -1 1 0 ) } {  // ref.is_null
+                                                                                                                        ? == op 320 {  // float / conversion bridge through the value stack
+                                                                                                                            : ~ i bk 0
+                                                                                                                            ~ < bk rc { ( __push it ( nurl_peek rbase + rb bk ) ) = bk + bk 1 }
+                                                                                                                            ( __exec_float it ra )
+                                                                                                                            ? ! . it trap { ( nurl_poke rbase rb ( __pop it ) ) } {}
+                                                                                                                        } {
+                                                                                                                            ? == op 321 {  // 0xfc bridge through the value stack
+                                                                                                                                : i dd ( nurl_peek pbase + rrec 4 )
+                                                                                                                                : i pops >> dd 1
+                                                                                                                                : ~ i bk 0
+                                                                                                                                ~ < bk pops { ( __push it ( nurl_peek rbase + rc bk ) ) = bk + bk 1 }
+                                                                                                                                ( __exec_fc it ra rb )
+                                                                                                                                ? & != 0 & dd 1 ! . it trap { ( nurl_poke rbase rc ( __pop it ) ) } {}
+                                                                                                                            } {
+                                                                                                                                ? == op 318 { ( __trap it `unreachable` ) } {
+                                                                                                                                    ? == op 319 { ( __trap it `unsupported opcode` ) } {
+                                                                                                                                        ( __trap it `unsupported opcode` )
+                                                                                                                                    } } } } } } } } } } } } } } } } } } } } } } } } } } } } } }
             }
         }
     }
-    // The cursor, not the frame, holds the trapping position — sync it back so
-    // the backtrace's `+offset` is the instruction that actually trapped.
-    // Only when `reload` is still 0: that is exactly the case where the cursor
-    // belongs to the frame still on top. If the stack moved (a pop freed `tp`,
-    // or `call stack exhausted` trapped after the caller's pos was already
-    // saved) the cursor describes a frame that is gone or already up to date,
-    // and `tp` may be dangling — so re-read the top rather than trusting it.
     ? . it trap {
         ? & == reload 0 > ( vec_len [s] frames ) 0 {
             : s ttp ?? ( vec_get [s] frames - ( vec_len [s] frames ) 1 ) { T x → x F → # s 0 }
-            ? != # i ttp 0 { : *Frame ftr # *Frame ttp = . ftr pos . c pos } {}
+            ? != # i ttp 0 { : *Frame ftr # *Frame ttp = . ftr pos - . c pos 1 } {}
         } {}
         ( __trap_backtrace it m frames )
     } {}
@@ -1037,172 +1324,113 @@ $ `module.nu`
     ( wc_free c )
 }
 
-// Execute one predecoded record. `op` plus operands ra/rb/rc were read off
-// the PFunc array by the driver; `c` is the program counter in record units
-// (pos = next record, len = record count); `abase` is the raw base of the
-// PFunc aux array (br_table label vectors). Mutates the value stack, locals,
-// control stack and pc.
-@ __pexec_op * Interp it * Module m * Wc c s abase ( Vec s ) ctrl ( Vec i ) locals i op i ra i rb i rc → v {
-    // ── control flow ──
-    ? == op 0 { ( __trap it `unreachable` ) ^ v } {}  // unreachable
-    ? == op 1 { ^ v } {}  // nop
-    ? | == op 2 == op 3 {  // block / loop: ra=end, rb=params, rc=results
-        // control-frame height = the stack base under the block's parameters;
-        // a branch carries a loop's params back to the top, a block's results out.
-        : i height - ( __vsh it ) rb
-        ? == op 3 { ( __ctrl_push ctrl 1 . c pos ra height rb ) }
-        { ( __ctrl_push ctrl 0 0 ra height rc ) }
-        ^ v
-    } {}
-    ? == op 4 {  // if: ra=end, rb=else (-1 none), rc=params<<16|results
-        : i cond ( __pop it )
-        ( __ctrl_push ctrl 0 0 ra - ( __vsh it ) >> rc 16 & rc 65535 )
-        ? == cond 0 { = . c pos ? >= rb 0 + rb 1 ra } {}
-        ^ v
-    } {}
-    ? == op 5 {  // else: reached at end of the then-arm → skip to end
-        : s tp ( __ctrl_at ctrl 0 )
-        ? != # i tp 0 { : *Ctrl e # *Ctrl tp = . c pos . e end_pc } {}
-        ^ v
-    } {}
-    ? == op 11 { ( __ctrl_pop ctrl ) ^ v } {}  // end
-    ? == op 12 { ( __do_branch it ctrl c ra ) ^ v } {}  // br
-    ? == op 13 { : i cond ( __pop it ) ? != cond 0 { ( __do_branch it ctrl c ra ) } {} ^ v } {}  // br_if
-    ? == op 14 {  // br_table: ra=aux start, rb=label count, default at aux[ra+rb]
-        : i ui ( __u32 ( __pop it ) )
-        : i pick ? < ui rb ui rb
-        ( __do_branch it ctrl c ( nurl_peek abase + ra pick ) )
-        ^ v
-    } {}
-    ? == op 15 { ^ v } {}  // return (handled by the driver)
-    ? == op 16 { = . it pending_call ra ^ v } {}  // call → driver pushes the frame
-    ? == op 17 {  // call_indirect: ra=typeidx (single table)
-        : i ei & ( __pop it ) 4294967295
-        ? | < ei 0 >= ei ( vec_len [i] . it table ) {
-            ( __trap it `call_indirect: index out of range` ) ^ v
+// Perform a call from the register driver: `argbase` is the caller slot of
+// the first argument (and the destination of the results). Imports bridge
+// through the value stack; defined functions get a fresh frame with the
+// arguments copied straight into their first locals.
+@ __rdo_call * Interp it * Module m ( Vec s ) frames i callee i argbase s caller_rbase → v {
+    ? < callee . m num_import_funcs {
+        : s wt ( module_func_type m callee )
+        : ~ i np 0
+        : ~ i nr 0
+        ? != # i wt 0 { : *FuncType wft # *FuncType wt = np ( vec_len [i] . wft params ) = nr ( vec_len [i] . wft results ) } {}
+        : ~ i ak 0
+        ~ < ak np { ( __push it ( nurl_peek caller_rbase + argbase ak ) ) = ak + ak 1 }
+        ( __call_import it m callee )
+        ? ! . it trap {
+            : ~ i rk nr
+            ~ > rk 0 { = rk - rk 1 ( nurl_poke caller_rbase + argbase rk ( __pop it ) ) }
         } {}
-        : i fi ?? ( vec_get [i] . it table ei ) { T x → x F → -1 }
-        ? < fi 0 { ( __trap it `call_indirect: null table element` ) ^ v } {}
-        // runtime type check: the callee's type must structurally equal the
-        // instruction's expected type
-        : s want ?? ( vec_get [s] . m types ra ) { T x → x F → # s 0 }
-        : s have ( module_func_type m fi )
-        ? | == # i want 0 == # i have 0 {
-            ( __trap it `call_indirect: bad type index` ) ^ v } {}
-        ? ! ( functype_eq # *FuncType want # *FuncType have ) {
-            ( __trap it `call_indirect: signature mismatch` ) ^ v } {}
-        = . it pending_call fi
         ^ v
     } {}
-    ? == op 26 { ( __pop it ) ^ v } {}  // drop
-    ? == op 27 { : i cc ( __pop it ) : i b2 ( __pop it ) : i a2 ( __pop it ) ( __push it ? != cc 0 a2 b2 ) ^ v } {}  // select (typed form folded in at predecode)
-    ? == op 37 {  // table.get
-        : i ei ( __u32 ( __pop it ) )
-        ? >= ei ( vec_len [i] . it table ) { ( __trap it `out of bounds table access` ) ^ v } {}
-        ( __push it ?? ( vec_get [i] . it table ei ) { T x → x F → -1 } ) ^ v } {}
-    ? == op 38 {  // table.set
-        : i val ( __pop it )
-        : i ei ( __u32 ( __pop it ) )
-        ? >= ei ( vec_len [i] . it table ) { ( __trap it `out of bounds table access` ) ^ v } {}
-        ( vec_set [i] . it table ei val ) ^ v } {}
-    ? == op 208 { ( __push it -1 ) ^ v } {}  // ref.null ht → −1
-    ? == op 209 { ( __push it ? == ( __pop it ) -1 1 0 ) ^ v } {}  // ref.is_null
-    ? == op 210 { ( __push it ra ) ^ v } {}  // ref.func (funcref = index)
-    // ── locals ──
-    ? == op 32 { ( __push it ?? ( vec_get [i] locals ra ) { T x → x F → 0 } ) ^ v } {}
-    ? == op 33 { ( vec_set [i] locals ra ( __pop it ) ) ^ v } {}
-    ? == op 34 { : i tv ?? ( vec_get [i] . it vs - ( vec_len [i] . it vs ) 1 ) { T x → x F → 0 } ( vec_set [i] locals ra tv ) ^ v } {}  // local.tee
-    // ── globals ──
-    ? == op 35 { ( __push it ?? ( vec_get [i] . it globals ra ) { T x → x F → 0 } ) ^ v } {}  // global.get
-    ? == op 36 { ( vec_set [i] . it globals ra ( __pop it ) ) ^ v } {}  // global.set
-    // ── constants (f32/f64 arrive as their raw bit patterns) ──
-    ? == op 65 { ( __push it ( __w32 ra ) ) ^ v } {}  // i32.const
-    ? | == op 66 | == op 67 == op 68 { ( __push it ra ) ^ v } {}  // i64/f32/f64.const
-    // ── linear memory (loads/stores, size/grow) ──
-    ? & >= op 40 <= op 64 { ( __exec_mem it ra op ) ^ v } {}
-    // ── floats: cmp (91..102), unary/binary (139..166), conversions (167..191) ──
-    ? | & >= op 91 <= op 102 | & >= op 139 <= op 166 & >= op 167 <= op 191 { ( __exec_float it op ) ^ v } {}
-    // ── sign-extension ops (0xc0..0xc4) and the 0xfc prefix (bulk memory) ──
-    ? & >= op 192 <= op 196 { ( __exec_signext it op ) ^ v } {}
-    ? == op 252 { ( __exec_fc it ra rb ) ^ v } {}
-    // ── the rest: integer numeric ops ──
-    ( __exec_num it op )
+    ? >= ( vec_len [s] frames ) . it max_depth { ( __trap it `call stack exhausted` ) ^ v } {}
+    : s nf ( __frame_new it m callee argbase )
+    ? == # i nf 0 { ^ v } {}
+    : *Frame nfr # *Frame nf
+    : s nrb # s ( vec_data [i] . nfr regs )
+    : s ct ( module_func_type m callee )
+    : ~ i np 0
+    ? != # i ct 0 { : *FuncType ctt # *FuncType ct = np ( vec_len [i] . ctt params ) } {}
+    : ~ i ak 0
+    ~ < ak np { ( nurl_poke nrb ak ( nurl_peek caller_rbase + argbase ak ) ) = ak + ak 1 }
+    ( vec_push [s] frames nf )
 }
 
-// Numeric/comparison/bitwise ops (both i32 and i64). i32 results are wrapped to
-// 32 bits; comparisons push 0/1.
-@ __exec_num * Interp it i op → v {
-    // i32 unary: eqz
-    ? == op 69 { ( __push it ? == ( __pop it ) 0 1 0 ) ^ v } {}
-    // i64 unary: eqz
-    ? == op 80 { ( __push it ? == ( __pop it ) 0 1 0 ) ^ v } {}
-    // i32/i64 unary: clz / ctz / popcnt
-    ? == op 103 { ( __push it ( __clz32 ( __pop it ) ) ) ^ v } {}
-    ? == op 104 { ( __push it ( __ctz32 ( __pop it ) ) ) ^ v } {}
-    ? == op 105 { ( __push it ( __popc32 ( __pop it ) ) ) ^ v } {}
-    ? == op 121 { ( __push it ( __clz64 ( __pop it ) ) ) ^ v } {}
-    ? == op 122 { ( __push it ( __ctz64 ( __pop it ) ) ) ^ v } {}
-    ? == op 123 { ( __push it ( __popc64 ( __pop it ) ) ) ^ v } {}
-    // (i32.wrap_i64 / i64.extend_i32_* live in __exec_float's conversion block)
-    // binary ops: pop b, a
-    : i b ( __pop it )
-    : i a ( __pop it )
-    // ── i32 comparisons (0x46..0x4f) ──
-    ? == op 70 { ( __push it ? == ( __w32 a ) ( __w32 b ) 1 0 ) ^ v } {}
-    ? == op 71 { ( __push it ? != ( __w32 a ) ( __w32 b ) 1 0 ) ^ v } {}
-    ? == op 72 { ( __push it ? < ( __w32 a ) ( __w32 b ) 1 0 ) ^ v } {}
-    ? == op 73 { ( __push it ? < ( __u32 a ) ( __u32 b ) 1 0 ) ^ v } {}  // lt_u
-    ? == op 74 { ( __push it ? > ( __w32 a ) ( __w32 b ) 1 0 ) ^ v } {}
-    ? == op 75 { ( __push it ? > ( __u32 a ) ( __u32 b ) 1 0 ) ^ v } {}  // gt_u
-    ? == op 76 { ( __push it ? <= ( __w32 a ) ( __w32 b ) 1 0 ) ^ v } {}
-    ? == op 77 { ( __push it ? <= ( __u32 a ) ( __u32 b ) 1 0 ) ^ v } {}  // le_u
-    ? == op 78 { ( __push it ? >= ( __w32 a ) ( __w32 b ) 1 0 ) ^ v } {}
-    ? == op 79 { ( __push it ? >= ( __u32 a ) ( __u32 b ) 1 0 ) ^ v } {}  // ge_u
-    // ── i32 arithmetic/bitwise (0x6a..0x78) → wrap 32 ──
-    ? == op 106 { ( __push it ( __w32 + a b ) ) ^ v } {}
-    ? == op 107 { ( __push it ( __w32 - a b ) ) ^ v } {}
-    ? == op 108 { ( __push it ( __w32 * a b ) ) ^ v } {}
-    ? == op 109 { ( __push it ( __w32 ( __div_s it ( __w32 a ) ( __w32 b ) -2147483648 ) ) ) ^ v } {}
-    ? == op 110 { ( __push it ( __w32 ( __div_u it ( __u32 a ) ( __u32 b ) ) ) ) ^ v } {}  // div_u
-    ? == op 111 { ( __push it ( __w32 ( __rem_s it ( __w32 a ) ( __w32 b ) ) ) ) ^ v } {}
-    ? == op 112 { ( __push it ( __w32 ( __rem_u it ( __u32 a ) ( __u32 b ) ) ) ) ^ v } {}  // rem_u
-    ? == op 113 { ( __push it ( __w32 & a b ) ) ^ v } {}
-    ? == op 114 { ( __push it ( __w32 | a b ) ) ^ v } {}
-    ? == op 115 { ( __push it ( __w32 ^^ a b ) ) ^ v } {}
-    ? == op 116 { ( __push it ( __w32 << a & b 31 ) ) ^ v } {}
-    ? == op 117 { ( __push it ( __w32 >> ( __w32 a ) & b 31 ) ) ^ v } {}  // shr_s
-    ? == op 118 { ( __push it ( __w32 >> ( __u32 a ) & b 31 ) ) ^ v } {}  // shr_u
-    ? == op 119 { ( __push it ( __rotl32 a b ) ) ^ v } {}  // rotl
-    ? == op 120 { ( __push it ( __rotr32 a b ) ) ^ v } {}  // rotr
-    // ── i64 comparisons (0x51..0x5a) ──
-    ? == op 81 { ( __push it ? == a b 1 0 ) ^ v } {}
-    ? == op 82 { ( __push it ? != a b 1 0 ) ^ v } {}
-    ? == op 83 { ( __push it ? < a b 1 0 ) ^ v } {}
-    ? == op 84 { ( __push it ? ( __ultb a b ) 1 0 ) ^ v } {}  // lt_u
-    ? == op 85 { ( __push it ? > a b 1 0 ) ^ v } {}
-    ? == op 86 { ( __push it ? ( __ultb b a ) 1 0 ) ^ v } {}  // gt_u
-    ? == op 87 { ( __push it ? <= a b 1 0 ) ^ v } {}
-    ? == op 88 { ( __push it ? ! ( __ultb b a ) 1 0 ) ^ v } {}  // le_u
-    ? == op 89 { ( __push it ? >= a b 1 0 ) ^ v } {}
-    ? == op 90 { ( __push it ? ! ( __ultb a b ) 1 0 ) ^ v } {}  // ge_u
-    // ── i64 arithmetic/bitwise (0x7c..0x8a) ──
-    ? == op 124 { ( __push it + a b ) ^ v } {}
-    ? == op 125 { ( __push it - a b ) ^ v } {}
-    ? == op 126 { ( __push it * a b ) ^ v } {}
-    ? == op 127 { ( __push it ( __div_s it a b -9223372036854775808 ) ) ^ v } {}
-    ? == op 128 { ? == b 0 { ( __trap it `integer divide by zero` ) } { ( __push it ( __udiv64 a b ) ) } ^ v } {}  // div_u
-    ? == op 129 { ( __push it ( __rem_s it a b ) ) ^ v } {}
-    ? == op 130 { ? == b 0 { ( __trap it `integer divide by zero` ) } { ( __push it ( __urem64 a b ) ) } ^ v } {}  // rem_u
-    ? == op 131 { ( __push it & a b ) ^ v } {}
-    ? == op 132 { ( __push it | a b ) ^ v } {}
-    ? == op 133 { ( __push it ^^ a b ) ^ v } {}
-    ? == op 134 { ( __push it << a & b 63 ) ^ v } {}
-    ? == op 135 { ( __push it >> a & b 63 ) ^ v } {}  // shr_s
-    ? == op 136 { ( __push it ( __lshr64 a & b 63 ) ) ^ v } {}  // shr_u
-    ? == op 137 { ( __push it ( __rotl64 a b ) ) ^ v } {}  // rotl
-    ? == op 138 { ( __push it ( __rotr64 a b ) ) ^ v } {}  // rotr
-    // unsupported opcode → trap
-    ( __trap it `unsupported opcode` )
+// Value-form integer executors for the register core: operands in, result
+// out, traps via `it`. Ported arm-for-arm from the old stack-form
+// __exec_num; the semantics comments live with the arms.
+
+@ __rnum64 * Interp it i op i a i b → i {  // 0x7c..0x8a
+    ? == op 124 { ^ + a b } {}
+    ? == op 125 { ^ - a b } {}
+    ? == op 126 { ^ * a b } {}
+    ? == op 127 { ^ ( __div_s it a b -9223372036854775808 ) } {}
+    ? == op 128 { ? == b 0 { ( __trap it `integer divide by zero` ) ^ 0 } {} ^ ( __udiv64 a b ) } {}  // div_u
+    ? == op 129 { ^ ( __rem_s it a b ) } {}
+    ? == op 130 { ? == b 0 { ( __trap it `integer divide by zero` ) ^ 0 } {} ^ ( __urem64 a b ) } {}  // rem_u
+    ? == op 131 { ^ & a b } {}
+    ? == op 132 { ^ | a b } {}
+    ? == op 133 { ^ ^^ a b } {}
+    ? == op 134 { ^ << a & b 63 } {}
+    ? == op 135 { ^ >> a & b 63 } {}  // shr_s
+    ? == op 136 { ^ ( __lshr64 a & b 63 ) } {}  // shr_u
+    ? == op 137 { ^ ( __rotl64 a b ) } {}  // rotl
+    ^ ( __rotr64 a b )  // 138 rotr
+}
+
+@ __rnum32 * Interp it i op i a i b → i {  // 0x6a..0x78 → wrap 32
+    ? == op 106 { ^ ( __w32 + a b ) } {}
+    ? == op 107 { ^ ( __w32 - a b ) } {}
+    ? == op 108 { ^ ( __w32 * a b ) } {}
+    ? == op 109 { ^ ( __w32 ( __div_s it ( __w32 a ) ( __w32 b ) -2147483648 ) ) } {}
+    ? == op 110 { ^ ( __w32 ( __div_u it ( __u32 a ) ( __u32 b ) ) ) } {}  // div_u
+    ? == op 111 { ^ ( __w32 ( __rem_s it ( __w32 a ) ( __w32 b ) ) ) } {}
+    ? == op 112 { ^ ( __w32 ( __rem_u it ( __u32 a ) ( __u32 b ) ) ) } {}  // rem_u
+    ? == op 113 { ^ ( __w32 & a b ) } {}
+    ? == op 114 { ^ ( __w32 | a b ) } {}
+    ? == op 115 { ^ ( __w32 ^^ a b ) } {}
+    ? == op 116 { ^ ( __w32 << a & b 31 ) } {}
+    ? == op 117 { ^ ( __w32 >> ( __w32 a ) & b 31 ) } {}  // shr_s
+    ? == op 118 { ^ ( __w32 >> ( __u32 a ) & b 31 ) } {}  // shr_u
+    ? == op 119 { ^ ( __rotl32 a b ) } {}  // rotl
+    ^ ( __rotr32 a b )  // 120 rotr
+}
+
+@ __rcmp i op i a i b → i {  // i32 0x46..0x4f, i64 0x51..0x5a → 0/1
+    ? == op 70 { ^ ? == ( __w32 a ) ( __w32 b ) 1 0 } {}
+    ? == op 71 { ^ ? != ( __w32 a ) ( __w32 b ) 1 0 } {}
+    ? == op 72 { ^ ? < ( __w32 a ) ( __w32 b ) 1 0 } {}
+    ? == op 73 { ^ ? < ( __u32 a ) ( __u32 b ) 1 0 } {}  // lt_u
+    ? == op 74 { ^ ? > ( __w32 a ) ( __w32 b ) 1 0 } {}
+    ? == op 75 { ^ ? > ( __u32 a ) ( __u32 b ) 1 0 } {}  // gt_u
+    ? == op 76 { ^ ? <= ( __w32 a ) ( __w32 b ) 1 0 } {}
+    ? == op 77 { ^ ? <= ( __u32 a ) ( __u32 b ) 1 0 } {}  // le_u
+    ? == op 78 { ^ ? >= ( __w32 a ) ( __w32 b ) 1 0 } {}
+    ? == op 79 { ^ ? >= ( __u32 a ) ( __u32 b ) 1 0 } {}  // ge_u
+    ? == op 81 { ^ ? == a b 1 0 } {}
+    ? == op 82 { ^ ? != a b 1 0 } {}
+    ? == op 83 { ^ ? < a b 1 0 } {}
+    ? == op 84 { ^ ? ( __ultb a b ) 1 0 } {}  // lt_u
+    ? == op 85 { ^ ? > a b 1 0 } {}
+    ? == op 86 { ^ ? ( __ultb b a ) 1 0 } {}  // gt_u
+    ? == op 87 { ^ ? <= a b 1 0 } {}
+    ? == op 88 { ^ ? ! ( __ultb b a ) 1 0 } {}  // le_u
+    ? == op 89 { ^ ? >= a b 1 0 } {}
+    ^ ? ! ( __ultb a b ) 1 0  // 90 ge_u
+}
+
+@ __runary i op i x → i {  // clz/ctz/popcnt + sign extensions
+    ? == op 103 { ^ ( __clz32 x ) } {}
+    ? == op 104 { ^ ( __ctz32 x ) } {}
+    ? == op 105 { ^ ( __popc32 x ) } {}
+    ? == op 121 { ^ ( __clz64 x ) } {}
+    ? == op 122 { ^ ( __ctz64 x ) } {}
+    ? == op 123 { ^ ( __popc64 x ) } {}
+    ? == op 192 { ^ ( __w32 ( __sext x 8 ) ) } {}  // i32.extend8_s
+    ? == op 193 { ^ ( __w32 ( __sext x 16 ) ) } {}  // i32.extend16_s
+    ? == op 194 { ^ ( __sext x 8 ) } {}  // i64.extend8_s
+    ? == op 195 { ^ ( __sext x 16 ) } {}  // i64.extend16_s
+    ^ ( __sext x 32 )  // 196 i64.extend32_s
 }
 
 // ── floats (values held as their IEEE-754 bit pattern in the i64 cell) ──
@@ -2398,15 +2626,6 @@ $ `module.nu`
     : i mask - << 1 nbits 1
     : i lo & v mask
     ? != 0 & lo << 1 - nbits 1 { ^ - lo << 1 nbits } { ^ lo }
-}
-
-@ __exec_signext * Interp it i op → v {
-    : i x ( __pop it )
-    ? == op 192 { ( __push it ( __w32 ( __sext x 8 ) ) ) ^ v } {}  // i32.extend8_s
-    ? == op 193 { ( __push it ( __w32 ( __sext x 16 ) ) ) ^ v } {}  // i32.extend16_s
-    ? == op 194 { ( __push it ( __sext x 8 ) ) ^ v } {}  // i64.extend8_s
-    ? == op 195 { ( __push it ( __sext x 16 ) ) ^ v } {}  // i64.extend16_s
-    ? == op 196 { ( __push it ( __sext x 32 ) ) ^ v } {}  // i64.extend32_s
 }
 
 @ __mem_copy * Interp it i dst i src i n → v {
