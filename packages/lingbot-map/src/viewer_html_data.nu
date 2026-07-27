@@ -317,6 +317,10 @@ function boot(data, label) {
   /* ?yaw=&pitch=&dist= overrides the framing, so a particular view can be
      linked to or asked for by a test. dist is a multiple of the automatic
      one rather than a world distance, which survives a change of scene. */
+  if (Q.has("ps")) { psize = parseFloat(Q.get("ps")); $("ps").value = psize;
+                     $("psv").textContent = psize; }
+  if (Q.has("trim")) { trim = parseFloat(Q.get("trim")); $("tm").value = trim * 100;
+                       $("tmv").textContent = Math.round(100 - trim * 100) + "%"; }
   if (Q.has("yaw")) cam.yaw = parseFloat(Q.get("yaw"));
   if (Q.has("pitch")) cam.pitch = parseFloat(Q.get("pitch"));
   if (Q.has("dist")) cam.dist *= parseFloat(Q.get("dist"));

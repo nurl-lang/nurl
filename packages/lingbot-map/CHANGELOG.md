@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.4.1
+
+**0.4.0 printed the wrong version.** `--version` said `lingbot-map 0.3.0`
+on a binary that had the viewer in it: the string lives in `src/main.nu`,
+the real version lives in `nurl.toml`, and bumping one did not touch the
+other. Nothing anywhere compared them, so it published clean and only
+turned up when the installed 0.4.0 was asked what it was.
+
+Fixed, and the suite now compares the two — a version that disagrees with
+the manifest fails the build rather than shipping.
+
+Also here: the README shows what the viewer actually looks like
+([`docs/viewer.png`](docs/viewer.png), 286 frames of the courthouse walk)
+and spells out how to open it — the command, the address it prints, and
+what every control does. The viewer takes `?yaw=&pitch=&dist=&ps=&trim=`
+so a particular view can be linked to.
+
 ## 0.4.0
 
 **You can look at the output now.** The reference's `demo.py` ends in a

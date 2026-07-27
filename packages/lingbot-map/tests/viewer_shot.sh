@@ -3,7 +3,7 @@
 #  viewer_shot.sh — render the viewer headlessly and report what
 #  the GPU actually drew.
 #
-#    ./tests/viewer_shot.sh <viewer-url> [out.png]
+#    ./tests/viewer_shot.sh <viewer-url> [out.png] [WxH]
 #
 #  e.g.  ./tests/viewer_shot.sh 'http://127.0.0.1:8730/?probe=6' shot.png
 #
@@ -22,6 +22,7 @@
 set -u
 URL="${1:?usage: viewer_shot.sh <url> [out.png]}"
 OUT="${2:-}"
+SIZE="${3:-1280,800}"
 
 CHROME=""
 for c in google-chrome chromium chromium-browser; do
@@ -34,6 +35,7 @@ DOM="$(mktemp)"; trap 'rm -f "$DOM"' EXIT
 # the point of the check is the draw path, not the driver.
 "$CHROME" --headless --disable-gpu --enable-unsafe-swiftshader --no-sandbox \
     --virtual-time-budget=120000 --run-all-compositor-stages-before-draw \
+    --window-size="$SIZE" \
     --dump-dom "$URL" > "$DOM" 2>/dev/null
 
 LIT=$(sed -n 's/.*id="probe" data-lit="\([0-9]*\)".*/\1/p' "$DOM" | head -1)

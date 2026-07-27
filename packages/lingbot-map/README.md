@@ -44,27 +44,66 @@ wrote 8602925 points to cloud.ply  (286 frames, 108624 ms)
 
 ## Look at it
 
-```
-lingbot-map view cloud.ply
-```
+![286 frames of the courthouse walk, in the built-in viewer](docs/viewer.png)
 
-That serves a viewer on `http://127.0.0.1:8080` — drag to orbit, wheel to
-zoom, shift-drag to pan. It is one self-contained page drawing the cloud
-on the GPU through WebGL; nothing is fetched from anywhere, and there is
-nothing to install.
+> 8 602 925 points from 286 frames, drawn in the browser by the viewer
+> below. Facades, shopfronts, the crossing, the parked cars — and the
+> white haze through the middle is sky, which is what the **trim** control
+> is for.
 
-To go straight from frames to a viewer the way `demo.py` does, add
-`--view` and it opens as soon as the cloud is written:
+Point it at a cloud:
 
 ```
-lingbot-map --view my-frames/
+$ lingbot-map view cloud.ply
+viewer  http://127.0.0.1:8080
+cloud   cloud.ply  123 MB
+Ctrl-C to stop
 ```
 
-The controls that matter are **trim far points**, which hides the
-farthest few percent (almost always sky the depth head placed a long way
-off, and it is what makes the first frame legible), **density**, which
-thins the cloud on a slow machine, and **colour**, which switches between
-the frames' own RGB, height and distance.
+**Open `http://127.0.0.1:8080` in your browser.** That is the whole thing
+— the command prints the address and then serves until you stop it with
+Ctrl-C. Nothing else is installed and nothing is fetched from the
+internet; the page is inside the binary.
+
+If port 8080 is taken, pick another and open the address it prints:
+
+```
+$ lingbot-map view cloud.ply --port 9000
+viewer  http://127.0.0.1:9000
+```
+
+To go from frames to a viewer in one command, the way `demo.py` does, add
+`--view` — it reconstructs first and then serves, printing the same
+address when it is ready:
+
+```
+$ lingbot-map --view ~/dev/lingbot-map/example/courthouse
+frames 286 -> cloud.ply
+model  /home/wau/.nurl/models/lingbot-map/lingbot-map.pt
+frame 1/286  33025 points  526 ms  .../courthouse/000000.png
+...
+wrote 8602925 points to cloud.ply  (286 frames, 108624 ms)
+
+viewer  http://127.0.0.1:8080
+cloud   cloud.ply  123 MB
+Ctrl-C to stop
+```
+
+Once it is open: **drag** to orbit, **wheel** to zoom, **shift-drag** to
+pan, **r** to reset the view, **c** to cycle the colouring, **[** and
+**]** for point size.
+
+The three sliders, in the order they matter:
+
+* **trim far points** hides the farthest few percent, and starts at 2%.
+  That is almost always sky the depth head placed a long way off, and it
+  is the difference between a legible first frame and a white wall. Push
+  it further for a cleaner scene; pull it back to 0% to see everything
+  the model produced.
+* **density** thins the cloud if your machine struggles. The points are
+  shuffled once when they load, so 10% is a tenth of the whole scene
+  rather than the first tenth of the walk.
+* **point size** for how solid the surfaces look.
 
 `cloud.ply` is an ordinary PLY, so MeshLab, CloudCompare, Blender and
 `f3d cloud.ply` open it too.
