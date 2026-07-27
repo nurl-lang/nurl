@@ -404,8 +404,15 @@ else
     # --help succeeds and shows an example; the usage alone is not help
     "$WORK/lbm-cli" --help > "$WORK/help.txt" 2>&1 || cf=$((cf+1))
     grep -q "^examples:" "$WORK/help.txt" || { bad "--help has no examples"; cf=$((cf+1)); }
-    "$WORK/lbm-cli" --version 2>&1 | grep -q "^lingbot-map " \
-        || { bad "--version prints nothing recognisable"; cf=$((cf+1)); }
+    # --version must agree with the manifest. 0.4.0 shipped saying 0.3.0
+    # because the two live in different files and nothing compared them.
+    manifest_v=$(sed -n 's/^version = "\([^"]*\)".*/\1/p' nurl.toml | head -1)
+    binary_v=$("$WORK/lbm-cli" --version 2>&1 | sed -n 's/^lingbot-map \(.*\)$/\1/p')
+    if [ -z "$binary_v" ]; then
+        bad "--version prints nothing recognisable"; cf=$((cf+1))
+    elif [ "$binary_v" != "$manifest_v" ]; then
+        bad "--version says $binary_v, nurl.toml says $manifest_v"; cf=$((cf+1))
+    fi
 
     # each of these must fail, and must SAY what is wrong
     expect_msg() {  # <pattern> <args...>

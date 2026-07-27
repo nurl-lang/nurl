@@ -134,7 +134,10 @@ $ `src/viewer.nu`
     ( nurl_print `The cloud is a PLY. MeshLab, CloudCompare, Blender and f3d all open it.\n` )
 }
 
-@ __lm_version → v { ( nurl_print `lingbot-map 0.3.0\n` ) }
+// Kept in step with nurl.toml by the test suite, which compares the two.
+// 0.4.0 shipped saying 0.3.0: the manifest was bumped and this was not,
+// and nothing anywhere would have noticed.
+@ __lm_version → v { ( nurl_print `lingbot-map 0.4.1\n` ) }
 
 @ __lm_streq s a s b → b { ^ == 0 ( nurl_str_cmp a b ) }
 
