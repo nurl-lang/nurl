@@ -67,7 +67,7 @@ print("worst relative error %.3e" % worst)
 PY
 }
 
-echo "[1/18] camera geometry vs the reference torch code"
+echo "[1/20] camera geometry vs the reference torch code"
 if ! $NURL tests/geomcheck.nu "$WORK/geomcheck" >/dev/null 2>"$WORK/build.err"; then
     bad "geomcheck build"; cat "$WORK/build.err"
 elif [ -z "$PYTORCH_PY" ] || ! "$PYTORCH_PY" -c "import torch" 2>/dev/null; then
@@ -84,7 +84,7 @@ else
     fi
 fi
 
-echo "[2/18] frame preprocessing vs the reference load_fn pipeline"
+echo "[2/20] frame preprocessing vs the reference load_fn pipeline"
 # Real frames, not synthetic ones: the resize ratio, the patch-multiple
 # rounding and the centre crop only interact on an actual aspect ratio.
 FRAMES=""
@@ -113,7 +113,7 @@ else
     fi
 fi
 
-echo "[3/18] position-grid resample vs torch bicubic+antialias"
+echo "[3/20] position-grid resample vs torch bicubic+antialias"
 if ! $NURL tests/interpcheck.nu "$WORK/ic" >/dev/null 2>"$WORK/ic_build.err"; then
     bad "interpcheck build"; tail -6 "$WORK/ic_build.err"
 elif [ -z "$PYTORCH_PY" ] || ! "$PYTORCH_PY" -c "import torch" 2>/dev/null; then
@@ -128,7 +128,7 @@ else
     fi
 fi
 
-echo "[4/18] 2-D rotary position embedding vs the reference"
+echo "[4/20] 2-D rotary position embedding vs the reference"
 if ! $NURL tests/ropecheck.nu "$WORK/rc" >/dev/null 2>"$WORK/rc_build.err"; then
     bad "ropecheck build"; tail -6 "$WORK/rc_build.err"
 elif [ -z "$PYTORCH_PY" ] || ! "$PYTORCH_PY" -c "import torch" 2>/dev/null; then
@@ -143,7 +143,7 @@ else
     fi
 fi
 
-echo "[5/18] patch embedding vs torch Conv2d"
+echo "[5/20] patch embedding vs torch Conv2d"
 if ! $NURL tests/pecheck.nu "$WORK/pe" >/dev/null 2>"$WORK/pe_build.err"; then
     bad "pecheck build"; tail -6 "$WORK/pe_build.err"
 elif [ -z "$PYTORCH_PY" ] || ! "$PYTORCH_PY" -c "import torch" 2>/dev/null; then
@@ -158,7 +158,7 @@ else
     fi
 fi
 
-echo "[6/18] full transformer block vs the reference Block"
+echo "[6/20] full transformer block vs the reference Block"
 if ! $NURL tests/blockcheck.nu "$WORK/bc" >/dev/null 2>"$WORK/bc_build.err"; then
     bad "blockcheck build"; tail -6 "$WORK/bc_build.err"
 elif [ -z "$PYTORCH_PY" ] || ! "$PYTORCH_PY" -c "import torch" 2>/dev/null; then
@@ -174,7 +174,7 @@ else
 fi
 
 CKPT="${LINGBOT_CKPT:-$HOME/.nurl/models/lingbot-map/lingbot-map.pt}"
-echo "[7/18] the real 4.6 GB checkpoint (skipped when absent)"
+echo "[7/20] the real 4.6 GB checkpoint (skipped when absent)"
 if [ ! -f "$CKPT" ]; then
     skip "no checkpoint at $CKPT — set LINGBOT_CKPT"
 elif ! $NURL tests/wcheck.nu "$WORK/wc" >/dev/null 2>"$WORK/wc_build.err"; then
@@ -196,7 +196,7 @@ else
     fi
 fi
 
-echo "[8/18] the block on the DEVICE (f32) vs the host reference"
+echo "[8/20] the block on the DEVICE (f32) vs the host reference"
 # Tolerance is float32's, not float64's: the device path computes in f32
 # on purpose. 1e-4 is two orders above what is observed (~3e-6) and two
 # orders below what any real stride bug produces (a wrong head stride
@@ -220,7 +220,7 @@ else
     fi
 fi
 
-echo "[9/18] 3-D rope vs the real WanRotaryPosEmbed"
+echo "[9/20] 3-D rope vs the real WanRotaryPosEmbed"
 # This one imports the upstream package rather than re-implementing it:
 # the 3-D rope is fiddly enough (three axes, interleaved pairs, a 20/22/22
 # head split) that a hand-written oracle would just be a second chance to
@@ -240,7 +240,7 @@ else
     fi
 fi
 
-echo "[10/18] the DINOv2 trunk on a real frame vs the real model"
+echo "[10/20] the DINOv2 trunk on a real frame vs the real model"
 # 24 blocks and 300M real weights against tests/agg_ref_courthouse0.txt,
 # which tests/agg_oracle.py produced by running the actual model. Takes
 # ~35 s and ~2.5 GB. Tolerance is float32's.
@@ -265,7 +265,7 @@ else
     fi
 fi
 
-echo "[11/18] the WHOLE aggregator on a real frame vs the real model"
+echo "[11/20] the WHOLE aggregator on a real frame vs the real model"
 # 72 blocks and 909M real weights: DINOv2 trunk, then 24 frame/global
 # pairs with 2-D and 3-D rope and the six special tokens. ~105 s, 7.3 GB.
 if [ ! -f "$CKPT" ]; then
@@ -294,7 +294,7 @@ else
     fi
 fi
 
-echo "[12/18] two frames STREAMED through the KV cache"
+echo "[12/20] two frames STREAMED through the KV cache"
 # The cache is the whole point of the model: frame 2's global blocks
 # attend over frame 1's keys as well as their own. ~200 s.
 FRAME1="$HOME/dev/lingbot-map/example/courthouse/000001.png"
@@ -318,7 +318,7 @@ else
     fi
 fi
 
-echo "[13/18] a camera POSE, end to end, vs the real model"
+echo "[13/20] a camera POSE, end to end, vs the real model"
 # preprocess -> DINOv2 -> aggregator -> camera head -> 9-vector, then
 # decoded to extrinsics and intrinsics. ~106 s.
 if [ ! -f "$CKPT" ] || [ ! -f "$FRAME0" ]; then
@@ -344,7 +344,7 @@ else
     fi
 fi
 
-echo "[14/18] one DPT fusion block, on synthetic weights"
+echo "[14/20] one DPT fusion block, on synthetic weights"
 # Seconds, not the ~150 s the real head takes: resConfUnit2 -> bilinear
 # upsample -> 1x1 out_conv against torch, so a fix to the fusion can be
 # checked without a 909M-parameter transformer in front of it.
@@ -366,7 +366,7 @@ else
     fi
 fi
 
-echo "[15/18] a DEPTH MAP and WORLD POINTS, end to end, vs the real model"
+echo "[15/20] a DEPTH MAP and WORLD POINTS, end to end, vs the real model"
 # preprocess -> DINOv2 -> aggregator -> DPT head -> depth + confidence
 # at full frame resolution. ~150 s on top of the aggregator.
 if [ ! -f "$CKPT" ] || [ ! -f "$FRAME0" ]; then
@@ -390,7 +390,60 @@ else
     fi
 fi
 
-echo "[16/18] the CLI, end to end, to a point-cloud file"
+echo "[16/20] the CLI's front door — no checkpoint, no GPU, no network"
+# Everything the command does BEFORE it loads a model: what it says when
+# it has nothing to reconstruct, that a mistyped option is an error
+# rather than a frame filename, that a directory of frames is found and
+# sorted, and that a `/`-led --model that does not exist fails as a
+# missing file instead of being looked up on Hugging Face. Seconds, and
+# it needs none of the heavy inputs the rest of the suite does.
+if ! $NURL src/main.nu "$WORK/lbm-cli" >/dev/null 2>"$WORK/cliarg.err"; then
+    bad "CLI build"; tail -6 "$WORK/cliarg.err"
+else
+    cf=0
+    # --help succeeds and shows an example; the usage alone is not help
+    "$WORK/lbm-cli" --help > "$WORK/help.txt" 2>&1 || cf=$((cf+1))
+    grep -q "^examples:" "$WORK/help.txt" || { bad "--help has no examples"; cf=$((cf+1)); }
+    "$WORK/lbm-cli" --version 2>&1 | grep -q "^lingbot-map " \
+        || { bad "--version prints nothing recognisable"; cf=$((cf+1)); }
+
+    # each of these must fail, and must SAY what is wrong
+    expect_msg() {  # <pattern> <args...>
+        pat="$1"; shift
+        if "$WORK/lbm-cli" "$@" > "$WORK/cliarg.txt" 2>&1; then
+            bad "'$*' should have failed"; cf=$((cf+1))
+        elif ! grep -qi "$pat" "$WORK/cliarg.txt"; then
+            bad "'$*' did not mention '$pat': $(head -1 "$WORK/cliarg.txt")"
+            cf=$((cf+1))
+        fi
+    }
+    expect_msg "no frames"      # nothing at all
+    expect_msg "no frames"      --model /nope/x.pt
+    expect_msg "unknown option" --qiuet frame.png
+    expect_msg "needs a value"  --out
+    expect_msg "no such frame"  no-such-frame.png
+    expect_msg "no .png"        "$WORK"          # a directory with no frames
+
+    # A directory IS the frames — and the failure that follows must be
+    # the missing local checkpoint, never a network lookup.
+    if [ -d "$HOME/dev/lingbot-map/example/courthouse" ]; then
+        expect_msg "no such file" --model /nope/x.pt --max-frames 2 \
+            "$HOME/dev/lingbot-map/example/courthouse"
+
+        # --max-frames then --stride, the order demo.py applies --first_k
+        # and --stride in: 30 frames every 3rd is 10, not 90. The count is
+        # printed before the checkpoint is opened, so this needs neither.
+        "$WORK/lbm-cli" --model /nope/x.pt --max-frames 30 --stride 3 \
+            "$HOME/dev/lingbot-map/example/courthouse" > "$WORK/stride.txt" 2>&1
+        if ! grep -q "^frames 10 " "$WORK/stride.txt"; then
+            bad "--max-frames 30 --stride 3 selected $(sed -n 's/^frames \([0-9]*\) .*/\1/p' "$WORK/stride.txt") frames, expected 10"
+            cf=$((cf+1))
+        fi
+    fi
+    [ "$cf" -eq 0 ] && ok "help, usage, unknown options, missing frames, dirs and --stride"
+fi
+
+echo "[17/20] the CLI, end to end, to a point-cloud file"
 # One frame all the way through to a PLY a viewer can open. The numbers
 # are already checked above; what this checks is that the program runs,
 # that the header's vertex count matches the body it wrote (it is
@@ -433,7 +486,7 @@ else
     fi
 fi
 
-echo "[17/18] KV-cache eviction bookkeeping, 120 frames"
+echo "[18/20] KV-cache eviction bookkeeping, 120 frames"
 # A replay of the reference's own _apply_kv_cache_eviction_causal on
 # frame indices. Checking eviction against the model itself would need
 # 73+ frames through a 909M-parameter transformer on both sides; this
@@ -453,7 +506,7 @@ else
     fi
 fi
 
-echo "[18/18] EVICTION against the real model, at a window that fits"
+echo "[19/20] EVICTION against the real model, at a window that fits"
 # The bookkeeping test above is indices; this one is activations. The
 # window is shrunk to 1 + 2 on BOTH sides, so eviction bites at frame 3
 # instead of frame 72 and six frames are enough. This is the test that
@@ -493,6 +546,86 @@ else
             bad "eviction differs from the real model"; echo "$out"
         fi
     fi
+fi
+
+
+echo "[20/20] THE WHOLE DELIVERABLE vs the reference: same frames, same cloud"
+# Every other step compares a module's activations on one or two frames.
+# This one compares what the user actually gets — the point cloud — over a
+# SEQUENCE, against ~/dev/lingbot-map driven through its own
+# `inference_streaming`, and times both.
+#
+# It needs a CUDA torch, which `.venv-oracle` is NOT (it is a CPU build,
+# deliberately — the rest of the suite only needs correctness). Set
+# LINGBOT_CUDA_PY, or drop a CUDA venv at the repo root as `.venv-cuda`.
+#
+# `--scale-frames 1` drives the reference the way the port drives the
+# model: every frame causal. demo.py's default is 8, which gives the first
+# eight frames BIDIRECTIONAL attention as one block — a mode the port does
+# not implement, and worth about 3% of the cloud. That is a known gap, not
+# something this step can hide.
+#
+# The two thresholds are different questions. ONE frame is pure arithmetic
+# and must agree tightly. A SEQUENCE accumulates: the pose of frame N is
+# estimated from a cache carrying every frame before it. The sequence
+# bound is set at what is measured TODAY so that a regression is caught —
+# it is NOT a statement that this much drift is correct. It is not: the
+# reference perturbed by 3e-4, the port's own activation-level
+# disagreement, moves only 3.9e-5, so the drift below is roughly 600x what
+# the model's conditioning explains. See README, "How close is it really".
+if [ -n "${LINGBOT_CUDA_PY:-}" ]; then :;
+elif [ -x "$REPO_ROOT/.venv-cuda/bin/python" ]; then LINGBOT_CUDA_PY="$REPO_ROOT/.venv-cuda/bin/python";
+else LINGBOT_CUDA_PY=""; fi
+CH="$HOME/dev/lingbot-map/example/courthouse"
+
+if [ ! -f "$CKPT" ] || [ ! -d "$CH" ]; then
+    skip "needs the checkpoint and ~/dev/lingbot-map/example/courthouse"
+elif [ -z "$LINGBOT_CUDA_PY" ] || \
+     ! CUDA_VISIBLE_DEVICES="${LINGBOT_CUDA_DEV:-0}" "$LINGBOT_CUDA_PY" \
+         -c "import torch,sys; sys.exit(0 if torch.cuda.is_available() else 1)" 2>/dev/null; then
+    skip "end-to-end differential — needs a CUDA torch (set LINGBOT_CUDA_PY)"
+elif ! $NURL src/main.nu "$WORK/lbm-e2e" >/dev/null 2>"$WORK/e2e_build.err"; then
+    bad "CLI build"; tail -6 "$WORK/e2e_build.err"
+elif ! "$LINGBOT_CUDA_PY" -c "import scipy.spatial" 2>/dev/null; then
+    skip "cloud comparison needs scipy"
+else
+    e2e_fail=0
+    for N in 1 20; do
+        FR=$(ls "$CH"/*.png 2>/dev/null | head -"$N")
+        # shellcheck disable=SC2086
+        if ! CUDA_VISIBLE_DEVICES="${LINGBOT_CUDA_DEV:-0}" PYTHONPATH="$HOME/dev/lingbot-map" \
+                "$LINGBOT_CUDA_PY" tests/ref_cloud.py --scale-frames 1 \
+                "$CKPT" "$WORK/ref$N.ply" $FR >/dev/null 2>"$WORK/ref$N.err"; then
+            bad "the reference failed to run on $N frames"; tail -3 "$WORK/ref$N.err"
+            e2e_fail=1; continue
+        fi
+        if ! "$WORK/lbm-e2e" --quiet --model "$CKPT" --max-frames "$N" \
+                --out "$WORK/port$N.ply" "$CH" >"$WORK/port$N.log" 2>&1; then
+            bad "the port failed to run on $N frames"; tail -3 "$WORK/port$N.log"
+            e2e_fail=1; continue
+        fi
+        # 1 frame is arithmetic; 20 frames is arithmetic plus accumulation.
+        [ "$N" = "1" ] && TOL=1e-4 || TOL=5e-3
+        if out="$("$LINGBOT_CUDA_PY" tests/cmp_cloud.py \
+                    "$WORK/ref$N.ply" "$WORK/port$N.ply" "$TOL" 2>&1)"; then
+            ok "$N frame(s): $(echo "$out" | sed -n '2p')"
+        else
+            bad "$N frame(s) differ beyond $TOL"; echo "$out" | sed -n '1,3p'
+            e2e_fail=1
+        fi
+        # Faster is half the requirement, so it is measured, not assumed.
+        rs=$(sed -n 's/^ref_seconds \([0-9.]*\) .*/\1/p' "$WORK/ref$N.err")
+        ps=$(sed -n 's/.*(\([0-9]*\) frames, \([0-9]*\) ms).*/\2/p' "$WORK/port$N.log")
+        if [ -n "$rs" ] && [ -n "$ps" ]; then
+            rms=$(awk -v r="$rs" 'BEGIN { printf "%d", r * 1000 }')
+            echo "       $N frame(s): reference ${rs}s, port $((ps / 1000)).$((ps % 1000 / 100))s" \
+                 "= $(awk -v r="$rms" -v p="$ps" 'BEGIN { printf "%.1fx", r / p }') faster"
+            if [ "$ps" -ge "$rms" ]; then
+                bad "$N frame(s): the port is NOT faster than the reference"
+                e2e_fail=1
+            fi
+        fi
+    done
 fi
 
 echo

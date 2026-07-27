@@ -1,10 +1,11 @@
 [package]
 name = "lingbot-map"
-version = "0.2.1"
-description = "LingBot-Map in pure NURL — the Geometric Context Transformer for streaming 3D reconstruction, ported from the reference PyTorch implementation. Feed it a folder of frames and it returns per-frame camera poses, depth and a world-space point cloud. Runs at parity with the reference on the same GPU — 138 ms a frame against its 141, f32 both sides, with eight frames end to end in 3.2 s including the 4.6 GB checkpoint load. Writes binary_little_endian PLY (--ascii for text), and --profile reports per-stage frame timings and a per-kernel GPU profile."
+version = "0.3.0"
+description = "Streaming 3-D reconstruction in pure NURL. Point it at a folder of video frames — `lingbot-map frames/` — and it writes a world-space point cloud as a PLY, plus a camera pose and a depth map for every frame, one frame at a time, with no per-scene optimisation and no structure-from-motion pass. It is a port of LingBot-Map's Geometric Context Transformer and runs the reference's own 1.16 B parameter checkpoint, which the first run fetches from Hugging Face and caches under ~/.nurl/models; no Python, no PyTorch, no CUDA toolkit, since the kernels are compiled at run time through NVRTC. Every stage is checked against the reference PyTorch implementation by importing and driving the upstream modules rather than re-implementing them: preprocessing byte-identical, the DINOv2 trunk 3.9e-6, the streaming aggregator with sliding-window KV eviction 5.9e-6, the camera head 2.2e-7, the DPT depth head 1.6e-6, the geometry 2.4e-16, world points end to end 1.5e-6. On one RTX 4090 in f32 it is at parity with the reference — 138 ms a frame against its 141 — and the per-frame cost is flat past 72 frames because the KV window bounds it: 286 frames of the courthouse example in 109 s. Writes binary_little_endian PLY (--ascii for text); --profile reports per-stage frame timings and a per-kernel GPU profile; the reference's own flag spellings (--model_path, --image_folder, --conf_threshold, --first_k) are accepted."
 license = "Apache-2.0"
 
 [dependencies]
 torchpt = { path = "../torchpt", version = "^0.1" }
+hub = { path = "../hub", version = "^0.1" }
 gpukit = { path = "../gpukit", version = "^0.6.1" }
 image = { path = "../image", version = "^0.5" }

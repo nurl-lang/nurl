@@ -1,102 +1,205 @@
-# lingbot-map — Geometric Context Transformer in pure NURL
+# lingbot-map
 
-A port of [LingBot-Map](https://github.com/robbyant/lingbot-map), the
-feed-forward 3D foundation model for **streaming 3D reconstruction**:
-feed it a sequence of frames, get back per-frame camera poses, depth
-maps and a world-space point cloud, one frame at a time, with no
-per-scene optimisation.
+Streaming 3-D reconstruction, in pure NURL. Hand it a folder of video
+frames; it hands back a world-space point cloud, plus a camera pose and a
+depth map for every frame — one frame at a time, no per-scene
+optimisation, no structure-from-motion pass.
 
-**Status: in progress.** The port is staged, and each stage is verified
-against the reference PyTorch implementation before the next one starts.
-What is done and what is not is spelled out below — nothing here claims
-to work that has not been checked against the oracle.
+It is a port of [LingBot-Map](https://github.com/robbyant/lingbot-map),
+the feed-forward 3-D foundation model, and it runs the same 1.16 B
+parameter checkpoint the reference does. Every stage is checked against
+the reference PyTorch implementation, and on the same GPU it is several
+times faster end to end. On a single frame it reproduces the reference to
+2e-5; over a long sequence it drifts, which is measured and quantified
+under [How close is it really](#how-close-is-it-really) rather than
+glossed.
 
-## Why this port is the size it is
+## Install
 
-The reference is ~13 000 lines of PyTorch and the checkpoint is 4.6 GB
-of fp32 — roughly 1.16 B parameters in three stacked transformers:
+```
+nurlpkg install lingbot-map
+```
 
-| part | shape |
+## Reconstruct something
+
+```
+lingbot-map my-frames/
+```
+
+That is the whole command: a folder of `.png` or `.jpg` frames in, a
+point cloud out. The first run downloads the 4.6 GB checkpoint from
+Hugging Face and caches it under `~/.nurl/models`; every run after that
+starts straight away.
+
+```
+frames 286 -> cloud.ply
+model  /home/wau/.nurl/models/lingbot-map/lingbot-map.pt
+frame 1/286  33025 points  526 ms  .../courthouse/000000.png
+frame 2/286  66564 points  157 ms  .../courthouse/000001.png
+frame 3/286  98930 points  158 ms  .../courthouse/000002.png
+...
+frame 286/286  8602925 points  410 ms  .../courthouse/000285.png
+wrote 8602925 points to cloud.ply  (286 frames, 108624 ms)
+```
+
+`cloud.ply` opens in MeshLab, CloudCompare, Blender, or `f3d cloud.ply`.
+
+## Where frames come from
+
+Any folder of `.png`, `.jpg` or `.jpeg` files whose names sort into the
+order they were shot. From a video, that is one `ffmpeg` call:
+
+```bash
+mkdir frames && ffmpeg -i walk.mp4 -r 10 frames/%06d.png
+lingbot-map frames/
+```
+
+The example sequences the reference uses — `courthouse`, `loop`,
+`university` — come with
+[its repository](https://github.com/robbyant/lingbot-map), under
+`example/`. Everything below uses one of those, so the numbers are
+reproducible.
+
+## More things to try
+
+```bash
+# a quick look first: 30 frames instead of all 286
+lingbot-map --max-frames 30 ~/dev/lingbot-map/example/courthouse
+
+# the whole walk, but every 20th frame — 15 frames, 4 s
+lingbot-map --stride 20 --out sparse.ply ~/dev/lingbot-map/example/courthouse
+
+# every pixel rather than every second one — 4x the points
+lingbot-map --pixel-stride 1 --out dense.ply ~/dev/lingbot-map/example/courthouse
+
+# keep more of the uncertain geometry (1.0 is "the model knows nothing")
+lingbot-map --conf 1.2 --out loose.ply ~/dev/lingbot-map/example/courthouse
+
+# a checkpoint you already downloaded, and where the time goes
+lingbot-map --model ./lingbot-map.pt --profile ~/dev/lingbot-map/example/courthouse
+
+# a few individual frames, in the order you name them
+lingbot-map shot0.png shot1.png shot2.png
+
+# a text PLY, for reading with your eyes
+lingbot-map --ascii --max-frames 2 --out two.ply ~/dev/lingbot-map/example/courthouse
+```
+
+## Options
+
+| | |
 |---|---|
-| `patch_embed` | DINOv2 ViT-L/14 — 24 blocks, dim 1024, used as a frozen feature extractor |
-| `aggregator.frame_blocks` | 24 blocks, dim 1024 — attention **within** a frame |
-| `aggregator.global_blocks` | 24 blocks, dim 1024 — causal attention **across** frames, over a paged KV cache |
-| `camera_head` | iterative pose refinement, 4 passes |
-| `depth_head`, `point_head` | DPT decoders over four intermediate layers |
+| `--model <path\|ref>` | checkpoint to run: a local `.pt`, or a Hugging Face ref such as `robbyant/lingbot-map/lingbot-map.pt`. Default: `$LINGBOT_MAP_MODEL`, else `~/.nurl/models/lingbot-map/lingbot-map.pt`, else that ref is fetched |
+| `--out <file.ply>` | where to write the cloud (default `cloud.ply`) |
+| `--conf <f>` | keep pixels whose confidence exceeds this (default 1.5, the reference's own `--conf_threshold`) |
+| `--pixel-stride <n>` | take every nth pixel on both axes (default 2) |
+| `--max-frames <n>` | stop after n frames |
+| `--stride <n>` | use every nth frame, applied after `--max-frames` |
+| `--frames <dir>` | a directory of frames; the same as naming it positionally |
+| `--ascii` | write an ASCII PLY instead of `binary_little_endian` |
+| `--quiet`, `-q` | no per-frame progress |
+| `--profile` | per-stage frame timings and a per-kernel GPU profile |
+| `--version`, `--help` | |
 
-Frame and global blocks alternate, and every fourth pair (`[4, 11, 17,
-23]`) is tapped for the DPT heads. That structure — anchor context,
-pose-reference window, trajectory memory — is the paper's contribution
-and is what the port has to reproduce exactly, not approximately.
+The reference's own spellings work too — `--model_path`,
+`--image_folder`, `--conf_threshold`, `--first_k` — so a `demo.py`
+command line mostly transfers.
 
-## Stages
+**Order is the trajectory.** Frames are read in name order, and the model
+keeps a cache across frames, so each one is placed relative to the ones
+before it. A shuffled directory reconstructs a different scene.
 
-| # | stage | state |
-|---|---|---|
-| 1 | read the `.pt` checkpoint | **done** — [`torchpt`](../torchpt); the real 4.6 GB file in 0.01 s / 31 MB RSS, values identical to `torch.load` |
-| 2 | image loading and preprocessing | **done** — byte-identical to the reference pipeline on real frames |
-| 3 | ViT layers: patch embed, 2-D RoPE, qk-norm attention, block | **done** — the full block matches the reference to 4e-15 |
-| 4 | streaming aggregator + KV cache | **done** — 5.9e-6 vs the real model; sliding-window eviction 8.5e-6, checked against the model past the eviction point |
-| 5 | camera head, DPT heads | **done** — camera head 2.2e-7, DPT depth head 1.6e-6 |
-| 6 | camera geometry | **done** — matches torch to 2.4e-16 |
-| 7 | CLI, point-cloud export, end-to-end check | **done** — `src/main.nu`; world points 1.5e-6 vs the real model |
+## How it differs from `demo.py`
 
-## Performance
+The model is the same and the numbers agree; the packaging does not.
 
-Everything below is one machine — an RTX 4090, f32 on both sides — and
-the port's numbers are with `--profile`, which prints per-stage times and
-a per-kernel GPU profile.
+* **It writes a file, it does not open a viewer.** `demo.py` ends in a
+  viser web viewer; this ends in a PLY, and you bring your own viewer.
+* **No video input.** `demo.py --video_path` shells out to OpenCV; split
+  the video with `ffmpeg` and point at the folder.
+* **No scale-frame block.** `demo.py` runs the first `--num_scale_frames`
+  (8 by default) frames as **one block with bidirectional attention among
+  themselves**, and only then goes frame-by-frame. The port is causal from
+  frame 0, which is what `demo.py --num_scale_frames 1` does. Measured on
+  12 frames, that alone is worth **3.3% of the cloud** (370 052 points
+  against 357 693). Everything in [How close is it
+  really](#how-close-is-it-really) compares against the reference driven
+  the port's way, so it is a separate gap and is not folded into those
+  numbers.
+* **Streaming only.** `--mode windowed`, `--keyframe_interval`,
+  `--mask_sky` and `--rotate_clockwise_90` have no equivalent here. The
+  sliding KV window is what bounds the memory instead of keyframes,
+  which is why 286 frames run at a flat 410 ms each; past ~320 frames
+  `demo.py` would start dropping to keyframes and this will not.
+* **f32 throughout.** `demo.py` casts the aggregator to bf16. In eager
+  mode that is *slower* on this card — 155 ms a frame against f32's
+  141 — and it is not what the accuracy figures above were measured
+  against.
 
-**The same eight-frame reconstruction, before and after the speed work:**
+## What you need
 
-| | before | after |
-| --- | --- | --- |
-| 8 frames, end to end | 38.2 s | **3.6 s** |
-| loading the 4.6 GB checkpoint | ~25 s | **1.6 s** |
-| per frame, steady state | ~1.25 s | **0.20–0.24 s** |
-| 30 frames, end to end | — | **10.7 s** |
-| `tests/depthcheck.nu` (load + a frame + dumps) | 25.8 s | **2.1 s** |
+* An NVIDIA GPU and the CUDA driver. VRAM goes with the length of the
+  sequence, and stops growing once the sliding KV window fills: ~6.8 GB
+  for 8 frames, ~10 GB for 30, ~16.4 GB for 286 and for anything longer.
+  `--max-frames` caps the sequence, and so caps the memory.
+* The 4.6 GB checkpoint, which the first run fetches for you. To fetch it
+  yourself: `hub pull robbyant/lingbot-map/lingbot-map.pt`, or download
+  `lingbot-map.pt` from
+  [huggingface.co/robbyant/lingbot-map](https://huggingface.co/robbyant/lingbot-map)
+  and pass `--model <path>`. The `-long` and `-stage1` checkpoints in the
+  same repository are read the same way — layer counts come off the file
+  rather than from a constant.
 
-Identical output: the same 237 123 points, and `depthcheck`'s dump is
-byte-for-byte what the pre-optimisation build produced. (Worth knowing
-before reading anything into a tolerance number: the end-to-end
-depth/confidence/world-points check reports 1.6e-5, on the CUDA and CPU
-backends alike, and reported the same 1.646e-5 from a pristine build of
-`HEAD` — it is what that three-row comparison has always been, not
-something the speed work moved. The 1.6e-6 in the stage table is the
-depth map on its own.) Every kernel
-rewrite kept its accumulation order, so this is the same arithmetic run
-in a better shape — with one deliberate exception, noted below.
+No Python and no PyTorch. The kernels are CUDA C compiled at run time
+through NVRTC, so the driver (`libcuda`) and `libnvrtc` are what you
+need at run time, and nothing at all at build time.
 
-**Against the reference on the same card.** `tests/ref_timing.py` runs
-the reference's aggregator, camera head and depth head on one frame with
-the checkpoint load excluded, which is the same slice the port's
-`--profile` reports:
+## Speed
 
-| | reference | port |
+An RTX 4090, f32 on both sides, same frames, same checkpoint.
+`tests/ref_cloud.py` drives `~/dev/lingbot-map` through its own
+`inference_streaming` and writes the same cloud, so this is the whole
+command against the whole command, not a module against a module:
+
+| frames | reference | this port | |
+| ---: | ---: | ---: | --- |
+| 1 | 14.6 s | 1.6 s | **9.2x** |
+| 4 | 14.5 s | 2.0 s | **7.1x** |
+| 12 | 15.8 s | 3.4 s | **4.6x** |
+| 20 | 17.2 s | 5.1 s | **3.4x** |
+
+Most of that is the checkpoint: the port reads 4.6 GB straight into
+device memory in 1.6 s where `torch.load` plus `load_state_dict` takes
+~12.6 s, and that cost is paid once however long the sequence. On
+inference alone the two are close — at 20 frames the reference spends
+3.7 s and the port about 3.5 s.
+
+Per module, on one frame with the load excluded (`tests/ref_timing.py`,
+the same slice `--profile` reports):
+
+| | reference | this port |
 | --- | --- | --- |
 | aggregator | 77 ms | 100 ms |
 | camera head | 54 ms | **16 ms** |
 | depth head | 10 ms | 22 ms |
-| **total** | **141 ms** | **138 ms** |
+| **one frame** | **141 ms** | **138 ms** |
 
-**So the port is at parity** — 138 ms against 141, best of four runs on
-each side, with the port's three numbers stable to a millisecond across
-runs. It is well ahead on the camera head, behind on the other two, and
-the sum lands where the reference does. The port's own preprocessing —
-PNG decode and the bicubic resize, ~33 ms — is outside this table on
-both sides, as `load_and_preprocess_images` is for the reference.
+Ahead on the camera head, behind on the other two, and the sum lands
+where the reference's does. End to end, including the 1.6 s checkpoint
+load, eight frames take 2.8 s, thirty take 7.5 s and all 286 take 109 s.
 
-Worth saying plainly what this is and is not: torch here is eager mode,
-which is what `ref_timing.py` measures on both sides. `demo.py` also
-turns on `torch.compile` and CUDA graphs, and that is a different (and
-faster) reference this has not been measured against. The reference as `demo.py` ships it — the
-aggregator cast to bf16 — measures 155 ms here, slower than its own
-fp32 path: at one frame of 783 tokens this model is latency-bound in
-eager mode, and bf16 only pays off with the `torch.compile` and CUDA
-graphs `demo.py` also turns on.
+A frame costs more the more of the sequence it has to attend to, and then
+stops: 157 ms at frame 2, 400 ms by frame 73, and 410 ms at frame 286.
+That plateau is the sliding KV window filling up — past 72 frames the
+model attends over a bounded cache, so the per-frame cost is flat however
+long the walk is.
 
-**Where a frame goes now** (frame 4 of a sequence, `--profile`):
+The reference here is torch in eager mode, which is what `ref_timing.py`
+measures on both sides. `demo.py` can also turn on `torch.compile` and
+CUDA graphs; that is a faster reference this has not been measured
+against.
+
+`--profile` shows where a frame goes, and which kernels it spends it in:
 
 ```
 prep 33 ms  aggregator 100 ms  camera 16 ms  depth 22 ms  cloud 1 ms
@@ -106,666 +209,123 @@ prep 33 ms  aggregator 100 ms  camera 16 ms  depth 22 ms  cloud 1 ms
    7%  gk32_lnormrow       760 calls     53 us
 ```
 
-Nearly half of it is now one kernel, the tiled GEMM, at 19–27 TFLOP/s
-where cuBLAS would do ~50. That is where a further gain would come from,
-and it needs a different structure — warp-level tiling with
-register-resident fragments — rather than another parameter; four
-parameter changes were measured and none helped (see below).
+## Accuracy
 
-### What made the difference
+Every stage is checked against the reference itself. Where an oracle can
+import the upstream module and drive it, it does, rather than working
+from a second reading of the source — a hand-written oracle is just
+another chance to make the same mistake, and once did.
 
-Nearly all of it is in [`gpukit`](../gpukit) rather than here — this port
-was the thing that made the gaps visible, and the fixes belong where
-every GPU package gets them. In rough order of what it bought:
+These are what the suite prints, worst relative error in each case:
 
-* **Tiled GEMM.** One thread per output element costs a global load of B
-  per multiply-add; a 64x64 shared-memory tile with a 4x4 register tile
-  and `float4` shared reads costs a fraction of one. 3.1 → 19.1 TFLOP/s
-  (and 0.6 → 20.1 with a transposed B, which the old kernel read along
-  the wrong axis entirely). Bit-identical: blocking changes when a
-  product is computed, not the order the sum runs in.
-* **Fused attention.** The composed form materialises a
-  `[heads, n, nkv]` score matrix, writes it once and reads it five
-  times. `gkd_attention` never writes it. 3.8x at `nkv = n`, 6.2x at
-  `nkv = 4n` — and, more to the point for a *streaming* model, the
-  buffer it does not allocate is 2.8 GB at a 72-frame window. This is
-  the one change that is not bit-identical (an online softmax rescales a
-  running sum rather than summing left to right); it moved the whole
-  aggregator from 5.385e-6 to 5.853e-6 against the real model, and the
-  end-to-end depth agreement *improved*, from 1.646e-5 to 1.591e-5 —
-  which figures, since the reference uses SDPA and so does this.
-* **A caching device allocator.** `cuMemAlloc`/`cuMemFree` synchronise
-  and cost ~315 us per 12 MB pair. A frame allocates its scratch a few
-  hundred times, so a third of every frame was the allocator, with the
-  device idle for all of it.
-* **The checkpoint is read straight into device memory.** The load path
-  widened every f32 weight to f64, transposed the four hot Linear
-  weights on the host with a column-strided write per element, and
-  narrowed them again on upload. Now the mapped bytes go to the device
-  as they are and the transpose is a permute kernel: 25 s → 1.6 s.
-* **Layernorm a row per block, not per thread** (~800 rows is three
-  blocks on a 128-SM card): 6.3x. **Convolution with a 4x4 output tile
-  per thread**: 2.2x. **Transposed convolution** with a fast path for
-  stride == kernel, where the general body was doing two 64-bit modulos
-  per tap to discover that fifteen of every sixteen taps contribute
-  nothing: 14.2 ms → 0.35 ms. **GEMV shape for M = 1**, which the camera
-  head runs twenty times per frame and which was eight blocks on a
-  128-SM card.
-* **The convolution is shape-specialised too**, for the same reason as
-  the permute: every loop bound and stride was a kernel argument, so a
-  3x3 layer paid a 64-bit multiply-add chain per tap to compute an
-  address the compiler could have folded, and could not unroll a
-  nine-tap window it did not know was nine taps. The twelve dimensions
-  go in as literals; each layer geometry compiles once. The depth head
-  went 39 ms → 22 ms, and the dumps are byte-identical with the
-  specialisation forced off.
-* **The permute is shape-specialised.** The generic body decomposed
-  each output index with six 64-bit divisions and modulos and kept its
-  working arrays in local memory, which is why moving 9 MB took 87 us.
-  The kernel source is generated per call anyway, so the dims and the
-  permutation go in as literals and it takes 15 us.
-* **Two per-frame constants are now built once.** The DPT
-  positional-embedding grid is a pure function of (channels, height,
-  width, aspect); rebuilding it was ~10 million host `sin`/`cos` a
-  frame, a fifth of the frame. The DINOv2 position grid is a bicubic
-  resample over 1024 channels and a pure function of (gh, gw);
-  rebuilding it was another 53 ms a frame — a *quarter* of what the
-  frame had shrunk to by then. Both were found the same way, by
-  profiling a build without LTO so the inlined frame loop resolves into
-  named functions, and both are bit-identical: the eight-frame cloud is
-  byte-for-byte unchanged.
-* **The point cloud is binary PLY by default.** ASCII cost 15 us per
-  point — 470 ms a frame at the default stride, more than the depth
-  head. `--ascii` still writes the text form, and the two agree exactly.
-  The float formatting behind it was worth fixing on its own:
-  `nurl_str_float` searched 1..17 significant digits linearly for the
-  shortest round-trip, which is ~2.5 us for a value that came from an
-  f32 (the worst case). It binary-searches now — the property is
-  monotone in the digit count — which is five probes instead of
-  seventeen, for every float any NURL program prints.
-
-Four things this did NOT need, all measured and dropped: double
-buffering the GEMM's global loads (neutral — the kernel is not
-latency-bound), a 128x128 tile with an 8x8 register tile (worse — at
-these shapes it halves the block count on a 128-SM card, and idle SMs
-cost more than the better reuse gains; worse again when re-tried after
-the `float4` change, this time on register pressure), and 16-byte global
-loads in the staging phase (also neutral-to-worse, so it is not
-issue-bound on those either). Four negative results on one kernel is
-itself the finding: at ~25 TFLOP/s it is not short of any single
-resource, and the next step is warp-level tiling with register-resident
-fragments rather than another parameter.
-
-The convolution and the attention, by contrast, were both short of
-something specific and both moved a lot when it was fixed — which is the
-argument for measuring each kernel rather than assuming the biggest one
-is the one to work on.
-
-### Stage 2 — preprocessing (`src/preproc.nu`)
-
-`load_and_preprocess_images(mode="crop", image_size=518, patch_size=14)`,
-which is what `demo.py` runs: alpha onto white, RGB, bicubic resize to
-width 518 with the height snapped to a whole number of patches, centre
-crop, scale to [0, 1], CHW. ImageNet normalisation is *not* done here —
-the aggregator does it, and doing it twice is a quiet way to get a
-plausible but wrong reconstruction.
-
-That needed a **PIL-compatible bicubic resampler**, which the `image`
-package did not have (only nearest, bilinear and box). It has one now:
-`image_resize_bicubic`, byte-identical to Pillow — same `a = −0.5`
-kernel, same support scaling, same 22-bit fixed-point two-pass
-arithmetic. Note that this is a *different kernel* from the one stage 3
-needs for the position grid (torch's `a = −0.75`); they are not
-interchangeable.
-
-Verified on the repo's own example frames: six frames, every sampled
-value identical to the reference pipeline.
-
-EXIF orientation is deliberately **not** applied — the reference calls
-`exif_transpose`, `image` does not surface EXIF, and silently ignoring a
-rotation beats silently applying the wrong one. Video-derived frames,
-which is what streaming reconstruction is actually fed, carry none.
-
-### Stage 6 — camera geometry (`src/geom.nu`)
-
-The model's per-frame output is a 9-vector: translation, a **scalar-last**
-quaternion, and two field-of-view angles. `src/geom.nu` turns that into
-extrinsics, intrinsics, a camera-to-world transform, and unprojected
-world points.
-
-Verified against the upstream `quat_to_mat` / `mat_to_quat` /
-`pose_encoding_to_extri_intri` / `closed_form_inverse_se3` code paths:
-worst relative error **2.4e-16** across six random pose encodings — the
-last bit, and it comes from torch's vectorised `tan` disagreeing with
-glibc's, not from the port.
-
-### Stage 7 — the CLI, hardening pass
-
-Three defects the finishing pass turned up, all in `src/main.nu`:
-
-* **It always exited 0.** A frame could fail, the message went to
-  stdout, and the process reported success — a caller piping the cloud
-  into a build would never learn. Failures now set `rc` and it is
-  returned.
-* **The workspace was sized `nframes · P`.** Eviction caps the cache far
-  below that, and the attention matrix is `heads · n · nkv`: at 300
-  frames the oversized version wants ~12 GB for that term alone and
-  would not run at all. It is now sized by `ag_kv_rows`, a 4× cut at
-  300 frames.
-* **No way to name a directory.** A 324-frame scene meant 324 paths on
-  the command line. `--frames <dir>` takes every `.png`/`.jpg`, **sorted
-  by name** — order is not a nicety, the KV cache makes frame N depend
-  on every frame before it, so a raw `readdir` order reconstructs a
-  different scene.
-
-`vec_extend` looked like the way to append the glob results, and it
-exposed a compiler bug: `= . p + k 0 v` for an aggregate element type
-died with *"unknown field or variable: +"*. Fixed in `nurlc` with a
-regression test (`compiler/tests/ptr_agg_index_store.nu`). `vec_extend`
-documents itself as safe only for trivial element types, so the CLI
-pushes the handles across instead.
-
-### Stage 4 (partial) — KV-cache eviction (`src/aggregator.nu`)
-
-The reference keeps the first `kv_cache_scale_frames` = 8 frames
-forever, keeps the last `kv_cache_sliding_window` = 64 frames
-**including the current one**, and from every frame it drops it
-preserves the six special-token rows. Past 72 frames a cache that just
-grows is not merely wasteful, it is **wrong** — the model attends to
-frames it should not. The example scenes are 237–324 frames.
-
-That "including the current one" is the whole subtlety, and it is not
-visible in the eviction function. `attention.py:239-244` concatenates
-the frame into the cache and only *then* calls
-`_apply_kv_cache_eviction_causal`, so `num_cached` already counts it:
-the trigger is `f ≥ S + W` and the live set is the scale frames plus
-`f−W+1 … f`. The port first read the function alone, got a window one
-frame too wide starting one frame too late, and was wrong from the very
-first eviction — by **2.7e-2**.
-
-The port implements the policy as a ring rather than as the reference's
-repeated `torch.cat`. Each cache is laid out as
-
-```
-[0, S·P)              the scale frames, never moved
-[S·P, S·P + W·P)      a ring of the last W frames
-[S·P + W·P, …)        six preserved rows per evicted frame
-```
-
-The live region is always a **prefix**, so attention still reads a
-contiguous run and nothing in the attention path had to learn about
-eviction. Shifting the survivors down instead, which is what
-`torch.cat` amounts to, would move about 5 GB per frame across 24
-blocks.
-
-That did force one honest change: `LmKv`'s single `used` became `woff`
-and `nvalid`. Where a frame writes and how much of the cache is live are
-the same number only while frames go on the end.
-
-Two tests, and it took both:
-
-* `tests/kvcheck.nu` vs `tests/kv_oracle.py` — the bookkeeping, 120
-  frames, exact, one second. `kv_oracle.py` replays the reference's own
-  eviction; it needs no torch and no checkpoint.
-* `tests/streamcheck.nu` vs the real model with the window shrunk to
-  **1 + 2 on both sides** (`LINGBOT_KV_SCALE` / `LINGBOT_KV_WINDOW`,
-  which the reference takes as constructor arguments) — six frames,
-  three of them past eviction, **7.7e-6**.
-
-The bookkeeping test alone was not enough, and the reason is worth
-keeping: `kv_oracle.py` replayed the reference's eviction *function*
-faithfully but placed the *call* where the port placed it. It agreed
-with the port's wrong window and reported an exact match. Only running
-the activations caught it. **A replay has to reproduce the call site,
-not just the callee.**
-
-### Stage 7 — the CLI and the point cloud (`src/main.nu`)
-
-```
-lingbot-map --model <checkpoint.pt> [options] <frame> ...
-  --out <file.ply>    where to write the cloud (default cloud.ply)
-  --conf <f>          keep pixels with confidence above this (default 2.0)
-  --pixel-stride <n>  take every nth pixel on both axes (default 2)
-  --max-frames <n>    stop after n frames
-  --quiet             no per-frame progress
-  --profile           per-stage frame timings and a per-kernel GPU profile
-  --ascii             write an ASCII PLY instead of binary_little_endian
-```
-
-Each frame goes through preprocessing, the DINOv2 trunk and the
-streaming aggregator — which keeps its KV cache across frames, so the
-poses land in one shared world frame — then the camera head for a pose
-and the DPT head for depth and confidence. Depth plus intrinsics plus
-the camera-to-world transform unprojects to world points, which is the
-cloud.
-
-`world_points` matches the reference's own
-`unproject_depth_map_to_point_map` to **1.5e-6**, and is checked as part
-of the end-to-end test rather than assumed from the depth agreeing.
-
-Two things about the geometry are easy to get wrong and are worth
-stating, because both are silent:
-
-* The reference builds its pixel grid with `np.arange(W)` — **integer**
-  pixel coordinates, not sample centres. Half a pixel of offset is not
-  visible in any single number.
-* `unproject_depth_map_to_point_map` takes the **world-from-camera**
-  extrinsic that the pose encoding decodes to and inverts it itself.
-  Handing it the already-inverted one gives a plausible-looking cloud
-  that is in the wrong frame.
-
-Output is `binary_little_endian` PLY, which every viewer reads, with
-`--ascii` for the text form. Binary is the default because ASCII is not
-a rounding cost here: formatting three coordinates per point ran at
-15 us a point, 470 ms a frame at the default stride — more than the
-depth head. The two formats produce the same points exactly, which the
-end-to-end test checks by writing both.
-
-The vertex count is not known until the last frame is done, so the
-header is written with a fixed-width zero-padded placeholder and patched
-by seeking back at the end — the alternative is holding the whole cloud
-in memory, and a 300-frame sequence is tens of millions of points.
-Points are flushed a row at a time.
-
-On two consecutive courthouse frames at the defaults: 61 458 points,
-frame centroids 0.0095 apart in a scene 2.82 across — the two frames
-land on top of each other, which is what a shared world frame means.
-
-### Stage 5 — the DPT depth head (`src/dpthead.nu`)
-
-Loads and runs end to end in ~150 s and matches the reference: `depth`
-to **1.6e-6** and `depth_conf` to **7.8e-6**, with every intermediate —
-the token norm, the four projections, the position embedding, all four
-resize layers (both ConvTransposes and the strided conv), the four
-`layerN_rn` reductions, all four fusion blocks and `output_conv1` —
-inside 5e-6.
-
-Getting there took a bisect worth writing down, because the bug was
-invisible to everything except the reference itself.
-
-The divergence started at `dpt_f4`, the first fusion block, at a scaled
-error of 6.8e+2. Every stage before it was already correct to float32
-noise. Three things were ruled out in turn:
-
-* **The ops.** `tests/fusecheck.nu` runs one fusion block on synthetic
-  weights at 8×3×5 — seconds instead of 150 — and `resConfUnit2`, the
-  bilinear upsample and the 1×1 `out_conv` each matched.
-* **The plumbing.** The real head keeps its blocks in a `Vec DpFuse`,
-  36 scalars deep, and pulls them out by index through an `Option`
-  match. Four blocks with distinguishable weights came back correct.
-* **The weights.** Every DPT tensor read through `Lw` matched torch's
-  sum and absolute maximum exactly.
-
-Right input, right ops, right plumbing, right weights, wrong output.
-What broke the deadlock was strengthening the dumps: a strided sample of
-a 53 504-element tensor is six numbers, and six numbers can agree while
-the tensor does not, so `__dp_dump` and the oracle's DPT trace both
-gained a whole-tensor sum and absolute maximum. That confirmed the input
-was right over every element, and — once probes went *inside* the block
-— that the reference's `resConfUnit2` takes an input peaking at 974 and
-returns one peaking at **0.144**, while the port returned its input
-essentially unchanged.
-
-No residual unit of the form `x + g(x)` can do that. The reference's is
-not that form:
-
-```python
-self.activation = nn.ReLU(inplace=True)   # _make_fusion_block
-...
-out = self.activation(x)      # OVERWRITES x
-out = self.conv1(out); out = self.activation(out); out = self.conv2(out)
-return self.skip_add.add(out, x)          # x is relu(x) by now
-```
-
-The residual added back is `relu(x)`, not `x`. The input to refinenet4
-averages −473, so clipping it is the whole point — and adding back the
-original `x` instead leaves that entire negative bulk in the output.
-Nothing fails, no shape is wrong, no weight is missing; the depth map is
-just wrong by three orders of magnitude.
-
-The lesson is about the oracle, not the language. `tests/fuse_oracle.py`
-originally re-implemented the block from a *reading* of the reference
-source and reproduced the same misreading, so the unit test passed while
-the head was wrong. It now imports `_make_fusion_block` and drives the
-reference's own module, which cannot drift from it.
-
-The bisect harness is kept:
-
-* `LINGBOT_DPT_TRACE=1 tests/agg_oracle.py …` re-walks the reference
-  head's own submodules and dumps every stage: `dpt_proj_N`,
-  `dpt_pos_N`, `dpt_rs_N`, `dpt_rn_N`, `dpt_rcu4`, `dpt_up4`,
-  `dpt_f4..f1`, `dpt_oc1`, each with a whole-tensor sum and absmax.
-* `dp_forward`'s `trace` argument prints the same stages from the port,
-  in the same format, so a single run localises the divergence. A
-  150 s forward is not something to bisect by adding one print at a
-  time.
-
-The reference stage values are recorded below for orientation; note how
-large `dpt_rs_3` and `dpt_rn_3` legitimately get (−170 … −447), which
-is *not* the bug.
-
-The shapes below are read off the real checkpoint:
-
-| piece | shape | note |
-|---|---|---|
-| `norm` | LayerNorm(2048) | over the tapped tokens, patches only (from index 6) |
-| `projects.0..3` | 1×1 conv 2048 → **256, 512, 1024, 1024** | one per tapped layer; the four differ |
-| `resize_layers.0` | ConvTranspose2d 256→256, k4 s4 | ×4 up |
-| `resize_layers.1` | ConvTranspose2d 512→512, k2 s2 | ×2 up |
-| `resize_layers.2` | Identity | — |
-| `resize_layers.3` | Conv2d 1024→1024, k3 s2 p1 | ×2 down |
-| `scratch.layer{1..4}_rn` | 3×3 conv → 256, **no bias** | 256/512/1024/1024 in |
-| `scratch.refinenet{1..4}` | fusion blocks | refinenet4 has **no** `resConfUnit1` |
-| `scratch.output_conv1` | 3×3 conv 256 → 128 | |
-| `scratch.output_conv2` | 3×3 conv 128→32, ReLU, 1×1 conv 32→**2** | depth + confidence |
-
-Config: `intermediate_layer_idx = [0,1,2,3]`, `pos_embed=True`,
-`activation="exp"`, `conf_activation="expp1"`.
-
-`gkd_resize_bilinear` was added to gpukit for this (both corner
-conventions, verified against torch); `gkd_conv2d` and
-`gkd_convtranspose2d` already existed. `gkd_convtranspose2d` indexes its
-weight as `[cin, cout, kh, kw]`, which is PyTorch's ConvTranspose2d
-layout — checked, and not the bug.
-
-Also needed: `_apply_pos_embed`, which builds a UV grid and a sinusoidal
-embedding scaled by 0.1 and adds it **twice** — after each project and
-after the final interpolate.
-
-### Stage 5 (partial) — the camera head (`src/camhead.nu`)
-
-**This is where a pose comes out.** It reads one token per frame — the
-camera token, row 0 of the last tapped aggregator layer — and refines a
-9-vector over four passes:
-
-```
-pred ← 0
-repeat 4:
-    cond               = embed_pose(pred)                9 → 2048
-    shift, scale, gate = Linear(SiLU(cond))              2048 → 3·2048
-    x                  = gate · (adaLN(tok)·(1+scale) + shift) + tok
-    x                  = trunk(x)                        4 blocks, dim 2048
-    pred               = pred + pose_branch(trunk_norm(x))
-```
-
-A DiT-style adaptive-LayerNorm loop: each pass sees its own previous
-answer, so the trunk is asked *what is wrong with this pose* rather than
-*what is the pose*.
-
-End to end on the real checkpoint — preprocess, DINOv2, aggregator,
-camera head — **106 s, 5.7e-7** against the real model's `pose_enc`, and
-the decoded result is what frame 0 should be: identity rotation,
-zero translation, fx ≈ 290.8 / fy ≈ 290.9 for a 518×294 frame.
-
-Details that bite:
-
-* the trunk is dim 2048 with 16 heads, so head_dim is **128** and its
-  3-D rope splits **40/44/44** — not the 20/22/22 the aggregator's
-  64-dim heads use. Same kernel, different geometry, so the axis widths
-  are a parameter now.
-* `adaln_norm` has **no affine parameters** and eps **1e-6**, while
-  `token_norm`, `trunk_norm` and the trunk's own norms are plain
-  `nn.LayerNorm` at 1e-5. That is a *fourth* epsilon.
-* only the field of view is activated (ReLU — it cannot be negative).
-  Translation and quaternion pass through linear, which is why the
-  quaternion is never unit and why `src/geom.nu` divides by its own
-  squared norm.
-* `poseLN_modulation` is `Sequential(SiLU, Linear)`, so the checkpoint
-  only carries `.1.weight` / `.1.bias` — element 0 is the SiLU.
-
-### Stage 4 — the aggregator, one frame (`src/aggregator.nu`)
-
-DINOv2's patch tokens, six special tokens prepended, then 24 **frame**
-and 24 **global** blocks alternating, with four pairs tapped and
-concatenated into [P, 2048] feature maps. On the real checkpoint, for
-one 518×294 frame: **103 s, 7.3 GB, 5.4e-6** against the actual model's
-four outputs.
-
-That is 909M parameters and 72 transformer blocks agreeing to float32's
-noise floor.
-
-Streaming works: `LmKv` holds each global block's keys and values as
-`[heads, maxkv, hd]`, each frame appends its rotated k/v at row `kvused`
-and attends over everything stored. **Two frames through the cache match
-the real model to 5.4e-6** — the same figure as one frame, which is what
-a correct cache should give.
-
-`used` is read by the block and never written by it: one frame passes
-through 24 separate caches, so the count belongs to the frame and is
-passed in per call rather than stored 24 times and kept in step by hand.
-
-One subtlety in the layout: a cache is `[heads, maxkv, hd]` but only
-`nkv` rows are live, so a prefix view is **not** contiguous per head.
-The live rows are repacked into a tight `[heads, nkv, hd]` before the
-permute. Correct, and the obvious thing to make cheaper later.
-
-Cost is close to linear so far: 103 s for one frame, 201 s for two on
-the CPU backend. Frame 2 attends over 1566 keys instead of 783 and pays
-the repack, and it still comes in at about what frame 1 costs — the
-per-frame DINOv2 trunk dominates at this length.
-
-**Eviction is implemented as a ring, not as repeated `torch.cat`** —
-see the stage 4 eviction section. Past 72 frames the sliding window is
-needed for *correctness*, not just for memory: without it the model
-attends to frames the reference has already dropped.
-
-**Three different LayerNorm epsilons in one model**, and getting one
-wrong is worth ~1e-3:
-
-| | ε |
+| stage | vs the reference |
 |---|---|
-| DINOv2's blocks and final norm | 1e-6 |
-| aggregator frame/global `norm1`/`norm2` | **1e-5** |
-| `q_norm` / `k_norm` everywhere | 1e-5 |
+| frame preprocessing | identical, every value |
+| the `.pt` checkpoint, 1342 tensors | identical to `torch.load` |
+| 2-D and 3-D rotary embeddings | 0 |
+| patch embedding, one transformer block | 4.4e-15 |
+| camera geometry | 2.4e-16 |
+| DINOv2 trunk, on a real frame | 6.5e-6 |
+| the whole aggregator, four tapped layers | 5.3e-6 |
+| two frames through the KV cache | 5.3e-6 |
+| KV eviction, 120 frames | 0 |
+| eviction against the real model, past the window | 9.3e-6 |
+| camera pose, after four refinement passes | 2.3e-7 |
+| depth, confidence and world points, end to end | 1.5e-5 |
 
-Only `DinoVisionTransformer` passes `partial(LayerNorm, eps=1e-6)` to
-its blocks. `Block` and `Attention` both default to plain
-`nn.LayerNorm`, so everything the aggregator builds gets 1e-5. Using
-1e-6 throughout produced a *constant* 4e-3 absolute error that appeared
-in the very first block group and never grew — which is how it was
-found: real accumulation grows with depth, a systematic error does not.
+f32 on both sides. The 1e-6-and-up figures are float32's own noise
+accumulating over 72 transformer blocks; the ones near 1e-15 are stages
+short enough that nothing accumulates.
 
-### Stage 4 (partial) — the DINOv2 trunk (`src/dino.nu`)
+**Every one of those is a one- or two-frame measurement.** They say the
+arithmetic is right. They do not say what a 300-frame reconstruction
+looks like, and the next section does.
 
-The aggregator's "patch embedding" is a whole frozen 24-block ViT-L/14,
-and it now runs on the real checkpoint: **35 s, 2.5 GB, 3.9e-6** against
-the actual model's `x_norm_patchtokens` for an example frame.
+## How close is it really
 
-The token order matters and is easy to get subtly wrong, because the
-position embedding is added *in the middle* of building it:
+`tests/ref_cloud.py` runs `~/dev/lingbot-map` over the same frames and
+writes the same cloud; `tests/cmp_cloud.py` asks whether every point of
+one has a point of the other in the same place, relative to the size of
+the scene. Both are in the suite as step 20.
 
-```
-[cls] + patches            ← pos_embed added HERE
-[cls] + [reg×4] + patches  ← register tokens spliced in AFTER
-```
+| frames | point counts | median displacement | centroid drift |
+| ---: | --- | ---: | ---: |
+| 1 | 33 024 vs 33 025 | 2.3e-5 | 6.9e-5 |
+| 2 | identical | 2.3e-4 | 8.9e-3 |
+| 4 | 129 979 vs 129 982 | 1.7e-3 | 5.1e-2 |
+| 12 | identical | 2.4e-3 | 1.0e-1 |
+| 20 | 589 997 vs 590 002 | 3.0e-3 | 1.8e-1 |
 
-so the four register tokens get no position embedding at all, and the
-patch tokens the aggregator wants start at index 5.
+So the **depth is right** — the point counts agree to about one part in
+30 000, which is the handful of pixels whose confidence sits within f32
+noise of the threshold — and the **poses drift**. Each frame's cloud has
+the right shape and very nearly the right size; it is placed slightly
+wrong, and the error compounds down the sequence.
 
-`src/load.nu` maps the checkpoint onto device buffers with nothing
-transposed — torch stores a `Linear` weight as `[out, in]` and
-`gkd_gemm` reads it with `transb=1` — and stages one tensor at a time,
-so peak extra memory is the largest single weight (32 MB) rather than
-the model.
+Some of that is unavoidable in a streaming model: frame N's pose is
+estimated from a cache carrying every frame before it, so a small
+disagreement early is a larger one later. But not this much. Perturbing
+the *reference's* input by 3e-4 — the size of the port's own
+activation-level disagreement — moves the reference's own 20-frame cloud
+by 4.3e-5 median and 3.9e-5 centroid. The port sits **roughly 600x
+further away than the model's own conditioning explains**, so this is a
+real accumulating difference in the streaming path and not the arithmetic
+being unlucky.
 
-### Stage 4 (partial) — 3-D RoPE (`src/rope.nu`)
+It is not visible to any of the per-module tests above, which is the
+point of keeping step 20: the aggregator's activations disagree by a flat
+~3e-4 from frame 1 to frame 10 and never grow, while the trajectory built
+out of them does. Finding where that turns into pose drift is the open
+piece of work on this package.
 
-The aggregator's **global** blocks do not use the 2-D rope the frame
-blocks use. With `enable_3d_rope` — which is `demo.py`'s default — they
-use `WanRotaryPosEmbed`, and it differs on three axes at once:
+For a short sequence, or for the shape of a scene rather than its
+absolute placement, the port and the reference are the same
+reconstruction. For a long walk where the far end has to land in the
+right spot, they are not yet.
 
-| | 2-D (frame blocks) | 3-D (global blocks) |
-|---|---|---|
-| axes | row, column | frame, row, column |
-| head split | half / half | 20 / 22 / 22 |
-| theta | 100 | 10000 |
-| pairs | split each half at half/2 | **interleaved** (x₀,x₁), (x₂,x₃), … |
+## How it works
 
-Same idea, incompatible memory order, and nothing about picking the
-wrong one looks wrong. Bit-exact against the real `WanRotaryPosEmbed` —
-that test imports the upstream package rather than re-implementing it,
-because a hand-written oracle for this would just be a second chance to
-make the same mistake.
+Each frame is resized and cropped to 518 px wide, run through a frozen
+DINOv2 ViT-L/14 trunk, then through 24 pairs of transformer blocks that
+alternate between attention *within* the frame and causal attention
+*across* frames over a KV cache. Four of those pairs are tapped and fed
+to two heads: a camera head, which refines a 9-vector pose over four
+passes, and a DPT decoder, which gives a depth map and a per-pixel
+confidence. Depth plus the pose plus the intrinsics unprojects to
+world-space points, and that is the cloud.
 
-Token positions are fixed by the layout: special token *j* sits at
-`(f, j, j)` and patch `(py, px)` at `(f, 6+py, 6+px)`, so the six
-special tokens run down a diagonal that the patch grid never reaches.
+The cache is what makes it *streaming*: frame N is placed relative to
+every frame before it, so the poses all land in one world frame without
+any global optimisation. Past 72 frames a sliding window evicts the
+middle of the sequence and keeps the first 8 frames and the last 64,
+which is what bounds the memory.
 
-### Stage 4 (partial) — the block on the device (`src/devblock.nu`)
-
-The block again, this time in **f32 over gpukit's `gkd_*` ops** — gemm,
-layernorm, bmm, softmax, permute, broadcast-elementwise — so the same
-code runs on CUDA and on the CPU backend. This is the one that will
-actually run the model; `src/block.nu` stays as the reference it is
-checked against.
-
-Keeping both is the point. A device block is ~15 kernel launches, every
-one with a stride or a permutation that can be silently wrong, and
-comparing against one slow implementation that is known correct catches
-all of them at once. Measured difference: **3e-6**, which is what f32
-accumulation over these sizes should give — against ~9e-2 for the head
-stride bug that was in the host version.
-
-Torch's weight layouts are used unchanged: a `Linear` weight is
-`[out, in]` and goes straight into `gkd_gemm` with `transb=1`, so
-nothing is transposed at load time.
-
-The one kernel that had to be written is 2-D RoPE — the rest of the
-block is composition.
-
-### Stage 3 — the transformer block (`src/block.nu`)
-
-The unit this model is 72 of (24 DINOv2 + 24 frame + 24 global):
-
-```
-x = x + ls1 · attn(norm1(x))
-x = x + ls2 · mlp(norm2(x))
-```
-
-pre-norm LayerNorm, LayerScale on both branches, exact (erf) GELU, and
-attention that layer-normalises q and k **per head** before rotating
-them. Matches the reference to 4e-15.
-
-Two things the reference does that a careful reading still misses:
-
-* **`qk_norm=True` uses a different epsilon.** `Block` builds its
-  `Attention` without passing `norm_layer`, so `norm1`/`norm2` get
-  DINOv2's `partial(LayerNorm, eps=1e-6)` while `q_norm`/`k_norm` fall
-  back to `nn.LayerNorm`'s own default of `1e-5`. Two constants, and
-  the port has to carry both.
-* q/k/v are `[heads, n, head_dim]`, so a head's stride is `n·head_dim`,
-  **not** `n·dim`. Getting that wrong leaves every head past the first
-  reading zeros — and attention still produces plausible numbers, so it
-  surfaces as a few percent of error rather than as anything obviously
-  broken. (It did, here, until the intermediates were dumped.)
-
-`erf` was missing from `stdlib/std/float.nu` and is now there
-(`float_erf` / `float_erfc`) — exact GELU needs it, and so does any
-normal-distribution CDF.
-
-### Stage 3 — patch embedding (`src/patchembed.nu`)
-
-`Conv2d(3, 1024, kernel=14, stride=14)`. Kernel equals stride, so the
-patches do not overlap and the convolution is exactly a matmul: im2col
-each 14×14×3 patch into a 588-wide row, multiply by the reshaped
-weight. Matches torch's `conv2d` to 4e-15.
-
-im2col is written out rather than fused into the multiply, because the
-multiply is what moves to a device kernel later and the layout is what
-has to be right first.
-
-### Stage 3 — 2-D RoPE (`src/rope.nu`)
-
-Attention rotates q and k by the token's position in the patch **grid**,
-not its index in the sequence: the head dimension splits in half, the
-first half rotated by the row coordinate and the second by the column.
-Bit-exact against `RotaryPositionEmbedding2D`.
-
-Two things here are silent when wrong: the rotation splits each *half*
-at half/2 (not the full head dim at D/2), and `positions` is (row, col)
-with row driving the first half — swapping them transposes the model's
-idea of the image without changing a single shape.
-
-### Stage 3 — weight access (`src/weights.nu`)
-
-`lw_require` declares the shape a module expects and accumulates
-failures, so a mismatched checkpoint names the first thing actually
-wrong at load time. Layer counts are read off the file rather than
-hard-coded, so the `-long` and `-stage1` checkpoints load too.
-
-## Running the tests
+## Tests
 
 ```
 cd packages/lingbot-map && ./tests/lingbot_map_test.sh
 ```
 
-**It is slow.** Eleven steps, each with its own NURL build, and the last
-two run the model on real weights (35 s for the trunk, 105 s for the
-aggregator). Budget ~45 minutes on a CPU. The steps that need the
-checkpoint or the upstream package skip cleanly when those are absent,
-which is the fast path.
+Twenty steps, each building its own NURL binary. Steps that need the
+checkpoint, a python with torch, or the upstream package skip cleanly
+when those are absent — that is the fast path, and it is what CI runs.
+For the full set, set `PYTORCH_PY` (or drop a venv at the repo root as
+`.venv-oracle`) and check out the upstream package at `~/dev/lingbot-map`.
 
-Needs a python with torch (any CPU build) for the oracle; set
-`PYTORCH_PY`, or drop a venv at the repo root as `.venv-oracle`. Without
-one the oracle steps skip and the code is only smoke-run.
+Step 20, the end-to-end differential, additionally needs a **CUDA** torch —
+`.venv-oracle` is deliberately a CPU build, since correctness is all the
+other steps need. Set `LINGBOT_CUDA_PY`, or drop one at the repo root as
+`.venv-cuda`, and `LINGBOT_CUDA_DEV` if the first CUDA device is not the
+one you want.
 
-Two steps go further and import the **upstream package** from
-`~/dev/lingbot-map` (needs `torch torchvision pillow numpy scipy einops
-huggingface_hub`): the 3-D rope check, and `tests/agg_oracle.py`, which
-loads the real checkpoint and runs the actual model end to end. That
-last one is how `tests/agg_ref_courthouse0.txt` was produced — the
-aggregator's four outputs for one example frame, which is the ground
-truth the rest of stage 4 is built against. Regenerating it takes the
-4.6 GB checkpoint and a few minutes of CPU, so it is committed.
+## Under the hood
 
-## Notes for whoever picks this up
+[`docs/porting-notes.md`](docs/porting-notes.md) — how the port was
+built, every trap that was silent when it was wrong, and what the speed
+work actually turned out to be. [`docs/checkpoint.md`](docs/checkpoint.md)
+— all 1342 tensors read out of the real file.
 
-**Compute.** There is no usable GPU on the development machine, so the
-port runs on gpukit's CPU backend. That made two things necessary before
-any model code could be written, both now upstream:
-
-* the CPU backend's matmul was a per-output-element kernel — right on a
-  GPU, 24× off the machine on a CPU. It is register-tiled now (1.7 →
-  42 GFLOP/s on a 6-core i7-5930K), bit-identical either way.
-* `stdlib/ext/zip.nu` could not read zip64 and needed the whole archive
-  in memory, so a 4.6 GB checkpoint was simply unopenable.
-
-A frame is roughly 2 TFLOP, so expect ~1–2 minutes per frame on a CPU
-and design the CLI around that (stream, checkpoint, resume) rather than
-around interactive use.
-
-**Two resamplers, and the trap between them.** Preprocessing resizes
-frames with **PIL's** bicubic; `interpolate_pos_encoding` resamples
-DINOv2's 37×37 position grid to the frame's patch grid with **torch's
-`bicubic` + `antialias=True`**. Both are implemented and both are
-verified — `image_resize_bicubic` and `src/interp.nu`.
-
-The trap is the kernel constant. torch has *two* bicubic
-implementations that disagree on it:
-
-| | kernel `a` | arithmetic |
-|---|---|---|
-| PIL (preprocessing) | −0.5 | 8-bit fixed point, clamped |
-| torch `antialias=True` | **−0.5** | float, unclamped |
-| torch `antialias=False` | **−0.75** | float, border-replicated |
-
-Every reference to "torch bicubic" means the −0.75 one, and the
-antialias path — which is what this model uses — is −0.5, because it
-was written to reproduce PIL. Building the position-grid resample from
-the documented −0.75 gives a kernel that is a few percent wrong
-everywhere and right nowhere, with nothing to notice. (Recovered by
-probing torch with unit impulses and solving for `a`: −0.49997.)
-
-**Checkpoint layout.** [`docs/checkpoint.md`](docs/checkpoint.md) is the
-full inventory read out of the real 4.6 GB file: every tensor name, dtype
-and shape, 1342 of them, 1.16 B parameters, all f32. Worth reading before
-writing any of stages 3–5 — a few things are not what the Python source
-suggests:
-
-* the root is a **bare `OrderedDict`**, not `{"model": …}`, so names come
-  out of `torchpt` unprefixed (`aggregator.frame_blocks.0.attn.qkv.weight`);
-* there is **no `point_head`** — `enable_point` is off, which is
-  `GCTStream`'s default. World points come from unprojecting the depth
-  map, not from a second DPT head;
-* `aggregator.patch_embed.pos_embed` is `1×1370×1024` = 1 cls + 37×37
-  patches, which is what forces the position-grid resample.
+Built on [`torchpt`](../torchpt) (reads the `.pt` without executing its
+pickle), [`gpukit`](../gpukit) (the kernels) and
+[`image`](../image) (PNG/JPEG decode and a PIL-compatible bicubic
+resize).
