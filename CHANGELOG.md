@@ -8,6 +8,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **nurl-lang.org published the previous release's benchmark table.** Two
+  workflows fire on a `v*` tag: `web-deploy.yml` checks out the **tag** and
+  renders the landing page's table from `bench/results/latest.json` as of
+  that commit, while `bench.yml` starts at the same moment and needs tens of
+  minutes. A tag is immutable, so it can never contain numbers measured
+  after it was cut — and once `bench.yml` finally landed its results,
+  nothing redeployed the site. Routing those results through a pull request
+  (which is what changed) guaranteed they arrived after the deploy every
+  time; before that they were usually already on main, which is why this
+  looked like a regression rather than a design gap.
+
+  Fixed from both ends. `bench.yml` now re-measures and **commits on every
+  merge to main**, not only on tags and manual runs, so main is
+  continuously current and a tag carries correct numbers by construction;
+  the results files are already excluded from its own paths filter, so it
+  does not re-trigger itself, and the push replays onto the tip if another
+  merge lands during the run. And `web-deploy.yml` now takes the two
+  results files **from main** rather than from the checked-out ref, so the
+  deploy publishes the newest measured numbers however it was triggered —
+  tag push or manual — instead of depending on when the tag was cut.
+  Everything else the page is built from still comes from the checked-out
+  ref, so a tag deploy still describes that tag.
+
+  The committed table this release shipped with was measured at
+  `fe2fc2930`, two releases back.
+
 ## [0.27.0] — 2026-07-27
 
 A WebAssembly release. The toolchain could already compile NURL to
