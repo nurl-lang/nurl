@@ -10,6 +10,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`packages/wasmtime` executes predecoded function bodies.** The
+  interpreter used to walk raw bytes: every operand LEB128-decoded again on
+  every execution, and — much worse — every `block`/`loop`/`if` *scanned
+  forward through its own body* to find the matching `end` each time it
+  executed, because the byte stream stores no widths. Function bodies are
+  now decoded once, on first call, into flat fixed-width records (opcode,
+  operands, branch targets as record indices, plus the original byte offset
+  so trap backtraces still point into the module image), and the execution
+  loop reads those records with raw loads. The scans and the re-decoding
+  are gone; `__find_end`/`__find_else` no longer exist.
+
+  Measured on the wasm suite's modules, old core → new core: `json_parse`
+  31.4 s → 5.75 s (**5.5×** — recursive descent is nested blocks all the
+  way down), `fib` 15.9 s → 10.6 s, `binary_search` 18.2 s → 15.9 s, and
+  the straight-line rows (`lcg`, `collatz`) ±5 % — their loops contained
+  nothing to scan. The compiler self-hosting on the interpreter drops from
+  5m45s to **1m22s**, still byte-identical to the native compiler. All 7
+  package test suites pass unchanged, hardening included: predecode keeps
+  the same bounded-input discipline (`__skip_imm` still steps over
+  unsupported 0xfd/0xfe immediates so record alignment survives hostile
+  bytes; execution still traps on them).
+
+  What this deliberately does not fix: the remaining floor is the value
+  stack — every push/pop is a bounds-checked `Vec` call, and at 2.5 IPC
+  the loop is now latency-bound on that memory round-trip, not
+  instruction-bound. The next real step is a register-form predecode
+  (static stack-slot assignment, direct-jump branches, no runtime control
+  stack), which this record layout was shaped to grow into.
+
 - **`wasmbuilder` links with `--gc-sections` by default.** The previous
   default, `--no-gc-sections`, guarded against a real trap: NURL closures
   store function-table indices, section GC renumbers that table, and
