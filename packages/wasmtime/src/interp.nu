@@ -145,7 +145,7 @@ $ `module.nu`
 // value stack: the record copies their operands from slots onto it.vs, runs
 // the existing executor arm, and copies the result back — correctness
 // identical, speed unchanged for them, and no duplicated semantics.
-: PFunc { ( Vec i ) code ( Vec i ) aux i count i nlocals i nslots }
+: PFunc { ( Vec i ) code ( Vec i ) aux i count i nlocals i nslots i nparams ( Vec s ) pool }
 
 @ __page → i { ^ 65536 }
 
@@ -558,16 +558,37 @@ $ `module.nu`
 
 // ── linear memory ────────────────────────────────────────────────
 // Read n bytes little-endian from mem[ea]; sign-extend when `signed` and n<8.
+// One bounds check up front, then raw word access on the linear-memory
+// buffer. The old body did a bounds-checked vec_get + Option unwrap PER
+// BYTE — an i64.load was eight of each. Aligned 8- and 4-byte accesses are
+// a single machine load; everything else extracts bytes from their
+// containing words, still one raw load per byte and zero per-byte checks.
+// The base pointer is re-fetched from the Vec every call (one dereference)
+// so memory.grow can never leave a stale pointer behind.
 @ __mem_load * Interp it i ea i n i signed → i {
     ? | < ea 0 > + ea n ( vec_len [u] . it mem ) {
         ( __trap it `memory load out of bounds` ) ^ 0
     } {}
+    // The memory Vec is always a whole number of 64 KiB pages, so any
+    // in-bounds byte's containing 8-byte word is in-bounds too — word reads
+    // below can never run past the buffer.
+    : s base # s ( vec_data [u] . it mem )
+    : i lo & ea 7
     : ~ i v 0
-    : ~ i k 0
-    ~ < k n {
-        : i byte ?? ( vec_get [u] . it mem + ea k ) { T x → # i x F → 0 }
-        = v | v << byte * 8 k
-        = k + k 1
+    ? <= + lo n 8 {
+        // the access sits inside one word — every naturally-aligned load
+        // (i64 at 8, i32 at 0/4, halves and bytes anywhere) lands here
+        : i w ( nurl_peek base >> ea 3 )
+        : i mask ? == n 8 -1 - << 1 * 8 n 1
+        = v & ( __lshr64 w * lo 8 ) mask
+    } {
+        : ~ i k 0
+        ~ < k n {
+            : i off + ea k
+            : i w ( nurl_peek base >> off 3 )
+            = v | v << & ( __lshr64 w * & off 7 8 ) 255 * 8 k
+            = k + k 1
+        }
     }
     ? & == signed 1 < n 8 {
         : i bits * 8 n
@@ -581,9 +602,26 @@ $ `module.nu`
     ? | < ea 0 > + ea n ( vec_len [u] . it mem ) {
         ( __trap it `memory store out of bounds` ) ^ v
     } {}
+    : s base # s ( vec_data [u] . it mem )
+    : i lo & ea 7
+    ? <= + lo n 8 {
+        // within one word: read-modify-write it once
+        : i wi >> ea 3
+        : i mask ? == n 8 -1 - << 1 * 8 n 1
+        : i sh * lo 8
+        : i w ( nurl_peek base wi )
+        : i cleared & w ^^ << mask sh -1
+        ( nurl_poke base wi | cleared << & val mask sh )
+        ^ v
+    } {}
     : ~ i k 0
     ~ < k n {
-        ( vec_set [u] . it mem + ea k # u & >> val * 8 k 255 )
+        : i off + ea k
+        : i wi >> off 3
+        : i sh * & off 7 8
+        : i w ( nurl_peek base wi )
+        : i cleared & w ^^ << 255 sh -1
+        ( nurl_poke base wi | cleared << & ( __lshr64 val * 8 k ) 255 sh )
         = k + k 1
     }
 }
@@ -661,6 +699,34 @@ $ `module.nu`
     : s pins ( __pfunc_for it m fidx )
     ? == # i pins 0 { ( __trap it `bad function index` ) ^ # s 0 } {}
     : *PFunc pfc # *PFunc pins
+    // Reuse a frame from this function's pool when one is free: a call then
+    // costs zeroing the declared locals instead of allocating and zero-
+    // filling the whole slot array. Parameters are overwritten by the
+    // caller and stack slots are written before they are read (register
+    // form guarantees it), so only [nparams, nlocals) needs clearing —
+    // wasm requires declared locals to read as zero.
+    : i pooln ( vec_len [s] . pfc pool )
+    ? > pooln 0 {
+        : s rf ?? ( vec_get [s] . pfc pool - pooln 1 ) { T x → x F → # s 0 }
+        ( vec_pop [s] . pfc pool )
+        ? != # i rf 0 {
+            : *Frame rfr # *Frame rf
+            : s rb # s ( vec_data [i] . rfr regs )
+            : ~ i zk . pfc nparams
+            ~ < zk . pfc nlocals { ( nurl_poke rb zk 0 ) = zk + zk 1 }
+            = . rfr pos 0
+            = . rfr ret_dst ret_dst
+            ? < ret_dst 0 {
+                : s tp0 ?? ( vec_get [s] . m types . f typeidx ) { T x → x F → # s 0 }
+                ? != # i tp0 0 {
+                    : *FuncType ft0 # *FuncType tp0
+                    : ~ i pk0 ( vec_len [i] . ft0 params )
+                    ~ > pk0 0 { = pk0 - pk0 1 ( nurl_poke rb pk0 ( __pop it ) ) }
+                } {}
+            } {}
+            ^ rf
+        } {}
+    } {}
     : ( Vec i ) regs ( vec_new [i] )
     : ~ i k 0
     ~ < k . pfc nslots { ( vec_push [i] regs 0 ) = k + k 1 }
@@ -691,9 +757,30 @@ $ `module.nu`
     ( nurl_free # s fr )
 }
 
+// Return a frame to its function's pool instead of freeing it. The pool is
+// unbounded by design: its high-water mark is the deepest simultaneous
+// recursion into that one function, which max_depth already caps.
+@ __frame_recycle s pp → v {
+    ? == # i pp 0 { ^ v } {}
+    : *Frame fr # *Frame pp
+    : *PFunc pf # *PFunc . fr pins
+    ( vec_push [s] . pf pool pp )
+}
+
 @ __pf_free s pp → v {
     ? == # i pp 0 { ^ v } {}
     : *PFunc pf # *PFunc pp
+    : i pn ( vec_len [s] . pf pool )
+    : ~ i pk 0
+    ~ < pk pn {
+        ?? ( vec_get [s] . pf pool pk ) { T fp → ? != # i fp 0 {
+                : *Frame fr # *Frame fp
+                ( vec_free [i] . fr regs )
+                ( nurl_free fp )
+            } {} F → {} }
+        = pk + pk 1
+    }
+    ( vec_free [s] . pf pool )
     ( vec_free [i] . pf code )
     ( vec_free [i] . pf aux )
     ( nurl_free # s pf )
@@ -1040,6 +1127,8 @@ $ `module.nu`
     ( wc_free c )
     = . pf count / ( vec_len [i] . pf code ) 6
     = . pf nslots + L + maxh 4
+    = . pf nparams nparams
+    = . pf pool ( vec_new [s] )
     ^ # s pf
 }
 // Get-or-build the PFunc for defined function `fidx`.
@@ -1170,7 +1259,7 @@ $ `module.nu`
                     ~ < rk nres { ( nurl_poke crb + rdst rk ( nurl_peek rbase + lloc rk ) ) = rk + rk 1 }
                 } {}
             }
-            ( __frame_free tp )
+            ( __frame_recycle tp )
             = reload 1
         } {
             ? == . it fuel 0 { ( __trap it `fuel exhausted` ) } {
@@ -2628,20 +2717,19 @@ $ `module.nu`
     ? != 0 & lo << 1 - nbits 1 { ^ - lo << 1 nbits } { ^ lo }
 }
 
+// Callers bounds-check dst/src/n before calling (memory.copy / memory.fill
+// / memory.init do it up front, spec-style); these just move the bytes.
+// nurl_memmove is the overlap-safe one — memory.copy allows aliasing.
 @ __mem_copy * Interp it i dst i src i n → v {
     ? <= n 0 { ^ v } {}
-    ? > dst src {
-        : ~ i k - n 1
-        ~ >= k 0 { ( __mem_store it + dst k 1 ( __mem_load it + src k 1 0 ) ) = k - k 1 }
-    } {
-        : ~ i k 0
-        ~ < k n { ( __mem_store it + dst k 1 ( __mem_load it + src k 1 0 ) ) = k + k 1 }
-    }
+    : s base # s ( vec_data [u] . it mem )
+    ( nurl_memmove # s + # i base dst # s + # i base src n )
 }
 
 @ __mem_fill * Interp it i dst i val i n → v {
-    : ~ i k 0
-    ~ < k n { ( __mem_store it + dst k 1 val ) = k + k 1 }
+    ? <= n 0 { ^ v } {}
+    : s base # s ( vec_data [u] . it mem )
+    ( nurl_memset # s + # i base dst & val 255 n )
 }
 
 // The *DataSeg / *ElemSeg at segment index k (#s 0 if out of range).
