@@ -25,7 +25,7 @@ $ `build.nu`
 
 // Keep in step with nurl.toml's [package] version — `--version` is what a
 // bug report quotes, so a stale literal here misattributes the bug.
-@ __wbc_version → s { ^ `wasmbuilder 0.1.3` }
+@ __wbc_version → s { ^ `wasmbuilder 0.1.4` }
 
 // --doctor: print every resolution step so a broken setup explains itself.
 @ __wbc_doctor → i {
