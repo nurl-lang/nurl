@@ -33,7 +33,16 @@ wasmtime run --invoke <export> <module.wasm> [args…]
   clean decode errors. Unknown sections are skipped.
 - **Interpreter** (`src/interp.nu`) — a stack machine over 64-bit integer
   cells, driven on an **explicit frame stack** (guest recursion never grows
-  the host's native stack; depth-limited, optionally fuel-metered):
+  the host's native stack; depth-limited, optionally fuel-metered).
+  Function bodies are **predecoded on first call** into flat fixed-width
+  records — operands LEB128-decoded once, `block`/`loop`/`if` end and else
+  positions resolved to record indices by a patch stack — so executing a
+  loop body never re-decodes an operand and never scans for a matching
+  `end` (the old per-execution scan made deeply-nested code quadratic-ish:
+  predecoding alone took the JSON-parse benchmark from 31 s to 5.7 s and a
+  full compiler self-host on this runtime from 5m45s to 1m22s). Each
+  record keeps its original byte offset, so trap backtraces still point
+  into the module image:
   - structured control flow: `block`, `loop`, `if`/`else`, `br`, `br_if`,
     `br_table`, `return`, `end` — **multi-value** block types included
     (s33-encoded type-section indices; branches carry a loop's params / a

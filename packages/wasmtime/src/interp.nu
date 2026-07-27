@@ -116,17 +116,37 @@ $ `module.nu`
     i max_depth  // frame-stack depth limit (trap when exceeded)
     i fuel  // remaining instruction budget (-1 = unlimited)
     b gpu_ok  // env/CUDA host imports enabled (opt-in; default off)
+    ( Vec s ) pfuncs  // *PFunc per defined function, predecoded lazily (#s 0 until first call)
 }
 
 // One activation record on the explicit call stack: the function, its locals,
-// its control stack, and the instruction cursor [pos, end).
-: Frame { i fidx ( Vec i ) locals ( Vec s ) ctrl i pos i end i code_start }
+// its control stack, and the instruction cursor [pos, end) — pos/end are
+// *record indices* into the function's predecoded instruction array, not byte
+// positions; `pins` borrows the *PFunc owned by it.pfuncs.
+: Frame { i fidx ( Vec i ) locals ( Vec s ) ctrl i pos i end i code_start s pins }
+
+// A predecoded function body: the byte stream decoded ONCE into fixed-width
+// records so the execution loop never touches LEB128 or scans for a matching
+// `end` again. Layout: 5 x i64 per instruction —
+//   [0] opcode   (0xfc/0xfd/0xfe prefixed ops keep the prefix byte as opcode)
+//   [1] A        first operand  (local/global idx, const bits, end-target, …)
+//   [2] B        second operand (else-target, memarg offset, params, …)
+//   [3] C        third operand  (results, packed if-counts, …)
+//   [4] BYTE     the instruction's byte offset in the module image, for
+//                trap backtraces — the one thing byte positions were
+//                still good for
+// Branch targets are record indices, resolved at predecode by a patch
+// stack (open block/loop/if records get their end/else slots filled in
+// when the matching `else`/`end` arrives). `aux` holds br_table label
+// vectors: [target0 … targetN default], record A = start index, B = N.
+: PFunc { ( Vec i ) code ( Vec i ) aux i count }
 
 @ __page → i { ^ 65536 }
 
 @ interp_new * Module m → *Interp {
     : *Interp it # *Interp ( nurl_alloc Z Interp )
     = . it mod # s m
+    = . it pfuncs ( vec_new [s] )
     = . it vs ( vec_new [i] )
     = . it mem ( vec_new [u] )
     = . it mem_pages 0
@@ -244,6 +264,10 @@ $ `module.nu`
     ~ < fi fn { ?? ( vec_get [s] . it fds fi ) { T pp → ( __freefd pp ) F → {} } = fi + fi 1 }
     ( vec_free [s] . it fds )
     ( vec_free [u] . it trapmsg )
+    : i pn ( vec_len [s] . it pfuncs )
+    : ~ i pi 0
+    ~ < pi pn { ?? ( vec_get [s] . it pfuncs pi ) { T pp → ( __pf_free pp ) F → {} } = pi + pi 1 }
+    ( vec_free [s] . it pfuncs )
     ( nurl_free # s it )
 }
 
@@ -368,48 +392,6 @@ $ `module.nu`
     } {}
     // sign-extension ops (0xc0..0xc4): no immediates (fall through)
     // everything else: no immediates
-}
-
-// From a cursor positioned just after a block/loop/if's block-type, return the
-// byte position of its matching `end` (and optionally its `else`). Uses a
-// throwaway cursor so the caller's position is untouched.
-@ __find_end ( Vec u ) buf i from i limit → i {
-    : *Wc c ( wc_new buf )
-    = . c pos from
-    = . c len limit
-    : ~ i depth 0
-    : ~ i result limit
-    : ~ b done F
-    ~ & ! done < . c pos limit {
-        : i op ( wc_u8 c )
-        ? | == op 2 | == op 3 == op 4 { = depth + depth 1 ( __skip_imm c op ) } {
-            ? == op 11 {
-                ? == depth 0 { = result - . c pos 1 = done T } { = depth - depth 1 }
-            } {
-                ( __skip_imm c op )
-            } }
-    }
-    ( wc_free c )
-    ^ result
-}
-
-@ __find_else ( Vec u ) buf i from i limit → i {
-    : *Wc c ( wc_new buf )
-    = . c pos from
-    = . c len limit
-    : ~ i depth 0
-    : ~ i result -1
-    : ~ b done F
-    ~ & ! done < . c pos limit {
-        : i op ( wc_u8 c )
-        ? | == op 2 | == op 3 == op 4 { = depth + depth 1 ( __skip_imm c op ) } {
-            ? == op 11 { ? == depth 0 { = done T } { = depth - depth 1 } } {
-                ? & == op 5 == depth 0 { = result - . c pos 1 = done T } {
-                    ( __skip_imm c op )
-                } } }
-    }
-    ( wc_free c )
-    ^ result
 }
 
 // Block types are a signed LEB (s33): -64 (0x40) = void, other negatives are a
@@ -618,13 +600,12 @@ $ `module.nu`
 }
 
 // Execute a memory instruction (0x28..0x40). memarg = align + offset ulebs.
-@ __exec_mem * Interp it * Wc c i op → v {
-    ? == op 63 { ( wc_u8 c ) ( __push it . it mem_pages ) ^ v } {}  // memory.size
-    ? == op 64 { ( wc_u8 c ) : i d ( __u32 ( __pop it ) ) ( __push it ( __mem_grow it d ) ) ^ v } {}  // memory.grow
-    : i align ( wc_uleb c )
-    // wasm32 memarg offset is a u32; mask it so a huge offset cannot make the
-    // effective address wrap negative and slip past the load/store bounds check.
-    : i off & ( wc_uleb c ) 4294967295
+// `off` arrives predecoded (and already u32-masked, so a huge offset cannot
+// make the effective address wrap negative and slip past the bounds check);
+// the alignment hint was dropped at predecode — it carried no semantics here.
+@ __exec_mem * Interp it i off i op → v {
+    ? == op 63 { ( __push it . it mem_pages ) ^ v } {}  // memory.size
+    ? == op 64 { : i d ( __u32 ( __pop it ) ) ( __push it ( __mem_grow it d ) ) ^ v } {}  // memory.grow
     ? & >= op 54 <= op 62 {  // stores: pop value, then addr
         : i val ( __pop it )
         : i ea + & ( __pop it ) 4294967295 off
@@ -737,13 +718,17 @@ $ `module.nu`
     ~ < k + nparams nlocals_decl { ( vec_push [i] locals 0 ) = k + k 1 }
     : ~ i p nparams
     ~ > p 0 { = p - p 1 ( vec_set [i] locals p ( __pop it ) ) }
+    : s pins ( __pfunc_for it m fidx )
+    ? == # i pins 0 { ( __trap it `bad function index` ) ( vec_free [i] locals ) ^ # s 0 } {}
+    : *PFunc pfc # *PFunc pins
     : *Frame fr # *Frame ( nurl_alloc Z Frame )
     = . fr fidx fidx
     = . fr locals locals
     = . fr ctrl ( vec_new [s] )
-    = . fr pos . f code_start
-    = . fr end . f code_end
+    = . fr pos 0
+    = . fr end . pfc count
     = . fr code_start . f code_start
+    = . fr pins pins
     ^ # s fr
 }
 
@@ -756,6 +741,149 @@ $ `module.nu`
     ( vec_free [s] . fr ctrl )
     ( vec_free [i] . fr locals )
     ( nurl_free # s fr )
+}
+
+// ── predecode ────────────────────────────────────────────────────
+// Decode a function body ONCE into PFunc records (layout at the struct).
+// Everything position-like in a record is an index into the record array,
+// which is what lets the executor drop the byte cursor: `loop` no longer
+// re-scans its body for the matching `end` on entry, `if` doesn't run two
+// scans per execution, and no operand is LEB-decoded twice.
+
+@ __pf_free s pp → v {
+    ? == # i pp 0 { ^ v } {}
+    : *PFunc pf # *PFunc pp
+    ( vec_free [i] . pf code )
+    ( vec_free [i] . pf aux )
+    ( nurl_free # s pf )
+}
+
+// Emit one 5-slot record; returns its index.
+@ __pf_emit ( Vec i ) code i op i a i b i cc i byte → i {
+    : i idx / ( vec_len [i] code ) 5
+    ( vec_push [i] code op ) ( vec_push [i] code a ) ( vec_push [i] code b )
+    ( vec_push [i] code cc ) ( vec_push [i] code byte )
+    ^ idx
+}
+
+// The patch stack: one i per open block/loop/if — the record index, with
+// bit 62 set when the frame is an `if` (so `else` knows whom to patch).
+@ __predecode * Module m i code_start i code_end → s {
+    : *PFunc pf # *PFunc ( nurl_alloc Z PFunc )
+    = . pf code ( vec_new [i] )
+    = . pf aux ( vec_new [i] )
+    : ( Vec i ) open ( vec_new [i] )
+    : *Wc c ( wc_new . m code )
+    = . c pos code_start
+    = . c len code_end
+    ~ < . c pos code_end {
+        : i byte . c pos
+        : i op ( wc_u8 c )
+        ? | == op 2 == op 3 {  // block / loop: A=end (patched), B=params, C=results
+            : i bt ( wc_sleb c )
+            : i rec ( __pf_emit . pf code op -1 ( __bt_params m bt ) ( __bt_results m bt ) byte )
+            ( vec_push [i] open rec )
+        } {
+            ? == op 4 {  // if: A=end (patched), B=else (-1), C=params<<16|results
+                : i bt ( wc_sleb c )
+                : i packed | << ( __bt_params m bt ) 16 & ( __bt_results m bt ) 65535
+                : i rec ( __pf_emit . pf code 4 -1 -1 packed byte )
+                ( vec_push [i] open | rec 4611686018427387904 )
+            } {
+                ? == op 5 {  // else: patch the open if's B; A here = its end (patched too)
+                    : i rec ( __pf_emit . pf code 5 -1 0 0 byte )
+                    : i n ( vec_len [i] open )
+                    ? > n 0 {
+                        : i top ?? ( vec_get [i] open - n 1 ) { T x → x F → 0 }
+                        : i orec & top 4611686018427387903
+                        ( vec_set [i] . pf code + * orec 5 2 rec )
+                    } {}
+                } {
+                    ? == op 11 {  // end: patch the open frame's A (and an else's A) to here
+                        : i rec ( __pf_emit . pf code 11 0 0 0 byte )
+                        : i n ( vec_len [i] open )
+                        ? > n 0 {
+                            : i top ?? ( vec_get [i] open - n 1 ) { T x → x F → 0 }
+                            ( vec_pop [i] open )
+                            : i orec & top 4611686018427387903
+                            ( vec_set [i] . pf code + * orec 5 1 rec )
+                            // an if with an else: the else record jumps to this end
+                            ? != 0 & top 4611686018427387904 {
+                                : i erec ?? ( vec_get [i] . pf code + * orec 5 2 ) { T x → x F → -1 }
+                                ? >= erec 0 { ( vec_set [i] . pf code + * erec 5 1 rec ) } {}
+                            } {}
+                        } {}
+                    } {
+                        ? | == op 12 == op 13 {  // br / br_if: A=label depth
+                            ( __pf_emit . pf code op ( wc_uleb c ) 0 0 byte )
+                        } {
+                            ? == op 14 {  // br_table: A=aux start, B=label count (default at aux[A+B])
+                                : i astart ( vec_len [i] . pf aux )
+                                : i n ( wc_uleb c )
+                                : ~ i k 0
+                                ~ <= k n { ( vec_push [i] . pf aux ( wc_uleb c ) ) = k + k 1 }
+                                ( __pf_emit . pf code 14 astart n 0 byte )
+                            } {
+                                ? == op 16 { ( __pf_emit . pf code 16 ( wc_uleb c ) 0 0 byte ) } {  // call: A=fidx
+                                    ? == op 17 {  // call_indirect: A=typeidx (single table; tableidx ignored)
+                                        : i ti ( wc_uleb c ) ( wc_uleb c )
+                                        ( __pf_emit . pf code 17 ti 0 0 byte )
+                                    } {
+                                        ? == op 28 {  // select t: value semantics identical to bare select
+                                            : i tc ( wc_uleb c ) ( wc_skip c tc )
+                                            ( __pf_emit . pf code 27 0 0 0 byte )
+                                        } {
+                                            ? == op 208 { ( wc_u8 c ) ( __pf_emit . pf code 208 0 0 0 byte ) } {  // ref.null
+                                                ? | == op 32 | == op 33 | == op 34 | == op 35 | == op 36 | == op 37 | == op 38 == op 210 {
+                                                    // local/global/table get-set/tee / ref.func: A=index
+                                                    ( __pf_emit . pf code op ( wc_uleb c ) 0 0 byte )
+                                                } {
+                                                    ? | == op 65 == op 66 { ( __pf_emit . pf code op ( wc_sleb c ) 0 0 byte ) } {  // i32/i64.const: A=value
+                                                        ? == op 67 { ( __pf_emit . pf code 67 ( __read_le c 4 ) 0 0 byte ) } {  // f32.const: A=raw bits
+                                                            ? == op 68 { ( __pf_emit . pf code 68 ( __read_le c 8 ) 0 0 byte ) } {  // f64.const: A=raw bits
+                                                                ? & >= op 40 <= op 62 {  // loads/stores: A=offset (u32-masked; align dropped)
+                                                                    ( wc_uleb c )
+                                                                    ( __pf_emit . pf code op & ( wc_uleb c ) 4294967295 0 0 byte )
+                                                                } {
+                                                                    ? | == op 63 == op 64 { ( wc_u8 c ) ( __pf_emit . pf code op 0 0 0 byte ) } {  // memory.size/grow
+                                                                        ? == op 252 {  // bulk memory / table ops / trunc_sat: A=sub, B=first idx operand
+                                                                            : i sub ( wc_uleb c )
+                                                                            : ~ i bop 0
+                                                                            ? == sub 8 { = bop ( wc_uleb c ) ( wc_u8 c ) } {  // memory.init: dataidx
+                                                                                ? == sub 9 { = bop ( wc_uleb c ) } {  // data.drop
+                                                                                    ? == sub 10 { ( wc_u8 c ) ( wc_u8 c ) } {  // memory.copy
+                                                                                        ? == sub 11 { ( wc_u8 c ) } {  // memory.fill
+                                                                                            ? == sub 12 { = bop ( wc_uleb c ) ( wc_uleb c ) } {  // table.init: elemidx
+                                                                                                ? == sub 13 { = bop ( wc_uleb c ) } {  // elem.drop
+                                                                                                    ? == sub 14 { ( wc_uleb c ) ( wc_uleb c ) } {  // table.copy
+                                                                                                        ? | | == sub 15 == sub 16 == sub 17 { ( wc_uleb c ) } {} } } } } } } }  // table.grow/size/fill
+                                                                            ( __pf_emit . pf code 252 sub bop 0 byte )
+                                                                        } {
+                                                                            // no-immediate ops (numeric, parametric, sign-ext, ref.is_null, …)
+                                                                            // and the unsupported 0xfd/0xfe prefixes: skip their immediates so
+                                                                            // record alignment survives, execute-time still traps on them.
+                                                                            ? | == op 253 == op 254 { ( __skip_imm c op ) } {}
+                                                                            ( __pf_emit . pf code op 0 0 0 byte )
+                                                                        } } } } } } } } } } } } } } } } }
+    }
+    ( vec_free [i] open )
+    ( wc_free c )
+    = . pf count / ( vec_len [i] . pf code ) 5
+    ^ # s pf
+}
+
+// Get-or-build the PFunc for defined function `fidx`.
+@ __pfunc_for * Interp it * Module m i fidx → s {
+    : i di - fidx . m num_import_funcs
+    ~ <= ( vec_len [s] . it pfuncs ) di { ( vec_push [s] . it pfuncs # s 0 ) }
+    : s have ?? ( vec_get [s] . it pfuncs di ) { T x → x F → # s 0 }
+    ? != # i have 0 { ^ have } {}
+    : s fp ?? ( vec_get [s] . m funcs di ) { T x → x F → # s 0 }
+    ? == # i fp 0 { ^ # s 0 } {}
+    : *WFunc f # *WFunc fp
+    : s built ( __predecode m . f code_start . f code_end )
+    ( vec_set [s] . it pfuncs di built )
+    ^ built
 }
 
 // On trap: append a wasm backtrace (innermost first) to the trap message,
@@ -776,7 +904,16 @@ $ `module.nu`
             ( __msg_push_str msg ` (func ` )
             ( __msg_push_int msg . fr fidx )
             ( __msg_push_str msg `, +` )
-            ( __msg_push_int msg - . fr pos . fr code_start )
+            // fr.pos is a record index; the record's BYTE slot maps it back
+            // to the module image so the offset stays meaningful against a
+            // wasm-objdump of the file. pos can sit one past the last record
+            // (fell off the end) — clamp before reading.
+            : *PFunc bpf # *PFunc . fr pins
+            : ~ i bpos . fr pos
+            ? >= bpos . bpf count { = bpos - . bpf count 1 } {}
+            : ~ i boff 0
+            ? >= bpos 0 { = boff - ?? ( vec_get [i] . bpf code + * bpos 5 4 ) { T x → x F → . fr code_start } . fr code_start } {}
+            ( __msg_push_int msg boff )
             ( __msg_push_str msg `)` )
         } {}
         = shown + shown 1
@@ -831,11 +968,16 @@ $ `module.nu`
     // something else will read it: before a call suspends this frame, and
     // before a trap prints a backtrace off it.
     : ~ s tp # s 0
+    : ~ s pbase # s 0
+    : ~ s abase # s 0
     : ~ i reload 1
     ~ & & > ( vec_len [s] frames ) 0 ! . it exited ! . it trap {
         ? != reload 0 {
             = tp ?? ( vec_get [s] frames - ( vec_len [s] frames ) 1 ) { T x → x F → # s 0 }
             : *Frame nfr # *Frame tp
+            : *PFunc npf # *PFunc . nfr pins
+            = pbase # s ( vec_data [i] . npf code )
+            = abase # s ( vec_data [i] . npf aux )
             = . c pos . nfr pos
             = . c len . nfr end
             = reload 0
@@ -846,8 +988,17 @@ $ `module.nu`
         } {
             ? == . it fuel 0 { ( __trap it `fuel exhausted` ) } {
                 ? > . it fuel 0 { = . it fuel - . it fuel 1 } {}
-                : i op ( wc_u8 c )
-                ( __exec_op it m c . fr ctrl . fr locals op )
+                // One record: five raw word reads off the frozen predecoded
+                // array — no bounds check, no Option, no LEB. The record
+                // array cannot move (nothing appends after predecode), which
+                // is what makes the borrowed vec_data pointer sound.
+                : i rbase * . c pos 5
+                : i op ( nurl_peek pbase rbase )
+                : i ra ( nurl_peek pbase + rbase 1 )
+                : i rb ( nurl_peek pbase + rbase 2 )
+                : i rc ( nurl_peek pbase + rbase 3 )
+                = . c pos + . c pos 1
+                ( __pexec_op it m c abase . fr ctrl . fr locals op ra rb rc )
                 ? == op 15 { ( __frame_free tp ) ( vec_pop [s] frames ) = reload 1 } {  // return
                     ? >= . it pending_call 0 {  // call / call_indirect
                         : i callee . it pending_call
@@ -886,29 +1037,27 @@ $ `module.nu`
     ( wc_free c )
 }
 
-// Execute one instruction (opcode already read into `op`). Mutates the value
-// stack, locals, control stack and cursor.
-@ __exec_op * Interp it * Module m * Wc c ( Vec s ) ctrl ( Vec i ) locals i op → v {
+// Execute one predecoded record. `op` plus operands ra/rb/rc were read off
+// the PFunc array by the driver; `c` is the program counter in record units
+// (pos = next record, len = record count); `abase` is the raw base of the
+// PFunc aux array (br_table label vectors). Mutates the value stack, locals,
+// control stack and pc.
+@ __pexec_op * Interp it * Module m * Wc c s abase ( Vec s ) ctrl ( Vec i ) locals i op i ra i rb i rc → v {
     // ── control flow ──
     ? == op 0 { ( __trap it `unreachable` ) ^ v } {}  // unreachable
     ? == op 1 { ^ v } {}  // nop
-    ? | == op 2 == op 3 {  // block / loop
-        : i bt ( wc_sleb c )
-        : i endp ( __find_end . m code . c pos . c len )
+    ? | == op 2 == op 3 {  // block / loop: ra=end, rb=params, rc=results
         // control-frame height = the stack base under the block's parameters;
         // a branch carries a loop's params back to the top, a block's results out.
-        : i height - ( __vsh it ) ( __bt_params m bt )
-        ? == op 3 { ( __ctrl_push ctrl 1 . c pos endp height ( __bt_params m bt ) ) }
-        { ( __ctrl_push ctrl 0 0 endp height ( __bt_results m bt ) ) }
+        : i height - ( __vsh it ) rb
+        ? == op 3 { ( __ctrl_push ctrl 1 . c pos ra height rb ) }
+        { ( __ctrl_push ctrl 0 0 ra height rc ) }
         ^ v
     } {}
-    ? == op 4 {  // if
-        : i bt ( wc_sleb c )
-        : i endp ( __find_end . m code . c pos . c len )
-        : i elsep ( __find_else . m code . c pos . c len )
+    ? == op 4 {  // if: ra=end, rb=else (-1 none), rc=params<<16|results
         : i cond ( __pop it )
-        ( __ctrl_push ctrl 0 0 endp - ( __vsh it ) ( __bt_params m bt ) ( __bt_results m bt ) )
-        ? == cond 0 { = . c pos ? >= elsep 0 + elsep 1 endp } {}
+        ( __ctrl_push ctrl 0 0 ra - ( __vsh it ) >> rc 16 & rc 65535 )
+        ? == cond 0 { = . c pos ? >= rb 0 + rb 1 ra } {}
         ^ v
     } {}
     ? == op 5 {  // else: reached at end of the then-arm → skip to end
@@ -917,23 +1066,17 @@ $ `module.nu`
         ^ v
     } {}
     ? == op 11 { ( __ctrl_pop ctrl ) ^ v } {}  // end
-    ? == op 12 { : i lbl ( wc_uleb c ) ( __do_branch it ctrl c lbl ) ^ v } {}  // br
-    ? == op 13 { : i lbl ( wc_uleb c ) : i cond ( __pop it ) ? != cond 0 { ( __do_branch it ctrl c lbl ) } {} ^ v } {}  // br_if
-    ? == op 14 {  // br_table: read n labels + default, branch to labels[idx] or default
-        : i n ( wc_uleb c )
+    ? == op 12 { ( __do_branch it ctrl c ra ) ^ v } {}  // br
+    ? == op 13 { : i cond ( __pop it ) ? != cond 0 { ( __do_branch it ctrl c ra ) } {} ^ v } {}  // br_if
+    ? == op 14 {  // br_table: ra=aux start, rb=label count, default at aux[ra+rb]
         : i ui ( __u32 ( __pop it ) )
-        : i pick ? < ui n ui n
-        : ~ i chosen 0
-        : ~ i k 0
-        ~ <= k n { : i t ( wc_uleb c ) ? == k pick { = chosen t } {} = k + k 1 }
-        ( __do_branch it ctrl c chosen )
+        : i pick ? < ui rb ui rb
+        ( __do_branch it ctrl c ( nurl_peek abase + ra pick ) )
         ^ v
     } {}
     ? == op 15 { ^ v } {}  // return (handled by the driver)
-    ? == op 16 { : i fi ( wc_uleb c ) = . it pending_call fi ^ v } {}  // call → driver pushes the frame
-    ? == op 17 {  // call_indirect typeidx tableidx
-        : i typeidx ( wc_uleb c )
-        : i tblidx ( wc_uleb c )
+    ? == op 16 { = . it pending_call ra ^ v } {}  // call → driver pushes the frame
+    ? == op 17 {  // call_indirect: ra=typeidx (single table)
         : i ei & ( __pop it ) 4294967295
         ? | < ei 0 >= ei ( vec_len [i] . it table ) {
             ( __trap it `call_indirect: index out of range` ) ^ v
@@ -942,7 +1085,7 @@ $ `module.nu`
         ? < fi 0 { ( __trap it `call_indirect: null table element` ) ^ v } {}
         // runtime type check: the callee's type must structurally equal the
         // instruction's expected type
-        : s want ?? ( vec_get [s] . m types typeidx ) { T x → x F → # s 0 }
+        : s want ?? ( vec_get [s] . m types ra ) { T x → x F → # s 0 }
         : s have ( module_func_type m fi )
         ? | == # i want 0 == # i have 0 {
             ( __trap it `call_indirect: bad type index` ) ^ v } {}
@@ -952,50 +1095,43 @@ $ `module.nu`
         ^ v
     } {}
     ? == op 26 { ( __pop it ) ^ v } {}  // drop
-    ? == op 27 { : i cc ( __pop it ) : i b2 ( __pop it ) : i a2 ( __pop it ) ( __push it ? != cc 0 a2 b2 ) ^ v } {}  // select
-    ? == op 28 {  // select t (typed; reference types) — same semantics
-        : i tc ( wc_uleb c ) ( wc_skip c tc )
-        : i cc ( __pop it ) : i b2 ( __pop it ) : i a2 ( __pop it ) ( __push it ? != cc 0 a2 b2 ) ^ v } {}
+    ? == op 27 { : i cc ( __pop it ) : i b2 ( __pop it ) : i a2 ( __pop it ) ( __push it ? != cc 0 a2 b2 ) ^ v } {}  // select (typed form folded in at predecode)
     ? == op 37 {  // table.get
-        ( wc_uleb c )
         : i ei ( __u32 ( __pop it ) )
         ? >= ei ( vec_len [i] . it table ) { ( __trap it `out of bounds table access` ) ^ v } {}
         ( __push it ?? ( vec_get [i] . it table ei ) { T x → x F → -1 } ) ^ v } {}
     ? == op 38 {  // table.set
-        ( wc_uleb c )
         : i val ( __pop it )
         : i ei ( __u32 ( __pop it ) )
         ? >= ei ( vec_len [i] . it table ) { ( __trap it `out of bounds table access` ) ^ v } {}
         ( vec_set [i] . it table ei val ) ^ v } {}
-    ? == op 208 { ( wc_u8 c ) ( __push it -1 ) ^ v } {}  // ref.null ht → −1
+    ? == op 208 { ( __push it -1 ) ^ v } {}  // ref.null ht → −1
     ? == op 209 { ( __push it ? == ( __pop it ) -1 1 0 ) ^ v } {}  // ref.is_null
-    ? == op 210 { : i rfi ( wc_uleb c ) ( __push it rfi ) ^ v } {}  // ref.func (funcref = index)
+    ? == op 210 { ( __push it ra ) ^ v } {}  // ref.func (funcref = index)
     // ── locals ──
-    ? == op 32 { : i li ( wc_uleb c ) ( __push it ?? ( vec_get [i] locals li ) { T x → x F → 0 } ) ^ v } {}
-    ? == op 33 { : i li ( wc_uleb c ) ( vec_set [i] locals li ( __pop it ) ) ^ v } {}
-    ? == op 34 { : i li ( wc_uleb c ) : i tv ?? ( vec_get [i] . it vs - ( vec_len [i] . it vs ) 1 ) { T x → x F → 0 } ( vec_set [i] locals li tv ) ^ v } {}  // local.tee
+    ? == op 32 { ( __push it ?? ( vec_get [i] locals ra ) { T x → x F → 0 } ) ^ v } {}
+    ? == op 33 { ( vec_set [i] locals ra ( __pop it ) ) ^ v } {}
+    ? == op 34 { : i tv ?? ( vec_get [i] . it vs - ( vec_len [i] . it vs ) 1 ) { T x → x F → 0 } ( vec_set [i] locals ra tv ) ^ v } {}  // local.tee
     // ── globals ──
-    ? == op 35 { : i gi ( wc_uleb c ) ( __push it ?? ( vec_get [i] . it globals gi ) { T x → x F → 0 } ) ^ v } {}  // global.get
-    ? == op 36 { : i gi ( wc_uleb c ) ( vec_set [i] . it globals gi ( __pop it ) ) ^ v } {}  // global.set
-    // ── constants ──
-    ? == op 65 { ( __push it ( __w32 ( wc_sleb c ) ) ) ^ v } {}  // i32.const
-    ? == op 66 { ( __push it ( wc_sleb c ) ) ^ v } {}  // i64.const
-    ? == op 67 { ( __push it ( __read_le c 4 ) ) ^ v } {}  // f32.const (raw 4-byte pattern)
-    ? == op 68 { ( __push it ( __read_le c 8 ) ) ^ v } {}  // f64.const (raw 8-byte pattern)
+    ? == op 35 { ( __push it ?? ( vec_get [i] . it globals ra ) { T x → x F → 0 } ) ^ v } {}  // global.get
+    ? == op 36 { ( vec_set [i] . it globals ra ( __pop it ) ) ^ v } {}  // global.set
+    // ── constants (f32/f64 arrive as their raw bit patterns) ──
+    ? == op 65 { ( __push it ( __w32 ra ) ) ^ v } {}  // i32.const
+    ? | == op 66 | == op 67 == op 68 { ( __push it ra ) ^ v } {}  // i64/f32/f64.const
     // ── linear memory (loads/stores, size/grow) ──
-    ? & >= op 40 <= op 64 { ( __exec_mem it c op ) ^ v } {}
+    ? & >= op 40 <= op 64 { ( __exec_mem it ra op ) ^ v } {}
     // ── floats: cmp (91..102), unary/binary (139..166), conversions (167..191) ──
     ? | & >= op 91 <= op 102 | & >= op 139 <= op 166 & >= op 167 <= op 191 { ( __exec_float it op ) ^ v } {}
     // ── sign-extension ops (0xc0..0xc4) and the 0xfc prefix (bulk memory) ──
     ? & >= op 192 <= op 196 { ( __exec_signext it op ) ^ v } {}
-    ? == op 252 { ( __exec_fc it c ) ^ v } {}
+    ? == op 252 { ( __exec_fc it ra rb ) ^ v } {}
     // ── the rest: integer numeric ops ──
-    ( __exec_num it c op )
+    ( __exec_num it op )
 }
 
 // Numeric/comparison/bitwise ops (both i32 and i64). i32 results are wrapped to
 // 32 bits; comparisons push 0/1.
-@ __exec_num * Interp it * Wc c i op → v {
+@ __exec_num * Interp it i op → v {
     // i32 unary: eqz
     ? == op 69 { ( __push it ? == ( __pop it ) 0 1 0 ) ^ v } {}
     // i64 unary: eqz
@@ -2300,10 +2436,10 @@ $ `module.nu`
     ^ ?? ( vec_get [s] . m elems k ) { T x → x F → # s 0 }
 }
 
-@ __exec_fc * Interp it * Wc c → v {
-    : i sub ( wc_uleb c )
+// `sub` and the one index operand some subops carry (`bop`) arrive predecoded.
+@ __exec_fc * Interp it i sub i bop → v {
     ? == sub 8 {  // memory.init dataidx: copy from a passive data segment
-        : i didx ( wc_uleb c ) ( wc_u8 c )
+        : i didx bop
         : i n ( __u32 ( __pop it ) )
         : i src ( __u32 ( __pop it ) )
         : i dst ( __u32 ( __pop it ) )
@@ -2322,12 +2458,11 @@ $ `module.nu`
         ^ v
     } {}
     ? == sub 9 {  // data.drop
-        : i didx ( wc_uleb c )
+        : i didx bop
         ? < didx ( vec_len [i] . it data_dropped ) { ( vec_set [i] . it data_dropped didx 1 ) } {}
         ^ v
     } {}
     ? == sub 10 {  // memory.copy — bounds checked up front (no partial writes)
-        ( wc_u8 c ) ( wc_u8 c )
         : i n ( __u32 ( __pop it ) )
         : i src ( __u32 ( __pop it ) )
         : i dst ( __u32 ( __pop it ) )
@@ -2337,7 +2472,6 @@ $ `module.nu`
         ^ v
     } {}
     ? == sub 11 {  // memory.fill — bounds checked up front
-        ( wc_u8 c )
         : i n ( __u32 ( __pop it ) )
         : i val & ( __pop it ) 255
         : i dst ( __u32 ( __pop it ) )
@@ -2346,7 +2480,7 @@ $ `module.nu`
         ^ v
     } {}
     ? == sub 12 {  // table.init elemidx: copy from a passive element segment
-        : i eidx ( wc_uleb c ) ( wc_uleb c )
+        : i eidx bop
         : i n ( __u32 ( __pop it ) )
         : i src ( __u32 ( __pop it ) )
         : i dst ( __u32 ( __pop it ) )
@@ -2365,12 +2499,11 @@ $ `module.nu`
         ^ v
     } {}
     ? == sub 13 {  // elem.drop
-        : i eidx ( wc_uleb c )
+        : i eidx bop
         ? < eidx ( vec_len [i] . it elem_dropped ) { ( vec_set [i] . it elem_dropped eidx 1 ) } {}
         ^ v
     } {}
     ? == sub 14 {  // table.copy — overlap-safe within the one table
-        ( wc_uleb c ) ( wc_uleb c )
         : i n ( __u32 ( __pop it ) )
         : i src ( __u32 ( __pop it ) )
         : i dst ( __u32 ( __pop it ) )
@@ -2386,7 +2519,6 @@ $ `module.nu`
         ^ v
     } {}
     ? == sub 15 {  // table.grow: [init n] → old size, or −1 past the maximum
-        ( wc_uleb c )
         : i n ( __u32 ( __pop it ) )
         : i init ( __pop it )
         : *Module m # *Module . it mod
@@ -2399,9 +2531,8 @@ $ `module.nu`
         ( __push it old )
         ^ v
     } {}
-    ? == sub 16 { ( wc_uleb c ) ( __push it ( vec_len [i] . it table ) ) ^ v } {}  // table.size
+    ? == sub 16 { ( __push it ( vec_len [i] . it table ) ) ^ v } {}  // table.size
     ? == sub 17 {  // table.fill
-        ( wc_uleb c )
         : i n ( __u32 ( __pop it ) )
         : i val ( __pop it )
         : i dst ( __u32 ( __pop it ) )
