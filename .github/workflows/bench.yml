@@ -36,6 +36,10 @@ on:
     tags: ['v*']
     paths:
       - 'bench/**'
+      # The results files are what this workflow itself commits back —
+      # excluded so a results merge doesn't spin up another full run.
+      - '!bench/results/**'
+      - '!bench/RESULTS.md'
       - 'compiler/**'
       - 'stdlib/**'
       - '.github/workflows/bench.yml'
@@ -208,8 +212,15 @@ jobs:
           Merging this updates what nurl-lang.org publishes: \`tools/gen-bench-table.mjs\` renders \`bench/results/latest.json\` into the landing page's table at the next deploy.
           BODY
           )"; then
-            gh pr merge --auto --squash "$branch" \
-              || echo "auto-merge not available — the PR is open and waiting for a review."
+            # The main ruleset requires a PR but 0 approvals and no status
+            # checks, so the bot can merge its own PR immediately — the
+            # committed results land on main in the same run, which is the
+            # "bench ran, results updated" behavior this workflow had
+            # before the ruleset existed. --auto as fallback, then leave
+            # the PR open as a last resort.
+            gh pr merge --squash "$branch" \
+              || gh pr merge --auto --squash "$branch" \
+              || echo "merge not available — the PR is open and waiting for a review."
           else
             url="${{ github.server_url }}/${{ github.repository }}/compare/main...${branch}?expand=1"
             echo "::warning::PR creation was refused (org Actions policy?). The results branch IS pushed — open the PR here: $url"
