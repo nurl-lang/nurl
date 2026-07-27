@@ -50,8 +50,30 @@ jobs:
           node-version: 22
       - if: env.DEPLOY_ENABLED == 'true'
         run: npm ci
-      # `deploy` runs the `predeploy` hook (gen-site-facts + sync-installers)
-      # automatically, then `wrangler deploy`.
+      # Take the benchmark numbers from main, never from the checkout.
+      #
+      # On a `v*` tag this job checks out the TAG, and a tag cannot contain
+      # results measured after it was cut — bench.yml starts at the same
+      # moment and runs for up to two hours. Publishing the tag's copy meant
+      # the site shipped the PREVIOUS release's table every time. Reading
+      # main here makes the deploy publish the newest measured numbers
+      # whichever way it was triggered: tag push, bench.yml's dispatch after
+      # it commits fresh results, or a manual run.
+      #
+      # Only the results files come from main — everything else the page is
+      # built from stays at the checked-out ref, so a tag deploy still
+      # describes that tag.
+      - name: Take bench results from main
+        if: env.DEPLOY_ENABLED == 'true'
+        working-directory: ${{ github.workspace }}
+        run: |
+          git fetch --depth=1 origin main
+          git checkout FETCH_HEAD -- bench/results/latest.json bench/RESULTS.md
+          echo "publishing table from:"
+          node -e 'const j=require("./bench/results/latest.json");
+                   console.log("  generated", j.generated_utc, "commit", j.commit.slice(0,9))'
+      # `deploy` runs the `predeploy` hook (gen-site-facts + bench-table +
+      # sync-installers) automatically, then `wrangler deploy`.
       - name: Deploy
         if: env.DEPLOY_ENABLED == 'true'
         run: npm run deploy

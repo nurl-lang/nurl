@@ -23,10 +23,16 @@ name: bench
 # with no way for a reader to check them.
 
 on:
-  # Source-change runs: any commit on main that touches the benchmark
-  # corpus, the compiler or the runtime. Uploads an artifact but does NOT
-  # commit results back — that would be a commit storm during active
-  # development, and would re-trigger this workflow on every push.
+  # Any commit on main that touches the benchmark corpus, the compiler or
+  # the runtime re-measures AND commits the refreshed numbers. Keeping main
+  # continuously current is what makes a release tag correct by
+  # construction: the alternative — measuring at the tag — cannot work,
+  # because a tag is immutable and the suite finishes long after it is cut.
+  #
+  # This does not re-trigger itself: the results files are excluded from the
+  # paths filter below. The cost is that runner noise (a few per cent
+  # run-to-run) puts a diff in latest.json on most merges, so read a single
+  # diff as noise and a sustained shift as a regression.
   push:
     branches: [main]
     # Release tags: every vX.Y.Z also refreshes the committed numbers, so
@@ -54,10 +60,7 @@ concurrency:
   cancel-in-progress: true
 
 permissions:
-  contents: write          # for pushing the refreshed-results branch
-  pull-requests: write     # for opening the results PR (also needs the org
-                           # Actions policy to allow PR creation, or a PAT
-                           # in BENCH_PR_TOKEN — see the PR step)
+  contents: write          # for committing the refreshed results to main
 
 jobs:
   bench:
@@ -157,80 +160,59 @@ jobs:
             bench/RESULTS.md
           retention-days: 90
 
-      - name: Open a pull request with the refreshed results
-        # Manual runs and release tags only; see the trigger comment above.
+      - name: Commit the refreshed results to main
+        # Every triggering event commits: merges to main keep the numbers
+        # current, so a release tag already carries them.
         #
-        # This opens a PR rather than pushing to main, because main carries a
-        # repository ruleset that requires one ("Changes must be made through
-        # a pull request" + 3 required checks). A direct `git push` from here
-        # is declined with GH013 — which is how the first scheduled-style run
-        # of this workflow failed. Pushing a *new branch* is allowed, so the
-        # results reach main the same way every other change does.
+        # Committed straight to main, not routed through a PR. The PR
+        # detour is what broke the published table: on a `v*` tag this
+        # workflow and the site deploy start together, the deploy checks
+        # out the TAG, and a tag can never contain results measured after
+        # it was cut. The numbers landed on main minutes-to-hours later
+        # and nothing redeployed, so nurl-lang.org kept publishing the
+        # previous release's table.
         #
-        # Token order of preference:
-        #   1. BENCH_PR_TOKEN secret (a PAT) — needed because the org-level
-        #      Actions policy currently forbids the built-in GITHUB_TOKEN
-        #      from creating PRs at all ("Resource not accessible by
-        #      integration", the way run 30226327087 failed), and flipping
-        #      that policy needs an org admin. A PAT also makes the PR
-        #      trigger the required checks, so --auto can complete.
-        #   2. The built-in token — works if an org admin has enabled
-        #      "Allow GitHub Actions to create and approve pull requests";
-        #      required checks then stay "expected" and the PR waits for a
-        #      human, which is visible rather than silent.
-        # If PR creation fails anyway, DON'T fail the run: the results
-        # branch is already pushed and the artifact uploaded — print the
-        # one-click compare URL into the step summary instead. A red run
-        # over a missing convenience-PR reads as "the benchmarks failed",
-        # which is worse than the missing PR.
-        if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v')
+        # main carries a ruleset requiring pull requests, so this push
+        # needs an actor allowed to bypass it: set BENCH_PUSH_TOKEN to a
+        # PAT whose account is in the ruleset's bypass list. Without it
+        # the push is declined with GH013 and this step fails loudly —
+        # which is the honest outcome, because a silent fallback is
+        # exactly how the table went stale unnoticed.
         env:
-          GH_TOKEN: ${{ secrets.BENCH_PR_TOKEN || github.token }}
+          GH_TOKEN: ${{ secrets.BENCH_PUSH_TOKEN || github.token }}
         run: |
           if git diff --quiet -- bench/results/latest.json bench/RESULTS.md; then
-            echo "results unchanged — nothing to open."
+            echo "results unchanged — nothing to commit."
             exit 0
           fi
 
           today="$(date -u +%Y-%m-%d)"
-          branch="bench-results/${today}-${{ github.run_id }}"
-
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git checkout -b "$branch"
+          git remote set-url origin \
+            "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git"
+
+          # A tag build has a detached HEAD; commit onto main explicitly so
+          # the results land where the site reads them from.
+          git fetch origin main
+          git stash push -- bench/results/latest.json bench/RESULTS.md
+          git checkout -B main origin/main
+          git checkout stash@{0} -- bench/results/latest.json bench/RESULTS.md
+          git stash drop
+
           git add bench/results/latest.json bench/RESULTS.md
           git commit -m "bench: refresh measured numbers ($today)"
-          git push -u origin "$branch"
 
-          if gh pr create --base main --head "$branch" \
-            --title "bench: refresh measured numbers ($today)" \
-            --body "$(cat <<BODY
-          Automated refresh from [\`bench.yml\` run ${{ github.run_id }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}).
-
-          All 15 benchmarks passed the correctness gate — every row's five implementations printed the same result — before any of them was timed, and the chaincheck physical-floor gate passed after the suite. The full report, including compile times and the process-start-up floor, is in the run summary and in \`bench/RESULTS.md\` below.
-
-          Merging this updates what nurl-lang.org publishes: \`tools/gen-bench-table.mjs\` renders \`bench/results/latest.json\` into the landing page's table at the next deploy.
-          BODY
-          )"; then
-            # The main ruleset requires a PR but 0 approvals and no status
-            # checks, so the bot can merge its own PR immediately — the
-            # committed results land on main in the same run, which is the
-            # "bench ran, results updated" behavior this workflow had
-            # before the ruleset existed. --auto as fallback, then leave
-            # the PR open as a last resort.
-            gh pr merge --squash "$branch" \
-              || gh pr merge --auto --squash "$branch" \
-              || echo "merge not available — the PR is open and waiting for a review."
-          else
-            url="${{ github.server_url }}/${{ github.repository }}/compare/main...${branch}?expand=1"
-            echo "::warning::PR creation was refused (org Actions policy?). The results branch IS pushed — open the PR here: $url"
-            {
-              echo "## Results branch pushed, PR creation refused"
-              echo
-              echo "The token cannot create pull requests (org-level Actions policy)."
-              echo "Open it with one click: $url"
-              echo
-              echo "To make this automatic: add a \`BENCH_PR_TOKEN\` PAT secret, or have an"
-              echo "org admin enable *Allow GitHub Actions to create and approve pull requests*."
-            } >> "$GITHUB_STEP_SUMMARY"
-          fi
+          # The suite takes tens of minutes; another merge can land in that
+          # window. Re-fetch and replay onto the new tip rather than failing
+          # — results are a pure overwrite of two files, so there is nothing
+          # to reconcile.
+          for attempt in 1 2 3; do
+            git push origin main && exit 0
+            echo "push rejected (attempt $attempt) — replaying onto the new tip"
+            git fetch origin main
+            git reset --soft origin/main
+            git commit --amend --no-edit
+          done
+          echo "::error::could not push refreshed results after 3 attempts"
+          exit 1
