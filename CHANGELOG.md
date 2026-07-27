@@ -10,6 +10,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`packages/wasmtime` executes in register form — the value stack is gone
+  from the hot path.** wasm validation guarantees a static stack height at
+  every instruction, so predecode now assigns the value at height h to slot
+  (locals + h) of one flat per-frame array and resolves every operand to an
+  absolute slot index. `local.get`/`set`/`tee` become register moves,
+  `block`/`loop`/`end` emit nothing at all, and branches are direct jumps
+  carrying their statically-computed result moves — there is no runtime
+  control stack and no push/pop; a hot op is three raw word accesses. Code
+  made unreachable by `br`/`return`/`unreachable` is parsed structurally
+  (alignment survives hostile bytes; the hardening suite passes as-is) but
+  emits nothing. Cold ops — floats, conversions, the 0xfc family, imports —
+  bridge through the old value stack, so their semantics are the previous
+  executor's arms verbatim.
+
+  The interpreter now retires **56 host instructions / 18.9 cycles per wasm
+  instruction**, from 191 / 54 at the start of this cycle. Same modules,
+  predecode core → register core: `sort_window` 13.3 s → 5.4 s, `matmul`
+  3.5 s → 1.5 s, `collatz` 2.1 s → 0.9 s, `lcg` 1.6 s → 0.9 s,
+  `json_parse` 4.0 s → 2.1 s; `fib` is flat — its cost is now frame
+  allocation per call, the next known target. The compiler self-hosting on
+  the interpreter: 1m22s → **30.5 s**, still byte-identical (5m45s at the
+  start of the cycle — 11x across the two rewrites). All 7 package suites
+  pass unchanged.
+
 - **`packages/wasmtime` executes predecoded function bodies.** The
   interpreter used to walk raw bytes: every operand LEB128-decoded again on
   every execution, and — much worse — every `block`/`loop`/`if` *scanned
