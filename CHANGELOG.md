@@ -196,6 +196,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`./build.sh` never built `nurlpkg`,** so a developer's `build/nurlpkg` was
+  whatever they last built by hand while the same script handed them a fresh
+  `nurlc` — the local toolchain could be months out of step with itself and
+  look current. Only `.github/workflows/release.yml` ran
+  `tools/nurlpkg/build.sh`. This is not hypothetical: a months-old `nurlpkg`
+  predating `publish --dry-run` (and predating the unknown-flag rejection that
+  was added to catch exactly this) silently ignored the flag and published for
+  real. `build.sh` now builds it as a soft step, like `nurlfmt`.
+
 - **`wasmbuilder`'s version stayed at 0.1.3 while its behaviour changed under
   it.** 0.1.3 is already published; the `--gc-sections` default flip, the
   `-Xclang` optimisation fix, the `realpath` stub and the declare-stripper fix

@@ -427,6 +427,21 @@ else
     log "[warn] nurlfmt build failed; skipping"
 fi
 
+# ── nurlpkg ──────────────────────────────────────────────────
+# The package manager, same soft-step treatment as nurlfmt. It used to be
+# built only by .github/workflows/release.yml, so a developer's build/nurlpkg
+# was whatever they last built by hand — while ./build.sh handed them a fresh
+# nurlc and let them believe the whole toolchain was current. That went wrong
+# in exactly the way you would expect: a months-old nurlpkg predating
+# `publish --dry-run` silently ignored the flag (its unknown-flag rejection
+# came later too) and published for real. Building it here keeps the local
+# toolchain internally consistent.
+if bash "$SCRIPT_DIR/tools/nurlpkg/build.sh" >> "$LOG" 2>&1; then
+    log "[info] nurlpkg built → build/nurlpkg"
+else
+    log "[warn] nurlpkg build failed; skipping"
+fi
+
 # ── Test suite ───────────────────────────────────────────────
 BUILD_SECS=$(( SECONDS - BUILD_T0 ))
 if (( RUN_TESTS == 0 )); then
