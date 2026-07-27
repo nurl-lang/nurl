@@ -1,5 +1,38 @@
 # Changelog
 
+## 0.4.0
+
+**You can look at the output now.** The reference's `demo.py` ends in a
+viser web viewer; this ended in a PLY and the advice to bring your own.
+
+- **`lingbot-map view cloud.ply`** serves a viewer on
+  `http://127.0.0.1:8080`: drag to orbit, wheel to zoom, shift-drag to
+  pan. One self-contained HTML page drawing the cloud through WebGL —
+  no CDN, no dependency, nothing fetched from anywhere. It is compiled
+  into the binary, so an installed tool needs no files beside it.
+- **`--view`** goes from frames to a viewer in one command, opening it
+  the moment the cloud is written, which is what `demo.py` does.
+- **Trim far points** is the control that matters, and it defaults to
+  hiding the farthest 2%: on every example scene that is sky the depth
+  head placed a long way off, and it is the difference between a legible
+  first frame and a white wall. **Density** thins the cloud on a slow
+  machine — the points are shuffled once on load, so any fraction of them
+  is a sample of the whole scene rather than the start of the walk.
+  **Colour** switches between the frames' own RGB, height and distance.
+- Reads any `lingbot-map` PLY, binary or `--ascii`.
+
+One thing worth writing down, because it is silent when wrong: the model
+works in OpenCV camera axes, where **y points down**. A viewer that
+assumes y-up renders the reconstruction upside down with the sky
+underneath it — which looks wrong, but not obviously so. The reference
+does the same thing with `up_dir = -R[:, 1]`.
+
+Suite step 21 serves a synthetic cloud, renders it in a real headless
+browser and counts lit pixels. It needs no checkpoint, no GPU and no
+torch, and it exists because a viewer whose HUD reports half a million
+points over an empty canvas is indistinguishable from a working one in
+the DOM.
+
 ## 0.3.0
 
 The model was right and the front door was not. `lingbot-map --model
