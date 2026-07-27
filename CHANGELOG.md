@@ -10,6 +10,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The bench results push authenticated as the wrong actor, and its retry
+  destroyed the run's numbers.** Two defects in the freshly-landed direct-push
+  path, both caught on its first real run. `actions/checkout` writes an
+  `Authorization` header for `GITHUB_TOKEN` into the local git config, and that
+  header **wins over credentials embedded in the remote URL** — so the push
+  went out as `github-actions[bot]` and was refused with GH013 even though
+  `BENCH_PUSH_TOKEN` was set. The header is now unset before the push. And the
+  retry replayed with `reset --soft` + `commit --amend`, which rewrote the tip
+  commit that had landed while the suite ran; the remote refused that as a
+  non-fast-forward, turning one refusal into three. Worse, the replay stashed
+  the results by path — but they are committed by then, so nothing was stashed,
+  `stash@{0}` did not exist, and a successful replay would have published the
+  *old* numbers. The files are now copied outside the worktree before the first
+  push and restored onto whatever tip arrived; a replay that finds the new tip
+  already carrying them exits clean. Verified against a real contended push.
+
 - **nurl-lang.org published the previous release's benchmark table.** Two
   workflows fire on a `v*` tag: `web-deploy.yml` checks out the **tag** and
   renders the landing page's table from `bench/results/latest.json` as of

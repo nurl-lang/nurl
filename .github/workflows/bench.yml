@@ -189,6 +189,14 @@ jobs:
           today="$(date -u +%Y-%m-%d)"
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+
+          # actions/checkout stores an Authorization header for GITHUB_TOKEN
+          # in the local git config, and that header WINS over credentials
+          # embedded in the remote URL. Leaving it in place is why the first
+          # run of this step still pushed as github-actions[bot] — and was
+          # refused with GH013 — despite BENCH_PUSH_TOKEN being set. Drop it
+          # so the URL's token is the one that authenticates.
+          git config --unset-all http.https://github.com/.extraheader || true
           git remote set-url origin \
             "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git"
 
@@ -203,16 +211,38 @@ jobs:
           git add bench/results/latest.json bench/RESULTS.md
           git commit -m "bench: refresh measured numbers ($today)"
 
+          # Keep the measured files OUTSIDE the worktree for the replay
+          # below. Stashing them cannot work there: by that point they are
+          # committed, so `git stash push -- <paths>` finds nothing to save,
+          # leaves no stash@{0}, and the replay silently drops the run's
+          # results instead of publishing them.
+          keep="$(mktemp -d)"
+          cp bench/results/latest.json "$keep/latest.json"
+          cp bench/RESULTS.md "$keep/RESULTS.md"
+
           # The suite takes tens of minutes; another merge can land in that
-          # window. Re-fetch and replay onto the new tip rather than failing
-          # — results are a pure overwrite of two files, so there is nothing
-          # to reconcile.
+          # window. Replay the two files onto the new tip rather than failing
+          # — results are a pure overwrite, so there is nothing to reconcile.
+          #
+          # Replay means: keep the files, move to the new tip, commit afresh.
+          # `commit --amend` here would rewrite the tip commit that arrived
+          # while we ran, which the remote then refuses as a non-fast-forward
+          # — the retry loop's own first version did exactly that and turned
+          # one refusal into three.
           for attempt in 1 2 3; do
             git push origin main && exit 0
-            echo "push rejected (attempt $attempt) — replaying onto the new tip"
+            echo "push refused (attempt $attempt) — replaying onto the new tip"
             git fetch origin main
-            git reset --soft origin/main
-            git commit --amend --no-edit
+            git reset --hard origin/main
+            cp "$keep/latest.json" bench/results/latest.json
+            cp "$keep/RESULTS.md" bench/RESULTS.md
+            if git diff --quiet -- bench/results/latest.json bench/RESULTS.md; then
+              echo "the new tip already carries these numbers — nothing to do."
+              exit 0
+            fi
+            git commit -am "bench: refresh measured numbers ($today)"
           done
-          echo "::error::could not push refreshed results after 3 attempts"
+          echo "::error::could not push refreshed results after 3 attempts."
+          echo "::error::If this is GH013, BENCH_PUSH_TOKEN's account is not in the"
+          echo "::error::'Protect main' ruleset bypass list (currently: Repository admin)."
           exit 1
