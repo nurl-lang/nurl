@@ -42,6 +42,7 @@ $ `src/camhead.nu`
 $ `src/dpthead.nu`
 $ `src/geom.nu`
 $ `src/preproc.nu`
+$ `src/viewer.nu`
 
 : i LM_SIZE 518
 : i LM_PATCH 14
@@ -62,6 +63,9 @@ $ `src/preproc.nu`
     i ascii
     ( Vec String ) frames
     i bad
+    i view
+    i port
+    s page
 }
 
 @ __lm_usage → v {
@@ -76,6 +80,7 @@ $ `src/preproc.nu`
     ( nurl_print `\n` )
     ( nurl_print `usage: lingbot-map [options] <frames-dir>\n` )
     ( nurl_print `       lingbot-map [options] <frame.png> <frame.png> ...\n` )
+    ( nurl_print `       lingbot-map view <cloud.ply> [--port n]\n` )
     ( nurl_print `\n` )
     ( nurl_print `examples:\n` )
     ( nurl_print `  # a folder of frames -> cloud.ply. The checkpoint is downloaded once,\n` )
@@ -93,6 +98,12 @@ $ `src/preproc.nu`
     ( nurl_print `  # a handful of individual frames\n` )
     ( nurl_print `  lingbot-map shot0.png shot1.png shot2.png\n` )
     ( nurl_print `\n` )
+    ( nurl_print `  # reconstruct, then look at it in a browser\n` )
+    ( nurl_print `  lingbot-map --view ~/dev/lingbot-map/example/courthouse\n` )
+    ( nurl_print `\n` )
+    ( nurl_print `  # or look at a cloud you already have\n` )
+    ( nurl_print `  lingbot-map view cloud.ply\n` )
+    ( nurl_print `\n` )
     ( nurl_print `options:\n` )
     ( nurl_print `  --model <path|ref>  checkpoint to run: a local .pt, or a Hugging Face ref\n` )
     ( nurl_print `                      such as robbyant/lingbot-map/lingbot-map.pt. Default:\n` )
@@ -108,6 +119,8 @@ $ `src/preproc.nu`
     ( nurl_print `  --ascii             write an ASCII PLY instead of binary_little_endian\n` )
     ( nurl_print `  --quiet, -q         no per-frame progress\n` )
     ( nurl_print `  --profile           per-stage frame timings and a per-kernel GPU profile\n` )
+    ( nurl_print `  --view              open the viewer on the cloud when it is written\n` )
+    ( nurl_print `  --port <n>          viewer port (default 8080)\n` )
     ( nurl_print `  --version           print the version\n` )
     ( nurl_print `  --help, -h          this\n` )
     ( nurl_print `\n` )
@@ -141,6 +154,7 @@ $ `src/preproc.nu`
     ? | ( __lm_streq a `--max-frames` ) ( __lm_streq a `--first_k` ) { ^ T } {}
     ? | ( __lm_streq a `--frames` ) ( __lm_streq a `--image_folder` ) { ^ T } {}
     ? ( __lm_streq a `--stride` ) { ^ T } {}
+    ? | ( __lm_streq a `--port` ) ( __lm_streq a `--page` ) { ^ T } {}
     ^ F
 }
 
@@ -251,6 +265,9 @@ $ `src/preproc.nu`
     : ~ i profile 0
     : ~ i ascii 0
     : ~ i bad 0
+    : ~ i view 0
+    : ~ i port 8080
+    : ~ s page ``
     : i argc ( nurl_argc )
     : ~ i i0 1
     ~ & == bad 0 < i0 argc {
@@ -275,6 +292,8 @@ $ `src/preproc.nu`
                 = maxf ( nurl_str_to_int v )
             } {}
             ? ( __lm_streq a `--stride` ) { = fstride ( nurl_str_to_int v ) } {}
+            ? ( __lm_streq a `--port` ) { = port ( nurl_str_to_int v ) } {}
+            ? ( __lm_streq a `--page` ) { = page v } {}
             ? | ( __lm_streq a `--frames` ) ( __lm_streq a `--image_folder` ) {
                 ? ( __lm_dir fr v ) {} { = bad 1 }
             } {}
@@ -285,6 +304,7 @@ $ `src/preproc.nu`
             ? | ( __lm_streq a `--quiet` ) ( __lm_streq a `-q` ) { = verbose 0 = hit 1 } {}
             ? ( __lm_streq a `--profile` ) { = profile 1 = hit 1 } {}
             ? ( __lm_streq a `--ascii` ) { = ascii 1 = hit 1 } {}
+            ? ( __lm_streq a `--view` ) { = view 1 = hit 1 } {}
             ? | ( __lm_streq a `--help` ) ( __lm_streq a `-h` ) { = bad 2 = hit 1 } {}
             ? ( __lm_streq a `--version` ) { = bad 3 = hit 1 } {}
             ? == hit 0 {
@@ -338,7 +358,7 @@ $ `src/preproc.nu`
         }
         : b _c ( vec_set_len [String] fr w )
     } {}
-    ^ @ Opts { model out conf pstride maxf verbose profile ascii fr bad }
+    ^ @ Opts { model out conf pstride maxf verbose profile ascii fr bad view port page }
 }
 
 @ __lm_free_opts Opts o → v {
@@ -582,7 +602,61 @@ i h i w f cmin i stride → Ply {
     ^ @ Ply { fh n ? ascii 1 0 }
 }
 
+// `view` takes a cloud and the two options that apply to looking at one.
+// It shares --port/--page with the main parser but nothing else, so it gets
+// its own loop rather than teaching that one about a mode it cannot reach.
+@ __lm_view_cmd → i {
+    : ~ s cloud ``
+    : ~ i port 8080
+    : ~ s page ``
+    : ~ i bad 0
+    : i argc ( nurl_argc )
+    : ~ i i0 2
+    ~ & == bad 0 < i0 argc {
+        : s a ( nurl_argv i0 )
+        : b wants | ( __lm_streq a `--port` ) ( __lm_streq a `--page` )
+        ? & wants >= + i0 1 argc {
+            ( nurl_print `lingbot-map: ` ) ( nurl_print a )
+            ( nurl_print ` needs a value\n` )
+            = bad 1
+        } {
+            ? ( __lm_streq a `--port` ) {
+                = port ( nurl_str_to_int ( nurl_argv + i0 1 ) ) = i0 + i0 1
+            } {
+                ? ( __lm_streq a `--page` ) {
+                    = page ( nurl_argv + i0 1 ) = i0 + i0 1
+                } {
+                    ? | ( __lm_streq a `--help` ) ( __lm_streq a `-h` ) {
+                        ( __lm_help ) ^ 0
+                    } {
+                        ? ( __lm_is_flag a ) {
+                            ( nurl_print `lingbot-map view: unknown option ` )
+                            ( nurl_print a ) ( nurl_print `\n` )
+                            = bad 1
+                        } { = cloud a }
+                    }
+                }
+            }
+        }
+        = i0 + i0 1
+    }
+    ? != bad 0 { ^ 2 } {}
+    ? == ( nurl_str_len cloud ) 0 {
+        ( nurl_print `lingbot-map: view needs a cloud to show.\n` )
+        ( nurl_print `    lingbot-map view cloud.ply\n` )
+        ^ 2
+    } {}
+    ^ ( vw_serve cloud `127.0.0.1` port page 0 )
+}
+
 @ main → i {
+    // `lingbot-map view <cloud.ply>` — look at a cloud that already exists,
+    // without a checkpoint, a GPU or a reconstruction. Taken before the
+    // options are parsed because a bare filename is a frame everywhere else.
+    ? > ( nurl_argc ) 1 {
+        ? ( __lm_streq ( nurl_argv 1 ) `view` ) { ^ ( __lm_view_cmd ) } {}
+    } {}
+
     : Opts o ( __lm_parse )
     ? == . o bad 2 { ( __lm_help ) ( __lm_free_opts o ) ^ 0 } {}
     ? == . o bad 3 { ( __lm_version ) ( __lm_free_opts o ) ^ 0 } {}
@@ -658,6 +732,7 @@ i h i w f cmin i stride → Ply {
     // half-ran and exited 0 is worse than one that failed loudly: the
     // caller writes the cloud into a pipeline and never learns.
     : ~ i rc 0
+    : ~ i serve 0
     : *GpuKit kit ( gk_open_best )
     ? ( gk_ok kit ) {} {
         ( nurl_print `lingbot-map: no GPU backend — no CUDA device is visible, and this\n` )
@@ -880,6 +955,10 @@ i h i w f cmin i stride → Ply {
                         ( nurl_print ` ms)\n` )
                     } {}
                     ? != . o profile 0 { ( gk_prof_report kit ) } {}
+                    // demo.py ends in its viewer; --view ends in this one.
+                    // After the GPU work, so the reconstruction is not
+                    // holding 17 GB of VRAM while someone looks at it.
+                    ? & == failed 0 != . o view 0 { = serve 1 } {}
                     ( nurl_free # s taps )
                     ( ch_ws_free cws )
                     ? != failed 0 { = rc 1 } {}
@@ -893,6 +972,11 @@ i h i w f cmin i stride → Ply {
     }
     ( gk_close kit )
     ( string_free model )
+    ? != serve 0 {
+        ( nurl_print `\n` )
+        : i vrc ( vw_serve . o out `127.0.0.1` . o port . o page 0 )
+        ? != vrc 0 { = rc vrc } {}
+    } {}
     ( __lm_free_opts o )
     ^ rc
 }

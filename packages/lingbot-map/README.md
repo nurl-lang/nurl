@@ -42,7 +42,32 @@ frame 286/286  8602925 points  410 ms  .../courthouse/000285.png
 wrote 8602925 points to cloud.ply  (286 frames, 108624 ms)
 ```
 
-`cloud.ply` opens in MeshLab, CloudCompare, Blender, or `f3d cloud.ply`.
+## Look at it
+
+```
+lingbot-map view cloud.ply
+```
+
+That serves a viewer on `http://127.0.0.1:8080` — drag to orbit, wheel to
+zoom, shift-drag to pan. It is one self-contained page drawing the cloud
+on the GPU through WebGL; nothing is fetched from anywhere, and there is
+nothing to install.
+
+To go straight from frames to a viewer the way `demo.py` does, add
+`--view` and it opens as soon as the cloud is written:
+
+```
+lingbot-map --view my-frames/
+```
+
+The controls that matter are **trim far points**, which hides the
+farthest few percent (almost always sky the depth head placed a long way
+off, and it is what makes the first frame legible), **density**, which
+thins the cloud on a slow machine, and **colour**, which switches between
+the frames' own RGB, height and distance.
+
+`cloud.ply` is an ordinary PLY, so MeshLab, CloudCompare, Blender and
+`f3d cloud.ply` open it too.
 
 ## Where frames come from
 
@@ -99,6 +124,8 @@ lingbot-map --ascii --max-frames 2 --out two.ply ~/dev/lingbot-map/example/court
 | `--ascii` | write an ASCII PLY instead of `binary_little_endian` |
 | `--quiet`, `-q` | no per-frame progress |
 | `--profile` | per-stage frame timings and a per-kernel GPU profile |
+| `--view` | open the viewer on the cloud once it is written |
+| `--port <n>` | viewer port (default 8080) |
 | `--version`, `--help` | |
 
 The reference's own spellings work too — `--model_path`,
@@ -113,8 +140,10 @@ before it. A shuffled directory reconstructs a different scene.
 
 The model is the same and the numbers agree; the packaging does not.
 
-* **It writes a file, it does not open a viewer.** `demo.py` ends in a
-  viser web viewer; this ends in a PLY, and you bring your own viewer.
+* **The viewer is a point cloud, not a scene inspector.** `demo.py` ends
+  in a viser viewer with camera frusta, per-frame playback and a sky mask;
+  `lingbot-map view` orbits the cloud and lets you trim and thin it. Both
+  run in a browser on localhost.
 * **No video input.** `demo.py --video_path` shells out to OpenCV; split
   the video with `ffmpeg` and point at the folder.
 * **No scale-frame block.** `demo.py` runs the first `--num_scale_frames`
@@ -306,13 +335,15 @@ which is what bounds the memory.
 cd packages/lingbot-map && ./tests/lingbot_map_test.sh
 ```
 
-Twenty steps, each building its own NURL binary. Steps that need the
+Twenty-one steps, each building its own NURL binary. Steps that need the
 checkpoint, a python with torch, or the upstream package skip cleanly
 when those are absent — that is the fast path, and it is what CI runs.
 For the full set, set `PYTORCH_PY` (or drop a venv at the repo root as
 `.venv-oracle`) and check out the upstream package at `~/dev/lingbot-map`.
 
-Step 20, the end-to-end differential, additionally needs a **CUDA** torch —
+Step 21 renders the viewer in a headless Chrome and needs `google-chrome`
+or `chromium` on PATH; it skips cleanly without one and needs no
+checkpoint. Step 20, the end-to-end differential, additionally needs a **CUDA** torch —
 `.venv-oracle` is deliberately a CPU build, since correctness is all the
 other steps need. Set `LINGBOT_CUDA_PY`, or drop one at the repo root as
 `.venv-cuda`, and `LINGBOT_CUDA_DEV` if the first CUDA device is not the
