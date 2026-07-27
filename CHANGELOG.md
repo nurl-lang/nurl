@@ -176,25 +176,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     program. Off, both runtimes are measured doing the same work: read the
     module, translate it, run it.
 
-- **`wasmbuilder --gc-sections`**, and `WbOpts.gc_sections` for embedders.
-  The builder has always passed `-Wl,--no-gc-sections`, because NURL
-  closures store function-table indices and section GC renumbers that
-  table — a `call_indirect` trap at run time with no link error to warn
-  anyone, observed on `nurlc.wasm`. The flag was not the problem; having no
-  way to opt out of it was. What it drops is most of the NURL runtime a
-  program never calls: on `bench/lcg.nu` the module goes 1064 KiB → 819 KiB
-  and a reference `wasmtime` run goes ~120 ms → ~85 ms, because the runtime
-  stops translating code nothing reaches. `wasmbench.sh` builds every
-  benchmark both ways and holds both to the same output, so the size of the
-  prize is now a measured number rather than an argument. It is an opt-in,
-  not a new default: what stands between it and being one is making closure
-  indices survive renumbering.
+- **`wasmbuilder --no-gc-sections`**, and `WbOpts.no_gc_sections` for
+  embedders — the escape hatch for the new `--gc-sections` default (see
+  Changed). Section GC renumbers the wasm function table, and NURL closures
+  store indices into it; if that ever produces a `call_indirect` trap again,
+  this switches the old behaviour back on. `bench/wasmbench.sh` builds every
+  benchmark both ways and holds both to the same output, so what the hatch
+  costs stays a measured number: ~25 % more module and most of a JIT
+  runtime's module-load floor.
 
 - **`wasmtime --version` / `--help`.** The package had neither, while its
   sibling `wasmbuilder` had both, so nothing that shelled out to it could
   record which runtime produced a result.
 
 ### Fixed
+
+- **`./build.sh` never built `nurlpkg`,** so a developer's `build/nurlpkg` was
+  whatever they last built by hand while the same script handed them a fresh
+  `nurlc` — the local toolchain could be months out of step with itself and
+  look current. Only `.github/workflows/release.yml` ran
+  `tools/nurlpkg/build.sh`. This is not hypothetical: a months-old `nurlpkg`
+  predating `publish --dry-run` (and predating the unknown-flag rejection that
+  was added to catch exactly this) silently ignored the flag and published for
+  real. `build.sh` now builds it as a soft step, like `nurlfmt`.
 
 - **`wasmbuilder`'s version stayed at 0.1.3 while its behaviour changed under
   it.** 0.1.3 is already published; the `--gc-sections` default flip, the
