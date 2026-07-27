@@ -816,24 +816,44 @@ $ `module.nu`
     : s fr0 ( __frame_new it m fidx )
     ? != # i fr0 0 { ( vec_push [s] frames fr0 ) } {}
     : *Wc c ( wc_new . m code )
+    // The frame stack changes only on a call, a return, or falling off the end
+    // of a body — but this loop used to re-read the top frame out of `frames`
+    // on every *instruction*: a bounds-checked vec_get, an Option unwrap and a
+    // dependent load, then two stores copying pos/end into the cursor and one
+    // copying pos back. At instruction-level profile that was the single
+    // hottest line in the interpreter (14.5 % of all cycles on the vec_get's
+    // load alone, ~8 % more on the cursor store) — pure bookkeeping, none of it
+    // the guest's work.
+    //
+    // So the cursor is now the authority on where execution is, and the top
+    // frame is cached in `tp` and refreshed only when `reload` says the frame
+    // stack moved. `. fr pos` is written back exactly at the transitions where
+    // something else will read it: before a call suspends this frame, and
+    // before a trap prints a backtrace off it.
+    : ~ s tp # s 0
+    : ~ i reload 1
     ~ & & > ( vec_len [s] frames ) 0 ! . it exited ! . it trap {
-        : i depth ( vec_len [s] frames )
-        : s tp ?? ( vec_get [s] frames - depth 1 ) { T x → x F → # s 0 }
+        ? != reload 0 {
+            = tp ?? ( vec_get [s] frames - ( vec_len [s] frames ) 1 ) { T x → x F → # s 0 }
+            : *Frame nfr # *Frame tp
+            = . c pos . nfr pos
+            = . c len . nfr end
+            = reload 0
+        } {}
         : *Frame fr # *Frame tp
-        ? >= . fr pos . fr end {  // fell off the end of the body → return
-            ( __frame_free tp ) ( vec_pop [s] frames )
+        ? >= . c pos . c len {  // fell off the end of the body → return
+            ( __frame_free tp ) ( vec_pop [s] frames ) = reload 1
         } {
             ? == . it fuel 0 { ( __trap it `fuel exhausted` ) } {
                 ? > . it fuel 0 { = . it fuel - . it fuel 1 } {}
-                = . c pos . fr pos
-                = . c len . fr end
                 : i op ( wc_u8 c )
                 ( __exec_op it m c . fr ctrl . fr locals op )
-                = . fr pos . c pos
-                ? == op 15 { ( __frame_free tp ) ( vec_pop [s] frames ) } {  // return
+                ? == op 15 { ( __frame_free tp ) ( vec_pop [s] frames ) = reload 1 } {  // return
                     ? >= . it pending_call 0 {  // call / call_indirect
                         : i callee . it pending_call
                         = . it pending_call -1
+                        = . fr pos . c pos  // this frame resumes here
+                        = reload 1
                         ? < callee . m num_import_funcs { ( __call_import it m callee ) } {
                             ? >= ( vec_len [s] frames ) . it max_depth { ( __trap it `call stack exhausted` ) } {
                                 : s nf ( __frame_new it m callee )
@@ -845,7 +865,20 @@ $ `module.nu`
             }
         }
     }
-    ? . it trap { ( __trap_backtrace it m frames ) } {}
+    // The cursor, not the frame, holds the trapping position — sync it back so
+    // the backtrace's `+offset` is the instruction that actually trapped.
+    // Only when `reload` is still 0: that is exactly the case where the cursor
+    // belongs to the frame still on top. If the stack moved (a pop freed `tp`,
+    // or `call stack exhausted` trapped after the caller's pos was already
+    // saved) the cursor describes a frame that is gone or already up to date,
+    // and `tp` may be dangling — so re-read the top rather than trusting it.
+    ? . it trap {
+        ? & == reload 0 > ( vec_len [s] frames ) 0 {
+            : s ttp ?? ( vec_get [s] frames - ( vec_len [s] frames ) 1 ) { T x → x F → # s 0 }
+            ? != # i ttp 0 { : *Frame ftr # *Frame ttp = . ftr pos . c pos } {}
+        } {}
+        ( __trap_backtrace it m frames )
+    } {}
     : i fn ( vec_len [s] frames )
     : ~ i fi 0
     ~ < fi fn { ?? ( vec_get [s] frames fi ) { T pp → ( __frame_free pp ) F → {} } = fi + fi 1 }
