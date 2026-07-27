@@ -29,18 +29,21 @@ on:
   # development, and would re-trigger this workflow on every push.
   push:
     branches: [main]
+    # Release tags: every vX.Y.Z also refreshes the committed numbers, so
+    # a release always ships with a table measured at exactly that tag.
+    # (GitHub does not evaluate the paths filter for tag pushes, so the
+    # filter below only narrows the branch runs.)
+    tags: ['v*']
     paths:
       - 'bench/**'
       - 'compiler/**'
       - 'stdlib/**'
       - '.github/workflows/bench.yml'
 
-  # Manual run + weekly drift check both commit the refreshed numbers, so
-  # the published table stays fresh even when nothing in the source moved
-  # (runner microarchitecture drift, toolchain bumps, noise-floor changes).
+  # Manual runs also commit the refreshed numbers — for re-measuring
+  # between releases (runner microarchitecture drift, toolchain bumps,
+  # noise-floor changes) without waiting for the next tag.
   workflow_dispatch:
-  schedule:
-    - cron: '0 6 * * 1'    # Monday 06:00 UTC
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -151,7 +154,7 @@ jobs:
           retention-days: 90
 
       - name: Open a pull request with the refreshed results
-        # Manual / scheduled runs only; see the trigger comment above.
+        # Manual runs and release tags only; see the trigger comment above.
         #
         # This opens a PR rather than pushing to main, because main carries a
         # repository ruleset that requires one ("Changes must be made through
@@ -176,7 +179,7 @@ jobs:
         # one-click compare URL into the step summary instead. A red run
         # over a missing convenience-PR reads as "the benchmarks failed",
         # which is worse than the missing PR.
-        if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+        if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v')
         env:
           GH_TOKEN: ${{ secrets.BENCH_PR_TOKEN || github.token }}
         run: |
