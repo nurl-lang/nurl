@@ -47,7 +47,10 @@ concurrency:
   cancel-in-progress: true
 
 permissions:
-  contents: write          # for committing the refreshed results back
+  contents: write          # for pushing the refreshed-results branch
+  pull-requests: write     # for opening the results PR (also needs the org
+                           # Actions policy to allow PR creation, or a PAT
+                           # in BENCH_PR_TOKEN — see the PR step)
 
 jobs:
   bench:
@@ -157,16 +160,25 @@ jobs:
         # of this workflow failed. Pushing a *new branch* is allowed, so the
         # results reach main the same way every other change does.
         #
-        # Note for whoever wires this up further: a PR opened with the
-        # built-in GITHUB_TOKEN does not trigger workflow runs, so the
-        # required checks stay "expected" and `--auto` cannot complete on its
-        # own. To make the weekly refresh self-merging, either add the
-        # Actions bot as a bypass actor on the ruleset, or hand this step a
-        # PAT in a secret. Until then the PR waits for a human, which is
-        # visible rather than silent.
+        # Token order of preference:
+        #   1. BENCH_PR_TOKEN secret (a PAT) — needed because the org-level
+        #      Actions policy currently forbids the built-in GITHUB_TOKEN
+        #      from creating PRs at all ("Resource not accessible by
+        #      integration", the way run 30226327087 failed), and flipping
+        #      that policy needs an org admin. A PAT also makes the PR
+        #      trigger the required checks, so --auto can complete.
+        #   2. The built-in token — works if an org admin has enabled
+        #      "Allow GitHub Actions to create and approve pull requests";
+        #      required checks then stay "expected" and the PR waits for a
+        #      human, which is visible rather than silent.
+        # If PR creation fails anyway, DON'T fail the run: the results
+        # branch is already pushed and the artifact uploaded — print the
+        # one-click compare URL into the step summary instead. A red run
+        # over a missing convenience-PR reads as "the benchmarks failed",
+        # which is worse than the missing PR.
         if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.BENCH_PR_TOKEN || github.token }}
         run: |
           if git diff --quiet -- bench/results/latest.json bench/RESULTS.md; then
             echo "results unchanged — nothing to open."
@@ -183,16 +195,28 @@ jobs:
           git commit -m "bench: refresh measured numbers ($today)"
           git push -u origin "$branch"
 
-          gh pr create --base main --head "$branch" \
+          if gh pr create --base main --head "$branch" \
             --title "bench: refresh measured numbers ($today)" \
             --body "$(cat <<BODY
           Automated refresh from [\`bench.yml\` run ${{ github.run_id }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}).
 
-          All 15 benchmarks passed the correctness gate — every row's five implementations printed the same result — before any of them was timed. The full report, including compile times and the process-start-up floor, is in the run summary and in \`bench/RESULTS.md\` below.
+          All 15 benchmarks passed the correctness gate — every row's five implementations printed the same result — before any of them was timed, and the chaincheck physical-floor gate passed after the suite. The full report, including compile times and the process-start-up floor, is in the run summary and in \`bench/RESULTS.md\` below.
 
           Merging this updates what nurl-lang.org publishes: \`tools/gen-bench-table.mjs\` renders \`bench/results/latest.json\` into the landing page's table at the next deploy.
           BODY
-          )"
-
-          gh pr merge --auto --squash "$branch" \
-            || echo "auto-merge not available — the PR is open and waiting for a review."
+          )"; then
+            gh pr merge --auto --squash "$branch" \
+              || echo "auto-merge not available — the PR is open and waiting for a review."
+          else
+            url="${{ github.server_url }}/${{ github.repository }}/compare/main...${branch}?expand=1"
+            echo "::warning::PR creation was refused (org Actions policy?). The results branch IS pushed — open the PR here: $url"
+            {
+              echo "## Results branch pushed, PR creation refused"
+              echo
+              echo "The token cannot create pull requests (org-level Actions policy)."
+              echo "Open it with one click: $url"
+              echo
+              echo "To make this automatic: add a \`BENCH_PR_TOKEN\` PAT secret, or have an"
+              echo "org admin enable *Allow GitHub Actions to create and approve pull requests*."
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
