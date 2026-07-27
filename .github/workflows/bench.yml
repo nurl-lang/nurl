@@ -208,8 +208,17 @@ jobs:
           git checkout stash@{0} -- bench/results/latest.json bench/RESULTS.md
           git stash drop
 
+          # [skip ci] because this commit is two data files and nothing
+          # else. ci.yml and windows-tests.yml have no paths filter, so
+          # every results commit would otherwise fire the three required
+          # checks — one of them a FreeBSD VM — plus the Windows suite,
+          # against code that did not change. bench.yml itself already
+          # excludes the results files from its own paths filter, so there
+          # was never a loop; there was a second full CI round per merge,
+          # which is pure waste. The numbers were produced by a run that
+          # passed the correctness gate and chaincheck before committing.
           git add bench/results/latest.json bench/RESULTS.md
-          git commit -m "bench: refresh measured numbers ($today)"
+          git commit -m "bench: refresh measured numbers ($today) [skip ci]"
 
           # Keep the measured files OUTSIDE the worktree for the replay
           # below. Stashing them cannot work there: by that point they are
@@ -240,7 +249,7 @@ jobs:
               echo "the new tip already carries these numbers — nothing to do."
               exit 0
             fi
-            git commit -am "bench: refresh measured numbers ($today)"
+            git commit -am "bench: refresh measured numbers ($today) [skip ci]"
           done
           echo "::error::could not push refreshed results after 3 attempts."
           echo "::error::If this is GH013, BENCH_PUSH_TOKEN's account is not in the"
