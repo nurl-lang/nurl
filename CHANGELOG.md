@@ -8,6 +8,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.27.0] — 2026-07-27
+
+A WebAssembly release. The toolchain could already compile NURL to
+`wasm32-wasi` and run it on a runtime written in NURL; what was missing was
+an honest measurement of what that costs — and building one turned up the
+reason nobody had noticed the cost was wrong.
+
+`bench/wasmbench.sh` compiles every benchmark in the corpus to native *and*
+wasm in three languages and runs each module on two runtimes: the reference
+`wasmtime` and `packages/wasmtime`. Running both is what earns its keep. A
+JIT re-optimises whatever it is handed, so it reports about the same number
+for a good module and a bad one; an interpreter executes exactly what is in
+the module. That asymmetry exposed `zig cc` silently dropping `-O` for LLVM
+IR inputs — **every wasm module the toolchain had ever produced shipped
+unoptimised**, invisible in the reference column and a 5.5× gap in the
+interpreter's.
+
+With that fixed, the numbers became worth acting on. NURL's steady-state
+wasm throughput is 1.0–2.1× native on most rows, at or better than clang's
+own wasm output. The start-up gap that remained was all dead code, so
+`--gc-sections` became the link default — after re-testing the closure
+hazard that had blocked it at exactly the documented scale, where a
+`--gc-sections` `nurlc.wasm` self-compiles the 65k-line compiler
+byte-identically. And the interpreter itself went from walking raw bytes to
+a predecoded register form: **191 → 56 host instructions per wasm
+instruction**, and a full compiler self-host on it from 5m45s to 24s.
+
+Also here: `nurl upgrade`, so the toolchain updates itself instead of
+telling you to re-run a curl one-liner; `--version` on every binary; and
+several toolchain seams that had been failing quietly — a missing
+`realpath` stub that broke every wasm build reaching `path_canonical`
+(`nurlc.wasm` included), the served installer still wiping the install
+prefix, and `./build.sh` never building `nurlpkg`.
+
 ### Changed
 
 - **`packages/wasmtime`: linear-memory access in words, frames from a
@@ -9254,7 +9288,8 @@ releases are measured.
   compile-server (`api/`), browser playground (`nurlweb/`).
 * Dual license: MIT (LICENSE-MIT) or Apache-2.0 (LICENSE-APACHE).
 
-[Unreleased]: https://github.com/nurl-lang/nurl/compare/v0.26.0...HEAD
+[Unreleased]: https://github.com/nurl-lang/nurl/compare/v0.27.0...HEAD
+[0.27.0]: https://github.com/nurl-lang/nurl/compare/v0.26.0...v0.27.0
 [0.26.0]: https://github.com/nurl-lang/nurl/compare/v0.25.1...v0.26.0
 [0.25.1]: https://github.com/nurl-lang/nurl/compare/v0.25.0...v0.25.1
 [0.25.0]: https://github.com/nurl-lang/nurl/compare/v0.24.1...v0.25.0
