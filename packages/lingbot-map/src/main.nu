@@ -11,20 +11,20 @@
 // pose plus intrinsics unprojects to world-space points, which is what
 // the point cloud is.
 //
-// Output is a PLY, which every viewer reads. The vertex count is not
-// known until the last frame is done, so the header is written with a
-// fixed-width placeholder and patched at the end rather than holding the
-// whole cloud in memory.
+// Output is a PLY, which every viewer reads — written streaming through
+// the `ply` package, whose header is patched with the real vertex count
+// at the end rather than holding the whole cloud in memory. Video input
+// comes through the `video` package (MJPEG AVI in pure NURL, the rest
+// via ffmpeg), and `--view` / `lingbot-map view` serve `ply`'s WebGL
+// viewer.
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/float.nu`
 $ `stdlib/std/fs.nu`
 $ `stdlib/std/path.nu`
-$ `stdlib/std/bytes.nu`
 $ `stdlib/std/sort.nu`
 $ `stdlib/std/time.nu`
-$ `stdlib/std/floatbits.nu`
 $ `stdlib/ext/env.nu`
 $ `deps/hub/src/store.nu`
 $ `deps/hub/src/hf.nu`
@@ -33,6 +33,9 @@ $ `deps/hub/src/hub.nu`
 $ `deps/gpukit/src/gpukit.nu`
 $ `deps/gpukit/src/dev.nu`
 $ `deps/gpukit/src/devops.nu`
+$ `deps/ply/src/ply.nu`
+$ `deps/ply/src/view.nu`
+$ `deps/video/src/video.nu`
 $ `src/weights.nu`
 $ `src/devblock.nu`
 $ `src/load.nu`
@@ -42,8 +45,6 @@ $ `src/camhead.nu`
 $ `src/dpthead.nu`
 $ `src/geom.nu`
 $ `src/preproc.nu`
-$ `src/viewer.nu`
-$ `src/video.nu`
 
 : i LM_SIZE 518
 : i LM_PATCH 14
@@ -51,7 +52,6 @@ $ `src/video.nu`
 // is "no information"; the reference draws everything above 1.5 and so
 // does this.
 : f LM_CONF 1.5
-: i LM_COUNT_WIDTH 12
 
 : Opts {
     s model
@@ -151,7 +151,7 @@ $ `src/video.nu`
 // Kept in step with nurl.toml by the test suite, which compares the two.
 // 0.4.0 shipped saying 0.3.0: the manifest was bumped and this was not,
 // and nothing anywhere would have noticed.
-@ __lm_version → v { ( nurl_print `lingbot-map 0.7.0\n` ) }
+@ __lm_version → v { ( nurl_print `lingbot-map 0.8.0\n` ) }
 
 @ __lm_streq s a s b → b { ^ == 0 ( nurl_str_cmp a b ) }
 
@@ -503,77 +503,6 @@ $ `src/video.nu`
     ^ ( __lm_fetch `robbyant/lingbot-map/lingbot-map.pt` verbose 1 )
 }
 
-// ── PLY ─────────────────────────────────────────────────────────────
-
-: Ply { File f i n i ascii }
-
-// The header, up to (but excluding) the vertex-count field. Both
-// formats keep a fixed-width count so it can be patched at the end,
-// and __lm_ply_close needs the same prefix length to seek back to it.
-@ __lm_ply_head i ascii → String {
-    : String h ( string_from `ply\nformat ` )
-    ( string_push_str h ? != ascii 0 `ascii` `binary_little_endian` )
-    ( string_push_str h ` 1.0\ncomment lingbot-map, pure NURL\nelement vertex ` )
-    ^ h
-}
-
-@ __lm_wr File f String s → b {
-    : ( Vec u ) b ( bytes_from_str ( string_data s ) )
-    ?? ( file_write_chunk f b ) { T _x → { ( vec_free [u] b ) ^ T } F _e → { ( vec_free [u] b ) ^ F } }
-}
-
-// The vertex count goes in as a fixed-width zero-padded field so the
-// header keeps its byte length when the real number is patched in.
-@ __lm_count_field i n → String {
-    : String d ( string_from `` )
-    ( string_push_int d n )
-    : String s ( string_from `` )
-    : ~ i k ( string_len d )
-    ~ < k LM_COUNT_WIDTH { ( string_push_char s 48 ) = k + k 1 }
-    ( string_push_str s ( string_data d ) )
-    ( string_free d )
-    ^ s
-}
-
-@ __lm_ply_open s path i ascii → !Ply String {
-    ?? ( file_create path ) {
-        F _e → {
-            : String m ( string_from `lingbot-map: cannot write ` )
-            ( string_push_str m path )
-            ^ @ !Ply String { F m }
-        }
-        T f → {
-            : String h ( __lm_ply_head ascii )
-            : String c ( __lm_count_field 0 )
-            ( string_push_str h ( string_data c ) )
-            ( string_free c )
-            ( string_push_str h `\nproperty float x\nproperty float y\nproperty float z\nproperty uchar red\nproperty uchar green\nproperty uchar blue\nend_header\n` )
-            : b ok ( __lm_wr f h )
-            ( string_free h )
-            ? ok {} {
-                ( file_close f )
-                ^ @ !Ply String { F ( string_from `lingbot-map: cannot write the PLY header` ) }
-            }
-            ^ @ !Ply String { T @ Ply { f 0 ascii } }
-        }
-    }
-}
-
-// Rewind to the count field and overwrite it in place. The field starts
-// right after the fixed prefix, whose length is what this counts.
-@ __lm_ply_close Ply p → b {
-    : String pre ( __lm_ply_head . p ascii )
-    : i off ( string_len pre )
-    ( string_free pre )
-    : File f . p f
-    ?? ( file_seek f off 0 ) { T _o → {} F _e → { ( file_close f ) ^ F } }
-    : String c ( __lm_count_field . p n )
-    : b ok ( __lm_wr f c )
-    ( string_free c )
-    ( file_close f )
-    ^ ok
-}
-
 // ── one frame ───────────────────────────────────────────────────────
 
 @ __lm_norm * f p i h i w → v {
@@ -601,29 +530,12 @@ $ `src/video.nu`
     ^ q
 }
 
-// Emit the points of one frame. `rgb` is the un-normalised CHW image,
-// `dep` and `cf` are the head's outputs, `kinv` and `c2w` the camera.
-// One little-endian float32, appended to a byte buffer.
-@ __lm_put_f32 ( Vec u ) b f v → v {
-    : i w ( f32_to_bits # f32 v )
-    ( vec_push [u] b # u & w 255 )
-    ( vec_push [u] b # u & >> w 8 255 )
-    ( vec_push [u] b # u & >> w 16 255 )
-    ( vec_push [u] b # u & >> w 24 255 )
-}
-
-@ __lm_wrb File f ( Vec u ) b → b {
-    ?? ( file_write_chunk f b ) { T _x → { ^ T } F _e → { ^ F } }
-}
-
-@ __lm_emit Ply p * f rgb * f dep * f cf * f kinv * f c2w
-i h i w f cmin i stride → Ply {
+// Emit the points of one frame into the PLY writer. `rgb` is the
+// un-normalised CHW image, `dep` and `cf` are the head's outputs,
+// `kinv` and `c2w` the camera. The writer buffers and flushes itself.
+@ __lm_emit * PlyW p * f rgb * f dep * f cf * f kinv * f c2w
+i h i w f cmin i stride → v {
     : *f wp # *f ( nurl_zalloc 24 )
-    : ~ i n . p n
-    : File fh . p f
-    : b ascii != . p ascii 0
-    : ~ String buf ( string_from `` )
-    : ( Vec u ) bin ( vec_new [u] )
     : i plane * h w
     : ~ i y 0
     ~ < y h {
@@ -634,54 +546,16 @@ i h i w f cmin i stride → Ply {
                 // INTEGER pixel coordinates: the reference builds its
                 // grid with np.arange(W), not sample centres
                 ( unproject # f x # f y . dep idx kinv c2w wp )
-                : i r ( __lm_u8 . rgb idx )
-                : i g ( __lm_u8 . rgb + plane idx )
-                : i bl ( __lm_u8 . rgb + * 2 plane idx )
-                ? ascii {
-                    ( string_push_str buf ( nurl_str_float . wp 0 ) )
-                    ( string_push_char buf 32 )
-                    ( string_push_str buf ( nurl_str_float . wp 1 ) )
-                    ( string_push_char buf 32 )
-                    ( string_push_str buf ( nurl_str_float . wp 2 ) )
-                    ( string_push_char buf 32 )
-                    ( string_push_int buf r )
-                    ( string_push_char buf 32 )
-                    ( string_push_int buf g )
-                    ( string_push_char buf 32 )
-                    ( string_push_int buf bl )
-                    ( string_push_char buf 10 )
-                } {
-                    ( __lm_put_f32 bin . wp 0 )
-                    ( __lm_put_f32 bin . wp 1 )
-                    ( __lm_put_f32 bin . wp 2 )
-                    ( vec_push [u] bin # u r )
-                    ( vec_push [u] bin # u g )
-                    ( vec_push [u] bin # u bl )
-                }
-                = n + n 1
+                ( ply_vertex p . wp 0 . wp 1 . wp 2
+                ( __lm_u8 . rgb idx )
+                ( __lm_u8 . rgb + plane idx )
+                ( __lm_u8 . rgb + * 2 plane idx ) )
             } {}
             = x + x stride
         }
-        // Flushing per row keeps the buffer at a row's worth rather than
-        // a frame's; a 518-wide row is a few kilobytes.
-        ? ascii {
-            ? > ( string_len buf ) 0 {
-                ( __lm_wr fh buf )
-                ( string_free buf )
-                = buf ( string_from `` )
-            } {}
-        } {
-            ? > ( vec_len [u] bin ) 0 {
-                : b _w ( __lm_wrb fh bin )
-                : b _t ( vec_set_len [u] bin 0 )
-            } {}
-        }
         = y + y stride
     }
-    ( string_free buf )
-    ( vec_free [u] bin )
     ( nurl_free # s wp )
-    ^ @ Ply { fh n ? ascii 1 0 }
 }
 
 // `view` takes a cloud and the two options that apply to looking at one.
@@ -877,13 +751,12 @@ i h i w f cmin i stride → Ply {
             ? ( lw_ok lw ) {} {
                 ( nurl_print ( lw_error lw ) ) ( nurl_print `\n` ) ^ 1
             }
-            : !Ply String po ( __lm_ply_open . o out . o ascii )
+            : !*PlyW String po ( ply_create . o out . o ascii `lingbot-map, pure NURL` )
             ?? po {
                 F e → {
                     ( nurl_print ( string_data e ) ) ( nurl_print `\n` ) ( string_free e ) ^ 1
                 }
-                T ply0 → {
-                    : ~ Ply ply ply0
+                T ply → {
                     : ChWs cws ( ch_ws_new kit nframes )
                     : *i taps # *i ( nurl_zalloc 32 )
                     ( ag_default_taps taps )
@@ -1032,7 +905,7 @@ i h i w f cmin i stride → Ply {
                                             ( pose_enc_to_intri pe h w kk )
                                             ( intri_inverse kk ki )
                                             ( pose_enc_to_c2w pe c2w )
-                                            = ply ( __lm_emit ply rgb ( vec_data [f] dv )
+                                            ( __lm_emit ply rgb ( vec_data [f] dv )
                                             ( vec_data [f] cv ) ki c2w h w . o conf . o pixstride )
                                             ( nurl_free # s kk ) ( nurl_free # s ki )
                                             ( nurl_free # s c2w )
@@ -1059,7 +932,7 @@ i h i w f cmin i stride → Ply {
                                                 ( nurl_print `/` )
                                                 ( nurl_print ( nurl_str_int nframes ) )
                                                 ( nurl_print `  ` )
-                                                ( nurl_print ( nurl_str_int . ply n ) )
+                                                ( nurl_print ( nurl_str_int ( ply_count ply ) ) )
                                                 ( nurl_print ` points  ` )
                                                 ( nurl_print ( nurl_str_int
                                                 / - ( monotonic_ns ) t_frame0 1000000 ) )
@@ -1084,8 +957,8 @@ i h i w f cmin i stride → Ply {
                         } {}
                         = fi + fi 1
                     }
-                    : i total . ply n
-                    ? ( __lm_ply_close ply ) {} {
+                    : i total ( ply_count ply )
+                    ? ( ply_finish ply ) {} {
                         ( nurl_print `lingbot-map: cannot finish the PLY\n` )
                         = failed 1
                     }

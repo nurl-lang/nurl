@@ -1,0 +1,7 @@
+[package]
+name = "video"
+version = "0.1.0"
+description = "Turn a video file into ordered JPEG frames, in pure NURL where the container allows it. MJPEG-in-AVI is parsed here with no external anything: an AVI is a RIFF tree and each MJPEG '..dc' chunk is a complete JPEG, so extraction is walking the tree — hdrl/strl for the frame rate and the video stream, movi for the frames — and writing the sampled chunks to numbered files that packages/image (or any JPEG decoder) opens directly. Cameras, OBS and ffmpeg can all record MJPEG. Every other container (H.264 in MP4, HEVC, VP9, MKV, WebM) is delegated to ffmpeg when it is on PATH, with an error that says exactly what to install or how to record instead when it is not. Sampling keeps every round(src_fps/target_fps)-th frame, floor 1, from the stream's own declared rate; re-extraction into the same directory first removes exactly the frames a previous run wrote (six digits + .jpg/.png, nothing else), so a shorter run can never inherit a longer run's stale tail. Library: vid_is_video (extension test), vid_frames_dir (the <video>_frames/ convention), vid_extract (the front door: AVI in pure NURL, else ffmpeg), and the AVI parser itself as vid_avi_open/extract/close for callers that want the stream metadata. CLI: `video frames walk.avi --fps 10 --out dir` and `video probe walk.avi`. No dependencies; a truncated or non-MJPEG AVI is a clean error, never a crash."
+license = "MIT OR Apache-2.0"
+
+[dependencies]

@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>lingbot-map viewer</title>
+<title>ply viewer</title>
 <style>
   :root { color-scheme: dark; }
   /* The UA stylesheet hides [hidden] with a type selector, which ANY author
@@ -47,7 +47,7 @@
 <canvas id="gl"></canvas>
 
 <div id="hud" class="panel" hidden>
-  <h1>lingbot-map</h1>
+  <h1>ply viewer</h1>
   <div class="sub" id="src">&nbsp;</div>
   <div class="row"><span>points</span><span id="n">-</span></div>
   <div class="row"><span>drawn</span><span id="nd">-</span></div>
@@ -86,8 +86,8 @@
 var $ = function (id) { return document.getElementById(id); };
 
 /* ---------- PLY ---------------------------------------------------------
-   lingbot-map writes binary_little_endian with x,y,z float32 then r,g,b
-   uchar - 15 bytes a vertex. A 15-byte stride cannot be fed to a float
+   This package's writer emits binary_little_endian with x,y,z float32 then
+   r,g,b uchar - 15 bytes a vertex. A 15-byte stride cannot be fed to a float
    attribute (WebGL wants the stride 4-aligned), so the body is repacked to
    16 bytes: 3 floats plus 4 colour bytes.
 
@@ -202,7 +202,7 @@ var VS = [
 "                    1.5 - abs(4.0*t - 1.0)), 0.0, 1.0);",
 "}",
 "void main(){",
-/* Far outliers are mostly sky: geometry the depth head places at a
+/* Far outliers — in a reconstruction cloud, mostly sky placed at a
    plausible but enormous distance. Pushing them outside the frustum
    is the cheapest cull there is, and it composes with the density
    prefix instead of fighting it. */
@@ -249,9 +249,8 @@ var DEFAULT_TRIM = 0.98;
 var PROBE = parseInt(Q.get("probe") || "0", 10);
 var cv = $("gl"), gl = cv.getContext("webgl2",
   { antialias: false, alpha: false, preserveDrawingBuffer: PROBE > 0 });
-/* The model works in OpenCV camera axes: x right, y DOWN, z forward. So
-   world up is -Y, which is what the reference viewer uses too
-   (point_cloud_viewer.py: up_dir = -R[:, 1]). Get this wrong and the
+/* Reconstruction clouds are usually in OpenCV camera axes: x right,
+   y DOWN, z forward. So world up defaults to -Y. Get this wrong and a
    reconstruction renders upside down with the sky underneath it, which
    looks wrong but not obviously so. */
 var UP = [0, -1, 0];
