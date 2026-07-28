@@ -485,13 +485,17 @@ window.addEventListener("mousemove", function (e) {
   var dx = e.clientX - drag.x, dy = e.clientY - drag.y;
   drag.x = e.clientX; drag.y = e.clientY;
   if (drag.pan) {
-    /* pan in the camera plane, scaled so it feels the same at any zoom */
+    /* pan in the camera plane, scaled so it feels the same at any zoom.
+       World up is -Y (OpenCV axes), which MIRRORS the screen's horizontal
+       axis relative to a +Y-up orbit: the vertical drag signs come out
+       right on their own and the horizontal ones must be flipped, here
+       and in the orbit below, or left-drag walks the scene right. */
     var s = cam.dist * 0.0016;
     var rx = Math.cos(cam.yaw), rz = -Math.sin(cam.yaw);
-    cam.tgt[0] -= dx * s * rx; cam.tgt[2] -= dx * s * rz;
+    cam.tgt[0] += dx * s * rx; cam.tgt[2] += dx * s * rz;
     cam.tgt[1] -= dy * s;
   } else {
-    cam.yaw -= dx * 0.006;
+    cam.yaw += dx * 0.006;
     cam.pitch = Math.max(-1.55, Math.min(1.55, cam.pitch + dy * 0.006));
   }
 });
