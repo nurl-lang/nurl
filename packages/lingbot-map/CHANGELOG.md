@@ -33,7 +33,12 @@ a cacheless head and a causal one are the same thing for one frame,
 which is also why the per-frame test suite never caught this. Step 20's
 sequence tolerance tightens from 5e-3 to 1e-3 accordingly.
 
-No format changes; the PLY and the viewer are as in 0.4.2.
+The viewer gains a `roll` URL parameter alongside
+`yaw/pitch/dist/ps/trim`: the world frame is the first camera's, and a
+hand-held first frame is rarely level, so orbiting alone cannot square a
+tilted scene. The README's image is regenerated from the fixed
+reconstruction with the exact parameters in its caption. No format
+changes; the PLY is as in 0.4.2.
 
 ## 0.4.2
 

@@ -44,12 +44,13 @@ wrote 8602925 points to cloud.ply  (286 frames, 108624 ms)
 
 ## Look at it
 
-![286 frames of the courthouse walk, in the built-in viewer](docs/viewer.png)
+![286 frames of the courthouse walk, rendered by the built-in viewer](docs/viewer.png)
 
-> The viewer as it opens: 8 602 925 points from 286 frames, drawn in the
-> browser. Facades, shopfronts, the crossing, the parked cars — and the
-> white haze through the middle is sky, which is what the **trim** control
-> is for. (Captured headlessly, hence the blank frame rate.)
+> All 286 frames of the courthouse walk as one reconstruction — facades,
+> shopfront posters, the parked cars, the street. Rendered by the viewer
+> below from `lingbot-map --conf 3 ...`; the exact view is
+> `?yaw=1.15&pitch=0.18&dist=0.60&trim=0.94&roll=0.30`, so you can
+> reproduce it.
 
 Point it at a cloud:
 
@@ -92,6 +93,11 @@ Ctrl-C to stop
 Once it is open: **drag** to orbit, **wheel** to zoom, **shift-drag** to
 pan, **r** to reset the view, **c** to cycle the colouring, **[** and
 **]** for point size.
+
+A particular view can be linked to with URL parameters:
+`?yaw=&pitch=&dist=&roll=&ps=&trim=` — angles in radians, `dist` as a
+multiple of the automatic framing. `roll` exists because the world frame
+is the first camera's, and a hand-held first frame is rarely level.
 
 The three sliders, in the order they matter:
 

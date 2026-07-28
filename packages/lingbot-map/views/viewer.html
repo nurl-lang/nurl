@@ -255,6 +255,24 @@ var cv = $("gl"), gl = cv.getContext("webgl2",
    reconstruction renders upside down with the sky underneath it, which
    looks wrong but not obviously so. */
 var UP = [0, -1, 0];
+/* Optional camera roll about the view axis. The world frame is frame 0's
+   camera, and a hand-held first frame is rarely level — the whole scene
+   inherits its tilt, and orbiting cannot remove a roll. ?roll= (radians)
+   levels the horizon for a scene shot that way. */
+var ROLL = 0;
+function rolledUp(eye, tgt) {
+  if (!ROLL) return UP;
+  var fx = tgt[0]-eye[0], fy = tgt[1]-eye[1], fz = tgt[2]-eye[2];
+  var fl = Math.hypot(fx, fy, fz) || 1; fx/=fl; fy/=fl; fz/=fl;
+  var c = Math.cos(ROLL), sn = Math.sin(ROLL);
+  /* Rodrigues about the view direction */
+  var dot = UP[0]*fx + UP[1]*fy + UP[2]*fz;
+  return [
+    UP[0]*c + (fy*UP[2]-fz*UP[1])*sn + fx*dot*(1-c),
+    UP[1]*c + (fz*UP[0]-fx*UP[2])*sn + fy*dot*(1-c),
+    UP[2]*c + (fx*UP[1]-fy*UP[0])*sn + fz*dot*(1-c)
+  ];
+}
 var cam = { yaw: 0.6, pitch: 0.35, dist: 3, tgt: [0, 0, 0] }, home = null;
 var total = 0, drawn = 0, mode = 0, psize = 2, density = 1, trim = 0.98;
 var lo = [0,0,0], span = [1,1,1], mid = [0,0,0], radii = null, diag = 1;
@@ -316,6 +334,7 @@ function boot(data, label) {
                      $("psv").textContent = psize; }
   if (Q.has("trim")) { trim = parseFloat(Q.get("trim")); $("tm").value = trim * 100;
                        $("tmv").textContent = Math.round(100 - trim * 100) + "%"; }
+  if (Q.has("roll")) ROLL = parseFloat(Q.get("roll"));
   if (Q.has("yaw")) cam.yaw = parseFloat(Q.get("yaw"));
   if (Q.has("pitch")) cam.pitch = parseFloat(Q.get("pitch"));
   if (Q.has("dist")) cam.dist *= parseFloat(Q.get("dist"));
@@ -377,7 +396,7 @@ function boot(data, label) {
     ];
     var P = perspective(50 * Math.PI / 180, cv.width / cv.height,
                         Math.max(cam.dist / 5000, 1e-4), cam.dist * 20 + diag * 4);
-    gl.uniformMatrix4fv(uMVP, false, mul(P, lookAt(eye, cam.tgt, UP)));
+    gl.uniformMatrix4fv(uMVP, false, mul(P, lookAt(eye, cam.tgt, rolledUp(eye, cam.tgt))));
     gl.uniform1f(uSize, psize * Math.min(window.devicePixelRatio || 1, 2));
     gl.uniform1i(uMode, mode);
     gl.uniform3fv(uLo, lo);
