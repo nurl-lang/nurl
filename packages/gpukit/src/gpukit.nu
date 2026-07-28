@@ -94,6 +94,12 @@ $ `deps/gpu/src/gpu.nu`
 
 @ gk_device_name * GpuKit kit → s { ^ ( gpu_name . kit gpu ) }
 
+// Free / total device memory in bytes; 0 means the backend cannot say.
+// CUDA asks the driver; the CPU backends report host RAM.
+@ gk_mem_free * GpuKit kit → i { ^ ( gpu_mem_free . kit gpu ) }
+
+@ gk_mem_total * GpuKit kit → i { ^ ( gpu_mem_total . kit gpu ) }
+
 // Release every cached kernel, close the device, and free the kit.
 // ── Device-memory pool ────────────────────────────────────────────────
 //

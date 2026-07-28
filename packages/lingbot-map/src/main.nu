@@ -67,6 +67,7 @@ $ `src/video.nu`
     i view
     i port
     s page
+    i imgsize
 }
 
 // `video` and `fps` live outside Opts: they are consumed inside the
@@ -125,6 +126,9 @@ $ `src/video.nu`
     ( nurl_print `  --max-frames <n>    stop after n frames\n` )
     ( nurl_print `  --stride <n>        use every nth frame (applied after --max-frames)\n` )
     ( nurl_print `  --fps <n>           frames per second to take from a video (default 10)\n` )
+    ( nurl_print `  --image-size <n>    input width in pixels, a multiple of 14 (default 518).\n` )
+    ( nurl_print `                      Smaller fits longer or portrait sequences in memory:\n` )
+    ( nurl_print `                      392 roughly halves the KV cache of a portrait video.\n` )
     ( nurl_print `  --frames <dir>      a directory of frames; same as naming it positionally\n` )
     ( nurl_print `  --ascii             write an ASCII PLY instead of binary_little_endian\n` )
     ( nurl_print `  --quiet, -q         no per-frame progress\n` )
@@ -135,7 +139,7 @@ $ `src/video.nu`
     ( nurl_print `  --help, -h          this\n` )
     ( nurl_print `\n` )
     ( nurl_print `The reference's spellings are accepted too: --model_path, --image_folder,\n` )
-    ( nurl_print `--conf_threshold, --first_k, --video_path, --fps.\n` )
+    ( nurl_print `--conf_threshold, --first_k, --video_path, --fps, --image_size.\n` )
     ( nurl_print `\n` )
     ( nurl_print `Frames are read in name order, and the order is the trajectory: the model\n` )
     ( nurl_print `keeps a cache across frames, so each one is placed relative to the ones\n` )
@@ -147,7 +151,7 @@ $ `src/video.nu`
 // Kept in step with nurl.toml by the test suite, which compares the two.
 // 0.4.0 shipped saying 0.3.0: the manifest was bumped and this was not,
 // and nothing anywhere would have noticed.
-@ __lm_version → v { ( nurl_print `lingbot-map 0.6.0\n` ) }
+@ __lm_version → v { ( nurl_print `lingbot-map 0.7.0\n` ) }
 
 @ __lm_streq s a s b → b { ^ == 0 ( nurl_str_cmp a b ) }
 
@@ -169,6 +173,7 @@ $ `src/video.nu`
     ? ( __lm_streq a `--stride` ) { ^ T } {}
     ? | ( __lm_streq a `--port` ) ( __lm_streq a `--page` ) { ^ T } {}
     ? | | ( __lm_streq a `--video` ) ( __lm_streq a `--video_path` ) ( __lm_streq a `--fps` ) { ^ T } {}
+    ? | ( __lm_streq a `--image-size` ) ( __lm_streq a `--image_size` ) { ^ T } {}
     ^ F
 }
 
@@ -284,6 +289,7 @@ $ `src/video.nu`
     : ~ s page ``
     : ~ s video ``
     : ~ i fps 10
+    : ~ i imgsize LM_SIZE
     : i argc ( nurl_argc )
     : ~ i i0 1
     ~ & == bad 0 < i0 argc {
@@ -312,6 +318,9 @@ $ `src/video.nu`
             ? ( __lm_streq a `--page` ) { = page v } {}
             ? | ( __lm_streq a `--video` ) ( __lm_streq a `--video_path` ) { = video v } {}
             ? ( __lm_streq a `--fps` ) { = fps ( nurl_str_to_int v ) } {}
+            ? | ( __lm_streq a `--image-size` ) ( __lm_streq a `--image_size` ) {
+                = imgsize ( nurl_str_to_int v )
+            } {}
             ? | ( __lm_streq a `--frames` ) ( __lm_streq a `--image_folder` ) {
                 ? ( __lm_dir fr v ) {} { = bad 1 }
             } {}
@@ -347,6 +356,13 @@ $ `src/video.nu`
         = i0 + i0 1
     }
     ? < pstride 1 { = pstride 1 } {}
+    // The ViT is patchwise: the input width must be whole patches, and
+    // demo.py's own default is 518 = 37 x 14. Anything else is a typo or
+    // a misunderstanding worth naming, not rounding silently.
+    ? | | < imgsize * 4 LM_PATCH > imgsize * 74 LM_PATCH != % imgsize LM_PATCH 0 {
+        ( nurl_print `lingbot-map: --image-size must be a multiple of 14 between 56 and 1036 (default 518, smaller = less memory)\n` )
+        = bad 1
+    } {}
 
     // A video becomes a frames directory HERE, before the trim below, so
     // --max-frames and --stride mean the same thing for a video as for a
@@ -424,7 +440,7 @@ $ `src/video.nu`
         }
         : b _c ( vec_set_len [String] fr w )
     } {}
-    ^ @ Opts { model out conf pstride maxf verbose profile ascii fr bad view port page }
+    ^ @ Opts { model out conf pstride maxf verbose profile ascii fr bad view port page imgsize }
 }
 
 @ __lm_free_opts Opts o → v {
@@ -715,6 +731,29 @@ i h i w f cmin i stride → Ply {
     ^ ( vw_serve cloud `127.0.0.1` port page 0 )
 }
 
+// The run's big device allocations, in bytes, before any of them is
+// made: the aggregator's 24 x (k,v) caches, the workspace's kv repack
+// pair, and the camera head's 16 trajectory caches. Everything else on
+// the device is either the checkpoint (already resident when this runs)
+// or small in comparison. The point of estimating is that a cache that
+// cannot fit fails HERE with numbers and levers, instead of as three
+// bare "failed" lines from ops that never say why.
+@ __lm_device_bytes i nframes i p → i {
+    : i rows ( ag_kv_rows nframes p AG_KV_SCALE AG_KV_WINDOW )
+    : i aggkv * 48 * rows 4096  // 24 blocks x k+v, [16 heads, rows, 64] f32
+    : i wspk * 2 * rows 4096  // lm_ws kpack + vpack, same shape
+    : i camkv * 32 * nframes 8192  // 4 passes x 4 blocks x k+v, [16, n, 128] f32
+    ^ + + aggkv wspk camkv
+}
+
+@ __lm_print_gb i bytes → v {
+    : i tenths / + bytes 53687091 107374182
+    ( nurl_print ( nurl_str_int / tenths 10 ) )
+    ( nurl_print `.` )
+    ( nurl_print ( nurl_str_int % tenths 10 ) )
+    ( nurl_print ` GB` )
+}
+
 @ main → i {
     // `lingbot-map view <cloud.ply>` — look at a cloud that already exists,
     // without a checkpoint, a GPU or a reconstruction. Taken before the
@@ -863,7 +902,7 @@ i h i w f cmin i stride → Ply {
                         : i t_frame0 ( monotonic_ns )
                         : i dev0 ( gk_prof_total kit )
                         ? == failed 0 {
-                            : !*Frame String fro ( pp_load path LM_SIZE LM_PATCH )
+                            : !*Frame String fro ( pp_load path . o imgsize LM_PATCH )
                             ?? fro {
                                 F e → {
                                     ( nurl_print ( string_data e ) ) ( nurl_print `\n` )
@@ -877,7 +916,40 @@ i h i w f cmin i stride → Ply {
                                         = gw / w LM_PATCH
                                         = p ( ag_ntokens gh gw )
                                         = dn ( dn_tokens gh gw )
-                                        ( ag_kv_alloc kit a nframes p AG_KV_SCALE AG_KV_WINDOW )
+                                        // Fit, or say why not — BEFORE the
+                                        // first allocation. A portrait frame
+                                        // carries 1375 tokens against a
+                                        // landscape frame's 783, and past the
+                                        // 72-frame window the caches want
+                                        // ~1.75x the memory; on a card where
+                                        // that cannot fit, every op downstream
+                                        // fails without a word about memory.
+                                        : i need ( __lm_device_bytes nframes p )
+                                        : i mfree ( gk_mem_free kit )
+                                        ? & > mfree 0 > + need 268435456 mfree {
+                                            ( nurl_print `lingbot-map: this run does not fit on the device.\n` )
+                                            ( nurl_print `  frames        ` )
+                                            ( nurl_print ( nurl_str_int nframes ) )
+                                            ( nurl_print ` of ` )
+                                            ( nurl_print ( nurl_str_int w ) )
+                                            ( nurl_print `x` )
+                                            ( nurl_print ( nurl_str_int h ) )
+                                            ( nurl_print ` = ` )
+                                            ( nurl_print ( nurl_str_int p ) )
+                                            ( nurl_print ` tokens each\n  caches need   ` )
+                                            ( __lm_print_gb need )
+                                            ( nurl_print `\n  device free   ` )
+                                            ( __lm_print_gb mfree )
+                                            ( nurl_print ` of ` )
+                                            ( __lm_print_gb ( gk_mem_total kit ) )
+                                            ( nurl_print `\nWays to fit:\n` )
+                                            ( nurl_print `  --image-size 392   fewer tokens per frame (392 = 28 patches)\n` )
+                                            ( nurl_print `  --stride 2         half the frames\n` )
+                                            ( nurl_print `  --max-frames N     reconstruct a shorter stretch\n` )
+                                            = failed 1
+                                        } {
+                                            ( ag_kv_alloc kit a nframes p AG_KV_SCALE AG_KV_WINDOW )
+                                        }
                                     } {}
                                     // the RGB has to be kept before the
                                     // normalisation eats it in place
@@ -906,28 +978,34 @@ i h i w f cmin i stride → Ply {
                                     // ahead and the stages overlap as they should
                                     ? != . o profile 0 { : b _sy0 ( gk_sync kit ) } {}
                                     : i t_prep ( monotonic_ns )
-                                    ? ( ag_forward_one kit a ws dtok tok src
-                                    h w gh gw fi 1 AG_KV_SCALE AG_KV_WINDOW -1 taps out ) {} {
-                                        ( nurl_print `lingbot-map: aggregator failed\n` )
-                                        = failed 1
-                                    }
+                                    ? == failed 0 {
+                                        ? ( ag_forward_one kit a ws dtok tok src
+                                        h w gh gw fi 1 AG_KV_SCALE AG_KV_WINDOW -1 taps out ) {} {
+                                            ( nurl_print `lingbot-map: aggregator failed\n` )
+                                            = failed 1
+                                        }
+                                    } {}
 
                                     ? != . o profile 0 { : b _sy1 ( gk_sync kit ) } {}
                                     : i t_agg ( monotonic_ns )
                                     : GkBuf camtok ( lm_view out * 3 * p 2048 2048 )
                                     : GkBuf pose ( gk_dbuf_new kit 9 GK_F32 )
-                                    ? & == failed 0 ( ch_forward kit chd cws camtok fi pose ) {} {
-                                        ( nurl_print `lingbot-map: camera head failed\n` )
-                                        = failed 1
-                                    }
+                                    ? == failed 0 {
+                                        ? ( ch_forward kit chd cws camtok fi pose ) {} {
+                                            ( nurl_print `lingbot-map: camera head failed\n` )
+                                            = failed 1
+                                        }
+                                    } {}
                                     ? != . o profile 0 { : b _sy2 ( gk_sync kit ) } {}
                                     : i t_cam ( monotonic_ns )
                                     : GkBuf depth ( gk_dbuf_new kit * h w GK_F32 )
                                     : GkBuf conf ( gk_dbuf_new kit * h w GK_F32 )
-                                    ? & == failed 0 ( dp_forward kit dp out gh gw h w 0 depth conf ) {} {
-                                        ( nurl_print `lingbot-map: depth head failed\n` )
-                                        = failed 1
-                                    }
+                                    ? == failed 0 {
+                                        ? ( dp_forward kit dp out gh gw h w 0 depth conf ) {} {
+                                            ( nurl_print `lingbot-map: depth head failed\n` )
+                                            = failed 1
+                                        }
+                                    } {}
 
                                     ? != . o profile 0 { : b _sy3 ( gk_sync kit ) } {}
                                     : i t_dpt ( monotonic_ns )

@@ -197,6 +197,62 @@ $ `cpu.nu`
     ? == __gpu_backend 1 { ^ `CPU (host C++)` } { ^ ( cuda_device_name . g dev ) }
 }
 
+// Device memory: free and total bytes as the driver reports them. On the
+// CPU backends "device memory" is host RAM: MemAvailable/MemTotal from
+// /proc/meminfo where that exists, 0/0 (= unknown) where it does not.
+// 0/0 is the honest answer everywhere the question has none: callers
+// treat unknown as "do not second-guess the allocator".
+@ __gpu_meminfo_line s tag → i {
+    ?? ( read_file `/proc/meminfo` ) {
+        F _e → { ^ 0 }
+        T t → {
+            : s d ( string_data t )
+            : i n ( nurl_str_len d )
+            : i tl ( nurl_str_len tag )
+            : ~ i k 0
+            : ~ i val 0
+            ~ & < k - n tl == val 0 {
+                : ~ i m 0
+                ~ & < m tl == ( nurl_str_at d n + k m ) ( nurl_str_at tag tl m ) { = m + m 1 }
+                ? == m tl {
+                    // parse the digits after the tag; the unit is kB
+                    : ~ i j + k tl
+                    ~ & < j n | < ( nurl_str_at d n j ) 48 > ( nurl_str_at d n j ) 57 { = j + j 1 }
+                    ~ & < j n & >= ( nurl_str_at d n j ) 48 <= ( nurl_str_at d n j ) 57 {
+                        = val + * val 10 - ( nurl_str_at d n j ) 48
+                        = j + j 1
+                    }
+                } {}
+                = k + k 1
+            }
+            ( string_free t )
+            ^ * val 1024
+        }
+    }
+}
+
+@ gpu_mem_free Gpu g → i {
+    ? == __gpu_backend 0 {
+        : s fp ( nurl_zalloc 16 )
+        : ~ i r 0
+        ? == # i ( cuMemGetInfo_v2 # *u fp # *u + # i fp 8 ) 0 { = r ( nurl_peek fp 0 ) } {}
+        ( nurl_free fp )
+        ^ r
+    } {}
+    ^ ( __gpu_meminfo_line `MemAvailable:` )
+}
+
+@ gpu_mem_total Gpu g → i {
+    ? == __gpu_backend 0 {
+        : s fp ( nurl_zalloc 16 )
+        : ~ i r 0
+        ? == # i ( cuMemGetInfo_v2 # *u fp # *u + # i fp 8 ) 0 { = r ( nurl_peek fp 1 ) } {}
+        ( nurl_free fp )
+        ^ r
+    } {}
+    ^ ( __gpu_meminfo_line `MemTotal:` )
+}
+
 @ gpu_close Gpu g → v { ? == __gpu_backend 0 { ( cuda_ctx_destroy_dev . g dev ) } {} }
 
 // Block until all submitted work on the context completes. 0 == success.

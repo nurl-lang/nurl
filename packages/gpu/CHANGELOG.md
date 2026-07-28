@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.11.1
+
+- `gpu_mem_free` / `gpu_mem_total`: device memory as the driver
+  reports it (`cuMemGetInfo`); on the CPU backends host RAM from
+  /proc/meminfo, and 0/0 where the question has no answer. Added for
+  lingbot-map's out-of-memory preflight — a run that cannot fit should
+  say so before its first allocation fails silently.
+
 ## 0.11.0
 
 - **Event timers.** `gpu_timer_new/mark/ns/free` (and the `cuda_event_*`
