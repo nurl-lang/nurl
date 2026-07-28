@@ -19,12 +19,16 @@ def make_src(w, h, ch):
     return Image.frombytes(mode, (w, h), bytes(px))
 
 
-def case(w, h, ch, nw, nh):
+def case(w, h, ch, nw, nh, resample=Image.Resampling.BICUBIC, prefix="r"):
     src = make_src(w, h, ch)
-    out = src.resize((nw, nh), Image.Resampling.BICUBIC)
+    out = src.resize((nw, nh), resample)
     data = out.tobytes()
-    label = "r%d_%d_%d_%d_%d" % (w, h, ch, nw, nh)
+    label = "%s%d_%d_%d_%d_%d" % (prefix, w, h, ch, nw, nh)
     print("%s %dx%dx%d %s" % (label, nw, nh, ch, " ".join(str(b) for b in data)))
+
+
+def lcase(w, h, ch, nw, nh):
+    case(w, h, ch, nw, nh, Image.Resampling.LANCZOS, "l")
 
 
 def main():
@@ -37,6 +41,16 @@ def main():
     case(9, 9, 3, 1, 1)
     case(1, 1, 3, 5, 5)
     case(31, 5, 3, 5, 31)
+    lcase(16, 12, 3, 8, 6)
+    lcase(16, 12, 3, 32, 24)
+    lcase(17, 13, 3, 11, 7)
+    lcase(17, 13, 3, 23, 29)
+    lcase(17, 13, 3, 23, 7)
+    lcase(20, 20, 1, 7, 7)
+    lcase(9, 9, 3, 1, 1)
+    lcase(1, 1, 3, 5, 5)
+    lcase(31, 5, 3, 5, 31)
+    lcase(200, 150, 3, 74, 56)
 
 
 if __name__ == "__main__":
