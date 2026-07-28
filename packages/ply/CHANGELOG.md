@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.1 — 2026-07-28
+
+- Viewer: horizontal drag was inverted, in both orbit and pan — dragging
+  left rotated (and walked) the scene right. World up is -Y (OpenCV
+  axes), which mirrors the screen's horizontal axis relative to a +Y-up
+  orbit: the vertical signs come out right on their own, the horizontal
+  ones had to be flipped. Vertical behaviour is unchanged.
+
 ## 0.1.0 — 2026-07-28
 
 Extracted from `lingbot-map` 0.7.0 (the PLY section of `src/main.nu`,
