@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.8.0
+
+**The PLY writer, the viewer and the video extractor are their own
+packages.** `src/video.nu` is now the `video` package (MJPEG-AVI frame
+extraction in pure NURL, ffmpeg fallback), and the PLY section of
+`src/main.nu` plus `src/viewer.nu` / `views/viewer.html` are now the
+`ply` package (streaming writer with the patched vertex count, the
+embedded WebGL viewer, `vw_serve`). Both were general-purpose code that
+had nothing lingbot-shaped in them; they now version and improve on
+their own, and this package consumes them as ordinary dependencies.
+
+Behaviour is unchanged — same flags, same output bytes, same viewer —
+with one visible exception: the viewer page's title is now "ply viewer"
+rather than "lingbot-map viewer" (the HUD names the cloud being shown,
+as before). The PLY comment line still says `lingbot-map, pure NURL`.
+
 ## 0.7.0
 
 **A run that cannot fit says so, with the numbers.** A phone video is

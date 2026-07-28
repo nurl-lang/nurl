@@ -1,13 +1,12 @@
-// video.nu — a video file as input.
+// packages/video/src/video.nu — a video file, as frames on disk.
 //
-//   lingbot-map walk.mp4            extract frames, then reconstruct
-//   lingbot-map --fps 10 walk.avi   sample the video at 10 fps
+//   ( vid_extract path fps outdir verbose )   → !i String   frames kept
 //
-// The model wants ordered frames; a video is the natural way to shoot
-// them. This extracts frames into `<video>_frames/` next to the file —
-// exactly where the reference's demo.py puts them — and the ordinary
-// directory pipeline takes it from there, so `--max-frames`, `--stride`
-// and the rest all apply to video input unchanged.
+// A vision tool wants ordered frames; a video is the natural way to
+// shoot them. This extracts JPEG frames, numbered 000000.jpg on, into a
+// directory of the caller's choosing — `vid_frames_dir` names the
+// `<video>_frames/` convention next to the file — and a directory
+// pipeline takes it from there.
 //
 // Two extraction paths:
 //
@@ -19,13 +18,18 @@
 //
 //   Everything else (H.264 in MP4, HEVC, VP9, ...) — delegated to
 //   `ffmpeg` when it is on PATH. A from-scratch H.264 decoder is not
-//   this package's fight, and the reference makes the same call: its
-//   video path shells out to OpenCV. When ffmpeg is absent the error
-//   says exactly what to install or how to record instead.
+//   this package's fight. When ffmpeg is absent the error says exactly
+//   what to install or how to record instead.
 //
 // The sampling stride is computed from the stream's own frame rate:
-// keep every round(src_fps / target_fps)-th frame, floor 1 — the same
-// arithmetic demo.py uses.
+// keep every round(src_fps / target_fps)-th frame, floor 1.
+//
+//   ( vid_is_video path )        → b        the extension is a video's
+//   ( vid_frames_dir path )      → String   <dir>/<stem>_frames
+//   ( vid_avi_open path )        → !VidAvi String
+//   ( vid_avi_extract v outdir stride ) → !i String
+//   ( vid_avi_close v )          → v
+//   ( vid_extract path fps outdir verbose ) → !i String
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
@@ -61,8 +65,8 @@ $ `stdlib/std/process.nu`
     ^ F
 }
 
-// `<dir>/<stem>_frames` — demo.py's own convention, so the two tools
-// leave the same artefacts side by side.
+// `<dir>/<stem>_frames` — the conventional place: next to the video,
+// named after it, so what a run leaves behind is self-explaining.
 @ vid_frames_dir s path → String {
     : String d ( path_dirname path )
     : String base ( path_basename path )
@@ -316,7 +320,7 @@ $ `stdlib/std/process.nu`
             ( output_free o )
         }
         F _e → {
-            ( string_push_str err `this container needs ffmpeg to decode, and ffmpeg is not on PATH.\nInstall it (apt install ffmpeg), or record MJPEG (an .avi), which lingbot-map\nreads by itself.` )
+            ( string_push_str err `this container needs ffmpeg to decode, and ffmpeg is not on PATH.\nInstall it (apt install ffmpeg), or record MJPEG (an .avi), which this\npackage reads by itself.` )
         }
     }
     ( vec_free [s] args ) ( string_free pat ) ( string_free vf )
@@ -400,7 +404,7 @@ $ `stdlib/std/process.nu`
     ? ( __vd_ext_is path `.avi` ) {
         ?? ( vid_avi_open path ) {
             T av → {
-                // stride = round(src_fps / want), floor 1 — demo.py's own
+                // stride = round(src_fps / want), floor 1
                 : i num . av fps_num
                 : i den . av fps_den
                 : ~ i stride / + * 2 num * want den * 2 * want den

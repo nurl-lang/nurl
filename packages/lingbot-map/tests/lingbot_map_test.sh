@@ -702,7 +702,7 @@ PLY
             # the page, and the cloud byte-for-byte
             curl -fsS "http://127.0.0.1:$VPORT/" > "$WORK/page.html" 2>/dev/null \
                 || { bad "GET / failed"; vf=1; }
-            grep -q "lingbot-map viewer" "$WORK/page.html" \
+            grep -q "ply viewer" "$WORK/page.html" \
                 || { bad "GET / did not return the viewer page"; vf=1; }
             curl -fsS "http://127.0.0.1:$VPORT/cloud" > "$WORK/got.ply" 2>/dev/null \
                 || { bad "GET /cloud failed"; vf=1; }

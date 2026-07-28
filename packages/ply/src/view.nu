@@ -1,22 +1,24 @@
-// viewer.nu — look at the cloud.
+// packages/ply/src/view.nu — look at the cloud.
 //
-// The reference's demo.py ends in a viser web viewer; this ends in a PLY,
-// and this file is what closes that gap. It serves two things on
-// localhost: the page, and the bytes of the file that was just written.
+// Serves two things on localhost: the viewer page, and the bytes of a
+// PLY file.
 //
-//   GET /        the viewer, one self-contained HTML document
+//   GET /        the viewer, one self-contained WebGL document
 //   GET /cloud   the PLY, verbatim
 //
-// The page is compiled into the binary (src/viewer_html_data.nu, generated
+// The page is compiled into the binary (viewer_html_data.nu, generated
 // by tools/embed_viewer.py) because `nurlpkg install` ships a binary and
 // nothing else — a views/ path next to the executable can never resolve
-// for an installed tool. --page FILE overrides it while editing the page.
+// for an installed tool. A `page_override` file path replaces it while
+// editing the page.
 //
-// The cloud is read into memory once and handed out on every request. A
-// 286-frame scene is ~129 MB, which is a lot to hold but exactly what the
+// The cloud is read into memory once and handed out on every request.
+// A large scene is ~100+ MB, which is a lot to hold but exactly what the
 // browser is about to hold anyway, and it means the file can be replaced
 // underneath a running viewer without the server noticing a half-written
 // one.
+//
+//   ( vw_serve path host port page_override quiet )  → i   exit code
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
@@ -24,7 +26,7 @@ $ `stdlib/std/fs.nu`
 $ `stdlib/std/path.nu`
 $ `stdlib/std/bytes.nu`
 $ `deps/http/src/http.nu`
-$ `src/viewer_html_data.nu`
+$ `viewer_html_data.nu`
 
 : VwState {
     String page
@@ -41,7 +43,7 @@ $ `src/viewer_html_data.nu`
         ?? ( read_file override ) {
             T t → { ^ t }
             F _e → {
-                ( nurl_print `lingbot-map: cannot read ` ) ( nurl_print override )
+                ( nurl_print `ply: cannot read ` ) ( nurl_print override )
                 ( nurl_print `, using the built-in page\n` )
             }
         }
@@ -81,7 +83,7 @@ $ `src/viewer_html_data.nu`
     : ~ ( Vec u ) blob ( vec_new [u] )
     ?? rd {
         F _e → {
-            ( nurl_print `lingbot-map: cannot read ` ) ( nurl_print path )
+            ( nurl_print `ply: cannot read ` ) ( nurl_print path )
             ( nurl_print `\n` )
             ( vec_free [u] blob )
             ^ 1
@@ -89,7 +91,7 @@ $ `src/viewer_html_data.nu`
         T b → { ( vec_free [u] blob ) = blob b }
     }
     ? < ( vec_len [u] blob ) 16 {
-        ( nurl_print `lingbot-map: ` ) ( nurl_print path )
+        ( nurl_print `ply: ` ) ( nurl_print path )
         ( nurl_print ` is not a PLY file (too short)\n` )
         ( vec_free [u] blob )
         ^ 1
@@ -98,7 +100,7 @@ $ `src/viewer_html_data.nu`
     // the file the user typed, on the terminal they typed it in
     : *u magic ( vec_data [u] blob )
     ? & & == 112 # i . magic 0 == 108 # i . magic 1 == 121 # i . magic 2 {} {
-        ( nurl_print `lingbot-map: ` ) ( nurl_print path )
+        ( nurl_print `ply: ` ) ( nurl_print path )
         ( nurl_print ` does not start with 'ply' — not a point cloud\n` )
         ( vec_free [u] blob )
         ^ 1
