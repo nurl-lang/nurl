@@ -6,6 +6,11 @@
 <title>lingbot-map viewer</title>
 <style>
   :root { color-scheme: dark; }
+  /* The UA stylesheet hides [hidden] with a type selector, which ANY author
+     rule outranks — and #status sets display:grid. Without this the loading
+     overlay stays on screen for ever, opaque, on top of a cloud that has in
+     fact finished loading and is rendering happily underneath it. */
+  [hidden] { display: none !important; }
   html, body { margin: 0; height: 100%; overflow: hidden; background: #0b0d10;
                font: 13px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
                color: #c8d0d8; }
@@ -237,10 +242,10 @@ var Q = new URLSearchParams(location.search);
    sky and nothing else, and it is what makes the first frame legible */
 var DEFAULT_TRIM = 0.98;
 /* ?probe=N renders N frames and then writes the canvas back into the DOM as
-   a data URL. Headless Chrome's --screenshot grabs a compositor frame that
-   can predate the WebGL draw, while --dump-dom always reflects the finished
-   page; this is what lets tests/viewer_shot.sh see what was actually drawn.
-   preserveDrawingBuffer is only paid for when probing. */
+   a data URL, so tests/viewer_shot.sh can check what the GPU actually drew
+   rather than what the page claims. That is a narrower question than a
+   screenshot answers: it isolates the draw from everything the DOM is doing
+   on top of it. preserveDrawingBuffer is only paid for when probing. */
 var PROBE = parseInt(Q.get("probe") || "0", 10);
 var cv = $("gl"), gl = cv.getContext("webgl2",
   { antialias: false, alpha: false, preserveDrawingBuffer: PROBE > 0 });
@@ -385,7 +390,11 @@ function boot(data, label) {
 
     frames++; acc += now - last; last = now;
     if (acc > 500) {
-      $("fps").textContent = (frames * 1000 / acc).toFixed(0);
+      /* Ten frames minimum before quoting a rate. One frame over half a
+         second is not a measurement, and under a virtual clock — a headless
+         capture, a backgrounded tab — it is an invented number that looks
+         like a real one. Better to say nothing. */
+      $("fps").textContent = frames >= 10 ? (frames * 1000 / acc).toFixed(0) : "-";
       $("nd").textContent = drawn.toLocaleString();
       frames = 0; acc = 0;
     }
@@ -395,10 +404,9 @@ function boot(data, label) {
 
   if (PROBE > 0) {
     /* Probing draws its frames right here rather than waiting on the
-       animation loop. A headless browser running on a virtual clock is
-       under no obligation to deliver a requestAnimationFrame callback at
-       all, and a test that depends on one reports "nothing was drawn" for
-       a viewer that draws perfectly. */
+       animation loop: a browser on a virtual clock is under no obligation
+       to deliver a requestAnimationFrame callback, and a test that waits
+       for one can hang or report nothing drawn. */
     for (var f = 0; f < PROBE; f++) frame(performance.now());
     probeOut();
     return;
@@ -427,6 +435,10 @@ function probeOut() {
   d.setAttribute("data-mean", lit ? [Math.round(r / lit), Math.round(g / lit),
                                      Math.round(b / lit)].join(",") : "");
   d.setAttribute("data-points", String(total));
+  /* The COMPUTED display of the loading overlay, not its hidden attribute.
+     The attribute was set the whole time the overlay was covering the
+     render; only the computed style knew the difference. */
+  d.setAttribute("data-overlay", getComputedStyle($("status")).display);
   d.textContent = cv.toDataURL("image/png");
   d.style.display = "none";
   document.body.appendChild(d);
