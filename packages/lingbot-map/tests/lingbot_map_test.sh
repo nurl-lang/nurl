@@ -573,13 +573,12 @@ echo "[20/21] THE WHOLE DELIVERABLE vs the reference: same frames, same cloud"
 # something this step can hide.
 #
 # The two thresholds are different questions. ONE frame is pure arithmetic
-# and must agree tightly. A SEQUENCE accumulates: the pose of frame N is
-# estimated from a cache carrying every frame before it. The sequence
-# bound is set at what is measured TODAY so that a regression is caught —
-# it is NOT a statement that this much drift is correct. It is not: the
-# reference perturbed by 3e-4, the port's own activation-level
-# disagreement, moves only 3.9e-5, so the drift below is roughly 600x what
-# the model's conditioning explains. See README, "How close is it really".
+# and must agree tightly. A SEQUENCE accumulates f32 noise through the
+# KV caches — the aggregator's and the camera head's — so its bound is
+# looser. What it must NOT do is grow with sequence length: that was the
+# pose-drift bug (the camera head ran cacheless, every frame posed alone),
+# and after the fix the 20-frame median sits at ~2.4e-4 with the per-frame
+# error flat from frame 2 to frame 20. The bound gives ~4x headroom.
 if [ -n "${LINGBOT_CUDA_PY:-}" ]; then :;
 elif [ -x "$REPO_ROOT/.venv-cuda/bin/python" ]; then LINGBOT_CUDA_PY="$REPO_ROOT/.venv-cuda/bin/python";
 else LINGBOT_CUDA_PY=""; fi
@@ -612,7 +611,7 @@ else
             e2e_fail=1; continue
         fi
         # 1 frame is arithmetic; 20 frames is arithmetic plus accumulation.
-        [ "$N" = "1" ] && TOL=1e-4 || TOL=5e-3
+        [ "$N" = "1" ] && TOL=1e-4 || TOL=1e-3
         if out="$("$LINGBOT_CUDA_PY" tests/cmp_cloud.py \
                     "$WORK/ref$N.ply" "$WORK/port$N.ply" "$TOL" 2>&1)"; then
             ok "$N frame(s): $(echo "$out" | sed -n '2p')"

@@ -9,10 +9,10 @@ It is a port of [LingBot-Map](https://github.com/robbyant/lingbot-map),
 the feed-forward 3-D foundation model, and it runs the same 1.16 B
 parameter checkpoint the reference does. Every stage is checked against
 the reference PyTorch implementation, and on the same GPU it is several
-times faster end to end. On a single frame it reproduces the reference to
-2e-5; over a long sequence it drifts, which is measured and quantified
-under [How close is it really](#how-close-is-it-really) rather than
-glossed.
+times faster end to end. The whole deliverable is compared against the
+reference over whole sequences — same frames, same checkpoint, cloud
+against cloud — under [How close is it
+really](#how-close-is-it-really).
 
 ## Install
 
@@ -319,37 +319,27 @@ the scene. Both are in the suite as step 20.
 | frames | point counts | median displacement | centroid drift |
 | ---: | --- | ---: | ---: |
 | 1 | 33 024 vs 33 025 | 2.3e-5 | 6.9e-5 |
-| 2 | identical | 2.3e-4 | 8.9e-3 |
-| 4 | 129 979 vs 129 982 | 1.7e-3 | 5.1e-2 |
-| 12 | identical | 2.4e-3 | 1.0e-1 |
-| 20 | 589 997 vs 590 002 | 3.0e-3 | 1.8e-1 |
+| 4 | 129 979 vs 129 982 | 2.5e-4 | 2.3e-4 |
+| 12 | identical | 2.4e-4 | 1.3e-4 |
+| 20 | 589 997 vs 590 002 | 2.4e-4 | 1.2e-4 |
 
-So the **depth is right** — the point counts agree to about one part in
-30 000, which is the handful of pixels whose confidence sits within f32
-noise of the threshold — and the **poses drift**. Each frame's cloud has
-the right shape and very nearly the right size; it is placed slightly
-wrong, and the error compounds down the sequence.
+The error is **flat** — frame 20 sits as close as frame 4 — and the
+per-frame scale agrees with the reference to ±3e-4 down the whole
+sequence. What remains is float32 noise accumulating through two KV
+caches, not drift: nothing compounds.
 
-Some of that is unavoidable in a streaming model: frame N's pose is
-estimated from a cache carrying every frame before it, so a small
-disagreement early is a larger one later. But not this much. Perturbing
-the *reference's* input by 3e-4 — the size of the port's own
-activation-level disagreement — moves the reference's own 20-frame cloud
-by 4.3e-5 median and 3.9e-5 centroid. The port sits **roughly 600x
-further away than the model's own conditioning explains**, so this is a
-real accumulating difference in the streaming path and not the arithmetic
-being unlucky.
-
-It is not visible to any of the per-module tests above, which is the
-point of keeping step 20: the aggregator's activations disagree by a flat
-~3e-4 from frame 1 to frame 10 and never grow, while the trajectory built
-out of them does. Finding where that turns into pose drift is the open
-piece of work on this package.
-
-For a short sequence, or for the shape of a scene rather than its
-absolute placement, the port and the reference are the same
-reconstruction. For a long walk where the far end has to land in the
-right spot, they are not yet.
+It was not always flat, and the bug is worth recording. Through 0.4.x
+the per-frame *clouds* were right and their *placement* wandered — by 20
+frames the centroid sat 1.8e-1 of the scene away and the reconstruction
+read as rubble. The camera head was running cacheless, so every frame
+was posed alone; the reference's `CameraCausalHead` attends causally
+over every previous frame's camera token, one KV cache per refinement
+pass, and its eviction guard (`tokens-per-frame > 1`) never fires for a
+one-token stream, so those caches deliberately hold the entire
+trajectory. No per-module test could see it: the aggregator's
+activations were flat-correct all along, and pose agreement had only
+ever been checked on frame 0, where a cacheless head is
+indistinguishable from a causal one.
 
 ## How it works
 

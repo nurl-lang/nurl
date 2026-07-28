@@ -147,8 +147,19 @@ $ `src/rope.nu`
         c3 s3 }
 }
 
-// Scratch for one frame's four refinement passes. Everything here is
-// [1, ...] — the camera head sees exactly one token per frame.
+// Scratch for one frame's four refinement passes, PLUS the trunk's KV
+// caches. The camera head is not stateless across frames: the reference
+// is a CameraCausalHead whose trunk attends causally over EVERY previous
+// frame's camera token, with a separate cache per refinement pass —
+// pass i of frame N attends to the pass-i tokens of frames 0..N, not to
+// pass-1's. Sixteen caches: CH_ITERS passes x CH_DEPTH blocks.
+//
+// No eviction, and that is the reference's own behaviour rather than a
+// simplification: its `_apply_kv_cache_eviction_causal` guards on
+// tokens-per-frame > 1, and the camera head has exactly one token per
+// frame, so the guard never passes and the cache grows for the whole
+// sequence. At [16 heads, N, 128] f32 that is ~256 KB per frame across
+// all sixteen caches.
 : ChWs {
     GkBuf tok  // [1, 2048] normalised camera token
     GkBuf cond  // [1, 2048] embed_pose output
@@ -160,9 +171,20 @@ $ `src/rope.nu`
     GkBuf delta  // [9]
     GkBuf fr GkBuf rw GkBuf cl
     LmWs blk
+    ( Vec LmKv ) kvs  // CH_ITERS x CH_DEPTH, indexed it*CH_DEPTH + blk
+    i maxfr
 }
 
-@ ch_ws_new * GpuKit kit → ChWs {
+// `maxfr` is the longest sequence this workspace will see — the caches
+// and the attention scratch are sized by it once, not grown.
+@ ch_ws_new * GpuKit kit i maxfr → ChWs {
+    : i mf ? < maxfr 1 1 maxfr
+    : ( Vec LmKv ) kvs ( vec_with_cap [LmKv] * CH_ITERS CH_DEPTH )
+    : ~ i c 0
+    ~ < c * CH_ITERS CH_DEPTH {
+        ( vec_push [LmKv] kvs ( lm_kv_new kit CH_HEADS mf / CH_DIM CH_HEADS ) )
+        = c + c 1
+    }
     ^ @ ChWs {
         ( gk_dbuf_new kit CH_DIM GK_F32 )
         ( gk_dbuf_new kit CH_DIM GK_F32 )
@@ -175,7 +197,8 @@ $ `src/rope.nu`
         ( gk_dbuf_new kit 1 GK_I64 )
         ( gk_dbuf_new kit 1 GK_I64 )
         ( gk_dbuf_new kit 1 GK_I64 )
-        ( lm_ws_new kit 1 CH_DIM CH_HEADS CH_HIDDEN 1 CH_MAXPOS ) }
+        ( lm_ws_new kit 1 CH_DIM CH_HEADS CH_HIDDEN mf CH_MAXPOS )
+        kvs mf }
 }
 
 @ ch_ws_free ChWs w → v {
@@ -185,6 +208,7 @@ $ `src/rope.nu`
     ( gk_dbuf_free . w pred ) ( gk_dbuf_free . w delta )
     ( gk_dbuf_free . w fr ) ( gk_dbuf_free . w rw ) ( gk_dbuf_free . w cl )
     ( lm_ws_free . w blk )
+    ( vec_free_with [LmKv] . w kvs \ LmKv c → v { ( lm_kv_free c ) } )
 }
 
 @ __ch_upi1 * GpuKit kit GkBuf b i v → b {
@@ -200,6 +224,9 @@ $ `src/rope.nu`
 // 9-vector.
 @ ch_forward * GpuKit kit CamHead c ChWs ws GkBuf camtok i fidx GkBuf out → b {
     ? & == . camtok n CH_DIM == . out n CH_POSE {} { ^ F }
+    // The caches were sized for a sequence this frame must fit in — an
+    // index past the end would silently attend over garbage rows.
+    ? < fidx . ws maxfr {} { ^ F }
     // camera tokens live at (frame, 0, 0) — one per frame, so time is
     // the only coordinate that moves
     ? & & ( __ch_upi1 kit . ws fr fidx ) ( __ch_upi1 kit . ws rw 0 )
@@ -232,14 +259,28 @@ $ `src/rope.nu`
         ? & ok ( gkd_add kit . ws x . ws x shift ) {} { = ok F }
         ? & ok ( gkd_mul kit . ws x . ws x gate ) {} { = ok F }
         ? & ok ( gkd_add kit . ws x . ws x . ws tok ) {} { = ok F }
-        // the trunk. One token, so attention is over itself; the cache
-        // the reference keeps here only matters once frames accumulate.
+        // The trunk, attending over the STREAM: this pass's cache holds
+        // the same pass's rotated k/v for every earlier frame, this
+        // frame's rows go in at row fidx, and attention runs over all
+        // fidx+1 rows. This is what places frame N relative to the
+        // trajectory rather than in a coordinate frame of its own — the
+        // pose drift that motivated it was frames agreeing with the
+        // reference alone (2.3e-7) and disagreeing in sequence (1.9e-2
+        // by frame 2).
         : ~ i bi 0
         ~ & ok < bi CH_DEPTH {
             ?? ( vec_get [LmBlk] . c trunk bi ) {
                 T blk → {
-                    ? ( lm_block_forward kit blk . ws blk rp ( lm_kv_none ) . ws x
-                    1 CH_DIM CH_HEADS CH_HIDDEN ) {} { = ok F }
+                    ?? ( vec_get [LmKv] . ws kvs + * it CH_DEPTH bi ) {
+                        T cache → {
+                            : ~ LmKv kv cache
+                            = . kv woff fidx
+                            = . kv nvalid + fidx 1
+                            ? ( lm_block_forward kit blk . ws blk rp kv . ws x
+                            1 CH_DIM CH_HEADS CH_HIDDEN ) {} { = ok F }
+                        }
+                        F → { = ok F }
+                    }
                 }
                 F → { = ok F }
             }
