@@ -137,7 +137,7 @@ $ `src/viewer.nu`
 // Kept in step with nurl.toml by the test suite, which compares the two.
 // 0.4.0 shipped saying 0.3.0: the manifest was bumped and this was not,
 // and nothing anywhere would have noticed.
-@ __lm_version → v { ( nurl_print `lingbot-map 0.4.2\n` ) }
+@ __lm_version → v { ( nurl_print `lingbot-map 0.5.0\n` ) }
 
 @ __lm_streq s a s b → b { ^ == 0 ( nurl_str_cmp a b ) }
 
@@ -782,7 +782,7 @@ i h i w f cmin i stride → Ply {
                 }
                 T ply0 → {
                     : ~ Ply ply ply0
-                    : ChWs cws ( ch_ws_new kit )
+                    : ChWs cws ( ch_ws_new kit nframes )
                     : *i taps # *i ( nurl_zalloc 32 )
                     ( ag_default_taps taps )
                     : ~ i p 0

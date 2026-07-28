@@ -78,7 +78,7 @@ $ `src/geom.nu`
                     { ( nurl_print `aggregator FAILED\n` ) ^ 1 }
                     // the camera token is row 0 of the LAST tapped layer
                     : GkBuf camtok ( lm_view out * 3 * p 2048 2048 )
-                    : ChWs cws ( ch_ws_new kit )
+                    : ChWs cws ( ch_ws_new kit 1 )
                     : GkBuf pose ( gk_dbuf_new kit 9 GK_F32 )
                     ? ( ch_forward kit ch cws camtok 0 pose ) {}
                     { ( nurl_print `camera head FAILED\n` ) ^ 1 }

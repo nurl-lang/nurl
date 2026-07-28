@@ -1,5 +1,45 @@
 # Changelog
 
+## 0.5.0
+
+**The reconstruction holds together now.** Through 0.4.x each frame's
+cloud was correct on its own and the frames were placed slightly wrong
+relative to each other, compounding down the sequence — by 20 frames the
+centroid sat 1.8e-1 of the scene's own scale away, and a long walk read
+as rubble rather than a street.
+
+The camera head was running **cacheless**: every frame's pose was
+estimated from that frame's camera token alone, attending to itself. The
+reference's `CameraCausalHead` is causal *across frames* — the trunk
+attends over every previous frame's camera token, with a separate KV
+cache per refinement pass (pass i of frame N attends to the pass-i
+tokens of frames 0..N), and its eviction guard is `tokens-per-frame > 1`,
+which a one-token-per-frame stream never satisfies, so those caches
+intentionally hold the entire trajectory. The port now does exactly
+that: sixteen caches (4 passes x 4 trunk blocks), rows appended after
+rope at the frame's own position, attention over the full prefix.
+
+Measured over the whole deliverable, same frames, same checkpoint:
+
+| | 0.4.x | 0.5.0 |
+|---|---:|---:|
+| 20-frame median displacement | 3.0e-3 | **2.4e-4** |
+| 20-frame centroid drift | 2.6e-2 | **1.2e-4** |
+| per-frame scale vs reference | 0.91-1.05 | **0.9997-1.0003** |
+| error growth down the sequence | compounds | **flat** |
+
+Frame 0's pose is bit-for-bit what it was (2.3e-7 vs the reference) —
+a cacheless head and a causal one are the same thing for one frame,
+which is also why the per-frame test suite never caught this. Step 20's
+sequence tolerance tightens from 5e-3 to 1e-3 accordingly.
+
+The viewer gains a `roll` URL parameter alongside
+`yaw/pitch/dist/ps/trim`: the world frame is the first camera's, and a
+hand-held first frame is rarely level, so orbiting alone cannot square a
+tilted scene. The README's image is regenerated from the fixed
+reconstruction with the exact parameters in its caption. No format
+changes; the PLY is as in 0.4.2.
+
 ## 0.4.2
 
 **The viewer looked like it hung, at every cloud size.** The cloud

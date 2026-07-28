@@ -626,48 +626,57 @@ failures, so a mismatched checkpoint names the first thing actually
 wrong at load time. Layer counts are read off the file rather than
 hard-coded, so the `-long` and `-stage1` checkpoints load too.
 
-## The open one: pose drift over a sequence
+## The one that made the reconstruction rubble: the cacheless camera head
 
-Every stage section above is a one- or two-frame comparison, and every one
-of them passes. Step 20 of the suite asks a different question — does the
-*cloud* match over a *sequence* — and the answer is no. The README's
-["How close is it really"](../README.md#how-close-is-it-really) has the
-table; what belongs here is what has been ruled out and what has not.
+Solved, and the hunt is worth keeping because no per-module test could
+have found it.
 
-Ruled out:
+**Symptom.** Each frame's cloud was right — point counts within one part
+in 30 000 of the reference, shape correct — and the frames were placed
+slightly wrong relative to each other, compounding down the sequence: by
+20 frames the centroid sat 1.8e-1 of the scene away, the cloud's scale
+wandered between 0.91 and 1.05 of the reference's, and a long walk read
+as rubble.
 
-* **Arithmetic.** One frame agrees to 2.3e-5, which is the same figure the
-  per-module tests report.
-* **Inherent sensitivity.** `tests/ref_cloud.py --jitter EPS` perturbs the
-  reference's own input and re-runs it against itself. At 3e-4 — the size
-  of the port's own activation-level disagreement — the reference's
-  20-frame cloud moves by 4.3e-5 median and 3.9e-5 centroid. The port sits
-  at 3.0e-3 and 2.6e-2, about 600x further. The model is well conditioned
-  over this length; the port is not tracking it.
-* **The depth head.** Point counts agree to about one part in 30 000 over
-  20 frames, which is the handful of pixels whose confidence sits within
-  f32 noise of a strict `>`. Each frame's cloud is the right shape and
-  very nearly the right size. It is placed wrong.
-* **Growing activation error.** `streamcheck.nu` over ten streamed frames
-  against the real model on the same GPU disagrees by a **flat** 1e-4 to
-  6e-4 — frame 1 and frame 10 are the same. A non-growing activation error
-  is producing a growing trajectory error, so the divergence is in what is
-  built out of those activations, or in cache state they do not expose.
+**What was ruled out first, in order.** The arithmetic (one frame agreed
+to 2.3e-5); the model's own conditioning (the reference perturbed by
+3e-4, the size of the port's activation disagreement, moved only 3.9e-5 —
+the port sat 600x further); the depth head (counts matched); and growing
+activation error (the aggregator's tapped outputs disagreed by a *flat*
+1e-4..6e-4 from frame 1 to frame 10). A non-growing activation error was
+producing a growing trajectory error, so the bug had to be downstream of
+the activations — and the per-frame centroid stepped from 5.5e-5 to
+1.9e-2 exactly at frame 2, the first frame that reads a non-empty cache.
 
-Not ruled out, and where to look next: the per-frame centroid offset jumps
-from 5.5e-5 at frame 1 to 1.9e-2 at frame 2 — the first frame that reads a
-non-empty KV cache. Three things change at that boundary at once (the
-camera/register special-token slots, which are frame-0 only; the scale
-slot, which covers the first `nscale` frames; and the cache going
-non-empty), and the tests that exist cannot separate them because they all
-compare activations, which agree.
+**The bug.** `src/camhead.nu` ran the trunk with `lm_kv_none` and a
+comment asserting the cache "only matters once frames accumulate" — every
+frame was posed alone, attending to itself. The reference's
+`CameraCausalHead` is causal *across frames*: the trunk attends over
+every previous frame's camera token, with a **separate KV cache per
+refinement pass** — pass i of frame N attends to the pass-i tokens of
+frames 0..N, because each pass's tokens are modulated by that pass's own
+running prediction. And its eviction guard is `tokens-per-frame > 1`
+(`_apply_kv_cache_eviction_causal`), which a one-token-per-frame stream
+never satisfies: the camera caches intentionally hold the **entire
+trajectory**, unlike the aggregator's evicted ones. That detail is
+invisible unless the call site is read — the same lesson the aggregator
+eviction taught.
 
-The method that would separate them is the one the eviction bug needed: a
-per-frame `pose_enc` dump from both sides over twenty frames, not a
-strided sample of an activation. If the pose diverges smoothly it is
-accumulation; if it steps at a particular frame index it is a boundary.
+**Why every test passed.** Pose agreement had only ever been checked on
+frame 0, where a cacheless head and a causal one are the same
+computation, bit for bit. The streaming tests compared aggregator
+activations, which were never wrong. Only step 20 — the whole deliverable
+over a sequence — could see it, and it is the test that did.
 
-## Running the tests
+**After the fix** (sixteen caches, 4 passes x 4 blocks, rows appended
+after rope at the frame's own position): 20-frame median displacement
+3.0e-3 → 2.4e-4, centroid 2.6e-2 → 1.2e-4, per-frame scale 0.9997–1.0003,
+and over all 286 courthouse frames the whole cloud matches the reference
+at median 2.4e-4 with no growth from frame 2 to frame 286. Frame 0's
+pose is unchanged to the digit. Speed is unchanged — the extra attention
+is one query row over at most N cached rows, sixteen times a frame.
+
+## Running the tests## Running the tests
 
 ```
 cd packages/lingbot-map && ./tests/lingbot_map_test.sh

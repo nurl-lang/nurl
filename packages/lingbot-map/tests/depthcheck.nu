@@ -134,7 +134,7 @@ $ `src/preproc.nu`
                     // and the same depth turned into world points, which
                     // is what the CLI writes out as a cloud
                     : GkBuf camtok ( lm_view out * 3 * p 2048 2048 )
-                    : ChWs cws ( ch_ws_new kit )
+                    : ChWs cws ( ch_ws_new kit 1 )
                     : GkBuf pose ( gk_dbuf_new kit 9 GK_F32 )
                     ? ( ch_forward kit chd cws camtok 0 pose ) {}
                     { ( nurl_print `camera head FAILED\n` ) ^ 1 }
