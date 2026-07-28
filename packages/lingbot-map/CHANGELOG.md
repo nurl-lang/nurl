@@ -1,5 +1,40 @@
 # Changelog
 
+## 0.6.0
+
+**Video input.** Shoot a video, hand the file over:
+
+    lingbot-map --view walk.mp4
+    lingbot-map --fps 5 walk.avi
+
+Frames are extracted into `<video>_frames/` next to the file — the same
+place `demo.py` leaves them — and then the ordinary pipeline runs, so
+`--max-frames`, `--stride` and everything else apply to a video
+unchanged. `--fps` (default 10) samples the stream by its own frame
+rate: every `round(src_fps / fps)`-th frame, the arithmetic `demo.py`
+uses.
+
+Two decode paths, deliberately:
+
+- **MJPEG in AVI is parsed by lingbot-map itself, in pure NURL.** An AVI
+  is a RIFF tree and an MJPEG chunk is a complete JPEG, which
+  `packages/image` already decodes — extraction is a container walk, not
+  a codec. Cameras, OBS and ffmpeg can all record MJPEG.
+- **Everything else** (H.264, HEVC, VP9, ...) delegates to `ffmpeg` when
+  it is on PATH — a from-scratch H.264 decoder is not this package's
+  fight, and the reference makes the same call by shelling out to
+  OpenCV. Without ffmpeg the error says exactly what to install or how
+  to record instead.
+
+Re-extraction replaces the previous frames rather than mixing with them,
+so a shorter run cannot inherit a longer one's tail. Verified end to
+end: the reference run on the same extracted JPEGs agrees with the
+port's video-input cloud at median 2.9e-4 (VERDICT match) — the video
+path adds nothing beyond the JPEG encode itself. Suite step 22 builds an
+MJPEG AVI from scratch (`tests/make_avi.py`, Pillow + struct, no
+ffmpeg) and checks the fps stride, the files and the replacement
+behaviour, with no checkpoint and no GPU.
+
 ## 0.5.0
 
 **The reconstruction holds together now.** Through 0.4.x each frame's
