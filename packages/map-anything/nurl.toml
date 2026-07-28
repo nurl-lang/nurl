@@ -1,0 +1,14 @@
+[package]
+name = "map-anything"
+version = "0.1.0"
+description = "Metric 3-D reconstruction from plain images in pure NURL — a port of Meta's MapAnything (https://github.com/facebookresearch/map-anything). Point it at a set of photos or a video and it produces a metric-scale world-space point cloud with per-view camera poses, depth maps and confidences, viewable as a rotatable object in the browser via the ply package's WebGL viewer. Runs the reference facebook/map-anything-apache checkpoint (DINOv2-giant encoder, 16-layer alternating-attention multi-view transformer, DPT ray-directions+depth head, pose and metric-scale heads), fetched from Hugging Face on first use and cached under ~/.nurl/models."
+license = "Apache-2.0"
+
+[dependencies]
+hub = { path = "../hub", version = "^0.1" }
+http = { path = "../http", version = "^0.3" }
+gpukit = { path = "../gpukit", version = "^0.6.2" }
+image = { path = "../image", version = "^0.5" }
+ply = { path = "../ply", version = "^0.1" }
+video = { path = "../video", version = "^0.1" }
+safetensor = { path = "../safetensor", version = "^0.3" }
