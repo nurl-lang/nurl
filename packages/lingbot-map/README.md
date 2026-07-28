@@ -116,13 +116,24 @@ The three sliders, in the order they matter:
 
 ## Where frames come from
 
-Any folder of `.png`, `.jpg` or `.jpeg` files whose names sort into the
-order they were shot. From a video, that is one `ffmpeg` call:
+A video, or a folder of `.png`/`.jpg`/`.jpeg` files whose names sort
+into the order they were shot. A video is just handed over:
 
 ```bash
-mkdir frames && ffmpeg -i walk.mp4 -r 10 frames/%06d.png
-lingbot-map frames/
+lingbot-map --view walk.mp4          # extract at 10 fps, reconstruct, view
+lingbot-map --fps 5 walk.avi         # sample it sparser
 ```
+
+Frames land in `walk_frames/` next to the file — the same place
+`demo.py` puts them — and `--max-frames`, `--stride` and the rest apply
+to them unchanged. An **MJPEG `.avi`** is parsed by lingbot-map itself,
+in pure NURL; every other codec (H.264 `.mp4`, HEVC, VP9, ...) uses
+`ffmpeg` when it is on PATH, and the error tells you so when it is not.
+
+Shooting for reconstruction: move steadily, keep sharp fixed features in
+view (corners, signs, textured walls — the model tracks what it can
+see), and avoid spinning in place. 10 fps of a walking pace is plenty;
+more frames add ghost layers faster than they add coverage.
 
 The example sequences the reference uses — `courthouse`, `loop`,
 `university` — come with
@@ -165,6 +176,7 @@ lingbot-map --ascii --max-frames 2 --out two.ply ~/dev/lingbot-map/example/court
 | `--pixel-stride <n>` | take every nth pixel on both axes (default 2) |
 | `--max-frames <n>` | stop after n frames |
 | `--stride <n>` | use every nth frame, applied after `--max-frames` |
+| `--fps <n>` | frames per second to take from a video (default 10) |
 | `--frames <dir>` | a directory of frames; the same as naming it positionally |
 | `--ascii` | write an ASCII PLY instead of `binary_little_endian` |
 | `--quiet`, `-q` | no per-frame progress |
@@ -174,8 +186,8 @@ lingbot-map --ascii --max-frames 2 --out two.ply ~/dev/lingbot-map/example/court
 | `--version`, `--help` | |
 
 The reference's own spellings work too — `--model_path`,
-`--image_folder`, `--conf_threshold`, `--first_k` — so a `demo.py`
-command line mostly transfers.
+`--image_folder`, `--conf_threshold`, `--first_k`, `--video_path`,
+`--fps` — so a `demo.py` command line mostly transfers.
 
 **Order is the trajectory.** Frames are read in name order, and the model
 keeps a cache across frames, so each one is placed relative to the ones
@@ -189,8 +201,9 @@ The model is the same and the numbers agree; the packaging does not.
   in a viser viewer with camera frusta, per-frame playback and a sky mask;
   `lingbot-map view` orbits the cloud and lets you trim and thin it. Both
   run in a browser on localhost.
-* **No video input.** `demo.py --video_path` shells out to OpenCV; split
-  the video with `ffmpeg` and point at the folder.
+* **Video decode is MJPEG-native, ffmpeg otherwise.** `demo.py` shells
+  out to OpenCV for every codec; this parses MJPEG AVI itself and uses
+  `ffmpeg` for the rest.
 * **No scale-frame block.** `demo.py` runs the first `--num_scale_frames`
   (8 by default) frames as **one block with bidirectional attention among
   themselves**, and only then goes frame-by-frame. The port is causal from

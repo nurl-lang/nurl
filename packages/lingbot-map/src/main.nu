@@ -43,6 +43,7 @@ $ `src/dpthead.nu`
 $ `src/geom.nu`
 $ `src/preproc.nu`
 $ `src/viewer.nu`
+$ `src/video.nu`
 
 : i LM_SIZE 518
 : i LM_PATCH 14
@@ -68,6 +69,10 @@ $ `src/viewer.nu`
     s page
 }
 
+// `video` and `fps` live outside Opts: they are consumed inside the
+// parser itself — extraction runs before the --max-frames/--stride trim
+// so both apply to video frames through the one code path.
+
 @ __lm_usage → v {
     ( nurl_print `usage: lingbot-map [options] <frames-dir>\n` )
     ( nurl_print `       lingbot-map [options] <frame.png> <frame.png> ...\n` )
@@ -78,7 +83,7 @@ $ `src/viewer.nu`
     ( nurl_print `lingbot-map -- streaming 3-D reconstruction from a sequence of frames.\n` )
     ( nurl_print `Give it frames in order; it writes a world-space point cloud as a PLY.\n` )
     ( nurl_print `\n` )
-    ( nurl_print `usage: lingbot-map [options] <frames-dir>\n` )
+    ( nurl_print `usage: lingbot-map [options] <frames-dir | video.mp4>\n` )
     ( nurl_print `       lingbot-map [options] <frame.png> <frame.png> ...\n` )
     ( nurl_print `       lingbot-map view <cloud.ply> [--port n]\n` )
     ( nurl_print `\n` )
@@ -86,6 +91,10 @@ $ `src/viewer.nu`
     ( nurl_print `  # a folder of frames -> cloud.ply. The checkpoint is downloaded once,\n` )
     ( nurl_print `  # on the first run, and cached under ~/.nurl/models.\n` )
     ( nurl_print `  lingbot-map ~/dev/lingbot-map/example/courthouse\n` )
+    ( nurl_print `\n` )
+    ( nurl_print `  # a video you shot, sampled at 10 fps (MJPEG .avi needs nothing;\n` )
+    ( nurl_print `  # other codecs use ffmpeg when it is installed)\n` )
+    ( nurl_print `  lingbot-map --view walk.mp4\n` )
     ( nurl_print `\n` )
     ( nurl_print `  # the first 30 frames, every pixel, written where you want it\n` )
     ( nurl_print `  lingbot-map --max-frames 30 --pixel-stride 1 --out courthouse.ply \\\n` )
@@ -115,6 +124,7 @@ $ `src/viewer.nu`
     ( nurl_print `  --pixel-stride <n>  take every nth pixel on both axes (default 2)\n` )
     ( nurl_print `  --max-frames <n>    stop after n frames\n` )
     ( nurl_print `  --stride <n>        use every nth frame (applied after --max-frames)\n` )
+    ( nurl_print `  --fps <n>           frames per second to take from a video (default 10)\n` )
     ( nurl_print `  --frames <dir>      a directory of frames; same as naming it positionally\n` )
     ( nurl_print `  --ascii             write an ASCII PLY instead of binary_little_endian\n` )
     ( nurl_print `  --quiet, -q         no per-frame progress\n` )
@@ -125,7 +135,7 @@ $ `src/viewer.nu`
     ( nurl_print `  --help, -h          this\n` )
     ( nurl_print `\n` )
     ( nurl_print `The reference's spellings are accepted too: --model_path, --image_folder,\n` )
-    ( nurl_print `--conf_threshold, --first_k.\n` )
+    ( nurl_print `--conf_threshold, --first_k, --video_path, --fps.\n` )
     ( nurl_print `\n` )
     ( nurl_print `Frames are read in name order, and the order is the trajectory: the model\n` )
     ( nurl_print `keeps a cache across frames, so each one is placed relative to the ones\n` )
@@ -137,7 +147,7 @@ $ `src/viewer.nu`
 // Kept in step with nurl.toml by the test suite, which compares the two.
 // 0.4.0 shipped saying 0.3.0: the manifest was bumped and this was not,
 // and nothing anywhere would have noticed.
-@ __lm_version → v { ( nurl_print `lingbot-map 0.5.0\n` ) }
+@ __lm_version → v { ( nurl_print `lingbot-map 0.6.0\n` ) }
 
 @ __lm_streq s a s b → b { ^ == 0 ( nurl_str_cmp a b ) }
 
@@ -158,6 +168,7 @@ $ `src/viewer.nu`
     ? | ( __lm_streq a `--frames` ) ( __lm_streq a `--image_folder` ) { ^ T } {}
     ? ( __lm_streq a `--stride` ) { ^ T } {}
     ? | ( __lm_streq a `--port` ) ( __lm_streq a `--page` ) { ^ T } {}
+    ? | | ( __lm_streq a `--video` ) ( __lm_streq a `--video_path` ) ( __lm_streq a `--fps` ) { ^ T } {}
     ^ F
 }
 
@@ -271,6 +282,8 @@ $ `src/viewer.nu`
     : ~ i view 0
     : ~ i port 8080
     : ~ s page ``
+    : ~ s video ``
+    : ~ i fps 10
     : i argc ( nurl_argc )
     : ~ i i0 1
     ~ & == bad 0 < i0 argc {
@@ -297,6 +310,8 @@ $ `src/viewer.nu`
             ? ( __lm_streq a `--stride` ) { = fstride ( nurl_str_to_int v ) } {}
             ? ( __lm_streq a `--port` ) { = port ( nurl_str_to_int v ) } {}
             ? ( __lm_streq a `--page` ) { = page v } {}
+            ? | ( __lm_streq a `--video` ) ( __lm_streq a `--video_path` ) { = video v } {}
+            ? ( __lm_streq a `--fps` ) { = fps ( nurl_str_to_int v ) } {}
             ? | ( __lm_streq a `--frames` ) ( __lm_streq a `--image_folder` ) {
                 ? ( __lm_dir fr v ) {} { = bad 1 }
             } {}
@@ -316,12 +331,15 @@ $ `src/viewer.nu`
                     ( nurl_print `\n` )
                     = bad 1
                 } {
-                    // A positional is either a directory of frames or one
-                    // frame. Naming the directory is what people try first.
+                    // A positional is a directory of frames, a video, or
+                    // one frame. Naming the directory is what people try
+                    // first; handing over the video is what they film.
                     ? ( __lm_is_dir a ) {
                         ? ( __lm_dir fr a ) {} { = bad 1 }
                     } {
-                        ( vec_push [String] fr ( string_from a ) )
+                        ? ( vid_is_video a ) { = video a } {
+                            ( vec_push [String] fr ( string_from a ) )
+                        }
                     }
                 }
             } {}
@@ -329,6 +347,51 @@ $ `src/viewer.nu`
         = i0 + i0 1
     }
     ? < pstride 1 { = pstride 1 } {}
+
+    // A video becomes a frames directory HERE, before the trim below, so
+    // --max-frames and --stride mean the same thing for a video as for a
+    // directory. Extraction is idempotent per (video, fps): frames land
+    // in <video>_frames/ next to the file, the way demo.py leaves them.
+    ? & == bad 0 > ( nurl_str_len video ) 0 {
+        ? == ( vec_len [String] fr ) 0 {} {
+            ( nurl_print `lingbot-map: give a video or frames, not both\n` )
+            = bad 1
+        }
+        ? == bad 0 {
+            ? == 1 ( nurl_path_type video ) {} {
+                ( nurl_print `lingbot-map: no such video: ` )
+                ( nurl_print video ) ( nurl_print `\n` )
+                = bad 1
+            }
+        } {}
+        ? == bad 0 {
+            : String fdir ( vid_frames_dir video )
+            ?? ( vid_extract video fps ( string_data fdir ) verbose ) {
+                T n → {
+                    ? > n 0 {
+                        ? != verbose 0 {
+                            ( nurl_print `frames  ` )
+                            ( nurl_print ( nurl_str_int n ) )
+                            ( nurl_print ` extracted -> ` )
+                            ( nurl_print ( string_data fdir ) )
+                            ( nurl_print `\n` )
+                        } {}
+                        ? ( __lm_dir fr ( string_data fdir ) ) {} { = bad 1 }
+                    } {
+                        ( nurl_print `lingbot-map: the video yielded no frames\n` )
+                        = bad 1
+                    }
+                }
+                F e → {
+                    ( nurl_print `lingbot-map: ` )
+                    ( nurl_print ( string_data e ) ) ( nurl_print `\n` )
+                    ( string_free e )
+                    = bad 1
+                }
+            }
+            ( string_free fdir )
+        } {}
+    } {}
 
     // --max-frames caps the sequence and --stride then subsamples what is
     // left, which is the order the reference applies its own --first_k and
