@@ -1,6 +1,6 @@
 # Benchmark results — NURL vs C vs Rust vs Node vs Python
 
-Generated `2026-07-27T18:55:06Z` by `bench/bench.sh`. **Do not edit by hand** — the next
+Generated `2026-07-28T17:06:52Z` by `bench/bench.sh`. **Do not edit by hand** — the next
 run overwrites it. The machine-readable form of this same run is
 [`results/latest.json`](results/latest.json), which is what the landing
 page renders its table from.
@@ -11,11 +11,11 @@ page renders its table from.
 |---|---|
 | Host | `GitHub Actions ubuntu-latest runner` |
 | Kernel | `Linux 6.17.0-1020-azure x86_64` |
-| CPU | AMD EPYC 7763 64-Core Processor (4 logical cores) |
-| Memory | 16373456 KiB |
-| Commit | `220fe3b71b050a17ad2a7d5122091ac50fe90c4c` |
-| CI run | https://github.com/nurl-lang/nurl/actions/runs/30294717011 |
-| NURL | `v0.27.0-4-g220fe3b` |
+| CPU | INTEL(R) XEON(R) PLATINUM 8573C (4 logical cores) |
+| Memory | 16372440 KiB |
+| Commit | `2996a9ed2f2db1dd351461f897b0c849331c12b0` |
+| CI run | https://github.com/nurl-lang/nurl/actions/runs/30381086145 |
+| NURL | `v0.27.0-28-g2996a9e` |
 | C | Ubuntu clang version 18.1.3 (1ubuntu1) |
 | Rust | rustc 1.97.1 (8bab26f4f 2026-07-14) |
 | Node | v22.23.1 |
@@ -36,22 +36,22 @@ same computation. **Bold** is the fastest cell in the row.
 
 | Benchmark | NURL | C | Rust | Node | Python |
 |---|---:|---:|---:|---:|---:|
-| _(floor: empty program)_ | _1.741_ | _1.758_ | _1.905_ | _24.454_ | _17.549_ |
-| `lcg` | **39.306** | 39.455 | 39.742 | 1876.271 | 5065.439 |
-| `affine_mix` | **39.436** | 39.505 | 39.765 | 1868.351 | 6345.308 |
-| `packet_classifier` | **56.752** | 56.816 | 57.049 | 164.710 | 4802.268 |
-| `ring_write` | **42.581** | 42.827 | 42.853 | 69.034 | 6105.687 |
-| `histogram_bins` | 40.093 | 41.778 | **40.006** | 67.746 | 6171.224 |
-| `prefix_scan` | 22.311 | 22.240 | **22.215** | 67.844 | 4618.950 |
-| `binary_search` | 40.245 | **38.845** | 43.632 | 108.829 | 6287.938 |
-| `sort_window` | 27.626 | 27.899 | **27.512** | 200.572 | 11345.280 |
-| `bloom_filter` | **18.303** | 18.631 | 18.799 | 2832.280 | 7543.209 |
-| `hash_join` | **4.648** | 4.878 | 5.282 | 377.711 | 835.450 |
-| `sieve` | 21.143 | **19.496** | 19.811 | 70.985 | 3241.570 |
-| `fib` | **25.582** | 30.058 | 28.614 | 134.349 | 1346.082 |
-| `collatz` | **12.563** | 12.609 | 12.842 | 52.675 | 713.890 |
-| `matmul` | 34.509 | 34.435 | **34.340** | 78.892 | 3186.466 |
-| `json_parse` | **8.851** | 9.158 | 11.978 | 38.903 | 40.849 |
+| _(floor: empty program)_ | _1.242_ | _1.270_ | _1.357_ | _18.360_ | _13.396_ |
+| `lcg` | **35.409** | 35.581 | 35.641 | 1321.964 | 3865.797 |
+| `packet_classifier` | **56.518** | 62.800 | 62.209 | 147.088 | 3161.431 |
+| `ring_write` | 38.953 | **38.527** | 38.920 | 58.144 | 4555.943 |
+| `histogram_bins` | **36.302** | 36.474 | 36.563 | 59.121 | 4301.111 |
+| `prefix_scan` | **19.910** | 20.422 | 20.420 | 58.905 | 3230.231 |
+| `binary_search` | 30.245 | **28.215** | 38.972 | 102.428 | 4684.373 |
+| `sort_window` | 38.371 | 46.388 | **35.806** | 158.447 | 8257.032 |
+| `bloom_filter` | 12.890 | **12.838** | 12.949 | 2132.325 | 5771.991 |
+| `hash_join` | **21.525** | 23.189 | 24.189 | 2709.381 | 6307.057 |
+| `sieve` | 33.517 | 32.274 | **31.964** | 73.290 | 2460.745 |
+| `fib` | 26.160 | 28.505 | **23.309** | 101.612 | 791.581 |
+| `collatz` | **13.420** | 14.152 | 13.637 | 52.501 | 505.428 |
+| `matmul` | 19.075 | **18.166** | 18.809 | 63.391 | 2245.139 |
+| `json_parse` | **6.334** | 6.818 | 8.456 | 29.828 | 30.273 |
+| `nbody` | 28.740 | 29.074 | **26.570** | 70.151 | 1895.675 |
 
 ## 2. Compile time (median, ms)
 
@@ -65,22 +65,22 @@ column here: they compile at run time, inside their own cells above.
 
 | Benchmark | NURL `nurlc` | NURL `clang` | **NURL total** | C `clang` | Rust `rustc` |
 |---|---:|---:|---:|---:|---:|
-| _(floor: empty program)_ | _3.097_ | _83.244_ | _**86.341**_ | _63.693_ | _64.397_ |
-| `lcg` | 3.136 | 89.340 | **92.476** | 68.674 | 69.887 |
-| `affine_mix` | 3.263 | 95.783 | **99.046** | 75.213 | 76.759 |
-| `packet_classifier` | 3.302 | 89.654 | **92.956** | 70.107 | 72.802 |
-| `ring_write` | 3.412 | 93.866 | **97.278** | 74.716 | 74.275 |
-| `histogram_bins` | 3.660 | 97.737 | **101.397** | 76.966 | 79.933 |
-| `prefix_scan` | 3.628 | 93.117 | **96.745** | 77.106 | 76.550 |
-| `binary_search` | 4.179 | 99.896 | **104.075** | 75.854 | 82.529 |
-| `sort_window` | 4.176 | 105.352 | **109.528** | 80.562 | 84.083 |
-| `bloom_filter` | 4.216 | 102.877 | **107.093** | 81.946 | 83.942 |
-| `hash_join` | 9.054 | 221.633 | **230.687** | 127.387 | 122.972 |
-| `sieve` | 3.803 | 101.415 | **105.218** | 87.312 | 91.282 |
-| `fib` | 3.100 | 91.152 | **94.252** | 74.162 | 71.934 |
-| `collatz` | 3.465 | 94.280 | **97.745** | 72.703 | 76.855 |
-| `matmul` | 4.678 | 102.431 | **107.109** | 86.996 | 99.891 |
-| `json_parse` | 74.143 | 765.723 | **839.866** | 131.337 | 194.248 |
+| _(floor: empty program)_ | _2.107_ | _62.657_ | _**64.764**_ | _43.060_ | _50.971_ |
+| `lcg` | 2.166 | 61.040 | **63.206** | 45.456 | 57.614 |
+| `packet_classifier` | 2.248 | 62.659 | **64.907** | 66.833 | 54.808 |
+| `ring_write` | 2.385 | 63.471 | **65.856** | 46.571 | 54.711 |
+| `histogram_bins` | 2.463 | 67.386 | **69.849** | 48.314 | 59.015 |
+| `prefix_scan` | 2.611 | 69.699 | **72.310** | 51.806 | 60.269 |
+| `binary_search` | 2.791 | 66.421 | **69.212** | 51.674 | 65.993 |
+| `sort_window` | 2.845 | 74.038 | **76.883** | 55.589 | 67.931 |
+| `bloom_filter` | 3.072 | 74.841 | **77.913** | 59.702 | 66.924 |
+| `hash_join` | 6.437 | 159.433 | **165.870** | 88.753 | 96.448 |
+| `sieve` | 2.551 | 68.701 | **71.252** | 56.257 | 68.968 |
+| `fib` | 2.236 | 62.869 | **65.105** | 50.223 | 58.025 |
+| `collatz` | 2.531 | 71.424 | **73.955** | 49.038 | 59.225 |
+| `matmul` | 3.398 | 74.190 | **77.588** | 61.063 | 81.068 |
+| `json_parse` | 53.830 | 564.498 | **618.328** | 91.622 | 164.353 |
+| `nbody` | 5.032 | 81.610 | **86.642** | 69.920 | 77.888 |
 
 ## 3. Correctness gate
 
@@ -92,7 +92,6 @@ reported as a fast cell.
 | Benchmark | Output | Verdict |
 |---|---|---|
 | `lcg` | `-7585129161289236796` | identical across 5 languages |
-| `affine_mix` | `227901546981696845` | identical across 5 languages |
 | `packet_classifier` | `4205972061` | identical across 5 languages |
 | `ring_write` | `8299504528805184357` | identical across 5 languages |
 | `histogram_bins` | `1215643728` | identical across 5 languages |
@@ -100,12 +99,13 @@ reported as a fast cell.
 | `binary_search` | `805907445` | identical across 5 languages |
 | `sort_window` | `2815490238` | identical across 5 languages |
 | `bloom_filter` | `2351703` | identical across 5 languages |
-| `hash_join` | `2814341850483607168` | identical across 5 languages |
+| `hash_join` | `6152419568754618368` | identical across 5 languages |
 | `sieve` | `664579` | identical across 5 languages |
 | `fib` | `9227465` | identical across 5 languages |
 | `collatz` | `350` | identical across 5 languages |
 | `matmul` | `393199` | identical across 5 languages |
 | `json_parse` | `20` | identical across 5 languages |
+| `nbody` | `4595260366167553674` | identical across 5 languages |
 
 ## 4. Reading the numbers
 
@@ -116,11 +116,20 @@ reported as a fast cell.
   be clever: LLVM will fold an affine recurrence or unroll a loop by a
   different factor in each language. A cell measures optimised throughput
   of the same algorithm, not the source-level iteration count.
-* Ten of the fifteen benchmarks are defined over 64-bit unsigned integers.
+* Nine of the fifteen benchmarks are defined over 64-bit unsigned integers.
   Python has arbitrary-precision integers and masks; JS has no 64-bit
   integer at all, so those rows use `BigInt` where the algorithm genuinely
   needs 64 bits and Numbers with `Math.imul` where 32 bits suffice. Each
   file says which and why. That gap *is* part of what this table reports.
+* `nbody` is the counterweight to the row above, and the only row defined
+  over IEEE-754 doubles rather than integers. That is the type JavaScript
+  does have — its one numeric type is the double — so Node runs the same
+  arithmetic as the compiled backends with no representation tax, and lands
+  near 2x C instead of the 30-50x the BigInt rows cost it. It is also the
+  only row whose critical path runs through the FPU's long-latency sqrt and
+  divide units rather than the integer ALU. All five ports use the same
+  operation order and the same struct-of-arrays layout, so the checksum —
+  the final energy's bit pattern — is exact across all five.
 * `json_parse` is the one row whose gate is "every parser accepted the
   document" rather than a structural checksum: each language uses the
   parser in its own box (Python `json`, Node `JSON.parse`, NURL
