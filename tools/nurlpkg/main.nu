@@ -3300,16 +3300,17 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
                     ?? ( process_run `chmod` chargs `` ) { T o → ( output_free o ) F _ → {} }
                     ( vec_free [s] chargs )
                 } {}
-                ( nurl_print `Installed ` ) ( nurl_print name )
-                ( nurl_print ` → ` ) ( nurl_print ( string_data dest ) ) ( nurl_print `\n` )
                 // Stage the package's declared runtime assets ([install].assets)
                 // into <prefix>/share/<name>/ so the tool finds them relative to
                 // its own executable (a registry install ships data, not just a
                 // binary). A missing/failed asset fails the install.
+                // The version is read here too, for the closing line.
+                : String ver ( string_new )
                 : String ampath ( path_join pkgdir `nurl.toml` )
                 ?? ( manifest_load ( string_data ampath ) ) {
                     T am → {
                         ? != 0 ( __install_assets am pkgdir name ( string_data bindir ) ) { = rc 1 } {}
+                        ( string_push_str ver ( string_data . am version ) )
                         ( manifest_free am )
                     }
                     F _ → {}
@@ -3317,6 +3318,15 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
                 ( string_free ampath )
                 // Show the package's [hints].postinstall message, if any.
                 ( __print_postinstall pkgdir )
+                // The LAST line says what landed and where — the name and
+                // version, not a bare "done".
+                ( nurl_print name )
+                ? > ( string_len ver ) 0 {
+                    ( nurl_print ` ` ) ( nurl_print ( string_data ver ) )
+                } {}
+                ( nurl_print ` installed → ` )
+                ( nurl_print ( string_data dest ) ) ( nurl_print `\n` )
+                ( string_free ver )
             }
         }
         ( string_free outbin )
@@ -3633,6 +3643,13 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
             : ( Vec LockPkg ) regpkgs ( vec_new [LockPkg] )
             : i reg_rc ( __install_registry root cwd_s regpkgs )
             ? != reg_rc 0 { = rc 1 } {}
+            // The closing line names the package whose deps these are —
+            // captured before the manifest is freed.
+            : String who ( string_from ( string_data . root name ) )
+            ? > ( string_len . root version ) 0 {
+                ( string_push_char who 32 )
+                ( string_push_str who ( string_data . root version ) )
+            } {}
             ( manifest_free root )
             // Regenerate the lockfile from the resulting deps/ tree. We do
             // this even if some deps failed — a partial lockfile correctly
@@ -3641,7 +3658,9 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
             : i lr ( __write_lockfile regpkgs )
             ? != lr 0 { = rc 1 } {}
             ( lockpkgs_free regpkgs )
-            ( nurl_print `done.\n` )
+            ( nurl_print ( string_data who ) )
+            ( nurl_print `: dependencies installed\n` )
+            ( string_free who )
         }
     }
     ( string_free cwd )
