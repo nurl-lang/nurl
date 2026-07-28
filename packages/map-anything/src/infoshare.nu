@@ -112,9 +112,10 @@ $ `src/load.nu`
 }
 
 // After every view is placed: fusion-norm the patch rows (NOT the cls
-// registers), add view_pos_table to every view-0 token, and write the
-// scale token into the last row.
-@ is_finish_input * GpuKit kit InfoShare ish GkBuf x i nv i np → b {
+// registers). This is the state the DPT head's hook 0 wants — snapshot
+// AFTER this and BEFORE is_mark_input, which is what the reference
+// feeds it (the view positional encoding is info_sharing-internal).
+@ is_fuse_input * GpuKit kit InfoShare ish GkBuf x i nv i np → b {
     : i tpv + np 1
     : ~ i v 0
     ~ < v nv {
@@ -122,6 +123,13 @@ $ `src/load.nu`
         ? ( gkd_layernorm kit pr pr . ish fng . ish fnb np IS_DIM 0.000001 ) {} { ^ F }
         = v + v 1
     }
+    ^ T
+}
+
+// Add view_pos_table to every view-0 token and write the scale token
+// into the last row.
+@ is_mark_input * GpuKit kit InfoShare ish GkBuf x i nv i np → b {
+    : i tpv + np 1
     // view 0 gets the reference-view positional encoding, cls included
     : GkBuf v0 ( ma_view x 0 * tpv IS_DIM )
     : ( Vec i ) od ( _ma_i2 tpv IS_DIM )
@@ -132,6 +140,11 @@ $ `src/load.nu`
     ? okpe {} { ^ F }
     : GkBuf last ( ma_view x * * nv tpv IS_DIM IS_DIM )
     ^ ( gk_dbuf_upload kit last . ish scaletok )
+}
+
+@ is_finish_input * GpuKit kit InfoShare ish GkBuf x i nv i np → b {
+    ? ( is_fuse_input kit ish x nv np ) {} { ^ F }
+    ^ ( is_mark_input kit ish x nv np )
 }
 
 // The 16 blocks. `n` is the full sequence length is_tokens(nv, np);
