@@ -28,11 +28,9 @@ $ `src/weights.nu`
     ? ok {} { = __wc_fails + __wc_fails 1 }
 }
 
-@ main ( Vec String ) argv → i {
+@ main → i {
     : ~ s path ( __wc_default )
-    ? > ( vec_len [String] argv ) 1 {
-        ?? ( vec_get [String] argv 1 ) { T a → { = path ( string_data a ) } F → {} }
-    } {}
+    ? > ( nurl_argc ) 1 { = path ( nurl_argv 1 ) } {}
     : !*Lw String r ( lw_open path )
     : ~ * Lw w # *Lw 0
     ?? r {
