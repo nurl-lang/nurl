@@ -94,6 +94,17 @@ for d in courthouse loop university; do
         [ -f "$p" ] && FRAMES="$FRAMES $p"
     done
 done
+# A PORTRAIT frame too: the crop path where the resized height overshoots
+# and is centre-cropped back had never met one until a phone video did.
+if [ -n "$FRAMES" ] && [ -n "${PYTORCH_PY:-}" ] && \
+   "$PYTORCH_PY" -c "import PIL" 2>/dev/null; then
+    WORK="$WORK" "$PYTORCH_PY" -c "
+import os
+from PIL import Image
+src = os.path.expanduser('~/dev/lingbot-map/example/courthouse/000000.png')
+Image.open(src).transpose(Image.ROTATE_90).save(os.environ['WORK'] + '/portrait.png')
+" 2>/dev/null && FRAMES="$FRAMES $WORK/portrait.png"
+fi
 if ! $NURL tests/preproccheck.nu "$WORK/ppc" >/dev/null 2>"$WORK/pp_build.err"; then
     bad "preproccheck build"; tail -6 "$WORK/pp_build.err"
 elif [ -z "$FRAMES" ]; then
@@ -429,7 +440,10 @@ else
     expect_msg "unknown option" --qiuet frame.png
     expect_msg "needs a value"  --out
     expect_msg "no such frame"  no-such-frame.png
-    expect_msg "no .png"        "$WORK"          # a directory with no frames
+    mkdir -p "$WORK/empty"
+    expect_msg "no .png"        "$WORK/empty"    # a directory with no frames
+    expect_msg "multiple of 14" --image-size 500 f.png
+    expect_msg "multiple of 14" --image-size 0 f.png
 
     # A directory IS the frames — and the failure that follows must be
     # the missing local checkpoint, never a network lookup.

@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.6.2
+
+- `gk_mem_free` / `gk_mem_total`: free and total device memory in
+  bytes, 0 when the backend cannot say (gpu 0.11.1's
+  `gpu_mem_free/total`). Lets a caller cost a run before the first
+  allocation instead of failing silently mid-model.
+
 ## 0.6.1
 
 Two kernels that 0.6.0 left short of something specific, each measured.

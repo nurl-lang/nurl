@@ -52,6 +52,7 @@ def main():
     args = sys.argv[1:]
     conf_thr, pixel_stride, dtype, scale_frames = 1.5, 2, torch.float32, 8
     jitter = 0.0
+    image_size = 518
     rest = []
     i = 0
     while i < len(args):
@@ -70,6 +71,8 @@ def main():
             # sits from it, the two are as close as this model allows, and
             # the gap is the system's conditioning rather than a porting bug.
             jitter = float(args[i + 1]); i += 2
+        elif a == "--image-size":
+            image_size = int(args[i + 1]); i += 2
         elif a == "--scale-frames":
             # inference_streaming's Phase 1 batch size. demo.py's default
             # is 8, which gives those frames BIDIRECTIONAL attention among
@@ -92,6 +95,11 @@ def main():
 
     t_total0 = time.time()
 
+    # img_size stays 518 whatever --image-size says: the checkpoint's
+    # pos_embed is 1370 rows and load_state_dict rejects any other build
+    # size. Other input sizes are handled at RUNTIME by
+    # interpolate_pos_encoding — which is also exactly how the port does
+    # it, so the two stay comparable.
     model = GCTStream(img_size=518, patch_size=14, enable_3d_rope=True,
                       max_frame_num=1024, kv_cache_sliding_window=64,
                       kv_cache_scale_frames=8, kv_cache_cross_frame_special=True,
@@ -104,7 +112,7 @@ def main():
         model.aggregator = model.aggregator.to(dtype=dtype)
 
     images = load_and_preprocess_images(frames, mode="crop",
-                                        image_size=518, patch_size=14)
+                                        image_size=image_size, patch_size=14)
     if jitter:
         g = torch.Generator().manual_seed(0)
         images = images * (1.0 + jitter * torch.randn(images.shape, generator=g))

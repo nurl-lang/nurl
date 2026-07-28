@@ -177,6 +177,7 @@ lingbot-map --ascii --max-frames 2 --out two.ply ~/dev/lingbot-map/example/court
 | `--max-frames <n>` | stop after n frames |
 | `--stride <n>` | use every nth frame, applied after `--max-frames` |
 | `--fps <n>` | frames per second to take from a video (default 10) |
+| `--image-size <n>` | input width in pixels, a multiple of 14 (default 518); smaller = fewer tokens = less memory |
 | `--frames <dir>` | a directory of frames; the same as naming it positionally |
 | `--ascii` | write an ASCII PLY instead of `binary_little_endian` |
 | `--quiet`, `-q` | no per-frame progress |
@@ -187,7 +188,7 @@ lingbot-map --ascii --max-frames 2 --out two.ply ~/dev/lingbot-map/example/court
 
 The reference's own spellings work too — `--model_path`,
 `--image_folder`, `--conf_threshold`, `--first_k`, `--video_path`,
-`--fps` — so a `demo.py` command line mostly transfers.
+`--fps`, `--image_size` — so a `demo.py` command line mostly transfers.
 
 **Order is the trajectory.** Frames are read in name order, and the model
 keeps a cache across frames, so each one is placed relative to the ones
@@ -226,9 +227,14 @@ The model is the same and the numbers agree; the packaging does not.
 ## What you need
 
 * An NVIDIA GPU and the CUDA driver. VRAM goes with the length of the
-  sequence, and stops growing once the sliding KV window fills: ~6.8 GB
-  for 8 frames, ~10 GB for 30, ~16.4 GB for 286 and for anything longer.
-  `--max-frames` caps the sequence, and so caps the memory.
+  sequence and with the frame's token count, and stops growing once the
+  sliding KV window fills: landscape frames (518x294, 783 tokens) run
+  ~6.8 GB at 8 frames, ~10 GB at 30, ~16.4 GB at 286 and beyond.
+  **Portrait frames cost ~1.75x** — they crop to 518x518, 1375 tokens —
+  and a long portrait video does not fit a 24 GB card at the default
+  size. A run that cannot fit says so up front, with the numbers and
+  the levers; `--image-size 392` is the usual fix, and `--stride` /
+  `--max-frames` cap it further.
 * The 4.6 GB checkpoint, which the first run fetches for you. To fetch it
   yourself: `hub pull robbyant/lingbot-map/lingbot-map.pt`, or download
   `lingbot-map.pt` from

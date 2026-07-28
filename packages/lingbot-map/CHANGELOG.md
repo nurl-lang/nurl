@@ -1,5 +1,50 @@
 # Changelog
 
+## 0.7.0
+
+**A run that cannot fit says so, with the numbers.** A phone video is
+portrait, a portrait frame crops to 518x518 = 1375 tokens against a
+landscape frame's 783, and past the 72-frame window the KV caches want
+~1.75x the memory — on a 24 GB card, 111 portrait frames need 19.0 GB of
+cache with ~18.7 GB free once the checkpoint is resident. Through 0.6.0
+that failed as three bare lines:
+
+    lingbot-map: aggregator failed
+    lingbot-map: camera head failed
+    lingbot-map: depth head failed
+
+— the first because a device allocation failed without saying so, the
+other two because the stage messages printed even for stages that were
+skipped. Now the run is costed BEFORE the first allocation:
+
+    lingbot-map: this run does not fit on the device.
+      frames        111 of 518x518 = 1375 tokens each
+      caches need   19.0 GB
+      device free   18.7 GB of 23.5 GB
+    Ways to fit:
+      --image-size 392   fewer tokens per frame (392 = 28 patches)
+      --stride 2         half the frames
+      --max-frames N     reconstruct a shorter stretch
+
+**`--image-size N`** (and the reference's `--image_size`) is the real
+resolution lever: the input width, a multiple of 14, default 518.
+Smaller means fewer tokens and a smaller cache — 392 fits the same 111
+portrait frames on the same card, and completes them in 41 s. The model
+handles the size at runtime through the position-grid resample; notably
+the reference's own `--image_size` flag cannot actually do this (a
+GCTStream built at another size rejects the checkpoint — pos_embed 1370
+vs 785 rows), so the comparison harness drives the reference the only
+way that works: build at 518, preprocess at the requested size.
+
+Verified against the reference at 392 on portrait frames: median
+5.9e-4, point counts within 0.04%, VERDICT match.
+
+Stage messages now name only the stage that actually failed. Needs
+gpukit 0.6.2 (`gk_mem_free`/`gk_mem_total`, backed by `cuMemGetInfo` on
+CUDA and /proc/meminfo on the CPU backends — gpu 0.11.1). The preproc
+oracle now includes a portrait frame, which the crop path had never been
+tested with.
+
 ## 0.6.0
 
 **Video input.** Shoot a video, hand the file over:

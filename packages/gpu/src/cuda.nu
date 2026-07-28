@@ -54,6 +54,8 @@ $ `stdlib/core/string.nu`
 
 & `cuda` @ cuMemAlloc_v2 *u dptr i bytesize → i32
 
+& `cuda` @ cuMemGetInfo_v2 *u free *u total → i32
+
 & `cuda` @ cuMemFree_v2 i dptr → i32
 
 & `cuda` @ cuMemcpyHtoD_v2 i dst *u src i n → i32
