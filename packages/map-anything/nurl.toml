@@ -8,7 +8,7 @@ license = "Apache-2.0"
 hub = { path = "../hub", version = "^0.1" }
 http = { path = "../http", version = "^0.3" }
 gpukit = { path = "../gpukit", version = "^0.6.2" }
-image = { path = "../image", version = "^0.5" }
+image = { path = "../image", version = "^0.6" }
 ply = { path = "../ply", version = "^0.1" }
 video = { path = "../video", version = "^0.1" }
 safetensor = { path = "../safetensor", version = "^0.3" }

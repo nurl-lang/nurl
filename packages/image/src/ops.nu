@@ -300,12 +300,40 @@ $ `core.nu`
 
 : i __IMG_PREC 22  // fixed-point fraction bits (Pillow's PRECISION_BITS)
 
+// Filter selectors for the shared resample machinery.
+: i __IMG_F_BICUBIC 0
+: i __IMG_F_LANCZOS 1
+
 // Pillow's bicubic kernel, a = −0.5.
 @ __img_cubic f x → f {
     : f t ? < x 0.0 - 0.0 x x
     ? < t 1.0 { ^ + * * t t - * 1.5 t 2.5 1.0 } {}
     ? < t 2.0 { ^ * -0.5 - * t + * t - t 5.0 8.0 4.0 } {}
     ^ 0.0
+}
+
+// Pillow's Lanczos-3 kernel: sinc(x)·sinc(x/3) on (−3, 3). Written the
+// way Pillow's C writes it (sinc_filter guards x == 0 and |x| ≥ 3, then
+// lanczos_filter divides the two sincs) so the doubles agree exactly.
+@ __img_sinc f x → f {
+    ? == x 0.0 { ^ 1.0 } {}
+    : f px * 3.14159265358979323846 x
+    ^ / ( float_sin px ) px
+}
+
+@ __img_lanczos f x → f {
+    ? & > x -3.0 < x 3.0 { ^ * ( __img_sinc x ) ( __img_sinc / x 3.0 ) } {}
+    ^ 0.0
+}
+
+@ __img_filter i filt f x → f {
+    ? == filt __IMG_F_LANCZOS { ^ ( __img_lanczos x ) } {}
+    ^ ( __img_cubic x )
+}
+
+@ __img_support i filt → f {
+    ? == filt __IMG_F_LANCZOS { ^ 3.0 } {}
+    ^ 2.0
 }
 
 // Round half away from zero, matching Pillow's coefficient quantisation.
@@ -319,10 +347,10 @@ $ `core.nu`
 // Returns a control block: slot 0 = ksize, then per output pixel a run of
 // (1 + ksize) slots holding `xmin` followed by ksize fixed-point weights.
 // One allocation, freed by the caller.
-@ __img_coeffs i insize i outsize → s {
+@ __img_coeffs i insize i outsize i filt → s {
     : f scale / # f insize # f outsize
     : f fscale ? < scale 1.0 1.0 scale
-    : f support * 2.0 fscale
+    : f support * ( __img_support filt ) fscale
     : i ksize + * 2 # i ( float_ceil support ) 1
     : i stride + ksize 1
     : s kk ( nurl_zalloc * 8 + 1 * outsize stride )
@@ -345,7 +373,7 @@ $ `core.nu`
         : ~ f wsum 0.0
         : ~ i x 0
         ~ < x xmax {
-            : f v ( __img_cubic * ss - + # f + x xmin 0.5 center )
+            : f v ( __img_filter filt * ss - + # f + x xmin 0.5 center )
             = . w x v
             = wsum + wsum v
             = x + x 1
@@ -372,15 +400,16 @@ $ `core.nu`
     ^ v
 }
 
-// Catmull-Rom-family bicubic resize, Pillow-compatible.
-@ image_resize_bicubic Image im i nw i nh → Image {
+// Shared separable resampler: the two fixed-point passes, parameterised
+// only by which kernel fills the coefficient windows.
+@ __img_resample Image im i nw i nh i filt → Image {
     : i w . im width
     : i h . im height
     : i c . im channels
     ? | | | <= nw 0 <= nh 0 <= w 0 <= h 0 { ^ ( image_new 0 0 c ) } {}
     : i half << 1 - __IMG_PREC 1
     // horizontal pass: w → nw, height unchanged
-    : s kx ( __img_coeffs w nw )
+    : s kx ( __img_coeffs w nw filt )
     : i ksx ( nurl_peek kx 0 )
     : Image tmp ( image_new nw h c )
     : ~ i y 0
@@ -408,7 +437,7 @@ $ `core.nu`
     }
     ( nurl_free kx )
     // vertical pass: h → nh
-    : s ky ( __img_coeffs h nh )
+    : s ky ( __img_coeffs h nh filt )
     : i ksy ( nurl_peek ky 0 )
     : Image out ( image_new nw nh c )
     : ~ i oy 0
@@ -437,6 +466,20 @@ $ `core.nu`
     ( nurl_free ky )
     ( image_free tmp )
     ^ out
+}
+
+// Catmull-Rom-family bicubic resize, Pillow-compatible.
+@ image_resize_bicubic Image im i nw i nh → Image {
+    ^ ( __img_resample im nw nh __IMG_F_BICUBIC )
+}
+
+// Lanczos-3 resize, Pillow-compatible (Pillow's `LANCZOS`/`ANTIALIAS`):
+// the same separable fixed-point machinery as bicubic, with the
+// sinc(x)·sinc(x/3) kernel and support 3 — so a shrink averages over a
+// wider, softer window. Same alpha caveat as image_resize_bicubic:
+// channels are resampled independently, with no premultiply.
+@ image_resize_lanczos Image im i nw i nh → Image {
+    ^ ( __img_resample im nw nh __IMG_F_LANCZOS )
 }
 
 // ── Fill and drawing (in place, clipped, overwrite) ───────────────────

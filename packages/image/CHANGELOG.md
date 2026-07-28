@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.6.0
+
+- **`image_resize_lanczos` — Pillow's Lanczos-3, byte for byte.** The
+  sinc(x)·sinc(x/3) kernel with support 3, on the same separable
+  fixed-point machinery as `image_resize_bicubic` (which is unchanged:
+  the two share coefficient generation and both passes, parameterised
+  only by the kernel). Verified byte-identical to Pillow across the same
+  case spread as bicubic plus a preprocessing-sized shrink. Same alpha
+  caveat as bicubic: channels resampled independently, no premultiply.
+- First consumer: map-anything's image preprocessing (the reference
+  downscales with `PIL.Image.Resampling.LANCZOS`).
+
 ## 0.5.0
 
 - **`image_resize_bicubic` — Pillow's resampler, byte for byte.** The
