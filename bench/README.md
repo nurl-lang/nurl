@@ -76,7 +76,6 @@ and `perfstat.sh` read.
 | Benchmark | Shape |
 |---|---|
 | `lcg` | Loop-carried mul/add/shift/xor dependency the unroller cannot compose |
-| `affine_mix` | Shift/add/mask/xor chain over a 58-bit state, no multiply |
 | `packet_classifier` | A data-dependent 50/50 branch the predictor cannot learn |
 | `ring_write` | Dependent store per iteration plus address computation |
 | `histogram_bins` | Read-modify-write at a data-dependent index |
@@ -90,26 +89,72 @@ and `perfstat.sh` read.
 | `collatz` | Control-flow-heavy inner loop with no array at all |
 | `matmul` | Triple-nested loop, flat indexing, column-strided reads |
 | `json_parse` | Allocator pressure, string handling, recursive descent |
+| `nbody` | IEEE-754 doubles: sqrt and divide throughput, the FPU rather than the ALU |
 
 No two rows measure the same shape. That is a deliberate property, and
 the reason the previous `stream_lcg` kernel is gone: it was `lcg` with
 32-bit constants, so it made the table longer without making it say more.
 
+`nbody` is the one row not defined over integers, and it is here for two
+reasons. It is the only one whose critical path runs through the FPU's
+long-latency, non-pipelined sqrt and divide units rather than the integer
+ALU — nothing else in the roster exercises that hardware, or NURL's `f`
+codegen, at all. And it is the only row where JavaScript competes on even
+terms: see below.
+
 ### How the languages are held to the same algorithm
 
-Ten of the fifteen are defined over 64-bit unsigned integers, which two
+Nine of the fifteen are defined over 64-bit unsigned integers, which two
 of the five languages do not have:
 
 * **Python** has arbitrary-precision integers, so every step masks
   explicitly. Always exact, and slow — that is the measurement.
 * **JavaScript** has no 64-bit integer at all. Where the algorithm
-  genuinely needs 64 bits (`lcg`, `affine_mix`, `bloom_filter`,
-  `hash_join`) the port uses `BigInt`; where 32 bits suffice it uses
+  genuinely needs 64 bits (`lcg`, `bloom_filter`, `hash_join`) the port
+  uses `BigInt`; where 32 bits suffice it uses
   Numbers with `Math.imul`, which is exactly defined as the wrapping
   32-bit multiply. Each file states which and why in its header.
 
 The rule is *each language at its fastest exact representation*, and the
 checksum gate is what keeps "fastest" from drifting into "different".
+
+`nbody` is the counterweight to those two bullets. It is defined over
+IEEE-754 doubles, which is precisely the type JavaScript *does* have —
+its single numeric type is the double, and `Math.sqrt` is the same
+correctly-rounded hardware instruction the compiled backends emit. So
+Node runs the identical arithmetic there with no representation tax, and
+lands around 2× C rather than the 30–50× the BigInt rows cost it. That
+matters for reading the whole table: a suite in which one language loses
+every row by two orders of magnitude invites the suspicion that the
+corpus was chosen to make it lose, and the cheapest way to answer that is
+to include the row where it doesn't.
+
+Bit-exactness across five languages is not free, and `nbody` holds three
+lines to get it:
+
+* **No `-ffast-math`, and no multiply-add contraction.** Fusing
+  `dx*dx + dy*dy` into an fma is *more* accurate than the unfused form,
+  which is exactly the problem: JS and Python cannot fuse and would
+  disagree in the last bits. This is moot as the suite is built today —
+  the baseline `x86-64` target has no FMA instruction and `bench.sh`
+  sets no `-march` — so if a `-march=` flag is ever added, that row needs
+  an explicit `-ffp-contract=off`. Its header says so.
+* **The same operation order in all five files.** IEEE addition is not
+  associative, so a reordered sum is a different number.
+* **The same data layout in all five files** — struct-of-arrays. An
+  array-of-structs C port is ~6% faster (274.0M retired instructions
+  against SoA's 290.1M), but mixing the two layouts would have had the
+  row reporting a 6% spread that has nothing to do with floating point.
+  Pinned to one layout, the three compiled backends land within 3.5% of
+  each other on instruction count. SoA is the layout that is natural in
+  all five at once: an AoS Python port would be a list of objects and
+  would measure the interpreter's object model instead of its float path.
+
+What is left is IEEE-754 exact by specification — `+`, `-`, `*`, `/` and
+`sqrt` are all correctly rounded — so five conforming implementations
+evaluating the same expressions in the same order must agree to the bit.
+The row prints the bit pattern of the final energy, so the gate asserts
+exactly that.
 
 ## What is **not** in the timing suite
 
@@ -215,9 +260,9 @@ This gate exists because the pre-xorshift `lcg` was exactly such a
 number — LLVM composed k affine steps into one (`x·aᵏ + cₖ`), the NURL
 binary ran 100M "iterations" in 3.7 ms (a 162 GHz clock, had the chain
 been real), and the row was silently measuring the compiler's
-composition factor. The xorshift mix in `lcg`, `affine_mix`,
-`ring_write` and `histogram_bins` breaks the affinity that transform
-needs; `chaincheck.sh` keeps it broken.
+composition factor. The xorshift mix in `lcg`, `ring_write` and
+`histogram_bins` breaks the affinity that transform needs;
+`chaincheck.sh` keeps it broken.
 
 ## Reading the numbers
 

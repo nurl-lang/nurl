@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# benchmark-contract: hash-join;seed=123456789;build=160;queries=500000;cap=256;bloom=64;group=16;probe=alternating-built-random
+# benchmark-contract: hash-join;seed=123456789;build=160;queries=5000000;cap=256;bloom=64;group=16;probe=alternating-built-random
 #
 # hash_join — build a 256-slot open-addressed hash table (7-bit control
 # fingerprints, 16-wide group probing, partitioned into 4 sub-tables)
@@ -14,7 +14,7 @@ BLOOM_WORDS = 64
 GROUP = 16
 COMPACT_CHUNK = 64
 BUILD_ROWS = 160
-TOTAL_QUERIES = 500_000
+TOTAL_QUERIES = 5_000_000
 
 state = 123456789
 

@@ -475,11 +475,20 @@ emit_md() {
     printf '  be clever: LLVM will fold an affine recurrence or unroll a loop by a\n'
     printf '  different factor in each language. A cell measures optimised throughput\n'
     printf '  of the same algorithm, not the source-level iteration count.\n'
-    printf '* Ten of the fifteen benchmarks are defined over 64-bit unsigned integers.\n'
+    printf '* Nine of the fifteen benchmarks are defined over 64-bit unsigned integers.\n'
     printf '  Python has arbitrary-precision integers and masks; JS has no 64-bit\n'
     printf '  integer at all, so those rows use `BigInt` where the algorithm genuinely\n'
     printf '  needs 64 bits and Numbers with `Math.imul` where 32 bits suffice. Each\n'
     printf '  file says which and why. That gap *is* part of what this table reports.\n'
+    printf '* `nbody` is the counterweight to the row above, and the only row defined\n'
+    printf "  over IEEE-754 doubles rather than integers. That is the type JavaScript\n"
+    printf '  does have — its one numeric type is the double — so Node runs the same\n'
+    printf '  arithmetic as the compiled backends with no representation tax, and lands\n'
+    printf '  near 2x C instead of the 30-50x the BigInt rows cost it. It is also the\n'
+    printf "  only row whose critical path runs through the FPU's long-latency sqrt and\n"
+    printf '  divide units rather than the integer ALU. All five ports use the same\n'
+    printf '  operation order and the same struct-of-arrays layout, so the checksum —\n'
+    printf "  the final energy's bit pattern — is exact across all five.\n"
     printf '* `json_parse` is the one row whose gate is "every parser accepted the\n'
     printf '  document" rather than a structural checksum: each language uses the\n'
     printf '  parser in its own box (Python `json`, Node `JSON.parse`, NURL\n'

@@ -7,8 +7,8 @@
 #  A benchmark row whose blurb claims a loop-carried dependency chain
 #  must not run faster than the chain's hardware minimum — a cell below
 #  that line means the compiler shortcut the recurrence (as LLVM used to
-#  do to the pre-xorshift lcg/affine_mix by composing k affine steps
-#  into one) and the row no longer measures what it says.
+#  do to the pre-xorshift lcg by composing k affine steps into one) and
+#  the row no longer measures what it says.
 #
 #  For every row with a well-defined serial chain this script builds the
 #  NURL, C and Rust binaries the way bench.sh does and asserts each one
@@ -62,7 +62,6 @@ echo "chaincheck: mode=$MODE (pmu = exact cycles; wall = lower bound at ${MAX_GH
 # bound scans, allocator work) have no hard floor and are not listed.
 FLOORS="\
 lcg               20000000   6   imul(3)+add(1)+shr(1)+xor(1)
-affine_mix        20000000   6   lea(1)+and(1)+shr(1)+xor(1)+lea(1)+and(1)
 packet_classifier 25000000   4   imul32(3)+add(1), branch resolution on top
 ring_write        20000000   6   imul32(3)+add(1)+shr(1)+xor(1), store off-chain
 histogram_bins    20000000   6   imul32(3)+add(1)+shr(1)+xor(1), RMW on top

@@ -8,6 +8,64 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`nbody` — the benchmark suite's first row over floating point.**
+  Every other row is an integer or byte kernel, so
+  nothing in the suite touched `f` codegen, and nothing exercised the FPU's
+  long-latency, non-pipelined sqrt and divide units: 500k symplectic-Euler
+  steps of the Sun and four gas giants put ten sqrt/divide pairs on the
+  critical path per step. It is also the one row where JavaScript is not
+  handicapped. The u64 rows force that port onto `BigInt` because JS has no
+  integer type, and Node loses them by 30–50×; here JS's single numeric type
+  *is* the IEEE-754 double the benchmark is written in, so Node runs the
+  same arithmetic as the compiled backends and lands near 2× C. A table in
+  which one language loses every row by two orders of magnitude invites the
+  suspicion that the corpus was picked to make it lose — this is the row
+  that answers it.
+
+  The checksum is the final energy's **bit pattern**, not a rounded
+  decimal, so the gate asserts bit-exactness across all five languages
+  rather than approximate agreement. That is achievable because `+`, `-`,
+  `*`, `/` and `sqrt` are all correctly rounded by IEEE-754, and it costs
+  three constraints, documented in `bench/nbody.c`: no `-ffast-math`, no
+  multiply-add contraction (moot at the suite's baseline `x86-64` target,
+  which has no FMA — but a future `-march=` flag would need
+  `-ffp-contract=off` here), and the same operation order in all five
+  ports. The five also share one data layout, struct-of-arrays: an
+  array-of-structs C port is ~6% faster (274.0M retired instructions
+  against 290.1M), but mixing layouts would have had the row reporting a
+  6% spread that has nothing to do with floating point. Pinned to one
+  layout the three compiled backends land within 3.5% of each other on
+  instruction count. Native suite only for now — `wasmbench.sh` reads the
+  same manifest but is not run in CI.
+
+### Changed
+
+- **`affine_mix` is gone; the suite is back to fifteen rows.** It was the
+  closest pair in the corpus to `lcg` — both 20M-iteration serial xorshift
+  mixing chains — and `chaincheck.sh` recorded the giveaway: the two rows
+  carry the *same* documented floor of 6 cycles per iteration
+  (`imul(3)+add(1)+shr(1)+xor(1)` against
+  `lea(1)+and(1)+shr(1)+xor(1)+lea(1)+and(1)`). Different instruction mix,
+  identical critical-path length, and so identical cells: the last run had
+  the C column at 40.6 ms for `lcg` and 40.0 ms for `affine_mix`. That is
+  the same objection that retired `stream_lcg` — it made the table longer
+  without making it say more. `ring_write` and `histogram_bins` share that
+  6-cycle chain too but each bolts something on it (an off-chain store, a
+  read-modify-write), so they stay.
+
+- **`hash_join` now runs 5M probes, up from 500k.** By the suite's own
+  reading advice — "the rows worth comparing are the ones in the tens of
+  milliseconds and up" — the row did not qualify: it measured 4.9–6.2 ms
+  against a 1.8 ms process floor, so roughly three quarters of the cell
+  was start-up. It was the one row the report told you to discount. The
+  build table, capacity, Bloom width and probe pattern are unchanged, and
+  the query count stays above the `use_partitioned` threshold, so the
+  algorithm and its shape are the same — there is simply ten times as much
+  of it. The compiled cells now land near 38–44 ms. The checksum changes
+  with the query count, as expected.
+
 ### Fixed
 
 - **Each bench results commit fired a second full CI round.** Now that the
