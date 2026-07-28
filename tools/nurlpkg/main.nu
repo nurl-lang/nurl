@@ -3280,6 +3280,14 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
         ? win { ( string_push_str dest `.exe` ) } {}
 
         ?? ( dir_create_all ( string_data bindir ) ) { T _ → {} F _ → {} }
+        // Unlink the destination first. Writing INTO a binary that some
+        // process is executing fails with ETXTBSY on Linux; unlinking the
+        // directory entry and creating a fresh file succeeds, and the
+        // running process keeps its old inode until it exits — which is
+        // how every package manager replaces a running executable. This
+        // surfaced as a bare "failed to install binary" while an old
+        // `lingbot-map view` was still serving.
+        : i32 _unl ( unlink ( string_data dest ) )
         ?? ( fs_copy_file ( string_data outbin ) ( string_data dest ) ) {
             F _ → { ( nurl_eprintln `nurlpkg: failed to install binary` ) = rc 1 }
             T _ → {
