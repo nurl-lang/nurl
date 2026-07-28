@@ -746,7 +746,7 @@ function Emit-Md {
     & $a '  be clever: LLVM will fold an affine recurrence or unroll a loop by a'
     & $a '  different factor in each language. A cell measures optimised throughput'
     & $a '  of the same algorithm, not the source-level iteration count.'
-    & $a '* Ten of the fifteen benchmarks are defined over 64-bit unsigned integers.'
+    & $a '* Nine of the fifteen benchmarks are defined over 64-bit unsigned integers.'
     & $a '  Python has arbitrary-precision integers and masks; JS has no 64-bit'
     & $a '  integer at all, so those rows use `BigInt` where the algorithm genuinely'
     & $a '  needs 64 bits and Numbers with `Math.imul` where 32 bits suffice. Each'

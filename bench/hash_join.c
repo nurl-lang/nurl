@@ -1,4 +1,4 @@
-// benchmark-contract: hash-join;seed=123456789;build=160;queries=500000;cap=256;bloom=64;group=16;probe=alternating-built-random
+// benchmark-contract: hash-join;seed=123456789;build=160;queries=5000000;cap=256;bloom=64;group=16;probe=alternating-built-random
 #include <stdbool.h>
 #include <inttypes.h>
 #include <stdint.h>
@@ -136,7 +136,7 @@ int main(void) {
   uint64_t built_keys[BUILD_ROWS] = {0};
 
   const uint64_t build_rows = BUILD_ROWS;
-  const uint64_t total_queries = 500000ULL;
+  const uint64_t total_queries = 5000000ULL;
   const bool use_partitioned = (build_rows >= 128ULL) && (total_queries >= 200000ULL);
 
   for (uint64_t i = 0; i < build_rows; ++i) {

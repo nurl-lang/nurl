@@ -1,4 +1,4 @@
-// benchmark-contract: hash-join;seed=123456789;build=160;queries=500000;cap=256;bloom=64;group=16;probe=alternating-built-random
+// benchmark-contract: hash-join;seed=123456789;build=160;queries=5000000;cap=256;bloom=64;group=16;probe=alternating-built-random
 //
 // hash_join — build a 256-slot open-addressed hash table (7-bit control
 // fingerprints, 16-wide group probing, partitioned into 4 sub-tables) from
@@ -159,7 +159,7 @@
     = . out 0 # u64 0
 
     : u64 build_rows 160
-    : u64 total_queries 500000
+    : u64 total_queries 5000000
     : b use_partitioned & >= build_rows 128 >= total_queries 200000
 
     : ~ u64 row 0
