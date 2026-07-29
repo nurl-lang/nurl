@@ -17479,7 +17479,28 @@
 
 // ── Module header ──────────────────────────────────────────────────
 
-@ emit_header → v {
+// Emit one preamble runtime `declare` line AND mark its symbol as
+// already declared (`<name>__ffi_emitted` — the same dedup key
+// gen_ffi_decl uses between duplicate user FFI declares). A later user
+// FFI declaration of the same builtin (`& `c` @ nurl_str_float …`,
+// e.g. via stdlib/core/builtins.nu, which redeclares this whole
+// surface for documentation) then skips its own `declare`, instead of
+// producing a duplicate LLVM rejects with "invalid redefinition of
+// function". The symbol name is parsed out of the line (between '@'
+// and '(') so the list below stays single-source.
+@ __emit_rt_decl i syms s line → v {
+    ( emit line )
+    : i at ( nurl_str_find line `@` )
+    ? >= at 0 {
+        : i lp ( nurl_str_find line `(` )
+        ? > lp at {
+            : s nm ( nurl_str_slice line + at 1 - lp + at 1 )
+            ( nurl_sym_def syms ( nurl_str_cat nm `__ffi_emitted` ) `1` )
+        } {}
+    } {}
+}
+
+@ emit_header i syms → v {
     ( emit `; NURL compiler output (nurlc.nu)` )
     ( emit `; link: clang <this.ll> stdlib/runtime.o -o out` )
     ( emit `` )
@@ -17487,114 +17508,114 @@
     // variable's storage to its !DILocalVariable metadata. Emitted
     // unconditionally; with --g off the compiler never calls it, so
     // the unused declaration is dead and the optimizer drops it.
-    ( emit `declare void @llvm.dbg.declare(metadata, metadata, metadata)` )
-    ( emit `declare i32  @puts(i8*)` )
-    ( emit `declare i32  @printf(i8*, ...)` )
-    ( emit `declare i8*  @malloc(i64)` )
-    ( emit `declare void @free(i8*)` )
+    ( __emit_rt_decl syms `declare void @llvm.dbg.declare(metadata, metadata, metadata)` )
+    ( __emit_rt_decl syms `declare i32  @puts(i8*)` )
+    ( __emit_rt_decl syms `declare i32  @printf(i8*, ...)` )
+    ( __emit_rt_decl syms `declare i8*  @malloc(i64)` )
+    ( __emit_rt_decl syms `declare void @free(i8*)` )
     // libc string / parse primitives — declared here so the pure-NURL
     // `nurl_str_*` helpers can call them globally without per-file
     // `&`-FFI declarations. Returns mapped at their native C widths
     // (i32 for int-returners, i8* for ptr-returners); NURL callers do
     // their own widening via `# i` if they need i64.
-    ( emit `declare i64  @strlen(i8*)` )
-    ( emit `declare i32  @strcmp(i8*, i8*)` )
-    ( emit `declare i32  @strncmp(i8*, i8*, i64)` )
-    ( emit `declare i32  @memcmp(i8*, i8*, i64)` )
-    ( emit `declare i8*  @strstr(i8*, i8*)` )
-    ( emit `declare i8*  @memmem(i8*, i64, i8*, i64)` )
-    ( emit `declare i64  @atoll(i8*)` )
-    ( emit `declare double @atof(i8*)` )
-    ( emit `declare double @strtod(i8*, i8**)` )
-    ( emit `declare i8*  @memcpy(i8*, i8*, i64)` )
-    ( emit `declare i8*  @strdup(i8*)` )
+    ( __emit_rt_decl syms `declare i64  @strlen(i8*)` )
+    ( __emit_rt_decl syms `declare i32  @strcmp(i8*, i8*)` )
+    ( __emit_rt_decl syms `declare i32  @strncmp(i8*, i8*, i64)` )
+    ( __emit_rt_decl syms `declare i32  @memcmp(i8*, i8*, i64)` )
+    ( __emit_rt_decl syms `declare i8*  @strstr(i8*, i8*)` )
+    ( __emit_rt_decl syms `declare i8*  @memmem(i8*, i64, i8*, i64)` )
+    ( __emit_rt_decl syms `declare i64  @atoll(i8*)` )
+    ( __emit_rt_decl syms `declare double @atof(i8*)` )
+    ( __emit_rt_decl syms `declare double @strtod(i8*, i8**)` )
+    ( __emit_rt_decl syms `declare i8*  @memcpy(i8*, i8*, i64)` )
+    ( __emit_rt_decl syms `declare i8*  @strdup(i8*)` )
     // libc stdio primitives — declared here so the pure-NURL
     // `nurl_file_*` helpers in stdlib/std/fs.nu can call them
     // globally.
-    ( emit `declare i8*  @fopen(i8*, i8*)` )
-    ( emit `declare i32  @fclose(i8*)` )
-    ( emit `declare i32  @fputs(i8*, i8*)` )
-    ( emit `declare i64  @fwrite(i8*, i64, i64, i8*)` )
-    ( emit `declare i32  @fputc(i32, i8*)` )
-    ( emit `declare i64  @fread(i8*, i64, i64, i8*)` )
-    ( emit `declare i32  @feof(i8*)` )
+    ( __emit_rt_decl syms `declare i8*  @fopen(i8*, i8*)` )
+    ( __emit_rt_decl syms `declare i32  @fclose(i8*)` )
+    ( __emit_rt_decl syms `declare i32  @fputs(i8*, i8*)` )
+    ( __emit_rt_decl syms `declare i64  @fwrite(i8*, i64, i64, i8*)` )
+    ( __emit_rt_decl syms `declare i32  @fputc(i32, i8*)` )
+    ( __emit_rt_decl syms `declare i64  @fread(i8*, i64, i64, i8*)` )
+    ( __emit_rt_decl syms `declare i32  @feof(i8*)` )
     // fseek/ftell — POSIX stdio file-position primitives. Pure-NURL
     // file_size + future random-access I/O use these to learn the
     // file's length without going through `stat(2)` (whose `struct
     // stat` layout varies per platform). SEEK_END = 2 universally.
-    ( emit `declare i32  @fseek(i8*, i64, i32)` )
-    ( emit `declare i64  @ftell(i8*)` )
+    ( __emit_rt_decl syms `declare i32  @fseek(i8*, i64, i32)` )
+    ( __emit_rt_decl syms `declare i64  @ftell(i8*)` )
     // POSIX access(2) for the pure-NURL nurl_file_exists @-fn.
-    ( emit `declare i32  @access(i8*, i32)` )
+    ( __emit_rt_decl syms `declare i32  @access(i8*, i32)` )
     // getenv(3) — import-path resolution consults $NURL_STDLIB so an
     // installed toolchain finds stdlib regardless of cwd (see
     // __norm_import_path).
-    ( emit `declare i8*  @getenv(i8*)` )
+    ( __emit_rt_decl syms `declare i8*  @getenv(i8*)` )
     // realpath(3) — the import DEDUP key is the canonical path so the same
     // file reached through two symlink chains (diamond package deps:
     // deps/a/deps/gpu vs deps/gpu) compiles exactly once (see
     // __canon_import_key). Diagnostics keep the as-written path.
-    ( emit `declare i8*  @realpath(i8*, i8*)` )
-    ( emit `declare void @nurl_init(i32, i8**)` )
-    ( emit `declare void @nurl_print(i8*)` )
-    ( emit `declare void @nurl_println(i8*)` )
-    ( emit `declare void @nurl_eprint(i8*)` )
-    ( emit `declare void @nurl_eprintln(i8*)` )
-    ( emit `declare void @nurl_print_int(i64)` )
-    ( emit `declare void @nurl_print_str(i8*)` )
-    ( emit `declare void @nurl_print_bool(i1)` )
-    ( emit `declare i64  @nurl_read_int()` )
-    ( emit `declare i8*  @nurl_read_line()` )
+    ( __emit_rt_decl syms `declare i8*  @realpath(i8*, i8*)` )
+    ( __emit_rt_decl syms `declare void @nurl_init(i32, i8**)` )
+    ( __emit_rt_decl syms `declare void @nurl_print(i8*)` )
+    ( __emit_rt_decl syms `declare void @nurl_println(i8*)` )
+    ( __emit_rt_decl syms `declare void @nurl_eprint(i8*)` )
+    ( __emit_rt_decl syms `declare void @nurl_eprintln(i8*)` )
+    ( __emit_rt_decl syms `declare void @nurl_print_int(i64)` )
+    ( __emit_rt_decl syms `declare void @nurl_print_str(i8*)` )
+    ( __emit_rt_decl syms `declare void @nurl_print_bool(i1)` )
+    ( __emit_rt_decl syms `declare i64  @nurl_read_int()` )
+    ( __emit_rt_decl syms `declare i8*  @nurl_read_line()` )
     // nurl_read_n_bytes lives as pure NURL `read_n_bytes` in
     // `stdlib/core/io.nu`; it reads stdin via `nurl_stdin_read`
     // (declared by FFI in stdlib/core/posix.nu, no built-in declare).
-    ( emit `declare i64  @nurl_stdin_eof()` )
-    ( emit `declare void @nurl_flush_stdout()` )
-    ( emit `declare void @nurl_flush_stderr()` )
+    ( __emit_rt_decl syms `declare i64  @nurl_stdin_eof()` )
+    ( __emit_rt_decl syms `declare void @nurl_flush_stdout()` )
+    ( __emit_rt_decl syms `declare void @nurl_flush_stderr()` )
     // nurl_str_get / _cat / _cat3 / _cat4 / _slice / _parse_int_range
     // / _parse_float_range are pure-NURL @-fns — no preamble declare
     // here to avoid clashing with their `define`s in user code and
     // the local copies inside nurlc.nu itself.  _str_int and
     // _str_float stay in C (printf-family %g, Grisu/Ryu TODO).
-    ( emit `declare i8*  @nurl_str_int(i64)` )
-    ( emit `declare i8*  @nurl_str_float(double)` )
+    ( __emit_rt_decl syms `declare i8*  @nurl_str_int(i64)` )
+    ( __emit_rt_decl syms `declare i8*  @nurl_str_float(double)` )
     // nurl_str_len / _eq / _cmp / _to_int / _to_float / _starts /
     // _find / _ends / _memmem_range / _memcmp_lex are pure-NURL
     // @-fns (libc-thin wrappers calling strlen / strcmp / strncmp /
     // strstr / memcmp / memmem / atoll / atof directly via the global
     // preamble declarations emitted above).
-    ( emit `declare i64    @nurl_scan_byte3(i8*, i64, i64, i64, i64)` )
-    ( emit `declare i64    @nurl_byte_substr(i8*, i64, i8*, i64)` )
-    ( emit `declare i64    @nurl_count_byte(i8*, i64, i64)` )
-    ( emit `declare double @nurl_fast_atof(i8*, i64)` )
+    ( __emit_rt_decl syms `declare i64    @nurl_scan_byte3(i8*, i64, i64, i64, i64)` )
+    ( __emit_rt_decl syms `declare i64    @nurl_byte_substr(i8*, i64, i8*, i64)` )
+    ( __emit_rt_decl syms `declare i64    @nurl_count_byte(i8*, i64, i64)` )
+    ( __emit_rt_decl syms `declare double @nurl_fast_atof(i8*, i64)` )
     // nurl_str_slice is a pure-NURL @-fn.
     // nurl_map_* (string→i64) is not part of the runtime — use the
     // generic `stdlib/std/hashmap.nu` HashMap[K V] at [s i] instead.
-    ( emit `declare i8*  @nurl_read_file(i8*)` )
-    ( emit `declare void @nurl_exit(i64)` )
-    ( emit `declare i64  @nurl_argc()` )
-    ( emit `declare i8*  @nurl_argv(i64)` )
-    ( emit `declare i64  @nurl_argv_count()` )
-    ( emit `declare i8*  @nurl_argv_get(i64)` )
-    ( emit `declare i8*  @nurl_version()` )
+    ( __emit_rt_decl syms `declare i8*  @nurl_read_file(i8*)` )
+    ( __emit_rt_decl syms `declare void @nurl_exit(i64)` )
+    ( __emit_rt_decl syms `declare i64  @nurl_argc()` )
+    ( __emit_rt_decl syms `declare i8*  @nurl_argv(i64)` )
+    ( __emit_rt_decl syms `declare i64  @nurl_argv_count()` )
+    ( __emit_rt_decl syms `declare i8*  @nurl_argv_get(i64)` )
+    ( __emit_rt_decl syms `declare i8*  @nurl_version()` )
     // nurl_lex_* are pure-NURL @-fns in compiler/nurlc.nu (see the
     // §6a Lexer block).
-    ( emit `declare void @nurl_print_buf_start()` )
-    ( emit `declare i8*  @nurl_print_buf_stop()` )
-    ( emit `declare void @nurl_print_buf_reset()` )
+    ( __emit_rt_decl syms `declare void @nurl_print_buf_start()` )
+    ( __emit_rt_decl syms `declare i8*  @nurl_print_buf_stop()` )
+    ( __emit_rt_decl syms `declare void @nurl_print_buf_reset()` )
     // nurl_lex_filename, nurl_sym_*, nurl_cg_*, nurl_get_last_type
     // and _set_last_type are pure-NURL @-fns (see top of this file).
-    ( emit `declare i8*  @nurl_malloc(i64)` )
-    ( emit `declare i8*  @nurl_alloc(i64)` )
-    ( emit `declare i8*  @nurl_zalloc(i64)` )
-    ( emit `declare i8*  @nurl_realloc(i8*, i64)` )
-    ( emit `declare void @nurl_free(i8*)` )
-    ( emit `declare void @nurl_journal_push(i8*)` )
-    ( emit `declare void @nurl_journal_push_drop(i8*, ptr)` )
-    ( emit `declare void @nurl_journal_forget(i8*)` )
-    ( emit `declare void @nurl_memcpy(i8*, i8*, i64)` )
-    ( emit `declare void @nurl_memmove(i8*, i8*, i64)` )
-    ( emit `declare void @nurl_memset(i8*, i64, i64)` )
+    ( __emit_rt_decl syms `declare i8*  @nurl_malloc(i64)` )
+    ( __emit_rt_decl syms `declare i8*  @nurl_alloc(i64)` )
+    ( __emit_rt_decl syms `declare i8*  @nurl_zalloc(i64)` )
+    ( __emit_rt_decl syms `declare i8*  @nurl_realloc(i8*, i64)` )
+    ( __emit_rt_decl syms `declare void @nurl_free(i8*)` )
+    ( __emit_rt_decl syms `declare void @nurl_journal_push(i8*)` )
+    ( __emit_rt_decl syms `declare void @nurl_journal_push_drop(i8*, ptr)` )
+    ( __emit_rt_decl syms `declare void @nurl_journal_forget(i8*)` )
+    ( __emit_rt_decl syms `declare void @nurl_memcpy(i8*, i8*, i64)` )
+    ( __emit_rt_decl syms `declare void @nurl_memmove(i8*, i8*, i64)` )
+    ( __emit_rt_decl syms `declare void @nurl_memset(i8*, i64, i64)` )
     // ── The memory accessors are DEFINED here, not declared ───────
     //
     // `nurl_peek` is a null check and a load, and it is what every Vec
@@ -17638,7 +17659,7 @@
     ( emit `pw.done:` )
     ( emit `  ret void` )
     ( emit `}` )
-    ( emit `declare void @nurl_vec_drop(i8*, ptr, i64)` )
+    ( __emit_rt_decl syms `declare void @nurl_vec_drop(i8*, ptr, i64)` )
     // nurl_file_* (open/write/write_range/write_byte/close/read_chunk
     // /eof/exists/del/dir_create/dir_remove) are pure-NURL @-fns in
     // stdlib/std/fs.nu, calling libc fopen/fputs/fwrite/fputc/fclose/
@@ -17648,43 +17669,43 @@
     // libm wrappers and nurl_iabs / _ipow are pure-NURL (libm direct
     // FFI in stdlib/std/float.nu; iabs/ipow as plain @-fns in
     // stdlib/std/int.nu).
-    ( emit `declare i64    @nurl_is_nan(double)` )
-    ( emit `declare i64    @nurl_is_inf(double)` )
-    ( emit `declare i64  @nurl_dir_list_open(i8*)` )
-    ( emit `declare i8*  @nurl_dir_list_next(i64)` )
-    ( emit `declare void @nurl_dir_list_close(i64)` )
-    ( emit `declare i64  @nurl_http_perform_full(i8*, i8*, i8*, i8*)` )
-    ( emit `declare i64  @nurl_http_perform_full_to(i8*, i8*, i8*, i8*, i64, i64)` )
+    ( __emit_rt_decl syms `declare i64    @nurl_is_nan(double)` )
+    ( __emit_rt_decl syms `declare i64    @nurl_is_inf(double)` )
+    ( __emit_rt_decl syms `declare i64  @nurl_dir_list_open(i8*)` )
+    ( __emit_rt_decl syms `declare i8*  @nurl_dir_list_next(i64)` )
+    ( __emit_rt_decl syms `declare void @nurl_dir_list_close(i64)` )
+    ( __emit_rt_decl syms `declare i64  @nurl_http_perform_full(i8*, i8*, i8*, i8*)` )
+    ( __emit_rt_decl syms `declare i64  @nurl_http_perform_full_to(i8*, i8*, i8*, i8*, i64, i64)` )
     // The 7 accessors (status / err_kind / body / body_len /
     // header_count / header_name / header_value) are pure-NURL @-fns
     // in stdlib/ext/http.nu that read the NurlHttpResponse struct via
     // nurl_peek. Only the C-side freer stays — it walks the headers
     // array deallocating every name/value pair.
-    ( emit `declare void @nurl_http_response_free(i64)` )
-    ( emit `declare i64  @nurl_http_stream_open_to(i8*, i8*, i8*, i8*, i64, i64)` )
-    ( emit `declare i8*  @nurl_http_stream_next(i64)` )
-    ( emit `declare void @nurl_http_stream_close(i64)` )
-    ( emit `declare i64  @nurl_http_stream_pump_headers(i64)` )
-    ( emit `declare i64  @nurl_proc_run(i8*, i8*, i64, i8*)` )
-    ( emit `declare i64  @nurl_proc_exit_code(i64)` )
-    ( emit `declare i64  @nurl_proc_err_kind(i64)` )
-    ( emit `declare i8*  @nurl_proc_stdout(i64)` )
-    ( emit `declare i8*  @nurl_proc_stderr(i64)` )
-    ( emit `declare i64  @nurl_proc_stdout_len(i64)` )
-    ( emit `declare i64  @nurl_proc_stderr_len(i64)` )
-    ( emit `declare void @nurl_proc_free(i64)` )
-    ( emit `declare i64  @nurl_proc_spawn(i8*, i8*, i64)` )
-    ( emit `declare i64  @nurl_proc_spawn_err_kind(i64)` )
-    ( emit `declare i64  @nurl_proc_spawn_pid(i64)` )
-    ( emit `declare i64  @nurl_proc_spawn_write(i64, i8*, i64)` )
-    ( emit `declare void @nurl_proc_spawn_close_stdin(i64)` )
-    ( emit `declare i8*  @nurl_proc_spawn_read_line(i64, i64)` )
-    ( emit `declare i64  @nurl_proc_spawn_read_line_len(i64)` )
-    ( emit `declare i64  @nurl_proc_spawn_eof(i64)` )
-    ( emit `declare i64  @nurl_proc_spawn_last_io_err(i64)` )
-    ( emit `declare i64  @nurl_proc_spawn_wait(i64)` )
-    ( emit `declare i64  @nurl_proc_spawn_kill(i64, i64)` )
-    ( emit `declare void @nurl_proc_spawn_free(i64)` )
+    ( __emit_rt_decl syms `declare void @nurl_http_response_free(i64)` )
+    ( __emit_rt_decl syms `declare i64  @nurl_http_stream_open_to(i8*, i8*, i8*, i8*, i64, i64)` )
+    ( __emit_rt_decl syms `declare i8*  @nurl_http_stream_next(i64)` )
+    ( __emit_rt_decl syms `declare void @nurl_http_stream_close(i64)` )
+    ( __emit_rt_decl syms `declare i64  @nurl_http_stream_pump_headers(i64)` )
+    ( __emit_rt_decl syms `declare i64  @nurl_proc_run(i8*, i8*, i64, i8*)` )
+    ( __emit_rt_decl syms `declare i64  @nurl_proc_exit_code(i64)` )
+    ( __emit_rt_decl syms `declare i64  @nurl_proc_err_kind(i64)` )
+    ( __emit_rt_decl syms `declare i8*  @nurl_proc_stdout(i64)` )
+    ( __emit_rt_decl syms `declare i8*  @nurl_proc_stderr(i64)` )
+    ( __emit_rt_decl syms `declare i64  @nurl_proc_stdout_len(i64)` )
+    ( __emit_rt_decl syms `declare i64  @nurl_proc_stderr_len(i64)` )
+    ( __emit_rt_decl syms `declare void @nurl_proc_free(i64)` )
+    ( __emit_rt_decl syms `declare i64  @nurl_proc_spawn(i8*, i8*, i64)` )
+    ( __emit_rt_decl syms `declare i64  @nurl_proc_spawn_err_kind(i64)` )
+    ( __emit_rt_decl syms `declare i64  @nurl_proc_spawn_pid(i64)` )
+    ( __emit_rt_decl syms `declare i64  @nurl_proc_spawn_write(i64, i8*, i64)` )
+    ( __emit_rt_decl syms `declare void @nurl_proc_spawn_close_stdin(i64)` )
+    ( __emit_rt_decl syms `declare i8*  @nurl_proc_spawn_read_line(i64, i64)` )
+    ( __emit_rt_decl syms `declare i64  @nurl_proc_spawn_read_line_len(i64)` )
+    ( __emit_rt_decl syms `declare i64  @nurl_proc_spawn_eof(i64)` )
+    ( __emit_rt_decl syms `declare i64  @nurl_proc_spawn_last_io_err(i64)` )
+    ( __emit_rt_decl syms `declare i64  @nurl_proc_spawn_wait(i64)` )
+    ( __emit_rt_decl syms `declare i64  @nurl_proc_spawn_kill(i64, i64)` )
+    ( __emit_rt_decl syms `declare void @nurl_proc_spawn_free(i64)` )
     // Crypto hash transforms (SHA-1/256/512, MD5, HMAC-SHA-256/512)
     // live in pure NURL under `stdlib/std/hash_*.nu`. Random surface
     // (`rand_u64` / `rand_hex_str`) is in `stdlib/std/random.nu`;
@@ -17693,32 +17714,32 @@
     // nurl_read_file_bytes / nurl_write_file_bytes / nurl_last_bytes_len
     // are pure NURL in `stdlib/std/fs.nu`; fread / fwrite write into
     // Vec[u]'s data buffer, vec_set_len records the count.
-    ( emit `declare i64  @nurl_tcp_listen(i8*, i64, i64)` )
-    ( emit `declare i64  @nurl_tcp_listen_tls(i8*, i64, i64, i8*, i8*)` )
-    ( emit `declare i64  @nurl_tcp_listen_tls_alpn(i8*, i64, i64, i8*, i8*, i8*)` )
-    ( emit `declare i8*  @nurl_tcp_alpn_selected(i64)` )
-    ( emit `declare i64  @nurl_tcp_tls_add_sni(i64, i8*, i8*, i8*)` )
-    ( emit `declare i64  @nurl_tcp_tls_reload(i64, i8*, i8*, i8*)` )
-    ( emit `declare i64  @nurl_tcp_tls_require_client_cert(i64, i8*, i64)` )
-    ( emit `declare i8*  @nurl_tcp_peer_cert_subject(i64)` )
-    ( emit `declare i64  @nurl_tcp_accept(i64)` )
-    ( emit `declare i64  @nurl_tcp_read(i64, i8*, i64)` )
-    ( emit `declare i64  @nurl_tcp_write(i64, i8*, i64)` )
-    ( emit `declare void @nurl_tcp_close(i64)` )
-    ( emit `declare void @nurl_tcp_shutdown(i64)` )
-    ( emit `declare i64  @nurl_tcp_err_kind(i64)` )
-    ( emit `declare i8*  @nurl_tcp_peer_addr(i64)` )
-    ( emit `declare void @nurl_tcp_set_timeout(i64, i64)` )
+    ( __emit_rt_decl syms `declare i64  @nurl_tcp_listen(i8*, i64, i64)` )
+    ( __emit_rt_decl syms `declare i64  @nurl_tcp_listen_tls(i8*, i64, i64, i8*, i8*)` )
+    ( __emit_rt_decl syms `declare i64  @nurl_tcp_listen_tls_alpn(i8*, i64, i64, i8*, i8*, i8*)` )
+    ( __emit_rt_decl syms `declare i8*  @nurl_tcp_alpn_selected(i64)` )
+    ( __emit_rt_decl syms `declare i64  @nurl_tcp_tls_add_sni(i64, i8*, i8*, i8*)` )
+    ( __emit_rt_decl syms `declare i64  @nurl_tcp_tls_reload(i64, i8*, i8*, i8*)` )
+    ( __emit_rt_decl syms `declare i64  @nurl_tcp_tls_require_client_cert(i64, i8*, i64)` )
+    ( __emit_rt_decl syms `declare i8*  @nurl_tcp_peer_cert_subject(i64)` )
+    ( __emit_rt_decl syms `declare i64  @nurl_tcp_accept(i64)` )
+    ( __emit_rt_decl syms `declare i64  @nurl_tcp_read(i64, i8*, i64)` )
+    ( __emit_rt_decl syms `declare i64  @nurl_tcp_write(i64, i8*, i64)` )
+    ( __emit_rt_decl syms `declare void @nurl_tcp_close(i64)` )
+    ( __emit_rt_decl syms `declare void @nurl_tcp_shutdown(i64)` )
+    ( __emit_rt_decl syms `declare i64  @nurl_tcp_err_kind(i64)` )
+    ( __emit_rt_decl syms `declare i8*  @nurl_tcp_peer_addr(i64)` )
+    ( __emit_rt_decl syms `declare void @nurl_tcp_set_timeout(i64, i64)` )
     // Thread / mutex / cond live in pure-NURL FFI in
     // stdlib/std/thread.nu — libpthread symbols (pthread_create /
     // mutex_* / cond_*) plus the tiny nurl_pthread_join_ptr /
     // _detach_ptr trampolines are declared on-demand in that module
     // via `& `c` @ ...`.
-    ( emit `declare void @nurl_signal_install_shutdown(i64)` )
-    ( emit `declare void @nurl_signal_trigger_shutdown()` )
-    ( emit `declare void @nurl_panic(i8*)` )
-    ( emit `declare i64  @nurl_recover(i8*, i8*)` )
-    ( emit `declare i8*  @nurl_panic_last_msg()` )
+    ( __emit_rt_decl syms `declare void @nurl_signal_install_shutdown(i64)` )
+    ( __emit_rt_decl syms `declare void @nurl_signal_trigger_shutdown()` )
+    ( __emit_rt_decl syms `declare void @nurl_panic(i8*)` )
+    ( __emit_rt_decl syms `declare i64  @nurl_recover(i8*, i8*)` )
+    ( __emit_rt_decl syms `declare i8*  @nurl_panic_last_msg()` )
     ( emit `` )
 }
 
@@ -20099,7 +20120,7 @@
     // where the hazard is most common.
     = g_ptrtab ( nurl_sym_new )
     ( vis_set_current_src_file path )
-    ( emit_header )
+    ( emit_header syms )
     ? != g_dbg_enabled 0 { ( dbg_init path ) } {}
     ( init_syms syms )
     : i lex0 ( nurl_lex_new src path )
