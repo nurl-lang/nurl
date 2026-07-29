@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.0
+
+- Viewer: `--host`/`--addr` (bind address, default 127.0.0.1) and
+  `--tls` (self-signed HTTPS) on both `map-anything view` and `--view`,
+  riding on ply 0.2.0.
+
 ## 0.3.0
 
 - **Long captures: windowed Sim(3)-stitched reconstruction.** Global

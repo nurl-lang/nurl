@@ -18,13 +18,20 @@
 // underneath a running viewer without the server noticing a half-written
 // one.
 //
-//   ( vw_serve path host port page_override quiet )  → i   exit code
+//   ( vw_serve path host port page_override quiet tls )  → i   exit code
+//
+// `host` is the BIND address: 127.0.0.1 stays private to the machine,
+// 0.0.0.0 serves every interface, a specific address (192.168.1.30)
+// serves exactly that adapter. `tls` != 0 generates a fresh self-signed
+// P-256 certificate at startup (std/x509_gen) and serves HTTPS — the
+// browser warns once, but the bytes cross the LAN encrypted.
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/fs.nu`
 $ `stdlib/std/path.nu`
 $ `stdlib/std/bytes.nu`
+$ `stdlib/std/x509_gen.nu`
 $ `deps/http/src/http.nu`
 $ `viewer_html_data.nu`
 
@@ -78,7 +85,7 @@ $ `viewer_html_data.nu`
 }
 
 // Serve `path` until interrupted. Returns a process exit code.
-@ vw_serve s path s host i port s page_override i quiet → i {
+@ vw_serve s path s host i port s page_override i quiet i tls → i {
     : !( Vec u ) IoErr rd ( read_file_bytes path )
     : ~ ( Vec u ) blob ( vec_new [u] )
     ?? rd {
@@ -122,15 +129,52 @@ $ `viewer_html_data.nu`
     ( http_app_body_max a 1024 )
 
     ? == quiet 0 {
-        ( nurl_print `viewer  http://` ) ( nurl_print host )
+        ( nurl_print `viewer  ` )
+        ( nurl_print ? != tls 0 `https://` `http://` )
+        ( nurl_print ? ( nurl_str_eq host `0.0.0.0` ) `<this-machine>` host )
         ( nurl_print `:` ) ( nurl_print ( nurl_str_int port ) )
+        ? != tls 0 { ( nurl_print `  (self-signed — accept the browser warning once)` ) } {}
         ( nurl_print `\ncloud   ` ) ( nurl_print path )
         ( nurl_print `  ` )
         ( nurl_print ( nurl_str_int / ( vec_len [u] blob ) 1048576 ) )
         ( nurl_print ` MB\nCtrl-C to stop\n` )
     } {}
 
-    : i rc ( http_app_listen a ( string_data ( string_from host ) ) port )
+    : ~ i rc 0
+    ? != tls 0 {
+        // a fresh throwaway certificate every start: nothing to manage,
+        // nothing long-lived to leak. The PEMs go through unpredictable
+        // temp paths (not a fixed /tmp name someone else could plant).
+        : X509SelfSigned cert ( x509_selfsigned_p256 `ply.local` 30 )
+        : ~ String cp ( string_new )
+        : ~ String kp ( string_new )
+        : ~ i certok 1
+        ?? ( fs_tempfile `/tmp` `ply-cert-` ) {
+            T pth → { ( string_free cp ) = cp pth }
+            F _ → { = certok 0 }
+        }
+        ?? ( fs_tempfile `/tmp` `ply-key-` ) {
+            T pth → { ( string_free kp ) = kp pth }
+            F _ → { = certok 0 }
+        }
+        ? != certok 0 {
+            ?? ( write_file ( string_data cp ) ( string_data . cert cert_pem ) ) { T _ → {} F _ → { = certok 0 } }
+            ?? ( write_file ( string_data kp ) ( string_data . cert key_pem ) ) { T _ → {} F _ → { = certok 0 } }
+        } {}
+        ( x509_selfsigned_free cert )
+        ? != certok 0 {
+            = rc ( http_app_listen_tls a ( string_data ( string_from host ) ) port ( string_data cp ) ( string_data kp ) )
+        } {
+            ( nurl_print `ply: cannot stage the TLS certificate\n` )
+            = rc 1
+        }
+        ( unlink ( string_data cp ) )
+        ( unlink ( string_data kp ) )
+        ( string_free cp )
+        ( string_free kp )
+    } {
+        = rc ( http_app_listen a ( string_data ( string_from host ) ) port )
+    }
     ( http_app_free a )
     ^ ? == rc 0 0 1
 }
