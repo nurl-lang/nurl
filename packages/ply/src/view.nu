@@ -123,8 +123,12 @@ $ `viewer_html_data.nu`
     ( http_app_get a `/` \ HttpRequest rq Params pp → HttpResponse { ^ ( h_vw_index rq pp ) } )
     ( http_app_get a `/cloud` \ HttpRequest rq Params pp → HttpResponse { ^ ( h_vw_cloud rq pp ) } )
     ( http_app_quiet a )
-    // one browser, a page and a cloud: a single worker is the whole load,
-    // and a long idle would hold the connection open after the fetch
+    // A small worker pool, not a single thread: one browser opens the
+    // page and the cloud concurrently, a second machine on the LAN
+    // (--host) must not queue behind the first, and over TLS a slow
+    // fetch would otherwise serialise everyone behind the cipher.
+    ( http_app_workers a 4 )
+    // a long idle would hold the connection open after the fetch
     ( http_app_idle_ms a 2000 )
     ( http_app_body_max a 1024 )
 
