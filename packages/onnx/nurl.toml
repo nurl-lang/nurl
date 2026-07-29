@@ -1,6 +1,6 @@
 [package]
 name = "onnx"
-version = "0.7.3"
+version = "0.8.0"
 description = "Run ONNX neural-network models from pure NURL, GPU-accelerated. The model's protobuf is decoded by a pure-NURL wire-format reader (no protoc, no external protobuf library) into an in-memory graph; inference keeps every weight and activation resident on the device and dispatches each node to gpukit's dev-layer kernel library — the SAME dtype-generic kernels the tensor package's DTensor uses, so the whole ML stack shares one proven kernel set (onnx carries no kernel sources of its own). Kernels JIT-compile lazily and are cached in-process and on disk; launches chain on the stream with a single device sync per graph walk. The op set covers CNNs and transformers: Conv/ConvTranspose/MaxPool/BatchNormalization, Gemm/MatMul (dense + batched)/Einsum, broadcast Mul/Add/Sub/Div, LayerNormalization/Softmax/Erf/Sigmoid/Relu/LeakyRelu/Clip, Concat/Split/Slice/Reshape/Transpose/Resize/Expand/Unsqueeze, Gather/GatherND/ArgMax/ReduceL2 — enough for YOLO-class detectors, segmentation heads and CLIP text encoders, verified byte-for-byte against the previous executor and numerically against onnxruntime. The zero-copy tensor bridge runs a graph on a device-resident DTensor input and wraps outputs back as DTensors with no host roundtrip. Runs on CUDA (libcuda + NVRTC) or the gpu package's CPU/OpenMP backend on a GPU-less host."
 license = "MIT OR Apache-2.0"
 

@@ -1,5 +1,35 @@
 # Changelog
 
+## 0.3.0
+
+- **Long captures: windowed Sim(3)-stitched reconstruction.** Global
+  attention is quadratic in the sequence, so past `--window` views
+  (default 24) the run splits into overlapping windows, each
+  reconstructed independently and stitched with a closed-form
+  similarity: the `--overlap` views (default 6) exist pixel-for-pixel
+  in both windows, so the correspondences are exact — Horn's quaternion
+  method (4×4 Jacobi) recovers s, R, t to 7e-15 on synthetic transforms
+  (tests/sim3check.nu). Window 0 sets the global metric frame; later
+  windows' scale drift is absorbed by the stitch. Defaults unchanged:
+  ≤ 24 views is still one batch, `--max-views 400` (or `--max-frames`,
+  now an alias) actually works — 400 views of 518×294 in ~3 min on one
+  RTX 4090 (~17 windows).
+
+
+## 0.2.0
+
+- **`--mask-sky`** — optional sky masking, the way the LingBot-Map demo
+  does it: JianyuanWang's skyseg.onnx (U²-Net, fetched via hub on first
+  use) scores sky per view through the onnx package on the GPU; the
+  reference arithmetic (320×320, ImageNet norm, min–max → u8, bilinear
+  back, keep at the map's minimum) is reproduced and agrees with the
+  onnxruntime-driven reference on 99.97% of pixels. ANDs into the mask
+  pipeline between the non-ambiguous and confidence masks.
+- Rides on onnx 0.8.0 (dilated Conv, host-side INT64 shape folding,
+  linear Resize, MaxPool ceil_mode — everything a torch U²-Net export
+  needs) and gpukit 0.6.3 (`gkd_conv2d_dil`).
+
+
 ## 0.1.0
 
 - **Initial release: MapAnything in pure NURL.** A port of Meta's

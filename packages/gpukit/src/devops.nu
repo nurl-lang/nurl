@@ -305,6 +305,69 @@ $ `dev.nu`
     ( gk_grid * * ( __gkd_ceil cout 4 ) oh ( __gkd_ceil ow 4 ) 256 ) args )
 }
 
+// ── 2-D DILATED convolution, NCHW, batch 1, group 1 ──────────────────
+// The atrous variant (U²-Net's RSU4F, DeepLab-family heads): tap (r, s)
+// reads input row iy = oy·sh − ph + r·dh. gkd_conv2d is the dh=dw=1
+// special case and keeps its specialised fast kernel; this one is a
+// plain one-thread-per-output body, because dilated layers in the models
+// that need them are a handful of small feature maps, not the hot path.
+@ gkd_conv2d_dil * GpuKit kit GkBuf y GkBuf x GkBuf w GkBuf bias i hasb i cin i h i wd i cout i kh i kw i oh i ow i ph i pw i sh i sw i dh i dw → b {
+    ? & == dh 1 == dw 1 {
+        ^ ( gkd_conv2d kit y x w bias hasb cin h wd cout kh kw oh ow ph pw sh sw )
+    } {}
+    ? & & ( __gkd_isfloat y ) ( gk_buf_ok x ) ( gk_buf_ok w ) {} { ^ F }
+    ? & == . y dtype . x dtype == . x dtype . w dtype {} { ^ F }
+    ? & & & > cin 0 > h 0 > wd 0 > cout 0 {} { ^ F }
+    ? & & & > kh 0 > kw 0 > oh 0 > ow 0 {} { ^ F }
+    ? & & & > sh 0 > sw 0 > dh 0 > dw 0 {} { ^ F }
+    ? & & == . x n * * cin h wd == . w n * * * cout cin kh kw == . y n * * cout oh ow {} { ^ F }
+    ? != hasb 0 {
+        ? & & ( gk_buf_ok bias ) == . bias dtype . y dtype >= . bias n cout {} { ^ F }
+    } {}
+    : s tn ( _gk_tname . y dtype )
+    : String kname ( __gkd_name . y dtype )
+    : String src ( __gkd_head kname `conv2d_dil` )
+    ( string_push_str src `const ` ) ( string_push_str src tn ) ( string_push_str src `* X, const ` )
+    ( string_push_str src tn ) ( string_push_str src `* Wt, const ` )
+    ( string_push_str src tn ) ( string_push_str src `* B, ` )
+    ( string_push_str src tn )
+    ( string_push_str src `* Y, long long Cin, long long H, long long W, long long Cout, long long kh, long long kw, long long OH, long long OW, long long ph, long long pw, long long sh, long long sw, long long dh, long long dw, long long hasB){` )
+    ( string_push_str src `long long idx=blockIdx.x*blockDim.x+threadIdx.x;` )
+    ( string_push_str src `if(idx>=Cout*OH*OW)return;` )
+    ( string_push_str src `long long ox=idx%OW, oy=(idx/OW)%OH, oc=idx/(OW*OH);` )
+    ( string_push_str src `double acc=hasB?(double)B[oc]:0.0;` )
+    ( string_push_str src `for(long long ic=0;ic<Cin;ic++){` )
+    ( string_push_str src `const ` ) ( string_push_str src tn ) ( string_push_str src `* xp=X+ic*H*W;` )
+    ( string_push_str src `const ` ) ( string_push_str src tn ) ( string_push_str src `* wp=Wt+(oc*Cin+ic)*kh*kw;` )
+    ( string_push_str src `for(long long r=0;r<kh;r++){` )
+    ( string_push_str src `long long iy=oy*sh-ph+r*dh; if(iy<0||iy>=H)continue;` )
+    ( string_push_str src `for(long long s=0;s<kw;s++){` )
+    ( string_push_str src `long long ix=ox*sw-pw+s*dw; if(ix<0||ix>=W)continue;` )
+    ( string_push_str src `acc+=(double)xp[iy*W+ix]*(double)wp[r*kw+s];}}}` )
+    ( string_push_str src `Y[idx]=(` ) ( string_push_str src tn ) ( string_push_str src `)acc;}` )
+    : ( Vec i ) args ( vec_new [i] )
+    ( vec_push [i] args ( gk_arg_dev x ) )
+    ( vec_push [i] args ( gk_arg_dev w ) )
+    ( vec_push [i] args ? != hasb 0 ( gk_arg_dev bias ) ( gk_arg_dev x ) )
+    ( vec_push [i] args ( gk_arg_dev y ) )
+    ( vec_push [i] args ( gpu_arg_i64 cin ) )
+    ( vec_push [i] args ( gpu_arg_i64 h ) )
+    ( vec_push [i] args ( gpu_arg_i64 wd ) )
+    ( vec_push [i] args ( gpu_arg_i64 cout ) )
+    ( vec_push [i] args ( gpu_arg_i64 kh ) )
+    ( vec_push [i] args ( gpu_arg_i64 kw ) )
+    ( vec_push [i] args ( gpu_arg_i64 oh ) )
+    ( vec_push [i] args ( gpu_arg_i64 ow ) )
+    ( vec_push [i] args ( gpu_arg_i64 ph ) )
+    ( vec_push [i] args ( gpu_arg_i64 pw ) )
+    ( vec_push [i] args ( gpu_arg_i64 sh ) )
+    ( vec_push [i] args ( gpu_arg_i64 sw ) )
+    ( vec_push [i] args ( gpu_arg_i64 dh ) )
+    ( vec_push [i] args ( gpu_arg_i64 dw ) )
+    ( vec_push [i] args ( gpu_arg_i64 hasb ) )
+    ^ ( __gkd_launch kit src kname ( gk_grid * * cout oh ow 256 ) args )
+}
+
 // ── 2-D transposed convolution (deconv), NCHW, batch 1, group 1 ──────
 // PyTorch/ONNX weight layout [Cin, Cout, kh, kw] (Cin first, unlike Conv).
 // Gather form: Y[oc,oy,ox] = bias + Σ X[ic,iy,ix]·W[ic,oc,ky,kx] where

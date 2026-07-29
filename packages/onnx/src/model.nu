@@ -126,6 +126,29 @@ $ `pb.nu`
                 ( pb_free is )
             } { ( vec_push [i] ints ( pb_varint r ) ) }
         }
+        ? == fld 5 {  // t: an embedded TensorProto — a Constant node's payload.
+            // INT64 values land in `ints` (that is what the host-side
+            // shape-arithmetic pass consumes — Gather indices, Slice
+            // starts/ends/axes, Resize size parts). Float constants keep
+            // only their element count in `i` — the one float Constant
+            // skyseg-class models carry is the EMPTY roi/scales tensor,
+            // whose only information is that it is empty.
+            : *PbR ts ( pb_submsg r )
+            : OTensor t ( __parse_tensor ts )
+            ( pb_free ts )
+            ? & == . t dtype 7 != . t host 0 {
+                : *u h # *u . t host
+                : ~ i q 0
+                ~ < q . t nelem {
+                    ( vec_push [i] ints ( nurl_peek # s h q ) )
+                    = q + q 1
+                }
+            } {}
+            = iv . t nelem
+            ( string_free . t name )
+            ( vec_free [i] . t dims )
+            ? != . t host 0 { ( nurl_free # s # *u . t host ) } {}
+        }
         { ( pb_skip r wt ) }
     }
     ^ @ OAttr { name 0 fv iv sv ints }
