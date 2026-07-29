@@ -50,6 +50,9 @@ $ `src/sky.nu`
 
 : s MA_DEFAULT_REF `facebook/map-anything-apache`
 
+// Kept in step with nurl.toml by tests/version_test.sh.
+@ __ma_version → v { ( nurl_print `map-anything 0.4.1\n` ) }
+
 @ __ma_usage → v {
     ( nurl_print `map-anything - metric 3-D reconstruction from images, in pure NURL\n` )
     ( nurl_print `a port of Meta's MapAnything (github.com/facebookresearch/map-anything)\n\n` )
@@ -75,6 +78,7 @@ $ `src/sky.nu`
     ( nurl_print `  --host A            viewer bind address (default 127.0.0.1;\n` )
     ( nurl_print `                      0.0.0.0 = every interface; --addr works too)\n` )
     ( nurl_print `  --tls               viewer HTTPS with a fresh self-signed cert\n` )
+    ( nurl_print `  --version           print the version\n` )
     ( nurl_print `  -q, --quiet         only errors\n` )
 }
 
@@ -313,6 +317,7 @@ $ `src/sky.nu`
             ? ( __ma_streq a `--tls` ) { = vtls 1 = hit 1 } {}
             ? | ( __ma_streq a `--quiet` ) ( __ma_streq a `-q` ) { = verbose 0 = hit 1 } {}
             ? | ( __ma_streq a `--help` ) ( __ma_streq a `-h` ) { = bad 2 = hit 1 } {}
+            ? ( __ma_streq a `--version` ) { ( __ma_version ) = bad 4 = hit 1 } {}
             ? == hit 0 {
                 ? ( __ma_is_flag a ) {
                     ( nurl_print `map-anything: unknown option ` )
@@ -404,6 +409,7 @@ $ `src/sky.nu`
         ( __ma_usage )
         ^ ? < ( nurl_argc ) 2 1 0
     } {}
+    ? == . o bad 4 { ^ 0 } {}
     ? == . o bad 1 { ^ 1 } {}
     ? == . o bad 3 {
         ^ ( vw_serve . o viewfile . o vhost . o port `` 0 . o vtls )
