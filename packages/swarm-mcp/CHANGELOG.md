@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.21.1
+
+**`--version` prints the version instead of failing the role check.** `swarm-mcp
+--version` used to fall through to the node launcher, which rejected it with
+`pick at least one role` (exit 1) plus the whole usage text. It now prints
+`swarm-mcp 0.21.1` and exits 0, like every other toolchain program. `-v` is
+unchanged — it stays `--verbose` — so the version flag is long-form only. The
+flag is recognised anywhere on the command line, and `--help` now lists it.
+
+**`tests/blob_test.nu` compiles again.** Its three
+`wasm_gpu_chunk_payload_blobs` calls still passed the pre-`dtype` argument
+list, so `hashes` and `wasm` landed one slot to the left — the v4 payload
+gained a `dtype` field and the test was not updated with it. The calls now pass
+`dtype` (1 = f64), and the v4 round-trip asserts it decodes back.
+
 ## 0.20.0
 
 **Coordinator crash-restart recovery — datasets persist across a coordinator
