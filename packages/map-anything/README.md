@@ -16,6 +16,7 @@ orbited in the browser through the [ply](../ply) package's built-in WebGL viewer
 map-anything photos/            # folder of images -> cloud.ply
 map-anything walk.mp4           # video (MJPEG AVI in pure NURL, rest via ffmpeg)
 map-anything photos/ --view     # open the browser viewer when done
+map-anything hill.mp4 --mask-sky   # outdoor: drop sky via skyseg.onnx
 ```
 
 The checkpoint (~4.5 GB, F32 safetensors) is fetched from Hugging Face on first

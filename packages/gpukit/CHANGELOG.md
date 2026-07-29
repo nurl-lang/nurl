@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.6.3
+
+- **`gkd_conv2d_dil`** — atrous (dilated) 2-D convolution: tap (r,s)
+  reads iy = oy·sh − ph + r·dh. The dh=dw=1 case delegates to the
+  existing specialised `gkd_conv2d` kernel unchanged; the dilated body
+  is a plain one-thread-per-output kernel, because dilated layers
+  (U²-Net RSU4F, DeepLab heads) are a handful of small maps, not the
+  hot path. First consumer: the onnx package's Conv (skyseg.onnx for
+  map-anything's --mask-sky).
+
 ## 0.6.2
 
 - `gk_mem_free` / `gk_mem_total`: free and total device memory in

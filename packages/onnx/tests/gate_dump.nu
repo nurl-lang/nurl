@@ -154,7 +154,22 @@ $ `src/runtime.nu`
                 } {}
                 ( nurl_free img )
                 ( nurl_free tpe )
-            } { ( nurl_print `usage: gate_dump img|tok|two ...\n` ) = rc 2 }
+            } {
+                ? ( nurl_str_eq ( string_data mode ) `imgf` ) {
+                    // imgf <model> <in.f32.bin> <d0..d3> <out.bin> — a real
+                    // input from a file, for oracle comparisons.
+                    : *u pc ( nurl_alloc 8 )
+                    : *u input ( load_bytes ( string_data ( args 3 ) ) pc )
+                    ( nurl_free pc )
+                    : i d0 ( argi 4 1 )
+                    : i d1 ( argi 5 3 )
+                    : i d2 ( argi 6 320 )
+                    : i d3 ( argi 7 320 )
+                    : RTensor out ( rt_run_shaped e g input ( shape4g d0 d1 d2 d3 ) )
+                    = rc ( dump_out e out ( string_data ( args 8 ) ) )
+                    ( nurl_free input )
+                } { ( nurl_print `usage: gate_dump img|imgf|tok|two ...\n` ) = rc 2 }
+            }
         }
     }
     ( rt_close e )

@@ -46,6 +46,7 @@ $ `src/dpthead.nu`
 $ `src/heads.nu`
 $ `src/geom.nu`
 $ `src/preproc.nu`
+$ `src/sky.nu`
 
 : s MA_DEFAULT_REF `facebook/map-anything-apache`
 
@@ -62,6 +63,7 @@ $ `src/preproc.nu`
     ( nurl_print `  --fps N             frames per second when extracting a video (default 1)\n` )
     ( nurl_print `  --pixel-stride N    emit every Nth pixel in x and y (default 1)\n` )
     ( nurl_print `  --conf-pct P        drop the P% least confident pixels (default off)\n` )
+    ( nurl_print `  --mask-sky          drop sky pixels via skyseg.onnx (fetched on first use)\n` )
     ( nurl_print `  --no-mask-edges     keep depth-discontinuity edge pixels\n` )
     ( nurl_print `  --no-mask           keep even the sky/ambiguous pixels\n` )
     ( nurl_print `  --ascii             text PLY instead of binary\n` )
@@ -225,6 +227,7 @@ $ `src/preproc.nu`
     i pstride
     f confpct
     i maskedges
+    i masksky
     i domask
     ( Vec String ) frames
     i bad  // 0 run, 1 error, 2 help, 3 view-subcommand
@@ -245,6 +248,7 @@ $ `src/preproc.nu`
     : ~ i pstride 1
     : ~ f confpct -1.0
     : ~ i maskedges 1
+    : ~ i masksky 0
     : ~ i domask 1
     : ~ i bad 0
     : ~ s viewfile ``
@@ -279,6 +283,7 @@ $ `src/preproc.nu`
         ? == take 1 { = i0 + i0 1 } {
             : ~ i hit 0
             ? ( __ma_streq a `--no-mask-edges` ) { = maskedges 0 = hit 1 } {}
+            ? ( __ma_streq a `--mask-sky` ) { = masksky 1 = hit 1 } {}
             ? ( __ma_streq a `--no-mask` ) { = domask 0 = hit 1 } {}
             ? ( __ma_streq a `--ascii` ) { = ascii 1 = hit 1 } {}
             ? ( __ma_streq a `--view` ) { = view 1 = hit 1 } {}
@@ -364,7 +369,7 @@ $ `src/preproc.nu`
     } {}
     ? & == bad 0 == ( vec_len [String] fr ) 0 { = bad 2 } {}
     ^ @ Opts { model out video view port ascii verbose maxviews stride fps
-        pstride confpct maskedges domask fr bad viewfile }
+        pstride confpct maskedges masksky domask fr bad viewfile }
 }
 
 // ── main ────────────────────────────────────────────────────────────
@@ -545,6 +550,29 @@ $ `src/preproc.nu`
         ( nurl_print ` (metric)\n` )
     } {}
 
+    // sky segmentation, when asked for: the LingBot demo's skyseg.onnx,
+    // fetched through hub and run through the onnx package
+    : ~ Sky sky @ Sky { @ OGraph { ( vec_new [ONode] ) ( vec_new [OTensor] ) ( string_new ) ( string_new ) ( string_new ) } # *Engine 0 F }
+    ? != . o masksky 0 {
+        ?? ( hub_get `https://huggingface.co/JianyuanWang/skyseg/resolve/main/skyseg.onnx` ) {
+            F e → {
+                ( nurl_print `map-anything: skyseg fetch failed: ` )
+                ( nurl_print ( string_data e ) ) ( nurl_print `\n` )
+                ( string_free e )
+                ^ 1
+            }
+            T p → {
+                ( sky_free sky )
+                = sky ( sky_open ( string_data p ) )
+                ( string_free p )
+                ? . sky ok {} {
+                    ( nurl_print `map-anything: cannot load skyseg.onnx\n` )
+                    ^ 1
+                }
+            }
+        }
+    } {}
+
     // per view: dense head + pose head → world points → PLY
     : ~ * PlyW ply # *PlyW 0
     ?? ( ply_create . o out . o ascii `map-anything, pure NURL (github.com/facebookresearch/map-anything port)` ) {
@@ -604,6 +632,14 @@ $ `src/preproc.nu`
             = j 0
             ~ < j hw { = . mask j # u 1 = j + j 1 }
         }
+        ? != . o masksky 0 {
+            : ~ * Frame skf # *Frame 0
+            ?? ( vec_get [i] framev k ) { T v → { = skf # *Frame v } F → {} }
+            ? ( sky_mask sky ( pp_data skf ) w h mask ) {} {
+                ( nurl_print `map-anything: sky segmentation failed\n` )
+                ^ 1
+            }
+        } {}
         ? >= . o confpct 0.0 { ( gm_conf_percentile conf_h hw . o confpct mask ) } {}
         ? & != . o maskedges 0 != . o domask 0 {
             ( gm_edge_mask pts depthz h w mask )

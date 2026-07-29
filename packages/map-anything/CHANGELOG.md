@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.2.0
+
+- **`--mask-sky`** — optional sky masking, the way the LingBot-Map demo
+  does it: JianyuanWang's skyseg.onnx (U²-Net, fetched via hub on first
+  use) scores sky per view through the onnx package on the GPU; the
+  reference arithmetic (320×320, ImageNet norm, min–max → u8, bilinear
+  back, keep at the map's minimum) is reproduced and agrees with the
+  onnxruntime-driven reference on 99.97% of pixels. ANDs into the mask
+  pipeline between the non-ambiguous and confidence masks.
+- Rides on onnx 0.8.0 (dilated Conv, host-side INT64 shape folding,
+  linear Resize, MaxPool ceil_mode — everything a torch U²-Net export
+  needs) and gpukit 0.6.3 (`gkd_conv2d_dil`).
+
+
 ## 0.1.0
 
 - **Initial release: MapAnything in pure NURL.** A port of Meta's

@@ -172,6 +172,151 @@ $ `model.nu`
     ^ ( string_data ?? ( vec_get [String] . n outputs 0 ) { T x → x F _ → ( string_new ) } )
 }
 
+@ __rt_in_name ONode n i k → s {
+    ^ ( string_data ?? ( vec_get [String] . n inputs k ) { T x → x F _ → ( string_new ) } )
+}
+
+// ── host-side INT64 tensors ───────────────────────────────────────
+// The shape-arithmetic chains a torch export leaves behind —
+// Shape → Gather/Unsqueeze/Concat/Cast/Slice → a Resize `sizes` input —
+// run on the HOST: with a static input shape they are constants, and
+// three-element i64 tensors have no business on the device. A host-int
+// tensor lives in the SAME value map as an RTensor whose dptr is the
+// RT_HOSTI sentinel and whose VALUES sit in the `shape` vector, so
+// rt_reset frees it like any other entry and the ready gate's rt_find
+// keeps working unchanged.
+: i RT_HOSTI - 0 1
+
+@ __hi_put * Engine e s name ( Vec i ) vals → v {
+    ( rt_put e name RT_HOSTI vals )
+}
+
+// The named value as a host int vector: a host tensor's values, else an
+// INT64 initializer's, else empty. The returned vec is FRESH (caller
+// frees). Device tensors yield empty — float weights never alias an
+// INT64 name — so "non-empty" doubles as "this is host data".
+@ __hi_vals * Engine e s name → ( Vec i ) {
+    : ( Vec i ) out ( vec_new [i] )
+    ? == ( nurl_str_len name ) 0 { ^ out } {}
+    : i idx ( rt_find e name )
+    ? >= idx 0 {
+        : RTensor t ( rt_at e idx )
+        ? == . t dptr RT_HOSTI {
+            : ~ i k 0
+            ~ < k ( vec_len [i] . t shape ) {
+                ( vec_push [i] out ?? ( vec_get [i] . t shape k ) { T v → v F _ → 0 } )
+                = k + k 1
+            }
+        } {}
+        ^ out
+    } {}
+    : i nl ( __init_i64_len e name )
+    : ~ i k 0
+    ~ < k nl { ( vec_push [i] out ( __init_i64 e name k ) ) = k + k 1 }
+    ^ out
+}
+
+// Execute a node entirely on the host when its data is host-int. Returns
+// T when the node was consumed (its output registered, or deliberately
+// dropped), F when the device dispatch should have it.
+@ __rt_host_step * Engine e ONode n → b {
+    : s op ( string_data . n op_type )
+    ? ( streq2 op `Constant` ) {
+        // The payload's INT64 values were folded into the `value`
+        // attribute's ints at parse time; a float Constant (the empty
+        // roi/scales of a Resize) registers as an empty host tensor.
+        : ( Vec i ) vals ( vec_new [i] )
+        : i nv ( node_attr_ints_len n `value` )
+        : ~ i k 0
+        ~ < k nv { ( vec_push [i] vals ( node_attr_int_at n `value` k 0 ) ) = k + k 1 }
+        ( __hi_put e ( __out_name n ) vals )
+        ^ T
+    } {}
+    ? ( streq2 op `Shape` ) {
+        : i idx ( rt_find e ( __rt_in_name n 0 ) )
+        ? < idx 0 { ^ T } {}
+        : RTensor X ( rt_at e idx )
+        : ( Vec i ) vals ( vec_new [i] )
+        ? == . X dptr RT_HOSTI { ( vec_push [i] vals ( vec_len [i] . X shape ) ) } {
+            : ~ i k 0
+            ~ < k ( vec_len [i] . X shape ) {
+                ( vec_push [i] vals ?? ( vec_get [i] . X shape k ) { T v → v F _ → 0 } )
+                = k + k 1
+            }
+        }
+        ( __hi_put e ( __out_name n ) vals )
+        ^ T
+    } {}
+    ? | | ( streq2 op `Cast` ) ( streq2 op `Unsqueeze` ) ( streq2 op `Squeeze` ) {
+        // Value-preserving on a flat int list (Cast only ever targets
+        // INT64 in these chains; a 1-D unsqueeze/squeeze is shape-talk).
+        : ( Vec i ) vals ( __hi_vals e ( __rt_in_name n 0 ) )
+        ? == ( vec_len [i] vals ) 0 { ( vec_free [i] vals ) ^ F } {}
+        ( __hi_put e ( __out_name n ) vals )
+        ^ T
+    } {}
+    ? ( streq2 op `Gather` ) {
+        : ( Vec i ) data ( __hi_vals e ( __rt_in_name n 0 ) )
+        ? == ( vec_len [i] data ) 0 { ( vec_free [i] data ) ^ F } {}
+        : ( Vec i ) idxs ( __hi_vals e ( __rt_in_name n 1 ) )
+        : i dn ( vec_len [i] data )
+        : ( Vec i ) vals ( vec_new [i] )
+        : ~ i k 0
+        ~ < k ( vec_len [i] idxs ) {
+            : ~ i ix ?? ( vec_get [i] idxs k ) { T v → v F _ → 0 }
+            ? < ix 0 { = ix + ix dn } {}
+            ( vec_push [i] vals ?? ( vec_get [i] data ix ) { T v → v F _ → 0 } )
+            = k + k 1
+        }
+        ( vec_free [i] data )
+        ( vec_free [i] idxs )
+        ( __hi_put e ( __out_name n ) vals )
+        ^ T
+    } {}
+    ? ( streq2 op `Concat` ) {
+        : ( Vec i ) first ( __hi_vals e ( __rt_in_name n 0 ) )
+        ? == ( vec_len [i] first ) 0 { ( vec_free [i] first ) ^ F } {}
+        : ( Vec i ) vals first
+        : ~ i k 1
+        ~ < k ( vec_len [String] . n inputs ) {
+            : ( Vec i ) part ( __hi_vals e ( __rt_in_name n k ) )
+            : ~ i j 0
+            ~ < j ( vec_len [i] part ) {
+                ( vec_push [i] vals ?? ( vec_get [i] part j ) { T v → v F _ → 0 } )
+                = j + j 1
+            }
+            ( vec_free [i] part )
+            = k + k 1
+        }
+        ( __hi_put e ( __out_name n ) vals )
+        ^ T
+    } {}
+    ? ( streq2 op `Slice` ) {
+        : ( Vec i ) data ( __hi_vals e ( __rt_in_name n 0 ) )
+        ? == ( vec_len [i] data ) 0 { ( vec_free [i] data ) ^ F } {}
+        : ( Vec i ) starts ( __hi_vals e ( __rt_in_name n 1 ) )
+        : ( Vec i ) ends ( __hi_vals e ( __rt_in_name n 2 ) )
+        : i dn ( vec_len [i] data )
+        : ~ i s0 ?? ( vec_get [i] starts 0 ) { T v → v F _ → 0 }
+        : ~ i e0 ?? ( vec_get [i] ends 0 ) { T v → v F _ → dn }
+        ? < s0 0 { = s0 + s0 dn } {}
+        ? < e0 0 { = e0 + e0 dn } {}
+        ? > e0 dn { = e0 dn } {}
+        : ( Vec i ) vals ( vec_new [i] )
+        : ~ i k s0
+        ~ < k e0 {
+            ( vec_push [i] vals ?? ( vec_get [i] data k ) { T v → v F _ → 0 } )
+            = k + k 1
+        }
+        ( vec_free [i] data )
+        ( vec_free [i] starts )
+        ( vec_free [i] ends )
+        ( __hi_put e ( __out_name n ) vals )
+        ^ T
+    } {}
+    ^ F
+}
+
 // Upload all graph initializers to the device as RTensors (full shape).
 // Fresh copy of a shape vector — rt_put ADOPTS its shape argument (rt_reset
 // frees it), so borrowed vectors (a graph init's dims) must be copied in.
@@ -252,19 +397,26 @@ $ `model.nu`
     : i kw ( rt_dim W 3 )
     : i sh ( node_attr_int_at n `strides` 0 1 )
     : i sw ( node_attr_int_at n `strides` 1 1 )
+    // dilation stretches the EFFECTIVE kernel: ek = (k−1)·d + 1. U²-Net's
+    // RSU4F runs 3×3 at d = 2/4/8; ignoring the attribute silently grows
+    // every such map (pad 2, effective kernel still read as 3).
+    : i dh ( node_attr_int_at n `dilations` 0 1 )
+    : i dw ( node_attr_int_at n `dilations` 1 1 )
+    : i ekh + * - kh 1 dh 1
+    : i ekw + * - kw 1 dw 1
     : s ap ( node_attr_s n `auto_pad` `NOTSET` )
     : ~ i OH ( ceil_div H sh )
     : ~ i OW ( ceil_div Wd sw )
     : ~ i ph 0
     : ~ i pw 0
     ? | ( streq2 ap `SAME_UPPER` ) ( streq2 ap `SAME_LOWER` ) {
-        : i pht - + * - OH 1 sh kh H
-        : i pwt - + * - OW 1 sw kw Wd
+        : i pht - + * - OH 1 sh ekh H
+        : i pwt - + * - OW 1 sw ekw Wd
         = ph ? > pht 0 / pht 2 0
         = pw ? > pwt 0 / pwt 2 0
     } {
-        = OH + / - + H * 2 ( node_attr_int_at n `pads` 0 0 ) kh sh 1
-        = OW + / - + Wd * 2 ( node_attr_int_at n `pads` 1 0 ) kw sw 1
+        = OH + / - + H * 2 ( node_attr_int_at n `pads` 0 0 ) ekh sh 1
+        = OW + / - + Wd * 2 ( node_attr_int_at n `pads` 1 0 ) ekw sw 1
         = ph ( node_attr_int_at n `pads` 0 0 )
         = pw ( node_attr_int_at n `pads` 1 0 )
     }
@@ -273,7 +425,7 @@ $ `model.nu`
     ? > ( vec_len [String] . n inputs ) 2 { : RTensor B ( __in e n 2 ) = bb ( __rt_fbuf B ) = hasB 1 } {}
     : i yd ( rt_alloc_out e ( __out_name n ) ( __shape4 1 Cout OH OW ) )
     : GkBuf yb @ GkBuf { yd * * Cout OH OW GK_F32 }
-    ? ( gkd_conv2d . e kit yb ( __rt_fbuf X ) ( __rt_fbuf W ) bb hasB Cin H Wd Cout kh kw OH OW ph pw sh sw ) {} { ( __rt_op_fail `Conv` ) }
+    ? ( gkd_conv2d_dil . e kit yb ( __rt_fbuf X ) ( __rt_fbuf W ) bb hasB Cin H Wd Cout kh kw OH OW ph pw sh sw dh dw ) {} { ( __rt_op_fail `Conv` ) }
 }
 
 // Transposed convolution (ConvTranspose). Weight is [Cin, Cout, kh, kw].
@@ -316,6 +468,9 @@ $ `model.nu`
     : i sh ( node_attr_int_at n `strides` 0 1 )
     : i sw ( node_attr_int_at n `strides` 1 1 )
     : s ap ( node_attr_s n `auto_pad` `NOTSET` )
+    // ceil_mode rounds the output size UP, so a window that hangs off the
+    // edge still yields an output row (U²-Net's odd feature sizes: 5→3).
+    : i cm ( node_attr_i n `ceil_mode` 0 )
     : ~ i OH 0
     : ~ i OW 0
     : ~ i ph 0
@@ -330,8 +485,10 @@ $ `model.nu`
         // NOTSET: explicit pads [top,left,bottom,right] (begin = top/left)
         = ph ( node_attr_int_at n `pads` 0 0 )
         = pw ( node_attr_int_at n `pads` 1 0 )
-        = OH + / - + H * 2 ph kh sh 1
-        = OW + / - + Wd * 2 pw kw sw 1
+        : i ex ? != cm 0 - sh 1 0
+        : i ex2 ? != cm 0 - sw 1 0
+        = OH + / + - + H * 2 ph kh ex sh 1
+        = OW + / + - + Wd * 2 pw kw ex2 sw 1
     }
     : i yd ( rt_alloc_out e ( __out_name n ) ( __shape4 1 C OH OW ) )
     : GkBuf yb @ GkBuf { yd * * C OH OW GK_F32 }
@@ -501,17 +658,34 @@ $ `model.nu`
 
 @ rt_resize * Engine e ONode n → v {
     : RTensor X ( __in e n 0 )
-    : s sc_name ( string_data ?? ( vec_get [String] . n inputs 2 ) { T x → x F _ → ( string_new ) } )
-    : i sh # i ( __init_f32 e sc_name 2 )
-    : i sw # i ( __init_f32 e sc_name 3 )
     : i C ( rt_dim X 1 )
     : i H ( rt_dim X 2 )
     : i W ( rt_dim X 3 )
-    : i OH * H sh
-    : i OW * W sw
+    // The output size: an explicit `sizes` input (opset ≥ 11 — computed
+    // by the host-int chains, [N, C, OH, OW]) wins over float `scales`.
+    : ~ i OH 0
+    : ~ i OW 0
+    : ( Vec i ) sz ( __hi_vals e ( __rt_in_name n 3 ) )
+    ? >= ( vec_len [i] sz ) 4 {
+        = OH ?? ( vec_get [i] sz 2 ) { T v → v F _ → 0 }
+        = OW ?? ( vec_get [i] sz 3 ) { T v → v F _ → 0 }
+    } {
+        : s sc_name ( __rt_in_name n 2 )
+        = OH * H # i ( __init_f32 e sc_name 2 )
+        = OW * W # i ( __init_f32 e sc_name 3 )
+    }
+    ( vec_free [i] sz )
+    ? | <= OH 0 <= OW 0 { ( __rt_op_fail `Resize` ) ^ v } {}
     : i yd ( rt_alloc_out e ( __out_name n ) ( __shape4 1 C OH OW ) )
     : GkBuf yb @ GkBuf { yd * * C OH OW GK_F32 }
-    ? ( gkd_resize_nn . e kit yb ( __rt_fbuf X ) C H W OH OW sh sw ) {} { ( __rt_op_fail `Resize` ) }
+    : s mode ( node_attr_s n `mode` `nearest` )
+    ? ( streq2 mode `linear` ) {
+        // half-pixel bilinear (align 0) — ONNX pytorch_half_pixel and
+        // half_pixel agree for every output size above 1
+        ? ( gkd_resize_bilinear . e kit yb ( __rt_fbuf X ) C H W OH OW 0 ) {} { ( __rt_op_fail `Resize` ) }
+    } {
+        ? ( gkd_resize_nn . e kit yb ( __rt_fbuf X ) C H W OH OW / OH H / OW W ) {} { ( __rt_op_fail `Resize` ) }
+    }
 }
 
 // General transpose (≤6-D): input dims + perm straight to gkd_perm (which
@@ -586,7 +760,15 @@ $ `model.nu`
     ~ < ai nin {
         : RTensor src ( __in e n ai )
         : i sa ( rt_dim src axis )
-        ? ( gkd_copy_ax . e kit yb ( __rt_fbuf src ) outer sa inner sumax off ) {} { ( __rt_op_fail `Concat` ) }
+        ? ( gkd_copy_ax . e kit yb ( __rt_fbuf src ) outer sa inner sumax off ) {} {
+            ( __rt_op_fail `Concat` )
+            ( nurl_eprint `  out=` ) ( nurl_eprint ( __out_name n ) )
+            ( nurl_eprint ` in=` ) ( nurl_eprint ( __rt_in_name n ai ) )
+            ( nurl_eprint ` nelem=` ) ( nurl_eprint ( nurl_str_int . src nelem ) )
+            ( nurl_eprint ` want outer*sa*inner=` )
+            ( nurl_eprint ( nurl_str_int * * outer sa inner ) )
+            ( nurl_eprint `\n` )
+        }
         = off + off sa
         = ai + ai 1
     }
@@ -926,41 +1108,45 @@ $ `model.nu`
                 // (output0) doesn't depend on that branch.
                 : s in0 ( string_data ?? ( vec_get [String] . nd inputs 0 ) { T x → x F _ → ( string_new ) } )
                 : b ready | == ( vec_len [String] . nd inputs ) 0 >= ( rt_find e in0 ) 0
-                ? ! ready {} {
-                    ? ( streq2 op `Gemm` ) { ( rt_gemm e nd ) }
-                    ? ( streq2 op `Relu` ) { ( rt_relu e nd ) }
-                    ? ( streq2 op `Conv` ) { ( rt_conv e nd ) }
-                    ? ( streq2 op `ConvTranspose` ) { ( rt_convtranspose e nd ) }
-                    ? ( streq2 op `MaxPool` ) { ( rt_maxpool e nd ) }
-                    ? ( streq2 op `BatchNormalization` ) { ( rt_batchnorm e nd ) }
-                    ? ( streq2 op `LeakyRelu` ) { ( rt_leakyrelu e nd ) }
-                    ? ( streq2 op `Mul` ) { ( rt_binop e nd 0 ) }
-                    ? ( streq2 op `Add` ) { ( rt_binop e nd 1 ) }
-                    ? ( streq2 op `Sub` ) { ( rt_binop e nd 2 ) }
-                    ? ( streq2 op `Div` ) { ( rt_binop e nd 3 ) }
-                    ? ( streq2 op `Sigmoid` ) { ( rt_sigmoid e nd ) }
-                    ? ( streq2 op `Concat` ) { ( rt_concat e nd ) }
-                    ? ( streq2 op `Split` ) { ( rt_split e nd ) }
-                    ? ( streq2 op `Slice` ) { ( rt_slice e nd ) }
-                    ? ( streq2 op `Reshape` ) { ( rt_reshape e nd ) }
-                    ? ( streq2 op `Resize` ) { ( rt_resize e nd ) }
-                    ? ( streq2 op `Transpose` ) { ( rt_transpose e nd ) }
-                    ? ( streq2 op `Softmax` ) { ( rt_softmax e nd ) }
-                    ? ( streq2 op `MatMul` ) { ( rt_matmul e nd ) }
-                    ? ( streq2 op `Einsum` ) { ( rt_einsum e nd ) }
-                    ? ( streq2 op `ReduceL2` ) { ( rt_reducel2 e nd ) }
-                    ? ( streq2 op `Clip` ) { ( rt_clip e nd ) }
-                    ? ( streq2 op `Expand` ) { ( rt_expand e nd ) }
-                    ? ( streq2 op `Unsqueeze` ) { ( rt_unsqueeze e nd ) }
-                    ? ( streq2 op `LayerNormalization` ) { ( rt_layernorm e nd ) }
-                    ? ( streq2 op `Erf` ) { ( rt_erf e nd ) }
-                    ? ( streq2 op `Gather` ) { ( rt_gather e nd ) }
-                    ? ( streq2 op `GatherND` ) { ( rt_gathernd e nd ) }
-                    ? ( streq2 op `ArgMax` ) { ( rt_argmax e nd ) }
-                    ? ( streq2 op `Shape` ) {}
-                    ? ( streq2 op `Range` ) {}
-                    ? ( streq2 op `Squeeze` ) {}
-                    { ( nurl_eprint `[onnx] unsupported op: ` ) ( nurl_eprint op ) ( nurl_eprint `\n` ) }
+                // Shape arithmetic first: Constant / Shape and any int
+                // chain op whose data is host-side never touch the device.
+                ? ( __rt_host_step e nd ) {} {
+                    ? ! ready {} {
+                        ? ( streq2 op `Gemm` ) { ( rt_gemm e nd ) }
+                        ? ( streq2 op `Relu` ) { ( rt_relu e nd ) }
+                        ? ( streq2 op `Conv` ) { ( rt_conv e nd ) }
+                        ? ( streq2 op `ConvTranspose` ) { ( rt_convtranspose e nd ) }
+                        ? ( streq2 op `MaxPool` ) { ( rt_maxpool e nd ) }
+                        ? ( streq2 op `BatchNormalization` ) { ( rt_batchnorm e nd ) }
+                        ? ( streq2 op `LeakyRelu` ) { ( rt_leakyrelu e nd ) }
+                        ? ( streq2 op `Mul` ) { ( rt_binop e nd 0 ) }
+                        ? ( streq2 op `Add` ) { ( rt_binop e nd 1 ) }
+                        ? ( streq2 op `Sub` ) { ( rt_binop e nd 2 ) }
+                        ? ( streq2 op `Div` ) { ( rt_binop e nd 3 ) }
+                        ? ( streq2 op `Sigmoid` ) { ( rt_sigmoid e nd ) }
+                        ? ( streq2 op `Concat` ) { ( rt_concat e nd ) }
+                        ? ( streq2 op `Split` ) { ( rt_split e nd ) }
+                        ? ( streq2 op `Slice` ) { ( rt_slice e nd ) }
+                        ? ( streq2 op `Reshape` ) { ( rt_reshape e nd ) }
+                        ? ( streq2 op `Resize` ) { ( rt_resize e nd ) }
+                        ? ( streq2 op `Transpose` ) { ( rt_transpose e nd ) }
+                        ? ( streq2 op `Softmax` ) { ( rt_softmax e nd ) }
+                        ? ( streq2 op `MatMul` ) { ( rt_matmul e nd ) }
+                        ? ( streq2 op `Einsum` ) { ( rt_einsum e nd ) }
+                        ? ( streq2 op `ReduceL2` ) { ( rt_reducel2 e nd ) }
+                        ? ( streq2 op `Clip` ) { ( rt_clip e nd ) }
+                        ? ( streq2 op `Expand` ) { ( rt_expand e nd ) }
+                        ? ( streq2 op `Unsqueeze` ) { ( rt_unsqueeze e nd ) }
+                        ? ( streq2 op `LayerNormalization` ) { ( rt_layernorm e nd ) }
+                        ? ( streq2 op `Erf` ) { ( rt_erf e nd ) }
+                        ? ( streq2 op `Gather` ) { ( rt_gather e nd ) }
+                        ? ( streq2 op `GatherND` ) { ( rt_gathernd e nd ) }
+                        ? ( streq2 op `ArgMax` ) { ( rt_argmax e nd ) }
+                        ? ( streq2 op `Shape` ) {}
+                        ? ( streq2 op `Range` ) {}
+                        ? ( streq2 op `Squeeze` ) {}
+                        { ( nurl_eprint `[onnx] unsupported op: ` ) ( nurl_eprint op ) ( nurl_eprint `\n` ) }
+                    }
                 }
             } F _ → {}
         }
