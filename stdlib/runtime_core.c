@@ -1343,48 +1343,6 @@ int pthread_cond_destroy(pthread_cond_t *c)   { (void)c; return 0; }
 #      define CLOCK_MONOTONIC 1
 #    endif
 
-/* UCRT <time.h> defines struct timespec (time_t tv_sec; long tv_nsec)
- * but no clock_gettime — only timespec_get. NURL allocates 16 zeroed
- * bytes and peeks slot 1 as i64, so the 4 pad bytes after the 32-bit
- * tv_nsec must stay zero — we only ever store through the long. */
-int clock_gettime(int clk, struct timespec *ts) {
-    if (!ts) { errno = EINVAL; return -1; }
-    if (clk == CLOCK_MONOTONIC) {
-        static LARGE_INTEGER freq;  /* benign race: same value either way */
-        if (!freq.QuadPart) QueryPerformanceFrequency(&freq);
-        LARGE_INTEGER c;
-        QueryPerformanceCounter(&c);
-        ts->tv_sec  = (time_t)(c.QuadPart / freq.QuadPart);
-        ts->tv_nsec = (long)((c.QuadPart % freq.QuadPart) * 1000000000LL
-                             / freq.QuadPart);
-        return 0;
-    }
-    if (clk != CLOCK_REALTIME) { errno = EINVAL; return -1; }
-    FILETIME ft;
-    GetSystemTimePreciseAsFileTime(&ft);
-    ULARGE_INTEGER u;
-    u.LowPart  = ft.dwLowDateTime;
-    u.HighPart = ft.dwHighDateTime;
-    /* 100 ns ticks, 1601 epoch → Unix epoch. */
-    unsigned long long t = u.QuadPart - 116444736000000000ULL;
-    ts->tv_sec  = (time_t)(t / 10000000ULL);
-    ts->tv_nsec = (long)(t % 10000000ULL) * 100;
-    return 0;
-}
-
-/* Sleep() can't be interrupted by POSIX signals on Windows, so this
- * never reports EINTR / a remainder. req may alias rem (time.nu passes
- * the same buffer twice) — read req fully before touching rem. */
-int nanosleep(const struct timespec *req, struct timespec *rem) {
-    if (!req) { errno = EINVAL; return -1; }
-    long long ms = (long long)req->tv_sec * 1000
-                 + (req->tv_nsec + 999999L) / 1000000L;
-    if (rem) { rem->tv_sec = 0; rem->tv_nsec = 0; }
-    if (ms <= 0) return 0;
-    Sleep(ms > 0xFFFFFFFELL ? 0xFFFFFFFEUL : (DWORD)ms);
-    return 0;
-}
-
 int mkstemp(char *tmpl) {
     static const char alpha[] =
         "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
@@ -1445,6 +1403,72 @@ int write(int fd, const void *buf, unsigned int n) {
     return _write(fd, buf, n);
 }
 int chdir(const char *path)                { return _chdir(path); }
+void *opendir(const char *path)            { (void)path; errno = ENOSYS; return NULL; }
+void *readdir(void *d)                     { (void)d; errno = ENOSYS; return NULL; }
+int   closedir(void *d)                    { (void)d; errno = ENOSYS; return -1; }
+#  endif /* !__MINGW32__ */
+
+/* ── Windows POSIX-compat shared by BOTH ABIs (MSVC and MinGW) ──────
+ *
+ * These lived in the MSVC-only tier above on the theory that mingw-w64
+ * ships them. Its HEADERS do; the functions live in libwinpthread
+ * (clock_gettime / nanosleep) or nowhere at all (readlink, fork, poll,
+ * termios), and the bundled zig's MinGW link carries neither — so
+ * stdlib\runtime.mingw.o lacked them and anything importing std/net or
+ * ext/http failed to link on Windows (reported in the field on
+ * v0.27.0). One definition for both ABIs; the MSVC pragma tier keeps
+ * only what mingw genuinely provides (isatty/_write forwards, mkstemp,
+ * the dirent trio). */
+#  include <io.h>     /* _get_osfhandle — both ABIs spell it this way */
+#  ifndef CLOCK_REALTIME
+#    define CLOCK_REALTIME  0
+#  endif
+#  ifndef CLOCK_MONOTONIC
+#    define CLOCK_MONOTONIC 1
+#  endif
+
+/* UCRT <time.h> defines struct timespec (time_t tv_sec; long tv_nsec)
+ * but no clock_gettime — only timespec_get. NURL allocates 16 zeroed
+ * bytes and peeks slot 1 as i64, so the 4 pad bytes after the 32-bit
+ * tv_nsec must stay zero — we only ever store through the long. */
+int clock_gettime(int clk, struct timespec *ts) {
+    if (!ts) { errno = EINVAL; return -1; }
+    if (clk == CLOCK_MONOTONIC) {
+        static LARGE_INTEGER freq;  /* benign race: same value either way */
+        if (!freq.QuadPart) QueryPerformanceFrequency(&freq);
+        LARGE_INTEGER c;
+        QueryPerformanceCounter(&c);
+        ts->tv_sec  = (time_t)(c.QuadPart / freq.QuadPart);
+        ts->tv_nsec = (long)((c.QuadPart % freq.QuadPart) * 1000000000LL
+                             / freq.QuadPart);
+        return 0;
+    }
+    if (clk != CLOCK_REALTIME) { errno = EINVAL; return -1; }
+    FILETIME ft;
+    GetSystemTimePreciseAsFileTime(&ft);
+    ULARGE_INTEGER u;
+    u.LowPart  = ft.dwLowDateTime;
+    u.HighPart = ft.dwHighDateTime;
+    /* 100 ns ticks, 1601 epoch → Unix epoch. */
+    unsigned long long t = u.QuadPart - 116444736000000000ULL;
+    ts->tv_sec  = (time_t)(t / 10000000ULL);
+    ts->tv_nsec = (long)(t % 10000000ULL) * 100;
+    return 0;
+}
+
+/* Sleep() can't be interrupted by POSIX signals on Windows, so this
+ * never reports EINTR / a remainder. req may alias rem (time.nu passes
+ * the same buffer twice) — read req fully before touching rem. */
+int nanosleep(const struct timespec *req, struct timespec *rem) {
+    if (!req) { errno = EINVAL; return -1; }
+    long long ms = (long long)req->tv_sec * 1000
+                 + (req->tv_nsec + 999999L) / 1000000L;
+    if (rem) { rem->tv_sec = 0; rem->tv_nsec = 0; }
+    if (ms <= 0) return 0;
+    Sleep(ms > 0xFFFFFFFELL ? 0xFFFFFFFEUL : (DWORD)ms);
+    return 0;
+}
+
 int  tcgetattr(int fd, char *buf)          { (void)fd; (void)buf; errno = ENOSYS; return -1; }
 int  tcsetattr(int fd, int act, const char *buf) {
     (void)fd; (void)act; (void)buf; errno = ENOSYS; return -1;
@@ -1471,9 +1495,6 @@ int ioctl(int fd, long long req, void *argp) {
     errno = ENOSYS;
     return -1;
 }
-void *opendir(const char *path)            { (void)path; errno = ENOSYS; return NULL; }
-void *readdir(void *d)                     { (void)d; errno = ENOSYS; return NULL; }
-int   closedir(void *d)                    { (void)d; errno = ENOSYS; return -1; }
 long long readlink(const char *p, char *buf, unsigned long long n) {
     (void)p; (void)buf; (void)n; errno = ENOSYS; return -1;
 }
@@ -1485,7 +1506,8 @@ int  fcntl(int fd, int cmd, ...)           { (void)fd; (void)cmd; errno = ENOSYS
 int  poll(void *fds, unsigned long n, int timeout) {
     (void)fds; (void)n; (void)timeout; errno = ENOSYS; return -1;
 }
-#  endif /* !__MINGW32__ */
+
+
 #elif !defined(__wasi__)
 #  include <pthread.h>
 #  include <sys/socket.h>
@@ -1630,9 +1652,9 @@ long long nurl_native_constant(const char *name) {
     if (strcmp(name, "TIOCGWINSZ")      == 0) return (long long)TIOCGWINSZ;
 #  endif
 #endif
-#if defined(_WIN32) && !defined(__MINGW32__)
-    /* The MSVC path's ioctl shim (above) answers this request with
-     * GetConsoleScreenBufferInfo — surface the sentinel it matches on. */
+#if defined(_WIN32)
+    /* The Windows ioctl shim (above, both ABIs) answers this request
+     * with GetConsoleScreenBufferInfo — surface its sentinel. */
     if (strcmp(name, "TIOCGWINSZ")      == 0) return 0x5413;
 #endif
     (void)name;

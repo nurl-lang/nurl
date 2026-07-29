@@ -75,9 +75,28 @@ jobs:
           New-Item -ItemType Directory -Path $dir -Force | Out-Null
           # single-quoted here-string: NURL uses backticks for strings and
           # PowerShell would otherwise eat them as escapes
+          # The import list is the REGRESSION: v0.27.0 shipped a
+          # runtime.mingw.o that could not link std/net or ext/http
+          # (clock_gettime / nanosleep / readlink and friends lived in
+          # the MSVC-only compat tier), and a core/io-only smoke was
+          # blind to it. Import the wide surface and call now_ms so the
+          # clock path also RUNS on both ABIs.
           $src = @'
           $ `stdlib/core/io.nu`
-          @ main → i { ( nurl_print `ok` ) ^ 0 }
+          $ `stdlib/core/string.nu`
+          $ `stdlib/core/vec.nu`
+          $ `stdlib/std/time.nu`
+          $ `stdlib/std/fs.nu`
+          $ `stdlib/std/net.nu`
+          $ `stdlib/std/process.nu`
+          $ `stdlib/std/term.nu`
+          $ `stdlib/std/path.nu`
+          $ `stdlib/ext/http.nu`
+          $ `stdlib/ext/env.nu`
+          @ main → i {
+          ? > ( now_ms ) 0 { ( nurl_print `ok` ) } { ( nurl_print `bad-clock` ) }
+          ^ 0
+          }
           '@
           ($src -split "`n" | ForEach-Object { $_.TrimStart() }) -join "`n" |
             Set-Content -Path "$dir\s.nu" -Encoding utf8NoBOM

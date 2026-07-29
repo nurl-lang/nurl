@@ -73,18 +73,51 @@ $ `stdlib/ext/registry_index.nu`
 @ pkg_fetch_index s registry s name → String {
     : String url ( __pkg_index_url registry name )
     : !HttpcResp HttpcErr rr ( httpc_get ( string_data url ) )
-    ( string_free url )
     ?? rr {
         T resp → {
             : ~ String out ( string_new )
-            ? == ( httpc_status resp ) 200 {
+            : i st ( httpc_status resp )
+            ? == st 200 {
                 ( string_free out )
                 = out ( string_from ( httpc_body_str resp ) )
-            } {}
+            } {
+                // 404 is the registry's honest "no such package" and stays
+                // silent; anything else is the registry misbehaving and
+                // must not be reported downstream as a missing package.
+                ? != st 404 {
+                    ( nurl_eprint `nurlpkg: registry returned HTTP ` )
+                    : String ss ( string_new )
+                    ( string_push_int ss st )
+                    ( nurl_eprint ( string_data ss ) )
+                    ( string_free ss )
+                    ( nurl_eprint ` for ` )
+                    ( nurl_eprint ( string_data url ) )
+                    ( nurl_eprint `\n` )
+                } {}
+            }
             ( httpc_resp_free resp )
+            ( string_free url )
             ^ out
         }
-        F → ^ ( string_new )
+        F e → {
+            // A TRANSPORT failure — no bytes ever moved. Say so, with the
+            // failing URL: on Windows this was a dead temp-dir path being
+            // reported as "package not found" with zero network calls.
+            ( nurl_eprint `nurlpkg: registry request FAILED (` )
+            ( nurl_eprint ?? e {
+                HttpcConnect → `connect`
+                HttpcTimeout → `timeout`
+                HttpcTls → `tls`
+                HttpcDns → `dns`
+                HttpcInvalidUrl → `bad url`
+                HttpcOther → `transport — is curl on PATH, and is the temp dir writable?`
+            } )
+            ( nurl_eprint `) for ` )
+            ( nurl_eprint ( string_data url ) )
+            ( nurl_eprint `\n` )
+            ( string_free url )
+            ^ ( string_new )
+        }
     }
 }
 
