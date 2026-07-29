@@ -59,6 +59,9 @@ $ `src/sky.nu`
     ( nurl_print `  -o, --out FILE      output PLY (default cloud.ply)\n` )
     ( nurl_print `  --model REF|PATH    checkpoint (default facebook/map-anything-apache)\n` )
     ( nurl_print `  --max-views N       cap the number of views (default 24; 0 = all)\n` )
+    ( nurl_print `  --window N          views per attention window (default 24); longer\n` )
+    ( nurl_print `                      runs are Sim3-stitched from overlapping windows\n` )
+    ( nurl_print `  --overlap N         views shared between windows (default 6)\n` )
     ( nurl_print `  --stride N          take every Nth input (default 1)\n` )
     ( nurl_print `  --fps N             frames per second when extracting a video (default 1)\n` )
     ( nurl_print `  --pixel-stride N    emit every Nth pixel in x and y (default 1)\n` )
@@ -228,6 +231,8 @@ $ `src/sky.nu`
     f confpct
     i maskedges
     i masksky
+    i window
+    i overlap
     i domask
     ( Vec String ) frames
     i bad  // 0 run, 1 error, 2 help, 3 view-subcommand
@@ -249,6 +254,8 @@ $ `src/sky.nu`
     : ~ f confpct -1.0
     : ~ i maskedges 1
     : ~ i masksky 0
+    : ~ i window 24
+    : ~ i overlap 6
     : ~ i domask 1
     : ~ i bad 0
     : ~ s viewfile ``
@@ -274,7 +281,9 @@ $ `src/sky.nu`
         : ~ i take 0
         ? & ( __ma_streq a `--model` ) < + i0 1 argc { = model ( nurl_argv + i0 1 ) = take 1 } {}
         ? & | ( __ma_streq a `-o` ) ( __ma_streq a `--out` ) < + i0 1 argc { = out ( nurl_argv + i0 1 ) = take 1 } {}
-        ? & ( __ma_streq a `--max-views` ) < + i0 1 argc { = maxviews ( nurl_str_to_int ( nurl_argv + i0 1 ) ) = take 1 } {}
+        ? & | ( __ma_streq a `--max-views` ) ( __ma_streq a `--max-frames` ) < + i0 1 argc { = maxviews ( nurl_str_to_int ( nurl_argv + i0 1 ) ) = take 1 } {}
+        ? & ( __ma_streq a `--window` ) < + i0 1 argc { = window ( nurl_str_to_int ( nurl_argv + i0 1 ) ) = take 1 } {}
+        ? & ( __ma_streq a `--overlap` ) < + i0 1 argc { = overlap ( nurl_str_to_int ( nurl_argv + i0 1 ) ) = take 1 } {}
         ? & ( __ma_streq a `--stride` ) < + i0 1 argc { = stride ( nurl_str_to_int ( nurl_argv + i0 1 ) ) = take 1 } {}
         ? & ( __ma_streq a `--fps` ) < + i0 1 argc { = fps ( nurl_str_to_int ( nurl_argv + i0 1 ) ) = take 1 } {}
         ? & ( __ma_streq a `--pixel-stride` ) < + i0 1 argc { = pstride ( nurl_str_to_int ( nurl_argv + i0 1 ) ) = take 1 } {}
@@ -369,7 +378,7 @@ $ `src/sky.nu`
     } {}
     ? & == bad 0 == ( vec_len [String] fr ) 0 { = bad 2 } {}
     ^ @ Opts { model out video view port ascii verbose maxviews stride fps
-        pstride confpct maskedges masksky domask fr bad viewfile }
+        pstride confpct maskedges masksky window overlap domask fr bad viewfile }
 }
 
 // ── main ────────────────────────────────────────────────────────────
@@ -491,64 +500,35 @@ $ `src/sky.nu`
     }
 
     : i tpv + np 1
-    : i n ( is_tokens nv np )
-    : MaWs ws ( ma_ws_new kit n DN_DIM DN_HEADS DN_SWH )
-    : GkBuf x ( gk_dbuf_new kit * n IS_DIM GK_F32 )
+    // Window geometry. Global attention is quadratic in the sequence, so
+    // past --window views the run goes WINDOWED: overlapping windows are
+    // reconstructed independently and stitched with a closed-form Sim(3)
+    // fitted on the overlap views' pixels — the same pixels exist in
+    // both windows, so the correspondences are exact, not matched.
+    : ~ i win . o window
+    ? <= win 0 { = win 24 } {}
+    ? > win nv { = win nv } {}
+    : ~ i ov . o overlap
+    ? < ov 2 { = ov 2 } {}
+    ? > ov / win 2 { = ov / win 2 } {}
+    : i step - win ov
+    ? & != . o verbose 0 > nv win {
+        ( nurl_print `windows ` )
+        ( nurl_print ( nurl_str_int win ) )
+        ( nurl_print ` views each, overlap ` )
+        ( nurl_print ( nurl_str_int ov ) )
+        ( nurl_print ` (Sim3-stitched)\n` )
+    } {}
 
-    // encoder over every view, placed straight into the sequence
+    : i nmax ( is_tokens win np )
+    : MaWs ws ( ma_ws_new kit nmax DN_DIM DN_HEADS DN_SWH )
+    : GkBuf xbuf ( gk_dbuf_new kit * nmax IS_DIM GK_F32 )
+    : GkBuf h0b ( gk_dbuf_new kit * nmax IS_DIM GK_F32 )
+    : GkBuf i7b ( gk_dbuf_new kit * nmax IS_DIM GK_F32 )
+    : GkBuf i11b ( gk_dbuf_new kit * nmax IS_DIM GK_F32 )
+    : GkBuf finb ( gk_dbuf_new kit * nmax IS_DIM GK_F32 )
     : GkBuf tok ( gk_dbuf_new kit * tpv DN_DIM GK_F32 )
     : *f norm # *f ( nurl_zalloc * 8 * 3 * h w )
-    = k 0
-    ~ < k nv {
-        : ~ * Frame fr # *Frame 0
-        ?? ( vec_get [i] framev k ) { T v → { = fr # *Frame v } F → {} }
-        : *f src ( pp_data fr )
-        : ~ i j 0
-        ~ < j * 3 * h w { = . norm j . src j = j + j 1 }
-        ( __ma_norm norm * h w )
-        ? ( dn_forward kit dn ws norm h w gh gw tok ) {} {
-            ( nurl_print `map-anything: encoder failed\n` )
-            ^ 1
-        }
-        ? ( is_place kit x k tpv tok np ) {} {
-            ( nurl_print `map-anything: sequence assembly failed\n` )
-            ^ 1
-        }
-        ? != . o verbose 0 {
-            ( nurl_print `encode  view ` )
-            ( nurl_print ( nurl_str_int + k 1 ) )
-            ( nurl_print `/` )
-            ( nurl_print ( nurl_str_int nv ) )
-            ( nurl_print `\r` )
-        } {}
-        = k + k 1
-    }
-    ( nurl_free # s norm )
-    ( gk_dbuf_free tok )
-    ? != . o verbose 0 { ( nurl_print `\n` ) } {}
-
-    // fusion norm → hook-0 snapshot → view marks → 16 blocks
-    ? ( is_fuse_input kit ish x nv np ) {} { ( nurl_print `fusion failed\n` ) ^ 1 }
-    : GkBuf h0 ( gk_dbuf_new kit * n IS_DIM GK_F32 )
-    ? ( gkd_map kit `copy` `x` h0 x ) {} { ^ 1 }
-    ? ( is_mark_input kit ish x nv np ) {} { ( nurl_print `marking failed\n` ) ^ 1 }
-    : GkBuf i7 ( gk_dbuf_new kit * n IS_DIM GK_F32 )
-    : GkBuf i11 ( gk_dbuf_new kit * n IS_DIM GK_F32 )
-    : GkBuf fin ( gk_dbuf_new kit * n IS_DIM GK_F32 )
-    ? ( is_forward kit ish ws x nv np i7 i11 fin ) {} {
-        ( nurl_print `map-anything: info sharing failed\n` )
-        ^ 1
-    }
-    ( gk_dbuf_free x )
-
-    // the global metric scale
-    : f scale ( sh_forward kit sh fin * nv tpv )
-    ? > scale 0.0 {} { ( nurl_print `scale head failed\n` ) ^ 1 }
-    ? != . o verbose 0 {
-        ( nurl_print `scale   ` )
-        ( nurl_print ( nurl_str_float scale ) )
-        ( nurl_print ` (metric)\n` )
-    } {}
 
     // sky segmentation, when asked for: the LingBot demo's skyseg.onnx,
     // fetched through hub and run through the onnx package
@@ -573,7 +553,6 @@ $ `src/sky.nu`
         }
     } {}
 
-    // per view: dense head + pose head → world points → PLY
     : ~ * PlyW ply # *PlyW 0
     ?? ( ply_create . o out . o ascii `map-anything, pure NURL (github.com/facebookresearch/map-anything port)` ) {
         F e → {
@@ -598,83 +577,202 @@ $ `src/sky.nu`
     : *f pts # *f ( nurl_zalloc * 24 hw )
     : *f depthz # *f ( nurl_zalloc * 8 hw )
     : *u mask # *u ( nurl_zalloc hw )
-    : ~ i total 0
-    = k 0
-    ~ < k nv {
-        : i voff * k tpv
-        ? ( dp_forward kit dp h0 i7 i11 fin voff gh gw h w rays depth conf mlog ) {} {
-            ( nurl_print `map-anything: dense head failed\n` )
-            ^ 1
-        }
-        ? ( ph_forward kit ph fin voff np pose ) {} {
-            ( nurl_print `map-anything: pose head failed\n` )
-            ^ 1
-        }
-        // download the view's maps
-        : b _d1 ( vec_set_len [f] hostv * 3 hw )
-        ? ( gk_dbuf_download kit rays hostv ) {} { ^ 1 }
-        : *f hv ( vec_data [f] hostv )
-        : ~ i j 0
-        ~ < j * 3 hw { = . rays_h j . hv j = j + j 1 }
-        : b _d2 ( vec_set_len [f] hostv hw )
-        ? ( gk_dbuf_download kit depth hostv ) {} { ^ 1 }
-        = j 0
-        ~ < j hw { = . depth_h j . hv j = j + j 1 }
-        ? ( gk_dbuf_download kit conf hostv ) {} { ^ 1 }
-        = j 0
-        ~ < j hw { = . conf_h j . hv j = j + j 1 }
-        ? ( gk_dbuf_download kit mlog hostv ) {} { ^ 1 }
-        = j 0
-        ~ < j hw { = . mlog_h j . hv j = j + j 1 }
+    // the stitch: the previous window's last `ov` views in GLOBAL
+    // coordinates, and pair buffers for the Sim(3) fit
+    : *f prev_pts # *f ( nurl_zalloc * 24 * ov hw )
+    : *u prev_mask # *u ( nurl_zalloc * ov hw )
+    : *f pair_x # *f ( nurl_zalloc * 24 * ov hw )
+    : *f pair_y # *f ( nurl_zalloc * 24 * ov hw )
+    : *f xf # *f ( nurl_zalloc 104 )
+    = . xf 0 1.0
+    = . xf 1 1.0
+    = . xf 5 1.0
+    = . xf 9 1.0
 
-        ( gm_world_points rays_h depth_h pose scale hw pts depthz )
-        ? != . o domask 0 { ( gm_nonambig mlog_h hw mask ) } {
-            = j 0
-            ~ < j hw { = . mask j # u 1 = j + j 1 }
-        }
-        ? != . o masksky 0 {
-            : ~ * Frame skf # *Frame 0
-            ?? ( vec_get [i] framev k ) { T v → { = skf # *Frame v } F → {} }
-            ? ( sky_mask sky ( pp_data skf ) w h mask ) {} {
-                ( nurl_print `map-anything: sky segmentation failed\n` )
+    : ~ i total 0
+    : ~ i wbase 0
+    : ~ i windex 0
+    : ~ b more T
+    ~ more {
+        : i count ? > - nv wbase win win - nv wbase
+        : i n ( is_tokens count np )
+        : GkBuf x ( ma_view xbuf 0 * n IS_DIM )
+        : GkBuf h0 ( ma_view h0b 0 * n IS_DIM )
+        : GkBuf i7 ( ma_view i7b 0 * n IS_DIM )
+        : GkBuf i11 ( ma_view i11b 0 * n IS_DIM )
+        : GkBuf fin ( ma_view finb 0 * n IS_DIM )
+
+        // encoder over this window's views, placed into the sequence
+        = k 0
+        ~ < k count {
+            : ~ * Frame fr # *Frame 0
+            ?? ( vec_get [i] framev + wbase k ) { T v → { = fr # *Frame v } F → {} }
+            : *f src ( pp_data fr )
+            : ~ i j 0
+            ~ < j * 3 * h w { = . norm j . src j = j + j 1 }
+            ( __ma_norm norm * h w )
+            ? ( dn_forward kit dn ws norm h w gh gw tok ) {} {
+                ( nurl_print `map-anything: encoder failed\n` )
                 ^ 1
             }
-        } {}
-        ? >= . o confpct 0.0 { ( gm_conf_percentile conf_h hw . o confpct mask ) } {}
-        ? & != . o maskedges 0 != . o domask 0 {
-            ( gm_edge_mask pts depthz h w mask )
+            ? ( is_place kit x k tpv tok np ) {} {
+                ( nurl_print `map-anything: sequence assembly failed\n` )
+                ^ 1
+            }
+            ? != . o verbose 0 {
+                ( nurl_print `encode  view ` )
+                ( nurl_print ( nurl_str_int + + wbase k 1 ) )
+                ( nurl_print `/` )
+                ( nurl_print ( nurl_str_int nv ) )
+                ( nurl_print `\r` )
+            } {}
+            = k + k 1
+        }
+        ? != . o verbose 0 { ( nurl_print `\n` ) } {}
+
+        // fusion norm → hook-0 snapshot → view marks → 16 blocks
+        ? ( is_fuse_input kit ish x count np ) {} { ( nurl_print `fusion failed\n` ) ^ 1 }
+        ? ( gkd_map kit `copy` `x` h0 x ) {} { ^ 1 }
+        ? ( is_mark_input kit ish x count np ) {} { ( nurl_print `marking failed\n` ) ^ 1 }
+        ? ( is_forward kit ish ws x count np i7 i11 fin ) {} {
+            ( nurl_print `map-anything: info sharing failed\n` )
+            ^ 1
+        }
+
+        // this window's metric scale (window 0's sets the global frame;
+        // later windows' differences are absorbed by the stitch)
+        : f scale ( sh_forward kit sh fin * count tpv )
+        ? > scale 0.0 {} { ( nurl_print `scale head failed\n` ) ^ 1 }
+        ? & != . o verbose 0 == windex 0 {
+            ( nurl_print `scale   ` )
+            ( nurl_print ( nurl_str_float scale ) )
+            ( nurl_print ` (metric)\n` )
         } {}
 
-        // emit
-        : ~ * Frame fr # *Frame 0
-        ?? ( vec_get [i] framev k ) { T v → { = fr # *Frame v } F → {} }
-        : *f rgb ( pp_data fr )
-        : ~ i y 0
-        ~ < y h {
-            : ~ i px 0
-            ~ < px w {
-                : i idx + * y w px
-                ? != # i . mask idx 0 {
-                    ( ply_vertex ply . pts * idx 3 . pts + * idx 3 1 . pts + * idx 3 2
-                    ( __ma_u8 . rgb idx ) ( __ma_u8 . rgb + hw idx ) ( __ma_u8 . rgb + * 2 hw idx ) )
-                    = total + total 1
-                } {}
-                = px + px . o pstride
+        : i emit_from ? > windex 0 ov 0
+        : ~ i npairs 0
+        : ~ i v 0
+        ~ < v count {
+            : i voff * v tpv
+            ? ( dp_forward kit dp h0 i7 i11 fin voff gh gw h w rays depth conf mlog ) {} {
+                ( nurl_print `map-anything: dense head failed\n` )
+                ^ 1
             }
-            = y + y . o pstride
+            ? ( ph_forward kit ph fin voff np pose ) {} {
+                ( nurl_print `map-anything: pose head failed\n` )
+                ^ 1
+            }
+            : b _d1 ( vec_set_len [f] hostv * 3 hw )
+            ? ( gk_dbuf_download kit rays hostv ) {} { ^ 1 }
+            : *f hv ( vec_data [f] hostv )
+            : ~ i j 0
+            ~ < j * 3 hw { = . rays_h j . hv j = j + j 1 }
+            : b _d2 ( vec_set_len [f] hostv hw )
+            ? ( gk_dbuf_download kit depth hostv ) {} { ^ 1 }
+            = j 0
+            ~ < j hw { = . depth_h j . hv j = j + j 1 }
+            ? ( gk_dbuf_download kit conf hostv ) {} { ^ 1 }
+            = j 0
+            ~ < j hw { = . conf_h j . hv j = j + j 1 }
+            ? ( gk_dbuf_download kit mlog hostv ) {} { ^ 1 }
+            = j 0
+            ~ < j hw { = . mlog_h j . hv j = j + j 1 }
+
+            ( gm_world_points rays_h depth_h pose scale hw pts depthz )
+            ? != . o domask 0 { ( gm_nonambig mlog_h hw mask ) } {
+                = j 0
+                ~ < j hw { = . mask j # u 1 = j + j 1 }
+            }
+            ? != . o masksky 0 {
+                : ~ * Frame skf # *Frame 0
+                ?? ( vec_get [i] framev + wbase v ) { T vv → { = skf # *Frame vv } F → {} }
+                ? ( sky_mask sky ( pp_data skf ) w h mask ) {} {
+                    ( nurl_print `map-anything: sky segmentation failed\n` )
+                    ^ 1
+                }
+            } {}
+            ? >= . o confpct 0.0 { ( gm_conf_percentile conf_h hw . o confpct mask ) } {}
+            ? & != . o maskedges 0 != . o domask 0 {
+                ( gm_edge_mask pts depthz h w mask )
+            } {}
+
+            // overlap views: collect exact pixel pairs (this window's
+            // LOCAL point, previous window's GLOBAL point)
+            ? & > windex 0 < v ov {
+                : i sbase * v hw
+                = j 0
+                ~ < j hw {
+                    ? & != # i . mask j 0 != # i . prev_mask + sbase j 0 {
+                        = . pair_x * npairs 3 . pts * j 3
+                        = . pair_x + * npairs 3 1 . pts + * j 3 1
+                        = . pair_x + * npairs 3 2 . pts + * j 3 2
+                        = . pair_y * npairs 3 . prev_pts * + sbase j 3
+                        = . pair_y + * npairs 3 1 . prev_pts + * + sbase j 3 1
+                        = . pair_y + * npairs 3 2 . prev_pts + * + sbase j 3 2
+                        = npairs + npairs 1
+                    } {}
+                    = j + j 4
+                }
+            } {}
+            // the stitch, once the overlap has been seen
+            ? & > windex 0 == v ov {
+                ? ( gm_sim3_fit pair_x pair_y npairs xf ) {} {
+                    ( nurl_print `map-anything: window stitch failed (` )
+                    ( nurl_print ( nurl_str_int npairs ) )
+                    ( nurl_print ` pairs); keeping the previous transform\n` )
+                }
+            } {}
+
+            ? >= v emit_from {
+                ? > windex 0 { ( gm_sim3_apply pts hw xf ) } {}
+                : ~ * Frame fr # *Frame 0
+                ?? ( vec_get [i] framev + wbase v ) { T vv → { = fr # *Frame vv } F → {} }
+                : *f rgb ( pp_data fr )
+                : ~ i y 0
+                ~ < y h {
+                    : ~ i px 0
+                    ~ < px w {
+                        : i idx + * y w px
+                        ? != # i . mask idx 0 {
+                            ( ply_vertex ply . pts * idx 3 . pts + * idx 3 1 . pts + * idx 3 2
+                            ( __ma_u8 . rgb idx ) ( __ma_u8 . rgb + hw idx ) ( __ma_u8 . rgb + * 2 hw idx ) )
+                            = total + total 1
+                        } {}
+                        = px + px . o pstride
+                    }
+                    = y + y . o pstride
+                }
+                // stash the window's tail (in GLOBAL coordinates) for the
+                // next window's stitch
+                ? >= v - count ov {
+                    : i slot - v - count ov
+                    = j 0
+                    ~ < j hw {
+                        = . prev_pts * + * slot hw j 3 . pts * j 3
+                        = . prev_pts + * + * slot hw j 3 1 . pts + * j 3 1
+                        = . prev_pts + * + * slot hw j 3 2 . pts + * j 3 2
+                        = . prev_mask + * slot hw j . mask j
+                        = j + j 1
+                    }
+                } {}
+                ? != . o verbose 0 {
+                    ( nurl_print `points  view ` )
+                    ( nurl_print ( nurl_str_int + + wbase v 1 ) )
+                    ( nurl_print `/` )
+                    ( nurl_print ( nurl_str_int nv ) )
+                    ( nurl_print `  total ` )
+                    ( nurl_print ( nurl_str_int total ) )
+                    ( nurl_print `\r` )
+                } {}
+            } {}
+            = v + v 1
         }
-        ? != . o verbose 0 {
-            ( nurl_print `points  view ` )
-            ( nurl_print ( nurl_str_int + k 1 ) )
-            ( nurl_print `/` )
-            ( nurl_print ( nurl_str_int nv ) )
-            ( nurl_print `  total ` )
-            ( nurl_print ( nurl_str_int total ) )
-            ( nurl_print `\r` )
-        } {}
-        = k + k 1
+        ? != . o verbose 0 { ( nurl_print `\n` ) } {}
+        ? >= + wbase count nv { = more F } {
+            = wbase + wbase step
+            = windex + windex 1
+        }
     }
-    ? != . o verbose 0 { ( nurl_print `\n` ) } {}
     ? ( ply_finish ply ) {} {
         ( nurl_print `map-anything: cannot finish the PLY\n` )
         ^ 1

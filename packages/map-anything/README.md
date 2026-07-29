@@ -17,7 +17,13 @@ map-anything photos/            # folder of images -> cloud.ply
 map-anything walk.mp4           # video (MJPEG AVI in pure NURL, rest via ffmpeg)
 map-anything photos/ --view     # open the browser viewer when done
 map-anything hill.mp4 --mask-sky   # outdoor: drop sky via skyseg.onnx
+map-anything walk/ --max-views 400 # long capture: windowed + Sim3-stitched
 ```
+
+Up to `--window` views (default 24) the whole set runs through the
+model's global attention at once. Longer captures are reconstructed in
+overlapping windows and stitched with a closed-form Sim(3) fitted on the
+overlap views' pixels — exact correspondences, no matching step.
 
 The checkpoint (~4.5 GB, F32 safetensors) is fetched from Hugging Face on first
 use via the [hub](../hub) package and cached under `~/.nurl/models`.

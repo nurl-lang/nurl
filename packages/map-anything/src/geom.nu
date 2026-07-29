@@ -325,3 +325,227 @@ $ `stdlib/std/sort.nu`
     ( nurl_free # s ang )
     ( nurl_free # s nedge )
 }
+
+// ── Sim(3) alignment (windowed long-capture mode) ───────────────────
+//
+// Two overlapping windows reconstruct the SAME frames, pixel for pixel,
+// so the correspondence problem is already solved: pixel j of an
+// overlap view has a point in the previous window's (global) frame and
+// one in the new window's (local) frame. The similarity that maps local
+// onto global is closed-form: Horn's quaternion method for the
+// rotation (the largest eigenvector of the 4×4 correlation form, found
+// by cyclic Jacobi — always a proper rotation, no reflection case),
+// then s = Σ(yc·Rxc)/Σ‖xc‖² and t = μy − sRμx.
+//
+//   ( gm_sim3_fit xs ys n out )   → b    out: [s | R row-major 9 | t 3]
+//   ( gm_sim3_apply pts n out13 ) → v    in place
+
+// Largest-eigenvalue eigenvector of a symmetric 4×4 by cyclic Jacobi.
+@ __gm_jacobi4 * f a * f evec → v {
+    // V ← I
+    : *f v # *f ( nurl_zalloc 128 )
+    : ~ i k 0
+    ~ < k 4 { = . v + * k 4 k 1.0 = k + k 1 }
+    : ~ i sweep 0
+    ~ < sweep 32 {
+        : ~ f off 0.0
+        : ~ i p 0
+        ~ < p 4 {
+            : ~ i q + p 1
+            ~ < q 4 {
+                = off + off ( float_abs . a + * p 4 q )
+                = q + q 1
+            }
+            = p + p 1
+        }
+        ? < off 0.000000000001 { = sweep 32 } {
+            = p 0
+            ~ < p 4 {
+                : ~ i q + p 1
+                ~ < q 4 {
+                    : f apq . a + * p 4 q
+                    ? > ( float_abs apq ) 0.0000000000001 {
+                        : f app . a + * p 4 p
+                        : f aqq . a + * q 4 q
+                        : f theta / - aqq app * 2.0 apq
+                        : ~ f t / 1.0 + ( float_abs theta ) ( float_sqrt + * theta theta 1.0 )
+                        ? < theta 0.0 { = t - 0.0 t } {}
+                        : f c / 1.0 ( float_sqrt + * t t 1.0 )
+                        : f s * t c
+                        // rotate rows/cols p,q of a
+                        : ~ i r 0
+                        ~ < r 4 {
+                            : f arp . a + * r 4 p
+                            : f arq . a + * r 4 q
+                            = . a + * r 4 p - * c arp * s arq
+                            = . a + * r 4 q + * s arp * c arq
+                            = r + r 1
+                        }
+                        = r 0
+                        ~ < r 4 {
+                            : f apr . a + * p 4 r
+                            : f aqr . a + * q 4 r
+                            = . a + * p 4 r - * c apr * s aqr
+                            = . a + * q 4 r + * s apr * c aqr
+                            = r + r 1
+                        }
+                        = r 0
+                        ~ < r 4 {
+                            : f vrp . v + * r 4 p
+                            : f vrq . v + * r 4 q
+                            = . v + * r 4 p - * c vrp * s vrq
+                            = . v + * r 4 q + * s vrp * c vrq
+                            = r + r 1
+                        }
+                    } {}
+                    = q + q 1
+                }
+                = p + p 1
+            }
+            = sweep + sweep 1
+        }
+    }
+    // pick the column with the largest diagonal eigenvalue
+    : ~ i best 0
+    : ~ f bv . a 0
+    = k 1
+    ~ < k 4 {
+        ? > . a + * k 4 k bv { = bv . a + * k 4 k = best k } {}
+        = k + k 1
+    }
+    = k 0
+    ~ < k 4 { = . evec k . v + * k 4 best = k + k 1 }
+    ( nurl_free # s v )
+}
+
+// Fit local→global: xs, ys are [n, 3] interleaved. Fails (F) below 3
+// pairs or on a degenerate spread.
+@ gm_sim3_fit * f xs * f ys i n * f out → b {
+    ? < n 3 { ^ F } {}
+    : f fn # f n
+    : ~ f mx0 0.0
+    : ~ f mx1 0.0
+    : ~ f mx2 0.0
+    : ~ f my0 0.0
+    : ~ f my1 0.0
+    : ~ f my2 0.0
+    : ~ i j 0
+    ~ < j n {
+        = mx0 + mx0 . xs * j 3
+        = mx1 + mx1 . xs + * j 3 1
+        = mx2 + mx2 . xs + * j 3 2
+        = my0 + my0 . ys * j 3
+        = my1 + my1 . ys + * j 3 1
+        = my2 + my2 . ys + * j 3 2
+        = j + j 1
+    }
+    = mx0 / mx0 fn = mx1 / mx1 fn = mx2 / mx2 fn
+    = my0 / my0 fn = my1 / my1 fn = my2 / my2 fn
+    // correlation M = Σ yc xcᵀ (3×3) and var_x
+    : *f m # *f ( nurl_zalloc 72 )
+    : ~ f varx 0.0
+    = j 0
+    ~ < j n {
+        : f x0 - . xs * j 3 mx0
+        : f x1 - . xs + * j 3 1 mx1
+        : f x2 - . xs + * j 3 2 mx2
+        : f y0 - . ys * j 3 my0
+        : f y1 - . ys + * j 3 1 my1
+        : f y2 - . ys + * j 3 2 my2
+        = varx + varx + + * x0 x0 * x1 x1 * x2 x2
+        = . m 0 + . m 0 * y0 x0
+        = . m 1 + . m 1 * y0 x1
+        = . m 2 + . m 2 * y0 x2
+        = . m 3 + . m 3 * y1 x0
+        = . m 4 + . m 4 * y1 x1
+        = . m 5 + . m 5 * y1 x2
+        = . m 6 + . m 6 * y2 x0
+        = . m 7 + . m 7 * y2 x1
+        = . m 8 + . m 8 * y2 x2
+        = j + j 1
+    }
+    ? < varx 0.000000000001 { ( nurl_free # s m ) ^ F } {}
+    // Horn's N (4×4 symmetric), from M with x as "left" set:
+    // q rotates x onto y: R(q)·xc ≈ yc
+    : f sxx . m 0
+    : f sxy . m 3
+    : f sxz . m 6
+    : f syx . m 1
+    : f syy . m 4
+    : f syz . m 7
+    : f szx . m 2
+    : f szy . m 5
+    : f szz . m 8
+    // NOTE the index convention: m holds Σ yc xcᵀ, so m[r][c] = Σ y_r x_c;
+    // Horn's S_ab = Σ x_a y_b = m[b][a] — the reads above already swap.
+    : *f nmat # *f ( nurl_zalloc 128 )
+    = . nmat 0 + + sxx syy szz
+    = . nmat 1 - syz szy
+    = . nmat 2 - szx sxz
+    = . nmat 3 - sxy syx
+    = . nmat 4 . nmat 1
+    = . nmat 5 - - sxx syy szz
+    = . nmat 6 + sxy syx
+    = . nmat 7 + szx sxz
+    = . nmat 8 . nmat 2
+    = . nmat 9 . nmat 6
+    = . nmat 10 - - syy sxx szz
+    = . nmat 11 + syz szy
+    = . nmat 12 . nmat 3
+    = . nmat 13 . nmat 7
+    = . nmat 14 . nmat 11
+    = . nmat 15 - - szz sxx syy
+    : *f q # *f ( nurl_zalloc 32 )
+    ( __gm_jacobi4 nmat q )
+    : f qw . q 0
+    : f qx . q 1
+    : f qy . q 2
+    : f qz . q 3
+    // R from the unit quaternion (w, x, y, z)
+    : *f r # *f ( nurl_zalloc 72 )
+    ( gm_quat_to_mat qx qy qz qw r )
+    // s = Σ yc·(R xc) / var_x — recompute with R in hand
+    : ~ f num 0.0
+    = j 0
+    ~ < j n {
+        : f x0 - . xs * j 3 mx0
+        : f x1 - . xs + * j 3 1 mx1
+        : f x2 - . xs + * j 3 2 mx2
+        : f y0 - . ys * j 3 my0
+        : f y1 - . ys + * j 3 1 my1
+        : f y2 - . ys + * j 3 2 my2
+        : f rx0 + + * . r 0 x0 * . r 1 x1 * . r 2 x2
+        : f rx1 + + * . r 3 x0 * . r 4 x1 * . r 5 x2
+        : f rx2 + + * . r 6 x0 * . r 7 x1 * . r 8 x2
+        = num + num + + * y0 rx0 * y1 rx1 * y2 rx2
+        = j + j 1
+    }
+    : f s / num varx
+    ? <= s 0.0 {
+        ( nurl_free # s m ) ( nurl_free # s nmat ) ( nurl_free # s q ) ( nurl_free # s r )
+        ^ F
+    } {}
+    = . out 0 s
+    = j 0
+    ~ < j 9 { = . out + 1 j . r j = j + j 1 }
+    = . out 10 - my0 * s + + * . r 0 mx0 * . r 1 mx1 * . r 2 mx2
+    = . out 11 - my1 * s + + * . r 3 mx0 * . r 4 mx1 * . r 5 mx2
+    = . out 12 - my2 * s + + * . r 6 mx0 * . r 7 mx1 * . r 8 mx2
+    ( nurl_free # s m ) ( nurl_free # s nmat ) ( nurl_free # s q ) ( nurl_free # s r )
+    ^ T
+}
+
+// p ← s·R·p + t, in place over [n, 3] interleaved points.
+@ gm_sim3_apply * f pts i n * f xf → v {
+    : f s . xf 0
+    : ~ i j 0
+    ~ < j n {
+        : f x . pts * j 3
+        : f y . pts + * j 3 1
+        : f z . pts + * j 3 2
+        = . pts * j 3 + * s + + * . xf 1 x * . xf 2 y * . xf 3 z . xf 10
+        = . pts + * j 3 1 + * s + + * . xf 4 x * . xf 5 y * . xf 6 z . xf 11
+        = . pts + * j 3 2 + * s + + * . xf 7 x * . xf 8 y * . xf 9 z . xf 12
+        = j + j 1
+    }
+}
