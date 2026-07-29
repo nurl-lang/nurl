@@ -52,15 +52,34 @@ $ `stdlib/ext/env.nu`
 
 // ── Temp directory ──────────────────────────────────────────────────
 // $TMPDIR if set and non-empty, else /tmp.
+// The temp directory, on every platform's own terms. POSIX spells it
+// TMPDIR; Windows spells it TEMP (or TMP) and has no /tmp at all — the
+// old TMPDIR-or-/tmp fallback made EVERY request on Windows die staging
+// its response file, before curl was even spawned, and nurlpkg then
+// reported the silence as "package not found in the registry".
 @ __httpc_tmpdir → String {
     ?? ( env_get `TMPDIR` ) {
         T d → {
             ? > ( string_len d ) 0 { ^ d } {}
             ( string_free d )
-            ^ ( string_from `/tmp` )
         }
-        F _ → ^ ( string_from `/tmp` )
+        F _ → {}
     }
+    ?? ( env_get `TEMP` ) {
+        T d → {
+            ? > ( string_len d ) 0 { ^ d } {}
+            ( string_free d )
+        }
+        F _ → {}
+    }
+    ?? ( env_get `TMP` ) {
+        T d → {
+            ? > ( string_len d ) 0 { ^ d } {}
+            ( string_free d )
+        }
+        F _ → {}
+    }
+    ^ ( string_from `/tmp` )
 }
 
 // Copy bytes [a, b) of `str` into a fresh owned String.
