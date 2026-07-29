@@ -65,8 +65,11 @@ decl = import_decl                 (*  $                             *)
 (* $ `path` IDENT?
    Inline-compiles the .nu file at `path` into the current module. The
    path is resolved relative to the compiler's current working directory,
-   NOT relative to the importing file. The same `path` is imported at most
-   once per compilation (duplicate-include guard).
+   NOT relative to the importing file. A path without a `.nu` extension
+   is first tried as written, then with `.nu` appended — so
+   `stdlib/core/string` and `stdlib/core/string.nu` name the same file.
+   The same `path` is imported at most once per compilation
+   (duplicate-include guard).
 
    Without alias:
      All top-level names from the imported file land in the global

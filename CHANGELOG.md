@@ -8,7 +8,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Nothing yet.
+### Added
+
+- **Extensionless import paths.** The grammar's own import examples write
+  `$ `stdlib/core/string`` — extensionless — while the compiler required
+  `.nu` and rejected the documented spelling with a bare
+  `nurlc: cannot open`. The resolver now retries every lookup tier
+  (importer-relative, cwd, `$NURL_STDLIB`) with `.nu` appended, but only
+  after the path as written missed all of them, so all existing imports —
+  including a file that really has no extension — resolve exactly as
+  before. Both spellings dedup to the same file.
+
+- **`nurl_println`** — `nurl_print` plus a trailing newline, callable
+  everywhere without an import, next to the long-standing `nurl_print` /
+  `nurl_eprintln`. Language models writing NURL routinely assume it
+  exists; now it does. Routed through `nurl_print` so output capture
+  (`nurl_print_buf_*`) sees it too.
 
 ## [0.28.0] — 2026-07-29
 

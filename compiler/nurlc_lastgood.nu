@@ -2331,6 +2331,23 @@
             `return value type '` lt `' does not match the declared return type '` fn_rt )
             `' — wrong struct type returned by value (the fields would be silently reinterpreted)` ) ) }
         {}
+        // Integer WIDTH mismatch — above all the bool boundary. `^ ( ffi )` in
+        // a `→ b` function lowered `ret i64 …` out of an i1 function (and the
+        // mirror image, `^ == a b` from `→ i`, lowered `ret i1` out of an i64
+        // one): invalid IR that nurlc accepted (rc 0) and only the LLVM
+        // verifier rejected, three build stages later, with a line number
+        // into the .ll. Same policy as the float/pointer clashes: no
+        // implicit conversions, say so HERE with the cure spelled out.
+        ? & & ( is_int_ty lt ) ( is_int_ty fn_rt ) ! ( seq lt fn_rt )
+        { : s cure ? ( seq fn_rt `i1` )
+            `' — NURL has no implicit conversions; compare the value to get a b, e.g. '^ != 0 ( … )'`
+            ? ( seq lt `i1` )
+            `' — NURL has no implicit conversions; select to widen the b, e.g. '^ ? cond 1 0'`
+            `' — NURL has no implicit conversions; convert with '# T expr'`
+            ( die lex ( nurl_str_cat ( nurl_str_cat4
+            `return value type '` ( llvm_to_nurl lt ) `' does not match the declared return type '` ( llvm_to_nurl fn_rt ) )
+            cure ) ) }
+        {}
     }
     {}
     // Determine which owned-slice binding (if any) is escaping as the return value.
@@ -9716,6 +9733,14 @@
 // with an index walk: the old version re-sliced the remainder per
 // token AND re-copied the accumulated output per append — O(B²) bytes
 // per update on a B-byte state.
+//
+// The scan reads through hoisted `*u` pointers, like __bck_st_get_at
+// above: `nurl_str_get` re-runs strlen on EVERY call, so walking the
+// state with it cost a strlen over the whole state per byte examined —
+// O(B²) again, in the one function whose comment claims to have removed
+// exactly that. Both indices are bounded by the loop guard (`e < n`)
+// and by `wl` against a token already measured to be `wl + 2` long, so
+// the bounds check nurl_str_get performed was dead weight.
 @ bck_st_set s state s name i val → s {
     : i n ( nurl_str_len state )
     : i wl ( nurl_str_len name )
@@ -9724,17 +9749,19 @@
     // worst case: whole state kept + separator + `name=val`
     : s out # s ( malloc + + + n wl vl 3 )
     : *u ob # *u out
+    : *u stp # *u state
+    : *u nmp # *u name
     : ~ i op 0
     : ~ i i 0
     ~ < i n {
         : ~ i e i
-        ~ & < e n != ( nurl_str_get state e ) 32 { = e + e 1 }
+        ~ & < e n != # i . stp e 32 { = e + e 1 }
         : ~ b keep T
         ? == - - e i 2 wl {
             : ~ i k 0
             : ~ b eq T
             ~ & eq < k wl {
-                ? != ( nurl_str_get state + i k ) ( nurl_str_get name k ) { = eq F } {}
+                ? != # i . stp + i k # i . nmp k { = eq F } {}
                 = k + k 1
             }
             ? eq { = keep F } {}
@@ -9772,19 +9799,23 @@
     // digit is one char, so the join of a and b never exceeds
     // len(a) + len(b) + 2. Names probed while still embedded in their
     // state string via __bck_st_get_at — the whole join allocates
-    // exactly one buffer.
+    // exactly one buffer. Both states are scanned through hoisted `*u`
+    // pointers rather than `nurl_str_get`, which re-runs strlen per
+    // call and made each pass quadratic in the state length.
     : i na ( nurl_str_len a )
     : i nb ( nurl_str_len b )
     : s out # s ( malloc + + na nb 2 )
     : *u ob # *u out
+    : *u ap # *u a
+    : *u bp # *u b
     : ~ i op 0
     // pass 1: every binding of a, joined against its state in b
     : ~ i i 0
     ~ < i na {
         : ~ i e i
-        ~ & < e na != ( nurl_str_get a e ) 32 { = e + e 1 }
+        ~ & < e na != # i . ap e 32 { = e + e 1 }
         : i wl - - e i 2
-        : i vj ( bck_join - ( nurl_str_get a - e 1 ) 48 ( __bck_st_get_at b a i wl ) )
+        : i vj ( bck_join - # i . ap - e 1 48 ( __bck_st_get_at b a i wl ) )
         ? > op 0 { : u sp # u 32 = . ob op sp = op + op 1 } {}
         // `name=` copied verbatim from a; then the joined digit
         ( memcpy # s + # i out op # s + # i a i + wl 1 )
@@ -9798,10 +9829,10 @@
     : ~ i j 0
     ~ < j nb {
         : ~ i e2 j
-        ~ & < e2 nb != ( nurl_str_get b e2 ) 32 { = e2 + e2 1 }
+        ~ & < e2 nb != # i . bp e2 32 { = e2 + e2 1 }
         : i wl2 - - e2 j 2
         ? == BCK_UNINIT ( __bck_st_get_at a b j wl2 ) {
-            : i vj2 ( bck_join BCK_UNINIT - ( nurl_str_get b - e2 1 ) 48 )
+            : i vj2 ( bck_join BCK_UNINIT - # i . bp - e2 1 48 )
             ? > op 0 { : u sp2 # u 32 = . ob op sp2 = op + op 1 } {}
             ( memcpy # s + # i out op # s + # i b j + wl2 1 )
             = op + op + wl2 1
@@ -9825,13 +9856,18 @@
 }
 
 // idx-th tab-delimited field of a record (0=kind .. 4=depth).
+// The tab scan reads through a hoisted `*u`: `nurl_str_get` re-runs
+// strlen per call, which made finding field 4 of an R-byte record cost
+// O(R²) — and bck_field is called for every field of every statement
+// row the walk visits.
 @ bck_field s rec i idx → s {
     : i len ( nurl_str_len rec )
+    : *u rp # *u rec
     : ~ i start 0
     : ~ i fno 0
     : ~ i pos 0
     ~ < pos len {
-        ? == ( nurl_str_get rec pos ) 9 {
+        ? == # i . rp pos 9 {
             ? == fno idx { ^ ( nurl_str_slice rec start - pos start ) } {}
             = fno + fno 1
             = start + pos 1
@@ -9844,14 +9880,19 @@
     ( nurl_str_cat `` `` )
 }
 
+// Split the captured statement list on newlines. The scan reads through
+// a hoisted `*u` for the same reason as bck_field: with `nurl_str_get`
+// this single loop was O(total²) over the whole function's statement
+// text.
 @ bck_explode → i {
     : s txt ( nurl_sym_get g_bck `stmts` )
     : i len ( nurl_str_len txt )
+    : *u tp # *u txt
     : ~ i start 0
     : ~ i n 0
     : ~ i pos 0
     ~ < pos len {
-        ? == ( nurl_str_get txt pos ) 10 {
+        ? == # i . tp pos 10 {
             ( nurl_sym_set g_bck ( nurl_str_cat `r` ( nurl_str_int n ) )
             ( nurl_str_slice txt start - pos start ) )
             = n + n 1
@@ -11195,6 +11236,14 @@
             ^ rhs
         }
         { : s idx_val ( gen_expr lex syms cg )
+            // `nurl_get_last_type` yields a NURL type name, so the GEP's
+            // index operand has to be lowered like every other type on
+            // the line. Printing it raw emitted `getelementptr i64, i64*
+            // %p, u64 %idx` for an unsigned index — IR that nurlc
+            // accepted (rc 0) and only clang rejected ("expected type").
+            // All four index-store paths share this shape; the matching
+            // load paths were already correct, so a program could read at
+            // an unsigned index but not write at one.
             : s idx_type ( nurl_get_last_type )
             : s rhs ( gen_expr lex syms cg )
             : s gep ( nurl_cg_reg cg )
@@ -11202,7 +11251,7 @@
             ( nurl_print ` = getelementptr ` ) ( nurl_print ( nurl_llty elem_ty ) )
             ( nurl_print `, ` ) ( nurl_print ( nurl_llty ptr_ty ) )
             ( nurl_print ` ` ) ( nurl_print data_ptr )
-            ( nurl_print `, ` ) ( nurl_print idx_type ) ( nurl_print ` ` ) ( nurl_print idx_val ) ( nurl_print `\n` )
+            ( nurl_print `, ` ) ( nurl_print ( nurl_llty idx_type ) ) ( nurl_print ` ` ) ( nurl_print idx_val ) ( nurl_print `\n` )
             ( nurl_print `  store ` ) ( nurl_print ( nurl_llty elem_ty ) )
             ( nurl_print ` ` ) ( nurl_print rhs )
             ( nurl_print `, ` ) ( nurl_print ( nurl_llty elem_ty ) )
@@ -11284,7 +11333,7 @@
                         ( nurl_print ` = getelementptr ` ) ( nurl_print ( nurl_llty st ) )
                         ( nurl_print `, ` ) ( nurl_print ( nurl_llty pt ) )
                         ( nurl_print ` ` ) ( nurl_print pv )
-                        ( nurl_print `, ` ) ( nurl_print idx_type ) ( nurl_print ` ` ) ( nurl_print idx_val ) ( nurl_print `\n` )
+                        ( nurl_print `, ` ) ( nurl_print ( nurl_llty idx_type ) ) ( nurl_print ` ` ) ( nurl_print idx_val ) ( nurl_print `\n` )
                         ( nurl_print `  store ` ) ( nurl_print ( nurl_llty st ) )
                         ( nurl_print ` ` ) ( nurl_print rhs )
                         ( nurl_print `, ` ) ( nurl_print ( nurl_llty st ) )
@@ -11334,7 +11383,7 @@
                                 ( nurl_print ` = getelementptr ` ) ( nurl_print ( nurl_llty st ) )
                                 ( nurl_print `, ` ) ( nurl_print ( nurl_llty pt ) )
                                 ( nurl_print ` ` ) ( nurl_print pv )
-                                ( nurl_print `, ` ) ( nurl_print idx_type ) ( nurl_print ` ` ) ( nurl_print idx_val ) ( nurl_print `\n` )
+                                ( nurl_print `, ` ) ( nurl_print ( nurl_llty idx_type ) ) ( nurl_print ` ` ) ( nurl_print idx_val ) ( nurl_print `\n` )
                                 ( nurl_print `  store ` ) ( nurl_print ( nurl_llty st ) )
                                 ( nurl_print ` ` ) ( nurl_print rhs )
                                 ( nurl_print `, ` ) ( nurl_print ( nurl_llty st ) )
@@ -11354,7 +11403,7 @@
                     ( nurl_print ` = getelementptr ` ) ( nurl_print ( nurl_llty st ) )
                     ( nurl_print `, ` ) ( nurl_print ( nurl_llty pt ) )
                     ( nurl_print ` ` ) ( nurl_print pv )
-                    ( nurl_print `, ` ) ( nurl_print idx_type ) ( nurl_print ` ` ) ( nurl_print idx_val ) ( nurl_print `\n` )
+                    ( nurl_print `, ` ) ( nurl_print ( nurl_llty idx_type ) ) ( nurl_print ` ` ) ( nurl_print idx_val ) ( nurl_print `\n` )
                     ( nurl_print `  store ` ) ( nurl_print ( nurl_llty st ) )
                     ( nurl_print ` ` ) ( nurl_print rhs )
                     ( nurl_print `, ` ) ( nurl_print ( nurl_llty st ) )
@@ -11414,6 +11463,16 @@
 
 // True iff an LLVM type string is a float type (`double` or f32 `float`).
 @ is_float_ty s ty → b { ^ | ( seq ty `double` ) ( seq ty `float` ) }
+
+// A first-class LLVM integer scalar. i1 counts — that is the point: the
+// return-type width check exists mostly to catch b/i mixups.
+@ is_int_ty s ty → b {
+    ? ( seq ty `i1` ) { ^ T } {}
+    ? ( seq ty `i8` ) { ^ T } {}
+    ? ( seq ty `i16` ) { ^ T } {}
+    ? ( seq ty `i32` ) { ^ T } {}
+    ^ ( seq ty `i64` )
+}
 
 // A never-legal store/assign type clash between a value's LLVM type `vt`
 // and the declared destination type `dt`: float-vs-non-float, a different
@@ -17478,6 +17537,7 @@
     ( emit `declare i8*  @realpath(i8*, i8*)` )
     ( emit `declare void @nurl_init(i32, i8**)` )
     ( emit `declare void @nurl_print(i8*)` )
+    ( emit `declare void @nurl_println(i8*)` )
     ( emit `declare void @nurl_eprint(i8*)` )
     ( emit `declare void @nurl_eprintln(i8*)` )
     ( emit `declare void @nurl_print_int(i64)` )
@@ -17725,6 +17785,39 @@
         : s joined ( nurl_str_cat3 root `/` cur )
         ? == ( nurl_file_exists joined ) 1 { ^ joined } {}
     } {}
+    // Every tier missed the path as written. If it has no `.nu` suffix,
+    // retry the same three tiers with `.nu` appended — the grammar's own
+    // import examples are extensionless (`$ `stdlib/core/string``).
+    // Running only after a full as-written miss keeps every existing
+    // import (and the bootstrap) byte-identical.
+    : i cn ( nurl_str_len cur )
+    ? & >= cn 3 & == ( nurl_str_get cur - cn 3 ) 46
+    & == ( nurl_str_get cur - cn 2 ) 110 == ( nurl_str_get cur - cn 1 ) 117
+    {} { ^ ( __import_nu_fallback cur ) }
+    ^ cur
+}
+
+// __import_nu_fallback — second resolution pass for an extensionless
+// import path: the same importer-relative / cwd / $NURL_STDLIB tiers as
+// __norm_import_path, but on `cur` + `.nu`. On a total miss the path is
+// returned as written so the "cannot open" error names what the user
+// typed.
+@ __import_nu_fallback s cur → s {
+    : s cand ( nurl_str_cat cur `.nu` )
+    : s sf ( vis_current_src_file )
+    ? != # i sf 0 {
+        : s dir ( __dirname sf )
+        ? != 0 ( nurl_str_len dir ) {
+            : s rel ( nurl_str_cat3 dir `/` cand )
+            ? == ( nurl_file_exists rel ) 1 { ^ rel } {}
+        } {}
+    } {}
+    ? == ( nurl_file_exists cand ) 1 { ^ cand } {}
+    : s root ( getenv `NURL_STDLIB` )
+    ? != # i root 0 {
+        : s joined ( nurl_str_cat3 root `/` cand )
+        ? == ( nurl_file_exists joined ) 1 { ^ joined } {}
+    } {}
     ^ cur
 }
 
@@ -17953,6 +18046,7 @@
     ( nurl_sym_def syms `nurl_panic_last_msg` `i8*` )
     // void runtime functions
     ( nurl_sym_def syms `nurl_print` `void` )
+    ( nurl_sym_def syms `nurl_println` `void` )
     ( nurl_sym_def syms `nurl_eprint` `void` )
     ( nurl_sym_def syms `nurl_eprintln` `void` )
     ( nurl_sym_def syms `nurl_print_int` `void` )
@@ -19916,7 +20010,7 @@
     ( nurl_print `usage: nurlc [flags] <file.nu>  >out.ll\n\n` )
     ( nurl_print `flags:\n` )
     ( nurl_print `  --help, -h          print this help and exit\n` )
-    ( nurl_print `  --version           print the compiler version and exit\n` )
+    ( nurl_print `  --version, -v       print the toolchain version and exit\n` )
     ( nurl_print `  --g, -g             emit DWARF debug info (nurl.sh --debug forwards this)\n` )
     ( nurl_print `  --lint              run lint-only diagnostics (e.g. unused imports)\n` )
     ( nurl_print `  --no-borrowck       disable the borrow-checker pass (on by default)\n` )
@@ -19939,7 +20033,7 @@
     : ~ i ai 1
     ~ < ai ( nurl_argc ) {
         : s a ( nurl_argv ai )
-        ? ( seq a `--version` )
+        ? | ( seq a `--version` ) ( seq a `-v` )
         { ( nurl_print ( nurl_version ) ) ( nurl_print `\n` ) ( nurl_exit 0 ) }
         { ? | ( seq a `--help` ) ( seq a `-h` )
             { ( nurlc_print_help ) ( nurl_exit 0 ) }

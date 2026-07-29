@@ -478,6 +478,9 @@ void nurl_print(const char *s) {
         fflush(stdout);
     }
 }
+/* Print with a trailing newline. Routed through nurl_print so the
+ * output-capture buffer (nurl_print_buf_*) sees it too. */
+void nurl_println(const char *s)  { nurl_print(s); nurl_print("\n"); }
 void nurl_eprint(const char *s)   { fputs(s, stderr); fflush(stderr); }
 void nurl_eprintln(const char *s) { fputs(s, stderr); fputc('\n', stderr); fflush(stderr); }
 
