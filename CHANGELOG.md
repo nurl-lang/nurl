@@ -8,6 +8,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [0.29.0] — 2026-07-30
+
+A discoverability release, cut from one field report about seams a
+newcomer hits in the first hour: the grammar's own import examples
+didn't compile, the print function every language model reaches for
+didn't exist, and the API-search tool couldn't see the runtime surface
+the compiler itself provides. All four changes close the gap between
+what the toolchain documents and what it accepts.
+
 ### Added
 
 - **The runtime-builtin surface is discoverable** (`stdlib/core/builtins.nu`).
@@ -9515,7 +9526,8 @@ releases are measured.
   compile-server (`api/`), browser playground (`nurlweb/`).
 * Dual license: MIT (LICENSE-MIT) or Apache-2.0 (LICENSE-APACHE).
 
-[Unreleased]: https://github.com/nurl-lang/nurl/compare/v0.28.0...HEAD
+[Unreleased]: https://github.com/nurl-lang/nurl/compare/v0.29.0...HEAD
+[0.29.0]: https://github.com/nurl-lang/nurl/compare/v0.28.0...v0.29.0
 [0.28.0]: https://github.com/nurl-lang/nurl/compare/v0.27.0...v0.28.0
 [0.27.0]: https://github.com/nurl-lang/nurl/compare/v0.26.0...v0.27.0
 [0.26.0]: https://github.com/nurl-lang/nurl/compare/v0.25.1...v0.26.0
