@@ -17537,6 +17537,7 @@
     ( emit `declare i8*  @realpath(i8*, i8*)` )
     ( emit `declare void @nurl_init(i32, i8**)` )
     ( emit `declare void @nurl_print(i8*)` )
+    ( emit `declare void @nurl_println(i8*)` )
     ( emit `declare void @nurl_eprint(i8*)` )
     ( emit `declare void @nurl_eprintln(i8*)` )
     ( emit `declare void @nurl_print_int(i64)` )
@@ -17784,6 +17785,39 @@
         : s joined ( nurl_str_cat3 root `/` cur )
         ? == ( nurl_file_exists joined ) 1 { ^ joined } {}
     } {}
+    // Every tier missed the path as written. If it has no `.nu` suffix,
+    // retry the same three tiers with `.nu` appended — the grammar's own
+    // import examples are extensionless (`$ `stdlib/core/string``).
+    // Running only after a full as-written miss keeps every existing
+    // import (and the bootstrap) byte-identical.
+    : i cn ( nurl_str_len cur )
+    ? & >= cn 3 & == ( nurl_str_get cur - cn 3 ) 46
+    & == ( nurl_str_get cur - cn 2 ) 110 == ( nurl_str_get cur - cn 1 ) 117
+    {} { ^ ( __import_nu_fallback cur ) }
+    ^ cur
+}
+
+// __import_nu_fallback — second resolution pass for an extensionless
+// import path: the same importer-relative / cwd / $NURL_STDLIB tiers as
+// __norm_import_path, but on `cur` + `.nu`. On a total miss the path is
+// returned as written so the "cannot open" error names what the user
+// typed.
+@ __import_nu_fallback s cur → s {
+    : s cand ( nurl_str_cat cur `.nu` )
+    : s sf ( vis_current_src_file )
+    ? != # i sf 0 {
+        : s dir ( __dirname sf )
+        ? != 0 ( nurl_str_len dir ) {
+            : s rel ( nurl_str_cat3 dir `/` cand )
+            ? == ( nurl_file_exists rel ) 1 { ^ rel } {}
+        } {}
+    } {}
+    ? == ( nurl_file_exists cand ) 1 { ^ cand } {}
+    : s root ( getenv `NURL_STDLIB` )
+    ? != # i root 0 {
+        : s joined ( nurl_str_cat3 root `/` cand )
+        ? == ( nurl_file_exists joined ) 1 { ^ joined } {}
+    } {}
     ^ cur
 }
 
@@ -18012,6 +18046,7 @@
     ( nurl_sym_def syms `nurl_panic_last_msg` `i8*` )
     // void runtime functions
     ( nurl_sym_def syms `nurl_print` `void` )
+    ( nurl_sym_def syms `nurl_println` `void` )
     ( nurl_sym_def syms `nurl_eprint` `void` )
     ( nurl_sym_def syms `nurl_eprintln` `void` )
     ( nurl_sym_def syms `nurl_print_int` `void` )
