@@ -2331,6 +2331,23 @@
             `return value type '` lt `' does not match the declared return type '` fn_rt )
             `' — wrong struct type returned by value (the fields would be silently reinterpreted)` ) ) }
         {}
+        // Integer WIDTH mismatch — above all the bool boundary. `^ ( ffi )` in
+        // a `→ b` function lowered `ret i64 …` out of an i1 function (and the
+        // mirror image, `^ == a b` from `→ i`, lowered `ret i1` out of an i64
+        // one): invalid IR that nurlc accepted (rc 0) and only the LLVM
+        // verifier rejected, three build stages later, with a line number
+        // into the .ll. Same policy as the float/pointer clashes: no
+        // implicit conversions, say so HERE with the cure spelled out.
+        ? & & ( is_int_ty lt ) ( is_int_ty fn_rt ) ! ( seq lt fn_rt )
+        { : s cure ? ( seq fn_rt `i1` )
+            `' — NURL has no implicit conversions; compare the value to get a b, e.g. '^ != 0 ( … )'`
+            ? ( seq lt `i1` )
+            `' — NURL has no implicit conversions; select to widen the b, e.g. '^ ? cond 1 0'`
+            `' — NURL has no implicit conversions; convert with '# T expr'`
+            ( die lex ( nurl_str_cat ( nurl_str_cat4
+            `return value type '` ( llvm_to_nurl lt ) `' does not match the declared return type '` ( llvm_to_nurl fn_rt ) )
+            cure ) ) }
+        {}
     }
     {}
     // Determine which owned-slice binding (if any) is escaping as the return value.
@@ -11446,6 +11463,16 @@
 
 // True iff an LLVM type string is a float type (`double` or f32 `float`).
 @ is_float_ty s ty → b { ^ | ( seq ty `double` ) ( seq ty `float` ) }
+
+// A first-class LLVM integer scalar. i1 counts — that is the point: the
+// return-type width check exists mostly to catch b/i mixups.
+@ is_int_ty s ty → b {
+    ? ( seq ty `i1` ) { ^ T } {}
+    ? ( seq ty `i8` ) { ^ T } {}
+    ? ( seq ty `i16` ) { ^ T } {}
+    ? ( seq ty `i32` ) { ^ T } {}
+    ^ ( seq ty `i64` )
+}
 
 // A never-legal store/assign type clash between a value's LLVM type `vt`
 // and the declared destination type `dt`: float-vs-non-float, a different
