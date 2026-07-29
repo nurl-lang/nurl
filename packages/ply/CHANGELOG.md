@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.2.2 — 2026-07-29
+
+- Viewer: a 4-thread worker pool instead of a single-threaded accept
+  loop — a second browser (or a second machine, with --host) no longer
+  queues behind the first client's download.
+- Rides on the stdlib ChaCha20-Poly1305 rewrite in the same change:
+  a TLS cloud download went from ~27 MB/s to ~170 MB/s served, past
+  gigabit wire speed. (Ships to installed toolchains with the next
+  release; the pool applies immediately.)
+
 ## 0.2.0 — 2026-07-29
 
 - **`--host` / `--addr`** on `ply view`: the bind address. The default
