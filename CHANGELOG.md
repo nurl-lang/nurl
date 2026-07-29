@@ -68,6 +68,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`nurlpkg test` and `nurlpkg bench` only worked inside a toolchain
+  checkout.** Both resolved their build driver to a bare `./nurl.sh`, a path
+  that exists in the NURL repo and nowhere else — so in a package built against
+  an *installed* toolchain every single test failed identically with
+  `/bin/sh: 1: ./nurl.sh: not found`, reported as `(compile error)`, which reads
+  like the package is broken rather than the runner. They now resolve the driver
+  the way `build`, `install` and the publish gate already do: `$NURL_CC` first,
+  then a checkout's own `./nurl.sh` / `nurl.bat` when you are standing in one
+  (so a toolchain build keeps testing with the compiler it just built), then
+  `$NURL`, then the installed `nurl` on PATH. Both commands also resolve `deps/`
+  first, like `build` does — a test importing `deps/<pkg>/src/...` no longer
+  needs a separate `nurlpkg install` to compile.
+
 - **Each bench results commit fired a second full CI round.** Now that the
   suite re-measures on every merge to main, the commit it pushes back — two
   data files, no code — re-triggered `ci.yml` (three required checks, one of

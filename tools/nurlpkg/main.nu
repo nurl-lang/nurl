@@ -462,6 +462,9 @@ Usage: nurlpkg remove <name>
         ( nurl_print `nurlpkg test — build + run every tests/*.nu
 
 Usage: nurlpkg test   (optional tests/outputs/ goldens; exit 0 = pass)
+
+Compiles with the installed nurl (a toolchain checkout's ./nurl.sh wins when
+you run from one); $NURL_CC overrides with your own <flags> <src> <out> driver.
 ` )
         ^ T
     } {}
@@ -3718,9 +3721,14 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
 // `tests/outputs/<name>.txt` exists, its bytes must match the program's
 // stdout exactly (a golden); otherwise the exit code alone decides.
 //
-// The build driver is `./nurl.sh` by default; override with $NURL_CC
-// (a command taking `<flags> <src> <outbin>`), e.g. a wrapper around an
-// installed `nurl`. Test binaries land in /tmp.
+// The build driver is resolved like every other nurlpkg build path
+// (`build`, `install`, the publish gate): $NURL_CC first (a command taking
+// `<flags> <src> <outbin>`), then a toolchain checkout's own `./nurl.sh` /
+// `nurl.bat` when the command runs from one, then $NURL, then the installed
+// `nurl` on PATH. Defaulting to a bare `./nurl.sh` made `test` and `bench`
+// the only commands that worked in the toolchain repo and nowhere else — an
+// installed-toolchain package got "./nurl.sh: not found" for every test.
+// Test binaries land in /tmp.
 
 @ __test_basename s path → String {
     : i n ( nurl_str_len path )
@@ -3736,10 +3744,16 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
 }
 
 @ __test_driver → String {
-    ^ ?? ( env_get `NURL_CC` ) {
-        T v → v
-        F _ → { : String d ( string_with_cap 16 ) ( string_push_str d `./nurl.sh` ) d }
+    ?? ( env_get `NURL_CC` ) {
+        T v → { ? > ( string_len v ) 0 { ^ v } { ( string_free v ) } }
+        F _ → {}
     }
+    // A toolchain checkout builds with its OWN freshly built compiler, not
+    // whatever `nurl` happens to be installed — keep that when the wrapper
+    // is right here in the working directory.
+    : s local ? ( __is_windows ) `nurl.bat` `./nurl.sh`
+    ? ( file_exists local ) { ^ ( string_from local ) } {}
+    ^ ( __env_or `NURL` `nurl` )
 }
 
 @ __test_report String name s status s detail → v {
@@ -3845,6 +3859,12 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
 }
 
 @ __cmd_test → i {
+    // Resolve deps/ first, exactly like `build` and `install` do — a test that
+    // imports `deps/<pkg>/src/...` cannot compile without it, and requiring a
+    // separate `nurlpkg install` made `test` the odd one out.
+    ? ( file_exists `nurl.toml` ) {
+        ? != ( __cmd_install ) 0 { ^ 1 } {}
+    } {}
     ^ ?? ( fs_glob `tests/*.nu` ) {
         F _ → { ( nurl_eprintln `nurlpkg: no tests/ directory (expected tests/*.nu)` ) 1 }
         T files → {
@@ -3865,7 +3885,7 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
 // stdout (each bench program prints its own std/bench.nu report). No
 // goldens — wall time is machine-dependent. A bench "fails" only if it
 // won't compile or exits nonzero. Build driver as for `test` ($NURL_CC,
-// default ./nurl.sh).
+// else a checkout's ./nurl.sh, else the installed nurl).
 
 @ __run_bench_one s src s driver → i {
     : String name ( __test_basename src )
@@ -3937,6 +3957,9 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
 }
 
 @ __cmd_bench → i {
+    ? ( file_exists `nurl.toml` ) {
+        ? != ( __cmd_install ) 0 { ^ 1 } {}
+    } {}
     ^ ?? ( fs_glob `benches/*.nu` ) {
         F _ → { ( nurl_eprintln `nurlpkg: no benches/ directory (expected benches/*.nu)` ) 1 }
         T files → {
