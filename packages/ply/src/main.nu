@@ -1,6 +1,6 @@
 // packages/ply/src/main.nu — the `ply` CLI.
 //
-//   ply view <cloud.ply> [--port n] [--page f]   serve the viewer
+//   ply view <cloud.ply> [--port n] [--host a] [--tls] [--page f]
 //   ply info <cloud.ply>                         print the header
 //   ply <cloud.ply>                              shorthand for view
 //
@@ -21,13 +21,16 @@ $ `view.nu`
 
 @ __pc_usage → i {
     ( nurl_print `ply — write and view PLY point clouds\n\n` )
-    ( nurl_print `usage: ply view <cloud.ply> [--port n] [--page file]\n` )
+    ( nurl_print `usage: ply view <cloud.ply> [--port n] [--host addr] [--tls] [--page file]\n` )
     ( nurl_print `       ply info <cloud.ply>\n` )
     ( nurl_print `       ply <cloud.ply>            same as view\n\n` )
     ( nurl_print `  view    serve a WebGL viewer for the cloud on localhost\n` )
     ( nurl_print `  info    print the PLY header\n\n` )
     ( nurl_print `options:\n` )
     ( nurl_print `  --port <n>    viewer port (default 8080)\n` )
+    ( nurl_print `  --host <a>    bind address (default 127.0.0.1; 0.0.0.0 = every\n` )
+    ( nurl_print `                interface, or one adapter's address; --addr works too)\n` )
+    ( nurl_print `  --tls         HTTPS with a fresh self-signed certificate\n` )
     ( nurl_print `  --page <f>    serve this HTML file instead of the built-in page\n` )
     ( nurl_print `  --version     print the version\n` )
     ( nurl_print `  --help, -h    this\n\n` )
@@ -49,12 +52,14 @@ $ `view.nu`
     : ~ s cloud ``
     : ~ i port 8080
     : ~ s page ``
+    : ~ s host `127.0.0.1`
+    : ~ i tls 0
     : ~ i bad 0
     : i argc ( nurl_argc )
     : ~ i i0 first
     ~ & == bad 0 < i0 argc {
         : s a ( nurl_argv i0 )
-        : b wants | ( __pc_streq a `--port` ) ( __pc_streq a `--page` )
+        : b wants | | | ( __pc_streq a `--port` ) ( __pc_streq a `--page` ) ( __pc_streq a `--host` ) ( __pc_streq a `--addr` )
         ? & wants >= + i0 1 argc {
             ( nurl_print `ply: ` ) ( nurl_print a ) ( nurl_print ` needs a value\n` )
             = bad 1
@@ -65,11 +70,17 @@ $ `view.nu`
                 ? ( __pc_streq a `--page` ) {
                     = page ( nurl_argv + i0 1 ) = i0 + i0 1
                 } {
-                    ? ( __pc_is_flag a ) {
-                        ( nurl_print `ply: unknown option ` )
-                        ( nurl_print a ) ( nurl_print `\n` )
-                        = bad 1
-                    } { = cloud a }
+                    ? | ( __pc_streq a `--host` ) ( __pc_streq a `--addr` ) {
+                        = host ( nurl_argv + i0 1 ) = i0 + i0 1
+                    } {
+                        ? ( __pc_streq a `--tls` ) { = tls 1 } {
+                            ? ( __pc_is_flag a ) {
+                                ( nurl_print `ply: unknown option ` )
+                                ( nurl_print a ) ( nurl_print `\n` )
+                                = bad 1
+                            } { = cloud a }
+                        }
+                    }
                 }
             }
         }
@@ -80,7 +91,7 @@ $ `view.nu`
         ( nurl_print `ply: which cloud? — ply view cloud.ply\n` )
         ^ 2
     } {}
-    ^ ( vw_serve cloud `127.0.0.1` port page 0 )
+    ^ ( vw_serve cloud host port page 0 tls )
 }
 
 // Print the header lines of a PLY, verbatim — they were written to be

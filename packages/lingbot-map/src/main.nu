@@ -67,6 +67,8 @@ $ `src/preproc.nu`
     i view
     i port
     s page
+    s host
+    i tls
     i imgsize
 }
 
@@ -86,7 +88,7 @@ $ `src/preproc.nu`
     ( nurl_print `\n` )
     ( nurl_print `usage: lingbot-map [options] <frames-dir | video.mp4>\n` )
     ( nurl_print `       lingbot-map [options] <frame.png> <frame.png> ...\n` )
-    ( nurl_print `       lingbot-map view <cloud.ply> [--port n]\n` )
+    ( nurl_print `       lingbot-map view <cloud.ply> [--port n] [--host a] [--tls]\n` )
     ( nurl_print `\n` )
     ( nurl_print `examples:\n` )
     ( nurl_print `  # a folder of frames -> cloud.ply. The checkpoint is downloaded once,\n` )
@@ -135,6 +137,9 @@ $ `src/preproc.nu`
     ( nurl_print `  --profile           per-stage frame timings and a per-kernel GPU profile\n` )
     ( nurl_print `  --view              open the viewer on the cloud when it is written\n` )
     ( nurl_print `  --port <n>          viewer port (default 8080)\n` )
+    ( nurl_print `  --host <a>          viewer bind address (default 127.0.0.1;\n` )
+    ( nurl_print `                      0.0.0.0 = every interface; --addr works too)\n` )
+    ( nurl_print `  --tls               viewer HTTPS with a fresh self-signed cert\n` )
     ( nurl_print `  --version           print the version\n` )
     ( nurl_print `  --help, -h          this\n` )
     ( nurl_print `\n` )
@@ -172,6 +177,7 @@ $ `src/preproc.nu`
     ? | ( __lm_streq a `--frames` ) ( __lm_streq a `--image_folder` ) { ^ T } {}
     ? ( __lm_streq a `--stride` ) { ^ T } {}
     ? | ( __lm_streq a `--port` ) ( __lm_streq a `--page` ) { ^ T } {}
+    ? | ( __lm_streq a `--host` ) ( __lm_streq a `--addr` ) { ^ T } {}
     ? | | ( __lm_streq a `--video` ) ( __lm_streq a `--video_path` ) ( __lm_streq a `--fps` ) { ^ T } {}
     ? | ( __lm_streq a `--image-size` ) ( __lm_streq a `--image_size` ) { ^ T } {}
     ^ F
@@ -287,6 +293,8 @@ $ `src/preproc.nu`
     : ~ i view 0
     : ~ i port 8080
     : ~ s page ``
+    : ~ s host `127.0.0.1`
+    : ~ i tls 0
     : ~ s video ``
     : ~ i fps 10
     : ~ i imgsize LM_SIZE
@@ -316,6 +324,7 @@ $ `src/preproc.nu`
             ? ( __lm_streq a `--stride` ) { = fstride ( nurl_str_to_int v ) } {}
             ? ( __lm_streq a `--port` ) { = port ( nurl_str_to_int v ) } {}
             ? ( __lm_streq a `--page` ) { = page v } {}
+            ? | ( __lm_streq a `--host` ) ( __lm_streq a `--addr` ) { = host v } {}
             ? | ( __lm_streq a `--video` ) ( __lm_streq a `--video_path` ) { = video v } {}
             ? ( __lm_streq a `--fps` ) { = fps ( nurl_str_to_int v ) } {}
             ? | ( __lm_streq a `--image-size` ) ( __lm_streq a `--image_size` ) {
@@ -332,6 +341,7 @@ $ `src/preproc.nu`
             ? ( __lm_streq a `--profile` ) { = profile 1 = hit 1 } {}
             ? ( __lm_streq a `--ascii` ) { = ascii 1 = hit 1 } {}
             ? ( __lm_streq a `--view` ) { = view 1 = hit 1 } {}
+            ? ( __lm_streq a `--tls` ) { = tls 1 = hit 1 } {}
             ? | ( __lm_streq a `--help` ) ( __lm_streq a `-h` ) { = bad 2 = hit 1 } {}
             ? ( __lm_streq a `--version` ) { = bad 3 = hit 1 } {}
             ? == hit 0 {
@@ -440,7 +450,7 @@ $ `src/preproc.nu`
         }
         : b _c ( vec_set_len [String] fr w )
     } {}
-    ^ @ Opts { model out conf pstride maxf verbose profile ascii fr bad view port page imgsize }
+    ^ @ Opts { model out conf pstride maxf verbose profile ascii fr bad view port page host tls imgsize }
 }
 
 @ __lm_free_opts Opts o → v {
@@ -565,12 +575,14 @@ i h i w f cmin i stride → v {
     : ~ s cloud ``
     : ~ i port 8080
     : ~ s page ``
+    : ~ s host `127.0.0.1`
+    : ~ i tls 0
     : ~ i bad 0
     : i argc ( nurl_argc )
     : ~ i i0 2
     ~ & == bad 0 < i0 argc {
         : s a ( nurl_argv i0 )
-        : b wants | ( __lm_streq a `--port` ) ( __lm_streq a `--page` )
+        : b wants | | | ( __lm_streq a `--port` ) ( __lm_streq a `--page` ) ( __lm_streq a `--host` ) ( __lm_streq a `--addr` )
         ? & wants >= + i0 1 argc {
             ( nurl_print `lingbot-map: ` ) ( nurl_print a )
             ( nurl_print ` needs a value\n` )
@@ -582,14 +594,20 @@ i h i w f cmin i stride → v {
                 ? ( __lm_streq a `--page` ) {
                     = page ( nurl_argv + i0 1 ) = i0 + i0 1
                 } {
-                    ? | ( __lm_streq a `--help` ) ( __lm_streq a `-h` ) {
-                        ( __lm_help ) ^ 0
+                    ? | ( __lm_streq a `--host` ) ( __lm_streq a `--addr` ) {
+                        = host ( nurl_argv + i0 1 ) = i0 + i0 1
                     } {
-                        ? ( __lm_is_flag a ) {
-                            ( nurl_print `lingbot-map view: unknown option ` )
-                            ( nurl_print a ) ( nurl_print `\n` )
-                            = bad 1
-                        } { = cloud a }
+                        ? ( __lm_streq a `--tls` ) { = tls 1 } {
+                            ? | ( __lm_streq a `--help` ) ( __lm_streq a `-h` ) {
+                                ( __lm_help ) ^ 0
+                            } {
+                                ? ( __lm_is_flag a ) {
+                                    ( nurl_print `lingbot-map view: unknown option ` )
+                                    ( nurl_print a ) ( nurl_print `\n` )
+                                    = bad 1
+                                } { = cloud a }
+                            }
+                        }
                     }
                 }
             }
@@ -602,7 +620,7 @@ i h i w f cmin i stride → v {
         ( nurl_print `    lingbot-map view cloud.ply\n` )
         ^ 2
     } {}
-    ^ ( vw_serve cloud `127.0.0.1` port page 0 )
+    ^ ( vw_serve cloud host port page 0 tls )
 }
 
 // The run's big device allocations, in bytes, before any of them is
@@ -991,7 +1009,7 @@ i h i w f cmin i stride → v {
     ( string_free model )
     ? != serve 0 {
         ( nurl_print `\n` )
-        : i vrc ( vw_serve . o out `127.0.0.1` . o port . o page 0 )
+        : i vrc ( vw_serve . o out . o host . o port . o page 0 . o tls )
         ? != vrc 0 { = rc vrc } {}
     } {}
     ( __lm_free_opts o )

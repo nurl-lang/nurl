@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.9.0 — 2026-07-29
+
+- Viewer: `--host`/`--addr` (bind address, default 127.0.0.1) and
+  `--tls` (self-signed HTTPS) on both `lingbot-map view` and `--view`,
+  riding on ply 0.2.0.
+
 ## 0.8.0
 
 **The PLY writer, the viewer and the video extractor are their own

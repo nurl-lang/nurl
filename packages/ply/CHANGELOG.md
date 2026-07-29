@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.2.0 — 2026-07-29
+
+- **`--host` / `--addr`** on `ply view`: the bind address. The default
+  stays 127.0.0.1 (private to the machine); `--host 0.0.0.0` serves
+  every interface, a specific address serves exactly that adapter.
+- **`--tls`**: HTTPS with a fresh self-signed P-256 certificate
+  generated at startup (std/x509_gen, CN ply.local, 30 days) — the
+  browser warns once, but the cloud crosses the LAN encrypted. The PEMs
+  are staged through unpredictable temp paths and unlinked after the
+  listener exits.
+- `vw_serve` grew `tls` as its sixth parameter (breaking for callers;
+  lingbot-map ≥ 0.9.0 and map-anything ≥ 0.4.0 carry the new flags
+  through their own `view` / `--view`).
+
 ## 0.1.1 — 2026-07-28
 
 - Viewer: horizontal drag was inverted, in both orbit and pan — dragging

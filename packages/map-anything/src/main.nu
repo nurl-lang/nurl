@@ -54,7 +54,7 @@ $ `src/sky.nu`
     ( nurl_print `map-anything - metric 3-D reconstruction from images, in pure NURL\n` )
     ( nurl_print `a port of Meta's MapAnything (github.com/facebookresearch/map-anything)\n\n` )
     ( nurl_print `usage: map-anything <images-dir | video | frames...> [options]\n` )
-    ( nurl_print `       map-anything view <cloud.ply> [--port N]\n\n` )
+    ( nurl_print `       map-anything view <cloud.ply> [--port N] [--host A] [--tls]\n\n` )
     ( nurl_print `options:\n` )
     ( nurl_print `  -o, --out FILE      output PLY (default cloud.ply)\n` )
     ( nurl_print `  --model REF|PATH    checkpoint (default facebook/map-anything-apache)\n` )
@@ -72,6 +72,9 @@ $ `src/sky.nu`
     ( nurl_print `  --ascii             text PLY instead of binary\n` )
     ( nurl_print `  --view              serve the browser viewer when done\n` )
     ( nurl_print `  --port N            viewer port (default 8790)\n` )
+    ( nurl_print `  --host A            viewer bind address (default 127.0.0.1;\n` )
+    ( nurl_print `                      0.0.0.0 = every interface; --addr works too)\n` )
+    ( nurl_print `  --tls               viewer HTTPS with a fresh self-signed cert\n` )
     ( nurl_print `  -q, --quiet         only errors\n` )
 }
 
@@ -237,6 +240,8 @@ $ `src/sky.nu`
     ( Vec String ) frames
     i bad  // 0 run, 1 error, 2 help, 3 view-subcommand
     s viewfile
+    s vhost
+    i vtls
 }
 
 @ __ma_parse → Opts {
@@ -259,6 +264,8 @@ $ `src/sky.nu`
     : ~ i domask 1
     : ~ i bad 0
     : ~ s viewfile ``
+    : ~ s vhost `127.0.0.1`
+    : ~ i vtls 0
     : ( Vec String ) fr ( vec_new [String] )
     : i argc ( nurl_argc )
     ? < argc 2 { = bad 2 } {}
@@ -268,10 +275,16 @@ $ `src/sky.nu`
         = viewfile ( nurl_argv 2 )
         : ~ i k 3
         ~ < k argc {
-            ? & ( __ma_streq ( nurl_argv k ) `--port` ) < + k 1 argc {
+            : s va ( nurl_argv k )
+            ? & ( __ma_streq va `--port` ) < + k 1 argc {
                 = port ( nurl_str_to_int ( nurl_argv + k 1 ) )
                 = k + k 1
             } {}
+            ? & | ( __ma_streq va `--host` ) ( __ma_streq va `--addr` ) < + k 1 argc {
+                = vhost ( nurl_argv + k 1 )
+                = k + k 1
+            } {}
+            ? ( __ma_streq va `--tls` ) { = vtls 1 } {}
             = k + k 1
         }
     } {}
@@ -289,6 +302,7 @@ $ `src/sky.nu`
         ? & ( __ma_streq a `--pixel-stride` ) < + i0 1 argc { = pstride ( nurl_str_to_int ( nurl_argv + i0 1 ) ) = take 1 } {}
         ? & ( __ma_streq a `--conf-pct` ) < + i0 1 argc { = confpct ( nurl_str_to_float ( nurl_argv + i0 1 ) ) = take 1 } {}
         ? & ( __ma_streq a `--port` ) < + i0 1 argc { = port ( nurl_str_to_int ( nurl_argv + i0 1 ) ) = take 1 } {}
+        ? & | ( __ma_streq a `--host` ) ( __ma_streq a `--addr` ) < + i0 1 argc { = vhost ( nurl_argv + i0 1 ) = take 1 } {}
         ? == take 1 { = i0 + i0 1 } {
             : ~ i hit 0
             ? ( __ma_streq a `--no-mask-edges` ) { = maskedges 0 = hit 1 } {}
@@ -296,6 +310,7 @@ $ `src/sky.nu`
             ? ( __ma_streq a `--no-mask` ) { = domask 0 = hit 1 } {}
             ? ( __ma_streq a `--ascii` ) { = ascii 1 = hit 1 } {}
             ? ( __ma_streq a `--view` ) { = view 1 = hit 1 } {}
+            ? ( __ma_streq a `--tls` ) { = vtls 1 = hit 1 } {}
             ? | ( __ma_streq a `--quiet` ) ( __ma_streq a `-q` ) { = verbose 0 = hit 1 } {}
             ? | ( __ma_streq a `--help` ) ( __ma_streq a `-h` ) { = bad 2 = hit 1 } {}
             ? == hit 0 {
@@ -378,7 +393,7 @@ $ `src/sky.nu`
     } {}
     ? & == bad 0 == ( vec_len [String] fr ) 0 { = bad 2 } {}
     ^ @ Opts { model out video view port ascii verbose maxviews stride fps
-        pstride confpct maskedges masksky window overlap domask fr bad viewfile }
+        pstride confpct maskedges masksky window overlap domask fr bad viewfile vhost vtls }
 }
 
 // ── main ────────────────────────────────────────────────────────────
@@ -391,7 +406,7 @@ $ `src/sky.nu`
     } {}
     ? == . o bad 1 { ^ 1 } {}
     ? == . o bad 3 {
-        ^ ( vw_serve . o viewfile `127.0.0.1` . o port `` 0 )
+        ^ ( vw_serve . o viewfile . o vhost . o port `` 0 . o vtls )
     } {}
 
     // the checkpoint
@@ -785,7 +800,7 @@ $ `src/sky.nu`
         ( nurl_print ` points)\n` )
     } {}
     ? != . o view 0 {
-        ^ ( vw_serve . o out `127.0.0.1` . o port `` 0 )
+        ^ ( vw_serve . o out . o vhost . o port `` 0 . o vtls )
     } {}
     ^ 0
 }
