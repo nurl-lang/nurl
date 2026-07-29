@@ -100,11 +100,14 @@ $ `src/wasmkernel.nu`
     ( vec_push [( Vec u )] hashes ( blob_hash small ) )
     ( vec_push [( Vec u )] hashes ( blob_hash data ) )
     : ( Vec u ) wasm ( mkbytes 512 5 )
-    : ( Vec u ) p4 ( wasm_gpu_chunk_payload_blobs 0 1000 3000 0 params 7 hashes wasm )
+    // dtype (1 = f64) rides in byte 1's high nibble — the argument this call
+    // used to omit, which silently shifted `hashes`/`wasm` one slot left.
+    : ( Vec u ) p4 ( wasm_gpu_chunk_payload_blobs 0 1000 3000 0 params 7 1 hashes wasm )
     : GpuChunk c ( wasm_gpu_chunk_decode p4 )
     ( check == . c ok 1 `v4: decodes` )
     ( check & == . c lo 1000 == . c hi 3000 `v4: range` )
     ( check == . c b0 7 `v4: first block index` )
+    ( check == . c dtype 1 `v4: dataset dtype` )
     ( check == ( vec_len [( Vec u )] . c blobs ) 2 `v4: 2 block hashes` )
     : ( Vec u ) ch0 ?? ( vec_get [( Vec u )] . c blobs 0 ) { T x → x F → ( vec_new [u] ) }
     : ( Vec u ) eh0 ?? ( vec_get [( Vec u )] hashes 0 ) { T x → x F → ( vec_new [u] ) }
@@ -129,7 +132,7 @@ $ `src/wasmkernel.nu`
     : ( Vec ( Vec u ) ) ah ( vec_new [( Vec u )] )
     ( vec_push [( Vec u )] ah ( blob_hash small ) )
     : ( Vec u ) aw ( mkbytes 64 3 )
-    : ( Vec u ) ap ( wasm_gpu_chunk_payload_blobs 0 8 200 0 nop 0 ah aw )
+    : ( Vec u ) ap ( wasm_gpu_chunk_payload_blobs 0 8 200 0 nop 0 1 ah aw )
     : ~ GpuChunk ac ( wasm_gpu_chunk_decode ap )
     ( check ( gpu_chunk_assemble ac ) `assemble: cached block ok` )
     ( check == ( vec_len [u] . ac data ) * 8 192 `assemble: exact take (8·(hi−lo))` )
@@ -141,7 +144,7 @@ $ `src/wasmkernel.nu`
     : ( Vec ( Vec u ) ) mh ( vec_new [( Vec u )] )
     : ( Vec u ) ghost ( mkbytes 100 77 )
     ( vec_push [( Vec u )] mh ( blob_hash ghost ) )
-    : ( Vec u ) mp ( wasm_gpu_chunk_payload_blobs 0 0 10 0 nop 0 mh aw )
+    : ( Vec u ) mp ( wasm_gpu_chunk_payload_blobs 0 0 10 0 nop 0 1 mh aw )
     : ~ GpuChunk mc ( wasm_gpu_chunk_decode mp )
     ( check ! ( gpu_chunk_assemble mc ) `assemble: missing block FAILS the chunk` )
     ( gpu_chunk_free mc )

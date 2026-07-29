@@ -3407,6 +3407,9 @@ $ `cudakernel.nu`
     ^ rc
 }
 
+// `-v` is already taken by --verbose, so the version flag is long-form only.
+@ version → v { ( nurl_print `swarm-mcp 0.21.1\n` ) }
+
 @ usage → v {
     ( nurl_print `swarm-mcp — a distributed compute cluster driven over MCP (HTTPS JSON-RPC).\n\n` )
     ( nurl_print `Every node runs the same command; roles combine freely:\n` )
@@ -3426,7 +3429,9 @@ $ `cudakernel.nu`
     ( nurl_print `  --workers N              worker threads   (default 1)\n` )
     ( nurl_print `  --gpu                    workers run GPU wasm kernels (--allow-gpu; needs the\n` )
     ( nurl_print `                           pure-NURL wasmtime as $WASMTIME + an NVIDIA GPU/CUDA)\n` )
-    ( nurl_print `  -v, --verbose\n\n` )
+    ( nurl_print `  -v, --verbose\n` )
+    ( nurl_print `  --version                print the version and exit\n` )
+    ( nurl_print `  --help, -h               this\n\n` )
     ( nurl_print `Examples:\n` )
     ( nurl_print `  swarm-mcp --token sekret --relay --worker --mcp              # all-in-one node\n` )
     ( nurl_print `  swarm-mcp --token sekret --worker --connect 10.0.0.1:47700  # join as a worker\n\n` )
@@ -3542,5 +3547,6 @@ $ `cudakernel.nu`
     ? ( arg_eq 1 `submit` ) { ^ ( cli_submit ) } {}
     ? ( arg_eq 1 `runwasm` ) { ^ ( cli_runwasm ) } {}
     ? | ( arg_eq 1 `-h` ) | ( arg_eq 1 `--help` ) ( arg_eq 1 `help` ) { ( usage ) ^ 0 } {}
+    ? ( has_flag `--version` ) { ( version ) ^ 0 } {}
     ^ ( run_node )
 }
