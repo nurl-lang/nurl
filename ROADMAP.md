@@ -117,7 +117,7 @@ platform-specific shims.
 - **ext/web stack** — full HTTP/1.1 server (keep-alive, pipelining, static,
   auth, JWT bearer-auth, cookies, forms, multipart, router, middleware, access log + Prometheus
   metrics, DoS caps, graceful shutdown, per-request timeouts, panic recovery),
-  HTTP client (with cookie jar), **TLS** (SNI + ALPN + mTLS + live cert reload), **HTTP/2**
+  HTTP client (with cookie jar), **TLS** (SNI + ALPN + mTLS + live cert reload; the pure ChaCha20-Poly1305 record path serves past gigabit wire speed), **HTTP/2**
   (RFC 9113 + HPACK, **server and client**), **WebSocket** (RFC 6455, **server
   and client**, with **permessage-deflate** compression — RFC 7692),
   reverse proxy with binary-safe streaming. The stack has had a
