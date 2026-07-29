@@ -1,6 +1,6 @@
 [package]
 name = "map-anything"
-version = "0.4.0"
+version = "0.4.1"
 description = "Metric 3-D reconstruction from plain images in pure NURL — a port of Meta's MapAnything (https://github.com/facebookresearch/map-anything). Point it at a set of photos or a video and it produces a metric-scale world-space point cloud with per-view camera poses, depth maps and confidences, viewable as a rotatable object in the browser via the ply package's WebGL viewer. Runs the reference facebook/map-anything-apache checkpoint (DINOv2-giant encoder, 16-layer alternating-attention multi-view transformer, DPT ray-directions+depth head, pose and metric-scale heads), fetched from Hugging Face on first use and cached under ~/.nurl/models. --mask-sky additionally drops sky pixels with the skyseg.onnx U2-Net run through the onnx package on the GPU, for outdoor scenes where the depth head hallucinates a far wall."
 license = "Apache-2.0"
 
