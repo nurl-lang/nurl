@@ -8,7 +8,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [0.28.0] — 2026-07-29
+
+A field-report release. Everything here was found by running the thing —
+a Windows user on a machine shaped unlike any CI runner, a browser pulling
+a 100 MB point cloud through the pure-NURL TLS stack, a port whose
+bool-returning wrapper compiled to IR the verifier rejected three stages
+later — and each fix lands with the regression that would have caught it.
+
 ### Added
+
+- **`ply view --host/--addr` and `--tls`** (ply 0.2.x, registry): the viewer
+  can bind 0.0.0.0 or one adapter and serve HTTPS under a fresh self-signed
+  P-256 certificate (std/x509_gen) — listed here because the enabling
+  stdlib work ships with this toolchain.
 
 - **`nbody` — the benchmark suite's first row over floating point.**
   Every other row is an integer or byte kernel, so
@@ -42,6 +57,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **nurlc rejects integer-width mismatches at return position.** `^ ( ffi )`
+  in a `→ b` function lowered `ret i64 …` out of an `i1` LLVM function (and
+  `^ == a b` from `→ i`, the mirror image, `ret i1` out of an i64 one):
+  invalid IR that nurlc accepted with rc 0 and only the LLVM verifier
+  rejected, three build stages later, with a line number into the `.ll`.
+  The return-type agreement check now dies on integer width like it
+  already did on float↔int and pointer↔scalar, with the cure per
+  direction (`^ != 0 ( … )` to get a `b`, `^ ? cond 1 0` to widen one).
+  No codegen change: accepted programs lower identically, and a program
+  hitting the new diagnostic could never have linked.
+
+- **ChaCha20-Poly1305 rewritten for the register allocator — a served TLS
+  download goes 27 → ~170 MB/s.** The quarter-round made twelve
+  bounds-checked Vec accessor calls per invocation (~960 per 64-byte
+  block) with three Vec allocations per block and a per-byte `vec_push`
+  output loop. The sixteen state words are now locals, key/nonce words
+  are hoisted out of the block loop, full blocks XOR through raw
+  pointers, and a block allocates nothing; Poly1305 reads full 16-byte
+  blocks off the message pointer. Single-core: `chacha20_xor` 296 MB/s,
+  `poly1305_mac` 1.3 GB/s — past gigabit wire speed for the whole served
+  path, which is what a LAN can carry. RFC vectors and the TLS corpus
+  tests pass unchanged.
+
+- **`nurlpkg install` closes by naming what landed.** A tool install ends
+  with `<name> <version> installed → <path>` (after the postinstall hint,
+  so it is genuinely the last line); a project's dependency install ends
+  with `<name> <version>: dependencies installed` — instead of a bare
+  "done." either way.
+
 - **`affine_mix` is gone; the suite is back to fifteen rows.** It was the
   closest pair in the corpus to `lcg` — both 20M-iteration serial xorshift
   mixing chains — and `chaincheck.sh` recorded the giveaway: the two rows
@@ -67,6 +111,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with the query count, as expected.
 
 ### Fixed
+
+- **Windows: `runtime.mingw.o` could not link `std/net` or `ext/http`.**
+  `clock_gettime` / `nanosleep` / `readlink` and ten friends lived in the
+  MSVC-only compat tier on the theory that mingw-w64 ships them — its
+  headers do, but the functions live in libwinpthread (or nowhere), and
+  the bundled zig links neither, so thirteen symbols came up undefined.
+  Field-reported on v0.27.0 from a machine with no system LLVM — the
+  exact path CI's runners, which all have LLVM, never walked. The compat
+  code is now split into a shared `_WIN32` tier (what neither ABI
+  provides) and an MSVC-only tier (what mingw genuinely has), verified
+  by cross-linking the wide stdlib surface with
+  `zig cc -target x86_64-windows-gnu`, and the Windows smoke test now
+  imports that surface on both compiler paths instead of `core/io` alone.
+
+- **Windows: every registry request failed before curl was even spawned,
+  and nurlpkg reported it as "package not found".** The HTTP shim staged
+  request/response bodies under `$TMPDIR`-or-`/tmp`; Windows spells its
+  temp dir `TEMP` (or `TMP`) and has no `/tmp`, so the tempfile creation
+  died first on machines without a stray `C:\tmp` — zero network calls,
+  masked as a missing package. The temp dir now resolves
+  `TMPDIR → TEMP → TMP → /tmp`, and `pkg_fetch_index` reports a transport
+  failure as a transport failure, with the URL and a hint; only a genuine
+  404 stays silent.
 
 - **`nurlpkg test` and `nurlpkg bench` only worked inside a toolchain
   checkout.** Both resolved their build driver to a bare `./nurl.sh`, a path
@@ -9413,7 +9480,8 @@ releases are measured.
   compile-server (`api/`), browser playground (`nurlweb/`).
 * Dual license: MIT (LICENSE-MIT) or Apache-2.0 (LICENSE-APACHE).
 
-[Unreleased]: https://github.com/nurl-lang/nurl/compare/v0.27.0...HEAD
+[Unreleased]: https://github.com/nurl-lang/nurl/compare/v0.28.0...HEAD
+[0.28.0]: https://github.com/nurl-lang/nurl/compare/v0.27.0...v0.28.0
 [0.27.0]: https://github.com/nurl-lang/nurl/compare/v0.26.0...v0.27.0
 [0.26.0]: https://github.com/nurl-lang/nurl/compare/v0.25.1...v0.26.0
 [0.25.1]: https://github.com/nurl-lang/nurl/compare/v0.25.0...v0.25.1
