@@ -10,6 +10,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The runtime-builtin surface is discoverable** (`stdlib/core/builtins.nu`).
+  Field report: `nurl_api query='float string convert'` returned zero stdlib
+  hits even though `nurl_str_float` exists — it is a C-runtime builtin the
+  compiler pre-registers, not a stdlib declaration, so no indexed surface
+  mentioned it. The whole pre-registered surface (114 functions: printing,
+  stdin, conversions, byte scanning, files, process/args/env, output capture,
+  allocators, raw HTTP/subprocess/TCP-TLS handles, panic/recover, the libc
+  pass-throughs) now lives in a documented module that nurldoc renders,
+  `nurl_api` indexes, and `nurl_grep` / `nurl_read_stdlib` see. Hand-written
+  prose, machine-checked list: `tools/check_builtins_doc.sh` gates it against
+  the compiler preamble in CI, both directions.
+
+- **FFI-redeclaring a runtime builtin is now harmless.** `& `c` @
+  nurl_str_float f x → s` used to make LLVM reject the whole module with
+  "invalid redefinition of function", because the compiler re-emitted a
+  `declare` its own preamble already carried. The preamble now marks each
+  symbol it declares with the same dedup key user FFI declarations use, so
+  the duplicate is skipped — which is also what lets `core/builtins.nu` be
+  imported at all.
+
 - **Extensionless import paths.** The grammar's own import examples write
   `$ `stdlib/core/string`` — extensionless — while the compiler required
   `.nu` and rejected the documented spelling with a bare

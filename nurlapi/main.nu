@@ -5047,7 +5047,7 @@ s combined_stdout s combined_stderr → v {
     ( __mcp_schema_changelog ) ) )
 
     ( json_arr_push arr ( __mcp_tool_desc `nurl_api`
-    `A stdlib module's API surface, a published package's API surface, or a search across all stdlib modules — strongly prefer this over nurl_read_stdlib (whole modules waste context; ext/csv.nu is 63 KB, its API surface 11 KB, one matching declaration ~0.3 KB). module='ext/csv.nu' renders one stdlib module's signatures + doc comments + full type definitions, no function bodies. package='nn' renders a registry package's API the same way (streamed from its tarball) — the step after a registry hit to see the functions/types it exposes. query='csv quote' finds every stdlib declaration whose signature/doc/module-path contains ALL terms (0 hits widen to examples + registry).`
+    `A stdlib module's API surface, a published package's API surface, or a search across all stdlib modules — strongly prefer this over nurl_read_stdlib (whole modules waste context; ext/csv.nu is 63 KB, its API surface 11 KB, one matching declaration ~0.3 KB). module='ext/csv.nu' renders one stdlib module's signatures + doc comments + full type definitions, no function bodies. package='nn' renders a registry package's API the same way (streamed from its tarball) — the step after a registry hit to see the functions/types it exposes. query='csv quote' finds every stdlib declaration whose signature/doc/module-path contains ALL terms (0 hits widen to examples + registry). The import-free C-runtime builtins (nurl_println, nurl_str_float, …) are indexed too, as core/builtins.nu.`
     ( __mcp_schema_api ) ) )
 
     ( json_arr_push arr ( __mcp_tool_desc `nurl_grep`

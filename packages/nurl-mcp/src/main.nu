@@ -59,7 +59,7 @@ $ `deps/wasmbuilder/src/build.nu`
 // to bump (previously the banners drifted to a stale 0.2.0 while the
 // handshake reported 0.4.0).
 
-@ nm_version → s { ^ `0.7.1` }
+@ nm_version → s { ^ `0.7.3` }
 
 // Log a startup banner "nurl-mcp <version> <suffix>" through mcp_log,
 // building the line from the single-source version so the banners can
@@ -997,7 +997,7 @@ version = "0.0.0"
     `Read one module from the installed standard library by relative path.`
     ( nm_schema_name ) ) )
     ( vec_push [Json] tools ( mcp_tool_descriptor `nurl_api`
-    `A stdlib module's API surface, or a search across all of them — strongly prefer this over nurl_read_stdlib (whole modules waste context; ext/csv.nu is 63 KB, its API surface 11 KB, one matching declaration ~0.3 KB). module='ext/csv.nu' renders signatures + doc comments + type definitions; query='csv quote' finds matching declarations. Zero hits widen to the package registry; an exact package-name term is footnoted regardless.`
+    `A stdlib module's API surface, or a search across all of them — strongly prefer this over nurl_read_stdlib (whole modules waste context; ext/csv.nu is 63 KB, its API surface 11 KB, one matching declaration ~0.3 KB). module='ext/csv.nu' renders signatures + doc comments + type definitions; query='csv quote' finds matching declarations. The import-free C-runtime builtins (nurl_println, nurl_str_float, …) are indexed too, as core/builtins.nu. Zero hits widen to the package registry; an exact package-name term is footnoted regardless.`
     ( nm_schema_api ) ) )
     ( vec_push [Json] tools ( mcp_tool_descriptor `nurl_grep`
     `Case-insensitive search across the installed stdlib (path:line: text; word-boundary matches ranked first, in-word substring hits in a labeled tail) and the package registry (name + description) — "is there a package for X" works from any MCP-only editor. word=true for short acronyms.`

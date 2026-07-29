@@ -102,6 +102,14 @@ jobs:
         # globally unique.
         run: ./tools/check_stdlib_symbols.sh
 
+      - name: runtime-builtins doc module in sync with the compiler preamble
+        # stdlib/core/builtins.nu is the hand-written, nurl_api-indexed
+        # documentation of the pre-registered C-runtime surface
+        # (nurl_str_float, nurl_println, …). Its authoritative list is
+        # the __emit_rt_decl preamble in compiler/nurlc.nu; assert the
+        # two agree in both directions so discovery never lies.
+        run: ./tools/check_builtins_doc.sh
+
       - name: served installers match the canonical ones
         # nurlweb/public/install.{sh,ps1} are copies of tools/get-nurl.*
         # made by a MANUAL npm script, and they are what nurl-lang.org
