@@ -10682,6 +10682,20 @@
 
 // ── Statement ──────────────────────────────────────────────────────
 
+// True when a statement with leading token `tt` whose generation left
+// `lt` in last_type is a dead value expression: not a declaration /
+// assignment / loop / defer / call / conditional / match / literal,
+// and the produced type is non-void.
+@ __stmt_is_bare_value i tt s lt → b {
+    ? | | | == tt TT_COLON == tt TT_EQ == tt TT_TILDE == tt TT_SEMICOL
+    { ^ F } {}
+    ? | | == tt TT_LPAREN == tt TT_QUEST == tt TT_QUESTQUEST
+    { ^ F } {}
+    ? | | == tt TT_INT == tt TT_FLOAT == tt TT_STR
+    { ^ F } {}
+    ^ ! ( seq lt `void` )
+}
+
 @ gen_stmt i lex i syms i cg → s {
     // DWARF Phase 4: snapshot the source line/col of this statement's
     // first token and seed a fresh DILocation. emit_dbg_eol attaches
@@ -10783,20 +10797,6 @@
     // of blaming the innocent neighbour.
     = g_stmt_bare_value ? ( __stmt_is_bare_value tt ( nurl_get_last_type ) ) bck_line 0
     gs_rv
-}
-
-// True when a statement with leading token `tt` whose generation left
-// `lt` in last_type is a dead value expression: not a declaration /
-// assignment / loop / defer / call / conditional / match / literal,
-// and the produced type is non-void.
-@ __stmt_is_bare_value i tt s lt → b {
-    ? | | | == tt TT_COLON == tt TT_EQ == tt TT_TILDE == tt TT_SEMICOL
-    { ^ F } {}
-    ? | | == tt TT_LPAREN == tt TT_QUEST == tt TT_QUESTQUEST
-    { ^ F } {}
-    ? | | == tt TT_INT == tt TT_FLOAT == tt TT_STR
-    { ^ F } {}
-    ^ ! ( seq lt `void` )
 }
 
 // Soft check for the same-line shadow pattern: a `:` binding declares
