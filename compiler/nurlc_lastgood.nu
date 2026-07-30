@@ -3792,6 +3792,33 @@
     ^ # i t
 }
 
+// Release a symbol table: every entry's strdup'd name and value, the
+// four parallel arrays, the bucket array, and the struct. The global
+// tables' handles live in `: ~ i` globals as integer casts, which
+// LSan's reachability scan cannot see through — without an explicit
+// exit-time free every table counts as leaked wholesale.
+@ nurl_sym_free i h → v {
+    ? == h 0 { ^ } {}
+    : s t # s h
+    : i count ( nurl_peek t 0 )
+    : *i names # *i # s ( nurl_peek t 3 )
+    : *i types # *i # s ( nurl_peek t 4 )
+    : ~ i k 0
+    ~ < k count {
+        : i np . names k
+        ? != 0 np { ( free # s np ) } {}
+        : i tp . types k
+        ? != 0 tp { ( free # s tp ) } {}
+        = k + k 1
+    }
+    ( free # s ( nurl_peek t 3 ) )
+    ( free # s ( nurl_peek t 4 ) )
+    ( free # s ( nurl_peek t 5 ) )
+    ( free # s ( nurl_peek t 7 ) )
+    ( free # s ( nurl_peek t 8 ) )
+    ( nurl_free t )
+}
+
 @ nurl_sym_def i h s name s type → v {
     : s t # s h
     : i count ( nurl_peek t 0 )
@@ -20590,4 +20617,45 @@
         ( nurl_exit 1 ) }
     {}
     ( nurl_lex_free lex )
+    // Exit-time release of the global symbol tables. Their handles
+    // live in `: ~ i` globals as integer casts, which a leak scanner's
+    // reachability pass cannot see through — without these frees every
+    // table (and every strdup'd entry in it) reports as leaked, hiding
+    // real leaks in the noise. Order is unconstrained: tables never
+    // point into one another (entries are strdup'd copies).
+    ( nurl_sym_free syms )
+    ( nurl_sym_free g_str_syms )
+    ( nurl_sym_free g_generic_syms )
+    ( nurl_sym_free g_generic_struct_syms )
+    ( nurl_sym_free g_struct_inst_syms )
+    ( nurl_sym_free g_impl_ret_syms )
+    ( nurl_sym_free g_impl_name_syms )
+    ( nurl_sym_free g_impl_trait_syms )
+    ( nurl_sym_free g_impl_pos_syms )
+    ( nurl_sym_free g_fn_pos_syms )
+    ( nurl_sym_free g_priv_file_ids )
+    ( nurl_sym_free g_priv_owner_ids )
+    ( nurl_sym_free g_priv_owner_files )
+    ( nurl_sym_free g_priv_warned )
+    ( nurl_sym_free g_trait_syms )
+    ( nurl_sym_free g_res_type_syms )
+    ( nurl_sym_free g_closure_defs )
+    ( nurl_sym_free g_closure_types )
+    ( nurl_sym_free g_fn_inout )
+    ( nurl_sym_free g_fn_sink )
+    ( nurl_sym_free g_fn_escapes )
+    ( nurl_sym_free g_fn_invoke_only )
+    ( nurl_sym_free g_fn_ret_param )
+    ( nurl_sym_free g_pending_escape )
+    ( nurl_sym_free g_bck )
+    ( nurl_sym_free g_ptrtab )
+    ( nurl_sym_free g_vis_syms )
+    // Conditionally-allocated tables (--lint / --g): nurl_sym_free is a
+    // no-op on a 0 handle.
+    ( nurl_sym_free g_lint_syms )
+    ( nurl_sym_free g_lint_reads )
+    ( nurl_sym_free g_lint_used )
+    ( nurl_sym_free g_dbg_file_syms )
+    ( nurl_sym_free g_dbg_type_syms )
+    ( nurl_sym_free g_dbg_blob_syms )
 }
