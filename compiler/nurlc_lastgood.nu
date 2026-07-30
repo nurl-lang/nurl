@@ -2079,7 +2079,7 @@
     : s bv ( nurl_lex_val lex )
     ( nurl_lex_advance lex )
     ( nurl_set_last_type `i1` )
-    ? ( seq bv `T` ) `1` `0`
+    ? ( seq bv `T` ) ( nurl_str_cat `1` `` ) ( nurl_str_cat `0` `` )
 }
 
 @ gen_float_lit i lex → s {
@@ -2096,13 +2096,13 @@
     ( nurl_lex_advance lex )
     : s lty ( parse_type lex )  // parse_type already returns the LLVM type
     // Known-size base types: return string constant directly
-    ? ( seq lty `void` ) { ( nurl_set_last_type `i64` ) ^ `0` } {}
-    ? ( seq lty `i64` ) { ( nurl_set_last_type `i64` ) ^ `8` } {}
-    ? ( seq lty `double` ) { ( nurl_set_last_type `i64` ) ^ `8` } {}
-    ? ( seq lty `i1` ) { ( nurl_set_last_type `i64` ) ^ `1` } {}
+    ? ( seq lty `void` ) { ( nurl_set_last_type `i64` ) ^ ( nurl_str_cat `0` `` ) } {}
+    ? ( seq lty `i64` ) { ( nurl_set_last_type `i64` ) ^ ( nurl_str_cat `8` `` ) } {}
+    ? ( seq lty `double` ) { ( nurl_set_last_type `i64` ) ^ ( nurl_str_cat `8` `` ) } {}
+    ? ( seq lty `i1` ) { ( nurl_set_last_type `i64` ) ^ ( nurl_str_cat `1` `` ) } {}
     // Any pointer type: last char is '*' (ASCII 42)
     ? == ( nurl_str_get lty - ( nurl_str_len lty ) 1 ) 42
-    { ( nurl_set_last_type `i64` ) ^ `8` }
+    { ( nurl_set_last_type `i64` ) ^ ( nurl_str_cat `8` `` ) }
     {}
     // Struct / named type: getelementptr null trick
     : s r0 ( nurl_cg_reg cg )
@@ -2186,7 +2186,7 @@
             ( gen_ret_term lex syms cg `void` `` `` `` `` `` `` )
             ( nurl_set_last_type `void` )
             = g_did_ret 1
-            ^ `` }
+            ^ ( nurl_str_cat `` `` ) }
         { ( die lex ( nurl_str_cat ( nurl_str_cat
             `bare '^' (return) but this function returns '` ( llvm_to_nurl __ret_frt ) )
             `' — a '^' here must be followed by a return value of that type` ) ) }
@@ -3067,7 +3067,7 @@
             {}
             : s msg ( nurl_str_cat `operator & requires matching types — got ` ( llvm_to_nurl lt ) )
             ( die lex ( nurl_str_cat msg ` and unknown` ) )
-            ^ `error`
+            ^ ( nurl_str_cat `error` `` )
         }
     }
 }
@@ -3086,7 +3086,7 @@
         { ^ ( gen_bitwise_binary lv lt lex syms cg TT_PIPE ) }
         { : s msg ( nurl_str_cat `operator | requires matching types — got ` ( llvm_to_nurl lt ) )
             ( die lex ( nurl_str_cat msg ` and unknown` ) )
-            ^ `error`
+            ^ ( nurl_str_cat `error` `` )
         }
     }
 }
@@ -5267,7 +5267,7 @@
     ( nurl_print ( nurl_llty pt ) ) ( nurl_print ` ` ) ( nurl_print pv )
     ( emit_dbg_eol )
     ( nurl_set_last_type `void` )
-    ^ `void`
+    ^ ( nurl_str_cat `void` `` )
 }
 
 // Does the call's argument list (lexer at the first argument) use any
@@ -5393,7 +5393,7 @@
         ( nurl_print `(` ) ( nurl_print argstr ) ( nurl_print `)` ) ( emit_dbg_eol )
         ( mem_drop_arg_temps owned_temps )
         ( nurl_set_last_type `void` )
-        ^ `undef` }
+        ^ ( nurl_str_cat `undef` `` ) }
     {}
     : s res ( nurl_cg_reg cg )
     ( nurl_print `  ` ) ( nurl_print res ) ( nurl_print ` = call ` ) ( nurl_print ( nurl_llty rlt ) )
@@ -6278,8 +6278,11 @@
         ? != first 0
         { = argstr ( nurl_str_cat3 ( nurl_llty at ) ` ` av )
             = first 0
-            = first_arg_type at
-            = first_arg_val av
+            // Copies, not aliases: at/av are tracked loop-locals whose
+            // slots are freed on the next argument's re-entry, while
+            // first_arg_* are read after the loop.
+            = first_arg_type ( nurl_str_cat at `` )
+            = first_arg_val ( nurl_str_cat av `` )
         }
         { = argstr ( nurl_str_cat argstr ( nurl_str_cat4 `, ` ( nurl_llty at ) ` ` av ) )
             = rest_argstr ? == 0 ( nurl_str_len rest_argstr )
@@ -6452,7 +6455,7 @@
             { ( nurl_print `  call void ` ) ( nurl_print __fnr ) ( nurl_print `(` ) ( nurl_print __cargs ) ( nurl_print `)` ) ( emit_dbg_eol )
                 ( mem_drop_arg_temps owned_arg_temps ) ( mem_drop_arg_temps closure_envs_free )
                 ( nurl_set_last_type `void` )
-                ^ `undef` }
+                ^ ( nurl_str_cat `undef` `` ) }
             { : s __res ( nurl_cg_reg cg )
                 ( nurl_print `  ` ) ( nurl_print __res ) ( nurl_print ` = call ` ) ( nurl_print ( nurl_llty __ret ) ) ( nurl_print ` ` ) ( nurl_print __fnr ) ( nurl_print `(` ) ( nurl_print __cargs ) ( nurl_print `)` ) ( emit_dbg_eol )
                 ( mem_drop_arg_temps owned_arg_temps ) ( mem_drop_arg_temps closure_envs_free )
@@ -6491,7 +6494,7 @@
             ( nurl_print `(` ) ( nurl_print argstr ) ( nurl_print `)` ) ( emit_dbg_eol )
             ( mem_drop_arg_temps owned_arg_temps ) ( mem_drop_arg_temps closure_envs_free )
             ( nurl_set_last_type `void` )
-            ^ `undef`
+            ^ ( nurl_str_cat `undef` `` )
         }
         { : s res ( nurl_cg_reg cg )
             ( nurl_print `  ` ) ( nurl_print res )
@@ -6616,7 +6619,7 @@
                 ( nurl_print `(` ) ( nurl_print argstr ) ( nurl_print `)` ) ( emit_dbg_eol )
                 ( mem_drop_arg_temps owned_arg_temps ) ( mem_drop_arg_temps closure_envs_free )
                 ( nurl_set_last_type `void` )
-                `undef`
+                ( nurl_str_cat `undef` `` )
             }
             { : s res ( nurl_cg_reg cg )
                 ( nurl_print `  ` ) ( nurl_print res )
@@ -7211,7 +7214,7 @@
     ( gen_stmt sub syms cg )
     ( nurl_lex_free sub )
     ( nurl_set_last_type `void` )
-    ^ ``
+    ^ ( nurl_str_cat `` `` )
 }
 
 // emit_or_chain: lower the alternatives of an or-pattern `A | B | C →`.
@@ -8485,7 +8488,7 @@
         ^ final64
     } {}
     ( nurl_set_last_type `void` )
-    ^ `undef`
+    ^ ( nurl_str_cat `undef` `` )
 }
 
 // ── For-each ~ var slice { body } ─────────────────────────────────
@@ -8654,7 +8657,7 @@
     ( emit ( nurl_str_cat le `:` ) )
     ( nurl_sym_def syms `__cur_lbl__` le )
     ( nurl_set_last_type `void` )
-    `undef`
+    ( nurl_str_cat `undef` `` )
 }
 
 // ── Loop ~ cond { body } ──────────────────────────────────────────
@@ -8726,7 +8729,7 @@
         ( emit ( nurl_str_cat le `:` ) )
         ( nurl_sym_def syms `__cur_lbl__` le )
         ( nurl_set_last_type `void` )
-        ^ `undef`
+        ^ ( nurl_str_cat `undef` `` )
     }
     {
         // No block — a complement expression `~ cond` used as a
@@ -8779,7 +8782,7 @@
     ( nurl_sym_def syms `__cur_lbl__` lafter )
     = g_did_ret 0
     ( nurl_set_last_type `void` )
-    `undef`
+    ( nurl_str_cat `undef` `` )
 }
 
 // ── Block expression { stmts... } ─────────────────────────────────
@@ -8788,7 +8791,7 @@
     : i bck_line ( nurl_lex_line lex )
     ( nurl_lex_advance lex )
     ( bck_block_enter bck_line )
-    : ~ s last `undef`
+    : ~ s last ( nurl_str_cat `undef` `` )
     : ~ b any F
     ~ != ( nurl_lex_type lex ) TT_RBRACE {
         = last ( gen_stmt lex syms cg )
@@ -8850,7 +8853,7 @@
     // read-accumulator holds, i.e. the controlling `?`/`~`/`??`
     // condition that was evaluated just before this arm.
     ( bck_block_enter bck_line )
-    : ~ s last `undef`
+    : ~ s last ( nurl_str_cat `undef` `` )
     ~ != ( nurl_lex_type lex ) TT_RBRACE {
         = last ( gen_stmt lex syms cg )
         // A bare literal that is NOT the block's final expression (its
@@ -11279,7 +11282,7 @@
                 // later `=` of a reference into it compares depths
                 // correctly.
                 ( bck_esc_let syms name 0 )
-                ^ `undef`
+                ^ ( nurl_str_cat `undef` `` )
             }
             { : b rhs_is_slice_lit == ( nurl_lex_type lex ) TT_LBRACK
                 // Borrow checker (Phase 2): snapshot the RHS's first
@@ -11692,7 +11695,10 @@
         // RHS expression) and disagree with the stored register's actual
         // type (`%WsErr` post-coercion), producing a phi type mismatch.
         ( nurl_set_last_type vt )
-        ^ store_val
+        // A COPY: store_val may alias `val`, a tracked local this
+        // function's scope exit frees — returning the alias hands the
+        // caller freed memory once gen_* results carry ownership.
+        ^ ( nurl_str_cat store_val `` )
     }
     { ( die lex `expected name after =` ) }
 }
@@ -12410,7 +12416,7 @@
                             {  // f0 is neither pointer, i64, nor unknown —
                                 // produce a zero-initialised whole struct.
                                 ( nurl_set_last_type dt )
-                                ^ `zeroinitializer` }
+                                ^ ( nurl_str_cat `zeroinitializer` `` ) }
                         }
                     }
                     {  // Integer → anonymous aggregate (`{ … }` option /
@@ -12421,7 +12427,7 @@
                         // forbids an integer constant at aggregate type, so
                         // produce a zero-initialised aggregate.
                         ? & > ( int_width st ) 0 | == ( nurl_str_get dt 0 ) 123 == ( nurl_str_get dt 0 ) 91
-                        { ( nurl_set_last_type dt ) ^ `zeroinitializer` }
+                        { ( nurl_set_last_type dt ) ^ ( nurl_str_cat `zeroinitializer` `` ) }
                         {}
                         // Anonymous aggregate SOURCE (`{ … }` option /
                         // result / slice / tuple, or `[ … ]` array).
@@ -13942,7 +13948,7 @@
 
 @ gen_env_struct_type s struct_name s captured_vars i syms → s {
     ? == 0 ( count_words captured_vars )
-    { ^ `` }  // No captures
+    { ^ ( nurl_str_cat `` `` ) }  // No captures
     {}
 
     : ~ s ty `{ i64`  // field 0: refcount
@@ -13975,7 +13981,7 @@
 // to an i64 byte count and pass to nurl_malloc.
 @ gen_env_allocation s struct_name s captured_vars i syms i cg → s {
     ? == 0 ( count_words captured_vars )
-    { ^ `null` }
+    { ^ ( nurl_str_cat `null` `` ) }
     {}
 
     // Compute sizeof(struct_name) at IR-emission time via GEP-on-null.
@@ -14760,7 +14766,7 @@
         ? ( seq ret_type `void` )
         {
             // For void functions, just generate an empty body
-            ``
+            ( nurl_str_cat `` `` )
         }
         {
             // For non-void functions, return a constant value for now
@@ -14772,7 +14778,7 @@
     }
     {
         // Has captures - extract from environment and return first one
-        : ~ s code ``
+        : ~ s code ( nurl_str_cat `` `` )
 
         // Cast environment pointer to proper struct type
         : s typed_env ( nurl_cg_reg cg )
@@ -18529,6 +18535,55 @@
         ( nurl_sym_def syms `parse_type_paren__ret_owned` `str` )
         ( nurl_sym_def syms `parse_type_enum__ret_owned` `str` )
         ( nurl_sym_def syms `parse_type_dyn__ret_owned` `str` )
+        // The gen-* VALUE family: every member returns the IR value
+        // string of the expression it just emitted — a `%rN` register
+        // from nurl_cg_reg, a `@.str.N` GEP register, or a fresh copy
+        // of a literal spelling (every `^ `lit`` in the family was
+        // converted to a copy for exactly this reason: a tracked
+        // binding must never hold .rodata). Fresh on every path, but
+        // the family is MUTUALLY RECURSIVE — gen_expr dispatches to all
+        // of them and each recurses back — so the def-order inference
+        // can never prove a member and the mixed poison unowned the
+        // lot: gen_ident's returns alone leaked 17k register strings
+        // per self-compile.
+        ( nurl_sym_def syms `gen_expr__ret_owned` `str` )
+        ( nurl_sym_def syms `gen_operand__ret_owned` `str` )
+        ( nurl_sym_def syms `gen_ident__ret_owned` `str` )
+        ( nurl_sym_def syms `gen_call__ret_owned` `str` )
+        ( nurl_sym_def syms `gen_call_kwargs__ret_owned` `str` )
+        ( nurl_sym_def syms `gen_cond__ret_owned` `str` )
+        ( nurl_sym_def syms `gen_match__ret_owned` `str` )
+        ( nurl_sym_def syms `gen_str_lit__ret_owned` `str` )
+        ( nurl_sym_def syms `gen_str_lit_expr__ret_owned` `str` )
+        ( nurl_sym_def syms `gen_int_lit__ret_owned` `str` )
+        ( nurl_sym_def syms `gen_float_lit__ret_owned` `str` )
+        ( nurl_sym_def syms `gen_bool_lit__ret_owned` `str` )
+        ( nurl_sym_def syms `gen_sizeof__ret_owned` `str` )
+        ( nurl_sym_def syms `gen_ret__ret_owned` `str` )
+        ( nurl_sym_def syms `gen_unary_not__ret_owned` `str` )
+        ( nurl_sym_def syms `gen_cast__ret_owned` `str` )
+        ( nurl_sym_def syms `gen_member__ret_owned` `str` )
+        ( nurl_sym_def syms `gen_block_expr__ret_owned` `str` )
+        ( nurl_sym_def syms `gen_agg_lit__ret_owned` `str` )
+        ( nurl_sym_def syms `gen_slice_literal__ret_owned` `str` )
+        ( nurl_sym_def syms `gen_backslash_expr__ret_owned` `str` )
+        ( nurl_sym_def syms `gen_oror__ret_owned` `str` )
+        ( nurl_sym_def syms `gen_logical_or_bitwise_and__ret_owned` `str` )
+        ( nurl_sym_def syms `gen_logical_or_bitwise_or__ret_owned` `str` )
+        ( nurl_sym_def syms `gen_binary__ret_owned` `str` )
+        ( nurl_sym_def syms `gen_dyn_construct__ret_owned` `str` )
+        ( nurl_sym_def syms `gen_inout_field_addr__ret_owned` `str` )
+        ( nurl_sym_def syms `gen_closure_expr__ret_owned` `str` )
+        ( nurl_sym_def syms `gen_stmt__ret_owned` `str` )
+        ( nurl_sym_def syms `gen_block_ret__ret_owned` `str` )
+        ( nurl_sym_def syms `gen_block_stmts__ret_owned` `str` )
+        ( nurl_sym_def syms `gen_let_or_struct__ret_owned` `str` )
+        ( nurl_sym_def syms `gen_assign__ret_owned` `str` )
+        ( nurl_sym_def syms `gen_field_store__ret_owned` `str` )
+        ( nurl_sym_def syms `gen_loop__ret_owned` `str` )
+        ( nurl_sym_def syms `gen_foreach__ret_owned` `str` )
+        ( nurl_sym_def syms `load_var__ret_owned` `str` )
+        ( nurl_sym_def syms `gen_defer__ret_owned` `str` )
     }
     {}
     ( nurl_sym_def syms `malloc` `i8*` )
