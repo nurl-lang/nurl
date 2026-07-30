@@ -2144,6 +2144,7 @@
         { ( mem_drop_owned_strings syms cg skip_str_ptr )
             ( mem_drop_owned_struct_fields syms cg skip_struct_ptr )
             ( mem_drop_user_drops syms cg skip_user_ptr )
+            ? == g_bck_closure_depth 0 { ( mem_drain_deferred cg ) } {}
         }
         {}
         ( mem_own_closure_remove syms ret_ident )
@@ -2231,6 +2232,12 @@
     // exact for this shape and never stale (any other expression shape
     // skips the check entirely).
     : b ret_is_direct_call == ( nurl_lex_type lex ) TT_LPAREN
+    // `?` / `??` value joins publish `__last_call_ret_owned__`
+    // deterministically (every-live-arm rule, since the copy-out-of-
+    // arms protocol) — so a `^ ? c ( f ) ( g )` return can prove
+    // ownership through the same marker a direct call does.
+    : b ret_is_det_join | == ( nurl_lex_type lex ) TT_QUEST
+    == ( nurl_lex_type lex ) TT_QUESTQUEST
     // A4c: reset the agg / call struct-ownership side-channels so the
     // return-value analysis below observes only what THIS expression
     // sets (a stale `@ T {…}` from an earlier statement must not leak
@@ -2402,7 +2409,7 @@
         // otherwise `: s x ( g )` off a `@ g → s { ^ ( nurl_str_cat … ) }`
         // composes helpers into a leak. `__last_call_ret_owned__` was
         // (re)set by the outermost call's emit site just above.
-        ? & & ret_is_direct_call ( seq ( nurl_llty lt ) `i8*` )
+        ? & & | ret_is_direct_call ret_is_det_join ( seq ( nurl_llty lt ) `i8*` )
         ( seq ( nurl_sym_get syms `__last_call_ret_owned__` ) `str` )
         { ( nurl_sym_def syms `__fn_ret_str_owned__` `1` ) }
         {}
@@ -2412,7 +2419,7 @@
         // in gen_fn_decl_concrete.
         ? & & ( seq ( nurl_llty lt ) `i8*` )
         == 0 ( nurl_str_len skip_str_ptr )
-        ! & ret_is_direct_call
+        ! & | ret_is_direct_call ret_is_det_join
         ( seq ( nurl_sym_get syms `__last_call_ret_owned__` ) `str` )
         { ( nurl_sym_def syms `__fn_ret_str_mixed__` `1` ) }
         {}
@@ -2710,7 +2717,7 @@
         ? & ( seq name `v` ) == 0 ( nurl_sym_len syms name )
         { ( nurl_sym_def syms `__last_ident_name__` name )
             ( nurl_set_last_type `void` )
-            ^ `void` }
+            ^ ( nurl_str_cat `void` `` ) }
         {}
         : s lt ( nurl_sym_get syms name )
         ( nurl_set_last_type ? == 0 ( nurl_str_len lt ) `i64` lt )
@@ -3260,6 +3267,48 @@
     ( str_contains_word
     `nurl_sym_def nurl_sym_set nurl_sym_append nurl_sym_get nurl_sym_get2 nurl_sym_len nurl_sym_len2 nurl_set_last_type nurl_print nurl_println nurl_eprintln puts nurl_str_len nurl_str_to_int nurl_str_to_float nurl_str_find nurl_str_starts nurl_str_ends seq str_contains_word str_word_index count_words nurl_str_cat nurl_str_cat3 nurl_str_cat4 nurl_str_slice nurl_str_int nurl_read_file nurl_lex_new nurl_file_exists emit`
     fname )
+}
+
+// Deferred arm-local drops. A `?`/`??` arm whose VALUE is a pointer
+// cannot drop its local owned strings at the arm's fall-through
+// (mem_arm_drop_safe — the value may reference one of them), and the
+// arm's symtab pop then forgets their registrations: historically a
+// deliberate leak. Instead their alloca slot names are parked on this
+// per-function list and freed in the epilogue — by then any phi
+// consumer inside the function is done with the buffer, an ident arm
+// value is a COPY (the arm-dup protocol), and a tracked binding
+// cannot have been sunk into a container (the sink diagnostic rejects
+// that at compile time). Slots on never-taken paths read the entry-
+// block null-init (see emit_hoisted) and free(NULL) is a no-op.
+// The list rides a symbol-table key, not a global string, so the
+// bookkeeping itself is reclaimed at exit.
+@ mem_defer_new_strings i syms s old_list → v {
+    : ~ s rest ( nurl_sym_get syms `__owned_strings__` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s ptr ( str_first_word rest )
+        = rest ( str_skip_word rest )
+        ? ( str_contains_word old_list ptr ) {} {
+            : s cur ( nurl_sym_get g_fn_escapes `__deferred_drops__` )
+            ? ( str_contains_word cur ptr ) {} {
+                ( nurl_sym_set g_fn_escapes `__deferred_drops__`
+                ? == 0 ( nurl_str_len cur ) ptr ( nurl_str_cat3 cur ` ` ptr ) )
+            }
+        }
+    }
+}
+
+// Free every parked slot's current value (see mem_defer_new_strings).
+// Emitted wherever the function-exit owned-string drops run.
+@ mem_drain_deferred i cg → v {
+    : ~ s rest ( nurl_sym_get g_fn_escapes `__deferred_drops__` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s ptr ( str_first_word rest )
+        = rest ( str_skip_word rest )
+        : s v ( nurl_cg_reg cg )
+        ( nurl_print `  ` ) ( nurl_print v )
+        ( nurl_print ` = load i8*, i8** ` ) ( nurl_print ptr ) ( nurl_print `\n` )
+        ( nurl_print `  call void @nurl_free(i8* ` ) ( nurl_print v ) ( nurl_print `)` ) ( emit_dbg_eol )
+    }
 }
 
 // Emit `call void @nurl_free(i8* %r)` for every register in `temps`
@@ -6657,7 +6706,9 @@
         { ( mem_drop_new_strings syms cg old_strs_t )
             ( mem_drop_new_struct_fields syms cg old_structs_t )
             ( mem_drop_new_user_drops syms cg old_user_t )
-            ? != 0 g_fn_slice_decls { ( mem_drop_new_slices syms cg old_slices_t ) } {} } {}
+            ? != 0 g_fn_slice_decls { ( mem_drop_new_slices syms cg old_slices_t ) } {} }
+        { ? & != 0 g_auto_drop_strings == g_bck_closure_depth 0
+            { ( mem_defer_new_strings syms old_strs_t ) } {} }
         ( mem_drop_new_closure_envs syms cg old_closure_t )
         ( nurl_print `  br label %` ) ( nurl_print lend ) ( emit_dbg_eol )
     } {}
@@ -6726,7 +6777,9 @@
         { ( mem_drop_new_strings syms cg old_strs_e )
             ( mem_drop_new_struct_fields syms cg old_structs_e )
             ( mem_drop_new_user_drops syms cg old_user_e )
-            ? != 0 g_fn_slice_decls { ( mem_drop_new_slices syms cg old_slices_e ) } {} } {}
+            ? != 0 g_fn_slice_decls { ( mem_drop_new_slices syms cg old_slices_e ) } {} }
+        { ? & != 0 g_auto_drop_strings == g_bck_closure_depth 0
+            { ( mem_defer_new_strings syms old_strs_e ) } {} }
         ( mem_drop_new_closure_envs syms cg old_closure_e )
         ( nurl_print `  br label %` ) ( nurl_print lend ) ( emit_dbg_eol )
     } {}
@@ -8147,7 +8200,10 @@
             { ( mem_drop_new_strings syms cg old_strs_m )
                 ( mem_drop_new_struct_fields syms cg old_structs_m )
                 ( mem_drop_new_user_drops syms cg old_user_m )
-                ? != 0 g_fn_slice_decls { ( mem_drop_new_slices syms cg old_slices_m ) } {} } {}
+                ? != 0 g_fn_slice_decls { ( mem_drop_new_slices syms cg old_slices_m ) } {} }
+            { ? & & != 0 g_auto_drop_strings == arm_did_ret 0
+                == g_bck_closure_depth 0
+                { ( mem_defer_new_strings syms old_strs_m ) } {} }
             ? == arm_did_ret 0
             { ( mem_drop_new_closure_envs syms cg old_closure_m ) } {}
             ? != 0 g_auto_drop_strings { ( nurl_sym_pop syms ) } {}
@@ -9251,6 +9307,11 @@
                 ( nurl_print `  ` ) ( nurl_print v )
                 ( nurl_print ` = load i8*, i8** ` ) ( nurl_print ptr ) ( nurl_print `\n` )
                 ( nurl_print `  call void @nurl_free(i8* ` ) ( nurl_print v ) ( nurl_print `)` ) ( emit_dbg_eol )
+                // Null the slot after freeing: a loop-body re-entry
+                // re-executes the binding's registration-time free-old
+                // (gen_let), which must see NULL, not this dangling
+                // pointer.
+                ( nurl_print `  store i8* null, i8** ` ) ( nurl_print ptr ) ( emit_dbg_eol )
             }
         }
     }
@@ -11015,6 +11076,19 @@
         : s ptr ( nurl_cg_reg cg )
         ( nurl_print `  ` ) ( nurl_print ptr )
         ( nurl_print ` = alloca ` ) ( nurl_print ( nurl_llty vt ) ) ( nurl_print `\n` )
+        // Loop re-entry: a to-be-registered binding's hoisted slot may
+        // still hold the PREVIOUS iteration's buffer — same-scope drops
+        // null the slot after freeing, but an arm-DEFERRED slot cannot
+        // be released until function exit, so without this free every
+        // iteration's value but the last leaks. First entry reads the
+        // entry-block null-init; free(NULL) is a no-op.
+        ? & & != 0 g_auto_drop_strings ( seq ( nurl_llty vt ) `i8*` )
+        | ( seq ( nurl_sym_get syms `__last_call_ret_owned__` ) `str` ) lit_track
+        { : s __ov ( nurl_cg_reg cg )
+            ( nurl_print `  ` ) ( nurl_print __ov )
+            ( nurl_print ` = load i8*, i8** ` ) ( nurl_print ptr ) ( nurl_print `\n` )
+            ( nurl_print `  call void @nurl_free(i8* ` ) ( nurl_print __ov ) ( nurl_print `)` ) ( emit_dbg_eol )
+        } {}
         ( nurl_print `  store ` ) ( nurl_print ( nurl_llty vt ) ) ( nurl_print ` ` )
         ( nurl_print val ) ( nurl_print `, ` ) ( nurl_print ( nurl_llty vt ) )
         ( nurl_print `* ` ) ( nurl_print ptr ) ( nurl_print `\n` )
@@ -11217,6 +11291,15 @@
                 : s ptr ( nurl_cg_reg cg )
                 ( nurl_print `  ` ) ( nurl_print ptr )
                 ( nurl_print ` = alloca ` ) ( nurl_print ( nurl_llty ptype ) ) ( nurl_print `\n` )
+                // Loop re-entry free of the previous iteration's value —
+                // see the type-inference path's twin above.
+                ? & & != 0 g_auto_drop_strings ( seq ( nurl_llty ptype ) `i8*` )
+                | ( seq ( nurl_sym_get syms `__last_call_ret_owned__` ) `str` ) lit_track
+                { : s __ov ( nurl_cg_reg cg )
+                    ( nurl_print `  ` ) ( nurl_print __ov )
+                    ( nurl_print ` = load i8*, i8** ` ) ( nurl_print ptr ) ( nurl_print `\n` )
+                    ( nurl_print `  call void @nurl_free(i8* ` ) ( nurl_print __ov ) ( nurl_print `)` ) ( emit_dbg_eol )
+                } {}
                 ( nurl_print `  store ` ) ( nurl_print ( nurl_llty ptype ) ) ( nurl_print ` ` )
                 ( nurl_print store_val ) ( nurl_print `, ` ) ( nurl_print ( nurl_llty ptype ) )
                 ( nurl_print `* ` ) ( nurl_print ptr ) ( nurl_print `\n` )
@@ -15806,7 +15889,19 @@
         : u sv . fp le
         = . fp le # u 0
         : s line # s + # i fp p
-        ? ( __ha_is_alloca line ) { ( nurl_print line ) ( nurl_print `\n` ) } {}
+        ? ( __ha_is_alloca line ) { ( nurl_print line ) ( nurl_print `\n` )
+            // Null-init every i8* slot at entry. The deferred arm-local
+            // drop (mem_defer_new_strings) frees these slots at function
+            // exit on EVERY path — including paths where the arm that
+            // stores the slot never ran, where the load would otherwise
+            // read stack garbage. nurl_free(NULL) is a no-op.
+            : i __zf ( nurl_str_find line ` = alloca i8*` )
+            ? & >= __zf 0 == ( nurl_str_get line + __zf 13 ) 0 {
+                : s __zr ( nurl_str_slice line 2 - __zf 2 )
+                ( nurl_print `  store i8* null, i8** ` )
+                ( nurl_print __zr ) ( nurl_print `\n` )
+            } {}
+        } {}
         = . fp le sv
         = p + le 1
     }
@@ -15896,6 +15991,9 @@
 
 @ gen_fn_decl_concrete s fname i lex i syms i cg → v {
     ( nurl_cg_reset cg )
+    // Fresh per-function deferred arm-local drop list (see
+    // mem_defer_new_strings) — slot names are function-local SSA.
+    ( nurl_sym_set g_fn_escapes `__deferred_drops__` `` )
     // Borrow checker: start a fresh per-function statement list.
     ( bck_fn_begin )
     ( nurl_sym_def g_ptrtab `__ptr_src__` `` )
@@ -16215,6 +16313,7 @@
                 { ( mem_drop_owned_strings syms cg skip_str_ptr )
                     ( mem_drop_owned_struct_fields syms cg skip_struct_ptr )
                     ( mem_drop_user_drops syms cg skip_user_ptr )
+                    ? == g_bck_closure_depth 0 { ( mem_drain_deferred cg ) } {}
                 }
                 {}
                 ( mem_drop_closure_envs syms cg )
@@ -16234,6 +16333,7 @@
                 { ( mem_drop_owned_strings syms cg skip_str_ptr )
                     ( mem_drop_owned_struct_fields syms cg skip_struct_ptr )
                     ( mem_drop_user_drops syms cg skip_user_ptr )
+                    ? == g_bck_closure_depth 0 { ( mem_drain_deferred cg ) } {}
                 }
                 {}
                 // Return-escape: an implicitly-returned closure binding
@@ -18337,6 +18437,25 @@
         ( nurl_sym_def syms `nurl_lex_peek_val__ret_owned` `str` )
         ( nurl_sym_def syms `nurl_llty__ret_owned` `str` )
         ( nurl_sym_def syms `ty_to_unsigned__ret_owned` `str` )
+        // Forward-called fresh-returning helpers. Return ownership is
+        // otherwise inferred when a BODY is compiled, so a caller that
+        // appears EARLIER in the file than the helper's definition saw
+        // no marker, treated the result as unowned, and the
+        // reassignment rules strdup'd a copy while the original leaked
+        // — one allocation per cursor step, tens of thousands per
+        // self-compile (`= rest ( str_skip_word rest )` and the
+        // seplist walks). Each is hand-verified fresh-on-every-path.
+        // bck_st_set / bck_join_state / bck_loop_carry_seed return a
+        // `# s ( malloc … )`-cast local, which the ident-return
+        // inference cannot prove either.
+        ( nurl_sym_def syms `str_first_word__ret_owned` `str` )
+        ( nurl_sym_def syms `str_skip_word__ret_owned` `str` )
+        ( nurl_sym_def syms `seplist_first__ret_owned` `str` )
+        ( nurl_sym_def syms `seplist_rest__ret_owned` `str` )
+        ( nurl_sym_def syms `__kw_trim__ret_owned` `str` )
+        ( nurl_sym_def syms `bck_st_set__ret_owned` `str` )
+        ( nurl_sym_def syms `bck_join_state__ret_owned` `str` )
+        ( nurl_sym_def syms `bck_loop_carry_seed__ret_owned` `str` )
     }
     {}
     ( nurl_sym_def syms `malloc` `i8*` )
