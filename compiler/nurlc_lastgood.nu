@@ -5639,7 +5639,7 @@
     }
     {}
     // Generic instantiation: ( fname [T1 T2...] args... )
-    : ~ s call_name fname
+    : ~ s call_name ( nurl_str_cat fname `` )
     : ~ s call_targs ``
     ? == ( nurl_lex_type lex ) TT_LBRACK
     { ( nurl_lex_advance lex )  // consume '['
@@ -5947,8 +5947,8 @@
                 `' while iterating over it — the '~' loop holds a borrow of the container; move the mutation out of the loop body` ) ) }
             {} }
         {}
-        : ~ s av ``
-        : ~ s at ``
+        : ~ s av ( nurl_str_cat `` `` )
+        : ~ s at ( nurl_str_cat `` `` )
         ? is_inout_arg
         { ? == bck_arg_tt TT_DOT
             {  // `inout` field target — `. obj field`.
@@ -6601,7 +6601,7 @@
         ( nurl_print `, ` ) ( nurl_print ( nurl_llty call_type ) ) ( nurl_print `* ` )
         ( nurl_print var_ptr ) ( nurl_print `\n` )
 
-        : ~ s final_result ``
+        : ~ s final_result ( nurl_str_cat `` `` )
         ? ( str_contains call_type `{` )
         {
             // Closure struct - extract function pointer and call with environment
@@ -6624,7 +6624,7 @@
     { ? is_function_pointer
         {
             // This is a function pointer parameter
-            : ~ s final_result ``
+            : ~ s final_result ( nurl_str_cat `` `` )
             ? ( str_contains call_type `{` )
             {  // Closure struct parameter
                 = final_result ( call_closure_function var_llvm_val call_type argstr cg )
@@ -6754,8 +6754,8 @@
     // free() calls for allocas that are only populated on the then-arm path,
     // producing invalid IR that crashes LLVM's register allocator under -O2.
     : ~ s old_strs_t ``
-    : ~ s old_structs_t ``
-    : ~ s old_user_t ``
+    : ~ s old_structs_t ( nurl_str_cat `` `` )
+    : ~ s old_user_t ( nurl_str_cat `` `` )
     : ~ s old_slices_t ``
     : ~ s old_closure_t ( nurl_sym_get syms `__owned_closure_envs__` )
     ? != 0 g_auto_drop_strings
@@ -6877,8 +6877,8 @@
     ? != 0 g_auto_drop_strings { ( nurl_sym_pop syms ) } {}
     ( emit ( nurl_str_cat le `:` ) )
     : ~ s old_strs_e ``
-    : ~ s old_structs_e ``
-    : ~ s old_user_e ``
+    : ~ s old_structs_e ( nurl_str_cat `` `` )
+    : ~ s old_user_e ( nurl_str_cat `` `` )
     : ~ s old_slices_e ``
     : ~ s old_closure_e ( nurl_sym_get syms `__owned_closure_envs__` )
     ? != 0 g_auto_drop_strings
@@ -7750,8 +7750,8 @@
             // Scope each match arm so payload bindings and owned-string entries
             // don't leak into sibling arms (see gen_cond for the same reasoning).
             : ~ s old_strs_m ``
-            : ~ s old_structs_m ``
-            : ~ s old_user_m ``
+            : ~ s old_structs_m ( nurl_str_cat `` `` )
+            : ~ s old_user_m ( nurl_str_cat `` `` )
             : ~ s old_slices_m ``
             : ~ s old_closure_m ( nurl_sym_get syms `__owned_closure_envs__` )
             ? != 0 g_auto_drop_strings
@@ -8593,8 +8593,8 @@
     //                          Vec branch below replaces that with the
     //                          control-block accessor pair.
     : b is_vec != 0 ( nurl_str_starts slice_ty `%Vec__` )
-    : ~ s ptr_ty ``
-    : ~ s elem_ty ``
+    : ~ s ptr_ty ( nurl_str_cat `` `` )
+    : ~ s elem_ty ( nurl_str_cat `` `` )
     : ~ s ptr_val ``
     : ~ s len_val ``
     ? is_vec {
@@ -8682,8 +8682,8 @@
     ( nurl_print ( nurl_llty ptr_ty ) ) ( nurl_print ` ` ) ( nurl_print elem_ptr ) ( nurl_print `\n` )
     // Scope foreach body (see gen_cond / gen_loop).
     : ~ s old_strs_fe ``
-    : ~ s old_structs_fe ``
-    : ~ s old_user_fe ``
+    : ~ s old_structs_fe ( nurl_str_cat `` `` )
+    : ~ s old_user_fe ( nurl_str_cat `` `` )
     : ~ s old_slices_fe ``
     : ~ s old_closure_fe ( nurl_sym_get syms `__owned_closure_envs__` )
     ? != 0 g_auto_drop_strings
@@ -8763,8 +8763,8 @@
         // Scope the loop body so `:` bindings don't leak into the outer
         // `__owned_strings__` list (see gen_cond for the same reasoning).
         : ~ s old_strs_lp ``
-        : ~ s old_structs_lp ``
-        : ~ s old_user_lp ``
+        : ~ s old_structs_lp ( nurl_str_cat `` `` )
+        : ~ s old_user_lp ( nurl_str_cat `` `` )
         : ~ s old_slices_lp ``
         : ~ s old_closure_lp ( nurl_sym_get syms `__owned_closure_envs__` )
         ? != 0 g_auto_drop_strings
@@ -13245,7 +13245,7 @@
             }
             {  // Check if this is actually an enum type
                 // Extract type name from agg_ty (e.g., "%Slice" from "%Slice")
-                : ~ s type_name ``
+                : ~ s type_name ( nurl_str_cat `` `` )
                 ? == ( nurl_str_get agg_ty 0 ) 37
                 {  // Named type starting with '%' - extract name
                     : ~ i end_pos 1
@@ -15294,7 +15294,7 @@
         { ^ ( nurl_str_cat ( __mangle_struct_esc ) nm ) } {}
         ^ nm }
     {}
-    lty
+    ( nurl_str_cat lty `` )
 }
 
 // demangle_type: inverse of mangle_type. Maps a monomorphisation
@@ -15314,7 +15314,7 @@
     // they round-trip verbatim — gen_foreach recovers a `%Vec__u8`
     // element as `u8` and the loop binding carries its signedness in
     // its type, no separate flag needed.
-    ? ( ty_is_unsigned mty ) ^ mty
+    ? ( ty_is_unsigned mty ) ^ ( nurl_str_cat mty `` )
     ? != 0 ( nurl_str_starts mty `opt_` )
     ^ ( nurl_str_cat `{ i1, ` ( nurl_str_cat ( demangle_type ( nurl_str_slice mty 4 - ( nurl_str_len mty ) 4 ) ) ` }` ) )
     {}
@@ -15348,13 +15348,18 @@
 // subst_source: replace whole-word occurrences of 'from' with 'to' in src.
 // Words are space-separated tokens as produced by collect_fn_body.
 @ subst_source s src s from s to → s {
-    : ~ s result ``
+    : ~ s result ( nurl_str_cat `` `` )
     : ~ s rest ( nurl_str_cat src `` )
     ~ != 0 ( nurl_str_len rest ) {
         : s word ( str_first_word rest )
         = rest ( str_skip_word rest )
+        // Both arms owned: a mixed join (borrowed `to` vs tracked
+        // `word`) published "not owned", so the copy the tracked arm
+        // made was never collected — 71k leaks per generic-heavy
+        // compile.
         = result ( nurl_str_cat result
-        ( nurl_str_cat ? ( seq word from ) to word ` ` ) )
+        ( nurl_str_cat ? ( seq word from ) ( nurl_str_cat to `` )
+        ( nurl_str_cat word `` ) ` ` ) )
     }
     result
 }
@@ -15374,7 +15379,8 @@
         { = pos + pos 1 }
         { ? > pos word_start
             { : s word ( nurl_str_slice src word_start - pos word_start )
-                = result ( nurl_str_cat result ? ( seq word from ) to word )
+                = result ( nurl_str_cat result ? ( seq word from )
+                ( nurl_str_cat to `` ) ( nurl_str_cat word `` ) )
             }
             {}
             = result ( nurl_str_cat result ( nurl_str_slice src pos 1 ) )
@@ -15384,7 +15390,8 @@
     }
     ? > pos word_start
     { : s word ( nurl_str_slice src word_start - pos word_start )
-        = result ( nurl_str_cat result ? ( seq word from ) to word )
+        = result ( nurl_str_cat result ? ( seq word from )
+        ( nurl_str_cat to `` ) ( nurl_str_cat word `` ) )
     }
     {}
     result
@@ -15587,7 +15594,7 @@
     }
     ( expect lex TT_RBRACK )
     // Collect params/return/body tokens until EOF
-    : ~ s src ``
+    : ~ s src ( nurl_str_cat `` `` )
     ~ & != ( nurl_lex_type lex ) TT_LBRACE != ( nurl_lex_type lex ) TT_EOF {
         = src ( nurl_str_cat src ( nurl_str_cat ( __tok_src_text lex ) ` ` ) )
         ( nurl_lex_advance lex )
@@ -18664,6 +18671,16 @@
         // __nth_sep is defined next to the other seplist helpers, far
         // below its only caller in gen_call.
         ( nurl_sym_def syms `__nth_sep__ret_owned` `str` )
+        // Generic-instantiation helpers: defined with the mangling
+        // machinery near the end, called from parse_type_paren and
+        // gen_call at the top.
+        ( nurl_sym_def syms `mangle_src_word__ret_owned` `str` )
+        ( nurl_sym_def syms `mangle_type__ret_owned` `str` )
+        ( nurl_sym_def syms `demangle_type__ret_owned` `str` )
+        ( nurl_sym_def syms `nurl_src_to_llvm__ret_owned` `str` )
+        ( nurl_sym_def syms `__tok_src_text__ret_owned` `str` )
+        ( nurl_sym_def syms `subst_source__ret_owned` `str` )
+        ( nurl_sym_def syms `subst_source_raw__ret_owned` `str` )
     }
     {}
     ( nurl_sym_def syms `malloc` `i8*` )
@@ -19608,7 +19625,7 @@
     : s params ( pipe_rest r2 )
     // thunk parameter list + inner-call tail (value args passed straight on)
     : ~ s thunk_params `i8* %self`
-    : ~ s inner_tail ``
+    : ~ s inner_tail ( nurl_str_cat `` `` )
     : ~ s pr params
     : ~ i pidx 1
     ~ != 0 ( nurl_str_len pr ) {
@@ -19621,7 +19638,7 @@
     ( nurl_print `define ` ) ( nurl_print ( nurl_llty ret ) ) ( nurl_print ` @__dynm.` ) ( nurl_print slug )
     ( nurl_print `(` ) ( nurl_print thunk_params ) ( nurl_print `) {\nentry:\n` )
     ( nurl_print `  %p = bitcast i8* %self to ` ) ( nurl_print recv_llvm ) ( nurl_print `*\n` )
-    : ~ s self_arg ``
+    : ~ s self_arg ( nurl_str_cat `` `` )
     ? ( seq recvmode `val` )
     { ( nurl_print `  %rv = load ` ) ( nurl_print recv_llvm ) ( nurl_print `, ` ) ( nurl_print recv_llvm ) ( nurl_print `* %p\n` )
         = self_arg ( nurl_str_cat3 recv_llvm ` ` `%rv` ) }
@@ -19920,7 +19937,7 @@
     : s sname ( nurl_lex_val lex )
     ( nurl_lex_advance lex )  // consume Name
     : ~ s ta_list ``
-    : ~ s mangle_sfx ``
+    : ~ s mangle_sfx ( nurl_str_cat `` `` )
     ~ & != ( nurl_lex_type lex ) TT_RPAREN != ( nurl_lex_type lex ) TT_EOF {
         : ~ s ta_word ``
         ? == ( nurl_lex_type lex ) TT_LPAREN
