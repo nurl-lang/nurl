@@ -18602,6 +18602,10 @@
         // output buffer — the single biggest leak by BYTES (2.6 MB of
         // function IR per self-compile).
         ( nurl_sym_def syms `nurl_print_buf_stop__ret_owned` `str` )
+        // priv_mangle_for is defined near the end of the file but is
+        // called from gen_call / gen_fn_decl at the top — the mangled
+        // callee names it mints were never freed.
+        ( nurl_sym_def syms `priv_mangle_for__ret_owned` `str` )
     }
     {}
     ( nurl_sym_def syms `malloc` `i8*` )
