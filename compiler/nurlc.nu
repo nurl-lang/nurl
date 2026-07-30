@@ -458,7 +458,7 @@
         ~ & != ( nurl_lex_type lex ) TT_RPAREN != ( nurl_lex_type lex ) TT_EOF {
             : s p ( parse_type lex )
             = params ? == 0 ( nurl_str_len params )
-            p
+            ( nurl_str_cat p `` )
             ( nurl_str_cat params ( nurl_str_cat `, ` p ) )
         }
         ( expect lex TT_RPAREN )  // consume ')'
@@ -6286,7 +6286,7 @@
         } {}
         ? & & != 0 g_auto_drop_strings __tmp_owned __cons_safe
         { = owned_arg_temps ? == 0 ( nurl_str_len owned_arg_temps )
-            av
+            ( nurl_str_cat av `` )
             ( nurl_str_cat3 owned_arg_temps ` ` av ) }
         {}
         ? != first 0
@@ -7604,7 +7604,7 @@
                     // literal-constrained arm.
                     ? | has_lit != 0 has_guard {} {
                         = seen_variants ? == 0 ( nurl_str_len seen_variants )
-                        pattern_name
+                        ( nurl_str_cat pattern_name `` )
                         ( nurl_str_cat seen_variants ( nurl_str_cat ` ` pattern_name ) )
                     }
                     // T/F: bool pattern matching i1 tag of Option — no global load needed
@@ -8364,23 +8364,23 @@
                     {}
                     : s entry ( nurl_str_cat `[ ` ( nurl_str_cat arm_result ( nurl_str_cat `, %` ( nurl_str_cat arm_lbl ` ]` ) ) ) )
                     = phi_entries ? == 0 ( nurl_str_len phi_entries )
-                    entry
+                    ( nurl_str_cat entry `` )
                     ( nurl_str_cat phi_entries ( nurl_str_cat `, ` entry ) )
                     = phi_count + phi_count 1
                     ? == ( int_width ( nurl_llty arm_type ) ) 0 { = all_int64 F } {}
                     ? ( ty_is_unsigned arm_type ) { = any_u64 T } {}
                     : s entry64 ( nurl_str_cat `[ ` ( nurl_str_cat arm_res64 ( nurl_str_cat `, %` ( nurl_str_cat arm_lbl ` ]` ) ) ) )
                     = phi_entries64 ? == 0 ( nurl_str_len phi_entries64 )
-                    entry64
+                    ( nurl_str_cat entry64 `` )
                     ( nurl_str_cat phi_entries64 ( nurl_str_cat `, ` entry64 ) )
                 } {
                     : s eu64 ( nurl_str_cat `[ undef, %` ( nurl_str_cat arm_lbl ` ]` ) )
                     = phi_entries64 ? == 0 ( nurl_str_len phi_entries64 )
-                    eu64
+                    ( nurl_str_cat eu64 `` )
                     ( nurl_str_cat phi_entries64 ( nurl_str_cat `, ` eu64 ) )
                     : s entry ( nurl_str_cat `[ undef, %` ( nurl_str_cat arm_lbl ` ]` ) )
                     = phi_entries ? == 0 ( nurl_str_len phi_entries )
-                    entry
+                    ( nurl_str_cat entry `` )
                     ( nurl_str_cat phi_entries ( nurl_str_cat `, ` entry ) )
                 }
                 ( nurl_print `  br label %` ) ( nurl_print end_label ) ( emit_dbg_eol )
@@ -8444,7 +8444,7 @@
     // non-void type.  Otherwise the match is treated as a statement.
     ? & & != 0 phi_count phi_ok ! ( seq phi_type `void` ) {
         : s final_reg ( nurl_cg_reg cg )
-        : ~ s phi_full phi_entries
+        : ~ s phi_full ( nurl_str_cat phi_entries `` )
         ? != 0 ( nurl_str_len fallback_pred ) {
             = phi_full ( nurl_str_cat phi_entries ( nurl_str_cat `, [ undef, %` ( nurl_str_cat fallback_pred ` ]` ) ) )
         } {}
@@ -8489,7 +8489,7 @@
     // mixes still degrade (and the valueless-consumer diagnostics say why).
     ? & & != 0 phi_count ! phi_ok all_int64 {
         : s final64 ( nurl_cg_reg cg )
-        : ~ s phi_full64 phi_entries64
+        : ~ s phi_full64 ( nurl_str_cat phi_entries64 `` )
         ? != 0 ( nurl_str_len fallback_pred ) {
             = phi_full64 ( nurl_str_cat phi_entries64 ( nurl_str_cat `, [ undef, %` ( nurl_str_cat fallback_pred ` ]` ) ) )
         } {}
@@ -8895,7 +8895,7 @@
 @ mem_own_add i syms s name → v {
     : s cur ( nurl_sym_get syms `__owned_slices__` )
     : s new ? == 0 ( nurl_str_len cur )
-    name
+    ( nurl_str_cat name `` )
     ( nurl_str_cat3 cur ` ` name )
     ( nurl_sym_def syms `__owned_slices__` new )
 }
@@ -9032,7 +9032,7 @@
 @ mem_own_add_str i syms s ptr → v {
     : s cur ( nurl_sym_get syms `__owned_strings__` )
     : s new ? == 0 ( nurl_str_len cur )
-    ptr
+    ( nurl_str_cat ptr `` )
     ( nurl_str_cat3 cur ` ` ptr )
     ( nurl_sym_def syms `__owned_strings__` new )
 }
@@ -9099,7 +9099,7 @@
     = entry ( nurl_str_cat3 entry ` ` leaf_sname )
     = entry ( nurl_str_cat3 entry ` ` leaf_idx )
     : s new ? == 0 ( nurl_str_len cur )
-    entry
+    ( nurl_str_cat entry `` )
     ( nurl_str_cat3 cur ` ` entry )
     ( nurl_sym_def syms `__owned_struct_fields__` new )
 }
@@ -9509,7 +9509,7 @@
     : s cur ( nurl_sym_get syms `__user_drops__` )
     : s entry ( nurl_str_cat3 ptr ` ` vt )
     : s new ? == 0 ( nurl_str_len cur )
-    entry
+    ( nurl_str_cat entry `` )
     ( nurl_str_cat3 cur ` ` entry )
     ( nurl_sym_def syms `__user_drops__` new )
 }
@@ -10517,8 +10517,8 @@
 // stepped over wholesale so their arm-blocks are not mistaken for this
 // conditional's arms.
 @ bck_handle_cond i ci i ec s state → s {
-    : ~ s s_then state
-    : ~ s s_else state
+    : ~ s s_then ( nurl_str_cat state `` )
+    : ~ s s_else ( nurl_str_cat state `` )
     : ~ i j + ci 1
     ~ < j ec {
         : s rec ( bck_rec j )
@@ -10646,7 +10646,7 @@
     = g_bck_gen + g_bck_gen 1
     = g_bck_inn 0
     : i n ( bck_explode )
-    : ~ s seed ``
+    : ~ s seed ( nurl_str_cat `` `` )
     : ~ s prest ( nurl_str_cat params `` )
     ~ != 0 ( nurl_str_len prest ) {
         : s pn ( str_first_word prest )
@@ -12929,7 +12929,7 @@
         & ( seq ( nurl_sym_get syms `__last_ident_name__` ) fld_first_val )
         ( str_contains_word ( nurl_sym_get syms `__fn_param_names__` ) fld_first_val )
         { = agg_param_idents ? == 0 ( nurl_str_len agg_param_idents )
-            fld_first_val
+            ( nurl_str_cat fld_first_val `` )
             ( nurl_str_cat3 agg_param_idents ` ` fld_first_val ) }
         {}
         // The value's signedness for the int-width coercions below (zext
@@ -12950,14 +12950,14 @@
         ? & != 0 g_auto_drop_strings is_str_fresh
         { : s tag ( nurl_str_cat3 idx_str `:str:` ( nurl_str_cat3 cur_sname `:` idx_str ) )
             = owned_field_idxs ? == 0 ( nurl_str_len owned_field_idxs )
-            tag
+            ( nurl_str_cat tag `` )
             ( nurl_str_cat3 owned_field_idxs ` ` tag )
         }
         {}
         ? & != 0 g_auto_drop_strings is_slice_fresh
         { : s tag ( nurl_str_cat3 idx_str `:slice:` ( nurl_str_cat3 cur_sname `:` idx_str ) )
             = owned_field_idxs ? == 0 ( nurl_str_len owned_field_idxs )
-            tag
+            ( nurl_str_cat tag `` )
             ( nurl_str_cat3 owned_field_idxs ` ` tag )
         }
         {}
@@ -12980,7 +12980,7 @@
 
         // For payload fields (idx > 0): conversion depends on aggregate type.
         // opt/res types ({ i1, ... }) need i64 coercion; enum types need ptr coercion.
-        : ~ s actual_fval fval
+        : ~ s actual_fval ( nurl_str_cat fval `` )
         : ~ s actual_fty fty
         // The insertvalue index: normally the literal position, but a result
         // payload (idx 1) routes to field 1 (Ok) or field 2 (Err) by tag.
@@ -14018,7 +14018,7 @@
     // ALLOCA POINTER itself — the env field type is `T*`, the body
     // reads the pointer back and uses it as the var's `__ptr` so
     // every read/write reaches the caller's alloca.
-    : ~ s vars captured_vars
+    : ~ s vars ( nurl_str_cat captured_vars `` )
     : ~ i field_idx 1
     ~ != 0 ( nurl_str_len vars ) {
         : s var ( str_first_word vars )
@@ -14320,8 +14320,8 @@
     ( nurl_sym_def body_syms `__fn_ret_ty__` ret_type )
 
     // Register closure parameters
-    : ~ s bp_types param_types
-    : ~ s bp_names param_names
+    : ~ s bp_types ( nurl_str_cat param_types `` )
+    : ~ s bp_names ( nurl_str_cat param_names `` )
     : ~ i bpi 0
     ~ < bpi param_count {
         : s bpname ( str_first_word bp_names )
@@ -14371,7 +14371,7 @@
         //     allocation through this shared pointer. The body sees the same
         //     binding shape (`__ptr` + native type), so no other path needs
         //     to special-case it.
-        : ~ s caps captured_vars
+        : ~ s caps ( nurl_str_cat captured_vars `` )
         : ~ i cap_idx 1
         ~ != 0 ( nurl_str_len caps ) {
             : s cap_name ( str_first_word caps )
@@ -15380,7 +15380,7 @@
 // AFTER the trait type-param (T) substitution so a default body / signature that
 // names an associated type lowers to the impl's choice (e.g. `→ Elem` → `→ i`).
 @ subst_assoc s src s bindings → s {
-    : ~ s result src
+    : ~ s result ( nurl_str_cat src `` )
     : ~ s rest ( nurl_str_cat bindings `` )
     ~ != 0 ( nurl_str_len rest ) {
         : s nm ( str_first_word rest )
@@ -15470,7 +15470,7 @@
         // real instantiation path dodges this because emit_one_instantiation
         // substitutes the tparams away first. The substitution is
         // type-irrelevant here — only parameter POSITIONS are read.
-        : ~ s probe gsrc
+        : ~ s probe ( nurl_str_cat gsrc `` )
         : ~ s tpr ( nurl_sym_get2 g_generic_syms fname `__tparams` )
         ~ != 0 ( nurl_str_len tpr )
         { : s tp ( str_first_word tpr )
@@ -15582,7 +15582,7 @@
 @ compute_generic_ret_ty s fname s type_args → s {
     : s tparams ( nurl_sym_get2 g_generic_syms fname `__tparams` )
     : s gsrc ( nurl_sym_get2 g_generic_syms fname `__gsrc` )
-    : ~ s subst_src gsrc
+    : ~ s subst_src ( nurl_str_cat gsrc `` )
     : ~ s tp_rest ( nurl_str_cat tparams `` )
     : ~ s ta_rest ( nurl_str_cat type_args `` )
     ~ != 0 ( nurl_str_len tp_rest ) {
@@ -15741,7 +15741,7 @@
         }
         ? ! skip {
             // Compute mangled name by walking tparams + ta_list in parallel.
-            : ~ s mangled sname
+            : ~ s mangled ( nurl_str_cat sname `` )
             : ~ s tp_r ( nurl_str_cat tparams `` )
             : ~ s ta_r ( nurl_str_cat ta_list `` )
             ~ & != 0 ( nurl_str_len tp_r ) != 0 ( nurl_str_len ta_r ) {
@@ -15758,7 +15758,7 @@
                 ( nurl_sym_def g_struct_inst_syms done_key `1` )
                 // Substitute tparam → type-arg in the raw body source.
                 : s body ( nurl_sym_get2 g_generic_struct_syms sname `__sbody` )
-                : ~ s subst body
+                : ~ s subst ( nurl_str_cat body `` )
                 : ~ s tp_r2 ( nurl_str_cat tparams `` )
                 : ~ s ta_r2 ( nurl_str_cat ta_list `` )
                 ~ & != 0 ( nurl_str_len tp_r2 ) != 0 ( nurl_str_len ta_r2 ) {
@@ -16251,7 +16251,7 @@
             = __as_rest ( str_skip_word __as_rest )
             ? ! ( str_contains_word __as_merged __as_w )
             { = __as_merged ? == 0 ( nurl_str_len __as_merged )
-                __as_w
+                ( nurl_str_cat __as_w `` )
                 ( nurl_str_cat3 __as_merged ` ` __as_w ) }
             {} }
         ( nurl_sym_def g_fn_sink fname __as_merged ) }
@@ -16268,7 +16268,7 @@
             = __ae_rest ( str_skip_word __ae_rest )
             ? ! ( str_contains_word __ae_merged __ae_w )
             { = __ae_merged ? == 0 ( nurl_str_len __ae_merged )
-                __ae_w
+                ( nurl_str_cat __ae_w `` )
                 ( nurl_str_cat3 __ae_merged ` ` __ae_w ) }
             {} }
         ( nurl_sym_def g_fn_escapes fname __ae_merged ) }
@@ -16304,7 +16304,7 @@
             = __rp_rest ( str_skip_word __rp_rest )
             ? ! ( str_contains_word __rp_merged __rp_w )
             { = __rp_merged ? == 0 ( nurl_str_len __rp_merged )
-                __rp_w
+                ( nurl_str_cat __rp_w `` )
                 ( nurl_str_cat3 __rp_merged ` ` __rp_w ) }
             {} }
         ( nurl_sym_def g_fn_ret_param fname __rp_merged ) }
@@ -17590,7 +17590,7 @@
         : s vname ( nurl_lex_val lex )
         ( nurl_lex_advance lex )
         = variants_str ? == 0 ( nurl_str_len variants_str )
-        vname
+        ( nurl_str_cat vname `` )
         ( nurl_str_cat variants_str ( nurl_str_cat ` ` vname ) )
         ( nurl_print `@` ) ( nurl_print vname )
         ( nurl_print ` = global i64 ` )
@@ -17723,7 +17723,7 @@
                             ? ( is_ident_tok ( nurl_lex_type lx ) )
                             { : s n ( nurl_lex_val lx )
                                 = names ? == 0 ( nurl_str_len names )
-                                n
+                                ( nurl_str_cat n `` )
                                 ( nurl_str_cat3 names ` ` n )
                                 ( nurl_lex_advance lx )
                             }
@@ -17946,7 +17946,7 @@
         ( nurl_exit 1 )
     }
     {}
-    : ~ s subst_src gsrc
+    : ~ s subst_src ( nurl_str_cat gsrc `` )
     : ~ s tp_rest ( nurl_str_cat tparams `` )
     : ~ s ta_rest ( nurl_str_cat type_args `` )
     ~ != 0 ( nurl_str_len tp_rest ) {
@@ -18423,7 +18423,7 @@
 @ mem_mark_imported i syms s path → v {
     : s list ( nurl_sym_get syms `__imported_files__` )
     : s new ? == 0 ( nurl_str_len list )
-    path
+    ( nurl_str_cat path `` )
     ( nurl_str_cat3 list ` ` path )
     ( nurl_sym_def syms `__imported_files__` new )
 }
@@ -18598,6 +18598,14 @@
         // strdup getters above, so they must be declared.
         ( nurl_sym_def syms `encode_str__ret_owned` `str` )
         ( nurl_sym_def syms `nurl_lex_src_slice__ret_owned` `str` )
+        // nurl_print_buf_stop hands back a strdup of the captured
+        // output buffer — the single biggest leak by BYTES (2.6 MB of
+        // function IR per self-compile).
+        ( nurl_sym_def syms `nurl_print_buf_stop__ret_owned` `str` )
+        // priv_mangle_for is defined near the end of the file but is
+        // called from gen_call / gen_fn_decl at the top — the mangled
+        // callee names it mints were never freed.
+        ( nurl_sym_def syms `priv_mangle_for__ret_owned` `str` )
     }
     {}
     ( nurl_sym_def syms `malloc` `i8*` )
@@ -18898,7 +18906,7 @@
                         ? ! ( str_contains_word cur mname )
                         { ( nurl_sym_def g_trait_syms defaults_key
                             ? == 0 ( nurl_str_len cur )
-                            mname
+                            ( nurl_str_cat mname `` )
                             ( nurl_str_cat cur ( nurl_str_cat ` ` mname ) ) ) }
                         {}
                     }
@@ -19116,7 +19124,7 @@
                     { : s mname ( nurl_lex_val lex )
                         ( nurl_lex_advance lex )  // skip method name
                         = provided ? == 0 ( nurl_str_len provided )
-                        mname
+                        ( nurl_str_cat mname `` )
                         ( nurl_str_cat provided ( nurl_str_cat ` ` mname ) )
                         // Skip params until →
                         ~ & != ( nurl_lex_type lex ) TT_ARROW
@@ -19791,7 +19799,7 @@
                     { : s mname ( nurl_lex_val lex )
                         ( nurl_lex_advance lex )  // skip method name
                         = provided ? == 0 ( nurl_str_len provided )
-                        mname
+                        ( nurl_str_cat mname `` )
                         ( nurl_str_cat provided ( nurl_str_cat ` ` mname ) )
                         : s mangled ( nurl_str_cat mname ( nurl_str_cat `__` impl_mangle ) )
                         // gen_fn_decl_concrete reads params, →, ret, body from lex
@@ -19861,7 +19869,7 @@
         { = ta_word ( scan_compound_ta_inner lex syms ) }
         { = ta_word ( capture_type_arg_src lex ) }
         = ta_list ? == 0 ( nurl_str_len ta_list )
-        ta_word
+        ( nurl_str_cat ta_word `` )
         ( nurl_str_cat3 ta_list ` ` ta_word )
         = mangle_sfx ( nurl_str_cat mangle_sfx
         ( nurl_str_cat `__` ( mangle_src_word ta_word ) ) )
@@ -20406,7 +20414,7 @@
                         ? ( str_contains_word scanned __fs_key )
                         {}
                         { : s new_scanned ? == 0 ( nurl_str_len scanned )
-                            __fs_key
+                            ( nurl_str_cat __fs_key `` )
                             ( nurl_str_cat3 scanned ` ` __fs_key )
                             ( nurl_sym_def syms `__scanned_files__` new_scanned )
                             : s src2 ( nurl_read_file path )
