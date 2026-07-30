@@ -2042,6 +2042,16 @@
 
 // gen_str_lit: emit a getelementptr referencing a deferred global constant.
 // The global @.str.N is recorded in g_str_syms and emitted after each function.
+// Ownership hygiene (same rule as gen_ident's): a string literal is
+// .rodata, never a fresh owning call — clear any residue so a
+// literal-valued block/arm cannot inherit an earlier call's owned
+// marker and get its .rodata pointer scheduled for free. gen_expr
+// dispatches here; gen_str_lit stays syms-free for its other shape.
+@ gen_str_lit_expr i lex i syms i cg → s {
+    ( nurl_sym_def syms `__last_call_ret_owned__` `` )
+    ^ ( gen_str_lit lex cg )
+}
+
 @ gen_str_lit i lex i cg → s {
     : s sval ( nurl_lex_val lex )
     ( nurl_lex_advance lex )
@@ -2395,6 +2405,16 @@
         ( seq ( nurl_sym_get syms `__last_call_ret_owned__` ) `str` )
         { ( nurl_sym_def syms `__fn_ret_str_owned__` `1` ) }
         {}
+        // Mixed-return poison: THIS site returns an i8* it cannot prove
+        // fresh (a parameter, a literal, a borrow-returning call). The
+        // owned marker is all-paths-or-nothing — see the flag snapshot
+        // in gen_fn_decl_concrete.
+        ? & & ( seq ( nurl_llty lt ) `i8*` )
+        == 0 ( nurl_str_len skip_str_ptr )
+        ! & ret_is_direct_call
+        ( seq ( nurl_sym_get syms `__last_call_ret_owned__` ) `str` )
+        { ( nurl_sym_def syms `__fn_ret_str_mixed__` `1` ) }
+        {}
         = skip_user_ptr ? & ( str_contains_word ( nurl_sym_get syms `__user_drops__` ) rid_ptr )
         ret_arg_alias
         rid_ptr
@@ -2547,7 +2567,7 @@
     : i tt ( nurl_lex_type lex )
     ? == tt TT_INT ( gen_int_lit lex )
     ? == tt TT_FLOAT ( gen_float_lit lex )
-    ? == tt TT_STR ( gen_str_lit lex cg )
+    ? == tt TT_STR ( gen_str_lit_expr lex syms cg )
     ? == tt TT_BOOL ( gen_bool_lit lex )
     ? == tt TT_SIZEOF ( gen_sizeof lex cg )
     ? == tt TT_CARET ( gen_ret lex syms cg )
@@ -2724,6 +2744,13 @@
         // Borrow provenance: loading a `__borrow`-marked binding yields a
         // borrow; any other ident load yields a non-borrow (resets the flag).
         ( nurl_sym_def syms `__last_value_borrow__` ( nurl_sym_get2 syms name `__borrow` ) )
+        // Ownership hygiene: a bare identifier load is never a fresh
+        // owning call, so clear the marker a preceding call left behind.
+        // Without this, a block/arm whose side-effect call returned an
+        // owned string but whose VALUE is this (borrowed) identifier
+        // would register the consumer's binding as owned — and its
+        // scope-exit drop would free a buffer someone else owns.
+        ( nurl_sym_def syms `__last_call_ret_owned__` `` )
         // Signedness rides the binding's stored type itself (A1) —
         // `lt` above is the internal repr (`u8` vs `i8` distinct), so
         // the set_last_type call already propagated it.
@@ -3215,6 +3242,23 @@
         ^ r }
     {}
     av
+}
+
+// Consumers whose argument handling is verifiably COPY or READ-ONLY:
+// the C-side symbol table and last-type channel strdup what they keep,
+// the printers consume synchronously, the string builders read their
+// sources and return fresh buffers, and the read-only predicates keep
+// nothing. Only for these (plus fresh-returning user functions — see
+// gen_call's collect gate) may an owned argument TEMPORARY be freed
+// after the call: a consumer that stores the pointer (vec_push) means
+// the temp's ownership moved INTO the container, and a consumer that
+// may return an alias of its argument (__canon_import_key's miss path)
+// means the caller's next read would be use-after-free. Both bit for
+// real: released compilers freed the temp handed to vec_push [s].
+@ mem_consumer_copy_safe s fname → b {
+    ( str_contains_word
+    `nurl_sym_def nurl_sym_set nurl_sym_append nurl_sym_get nurl_sym_get2 nurl_sym_len nurl_sym_len2 nurl_set_last_type nurl_print nurl_println nurl_eprintln puts nurl_str_len nurl_str_to_int nurl_str_to_float nurl_str_find nurl_str_starts nurl_str_ends seq str_contains_word str_word_index count_words nurl_str_cat nurl_str_cat3 nurl_str_cat4 nurl_str_slice nurl_str_int nurl_read_file nurl_lex_new nurl_file_exists emit`
+    fname )
 }
 
 // Emit `call void @nurl_free(i8* %r)` for every register in `temps`
@@ -5276,7 +5320,11 @@
 @ gen_call i lex i syms i cg → s {
     ( nurl_lex_advance lex )
     : ~ s fname ( nurl_lex_val lex )
-    : s fname_bare fname
+    // Own a COPY: fname is a tracked owned string, and the private-name
+    // resolve below REASSIGNS it (which frees the old buffer under the
+    // reassignment-drop rule) — an alias here dangled and misspelled
+    // every private callee's diagnostics.
+    : s fname_bare ( nurl_str_cat fname `` )
     ? ( priv_is_private fname ) {
         = fname ( priv_resolve lex syms fname )
     } {}
@@ -5599,7 +5647,13 @@
         // --strict-borrowck. The deep peek-val read is cheap because
         // the lexer's LX_PEEK slot is materialised on demand and we
         // don't advance.
-        : ~ s bck_arg_root bck_arg_val
+        // Own a COPY, not an alias: bck_arg_val is a tracked owned
+        // string freed at this loop iteration's end, while bck_arg_root
+        // flows into the p5_seen/p5_inout_seen accumulators that
+        // outlive every iteration — the alias made those accumulators
+        // read freed token text (heap-UAF in the stage-2 self-compile
+        // once nurl_lex_val's ownership became visible to auto-drop).
+        : ~ s bck_arg_root ( nurl_str_cat bck_arg_val `` )
         ? & != g_strict_borrowck 0 == bck_arg_tt TT_DOT {
             : i pk_t ( nurl_lex_peek_type lex )
             ? ( is_ident_tok pk_t ) { = bck_arg_root ( nurl_lex_peek_val lex ) } {}
@@ -5987,9 +6041,44 @@
                 } {}
             } {}
         } {}
-        ? & & != 0 g_auto_drop_strings
-        ( seq ( nurl_llty at ) `i8*` )
+        // Collect an owned argument TEMPORARY for the post-call drop
+        // only when the CONSUMER provably neither keeps the pointer nor
+        // returns an alias of it:
+        //   - a non-generic callee whose return is proven fresh-owned
+        //     (`__ret_owned` = str implies its body was compiled, so its
+        //     sink / inferred-escape indices are populated — check them
+        //     for THIS argument position), or
+        //   - a hand-audited copy/read-only runtime consumer
+        //     (mem_consumer_copy_safe).
+        // Everything else keeps the temp alive: into a storing callee
+        // (vec_push) the temp's ownership has MOVED — freeing it left
+        // the container holding freed memory in released compilers —
+        // and out of an alias-returning callee (the import-path
+        // helpers) the freed temp came straight back as the result.
+        : b __tmp_owned & ( seq ( nurl_llty at ) `i8*` )
         ( seq ( nurl_sym_get syms `__last_call_ret_owned__` ) `str` )
+        : ~ b __cons_safe F
+        ? & __tmp_owned != 0 g_auto_drop_strings {
+            ? ( mem_consumer_copy_safe fname ) { = __cons_safe T } {
+                // Fresh-returning callee (body compiled by definition of
+                // the marker), or a scalar/void-returning callee whose
+                // body has been compiled — either way its sink and
+                // inferred-escape summaries are live; trust them for
+                // this argument position. Generic instantiations are
+                // excluded: their summaries key differently and the
+                // container family (vec_push [s]) lives there.
+                : b __cs_fresh ( seq ( nurl_sym_get2 syms fname `__ret_owned` ) `str` )
+                : b __cs_scalar & ( mem_arm_drop_safe ( nurl_sym_get syms fname ) )
+                != 0 ( nurl_sym_len2 syms fname `__body_done` )
+                ? & & ( seq call_name fname )
+                | __cs_fresh __cs_scalar
+                & ! ( str_contains_word callee_sink ( nurl_str_int arg_idx ) )
+                ! ( str_contains_word ( nurl_sym_get g_fn_escapes fname )
+                ( nurl_str_int arg_idx ) )
+                { = __cons_safe T } {}
+            }
+        } {}
+        ? & & != 0 g_auto_drop_strings __tmp_owned __cons_safe
         { = owned_arg_temps ? == 0 ( nurl_str_len owned_arg_temps )
             av
             ( nurl_str_cat3 owned_arg_temps ` ` av ) }
@@ -6419,10 +6508,41 @@
     // (a slice literal or a nested `?` that is itself fresh). Only when BOTH
     // live arms are fresh does the `?`-result carry ownership to the binding.
     ( nurl_sym_def syms `__last_slice_owned__` `` )
-    : s tv ( gen_expr lex syms cg )
+    // Owned-STRING provenance gets the same per-arm reset+snapshot
+    // discipline. Without it, `__last_call_ret_owned__` after the whole
+    // `?` was simply the LAST arm's residue — `: s x ? c `lit` ( getter )`
+    // registered x as owned off the else-arm's marker, and the literal
+    // path's scope-exit drop then freed .rodata (SEGV).
+    ( nurl_sym_def syms `__last_call_ret_owned__` `` )
+    : ~ s tv ( gen_expr lex syms cg )
     : s tt2 ( nurl_get_last_type )
     : s t_slice_flag ( nurl_str_cat ( nurl_sym_get syms `__last_slice_owned__` ) `` )
+    : s t_str_flag ( nurl_str_cat ( nurl_sym_get syms `__last_call_ret_owned__` ) `` )
     : s t_retid ( nurl_str_cat ( nurl_sym_get syms `__last_ident_name__` ) `` )
+    // A tracked-owned-string ident arm hands the phi a COPY, emitted
+    // here inside the arm's own block (it must only run on this path).
+    // The old protocol cancelled the binding's scheduled drop instead —
+    // transferring ownership into the phi — but the phi's consumer can
+    // outlive the binding's scope (an outer accumulator fed by
+    // `= acc ? c root ( … )` dangled the moment root's scope dropped
+    // it: heap-UAF in the stage-2 self-compile). A copy keeps the
+    // source's drop where it was and makes this arm a proven fresh
+    // owner. Staleness discipline matches the old cancel: t_retid may
+    // name an ident that was merely the last load inside a trailing
+    // call — then the dup is redundant and the call's buffer leaks,
+    // never a UAF.
+    : ~ b t_dup F
+    ? & & & == 0 g_did_ret ( seq ( nurl_llty tt2 ) `i8*` )
+    != 0 ( nurl_str_len t_retid )
+    ( str_contains_word ( nurl_sym_get syms `__owned_strings__` )
+    ( nurl_sym_get2 syms t_retid `__ptr` ) )
+    { : s __td ( nurl_cg_reg cg )
+        ( nurl_print `  ` ) ( nurl_print __td )
+        ( nurl_print ` = call i8* @strdup(i8* ` ) ( nurl_print tv )
+        ( nurl_print `)` ) ( emit_dbg_eol )
+        = tv __td
+        = t_dup T
+    } {}
     : s tlbl ( nurl_sym_get syms `__cur_lbl__` )
     : i tdr g_did_ret
     // Lossless 64-bit shadow of an integer branch value, emitted while
@@ -6485,10 +6605,25 @@
     // Mirror of the then-arm's escaping-ident snapshot above.
     ( nurl_sym_def syms `__last_ident_name__` `` )
     ( nurl_sym_def syms `__last_slice_owned__` `` )
-    : s ev ( gen_expr lex syms cg )
+    ( nurl_sym_def syms `__last_call_ret_owned__` `` )
+    : ~ s ev ( gen_expr lex syms cg )
     : s et2 ( nurl_get_last_type )
     : s e_slice_flag ( nurl_str_cat ( nurl_sym_get syms `__last_slice_owned__` ) `` )
+    : s e_str_flag ( nurl_str_cat ( nurl_sym_get syms `__last_call_ret_owned__` ) `` )
     : s e_retid ( nurl_str_cat ( nurl_sym_get syms `__last_ident_name__` ) `` )
+    // Mirror of the then-arm's tracked-ident copy (see above).
+    : ~ b e_dup F
+    ? & & & == 0 g_did_ret ( seq ( nurl_llty et2 ) `i8*` )
+    != 0 ( nurl_str_len e_retid )
+    ( str_contains_word ( nurl_sym_get syms `__owned_strings__` )
+    ( nurl_sym_get2 syms e_retid `__ptr` ) )
+    { : s __ed ( nurl_cg_reg cg )
+        ( nurl_print `  ` ) ( nurl_print __ed )
+        ( nurl_print ` = call i8* @strdup(i8* ` ) ( nurl_print ev )
+        ( nurl_print `)` ) ( emit_dbg_eol )
+        = ev __ed
+        = e_dup T
+    } {}
     : s elbl ( nurl_sym_get syms `__cur_lbl__` )
     : i edr g_did_ret
     : ~ s ev64 ev
@@ -6582,27 +6717,14 @@
     ? == 0 g_did_ret
     { ? & ! ( seq phi_ty `void` ) types_ok
         { : s res ( nurl_cg_reg cg )
-            // Ownership transfer out of the arms: an arm whose value is
-            // a bare load of a tracked owned i8* binding hands that
-            // buffer to the phi consumer — cancel the binding's
-            // scheduled drop or the scope-exit free dangles every later
-            // use of the phi value (bit the compiler itself: gen_cast's
-            // `: s norm ? … xv ( nurl_cg_reg cg )` returned norm while
-            // the epilogue freed xv). Worst case (ident was merely the
-            // last load inside a trailing call) the buffer leaks —
-            // never a use-after-free. Only arms live into the phi
-            // transfer; a `^`-returning arm keeps its own path's drops.
-            ? ( seq ( nurl_llty phi_ty ) `i8*` )
-            { ? == 0 tdr
-                { ( mem_remove_owned_str syms
-                    ( nurl_sym_get2 syms t_retid `__ptr` ) ) }
-                {}
-                ? == 0 edr
-                { ( mem_remove_owned_str syms
-                    ( nurl_sym_get2 syms e_retid `__ptr` ) ) }
-                {}
-            }
-            {}
+            // Ownership OUT of the arms is a copy, not a transfer: a
+            // tracked-ident arm already dup'd its value in-arm (see the
+            // t_dup/e_dup blocks), so the binding keeps its scheduled
+            // drop and the phi consumer owns its own buffer. (The old
+            // cancel-the-drop protocol dangled any phi consumer that
+            // outlived the binding's scope — an outer accumulator fed
+            // by `= acc ? c root ( … )` read freed memory once root's
+            // scope ended.)
             ? & != 0 tdr == 0 edr
             { ( nurl_print `  ` ) ( nurl_print res )
                 ( nurl_print ` = phi ` ) ( nurl_print ( nurl_llty phi_ty ) )
@@ -6639,6 +6761,19 @@
     : b __slice_live | == 0 tdr == 0 edr
     : b __slice_res & & & __t_slice_ok __e_slice_ok __slice_live ( mem_is_slice_ty phi_ty )
     ( nurl_sym_def syms `__last_slice_owned__` ? __slice_res `1` `` )
+    // Owned-string provenance of the `?`-result, by the same rule: the
+    // result is a fresh owned string only when every LIVE arm produced
+    // one. Deterministic on purpose — before this, the marker was the
+    // last arm's residue, so a literal-or-borrow arm could ride an
+    // owned-arm's flag into a caller's tracked binding and have its
+    // .rodata / borrowed pointer freed at scope exit. A mixed pair
+    // publishes empty: the owning arm's buffer leaks (conservative,
+    // leak-not-UAF) rather than the borrowing arm's crash.
+    : b __t_str_ok ? != 0 tdr T | ( seq t_str_flag `str` ) t_dup
+    : b __e_str_ok ? != 0 edr T | ( seq e_str_flag `str` ) e_dup
+    : b __str_res & & & __t_str_ok __e_str_ok __slice_live
+    ( seq ( nurl_llty phi_ty ) `i8*` )
+    ( nurl_sym_def syms `__last_call_ret_owned__` ? __str_res `str` `` )
     result
 }
 
@@ -6978,6 +7113,13 @@
     // stay unregistered (leak-not-UAF), mirroring gen_cond.
     : ~ b all_slice_fresh T
     : ~ i live_slice_arms 0
+    // Owned-string provenance across the arms, by the same all-live-
+    // arms rule (mirrors gen_cond's `?`-join): the match result is a
+    // fresh owned string only when EVERY live arm's value was one —
+    // a fresh owning call, or a tracked-ident value that the arm
+    // copied into the phi (arm_dup below).
+    : ~ b all_str_owned T
+    : ~ i live_str_arms 0
     // arms_total / arms_ret count every parsed arm vs. those that ended
     // in `^`. When equal AND a fallback_pred is set, the `match_end`
     // label is reached only through the synthetic last-arm fallthrough
@@ -7857,13 +7999,34 @@
             // is recorded below. Copy via nurl_str_cat — sym_get's
             // pointer dies at the arm scope's nurl_sym_pop.
             ( nurl_sym_def syms `__last_ident_name__` `` )
-            : s arm_result ( gen_stmt lex syms cg )
+            ( nurl_sym_def syms `__last_call_ret_owned__` `` )
+            : ~ s arm_result ( gen_stmt lex syms cg )
             = g_in_match_arm __saved_in_arm
             : s arm_type ( nurl_get_last_type )
             // Fresh-owned-slice provenance of THIS arm's value (see gen_cond):
             // snapshot before the arm scope's nurl_sym_pop frees the flag entry.
             : s arm_slice_flag ( nurl_str_cat ( nurl_sym_get syms `__last_slice_owned__` ) `` )
+            : s arm_str_flag ( nurl_str_cat ( nurl_sym_get syms `__last_call_ret_owned__` ) `` )
             : s arm_retid ( nurl_str_cat ( nurl_sym_get syms `__last_ident_name__` ) `` )
+            // Tracked-ident arm value → hand the phi a COPY, emitted in
+            // this arm's block (gen_cond's t_dup twin): the old cancel-
+            // the-drop transfer ran inside the arm's symtab scope, so
+            // the pop resurrected the source's registration and BOTH
+            // owners freed the one buffer (double-free compiling any
+            // closure whose captured var's type string flowed through a
+            // `??` arm).
+            : ~ b arm_dup F
+            ? & & & == 0 g_did_ret ( seq ( nurl_llty arm_type ) `i8*` )
+            != 0 ( nurl_str_len arm_retid )
+            ( str_contains_word ( nurl_sym_get syms `__owned_strings__` )
+            ( nurl_sym_get2 syms arm_retid `__ptr` ) )
+            { : s __ad ( nurl_cg_reg cg )
+                ( nurl_print `  ` ) ( nurl_print __ad )
+                ( nurl_print ` = call i8* @strdup(i8* ` ) ( nurl_print arm_result )
+                ( nurl_print `)` ) ( emit_dbg_eol )
+                = arm_result __ad
+                = arm_dup T
+            } {}
             : s arm_lbl ( nurl_sym_get syms `__cur_lbl__` )
             : i arm_did_ret g_did_ret
             // Lossless 64-bit shadow of an integer arm value (see gen_cond's
@@ -7926,11 +8089,14 @@
                         `'), so the match degrades to a statement and produces NO value — make the arms agree (e.g. cast inside the arm: 'T x → # T2 x')` )
                     } {}
                     ? ( ty_is_unsigned arm_type ) { = phi_type ( ty_to_unsigned phi_type ) } {}
-                    // Ownership transfer out of the arm (see snapshot
-                    // above): the value lives on through the phi.
+                    // Ownership OUT of the arm is a copy, not a transfer
+                    // (arm_dup above) — the source keeps its scheduled
+                    // drop. Track whether every live i8* arm proved a
+                    // fresh owner.
                     ? ( seq ( nurl_llty arm_type ) `i8*` )
-                    { ( mem_remove_owned_str syms
-                        ( nurl_sym_get2 syms arm_retid `__ptr` ) ) }
+                    { = live_str_arms + live_str_arms 1
+                        ? | ( seq arm_str_flag `str` ) arm_dup {}
+                        { = all_str_owned F } }
                     {}
                     // Fresh-owned-slice provenance: this live arm feeds the
                     // phi. Count it, and clear the aggregate if it isn't fresh.
@@ -8032,6 +8198,12 @@
         // every live arm produced a fresh owned slice of the (slice) join type.
         ( nurl_sym_def syms `__last_slice_owned__`
         ? & & all_slice_fresh > live_slice_arms 0 ( mem_is_slice_ty phi_type ) `1` `` )
+        // Owned-string provenance of the `??`-result — deterministic,
+        // by the same every-live-arm rule (gen_cond's twin). Residue
+        // from the last arm's inner calls must not decide ownership.
+        ( nurl_sym_def syms `__last_call_ret_owned__`
+        ? & & all_str_owned > live_str_arms 0
+        ( seq ( nurl_llty phi_type ) `i8*` ) `str` `` )
         // Borrow propagation only matters when the match YIELDS an auto-Drop
         // enum (the value a `:`-binding might wrongly drop). For any other
         // result type — String, i, … — reset so a match on a borrowed param
@@ -11120,15 +11292,18 @@
         //     assign_literal_owned)
         //   - bare identifier: an untracked RHS (parameter, borrow,
         //     global) would hand the drop someone else's buffer (UAF);
-        //     a TRACKED RHS is a true move — pointer kept, old value
-        //     freed here, the source's drop cancelled by the transfer
-        //     block below
-        //   - borrow-returning direct call (ret_owned not `str`): same
+        //     a TRACKED RHS gets the same copy — the old cancel-the-
+        //     source's-drop transfer ran at the current symtab depth,
+        //     so inside a `?` arm the pop resurrected the registration
+        //     and both owners freed one buffer (double-free in
+        //     gen_env_allocation's `= loaded var_alloca`)
+        //   - borrow-returning direct call, `?` / `??` / block value
+        //     whose deterministic ownership marker is not `str`: same
         //     copy discipline as the untracked identifier
         // Self-assign `= x x` is skipped whole — freeing the old value
-        // first would store a dangling pointer. `?`-ternary RHS keeps
-        // its pre-existing handling (arm ownership is a phi problem,
-        // not an assignment one).
+        // first would store a dangling pointer. A `#`-cast RHS keeps
+        // its pre-existing raw-FFI handling: `#` means the programmer
+        // manages that pointer.
         : b rhs_lit_over_owned & lhs_is_owned_str == bck_rhs_tt TT_STR
         : ~ s __rhs_ptr ``
         ? ( is_ident_tok bck_rhs_tt )
@@ -11137,19 +11312,24 @@
         ( str_contains_word ( nurl_sym_get syms `__owned_strings__` ) __rhs_ptr )
         : b rhs_id_over_owned & & lhs_is_owned_str ( is_ident_tok bck_rhs_tt )
         ! ( seq bck_rhs_val name )
-        : b rhs_call_unowned & & lhs_is_owned_str == bck_rhs_tt TT_LPAREN
+        : b rhs_call_unowned & & lhs_is_owned_str
+        | | | == bck_rhs_tt TT_LPAREN == bck_rhs_tt TT_QUEST
+        == bck_rhs_tt TT_QUESTQUEST == bck_rhs_tt TT_LBRACE
         ! rhs_is_owned_call
         ? | | rhs_lit_over_owned rhs_id_over_owned rhs_call_unowned
-        { : s old_reg2 ( nurl_cg_reg cg )
+        {  // Copy BEFORE freeing the old value: an unowned call RHS may
+            // return an alias of the LHS's own buffer (priv_resolve's
+            // `^ fname` tail does), and an ident RHS may alias it
+            // through an earlier `: s y x`. Freeing first made the
+            // strdup read freed memory.
+            : s dup_reg ( nurl_cg_reg cg )
+            ( nurl_print `  ` ) ( nurl_print dup_reg )
+            ( nurl_print ` = call i8* @strdup(i8* ` ) ( nurl_print val ) ( nurl_print `)` ) ( emit_dbg_eol )
+            = val dup_reg
+            : s old_reg2 ( nurl_cg_reg cg )
             ( nurl_print `  ` ) ( nurl_print old_reg2 )
             ( nurl_print ` = load i8*, i8** ` ) ( nurl_print ptr ) ( nurl_print `\n` )
             ( nurl_print `  call void @nurl_free(i8* ` ) ( nurl_print old_reg2 ) ( nurl_print `)` ) ( emit_dbg_eol )
-            ? & rhs_id_over_owned rhs_id_tracked {} {
-                : s dup_reg ( nurl_cg_reg cg )
-                ( nurl_print `  ` ) ( nurl_print dup_reg )
-                ( nurl_print ` = call i8* @strdup(i8* ` ) ( nurl_print val ) ( nurl_print `)` ) ( emit_dbg_eol )
-                = val dup_reg
-            }
         }
         {}
         // Slice reassignment-drop (rule 3 dual of the string block
@@ -11166,18 +11346,24 @@
         rhs_slice_owned
         { ( mem_emit_slice_free syms cg name ) }
         {}
-        // Ownership transfer: `= name x` with a bare-identifier RHS
-        // copies x's pointer into `name`. If x was a tracked owned
-        // string, cancel ITS scheduled drop — the buffer lives on
-        // through `name` now (whose own registration, if any, frees it
-        // exactly once at scope exit). Without this, the arm/loop
-        // delta-drop frees x while `name` still aliases it.
-        // Self-assign is excluded: `= x x` untracking x's own alloca
-        // would silence its scope-exit drop and leak the buffer.
-        ? & & & != 0 g_auto_drop_strings ( seq ( nurl_llty vt ) `i8*` )
-        ( is_ident_tok bck_rhs_tt ) ! ( seq bck_rhs_val name )
-        { ( mem_remove_owned_str syms
-            ( nurl_sym_get2 syms bck_rhs_val `__ptr` ) ) }
+        // `= name x` where x is a TRACKED owned string and `name` is
+        // NOT tracked (a global, a parameter binding, an accumulator
+        // declared from a literal): store a strdup. The old protocol
+        // cancelled x's scheduled drop instead ("ownership transfer"),
+        // but the cancel ran at the current symtab depth — inside a `?`
+        // arm the pop resurrected x's registration, and x AND name
+        // freed the same buffer. A copy is path-independent: x keeps
+        // its drop, name owns (and, being untracked, leaks) its own
+        // buffer — leak-not-UAF, the standing conservative trade.
+        // (The tracked-lhs ident case already copied above.)
+        ? & & & & != 0 g_auto_drop_strings ! lhs_is_owned_str
+        ( seq ( nurl_llty vt ) `i8*` ) ( is_ident_tok bck_rhs_tt )
+        rhs_id_tracked
+        { : s dup_reg2 ( nurl_cg_reg cg )
+            ( nurl_print `  ` ) ( nurl_print dup_reg2 )
+            ( nurl_print ` = call i8* @strdup(i8* ` ) ( nurl_print val ) ( nurl_print `)` ) ( emit_dbg_eol )
+            = val dup_reg2
+        }
         {}
         // Same for a moved user `% Drop` binding: `= name x` transfers x's
         // value into name, so x is no longer dropped — forget its
@@ -14145,7 +14331,12 @@
         ? == ( nurl_str_get str i ) 59 { ^ ( nurl_str_slice str 0 i ) } {}
         = i + i 1
     }
-    ^ str
+    // Fresh copy, not `^ str`: every path returns OWNED (the nurl_llty
+    // idiom). The old borrow tail made this a mixed-ownership return —
+    // the exact shape the __fn_ret_str_mixed__ poison now rejects — and
+    // a caller that freed its (owned) argument temp left the borrowed
+    // result dangling.
+    ^ ( nurl_str_cat str `` )
 }
 
 @ seplist_rest s str → s {
@@ -14155,7 +14346,9 @@
         ? == ( nurl_str_get str i ) 59 { ^ ( nurl_str_slice str + i 1 - n + i 1 ) } {}
         = i + i 1
     }
-    ^ ``
+    // Fresh empty, not the `` literal — every path returns OWNED (see
+    // seplist_first above).
+    ^ ( nurl_str_cat `` `` )
 }
 
 // ── String Helpers ───────────────────────────────────────────────
@@ -15865,6 +16058,17 @@
         ? != 0 ( nurl_str_len skip_str_ptr )
         { ( nurl_sym_def syms `__fn_ret_str_owned__` `1` ) }
         {}
+        // Fall-off tail that is a direct owning call (`@ f → s { ( g ) }`)
+        // proves ownership like gen_ret's explicit-call path; any other
+        // unproven i8* fall-off sets the mixed poison (all-paths rule —
+        // see the flag snapshot below).
+        ? & ( seq ( nurl_llty ret_ty ) `i8*` )
+        == 0 ( nurl_str_len skip_str_ptr )
+        { ? ( seq ( nurl_sym_get syms `__last_call_ret_owned__` ) `str` )
+            { ( nurl_sym_def syms `__fn_ret_str_owned__` `1` ) }
+            { ( nurl_sym_def syms `__fn_ret_str_mixed__` `1` ) }
+        }
+        {}
         // A void fall-off returns nothing — no binding can escape
         // through it, so a stale __last_ident_name__ (e.g. the last
         // call's argument) must not cancel a Drop-value's drop here.
@@ -15959,8 +16163,16 @@
     // Snapshot owned-return flags BEFORE pop: nurl_sym_get returns a pointer
     // into the current scope's entry, which nurl_sym_pop then frees.
     : i fn_ret_owned_flag ? != 0 ( nurl_sym_len syms `__fn_ret_owned__` ) 1 0
+    // Ownership is an ALL-paths property: one return site that proved a
+    // fresh owned string must not speak for a sibling that returned a
+    // parameter or a literal (seplist_first's `^ str` tail did exactly
+    // that — the sticky flag marked it owned, callers freed the no-
+    // separator path's BORROW, and stage-2 self-compiles read freed
+    // token text). Any non-proving i8* return site sets the mixed
+    // poison, which vetoes the marker here.
     : i fn_ret_str_owned_flag ? != 0 g_auto_drop_strings
-    ? != 0 ( nurl_sym_len syms `__fn_ret_str_owned__` ) 1 0
+    ? & != 0 ( nurl_sym_len syms `__fn_ret_str_owned__` )
+    == 0 ( nurl_sym_len syms `__fn_ret_str_mixed__` ) 1 0
     0
     : i fn_ret_borrow_flag ? != 0 ( nurl_sym_len syms `__fn_ret_borrow__` ) 1 0
     // A4c: snapshot the returned struct's owned-field list (colon format)
@@ -15985,6 +16197,11 @@
         { ( nurl_sym_def syms ( nurl_str_cat fname `__ret_owned` ) `1` ) }
         {}
     }
+    // Body-known marker: gen_call's arg-temp collect gate may trust this
+    // function's sink / inferred-escape summaries only once its body has
+    // actually been compiled — an entry ABSENT from g_fn_escapes is
+    // ambiguous between "retains nothing" and "not seen yet".
+    ( nurl_sym_def syms ( nurl_str_cat fname `__body_done` ) `1` )
     // Persist "returns a borrow" so a caller's `:`-binding off this fn
     // skips its auto-Drop (borrow-provenance pass).
     ? != 0 fn_ret_borrow_flag
@@ -17978,6 +18195,23 @@
         ( nurl_sym_def syms `nurl_str_slice__ret_owned` `str` )
         ( nurl_sym_def syms `nurl_read_file__ret_owned` `str` )
         ( nurl_sym_def syms `nurl_read_line__ret_owned` `str` )
+        // The strdup-returning getters. Each returns a FRESH copy on
+        // every path (`^ # s ( strdup … )` — the `# s` cast hid the
+        // ownership from the return-site inference, so callers never
+        // freed the copies: nurl_sym_get alone leaked 1.77M strdups
+        // per self-compile). Pre-registered here because the def-time
+        // inference only WRITES the marker when it proves ownership
+        // itself — a pre-registration survives it. The stdlib symtab
+        // twin (stdlib/core/symtab.nu) defines the same names, so
+        // programs built against it get the same ownership.
+        ( nurl_sym_def syms `nurl_sym_get__ret_owned` `str` )
+        ( nurl_sym_def syms `nurl_sym_get2__ret_owned` `str` )
+        ( nurl_sym_def syms `nurl_get_last_type__ret_owned` `str` )
+        ( nurl_sym_def syms `nurl_lex_val__ret_owned` `str` )
+        ( nurl_sym_def syms `nurl_lex_filename__ret_owned` `str` )
+        ( nurl_sym_def syms `nurl_lex_peek_val__ret_owned` `str` )
+        ( nurl_sym_def syms `nurl_llty__ret_owned` `str` )
+        ( nurl_sym_def syms `ty_to_unsigned__ret_owned` `str` )
     }
     {}
     ( nurl_sym_def syms `malloc` `i8*` )
@@ -18697,9 +18931,13 @@
 // dyn_note_needed: add `tname` to the set of traits that need a fat-pointer
 // type + Drop impl emitted. Idempotent (set semantics over g_dyn_needed).
 @ dyn_note_needed s tname → v {
+    // Copy into the global accumulator: tname is a borrowed parameter,
+    // and the caller's owning binding is dropped at ITS scope exit —
+    // storing the bare pointer left g_dyn_needed reading freed trait
+    // names (garbage `%dyn.<…>` type headers in the dyn tests).
     ? ! ( str_contains_word g_dyn_needed tname )
     { = g_dyn_needed ? == 0 ( nurl_str_len g_dyn_needed )
-        tname ( nurl_str_cat3 g_dyn_needed ` ` tname ) }
+        ( nurl_str_cat tname `` ) ( nurl_str_cat3 g_dyn_needed ` ` tname ) }
     {}
 }
 
