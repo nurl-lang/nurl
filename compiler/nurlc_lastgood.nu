@@ -10942,8 +10942,26 @@
         ( nurl_sym_def syms `__last_value_borrow__` `` )
         ( nurl_sym_def syms `__last_closure_env__` `` )
         ( nurl_sym_def syms `__last_slice_owned__` `` )
-        : s val ( gen_expr lex syms cg )
+        : ~ s val ( gen_expr lex syms cg )
         : s vt ( nurl_get_last_type )
+        // Mutable string binding initialised from a string LITERAL: own
+        // a heap copy and track it from birth. The accumulator idiom
+        // (`: ~ s acc `` … = acc ( … cat3 acc … )`) never freed a byte —
+        // the literal init left the binding untracked, so every value
+        // the assignment rules later stored in it leaked. Those rules
+        // now maintain the heap-owned invariant for every RHS shape, so
+        // birth-tracking is sound. Immutable literal bindings stay
+        // untracked: nothing owned can ever flow into them.
+        : ~ b lit_track F
+        ? & & & != 0 g_auto_drop_strings is_mutable
+        == bck_rhs_tt TT_STR ( seq ( nurl_llty vt ) `i8*` )
+        { : s __ld ( nurl_cg_reg cg )
+            ( nurl_print `  ` ) ( nurl_print __ld )
+            ( nurl_print ` = call i8* @strdup(i8* ` ) ( nurl_print val )
+            ( nurl_print `)` ) ( emit_dbg_eol )
+            = val __ld
+            = lit_track T
+        } {}
         // Closure-env reclamation (§7.4): did the RHS allocate a capturing
         // closure's env? Captured now, registered for the function-exit
         // free after the binding is recorded below.
@@ -11004,7 +11022,8 @@
             {} }
         // Phase 2B: string ownership tracking (opt-in)
         ? != 0 g_auto_drop_strings
-        { ? & ( seq ( nurl_sym_get syms `__last_call_ret_owned__` ) `str` ) ( seq ( nurl_llty vt ) `i8*` )
+        { ? & | ( seq ( nurl_sym_get syms `__last_call_ret_owned__` ) `str` )
+            lit_track ( seq ( nurl_llty vt ) `i8*` )
             { ( mem_own_add_str syms ptr ) ( mem_journal_push_str cg ptr ) }
             {}
         }
@@ -11114,8 +11133,20 @@
                 ( nurl_sym_def syms `__last_value_borrow__` `` )
                 ( nurl_sym_def syms `__last_closure_env__` `` )
                 ( nurl_sym_def syms `__last_slice_owned__` `` )
-                : s val ( gen_expr lex syms cg )
+                : ~ s val ( gen_expr lex syms cg )
                 : s vt ( nurl_get_last_type )
+                // Birth-tracking for a mutable string binding with a
+                // LITERAL initialiser — see the type-inference path.
+                : ~ b lit_track F
+                ? & & & != 0 g_auto_drop_strings is_mutable
+                == bck_rhs_tt TT_STR ( seq ( nurl_llty ptype ) `i8*` )
+                { : s __ld ( nurl_cg_reg cg )
+                    ( nurl_print `  ` ) ( nurl_print __ld )
+                    ( nurl_print ` = call i8* @strdup(i8* ` ) ( nurl_print val )
+                    ( nurl_print `)` ) ( emit_dbg_eol )
+                    = val __ld
+                    = lit_track T
+                } {}
                 : s rhs_closure_env ( nurl_sym_get syms `__last_closure_env__` )
                 // Thread-safety: when the RHS is a closure that captured a
                 // non-Send value (an Rc), carry it onto this binding so a later
@@ -11190,7 +11221,8 @@
                 {}
                 // Phase 2B: string ownership tracking (opt-in)
                 ? != 0 g_auto_drop_strings
-                { ? & ( seq ( nurl_sym_get syms `__last_call_ret_owned__` ) `str` ) ( seq ( nurl_llty ptype ) `i8*` )
+                { ? & | ( seq ( nurl_sym_get syms `__last_call_ret_owned__` ) `str` )
+                    lit_track ( seq ( nurl_llty ptype ) `i8*` )
                     { ( mem_own_add_str syms ptr ) ( mem_journal_push_str cg ptr ) }
                     {}
                 }
