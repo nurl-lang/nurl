@@ -5459,6 +5459,40 @@
     ^ != ( is_ptr_ty at_ll ) ( is_ptr_ty pt_ll )
 }
 
+// Referent depth of the expression just evaluated by gen_expr: the
+// transient `__last_expr_refdepth__` (set by a closure / aggregate
+// literal), else — when the expression was a bare identifier — that
+// binding's `<name>__refdepth`. 0 means "not a stack reference"
+// (a real referent depth is always >= 1, the function body).
+@ bck_expr_refdepth i syms s ident → i {
+    ? == g_borrowck 0 { ^ 0 } {}
+    : s d ( nurl_sym_get syms `__last_expr_refdepth__` )
+    ? != 0 ( nurl_str_len d ) { ^ ( nurl_str_to_int d ) } {}
+    ? != 0 ( nurl_str_len ident ) {
+        : s rd ( nurl_sym_get2 syms ident `__refdepth` )
+        ? != 0 ( nurl_str_len rd ) { ^ ( nurl_str_to_int rd ) } {}
+    } {}
+    0
+}
+
+// Map a SOURCE-spelling scalar token to its canonical sized-int type
+// ("" when the token is not a sized-int scalar). Used by the call-arg
+// width coercion, where the declared parameter type is the pre-pass
+// source string (`u`, `u16`, `i`, …) rather than an LLVM type.
+@ src_int_ty s t → s {
+    ? ( seq t `u` ) `u8`
+    ? ( seq t `u8` ) `u8`
+    ? ( seq t `u16` ) `u16`
+    ? ( seq t `u32` ) `u32`
+    ? ( seq t `u64` ) `u64`
+    ? ( seq t `i8` ) `i8`
+    ? ( seq t `i16` ) `i16`
+    ? ( seq t `i32` ) `i32`
+    ? ( seq t `i64` ) `i64`
+    ? ( seq t `i` ) `i64`
+    ``
+}
+
 @ gen_call i lex i syms i cg → s {
     ( nurl_lex_advance lex )
     : ~ s fname ( nurl_lex_val lex )
@@ -6589,6 +6623,32 @@
 }
 
 // ── Conditional ? cond then else ──────────────────────────────────
+
+// Arm-local staleness. The two arms of a `?` are ALTERNATIVES: a
+// `( string_free line )` in the then-arm does not run on the else-arm's
+// path, so it must not mark a pointer stale there (it flagged correct
+// stdlib code before this — the no-false-positive contract, docs/MEMORY.md
+// §6). After the `?` closes, though, either arm may have run, so the join
+// takes the UNION: stale if stale on either path.
+@ __ptr_dead_snapshot → s { ^ ( nurl_sym_get g_ptrtab `__ptr_dead__` ) }
+
+@ __ptr_dead_restore s snap → v { ( nurl_sym_def g_ptrtab `__ptr_dead__` snap ) }
+
+@ __ptr_dead_union s a s b → v {
+    : ~ s rest b
+    : ~ s out a
+    ~ != 0 ( nurl_str_len rest ) {
+        : s p ( str_first_word rest )
+        = rest ( str_skip_word rest )
+        : s l ( str_first_word rest )
+        = rest ( str_skip_word rest )
+        ? ( str_contains_word out p ) {} {
+            : s entry ( nurl_str_cat3 p ` ` l )
+            = out ? == 0 ( nurl_str_len out ) entry ( nurl_str_cat3 out ` ` entry )
+        }
+    }
+    ( nurl_sym_def g_ptrtab `__ptr_dead__` out )
+}
 
 @ gen_cond i lex i syms i cg → s {
     // Borrow checker (Phase 0d): source line of the `?`, for the
@@ -10623,22 +10683,6 @@
 // function* needs an interprocedural summary — a per-function pass
 // cannot see whether the callee retains it.
 
-// Referent depth of the expression just evaluated by gen_expr: the
-// transient `__last_expr_refdepth__` (set by a closure / aggregate
-// literal), else — when the expression was a bare identifier — that
-// binding's `<name>__refdepth`. 0 means "not a stack reference"
-// (a real referent depth is always >= 1, the function body).
-@ bck_expr_refdepth i syms s ident → i {
-    ? == g_borrowck 0 { ^ 0 } {}
-    : s d ( nurl_sym_get syms `__last_expr_refdepth__` )
-    ? != 0 ( nurl_str_len d ) { ^ ( nurl_str_to_int d ) } {}
-    ? != 0 ( nurl_str_len ident ) {
-        : s rd ( nurl_sym_get2 syms ident `__refdepth` )
-        ? != 0 ( nurl_str_len rd ) { ^ ( nurl_str_to_int rd ) } {}
-    } {}
-    0
-}
-
 // Emit one borrow-checker `error:` as `file:line: error: <msg>`. The
 // check fires parse-time but away from the offending token (after
 // `gen_expr` has consumed the whole sub-expression), so — like
@@ -10973,32 +11017,6 @@
     ( nurl_eprintln ( nurl_str_cat3 loc `: warning: ` msg ) )
     ( nurl_eprintln ( nurl_str_cat3 `  note: re-fetch the pointer after the mutation (` name
     ( nurl_str_cat3 ` = ( vec_data … ` cont ` ) )` ) ) )
-}
-
-// Arm-local staleness. The two arms of a `?` are ALTERNATIVES: a
-// `( string_free line )` in the then-arm does not run on the else-arm's
-// path, so it must not mark a pointer stale there (it flagged correct
-// stdlib code before this — the no-false-positive contract, docs/MEMORY.md
-// §6). After the `?` closes, though, either arm may have run, so the join
-// takes the UNION: stale if stale on either path.
-@ __ptr_dead_snapshot → s { ^ ( nurl_sym_get g_ptrtab `__ptr_dead__` ) }
-
-@ __ptr_dead_restore s snap → v { ( nurl_sym_def g_ptrtab `__ptr_dead__` snap ) }
-
-@ __ptr_dead_union s a s b → v {
-    : ~ s rest b
-    : ~ s out a
-    ~ != 0 ( nurl_str_len rest ) {
-        : s p ( str_first_word rest )
-        = rest ( str_skip_word rest )
-        : s l ( str_first_word rest )
-        = rest ( str_skip_word rest )
-        ? ( str_contains_word out p ) {} {
-            : s entry ( nurl_str_cat3 p ` ` l )
-            = out ? == 0 ( nurl_str_len out ) entry ( nurl_str_cat3 out ` ` entry )
-        }
-    }
-    ( nurl_sym_def g_ptrtab `__ptr_dead__` out )
 }
 
 // The container a pointer was borrowed from ("" when unknown).
@@ -11953,24 +11971,6 @@
     ? | == 0 ( nurl_str_len vt ) == 0 ( nurl_str_len dt ) { ^ F } {}
     ^ | | != ( is_float_ty vt ) ( is_float_ty dt )
     ( __arg_named_struct_mismatch vt dt ) ( __arg_str_cstr_mismatch vt dt )
-}
-
-// Map a SOURCE-spelling scalar token to its canonical sized-int type
-// ("" when the token is not a sized-int scalar). Used by the call-arg
-// width coercion, where the declared parameter type is the pre-pass
-// source string (`u`, `u16`, `i`, …) rather than an LLVM type.
-@ src_int_ty s t → s {
-    ? ( seq t `u` ) `u8`
-    ? ( seq t `u8` ) `u8`
-    ? ( seq t `u16` ) `u16`
-    ? ( seq t `u32` ) `u32`
-    ? ( seq t `u64` ) `u64`
-    ? ( seq t `i8` ) `i8`
-    ? ( seq t `i16` ) `i16`
-    ? ( seq t `i32` ) `i32`
-    ? ( seq t `i64` ) `i64`
-    ? ( seq t `i` ) `i64`
-    ``
 }
 
 // Emit an integer-width bridge `%r = trunc|sext|zext <from> <val> to
