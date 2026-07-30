@@ -5384,7 +5384,10 @@
 // The arg_idx-th entry of a `;`-joined param-type-source list (empty when
 // out of range).
 @ __ptypes_nth s lst i idx → s {
-    : ~ s cur lst
+    // Own a copy so the cursor is TRACKED: `= cur ( seplist_rest cur )`
+    // on an untracked alias stored each fresh tail without freeing the
+    // previous one — one leak per hop, ~20k per self-compile.
+    : ~ s cur ( nurl_str_cat lst `` )
     : ~ i k 0
     ~ < k idx { = cur ( seplist_rest cur ) = k + k 1 }
     ^ ( seplist_first cur )
