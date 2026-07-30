@@ -2034,6 +2034,34 @@
 
 // ── Expression generation ─────────────────────────────────────────
 
+@ nurl_cg_reg i h → s {
+    : s p # s h
+    : i n ( nurl_peek p 0 )
+    ( nurl_poke p 0 + n 1 )
+    ^ ( nurl_str_cat `%r` ( nurl_str_int n ) )
+}
+
+@ nurl_cg_lbl i h s hint → s {
+    : s p # s h
+    : i n ( nurl_peek p 1 )
+    ( nurl_poke p 1 + n 1 )
+    ^ ( nurl_str_cat3 hint `_` ( nurl_str_int n ) )
+}
+
+@ int_width s ty → i {
+    ? ( seq ty `i1` ) 1
+    ? ( seq ty `i8` ) 8
+    ? ( seq ty `i16` ) 16
+    ? ( seq ty `i32` ) 32
+    ? ( seq ty `i64` ) 64
+    // Unsigned internal scalars (A1) have the same widths.
+    ? ( seq ty `u8` ) 8
+    ? ( seq ty `u16` ) 16
+    ? ( seq ty `u32` ) 32
+    ? ( seq ty `u64` ) 64
+    0
+}
+
 @ gen_int_lit i lex → s {
     : i n ( nurl_lex_inum lex )
     ( nurl_lex_advance lex )
@@ -3323,7 +3351,7 @@
 // (space-separated). Called by gen_call after a callee returns to release
 // owned-string argument temporaries (Phase 2B parameter-ownership).
 @ mem_drop_arg_temps s temps → v {
-    : ~ s rest temps
+    : ~ s rest ( nurl_str_cat temps `` )
     ~ != 0 ( nurl_str_len rest ) {
         : s reg ( str_first_word rest )
         = rest ( str_skip_word rest )
@@ -3692,20 +3720,6 @@
 
 @ nurl_cg_new → i {
     ^ # i ( nurl_zalloc 16 )
-}
-
-@ nurl_cg_reg i h → s {
-    : s p # s h
-    : i n ( nurl_peek p 0 )
-    ( nurl_poke p 0 + n 1 )
-    ^ ( nurl_str_cat `%r` ( nurl_str_int n ) )
-}
-
-@ nurl_cg_lbl i h s hint → s {
-    : s p # s h
-    : i n ( nurl_peek p 1 )
-    ( nurl_poke p 1 + n 1 )
-    ^ ( nurl_str_cat3 hint `_` ( nurl_str_int n ) )
 }
 
 @ nurl_cg_reset i h → v {
@@ -5189,7 +5203,7 @@
 // compile-time diagnostic at the bound. No-op for unbounded generics.
 @ check_generic_bounds i lex s fname s type_args → v {
     : ~ s tp_rest ( nurl_sym_get2 g_generic_syms fname `__tparams` )
-    : ~ s ta_rest type_args
+    : ~ s ta_rest ( nurl_str_cat type_args `` )
     ~ != 0 ( nurl_str_len tp_rest ) {
         : s tp ( str_first_word tp_rest )
         = tp_rest ( str_skip_word tp_rest )
@@ -5198,7 +5212,7 @@
         : s bounds ( nurl_sym_get g_generic_syms ( nurl_str_cat3 fname `__bound__` tp ) )
         ? & != 0 ( nurl_str_len bounds ) != 0 ( nurl_str_len ta ) {
             : s ta_llvm ( nurl_src_to_llvm ta )
-            : ~ s br bounds
+            : ~ s br ( nurl_str_cat bounds `` )
             ~ != 0 ( nurl_str_len br ) {
                 : s bt ( str_first_word br )
                 = br ( str_skip_word br )
@@ -6212,7 +6226,7 @@
                     : ~ s __psrc ( __kw_trim ( __ptypes_nth __roster arg_idx ) )
                     ? ! ( seq call_name fname ) {
                         : ~ s __tpr ( nurl_sym_get2 g_generic_syms fname `__tparams` )
-                        : ~ s __tar call_targs
+                        : ~ s __tar ( nurl_str_cat call_targs `` )
                         ~ != 0 ( nurl_str_len __tpr ) {
                             : s __tp ( str_first_word __tpr )
                             = __tpr ( str_skip_word __tpr )
@@ -6653,7 +6667,7 @@
 @ __ptr_dead_restore s snap → v { ( nurl_sym_def g_ptrtab `__ptr_dead__` snap ) }
 
 @ __ptr_dead_union s a s b → v {
-    : ~ s rest b
+    : ~ s rest ( nurl_str_cat b `` )
     : ~ s out a
     ~ != 0 ( nurl_str_len rest ) {
         : s p ( str_first_word rest )
@@ -7223,7 +7237,7 @@
 // compares, and branches to `tag_ok_label` (the arm body) on a match or
 // to the next alternative — the last falling through to `next_label`.
 @ emit_or_chain i cg s tag_reg s or_names s tag_ok_label s next_label s first_label → v {
-    : ~ s rest or_names
+    : ~ s rest ( nurl_str_cat or_names `` )
     : ~ s cur_lbl first_label
     ~ != 0 ( nurl_str_len rest ) {
         : s vname ( str_first_word rest )
@@ -7635,7 +7649,7 @@
                         ? != 0 pvc { ( die lex `or-pattern variants cannot bind payloads` ) } {}
                         ? has_lit { ( die lex `or-pattern cannot mix literal constraints` ) } {}
                         ? is_bool_pat { ( die lex `or-pattern applies to named enum variants, not T/F` ) } {}
-                        : ~ s orr or_names
+                        : ~ s orr ( nurl_str_cat or_names `` )
                         ~ != 0 ( nurl_str_len orr ) {
                             : s vn ( str_first_word orr )
                             = orr ( str_skip_word orr )
@@ -7669,7 +7683,7 @@
                         ( emit_lit_check cg syms match_val match_type pattern_name 1 lit1 next_label )
                         ( emit_lit_check cg syms match_val match_type pattern_name 2 lit2 next_label )
                         // Literal constraints on payload slots 3+ (rare).
-                        : ~ s lc_rest lit_over
+                        : ~ s lc_rest ( nurl_str_cat lit_over `` )
                         : ~ i lc_idx 3
                         ~ != 0 ( nurl_str_len lc_rest ) {
                             : s lc_tok ( str_first_word lc_rest )
@@ -8187,7 +8201,7 @@
             // Bind payload slots 3+ (slot 0 is handled inline above with its
             // opt/res-aware reconstruction; slots 1/2 just above). One helper
             // call per slot lifts the former 3-payload destructuring limit.
-            : ~ s pb_rest pv_over
+            : ~ s pb_rest ( nurl_str_cat pv_over `` )
             : ~ i pb_idx 3
             ~ != 0 ( nurl_str_len pb_rest ) {
                 : s pb_tok ( str_first_word pb_rest )
@@ -8917,7 +8931,7 @@
         : s cur ( nurl_sym_get syms key )
         ? ( str_contains_word cur name )
         { : ~ s out ``
-            : ~ s rest cur
+            : ~ s rest ( nurl_str_cat cur `` )
             ~ != 0 ( nurl_str_len rest ) {
                 : s w ( str_first_word rest ) = rest ( str_skip_word rest )
                 ? ( seq w name ) {}
@@ -9099,7 +9113,7 @@
     : s idxs ( nurl_sym_get syms `__last_agg_owned_fields__` )
     ? & != 0 ( nurl_str_len idxs ) == ( nurl_str_get vt 0 ) 37
     { : s sname ( nurl_str_slice vt 1 - ( nurl_str_len vt ) 1 )
-        : ~ s rest idxs
+        : ~ s rest ( nurl_str_cat idxs `` )
         ~ != 0 ( nurl_str_len rest ) {
             : s tok ( str_first_word rest )
             = rest ( str_skip_word rest )
@@ -9552,7 +9566,7 @@
     : s cur ( nurl_sym_get syms `__owned_closure_envs__` )
     ? & != 0 ( nurl_str_len name ) ( str_contains_word cur name )
     { : ~ s out ``
-        : ~ s rest cur
+        : ~ s rest ( nurl_str_cat cur `` )
         ~ != 0 ( nurl_str_len rest ) {
             : s w ( str_first_word rest ) = rest ( str_skip_word rest )
             ? ( seq w name ) {}
@@ -9729,7 +9743,7 @@
     : s cur ( nurl_sym_get syms `__owned_strings__` )
     ? & != 0 ( nurl_str_len ptr ) ( str_contains_word cur ptr )
     { : ~ s out ``
-        : ~ s rest cur
+        : ~ s rest ( nurl_str_cat cur `` )
         ~ != 0 ( nurl_str_len rest ) {
             : s w ( str_first_word rest )
             = rest ( str_skip_word rest )
@@ -10633,7 +10647,7 @@
     = g_bck_inn 0
     : i n ( bck_explode )
     : ~ s seed ``
-    : ~ s prest params
+    : ~ s prest ( nurl_str_cat params `` )
     ~ != 0 ( nurl_str_len prest ) {
         : s pn ( str_first_word prest )
         = prest ( str_skip_word prest )
@@ -12007,20 +12021,6 @@
     ( nurl_print ( nurl_llty from_ty ) ) ( nurl_print ` ` ) ( nurl_print val )
     ( nurl_print ` to ` ) ( nurl_print ( nurl_llty to_ty ) ) ( nurl_print `\n` )
     ^ r
-}
-
-@ int_width s ty → i {
-    ? ( seq ty `i1` ) 1
-    ? ( seq ty `i8` ) 8
-    ? ( seq ty `i16` ) 16
-    ? ( seq ty `i32` ) 32
-    ? ( seq ty `i64` ) 64
-    // Unsigned internal scalars (A1) have the same widths.
-    ? ( seq ty `u8` ) 8
-    ? ( seq ty `u16` ) 16
-    ? ( seq ty `u32` ) 32
-    ? ( seq ty `u64` ) 64
-    0
 }
 
 // An LLVM type string denotes a pointer iff it ends in `*` (e.g.
@@ -13561,7 +13561,7 @@
     ( nurl_print ` = bitcast i8* ` ) ( nurl_print raw_ptr )
     ( nurl_print ` to ` ) ( nurl_print ( nurl_llty elem_ty ) ) ( nurl_print `*\n` )
     // Store each value at successive GEP indices
-    : ~ s rest vals
+    : ~ s rest ( nurl_str_cat vals `` )
     : ~ i idx 0
     ~ < idx count {
         : s v ( str_first_word rest )
@@ -13952,7 +13952,7 @@
     {}
 
     : ~ s ty `{ i64`  // field 0: refcount
-    : ~ s vars captured_vars
+    : ~ s vars ( nurl_str_cat captured_vars `` )
     ~ != 0 ( nurl_str_len vars ) {
         : s var ( str_first_word vars )
         // Lower to the LLVM spelling here: this string is pure IR text
@@ -14235,7 +14235,7 @@
     // it as a value, so a captured parameter is NOT invoke-only (§7.4) —
     // the closure may outlive the call and carry the captured reference.
     // Mark each captured name value-read in the enclosing scope.
-    : ~ s __cap_scan captured_vars
+    : ~ s __cap_scan ( nurl_str_cat captured_vars `` )
     ~ != 0 ( nurl_str_len __cap_scan ) {
         : s __cap_w ( str_first_word __cap_scan )
         ( bck_mark_param_valueread syms __cap_w )
@@ -14275,8 +14275,8 @@
     // Emit function header
     ( nurl_print `\ndefine ` ) ( nurl_print ( nurl_llty ret_type ) ) ( nurl_print ` @` )
     ( nurl_print closure_fn_name ) ( nurl_print `(i8* %__env` )
-    : ~ s body_param_types param_types
-    : ~ s body_param_names param_names
+    : ~ s body_param_types ( nurl_str_cat param_types `` )
+    : ~ s body_param_names ( nurl_str_cat param_names `` )
     : ~ i bi 0
     ~ < bi param_count {
         ( nurl_print `, ` )
@@ -14488,7 +14488,7 @@
     // Return a function pointer constant
     : ~ s fn_ptr_type ( nurl_str_cat `{ ` ( nurl_str_cat ret_type `(` ) )
     = fn_ptr_type ( nurl_str_cat fn_ptr_type `i8*` )
-    : ~ s types1 param_types
+    : ~ s types1 ( nurl_str_cat param_types `` )
     : ~ i j 0
     ~ < j param_count {
         = fn_ptr_type ( nurl_str_cat ( nurl_str_cat fn_ptr_type `, ` ) ( seplist_first types1 ) )
@@ -14510,7 +14510,7 @@
     ( nurl_print `  ` ) ( nurl_print result )
     ( nurl_print ` = insertvalue ` ) ( nurl_print ( nurl_llty fn_ptr_type ) )
     ( nurl_print ` undef, ` ) ( nurl_print ( nurl_llty ret_type ) ) ( nurl_print `(i8*` )
-    : ~ s types2 param_types
+    : ~ s types2 ( nurl_str_cat param_types `` )
     : ~ i k 0
     ~ < k param_count {
         ( nurl_print `, ` ) ( nurl_print ( seplist_first types2 ) )
@@ -14563,7 +14563,7 @@
 // never appears in an LLVM type string, so it is a safe field delimiter.
 // The n-th (0-based) element of a `;`-separated list, or `` if out of range.
 @ __nth_sep s list i n → s {
-    : ~ s rest list
+    : ~ s rest ( nurl_str_cat list `` )
     : ~ i k 0
     ~ < k n { = rest ( seplist_rest rest ) = k + k 1 }
     ? == 0 ( nurl_str_len rest ) { ^ `` } {}
@@ -14603,7 +14603,7 @@
     ? == 0 ( nurl_str_len word_list ) ^ 0 {}
 
     : ~ i count 0
-    : ~ s remaining word_list
+    : ~ s remaining ( nurl_str_cat word_list `` )
     ~ != 0 ( nurl_str_len remaining ) {
         = remaining ( str_skip_word remaining )
         = count + count 1
@@ -14615,7 +14615,7 @@
 @ str_contains s word_list s target → b {
     ? == 0 ( nurl_str_len word_list ) ^ F {}
 
-    : ~ s remaining word_list
+    : ~ s remaining ( nurl_str_cat word_list `` )
     ~ != 0 ( nurl_str_len remaining ) {
         : s current_word ( str_first_word remaining )
         ? ( seq current_word target ) ^ T {}
@@ -15125,7 +15125,7 @@
 
 // idx-th space-separated word of `list`, or empty when out of range.
 @ bck_nth_word s list i idx → s {
-    : ~ s rest list
+    : ~ s rest ( nurl_str_cat list `` )
     : ~ i k 0
     ~ != 0 ( nurl_str_len rest ) {
         : s w ( str_first_word rest )
@@ -15142,7 +15142,7 @@
 // stack reference.
 @ bck_max_ret_refdepth s ret_params s arg_refdepths → i {
     : ~ i best 0
-    : ~ s rest ret_params
+    : ~ s rest ( nurl_str_cat ret_params `` )
     ~ != 0 ( nurl_str_len rest ) {
         : s w ( str_first_word rest )
         = rest ( str_skip_word rest )
@@ -15192,7 +15192,7 @@
     ? == has_wildcard 0 {
         : s all ( nurl_sym_get2 syms ename `__variants` )
         ? != 0 ( nurl_str_len all ) {
-            : ~ s rest all
+            : ~ s rest ( nurl_str_cat all `` )
             ~ != 0 ( nurl_str_len rest ) {
                 : s vname ( str_first_word rest )
                 = rest ( str_skip_word rest )
@@ -15317,7 +15317,7 @@
 // Words are space-separated tokens as produced by collect_fn_body.
 @ subst_source s src s from s to → s {
     : ~ s result ``
-    : ~ s rest src
+    : ~ s rest ( nurl_str_cat src `` )
     ~ != 0 ( nurl_str_len rest ) {
         : s word ( str_first_word rest )
         = rest ( str_skip_word rest )
@@ -15364,7 +15364,7 @@
 // unambiguous "absent"). No early `^` inside the loop — accumulate.
 @ __assoc_val s bindings s name → s {
     : ~ s found ``
-    : ~ s rest bindings
+    : ~ s rest ( nurl_str_cat bindings `` )
     ~ != 0 ( nurl_str_len rest ) {
         : s nm ( str_first_word rest )
         = rest ( str_skip_word rest )
@@ -15381,7 +15381,7 @@
 // names an associated type lowers to the impl's choice (e.g. `→ Elem` → `→ i`).
 @ subst_assoc s src s bindings → s {
     : ~ s result src
-    : ~ s rest bindings
+    : ~ s rest ( nurl_str_cat bindings `` )
     ~ != 0 ( nurl_str_len rest ) {
         : s nm ( str_first_word rest )
         = rest ( str_skip_word rest )
@@ -15583,8 +15583,8 @@
     : s tparams ( nurl_sym_get2 g_generic_syms fname `__tparams` )
     : s gsrc ( nurl_sym_get2 g_generic_syms fname `__gsrc` )
     : ~ s subst_src gsrc
-    : ~ s tp_rest tparams
-    : ~ s ta_rest type_args
+    : ~ s tp_rest ( nurl_str_cat tparams `` )
+    : ~ s ta_rest ( nurl_str_cat type_args `` )
     ~ != 0 ( nurl_str_len tp_rest ) {
         : s tp ( str_first_word tp_rest )
         = tp_rest ( str_skip_word tp_rest )
@@ -15732,7 +15732,7 @@
         // where A/B are still abstract. The concrete instantiation emerges
         // when the function is called with concrete type args at parse
         // time and re-enters scan_generic_structs / parse_type_paren.
-        : ~ s ta_chk ta_list
+        : ~ s ta_chk ( nurl_str_cat ta_list `` )
         : ~ b skip F
         ~ & != 0 ( nurl_str_len ta_chk ) ! skip {
             : s ta ( str_first_word ta_chk )
@@ -15742,8 +15742,8 @@
         ? ! skip {
             // Compute mangled name by walking tparams + ta_list in parallel.
             : ~ s mangled sname
-            : ~ s tp_r tparams
-            : ~ s ta_r ta_list
+            : ~ s tp_r ( nurl_str_cat tparams `` )
+            : ~ s ta_r ( nurl_str_cat ta_list `` )
             ~ & != 0 ( nurl_str_len tp_r ) != 0 ( nurl_str_len ta_r ) {
                 : s tp ( str_first_word tp_r )
                 = tp_r ( str_skip_word tp_r )
@@ -15759,8 +15759,8 @@
                 // Substitute tparam → type-arg in the raw body source.
                 : s body ( nurl_sym_get2 g_generic_struct_syms sname `__sbody` )
                 : ~ s subst body
-                : ~ s tp_r2 tparams
-                : ~ s ta_r2 ta_list
+                : ~ s tp_r2 ( nurl_str_cat tparams `` )
+                : ~ s ta_r2 ( nurl_str_cat ta_list `` )
                 ~ & != 0 ( nurl_str_len tp_r2 ) != 0 ( nurl_str_len ta_r2 ) {
                     : s tp ( str_first_word tp_r2 )
                     = tp_r2 ( str_skip_word tp_r2 )
@@ -16245,7 +16245,7 @@
     : s __as_inferred ( nurl_sym_get syms `__fn_inferred_sink__` )
     ? != 0 ( nurl_str_len __as_inferred )
     { : ~ s __as_merged ( nurl_sym_get g_fn_sink fname )
-        : ~ s __as_rest __as_inferred
+        : ~ s __as_rest ( nurl_str_cat __as_inferred `` )
         ~ != 0 ( nurl_str_len __as_rest ) {
             : s __as_w ( str_first_word __as_rest )
             = __as_rest ( str_skip_word __as_rest )
@@ -16262,7 +16262,7 @@
     : s __ae_inferred ( nurl_sym_get syms `__fn_inferred_escape__` )
     ? != 0 ( nurl_str_len __ae_inferred )
     { : ~ s __ae_merged ( nurl_sym_get g_fn_escapes fname )
-        : ~ s __ae_rest __ae_inferred
+        : ~ s __ae_rest ( nurl_str_cat __ae_inferred `` )
         ~ != 0 ( nurl_str_len __ae_rest ) {
             : s __ae_w ( str_first_word __ae_rest )
             = __ae_rest ( str_skip_word __ae_rest )
@@ -16298,7 +16298,7 @@
     : s __rp_inferred ( nurl_sym_get syms `__fn_ret_param__` )
     ? != 0 ( nurl_str_len __rp_inferred )
     { : ~ s __rp_merged ( nurl_sym_get g_fn_ret_param fname )
-        : ~ s __rp_rest __rp_inferred
+        : ~ s __rp_rest ( nurl_str_cat __rp_inferred `` )
         ~ != 0 ( nurl_str_len __rp_rest ) {
             : s __rp_w ( str_first_word __rp_rest )
             = __rp_rest ( str_skip_word __rp_rest )
@@ -17317,7 +17317,7 @@
 }
 
 @ __enum_needs_drop s variants i syms → b {
-    : ~ s scan variants
+    : ~ s scan ( nurl_str_cat variants `` )
     : ~ b r F
     ~ != 0 ( nurl_str_len scan ) {
         : s vname ( str_first_word scan )
@@ -17452,7 +17452,7 @@
     ( nurl_print `(%` ) ( nurl_print ename ) ( nurl_print ` %v) {\nentry:\n` )
     ( nurl_print `  %dtag = extractvalue %` ) ( nurl_print ename ) ( nurl_print ` %v, 0\n` )
     : ~ i vk 0
-    : ~ s rest variants
+    : ~ s rest ( nurl_str_cat variants `` )
     ~ != 0 ( nurl_str_len rest ) {
         : s vname ( str_first_word rest )
         = rest ( str_skip_word rest )
@@ -17508,7 +17508,7 @@
     } {}
     : s vlist ( nurl_sym_get2 syms mangle `__variants` )
     ? != 0 ( nurl_str_len vlist ) {
-        : ~ s scan vlist
+        : ~ s scan ( nurl_str_cat vlist `` )
         ~ != 0 ( nurl_str_len scan ) {
             : s vname ( str_first_word scan )
             = scan ( str_skip_word scan )
@@ -17547,7 +17547,7 @@
 // registers `drop##%E`) iff a drop graph was emitted.
 @ emit_auto_drop s ename s variants i syms → b {
     : ~ b has_box F
-    : ~ s scan variants
+    : ~ s scan ( nurl_str_cat variants `` )
     ~ != 0 ( nurl_str_len scan ) {
         : s vname ( str_first_word scan )
         = scan ( str_skip_word scan )
@@ -17947,8 +17947,8 @@
     }
     {}
     : ~ s subst_src gsrc
-    : ~ s tp_rest tparams
-    : ~ s ta_rest type_args
+    : ~ s tp_rest ( nurl_str_cat tparams `` )
+    : ~ s ta_rest ( nurl_str_cat type_args `` )
     ~ != 0 ( nurl_str_len tp_rest ) {
         : s tp ( str_first_word tp_rest )
         = tp_rest ( str_skip_word tp_rest )
@@ -18593,6 +18593,11 @@
         ( nurl_sym_def syms `bck_handle_cond__ret_owned` `str` )
         ( nurl_sym_def syms `bck_handle_match__ret_owned` `str` )
         ( nurl_sym_def syms `bck_loop__ret_owned` `str` )
+        // Fresh `# s ( malloc … )` builders. The cast hides the
+        // allocation from the ident-return inference exactly like the
+        // strdup getters above, so they must be declared.
+        ( nurl_sym_def syms `encode_str__ret_owned` `str` )
+        ( nurl_sym_def syms `nurl_lex_src_slice__ret_owned` `str` )
     }
     {}
     ( nurl_sym_def syms `malloc` `i8*` )
@@ -19163,7 +19168,7 @@
     // (a) every binding names a declared associated type — checked first so a
     // typo'd `type Elment i` is reported as the unknown name, not as the (also
     // true, but less precise) "Elem unbound".
-    : ~ s brest bindings
+    : ~ s brest ( nurl_str_cat bindings `` )
     ~ != 0 ( nurl_str_len brest ) {
         : s bn ( str_first_word brest )
         = brest ( str_skip_word brest )
@@ -19175,7 +19180,7 @@
         {}
     }
     // (b) every declared associated type is bound
-    : ~ s drest declared
+    : ~ s drest ( nurl_str_cat declared `` )
     ~ != 0 ( nurl_str_len drest ) {
         : s an ( str_first_word drest )
         = drest ( str_skip_word drest )
@@ -19197,7 +19202,7 @@
 // T: Super`, so a bound `[A: Sub]` may freely call any supertrait method on A
 // (dispatch resolves through the supertrait impl that this check proves exists).
 @ verify_super_obligations → v {
-    : ~ s rest g_super_obligations
+    : ~ s rest ( nurl_str_cat g_super_obligations `` )
     ~ != 0 ( nurl_str_len rest ) {
         : s sub ( str_first_word rest )
         = rest ( str_skip_word rest )
@@ -19633,13 +19638,13 @@
 // then their synthesized Drop functions.
 @ ensure_dyn_types_emitted i syms i cg → v {
     // Pass 1: type definitions.
-    : ~ s a g_dyn_needed
+    : ~ s a ( nurl_str_cat g_dyn_needed `` )
     ~ != 0 ( nurl_str_len a ) {
         : s t ( str_first_word a ) = a ( str_skip_word a )
         ( nurl_print `%dyn.` ) ( nurl_print t ) ( nurl_print ` = type { i8*, i8* }\n` )
     }
     // Pass 2: synthesized drop functions (reference the type defs above).
-    : ~ s b g_dyn_needed
+    : ~ s b ( nurl_str_cat g_dyn_needed `` )
     ~ != 0 ( nurl_str_len b ) {
         : s t ( str_first_word b ) = b ( str_skip_word b )
         ( emit_dyn_drop_fn t )
