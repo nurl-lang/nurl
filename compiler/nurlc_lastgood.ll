@@ -12536,6 +12536,107 @@ entry:
   ret i64 %r35
 }
 
+define void @nurl_sym_free(i64 %h) {
+entry:
+  %r2 = alloca i8*
+  %r5 = alloca i64
+  %r10 = alloca i64*
+  %r15 = alloca i64*
+  %r16 = alloca i64
+  %r24 = alloca i64
+  %r33 = alloca i64
+  %r0 = icmp eq i64 %h, 0
+  br i1 %r0, label %then_1, label %else_2
+then_1:
+  ret void
+else_2:
+  br label %end_3
+end_3:
+  %r1 = inttoptr i64 %h to i8*
+  store i8* %r1, i8** %r2
+  %r3 = load i8*, i8** %r2
+  %r4 = call i64 @nurl_peek(i8* %r3, i64 0)
+  store i64 %r4, i64* %r5
+  %r6 = load i8*, i8** %r2
+  %r7 = call i64 @nurl_peek(i8* %r6, i64 3)
+  %r8 = inttoptr i64 %r7 to i8*
+  %r9 = bitcast i8* %r8 to i64*
+  store i64* %r9, i64** %r10
+  %r11 = load i8*, i8** %r2
+  %r12 = call i64 @nurl_peek(i8* %r11, i64 4)
+  %r13 = inttoptr i64 %r12 to i8*
+  %r14 = bitcast i8* %r13 to i64*
+  store i64* %r14, i64** %r15
+  store i64 0, i64* %r16
+  br label %loop_check_4
+loop_check_4:
+  %r17 = load i64, i64* %r16
+  %r18 = load i64, i64* %r5
+  %r19 = icmp slt i64 %r17, %r18
+  br i1 %r19, label %loop_body_5, label %loop_exit_6
+loop_body_5:
+  %r20 = load i64*, i64** %r10
+  %r21 = load i64, i64* %r16
+  %r22 = getelementptr i64, i64* %r20, i64 %r21
+  %r23 = load i64, i64* %r22
+  store i64 %r23, i64* %r24
+  %r25 = load i64, i64* %r24
+  %r26 = icmp ne i64 0, %r25
+  br i1 %r26, label %then_7, label %else_8
+then_7:
+  %r27 = load i64, i64* %r24
+  %r28 = inttoptr i64 %r27 to i8*
+  call void @free(i8* %r28)
+  br label %end_9
+else_8:
+  br label %end_9
+end_9:
+  %r29 = load i64*, i64** %r15
+  %r30 = load i64, i64* %r16
+  %r31 = getelementptr i64, i64* %r29, i64 %r30
+  %r32 = load i64, i64* %r31
+  store i64 %r32, i64* %r33
+  %r34 = load i64, i64* %r33
+  %r35 = icmp ne i64 0, %r34
+  br i1 %r35, label %then_10, label %else_11
+then_10:
+  %r36 = load i64, i64* %r33
+  %r37 = inttoptr i64 %r36 to i8*
+  call void @free(i8* %r37)
+  br label %end_12
+else_11:
+  br label %end_12
+end_12:
+  %r38 = load i64, i64* %r16
+  %r39 = add i64 %r38, 1
+  store i64 %r39, i64* %r16
+  br label %loop_check_4
+loop_exit_6:
+  %r40 = load i8*, i8** %r2
+  %r41 = call i64 @nurl_peek(i8* %r40, i64 3)
+  %r42 = inttoptr i64 %r41 to i8*
+  call void @free(i8* %r42)
+  %r43 = load i8*, i8** %r2
+  %r44 = call i64 @nurl_peek(i8* %r43, i64 4)
+  %r45 = inttoptr i64 %r44 to i8*
+  call void @free(i8* %r45)
+  %r46 = load i8*, i8** %r2
+  %r47 = call i64 @nurl_peek(i8* %r46, i64 5)
+  %r48 = inttoptr i64 %r47 to i8*
+  call void @free(i8* %r48)
+  %r49 = load i8*, i8** %r2
+  %r50 = call i64 @nurl_peek(i8* %r49, i64 7)
+  %r51 = inttoptr i64 %r50 to i8*
+  call void @free(i8* %r51)
+  %r52 = load i8*, i8** %r2
+  %r53 = call i64 @nurl_peek(i8* %r52, i64 8)
+  %r54 = inttoptr i64 %r53 to i8*
+  call void @free(i8* %r54)
+  %r55 = load i8*, i8** %r2
+  call void @nurl_free(i8* %r55)
+  ret void
+}
+
 define void @nurl_sym_def(i64 %h, i8* %name, i8* %type) {
 entry:
   %r1 = alloca i8*
@@ -78263,12 +78364,78 @@ else_59:
 end_60:
   %r181 = load i64, i64* %r147
   call void @nurl_lex_free(i64 %r181)
-  %r182 = load i8*, i8** %r2
-  call void @nurl_free(i8* %r182)
-  %r183 = load i8*, i8** %r63
-  call void @nurl_free(i8* %r183)
-  %r184 = load i8*, i8** %r68
-  call void @nurl_free(i8* %r184)
+  %r182 = load i64, i64* %r75
+  call void @nurl_sym_free(i64 %r182)
+  %r183 = load i64, i64* @g_str_syms
+  call void @nurl_sym_free(i64 %r183)
+  %r184 = load i64, i64* @g_generic_syms
+  call void @nurl_sym_free(i64 %r184)
+  %r185 = load i64, i64* @g_generic_struct_syms
+  call void @nurl_sym_free(i64 %r185)
+  %r186 = load i64, i64* @g_struct_inst_syms
+  call void @nurl_sym_free(i64 %r186)
+  %r187 = load i64, i64* @g_impl_ret_syms
+  call void @nurl_sym_free(i64 %r187)
+  %r188 = load i64, i64* @g_impl_name_syms
+  call void @nurl_sym_free(i64 %r188)
+  %r189 = load i64, i64* @g_impl_trait_syms
+  call void @nurl_sym_free(i64 %r189)
+  %r190 = load i64, i64* @g_impl_pos_syms
+  call void @nurl_sym_free(i64 %r190)
+  %r191 = load i64, i64* @g_fn_pos_syms
+  call void @nurl_sym_free(i64 %r191)
+  %r192 = load i64, i64* @g_priv_file_ids
+  call void @nurl_sym_free(i64 %r192)
+  %r193 = load i64, i64* @g_priv_owner_ids
+  call void @nurl_sym_free(i64 %r193)
+  %r194 = load i64, i64* @g_priv_owner_files
+  call void @nurl_sym_free(i64 %r194)
+  %r195 = load i64, i64* @g_priv_warned
+  call void @nurl_sym_free(i64 %r195)
+  %r196 = load i64, i64* @g_trait_syms
+  call void @nurl_sym_free(i64 %r196)
+  %r197 = load i64, i64* @g_res_type_syms
+  call void @nurl_sym_free(i64 %r197)
+  %r198 = load i64, i64* @g_closure_defs
+  call void @nurl_sym_free(i64 %r198)
+  %r199 = load i64, i64* @g_closure_types
+  call void @nurl_sym_free(i64 %r199)
+  %r200 = load i64, i64* @g_fn_inout
+  call void @nurl_sym_free(i64 %r200)
+  %r201 = load i64, i64* @g_fn_sink
+  call void @nurl_sym_free(i64 %r201)
+  %r202 = load i64, i64* @g_fn_escapes
+  call void @nurl_sym_free(i64 %r202)
+  %r203 = load i64, i64* @g_fn_invoke_only
+  call void @nurl_sym_free(i64 %r203)
+  %r204 = load i64, i64* @g_fn_ret_param
+  call void @nurl_sym_free(i64 %r204)
+  %r205 = load i64, i64* @g_pending_escape
+  call void @nurl_sym_free(i64 %r205)
+  %r206 = load i64, i64* @g_bck
+  call void @nurl_sym_free(i64 %r206)
+  %r207 = load i64, i64* @g_ptrtab
+  call void @nurl_sym_free(i64 %r207)
+  %r208 = load i64, i64* @g_vis_syms
+  call void @nurl_sym_free(i64 %r208)
+  %r209 = load i64, i64* @g_lint_syms
+  call void @nurl_sym_free(i64 %r209)
+  %r210 = load i64, i64* @g_lint_reads
+  call void @nurl_sym_free(i64 %r210)
+  %r211 = load i64, i64* @g_lint_used
+  call void @nurl_sym_free(i64 %r211)
+  %r212 = load i64, i64* @g_dbg_file_syms
+  call void @nurl_sym_free(i64 %r212)
+  %r213 = load i64, i64* @g_dbg_type_syms
+  call void @nurl_sym_free(i64 %r213)
+  %r214 = load i64, i64* @g_dbg_blob_syms
+  call void @nurl_sym_free(i64 %r214)
+  %r215 = load i8*, i8** %r2
+  call void @nurl_free(i8* %r215)
+  %r216 = load i8*, i8** %r63
+  call void @nurl_free(i8* %r216)
+  %r217 = load i8*, i8** %r68
+  call void @nurl_free(i8* %r217)
   ret void
 }
 
