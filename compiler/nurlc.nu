@@ -562,7 +562,7 @@
         {}
         = i + i 1
     }
-    `i64`
+    ( nurl_str_cat `i64` `` )
 }
 
 // agg_field_count: number of fields in an aggregate LLVM type, or -1 when
@@ -2184,6 +2184,15 @@
     }
 }
 
+// A stack reference reaching `^`-return or an ownership-taking helper
+// escapes the current frame unconditionally (the caller / a heap
+// container / a worker thread all outlive every in-function region).
+@ bck_esc_check_return i lex i syms i line s ident → v {
+    ? & != g_borrowck 0 > ( bck_expr_refdepth syms ident ) 0
+    { ( bck_esc_warn lex line `returning a value that references a stack binding by pointer — it dangles after this function returns (move the captured data to a heap-backed handle)` ) }
+    {}
+}
+
 @ gen_ret i lex i syms i cg → s {
     // Cascade guard: a `^` reached here while parsing a value operand
     // (g_ret_forbidden set by gen_operand / a `?`-condition / `??`-
@@ -2591,20 +2600,20 @@
 // __tok_label — a human-readable name for a token that turned up where
 // a value expression was required. Used only on the diagnostic path.
 @ __tok_label i tt s val → s {
-    ? == tt TT_COLON { ^ `':' (a ':' binding starts here)` } {}
-    ? == tt TT_EQ { ^ `'=' (an assignment starts here)` } {}
-    ? == tt TT_SEMICOL { ^ `';' (a ';' defer starts here)` } {}
-    ? == tt TT_RBRACE { ^ `'}' (the enclosing block ends here)` } {}
-    ? == tt TT_RPAREN { ^ `')'` } {}
-    ? == tt TT_RBRACK { ^ `']'` } {}
-    ? == tt TT_LBRACE { ^ `'{'` } {}
-    ? == tt TT_LPAREN { ^ `'('` } {}
-    ? == tt TT_LBRACK { ^ `'['` } {}
-    ? == tt TT_AT { ^ `'@'` } {}
-    ? == tt TT_EOF { ^ `end of input` } {}
-    ? == tt TT_ARROW { ^ `'->'` } {}
+    ? == tt TT_COLON { ^ ( nurl_str_cat `':' (a ':' binding starts here)` `` ) } {}
+    ? == tt TT_EQ { ^ ( nurl_str_cat `'=' (an assignment starts here)` `` ) } {}
+    ? == tt TT_SEMICOL { ^ ( nurl_str_cat `';' (a ';' defer starts here)` `` ) } {}
+    ? == tt TT_RBRACE { ^ ( nurl_str_cat `'}' (the enclosing block ends here)` `` ) } {}
+    ? == tt TT_RPAREN { ^ ( nurl_str_cat `')'` `` ) } {}
+    ? == tt TT_RBRACK { ^ ( nurl_str_cat `']'` `` ) } {}
+    ? == tt TT_LBRACE { ^ ( nurl_str_cat `'{'` `` ) } {}
+    ? == tt TT_LPAREN { ^ ( nurl_str_cat `'('` `` ) } {}
+    ? == tt TT_LBRACK { ^ ( nurl_str_cat `'['` `` ) } {}
+    ? == tt TT_AT { ^ ( nurl_str_cat `'@'` `` ) } {}
+    ? == tt TT_EOF { ^ ( nurl_str_cat `end of input` `` ) } {}
+    ? == tt TT_ARROW { ^ ( nurl_str_cat `'->'` `` ) } {}
     ? != 0 ( nurl_str_len val ) { ^ ( nurl_str_cat3 `'` val `'` ) } {}
-    `this token`
+    ( nurl_str_cat `this token` `` )
 }
 
 @ gen_expr i lex i syms i cg → s {
@@ -2848,6 +2857,38 @@
 }
 
 // ── Binary op OP lhs rhs ─────────────────────────────────────────
+
+// `isu` = unsigned-operand path: selects unsigned compare predicates,
+// logical (zero-fill) shift right, and unsigned div/rem. Set when
+// either operand's TYPE is an unsigned scalar (`u8`/`u16`/`u32`/`u64`
+// — signedness is in the type repr since A1). Equality predicates
+// (`==`, `!=`) are sign-agnostic, so they take the signed entry. `add`/`sub`/`mul`/`and`/
+// `or` produce identical results on signed and unsigned operands of
+// the same width, so they're keyed off `isf` only.
+@ binop_instr i tt b isf b isu → s {
+    ? == tt TT_PLUS ? isf `fadd` `add`
+    ? == tt TT_MINUS ? isf `fsub` `sub`
+    ? == tt TT_STAR ? isf `fmul` `mul`
+    ? == tt TT_SLASH ? isf `fdiv` ? isu `udiv` `sdiv`
+    ? == tt TT_PERCENT ? isf `frem` ? isu `urem` `srem`
+    ? == tt TT_AMP `and`
+    ? == tt TT_PIPE `or`
+    ? == tt TT_CARETCARET `xor`
+    ? == tt TT_SHL `shl`
+    ? == tt TT_SHR ? isu `lshr` `ashr`
+    ? == tt TT_LT ? isf `fcmp olt` ? isu `icmp ult` `icmp slt`
+    ? == tt TT_GT ? isf `fcmp ogt` ? isu `icmp ugt` `icmp sgt`
+    ? == tt TT_EQEQ ? isf `fcmp oeq` `icmp eq`
+    // Float `!=` must be UNORDERED-or-not-equal (`une`), not ordered (`one`):
+    // IEEE 754 requires `x != y` to be TRUE when either operand is NaN, so the
+    // canonical NaN check `!= x x` works. `une` matches C's `!=` and is
+    // identical to `one` for non-NaN operands. (`==` stays `oeq` — NaN == NaN
+    // is false, also matching C.)
+    ? == tt TT_NE ? isf `fcmp une` `icmp ne`
+    ? == tt TT_LE ? isf `fcmp ole` ? isu `icmp ule` `icmp sle`
+    ? == tt TT_GE ? isf `fcmp oge` ? isu `icmp uge` `icmp sge`
+    `add`
+}
 
 @ gen_binary i lex i syms i cg → s {
     : i tt ( nurl_lex_type lex )
@@ -3117,38 +3158,6 @@
             ^ ( nurl_str_cat `error` `` )
         }
     }
-}
-
-// `isu` = unsigned-operand path: selects unsigned compare predicates,
-// logical (zero-fill) shift right, and unsigned div/rem. Set when
-// either operand's TYPE is an unsigned scalar (`u8`/`u16`/`u32`/`u64`
-// — signedness is in the type repr since A1). Equality predicates
-// (`==`, `!=`) are sign-agnostic, so they take the signed entry. `add`/`sub`/`mul`/`and`/
-// `or` produce identical results on signed and unsigned operands of
-// the same width, so they're keyed off `isf` only.
-@ binop_instr i tt b isf b isu → s {
-    ? == tt TT_PLUS ? isf `fadd` `add`
-    ? == tt TT_MINUS ? isf `fsub` `sub`
-    ? == tt TT_STAR ? isf `fmul` `mul`
-    ? == tt TT_SLASH ? isf `fdiv` ? isu `udiv` `sdiv`
-    ? == tt TT_PERCENT ? isf `frem` ? isu `urem` `srem`
-    ? == tt TT_AMP `and`
-    ? == tt TT_PIPE `or`
-    ? == tt TT_CARETCARET `xor`
-    ? == tt TT_SHL `shl`
-    ? == tt TT_SHR ? isu `lshr` `ashr`
-    ? == tt TT_LT ? isf `fcmp olt` ? isu `icmp ult` `icmp slt`
-    ? == tt TT_GT ? isf `fcmp ogt` ? isu `icmp ugt` `icmp sgt`
-    ? == tt TT_EQEQ ? isf `fcmp oeq` `icmp eq`
-    // Float `!=` must be UNORDERED-or-not-equal (`une`), not ordered (`one`):
-    // IEEE 754 requires `x != y` to be TRUE when either operand is NaN, so the
-    // canonical NaN check `!= x x` works. `une` matches C's `!=` and is
-    // identical to `one` for non-NaN operands. (`==` stays `oeq` — NaN == NaN
-    // is false, also matching C.)
-    ? == tt TT_NE ? isf `fcmp une` `icmp ne`
-    ? == tt TT_LE ? isf `fcmp ole` ? isu `icmp ule` `icmp sle`
-    ? == tt TT_GE ? isf `fcmp oge` ? isu `icmp uge` `icmp sge`
-    `add`
 }
 
 // ── Call ( fn args... ) ───────────────────────────────────────────
@@ -9078,7 +9087,7 @@
 // LLVM's multi-index extractvalue. Empty path → "".
 @ mem_path_to_indices s path → s {
     : i n ( nurl_str_len path )
-    ? == n 0 { ^ `` } {}
+    ? == n 0 { ^ ( nurl_str_cat `` `` ) } {}
     : ~ s out `, `
     : ~ i i 0
     ~ < i n {
@@ -9379,7 +9388,7 @@
 // ptr matches `want_ptr`. Empty when the binding owns no fields. Used by
 // gen_ret to hand the caller exactly the field set to re-register (A4c).
 @ mem_collect_struct_fields_for i syms s want_ptr → s {
-    ? == 0 ( nurl_str_len want_ptr ) { ^ `` } {}
+    ? == 0 ( nurl_str_len want_ptr ) { ^ ( nurl_str_cat `` `` ) } {}
     : ~ s out ``
     : ~ s rest ( nurl_sym_get syms `__owned_struct_fields__` )
     ~ != 0 ( nurl_str_len rest ) {
@@ -9920,7 +9929,7 @@
 // value so the caller can restore it once the loop body is parsed.
 // No-op (returns ``) when --borrowck is off.
 @ bck_iter_enter s cont → s {
-    ? == g_borrowck 0 { ^ `` } {}
+    ? == g_borrowck 0 { ^ ( nurl_str_cat `` `` ) } {}
     : s saved ( nurl_sym_get g_bck `iter_containers` )
     ? != 0 ( nurl_str_len cont )
     { ( nurl_sym_set g_bck `iter_containers`
@@ -10757,15 +10766,6 @@
             {}
         } {}
     }
-}
-
-// A stack reference reaching `^`-return or an ownership-taking helper
-// escapes the current frame unconditionally (the caller / a heap
-// container / a worker thread all outlive every in-function region).
-@ bck_esc_check_return i lex i syms i line s ident → v {
-    ? & != g_borrowck 0 > ( bck_expr_refdepth syms ident ) 0
-    { ( bck_esc_warn lex line `returning a value that references a stack binding by pointer — it dangles after this function returns (move the captured data to a heap-backed handle)` ) }
-    {}
 }
 
 @ bck_esc_check_call_arg i lex i syms i line s ident s fname → v {
@@ -13601,21 +13601,21 @@
 
 // llvm_to_nurl: map LLVM type string to NURL type keyword for error messages.
 @ llvm_to_nurl s lt → s {
-    ? ( seq lt `i64` ) ^ `i`
-    ? ( seq lt `i8` ) ^ `i8`
-    ? ( seq lt `i1` ) ^ `b`
-    ? ( seq lt `double` ) ^ `f`
-    ? ( seq lt `i8*` ) ^ `s`
+    ? ( seq lt `i64` ) ^ ( nurl_str_cat `i` `` )
+    ? ( seq lt `i8` ) ^ ( nurl_str_cat `i8` `` )
+    ? ( seq lt `i1` ) ^ ( nurl_str_cat `b` `` )
+    ? ( seq lt `double` ) ^ ( nurl_str_cat `f` `` )
+    ? ( seq lt `i8*` ) ^ ( nurl_str_cat `s` `` )
     // The internal repr carries signedness (A1), so the reverse map is
     // faithful for the unsigned family: `u8` is the NURL byte `u`, and
     // `u16`/`u32`/`u64` read back as themselves.
-    ? ( seq lt `i16` ) ^ `i16`
-    ? ( seq lt `i32` ) ^ `i32`
-    ? ( seq lt `u8` ) ^ `u`
-    ? ( seq lt `u16` ) ^ `u16`
-    ? ( seq lt `u32` ) ^ `u32`
-    ? ( seq lt `u64` ) ^ `u64`
-    ? ( seq lt `float` ) ^ `f32`
+    ? ( seq lt `i16` ) ^ ( nurl_str_cat `i16` `` )
+    ? ( seq lt `i32` ) ^ ( nurl_str_cat `i32` `` )
+    ? ( seq lt `u8` ) ^ ( nurl_str_cat `u` `` )
+    ? ( seq lt `u16` ) ^ ( nurl_str_cat `u16` `` )
+    ? ( seq lt `u32` ) ^ ( nurl_str_cat `u32` `` )
+    ? ( seq lt `u64` ) ^ ( nurl_str_cat `u64` `` )
+    ? ( seq lt `float` ) ^ ( nurl_str_cat `f32` `` )
     // struct/enum: strip leading '%'
     ? == ( nurl_str_get lt 0 ) 37
     { ^ ( nurl_str_slice lt 1 - ( nurl_str_len lt ) 1 ) }
@@ -14566,7 +14566,7 @@
     : ~ s rest ( nurl_str_cat list `` )
     : ~ i k 0
     ~ < k n { = rest ( seplist_rest rest ) = k + k 1 }
-    ? == 0 ( nurl_str_len rest ) { ^ `` } {}
+    ? == 0 ( nurl_str_len rest ) { ^ ( nurl_str_cat `` `` ) } {}
     ^ ( seplist_first rest )
 }
 
@@ -15133,7 +15133,7 @@
         ? == k idx { ^ w } {}
         = k + k 1
     }
-    ``
+    ( nurl_str_cat `` `` )
 }
 
 // Max referent depth (docs/MEMORY.md §2.8) over the argument positions
@@ -15241,11 +15241,11 @@
 // LLVM type strings (see __mangle_slug_collides) so distinct generic
 // instantiations never share a monomorphisation.
 @ mangle_type s lty → s {
-    ? ( seq lty `i64` ) ^ `i64`
-    ? ( seq lty `double` ) ^ `f64`
-    ? ( seq lty `i1` ) ^ `i1`
-    ? ( seq lty `i8*` ) ^ `str`
-    ? ( seq lty `void` ) ^ `void`
+    ? ( seq lty `i64` ) ^ ( nurl_str_cat `i64` `` )
+    ? ( seq lty `double` ) ^ ( nurl_str_cat `f64` `` )
+    ? ( seq lty `i1` ) ^ ( nurl_str_cat `i1` `` )
+    ? ( seq lty `i8*` ) ^ ( nurl_str_cat `str` `` )
+    ? ( seq lty `void` ) ^ ( nurl_str_cat `void` `` )
     // Option / option-of-option `{ i1, X }` → `opt_<mangle X>`. Must
     // precede the pointer + `%Name` cases. (Result is also `{ i1, i64 }`
     // but never appears as a generic type argument, so the collision is
@@ -15273,11 +15273,11 @@
 // functions must round-trip: `demangle_type ( mangle_type t ) == t`
 // for every t the front-end can produce.
 @ demangle_type s mty → s {
-    ? ( seq mty `i64` ) ^ `i64`
-    ? ( seq mty `f64` ) ^ `double`
-    ? ( seq mty `i1` ) ^ `i1`
-    ? ( seq mty `str` ) ^ `i8*`
-    ? ( seq mty `void` ) ^ `void`
+    ? ( seq mty `i64` ) ^ ( nurl_str_cat `i64` `` )
+    ? ( seq mty `f64` ) ^ ( nurl_str_cat `double` `` )
+    ? ( seq mty `i1` ) ^ ( nurl_str_cat `i1` `` )
+    ? ( seq mty `str` ) ^ ( nurl_str_cat `i8*` `` )
+    ? ( seq mty `void` ) ^ ( nurl_str_cat `void` `` )
     // Unsigned-int leaf slugs ARE the internal unsigned types (A1), so
     // they round-trip verbatim — gen_foreach recovers a `%Vec__u8`
     // element as `u8` and the loop binding carries its signedness in
@@ -16323,7 +16323,16 @@
     : ~ s skip_user_ptr ``
     ? != 0 g_auto_drop_strings
     { : s rid_ptr ( nurl_sym_get2 syms ret_ident `__ptr` )
-        = skip_str_ptr ? & ( seq ( nurl_llty ret_ty ) `i8*` ) ( str_contains_word ( nurl_sym_get syms `__owned_strings__` ) rid_ptr )
+        // Only a BARE-IDENT fall-off escapes a binding. When the tail
+        // is a fresh owning call (`( bck_join_state s_then s_else )`),
+        // `__last_ident_name__` is merely its last argument — skipping
+        // that binding's drop leaked it on every call (bck_handle_cond
+        // leaked `s_else` 864 times per self-compile). The explicit-`^`
+        // path got this guard in the join-vs-alias fix; the fall-off
+        // path kept the old, unguarded shape.
+        = skip_str_ptr ? & & ( seq ( nurl_llty ret_ty ) `i8*` )
+        ! ( seq ( nurl_sym_get syms `__last_call_ret_owned__` ) `str` )
+        ( str_contains_word ( nurl_sym_get syms `__owned_strings__` ) rid_ptr )
         rid_ptr
         ``
         ? != 0 ( nurl_str_len skip_str_ptr )
@@ -18322,7 +18331,7 @@
         ? == ( nurl_str_get p i ) 47 { ^ ( nurl_str_slice p 0 i ) } {}
         = i - i 1
     }
-    ^ ``
+    ^ ( nurl_str_cat `` `` )
 }
 
 @ __norm_import_path s path → s {
@@ -18606,6 +18615,7 @@
         // called from gen_call / gen_fn_decl at the top — the mangled
         // callee names it mints were never freed.
         ( nurl_sym_def syms `priv_mangle_for__ret_owned` `str` )
+        ( nurl_sym_def syms `priv_resolve__ret_owned` `str` )
     }
     {}
     ( nurl_sym_def syms `malloc` `i8*` )
@@ -20133,9 +20143,9 @@
 // LOCAL closure binding named `__x` keeps winning over any @-definition,
 // exactly as it did under the flat namespace.
 @ priv_resolve i lex i syms s fname → s {
-    ? != 0 ( nurl_sym_len2 syms fname `__ptr` ) { ^ fname } {}
+    ? != 0 ( nurl_sym_len2 syms fname `__ptr` ) { ^ ( nurl_str_cat fname `` ) } {}
     : s owners ( nurl_sym_get g_priv_owner_ids fname )
-    ? == 0 ( nurl_str_len owners ) { ^ fname } {}
+    ? == 0 ( nurl_str_len owners ) { ^ ( nurl_str_cat fname `` ) } {}
     : s fid ( priv_file_id )
     ? ( str_contains_word owners fid ) { ^ ( priv_mangle_for fname fid ) } {}
     // count the owners: one space per extra owner
@@ -20157,7 +20167,7 @@
     ( die lex ( nurl_str_cat ( nurl_str_cat4
     `private function '` fname `' is defined in several files (` ( nurl_sym_get g_priv_owner_files fname ) )
     `) and this file is not one of them — a '__' function is file-scoped; call it from its own file, or rename the shared one with ONE underscore` ) )
-    ^ fname
+    ^ ( nurl_str_cat fname `` )
 }
 
 @ scan_fn_sigs i lex i syms → v {
