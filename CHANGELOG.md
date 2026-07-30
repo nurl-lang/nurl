@@ -8,7 +8,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Nothing yet.
+### Changed
+
+- **MCP build tools answer with links/paths, never an inline base64
+  module.** A compiled module returned as base64 in a tool result lands
+  verbatim in the calling model's context — hundreds of KB spent on bytes
+  the model can't read. The playground MCP tool `nurl_build_wasm` now
+  returns `wasm_artifact` + `ll_artifact` download URLs (backed by a new
+  `links_only:true` field on `POST /build_wasm`; the default REST response
+  keeps the inline `wasm_base64` the playground consumes, and now carries
+  the artifact objects too — `ll_artifact` even when the link step failed,
+  which is exactly when the IR is wanted). The local `nurl-mcp` server
+  (0.7.4) does the file-system equivalent: inline-source `nurl_build_wasm`
+  keeps the module and its `.ll` on disk and returns `wasm_path` /
+  `ll_path`, and `nurl_build_project` returns `binary_path` / `ll_path`
+  instead of `binary_base64`.
 
 ## [0.29.0] — 2026-07-30
 

@@ -34,7 +34,6 @@ $ `stdlib/ext/http_request.nu`
 $ `stdlib/ext/http_response.nu`
 $ `stdlib/ext/http_server.nu`
 $ `stdlib/ext/mcp_http.nu`
-$ `stdlib/std/encode.nu`
 $ `deps/wasmbuilder/src/build.nu`
 
 // ── Policy (set once in main, read by the dispatcher) ───────────────
@@ -59,7 +58,7 @@ $ `deps/wasmbuilder/src/build.nu`
 // to bump (previously the banners drifted to a stale 0.2.0 while the
 // handshake reported 0.4.0).
 
-@ nm_version → s { ^ `0.7.3` }
+@ nm_version → s { ^ `0.7.4` }
 
 // Log a startup banner "nurl-mcp <version> <suffix>" through mcp_log,
 // building the line from the single-source version so the banners can
@@ -257,9 +256,10 @@ $ `deps/wasmbuilder/src/build.nu`
 // synthesized nurl.toml with [dependencies]), runs `nurlpkg install` to
 // resolve the full transitive graph from the registry (signature- and
 // checksum-verified — reusing nurlpkg's supply-chain checks verbatim),
-// then `nurl <entry>` to compile. Nothing is executed; the binary is
-// returned base64. So an agent that found `nn` (nurl_grep), learned its
-// API (nurl_api package=nn), can now compile a program that calls it.
+// then `nurl <entry>` to compile. Nothing is executed; the binary and
+// its .ll stay at a temp path returned as binary_path / ll_path. So an
+// agent that found `nn` (nurl_grep), learned its API (nurl_api
+// package=nn), can now compile a program that calls it.
 //
 //   args: { source | files:{path:content}, deps:{name:req}, entry?, run? }
 
@@ -423,27 +423,35 @@ version = "0.0.0"
         T co → {
             ? ( output_success co ) {
                 ( output_free co )
-                : !( Vec u ) IoErr br ( read_file_bytes ( string_data out ) )
-                ( nm_unlink_artifacts ( string_data out ) )
-                ( nm_unlink ( string_data out ) )
-                ( string_free out )
-                ?? br {
-                    T bytes → {
-                        : i sz ( vec_len [u] bytes )
-                        : String b64 ( b64_encode_vec bytes )
-                        ( vec_free [u] bytes )
+                // The binary and its .ll stay on disk; the result carries
+                // their paths, never the bytes — a base64 binary in the
+                // tool result lands verbatim in the calling model's context.
+                : !i IoErr szr ( file_size ( string_data out ) )
+                ?? szr {
+                    T sz → {
+                        : String ll_p ( string_from ( string_data out ) )
+                        ( string_push_str ll_p `.ll` )
                         : Json res ( json_obj_new )
                         ( json_obj_set res `status` ( json_str_lit `ok` ) )
                         ( json_obj_set res `binary_bytes` ( json_int sz ) )
-                        ( json_obj_set res `binary_base64` ( json_str_lit ( string_data b64 ) ) )
-                        ( string_free b64 )
+                        ( json_obj_set res `binary_path` ( json_str_lit ( string_data out ) ) )
+                        ( json_obj_set res `ll_path` ( json_str_lit ( string_data ll_p ) ) )
+                        : String hint ( string_from `run: ` )
+                        ( string_push_str hint ( string_data out ) )
+                        ( json_obj_set res `note` ( json_str_lit ( string_data hint ) ) )
+                        ( string_free hint )
+                        ( string_free ll_p )
+                        ( string_free out )
                         : String body ( json_stringify res )
                         ( json_free res )
                         : Json j ( mcp_tool_result_text ( string_data body ) )
                         ( string_free body )
                         ^ j
                     }
-                    F _ → { ^ ( mcp_tool_result_error `compiled, but the binary could not be read back` ) }
+                    F _ → {
+                        ( string_free out )
+                        ^ ( mcp_tool_result_error `compiled, but the binary could not be read back` )
+                    }
                 }
             } {
                 : Json j ( nm_fail_from_output `build failed` co T )
@@ -472,8 +480,12 @@ version = "0.0.0"
 //   * `out` argument given          → module written there, text summary
 //   * `path` input, no `out`        → written next to the input as
 //                                     <input minus .nu>.wasm
-//   * inline `source`, no `out`     → JSON text with `wasm_base64`
-//                                     (mirrors the playground MCP tool)
+//   * inline `source`, no `out`     → module + its .ll kept at a temp
+//                                     path, JSON text with `wasm_path` /
+//                                     `ll_path` (mirrors the playground
+//                                     MCP tool — never inline base64,
+//                                     which would land verbatim in the
+//                                     calling model's context)
 @ nm_tool_build_wasm Json args → Json {
     : ?String po ( nm_input_path args )
     ?? po {
@@ -483,10 +495,10 @@ version = "0.0.0"
             : ~ String outp ( string_new )
             : ?Json oj ( json_obj_get args `out` )
             ?? oj { T ov → { ( string_free outp ) = outp ( string_from ( json_str_data ov ) ) } F → {} }
-            : ~ b b64_mode F
+            : ~ b tmp_out F
             ? == ( string_len outp ) 0 {
                 ? was_inline {
-                    = b64_mode T
+                    = tmp_out T
                     ( string_free outp ) = outp ( nm_tmp_path `.wasm` )
                 } {
                     ( string_free outp ) = outp ( string_from ( string_data p ) )
@@ -501,6 +513,9 @@ version = "0.0.0"
             : ~ WbOpts wopts ( wb_opts_default )
             = . wopts opt `-O1`
             = . wopts quiet T
+            // Inline-source builds keep the rewritten .ll next to the
+            // module so the result can point at both files.
+            ? tmp_out { = . wopts keep_ll T } {}
             : !v String r ( wb_build_file ( string_data p ) ( string_data outp ) wopts )
             ? was_inline { ( nm_unlink ( string_data p ) ) } {}
             ( string_free p )
@@ -508,27 +523,27 @@ version = "0.0.0"
                 T _ → {
                     : !i IoErr szr ( file_size ( string_data outp ) )
                     : i sz ?? szr { T sv → sv F _ → 0 }
-                    ? b64_mode {
-                        : !( Vec u ) IoErr br ( read_file_bytes ( string_data outp ) )
-                        ( nm_unlink ( string_data outp ) )
+                    ? tmp_out {
+                        // The module and its .ll stay on disk; the result
+                        // carries their paths, never the bytes.
+                        : String ll_p ( string_from ( string_data outp ) )
+                        ( string_push_str ll_p `.ll` )
+                        : Json res ( json_obj_new )
+                        ( json_obj_set res `status` ( json_str_lit `ok` ) )
+                        ( json_obj_set res `wasm_bytes` ( json_int sz ) )
+                        ( json_obj_set res `wasm_path` ( json_str_lit ( string_data outp ) ) )
+                        ( json_obj_set res `ll_path` ( json_str_lit ( string_data ll_p ) ) )
+                        : String hint ( string_from `run: wt run ` )
+                        ( string_push_str hint ( string_data outp ) )
+                        ( json_obj_set res `note` ( json_str_lit ( string_data hint ) ) )
+                        ( string_free hint )
+                        ( string_free ll_p )
                         ( string_free outp )
-                        ?? br {
-                            T bytes → {
-                                : String b64 ( b64_encode_vec bytes )
-                                ( vec_free [u] bytes )
-                                : Json res ( json_obj_new )
-                                ( json_obj_set res `status` ( json_str_lit `ok` ) )
-                                ( json_obj_set res `wasm_bytes` ( json_int sz ) )
-                                ( json_obj_set res `wasm_base64` ( json_str_lit ( string_data b64 ) ) )
-                                ( string_free b64 )
-                                : String body ( json_stringify res )
-                                ( json_free res )
-                                : Json j ( mcp_tool_result_text ( string_data body ) )
-                                ( string_free body )
-                                ^ j
-                            }
-                            F _ → { ^ ( mcp_tool_result_error `built module could not be read back` ) }
-                        }
+                        : String body ( json_stringify res )
+                        ( json_free res )
+                        : Json j ( mcp_tool_result_text ( string_data body ) )
+                        ( string_free body )
+                        ^ j
                     } {
                         : String msg ( string_from `OK — wrote ` )
                         ( string_push_str msg ( string_data outp ) )
@@ -971,12 +986,12 @@ version = "0.0.0"
         `Compile NURL (inline "source" or a "path") with the local toolchain; reports success or compiler diagnostics. Does not run the program.`
         ( nm_schema_src_path ) ) )
         ( vec_push [Json] tools ( mcp_tool_descriptor `nurl_build_project`
-        `Compile a program that USES registry packages: give "source" (or "files") plus "deps" ({name: req}); the tool resolves them (nurlpkg install — transitive, checksum + signature verified) and compiles with the local toolchain, returning the binary as base64. The bridge from nurl_api/nurl_grep discovery to a working build. Does not run the program.`
+        `Compile a program that USES registry packages: give "source" (or "files") plus "deps" ({name: req}); the tool resolves them (nurlpkg install — transitive, checksum + signature verified) and compiles with the local toolchain, returning JSON with binary_path and ll_path (no inline base64). The bridge from nurl_api/nurl_grep discovery to a working build. Does not run the program.`
         ( nm_schema_project ) ) )
     } {}
     ? ( nm_build_ok ) {
         ( vec_push [Json] tools ( mcp_tool_descriptor `nurl_build_wasm`
-        `Compile NURL (inline "source" or a "path") to a wasm32-wasi module, fully locally (no build service). Optional "out" = output path; a "path" input defaults to <input>.wasm next to it; inline "source" without "out" returns JSON with wasm_base64.`
+        `Compile NURL (inline "source" or a "path") to a wasm32-wasi module, fully locally (no build service). Optional "out" = output path; a "path" input defaults to <input>.wasm next to it; inline "source" without "out" writes the module + its .ll to a temp path and returns JSON with wasm_path and ll_path (no inline base64).`
         ( nm_schema_src_path ) ) )
     } {}
     ? ( nm_run_ok ) {

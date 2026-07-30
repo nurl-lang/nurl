@@ -708,6 +708,57 @@ def t_build_wasm_libc_shims(c: Client) -> None:
     assert_true("no shim/call-site signature mismatch", not mismatched, "; ".join(mismatched))
 
 
+def t_tools_call_build_wasm(c: Client) -> None:
+    # The MCP tool must answer with download links, never the inline
+    # base64 module (which would land verbatim in the caller's context).
+    print("\n[MCP] tools/call nurl_build_wasm (links, no base64)")
+    src = '@ main → i {\n  ( puts `hello-wasm-mcp` )\n  ^ 0\n}\n'
+    env = _tool_call(c, "nurl_build_wasm", {"source": src, "filename": "hellow.nu"})
+    text = _tool_text(env)
+    try:
+        j = json.loads(text)
+    except json.JSONDecodeError:
+        bad("wasm build result is JSON text", f"got: {text[:200]!r}")
+        return
+    assert_eq("wasm build ok", j.get("status"), "ok")
+    assert_true("no inline wasm_base64", not j.get("wasm_base64"), "base64 present")
+    assert_true("no inline llvm_ir", not j.get("llvm_ir"), "llvm_ir present")
+    for key, suffix in (("wasm_artifact", ".wasm"), ("ll_artifact", ".ll")):
+        art = j.get(key)
+        if not isinstance(art, dict):
+            bad(f"{key} present", f"{key}={art!r}")
+            continue
+        assert_true(f"{key}.name ends {suffix}", str(art.get("name", "")).endswith(suffix))
+        assert_true(f"{key}.bytes > 0", int(art.get("bytes") or 0) > 0)
+        token = art.get("token")
+        assert_true(f"{key}.token present", bool(token))
+        status, _, body = c.get(f"/download/{token}")
+        assert_eq(f"{key} download → 200", status, 200)
+        if suffix == ".wasm":
+            assert_true("download body is wasm", body[:4] == b"\x00asm", f"prefix={body[:4]!r}")
+        else:
+            assert_true("download body looks like IR", b"target triple" in body[:400])
+
+
+def t_build_wasm_links_only_rest(c: Client) -> None:
+    # REST default keeps the inline base64 (the playground consumes it);
+    # links_only:true is the opt-out the MCP layer uses.
+    print("\n[REST] /build_wasm links_only:true")
+    src = '@ main → i {\n  ( puts `hello-wasm-rest` )\n  ^ 0\n}\n'
+    status, _, raw = c.post(
+        "/build_wasm",
+        {"source": src, "filename": "hellol.nu", "links_only": True},
+        timeout=180.0,
+    )
+    assert_eq("status 200", status, 200)
+    j = json.loads(raw)
+    assert_eq("build ok", j.get("status"), "ok")
+    assert_true("no wasm_base64", not j.get("wasm_base64"), f"keys={list(j)}")
+    assert_true("wasm_artifact present", isinstance(j.get("wasm_artifact"), dict))
+    assert_true("ll_artifact present", isinstance(j.get("ll_artifact"), dict))
+    assert_true("download_url still set", bool(j.get("download_url")))
+
+
 def t_get_sse_and_delete(c: Client) -> None:
     print("\n[MCP] GET /mcp (SSE stub) + DELETE /mcp")
     status, hdrs, raw = c.get("/mcp")
@@ -782,10 +833,14 @@ def main() -> int:
     t_tools_call_unknown(c)
     if not args.quick:
         t_tools_call_build(c)
+        t_tools_call_build_wasm(c)
         t_build_wasm_libc_shims(c)
+        t_build_wasm_links_only_rest(c)
     else:
         print("\n[MCP] tools/call nurl_build_native — skipped (--quick)")
+        print("[MCP] tools/call nurl_build_wasm — skipped (--quick)")
         print("[REST] /build_wasm libc shims — skipped (--quick)")
+        print("[REST] /build_wasm links_only — skipped (--quick)")
 
     t_resources(c)
     t_prompts(c)
