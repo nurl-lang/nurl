@@ -42,12 +42,13 @@ $ `stdlib/core/string.nu`
     }
 
     // Escape via outer mutable: the arm-local's buffer must survive
-    // the arm's fall-through drop (ownership transfers to `kept`).
-    // The transfer cancels esc's scheduled drop but registers no new
-    // one on `kept` (a cross-scope registration would be freed by the
-    // arm delta-drop), so the test frees it manually — which doubles
-    // as the single-ownership lock: were esc's drop NOT cancelled,
-    // this free would be a double-free under the sanitizer run.
+    // the arm's fall-through drop. `kept` is a mutable binding with a
+    // literal initialiser, so it owns a heap buffer from birth and is
+    // auto-dropped at scope exit; `= kept esc` stores a COPY (the old
+    // cancel-the-source's-drop transfer died with the arm's symtab
+    // pop), so esc keeps its own arm drop and kept its own scope-exit
+    // one. No manual free — adding one would double-free under the
+    // sanitizer run, which is exactly the single-ownership lock.
     : ~ s kept ``
     ? 1
     { : s esc ( nurl_str_cat `escaped-` `value` )
@@ -56,7 +57,6 @@ $ `stdlib/core/string.nu`
     }
     {}
     ( nurl_print kept ) ( nurl_print `\n` )
-    ( nurl_free kept )
 
     ( nurl_print `done\n` )
     ^ 0
