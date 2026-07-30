@@ -7,12 +7,16 @@
 // call. gen_ret now consults `__last_call_ret_owned__` for a direct
 // parenthesised-call return, so ownership flows through call chains.
 //
-// Also locks the phi-escape ownership transfer that the propagation
-// surfaced (it bit the compiler's own gen_cast): a ternary / match
-// arm whose value is a bare load of an owned binding hands the buffer
-// to the phi consumer — the binding's scheduled drop is cancelled
-// (conservative: worst case a leak, never a use-after-free), so the
-// phi value stays readable after the owned binding's scope exits.
+// Also locks the phi-escape ownership COPY: a ternary / match arm
+// whose value is a bare load of an owned binding hands the phi
+// consumer a strdup of the buffer, emitted inside that arm. The old
+// protocol cancelled the binding's scheduled drop instead — but the
+// cancel ran at the arm's symtab depth, so the pop resurrected the
+// registration (double-free), and a phi consumer that outlived the
+// binding's scope read freed memory. Under the copy contract the
+// source binding STAYS VALID after the join, both the source and the
+// phi result are auto-dropped exactly once, and no manual free is
+// needed (one would now be a double-free).
 //
 // Frees are observable under ASan/LSan (run_san_tests.sh); this
 // golden locks compile + run + output.
@@ -45,14 +49,15 @@ $ `stdlib/core/string.nu`
     : s c ( mk_bound )
     ( nurl_print c ) ( nurl_print `\n` )
 
-    // Ternary phi-escape: `sel` aliases `a` on the taken path. `a`'s
-    // drop is cancelled at the phi and `sel` itself is untracked, so
-    // the buffer is freed manually below — which doubles as the
-    // single-ownership lock: were a's drop NOT cancelled, this free
-    // would be a double-free under the sanitizer run.
+    // Ternary phi-escape: the taken arm's value is the owned binding
+    // `a`, so the phi receives a COPY and `sel` (both arms owned) is
+    // auto-dropped. `a` stays valid and is auto-dropped too — reading
+    // it again below locks that the arm did not consume it, and the
+    // ABSENCE of any manual free locks single ownership: adding one
+    // would double-free under the sanitizer run.
     : s sel ? 1 a ( mk_one )
     ( nurl_print sel ) ( nurl_print `\n` )
-    ( nurl_free sel )
+    ( nurl_print a ) ( nurl_print `\n` )
 
     // Match phi-escape: same contract through a `??` value arm.
     : ?i opt @ ?i { T 3 }
@@ -61,7 +66,7 @@ $ `stdlib/core/string.nu`
         F → ( mk_one )
     }
     ( nurl_print msel ) ( nurl_print `\n` )
-    ( nurl_free msel )
+    ( nurl_print b ) ( nurl_print `\n` )
 
     ( nurl_print `done\n` )
     ^ 0
