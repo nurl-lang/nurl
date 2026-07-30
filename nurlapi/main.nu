@@ -1366,6 +1366,13 @@ s combined_stdout s combined_stderr → v {
             { ( json_free root ) ( string_free body_str )
                 ^ ( unsupported_target_response filename __wasm_nodep `WebAssembly` ) } {}
             : b emit_ll ( get_common_bool root `emit_ll` F )
+            // links_only:true (the MCP tool sets it) omits the inline
+            // wasm_base64 payload and the inline llvm_ir blob — the caller
+            // fetches them via wasm_artifact / ll_artifact download URLs
+            // instead of paying for a base64 copy in the response (and in
+            // the model's context, when the caller is an LLM). The
+            // playground keeps the default inline path.
+            : b links_only ( get_common_bool root `links_only` F )
             // /build_wasm opt level — defaults to -O1 (was -O2). On serde_demo /
             // claude_chat / json_basic the -O2 link step accounted for 14-24 s of
             // the perceived "playground feels slow"; -O1 produces ~5-15% larger
@@ -1560,25 +1567,41 @@ s combined_stdout s combined_stderr → v {
                             // code did) silently swallowed wasi-clang errors like
                             // "undefined symbol: canvas_open".
                             ( json_obj_set res `stderr` ( json_str_lit ( string_data combined_stderr ) ) )
-                            ( json_obj_set res `llvm_ir` ? | emit_ll != c_rc 0 { ( json_str_lit ( string_data ir_fixed ) ) } { ( json_null ) } )
+                            ( json_obj_set res `llvm_ir` ? & ! links_only | emit_ll != c_rc 0 { ( json_str_lit ( string_data ir_fixed ) ) } { ( json_null ) } )
                             ( json_obj_set res `uses_canvas` ( json_bool uses_canvas ) )
                             ( json_obj_set res `uses_audio` ( json_bool uses_audio ) )
+
+                            // The .ll is on disk whenever nurlc succeeded (we are
+                            // past the nok gate), so its artifact is exposed even
+                            // when the LINK failed — that is exactly when a caller
+                            // wants to inspect the IR.
+                            : !i IoErr ll_size_res ( file_size ( string_data ll_path ) )
+                            : i ll_bytes ?? ll_size_res { T s → s F _ → 0 }
+                            ( json_obj_set res `ll_artifact` ( make_artifact_json ( string_data ll_name ) ll_bytes ( string_data build_id ) ) )
 
                             : ~ String b64 ( string_new ) : ~ String wasm_url ( string_new )
                             ? == c_rc 0 {
                                 : !i IoErr wasm_size_res ( file_size ( string_data wasm_path ) )
                                 : i w_bytes ?? wasm_size_res { T s → s F _ → 0 }
                                 ( json_obj_set res `wasm_bytes` ( json_int w_bytes ) )
-                                : !( Vec u ) IoErr wasm_data_res ( read_file_bytes ( string_data wasm_path ) )
-                                ?? wasm_data_res { T w_data → {
-                                        : String b ( b64_encode_vec w_data ) ( json_obj_set res `wasm_base64` ( json_str_lit ( string_data b ) ) )
-                                        ( string_free b64 ) = b64 b ( vec_free [u] w_data ) } F _ → {} }
+                                // Artifact name = the file actually produced —
+                                // <bin>.async.wasm after the asyncify pass, not
+                                // the pre-instrumentation <bin>.wasm.
+                                : String final_name ( path_basename ( string_data wasm_path ) )
+                                ( json_obj_set res `wasm_artifact` ( make_artifact_json ( string_data final_name ) w_bytes ( string_data build_id ) ) )
+                                ? links_only {} {
+                                    : !( Vec u ) IoErr wasm_data_res ( read_file_bytes ( string_data wasm_path ) )
+                                    ?? wasm_data_res { T w_data → {
+                                            : String b ( b64_encode_vec w_data ) ( json_obj_set res `wasm_base64` ( json_str_lit ( string_data b ) ) )
+                                            ( string_free b64 ) = b64 b ( vec_free [u] w_data ) } F _ → {} }
+                                }
                                 = wasm_url ( string_with_cap 96 )
                                 : String w_base ( __public_base_url )
                                 ( string_push_str wasm_url ( string_data w_base ) )
                                 ( string_free w_base )
-                                ( string_push_str wasm_url `/download/` ) ( string_push_str wasm_url ( string_data build_id ) ) ( string_push_str wasm_url `/` ) ( string_push_str wasm_url ( string_data wasm_name ) )
+                                ( string_push_str wasm_url `/download/` ) ( string_push_str wasm_url ( string_data build_id ) ) ( string_push_str wasm_url `/` ) ( string_push_str wasm_url ( string_data final_name ) )
                                 ( json_obj_set res `download_url` ( json_str_lit ( string_data wasm_url ) ) )
+                                ( string_free final_name )
                             } {}
 
                             : String body ( json_stringify res )
@@ -2100,7 +2123,7 @@ s combined_stdout s combined_stderr → v {
 
     ( __oa_path paths `/health` `get` `Liveness probe` `Returns 200 OK with a small JSON payload.` )
     ( __oa_path paths `/build` `post` `Compile NURL source to a native x86_64 Linux binary (mirrors nurl.sh)` `nurlc → LLVM IR → clang link → ELF. Returns BuildResponse with ll_artifact + binary_artifact download URLs on success.` )
-    ( __oa_path paths `/build_wasm` `post` `Compile NURL source to a wasm32-wasi WebAssembly module` `nurlc → wasi-clang link → .wasm. Returns base64 wasm + canvas/audio FFI flags.` )
+    ( __oa_path paths `/build_wasm` `post` `Compile NURL source to a wasm32-wasi WebAssembly module` `nurlc → wasi-clang link → .wasm. Returns base64 wasm + canvas/audio FFI flags + wasm_artifact/ll_artifact download URLs; links_only:true omits the inline base64.` )
     ( __oa_path paths `/build_windows` `post` `Cross-compile to a Windows .exe via mingw-w64` `nurlc → clang+mingw link → PE/COFF. Static libcurl + Schannel TLS.` )
     ( __oa_path paths `/build_macos` `post` `Cross-compile to a macOS x86_64 Mach-O binary via zig cc` `Unsigned — clear quarantine attribute before running on macOS.` )
     ( __oa_path paths `/build_target` `post` `Cross-compile to a registered zig target (linux-arm64-musl, riscv64, …)` `See GET /targets for available target ids.` )
@@ -4288,7 +4311,10 @@ s combined_stdout s combined_stderr → v {
     }
 }
 
-@ __mcp_tool_build_source_filename s endpoint Json args → Json {
+// `links_only` — set by the wasm tool: the handler then answers with
+// wasm_artifact/ll_artifact download URLs and no inline base64 module,
+// which would otherwise land verbatim in the calling model's context.
+@ __mcp_tool_build_source_filename s endpoint b links_only Json args → Json {
     : s source ( __mcp_args_get `source` args `` )
     : s filename ( __mcp_args_get `filename` args `main.nu` )
     ? == ( nurl_str_len source ) 0 {
@@ -4297,6 +4323,7 @@ s combined_stdout s combined_stderr → v {
     : Json body ( json_obj_new )
     ( json_obj_set body `source` ( json_str_lit source ) )
     ( json_obj_set body `filename` ( json_str_lit filename ) )
+    ? links_only { ( json_obj_set body `links_only` ( json_bool T ) ) } {}
     : Json result ( __mcp_build_endpoint endpoint body )
     ( json_free body )
     ^ result
@@ -4871,16 +4898,16 @@ s combined_stdout s combined_stderr → v {
 @ __mcp_dispatch_tool s name Json args → Json {
     // Build tools — five compilation targets.
     ? != 0 ( nurl_str_eq name `nurl_build_native` ) {
-        ^ ( __mcp_tool_build_source_filename `/build` args )
+        ^ ( __mcp_tool_build_source_filename `/build` F args )
     } {}
     ? != 0 ( nurl_str_eq name `nurl_build_wasm` ) {
-        ^ ( __mcp_tool_build_source_filename `/build_wasm` args )
+        ^ ( __mcp_tool_build_source_filename `/build_wasm` T args )
     } {}
     ? != 0 ( nurl_str_eq name `nurl_build_windows` ) {
-        ^ ( __mcp_tool_build_source_filename `/build_windows` args )
+        ^ ( __mcp_tool_build_source_filename `/build_windows` F args )
     } {}
     ? != 0 ( nurl_str_eq name `nurl_build_macos` ) {
-        ^ ( __mcp_tool_build_source_filename `/build_macos` args )
+        ^ ( __mcp_tool_build_source_filename `/build_macos` F args )
     } {}
     ? != 0 ( nurl_str_eq name `nurl_build_target` ) {
         ^ ( __mcp_tool_build_target_impl args )
@@ -4993,7 +5020,7 @@ s combined_stdout s combined_stderr → v {
     `Compile NURL source to a native x86_64 Linux ELF binary. Returns build status, nurlc+clang return codes, combined stderr, download URLs for the generated .ll and the binary. Equivalent to POST /build.`
     ( __mcp_schema_source_filename ) ) )
     ( json_arr_push arr ( __mcp_tool_desc `nurl_build_wasm`
-    `Compile NURL source to a wasm32-wasi WebAssembly module. Returns base64-encoded wasm bytes, compile logs, download URL. Runs in-browser via a WASI shim or with wasmtime. Equivalent to POST /build_wasm.`
+    `Compile NURL source to a wasm32-wasi WebAssembly module. Returns build status, compile logs, and download URLs for the generated .wasm module (wasm_artifact) and the LLVM IR (ll_artifact) — no inline base64. Runs in-browser via a WASI shim or with wasmtime. Equivalent to POST /build_wasm with links_only:true.`
     ( __mcp_schema_source_filename ) ) )
     ( json_arr_push arr ( __mcp_tool_desc `nurl_build_windows`
     `Cross-compile NURL source to a Windows x86_64 .exe via mingw-w64 (clang -c → x86_64-w64-mingw32-gcc link). Static libcurl + Schannel TLS when the runtime is libcurl-enabled. Returns build status, return codes, combined stderr, download URL. Equivalent to POST /build_windows.`

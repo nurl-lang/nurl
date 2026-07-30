@@ -49,7 +49,7 @@ For any other client, configure an MCP server whose `command` is
 | Tool | Arguments | Does |
 |---|---|---|
 | `nurl_build` | `source` *or* `path` | Compile with the local toolchain; report success or compiler diagnostics. Does not run the program. |
-| `nurl_build_wasm` | `source` *or* `path`, optional `out` | Compile to a **wasm32-wasi module**, fully locally (wasmbuilder package — no build service). `out` = output path; a `path` input defaults to `<input>.wasm`; inline `source` without `out` returns JSON with `wasm_base64`. |
+| `nurl_build_wasm` | `source` *or* `path`, optional `out` | Compile to a **wasm32-wasi module**, fully locally (wasmbuilder package — no build service). `out` = output path; a `path` input defaults to `<input>.wasm`; inline `source` without `out` keeps the module + its `.ll` at a temp path and returns JSON with `wasm_path` / `ll_path` (no inline base64). |
 | `nurl_run` | `source` *or* `path` | Compile **and** run; return the program's exit code, stdout, and stderr. |
 | `nurl_check` | `source` *or* `path` | Front-end only — type-check + borrow-check, no binary. Fast. |
 | `nurl_fmt` | `source` *or* `path` | Format to canonical form (`nurlfmt`); return the formatted source. |
