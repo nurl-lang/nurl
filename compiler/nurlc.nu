@@ -11075,7 +11075,7 @@
         : i bck_rhs_tt ( nurl_lex_type lex )
         : s bck_rhs_val ( nurl_lex_val lex )
         ( nurl_sym_def syms `__last_expr_refdepth__` `` )
-        : s val ( gen_operand lex syms cg )
+        : ~ s val ( gen_operand lex syms cg )
         : s __asn_rt ( nurl_get_last_type )
         // A fresh owned slice reaching the RHS through a `?` / `??` (whose
         // first token isn't `[`) still frees the old buffer below.
@@ -11106,6 +11106,52 @@
             ( nurl_print `  call void @nurl_free(i8* ` ) ( nurl_print old_reg ) ( nurl_print `)` ) ( emit_dbg_eol )
         }
         {}
+        // The remaining RHS shapes against a tracked owned-string LHS
+        // (the fresh-call shape was handled just above). The invariant
+        // all of them maintain: a TRACKED binding holds an
+        // allocator-owned pointer on EVERY control-flow path. Compile-
+        // time untracking cannot express that — an untrack inside a `?`
+        // arm dies with the arm's nurl_sym_pop and the outer
+        // registration resurfaces — so each shape instead frees the old
+        // value here and, when the incoming pointer is not a fresh heap
+        // allocation, stores a strdup of it:
+        //   - string literal: storing the .rodata pointer made the
+        //     scope-exit drop free a string constant (SEGV; lock test
+        //     assign_literal_owned)
+        //   - bare identifier: an untracked RHS (parameter, borrow,
+        //     global) would hand the drop someone else's buffer (UAF);
+        //     a TRACKED RHS is a true move — pointer kept, old value
+        //     freed here, the source's drop cancelled by the transfer
+        //     block below
+        //   - borrow-returning direct call (ret_owned not `str`): same
+        //     copy discipline as the untracked identifier
+        // Self-assign `= x x` is skipped whole — freeing the old value
+        // first would store a dangling pointer. `?`-ternary RHS keeps
+        // its pre-existing handling (arm ownership is a phi problem,
+        // not an assignment one).
+        : b rhs_lit_over_owned & lhs_is_owned_str == bck_rhs_tt TT_STR
+        : ~ s __rhs_ptr ``
+        ? ( is_ident_tok bck_rhs_tt )
+        { = __rhs_ptr ( nurl_sym_get2 syms bck_rhs_val `__ptr` ) } {}
+        : b rhs_id_tracked & != 0 ( nurl_str_len __rhs_ptr )
+        ( str_contains_word ( nurl_sym_get syms `__owned_strings__` ) __rhs_ptr )
+        : b rhs_id_over_owned & & lhs_is_owned_str ( is_ident_tok bck_rhs_tt )
+        ! ( seq bck_rhs_val name )
+        : b rhs_call_unowned & & lhs_is_owned_str == bck_rhs_tt TT_LPAREN
+        ! rhs_is_owned_call
+        ? | | rhs_lit_over_owned rhs_id_over_owned rhs_call_unowned
+        { : s old_reg2 ( nurl_cg_reg cg )
+            ( nurl_print `  ` ) ( nurl_print old_reg2 )
+            ( nurl_print ` = load i8*, i8** ` ) ( nurl_print ptr ) ( nurl_print `\n` )
+            ( nurl_print `  call void @nurl_free(i8* ` ) ( nurl_print old_reg2 ) ( nurl_print `)` ) ( emit_dbg_eol )
+            ? & rhs_id_over_owned rhs_id_tracked {} {
+                : s dup_reg ( nurl_cg_reg cg )
+                ( nurl_print `  ` ) ( nurl_print dup_reg )
+                ( nurl_print ` = call i8* @strdup(i8* ` ) ( nurl_print val ) ( nurl_print `)` ) ( emit_dbg_eol )
+                = val dup_reg
+            }
+        }
+        {}
         // Slice reassignment-drop (rule 3 dual of the string block
         // above): `= xs [ … ]` / `= xs ( fresh-slice-call )` frees the
         // old backing buffer before the store overwrites the alloca.
@@ -11126,7 +11172,10 @@
         // through `name` now (whose own registration, if any, frees it
         // exactly once at scope exit). Without this, the arm/loop
         // delta-drop frees x while `name` still aliases it.
-        ? & & != 0 g_auto_drop_strings ( seq ( nurl_llty vt ) `i8*` ) ( is_ident_tok bck_rhs_tt )
+        // Self-assign is excluded: `= x x` untracking x's own alloca
+        // would silence its scope-exit drop and leak the buffer.
+        ? & & & != 0 g_auto_drop_strings ( seq ( nurl_llty vt ) `i8*` )
+        ( is_ident_tok bck_rhs_tt ) ! ( seq bck_rhs_val name )
         { ( mem_remove_owned_str syms
             ( nurl_sym_get2 syms bck_rhs_val `__ptr` ) ) }
         {}
