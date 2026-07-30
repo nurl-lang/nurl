@@ -393,7 +393,7 @@
     ( nurl_lex_advance lex )
     : s inner ( parse_type lex )
     // void* is invalid in LLVM IR — use i8* instead
-    ? ( seq inner `void` ) { ^ `i8*` } { ^ ( nurl_str_cat inner `*` ) }
+    ? ( seq inner `void` ) { ^ ( nurl_str_cat `i8*` `` ) } { ^ ( nurl_str_cat inner `*` ) }
 }
 
 @ parse_type_base i lex → s {
@@ -527,7 +527,7 @@
             {}
             ^ ( nurl_str_cat `%` ( nurl_str_cat sname mangle_sfx ) )
         }
-        { ( die lex `( in type position must be followed by @ or type name` ) ^ `i64` }
+        { ( die lex `( in type position must be followed by @ or type name` ) ^ ( nurl_str_cat `i64` `` ) }
     }
 }
 
@@ -538,7 +538,7 @@
 // `{ T*, i64 }` (0/1) uniformly. Falls back to i64 for a non-`{` type.
 @ compound_field_type s agg_ty i idx → s {
     : i len ( nurl_str_len agg_ty )
-    ? | < len 4 != ( nurl_str_get agg_ty 0 ) 123 { ^ `i64` } {}
+    ? | < len 4 != ( nurl_str_get agg_ty 0 ) 123 { ^ ( nurl_str_cat `i64` `` ) } {}
     : ~ i depth 0
     : ~ i cur 0  // index of the field currently being scanned
     : ~ i fstart 2  // first field begins just after the leading "{ "
@@ -634,7 +634,7 @@
 // (option / pointer) type arguments.
 @ nurl_src_to_llvm s src → s {
     : i n ( nurl_str_len src )
-    ? == n 0 { ^ `i8*` } {}
+    ? == n 0 { ^ ( nurl_str_cat `i8*` `` ) } {}
     : i c0 ( nurl_str_get src 0 )
     ? & & == c0 63 >= n 2 == ( nurl_str_get src 1 ) 63
     { ^ ( nurl_str_cat `{ i1, ` ( nurl_str_cat ( nurl_src_to_llvm ( nurl_str_slice src 2 - n 2 ) ) ` }` ) ) }
@@ -644,7 +644,7 @@
     {}
     ? == c0 42
     { : s inner ( nurl_src_to_llvm ( nurl_str_slice src 1 - n 1 ) )
-        ? ( seq inner `void` ) { ^ `i8*` } { ^ ( nurl_str_cat inner `*` ) } }
+        ? ( seq inner `void` ) { ^ ( nurl_str_cat `i8*` `` ) } { ^ ( nurl_str_cat inner `*` ) } }
     {}
     ^ ( llvm_type src )
 }
@@ -2385,7 +2385,15 @@
     // argument (ret_borrow summary / vec_get*) — keeps the skip:
     // dropping the source would dangle the returned alias
     // (conservative: worst case leak, never UAF).
-    : b ret_arg_alias | ! ret_is_direct_call
+    // A `?` / `??` value join is not an alias of any single binding
+    // either: the arm protocol hands the phi a COPY of a tracked-ident
+    // arm's value, so the binding it was loaded from is NOT the
+    // returned buffer. Treating a join like a bare-ident return made
+    // gen_ident's `^ ? … ptr …` skip the drop of every local the arms
+    // happened to load last — 26k leaked bindings per self-compile.
+    // A genuine borrow (ret_borrow / vec_get) still keeps the skip via
+    // the second clause.
+    : b ret_arg_alias | & ! ret_is_direct_call ! ret_is_det_join
     != 0 ( nurl_sym_len syms `__last_value_borrow__` )
     : s skip ? & & ( mem_is_slice_ty lt ) ( str_contains_word ( nurl_sym_get syms `__owned_slices__` ) ret_ident )
     ret_arg_alias
@@ -6649,6 +6657,10 @@
     // registered x as owned off the else-arm's marker, and the literal
     // path's scope-exit drop then freed .rodata (SEGV).
     ( nurl_sym_def syms `__last_call_ret_owned__` `` )
+    // First token of the arm: a bare string-literal arm's value is a
+    // .rodata GEP — provably non-null, so it can be copied to make a
+    // MIXED join uniformly owned (see the dup blocks below).
+    : i t_tt0 ( nurl_lex_type lex )
     : ~ s tv ( gen_expr lex syms cg )
     : s tt2 ( nurl_get_last_type )
     : s t_slice_flag ( nurl_str_cat ( nurl_sym_get syms `__last_slice_owned__` ) `` )
@@ -6667,9 +6679,15 @@
     // call — then the dup is redundant and the call's buffer leaks,
     // never a UAF.
     : ~ b t_dup F
+    // Either a tracked-ident arm (copy so the binding keeps its own
+    // drop) or a string-literal arm (copy so a join with an owning
+    // sibling is UNIFORMLY owned instead of publishing "not owned" and
+    // leaking the sibling's buffer — 16k per self-compile in
+    // `? == 0 ( nurl_str_len lt ) `i64` lt` alone).
     ? & & & & == 0 g_did_ret ( seq ( nurl_llty tt2 ) `i8*` )
     ! ( seq t_str_flag `str` )
-    != 0 ( nurl_str_len t_retid )
+    | == t_tt0 TT_STR != 0 ( nurl_str_len t_retid )
+    | == t_tt0 TT_STR
     ( str_contains_word ( nurl_sym_get syms `__owned_strings__` )
     ( nurl_sym_get2 syms t_retid `__ptr` ) )
     { : s __td ( nurl_cg_reg cg )
@@ -6744,6 +6762,7 @@
     ( nurl_sym_def syms `__last_ident_name__` `` )
     ( nurl_sym_def syms `__last_slice_owned__` `` )
     ( nurl_sym_def syms `__last_call_ret_owned__` `` )
+    : i e_tt0 ( nurl_lex_type lex )
     : ~ s ev ( gen_expr lex syms cg )
     : s et2 ( nurl_get_last_type )
     : s e_slice_flag ( nurl_str_cat ( nurl_sym_get syms `__last_slice_owned__` ) `` )
@@ -6753,7 +6772,8 @@
     : ~ b e_dup F
     ? & & & & == 0 g_did_ret ( seq ( nurl_llty et2 ) `i8*` )
     ! ( seq e_str_flag `str` )
-    != 0 ( nurl_str_len e_retid )
+    | == e_tt0 TT_STR != 0 ( nurl_str_len e_retid )
+    | == e_tt0 TT_STR
     ( str_contains_word ( nurl_sym_get syms `__owned_strings__` )
     ( nurl_sym_get2 syms e_retid `__ptr` ) )
     { : s __ed ( nurl_cg_reg cg )
@@ -16183,6 +16203,12 @@
     // g_fn_ret_param[fname] after the body.
     ( nurl_sym_def syms `__fn_ret_param__` `` )
     : s last ( gen_block_ret lex syms cg )
+    // Type of the value the body actually falls off with. A body whose
+    // tail is a `die` block (or that returned on every path) produces
+    // NO fall-off value — its type is void — and must not be judged by
+    // the fall-off ownership rule below.
+    : s __fall_ty ( nurl_get_last_type )
+    : b __has_fall & == 0 g_did_ret ( seq ( nurl_llty __fall_ty ) `i8*` )
     // Borrow provenance for an IMPLICIT (no `^`) block return: the body's
     // final expression IS the return value, so if it left a borrow on
     // __last_value_borrow__ (e.g. a `?? param { … }` yielding a payload
@@ -16286,8 +16312,13 @@
         // proves ownership like gen_ret's explicit-call path; any other
         // unproven i8* fall-off sets the mixed poison (all-paths rule —
         // see the flag snapshot below).
-        ? & ( seq ( nurl_llty ret_ty ) `i8*` )
-        == 0 ( nurl_str_len skip_str_ptr )
+        // Only a REAL fall-off is judged: a body ending in `die` (or one
+        // that returned on every path) has a void tail and no value to
+        // own, but the old gate keyed on the DECLARED return type and so
+        // poisoned every such function — `parse_type_base`'s trailing
+        // `{ ( die … ) }` un-owned the whole type-parser family, and 20k
+        // type strings per self-compile leaked at its callers.
+        ? & __has_fall == 0 ( nurl_str_len skip_str_ptr )
         { ? ( seq ( nurl_sym_get syms `__last_call_ret_owned__` ) `str` )
             { ( nurl_sym_def syms `__fn_ret_str_owned__` `1` ) }
             { ( nurl_sym_def syms `__fn_ret_str_mixed__` `1` ) }
@@ -18462,6 +18493,27 @@
         ( nurl_sym_def syms `bck_st_set__ret_owned` `str` )
         ( nurl_sym_def syms `bck_join_state__ret_owned` `str` )
         ( nurl_sym_def syms `bck_loop_carry_seed__ret_owned` `str` )
+        // The type-parser family. Every member returns a fresh type
+        // string on every path (audited: `nurl_str_cat`/`nurl_str_slice`
+        // tails, `llvm_type`'s dup'd ternary chain, and the literal
+        // tails converted to copies) — but the family is MUTUALLY
+        // RECURSIVE (`parse_type` delegates to parsers defined after it,
+        // which recurse back), so the def-order inference can never
+        // prove a single member and the mixed poison unowned all of
+        // them. 20k type strings per self-compile leaked at the 37
+        // `parse_type` call sites. Pre-registration bypasses the
+        // inference, exactly like the strdup getters above.
+        ( nurl_sym_def syms `llvm_type__ret_owned` `str` )
+        ( nurl_sym_def syms `parse_type__ret_owned` `str` )
+        ( nurl_sym_def syms `parse_type_base__ret_owned` `str` )
+        ( nurl_sym_def syms `parse_type_ptr__ret_owned` `str` )
+        ( nurl_sym_def syms `parse_type_opt__ret_owned` `str` )
+        ( nurl_sym_def syms `parse_type_optopt__ret_owned` `str` )
+        ( nurl_sym_def syms `parse_type_slice__ret_owned` `str` )
+        ( nurl_sym_def syms `parse_type_res__ret_owned` `str` )
+        ( nurl_sym_def syms `parse_type_paren__ret_owned` `str` )
+        ( nurl_sym_def syms `parse_type_enum__ret_owned` `str` )
+        ( nurl_sym_def syms `parse_type_dyn__ret_owned` `str` )
     }
     {}
     ( nurl_sym_def syms `malloc` `i8*` )
