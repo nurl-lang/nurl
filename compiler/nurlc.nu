@@ -1757,6 +1757,7 @@
         {}
         ( nurl_lex_advance lx )
     }
+    ( nurl_lex_free lx )
 }
 
 @ lint_note_import s path i line i col → v {
@@ -4266,6 +4267,16 @@
 // from strdup or an inline malloc). Marks the slot valid.
 @ __tok_write i lex i base i type s val i inum i line i start → v {
     : s p # s lex
+    // Every slot val is a fresh heap string (strdup'd operator spelling
+    // or malloc'd ident/number/str buffer) — release the one this write
+    // overwrites, or every token of every compile leaks its text
+    // (~500k strings per self-compile). Gated on TF_VALID: an invalid
+    // slot's val pointer is stale (already owned by another slot after
+    // a __tok_shift).
+    ? != 0 ( nurl_peek p + base TF_VALID ) {
+        : i __oldv ( nurl_peek p + base TF_VAL )
+        ? != 0 __oldv { ( free # s __oldv ) } {}
+    } {}
     ( nurl_poke p + base TF_TYPE type )
     ( nurl_poke p + base TF_VAL # i val )
     ( nurl_poke p + base TF_INUM inum )
@@ -4278,12 +4289,24 @@
 // Both must be valid token-slot bases.
 @ __tok_shift i lex i src_base i dst_base → v {
     : s p # s lex
+    // The destination's old val is overwritten — release it (see
+    // __tok_write). The SOURCE slot is invalidated at the bottom of
+    // this function, not by the caller: nurl_lex_advance shifts a
+    // whole cascade (PEEK→CUR, PEEK2→PEEK, …), and with the source
+    // left valid the NEXT shift's destination-free would free the
+    // pointer the previous shift just moved forward.
+    ? != 0 ( nurl_peek p + dst_base TF_VALID ) {
+        : i __oldv ( nurl_peek p + dst_base TF_VAL )
+        ? != 0 __oldv { ( free # s __oldv ) } {}
+    } {}
     ( nurl_poke p + dst_base TF_TYPE ( nurl_peek p + src_base TF_TYPE ) )
     ( nurl_poke p + dst_base TF_VAL ( nurl_peek p + src_base TF_VAL ) )
     ( nurl_poke p + dst_base TF_INUM ( nurl_peek p + src_base TF_INUM ) )
     ( nurl_poke p + dst_base TF_LINE ( nurl_peek p + src_base TF_LINE ) )
     ( nurl_poke p + dst_base TF_START ( nurl_peek p + src_base TF_START ) )
     ( nurl_poke p + dst_base TF_VALID 1 )
+    // Exactly one valid slot owns the moved val pointer from here on.
+    ( nurl_poke p + src_base TF_VALID 0 )
 }
 
 // ── Whitespace + comment skip ────────────────────────────────────
@@ -4751,6 +4774,31 @@
     ^ # i lx
 }
 
+// Release a lexer: every valid token slot's val string, the strdup'd
+// source and filename, the line-number table, and the struct itself.
+// The compiler creates a lexer per import per scan pass plus a mini-
+// lexer per parameter-roster probe — ~15k per self-compile, ~10 MB
+// left behind before this existed.
+@ nurl_lex_free i h → v {
+    ? == h 0 { ^ } {}
+    : s p # s h
+    : ~ i b LX_CUR
+    ~ <= b LX_PEEK4 {
+        ? != 0 ( nurl_peek p + b TF_VALID ) {
+            : i tv ( nurl_peek p + b TF_VAL )
+            ? != 0 tv { ( free # s tv ) } {}
+        } {}
+        = b + b 6
+    }
+    : i sp ( nurl_peek p LX_SRC )
+    ? != 0 sp { ( free # s sp ) } {}
+    : i fp ( nurl_peek p LX_FILENAME )
+    ? != 0 fp { ( free # s fp ) } {}
+    : i tp ( nurl_peek p LX_LINETAB )
+    ? != 0 tp { ( free # s tp ) } {}
+    ( nurl_free p )
+}
+
 @ nurl_lex_type i h → i {
     : s p # s h
     ^ ( nurl_peek p + LX_CUR TF_TYPE )
@@ -4908,11 +4956,18 @@
     : ~ i np new_pos
     ? < np 0 { = np 0 } {}
     ? > np len { = np len } {}
-    // Invalidate lookahead.
-    ( nurl_poke p + LX_PEEK TF_VALID 0 )
-    ( nurl_poke p + LX_PEEK2 TF_VALID 0 )
-    ( nurl_poke p + LX_PEEK3 TF_VALID 0 )
-    ( nurl_poke p + LX_PEEK4 TF_VALID 0 )
+    // Invalidate lookahead — releasing each parked val first, or every
+    // parser backtrack (closure probe, `??` guard arm) leaks the
+    // lookahead tokens' text.
+    : ~ i __ib LX_PEEK
+    ~ <= __ib LX_PEEK4 {
+        ? != 0 ( nurl_peek p + __ib TF_VALID ) {
+            : i __iv ( nurl_peek p + __ib TF_VAL )
+            ? != 0 __iv { ( free # s __iv ) } {}
+            ( nurl_poke p + __ib TF_VALID 0 )
+        } {}
+        = __ib + __ib 6
+    }
     // Line = 1 + the number of newlines strictly before np. Binary
     // search the index built in nurl_lex_new: this used to rescan the
     // source from byte 0 on EVERY call, which on a 1 MB input made the
@@ -5807,6 +5862,7 @@
             ? != 0 ( nurl_str_len __psrc )
             { : i __plx ( nurl_lex_new __psrc `<param>` )
                 : s __pllvm ( parse_type __plx )
+                ( nurl_lex_free __plx )
                 // Detect pointer-ness from the LOWERED types so pointer
                 // aliases with no literal `*` (e.g. `s` → i8*) are covered.
                 // That is what lets the reverse case — a bare scalar passed
@@ -6973,6 +7029,7 @@
     // ── Compile the synthesised block through a sub-lexer ──
     : i sub ( nurl_lex_new src `<select>` )
     ( gen_stmt sub syms cg )
+    ( nurl_lex_free sub )
     ( nurl_set_last_type `void` )
     ^ ``
 }
@@ -15258,6 +15315,7 @@
         }
         ( nurl_sym_def g_fn_inout fname ia )
         ( nurl_sym_def g_fn_sink fname sa )
+        ( nurl_lex_free lexp )
     }
     {}
 }
@@ -15357,6 +15415,7 @@
         = ret_ty ( parse_type lex2 )
     }
     {}
+    ( nurl_lex_free lex2 )
     ret_ty
 }
 
@@ -15531,6 +15590,7 @@
                 // a self-referential struct won't recurse infinitely.
                 : i lex_inner ( nurl_lex_new subst ( nurl_str_cat `<inst-rescan:` ( nurl_str_cat mangled `>` ) ) )
                 ( scan_generic_structs lex_inner syms )
+                ( nurl_lex_free lex_inner )
                 // Re-lex, skip outer '{', parse each field via parse_type + IDENT.
                 : i lex2 ( nurl_lex_new subst ( nurl_str_cat `<inst:` ( nurl_str_cat mangled `>` ) ) )
                 ? == ( nurl_lex_type lex2 ) TT_LBRACE { ( nurl_lex_advance lex2 ) } {}
@@ -15565,6 +15625,7 @@
                     = fidx + fidx 1
                 }
                 ( nurl_print ` }\n\n` )
+                ( nurl_lex_free lex2 )
                 ( nurl_sym_def syms mangled ( nurl_str_cat `%` mangled ) )
                 ( nurl_sym_def syms ( nurl_str_cat mangled `__is_type` ) `1` )
                 ( nurl_sym_def syms ( nurl_str_cat mangled `__field_count` ) ( nurl_str_int fidx ) )
@@ -17523,6 +17584,7 @@
             }
         }
     }
+    ( nurl_lex_free lx )
     names
 }
 
@@ -17628,8 +17690,10 @@
         ( vis_set_current_src_file path )
         : i lex2 ( nurl_lex_new eff_src path )
         ( scan_fn_sigs lex2 syms )
+        ( nurl_lex_free lex2 )
         : i lex3 ( nurl_lex_new eff_src path )
         ( parse_program lex3 syms cg )
+        ( nurl_lex_free lex3 )
         ( vis_set_current_src_file saved_sf )
     }
 }
@@ -17678,6 +17742,7 @@
     : s full_src ( nurl_str_cat `@ ` ( nurl_str_cat mangled ( nurl_str_cat ` ` subst_src ) ) )
     : i lex_scan ( nurl_lex_new full_src `<generic-scan>` )
     ( scan_generic_structs lex_scan syms )
+    ( nurl_lex_free lex_scan )
     // Critic v0.9.0 §2: synthesise a filename that includes the call
     // site so any diagnostic emitted while re-parsing the substituted
     // body points the user at THEIR code, not the opaque `<generic>`.
@@ -17731,6 +17796,7 @@
         ( nurl_sym_def g_lint_syms `use_file` saved_uf )
     }
     { ( gen_fn_decl lex2 syms cg ) }
+    ( nurl_lex_free lex2 )
     ( vis_set_current_src_file saved_vis_sf )
     = g_dbg_override_line saved_override
     = g_dbg_override_file saved_override_file
@@ -18538,6 +18604,7 @@
         = ret ( parse_type lex2 )
     }
     {}
+    ( nurl_lex_free lex2 )
     ret
 }
 
@@ -18862,6 +18929,7 @@
             : s full_src ( nurl_str_cat `@ ` ( nurl_str_cat mangled ( nurl_str_cat ` ` subst ) ) )
             : i lex2 ( nurl_lex_new full_src `<trait_default>` )
             ( gen_fn_decl lex2 syms cg )
+            ( nurl_lex_free lex2 )
         }
     }
 }
@@ -19050,7 +19118,9 @@
     : ~ s ret `void`
     ? == ( nurl_lex_type sx ) TT_ARROW { ( nurl_lex_advance sx ) = ret ( parse_type sx ) } {}
     : s head ( nurl_str_cat4 ret `|` recvmode ( nurl_str_cat `|` recv_llvm ) )
-    ^ ? == 0 ( nurl_str_len params ) head ( nurl_str_cat3 head `|` params )
+    : s __dsr ? == 0 ( nurl_str_len params ) head ( nurl_str_cat3 head `|` params )
+    ( nurl_lex_free sx )
+    ^ __dsr
 }
 
 // dyn_subst_parts: the sig parts of (declaring trait, method) with Self
@@ -19132,6 +19202,7 @@
         {}
         ( nurl_lex_advance sx )
     }
+    ( nurl_lex_free sx )
 }
 
 // emit_dyn_method_thunk: emit the uniform-ABI thunk that adapts an i8* self +
@@ -19591,6 +19662,7 @@
                     : s saved_sf ( vis_current_src_file )
                     ( vis_set_current_src_file path )
                     ( scan_generic_structs lex2 syms )
+                    ( nurl_lex_free lex2 )
                     ( vis_set_current_src_file saved_sf )
                 }
                 = handled T
@@ -19685,6 +19757,7 @@
     : i sub ( nurl_lex_new src `<kw-default>` )
     : s v ( gen_operand sub syms cg )
     : s t ( nurl_get_last_type )
+    ( nurl_lex_free sub )
     ^ ( nurl_str_cat3 t ` ` v )
 }
 
@@ -20029,6 +20102,7 @@
                             : s saved_sf ( vis_current_src_file )
                             ( vis_set_current_src_file path )
                             ( scan_fn_sigs lex2 syms )
+                            ( nurl_lex_free lex2 )
                             ( vis_set_current_src_file saved_sf )
                         }
                     }
@@ -20132,6 +20206,7 @@
                             : s saved_sf ( vis_current_src_file )
                             ( vis_set_current_src_file path )
                             ( scan_type_names lex2 syms )
+                            ( nurl_lex_free lex2 )
                             ( vis_set_current_src_file saved_sf )
                         }
                     }
@@ -20422,19 +20497,23 @@
     ( init_syms syms )
     : i lex0 ( nurl_lex_new src path )
     ( scan_generic_structs lex0 syms )
+    ( nurl_lex_free lex0 )
     : i lex1 ( nurl_lex_new src path )
     ( scan_fn_sigs lex1 syms )
+    ( nurl_lex_free lex1 )
     // Every impl across the program is now registered — enforce that each
     // implemented subtrait's supertraits are implemented for the same type.
     ( verify_super_obligations )
     : i lex_tn ( nurl_lex_new src path )
     ( scan_type_names lex_tn syms )
+    ( nurl_lex_free lex_tn )
     // Dynamic trait objects (docs/spec.md §4.9): collect every trait used as a
     // `%Trait` object (body-aware, after __istrait markers exist) and emit the
     // `%dyn.<T>` fat-pointer type defs + synthesized Drop functions at module
     // scope, before any function references them.
     : i lex_dyn ( nurl_lex_new src path )
     ( scan_dyn_types lex_dyn )
+    ( nurl_lex_free lex_dyn )
     ( ensure_dyn_types_emitted syms cg )
     : i lex ( nurl_lex_new src path )
     ? != g_lint 0 { = g_lint_recording 1 } {}
@@ -20478,4 +20557,5 @@
         ` (re-run with --no-borrowck to bypass)` ) )
         ( nurl_exit 1 ) }
     {}
+    ( nurl_lex_free lex )
 }
