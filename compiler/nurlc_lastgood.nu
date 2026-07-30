@@ -762,6 +762,10 @@
 : ~ i g_impl_name_syms 0  // Group F: method##llvm_type → mangle_suffix string
 : ~ i g_impl_trait_syms 0  // coherence: method##llvm_type → owning trait name
 : ~ s g_void_reason ``  // why the last expression degraded to void (mixed-type
+: ~ i g_void_reason_owned 0  // 1 when g_void_reason holds a heap string —
+//  the global starts as a .rodata `` and is
+//  overwritten with fresh cats, so the previous
+//  value can only be freed when it was one.
 //   `??`/`?` arms). Consumers that NEED a value (a cast, a let/assign) die
 //   with this appended, so "produced no value" also says WHY — the silent
 //   version handed `undef` to the cast and the program printed a pointer.
@@ -2060,6 +2064,21 @@
     ? ( seq ty `u32` ) 32
     ? ( seq ty `u64` ) 64
     0
+}
+
+// Release the previous heap value of g_void_reason (a .rodata `` at
+// startup, so the flag gates the free) and mark the next store owned.
+@ __void_reason_release → v {
+    ? != 0 g_void_reason_owned { ( nurl_free # s g_void_reason ) } {}
+    = g_void_reason_owned 1
+}
+
+// Reset to the empty .rodata spelling: release any heap value first and
+// clear the flag, or the NEXT release would free a string constant.
+@ __void_reason_clear → v {
+    ? != 0 g_void_reason_owned { ( nurl_free # s g_void_reason ) } {}
+    = g_void_reason_owned 0
+    = g_void_reason ``
 }
 
 @ gen_int_lit i lex → s {
@@ -5531,6 +5550,26 @@
     ``
 }
 
+// Phase 2D gate: an arm's fall-through drop is safe when the arm's
+// VALUE cannot reference arm-local heap memory. That is: void (no
+// value at all), or a plain scalar — integers, floats, bool are copied
+// through the join phi, so freeing arm-local buffers behind them can
+// never dangle. Pointer, slice and aggregate arm values stay
+// conservative (leak-not-UAF): the value may be backed by exactly the
+// arm-local allocation the drop would free (`{ : String t … t }`).
+// This closes the gap where an arm whose LAST statement is an
+// assignment (`= total …` publishes the stored value's type, see
+// gen_assign's tail comment) looked value-typed and skipped every
+// arm-local drop — leaking any owned string/slice declared in the arm.
+@ mem_arm_drop_safe s t → b {
+    ? ( seq t `void` ) { ^ T } {}
+    : s ll ( nurl_llty t )
+    ? > ( int_width ll ) 0 { ^ T } {}
+    ? ( seq ll `double` ) { ^ T } {}
+    ? ( seq ll `float` ) { ^ T } {}
+    ^ F
+}
+
 @ gen_call i lex i syms i cg → s {
     ( nurl_lex_advance lex )
     : ~ s fname ( nurl_lex_val lex )
@@ -6806,7 +6845,7 @@
     // shadows — each extended by its own signedness (zext for unsigned and
     // i1, sext for signed), so the VALUE is preserved exactly. When the
     // widths agree, the shadows are dead code and LLVM drops them.
-    : ~ s tv64 tv
+    : ~ s tv64 ( nurl_str_cat tv `` )
     ? == tdr 0
     { : i __tw ( int_width ( nurl_llty tt2 ) )
         ? & > __tw 0 < __tw 64
@@ -6886,7 +6925,7 @@
     } {}
     : s elbl ( nurl_sym_get syms `__cur_lbl__` )
     : i edr g_did_ret
-    : ~ s ev64 ev
+    : ~ s ev64 ( nurl_str_cat ev `` )
     ? == edr 0
     { : i __ew ( int_width ( nurl_llty et2 ) )
         ? & > __ew 0 < __ew 64
@@ -6960,8 +6999,8 @@
     // (coerce_store_val's trunc/zext/sext), so the join erroring here was the
     // language disagreeing with itself. Only genuinely incompatible mixes
     // (float vs int, pointer vs int) stay valueless — and diagnosable.
-    : ~ s tvp tv
-    : ~ s evp ev
+    : ~ s tvp ( nurl_str_cat tv `` )
+    : ~ s evp ( nurl_str_cat ev `` )
     ? & & & ! types_ok == 0 tdr == 0 edr
     & > ( int_width ( nurl_llty tt2 ) ) 0 > ( int_width ( nurl_llty et2 ) ) 0
     { = types_ok T
@@ -6970,7 +7009,8 @@
         = evp ev64
     } {}
     ? & & == 0 g_did_ret ! types_ok & ! ( seq tt2 `void` ) ! ( seq et2 `void` )
-    { = g_void_reason ( nurl_str_cat ( nurl_str_cat4
+    { ( __void_reason_release )
+        = g_void_reason ( nurl_str_cat ( nurl_str_cat4
         `the '?' branches yield values of different types ('` ( llvm_to_nurl tt2 )
         `' vs '` ( llvm_to_nurl et2 ) )
         `'), so the conditional produces NO value — make the branches agree (e.g. '# T' inside a branch)` )
@@ -8298,7 +8338,7 @@
             // the join phi uses these — each extended by its OWN signedness,
             // so the value is exact — and when the widths agree the shadows
             // are dead code LLVM drops.
-            : ~ s arm_res64 arm_result
+            : ~ s arm_res64 ( nurl_str_cat arm_result `` )
             ? == arm_did_ret 0
             { : i __aw ( int_width ( nurl_llty arm_type ) )
                 ? & > __aw 0 < __aw 64
@@ -8350,6 +8390,7 @@
                     // gen_cond's `?`-join.
                     ? & != phi_count 0 ! ( seq ( nurl_llty arm_type ) ( nurl_llty phi_type ) )
                     { = phi_ok F
+                        ( __void_reason_release )
                         = g_void_reason ( nurl_str_cat ( nurl_str_cat4
                         `the '??' arms yield values of different types ('` ( llvm_to_nurl phi_type )
                         `' vs '` ( llvm_to_nurl arm_type ) )
@@ -8505,7 +8546,7 @@
         ( nurl_print `  ` ) ( nurl_print final64 )
         ( nurl_print ` = phi i64 ` ) ( nurl_print phi_full64 ) ( nurl_print `\n` )
         ( nurl_set_last_type ? any_u64 `u64` `i64` )
-        = g_void_reason ``
+        ( __void_reason_clear )
         ( nurl_sym_def syms `__last_value_borrow__` `` )
         ( nurl_sym_def syms `__last_ident_name__` `` )
         ^ final64
@@ -8857,7 +8898,13 @@
     ( expect lex TT_LBRACE )
     ( bck_block_enter bck_line )
     ~ != ( nurl_lex_type lex ) TT_RBRACE {
-        ( gen_stmt lex syms cg )
+        // Bind the statement's value: gen_stmt hands back the IR value
+        // string it emitted, and a bare `( gen_stmt … )` here would
+        // DISCARD an owned string — 492 leaked per self-compile. The
+        // binding is tracked, so the loop re-entry frees the previous
+        // iteration's and scope exit frees the last.
+        : s __gs_val ( gen_stmt lex syms cg )
+        ? != 0 ( nurl_str_len __gs_val ) {} {}
         // Every statement in a void block has its value discarded, so a
         // bare literal here is dead — reject it (dangling operand).
         ? != 0 g_stmt_bare_lit { ( die lex ( __dangling_operand_msg ) ) } {}
@@ -9465,26 +9512,6 @@
         }
     }
     {}
-}
-
-// Phase 2D gate: an arm's fall-through drop is safe when the arm's
-// VALUE cannot reference arm-local heap memory. That is: void (no
-// value at all), or a plain scalar — integers, floats, bool are copied
-// through the join phi, so freeing arm-local buffers behind them can
-// never dangle. Pointer, slice and aggregate arm values stay
-// conservative (leak-not-UAF): the value may be backed by exactly the
-// arm-local allocation the drop would free (`{ : String t … t }`).
-// This closes the gap where an arm whose LAST statement is an
-// assignment (`= total …` publishes the stored value's type, see
-// gen_assign's tail comment) looked value-typed and skipped every
-// arm-local drop — leaking any owned string/slice declared in the arm.
-@ mem_arm_drop_safe s t → b {
-    ? ( seq t `void` ) { ^ T } {}
-    : s ll ( nurl_llty t )
-    ? > ( int_width ll ) 0 { ^ T } {}
-    ? ( seq ll `double` ) { ^ T } {}
-    ? ( seq ll `float` ) { ^ T } {}
-    ^ F
 }
 
 // Slice counterpart of mem_drop_new_strings: at an arm's fall-through,
@@ -13620,7 +13647,7 @@
     ? == ( nurl_str_get lt 0 ) 37
     { ^ ( nurl_str_slice lt 1 - ( nurl_str_len lt ) 1 ) }
     {}
-    lt
+    ( nurl_str_cat lt `` )
 }
 
 // ── Backslash expression disambiguation ──────────────────────────
@@ -13851,7 +13878,7 @@
 // required i1. No-op when the value is already i1.
 @ coerce_to_i1 s val s ty i cg → s {
     ? ( seq ty `i1` )
-    { val }
+    { ( nurl_str_cat val `` ) }
     { : s r ( nurl_cg_reg cg )
         ( nurl_print `  ` ) ( nurl_print r )
         ( nurl_print ` = icmp ne ` ) ( nurl_print ( nurl_llty ty ) )
@@ -14491,7 +14518,8 @@
     : ~ s types1 ( nurl_str_cat param_types `` )
     : ~ i j 0
     ~ < j param_count {
-        = fn_ptr_type ( nurl_str_cat ( nurl_str_cat fn_ptr_type `, ` ) ( seplist_first types1 ) )
+        : s __t1 ( seplist_first types1 )
+        = fn_ptr_type ( nurl_str_cat ( nurl_str_cat fn_ptr_type `, ` ) __t1 )
         = types1 ( seplist_rest types1 )
         = j + j 1
     }
@@ -14513,7 +14541,9 @@
     : ~ s types2 ( nurl_str_cat param_types `` )
     : ~ i k 0
     ~ < k param_count {
-        ( nurl_print `, ` ) ( nurl_print ( seplist_first types2 ) )
+        ( nurl_print `, ` )
+        : s __t2 ( seplist_first types2 )
+        ( nurl_print __t2 )
         = types2 ( seplist_rest types2 )
         = k + k 1
     }
@@ -14628,7 +14658,7 @@
 // Returns a space-separated string of captured variable names
 
 @ simple_capture_analysis i lex i outer_syms s closure_params → s {
-    : ~ s captured_vars ``
+    : ~ s captured_vars ( nurl_str_cat `` `` )
     : ~ i captured_count 0
     ( nurl_lex_advance lex )  // consume opening '{'
 
@@ -14702,7 +14732,7 @@
                                 ? ! ( str_contains captured_vars var_name )
                                 {
                                     = captured_vars ? == 0 captured_count
-                                    var_name
+                                    ( nurl_str_cat var_name `` )
                                     ( nurl_str_cat ( nurl_str_cat captured_vars ` ` ) var_name )
                                     = captured_count + captured_count 1
                                 }
@@ -16150,7 +16180,7 @@
     ( nurl_sym_def syms ( nurl_str_cat fname `__res_t_llvm` ) res_t_llvm )
     ( nurl_sym_def syms ( nurl_str_cat fname `__res_e_llvm` ) res_e_llvm )
     ( nurl_sym_def syms ( nurl_str_cat fname `__opt_nurl_t` ) opt_nurl_t )
-    : s lname ? ( seq fname `main` ) `_nurl_main` fname
+    : s lname ? ( seq fname `main` ) ( nurl_str_cat `_nurl_main` `` ) ( nurl_str_cat fname `` )
     // Capture the whole function definition into the output buffer so its
     // allocas can be hoisted into the entry block before emission (see
     // emit_hoisted). Closures created mid-body buffer separately (nested
@@ -18616,6 +18646,19 @@
         // callee names it mints were never freed.
         ( nurl_sym_def syms `priv_mangle_for__ret_owned` `str` )
         ( nurl_sym_def syms `priv_resolve__ret_owned` `str` )
+        // Defined near the end of the file, called from
+        // gen_fn_decl_concrete at the top.
+        ( nurl_sym_def syms `priv_file_id__ret_owned` `str` )
+        // Both had a borrow tail (`lt` / `val`, their own parameter),
+        // now copied — so every path is fresh and the marker is honest.
+        ( nurl_sym_def syms `llvm_to_nurl__ret_owned` `str` )
+        ( nurl_sym_def syms `coerce_to_i1__ret_owned` `str` )
+        ( nurl_sym_def syms `emit_deferred_cstr__ret_owned` `str` )
+        // nurl_argv strdups the argument (runtime_core.c) — the CLI
+        // loop's `: s a ( nurl_argv ai )` never freed it.
+        ( nurl_sym_def syms `nurl_argv__ret_owned` `str` )
+        // Defined after gen_closure_expr, its only caller.
+        ( nurl_sym_def syms `simple_capture_analysis__ret_owned` `str` )
     }
     {}
     ( nurl_sym_def syms `malloc` `i8*` )
