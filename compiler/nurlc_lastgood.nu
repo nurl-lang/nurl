@@ -3345,12 +3345,27 @@
 // borrow-returning trait method risked a double free, and a `u`- or `!T E`-
 // returning one lost its signedness / try-propagation. One helper, one call per
 // path, no path can silently omit a marker again.
+// Ownership marker of a callee, tolerant of private-name mangling.
+// A file-private callee (`__name`) is emitted — and looked up — under
+// `__name__fp<fileid>` (priv_mangle_for), while the pre-registered
+// markers in init_syms are keyed on the SOURCE name. Without the
+// retry, every private fresh-returning helper looked unowned to its
+// callers: `__kw_trim`'s results alone leaked 15k strings per
+// self-compile, and their argument temps were never collected either.
+@ __ret_owned_of i syms s name → s {
+    : s v ( nurl_sym_get2 syms name `__ret_owned` )
+    ? != 0 ( nurl_str_len v ) { ^ v } {}
+    : i p ( nurl_str_find name `__fp` )
+    ? > p 0 { ^ ( nurl_sym_get2 syms ( nurl_str_slice name 0 p ) `__ret_owned` ) } {}
+    ( nurl_str_cat `` `` )
+}
+
 @ mem_propagate_call_ret_markers i syms s cn → v {
     ( nurl_sym_def syms `__last_nurl_call__` ( nurl_sym_get2 syms cn `__nurl_ret` ) )
     ( nurl_sym_def syms `__last_call_res_t_llvm__` ( nurl_sym_get2 syms cn `__res_t_llvm` ) )
     ( nurl_sym_def syms `__last_call_res_e_llvm__` ( nurl_sym_get2 syms cn `__res_e_llvm` ) )
     ( nurl_sym_def syms `__last_call_opt_nurl_t__` ( nurl_sym_get2 syms cn `__opt_nurl_t` ) )
-    ( nurl_sym_def syms `__last_call_ret_owned__` ( nurl_sym_get2 syms cn `__ret_owned` ) )
+    ( nurl_sym_def syms `__last_call_ret_owned__` ( __ret_owned_of syms cn ) )
     ( nurl_sym_def syms `__last_call_ret_struct_fields__` ( nurl_sym_get2 syms cn `__ret_owned_fields` ) )
     ( nurl_sym_def syms `__last_value_borrow__`
     ? | != 0 ( nurl_sym_len2 syms cn `__ret_borrow` )
@@ -5360,7 +5375,7 @@
     ( nurl_sym_def syms `__last_call_res_t_llvm__` ( nurl_sym_get2 syms fname `__res_t_llvm` ) )
     ( nurl_sym_def syms `__last_call_res_e_llvm__` ( nurl_sym_get2 syms fname `__res_e_llvm` ) )
     ( nurl_sym_def syms `__last_call_opt_nurl_t__` ( nurl_sym_get2 syms fname `__opt_nurl_t` ) )
-    ( nurl_sym_def syms `__last_call_ret_owned__` ( nurl_sym_get2 syms fname `__ret_owned` ) )
+    ( nurl_sym_def syms `__last_call_ret_owned__` ( __ret_owned_of syms fname ) )
     // A4c: propagate the callee's returned struct owned-field list so the
     // caller's `: T x ( f )` re-registers them for drop.
     ( nurl_sym_def syms `__last_call_ret_struct_fields__` ( nurl_sym_get2 syms fname `__ret_owned_fields` ) )
@@ -6244,7 +6259,7 @@
                 // this argument position. Generic instantiations are
                 // excluded: their summaries key differently and the
                 // container family (vec_push [s]) lives there.
-                : b __cs_fresh ( seq ( nurl_sym_get2 syms fname `__ret_owned` ) `str` )
+                : b __cs_fresh ( seq ( __ret_owned_of syms fname ) `str` )
                 : b __cs_scalar & ( mem_arm_drop_safe ( nurl_sym_get syms fname ) )
                 != 0 ( nurl_sym_len2 syms fname `__body_done` )
                 ? & & ( seq call_name fname )
