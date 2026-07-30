@@ -6667,7 +6667,8 @@
     // call — then the dup is redundant and the call's buffer leaks,
     // never a UAF.
     : ~ b t_dup F
-    ? & & & == 0 g_did_ret ( seq ( nurl_llty tt2 ) `i8*` )
+    ? & & & & == 0 g_did_ret ( seq ( nurl_llty tt2 ) `i8*` )
+    ! ( seq t_str_flag `str` )
     != 0 ( nurl_str_len t_retid )
     ( str_contains_word ( nurl_sym_get syms `__owned_strings__` )
     ( nurl_sym_get2 syms t_retid `__ptr` ) )
@@ -6750,7 +6751,8 @@
     : s e_retid ( nurl_str_cat ( nurl_sym_get syms `__last_ident_name__` ) `` )
     // Mirror of the then-arm's tracked-ident copy (see above).
     : ~ b e_dup F
-    ? & & & == 0 g_did_ret ( seq ( nurl_llty et2 ) `i8*` )
+    ? & & & & == 0 g_did_ret ( seq ( nurl_llty et2 ) `i8*` )
+    ! ( seq e_str_flag `str` )
     != 0 ( nurl_str_len e_retid )
     ( str_contains_word ( nurl_sym_get syms `__owned_strings__` )
     ( nurl_sym_get2 syms e_retid `__ptr` ) )
@@ -8156,7 +8158,8 @@
             // closure whose captured var's type string flowed through a
             // `??` arm).
             : ~ b arm_dup F
-            ? & & & == 0 g_did_ret ( seq ( nurl_llty arm_type ) `i8*` )
+            ? & & & & == 0 g_did_ret ( seq ( nurl_llty arm_type ) `i8*` )
+            ! ( seq arm_str_flag `str` )
             != 0 ( nurl_str_len arm_retid )
             ( str_contains_word ( nurl_sym_get syms `__owned_strings__` )
             ( nurl_sym_get2 syms arm_retid `__ptr` ) )
