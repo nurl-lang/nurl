@@ -3299,7 +3299,7 @@
             : s cur ( nurl_sym_get g_fn_escapes `__deferred_drops__` )
             ? ( str_contains_word cur ptr ) {} {
                 ( nurl_sym_set g_fn_escapes `__deferred_drops__`
-                ? == 0 ( nurl_str_len cur ) ptr ( nurl_str_cat3 cur ` ` ptr ) )
+                ? == 0 ( nurl_str_len cur ) ( nurl_str_cat ptr `` ) ( nurl_str_cat3 cur ` ` ptr ) )
             }
         }
     }
@@ -5357,7 +5357,7 @@
         ( nurl_sym_def syms ( __kw_slot_key kwseq slot ) ( nurl_str_cat3 at ` ` av ) )
         ? & & != 0 g_auto_drop_strings ( seq ( nurl_llty at ) `i8*` )
         ( seq ( nurl_sym_get syms `__last_call_ret_owned__` ) `str` )
-        { = owned_temps ? == 0 ( nurl_str_len owned_temps ) av ( nurl_str_cat3 owned_temps ` ` av ) }
+        { = owned_temps ? == 0 ( nurl_str_len owned_temps ) ( nurl_str_cat av `` ) ( nurl_str_cat3 owned_temps ` ` av ) }
         {}
     }
     ( expect lex TT_RPAREN )
@@ -5366,7 +5366,7 @@
     ~ < k kw_n {
         : s piece ( nurl_sym_get syms ( __kw_slot_key kwseq k ) )
         : s use_piece ? != 0 ( nurl_str_len piece ) piece ( __kw_default_or_die lex syms cg fname k )
-        = argstr ? == 0 ( nurl_str_len argstr ) use_piece ( nurl_str_cat3 argstr `, ` use_piece )
+        = argstr ? == 0 ( nurl_str_len argstr ) ( nurl_str_cat use_piece `` ) ( nurl_str_cat3 argstr `, ` use_piece )
         = k + k 1
     }
     // Result metadata — mirror gen_call's ordinary-call setup so the
@@ -5617,7 +5617,7 @@
                 // here or a types-only import looks unused.
                 ( lint_note_used_type_word ta )
             }
-            = type_args ? == 0 ( nurl_str_len type_args ) ta
+            = type_args ? == 0 ( nurl_str_len type_args ) ( nurl_str_cat ta `` )
             ( nurl_str_cat type_args ( nurl_str_cat ` ` ta ) )
             = mangle_sfx ( nurl_str_cat mangle_sfx ( nurl_str_cat `__` ( mangle_src_word ta ) ) )
         }
@@ -6107,7 +6107,7 @@
             ( nurl_str_cat ` ` ( nurl_lex_filename lex ) ) )
             : s __pe_cur ( nurl_sym_get g_pending_escape `l` )
             ( nurl_sym_def g_pending_escape `l`
-            ? == 0 ( nurl_str_len __pe_cur ) __pe_rec
+            ? == 0 ( nurl_str_len __pe_cur ) ( nurl_str_cat __pe_rec `` )
             ( nurl_str_cat3 __pe_cur ` ` __pe_rec ) ) }
         {}
         // A `*_free` destructor's first argument, when it is a bare
@@ -6662,7 +6662,7 @@
         = rest ( str_skip_word rest )
         ? ( str_contains_word out p ) {} {
             : s entry ( nurl_str_cat3 p ` ` l )
-            = out ? == 0 ( nurl_str_len out ) entry ( nurl_str_cat3 out ` ` entry )
+            = out ? == 0 ( nurl_str_len out ) ( nurl_str_cat entry `` ) ( nurl_str_cat3 out ` ` entry )
         }
     }
     ( nurl_sym_def g_ptrtab `__ptr_dead__` out )
@@ -7467,7 +7467,7 @@
                         ? == pvc 1 { = lit1 ival } {}
                         ? == pvc 2 { = lit2 ival } {}
                         ? >= pvc 3 {
-                            = lit_over ? == 0 ( nurl_str_len lit_over ) ival ( nurl_str_cat3 lit_over ` ` ival )
+                            = lit_over ? == 0 ( nurl_str_len lit_over ) ( nurl_str_cat ival `` ) ( nurl_str_cat3 lit_over ` ` ival )
                             = pv_over ? == 0 ( nurl_str_len pv_over ) `_` ( nurl_str_cat pv_over ` _` )
                             = over_has_lit 1
                         } {}
@@ -8902,7 +8902,7 @@
     = g_fn_slice_decls 1
     : s cur ( nurl_sym_get syms `__slice_decls__` )
     ( nurl_sym_def syms `__slice_decls__`
-    ? == 0 ( nurl_str_len cur ) name ( nurl_str_cat3 cur ` ` name ) )
+    ? == 0 ( nurl_str_len cur ) ( nurl_str_cat name `` ) ( nurl_str_cat3 cur ` ` name ) )
 }
 
 // Un-register `name` as an owned slice (both sidebands mem_own_add /
@@ -8921,7 +8921,7 @@
             ~ != 0 ( nurl_str_len rest ) {
                 : s w ( str_first_word rest ) = rest ( str_skip_word rest )
                 ? ( seq w name ) {}
-                { = out ? == 0 ( nurl_str_len out ) w ( nurl_str_cat3 out ` ` w ) }
+                { = out ? == 0 ( nurl_str_len out ) ( nurl_str_cat w `` ) ( nurl_str_cat3 out ` ` w ) }
             }
             ( nurl_sym_def syms key out ) }
         {}
@@ -9377,7 +9377,7 @@
         : s leaf_idx ( str_first_word rest ) = rest ( str_skip_word rest )
         ? ( seq ptr want_ptr )
         { : s tok ( nurl_str_cat4 path `:` kind ( nurl_str_cat4 `:` leaf_sname `:` leaf_idx ) )
-            = out ? == 0 ( nurl_str_len out ) tok ( nurl_str_cat3 out ` ` tok )
+            = out ? == 0 ( nurl_str_len out ) ( nurl_str_cat tok `` ) ( nurl_str_cat3 out ` ` tok )
         }
         {}
     }
@@ -9542,7 +9542,7 @@
     : s cur ( nurl_sym_get syms `__owned_closure_envs__` )
     ? ( str_contains_word cur name ) {}
     { ( nurl_sym_def syms `__owned_closure_envs__`
-        ? == 0 ( nurl_str_len cur ) name ( nurl_str_cat3 cur ` ` name ) ) }
+        ? == 0 ( nurl_str_len cur ) ( nurl_str_cat name `` ) ( nurl_str_cat3 cur ` ` name ) ) }
 }
 
 // Escape: drop `name` from the owned-closure set so its env is NOT freed
@@ -9556,7 +9556,7 @@
         ~ != 0 ( nurl_str_len rest ) {
             : s w ( str_first_word rest ) = rest ( str_skip_word rest )
             ? ( seq w name ) {}
-            { = out ? == 0 ( nurl_str_len out ) w ( nurl_str_cat3 out ` ` w ) }
+            { = out ? == 0 ( nurl_str_len out ) ( nurl_str_cat w `` ) ( nurl_str_cat3 out ` ` w ) }
         }
         ( nurl_sym_def syms `__owned_closure_envs__` out ) }
     {}
@@ -9613,7 +9613,7 @@
         ~ != 0 ( nurl_str_len rest ) {
             : s name ( str_first_word rest ) = rest ( str_skip_word rest )
             ? ( str_contains_word old_list name )
-            { = keep ? == 0 ( nurl_str_len keep ) name ( nurl_str_cat3 keep ` ` name ) }
+            { = keep ? == 0 ( nurl_str_len keep ) ( nurl_str_cat name `` ) ( nurl_str_cat3 keep ` ` name ) }
             { ( mem_emit_closure_env_drop syms cg name ) }
         }
         ( nurl_sym_def syms `__owned_closure_envs__` keep )
@@ -9735,7 +9735,7 @@
             = rest ( str_skip_word rest )
             ? ( seq w ptr )
             {}
-            { = out ? == 0 ( nurl_str_len out ) w ( nurl_str_cat3 out ` ` w ) }
+            { = out ? == 0 ( nurl_str_len out ) ( nurl_str_cat w `` ) ( nurl_str_cat3 out ` ` w ) }
         }
         ( nurl_sym_def syms `__owned_strings__` out )
     }
@@ -9828,7 +9828,7 @@
     ? & != g_borrowck 0 == g_bck_closure_depth 0 {
         : s cur ( nurl_sym_get g_bck `reads` )
         ( nurl_sym_set g_bck `reads`
-        ? == 0 ( nurl_str_len cur ) name ( nurl_str_cat3 cur ` ` name ) )
+        ? == 0 ( nurl_str_len cur ) ( nurl_str_cat name `` ) ( nurl_str_cat3 cur ` ` name ) )
     } {}
 }
 
@@ -9910,7 +9910,7 @@
     : s saved ( nurl_sym_get g_bck `iter_containers` )
     ? != 0 ( nurl_str_len cont )
     { ( nurl_sym_set g_bck `iter_containers`
-        ? == 0 ( nurl_str_len saved ) cont
+        ? == 0 ( nurl_str_len saved ) ( nurl_str_cat cont `` )
         ( nurl_str_cat3 saved ` ` cont ) ) }
     {}
     saved
@@ -9956,7 +9956,7 @@
         : s cur ( nurl_sym_get g_bck `pmoves` )
         : s add ( nurl_str_cat3 name ` ` ( nurl_str_int line ) )
         ( nurl_sym_set g_bck `pmoves`
-        ? == 0 ( nurl_str_len cur ) add ( nurl_str_cat3 cur ` ` add ) )
+        ? == 0 ( nurl_str_len cur ) ( nurl_str_cat add `` ) ( nurl_str_cat3 cur ` ` add ) )
     } {}
 }
 
@@ -10358,7 +10358,7 @@
     : s ws ( nurl_sym_get g_bck `warnset` )
     ? ( str_contains_word ws tag ) {} {
         ( nurl_sym_set g_bck `warnset`
-        ? == 0 ( nurl_str_len ws ) tag ( nurl_str_cat3 ws ` ` tag ) )
+        ? == 0 ( nurl_str_len ws ) ( nurl_str_cat tag `` ) ( nurl_str_cat3 ws ` ` tag ) )
         // The state map speaks interned ids; the message speaks the
         // binding's name — rv_ is the reverse mapping bck_intern kept.
         : s name ( nurl_sym_get2 g_bck `rv_` ids )
@@ -10381,7 +10381,7 @@
     : s ws ( nurl_sym_get g_bck `warnset` )
     ? ( str_contains_word ws tag ) {} {
         ( nurl_sym_set g_bck `warnset`
-        ? == 0 ( nurl_str_len ws ) tag ( nurl_str_cat3 ws ` ` tag ) )
+        ? == 0 ( nurl_str_len ws ) ( nurl_str_cat tag `` ) ( nurl_str_cat3 ws ` ` tag ) )
         : s name ( nurl_sym_get2 g_bck `rv_` ids )
         : s ml ( nurl_sym_get2 g_bck `ml_` ids )
         ( bck_emit_error ( nurl_sym_get g_bck `file` ) useline
@@ -10961,7 +10961,7 @@
     : i syms g_ptrtab
     : s cur ( nurl_sym_get syms `__ptr_src__` )
     : s e ( nurl_str_cat3 ptr ` ` ( nurl_str_cat3 cont ` ` ( nurl_str_int line ) ) )
-    : s new ? == 0 ( nurl_str_len cur ) e ( nurl_str_cat3 cur ` ` e )
+    : s new ? == 0 ( nurl_str_len cur ) ( nurl_str_cat e `` ) ( nurl_str_cat3 cur ` ` e )
     ( nurl_sym_def syms `__ptr_src__` new )
 }
 
@@ -10983,7 +10983,7 @@
         = rest ( str_skip_word rest )
         ? & ( seq c cont ) ! ( str_contains_word dead p ) {
             : s entry ( nurl_str_cat3 p ` ` ( nurl_str_int line ) )
-            = dead ? == 0 ( nurl_str_len dead ) entry ( nurl_str_cat3 dead ` ` entry )
+            = dead ? == 0 ( nurl_str_len dead ) ( nurl_str_cat entry `` ) ( nurl_str_cat3 dead ` ` entry )
         } {}
     }
     ( nurl_sym_def syms `__ptr_dead__` dead )
@@ -11015,7 +11015,7 @@
         = rest ( str_skip_word rest )
         ? ( seq p name ) {} {
             : s entry ( nurl_str_cat3 p ` ` l )
-            = keep ? == 0 ( nurl_str_len keep ) entry ( nurl_str_cat3 keep ` ` entry )
+            = keep ? == 0 ( nurl_str_len keep ) ( nurl_str_cat entry `` ) ( nurl_str_cat3 keep ` ` entry )
         }
     }
     ( nurl_sym_def syms `__ptr_dead__` keep )
@@ -14338,7 +14338,7 @@
         ( nurl_sym_def body_syms ( nurl_str_cat bpname `__param` ) `1` )
         // Mirror into the closure-local shadow-check roster.
         : s c_name_roster ( nurl_sym_get body_syms `__fn_param_names__` )
-        : s c_name_next ? == 0 ( nurl_str_len c_name_roster ) bpname ( nurl_str_cat3 c_name_roster ` ` bpname )
+        : s c_name_next ? == 0 ( nurl_str_len c_name_roster ) ( nurl_str_cat bpname `` ) ( nurl_str_cat3 c_name_roster ` ` bpname )
         ( nurl_sym_def body_syms `__fn_param_names__` c_name_next )
         = bp_types ( seplist_rest bp_types )
         = bp_names ( str_skip_word bp_names )
@@ -15055,7 +15055,7 @@
             : s new ( nurl_str_int idx )
             ? ! ( str_contains_word cur new )
             { ( nurl_sym_def syms `__fn_inferred_sink__`
-                ? == 0 ( nurl_str_len cur ) new
+                ? == 0 ( nurl_str_len cur ) ( nurl_str_cat new `` )
                 ( nurl_str_cat3 cur ` ` new ) ) }
             {} }
         {}
@@ -15084,7 +15084,7 @@
     : s cur ( nurl_sym_get syms `__fn_param_valueread__` )
     ? ( str_contains_word cur name ) {} {
         ( nurl_sym_def syms `__fn_param_valueread__`
-        ? == 0 ( nurl_str_len cur ) name ( nurl_str_cat3 cur ` ` name ) ) }
+        ? == 0 ( nurl_str_len cur ) ( nurl_str_cat name `` ) ( nurl_str_cat3 cur ` ` name ) ) }
 }
 
 @ bck_record_inferred_escape i syms s arg_name → v {
@@ -15096,7 +15096,7 @@
             : s new ( nurl_str_int idx )
             ? ! ( str_contains_word cur new )
             { ( nurl_sym_def syms `__fn_inferred_escape__`
-                ? == 0 ( nurl_str_len cur ) new
+                ? == 0 ( nurl_str_len cur ) ( nurl_str_cat new `` )
                 ( nurl_str_cat3 cur ` ` new ) ) }
             {} }
         {}
@@ -15116,7 +15116,7 @@
             : s new ( nurl_str_int idx )
             ? ! ( str_contains_word cur new )
             { ( nurl_sym_def syms `__fn_ret_param__`
-                ? == 0 ( nurl_str_len cur ) new
+                ? == 0 ( nurl_str_len cur ) ( nurl_str_cat new `` )
                 ( nurl_str_cat3 cur ` ` new ) ) }
             {} }
         {}
@@ -15536,7 +15536,7 @@
     ~ != ( nurl_lex_type lex ) TT_RBRACK {
         : s tp ( nurl_lex_val lex )
         ( nurl_lex_advance lex )
-        = tparams ? == 0 ( nurl_str_len tparams ) tp
+        = tparams ? == 0 ( nurl_str_len tparams ) ( nurl_str_cat tp `` )
         ( nurl_str_cat tparams ( nurl_str_cat ` ` tp ) )
         // Optional trait bound `A: Ord`. Recorded per-tparam; checked at
         // each instantiation (the dispatch itself already works through
@@ -15550,7 +15550,7 @@
             : s bkey ( nurl_str_cat3 fname `__bound__` tp )
             : s prev ( nurl_sym_get g_generic_syms bkey )
             ( nurl_sym_def g_generic_syms bkey
-            ? == 0 ( nurl_str_len prev ) bound ( nurl_str_cat3 prev ` ` bound ) )
+            ? == 0 ( nurl_str_len prev ) ( nurl_str_cat bound `` ) ( nurl_str_cat3 prev ` ` bound ) )
         }
     }
     ( expect lex TT_RBRACK )
@@ -16288,7 +16288,7 @@
         = __io_names ( str_skip_word __io_names )
         ? ! ( str_contains_word __io_vr __io_p )
         { : s __io_w ( nurl_str_int __io_idx )
-            = __io_set ? == 0 ( nurl_str_len __io_set ) __io_w ( nurl_str_cat3 __io_set ` ` __io_w ) }
+            = __io_set ? == 0 ( nurl_str_len __io_set ) ( nurl_str_cat __io_w `` ) ( nurl_str_cat3 __io_set ` ` __io_w ) }
         {}
         = __io_idx + __io_idx 1
     }
@@ -16635,14 +16635,14 @@
         ? == pconv 1 {} {
             : s roster ( nurl_sym_get syms `__fn_params__` )
             : s pair ( nurl_str_cat3 pname `\t` lt )
-            : s next ? == 0 ( nurl_str_len roster ) pair ( nurl_str_cat3 roster `|` pair )
+            : s next ? == 0 ( nurl_str_len roster ) ( nurl_str_cat pair `` ) ( nurl_str_cat3 roster `|` pair )
             ( nurl_sym_def syms `__fn_params__` next )
         }
         // Mirror the param name into the name-only roster used by
         // gen_let_or_struct's shadow check. Space-separated; matches
         // `str_contains_word` semantics.
         : s name_roster ( nurl_sym_get syms `__fn_param_names__` )
-        : s name_next ? == 0 ( nurl_str_len name_roster ) pname ( nurl_str_cat3 name_roster ` ` pname )
+        : s name_next ? == 0 ( nurl_str_len name_roster ) ( nurl_str_cat pname `` ) ( nurl_str_cat3 name_roster ` ` pname )
         ( nurl_sym_def syms `__fn_param_names__` name_next )
         // An `inout` parameter's LLVM type is a pointer to T. The
         // signature text is IR — lower the internal type here; the
@@ -17745,7 +17745,7 @@
                                         ( nurl_lex_advance lx )  // consume '|'
                                         ? ( is_ident_tok ( nurl_lex_type lx ) )
                                         { : s en ( nurl_lex_val lx )
-                                            = names ? == 0 ( nurl_str_len names ) en ( nurl_str_cat3 names ` ` en )
+                                            = names ? == 0 ( nurl_str_len names ) ( nurl_str_cat en `` ) ( nurl_str_cat3 names ` ` en )
                                             ( nurl_lex_advance lx )
                                         } {}
                                         // Walk into the body and collect variant
@@ -17762,7 +17762,7 @@
                                             ~ & != ( nurl_lex_type lx ) TT_RBRACE != ( nurl_lex_type lx ) TT_EOF {
                                                 ? ( is_ident_tok ( nurl_lex_type lx ) )
                                                 { : s vn ( nurl_lex_val lx )
-                                                    = names ? == 0 ( nurl_str_len names ) vn ( nurl_str_cat3 names ` ` vn )
+                                                    = names ? == 0 ( nurl_str_len names ) ( nurl_str_cat vn `` ) ( nurl_str_cat3 names ` ` vn )
                                                     ( nurl_lex_advance lx )
                                                 } { ( nurl_lex_advance lx ) }
                                             }
@@ -17778,7 +17778,7 @@
                                             ( nurl_lex_advance lx )  // consume type kw
                                             ? ( is_ident_tok ( nurl_lex_type lx ) )
                                             { : s cn ( nurl_lex_val lx )
-                                                = names ? == 0 ( nurl_str_len names ) cn ( nurl_str_cat3 names ` ` cn )
+                                                = names ? == 0 ( nurl_str_len names ) ( nurl_str_cat cn `` ) ( nurl_str_cat3 names ` ` cn )
                                                 ( nurl_lex_advance lx )
                                             } {}
                                         }
@@ -17786,7 +17786,7 @@
                                             {  // `: Name { ... }` (struct) OR
                                                 // `: Name [tparams] { ... }` (generic struct).
                                                 : s sn ( nurl_lex_val lx )
-                                                = names ? == 0 ( nurl_str_len names ) sn ( nurl_str_cat3 names ` ` sn )
+                                                = names ? == 0 ( nurl_str_len names ) ( nurl_str_cat sn `` ) ( nurl_str_cat3 names ` ` sn )
                                                 ( nurl_lex_advance lx )
                                             }
                                             {}
@@ -18584,6 +18584,15 @@
         ( nurl_sym_def syms `gen_foreach__ret_owned` `str` )
         ( nurl_sym_def syms `load_var__ret_owned` `str` )
         ( nurl_sym_def syms `gen_defer__ret_owned` `str` )
+        // The borrow-checker's walk family — same mutual-recursion trap
+        // (bck_walk_seq <-> bck_handle_cond <-> bck_loop). Every member
+        // returns a fresh state string: `st` / `head` are heap-owned on
+        // every assignment (nurl_str_cat / bck_st_set / bck_join_state,
+        // all owned), and the tails are owned calls.
+        ( nurl_sym_def syms `bck_walk_seq__ret_owned` `str` )
+        ( nurl_sym_def syms `bck_handle_cond__ret_owned` `str` )
+        ( nurl_sym_def syms `bck_handle_match__ret_owned` `str` )
+        ( nurl_sym_def syms `bck_loop__ret_owned` `str` )
     }
     {}
     ( nurl_sym_def syms `malloc` `i8*` )
@@ -18831,7 +18840,7 @@
             // Idempotent append (same double-scan reason as __defaults).
             ? ! ( str_contains_word acur aname )
             { ( nurl_sym_def g_trait_syms akey
-                ? == 0 ( nurl_str_len acur ) aname ( nurl_str_cat acur ( nurl_str_cat ` ` aname ) ) ) }
+                ? == 0 ( nurl_str_len acur ) ( nurl_str_cat aname `` ) ( nurl_str_cat acur ( nurl_str_cat ` ` aname ) ) ) }
             {}
         }
         { ? == ( nurl_lex_type lex ) TT_AT
@@ -18863,7 +18872,7 @@
                     : s mcur ( nurl_sym_get g_trait_syms methods_key )
                     ? ! ( str_contains_word mcur mname )
                     { ( nurl_sym_def g_trait_syms methods_key
-                        ? == 0 ( nurl_str_len mcur ) mname ( nurl_str_cat mcur ( nurl_str_cat ` ` mname ) ) ) }
+                        ? == 0 ( nurl_str_len mcur ) ( nurl_str_cat mname `` ) ( nurl_str_cat mcur ( nurl_str_cat ` ` mname ) ) ) }
                     {}
                     ? == ( nurl_lex_type lex ) TT_LBRACE
                     {  // Default method: consume the body block and capture raw source.
@@ -19338,7 +19347,7 @@
             // loop forever; guarding on non-empty keeps the worklist shrinking.
             : s ss ( nurl_sym_get2 g_trait_syms sup `__supers` )
             ? != 0 ( nurl_str_len ss )
-            { = work ? == 0 ( nurl_str_len work ) ss ( nurl_str_cat3 work ` ` ss ) }
+            { = work ? == 0 ( nurl_str_len work ) ( nurl_str_cat ss `` ) ( nurl_str_cat3 work ` ` ss ) }
             {}
         } {}
     }
@@ -19352,7 +19361,7 @@
     ~ != 0 ( nurl_str_len ms ) {
         : s m ( str_first_word ms ) = ms ( str_skip_word ms )
         ? ( str_contains_word g_dyn_flat_seen m ) {}
-        { = g_dyn_flat_seen ? == 0 ( nurl_str_len g_dyn_flat_seen ) m ( nurl_str_cat3 g_dyn_flat_seen ` ` m )
+        { = g_dyn_flat_seen ? == 0 ( nurl_str_len g_dyn_flat_seen ) ( nurl_str_cat m `` ) ( nurl_str_cat3 g_dyn_flat_seen ` ` m )
             = g_dyn_flat_out ? == 0 ( nurl_str_len g_dyn_flat_out )
             ( nurl_str_cat3 m ` ` declTrait )
             ( nurl_str_cat g_dyn_flat_out ( nurl_str_cat4 ` ` m ` ` declTrait ) ) }
@@ -19418,13 +19427,13 @@
     : ~ s params ``
     ~ & != ( nurl_lex_type sx ) TT_ARROW != ( nurl_lex_type sx ) TT_EOF {
         : s pt ( parse_type sx )
-        = params ? == 0 ( nurl_str_len params ) pt ( nurl_str_cat3 params `|` pt )
+        = params ? == 0 ( nurl_str_len params ) ( nurl_str_cat pt `` ) ( nurl_str_cat3 params `|` pt )
         ? ( is_ident_tok ( nurl_lex_type sx ) ) { ( nurl_lex_advance sx ) } {}  // param name
     }
     : ~ s ret `void`
     ? == ( nurl_lex_type sx ) TT_ARROW { ( nurl_lex_advance sx ) = ret ( parse_type sx ) } {}
     : s head ( nurl_str_cat4 ret `|` recvmode ( nurl_str_cat `|` recv_llvm ) )
-    : s __dsr ? == 0 ( nurl_str_len params ) head ( nurl_str_cat3 head `|` params )
+    : s __dsr ? == 0 ( nurl_str_len params ) ( nurl_str_cat head `` ) ( nurl_str_cat3 head `|` params )
     ( nurl_lex_free sx )
     ^ __dsr
 }
@@ -19896,7 +19905,7 @@
                     ~ & != ( nurl_lex_type lex ) TT_RBRACK != ( nurl_lex_type lex ) TT_EOF {
                         : s tp ( nurl_lex_val lex )
                         ( nurl_lex_advance lex )
-                        = tparams ? == 0 ( nurl_str_len tparams ) tp
+                        = tparams ? == 0 ( nurl_str_len tparams ) ( nurl_str_cat tp `` )
                         ( nurl_str_cat tparams ( nurl_str_cat ` ` tp ) )
                     }
                     ? == ( nurl_lex_type lex ) TT_RBRACK { ( nurl_lex_advance lex ) } {}
@@ -19937,7 +19946,7 @@
                         ? == ( nurl_lex_type lex ) TT_LPAREN
                         { = ta ( scan_compound_ta_inner lex syms ) }
                         { = ta ( capture_type_arg_src lex ) }
-                        = ta_list ? == 0 ( nurl_str_len ta_list ) ta
+                        = ta_list ? == 0 ( nurl_str_len ta_list ) ( nurl_str_cat ta `` )
                         ( nurl_str_cat ta_list ( nurl_str_cat ` ` ta ) )
                     }
                     ? == ( nurl_lex_type lex ) TT_RPAREN { ( nurl_lex_advance lex ) } {}
@@ -19958,7 +19967,7 @@
                 : s __gs_key ( __canon_import_key path )
                 : s marker ( nurl_sym_get g_generic_struct_syms `__scanned__` )
                 ? ( str_contains_word marker __gs_key ) {} {
-                    : s new_marker ? == 0 ( nurl_str_len marker ) __gs_key
+                    : s new_marker ? == 0 ( nurl_str_len marker ) ( nurl_str_cat __gs_key `` )
                     ( nurl_str_cat3 marker ` ` __gs_key )
                     ( nurl_sym_def g_generic_struct_syms `__scanned__` new_marker )
                     : s src2 ( nurl_read_file path )
@@ -20100,7 +20109,7 @@
     : s ids ( nurl_sym_get g_priv_owner_ids fname )
     ? ( str_contains_word ids fid ) { ^ {} } {}
     ( nurl_sym_def g_priv_owner_ids fname
-    ? == 0 ( nurl_str_len ids ) fid ( nurl_str_cat ids ( nurl_str_cat ` ` fid ) ) )
+    ? == 0 ( nurl_str_len ids ) ( nurl_str_cat fid `` ) ( nurl_str_cat ids ( nurl_str_cat ` ` fid ) ) )
     : s fls ( nurl_sym_get g_priv_owner_files fname )
     ( nurl_sym_def g_priv_owner_files fname
     ? == 0 ( nurl_str_len fls ) ( vis_current_src_file )
@@ -20496,7 +20505,7 @@
                         : s marker ( nurl_sym_get syms `__tn_scanned__` )
                         ? ( str_contains_word marker __tn_key )
                         {}
-                        { : s new_marker ? == 0 ( nurl_str_len marker ) __tn_key
+                        { : s new_marker ? == 0 ( nurl_str_len marker ) ( nurl_str_cat __tn_key `` )
                             ( nurl_str_cat3 marker ` ` __tn_key )
                             ( nurl_sym_def syms `__tn_scanned__` new_marker )
                             : s src2 ( nurl_read_file path )
