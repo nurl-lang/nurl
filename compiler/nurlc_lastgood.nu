@@ -869,6 +869,11 @@
 //  data (statement list etc.); allocated in main()
 //  only when --borrowck is set
 : ~ i g_bck_depth 0  // block-nesting depth during the statement walk
+: ~ i g_bck_gen 0  // analyzed-function generation for the binding-name
+//  intern table — bumped per bck_analyze so entries
+//  from earlier functions read as misses without any
+//  table clearing
+: ~ i g_bck_inn 0  // next dense binding id within the current function
 : ~ i g_bck_closure_depth 0  // >0 while parsing a closure body — the bck
 //  capture hooks no-op so closure statements do not
 //  inline into the enclosing function's list (so
@@ -9649,138 +9654,96 @@
     BCK_INVALID
 }
 
-// ── Per-binding state — a space-separated `name=digit` map ─────────
+// ── Per-binding state — a direct-indexed lattice-digit array ───────
 // The analysis analogue of the mem_* owned-resource lists, but it
 // records a lattice digit per binding (not mere membership) and is
 // forked / joined at branches rather than scoped on a stack.
+//
+// Binding names are interned per function into dense ids 0..N-1
+// (bck_intern, applied once at bck_explode time), and a state is a
+// plain byte string indexed BY id: state[id] is `'0' + digit`, and an
+// id past the end of the string reads as Uninit. This replaces the
+// old space-separated `name=digit` token string, whose every lookup
+// was a memmem over the whole state (11% of a self-compile inside
+// libc memmem) and whose join probed each token of one side against
+// the whole other side — O(na*nb). Now:
+//   get   — one bounds check + one byte load
+//   set   — one malloc + memcpy + one byte store
+//   join  — one pointwise pass over max(na, nb) bytes
+// No rule ever writes Uninit (let/assign/move/seed write Owned or
+// Moved, and bck_join of two non-Uninit values is non-Uninit), so a
+// `'0'` byte and an out-of-range id both mean exactly "binding
+// absent" — the same two cases the token walk distinguished.
 
-// Name part of a `name=digit` token (all but the last 2 chars).
-// Every path returns a fresh owned string so callers free it once.
-@ bck_tok_name s tok → s {
-    : i len ( nurl_str_len tok )
-    ? < len 2 { ^ ( nurl_str_cat tok `` ) } {}
-    ( nurl_str_slice tok 0 - len 2 )
-}
-
-// Lattice digit of a `name=digit` token — its last character.
-@ bck_tok_val s tok → i {
-    : i len ( nurl_str_len tok )
-    ? < len 1 { ^ BCK_UNINIT } {}
-    - ( nurl_str_get tok - len 1 ) 48
-}
-
-// State lookup — BCK_UNINIT when the binding is absent. Walks by INDEX,
-// allocating nothing: bck_st_get is the hottest allocation site in the
-// whole compiler (14.8M calls per self-compile), and the old remainder-
-// re-slice walk (`= rest ( str_skip_word rest )`) copied the entire tail
-// of the state string per step — measured at 11.9 GB of the 13.6 GB
-// self-compile peak RSS. A token is `name=digit`; its name part is
-// everything but the last two chars (same rule as bck_tok_name). The
-// name to look up lives at src[at .. at+wl) so bck_join_state can probe
-// with a name that is still embedded in the other state string — no
-// copy of the name either.
-// Reads through hoisted `*u` pointers: `nurl_str_get` re-runs strlen on
-// EVERY call, so scanning the state string with it cost a strlen per
-// byte examined — O(state_len^2) per lookup, at 14.8M lookups per
-// self-compile. That single loop was 17% of nurlc's profile plus most
-// of the 20% spent inside libc strlen. Both indices are already bounded
-// by the loop guards (`e < n`) and by the caller's `wl` (the name it
-// probes with is embedded in a NUL-terminated string), so the bounds
-// check nurl_str_get performed was dead weight here.
-// The token walk runs on `memmem` (next separator) + `memcmp` (name
-// compare) rather than a NURL byte loop through `nurl_str_get`. This
-// lookup is called 14.8M times per self-compile and was 17% of nurlc's
-// profile, plus 5% more inside libc strlen — `nurl_str_get` re-runs
-// strlen on EVERY byte it reads. Both indices are bounded by `n` and by
-// the caller's `wl`, so the per-byte bounds check bought nothing.
-@ __bck_st_get_at s state s src i at i wl → i {
-    : i n ( nurl_str_len state )
-    ? | == n 0 <= wl 0 { ^ BCK_UNINIT } {}
-    : *u sp # *u state
-    : *u qp # *u src
-    // Search for the NAME, not for the separators. Walking token by
-    // token means one `memmem` per token to find the next space — on a
-    // ~1 KB state that is ~100 calls per lookup, 41 M of them per
-    // self-compile, each scanning ten bytes. The call overhead IS the
-    // cost at that size. Searching for the name instead is ONE memmem
-    // over the whole state at SIMD speed, and a match only has to be
-    // confirmed as a token start (offset 0, or preceded by the
-    // separator) followed by `=`. A name that appears inside a longer
-    // name fails that test and the search resumes past it, so this is
-    // the same predicate the token walk applied, asked in the other
-    // direction.
-    : ~ i from 0
-    ~ <= + from wl n {
-        : i r ( nurl_memmem_range # s + # i sp from - n from # s + # i qp at wl )
-        ? < r 0 { ^ BCK_UNINIT } {}
-        : i pos + from r
-        : i after + pos wl
-        ? & | == pos 0 == 32 # i . sp - pos 1
-        & < + after 1 n == 61 # i . sp after {
-            ^ - & # i . sp + after 1 255 48
+// Intern `name` into the current function's dense id space. The
+// mapping lives on g_bck as `in_<name>` = `<gen> <id>`; g_bck_gen is
+// bumped once per analyzed function, so entries left behind by
+// earlier functions fail the generation check and read as misses —
+// no per-function table clearing. `rv_<id>` records the reverse
+// mapping for diagnostics; it is always current because every id the
+// walk can mention was interned by THIS function, overwriting any
+// stale `rv_` from a previous one.
+@ bck_intern s name → i {
+    : s v ( nurl_sym_get2 g_bck `in_` name )
+    : i vn ( nurl_str_len v )
+    ? != 0 vn {
+        : *u vp # *u v
+        : ~ i i 0
+        : ~ i gen 0
+        ~ & < i vn != # i . vp i 32 {
+            = gen + * gen 10 - # i . vp i 48
+            = i + i 1
+        }
+        ? == gen g_bck_gen {
+            : ~ i idv 0
+            = i + i 1
+            ~ < i vn {
+                = idv + * idv 10 - # i . vp i 48
+                = i + i 1
+            }
+            ^ idv
         } {}
-        = from + pos 1
-    }
+    } {}
+    : i idn g_bck_inn
+    = g_bck_inn + idn 1
+    : s ids ( nurl_str_int idn )
+    ( nurl_sym_set g_bck ( nurl_str_cat `in_` name )
+    ( nurl_str_cat3 ( nurl_str_int g_bck_gen ) ` ` ids ) )
+    ( nurl_sym_set g_bck ( nurl_str_cat `rv_` ids ) name )
+    idn
+}
+
+// State lookup — one bounds check + one byte load. An id past the
+// end of the string is a binding this state never set: Uninit.
+@ bck_st_get s state i id → i {
+    ? < id ( nurl_str_len state ) {
+        : *u sp # *u state
+        ^ - # i . sp id 48
+    } {}
     BCK_UNINIT
 }
 
-@ bck_st_get s state s name → i {
-    ^ ( __bck_st_get_at state name 0 ( nurl_str_len name ) )
-}
-
-// State update — a new state with `name` set to `val` (any prior
-// entry dropped; the binding lands at the end). Built in ONE buffer
-// with an index walk: the old version re-sliced the remainder per
-// token AND re-copied the accumulated output per append — O(B²) bytes
-// per update on a B-byte state.
-//
-// The scan reads through hoisted `*u` pointers, like __bck_st_get_at
-// above: `nurl_str_get` re-runs strlen on EVERY call, so walking the
-// state with it cost a strlen over the whole state per byte examined —
-// O(B²) again, in the one function whose comment claims to have removed
-// exactly that. Both indices are bounded by the loop guard (`e < n`)
-// and by `wl` against a token already measured to be `wl + 2` long, so
-// the bounds check nurl_str_get performed was dead weight.
-@ bck_st_set s state s name i val → s {
+// State update — a fresh state with id's digit set to `val`, any gap
+// up to the id padded with Uninit. One malloc + one memcpy + one
+// store; the old token rebuild re-scanned and re-compared every token
+// just to move the updated binding to the end.
+@ bck_st_set s state i id i val → s {
     : i n ( nurl_str_len state )
-    : i wl ( nurl_str_len name )
-    : s vs ( nurl_str_int val )
-    : i vl ( nurl_str_len vs )
-    // worst case: whole state kept + separator + `name=val`
-    : s out # s ( malloc + + + n wl vl 3 )
+    : i m ? > n id n + id 1
+    : s out # s ( malloc + m 1 )
     : *u ob # *u out
-    : *u stp # *u state
-    : *u nmp # *u name
-    : ~ i op 0
-    : ~ i i 0
-    ~ < i n {
-        : ~ i e i
-        ~ & < e n != # i . stp e 32 { = e + e 1 }
-        : ~ b keep T
-        ? == - - e i 2 wl {
-            : ~ i k 0
-            : ~ b eq T
-            ~ & eq < k wl {
-                ? != # i . stp + i k # i . nmp k { = eq F } {}
-                = k + k 1
-            }
-            ? eq { = keep F } {}
-        } {}
-        ? keep {
-            ? > op 0 { : u sp # u 32 = . ob op sp = op + op 1 } {}
-            ( memcpy # s + # i out op # s + # i state i - e i )
-            = op + op - e i
-        } {}
-        = i + e 1
+    ( memcpy out state n )
+    : ~ i k n
+    ~ < k m {
+        : u pad # u 48
+        = . ob k pad
+        = k + k 1
     }
-    ? > op 0 { : u sp2 # u 32 = . ob op sp2 = op + op 1 } {}
-    ( memcpy # s + # i out op name wl )
-    = op + op wl
-    : u eqc # u 61
-    = . ob op eqc
-    = op + op 1
-    ( memcpy # s + # i out op vs + vl 1 )
-    ^ out
+    : u dg # u + 48 val
+    = . ob id dg
+    : u z # u 0
+    = . ob m z
+    out
 }
 
 // State join — least upper bound of two states, binding by binding.
@@ -9791,59 +9754,28 @@
 // (Copying the `b`-only token verbatim — the old shortcut — violated
 // that: a foreach element or loop-local freed in the body came back
 // from the loop's fixpoint join as Moved and was wrongly flagged as a
-// use-after-move on re-read.) `out` starts fresh and every `= out ...`
-// builds a fresh string — aliasing a loop-local would double-free at
-// auto-drop.
+// use-after-move on re-read.)
 @ bck_join_state s a s b → s {
-    // Index walk + single output buffer (see bck_st_set). The lattice
-    // digit is one char, so the join of a and b never exceeds
-    // len(a) + len(b) + 2. Names probed while still embedded in their
-    // state string via __bck_st_get_at — the whole join allocates
-    // exactly one buffer. Both states are scanned through hoisted `*u`
-    // pointers rather than `nurl_str_get`, which re-runs strlen per
-    // call and made each pass quadratic in the state length.
+    // Pointwise lattice join over max(na, nb) bytes — either side
+    // reads as Uninit past its end, exactly the absent-token case of
+    // the old probe loop. One output buffer, no searching.
     : i na ( nurl_str_len a )
     : i nb ( nurl_str_len b )
-    : s out # s ( malloc + + na nb 2 )
+    : i m ? > na nb na nb
+    : s out # s ( malloc + m 1 )
     : *u ob # *u out
     : *u ap # *u a
     : *u bp # *u b
-    : ~ i op 0
-    // pass 1: every binding of a, joined against its state in b
     : ~ i i 0
-    ~ < i na {
-        : ~ i e i
-        ~ & < e na != # i . ap e 32 { = e + e 1 }
-        : i wl - - e i 2
-        : i vj ( bck_join - # i . ap - e 1 48 ( __bck_st_get_at b a i wl ) )
-        ? > op 0 { : u sp # u 32 = . ob op sp = op + op 1 } {}
-        // `name=` copied verbatim from a; then the joined digit
-        ( memcpy # s + # i out op # s + # i a i + wl 1 )
-        = op + op + wl 1
-        : u dg # u + 48 vj
-        = . ob op dg
-        = op + op 1
-        = i + e 1
-    }
-    // pass 2: bindings present only in b (join against BCK_UNINIT)
-    : ~ i j 0
-    ~ < j nb {
-        : ~ i e2 j
-        ~ & < e2 nb != # i . bp e2 32 { = e2 + e2 1 }
-        : i wl2 - - e2 j 2
-        ? == BCK_UNINIT ( __bck_st_get_at a b j wl2 ) {
-            : i vj2 ( bck_join BCK_UNINIT - # i . bp - e2 1 48 )
-            ? > op 0 { : u sp2 # u 32 = . ob op sp2 = op + op 1 } {}
-            ( memcpy # s + # i out op # s + # i b j + wl2 1 )
-            = op + op + wl2 1
-            : u dg2 # u + 48 vj2
-            = . ob op dg2
-            = op + op 1
-        } {}
-        = j + e2 1
+    ~ < i m {
+        : i va ? < i na - # i . ap i 48 BCK_UNINIT
+        : i vb ? < i nb - # i . bp i 48 BCK_UNINIT
+        : u dg # u + 48 ( bck_join va vb )
+        = . ob i dg
+        = i + i 1
     }
     : u z # u 0
-    = . ob op z
+    = . ob m z
     ^ out
 }
 
@@ -9880,10 +9812,54 @@
     ( nurl_str_cat `` `` )
 }
 
-// Split the captured statement list on newlines. The scan reads through
-// a hoisted `*u` for the same reason as bck_field: with `nurl_str_get`
-// this single loop was O(total²) over the whole function's statement
-// text.
+// Intern every space-separated name in `reads`, returning the
+// matching space-separated id list. Index walk over the input — the
+// old per-word `str_skip_word` idiom copied the whole remaining tail
+// per step.
+@ bck_ids s reads → s {
+    : i n ( nurl_str_len reads )
+    ? == 0 n { ^ ( nurl_str_cat `` `` ) } {}
+    : *u rp # *u reads
+    : ~ s out ( nurl_str_cat `` `` )
+    : ~ i i 0
+    ~ < i n {
+        ~ & < i n == # i . rp i 32 { = i + i 1 }
+        : ~ i e i
+        ~ & < e n != # i . rp e 32 { = e + e 1 }
+        ? > e i {
+            : s w ( nurl_str_slice reads i - e i )
+            : s ids ( nurl_str_int ( bck_intern w ) )
+            = out ? == 0 ( nurl_str_len out )
+            ( nurl_str_cat ids `` ) ( nurl_str_cat3 out ` ` ids )
+        } {}
+        = i + e 1
+    }
+    out
+}
+
+// Translate one captured row into walk form: binding names become
+// interned ids — the wname of `let`/`assign`/`move` rows, and every
+// word of the reads field. A loop body is re-walked up to 18 times
+// on the way to its fixpoint, so the walk parses each id as a small
+// int instead of re-keying a name per visit; interning happens here,
+// exactly once per row. Every other field is copied verbatim (a
+// `block` row's wname is its block KIND — loop/foreach/cond-then/… —
+// which the walk compares as text).
+@ bck_xlate_row s rec → s {
+    : s kind ( bck_field rec 0 )
+    : s w ( bck_field rec 1 )
+    : s w2 ? | | ( seq kind `let` ) ( seq kind `assign` ) ( seq kind `move` )
+    ( nurl_str_int ( bck_intern w ) ) ( nurl_str_cat w `` )
+    : s rds ( bck_ids ( bck_field rec 2 ) )
+    : s head ( nurl_str_cat4 kind `\t` w2 `\t` )
+    : s body ( nurl_str_cat4 head rds `\t` ( bck_field rec 3 ) )
+    ( nurl_str_cat3 body `\t` ( bck_field rec 4 ) )
+}
+
+// Split the captured statement list on newlines, translating each row
+// (bck_xlate_row) as it is stored. The scan reads through a hoisted
+// `*u` for the same reason as bck_field: with `nurl_str_get` this
+// single loop was O(total²) over the whole function's statement text.
 @ bck_explode → i {
     : s txt ( nurl_sym_get g_bck `stmts` )
     : i len ( nurl_str_len txt )
@@ -9894,7 +9870,7 @@
     ~ < pos len {
         ? == # i . tp pos 10 {
             ( nurl_sym_set g_bck ( nurl_str_cat `r` ( nurl_str_int n ) )
-            ( nurl_str_slice txt start - pos start ) )
+            ( bck_xlate_row ( nurl_str_slice txt start - pos start ) ) )
             = n + n 1
             = start + pos 1
         } {}
@@ -9902,7 +9878,7 @@
     }
     ? > len start {
         ( nurl_sym_set g_bck ( nurl_str_cat `r` ( nurl_str_int n ) )
-        ( nurl_str_slice txt start - len start ) )
+        ( bck_xlate_row ( nurl_str_slice txt start - len start ) ) )
         = n + n 1
     } {}
     ( nurl_sym_set g_bck `rn` ( nurl_str_int n ) )
@@ -9955,13 +9931,17 @@
 // is stashed on g_bck by borrowck_fn_end. Deduplicated per (line,
 // name) via `warnset` so a loop body's fixpoint re-walk does not
 // repeat the same warning.
-@ bck_diag s name i useline → v {
-    : s tag ( nurl_str_cat3 ( nurl_str_int useline ) `:` name )
+@ bck_diag i id i useline → v {
+    : s ids ( nurl_str_int id )
+    : s tag ( nurl_str_cat3 ( nurl_str_int useline ) `:` ids )
     : s ws ( nurl_sym_get g_bck `warnset` )
     ? ( str_contains_word ws tag ) {} {
         ( nurl_sym_set g_bck `warnset`
         ? == 0 ( nurl_str_len ws ) tag ( nurl_str_cat3 ws ` ` tag ) )
-        : s ml ( nurl_sym_get2 g_bck `ml_` name )
+        // The state map speaks interned ids; the message speaks the
+        // binding's name — rv_ is the reverse mapping bck_intern kept.
+        : s name ( nurl_sym_get2 g_bck `rv_` ids )
+        : s ml ( nurl_sym_get2 g_bck `ml_` ids )
         ( bck_emit_error ( nurl_sym_get g_bck `file` ) useline
         ( nurl_str_cat4 `use of moved value '` name
         `' — it was consumed at line ` ( nurl_str_cat3 ml
@@ -9974,13 +9954,15 @@
 // other). Deduplicated through the same warnset; the `mm:` prefix keeps
 // a strict diagnostic from suppressing a later definite one (or vice
 // versa) on the same line+name.
-@ bck_diag_maybe s name i useline → v {
-    : s tag ( nurl_str_cat3 ( nurl_str_cat `mm:` ( nurl_str_int useline ) ) `:` name )
+@ bck_diag_maybe i id i useline → v {
+    : s ids ( nurl_str_int id )
+    : s tag ( nurl_str_cat3 ( nurl_str_cat `mm:` ( nurl_str_int useline ) ) `:` ids )
     : s ws ( nurl_sym_get g_bck `warnset` )
     ? ( str_contains_word ws tag ) {} {
         ( nurl_sym_set g_bck `warnset`
         ? == 0 ( nurl_str_len ws ) tag ( nurl_str_cat3 ws ` ` tag ) )
-        : s ml ( nurl_sym_get2 g_bck `ml_` name )
+        : s name ( nurl_sym_get2 g_bck `rv_` ids )
+        : s ml ( nurl_sym_get2 g_bck `ml_` ids )
         ( bck_emit_error ( nurl_sym_get g_bck `file` ) useline
         ( nurl_str_cat4 `'` name
         `' may already be freed here — it was conditionally consumed (one branch only) at line ` ( nurl_str_cat3 ml
@@ -9992,12 +9974,22 @@
 // MaybeMoved (a conditional move at a CFG join) is deliberately NOT
 // flagged — erroring only on a definite move keeps this check
 // false-positive-free.
+// `reads` is an interned-id list (bck_xlate_row), parsed in place —
+// the old `str_skip_word` walk copied the whole remaining tail per
+// word, and each name then keyed a search of the state string.
 @ bck_check_moved_reads s reads i line s state → v {
-    : ~ s rest reads
-    ~ != 0 ( nurl_str_len rest ) {
-        : s w ( str_first_word rest )
-        = rest ( str_skip_word rest )
-        ? == BCK_MOVED ( bck_st_get state w ) { ( bck_diag w line ) } {}
+    : i n ( nurl_str_len reads )
+    : *u rp # *u reads
+    : ~ i i 0
+    ~ < i n {
+        ? == # i . rp i 32 { = i + i 1 } {
+            : ~ i idv 0
+            ~ & < i n != # i . rp i 32 {
+                = idv + * idv 10 - # i . rp i 48
+                = i + i 1
+            }
+            ? == BCK_MOVED ( bck_st_get state idv ) { ( bck_diag idv line ) } {}
+        }
     }
 }
 
@@ -10021,19 +10013,20 @@
         ( nurl_str_to_int ( bck_field rec 3 ) ) st )
         ? ( seq kind `let` ) {
             // A `let` (re)binds the name — Owned, reviving a Moved one.
-            = st ( bck_st_set st ( bck_field rec 1 ) BCK_OWNED )
+            = st ( bck_st_set st ( nurl_str_to_int ( bck_field rec 1 ) ) BCK_OWNED )
             = p + p 1
             = done T
         } {}
         ? & ! done ( seq kind `assign` ) {
             // `= x ...` gives x a fresh value — Owned, reviving x.
-            = st ( bck_st_set st ( bck_field rec 1 ) BCK_OWNED )
+            = st ( bck_st_set st ( nurl_str_to_int ( bck_field rec 1 ) ) BCK_OWNED )
             = p + p 1
             = done T
         } {}
         ? & ! done ( seq kind `move` ) {
             // A consumed binding: Owned -> Moved; remember where.
             : s mvn ( bck_field rec 1 )
+            : i mvid ( nurl_str_to_int mvn )
             // --strict-borrowck: consuming a MAYBE-moved binding is the
             // conditional double-free the default checker deliberately
             // lets through (docs/MEMORY.md §6.2/§6.5): freed on one arm
@@ -10041,10 +10034,10 @@
             // path where the first free ran. Opt-in because it also
             // flags the mutually-exclusive-frees pattern the default
             // no-false-positive contract protects.
-            ? & != 0 g_strict_borrowck == BCK_MAYBE_MOVED ( bck_st_get st mvn ) {
-                ( bck_diag_maybe mvn ( nurl_str_to_int ( bck_field rec 3 ) ) )
+            ? & != 0 g_strict_borrowck == BCK_MAYBE_MOVED ( bck_st_get st mvid ) {
+                ( bck_diag_maybe mvid ( nurl_str_to_int ( bck_field rec 3 ) ) )
             } {}
-            = st ( bck_st_set st mvn BCK_MOVED )
+            = st ( bck_st_set st mvid BCK_MOVED )
             ( nurl_sym_set g_bck ( nurl_str_cat `ml_` mvn )
             ( bck_field rec 3 ) )
             = p + p 1
@@ -10140,17 +10133,30 @@
 // the loop, or a foreach element) are fresh every iteration and are
 // deliberately dropped, so they never carry a stale Moved state.
 @ bck_loop_carry_seed s pre s post → s {
-    : ~ s out ( nurl_str_cat `` `` )
-    : ~ s rest pre
-    ~ != 0 ( nurl_str_len rest ) {
-        : s tok ( str_first_word rest )
-        = rest ( str_skip_word rest )
-        : s nm ( bck_tok_name tok )
-        : i carried ? == BCK_MOVED ( bck_st_get post nm )
-        BCK_MOVED ( bck_tok_val tok )
-        : s nt ( nurl_str_cat3 nm `=` ( nurl_str_int carried ) )
-        = out ? == 0 ( nurl_str_len out ) nt ( nurl_str_cat3 out ` ` nt )
+    // One pointwise pass: a binding present in pre carries its pre
+    // digit unless the body left it Moved; an id Uninit in pre (or
+    // past pre's end — the output is pre-sized) is loop-local and
+    // stays dropped. The old token walk re-sliced pre's tail per
+    // token and probed post by name per binding.
+    : i np ( nurl_str_len pre )
+    : i npo ( nurl_str_len post )
+    : s out # s ( malloc + np 1 )
+    : *u ob # *u out
+    : *u pp # *u pre
+    : *u pop # *u post
+    : ~ i i 0
+    ~ < i np {
+        : i pv - # i . pp i 48
+        : ~ i cv pv
+        ? & != pv BCK_UNINIT < i npo {
+            ? == BCK_MOVED - # i . pop i 48 { = cv BCK_MOVED } {}
+        } {}
+        : u dg # u + 48 cv
+        = . ob i dg
+        = i + i 1
     }
+    : u z # u 0
+    = . ob np z
     out
 }
 
@@ -10200,13 +10206,17 @@
 // joining a bare Uninit on the other branch straight back to Moved.
 @ bck_analyze s params → v {
     ( nurl_sym_set g_bck `warnset` `` )
+    // New function, new dense id space: bumping the generation
+    // invalidates every intern entry left by earlier functions.
+    = g_bck_gen + g_bck_gen 1
+    = g_bck_inn 0
     : i n ( bck_explode )
     : ~ s seed ``
     : ~ s prest params
     ~ != 0 ( nurl_str_len prest ) {
         : s pn ( str_first_word prest )
         = prest ( str_skip_word prest )
-        = seed ( bck_st_set seed pn BCK_OWNED )
+        = seed ( bck_st_set seed ( bck_intern pn ) BCK_OWNED )
     }
     // Walk from the seeded state. n == 0 (no records) walks nothing.
     : s final ( bck_walk_seq 0 n seed )
@@ -11065,7 +11075,7 @@
         : i bck_rhs_tt ( nurl_lex_type lex )
         : s bck_rhs_val ( nurl_lex_val lex )
         ( nurl_sym_def syms `__last_expr_refdepth__` `` )
-        : s val ( gen_operand lex syms cg )
+        : ~ s val ( gen_operand lex syms cg )
         : s __asn_rt ( nurl_get_last_type )
         // A fresh owned slice reaching the RHS through a `?` / `??` (whose
         // first token isn't `[`) still frees the old buffer below.
@@ -11096,6 +11106,52 @@
             ( nurl_print `  call void @nurl_free(i8* ` ) ( nurl_print old_reg ) ( nurl_print `)` ) ( emit_dbg_eol )
         }
         {}
+        // The remaining RHS shapes against a tracked owned-string LHS
+        // (the fresh-call shape was handled just above). The invariant
+        // all of them maintain: a TRACKED binding holds an
+        // allocator-owned pointer on EVERY control-flow path. Compile-
+        // time untracking cannot express that — an untrack inside a `?`
+        // arm dies with the arm's nurl_sym_pop and the outer
+        // registration resurfaces — so each shape instead frees the old
+        // value here and, when the incoming pointer is not a fresh heap
+        // allocation, stores a strdup of it:
+        //   - string literal: storing the .rodata pointer made the
+        //     scope-exit drop free a string constant (SEGV; lock test
+        //     assign_literal_owned)
+        //   - bare identifier: an untracked RHS (parameter, borrow,
+        //     global) would hand the drop someone else's buffer (UAF);
+        //     a TRACKED RHS is a true move — pointer kept, old value
+        //     freed here, the source's drop cancelled by the transfer
+        //     block below
+        //   - borrow-returning direct call (ret_owned not `str`): same
+        //     copy discipline as the untracked identifier
+        // Self-assign `= x x` is skipped whole — freeing the old value
+        // first would store a dangling pointer. `?`-ternary RHS keeps
+        // its pre-existing handling (arm ownership is a phi problem,
+        // not an assignment one).
+        : b rhs_lit_over_owned & lhs_is_owned_str == bck_rhs_tt TT_STR
+        : ~ s __rhs_ptr ``
+        ? ( is_ident_tok bck_rhs_tt )
+        { = __rhs_ptr ( nurl_sym_get2 syms bck_rhs_val `__ptr` ) } {}
+        : b rhs_id_tracked & != 0 ( nurl_str_len __rhs_ptr )
+        ( str_contains_word ( nurl_sym_get syms `__owned_strings__` ) __rhs_ptr )
+        : b rhs_id_over_owned & & lhs_is_owned_str ( is_ident_tok bck_rhs_tt )
+        ! ( seq bck_rhs_val name )
+        : b rhs_call_unowned & & lhs_is_owned_str == bck_rhs_tt TT_LPAREN
+        ! rhs_is_owned_call
+        ? | | rhs_lit_over_owned rhs_id_over_owned rhs_call_unowned
+        { : s old_reg2 ( nurl_cg_reg cg )
+            ( nurl_print `  ` ) ( nurl_print old_reg2 )
+            ( nurl_print ` = load i8*, i8** ` ) ( nurl_print ptr ) ( nurl_print `\n` )
+            ( nurl_print `  call void @nurl_free(i8* ` ) ( nurl_print old_reg2 ) ( nurl_print `)` ) ( emit_dbg_eol )
+            ? & rhs_id_over_owned rhs_id_tracked {} {
+                : s dup_reg ( nurl_cg_reg cg )
+                ( nurl_print `  ` ) ( nurl_print dup_reg )
+                ( nurl_print ` = call i8* @strdup(i8* ` ) ( nurl_print val ) ( nurl_print `)` ) ( emit_dbg_eol )
+                = val dup_reg
+            }
+        }
+        {}
         // Slice reassignment-drop (rule 3 dual of the string block
         // above): `= xs [ … ]` / `= xs ( fresh-slice-call )` frees the
         // old backing buffer before the store overwrites the alloca.
@@ -11116,7 +11172,10 @@
         // through `name` now (whose own registration, if any, frees it
         // exactly once at scope exit). Without this, the arm/loop
         // delta-drop frees x while `name` still aliases it.
-        ? & & != 0 g_auto_drop_strings ( seq ( nurl_llty vt ) `i8*` ) ( is_ident_tok bck_rhs_tt )
+        // Self-assign is excluded: `= x x` untracking x's own alloca
+        // would silence its scope-exit drop and leak the buffer.
+        ? & & & != 0 g_auto_drop_strings ( seq ( nurl_llty vt ) `i8*` )
+        ( is_ident_tok bck_rhs_tt ) ! ( seq bck_rhs_val name )
         { ( mem_remove_owned_str syms
             ( nurl_sym_get2 syms bck_rhs_val `__ptr` ) ) }
         {}
@@ -17479,7 +17538,28 @@
 
 // ── Module header ──────────────────────────────────────────────────
 
-@ emit_header → v {
+// Emit one preamble runtime `declare` line AND mark its symbol as
+// already declared (`<name>__ffi_emitted` — the same dedup key
+// gen_ffi_decl uses between duplicate user FFI declares). A later user
+// FFI declaration of the same builtin (`& `c` @ nurl_str_float …`,
+// e.g. via stdlib/core/builtins.nu, which redeclares this whole
+// surface for documentation) then skips its own `declare`, instead of
+// producing a duplicate LLVM rejects with "invalid redefinition of
+// function". The symbol name is parsed out of the line (between '@'
+// and '(') so the list below stays single-source.
+@ __emit_rt_decl i syms s line → v {
+    ( emit line )
+    : i at ( nurl_str_find line `@` )
+    ? >= at 0 {
+        : i lp ( nurl_str_find line `(` )
+        ? > lp at {
+            : s nm ( nurl_str_slice line + at 1 - lp + at 1 )
+            ( nurl_sym_def syms ( nurl_str_cat nm `__ffi_emitted` ) `1` )
+        } {}
+    } {}
+}
+
+@ emit_header i syms → v {
     ( emit `; NURL compiler output (nurlc.nu)` )
     ( emit `; link: clang <this.ll> stdlib/runtime.o -o out` )
     ( emit `` )
@@ -17487,114 +17567,114 @@
     // variable's storage to its !DILocalVariable metadata. Emitted
     // unconditionally; with --g off the compiler never calls it, so
     // the unused declaration is dead and the optimizer drops it.
-    ( emit `declare void @llvm.dbg.declare(metadata, metadata, metadata)` )
-    ( emit `declare i32  @puts(i8*)` )
-    ( emit `declare i32  @printf(i8*, ...)` )
-    ( emit `declare i8*  @malloc(i64)` )
-    ( emit `declare void @free(i8*)` )
+    ( __emit_rt_decl syms `declare void @llvm.dbg.declare(metadata, metadata, metadata)` )
+    ( __emit_rt_decl syms `declare i32  @puts(i8*)` )
+    ( __emit_rt_decl syms `declare i32  @printf(i8*, ...)` )
+    ( __emit_rt_decl syms `declare i8*  @malloc(i64)` )
+    ( __emit_rt_decl syms `declare void @free(i8*)` )
     // libc string / parse primitives — declared here so the pure-NURL
     // `nurl_str_*` helpers can call them globally without per-file
     // `&`-FFI declarations. Returns mapped at their native C widths
     // (i32 for int-returners, i8* for ptr-returners); NURL callers do
     // their own widening via `# i` if they need i64.
-    ( emit `declare i64  @strlen(i8*)` )
-    ( emit `declare i32  @strcmp(i8*, i8*)` )
-    ( emit `declare i32  @strncmp(i8*, i8*, i64)` )
-    ( emit `declare i32  @memcmp(i8*, i8*, i64)` )
-    ( emit `declare i8*  @strstr(i8*, i8*)` )
-    ( emit `declare i8*  @memmem(i8*, i64, i8*, i64)` )
-    ( emit `declare i64  @atoll(i8*)` )
-    ( emit `declare double @atof(i8*)` )
-    ( emit `declare double @strtod(i8*, i8**)` )
-    ( emit `declare i8*  @memcpy(i8*, i8*, i64)` )
-    ( emit `declare i8*  @strdup(i8*)` )
+    ( __emit_rt_decl syms `declare i64  @strlen(i8*)` )
+    ( __emit_rt_decl syms `declare i32  @strcmp(i8*, i8*)` )
+    ( __emit_rt_decl syms `declare i32  @strncmp(i8*, i8*, i64)` )
+    ( __emit_rt_decl syms `declare i32  @memcmp(i8*, i8*, i64)` )
+    ( __emit_rt_decl syms `declare i8*  @strstr(i8*, i8*)` )
+    ( __emit_rt_decl syms `declare i8*  @memmem(i8*, i64, i8*, i64)` )
+    ( __emit_rt_decl syms `declare i64  @atoll(i8*)` )
+    ( __emit_rt_decl syms `declare double @atof(i8*)` )
+    ( __emit_rt_decl syms `declare double @strtod(i8*, i8**)` )
+    ( __emit_rt_decl syms `declare i8*  @memcpy(i8*, i8*, i64)` )
+    ( __emit_rt_decl syms `declare i8*  @strdup(i8*)` )
     // libc stdio primitives — declared here so the pure-NURL
     // `nurl_file_*` helpers in stdlib/std/fs.nu can call them
     // globally.
-    ( emit `declare i8*  @fopen(i8*, i8*)` )
-    ( emit `declare i32  @fclose(i8*)` )
-    ( emit `declare i32  @fputs(i8*, i8*)` )
-    ( emit `declare i64  @fwrite(i8*, i64, i64, i8*)` )
-    ( emit `declare i32  @fputc(i32, i8*)` )
-    ( emit `declare i64  @fread(i8*, i64, i64, i8*)` )
-    ( emit `declare i32  @feof(i8*)` )
+    ( __emit_rt_decl syms `declare i8*  @fopen(i8*, i8*)` )
+    ( __emit_rt_decl syms `declare i32  @fclose(i8*)` )
+    ( __emit_rt_decl syms `declare i32  @fputs(i8*, i8*)` )
+    ( __emit_rt_decl syms `declare i64  @fwrite(i8*, i64, i64, i8*)` )
+    ( __emit_rt_decl syms `declare i32  @fputc(i32, i8*)` )
+    ( __emit_rt_decl syms `declare i64  @fread(i8*, i64, i64, i8*)` )
+    ( __emit_rt_decl syms `declare i32  @feof(i8*)` )
     // fseek/ftell — POSIX stdio file-position primitives. Pure-NURL
     // file_size + future random-access I/O use these to learn the
     // file's length without going through `stat(2)` (whose `struct
     // stat` layout varies per platform). SEEK_END = 2 universally.
-    ( emit `declare i32  @fseek(i8*, i64, i32)` )
-    ( emit `declare i64  @ftell(i8*)` )
+    ( __emit_rt_decl syms `declare i32  @fseek(i8*, i64, i32)` )
+    ( __emit_rt_decl syms `declare i64  @ftell(i8*)` )
     // POSIX access(2) for the pure-NURL nurl_file_exists @-fn.
-    ( emit `declare i32  @access(i8*, i32)` )
+    ( __emit_rt_decl syms `declare i32  @access(i8*, i32)` )
     // getenv(3) — import-path resolution consults $NURL_STDLIB so an
     // installed toolchain finds stdlib regardless of cwd (see
     // __norm_import_path).
-    ( emit `declare i8*  @getenv(i8*)` )
+    ( __emit_rt_decl syms `declare i8*  @getenv(i8*)` )
     // realpath(3) — the import DEDUP key is the canonical path so the same
     // file reached through two symlink chains (diamond package deps:
     // deps/a/deps/gpu vs deps/gpu) compiles exactly once (see
     // __canon_import_key). Diagnostics keep the as-written path.
-    ( emit `declare i8*  @realpath(i8*, i8*)` )
-    ( emit `declare void @nurl_init(i32, i8**)` )
-    ( emit `declare void @nurl_print(i8*)` )
-    ( emit `declare void @nurl_println(i8*)` )
-    ( emit `declare void @nurl_eprint(i8*)` )
-    ( emit `declare void @nurl_eprintln(i8*)` )
-    ( emit `declare void @nurl_print_int(i64)` )
-    ( emit `declare void @nurl_print_str(i8*)` )
-    ( emit `declare void @nurl_print_bool(i1)` )
-    ( emit `declare i64  @nurl_read_int()` )
-    ( emit `declare i8*  @nurl_read_line()` )
+    ( __emit_rt_decl syms `declare i8*  @realpath(i8*, i8*)` )
+    ( __emit_rt_decl syms `declare void @nurl_init(i32, i8**)` )
+    ( __emit_rt_decl syms `declare void @nurl_print(i8*)` )
+    ( __emit_rt_decl syms `declare void @nurl_println(i8*)` )
+    ( __emit_rt_decl syms `declare void @nurl_eprint(i8*)` )
+    ( __emit_rt_decl syms `declare void @nurl_eprintln(i8*)` )
+    ( __emit_rt_decl syms `declare void @nurl_print_int(i64)` )
+    ( __emit_rt_decl syms `declare void @nurl_print_str(i8*)` )
+    ( __emit_rt_decl syms `declare void @nurl_print_bool(i1)` )
+    ( __emit_rt_decl syms `declare i64  @nurl_read_int()` )
+    ( __emit_rt_decl syms `declare i8*  @nurl_read_line()` )
     // nurl_read_n_bytes lives as pure NURL `read_n_bytes` in
     // `stdlib/core/io.nu`; it reads stdin via `nurl_stdin_read`
     // (declared by FFI in stdlib/core/posix.nu, no built-in declare).
-    ( emit `declare i64  @nurl_stdin_eof()` )
-    ( emit `declare void @nurl_flush_stdout()` )
-    ( emit `declare void @nurl_flush_stderr()` )
+    ( __emit_rt_decl syms `declare i64  @nurl_stdin_eof()` )
+    ( __emit_rt_decl syms `declare void @nurl_flush_stdout()` )
+    ( __emit_rt_decl syms `declare void @nurl_flush_stderr()` )
     // nurl_str_get / _cat / _cat3 / _cat4 / _slice / _parse_int_range
     // / _parse_float_range are pure-NURL @-fns — no preamble declare
     // here to avoid clashing with their `define`s in user code and
     // the local copies inside nurlc.nu itself.  _str_int and
     // _str_float stay in C (printf-family %g, Grisu/Ryu TODO).
-    ( emit `declare i8*  @nurl_str_int(i64)` )
-    ( emit `declare i8*  @nurl_str_float(double)` )
+    ( __emit_rt_decl syms `declare i8*  @nurl_str_int(i64)` )
+    ( __emit_rt_decl syms `declare i8*  @nurl_str_float(double)` )
     // nurl_str_len / _eq / _cmp / _to_int / _to_float / _starts /
     // _find / _ends / _memmem_range / _memcmp_lex are pure-NURL
     // @-fns (libc-thin wrappers calling strlen / strcmp / strncmp /
     // strstr / memcmp / memmem / atoll / atof directly via the global
     // preamble declarations emitted above).
-    ( emit `declare i64    @nurl_scan_byte3(i8*, i64, i64, i64, i64)` )
-    ( emit `declare i64    @nurl_byte_substr(i8*, i64, i8*, i64)` )
-    ( emit `declare i64    @nurl_count_byte(i8*, i64, i64)` )
-    ( emit `declare double @nurl_fast_atof(i8*, i64)` )
+    ( __emit_rt_decl syms `declare i64    @nurl_scan_byte3(i8*, i64, i64, i64, i64)` )
+    ( __emit_rt_decl syms `declare i64    @nurl_byte_substr(i8*, i64, i8*, i64)` )
+    ( __emit_rt_decl syms `declare i64    @nurl_count_byte(i8*, i64, i64)` )
+    ( __emit_rt_decl syms `declare double @nurl_fast_atof(i8*, i64)` )
     // nurl_str_slice is a pure-NURL @-fn.
     // nurl_map_* (string→i64) is not part of the runtime — use the
     // generic `stdlib/std/hashmap.nu` HashMap[K V] at [s i] instead.
-    ( emit `declare i8*  @nurl_read_file(i8*)` )
-    ( emit `declare void @nurl_exit(i64)` )
-    ( emit `declare i64  @nurl_argc()` )
-    ( emit `declare i8*  @nurl_argv(i64)` )
-    ( emit `declare i64  @nurl_argv_count()` )
-    ( emit `declare i8*  @nurl_argv_get(i64)` )
-    ( emit `declare i8*  @nurl_version()` )
+    ( __emit_rt_decl syms `declare i8*  @nurl_read_file(i8*)` )
+    ( __emit_rt_decl syms `declare void @nurl_exit(i64)` )
+    ( __emit_rt_decl syms `declare i64  @nurl_argc()` )
+    ( __emit_rt_decl syms `declare i8*  @nurl_argv(i64)` )
+    ( __emit_rt_decl syms `declare i64  @nurl_argv_count()` )
+    ( __emit_rt_decl syms `declare i8*  @nurl_argv_get(i64)` )
+    ( __emit_rt_decl syms `declare i8*  @nurl_version()` )
     // nurl_lex_* are pure-NURL @-fns in compiler/nurlc.nu (see the
     // §6a Lexer block).
-    ( emit `declare void @nurl_print_buf_start()` )
-    ( emit `declare i8*  @nurl_print_buf_stop()` )
-    ( emit `declare void @nurl_print_buf_reset()` )
+    ( __emit_rt_decl syms `declare void @nurl_print_buf_start()` )
+    ( __emit_rt_decl syms `declare i8*  @nurl_print_buf_stop()` )
+    ( __emit_rt_decl syms `declare void @nurl_print_buf_reset()` )
     // nurl_lex_filename, nurl_sym_*, nurl_cg_*, nurl_get_last_type
     // and _set_last_type are pure-NURL @-fns (see top of this file).
-    ( emit `declare i8*  @nurl_malloc(i64)` )
-    ( emit `declare i8*  @nurl_alloc(i64)` )
-    ( emit `declare i8*  @nurl_zalloc(i64)` )
-    ( emit `declare i8*  @nurl_realloc(i8*, i64)` )
-    ( emit `declare void @nurl_free(i8*)` )
-    ( emit `declare void @nurl_journal_push(i8*)` )
-    ( emit `declare void @nurl_journal_push_drop(i8*, ptr)` )
-    ( emit `declare void @nurl_journal_forget(i8*)` )
-    ( emit `declare void @nurl_memcpy(i8*, i8*, i64)` )
-    ( emit `declare void @nurl_memmove(i8*, i8*, i64)` )
-    ( emit `declare void @nurl_memset(i8*, i64, i64)` )
+    ( __emit_rt_decl syms `declare i8*  @nurl_malloc(i64)` )
+    ( __emit_rt_decl syms `declare i8*  @nurl_alloc(i64)` )
+    ( __emit_rt_decl syms `declare i8*  @nurl_zalloc(i64)` )
+    ( __emit_rt_decl syms `declare i8*  @nurl_realloc(i8*, i64)` )
+    ( __emit_rt_decl syms `declare void @nurl_free(i8*)` )
+    ( __emit_rt_decl syms `declare void @nurl_journal_push(i8*)` )
+    ( __emit_rt_decl syms `declare void @nurl_journal_push_drop(i8*, ptr)` )
+    ( __emit_rt_decl syms `declare void @nurl_journal_forget(i8*)` )
+    ( __emit_rt_decl syms `declare void @nurl_memcpy(i8*, i8*, i64)` )
+    ( __emit_rt_decl syms `declare void @nurl_memmove(i8*, i8*, i64)` )
+    ( __emit_rt_decl syms `declare void @nurl_memset(i8*, i64, i64)` )
     // ── The memory accessors are DEFINED here, not declared ───────
     //
     // `nurl_peek` is a null check and a load, and it is what every Vec
@@ -17638,7 +17718,7 @@
     ( emit `pw.done:` )
     ( emit `  ret void` )
     ( emit `}` )
-    ( emit `declare void @nurl_vec_drop(i8*, ptr, i64)` )
+    ( __emit_rt_decl syms `declare void @nurl_vec_drop(i8*, ptr, i64)` )
     // nurl_file_* (open/write/write_range/write_byte/close/read_chunk
     // /eof/exists/del/dir_create/dir_remove) are pure-NURL @-fns in
     // stdlib/std/fs.nu, calling libc fopen/fputs/fwrite/fputc/fclose/
@@ -17648,43 +17728,43 @@
     // libm wrappers and nurl_iabs / _ipow are pure-NURL (libm direct
     // FFI in stdlib/std/float.nu; iabs/ipow as plain @-fns in
     // stdlib/std/int.nu).
-    ( emit `declare i64    @nurl_is_nan(double)` )
-    ( emit `declare i64    @nurl_is_inf(double)` )
-    ( emit `declare i64  @nurl_dir_list_open(i8*)` )
-    ( emit `declare i8*  @nurl_dir_list_next(i64)` )
-    ( emit `declare void @nurl_dir_list_close(i64)` )
-    ( emit `declare i64  @nurl_http_perform_full(i8*, i8*, i8*, i8*)` )
-    ( emit `declare i64  @nurl_http_perform_full_to(i8*, i8*, i8*, i8*, i64, i64)` )
+    ( __emit_rt_decl syms `declare i64    @nurl_is_nan(double)` )
+    ( __emit_rt_decl syms `declare i64    @nurl_is_inf(double)` )
+    ( __emit_rt_decl syms `declare i64  @nurl_dir_list_open(i8*)` )
+    ( __emit_rt_decl syms `declare i8*  @nurl_dir_list_next(i64)` )
+    ( __emit_rt_decl syms `declare void @nurl_dir_list_close(i64)` )
+    ( __emit_rt_decl syms `declare i64  @nurl_http_perform_full(i8*, i8*, i8*, i8*)` )
+    ( __emit_rt_decl syms `declare i64  @nurl_http_perform_full_to(i8*, i8*, i8*, i8*, i64, i64)` )
     // The 7 accessors (status / err_kind / body / body_len /
     // header_count / header_name / header_value) are pure-NURL @-fns
     // in stdlib/ext/http.nu that read the NurlHttpResponse struct via
     // nurl_peek. Only the C-side freer stays — it walks the headers
     // array deallocating every name/value pair.
-    ( emit `declare void @nurl_http_response_free(i64)` )
-    ( emit `declare i64  @nurl_http_stream_open_to(i8*, i8*, i8*, i8*, i64, i64)` )
-    ( emit `declare i8*  @nurl_http_stream_next(i64)` )
-    ( emit `declare void @nurl_http_stream_close(i64)` )
-    ( emit `declare i64  @nurl_http_stream_pump_headers(i64)` )
-    ( emit `declare i64  @nurl_proc_run(i8*, i8*, i64, i8*)` )
-    ( emit `declare i64  @nurl_proc_exit_code(i64)` )
-    ( emit `declare i64  @nurl_proc_err_kind(i64)` )
-    ( emit `declare i8*  @nurl_proc_stdout(i64)` )
-    ( emit `declare i8*  @nurl_proc_stderr(i64)` )
-    ( emit `declare i64  @nurl_proc_stdout_len(i64)` )
-    ( emit `declare i64  @nurl_proc_stderr_len(i64)` )
-    ( emit `declare void @nurl_proc_free(i64)` )
-    ( emit `declare i64  @nurl_proc_spawn(i8*, i8*, i64)` )
-    ( emit `declare i64  @nurl_proc_spawn_err_kind(i64)` )
-    ( emit `declare i64  @nurl_proc_spawn_pid(i64)` )
-    ( emit `declare i64  @nurl_proc_spawn_write(i64, i8*, i64)` )
-    ( emit `declare void @nurl_proc_spawn_close_stdin(i64)` )
-    ( emit `declare i8*  @nurl_proc_spawn_read_line(i64, i64)` )
-    ( emit `declare i64  @nurl_proc_spawn_read_line_len(i64)` )
-    ( emit `declare i64  @nurl_proc_spawn_eof(i64)` )
-    ( emit `declare i64  @nurl_proc_spawn_last_io_err(i64)` )
-    ( emit `declare i64  @nurl_proc_spawn_wait(i64)` )
-    ( emit `declare i64  @nurl_proc_spawn_kill(i64, i64)` )
-    ( emit `declare void @nurl_proc_spawn_free(i64)` )
+    ( __emit_rt_decl syms `declare void @nurl_http_response_free(i64)` )
+    ( __emit_rt_decl syms `declare i64  @nurl_http_stream_open_to(i8*, i8*, i8*, i8*, i64, i64)` )
+    ( __emit_rt_decl syms `declare i8*  @nurl_http_stream_next(i64)` )
+    ( __emit_rt_decl syms `declare void @nurl_http_stream_close(i64)` )
+    ( __emit_rt_decl syms `declare i64  @nurl_http_stream_pump_headers(i64)` )
+    ( __emit_rt_decl syms `declare i64  @nurl_proc_run(i8*, i8*, i64, i8*)` )
+    ( __emit_rt_decl syms `declare i64  @nurl_proc_exit_code(i64)` )
+    ( __emit_rt_decl syms `declare i64  @nurl_proc_err_kind(i64)` )
+    ( __emit_rt_decl syms `declare i8*  @nurl_proc_stdout(i64)` )
+    ( __emit_rt_decl syms `declare i8*  @nurl_proc_stderr(i64)` )
+    ( __emit_rt_decl syms `declare i64  @nurl_proc_stdout_len(i64)` )
+    ( __emit_rt_decl syms `declare i64  @nurl_proc_stderr_len(i64)` )
+    ( __emit_rt_decl syms `declare void @nurl_proc_free(i64)` )
+    ( __emit_rt_decl syms `declare i64  @nurl_proc_spawn(i8*, i8*, i64)` )
+    ( __emit_rt_decl syms `declare i64  @nurl_proc_spawn_err_kind(i64)` )
+    ( __emit_rt_decl syms `declare i64  @nurl_proc_spawn_pid(i64)` )
+    ( __emit_rt_decl syms `declare i64  @nurl_proc_spawn_write(i64, i8*, i64)` )
+    ( __emit_rt_decl syms `declare void @nurl_proc_spawn_close_stdin(i64)` )
+    ( __emit_rt_decl syms `declare i8*  @nurl_proc_spawn_read_line(i64, i64)` )
+    ( __emit_rt_decl syms `declare i64  @nurl_proc_spawn_read_line_len(i64)` )
+    ( __emit_rt_decl syms `declare i64  @nurl_proc_spawn_eof(i64)` )
+    ( __emit_rt_decl syms `declare i64  @nurl_proc_spawn_last_io_err(i64)` )
+    ( __emit_rt_decl syms `declare i64  @nurl_proc_spawn_wait(i64)` )
+    ( __emit_rt_decl syms `declare i64  @nurl_proc_spawn_kill(i64, i64)` )
+    ( __emit_rt_decl syms `declare void @nurl_proc_spawn_free(i64)` )
     // Crypto hash transforms (SHA-1/256/512, MD5, HMAC-SHA-256/512)
     // live in pure NURL under `stdlib/std/hash_*.nu`. Random surface
     // (`rand_u64` / `rand_hex_str`) is in `stdlib/std/random.nu`;
@@ -17693,32 +17773,32 @@
     // nurl_read_file_bytes / nurl_write_file_bytes / nurl_last_bytes_len
     // are pure NURL in `stdlib/std/fs.nu`; fread / fwrite write into
     // Vec[u]'s data buffer, vec_set_len records the count.
-    ( emit `declare i64  @nurl_tcp_listen(i8*, i64, i64)` )
-    ( emit `declare i64  @nurl_tcp_listen_tls(i8*, i64, i64, i8*, i8*)` )
-    ( emit `declare i64  @nurl_tcp_listen_tls_alpn(i8*, i64, i64, i8*, i8*, i8*)` )
-    ( emit `declare i8*  @nurl_tcp_alpn_selected(i64)` )
-    ( emit `declare i64  @nurl_tcp_tls_add_sni(i64, i8*, i8*, i8*)` )
-    ( emit `declare i64  @nurl_tcp_tls_reload(i64, i8*, i8*, i8*)` )
-    ( emit `declare i64  @nurl_tcp_tls_require_client_cert(i64, i8*, i64)` )
-    ( emit `declare i8*  @nurl_tcp_peer_cert_subject(i64)` )
-    ( emit `declare i64  @nurl_tcp_accept(i64)` )
-    ( emit `declare i64  @nurl_tcp_read(i64, i8*, i64)` )
-    ( emit `declare i64  @nurl_tcp_write(i64, i8*, i64)` )
-    ( emit `declare void @nurl_tcp_close(i64)` )
-    ( emit `declare void @nurl_tcp_shutdown(i64)` )
-    ( emit `declare i64  @nurl_tcp_err_kind(i64)` )
-    ( emit `declare i8*  @nurl_tcp_peer_addr(i64)` )
-    ( emit `declare void @nurl_tcp_set_timeout(i64, i64)` )
+    ( __emit_rt_decl syms `declare i64  @nurl_tcp_listen(i8*, i64, i64)` )
+    ( __emit_rt_decl syms `declare i64  @nurl_tcp_listen_tls(i8*, i64, i64, i8*, i8*)` )
+    ( __emit_rt_decl syms `declare i64  @nurl_tcp_listen_tls_alpn(i8*, i64, i64, i8*, i8*, i8*)` )
+    ( __emit_rt_decl syms `declare i8*  @nurl_tcp_alpn_selected(i64)` )
+    ( __emit_rt_decl syms `declare i64  @nurl_tcp_tls_add_sni(i64, i8*, i8*, i8*)` )
+    ( __emit_rt_decl syms `declare i64  @nurl_tcp_tls_reload(i64, i8*, i8*, i8*)` )
+    ( __emit_rt_decl syms `declare i64  @nurl_tcp_tls_require_client_cert(i64, i8*, i64)` )
+    ( __emit_rt_decl syms `declare i8*  @nurl_tcp_peer_cert_subject(i64)` )
+    ( __emit_rt_decl syms `declare i64  @nurl_tcp_accept(i64)` )
+    ( __emit_rt_decl syms `declare i64  @nurl_tcp_read(i64, i8*, i64)` )
+    ( __emit_rt_decl syms `declare i64  @nurl_tcp_write(i64, i8*, i64)` )
+    ( __emit_rt_decl syms `declare void @nurl_tcp_close(i64)` )
+    ( __emit_rt_decl syms `declare void @nurl_tcp_shutdown(i64)` )
+    ( __emit_rt_decl syms `declare i64  @nurl_tcp_err_kind(i64)` )
+    ( __emit_rt_decl syms `declare i8*  @nurl_tcp_peer_addr(i64)` )
+    ( __emit_rt_decl syms `declare void @nurl_tcp_set_timeout(i64, i64)` )
     // Thread / mutex / cond live in pure-NURL FFI in
     // stdlib/std/thread.nu — libpthread symbols (pthread_create /
     // mutex_* / cond_*) plus the tiny nurl_pthread_join_ptr /
     // _detach_ptr trampolines are declared on-demand in that module
     // via `& `c` @ ...`.
-    ( emit `declare void @nurl_signal_install_shutdown(i64)` )
-    ( emit `declare void @nurl_signal_trigger_shutdown()` )
-    ( emit `declare void @nurl_panic(i8*)` )
-    ( emit `declare i64  @nurl_recover(i8*, i8*)` )
-    ( emit `declare i8*  @nurl_panic_last_msg()` )
+    ( __emit_rt_decl syms `declare void @nurl_signal_install_shutdown(i64)` )
+    ( __emit_rt_decl syms `declare void @nurl_signal_trigger_shutdown()` )
+    ( __emit_rt_decl syms `declare void @nurl_panic(i8*)` )
+    ( __emit_rt_decl syms `declare i64  @nurl_recover(i8*, i8*)` )
+    ( __emit_rt_decl syms `declare i8*  @nurl_panic_last_msg()` )
     ( emit `` )
 }
 
@@ -20099,7 +20179,7 @@
     // where the hazard is most common.
     = g_ptrtab ( nurl_sym_new )
     ( vis_set_current_src_file path )
-    ( emit_header )
+    ( emit_header syms )
     ? != g_dbg_enabled 0 { ( dbg_init path ) } {}
     ( init_syms syms )
     : i lex0 ( nurl_lex_new src path )
