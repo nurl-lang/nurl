@@ -14517,8 +14517,9 @@
     = fn_ptr_type ( nurl_str_cat fn_ptr_type `i8*` )
     : ~ s types1 ( nurl_str_cat param_types `` )
     : ~ i j 0
+    : ~ s __t1 ( nurl_str_cat `` `` )
     ~ < j param_count {
-        : s __t1 ( seplist_first types1 )
+        = __t1 ( seplist_first types1 )
         = fn_ptr_type ( nurl_str_cat ( nurl_str_cat fn_ptr_type `, ` ) __t1 )
         = types1 ( seplist_rest types1 )
         = j + j 1
@@ -14540,9 +14541,10 @@
     ( nurl_print ` undef, ` ) ( nurl_print ( nurl_llty ret_type ) ) ( nurl_print `(i8*` )
     : ~ s types2 ( nurl_str_cat param_types `` )
     : ~ i k 0
+    : ~ s __t2 ( nurl_str_cat `` `` )
     ~ < k param_count {
         ( nurl_print `, ` )
-        : s __t2 ( seplist_first types2 )
+        = __t2 ( seplist_first types2 )
         ( nurl_print __t2 )
         = types2 ( seplist_rest types2 )
         = k + k 1
@@ -18659,6 +18661,9 @@
         ( nurl_sym_def syms `nurl_argv__ret_owned` `str` )
         // Defined after gen_closure_expr, its only caller.
         ( nurl_sym_def syms `simple_capture_analysis__ret_owned` `str` )
+        // __nth_sep is defined next to the other seplist helpers, far
+        // below its only caller in gen_call.
+        ( nurl_sym_def syms `__nth_sep__ret_owned` `str` )
     }
     {}
     ( nurl_sym_def syms `malloc` `i8*` )
