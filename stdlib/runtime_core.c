@@ -371,34 +371,65 @@ const char* nurl_read_password(const char *prompt) {
 }
 #endif
 
-/* Output-buffer stack for deferred emission of closure bodies.
+/* Output-buffer stack for deferred emission.
  *
- * `start` pushes a fresh buffering frame; `stop` snapshots it to a
- * strdup'd return and pops back to whatever was active before. The
- * stack (not a single slot) is required because gen_closure_expr in
- * nurlc.nu recurses for nested closures — a single slot would let the
- * inner stop switch back to stdout while the outer body was still mid-
- * buffer, spilling IR at module scope. */
-#define OUTBUF_SIZE       (8*1024*1024)
+ * `start` pushes a buffering frame; `stop` hands back everything printed
+ * since that push as a strdup'd string and pops to whatever was active
+ * before. The stack (not a single slot) is required because
+ * gen_closure_expr in nurlc.nu recurses for nested closures — a single
+ * slot would let the inner stop switch back to stdout while the outer
+ * body was still mid-buffer, spilling IR at module scope.
+ *
+ * A frame is just an OFFSET into one shared buffer: pushing records
+ * where the frame's bytes will begin and never copies, popping strdups
+ * the tail and truncates back to that offset. The earlier design
+ * snapshotted the whole enclosing buffer on every push and memcpy'd it
+ * back on every pop, which is quadratic as soon as an outer frame holds
+ * anything substantial — nurlc's module-level dead-code pass keeps the
+ * entire module in the outermost frame while pushing one nested frame
+ * per function, so at 1,400 functions that design would have memcpy'd
+ * gigabytes. Offsets make the same nesting free.
+ *
+ * The buffer grows on demand. It used to be a fixed 8 MB that
+ * `nurl_print` silently DROPPED writes past — a module larger than that
+ * would have been truncated into invalid IR with no diagnostic. */
 #define OUTBUF_STACK_MAX  32
+#define OUTBUF_INIT_CAP   (64*1024)
 
 struct OutbufFrame {
-    char  *bytes;    /* saved snapshot; NULL when frame was empty */
-    size_t len;
-    int    mode;
+    size_t start;    /* offset in g_outbuf where this frame's bytes begin */
+    int    mode;     /* mode to restore on pop */
 };
 
 static char  *g_outbuf      = NULL;
 static size_t g_outbuf_len  = 0;
+static size_t g_outbuf_cap  = 0;
 static int    g_outbuf_mode = 0;   /* 0 = stdout, 1 = buffer */
 static struct OutbufFrame g_outbuf_stack[OUTBUF_STACK_MAX];
 static int    g_outbuf_sp   = 0;   /* 0 = stack empty */
 
 static void outbuf_init(void) {
-    if (!g_outbuf) { g_outbuf = (char*)malloc(OUTBUF_SIZE); g_outbuf[0] = '\0'; }
+    if (!g_outbuf) {
+        g_outbuf = (char*)malloc(OUTBUF_INIT_CAP);
+        g_outbuf_cap = OUTBUF_INIT_CAP;
+        g_outbuf[0] = '\0';
+    }
 }
 
-/* Push a fresh buffering frame; previous frame is saved for `stop`. */
+/* Make room for `extra` more bytes plus the NUL. malloc/realloc here are
+ * the checked wrappers (see nurl__oom) — growth failure aborts loudly
+ * rather than truncating the module. */
+static void outbuf_reserve(size_t extra) {
+    outbuf_init();
+    size_t need = g_outbuf_len + extra + 1;
+    if (need <= g_outbuf_cap) return;
+    size_t cap = g_outbuf_cap;
+    while (cap < need) cap *= 2;
+    g_outbuf = (char*)realloc(g_outbuf, cap);
+    g_outbuf_cap = cap;
+}
+
+/* Push a buffering frame anchored at the current write position. */
 void nurl_print_buf_start(void) {
     outbuf_init();
     if (g_outbuf_sp >= OUTBUF_STACK_MAX) {
@@ -406,40 +437,25 @@ void nurl_print_buf_start(void) {
         return;
     }
     struct OutbufFrame *f = &g_outbuf_stack[g_outbuf_sp++];
-    f->mode = g_outbuf_mode;
-    f->len  = g_outbuf_len;
-    if (g_outbuf_len > 0) {
-        f->bytes = (char*)malloc(g_outbuf_len + 1);
-        if (f->bytes) memcpy(f->bytes, g_outbuf, g_outbuf_len + 1);
-    } else {
-        f->bytes = NULL;
-    }
-    g_outbuf_len = 0;
-    g_outbuf[0] = '\0';
+    f->mode  = g_outbuf_mode;
+    f->start = g_outbuf_len;
     g_outbuf_mode = 1;
 }
 
-/* Snapshot current frame as owned return; pop saved frame back. */
+/* Hand back this frame's bytes as an owned copy; truncate to its start. */
 const char* nurl_print_buf_stop(void) {
     outbuf_init();
-    char *ret = strdup(g_outbuf ? g_outbuf : "");
+    size_t start = 0;
+    int    mode  = 0;   /* bottom of the stack falls back to stdout mode */
     if (g_outbuf_sp > 0) {
         struct OutbufFrame *f = &g_outbuf_stack[--g_outbuf_sp];
-        g_outbuf_len = f->len;
-        if (f->bytes) {
-            memcpy(g_outbuf, f->bytes, f->len + 1);
-            free(f->bytes);
-            f->bytes = NULL;
-        } else {
-            g_outbuf[0] = '\0';
-        }
-        g_outbuf_mode = f->mode;
-    } else {
-        /* Bottom of the stack — fall back to stdout mode. */
-        g_outbuf_len = 0;
-        g_outbuf[0] = '\0';
-        g_outbuf_mode = 0;
+        start = f->start;
+        mode  = f->mode;
     }
+    char *ret = strdup(g_outbuf + start);
+    g_outbuf_len  = start;
+    g_outbuf[start] = '\0';
+    g_outbuf_mode = mode;
     return ret;
 }
 
@@ -453,17 +469,14 @@ void nurl_print_buf_reset(void) {
     }
 }
 
-/* Hard-unwind the whole buffering stack back to stdout mode, freeing any
- * saved frames. For panic-recovery paths (nurlc's multi-error resync):
- * a panic can fire while frames pushed by nurl_print_buf_start are still
- * open, and the matching _stop calls will never run — without this, later
- * output would land in an abandoned buffer via stale frames. */
+/* Hard-unwind the whole buffering stack back to stdout mode. For
+ * panic-recovery paths (nurlc's multi-error resync): a panic can fire
+ * while frames pushed by nurl_print_buf_start are still open, and the
+ * matching _stop calls will never run — without this, later output would
+ * land in an abandoned buffer via stale frames. */
 void nurl_print_buf_unwind(void) {
     outbuf_init();
-    while (g_outbuf_sp > 0) {
-        struct OutbufFrame *f = &g_outbuf_stack[--g_outbuf_sp];
-        if (f->bytes) { free(f->bytes); f->bytes = NULL; }
-    }
+    g_outbuf_sp   = 0;
     g_outbuf_len  = 0;
     g_outbuf[0]   = '\0';
     g_outbuf_mode = 0;
@@ -496,10 +509,9 @@ static int g_stdout_tty = -1;
 void nurl_print(const char *s) {
     if (g_outbuf_mode) {
         size_t n = strlen(s);
-        if (g_outbuf_len + n + 1 < OUTBUF_SIZE) {
-            memcpy(g_outbuf + g_outbuf_len, s, n + 1);
-            g_outbuf_len += n;
-        }
+        outbuf_reserve(n);
+        memcpy(g_outbuf + g_outbuf_len, s, n + 1);
+        g_outbuf_len += n;
     } else {
         if (g_stdout_tty < 0) g_stdout_tty = nurl_stdout_isatty() ? 1 : 0;
         fputs(s, stdout);

@@ -1,0 +1,9 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+area=16
+area=12
+twice=21
+apply=42
+dropped 7

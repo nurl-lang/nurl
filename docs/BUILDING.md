@@ -112,6 +112,35 @@ clang myprogram.ll stdlib/runtime.native.o -lm -lpthread -o myprogram
 > plain `clang` link rejects it with *"file format not recognized"*. The
 > `-lm -lpthread` libraries are required.
 
+## What ends up in the `.ll`
+
+`nurlc` emits only the functions `main` can reach. An import brings in a
+whole module — a program that imports `stdlib/ext/json.nu` for
+`json_parse` also parses `json_clone`, the pretty-printer and the float
+formatter — and emitting all of it means clang runs its `-O2` pipeline
+over code LTO then deletes at link time. Dropping it at the source of
+the IR instead is worth 30–40% of the clang step on a stdlib-heavy
+program (`examples/static_server.nu`: 1,416 emitted functions down to
+469, 6.6 s of clang down to 3.8 s). The final binary is unchanged —
+LTO was already removing the same code, just later.
+
+The pass runs over the finished IR text, so it needs no special
+knowledge of closures, generic monomorphisations, drop glue or dyn
+vtables: a function is live when something emitted names it. Roots are
+`main` plus anything named at module scope (a `@__vt.…` vtable constant
+holds its method thunks there). A file with **no `main`** is a module
+compiled for something else to link against, so the pass leaves it
+whole.
+
+Two things make it safe to have on by default: the output is a
+sub-sequence of the unfiltered IR — nothing is rewritten, reordered or
+renamed — and dropping something still referenced is an undefined
+symbol at link time, never a wrong binary.
+
+`nurlc --no-dce <file>` emits everything, which is what you want when
+diffing IR against an older compiler or linking a NURL object into a C
+program by hand.
+
 ## Debugging with `gdb` / `lldb` (DWARF)
 
 NURL emits DWARF debug info, so a NURL binary drives under `gdb` / `lldb`
