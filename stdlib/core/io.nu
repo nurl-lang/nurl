@@ -14,6 +14,25 @@
 //   ( stdin_eof )         → b       T iff a previous read hit EOF
 //   ( flush )             → v       fflush(stdout)
 //   ( eflush )            → v       fflush(stderr)
+//
+// ── When you need ( flush ) ──────────────────────────────────────────
+//
+// stdout is block-buffered when it is a pipe or a file, and flushed per
+// print when it is a terminal — the same split C and Python make. That
+// keeps a print-heavy program from paying one write(2) per fragment
+// (measured: 300k printed lines went from 435 ms to 26 ms) without
+// costing an interactive prompt its immediacy.
+//
+// The runtime already drains stdout for you at process exit, before a
+// panic aborts, before every stderr write (so `2>&1` never reorders the
+// two streams), and before `process`'s fork. Call ( flush ) yourself in
+// the two cases it cannot see:
+//
+//   * before writing to fd 1 with raw `write(2)` instead of a print —
+//     that path bypasses stdio's buffer entirely;
+//   * when another process is *following* your redirected stdout and
+//     must see a line the moment you print it (a server announcing its
+//     port to a supervisor, a progress line piped into `tee`).
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`

@@ -78,6 +78,10 @@
 static void nurl__oom(unsigned long long bytes) {
     fprintf(stderr, "nurl: out of memory (requested %llu bytes)\n", bytes);
     fflush(stderr);
+    /* abort() skips stdio cleanup — push whatever the program had
+     * already printed (stdout is block-buffered when redirected; see
+     * nurl_print) before the process dies. */
+    fflush(stdout);
     abort();
 }
 static void *nurl__xmalloc(size_t n) {
@@ -465,6 +469,29 @@ void nurl_print_buf_unwind(void) {
     g_outbuf_mode = 0;
 }
 
+/* stdout flush policy, resolved once on the first write (-1 = not yet
+ * probed, 1 = terminal, 0 = pipe/file).
+ *
+ * `nurl_print` used to fflush after EVERY call, which turns each print
+ * fragment into its own write(2). NURL code prints in small pieces —
+ * nurlc emits an IR line as ~8 separate prints — so compiling
+ * examples/static_server.nu cost 188,713 write syscalls, ~20% of the
+ * compiler's wall clock, and a program printing 300k lines spent 16.7x
+ * longer in the kernel than in its own loop.
+ *
+ * On a terminal the per-call flush still earns its keep: a prompt with
+ * no trailing newline has to appear before the matching read. So keep
+ * flushing there, and let stdio's own buffer do its job when stdout is
+ * a pipe or a file. That is the same split C and Python make.
+ *
+ * Buffered bytes must not be lost when the process dies abnormally:
+ * `exit()` (nurl_exit) flushes for us, and every `abort()` path in this
+ * file — nurl__oom, nurl_panic — flushes stdout first. A NURL program
+ * that forks (stdlib/std/process.nu) flushes before the fork so the
+ * child does not inherit, and re-emit, the parent's pending bytes.
+ * `nurl_flush_stdout` is exported for anything else that needs it. */
+static int g_stdout_tty = -1;
+
 /* Print without a trailing newline. */
 void nurl_print(const char *s) {
     if (g_outbuf_mode) {
@@ -474,15 +501,24 @@ void nurl_print(const char *s) {
             g_outbuf_len += n;
         }
     } else {
+        if (g_stdout_tty < 0) g_stdout_tty = nurl_stdout_isatty() ? 1 : 0;
         fputs(s, stdout);
-        fflush(stdout);
+        if (g_stdout_tty) fflush(stdout);
     }
 }
 /* Print with a trailing newline. Routed through nurl_print so the
  * output-capture buffer (nurl_print_buf_*) sees it too. */
 void nurl_println(const char *s)  { nurl_print(s); nurl_print("\n"); }
-void nurl_eprint(const char *s)   { fputs(s, stderr); fflush(stderr); }
-void nurl_eprintln(const char *s) { fputs(s, stderr); fputc('\n', stderr); fflush(stderr); }
+/* stderr is flushed per call, and stdout is block-buffered when it is
+ * redirected — so without draining stdout first, a program that
+ * interleaves the two would have its stderr lines jump ahead of stdout
+ * lines printed earlier. Anything that merges the two streams (a
+ * terminal, `2>&1`, a CI log) has to see them in the order the program
+ * produced them. The extra fflush is free when nothing is pending, and
+ * stderr writes are diagnostics — orders of magnitude rarer than the
+ * stdout prints this buffering is here to make cheap. */
+void nurl_eprint(const char *s)   { fflush(stdout); fputs(s, stderr); fflush(stderr); }
+void nurl_eprintln(const char *s) { fflush(stdout); fputs(s, stderr); fputc('\n', stderr); fflush(stderr); }
 
 
 /* ── §2  String operations ─────────────────────────────────────── */
@@ -2030,6 +2066,8 @@ void nurl_panic(const char *msg) {
         }
 #endif
         fflush(stderr);
+        /* abort() skips stdio cleanup — see nurl__oom. */
+        fflush(stdout);
         abort();
     }
     nurl__panic_top->msg = (msg && *msg) ? strdup(msg)
@@ -2071,6 +2109,8 @@ void nurl_panic(const char *msg) {
     fprintf(stderr, "nurl panic (wasi: no recover): %s\n",
             msg && *msg ? msg : "(no message)");
     fflush(stderr);
+    /* abort() skips stdio cleanup — see nurl__oom. */
+    fflush(stdout);
     abort();
 }
 

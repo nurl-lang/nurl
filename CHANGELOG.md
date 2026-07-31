@@ -28,6 +28,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`nurl_print` stops paying a `write(2)` per print — 16.7× faster
+  output, 19–25% off every `nurlc` run.** The runtime flushed stdout
+  after *every* print call. NURL code prints in small pieces (nurlc
+  emits one IR line as ~8 separate prints), so the flush, not the
+  formatting, was the cost: compiling `examples/static_server.nu` issued
+  **188,713** write syscalls, and a program printing 300k lines spent
+  16× longer in the kernel than in its own loop. stdout is now
+  block-buffered when it is a pipe or a file and still flushed per print
+  on a terminal — the same split C and Python make, so an interactive
+  prompt with no trailing newline still appears before its read
+  (verified against a pty).
+
+  | | before | after |
+  |---|---:|---:|
+  | `nurlc examples/static_server.nu` — write syscalls | 188,713 | **725** |
+  | `nurlc compiler/nurlc.nu` (self-compile IR) | 601 ms | **449 ms** |
+  | `nurlc examples/static_server.nu` | 693 ms | **556 ms** |
+  | `nurlc examples/ws_echo.nu` | 637 ms | **517 ms** |
+  | 300k-line print loop | 435 ms | **26 ms** |
+
+  Buffered bytes are never lost or reordered: `exit` flushes, every
+  `abort()` path (`nurl__oom`, `nurl_panic`, the wasi panic stub)
+  flushes stdout first, `stdlib/std/process.nu` flushes before its two
+  `fork`s so the child cannot re-emit the parent's pending bytes, and
+  **`nurl_eprint`/`nurl_eprintln` drain stdout before writing** — so
+  anything merging the streams (a terminal, `2>&1`, a CI log) sees them
+  in the order the program produced them. That last rule is stricter
+  than before: `compiler/tests/outputs/mcp_hardening.txt` recorded a
+  stderr line jumping *ahead* of a `puts` printed earlier, and the
+  golden now shows true program order. The one case the runtime cannot
+  see — a raw `write(2)` on fd 1, which bypasses stdio — needs an
+  explicit `( flush )`, exactly as mixing `printf` and `write(1, …)`
+  does in C; `stdlib/core/io.nu` documents both that and the
+  follow-my-redirected-log case, and `compiler/tests/stdout_flush_order.nu`
+  pins all three ordering rules.
+
 - **MCP build tools answer with links/paths, never an inline base64
   module.** A compiled module returned as base64 in a tool result lands
   verbatim in the calling model's context — hundreds of KB spent on bytes

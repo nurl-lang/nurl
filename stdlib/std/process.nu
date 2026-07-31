@@ -382,6 +382,11 @@ $ `stdlib/core/posix.nu`
 
     : s full ( __build_argv cmd args )
 
+    // stdout is block-buffered when it is a pipe or a file, so anything
+    // the parent has printed but not yet written out would be inherited
+    // by the child's copy of the buffer and emitted TWICE. Drain it
+    // before the fork — the standard pre-fork discipline.
+    ( nurl_flush_stdout )
     : i pid ( fork )
     ? < pid 0 {
         ( close ( __pipe_fd sin_p 0 ) ) ( close ( __pipe_fd sin_p 1 ) )
@@ -853,6 +858,9 @@ $ `stdlib/core/posix.nu`
 
     : s full ( __build_argv cmd args )
 
+    // See the fork in __process_run: drain the parent's pending stdout
+    // so the child cannot re-emit it.
+    ( nurl_flush_stdout )
     : i pid ( fork )
     ? < pid 0 {
         ( nurl_free full )
