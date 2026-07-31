@@ -94,6 +94,17 @@ jobs:
         # budget so the PR that regresses it is the one that fails.
         run: ./tools/memgate.sh
 
+      - name: dead-function elimination gate
+        # The corpus proves the pass never drops a LIVE function — that
+        # would be an undefined symbol at link time. It cannot see the
+        # other half: a pass that decided everything was reachable stays
+        # green everywhere while costing nothing but wall clock, which
+        # is exactly the bug an off-by-one in the block scanner caused
+        # during development. This asserts unreachable code is gone AND
+        # the indirect routes (dyn vtable thunks, `% Drop`, closures,
+        # generic monomorphs) survive. Costs ~1 s.
+        run: ./tools/dcegate.sh
+
       - name: examples corpus frontend gate
         # Frontend-compiles every examples/ + bench/ + duo/ program.
         # Examples have rotted silently twice (immutability-migration

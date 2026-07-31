@@ -28,6 +28,67 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`nurlc` emits only the functions `main` can reach — 30–40% off the
+  clang step on any stdlib-heavy program.** An import brings in a whole
+  module: a program that imports `stdlib/ext/json.nu` for `json_parse`
+  also got `json_clone`, `json_eq`, the pretty-printer and the float
+  formatter. clang then ran its entire `-O2` pipeline over all of it and
+  LTO deleted the unreachable half at link time — after the optimising
+  was already paid for. On `examples/static_server.nu` that was 947 of
+  1,416 emitted functions, 60,000 of 94,244 IR lines, and 2.7 s of a
+  6.5 s clang step.
+
+  | | before | after |
+  |---|---:|---:|
+  | `examples/static_server.nu` | 7.19 s | **4.32 s** |
+  | `examples/ws_echo.nu` | 6.70 s | **4.04 s** |
+  | `examples/h2c_server.nu` | 6.64 s | **4.41 s** |
+  | `examples/wordcount.nu` | 291 ms | **178 ms** |
+  | `bench/json_parse.nu` | 815 ms | **611 ms** |
+  | test corpus wall clock (`./build.sh`) | 1 m 11 s | **42 s** |
+
+  (`nurlc` + `clang -O2 -flto`, best of three. The self-compile is
+  unchanged at −0.6%: a compiler uses nearly all of itself.)
+
+  The pass is a linker-style collection over the **finished IR text**,
+  not a source-level call graph — closures, generic monomorphisations,
+  drop glue, `% Drop` impls and dyn method thunks are all just `@name`
+  references by then, so it needs to know nothing about how any of them
+  got there, and a future construct that emits a function is covered the
+  day it is written. Roots are `main` plus every function named at
+  module scope, which is where a `@__vt.<Trait>.<T>` vtable constant
+  names its thunks. A file with **no `main`** is a module compiled for
+  something else to link against and is left whole; `--no-dce` disables
+  the pass outright.
+
+  Two properties make it safe on by default: the output is a
+  *sub-sequence* of the unfiltered IR — nothing is rewritten, reordered
+  or renamed, only dropped — and dropping something still referenced is
+  an undefined symbol at link time, never a silently wrong binary. The
+  final binaries are byte-for-byte as capable as before; LTO was already
+  removing the same code, just later.
+
+  `tools/dcegate.sh` (new, wired into CI) pins the half the corpus
+  cannot see. 567 passing tests prove nothing *live* is dropped — that
+  would fail to link — but a pass that decided everything was reachable
+  would also stay green while costing nothing but wall clock, which is
+  exactly what an off-by-one in the block scanner did during
+  development: a `define` following a closing brace with no blank line
+  went unseen, its body counted as module scope, and static_server went
+  from 947 droppable functions to 0 with every test still passing. The
+  gate asserts unreachable code is gone, that the four indirect
+  reachability routes survive, and that both builds behave identically;
+  it is verified to fail against a compiler without the pass.
+
+  Enabling this needed the output-buffer stack in `runtime_core.c` to
+  become offset-based: a frame now records where its bytes start instead
+  of snapshotting and restoring the whole enclosing buffer, so nesting
+  one frame per function inside a module-sized outer frame is free
+  rather than quadratic. The buffer also grows on demand now — it was a
+  fixed 8 MB that `nurl_print` silently dropped writes past, which would
+  have truncated a large module into invalid IR with no diagnostic.
+  Self-compile peak RSS 18 → 24 MB (budget 600 MB).
+
 - **`nurl_print` stops paying a `write(2)` per print — 16.7× faster
   output, 19–25% off every `nurlc` run.** The runtime flushed stdout
   after *every* print call. NURL code prints in small pieces (nurlc

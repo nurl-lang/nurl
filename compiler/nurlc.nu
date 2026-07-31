@@ -21239,6 +21239,250 @@
     }
 }
 
+// ── Module dead-function elimination ────────────────────────────────
+//
+// nurlc emits every function of every transitively imported module,
+// reachable or not: a program that imports `stdlib/ext/json.nu` for
+// `json_parse` also gets `json_clone`, `json_eq`, the pretty-printer and
+// the float formatter. clang then runs its whole -O2 pipeline over all
+// of it, and LTO deletes the unreachable half at link time — after the
+// optimising is already paid for. Measured on `examples/static_server.nu`:
+// 947 of 1,416 emitted functions are unreachable from `main`, 60,000 of
+// its 94,244 IR lines exist only to be thrown away, and 2.7 s of the
+// 6.5 s clang step goes into optimising them.
+//
+// So the module is emitted into a buffer, and what reaches stdout is the
+// sub-sequence of it that `main` can reach. This is a linker-style
+// collection over the FINAL IR TEXT, not a source-level call graph:
+// closures, generic monomorphisations, drop glue, `% Drop` impls and dyn
+// method thunks are all just `@name` references in the text by the time
+// this runs, so the pass needs to know nothing about how any of them got
+// there — and a future construct that emits a function is covered the
+// day it is written.
+//
+// Roots are `main` plus every function named OUTSIDE a function body: a
+// `@__vt.<Trait>.<T>` vtable is a module-level constant holding function
+// pointers, and its thunks are reachable only through it.
+//
+// Two properties make this safe to run by default:
+//
+//   * The output is a sub-sequence of what the compiler emitted before —
+//     nothing is rewritten, reordered or renamed, only dropped.
+//   * The failure mode is loud. Dropping a function something still
+//     references leaves an undefined symbol at link time; it cannot
+//     produce a silently wrong binary.
+//
+// A file with no `main` is a module being compiled for something else to
+// link against, so the pass leaves it alone. `--no-dce` disables it.
+
+: ~ i g_dce 1  // 0 after --no-dce
+// The module text, as an integer cast of a BORROWED `s`. Deliberately
+// not a `: ~ s` global: a mutable string global owns its buffer, and
+// this one is owned by dce_emit_module's caller.
+: ~ i g_dce_mod 0
+: ~ i g_dce_start 0  // i64[n]: byte offset of each `define`
+: ~ i g_dce_end 0  // i64[n]: byte offset just past its closing `}`
+: ~ i g_dce_live 0  // i64[n]: 1 once reached
+: ~ i g_dce_queue 0  // i64[n]: worklist of reached-but-unscanned indices
+: ~ i g_dce_qn 0  // worklist length
+: ~ i g_dce_map 0  // symtab: function name → its index, as decimal text
+
+// Is `c` a byte that can appear in an LLVM global identifier?
+@ __dce_ident_byte i c → b {
+    ? & >= c 97 <= c 122 { ^ T } {}  // a-z
+    ? & >= c 65 <= c 90 { ^ T } {}  // A-Z
+    ? & >= c 48 <= c 57 { ^ T } {}  // 0-9
+    ? == c 95 { ^ T } {}  // _
+    ? == c 46 { ^ T } {}  // .  (@__dynm.Trait.Impl.method)
+    ? == c 36 { ^ T } {}  // $
+    ^ F
+}
+
+// Mark the function called `nm` reachable and queue its body for
+// scanning. A name that is not a function in this module (a `declare`d
+// runtime symbol, a `@.str.N` global, a label) is simply absent.
+@ __dce_mark_name s nm → v {
+    : s ent ( nurl_sym_get g_dce_map nm )
+    ? == 0 ( nurl_str_len ent ) { ^ v } {}
+    : i idx ( nurl_str_to_int ent )
+    ? != 0 ( nurl_peek # s g_dce_live idx ) { ^ v } {}
+    ( nurl_poke # s g_dce_live idx 1 )
+    ( nurl_poke # s g_dce_queue g_dce_qn idx )
+    = g_dce_qn + g_dce_qn 1
+}
+
+// Mark every function named by an `@ident` in module bytes [from, to).
+// Over-marking is harmless (a `@` inside a comment keeps a function that
+// nothing calls); under-marking is what would break the link, so the
+// scan deliberately does no context analysis at all.
+@ __dce_scan i from i to → v {
+    : *u mp # *u # s g_dce_mod
+    : ~ i p from
+    ~ < p to {
+        ? != & # i . mp p 255 64 { = p + p 1 } {  // '@'
+            : ~ i q + p 1
+            ~ & < q to ( __dce_ident_byte & # i . mp q 255 ) { = q + q 1 }
+            ? == q + p 1 { = p q } {
+                // NUL-terminate the name in place for the lookup, then
+                // put the byte back — same trick emit_hoisted uses to
+                // hand a line to a `s`-taking helper without copying.
+                : u sv . mp q
+                = . mp q # u 0
+                ( __dce_mark_name # s + # i mp + p 1 )
+                = . mp q sv
+                = p q
+            }
+        }
+    }
+}
+
+// Record the name on the `define` line starting at byte `st` as index
+// `idx`. The line is `define <ret-ty> @<name>(…`; the return type never
+// contains a `@`, so the first one on the line starts the name.
+@ __dce_record_name i st i idx → v {
+    : *u mp # *u # s g_dce_mod
+    : ~ i p st
+    ~ & != & # i . mp p 255 64 != & # i . mp p 255 10 { = p + p 1 }
+    ? != & # i . mp p 255 64 { ^ v } {}
+    : i ns + p 1
+    : ~ i q ns
+    ~ ( __dce_ident_byte & # i . mp q 255 ) { = q + q 1 }
+    ? == q ns { ^ v } {}
+    : u sv . mp q
+    = . mp q # u 0
+    ( nurl_sym_def g_dce_map # s + # i mp ns ( nurl_str_int idx ) )
+    = . mp q sv
+}
+
+// Walk the module and locate every `define … }` block. With `counting`
+// non-zero this only counts them (so the index arrays can be sized
+// exactly); otherwise it fills the arrays and the name→index map.
+//
+// A function begins at a line starting `define ` and ends at the first
+// line that is exactly `}` — body instructions are indented and labels
+// end in `:`, so a lone `}` in column 1 is unambiguous. Searching for
+// "\ndefine " rather than "define " is what keeps a source string
+// literal out of it: nurlc.nu emits the text `define ` itself, and it
+// lands in a `@.str.N` constant mid-line. A newline inside such a
+// constant is escaped as `\0A`, never a raw byte, so no string can
+// forge either delimiter. (The module always opens with its `; NURL
+// compiler output` banner, so a `define` at offset 0 cannot occur.)
+@ __dce_index i mlen i counting → i {
+    : ~ i n 0
+    : ~ i pos 0
+    ~ < pos mlen {
+        : i rel ( nurl_memmem_range # s + # i # *u # s g_dce_mod pos - mlen pos `\ndefine ` 8 )
+        ? < rel 0 { = pos mlen } {
+            : i st + + pos rel 1
+            : i rel2 ( nurl_memmem_range # s + # i # *u # s g_dce_mod st - mlen st `\n}\n` 3 )
+            ? < rel2 0 { = pos mlen } {
+                : i en + + st rel2 3
+                ? == 0 counting {
+                    ( nurl_poke # s g_dce_start n st )
+                    ( nurl_poke # s g_dce_end n en )
+                    ( __dce_record_name st n )
+                } {}
+                = n + n 1
+                // Resume ONE BYTE BACK. The two delimiters overlap when
+                // a `define` follows a closing brace with no blank line
+                // between them (`…\n}\ndefine …`, which is how
+                // emit_header lays out nurl_peek/nurl_poke and how a
+                // closure lands in front of the next function): the
+                // newline consumed as the tail of `\n}\n` is the same
+                // one that has to open the next `\ndefine `. Resuming at
+                // `en` skipped that function, and its body then counted
+                // as module scope — which rooted everything it called
+                // and quietly disabled the pass on 16 of
+                // static_server's 1,416 functions. `en` still bounds the
+                // block; only the search cursor steps back, and it
+                // always advances by at least three bytes per block.
+                = pos - en 1
+            }
+        }
+    }
+    ^ n
+}
+
+// Print module bytes [from, to) without copying them out.
+@ __dce_print_range i from i to → v {
+    ? >= from to { ^ v } {}
+    : *u mp # *u # s g_dce_mod
+    : u sv . mp to
+    = . mp to # u 0
+    ( nurl_print # s + # i mp from )
+    = . mp to sv
+}
+
+// Emit the collected module: everything that is not a function body,
+// plus the functions `main` can reach, in the order they were emitted.
+@ dce_emit_module s mod → v {
+    : i mlen ( strlen mod )
+    = g_dce_mod # i mod
+    ? == 0 g_dce { ( __dce_print_range 0 mlen ) ^ v } {}
+    : i n ( __dce_index mlen 1 )
+    ? == 0 n { ( __dce_print_range 0 mlen ) ^ v } {}
+    = g_dce_start # i # s ( nurl_zalloc * n 8 )
+    = g_dce_end # i # s ( nurl_zalloc * n 8 )
+    = g_dce_live # i # s ( nurl_zalloc * n 8 )
+    = g_dce_queue # i # s ( nurl_zalloc * n 8 )
+    = g_dce_map ( nurl_sym_new )
+    = g_dce_qn 0
+    ( __dce_index mlen 0 )
+    // No `main` — this is a module compiled to be linked into something
+    // else, and every function in it is potentially an entry point.
+    : s mainent ( nurl_sym_get g_dce_map `main` )
+    ? == 0 ( nurl_str_len mainent )
+    { ( __dce_print_range 0 mlen ) ( dce_free ) ^ v }
+    {}
+    ( __dce_mark_name `main` )
+    // Roots from module scope: the gaps between function bodies hold the
+    // globals, and a dyn vtable constant names its thunks there.
+    : ~ i gap 0
+    : ~ i gi 0
+    ~ < gi n {
+        ( __dce_scan gap ( nurl_peek # s g_dce_start gi ) )
+        = gap ( nurl_peek # s g_dce_end gi )
+        = gi + gi 1
+    }
+    ( __dce_scan gap mlen )
+    // Transitive closure over the worklist.
+    : ~ i qh 0
+    ~ < qh g_dce_qn {
+        : i fi ( nurl_peek # s g_dce_queue qh )
+        ( __dce_scan ( nurl_peek # s g_dce_start fi ) ( nurl_peek # s g_dce_end fi ) )
+        = qh + qh 1
+    }
+    // Emit the live sub-sequence.
+    : ~ i pos 0
+    : ~ i ei 0
+    ~ < ei n {
+        : i st ( nurl_peek # s g_dce_start ei )
+        : i en ( nurl_peek # s g_dce_end ei )
+        ( __dce_print_range pos st )
+        ? != 0 ( nurl_peek # s g_dce_live ei ) { ( __dce_print_range st en ) } {}
+        = pos en
+        = ei + ei 1
+    }
+    ( __dce_print_range pos mlen )
+    ( dce_free )
+}
+
+// The four index arrays live in `: ~ i` globals as integer casts, which
+// a leak scanner cannot see through — release them explicitly, the same
+// contract main's exit-time table frees follow.
+@ dce_free → v {
+    ( nurl_free # s g_dce_start )
+    ( nurl_free # s g_dce_end )
+    ( nurl_free # s g_dce_live )
+    ( nurl_free # s g_dce_queue )
+    ( nurl_sym_free g_dce_map )
+    = g_dce_start 0
+    = g_dce_end 0
+    = g_dce_live 0
+    = g_dce_queue 0
+    = g_dce_map 0
+}
+
 // ── Entry point ────────────────────────────────────────────────────
 
 @ nurlc_print_help → v {
@@ -21251,6 +21495,7 @@
     ( nurl_print `  --lint              run lint-only diagnostics (e.g. unused imports)\n` )
     ( nurl_print `  --no-borrowck       disable the borrow-checker pass (on by default)\n` )
     ( nurl_print `  --strict-borrowck   run the borrow-checker in strict mode\n` )
+    ( nurl_print `  --no-dce            emit unreachable functions too (on by default)\n` )
     ( nurl_print `  --ffi-host-imports  emit FFI calls as wasm host imports\n` )
     ( nurl_print `\nThe LLVM IR goes to stdout; link it with clang against\n` )
     ( nurl_print `stdlib/runtime.native.o (see docs/BUILDING.md). For a one-step\n` )
@@ -21285,11 +21530,13 @@
                                 { = g_borrowck 1 = g_strict_borrowck 1 }
                                 { ? ( seq a `--ffi-host-imports` )
                                     { = g_ffi_host_imports 1 }
-                                    { = path a } } } } } } } }
+                                    { ? ( seq a `--no-dce` )
+                                        { = g_dce 0 }
+                                        { = path a } } } } } } } } }
         = ai + ai 1
     }
     ? == 0 ( nurl_str_len path )
-    { ( nurl_eprintln `usage: nurlc [--version] [--g] [--lint] [--no-borrowck | --strict-borrowck] [--ffi-host-imports] <file.nu>` ) ( nurl_exit 1 ) }
+    { ( nurl_eprintln `usage: nurlc [--version] [--g] [--lint] [--no-borrowck | --strict-borrowck] [--ffi-host-imports] [--no-dce] <file.nu>` ) ( nurl_exit 1 ) }
     {}
     ? != g_lint 0 { ( lint_init path ) } {}
     : s src ( nurl_read_file path )
@@ -21335,6 +21582,14 @@
     // where the hazard is most common.
     = g_ptrtab ( nurl_sym_new )
     ( vis_set_current_src_file path )
+    // Collect the whole module into one buffering frame so the
+    // dead-function pass can decide what actually reaches stdout (see
+    // dce_emit_module). Nested per-function frames anchor at an offset
+    // inside this one and cost nothing. On an error path nurlc exits
+    // non-zero before the matching stop, and the buffered IR is
+    // discarded with it — which is what a caller does with post-error
+    // IR anyway.
+    ( nurl_print_buf_start )
     ( emit_header syms )
     ? != g_dbg_enabled 0 { ( dbg_init path ) } {}
     ( init_syms syms )
@@ -21400,6 +21655,10 @@
         ` (re-run with --no-borrowck to bypass)` ) )
         ( nurl_exit 1 ) }
     {}
+    // Every function this compile will ever emit is now in the buffer:
+    // close it and write out the part `main` can reach.
+    : s __mod ( nurl_print_buf_stop )
+    ( dce_emit_module __mod )
     ( nurl_lex_free lex )
     // Exit-time release of the global symbol tables. Their handles
     // live in `: ~ i` globals as integer casts, which a leak scanner's

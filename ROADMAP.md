@@ -89,6 +89,11 @@ A high-level map of what exists. Dates and per-feature detail are in
   identifiers, call-arity mismatches, unbalanced braces / stray top-level
   tokens, and visibility violations are hard errors with source locations —
   nothing malformed reaches the backend silently.
+- Emission: only the functions `main` can reach reach the `.ll`
+  (`--no-dce` to emit everything). Reachability is computed over the
+  finished IR, so closures, monomorphs, drop glue and dyn vtable thunks
+  need no special casing — worth 30–40% of the clang step on a
+  stdlib-heavy program. See [`docs/BUILDING.md`](docs/BUILDING.md).
 - Debugging: DWARF emission (`nurlc --g`) with `ptype`/`print` over structs.
 
 ### Standard library
