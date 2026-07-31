@@ -8,6 +8,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.30.0] — 2026-07-31
+
+A compiler-efficiency release. Everything in it is about what `nurlc`
+spends — memory, syscalls, and the work it hands to clang — and nothing
+in it changes what a NURL program means. The self-compile went from
+leaking 2.8 million allocations to leaking none and from 115.9 MB peak
+RSS to 18.5; the borrow checker's state representation was rewritten and
+took 20.7% of the compiler's instructions with it; printing stopped
+paying a write syscall per fragment; and `nurlc` now emits only the
+functions a program can actually reach, which is 30–40% off the clang
+step for anything that imports a stdlib module. Four new CI gates keep
+each of those from decaying back.
+
 ### Added
 
 - **Self-compile leak gate — `nurlc compiler/nurlc.nu` must leak nothing,
@@ -138,6 +151,77 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   keeps the module and its `.ll` on disk and returns `wasm_path` /
   `ll_path`, and `nurl_build_project` returns `binary_path` / `ll_path`
   instead of `binary_base64`.
+
+- **Web docs build on fumadocs 16.14.**
+
+### Performance
+
+- **The borrow checker's per-binding state is a direct-indexed lattice
+  array — 20.7% off the whole compiler's instruction count.** The state
+  was a space-separated `name=digit` token string: every lookup
+  `memmem`'d the whole thing (11.2% of a self-compile sat inside libc
+  `memmem`), every update rebuilt the string token by token, and a join
+  probed each token of one side against the whole of the other —
+  O(na·nb). Binding names are now interned once per function into dense
+  ids at `bck_explode` time (generation-stamped entries on `g_bck`, so
+  there is no clearing pass; `rv_<id>` keeps the reverse map for
+  diagnostics), and a state is a byte string indexed by id: get is a
+  byte load, set a memcpy plus one store, join and the loop-carry seed
+  pointwise passes.
+
+  Self-compile, pinned, `perf stat -r 5`: instructions 3.318 G → 2.631 G
+  (−20.7%), cycles −13.2%, wall 0.528 → 0.459 s, peak RSS 125 → 115 MB.
+  The borrow checker's own overhead — the delta against `--no-borrowck`
+  — drops 44%. Gated by a differential sweep over all 1,654 `.nu` files
+  in the tree: IR, diagnostics and exit codes byte-identical.
+
+### Fixed
+
+- **The compiler stopped leaking: 2,793,226 allocations / 33.4 MB per
+  self-compile → zero, peak RSS 115.9 → 18.5 MB.** A single-owner
+  language whose own compiler leaks a third of its address space is
+  making an argument it does not believe, and every step of this
+  campaign found leaks that had sat unnoticed for months because nothing
+  was looking. About thirty commits, each closing a *class* rather than
+  a site — the recurring roots were worth naming:
+
+  - **Ownership hidden behind a cast.** The strdup-returning getters
+    (`nurl_sym_get`/`get2`, `nurl_lex_val`/`filename`/`peek_val`,
+    `nurl_llty`, …) returned `^ # s ( strdup … )`, and the cast hid the
+    freshness from return-site inference, so no caller ever freed the
+    copy. `nurl_sym_get` alone leaked 1.77 M strdups per self-compile.
+  - **Ownership as a per-path guess.** Return inference is now
+    all-paths-or-nothing: any `i8*` return site that cannot prove
+    freshness sets a poison that vetoes the marker. One owned
+    `^ ( slice … )` beside a borrowed `^ param` tail used to mark the
+    whole function owned — and callers then freed the borrow.
+  - **The def-order gap.** A helper defined *below* its caller had no
+    ownership summary yet at the call site, so its result went
+    uncollected. Fixed both by hoisting and by a forward-call ownership
+    channel that lets a call ask a not-yet-compiled callee, at run time,
+    whether the pointer it returned was fresh.
+  - **Copies nobody consumes.** A `?`/`??` arm whose value merely
+    aliases a binding was copied like any other tracked value, while the
+    binding's own scope-exit drop already owned that buffer — so every
+    `? c { = x y } {}` minted a buffer with no consumer. The single
+    biggest remaining class.
+  - **Mixed joins.** A join with a borrowed parameter on one side and a
+    tracked local on the other never collected the tracked arm's copy:
+    71 k leaks on one `ws_echo` compile, through `subst_source` alone.
+
+  Two of these were live-memory bugs, not just leaks: reassigning a
+  tracked mutable string could `free` a `.rodata` literal or a borrow,
+  and an over-eager owned marker made callers free a value they did not
+  own. `arm_local_trailing_drop` and `ret_owned_propagation` pin the
+  copy contract as regressions.
+
+  The self-compile is the workload `nurlc.nu` exercises, and it has no
+  `$` imports and instantiates no generics — so the whole
+  mangling/substitution path was untested by it. Compiling an
+  import-heavy program was taken the same way: 96 k → 7.6 k → **zero**
+  leaked allocations, at `-O0` as well as `-O2` (an `-O0` ASan build
+  elides no allocations and was the honest measurement). `tools/leakgate.sh`
+  above is what keeps all of it at zero.
 
 ## [0.29.0] — 2026-07-30
 
