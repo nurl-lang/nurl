@@ -3363,7 +3363,7 @@
 // real: released compilers freed the temp handed to vec_push [s].
 @ mem_consumer_copy_safe s fname → b {
     ( str_contains_word
-    `nurl_sym_def nurl_sym_set nurl_sym_append nurl_sym_get nurl_sym_get2 nurl_sym_len nurl_sym_len2 nurl_set_last_type nurl_print nurl_println nurl_eprintln puts nurl_str_len nurl_str_to_int nurl_str_to_float nurl_str_find nurl_str_starts nurl_str_ends seq str_contains_word str_word_index count_words nurl_str_cat nurl_str_cat3 nurl_str_cat4 nurl_str_slice nurl_str_int nurl_read_file nurl_lex_new nurl_file_exists emit die die_stmt warn bck_esc_warn bck_emit_error`
+    `nurl_sym_def nurl_sym_set nurl_sym_append nurl_sym_get nurl_sym_get2 nurl_sym_len nurl_sym_len2 nurl_set_last_type nurl_print nurl_println nurl_eprintln puts nurl_str_len nurl_str_to_int nurl_str_to_float nurl_str_find nurl_str_starts nurl_str_ends seq str_contains_word str_word_index count_words nurl_str_cat nurl_str_cat3 nurl_str_cat4 nurl_str_slice nurl_str_int nurl_read_file nurl_lex_new nurl_file_exists emit die die_stmt warn bck_esc_warn bck_emit_error nurl_str_eq nurl_str_get int_width ty_is_unsigned mem_is_slice_ty is_int_ty nurl_llty llvm_type ty_to_unsigned mangle_type demangle_type str_first_word str_skip_word compound_field_type convert_closure_arg`
     fname )
 }
 
@@ -6248,9 +6248,13 @@
         // closure literal sets the `__last_closure_nonsend__` side-channel as it
         // is built just above.
         ? & ( seq fname `thread_spawn` ) builtin_escape_slot {
+            // Both arms OWN their value: a mixed owned/borrow join publishes
+            // "not owned" (the compiler cannot copy a borrow for you — `s`
+            // is also NURL's opaque-handle spelling), so the owning arm's
+            // buffer would have no consumer.
             : s __ts_ns ? ( is_ident_tok bck_arg_tt )
             ( nurl_sym_get2 syms bck_arg_val `__closure_nonsend` )
-            g_last_closure_nonsend
+            ( nurl_str_cat g_last_closure_nonsend `` )
             ? != 0 ( nurl_str_len __ts_ns )
             { ( die lex ( nurl_str_cat
                 ( nurl_str_cat3 `thread_spawn closure captures '` __ts_ns `' which is an Rc — ` )
@@ -6419,9 +6423,12 @@
         //     sink / inferred-escape indices are populated — check them
         //     for THIS argument position), or
         //   - a hand-audited copy/read-only consumer
-        //     (mem_consumer_copy_safe) — which includes the diagnostic
-        //     printers: they only read the message, and being defined
-        //     below their call sites they have no body summary to trust.
+        //     (mem_consumer_copy_safe) — the diagnostic printers (they
+        //     only read the message) and the type/string INSPECTORS,
+        //     which either answer with a scalar or build a fresh string
+        //     and so can neither retain the pointer nor hand back an
+        //     alias of it. Both families are defined below their call
+        //     sites, so they have no body summary to trust.
         // Everything else keeps the temp alive: into a storing callee
         // (vec_push) the temp's ownership has MOVED — freeing it left
         // the container holding freed memory in released compilers —
@@ -6836,7 +6843,12 @@
 
 @ __ptr_dead_union s a s b → v {
     : ~ s rest ( nurl_str_cat b `` )
-    : ~ s out a
+    // Own the accumulator from birth. Declared straight from the borrowed
+    // parameter it stayed UNTRACKED, so every owned string the loop below
+    // assigned into it was orphaned — 26 per import-heavy compile. A
+    // mutable binding that will hold owned values has to own its buffer;
+    // the copy is what makes the assignment rules free the previous one.
+    : ~ s out ( nurl_str_cat a `` )
     ~ != 0 ( nurl_str_len rest ) {
         : s p ( str_first_word rest )
         = rest ( str_skip_word rest )
@@ -11855,6 +11867,24 @@
             : s dup_reg ( nurl_cg_reg cg )
             ( nurl_print `  ` ) ( nurl_print dup_reg )
             ( nurl_print ` = call i8* @strdup(i8* ` ) ( nurl_print val ) ( nurl_print `)` ) ( emit_dbg_eol )
+            // The copy exists because a TRACKED binding must hold an
+            // allocator-owned pointer on every path, and this RHS could not
+            // be proven fresh. When it came from a forward call, the guard
+            // slot says at run time whether it WAS fresh — and if it was,
+            // the original is a temporary that never escaped this
+            // statement, so releasing it here is exactly right. Without
+            // this the copy orphaned it: gen_agg_lit's
+            // `= actual_fval ( coerce_store_val … )` alone leaked 97
+            // buffers per import-heavy compile.
+            : s __ag ( nurl_sym_get syms `__last_call_guard__` )
+            ? != 0 ( nurl_str_len __ag )
+            { : s __agv ( nurl_cg_reg cg )
+                ( nurl_print `  ` ) ( nurl_print __agv )
+                ( nurl_print ` = load i8*, i8** ` ) ( nurl_print __ag ) ( nurl_print `\n` )
+                ( nurl_print `  call void @nurl_free(i8* ` ) ( nurl_print __agv )
+                ( nurl_print `)` ) ( emit_dbg_eol )
+                ( nurl_print `  store i8* null, i8** ` ) ( nurl_print __ag ) ( emit_dbg_eol ) }
+            {}
             = val dup_reg
             : s old_reg2 ( nurl_cg_reg cg )
             ( nurl_print `  ` ) ( nurl_print old_reg2 )
@@ -14173,7 +14203,13 @@
         ( nurl_print ` ` ) ( nurl_print arg_val ) ( nurl_print `, 0\n` )
         fn_ptr
     }
-    { arg_val }  // No conversion needed
+    // Fresh on BOTH paths: the pass-through used to hand back its own
+    // argument, so the function could neither be declared owning nor
+    // counted as a copy-safe consumer — and the guarded value it was
+    // handed had no consumer that could release it (11 buffers per
+    // import-heavy compile). A copy makes the result uniformly owned,
+    // which is what a `→ s` result of this compiler means everywhere else.
+    { ( nurl_str_cat arg_val `` ) }
 }
 
 // ── Closure deferral helpers ─────────────────────────────────────
@@ -17440,7 +17476,9 @@
     : i llen ( nurl_str_len lib )
     ? > llen 0 {
         // Strip a leading `lib` prefix if present (`libcurl` → `curl`).
-        : ~ s norm lib
+        // Owned from birth for the same reason as __ptr_dead_union's `out`:
+        // the slice assigned below needs an owner.
+        : ~ s norm ( nurl_str_cat lib `` )
         ? & >= llen 3
         & == ( nurl_str_get lib 0 ) 108
         & == ( nurl_str_get lib 1 ) 105
@@ -19068,6 +19106,7 @@
         ( nurl_sym_def syms `__norm_import_path__ret_owned` `str` )
         ( nurl_sym_def syms `__import_nu_fallback__ret_owned` `str` )
         ( nurl_sym_def syms `compound_field_type__ret_owned` `str` )
+        ( nurl_sym_def syms `convert_closure_arg__ret_owned` `str` )
         // Fresh on every path now that its empty returns are copies.
         // Undeclared it looked like a borrow-returning call, so every
         // `= x ( mem_ret_struct_transfer … )` dup'd the result and
