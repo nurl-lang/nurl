@@ -3,3 +3,7 @@ allowBuilds:
   sharp: true
   unrs-resolver: true
   workerd: true
+minimumReleaseAgeExclude:
+  - '@fumadocs/base-ui@16.14.0'
+  - fumadocs-core@16.14.0
+  - fumadocs-mdx@15.2.1
