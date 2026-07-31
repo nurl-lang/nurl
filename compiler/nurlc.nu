@@ -6805,6 +6805,7 @@
     // registered x as owned off the else-arm's marker, and the literal
     // path's scope-exit drop then freed .rodata (SEGV).
     ( nurl_sym_def syms `__last_call_ret_owned__` `` )
+    ( nurl_sym_def syms `__last_value_alias__` `` )
     // First token of the arm: a bare string-literal arm's value is a
     // .rodata GEP — provably non-null, so it can be copied to make a
     // MIXED join uniformly owned (see the dup blocks below).
@@ -6813,6 +6814,7 @@
     : s tt2 ( nurl_get_last_type )
     : s t_slice_flag ( nurl_str_cat ( nurl_sym_get syms `__last_slice_owned__` ) `` )
     : s t_str_flag ( nurl_str_cat ( nurl_sym_get syms `__last_call_ret_owned__` ) `` )
+    : b t_alias != 0 ( nurl_sym_len syms `__last_value_alias__` )
     : s t_retid ( nurl_str_cat ( nurl_sym_get syms `__last_ident_name__` ) `` )
     // A tracked-owned-string ident arm hands the phi a COPY, emitted
     // here inside the arm's own block (it must only run on this path).
@@ -6832,7 +6834,8 @@
     // sibling is UNIFORMLY owned instead of publishing "not owned" and
     // leaking the sibling's buffer — 16k per self-compile in
     // `? == 0 ( nurl_str_len lt ) `i64` lt` alone).
-    ? & & & & == 0 g_did_ret ( seq ( nurl_llty tt2 ) `i8*` )
+    ? & & & & & == 0 g_did_ret ( seq ( nurl_llty tt2 ) `i8*` )
+    ! t_alias
     ! ( seq t_str_flag `str` )
     | == t_tt0 TT_STR != 0 ( nurl_str_len t_retid )
     | == t_tt0 TT_STR
@@ -6910,15 +6913,18 @@
     ( nurl_sym_def syms `__last_ident_name__` `` )
     ( nurl_sym_def syms `__last_slice_owned__` `` )
     ( nurl_sym_def syms `__last_call_ret_owned__` `` )
+    ( nurl_sym_def syms `__last_value_alias__` `` )
     : i e_tt0 ( nurl_lex_type lex )
     : ~ s ev ( gen_expr lex syms cg )
     : s et2 ( nurl_get_last_type )
     : s e_slice_flag ( nurl_str_cat ( nurl_sym_get syms `__last_slice_owned__` ) `` )
     : s e_str_flag ( nurl_str_cat ( nurl_sym_get syms `__last_call_ret_owned__` ) `` )
+    : b e_alias != 0 ( nurl_sym_len syms `__last_value_alias__` )
     : s e_retid ( nurl_str_cat ( nurl_sym_get syms `__last_ident_name__` ) `` )
     // Mirror of the then-arm's tracked-ident copy (see above).
     : ~ b e_dup F
-    ? & & & & == 0 g_did_ret ( seq ( nurl_llty et2 ) `i8*` )
+    ? & & & & & == 0 g_did_ret ( seq ( nurl_llty et2 ) `i8*` )
+    ! e_alias
     ! ( seq e_str_flag `str` )
     | == e_tt0 TT_STR != 0 ( nurl_str_len e_retid )
     | == e_tt0 TT_STR
@@ -8331,7 +8337,8 @@
             // closure whose captured var's type string flowed through a
             // `??` arm).
             : ~ b arm_dup F
-            ? & & & & == 0 g_did_ret ( seq ( nurl_llty arm_type ) `i8*` )
+            ? & & & & & == 0 g_did_ret ( seq ( nurl_llty arm_type ) `i8*` )
+            == 0 ( nurl_sym_len syms `__last_value_alias__` )
             ! ( seq arm_str_flag `str` )
             != 0 ( nurl_str_len arm_retid )
             ( str_contains_word ( nurl_sym_get syms `__owned_strings__` )
@@ -10922,6 +10929,12 @@
     // NEXT statement, so the diagnostic embeds the real line instead
     // of blaming the innocent neighbour.
     = g_stmt_bare_value ? ( __stmt_is_bare_value tt ( nurl_get_last_type ) ) bck_line 0
+    // A `:` or `=` statement's VALUE is the pointer just stored into the
+    // binding — an alias, whatever the right-hand side was. Its own
+    // scope-exit drop owns that buffer, and a join containing such an
+    // arm publishes "not owned", so no consumer will ever free the
+    // arm's value: copying it in-arm mints a buffer nobody consumes.
+    ( nurl_sym_def syms `__last_value_alias__` ? | == tt TT_COLON == tt TT_EQ `1` `` )
     gs_rv
 }
 
