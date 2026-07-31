@@ -724,6 +724,10 @@
 : ~ i g_str_idx 0
 : ~ i g_str_syms 0  // sym handle for string-literal metadata (never pushed/popped)
 : ~ i g_did_ret 0  // set to 1 by gen_ret; checked/reset by gen_cond
+// Names of the mutable string globals that own their buffer (each has a
+// compiler-emitted `<name>__nurlown` flag). `main` releases them on the
+// way out — nothing else can, since a global outlives every scope.
+: ~ s g_owned_globals ``
 // Cascade guard: 1 while parsing a VALUE OPERAND (a binary/unary/cast/
 // member operand, a call argument, a `?`/`??` condition/scrutinee, or a
 // return value). `^` (return) is control flow and is meaningless in those
@@ -762,10 +766,6 @@
 : ~ i g_impl_name_syms 0  // Group F: method##llvm_type → mangle_suffix string
 : ~ i g_impl_trait_syms 0  // coherence: method##llvm_type → owning trait name
 : ~ s g_void_reason ``  // why the last expression degraded to void (mixed-type
-: ~ i g_void_reason_owned 0  // 1 when g_void_reason holds a heap string —
-//  the global starts as a .rodata `` and is
-//  overwritten with fresh cats, so the previous
-//  value can only be freed when it was one.
 //   `??`/`?` arms). Consumers that NEED a value (a cast, a let/assign) die
 //   with this appended, so "produced no value" also says WHY — the silent
 //   version handed `undef` to the cast and the program printed a pointer.
@@ -2066,18 +2066,16 @@
     0
 }
 
-// Release the previous heap value of g_void_reason (a .rodata `` at
-// startup, so the flag gates the free) and mark the next store owned.
-@ __void_reason_release → v {
-    ? != 0 g_void_reason_owned { ( nurl_free # s g_void_reason ) } {}
-    = g_void_reason_owned 1
-}
+// A mutable string global now owns its buffer: `= g_void_reason …` frees
+// the previous value through the compiler-emitted ownership flag. This
+// pair used to hand-roll exactly that (a `g_void_reason_owned` companion
+// the compiler knew nothing about) — kept as the two names the call sites
+// read better with, but the release is now a no-op and the reset is a
+// plain assignment.
+@ __void_reason_release → v {}
 
-// Reset to the empty .rodata spelling: release any heap value first and
-// clear the flag, or the NEXT release would free a string constant.
+// Reset to the empty spelling; the assignment frees whatever was there.
 @ __void_reason_clear → v {
-    ? != 0 g_void_reason_owned { ( nurl_free # s g_void_reason ) } {}
-    = g_void_reason_owned 0
     = g_void_reason ``
 }
 
@@ -2307,7 +2305,7 @@
     // expression (`^ + p 1`, `^ ( f p )`).
     : i ret_first_tt ( nurl_lex_type lex )
     : s ret_first_val ( nurl_lex_val lex )
-    : s val ( gen_operand lex syms cg )
+    : ~ s val ( gen_operand lex syms cg )
     // If the returned value WAS exactly that bare identifier and it
     // names a parameter, record the parameter index: callers then learn
     // this function may return that argument, propagating a passed-in
@@ -2477,10 +2475,21 @@
         ( seq ( nurl_sym_get syms `__last_call_ret_owned__` ) `str` )
         { ( nurl_sym_def syms `__fn_ret_str_owned__` `1` ) }
         {}
-        // Mixed-return poison: THIS site returns an i8* it cannot prove
-        // fresh (a parameter, a literal, a borrow-returning call). The
-        // owned marker is all-paths-or-nothing — see the flag snapshot
-        // in gen_fn_decl_concrete.
+        // THIS site returns an i8* it cannot prove fresh (a parameter, a
+        // literal, a borrow-returning call).
+        //
+        // When the pre-scan promised callers an owned result, KEEP THE
+        // PROMISE: copy here, so every path of the function returns a
+        // buffer the caller may free. That is what lets the ownership
+        // marker be written from the signature alone — the old choice
+        // (poison the marker, all-paths-or-nothing) made ownership depend
+        // on the body, so a call to a function defined later in the file
+        // could not know it and leaked. The copy also retires the mixed
+        // case: a function owning on one path and borrowing on another
+        // used to leak the owning path's buffer at every caller.
+        //
+        // Otherwise (a `# s` body — a raw pointer reinterpreted as a
+        // string, which strdup must not touch) fall back to the poison.
         ? & & ( seq ( nurl_llty lt ) `i8*` )
         == 0 ( nurl_str_len skip_str_ptr )
         ! & | ret_is_direct_call ret_is_det_join
@@ -3123,8 +3132,14 @@
     ( nurl_print lv ) ( nurl_print `, ` ) ( nurl_print rv ) ( nurl_print `\n` )
     // The RESULT value keeps the operands' signedness in its type, so it
     // survives into a downstream widen with no separate flag.
+    // Both arms OWN their value: the `lt` arm is copied explicitly so
+    // the join is uniformly owned and the argument temporary is
+    // collected after the call. A mixed owned/borrow join publishes
+    // "not owned" (a borrowed `s` may be an opaque handle, so the
+    // compiler cannot copy it for you), which left `ty_to_unsigned`'s
+    // buffer with no consumer — one leak per bitwise operator compiled.
     ( nurl_set_last_type ? | ( ty_is_unsigned lt ) ( ty_is_unsigned rt )
-    ( ty_to_unsigned lt ) lt )
+    ( ty_to_unsigned lt ) ( nurl_str_cat lt `` ) )
     res
 }
 
@@ -3329,7 +3344,7 @@
 // real: released compilers freed the temp handed to vec_push [s].
 @ mem_consumer_copy_safe s fname → b {
     ( str_contains_word
-    `nurl_sym_def nurl_sym_set nurl_sym_append nurl_sym_get nurl_sym_get2 nurl_sym_len nurl_sym_len2 nurl_set_last_type nurl_print nurl_println nurl_eprintln puts nurl_str_len nurl_str_to_int nurl_str_to_float nurl_str_find nurl_str_starts nurl_str_ends seq str_contains_word str_word_index count_words nurl_str_cat nurl_str_cat3 nurl_str_cat4 nurl_str_slice nurl_str_int nurl_read_file nurl_lex_new nurl_file_exists emit`
+    `nurl_sym_def nurl_sym_set nurl_sym_append nurl_sym_get nurl_sym_get2 nurl_sym_len nurl_sym_len2 nurl_set_last_type nurl_print nurl_println nurl_eprintln puts nurl_str_len nurl_str_to_int nurl_str_to_float nurl_str_find nurl_str_starts nurl_str_ends seq str_contains_word str_word_index count_words nurl_str_cat nurl_str_cat3 nurl_str_cat4 nurl_str_slice nurl_str_int nurl_read_file nurl_lex_new nurl_file_exists emit die die_stmt warn bck_esc_warn bck_emit_error`
     fname )
 }
 
@@ -6310,8 +6325,10 @@
         //     (`__ret_owned` = str implies its body was compiled, so its
         //     sink / inferred-escape indices are populated — check them
         //     for THIS argument position), or
-        //   - a hand-audited copy/read-only runtime consumer
-        //     (mem_consumer_copy_safe).
+        //   - a hand-audited copy/read-only consumer
+        //     (mem_consumer_copy_safe) — which includes the diagnostic
+        //     printers: they only read the message, and being defined
+        //     below their call sites they have no body summary to trust.
         // Everything else keeps the temp alive: into a storing callee
         // (vec_push) the temp's ownership has MOVED — freeing it left
         // the container holding freed memory in released compilers —
@@ -6834,6 +6851,13 @@
     // sibling is UNIFORMLY owned instead of publishing "not owned" and
     // leaking the sibling's buffer — 16k per self-compile in
     // `? == 0 ( nurl_str_len lt ) `i64` lt` alone).
+    // An UNTRACKED ident arm is deliberately NOT copied. `s` is also
+    // NURL's spelling for an opaque handle (a sqlite connection reaches
+    // a binding as `# s <i64>`), and a handle is not a NUL-terminated
+    // string: copying one hands the callee a garbage pointer. Only a
+    // tracked owned string (or a literal) is provably copyable, so a
+    // mixed `? c ( owner ) param` join keeps publishing "not owned" and
+    // the owning arm's buffer leaks — the standing leak-not-UAF trade.
     ? & & & & & == 0 g_did_ret ( seq ( nurl_llty tt2 ) `i8*` )
     ! t_alias
     ! ( seq t_str_flag `str` )
@@ -11192,8 +11216,28 @@
         // birth-tracking is sound. Immutable literal bindings stay
         // untracked: nothing owned can ever flow into them.
         : ~ b lit_track F
-        ? & & & != 0 g_auto_drop_strings is_mutable
-        == bck_rhs_tt TT_STR ( seq ( nurl_llty vt ) `i8*` )
+        // A MUTABLE string binding owns its buffer from birth, whatever
+        // the initialiser was. It used to hold only for a literal
+        // initialiser, so `: ~ s out a` (a borrowed parameter) stayed
+        // untracked forever — and every owned value a later `= out …`
+        // stored in it leaked, because the assignment rules keep the
+        // heap-owned invariant only for a binding that already has one.
+        // An owned call needs no copy (it is already a fresh owner), and
+        // a `#`-cast initialiser is excluded: `# s` reinterprets a raw
+        // pointer (possibly NULL) as a string, which strdup must not
+        // touch. Immutable bindings stay borrows — nothing owned can
+        // ever flow into them.
+        // A binding off a mutable string GLOBAL copies even when it is
+        // immutable: the global owns its buffer and frees it on the next
+        // assignment, so a borrow would dangle across the save/restore
+        // idiom (`: s saved g … = g x … = g saved`) that made the flag
+        // worth having.
+        : b rhs_is_owned_global & ( is_ident_tok bck_rhs_tt )
+        != 0 ( nurl_sym_len syms ( nurl_str_cat bck_rhs_val `__ownflag` ) )
+        ? & & & != 0 g_auto_drop_strings
+        | & is_mutable == bck_rhs_tt TT_STR rhs_is_owned_global
+        ( seq ( nurl_llty vt ) `i8*` )
+        == 0 ( nurl_sym_len syms `__last_call_ret_owned__` )
         { : s __ld ( nurl_cg_reg cg )
             ( nurl_print `  ` ) ( nurl_print __ld )
             ( nurl_print ` = call i8* @strdup(i8* ` ) ( nurl_print val )
@@ -11387,11 +11431,16 @@
                 ( nurl_sym_def syms `__last_slice_owned__` `` )
                 : ~ s val ( gen_expr lex syms cg )
                 : s vt ( nurl_get_last_type )
-                // Birth-tracking for a mutable string binding with a
-                // LITERAL initialiser — see the type-inference path.
+                // A mutable string binding owns its buffer from birth,
+                // whatever the initialiser was — see the type-inference
+                // path for why, and for the two exclusions.
                 : ~ b lit_track F
-                ? & & & != 0 g_auto_drop_strings is_mutable
-                == bck_rhs_tt TT_STR ( seq ( nurl_llty ptype ) `i8*` )
+                : b rhs_is_owned_global & ( is_ident_tok bck_rhs_tt )
+                != 0 ( nurl_sym_len syms ( nurl_str_cat bck_rhs_val `__ownflag` ) )
+                ? & & & != 0 g_auto_drop_strings
+                | & is_mutable == bck_rhs_tt TT_STR rhs_is_owned_global
+                ( seq ( nurl_llty ptype ) `i8*` )
+                == 0 ( nurl_sym_len syms `__last_call_ret_owned__` )
                 { : s __ld ( nurl_cg_reg cg )
                     ( nurl_print `  ` ) ( nurl_print __ld )
                     ( nurl_print ` = call i8* @strdup(i8* ` ) ( nurl_print val )
@@ -11619,8 +11668,11 @@
         // reference outlives its referent — an escape.
         ( bck_esc_assign lex syms bck_line name ( bck_expr_refdepth syms
         ? ( is_ident_tok bck_rhs_tt ) bck_rhs_val `` ) )
-        : b rhs_is_owned_call & lhs_is_owned_str
-        ( seq ( nurl_sym_get syms `__last_call_ret_owned__` ) `str` )
+        // The raw marker, ungated by the LHS: a global string LHS is not a
+        // tracked binding, but it still needs to know whether the incoming
+        // pointer is heap-owned (see the `__ownflag` block below).
+        : b rhs_is_owned_call2 ( seq ( nurl_sym_get syms `__last_call_ret_owned__` ) `str` )
+        : b rhs_is_owned_call & lhs_is_owned_str rhs_is_owned_call2
         ? rhs_is_owned_call
         { : s old_reg ( nurl_cg_reg cg )
             ( nurl_print `  ` ) ( nurl_print old_reg )
@@ -11706,6 +11758,7 @@
         // its drop, name owns (and, being untracked, leaks) its own
         // buffer — leak-not-UAF, the standing conservative trade.
         // (The tracked-lhs ident case already copied above.)
+        : ~ b lhs_glob_owned F
         ? & & & & != 0 g_auto_drop_strings ! lhs_is_owned_str
         ( seq ( nurl_llty vt ) `i8*` ) ( is_ident_tok bck_rhs_tt )
         rhs_id_tracked
@@ -11713,6 +11766,36 @@
             ( nurl_print `  ` ) ( nurl_print dup_reg2 )
             ( nurl_print ` = call i8* @strdup(i8* ` ) ( nurl_print val ) ( nurl_print `)` ) ( emit_dbg_eol )
             = val dup_reg2
+            = lhs_glob_owned T
+        }
+        {}
+        // A mutable string GLOBAL owns its buffer: free the old value —
+        // through the companion flag, since the initial value is .rodata —
+        // and record whether the incoming pointer is heap-owned. `select`
+        // rather than a branch keeps this inside the current basic block
+        // (an assignment in a `?` arm must not split it), and nurl_free
+        // ignores a null pointer.
+        ? & != 0 ( nurl_sym_len syms ( nurl_str_cat name `__ownflag` ) )
+        ( seq ( nurl_llty vt ) `i8*` )
+        { : s __gf ( nurl_cg_reg cg )
+            : s __go ( nurl_cg_reg cg )
+            : s __gc ( nurl_cg_reg cg )
+            : s __gs ( nurl_cg_reg cg )
+            ( nurl_print `  ` ) ( nurl_print __gf )
+            ( nurl_print ` = load i64, i64* @` ) ( nurl_print name )
+            ( nurl_print `__nurlown\n` )
+            ( nurl_print `  ` ) ( nurl_print __go )
+            ( nurl_print ` = load i8*, i8** @` ) ( nurl_print name ) ( nurl_print `\n` )
+            ( nurl_print `  ` ) ( nurl_print __gc )
+            ( nurl_print ` = icmp ne i64 ` ) ( nurl_print __gf ) ( nurl_print `, 0\n` )
+            ( nurl_print `  ` ) ( nurl_print __gs )
+            ( nurl_print ` = select i1 ` ) ( nurl_print __gc )
+            ( nurl_print `, i8* ` ) ( nurl_print __go ) ( nurl_print `, i8* null\n` )
+            ( nurl_print `  call void @nurl_free(i8* ` ) ( nurl_print __gs )
+            ( nurl_print `)` ) ( emit_dbg_eol )
+            ( nurl_print `  store i64 ` )
+            ( nurl_print ? | lhs_glob_owned rhs_is_owned_call2 `1` `0` )
+            ( nurl_print `, i64* @` ) ( nurl_print name ) ( nurl_print `__nurlown\n` )
         }
         {}
         // Same for a moved user `% Drop` binding: `= name x` transfers x's
@@ -16326,7 +16409,7 @@
     // index of any parameter returned directly; merged into
     // g_fn_ret_param[fname] after the body.
     ( nurl_sym_def syms `__fn_ret_param__` `` )
-    : s last ( gen_block_ret lex syms cg )
+    : ~ s last ( gen_block_ret lex syms cg )
     // Type of the value the body actually falls off with. A body whose
     // tail is a `die` block (or that returned on every path) produces
     // NO fall-off value — its type is void — and must not be judged by
@@ -16451,6 +16534,9 @@
         // poisoned every such function — `parse_type_base`'s trailing
         // `{ ( die … ) }` un-owned the whole type-parser family, and 20k
         // type strings per self-compile leaked at its callers.
+        // When the pre-scan promised an owned result, an unproven tail is
+        // COPIED here rather than poisoning the marker — gen_ret's twin,
+        // and the other half of what makes ownership a signature property.
         ? & __has_fall == 0 ( nurl_str_len skip_str_ptr )
         { ? ( seq ( nurl_sym_get syms `__last_call_ret_owned__` ) `str` )
             { ( nurl_sym_def syms `__fn_ret_str_owned__` `1` ) }
@@ -16825,6 +16911,33 @@
     ( nurl_sym_def syms `__fn_params__` `` )
 }
 
+// Free the final value of every owning string global before main returns,
+// through the same `__nurlown` flag the assignment path maintains — the
+// initial value is a .rodata literal and freeing a string constant is a
+// SEGV. Emitted with `select` rather than a branch so the wrapper stays
+// one basic block.
+@ emit_owned_global_release → v {
+    ? == 0 g_auto_drop_strings { ^ v } {}
+    : ~ s rest ( nurl_str_cat g_owned_globals `` )
+    : ~ i k 0
+    ~ != 0 ( nurl_str_len rest ) {
+        : s g ( str_first_word rest )
+        = rest ( str_skip_word rest )
+        : s n ( nurl_str_int k )
+        = k + k 1
+        ( nurl_print `  %_gf` ) ( nurl_print n )
+        ( nurl_print ` = load i64, i64* @` ) ( nurl_print g ) ( nurl_print `__nurlown\n` )
+        ( nurl_print `  %_gv` ) ( nurl_print n )
+        ( nurl_print ` = load i8*, i8** @` ) ( nurl_print g ) ( nurl_print `\n` )
+        ( nurl_print `  %_gc` ) ( nurl_print n )
+        ( nurl_print ` = icmp ne i64 %_gf` ) ( nurl_print n ) ( nurl_print `, 0\n` )
+        ( nurl_print `  %_gs` ) ( nurl_print n )
+        ( nurl_print ` = select i1 %_gc` ) ( nurl_print n )
+        ( nurl_print `, i8* %_gv` ) ( nurl_print n ) ( nurl_print `, i8* null\n` )
+        ( nurl_print `  call void @nurl_free(i8* %_gs` ) ( nurl_print n ) ( nurl_print `)\n` )
+    }
+}
+
 @ emit_main_wrapper s ret_ty → v {
     // Synthetic C-ABI wrapper. It CALLS the module-defined `@_nurl_main`,
     // which the optimizer may inline — so under --g it needs a subprogram
@@ -16837,9 +16950,12 @@
     ( emit `entry:` )
     ( emit_call `call void @nurl_init(i32 %argc, i8** %argv)` )
     ? ( seq ret_ty `void` )
-    { ( emit_call `call void @_nurl_main()` ) ( emit_call_term `ret i32 0` ) }
+    { ( emit_call `call void @_nurl_main()` )
+        ( emit_owned_global_release )
+        ( emit_call_term `ret i32 0` ) }
     { ( emit_call `%_ret = call i64 @_nurl_main()` )
         ( emit_inst `%_exit = trunc i64 %_ret to i32` )
+        ( emit_owned_global_release )
         ( emit_call_term `ret i32 %_exit` ) }
     ( emit `}` ) ( emit `` )
     ( dbg_synth_end )
@@ -17113,7 +17229,31 @@
             // assignment to an immutable global (the grammar lists `s` as an
             // updatable mutable-global type).
             ? is_mutable
-            { ( nurl_sym_def syms ( nurl_str_cat cname `__mutable` ) `1` ) }
+            { ( nurl_sym_def syms ( nurl_str_cat cname `__mutable` ) `1` )
+                // A mutable string global outlives every function, so its
+                // buffer has no scope to be dropped in — `= g x` simply
+                // overwrote the pointer and orphaned whatever was there
+                // (emit_one_instantiation's DWARF override alone leaked 73
+                // buffers per import-heavy compile). It cannot free the old
+                // value unconditionally either: the INITIAL value is the
+                // .rodata literal above, and freeing a string constant is a
+                // SEGV. So each mutable string global carries a companion
+                // flag recording whether its current pointer is heap-owned;
+                // the assignment path frees through it. The flag is read and
+                // fed to nurl_free via a `select` (never a branch): an
+                // assignment inside a `?` arm must not split the arm's basic
+                // block, or the join's phi would name the wrong label.
+                ? != 0 g_auto_drop_strings
+                { ( nurl_print `@` ) ( nurl_print cname )
+                    ( nurl_print `__nurlown = global i64 0\n\n` )
+                    ( nurl_sym_def syms ( nurl_str_cat cname `__ownflag` ) `1` )
+                    // Remember it for the process-exit release in main:
+                    // a global outlives every scope, so its LAST value has
+                    // nowhere else to be dropped.
+                    = g_owned_globals ? == 0 ( nurl_str_len g_owned_globals )
+                    ( nurl_str_cat cname `` )
+                    ( nurl_str_cat3 g_owned_globals ` ` cname ) }
+                {} }
             {}
         }
         // Integer const-expression RHS (operator-led): fold to a single
@@ -18523,7 +18663,17 @@
 // messages and goldens are unchanged.
 @ __canon_import_key s path → s {
     : s r ( realpath path # *u 0 )
-    ? != # i r 0 { ^ r } {}
+    // realpath(3) mallocs its result ONLY when the second argument is
+    // NULL; given a caller-supplied buffer it returns that buffer
+    // instead. Ownership is therefore a property of the CALL SITE, not
+    // of the declaration, so it cannot be recorded as a `__ret_owned`
+    // marker on `realpath` — this site knows it owns the buffer and
+    // hands it over explicitly.
+    ? != # i r 0
+    { : s out ( nurl_str_cat r `` )
+        ( nurl_free # s r )
+        ^ out }
+    {}
     ^ ( nurl_str_cat path `` )
 }
 
@@ -18750,6 +18900,17 @@
         // 2.8 MB on a single import-heavy compile.
         ( nurl_sym_def syms `__canon_import_key__ret_owned` `str` )
         ( nurl_sym_def syms `__norm_int_lit__ret_owned` `str` )
+        // Diagnostic-text builders. Each mallocs its result and returns it
+        // through a `# s` cast, which is exactly the shape the signature
+        // promise waives (a cast-to-string is normally a BORROWED raw
+        // pointer) — so their ownership has to be stated here, like the
+        // other raw-buffer builders above. Missing, they leaked one line
+        // buffer plus one caret per warning printed.
+        ( nurl_sym_def syms `nurl_lex_line_text__ret_owned` `str` )
+        ( nurl_sym_def syms `nurl_diag_caret__ret_owned` `str` )
+        ( nurl_sym_def syms `__src_line_text__ret_owned` `str` )
+        ( nurl_sym_def syms `nurl_lex_line_text_at__ret_owned` `str` )
+        ( nurl_sym_def syms `__suggest_ident__ret_owned` `str` )
         ( nurl_sym_def syms `mem_collect_struct_fields_for__ret_owned` `str` )
         // Import-path resolution and the aggregate/type helpers all
         // live below their callers.
@@ -21083,4 +21244,9 @@
     ( nurl_sym_free g_dbg_file_syms )
     ( nurl_sym_free g_dbg_type_syms )
     ( nurl_sym_free g_dbg_blob_syms )
+    // The codegen counter block (nurl_cg_new's 16 bytes) was never
+    // released. -O2 + LTO happened to elide the allocation, so the leak
+    // only showed once an unrelated change moved the IR enough for the
+    // optimiser to keep it — the reason this campaign measures at -O0 too.
+    ( nurl_free # s cg )
 }
