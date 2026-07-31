@@ -394,6 +394,16 @@ $results = $names | ForEach-Object -ThrottleLimit $Jobs -Parallel {
         $sign = if ($_.SideIndicator -eq '<=') { '-' } else { '+' }
         "$sign $($_.InputObject)"
     }) -join "`n"
+    # Compare-Object matches line SETS, not sequences, so a pure
+    # REORDERING fails the byte compare above and produces no rows here —
+    # a FAIL printed under an empty diff, which reads like a harness bug.
+    # Name the actual difference instead. (stdout_flush_order hit this:
+    # the runner concatenates the child's two pipes rather than
+    # interleaving them, so its lines arrive in a different order than
+    # the posix golden records.)
+    if ([string]::IsNullOrWhiteSpace($diff)) {
+        $diff = '  (same lines, different order — golden and actual differ only in sequence)'
+    }
     return [pscustomobject]@{ Name = $name; Verdict = 'FAIL'; Diff = $diff }
 }
 

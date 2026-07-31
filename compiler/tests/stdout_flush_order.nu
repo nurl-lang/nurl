@@ -14,8 +14,17 @@
 //      program must flush stdout itself before one — same discipline
 //      as mixing printf and write(1, …) in C.
 //
-// The runner captures `> out 2>&1`, so the golden file below IS the
-// interleaving.
+// The POSIX runner captures `> out 2>&1`, so `outputs/` IS the
+// interleaving, and rule 2 is what that golden asserts.
+//
+// `outputs-windows/` records the same run with the lines in a different
+// order, and that is expected rather than a Windows bug: run_tests.ps1
+// reads the child's two pipes separately and concatenates them
+// (`Out = $o.Result + $e.Result`), so no interleaving survives to be
+// compared — every stderr line lands after every stdout line whatever
+// the program did. Rules 1 and 3 still hold there and the Windows
+// golden still pins them; rule 2 is simply unobservable through that
+// harness. Do not "fix" the Windows golden into the POSIX order.
 
 & `libc` @ write i fd s buf i count → i
 

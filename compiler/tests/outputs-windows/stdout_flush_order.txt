@@ -1,0 +1,11 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+1 stdout via nurl_print
+3 stdout again
+5 stdout before a raw write
+6 raw write(2) on fd 1
+7 stdout last
+2 stderr via nurl_eprintln
+4 stderr via nurl_eprint
