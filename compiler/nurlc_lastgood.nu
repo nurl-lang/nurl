@@ -203,8 +203,8 @@
 // parser's lookahead peeks), so we re-parse the spelling instead.
 @ __norm_int_lit s txt → s {
     : i n ( nurl_str_len txt )
-    ? < n 3 { ^ txt } {}
-    ? != ( nurl_str_get txt 0 ) 48 { ^ txt } {}  // not leading '0'
+    ? < n 3 { ^ ( nurl_str_cat txt `` ) } {}
+    ? != ( nurl_str_get txt 0 ) 48 { ^ ( nurl_str_cat txt `` ) } {}  // not leading '0'
     : i c1 ( nurl_str_get txt 1 )
     ? | == c1 120 == c1 88 {  // 0x / 0X
         : ~ i acc 0
@@ -218,7 +218,7 @@
         ~ < i n { = acc + * acc 2 - ( nurl_str_get txt i ) 48 = i + i 1 }
         ^ ( nurl_str_int acc )
     } {}
-    ^ txt
+    ^ ( nurl_str_cat txt `` )
 }
 
 // is_type_start: true if tt can start a type expression.
@@ -5570,6 +5570,14 @@
     ^ F
 }
 
+@ bck_esc_check_call_arg i lex i syms i line s ident s fname → v {
+    ? & != g_borrowck 0 > ( bck_expr_refdepth syms ident ) 0
+    { ( bck_esc_warn lex line ( nurl_str_cat3
+        `passing a value that references a stack binding by pointer to '` fname
+        `' — it escapes the current stack frame and dangles (move it to a heap-backed handle)` ) ) }
+    {}
+}
+
 @ gen_call i lex i syms i cg → s {
     ( nurl_lex_advance lex )
     : ~ s fname ( nurl_lex_val lex )
@@ -10795,14 +10803,6 @@
     }
 }
 
-@ bck_esc_check_call_arg i lex i syms i line s ident s fname → v {
-    ? & != g_borrowck 0 > ( bck_expr_refdepth syms ident ) 0
-    { ( bck_esc_warn lex line ( nurl_str_cat3
-        `passing a value that references a stack binding by pointer to '` fname
-        `' — it escapes the current stack frame and dangles (move it to a heap-backed handle)` ) ) }
-    {}
-}
-
 // ── Statement ──────────────────────────────────────────────────────
 
 // True when a statement with leading token `tt` whose generation left
@@ -11749,6 +11749,17 @@
 // Called after gen_assign has already consumed '='.
 // Precondition: current token is TT_DOT.
 
+// A never-legal store/assign type clash between a value's LLVM type `vt`
+// and the declared destination type `dt`: float-vs-non-float, a different
+// named struct by value, or String vs raw C-string. Integer width /
+// signedness / pointer-stash coercions are legal and NOT flagged. Shared
+// by gen_assign (reassignment) and gen_field_store (field writes).
+@ __store_type_clash s vt s dt → b {
+    ? | == 0 ( nurl_str_len vt ) == 0 ( nurl_str_len dt ) { ^ F } {}
+    ^ | | != ( is_float_ty vt ) ( is_float_ty dt )
+    ( __arg_named_struct_mismatch vt dt ) ( __arg_str_cstr_mismatch vt dt )
+}
+
 @ gen_field_store i lex i syms i cg → s {
     ( nurl_lex_advance lex )  // consume '.'
     // Save object name before gen_expr consumes the token (needed for struct-by-value alloca lookup)
@@ -12022,17 +12033,6 @@
     ? ( seq ty `i16` ) { ^ T } {}
     ? ( seq ty `i32` ) { ^ T } {}
     ^ ( seq ty `i64` )
-}
-
-// A never-legal store/assign type clash between a value's LLVM type `vt`
-// and the declared destination type `dt`: float-vs-non-float, a different
-// named struct by value, or String vs raw C-string. Integer width /
-// signedness / pointer-stash coercions are legal and NOT flagged. Shared
-// by gen_assign (reassignment) and gen_field_store (field writes).
-@ __store_type_clash s vt s dt → b {
-    ? | == 0 ( nurl_str_len vt ) == 0 ( nurl_str_len dt ) { ^ F } {}
-    ^ | | != ( is_float_ty vt ) ( is_float_ty dt )
-    ( __arg_named_struct_mismatch vt dt ) ( __arg_str_cstr_mismatch vt dt )
 }
 
 // Emit an integer-width bridge `%r = trunc|sext|zext <from> <val> to
@@ -13008,7 +13008,7 @@
         // For payload fields (idx > 0): conversion depends on aggregate type.
         // opt/res types ({ i1, ... }) need i64 coercion; enum types need ptr coercion.
         : ~ s actual_fval ( nurl_str_cat fval `` )
-        : ~ s actual_fty fty
+        : ~ s actual_fty ( nurl_str_cat fty `` )
         // The insertvalue index: normally the literal position, but a result
         // payload (idx 1) routes to field 1 (Ok) or field 2 (Err) by tag.
         : ~ i ins_idx idx
@@ -13020,7 +13020,7 @@
         { : i res_tgt ? res_is_ok 1 2
             : s res_tgt_ty ( compound_field_type agg_ty res_tgt )
             = actual_fval ( coerce_store_val lex fval fty res_tgt_ty syms cg )
-            = actual_fty res_tgt_ty
+            = actual_fty ( nurl_str_cat res_tgt_ty `` )
             = ins_idx res_tgt }
         {}
         ? & > idx 0 ! agg_is_res
@@ -15637,7 +15637,7 @@
     ~ & != ( nurl_lex_type lex2 ) TT_ARROW != ( nurl_lex_type lex2 ) TT_EOF {
         ( nurl_lex_advance lex2 )
     }
-    : ~ s ret_ty `i64`
+    : ~ s ret_ty ( nurl_str_cat `i64` `` )
     ? == ( nurl_lex_type lex2 ) TT_ARROW
     { ( nurl_lex_advance lex2 )
         = ret_ty ( parse_type lex2 )
@@ -18374,7 +18374,7 @@
 }
 
 @ __norm_import_path s path → s {
-    : ~ s cur path
+    : ~ s cur ( nurl_str_cat path `` )
     : ~ b done F
     ~ ! done {
         : i n ( nurl_str_len cur )
@@ -18446,7 +18446,7 @@
         : s joined ( nurl_str_cat3 root `/` cand )
         ? == ( nurl_file_exists joined ) 1 { ^ joined } {}
     } {}
-    ^ cur
+    ^ ( nurl_str_cat cur `` )
 }
 
 // Canonical form of a RESOLVED import path, used ONLY as the dedup key in
@@ -18460,7 +18460,7 @@
 @ __canon_import_key s path → s {
     : s r ( realpath path # *u 0 )
     ? != # i r 0 { ^ r } {}
-    ^ path
+    ^ ( nurl_str_cat path `` )
 }
 
 @ mem_is_imported i syms s path → b {
@@ -18681,6 +18681,17 @@
         ( nurl_sym_def syms `__tok_src_text__ret_owned` `str` )
         ( nurl_sym_def syms `subst_source__ret_owned` `str` )
         ( nurl_sym_def syms `subst_source_raw__ret_owned` `str` )
+        // Import-path helpers. __canon_import_key wraps realpath(),
+        // which mallocs a PATH_MAX buffer per import per scan pass —
+        // 2.8 MB on a single import-heavy compile.
+        ( nurl_sym_def syms `__canon_import_key__ret_owned` `str` )
+        ( nurl_sym_def syms `__norm_int_lit__ret_owned` `str` )
+        ( nurl_sym_def syms `mem_collect_struct_fields_for__ret_owned` `str` )
+        // Import-path resolution and the aggregate/type helpers all
+        // live below their callers.
+        ( nurl_sym_def syms `__norm_import_path__ret_owned` `str` )
+        ( nurl_sym_def syms `__import_nu_fallback__ret_owned` `str` )
+        ( nurl_sym_def syms `compound_field_type__ret_owned` `str` )
     }
     {}
     ( nurl_sym_def syms `malloc` `i8*` )
@@ -19001,7 +19012,7 @@
     ~ & != ( nurl_lex_type lex2 ) TT_ARROW != ( nurl_lex_type lex2 ) TT_EOF {
         ( nurl_lex_advance lex2 )
     }
-    : ~ s ret `i64`
+    : ~ s ret ( nurl_str_cat `i64` `` )
     ? == ( nurl_lex_type lex2 ) TT_ARROW
     { ( nurl_lex_advance lex2 )
         = ret ( parse_type lex2 )
@@ -19518,7 +19529,7 @@
         = params ? == 0 ( nurl_str_len params ) ( nurl_str_cat pt `` ) ( nurl_str_cat3 params `|` pt )
         ? ( is_ident_tok ( nurl_lex_type sx ) ) { ( nurl_lex_advance sx ) } {}  // param name
     }
-    : ~ s ret `void`
+    : ~ s ret ( nurl_str_cat `void` `` )
     ? == ( nurl_lex_type sx ) TT_ARROW { ( nurl_lex_advance sx ) = ret ( parse_type sx ) } {}
     : s head ( nurl_str_cat4 ret `|` recvmode ( nurl_str_cat `|` recv_llvm ) )
     : s __dsr ? == 0 ( nurl_str_len params ) ( nurl_str_cat head `` ) ( nurl_str_cat3 head `|` params )
