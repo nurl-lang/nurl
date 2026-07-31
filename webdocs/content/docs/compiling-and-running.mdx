@@ -60,6 +60,26 @@ Link against `stdlib/runtime.native.o`, not `stdlib/runtime.o` — after a
 normal build the latter is LLVM bitcode (for link-time optimization), and a
 plain `clang` link rejects it with *"file format not recognized"*.
 
+<Accordions>
+  <Accordion title="Why is the .ll smaller than the code I imported?">
+    `nurlc` emits only the functions your `main` can actually reach. An
+    import brings in a whole module — importing `stdlib/ext/json.nu` for
+    `json_parse` also brings the pretty-printer, the comparison helpers
+    and the float formatter — and handing all of that to `clang` means
+    paying for optimizing code the linker then throws away. Dropping it
+    at the source of the IR instead is worth 30–40% of the `clang` step
+    on a stdlib-heavy program.
+
+    The binary is unchanged: link-time optimization was already removing
+    the same code, just later. Reachability is computed over the finished
+    IR, so closures, generic instantiations, destructors and dynamic
+    trait vtables are all handled without special cases, and a file with
+    no `main` — a module you intend to link into something else — is
+    left whole. `nurlc --no-dce` emits everything, which is what you want
+    when diffing IR against an older compiler.
+  </Accordion>
+</Accordions>
+
 ## If you installed the prebuilt toolchain
 
 The prebuilt `curl | sh` installer gives you `nurlc`, `nurlpkg`, and
