@@ -9414,10 +9414,10 @@
 // which structurally excludes stdlib's incremental-build-then-`^ binding`
 // returns (they never register agg owned fields on the returned struct).
 @ mem_ret_struct_transfer i syms s lt s ret_ident → s {
-    ? == 0 g_auto_drop_strings { ^ `` } {}
+    ? == 0 g_auto_drop_strings { ^ ( nurl_str_cat `` `` ) } {}
     // Only a named non-pointer struct return can carry owned fields.
-    ? | == 0 ( nurl_str_len lt ) != ( nurl_str_get lt 0 ) 37 { ^ `` } {}
-    ? == ( nurl_str_get lt - ( nurl_str_len lt ) 1 ) 42 { ^ `` } {}
+    ? | == 0 ( nurl_str_len lt ) != ( nurl_str_get lt 0 ) 37 { ^ ( nurl_str_cat `` `` ) } {}
+    ? == ( nurl_str_get lt - ( nurl_str_len lt ) 1 ) 42 { ^ ( nurl_str_cat `` `` ) } {}
     : s rid_ptr ( nurl_sym_get2 syms ret_ident `__ptr` )
     : s from_binding ( mem_collect_struct_fields_for syms rid_ptr )
     ? != 0 ( nurl_str_len from_binding )
@@ -9430,13 +9430,13 @@
     : s from_agg ( nurl_sym_get syms `__last_agg_owned_fields__` )
     ? != 0 ( nurl_str_len from_agg )
     { ( nurl_sym_def syms `__fn_ret_struct_owned__` from_agg )
-        ^ `` }
+        ^ ( nurl_str_cat `` `` ) }
     {}
     : s from_call ( nurl_sym_get syms `__last_call_ret_struct_fields__` )
     ? != 0 ( nurl_str_len from_call )
     { ( nurl_sym_def syms `__fn_ret_struct_owned__` from_call ) }
     {}
-    ^ ``
+    ^ ( nurl_str_cat `` `` )
 }
 
 // Collect a returned struct binding's owned fields, reformatted from the
@@ -18711,6 +18711,12 @@
         ( nurl_sym_def syms `__norm_import_path__ret_owned` `str` )
         ( nurl_sym_def syms `__import_nu_fallback__ret_owned` `str` )
         ( nurl_sym_def syms `compound_field_type__ret_owned` `str` )
+        // Fresh on every path now that its empty returns are copies.
+        // Undeclared it looked like a borrow-returning call, so every
+        // `= x ( mem_ret_struct_transfer … )` dup'd the result and
+        // orphaned the original — 3.4k allocations per import-heavy
+        // compile that LLVM only hid at -O2.
+        ( nurl_sym_def syms `mem_ret_struct_transfer__ret_owned` `str` )
     }
     {}
     ( nurl_sym_def syms `malloc` `i8*` )
