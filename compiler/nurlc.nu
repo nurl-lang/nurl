@@ -6496,7 +6496,7 @@
         : i __slot ( dyn_method_slot __dtrait fname )
         ? >= __slot 0
         { : s __dynty ( nurl_str_cat `%dyn.` __dtrait )
-            : ~ s __fat first_arg_val
+            : ~ s __fat ( nurl_str_cat first_arg_val `` )
             ? __dptr
             { : s __lf ( nurl_cg_reg cg )
                 ( nurl_print `  ` ) ( nurl_print __lf ) ( nurl_print ` = load ` ) ( nurl_print ( nurl_llty __dynty ) ) ( nurl_print `, ` ) ( nurl_print ( nurl_llty __dynty ) ) ( nurl_print `* ` ) ( nurl_print first_arg_val ) ( nurl_print `\n` )
@@ -6877,7 +6877,7 @@
             ( mem_drop_new_struct_fields syms cg old_structs_t )
             ( mem_drop_new_user_drops syms cg old_user_t )
             ? != 0 g_fn_slice_decls { ( mem_drop_new_slices syms cg old_slices_t ) } {} }
-        { ? & != 0 g_auto_drop_strings == g_bck_closure_depth 0
+        { ? != 0 g_auto_drop_strings
             { ( mem_defer_new_strings syms old_strs_t ) } {} }
         ( mem_drop_new_closure_envs syms cg old_closure_t )
         ( nurl_print `  br label %` ) ( nurl_print lend ) ( emit_dbg_eol )
@@ -6951,7 +6951,7 @@
             ( mem_drop_new_struct_fields syms cg old_structs_e )
             ( mem_drop_new_user_drops syms cg old_user_e )
             ? != 0 g_fn_slice_decls { ( mem_drop_new_slices syms cg old_slices_e ) } {} }
-        { ? & != 0 g_auto_drop_strings == g_bck_closure_depth 0
+        { ? != 0 g_auto_drop_strings
             { ( mem_defer_new_strings syms old_strs_e ) } {} }
         ( mem_drop_new_closure_envs syms cg old_closure_e )
         ( nurl_print `  br label %` ) ( nurl_print lend ) ( emit_dbg_eol )
@@ -7295,7 +7295,7 @@
 // to the next alternative — the last falling through to `next_label`.
 @ emit_or_chain i cg s tag_reg s or_names s tag_ok_label s next_label s first_label → v {
     : ~ s rest ( nurl_str_cat or_names `` )
-    : ~ s cur_lbl first_label
+    : ~ s cur_lbl ( nurl_str_cat first_label `` )
     ~ != 0 ( nurl_str_len rest ) {
         : s vname ( str_first_word rest )
         = rest ( str_skip_word rest )
@@ -7808,8 +7808,8 @@
                 // — substitute pt0 with the struct's LLVM type so the alloca below
                 // stores the reconstructed value at the right type. This lets the
                 // user write `T j → ...` and have `j : %Json`.
-                : ~ s pt0_eff pt0
-                : ~ s pr0_eff pr0
+                : ~ s pt0_eff ( nurl_str_cat pt0 `` )
+                : ~ s pr0_eff ( nurl_str_cat pr0 `` )
                 : ~ b did_reconstruct F
                 // The legacy i64-unbox reconstruction only applies to the old
                 // `{ i1, i64 }` result squeeze; a wide `{ i1, T, E }` result is
@@ -7966,8 +7966,12 @@
                         {} }
                     {} }
                 {}
-                : s cv0 ? did_reconstruct pr0_eff
-                ? pt0_is_opt_bool pr0 ( nurl_cg_reg cg )
+                // Every arm owns its value so the join is uniformly
+                // owned (pr0_eff / pr0 are tracked registers, the
+                // cg_reg call is fresh) — a mixed join here published
+                // "not owned" and leaked the fresh arm per match.
+                : s cv0 ? did_reconstruct ( nurl_str_cat pr0_eff `` )
+                ? pt0_is_opt_bool ( nurl_str_cat pr0 `` ) ( nurl_cg_reg cg )
                 ? pt0_is_opt_bool {} {
                     ? ( is_float_ty pt0 )
                     { ( emit_enum_float_extract cv0 pt0 pr0 cg ) }
@@ -8275,7 +8279,7 @@
                 ( nurl_lex_set_pos lex guard_pos )
                 : s gv ( gen_expr lex syms cg )
                 : s gvt ( nurl_get_last_type )
-                : ~ s gcond gv
+                : ~ s gcond ( nurl_str_cat gv `` )
                 ? ( seq gvt `i1` ) {} {
                     : s gz ( nurl_cg_reg cg )
                     ( nurl_print `  ` ) ( nurl_print gz )
@@ -8376,8 +8380,7 @@
                 ( mem_drop_new_struct_fields syms cg old_structs_m )
                 ( mem_drop_new_user_drops syms cg old_user_m )
                 ? != 0 g_fn_slice_decls { ( mem_drop_new_slices syms cg old_slices_m ) } {} }
-            { ? & & != 0 g_auto_drop_strings == arm_did_ret 0
-                == g_bck_closure_depth 0
+            { ? & != 0 g_auto_drop_strings == arm_did_ret 0
                 { ( mem_defer_new_strings syms old_strs_m ) } {} }
             ? == arm_did_ret 0
             { ( mem_drop_new_closure_envs syms cg old_closure_m ) } {}
@@ -13292,7 +13295,7 @@
                         ? ( seq decl_pt `float` )
                         {  // f32 slot: ensure the value is `float` (fptrunc a
                             // double literal), then bitcast→i32, zext→i64.
-                            : ~ s fv32 fval
+                            : ~ s fv32 ( nurl_str_cat fval `` )
                             ? ( seq fty `double` )
                             { : s ftr ( nurl_cg_reg cg )
                                 ( nurl_print `  ` ) ( nurl_print ftr )
@@ -13308,7 +13311,7 @@
                             ( nurl_print ` = zext i32 ` ) ( nurl_print b32 ) ( nurl_print ` to i64\n` ) }
                         {  // double slot: ensure the value is `double` (fpext an
                             // f32 value), then bitcast→i64.
-                            : ~ s fv64 fval
+                            : ~ s fv64 ( nurl_str_cat fval `` )
                             ? ( seq fty `float` )
                             { : s fpe ( nurl_cg_reg cg )
                                 ( nurl_print `  ` ) ( nurl_print fpe )
@@ -13327,7 +13330,7 @@
                         // incl. the unsigned u/u16/u32) widens to i64 — zext
                         // when the payload value is unsigned (`fld_unsigned`),
                         // sext otherwise. i64 payloads ride the slot as-is.
-                        : ~ s wide_val fval
+                        : ~ s wide_val ( nurl_str_cat fval `` )
                         ? < ( int_width fty ) 64
                         { : s ext_reg ( nurl_cg_reg cg )
                             : s ext_op ? fld_unsigned ` = zext ` ` = sext `
@@ -14486,8 +14489,19 @@
     // body — its statements must not inline into the enclosing
     // function's list (where they would conflate same-named bindings).
     = g_bck_closure_depth + g_bck_closure_depth 1
+    // A closure body is emitted as its OWN function, so it needs its own
+    // deferred arm-drop list: the enclosing function's epilogue cannot
+    // free slots that live in a different frame. Saving and clearing the
+    // list here (and draining it before the closure's `ret`) is what
+    // lets the arm-local drops run inside closures at all — they used to
+    // be skipped outright, leaking every pointer-valued `?`/`??` arm
+    // local in every closure body.
+    : s __cl_defer_saved ( nurl_sym_get g_fn_escapes `__deferred_drops__` )
+    ( nurl_sym_set g_fn_escapes `__deferred_drops__` `` )
     : s body_val ( gen_stmt lex body_syms cg )
     = g_bck_closure_depth - g_bck_closure_depth 1
+    ? == g_did_ret 0 { ( mem_drain_deferred cg ) } {}
+    ( nurl_sym_set g_fn_escapes `__deferred_drops__` __cl_defer_saved )
 
     // Emit return
     ? == g_did_ret 0
@@ -15535,7 +15549,12 @@
                 ( nurl_str_int pc )
                 ( nurl_str_cat3 sa ` ` ( nurl_str_int pc ) ) }
             {}
-            ( parse_type lexp )
+            // Bind the parsed type: parse_type returns an owned string
+            // and this probe only needs the side effect of consuming
+            // the tokens — discarding the value leaked it per parameter
+            // of every generic signature scanned.
+            : s __psig_ty ( parse_type lexp )
+            ? != 0 ( nurl_str_len __psig_ty ) {} {}
             ? ( is_ident_tok ( nurl_lex_type lexp ) )
             { ( nurl_lex_advance lexp ) }
             {}
