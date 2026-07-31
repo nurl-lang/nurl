@@ -168,6 +168,7 @@ Every pull request, and every push to `main`, runs
 |---|---|
 | build + bootstrap fixed point + test corpus | `build.sh` on Linux x86_64 — stage1 ≡ stage2 byte-identical IR, then the snapshot test suite |
 | self-compile peak-RSS gate | `tools/memgate.sh` — compiling the compiler must stay under the memory budget |
+| self-compile leak gate | `tools/leakgate.sh` — `nurlc compiler/nurlc.nu` must leak nothing under LSan; runs when `compiler/nurlc.nu` changes |
 | examples corpus frontend gate | every program under `examples/` compiles (`tools/check_examples.sh`) |
 | stdlib symbol-collision gate | no two stdlib helpers mangle to the same symbol (`tools/check_stdlib_symbols.sh`) |
 | `nurlfmt --check` | the whole tree is in canonical format (no drift) |
