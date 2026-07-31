@@ -7090,6 +7090,17 @@
     : b __str_res & & & __t_str_ok __e_str_ok __slice_live
     ( seq ( nurl_llty phi_ty ) `i8*` )
     ( nurl_sym_def syms `__last_call_ret_owned__` ? __str_res `str` `` )
+    // Alias provenance of the `?`-result, by the same every-live-arm rule.
+    // A join whose live arms are ALL aliases is itself an alias: its phi
+    // selects between pointers that other bindings already own, so an
+    // enclosing arm must not copy it (the copy would have no consumer —
+    // the join publishes "not owned" — and leak). An arm that dup'd is a
+    // fresh owner, not an alias, so t_dup/e_dup clear it.
+    : b __t_alias_ok ? != 0 tdr T & t_alias ! t_dup
+    : b __e_alias_ok ? != 0 edr T & e_alias ! e_dup
+    : b __alias_res & & & __t_alias_ok __e_alias_ok __slice_live
+    ( seq ( nurl_llty phi_ty ) `i8*` )
+    ( nurl_sym_def syms `__last_value_alias__` ? __alias_res `1` `` )
     result
 }
 
@@ -7437,6 +7448,11 @@
     // copied into the phi (arm_dup below).
     : ~ b all_str_owned T
     : ~ i live_str_arms 0
+    // Alias provenance across the arms, same all-live-arms rule: the
+    // `??`-result aliases storage another binding owns only when EVERY
+    // live arm's value did. An enclosing arm must not copy such a join —
+    // the join publishes "not owned", so the copy would have no consumer.
+    : ~ b all_alias T
     // arms_total / arms_ret count every parsed arm vs. those that ended
     // in `^`. When equal AND a fallback_pred is set, the `match_end`
     // label is reached only through the synthetic last-arm fallthrough
@@ -8321,6 +8337,7 @@
             // pointer dies at the arm scope's nurl_sym_pop.
             ( nurl_sym_def syms `__last_ident_name__` `` )
             ( nurl_sym_def syms `__last_call_ret_owned__` `` )
+            ( nurl_sym_def syms `__last_value_alias__` `` )
             : ~ s arm_result ( gen_stmt lex syms cg )
             = g_in_match_arm __saved_in_arm
             : s arm_type ( nurl_get_last_type )
@@ -8329,6 +8346,7 @@
             : s arm_slice_flag ( nurl_str_cat ( nurl_sym_get syms `__last_slice_owned__` ) `` )
             : s arm_str_flag ( nurl_str_cat ( nurl_sym_get syms `__last_call_ret_owned__` ) `` )
             : s arm_retid ( nurl_str_cat ( nurl_sym_get syms `__last_ident_name__` ) `` )
+            : b arm_alias != 0 ( nurl_sym_len syms `__last_value_alias__` )
             // Tracked-ident arm value → hand the phi a COPY, emitted in
             // this arm's block (gen_cond's t_dup twin): the old cancel-
             // the-drop transfer ran inside the arm's symtab scope, so
@@ -8422,7 +8440,9 @@
                     ? ( seq ( nurl_llty arm_type ) `i8*` )
                     { = live_str_arms + live_str_arms 1
                         ? | ( seq arm_str_flag `str` ) arm_dup {}
-                        { = all_str_owned F } }
+                        { = all_str_owned F }
+                        // A dup'd arm is a fresh owner, not an alias.
+                        ? & arm_alias ! arm_dup {} { = all_alias F } }
                     {}
                     // Fresh-owned-slice provenance: this live arm feeds the
                     // phi. Count it, and clear the aggregate if it isn't fresh.
@@ -8530,6 +8550,9 @@
         ( nurl_sym_def syms `__last_call_ret_owned__`
         ? & & all_str_owned > live_str_arms 0
         ( seq ( nurl_llty phi_type ) `i8*` ) `str` `` )
+        ( nurl_sym_def syms `__last_value_alias__`
+        ? & & all_alias > live_str_arms 0
+        ( seq ( nurl_llty phi_type ) `i8*` ) `1` `` )
         // Borrow propagation only matters when the match YIELDS an auto-Drop
         // enum (the value a `:`-binding might wrongly drop). For any other
         // result type — String, i, … — reset so a match on a borrowed param
@@ -8567,9 +8590,11 @@
         ( __void_reason_clear )
         ( nurl_sym_def syms `__last_value_borrow__` `` )
         ( nurl_sym_def syms `__last_ident_name__` `` )
+        ( nurl_sym_def syms `__last_value_alias__` `` )
         ^ final64
     } {}
     ( nurl_set_last_type `void` )
+    ( nurl_sym_def syms `__last_value_alias__` `` )
     ^ ( nurl_str_cat `undef` `` )
 }
 
@@ -10934,7 +10959,14 @@
     // scope-exit drop owns that buffer, and a join containing such an
     // arm publishes "not owned", so no consumer will ever free the
     // arm's value: copying it in-arm mints a buffer nobody consumes.
-    ( nurl_sym_def syms `__last_value_alias__` ? | == tt TT_COLON == tt TT_EQ `1` `` )
+    // A `?`/`??` statement publishes its OWN alias verdict (a join whose
+    // live arms are all aliases is one too) — clearing it here would make
+    // an enclosing arm copy the join value, and that copy has no consumer.
+    ? | == tt TT_COLON == tt TT_EQ
+    { ( nurl_sym_def syms `__last_value_alias__` `1` ) }
+    { ? | == tt TT_QUEST == tt TT_QUESTQUEST
+        {}
+        { ( nurl_sym_def syms `__last_value_alias__` `` ) } }
     gs_rv
 }
 
