@@ -24,6 +24,7 @@ jobs:
     outputs:
       code: ${{ steps.filter.outputs.code }}
       webdocs: ${{ steps.filter.outputs.webdocs }}
+      compiler: ${{ steps.filter.outputs.compiler }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -41,6 +42,13 @@ jobs:
               - 'webdocs/**'
             code:
               - '!webdocs/**'
+            # The self-compile leak gate (in the sanitizers job) runs when
+            # the compiler source itself changes — that is what owns the
+            # allocations it is asserting about — or when the gate script
+            # changes, so a change to the gate is exercised by its own PR.
+            compiler:
+              - 'compiler/nurlc.nu'
+              - 'tools/leakgate.sh'
 
   build-test:
     name: build + bootstrap fixed point + test corpus
@@ -241,6 +249,20 @@ jobs:
         # sanitised runtime; run_san_tests.sh below is the
         # sanitiser-aware corpus driver.
         run: ./build.sh --san --no-tests
+
+      - name: self-compile leak gate (LSan) — hard, zero tolerance
+        # Runs only when compiler/nurlc.nu (or the gate itself) changed: that
+        # source owns the allocations this asserts about. Reuses the --san
+        # build above, so the whole gate costs ~3 s.
+        #
+        # The July 2026 ownership campaign took `nurlc compiler/nurlc.nu` from
+        # 2,793,226 leaked allocations / 33.4 MB to ZERO (peak RSS 115.9 ->
+        # 18.5 MB). Nothing in CI was watching while those leaks accumulated
+        # one unowned helper at a time, and leak freedom decays the same way.
+        # ANY LeakSanitizer report fails this — there is no budget to raise,
+        # unlike the RSS gate. ASan/UBSan findings in the same run fail too.
+        if: needs.changes.outputs.compiler == 'true'
+        run: ./tools/leakgate.sh
 
       - name: ASan + UBSan corpus
         # Leak detection is opt-in via LSAN_DETECT_LEAKS=1; NURL has

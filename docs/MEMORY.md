@@ -720,11 +720,21 @@ on; they are not two separate tools or two separate builds.
      fails on *any* leak; it locks the per-request leak class
      (None-placeholder allocations, the keepalive-500 response, and
      router/handler closure envs).
+   - `tools/leakgate.sh` — the self-compile. `nurlc compiler/nurlc.nu`
+     under `detect_leaks=1` must report nothing at all. This is the
+     largest NURL program there is, so it exercises the ownership rules
+     at a density no test does; the July 2026 campaign took it from
+     2,793,226 leaked allocations / 33.4 MB to zero (peak RSS
+     115.9 → 18.5 MB) and this is what holds the line. Zero tolerance
+     by design: unlike the RSS gate there is no budget to raise, because
+     the number a leak gate accepts is zero.
 
-   Both pinned checks are now wired into `ci.yml`: the leak-pinned
-   subset runs under `LSAN_DETECT_LEAKS=1` in the sanitizers job, and
-   `tools/leakcheck/run.sh` runs in the build-test job. So a leak
-   regression in the pinned surface fails CI, not just a manual audit.
+   All three pinned checks are wired into `ci.yml`: the leak-pinned
+   subset runs under `LSAN_DETECT_LEAKS=1` in the sanitizers job,
+   `tools/leakcheck/run.sh` runs in the build-test job, and
+   `tools/leakgate.sh` runs in the sanitizers job — reusing its
+   `--san` build, and only when `compiler/nurlc.nu` itself changed. So a
+   leak regression in the pinned surface fails CI, not just a manual audit.
 
 ## 7. Leaks versus memory safety
 

@@ -8,6 +8,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Self-compile leak gate — `nurlc compiler/nurlc.nu` must leak nothing,
+  and CI now enforces it.** The ownership campaign took the self-compile
+  from 2,793,226 leaked allocations / 33.4 MB to zero (peak RSS
+  115.9 → 18.5 MB), and nothing was watching while those leaks accumulated
+  one unowned helper at a time — they decay back the same way. `tools/leakgate.sh`
+  runs the self-compile under ASan+LSan with `detect_leaks=1` and fails on
+  ANY report: no budget to raise, unlike the peak-RSS gate, because the
+  number a leak gate accepts is zero. ASan/UBSan findings in the same run
+  fail it too, and it refuses to run against an uninstrumented build rather
+  than passing while checking nothing. It is a step in the existing
+  `sanitizers` job (already a required check), so it reuses that job's
+  `./build.sh --san` and costs ~3 s; it runs when `compiler/nurlc.nu` — the
+  source that owns the allocations in question — or the gate script itself
+  changed. Verified in both directions: green on the current compiler, and
+  it fails as designed on a pre-campaign build (2.8M allocations reported).
+
 ### Changed
 
 - **MCP build tools answer with links/paths, never an inline base64
