@@ -24,7 +24,12 @@
 
 // 3. Turvallinen tulostus: Käyttää libc:n write-funktiota.
 // Ei välitä null-päätteistä, tulostaa tasan 'len' tavua.
+// write(2) ohittaa stdion puskurin, ja nurl_print on lohkopuskuroitu
+// kun stdout on putki tai tiedosto — joten stdout on tyhjennettävä
+// ennen raakaa kirjoitusta, tai rivit tulostuvat väärässä
+// järjestyksessä. Sama sääntö kuin C:ssä printf + write(1, ...).
 @ safe_print String str → i {
+    ( nurl_flush_stdout )
     ( write 1 . str ptr . str len )
     ( write 1 `\n` 1 )
     ^ 0
