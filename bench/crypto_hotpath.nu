@@ -1,6 +1,7 @@
-// bench/crypto_hotpath.nu — throughput of the AEAD record protection a
-// pure-NURL TLS connection runs every byte through, measured without a
-// socket in the way. Run directly:
+// bench/crypto_hotpath.nu — the two costs a pure-NURL TLS connection is
+// made of, measured without a socket in the way: the AEAD every byte runs
+// through, and the key-exchange scalar multiplies every handshake runs
+// once each. Run directly:
 //
 //     ./nurl.sh -O2 bench/crypto_hotpath.nu bench/_build/crypto && bench/_build/crypto
 //
@@ -12,12 +13,19 @@
 // Both suites TLS 1.3 defines are here: ChaCha20-Poly1305, which is what
 // NURL negotiates by default and what a host with no AES instructions
 // wants, and AES-128-GCM for the servers that pick it.
+//
+// The key-exchange section reports ms/op instead. A handshake sends a
+// key share for both groups, so it pays BOTH of those rows once before
+// a single application byte moves — which is why a short-lived
+// connection (a package fetch, an API call) is dominated by them.
 
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/bytes.nu`
 $ `stdlib/std/bench.nu`
 $ `stdlib/std/chacha20poly1305.nu`
 $ `stdlib/std/aes_gcm.nu`
+$ `stdlib/std/x25519.nu`
+$ `stdlib/std/ecdsa_p256.nu`
 
 // A TLS record's plaintext limit (RFC 8446 §5.1).
 @ record_size → i { ^ 16384 }
@@ -41,6 +49,19 @@ $ `stdlib/std/aes_gcm.nu`
     ( nurl_print `.` )
     ( nurl_print ( nurl_str_int % tenths 10 ) )
     ( nurl_print ` MB/s\n\n` )
+}
+
+// ns/op → ms/op to two decimals, for the handshake-sized operations.
+@ report_ms s label i ns_per_op → v {
+    : i hundredths / ns_per_op 10000
+    ( nurl_print label )
+    ( nurl_print `: ` )
+    ( nurl_print ( nurl_str_int / hundredths 100 ) )
+    ( nurl_print `.` )
+    : i frac % hundredths 100
+    ? < frac 10 { ( nurl_print `0` ) } {}
+    ( nurl_print ( nurl_str_int frac ) )
+    ( nurl_print ` ms\n\n` )
 }
 
 @ main → i {
@@ -97,6 +118,29 @@ $ `stdlib/std/aes_gcm.nu`
     ( report_mbps `aes128_gcm_open` . r4 ns_per_op )
     ( bench_result_free r4 )
 
+    // ── key exchange: one scalar multiply each, per handshake ──────
+    ( nurl_print `Key-exchange scalar multiply (one per handshake, per group):\n\n` )
+    : ( Vec u ) scalar ( filled 32 5 )
+
+    : ( @ v ) b_x255 \ → v {
+        : ( Vec u ) pk ( x25519_base scalar )
+        ( vec_free [u] pk )
+    }
+    : BenchResult r5 ( bench_auto `x25519_base` b_x255 )
+    ( bench_report r5 )
+    ( report_ms `x25519_base` . r5 ns_per_op )
+    ( bench_result_free r5 )
+
+    : ( @ v ) b_p256 \ → v {
+        : ( Vec u ) pk ( p256_ecdh_keygen scalar )
+        ( vec_free [u] pk )
+    }
+    : BenchResult r6 ( bench_auto `p256_ecdh_keygen` b_p256 )
+    ( bench_report r6 )
+    ( report_ms `p256_ecdh_keygen` . r6 ns_per_op )
+    ( bench_result_free r6 )
+
+    ( vec_free [u] scalar )
     ( vec_free [u] key32 )
     ( vec_free [u] key16 )
     ( vec_free [u] nonce )

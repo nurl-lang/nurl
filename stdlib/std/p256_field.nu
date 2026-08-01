@@ -17,11 +17,15 @@ $ `stdlib/core/vec.nu`
 
 // p = 2^256 − 2^224 + 2^192 + 2^96 − 1, little-endian 16-bit limbs.
 @ __p256_mod → ( Vec i ) {
-    : ( Vec i ) v ( vec_with_cap [i] 16 )
-    ( vec_push [i] v 65535 ) ( vec_push [i] v 65535 ) ( vec_push [i] v 65535 ) ( vec_push [i] v 65535 )
-    ( vec_push [i] v 65535 ) ( vec_push [i] v 65535 ) ( vec_push [i] v 0 ) ( vec_push [i] v 0 )
-    ( vec_push [i] v 0 ) ( vec_push [i] v 0 ) ( vec_push [i] v 0 ) ( vec_push [i] v 0 )
-    ( vec_push [i] v 1 ) ( vec_push [i] v 0 ) ( vec_push [i] v 65535 ) ( vec_push [i] v 65535 )
+    // Filled by index, not pushed: p256ct_mul rebuilds this on every one
+    // of the ~3000 field operations a scalar multiply performs, and a
+    // push carries a capacity check the fixed sixteen limbs do not need.
+    : ( Vec i ) v ( __mag16 )
+    : *i q ( vec_data [i] v )
+    = . q 0 65535 = . q 1 65535 = . q 2 65535 = . q 3 65535
+    = . q 4 65535 = . q 5 65535 = . q 6 0 = . q 7 0
+    = . q 8 0 = . q 9 0 = . q 10 0 = . q 11 0
+    = . q 12 1 = . q 13 0 = . q 14 65535 = . q 15 65535
     ^ v
 }
 
@@ -50,10 +54,29 @@ $ `stdlib/core/vec.nu`
 
 @ __ctl ( Vec i ) v i k → i { ?? ( vec_get [i] v k ) { T x → ^ x F _ → ^ 0 } }
 
-@ __zeros16 → ( Vec i ) {
+// A 16-limb magnitude, uninitialised. The hot routines below fill every
+// limb through a raw `*i` before anyone reads one, so there is nothing to
+// zero first — and unlike a push loop, filling by index costs no capacity
+// check per limb.
+@ __mag16 → ( Vec i ) {
     : ( Vec i ) v ( vec_with_cap [i] 16 )
+    : b _l ( vec_set_len [i] v 16 )
+    ^ v
+}
+
+// Limb access in the field routines goes through `*i` rather than
+// `__ctl` / `vec_set`. Every one of these loops is fixed-count with an
+// index the compiler can see is in range, so the bounds check the Vec
+// accessors carry is provably redundant — but it is a real call, and a
+// single Montgomery multiply makes about two thousand of them. That was
+// 61% of a TLS handshake. Constant time is unaffected: the loops keep
+// their fixed trip counts and stay branch-free in the data.
+
+@ __zeros16 → ( Vec i ) {
+    : ( Vec i ) v ( __mag16 )
+    : *i q ( vec_data [i] v )
     : ~ i k 0
-    ~ < k 16 { ( vec_push [i] v 0 ) = k + k 1 }
+    ~ < k 16 { = . q k 0 = k + k 1 }
     ^ v
 }
 
@@ -64,111 +87,132 @@ $ `stdlib/core/vec.nu`
     : i pinv ( __p256_pinv )
     // accumulator t has 18 limbs (n+2), starts zero.
     : ( Vec i ) t ( vec_with_cap [i] 18 )
+    : b _tl ( vec_set_len [i] t 18 )
+    : *i ap ( vec_data [i] a )
+    : *i bp ( vec_data [i] b )
+    : *i tp ( vec_data [i] t )
+    : *i pp ( vec_data [i] modp )
     : ~ i zz 0
-    ~ < zz 18 { ( vec_push [i] t 0 ) = zz + zz 1 }
+    ~ < zz 18 { = . tp zz 0 = zz + zz 1 }
     : ~ i i 0
     ~ < i 16 {
-        : i bi ( __ctl b i )
+        : i bi . bp i
         // t += a * b[i]
         : ~ i C 0
         : ~ i j 0
         ~ < j 16 {
-            : i x + + ( __ctl t j ) * ( __ctl a j ) bi C
-            ( vec_set [i] t j & x 65535 )
+            : i x + + . tp j * . ap j bi C
+            = . tp j & x 65535
             = C >> x 16
             = j + j 1
         }
-        : i x16 + ( __ctl t 16 ) C
-        ( vec_set [i] t 16 & x16 65535 )
-        ( vec_set [i] t 17 >> x16 16 )
+        : i x16 + . tp 16 C
+        = . tp 16 & x16 65535
+        = . tp 17 >> x16 16
         // m = t[0] * pinv mod 2^16 ; t = (t + m*p) / 2^16
-        : i m & * ( __ctl t 0 ) pinv 65535
-        : i x0 + ( __ctl t 0 ) * m ( __ctl modp 0 )
+        : i m & * . tp 0 pinv 65535
+        : i x0 + . tp 0 * m . pp 0
         : ~ i C2 >> x0 16
         : ~ i j2 1
         ~ < j2 16 {
-            : i y + + ( __ctl t j2 ) * m ( __ctl modp j2 ) C2
-            ( vec_set [i] t - j2 1 & y 65535 )
+            : i y + + . tp j2 * m . pp j2 C2
+            = . tp - j2 1 & y 65535
             = C2 >> y 16
             = j2 + j2 1
         }
-        : i y16 + ( __ctl t 16 ) C2
-        ( vec_set [i] t 15 & y16 65535 )
-        ( vec_set [i] t 16 + ( __ctl t 17 ) >> y16 16 )
+        : i y16 + . tp 16 C2
+        = . tp 15 & y16 65535
+        = . tp 16 + . tp 17 >> y16 16
         = i + i 1
     }
     // t is 17 meaningful limbs (t[0..16]); value < 2p. Conditional subtract p.
-    : ( Vec i ) out ( __p256_cond_sub_p t )
+    : ( Vec i ) out ( __p256_cond_sub_p t modp )
     ( vec_free [i] modp ) ( vec_free [i] t )
     ^ out
 }
 
 // Given a 17-limb t in [0, 2p), return (t mod p) as 16 limbs, constant-time:
 // compute t − p with borrow; if it underflows (t < p) keep t, else keep t−p.
-@ __p256_cond_sub_p ( Vec i ) t → ( Vec i ) {
-    : ( Vec i ) modp ( __p256_mod )
-    : ( Vec i ) diff ( vec_with_cap [i] 16 )
+// `modp` is passed in rather than rebuilt: every caller already holds it,
+// and building it cost sixteen pushes into a fresh allocation on each of
+// the ~3000 field operations a scalar multiply performs.
+@ __p256_cond_sub_p ( Vec i ) t ( Vec i ) modp → ( Vec i ) {
+    : ( Vec i ) diff ( __mag16 )
+    : *i tp ( vec_data [i] t )
+    : *i pp ( vec_data [i] modp )
+    : *i dp ( vec_data [i] diff )
     : ~ i borrow 0
     : ~ i k 0
     ~ < k 16 {
-        : ~ i d - - ( __ctl t k ) ( __ctl modp k ) borrow
+        : ~ i d - - . tp k . pp k borrow
         ? < d 0 { = d + d 65536 = borrow 1 } { = borrow 0 }
-        ( vec_push [i] diff d )
+        = . dp k d
         = k + k 1
     }
     // top limb t[16] minus the final borrow: if negative, t < p.
-    : i topb - ( __ctl t 16 ) borrow
+    : i topb - . tp 16 borrow
     // mask = 0xffff if (t >= p) i.e. topb >= 0, else 0 (keep t).
     : i tge & 1 ? >= topb 0 1 0
     : i mask & 65535 - 0 tge
     : i imask & 65535 - 0 - 1 tge
-    : ( Vec i ) out ( vec_with_cap [i] 16 )
+    : ( Vec i ) out ( __mag16 )
+    : *i op ( vec_data [i] out )
     : ~ i j 0
     ~ < j 16 {
-        ( vec_push [i] out | & mask ( __ctl diff j ) & imask ( __ctl t j ) )
+        = . op j | & mask . dp j & imask . tp j
         = j + j 1
     }
-    ( vec_free [i] modp ) ( vec_free [i] diff )
+    ( vec_free [i] diff )
     ^ out
 }
 
 // (a + b) mod p, constant-time. a, b < p ⇒ a+b < 2p ⇒ one conditional sub.
 @ p256ct_add ( Vec i ) a ( Vec i ) b → ( Vec i ) {
+    : ( Vec i ) modp ( __p256_mod )
     : ( Vec i ) t ( vec_with_cap [i] 17 )
+    : b _tl ( vec_set_len [i] t 17 )
+    : *i ap ( vec_data [i] a )
+    : *i bp ( vec_data [i] b )
+    : *i tp ( vec_data [i] t )
     : ~ i carry 0
     : ~ i k 0
     ~ < k 16 {
-        : i s + + ( __ctl a k ) ( __ctl b k ) carry
-        ( vec_push [i] t & s 65535 )
+        : i s + + . ap k . bp k carry
+        = . tp k & s 65535
         = carry >> s 16
         = k + k 1
     }
-    ( vec_push [i] t carry )
-    : ( Vec i ) out ( __p256_cond_sub_p t )
-    ( vec_free [i] t )
+    = . tp 16 carry
+    : ( Vec i ) out ( __p256_cond_sub_p t modp )
+    ( vec_free [i] modp ) ( vec_free [i] t )
     ^ out
 }
 
 // (a − b) mod p, constant-time: a − b, and if it borrows add p back.
 @ p256ct_sub ( Vec i ) a ( Vec i ) b → ( Vec i ) {
     : ( Vec i ) modp ( __p256_mod )
-    : ( Vec i ) d ( vec_with_cap [i] 16 )
+    : ( Vec i ) d ( __mag16 )
+    : *i ap ( vec_data [i] a )
+    : *i bp ( vec_data [i] b )
+    : *i pp ( vec_data [i] modp )
+    : *i dp ( vec_data [i] d )
     : ~ i borrow 0
     : ~ i k 0
     ~ < k 16 {
-        : ~ i x - - ( __ctl a k ) ( __ctl b k ) borrow
+        : ~ i x - - . ap k . bp k borrow
         ? < x 0 { = x + x 65536 = borrow 1 } { = borrow 0 }
-        ( vec_push [i] d x )
+        = . dp k x
         = k + k 1
     }
     // if borrow (a < b), add p (masked).
     : i mask & 65535 - 0 borrow
-    : ( Vec i ) out ( vec_with_cap [i] 16 )
+    : ( Vec i ) out ( __mag16 )
+    : *i op ( vec_data [i] out )
     : ~ i c2 0
     : ~ i j 0
     ~ < j 16 {
-        : i s + + ( __ctl d j ) & mask ( __ctl modp j ) c2
-        ( vec_push [i] out & s 65535 )
+        : i s + + . dp j & mask . pp j c2
+        = . op j & s 65535
         = c2 >> s 16
         = j + j 1
     }
@@ -349,9 +393,12 @@ $ `stdlib/core/vec.nu`
 }
 
 @ __p256_lmerge i mask i imask ( Vec i ) a ( Vec i ) b → ( Vec i ) {
-    : ( Vec i ) out ( vec_with_cap [i] 16 )
+    : ( Vec i ) out ( __mag16 )
+    : *i op ( vec_data [i] out )
+    : *i ap ( vec_data [i] a )
+    : *i bp ( vec_data [i] b )
     : ~ i k 0
-    ~ < k 16 { ( vec_push [i] out | & mask ( __ctl a k ) & imask ( __ctl b k ) ) = k + k 1 }
+    ~ < k 16 { = . op k | & mask . ap k & imask . bp k = k + k 1 }
     ^ out
 }
 
@@ -360,9 +407,11 @@ $ `stdlib/core/vec.nu`
 }
 
 @ __mag16_clone ( Vec i ) a → ( Vec i ) {
-    : ( Vec i ) out ( vec_with_cap [i] 16 )
+    : ( Vec i ) out ( __mag16 )
+    : *i op ( vec_data [i] out )
+    : *i ap ( vec_data [i] a )
     : ~ i k 0
-    ~ < k 16 { ( vec_push [i] out ( __ctl a k ) ) = k + k 1 }
+    ~ < k 16 { = . op k . ap k = k + k 1 }
     ^ out
 }
 

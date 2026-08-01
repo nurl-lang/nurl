@@ -117,17 +117,17 @@ $ `stdlib/core/vec.nu`
     ? == n 0 { ^ out } {}
     : *u dp # *u + # i ( vec_data [u] data ) doff
     : *u op ( vec_data [u] out )
-    : i k0 ( __ld32 key 0 )
-    : i k1 ( __ld32 key 4 )
-    : i k2 ( __ld32 key 8 )
-    : i k3 ( __ld32 key 12 )
-    : i k4 ( __ld32 key 16 )
-    : i k5 ( __ld32 key 20 )
-    : i k6 ( __ld32 key 24 )
-    : i k7 ( __ld32 key 28 )
-    : i n0 ( __ld32 nonce 0 )
-    : i n1 ( __ld32 nonce 4 )
-    : i n2 ( __ld32 nonce 8 )
+    : u32 k0 # u32 ( __ld32 key 0 )
+    : u32 k1 # u32 ( __ld32 key 4 )
+    : u32 k2 # u32 ( __ld32 key 8 )
+    : u32 k3 # u32 ( __ld32 key 12 )
+    : u32 k4 # u32 ( __ld32 key 16 )
+    : u32 k5 # u32 ( __ld32 key 20 )
+    : u32 k6 # u32 ( __ld32 key 24 )
+    : u32 k7 # u32 ( __ld32 key 28 )
+    : u32 n0 # u32 ( __ld32 nonce 0 )
+    : u32 n1 # u32 ( __ld32 nonce 4 )
+    : u32 n2 # u32 ( __ld32 nonce 8 )
     // Whole-block XOR through 8-byte loads and stores when both buffers
     // are 8-byte aligned — a Vec's storage comes from malloc, so they
     // are unless a caller hands in an unaligned `doff`. Eight loads,
@@ -139,311 +139,311 @@ $ `stdlib/core/vec.nu`
     : ~ i ctr counter
     : ~ i off 0
     ~ < off n {
-        : ~ i x0 1634760805
-        : ~ i x1 857760878
-        : ~ i x2 2036477234
-        : ~ i x3 1797285236
-        : ~ i x4 k0
-        : ~ i x5 k1
-        : ~ i x6 k2
-        : ~ i x7 k3
-        : ~ i x8 k4
-        : ~ i x9 k5
-        : ~ i x10 k6
-        : ~ i x11 k7
-        : ~ i x12 & ctr 4294967295
-        : ~ i x13 n0
-        : ~ i x14 n1
-        : ~ i x15 n2
+        : ~ u32 x0 1634760805
+        : ~ u32 x1 857760878
+        : ~ u32 x2 2036477234
+        : ~ u32 x3 1797285236
+        : ~ u32 x4 k0
+        : ~ u32 x5 k1
+        : ~ u32 x6 k2
+        : ~ u32 x7 k3
+        : ~ u32 x8 k4
+        : ~ u32 x9 k5
+        : ~ u32 x10 k6
+        : ~ u32 x11 k7
+        : ~ u32 x12 # u32 ctr
+        : ~ u32 x13 n0
+        : ~ u32 x14 n1
+        : ~ u32 x15 n2
         : ~ i rr 0
         ~ < rr 10 {
-            = x0 & + x0 x4 4294967295
+            = x0 + x0 x4
             = x12 ^^ x12 x0
-            = x12 & | << x12 16 >> x12 16 4294967295
-            = x8 & + x8 x12 4294967295
+            = x12 | << x12 16 >> x12 16
+            = x8 + x8 x12
             = x4 ^^ x4 x8
-            = x4 & | << x4 12 >> x4 20 4294967295
-            = x0 & + x0 x4 4294967295
+            = x4 | << x4 12 >> x4 20
+            = x0 + x0 x4
             = x12 ^^ x12 x0
-            = x12 & | << x12 8 >> x12 24 4294967295
-            = x8 & + x8 x12 4294967295
+            = x12 | << x12 8 >> x12 24
+            = x8 + x8 x12
             = x4 ^^ x4 x8
-            = x4 & | << x4 7 >> x4 25 4294967295
-            = x1 & + x1 x5 4294967295
+            = x4 | << x4 7 >> x4 25
+            = x1 + x1 x5
             = x13 ^^ x13 x1
-            = x13 & | << x13 16 >> x13 16 4294967295
-            = x9 & + x9 x13 4294967295
+            = x13 | << x13 16 >> x13 16
+            = x9 + x9 x13
             = x5 ^^ x5 x9
-            = x5 & | << x5 12 >> x5 20 4294967295
-            = x1 & + x1 x5 4294967295
+            = x5 | << x5 12 >> x5 20
+            = x1 + x1 x5
             = x13 ^^ x13 x1
-            = x13 & | << x13 8 >> x13 24 4294967295
-            = x9 & + x9 x13 4294967295
+            = x13 | << x13 8 >> x13 24
+            = x9 + x9 x13
             = x5 ^^ x5 x9
-            = x5 & | << x5 7 >> x5 25 4294967295
-            = x2 & + x2 x6 4294967295
+            = x5 | << x5 7 >> x5 25
+            = x2 + x2 x6
             = x14 ^^ x14 x2
-            = x14 & | << x14 16 >> x14 16 4294967295
-            = x10 & + x10 x14 4294967295
+            = x14 | << x14 16 >> x14 16
+            = x10 + x10 x14
             = x6 ^^ x6 x10
-            = x6 & | << x6 12 >> x6 20 4294967295
-            = x2 & + x2 x6 4294967295
+            = x6 | << x6 12 >> x6 20
+            = x2 + x2 x6
             = x14 ^^ x14 x2
-            = x14 & | << x14 8 >> x14 24 4294967295
-            = x10 & + x10 x14 4294967295
+            = x14 | << x14 8 >> x14 24
+            = x10 + x10 x14
             = x6 ^^ x6 x10
-            = x6 & | << x6 7 >> x6 25 4294967295
-            = x3 & + x3 x7 4294967295
+            = x6 | << x6 7 >> x6 25
+            = x3 + x3 x7
             = x15 ^^ x15 x3
-            = x15 & | << x15 16 >> x15 16 4294967295
-            = x11 & + x11 x15 4294967295
+            = x15 | << x15 16 >> x15 16
+            = x11 + x11 x15
             = x7 ^^ x7 x11
-            = x7 & | << x7 12 >> x7 20 4294967295
-            = x3 & + x3 x7 4294967295
+            = x7 | << x7 12 >> x7 20
+            = x3 + x3 x7
             = x15 ^^ x15 x3
-            = x15 & | << x15 8 >> x15 24 4294967295
-            = x11 & + x11 x15 4294967295
+            = x15 | << x15 8 >> x15 24
+            = x11 + x11 x15
             = x7 ^^ x7 x11
-            = x7 & | << x7 7 >> x7 25 4294967295
-            = x0 & + x0 x5 4294967295
+            = x7 | << x7 7 >> x7 25
+            = x0 + x0 x5
             = x15 ^^ x15 x0
-            = x15 & | << x15 16 >> x15 16 4294967295
-            = x10 & + x10 x15 4294967295
+            = x15 | << x15 16 >> x15 16
+            = x10 + x10 x15
             = x5 ^^ x5 x10
-            = x5 & | << x5 12 >> x5 20 4294967295
-            = x0 & + x0 x5 4294967295
+            = x5 | << x5 12 >> x5 20
+            = x0 + x0 x5
             = x15 ^^ x15 x0
-            = x15 & | << x15 8 >> x15 24 4294967295
-            = x10 & + x10 x15 4294967295
+            = x15 | << x15 8 >> x15 24
+            = x10 + x10 x15
             = x5 ^^ x5 x10
-            = x5 & | << x5 7 >> x5 25 4294967295
-            = x1 & + x1 x6 4294967295
+            = x5 | << x5 7 >> x5 25
+            = x1 + x1 x6
             = x12 ^^ x12 x1
-            = x12 & | << x12 16 >> x12 16 4294967295
-            = x11 & + x11 x12 4294967295
+            = x12 | << x12 16 >> x12 16
+            = x11 + x11 x12
             = x6 ^^ x6 x11
-            = x6 & | << x6 12 >> x6 20 4294967295
-            = x1 & + x1 x6 4294967295
+            = x6 | << x6 12 >> x6 20
+            = x1 + x1 x6
             = x12 ^^ x12 x1
-            = x12 & | << x12 8 >> x12 24 4294967295
-            = x11 & + x11 x12 4294967295
+            = x12 | << x12 8 >> x12 24
+            = x11 + x11 x12
             = x6 ^^ x6 x11
-            = x6 & | << x6 7 >> x6 25 4294967295
-            = x2 & + x2 x7 4294967295
+            = x6 | << x6 7 >> x6 25
+            = x2 + x2 x7
             = x13 ^^ x13 x2
-            = x13 & | << x13 16 >> x13 16 4294967295
-            = x8 & + x8 x13 4294967295
+            = x13 | << x13 16 >> x13 16
+            = x8 + x8 x13
             = x7 ^^ x7 x8
-            = x7 & | << x7 12 >> x7 20 4294967295
-            = x2 & + x2 x7 4294967295
+            = x7 | << x7 12 >> x7 20
+            = x2 + x2 x7
             = x13 ^^ x13 x2
-            = x13 & | << x13 8 >> x13 24 4294967295
-            = x8 & + x8 x13 4294967295
+            = x13 | << x13 8 >> x13 24
+            = x8 + x8 x13
             = x7 ^^ x7 x8
-            = x7 & | << x7 7 >> x7 25 4294967295
-            = x3 & + x3 x4 4294967295
+            = x7 | << x7 7 >> x7 25
+            = x3 + x3 x4
             = x14 ^^ x14 x3
-            = x14 & | << x14 16 >> x14 16 4294967295
-            = x9 & + x9 x14 4294967295
+            = x14 | << x14 16 >> x14 16
+            = x9 + x9 x14
             = x4 ^^ x4 x9
-            = x4 & | << x4 12 >> x4 20 4294967295
-            = x3 & + x3 x4 4294967295
+            = x4 | << x4 12 >> x4 20
+            = x3 + x3 x4
             = x14 ^^ x14 x3
-            = x14 & | << x14 8 >> x14 24 4294967295
-            = x9 & + x9 x14 4294967295
+            = x14 | << x14 8 >> x14 24
+            = x9 + x9 x14
             = x4 ^^ x4 x9
-            = x4 & | << x4 7 >> x4 25 4294967295
+            = x4 | << x4 7 >> x4 25
             = rr + rr 1
         }
-        = x0 & + x0 1634760805 4294967295
-        = x1 & + x1 857760878 4294967295
-        = x2 & + x2 2036477234 4294967295
-        = x3 & + x3 1797285236 4294967295
-        = x4 & + x4 k0 4294967295
-        = x5 & + x5 k1 4294967295
-        = x6 & + x6 k2 4294967295
-        = x7 & + x7 k3 4294967295
-        = x8 & + x8 k4 4294967295
-        = x9 & + x9 k5 4294967295
-        = x10 & + x10 k6 4294967295
-        = x11 & + x11 k7 4294967295
-        = x12 & + x12 & ctr 4294967295 4294967295
-        = x13 & + x13 n0 4294967295
-        = x14 & + x14 n1 4294967295
-        = x15 & + x15 n2 4294967295
+        = x0 + x0 1634760805
+        = x1 + x1 857760878
+        = x2 + x2 2036477234
+        = x3 + x3 1797285236
+        = x4 + x4 k0
+        = x5 + x5 k1
+        = x6 + x6 k2
+        = x7 + x7 k3
+        = x8 + x8 k4
+        = x9 + x9 k5
+        = x10 + x10 k6
+        = x11 + x11 k7
+        = x12 + x12 # u32 ctr
+        = x13 + x13 n0
+        = x14 + x14 n1
+        = x15 + x15 n2
         ? & == 1 wordio >= - n off 64 {
             // Eight machine words: the state pairs up low-word-first,
             // which is the same byte order the byte path spells out.
             : i w8 >> off 3
-            ( nurl_poke # s op w8 ^^ ( nurl_peek # s dp w8 ) | x0 << x1 32 )
-            ( nurl_poke # s op + w8 1 ^^ ( nurl_peek # s dp + w8 1 ) | x2 << x3 32 )
-            ( nurl_poke # s op + w8 2 ^^ ( nurl_peek # s dp + w8 2 ) | x4 << x5 32 )
-            ( nurl_poke # s op + w8 3 ^^ ( nurl_peek # s dp + w8 3 ) | x6 << x7 32 )
-            ( nurl_poke # s op + w8 4 ^^ ( nurl_peek # s dp + w8 4 ) | x8 << x9 32 )
-            ( nurl_poke # s op + w8 5 ^^ ( nurl_peek # s dp + w8 5 ) | x10 << x11 32 )
-            ( nurl_poke # s op + w8 6 ^^ ( nurl_peek # s dp + w8 6 ) | x12 << x13 32 )
-            ( nurl_poke # s op + w8 7 ^^ ( nurl_peek # s dp + w8 7 ) | x14 << x15 32 )
+            ( nurl_poke # s op w8 ^^ ( nurl_peek # s dp w8 ) | # i x0 << # i x1 32 )
+            ( nurl_poke # s op + w8 1 ^^ ( nurl_peek # s dp + w8 1 ) | # i x2 << # i x3 32 )
+            ( nurl_poke # s op + w8 2 ^^ ( nurl_peek # s dp + w8 2 ) | # i x4 << # i x5 32 )
+            ( nurl_poke # s op + w8 3 ^^ ( nurl_peek # s dp + w8 3 ) | # i x6 << # i x7 32 )
+            ( nurl_poke # s op + w8 4 ^^ ( nurl_peek # s dp + w8 4 ) | # i x8 << # i x9 32 )
+            ( nurl_poke # s op + w8 5 ^^ ( nurl_peek # s dp + w8 5 ) | # i x10 << # i x11 32 )
+            ( nurl_poke # s op + w8 6 ^^ ( nurl_peek # s dp + w8 6 ) | # i x12 << # i x13 32 )
+            ( nurl_poke # s op + w8 7 ^^ ( nurl_peek # s dp + w8 7 ) | # i x14 << # i x15 32 )
         } {}
         // Both write the same bytes; only the width differs.
         ? & == 0 wordio >= - n off 64 {
-            : i v0 x0
+            : i v0 # i x0
             = . op off # u ^^ # i . dp off & v0 255
             = . op + off 1 # u ^^ # i . dp + off 1 & >> v0 8 255
             = . op + off 2 # u ^^ # i . dp + off 2 & >> v0 16 255
             = . op + off 3 # u ^^ # i . dp + off 3 & >> v0 24 255
-            : i v1 x1
+            : i v1 # i x1
             = . op + off 4 # u ^^ # i . dp + off 4 & v1 255
             = . op + off 5 # u ^^ # i . dp + off 5 & >> v1 8 255
             = . op + off 6 # u ^^ # i . dp + off 6 & >> v1 16 255
             = . op + off 7 # u ^^ # i . dp + off 7 & >> v1 24 255
-            : i v2 x2
+            : i v2 # i x2
             = . op + off 8 # u ^^ # i . dp + off 8 & v2 255
             = . op + off 9 # u ^^ # i . dp + off 9 & >> v2 8 255
             = . op + off 10 # u ^^ # i . dp + off 10 & >> v2 16 255
             = . op + off 11 # u ^^ # i . dp + off 11 & >> v2 24 255
-            : i v3 x3
+            : i v3 # i x3
             = . op + off 12 # u ^^ # i . dp + off 12 & v3 255
             = . op + off 13 # u ^^ # i . dp + off 13 & >> v3 8 255
             = . op + off 14 # u ^^ # i . dp + off 14 & >> v3 16 255
             = . op + off 15 # u ^^ # i . dp + off 15 & >> v3 24 255
-            : i v4 x4
+            : i v4 # i x4
             = . op + off 16 # u ^^ # i . dp + off 16 & v4 255
             = . op + off 17 # u ^^ # i . dp + off 17 & >> v4 8 255
             = . op + off 18 # u ^^ # i . dp + off 18 & >> v4 16 255
             = . op + off 19 # u ^^ # i . dp + off 19 & >> v4 24 255
-            : i v5 x5
+            : i v5 # i x5
             = . op + off 20 # u ^^ # i . dp + off 20 & v5 255
             = . op + off 21 # u ^^ # i . dp + off 21 & >> v5 8 255
             = . op + off 22 # u ^^ # i . dp + off 22 & >> v5 16 255
             = . op + off 23 # u ^^ # i . dp + off 23 & >> v5 24 255
-            : i v6 x6
+            : i v6 # i x6
             = . op + off 24 # u ^^ # i . dp + off 24 & v6 255
             = . op + off 25 # u ^^ # i . dp + off 25 & >> v6 8 255
             = . op + off 26 # u ^^ # i . dp + off 26 & >> v6 16 255
             = . op + off 27 # u ^^ # i . dp + off 27 & >> v6 24 255
-            : i v7 x7
+            : i v7 # i x7
             = . op + off 28 # u ^^ # i . dp + off 28 & v7 255
             = . op + off 29 # u ^^ # i . dp + off 29 & >> v7 8 255
             = . op + off 30 # u ^^ # i . dp + off 30 & >> v7 16 255
             = . op + off 31 # u ^^ # i . dp + off 31 & >> v7 24 255
-            : i v8 x8
+            : i v8 # i x8
             = . op + off 32 # u ^^ # i . dp + off 32 & v8 255
             = . op + off 33 # u ^^ # i . dp + off 33 & >> v8 8 255
             = . op + off 34 # u ^^ # i . dp + off 34 & >> v8 16 255
             = . op + off 35 # u ^^ # i . dp + off 35 & >> v8 24 255
-            : i v9 x9
+            : i v9 # i x9
             = . op + off 36 # u ^^ # i . dp + off 36 & v9 255
             = . op + off 37 # u ^^ # i . dp + off 37 & >> v9 8 255
             = . op + off 38 # u ^^ # i . dp + off 38 & >> v9 16 255
             = . op + off 39 # u ^^ # i . dp + off 39 & >> v9 24 255
-            : i v10 x10
+            : i v10 # i x10
             = . op + off 40 # u ^^ # i . dp + off 40 & v10 255
             = . op + off 41 # u ^^ # i . dp + off 41 & >> v10 8 255
             = . op + off 42 # u ^^ # i . dp + off 42 & >> v10 16 255
             = . op + off 43 # u ^^ # i . dp + off 43 & >> v10 24 255
-            : i v11 x11
+            : i v11 # i x11
             = . op + off 44 # u ^^ # i . dp + off 44 & v11 255
             = . op + off 45 # u ^^ # i . dp + off 45 & >> v11 8 255
             = . op + off 46 # u ^^ # i . dp + off 46 & >> v11 16 255
             = . op + off 47 # u ^^ # i . dp + off 47 & >> v11 24 255
-            : i v12 x12
+            : i v12 # i x12
             = . op + off 48 # u ^^ # i . dp + off 48 & v12 255
             = . op + off 49 # u ^^ # i . dp + off 49 & >> v12 8 255
             = . op + off 50 # u ^^ # i . dp + off 50 & >> v12 16 255
             = . op + off 51 # u ^^ # i . dp + off 51 & >> v12 24 255
-            : i v13 x13
+            : i v13 # i x13
             = . op + off 52 # u ^^ # i . dp + off 52 & v13 255
             = . op + off 53 # u ^^ # i . dp + off 53 & >> v13 8 255
             = . op + off 54 # u ^^ # i . dp + off 54 & >> v13 16 255
             = . op + off 55 # u ^^ # i . dp + off 55 & >> v13 24 255
-            : i v14 x14
+            : i v14 # i x14
             = . op + off 56 # u ^^ # i . dp + off 56 & v14 255
             = . op + off 57 # u ^^ # i . dp + off 57 & >> v14 8 255
             = . op + off 58 # u ^^ # i . dp + off 58 & >> v14 16 255
             = . op + off 59 # u ^^ # i . dp + off 59 & >> v14 24 255
-            : i v15 x15
+            : i v15 # i x15
             = . op + off 60 # u ^^ # i . dp + off 60 & v15 255
             = . op + off 61 # u ^^ # i . dp + off 61 & >> v15 8 255
             = . op + off 62 # u ^^ # i . dp + off 62 & >> v15 16 255
             = . op + off 63 # u ^^ # i . dp + off 63 & >> v15 24 255
         } {}
         ? < - n off 64 {
-            : i v0 x0
+            : i v0 # i x0
             = . ks 0 # u & v0 255
             = . ks 1 # u & >> v0 8 255
             = . ks 2 # u & >> v0 16 255
             = . ks 3 # u & >> v0 24 255
-            : i v1 x1
+            : i v1 # i x1
             = . ks 4 # u & v1 255
             = . ks 5 # u & >> v1 8 255
             = . ks 6 # u & >> v1 16 255
             = . ks 7 # u & >> v1 24 255
-            : i v2 x2
+            : i v2 # i x2
             = . ks 8 # u & v2 255
             = . ks 9 # u & >> v2 8 255
             = . ks 10 # u & >> v2 16 255
             = . ks 11 # u & >> v2 24 255
-            : i v3 x3
+            : i v3 # i x3
             = . ks 12 # u & v3 255
             = . ks 13 # u & >> v3 8 255
             = . ks 14 # u & >> v3 16 255
             = . ks 15 # u & >> v3 24 255
-            : i v4 x4
+            : i v4 # i x4
             = . ks 16 # u & v4 255
             = . ks 17 # u & >> v4 8 255
             = . ks 18 # u & >> v4 16 255
             = . ks 19 # u & >> v4 24 255
-            : i v5 x5
+            : i v5 # i x5
             = . ks 20 # u & v5 255
             = . ks 21 # u & >> v5 8 255
             = . ks 22 # u & >> v5 16 255
             = . ks 23 # u & >> v5 24 255
-            : i v6 x6
+            : i v6 # i x6
             = . ks 24 # u & v6 255
             = . ks 25 # u & >> v6 8 255
             = . ks 26 # u & >> v6 16 255
             = . ks 27 # u & >> v6 24 255
-            : i v7 x7
+            : i v7 # i x7
             = . ks 28 # u & v7 255
             = . ks 29 # u & >> v7 8 255
             = . ks 30 # u & >> v7 16 255
             = . ks 31 # u & >> v7 24 255
-            : i v8 x8
+            : i v8 # i x8
             = . ks 32 # u & v8 255
             = . ks 33 # u & >> v8 8 255
             = . ks 34 # u & >> v8 16 255
             = . ks 35 # u & >> v8 24 255
-            : i v9 x9
+            : i v9 # i x9
             = . ks 36 # u & v9 255
             = . ks 37 # u & >> v9 8 255
             = . ks 38 # u & >> v9 16 255
             = . ks 39 # u & >> v9 24 255
-            : i v10 x10
+            : i v10 # i x10
             = . ks 40 # u & v10 255
             = . ks 41 # u & >> v10 8 255
             = . ks 42 # u & >> v10 16 255
             = . ks 43 # u & >> v10 24 255
-            : i v11 x11
+            : i v11 # i x11
             = . ks 44 # u & v11 255
             = . ks 45 # u & >> v11 8 255
             = . ks 46 # u & >> v11 16 255
             = . ks 47 # u & >> v11 24 255
-            : i v12 x12
+            : i v12 # i x12
             = . ks 48 # u & v12 255
             = . ks 49 # u & >> v12 8 255
             = . ks 50 # u & >> v12 16 255
             = . ks 51 # u & >> v12 24 255
-            : i v13 x13
+            : i v13 # i x13
             = . ks 52 # u & v13 255
             = . ks 53 # u & >> v13 8 255
             = . ks 54 # u & >> v13 16 255
             = . ks 55 # u & >> v13 24 255
-            : i v14 x14
+            : i v14 # i x14
             = . ks 56 # u & v14 255
             = . ks 57 # u & >> v14 8 255
             = . ks 58 # u & >> v14 16 255
             = . ks 59 # u & >> v14 24 255
-            : i v15 x15
+            : i v15 # i x15
             = . ks 60 # u & v15 255
             = . ks 61 # u & >> v15 8 255
             = . ks 62 # u & >> v15 16 255

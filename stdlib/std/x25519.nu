@@ -31,6 +31,14 @@ $ `stdlib/core/vec.nu`
     ( vec_set [i] v k val )
 }
 
+// The ladder's inner routines index their limbs through `*i` instead of
+// the two accessors above. Every one of those loops is fixed-count over
+// a 16- or 31-limb gf, so the bounds check is provably redundant — but
+// it is a real call, and one field multiply makes about a thousand of
+// them while one X25519 scalar multiply makes 1280 field multiplies.
+// Constant time is unaffected: the trip counts are fixed and the data
+// takes no branch.
+
 @ _x_bget ( Vec u ) v i k → i {
     ?? ( vec_get [u] v k ) { T x → ^ # i x F _ → ^ 0 }
 }
@@ -41,9 +49,14 @@ $ `stdlib/core/vec.nu`
 
 // n zeroed i64 limbs.
 @ _zeros_i i n → ( Vec i ) {
+    // Filled by index rather than pushed — `_M` builds a 31-limb one of
+    // these per field multiply, 1280 of them per scalar multiply, and a
+    // push carries a capacity check a known length does not need.
     : ( Vec i ) v ( vec_with_cap [i] ? > n 0 n 1 )
+    : b _l ( vec_set_len [i] v ? > n 0 n 0 )
+    : *i q ( vec_data [i] v )
     : ~ i k 0
-    ~ < k n { ( vec_push [i] v 0 ) = k + k 1 }
+    ~ < k n { = . q k 0 = k + k 1 }
     ^ v
 }
 
@@ -61,15 +74,19 @@ $ `stdlib/core/vec.nu`
 // Copy the first 16 limbs of `a` into a new gf.
 @ _gf_copy ( Vec i ) a → ( Vec i ) {
     : ( Vec i ) o ( _gf_zero )
+    : *i op ( vec_data [i] o )
+    : *i ap ( vec_data [i] a )
     : ~ i k 0
-    ~ < k 16 { ( _vset o k ( _vget a k ) ) = k + k 1 }
+    ~ < k 16 { = . op k . ap k = k + k 1 }
     ^ o
 }
 
 // dst ← src (16 limbs), in place.
 @ _gf_into ( Vec i ) dst ( Vec i ) src → v {
+    : *i dp ( vec_data [i] dst )
+    : *i sp ( vec_data [i] src )
     : ~ i k 0
-    ~ < k 16 { ( _vset dst k ( _vget src k ) ) = k + k 1 }
+    ~ < k 16 { = . dp k . sp k = k + k 1 }
 }
 
 // The constant 121665 as a gf (used in the ladder).
@@ -85,16 +102,17 @@ $ `stdlib/core/vec.nu`
 // limbs via TweetNaCl's bias trick; the wrap from limb 15 folds back
 // into limb 0 with the ×38 (= 2·19) reduction for 2^256 ≡ 38.
 @ __car25519 ( Vec i ) o → v {
+    : *i op ( vec_data [i] o )
     : ~ i i 0
     ~ < i 16 {
-        : i oi + ( _vget o i ) 65536
+        : i oi + . op i 65536
         : i c >> oi 16
         ? < i 15 {
-            ( _vset o + i 1 + ( _vget o + i 1 ) - c 1 )
+            = . op + i 1 + . op + i 1 - c 1
         } {
-            ( _vset o 0 + ( _vget o 0 ) * 38 - c 1 )
+            = . op 0 + . op 0 * 38 - c 1
         }
-        ( _vset o i - oi << c 16 )
+        = . op i - oi << c 16
         = i + i 1
     }
 }
@@ -102,11 +120,13 @@ $ `stdlib/core/vec.nu`
 // Constant-time conditional swap of p and q when b = 1.
 @ _sel25519 ( Vec i ) p ( Vec i ) q i b → v {
     : i c - 0 b
+    : *i pp ( vec_data [i] p )
+    : *i qp ( vec_data [i] q )
     : ~ i i 0
     ~ < i 16 {
-        : i t & c ^^ ( _vget p i ) ( _vget q i )
-        ( _vset p i ^^ ( _vget p i ) t )
-        ( _vset q i ^^ ( _vget q i ) t )
+        : i t & c ^^ . pp i . qp i
+        = . pp i ^^ . pp i t
+        = . qp i ^^ . qp i t
         = i + i 1
     }
 }
@@ -161,13 +181,19 @@ $ `stdlib/core/vec.nu`
 
 // ── field ops (write into dst; aliasing-safe) ─────────────────────
 @ _A ( Vec i ) o ( Vec i ) a ( Vec i ) b → v {
+    : *i op ( vec_data [i] o )
+    : *i ap ( vec_data [i] a )
+    : *i bp ( vec_data [i] b )
     : ~ i i 0
-    ~ < i 16 { ( _vset o i + ( _vget a i ) ( _vget b i ) ) = i + i 1 }
+    ~ < i 16 { = . op i + . ap i . bp i = i + i 1 }
 }
 
 @ _Z ( Vec i ) o ( Vec i ) a ( Vec i ) b → v {
+    : *i op ( vec_data [i] o )
+    : *i ap ( vec_data [i] a )
+    : *i bp ( vec_data [i] b )
     : ~ i i 0
-    ~ < i 16 { ( _vset o i - ( _vget a i ) ( _vget b i ) ) = i + i 1 }
+    ~ < i 16 { = . op i - . ap i . bp i = i + i 1 }
 }
 
 // o ← a·b mod p. Schoolbook into a 31-limb accumulator, fold the high
@@ -175,22 +201,27 @@ $ `stdlib/core/vec.nu`
 // only from the independent accumulator t).
 @ _M ( Vec i ) o ( Vec i ) a ( Vec i ) b → v {
     : ( Vec i ) t ( _zeros_i 31 )
+    : *i tp ( vec_data [i] t )
+    : *i ap ( vec_data [i] a )
+    : *i bp ( vec_data [i] b )
     : ~ i i 0
     ~ < i 16 {
+        : i ai . ap i
         : ~ i j 0
         ~ < j 16 {
-            ( _vset t + i j + ( _vget t + i j ) * ( _vget a i ) ( _vget b j ) )
+            = . tp + i j + . tp + i j * ai . bp j
             = j + j 1
         }
         = i + i 1
     }
     : ~ i i 0
     ~ < i 15 {
-        ( _vset t i + ( _vget t i ) * 38 ( _vget t + i 16 ) )
+        = . tp i + . tp i * 38 . tp + i 16
         = i + i 1
     }
+    : *i op ( vec_data [i] o )
     : ~ i i 0
-    ~ < i 16 { ( _vset o i ( _vget t i ) ) = i + i 1 }
+    ~ < i 16 { = . op i . tp i = i + i 1 }
     ( __car25519 o )
     ( __car25519 o )
     ( vec_free [i] t )
