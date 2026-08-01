@@ -109,7 +109,7 @@ $ `stdlib/std/p256_field.nu`  // fully constant-time scalar mult (secret path)
     ^ @ Jac { ( bigint_from_i 1 ) ( bigint_from_i 1 ) ( bigint_from_i 0 ) T }
 }
 
-@ __jfree Jac q → v {
+@ _jfree Jac q → v {
     ( bigint_free . q x )
     ( bigint_free . q y )
     ( bigint_free . q z )
@@ -208,7 +208,7 @@ $ `stdlib/std/p256_field.nu`  // fully constant-time scalar mult (secret path)
 // are public, so the operand-time-dependent BigInt field ops are harmless.
 // The SECRET path (signing nonce, ECDHE) uses the fully constant-time
 // std/p256_field scalar multiply instead (see __p256_mul_affine).
-@ __jmul ( Vec u ) k Jac base BigInt p → Jac {
+@ _jmul ( Vec u ) k Jac base BigInt p → Jac {
     : ~ Jac acc ( __jinf )
     : i n ( vec_len [u] k )
     : ~ i bi 0
@@ -217,13 +217,13 @@ $ `stdlib/std/p256_field.nu`  // fully constant-time scalar mult (secret path)
         : ~ i bit 7
         ~ >= bit 0 {
             : Jac d ( __jdouble acc p )
-            ( __jfree acc )
+            ( _jfree acc )
             = acc d
             : i b1 & 1 >> byte bit
             : Jac t ( __jadd acc base p )
             : Jac sel ( __jcselect b1 t acc )
-            ( __jfree t )
-            ( __jfree acc )
+            ( _jfree t )
+            ( _jfree acc )
             = acc sel
             = bit - bit 1
         }
@@ -260,7 +260,7 @@ $ `stdlib/std/p256_field.nu`  // fully constant-time scalar mult (secret path)
 }
 
 // Affine x-coordinate of a Jacobian point: X / Z^2 mod p.
-@ __jaffine_x Jac q BigInt p → BigInt {
+@ _jaffine_x Jac q BigInt p → BigInt {
     : BigInt zsq ( __fsqr . q z p )
     : BigInt zinv ( __finv zsq p )
     : BigInt x ( __fmul . q x zinv p )
@@ -270,7 +270,7 @@ $ `stdlib/std/p256_field.nu`  // fully constant-time scalar mult (secret path)
 }
 
 // Affine y-coordinate of a Jacobian point: Y / Z^3 mod p.
-@ __jaffine_y Jac q BigInt p → BigInt {
+@ _jaffine_y Jac q BigInt p → BigInt {
     : BigInt zsq ( __fsqr . q z p )
     : BigInt zcb ( __fmul zsq . q z p )
     : BigInt zinv ( __finv zcb p )
@@ -410,17 +410,17 @@ $ `stdlib/std/p256_field.nu`  // fully constant-time scalar mult (secret path)
 
         : Jac G @ Jac { gx gy ( bigint_from_i 1 ) F }
         : Jac Q @ Jac { qx qy ( bigint_from_i 1 ) F }
-        : Jac p1 ( __jmul u1b G p )
-        : Jac p2 ( __jmul u2b Q p )
+        : Jac p1 ( _jmul u1b G p )
+        : Jac p2 ( _jmul u2b Q p )
         : Jac R ( __jadd p1 p2 p )
         ? . R inf { = result F } {
-            : BigInt rx ( __jaffine_x R p )
+            : BigInt rx ( _jaffine_x R p )
             : BigInt rxn ( bigint_rem rx nn )
             = result == ( bigint_cmp rxn br ) 0
             ( bigint_free rx )
             ( bigint_free rxn )
         }
-        ( __jfree G ) ( __jfree Q ) ( __jfree p1 ) ( __jfree p2 ) ( __jfree R )
+        ( _jfree G ) ( _jfree Q ) ( _jfree p1 ) ( _jfree p2 ) ( _jfree R )
         ( bigint_free zr ) ( bigint_free w ) ( bigint_free u1m ) ( bigint_free u1 )
         ( bigint_free u2m ) ( bigint_free u2 ) ( vec_free [u] u1b ) ( vec_free [u] u2b )
     } {
