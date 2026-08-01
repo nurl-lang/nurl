@@ -141,6 +141,90 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the stage that runs closest to CI's memory and time ceilings. `build.bat`
   gets the same treatment for the two throwaway stages (untested on
   Windows beyond the flag swap — the structure is identical).
+=======
+- **AES-GCM is bitsliced: 0.3 MB/s → 113 MB/s, a 334× record layer.**
+  `std/aes_gcm.nu` computed the AES S-box algebraically, per byte, as
+  `Affine(x²⁵⁴)` — constant-time, which is the whole point (a table
+  indexed by key bytes leaks the key through the cache), but about a
+  thousand operations for one substitution. Ten rounds of sixteen of
+  those put AES-128-GCM at **0.3 MB/s** against ChaCha20-Poly1305's 370,
+  and AES-GCM is the one cipher suite RFC 8446 requires every TLS 1.3
+  implementation to have. A peer that insisted on it made an 8 MB
+  download take half a minute.
+
+  Constant time was never the thing to give up, so the block cipher is
+  **bitsliced** instead (a port of BearSSL's `aes_ct64`, Thomas Pornin,
+  MIT). The state is transposed so each of eight 64-bit words holds one
+  bit position of 64 bytes, and `SubBytes` becomes Boyar and Peralta's
+  113-gate boolean circuit evaluated on those words: one pass
+  substitutes 64 bytes, so the S-box costs under two operations per byte
+  instead of a thousand — with no table and no data-dependent branch,
+  the same guarantee as before. Four blocks travel together, which is
+  what CTR mode wants anyway.
+
+  GHASH was the other half: multiplying in GF(2¹²⁸) bit by bit is 128
+  iterations of a 16-byte shift-and-mask per block. It is now carry-less
+  multiplication built out of ordinary 64-bit integer multiplies
+  (`ghash_ctmul64`) — each operand split into four interleaved bit
+  groups so no carry crosses a kept bit, recombined by Karatsuba. After
+  the rewrite the two halves cost about the same (perf: 45% cipher, 47%
+  GHASH), which is where a balanced implementation should land.
+
+  | 16 KB record | before | after |
+  |---|---:|---:|
+  | `aes128_gcm_seal` | 48 312 827 ns | **144 591 ns** |
+  | | 0.3 MB/s | **113.3 MB/s** |
+  | `aes128_gcm_open` | 48 296 068 ns | **144 861 ns** |
+  | | 0.3 MB/s | **113.1 MB/s** |
+  | allocations / record | 30 835 | **15** |
+
+  The public surface is unchanged (`aes128_gcm_encrypt` / `_decrypt`,
+  `aes256_gcm_encrypt` / `_decrypt`), and so is the ciphertext: a
+  differential sweep over every plaintext length 0–200 × every AAD
+  length 0–40 × both key sizes, plus a 16 KB record, matches the
+  previous implementation byte for byte in all 33 166 cases, clean under
+  ASan/UBSan/LSan. `compiler/tests/aes_gcm_vectors.nu` additionally
+  gained the empty, single-block, AAD-only and 300-byte cases — lengths
+  chosen to walk every path through the four-block loop — checked
+  against OpenSSL rather than against the code they test.
+
+  Two caveats, both documented in `docs/CRYPTO.md`: the key schedule
+  still uses the old per-byte S-box (it runs once per key, ~2.5% of a
+  record, and is not worth bitslicing), and GHASH's constant-timeness
+  now rests on the CPU's integer multiplier being data-independent —
+  true of every mainstream 64-bit core, not true of some small in-order
+  ARM cores. TLS keeps preferring ChaCha20-Poly1305, which is still 3×
+  faster; the comments in `tls.nu` / `tls_server.nu` explaining that
+  preference by a 700× gap have been corrected to the 3× one.
+
+- **A P-256 scalar multiply allocates 44 000 times instead of 164 000 —
+  22% off the handshake's instruction count.** With the accessor calls
+  gone (below), what was left in front of the arithmetic was the
+  allocator: `vec_with_cap` is *two* allocations — a 24-byte control
+  block and the data buffer — so a Montgomery multiply that built the
+  modulus, the CIOS accumulator, the difference and its result made
+  eight of them, and one complete point addition performs about thirty
+  field operations.
+
+  The modulus and the two temporaries now live in a `P256Scratch` built
+  once per scalar multiply and threaded down through the point layer,
+  so only each operation's *result* is allocated. The public field API
+  (`p256ct_mul` / `_add` / `_sub` / `_inv` / `_to_mont` / `_from_mont`)
+  is unchanged — each is a wrapper that makes a scratch, calls the
+  scratch-taking sibling and frees it. A scratch is never shared between
+  scalar multiplies, so there is no state to race over, and no
+  arithmetic changed: the same limbs are written in the same order.
+
+  | `p256_ecdh_keygen` | before | after |
+  |---|---:|---:|
+  | allocations | 163 986 | **44 124** |
+  | time | 6.2 ms | **4.7 ms** |
+  | handshake, instructions retired | 437.4 M | **341.0 M** |
+
+  (Instructions rather than wall clock for the handshake: the loopback
+  harness has a Python peer in the loop and cannot resolve 20% — the
+  count is reproducible to four significant figures, the wall clock is
+  not.)
 
 - **A TLS handshake costs 10.5 ms of arithmetic instead of 57.4 —
   5.5×.** The ClientHello carries a key share for *both* groups, so every
