@@ -20,17 +20,22 @@ $ `stdlib/std/p256_field.nu`
 
 @ to_limbs BigInt x → ( Vec i ) {
     : ( Vec u ) be ( bigint_to_bytes_be x 32 )
-    : ( Vec i ) out ( vec_with_cap [i] 16 )
+    : ( Vec i ) out ( vec_with_cap [i] 8 )
     : ~ i k 0
-    ~ < k 16 { ( vec_push [i] out | ( __bg be - 31 * 2 k ) << ( __bg be - 30 * 2 k ) 8 ) = k + k 1 }
+    ~ < k 8 {
+        ( vec_push [i] out | | | ( __bg be - 31 * 4 k ) << ( __bg be - 30 * 4 k ) 8
+        << ( __bg be - 29 * 4 k ) 16 << ( __bg be - 28 * 4 k ) 24 )
+        = k + k 1
+    }
     ( vec_free [u] be ) ^ out
 }
 
 @ from_limbs ( Vec i ) v → BigInt {
     : ( Vec u ) be ( vec_with_cap [u] 32 )
-    : ~ i k 15
+    : ~ i k 7
     ~ >= k 0 {
         : i lk ?? ( vec_get [i] v k ) { T x → x F _ → 0 }
+        ( vec_push [u] be # u & >> lk 24 255 ) ( vec_push [u] be # u & >> lk 16 255 )
         ( vec_push [u] be # u & >> lk 8 255 ) ( vec_push [u] be # u & lk 255 )
         = k - k 1
     }

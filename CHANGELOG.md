@@ -104,6 +104,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **A P-256 key generation takes 1.07 ms instead of 4.77 ms, and makes 98
+  allocations instead of 44 124 — a TLS 1.3 handshake is 8.5 → 4.9 ms.**
+  Two changes to `std/p256_field`, the constant-time field behind every
+  ECDHE key share and every ECDSA signing nonce.
+
+  *The limb radix went from 2^16 to 2^32.* The field was transcribed with
+  16-bit limbs so that a product would fit an `i64`, which meant a
+  Montgomery multiply ran 16×16 = 256 schoolbook steps and another 256
+  reduction steps. NURL has a real `u64`, and a 32×32 → 64 product is one
+  machine multiply, so the same operation is now 8×8 = 64 and 64. The CIOS
+  bound is exactly why 2^32 is the largest radix that works without a
+  double-word carry: `t[j] + a[j]·b[i] + C ≤ (2^32−1) + (2^32−1)² +
+  (2^32−1) = 2^64 − 1`, which a `u64` holds precisely.
+
+  *The ladder stopped allocating.* Every field operation used to allocate
+  its result, and `vec_with_cap` is two allocations (control block +
+  buffer), so ~3000 field operations per keygen cost ~44 000 of them —
+  25% of the run time once the multiply got cheap. Each operation now has
+  a `_d` form that writes into a destination the caller owns, the six
+  registers RCB point addition works in live in the per-scalar-multiply
+  scratch, and the always-add ladder runs its 512 point additions in
+  registers allocated before it starts. The allocating `p256ct_*` API is
+  unchanged — it is those workers plus one `__mag8`.
+
+  | | before | after |
+  |---|---:|---:|
+  | `p256_ecdh_keygen` | 4.77 ms | **1.07 ms** |
+  | allocations / keygen | 44 124 | **98** |
+  | TLS 1.3 client handshake | 8.47 ms | **4.87 ms** |
+
+  Constant time is untouched: the loops keep their fixed trip counts, stay
+  branch-free in the data, and the field is still never normalized. The
+  `_d` workers may be called with `dst` aliasing a source — safe by
+  construction, because each reads all of its operands into the scratch
+  accumulator before writing `dst` (`__p256_inv_d`, the one exception,
+  documents it). Verified by `compiler/tests/p256_ct_field.nu` (400 random
+  field trials against the bigint reference plus 60 scalar multiplies),
+  the ECDH known-answer vectors, the RFC 6979 signing vectors, and the
+  full suite under ASan + UBSan.
+
 - **`./build.sh` takes 23.6 s instead of 36.3 s — 35% off every build —
   because the bootstrap no longer optimises the two compilers it throws
   away.** Stages 0 and 1 are scaffolding: neither binary is shipped,
