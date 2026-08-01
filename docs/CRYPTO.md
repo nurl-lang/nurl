@@ -93,10 +93,10 @@ signal.
 
 **Threat model — OUT of scope for the entire software stack:** physical
 **power / electromagnetic (DPA, SPA-power, template) side-channels.** Software
-constant-time code is *not* a defense against these: a constant-time table-free
-AES S-box still leaks the Hamming weight of the byte it processes through power
-consumption, branchless or not, and the same is true of the P-256 field
-arithmetic. Defending power/EM requires masking / hiding and ultimately
+constant-time code is *not* a defense against these: the power a gate draws
+still depends on the bits flowing through it, so a table-free or bitsliced AES
+S-box and the P-256 field arithmetic both remain readable to an attacker with
+a probe, branchless or not. Defending power/EM requires masking / hiding and ultimately
 hardware countermeasures, which are not in this (or any pure-software) library.
 Everything below concerns the **timing/cache** axis only.
 
@@ -111,8 +111,8 @@ follow-up. Hardening (timing/cache axis):
 
 | Primitive | Countermeasure |
 |---|---|
-| AES S-box | **Constant-time**: `SubBytes(x) = Affine(x⁻¹ in GF(2⁸))` computed with a branchless GF multiply and a fixed-exponent (x²⁵⁴) inversion — no table lookup or branch indexed by secret data. Verified equal to the reference S-box on all 256 inputs. `xtime` (MixColumns) is likewise branchless. |
-| GHASH | Branchless: the GF(2¹²⁸) multiply uses mask arithmetic, so its timing does not leak the authentication key H. |
+| AES S-box | **Constant-time, bitsliced**: the state is transposed so each 64-bit word holds one bit position of 64 bytes, and `SubBytes` is Boyar–Peralta's 113-gate boolean circuit evaluated on those words (the `aes_ct64` construction). Every operation is a word-wide AND/XOR — no table lookup, no branch, and nothing indexed by secret data. ShiftRows and MixColumns are shifts and XORs on the same words. The key schedule (once per key, not per block) instead uses the older per-byte form: `SubBytes(x) = Affine(x⁻¹ in GF(2⁸))` via a branchless GF multiply and a fixed-exponent (x²⁵⁴) inversion, verified equal to the reference S-box on all 256 inputs. |
+| GHASH | **Constant-time on any CPU with a constant-time multiplier.** The GF(2¹²⁸) multiply is carry-less multiplication built from ordinary 64-bit integer multiplies (`ghash_ctmul64`): each operand is split into four interleaved bit groups so no carry crosses a kept bit, and the halves recombine by Karatsuba. No branch and no table, so nothing leaks the authentication key H through cache or control flow — but the timing rests on `imul` being data-independent, which holds on every mainstream 64-bit core and does *not* hold on some small in-order ARM cores (Cortex-M3/M0, early Cortex-A), where an early-terminating multiplier would reintroduce an operand-timing signal. |
 | GCM / Poly1305 / TLS Finished tag compares | Constant-time (OR-accumulated XOR, no early exit). |
 | RSA modexp (`bigint_modpow`) | **Constant control flow**: a Montgomery powering ladder — exactly two modular multiplies per iteration for a fixed iteration count = bit-length of the **modulus `n`** (a public value), register choice by a constant-time conditional swap. The count depends only on the public modulus, **never on the secret exponent `d`** (no naive "multiply only on 1-bits" leak, and the loop length does not reveal `d`'s bit length). No CRT is used (single direct modexp with the full `d`), so there is no CRT-reduction timing surface (Brumley–Boneh class). |
 | RSA private key (PSS sign) | **Base blinding** on top: `s = ((EM·rᵉ)ᵈ · r⁻¹) mod n` for a fresh random `r` per signature. `rᵉᵈ ≡ r (mod n)`, so the result is identical, but the value fed to the (still operand-time-dependent) `bigint` mul/rem is randomized — covering the residual timing the ladder's uniform control flow does not. The setup inverse `r⁻¹ mod n` is computed with the variable-time `bigint_modinv`, but its timing is **not security-relevant**: `r` is a fresh per-signature ephemeral that is discarded, so its magnitude leaks nothing about the key. |
@@ -149,9 +149,10 @@ follow-up. Hardening (timing/cache axis):
 ### Practical guidance
 
 - **Prefer ChaCha20-Poly1305.** It is naturally constant-time and fast; it is
-  the default record cipher. The constant-time AES is correct but slower than
-  a table implementation (it computes the S-box per byte), and exists for peers
-  that only offer AES-GCM.
+  the default record cipher. AES-GCM is bitsliced, so it is constant-time
+  without needing AES instructions and no longer pays for that with orders of
+  magnitude: measured on 16 KB records, ~113 MB/s against ChaCha's ~370. It
+  remains the second choice, and exists for peers that only offer AES-GCM.
 
 ---
 
@@ -242,8 +243,8 @@ be **sound, not a hardware-grade side-channel-free implementation**:
    yet measured statistically (dudect/ctgrind — a tracked follow-up).
 4. **Power / EM (DPA, SPA-power, template) side-channels are OUT of scope for
    the entire software stack.** Software constant-time code does not defend
-   them — a table-free AES S-box still leaks the processed byte's Hamming weight
-   through power draw, and so does the P-256 field. Defending power/EM needs
+   them — a table-free or bitsliced AES S-box still leaks through power draw,
+   and so does the P-256 field. Defending power/EM needs
    masking/hiding and ultimately hardware; use a hardware-backed / audited
    library (HSM, secure element, AES-NI + a vetted bignum) where that threat
    model applies.
