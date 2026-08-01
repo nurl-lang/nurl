@@ -332,19 +332,16 @@ section { padding: 4rem 0; }
   color: var(--fg-faint);
   line-height: 1.35;
 }
-/* The NURL column keeps an accented header; only a strict NURL win receives
-   the cell background below. */
+/* The NURL column keeps an accented header; only a win receives the cell
+   treatment below. The generator adds `fastest` when NURL prints a lower
+   number than every other language — a row where two cells print the same
+   figure is a tie at this resolution and stays plain, so the page never
+   marks one "39 ms" as beating the "39 ms" next to it. */
 .bench-table td.nurl-col { color: var(--fg); font-weight: 600; }
-/* The generator adds fasted when NURL is strictly fastest.  When NURL
-   ties with the best value the cell gets the accent color but no background. */
 .bench-table td.fastest {
   color: var(--accent);
   font-weight: 700;
   background: var(--accent-soft);
-}
-.bench-table td.tied {
-  color: var(--accent);
-  font-weight: 700;
 }
 .bench-note {
   color: var(--fg-dim);
