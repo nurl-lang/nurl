@@ -5,7 +5,7 @@
 // TLS_CHACHA20_POLY1305_SHA256 cipher suite), and is equally usable for
 // Noise / age / any AEAD need on a host with nothing installed.
 //
-// ChaCha20 words are kept in i64 limbs masked to 32 bits (`__m32`);
+// ChaCha20 words are kept in i64 limbs masked to 32 bits;
 // Poly1305 is a port of the well-trodden poly1305-donna radix-2^26
 // reference, whose partial products stay well under 2^63 so plain i64
 // arithmetic suffices.
@@ -13,6 +13,7 @@
 // Public surface:
 //   ( chacha20_block key counter nonce )      → ( Vec u )  64-byte block
 //   ( chacha20_xor key counter nonce data )   → ( Vec u )  stream cipher
+//   ( chacha20_xor_range k c n data off len ) → ( Vec u )  … over a range
 //   ( poly1305_mac otk msg )                  → ( Vec u )  16-byte tag
 //   ( aead_encrypt key nonce aad plaintext )  → ( Vec u )  ciphertext||tag
 //   ( aead_decrypt key nonce aad ct_and_tag ) → ?( Vec u ) None if forged
@@ -38,74 +39,49 @@ $ `stdlib/core/vec.nu`
     ^ | | | ( __cc_bget v off ) << ( __cc_bget v + off 1 ) 8 << ( __cc_bget v + off 2 ) 16 << ( __cc_bget v + off 3 ) 24
 }
 
-@ __m32 i x → i { ^ & x 4294967295 }
-
-// 32-bit rotate left.
-@ __rotl32 i x i n → i {
-    ^ & | << & x 4294967295 n >> & x 4294967295 - 32 n 4294967295
-}
-
-@ __wget ( Vec i ) v i k → i {
-    ?? ( vec_get [i] v k ) { T x → ^ x F _ → ^ 0 }
-}
-
-@ __wset ( Vec i ) v i k i val → v { ( vec_set [i] v k val ) }
-
 // ── ChaCha20 ──────────────────────────────────────────────────────
-// One quarter-round, mutating state words a,b,c,d in place.
-@ __qr ( Vec i ) s i a i b i c i d → v {
-    ( __wset s a ( __m32 + ( __wget s a ) ( __wget s b ) ) )
-    ( __wset s d ( __rotl32 ^^ ( __wget s d ) ( __wget s a ) 16 ) )
-    ( __wset s c ( __m32 + ( __wget s c ) ( __wget s d ) ) )
-    ( __wset s b ( __rotl32 ^^ ( __wget s b ) ( __wget s c ) 12 ) )
-    ( __wset s a ( __m32 + ( __wget s a ) ( __wget s b ) ) )
-    ( __wset s d ( __rotl32 ^^ ( __wget s d ) ( __wget s a ) 8 ) )
-    ( __wset s c ( __m32 + ( __wget s c ) ( __wget s d ) ) )
-    ( __wset s b ( __rotl32 ^^ ( __wget s b ) ( __wget s c ) 7 ) )
+// The round function lives once, inside `chacha20_xor_range` below, with
+// the sixteen state words held in locals. The separate quarter-round /
+// state-vector helpers this file used to carry for `chacha20_block` were
+// the accessor-based second copy of it, and are gone.
+
+// Does a 64-bit store land in memory low byte first? The block loop
+// below combines two 32-bit keystream words into one machine word and
+// stores it whole, which is only the same bytes on a little-endian
+// machine. Every target NURL builds for is one, but this file is where
+// getting it wrong would mean silently wrong ciphertext rather than a
+// build error, so it asks instead of assuming — once, into a global, not
+// once per record. (Two threads racing here both write the same answer.)
+: ~ i g_cc_le -1
+
+@ __le_words → i {
+    ? >= g_cc_le 0 { ^ g_cc_le } {}
+    : *u p # *u ( nurl_zalloc 8 )
+    ( nurl_poke # s p 0 1 )
+    = g_cc_le ? == # i . p 0 1 1 0
+    ( nurl_free # s p )
+    ^ g_cc_le
 }
 
-// Build the 16-word initial state for (key, counter, nonce).
-@ __chacha_state ( Vec u ) key i counter ( Vec u ) nonce → ( Vec i ) {
-    : ( Vec i ) s ( vec_with_cap [i] 16 )
-    ( vec_push [i] s 1634760805 )  // "expa"
-    ( vec_push [i] s 857760878 )  // "nd 3"
-    ( vec_push [i] s 2036477234 )  // "2-by"
-    ( vec_push [i] s 1797285236 )  // "te k"
+// `n` zero bytes — the plaintext that turns the XOR kernel into a plain
+// keystream generator.
+@ __zeros i n → ( Vec u ) {
+    : ( Vec u ) z ( vec_with_cap [u] ? > n 0 n 1 )
     : ~ i k 0
-    ~ < k 8 { ( vec_push [i] s ( __ld32 key * 4 k ) ) = k + k 1 }
-    ( vec_push [i] s ( __m32 counter ) )
-    ( vec_push [i] s ( __ld32 nonce 0 ) )
-    ( vec_push [i] s ( __ld32 nonce 4 ) )
-    ( vec_push [i] s ( __ld32 nonce 8 ) )
-    ^ s
+    ~ < k n { ( vec_push [u] z # u 0 ) = k + k 1 }
+    ^ z
 }
 
-// The 64-byte keystream block for (key, counter, nonce).
+// The 64-byte keystream block for (key, counter, nonce). Keystream is
+// what the XOR kernel produces against a zero plaintext, so this goes
+// through `chacha20_xor_range` rather than keeping a second, slower copy
+// of the round function: the accessor-based version this replaced ran
+// ~960 bounds-checked Vec calls a block, and the AEAD below needs one
+// block PER RECORD for the Poly1305 one-time key.
 @ chacha20_block ( Vec u ) key i counter ( Vec u ) nonce → ( Vec u ) {
-    : ( Vec i ) s ( __chacha_state key counter nonce )
-    : ( Vec i ) w ( vec_with_cap [i] 16 )
-    : ~ i k 0
-    ~ < k 16 { ( vec_push [i] w ( __wget s k ) ) = k + k 1 }
-    : ~ i r 0
-    ~ < r 10 {
-        ( __qr w 0 4 8 12 )
-        ( __qr w 1 5 9 13 )
-        ( __qr w 2 6 10 14 )
-        ( __qr w 3 7 11 15 )
-        ( __qr w 0 5 10 15 )
-        ( __qr w 1 6 11 12 )
-        ( __qr w 2 7 8 13 )
-        ( __qr w 3 4 9 14 )
-        = r + r 1
-    }
-    : ( Vec u ) out ( vec_with_cap [u] 64 )
-    : ~ i i 0
-    ~ < i 16 {
-        ( __push_le32 out ( __m32 + ( __wget w i ) ( __wget s i ) ) )
-        = i + i 1
-    }
-    ( vec_free [i] s )
-    ( vec_free [i] w )
+    : ( Vec u ) z ( __zeros 64 )
+    : ( Vec u ) out ( chacha20_xor_range key counter nonce z 0 64 )
+    ( vec_free [u] z )
     ^ out
 }
 
@@ -121,11 +97,25 @@ $ `stdlib/core/vec.nu`
 // it is what takes a pure-NURL TLS download from ~27 MB/s to well over
 // 100.
 @ chacha20_xor ( Vec u ) key i counter ( Vec u ) nonce ( Vec u ) data → ( Vec u ) {
-    : i n ( vec_len [u] data )
+    ^ ( chacha20_xor_range key counter nonce data 0 ( vec_len [u] data ) )
+}
+
+// The same, over the `n` bytes of `data` starting at `doff`, so a caller
+// that holds its plaintext or ciphertext INSIDE a larger buffer does not
+// have to slice a copy out first just to name it. An AEAD record arrives
+// as ciphertext‖tag in one Vec, and every 16 KB of a TLS transfer used
+// to be copied out of that buffer byte by bounds-checked byte before
+// this kernel would look at it.
+//
+// The caller is responsible for `doff + n` being within `data`; this is
+// a private-by-convention entry point (the AEAD pair below and the
+// record layer are its only users) and it does no bounds check of its
+// own, exactly like the raw-pointer loop it feeds.
+@ chacha20_xor_range ( Vec u ) key i counter ( Vec u ) nonce ( Vec u ) data i doff i n → ( Vec u ) {
     : ( Vec u ) out ( vec_with_cap [u] ? > n 0 n 1 )
     : b _ol ( vec_set_len [u] out n )
     ? == n 0 { ^ out } {}
-    : *u dp ( vec_data [u] data )
+    : *u dp # *u + # i ( vec_data [u] data ) doff
     : *u op ( vec_data [u] out )
     : i k0 ( __ld32 key 0 )
     : i k1 ( __ld32 key 4 )
@@ -138,6 +128,13 @@ $ `stdlib/core/vec.nu`
     : i n0 ( __ld32 nonce 0 )
     : i n1 ( __ld32 nonce 4 )
     : i n2 ( __ld32 nonce 8 )
+    // Whole-block XOR through 8-byte loads and stores when both buffers
+    // are 8-byte aligned — a Vec's storage comes from malloc, so they
+    // are unless a caller hands in an unaligned `doff`. Eight loads,
+    // eight XORs and eight stores a block, against sixty-four of each
+    // plus their shifts and masks on the byte path below, which stays as
+    // the fallback for the unaligned and big-endian cases.
+    : i wordio & ( __le_words ) ? == 0 | & # i dp 7 & # i op 7 1 0
     : *u ks # *u ( nurl_zalloc 64 )
     : ~ i ctr counter
     : ~ i off 0
@@ -274,7 +271,21 @@ $ `stdlib/core/vec.nu`
         = x13 & + x13 n0 4294967295
         = x14 & + x14 n1 4294967295
         = x15 & + x15 n2 4294967295
-        ? >= - n off 64 {
+        ? & == 1 wordio >= - n off 64 {
+            // Eight machine words: the state pairs up low-word-first,
+            // which is the same byte order the byte path spells out.
+            : i w8 >> off 3
+            ( nurl_poke # s op w8 ^^ ( nurl_peek # s dp w8 ) | x0 << x1 32 )
+            ( nurl_poke # s op + w8 1 ^^ ( nurl_peek # s dp + w8 1 ) | x2 << x3 32 )
+            ( nurl_poke # s op + w8 2 ^^ ( nurl_peek # s dp + w8 2 ) | x4 << x5 32 )
+            ( nurl_poke # s op + w8 3 ^^ ( nurl_peek # s dp + w8 3 ) | x6 << x7 32 )
+            ( nurl_poke # s op + w8 4 ^^ ( nurl_peek # s dp + w8 4 ) | x8 << x9 32 )
+            ( nurl_poke # s op + w8 5 ^^ ( nurl_peek # s dp + w8 5 ) | x10 << x11 32 )
+            ( nurl_poke # s op + w8 6 ^^ ( nurl_peek # s dp + w8 6 ) | x12 << x13 32 )
+            ( nurl_poke # s op + w8 7 ^^ ( nurl_peek # s dp + w8 7 ) | x14 << x15 32 )
+        } {}
+        // Both write the same bytes; only the width differs.
+        ? & == 0 wordio >= - n off 64 {
             : i v0 x0
             = . op off # u ^^ # i . dp off & v0 255
             = . op + off 1 # u ^^ # i . dp + off 1 & >> v0 8 255
@@ -355,7 +366,8 @@ $ `stdlib/core/vec.nu`
             = . op + off 61 # u ^^ # i . dp + off 61 & >> v15 8 255
             = . op + off 62 # u ^^ # i . dp + off 62 & >> v15 16 255
             = . op + off 63 # u ^^ # i . dp + off 63 & >> v15 24 255
-        } {
+        } {}
+        ? < - n off 64 {
             : i v0 x0
             = . ks 0 # u & v0 255
             = . ks 1 # u & >> v0 8 255
@@ -441,7 +453,7 @@ $ `stdlib/core/vec.nu`
                 = . op + off j # u ^^ # i . dp + off j # i . ks j
                 = j + j 1
             }
-        }
+        } {}
         = off + off 64
         = ctr + ctr 1
     }
@@ -611,11 +623,12 @@ $ `stdlib/core/vec.nu`
 // ── ChaCha20-Poly1305 AEAD (RFC 8439 §2.8) ────────────────────────
 // The one-time Poly1305 key: first 32 bytes of the counter-0 block.
 @ __poly_key ( Vec u ) key ( Vec u ) nonce → ( Vec u ) {
-    : ( Vec u ) blk ( chacha20_block key 0 nonce )
-    : ( Vec u ) otk ( vec_with_cap [u] 32 )
-    : ~ i k 0
-    ~ < k 32 { ( vec_push [u] otk # u ( __cc_bget blk k ) ) = k + k 1 }
-    ( vec_free [u] blk )
+    // Only the first half of the counter-0 block is the key, so ask the
+    // kernel for 32 bytes and skip both the second half and the copy out
+    // of it. One of these per AEAD record.
+    : ( Vec u ) z ( __zeros 32 )
+    : ( Vec u ) otk ( chacha20_xor_range key 0 nonce z 0 32 )
+    ( vec_free [u] z )
     ^ otk
 }
 
@@ -632,10 +645,11 @@ $ `stdlib/core/vec.nu`
     ~ < k 8 { ( vec_push [u] v # u & >> n * 8 k 255 ) = k + k 1 }
 }
 
-// Build the Poly1305 input: aad ‖ pad16 ‖ ct ‖ pad16 ‖ le64(|aad|) ‖ le64(|ct|).
-@ __mac_data ( Vec u ) aad ( Vec u ) ct → ( Vec u ) {
+// Build the Poly1305 input: aad ‖ pad16 ‖ ct ‖ pad16 ‖ le64(|aad|) ‖ le64(|ct|),
+// where the ciphertext is the `cl` bytes of `ct` at `coff` — decrypt hands
+// in the record buffer with the tag still on the end rather than a copy.
+@ __mac_data ( Vec u ) aad ( Vec u ) ct i coff i cl → ( Vec u ) {
     : i al ( vec_len [u] aad )
-    : i cl ( vec_len [u] ct )
     : ( Vec u ) m ( vec_with_cap [u] + + al cl 32 )
     // Bulk pointer copies, not per-byte checked pushes: the ciphertext
     // side is the whole record and this concat sat at ~4% of a TLS
@@ -649,7 +663,7 @@ $ `stdlib/core/vec.nu`
     : i cbase ( vec_len [u] m )
     : b _cl ( vec_set_len [u] m + cbase cl )
     : *u mp2 ( vec_data [u] m )
-    : *u cp ( vec_data [u] ct )
+    : *u cp # *u + # i ( vec_data [u] ct ) coff
     = i 0
     ~ < i cl { = . mp2 + cbase i . cp i = i + i 1 }
     ( __pad16 m cl )
@@ -667,7 +681,7 @@ $ `stdlib/core/vec.nu`
     ? > ( vec_len [u] plaintext ) 274877906880 { ^ ( vec_new [u] ) } {}
     : ( Vec u ) otk ( __poly_key key nonce )
     : ( Vec u ) ct ( chacha20_xor key 1 nonce plaintext )
-    : ( Vec u ) md ( __mac_data aad ct )
+    : ( Vec u ) md ( __mac_data aad ct 0 ( vec_len [u] ct ) )
     : ( Vec u ) tag ( poly1305_mac otk md )
     : ~ i k 0
     ~ < k 16 { ( vec_push [u] ct # u ( __cc_bget tag k ) ) = k + k 1 }
@@ -695,22 +709,19 @@ $ `stdlib/core/vec.nu`
     : i total ( vec_len [u] ct_and_tag )
     ? < total 16 { ^ @ ?( Vec u ) { F # ( Vec u ) 0 } } {}
     : i ctlen - total 16
-    : ( Vec u ) ct ( vec_with_cap [u] ? > ctlen 0 ctlen 1 )
-    : ~ i k 0
-    ~ < k ctlen { ( vec_push [u] ct # u ( __cc_bget ct_and_tag k ) ) = k + k 1 }
-
+    // The ciphertext is `ct_and_tag` minus its trailing tag — both the MAC
+    // and the keystream take it as a range, so nothing is copied out of
+    // the record to name it. Extracting it used to cost a bounds-checked
+    // `vec_get` + `vec_push` PER BYTE of every 16 KB record, a quarter of
+    // the whole receive path.
     : ( Vec u ) otk ( __poly_key key nonce )
-    : ( Vec u ) md ( __mac_data aad ct )
+    : ( Vec u ) md ( __mac_data aad ct_and_tag 0 ctlen )
     : ( Vec u ) tag ( poly1305_mac otk md )
     : b ok ( __tag_ok ct_and_tag ctlen tag )
     ( vec_free [u] otk )
     ( vec_free [u] md )
     ( vec_free [u] tag )
-    ? ! ok {
-        ( vec_free [u] ct )
-        ^ @ ?( Vec u ) { F # ( Vec u ) 0 }
-    } {}
-    : ( Vec u ) pt ( chacha20_xor key 1 nonce ct )
-    ( vec_free [u] ct )
+    ? ! ok { ^ @ ?( Vec u ) { F # ( Vec u ) 0 } } {}
+    : ( Vec u ) pt ( chacha20_xor_range key 1 nonce ct_and_tag 0 ctlen )
     ^ @ ?( Vec u ) { T pt }
 }

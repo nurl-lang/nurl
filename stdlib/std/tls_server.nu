@@ -294,13 +294,28 @@ $ `stdlib/std/aes_gcm.nu`
     : i sidlen ( _t_bget ch 38 )
     : i p1 + 39 sidlen
     : i cslen ( _rdint ch p1 2 )
-    // choose cipher: prefer AES-128-GCM (0x1301), else ChaCha20 (0x1303)
+    // Choose the cipher: ChaCha20-Poly1305 (0x1303) when the client
+    // offers it, AES-128-GCM (0x1301) otherwise.
+    //
+    // The preference used to be the other way round, and since
+    // TLS_AES_128_GCM_SHA256 is the one suite RFC 8446 requires every
+    // implementation to have, EVERY client offered it and EVERY
+    // connection this server accepted got it. NURL has no AES-NI path:
+    // `std/aes_gcm.nu` derives each S-box byte through a constant-time
+    // GF(2^8) inversion rather than a cache-timing-visible table, which
+    // is the right call for security and costs about four thousand
+    // cycles a byte. Measured on 16 KB records (`bench/crypto_hotpath.nu`):
+    // AES-128-GCM 0.55 MB/s against ChaCha20-Poly1305's 305 MB/s — the
+    // preference alone was a ~500x difference on everything this server
+    // sent. The two suites are equally strong; a software-only TLS stack
+    // preferring ChaCha is what OpenSSL itself does when the CPU has no
+    // AES instructions.
     : ~ i suite 0
     : ~ i ci 0
     ~ < ci cslen {
         : i s2 ( _rdint ch + + p1 2 ci 2 )
-        ? == s2 4865 { ? == suite 0 { = suite 4865 } {} } {}
-        ? == s2 4867 { ? == suite 0 { = suite 4867 } {} } {}
+        ? == s2 4867 { = suite 4867 } {}
+        ? & == s2 4865 == suite 0 { = suite 4865 } {}
         = ci + ci 2
     }
     ? == suite 0 { = suite 4867 } {}
