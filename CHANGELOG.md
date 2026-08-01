@@ -104,6 +104,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The P-256 Montgomery reduction performs no multiplies at all — a
+  keygen is 1.07 → 0.93 ms.** The reduction half of CIOS multiplies `m`
+  by the modulus limb by limb, and P-256's modulus is
+  `[2^32−1, 2^32−1, 2^32−1, 0, 0, 0, 1, 2^32−1]` in the radix the field
+  now uses. Every one of those partial products is a shift, a zero, or
+  `m` itself. `-p^-1 mod 2^32` is 1 as well, so `m` is simply `t[0]`,
+  which makes the first step's low word cancel by construction and the
+  next two limbs fall through unchanged.
+
+  A Montgomery multiply is 64 machine multiplies instead of 128, and
+  `__p256_mul_d` compiles to 8 `imul` per outer iteration instead of 16.
+  This is what "Montgomery-friendly prime" buys and it was being paid
+  for without being spent.
+
 - **A P-256 key generation takes 1.07 ms instead of 4.77 ms, and makes 98
   allocations instead of 44 124 — a TLS 1.3 handshake is 8.5 → 4.9 ms.**
   Two changes to `std/p256_field`, the constant-time field behind every
