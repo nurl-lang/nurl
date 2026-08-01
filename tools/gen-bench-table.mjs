@@ -100,19 +100,24 @@ const head = COLUMNS.map(
 
 const body = rows
     .map((bench) => {
-        // The fastest cell in the row glows. The comparison is on the
-        // *rendered* value, so two cells that print the same number both
-        // glow: highlighting 35 ms and not the 35 ms next to it would
-        // read as a mistake, and at this resolution it would be one.
         const values = COLUMNS.map((c) => bench.run_ms?.[c.key] ?? null);
         const finite = values.filter((v) => typeof v === "number" && Number.isFinite(v));
         const bestLabel = finite.length > 0 ? formatMs(Math.min(...finite)) : null;
+        const nurlLabel = formatMs(values[0]);
+        const [nurlMs, ...otherValues] = values;
+        const nurlWins = typeof nurlMs === "number" && Number.isFinite(nurlMs) &&
+            otherValues.every((value) =>
+                typeof value === "number" && Number.isFinite(value) && nurlMs < value,
+            );
+        const nurlTies = !nurlWins &&
+            bestLabel !== null && nurlLabel === bestLabel;
 
         const cells = COLUMNS.map((column, i) => {
             const label = formatMs(values[i]);
             const classes = ["num"];
             if (column.nurl) classes.push("nurl-col");
-            if (bestLabel !== null && label === bestLabel) classes.push("fastest");
+            if (column.nurl && nurlWins) classes.push("fastest");
+            if (column.nurl && nurlTies) classes.push("tied");
             return `            <td class="${classes.join(" ")}">${label}</td>`;
         }).join("\n");
 
@@ -153,9 +158,9 @@ ${body}
     </div>
 
     <p class="bench-note">
-      Median wall-clock milliseconds, whole process, lower is better; the fastest
-      cell in each row is highlighted. Same algorithm in every language — each row is
-      timed only after all five implementations print the same result, so a cell can
+       Median wall-clock milliseconds, whole process, lower is better; NURL is highlighted
+       only when it is faster than every other language. Same algorithm in every language — each row is
+      timed only after all ${COLUMNS.length} implementations print the same result, so a cell can
       never be fast by computing something else.
       Measured on ${escapeHtml(host.label ?? "unknown host")}${host.cores ? ` (${host.cores} logical cores)` : ""}
       with NURL ${escapeHtml(shortVersion(tools.nurl))} ·
@@ -177,7 +182,28 @@ if (start === -1 || stop === -1 || stop < start) {
     die(`markers ${BEGIN} / ${END} not found in ${HTML}`);
 }
 
-writeFileSync(HTML, html.slice(0, start) + table + html.slice(stop + END.length));
+let out = html.slice(0, start) + table + html.slice(stop + END.length);
+
+// The prose above the table counts the same things the table does ("15
+// benchmarks, 5 languages"). Left by hand it drifts the moment a row is
+// added, and it drifts *silently* — the table beside it is right. Fill it
+// from the same numbers, through the `data-fact` hook gen-site-facts.sh
+// already established for release-coupled figures.
+function injectFact(source, key, value) {
+    const pattern = new RegExp(`(data-fact="${key}"[^>]*>)[^<]*`, "g");
+    let hits = 0;
+    const replaced = source.replace(pattern, (_match, open) => {
+        hits += 1;
+        return `${open}${value}`;
+    });
+    if (hits === 0) console.warn(`gen-bench-table: no data-fact="${key}" element in ${HTML}`);
+    return replaced;
+}
+
+out = injectFact(out, "bench_count", String(rows.length));
+out = injectFact(out, "bench_languages", String(COLUMNS.length));
+
+writeFileSync(HTML, out);
 console.log(
     `bench table → ${HTML}\n  ${rows.length} benchmarks × ${COLUMNS.length} languages, measured ${generated}`,
 );

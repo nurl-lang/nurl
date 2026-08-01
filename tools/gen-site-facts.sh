@@ -5,7 +5,7 @@
 #  gen-site-facts.sh — keep the landing page's numbers honest.
 #
 #  The site (nurlweb/public/index.html) carries release-coupled facts
-#  (version, compiler size, test/stdlib/example counts) that drift and
+#  (version, compiler size, test/stdlib/example/target counts) that drift and
 #  even contradict each other when hand-edited. This script computes them
 #  from the repo — the single source of truth — and writes them into every
 #  element carrying a matching `data-fact="<key>"` attribute. The one
@@ -39,6 +39,15 @@ compiler_lines="$(comma "$(wc -l < "$ROOT/compiler/nurlc.nu")")"
 tests="$(comma "$(find "$ROOT/compiler/tests" -maxdepth 1 -name '*.nu' | wc -l | tr -d ' ')")"
 stdlib_modules="$(find "$ROOT/stdlib" -name '*.nu' | wc -l | tr -d ' ')"
 examples="$(find "$ROOT/examples" -maxdepth 1 -name '*.nu' | wc -l | tr -d ' ')"
+# Tested targets = the rows of the "Target platforms" grid. That grid is the
+# hand-maintained source of truth (each row carries its own evidence: "on-device",
+# "flashed & verified"), so the headline figure is counted from it rather than
+# typed a second time — a new target used to mean editing two places, and the
+# stat is exactly the one nobody remembered.
+# `|| true`: grep exits 1 on no match, which under `set -e` would abort the
+# publish with no message at all if that markup is ever restyled. Fall back to
+# leaving the figure alone instead.
+targets="$(grep -c '<div class="target">' "$HTML" 2>/dev/null | tr -d ' ' || true)"
 
 # Registry package count — the one fact whose source of truth is the live
 # registry, not the repo. Fetched best-effort from its public stats endpoint;
@@ -65,6 +74,16 @@ inject compiler_lines "$compiler_lines"
 inject tests          "$tests"
 inject stdlib_modules "$stdlib_modules"
 inject examples       "$examples"
+if [[ "${targets:-0}" -gt 0 ]]; then
+    inject targets "$targets"
+    # The count also appears in the <meta> descriptions, where there is no
+    # element text to inject into — patch the attribute value in place instead,
+    # so the social-card blurb cannot claim a different number than the page.
+    perl -0777 -i -pe "s/\b[0-9]+ tested targets\b/$targets tested targets/g" "$HTML"
+else
+    echo "gen-site-facts: no target rows matched — leaving the target count as it stands" >&2
+    targets="unchanged"
+fi
 # Only overwrite the registry figures when the fetch actually produced them.
 if [[ -n "$registry_packages" ]]; then
     inject registry_packages "$(comma "$registry_packages")"
@@ -74,4 +93,4 @@ if [[ -n "$registry_versions" ]]; then
 fi
 
 echo "site facts → $HTML"
-echo "  version=$version  compiler_lines=$compiler_lines  tests=$tests  stdlib_modules=$stdlib_modules  examples=$examples  registry_packages=${registry_packages:-unchanged}"
+echo "  version=$version  compiler_lines=$compiler_lines  tests=$tests  stdlib_modules=$stdlib_modules  examples=$examples  targets=$targets  registry_packages=${registry_packages:-unchanged}"

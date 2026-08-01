@@ -1,0 +1,21 @@
+{
+  "_comment": [
+    "Editorial half of the landing page's contributor strip. The list itself",
+    "is not here — it comes from GitHub at publish time (see",
+    "tools/gen-contributors.mjs). This file only supplies the parts an API",
+    "cannot know: the display name and the one-line role under it.",
+    "",
+    "A contributor with no entry below still appears; their role line falls",
+    "back to their commit count. Add them here to give it a name.",
+    "",
+    "The order of `people` is the order of the strip. Anyone not listed is",
+    "appended after them, most commits first, up to `limit` faces total."
+  ],
+  "limit": 6,
+  "exclude": ["dependabot", "renovate", "github-actions"],
+  "people": {
+    "tero-punos": { "name": "Tero Andelin", "role": "compiler & language" },
+    "hindurable": { "name": "Hindurable", "role": "stdlib & tooling" },
+    "iljasrb": { "name": "iljasrb", "role": "web documentation" }
+  }
+}
