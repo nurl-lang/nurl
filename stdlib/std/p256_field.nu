@@ -64,6 +64,39 @@ $ `stdlib/core/vec.nu`
     ^ v
 }
 
+// The same for an arbitrary limb count (the CIOS accumulator wants 18).
+@ __magn i n → ( Vec i ) {
+    : ( Vec i ) v ( vec_with_cap [i] n )
+    : b _l ( vec_set_len [i] v n )
+    ^ v
+}
+
+// ── field scratch ─────────────────────────────────────────────────────
+// The modulus and the two temporaries every field operation needs, held
+// for the length of a whole scalar multiply instead of being allocated
+// and freed inside each one.
+//
+// This is where the allocator time went. `vec_with_cap` is TWO
+// allocations — a 24-byte control block and the data buffer — so a
+// Montgomery multiply that built `modp`, the accumulator, the difference
+// and its result made eight, and one point addition performs about
+// thirty field operations. A P-256 keygen was making ~164000
+// allocations; now only each operation's RESULT is allocated.
+//
+// A scratch is created per scalar multiply and never shared between
+// them, so there is no state to race over. Every routine below fills
+// its scratch limbs completely before reading them, exactly as it did
+// when they were fresh allocations.
+: P256Scratch { ( Vec i ) modp ( Vec i ) t ( Vec i ) diff }
+
+@ __p256_scr_new → P256Scratch {
+    ^ @ P256Scratch { ( __p256_mod ) ( __magn 18 ) ( __mag16 ) }
+}
+
+@ __p256_scr_free P256Scratch s → v {
+    ( vec_free [i] . s modp ) ( vec_free [i] . s t ) ( vec_free [i] . s diff )
+}
+
 // Limb access in the field routines goes through `*i` rather than
 // `__ctl` / `vec_set`. Every one of these loops is fixed-count with an
 // index the compiler can see is in range, so the bounds check the Vec
@@ -83,11 +116,17 @@ $ `stdlib/core/vec.nu`
 // Montgomery multiply: returns (a·b·R^-1) mod p as 16 fixed limbs. CIOS, all
 // fixed-count loops, no data-dependent branch. a, b are 16-limb (< p).
 @ p256ct_mul ( Vec i ) a ( Vec i ) b → ( Vec i ) {
-    : ( Vec i ) modp ( __p256_mod )
+    : P256Scratch scr ( __p256_scr_new )
+    : ( Vec i ) r ( __p256_mul_s scr a b )
+    ( __p256_scr_free scr )
+    ^ r
+}
+
+@ __p256_mul_s P256Scratch scr ( Vec i ) a ( Vec i ) b → ( Vec i ) {
+    : ( Vec i ) modp . scr modp
     : i pinv ( __p256_pinv )
     // accumulator t has 18 limbs (n+2), starts zero.
-    : ( Vec i ) t ( vec_with_cap [i] 18 )
-    : b _tl ( vec_set_len [i] t 18 )
+    : ( Vec i ) t . scr t
     : *i ap ( vec_data [i] a )
     : *i bp ( vec_data [i] b )
     : *i tp ( vec_data [i] t )
@@ -126,9 +165,7 @@ $ `stdlib/core/vec.nu`
         = i + i 1
     }
     // t is 17 meaningful limbs (t[0..16]); value < 2p. Conditional subtract p.
-    : ( Vec i ) out ( __p256_cond_sub_p t modp )
-    ( vec_free [i] modp ) ( vec_free [i] t )
-    ^ out
+    ^ ( __p256_cond_sub_p scr t )
 }
 
 // Given a 17-limb t in [0, 2p), return (t mod p) as 16 limbs, constant-time:
@@ -136,10 +173,10 @@ $ `stdlib/core/vec.nu`
 // `modp` is passed in rather than rebuilt: every caller already holds it,
 // and building it cost sixteen pushes into a fresh allocation on each of
 // the ~3000 field operations a scalar multiply performs.
-@ __p256_cond_sub_p ( Vec i ) t ( Vec i ) modp → ( Vec i ) {
-    : ( Vec i ) diff ( __mag16 )
+@ __p256_cond_sub_p P256Scratch scr ( Vec i ) t → ( Vec i ) {
+    : ( Vec i ) diff . scr diff
     : *i tp ( vec_data [i] t )
-    : *i pp ( vec_data [i] modp )
+    : *i pp ( vec_data [i] . scr modp )
     : *i dp ( vec_data [i] diff )
     : ~ i borrow 0
     : ~ i k 0
@@ -162,15 +199,20 @@ $ `stdlib/core/vec.nu`
         = . op j | & mask . dp j & imask . tp j
         = j + j 1
     }
-    ( vec_free [i] diff )
     ^ out
 }
 
 // (a + b) mod p, constant-time. a, b < p ⇒ a+b < 2p ⇒ one conditional sub.
 @ p256ct_add ( Vec i ) a ( Vec i ) b → ( Vec i ) {
-    : ( Vec i ) modp ( __p256_mod )
-    : ( Vec i ) t ( vec_with_cap [i] 17 )
-    : b _tl ( vec_set_len [i] t 17 )
+    : P256Scratch scr ( __p256_scr_new )
+    : ( Vec i ) r ( __p256_add_s scr a b )
+    ( __p256_scr_free scr )
+    ^ r
+}
+
+@ __p256_add_s P256Scratch scr ( Vec i ) a ( Vec i ) b → ( Vec i ) {
+    // The 18-limb accumulator doubles as the 17-limb sum.
+    : ( Vec i ) t . scr t
     : *i ap ( vec_data [i] a )
     : *i bp ( vec_data [i] b )
     : *i tp ( vec_data [i] t )
@@ -183,15 +225,20 @@ $ `stdlib/core/vec.nu`
         = k + k 1
     }
     = . tp 16 carry
-    : ( Vec i ) out ( __p256_cond_sub_p t modp )
-    ( vec_free [i] modp ) ( vec_free [i] t )
-    ^ out
+    ^ ( __p256_cond_sub_p scr t )
 }
 
 // (a − b) mod p, constant-time: a − b, and if it borrows add p back.
 @ p256ct_sub ( Vec i ) a ( Vec i ) b → ( Vec i ) {
-    : ( Vec i ) modp ( __p256_mod )
-    : ( Vec i ) d ( __mag16 )
+    : P256Scratch scr ( __p256_scr_new )
+    : ( Vec i ) r ( __p256_sub_s scr a b )
+    ( __p256_scr_free scr )
+    ^ r
+}
+
+@ __p256_sub_s P256Scratch scr ( Vec i ) a ( Vec i ) b → ( Vec i ) {
+    : ( Vec i ) modp . scr modp
+    : ( Vec i ) d . scr diff
     : *i ap ( vec_data [i] a )
     : *i bp ( vec_data [i] b )
     : *i pp ( vec_data [i] modp )
@@ -216,22 +263,35 @@ $ `stdlib/core/vec.nu`
         = c2 >> s 16
         = j + j 1
     }
-    ( vec_free [i] modp ) ( vec_free [i] d )
     ^ out
 }
 
 @ p256ct_sqr ( Vec i ) a → ( Vec i ) { ^ ( p256ct_mul a a ) }
 
 @ p256ct_to_mont ( Vec i ) a → ( Vec i ) {
+    : P256Scratch scr ( __p256_scr_new )
+    : ( Vec i ) r ( __p256_to_mont_s scr a )
+    ( __p256_scr_free scr )
+    ^ r
+}
+
+@ __p256_to_mont_s P256Scratch scr ( Vec i ) a → ( Vec i ) {
     : ( Vec i ) r2 ( __p256_r2 )
-    : ( Vec i ) r ( p256ct_mul a r2 )
+    : ( Vec i ) r ( __p256_mul_s scr a r2 )
     ( vec_free [i] r2 )
     ^ r
 }
 
 @ p256ct_from_mont ( Vec i ) a → ( Vec i ) {
+    : P256Scratch scr ( __p256_scr_new )
+    : ( Vec i ) r ( __p256_from_mont_s scr a )
+    ( __p256_scr_free scr )
+    ^ r
+}
+
+@ __p256_from_mont_s P256Scratch scr ( Vec i ) a → ( Vec i ) {
     : ( Vec i ) one ( __p256_one )
-    : ( Vec i ) r ( p256ct_mul a one )
+    : ( Vec i ) r ( __p256_mul_s scr a one )
     ( vec_free [i] one )
     ^ r
 }
@@ -246,8 +306,15 @@ $ `stdlib/core/vec.nu`
 
 // Montgomery 1 (= R mod p), the field identity in Montgomery form.
 @ p256ct_one_mont → ( Vec i ) {
+    : P256Scratch scr ( __p256_scr_new )
+    : ( Vec i ) r ( __p256_one_mont_s scr )
+    ( __p256_scr_free scr )
+    ^ r
+}
+
+@ __p256_one_mont_s P256Scratch scr → ( Vec i ) {
     : ( Vec i ) one ( __p256_one )
-    : ( Vec i ) r ( p256ct_to_mont one )
+    : ( Vec i ) r ( __p256_to_mont_s scr one )
     ( vec_free [i] one )
     ^ r
 }
@@ -257,24 +324,30 @@ $ `stdlib/core/vec.nu`
 // square/multiply schedule is data-independent. Input/output in Mont form;
 // a^(p-2)·R ≡ a^-1·R (mod p). For a == 0 returns 0.
 @ p256ct_inv ( Vec i ) a → ( Vec i ) {
+    : P256Scratch scr ( __p256_scr_new )
+    : ( Vec i ) r ( __p256_inv_s scr a )
+    ( __p256_scr_free scr )
+    ^ r
+}
+
+// 256 squarings and 256 multiplies of the Fermat chain, all off one scratch.
+@ __p256_inv_s P256Scratch scr ( Vec i ) a → ( Vec i ) {
     // p-2 = ffffffff00000001000000000000000000000000fffffffffffffffffffffffd
     // Square-and-multiply, MSB→LSB, over the 256-bit exponent's limbs.
     : ( Vec i ) e ( __p256_pm2 )
-    : ~ ( Vec i ) result ( p256ct_one_mont )
+    : ~ ( Vec i ) result ( __p256_one_mont_s scr )
     : ~ i bit 255
     ~ >= bit 0 {
-        : ( Vec i ) sq ( p256ct_sqr result )
+        : ( Vec i ) sq ( __p256_mul_s scr result result )
         ( vec_free [i] result ) = result sq
         : i li / bit 16
         : i bp % bit 16
         : i b1 & 1 >> ( __ctl e li ) bp
-        : ( Vec i ) prod ( p256ct_mul result a )
+        : ( Vec i ) prod ( __p256_mul_s scr result a )
         // constant-time select prod (if bit) else result
         : i mask & 65535 - 0 b1
         : i imask & 65535 - 0 - 1 b1
-        : ( Vec i ) sel ( vec_with_cap [i] 16 )
-        : ~ i k 0
-        ~ < k 16 { ( vec_push [i] sel | & mask ( __ctl prod k ) & imask ( __ctl result k ) ) = k + k 1 }
+        : ( Vec i ) sel ( __p256_lmerge mask imask prod result )
         ( vec_free [i] prod ) ( vec_free [i] result )
         = result sel
         = bit - bit 1
@@ -333,49 +406,49 @@ $ `stdlib/core/vec.nu`
 // in Montgomery form; `am` = a, `b3m` = b3 in Montgomery form. Returns a fresh
 // point. Mutable registers t0..t5 / X3,Y3,Z3 mirror the published register
 // reuse; each reassignment frees the overwritten value.
-@ p256ct_padd P256Pt P P256Pt Q ( Vec i ) am ( Vec i ) b3m → P256Pt {
+@ p256ct_padd P256Scratch scr P256Pt P P256Pt Q ( Vec i ) am ( Vec i ) b3m → P256Pt {
     : ( Vec i ) X1 . P x : ( Vec i ) Y1 . P y : ( Vec i ) Z1 . P z
     : ( Vec i ) X2 . Q x : ( Vec i ) Y2 . Q y : ( Vec i ) Z2 . Q z
-    : ~ ( Vec i ) t0 ( p256ct_mul X1 X2 )
-    : ~ ( Vec i ) t1 ( p256ct_mul Y1 Y2 )
-    : ~ ( Vec i ) t2 ( p256ct_mul Z1 Z2 )
-    : ~ ( Vec i ) t3 ( p256ct_add X1 Y1 )
-    : ~ ( Vec i ) t4 ( p256ct_add X2 Y2 )
-    : ( Vec i ) m6 ( p256ct_mul t3 t4 ) ( vec_free [i] t3 ) = t3 m6
-    : ( Vec i ) m7 ( p256ct_add t0 t1 ) ( vec_free [i] t4 ) = t4 m7
-    : ( Vec i ) m8 ( p256ct_sub t3 t4 ) ( vec_free [i] t3 ) = t3 m8
-    : ( Vec i ) m9 ( p256ct_add X1 Z1 ) ( vec_free [i] t4 ) = t4 m9
-    : ~ ( Vec i ) t5 ( p256ct_add X2 Z2 )
-    : ( Vec i ) m11 ( p256ct_mul t4 t5 ) ( vec_free [i] t4 ) = t4 m11
-    : ( Vec i ) m12 ( p256ct_add t0 t2 ) ( vec_free [i] t5 ) = t5 m12
-    : ( Vec i ) m13 ( p256ct_sub t4 t5 ) ( vec_free [i] t4 ) = t4 m13
-    : ( Vec i ) m14 ( p256ct_add Y1 Z1 ) ( vec_free [i] t5 ) = t5 m14
-    : ~ ( Vec i ) X3 ( p256ct_add Y2 Z2 )
-    : ( Vec i ) m16 ( p256ct_mul t5 X3 ) ( vec_free [i] t5 ) = t5 m16
-    : ( Vec i ) m17 ( p256ct_add t1 t2 ) ( vec_free [i] X3 ) = X3 m17
-    : ( Vec i ) m18 ( p256ct_sub t5 X3 ) ( vec_free [i] t5 ) = t5 m18
-    : ~ ( Vec i ) Z3 ( p256ct_mul am t4 )
-    : ( Vec i ) m20 ( p256ct_mul b3m t2 ) ( vec_free [i] X3 ) = X3 m20
-    : ( Vec i ) m21 ( p256ct_add X3 Z3 ) ( vec_free [i] Z3 ) = Z3 m21
-    : ( Vec i ) m22 ( p256ct_sub t1 Z3 ) ( vec_free [i] X3 ) = X3 m22
-    : ( Vec i ) m23 ( p256ct_add t1 Z3 ) ( vec_free [i] Z3 ) = Z3 m23
-    : ~ ( Vec i ) Y3 ( p256ct_mul X3 Z3 )
-    : ( Vec i ) m25 ( p256ct_add t0 t0 ) ( vec_free [i] t1 ) = t1 m25
-    : ( Vec i ) m26 ( p256ct_add t1 t0 ) ( vec_free [i] t1 ) = t1 m26
-    : ( Vec i ) m27 ( p256ct_mul am t2 ) ( vec_free [i] t2 ) = t2 m27
-    : ( Vec i ) m28 ( p256ct_mul b3m t4 ) ( vec_free [i] t4 ) = t4 m28
-    : ( Vec i ) m29 ( p256ct_add t1 t2 ) ( vec_free [i] t1 ) = t1 m29
-    : ( Vec i ) m30 ( p256ct_sub t0 t2 ) ( vec_free [i] t2 ) = t2 m30
-    : ( Vec i ) m31 ( p256ct_mul am t2 ) ( vec_free [i] t2 ) = t2 m31
-    : ( Vec i ) m32 ( p256ct_add t4 t2 ) ( vec_free [i] t4 ) = t4 m32
-    : ( Vec i ) m33 ( p256ct_mul t1 t4 ) ( vec_free [i] t0 ) = t0 m33
-    : ( Vec i ) m34 ( p256ct_add Y3 t0 ) ( vec_free [i] Y3 ) = Y3 m34
-    : ( Vec i ) m35 ( p256ct_mul t5 t4 ) ( vec_free [i] t0 ) = t0 m35
-    : ( Vec i ) m36 ( p256ct_mul t3 X3 ) ( vec_free [i] X3 ) = X3 m36
-    : ( Vec i ) m37 ( p256ct_sub X3 t0 ) ( vec_free [i] X3 ) = X3 m37
-    : ( Vec i ) m38 ( p256ct_mul t3 t1 ) ( vec_free [i] t0 ) = t0 m38
-    : ( Vec i ) m39 ( p256ct_mul t5 Z3 ) ( vec_free [i] Z3 ) = Z3 m39
-    : ( Vec i ) m40 ( p256ct_add Z3 t0 ) ( vec_free [i] Z3 ) = Z3 m40
+    : ~ ( Vec i ) t0 ( __p256_mul_s scr X1 X2 )
+    : ~ ( Vec i ) t1 ( __p256_mul_s scr Y1 Y2 )
+    : ~ ( Vec i ) t2 ( __p256_mul_s scr Z1 Z2 )
+    : ~ ( Vec i ) t3 ( __p256_add_s scr X1 Y1 )
+    : ~ ( Vec i ) t4 ( __p256_add_s scr X2 Y2 )
+    : ( Vec i ) m6 ( __p256_mul_s scr t3 t4 ) ( vec_free [i] t3 ) = t3 m6
+    : ( Vec i ) m7 ( __p256_add_s scr t0 t1 ) ( vec_free [i] t4 ) = t4 m7
+    : ( Vec i ) m8 ( __p256_sub_s scr t3 t4 ) ( vec_free [i] t3 ) = t3 m8
+    : ( Vec i ) m9 ( __p256_add_s scr X1 Z1 ) ( vec_free [i] t4 ) = t4 m9
+    : ~ ( Vec i ) t5 ( __p256_add_s scr X2 Z2 )
+    : ( Vec i ) m11 ( __p256_mul_s scr t4 t5 ) ( vec_free [i] t4 ) = t4 m11
+    : ( Vec i ) m12 ( __p256_add_s scr t0 t2 ) ( vec_free [i] t5 ) = t5 m12
+    : ( Vec i ) m13 ( __p256_sub_s scr t4 t5 ) ( vec_free [i] t4 ) = t4 m13
+    : ( Vec i ) m14 ( __p256_add_s scr Y1 Z1 ) ( vec_free [i] t5 ) = t5 m14
+    : ~ ( Vec i ) X3 ( __p256_add_s scr Y2 Z2 )
+    : ( Vec i ) m16 ( __p256_mul_s scr t5 X3 ) ( vec_free [i] t5 ) = t5 m16
+    : ( Vec i ) m17 ( __p256_add_s scr t1 t2 ) ( vec_free [i] X3 ) = X3 m17
+    : ( Vec i ) m18 ( __p256_sub_s scr t5 X3 ) ( vec_free [i] t5 ) = t5 m18
+    : ~ ( Vec i ) Z3 ( __p256_mul_s scr am t4 )
+    : ( Vec i ) m20 ( __p256_mul_s scr b3m t2 ) ( vec_free [i] X3 ) = X3 m20
+    : ( Vec i ) m21 ( __p256_add_s scr X3 Z3 ) ( vec_free [i] Z3 ) = Z3 m21
+    : ( Vec i ) m22 ( __p256_sub_s scr t1 Z3 ) ( vec_free [i] X3 ) = X3 m22
+    : ( Vec i ) m23 ( __p256_add_s scr t1 Z3 ) ( vec_free [i] Z3 ) = Z3 m23
+    : ~ ( Vec i ) Y3 ( __p256_mul_s scr X3 Z3 )
+    : ( Vec i ) m25 ( __p256_add_s scr t0 t0 ) ( vec_free [i] t1 ) = t1 m25
+    : ( Vec i ) m26 ( __p256_add_s scr t1 t0 ) ( vec_free [i] t1 ) = t1 m26
+    : ( Vec i ) m27 ( __p256_mul_s scr am t2 ) ( vec_free [i] t2 ) = t2 m27
+    : ( Vec i ) m28 ( __p256_mul_s scr b3m t4 ) ( vec_free [i] t4 ) = t4 m28
+    : ( Vec i ) m29 ( __p256_add_s scr t1 t2 ) ( vec_free [i] t1 ) = t1 m29
+    : ( Vec i ) m30 ( __p256_sub_s scr t0 t2 ) ( vec_free [i] t2 ) = t2 m30
+    : ( Vec i ) m31 ( __p256_mul_s scr am t2 ) ( vec_free [i] t2 ) = t2 m31
+    : ( Vec i ) m32 ( __p256_add_s scr t4 t2 ) ( vec_free [i] t4 ) = t4 m32
+    : ( Vec i ) m33 ( __p256_mul_s scr t1 t4 ) ( vec_free [i] t0 ) = t0 m33
+    : ( Vec i ) m34 ( __p256_add_s scr Y3 t0 ) ( vec_free [i] Y3 ) = Y3 m34
+    : ( Vec i ) m35 ( __p256_mul_s scr t5 t4 ) ( vec_free [i] t0 ) = t0 m35
+    : ( Vec i ) m36 ( __p256_mul_s scr t3 X3 ) ( vec_free [i] X3 ) = X3 m36
+    : ( Vec i ) m37 ( __p256_sub_s scr X3 t0 ) ( vec_free [i] X3 ) = X3 m37
+    : ( Vec i ) m38 ( __p256_mul_s scr t3 t1 ) ( vec_free [i] t0 ) = t0 m38
+    : ( Vec i ) m39 ( __p256_mul_s scr t5 Z3 ) ( vec_free [i] Z3 ) = Z3 m39
+    : ( Vec i ) m40 ( __p256_add_s scr Z3 t0 ) ( vec_free [i] Z3 ) = Z3 m40
     ( vec_free [i] t0 ) ( vec_free [i] t1 ) ( vec_free [i] t2 )
     ( vec_free [i] t3 ) ( vec_free [i] t4 ) ( vec_free [i] t5 )
     ^ @ P256Pt { X3 Y3 Z3 }
@@ -430,16 +503,19 @@ $ `stdlib/core/vec.nu`
 // and adds, then a constant-time point select keeps the add iff the bit set.
 // Returns the all-zero 64 bytes for the identity result.
 @ p256ct_scalarmult ( Vec u ) kbytes ( Vec i ) bx ( Vec i ) by → ( Vec u ) {
+    // One scratch for the whole ladder — see P256Scratch. Every field
+    // operation below borrows its modulus and temporaries from here.
+    : P256Scratch scr ( __p256_scr_new )
     : ( Vec i ) aplain ( __p256_a_plain )
-    : ( Vec i ) am ( p256ct_to_mont aplain )
+    : ( Vec i ) am ( __p256_to_mont_s scr aplain )
     ( vec_free [i] aplain )
     : ( Vec i ) b3plain ( __p256_b3_plain )
-    : ( Vec i ) b3m ( p256ct_to_mont b3plain )
+    : ( Vec i ) b3m ( __p256_to_mont_s scr b3plain )
     ( vec_free [i] b3plain )
     // base in Montgomery projective form (Z = 1).
-    : ( Vec i ) bxm ( p256ct_to_mont bx )
-    : ( Vec i ) bym ( p256ct_to_mont by )
-    : ( Vec i ) bzm ( p256ct_one_mont )
+    : ( Vec i ) bxm ( __p256_to_mont_s scr bx )
+    : ( Vec i ) bym ( __p256_to_mont_s scr by )
+    : ( Vec i ) bzm ( __p256_one_mont_s scr )
     : P256Pt base @ P256Pt { bxm bym bzm }
     : ~ P256Pt acc ( p256ct_identity )
     : i nbytes ( vec_len [u] kbytes )
@@ -452,19 +528,19 @@ $ `stdlib/core/vec.nu`
         : i bitpos - 7 % pos 8
         : i bv ?? ( vec_get [u] kbytes byteidx ) { T b → # i b F _ → 0 }
         : i bit & 1 >> bv bitpos
-        : P256Pt dbl ( p256ct_padd acc acc am b3m )
+        : P256Pt dbl ( p256ct_padd scr acc acc am b3m )
         ( p256pt_free acc ) = acc dbl
-        : P256Pt added ( p256ct_padd acc base am b3m )
+        : P256Pt added ( p256ct_padd scr acc base am b3m )
         : P256Pt sel ( p256ct_pt_select bit added acc )
         ( p256pt_free added ) ( p256pt_free acc ) = acc sel
         = pos + pos 1
     }
     // affine: x = X/Z, y = Y/Z (de-Montgomery via inverse).
-    : ( Vec i ) zinv ( p256ct_inv . acc z )
-    : ( Vec i ) xm ( p256ct_mul . acc x zinv )
-    : ( Vec i ) ym ( p256ct_mul . acc y zinv )
-    : ( Vec i ) xp ( p256ct_from_mont xm )
-    : ( Vec i ) yp ( p256ct_from_mont ym )
+    : ( Vec i ) zinv ( __p256_inv_s scr . acc z )
+    : ( Vec i ) xm ( __p256_mul_s scr . acc x zinv )
+    : ( Vec i ) ym ( __p256_mul_s scr . acc y zinv )
+    : ( Vec i ) xp ( __p256_from_mont_s scr xm )
+    : ( Vec i ) yp ( __p256_from_mont_s scr ym )
     : ( Vec u ) out ( vec_with_cap [u] 64 )
     ( __p256_limbs_to_be out xp )
     ( __p256_limbs_to_be out yp )
@@ -472,6 +548,7 @@ $ `stdlib/core/vec.nu`
     ( vec_free [i] am ) ( vec_free [i] b3m )
     ( vec_free [i] zinv ) ( vec_free [i] xm ) ( vec_free [i] ym )
     ( vec_free [i] xp ) ( vec_free [i] yp )
+    ( __p256_scr_free scr )
     ^ out
 }
 
