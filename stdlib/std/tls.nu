@@ -404,10 +404,13 @@ $ `stdlib/std/tls_verify.nu`
     // cipher_suites: TLS_CHACHA20_POLY1305_SHA256 (0x1303) +
     // TLS_AES_128_GCM_SHA256 (0x1301) — both use the SHA-256 key
     // schedule, so either keeps the rest of the handshake unchanged.
-    // ChaCha is listed FIRST on purpose: our AES is the constant-time
-    // (table-free) software S-box, ~0.5 MB/s, while ChaCha20-Poly1305
-    // runs ~25 MB/s — a 50× record-layer difference that is the sole
-    // throughput limit on large downloads. Servers honouring client
+    // ChaCha is listed FIRST on purpose: measured on one core over
+    // 16 KB records, ChaCha20-Poly1305 seals at ~370 MB/s and
+    // AES-128-GCM — bitsliced, so constant-time without AES
+    // instructions — at ~113. Both are now fast enough that a download
+    // is not bounded by the record layer, but ChaCha is still the
+    // better of the two on a host with no AES hardware, which is every
+    // host NURL has a code path for. Servers honouring client
     // preference (Cloudflare et al.) pick ChaCha; AES-only peers still
     // get 0x1301 from the same list.
     // 1.3 suites first, then the TLS 1.2 ECDHE suites for fallback.

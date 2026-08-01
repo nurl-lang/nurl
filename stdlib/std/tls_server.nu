@@ -300,16 +300,16 @@ $ `stdlib/std/aes_gcm.nu`
     // The preference used to be the other way round, and since
     // TLS_AES_128_GCM_SHA256 is the one suite RFC 8446 requires every
     // implementation to have, EVERY client offered it and EVERY
-    // connection this server accepted got it. NURL has no AES-NI path:
-    // `std/aes_gcm.nu` derives each S-box byte through a constant-time
-    // GF(2^8) inversion rather than a cache-timing-visible table, which
-    // is the right call for security and costs about four thousand
-    // cycles a byte. Measured on 16 KB records (`bench/crypto_hotpath.nu`):
-    // AES-128-GCM 0.5 MB/s against ChaCha20-Poly1305's 390 MB/s — the
-    // preference alone was a ~700x difference on everything this server
-    // sent. The two suites are equally strong; a software-only TLS stack
-    // preferring ChaCha is what OpenSSL itself does when the CPU has no
-    // AES instructions.
+    // connection this server accepted got it — back when AES-GCM ran at
+    // 0.5 MB/s against ChaCha's 390, that single line cost a ~700x
+    // slowdown on everything this server sent.
+    //
+    // `std/aes_gcm.nu` is bitsliced now and the gap is 3x, not 700x
+    // (16 KB records via `bench/crypto_hotpath.nu`: AES-128-GCM
+    // ~113 MB/s, ChaCha20-Poly1305 ~370). ChaCha still wins, and still
+    // should: NURL has no AES-NI path on any target, and a software-only
+    // TLS stack preferring ChaCha is what OpenSSL itself does when the
+    // CPU has no AES instructions. The two suites are equally strong.
     : ~ i suite 0
     : ~ i ci 0
     ~ < ci cslen {

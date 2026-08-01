@@ -2,6 +2,9 @@ COMPILE OK
 LINK OK
 EXIT 0
 OUTPUT
+tc1_empty: PASS
+tc2_oneblock: PASS
+aad_only: PASS
 tc3: PASS
 tc4: PASS
 tc4_open: PASS
@@ -10,4 +13,7 @@ tc14: PASS
 tc16: PASS
 tc16_open: PASS
 tamper256: PASS
+long128: PASS
+long256: PASS
+long256_open: PASS
 aes-gcm: all vectors PASS
