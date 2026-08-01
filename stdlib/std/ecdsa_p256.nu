@@ -281,15 +281,17 @@ $ `stdlib/std/p256_field.nu`  // fully constant-time scalar mult (secret path)
     ^ y
 }
 
-// bigint (0 ≤ x < p, ≤ 256 bits) → 16 little-endian 16-bit plain limbs.
-@ __big_to_limbs16 BigInt x → ( Vec i ) {
+// bigint (0 ≤ x < p, ≤ 256 bits) → 8 little-endian 32-bit plain limbs.
+@ __big_to_limbs8 BigInt x → ( Vec i ) {
     : ( Vec u ) be ( bigint_to_bytes_be x 32 )
-    : ( Vec i ) out ( vec_with_cap [i] 16 )
+    : ( Vec i ) out ( vec_with_cap [i] 8 )
     : ~ i k 0
-    ~ < k 16 {
-        : i lo ?? ( vec_get [u] be - 31 * 2 k ) { T b → # i b F _ → 0 }
-        : i hi ?? ( vec_get [u] be - 30 * 2 k ) { T b → # i b F _ → 0 }
-        ( vec_push [i] out | lo << hi 8 )
+    ~ < k 8 {
+        : i b0 ?? ( vec_get [u] be - 31 * 4 k ) { T b → # i b F _ → 0 }
+        : i b1 ?? ( vec_get [u] be - 30 * 4 k ) { T b → # i b F _ → 0 }
+        : i b2 ?? ( vec_get [u] be - 29 * 4 k ) { T b → # i b F _ → 0 }
+        : i b3 ?? ( vec_get [u] be - 28 * 4 k ) { T b → # i b F _ → 0 }
+        ( vec_push [i] out | | | b0 << b1 8 << b2 16 << b3 24 )
         = k + k 1
     }
     ( vec_free [u] be )
@@ -303,8 +305,8 @@ $ `stdlib/std/p256_field.nu`  // fully constant-time scalar mult (secret path)
 // BigInt, no secret-dependent branch, so no scalar blinding is needed (the
 // op is leak-free by construction). Identity result → 64 zero bytes.
 @ __p256_mul_affine ( Vec u ) scalar BigInt bx BigInt by → ( Vec u ) {
-    : ( Vec i ) bxl ( __big_to_limbs16 bx )
-    : ( Vec i ) byl ( __big_to_limbs16 by )
+    : ( Vec i ) bxl ( __big_to_limbs8 bx )
+    : ( Vec i ) byl ( __big_to_limbs8 by )
     : ( Vec u ) out ( p256ct_scalarmult scalar bxl byl )
     ( vec_free [i] bxl ) ( vec_free [i] byl )
     ^ out
