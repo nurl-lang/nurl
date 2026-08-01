@@ -104,6 +104,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`./build.sh` takes 23.6 s instead of 36.3 s — 35% off every build —
+  because the bootstrap no longer optimises the two compilers it throws
+  away.** Stages 0 and 1 are scaffolding: neither binary is shipped,
+  neither is benchmarked, and each one does exactly one job — compile
+  `nurlc.nu` once — before the build deletes it. Both were nonetheless
+  linked at `-O2 -flto`, and stage 0 is the one link `--split` cannot
+  help (it links the committed `nurlc_lastgood.ll` snapshot, which is a
+  single file by definition), so it was ~13 s of single-threaded ThinLTO
+  spent to make a 0.8 s job take 0.35 s.
+
+  They are built `-O0` now. Stage 2 — the one copied to `build/nurlc` —
+  keeps `-O2`, and its link flags are untouched.
+
+  | step | before | after |
+  |---|---:|---:|
+  | stage 0 link | 12.89 s | **0.75 s** |
+  | stage 1 link | 1.93 s | **0.30 s** |
+  | stage 1 ir | 0.38 s | 0.88 s |
+  | stage 2 ir | 0.35 s | 0.78 s |
+  | stage 2 link | 12.54 s | 12.49 s |
+  | **`--no-tests`, end to end** | **36.3 s** | **23.6 s** |
+
+  Twelve cores, clang 18. The scaffolding gets ~2× slower at the one
+  thing it does, and the build still comes out a third shorter.
+
+  **Nothing about the shipped compiler changes.** The IR a stage emits is
+  byte-identical at either optimisation level, which is the only property
+  the bootstrap depends on — and the fixed-point check (stage 1 ≡ stage 2,
+  byte for byte) proves it on every single build rather than taking it on
+  trust. `build/nurlc` verified to emit the same 3,330,125 bytes of IR,
+  hash for hash, at the same 0.34 s self-compile as before.
+
+  `--san` builds stay `-O2` throughout: LTO is already off there, so the
+  link is not the expensive part, and the instrumented self-compile is
+  the stage that runs closest to CI's memory and time ceilings. `build.bat`
+  gets the same treatment for the two throwaway stages (untested on
+  Windows beyond the flag swap — the structure is identical).
+
 - **A TLS handshake costs 10.5 ms of arithmetic instead of 57.4 —
   5.5×.** The ClientHello carries a key share for *both* groups, so every
   connection runs an X25519 and a P-256 keygen — and then a third scalar

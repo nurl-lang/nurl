@@ -175,6 +175,9 @@ ship. The drivers follow that rule rather than a global default:
 - **`build.sh` splits the throwaway stage-1 compiler**, but links the
   stage-2 one it installs as `build/nurlc` as a single module.
 
+The bootstrap applies the same rule to the optimisation level, not just
+the partition — see [Only stage 2 is optimised](#only-stage-2-is-optimised).
+
 Controls:
 
 | | |
@@ -253,6 +256,42 @@ no other-language toolchain is required.
 Snapshot refresh: `./build.sh --refresh-bootstrap` (re-runs the existing
 `build/nurlc` on the current `nurlc.nu` and overwrites both `.nu` and `.ll`;
 commit them together).
+
+### Only stage 2 is optimised
+
+Stages 0 and 1 are scaffolding. Neither binary is shipped or benchmarked,
+and each one does exactly one job — compile `nurlc.nu` once — before the
+build deletes it. `build.sh` therefore links them `-O0` and keeps `-O2`
+for stage 2, the one copied to `build/nurlc`.
+
+The trade is the same one the split above makes, pushed further: a
+throwaway compiler is allowed to be slow, because what it costs to *make*
+it fast dwarfs what the speed gives back. Stage 0 is the extreme case —
+it links the committed snapshot, which is one file by definition, so it
+is the one link the split cannot help.
+
+| step | `-O2` | `-O0` |
+|---|---:|---:|
+| stage 0 link | 12.89 s | **0.75 s** |
+| stage 1 link (split) | 1.93 s | **0.30 s** |
+| stage 1 ir (emit) | 0.38 s | 0.88 s |
+| stage 2 ir (emit) | 0.35 s | 0.78 s |
+| stage 2 link | 12.54 s | 12.49 s |
+| **`build.sh --no-tests`, end to end** | **36.3 s** | **23.6 s** |
+
+Twelve cores, clang 18. The two stages get ~2× slower at the one thing
+they do and the build still comes out 35% shorter.
+
+**This cannot change what gets built.** The IR a stage emits is
+byte-identical at either level — the bootstrap fixed point (stage 1 ≡
+stage 2, byte for byte) is checked on every build and would fail loudly
+otherwise, and stage 2's own link flags are untouched, so `build/nurlc`
+is the same binary it always was.
+
+Sanitized builds (`--san`) stay `-O2` throughout: LTO is already off
+there, so the link is not the expensive part, and the instrumented
+self-compile is the stage that runs closest to CI's memory and time
+limits — `-O0` would slow down the thing that is already slowest.
 
 ## Continuous integration
 
