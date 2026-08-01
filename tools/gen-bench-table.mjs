@@ -100,25 +100,27 @@ const head = COLUMNS.map(
 
 const body = rows
     .map((bench) => {
+        // NURL glows only when the number it PRINTS beats every other printed
+        // number. Comparing the underlying floats instead would light up rows
+        // where NURL leads by 0.1 ms — a third of a percent, well inside the
+        // run-to-run spread of a shared CI runner, and invisible in a table
+        // rounded to whole milliseconds. Highlighting one "39 ms" and not the
+        // "39 ms" beside it reads as a mistake, and at this resolution it is
+        // one: the two runs did not measurably differ. A tie is left plain.
         const values = COLUMNS.map((c) => bench.run_ms?.[c.key] ?? null);
+        const labels = values.map(formatMs);
         const finite = values.filter((v) => typeof v === "number" && Number.isFinite(v));
         const bestLabel = finite.length > 0 ? formatMs(Math.min(...finite)) : null;
-        const nurlLabel = formatMs(values[0]);
-        const [nurlMs, ...otherValues] = values;
-        const nurlWins = typeof nurlMs === "number" && Number.isFinite(nurlMs) &&
-            otherValues.every((value) =>
-                typeof value === "number" && Number.isFinite(value) && nurlMs < value,
-            );
-        const nurlTies = !nurlWins &&
-            bestLabel !== null && nurlLabel === bestLabel;
+        const nurlWins =
+            bestLabel !== null &&
+            labels[0] === bestLabel &&
+            !labels.slice(1).includes(bestLabel);
 
         const cells = COLUMNS.map((column, i) => {
-            const label = formatMs(values[i]);
             const classes = ["num"];
             if (column.nurl) classes.push("nurl-col");
             if (column.nurl && nurlWins) classes.push("fastest");
-            if (column.nurl && nurlTies) classes.push("tied");
-            return `            <td class="${classes.join(" ")}">${label}</td>`;
+            return `            <td class="${classes.join(" ")}">${labels[i]}</td>`;
         }).join("\n");
 
         return [
@@ -158,8 +160,10 @@ ${body}
     </div>
 
     <p class="bench-note">
-       Median wall-clock milliseconds, whole process, lower is better; NURL is highlighted
-       only when it is faster than every other language. Same algorithm in every language — each row is
+      Median wall-clock milliseconds, whole process, lower is better; NURL is
+      highlighted only where it prints a lower number than every other language —
+      two cells showing the same figure are a tie at this resolution, and neither
+      is marked. Same algorithm in every language — each row is
       timed only after all ${COLUMNS.length} implementations print the same result, so a cell can
       never be fast by computing something else.
       Measured on ${escapeHtml(host.label ?? "unknown host")}${host.cores ? ` (${host.cores} logical cores)` : ""}
