@@ -73,10 +73,16 @@ jobs:
           node -e 'const j=require("./bench/results/latest.json");
                    console.log("  generated", j.generated_utc, "commit", j.commit.slice(0,9))'
       # `deploy` runs the `predeploy` hook (gen-site-facts + bench-table +
-      # sync-installers) automatically, then `wrangler deploy`.
+      # contributors + sync-installers) automatically, then `wrangler deploy`.
+      #
+      # GITHUB_TOKEN is for gen-contributors.mjs: the contributor API allows
+      # 60 anonymous requests per hour per IP, which shared runner addresses
+      # can already have spent. Without it the strip silently keeps its
+      # previous contents; the token just makes the refresh reliable.
       - name: Deploy
         if: env.DEPLOY_ENABLED == 'true'
         run: npm run deploy
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
