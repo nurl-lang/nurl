@@ -299,11 +299,11 @@
 // aggregates). Used where a join must keep unsignedness contributed by
 // the OTHER operand/arm (binop results, `?`-phi joins).
 @ ty_to_unsigned s t → s {
-    ? ( seq t `i8` ) { ^ # s ( strdup `u8` ) } {}
-    ? ( seq t `i16` ) { ^ # s ( strdup `u16` ) } {}
-    ? ( seq t `i32` ) { ^ # s ( strdup `u32` ) } {}
-    ? ( seq t `i64` ) { ^ # s ( strdup `u64` ) } {}
-    ^ # s ( strdup t )
+    ? ( seq t `i8` ) { ^ # s ( nurl_strdup `u8` ) } {}
+    ? ( seq t `i16` ) { ^ # s ( nurl_strdup `u16` ) } {}
+    ? ( seq t `i32` ) { ^ # s ( nurl_strdup `u32` ) } {}
+    ? ( seq t `i64` ) { ^ # s ( nurl_strdup `u64` ) } {}
+    ^ # s ( nurl_strdup t )
 }
 
 // __llty_word_at: does the unsigned word `w` (u8/u16/u32/u64) sit at
@@ -345,10 +345,10 @@
     // nurl_get_last_type): a mixed borrowed-param/owned return would
     // let a caller's owned-arg-temp drop free the very pointer we
     // returned (bit us as garbage `alloca` types in stage2).
-    ? ( seq t `u8` ) { ^ # s ( strdup `i8` ) } {}
-    ? ( seq t `u16` ) { ^ # s ( strdup `i16` ) } {}
-    ? ( seq t `u32` ) { ^ # s ( strdup `i32` ) } {}
-    ? ( seq t `u64` ) { ^ # s ( strdup `i64` ) } {}
+    ? ( seq t `u8` ) { ^ # s ( nurl_strdup `i8` ) } {}
+    ? ( seq t `u16` ) { ^ # s ( nurl_strdup `i16` ) } {}
+    ? ( seq t `u32` ) { ^ # s ( nurl_strdup `i32` ) } {}
+    ? ( seq t `u64` ) { ^ # s ( nurl_strdup `i64` ) } {}
     : i tl ( nurl_str_len t )
     : ~ i p 0
     ~ < p tl {
@@ -361,7 +361,7 @@
         {}
         = p + p 1
     }
-    ^ # s ( strdup t )
+    ^ # s ( nurl_strdup t )
 }
 
 @ parse_type i lex → s {
@@ -1979,7 +1979,7 @@
 @ encode_str s val i pos i end → s {
     : i n - end pos
     // worst case every byte escapes to three chars, plus NUL
-    : s out # s ( malloc + * n 3 1 )
+    : s out # s ( nurl_alloc + * n 3 1 )
     : *u op # *u out
     : ~ i w 0
     : ~ i p pos
@@ -3715,7 +3715,7 @@
 @ nurl_str_cat s a s b → s {
     : i la ( strlen a )
     : i lb ( strlen b )
-    : s r # s ( malloc + + la lb 1 )
+    : s r # s ( nurl_alloc + + la lb 1 )
     ( memcpy r a la )
     : *u rp # *u r
     : *u dst # *u + # i rp la
@@ -3727,7 +3727,7 @@
     : i la ( strlen a )
     : i lb ( strlen b )
     : i lc ( strlen c )
-    : s r # s ( malloc + + + la lb lc 1 )
+    : s r # s ( nurl_alloc + + + la lb lc 1 )
     ( memcpy r a la )
     : *u rp # *u r
     : *u d2 # *u + # i rp la
@@ -3742,7 +3742,7 @@
     : i lb ( strlen b )
     : i lc ( strlen c )
     : i ld ( strlen d )
-    : s r # s ( malloc + + + + la lb lc ld 1 )
+    : s r # s ( nurl_alloc + + + + la lb lc ld 1 )
     ( memcpy r a la )
     : *u rp # *u r
     : *u d2 # *u + # i rp la
@@ -3762,7 +3762,7 @@
     ? > st slen { = st slen } {}
     ? < k 0 { = k 0 } {}
     ? > + st k slen { = k - slen st } {}
-    : s r # s ( malloc + k 1 )
+    : s r # s ( nurl_alloc + k 1 )
     : *u sp # *u str
     : *u sat # *u + # i sp st
     ( memcpy r # s sat k )
@@ -3814,14 +3814,14 @@
 @ nurl_parse_float_range s p i len → f {
     ? == # i p 0 { ^ 0.0 } {}
     ? <= len 0 { ^ 0.0 } {}
-    : s buf # s ( malloc + len 1 )
+    : s buf # s ( nurl_alloc + len 1 )
     ( memcpy buf p len )
     : *u bp # *u buf
     : u zero # u 0
     = . bp len zero
     : **u endptr # **u 0
     : f v ( strtod buf endptr )
-    ( free buf )
+    ( nurl_free buf )
     ^ v
 }
 
@@ -3866,8 +3866,8 @@
 : ~ i g_last_type_ptr 0
 
 @ nurl_get_last_type → s {
-    ? == g_last_type_ptr 0 { ^ # s ( strdup `i64` ) } {}
-    ^ # s ( strdup # s g_last_type_ptr )
+    ? == g_last_type_ptr 0 { ^ # s ( nurl_strdup `i64` ) } {}
+    ^ # s ( nurl_strdup # s g_last_type_ptr )
 }
 
 // A value's SIGNEDNESS is a property of its type, and since A1 the type
@@ -3881,8 +3881,8 @@
 
 @ nurl_set_last_type s t → v {
     : i old g_last_type_ptr
-    = g_last_type_ptr # i ( strdup t )
-    ? != old 0 { ( free # s old ) } {}
+    = g_last_type_ptr # i ( nurl_strdup t )
+    ? != old 0 { ( nurl_free # s old ) } {}
 }
 
 // ── symbol table ──────────────────────────────────────────────────
@@ -3969,19 +3969,19 @@
     : s types_old # s ( nurl_peek t 4 )
     : s depths_old # s ( nurl_peek t 5 )
     : s prev_old # s ( nurl_peek t 8 )
-    : s names_new # s ( malloc * newcap 8 )
-    : s types_new # s ( malloc * newcap 8 )
-    : s depths_new # s ( malloc * newcap 8 )
-    : s prev_new # s ( malloc * newcap 8 )
+    : s names_new # s ( nurl_alloc * newcap 8 )
+    : s types_new # s ( nurl_alloc * newcap 8 )
+    : s depths_new # s ( nurl_alloc * newcap 8 )
+    : s prev_new # s ( nurl_alloc * newcap 8 )
     : i nbytes * count 8
     ( memcpy names_new names_old nbytes )
     ( memcpy types_new types_old nbytes )
     ( memcpy depths_new depths_old nbytes )
     ( memcpy prev_new prev_old nbytes )
-    ( free names_old )
-    ( free types_old )
-    ( free depths_old )
-    ( free prev_old )
+    ( nurl_free names_old )
+    ( nurl_free types_old )
+    ( nurl_free depths_old )
+    ( nurl_free prev_old )
     ( nurl_poke t 2 newcap )
     ( nurl_poke t 3 # i names_new )
     ( nurl_poke t 4 # i types_new )
@@ -3996,12 +3996,12 @@
     : i nb 4096
     : s t # s ( nurl_zalloc 72 )
     ( nurl_poke t 2 64 )
-    ( nurl_poke t 3 # i # s ( malloc * 64 8 ) )
-    ( nurl_poke t 4 # i # s ( malloc * 64 8 ) )
-    ( nurl_poke t 5 # i # s ( malloc * 64 8 ) )
+    ( nurl_poke t 3 # i # s ( nurl_alloc * 64 8 ) )
+    ( nurl_poke t 4 # i # s ( nurl_alloc * 64 8 ) )
+    ( nurl_poke t 5 # i # s ( nurl_alloc * 64 8 ) )
     ( nurl_poke t 6 nb )
     ( nurl_poke t 7 # i # s ( nurl_zalloc * nb 8 ) )
-    ( nurl_poke t 8 # i # s ( malloc * 64 8 ) )
+    ( nurl_poke t 8 # i # s ( nurl_alloc * 64 8 ) )
     ^ # i t
 }
 
@@ -4019,16 +4019,16 @@
     : ~ i k 0
     ~ < k count {
         : i np . names k
-        ? != 0 np { ( free # s np ) } {}
+        ? != 0 np { ( nurl_free # s np ) } {}
         : i tp . types k
-        ? != 0 tp { ( free # s tp ) } {}
+        ? != 0 tp { ( nurl_free # s tp ) } {}
         = k + k 1
     }
-    ( free # s ( nurl_peek t 3 ) )
-    ( free # s ( nurl_peek t 4 ) )
-    ( free # s ( nurl_peek t 5 ) )
-    ( free # s ( nurl_peek t 7 ) )
-    ( free # s ( nurl_peek t 8 ) )
+    ( nurl_free # s ( nurl_peek t 3 ) )
+    ( nurl_free # s ( nurl_peek t 4 ) )
+    ( nurl_free # s ( nurl_peek t 5 ) )
+    ( nurl_free # s ( nurl_peek t 7 ) )
+    ( nurl_free # s ( nurl_peek t 8 ) )
     ( nurl_free t )
 }
 
@@ -4046,8 +4046,8 @@
     : *i buckets # *i # s ( nurl_peek t 7 )
     : *i prev # *i # s ( nurl_peek t 8 )
     : i bh ( __sym_hash name ( nurl_peek t 6 ) )
-    = . names count # s ( strdup name )
-    = . types count # s ( strdup type )
+    = . names count # s ( nurl_strdup name )
+    = . types count # s ( nurl_strdup type )
     = . depths count ( nurl_peek t 1 )
     // Push onto the front of the bucket chain — newest-first, so a
     // later definition of the same name shadows the earlier one, exactly
@@ -4072,11 +4072,11 @@
         : i idx - cur 1
         ? >= idx count { = cur 0 } {
             ? == 0 # i ( strcmp name . names idx )
-            { ^ # s ( strdup . types idx ) }
+            { ^ # s ( nurl_strdup . types idx ) }
             { = cur . prev idx }
         }
     }
-    ^ # s ( strdup `` )
+    ^ # s ( nurl_strdup `` )
 }
 
 // Lookup whose key is the CONCATENATION of two parts, without ever
@@ -4109,11 +4109,11 @@
             ? & == ( nurl_str_len cand ) + bl sl
             & == 0 # i ( memcmp cand base bl )
             == 0 # i ( memcmp # s + # i # *u cand bl suffix sl )
-            { ^ # s ( strdup . types idx ) }
+            { ^ # s ( nurl_strdup . types idx ) }
             { = cur . prev idx }
         }
     }
-    ^ # s ( strdup `` )
+    ^ # s ( nurl_strdup `` )
 }
 
 // Replace the value of `name` in place instead of shadowing it.
@@ -4134,8 +4134,8 @@
     : i idx ( __sym_find_here h name )
     ? < idx 0 { ( nurl_sym_def h name value ) ^ } {}
     : *s types # *s # s ( nurl_peek # s h 4 )
-    ( free . types idx )
-    = . types idx # s ( strdup value )
+    ( nurl_free . types idx )
+    = . types idx # s ( nurl_strdup value )
 }
 
 // Append to the value of `name` in place, under the same depth rule.
@@ -4251,8 +4251,8 @@
         // its bucket chain — unlink it so the chain stays consistent.
         : i bh ( __sym_hash . names idx nb )
         = . buckets bh . prev idx
-        ( free . names idx )
-        ( free . types idx )
+        ( nurl_free . names idx )
+        ( nurl_free . types idx )
         = count - count 1
     }
     ( nurl_poke t 0 count )
@@ -4361,11 +4361,11 @@
 // (the caller feeds it straight into a die message).
 @ __suggest_ident i syms s name → s {
     : i n ( nurl_str_len name )
-    ? < n 2 { ^ ( strdup `` ) } {}
+    ? < n 2 { ^ ( nurl_strdup `` ) } {}
     : i cap ? <= n 4 1 2
     : i cnt ( __sym_count syms )
-    : *u row0 # *u ( malloc 160 )
-    : *u row1 # *u ( malloc 160 )
+    : *u row0 # *u ( nurl_alloc 160 )
+    : *u row1 # *u ( nurl_alloc 160 )
     : ~ i best_k -1
     : ~ i best_len 0
     : ~ i bestd + cap 1
@@ -4397,7 +4397,7 @@
     ? >= best_k 0
     { ^ ( nurl_str_slice ( __sym_entry_name syms best_k ) 0 best_len ) }
     {}
-    ^ ( strdup `` )
+    ^ ( nurl_strdup `` )
 }
 
 // ══════════════════════════════════════════════════════════════════
@@ -4515,7 +4515,7 @@
     // a __tok_shift).
     ? != 0 ( nurl_peek p + base TF_VALID ) {
         : i __oldv ( nurl_peek p + base TF_VAL )
-        ? != 0 __oldv { ( free # s __oldv ) } {}
+        ? != 0 __oldv { ( nurl_free # s __oldv ) } {}
     } {}
     ( nurl_poke p + base TF_TYPE type )
     ( nurl_poke p + base TF_VAL # i val )
@@ -4537,7 +4537,7 @@
     // pointer the previous shift just moved forward.
     ? != 0 ( nurl_peek p + dst_base TF_VALID ) {
         : i __oldv ( nurl_peek p + dst_base TF_VAL )
-        ? != 0 __oldv { ( free # s __oldv ) } {}
+        ? != 0 __oldv { ( nurl_free # s __oldv ) } {}
     } {}
     ( nurl_poke p + dst_base TF_TYPE ( nurl_peek p + src_base TF_TYPE ) )
     ( nurl_poke p + dst_base TF_VAL ( nurl_peek p + src_base TF_VAL ) )
@@ -4597,7 +4597,7 @@
 
     // ── EOF ──
     ? >= pos len {
-        ( __tok_write lex base TT_EOF ( strdup `` ) 0 line start )
+        ( __tok_write lex base TT_EOF ( nurl_strdup `` ) 0 line start )
         = done T
     } {}
 
@@ -4608,7 +4608,7 @@
         == & # i . src + pos 1 255 134
         == & # i . src + pos 2 255 146 {
             = pos + pos 3
-            ( __tok_write lex base TT_ARROW ( strdup `→` ) 0 line start )
+            ( __tok_write lex base TT_ARROW ( nurl_strdup `→` ) 0 line start )
             = done T
         } {}
     } {}
@@ -4647,7 +4647,7 @@
                 }
             }
             : i raw_len - scan str_open
-            : s buf # s ( malloc + raw_len 1 )
+            : s buf # s ( nurl_alloc + raw_len 1 )
             : *u bp # *u buf
             : ~ i blen 0
             : ~ i rp str_open
@@ -4720,7 +4720,7 @@
             } {}
             // Materialise the literal text as an owned string.
             : i n - pos lit_start
-            : s sv # s ( malloc + n 1 )
+            : s sv # s ( nurl_alloc + n 1 )
             ( memcpy sv # s + # i # *u # s ( nurl_peek p LX_SRC ) lit_start n )
             : *u svp # *u sv
             = . svp n # u 0
@@ -4750,7 +4750,7 @@
             }
             ? == pos hdig0 { ( die lex `malformed hex literal: expected hex digit after '0x'` ) } {}
             : i hn - pos lit0
-            : s hsv # s ( malloc + hn 1 )
+            : s hsv # s ( nurl_alloc + hn 1 )
             ( memcpy hsv # s + # i # *u # s ( nurl_peek p LX_SRC ) lit0 hn )
             : *u hsvp # *u hsv
             = . hsvp hn # u 0
@@ -4768,7 +4768,7 @@
             }
             ? == pos bdig0 { ( die lex `malformed binary literal: expected 0/1 after '0b'` ) } {}
             : i bn - pos lit0
-            : s bsv # s ( malloc + bn 1 )
+            : s bsv # s ( nurl_alloc + bn 1 )
             ( memcpy bsv # s + # i # *u # s ( nurl_peek p LX_SRC ) lit0 bn )
             : *u bsvp # *u bsv
             = . bsvp bn # u 0
@@ -4802,7 +4802,7 @@
                 } {}
             } {}
             : i n - pos lit_start
-            : s sv # s ( malloc + n 1 )
+            : s sv # s ( nurl_alloc + n 1 )
             ( memcpy sv # s + # i # *u # s ( nurl_peek p LX_SRC ) lit_start n )
             : *u svp # *u sv
             = . svp n # u 0
@@ -4832,7 +4832,7 @@
             }
             // Materialise the identifier text.
             : i n - pos id_start
-            : s id # s ( malloc + n 1 )
+            : s id # s ( nurl_alloc + n 1 )
             ( memcpy id # s + # i # *u # s ( nurl_peek p LX_SRC ) id_start n )
             : *u idp # *u id
             // Rewrite any `::` (two colons) found in `id` to `__`.
@@ -4898,7 +4898,7 @@
         & == & # i . src + pos 1 255 46
         == & # i . src + pos 2 255 46 {
             = pos + pos 3
-            ( __tok_write lex base TT_ELLIPSIS ( strdup `...` ) 0 line start )
+            ( __tok_write lex base TT_ELLIPSIS ( nurl_strdup `...` ) 0 line start )
             = done T
         } {}
     } {}
@@ -4908,16 +4908,16 @@
         ? < + pos 1 len {
             : i c1 & # i . src pos 255
             : i c2 & # i . src + pos 1 255
-            ? & == c1 61 == c2 61 { = pos + pos 2 ( __tok_write lex base TT_EQEQ ( strdup `==` ) 0 line start ) = done T } {}
-            ? & ! done & == c1 33 == c2 61 { = pos + pos 2 ( __tok_write lex base TT_NE ( strdup `!=` ) 0 line start ) = done T } {}
-            ? & ! done & == c1 60 == c2 61 { = pos + pos 2 ( __tok_write lex base TT_LE ( strdup `<=` ) 0 line start ) = done T } {}
-            ? & ! done & == c1 62 == c2 61 { = pos + pos 2 ( __tok_write lex base TT_GE ( strdup `>=` ) 0 line start ) = done T } {}
-            ? & ! done & == c1 60 == c2 60 { = pos + pos 2 ( __tok_write lex base TT_SHL ( strdup `<<` ) 0 line start ) = done T } {}
-            ? & ! done & == c1 62 == c2 62 { = pos + pos 2 ( __tok_write lex base TT_SHR ( strdup `>>` ) 0 line start ) = done T } {}
-            ? & ! done & == c1 63 == c2 63 { = pos + pos 2 ( __tok_write lex base TT_QUESTQUEST ( strdup `??` ) 0 line start ) = done T } {}
-            ? & ! done & == c1 94 == c2 94 { = pos + pos 2 ( __tok_write lex base TT_CARETCARET ( strdup `^^` ) 0 line start ) = done T } {}
-            ? & ! done & == c1 124 == c2 124 { = pos + pos 2 ( __tok_write lex base TT_OROR ( strdup `||` ) 0 line start ) = done T } {}
-            ? & ! done & == c1 38 == c2 38 { = pos + pos 2 ( __tok_write lex base TT_ANDAND ( strdup `&&` ) 0 line start ) = done T } {}
+            ? & == c1 61 == c2 61 { = pos + pos 2 ( __tok_write lex base TT_EQEQ ( nurl_strdup `==` ) 0 line start ) = done T } {}
+            ? & ! done & == c1 33 == c2 61 { = pos + pos 2 ( __tok_write lex base TT_NE ( nurl_strdup `!=` ) 0 line start ) = done T } {}
+            ? & ! done & == c1 60 == c2 61 { = pos + pos 2 ( __tok_write lex base TT_LE ( nurl_strdup `<=` ) 0 line start ) = done T } {}
+            ? & ! done & == c1 62 == c2 61 { = pos + pos 2 ( __tok_write lex base TT_GE ( nurl_strdup `>=` ) 0 line start ) = done T } {}
+            ? & ! done & == c1 60 == c2 60 { = pos + pos 2 ( __tok_write lex base TT_SHL ( nurl_strdup `<<` ) 0 line start ) = done T } {}
+            ? & ! done & == c1 62 == c2 62 { = pos + pos 2 ( __tok_write lex base TT_SHR ( nurl_strdup `>>` ) 0 line start ) = done T } {}
+            ? & ! done & == c1 63 == c2 63 { = pos + pos 2 ( __tok_write lex base TT_QUESTQUEST ( nurl_strdup `??` ) 0 line start ) = done T } {}
+            ? & ! done & == c1 94 == c2 94 { = pos + pos 2 ( __tok_write lex base TT_CARETCARET ( nurl_strdup `^^` ) 0 line start ) = done T } {}
+            ? & ! done & == c1 124 == c2 124 { = pos + pos 2 ( __tok_write lex base TT_OROR ( nurl_strdup `||` ) 0 line start ) = done T } {}
+            ? & ! done & == c1 38 == c2 38 { = pos + pos 2 ( __tok_write lex base TT_ANDAND ( nurl_strdup `&&` ) 0 line start ) = done T } {}
         } {}
     } {}
 
@@ -4925,36 +4925,36 @@
     ? ! done {
         : i c & # i . src pos 255
         = pos + pos 1
-        ? == c 64 { ( __tok_write lex base TT_AT ( strdup `@` ) 0 line start ) = done T } {}
-        ? & ! done == c 58 { ( __tok_write lex base TT_COLON ( strdup `:` ) 0 line start ) = done T } {}
-        ? & ! done == c 61 { ( __tok_write lex base TT_EQ ( strdup `=` ) 0 line start ) = done T } {}
-        ? & ! done == c 94 { ( __tok_write lex base TT_CARET ( strdup `^` ) 0 line start ) = done T } {}
-        ? & ! done == c 63 { ( __tok_write lex base TT_QUEST ( strdup `?` ) 0 line start ) = done T } {}
-        ? & ! done == c 126 { ( __tok_write lex base TT_TILDE ( strdup `~` ) 0 line start ) = done T } {}
-        ? & ! done == c 40 { ( __tok_write lex base TT_LPAREN ( strdup `(` ) 0 line start ) = done T } {}
-        ? & ! done == c 41 { ( __tok_write lex base TT_RPAREN ( strdup `)` ) 0 line start ) = done T } {}
-        ? & ! done == c 123 { ( __tok_write lex base TT_LBRACE ( strdup `{` ) 0 line start ) = done T } {}
-        ? & ! done == c 125 { ( __tok_write lex base TT_RBRACE ( strdup `}` ) 0 line start ) = done T } {}
-        ? & ! done == c 46 { ( __tok_write lex base TT_DOT ( strdup `.` ) 0 line start ) = done T } {}
-        ? & ! done == c 35 { ( __tok_write lex base TT_HASH ( strdup `#` ) 0 line start ) = done T } {}
-        ? & ! done == c 33 { ( __tok_write lex base TT_BANG ( strdup `!` ) 0 line start ) = done T } {}
-        ? & ! done == c 43 { ( __tok_write lex base TT_PLUS ( strdup `+` ) 0 line start ) = done T } {}
-        ? & ! done == c 45 { ( __tok_write lex base TT_MINUS ( strdup `-` ) 0 line start ) = done T } {}
-        ? & ! done == c 42 { ( __tok_write lex base TT_STAR ( strdup `*` ) 0 line start ) = done T } {}
-        ? & ! done == c 47 { ( __tok_write lex base TT_SLASH ( strdup `/` ) 0 line start ) = done T } {}
-        ? & ! done == c 37 { ( __tok_write lex base TT_PERCENT ( strdup `%` ) 0 line start ) = done T } {}
-        ? & ! done == c 38 { ( __tok_write lex base TT_AMP ( strdup `&` ) 0 line start ) = done T } {}
-        ? & ! done == c 124 { ( __tok_write lex base TT_PIPE ( strdup `|` ) 0 line start ) = done T } {}
-        ? & ! done == c 60 { ( __tok_write lex base TT_LT ( strdup `<` ) 0 line start ) = done T } {}
-        ? & ! done == c 62 { ( __tok_write lex base TT_GT ( strdup `>` ) 0 line start ) = done T } {}
-        ? & ! done == c 91 { ( __tok_write lex base TT_LBRACK ( strdup `[` ) 0 line start ) = done T } {}
-        ? & ! done == c 93 { ( __tok_write lex base TT_RBRACK ( strdup `]` ) 0 line start ) = done T } {}
-        ? & ! done == c 59 { ( __tok_write lex base TT_SEMICOL ( strdup `;` ) 0 line start ) = done T } {}
-        ? & ! done == c 92 { ( __tok_write lex base TT_BACKSLASH ( strdup `\\` ) 0 line start ) = done T } {}
-        ? & ! done == c 36 { ( __tok_write lex base TT_DOLLAR ( strdup `$` ) 0 line start ) = done T } {}
+        ? == c 64 { ( __tok_write lex base TT_AT ( nurl_strdup `@` ) 0 line start ) = done T } {}
+        ? & ! done == c 58 { ( __tok_write lex base TT_COLON ( nurl_strdup `:` ) 0 line start ) = done T } {}
+        ? & ! done == c 61 { ( __tok_write lex base TT_EQ ( nurl_strdup `=` ) 0 line start ) = done T } {}
+        ? & ! done == c 94 { ( __tok_write lex base TT_CARET ( nurl_strdup `^` ) 0 line start ) = done T } {}
+        ? & ! done == c 63 { ( __tok_write lex base TT_QUEST ( nurl_strdup `?` ) 0 line start ) = done T } {}
+        ? & ! done == c 126 { ( __tok_write lex base TT_TILDE ( nurl_strdup `~` ) 0 line start ) = done T } {}
+        ? & ! done == c 40 { ( __tok_write lex base TT_LPAREN ( nurl_strdup `(` ) 0 line start ) = done T } {}
+        ? & ! done == c 41 { ( __tok_write lex base TT_RPAREN ( nurl_strdup `)` ) 0 line start ) = done T } {}
+        ? & ! done == c 123 { ( __tok_write lex base TT_LBRACE ( nurl_strdup `{` ) 0 line start ) = done T } {}
+        ? & ! done == c 125 { ( __tok_write lex base TT_RBRACE ( nurl_strdup `}` ) 0 line start ) = done T } {}
+        ? & ! done == c 46 { ( __tok_write lex base TT_DOT ( nurl_strdup `.` ) 0 line start ) = done T } {}
+        ? & ! done == c 35 { ( __tok_write lex base TT_HASH ( nurl_strdup `#` ) 0 line start ) = done T } {}
+        ? & ! done == c 33 { ( __tok_write lex base TT_BANG ( nurl_strdup `!` ) 0 line start ) = done T } {}
+        ? & ! done == c 43 { ( __tok_write lex base TT_PLUS ( nurl_strdup `+` ) 0 line start ) = done T } {}
+        ? & ! done == c 45 { ( __tok_write lex base TT_MINUS ( nurl_strdup `-` ) 0 line start ) = done T } {}
+        ? & ! done == c 42 { ( __tok_write lex base TT_STAR ( nurl_strdup `*` ) 0 line start ) = done T } {}
+        ? & ! done == c 47 { ( __tok_write lex base TT_SLASH ( nurl_strdup `/` ) 0 line start ) = done T } {}
+        ? & ! done == c 37 { ( __tok_write lex base TT_PERCENT ( nurl_strdup `%` ) 0 line start ) = done T } {}
+        ? & ! done == c 38 { ( __tok_write lex base TT_AMP ( nurl_strdup `&` ) 0 line start ) = done T } {}
+        ? & ! done == c 124 { ( __tok_write lex base TT_PIPE ( nurl_strdup `|` ) 0 line start ) = done T } {}
+        ? & ! done == c 60 { ( __tok_write lex base TT_LT ( nurl_strdup `<` ) 0 line start ) = done T } {}
+        ? & ! done == c 62 { ( __tok_write lex base TT_GT ( nurl_strdup `>` ) 0 line start ) = done T } {}
+        ? & ! done == c 91 { ( __tok_write lex base TT_LBRACK ( nurl_strdup `[` ) 0 line start ) = done T } {}
+        ? & ! done == c 93 { ( __tok_write lex base TT_RBRACK ( nurl_strdup `]` ) 0 line start ) = done T } {}
+        ? & ! done == c 59 { ( __tok_write lex base TT_SEMICOL ( nurl_strdup `;` ) 0 line start ) = done T } {}
+        ? & ! done == c 92 { ( __tok_write lex base TT_BACKSLASH ( nurl_strdup `\\` ) 0 line start ) = done T } {}
+        ? & ! done == c 36 { ( __tok_write lex base TT_DOLLAR ( nurl_strdup `$` ) 0 line start ) = done T } {}
         // Unknown byte — emit IDENT "?XX" so caller can diagnose.
         ? ! done {
-            : s buf # s ( malloc 4 )
+            : s buf # s ( nurl_alloc 4 )
             : *u bp # *u buf
             = . bp 0 # u 63  // '?'
             : i hi / c 16
@@ -4986,7 +4986,7 @@
         ? == & # i . src i 255 10 { = count + count 1 } {}
         = i + i 1
     }
-    : s tab # s ( malloc * 8 ? > count 0 count 1 )
+    : s tab # s ( nurl_alloc * 8 ? > count 0 count 1 )
     : *i tp # *i tab
     : ~ i k 0
     = i 0
@@ -5003,8 +5003,8 @@
 
 @ nurl_lex_new s src s filename → i {
     : s lx # s ( nurl_zalloc LX_SIZE )
-    ( nurl_poke lx LX_SRC # i ( strdup src ) )
-    ( nurl_poke lx LX_FILENAME # i ( strdup filename ) )
+    ( nurl_poke lx LX_SRC # i ( nurl_strdup src ) )
+    ( nurl_poke lx LX_FILENAME # i ( nurl_strdup filename ) )
     ( nurl_poke lx LX_POS 0 )
     ( nurl_poke lx LX_LEN ( strlen src ) )
     ( nurl_poke lx LX_LINE 1 )
@@ -5026,16 +5026,16 @@
     ~ <= b LX_PEEK4 {
         ? != 0 ( nurl_peek p + b TF_VALID ) {
             : i tv ( nurl_peek p + b TF_VAL )
-            ? != 0 tv { ( free # s tv ) } {}
+            ? != 0 tv { ( nurl_free # s tv ) } {}
         } {}
         = b + b 6
     }
     : i sp ( nurl_peek p LX_SRC )
-    ? != 0 sp { ( free # s sp ) } {}
+    ? != 0 sp { ( nurl_free # s sp ) } {}
     : i fp ( nurl_peek p LX_FILENAME )
-    ? != 0 fp { ( free # s fp ) } {}
+    ? != 0 fp { ( nurl_free # s fp ) } {}
     : i tp ( nurl_peek p LX_LINETAB )
-    ? != 0 tp { ( free # s tp ) } {}
+    ? != 0 tp { ( nurl_free # s tp ) } {}
     ( nurl_free p )
 }
 
@@ -5046,7 +5046,7 @@
 
 @ nurl_lex_val i h → s {
     : s p # s h
-    ^ # s ( strdup # s ( nurl_peek p + LX_CUR TF_VAL ) )
+    ^ # s ( nurl_strdup # s ( nurl_peek p + LX_CUR TF_VAL ) )
 }
 
 @ nurl_lex_inum i h → i {
@@ -5071,7 +5071,7 @@
 
 @ nurl_lex_filename i h → s {
     : s p # s h
-    ^ # s ( strdup # s ( nurl_peek p LX_FILENAME ) )
+    ^ # s ( nurl_strdup # s ( nurl_peek p LX_FILENAME ) )
 }
 
 @ nurl_lex_cur_start i h → i {
@@ -5112,7 +5112,7 @@
     ~ & < line_end len != & # i . src line_end 255 10 { = line_end + line_end 1 }
     ? & > line_end line_start == & # i . src - line_end 1 255 13 { = line_end - line_end 1 } {}
     : i n - line_end line_start
-    : s out # s ( malloc + n 1 )
+    : s out # s ( nurl_alloc + n 1 )
     : *u op # *u out
     : ~ i i 0
     ~ < i n {
@@ -5128,7 +5128,7 @@
 @ nurl_diag_caret i col → s {
     : ~ i pad ? > col 0 - col 1 0
     ? > pad 4096 { = pad 4096 } {}
-    : s out # s ( malloc + pad 2 )
+    : s out # s ( nurl_alloc + pad 2 )
     : *u op # *u out
     : ~ i i 0
     ~ < i pad { = . op i # u 32 = i + i 1 }
@@ -5149,13 +5149,13 @@
         ? == & # i . sp k 255 10 { = ln + ln 1 } {}
         = k + k 1
     }
-    ? < ln line { ^ ( strdup `` ) } {}
+    ? < ln line { ^ ( nurl_strdup `` ) } {}
     : i line_start k
     : ~ i line_end k
     ~ & < line_end len != & # i . sp line_end 255 10 { = line_end + line_end 1 }
     ? & > line_end line_start == & # i . sp - line_end 1 255 13 { = line_end - line_end 1 } {}
     : i n - line_end line_start
-    : s out # s ( malloc + n 1 )
+    : s out # s ( nurl_alloc + n 1 )
     : *u op # *u out
     : ~ i i 0
     ~ < i n {
@@ -5183,7 +5183,7 @@
     : i avail - len st
     ? < k 0 { = k 0 } {}
     ? > k avail { = k avail } {}
-    : s out # s ( malloc + k 1 )
+    : s out # s ( nurl_alloc + k 1 )
     ( memcpy out # s + # i # *u # s ( nurl_peek p LX_SRC ) st k )
     : *u op # *u out
     = . op k # u 0
@@ -5203,7 +5203,7 @@
     ~ <= __ib LX_PEEK4 {
         ? != 0 ( nurl_peek p + __ib TF_VALID ) {
             : i __iv ( nurl_peek p + __ib TF_VAL )
-            ? != 0 __iv { ( free # s __iv ) } {}
+            ? != 0 __iv { ( nurl_free # s __iv ) } {}
             ( nurl_poke p + __ib TF_VALID 0 )
         } {}
         = __ib + __ib 6
@@ -5273,7 +5273,7 @@
     ? == 0 ( nurl_peek p + LX_PEEK TF_VALID ) {
         ( __lex_one # i p LX_PEEK )
     } {}
-    ^ # s ( strdup # s ( nurl_peek p + LX_PEEK TF_VAL ) )
+    ^ # s ( nurl_strdup # s ( nurl_peek p + LX_PEEK TF_VAL ) )
 }
 
 @ nurl_lex_peek2_type i h → i {
@@ -6974,7 +6974,7 @@
     ( nurl_sym_get2 syms t_retid `__ptr` ) )
     { : s __td ( nurl_cg_reg cg )
         ( nurl_print `  ` ) ( nurl_print __td )
-        ( nurl_print ` = call i8* @strdup(i8* ` ) ( nurl_print tv )
+        ( nurl_print ` = call i8* @nurl_strdup(i8* ` ) ( nurl_print tv )
         ( nurl_print `)` ) ( emit_dbg_eol )
         = tv __td
         = t_dup T
@@ -7063,7 +7063,7 @@
     ( nurl_sym_get2 syms e_retid `__ptr` ) )
     { : s __ed ( nurl_cg_reg cg )
         ( nurl_print `  ` ) ( nurl_print __ed )
-        ( nurl_print ` = call i8* @strdup(i8* ` ) ( nurl_print ev )
+        ( nurl_print ` = call i8* @nurl_strdup(i8* ` ) ( nurl_print ev )
         ( nurl_print `)` ) ( emit_dbg_eol )
         = ev __ed
         = e_dup T
@@ -8494,7 +8494,7 @@
             ( nurl_sym_get2 syms arm_retid `__ptr` ) )
             { : s __ad ( nurl_cg_reg cg )
                 ( nurl_print `  ` ) ( nurl_print __ad )
-                ( nurl_print ` = call i8* @strdup(i8* ` ) ( nurl_print arm_result )
+                ( nurl_print ` = call i8* @nurl_strdup(i8* ` ) ( nurl_print arm_result )
                 ( nurl_print `)` ) ( emit_dbg_eol )
                 = arm_result __ad
                 = arm_dup T
@@ -10375,7 +10375,7 @@
 @ bck_st_set s state i id i val → s {
     : i n ( nurl_str_len state )
     : i m ? > n id n + id 1
-    : s out # s ( malloc + m 1 )
+    : s out # s ( nurl_alloc + m 1 )
     : *u ob # *u out
     ( memcpy out state n )
     : ~ i k n
@@ -10407,7 +10407,7 @@
     : i na ( nurl_str_len a )
     : i nb ( nurl_str_len b )
     : i m ? > na nb na nb
-    : s out # s ( malloc + m 1 )
+    : s out # s ( nurl_alloc + m 1 )
     : *u ob # *u out
     : *u ap # *u a
     : *u bp # *u b
@@ -10785,7 +10785,7 @@
     // token and probed post by name per binding.
     : i np ( nurl_str_len pre )
     : i npo ( nurl_str_len post )
-    : s out # s ( malloc + np 1 )
+    : s out # s ( nurl_alloc + np 1 )
     : *u ob # *u out
     : *u pp # *u pre
     : *u pop # *u post
@@ -11348,7 +11348,7 @@
         == 0 ( nurl_sym_len syms `__last_call_ret_owned__` )
         { : s __ld ( nurl_cg_reg cg )
             ( nurl_print `  ` ) ( nurl_print __ld )
-            ( nurl_print ` = call i8* @strdup(i8* ` ) ( nurl_print val )
+            ( nurl_print ` = call i8* @nurl_strdup(i8* ` ) ( nurl_print val )
             ( nurl_print `)` ) ( emit_dbg_eol )
             = val __ld
             = lit_track T
@@ -11567,7 +11567,7 @@
                 == 0 ( nurl_sym_len syms `__last_call_ret_owned__` )
                 { : s __ld ( nurl_cg_reg cg )
                     ( nurl_print `  ` ) ( nurl_print __ld )
-                    ( nurl_print ` = call i8* @strdup(i8* ` ) ( nurl_print val )
+                    ( nurl_print ` = call i8* @nurl_strdup(i8* ` ) ( nurl_print val )
                     ( nurl_print `)` ) ( emit_dbg_eol )
                     = val __ld
                     = lit_track T
@@ -11866,7 +11866,7 @@
             // strdup read freed memory.
             : s dup_reg ( nurl_cg_reg cg )
             ( nurl_print `  ` ) ( nurl_print dup_reg )
-            ( nurl_print ` = call i8* @strdup(i8* ` ) ( nurl_print val ) ( nurl_print `)` ) ( emit_dbg_eol )
+            ( nurl_print ` = call i8* @nurl_strdup(i8* ` ) ( nurl_print val ) ( nurl_print `)` ) ( emit_dbg_eol )
             // The copy exists because a TRACKED binding must hold an
             // allocator-owned pointer on every path, and this RHS could not
             // be proven fresh. When it came from a forward call, the guard
@@ -11922,7 +11922,7 @@
         rhs_id_tracked
         { : s dup_reg2 ( nurl_cg_reg cg )
             ( nurl_print `  ` ) ( nurl_print dup_reg2 )
-            ( nurl_print ` = call i8* @strdup(i8* ` ) ( nurl_print val ) ( nurl_print `)` ) ( emit_dbg_eol )
+            ( nurl_print ` = call i8* @nurl_strdup(i8* ` ) ( nurl_print val ) ( nurl_print `)` ) ( emit_dbg_eol )
             = val dup_reg2
             = lhs_glob_owned T
         }
@@ -15752,7 +15752,7 @@
     ? != tt TT_STR { ^ val } {}
     : i n ( nurl_str_len val )
     // Worst case: every byte escapes to two, plus two backticks + NUL.
-    : s buf # s ( malloc + + * n 2 2 1 )
+    : s buf # s ( nurl_alloc + + * n 2 2 1 )
     : *u bp # *u buf
     : *u vp # *u val
     : ~ i blen 0
@@ -18513,6 +18513,13 @@
     ( __emit_rt_decl syms `declare double @strtod(i8*, i8**)` )
     ( __emit_rt_decl syms `declare i8*  @memcpy(i8*, i8*, i64)` )
     ( __emit_rt_decl syms `declare i8*  @strdup(i8*)` )
+    // The runtime's strdup (runtime_core.c §9a). Every copy the code
+    // generator mints — reassignment of an owned string, a match arm's
+    // result, an owned struct field — is released through nurl_free,
+    // which parks the block in the runtime's small-allocation cache;
+    // taking the copy from libc instead meant nothing was ever handed
+    // back out of that cache. Same block, same lifetime.
+    ( __emit_rt_decl syms `declare i8*  @nurl_strdup(i8*)` )
     // libc stdio primitives — declared here so the pure-NURL
     // `nurl_file_*` helpers in stdlib/std/fs.nu can call them
     // globally.
@@ -18930,7 +18937,7 @@
         ( nurl_sym_def syms `nurl_read_file__ret_owned` `str` )
         ( nurl_sym_def syms `nurl_read_line__ret_owned` `str` )
         // The strdup-returning getters. Each returns a FRESH copy on
-        // every path (`^ # s ( strdup … )` — the `# s` cast hid the
+        // every path (`^ # s ( nurl_strdup … )` — the `# s` cast hid the
         // ownership from the return-site inference, so callers never
         // freed the copies: nurl_sym_get alone leaked 1.77M strdups
         // per self-compile). Pre-registered here because the def-time
@@ -18955,7 +18962,7 @@
         // self-compile (`= rest ( str_skip_word rest )` and the
         // seplist walks). Each is hand-verified fresh-on-every-path.
         // bck_st_set / bck_join_state / bck_loop_carry_seed return a
-        // `# s ( malloc … )`-cast local, which the ident-return
+        // `# s ( nurl_alloc … )`-cast local, which the ident-return
         // inference cannot prove either.
         ( nurl_sym_def syms `str_first_word__ret_owned` `str` )
         ( nurl_sym_def syms `str_skip_word__ret_owned` `str` )
@@ -19044,7 +19051,7 @@
         ( nurl_sym_def syms `bck_handle_cond__ret_owned` `str` )
         ( nurl_sym_def syms `bck_handle_match__ret_owned` `str` )
         ( nurl_sym_def syms `bck_loop__ret_owned` `str` )
-        // Fresh `# s ( malloc … )` builders. The cast hides the
+        // Fresh `# s ( nurl_alloc … )` builders. The cast hides the
         // allocation from the ident-return inference exactly like the
         // strdup getters above, so they must be declared.
         ( nurl_sym_def syms `encode_str__ret_owned` `str` )
@@ -19132,6 +19139,7 @@
     ( nurl_sym_def syms `strtod` `double` )
     ( nurl_sym_def syms `memcpy` `i8*` )
     ( nurl_sym_def syms `strdup` `i8*` )
+    ( nurl_sym_def syms `nurl_strdup` `i8*` )
     // libc stdio — i64-typed returns align with how the @-fns
     // capture them. fopen returns FILE* (i8*); fread/fwrite return
     // size_t which we treat as i64.
@@ -21133,6 +21141,13 @@
 & `c` @ nurl_recover_nojournal *u fnp *u env → i
 
 & `c` @ nurl_print_buf_unwind → v
+
+// strdup on the runtime's small-allocation cache, declared the same way
+// and for the same reason: the bootstrap compiler predates the symbol.
+// Every copy this compiler takes is released through nurl_free, which
+// parks the block in that cache — taking the copy from libc instead
+// meant nothing ever came back out of it. See runtime_core.c §9a.
+& `c` @ nurl_strdup s x → s
 
 // Minimal recover for the compiler's own multi-error frames (nurlc.nu
 // imports no stdlib): decompose the closure into (fn, env), run it under

@@ -166,11 +166,11 @@ $ `stdlib/core/char.nu`
     ^ & # i b 255
 }
 
-// Concatenate two strings; result is malloc'd, NUL-terminated.
+// Concatenate two strings; result is heap-allocated, NUL-terminated.
 @ nurl_str_cat s a s b → s {
     : i la ( strlen a )
     : i lb ( strlen b )
-    : s r # s ( malloc + + la lb 1 )
+    : s r # s ( nurl_alloc + + la lb 1 )
     ( memcpy r a la )
     : *u rp # *u r
     : *u dst # *u + # i rp la
@@ -178,12 +178,12 @@ $ `stdlib/core/char.nu`
     ^ r
 }
 
-// Concatenate three; result is malloc'd, NUL-terminated.
+// Concatenate three; result is heap-allocated, NUL-terminated.
 @ nurl_str_cat3 s a s b s c → s {
     : i la ( strlen a )
     : i lb ( strlen b )
     : i lc ( strlen c )
-    : s r # s ( malloc + + + la lb lc 1 )
+    : s r # s ( nurl_alloc + + + la lb lc 1 )
     ( memcpy r a la )
     : *u rp # *u r
     : *u d2 # *u + # i rp la
@@ -193,7 +193,7 @@ $ `stdlib/core/char.nu`
     ^ r
 }
 
-// Concatenate four; result is malloc'd, NUL-terminated. Allocates
+// Concatenate four; result is heap-allocated, NUL-terminated. Allocates
 // exactly once (the historic C version nested two `cat` calls and
 // leaked the intermediates).
 @ nurl_str_cat4 s a s b s c s d → s {
@@ -201,7 +201,7 @@ $ `stdlib/core/char.nu`
     : i lb ( strlen b )
     : i lc ( strlen c )
     : i ld ( strlen d )
-    : s r # s ( malloc + + + + la lb lc ld 1 )
+    : s r # s ( nurl_alloc + + + + la lb lc ld 1 )
     ( memcpy r a la )
     : *u rp # *u r
     : *u d2 # *u + # i rp la
@@ -213,7 +213,7 @@ $ `stdlib/core/char.nu`
     ^ r
 }
 
-// Return bytes [start, start+len); result is malloc'd, NUL-terminated.
+// Return bytes [start, start+len); result is heap-allocated, NUL-terminated.
 // Clamps `start` and `len` into the actual string length.
 @ nurl_str_slice s str i start i n → s {
     : i slen ( strlen str )
@@ -223,7 +223,7 @@ $ `stdlib/core/char.nu`
     ? > st slen { = st slen } {}
     ? < k 0 { = k 0 } {}
     ? > + st k slen { = k - slen st } {}
-    : s r # s ( malloc + k 1 )
+    : s r # s ( nurl_alloc + k 1 )
     : *u sp # *u str
     : *u sat # *u + # i sp st
     ( memcpy r # s sat k )
@@ -269,14 +269,14 @@ $ `stdlib/core/char.nu`
 @ nurl_parse_float_range s p i len → f {
     ? == # i p 0 { ^ 0.0 } {}
     ? <= len 0 { ^ 0.0 } {}
-    : s buf # s ( malloc + len 1 )
+    : s buf # s ( nurl_alloc + len 1 )
     ( memcpy buf p len )
     : *u bp # *u buf
     : u zero # u 0
     = . bp len zero
     : **u endptr # **u 0
     : f v ( strtod buf endptr )
-    ( free buf )
+    ( nurl_free buf )
     ^ v
 }
 
