@@ -96,6 +96,65 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Every string a NURL program allocates comes off the runtime's
+  recycling allocator — 27% off `nurlc`'s own run time.** 0.30.0 put a
+  per-thread size-class freelist behind `nurl_alloc`/`nurl_free`, and
+  `String` and `Vec` buffers have used it ever since. The string
+  *primitives* never did: `nurl_str_cat`, `nurl_str_slice`,
+  `nurl_str_int`, and every `strdup` in the symbol table took their
+  block straight from libc, while the compiler-inserted auto-drop handed
+  that same block back through `nurl_free`. The loop was open at one
+  end. Nothing was ever taken *out* of the cache, so the classes filled
+  to their 1 MB budget once and from then on every free paid a
+  usable-size query only to hand the block to libc anyway — the cache
+  was pure overhead on the program that allocates hardest, and turning
+  it off with `NURL_ALLOC_CACHE=0` made a self-compile *faster*.
+
+  Closing the loop is one rule applied everywhere: allocate what
+  `nurl_free` will free with `nurl_alloc`. The primitives in
+  `compiler/nurlc.nu` and `stdlib/core/{string,symtab}.nu` call
+  `nurl_alloc`; copies go through a new `nurl_strdup` (same block, same
+  lifetime, an ordinary libc chunk — so a site that frees one with plain
+  `free()` still works); and the code generator emits `@nurl_strdup`
+  rather than `@strdup` for the copies it mints — an owned string
+  reassigned, a match arm's result, an owned struct field — so a user
+  program's copies recycle too.
+
+  | `nurlc compiler/nurlc.nu` | before | after |
+  |---|---:|---:|
+  | wall clock | 469.9 ms | **346.2 ms** |
+  | retired instructions | 3.137e9 | **2.101e9** |
+  | libc `malloc` calls | 6 006 395 | **96 199** |
+  | peak RSS | 25.9 MB | **18.0 MB** |
+
+  98.4% of the compiler's allocations no longer reach libc at all, and
+  the ones that do stop fragmenting an arena that was being handed six
+  million short-lived blocks — which is where a third of the peak RSS
+  went. `NURL_ALLOC_CACHE=0` still turns the cache off, and with it the
+  self-compile goes back to 0.43 s: the whole gap is the cache, now that
+  something finally takes blocks out of it.
+
+  It is worth what it is worth and no more: this moves programs whose
+  time is string-primitive churn, and not others. A loop of
+  `nurl_str_int` + two concatenations + a slice, 300 k iterations, runs
+  **2.07× faster** (49.6 ms → 24.0 ms). `bench/json_parse`, whose `Vec`
+  and `String` buffers were already on the cache, measures unchanged, as
+  does `nurlfmt` — neither is allocator-bound. `nurlc` is the outlier
+  because it is a program that does almost nothing but build small
+  strings.
+
+- **`nurl_str_int` formats its digits by hand.** The runtime's hottest
+  formatter — `nurlc` names every SSA register through it — spent its
+  time in `snprintf("%lld")`: a format-string parse, a locale check and
+  an internal output buffer, to produce at most twenty digits. glibc's
+  printf machinery measured 3% of a self-compile on its own. The
+  replacement writes digits backwards into a stack buffer and takes the
+  one allocation it needs from `nurl_alloc`. The magnitude is
+  accumulated in an `unsigned long long`, so `LLONG_MIN` — whose
+  absolute value has no signed representation — formats like any other
+  value; the output is byte-identical to `snprintf` across the full
+  `i64` edge set and 400 000 consecutive values.
+
 - **Every clang invocation is quiet about the target triple.** `nurlc`
   emits no `target triple`, so clang announced that it was supplying the
   host one on every single build. There was never anything to act on,

@@ -99,8 +99,15 @@ static void *nurl__xrealloc(void *q, size_t n) {
     if (!p && n) nurl__oom((unsigned long long)n);
     return p;
 }
+/* Duplication routes through nurl_strdup (§9a) rather than libc's
+ * strdup, so a copy comes off the small-allocation cache like every
+ * other NURL allocation. The block is an ordinary libc chunk either
+ * way, so a site that frees one of these with plain free() — several
+ * in the FFI half do — keeps working. */
+void *nurl_alloc(long long bytes);  /* §9a */
+char *nurl_strdup(const char *s);   /* §9a */
 static char *nurl__xstrdup(const char *s) {
-    char *p = strdup(s);
+    char *p = nurl_strdup(s);
     if (!p && s) nurl__oom((unsigned long long)strlen(s) + 1);
     return p;
 }
@@ -535,14 +542,32 @@ void nurl_eprintln(const char *s) { fflush(stdout); fputs(s, stderr); fputc('\n'
 
 /* ── §2  String operations ─────────────────────────────────────── */
 
-/* Decimal representation of n; result is malloc'd. Kept in C
+/* Decimal representation of n; result is heap-allocated. Kept in C
  * because 72 corpus tests call `nurl_str_int` without importing
  * `stdlib/core/string.nu`; moving it to NURL would force the
- * import on every test. Drop once a prelude / auto-import lands. */
+ * import on every test. Drop once a prelude / auto-import lands.
+ *
+ * Digits by hand rather than snprintf("%lld"): this is the runtime's
+ * hottest formatter by a distance — nurlc names every SSA register
+ * through it, 555 504 calls in one self-compile — and printf pays for a
+ * format-string parse, a locale check and an internal output buffer to
+ * produce at most twenty digits. glibc's printf machinery measured 3 %
+ * of a self-compile on its own. The magnitude is built in an unsigned
+ * long long so LLONG_MIN, whose absolute value has no signed
+ * representation, formats like any other value. */
 const char* nurl_str_int(long long n) {
-    char buf[32];
-    snprintf(buf, sizeof(buf), "%lld", n);
-    return strdup(buf);
+    char buf[24];
+    char *end = buf + sizeof buf;
+    char *p = end;
+    unsigned long long u = n < 0 ? 0ULL - (unsigned long long)n
+                                 : (unsigned long long)n;
+    do { *--p = (char)('0' + (u % 10ULL)); u /= 10ULL; } while (u);
+    if (n < 0) *--p = '-';
+    size_t len = (size_t)(end - p);
+    char *r = (char *)nurl_alloc((long long)len + 1);
+    memcpy(r, p, len);
+    r[len] = '\0';
+    return r;
 }
 
 /* Float formatting via printf %g. Kept in C until variadic FFI lands. */
@@ -1025,6 +1050,20 @@ void* nurl_zalloc(long long bytes) {
     void *p = nurl__sc_pop((size_t)bytes);
     if (p) { memset(p, 0, (size_t)bytes); return p; }
     return calloc(1, (size_t)bytes);
+}
+/* strdup on the cache. The copy is the runtime's — and the compiler's —
+ * most common allocation by a wide margin, and every one of them is
+ * released through nurl_free, which parks the block in the freelists
+ * above. Taking the copy from libc instead left that loop open at one
+ * end: the classes filled to their budget once and then every free paid
+ * a usable-size query only to hand the block straight back to libc.
+ * Same block, same lifetime, a freelist pop instead of a malloc. */
+char *nurl_strdup(const char *s) {
+    if (!s) return NULL;
+    size_t n = strlen(s) + 1;
+    char *p = (char *)nurl_alloc((long long)n);
+    memcpy(p, s, n);
+    return p;
 }
 long long nurl_alloc_count(void)               { return (long long)nurl__actr_total(0); }
 long long nurl_free_count(void)                { return (long long)nurl__actr_total(1); }

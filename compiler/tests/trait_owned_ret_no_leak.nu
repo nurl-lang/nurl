@@ -6,10 +6,10 @@
 // to skip publishing the callee's `__ret_owned` marker, so the temp leaked.
 //
 // Proven deterministically WITHOUT a sanitizer via nurl_free_count(): each of
-// the 100 iterations produces one owned-string temp (nurl_str_cat mallocs
-// directly, so it is NOT visible to nurl_alloc_count — the free count is the
-// signal), and the temp must be freed after the call it is passed to. So the
-// free count grows by exactly 100 across the loop. Before the fix the impl-
+// the 100 iterations produces one owned-string temp, and the temp must be
+// freed after the call it is passed to. So the free count grows by exactly
+// 100 across the loop. The free count, not the alloc count, is the signal:
+// what is being tested is whether the drop happens at all. Before the fix the impl-
 // method dispatch never marked the result owned, the temp was never freed, and
 // the delta was 0.
 $ `stdlib/core/string.nu`

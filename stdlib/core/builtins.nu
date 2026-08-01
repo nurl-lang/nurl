@@ -210,6 +210,11 @@
 
 & `c` @ nurl_malloc i bytes → s
 
+// Copy a NUL-terminated string onto a fresh block from the same
+// freelist cache — strdup, but recyclable by nurl_free. The copy is an
+// ordinary heap block, so plain free() releases it too.
+& `c` @ nurl_strdup s src → s
+
 // Raw byte moves/fill over possibly-overlapping regions.
 & `c` @ nurl_memcpy s dst s src i n → v
 
