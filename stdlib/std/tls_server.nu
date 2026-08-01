@@ -305,8 +305,8 @@ $ `stdlib/std/aes_gcm.nu`
     // GF(2^8) inversion rather than a cache-timing-visible table, which
     // is the right call for security and costs about four thousand
     // cycles a byte. Measured on 16 KB records (`bench/crypto_hotpath.nu`):
-    // AES-128-GCM 0.55 MB/s against ChaCha20-Poly1305's 305 MB/s — the
-    // preference alone was a ~500x difference on everything this server
+    // AES-128-GCM 0.5 MB/s against ChaCha20-Poly1305's 390 MB/s — the
+    // preference alone was a ~700x difference on everything this server
     // sent. The two suites are equally strong; a software-only TLS stack
     // preferring ChaCha is what OpenSSL itself does when the CPU has no
     // AES instructions.

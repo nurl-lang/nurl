@@ -104,6 +104,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **A TLS handshake costs 10.5 ms of arithmetic instead of 57.4 —
+  5.5×.** The ClientHello carries a key share for *both* groups, so every
+  connection runs an X25519 and a P-256 keygen — and then a third scalar
+  multiply for the shared secret — before a single application byte
+  moves. Short-lived connections (a package fetch, an API call, one
+  HTTPS request) are dominated by that. Both curves were built out of
+  bounds-checked `Vec` accessors: 61% of the whole handshake was
+  `vec_get` / `vec_set` / `vec_push` calls, not arithmetic.
+
+  `std/p256_field.nu` and `std/x25519.nu` now index their limbs through a
+  raw `*i` in the hot routines — the Montgomery multiply, the conditional
+  subtract, add/sub/merge/clone on the P-256 side; `_M`, `_A`, `_Z`,
+  `__car25519`, `_sel25519` and the gf copies on the X25519 side. Every
+  one of those loops is fixed-count over a 16- or 31-limb magnitude, so
+  the bounds check was provably redundant, and **constant time is
+  unaffected**: the trip counts stay fixed and the data still takes no
+  branch. Two smaller ones came with it — the modulus is passed into
+  `__p256_cond_sub_p` instead of being rebuilt there (it was being
+  reconstructed on each of the ~3000 field operations a scalar multiply
+  performs), and the fixed-size magnitudes are filled by index rather
+  than through a per-limb `vec_push` capacity check.
+
+  | | before | after |
+  |---|---:|---:|
+  | TLS handshake (loopback, OpenSSL peer) | 57.4 ms | **10.5 ms** |
+  | `x25519_base` | 3.1 ms | **0.59 ms** |
+  | `p256_ecdh_keygen` | 15.7 ms | **6.4 ms** |
+
+- **ChaCha20 keeps its state in `u32` instead of masked `i64` limbs —
+  another 26% on the AEAD.** The kernel held the sixteen state words as
+  `i` and put `& 4294967295` after every add and every rotate, and wrote
+  each rotate as `shl | shr | and` because a 64-bit value cannot say
+  `rol` on 32 bits. NURL has a native 32-bit integer that wraps, so the
+  masks are gone and all thirty-two rotations in a double-round are now
+  single `rol` instructions. Only the widening at the block's edges
+  needed adding.
+
+  | 16 KB records | before | after |
+  |---|---:|---:|
+  | `aead_encrypt` | 302 MB/s | **375 MB/s** |
+  | `aead_decrypt` | 305 MB/s | **377 MB/s** |
+  | `tls_write` over loopback | 261 MB/s | **307 MB/s** |
+
+  `bench/crypto_hotpath.nu` grew the two key-exchange rows, so the
+  handshake side is measured too and not just the byte-throughput side.
+
 - **A pure-NURL TLS server no longer picks the cipher suite it is 500×
   slower at — 24.9 s → 0.15 s for an 8 MB response.** `tls_server.nu`
   walked the ClientHello and took the *client's* first acceptable suite.
