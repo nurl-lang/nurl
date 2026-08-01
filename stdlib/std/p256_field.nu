@@ -57,8 +57,9 @@ $ `stdlib/core/vec.nu`
     ^ v
 }
 
-// -p^-1 mod 2^32. For p ≡ −1 (mod 2^32) this is 1.
-@ __p256_pinv → i { ^ 1 }
+// The Montgomery constant -p^-1 mod 2^32 is 1, because p ≡ −1 (mod 2^32).
+// It is not a function any more: __p256_mul_d folds it (and the whole
+// modulus) into the reduction as shifts — see there.
 
 @ __ctl ( Vec i ) v i k → i { ?? ( vec_get [i] v k ) { T x → ^ x F _ → ^ 0 } }
 
@@ -164,14 +165,11 @@ $ `stdlib/core/vec.nu`
 // — that bound is what makes this radix the largest one that needs no
 // double-word carry.
 @ __p256_mul_d P256Scratch scr ( Vec i ) dst ( Vec i ) a ( Vec i ) b → v {
-    : ( Vec i ) modp . scr modp
-    : u64 pinv # u64 ( __p256_pinv )
     // accumulator t has 10 limbs (n+2), starts zero.
     : ( Vec i ) t . scr t
     : *i ap ( vec_data [i] a )
     : *i bp ( vec_data [i] b )
     : *i tp ( vec_data [i] t )
-    : *i pp ( vec_data [i] modp )
     : ~ i zz 0
     ~ < zz 10 { = . tp zz 0 = zz + zz 1 }
     : ~ i i 0
@@ -189,17 +187,39 @@ $ `stdlib/core/vec.nu`
         : u64 x8 + # u64 . tp 8 C
         = . tp 8 # i & x8 0xFFFFFFFF
         = . tp 9 # i >> x8 32
-        // m = t[0] * pinv mod 2^32 ; t = (t + m*p) / 2^32
-        : u64 m & * # u64 . tp 0 pinv 0xFFFFFFFF
-        : u64 x0 + # u64 . tp 0 * m # u64 . pp 0
-        : ~ u64 C2 >> x0 32
-        : ~ i j2 1
-        ~ < j2 8 {
-            : u64 y + + # u64 . tp j2 * m # u64 . pp j2 C2
-            = . tp - j2 1 # i & y 0xFFFFFFFF
-            = C2 >> y 32
-            = j2 + j2 1
-        }
+        // t = (t + m·p) / 2^32, where m = t[0]·pinv mod 2^32.
+        //
+        // NOT A SINGLE MULTIPLY: pinv is 1, so m is just t[0], and
+        // p = [2^32−1, 2^32−1, 2^32−1, 0, 0, 0, 1, 2^32−1] — every
+        // partial product m·p[j] is a shift, a zero, or m itself. That
+        // is half of this routine's multiplies gone, and it is the whole
+        // reason a Montgomery-friendly prime is chosen with this shape.
+        : u64 m # u64 . tp 0
+        : u64 mp << m 32  // m·(2^32−1) = mp − m
+        // j=0: t[0] + (mp − m) = mp, since m IS t[0] — low word zero
+        //      (as the reduction requires) and carry m.
+        // j=1,2: t[j] + (mp − m) + m = t[j] + mp — the limb falls
+        //      through unchanged and the carry stays m.
+        = . tp 0 . tp 1
+        = . tp 1 . tp 2
+        // j=3,4,5: p[j] = 0.
+        : u64 y3 + # u64 . tp 3 m
+        = . tp 2 # i & y3 0xFFFFFFFF
+        : ~ u64 C2 >> y3 32
+        : u64 y4 + # u64 . tp 4 C2
+        = . tp 3 # i & y4 0xFFFFFFFF
+        = C2 >> y4 32
+        : u64 y5 + # u64 . tp 5 C2
+        = . tp 4 # i & y5 0xFFFFFFFF
+        = C2 >> y5 32
+        // j=6: p[6] = 1.
+        : u64 y6 + + # u64 . tp 6 m C2
+        = . tp 5 # i & y6 0xFFFFFFFF
+        = C2 >> y6 32
+        // j=7: p[7] = 2^32−1 again.
+        : u64 y7 + + # u64 . tp 7 - mp m C2
+        = . tp 6 # i & y7 0xFFFFFFFF
+        = C2 >> y7 32
         : u64 y8 + # u64 . tp 8 C2
         = . tp 7 # i & y8 0xFFFFFFFF
         = . tp 8 + . tp 9 # i >> y8 32
