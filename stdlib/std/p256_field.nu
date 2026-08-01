@@ -615,16 +615,89 @@ $ `stdlib/core/vec.nu`
     ( __p256_one_mont_d scr . dst y )
 }
 
+@ __p256_pt_copy_d P256Pt dst P256Pt a → v {
+    ( __p256_copy_d . dst x . a x )
+    ( __p256_copy_d . dst y . a y )
+    ( __p256_copy_d . dst z . a z )
+}
+
+// ── the window table ──────────────────────────────────────────────────
+// Sixteen projective multiples of the base point, 0·B … 15·B, in one flat
+// limb vector: entry d occupies [d·24, d·24+24) as x‖y‖z. Flat because the
+// constant-time read below has to walk EVERY entry, and a straight run of
+// limbs is what that walk wants.
+
+@ __p256_tbl_put ( Vec i ) tbl i d P256Pt p → v {
+    : *i tp ( vec_data [i] tbl )
+    : *i xp ( vec_data [i] . p x )
+    : *i yp ( vec_data [i] . p y )
+    : *i zp ( vec_data [i] . p z )
+    : i base * d 24
+    : ~ i k 0
+    ~ < k 8 {
+        = . tp + base k . xp k
+        = . tp + + base 8 k . yp k
+        = . tp + + base 16 k . zp k
+        = k + k 1
+    }
+}
+
+// Read entry `digit` into `dst`. `digit` is four bits of the SECRET scalar,
+// so this must not become an indexed load: it reads all sixteen entries,
+// every time, and merges each one under a mask that is 0xffffffff exactly
+// when d == digit. The mask is arithmetic, not a comparison — `d ^ digit`
+// is zero only on a match, and subtracting one from zero borrows all the
+// way into the top bit, which nothing else can set for a 4-bit value. No
+// branch, and the address stream is identical for every possible digit.
+@ __p256_tbl_get_d P256Pt dst ( Vec i ) tbl i digit → v {
+    : *i tp ( vec_data [i] tbl )
+    : *i xp ( vec_data [i] . dst x )
+    : *i yp ( vec_data [i] . dst y )
+    : *i zp ( vec_data [i] . dst z )
+    : ~ i k 0
+    ~ < k 8 { = . xp k 0 = . yp k 0 = . zp k 0 = k + k 1 }
+    : ~ i d 0
+    ~ < d 16 {
+        : u64 z ^^ # u64 d # u64 digit
+        : i mask & 0xFFFFFFFF - 0 # i >> - z 1 63
+        : i base * d 24
+        : ~ i j 0
+        ~ < j 8 {
+            = . xp j | . xp j & mask . tp + base j
+            = . yp j | . yp j & mask . tp + + base 8 j
+            = . zp j | . zp j & mask . tp + + base 16 j
+            = j + j 1
+        }
+        = d + d 1
+    }
+}
+
 // Scalar × affine base point → affine (x, y) as two 32-byte big-endian vecs.
 // `kbytes` is the scalar, big-endian; bx/by are the base point's affine
-// coordinates as 8-limb plain (non-Montgomery) field elements. Branchless
-// Coron always-add ladder over the RCB complete addition: every bit doubles
-// and adds, then a constant-time point select keeps the add iff the bit set.
-// Returns the all-zero 64 bytes for the identity result.
+// coordinates as 8-limb plain (non-Montgomery) field elements. Returns the
+// all-zero 64 bytes for the identity result.
 //
-// The whole ladder runs in registers allocated before it starts — `acc`,
-// `added`, the base point and the scratch — so its 512 point additions
-// allocate nothing.
+// FIXED 4-BIT WINDOW over the RCB complete addition. The scalar is consumed
+// a nibble at a time, most significant first: four doublings shift the
+// accumulator up by sixteen, then one addition brings in digit·B read out
+// of the window table. That is 4·64 + 64 + 14 = 334 point additions for a
+// 32-byte scalar, where the bit-at-a-time always-add ladder it replaces
+// needed 512 — and the table walk that buys it costs about 4% of one
+// addition per window.
+//
+// Constant-time on the same terms as before, and for the same reasons:
+//   * the step count is fixed at 8·len(scalar bytes) / 4 windows, so the
+//     scalar's value — including its top bits — cannot change the trace;
+//   * the digit selects nothing by address, only by mask (see
+//     __p256_tbl_get_d), so there is no secret-dependent load;
+//   * digit 0 reads the identity, which the COMPLETE addition formula
+//     absorbs correctly — that is what removes the need to special-case
+//     it, and with it the last data-dependent branch;
+//   * `w` and the nibble position are public loop counters.
+//
+// The whole ladder runs in storage allocated before it starts — `acc`,
+// `added`, the table, the base point and the scratch — so its 334 point
+// additions allocate nothing.
 @ p256ct_scalarmult ( Vec u ) kbytes ( Vec i ) bx ( Vec i ) by → ( Vec u ) {
     : P256Scratch scr ( __p256_scr_new )
     : ( Vec i ) aplain ( __p256_a_plain )
@@ -639,22 +712,33 @@ $ `stdlib/core/vec.nu`
     ( __p256_to_mont_d scr . base y by )
     ( __p256_one_mont_d scr . base z )
     : P256Pt acc ( __p256_pt_mag )
-    ( __p256_set_identity_d scr acc )
     : P256Pt added ( __p256_pt_mag )
+    // window table: T[0] = identity, T[d] = T[d-1] + B.
+    : ( Vec i ) tbl ( __magn 384 )
+    ( __p256_set_identity_d scr acc )
+    ( __p256_tbl_put tbl 0 acc )
+    ( __p256_tbl_put tbl 1 base )
+    ( __p256_pt_copy_d added base )
+    : ~ i d 2
+    ~ < d 16 {
+        ( p256ct_padd_d scr added added base am b3m )
+        ( __p256_tbl_put tbl d added )
+        = d + d 1
+    }
     : i nbytes ( vec_len [u] kbytes )
-    : i nbits * nbytes 8
-    // MSB-first: pos = 0 is byte 0 / bit 7 (most significant), matching the
-    // big-endian scalar and the bigint reference ladder.
-    : ~ i pos 0
-    ~ < pos nbits {
-        : i byteidx / pos 8
-        : i bitpos - 7 % pos 8
-        : i bv ?? ( vec_get [u] kbytes byteidx ) { T b → # i b F _ → 0 }
-        : i bit & 1 >> bv bitpos
+    // MSB-first nibbles: window 0 is byte 0's high nibble.
+    : i nwin * nbytes 2
+    : ~ i w 0
+    ~ < w nwin {
         ( p256ct_padd_d scr acc acc acc am b3m )
-        ( p256ct_padd_d scr added acc base am b3m )
-        ( p256ct_pt_select_d acc bit added acc )
-        = pos + pos 1
+        ( p256ct_padd_d scr acc acc acc am b3m )
+        ( p256ct_padd_d scr acc acc acc am b3m )
+        ( p256ct_padd_d scr acc acc acc am b3m )
+        : i bv ?? ( vec_get [u] kbytes / w 2 ) { T b → # i b F _ → 0 }
+        : i digit ? == % w 2 0 & 15 >> bv 4 & 15 bv
+        ( __p256_tbl_get_d added tbl digit )
+        ( p256ct_padd_d scr acc acc added am b3m )
+        = w + w 1
     }
     // affine: x = X/Z, y = Y/Z (de-Montgomery via inverse).
     : ( Vec i ) zinv ( __mag8 )
@@ -667,6 +751,7 @@ $ `stdlib/core/vec.nu`
     ( __p256_limbs_to_be out . acc x )
     ( __p256_limbs_to_be out . acc y )
     ( p256pt_free base ) ( p256pt_free acc ) ( p256pt_free added )
+    ( vec_free [i] tbl )
     ( vec_free [i] am ) ( vec_free [i] b3m ) ( vec_free [i] zinv )
     ( __p256_scr_free scr )
     ^ out

@@ -80,7 +80,12 @@ $ `stdlib/std/p256_field.nu`
         ( vec_free [i] pm ) ( vec_free [i] pr ) ( vec_free [i] sl )
         = t + t 1
     }
-    // scalar mult vs bigint keygen
+    // Scalar multiply against an INDEPENDENT implementation: the BigInt
+    // Jacobian double-and-add ladder in std/ecdsa_p256 (_jmul), which
+    // shares no code with the fixed-limb projective one — different
+    // coordinates, different field, different addition formula.
+    // (It must not be compared against p256_ecdh_keygen: that calls the
+    // very ladder under test, so the check would be vacuous.)
     : BigInt gx ( bgh `6b17d1f2e12c4247f8bce6e563a440f277037d812deb33a0f4a13945d898c296` )
     : BigInt gy ( bgh `4fe342e2fe1a7f9b8ee7eb4a7c0f9e162bce33576b315ececbb6406837bf51f5` )
     : ( Vec i ) gxl ( to_limbs gx ) : ( Vec i ) gyl ( to_limbs gy )
@@ -90,12 +95,20 @@ $ `stdlib/std/p256_field.nu`
     ~ < s 60 {
         : ( Vec u ) k ( vec_with_cap [u] 32 )
         : ~ i j 0 ~ < j 32 { ( vec_push [u] k # u & ( rng_next g2 ) 255 ) = j + j 1 }
-        : ( Vec u ) ref ( p256_ecdh_keygen k )
+        : Jac gj @ Jac { ( bigint_clone gx ) ( bigint_clone gy ) ( bigint_from_i 1 ) F }
+        : Jac rj ( _jmul k gj p )
+        : BigInt rx ( _jaffine_x rj p )
+        : BigInt ry ( _jaffine_y rj p )
+        : ( Vec u ) refx ( bigint_to_bytes_be rx 32 )
+        : ( Vec u ) refy ( bigint_to_bytes_be ry 32 )
         : ( Vec u ) mine ( p256ct_scalarmult k gxl gyl )
-        : ~ b ok ? & == ( vec_len [u] ref ) 65 == ( vec_len [u] mine ) 64 T F
-        : ~ i c 0 ~ & ok < c 64 { ? != ( __bg ref + 1 c ) ( __bg mine c ) { = ok F } {} = c + c 1 }
+        : ~ b ok == ( vec_len [u] mine ) 64
+        : ~ i c 0 ~ & ok < c 32 { ? != ( __bg refx c ) ( __bg mine c ) { = ok F } {} = c + c 1 }
+        : ~ i c2 0 ~ & ok < c2 32 { ? != ( __bg refy c2 ) ( __bg mine + 32 c2 ) { = ok F } {} = c2 + c2 1 }
         ? ! ok { = sf + sf 1 } {}
-        ( vec_free [u] k ) ( vec_free [u] ref ) ( vec_free [u] mine )
+        ( bigint_free rx ) ( bigint_free ry ) ( _jfree rj ) ( _jfree gj )
+        ( vec_free [u] refx ) ( vec_free [u] refy )
+        ( vec_free [u] k ) ( vec_free [u] mine )
         = s + s 1
     }
     ( nurl_print `field 400 trials, scalarmult 60 trials\n` )

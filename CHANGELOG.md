@@ -104,6 +104,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The P-256 ladder consumes the scalar a nibble at a time: 334 point
+  additions instead of 512, a keygen 0.93 → 0.62 ms.** The bit-at-a-time
+  always-add ladder paid two complete additions per scalar bit — one to
+  double, one to add the base whether or not the bit was set. A fixed
+  4-bit window pays four doublings and *one* addition per nibble, reading
+  `digit·B` out of a sixteen-entry table that costs fourteen additions to
+  build.
+
+  The digit is four bits of the secret scalar, so the table is never
+  indexed by it: `__p256_tbl_get_d` reads **all sixteen entries every
+  time** and merges each under a mask that is all-ones exactly when
+  `d == digit`. The mask is arithmetic rather than a comparison —
+  `d ^ digit` is zero only on a match, and subtracting one from zero
+  borrows into the top bit, which nothing else can set for a 4-bit value.
+  The table walk costs about 4% of one point addition per window.
+
+  Digit 0 reads the identity, which the RCB **complete** addition formula
+  absorbs correctly — that is what lets the zero digit stay on the same
+  path as every other one.
+
+  Constant time is unchanged, on the same terms as before: a fixed
+  `2·len(scalar bytes)` windows regardless of the scalar's value, no
+  branch on secret data, and now no secret-dependent address either.
+
+  `compiler/tests/p256_ct_field.nu` cross-checked its 60 random scalar
+  multiplies against `p256_ecdh_keygen` — which calls the very ladder
+  under test, so the check was vacuous. It now compares against
+  `std/ecdsa_p256`'s BigInt Jacobian ladder, which shares no code with it
+  (different coordinates, different field, different addition formula);
+  a mutation of the base point makes it fail, as it should. The four
+  reference functions it needs are renamed from `__` to a single
+  underscore, which is what the compiler's own deprecation says to do.
+
 - **The P-256 Montgomery reduction performs no multiplies at all — a
   keygen is 1.07 → 0.93 ms.** The reduction half of CIOS multiplies `m`
   by the modulus limb by limb, and P-256's modulus is
