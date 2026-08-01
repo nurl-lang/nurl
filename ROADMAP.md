@@ -7,7 +7,7 @@ Anything marked done here has a regression test in
 [`compiler/tests/`](compiler/tests/) and is covered by the bootstrap fixed
 point.
 
-_Last reviewed: 2026-07-31 · Current release: **0.30.0** · Language: **Grammar
+_Last reviewed: 2026-08-01 · Current release: **0.30.0** · Language: **Grammar
 v2.3** ([`spec/grammar.ebnf`](spec/grammar.ebnf))._
 
 ---
@@ -93,7 +93,13 @@ A high-level map of what exists. Dates and per-feature detail are in
   (`--no-dce` to emit everything). Reachability is computed over the
   finished IR, so closures, monomorphs, drop glue and dyn vtable thunks
   need no special casing — worth 30–40% of the clang step on a
-  stdlib-heavy program. See [`docs/BUILDING.md`](docs/BUILDING.md).
+  stdlib-heavy program. What survives is then emitted as several
+  independent modules (`--split=N`) that the driver lowers concurrently
+  and links with ThinLTO, taking the clang step on the compiler's own
+  3.2 MB of IR from 11.3 s to 2.0 s — at a measured 3.4% of the built
+  program's own speed, which is why `nurl.sh` splits your program and
+  `build.sh` does not split the compiler it installs (`NURL_SPLIT=0`
+  opts out). Both passes: [`docs/BUILDING.md`](docs/BUILDING.md).
 - Debugging: DWARF emission (`nurlc --g`) with `ptype`/`print` over structs.
 
 ### Standard library

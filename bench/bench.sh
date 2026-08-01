@@ -177,6 +177,12 @@ compile_nurl() {           # <src.nu> <outbase> -> "<frontend_ms> <total_ms>" or
     for ((r = 0; r < COMPILE_REPS; r++)); do
         f="$(cd "$ROOT" && TIME_STDOUT="$ll" time_ms "$NURLC" "$src")"
         [[ "$f" == FAIL || "$f" == TIMEOUT ]] && { echo FAIL; return 1; }
+        # One module, full LTO — which is also what `nurl.sh` does for
+        # every program in this corpus. Its parallel-lowering path
+        # (`nurlc --split`, docs/BUILDING.md) needs ~256 KB of IR before
+        # it engages, and the largest benchmark here emits 112 KB. If a
+        # benchmark ever grows past that, this line stops matching the
+        # driver and the compile column below has to say so.
         # shellcheck disable=SC2086
         l="$(cd "$ROOT" && time_ms clang $OPT -flto -Wl,--as-needed "$ll" "$RUNTIME" \
                  -lm -lpthread $EXTRA_LIBS -o "$bin")"

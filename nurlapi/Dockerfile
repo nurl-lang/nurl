@@ -147,8 +147,14 @@ RUN set -eux; \
     build_zig_target linux-riscv64-musl riscv64-linux-musl       "-static" "-lm -lpthread"; \
     rm -f /tmp/warm.c /tmp/warm-*
 
-# Compile the NURL API binary itself
-RUN ./nurl.sh nurlapi/main.nu nurlapi/nurlapi
+# Compile the NURL API binary itself.
+# NURL_SPLIT=0: this is a shipped artifact, built once per image and then
+# served from, so it takes the single-module full-LTO link rather than
+# the parallel one (docs/BUILDING.md → Parallel lowering). Same rule
+# build.sh applies to the stage-2 compiler it installs. The compile
+# endpoints below are unaffected either way — main.nu drives `nurlc` and
+# `clang` itself and never asks for `--split`.
+RUN NURL_SPLIT=0 ./nurl.sh nurlapi/main.nu nurlapi/nurlapi
 
 # Stage 2: Final runtime image
 FROM debian:bookworm-slim

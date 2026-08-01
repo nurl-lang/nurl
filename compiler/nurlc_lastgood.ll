@@ -89764,6 +89764,25 @@ entry:
 }
 @g_dce = global i64 1
 
+@g_split_n = global i64 0
+
+@g_split_max = global i64 0
+
+@g_split_min = global i64 131072
+
+@__const_g_split_out = private unnamed_addr constant [1 x i8] c"\00"
+@g_split_out = global i8* getelementptr ([1 x i8], [1 x i8]* @__const_g_split_out, i64 0, i64 0)
+
+@g_split_out__nurlown = global i64 0
+
+@g_split_part = global i64 0
+
+@g_split_fill = global i64 0
+
+@g_split_priv = global i64 0
+
+@g_split_fh = global i64 0
+
 @g_dce_mod = global i64 0
 
 @g_dce_start = global i64 0
@@ -90255,209 +90274,308 @@ end_3:
   ret void
 }
 
+define i64 @__sp_parts__fp1(i64 %mlen) {
+entry:
+  %r0 = alloca i64
+  %r7 = alloca i64
+  %r9 = alloca i64
+  %r1 = load i64, i64* @g_split_max
+  %r2 = icmp eq i64 0, %r1
+  br i1 %r2, label %then_1, label %else_2
+then_1:
+  ret i64 0
+else_2:
+  br label %end_3
+end_3:
+  %r3 = load i64, i64* @g_split_min
+  %r5 = icmp eq i64 %r3, 0
+  br i1 %r5, label %divzero_4, label %divok_5
+divzero_4:
+  %r6 = getelementptr [17 x i8], [17 x i8]* @.str.6354, i64 0, i64 0
+  call void @nurl_panic(i8* %r6)
+  unreachable
+divok_5:
+  %r4 = sdiv i64 %mlen, %r3
+  store i64 %r4, i64* %r7
+  %r8 = load i64, i64* @g_split_max
+  store i64 %r8, i64* %r9
+  %r10 = load i64, i64* %r7
+  %r11 = load i64, i64* %r9
+  %r12 = icmp slt i64 %r10, %r11
+  br i1 %r12, label %then_6, label %else_7
+then_6:
+  %r13 = load i64, i64* %r7
+  store i64 %r13, i64* %r9
+  br label %end_8
+else_7:
+  br label %end_8
+end_8:
+  %r14 = load i64, i64* %r9
+  %r15 = icmp slt i64 %r14, 2
+  br i1 %r15, label %then_9, label %else_10
+then_9:
+  ret i64 0
+else_10:
+  br label %end_11
+end_11:
+  %r16 = load i64, i64* %r9
+  ret i64 %r16
+}
+
+@.str.6354 = private unnamed_addr constant [17 x i8] c"division by zero\00"
 define void @dce_emit_module(i8* %mod) {
 entry:
   %r1 = alloca i64
-  %r8 = alloca i64
-  %r38 = alloca i8*
-  store i8* null, i8** %r38
-  %r47 = alloca i64
-  %r48 = alloca i64
+  %r11 = alloca i64
+  %r41 = alloca i8*
+  store i8* null, i8** %r41
+  %r51 = alloca i64
+  %r54 = alloca i64
+  %r64 = alloca i64
   %r65 = alloca i64
-  %r73 = alloca i64
-  %r84 = alloca i64
-  %r85 = alloca i64
-  %r93 = alloca i64
-  %r98 = alloca i64
+  %r82 = alloca i64
+  %r90 = alloca i64
+  %r101 = alloca i64
+  %r102 = alloca i64
+  %r110 = alloca i64
+  %r115 = alloca i64
   %r0 = call i64 @strlen(i8* %mod)
   store i64 %r0, i64* %r1
   %r2 = ptrtoint i8* %mod to i64
   store i64 %r2, i64* @g_dce_mod
+  store i64 0, i64* @g_split_n
   %r3 = load i64, i64* @g_dce
   %r4 = icmp eq i64 0, %r3
-  br i1 %r4, label %then_1, label %else_2
-then_1:
-  %r5 = load i64, i64* %r1
-  call void @__dce_print_range__fp1(i64 0, i64 %r5)
+  br i1 %r4, label %and_right_1, label %and_end_2
+and_right_1:
+  %r5 = load i64, i64* @g_split_max
+  %r6 = icmp eq i64 0, %r5
+  br label %and_end_2
+and_end_2:
+  %r7 = phi i1 [ 0, %entry ], [ %r6, %and_right_1 ]
+  br i1 %r7, label %then_3, label %else_4
+then_3:
+  %r8 = load i64, i64* %r1
+  call void @__dce_print_range__fp1(i64 0, i64 %r8)
   ret void
-else_2:
-  br label %end_3
-end_3:
-  %r6 = load i64, i64* %r1
-  %r7 = call i64 @__dce_index__fp1(i64 %r6, i64 1)
-  store i64 %r7, i64* %r8
-  %r9 = load i64, i64* %r8
-  %r10 = icmp eq i64 0, %r9
-  br i1 %r10, label %then_4, label %else_5
-then_4:
-  %r11 = load i64, i64* %r1
-  call void @__dce_print_range__fp1(i64 0, i64 %r11)
+else_4:
+  br label %end_5
+end_5:
+  %r9 = load i64, i64* %r1
+  %r10 = call i64 @__dce_index__fp1(i64 %r9, i64 1)
+  store i64 %r10, i64* %r11
+  %r12 = load i64, i64* %r11
+  %r13 = icmp eq i64 0, %r12
+  br i1 %r13, label %then_6, label %else_7
+then_6:
+  %r14 = load i64, i64* %r1
+  call void @__sp_whole__fp1(i64 %r14)
   ret void
-else_5:
-  br label %end_6
-end_6:
-  %r12 = load i64, i64* %r8
-  %r13 = mul i64 %r12, 8
-  %r14 = call i8* @nurl_zalloc(i64 %r13)
-  %r15 = bitcast i8* %r14 to i8*
-  %r16 = ptrtoint i8* %r15 to i64
-  store i64 %r16, i64* @g_dce_start
-  %r17 = load i64, i64* %r8
-  %r18 = mul i64 %r17, 8
-  %r19 = call i8* @nurl_zalloc(i64 %r18)
-  %r20 = bitcast i8* %r19 to i8*
-  %r21 = ptrtoint i8* %r20 to i64
-  store i64 %r21, i64* @g_dce_end
-  %r22 = load i64, i64* %r8
-  %r23 = mul i64 %r22, 8
-  %r24 = call i8* @nurl_zalloc(i64 %r23)
-  %r25 = bitcast i8* %r24 to i8*
-  %r26 = ptrtoint i8* %r25 to i64
-  store i64 %r26, i64* @g_dce_live
-  %r27 = load i64, i64* %r8
-  %r28 = mul i64 %r27, 8
-  %r29 = call i8* @nurl_zalloc(i64 %r28)
-  %r30 = bitcast i8* %r29 to i8*
-  %r31 = ptrtoint i8* %r30 to i64
-  store i64 %r31, i64* @g_dce_queue
-  %r32 = call i64 @nurl_sym_new()
-  store i64 %r32, i64* @g_dce_map
+else_7:
+  br label %end_8
+end_8:
+  %r15 = load i64, i64* %r11
+  %r16 = mul i64 %r15, 8
+  %r17 = call i8* @nurl_zalloc(i64 %r16)
+  %r18 = bitcast i8* %r17 to i8*
+  %r19 = ptrtoint i8* %r18 to i64
+  store i64 %r19, i64* @g_dce_start
+  %r20 = load i64, i64* %r11
+  %r21 = mul i64 %r20, 8
+  %r22 = call i8* @nurl_zalloc(i64 %r21)
+  %r23 = bitcast i8* %r22 to i8*
+  %r24 = ptrtoint i8* %r23 to i64
+  store i64 %r24, i64* @g_dce_end
+  %r25 = load i64, i64* %r11
+  %r26 = mul i64 %r25, 8
+  %r27 = call i8* @nurl_zalloc(i64 %r26)
+  %r28 = bitcast i8* %r27 to i8*
+  %r29 = ptrtoint i8* %r28 to i64
+  store i64 %r29, i64* @g_dce_live
+  %r30 = load i64, i64* %r11
+  %r31 = mul i64 %r30, 8
+  %r32 = call i8* @nurl_zalloc(i64 %r31)
+  %r33 = bitcast i8* %r32 to i8*
+  %r34 = ptrtoint i8* %r33 to i64
+  store i64 %r34, i64* @g_dce_queue
+  %r35 = call i64 @nurl_sym_new()
+  store i64 %r35, i64* @g_dce_map
   store i64 0, i64* @g_dce_qn
-  %r33 = load i64, i64* %r1
-  %r34 = call i64 @__dce_index__fp1(i64 %r33, i64 0)
-  %r35 = load i64, i64* @g_dce_map
-  %r36 = getelementptr [5 x i8], [5 x i8]* @.str.6354, i64 0, i64 0
-  %r37 = call i8* @nurl_sym_get(i64 %r35, i8* %r36)
-  %r39 = load i8*, i8** %r38
-  call void @nurl_free(i8* %r39)
-  store i8* %r37, i8** %r38
-  %r40 = load i8*, i8** %r38
-  call void @nurl_journal_push(i8* %r40)
-  %r41 = load i8*, i8** %r38
-  %r42 = call i64 @nurl_str_len(i8* %r41)
-  %r43 = icmp eq i64 0, %r42
-  br i1 %r43, label %then_7, label %else_8
-then_7:
-  %r44 = load i64, i64* %r1
-  call void @__dce_print_range__fp1(i64 0, i64 %r44)
-  call void @dce_free()
-  %r45 = load i8*, i8** %r38
-  call void @nurl_free(i8* %r45)
-  ret void
-else_8:
-  br label %end_9
-end_9:
-  %r46 = getelementptr [5 x i8], [5 x i8]* @.str.6355, i64 0, i64 0
-  call void @__dce_mark_name__fp1(i8* %r46)
-  store i64 0, i64* %r47
-  store i64 0, i64* %r48
-  br label %loop_check_10
-loop_check_10:
-  %r49 = load i64, i64* %r48
-  %r50 = load i64, i64* %r8
-  %r51 = icmp slt i64 %r49, %r50
-  br i1 %r51, label %loop_body_11, label %loop_exit_12
-loop_body_11:
-  %r52 = load i64, i64* %r47
-  %r53 = load i64, i64* @g_dce_start
-  %r54 = inttoptr i64 %r53 to i8*
-  %r55 = load i64, i64* %r48
-  %r56 = call i64 @nurl_peek(i8* %r54, i64 %r55)
-  call void @__dce_scan__fp1(i64 %r52, i64 %r56)
-  %r57 = load i64, i64* @g_dce_end
-  %r58 = inttoptr i64 %r57 to i8*
-  %r59 = load i64, i64* %r48
-  %r60 = call i64 @nurl_peek(i8* %r58, i64 %r59)
-  store i64 %r60, i64* %r47
-  %r61 = load i64, i64* %r48
+  %r36 = load i64, i64* %r1
+  %r37 = call i64 @__dce_index__fp1(i64 %r36, i64 0)
+  %r38 = load i64, i64* @g_dce_map
+  %r39 = getelementptr [5 x i8], [5 x i8]* @.str.6355, i64 0, i64 0
+  %r40 = call i8* @nurl_sym_get(i64 %r38, i8* %r39)
+  %r42 = load i8*, i8** %r41
+  call void @nurl_free(i8* %r42)
+  store i8* %r40, i8** %r41
+  %r43 = load i8*, i8** %r41
+  call void @nurl_journal_push(i8* %r43)
+  %r44 = load i64, i64* @g_dce
+  %r45 = icmp ne i64 0, %r44
+  br i1 %r45, label %and_right_9, label %and_end_10
+and_right_9:
+  %r46 = load i8*, i8** %r41
+  %r47 = call i64 @nurl_str_len(i8* %r46)
+  %r48 = icmp ne i64 0, %r47
+  br label %and_end_10
+and_end_10:
+  %r49 = phi i1 [ 0, %end_8 ], [ %r48, %and_right_9 ]
+  br i1 %r49, label %then_11, label %else_12
+then_11:
+  br label %end_13
+else_12:
+  br label %end_13
+end_13:
+  %r50 = phi i64 [ 1, %then_11 ], [ 0, %else_12 ]
+  store i64 %r50, i64* %r51
+  %r52 = load i64, i64* %r51
+  %r53 = icmp eq i64 0, %r52
+  br i1 %r53, label %then_14, label %else_15
+then_14:
+  store i64 0, i64* %r54
+  br label %loop_check_17
+loop_check_17:
+  %r55 = load i64, i64* %r54
+  %r56 = load i64, i64* %r11
+  %r57 = icmp slt i64 %r55, %r56
+  br i1 %r57, label %loop_body_18, label %loop_exit_19
+loop_body_18:
+  %r58 = load i64, i64* @g_dce_live
+  %r59 = inttoptr i64 %r58 to i8*
+  %r60 = load i64, i64* %r54
+  call void @nurl_poke(i8* %r59, i64 %r60, i64 1)
+  %r61 = load i64, i64* %r54
   %r62 = add i64 %r61, 1
-  store i64 %r62, i64* %r48
-  br label %loop_check_10
-loop_exit_12:
-  %r63 = load i64, i64* %r47
-  %r64 = load i64, i64* %r1
-  call void @__dce_scan__fp1(i64 %r63, i64 %r64)
+  store i64 %r62, i64* %r54
+  br label %loop_check_17
+loop_exit_19:
+  br label %end_16
+else_15:
+  %r63 = getelementptr [5 x i8], [5 x i8]* @.str.6356, i64 0, i64 0
+  call void @__dce_mark_name__fp1(i8* %r63)
+  store i64 0, i64* %r64
   store i64 0, i64* %r65
-  br label %loop_check_13
-loop_check_13:
+  br label %loop_check_20
+loop_check_20:
   %r66 = load i64, i64* %r65
-  %r67 = load i64, i64* @g_dce_qn
+  %r67 = load i64, i64* %r11
   %r68 = icmp slt i64 %r66, %r67
-  br i1 %r68, label %loop_body_14, label %loop_exit_15
-loop_body_14:
-  %r69 = load i64, i64* @g_dce_queue
-  %r70 = inttoptr i64 %r69 to i8*
-  %r71 = load i64, i64* %r65
-  %r72 = call i64 @nurl_peek(i8* %r70, i64 %r71)
-  store i64 %r72, i64* %r73
-  %r74 = load i64, i64* @g_dce_start
+  br i1 %r68, label %loop_body_21, label %loop_exit_22
+loop_body_21:
+  %r69 = load i64, i64* %r64
+  %r70 = load i64, i64* @g_dce_start
+  %r71 = inttoptr i64 %r70 to i8*
+  %r72 = load i64, i64* %r65
+  %r73 = call i64 @nurl_peek(i8* %r71, i64 %r72)
+  call void @__dce_scan__fp1(i64 %r69, i64 %r73)
+  %r74 = load i64, i64* @g_dce_end
   %r75 = inttoptr i64 %r74 to i8*
-  %r76 = load i64, i64* %r73
+  %r76 = load i64, i64* %r65
   %r77 = call i64 @nurl_peek(i8* %r75, i64 %r76)
-  %r78 = load i64, i64* @g_dce_end
-  %r79 = inttoptr i64 %r78 to i8*
-  %r80 = load i64, i64* %r73
-  %r81 = call i64 @nurl_peek(i8* %r79, i64 %r80)
-  call void @__dce_scan__fp1(i64 %r77, i64 %r81)
-  %r82 = load i64, i64* %r65
-  %r83 = add i64 %r82, 1
-  store i64 %r83, i64* %r65
-  br label %loop_check_13
-loop_exit_15:
-  store i64 0, i64* %r84
-  store i64 0, i64* %r85
-  br label %loop_check_16
-loop_check_16:
-  %r86 = load i64, i64* %r85
-  %r87 = load i64, i64* %r8
-  %r88 = icmp slt i64 %r86, %r87
-  br i1 %r88, label %loop_body_17, label %loop_exit_18
-loop_body_17:
-  %r89 = load i64, i64* @g_dce_start
-  %r90 = inttoptr i64 %r89 to i8*
-  %r91 = load i64, i64* %r85
-  %r92 = call i64 @nurl_peek(i8* %r90, i64 %r91)
-  store i64 %r92, i64* %r93
-  %r94 = load i64, i64* @g_dce_end
-  %r95 = inttoptr i64 %r94 to i8*
-  %r96 = load i64, i64* %r85
-  %r97 = call i64 @nurl_peek(i8* %r95, i64 %r96)
-  store i64 %r97, i64* %r98
-  %r99 = load i64, i64* %r84
-  %r100 = load i64, i64* %r93
-  call void @__dce_print_range__fp1(i64 %r99, i64 %r100)
-  %r101 = load i64, i64* @g_dce_live
-  %r102 = inttoptr i64 %r101 to i8*
-  %r103 = load i64, i64* %r85
-  %r104 = call i64 @nurl_peek(i8* %r102, i64 %r103)
-  %r105 = icmp ne i64 0, %r104
-  br i1 %r105, label %then_19, label %else_20
-then_19:
-  %r106 = load i64, i64* %r93
-  %r107 = load i64, i64* %r98
-  call void @__dce_print_range__fp1(i64 %r106, i64 %r107)
-  br label %end_21
-else_20:
-  br label %end_21
-end_21:
-  %r108 = load i64, i64* %r98
-  store i64 %r108, i64* %r84
-  %r109 = load i64, i64* %r85
-  %r110 = add i64 %r109, 1
-  store i64 %r110, i64* %r85
-  br label %loop_check_16
-loop_exit_18:
-  %r111 = load i64, i64* %r84
-  %r112 = load i64, i64* %r1
-  call void @__dce_print_range__fp1(i64 %r111, i64 %r112)
+  store i64 %r77, i64* %r64
+  %r78 = load i64, i64* %r65
+  %r79 = add i64 %r78, 1
+  store i64 %r79, i64* %r65
+  br label %loop_check_20
+loop_exit_22:
+  %r80 = load i64, i64* %r64
+  %r81 = load i64, i64* %r1
+  call void @__dce_scan__fp1(i64 %r80, i64 %r81)
+  store i64 0, i64* %r82
+  br label %loop_check_23
+loop_check_23:
+  %r83 = load i64, i64* %r82
+  %r84 = load i64, i64* @g_dce_qn
+  %r85 = icmp slt i64 %r83, %r84
+  br i1 %r85, label %loop_body_24, label %loop_exit_25
+loop_body_24:
+  %r86 = load i64, i64* @g_dce_queue
+  %r87 = inttoptr i64 %r86 to i8*
+  %r88 = load i64, i64* %r82
+  %r89 = call i64 @nurl_peek(i8* %r87, i64 %r88)
+  store i64 %r89, i64* %r90
+  %r91 = load i64, i64* @g_dce_start
+  %r92 = inttoptr i64 %r91 to i8*
+  %r93 = load i64, i64* %r90
+  %r94 = call i64 @nurl_peek(i8* %r92, i64 %r93)
+  %r95 = load i64, i64* @g_dce_end
+  %r96 = inttoptr i64 %r95 to i8*
+  %r97 = load i64, i64* %r90
+  %r98 = call i64 @nurl_peek(i8* %r96, i64 %r97)
+  call void @__dce_scan__fp1(i64 %r94, i64 %r98)
+  %r99 = load i64, i64* %r82
+  %r100 = add i64 %r99, 1
+  store i64 %r100, i64* %r82
+  br label %loop_check_23
+loop_exit_25:
+  br label %end_16
+end_16:
+  store i64 0, i64* %r101
+  store i64 0, i64* %r102
+  br label %loop_check_26
+loop_check_26:
+  %r103 = load i64, i64* %r102
+  %r104 = load i64, i64* %r11
+  %r105 = icmp slt i64 %r103, %r104
+  br i1 %r105, label %loop_body_27, label %loop_exit_28
+loop_body_27:
+  %r106 = load i64, i64* @g_dce_start
+  %r107 = inttoptr i64 %r106 to i8*
+  %r108 = load i64, i64* %r102
+  %r109 = call i64 @nurl_peek(i8* %r107, i64 %r108)
+  store i64 %r109, i64* %r110
+  %r111 = load i64, i64* @g_dce_end
+  %r112 = inttoptr i64 %r111 to i8*
+  %r113 = load i64, i64* %r102
+  %r114 = call i64 @nurl_peek(i8* %r112, i64 %r113)
+  store i64 %r114, i64* %r115
+  %r116 = load i64, i64* %r101
+  %r117 = load i64, i64* %r110
+  call void @__dce_print_range__fp1(i64 %r116, i64 %r117)
+  %r118 = load i64, i64* @g_dce_live
+  %r119 = inttoptr i64 %r118 to i8*
+  %r120 = load i64, i64* %r102
+  %r121 = call i64 @nurl_peek(i8* %r119, i64 %r120)
+  %r122 = icmp ne i64 0, %r121
+  br i1 %r122, label %then_29, label %else_30
+then_29:
+  %r123 = load i64, i64* %r110
+  %r124 = load i64, i64* %r115
+  call void @__dce_print_range__fp1(i64 %r123, i64 %r124)
+  br label %end_31
+else_30:
+  br label %end_31
+end_31:
+  %r125 = load i64, i64* %r115
+  store i64 %r125, i64* %r101
+  %r126 = load i64, i64* %r102
+  %r127 = add i64 %r126, 1
+  store i64 %r127, i64* %r102
+  br label %loop_check_26
+loop_exit_28:
+  %r128 = load i64, i64* %r101
+  %r129 = load i64, i64* %r1
+  call void @__dce_print_range__fp1(i64 %r128, i64 %r129)
+  %r130 = load i64, i64* @g_split_max
+  %r131 = icmp ne i64 0, %r130
+  br i1 %r131, label %then_32, label %else_33
+then_32:
+  %r132 = load i64, i64* %r11
+  %r133 = load i64, i64* %r1
+  call void @split_emit_module(i64 %r132, i64 %r133)
+  br label %end_34
+else_33:
+  br label %end_34
+end_34:
   call void @dce_free()
-  %r113 = load i8*, i8** %r38
-  call void @nurl_free(i8* %r113)
+  %r134 = load i8*, i8** %r41
+  call void @nurl_free(i8* %r134)
   ret void
 }
 
-@.str.6354 = private unnamed_addr constant [5 x i8] c"main\00"
 @.str.6355 = private unnamed_addr constant [5 x i8] c"main\00"
+@.str.6356 = private unnamed_addr constant [5 x i8] c"main\00"
 define void @dce_free() {
 entry:
   %r0 = load i64, i64* @g_dce_start
@@ -90482,53 +90600,1921 @@ entry:
   ret void
 }
 
-define void @nurlc_print_help() {
+define void @__sp_write__fp1(i64 %from, i64 %to) {
 entry:
-  %r0 = getelementptr [80 x i8], [80 x i8]* @.str.6356, i64 0, i64 0
-  call void @nurl_print(i8* %r0)
-  %r1 = getelementptr [42 x i8], [42 x i8]* @.str.6357, i64 0, i64 0
-  call void @nurl_print(i8* %r1)
-  %r2 = getelementptr [8 x i8], [8 x i8]* @.str.6358, i64 0, i64 0
-  call void @nurl_print(i8* %r2)
-  %r3 = getelementptr [48 x i8], [48 x i8]* @.str.6359, i64 0, i64 0
-  call void @nurl_print(i8* %r3)
-  %r4 = getelementptr [60 x i8], [60 x i8]* @.str.6360, i64 0, i64 0
-  call void @nurl_print(i8* %r4)
-  %r5 = getelementptr [77 x i8], [77 x i8]* @.str.6361, i64 0, i64 0
-  call void @nurl_print(i8* %r5)
-  %r6 = getelementptr [71 x i8], [71 x i8]* @.str.6362, i64 0, i64 0
-  call void @nurl_print(i8* %r6)
-  %r7 = getelementptr [71 x i8], [71 x i8]* @.str.6363, i64 0, i64 0
-  call void @nurl_print(i8* %r7)
-  %r8 = getelementptr [61 x i8], [61 x i8]* @.str.6364, i64 0, i64 0
-  call void @nurl_print(i8* %r8)
-  %r9 = getelementptr [70 x i8], [70 x i8]* @.str.6365, i64 0, i64 0
-  call void @nurl_print(i8* %r9)
-  %r10 = getelementptr [59 x i8], [59 x i8]* @.str.6366, i64 0, i64 0
-  call void @nurl_print(i8* %r10)
-  %r11 = getelementptr [57 x i8], [57 x i8]* @.str.6367, i64 0, i64 0
-  call void @nurl_print(i8* %r11)
-  %r12 = getelementptr [64 x i8], [64 x i8]* @.str.6368, i64 0, i64 0
-  call void @nurl_print(i8* %r12)
-  %r13 = getelementptr [58 x i8], [58 x i8]* @.str.6369, i64 0, i64 0
-  call void @nurl_print(i8* %r13)
+  %r4 = alloca i8*
+  store i8* null, i8** %r4
+  %r13 = alloca i64
+  %r0 = icmp sge i64 %from, %to
+  br i1 %r0, label %then_1, label %else_2
+then_1:
+  ret void
+else_2:
+  br label %end_3
+end_3:
+  %r1 = load i64, i64* @g_dce_mod
+  %r2 = inttoptr i64 %r1 to i8*
+  %r3 = bitcast i8* %r2 to i8*
+  store i8* %r3, i8** %r4
+  %r5 = load i8*, i8** %r4
+  %r6 = ptrtoint i8* %r5 to i64
+  %r7 = add i64 %r6, %from
+  %r8 = inttoptr i64 %r7 to i8*
+  %r9 = sub i64 %to, %from
+  %r10 = load i64, i64* @g_split_fh
+  %r11 = inttoptr i64 %r10 to i8*
+  %r12 = call i64 @fwrite(i8* %r8, i64 1, i64 %r9, i8* %r11)
+  store i64 %r12, i64* %r13
   ret void
 }
 
-@.str.6356 = private unnamed_addr constant [80 x i8] c"nurlc \E2\80\94 the NURL compiler. Compiles a .nu source file to LLVM IR on stdout.\0A\0A\00"
-@.str.6357 = private unnamed_addr constant [42 x i8] c"usage: nurlc [flags] <file.nu>  >out.ll\0A\0A\00"
-@.str.6358 = private unnamed_addr constant [8 x i8] c"flags:\0A\00"
-@.str.6359 = private unnamed_addr constant [48 x i8] c"  --help, -h          print this help and exit\0A\00"
-@.str.6360 = private unnamed_addr constant [60 x i8] c"  --version, -v       print the toolchain version and exit\0A\00"
-@.str.6361 = private unnamed_addr constant [77 x i8] c"  --g, -g             emit DWARF debug info (nurl.sh --debug forwards this)\0A\00"
-@.str.6362 = private unnamed_addr constant [71 x i8] c"  --lint              run lint-only diagnostics (e.g. unused imports)\0A\00"
-@.str.6363 = private unnamed_addr constant [71 x i8] c"  --no-borrowck       disable the borrow-checker pass (on by default)\0A\00"
-@.str.6364 = private unnamed_addr constant [61 x i8] c"  --strict-borrowck   run the borrow-checker in strict mode\0A\00"
-@.str.6365 = private unnamed_addr constant [70 x i8] c"  --no-dce            emit unreachable functions too (on by default)\0A\00"
-@.str.6366 = private unnamed_addr constant [59 x i8] c"  --ffi-host-imports  emit FFI calls as wasm host imports\0A\00"
-@.str.6367 = private unnamed_addr constant [57 x i8] c"\0AThe LLVM IR goes to stdout; link it with clang against\0A\00"
-@.str.6368 = private unnamed_addr constant [64 x i8] c"stdlib/runtime.native.o (see docs/BUILDING.md). For a one-step\0A\00"
-@.str.6369 = private unnamed_addr constant [58 x i8] c"source-to-binary build use ./nurl.sh <file.nu> [output].\0A\00"
+define void @__sp_puts__fp1(i8* %t) {
+entry:
+  %r3 = alloca i32
+  %r0 = load i64, i64* @g_split_fh
+  %r1 = inttoptr i64 %r0 to i8*
+  %r2 = call i32 @fputs(i8* %t, i8* %r1)
+  store i32 %r2, i32* %r3
+  ret void
+}
+
+define i64 @__sp_line_end__fp1(i64 %p, i64 %lim) {
+entry:
+  %r0 = alloca i64
+  %r4 = alloca i8*
+  store i8* null, i8** %r4
+  %r5 = alloca i64
+  %r1 = load i64, i64* @g_dce_mod
+  %r2 = inttoptr i64 %r1 to i8*
+  %r3 = bitcast i8* %r2 to i8*
+  store i8* %r3, i8** %r4
+  store i64 %p, i64* %r5
+  br label %loop_check_1
+loop_check_1:
+  %r6 = load i64, i64* %r5
+  %r7 = icmp slt i64 %r6, %lim
+  br i1 %r7, label %and_right_4, label %and_end_5
+and_right_4:
+  %r8 = load i8*, i8** %r4
+  %r9 = load i64, i64* %r5
+  %r10 = getelementptr i8, i8* %r8, i64 %r9
+  %r11 = load i8, i8* %r10
+  %r12 = zext i8 %r11 to i64
+  %r13 = and i64 %r12, 255
+  %r14 = icmp ne i64 %r13, 10
+  br label %and_end_5
+and_end_5:
+  %r15 = phi i1 [ 0, %loop_check_1 ], [ %r14, %and_right_4 ]
+  br i1 %r15, label %loop_body_2, label %loop_exit_3
+loop_body_2:
+  %r16 = load i64, i64* %r5
+  %r17 = add i64 %r16, 1
+  store i64 %r17, i64* %r5
+  br label %loop_check_1
+loop_exit_3:
+  %r18 = load i64, i64* %r5
+  ret i64 %r18
+}
+
+define i64 @__sp_ident_end__fp1(i64 %p, i64 %lim) {
+entry:
+  %r0 = alloca i64
+  %r4 = alloca i8*
+  store i8* null, i8** %r4
+  %r6 = alloca i64
+  %r1 = load i64, i64* @g_dce_mod
+  %r2 = inttoptr i64 %r1 to i8*
+  %r3 = bitcast i8* %r2 to i8*
+  store i8* %r3, i8** %r4
+  %r5 = add i64 %p, 1
+  store i64 %r5, i64* %r6
+  br label %loop_check_1
+loop_check_1:
+  %r7 = load i64, i64* %r6
+  %r8 = icmp slt i64 %r7, %lim
+  br i1 %r8, label %and_right_4, label %and_end_5
+and_right_4:
+  %r9 = load i8*, i8** %r4
+  %r10 = load i64, i64* %r6
+  %r11 = getelementptr i8, i8* %r9, i64 %r10
+  %r12 = load i8, i8* %r11
+  %r13 = zext i8 %r12 to i64
+  %r14 = and i64 %r13, 255
+  %r15 = call i1 @__dce_ident_byte__fp1(i64 %r14)
+  br label %and_end_5
+and_end_5:
+  %r16 = phi i1 [ 0, %loop_check_1 ], [ %r15, %and_right_4 ]
+  br i1 %r16, label %loop_body_2, label %loop_exit_3
+loop_body_2:
+  %r17 = load i64, i64* %r6
+  %r18 = add i64 %r17, 1
+  store i64 %r18, i64* %r6
+  br label %loop_check_1
+loop_exit_3:
+  %r19 = load i64, i64* %r6
+  ret i64 %r19
+}
+
+define i64 @__sp_lookup__fp1(i64 %tab, i64 %p, i64 %lim, i64 %dflt) {
+entry:
+  %r0 = alloca i64
+  %r2 = alloca i64
+  %r9 = alloca i8*
+  store i8* null, i8** %r9
+  %r14 = alloca i8
+  %r25 = alloca i8*
+  store i8* null, i8** %r25
+  %r28 = alloca i64
+  %r1 = call i64 @__sp_ident_end__fp1(i64 %p, i64 %lim)
+  store i64 %r1, i64* %r2
+  %r3 = load i64, i64* %r2
+  %r4 = add i64 %p, 1
+  %r5 = icmp eq i64 %r3, %r4
+  br i1 %r5, label %then_1, label %else_2
+then_1:
+  ret i64 %dflt
+else_2:
+  br label %end_3
+end_3:
+  %r6 = load i64, i64* @g_dce_mod
+  %r7 = inttoptr i64 %r6 to i8*
+  %r8 = bitcast i8* %r7 to i8*
+  store i8* %r8, i8** %r9
+  %r10 = load i8*, i8** %r9
+  %r11 = load i64, i64* %r2
+  %r12 = getelementptr i8, i8* %r10, i64 %r11
+  %r13 = load i8, i8* %r12
+  store i8 %r13, i8* %r14
+  %r15 = load i8*, i8** %r9
+  %r16 = load i64, i64* %r2
+  %r17 = trunc i64 0 to i8
+  %r18 = getelementptr i8, i8* %r15, i64 %r16
+  store i8 %r17, i8* %r18
+  %r19 = load i8*, i8** %r9
+  %r20 = ptrtoint i8* %r19 to i64
+  %r21 = add i64 %p, 1
+  %r22 = add i64 %r20, %r21
+  %r23 = inttoptr i64 %r22 to i8*
+  %r24 = call i8* @nurl_sym_get(i64 %tab, i8* %r23)
+  %r26 = load i8*, i8** %r25
+  call void @nurl_free(i8* %r26)
+  store i8* %r24, i8** %r25
+  %r27 = load i8*, i8** %r25
+  call void @nurl_journal_push(i8* %r27)
+  store i64 %dflt, i64* %r28
+  %r29 = load i8*, i8** %r25
+  %r30 = call i64 @nurl_str_len(i8* %r29)
+  %r31 = icmp ne i64 0, %r30
+  br i1 %r31, label %then_4, label %else_5
+then_4:
+  %r32 = load i8*, i8** %r25
+  %r33 = call i64 @nurl_str_to_int(i8* %r32)
+  store i64 %r33, i64* %r28
+  br label %end_6
+else_5:
+  br label %end_6
+end_6:
+  %r34 = load i8*, i8** %r9
+  %r35 = load i64, i64* %r2
+  %r36 = load i8, i8* %r14
+  %r37 = getelementptr i8, i8* %r34, i64 %r35
+  store i8 %r36, i8* %r37
+  %r38 = load i64, i64* %r28
+  %r39 = load i8*, i8** %r25
+  call void @nurl_free(i8* %r39)
+  ret i64 %r38
+}
+
+define void @__sp_set__fp1(i64 %tab, i64 %p, i64 %lim, i8* %val) {
+entry:
+  %r1 = alloca i64
+  %r8 = alloca i8*
+  store i8* null, i8** %r8
+  %r13 = alloca i8
+  %r0 = call i64 @__sp_ident_end__fp1(i64 %p, i64 %lim)
+  store i64 %r0, i64* %r1
+  %r2 = load i64, i64* %r1
+  %r3 = add i64 %p, 1
+  %r4 = icmp eq i64 %r2, %r3
+  br i1 %r4, label %then_1, label %else_2
+then_1:
+  ret void
+else_2:
+  br label %end_3
+end_3:
+  %r5 = load i64, i64* @g_dce_mod
+  %r6 = inttoptr i64 %r5 to i8*
+  %r7 = bitcast i8* %r6 to i8*
+  store i8* %r7, i8** %r8
+  %r9 = load i8*, i8** %r8
+  %r10 = load i64, i64* %r1
+  %r11 = getelementptr i8, i8* %r9, i64 %r10
+  %r12 = load i8, i8* %r11
+  store i8 %r12, i8* %r13
+  %r14 = load i8*, i8** %r8
+  %r15 = load i64, i64* %r1
+  %r16 = trunc i64 0 to i8
+  %r17 = getelementptr i8, i8* %r14, i64 %r15
+  store i8 %r16, i8* %r17
+  %r18 = load i8*, i8** %r8
+  %r19 = ptrtoint i8* %r18 to i64
+  %r20 = add i64 %p, 1
+  %r21 = add i64 %r19, %r20
+  %r22 = inttoptr i64 %r21 to i8*
+  call void @nurl_sym_def(i64 %tab, i8* %r22, i8* %val)
+  %r23 = load i8*, i8** %r8
+  %r24 = load i64, i64* %r1
+  %r25 = load i8, i8* %r13
+  %r26 = getelementptr i8, i8* %r23, i64 %r24
+  store i8 %r25, i8* %r26
+  ret void
+}
+
+define i1 @__sp_is_private__fp1(i64 %p, i64 %le) {
+entry:
+  %r0 = alloca i1
+  %r2 = alloca i64
+  %r9 = alloca i8*
+  store i8* null, i8** %r9
+  %r1 = call i64 @__sp_ident_end__fp1(i64 %p, i64 %le)
+  store i64 %r1, i64* %r2
+  %r3 = load i64, i64* %r2
+  %r4 = add i64 %r3, 11
+  %r5 = icmp sgt i64 %r4, %le
+  br i1 %r5, label %then_1, label %else_2
+then_1:
+  ret i1 0
+else_2:
+  br label %end_3
+end_3:
+  %r6 = load i64, i64* @g_dce_mod
+  %r7 = inttoptr i64 %r6 to i8*
+  %r8 = bitcast i8* %r7 to i8*
+  store i8* %r8, i8** %r9
+  %r10 = load i8*, i8** %r9
+  %r11 = ptrtoint i8* %r10 to i64
+  %r12 = load i64, i64* %r2
+  %r13 = add i64 %r11, %r12
+  %r14 = inttoptr i64 %r13 to i8*
+  %r15 = getelementptr [12 x i8], [12 x i8]* @.str.6357, i64 0, i64 0
+  %r16 = call i64 @nurl_str_starts(i8* %r14, i8* %r15)
+  %r17 = icmp ne i64 0, %r16
+  br i1 %r17, label %then_4, label %else_5
+then_4:
+  %r18 = zext i1 1 to i64
+  br label %end_6
+else_5:
+  %r19 = zext i1 0 to i64
+  br label %end_6
+end_6:
+  %r20 = phi i1 [ 1, %then_4 ], [ 0, %else_5 ]
+  ret i1 %r20
+}
+
+@.str.6357 = private unnamed_addr constant [12 x i8] c" = private \00"
+define i64 @__sp_word_end__fp1(i64 %t, i64 %lim) {
+entry:
+  %r0 = alloca i64
+  %r4 = alloca i8*
+  store i8* null, i8** %r4
+  %r5 = alloca i64
+  %r1 = load i64, i64* @g_dce_mod
+  %r2 = inttoptr i64 %r1 to i8*
+  %r3 = bitcast i8* %r2 to i8*
+  store i8* %r3, i8** %r4
+  store i64 %t, i64* %r5
+  br label %loop_check_1
+loop_check_1:
+  %r6 = load i64, i64* %r5
+  %r7 = icmp slt i64 %r6, %lim
+  br i1 %r7, label %and_right_4, label %and_end_5
+and_right_4:
+  %r8 = load i8*, i8** %r4
+  %r9 = load i64, i64* %r5
+  %r10 = getelementptr i8, i8* %r8, i64 %r9
+  %r11 = load i8, i8* %r10
+  %r12 = zext i8 %r11 to i64
+  %r13 = and i64 %r12, 255
+  %r14 = icmp ne i64 %r13, 32
+  br i1 %r14, label %and_right_6, label %and_end_7
+and_right_6:
+  %r15 = load i8*, i8** %r4
+  %r16 = load i64, i64* %r5
+  %r17 = getelementptr i8, i8* %r15, i64 %r16
+  %r18 = load i8, i8* %r17
+  %r19 = zext i8 %r18 to i64
+  %r20 = and i64 %r19, 255
+  %r21 = icmp ne i64 %r20, 10
+  br label %and_end_7
+and_end_7:
+  %r22 = phi i1 [ 0, %and_right_4 ], [ %r21, %and_right_6 ]
+  br label %and_end_5
+and_end_5:
+  %r23 = phi i1 [ 0, %loop_check_1 ], [ %r22, %and_end_7 ]
+  br i1 %r23, label %loop_body_2, label %loop_exit_3
+loop_body_2:
+  %r24 = load i64, i64* %r5
+  %r25 = add i64 %r24, 1
+  store i64 %r25, i64* %r5
+  br label %loop_check_1
+loop_exit_3:
+  %r26 = load i64, i64* %r5
+  ret i64 %r26
+}
+
+define i1 @__sp_word_eq__fp1(i64 %t, i64 %w, i8* %txt) {
+entry:
+  %r0 = alloca i1
+  %r7 = alloca i8*
+  store i8* null, i8** %r7
+  %r1 = sub i64 %w, %t
+  %r2 = call i64 @nurl_str_len(i8* %txt)
+  %r3 = icmp ne i64 %r1, %r2
+  br i1 %r3, label %then_1, label %else_2
+then_1:
+  ret i1 0
+else_2:
+  br label %end_3
+end_3:
+  %r4 = load i64, i64* @g_dce_mod
+  %r5 = inttoptr i64 %r4 to i8*
+  %r6 = bitcast i8* %r5 to i8*
+  store i8* %r6, i8** %r7
+  %r8 = load i8*, i8** %r7
+  %r9 = ptrtoint i8* %r8 to i64
+  %r10 = add i64 %r9, %t
+  %r11 = inttoptr i64 %r10 to i8*
+  %r12 = call i64 @nurl_str_starts(i8* %r11, i8* %txt)
+  %r13 = icmp ne i64 0, %r12
+  br i1 %r13, label %then_4, label %else_5
+then_4:
+  %r14 = zext i1 1 to i64
+  br label %end_6
+else_5:
+  %r15 = zext i1 0 to i64
+  br label %end_6
+end_6:
+  %r16 = phi i1 [ 1, %then_4 ], [ 0, %else_5 ]
+  ret i1 %r16
+}
+
+define i64 @__sp_type_end__fp1(i64 %p, i64 %lim) {
+entry:
+  %r0 = alloca i64
+  %r4 = alloca i8*
+  store i8* null, i8** %r4
+  %r5 = alloca i64
+  %r6 = alloca i64
+  %r7 = alloca i64
+  %r19 = alloca i64
+  %r1 = load i64, i64* @g_dce_mod
+  %r2 = inttoptr i64 %r1 to i8*
+  %r3 = bitcast i8* %r2 to i8*
+  store i8* %r3, i8** %r4
+  store i64 %p, i64* %r5
+  store i64 0, i64* %r6
+  store i64 1, i64* %r7
+  br label %loop_check_1
+loop_check_1:
+  %r8 = load i64, i64* %r7
+  %r9 = icmp ne i64 0, %r8
+  br i1 %r9, label %and_right_4, label %and_end_5
+and_right_4:
+  %r10 = load i64, i64* %r5
+  %r11 = icmp slt i64 %r10, %lim
+  br label %and_end_5
+and_end_5:
+  %r12 = phi i1 [ 0, %loop_check_1 ], [ %r11, %and_right_4 ]
+  br i1 %r12, label %loop_body_2, label %loop_exit_3
+loop_body_2:
+  %r13 = load i8*, i8** %r4
+  %r14 = load i64, i64* %r5
+  %r15 = getelementptr i8, i8* %r13, i64 %r14
+  %r16 = load i8, i8* %r15
+  %r17 = zext i8 %r16 to i64
+  %r18 = and i64 %r17, 255
+  store i64 %r18, i64* %r19
+  %r20 = load i64, i64* %r19
+  %r21 = icmp eq i64 %r20, 91
+  br i1 %r21, label %or_end_7, label %or_right_6
+or_right_6:
+  %r22 = load i64, i64* %r19
+  %r23 = icmp eq i64 %r22, 123
+  br label %or_end_7
+or_end_7:
+  %r24 = phi i1 [ 1, %loop_body_2 ], [ %r23, %or_right_6 ]
+  br i1 %r24, label %or_end_9, label %or_right_8
+or_right_8:
+  %r25 = load i64, i64* %r19
+  %r26 = icmp eq i64 %r25, 60
+  br label %or_end_9
+or_end_9:
+  %r27 = phi i1 [ 1, %or_end_7 ], [ %r26, %or_right_8 ]
+  br i1 %r27, label %or_end_11, label %or_right_10
+or_right_10:
+  %r28 = load i64, i64* %r19
+  %r29 = icmp eq i64 %r28, 40
+  br label %or_end_11
+or_end_11:
+  %r30 = phi i1 [ 1, %or_end_9 ], [ %r29, %or_right_10 ]
+  br i1 %r30, label %then_12, label %else_13
+then_12:
+  %r31 = load i64, i64* %r6
+  %r32 = add i64 %r31, 1
+  store i64 %r32, i64* %r6
+  %r33 = load i64, i64* %r5
+  %r34 = add i64 %r33, 1
+  store i64 %r34, i64* %r5
+  br label %end_14
+else_13:
+  %r35 = load i64, i64* %r19
+  %r36 = icmp eq i64 %r35, 93
+  br i1 %r36, label %or_end_16, label %or_right_15
+or_right_15:
+  %r37 = load i64, i64* %r19
+  %r38 = icmp eq i64 %r37, 125
+  br label %or_end_16
+or_end_16:
+  %r39 = phi i1 [ 1, %else_13 ], [ %r38, %or_right_15 ]
+  br i1 %r39, label %or_end_18, label %or_right_17
+or_right_17:
+  %r40 = load i64, i64* %r19
+  %r41 = icmp eq i64 %r40, 62
+  br label %or_end_18
+or_end_18:
+  %r42 = phi i1 [ 1, %or_end_16 ], [ %r41, %or_right_17 ]
+  br i1 %r42, label %or_end_20, label %or_right_19
+or_right_19:
+  %r43 = load i64, i64* %r19
+  %r44 = icmp eq i64 %r43, 41
+  br label %or_end_20
+or_end_20:
+  %r45 = phi i1 [ 1, %or_end_18 ], [ %r44, %or_right_19 ]
+  br i1 %r45, label %then_21, label %else_22
+then_21:
+  %r46 = load i64, i64* %r6
+  %r47 = sub i64 %r46, 1
+  store i64 %r47, i64* %r6
+  %r48 = load i64, i64* %r5
+  %r49 = add i64 %r48, 1
+  store i64 %r49, i64* %r5
+  %r50 = load i64, i64* %r6
+  %r51 = icmp eq i64 %r50, 0
+  br i1 %r51, label %then_24, label %else_25
+then_24:
+  store i64 0, i64* %r7
+  br label %end_26
+else_25:
+  br label %end_26
+end_26:
+  br label %end_23
+else_22:
+  %r52 = load i64, i64* %r6
+  %r53 = icmp eq i64 %r52, 0
+  br i1 %r53, label %and_right_27, label %and_end_28
+and_right_27:
+  %r54 = load i64, i64* %r19
+  %r55 = icmp eq i64 %r54, 32
+  br i1 %r55, label %or_end_30, label %or_right_29
+or_right_29:
+  %r56 = load i64, i64* %r19
+  %r57 = icmp eq i64 %r56, 10
+  br label %or_end_30
+or_end_30:
+  %r58 = phi i1 [ 1, %and_right_27 ], [ %r57, %or_right_29 ]
+  br label %and_end_28
+and_end_28:
+  %r59 = phi i1 [ 0, %else_22 ], [ %r58, %or_end_30 ]
+  br i1 %r59, label %then_31, label %else_32
+then_31:
+  store i64 0, i64* %r7
+  br label %end_33
+else_32:
+  %r60 = load i64, i64* %r5
+  %r61 = add i64 %r60, 1
+  store i64 %r61, i64* %r5
+  br label %end_33
+end_33:
+  %r62 = phi i64 [ 0, %then_31 ], [ %r61, %else_32 ]
+  br label %end_23
+end_23:
+  br label %end_14
+end_14:
+  br label %loop_check_1
+loop_exit_3:
+  br label %loop_check_34
+loop_check_34:
+  %r63 = load i64, i64* %r5
+  %r64 = icmp slt i64 %r63, %lim
+  br i1 %r64, label %and_right_37, label %and_end_38
+and_right_37:
+  %r65 = load i8*, i8** %r4
+  %r66 = load i64, i64* %r5
+  %r67 = getelementptr i8, i8* %r65, i64 %r66
+  %r68 = load i8, i8* %r67
+  %r69 = zext i8 %r68 to i64
+  %r70 = and i64 %r69, 255
+  %r71 = icmp eq i64 %r70, 42
+  br label %and_end_38
+and_end_38:
+  %r72 = phi i1 [ 0, %loop_check_34 ], [ %r71, %and_right_37 ]
+  br i1 %r72, label %loop_body_35, label %loop_exit_36
+loop_body_35:
+  %r73 = load i64, i64* %r5
+  %r74 = add i64 %r73, 1
+  store i64 %r74, i64* %r5
+  br label %loop_check_34
+loop_exit_36:
+  %r75 = load i64, i64* %r5
+  ret i64 %r75
+}
+
+define void @__sp_extern__fp1(i64 %p, i64 %le) {
+entry:
+  %r1 = alloca i64
+  %r6 = alloca i64
+  %r7 = alloca i64
+  %r8 = alloca i64
+  %r16 = alloca i64
+  %r0 = call i64 @__sp_ident_end__fp1(i64 %p, i64 %le)
+  store i64 %r0, i64* %r1
+  %r2 = load i64, i64* %r1
+  call void @__sp_write__fp1(i64 %p, i64 %r2)
+  %r3 = getelementptr [13 x i8], [13 x i8]* @.str.6358, i64 0, i64 0
+  call void @__sp_puts__fp1(i8* %r3)
+  %r4 = load i64, i64* %r1
+  %r5 = add i64 %r4, 3
+  store i64 %r5, i64* %r6
+  store i64 0, i64* %r7
+  store i64 1, i64* %r8
+  br label %loop_check_1
+loop_check_1:
+  %r9 = load i64, i64* %r8
+  %r10 = icmp ne i64 0, %r9
+  br i1 %r10, label %and_right_4, label %and_end_5
+and_right_4:
+  %r11 = load i64, i64* %r6
+  %r12 = icmp slt i64 %r11, %le
+  br label %and_end_5
+and_end_5:
+  %r13 = phi i1 [ 0, %loop_check_1 ], [ %r12, %and_right_4 ]
+  br i1 %r13, label %loop_body_2, label %loop_exit_3
+loop_body_2:
+  %r14 = load i64, i64* %r6
+  %r15 = call i64 @__sp_word_end__fp1(i64 %r14, i64 %le)
+  store i64 %r15, i64* %r16
+  %r17 = load i64, i64* %r6
+  %r18 = load i64, i64* %r16
+  %r19 = getelementptr [7 x i8], [7 x i8]* @.str.6359, i64 0, i64 0
+  %r20 = call i1 @__sp_word_eq__fp1(i64 %r17, i64 %r18, i8* %r19)
+  br i1 %r20, label %then_6, label %else_7
+then_6:
+  store i64 0, i64* %r8
+  br label %end_8
+else_7:
+  %r21 = load i64, i64* %r6
+  %r22 = load i64, i64* %r16
+  %r23 = getelementptr [9 x i8], [9 x i8]* @.str.6360, i64 0, i64 0
+  %r24 = call i1 @__sp_word_eq__fp1(i64 %r21, i64 %r22, i8* %r23)
+  br i1 %r24, label %then_9, label %else_10
+then_9:
+  store i64 1, i64* %r7
+  store i64 0, i64* %r8
+  br label %end_11
+else_10:
+  br label %end_11
+end_11:
+  br label %end_8
+end_8:
+  %r25 = load i64, i64* %r16
+  %r26 = add i64 %r25, 1
+  store i64 %r26, i64* %r6
+  br label %loop_check_1
+loop_exit_3:
+  %r27 = load i64, i64* %r7
+  %r28 = icmp eq i64 %r27, 1
+  br i1 %r28, label %then_12, label %else_13
+then_12:
+  %r29 = getelementptr [10 x i8], [10 x i8]* @.str.6361, i64 0, i64 0
+  %r30 = call i8* @strdup(i8* %r29)
+  br label %end_14
+else_13:
+  %r31 = getelementptr [8 x i8], [8 x i8]* @.str.6362, i64 0, i64 0
+  %r32 = call i8* @strdup(i8* %r31)
+  br label %end_14
+end_14:
+  %r33 = phi i8* [ %r30, %then_12 ], [ %r32, %else_13 ]
+  call void @__sp_puts__fp1(i8* %r33)
+  call void @nurl_free(i8* %r33)
+  %r34 = load i64, i64* %r6
+  %r35 = load i64, i64* %r6
+  %r36 = call i64 @__sp_type_end__fp1(i64 %r35, i64 %le)
+  call void @__sp_write__fp1(i64 %r34, i64 %r36)
+  %r37 = getelementptr [2 x i8], [2 x i8]* @.str.6363, i64 0, i64 0
+  call void @__sp_puts__fp1(i8* %r37)
+  ret void
+}
+
+@.str.6358 = private unnamed_addr constant [13 x i8] c" = external \00"
+@.str.6359 = private unnamed_addr constant [7 x i8] c"global\00"
+@.str.6360 = private unnamed_addr constant [9 x i8] c"constant\00"
+@.str.6361 = private unnamed_addr constant [10 x i8] c"constant \00"
+@.str.6362 = private unnamed_addr constant [8 x i8] c"global \00"
+@.str.6363 = private unnamed_addr constant [2 x i8] c"\0A\00"
+define void @__sp_scan_refs__fp1(i64 %from, i64 %to, i64 %part) {
+entry:
+  %r3 = alloca i8*
+  store i8* null, i8** %r3
+  %r6 = alloca i64
+  %r9 = alloca i64
+  %r10 = alloca i64
+  %r24 = alloca i64
+  %r34 = alloca i64
+  %r0 = load i64, i64* @g_dce_mod
+  %r1 = inttoptr i64 %r0 to i8*
+  %r2 = bitcast i8* %r1 to i8*
+  store i8* %r2, i8** %r3
+  %r4 = load i64, i64* @g_split_n
+  %r5 = add i64 %r4, 1
+  store i64 %r5, i64* %r6
+  %r7 = load i64, i64* @g_split_n
+  %r8 = add i64 %r7, 2
+  store i64 %r8, i64* %r9
+  store i64 %from, i64* %r10
+  br label %loop_check_1
+loop_check_1:
+  %r11 = load i64, i64* %r10
+  %r12 = icmp slt i64 %r11, %to
+  br i1 %r12, label %loop_body_2, label %loop_exit_3
+loop_body_2:
+  %r13 = load i8*, i8** %r3
+  %r14 = load i64, i64* %r10
+  %r15 = getelementptr i8, i8* %r13, i64 %r14
+  %r16 = load i8, i8* %r15
+  %r17 = zext i8 %r16 to i64
+  %r18 = and i64 %r17, 255
+  %r19 = icmp ne i64 %r18, 64
+  br i1 %r19, label %then_4, label %else_5
+then_4:
+  %r20 = load i64, i64* %r10
+  %r21 = add i64 %r20, 1
+  store i64 %r21, i64* %r10
+  br label %end_6
+else_5:
+  %r22 = load i64, i64* %r10
+  %r23 = call i64 @__sp_ident_end__fp1(i64 %r22, i64 %to)
+  store i64 %r23, i64* %r24
+  %r25 = load i64, i64* %r24
+  %r26 = load i64, i64* %r10
+  %r27 = add i64 %r26, 1
+  %r28 = icmp eq i64 %r25, %r27
+  br i1 %r28, label %then_7, label %else_8
+then_7:
+  %r29 = load i64, i64* %r24
+  store i64 %r29, i64* %r10
+  br label %end_9
+else_8:
+  %r30 = load i64, i64* @g_split_priv
+  %r31 = load i64, i64* %r10
+  %r32 = load i64, i64* %r9
+  %r33 = call i64 @__sp_lookup__fp1(i64 %r30, i64 %r31, i64 %to, i64 %r32)
+  store i64 %r33, i64* %r34
+  %r35 = load i64, i64* %r34
+  %r36 = load i64, i64* %r9
+  %r37 = icmp ne i64 %r35, %r36
+  br i1 %r37, label %and_right_10, label %and_end_11
+and_right_10:
+  %r38 = load i64, i64* %r34
+  %r39 = icmp ne i64 %r38, %part
+  br label %and_end_11
+and_end_11:
+  %r40 = phi i1 [ 0, %else_8 ], [ %r39, %and_right_10 ]
+  br i1 %r40, label %and_right_12, label %and_end_13
+and_right_12:
+  %r41 = load i64, i64* %r34
+  %r42 = load i64, i64* @g_split_n
+  %r43 = icmp ne i64 %r41, %r42
+  br label %and_end_13
+and_end_13:
+  %r44 = phi i1 [ 0, %and_end_11 ], [ %r43, %and_right_12 ]
+  br i1 %r44, label %then_14, label %else_15
+then_14:
+  %r45 = load i64, i64* @g_split_priv
+  %r46 = load i64, i64* %r10
+  %r47 = load i64, i64* %r34
+  %r48 = load i64, i64* %r6
+  %r49 = icmp eq i64 %r47, %r48
+  br i1 %r49, label %then_17, label %else_18
+then_17:
+  br label %end_19
+else_18:
+  %r50 = load i64, i64* @g_split_n
+  br label %end_19
+end_19:
+  %r51 = phi i64 [ %part, %then_17 ], [ %r50, %else_18 ]
+  %r52 = call i8* @nurl_str_int(i64 %r51)
+  call void @__sp_set__fp1(i64 %r45, i64 %r46, i64 %to, i8* %r52)
+  call void @nurl_free(i8* %r52)
+  br label %end_16
+else_15:
+  br label %end_16
+end_16:
+  %r53 = load i64, i64* %r24
+  store i64 %r53, i64* %r10
+  br label %end_9
+end_9:
+  %r54 = phi i64 [ %r29, %then_7 ], [ %r53, %end_16 ]
+  br label %end_6
+end_6:
+  %r55 = phi i64 [ %r21, %then_4 ], [ %r54, %end_9 ]
+  br label %loop_check_1
+loop_exit_3:
+  ret void
+}
+
+define void @__sp_scan_modscope__fp1(i64 %from, i64 %to) {
+entry:
+  %r3 = alloca i8*
+  store i8* null, i8** %r3
+  %r4 = alloca i64
+  %r9 = alloca i64
+  %r11 = alloca i64
+  %r0 = load i64, i64* @g_dce_mod
+  %r1 = inttoptr i64 %r0 to i8*
+  %r2 = bitcast i8* %r1 to i8*
+  store i8* %r2, i8** %r3
+  store i64 %from, i64* %r4
+  br label %loop_check_1
+loop_check_1:
+  %r5 = load i64, i64* %r4
+  %r6 = icmp slt i64 %r5, %to
+  br i1 %r6, label %loop_body_2, label %loop_exit_3
+loop_body_2:
+  %r7 = load i64, i64* %r4
+  %r8 = call i64 @__sp_line_end__fp1(i64 %r7, i64 %to)
+  store i64 %r8, i64* %r9
+  %r10 = load i64, i64* %r4
+  store i64 %r10, i64* %r11
+  %r12 = load i8*, i8** %r3
+  %r13 = load i64, i64* %r4
+  %r14 = getelementptr i8, i8* %r12, i64 %r13
+  %r15 = load i8, i8* %r14
+  %r16 = zext i8 %r15 to i64
+  %r17 = and i64 %r16, 255
+  %r18 = icmp eq i64 %r17, 64
+  br i1 %r18, label %then_4, label %else_5
+then_4:
+  %r19 = load i64, i64* %r4
+  %r20 = load i64, i64* %r9
+  %r21 = call i64 @__sp_ident_end__fp1(i64 %r19, i64 %r20)
+  store i64 %r21, i64* %r11
+  br label %end_6
+else_5:
+  br label %end_6
+end_6:
+  %r22 = load i64, i64* %r11
+  %r23 = load i64, i64* %r9
+  %r24 = load i64, i64* @g_split_n
+  call void @__sp_scan_refs__fp1(i64 %r22, i64 %r23, i64 %r24)
+  %r25 = load i64, i64* %r9
+  %r26 = icmp slt i64 %r25, %to
+  br i1 %r26, label %then_7, label %else_8
+then_7:
+  %r27 = load i64, i64* %r9
+  %r28 = add i64 %r27, 1
+  br label %end_9
+else_8:
+  br label %end_9
+end_9:
+  %r29 = phi i64 [ %r28, %then_7 ], [ %to, %else_8 ]
+  store i64 %r29, i64* %r4
+  br label %loop_check_1
+loop_exit_3:
+  ret void
+}
+
+define void @__sp_register_privs__fp1(i64 %from, i64 %to) {
+entry:
+  %r3 = alloca i8*
+  store i8* null, i8** %r3
+  %r4 = alloca i64
+  %r9 = alloca i64
+  %r0 = load i64, i64* @g_dce_mod
+  %r1 = inttoptr i64 %r0 to i8*
+  %r2 = bitcast i8* %r1 to i8*
+  store i8* %r2, i8** %r3
+  store i64 %from, i64* %r4
+  br label %loop_check_1
+loop_check_1:
+  %r5 = load i64, i64* %r4
+  %r6 = icmp slt i64 %r5, %to
+  br i1 %r6, label %loop_body_2, label %loop_exit_3
+loop_body_2:
+  %r7 = load i64, i64* %r4
+  %r8 = call i64 @__sp_line_end__fp1(i64 %r7, i64 %to)
+  store i64 %r8, i64* %r9
+  %r10 = load i8*, i8** %r3
+  %r11 = load i64, i64* %r4
+  %r12 = getelementptr i8, i8* %r10, i64 %r11
+  %r13 = load i8, i8* %r12
+  %r14 = zext i8 %r13 to i64
+  %r15 = and i64 %r14, 255
+  %r16 = icmp eq i64 %r15, 64
+  br i1 %r16, label %and_right_4, label %and_end_5
+and_right_4:
+  %r17 = load i64, i64* %r4
+  %r18 = load i64, i64* %r9
+  %r19 = call i1 @__sp_is_private__fp1(i64 %r17, i64 %r18)
+  br label %and_end_5
+and_end_5:
+  %r20 = phi i1 [ 0, %loop_body_2 ], [ %r19, %and_right_4 ]
+  br i1 %r20, label %then_6, label %else_7
+then_6:
+  %r21 = load i64, i64* @g_split_priv
+  %r22 = load i64, i64* %r4
+  %r23 = load i64, i64* %r9
+  %r24 = load i64, i64* @g_split_n
+  %r25 = add i64 %r24, 1
+  %r26 = call i8* @nurl_str_int(i64 %r25)
+  call void @__sp_set__fp1(i64 %r21, i64 %r22, i64 %r23, i8* %r26)
+  call void @nurl_free(i8* %r26)
+  br label %end_8
+else_7:
+  br label %end_8
+end_8:
+  %r27 = load i64, i64* %r9
+  %r28 = icmp slt i64 %r27, %to
+  br i1 %r28, label %then_9, label %else_10
+then_9:
+  %r29 = load i64, i64* %r9
+  %r30 = add i64 %r29, 1
+  br label %end_11
+else_10:
+  br label %end_11
+end_11:
+  %r31 = phi i64 [ %r30, %then_9 ], [ %to, %else_10 ]
+  store i64 %r31, i64* %r4
+  br label %loop_check_1
+loop_exit_3:
+  ret void
+}
+
+define void @__sp_param__fp1(i64 %a, i64 %b, i64 %first) {
+entry:
+  %r3 = alloca i8*
+  store i8* null, i8** %r3
+  %r4 = alloca i64
+  %r17 = alloca i64
+  %r33 = alloca i64
+  %r0 = load i64, i64* @g_dce_mod
+  %r1 = inttoptr i64 %r0 to i8*
+  %r2 = bitcast i8* %r1 to i8*
+  store i8* %r2, i8** %r3
+  store i64 %a, i64* %r4
+  br label %loop_check_1
+loop_check_1:
+  %r5 = load i64, i64* %r4
+  %r6 = icmp slt i64 %r5, %b
+  br i1 %r6, label %and_right_4, label %and_end_5
+and_right_4:
+  %r7 = load i8*, i8** %r3
+  %r8 = load i64, i64* %r4
+  %r9 = getelementptr i8, i8* %r7, i64 %r8
+  %r10 = load i8, i8* %r9
+  %r11 = zext i8 %r10 to i64
+  %r12 = and i64 %r11, 255
+  %r13 = icmp eq i64 %r12, 32
+  br label %and_end_5
+and_end_5:
+  %r14 = phi i1 [ 0, %loop_check_1 ], [ %r13, %and_right_4 ]
+  br i1 %r14, label %loop_body_2, label %loop_exit_3
+loop_body_2:
+  %r15 = load i64, i64* %r4
+  %r16 = add i64 %r15, 1
+  store i64 %r16, i64* %r4
+  br label %loop_check_1
+loop_exit_3:
+  store i64 %b, i64* %r17
+  br label %loop_check_6
+loop_check_6:
+  %r18 = load i64, i64* %r17
+  %r19 = load i64, i64* %r4
+  %r20 = icmp sgt i64 %r18, %r19
+  br i1 %r20, label %and_right_9, label %and_end_10
+and_right_9:
+  %r21 = load i8*, i8** %r3
+  %r22 = load i64, i64* %r17
+  %r23 = sub i64 %r22, 1
+  %r24 = getelementptr i8, i8* %r21, i64 %r23
+  %r25 = load i8, i8* %r24
+  %r26 = zext i8 %r25 to i64
+  %r27 = and i64 %r26, 255
+  %r28 = icmp eq i64 %r27, 32
+  br label %and_end_10
+and_end_10:
+  %r29 = phi i1 [ 0, %loop_check_6 ], [ %r28, %and_right_9 ]
+  br i1 %r29, label %loop_body_7, label %loop_exit_8
+loop_body_7:
+  %r30 = load i64, i64* %r17
+  %r31 = sub i64 %r30, 1
+  store i64 %r31, i64* %r17
+  br label %loop_check_6
+loop_exit_8:
+  %r32 = load i64, i64* %r17
+  store i64 %r32, i64* %r33
+  br label %loop_check_11
+loop_check_11:
+  %r34 = load i64, i64* %r33
+  %r35 = load i64, i64* %r4
+  %r36 = icmp sgt i64 %r34, %r35
+  br i1 %r36, label %and_right_14, label %and_end_15
+and_right_14:
+  %r37 = load i8*, i8** %r3
+  %r38 = load i64, i64* %r33
+  %r39 = sub i64 %r38, 1
+  %r40 = getelementptr i8, i8* %r37, i64 %r39
+  %r41 = load i8, i8* %r40
+  %r42 = zext i8 %r41 to i64
+  %r43 = and i64 %r42, 255
+  %r44 = call i1 @__dce_ident_byte__fp1(i64 %r43)
+  br label %and_end_15
+and_end_15:
+  %r45 = phi i1 [ 0, %loop_check_11 ], [ %r44, %and_right_14 ]
+  br i1 %r45, label %loop_body_12, label %loop_exit_13
+loop_body_12:
+  %r46 = load i64, i64* %r33
+  %r47 = sub i64 %r46, 1
+  store i64 %r47, i64* %r33
+  br label %loop_check_11
+loop_exit_13:
+  %r48 = load i64, i64* %r33
+  %r49 = sub i64 %r48, 1
+  %r50 = load i64, i64* %r4
+  %r51 = icmp sgt i64 %r49, %r50
+  br i1 %r51, label %and_right_16, label %and_end_17
+and_right_16:
+  %r52 = load i8*, i8** %r3
+  %r53 = load i64, i64* %r33
+  %r54 = sub i64 %r53, 1
+  %r55 = getelementptr i8, i8* %r52, i64 %r54
+  %r56 = load i8, i8* %r55
+  %r57 = zext i8 %r56 to i64
+  %r58 = and i64 %r57, 255
+  %r59 = icmp eq i64 %r58, 37
+  br label %and_end_17
+and_end_17:
+  %r60 = phi i1 [ 0, %loop_exit_13 ], [ %r59, %and_right_16 ]
+  br i1 %r60, label %then_18, label %else_19
+then_18:
+  %r61 = load i8*, i8** %r3
+  %r62 = load i64, i64* %r33
+  %r63 = sub i64 %r62, 2
+  %r64 = getelementptr i8, i8* %r61, i64 %r63
+  %r65 = load i8, i8* %r64
+  %r66 = zext i8 %r65 to i64
+  %r67 = and i64 %r66, 255
+  %r68 = icmp eq i64 %r67, 32
+  br i1 %r68, label %then_21, label %else_22
+then_21:
+  %r69 = load i64, i64* %r33
+  %r70 = sub i64 %r69, 2
+  store i64 %r70, i64* %r17
+  br label %end_23
+else_22:
+  br label %end_23
+end_23:
+  br label %end_20
+else_19:
+  br label %end_20
+end_20:
+  %r71 = icmp eq i64 0, %first
+  br i1 %r71, label %then_24, label %else_25
+then_24:
+  %r72 = getelementptr [3 x i8], [3 x i8]* @.str.6364, i64 0, i64 0
+  call void @__sp_puts__fp1(i8* %r72)
+  br label %end_26
+else_25:
+  br label %end_26
+end_26:
+  %r73 = load i64, i64* %r4
+  %r74 = load i64, i64* %r17
+  call void @__sp_write__fp1(i64 %r73, i64 %r74)
+  ret void
+}
+
+@.str.6364 = private unnamed_addr constant [3 x i8] c", \00"
+define void @__sp_declare__fp1(i64 %st, i64 %en) {
+entry:
+  %r3 = alloca i8*
+  store i8* null, i8** %r3
+  %r5 = alloca i64
+  %r8 = alloca i64
+  %r25 = alloca i64
+  %r31 = alloca i64
+  %r32 = alloca i64
+  %r34 = alloca i64
+  %r35 = alloca i64
+  %r45 = alloca i64
+  %r0 = load i64, i64* @g_dce_mod
+  %r1 = inttoptr i64 %r0 to i8*
+  %r2 = bitcast i8* %r1 to i8*
+  store i8* %r2, i8** %r3
+  %r4 = call i64 @__sp_line_end__fp1(i64 %st, i64 %en)
+  store i64 %r4, i64* %r5
+  %r6 = getelementptr [8 x i8], [8 x i8]* @.str.6365, i64 0, i64 0
+  call void @__sp_puts__fp1(i8* %r6)
+  %r7 = add i64 %st, 6
+  store i64 %r7, i64* %r8
+  br label %loop_check_1
+loop_check_1:
+  %r9 = load i64, i64* %r8
+  %r10 = load i64, i64* %r5
+  %r11 = icmp slt i64 %r9, %r10
+  br i1 %r11, label %and_right_4, label %and_end_5
+and_right_4:
+  %r12 = load i8*, i8** %r3
+  %r13 = load i64, i64* %r8
+  %r14 = getelementptr i8, i8* %r12, i64 %r13
+  %r15 = load i8, i8* %r14
+  %r16 = zext i8 %r15 to i64
+  %r17 = and i64 %r16, 255
+  %r18 = icmp ne i64 %r17, 64
+  br label %and_end_5
+and_end_5:
+  %r19 = phi i1 [ 0, %loop_check_1 ], [ %r18, %and_right_4 ]
+  br i1 %r19, label %loop_body_2, label %loop_exit_3
+loop_body_2:
+  %r20 = load i64, i64* %r8
+  %r21 = add i64 %r20, 1
+  store i64 %r21, i64* %r8
+  br label %loop_check_1
+loop_exit_3:
+  %r22 = load i64, i64* %r8
+  %r23 = load i64, i64* %r5
+  %r24 = call i64 @__sp_ident_end__fp1(i64 %r22, i64 %r23)
+  store i64 %r24, i64* %r25
+  %r26 = add i64 %st, 6
+  %r27 = load i64, i64* %r25
+  %r28 = add i64 %r27, 1
+  call void @__sp_write__fp1(i64 %r26, i64 %r28)
+  %r29 = load i64, i64* %r25
+  %r30 = add i64 %r29, 1
+  store i64 %r30, i64* %r31
+  store i64 0, i64* %r32
+  %r33 = load i64, i64* %r31
+  store i64 %r33, i64* %r34
+  store i64 1, i64* %r35
+  br label %loop_check_6
+loop_check_6:
+  %r36 = load i64, i64* %r34
+  %r37 = load i64, i64* %r5
+  %r38 = icmp slt i64 %r36, %r37
+  br i1 %r38, label %loop_body_7, label %loop_exit_8
+loop_body_7:
+  %r39 = load i8*, i8** %r3
+  %r40 = load i64, i64* %r34
+  %r41 = getelementptr i8, i8* %r39, i64 %r40
+  %r42 = load i8, i8* %r41
+  %r43 = zext i8 %r42 to i64
+  %r44 = and i64 %r43, 255
+  store i64 %r44, i64* %r45
+  %r46 = load i64, i64* %r45
+  %r47 = icmp eq i64 %r46, 91
+  br i1 %r47, label %or_end_10, label %or_right_9
+or_right_9:
+  %r48 = load i64, i64* %r45
+  %r49 = icmp eq i64 %r48, 123
+  br label %or_end_10
+or_end_10:
+  %r50 = phi i1 [ 1, %loop_body_7 ], [ %r49, %or_right_9 ]
+  br i1 %r50, label %or_end_12, label %or_right_11
+or_right_11:
+  %r51 = load i64, i64* %r45
+  %r52 = icmp eq i64 %r51, 40
+  br label %or_end_12
+or_end_12:
+  %r53 = phi i1 [ 1, %or_end_10 ], [ %r52, %or_right_11 ]
+  br i1 %r53, label %then_13, label %else_14
+then_13:
+  %r54 = load i64, i64* %r32
+  %r55 = add i64 %r54, 1
+  store i64 %r55, i64* %r32
+  %r56 = load i64, i64* %r34
+  %r57 = add i64 %r56, 1
+  store i64 %r57, i64* %r34
+  br label %end_15
+else_14:
+  %r58 = load i64, i64* %r32
+  %r59 = icmp eq i64 %r58, 0
+  br i1 %r59, label %and_right_16, label %and_end_17
+and_right_16:
+  %r60 = load i64, i64* %r45
+  %r61 = icmp eq i64 %r60, 41
+  br label %and_end_17
+and_end_17:
+  %r62 = phi i1 [ 0, %else_14 ], [ %r61, %and_right_16 ]
+  br i1 %r62, label %then_18, label %else_19
+then_18:
+  %r63 = load i64, i64* %r34
+  %r64 = load i64, i64* %r31
+  %r65 = icmp sgt i64 %r63, %r64
+  br i1 %r65, label %then_21, label %else_22
+then_21:
+  %r66 = load i64, i64* %r31
+  %r67 = load i64, i64* %r34
+  %r68 = load i64, i64* %r35
+  call void @__sp_param__fp1(i64 %r66, i64 %r67, i64 %r68)
+  store i64 0, i64* %r35
+  br label %end_23
+else_22:
+  br label %end_23
+end_23:
+  %r69 = load i64, i64* %r5
+  store i64 %r69, i64* %r34
+  br label %end_20
+else_19:
+  %r70 = load i64, i64* %r45
+  %r71 = icmp eq i64 %r70, 93
+  br i1 %r71, label %or_end_25, label %or_right_24
+or_right_24:
+  %r72 = load i64, i64* %r45
+  %r73 = icmp eq i64 %r72, 125
+  br label %or_end_25
+or_end_25:
+  %r74 = phi i1 [ 1, %else_19 ], [ %r73, %or_right_24 ]
+  br i1 %r74, label %or_end_27, label %or_right_26
+or_right_26:
+  %r75 = load i64, i64* %r45
+  %r76 = icmp eq i64 %r75, 41
+  br label %or_end_27
+or_end_27:
+  %r77 = phi i1 [ 1, %or_end_25 ], [ %r76, %or_right_26 ]
+  br i1 %r77, label %then_28, label %else_29
+then_28:
+  %r78 = load i64, i64* %r32
+  %r79 = sub i64 %r78, 1
+  store i64 %r79, i64* %r32
+  %r80 = load i64, i64* %r34
+  %r81 = add i64 %r80, 1
+  store i64 %r81, i64* %r34
+  br label %end_30
+else_29:
+  %r82 = load i64, i64* %r32
+  %r83 = icmp eq i64 %r82, 0
+  br i1 %r83, label %and_right_31, label %and_end_32
+and_right_31:
+  %r84 = load i64, i64* %r45
+  %r85 = icmp eq i64 %r84, 44
+  br label %and_end_32
+and_end_32:
+  %r86 = phi i1 [ 0, %else_29 ], [ %r85, %and_right_31 ]
+  br i1 %r86, label %then_33, label %else_34
+then_33:
+  %r87 = load i64, i64* %r31
+  %r88 = load i64, i64* %r34
+  %r89 = load i64, i64* %r35
+  call void @__sp_param__fp1(i64 %r87, i64 %r88, i64 %r89)
+  store i64 0, i64* %r35
+  %r90 = load i64, i64* %r34
+  %r91 = add i64 %r90, 1
+  store i64 %r91, i64* %r31
+  %r92 = load i64, i64* %r34
+  %r93 = add i64 %r92, 1
+  store i64 %r93, i64* %r34
+  br label %end_35
+else_34:
+  %r94 = load i64, i64* %r34
+  %r95 = add i64 %r94, 1
+  store i64 %r95, i64* %r34
+  br label %end_35
+end_35:
+  %r96 = phi i64 [ %r93, %then_33 ], [ %r95, %else_34 ]
+  br label %end_30
+end_30:
+  %r97 = phi i64 [ %r81, %then_28 ], [ %r96, %end_35 ]
+  br label %end_20
+end_20:
+  %r98 = phi i64 [ %r69, %end_23 ], [ %r97, %end_30 ]
+  br label %end_15
+end_15:
+  %r99 = phi i64 [ %r57, %then_13 ], [ %r98, %end_20 ]
+  br label %loop_check_6
+loop_exit_8:
+  %r100 = getelementptr [3 x i8], [3 x i8]* @.str.6366, i64 0, i64 0
+  call void @__sp_puts__fp1(i8* %r100)
+  ret void
+}
+
+@.str.6365 = private unnamed_addr constant [8 x i8] c"declare\00"
+@.str.6366 = private unnamed_addr constant [3 x i8] c")\0A\00"
+define void @__sp_emit_global__fp1(i64 %p, i64 %le, i64 %nx, i64 %k) {
+entry:
+  %r5 = alloca i64
+  %r0 = call i1 @__sp_is_private__fp1(i64 %p, i64 %le)
+  br i1 %r0, label %then_1, label %else_2
+then_1:
+  %r1 = load i64, i64* @g_split_priv
+  %r2 = load i64, i64* @g_split_n
+  %r3 = add i64 %r2, 1
+  %r4 = call i64 @__sp_lookup__fp1(i64 %r1, i64 %p, i64 %le, i64 %r3)
+  store i64 %r4, i64* %r5
+  %r6 = load i64, i64* %r5
+  %r7 = load i64, i64* @g_split_n
+  %r8 = icmp eq i64 %r6, %r7
+  br i1 %r8, label %or_end_5, label %or_right_4
+or_right_4:
+  %r9 = load i64, i64* %r5
+  %r10 = icmp eq i64 %r9, %k
+  br label %or_end_5
+or_end_5:
+  %r11 = phi i1 [ 1, %then_1 ], [ %r10, %or_right_4 ]
+  br i1 %r11, label %or_end_7, label %or_right_6
+or_right_6:
+  %r12 = load i64, i64* %r5
+  %r13 = load i64, i64* @g_split_n
+  %r14 = add i64 %r13, 1
+  %r15 = icmp eq i64 %r12, %r14
+  br i1 %r15, label %and_right_8, label %and_end_9
+and_right_8:
+  %r16 = icmp eq i64 %k, 0
+  br label %and_end_9
+and_end_9:
+  %r17 = phi i1 [ 0, %or_right_6 ], [ %r16, %and_right_8 ]
+  br label %or_end_7
+or_end_7:
+  %r18 = phi i1 [ 1, %or_end_5 ], [ %r17, %and_end_9 ]
+  br i1 %r18, label %then_10, label %else_11
+then_10:
+  call void @__sp_write__fp1(i64 %p, i64 %nx)
+  br label %end_12
+else_11:
+  br label %end_12
+end_12:
+  ret void
+else_2:
+  br label %end_3
+end_3:
+  %r19 = icmp eq i64 %k, 0
+  br i1 %r19, label %then_13, label %else_14
+then_13:
+  call void @__sp_write__fp1(i64 %p, i64 %nx)
+  br label %end_15
+else_14:
+  call void @__sp_extern__fp1(i64 %p, i64 %le)
+  br label %end_15
+end_15:
+  ret void
+}
+
+define void @__sp_emit_gap__fp1(i64 %from, i64 %to, i64 %k) {
+entry:
+  %r3 = alloca i8*
+  store i8* null, i8** %r3
+  %r4 = alloca i64
+  %r9 = alloca i64
+  %r15 = alloca i64
+  %r0 = load i64, i64* @g_dce_mod
+  %r1 = inttoptr i64 %r0 to i8*
+  %r2 = bitcast i8* %r1 to i8*
+  store i8* %r2, i8** %r3
+  store i64 %from, i64* %r4
+  br label %loop_check_1
+loop_check_1:
+  %r5 = load i64, i64* %r4
+  %r6 = icmp slt i64 %r5, %to
+  br i1 %r6, label %loop_body_2, label %loop_exit_3
+loop_body_2:
+  %r7 = load i64, i64* %r4
+  %r8 = call i64 @__sp_line_end__fp1(i64 %r7, i64 %to)
+  store i64 %r8, i64* %r9
+  %r10 = load i64, i64* %r9
+  %r11 = icmp slt i64 %r10, %to
+  br i1 %r11, label %then_4, label %else_5
+then_4:
+  %r12 = load i64, i64* %r9
+  %r13 = add i64 %r12, 1
+  br label %end_6
+else_5:
+  br label %end_6
+end_6:
+  %r14 = phi i64 [ %r13, %then_4 ], [ %to, %else_5 ]
+  store i64 %r14, i64* %r15
+  %r16 = load i8*, i8** %r3
+  %r17 = load i64, i64* %r4
+  %r18 = getelementptr i8, i8* %r16, i64 %r17
+  %r19 = load i8, i8* %r18
+  %r20 = zext i8 %r19 to i64
+  %r21 = and i64 %r20, 255
+  %r22 = icmp eq i64 %r21, 64
+  br i1 %r22, label %then_7, label %else_8
+then_7:
+  %r23 = load i64, i64* %r4
+  %r24 = load i64, i64* %r9
+  %r25 = load i64, i64* %r15
+  call void @__sp_emit_global__fp1(i64 %r23, i64 %r24, i64 %r25, i64 %k)
+  br label %end_9
+else_8:
+  %r26 = load i64, i64* %r4
+  %r27 = load i64, i64* %r15
+  call void @__sp_write__fp1(i64 %r26, i64 %r27)
+  br label %end_9
+end_9:
+  %r28 = load i64, i64* %r15
+  store i64 %r28, i64* %r4
+  br label %loop_check_1
+loop_exit_3:
+  ret void
+}
+
+define void @__sp_open__fp1(i64 %k) {
+entry:
+  %r4 = alloca i8*
+  store i8* null, i8** %r4
+  %r10 = alloca i8*
+  store i8* null, i8** %r10
+  %r17 = alloca i8*
+  store i8* null, i8** %r17
+  %r0 = getelementptr [2 x i8], [2 x i8]* @.str.6367, i64 0, i64 0
+  %r1 = call i8* @nurl_str_int(i64 %k)
+  %r2 = getelementptr [4 x i8], [4 x i8]* @.str.6368, i64 0, i64 0
+  %r3 = call i8* @nurl_str_cat3(i8* %r0, i8* %r1, i8* %r2)
+  call void @nurl_free(i8* %r1)
+  %r5 = load i8*, i8** %r4
+  call void @nurl_free(i8* %r5)
+  store i8* %r3, i8** %r4
+  %r6 = load i8*, i8** %r4
+  call void @nurl_journal_push(i8* %r6)
+  %r7 = load i8*, i8** @g_split_out
+  %r8 = load i8*, i8** %r4
+  %r9 = call i8* @nurl_str_cat(i8* %r7, i8* %r8)
+  %r11 = load i8*, i8** %r10
+  call void @nurl_free(i8* %r11)
+  store i8* %r9, i8** %r10
+  %r12 = load i8*, i8** %r10
+  call void @nurl_journal_push(i8* %r12)
+  %r13 = load i8*, i8** %r10
+  %r14 = getelementptr [3 x i8], [3 x i8]* @.str.6369, i64 0, i64 0
+  %r15 = call i8* @fopen(i8* %r13, i8* %r14)
+  %r16 = bitcast i8* %r15 to i8*
+  store i8* %r16, i8** %r17
+  %r18 = load i8*, i8** %r17
+  %r19 = ptrtoint i8* %r18 to i64
+  %r20 = icmp eq i64 0, %r19
+  br i1 %r20, label %then_1, label %else_2
+then_1:
+  %r21 = getelementptr [21 x i8], [21 x i8]* @.str.6370, i64 0, i64 0
+  %r22 = load i8*, i8** %r10
+  %r23 = call i8* @nurl_str_cat(i8* %r21, i8* %r22)
+  call void @nurl_eprintln(i8* %r23)
+  call void @nurl_free(i8* %r23)
+  call void @nurl_exit(i64 1)
+  br label %end_3
+else_2:
+  br label %end_3
+end_3:
+  %r24 = load i8*, i8** %r17
+  %r25 = ptrtoint i8* %r24 to i64
+  store i64 %r25, i64* @g_split_fh
+  %r26 = load i8*, i8** %r4
+  call void @nurl_free(i8* %r26)
+  %r27 = load i8*, i8** %r10
+  call void @nurl_free(i8* %r27)
+  ret void
+}
+
+@.str.6367 = private unnamed_addr constant [2 x i8] c".\00"
+@.str.6368 = private unnamed_addr constant [4 x i8] c".ll\00"
+@.str.6369 = private unnamed_addr constant [3 x i8] c"wb\00"
+@.str.6370 = private unnamed_addr constant [21 x i8] c"nurlc: cannot write \00"
+define void @__sp_close__fp1() {
+entry:
+  %r3 = alloca i32
+  %r0 = load i64, i64* @g_split_fh
+  %r1 = inttoptr i64 %r0 to i8*
+  %r2 = call i32 @fclose(i8* %r1)
+  store i32 %r2, i32* %r3
+  store i64 0, i64* @g_split_fh
+  ret void
+}
+
+define void @__sp_whole__fp1(i64 %mlen) {
+entry:
+  %r3 = alloca i64
+  call void @__dce_print_range__fp1(i64 0, i64 %mlen)
+  %r0 = call i64 @__sp_parts__fp1(i64 %mlen)
+  store i64 %r0, i64* @g_split_n
+  %r1 = load i64, i64* @g_split_n
+  %r2 = icmp eq i64 0, %r1
+  br i1 %r2, label %then_1, label %else_2
+then_1:
+  ret void
+else_2:
+  br label %end_3
+end_3:
+  store i64 0, i64* %r3
+  br label %loop_check_4
+loop_check_4:
+  %r4 = load i64, i64* %r3
+  %r5 = load i64, i64* @g_split_n
+  %r6 = icmp slt i64 %r4, %r5
+  br i1 %r6, label %loop_body_5, label %loop_exit_6
+loop_body_5:
+  %r7 = load i64, i64* %r3
+  call void @__sp_open__fp1(i64 %r7)
+  %r8 = load i64, i64* %r3
+  %r9 = icmp eq i64 %r8, 0
+  br i1 %r9, label %then_7, label %else_8
+then_7:
+  call void @__sp_write__fp1(i64 0, i64 %mlen)
+  br label %end_9
+else_8:
+  br label %end_9
+end_9:
+  call void @__sp_close__fp1()
+  %r10 = load i64, i64* %r3
+  %r11 = add i64 %r10, 1
+  store i64 %r11, i64* %r3
+  br label %loop_check_4
+loop_exit_6:
+  ret void
+}
+
+define void @split_emit_module(i64 %n, i64 %mlen) {
+entry:
+  %r3 = alloca i8*
+  store i8* null, i8** %r3
+  %r4 = alloca i64
+  %r5 = alloca i64
+  %r52 = alloca i64
+  %r53 = alloca i64
+  %r54 = alloca i64
+  %r55 = alloca i64
+  %r62 = alloca i64
+  %r67 = alloca i64
+  %r122 = alloca i64
+  %r123 = alloca i64
+  %r152 = alloca i64
+  %r159 = alloca i64
+  %r174 = alloca i64
+  %r179 = alloca i64
+  %r180 = alloca i64
+  %r187 = alloca i64
+  %r192 = alloca i64
+  %r200 = alloca i64
+  %r0 = load i64, i64* @g_dce_mod
+  %r1 = inttoptr i64 %r0 to i8*
+  %r2 = bitcast i8* %r1 to i8*
+  store i8* %r2, i8** %r3
+  store i64 %mlen, i64* %r4
+  store i64 0, i64* %r5
+  br label %loop_check_1
+loop_check_1:
+  %r6 = load i64, i64* %r5
+  %r7 = icmp slt i64 %r6, %n
+  br i1 %r7, label %loop_body_2, label %loop_exit_3
+loop_body_2:
+  %r8 = load i64, i64* @g_dce_live
+  %r9 = inttoptr i64 %r8 to i8*
+  %r10 = load i64, i64* %r5
+  %r11 = call i64 @nurl_peek(i8* %r9, i64 %r10)
+  %r12 = icmp eq i64 0, %r11
+  br i1 %r12, label %then_4, label %else_5
+then_4:
+  %r13 = load i64, i64* %r4
+  %r14 = load i64, i64* @g_dce_end
+  %r15 = inttoptr i64 %r14 to i8*
+  %r16 = load i64, i64* %r5
+  %r17 = call i64 @nurl_peek(i8* %r15, i64 %r16)
+  %r18 = load i64, i64* @g_dce_start
+  %r19 = inttoptr i64 %r18 to i8*
+  %r20 = load i64, i64* %r5
+  %r21 = call i64 @nurl_peek(i8* %r19, i64 %r20)
+  %r22 = sub i64 %r17, %r21
+  %r23 = sub i64 %r13, %r22
+  store i64 %r23, i64* %r4
+  br label %end_6
+else_5:
+  br label %end_6
+end_6:
+  %r24 = load i64, i64* %r5
+  %r25 = add i64 %r24, 1
+  store i64 %r25, i64* %r5
+  br label %loop_check_1
+loop_exit_3:
+  %r26 = load i64, i64* %r4
+  %r27 = call i64 @__sp_parts__fp1(i64 %r26)
+  store i64 %r27, i64* @g_split_n
+  %r28 = load i64, i64* @g_split_n
+  %r29 = icmp eq i64 0, %r28
+  br i1 %r29, label %then_7, label %else_8
+then_7:
+  ret void
+else_8:
+  br label %end_9
+end_9:
+  %r30 = mul i64 %n, 8
+  %r31 = call i8* @nurl_zalloc(i64 %r30)
+  %r32 = bitcast i8* %r31 to i8*
+  %r33 = ptrtoint i8* %r32 to i64
+  store i64 %r33, i64* @g_split_part
+  %r34 = load i64, i64* @g_split_n
+  %r35 = mul i64 %r34, 8
+  %r36 = call i8* @nurl_zalloc(i64 %r35)
+  %r37 = bitcast i8* %r36 to i8*
+  %r38 = ptrtoint i8* %r37 to i64
+  store i64 %r38, i64* @g_split_fill
+  %r39 = call i64 @nurl_sym_new()
+  store i64 %r39, i64* @g_split_priv
+  %r40 = load i64, i64* %r4
+  %r41 = load i64, i64* @g_split_n
+  %r43 = icmp eq i64 %r41, 0
+  br i1 %r43, label %divzero_10, label %divok_11
+divzero_10:
+  %r44 = getelementptr [17 x i8], [17 x i8]* @.str.6371, i64 0, i64 0
+  call void @nurl_panic(i8* %r44)
+  unreachable
+divok_11:
+  %r42 = sdiv i64 %r40, %r41
+  %r45 = icmp sgt i64 %r42, 1
+  br i1 %r45, label %then_12, label %else_13
+then_12:
+  %r46 = load i64, i64* %r4
+  %r47 = load i64, i64* @g_split_n
+  %r49 = icmp eq i64 %r47, 0
+  br i1 %r49, label %divzero_15, label %divok_16
+divzero_15:
+  %r50 = getelementptr [17 x i8], [17 x i8]* @.str.6372, i64 0, i64 0
+  call void @nurl_panic(i8* %r50)
+  unreachable
+divok_16:
+  %r48 = sdiv i64 %r46, %r47
+  br label %end_14
+else_13:
+  br label %end_14
+end_14:
+  %r51 = phi i64 [ %r48, %divok_16 ], [ 1, %else_13 ]
+  store i64 %r51, i64* %r52
+  store i64 0, i64* %r53
+  store i64 0, i64* %r54
+  store i64 0, i64* %r55
+  br label %loop_check_17
+loop_check_17:
+  %r56 = load i64, i64* %r55
+  %r57 = icmp slt i64 %r56, %n
+  br i1 %r57, label %loop_body_18, label %loop_exit_19
+loop_body_18:
+  %r58 = load i64, i64* @g_dce_start
+  %r59 = inttoptr i64 %r58 to i8*
+  %r60 = load i64, i64* %r55
+  %r61 = call i64 @nurl_peek(i8* %r59, i64 %r60)
+  store i64 %r61, i64* %r62
+  %r63 = load i64, i64* @g_dce_end
+  %r64 = inttoptr i64 %r63 to i8*
+  %r65 = load i64, i64* %r55
+  %r66 = call i64 @nurl_peek(i8* %r64, i64 %r65)
+  store i64 %r66, i64* %r67
+  %r68 = load i64, i64* @g_dce_live
+  %r69 = inttoptr i64 %r68 to i8*
+  %r70 = load i64, i64* %r55
+  %r71 = call i64 @nurl_peek(i8* %r69, i64 %r70)
+  %r72 = icmp eq i64 0, %r71
+  br i1 %r72, label %then_20, label %else_21
+then_20:
+  %r73 = load i64, i64* @g_split_part
+  %r74 = inttoptr i64 %r73 to i8*
+  %r75 = load i64, i64* %r55
+  %r76 = load i64, i64* @g_split_n
+  call void @nurl_poke(i8* %r74, i64 %r75, i64 %r76)
+  br label %end_22
+else_21:
+  %r77 = load i8*, i8** %r3
+  %r78 = ptrtoint i8* %r77 to i64
+  %r79 = load i64, i64* %r62
+  %r80 = add i64 %r78, %r79
+  %r81 = inttoptr i64 %r80 to i8*
+  %r82 = getelementptr [21 x i8], [21 x i8]* @.str.6373, i64 0, i64 0
+  %r83 = call i64 @nurl_str_starts(i8* %r81, i8* %r82)
+  %r84 = icmp ne i64 0, %r83
+  br i1 %r84, label %then_23, label %else_24
+then_23:
+  %r85 = load i64, i64* @g_split_part
+  %r86 = inttoptr i64 %r85 to i8*
+  %r87 = load i64, i64* %r55
+  %r88 = load i64, i64* @g_split_n
+  %r89 = add i64 %r88, 1
+  call void @nurl_poke(i8* %r86, i64 %r87, i64 %r89)
+  br label %end_25
+else_24:
+  %r90 = load i64, i64* %r54
+  %r91 = load i64, i64* %r52
+  %r92 = icmp sge i64 %r90, %r91
+  br i1 %r92, label %and_right_26, label %and_end_27
+and_right_26:
+  %r93 = load i64, i64* %r53
+  %r94 = load i64, i64* @g_split_n
+  %r95 = sub i64 %r94, 1
+  %r96 = icmp slt i64 %r93, %r95
+  br label %and_end_27
+and_end_27:
+  %r97 = phi i1 [ 0, %else_24 ], [ %r96, %and_right_26 ]
+  br i1 %r97, label %then_28, label %else_29
+then_28:
+  %r98 = load i64, i64* %r53
+  %r99 = add i64 %r98, 1
+  store i64 %r99, i64* %r53
+  store i64 0, i64* %r54
+  br label %end_30
+else_29:
+  br label %end_30
+end_30:
+  %r100 = load i64, i64* @g_split_part
+  %r101 = inttoptr i64 %r100 to i8*
+  %r102 = load i64, i64* %r55
+  %r103 = load i64, i64* %r53
+  call void @nurl_poke(i8* %r101, i64 %r102, i64 %r103)
+  %r104 = load i64, i64* %r54
+  %r105 = load i64, i64* %r67
+  %r106 = load i64, i64* %r62
+  %r107 = sub i64 %r105, %r106
+  %r108 = add i64 %r104, %r107
+  store i64 %r108, i64* %r54
+  %r109 = load i64, i64* @g_split_fill
+  %r110 = inttoptr i64 %r109 to i8*
+  %r111 = load i64, i64* %r53
+  %r112 = load i64, i64* @g_split_fill
+  %r113 = inttoptr i64 %r112 to i8*
+  %r114 = load i64, i64* %r53
+  %r115 = call i64 @nurl_peek(i8* %r113, i64 %r114)
+  %r116 = load i64, i64* %r67
+  %r117 = load i64, i64* %r62
+  %r118 = sub i64 %r116, %r117
+  %r119 = add i64 %r115, %r118
+  call void @nurl_poke(i8* %r110, i64 %r111, i64 %r119)
+  br label %end_25
+end_25:
+  br label %end_22
+end_22:
+  %r120 = load i64, i64* %r55
+  %r121 = add i64 %r120, 1
+  store i64 %r121, i64* %r55
+  br label %loop_check_17
+loop_exit_19:
+  store i64 0, i64* %r122
+  store i64 0, i64* %r123
+  br label %loop_check_31
+loop_check_31:
+  %r124 = load i64, i64* %r123
+  %r125 = icmp slt i64 %r124, %n
+  br i1 %r125, label %loop_body_32, label %loop_exit_33
+loop_body_32:
+  %r126 = load i64, i64* %r122
+  %r127 = load i64, i64* @g_dce_start
+  %r128 = inttoptr i64 %r127 to i8*
+  %r129 = load i64, i64* %r123
+  %r130 = call i64 @nurl_peek(i8* %r128, i64 %r129)
+  call void @__sp_register_privs__fp1(i64 %r126, i64 %r130)
+  %r131 = load i64, i64* @g_dce_end
+  %r132 = inttoptr i64 %r131 to i8*
+  %r133 = load i64, i64* %r123
+  %r134 = call i64 @nurl_peek(i8* %r132, i64 %r133)
+  store i64 %r134, i64* %r122
+  %r135 = load i64, i64* %r123
+  %r136 = add i64 %r135, 1
+  store i64 %r136, i64* %r123
+  br label %loop_check_31
+loop_exit_33:
+  %r137 = load i64, i64* %r122
+  call void @__sp_register_privs__fp1(i64 %r137, i64 %mlen)
+  store i64 0, i64* %r122
+  store i64 0, i64* %r123
+  br label %loop_check_34
+loop_check_34:
+  %r138 = load i64, i64* %r123
+  %r139 = icmp slt i64 %r138, %n
+  br i1 %r139, label %loop_body_35, label %loop_exit_36
+loop_body_35:
+  %r140 = load i64, i64* %r122
+  %r141 = load i64, i64* @g_dce_start
+  %r142 = inttoptr i64 %r141 to i8*
+  %r143 = load i64, i64* %r123
+  %r144 = call i64 @nurl_peek(i8* %r142, i64 %r143)
+  call void @__sp_scan_modscope__fp1(i64 %r140, i64 %r144)
+  %r145 = load i64, i64* @g_dce_end
+  %r146 = inttoptr i64 %r145 to i8*
+  %r147 = load i64, i64* %r123
+  %r148 = call i64 @nurl_peek(i8* %r146, i64 %r147)
+  store i64 %r148, i64* %r122
+  %r149 = load i64, i64* %r123
+  %r150 = add i64 %r149, 1
+  store i64 %r150, i64* %r123
+  br label %loop_check_34
+loop_exit_36:
+  %r151 = load i64, i64* %r122
+  call void @__sp_scan_modscope__fp1(i64 %r151, i64 %mlen)
+  store i64 0, i64* %r152
+  br label %loop_check_37
+loop_check_37:
+  %r153 = load i64, i64* %r152
+  %r154 = icmp slt i64 %r153, %n
+  br i1 %r154, label %loop_body_38, label %loop_exit_39
+loop_body_38:
+  %r155 = load i64, i64* @g_split_part
+  %r156 = inttoptr i64 %r155 to i8*
+  %r157 = load i64, i64* %r152
+  %r158 = call i64 @nurl_peek(i8* %r156, i64 %r157)
+  store i64 %r158, i64* %r159
+  %r160 = load i64, i64* %r159
+  %r161 = load i64, i64* @g_split_n
+  %r162 = icmp slt i64 %r160, %r161
+  br i1 %r162, label %then_40, label %else_41
+then_40:
+  %r163 = load i64, i64* @g_dce_start
+  %r164 = inttoptr i64 %r163 to i8*
+  %r165 = load i64, i64* %r152
+  %r166 = call i64 @nurl_peek(i8* %r164, i64 %r165)
+  %r167 = load i64, i64* @g_dce_end
+  %r168 = inttoptr i64 %r167 to i8*
+  %r169 = load i64, i64* %r152
+  %r170 = call i64 @nurl_peek(i8* %r168, i64 %r169)
+  %r171 = load i64, i64* %r159
+  call void @__sp_scan_refs__fp1(i64 %r166, i64 %r170, i64 %r171)
+  br label %end_42
+else_41:
+  br label %end_42
+end_42:
+  %r172 = load i64, i64* %r152
+  %r173 = add i64 %r172, 1
+  store i64 %r173, i64* %r152
+  br label %loop_check_37
+loop_exit_39:
+  store i64 0, i64* %r174
+  br label %loop_check_43
+loop_check_43:
+  %r175 = load i64, i64* %r174
+  %r176 = load i64, i64* @g_split_n
+  %r177 = icmp slt i64 %r175, %r176
+  br i1 %r177, label %loop_body_44, label %loop_exit_45
+loop_body_44:
+  %r178 = load i64, i64* %r174
+  call void @__sp_open__fp1(i64 %r178)
+  store i64 0, i64* %r179
+  store i64 0, i64* %r180
+  br label %loop_check_46
+loop_check_46:
+  %r181 = load i64, i64* %r180
+  %r182 = icmp slt i64 %r181, %n
+  br i1 %r182, label %loop_body_47, label %loop_exit_48
+loop_body_47:
+  %r183 = load i64, i64* @g_dce_start
+  %r184 = inttoptr i64 %r183 to i8*
+  %r185 = load i64, i64* %r180
+  %r186 = call i64 @nurl_peek(i8* %r184, i64 %r185)
+  store i64 %r186, i64* %r187
+  %r188 = load i64, i64* @g_dce_end
+  %r189 = inttoptr i64 %r188 to i8*
+  %r190 = load i64, i64* %r180
+  %r191 = call i64 @nurl_peek(i8* %r189, i64 %r190)
+  store i64 %r191, i64* %r192
+  %r193 = load i64, i64* %r179
+  %r194 = load i64, i64* %r187
+  %r195 = load i64, i64* %r174
+  call void @__sp_emit_gap__fp1(i64 %r193, i64 %r194, i64 %r195)
+  %r196 = load i64, i64* @g_split_part
+  %r197 = inttoptr i64 %r196 to i8*
+  %r198 = load i64, i64* %r180
+  %r199 = call i64 @nurl_peek(i8* %r197, i64 %r198)
+  store i64 %r199, i64* %r200
+  %r201 = load i64, i64* %r200
+  %r202 = load i64, i64* %r174
+  %r203 = icmp eq i64 %r201, %r202
+  br i1 %r203, label %or_end_50, label %or_right_49
+or_right_49:
+  %r204 = load i64, i64* %r200
+  %r205 = load i64, i64* @g_split_n
+  %r206 = add i64 %r205, 1
+  %r207 = icmp eq i64 %r204, %r206
+  br label %or_end_50
+or_end_50:
+  %r208 = phi i1 [ 1, %loop_body_47 ], [ %r207, %or_right_49 ]
+  br i1 %r208, label %then_51, label %else_52
+then_51:
+  %r209 = load i64, i64* %r187
+  %r210 = load i64, i64* %r192
+  call void @__sp_write__fp1(i64 %r209, i64 %r210)
+  br label %end_53
+else_52:
+  %r211 = load i64, i64* %r200
+  %r212 = load i64, i64* @g_split_n
+  %r213 = icmp ne i64 %r211, %r212
+  br i1 %r213, label %then_54, label %else_55
+then_54:
+  %r214 = load i64, i64* %r187
+  %r215 = load i64, i64* %r192
+  call void @__sp_declare__fp1(i64 %r214, i64 %r215)
+  br label %end_56
+else_55:
+  br label %end_56
+end_56:
+  br label %end_53
+end_53:
+  %r216 = load i64, i64* %r192
+  store i64 %r216, i64* %r179
+  %r217 = load i64, i64* %r180
+  %r218 = add i64 %r217, 1
+  store i64 %r218, i64* %r180
+  br label %loop_check_46
+loop_exit_48:
+  %r219 = load i64, i64* %r179
+  %r220 = load i64, i64* %r174
+  call void @__sp_emit_gap__fp1(i64 %r219, i64 %mlen, i64 %r220)
+  call void @__sp_close__fp1()
+  %r221 = load i64, i64* %r174
+  %r222 = add i64 %r221, 1
+  store i64 %r222, i64* %r174
+  br label %loop_check_43
+loop_exit_45:
+  %r223 = load i64, i64* @g_split_part
+  %r224 = inttoptr i64 %r223 to i8*
+  call void @nurl_free(i8* %r224)
+  %r225 = load i64, i64* @g_split_fill
+  %r226 = inttoptr i64 %r225 to i8*
+  call void @nurl_free(i8* %r226)
+  %r227 = load i64, i64* @g_split_priv
+  call void @nurl_sym_free(i64 %r227)
+  store i64 0, i64* @g_split_part
+  store i64 0, i64* @g_split_fill
+  store i64 0, i64* @g_split_priv
+  ret void
+}
+
+@.str.6371 = private unnamed_addr constant [17 x i8] c"division by zero\00"
+@.str.6372 = private unnamed_addr constant [17 x i8] c"division by zero\00"
+@.str.6373 = private unnamed_addr constant [21 x i8] c"define linkonce_odr \00"
+define void @nurlc_print_help() {
+entry:
+  %r0 = getelementptr [80 x i8], [80 x i8]* @.str.6374, i64 0, i64 0
+  call void @nurl_print(i8* %r0)
+  %r1 = getelementptr [42 x i8], [42 x i8]* @.str.6375, i64 0, i64 0
+  call void @nurl_print(i8* %r1)
+  %r2 = getelementptr [8 x i8], [8 x i8]* @.str.6376, i64 0, i64 0
+  call void @nurl_print(i8* %r2)
+  %r3 = getelementptr [48 x i8], [48 x i8]* @.str.6377, i64 0, i64 0
+  call void @nurl_print(i8* %r3)
+  %r4 = getelementptr [60 x i8], [60 x i8]* @.str.6378, i64 0, i64 0
+  call void @nurl_print(i8* %r4)
+  %r5 = getelementptr [77 x i8], [77 x i8]* @.str.6379, i64 0, i64 0
+  call void @nurl_print(i8* %r5)
+  %r6 = getelementptr [71 x i8], [71 x i8]* @.str.6380, i64 0, i64 0
+  call void @nurl_print(i8* %r6)
+  %r7 = getelementptr [71 x i8], [71 x i8]* @.str.6381, i64 0, i64 0
+  call void @nurl_print(i8* %r7)
+  %r8 = getelementptr [61 x i8], [61 x i8]* @.str.6382, i64 0, i64 0
+  call void @nurl_print(i8* %r8)
+  %r9 = getelementptr [70 x i8], [70 x i8]* @.str.6383, i64 0, i64 0
+  call void @nurl_print(i8* %r9)
+  %r10 = getelementptr [59 x i8], [59 x i8]* @.str.6384, i64 0, i64 0
+  call void @nurl_print(i8* %r10)
+  %r11 = getelementptr [74 x i8], [74 x i8]* @.str.6385, i64 0, i64 0
+  call void @nurl_print(i8* %r11)
+  %r12 = getelementptr [75 x i8], [75 x i8]* @.str.6386, i64 0, i64 0
+  call void @nurl_print(i8* %r12)
+  %r13 = getelementptr [66 x i8], [66 x i8]* @.str.6387, i64 0, i64 0
+  call void @nurl_print(i8* %r13)
+  %r14 = getelementptr [70 x i8], [70 x i8]* @.str.6388, i64 0, i64 0
+  call void @nurl_print(i8* %r14)
+  %r15 = getelementptr [73 x i8], [73 x i8]* @.str.6389, i64 0, i64 0
+  call void @nurl_print(i8* %r15)
+  %r16 = getelementptr [74 x i8], [74 x i8]* @.str.6390, i64 0, i64 0
+  call void @nurl_print(i8* %r16)
+  %r17 = getelementptr [57 x i8], [57 x i8]* @.str.6391, i64 0, i64 0
+  call void @nurl_print(i8* %r17)
+  %r18 = getelementptr [64 x i8], [64 x i8]* @.str.6392, i64 0, i64 0
+  call void @nurl_print(i8* %r18)
+  %r19 = getelementptr [58 x i8], [58 x i8]* @.str.6393, i64 0, i64 0
+  call void @nurl_print(i8* %r19)
+  ret void
+}
+
+@.str.6374 = private unnamed_addr constant [80 x i8] c"nurlc \E2\80\94 the NURL compiler. Compiles a .nu source file to LLVM IR on stdout.\0A\0A\00"
+@.str.6375 = private unnamed_addr constant [42 x i8] c"usage: nurlc [flags] <file.nu>  >out.ll\0A\0A\00"
+@.str.6376 = private unnamed_addr constant [8 x i8] c"flags:\0A\00"
+@.str.6377 = private unnamed_addr constant [48 x i8] c"  --help, -h          print this help and exit\0A\00"
+@.str.6378 = private unnamed_addr constant [60 x i8] c"  --version, -v       print the toolchain version and exit\0A\00"
+@.str.6379 = private unnamed_addr constant [77 x i8] c"  --g, -g             emit DWARF debug info (nurl.sh --debug forwards this)\0A\00"
+@.str.6380 = private unnamed_addr constant [71 x i8] c"  --lint              run lint-only diagnostics (e.g. unused imports)\0A\00"
+@.str.6381 = private unnamed_addr constant [71 x i8] c"  --no-borrowck       disable the borrow-checker pass (on by default)\0A\00"
+@.str.6382 = private unnamed_addr constant [61 x i8] c"  --strict-borrowck   run the borrow-checker in strict mode\0A\00"
+@.str.6383 = private unnamed_addr constant [70 x i8] c"  --no-dce            emit unreachable functions too (on by default)\0A\00"
+@.str.6384 = private unnamed_addr constant [59 x i8] c"  --ffi-host-imports  emit FFI calls as wasm host imports\0A\00"
+@.str.6385 = private unnamed_addr constant [74 x i8] c"  --split=N           ALSO write the module as up to N independent ones,\0A\00"
+@.str.6386 = private unnamed_addr constant [75 x i8] c"                      so N clang processes can lower them at once (stdout\0A\00"
+@.str.6387 = private unnamed_addr constant [66 x i8] c"                      still carries the whole module either way)\0A\00"
+@.str.6388 = private unnamed_addr constant [70 x i8] c"  --split-out=PREFIX  where they go: PREFIX.0.ll \E2\80\A6 PREFIX.<N-1>.ll\0A\00"
+@.str.6389 = private unnamed_addr constant [73 x i8] c"  --split-min=BYTES   smallest a part may be (default 131072). A module\0A\00"
+@.str.6390 = private unnamed_addr constant [74 x i8] c"                      too small to fill two of them is not split at all.\0A\00"
+@.str.6391 = private unnamed_addr constant [57 x i8] c"\0AThe LLVM IR goes to stdout; link it with clang against\0A\00"
+@.str.6392 = private unnamed_addr constant [64 x i8] c"stdlib/runtime.native.o (see docs/BUILDING.md). For a one-step\0A\00"
+@.str.6393 = private unnamed_addr constant [58 x i8] c"source-to-binary build use ./nurl.sh <file.nu> [output].\0A\00"
 define void @_nurl_main() {
 entry:
   %r2 = alloca i8*
@@ -90536,20 +92522,20 @@ entry:
   %r5 = alloca i64
   %r11 = alloca i8*
   store i8* null, i8** %r11
-  %r70 = alloca i8*
-  store i8* null, i8** %r70
-  %r76 = alloca i8*
-  store i8* null, i8** %r76
-  %r84 = alloca i64
-  %r86 = alloca i64
-  %r127 = alloca i64
-  %r134 = alloca i64
-  %r141 = alloca i64
-  %r148 = alloca i64
-  %r156 = alloca i64
-  %r195 = alloca i8*
-  store i8* null, i8** %r195
-  %r0 = getelementptr [1 x i8], [1 x i8]* @.str.6370, i64 0, i64 0
+  %r122 = alloca i8*
+  store i8* null, i8** %r122
+  %r128 = alloca i8*
+  store i8* null, i8** %r128
+  %r136 = alloca i64
+  %r138 = alloca i64
+  %r179 = alloca i64
+  %r186 = alloca i64
+  %r193 = alloca i64
+  %r200 = alloca i64
+  %r208 = alloca i64
+  %r247 = alloca i8*
+  store i8* null, i8** %r247
+  %r0 = getelementptr [1 x i8], [1 x i8]* @.str.6394, i64 0, i64 0
   %r1 = call i8* @strdup(i8* %r0)
   %r3 = load i8*, i8** %r2
   call void @nurl_free(i8* %r3)
@@ -90572,12 +92558,12 @@ loop_body_2:
   %r13 = load i8*, i8** %r11
   call void @nurl_journal_push(i8* %r13)
   %r14 = load i8*, i8** %r11
-  %r15 = getelementptr [10 x i8], [10 x i8]* @.str.6371, i64 0, i64 0
+  %r15 = getelementptr [10 x i8], [10 x i8]* @.str.6395, i64 0, i64 0
   %r16 = call i1 @seq(i8* %r14, i8* %r15)
   br i1 %r16, label %or_end_5, label %or_right_4
 or_right_4:
   %r17 = load i8*, i8** %r11
-  %r18 = getelementptr [3 x i8], [3 x i8]* @.str.6372, i64 0, i64 0
+  %r18 = getelementptr [3 x i8], [3 x i8]* @.str.6396, i64 0, i64 0
   %r19 = call i1 @seq(i8* %r17, i8* %r18)
   br label %or_end_5
 or_end_5:
@@ -90586,18 +92572,18 @@ or_end_5:
 then_6:
   %r21 = call i8* @nurl_version()
   call void @nurl_print(i8* %r21)
-  %r22 = getelementptr [2 x i8], [2 x i8]* @.str.6373, i64 0, i64 0
+  %r22 = getelementptr [2 x i8], [2 x i8]* @.str.6397, i64 0, i64 0
   call void @nurl_print(i8* %r22)
   call void @nurl_exit(i64 0)
   br label %end_8
 else_7:
   %r23 = load i8*, i8** %r11
-  %r24 = getelementptr [7 x i8], [7 x i8]* @.str.6374, i64 0, i64 0
+  %r24 = getelementptr [7 x i8], [7 x i8]* @.str.6398, i64 0, i64 0
   %r25 = call i1 @seq(i8* %r23, i8* %r24)
   br i1 %r25, label %or_end_10, label %or_right_9
 or_right_9:
   %r26 = load i8*, i8** %r11
-  %r27 = getelementptr [3 x i8], [3 x i8]* @.str.6375, i64 0, i64 0
+  %r27 = getelementptr [3 x i8], [3 x i8]* @.str.6399, i64 0, i64 0
   %r28 = call i1 @seq(i8* %r26, i8* %r27)
   br label %or_end_10
 or_end_10:
@@ -90609,12 +92595,12 @@ then_11:
   br label %end_13
 else_12:
   %r30 = load i8*, i8** %r11
-  %r31 = getelementptr [4 x i8], [4 x i8]* @.str.6376, i64 0, i64 0
+  %r31 = getelementptr [4 x i8], [4 x i8]* @.str.6400, i64 0, i64 0
   %r32 = call i1 @seq(i8* %r30, i8* %r31)
   br i1 %r32, label %or_end_15, label %or_right_14
 or_right_14:
   %r33 = load i8*, i8** %r11
-  %r34 = getelementptr [3 x i8], [3 x i8]* @.str.6377, i64 0, i64 0
+  %r34 = getelementptr [3 x i8], [3 x i8]* @.str.6401, i64 0, i64 0
   %r35 = call i1 @seq(i8* %r33, i8* %r34)
   br label %or_end_15
 or_end_15:
@@ -90625,7 +92611,7 @@ then_16:
   br label %end_18
 else_17:
   %r37 = load i8*, i8** %r11
-  %r38 = getelementptr [7 x i8], [7 x i8]* @.str.6378, i64 0, i64 0
+  %r38 = getelementptr [7 x i8], [7 x i8]* @.str.6402, i64 0, i64 0
   %r39 = call i1 @seq(i8* %r37, i8* %r38)
   br i1 %r39, label %then_19, label %else_20
 then_19:
@@ -90633,7 +92619,7 @@ then_19:
   br label %end_21
 else_20:
   %r40 = load i8*, i8** %r11
-  %r41 = getelementptr [11 x i8], [11 x i8]* @.str.6379, i64 0, i64 0
+  %r41 = getelementptr [11 x i8], [11 x i8]* @.str.6403, i64 0, i64 0
   %r42 = call i1 @seq(i8* %r40, i8* %r41)
   br i1 %r42, label %then_22, label %else_23
 then_22:
@@ -90641,7 +92627,7 @@ then_22:
   br label %end_24
 else_23:
   %r43 = load i8*, i8** %r11
-  %r44 = getelementptr [14 x i8], [14 x i8]* @.str.6380, i64 0, i64 0
+  %r44 = getelementptr [14 x i8], [14 x i8]* @.str.6404, i64 0, i64 0
   %r45 = call i1 @seq(i8* %r43, i8* %r44)
   br i1 %r45, label %then_25, label %else_26
 then_25:
@@ -90649,7 +92635,7 @@ then_25:
   br label %end_27
 else_26:
   %r46 = load i8*, i8** %r11
-  %r47 = getelementptr [18 x i8], [18 x i8]* @.str.6381, i64 0, i64 0
+  %r47 = getelementptr [18 x i8], [18 x i8]* @.str.6405, i64 0, i64 0
   %r48 = call i1 @seq(i8* %r46, i8* %r47)
   br i1 %r48, label %then_28, label %else_29
 then_28:
@@ -90658,7 +92644,7 @@ then_28:
   br label %end_30
 else_29:
   %r49 = load i8*, i8** %r11
-  %r50 = getelementptr [19 x i8], [19 x i8]* @.str.6382, i64 0, i64 0
+  %r50 = getelementptr [19 x i8], [19 x i8]* @.str.6406, i64 0, i64 0
   %r51 = call i1 @seq(i8* %r49, i8* %r50)
   br i1 %r51, label %then_31, label %else_32
 then_31:
@@ -90666,7 +92652,7 @@ then_31:
   br label %end_33
 else_32:
   %r52 = load i8*, i8** %r11
-  %r53 = getelementptr [9 x i8], [9 x i8]* @.str.6383, i64 0, i64 0
+  %r53 = getelementptr [9 x i8], [9 x i8]* @.str.6407, i64 0, i64 0
   %r54 = call i1 @seq(i8* %r52, i8* %r53)
   br i1 %r54, label %then_34, label %else_35
 then_34:
@@ -90674,10 +92660,68 @@ then_34:
   br label %end_36
 else_35:
   %r55 = load i8*, i8** %r11
-  %r56 = call i8* @strdup(i8* %r55)
-  %r57 = load i8*, i8** %r2
-  call void @nurl_free(i8* %r57)
-  store i8* %r56, i8** %r2
+  %r56 = getelementptr [9 x i8], [9 x i8]* @.str.6408, i64 0, i64 0
+  %r57 = call i64 @nurl_str_starts(i8* %r55, i8* %r56)
+  %r58 = icmp ne i64 0, %r57
+  br i1 %r58, label %then_37, label %else_38
+then_37:
+  %r59 = load i8*, i8** %r11
+  %r60 = load i8*, i8** %r11
+  %r61 = call i64 @nurl_str_len(i8* %r60)
+  %r62 = sub i64 %r61, 8
+  %r63 = call i8* @nurl_str_slice(i8* %r59, i64 8, i64 %r62)
+  %r64 = call i64 @nurl_str_to_int(i8* %r63)
+  call void @nurl_free(i8* %r63)
+  store i64 %r64, i64* @g_split_max
+  br label %end_39
+else_38:
+  %r65 = load i8*, i8** %r11
+  %r66 = getelementptr [13 x i8], [13 x i8]* @.str.6409, i64 0, i64 0
+  %r67 = call i64 @nurl_str_starts(i8* %r65, i8* %r66)
+  %r68 = icmp ne i64 0, %r67
+  br i1 %r68, label %then_40, label %else_41
+then_40:
+  %r69 = load i8*, i8** %r11
+  %r70 = load i8*, i8** %r11
+  %r71 = call i64 @nurl_str_len(i8* %r70)
+  %r72 = sub i64 %r71, 12
+  %r73 = call i8* @nurl_str_slice(i8* %r69, i64 12, i64 %r72)
+  %r74 = load i64, i64* @g_split_out__nurlown
+  %r75 = load i8*, i8** @g_split_out
+  %r76 = icmp ne i64 %r74, 0
+  %r77 = select i1 %r76, i8* %r75, i8* null
+  call void @nurl_free(i8* %r77)
+  store i64 1, i64* @g_split_out__nurlown
+  store i8* %r73, i8** @g_split_out
+  br label %end_42
+else_41:
+  %r78 = load i8*, i8** %r11
+  %r79 = getelementptr [13 x i8], [13 x i8]* @.str.6410, i64 0, i64 0
+  %r80 = call i64 @nurl_str_starts(i8* %r78, i8* %r79)
+  %r81 = icmp ne i64 0, %r80
+  br i1 %r81, label %then_43, label %else_44
+then_43:
+  %r82 = load i8*, i8** %r11
+  %r83 = load i8*, i8** %r11
+  %r84 = call i64 @nurl_str_len(i8* %r83)
+  %r85 = sub i64 %r84, 12
+  %r86 = call i8* @nurl_str_slice(i8* %r82, i64 12, i64 %r85)
+  %r87 = call i64 @nurl_str_to_int(i8* %r86)
+  call void @nurl_free(i8* %r86)
+  store i64 %r87, i64* @g_split_min
+  br label %end_45
+else_44:
+  %r88 = load i8*, i8** %r11
+  %r89 = call i8* @strdup(i8* %r88)
+  %r90 = load i8*, i8** %r2
+  call void @nurl_free(i8* %r90)
+  store i8* %r89, i8** %r2
+  br label %end_45
+end_45:
+  br label %end_42
+end_42:
+  br label %end_39
+end_39:
   br label %end_36
 end_36:
   br label %end_33
@@ -90696,398 +92740,467 @@ end_18:
 end_13:
   br label %end_8
 end_8:
-  %r58 = load i64, i64* %r5
-  %r59 = add i64 %r58, 1
-  store i64 %r59, i64* %r5
-  %r60 = load i8*, i8** %r11
-  call void @nurl_free(i8* %r60)
+  %r91 = load i64, i64* %r5
+  %r92 = add i64 %r91, 1
+  store i64 %r92, i64* %r5
+  %r93 = load i8*, i8** %r11
+  call void @nurl_free(i8* %r93)
   store i8* null, i8** %r11
   br label %loop_check_1
 loop_exit_3:
-  %r61 = load i8*, i8** %r2
-  %r62 = call i64 @nurl_str_len(i8* %r61)
-  %r63 = icmp eq i64 0, %r62
-  br i1 %r63, label %then_37, label %else_38
-then_37:
-  %r64 = getelementptr [118 x i8], [118 x i8]* @.str.6384, i64 0, i64 0
-  call void @nurl_eprintln(i8* %r64)
-  call void @nurl_exit(i64 1)
-  br label %end_39
-else_38:
-  br label %end_39
-end_39:
-  %r65 = load i64, i64* @g_lint
-  %r66 = icmp ne i64 %r65, 0
-  br i1 %r66, label %then_40, label %else_41
-then_40:
-  %r67 = load i8*, i8** %r2
-  call void @lint_init(i8* %r67)
-  br label %end_42
-else_41:
-  br label %end_42
-end_42:
-  %r68 = load i8*, i8** %r2
-  %r69 = call i8* @nurl_read_file(i8* %r68)
-  %r71 = load i8*, i8** %r70
-  call void @nurl_free(i8* %r71)
-  store i8* %r69, i8** %r70
-  %r72 = load i8*, i8** %r70
-  call void @nurl_journal_push(i8* %r72)
-  %r73 = getelementptr [15 x i8], [15 x i8]* @.str.6385, i64 0, i64 0
-  %r74 = getelementptr [20 x i8], [20 x i8]* @.str.6386, i64 0, i64 0
-  %r75 = call i8* @nurl_str_cat(i8* %r73, i8* %r74)
-  %r77 = load i8*, i8** %r76
-  call void @nurl_free(i8* %r77)
-  store i8* %r75, i8** %r76
-  %r78 = load i8*, i8** %r76
-  call void @nurl_journal_push(i8* %r78)
-  %r79 = load i8*, i8** %r70
-  %r80 = load i8*, i8** %r76
-  %r81 = call i64 @nurl_str_find(i8* %r79, i8* %r80)
-  %r82 = icmp sge i64 %r81, 0
-  br i1 %r82, label %then_43, label %else_44
-then_43:
-  store i64 0, i64* @g_auto_drop_strings
-  br label %end_45
-else_44:
-  br label %end_45
-end_45:
-  %r83 = call i64 @nurl_sym_new()
-  store i64 %r83, i64* %r84
-  %r85 = call i64 @nurl_cg_new()
-  store i64 %r85, i64* %r86
-  %r87 = call i64 @nurl_sym_new()
-  store i64 %r87, i64* @g_str_syms
-  %r88 = call i64 @nurl_sym_new()
-  store i64 %r88, i64* @g_generic_syms
-  %r89 = call i64 @nurl_sym_new()
-  store i64 %r89, i64* @g_generic_struct_syms
-  %r90 = call i64 @nurl_sym_new()
-  store i64 %r90, i64* @g_struct_inst_syms
-  %r91 = load i64, i64* @g_generic_syms
-  %r92 = getelementptr [19 x i8], [19 x i8]* @.str.6387, i64 0, i64 0
-  %r93 = getelementptr [2 x i8], [2 x i8]* @.str.6388, i64 0, i64 0
-  call void @nurl_sym_def(i64 %r91, i8* %r92, i8* %r93)
-  %r94 = call i64 @nurl_sym_new()
-  store i64 %r94, i64* @g_impl_ret_syms
-  %r95 = call i64 @nurl_sym_new()
-  store i64 %r95, i64* @g_impl_name_syms
-  %r96 = call i64 @nurl_sym_new()
-  store i64 %r96, i64* @g_impl_trait_syms
-  %r97 = call i64 @nurl_sym_new()
-  store i64 %r97, i64* @g_impl_pos_syms
-  %r98 = call i64 @nurl_sym_new()
-  store i64 %r98, i64* @g_fn_pos_syms
-  %r99 = call i64 @nurl_sym_new()
-  store i64 %r99, i64* @g_priv_file_ids
-  %r100 = call i64 @nurl_sym_new()
-  store i64 %r100, i64* @g_priv_owner_ids
-  %r101 = call i64 @nurl_sym_new()
-  store i64 %r101, i64* @g_priv_owner_files
-  %r102 = call i64 @nurl_sym_new()
-  store i64 %r102, i64* @g_priv_warned
-  %r103 = call i64 @nurl_sym_new()
-  store i64 %r103, i64* @g_trait_syms
-  %r104 = call i64 @nurl_sym_new()
-  store i64 %r104, i64* @g_res_type_syms
-  %r105 = call i64 @nurl_sym_new()
-  store i64 %r105, i64* @g_closure_defs
-  %r106 = call i64 @nurl_sym_new()
-  store i64 %r106, i64* @g_closure_types
-  %r107 = call i64 @nurl_sym_new()
-  store i64 %r107, i64* @g_fn_inout
-  %r108 = call i64 @nurl_sym_new()
-  store i64 %r108, i64* @g_fn_sink
-  %r109 = call i64 @nurl_sym_new()
-  store i64 %r109, i64* @g_fn_escapes
-  %r110 = call i64 @nurl_sym_new()
-  store i64 %r110, i64* @g_fn_invoke_only
-  %r111 = call i64 @nurl_sym_new()
-  store i64 %r111, i64* @g_pending_escape
-  %r112 = call i64 @nurl_sym_new()
-  store i64 %r112, i64* @g_fn_ret_param
-  store i64 0, i64* @g_type_count
-  store i64 0, i64* @g_func_count
-  store i64 0, i64* @g_closure_emit_base
-  store i64 0, i64* @g_type_emit_base
-  %r113 = call i64 @nurl_sym_new()
-  store i64 %r113, i64* @g_vis_syms
-  %r114 = load i64, i64* @g_borrowck
-  %r115 = icmp ne i64 %r114, 0
-  br i1 %r115, label %then_46, label %else_47
+  %r94 = load i8*, i8** %r2
+  %r95 = call i64 @nurl_str_len(i8* %r94)
+  %r96 = icmp eq i64 0, %r95
+  br i1 %r96, label %then_46, label %else_47
 then_46:
-  %r116 = call i64 @nurl_sym_new()
-  store i64 %r116, i64* @g_bck
+  %r97 = getelementptr [149 x i8], [149 x i8]* @.str.6411, i64 0, i64 0
+  call void @nurl_eprintln(i8* %r97)
+  call void @nurl_exit(i64 1)
   br label %end_48
 else_47:
   br label %end_48
 end_48:
-  %r117 = call i64 @nurl_sym_new()
-  store i64 %r117, i64* @g_ptrtab
-  %r118 = load i8*, i8** %r2
-  call void @vis_set_current_src_file(i8* %r118)
-  call void @nurl_print_buf_start()
-  %r119 = load i64, i64* %r84
-  call void @emit_header(i64 %r119)
-  %r120 = load i64, i64* @g_dbg_enabled
-  %r121 = icmp ne i64 %r120, 0
-  br i1 %r121, label %then_49, label %else_50
+  %r98 = load i64, i64* @g_split_max
+  %r99 = icmp slt i64 %r98, 2
+  br i1 %r99, label %then_49, label %else_50
 then_49:
-  %r122 = load i8*, i8** %r2
-  call void @dbg_init(i8* %r122)
+  store i64 0, i64* @g_split_max
   br label %end_51
 else_50:
   br label %end_51
 end_51:
-  %r123 = load i64, i64* %r84
-  call void @init_syms(i64 %r123)
-  %r124 = load i8*, i8** %r70
-  %r125 = load i8*, i8** %r2
-  %r126 = call i64 @nurl_lex_new(i8* %r124, i8* %r125)
-  store i64 %r126, i64* %r127
-  %r128 = load i64, i64* %r127
-  %r129 = load i64, i64* %r84
-  call void @scan_generic_structs(i64 %r128, i64 %r129)
-  %r130 = load i64, i64* %r127
-  call void @nurl_lex_free(i64 %r130)
-  %r131 = load i8*, i8** %r70
-  %r132 = load i8*, i8** %r2
-  %r133 = call i64 @nurl_lex_new(i8* %r131, i8* %r132)
-  store i64 %r133, i64* %r134
-  %r135 = load i64, i64* %r134
-  %r136 = load i64, i64* %r84
-  call void @scan_fn_sigs(i64 %r135, i64 %r136)
-  %r137 = load i64, i64* %r134
-  call void @nurl_lex_free(i64 %r137)
-  call void @verify_super_obligations()
-  %r138 = load i8*, i8** %r70
-  %r139 = load i8*, i8** %r2
-  %r140 = call i64 @nurl_lex_new(i8* %r138, i8* %r139)
-  store i64 %r140, i64* %r141
-  %r142 = load i64, i64* %r141
-  %r143 = load i64, i64* %r84
-  call void @scan_type_names(i64 %r142, i64 %r143)
-  %r144 = load i64, i64* %r141
-  call void @nurl_lex_free(i64 %r144)
-  %r145 = load i8*, i8** %r70
-  %r146 = load i8*, i8** %r2
-  %r147 = call i64 @nurl_lex_new(i8* %r145, i8* %r146)
-  store i64 %r147, i64* %r148
-  %r149 = load i64, i64* %r148
-  call void @scan_dyn_types(i64 %r149)
-  %r150 = load i64, i64* %r148
-  call void @nurl_lex_free(i64 %r150)
-  %r151 = load i64, i64* %r84
-  %r152 = load i64, i64* %r86
-  call void @ensure_dyn_types_emitted(i64 %r151, i64 %r152)
-  %r153 = load i8*, i8** %r70
-  %r154 = load i8*, i8** %r2
-  %r155 = call i64 @nurl_lex_new(i8* %r153, i8* %r154)
-  store i64 %r155, i64* %r156
-  %r157 = load i64, i64* @g_lint
-  %r158 = icmp ne i64 %r157, 0
-  br i1 %r158, label %then_52, label %else_53
+  %r100 = load i64, i64* @g_split_max
+  %r101 = icmp sgt i64 %r100, 64
+  br i1 %r101, label %then_52, label %else_53
 then_52:
-  store i64 1, i64* @g_lint_recording
+  store i64 64, i64* @g_split_max
   br label %end_54
 else_53:
   br label %end_54
 end_54:
-  %r159 = load i64, i64* %r156
-  %r160 = load i64, i64* %r84
-  %r161 = load i64, i64* %r86
-  call void @parse_program(i64 %r159, i64 %r160, i64 %r161)
-  %r162 = load i64, i64* @g_err_count
-  %r163 = icmp sgt i64 %r162, 0
-  br i1 %r163, label %then_55, label %else_56
+  %r102 = load i64, i64* @g_split_min
+  %r103 = icmp slt i64 %r102, 1
+  br i1 %r103, label %then_55, label %else_56
 then_55:
-  %r164 = getelementptr [24 x i8], [24 x i8]* @.str.6389, i64 0, i64 0
-  %r165 = load i64, i64* @g_err_count
-  %r166 = call i8* @nurl_str_int(i64 %r165)
-  %r167 = getelementptr [16 x i8], [16 x i8]* @.str.6390, i64 0, i64 0
-  %r168 = call i8* @nurl_str_cat3(i8* %r164, i8* %r166, i8* %r167)
-  call void @nurl_free(i8* %r166)
-  %r169 = load i64, i64* @g_err_count
-  %r170 = icmp sgt i64 %r169, 1
-  br i1 %r170, label %then_58, label %else_59
-then_58:
-  %r171 = getelementptr [2 x i8], [2 x i8]* @.str.6391, i64 0, i64 0
-  %r172 = call i8* @strdup(i8* %r171)
-  br label %end_60
-else_59:
-  %r173 = getelementptr [1 x i8], [1 x i8]* @.str.6392, i64 0, i64 0
-  %r174 = call i8* @strdup(i8* %r173)
-  br label %end_60
-end_60:
-  %r175 = phi i8* [ %r172, %then_58 ], [ %r174, %else_59 ]
-  %r176 = call i8* @nurl_str_cat(i8* %r168, i8* %r175)
-  call void @nurl_free(i8* %r168)
-  call void @nurl_free(i8* %r175)
-  call void @nurl_eprintln(i8* %r176)
-  call void @nurl_free(i8* %r176)
-  call void @nurl_exit(i64 1)
+  store i64 1, i64* @g_split_min
   br label %end_57
 else_56:
   br label %end_57
 end_57:
+  %r104 = load i64, i64* @g_split_max
+  %r105 = icmp ne i64 0, %r104
+  br i1 %r105, label %and_right_58, label %and_end_59
+and_right_58:
+  %r106 = load i8*, i8** @g_split_out
+  %r107 = call i64 @nurl_str_len(i8* %r106)
+  %r108 = icmp eq i64 0, %r107
+  br label %and_end_59
+and_end_59:
+  %r109 = phi i1 [ 0, %end_57 ], [ %r108, %and_right_58 ]
+  br i1 %r109, label %then_60, label %else_61
+then_60:
+  %r110 = getelementptr [42 x i8], [42 x i8]* @.str.6412, i64 0, i64 0
+  call void @nurl_eprintln(i8* %r110)
+  call void @nurl_exit(i64 1)
+  br label %end_62
+else_61:
+  br label %end_62
+end_62:
+  %r111 = load i64, i64* @g_split_max
+  %r112 = icmp ne i64 0, %r111
+  br i1 %r112, label %and_right_63, label %and_end_64
+and_right_63:
+  %r113 = load i64, i64* @g_dbg_enabled
+  %r114 = icmp ne i64 0, %r113
+  br label %and_end_64
+and_end_64:
+  %r115 = phi i1 [ 0, %end_62 ], [ %r114, %and_right_63 ]
+  br i1 %r115, label %then_65, label %else_66
+then_65:
+  %r116 = getelementptr [74 x i8], [74 x i8]* @.str.6413, i64 0, i64 0
+  call void @nurl_eprintln(i8* %r116)
+  call void @nurl_exit(i64 1)
+  br label %end_67
+else_66:
+  br label %end_67
+end_67:
+  %r117 = load i64, i64* @g_lint
+  %r118 = icmp ne i64 %r117, 0
+  br i1 %r118, label %then_68, label %else_69
+then_68:
+  %r119 = load i8*, i8** %r2
+  call void @lint_init(i8* %r119)
+  br label %end_70
+else_69:
+  br label %end_70
+end_70:
+  %r120 = load i8*, i8** %r2
+  %r121 = call i8* @nurl_read_file(i8* %r120)
+  %r123 = load i8*, i8** %r122
+  call void @nurl_free(i8* %r123)
+  store i8* %r121, i8** %r122
+  %r124 = load i8*, i8** %r122
+  call void @nurl_journal_push(i8* %r124)
+  %r125 = getelementptr [15 x i8], [15 x i8]* @.str.6414, i64 0, i64 0
+  %r126 = getelementptr [20 x i8], [20 x i8]* @.str.6415, i64 0, i64 0
+  %r127 = call i8* @nurl_str_cat(i8* %r125, i8* %r126)
+  %r129 = load i8*, i8** %r128
+  call void @nurl_free(i8* %r129)
+  store i8* %r127, i8** %r128
+  %r130 = load i8*, i8** %r128
+  call void @nurl_journal_push(i8* %r130)
+  %r131 = load i8*, i8** %r122
+  %r132 = load i8*, i8** %r128
+  %r133 = call i64 @nurl_str_find(i8* %r131, i8* %r132)
+  %r134 = icmp sge i64 %r133, 0
+  br i1 %r134, label %then_71, label %else_72
+then_71:
+  store i64 0, i64* @g_auto_drop_strings
+  br label %end_73
+else_72:
+  br label %end_73
+end_73:
+  %r135 = call i64 @nurl_sym_new()
+  store i64 %r135, i64* %r136
+  %r137 = call i64 @nurl_cg_new()
+  store i64 %r137, i64* %r138
+  %r139 = call i64 @nurl_sym_new()
+  store i64 %r139, i64* @g_str_syms
+  %r140 = call i64 @nurl_sym_new()
+  store i64 %r140, i64* @g_generic_syms
+  %r141 = call i64 @nurl_sym_new()
+  store i64 %r141, i64* @g_generic_struct_syms
+  %r142 = call i64 @nurl_sym_new()
+  store i64 %r142, i64* @g_struct_inst_syms
+  %r143 = load i64, i64* @g_generic_syms
+  %r144 = getelementptr [19 x i8], [19 x i8]* @.str.6416, i64 0, i64 0
+  %r145 = getelementptr [2 x i8], [2 x i8]* @.str.6417, i64 0, i64 0
+  call void @nurl_sym_def(i64 %r143, i8* %r144, i8* %r145)
+  %r146 = call i64 @nurl_sym_new()
+  store i64 %r146, i64* @g_impl_ret_syms
+  %r147 = call i64 @nurl_sym_new()
+  store i64 %r147, i64* @g_impl_name_syms
+  %r148 = call i64 @nurl_sym_new()
+  store i64 %r148, i64* @g_impl_trait_syms
+  %r149 = call i64 @nurl_sym_new()
+  store i64 %r149, i64* @g_impl_pos_syms
+  %r150 = call i64 @nurl_sym_new()
+  store i64 %r150, i64* @g_fn_pos_syms
+  %r151 = call i64 @nurl_sym_new()
+  store i64 %r151, i64* @g_priv_file_ids
+  %r152 = call i64 @nurl_sym_new()
+  store i64 %r152, i64* @g_priv_owner_ids
+  %r153 = call i64 @nurl_sym_new()
+  store i64 %r153, i64* @g_priv_owner_files
+  %r154 = call i64 @nurl_sym_new()
+  store i64 %r154, i64* @g_priv_warned
+  %r155 = call i64 @nurl_sym_new()
+  store i64 %r155, i64* @g_trait_syms
+  %r156 = call i64 @nurl_sym_new()
+  store i64 %r156, i64* @g_res_type_syms
+  %r157 = call i64 @nurl_sym_new()
+  store i64 %r157, i64* @g_closure_defs
+  %r158 = call i64 @nurl_sym_new()
+  store i64 %r158, i64* @g_closure_types
+  %r159 = call i64 @nurl_sym_new()
+  store i64 %r159, i64* @g_fn_inout
+  %r160 = call i64 @nurl_sym_new()
+  store i64 %r160, i64* @g_fn_sink
+  %r161 = call i64 @nurl_sym_new()
+  store i64 %r161, i64* @g_fn_escapes
+  %r162 = call i64 @nurl_sym_new()
+  store i64 %r162, i64* @g_fn_invoke_only
+  %r163 = call i64 @nurl_sym_new()
+  store i64 %r163, i64* @g_pending_escape
+  %r164 = call i64 @nurl_sym_new()
+  store i64 %r164, i64* @g_fn_ret_param
+  store i64 0, i64* @g_type_count
+  store i64 0, i64* @g_func_count
+  store i64 0, i64* @g_closure_emit_base
+  store i64 0, i64* @g_type_emit_base
+  %r165 = call i64 @nurl_sym_new()
+  store i64 %r165, i64* @g_vis_syms
+  %r166 = load i64, i64* @g_borrowck
+  %r167 = icmp ne i64 %r166, 0
+  br i1 %r167, label %then_74, label %else_75
+then_74:
+  %r168 = call i64 @nurl_sym_new()
+  store i64 %r168, i64* @g_bck
+  br label %end_76
+else_75:
+  br label %end_76
+end_76:
+  %r169 = call i64 @nurl_sym_new()
+  store i64 %r169, i64* @g_ptrtab
+  %r170 = load i8*, i8** %r2
+  call void @vis_set_current_src_file(i8* %r170)
+  call void @nurl_print_buf_start()
+  %r171 = load i64, i64* %r136
+  call void @emit_header(i64 %r171)
+  %r172 = load i64, i64* @g_dbg_enabled
+  %r173 = icmp ne i64 %r172, 0
+  br i1 %r173, label %then_77, label %else_78
+then_77:
+  %r174 = load i8*, i8** %r2
+  call void @dbg_init(i8* %r174)
+  br label %end_79
+else_78:
+  br label %end_79
+end_79:
+  %r175 = load i64, i64* %r136
+  call void @init_syms(i64 %r175)
+  %r176 = load i8*, i8** %r122
+  %r177 = load i8*, i8** %r2
+  %r178 = call i64 @nurl_lex_new(i8* %r176, i8* %r177)
+  store i64 %r178, i64* %r179
+  %r180 = load i64, i64* %r179
+  %r181 = load i64, i64* %r136
+  call void @scan_generic_structs(i64 %r180, i64 %r181)
+  %r182 = load i64, i64* %r179
+  call void @nurl_lex_free(i64 %r182)
+  %r183 = load i8*, i8** %r122
+  %r184 = load i8*, i8** %r2
+  %r185 = call i64 @nurl_lex_new(i8* %r183, i8* %r184)
+  store i64 %r185, i64* %r186
+  %r187 = load i64, i64* %r186
+  %r188 = load i64, i64* %r136
+  call void @scan_fn_sigs(i64 %r187, i64 %r188)
+  %r189 = load i64, i64* %r186
+  call void @nurl_lex_free(i64 %r189)
+  call void @verify_super_obligations()
+  %r190 = load i8*, i8** %r122
+  %r191 = load i8*, i8** %r2
+  %r192 = call i64 @nurl_lex_new(i8* %r190, i8* %r191)
+  store i64 %r192, i64* %r193
+  %r194 = load i64, i64* %r193
+  %r195 = load i64, i64* %r136
+  call void @scan_type_names(i64 %r194, i64 %r195)
+  %r196 = load i64, i64* %r193
+  call void @nurl_lex_free(i64 %r196)
+  %r197 = load i8*, i8** %r122
+  %r198 = load i8*, i8** %r2
+  %r199 = call i64 @nurl_lex_new(i8* %r197, i8* %r198)
+  store i64 %r199, i64* %r200
+  %r201 = load i64, i64* %r200
+  call void @scan_dyn_types(i64 %r201)
+  %r202 = load i64, i64* %r200
+  call void @nurl_lex_free(i64 %r202)
+  %r203 = load i64, i64* %r136
+  %r204 = load i64, i64* %r138
+  call void @ensure_dyn_types_emitted(i64 %r203, i64 %r204)
+  %r205 = load i8*, i8** %r122
+  %r206 = load i8*, i8** %r2
+  %r207 = call i64 @nurl_lex_new(i8* %r205, i8* %r206)
+  store i64 %r207, i64* %r208
+  %r209 = load i64, i64* @g_lint
+  %r210 = icmp ne i64 %r209, 0
+  br i1 %r210, label %then_80, label %else_81
+then_80:
+  store i64 1, i64* @g_lint_recording
+  br label %end_82
+else_81:
+  br label %end_82
+end_82:
+  %r211 = load i64, i64* %r208
+  %r212 = load i64, i64* %r136
+  %r213 = load i64, i64* %r138
+  call void @parse_program(i64 %r211, i64 %r212, i64 %r213)
+  %r214 = load i64, i64* @g_err_count
+  %r215 = icmp sgt i64 %r214, 0
+  br i1 %r215, label %then_83, label %else_84
+then_83:
+  %r216 = getelementptr [24 x i8], [24 x i8]* @.str.6418, i64 0, i64 0
+  %r217 = load i64, i64* @g_err_count
+  %r218 = call i8* @nurl_str_int(i64 %r217)
+  %r219 = getelementptr [16 x i8], [16 x i8]* @.str.6419, i64 0, i64 0
+  %r220 = call i8* @nurl_str_cat3(i8* %r216, i8* %r218, i8* %r219)
+  call void @nurl_free(i8* %r218)
+  %r221 = load i64, i64* @g_err_count
+  %r222 = icmp sgt i64 %r221, 1
+  br i1 %r222, label %then_86, label %else_87
+then_86:
+  %r223 = getelementptr [2 x i8], [2 x i8]* @.str.6420, i64 0, i64 0
+  %r224 = call i8* @strdup(i8* %r223)
+  br label %end_88
+else_87:
+  %r225 = getelementptr [1 x i8], [1 x i8]* @.str.6421, i64 0, i64 0
+  %r226 = call i8* @strdup(i8* %r225)
+  br label %end_88
+end_88:
+  %r227 = phi i8* [ %r224, %then_86 ], [ %r226, %else_87 ]
+  %r228 = call i8* @nurl_str_cat(i8* %r220, i8* %r227)
+  call void @nurl_free(i8* %r220)
+  call void @nurl_free(i8* %r227)
+  call void @nurl_eprintln(i8* %r228)
+  call void @nurl_free(i8* %r228)
+  call void @nurl_exit(i64 1)
+  br label %end_85
+else_84:
+  br label %end_85
+end_85:
   store i64 0, i64* @g_lint_recording
-  %r177 = load i64, i64* %r84
-  %r178 = load i64, i64* %r86
-  call void @flush_deferred_instantiations(i64 %r177, i64 %r178)
+  %r229 = load i64, i64* %r136
+  %r230 = load i64, i64* %r138
+  call void @flush_deferred_instantiations(i64 %r229, i64 %r230)
   call void @resolve_pending_escapes()
   call void @dbg_flush()
   call void @lint_report_unused_fns()
   call void @lint_report_unused_imports()
-  %r179 = load i64, i64* @g_bck_errors
-  %r180 = icmp sgt i64 %r179, 0
-  br i1 %r180, label %then_61, label %else_62
-then_61:
-  %r181 = getelementptr [32 x i8], [32 x i8]* @.str.6393, i64 0, i64 0
-  %r182 = load i64, i64* @g_bck_errors
-  %r183 = call i8* @nurl_str_int(i64 %r182)
-  %r184 = load i64, i64* @g_bck_errors
-  %r185 = icmp sgt i64 %r184, 1
-  br i1 %r185, label %then_64, label %else_65
-then_64:
-  %r186 = getelementptr [27 x i8], [27 x i8]* @.str.6394, i64 0, i64 0
-  %r187 = call i8* @strdup(i8* %r186)
-  br label %end_66
-else_65:
-  %r188 = getelementptr [26 x i8], [26 x i8]* @.str.6395, i64 0, i64 0
-  %r189 = call i8* @strdup(i8* %r188)
-  br label %end_66
-end_66:
-  %r190 = phi i8* [ %r187, %then_64 ], [ %r189, %else_65 ]
-  %r191 = call i8* @nurl_str_cat3(i8* %r181, i8* %r183, i8* %r190)
-  call void @nurl_free(i8* %r183)
-  call void @nurl_free(i8* %r190)
-  %r192 = getelementptr [39 x i8], [39 x i8]* @.str.6396, i64 0, i64 0
-  %r193 = call i8* @nurl_str_cat(i8* %r191, i8* %r192)
-  call void @nurl_free(i8* %r191)
-  call void @nurl_eprintln(i8* %r193)
-  call void @nurl_free(i8* %r193)
-  call void @nurl_exit(i64 1)
-  br label %end_63
-else_62:
-  br label %end_63
-end_63:
-  %r194 = call i8* @nurl_print_buf_stop()
-  %r196 = load i8*, i8** %r195
-  call void @nurl_free(i8* %r196)
-  store i8* %r194, i8** %r195
-  %r197 = load i8*, i8** %r195
-  call void @nurl_journal_push(i8* %r197)
-  %r198 = load i8*, i8** %r195
-  call void @dce_emit_module(i8* %r198)
-  %r199 = load i64, i64* %r156
-  call void @nurl_lex_free(i64 %r199)
-  %r200 = load i64, i64* %r84
-  call void @nurl_sym_free(i64 %r200)
-  %r201 = load i64, i64* @g_str_syms
-  call void @nurl_sym_free(i64 %r201)
-  %r202 = load i64, i64* @g_generic_syms
-  call void @nurl_sym_free(i64 %r202)
-  %r203 = load i64, i64* @g_generic_struct_syms
-  call void @nurl_sym_free(i64 %r203)
-  %r204 = load i64, i64* @g_struct_inst_syms
-  call void @nurl_sym_free(i64 %r204)
-  %r205 = load i64, i64* @g_impl_ret_syms
-  call void @nurl_sym_free(i64 %r205)
-  %r206 = load i64, i64* @g_impl_name_syms
-  call void @nurl_sym_free(i64 %r206)
-  %r207 = load i64, i64* @g_impl_trait_syms
-  call void @nurl_sym_free(i64 %r207)
-  %r208 = load i64, i64* @g_impl_pos_syms
-  call void @nurl_sym_free(i64 %r208)
-  %r209 = load i64, i64* @g_fn_pos_syms
-  call void @nurl_sym_free(i64 %r209)
-  %r210 = load i64, i64* @g_priv_file_ids
-  call void @nurl_sym_free(i64 %r210)
-  %r211 = load i64, i64* @g_priv_owner_ids
-  call void @nurl_sym_free(i64 %r211)
-  %r212 = load i64, i64* @g_priv_owner_files
-  call void @nurl_sym_free(i64 %r212)
-  %r213 = load i64, i64* @g_priv_warned
-  call void @nurl_sym_free(i64 %r213)
-  %r214 = load i64, i64* @g_trait_syms
-  call void @nurl_sym_free(i64 %r214)
-  %r215 = load i64, i64* @g_res_type_syms
-  call void @nurl_sym_free(i64 %r215)
-  %r216 = load i64, i64* @g_closure_defs
-  call void @nurl_sym_free(i64 %r216)
-  %r217 = load i64, i64* @g_closure_types
-  call void @nurl_sym_free(i64 %r217)
-  %r218 = load i64, i64* @g_fn_inout
-  call void @nurl_sym_free(i64 %r218)
-  %r219 = load i64, i64* @g_fn_sink
-  call void @nurl_sym_free(i64 %r219)
-  %r220 = load i64, i64* @g_fn_escapes
-  call void @nurl_sym_free(i64 %r220)
-  %r221 = load i64, i64* @g_fn_invoke_only
-  call void @nurl_sym_free(i64 %r221)
-  %r222 = load i64, i64* @g_fn_ret_param
-  call void @nurl_sym_free(i64 %r222)
-  %r223 = load i64, i64* @g_pending_escape
-  call void @nurl_sym_free(i64 %r223)
-  %r224 = load i64, i64* @g_bck
-  call void @nurl_sym_free(i64 %r224)
-  %r225 = load i64, i64* @g_ptrtab
-  call void @nurl_sym_free(i64 %r225)
-  %r226 = load i64, i64* @g_vis_syms
-  call void @nurl_sym_free(i64 %r226)
-  %r227 = load i64, i64* @g_lint_syms
-  call void @nurl_sym_free(i64 %r227)
-  %r228 = load i64, i64* @g_lint_reads
-  call void @nurl_sym_free(i64 %r228)
-  %r229 = load i64, i64* @g_lint_used
-  call void @nurl_sym_free(i64 %r229)
-  %r230 = load i64, i64* @g_dbg_file_syms
-  call void @nurl_sym_free(i64 %r230)
-  %r231 = load i64, i64* @g_dbg_type_syms
-  call void @nurl_sym_free(i64 %r231)
-  %r232 = load i64, i64* @g_dbg_blob_syms
-  call void @nurl_sym_free(i64 %r232)
-  %r233 = load i64, i64* %r86
-  %r234 = inttoptr i64 %r233 to i8*
-  call void @nurl_free(i8* %r234)
-  %r235 = load i8*, i8** %r2
+  %r231 = load i64, i64* @g_bck_errors
+  %r232 = icmp sgt i64 %r231, 0
+  br i1 %r232, label %then_89, label %else_90
+then_89:
+  %r233 = getelementptr [32 x i8], [32 x i8]* @.str.6422, i64 0, i64 0
+  %r234 = load i64, i64* @g_bck_errors
+  %r235 = call i8* @nurl_str_int(i64 %r234)
+  %r236 = load i64, i64* @g_bck_errors
+  %r237 = icmp sgt i64 %r236, 1
+  br i1 %r237, label %then_92, label %else_93
+then_92:
+  %r238 = getelementptr [27 x i8], [27 x i8]* @.str.6423, i64 0, i64 0
+  %r239 = call i8* @strdup(i8* %r238)
+  br label %end_94
+else_93:
+  %r240 = getelementptr [26 x i8], [26 x i8]* @.str.6424, i64 0, i64 0
+  %r241 = call i8* @strdup(i8* %r240)
+  br label %end_94
+end_94:
+  %r242 = phi i8* [ %r239, %then_92 ], [ %r241, %else_93 ]
+  %r243 = call i8* @nurl_str_cat3(i8* %r233, i8* %r235, i8* %r242)
   call void @nurl_free(i8* %r235)
-  %r236 = load i8*, i8** %r70
-  call void @nurl_free(i8* %r236)
-  %r237 = load i8*, i8** %r76
-  call void @nurl_free(i8* %r237)
-  %r238 = load i8*, i8** %r195
-  call void @nurl_free(i8* %r238)
+  call void @nurl_free(i8* %r242)
+  %r244 = getelementptr [39 x i8], [39 x i8]* @.str.6425, i64 0, i64 0
+  %r245 = call i8* @nurl_str_cat(i8* %r243, i8* %r244)
+  call void @nurl_free(i8* %r243)
+  call void @nurl_eprintln(i8* %r245)
+  call void @nurl_free(i8* %r245)
+  call void @nurl_exit(i64 1)
+  br label %end_91
+else_90:
+  br label %end_91
+end_91:
+  %r246 = call i8* @nurl_print_buf_stop()
+  %r248 = load i8*, i8** %r247
+  call void @nurl_free(i8* %r248)
+  store i8* %r246, i8** %r247
+  %r249 = load i8*, i8** %r247
+  call void @nurl_journal_push(i8* %r249)
+  %r250 = load i8*, i8** %r247
+  call void @dce_emit_module(i8* %r250)
+  %r251 = load i64, i64* %r208
+  call void @nurl_lex_free(i64 %r251)
+  %r252 = load i64, i64* %r136
+  call void @nurl_sym_free(i64 %r252)
+  %r253 = load i64, i64* @g_str_syms
+  call void @nurl_sym_free(i64 %r253)
+  %r254 = load i64, i64* @g_generic_syms
+  call void @nurl_sym_free(i64 %r254)
+  %r255 = load i64, i64* @g_generic_struct_syms
+  call void @nurl_sym_free(i64 %r255)
+  %r256 = load i64, i64* @g_struct_inst_syms
+  call void @nurl_sym_free(i64 %r256)
+  %r257 = load i64, i64* @g_impl_ret_syms
+  call void @nurl_sym_free(i64 %r257)
+  %r258 = load i64, i64* @g_impl_name_syms
+  call void @nurl_sym_free(i64 %r258)
+  %r259 = load i64, i64* @g_impl_trait_syms
+  call void @nurl_sym_free(i64 %r259)
+  %r260 = load i64, i64* @g_impl_pos_syms
+  call void @nurl_sym_free(i64 %r260)
+  %r261 = load i64, i64* @g_fn_pos_syms
+  call void @nurl_sym_free(i64 %r261)
+  %r262 = load i64, i64* @g_priv_file_ids
+  call void @nurl_sym_free(i64 %r262)
+  %r263 = load i64, i64* @g_priv_owner_ids
+  call void @nurl_sym_free(i64 %r263)
+  %r264 = load i64, i64* @g_priv_owner_files
+  call void @nurl_sym_free(i64 %r264)
+  %r265 = load i64, i64* @g_priv_warned
+  call void @nurl_sym_free(i64 %r265)
+  %r266 = load i64, i64* @g_trait_syms
+  call void @nurl_sym_free(i64 %r266)
+  %r267 = load i64, i64* @g_res_type_syms
+  call void @nurl_sym_free(i64 %r267)
+  %r268 = load i64, i64* @g_closure_defs
+  call void @nurl_sym_free(i64 %r268)
+  %r269 = load i64, i64* @g_closure_types
+  call void @nurl_sym_free(i64 %r269)
+  %r270 = load i64, i64* @g_fn_inout
+  call void @nurl_sym_free(i64 %r270)
+  %r271 = load i64, i64* @g_fn_sink
+  call void @nurl_sym_free(i64 %r271)
+  %r272 = load i64, i64* @g_fn_escapes
+  call void @nurl_sym_free(i64 %r272)
+  %r273 = load i64, i64* @g_fn_invoke_only
+  call void @nurl_sym_free(i64 %r273)
+  %r274 = load i64, i64* @g_fn_ret_param
+  call void @nurl_sym_free(i64 %r274)
+  %r275 = load i64, i64* @g_pending_escape
+  call void @nurl_sym_free(i64 %r275)
+  %r276 = load i64, i64* @g_bck
+  call void @nurl_sym_free(i64 %r276)
+  %r277 = load i64, i64* @g_ptrtab
+  call void @nurl_sym_free(i64 %r277)
+  %r278 = load i64, i64* @g_vis_syms
+  call void @nurl_sym_free(i64 %r278)
+  %r279 = load i64, i64* @g_lint_syms
+  call void @nurl_sym_free(i64 %r279)
+  %r280 = load i64, i64* @g_lint_reads
+  call void @nurl_sym_free(i64 %r280)
+  %r281 = load i64, i64* @g_lint_used
+  call void @nurl_sym_free(i64 %r281)
+  %r282 = load i64, i64* @g_dbg_file_syms
+  call void @nurl_sym_free(i64 %r282)
+  %r283 = load i64, i64* @g_dbg_type_syms
+  call void @nurl_sym_free(i64 %r283)
+  %r284 = load i64, i64* @g_dbg_blob_syms
+  call void @nurl_sym_free(i64 %r284)
+  %r285 = load i64, i64* %r138
+  %r286 = inttoptr i64 %r285 to i8*
+  call void @nurl_free(i8* %r286)
+  %r287 = load i8*, i8** %r2
+  call void @nurl_free(i8* %r287)
+  %r288 = load i8*, i8** %r122
+  call void @nurl_free(i8* %r288)
+  %r289 = load i8*, i8** %r128
+  call void @nurl_free(i8* %r289)
+  %r290 = load i8*, i8** %r247
+  call void @nurl_free(i8* %r290)
   ret void
 }
 
-@.str.6370 = private unnamed_addr constant [1 x i8] c"\00"
-@.str.6371 = private unnamed_addr constant [10 x i8] c"--version\00"
-@.str.6372 = private unnamed_addr constant [3 x i8] c"-v\00"
-@.str.6373 = private unnamed_addr constant [2 x i8] c"\0A\00"
-@.str.6374 = private unnamed_addr constant [7 x i8] c"--help\00"
-@.str.6375 = private unnamed_addr constant [3 x i8] c"-h\00"
-@.str.6376 = private unnamed_addr constant [4 x i8] c"--g\00"
-@.str.6377 = private unnamed_addr constant [3 x i8] c"-g\00"
-@.str.6378 = private unnamed_addr constant [7 x i8] c"--lint\00"
-@.str.6379 = private unnamed_addr constant [11 x i8] c"--borrowck\00"
-@.str.6380 = private unnamed_addr constant [14 x i8] c"--no-borrowck\00"
-@.str.6381 = private unnamed_addr constant [18 x i8] c"--strict-borrowck\00"
-@.str.6382 = private unnamed_addr constant [19 x i8] c"--ffi-host-imports\00"
-@.str.6383 = private unnamed_addr constant [9 x i8] c"--no-dce\00"
-@.str.6384 = private unnamed_addr constant [118 x i8] c"usage: nurlc [--version] [--g] [--lint] [--no-borrowck | --strict-borrowck] [--ffi-host-imports] [--no-dce] <file.nu>\00"
-@.str.6385 = private unnamed_addr constant [15 x i8] c"@@nurl-disable\00"
-@.str.6386 = private unnamed_addr constant [20 x i8] c"-autodrop-strings@@\00"
-@.str.6387 = private unnamed_addr constant [19 x i8] c"__deferred_count__\00"
-@.str.6388 = private unnamed_addr constant [2 x i8] c"0\00"
-@.str.6389 = private unnamed_addr constant [24 x i8] c"error: aborting due to \00"
-@.str.6390 = private unnamed_addr constant [16 x i8] c" previous error\00"
-@.str.6391 = private unnamed_addr constant [2 x i8] c"s\00"
-@.str.6392 = private unnamed_addr constant [1 x i8] c"\00"
-@.str.6393 = private unnamed_addr constant [32 x i8] c"error: compilation aborted \E2\80\94 \00"
-@.str.6394 = private unnamed_addr constant [27 x i8] c" borrow-checker violations\00"
-@.str.6395 = private unnamed_addr constant [26 x i8] c" borrow-checker violation\00"
-@.str.6396 = private unnamed_addr constant [39 x i8] c" (re-run with --no-borrowck to bypass)\00"
+@.str.6394 = private unnamed_addr constant [1 x i8] c"\00"
+@.str.6395 = private unnamed_addr constant [10 x i8] c"--version\00"
+@.str.6396 = private unnamed_addr constant [3 x i8] c"-v\00"
+@.str.6397 = private unnamed_addr constant [2 x i8] c"\0A\00"
+@.str.6398 = private unnamed_addr constant [7 x i8] c"--help\00"
+@.str.6399 = private unnamed_addr constant [3 x i8] c"-h\00"
+@.str.6400 = private unnamed_addr constant [4 x i8] c"--g\00"
+@.str.6401 = private unnamed_addr constant [3 x i8] c"-g\00"
+@.str.6402 = private unnamed_addr constant [7 x i8] c"--lint\00"
+@.str.6403 = private unnamed_addr constant [11 x i8] c"--borrowck\00"
+@.str.6404 = private unnamed_addr constant [14 x i8] c"--no-borrowck\00"
+@.str.6405 = private unnamed_addr constant [18 x i8] c"--strict-borrowck\00"
+@.str.6406 = private unnamed_addr constant [19 x i8] c"--ffi-host-imports\00"
+@.str.6407 = private unnamed_addr constant [9 x i8] c"--no-dce\00"
+@.str.6408 = private unnamed_addr constant [9 x i8] c"--split=\00"
+@.str.6409 = private unnamed_addr constant [13 x i8] c"--split-out=\00"
+@.str.6410 = private unnamed_addr constant [13 x i8] c"--split-min=\00"
+@.str.6411 = private unnamed_addr constant [149 x i8] c"usage: nurlc [--version] [--g] [--lint] [--no-borrowck | --strict-borrowck] [--ffi-host-imports] [--no-dce] [--split=N --split-out=PREFIX] <file.nu>\00"
+@.str.6412 = private unnamed_addr constant [42 x i8] c"nurlc: --split=N needs --split-out=PREFIX\00"
+@.str.6413 = private unnamed_addr constant [74 x i8] c"nurlc: --split cannot be combined with --g (DWARF metadata is per-module)\00"
+@.str.6414 = private unnamed_addr constant [15 x i8] c"@@nurl-disable\00"
+@.str.6415 = private unnamed_addr constant [20 x i8] c"-autodrop-strings@@\00"
+@.str.6416 = private unnamed_addr constant [19 x i8] c"__deferred_count__\00"
+@.str.6417 = private unnamed_addr constant [2 x i8] c"0\00"
+@.str.6418 = private unnamed_addr constant [24 x i8] c"error: aborting due to \00"
+@.str.6419 = private unnamed_addr constant [16 x i8] c" previous error\00"
+@.str.6420 = private unnamed_addr constant [2 x i8] c"s\00"
+@.str.6421 = private unnamed_addr constant [1 x i8] c"\00"
+@.str.6422 = private unnamed_addr constant [32 x i8] c"error: compilation aborted \E2\80\94 \00"
+@.str.6423 = private unnamed_addr constant [27 x i8] c" borrow-checker violations\00"
+@.str.6424 = private unnamed_addr constant [26 x i8] c" borrow-checker violation\00"
+@.str.6425 = private unnamed_addr constant [39 x i8] c" (re-run with --no-borrowck to bypass)\00"
 define i32 @main(i32 %argc, i8** %argv) {
 entry:
   call void @nurl_init(i32 %argc, i8** %argv)
@@ -91137,6 +93250,11 @@ entry:
   %_gc8 = icmp ne i64 %_gf8, 0
   %_gs8 = select i1 %_gc8, i8* %_gv8, i8* null
   call void @nurl_free(i8* %_gs8)
+  %_gf9 = load i64, i64* @g_split_out__nurlown
+  %_gv9 = load i8*, i8** @g_split_out
+  %_gc9 = icmp ne i64 %_gf9, 0
+  %_gs9 = select i1 %_gc9, i8* %_gv9, i8* null
+  call void @nurl_free(i8* %_gs9)
   ret i32 0
 }
 

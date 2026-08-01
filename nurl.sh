@@ -29,6 +29,18 @@
 #
 #  Environment:
 #    NURL_OPT=-O0..-O3   Override default -O2 when no CLI flag given
+#    NURL_SPLIT=N        Lower the program as up to N independent modules
+#                        at once instead of one (default: one per core,
+#                        capped at 16). 5.6x off the clang step on a large
+#                        program, at a measured 3.4% of the program's own
+#                        speed — ThinLTO cannot import every callee back
+#                        across a module boundary. NURL_SPLIT=0 turns it
+#                        off: use that for a release build.
+#                        Details: docs/BUILDING.md → Parallel lowering.
+#    NURL_SPLIT_MIN=N    Smallest a part may be, in bytes of IR (default
+#                        131072). A program too small for two of them is
+#                        never split — cutting a small module up makes it
+#                        slower, not just cheaper to build.
 #    NURL_SAN=1          Link with AddressSanitizer + UndefinedBehaviorSanitizer.
 #                        Auto-builds a side-by-side stdlib/runtime_san.o (non-LTO,
 #                        same -fsanitize flags). LTO is dropped because clang's
@@ -162,6 +174,61 @@ fi
 LLFILE="${OUTBASE}.ll"
 SFILE="${OUTBASE}.s"
 
+# ── Parallel lowering ────────────────────────────────────────
+# The clang step is what a NURL build waits on — 11.3 s of the
+# compiler's own 12.0 s — and it is ONE single-threaded LLVM -O2
+# pipeline over ONE module, so a twelve-core box finishes no sooner
+# than a two-core one. `nurlc --split=N` additionally writes the module
+# as N independent ones (stdout still carries the whole thing, so
+# $LLFILE and the FFI-symbol greps further down are unchanged); this
+# script then lowers those N at once and links them with ThinLTO,
+# whose summaries carry cross-module inlining across the parts.
+# Measured on the compiler itself, twelve parts: 11.3 s → 2.0 s.
+#
+# The trade is real and is not hidden: ThinLTO does not import every
+# callee back across a boundary, and the split-built compiler retires
+# 3.4% more instructions than the single-module one. Five and a half
+# times the build speed for 3.4% of the program's — worth it while you
+# iterate, not worth it for what you ship, so set NURL_SPLIT=0 for a
+# release build. (build.sh applies the same rule to itself: it splits
+# the throwaway stage-1 compiler and not the one it installs.)
+#
+# N is a CEILING: nurlc splits only as far as it can keep each part
+# above --split-min, and a small program is not split at all — cutting
+# one up costs runtime, not just build time (see __sp_parts in
+# compiler/nurlc.nu). So this asks for one part per core and lets the
+# compiler decide how many the module can carry.
+#
+# Off wherever it cannot apply or would not pay:
+#   --emit-ir / --emit-asm   nothing is linked
+#   --debug / --coverage     DWARF is a per-module metadata graph, so
+#                            nurlc refuses --split with --g; these drop
+#                            LTO anyway
+#   NURL_SAN=1               sanitized builds drop LTO too
+#   -O0                      there is no optimiser to parallelise
+# NURL_SPLIT=0 disables it; NURL_SPLIT=N sets the ceiling;
+# NURL_SPLIT_MIN=BYTES moves the per-part floor.
+SPLIT_N=0
+if [ $EMIT_IR -eq 0 ] && [ $EMIT_ASM -eq 0 ] && [ $DEBUG_INFO -eq 0 ] \
+   && [ $COVERAGE -eq 0 ] && [ "${NURL_SAN:-0}" != "1" ]; then
+    case "${CLI_OPT:-${NURL_OPT:--O2}}" in
+        -O0) ;;
+        *)
+            if [ -n "${NURL_SPLIT:-}" ]; then
+                SPLIT_N="$NURL_SPLIT"
+            else
+                SPLIT_N="$(nproc 2>/dev/null || getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)"
+                # Past ~16 the parts stop being worth a process each, and
+                # every one of them carries a full set of cross-part
+                # declarations.
+                if [ "$SPLIT_N" -gt 16 ]; then SPLIT_N=16; fi
+            fi
+            ;;
+    esac
+fi
+case "$SPLIT_N" in ''|*[!0-9]*) SPLIT_N=0 ;; esac
+if [ "$SPLIT_N" -lt 2 ]; then SPLIT_N=0; fi
+
 # ── Step 1: .nu → LLVM IR ────────────────────────────────────
 if [ $EMIT_IR -eq 1 ]; then
     echo "[1/1] $SRCFILE → $LLFILE"
@@ -175,8 +242,26 @@ NURLC_G=""
 if [ $DEBUG_INFO -eq 1 ]; then
     NURLC_G="--g"
 fi
+SPLIT_FLAGS=""
+if [ "$SPLIT_N" -gt 0 ]; then
+    SPLIT_FLAGS="--split=$SPLIT_N --split-out=$OUTBASE"
+    if [ -n "${NURL_SPLIT_MIN:-}" ]; then
+        SPLIT_FLAGS="$SPLIT_FLAGS --split-min=$NURL_SPLIT_MIN"
+    fi
+    # A previous build may have left MORE parts than this one writes;
+    # linking a stale one in would resurrect the code it holds.
+    rm -f "$OUTBASE".[0-9]*.ll "$OUTBASE".[0-9]*.o
+fi
 # shellcheck disable=SC2086
-"$NURLC" $NURLC_G "$SRCFILE" > "$LLFILE"
+"$NURLC" $NURLC_G $SPLIT_FLAGS "$SRCFILE" > "$LLFILE"
+
+# `--split=N` is a ceiling, and nurlc holds the policy: it writes no
+# parts at all for a module too small for two of them to be worth it
+# (see __sp_parts). So the question here is not how big the module was —
+# it is whether parts exist.
+if [ "$SPLIT_N" -gt 0 ] && [ ! -f "$OUTBASE.0.ll" ]; then
+    SPLIT_N=0
+fi
 
 if [ $EMIT_IR -eq 1 ]; then
     echo ""
@@ -242,6 +327,11 @@ resolve_clang() {
 # whitespace-safe regardless of the prefix path.
 ZIG_BIN="${NURL_ZIG:-$SCRIPT_DIR/zig/zig}"
 OPAQUE_FLAGS=""
+# nurlc emits no `target triple`, so clang announces that it is supplying
+# the host one — on every build, and once per part when the module is
+# split. There is nothing to act on: the driver's triple is the only one
+# a NURL binary is ever built for.
+QUIET_FLAGS="-Wno-override-module"
 # `zig cc` drops -O for LLVM IR inputs. Not for C — `zig cc -O2 -c x.c`
 # forwards -O2 to cc1 as expected — but for a `.ll` it passes NOTHING,
 # and cc1's default is -O0. NURL compiles to `.ll` and hands it to the
@@ -302,7 +392,7 @@ fi
 if [ $EMIT_ASM -eq 1 ]; then
     echo "[2/2] $LLFILE → $SFILE  ($OPT${DEBUG_FLAGS:+ $DEBUG_FLAGS} -S)"
     # shellcheck disable=SC2086
-    cc_run $OPT $DEBUG_FLAGS $OPAQUE_FLAGS -S "$LLFILE" -o "$SFILE"
+    cc_run $OPT $DEBUG_FLAGS $OPAQUE_FLAGS $QUIET_FLAGS -S "$LLFILE" -o "$SFILE"
     echo ""
     echo "Done: $SFILE"
     exit 0
@@ -523,23 +613,62 @@ elif [ $DEBUG_INFO -eq 1 ]; then
     fi
     RUNTIME_TO_LINK="$DBG_RUNTIME"
 fi
-echo "[2/2] $LLFILE → $OUTBASE  ($OPT${LTO_FLAG:+ $LTO_FLAG}${DEBUG_FLAGS:+ $DEBUG_FLAGS}${COVERAGE_FLAGS:+ $COVERAGE_FLAGS}${SAN_LINK_FLAGS:+ $SAN_LINK_FLAGS}${EXTRA_LIBS:+ $EXTRA_LIBS})"
-# `-flto` is required because stdlib/runtime.o is compiled with -flto
+if [ "$SPLIT_N" -gt 0 ]; then
+    echo "[2/2] $LLFILE → $OUTBASE  ($OPT -flto=thin ×$SPLIT_N${EXTRA_LIBS:+ $EXTRA_LIBS})"
+else
+    echo "[2/2] $LLFILE → $OUTBASE  ($OPT${LTO_FLAG:+ $LTO_FLAG}${DEBUG_FLAGS:+ $DEBUG_FLAGS}${COVERAGE_FLAGS:+ $COVERAGE_FLAGS}${SAN_LINK_FLAGS:+ $SAN_LINK_FLAGS}${EXTRA_LIBS:+ $EXTRA_LIBS})"
+fi
+# An LTO link is not optional: stdlib/runtime.o is compiled with -flto
 # (build.sh) and therefore carries LLVM bitcode instead of native code.
 # The matching link-time flag here drives the LTO pipeline, inlining
 # every vec_data / nurl_peek / nurl_poke / nurl_print across the
-# runtime ↔ user-code boundary.
+# runtime ↔ user-code boundary. Either flavour does that; which one is
+# used depends on whether the module was split.
 #
 # `-Wl,--as-needed` drops DT_NEEDED entries for any auto-linked library
 # the program does not actually reference a symbol from — so a program
 # that imports nothing DB-related never inherits libpq/libsqlite3 just
 # because the build machine had them. Positional: it must precede the
 # `-l` libraries to govern them.
-# shellcheck disable=SC2086
 ZIG_OPT_FIX=""
 [ "$USING_ZIG" = "1" ] && ZIG_OPT_FIX="-Xclang $OPT"
-# shellcheck disable=SC2086
-cc_run $OPT $ZIG_OPT_FIX $LTO_FLAG -Wl,--as-needed $OPAQUE_FLAGS $DEBUG_FLAGS $COVERAGE_FLAGS $SAN_LINK_FLAGS "$LLFILE" "$RUNTIME_TO_LINK" $EXTRA_OBJS -o "$OUTBASE" -lm -lpthread $DL_LIB $EXTRA_LIBS
+if [ "$SPLIT_N" -gt 0 ]; then
+    # Lower the parts at once, then thin-link them. `-flto=thin` stands
+    # in for `-flto`: runtime.o's bitcode still needs an LTO link, and
+    # ThinLTO's summaries carry inlining across the parts and across the
+    # runtime ↔ user-code boundary — most of what one full-LTO module
+    # was doing, though measurably not all of it (see the note above).
+    # Its backend is parallel too, so the link is faster than the
+    # full-LTO one it replaces even before the parallel -c.
+    SPLIT_OBJS=""
+    SPLIT_PIDS=""
+    for _part in "$OUTBASE".[0-9]*.ll; do
+        _pobj="${_part%.ll}.o"
+        SPLIT_OBJS="$SPLIT_OBJS $_pobj"
+        # shellcheck disable=SC2086
+        cc_run $OPT $ZIG_OPT_FIX -flto=thin $OPAQUE_FLAGS $QUIET_FLAGS -c "$_part" -o "$_pobj" &
+        SPLIT_PIDS="$SPLIT_PIDS $!"
+    done
+    SPLIT_RC=0
+    for _pid in $SPLIT_PIDS; do
+        wait "$_pid" || SPLIT_RC=1
+    done
+    if [ "$SPLIT_RC" -ne 0 ]; then
+        echo "ERROR: lowering a module part failed (parts left in $OUTBASE.N.ll)" >&2
+        exit 1
+    fi
+    # shellcheck disable=SC2086
+    cc_run $OPT $ZIG_OPT_FIX -flto=thin -Wl,--as-needed $OPAQUE_FLAGS $QUIET_FLAGS $SPLIT_OBJS "$RUNTIME_TO_LINK" $EXTRA_OBJS -o "$OUTBASE" -lm -lpthread $DL_LIB $EXTRA_LIBS
+    # The parts are an artifact of how the link was parallelised; the
+    # documented one is $LLFILE, which still holds the whole module.
+    # shellcheck disable=SC2086
+    rm -f $SPLIT_OBJS "$OUTBASE".[0-9]*.ll
+else
+    # `-flto` is required because stdlib/runtime.o is compiled with -flto
+    # (build.sh) and therefore carries LLVM bitcode instead of native code.
+    # shellcheck disable=SC2086
+    cc_run $OPT $ZIG_OPT_FIX $LTO_FLAG -Wl,--as-needed $OPAQUE_FLAGS $QUIET_FLAGS $DEBUG_FLAGS $COVERAGE_FLAGS $SAN_LINK_FLAGS "$LLFILE" "$RUNTIME_TO_LINK" $EXTRA_OBJS -o "$OUTBASE" -lm -lpthread $DL_LIB $EXTRA_LIBS
+fi
 
 echo ""
 echo "Done: $OUTBASE"
