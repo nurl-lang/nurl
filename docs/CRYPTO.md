@@ -30,7 +30,7 @@ All sources live in `stdlib/std/`.
 | Hashes | `hash_sha256`, `hash_sha512`, `hash_sha1`, `hash_md5`, `hash_blake3` | SHA-1/MD5 for legacy interop only (never trusted for signatures) |
 | HMAC / KDF | `hkdf`, `pbkdf2`, `scrypt` | HKDF-Expand-Label for TLS 1.3 |
 | AEAD | `aes_gcm` (AES-128/256-GCM), `chacha20poly1305` | the two TLS 1.3 record ciphers |
-| ECDH / signatures | `x25519`, `ed25519`, `ecdsa_p256` (P-256 + P-384), `p256_field` | TweetNaCl-derived 25519; `p256_field` is the dedicated **constant-time** fixed-limb GF(p) for the P-256 secret path |
+| ECDH / signatures | `x25519`, `ed25519`, `ecdsa_p256` (P-256 + P-384), `p256_field` | TweetNaCl-derived 25519 ladder over a ten-limb radix-2^25.5 field; `p256_field` is the dedicated **constant-time** fixed-limb GF(p) for the P-256 secret path |
 | RSA | `rsa` (PKCS#1 v1.5 verify, PSS verify + sign) | built on `bigint` |
 | Bignum | `bigint` | sign-magnitude, schoolbook mul / long division, `modpow`, `modinv` |
 | X.509 | `x509`, `tls_verify` | DER parser + chain/host/policy verification |
@@ -127,8 +127,8 @@ follow-up. Hardening (timing/cache axis):
 - **P-256 (ECDSA signing, ECDHE), X25519, Ed25519, AES-GCM, ChaCha20-Poly1305,
   GHASH, all tag compares** — constant-time *including operand timing*: no
   secret-dependent branch, no secret-indexed table, and a fixed-width field
-  representation (P-256 via `std/p256_field`; 25519 via the TweetNaCl packed
-  limbs) so even `mul`/`reduce` duration is value-independent. This resists a
+  representation (P-256 via `std/p256_field`; 25519 via ten fixed signed limbs
+  at radix 2^25.5) so even `mul`/`reduce` duration is value-independent. This resists a
   *single-trace* **timing/cache** observer (not just the multi-trace remote
   attacker) — but, like all software constant-time code, it does **not** resist
   a power/EM (DPA/template) attacker, which is out of scope stack-wide.
