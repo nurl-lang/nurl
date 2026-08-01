@@ -403,6 +403,37 @@ if [ -z "$SAN_LDFLAGS" ]; then
     (( SPLIT_N < 2 )) && SPLIT_N=0
 fi
 
+# ── Optimisation level for the throwaway stages ──────────────
+# Stages 0 and 1 are scaffolding. Neither binary is shipped, neither is
+# benchmarked, and each one does exactly one job before being deleted:
+# compile nurlc.nu once. Optimising them is spending link time to make a
+# 0.8 s job into a 0.35 s job — the ~7 s of ThinLTO that buys the
+# difference costs an order of magnitude more than it saves.
+#
+# Measured here (12 cores, clang 18, nurlc's own 3.3 MB of IR):
+#
+#            stage 0 (one module)      stage 1 (split N ways)
+#            link    emit    total     link    emit    total
+#   -O2      8.07 s  0.35 s  8.42 s    2.36 s  0.35 s  2.71 s
+#   -O0      0.79 s  0.77 s  1.56 s    0.33 s  0.78 s  1.11 s
+#
+# ~8.5 s off every build. The IR each stage emits is byte-identical
+# either way — which is the property the bootstrap actually depends on,
+# and the fixed-point check below still proves it on every run.
+#
+# Stage 2 stays -O2: it is copied to build/nurlc, and that one IS the
+# compiler this tree ships and benchmarks.
+#
+# Sanitized builds keep -O2 throughout. There LTO is already off (so the
+# link is not the expensive part), the instrumented self-compile is the
+# stage that runs closest to the runner's memory and time limits, and
+# -O0 would slow the thing that is already slowest.
+if [ -n "$SAN_LDFLAGS" ]; then
+    BOOT_OPT="-O2"
+else
+    BOOT_OPT="-O0"
+fi
+
 # Does this compiler know how to partition a module? The snapshot that
 # builds stage 0 predates the flag whenever the bootstrap is refreshed
 # behind a change to it, so ask rather than assume.
@@ -421,36 +452,42 @@ stage_ir() {  # stage_ir <compiler> <ir-prefix>
 # Link stage IR: the parts in parallel if there are any, else the one
 # module. `-flto=thin` replaces `-flto` for the split path — runtime.o
 # is bitcode and still needs an LTO link either way.
-link_stage() {  # link_stage <ir-prefix> <out>
-    local pre="$1" out="$2" objs="" pids="" rc=0 p
+link_stage() {  # link_stage <ir-prefix> <out> <opt-level>
+    local pre="$1" out="$2" opt="$3" objs="" pids="" rc=0 p
     if compgen -G "$pre.[0-9]*.ll" > /dev/null; then
         for p in "$pre".[0-9]*.ll; do
             objs="$objs ${p%.ll}.o"
-            "$CLANG" -O2 -flto=thin -Wno-override-module -c "$p" -o "${p%.ll}.o" &
+            "$CLANG" "$opt" -flto=thin -Wno-override-module -c "$p" -o "${p%.ll}.o" &
             pids="$pids $!"
         done
         for p in $pids; do wait "$p" || rc=1; done
         (( rc == 0 )) || return 1
         # shellcheck disable=SC2086
-        "$CLANG" -O2 -flto=thin -Wno-override-module -Wl,--as-needed $objs stdlib/runtime.o \
+        "$CLANG" "$opt" -flto=thin -Wno-override-module -Wl,--as-needed $objs stdlib/runtime.o \
             -lm -lpthread $DL_LIB $CURL_LIBS $OPENSSL_LIBS $SQLITE3_LIBS $ZLIB_LIBS $ZSTD_LIBS \
             -o "$out" || return 1
         # shellcheck disable=SC2086
         rm -f $objs "$pre".[0-9]*.ll
     else
         # shellcheck disable=SC2086
-        "$CLANG" -O2 $LTO_FLAG $SAN_LDFLAGS -Wl,--as-needed "$pre.ll" stdlib/runtime.o \
+        "$CLANG" "$opt" $LTO_FLAG $SAN_LDFLAGS -Wl,--as-needed "$pre.ll" stdlib/runtime.o \
             -lm -lpthread $DL_LIB $CURL_LIBS $OPENSSL_LIBS $SQLITE3_LIBS $ZLIB_LIBS $ZSTD_LIBS \
             -o "$out" || return 1
     fi
 }
 
-step "stage0 link"   "$CLANG" -O2 $LTO_FLAG $SAN_LDFLAGS -Wl,--as-needed compiler/nurlc_lastgood.ll stdlib/runtime.o -lm -lpthread $DL_LIB $CURL_LIBS $OPENSSL_LIBS $SQLITE3_LIBS $ZLIB_LIBS $ZSTD_LIBS -o build/nurlc_lastgood.bin
+# Stage 0 is the one link that cannot be split — the committed snapshot
+# is a single file by definition — so it is also the one that gains most
+# from $BOOT_OPT: 8.4 s to 1.6 s, link and emit together.
+step "stage0 link"   "$CLANG" $BOOT_OPT $LTO_FLAG $SAN_LDFLAGS -Wl,--as-needed compiler/nurlc_lastgood.ll stdlib/runtime.o -lm -lpthread $DL_LIB $CURL_LIBS $OPENSSL_LIBS $SQLITE3_LIBS $ZLIB_LIBS $ZSTD_LIBS -o build/nurlc_lastgood.bin
 
 # Stage 1 is a throwaway: its only job is to emit stage 2's IR, and it
-# is rebuilt on every single build. Split it.
+# is rebuilt on every single build. Split it, and do not optimise it.
+# The split stays even at -O0: it is the cheaper link of the two (N
+# clangs beat one), and it is what keeps `nurlc --split` on the path
+# every build walks, not just the ones that run the test suite.
 step "stage1 ir"     stage_ir ./build/nurlc_lastgood.bin build/nurlc_self
-step "stage1 link"   link_stage build/nurlc_self build/nurlc_self
+step "stage1 link"   link_stage build/nurlc_self build/nurlc_self "$BOOT_OPT"
 
 # Stage 2 is NOT. It is copied to build/nurlc and is the compiler this
 # tree ships and benchmarks, and partitioning costs a measured 3.4% of
@@ -458,7 +495,7 @@ step "stage1 link"   link_stage build/nurlc_self build/nurlc_self
 # The rule is the same one nurl.sh applies to your program, pointed the
 # other way: split what you rebuild constantly, not what you ship once.
 step "stage2 ir"     bash -c './build/nurlc_self compiler/nurlc.nu > build/nurlc_self2.ll'
-step "stage2 link"   link_stage build/nurlc_self2 build/nurlc_self2
+step "stage2 link"   link_stage build/nurlc_self2 build/nurlc_self2 -O2
 
 # Fixed-point: nurlc_self must match nurlc_self2.
 if ! cmp -s build/nurlc_self.ll build/nurlc_self2.ll; then

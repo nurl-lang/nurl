@@ -252,6 +252,16 @@ set "LABEL=clean"
 >>"%LOG%" echo [%LABEL%]
 del /q build\nurlc_lastgood.bin.exe build\nurlc_self.ll build\nurlc_self.exe build\nurlc_self2.ll build\nurlc_self2.exe build\nurlc.exe >>"%LOG%" 2>&1
 
+REM ── Optimisation level for the throwaway stages ──────────────
+REM Stages 0 and 1 are scaffolding: neither binary is shipped or
+REM benchmarked, and each compiles nurlc.nu exactly once before being
+REM deleted. Optimising them spends far more link time than the faster
+REM compile gives back, so they are built -O0 and only stage 2 — the
+REM one copied to build\nurlc.exe — is built -O2. The IR each stage
+REM emits is byte-identical either way, and the fixed-point check below
+REM still proves it. See build.sh for the measured Linux numbers.
+set "BOOT_OPT=-O0"
+
 REM ── stage0 link ──────────────────────────────────────────────
 REM Python-free bootstrap: link the committed `nurlc_lastgood.ll`
 REM snapshot (regenerate via Linux/macOS `./build.sh --refresh-bootstrap`
@@ -260,8 +270,8 @@ REM current nurlc.nu). The .ll carries no `target triple` directive
 REM so clang on Windows picks the host triple automatically.
 set "LABEL=stage0 link"
 >>"%LOG%" echo.
->>"%LOG%" echo [%LABEL%] "%CLANG%" -O2 compiler/nurlc_lastgood.ll stdlib/runtime.o -lwinhttp -o build/nurlc_lastgood.bin.exe
-"%CLANG%" -O2 compiler/nurlc_lastgood.ll stdlib/runtime.o -lwinhttp -o build/nurlc_lastgood.bin.exe >>"%LOG%" 2>&1
+>>"%LOG%" echo [%LABEL%] "%CLANG%" %BOOT_OPT% compiler/nurlc_lastgood.ll stdlib/runtime.o -lwinhttp -o build/nurlc_lastgood.bin.exe
+"%CLANG%" %BOOT_OPT% compiler/nurlc_lastgood.ll stdlib/runtime.o -lwinhttp -o build/nurlc_lastgood.bin.exe >>"%LOG%" 2>&1
 if errorlevel 1 goto :failed
 
 REM ── stage1 ir ────────────────────────────────────────────────
@@ -274,8 +284,8 @@ if errorlevel 1 goto :failed
 REM ── stage1 link ──────────────────────────────────────────────
 set "LABEL=stage1 link"
 >>"%LOG%" echo.
->>"%LOG%" echo [%LABEL%] "%CLANG%" -O2 build/nurlc_self.ll stdlib/runtime.o -lwinhttp -o build/nurlc_self.exe
-"%CLANG%" -O2 build/nurlc_self.ll stdlib/runtime.o -lwinhttp -o build/nurlc_self.exe >>"%LOG%" 2>&1
+>>"%LOG%" echo [%LABEL%] "%CLANG%" %BOOT_OPT% build/nurlc_self.ll stdlib/runtime.o -lwinhttp -o build/nurlc_self.exe
+"%CLANG%" %BOOT_OPT% build/nurlc_self.ll stdlib/runtime.o -lwinhttp -o build/nurlc_self.exe >>"%LOG%" 2>&1
 if errorlevel 1 goto :failed
 
 REM ── stage2 ir ────────────────────────────────────────────────
