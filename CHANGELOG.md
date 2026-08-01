@@ -94,7 +94,63 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   failure was a pre-existing one (`-lsqlite3`, `canvas.o`, a module with
   no `main`) reproduced identically by the unsplit build.
 
+- **`bench/crypto_hotpath.nu` — AEAD record throughput, without a socket
+  in the way.** One "op" is one 16384-byte record, the largest TLS 1.3
+  allows and so the size the record layer actually works in; it reports
+  ns/op, allocations/op and the MB/s those imply for both suites TLS 1.3
+  defines. It is what found the cipher-preference bug below: the two
+  suites are three orders of magnitude apart on a CPU NURL cannot reach
+  the AES instructions of, and nothing was measuring that.
+
 ### Changed
+
+- **A pure-NURL TLS server no longer picks the cipher suite it is 500×
+  slower at — 24.9 s → 0.15 s for an 8 MB response.** `tls_server.nu`
+  walked the ClientHello and took the *client's* first acceptable suite.
+  Chrome, Firefox and Go's `crypto/tls` all list `TLS_AES_128_GCM_SHA256`
+  ahead of ChaCha20 when the CPU has AES instructions, so those clients
+  got AES-GCM — and NURL has no AES-NI path. `std/aes_gcm.nu` derives
+  every S-box byte through a constant-time GF(2^8) inversion instead of
+  a cache-timing-visible table, which is the right call for security and
+  costs about four thousand cycles a byte. Measured on 16 KB records
+  (`bench/crypto_hotpath.nu`): **AES-128-GCM 0.5 MB/s, ChaCha20-Poly1305
+  306 MB/s.** The server now prefers ChaCha20-Poly1305 whenever the
+  client offers it at all. Downloading 8 MB from a NURL HTTPS server
+  with `openssl s_client -ciphersuites
+  'TLS_AES_128_GCM_SHA256:TLS_CHACHA20_POLY1305_SHA256'` went from
+  **24.87 s to 0.151 s**. Clients that offer *only* AES-128-GCM still
+  negotiate it and still work — RFC 8446 makes that suite mandatory, so
+  it cannot simply be dropped; a software-only stack preferring ChaCha
+  is what OpenSSL itself does on a CPU without AES instructions.
+
+- **The ChaCha20-Poly1305 record path stopped copying every record
+  through a bounds-checked byte loop — TLS reads 150 → 214 MB/s.**
+  `aead_decrypt` extracted the ciphertext from the `ciphertext‖tag`
+  buffer with one `vec_get` and one `vec_push` *per byte* before either
+  the MAC or the keystream would look at it: a quarter of the whole
+  receive path, and the same shape a comment three functions up records
+  having already fixed once. Both consumers now take a range —
+  `chacha20_xor_range` is the new entry point, `__mac_data` takes an
+  offset and length — so nothing is copied out of the record at all.
+
+  Two more in the same file. `chacha20_block` was a second, accessor-based
+  copy of the round function, ~960 bounds-checked `Vec` calls a block,
+  and the AEAD ran one per record for the Poly1305 one-time key; it is
+  now the register-resident kernel applied to a zero plaintext, and the
+  duplicate quarter-round helpers are gone. And the kernel XORs a whole
+  64-byte block through eight 8-byte loads and stores when both buffers
+  are 8-byte aligned — a `Vec`'s storage is malloc'd, so they are —
+  instead of sixty-four of each with their shifts and masks. The byte
+  path stays as the fallback for unaligned offsets and big-endian
+  machines, which the file now probes for rather than assumes, and a new
+  vector pins the two paths to the same output.
+
+  | 16 KB records | before | after |
+  |---|---:|---:|
+  | `aead_encrypt` | 282 MB/s, 15 allocs/op | **313 MB/s, 12 allocs/op** |
+  | `aead_decrypt` | 198 MB/s, 17 allocs/op | **306 MB/s, 12 allocs/op** |
+  | `tls_read` over loopback | 150 MB/s | **214 MB/s** |
+  | `tls_write` over loopback | 218 MB/s | **259 MB/s** |
 
 - **Every string a NURL program allocates comes off the runtime's
   recycling allocator — 27% off `nurlc`'s own run time.** 0.30.0 put a

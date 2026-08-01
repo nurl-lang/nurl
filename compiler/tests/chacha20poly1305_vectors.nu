@@ -61,6 +61,26 @@ $ `stdlib/std/chacha20poly1305.nu`
         F _ → { ( nurl_print `aead_open: FAIL (rejected valid tag)\n` ) = fails + fails 1 }
     }
 
+    // chacha20_xor_range over an UNALIGNED source. The kernel XORs a
+    // whole 64-byte block through 8-byte machine words when both buffers
+    // are 8-byte aligned and falls back to a byte-at-a-time loop when
+    // they are not; a Vec's storage is always aligned, so only an odd
+    // `doff` reaches the fallback. Both paths must produce the same
+    // ciphertext, which is what this pins: the same plaintext is
+    // encrypted once at offset 0 (word path) and once as the tail of a
+    // one-byte-longer buffer (byte path).
+    : ( Vec u ) shifted ( vec_with_cap [u] + ( vec_len [u] pt ) 1 )
+    ( vec_push [u] shifted # u 170 )
+    ( bytes_extend_bytes shifted pt )
+    : ( Vec u ) ct_aligned ( chacha20_xor_range key1 1 n24 pt 0 ( vec_len [u] pt ) )
+    : ( Vec u ) ct_unaligned ( chacha20_xor_range key1 1 n24 shifted 1 ( vec_len [u] pt ) )
+    : String want_hex ( bytes_to_hex ct_aligned )
+    = fails + fails ( check `chacha20_range_unaligned` ct_unaligned ( string_data want_hex ) )
+    ( string_free want_hex )
+    ( vec_free [u] ct_aligned )
+    ( vec_free [u] ct_unaligned )
+    ( vec_free [u] shifted )
+
     // AEAD tamper detection: flip one ciphertext byte → must reject.
     ( vec_set [u] sealed 0 # u ^^ 255 ?? ( vec_get [u] sealed 0 ) { T x → # i x F _ → 0 } )
     ?? ( aead_decrypt akey anonce aad sealed ) {
