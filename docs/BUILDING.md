@@ -141,6 +141,72 @@ symbol at link time, never a wrong binary.
 diffing IR against an older compiler or linking a NURL object into a C
 program by hand.
 
+## Parallel lowering (`--split`)
+
+Even after dead-function elimination, the clang step is what a NURL
+build waits on, and it is *one* single-threaded LLVM `-O2` pipeline over
+*one* module. Lowering the compiler's own 3.2 MB of IR takes 11.3 s
+while emitting it takes 0.46 s, and idle cores stay idle: `-flto` with
+`-plugin-opt=jobs=12` parallelises only the codegen tail and still
+measures 11.1 s.
+
+So `nurl.sh` asks `nurlc` for the module *as several independent
+modules*, lowers them at once, and links them with ThinLTO — which
+carries cross-module inlining through its bitcode summaries and runs its
+own backend in parallel. On twelve cores, the compiler's clang step:
+
+| | one module, `-flto` | 12 parts, `-flto=thin` |
+|---|---:|---:|
+| clang step | 11.3 s | **2.0 s** |
+
+The whole module still reaches stdout, so `myprogram.ll` is byte for
+byte what it always was; the parts are written beside it and removed
+after the link.
+
+**The trade.** ThinLTO imports across a module boundary, but not
+unconditionally, so a caller separated from a callee it wanted inlined
+stays separated. The split-built compiler retires **3.4% more
+instructions** than the single-module one (3.242e9 vs 3.135e9 under
+`perf stat`, self-compile). A 5.6× cheaper build for 3.4% of the
+program's speed — worth it while you iterate, not worth it for what you
+ship. The drivers follow that rule rather than a global default:
+
+- **`nurl.sh` splits your program**, because you rebuild it constantly.
+- **`build.sh` splits the throwaway stage-1 compiler**, but links the
+  stage-2 one it installs as `build/nurlc` as a single module.
+
+Controls:
+
+| | |
+|---|---|
+| `NURL_SPLIT=0` | never split — the old behaviour exactly. Use it for a release build. |
+| `NURL_SPLIT=N` | at most `N` parts (default: one per core, capped at 16). |
+| `NURL_SPLIT_MIN=BYTES` | smallest a part may be (default 131072). |
+
+`N` is a *ceiling*: `nurlc` splits only as far as it can keep every part
+above the floor, so a program under ~256 KB of IR is never split at all.
+That floor is not about build time — cutting a small module up makes it
+*slower*. `bench/sort_window.nu` (10 KB of IR) runs 20–42% slower split
+at any part count, and `bench/hash_join.nu` (27 KB) 23% slower at twelve,
+while the compiler's 3.2 MB is unaffected at every count tried.
+
+Splitting is off for `--emit-ir`, `--emit-asm`, `-O0`, `NURL_SAN=1`, and
+`--debug` / `--coverage` — `nurlc` refuses `--split` together with `--g`,
+because DWARF is a per-module metadata graph that a function's `!dbg`
+attachments point into, and partitioning would strand them.
+
+The partition itself is a text-level pass over the finished IR, on the
+same footing as dead-function elimination above: a function goes to one
+part, everything a part does not define it declares, `private` globals
+follow the functions that name them, module-level globals are defined in
+part 0 and declared `external` in the rest. A reference that lands in
+the wrong part is an unparseable module or an undefined symbol — loud,
+never a silently wrong binary — and `compiler/tests/split_equivalence.sh`
+rebuilds a structurally varied corpus both ways on every `./build.sh` to
+prove the programs match.
+
+Windows (`nurl.bat`) links a single module and is unaffected.
+
 ## Debugging with `gdb` / `lldb` (DWARF)
 
 NURL emits DWARF debug info, so a NURL binary drives under `gdb` / `lldb`

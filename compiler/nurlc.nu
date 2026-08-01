@@ -21276,6 +21276,15 @@
 // link against, so the pass leaves it alone. `--no-dce` disables it.
 
 : ~ i g_dce 1  // 0 after --no-dce
+// Partitioned emission — see "Partitioned emission" below.
+: ~ i g_split_n 0  // parts requested; 0 = one module on stdout
+: ~ i g_split_max 0  // --split=N, the CEILING on the part count
+: ~ i g_split_min 131072  // --split-min=, the floor on a part's size
+: ~ s g_split_out ``  // --split-out= path prefix
+: ~ i g_split_part 0  // i64[n]: which part each function went to
+: ~ i g_split_fill 0  // i64[parts]: bytes assigned to each part so far
+: ~ i g_split_priv 0  // symtab: private global name → the part that owns it
+: ~ i g_split_fh 0  // FILE* of the part being written, as an integer
 // The module text, as an integer cast of a BORROWED `s`. Deliberately
 // not a `: ~ s` global: a mutable string global owns its buffer, and
 // this one is owned by dce_emit_module's caller.
@@ -21415,12 +21424,34 @@
 
 // Emit the collected module: everything that is not a function body,
 // plus the functions `main` can reach, in the order they were emitted.
+// How many parts this module actually gets. `--split=N` is a CEILING,
+// not an instruction: a part has to stay big enough that partitioning
+// does not cost more than it saves. Cutting a small module up is not
+// free — ThinLTO imports across the parts, but not unconditionally, and
+// a hot loop separated from the callee it needs inlined stays separated.
+// Measured: `bench/sort_window.nu` (10 KB of IR) runs 20-42% SLOWER split
+// at ANY part count, and `bench/hash_join.nu` (27 KB) 23% slower at 12,
+// while the compiler's own 3.2 MB is unaffected at every count tried.
+// The floor is what keeps the first two out and lets the third in; below
+// it the one-module path is also the FASTER build, because N clang
+// processes cost more to start than they save.
+@ __sp_parts i mlen → i {
+    ? == 0 g_split_max { ^ 0 } {}
+    : i want / mlen g_split_min
+    : ~ i n g_split_max
+    ? < want n { = n want } {}
+    ? < n 2 { ^ 0 } {}
+    ^ n
+}
+
 @ dce_emit_module s mod → v {
     : i mlen ( strlen mod )
     = g_dce_mod # i mod
-    ? == 0 g_dce { ( __dce_print_range 0 mlen ) ^ v } {}
+    = g_split_n 0
+    // Neither pass wants the index — hand the module straight to stdout.
+    ? & == 0 g_dce == 0 g_split_max { ( __dce_print_range 0 mlen ) ^ v } {}
     : i n ( __dce_index mlen 1 )
-    ? == 0 n { ( __dce_print_range 0 mlen ) ^ v } {}
+    ? == 0 n { ( __sp_whole mlen ) ^ v } {}
     = g_dce_start # i # s ( nurl_zalloc * n 8 )
     = g_dce_end # i # s ( nurl_zalloc * n 8 )
     = g_dce_live # i # s ( nurl_zalloc * n 8 )
@@ -21431,26 +21462,32 @@
     // No `main` — this is a module compiled to be linked into something
     // else, and every function in it is potentially an entry point.
     : s mainent ( nurl_sym_get g_dce_map `main` )
-    ? == 0 ( nurl_str_len mainent )
-    { ( __dce_print_range 0 mlen ) ( dce_free ) ^ v }
-    {}
-    ( __dce_mark_name `main` )
-    // Roots from module scope: the gaps between function bodies hold the
-    // globals, and a dyn vtable constant names its thunks there.
-    : ~ i gap 0
-    : ~ i gi 0
-    ~ < gi n {
-        ( __dce_scan gap ( nurl_peek # s g_dce_start gi ) )
-        = gap ( nurl_peek # s g_dce_end gi )
-        = gi + gi 1
-    }
-    ( __dce_scan gap mlen )
-    // Transitive closure over the worklist.
-    : ~ i qh 0
-    ~ < qh g_dce_qn {
-        : i fi ( nurl_peek # s g_dce_queue qh )
-        ( __dce_scan ( nurl_peek # s g_dce_start fi ) ( nurl_peek # s g_dce_end fi ) )
-        = qh + qh 1
+    // `--no-dce` and a `main`-less module both mean "keep everything".
+    // The split still needs the index, so mark every function live
+    // rather than skipping the pass.
+    : i sweep ? & != 0 g_dce != 0 ( nurl_str_len mainent ) 1 0
+    ? == 0 sweep {
+        : ~ i li 0
+        ~ < li n { ( nurl_poke # s g_dce_live li 1 ) = li + li 1 }
+    } {
+        ( __dce_mark_name `main` )
+        // Roots from module scope: the gaps between function bodies hold the
+        // globals, and a dyn vtable constant names its thunks there.
+        : ~ i gap 0
+        : ~ i gi 0
+        ~ < gi n {
+            ( __dce_scan gap ( nurl_peek # s g_dce_start gi ) )
+            = gap ( nurl_peek # s g_dce_end gi )
+            = gi + gi 1
+        }
+        ( __dce_scan gap mlen )
+        // Transitive closure over the worklist.
+        : ~ i qh 0
+        ~ < qh g_dce_qn {
+            : i fi ( nurl_peek # s g_dce_queue qh )
+            ( __dce_scan ( nurl_peek # s g_dce_start fi ) ( nurl_peek # s g_dce_end fi ) )
+            = qh + qh 1
+        }
     }
     // Emit the live sub-sequence.
     : ~ i pos 0
@@ -21464,6 +21501,11 @@
         = ei + ei 1
     }
     ( __dce_print_range pos mlen )
+    // `--split` is ADDITIVE: stdout still carries the whole module, so
+    // the `.ll` artifact and everything that reads it — `--emit-ir`,
+    // nurl.sh's FFI-symbol greps that decide which libraries to link —
+    // are unchanged, and one nurlc run produces both.
+    ? != 0 g_split_max { ( split_emit_module n mlen ) } {}
     ( dce_free )
 }
 
@@ -21483,6 +21525,456 @@
     = g_dce_map 0
 }
 
+// ── Partitioned emission (--split) ──────────────────────────────────
+//
+// The clang step, not nurlc, is what a NURL build waits on. Emitting
+// the compiler's own 3.2 MB of IR takes 0.46 s; lowering it takes
+// 11.3 s. Nearly all of that is ONE single-threaded LLVM -O2 pipeline
+// over ONE module — InstCombine alone is 31% of it — so a build machine
+// with twelve idle cores finishes no sooner than one with two, and no
+// driver flag changes that: `-flto` with `-plugin-opt=jobs=12`
+// parallelises only the codegen tail and still measures 11.1 s.
+//
+// `--split=N` cuts the finished module into N independent ones, which
+// the driver compiles with N concurrent clangs and links with ThinLTO —
+// whose summaries carry cross-module inlining across the parts, and
+// whose backend is parallel too. Measured on the compiler's own 3.2 MB
+// of IR, twelve parts on twelve cores:
+//
+//     clang step   11.3 s → 2.0 s   (5.6×)
+//
+// It is NOT free. ThinLTO imports across a module boundary, but not
+// unconditionally, so a caller separated from a callee it wanted
+// inlined stays separated: the split-built compiler retires 3.4% more
+// instructions than the one full LTO produced (3.242e9 vs 3.135e9,
+// `perf stat`, self-compile). That is the whole trade — a 5.6× cheaper
+// build for 3.4% of the program's speed — and it is why the drivers
+// apply it where a binary is rebuilt constantly and not where one is
+// shipped: nurl.sh splits your program, build.sh splits the throwaway
+// stage-1 compiler but links the stage-2 one it installs as a single
+// module. `NURL_SPLIT=0` turns it off for a release build.
+//
+// The partition is a pure function of the finished IR text, computed
+// over `@name` references exactly the way the dead-function pass above
+// computes reachability — it knows nothing about what emitted any
+// given function, so monomorphs, closures, drop glue and dyn thunks
+// need no special casing. It runs ON the DCE index, so it partitions
+// the functions that survived and no others.
+//
+// What goes where:
+//
+//   * A function body goes to exactly one part, and the parts are
+//     CONTIGUOUS runs of the emission order rather than a balanced
+//     interleaving — see the comment on the assignment loop for why
+//     the better-balanced version produces a slower program.
+//   * A `private` global — every string literal is one — goes to each
+//     part whose functions name it. Duplicating one is always sound
+//     (`private` is module-local by definition); in practice it never
+//     happens, because emit_str_globals flushes a function's literals
+//     immediately after that function, so each has exactly one user.
+//     One named from module scope (the backing constant of a mutable
+//     string global) goes into every part; the copies no part reads
+//     are deleted before they reach an object file.
+//   * A module-level global is DEFINED in part 0 and DECLARED
+//     `external` everywhere else.
+//   * `linkonce_odr` definitions (nurl_peek / nurl_poke) are
+//     REPLICATED, not declared: ODR linkage is precisely the licence to
+//     do that, and `declare linkonce_odr` is not legal IR.
+//   * Everything else at module scope — `declare`s, `%T = type` defs,
+//     comments, blank lines — is idempotent and goes verbatim into
+//     every part.
+//   * Every function a part does not define, it declares.
+//
+// The failure mode is the one the DCE pass already relies on: a
+// reference that lands in the wrong part is an undefined symbol or an
+// unparseable module — loud, never a silently wrong binary.
+//
+// Two values are stored out-of-range as sentinels. In g_split_part:
+// `g_split_n` means the DCE pass dropped this function, `g_split_n + 1`
+// means replicate it into every part. In g_split_priv: `g_split_n`
+// means every part, `g_split_n + 1` means no part has claimed it yet.
+
+// Write module bytes [from, to) to the part being built.
+@ __sp_write i from i to → v {
+    ? >= from to { ^ v } {}
+    : *u mp # *u # s g_dce_mod
+    : i _ ( fwrite # s + # i mp from 1 - to from # s g_split_fh )
+}
+
+// Write a literal to the part being built.
+@ __sp_puts s t → v { : i32 _ ( fputs t # s g_split_fh ) }
+
+// Index of the newline ending the line that starts at `p`, or `lim`.
+@ __sp_line_end i p i lim → i {
+    : *u mp # *u # s g_dce_mod
+    : ~ i q p
+    ~ & < q lim != & # i . mp q 255 10 { = q + q 1 }
+    ^ q
+}
+
+// Byte just past the `@name` whose `@` is at `p`.
+@ __sp_ident_end i p i lim → i {
+    : *u mp # *u # s g_dce_mod
+    : ~ i q + p 1
+    ~ & < q lim ( __dce_ident_byte & # i . mp q 255 ) { = q + q 1 }
+    ^ q
+}
+
+// Look the `@name` at `p` up in `tab`, or `dflt` if it is not there.
+// Uses the NUL-swap __dce_record_name uses, so no name is copied out of
+// the module, and returns an integer so no borrowed table pointer
+// escapes into the caller's ownership.
+@ __sp_lookup i tab i p i lim i dflt → i {
+    : i q ( __sp_ident_end p lim )
+    ? == q + p 1 { ^ dflt } {}
+    : *u mp # *u # s g_dce_mod
+    : u sv . mp q
+    = . mp q # u 0
+    : s ent ( nurl_sym_get tab # s + # i mp + p 1 )
+    : ~ i r dflt
+    ? != 0 ( nurl_str_len ent ) { = r ( nurl_str_to_int ent ) } {}
+    = . mp q sv
+    ^ r
+}
+
+// Bind the `@name` at `p` to `val` in `tab`.
+@ __sp_set i tab i p i lim s val → v {
+    : i q ( __sp_ident_end p lim )
+    ? == q + p 1 { ^ v } {}
+    : *u mp # *u # s g_dce_mod
+    : u sv . mp q
+    = . mp q # u 0
+    ( nurl_sym_def tab # s + # i mp + p 1 val )
+    = . mp q sv
+}
+
+// Is the global defined on [p, le) `private`? Only the linkage word
+// right after `@name = ` is examined, so a string literal that happens
+// to spell " = private " in its payload cannot be mistaken for one.
+@ __sp_is_private i p i le → b {
+    : i q ( __sp_ident_end p le )
+    ? > + q 11 le { ^ F } {}
+    : *u mp # *u # s g_dce_mod
+    ^ ? != 0 ( nurl_str_starts # s + # i mp q ` = private ` ) T F
+}
+
+// Byte just past the word at `t`.
+@ __sp_word_end i t i lim → i {
+    : *u mp # *u # s g_dce_mod
+    : ~ i q t
+    ~ & < q lim & != & # i . mp q 255 32 != & # i . mp q 255 10 { = q + q 1 }
+    ^ q
+}
+
+// Is the word [t, w) exactly `txt`?
+@ __sp_word_eq i t i w s txt → b {
+    ? != - w t ( nurl_str_len txt ) { ^ F } {}
+    : *u mp # *u # s g_dce_mod
+    ^ ? != 0 ( nurl_str_starts # s + # i mp t txt ) T F
+}
+
+// Byte just past the LLVM type starting at `p`. Types nest with
+// [ { < ( — a closure pair is `{ %Ret (i8*, %Arg)*, i8* }` — and carry
+// any number of trailing `*`s.
+@ __sp_type_end i p i lim → i {
+    : *u mp # *u # s g_dce_mod
+    : ~ i q p
+    : ~ i depth 0
+    : ~ i go 1
+    ~ & != 0 go < q lim {
+        : i c & # i . mp q 255
+        ? | | | == c 91 == c 123 == c 60 == c 40 { = depth + depth 1 = q + q 1 } {
+            ? | | | == c 93 == c 125 == c 62 == c 41 {
+                = depth - depth 1 = q + q 1
+                ? == depth 0 { = go 0 } {} } {
+                ? & == depth 0 | == c 32 == c 10 { = go 0 } { = q + q 1 } } }
+    }
+    ~ & < q lim == & # i . mp q 255 42 { = q + q 1 }
+    ^ q
+}
+
+// Write the `external` declaration of the module-level global defined
+// on [p, le): its name, its `global`/`constant` kind, its type, and
+// none of its initializer.
+@ __sp_extern i p i le → v {
+    : i q ( __sp_ident_end p le )
+    ( __sp_write p q )
+    ( __sp_puts ` = external ` )
+    : ~ i t + q 3  // past " = "
+    : ~ i kind 0  // 1 once the `constant` keyword was seen
+    : ~ i go 1
+    ~ & != 0 go < t le {
+        : i w ( __sp_word_end t le )
+        ? ( __sp_word_eq t w `global` ) { = go 0 } {
+            ? ( __sp_word_eq t w `constant` ) { = kind 1 = go 0 } {} }
+        = t + w 1
+    }
+    ( __sp_puts ? == kind 1 `constant ` `global ` )
+    ( __sp_write t ( __sp_type_end t le ) )
+    ( __sp_puts `\n` )
+}
+
+// Attribute every `@name` in [from, to) that names a private global to
+// `part`. A global two parts both name is promoted to "every part".
+@ __sp_scan_refs i from i to i part → v {
+    : *u mp # *u # s g_dce_mod
+    : i none + g_split_n 1
+    : i absent + g_split_n 2
+    : ~ i p from
+    ~ < p to {
+        ? != & # i . mp p 255 64 { = p + p 1 } {
+            : i q ( __sp_ident_end p to )
+            ? == q + p 1 { = p q } {
+                : i cur ( __sp_lookup g_split_priv p to absent )
+                ? & & != cur absent != cur part != cur g_split_n {
+                    ( __sp_set g_split_priv p to
+                    ( nurl_str_int ? == cur none part g_split_n ) )
+                } {}
+                = p q
+            }
+        }
+    }
+}
+
+// Module-scope references, line by line. A global's own definition line
+// opens with the name being DEFINED, not a reference to it — scanning
+// that would mark every string literal as belonging to every part.
+@ __sp_scan_modscope i from i to → v {
+    : *u mp # *u # s g_dce_mod
+    : ~ i p from
+    ~ < p to {
+        : i le ( __sp_line_end p to )
+        : ~ i st p
+        ? == & # i . mp p 255 64 { = st ( __sp_ident_end p le ) } {}
+        ( __sp_scan_refs st le g_split_n )
+        = p ? < le to + le 1 to
+    }
+}
+
+// Register every private global defined in [from, to) as unclaimed.
+@ __sp_register_privs i from i to → v {
+    : *u mp # *u # s g_dce_mod
+    : ~ i p from
+    ~ < p to {
+        : i le ( __sp_line_end p to )
+        ? & == & # i . mp p 255 64 ( __sp_is_private p le )
+        { ( __sp_set g_split_priv p le ( nurl_str_int + g_split_n 1 ) ) } {}
+        = p ? < le to + le 1 to
+    }
+}
+
+// One parameter of a `define` line: its type, with the ` %name` that
+// follows it dropped. The type may itself end in `%Struct`, so only a
+// `%` that a space precedes can be starting the parameter's name.
+@ __sp_param i a i b i first → v {
+    : *u mp # *u # s g_dce_mod
+    : ~ i s0 a
+    ~ & < s0 b == & # i . mp s0 255 32 { = s0 + s0 1 }
+    : ~ i e0 b
+    ~ & > e0 s0 == & # i . mp - e0 1 255 32 { = e0 - e0 1 }
+    : ~ i j e0
+    ~ & > j s0 ( __dce_ident_byte & # i . mp - j 1 255 ) { = j - j 1 }
+    ? & > - j 1 s0 == & # i . mp - j 1 255 37
+    { ? == & # i . mp - j 2 255 32 { = e0 - j 2 } {} } {}
+    ? == 0 first { ( __sp_puts `, ` ) } {}
+    ( __sp_write s0 e0 )
+}
+
+// `define <ret> @name(<params>) [attrs] {`
+//     → `declare <ret> @name(<param types>)`
+@ __sp_declare i st i en → v {
+    : *u mp # *u # s g_dce_mod
+    : i le ( __sp_line_end st en )
+    ( __sp_puts `declare` )
+    // The return type and the name, through the `(` that opens the
+    // parameter list. The `(` cannot be found by scanning for the first
+    // one: a function RETURNING a closure has parentheses in its return
+    // type (`define { %Resp (i8*, %Req)*, i8* } @router_get_handler(…)`).
+    // The name is what the first `@` on the line starts — a return type
+    // never contains one, which is the same fact __dce_record_name
+    // leans on — so the parameter list opens right after it.
+    : ~ i at + st 6
+    ~ & < at le != & # i . mp at 255 64 { = at + at 1 }
+    : i q ( __sp_ident_end at le )
+    ( __sp_write + st 6 + q 1 )
+    : ~ i a + q 1
+    : ~ i depth 0
+    : ~ i p a
+    : ~ i first 1
+    ~ < p le {
+        : i c & # i . mp p 255
+        ? | | == c 91 == c 123 == c 40 { = depth + depth 1 = p + p 1 } {
+            ? & == depth 0 == c 41 {
+                ? > p a { ( __sp_param a p first ) = first 0 } {}
+                = p le
+            } {
+                ? | | == c 93 == c 125 == c 41 { = depth - depth 1 = p + p 1 } {
+                    ? & == depth 0 == c 44 {
+                        ( __sp_param a p first ) = first 0 = a + p 1 = p + p 1
+                    } { = p + p 1 } } } }
+    }
+    ( __sp_puts `)\n` )
+}
+
+// One global definition line, for the part currently being written.
+@ __sp_emit_global i p i le i nx i k → v {
+    ? ( __sp_is_private p le ) {
+        : i own ( __sp_lookup g_split_priv p le + g_split_n 1 )
+        ? | | == own g_split_n == own k & == own + g_split_n 1 == k 0
+        { ( __sp_write p nx ) } {}
+        ^ v
+    } {}
+    ? == k 0 { ( __sp_write p nx ) } { ( __sp_extern p le ) }
+}
+
+// Module-scope text between two function bodies.
+@ __sp_emit_gap i from i to i k → v {
+    : *u mp # *u # s g_dce_mod
+    : ~ i p from
+    ~ < p to {
+        : i le ( __sp_line_end p to )
+        : i nx ? < le to + le 1 to
+        ? == & # i . mp p 255 64 { ( __sp_emit_global p le nx k ) } { ( __sp_write p nx ) }
+        = p nx
+    }
+}
+
+// Open <prefix>.<k>.ll as the part being written.
+@ __sp_open i k → v {
+    : s suffix ( nurl_str_cat3 `.` ( nurl_str_int k ) `.ll` )
+    : s nm ( nurl_str_cat g_split_out suffix )
+    : s fh # s ( fopen nm `wb` )
+    ? == 0 # i fh
+    { ( nurl_eprintln ( nurl_str_cat `nurlc: cannot write ` nm ) ) ( nurl_exit 1 ) }
+    {}
+    = g_split_fh # i fh
+}
+
+@ __sp_close → v {
+    : i32 _ ( fclose # s g_split_fh )
+    = g_split_fh 0
+}
+
+// A module with no function bodies at all: nothing to partition, so
+// part 0 is the whole of it and the rest are empty modules.
+@ __sp_whole i mlen → v {
+    ( __dce_print_range 0 mlen )
+    = g_split_n ( __sp_parts mlen )
+    ? == 0 g_split_n { ^ v } {}
+    : ~ i k 0
+    ~ < k g_split_n {
+        ( __sp_open k )
+        ? == k 0 { ( __sp_write 0 mlen ) } {}
+        ( __sp_close )
+        = k + k 1
+    }
+}
+
+// Partition the indexed module across g_split_n files.
+@ split_emit_module i n i mlen → v {
+    : *u mp # *u # s g_dce_mod
+    // Size the partition against what will actually reach an object
+    // file. The buffer still holds every function the compile emitted;
+    // the ones the pass above marked dead are about to be dropped, and
+    // on a stdlib-heavy program that is most of it.
+    : ~ i live mlen
+    : ~ i li 0
+    ~ < li n {
+        ? == 0 ( nurl_peek # s g_dce_live li )
+        { = live - live - ( nurl_peek # s g_dce_end li ) ( nurl_peek # s g_dce_start li ) }
+        {}
+        = li + li 1
+    }
+    = g_split_n ( __sp_parts live )
+    ? == 0 g_split_n { ^ v } {}
+    = g_split_part # i # s ( nurl_zalloc * n 8 )
+    = g_split_fill # i # s ( nurl_zalloc * g_split_n 8 )
+    = g_split_priv ( nurl_sym_new )
+    // Cut the function sequence into g_split_n CONTIGUOUS runs of about
+    // `live / g_split_n` bytes each — not round-robin, and not
+    // smallest-bin-first. Both of those balance better and produce a
+    // slower program: emission order is call-graph order (a module's
+    // functions are emitted together, a generic's monomorphs right
+    // after the call that needed them), so interleaving parts scatters
+    // every caller away from its callee and leaves ThinLTO to import
+    // back across a boundary that did not have to exist. Contiguous
+    // runs are what a hand-written multi-file project looks like.
+    : i target ? > / live g_split_n 1 / live g_split_n 1
+    : ~ i cur 0  // part being filled
+    : ~ i acc 0  // bytes in it so far
+    : ~ i fi 0
+    ~ < fi n {
+        : i st ( nurl_peek # s g_dce_start fi )
+        : i en ( nurl_peek # s g_dce_end fi )
+        ? == 0 ( nurl_peek # s g_dce_live fi )
+        { ( nurl_poke # s g_split_part fi g_split_n ) }
+        { ? != 0 ( nurl_str_starts # s + # i mp st `define linkonce_odr ` )
+            { ( nurl_poke # s g_split_part fi + g_split_n 1 ) }
+            { ? & >= acc target < cur - g_split_n 1 { = cur + cur 1 = acc 0 } {}
+                ( nurl_poke # s g_split_part fi cur )
+                = acc + acc - en st
+                ( nurl_poke # s g_split_fill cur + ( nurl_peek # s g_split_fill cur ) - en st )
+            } }
+        = fi + fi 1
+    }
+    // Register every private global, then attribute it to the parts
+    // that name it — module scope first, so a constant a global's own
+    // initializer reaches is pinned to every part before any single
+    // function can claim it.
+    : ~ i gap 0
+    : ~ i gi 0
+    ~ < gi n {
+        ( __sp_register_privs gap ( nurl_peek # s g_dce_start gi ) )
+        = gap ( nurl_peek # s g_dce_end gi )
+        = gi + gi 1
+    }
+    ( __sp_register_privs gap mlen )
+    = gap 0
+    = gi 0
+    ~ < gi n {
+        ( __sp_scan_modscope gap ( nurl_peek # s g_dce_start gi ) )
+        = gap ( nurl_peek # s g_dce_end gi )
+        = gi + gi 1
+    }
+    ( __sp_scan_modscope gap mlen )
+    : ~ i si 0
+    ~ < si n {
+        : i pk ( nurl_peek # s g_split_part si )
+        ? < pk g_split_n
+        { ( __sp_scan_refs ( nurl_peek # s g_dce_start si )
+            ( nurl_peek # s g_dce_end si ) pk ) }
+        {}
+        = si + si 1
+    }
+    // Write the parts.
+    : ~ i k 0
+    ~ < k g_split_n {
+        ( __sp_open k )
+        : ~ i pos 0
+        : ~ i ei 0
+        ~ < ei n {
+            : i st ( nurl_peek # s g_dce_start ei )
+            : i en ( nurl_peek # s g_dce_end ei )
+            ( __sp_emit_gap pos st k )
+            : i pk ( nurl_peek # s g_split_part ei )
+            ? | == pk k == pk + g_split_n 1
+            { ( __sp_write st en ) }
+            { ? != pk g_split_n { ( __sp_declare st en ) } {} }
+            = pos en
+            = ei + ei 1
+        }
+        ( __sp_emit_gap pos mlen k )
+        ( __sp_close )
+        = k + k 1
+    }
+    ( nurl_free # s g_split_part )
+    ( nurl_free # s g_split_fill )
+    ( nurl_sym_free g_split_priv )
+    = g_split_part 0
+    = g_split_fill 0
+    = g_split_priv 0
+}
+
 // ── Entry point ────────────────────────────────────────────────────
 
 @ nurlc_print_help → v {
@@ -21497,6 +21989,12 @@
     ( nurl_print `  --strict-borrowck   run the borrow-checker in strict mode\n` )
     ( nurl_print `  --no-dce            emit unreachable functions too (on by default)\n` )
     ( nurl_print `  --ffi-host-imports  emit FFI calls as wasm host imports\n` )
+    ( nurl_print `  --split=N           ALSO write the module as up to N independent ones,\n` )
+    ( nurl_print `                      so N clang processes can lower them at once (stdout\n` )
+    ( nurl_print `                      still carries the whole module either way)\n` )
+    ( nurl_print `  --split-out=PREFIX  where they go: PREFIX.0.ll … PREFIX.<N-1>.ll\n` )
+    ( nurl_print `  --split-min=BYTES   smallest a part may be (default 131072). A module\n` )
+    ( nurl_print `                      too small to fill two of them is not split at all.\n` )
     ( nurl_print `\nThe LLVM IR goes to stdout; link it with clang against\n` )
     ( nurl_print `stdlib/runtime.native.o (see docs/BUILDING.md). For a one-step\n` )
     ( nurl_print `source-to-binary build use ./nurl.sh <file.nu> [output].\n` )
@@ -21532,11 +22030,34 @@
                                     { = g_ffi_host_imports 1 }
                                     { ? ( seq a `--no-dce` )
                                         { = g_dce 0 }
-                                        { = path a } } } } } } } } }
+                                        { ? != 0 ( nurl_str_starts a `--split=` )
+                                            { = g_split_max ( nurl_str_to_int ( nurl_str_slice a 8 - ( nurl_str_len a ) 8 ) ) }
+                                            { ? != 0 ( nurl_str_starts a `--split-out=` )
+                                                { = g_split_out ( nurl_str_slice a 12 - ( nurl_str_len a ) 12 ) }
+                                                { ? != 0 ( nurl_str_starts a `--split-min=` )
+                                                    { = g_split_min ( nurl_str_to_int ( nurl_str_slice a 12 - ( nurl_str_len a ) 12 ) ) }
+                                                    { = path a } } } } } } } } } } } }
         = ai + ai 1
     }
     ? == 0 ( nurl_str_len path )
-    { ( nurl_eprintln `usage: nurlc [--version] [--g] [--lint] [--no-borrowck | --strict-borrowck] [--ffi-host-imports] [--no-dce] <file.nu>` ) ( nurl_exit 1 ) }
+    { ( nurl_eprintln `usage: nurlc [--version] [--g] [--lint] [--no-borrowck | --strict-borrowck] [--ffi-host-imports] [--no-dce] [--split=N --split-out=PREFIX] <file.nu>` ) ( nurl_exit 1 ) }
+    {}
+    // --split writes files, so it needs somewhere to write them. Cap it
+    // at 64: past the core count the parts only get smaller, and each
+    // one still costs a process and a set of cross-part declarations.
+    ? < g_split_max 2 { = g_split_max 0 } {}
+    ? > g_split_max 64 { = g_split_max 64 } {}
+    ? < g_split_min 1 { = g_split_min 1 } {}
+    ? & != 0 g_split_max == 0 ( nurl_str_len g_split_out )
+    { ( nurl_eprintln `nurlc: --split=N needs --split-out=PREFIX` ) ( nurl_exit 1 ) }
+    {}
+    // DWARF is a per-module graph of `!` metadata that a function's
+    // `!dbg` attachments point into. Partitioning would strand those
+    // attachments in modules whose functions are only declared, so the
+    // two modes are exclusive — and a debug build has no use for the
+    // speed anyway (nurl.sh already drops LTO for one).
+    ? & != 0 g_split_max != 0 g_dbg_enabled
+    { ( nurl_eprintln `nurlc: --split cannot be combined with --g (DWARF metadata is per-module)` ) ( nurl_exit 1 ) }
     {}
     ? != g_lint 0 { ( lint_init path ) } {}
     : s src ( nurl_read_file path )

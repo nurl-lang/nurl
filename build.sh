@@ -368,10 +368,12 @@ if (( REFRESH_BOOTSTRAP == 1 )); then
     log "[refresh] commit BOTH compiler/nurlc_lastgood.nu + .ll together"
 fi
 
-step "clean"         rm -f build/nurlc_lastgood.bin \
+step "clean"         bash -c 'rm -f build/nurlc_lastgood.bin \
                           build/nurlc_self.ll build/nurlc_self \
                           build/nurlc_self2.ll build/nurlc_self2 \
-                          build/nurlc
+                          build/nurlc_self.[0-9]*.ll build/nurlc_self.[0-9]*.o \
+                          build/nurlc_self2.[0-9]*.ll build/nurlc_self2.[0-9]*.o \
+                          build/nurlc'
 
 # Stage 0: link the committed snapshot IR. No Python anywhere —
 # the .ll was produced by a previous nurlc run and lives in the
@@ -385,13 +387,78 @@ step "clean"         rm -f build/nurlc_lastgood.bin \
 DL_LIB=""
 case "$(uname -s)" in Linux) DL_LIB="-ldl" ;; esac
 
+# ── Parallel stage links ─────────────────────────────────────
+# Lowering nurlc's own 3.2 MB of IR is ~11 s of single-threaded LLVM,
+# and the bootstrap pays it three times. `nurlc --split=N` writes the
+# same module as N independent ones (stdout still carries the whole
+# thing, so the .ll the fixed-point check compares is unchanged), which
+# lets N clangs run at once and ThinLTO put the cross-module inlining
+# back. Sanitized builds keep the one-module path: LTO is already off
+# there. Stage 0 always does, too — it links the committed snapshot,
+# which is one file by definition.
+SPLIT_N=0
+if [ -z "$SAN_LDFLAGS" ]; then
+    SPLIT_N="$(nproc 2>/dev/null || getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)"
+    (( SPLIT_N > 16 )) && SPLIT_N=16
+    (( SPLIT_N < 2 )) && SPLIT_N=0
+fi
+
+# Does this compiler know how to partition a module? The snapshot that
+# builds stage 0 predates the flag whenever the bootstrap is refreshed
+# behind a change to it, so ask rather than assume.
+split_capable() { [ "$SPLIT_N" -gt 0 ] && "$1" --help 2>/dev/null | grep -q -- '--split='; }
+
+# Emit stage IR, partitioned when the compiler can do it.
+stage_ir() {  # stage_ir <compiler> <ir-prefix>
+    rm -f "$2".[0-9]*.ll "$2".[0-9]*.o
+    if split_capable "$1"; then
+        "$1" "--split=$SPLIT_N" "--split-out=$2" compiler/nurlc.nu > "$2.ll"
+    else
+        "$1" compiler/nurlc.nu > "$2.ll"
+    fi
+}
+
+# Link stage IR: the parts in parallel if there are any, else the one
+# module. `-flto=thin` replaces `-flto` for the split path — runtime.o
+# is bitcode and still needs an LTO link either way.
+link_stage() {  # link_stage <ir-prefix> <out>
+    local pre="$1" out="$2" objs="" pids="" rc=0 p
+    if compgen -G "$pre.[0-9]*.ll" > /dev/null; then
+        for p in "$pre".[0-9]*.ll; do
+            objs="$objs ${p%.ll}.o"
+            "$CLANG" -O2 -flto=thin -Wno-override-module -c "$p" -o "${p%.ll}.o" &
+            pids="$pids $!"
+        done
+        for p in $pids; do wait "$p" || rc=1; done
+        (( rc == 0 )) || return 1
+        # shellcheck disable=SC2086
+        "$CLANG" -O2 -flto=thin -Wno-override-module -Wl,--as-needed $objs stdlib/runtime.o \
+            -lm -lpthread $DL_LIB $CURL_LIBS $OPENSSL_LIBS $SQLITE3_LIBS $ZLIB_LIBS $ZSTD_LIBS \
+            -o "$out" || return 1
+        # shellcheck disable=SC2086
+        rm -f $objs "$pre".[0-9]*.ll
+    else
+        # shellcheck disable=SC2086
+        "$CLANG" -O2 $LTO_FLAG $SAN_LDFLAGS -Wl,--as-needed "$pre.ll" stdlib/runtime.o \
+            -lm -lpthread $DL_LIB $CURL_LIBS $OPENSSL_LIBS $SQLITE3_LIBS $ZLIB_LIBS $ZSTD_LIBS \
+            -o "$out" || return 1
+    fi
+}
+
 step "stage0 link"   "$CLANG" -O2 $LTO_FLAG $SAN_LDFLAGS -Wl,--as-needed compiler/nurlc_lastgood.ll stdlib/runtime.o -lm -lpthread $DL_LIB $CURL_LIBS $OPENSSL_LIBS $SQLITE3_LIBS $ZLIB_LIBS $ZSTD_LIBS -o build/nurlc_lastgood.bin
 
-step "stage1 ir"     bash -c './build/nurlc_lastgood.bin compiler/nurlc.nu > build/nurlc_self.ll'
-step "stage1 link"   "$CLANG" -O2 $LTO_FLAG $SAN_LDFLAGS -Wl,--as-needed build/nurlc_self.ll stdlib/runtime.o -lm -lpthread $DL_LIB $CURL_LIBS $OPENSSL_LIBS $SQLITE3_LIBS $ZLIB_LIBS $ZSTD_LIBS -o build/nurlc_self
+# Stage 1 is a throwaway: its only job is to emit stage 2's IR, and it
+# is rebuilt on every single build. Split it.
+step "stage1 ir"     stage_ir ./build/nurlc_lastgood.bin build/nurlc_self
+step "stage1 link"   link_stage build/nurlc_self build/nurlc_self
 
+# Stage 2 is NOT. It is copied to build/nurlc and is the compiler this
+# tree ships and benchmarks, and partitioning costs a measured 3.4% of
+# retired instructions (see "Partitioned emission" in compiler/nurlc.nu).
+# The rule is the same one nurl.sh applies to your program, pointed the
+# other way: split what you rebuild constantly, not what you ship once.
 step "stage2 ir"     bash -c './build/nurlc_self compiler/nurlc.nu > build/nurlc_self2.ll'
-step "stage2 link"   "$CLANG" -O2 $LTO_FLAG $SAN_LDFLAGS -Wl,--as-needed build/nurlc_self2.ll stdlib/runtime.o -lm -lpthread $DL_LIB $CURL_LIBS $OPENSSL_LIBS $SQLITE3_LIBS $ZLIB_LIBS $ZSTD_LIBS -o build/nurlc_self2
+step "stage2 link"   link_stage build/nurlc_self2 build/nurlc_self2
 
 # Fixed-point: nurlc_self must match nurlc_self2.
 if ! cmp -s build/nurlc_self.ll build/nurlc_self2.ll; then
@@ -404,6 +471,19 @@ fi
 
 cp build/nurlc_self2 build/nurlc
 ln -sf build/nurlc nurlc 2>/dev/null || cp build/nurlc nurlc
+
+# ── Partitioned emission ─────────────────────────────────────
+# The stage links above already ran through `nurlc --split`, so a
+# partition that does not parse or link has failed the build by now —
+# that much holds even under --no-tests. What it does NOT cover is the
+# partition being wrong in a way the linker accepts, so this rebuilds a
+# structurally varied corpus both ways and compares the programs. It is
+# a test (it rebuilds a corpus and costs ~7 s), so it goes with the
+# tests: the Docker image asks for --no-tests precisely because CI runs
+# them elsewhere, and this is one of them.
+if (( RUN_TESTS == 1 )); then
+    step "split equivalence" bash compiler/tests/split_equivalence.sh
+fi
 
 # ── nurlfmt ──────────────────────────────────────────────────
 # Build the canonical source formatter on top of the freshly-
