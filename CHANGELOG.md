@@ -104,6 +104,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **A P-256 scalar multiply allocates 44 000 times instead of 164 000 —
+  22% off the handshake's instruction count.** With the accessor calls
+  gone (below), what was left in front of the arithmetic was the
+  allocator: `vec_with_cap` is *two* allocations — a 24-byte control
+  block and the data buffer — so a Montgomery multiply that built the
+  modulus, the CIOS accumulator, the difference and its result made
+  eight of them, and one complete point addition performs about thirty
+  field operations.
+
+  The modulus and the two temporaries now live in a `P256Scratch` built
+  once per scalar multiply and threaded down through the point layer,
+  so only each operation's *result* is allocated. The public field API
+  (`p256ct_mul` / `_add` / `_sub` / `_inv` / `_to_mont` / `_from_mont`)
+  is unchanged — each is a wrapper that makes a scratch, calls the
+  scratch-taking sibling and frees it. A scratch is never shared between
+  scalar multiplies, so there is no state to race over, and no
+  arithmetic changed: the same limbs are written in the same order.
+
+  | `p256_ecdh_keygen` | before | after |
+  |---|---:|---:|
+  | allocations | 163 986 | **44 124** |
+  | time | 6.2 ms | **4.7 ms** |
+  | handshake, instructions retired | 437.4 M | **341.0 M** |
+
+  (Instructions rather than wall clock for the handshake: the loopback
+  harness has a Python peer in the loop and cannot resolve 20% — the
+  count is reproducible to four significant figures, the wall clock is
+  not.)
+
 - **A TLS handshake costs 10.5 ms of arithmetic instead of 57.4 —
   5.5×.** The ClientHello carries a key share for *both* groups, so every
   connection runs an X25519 and a P-256 keygen — and then a third scalar
