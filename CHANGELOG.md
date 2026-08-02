@@ -104,6 +104,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Ed25519 signing is 2× faster — 735 → 360 µs — and makes 208
+  allocations instead of 18568.** Two changes, both of them ones
+  `std/p256_field` already had.
+
+  *The addition stopped allocating.* One twisted-Edwards addition needs
+  nine field temporaries, and `__ed_add` allocated and freed all nine on
+  every call — 512 calls per scalar multiply, so about nine thousand
+  allocations per multiply, a quarter of the run time spent in the
+  allocator for a routine whose work is nine field multiplies. They come
+  from an `EdScratch` built once per scalar multiply now. **735 → 501 µs.**
+
+  *The ladder consumes the scalar a nibble at a time.* The bit-at-a-time
+  ladder paid two complete additions per scalar bit. A fixed 4-bit window
+  pays four doublings and one addition per nibble, reading `digit·Q` from
+  a sixteen-entry table that costs fourteen additions to build: **334
+  point additions instead of 512**, and **501 → 360 µs**.
+
+  The digit is secret, so the table is never indexed by it —
+  `__ed_tbl_get_d` reads all sixteen entries every window and merges each
+  under an arithmetic equality mask. One difference from the P-256
+  version worth noting: gf limbs here are **signed**, so the mask is a
+  full 64-bit −1 rather than `0xffffffff`, which would clip a negative
+  limb's sign extension. Digit 0 reads the identity, which the complete
+  addition formula absorbs.
+
+  | | before | after |
+  |---|---:|---:|
+  | `ed25519_sign_pure` | 735 µs | **360 µs** |
+  | point additions per scalar multiply | 512 | **334** |
+  | allocations per signature | 18568 | **208** |
+
+  Verification benefits the same way — it runs two scalar multiplies.
+  This is the signature `std/minisign` verifies packages with, and the
+  one behind Ed25519 certificates in `std/x509` and EdDSA in `ext/jwt`.
+
+  Constant time is unchanged: a fixed `2·len(scalar bytes)` windows
+  regardless of the scalar, no branch on secret data, no secret-dependent
+  address. RFC 8032 vectors pass.
+
 - **SHA-256 is 2× faster (112 → 222 MB/s) and SHA-512 2.05×
   (170 → 349 MB/s), because the hash cores stopped going through
   bounds-checked Vec accessors.** One SHA-256 block made about 380 of

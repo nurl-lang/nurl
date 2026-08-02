@@ -105,10 +105,36 @@ $ `stdlib/std/hash_sha512.nu`
 // ── point operations (TweetNaCl) ───────────────────────────────────
 
 // p ← p + q  (extended coords; d2 = 2·d).
-@ __ed_add EdPt p EdPt q ( Vec i ) d2 → v {
-    : ( Vec i ) a ( _gf_zero ) : ( Vec i ) b ( _gf_zero ) : ( Vec i ) c ( _gf_zero )
-    : ( Vec i ) d ( _gf_zero ) : ( Vec i ) e ( _gf_zero ) : ( Vec i ) f ( _gf_zero )
-    : ( Vec i ) g ( _gf_zero ) : ( Vec i ) h ( _gf_zero ) : ( Vec i ) tt ( _gf_zero )
+// The nine field temporaries one Edwards addition needs, held for a whole
+// scalar multiply instead of being allocated and freed inside each one.
+// The ladder performs 512 additions, so allocating nine gf per addition
+// cost ~9000 allocations per scalar multiply — a quarter of the run time,
+// in the allocator, for a routine that does nine field multiplies.
+: EdScratch {
+    ( Vec i ) a ( Vec i ) b ( Vec i ) c ( Vec i ) d ( Vec i ) e
+    ( Vec i ) f ( Vec i ) g ( Vec i ) h ( Vec i ) tt
+}
+
+@ __ed_scr_new → EdScratch {
+    ^ @ EdScratch {
+        ( _gf_zero ) ( _gf_zero ) ( _gf_zero ) ( _gf_zero ) ( _gf_zero )
+        ( _gf_zero ) ( _gf_zero ) ( _gf_zero ) ( _gf_zero )
+    }
+}
+
+@ __ed_scr_free EdScratch s → v {
+    ( vec_free [i] . s a ) ( vec_free [i] . s b ) ( vec_free [i] . s c )
+    ( vec_free [i] . s d ) ( vec_free [i] . s e ) ( vec_free [i] . s f )
+    ( vec_free [i] . s g ) ( vec_free [i] . s h ) ( vec_free [i] . s tt )
+}
+
+// p ← p + q, twisted-Edwards extended coordinates. `p` may be `q` (the
+// ladder doubles that way): every operand is read into the scratch before
+// any of p's coordinates is written.
+@ __ed_add EdScratch sc EdPt p EdPt q ( Vec i ) d2 → v {
+    : ( Vec i ) a . sc a : ( Vec i ) b . sc b : ( Vec i ) c . sc c
+    : ( Vec i ) d . sc d : ( Vec i ) e . sc e : ( Vec i ) f . sc f
+    : ( Vec i ) g . sc g : ( Vec i ) h . sc h : ( Vec i ) tt . sc tt
     ( _Z a . p y . p x )
     ( _Z tt . q y . q x )
     ( _M a a tt )
@@ -127,33 +153,124 @@ $ `stdlib/std/hash_sha512.nu`
     ( _M . p y h g )
     ( _M . p z g f )
     ( _M . p t e h )
-    ( vec_free [i] a ) ( vec_free [i] b ) ( vec_free [i] c ) ( vec_free [i] d )
-    ( vec_free [i] e ) ( vec_free [i] f ) ( vec_free [i] g ) ( vec_free [i] h ) ( vec_free [i] tt )
 }
 
-@ __ed_cswap EdPt p EdPt q i b → v {
-    ( _sel25519 . p x . q x b )
-    ( _sel25519 . p y . q y b )
-    ( _sel25519 . p z . q z b )
-    ( _sel25519 . p t . q t b )
+// ── the window table ──────────────────────────────────────────────
+// Sixteen multiples of the input point, 0·Q … 15·Q, in one flat limb
+// vector: entry d occupies [d·40, d·40+40) as x‖y‖z‖t, ten limbs each.
+
+@ __ed_tbl_put ( Vec i ) tbl i d EdPt q → v {
+    : *i tb ( vec_data [i] tbl )
+    : *i qx ( vec_data [i] . q x )
+    : *i qy ( vec_data [i] . q y )
+    : *i qz ( vec_data [i] . q z )
+    : *i qt ( vec_data [i] . q t )
+    : i base * d 40
+    : ~ i k 0
+    ~ < k 10 {
+        = . tb + base k . qx k
+        = . tb + + base 10 k . qy k
+        = . tb + + base 20 k . qz k
+        = . tb + + base 30 k . qt k
+        = k + k 1
+    }
 }
 
-// p ← s · q  (s is a 32-byte little-endian scalar). p is set to identity first.
+// Read entry `digit` into `dst`. `digit` is four bits of the SECRET
+// scalar, so the table is never indexed by it: all sixteen entries are
+// read, every window, and merged under a mask that is all-ones exactly
+// when d == digit. The mask is arithmetic rather than a comparison —
+// `d ^ digit` is zero only on a match, and subtracting one from zero
+// borrows into the top bit, which nothing else can set for a 4-bit
+// value. Note the mask is a FULL 64-bit −1: gf limbs are signed, so a
+// negative limb has its high bits set and a 32-bit mask would clip it.
+@ __ed_tbl_get_d EdPt dst ( Vec i ) tbl i digit → v {
+    : *i tb ( vec_data [i] tbl )
+    : *i dx ( vec_data [i] . dst x )
+    : *i dy ( vec_data [i] . dst y )
+    : *i dz ( vec_data [i] . dst z )
+    : *i dt ( vec_data [i] . dst t )
+    : ~ i k 0
+    ~ < k 10 { = . dx k 0 = . dy k 0 = . dz k 0 = . dt k 0 = k + k 1 }
+    : ~ i d 0
+    ~ < d 16 {
+        : u64 z ^^ # u64 d # u64 digit
+        : i mask - 0 # i >> - z 1 63
+        : i base * d 40
+        : ~ i j 0
+        ~ < j 10 {
+            = . dx j | . dx j & mask . tb + base j
+            = . dy j | . dy j & mask . tb + + base 10 j
+            = . dz j | . dz j & mask . tb + + base 20 j
+            = . dt j | . dt j & mask . tb + + base 30 j
+            = j + j 1
+        }
+        = d + d 1
+    }
+}
+
+// p ← s · q  (s is a little-endian scalar). p is set to the identity
+// first.
+//
+// FIXED 4-BIT WINDOW over the same complete Edwards addition. The scalar
+// is consumed a nibble at a time, most significant first: four doublings
+// shift the accumulator up by sixteen, then one addition brings in
+// digit·Q read out of the window table. That is 4·64 + 64 + 14 = 334
+// point additions for a 32-byte scalar, where the bit-at-a-time ladder
+// it replaces needed 512.
+//
+// Constant time on the same terms as the ladder it replaces: the step
+// count is fixed at 2·len(scalar bytes) windows, the digit selects by
+// mask and never by address, and digit 0 reads the identity, which the
+// complete addition formula absorbs. `w` and the nibble position are
+// public loop counters.
 @ __ed_scalarmult EdPt p EdPt q ( Vec u ) s ( Vec i ) d2 → v {
-    // identity: (0, 1, 1, 0)
+    : EdScratch sc ( __ed_scr_new )
+    : ( Vec i ) tbl ( _zeros_i 640 )
+    : EdPt cur ( __ed_pt )
+    : EdPt sel ( __ed_pt )
+    // T[0] = identity (0, 1, 1, 0); T[1] = Q; T[d] = T[d-1] + Q.
+    ( _vset . cur y 0 1 )
+    ( _vset . cur z 0 1 )
+    ( __ed_tbl_put tbl 0 cur )
+    ( __ed_tbl_put tbl 1 q )
+    ( __ed_pt_copy cur q )
+    : ~ i d 2
+    ~ < d 16 {
+        ( __ed_add sc cur q d2 )
+        ( __ed_tbl_put tbl d cur )
+        = d + d 1
+    }
+    // p ← identity
     : ~ i z 0
     ~ < z 10 { ( _vset . p x z 0 ) ( _vset . p y z 0 ) ( _vset . p z z 0 ) ( _vset . p t z 0 ) = z + z 1 }
     ( _vset . p y 0 1 )
     ( _vset . p z 0 1 )
-    : ~ i i 255
-    ~ >= i 0 {
-        : i bit & >> ( _x_bget s / i 8 ) & i 7 1
-        ( __ed_cswap p q bit )
-        ( __ed_add q p d2 )
-        ( __ed_add p p d2 )
-        ( __ed_cswap p q bit )
-        = i - i 1
+    : i nwin * ( vec_len [u] s ) 2
+    : ~ i w 0
+    ~ < w nwin {
+        ( __ed_add sc p p d2 )
+        ( __ed_add sc p p d2 )
+        ( __ed_add sc p p d2 )
+        ( __ed_add sc p p d2 )
+        // nibble n counts from the bottom of the little-endian scalar.
+        : i n - - nwin 1 w
+        : i bv ( _x_bget s >> n 1 )
+        : i digit ? == & n 1 1 & 15 >> bv 4 & 15 bv
+        ( __ed_tbl_get_d sel tbl digit )
+        ( __ed_add sc p sel d2 )
+        = w + w 1
     }
+    ( __ed_pt_free cur ) ( __ed_pt_free sel )
+    ( vec_free [i] tbl )
+    ( __ed_scr_free sc )
+}
+
+@ __ed_pt_copy EdPt dst EdPt src → v {
+    ( _gf_into . dst x . src x )
+    ( _gf_into . dst y . src y )
+    ( _gf_into . dst z . src z )
+    ( _gf_into . dst t . src t )
 }
 
 // p ← s · B  (B the Ed25519 base point).
@@ -411,7 +528,9 @@ $ `stdlib/std/hash_sha512.nu`
     // p = k·(−A) + S·B ; valid iff pack(p) == R
     : EdPt p ( __ed_pt ) ( __ed_scalarmult p negA kscalar d2 )
     : EdPt q ( __ed_pt ) ( __ed_scalarbase q cap_S d2 )
-    ( __ed_add p q d2 )
+    : EdScratch vsc ( __ed_scr_new )
+    ( __ed_add vsc p q d2 )
+    ( __ed_scr_free vsc )
     : ( Vec u ) tcheck ( __ed_pack p )
     : ~ i diff 0
     : ~ i kk 0
