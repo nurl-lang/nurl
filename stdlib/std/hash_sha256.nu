@@ -28,112 +28,82 @@ $ `stdlib/std/bytes.nu`
 // ── 64-entry round-constant table per FIPS 180-4 §4.2.2 ────────────
 
 @ __sha256_K → ( Vec u32 ) {
+    // Filled by index through a raw `*u32`: this table is rebuilt on every
+    // `sha256_init`, and TLS's key schedule runs one of those per HMAC leg,
+    // so sixty-four capacity-checked pushes are sixty-four too many.
     : ( Vec u32 ) k ( vec_with_cap [u32] 64 )
-    ( vec_push [u32] k # u32 1116352408 )
-    ( vec_push [u32] k # u32 1899447441 )
-    ( vec_push [u32] k # u32 3049323471 )
-    ( vec_push [u32] k # u32 3921009573 )
-    ( vec_push [u32] k # u32 961987163 )
-    ( vec_push [u32] k # u32 1508970993 )
-    ( vec_push [u32] k # u32 2453635748 )
-    ( vec_push [u32] k # u32 2870763221 )
-    ( vec_push [u32] k # u32 3624381080 )
-    ( vec_push [u32] k # u32 310598401 )
-    ( vec_push [u32] k # u32 607225278 )
-    ( vec_push [u32] k # u32 1426881987 )
-    ( vec_push [u32] k # u32 1925078388 )
-    ( vec_push [u32] k # u32 2162078206 )
-    ( vec_push [u32] k # u32 2614888103 )
-    ( vec_push [u32] k # u32 3248222580 )
-    ( vec_push [u32] k # u32 3835390401 )
-    ( vec_push [u32] k # u32 4022224774 )
-    ( vec_push [u32] k # u32 264347078 )
-    ( vec_push [u32] k # u32 604807628 )
-    ( vec_push [u32] k # u32 770255983 )
-    ( vec_push [u32] k # u32 1249150122 )
-    ( vec_push [u32] k # u32 1555081692 )
-    ( vec_push [u32] k # u32 1996064986 )
-    ( vec_push [u32] k # u32 2554220882 )
-    ( vec_push [u32] k # u32 2821834349 )
-    ( vec_push [u32] k # u32 2952996808 )
-    ( vec_push [u32] k # u32 3210313671 )
-    ( vec_push [u32] k # u32 3336571891 )
-    ( vec_push [u32] k # u32 3584528711 )
-    ( vec_push [u32] k # u32 113926993 )
-    ( vec_push [u32] k # u32 338241895 )
-    ( vec_push [u32] k # u32 666307205 )
-    ( vec_push [u32] k # u32 773529912 )
-    ( vec_push [u32] k # u32 1294757372 )
-    ( vec_push [u32] k # u32 1396182291 )
-    ( vec_push [u32] k # u32 1695183700 )
-    ( vec_push [u32] k # u32 1986661051 )
-    ( vec_push [u32] k # u32 2177026350 )
-    ( vec_push [u32] k # u32 2456956037 )
-    ( vec_push [u32] k # u32 2730485921 )
-    ( vec_push [u32] k # u32 2820302411 )
-    ( vec_push [u32] k # u32 3259730800 )
-    ( vec_push [u32] k # u32 3345764771 )
-    ( vec_push [u32] k # u32 3516065817 )
-    ( vec_push [u32] k # u32 3600352804 )
-    ( vec_push [u32] k # u32 4094571909 )
-    ( vec_push [u32] k # u32 275423344 )
-    ( vec_push [u32] k # u32 430227734 )
-    ( vec_push [u32] k # u32 506948616 )
-    ( vec_push [u32] k # u32 659060556 )
-    ( vec_push [u32] k # u32 883997877 )
-    ( vec_push [u32] k # u32 958139571 )
-    ( vec_push [u32] k # u32 1322822218 )
-    ( vec_push [u32] k # u32 1537002063 )
-    ( vec_push [u32] k # u32 1747873779 )
-    ( vec_push [u32] k # u32 1955562222 )
-    ( vec_push [u32] k # u32 2024104815 )
-    ( vec_push [u32] k # u32 2227730452 )
-    ( vec_push [u32] k # u32 2361852424 )
-    ( vec_push [u32] k # u32 2428436474 )
-    ( vec_push [u32] k # u32 2756734187 )
-    ( vec_push [u32] k # u32 3204031479 )
-    ( vec_push [u32] k # u32 3329325298 )
+    : b _l ( vec_set_len [u32] k 64 )
+    : *u32 kp ( vec_data [u32] k )
+    = . kp 0 # u32 1116352408 = . kp 1 # u32 1899447441 = . kp 2 # u32 3049323471 = . kp 3 # u32 3921009573
+    = . kp 4 # u32 961987163 = . kp 5 # u32 1508970993 = . kp 6 # u32 2453635748 = . kp 7 # u32 2870763221
+    = . kp 8 # u32 3624381080 = . kp 9 # u32 310598401 = . kp 10 # u32 607225278 = . kp 11 # u32 1426881987
+    = . kp 12 # u32 1925078388 = . kp 13 # u32 2162078206 = . kp 14 # u32 2614888103 = . kp 15 # u32 3248222580
+    = . kp 16 # u32 3835390401 = . kp 17 # u32 4022224774 = . kp 18 # u32 264347078 = . kp 19 # u32 604807628
+    = . kp 20 # u32 770255983 = . kp 21 # u32 1249150122 = . kp 22 # u32 1555081692 = . kp 23 # u32 1996064986
+    = . kp 24 # u32 2554220882 = . kp 25 # u32 2821834349 = . kp 26 # u32 2952996808 = . kp 27 # u32 3210313671
+    = . kp 28 # u32 3336571891 = . kp 29 # u32 3584528711 = . kp 30 # u32 113926993 = . kp 31 # u32 338241895
+    = . kp 32 # u32 666307205 = . kp 33 # u32 773529912 = . kp 34 # u32 1294757372 = . kp 35 # u32 1396182291
+    = . kp 36 # u32 1695183700 = . kp 37 # u32 1986661051 = . kp 38 # u32 2177026350 = . kp 39 # u32 2456956037
+    = . kp 40 # u32 2730485921 = . kp 41 # u32 2820302411 = . kp 42 # u32 3259730800 = . kp 43 # u32 3345764771
+    = . kp 44 # u32 3516065817 = . kp 45 # u32 3600352804 = . kp 46 # u32 4094571909 = . kp 47 # u32 275423344
+    = . kp 48 # u32 430227734 = . kp 49 # u32 506948616 = . kp 50 # u32 659060556 = . kp 51 # u32 883997877
+    = . kp 52 # u32 958139571 = . kp 53 # u32 1322822218 = . kp 54 # u32 1537002063 = . kp 55 # u32 1747873779
+    = . kp 56 # u32 1955562222 = . kp 57 # u32 2024104815 = . kp 58 # u32 2227730452 = . kp 59 # u32 2361852424
+    = . kp 60 # u32 2428436474 = . kp 61 # u32 2756734187 = . kp 62 # u32 3204031479 = . kp 63 # u32 3329325298
     ^ k
 }
 
 // ── Transform one 64-byte block. Mutates state (8 × u32) in place.
+//
+// Every limb here goes through a raw `*u32` / `*u` rather than the
+// bounds-checked Vec accessors. One block used to make about 380 of those
+// calls — 64 pushes to build the message schedule, 192 gets to expand it,
+// and 128 more to read K and the schedule back in the round loop — for a
+// compression function whose actual work is 64 rounds of ALU. The indices
+// are all fixed-count and provably in range, so the checks were pure
+// overhead; they showed up as 12% of a TLS handshake.
+//
+// The schedule `m` is the caller's 64-word scratch, allocated once per
+// hash instead of once per block.
 
-@ __sha256_transform ( Vec u32 ) state ( Vec u ) block i offset ( Vec u32 ) K → v {
-    : ( Vec u32 ) m ( vec_with_cap [u32] 64 )
+@ __sha256_be32 * u p i o → u32 {
+    ^ | | | << # u32 . p o # u32 24 << # u32 . p + o 1 # u32 16
+    << # u32 . p + o 2 # u32 8 # u32 . p + o 3
+}
+
+@ __sha256_transform ( Vec u32 ) state ( Vec u ) block i offset ( Vec u32 ) K ( Vec u32 ) m → v {
+    : *u32 mp ( vec_data [u32] m )
+    : *u32 kp ( vec_data [u32] K )
+    : *u32 sp ( vec_data [u32] state )
+    : *u bp ( vec_data [u] block )
     : ~ i wi 0
     ~ < wi 16 {
-        : ?u32 wo ( bytes_read_u32_be block + offset * wi 4 )
-        : u32 wv ?? wo { T x → x F → # u32 0 }
-        ( vec_push [u32] m wv )
+        = . mp wi ( __sha256_be32 bp + offset * wi 4 )
         = wi + wi 1
     }
     ~ < wi 64 {
-        : u32 m15 ( __sha256_vu32 m - wi 15 )
-        : u32 m2 ( __sha256_vu32 m - wi 2 )
-        : u32 m7 ( __sha256_vu32 m - wi 7 )
-        : u32 m16 ( __sha256_vu32 m - wi 16 )
+        : u32 m15 . mp - wi 15
+        : u32 m2 . mp - wi 2
         : u32 s0 ^^ ^^ ( __sha256_rotr m15 7 ) ( __sha256_rotr m15 18 ) >> m15 # u32 3
         : u32 s1 ^^ ^^ ( __sha256_rotr m2 17 ) ( __sha256_rotr m2 19 ) >> m2 # u32 10
-        ( vec_push [u32] m + + + m16 s0 m7 s1 )
+        = . mp wi + + + . mp - wi 16 s0 . mp - wi 7 s1
         = wi + wi 1
     }
 
-    : ~ u32 a ( __sha256_vu32 state 0 )
-    : ~ u32 b ( __sha256_vu32 state 1 )
-    : ~ u32 c ( __sha256_vu32 state 2 )
-    : ~ u32 d ( __sha256_vu32 state 3 )
-    : ~ u32 e ( __sha256_vu32 state 4 )
-    : ~ u32 f ( __sha256_vu32 state 5 )
-    : ~ u32 g ( __sha256_vu32 state 6 )
-    : ~ u32 h ( __sha256_vu32 state 7 )
+    : ~ u32 a . sp 0
+    : ~ u32 b . sp 1
+    : ~ u32 c . sp 2
+    : ~ u32 d . sp 3
+    : ~ u32 e . sp 4
+    : ~ u32 f . sp 5
+    : ~ u32 g . sp 6
+    : ~ u32 h . sp 7
 
     : ~ i ri 0
     ~ < ri 64 {
         : u32 S1 ^^ ^^ ( __sha256_rotr e 6 ) ( __sha256_rotr e 11 ) ( __sha256_rotr e 25 )
         : u32 ch ^^ & e f & ~ e g
-        : u32 ki ( __sha256_vu32 K ri )
-        : u32 mi ( __sha256_vu32 m ri )
-        : u32 t1 + + + + h S1 ch ki mi
+        : u32 t1 + + + + h S1 ch . kp ri . mp ri
         : u32 S0 ^^ ^^ ( __sha256_rotr a 2 ) ( __sha256_rotr a 13 ) ( __sha256_rotr a 22 )
         : u32 mj ^^ ^^ & a b & a c & b c
         : u32 t2 + S0 mj
@@ -148,24 +118,14 @@ $ `stdlib/std/bytes.nu`
         = ri + ri 1
     }
 
-    : u32 s0 ( __sha256_vu32 state 0 )
-    : u32 s1 ( __sha256_vu32 state 1 )
-    : u32 s2 ( __sha256_vu32 state 2 )
-    : u32 s3 ( __sha256_vu32 state 3 )
-    : u32 s4 ( __sha256_vu32 state 4 )
-    : u32 s5 ( __sha256_vu32 state 5 )
-    : u32 s6 ( __sha256_vu32 state 6 )
-    : u32 s7 ( __sha256_vu32 state 7 )
-    : b _0 ( vec_set [u32] state 0 + s0 a )
-    : b _1 ( vec_set [u32] state 1 + s1 b )
-    : b _2 ( vec_set [u32] state 2 + s2 c )
-    : b _3 ( vec_set [u32] state 3 + s3 d )
-    : b _4 ( vec_set [u32] state 4 + s4 e )
-    : b _5 ( vec_set [u32] state 5 + s5 f )
-    : b _6 ( vec_set [u32] state 6 + s6 g )
-    : b _7 ( vec_set [u32] state 7 + s7 h )
-
-    ( vec_free [u32] m )
+    = . sp 0 + . sp 0 a
+    = . sp 1 + . sp 1 b
+    = . sp 2 + . sp 2 c
+    = . sp 3 + . sp 3 d
+    = . sp 4 + . sp 4 e
+    = . sp 5 + . sp 5 f
+    = . sp 6 + . sp 6 g
+    = . sp 7 + . sp 7 h
 }
 
 // ── Public entry — bytes-in, 32-byte digest out.
@@ -187,6 +147,7 @@ $ `stdlib/std/bytes.nu`
     ( Vec u ) buf
     i total
     ( Vec u32 ) k
+    ( Vec u32 ) m
 }
 
 @ sha256_init → *Sha256 {
@@ -204,6 +165,9 @@ $ `stdlib/std/bytes.nu`
     = . h buf ( vec_new [u] )
     = . h total 0
     = . h k ( __sha256_K )
+    : ( Vec u32 ) sched ( vec_with_cap [u32] 64 )
+    : b _m ( vec_set_len [u32] sched 64 )
+    = . h m sched
     ^ h
 }
 
@@ -220,13 +184,13 @@ $ `stdlib/std/bytes.nu`
         ( bytes_extend_raw . h buf # s ( vec_data [u] data ) take )
         = off take
         ? == ( vec_len [u] . h buf ) 64 {
-            ( __sha256_transform . h state . h buf 0 . h k )
+            ( __sha256_transform . h state . h buf 0 . h k . h m )
             ( vec_clear [u] . h buf )
         } {}
     } {}
     // full blocks straight from the caller's data — no copy
     ~ <= + off 64 n {
-        ( __sha256_transform . h state data off . h k )
+        ( __sha256_transform . h state data off . h k . h m )
         = off + off 64
     }
     // stash the tail
@@ -260,7 +224,7 @@ $ `stdlib/std/bytes.nu`
     : i tail_len ( vec_len [u] tail )
     : ~ i toff 0
     ~ < toff tail_len {
-        ( __sha256_transform . h state tail toff . h k )
+        ( __sha256_transform . h state tail toff . h k . h m )
         = toff + toff 64
     }
 
@@ -278,6 +242,7 @@ $ `stdlib/std/bytes.nu`
     ( vec_free [u] tail )
     ( vec_free [u32] . h state )
     ( vec_free [u32] . h k )
+    ( vec_free [u32] . h m )
     ( nurl_free # s h )
     ^ out
 }

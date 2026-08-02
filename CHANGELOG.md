@@ -104,6 +104,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **SHA-256 is 2× faster (112 → 222 MB/s) and SHA-512 2.05×
+  (170 → 349 MB/s), because the hash cores stopped going through
+  bounds-checked Vec accessors.** One SHA-256 block made about 380 of
+  them — 64 pushes to build the message schedule, 192 gets to expand it,
+  128 more to read the round constants and the schedule back in the round
+  loop — plus one allocation for the schedule itself, all for a
+  compression function whose real work is 64 rounds of ALU. Every index
+  is fixed-count and provably in range, so every check was overhead. It
+  showed up as **12% of a TLS handshake** in `vec_push`/`vec_get` alone.
+
+  The schedule now lives in a scratch owned by the hash (allocated once
+  instead of once per block) and every limb — state, schedule, round
+  constants, and the block's own bytes — is reached through a raw `*u32`
+  / `*u64`. The round-constant tables are filled by index too: they are
+  rebuilt on every `sha256_init`, and TLS's key schedule runs one of
+  those per HMAC leg.
+
+  | | before | after |
+  |---|---:|---:|
+  | SHA-256 | 112 MB/s | **222 MB/s** |
+  | SHA-512 | 170 MB/s | **349 MB/s** |
+  | HMAC-SHA-256, short input | 3.47 µs | **2.30 µs** |
+
+  This is the same change `std/p256_field` and `std/x25519` got, applied
+  to the hash every part of the stack leans on: the TLS 1.3 key schedule
+  and transcript, HMAC and HKDF, package hashing, the CAS Merkle tree,
+  JWT. Ed25519 signing is *unchanged* — SHA-512 is not where its time
+  goes (18568 allocations per signature are).
+
 - **X25519 is 4.3× faster — 0.58 → 0.135 ms, and 26 allocations instead
   of 6146 — because the 25519 field stopped being sixteen 16-bit limbs.**
   `std/x25519` carried TweetNaCl's `gf`: sixteen signed limbs of about
