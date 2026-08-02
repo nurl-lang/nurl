@@ -142,7 +142,7 @@ $ `stdlib/std/hash_sha512.nu`
 @ __ed_scalarmult EdPt p EdPt q ( Vec u ) s ( Vec i ) d2 → v {
     // identity: (0, 1, 1, 0)
     : ~ i z 0
-    ~ < z 16 { ( _vset . p x z 0 ) ( _vset . p y z 0 ) ( _vset . p z z 0 ) ( _vset . p t z 0 ) = z + z 1 }
+    ~ < z 10 { ( _vset . p x z 0 ) ( _vset . p y z 0 ) ( _vset . p z z 0 ) ( _vset . p t z 0 ) = z + z 1 }
     ( _vset . p y 0 1 )
     ( _vset . p z 0 1 )
     : ~ i i 255

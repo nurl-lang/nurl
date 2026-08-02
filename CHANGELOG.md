@@ -104,6 +104,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **X25519 is 4.3× faster — 0.58 → 0.135 ms, and 26 allocations instead
+  of 6146 — because the 25519 field stopped being sixteen 16-bit limbs.**
+  `std/x25519` carried TweetNaCl's `gf`: sixteen signed limbs of about
+  16 bits each. That shape needs **16×16 = 256 products** per field
+  multiply, and `_M` allocated a fresh 31-limb accumulator for every one
+  of the 1280 multiplies a scalar multiply performs.
+
+  A field element is now ten signed limbs at radix 2^25.5 — limb `i`
+  weighing `2^ceil(25.5·i)`, alternately 26 and 25 bits — which is the
+  classic 32-bit curve25519 layout. Ten limbs need **100 products**, and
+  a 26×26 → 52-bit product still leaves room to accumulate ten of them
+  times the folding factors inside a signed 64-bit limb. The multiply is
+  register-resident: it reads its operands into locals, computes the ten
+  output limbs and carries, allocating nothing.
+
+  The two coefficient shapes are folded into the *operands* rather than
+  the terms, so each of the hundred products is a single multiply: a
+  product of two odd-indexed limbs lands one bit low (because
+  `ceil(25.5j) + ceil(25.5k) = ceil(25.5(j+k)) + 1` when both are odd) and
+  is taken against a pre-doubled operand; a product that runs past limb 9
+  wraps by `2^255 ≡ 19` and is taken against a pre-nineteened one.
+
+  | | before | after |
+  |---|---:|---:|
+  | products per field multiply | 256 | **100** |
+  | `x25519_base` | 0.58 ms | **0.135 ms** |
+  | allocations per scalar multiply | 6146 | **26** |
+  | TLS 1.3 client handshake | ~4.2 ms | **~3.0 ms** |
+
+  **Ed25519 rides along** — `std/ed25519` builds on the same field, and
+  its constants are already decoded through `_unpack25519`, so they
+  re-encode themselves.
+
+  Constant time is unchanged: the ladder keeps its fixed iteration count
+  and its branchless conditional swap, and the new field has no branch on
+  data anywhere. Verified against RFC 7748 §5.2 and §6.1 and RFC 8032,
+  and the whole representation — multiply, carry chain, byte decode and
+  byte encode — was checked as a model first, including a full ladder
+  simulation that reproduces the RFC vectors and pins the worst-case
+  intermediate at 2^57 against a 2^63 ceiling.
+
 - **The P-256 ladder consumes the scalar a nibble at a time: 334 point
   additions instead of 512, a keygen 0.93 → 0.62 ms.** The bit-at-a-time
   always-add ladder paid two complete additions per scalar bit — one to
@@ -228,7 +269,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the stage that runs closest to CI's memory and time ceilings. `build.bat`
   gets the same treatment for the two throwaway stages (untested on
   Windows beyond the flag swap — the structure is identical).
-=======
+
 - **AES-GCM is bitsliced: 0.3 MB/s → 113 MB/s, a 334× record layer.**
   `std/aes_gcm.nu` computed the AES S-box algebraically, per byte, as
   `Affine(x²⁵⁴)` — constant-time, which is the whole point (a table
