@@ -6,6 +6,41 @@ are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **Every TLS server on FreeBSD failed its handshake, because `accept()`
+  inherits `O_NONBLOCK` there and does not on Linux.** `nurl_tcp_listen`
+  puts the listening socket in non-blocking mode — the accept-wakeup pipe
+  needs it — and POSIX leaves it *unspecified* whether `accept()` hands
+  that flag to the new socket. Linux does not; the BSDs do. So on FreeBSD
+  every accepted connection came back non-blocking.
+
+  `net.nu`'s `tcp_read_chunk` survived that (it loops on `EAGAIN`), which
+  is why plain TCP servers worked and the bug stayed hidden. But
+  `tls.nu`'s `__fill` deliberately issues **one raw blocking
+  `nurl_tcp_read`** — its comment explains why — so it got `EAGAIN`
+  instead of the ClientHello, and every pure-NURL TLS handshake died with
+  `TlsRead` before a single byte was parsed. Nothing to do with the
+  crypto: the same box passes every RFC and FIPS vector.
+
+  `nurl_tcp_accept` now clears `O_NONBLOCK` on the accepted socket, so
+  every platform behaves the way the net stack was written against. A
+  caller that wants non-blocking still asks for it through
+  `nurl_tcp_set_nonblock`.
+
+  Found by installing the toolchain on an OPNsense box and watching
+  `swarm-mcp`'s HTTPS control surface refuse every connection; reduced to
+  a 30-line reproducer (`x509_selfsigned_p256` → `tcp_listen_tls` →
+  `tcp_accept`). Not a regression — v0.30.0 fails identically.
+
+  **This had no test.** `compiler/tests/http_server_tls*.nu` are gated
+  behind `NURL_NET_TESTS=1` *and* use an openssl-generated RSA
+  certificate, so the pure server's EC P-256 path — the one `x509_gen`
+  produces and every NURL-native TLS server uses — was never exercised in
+  CI on any platform.
+
 ## [0.31.0] — 2026-08-02
 
 A cryptography release, plus the compiler change that made the rest of

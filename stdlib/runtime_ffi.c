@@ -1083,6 +1083,28 @@ long long nurl_tcp_accept(long long listener) {
         setsockopt(c->fd, IPPROTO_TCP, TCP_NODELAY,
                    (const char*)&one, (socklen_t)sizeof(one));
     }
+#ifndef _WIN32
+    /* Force the accepted socket BLOCKING, whatever the listener was.
+     *
+     * The listener is put in O_NONBLOCK above (the accept-wakeup pipe needs
+     * it), and POSIX leaves it *unspecified* whether accept() hands that
+     * flag to the new socket. Linux does not; the BSDs do. So on FreeBSD
+     * every accepted connection came back non-blocking, and any caller
+     * doing a plain blocking read got EAGAIN instead of data.
+     *
+     * net.nu's tcp_read_chunk survived that (it loops on EAGAIN), but
+     * tls.nu's __fill deliberately issues one raw nurl_tcp_read — see its
+     * comment — so the pure TLS server failed to read the ClientHello and
+     * every handshake died with TlsRead. Normalising here means every
+     * caller sees the Linux behaviour, which is what the whole net stack
+     * was written against. A caller that wants non-blocking still asks for
+     * it explicitly through nurl_tcp_set_nonblock. */
+    {
+        int fl = fcntl(c->fd, F_GETFL, 0);
+        if (fl >= 0 && (fl & O_NONBLOCK)) fcntl(c->fd, F_SETFL, fl & ~O_NONBLOCK);
+    }
+    c->nonblock = 0;
+#endif
     return (long long)(uintptr_t)c;
 }
 
