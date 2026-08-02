@@ -6,7 +6,33 @@ are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.31.0] — 2026-08-02
+
+A cryptography release, plus the compiler change that made the rest of
+the cycle bearable to iterate on. Every asymmetric primitive in the
+stack was rewritten around the same three findings, in this order: the
+representation was chosen for a machine that no longer exists, the hot
+loop allocated its own temporaries, and the ladder paid for bits it
+could have consumed in nibbles. A P-256 key generation went from 4.77 ms
+to 0.62 ms and from 44124 allocations to 100; X25519 from 0.58 ms to
+0.135 and from 6146 allocations to 26; Ed25519 signing from 735 µs to
+360; AES-GCM from 0.3 MB/s to 113; SHA-256 from 112 MB/s to 222. A TLS
+1.3 client handshake — which pays for a key share in *both* offered
+groups before one application byte moves — spent 57.4 ms in pure
+arithmetic when the cycle opened; the same client now completes a whole
+handshake against a stock TLS 1.3 server, network round trips and
+certificate verification included, in about **2 ms**.
+
+None of it changes what any of these primitives computes — every step is
+pinned to RFC or NIST vectors — and none of it weakens the constant-time
+properties: the ladders keep fixed step counts, the window tables are
+read in full and merged under arithmetic masks rather than indexed by a
+secret, and `docs/CRYPTO.md` records the argument primitive by primitive.
+
+On the compiler side, `nurlc --split=N` emits the module as N
+independent ones so clang can lower them at once, taking the compiler's
+own build from 12.0 s to 2.8 s, and the runtime now recycles small
+string allocations.
 
 ### Added
 
@@ -10311,7 +10337,9 @@ releases are measured.
   compile-server (`api/`), browser playground (`nurlweb/`).
 * Dual license: MIT (LICENSE-MIT) or Apache-2.0 (LICENSE-APACHE).
 
-[Unreleased]: https://github.com/nurl-lang/nurl/compare/v0.29.0...HEAD
+[Unreleased]: https://github.com/nurl-lang/nurl/compare/v0.31.0...HEAD
+[0.31.0]: https://github.com/nurl-lang/nurl/compare/v0.30.0...v0.31.0
+[0.30.0]: https://github.com/nurl-lang/nurl/compare/v0.29.0...v0.30.0
 [0.29.0]: https://github.com/nurl-lang/nurl/compare/v0.28.0...v0.29.0
 [0.28.0]: https://github.com/nurl-lang/nurl/compare/v0.27.0...v0.28.0
 [0.27.0]: https://github.com/nurl-lang/nurl/compare/v0.26.0...v0.27.0
