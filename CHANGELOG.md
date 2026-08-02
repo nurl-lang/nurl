@@ -6,7 +6,10 @@ are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.31.1] — 2026-08-03
+
+A one-fix patch release: TLS servers did not work on FreeBSD at all, and
+the reason was a socket flag, not the cryptography.
 
 ### Fixed
 
@@ -10372,7 +10375,8 @@ releases are measured.
   compile-server (`api/`), browser playground (`nurlweb/`).
 * Dual license: MIT (LICENSE-MIT) or Apache-2.0 (LICENSE-APACHE).
 
-[Unreleased]: https://github.com/nurl-lang/nurl/compare/v0.31.0...HEAD
+[Unreleased]: https://github.com/nurl-lang/nurl/compare/v0.31.1...HEAD
+[0.31.1]: https://github.com/nurl-lang/nurl/compare/v0.31.0...v0.31.1
 [0.31.0]: https://github.com/nurl-lang/nurl/compare/v0.30.0...v0.31.0
 [0.30.0]: https://github.com/nurl-lang/nurl/compare/v0.29.0...v0.30.0
 [0.29.0]: https://github.com/nurl-lang/nurl/compare/v0.28.0...v0.29.0
