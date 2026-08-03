@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.22.0
+
+**Dual-era MCP — the 2026-07-28 stateless revision, without dropping legacy
+clients.** The MCP spec's 2026-07-28 revision removed the `initialize`
+handshake in favor of per-request `_meta` and made `server/discover`
+mandatory. The `--mcp` endpoint now serves both eras:
+
+- **`server/discover`** answers with supported protocol versions (2026-07-28
+  down to 2024-11-05), capabilities, server identity, and LLM-facing
+  instructions pointing at `swarm_help`.
+- A request declaring an unsupported `_meta` protocolVersion gets the
+  spec-shaped **`UnsupportedProtocolVersionError` (−32022)** with
+  `data.supported`, so a modern client can retry on a mutual revision.
+- Results for modern requests carry `_meta` serverInfo; every result now
+  carries `resultType: "complete"` and `tools/list` the required
+  CacheableResult fields (`ttlMs`, `cacheScope`) — via the stdlib MCP
+  envelope layer.
+- `initialize` still works exactly as before for legacy clients, and now
+  **echoes the client's requested handshake-era revision** when supported
+  instead of always pinning the newest one.
+
+**The handshake no longer lies about the version.** `serverInfo.version` was a
+hand-written `0.20.0` while the package was at 0.21.1. The handshake,
+`server/discover`, and the `--version` banner now all read one `sm_version`
+source.
+
+Requires a toolchain whose stdlib ships the dual-era MCP layer (NURL >
+0.31.1).
+
 ## 0.21.1
 
 **`--version` prints the version instead of failing the role check.** `swarm-mcp

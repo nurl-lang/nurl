@@ -5279,12 +5279,17 @@ s combined_stdout s combined_stderr → v {
 
 // Initialize result with tools + resources + prompts capabilities.
 //
-// Pinned to MCP revision `2025-03-26` (FastMCP's default) for parity
-// with the Python reference server — most MCP clients negotiate that
-// version. The capability sub-fields advertise the FastMCP shape so
-// clients that key off `listChanged`/`subscribe` see the expected
-// surface even though we don't push change notifications today.
-@ __mcp_initialize → Json {
+// Legacy-handshake negotiation via `mcp_initialize_version_for`: the
+// client's requested revision is echoed when supported (a FastMCP-era
+// client asking for `2025-03-26` — the old pinned value — still sees
+// exactly that), newer handshake clients get theirs, and the modern
+// handshake-less revision is never advertised here. Modern
+// (2026-07-28) clients skip initialize entirely — they carry
+// per-request `_meta` and probe `server/discover` (below). The
+// capability sub-fields advertise the FastMCP shape so clients that
+// key off `listChanged`/`subscribe` see the expected surface even
+// though we don't push change notifications today.
+@ __mcp_initialize ? Json params → Json {
     : Json experimental_cap ( json_obj_new )
     : Json tools_cap ( json_obj_new )
     ( json_obj_set tools_cap `listChanged` ( json_bool F ) )
@@ -5310,12 +5315,55 @@ s combined_stdout s combined_stderr → v {
     : String instructions ( __mcp_instructions_text )
 
     : Json out ( json_obj_new )
-    ( json_obj_set out `protocolVersion` ( json_str_lit `2025-03-26` ) )
+    ( json_obj_set out `protocolVersion` ( json_str_lit ( mcp_initialize_version_for params ) ) )
     ( json_obj_set out `capabilities` caps )
     ( json_obj_set out `serverInfo` info )
     ( json_obj_set out `instructions` ( json_str_lit ( string_data instructions ) ) )
     ( string_free instructions )
     ^ out
+}
+
+// server/discover (2026-07-28, MUST): supported revisions + caps +
+// identity + the same LLM-facing instructions the initialize result
+// carries. Static output — mcp_discover_result stamps a long public
+// cache hint, which shared intermediaries in front of the playground
+// may cache.
+@ __mcp_discover → Json {
+    : Json caps ( json_obj_new )
+    ( json_obj_set caps `tools` ( json_obj_new ) )
+    ( json_obj_set caps `resources` ( json_obj_new ) )
+    ( json_obj_set caps `prompts` ( json_obj_new ) )
+    : String name ( get_mcp_server_name )
+    : String version ( get_mcp_server_version )
+    : String instructions ( __mcp_instructions_text )
+    : Json out ( mcp_discover_result
+    ( string_data name ) ( string_data version )
+    caps
+    ( string_data instructions ) )
+    ( string_free name )
+    ( string_free version )
+    ( string_free instructions )
+    ^ out
+}
+
+// Decorate an outgoing envelope for a MODERN (per-request `_meta`)
+// request: 2026-07-28 servers SHOULD identify themselves in each
+// result's `_meta`. No-op for error envelopes and legacy requests.
+@ __mcp_finish Json env b modern → ?Json {
+    ? modern {
+        : ?Json res ( json_obj_get env `result` )
+        ?? res {
+            T rv → {
+                : String n ( get_mcp_server_name )
+                : String v ( get_mcp_server_version )
+                ( mcp_result_set_server_info rv ( string_data n ) ( string_data v ) )
+                ( string_free n )
+                ( string_free v )
+            }
+            F _ → {}
+        }
+    } {}
+    ^ @ ?Json { T env }
 }
 
 // `dispatch` per mcp_http_handler contract: takes a single parsed
@@ -5337,22 +5385,42 @@ s combined_stdout s combined_stderr → v {
         ^ @ ?Json { F }
     } {}
 
-    // Method routing.
-    ? != 0 ( nurl_str_eq method `initialize` ) {
-        : Json result ( __mcp_initialize )
-        : Json env ( mcp_response_result id result )
+    // 2026-07-28 version gate: a request DECLARING an unsupported
+    // `_meta` protocolVersion gets the spec-shaped -32022 error (with
+    // data.supported); no declared version = legacy request.
+    : s req_ver ( mcp_request_protocol_version req )
+    : b modern > ( nurl_str_len req_ver ) 0
+    ? & modern ! ( mcp_version_supported req_ver ) {
+        : Json env ( mcp_unsupported_version_response id req_ver )
         ( json_free id )
         ^ @ ?Json { T env }
+    } {}
+
+    // Method routing.
+    ? != 0 ( nurl_str_eq method `server/discover` ) {
+        : Json env ( mcp_response_result id ( __mcp_discover ) )
+        ( json_free id )
+        ^ ( __mcp_finish env modern )
+    } {}
+    ? != 0 ( nurl_str_eq method `initialize` ) {
+        : Json result ( __mcp_initialize ( json_obj_get req `params` ) )
+        : Json env ( mcp_response_result id result )
+        ( json_free id )
+        ^ ( __mcp_finish env modern )
     } {}
     ? != 0 ( nurl_str_eq method `ping` ) {
         : Json env ( mcp_response_result id ( json_obj_new ) )
         ( json_free id )
-        ^ @ ?Json { T env }
+        ^ ( __mcp_finish env modern )
     } {}
     ? != 0 ( nurl_str_eq method `tools/list` ) {
-        : Json env ( mcp_response_result id ( __mcp_build_tools_list ) )
+        // CacheableResult (2026-07-28): the playground's tool set is
+        // identical for every caller — public, cache for an hour.
+        : Json tl ( __mcp_build_tools_list )
+        ( mcp_result_set_cacheable tl 3600000 `public` )
+        : Json env ( mcp_response_result id tl )
         ( json_free id )
-        ^ @ ?Json { T env }
+        ^ ( __mcp_finish env modern )
     } {}
     ? != 0 ( nurl_str_eq method `tools/call` ) {
         : ?Json po ( json_obj_get req `params` )
@@ -5364,7 +5432,7 @@ s combined_stdout s combined_stderr → v {
                 : Json result ( __mcp_dispatch_tool tname args )
                 : Json env ( mcp_response_result id result )
                 ( json_free args ) ( json_free id )
-                ^ @ ?Json { T env }
+                ^ ( __mcp_finish env modern )
             }
             F _ → {
                 : Json env ( mcp_response_error id mcp_err_invalid_params `tools/call requires params` )
@@ -5374,9 +5442,11 @@ s combined_stdout s combined_stderr → v {
         }
     } {}
     ? != 0 ( nurl_str_eq method `resources/list` ) {
-        : Json env ( mcp_response_result id ( __mcp_build_resources_list ) )
+        : Json rl ( __mcp_build_resources_list )
+        ( mcp_result_set_cacheable rl 3600000 `public` )
+        : Json env ( mcp_response_result id rl )
         ( json_free id )
-        ^ @ ?Json { T env }
+        ^ ( __mcp_finish env modern )
     } {}
     ? != 0 ( nurl_str_eq method `resources/read` ) {
         : ?Json po ( json_obj_get req `params` )
@@ -5384,9 +5454,12 @@ s combined_stdout s combined_stderr → v {
             T params → {
                 : s uri ( __mcp_args_get `uri` params `` )
                 : Json result ( __mcp_resource_read_for uri )
+                // Resource bodies (grammar, readme, …) are static per
+                // deployed toolchain version — public, 1 h.
+                ( mcp_result_set_cacheable result 3600000 `public` )
                 : Json env ( mcp_response_result id result )
                 ( json_free id )
-                ^ @ ?Json { T env }
+                ^ ( __mcp_finish env modern )
             }
             F _ → {
                 : Json env ( mcp_response_error id mcp_err_invalid_params `resources/read requires params.uri` )
@@ -5396,9 +5469,11 @@ s combined_stdout s combined_stderr → v {
         }
     } {}
     ? != 0 ( nurl_str_eq method `prompts/list` ) {
-        : Json env ( mcp_response_result id ( __mcp_build_prompts_list ) )
+        : Json pl ( __mcp_build_prompts_list )
+        ( mcp_result_set_cacheable pl 3600000 `public` )
+        : Json env ( mcp_response_result id pl )
         ( json_free id )
-        ^ @ ?Json { T env }
+        ^ ( __mcp_finish env modern )
     } {}
     ? != 0 ( nurl_str_eq method `prompts/get` ) {
         : ?Json po ( json_obj_get req `params` )
@@ -5407,7 +5482,7 @@ s combined_stdout s combined_stderr → v {
                 : s pname ( __mcp_args_get `name` params `` )
                 : Json env ( mcp_response_result id ( __mcp_prompts_get_for pname ) )
                 ( json_free id )
-                ^ @ ?Json { T env }
+                ^ ( __mcp_finish env modern )
             }
             F _ → {
                 : Json env ( mcp_response_error id mcp_err_invalid_params `prompts/get requires params.name` )

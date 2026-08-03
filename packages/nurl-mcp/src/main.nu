@@ -58,7 +58,7 @@ $ `deps/wasmbuilder/src/build.nu`
 // to bump (previously the banners drifted to a stale 0.2.0 while the
 // handshake reported 0.4.0).
 
-@ nm_version → s { ^ `0.7.4` }
+@ nm_version → s { ^ `0.8.0` }
 
 // Log a startup banner "nurl-mcp <version> <suffix>" through mcp_log,
 // building the line from the single-source version so the banners can
@@ -1049,9 +1049,39 @@ version = "0.0.0"
 // ── JSON-RPC method handlers (return-style: shape from
 // examples/mcp_echo_server_http.nu, used by both transports) ─────────
 
-@ handle_initialize Json id → Json {
+@ handle_initialize Json id ? Json params → Json {
     : Json result ( mcp_initialize_result `nurl-mcp` ( nm_version ) )
+    // Legacy handshake negotiation: echo the client's requested
+    // handshake-era revision when supported (mcp_initialize_result
+    // pins the newest one).
+    ( json_obj_set result `protocolVersion`
+    ( json_str_lit ( mcp_initialize_version_for params ) ) )
     ^ ( mcp_response_result id result )
+}
+
+// server/discover — 2026-07-28 servers MUST implement this; it is
+// also the stdio backward-compat probe a dual-era client sends first.
+@ handle_discover Json id → Json {
+    : Json caps ( json_obj_new )
+    ( json_obj_set caps `tools` ( json_obj_new ) )
+    : Json result ( mcp_discover_result `nurl-mcp` ( nm_version )
+    caps
+    `Local NURL toolchain: build/run/check/format NURL code, compile to wasm32-wasi, read the installed stdlib, browse API surfaces (nurl_api), search stdlib + the package registry (nurl_grep), and build registry-dependent projects (nurl_build_project). Start with nurl_api or nurl_grep to discover symbols, then nurl_check to validate code cheaply before nurl_build.` )
+    ^ ( mcp_response_result id result )
+}
+
+// Decorate an outgoing response for a MODERN (per-request `_meta`)
+// request: 2026-07-28 servers SHOULD identify themselves in each
+// result's `_meta`. Legacy requests pass through untouched.
+@ finish_reply Json env b modern → ?Json {
+    ? modern {
+        : ?Json res ( json_obj_get env `result` )
+        ?? res {
+            T rv → { ( mcp_result_set_server_info rv `nurl-mcp` ( nm_version ) ) }
+            F _ → {}
+        }
+    } {}
+    ^ @ ?Json { T env }
 }
 
 @ handle_ping Json id → Json {
@@ -1106,14 +1136,28 @@ version = "0.0.0"
             : ?Json id_opt ( json_obj_get req `id` )
             ?? id_opt {
                 T id → {
+                    // 2026-07-28 version gate: a request DECLARING an
+                    // unsupported `_meta` protocolVersion gets the
+                    // spec-shaped -32022 error (with data.supported so
+                    // the client can retry on a mutual revision). No
+                    // declared version = legacy request, served below.
+                    : s req_ver ( mcp_request_protocol_version req )
+                    : b modern > ( nurl_str_len req_ver ) 0
+                    ? & modern ! ( mcp_version_supported req_ver ) {
+                        ^ @ ?Json { T ( mcp_unsupported_version_response id req_ver ) }
+                    } {}
+                    ? != ( nurl_str_eq method `server/discover` ) 0 {
+                        ^ @ ?Json { T ( handle_discover id ) }
+                    } {}
                     ? != ( nurl_str_eq method `initialize` ) 0 {
-                        ^ @ ?Json { T ( handle_initialize id ) }
+                        : ?Json init_params ( json_obj_get req `params` )
+                        ^ ( finish_reply ( handle_initialize id init_params ) modern )
                     } {}
                     ? != ( nurl_str_eq method `ping` ) 0 {
-                        ^ @ ?Json { T ( handle_ping id ) }
+                        ^ ( finish_reply ( handle_ping id ) modern )
                     } {}
                     ? != ( nurl_str_eq method `tools/list` ) 0 {
-                        ^ @ ?Json { T ( handle_tools_list id ) }
+                        ^ ( finish_reply ( handle_tools_list id ) modern )
                     } {}
                     ? != ( nurl_str_eq method `tools/call` ) 0 {
                         : ?Json params_j ( json_obj_get req `params` )
@@ -1123,7 +1167,7 @@ version = "0.0.0"
                         }
                         : Json out ( handle_tools_call id params )
                         ( json_free params )
-                        ^ @ ?Json { T out }
+                        ^ ( finish_reply out modern )
                     } {}
                     ^ @ ?Json { T ( handle_unknown_method id method ) }
                 }
