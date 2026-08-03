@@ -92,21 +92,39 @@
 // * Notifications (no `id` field) require NO response from the server
 //   — the user's main loop must check `( json_obj_get req `id` )` and
 //   skip the reply when the result is None.
-// * `notifications/initialized` is sent by the client right after the
-//   `initialize` handshake completes; servers should accept and
+// * `notifications/initialized` is sent by LEGACY clients right after
+//   the `initialize` handshake completes; servers should accept and
 //   ignore it.
-// * `ping` requests get an empty result `{}`.
-// * `protocolVersion` defaults to the value returned by
-//   `mcp_protocol_version` — currently the latest stable revision
-//   (`2025-11-25`). MCP revisions only bump on backwards-incompatible
-//   changes, so a server advertising the latest revision serves older
-//   clients fine — but pinning to an old revision pushes negotiation
-//   the wrong way. `tools/mcp_spec_drift_check.sh` verifies the
-//   pinned version matches the spec site's "current".
-// * `mcp_protocol_version_legacy` returns `2024-11-05` — the previous
-//   pinned revision. Useful for serving clients that explicitly
-//   negotiate that version (a server MAY agree to whatever the
-//   client requests, as long as it's a revision the server supports).
+// * `ping` requests (legacy revisions) get an empty result `{}`.
+//
+// ── Protocol eras (2026-07-28 spec) ─────────────────────────────────
+//
+// Revision 2026-07-28 removed the `initialize` handshake: a MODERN
+// request carries its protocol version + client identity in
+// `params._meta` (`io.modelcontextprotocol/protocolVersion` etc.) and
+// servers MUST implement `server/discover`. Revisions `2025-11-25`
+// and earlier are LEGACY (handshake-based). This module supports
+// building DUAL-ERA servers per the spec's compatibility matrix
+// (specification/2026-07-28/basic/versioning):
+//
+//   * `mcp_protocol_version` — the latest revision (`2026-07-28`);
+//     what `server/discover` and client `_meta` advertise first.
+//     `tools/mcp_spec_drift_check.sh` verifies it matches the spec
+//     site's "current".
+//   * `mcp_protocol_version_initialize` — the newest HANDSHAKE-era
+//     revision (`2025-11-25`); what `initialize` responses advertise
+//     (a legacy client would reject a non-handshake revision).
+//   * `mcp_protocol_version_legacy` — `2024-11-05`, kept for callers
+//     that explicitly negotiate the oldest shape.
+//   * `mcp_version_supported` / `mcp_supported_versions_json` — the
+//     full supported set, for `server/discover` and the
+//     `UnsupportedProtocolVersionError` data payload.
+//   * `mcp_request_protocol_version` / `mcp_request_is_modern` — read
+//     a request's `_meta` version (empty string = legacy request).
+//   * Every result built via `mcp_response_result` carries
+//     `resultType: "complete"` (required in 2026-07-28; ignored by
+//     legacy clients, whose spec says unknown fields are tolerated
+//     and absence means "complete").
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/io.nu`
@@ -124,6 +142,12 @@ $ `stdlib/ext/json.nu`
 : i mcp_err_invalid_params -32602
 : i mcp_err_internal_error -32603
 
+// MCP-reserved codes (2026-07-28 partitioned -32020..-32099 for the
+// spec; earlier drafts used -32001/-32003/-32004 — renumbered).
+: i mcp_err_header_mismatch -32020
+: i mcp_err_missing_client_capability -32021
+: i mcp_err_unsupported_protocol_version -32022
+
 // ── Protocol version ────────────────────────────────────────────────
 //
 // MCP revisions are dated YYYY-MM-DD per
@@ -137,15 +161,119 @@ $ `stdlib/ext/json.nu`
 // fail fast when the spec drifts.
 
 @ mcp_protocol_version → s {
-    // Latest stable revision (as of 2026-05-19; verified via spec site).
+    // Latest stable revision (as of 2026-08-03; verified via spec site).
+    // First of the MODERN (stateless, per-request `_meta`) era.
+    ^ `2026-07-28`
+}
+
+@ mcp_protocol_version_initialize → s {
+    // Newest HANDSHAKE-era revision — what `initialize` responses
+    // advertise. 2026-07-28 has no handshake, so answering an
+    // `initialize` with it would make a legacy client disconnect;
+    // dual-era servers answer initialize with a legacy revision and
+    // serve modern clients through per-request `_meta`.
     ^ `2025-11-25`
 }
 
 @ mcp_protocol_version_legacy → s {
-    // Previous pinned revision — kept exported for callers that want
+    // Oldest supported revision — kept exported for callers that want
     // to explicitly negotiate the older shape (e.g. for compatibility
     // with a fixed older client).
     ^ `2024-11-05`
+}
+
+// The full supported set. A dual-era server serves every handshake
+// revision through the same JSON-RPC methods (the wire shapes NURL
+// implements are unchanged across them), plus the modern revision.
+@ mcp_version_supported s v → b {
+    ? != 0 ( nurl_str_eq v `2026-07-28` ) { ^ T } {}
+    ? != 0 ( nurl_str_eq v `2025-11-25` ) { ^ T } {}
+    ? != 0 ( nurl_str_eq v `2025-06-18` ) { ^ T } {}
+    ? != 0 ( nurl_str_eq v `2025-03-26` ) { ^ T } {}
+    ? != 0 ( nurl_str_eq v `2024-11-05` ) { ^ T } {}
+    ^ F
+}
+
+// Owned JSON array of the supported revisions, newest first — the
+// shape `server/discover`'s `supportedVersions` and the
+// UnsupportedProtocolVersionError `data.supported` field carry.
+@ mcp_supported_versions_json → Json {
+    : Json arr ( json_arr_new )
+    ( json_arr_push arr ( json_str_lit `2026-07-28` ) )
+    ( json_arr_push arr ( json_str_lit `2025-11-25` ) )
+    ( json_arr_push arr ( json_str_lit `2025-06-18` ) )
+    ( json_arr_push arr ( json_str_lit `2025-03-26` ) )
+    ( json_arr_push arr ( json_str_lit `2024-11-05` ) )
+    ^ arr
+}
+
+// ── Per-request `_meta` (modern era) ────────────────────────────────
+
+// The protocol version a request declares in
+// `params._meta["io.modelcontextprotocol/protocolVersion"]`.
+// Returns a BORROWED s (valid while `req` lives); empty string when
+// absent — i.e. a legacy-era request.
+@ mcp_request_protocol_version Json req → s {
+    : ?Json p ( json_obj_get req `params` )
+    ?? p {
+        T pv → {
+            : ?Json m ( json_obj_get pv `_meta` )
+            ?? m {
+                T mv → {
+                    : ?Json ver ( json_obj_get mv `io.modelcontextprotocol/protocolVersion` )
+                    ?? ver {
+                        T jv → { ^ ( json_as_str jv ) }
+                        F _ → { ^ `` }
+                    }
+                }
+                F _ → { ^ `` }
+            }
+        }
+        F _ → { ^ `` }
+    }
+}
+
+@ mcp_request_is_modern Json req → b {
+    ^ > ( nurl_str_len ( mcp_request_protocol_version req ) ) 0
+}
+
+// Legacy handshake negotiation: the revision an `initialize` response
+// should advertise for the given request params — the client's
+// requested `protocolVersion` when it is a supported HANDSHAKE-era
+// revision, else `mcp_protocol_version_initialize`. (Echoing the
+// modern, handshake-less revision would strand a legacy client.)
+// Returned s is BORROWED (from params or from a static literal).
+@ mcp_initialize_version_for ? Json params → s {
+    : ~ s ver ( mcp_protocol_version_initialize )
+    ?? params {
+        T p → {
+            : ?Json rv ( json_obj_get p `protocolVersion` )
+            ?? rv {
+                T jv → {
+                    : s req_ver ( json_as_str jv )
+                    ? & ( mcp_version_supported req_ver )
+                    == 0 ( nurl_str_eq req_ver ( mcp_protocol_version ) )
+                    { = ver req_ver } {}
+                }
+                F _ → {}
+            }
+        }
+        F _ → {}
+    }
+    ^ ver
+}
+
+// Client-side `_meta` for modern requests: protocolVersion +
+// clientInfo + clientCapabilities. Caller sets it on `params._meta`.
+@ mcp_client_meta s client_name s client_version → Json {
+    : Json info ( json_obj_new )
+    ( json_obj_set info `name` ( json_str_lit client_name ) )
+    ( json_obj_set info `version` ( json_str_lit client_version ) )
+    : Json meta ( json_obj_new )
+    ( json_obj_set meta `io.modelcontextprotocol/protocolVersion` ( json_str_lit ( mcp_protocol_version ) ) )
+    ( json_obj_set meta `io.modelcontextprotocol/clientInfo` info )
+    ( json_obj_set meta `io.modelcontextprotocol/clientCapabilities` ( json_obj_new ) )
+    ^ meta
 }
 
 // ── Logging ─────────────────────────────────────────────────────────
@@ -207,11 +335,46 @@ $ `stdlib/ext/json.nu`
 // ── JSON-RPC envelopes ──────────────────────────────────────────────
 
 @ mcp_response_result Json id Json result → Json {
+    // 2026-07-28: every result carries `resultType` ("complete" for
+    // ordinary results). Injected centrally so every server built on
+    // these envelopes conforms. Safe for legacy clients too: JSON-RPC
+    // consumers tolerate unknown result fields, and the changelog
+    // requires clients to treat an ABSENT field as "complete" — the
+    // field is purely additive.
+    ? ( json_is_obj result ) {
+        ? ( json_obj_has result `resultType` ) {} {
+            ( json_obj_set result `resultType` ( json_str_lit `complete` ) )
+        }
+    } {}
     : Json out ( json_obj_new )
     ( json_obj_set out `jsonrpc` ( json_str_lit `2.0` ) )
     ( json_obj_set out `id` ( json_clone id ) )
     ( json_obj_set out `result` result )
     ^ out
+}
+
+// Error envelope with a `data` member (e.g. the -32022
+// UnsupportedProtocolVersionError's {supported, requested}).
+// CONSUMES `data`; `id` is borrowed (cloned) like the other builders.
+@ mcp_response_error_data Json id i code s message Json data → Json {
+    : Json err ( json_obj_new )
+    ( json_obj_set err `code` ( json_int code ) )
+    ( json_obj_set err `message` ( json_str_lit message ) )
+    ( json_obj_set err `data` data )
+    : Json out ( json_obj_new )
+    ( json_obj_set out `jsonrpc` ( json_str_lit `2.0` ) )
+    ( json_obj_set out `id` ( json_clone id ) )
+    ( json_obj_set out `error` err )
+    ^ out
+}
+
+// The spec-shaped UnsupportedProtocolVersionError response: the
+// client reads `data.supported`, picks a mutual revision and retries.
+@ mcp_unsupported_version_response Json id s requested → Json {
+    : Json data ( json_obj_new )
+    ( json_obj_set data `supported` ( mcp_supported_versions_json ) )
+    ( json_obj_set data `requested` ( json_str_lit requested ) )
+    ^ ( mcp_response_error_data id mcp_err_unsupported_protocol_version `Unsupported protocol version` data )
 }
 
 @ mcp_response_error Json id i code s message → Json {
@@ -286,6 +449,11 @@ $ `stdlib/ext/json.nu`
     ( vec_free [Json] tools )
     : Json out ( json_obj_new )
     ( json_obj_set out `tools` arr )
+    // CacheableResult fields are REQUIRED on tools/list results in
+    // 2026-07-28 (and harmless earlier). Conservative defaults; a
+    // server with a static tool set can overwrite with a longer
+    // public hint via mcp_result_set_cacheable.
+    ( mcp_result_set_cacheable out 60000 `private` )
     ^ out
 }
 
@@ -301,8 +469,55 @@ $ `stdlib/ext/json.nu`
     ( json_obj_set caps `tools` tools_cap )
 
     : Json out ( json_obj_new )
-    ( json_obj_set out `protocolVersion` ( json_str_lit ( mcp_protocol_version ) ) )
+    // Handshake-era revision on purpose — see mcp_protocol_version_initialize.
+    ( json_obj_set out `protocolVersion` ( json_str_lit ( mcp_protocol_version_initialize ) ) )
     ( json_obj_set out `capabilities` caps )
     ( json_obj_set out `serverInfo` info )
+    ^ out
+}
+
+// ── 2026-07-28 result decorations ───────────────────────────────────
+
+// CacheableResult (required on tools/list, prompts/list,
+// resources/list, resources/read, resources/templates/list results):
+// `ttlMs` = freshness hint in milliseconds; `cacheScope` = "public"
+// (shared intermediaries may cache) or "private".
+@ mcp_result_set_cacheable Json result i ttl_ms s scope → v {
+    ( json_obj_set result `ttlMs` ( json_int ttl_ms ) )
+    ( json_obj_set result `cacheScope` ( json_str_lit scope ) )
+}
+
+// Attach `_meta["io.modelcontextprotocol/serverInfo"]` to a result —
+// modern-era servers SHOULD identify themselves in every result.
+// Merges into an existing `_meta` object when present.
+@ mcp_result_set_server_info Json result s name s version → v {
+    : Json info ( json_obj_new )
+    ( json_obj_set info `name` ( json_str_lit name ) )
+    ( json_obj_set info `version` ( json_str_lit version ) )
+    : ?Json m ( json_obj_get result `_meta` )
+    ?? m {
+        T mv → { ( json_obj_set mv `io.modelcontextprotocol/serverInfo` info ) }
+        F _ → {
+            : Json meta ( json_obj_new )
+            ( json_obj_set meta `io.modelcontextprotocol/serverInfo` info )
+            ( json_obj_set result `_meta` meta )
+        }
+    }
+}
+
+// server/discover result (servers MUST implement the RPC in
+// 2026-07-28). CONSUMES `caps`. `instructions` empty = omitted. The
+// discover output is static for the server's lifetime, so it carries
+// a long public cache hint.
+@ mcp_discover_result s name s version Json caps s instructions → Json {
+    : Json out ( json_obj_new )
+    ( json_obj_set out `resultType` ( json_str_lit `complete` ) )
+    ( json_obj_set out `supportedVersions` ( mcp_supported_versions_json ) )
+    ( json_obj_set out `capabilities` caps )
+    ( mcp_result_set_server_info out name version )
+    ? > ( nurl_str_len instructions ) 0 {
+        ( json_obj_set out `instructions` ( json_str_lit instructions ) )
+    } {}
+    ( mcp_result_set_cacheable out 3600000 `public` )
     ^ out
 }

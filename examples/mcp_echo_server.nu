@@ -85,6 +85,15 @@ $ `stdlib/core/string.nu`
     ( mcp_send_message ( mcp_response_result id result ) )
 }
 
+// server/discover — 2026-07-28 servers MUST implement this; it also
+// serves as the stdio backward-compat probe for dual-era clients.
+@ handle_discover Json id → v {
+    : Json caps ( json_obj_new )
+    ( json_obj_set caps `tools` ( json_obj_new ) )
+    : Json result ( mcp_discover_result `nurl-echo-mcp` `0.1.0` caps `` )
+    ( mcp_send_message ( mcp_response_result id result ) )
+}
+
 @ handle_ping Json id → v {
     : Json empty ( json_obj_new )
     ( mcp_send_message ( mcp_response_result id empty ) )
@@ -142,26 +151,29 @@ $ `stdlib/core/string.nu`
             // reply for, e.g., `notifications/initialized`.
             ?? id_opt {
                 T id → {
-                    ? != ( nurl_str_eq method `initialize` ) 0 {
-                        ( handle_initialize id )
+                    ? != ( nurl_str_eq method `server/discover` ) 0 {
+                        ( handle_discover id )
                     } {
-                        ? != ( nurl_str_eq method `ping` ) 0 {
-                            ( handle_ping id )
+                        ? != ( nurl_str_eq method `initialize` ) 0 {
+                            ( handle_initialize id )
                         } {
-                            ? != ( nurl_str_eq method `tools/list` ) 0 {
-                                ( handle_tools_list id )
+                            ? != ( nurl_str_eq method `ping` ) 0 {
+                                ( handle_ping id )
                             } {
-                                ? != ( nurl_str_eq method `tools/call` ) 0 {
-                                    : ?Json params_j ( json_obj_get req `params` )
-                                    : Json params ?? params_j {
-                                        T pv → ( json_clone pv )
-                                        F → ( json_obj_new )
-                                    }
-                                    ( handle_tools_call id params )
-                                    ( json_free params )
+                                ? != ( nurl_str_eq method `tools/list` ) 0 {
+                                    ( handle_tools_list id )
                                 } {
-                                    ( handle_unknown_method id method )
-                                } } } }
+                                    ? != ( nurl_str_eq method `tools/call` ) 0 {
+                                        : ?Json params_j ( json_obj_get req `params` )
+                                        : Json params ?? params_j {
+                                            T pv → ( json_clone pv )
+                                            F → ( json_obj_new )
+                                        }
+                                        ( handle_tools_call id params )
+                                        ( json_free params )
+                                    } {
+                                        ( handle_unknown_method id method )
+                                    } } } } }
                 }
                 F → {
                     // Notification — nothing to send. Trace at most.

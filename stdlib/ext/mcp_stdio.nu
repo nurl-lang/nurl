@@ -281,10 +281,24 @@ $ `stdlib/core/vec.nu`
     ( json_obj_set info `name` ( json_str_lit client_name ) )
     ( json_obj_set info `version` ( json_str_lit client_version ) )
     : Json params ( json_obj_new )
-    ( json_obj_set params `protocolVersion` ( json_str_lit ( mcp_protocol_version ) ) )
+    // Handshake-era revision — `initialize` IS the legacy path; the
+    // modern (2026-07-28) revision has no handshake, see
+    // mcp_stdio_discover.
+    ( json_obj_set params `protocolVersion` ( json_str_lit ( mcp_protocol_version_initialize ) ) )
     ( json_obj_set params `capabilities` caps )
     ( json_obj_set params `clientInfo` info )
     ^ ( mcp_stdio_call c `initialize` @ ?Json { T params } 0 )
+}
+
+// server/discover (2026-07-28) — ALSO the stdio backward-compat probe:
+// a dual-era client SHOULD send this first; a DiscoverResult (or a
+// recognized modern error like -32022) identifies a modern server,
+// anything else (e.g. -32601 method not found) identifies a legacy
+// server → fall back to mcp_stdio_initialize.
+@ mcp_stdio_discover McpStdioClient c s client_name s client_version → !Json McpStdioErr {
+    : Json params ( json_obj_new )
+    ( json_obj_set params `_meta` ( mcp_client_meta client_name client_version ) )
+    ^ ( mcp_stdio_call c `server/discover` @ ?Json { T params } 0 )
 }
 
 @ mcp_stdio_ping McpStdioClient c → !Json McpStdioErr {
