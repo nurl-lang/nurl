@@ -5,15 +5,16 @@
 > the same way `bench.yml` commits the benchmark numbers. Do not edit by hand;
 > curate the findings log in [`tools/fuzz/FINDINGS.json`](tools/fuzz/FINDINGS.json).
 
-_Last run: **2026-08-03** · toolchain `v0.32.0-8-gcf10972` · commit `cf10972`_
+_Last run: **2026-08-03** · toolchain `v0.32.0-10-ge07be943` · commit `e07be943`_
 
 **Latest run:** ✅ **clean** — no findings
 
 | family | configuration | executions | pass | findings | sanitized runs | wasm runs |
 |---|---|---:|---:|---:|---:|---:|
-| `differential-int` | seeds 1–500, size=12, depth=4 | 500 | 500 | 0 | 0 | 100 |
-| `differential-struct` | seeds 1–400, size=14, depth=3 | 400 | 400 | 0 | 40 | 200 |
-| `parser-mutational` | iters=1500 rng-seed=1 | 1500 | 1500 | 0 | 1500 | 0 |
+| `differential-int` | seeds 1–50, size=12, depth=4 | 50 | 50 | 0 | 0 | 5 |
+| `parser-mutational` | iters=200 rng-seed=1 | 200 | 200 | 0 | 200 | 0 |
+| `parser-mutational` | iters=200 rng-seed=2 | 200 | 200 | 0 | 200 | 0 |
+| `differential-struct` | seeds 1–30, size=14, depth=3 | 30 | 30 | 0 | 6 | 6 |
 
 ## What each family probes
 
