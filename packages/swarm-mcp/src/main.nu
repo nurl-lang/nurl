@@ -3064,9 +3064,43 @@ $ `cudakernel.nu`
 
 // ── JSON-RPC method handlers ─────────────────────────────────────
 
-@ handle_initialize Json id → Json {
-    : Json result ( mcp_initialize_result `swarm-mcp` `0.20.0` )
+// Single source of truth for the server version — the MCP handshake,
+// server/discover, and the --version banner all read this (the
+// handshake had drifted to a stale hand-written 0.20.0).
+@ sm_version → s { ^ `0.22.0` }
+
+@ handle_initialize Json id ? Json params → Json {
+    : Json result ( mcp_initialize_result `swarm-mcp` ( sm_version ) )
+    // Legacy handshake negotiation: echo the client's requested
+    // handshake-era revision when supported.
+    ( json_obj_set result `protocolVersion`
+    ( json_str_lit ( mcp_initialize_version_for params ) ) )
     ^ ( mcp_response_result id result )
+}
+
+// server/discover — 2026-07-28 servers MUST implement this; also the
+// stdio/HTTP backward-compat probe a dual-era client tries first.
+@ handle_discover Json id → Json {
+    : Json caps ( json_obj_new )
+    ( json_obj_set caps `tools` ( json_obj_new ) )
+    : Json result ( mcp_discover_result `swarm-mcp` ( sm_version )
+    caps
+    `Distributed compute over a swarm cluster: submit expression / NURL / CUDA-C kernels over integer ranges or uploaded datasets, sample or histogram on GPU workers, and iterate (SGD or a custom update rule). Call swarm_help first — topic "start" for the workflow, "limits" for the envelope.` )
+    ^ ( mcp_response_result id result )
+}
+
+// Decorate an outgoing response for a MODERN (per-request `_meta`)
+// request: 2026-07-28 servers SHOULD identify themselves in each
+// result's `_meta`. Legacy requests pass through untouched.
+@ finish_reply Json env b modern → ?Json {
+    ? modern {
+        : ?Json res ( json_obj_get env `result` )
+        ?? res {
+            T rv → { ( mcp_result_set_server_info rv `swarm-mcp` ( sm_version ) ) }
+            F _ → {}
+        }
+    } {}
+    ^ @ ?Json { T env }
 }
 
 @ handle_ping Json id → Json {
@@ -3112,14 +3146,27 @@ $ `cudakernel.nu`
             : ?Json id_opt ( json_obj_get req `id` )
             ?? id_opt {
                 T id → {
-                    ? != ( nurl_str_eq method `initialize` ) 0 { ^ @ ?Json { T ( handle_initialize id ) } } {}
-                    ? != ( nurl_str_eq method `ping` ) 0 { ^ @ ?Json { T ( handle_ping id ) } } {}
-                    ? != ( nurl_str_eq method `tools/list` ) 0 { ^ @ ?Json { T ( handle_tools_list id ) } } {}
+                    // 2026-07-28 version gate: a request declaring an
+                    // unsupported `_meta` protocolVersion gets the
+                    // spec-shaped -32022 error; no declared version =
+                    // legacy request, served below.
+                    : s req_ver ( mcp_request_protocol_version req )
+                    : b modern > ( nurl_str_len req_ver ) 0
+                    ? & modern ! ( mcp_version_supported req_ver ) {
+                        ^ @ ?Json { T ( mcp_unsupported_version_response id req_ver ) }
+                    } {}
+                    ? != ( nurl_str_eq method `server/discover` ) 0 { ^ @ ?Json { T ( handle_discover id ) } } {}
+                    ? != ( nurl_str_eq method `initialize` ) 0 {
+                        : ?Json init_params ( json_obj_get req `params` )
+                        ^ ( finish_reply ( handle_initialize id init_params ) modern )
+                    } {}
+                    ? != ( nurl_str_eq method `ping` ) 0 { ^ ( finish_reply ( handle_ping id ) modern ) } {}
+                    ? != ( nurl_str_eq method `tools/list` ) 0 { ^ ( finish_reply ( handle_tools_list id ) modern ) } {}
                     ? != ( nurl_str_eq method `tools/call` ) 0 {
                         : Json params ?? ( json_obj_get req `params` ) { T pv → ( json_clone pv ) F → ( json_obj_new ) }
                         : Json out ( handle_tools_call id params )
                         ( json_free params )
-                        ^ @ ?Json { T out }
+                        ^ ( finish_reply out modern )
                     } {}
                     ^ @ ?Json { T ( handle_unknown id method ) }
                 }
@@ -3408,7 +3455,7 @@ $ `cudakernel.nu`
 }
 
 // `-v` is already taken by --verbose, so the version flag is long-form only.
-@ version → v { ( nurl_print `swarm-mcp 0.21.1\n` ) }
+@ version → v { ( nurl_print `swarm-mcp ` ) ( nurl_print ( sm_version ) ) ( nurl_print `\n` ) }
 
 @ usage → v {
     ( nurl_print `swarm-mcp — a distributed compute cluster driven over MCP (HTTPS JSON-RPC).\n\n` )
