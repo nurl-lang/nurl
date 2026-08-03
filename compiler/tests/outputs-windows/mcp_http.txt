@@ -6,8 +6,8 @@ OUTPUT
   status=200
   ct=application/json; charset=utf-8
   cors=*
-  body_len=150
-  body={"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-11-25","capabilities":{"tools":{}},"serverInfo":{"name":"nurl-mcp-test","version":"0.1.0"}}}
+  body_len=174
+  body={"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-11-25","capabilities":{"tools":{}},"serverInfo":{"name":"nurl-mcp-test","version":"0.1.0"},"resultType":"complete"}}
 ── post_notification ──
   status=202
   ct=<absent>
@@ -18,20 +18,20 @@ OUTPUT
   status=200
   ct=application/json; charset=utf-8
   cors=*
-  body_len=36
-  body={"jsonrpc":"2.0","id":2,"result":{}}
+  body_len=59
+  body={"jsonrpc":"2.0","id":2,"result":{"resultType":"complete"}}
 ── post_tools_list ──
   status=200
   ct=application/json; charset=utf-8
   cors=*
-  body_len=190
-  body={"jsonrpc":"2.0","id":3,"result":{"tools":[{"name":"echo","description":"Echo back the input.","inputSchema":{"type":"object","properties":{"text":{"type":"string"}},"required":["text"]}}]}}
+  body_len=251
+  body={"jsonrpc":"2.0","id":3,"result":{"tools":[{"name":"echo","description":"Echo back the input.","inputSchema":{"type":"object","properties":{"text":{"type":"string"}},"required":["text"]}}],"ttlMs":60000,"cacheScope":"private","resultType":"complete"}}
 ── post_tools_call_echo ──
   status=200
   ct=application/json; charset=utf-8
   cors=*
-  body_len=91
-  body={"jsonrpc":"2.0","id":4,"result":{"content":[{"type":"text","text":"hi"}],"isError":false}}
+  body_len=115
+  body={"jsonrpc":"2.0","id":4,"result":{"content":[{"type":"text","text":"hi"}],"isError":false,"resultType":"complete"}}
 ── post_unknown_method ──
   status=200
   ct=application/json; charset=utf-8
@@ -82,8 +82,8 @@ data: {"server":"nurl-mcp","streaming":"single-event"}
   status=200
   ct=application/json; charset=utf-8
   cors=*
-  body_len=116
-  body=[{"jsonrpc":"2.0","id":10,"result":{}},{"jsonrpc":"2.0","id":11,"error":{"code":-32601,"message":"unknown method"}}]
+  body_len=139
+  body=[{"jsonrpc":"2.0","id":10,"result":{"resultType":"complete"}},{"jsonrpc":"2.0","id":11,"error":{"code":-32601,"message":"unknown method"}}]
 ── batch_all_notifications ──
   status=202
   ct=<absent>
@@ -100,5 +100,11 @@ data: {"server":"nurl-mcp","streaming":"single-event"}
   echoed=sess-abc-123
 ── session_echo_get ──
   echoed=sess-xyz-789
+── header_method_match ──
+  body={"jsonrpc":"2.0","id":200,"result":{"resultType":"complete"}}
+── header_method_mismatch ──
+  body={"jsonrpc":"2.0","id":null,"error":{"code":-32020,"message":"Mcp-Method/Mcp-Name header does not match the request body"}}
+── header_name_mismatch ──
+  body={"jsonrpc":"2.0","id":null,"error":{"code":-32020,"message":"Mcp-Method/Mcp-Name header does not match the request body"}}
 ── session_absent ──
   echoed=<absent>
