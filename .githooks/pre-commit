@@ -27,7 +27,6 @@ fi
 
 # Staged, added/copied/modified *.nu files, minus bench/.
 mapfile -t FILES < <(git diff --cached --name-only --diff-filter=ACM -- '*.nu' | grep -v '^bench/' || true)
-(( ${#FILES[@]} == 0 )) && exit 0
 
 blocked=()
 fixed=()
@@ -58,6 +57,52 @@ if (( ${#blocked[@]} > 0 )); then
     for f in "${blocked[@]}"; do echo "  $f" >&2; done
     echo "Fix: build/nurlfmt --write <file>  then re-stage." >&2
     exit 1
+fi
+
+# ── Windows golden twins ─────────────────────────────────────
+# The change-based rule of tools/check_golden_twins.sh, applied to the
+# staged diff: a staged compiler/tests/outputs/X.txt change whose
+# outputs-windows/ twin was byte-identical BEFORE the change proves the
+# test's output is platform-independent — so the twin gets the SAME
+# content, auto-copied from the staged blob and re-staged. Twins that
+# already differed are platform-specific; those get a note (the right
+# Windows bytes need a Windows runner — windows-tests.yml has an
+# `update_goldens` dispatch input). This is what the MCP dual-era
+# change needed: its two stale twins broke the Windows run on main.
+WIN_DIR="compiler/tests/outputs-windows"
+copied=()
+platform_note=()
+while IFS= read -r f; do
+    b="$(basename "$f")"
+    w="$WIN_DIR/$b"
+    [[ -f "$w" ]] || continue
+    old_l="$(git rev-parse --quiet --verify "HEAD:$f" 2>/dev/null || true)"
+    old_w="$(git rev-parse --quiet --verify "HEAD:$w" 2>/dev/null || true)"
+    staged_l="$(git rev-parse --quiet --verify ":$f" 2>/dev/null || true)"
+    staged_w="$(git rev-parse --quiet --verify ":$w" 2>/dev/null || true)"
+    if [[ -n "$old_l" && "$old_l" == "$old_w" ]]; then
+        # Identical before → must stay identical. Copy the staged Linux
+        # content over the twin unless it already matches.
+        if [[ "$staged_l" != "$staged_w" ]]; then
+            git show ":$f" > "$w"
+            git add -- "$w"
+            copied+=("$w")
+        fi
+    else
+        [[ "$staged_l" != "$staged_w" ]] && platform_note+=("$w")
+    fi
+done < <(git diff --cached --name-only --diff-filter=ACM -- "compiler/tests/outputs/*.txt")
+
+if (( ${#copied[@]} > 0 )); then
+    echo "pre-commit: Windows golden twins auto-synced (twin was byte-identical" >&2
+    echo "to the Linux golden — platform-independent output):" >&2
+    for f in "${copied[@]}"; do echo "  $f" >&2; done
+fi
+if (( ${#platform_note[@]} > 0 )); then
+    echo "pre-commit note: platform-SPECIFIC Windows twins exist for changed" >&2
+    echo "goldens — verify on a Windows runner if the change touches shared" >&2
+    echo "output (windows-tests.yml dispatch input 'update_goldens'):" >&2
+    for f in "${platform_note[@]}"; do echo "  $f" >&2; done
 fi
 
 exit 0

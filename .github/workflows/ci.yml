@@ -148,6 +148,19 @@ jobs:
         # without a Windows machine.
         run: ./tools/check_windows_goldens.sh
 
+      - name: Windows golden twins carry this PR's changes (change-based, exact)
+        # The state-based check above cannot see line MUTATIONS: the MCP
+        # dual-era change rewrote result lines, the stale twins diffed
+        # with both < and > lines — indistinguishable from a legitimate
+        # platform difference — and the break landed on main. The exact
+        # rule needs the change: a golden touched by this PR whose twin
+        # was byte-identical BEFORE it (platform-independent output)
+        # must keep the twin identical. The pre-commit hook auto-copies;
+        # this is the same rule for whoever skipped the hook.
+        run: |
+          git fetch --no-tags --depth=1 origin "${{ github.event.pull_request.base.sha || github.event.before }}" || true
+          ./tools/check_golden_twins.sh "${{ github.event.pull_request.base.sha || github.event.before }}"
+
       - name: no packages/… self-imports (breaks registry installs)
         # In this repo every build runs from the root, so a
         # `$ \`packages/<name>/src/x.nu\`` import resolves and every test
