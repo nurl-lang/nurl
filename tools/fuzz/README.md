@@ -20,7 +20,11 @@ of real bugs lives in [`FINDINGS.json`](FINDINGS.json).
    the statement-level oracle. `FUZZ_SAN_EVERY=N` additionally builds every
    Nth seed with ASan+LSan+UBSan and runs it leak-detection-on: a leak or
    UAF in the generated ownership traffic is a finding even when stdout
-   matches — this is the leg that hunts auto-drop bugs.
+   matches — this is the leg that hunts auto-drop bugs. `FUZZ_WASM_EVERY=N`
+   compiles every Nth seed to wasm32-wasi (`packages/wasmbuilder`) and runs
+   it under the reference wasmtime — a THIRD independent execution
+   environment against the same oracle, hunting target-dependent codegen
+   (32-bit pointers, i64 payload slots). Requires zig + wasmtime.
 3. **Mutational parser fuzzer** (`fuzz_parsers.sh` + `fuzz_parsers.py` +
    `parse_harness.nu`) — mutates seeds for the untrusted-input parsers
    (x509/DER, cbor, msgpack, json, yaml, xml, toml) against an ASan+UBSan
@@ -137,7 +141,9 @@ match literal constraint disagree with the arm's own payload binding
 ## Scope / future
 
 Covers integer + int↔float value semantics (`gen.py`) and the structural
-surface (`genprog.py`). Natural extensions: float *arithmetic* with a
-rounding-aware oracle, generic-function instantiations in generated
-programs, `?T`/`!T E` construction + propagation chains, and trait-object
-dispatch.
+surface (`genprog.py`), each executed natively at `-O0`/`-O2` and, on
+sampled seeds, sanitized and on wasm32-wasi. Natural extensions (tracked
+in TODO.md): float *arithmetic* with a rounding-aware oracle,
+generic-function instantiations + `?T`/`!T E` propagation chains in
+generated programs, trait-object dispatch, and borrow-checker soundness
+fuzzing (generate programs that MUST be rejected).

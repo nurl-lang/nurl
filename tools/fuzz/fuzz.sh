@@ -21,6 +21,15 @@
 # agree — this is what catches UAF/double-free/leaks in the generated
 # ownership traffic.
 #
+# Wasm leg: FUZZ_WASM_EVERY=N (default 0 = off) additionally compiles
+# every Nth seed to wasm32-wasi (packages/wasmbuilder: nurlc IR → retarget
+# → zig cc against wasi-libc) and runs it under the reference wasmtime —
+# a THIRD independent execution environment against the same oracle.
+# Catches target-dependent codegen bugs (the enum-payload-slot truncation
+# class: pointers are 32 bits on wasm32). Requires zig + wasmtime; the
+# wasmbuilder binary is built once per run (or set FUZZ_WASMBUILDER to a
+# prebuilt one).
+#
 # FUZZ_SUMMARY=path.json (optional): write a machine-readable run summary
 # consumed by tools/fuzz/report.py (the FUZZRESULTS.md generator).
 #
@@ -45,6 +54,7 @@ EXPRS="${3:-12}"
 DEPTH="${4:-4}"
 GEN_KIND="${FUZZ_GEN:-int}"
 SAN_EVERY="${FUZZ_SAN_EVERY:-0}"
+WASM_EVERY="${FUZZ_WASM_EVERY:-0}"
 SUMMARY="${FUZZ_SUMMARY:-}"
 RUN_TIMEOUT="${FUZZ_RUN_TIMEOUT:-40}"
 
@@ -60,6 +70,32 @@ fail=0
 buildfail=0
 san_runs=0
 san_findings=0
+wasm_runs=0
+wasm_findings=0
+
+# One-time wasm-leg setup: a wasmbuilder binary + wasmtime on the box.
+WASMBUILDER=""
+WASMTIME_BIN=""
+if [[ "$WASM_EVERY" != "0" ]]; then
+    if command -v wasmtime >/dev/null;              then WASMTIME_BIN="wasmtime"
+    elif [[ -x "$HOME/.wasmtime/bin/wasmtime" ]];   then WASMTIME_BIN="$HOME/.wasmtime/bin/wasmtime"
+    else echo "fuzz.sh: FUZZ_WASM_EVERY set but wasmtime not found" >&2; exit 2; fi
+    if [[ -n "${FUZZ_WASMBUILDER:-}" && -x "${FUZZ_WASMBUILDER:-}" ]]; then
+        WASMBUILDER="$FUZZ_WASMBUILDER"
+    else
+        WASMBUILDER="$TMP/wasmbuilder"
+        echo "[wasm] building packages/wasmbuilder …"
+        (cd "$ROOT" && "$NURL" packages/wasmbuilder/src/main.nu "$WASMBUILDER") >"$TMP/wb.log" 2>&1 \
+            || { echo "fuzz.sh: wasmbuilder build failed — see $TMP/wb.log" >&2; tail -5 "$TMP/wb.log" >&2; exit 2; }
+    fi
+    # wasmbuilder resolves nurlc + the stdlib from the environment; pin both
+    # to THIS repo so the wasm module comes out of the compiler under test.
+    export NURLC="$ROOT/build/nurlc"
+    export NURL_STDLIB="$ROOT"
+    # First use compiles runtime.c → runtime.wasm.o (content-hash cached);
+    # do it now so seed timings/timeouts don't carry it.
+    "$WASMBUILDER" --doctor >/dev/null 2>&1 || true
+fi
 
 end=$((START + COUNT - 1))
 for seed in $(seq "$START" "$end"); do
@@ -106,6 +142,24 @@ for seed in $(seq "$START" "$end"); do
         fi
     fi
 
+    # Wasm leg: the third execution environment against the same oracle.
+    if [[ $ok -eq 1 && "$WASM_EVERY" != "0" ]] && (( seed % WASM_EVERY == 0 )); then
+        wasm_runs=$((wasm_runs+1))
+        if "$WASMBUILDER" -q "$prog" -o "$TMP/p.wasm" >"$TMP/bwasm.log" 2>&1; then
+            timeout "$RUN_TIMEOUT" "$WASMTIME_BIN" run "$TMP/p.wasm" > "$TMP/outwasm" 2>/dev/null; rcw=$?
+            if [[ $rcw -ne 0 ]] || ! cmp -s "$TMP/outwasm" "$exp"; then
+                ok=0; reason="wasm leg (rc=$rcw)"
+                wasm_findings=$((wasm_findings+1))
+                cp "$TMP/outwasm" "$FAILDIR/${GEN_KIND}_seed_${seed}.outwasm" 2>/dev/null
+                diff "$exp" "$TMP/outwasm" > "$FAILDIR/${GEN_KIND}_seed_${seed}.diff_wasm" 2>&1
+            fi
+        else
+            ok=0; reason="wasm build fail"
+            wasm_findings=$((wasm_findings+1))
+            cp "$TMP/bwasm.log" "$FAILDIR/${GEN_KIND}_seed_${seed}.wasmlog"
+        fi
+    fi
+
     if [[ $ok -eq 1 ]]; then
         pass=$((pass+1))
     else
@@ -120,7 +174,7 @@ for seed in $(seq "$START" "$end"); do
 done
 
 echo "─────────────────────────────────────────"
-echo "[$GEN_KIND] seeds $START..$end   pass=$pass  findings=$fail  buildfail=$buildfail  san_runs=$san_runs  san_findings=$san_findings"
+echo "[$GEN_KIND] seeds $START..$end   pass=$pass  findings=$fail  buildfail=$buildfail  san_runs=$san_runs  san_findings=$san_findings  wasm_runs=$wasm_runs  wasm_findings=$wasm_findings"
 
 if [[ -n "$SUMMARY" ]]; then
     mkdir -p "$(dirname "$SUMMARY")"
@@ -136,7 +190,9 @@ if [[ -n "$SUMMARY" ]]; then
   "findings": $fail,
   "buildfail": $buildfail,
   "san_runs": $san_runs,
-  "san_findings": $san_findings
+  "san_findings": $san_findings,
+  "wasm_runs": $wasm_runs,
+  "wasm_findings": $wasm_findings
 }
 JSON
 fi

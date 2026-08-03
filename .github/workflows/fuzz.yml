@@ -10,6 +10,10 @@ name: fuzz
 #      same oracle contract, plus an ASan+LSan leg on sampled seeds — leaks
 #      and UAF in generated ownership traffic are findings even when stdout
 #      matches.
+#      The structural and integer legs also sample seeds onto wasm32-wasi
+#      (packages/wasmbuilder + reference wasmtime) — a third independent
+#      execution environment against the same oracle, catching
+#      target-dependent codegen (32-bit pointers, i64 payload slots).
 #   3. mutational parser fuzzer (tools/fuzz/fuzz_parsers.sh): mutate seeds for
 #      the untrusted-input parsers (x509/DER, cbor, msgpack, json, yaml, xml,
 #      toml) against an ASan+UBSan harness; any crash / OOB / UB / hang is a
@@ -64,15 +68,35 @@ jobs:
       - name: Build toolchain
         run: ./build.sh --no-tests
 
+      - name: Install zig + wasmtime (wasm differential leg)
+        # zig carries its own wasi-libc and wasm-ld, so no wasi-sdk is
+        # needed (same recipe release.yml uses for the bundled backend).
+        run: |
+          ZIG_VER=0.13.0
+          curl -fsSL "https://ziglang.org/download/${ZIG_VER}/zig-linux-x86_64-${ZIG_VER}.tar.xz" -o /tmp/zig.tar.xz
+          mkdir -p "$HOME/zig-toolchain"
+          tar -xf /tmp/zig.tar.xz -C "$HOME/zig-toolchain" --strip-components=1
+          echo "$HOME/zig-toolchain" >> "$GITHUB_PATH"
+          "$HOME/zig-toolchain/zig" version
+          curl https://wasmtime.dev/install.sh -sSf | bash
+          echo "$HOME/.wasmtime/bin" >> "$GITHUB_PATH"
+          "$HOME/.wasmtime/bin/wasmtime" --version
+
+      - name: Build wasmbuilder (shared by both differential legs)
+        run: |
+          ./nurl.sh packages/wasmbuilder/src/main.nu "$RUNNER_TEMP/wasmbuilder"
+          echo "FUZZ_WASMBUILDER=$RUNNER_TEMP/wasmbuilder" >> "$GITHUB_ENV"
+
       - name: Differential miscompile fuzzer (integer)
         run: |
+          FUZZ_WASM_EVERY=10 \
           FUZZ_SUMMARY="$RUNNER_TEMP/fuzz-summaries/int.json" \
             ./tools/fuzz/fuzz.sh 1 "${{ github.event.inputs.diff_seeds || '1500' }}"
 
       - name: Differential miscompile fuzzer (structural + sanitizer leg)
         if: success() || failure()          # run even if the int leg found something
         run: |
-          FUZZ_GEN=struct FUZZ_SAN_EVERY=5 \
+          FUZZ_GEN=struct FUZZ_SAN_EVERY=5 FUZZ_WASM_EVERY=5 \
           FUZZ_SUMMARY="$RUNNER_TEMP/fuzz-summaries/struct.json" \
             ./tools/fuzz/fuzz.sh 1 "${{ github.event.inputs.struct_seeds || '600' }}" 14 3
 
