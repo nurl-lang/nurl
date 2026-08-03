@@ -1,0 +1,47 @@
+{
+  "_comment": "Curated log of real compiler/runtime bugs found by the fuzzers. Newest first. report.py renders this into FUZZRESULTS.md — keep entries short; the fix commit/PR carries the detail.",
+  "findings": [
+    {
+      "date": "2026-08-03",
+      "family": "differential-struct",
+      "title": "Narrow-int enum payload slots stored non-canonically: `@ E { V 151 }` (i8 payload) kept raw 151 while the pattern binding reconstructed -105, so a literal constraint failed to match the value it names",
+      "severity": "miscompile",
+      "status": "fixed (genprog seed 20; enum_payload_canonical)"
+    },
+    {
+      "date": "2026-08-03",
+      "family": "differential-struct",
+      "title": "Field/element stores emitted the RHS without width coercion — an i32 value stored into an i16 field produced invalid IR (clang reject); all 8 store paths in gen_field_store affected",
+      "severity": "invalid-IR",
+      "status": "fixed (genprog seeds 1/2/4/8; field_store_width_coerce)"
+    },
+    {
+      "date": "2026-08-03",
+      "family": "differential-struct",
+      "title": "A `;` defer anywhere in a function disabled EVERY auto-drop in it (strings, struct fields, %Drop values, closure envs, slices) — loop-body %Drop values leaked per iteration",
+      "severity": "leak",
+      "status": "fixed (found hand-probing generator constructs; defer_drop_reclaim)"
+    },
+    {
+      "date": "2026-08-03",
+      "family": "differential-struct",
+      "title": "A defer inside an inner scope emitted `br label %fn_cleanup` with no such block — invalid IR; defers now carry reachability-armed flags and a function-lifetime chain",
+      "severity": "invalid-IR",
+      "status": "fixed (defer_scoped)"
+    },
+    {
+      "date": "2026-06-02",
+      "family": "differential-int",
+      "title": "Seven miscompiles in integer codegen: width-coercion, unsigned div/rem/shift/compare selection, mixed signed/unsigned operands (the campaign that motivated signedness-in-the-type-representation)",
+      "severity": "miscompile",
+      "status": "fixed (pinned by cast_*.nu and the signedness regression tests)"
+    },
+    {
+      "date": "2026-07-09",
+      "family": "parser-mutational",
+      "title": "X.509/DER, CBOR, msgpack, JSON, YAML, XML, TOML mutational campaign (~5300 inputs under ASan+UBSan): no crash, OOB, UB, or hang",
+      "severity": "none",
+      "status": "clean"
+    }
+  ]
+}

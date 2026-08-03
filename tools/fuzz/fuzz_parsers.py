@@ -143,6 +143,7 @@ def main() -> int:
     ap.add_argument("--iters", type=int, default=2000)
     ap.add_argument("--timeout", type=float, default=10.0)
     ap.add_argument("--formats", default=",".join(SEEDS.keys()))
+    ap.add_argument("--summary", default="", help="write a JSON run summary here (report.py input)")
     args = ap.parse_args()
 
     formats = [f for f in args.formats.split(",") if f in SEEDS]
@@ -182,6 +183,16 @@ def main() -> int:
     print("─" * 42)
     print(f"seed={args.seed} iters={args.iters} formats={','.join(formats)} "
           f"findings={findings}")
+    if args.summary:
+        import json
+        os.makedirs(os.path.dirname(args.summary) or ".", exist_ok=True)
+        with open(args.summary, "w") as fh:
+            json.dump({"family": "parser-mutational", "generator": "fuzz_parsers.py",
+                       "seed_start": args.seed, "seed_count": 1,
+                       "size": args.iters, "depth": 0,
+                       "pass": args.iters - findings, "findings": findings,
+                       "buildfail": 0, "san_runs": args.iters,
+                       "san_findings": findings}, fh, indent=2)
     return 1 if findings else 0
 
 

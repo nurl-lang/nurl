@@ -282,10 +282,12 @@ class Prog:
                     if match_it and result is None:
                         result = wrap(lit_result, "i64")
 
-            # optional guarded arm
+            # optional guarded arm. Guard leaves carry the payload's
+            # DECLARED type — the in-program binding is that type, and
+            # the compiler (correctly) rejects mixed-width operands.
             if is_target and ptypes and self.rng.random() < 0.5:
-                guard_leaves = [MutVar("i64", pn, c) for pn, c, pt in
-                                zip(pnames, contribs, ptypes) if pt not in ("f", "s")]
+                guard_leaves = [MutVar(pt, pn, wrap(raw, pt)) for pn, raw, pt in
+                                zip(pnames, raws, ptypes) if pt not in ("f", "s")]
                 if guard_leaves:
                     grender, gtruth = self.cond(leaves=guard_leaves)
                     gbody = str(self.rng.randrange(1 << 16))

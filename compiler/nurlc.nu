@@ -3036,6 +3036,40 @@
         `', right is '` rt )
         `' — NURL has no implicit bool↔int conversion; cast one side ('# i expr')` ) ) }
     {}
+    // Integer width agreement — same contract as the bool check above. A
+    // CONSTANT operand reinterprets at the other side's printed width (an
+    // i64 literal against an i8 binding is fine and always was), but two
+    // SSA registers of different integer widths would emit e.g.
+    // `icmp ule i64 %a, %b` with %b: i8 — invalid IR that only clang
+    // caught — or, for shifts, an amount silently reinterpreted at the
+    // narrow width where ≥-width amounts are LLVM poison that an
+    // optimised build turns into arbitrary misbehaviour (found by the
+    // structural fuzzer: a match guard `>> <i32-payload> # i64 34`
+    // segfaulted at -O2 and aborted at -O1 while -O0 "worked").
+    : i __lw ( int_width lt )
+    : i __rw ( int_width rt )
+    ? & & & > __lw 0 > __rw 0 != __lw __rw
+    & == ( nurl_str_get lv 0 ) 37 == ( nurl_str_get rv 0 ) 37
+    { ( die lex ( nurl_str_cat ( nurl_str_cat4
+        `operator mixes integer operands of different widths: left is '` ( llvm_to_nurl lt )
+        `', right is '` ( llvm_to_nurl rt ) )
+        `' — NURL has no implicit numeric conversions; widen or truncate one side with '# T expr'` ) ) }
+    {}
+    // A CONSTANT shift amount out of the value type's range is LLVM
+    // poison at every opt level (spec §6.1) — statically known, so
+    // reject it here instead of letting an optimised build turn the
+    // poison into arbitrary misbehaviour. Runtime-computed amounts stay
+    // the documented poison contract.
+    ? & & | == tt TT_SHL == tt TT_SHR > __lw 0
+    != ( nurl_str_get rv 0 ) 37
+    { : i __sa ( nurl_str_to_int rv )
+        ? | < __sa 0 >= __sa __lw
+        { ( die lex ( nurl_str_cat ( nurl_str_cat4
+            `shift amount ` rv ` is out of range for the ` ( llvm_to_nurl lt ) )
+            ( nurl_str_cat3 ` operand (0..` ( nurl_str_int - __lw 1 ) `) — an out-of-range shift is LLVM poison (spec §6.1); mask the amount or widen the operand` ) ) ) }
+        {}
+    }
+    {}
     : ~ s cmp_ty lt
     ? & is_cmp | ( is_ptr_ty lt ) ( is_ptr_ty rt ) {
         ? ( is_ptr_ty lt ) {
@@ -12158,7 +12192,14 @@
                 ( nurl_print store_val ) ( nurl_print `, ` ) ( nurl_print ( nurl_llty vt ) )
                 ( nurl_print `* @` ) ( nurl_print name ) ( nurl_print `\n` )
             }
-            {}
+            {  // No alloca, no global: the target does not exist. This
+                // used to fall through SILENTLY — the RHS was evaluated
+                // and the assignment vanished (no store, no diagnostic),
+                // found by the structural fuzzer's minimizer, whose
+                // deletions kept "compiling" through this hole.
+                ( die lex ( nurl_str_cat3
+                `assignment to undefined identifier '` name
+                `' — no binding, parameter, or global with this name is in scope; declare it first (': T name value')` ) ) }
         }
         // Panic-unwind journal: assigning an owned struct into a by-ref
         // capture escapes it to the caller's frame. Forget its heap leaves
