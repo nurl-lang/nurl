@@ -4,6 +4,20 @@
     {
       "date": "2026-08-03",
       "family": "differential-struct",
+      "title": "Constant out-of-range shift in a match guard (`>> <i32-payload> 34`): -O0 \"worked\", -O1 aborted, -O2 segfaulted with a wild jump — branch-on-poison UB; now a compile error, and mixed-width binop registers (24 build-fails/1000 seeds as invalid IR) are rejected like the float/bool/pointer mixes",
+      "severity": "UB-at-O2",
+      "status": "fixed (genprog seed 684; should_fail_shift_range, should_fail_binop_width_mix)"
+    },
+    {
+      "date": "2026-08-03",
+      "family": "differential-struct",
+      "title": "Assignment to an undefined identifier was silently discarded — RHS evaluated, no store, no diagnostic (exposed by the fuzzer's minimizer, whose deletions kept compiling through the hole)",
+      "severity": "diagnostic",
+      "status": "fixed (should_fail_assign_undefined)"
+    },
+    {
+      "date": "2026-08-03",
+      "family": "differential-struct",
       "title": "Narrow-int enum payload slots stored non-canonically: `@ E { V 151 }` (i8 payload) kept raw 151 while the pattern binding reconstructed -105, so a literal constraint failed to match the value it names",
       "severity": "miscompile",
       "status": "fixed (genprog seed 20; enum_payload_canonical)"
