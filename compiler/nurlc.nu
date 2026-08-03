@@ -12278,10 +12278,15 @@
             : s rhs ( gen_expr lex syms cg )
             // Same store-time contract as the named-field path:
             // reject never-valid mixes, width-coerce the rest.
-            ? ( __store_type_clash ( nurl_get_last_type ) elem_ty )
-            { ( die lex ( nurl_str_cat3 `cannot store a value of type '` ( nurl_get_last_type ) `' into this element — the element type differs and NURL has no implicit conversions` ) ) }
+            // Bind the RHS type first: an owned nurl_get_last_type
+            // temporary passed straight into the arg list is not
+            // collected (the leak gate caught 80 of them per
+            // self-compile); a tracked local frees at scope exit.
+            : s __fs_rt ( nurl_get_last_type )
+            ? ( __store_type_clash __fs_rt elem_ty )
+            { ( die lex ( nurl_str_cat3 `cannot store a value of type '` __fs_rt `' into this element — the element type differs and NURL has no implicit conversions` ) ) }
             {}
-            : s rhsc ( coerce_store_val lex rhs ( nurl_get_last_type ) elem_ty syms cg )
+            : s rhsc ( coerce_store_val lex rhs __fs_rt elem_ty syms cg )
             : s gep ( nurl_cg_reg cg )
             ( nurl_print `  ` ) ( nurl_print gep )
             ( nurl_print ` = getelementptr ` ) ( nurl_print ( nurl_llty elem_ty ) )
@@ -12307,10 +12312,15 @@
             : s rhs ( gen_expr lex syms cg )
             // Same store-time contract as the named-field path:
             // reject never-valid mixes, width-coerce the rest.
-            ? ( __store_type_clash ( nurl_get_last_type ) elem_ty )
-            { ( die lex ( nurl_str_cat3 `cannot store a value of type '` ( nurl_get_last_type ) `' into this element — the element type differs and NURL has no implicit conversions` ) ) }
+            // Bind the RHS type first: an owned nurl_get_last_type
+            // temporary passed straight into the arg list is not
+            // collected (the leak gate caught 80 of them per
+            // self-compile); a tracked local frees at scope exit.
+            : s __fs_rt ( nurl_get_last_type )
+            ? ( __store_type_clash __fs_rt elem_ty )
+            { ( die lex ( nurl_str_cat3 `cannot store a value of type '` __fs_rt `' into this element — the element type differs and NURL has no implicit conversions` ) ) }
             {}
-            : s rhsc ( coerce_store_val lex rhs ( nurl_get_last_type ) elem_ty syms cg )
+            : s rhsc ( coerce_store_val lex rhs __fs_rt elem_ty syms cg )
             : s gep ( nurl_cg_reg cg )
             ( nurl_print `  ` ) ( nurl_print gep )
             ( nurl_print ` = getelementptr ` ) ( nurl_print ( nurl_llty elem_ty ) )
@@ -12336,10 +12346,15 @@
             : s rhs ( gen_expr lex syms cg )
             // Same store-time contract as the named-field path:
             // reject never-valid mixes, width-coerce the rest.
-            ? ( __store_type_clash ( nurl_get_last_type ) elem_type )
-            { ( die lex ( nurl_str_cat3 `cannot store a value of type '` ( nurl_get_last_type ) `' into this element — the element type differs and NURL has no implicit conversions` ) ) }
+            // Bind the RHS type first: an owned nurl_get_last_type
+            // temporary passed straight into the arg list is not
+            // collected (the leak gate caught 80 of them per
+            // self-compile); a tracked local frees at scope exit.
+            : s __fs_rt ( nurl_get_last_type )
+            ? ( __store_type_clash __fs_rt elem_type )
+            { ( die lex ( nurl_str_cat3 `cannot store a value of type '` __fs_rt `' into this element — the element type differs and NURL has no implicit conversions` ) ) }
             {}
-            : s rhsc ( coerce_store_val lex rhs ( nurl_get_last_type ) elem_type syms cg )
+            : s rhsc ( coerce_store_val lex rhs __fs_rt elem_type syms cg )
             // Emit array indexing GEP + store
             : s gep ( nurl_cg_reg cg )
             ( nurl_print `  ` ) ( nurl_print gep )
@@ -12401,10 +12416,15 @@
                         : s rhs ( gen_expr lex syms cg )
                         // Same store-time contract as the named-field path:
                         // reject never-valid mixes, width-coerce the rest.
-                        ? ( __store_type_clash ( nurl_get_last_type ) st )
-                        { ( die lex ( nurl_str_cat3 `cannot store a value of type '` ( nurl_get_last_type ) `' into this element — the element type differs and NURL has no implicit conversions` ) ) }
+                        // Bind the RHS type first: an owned nurl_get_last_type
+                        // temporary passed straight into the arg list is not
+                        // collected (the leak gate caught 80 of them per
+                        // self-compile); a tracked local frees at scope exit.
+                        : s __fs_rt ( nurl_get_last_type )
+                        ? ( __store_type_clash __fs_rt st )
+                        { ( die lex ( nurl_str_cat3 `cannot store a value of type '` __fs_rt `' into this element — the element type differs and NURL has no implicit conversions` ) ) }
                         {}
-                        : s rhsc ( coerce_store_val lex rhs ( nurl_get_last_type ) st syms cg )
+                        : s rhsc ( coerce_store_val lex rhs __fs_rt st syms cg )
                         : s gep ( nurl_cg_reg cg )
                         ( nurl_print `  ` ) ( nurl_print gep )
                         ( nurl_print ` = getelementptr ` ) ( nurl_print ( nurl_llty st ) )
@@ -12434,7 +12454,8 @@
                             // time rule as `:` binds and struct-literal field
                             // inits. Emitting the raw value stored e.g. an i32
                             // mul into an i16 field: invalid IR only clang caught.
-                            : s rhsc ( coerce_store_val lex rhs ( nurl_get_last_type ) ftype syms cg )
+                            : s __fs_rt ( nurl_get_last_type )
+                            : s rhsc ( coerce_store_val lex rhs __fs_rt ftype syms cg )
                             : s gep ( nurl_cg_reg cg )
                             ( nurl_print `  ` ) ( nurl_print gep )
                             ( nurl_print ` = getelementptr ` ) ( nurl_print ( nurl_llty st ) )
@@ -12463,10 +12484,15 @@
                                 : s rhs ( gen_expr lex syms cg )
                                 // Same store-time contract as the named-field path:
                                 // reject never-valid mixes, width-coerce the rest.
-                                ? ( __store_type_clash ( nurl_get_last_type ) st )
-                                { ( die lex ( nurl_str_cat3 `cannot store a value of type '` ( nurl_get_last_type ) `' into this element — the element type differs and NURL has no implicit conversions` ) ) }
+                                // Bind the RHS type first: an owned nurl_get_last_type
+                                // temporary passed straight into the arg list is not
+                                // collected (the leak gate caught 80 of them per
+                                // self-compile); a tracked local frees at scope exit.
+                                : s __fs_rt ( nurl_get_last_type )
+                                ? ( __store_type_clash __fs_rt st )
+                                { ( die lex ( nurl_str_cat3 `cannot store a value of type '` __fs_rt `' into this element — the element type differs and NURL has no implicit conversions` ) ) }
                                 {}
-                                : s rhsc ( coerce_store_val lex rhs ( nurl_get_last_type ) st syms cg )
+                                : s rhsc ( coerce_store_val lex rhs __fs_rt st syms cg )
                                 : s gep ( nurl_cg_reg cg )
                                 ( nurl_print `  ` ) ( nurl_print gep )
                                 ( nurl_print ` = getelementptr ` ) ( nurl_print ( nurl_llty st ) )
@@ -12489,10 +12515,15 @@
                     : s rhs ( gen_expr lex syms cg )
                     // Same store-time contract as the named-field path:
                     // reject never-valid mixes, width-coerce the rest.
-                    ? ( __store_type_clash ( nurl_get_last_type ) st )
-                    { ( die lex ( nurl_str_cat3 `cannot store a value of type '` ( nurl_get_last_type ) `' into this element — the element type differs and NURL has no implicit conversions` ) ) }
+                    // Bind the RHS type first: an owned nurl_get_last_type
+                    // temporary passed straight into the arg list is not
+                    // collected (the leak gate caught 80 of them per
+                    // self-compile); a tracked local frees at scope exit.
+                    : s __fs_rt ( nurl_get_last_type )
+                    ? ( __store_type_clash __fs_rt st )
+                    { ( die lex ( nurl_str_cat3 `cannot store a value of type '` __fs_rt `' into this element — the element type differs and NURL has no implicit conversions` ) ) }
                     {}
-                    : s rhsc ( coerce_store_val lex rhs ( nurl_get_last_type ) st syms cg )
+                    : s rhsc ( coerce_store_val lex rhs __fs_rt st syms cg )
                     : s gep ( nurl_cg_reg cg )
                     ( nurl_print `  ` ) ( nurl_print gep )
                     ( nurl_print ` = getelementptr ` ) ( nurl_print ( nurl_llty st ) )
@@ -12526,7 +12557,8 @@
                 // time rule as `:` binds and struct-literal field
                 // inits. Emitting the raw value stored e.g. an i32
                 // mul into an i16 field: invalid IR only clang caught.
-                : s rhsc ( coerce_store_val lex rhs ( nurl_get_last_type ) ftype syms cg )
+                : s __fs_rt ( nurl_get_last_type )
+                : s rhsc ( coerce_store_val lex rhs __fs_rt ftype syms cg )
                 : s gep ( nurl_cg_reg cg )
                 ( nurl_print `  ` ) ( nurl_print gep )
                 ( nurl_print ` = getelementptr ` ) ( nurl_print ( nurl_llty pt ) )
