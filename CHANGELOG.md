@@ -8,6 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.32.0] — 2026-08-03
+
+The MCP release. The Model Context Protocol shipped revision
+**2026-07-28**, which removes the `initialize` handshake and
+protocol-level sessions in favor of a stateless core — a
+backwards-incompatible change to the protocol every NURL MCP server and
+client speaks. NURL now implements it **dual-era**: one endpoint serves
+both the new stateless clients and every existing handshake-based one,
+so nothing that works today stops working.
+
 ### Added
 
 - **MCP 2026-07-28 (the stateless revision) — the stdlib MCP stack is
@@ -56,6 +66,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   * `examples/mcp_echo_server.nu` demonstrates the `server/discover`
     handler; new offline regression `compiler/tests/mcp_dual_era.nu`
     locks the dual-era wire shapes byte-for-byte.
+
+### Changed
+
+- **The playground's MCP endpoint is off its pinned revision.**
+  `nurlapi`'s `/mcp` hard-coded `protocolVersion: "2025-03-26"` (chosen
+  for FastMCP parity). It now negotiates: a client asking for
+  `2025-03-26` still gets exactly that, newer handshake clients get
+  theirs, and modern clients get `server/discover` plus per-request
+  `_meta`. Its static `tools/list`, `resources/list`, `prompts/list`
+  and `resources/read` results carry `cacheScope: "public"` with a
+  1-hour `ttlMs`, so shared intermediaries can cache them.
+- **`packages/nurl-mcp` 0.8.0** and **`packages/swarm-mcp` 0.22.0**
+  adopt the dual-era layer in their hand-rolled dispatch loops
+  (`server/discover`, the −32022 version gate, `_meta` serverInfo,
+  handshake-revision echo).
+
+### Fixed
+
+- **swarm-mcp's MCP handshake reported a stale version.**
+  `serverInfo.version` was a hand-written `0.20.0` while the package
+  was at 0.21.1. The handshake, `server/discover`, and the `--version`
+  banner now all read one `sm_version` source.
+- **A latent double-free in the registry's stdio serve loop.** It
+  called `json_free` on the response *after* `mcp_send_message`, which
+  already consumes its argument. Unifying the loop onto
+  `mcp_registry_envelope` removed the second free.
 
 ## [0.31.1] — 2026-08-03
 
@@ -10426,7 +10462,8 @@ releases are measured.
   compile-server (`api/`), browser playground (`nurlweb/`).
 * Dual license: MIT (LICENSE-MIT) or Apache-2.0 (LICENSE-APACHE).
 
-[Unreleased]: https://github.com/nurl-lang/nurl/compare/v0.31.1...HEAD
+[Unreleased]: https://github.com/nurl-lang/nurl/compare/v0.32.0...HEAD
+[0.32.0]: https://github.com/nurl-lang/nurl/compare/v0.31.1...v0.32.0
 [0.31.1]: https://github.com/nurl-lang/nurl/compare/v0.31.0...v0.31.1
 [0.31.0]: https://github.com/nurl-lang/nurl/compare/v0.30.0...v0.31.0
 [0.30.0]: https://github.com/nurl-lang/nurl/compare/v0.29.0...v0.30.0
