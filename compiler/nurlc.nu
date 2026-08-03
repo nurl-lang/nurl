@@ -12235,6 +12235,12 @@
         { : i idx ( nurl_lex_inum lex )
             ( nurl_lex_advance lex )
             : s rhs ( gen_expr lex syms cg )
+            // Same store-time contract as the named-field path:
+            // reject never-valid mixes, width-coerce the rest.
+            ? ( __store_type_clash ( nurl_get_last_type ) elem_ty )
+            { ( die lex ( nurl_str_cat3 `cannot store a value of type '` ( nurl_get_last_type ) `' into this element — the element type differs and NURL has no implicit conversions` ) ) }
+            {}
+            : s rhsc ( coerce_store_val lex rhs ( nurl_get_last_type ) elem_ty syms cg )
             : s gep ( nurl_cg_reg cg )
             ( nurl_print `  ` ) ( nurl_print gep )
             ( nurl_print ` = getelementptr ` ) ( nurl_print ( nurl_llty elem_ty ) )
@@ -12242,7 +12248,7 @@
             ( nurl_print ` ` ) ( nurl_print data_ptr )
             ( nurl_print `, i32 ` ) ( nurl_print ( nurl_str_int idx ) ) ( nurl_print `\n` )
             ( nurl_print `  store ` ) ( nurl_print ( nurl_llty elem_ty ) )
-            ( nurl_print ` ` ) ( nurl_print rhs )
+            ( nurl_print ` ` ) ( nurl_print rhsc )
             ( nurl_print `, ` ) ( nurl_print ( nurl_llty elem_ty ) )
             ( nurl_print `* ` ) ( nurl_print gep ) ( nurl_print `\n` )
             ^ rhs
@@ -12258,6 +12264,12 @@
             // an unsigned index but not write at one.
             : s idx_type ( nurl_get_last_type )
             : s rhs ( gen_expr lex syms cg )
+            // Same store-time contract as the named-field path:
+            // reject never-valid mixes, width-coerce the rest.
+            ? ( __store_type_clash ( nurl_get_last_type ) elem_ty )
+            { ( die lex ( nurl_str_cat3 `cannot store a value of type '` ( nurl_get_last_type ) `' into this element — the element type differs and NURL has no implicit conversions` ) ) }
+            {}
+            : s rhsc ( coerce_store_val lex rhs ( nurl_get_last_type ) elem_ty syms cg )
             : s gep ( nurl_cg_reg cg )
             ( nurl_print `  ` ) ( nurl_print gep )
             ( nurl_print ` = getelementptr ` ) ( nurl_print ( nurl_llty elem_ty ) )
@@ -12265,7 +12277,7 @@
             ( nurl_print ` ` ) ( nurl_print data_ptr )
             ( nurl_print `, ` ) ( nurl_print ( nurl_llty idx_type ) ) ( nurl_print ` ` ) ( nurl_print idx_val ) ( nurl_print `\n` )
             ( nurl_print `  store ` ) ( nurl_print ( nurl_llty elem_ty ) )
-            ( nurl_print ` ` ) ( nurl_print rhs )
+            ( nurl_print ` ` ) ( nurl_print rhsc )
             ( nurl_print `, ` ) ( nurl_print ( nurl_llty elem_ty ) )
             ( nurl_print `* ` ) ( nurl_print gep ) ( nurl_print `\n` )
             ^ rhs
@@ -12276,11 +12288,17 @@
         {  // Numeric index: array access like raw_ptr[0] = value
             : i idx ( nurl_lex_inum lex )
             ( nurl_lex_advance lex )
-            // Generate RHS
-            : s rhs ( gen_expr lex syms cg )
             // Strip trailing '*' to get the element type, e.g. "i64*" → "i64"
             : i ptlen ( nurl_str_len pt )
             : s elem_type ( nurl_str_slice pt 0 - ptlen 1 )
+            // Generate RHS
+            : s rhs ( gen_expr lex syms cg )
+            // Same store-time contract as the named-field path:
+            // reject never-valid mixes, width-coerce the rest.
+            ? ( __store_type_clash ( nurl_get_last_type ) elem_type )
+            { ( die lex ( nurl_str_cat3 `cannot store a value of type '` ( nurl_get_last_type ) `' into this element — the element type differs and NURL has no implicit conversions` ) ) }
+            {}
+            : s rhsc ( coerce_store_val lex rhs ( nurl_get_last_type ) elem_type syms cg )
             // Emit array indexing GEP + store
             : s gep ( nurl_cg_reg cg )
             ( nurl_print `  ` ) ( nurl_print gep )
@@ -12289,7 +12307,7 @@
             ( nurl_print ` ` ) ( nurl_print pv )
             ( nurl_print `, i32 ` ) ( nurl_print ( nurl_str_int idx ) ) ( nurl_print `\n` )
             ( nurl_print `  store ` ) ( nurl_print ( nurl_llty elem_type ) )
-            ( nurl_print ` ` ) ( nurl_print rhs )
+            ( nurl_print ` ` ) ( nurl_print rhsc )
             ( nurl_print `, ` ) ( nurl_print ( nurl_llty elem_type ) )
             ( nurl_print `* ` ) ( nurl_print gep ) ( nurl_print `\n` )
             ^ rhs
@@ -12340,6 +12358,12 @@
                         : s idx_val ( gen_expr lex syms cg )
                         : s idx_type ( nurl_get_last_type )
                         : s rhs ( gen_expr lex syms cg )
+                        // Same store-time contract as the named-field path:
+                        // reject never-valid mixes, width-coerce the rest.
+                        ? ( __store_type_clash ( nurl_get_last_type ) st )
+                        { ( die lex ( nurl_str_cat3 `cannot store a value of type '` ( nurl_get_last_type ) `' into this element — the element type differs and NURL has no implicit conversions` ) ) }
+                        {}
+                        : s rhsc ( coerce_store_val lex rhs ( nurl_get_last_type ) st syms cg )
                         : s gep ( nurl_cg_reg cg )
                         ( nurl_print `  ` ) ( nurl_print gep )
                         ( nurl_print ` = getelementptr ` ) ( nurl_print ( nurl_llty st ) )
@@ -12347,7 +12371,7 @@
                         ( nurl_print ` ` ) ( nurl_print pv )
                         ( nurl_print `, ` ) ( nurl_print ( nurl_llty idx_type ) ) ( nurl_print ` ` ) ( nurl_print idx_val ) ( nurl_print `\n` )
                         ( nurl_print `  store ` ) ( nurl_print ( nurl_llty st ) )
-                        ( nurl_print ` ` ) ( nurl_print rhs )
+                        ( nurl_print ` ` ) ( nurl_print rhsc )
                         ( nurl_print `, ` ) ( nurl_print ( nurl_llty st ) )
                         ( nurl_print `* ` ) ( nurl_print gep ) ( nurl_print `\n` )
                         ^ rhs
@@ -12364,6 +12388,12 @@
                                 `cannot store a value of type '` ( nurl_get_last_type ) `' into field '` fname )
                                 ( nurl_str_cat3 `' of type '` ftype `' — NURL has no implicit conversions` ) ) ) }
                             {}
+                            // Width-coerce the RHS to the field type (trunc /
+                            // sext / zext by source signedness) — the same store-
+                            // time rule as `:` binds and struct-literal field
+                            // inits. Emitting the raw value stored e.g. an i32
+                            // mul into an i16 field: invalid IR only clang caught.
+                            : s rhsc ( coerce_store_val lex rhs ( nurl_get_last_type ) ftype syms cg )
                             : s gep ( nurl_cg_reg cg )
                             ( nurl_print `  ` ) ( nurl_print gep )
                             ( nurl_print ` = getelementptr ` ) ( nurl_print ( nurl_llty st ) )
@@ -12371,7 +12401,7 @@
                             ( nurl_print ` ` ) ( nurl_print pv )
                             ( nurl_print `, i32 0, i32 ` ) ( nurl_print ( nurl_str_int fidx ) ) ( nurl_print `\n` )
                             ( nurl_print `  store ` ) ( nurl_print ( nurl_llty ftype ) )
-                            ( nurl_print ` ` ) ( nurl_print rhs )
+                            ( nurl_print ` ` ) ( nurl_print rhsc )
                             ( nurl_print `, ` ) ( nurl_print ( nurl_llty ftype ) )
                             ( nurl_print `* ` ) ( nurl_print gep ) ( nurl_print `\n` )
                             ^ rhs
@@ -12390,6 +12420,12 @@
                             { : s idx_val ( gen_expr lex syms cg )
                                 : s idx_type ( nurl_get_last_type )
                                 : s rhs ( gen_expr lex syms cg )
+                                // Same store-time contract as the named-field path:
+                                // reject never-valid mixes, width-coerce the rest.
+                                ? ( __store_type_clash ( nurl_get_last_type ) st )
+                                { ( die lex ( nurl_str_cat3 `cannot store a value of type '` ( nurl_get_last_type ) `' into this element — the element type differs and NURL has no implicit conversions` ) ) }
+                                {}
+                                : s rhsc ( coerce_store_val lex rhs ( nurl_get_last_type ) st syms cg )
                                 : s gep ( nurl_cg_reg cg )
                                 ( nurl_print `  ` ) ( nurl_print gep )
                                 ( nurl_print ` = getelementptr ` ) ( nurl_print ( nurl_llty st ) )
@@ -12397,7 +12433,7 @@
                                 ( nurl_print ` ` ) ( nurl_print pv )
                                 ( nurl_print `, ` ) ( nurl_print ( nurl_llty idx_type ) ) ( nurl_print ` ` ) ( nurl_print idx_val ) ( nurl_print `\n` )
                                 ( nurl_print `  store ` ) ( nurl_print ( nurl_llty st ) )
-                                ( nurl_print ` ` ) ( nurl_print rhs )
+                                ( nurl_print ` ` ) ( nurl_print rhsc )
                                 ( nurl_print `, ` ) ( nurl_print ( nurl_llty st ) )
                                 ( nurl_print `* ` ) ( nurl_print gep ) ( nurl_print `\n` )
                                 ^ rhs
@@ -12410,6 +12446,12 @@
                     : s idx_val ( gen_expr lex syms cg )
                     : s idx_type ( nurl_get_last_type )
                     : s rhs ( gen_expr lex syms cg )
+                    // Same store-time contract as the named-field path:
+                    // reject never-valid mixes, width-coerce the rest.
+                    ? ( __store_type_clash ( nurl_get_last_type ) st )
+                    { ( die lex ( nurl_str_cat3 `cannot store a value of type '` ( nurl_get_last_type ) `' into this element — the element type differs and NURL has no implicit conversions` ) ) }
+                    {}
+                    : s rhsc ( coerce_store_val lex rhs ( nurl_get_last_type ) st syms cg )
                     : s gep ( nurl_cg_reg cg )
                     ( nurl_print `  ` ) ( nurl_print gep )
                     ( nurl_print ` = getelementptr ` ) ( nurl_print ( nurl_llty st ) )
@@ -12417,7 +12459,7 @@
                     ( nurl_print ` ` ) ( nurl_print pv )
                     ( nurl_print `, ` ) ( nurl_print ( nurl_llty idx_type ) ) ( nurl_print ` ` ) ( nurl_print idx_val ) ( nurl_print `\n` )
                     ( nurl_print `  store ` ) ( nurl_print ( nurl_llty st ) )
-                    ( nurl_print ` ` ) ( nurl_print rhs )
+                    ( nurl_print ` ` ) ( nurl_print rhsc )
                     ( nurl_print `, ` ) ( nurl_print ( nurl_llty st ) )
                     ( nurl_print `* ` ) ( nurl_print gep ) ( nurl_print `\n` )
                     ^ rhs
@@ -12438,6 +12480,12 @@
                     `cannot store a value of type '` ( nurl_get_last_type ) `' into field '` fname )
                     ( nurl_str_cat3 `' of type '` ftype `' — NURL has no implicit conversions` ) ) ) }
                 {}
+                // Width-coerce the RHS to the field type (trunc /
+                // sext / zext by source signedness) — the same store-
+                // time rule as `:` binds and struct-literal field
+                // inits. Emitting the raw value stored e.g. an i32
+                // mul into an i16 field: invalid IR only clang caught.
+                : s rhsc ( coerce_store_val lex rhs ( nurl_get_last_type ) ftype syms cg )
                 : s gep ( nurl_cg_reg cg )
                 ( nurl_print `  ` ) ( nurl_print gep )
                 ( nurl_print ` = getelementptr ` ) ( nurl_print ( nurl_llty pt ) )
@@ -12445,7 +12493,7 @@
                 ( nurl_print ` ` ) ( nurl_print alloca_ptr )
                 ( nurl_print `, i32 0, i32 ` ) ( nurl_print ( nurl_str_int fidx ) ) ( nurl_print `\n` )
                 ( nurl_print `  store ` ) ( nurl_print ( nurl_llty ftype ) )
-                ( nurl_print ` ` ) ( nurl_print rhs )
+                ( nurl_print ` ` ) ( nurl_print rhsc )
                 ( nurl_print `, ` ) ( nurl_print ( nurl_llty ftype ) )
                 ( nurl_print `* ` ) ( nurl_print gep ) ( nurl_print `\n` )
                 ^ rhs
@@ -13785,6 +13833,29 @@
                             ( nurl_print `  ` ) ( nurl_print ext_reg ) ( nurl_print ext_op )
                             ( nurl_print ( nurl_llty fty ) ) ( nurl_print ` ` ) ( nurl_print fval ) ( nurl_print ` to i64\n` )
                             = wide_val ext_reg }
+                        {}
+                        // Canonicalize to the DECLARED payload type when it is
+                        // a narrow int and the value's type differs:
+                        // `@ E { V 151 }` with an i8 payload must store the
+                        // same slot bits as `@ E { V # i8 151 }` (-105,
+                        // sign-extended). Without this the slot kept the raw
+                        // wide value, so a literal constraint in a `??` arm
+                        // (compared against the slot) and the arm's payload
+                        // binding (trunc+extend of the slot) disagreed about
+                        // the same logical value — found by the structural
+                        // fuzzer (genprog seed 20).
+                        : s __pty ( nurl_sym_get syms ( nurl_str_cat3 enum_vname `__payload__` ( nurl_str_int - idx 1 ) ) )
+                        ? & & > ( int_width __pty ) 0 < ( int_width __pty ) 64
+                        ! ( seq __pty fty )
+                        { : s tr_reg ( nurl_cg_reg cg )
+                            ( nurl_print `  ` ) ( nurl_print tr_reg )
+                            ( nurl_print ` = trunc i64 ` ) ( nurl_print wide_val )
+                            ( nurl_print ` to ` ) ( nurl_print ( nurl_llty __pty ) ) ( nurl_print `\n` )
+                            : s cn_reg ( nurl_cg_reg cg )
+                            ( nurl_print `  ` ) ( nurl_print cn_reg )
+                            ( nurl_print ? ( ty_is_unsigned __pty ) ` = zext ` ` = sext ` )
+                            ( nurl_print ( nurl_llty __pty ) ) ( nurl_print ` ` ) ( nurl_print tr_reg ) ( nurl_print ` to i64\n` )
+                            = wide_val cn_reg }
                         {}
                         = actual_fval wide_val
                         = actual_fty `i64`
