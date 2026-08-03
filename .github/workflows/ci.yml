@@ -289,11 +289,15 @@ jobs:
         # the --san build above; run_san_tests.sh exits non-zero on any LSan hit.
         # loop_drop_reclaim + recover_unwind pin the loop-body `% Drop` fix (a
         # loop-local Drop value is now dropped each iteration, not leaked).
+        # defer_drop_reclaim + defer_scoped + defer_ret_transfer pin the
+        # defer-vs-auto-drop fix (a `;` defer used to disable every owned
+        # drop in the function; scoped defers emitted invalid IR).
         run: |
           LSAN_DETECT_LEAKS=1 ./compiler/tests/run_san_tests.sh \
             struct_nested_field_drop arm_local_drop arm_local_trailing_drop \
             recover_unwind loop_drop_reclaim closure_env_reclaim closure_env_binding \
-            ternary_slice_owned match_slice_owned arm_assign_tail_drop
+            ternary_slice_owned match_slice_owned arm_assign_tail_drop \
+            defer_drop_reclaim defer_scoped defer_ret_transfer
 
   webdocs-build:
     name: web docs build (fumadocs)

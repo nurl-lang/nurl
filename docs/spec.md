@@ -666,6 +666,26 @@ The index form is chosen by the LHS LLVM type:
 Executes *body* when the enclosing function returns (LIFO order across
 multiple defers). Useful for guaranteed cleanup.
 
+Semantics (v2.3, 2026-08-03):
+
+- **Reachability-armed** — the body runs at function exit iff its `;`
+  statement was actually executed. A defer inside an untaken branch
+  does not run; a defer inside a loop body runs **once**, not once per
+  iteration.
+- **Ownership interaction** — a defer body may reference any owned
+  value (string, slice, `% Drop` value, closure) whose binding was
+  registered *before* the `;` statement; those values stay alive
+  through the defer chain and are auto-dropped after it runs. Values
+  bound *after* the last defer drop at their normal scope exit.
+  Returning an owned value transfers it to the caller as usual. One
+  sharp edge: with several return paths, a pre-defer owned value that
+  is returned on one path but not another is *leaked* (never
+  double-freed) on the path that does not return it.
+- `^` (return) inside a defer body is a compile error — the chain runs
+  during return. `;` inside a closure body is a compile error (a
+  closure is its own function; defer there would chain into the
+  enclosing function).
+
 ### 5.4 Loop, foreach, complement-as-statement
 
 The `~` token at statement position is *speculatively* parsed in this

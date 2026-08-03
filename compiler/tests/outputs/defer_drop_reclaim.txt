@@ -1,0 +1,11 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+defer A saw 5 drops
+loop drops: 5
+post-defer string
+pre-defer string
+arm-local
+defer B
+arm drops total: 6

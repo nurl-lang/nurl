@@ -765,6 +765,15 @@ by the leak-verification tests `struct_nested_field_drop`, `arm_local_drop`,
 `arm_local_trailing_drop` (§6.6). Do **not** treat them as open
 limitations.
 
+This holds with `;` **defers** in the function too: values registered
+before a defer statement (which its body may reference) are reclaimed
+in the function's cleanup block *after* the defer chain runs; values
+registered after it drop at their normal scope exits. Pinned by
+`defer_drop_reclaim`, `defer_scoped`, `defer_ret_transfer` (spec
+§5.3 has the full semantics, including the one documented leak seam:
+a pre-defer owned value returned on one path but not another leaks on
+the non-returning path — never a double free).
+
 ### 7.2 The panic-unwind allocation journal
 
 A panic `longjmp`s straight to the recover frame, skipping every

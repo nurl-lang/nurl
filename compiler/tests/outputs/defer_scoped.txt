@@ -1,0 +1,12 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+body done
+taken-arm defer
+body done
+loop done k=3
+loop defer once
+lifo body
+second
+first

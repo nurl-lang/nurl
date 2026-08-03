@@ -31,5 +31,8 @@ NURL_SAN=1 ./nurl.sh -O1 tools/fuzz/parse_harness.nu "$HARNESS" \
     || { echo "harness build failed" >&2; exit 2; }
 
 echo "[run] $ITERS iterations, seed $SEED, ${TIMEOUT}s per-input timeout"
+SUMMARY_ARGS=()
+[[ -n "${FUZZ_SUMMARY:-}" ]] && SUMMARY_ARGS=(--summary "$FUZZ_SUMMARY")
 exec python3 tools/fuzz/fuzz_parsers.py \
-    --harness "$HARNESS" --seed "$SEED" --iters "$ITERS" --timeout "$TIMEOUT"
+    --harness "$HARNESS" --seed "$SEED" --iters "$ITERS" --timeout "$TIMEOUT" \
+    "${SUMMARY_ARGS[@]}"

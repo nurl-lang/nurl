@@ -1,20 +1,35 @@
 # tools/fuzz — fuzzing for nurlc and the stdlib parsers
 
-Two fuzzers, both run weekly (and on demand) by
+Three fuzzers, all run weekly (and on demand) by
 [`.github/workflows/fuzz.yml`](../../.github/workflows/fuzz.yml), never as a
-per-PR gate. Either finding fails the run and uploads its reproducer inputs
-from `failures/` as an artifact.
+per-PR gate. Any finding fails the run and uploads its reproducer inputs
+from `failures/` as an artifact. After every run the workflow renders
+[`FUZZRESULTS.md`](../../FUZZRESULTS.md) via `report.py` and commits it to
+main (the same publish-the-evidence flow `bench.yml` uses); the curated log
+of real bugs lives in [`FINDINGS.json`](FINDINGS.json).
 
-1. **Differential miscompile fuzzer** (`fuzz.sh` + `gen.py`) — described below:
-   oracle-backed hunt for silent integer/float miscompiles in `nurlc`.
-2. **Mutational parser fuzzer** (`fuzz_parsers.sh` + `fuzz_parsers.py` +
+1. **Differential miscompile fuzzer, integer** (`fuzz.sh` + `gen.py`) —
+   described below: oracle-backed hunt for silent integer/float miscompiles.
+2. **Differential miscompile fuzzer, structural** (`FUZZ_GEN=struct fuzz.sh`
+   + `genprog.py`) — whole programs over the structural surface: enums with
+   N-ary mixed payloads (`i8…u64`, `f`, `s`), match with guards / literal
+   constraints / or-patterns, struct field writes, closures (creation-time
+   scalar capture), while/foreach loops, `;` defer (reachability-armed,
+   LIFO), `% Drop` destructors across scope shapes, string/Vec/slice
+   ownership traffic, helper calls and self-recursion. The same script is
+   the statement-level oracle. `FUZZ_SAN_EVERY=N` additionally builds every
+   Nth seed with ASan+LSan+UBSan and runs it leak-detection-on: a leak or
+   UAF in the generated ownership traffic is a finding even when stdout
+   matches — this is the leg that hunts auto-drop bugs.
+3. **Mutational parser fuzzer** (`fuzz_parsers.sh` + `fuzz_parsers.py` +
    `parse_harness.nu`) — mutates seeds for the untrusted-input parsers
    (x509/DER, cbor, msgpack, json, yaml, xml, toml) against an ASan+UBSan
    harness; a crash / out-of-bounds / UB / hang is a bug. Run it locally with
    `./tools/fuzz/fuzz_parsers.sh [SEED] [ITERS] [TIMEOUT]` after `./build.sh`.
 
-Both are deterministic per seed, so a finding reproduces. Seed corpora live
-in-tree (`gen.py`'s generator; `fuzz_parsers.py`'s `TEXT_SEEDS`/`BINARY_SEEDS`).
+All are deterministic per seed, so a finding reproduces. Seed corpora live
+in-tree (`gen.py` / `genprog.py` generators; `fuzz_parsers.py`'s
+`TEXT_SEEDS`/`BINARY_SEEDS`).
 
 ## Differential fuzzer — how it works
 
@@ -109,10 +124,20 @@ side-channel — and any path that forgets to set/clear it miscompiles.**
 7. Constructing a wider field from a narrower unsigned value sign-extended
    (`gen_agg_lit` field-store hardcoded `sext`).
 
+## Bugs found (2026-08-03, structural generator bring-up)
+
+Four more, all fixed at the root the same day (see `FINDINGS.json` and the
+regression tests named there): a `;` defer disabling every auto-drop in its
+function (leak class), scoped defers emitting a branch to a nonexistent
+cleanup block (invalid IR), field/element stores skipping width coercion
+(invalid IR), and non-canonical narrow-int enum payload slots making a
+match literal constraint disagree with the arm's own payload binding
+(miscompile class).
+
 ## Scope / future
 
-Covers integer + int↔float value semantics. Natural extensions: float
-*arithmetic* with a rounding-aware oracle (currently only exact-integer
-round-trips), option/result construction + `??` match payload widths,
-struct field round-trips, and `-O0`-vs-`-O2` divergence on
-loop/recursion-heavy programs.
+Covers integer + int↔float value semantics (`gen.py`) and the structural
+surface (`genprog.py`). Natural extensions: float *arithmetic* with a
+rounding-aware oracle, generic-function instantiations in generated
+programs, `?T`/`!T E` construction + propagation chains, and trait-object
+dispatch.

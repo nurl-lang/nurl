@@ -1,0 +1,8 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+lit_constraint_canonical ok
+binding_canonical ok
+sign_flip_canonical ok
+typed_init_same_slot ok
