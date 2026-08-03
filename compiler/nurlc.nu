@@ -2170,10 +2170,28 @@
 // the FUNCTION's return type, not just the value type — so a stray value
 // can never lower to `ret i64 …` out of a `void` function.
 @ gen_ret_term i lex i syms i cg s lt s val s skip s skip_str_ptr s skip_user_ptr s skip_struct_ptr s ret_ident → v {
-    : s dtop ( nurl_sym_get syms `__defer_top__` )
+    : s dtop ( nurl_sym_get g_fn_escapes `__defer_top_fn__` )
     : s fn_rt ( nurl_sym_get syms `__fn_ret_ty__` )
     ? != 0 ( nurl_str_len dtop )
-    {  // defers active: store return value then branch to defer chain
+    {  // defers active: drop what no defer body can reference (the
+        // snapshot entries are skipped inside each helper and reclaimed
+        // by fn_cleanup after the chain runs), record the returned
+        // binding so fn_cleanup does not reclaim what the caller now
+        // owns, then store the return value and enter the chain.
+        ( mem_drop_owned syms cg skip )
+        ? != 0 g_auto_drop_strings
+        { ( mem_drop_owned_strings syms cg skip_str_ptr )
+            ( mem_drop_owned_struct_fields syms cg skip_struct_ptr )
+            ( mem_drop_user_drops syms cg skip_user_ptr )
+        }
+        {}
+        ( mem_own_closure_remove syms ret_ident )
+        ( mem_drop_closure_envs syms cg )
+        ( __dret_skip_add skip )
+        ( __dret_skip_add skip_str_ptr )
+        ( __dret_skip_add skip_user_ptr )
+        ( __dret_skip_add skip_struct_ptr )
+        ( __dret_skip_add ret_ident )
         ? ! ( seq lt `void` )
         { : s rvp ( nurl_sym_get syms `__ret_val__` )
             ( nurl_print `  store ` ) ( nurl_print ( nurl_llty lt ) ) ( nurl_print ` ` )
@@ -2222,6 +2240,11 @@
     // within-statement half of the prefix-arity cascade gotcha.
     ? != 0 g_ret_forbidden
     { ( die lex `'^' (return) cannot appear here — it is being read as a value operand. A preceding prefix operator is short an argument and consumed this '^': every NURL operator has fixed arity and no closing bracket, so a missing operand silently swallows what follows. Count the operands on the operator before this '^'.` ) }
+    {}
+    // A `^` inside a `;` defer block would branch back into the defer
+    // chain it is already executing — an infinite loop at run time.
+    ? ( seq ( nurl_sym_get g_fn_escapes `__in_defer_body__` ) `1` )
+    { ( die lex `'^' (return) inside a ';' defer block — the defer chain runs DURING return and cannot itself return. Compute the value before the defer, or restructure the cleanup.` ) }
     {}
     // Borrow checker: source line of the `^` token.
     : i bck_line ( nurl_lex_line lex )
@@ -2276,7 +2299,7 @@
     ( seq ( nurl_sym_get syms `__owned_slices__` ) `` )
     ( seq ( nurl_sym_get syms `__owned_struct_fields__` ) `` )
     & ( seq ( nurl_sym_get syms `__user_drops__` ) `` )
-    ( seq ( nurl_sym_get syms `__defer_top__` ) `` )
+    ( seq ( nurl_sym_get g_fn_escapes `__defer_top_fn__` ) `` )
     { ( nurl_sym_def syms `__tail_call_pending__` `1` ) }
     {}
     // Snapshot whether the return expression is a direct parenthesised
@@ -8992,29 +9015,62 @@
 // normal execution; every exit path routes through the defer chain.
 
 @ gen_defer i lex i syms i cg → s {
+    // A defer inside a closure body would chain to the ENCLOSING
+    // function's cleanup label — a branch into another function's
+    // blocks (invalid IR). Refuse cleanly until closures grow their
+    // own defer chain.
+    ? != g_bck_closure_depth 0
+    { ( die lex `';' defer inside a closure body is not supported yet — do the cleanup at the end of the closure body, or defer in the enclosing function` ) }
+    {}
     ( nurl_lex_advance lex )
     : s ldefer ( nurl_cg_lbl cg `defer` )
     : s lafter ( nurl_cg_lbl cg `after_defer` )
-    : s prev_top ( nurl_sym_get syms `__defer_top__` )
-    // Push this defer onto the chain (LIFO: new top)
-    ( nurl_sym_def syms `__defer_top__` ldefer )
+    : s lbody ( nurl_cg_lbl cg `defer_body` )
+    : s lskip ( nurl_cg_lbl cg `defer_skip` )
+    : s prev_top ( nurl_sym_get g_fn_escapes `__defer_top_fn__` )
+    // Armed flag: an i8* alloca — emit_hoisted lifts it into the entry
+    // block and null-inits it there, so a registration point that never
+    // executes (a defer in an untaken arm) leaves the flag null and the
+    // body is skipped at run time. Reachability semantics: a defer runs
+    // iff its `;` statement was reached, at most once per site (a
+    // loop-body defer runs once at function exit, not per iteration).
+    : s dflag ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print dflag ) ( nurl_print ` = alloca i8*\n` )
+    ( nurl_print `  store i8* inttoptr (i64 1 to i8*), i8** ` ) ( nurl_print dflag ) ( emit_dbg_eol )
+    // Ownership snapshot: everything registered so far may be referenced
+    // by this defer body — protect it from scope-exit / return-site
+    // drops; fn_cleanup reclaims it after the chain has run.
+    ( __defer_snap_take syms )
+    // Push this defer onto the chain (LIFO: new top). The slot lives in
+    // g_fn_escapes (function lifetime): a defer registered inside an
+    // arm/loop stays on the chain after that scope closes — the armed
+    // flag, not scope shape, decides at run time whether the body runs.
+    ( nurl_sym_set g_fn_escapes `__defer_top_fn__` ldefer )
     = g_defer_count + g_defer_count 1
     // Skip over the defer block during normal execution
     ( nurl_print `  br label %` ) ( nurl_print lafter ) ( emit_dbg_eol )
-    // Emit the defer block
+    // Defer entry: run the body only if the registration point was
+    // reached (armed flag non-null).
     ( emit ( nurl_str_cat ldefer `:` ) )
-    ( nurl_sym_def syms `__cur_lbl__` ldefer )
+    : s fv ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print fv ) ( nurl_print ` = load i8*, i8** ` ) ( nurl_print dflag ) ( nurl_print `\n` )
+    : s fcnd ( nurl_cg_reg cg )
+    ( nurl_print `  ` ) ( nurl_print fcnd ) ( nurl_print ` = icmp ne i8* ` ) ( nurl_print fv ) ( nurl_print `, null\n` )
+    ( nurl_print `  br i1 ` ) ( nurl_print fcnd ) ( nurl_print `, label %` ) ( nurl_print lbody )
+    ( nurl_print `, label %` ) ( nurl_print lskip ) ( emit_dbg_eol )
+    ( emit ( nurl_str_cat lbody `:` ) )
+    ( nurl_sym_def syms `__cur_lbl__` lbody )
     = g_did_ret 0
+    ( nurl_sym_set g_fn_escapes `__in_defer_body__` `1` )
     ( gen_block_stmts lex syms cg )
+    ( nurl_sym_set g_fn_escapes `__in_defer_body__` `` )
     // After the defer block: chain to previous defer or to fn_cleanup
+    : s lnext ? != 0 ( nurl_str_len prev_top ) prev_top ( nurl_sym_get syms `__fn_cleanup__` )
     ? == g_did_ret 0
-    { ? != 0 ( nurl_str_len prev_top )
-        { ( nurl_print `  br label %` ) ( nurl_print prev_top ) ( emit_dbg_eol ) }
-        { : s fc ( nurl_sym_get syms `__fn_cleanup__` )
-            ( nurl_print `  br label %` ) ( nurl_print fc ) ( emit_dbg_eol )
-        }
-    }
+    { ( nurl_print `  br label %` ) ( nurl_print lnext ) ( emit_dbg_eol ) }
     {}
+    ( emit ( nurl_str_cat lskip `:` ) )
+    ( nurl_print `  br label %` ) ( nurl_print lnext ) ( emit_dbg_eol )
     // Resume normal execution after the defer block
     ( emit ( nurl_str_cat lafter `:` ) )
     ( nurl_sym_def syms `__cur_lbl__` lafter )
@@ -9205,18 +9261,15 @@
 // Does NOT clear the list — each return path emits its own set; paths are
 // mutually exclusive at runtime.
 @ mem_drop_owned i syms i cg s skip_name → v {
-    : s dtop ( nurl_sym_get syms `__defer_top__` )
-    ? == 0 ( nurl_str_len dtop )
-    { : ~ s rest ( nurl_sym_get syms `__owned_slices__` )
-        ~ != 0 ( nurl_str_len rest ) {
-            : s name ( str_first_word rest )
-            = rest ( str_skip_word rest )
-            ? ! ( seq name skip_name )
-            { ( mem_emit_slice_free syms cg name ) }
-            {}
-        }
+    : s snap ( nurl_sym_get g_fn_escapes `__dsnap_slice__` )
+    : ~ s rest ( nurl_sym_get syms `__owned_slices__` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s name ( str_first_word rest )
+        = rest ( str_skip_word rest )
+        ? | ( seq name skip_name ) ( str_contains_word snap name )
+        {}
+        { ( mem_emit_slice_free syms cg name ) }
     }
-    {}
 }
 
 // ── Phase 2B: owned-string tracking (opt-in, gated on g_auto_drop_strings) ──
@@ -9268,22 +9321,20 @@
 }
 
 @ mem_drop_owned_strings i syms i cg s skip_ptr → v {
-    : s dtop ( nurl_sym_get syms `__defer_top__` )
-    ? == 0 ( nurl_str_len dtop )
-    { : ~ s rest ( nurl_sym_get syms `__owned_strings__` )
-        ~ != 0 ( nurl_str_len rest ) {
-            : s ptr ( str_first_word rest )
-            = rest ( str_skip_word rest )
-            ? & ! ( seq ptr skip_ptr ) ( mem_guard_frees syms ptr )
-            { : s v ( nurl_cg_reg cg )
-                ( nurl_print `  ` ) ( nurl_print v )
-                ( nurl_print ` = load i8*, i8** ` ) ( nurl_print ptr ) ( nurl_print `\n` )
-                ( nurl_print `  call void @nurl_free(i8* ` ) ( nurl_print v ) ( nurl_print `)` ) ( emit_dbg_eol )
-            }
-            {}
+    : s snap ( nurl_sym_get g_fn_escapes `__dsnap_str__` )
+    : ~ s rest ( nurl_sym_get syms `__owned_strings__` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s ptr ( str_first_word rest )
+        = rest ( str_skip_word rest )
+        ? & & ! ( seq ptr skip_ptr ) ! ( str_contains_word snap ptr )
+        ( mem_guard_frees syms ptr )
+        { : s v ( nurl_cg_reg cg )
+            ( nurl_print `  ` ) ( nurl_print v )
+            ( nurl_print ` = load i8*, i8** ` ) ( nurl_print ptr ) ( nurl_print `\n` )
+            ( nurl_print `  call void @nurl_free(i8* ` ) ( nurl_print v ) ( nurl_print `)` ) ( emit_dbg_eol )
         }
+        {}
     }
-    {}
 }
 
 // ── Phase 2C / 2D: owned struct-field tracking (gated on g_auto_drop_strings)
@@ -9517,26 +9568,24 @@
 }
 
 @ mem_drop_owned_struct_fields i syms i cg s skip_ptr → v {
-    : s dtop ( nurl_sym_get syms `__defer_top__` )
-    ? == 0 ( nurl_str_len dtop )
-    { : ~ s rest ( nurl_sym_get syms `__owned_struct_fields__` )
-        ~ != 0 ( nurl_str_len rest ) {
-            : s ptr ( str_first_word rest ) = rest ( str_skip_word rest )
-            : s sname ( str_first_word rest ) = rest ( str_skip_word rest )
-            : s path ( str_first_word rest ) = rest ( str_skip_word rest )
-            : s kind ( str_first_word rest ) = rest ( str_skip_word rest )
-            : s leaf_sname ( str_first_word rest ) = rest ( str_skip_word rest )
-            : s leaf_idx ( str_first_word rest ) = rest ( str_skip_word rest )
-            // skip_ptr names a struct binding whose owned fields ESCAPE
-            // as the return value (A4c ownership transfer) — the caller
-            // re-registers them, so dropping them here would dangle the
-            // returned copy's field pointers (use-after-free).
-            ? & != 0 ( nurl_str_len skip_ptr ) ( seq ptr skip_ptr )
-            {}
-            { ( mem_emit_struct_field_drop syms cg ptr sname path kind leaf_sname leaf_idx ) }
-        }
+    : s snap ( nurl_sym_get g_fn_escapes `__dsnap_sfield__` )
+    : ~ s rest ( nurl_sym_get syms `__owned_struct_fields__` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s ptr ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s sname ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s path ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s kind ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s leaf_sname ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s leaf_idx ( str_first_word rest ) = rest ( str_skip_word rest )
+        // skip_ptr names a struct binding whose owned fields ESCAPE
+        // as the return value (A4c ownership transfer) — the caller
+        // re-registers them, so dropping them here would dangle the
+        // returned copy's field pointers (use-after-free).
+        ? | & != 0 ( nurl_str_len skip_ptr ) ( seq ptr skip_ptr )
+        ( str_contains_word snap ptr )
+        {}
+        { ( mem_emit_struct_field_drop syms cg ptr sname path kind leaf_sname leaf_idx ) }
     }
-    {}
 }
 
 // A4c (caller side): a `: T x ( f )` binding whose RHS is a call to a
@@ -9642,50 +9691,170 @@
 // MIDDLE of the current list mid-arm; alloca register names are unique
 // per function, so word membership is exact.
 
-@ mem_drop_new_strings i syms i cg s old_list → v {
-    : s dtop ( nurl_sym_get syms `__defer_top__` )
-    ? == 0 ( nurl_str_len dtop )
-    { : ~ s rest ( nurl_sym_get syms `__owned_strings__` )
-        ~ != 0 ( nurl_str_len rest ) {
-            : s ptr ( str_first_word rest )
+// ── Defer-aware ownership snapshots ───────────────────────────────
+// A `;` defer body may reference any owned value registered BEFORE the
+// defer statement, so those values must survive every scope exit and
+// return site and be reclaimed only in fn_cleanup, AFTER the defer
+// chain has run. Each defer registration unions the current ownership
+// lists into fn-lifetime snapshot lists (g_fn_escapes — survives scope
+// pops); the drop helpers below skip snapshot entries per entry; the
+// fn_cleanup block drops them (mem_cleanup_snap_drops). Values
+// registered after the last defer can never appear in a defer body
+// (the body parsed earlier), so they drop on the normal paths. In a
+// function with no defers every snapshot is empty and every helper
+// emits exactly what it always did.
+
+// Union `src_key`'s records (recsz words each, keyed by word 0) into
+// the fn-lifetime snapshot list `dst_key`.
+@ __dsnap_union i syms s src_key s dst_key i recsz → v {
+    : ~ s rest ( nurl_sym_get syms src_key )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s key ( str_first_word rest )
+        : ~ s rec ( nurl_str_cat key `` )
+        = rest ( str_skip_word rest )
+        : ~ i k 1
+        ~ < k recsz {
+            = rec ( nurl_str_cat3 rec ` ` ( str_first_word rest ) )
             = rest ( str_skip_word rest )
-            ? | ( str_contains_word old_list ptr ) ! ( mem_guard_frees syms ptr )
-            {}
-            { : s v ( nurl_cg_reg cg )
-                ( nurl_print `  ` ) ( nurl_print v )
-                ( nurl_print ` = load i8*, i8** ` ) ( nurl_print ptr ) ( nurl_print `\n` )
-                ( nurl_print `  call void @nurl_free(i8* ` ) ( nurl_print v ) ( nurl_print `)` ) ( emit_dbg_eol )
-                // Null the slot after freeing: a loop-body re-entry
-                // re-executes the binding's registration-time free-old
-                // (gen_let), which must see NULL, not this dangling
-                // pointer.
-                ( nurl_print `  store i8* null, i8** ` ) ( nurl_print ptr ) ( emit_dbg_eol )
-            }
+            = k + k 1
+        }
+        : s cur ( nurl_sym_get g_fn_escapes dst_key )
+        ? ( str_contains_word cur key )
+        {}
+        { ( nurl_sym_set g_fn_escapes dst_key
+            ? == 0 ( nurl_str_len cur ) rec ( nurl_str_cat3 cur ` ` rec ) ) }
+    }
+}
+
+@ __defer_snap_take i syms → v {
+    ( __dsnap_union syms `__owned_strings__` `__dsnap_str__` 1 )
+    ( __dsnap_union syms `__owned_struct_fields__` `__dsnap_sfield__` 6 )
+    ( __dsnap_union syms `__user_drops__` `__dsnap_udrop__` 2 )
+    ( __dsnap_union syms `__owned_closure_envs__` `__dsnap_cenv__` 1 )
+    ( __dsnap_union syms `__owned_slices__` `__dsnap_slice__` 1 )
+}
+
+// Record a returned binding/alloca so fn_cleanup does not reclaim what
+// the caller now owns (return-site ownership transfer under defers).
+// Multi-path caveat: the skip list is static across all return sites,
+// so a path that did NOT return the recorded binding leaks it — a
+// leak, never a use-after-free.
+@ __dret_skip_add s w → v {
+    ? == 0 ( nurl_str_len w ) { ^ } {}
+    : s cur ( nurl_sym_get g_fn_escapes `__dret_skips__` )
+    ? ( str_contains_word cur w ) { ^ } {}
+    ( nurl_sym_set g_fn_escapes `__dret_skips__`
+    ? == 0 ( nurl_str_len cur ) w ( nurl_str_cat3 cur ` ` w ) )
+}
+
+// fn_cleanup: reclaim every snapshot entry the defer chain may have
+// referenced, minus return-transferred ones. Alloca-keyed kinds
+// (strings / struct fields / user drops) are safe for inner-scope
+// registrations too (allocas are function-scoped); name-keyed kinds
+// (closure envs / slices) are dropped only while still visible in the
+// top-level ownership list — an inner-scope one leaks rather than
+// resolving the name to the wrong binding.
+@ mem_cleanup_snap_drops i syms i cg → v {
+    : s skips ( nurl_sym_get g_fn_escapes `__dret_skips__` )
+    : ~ s rest ( nurl_sym_get g_fn_escapes `__dsnap_str__` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s ptr ( str_first_word rest )
+        = rest ( str_skip_word rest )
+        ? | ( str_contains_word skips ptr ) ! ( mem_guard_frees syms ptr )
+        {}
+        { : s v ( nurl_cg_reg cg )
+            ( nurl_print `  ` ) ( nurl_print v )
+            ( nurl_print ` = load i8*, i8** ` ) ( nurl_print ptr ) ( nurl_print `\n` )
+            ( nurl_print `  call void @nurl_free(i8* ` ) ( nurl_print v ) ( nurl_print `)` ) ( emit_dbg_eol )
+            ( nurl_print `  store i8* null, i8** ` ) ( nurl_print ptr ) ( emit_dbg_eol )
         }
     }
-    {}
+    = rest ( nurl_sym_get g_fn_escapes `__dsnap_sfield__` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s ptr ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s sname ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s path ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s kind ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s leaf_sname ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s leaf_idx ( str_first_word rest ) = rest ( str_skip_word rest )
+        ? ( str_contains_word skips ptr )
+        {}
+        { ( mem_emit_struct_field_drop syms cg ptr sname path kind leaf_sname leaf_idx ) }
+    }
+    = rest ( nurl_sym_get g_fn_escapes `__dsnap_udrop__` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s ptr ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s vt ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s impl_mangle_key ( nurl_sym_get2 g_impl_name_syms `drop##` vt )
+        ? | ( str_contains_word skips ptr ) == 0 ( nurl_str_len impl_mangle_key )
+        {}
+        { : s impl_name ( nurl_str_cat `drop__` impl_mangle_key )
+            : s v ( nurl_cg_reg cg )
+            ( nurl_print `  ` ) ( nurl_print v )
+            ( nurl_print ` = load ` ) ( nurl_print ( nurl_llty vt ) ) ( nurl_print `, ` ) ( nurl_print ( nurl_llty vt ) )
+            ( nurl_print `* ` ) ( nurl_print ptr ) ( nurl_print `\n` )
+            ( nurl_print `  call void @` ) ( nurl_print impl_name )
+            ( nurl_print `(` ) ( nurl_print ( nurl_llty vt ) ) ( nurl_print ` ` ) ( nurl_print v ) ( nurl_print `)` ) ( emit_dbg_eol )
+            ( mem_journal_forget_userdrop cg ptr vt )
+        }
+    }
+    = rest ( nurl_sym_get g_fn_escapes `__dsnap_cenv__` )
+    : s cenvs ( nurl_sym_get syms `__owned_closure_envs__` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s name ( str_first_word rest ) = rest ( str_skip_word rest )
+        ? | ( str_contains_word skips name ) ! ( str_contains_word cenvs name )
+        {}
+        { ( mem_emit_closure_env_drop syms cg name ) }
+    }
+    = rest ( nurl_sym_get g_fn_escapes `__dsnap_slice__` )
+    : s slcs ( nurl_sym_get syms `__owned_slices__` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s name ( str_first_word rest ) = rest ( str_skip_word rest )
+        ? | ( str_contains_word skips name ) ! ( str_contains_word slcs name )
+        {}
+        { ( mem_emit_slice_free syms cg name ) }
+    }
+}
+
+@ mem_drop_new_strings i syms i cg s old_list → v {
+    : s snap ( nurl_sym_get g_fn_escapes `__dsnap_str__` )
+    : ~ s rest ( nurl_sym_get syms `__owned_strings__` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s ptr ( str_first_word rest )
+        = rest ( str_skip_word rest )
+        ? | | ( str_contains_word old_list ptr ) ( str_contains_word snap ptr )
+        ! ( mem_guard_frees syms ptr )
+        {}
+        { : s v ( nurl_cg_reg cg )
+            ( nurl_print `  ` ) ( nurl_print v )
+            ( nurl_print ` = load i8*, i8** ` ) ( nurl_print ptr ) ( nurl_print `\n` )
+            ( nurl_print `  call void @nurl_free(i8* ` ) ( nurl_print v ) ( nurl_print `)` ) ( emit_dbg_eol )
+            // Null the slot after freeing: a loop-body re-entry
+            // re-executes the binding's registration-time free-old
+            // (gen_let), which must see NULL, not this dangling
+            // pointer.
+            ( nurl_print `  store i8* null, i8** ` ) ( nurl_print ptr ) ( emit_dbg_eol )
+        }
+    }
 }
 
 @ mem_drop_new_struct_fields i syms i cg s old_list → v {
-    : s dtop ( nurl_sym_get syms `__defer_top__` )
-    ? == 0 ( nurl_str_len dtop )
-    { : ~ s rest ( nurl_sym_get syms `__owned_struct_fields__` )
-        ~ != 0 ( nurl_str_len rest ) {
-            : s ptr ( str_first_word rest ) = rest ( str_skip_word rest )
-            : s sname ( str_first_word rest ) = rest ( str_skip_word rest )
-            : s path ( str_first_word rest ) = rest ( str_skip_word rest )
-            : s kind ( str_first_word rest ) = rest ( str_skip_word rest )
-            : s leaf_sname ( str_first_word rest ) = rest ( str_skip_word rest )
-            : s leaf_idx ( str_first_word rest ) = rest ( str_skip_word rest )
-            // A binding's several owned fields share one alloca ptr and
-            // are registered together, so ptr-membership decides for
-            // the whole group consistently.
-            ? ( str_contains_word old_list ptr )
-            {}
-            { ( mem_emit_struct_field_drop syms cg ptr sname path kind leaf_sname leaf_idx ) }
-        }
+    : s snap ( nurl_sym_get g_fn_escapes `__dsnap_sfield__` )
+    : ~ s rest ( nurl_sym_get syms `__owned_struct_fields__` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s ptr ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s sname ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s path ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s kind ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s leaf_sname ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s leaf_idx ( str_first_word rest ) = rest ( str_skip_word rest )
+        // A binding's several owned fields share one alloca ptr and
+        // are registered together, so ptr-membership decides for
+        // the whole group consistently.
+        ? | ( str_contains_word old_list ptr ) ( str_contains_word snap ptr )
+        {}
+        { ( mem_emit_struct_field_drop syms cg ptr sname path kind leaf_sname leaf_idx ) }
     }
-    {}
 }
 
 // Slice counterpart of mem_drop_new_strings: at an arm's fall-through,
@@ -9700,19 +9869,17 @@
 // unique, so an arm-local shadow of an outer slice-declaring name is
 // skipped (a leak, never a double free).
 @ mem_drop_new_slices i syms i cg s old_decls → v {
-    : s dtop ( nurl_sym_get syms `__defer_top__` )
-    ? == 0 ( nurl_str_len dtop )
-    { : s owned ( nurl_sym_get syms `__owned_slices__` )
-        : ~ s rest ( nurl_sym_get syms `__slice_decls__` )
-        ~ != 0 ( nurl_str_len rest ) {
-            : s name ( str_first_word rest )
-            = rest ( str_skip_word rest )
-            ? | ( str_contains_word old_decls name ) ! ( str_contains_word owned name )
-            {}
-            { ( mem_emit_slice_free syms cg name ) }
-        }
+    : s snap ( nurl_sym_get g_fn_escapes `__dsnap_slice__` )
+    : s owned ( nurl_sym_get syms `__owned_slices__` )
+    : ~ s rest ( nurl_sym_get syms `__slice_decls__` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s name ( str_first_word rest )
+        = rest ( str_skip_word rest )
+        ? | | ( str_contains_word old_decls name ) ( str_contains_word snap name )
+        ! ( str_contains_word owned name )
+        {}
+        { ( mem_emit_slice_free syms cg name ) }
     }
-    {}
 }
 
 @ mem_own_add_user_drop i syms s ptr s vt → v {
@@ -9812,15 +9979,14 @@
 }
 
 @ mem_drop_closure_envs i syms i cg → v {
-    : s dtop ( nurl_sym_get syms `__defer_top__` )
-    ? == 0 ( nurl_str_len dtop )
-    { : ~ s rest ( nurl_sym_get syms `__owned_closure_envs__` )
-        ~ != 0 ( nurl_str_len rest ) {
-            : s name ( str_first_word rest ) = rest ( str_skip_word rest )
-            ( mem_emit_closure_env_drop syms cg name )
-        }
+    : s snap ( nurl_sym_get g_fn_escapes `__dsnap_cenv__` )
+    : ~ s rest ( nurl_sym_get syms `__owned_closure_envs__` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s name ( str_first_word rest ) = rest ( str_skip_word rest )
+        ? ( str_contains_word snap name )
+        {}
+        { ( mem_emit_closure_env_drop syms cg name ) }
     }
-    {}
 }
 
 // Block-delta drain (docs/MEMORY.md §7.4): free the env of every closure
@@ -9830,19 +9996,16 @@
 // named closure created in a loop does not leak unboundedly. Mirrors
 // mem_drop_new_user_drops.
 @ mem_drop_new_closure_envs i syms i cg s old_list → v {
-    : s dtop ( nurl_sym_get syms `__defer_top__` )
-    ? == 0 ( nurl_str_len dtop )
-    { : ~ s rest ( nurl_sym_get syms `__owned_closure_envs__` )
-        : ~ s keep ``
-        ~ != 0 ( nurl_str_len rest ) {
-            : s name ( str_first_word rest ) = rest ( str_skip_word rest )
-            ? ( str_contains_word old_list name )
-            { = keep ? == 0 ( nurl_str_len keep ) ( nurl_str_cat name `` ) ( nurl_str_cat3 keep ` ` name ) }
-            { ( mem_emit_closure_env_drop syms cg name ) }
-        }
-        ( nurl_sym_def syms `__owned_closure_envs__` keep )
+    : s snap ( nurl_sym_get g_fn_escapes `__dsnap_cenv__` )
+    : ~ s rest ( nurl_sym_get syms `__owned_closure_envs__` )
+    : ~ s keep ``
+    ~ != 0 ( nurl_str_len rest ) {
+        : s name ( str_first_word rest ) = rest ( str_skip_word rest )
+        ? | ( str_contains_word old_list name ) ( str_contains_word snap name )
+        { = keep ? == 0 ( nurl_str_len keep ) ( nurl_str_cat name `` ) ( nurl_str_cat3 keep ` ` name ) }
+        { ( mem_emit_closure_env_drop syms cg name ) }
     }
-    {}
+    ( nurl_sym_def syms `__owned_closure_envs__` keep )
 }
 
 // Panic-unwind journal for a user `% Drop` value. `ptr` is its alloca
@@ -9879,13 +10042,16 @@
 }
 
 @ mem_drop_user_drops i syms i cg s skip_ptr → v {
-    : s dtop ( nurl_sym_get syms `__defer_top__` )
-    ? == 0 ( nurl_str_len dtop )
-    { : ~ s rest ( nurl_sym_get syms `__user_drops__` )
-        ~ != 0 ( nurl_str_len rest ) {
-            : s ptr ( str_first_word rest ) = rest ( str_skip_word rest )
-            : s vt ( str_first_word rest ) = rest ( str_skip_word rest )
-            ? ( seq ptr skip_ptr )
+    : s snap ( nurl_sym_get g_fn_escapes `__dsnap_udrop__` )
+    : ~ s rest ( nurl_sym_get syms `__user_drops__` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s ptr ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s vt ( str_first_word rest ) = rest ( str_skip_word rest )
+        // A snapshot entry is dropped (and journal-forgotten) by
+        // fn_cleanup after the defer chain runs — skip it entirely here.
+        ? ( str_contains_word snap ptr )
+        {}
+        { ? ( seq ptr skip_ptr )
             {}
             { : s impl_key ( nurl_str_cat `drop##` vt )
                 : s impl_mangle_key ( nurl_sym_get g_impl_name_syms impl_key )
@@ -9907,35 +10073,31 @@
             ( mem_journal_forget_userdrop cg ptr vt )
         }
     }
-    {}
 }
 
 @ mem_drop_new_user_drops i syms i cg s old_list → v {
-    : s dtop ( nurl_sym_get syms `__defer_top__` )
-    ? == 0 ( nurl_str_len dtop )
-    { : ~ s rest ( nurl_sym_get syms `__user_drops__` )
-        ~ != 0 ( nurl_str_len rest ) {
-            : s ptr ( str_first_word rest ) = rest ( str_skip_word rest )
-            : s vt ( str_first_word rest ) = rest ( str_skip_word rest )
-            : s impl_key ( nurl_str_cat `drop##` vt )
-            : s impl_mangle_key ( nurl_sym_get g_impl_name_syms impl_key )
-            ? | ( str_contains_word old_list ptr )
-            == 0 ( nurl_str_len impl_mangle_key )
-            {}
-            { : s impl_name ( nurl_str_cat `drop__` impl_mangle_key )
-                : s v ( nurl_cg_reg cg )
-                ( nurl_print `  ` ) ( nurl_print v )
-                ( nurl_print ` = load ` ) ( nurl_print ( nurl_llty vt ) ) ( nurl_print `, ` ) ( nurl_print ( nurl_llty vt ) )
-                ( nurl_print `* ` ) ( nurl_print ptr ) ( nurl_print `\n` )
-                ( nurl_print `  call void @` ) ( nurl_print impl_name )
-                ( nurl_print `(` ) ( nurl_print ( nurl_llty vt ) ) ( nurl_print ` ` ) ( nurl_print v ) ( nurl_print `)` ) ( emit_dbg_eol )
-                // Forget the now-dropped value's journal entry so a later
-                // panic in this function cannot replay its destructor.
-                ( mem_journal_forget_userdrop cg ptr vt )
-            }
+    : s snap ( nurl_sym_get g_fn_escapes `__dsnap_udrop__` )
+    : ~ s rest ( nurl_sym_get syms `__user_drops__` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s ptr ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s vt ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s impl_key ( nurl_str_cat `drop##` vt )
+        : s impl_mangle_key ( nurl_sym_get g_impl_name_syms impl_key )
+        ? | | ( str_contains_word old_list ptr ) ( str_contains_word snap ptr )
+        == 0 ( nurl_str_len impl_mangle_key )
+        {}
+        { : s impl_name ( nurl_str_cat `drop__` impl_mangle_key )
+            : s v ( nurl_cg_reg cg )
+            ( nurl_print `  ` ) ( nurl_print v )
+            ( nurl_print ` = load ` ) ( nurl_print ( nurl_llty vt ) ) ( nurl_print `, ` ) ( nurl_print ( nurl_llty vt ) )
+            ( nurl_print `* ` ) ( nurl_print ptr ) ( nurl_print `\n` )
+            ( nurl_print `  call void @` ) ( nurl_print impl_name )
+            ( nurl_print `(` ) ( nurl_print ( nurl_llty vt ) ) ( nurl_print ` ` ) ( nurl_print v ) ( nurl_print `)` ) ( emit_dbg_eol )
+            // Forget the now-dropped value's journal entry so a later
+            // panic in this function cannot replay its destructor.
+            ( mem_journal_forget_userdrop cg ptr vt )
         }
     }
-    {}
 }
 
 // ── Ownership transfer on assignment ──────────────────────────────
@@ -14621,8 +14783,6 @@
     // Shadow outer __owned_slices__ with empty list for the closure body
     ( nurl_sym_def body_syms `__owned_slices__` `` )
     ( nurl_sym_def body_syms `__slice_decls__` `` )
-    // Defers don't cross closure boundaries — clear shadow too
-    ( nurl_sym_def body_syms `__defer_top__` `` )
     // Reset the shadow-check roster so a `:` inside the closure body
     // checks against the closure's OWN params, not the enclosing
     // function's. Restored on sym_pop at the bottom of this function.
@@ -14790,10 +14950,37 @@
     // local in every closure body.
     : s __cl_defer_saved ( nurl_sym_get g_fn_escapes `__deferred_drops__` )
     ( nurl_sym_set g_fn_escapes `__deferred_drops__` `` )
+    // Same frame rule for the defer chain and its ownership snapshots:
+    // the closure body must not observe the ENCLOSING function's defer
+    // chain (its `^` would branch into another function's blocks) or
+    // its snapshots (they name allocas of the wrong frame). gen_defer
+    // itself rejects `;` inside a closure; these clears keep the
+    // closure's return/drop paths on the plain no-defer shape.
+    : s __cl_dtop_saved ( nurl_sym_get g_fn_escapes `__defer_top_fn__` )
+    : s __cl_snapstr_saved ( nurl_sym_get g_fn_escapes `__dsnap_str__` )
+    : s __cl_snapsf_saved ( nurl_sym_get g_fn_escapes `__dsnap_sfield__` )
+    : s __cl_snapud_saved ( nurl_sym_get g_fn_escapes `__dsnap_udrop__` )
+    : s __cl_snapce_saved ( nurl_sym_get g_fn_escapes `__dsnap_cenv__` )
+    : s __cl_snapsl_saved ( nurl_sym_get g_fn_escapes `__dsnap_slice__` )
+    : s __cl_rskips_saved ( nurl_sym_get g_fn_escapes `__dret_skips__` )
+    ( nurl_sym_set g_fn_escapes `__defer_top_fn__` `` )
+    ( nurl_sym_set g_fn_escapes `__dsnap_str__` `` )
+    ( nurl_sym_set g_fn_escapes `__dsnap_sfield__` `` )
+    ( nurl_sym_set g_fn_escapes `__dsnap_udrop__` `` )
+    ( nurl_sym_set g_fn_escapes `__dsnap_cenv__` `` )
+    ( nurl_sym_set g_fn_escapes `__dsnap_slice__` `` )
+    ( nurl_sym_set g_fn_escapes `__dret_skips__` `` )
     : s body_val ( gen_stmt lex body_syms cg )
     = g_bck_closure_depth - g_bck_closure_depth 1
     ? == g_did_ret 0 { ( mem_drain_deferred cg ) } {}
     ( nurl_sym_set g_fn_escapes `__deferred_drops__` __cl_defer_saved )
+    ( nurl_sym_set g_fn_escapes `__defer_top_fn__` __cl_dtop_saved )
+    ( nurl_sym_set g_fn_escapes `__dsnap_str__` __cl_snapstr_saved )
+    ( nurl_sym_set g_fn_escapes `__dsnap_sfield__` __cl_snapsf_saved )
+    ( nurl_sym_set g_fn_escapes `__dsnap_udrop__` __cl_snapud_saved )
+    ( nurl_sym_set g_fn_escapes `__dsnap_cenv__` __cl_snapce_saved )
+    ( nurl_sym_set g_fn_escapes `__dsnap_slice__` __cl_snapsl_saved )
+    ( nurl_sym_set g_fn_escapes `__dret_skips__` __cl_rskips_saved )
 
     // Emit return
     ? == g_did_ret 0
@@ -15243,7 +15430,7 @@
     // For opt_type: return zeroinitializer (None = { false, 0 }).
     ( emit ( nurl_str_cat lfail `:` ) )
     : s fn_rt ( nurl_sym_get syms `__fn_ret_ty__` )
-    : s dtop ( nurl_sym_get syms `__defer_top__` )
+    : s dtop ( nurl_sym_get g_fn_escapes `__defer_top_fn__` )
     // Use the original val if types match (res propagation), else zeroinitializer
     : ~ s fail_val ? ( seq fn_rt vt ) val `zeroinitializer`
     // Result propagation where the caller's Ok type T differs from the callee's
@@ -16391,6 +16578,16 @@
     // Fresh per-function deferred arm-local drop list (see
     // mem_defer_new_strings) — slot names are function-local SSA.
     ( nurl_sym_set g_fn_escapes `__deferred_drops__` `` )
+    // Fresh per-function defer chain + ownership snapshots (gen_defer /
+    // mem_cleanup_snap_drops) — all fn-lifetime, all function-local.
+    ( nurl_sym_set g_fn_escapes `__defer_top_fn__` `` )
+    ( nurl_sym_set g_fn_escapes `__dsnap_str__` `` )
+    ( nurl_sym_set g_fn_escapes `__dsnap_sfield__` `` )
+    ( nurl_sym_set g_fn_escapes `__dsnap_udrop__` `` )
+    ( nurl_sym_set g_fn_escapes `__dsnap_cenv__` `` )
+    ( nurl_sym_set g_fn_escapes `__dsnap_slice__` `` )
+    ( nurl_sym_set g_fn_escapes `__dret_skips__` `` )
+    ( nurl_sym_set g_fn_escapes `__in_defer_body__` `` )
     // Borrow checker: start a fresh per-function statement list.
     ( bck_fn_begin )
     ( nurl_sym_def g_ptrtab `__ptr_src__` `` )
@@ -16535,7 +16732,7 @@
     ( __alloca_struct_params syms cg )
     : s fn_cleanup ( nurl_cg_lbl cg `fn_cleanup` )
     ( nurl_sym_def syms `__fn_cleanup__` fn_cleanup )
-    ( nurl_sym_def syms `__defer_top__` `` )
+    ( nurl_sym_set g_fn_escapes `__defer_top_fn__` `` )
     // Pre-allocate return-value slot for defer routing (non-void functions).
     // Unused if no defers are registered; optimiser removes it.
     : ~ s ret_val_ptr ``
@@ -16660,7 +16857,7 @@
         ( nurl_sym_def g_fn_ret_param fname __rp_merged ) }
     {}
     // Implicit return — route through defer chain if defers are active
-    : s dtop ( nurl_sym_get syms `__defer_top__` )
+    : s dtop ( nurl_sym_get g_fn_escapes `__defer_top_fn__` )
     // Ownership transfer: if ret type is a slice AND the last expression
     // resolved to a simple identifier load, that binding escapes.
     : s ret_ident ( nurl_sym_get syms `__last_ident_name__` )
@@ -16734,7 +16931,19 @@
     ? ( seq ret_ty `void` )
     { ? == g_did_ret 0
         { ? != 0 ( nurl_str_len dtop )
-            { ( nurl_print `  br label %` ) ( nurl_print dtop ) ( emit_dbg_eol ) }
+            { ( mem_drop_owned syms cg skip )
+                ? != 0 g_auto_drop_strings
+                { ( mem_drop_owned_strings syms cg skip_str_ptr )
+                    ( mem_drop_owned_struct_fields syms cg skip_struct_ptr )
+                    ( mem_drop_user_drops syms cg skip_user_ptr )
+                }
+                {}
+                ( mem_drop_closure_envs syms cg )
+                ( __dret_skip_add skip )
+                ( __dret_skip_add skip_str_ptr )
+                ( __dret_skip_add skip_user_ptr )
+                ( __dret_skip_add skip_struct_ptr )
+                ( nurl_print `  br label %` ) ( nurl_print dtop ) ( emit_dbg_eol ) }
             { ( mem_drop_owned syms cg skip )
                 ? != 0 g_auto_drop_strings
                 { ( mem_drop_owned_strings syms cg skip_str_ptr )
@@ -16750,7 +16959,21 @@
     }
     { ? == g_did_ret 0
         { ? != 0 ( nurl_str_len dtop )
-            { ( nurl_print `  store ` ) ( nurl_print ( nurl_llty ret_ty ) ) ( nurl_print ` ` )
+            { ( mem_drop_owned syms cg skip )
+                ? != 0 g_auto_drop_strings
+                { ( mem_drop_owned_strings syms cg skip_str_ptr )
+                    ( mem_drop_owned_struct_fields syms cg skip_struct_ptr )
+                    ( mem_drop_user_drops syms cg skip_user_ptr )
+                }
+                {}
+                ( mem_own_closure_remove syms ret_ident )
+                ( mem_drop_closure_envs syms cg )
+                ( __dret_skip_add skip )
+                ( __dret_skip_add skip_str_ptr )
+                ( __dret_skip_add skip_user_ptr )
+                ( __dret_skip_add skip_struct_ptr )
+                ( __dret_skip_add ret_ident )
+                ( nurl_print `  store ` ) ( nurl_print ( nurl_llty ret_ty ) ) ( nurl_print ` ` )
                 ( nurl_print last ) ( nurl_print `, ` ) ( nurl_print ( nurl_llty ret_ty ) )
                 ( nurl_print `* ` ) ( nurl_print ret_val_ptr ) ( nurl_print `\n` )
                 ( nurl_print `  br label %` ) ( nurl_print dtop ) ( emit_dbg_eol )
@@ -16775,6 +16998,12 @@
     // Emit cleanup block only when defers are present
     ? != 0 ( nurl_str_len dtop )
     { ( emit ( nurl_str_cat fn_cleanup `:` ) )
+        // The defer chain has run — now reclaim the snapshot-protected
+        // owned values its bodies could reference (minus what a return
+        // site transferred to the caller), and drain the parked
+        // arm-local drops.
+        ( mem_cleanup_snap_drops syms cg )
+        ? == g_bck_closure_depth 0 { ( mem_drain_deferred cg ) } {}
         ? ! ( seq ret_ty `void` )
         { : s rv ( nurl_cg_reg cg )
             ( nurl_print `  ` ) ( nurl_print rv )
