@@ -6,6 +6,57 @@ are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **MCP 2026-07-28 (the stateless revision) — the stdlib MCP stack is
+  now dual-era.** The new spec revision removes the
+  `initialize`/`notifications/initialized` handshake and protocol-level
+  sessions: a *modern* request carries its protocol version, client
+  identity and capabilities in `params._meta`
+  (`io.modelcontextprotocol/protocolVersion` & co), and servers MUST
+  implement `server/discover`. NURL's stack now serves **both eras on
+  the same endpoint**, per the spec's own dual-era compatibility
+  matrix — nothing was removed, so every existing legacy client keeps
+  working:
+
+  * `mcp_registry.nu` — `server/discover` dispatch; requests declaring
+    an unsupported `_meta` version get the spec-shaped
+    `UnsupportedProtocolVersionError` (−32022 with `data.supported`);
+    results for modern requests carry `_meta` serverInfo; `initialize`
+    now echoes the client's requested handshake-era revision when
+    supported (previously it always pinned the latest). The stdio serve
+    loop was unified onto `mcp_registry_envelope` — which also fixed a
+    latent double-free (`json_free` after the consuming
+    `mcp_send_message`).
+  * `mcp.nu` — `mcp_protocol_version` is now `2026-07-28`;
+    `mcp_protocol_version_initialize` (2025-11-25) is what handshake
+    responses advertise. New: `mcp_version_supported`,
+    `mcp_supported_versions_json`, `mcp_request_protocol_version` /
+    `mcp_request_is_modern`, `mcp_client_meta`, `mcp_discover_result`,
+    `mcp_result_set_cacheable` / `mcp_result_set_server_info`,
+    `mcp_response_error_data` / `mcp_unsupported_version_response`, and
+    error-code constants −32020…−32022. Every result built via
+    `mcp_response_result` now carries `resultType: "complete"`
+    (required in 2026-07-28, additive for older clients), and
+    `mcp_tools_list_result` fills the now-required CacheableResult
+    fields (`ttlMs`, `cacheScope`) — as do the registry's list/read
+    dispatchers.
+  * `mcp_http.nu` — validates the 2026-07-28 header-routing headers
+    (`Mcp-Method`, `Mcp-Name`) against the body when present
+    (mismatch → `HeaderMismatchError` −32020; absent headers stay
+    legal for legacy clients) and allows them through CORS.
+  * `mcp_client.nu` — modern era client calls: `mcp_call_modern` /
+    `mcp_tools_call_modern` (per-request `_meta` + routing headers),
+    `mcp_discover`, and the dual-era probe `mcp_server_is_modern`.
+    `mcp_stdio.nu` grew `mcp_stdio_discover` (the spec's stdio
+    backward-compat probe). Both `initialize` wrappers now send the
+    handshake-era revision instead of the latest one.
+  * `examples/mcp_echo_server.nu` demonstrates the `server/discover`
+    handler; new offline regression `compiler/tests/mcp_dual_era.nu`
+    locks the dual-era wire shapes byte-for-byte.
+
 ## [0.31.1] — 2026-08-03
 
 A one-fix patch release: TLS servers did not work on FreeBSD at all, and

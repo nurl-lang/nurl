@@ -143,8 +143,71 @@ $ `stdlib/core/vec.nu`
 
 @ __mcp_http_apply_cors HttpResponse r → v {
     ( response_set_header r `Access-Control-Allow-Origin` `*` )
-    ( response_set_header r `Access-Control-Allow-Headers` `Content-Type, Authorization, Mcp-Session-Id` )
+    ( response_set_header r `Access-Control-Allow-Headers` `Content-Type, Authorization, Mcp-Session-Id, Mcp-Method, Mcp-Name, MCP-Protocol-Version` )
     ( response_set_header r `Access-Control-Expose-Headers` `Mcp-Session-Id` )
+}
+
+// ── 2026-07-28 header-based routing validation ──────────────────────
+//
+// Modern Streamable HTTP POSTs carry `Mcp-Method` (and `Mcp-Name` for
+// named calls: the tool/prompt name or resource uri) so gateways and
+// rate limiters can route on headers without parsing the body. When a
+// header IS present it must match the body — mismatch is the spec's
+// HeaderMismatchError (-32020). An ABSENT header is accepted: legacy
+// clients never send these, and a dual-era server serves both.
+@ __mcp_http_header_mismatch HttpRequest req Json jreq → b {
+    : ~ b bad F
+    : ?String hm ( header_get . req headers `Mcp-Method` )
+    ?? hm {
+        T hv → {
+            : ?Json bm ( json_obj_get jreq `method` )
+            ?? bm {
+                T jm → {
+                    ? == 0 ( nurl_str_eq ( string_data hv ) ( json_as_str jm ) )
+                    { = bad T } {}
+                }
+                F _ → { = bad T }
+            }
+            ( string_free hv )
+        }
+        F e → { ( string_free e ) }
+    }
+    ? bad { ^ T } {}
+    : ?String hn ( header_get . req headers `Mcp-Name` )
+    ?? hn {
+        T nv → {
+            : ~ b nm_ok F
+            : ?Json pj ( json_obj_get jreq `params` )
+            ?? pj {
+                T pv → {
+                    : ?Json nj ( json_obj_get pv `name` )
+                    ?? nj {
+                        T jn → {
+                            ? != 0 ( nurl_str_eq ( string_data nv ) ( json_as_str jn ) )
+                            { = nm_ok T } {}
+                        }
+                        F _ → {}
+                    }
+                    // resources/read names its target with `uri`.
+                    ? ! nm_ok {
+                        : ?Json uj ( json_obj_get pv `uri` )
+                        ?? uj {
+                            T ju → {
+                                ? != 0 ( nurl_str_eq ( string_data nv ) ( json_as_str ju ) )
+                                { = nm_ok T } {}
+                            }
+                            F _ → {}
+                        }
+                    } {}
+                }
+                F _ → {}
+            }
+            ? nm_ok {} { = bad T }
+            ( string_free nv )
+        }
+        F e → { ( string_free e ) }
+    }
+    ^ bad
 }
 
 // MCP Streamable HTTP content-negotiation: if the client offers
@@ -335,6 +398,13 @@ $ `stdlib/core/vec.nu`
                 } {}
 
                 // Single request — original path.
+                ? ( __mcp_http_header_mismatch req jreq ) {
+                    ( json_free jreq )
+                    : HttpResponse r ( __mcp_http_jsonrpc_error mcp_err_header_mismatch `Mcp-Method/Mcp-Name header does not match the request body` )
+                    ( __mcp_http_apply_cors r )
+                    ( __mcp_http_echo_session req r )
+                    ^ r
+                } {}
                 : ?Json reply ( dispatch jreq )
                 ( json_free jreq )
 

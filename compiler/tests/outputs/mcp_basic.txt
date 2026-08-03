@@ -2,13 +2,13 @@ COMPILE OK
 LINK OK
 EXIT 0
 OUTPUT
-result    {"jsonrpc":"2.0","id":7,"result":{"ok":true}}
+result    {"jsonrpc":"2.0","id":7,"result":{"ok":true,"resultType":"complete"}}
 error     {"jsonrpc":"2.0","id":9,"error":{"code":-32601,"message":"unknown"}}
 notify    {"jsonrpc":"2.0","method":"progress","params":{"n":1}}
 text      {"type":"text","text":"hi"}
 tool_ok   {"content":[{"type":"text","text":"done"}],"isError":false}
 tool_err  {"content":[{"type":"text","text":"boom"}],"isError":true}
 tooldesc  {"name":"echo","description":"Repeat input","inputSchema":{"type":"object"}}
-toolslist {"tools":[{"name":"echo","description":"e","inputSchema":{"type":"object"}},{"name":"ping","description":"p","inputSchema":{"type":"object"}}]}
+toolslist {"tools":[{"name":"echo","description":"e","inputSchema":{"type":"object"}},{"name":"ping","description":"p","inputSchema":{"type":"object"}}],"ttlMs":60000,"cacheScope":"private"}
 init      {"protocolVersion":"2025-11-25","capabilities":{"tools":{}},"serverInfo":{"name":"nurl-srv","version":"0.1.0"}}
 codes -32700 -32600 -32601 -32602 -32603

@@ -14,14 +14,22 @@
 // registry struct as Vec[McpTool] / Vec[McpPrompt] / Vec[McpResource]
 // and dispatched by name lookup at request time.
 //
-// Spec coverage (Model Context Protocol — latest stable revision per
-// `mcp_protocol_version`, currently 2025-11-25):
-//   * initialize / initialized
+// Spec coverage — DUAL-ERA per the 2026-07-28 versioning page: one
+// registry serves both modern (per-request `_meta`, `server/discover`)
+// and legacy (initialize handshake) clients on the same endpoint:
+//   * server/discover (2026-07-28 — servers MUST implement)
+//   * initialize / initialized (legacy handshake; echoes the client's
+//     requested revision when supported)
 //   * tools/list, tools/call
 //   * prompts/list, prompts/get
-//   * resources/list, resources/read
+//   * resources/list, resources/read   (list/read results carry the
+//     2026-07-28 CacheableResult fields ttlMs + cacheScope)
 //   * completion/complete (argument autocompletion for prompts/resources)
-//   * ping (heartbeat — empty result)
+//   * ping (legacy heartbeat — empty result)
+// Requests declaring an unsupported `_meta` protocolVersion get the
+// spec-shaped UnsupportedProtocolVersionError (-32022); results for
+// modern requests carry `_meta` serverInfo. `resultType: "complete"`
+// rides on every result via mcp.nu's envelope builder.
 //
 // Out of scope here (transport-level; served by mcp_session/mcp_http):
 //   * resources/subscribe + notifications/resources/updated — session-
@@ -275,15 +283,10 @@ $ `stdlib/ext/http_response.nu`
 
 // ── Per-method dispatchers ────────────────────────────────────────────
 
-// initialize: returns server capabilities + info per spec §3.2.
-@ __mcp_dispatch_initialize McpRegistry r → Json {
-    : Json info ( json_obj_new )
-    ( json_obj_set info `name` ( json_str_lit ( string_data . r server_name ) ) )
-    ( json_obj_set info `version` ( json_str_lit ( string_data . r server_version ) ) )
-
+// Capability object: one entry per category that has any registered
+// entries. Empty object = "supported with no extra options".
+@ __mcp_registry_caps McpRegistry r → Json {
     : Json caps ( json_obj_new )
-    // Declare capability per category that has any registered entries.
-    // Empty object = "supported with no extra options".
     ? > ( vec_len [McpTool] . r tools ) 0
     { ( json_obj_set caps `tools` ( json_obj_new ) ) } {}
     ? > ( vec_len [McpPrompt] . r prompts ) 0
@@ -292,12 +295,54 @@ $ `stdlib/ext/http_response.nu`
     { ( json_obj_set caps `resources` ( json_obj_new ) ) } {}
     ? > ( vec_len [McpCompletion] . r completions ) 0
     { ( json_obj_set caps `completions` ( json_obj_new ) ) } {}
+    ^ caps
+}
+
+// initialize (legacy handshake): returns server capabilities + info.
+// Version negotiation per the handshake-era spec: echo the client's
+// requested `protocolVersion` when we support it, else answer with
+// the newest handshake-era revision we do support (a legacy client
+// would disconnect on a non-handshake revision like 2026-07-28).
+@ __mcp_dispatch_initialize McpRegistry r ? Json params → Json {
+    : Json info ( json_obj_new )
+    ( json_obj_set info `name` ( json_str_lit ( string_data . r server_name ) ) )
+    ( json_obj_set info `version` ( json_str_lit ( string_data . r server_version ) ) )
+
+    : Json caps ( __mcp_registry_caps r )
+
+    : ~ s ver ( mcp_protocol_version_initialize )
+    ?? params {
+        T p → {
+            : ?Json rv ( json_obj_get p `protocolVersion` )
+            ?? rv {
+                T jv → {
+                    : s req_ver ( json_as_str jv )
+                    // Only handshake-era revisions can be echoed here.
+                    ? & ( mcp_version_supported req_ver )
+                    == 0 ( nurl_str_eq req_ver ( mcp_protocol_version ) )
+                    { = ver req_ver } {}
+                }
+                F _ → {}
+            }
+        }
+        F _ → {}
+    }
 
     : Json out ( json_obj_new )
-    ( json_obj_set out `protocolVersion` ( json_str_lit ( mcp_protocol_version ) ) )
+    ( json_obj_set out `protocolVersion` ( json_str_lit ver ) )
     ( json_obj_set out `capabilities` caps )
     ( json_obj_set out `serverInfo` info )
     ^ out
+}
+
+// server/discover (2026-07-28, MUST): supported versions + caps +
+// identity. The registry has no instructions channel yet — empty.
+@ __mcp_dispatch_discover McpRegistry r → Json {
+    ^ ( mcp_discover_result
+    ( string_data . r server_name )
+    ( string_data . r server_version )
+    ( __mcp_registry_caps r )
+    `` )
 }
 
 // tools/list: build the array of {name, description, inputSchema}.
@@ -317,6 +362,9 @@ $ `stdlib/ext/http_response.nu`
     }
     : Json out ( json_obj_new )
     ( json_obj_set out `tools` arr )
+    // CacheableResult (2026-07-28): the registry is fixed after
+    // startup but may sit behind auth — modest TTL, private scope.
+    ( mcp_result_set_cacheable out 60000 `private` )
     ^ out
 }
 
@@ -402,6 +450,7 @@ $ `stdlib/ext/http_response.nu`
     }
     : Json out ( json_obj_new )
     ( json_obj_set out `prompts` arr )
+    ( mcp_result_set_cacheable out 60000 `private` )
     ^ out
 }
 
@@ -485,6 +534,7 @@ $ `stdlib/ext/http_response.nu`
     }
     : Json out ( json_obj_new )
     ( json_obj_set out `resources` arr )
+    ( mcp_result_set_cacheable out 60000 `private` )
     ^ out
 }
 
@@ -555,6 +605,9 @@ $ `stdlib/ext/http_response.nu`
     ( json_arr_push arr content )
     : Json out ( json_obj_new )
     ( json_obj_set out `contents` arr )
+    // resources/read is also a CacheableResult in 2026-07-28. Content
+    // comes from a live handler — short TTL, private scope.
+    ( mcp_result_set_cacheable out 5000 `private` )
     ^ out
 }
 
@@ -646,8 +699,11 @@ $ `stdlib/ext/http_response.nu`
 // `__error__` field — caller turns that into a JSON-RPC error response
 // (method not found / internal error).
 @ mcp_registry_dispatch McpRegistry r s method ? Json params → Json {
+    ? != 0 ( nurl_str_eq method `server/discover` ) {
+        ^ ( __mcp_dispatch_discover r )
+    } {}
     ? != 0 ( nurl_str_eq method `initialize` ) {
-        ^ ( __mcp_dispatch_initialize r )
+        ^ ( __mcp_dispatch_initialize r params )
     } {}
     ? != 0 ( nurl_str_eq method `tools/list` ) {
         ^ ( __mcp_dispatch_tools_list r )
@@ -753,25 +809,22 @@ $ `stdlib/ext/http_response.nu`
 
 // Single iteration of the stdio main loop. Returns T when EOF reached
 // (caller terminates the loop), F otherwise.
+//
+// Routes through `mcp_registry_envelope` so the stdio transport gets
+// the same dual-era behavior as HTTP (version gate, `server/discover`,
+// modern `_meta` decorations). This also fixed a latent double-free:
+// the old inline path called `json_free resp` after `mcp_send_message`
+// — which already CONSUMES its message.
 @ __mcp_serve_stdio_once McpRegistry r → b {
     : ?Json req ( mcp_read_request )
     ?? req {
         T jr → {
-            : String method ( __mcp_extract_method jr )
-            : Json id ( __mcp_extract_id_or_null jr )
-            : b had_id ( __mcp_has_id jr )
-            : ?Json mparams ( json_obj_get jr `params` )
-            : Json result ( mcp_registry_dispatch r ( string_data method ) mparams )
-            ? had_id {
-                : Json resp ( __mcp_envelope_response result id )
-                ( mcp_send_message resp )
-                ( json_free resp )
-            } {
+            : ?Json resp_o ( mcp_registry_envelope r jr )
+            ?? resp_o {
+                T resp → { ( mcp_send_message resp ) }
                 // Notification — no response (per JSON-RPC 2.0 §4.1).
-                ( json_free result )
-                ( json_free id )
+                F e → { ( json_free e ) }
             }
-            ( string_free method )
             ( json_free jr )
             ^ F
         }
@@ -810,9 +863,38 @@ $ `stdlib/ext/http_response.nu`
     : String method ( __mcp_extract_method req )
     : b had_id ( __mcp_has_id req )
     : Json id ( __mcp_extract_id_or_null req )
+
+    // Modern-era version gate (2026-07-28): a request that DECLARES a
+    // protocol version we don't support MUST get the spec-shaped
+    // UnsupportedProtocolVersionError — the client picks a mutual
+    // revision from `data.supported` and retries. A request with no
+    // `_meta` version is legacy-era and served as before.
+    : s req_ver ( mcp_request_protocol_version req )
+    : b is_modern > ( nurl_str_len req_ver ) 0
+    ? & is_modern ! ( mcp_version_supported req_ver ) {
+        ( string_free method )
+        ? had_id {
+            : Json resp ( mcp_unsupported_version_response id req_ver )
+            ( json_free id )
+            ^ @ ?Json { T resp }
+        } {
+            ( json_free id )
+            ^ @ ?Json { F }
+        }
+    } {}
+
     : ?Json mparams ( json_obj_get req `params` )
     : Json result ( mcp_registry_dispatch r ( string_data method ) mparams )
     ( string_free method )
+    // Modern-era servers SHOULD identify themselves in each result's
+    // `_meta`. Skip error sub-shapes (they become JSON-RPC errors).
+    ? & is_modern ( json_is_obj result ) {
+        ? ( json_obj_has result `__error__` ) {} {
+            ( mcp_result_set_server_info result
+            ( string_data . r server_name )
+            ( string_data . r server_version ) )
+        }
+    } {}
     ? had_id {
         : Json resp ( __mcp_envelope_response result id )
         ^ @ ?Json { T resp }

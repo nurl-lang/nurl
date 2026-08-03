@@ -25,8 +25,20 @@
 //                                  → ! Json McpErr     full response
 //
 //   ( mcp_initialize McpClient c s client_name s client_version )
-//                                  → ! Json McpErr
-//   ( mcp_ping        McpClient c ) → ! Json McpErr
+//                                  → ! Json McpErr    legacy handshake
+//   ( mcp_ping        McpClient c ) → ! Json McpErr   legacy heartbeat
+//
+//   Modern era (2026-07-28 — per-request `_meta`, no handshake):
+//   ( mcp_discover McpClient c s client_name s client_version )
+//                                  → ! Json McpErr    server/discover
+//   ( mcp_server_is_modern McpClient c s name s ver ) → b
+//                                  dual-era probe: T ⇒ speak modern,
+//                                  F ⇒ fall back to mcp_initialize
+//   ( mcp_call_modern McpClient c s method ( ? Json ) params s name s ver )
+//                                  → ! Json McpErr    injects `_meta` +
+//                                  Mcp-Method / MCP-Protocol-Version headers
+//   ( mcp_tools_call_modern McpClient c s tool Json args s name s ver )
+//                                  → ! Json McpErr    + Mcp-Name header
 //   ( mcp_tools_list  McpClient c ) → ! ( Vec Json ) McpErr
 //   ( mcp_tools_call  McpClient c s name Json args )
 //                                  → ! Json McpErr
@@ -111,6 +123,13 @@ $ `stdlib/core/vec.nu`
 // ── mcp_call: single round-trip ──────────────────────────────────────
 
 @ mcp_call McpClient c s method ? Json params → !Json McpErr {
+    ^ ( __mcp_call_with_headers c method params `` )
+}
+
+// Internal transport core shared by the legacy and modern call paths.
+// `extra_headers` rides after the base headers; `` for none. Each
+// entry must be `Name: value\r\n`-terminated.
+@ __mcp_call_with_headers McpClient c s method ? Json params s extra_headers → !Json McpErr {
     : i n ( string_len . c endpoint )
     ? == n 0 {
         ?? params { T p → ( json_free p ) F _ → {} }
@@ -125,13 +144,17 @@ $ `stdlib/core/vec.nu`
     : String body ( json_stringify req )
     ( json_free req )
 
+    : String hdrs ( string_from `Content-Type: application/json\r\nAccept: application/json\r\n` )
+    ( string_push_str hdrs extra_headers )
+
     : !Response HttpErr hr ( http_request_to
     `POST`
     ( string_data . c endpoint )
     ( string_data body )
-    `Content-Type: application/json\r\nAccept: application/json\r\n`
+    ( string_data hdrs )
     . c timeout_ms
     0 )
+    ( string_free hdrs )
     ( string_free body )
 
     ?? hr {
@@ -220,10 +243,81 @@ $ `stdlib/core/vec.nu`
     ( json_obj_set info `name` ( json_str_lit client_name ) )
     ( json_obj_set info `version` ( json_str_lit client_version ) )
     : Json params ( json_obj_new )
-    ( json_obj_set params `protocolVersion` ( json_str_lit ( mcp_protocol_version ) ) )
+    // Handshake-era revision — `initialize` IS the legacy path; the
+    // modern revision has no handshake (use mcp_discover/_call_modern).
+    ( json_obj_set params `protocolVersion` ( json_str_lit ( mcp_protocol_version_initialize ) ) )
     ( json_obj_set params `capabilities` caps )
     ( json_obj_set params `clientInfo` info )
     ^ ( mcp_call c `initialize` @ ?Json { T params } )
+}
+
+// ── Modern era (2026-07-28) ──────────────────────────────────────────
+
+// Modern call: injects per-request `_meta` (protocolVersion +
+// clientInfo + clientCapabilities — set only when the caller's params
+// don't already carry a `_meta`) plus the Mcp-Method and
+// MCP-Protocol-Version headers the Streamable HTTP transport requires.
+// `params` None → a fresh object is created to carry `_meta`.
+@ mcp_call_modern McpClient c s method ? Json params s client_name s client_version → !Json McpErr {
+    : Json p ?? params { T pv → pv F _ → ( json_obj_new ) }
+    ? ( json_obj_has p `_meta` ) {} {
+        ( json_obj_set p `_meta` ( mcp_client_meta client_name client_version ) )
+    }
+    : String eh ( string_from `Mcp-Method: ` )
+    ( string_push_str eh method )
+    ( string_push_str eh `\r\nMCP-Protocol-Version: ` )
+    ( string_push_str eh ( mcp_protocol_version ) )
+    ( string_push_str eh `\r\n` )
+    : !Json McpErr r ( __mcp_call_with_headers c method @ ?Json { T p } ( string_data eh ) )
+    ( string_free eh )
+    ^ r
+}
+
+// tools/call with the additional `Mcp-Name` routing header (the
+// header names the tool so gateways can meter per-tool). `args` is
+// CONSUMED.
+@ mcp_tools_call_modern McpClient c s name Json args s client_name s client_version → !Json McpErr {
+    : Json params ( json_obj_new )
+    ( json_obj_set params `name` ( json_str_lit name ) )
+    ( json_obj_set params `arguments` args )
+    ( json_obj_set params `_meta` ( mcp_client_meta client_name client_version ) )
+    : String eh ( string_from `Mcp-Method: tools/call\r\nMcp-Name: ` )
+    ( string_push_str eh name )
+    ( string_push_str eh `\r\nMCP-Protocol-Version: ` )
+    ( string_push_str eh ( mcp_protocol_version ) )
+    ( string_push_str eh `\r\n` )
+    : !Json McpErr r ( __mcp_call_with_headers c `tools/call` @ ?Json { T params } ( string_data eh ) )
+    ( string_free eh )
+    ^ r
+}
+
+// server/discover — supported versions + capabilities + identity.
+@ mcp_discover McpClient c s client_name s client_version → !Json McpErr {
+    ^ ( mcp_call_modern c `server/discover` @ ?Json { F } client_name client_version )
+}
+
+// Dual-era probe per the 2026-07-28 versioning page: T when the
+// server answered server/discover with a DiscoverResult (modern or
+// dual-era server — keep speaking modern), F otherwise (legacy server
+// — fall back to mcp_initialize; or transport failure). Cache the
+// answer for the lifetime of the origin, per the spec.
+@ mcp_server_is_modern McpClient c s client_name s client_version → b {
+    : !Json McpErr r ( mcp_discover c client_name client_version )
+    ?? r {
+        T resp → {
+            : ~ b modern F
+            : ?Json res ( json_obj_get resp `result` )
+            ?? res {
+                T rv → {
+                    ? ( json_obj_has rv `supportedVersions` ) { = modern T } {}
+                }
+                F _ → {}
+            }
+            ( json_free resp )
+            ^ modern
+        }
+        F _ → { ^ F }
+    }
 }
 
 @ mcp_ping McpClient c → !Json McpErr {

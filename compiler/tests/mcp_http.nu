@@ -278,6 +278,45 @@ s label s method s path s body → v {
     ( http_response_free sresp2 )
     ( request_free sreq2 )
 
+    // ── 2026-07-28 header-based routing (Mcp-Method / Mcp-Name) ────────
+    // A matching header passes through; a mismatch is the spec's
+    // HeaderMismatchError (-32020). Absent headers stay legal (legacy
+    // clients never send them — dual-era surface).
+    ( nurl_print `── header_method_match ──\n` )
+    : HttpRequest hreq ( make_req `POST` `/mcp` `{"jsonrpc":"2.0","id":200,"method":"ping"}` )
+    : Header hh @ Header { ( string_from `Mcp-Method` ) ( string_from `ping` ) }
+    ( vec_push [Header] . hreq headers hh )
+    : HttpResponse hresp ( handler hreq )
+    : String hbody ( body_to_string hresp )
+    ( println_str `  body=` ( string_data hbody ) )
+    ( string_free hbody )
+    ( http_response_free hresp )
+    ( request_free hreq )
+
+    ( nurl_print `── header_method_mismatch ──\n` )
+    : HttpRequest mreq ( make_req `POST` `/mcp` `{"jsonrpc":"2.0","id":201,"method":"ping"}` )
+    : Header mh @ Header { ( string_from `Mcp-Method` ) ( string_from `tools/call` ) }
+    ( vec_push [Header] . mreq headers mh )
+    : HttpResponse mresp ( handler mreq )
+    : String mbody ( body_to_string mresp )
+    ( println_str `  body=` ( string_data mbody ) )
+    ( string_free mbody )
+    ( http_response_free mresp )
+    ( request_free mreq )
+
+    ( nurl_print `── header_name_mismatch ──\n` )
+    : HttpRequest nreq ( make_req `POST` `/mcp` `{"jsonrpc":"2.0","id":202,"method":"tools/call","params":{"name":"echo","arguments":{"text":"hi"}}}` )
+    : Header nh1 @ Header { ( string_from `Mcp-Method` ) ( string_from `tools/call` ) }
+    ( vec_push [Header] . nreq headers nh1 )
+    : Header nh2 @ Header { ( string_from `Mcp-Name` ) ( string_from `other-tool` ) }
+    ( vec_push [Header] . nreq headers nh2 )
+    : HttpResponse nresp ( handler nreq )
+    : String nbody ( body_to_string nresp )
+    ( println_str `  body=` ( string_data nbody ) )
+    ( string_free nbody )
+    ( http_response_free nresp )
+    ( request_free nreq )
+
     ( nurl_print `── session_absent ──\n` )
     : HttpRequest noreq ( make_req `POST` `/mcp` `{"jsonrpc":"2.0","id":100,"method":"ping"}` )
     : HttpResponse noresp ( handler noreq )
