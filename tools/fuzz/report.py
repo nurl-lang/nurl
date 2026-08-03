@@ -32,7 +32,7 @@ FAMILY_DESC = {
         "field writes, closures, while/foreach, defer, `% Drop`, "
         "string/Vec/slice ownership, helper calls, recursion) with a "
         "statement-level oracle; `-O0` vs `-O2` vs oracle, plus an "
-        "ASan+LSan leg on sampled seeds",
+        "ASan+LSan leg and a wasm32-wasi/wasmtime leg on sampled seeds",
     "parser-mutational":
         "`fuzz_parsers.py` — mutated inputs for the untrusted-input "
         "parsers (x509/DER, cbor, msgpack, json, yaml, xml, toml) against "
@@ -83,8 +83,8 @@ def main():
     a("")
     a(f"**Latest run:** {status}")
     a("")
-    a("| family | configuration | executions | pass | findings | sanitized runs |")
-    a("|---|---|---:|---:|---:|---:|")
+    a("| family | configuration | executions | pass | findings | sanitized runs | wasm runs |")
+    a("|---|---|---:|---:|---:|---:|---:|")
     for r in runs:
         fam = r.get("family", "?")
         if fam.startswith("parser"):
@@ -96,7 +96,8 @@ def main():
                    f"size={r.get('size')}, depth={r.get('depth')}")
             execs = r.get("seed_count", 0)
         bad = r.get("findings", 0) + r.get("buildfail", 0)
-        a(f"| `{fam}` | {cfg} | {execs} | {r.get('pass', 0)} | {bad} | {r.get('san_runs', 0)} |")
+        a(f"| `{fam}` | {cfg} | {execs} | {r.get('pass', 0)} | {bad} | "
+          f"{r.get('san_runs', 0)} | {r.get('wasm_runs', 0)} |")
     a("")
     a("## What each family probes")
     a("")
@@ -104,8 +105,10 @@ def main():
         a(f"- **`{fam}`** — {desc}.")
     a("")
     a("A **finding** is any of: output divergence from the oracle at either")
-    a("opt level, a build failure on a generated (always-valid) program, a")
-    a("nonzero exit, a hang, or an ASan/LSan/UBSan report. Reproducers are")
+    a("opt level or on the wasm32-wasi leg (a third, independent execution")
+    a("environment run under wasmtime), a build failure on a generated")
+    a("(always-valid) program, a nonzero exit, a hang, or an")
+    a("ASan/LSan/UBSan report. Reproducers are")
     a("uploaded as workflow artifacts and land in `tools/fuzz/failures/`.")
     a("")
     a("## Findings log — real bugs the fuzzers have caught")
@@ -120,8 +123,8 @@ def main():
     a("```bash")
     a("./build.sh --no-tests")
     a("tools/fuzz/fuzz.sh 1 500                        # integer differential")
-    a("FUZZ_GEN=struct FUZZ_SAN_EVERY=5 \\")
-    a("    tools/fuzz/fuzz.sh 1 300 14 3               # structural + sanitizer leg")
+    a("FUZZ_GEN=struct FUZZ_SAN_EVERY=5 FUZZ_WASM_EVERY=5 \\")
+    a("    tools/fuzz/fuzz.sh 1 300 14 3               # structural + sanitizer + wasm legs")
     a("tools/fuzz/fuzz_parsers.sh 1 4000 8             # parser mutational")
     a("```")
     a("")

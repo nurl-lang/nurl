@@ -5,26 +5,27 @@
 > the same way `bench.yml` commits the benchmark numbers. Do not edit by hand;
 > curate the findings log in [`tools/fuzz/FINDINGS.json`](tools/fuzz/FINDINGS.json).
 
-_Last run: **2026-08-03** · toolchain `v0.32.0-3-gbaf5dd7` · commit `baf5dd7`_
+_Last run: **2026-08-03** · toolchain `v0.32.0-8-gcf10972` · commit `cf10972`_
 
 **Latest run:** ✅ **clean** — no findings
 
-| family | configuration | executions | pass | findings | sanitized runs |
-|---|---|---:|---:|---:|---:|
-| `differential-int` | seeds 1–1500, size=12, depth=4 | 1500 | 1500 | 0 | 0 |
-| `differential-struct` | seeds 1–1000, size=14, depth=3 | 1000 | 1000 | 0 | 200 |
-| `differential-struct` | seeds 2001–2300, size=25, depth=4 | 300 | 300 | 0 | 75 |
-| `parser-mutational` | iters=1500 rng-seed=1 | 1500 | 1500 | 0 | 1500 |
+| family | configuration | executions | pass | findings | sanitized runs | wasm runs |
+|---|---|---:|---:|---:|---:|---:|
+| `differential-int` | seeds 1–500, size=12, depth=4 | 500 | 500 | 0 | 0 | 100 |
+| `differential-struct` | seeds 1–400, size=14, depth=3 | 400 | 400 | 0 | 40 | 200 |
+| `parser-mutational` | iters=1500 rng-seed=1 | 1500 | 1500 | 0 | 1500 | 0 |
 
 ## What each family probes
 
 - **`differential-int`** — `gen.py` — random integer/float expression trees with a Python oracle; compiled at `-O0` and `-O2`, both outputs must equal the oracle bit for bit.
-- **`differential-struct`** — `genprog.py` — whole structural programs (enums with N-ary mixed payloads, match guards/or-patterns/literal constraints, struct field writes, closures, while/foreach, defer, `% Drop`, string/Vec/slice ownership, helper calls, recursion) with a statement-level oracle; `-O0` vs `-O2` vs oracle, plus an ASan+LSan leg on sampled seeds.
+- **`differential-struct`** — `genprog.py` — whole structural programs (enums with N-ary mixed payloads, match guards/or-patterns/literal constraints, struct field writes, closures, while/foreach, defer, `% Drop`, string/Vec/slice ownership, helper calls, recursion) with a statement-level oracle; `-O0` vs `-O2` vs oracle, plus an ASan+LSan leg and a wasm32-wasi/wasmtime leg on sampled seeds.
 - **`parser-mutational`** — `fuzz_parsers.py` — mutated inputs for the untrusted-input parsers (x509/DER, cbor, msgpack, json, yaml, xml, toml) against an ASan+UBSan harness; any crash / OOB / UB / hang is a finding.
 
 A **finding** is any of: output divergence from the oracle at either
-opt level, a build failure on a generated (always-valid) program, a
-nonzero exit, a hang, or an ASan/LSan/UBSan report. Reproducers are
+opt level or on the wasm32-wasi leg (a third, independent execution
+environment run under wasmtime), a build failure on a generated
+(always-valid) program, a nonzero exit, a hang, or an
+ASan/LSan/UBSan report. Reproducers are
 uploaded as workflow artifacts and land in `tools/fuzz/failures/`.
 
 ## Findings log — real bugs the fuzzers have caught
@@ -45,7 +46,7 @@ uploaded as workflow artifacts and land in `tools/fuzz/failures/`.
 ```bash
 ./build.sh --no-tests
 tools/fuzz/fuzz.sh 1 500                        # integer differential
-FUZZ_GEN=struct FUZZ_SAN_EVERY=5 \
-    tools/fuzz/fuzz.sh 1 300 14 3               # structural + sanitizer leg
+FUZZ_GEN=struct FUZZ_SAN_EVERY=5 FUZZ_WASM_EVERY=5 \
+    tools/fuzz/fuzz.sh 1 300 14 3               # structural + sanitizer + wasm legs
 tools/fuzz/fuzz_parsers.sh 1 4000 8             # parser mutational
 ```
