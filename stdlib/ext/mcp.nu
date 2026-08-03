@@ -237,6 +237,32 @@ $ `stdlib/ext/json.nu`
     ^ > ( nurl_str_len ( mcp_request_protocol_version req ) ) 0
 }
 
+// Legacy handshake negotiation: the revision an `initialize` response
+// should advertise for the given request params — the client's
+// requested `protocolVersion` when it is a supported HANDSHAKE-era
+// revision, else `mcp_protocol_version_initialize`. (Echoing the
+// modern, handshake-less revision would strand a legacy client.)
+// Returned s is BORROWED (from params or from a static literal).
+@ mcp_initialize_version_for ? Json params → s {
+    : ~ s ver ( mcp_protocol_version_initialize )
+    ?? params {
+        T p → {
+            : ?Json rv ( json_obj_get p `protocolVersion` )
+            ?? rv {
+                T jv → {
+                    : s req_ver ( json_as_str jv )
+                    ? & ( mcp_version_supported req_ver )
+                    == 0 ( nurl_str_eq req_ver ( mcp_protocol_version ) )
+                    { = ver req_ver } {}
+                }
+                F _ → {}
+            }
+        }
+        F _ → {}
+    }
+    ^ ver
+}
+
 // Client-side `_meta` for modern requests: protocolVersion +
 // clientInfo + clientCapabilities. Caller sets it on `params._meta`.
 @ mcp_client_meta s client_name s client_version → Json {

@@ -309,25 +309,7 @@ $ `stdlib/ext/http_response.nu`
     ( json_obj_set info `version` ( json_str_lit ( string_data . r server_version ) ) )
 
     : Json caps ( __mcp_registry_caps r )
-
-    : ~ s ver ( mcp_protocol_version_initialize )
-    ?? params {
-        T p → {
-            : ?Json rv ( json_obj_get p `protocolVersion` )
-            ?? rv {
-                T jv → {
-                    : s req_ver ( json_as_str jv )
-                    // Only handshake-era revisions can be echoed here.
-                    ? & ( mcp_version_supported req_ver )
-                    == 0 ( nurl_str_eq req_ver ( mcp_protocol_version ) )
-                    { = ver req_ver } {}
-                }
-                F _ → {}
-            }
-        }
-        F _ → {}
-    }
-
+    : s ver ( mcp_initialize_version_for params )
     : Json out ( json_obj_new )
     ( json_obj_set out `protocolVersion` ( json_str_lit ver ) )
     ( json_obj_set out `capabilities` caps )
