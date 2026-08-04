@@ -8,6 +8,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`unikernel/nolibc` — NURL programs that link no libc at all**
+  (unikernel plan A3). The freestanding libc subset the runtime calls:
+  `mem*`/`str*`, an allocator, buffered stdio over six syscalls, exact
+  `%f`/`%e`/`%g`, `setjmp`/`longjmp`, and the thread-pointer setup
+  `__thread` needs. **339 corpus tests build and run with `-nostdlib`
+  and glibc nowhere in the link line**, matching their ordinary
+  goldens; 139 more still call into `runtime_ffi` (sockets, threads,
+  processes) and `unikernel/run_nolibc_tests.sh` prints the missing
+  symbols for each, so the remaining work is measured rather than
+  guessed. A hello-world built this way is a 75 KB static binary that
+  makes four syscalls in its whole life.
+
+  Gated by three differentials, not by "it didn't crash":
+  `mem*`/`str*` against glibc swept over every alignment and length
+  (645 440 checks), `%f`/`%e`/`%g` against glibc at every precision
+  0–20 over random and adversarial doubles (1.2 M conversions), and a
+  400 000-op allocator fuzzer that keeps a pattern in every live block
+  — ASan cannot supervise an allocator it has replaced, so the data is
+  the oracle. Everything except `syscall_linux.c` and the two `.S`
+  files is portable C the guest will run unchanged.
+
 ### Fixed
 
 - **`nurl_fast_atof` is correctly rounded — NURL could not read back the

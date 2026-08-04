@@ -121,6 +121,23 @@ jobs:
         # globally unique.
         run: ./tools/check_stdlib_symbols.sh
 
+      - name: nolibc covers every libc symbol the runtime core calls
+        # unikernel/nolibc/ exists to supply exactly the libc surface of
+        # stdlib/runtime_core.c — a hand-synced pair, and this repo's
+        # history says those drift silently (install.sh, builtins.nu, the
+        # runtime_sources list). Compile the core, list what it still
+        # needs, require nolibc to define all of it. A new libc call in
+        # the runtime then fails in the PR that adds it, not at boot in
+        # Track B months later. Takes about a second.
+        run: ./tools/check_nolibc_symbols.sh
+
+      - name: nolibc unit gates (string / float-format differentials, allocator fuzz)
+        # Differentials against glibc, not "it didn't crash": every
+        # mem*/str* over all alignments and lengths, %f/%e/%g at every
+        # precision, and an allocator fuzzer that keeps a pattern in each
+        # live block (ASan cannot supervise an allocator it replaced).
+        run: ./unikernel/tests/run_unit_tests.sh
+
       - name: runtime-builtins doc module in sync with the compiler preamble
         # stdlib/core/builtins.nu is the hand-written, nurl_api-indexed
         # documentation of the pre-registered C-runtime surface
