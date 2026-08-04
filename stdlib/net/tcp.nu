@@ -1,15 +1,27 @@
 // stdlib/net/tcp.nu — the TCP connection state machine, sans-IO.
 //
+// NAMING. The connection object is a `Tcb` — RFC 793's Transmission
+// Control Block — and its operations are `tcb_*`, NOT `tcp_*`. NURL's
+// namespace is flat, and `stdlib/std/net.nu` already owns `tcp_connect`
+// / `tcp_listen` / `TcpConn` for the host *socket* API. Two different
+// things called the same name in one flat namespace is a link-time
+// collision at best and a silent link-order-dependent pick at worst.
+// The protocol's own vocabulary (`tcp_syn`, `tcp_established`,
+// `tcp_2msl_ms`, …) keeps the `tcp_` prefix: those name the protocol
+// rather than this API, and they collide with nothing. `tcp_listen_st`
+// carries its suffix for exactly this reason — the socket API owns the
+// unsuffixed name.
+//
 // PURE. Segments in, segments out, `now` supplied by the caller:
 //
-//     ( tcp_connect c … now out )   client open  → emits SYN
-//     ( tcp_listen  c … )           server open
-//     ( tcp_input   c seg buf now out )   one received segment
-//     ( tcp_write   c bytes … )     queue application data
-//     ( tcp_pump    c now out )     emit what may be sent now
-//     ( tcp_tick    c now out )     timers → retransmits, probes, 2MSL
-//     ( tcp_read    c dst n )       drain received data
-//     ( tcp_close   c now out )     half-close (FIN)
+//     ( tcb_connect c … now out )   client open  → emits SYN
+//     ( tcb_listen  c … )           server open
+//     ( tcb_input   c seg buf now out )   one received segment
+//     ( tcb_write   c bytes … )     queue application data
+//     ( tcb_pump    c now out )     emit what may be sent now
+//     ( tcb_tick    c now out )     timers → retransmits, probes, 2MSL
+//     ( tcb_read    c dst n )       drain received data
+//     ( tcb_close   c now out )     half-close (FIN)
 //
 // Because the clock is an argument, an RTO backoff sequence or a
 // 2MSL wait is a few integer comparisons in a unit test rather than a
@@ -147,7 +159,7 @@ $ `stdlib/net/tcpseg.nu`
     ^ - ( tcpout_seg_end o idx ) ( tcpout_seg_start o idx )
 }
 
-: TcpConn {
+: Tcb {
     i state
     i local_ip
     i local_port
@@ -187,8 +199,8 @@ $ `stdlib/net/tcpseg.nu`
     b close_requested
 }
 
-@ tcp_new → *TcpConn {
-    : *TcpConn c # *TcpConn ( nurl_alloc Z TcpConn )
+@ tcb_new → *Tcb {
+    : *Tcb c # *Tcb ( nurl_alloc Z Tcb )
     = . c state ( tcp_closed )
     = . c local_ip 0
     = . c local_port 0
@@ -226,7 +238,7 @@ $ `stdlib/net/tcpseg.nu`
     ^ c
 }
 
-@ tcp_free * TcpConn c → v {
+@ tcb_free * Tcb c → v {
     ( vec_free [u] . c sndbuf )
     ( vec_free [u] . c rcvbuf )
     ( free c )
@@ -235,30 +247,30 @@ $ `stdlib/net/tcpseg.nu`
 // ── helpers ─────────────────────────────────────────────────────
 
 // Bytes queued but not yet sent.
-@ __unsent * TcpConn c → i {
+@ __unsent * Tcb c → i {
     : i inflight ( seq_diff . c snd_nxt . c snd_una )
     : i total ( vec_len [u] . c sndbuf )
     ^ ? > - total inflight 0 - total inflight 0
 }
 
-@ tcp_send_queue_len * TcpConn c → i { ^ ( vec_len [u] . c sndbuf ) }
+@ tcb_send_queue_len * Tcb c → i { ^ ( vec_len [u] . c sndbuf ) }
 
-@ tcp_recv_queue_len * TcpConn c → i { ^ ( vec_len [u] . c rcvbuf ) }
+@ tcb_recv_queue_len * Tcb c → i { ^ ( vec_len [u] . c rcvbuf ) }
 
-@ tcp_is_established * TcpConn c → b { ^ == . c state ( tcp_established ) }
+@ tcb_is_established * Tcb c → b { ^ == . c state ( tcp_established ) }
 
 // A connection is "done" when it can be reaped by the owner.
-@ tcp_is_closed * TcpConn c → b {
+@ tcb_is_closed * Tcb c → b {
     ^ || == . c state ( tcp_closed ) . c reset
 }
 
-@ __emit * TcpConn c * TcpOut out i flags i seq i ack ( Vec u ) payload i pay_off i pay_len → v {
+@ __emit * Tcb c * TcpOut out i flags i seq i ack ( Vec u ) payload i pay_off i pay_len → v {
     ( tcpseg_push . out bytes . c local_ip . c remote_ip . c local_port . c remote_port
     seq ack flags . c rcv_wnd . c mss . c snd_wscale payload pay_off pay_len )
     ( vec_push [i] . out ends ( vec_len [u] . out bytes ) )
 }
 
-@ __emit_empty * TcpConn c * TcpOut out i flags i seq i ack → v {
+@ __emit_empty * Tcb c * TcpOut out i flags i seq i ack → v {
     : ( Vec u ) none ( vec_new [u] )
     ( __emit c out flags seq ack none 0 0 )
     ( vec_free [u] none )
@@ -266,7 +278,7 @@ $ `stdlib/net/tcpseg.nu`
 
 // Jacobson/Karn RTO update. Karn's rule — never sample a retransmitted
 // segment — is enforced by the caller clearing rtt_seq on retransmit.
-@ __rtt_update * TcpConn c i sample → v {
+@ __rtt_update * Tcb c i sample → v {
     ? <= sample 0 { ^ } {}
     ? == . c srtt 0 {
         = . c srtt sample
@@ -281,13 +293,13 @@ $ `stdlib/net/tcpseg.nu`
     = . c rto_ms ? < rto ( tcp_rto_min_ms ) ( tcp_rto_min_ms ) ? > rto ( tcp_rto_max_ms ) ( tcp_rto_max_ms ) rto
 }
 
-@ __arm_rtx * TcpConn c i now → v {
+@ __arm_rtx * Tcb c i now → v {
     = . c rtx_deadline + now . c rto_ms
 }
 
 // ── open ────────────────────────────────────────────────────────
 
-@ tcp_listen * TcpConn c i local_ip i local_port → v {
+@ tcb_listen * Tcb c i local_ip i local_port → v {
     = . c local_ip local_ip
     = . c local_port local_port
     = . c state ( tcp_listen_st )
@@ -296,7 +308,7 @@ $ `stdlib/net/tcpseg.nu`
 // Active open. `iss` is the initial send sequence — the caller
 // supplies it because a good ISS needs entropy this layer must not
 // invent (RFC 6528); a predictable ISS is a connection-hijack vector.
-@ tcp_connect * TcpConn c i local_ip i local_port i remote_ip i remote_port i iss i now * TcpOut out → v {
+@ tcb_connect * Tcb c i local_ip i local_port i remote_ip i remote_port i iss i now * TcpOut out → v {
     = . c local_ip local_ip
     = . c local_port local_port
     = . c remote_ip remote_ip
@@ -317,7 +329,7 @@ $ `stdlib/net/tcpseg.nu`
 // Queue bytes for transmission. Returns how many were accepted — the
 // send buffer is bounded, and reporting a short write is how
 // back-pressure reaches the application instead of the heap.
-@ tcp_write * TcpConn c ( Vec u ) data i off i len i max_queue → i {
+@ tcb_write * Tcb c ( Vec u ) data i off i len i max_queue → i {
     ? || . c reset ! || == . c state ( tcp_established ) == . c state ( tcp_close_wait ) { ^ 0 } {}
     : i have ( vec_len [u] . c sndbuf )
     : i room ? > - max_queue have 0 - max_queue have 0
@@ -331,7 +343,7 @@ $ `stdlib/net/tcpseg.nu`
 }
 
 // Drain up to `n` received bytes into `dst`. Returns how many moved.
-@ tcp_read * TcpConn c ( Vec u ) dst i n → i {
+@ tcb_read * Tcb c ( Vec u ) dst i n → i {
     : i have ( vec_len [u] . c rcvbuf )
     : i take ? < n have n have
     : ~ i k 0
@@ -356,7 +368,7 @@ $ `stdlib/net/tcpseg.nu`
 
 // Emit whatever may legally be sent right now: new data within the
 // peer's window, and a FIN once the queue has drained.
-@ tcp_pump * TcpConn c i now * TcpOut out → i {
+@ tcb_pump * Tcb c i now * TcpOut out → i {
     ? . c reset { ^ 0 } {}
     : i before ( vec_len [u] . out bytes )
     : ~ b sent_any F
@@ -398,17 +410,17 @@ $ `stdlib/net/tcpseg.nu`
     ^ - ( vec_len [u] . out bytes ) before
 }
 
-// Ask for a graceful close. The FIN itself leaves via tcp_pump once
+// Ask for a graceful close. The FIN itself leaves via tcb_pump once
 // the send queue drains — a close must never truncate queued data.
-@ tcp_close * TcpConn c i now * TcpOut out → v {
+@ tcb_close * Tcb c i now * TcpOut out → v {
     = . c close_requested T
     ? == . c state ( tcp_listen_st ) { = . c state ( tcp_closed ) ^ } {}
     ? == . c state ( tcp_syn_sent ) { = . c state ( tcp_closed ) ^ } {}
-    : i _n ( tcp_pump c now out )
+    : i _n ( tcb_pump c now out )
 }
 
 // Abort: send RST and drop the connection.
-@ tcp_abort * TcpConn c * TcpOut out → v {
+@ tcb_abort * Tcb c * TcpOut out → v {
     ? || == . c state ( tcp_closed ) == . c state ( tcp_listen_st ) {
         = . c state ( tcp_closed )
         ^
@@ -422,7 +434,7 @@ $ `stdlib/net/tcpseg.nu`
 
 // Returns bytes emitted. Drives retransmission, the persist timer and
 // the 2MSL wait.
-@ tcp_tick * TcpConn c i now * TcpOut out → i {
+@ tcb_tick * Tcb c i now * TcpOut out → i {
     : i before ( vec_len [u] . out bytes )
     // TIME_WAIT expiry
     ? && == . c state ( tcp_time_wait ) && != . c tw_deadline 0 >= now . c tw_deadline {
@@ -484,7 +496,7 @@ $ `stdlib/net/tcpseg.nu`
 
 // ── receive path ────────────────────────────────────────────────
 
-@ __accept_data * TcpConn c TcpSeg s ( Vec u ) buf → i {
+@ __accept_data * Tcb c TcpSeg s ( Vec u ) buf → i {
     : i n . s payload_len
     ? <= n 0 { ^ 0 } {}
     : ~ i k 0
@@ -498,7 +510,7 @@ $ `stdlib/net/tcpseg.nu`
 
 // Process an ACK: advance snd_una, release acknowledged bytes, update
 // RTT/RTO, and count duplicates for fast retransmit.
-@ __process_ack * TcpConn c TcpSeg s i now → v {
+@ __process_ack * Tcb c TcpSeg s i now → v {
     : i ack . s ack
     ? ( seq_gt ack . c snd_nxt ) { ^ } {}
     ? ( seq_lt ack . c snd_una ) { ^ } {}
@@ -541,7 +553,7 @@ $ `stdlib/net/tcpseg.nu`
     } { ( __arm_rtx c now ) }
 }
 
-@ __update_window * TcpConn c TcpSeg s → v {
+@ __update_window * Tcb c TcpSeg s → v {
     : i w << . s window . c rcv_wscale
     // RFC 793: only accept a window update from a segment that is not
     // older than the last one used, or the window can go backwards on
@@ -561,7 +573,7 @@ $ `stdlib/net/tcpseg.nu`
 
 // Feed one parsed segment. `buf` is the buffer it was parsed from.
 // Returns bytes emitted into `out`.
-@ tcp_input * TcpConn c TcpSeg s ( Vec u ) buf i now * TcpOut out → i {
+@ tcb_input * Tcb c TcpSeg s ( Vec u ) buf i now * TcpOut out → i {
     ? ! . s valid { ^ 0 } {}
     : i before ( vec_len [u] . out bytes )
     : b has_rst == & . s flags 4 4
@@ -750,6 +762,6 @@ $ `stdlib/net/tcpseg.nu`
         } {}
     } {}
 
-    : i _p ( tcp_pump c now out )
+    : i _p ( tcb_pump c now out )
     ^ - ( vec_len [u] . out bytes ) before
 }

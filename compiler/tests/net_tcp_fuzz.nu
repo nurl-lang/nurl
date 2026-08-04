@@ -16,7 +16,7 @@
 //      undefined value through some arithmetic path.
 //   5. `reset` and CLOSED stay paired. Resurrection after a reset is
 //      structurally impossible today — every site that sets `reset`
-//      also sets CLOSED, and tcp_input returns immediately in CLOSED —
+//      also sets CLOSED, and tcb_input returns immediately in CLOSED —
 //      so the useful check is the pairing itself: if a future edit sets
 //      one without the other, a reset connection becomes reachable
 //      again and this trips.
@@ -60,12 +60,12 @@ $ `stdlib/net/tcp.nu`
         // A fresh connection every few rounds, alternating between an
         // active open and a listening socket so both entry paths get
         // hammered.
-        : *TcpConn c ( tcp_new )
+        : *Tcb c ( tcb_new )
         : *TcpOut out ( tcpout_new )
         ? == % round 2 0 {
-            ( tcp_connect c ( ip_c ) 12345 ( ip_s ) 80 + 100000 * round 7 0 out )
+            ( tcb_connect c ( ip_c ) 12345 ( ip_s ) 80 + 100000 * round 7 0 out )
         } {
-            ( tcp_listen c ( ip_c ) 12345 )
+            ( tcb_listen c ( ip_c ) 12345 )
             = . c iss + 500000 * round 13
             = . c remote_ip ( ip_s )
             = . c remote_port 80
@@ -111,7 +111,7 @@ $ `stdlib/net/tcp.nu`
             ? . sg valid {
                 = accepted + accepted 1
                 ( tcpout_clear out )
-                : i _n ( tcp_input c sg sb + 1000 * step 50 out )
+                : i _n ( tcb_input c sg sb + 1000 * step 50 out )
                 = handled + handled 1
 
                 // (2) every emitted segment must acknowledge only data
@@ -136,20 +136,20 @@ $ `stdlib/net/tcp.nu`
                 // latter is vacuous while the pairing holds — and it is
                 // the pairing that a future edit could break.
                 ? && . c reset != . c state ( tcp_closed ) { = no_resurrect F } {}
-                ? && was_reset ( tcp_is_established c ) { = no_resurrect F } {}
+                ? && was_reset ( tcb_is_established c ) { = no_resurrect F } {}
 
                 // (3) in-order-only delivery bounds the receive queue.
-                ? > ( tcp_recv_queue_len c ) . c rcv_wnd { = rcvq_bounded F } {}
+                ? > ( tcb_recv_queue_len c ) . c rcv_wnd { = rcvq_bounded F } {}
             } {}
             ( vec_free [u] sb )
 
             // Interleave timer work — retransmits and probes have to
             // survive hostile input too.
-            : i _t ( tcp_tick c + 2000 * step 100 out )
+            : i _t ( tcb_tick c + 2000 * step 100 out )
             ? || < . c state 0 > . c state 10 { = state_sane F } {}
             = step + step 1
         }
-        ( tcp_free c )
+        ( tcb_free c )
         ( tcpout_free out )
         = round + round 1
     }
