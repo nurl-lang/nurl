@@ -324,6 +324,13 @@ jobs:
         # consumer must, so the gate catches either way that can break:
         # the compiler freeing it too (a double free, not a leak) or the
         # program losing the ability to free it at all.
+        # select_basic is here for what it makes the COMPILER do: it is
+        # the only test in the corpus that compiles a `select`, so it is
+        # the only input under which gen_select runs at all. The
+        # self-compile gate cannot cover that path — nurlc.nu contains no
+        # select — and a leak lived there unseen because of it. This step
+        # leak-checks nurlc's own compile as well as the program's run,
+        # so pinning the one test that reaches that code closes the hole.
         run: |
           LSAN_DETECT_LEAKS=1 ./compiler/tests/run_san_tests.sh \
             struct_nested_field_drop arm_local_drop arm_local_trailing_drop \
@@ -332,7 +339,8 @@ jobs:
             defer_drop_reclaim defer_scoped defer_ret_transfer \
             net_inet net_frames net_dhcp net_stack net_tcp net_tcp_fuzz \
             virtq_split free_suffix_query closure_env_escape_loop \
-            ctx_switch async_basic async_chan async_mn async_sleep
+            ctx_switch async_basic async_chan async_mn async_sleep \
+            select_basic
 
   webdocs-build:
     name: web docs build (fumadocs)
