@@ -1,0 +1,14 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+primitive is available: YES
+1000 round trips completed: YES
+entry argument arrived intact: YES
+callee-saved GPRs survive a round trip: YES
+MXCSR + x87 control word survive: YES
+fresh fiber can do floating point: YES
+re-init and 7 more round trips: YES
+argument intact on re-init: YES
+regs still preserved after re-init: YES
+single round trip: YES
