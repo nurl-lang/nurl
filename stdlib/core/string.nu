@@ -260,8 +260,9 @@ $ `stdlib/core/char.nu`
 // strtod via FFI for byte-range float parsing. nurl_str_int and
 // nurl_str_float keep their C bodies — str_int because moving it
 // would force `$ stdlib/core/string.nu` into 72 corpus tests that
-// use it transitively; str_float because printf-family %g/%e needs
-// Grisu/Ryu or variadic FFI.
+// use it transitively; str_float because its digit generator
+// (runtime_core §2b) multiplies by 125-bit table entries, which needs
+// a 64x64→128 widening multiply NURL has no operator for yet.
 
 // Parse f64 from byte range [p, p+len) via libc `strtod`. Copies
 // into a NUL-terminated scratch buffer, passes NULL as endptr.

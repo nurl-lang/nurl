@@ -576,9 +576,17 @@ SAN_LINK_FLAGS=""
 # hand-copied list is a hand-synced twin, and this one had already
 # drifted (runtime_ctx.c joined the aggregator and this list did not,
 # so a ctx edit silently kept a stale runtime_san.o).
+#
+# Local headers those sources pull in count too (the generated pow5 table
+# behind the float formatter is one), for the same reason: an edit there
+# changes the object and nothing else would notice.
 runtime_sources() {
     echo runtime.c
-    sed -n 's/^#include "\([A-Za-z0-9_]*\.c\)".*/\1/p' "$SCRIPT_DIR/stdlib/runtime.c"
+    _rt_c=$(sed -n 's/^#include "\([A-Za-z0-9_]*\.c\)".*/\1/p' "$SCRIPT_DIR/stdlib/runtime.c")
+    echo "$_rt_c"
+    for _rt_s in $_rt_c; do
+        sed -n 's/^#include "\([A-Za-z0-9_]*\.h\)".*/\1/p' "$SCRIPT_DIR/stdlib/$_rt_s"
+    done
 }
 runtime_stale() {
     _target="$1"

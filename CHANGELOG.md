@@ -8,6 +8,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Float formatting generates its digits instead of asking libc five
+  times** (`stdlib/runtime_core.c` §2b, `stdlib/nurl_pow5_table.h`,
+  `tools/gen_pow5_table.py`). `nurl_str_float` used to find the shortest
+  round-tripping text by printing with `snprintf("%.*g")` and parsing it
+  back with `strtod`, binary-searching the precision — five of those
+  pairs per number. It now computes the shortest digits directly (Ryū,
+  over generated 125-bit power-of-five tables): **28–55× faster**
+  (4398 → 80 ns per value on full-precision doubles, 1853 → 67 ns on
+  short "data" floats, measured on an idle box), and `snprintf`,
+  `strtod` and `floor` leave `runtime_core`'s libc surface entirely
+  (52 → 49 undefined symbols), which is what the freestanding/unikernel
+  target needs from this file.
+
+  The text is unchanged for every double except **46 of the 2098 powers
+  of two**, where the old search could not find the shortest form and
+  printed one digit too many (e.g. `7.1202363472230444e-307`, now
+  `7.120236347223045e-307` — same double, one digit shorter). A power of
+  two's rounding interval is asymmetric, so the shortest decimal inside
+  it is not always the one a correctly-rounding `printf` produces at that
+  precision, and a search that only ever sees `printf` output cannot
+  reach it. Verified byte-for-byte against the old implementation over
+  systematic (every power of two, both neighbours of each, denormal and
+  overflow edges) and random doubles, with every output independently
+  re-parsed to prove the round trip; `float_shortest` pins it.
+
 ### Added
 
 - **`tcp_listen` accepts port 0, and `tcp_local_addr` reads back what
