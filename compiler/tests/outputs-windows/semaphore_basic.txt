@@ -13,4 +13,5 @@ try5_blocked ok
 avail_restored ok
 neg_clamped_to_0 ok
 neg_no_permit ok
-live_concurrency skipped (set NURL_NET_TESTS=1)
+live_peak_within_bound ok
+live_region_entered ok

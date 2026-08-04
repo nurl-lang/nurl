@@ -254,7 +254,14 @@ run_one_san() {
     rm -rf "$rundir"; mkdir -p "$rundir"
     ln "$bin" "$rundir/$name" 2>/dev/null || cp "$bin" "$rundir/$name"
     local rc=0
-    ( cd "$rundir" && timeout "${TIMEOUT}s" "./$name" >"$stdout_log" 2>"$stderr_log" ) || rc=$?
+    # -k: plain `timeout` only sends SIGTERM, and a test spinning in a tight
+    # loop with no signal handler can ignore it for as long as the machine
+    # is up. Four such processes — mutation-test leftovers spinning inside
+    # tcpseg_parse's option loop — were found burning a core each, 12 hours
+    # after the run that started them. Declaring a hang is not the same as
+    # ending it.
+    ( cd "$rundir" && timeout -k 5s "${TIMEOUT}s" "./$name" \
+        >"$stdout_log" 2>"$stderr_log" ) || rc=$?
     rm -rf "$rundir"
 
     # Sanitizer-marker scan: ASan "AddressSanitizer:", UBSan

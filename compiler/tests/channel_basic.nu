@@ -2,18 +2,17 @@
 //
 // Deterministic by construction: producer pushes a known sequence,
 // consumer recvs into a shared accumulator under a mutex, joins close
-// the loop, then we observe the totals. Live thread/channel exercise
-// is gated behind NURL_NET_TESTS=1 (same convention as net_loopback,
-// http_server_seq, thread_basic).
+// the loop, then we observe the totals. Spawns real OS threads, hence
+// `requires: live` (same declaration as net_loopback, http_server_seq,
+// thread_basic).
 //
 // As of 2026-05-17 Channel is generic — every call site supplies the
 // element type via `[T-arg]`. This test exercises the `[i]`
 // instantiation; see channel_string.nu for a `[s]` (string element)
 // exercise.
+// requires: live
 
 $ `stdlib/std/channel.nu`
-$ `stdlib/ext/env.nu`
-$ `stdlib/core/string.nu`
 
 : ~ i sum_consumed 0
 : ~ i count_consumed 0
@@ -138,13 +137,6 @@ $ `stdlib/core/string.nu`
 }
 
 @ main → i {
-    : ?String gate ( env_get `NURL_NET_TESTS` )
-    ?? gate {
-        T s → {
-            ( string_free s )
-            ( run_live_channel_tests )
-        }
-        F → { ( nurl_print `live channel tests skipped (set NURL_NET_TESTS=1 to enable)\n` ) }
-    }
+    ( run_live_channel_tests )
     ^ 0
 }

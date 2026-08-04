@@ -7,17 +7,17 @@
 //       ordering (RFC 7541 / RFC 9113 §8.3).
 //   §B  https:// / http:// URL parsing (_h2_parse_url).
 //
-// Live section (gated on NURL_NET_TESTS=1) drives a real loopback
+// The live section (see `requires:` below) drives a real loopback
 // round-trip against the in-repo h2c SERVER (http2_serve), proving the
 // two interoperate AND exercising multiplexing — two concurrent streams
 // on one connection:
 //   §C  connect h2c → submit 2 requests → run → collect both responses.
+// requires: live
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/net.nu`
 $ `stdlib/std/thread.nu`
-$ `stdlib/ext/env.nu`
 $ `stdlib/ext/http.nu`
 $ `stdlib/ext/http_request.nu`
 $ `stdlib/ext/http_response.nu`
@@ -139,7 +139,7 @@ $ `stdlib/ext/http2_client.nu`
     ^ fails
 }
 
-// ── §C live loopback (NURL_NET_TESTS=1) ───────────────────────────────
+// ── §C live loopback ──────────────────────────────────────────────────
 
 // Echo the request path back in the body so the client can tell the
 // two multiplexed streams apart.
@@ -313,14 +313,7 @@ $ `stdlib/ext/http2_client.nu`
     : ~ i fails 0
     = fails + fails ( section_a )
     = fails + fails ( section_b )
-    : ?String gate ( env_get `NURL_NET_TESTS` )
-    ?? gate {
-        T s → {
-            ( string_free s )
-            = fails + fails ( run_live_test )
-        }
-        F → { ( nurl_print `live client test skipped (NURL_NET_TESTS != 1)\n` ) }
-    }
+    = fails + fails ( run_live_test )
     ? > fails 0 {
         : String m ( string_new )
         ( string_push_str m `FAILURES: ` )

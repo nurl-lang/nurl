@@ -14,9 +14,9 @@
 // it only after no worker can touch the handle, so a concurrent stop
 // defers the struct free instead of racing it.
 //
-// Live test (NURL_NET_TESTS=1) drives both fixed paths end to end —
-// no soft-close `tcp_shutdown_listener` staging, no deferred final
-// `server_stop`; just the documented one-call shutdown:
+// Drives both fixed paths end to end — no soft-close
+// `tcp_shutdown_listener` staging, no deferred final `server_stop`;
+// just the documented one-call shutdown:
 //
 //   phase 1: 4-worker pool on 127.0.0.1:18801, stopper thread sleeps
 //            200 ms then calls `server_stop` directly. Pool must
@@ -24,17 +24,13 @@
 //   phase 2: same shape against single-threaded `server_run` on
 //            127.0.0.1:18802.
 //
-// Run under run_san_tests.sh with NURL_NET_TESTS=1 to assert the
-// ASan-clean part; the plain runner asserts no hang / clean exit.
-//
-// Default (NURL_NET_TESTS unset): prints the skip notice — compile +
-// link of both paths is still exercised.
+// run_san_tests.sh asserts the ASan-clean part; the plain runner
+// asserts no hang / clean exit.
+// requires: live
 
 $ `stdlib/ext/http_server.nu`
 $ `stdlib/std/thread.nu`
 $ `stdlib/std/time.nu`
-$ `stdlib/ext/env.nu`
-$ `stdlib/core/string.nu`
 
 // One phase: listen on `port`, spawn a thread that direct-stops the
 // server after 200 ms, run with `n_workers` (0 ⇒ single-threaded
@@ -92,14 +88,7 @@ $ `stdlib/core/string.nu`
 }
 
 @ main → i {
-    : ?String gate ( env_get `NURL_NET_TESTS` )
-    ?? gate {
-        T s → {
-            ( string_free s )
-            ( run_stop_direct_phase 18801 4 `pool` )
-            ( run_stop_direct_phase 18802 0 `seq` )
-        }
-        F → { ( nurl_print `direct-stop test skipped (set NURL_NET_TESTS=1 to enable)\n` ) }
-    }
+    ( run_stop_direct_phase 18801 4 `pool` )
+    ( run_stop_direct_phase 18802 0 `seq` )
     ^ 0
 }

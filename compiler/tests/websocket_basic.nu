@@ -8,8 +8,9 @@
 //   §E  ws_parse_close + ws_send_close validation
 //   §F  Frame writer validation gates
 //
-// Live section (gated on NURL_NET_TESTS=1):
+// Live section (the `live` half of the declaration below):
 //   §G  Loopback handshake + echo round-trip + ping/pong + close handshake
+// requires: live
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`

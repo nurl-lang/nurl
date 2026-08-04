@@ -8,6 +8,73 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`tcp_listen` accepts port 0, and `tcp_local_addr` reads back what
+  the kernel picked** (`stdlib/std/net.nu`, `stdlib/runtime_ffi.c`).
+  Binding an ephemeral port is the POSIX contract and the only way to
+  take a listening port without racing whoever else wants it.
+  `nurl_udp_bind` had always accepted it and `nurl_udp_local_addr` had
+  always existed to read the result back; the TCP half of the same
+  runtime section had neither — `nurl_tcp_listen` rejected `port == 0`
+  as invalid and reported `NetBind`, a bind failure that never
+  happened. New `nurl_tcp_local_addr` / `tcp_local_addr` return an
+  owned `"ip:port"` from `getsockname`, mirroring the UDP pair
+  including the ownership rule (caller frees with `string_free`).
+
+### Fixed
+
+- **The compiler test corpus gated its own live surface out of CI.**
+  Both runners consulted hand-kept lists of test *names* while the
+  facts lived in the tests, and the lists had drifted: `net_basic`
+  binds 127.0.0.1 and ran by default while `net_loopback` binds
+  127.0.0.1 and was gated; `http_date`/`http_jwt` open no sockets yet
+  were held back for having an `http_` prefix; and exactly one test in
+  the corpus contacts a third party (`http_basic` → httpbin.org) while
+  the env var named for it held back everything else. The cost was the
+  whole live surface of the runtime — threads, channels, semaphores,
+  select, signals, unix sockets, async TCP, the HTTP server, its TLS
+  path, websockets, the package-install e2e — never running in CI.
+  Tests now declare what they need on a `// requires:` line (`live`,
+  `internet`, or the name of a tool that must be on `$PATH`); pure is
+  the default, so a test that forgets to declare fails loudly instead
+  of silently never running. Sixteen tests gained goldens they never
+  had. The per-test second gate (`env_get NURL_NET_TESTS` inside each
+  live section) is gone with it — per-test goldens are byte-exact, so
+  a half-run test could never have matched one, making those "skipped"
+  branches unreachable dead code.
+
+  `run_tests.ps1` reads the same declarations, so Windows and POSIX
+  now share one contract instead of three copies of a name list. One
+  token differs there by capability, not policy: `fibers` is off,
+  because NURL has no Win64 context-switch backend, so a test pairing
+  a fiber-side server with a blocking client would wait forever for a
+  peer that cannot exist (`async_tcp`, `async_http_server`). **The
+  Windows goldens for the tests whose live sections now run need one
+  regeneration pass** — `windows-tests.yml`'s `update_goldens`
+  workflow_dispatch, the canonical way those goldens are produced.
+  `compiler/tests/run_tests.bat` was deleted rather than carried: it
+  compared against a monolithic `correct.txt` that is not in the repo,
+  so its first run wrote its own baseline and declared success — a
+  runner that could not fail — and nothing invoked it.
+- **`net_basic` asserted the port-0 bug it should have caught**
+  (`listen_port_0=NetBind`, with a comment explaining the rejection as
+  intended) — a test written from the implementation, with a golden
+  pinning the defect. It now asserts the bind succeeds and that
+  `tcp_local_addr` reports a real, non-zero port.
+- **Both test runners now use `timeout -k 5s`.** Plain `timeout` sends
+  SIGTERM only, and a test spinning in a tight loop with no handler
+  ignores it indefinitely — four such processes from an earlier
+  mutation-testing run were found burning a core each 12.5 hours after
+  the run that started them. Declaring a hang is not the same as
+  ending it.
+- **`signal_basic`'s live shutdown assertion is no longer racy.**
+  `NetAccept` and `NetClosed` both mean "the listener went away
+  cleanly" and which one surfaces depends on thread timing; the test
+  collapses the pair instead of printing a racy name into a byte-exact
+  golden. Its listener also binds port 0 now, so parallel runs cannot
+  collide on a fixed port.
+
 ## [0.32.0] — 2026-08-03
 
 The MCP release. The Model Context Protocol shipped revision

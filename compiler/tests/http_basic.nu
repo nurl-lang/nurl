@@ -1,7 +1,9 @@
 // http_basic.nu — live HTTP smoke test (network-gated).
 //
-// Skipped by run_tests.{bat,sh} unless NURL_HTTP_TESTS=1, because it
-// reaches httpbin.org. When the gate is on, this exercises:
+// The one test in this corpus that contacts a third party, hence
+// `requires: internet` — off unless NURL_HTTP_TESTS=1 (or
+// NURL_NET_TESTS=1) says the public network is available. It reaches
+// httpbin.org to exercise:
 //   * http_get          — anonymous GET, status + non-empty body
 //   * http_get_with_headers — extra header round-trips back via /headers
 //   * http_post         — POST with content-type
@@ -12,6 +14,7 @@
 // Manual run:
 //   NURL_HTTP_TESTS=1 ./build.sh         (Linux/macOS)
 //   set NURL_HTTP_TESTS=1 & build.bat    (Windows cmd)
+// requires: internet
 
 $ `stdlib/ext/http.nu`
 $ `stdlib/ext/http_json.nu`

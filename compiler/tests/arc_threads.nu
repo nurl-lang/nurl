@@ -5,14 +5,14 @@
 // arc_strong walks back to 1 after all workers exit, then to 0
 // after the main thread's final arc_free, releasing the storage.
 //
-// Same `NURL_NET_TESTS=1` gate as thread_basic — pthread spawn is
-// occasionally flaky on heavily loaded CI hosts; the gate keeps the
-// default green path deterministic.
+// Same `live` declaration as thread_basic, for the same reason: it
+// spawns pthreads. (The old gate was justified by "pthread spawn is
+// occasionally flaky on heavily loaded CI hosts" — see thread_basic.nu
+// for what measuring that claim produced.)
+// requires: live
 
 $ `stdlib/std/arc.nu`
 $ `stdlib/std/thread.nu`
-$ `stdlib/ext/env.nu`
-$ `stdlib/core/string.nu`
 
 // Module-level: every worker captures and clones this Arc handle.
 // `i ` rather than `String` to keep the value side trivial — we are
@@ -81,13 +81,6 @@ $ `stdlib/core/string.nu`
 }
 
 @ main → i {
-    : ?String gate ( env_get `NURL_NET_TESTS` )
-    ?? gate {
-        T s → {
-            ( string_free s )
-            ( run_live_arc_tests )
-        }
-        F → { ( nurl_print `live arc thread tests skipped (set NURL_NET_TESTS=1 to enable)\n` ) }
-    }
+    ( run_live_arc_tests )
     ^ 0
 }

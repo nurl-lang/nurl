@@ -7,16 +7,16 @@
 //   §B  Masked empty / control frame format.
 //   §C  ws://… / wss://… URL parsing.
 //
-// Live section (gated on NURL_NET_TESTS=1) drives a real round-trip
+// The live section drives a real round-trip
 // against the existing SERVER stack, proving the two interoperate:
 //   §D  ws_connect → send text → echo → send binary → echo → close.
+// requires: live
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/bytes.nu`
 $ `stdlib/std/net.nu`
 $ `stdlib/std/thread.nu`
-$ `stdlib/ext/env.nu`
 $ `stdlib/ext/http_request.nu`
 $ `stdlib/ext/http_server.nu`
 $ `stdlib/ext/websocket.nu`
@@ -146,7 +146,7 @@ $ `stdlib/ext/websocket.nu`
     ^ fails
 }
 
-// ── §D live loopback round-trip (NURL_NET_TESTS=1) ────────────────────
+// ── §D live loopback round-trip ───────────────────────────────────────
 
 @ ws_echo_handler TcpConn conn WsMessage msg → !v WsErr {
     : i op . msg opcode
@@ -296,14 +296,7 @@ $ `stdlib/ext/websocket.nu`
     = fails + fails ( section_a )
     = fails + fails ( section_b )
     = fails + fails ( section_c )
-    : ?String gate ( env_get `NURL_NET_TESTS` )
-    ?? gate {
-        T s → {
-            ( string_free s )
-            = fails + fails ( run_live_test )
-        }
-        F → { ( nurl_print `live client test skipped (NURL_NET_TESTS != 1)\n` ) }
-    }
+    = fails + fails ( run_live_test )
     ? > fails 0 {
         : String m ( string_new )
         ( string_push_str m `FAILURES: ` )

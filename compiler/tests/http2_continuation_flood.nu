@@ -1,5 +1,5 @@
 // http2_continuation_flood.nu — live regression for the HTTP/2
-// CONTINUATION-flood DoS (CVE-2024-27316 class), gated NURL_NET_TESTS=1.
+// CONTINUATION-flood DoS (CVE-2024-27316 class), over a loopback socket.
 //
 // A peer opens a HEADERS frame WITHOUT END_HEADERS, then sends a stream
 // of CONTINUATION frames that also never set END_HEADERS. Before the fix
@@ -11,11 +11,10 @@
 // We craft the raw frames with h2_write_frame and assert the server
 // answers the flood with a GOAWAY (or closes) rather than swallowing an
 // unbounded block. main returns the failure count.
+// requires: live
 
 $ `stdlib/std/net.nu`
 $ `stdlib/std/thread.nu`
-$ `stdlib/ext/env.nu`
-$ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/ext/http_request.nu`
 $ `stdlib/ext/http_response.nu`
@@ -118,14 +117,7 @@ $ `stdlib/ext/http2_server.nu`
 }
 
 @ main → i {
-    : ?String gate ( env_get `NURL_NET_TESTS` )
-    ?? gate {
-        T s → {
-            ( string_free s )
-            : i f ( run )
-            ? == f 0 { ( nurl_print `continuation-flood defended\n` ) } {}
-            ^ f
-        }
-        F → { ( nurl_print `http2_continuation_flood skipped (NURL_NET_TESTS != 1)\n` ) ^ 0 }
-    }
+    : i f ( run )
+    ? == f 0 { ( nurl_print `continuation-flood defended\n` ) } {}
+    ^ f
 }

@@ -11,16 +11,17 @@
 //     program)
 //   * Mixing fibers (server) and OS threads (client) works on the
 //     same Channel-coordinated runtime
-//   * Live socket exercise gated behind NURL_NET_TESTS=1 — same
-//     convention as net_loopback / channel_basic / thread_basic.
+//   * Opens a loopback socket and pairs a fiber-side server with a
+//     blocking client, hence `requires: live fibers` — on a platform
+//     where `spawn` is stubbed the client waits for a peer that never
+//     runs, so this one must not run there at all.
+// requires: live fibers
 
 $ `stdlib/std/async.nu`
 $ `stdlib/std/net.nu`
 $ `stdlib/std/thread.nu`
 $ `stdlib/std/channel.nu`
 $ `stdlib/std/time.nu`
-$ `stdlib/ext/env.nu`
-$ `stdlib/core/string.nu`
 
 : ~ i echoed 0
 : ~ i client_match 0
@@ -134,10 +135,6 @@ $ `stdlib/core/string.nu`
 }
 
 @ main → i {
-    : ?String gate ( env_get `NURL_NET_TESTS` )
-    ?? gate {
-        T s → { ( string_free s ) ( run_async_tcp_test ) }
-        F → { ( nurl_print `async TCP test skipped (set NURL_NET_TESTS=1)\n` ) }
-    }
+    ( run_async_tcp_test )
     ^ 0
 }

@@ -6,4 +6,4 @@ err_names=UnixBind,UnixAddrInUse,UnixConnect
 pair a→b: ping
 pair b→a: pong!
 pair eof_after_close: T
-live unix round-trip skipped
+live echo: hello-unix

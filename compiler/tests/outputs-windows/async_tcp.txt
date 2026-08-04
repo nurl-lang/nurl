@@ -2,4 +2,6 @@ COMPILE OK
 LINK OK
 EXIT 0
 OUTPUT
-async TCP test skipped (set NURL_NET_TESTS=1)
+client_result=1
+echoed=1
+client_match=1

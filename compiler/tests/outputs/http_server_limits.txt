@@ -1,0 +1,6 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+case1_status=HTTP/1.1 413 Payload Too Large
+case2_status=HTTP/1.1 504 Gateway Timeout

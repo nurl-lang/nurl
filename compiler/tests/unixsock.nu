@@ -2,15 +2,15 @@
 //
 // The deterministic core uses socketpair() — a pure syscall, no path /
 // bind / listen / accept / thread — to exercise the read/write/close
-// path both directions. The full listen+accept+connect round-trip (with
-// a server thread over a /tmp socket) is gated on NURL_NET_TESTS=1, the
-// same convention as the TCP/websocket live tests.
+// path both directions. The full listen+accept+connect round-trip runs
+// a server thread over a /tmp socket — hence `requires: live`, the same
+// declaration the TCP/websocket live tests carry.
+// requires: live
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/unixsock.nu`
 $ `stdlib/std/thread.nu`
-$ `stdlib/ext/env.nu`
 
 @ str_to_vec s in → ( Vec u ) {
     : i n ( nurl_str_len in )
@@ -87,14 +87,7 @@ $ `stdlib/ext/env.nu`
     }
 
     // ── full listen/accept/connect round-trip (gated) ──
-    : ?String gate ( env_get `NURL_NET_TESTS` )
-    ?? gate {
-        T g → {
-            ? == 1 ( nurl_str_eq ( string_data g ) `1` ) { ( __live_roundtrip ) } { ( nurl_print `live unix round-trip skipped\n` ) }
-            ( string_free g )
-        }
-        F → ( nurl_print `live unix round-trip skipped\n` )
-    }
+    ( __live_roundtrip )
     ^ 0
 }
 

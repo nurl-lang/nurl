@@ -10,5 +10,8 @@ https_default_port=T
 http_explicit_port=T
 https_default_path=T
 bad_scheme_rejected=T
-live client test skipped (NURL_NET_TESTS != 1)
+distinct_stream_ids=T
+resp_ok=T
+resp_ok=T
+resp_ok=T
 all offline assertions passed

@@ -1,19 +1,18 @@
 // http_server_dos.nu — DoS connection-cap regression.
 //
-// Live (NURL_NET_TESTS=1): spin up a server with max_concurrent=2,
+// Live: spin up a server with max_concurrent=2,
 // max_per_ip=2. Open 4 concurrent TCP connections from python; the
 // first 2 are accepted and receive a response, the last 2 hit the
 // per-IP cap and are closed before the server speaks.
 //
 // Verification: count how many of the 4 conns receive any data on
 // the read. accepted_count must equal 2 (cap value).
+// requires: live python3
 
 $ `stdlib/std/net.nu`
 $ `stdlib/std/process.nu`
 $ `stdlib/std/thread.nu`
 $ `stdlib/std/time.nu`
-$ `stdlib/core/string.nu`
-$ `stdlib/ext/env.nu`
 $ `stdlib/ext/http_request.nu`
 $ `stdlib/ext/http_response.nu`
 $ `stdlib/ext/http_server.nu`
@@ -107,13 +106,6 @@ print(f'rejected={n_rejected}')
 }
 
 @ main → i {
-    : ?String gate ( env_get `NURL_NET_TESTS` )
-    ?? gate {
-        T s → {
-            ( string_free s )
-            ( run_live_dos_test )
-        }
-        F → { ( nurl_print `live DoS test skipped (NURL_NET_TESTS != 1)\n` ) }
-    }
+    ( run_live_dos_test )
     ^ 0
 }

@@ -1,0 +1,8 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+status=200
+body_len=5
+nul_at2=0
+done

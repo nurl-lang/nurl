@@ -219,7 +219,11 @@ run_one() {
             local rundir="$WORKDIR/run/$name"
             rm -rf "$rundir"; mkdir -p "$rundir"
             ln "$bin" "$rundir/$name" 2>/dev/null || cp "$bin" "$rundir/$name"
-            ( cd "$rundir" && timeout "${TIMEOUT}s" "./$name" > "$out" 2>&1 ) 2>/dev/null
+            # -k: plain `timeout` only sends SIGTERM, which a test spinning in
+            # a tight loop can ignore indefinitely — such leftovers have been
+            # found burning a core each 12 hours after their run. Declaring a
+            # hang is not the same as ending it.
+            ( cd "$rundir" && timeout -k 5s "${TIMEOUT}s" "./$name" > "$out" 2>&1 ) 2>/dev/null
             local code=$?
             rm -rf "$rundir"
             { echo "COMPILE OK"; } > "$act"

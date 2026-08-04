@@ -14,7 +14,11 @@
 //   * `server_stop` propagates through the listener → NetClosed →
 //     accept-fiber exit → runtime drains pending conn fibers →
 //     `server_run_async` returns
-//   * Live socket exercise gated behind NURL_NET_TESTS=1.
+//   * Opens a loopback socket and pairs a fiber-side server with a
+//     blocking client, hence `requires: live fibers` — on a platform
+//     where `spawn` is stubbed the client waits for a peer that never
+//     runs, so this one must not run there at all.
+// requires: live fibers
 
 $ `stdlib/std/async.nu`
 $ `stdlib/std/net.nu`
@@ -24,7 +28,6 @@ $ `stdlib/std/time.nu`
 $ `stdlib/ext/http_server.nu`
 $ `stdlib/ext/http_response.nu`
 $ `stdlib/core/string.nu`
-$ `stdlib/ext/env.nu`
 
 & `libc` @ nurl_tcp_connect s host i port → i
 
@@ -111,10 +114,6 @@ $ `stdlib/ext/env.nu`
 }
 
 @ main → i {
-    : ?String gate ( env_get `NURL_NET_TESTS` )
-    ?? gate {
-        T s → { ( string_free s ) ( run_async_http_test ) }
-        F → { ( nurl_print `async HTTP test skipped (set NURL_NET_TESTS=1)\n` ) }
-    }
+    ( run_async_http_test )
     ^ 0
 }

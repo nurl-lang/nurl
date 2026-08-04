@@ -1,0 +1,12 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+serve=OK
+client_out_len=62
+client_out=method=POST
+path=/echo
+query=
+version=HTTP/1.1
+body=hello srv
+

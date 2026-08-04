@@ -1,33 +1,83 @@
 #!/usr/bin/env bash
 # ============================================================
-#  test_skips.sh — which tests are skippable in THIS environment.
+#  test_skips.sh — which tests this host can run, and with what.
 #
 #  Sourced by every runner over compiler/tests/ (run_tests.sh,
-#  run_san_tests.sh). It answers exactly one question:
+#  run_san_tests.sh). It answers one question — "can this host run
+#  <name> at all?" — and it answers it by asking the TEST, not by
+#  consulting a list kept somewhere else.
 #
-#      "can this host run <name> at all?"
+#  ── The declaration ─────────────────────────────────────────────
+#  A test states its own requirements on a comment line near the top
+#  of its source:
 #
-#  — network reachability, optional native libraries, platform APIs,
-#  and files that are modules rather than tests. It deliberately does
-#  NOT answer "does this runner care about <name>", which is a runner's
-#  own business: the normal runner baselines should_fail_/diag_
-#  diagnostics, the sanitized runner has nothing to say about a program
-#  that never links. Those stay local to each runner.
+#      // requires: live openssl python3
 #
-#  This file exists because the split was got wrong once. The gating
-#  lived inside run_tests.sh, so run_san_tests.sh — a second full pass
-#  over the same corpus — silently had none of it, and CI's sanitized
-#  job reached httpbin.org on every commit while the normal job in the
-#  same workflow skipped those tests by design. Environment knowledge
-#  belongs next to the corpus it describes, in one copy.
+#  Tokens:
+#     live        exercises real OS facilities — loopback sockets,
+#                 unix sockets, threads, signals, subprocesses.
+#                 ON by default; NURL_LIVE_TESTS=0 turns it off.
+#     fibers      needs the M:N fiber runtime, and pairs a fiber-side
+#                 server with a blocking client — so on a platform
+#                 where `spawn` is stubbed the test does not print a
+#                 wrong answer, it waits forever for a peer that will
+#                 never run. Windows is that platform today (no Win64
+#                 context-switch backend — docs/ASYNC.md). ON by
+#                 default here; NURL_FIBER_TESTS=0 turns it off.
+#                 Declare it ONLY for that server/client shape: the
+#                 pure fiber tests (async_basic & co) print zeros
+#                 instead of hanging, and their Windows goldens pin
+#                 exactly that as the known-broken behaviour.
+#     internet    contacts a third-party host over the public network.
+#                 OFF by default; NURL_HTTP_TESTS=1 or NURL_NET_TESTS=1
+#                 turns it on.
+#     <anything>  the name of an external command that must be on
+#     else        $PATH (curl, python3, openssl, bash …).
 #
-#  Contract for callers: source it, then call `is_skipped <name>`; a
-#  non-empty echo means skip. ROOT_DIR is derived here, so sourcing
-#  works from any directory.
+#  No declaration means the test is pure: no sockets, no subprocesses,
+#  no clock races. Pure is the default, and it is the safe default —
+#  a test that forgets to declare its socket use fails loudly on a
+#  sandboxed host instead of silently never running.
 #
-#  Env toggles (read here, once, for every runner):
-#     NURL_HTTP_TESTS=1   run the http_ tests that need a live network
-#     NURL_NET_TESTS=1    run the tests that open a real socket
+#  ── Why declarations and not lists ──────────────────────────────
+#  The lists this replaces had drifted in every direction at once,
+#  because they lived in the runner and the facts lived in the tests:
+#
+#    * net_basic binds 127.0.0.1 and ran by default, while net_loopback
+#      binds 127.0.0.1 and was gated — the same capability, opposite
+#      answers.
+#    * http_date and http_jwt open no sockets whatsoever, yet were
+#      gated behind NURL_HTTP_TESTS purely for having an http_ prefix.
+#      This is the same "gated by name rather than behaviour" defect
+#      that was found and fixed for the net_ prefix, one prefix over,
+#      still live.
+#    * exactly ONE test in the corpus contacts a third party
+#      (http_basic → httpbin.org). Everything else the gate was
+#      holding back is loopback, threads or unix sockets — none of it
+#      needing anything CI does not already have.
+#
+#  The cost of that drift was the whole live surface of the runtime —
+#  threads, channels, semaphores, select, signals, unix sockets, async
+#  TCP, the HTTP server, its TLS path, websockets — never running in
+#  CI, behind an env var whose name suggests it is about the internet.
+#
+#  ── One gate, not two ───────────────────────────────────────────
+#  The tests used to gate their own live sections a second time, on
+#  `env_get NURL_NET_TESTS`, and print a "skipped" line otherwise. That
+#  second gate is gone. Two gates for one fact is the same shape as the
+#  drift above, one level down: the runner decides whether a test runs
+#  at all, and per-test goldens are byte-exact, so a half-run test could
+#  never have matched its golden anyway — the "skipped" branches were
+#  unreachable in CI, i.e. dead code that only a human reading the file
+#  would still believe. A test declares what it needs here, once.
+#
+#  Contract for callers:
+#     is_skipped <name>     non-empty echo means skip
+#
+#  Env toggles:
+#     NURL_LIVE_TESTS=0                    turn off the live tests
+#     NURL_FIBER_TESTS=0                   turn off the fiber tests
+#     NURL_HTTP_TESTS=1 / NURL_NET_TESTS=1 turn on the internet tests
 # ============================================================
 
 # Derived, not inherited: a sourced file that depends on the caller
@@ -36,46 +86,28 @@
 NURL_TESTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 NURL_TESTS_ROOT="$(cd "$NURL_TESTS_DIR/../.." && pwd)"
 
-ENABLE_HTTP_TESTS="${NURL_HTTP_TESTS:-0}"
-ENABLE_NET_TESTS="${NURL_NET_TESTS:-0}"
+ENABLE_LIVE_TESTS="${NURL_LIVE_TESTS:-1}"
+ENABLE_FIBER_TESTS="${NURL_FIBER_TESTS:-1}"
+# Two spellings because both are already documented and in use across
+# the repo (examples/README.md, packages/*/tests). Either means the
+# public network is available.
+ENABLE_INTERNET_TESTS=0
+[[ "${NURL_HTTP_TESTS:-0}" == "1" || "${NURL_NET_TESTS:-0}" == "1" ]] && ENABLE_INTERNET_TESTS=1
 
-# ── HTTP tests are network-dependent; opt-in via env. The handful
-#    listed here are pure (parser/builder/router) and run by default
-#    even though they share the http_ prefix.
-http_runs_by_default() {
-    case "$1" in
-        http_request_parser|http_response_builder|http_options|http_router|\
-        http_static_traversal|http_extras|http_middleware|http_form|\
-        http_multipart|http_proxy|http_server_seq|http_server_pipelined|\
-        http_server_limits|http_server_tls|http_server_panic|\
-        http_binary_body|http_response_binary) return 0 ;;
-    esac
-    return 1
-}
-http_needs_net() {
-    case "$1" in
-        http_server_seq|http_server_pipelined|http_server_limits|\
-        http_server_tls|http_server_panic|http_binary_body|\
-        http_response_binary) return 0 ;;
-    esac
-    return 1
-}
-
-# Same idea for the net_ prefix: gate on what a test actually DOES,
-# not on its name. Most net_ tests are pure wire-format / state-machine
-# logic (the sans-IO stack) and must run on every commit — that is the
-# whole point of writing them sans-IO. Only the ones that open a real
-# socket are opt-in.
+# Echo a test's declared requirement tokens, or nothing.
 #
-# Listing the socket-using tests explicitly, rather than exempting the
-# offline ones one by one, keeps the default SAFE: a new net_ test runs
-# by default, and a test that forgets to declare its socket use fails
-# loudly on a sandboxed host instead of silently never running.
-net_needs_net() {
-    case "$1" in
-        net_loopback) return 0 ;;
-    esac
-    return 1
+# Read from the leading comment block only — a `// requires:` further
+# down is prose about something else, not a declaration. The block ends
+# at the first line that is neither a comment nor blank, which is the
+# real boundary; a fixed line window would silently stop seeing the
+# declaration of any test that grew a longer header, and losing a
+# declaration means the test runs where it cannot.
+test_requires() {
+    local src="$NURL_TESTS_DIR/$1.nu"
+    [[ -f "$src" ]] || return 0
+    awk '/^[[:space:]]*$/ { next }
+         /^[[:space:]]*\/\// { if (sub(/^[[:space:]]*\/\/[[:space:]]*requires:[[:space:]]*/, "")) { print; exit } ; next }
+         { exit }' "$src"
 }
 
 # Decide whether a test is skipped in the current environment.
@@ -98,20 +130,24 @@ is_skipped() {
         # symbols don't exist to link elsewhere — FreeBSD/macOS CI).
         fswatch_*)  [[ "$(uname -s)" == "Linux" ]] || { echo skip; return; } ;;
     esac
-    if [[ "$name" == http_* ]]; then
-        if ! http_runs_by_default "$name" && [[ "$ENABLE_HTTP_TESTS" != "1" ]]; then
-            echo skip; return
-        fi
-        if http_needs_net "$name" && [[ "$ENABLE_NET_TESTS" != "1" ]]; then
-            echo skip; return
-        fi
-    fi
-    if [[ "$name" == net_* ]] && net_needs_net "$name" && [[ "$ENABLE_NET_TESTS" != "1" ]]; then
-        echo skip; return
-    fi
+
+    local tok
+    for tok in $(test_requires "$name"); do
+        case "$tok" in
+            live)     [[ "$ENABLE_LIVE_TESTS"     == "1" ]] || { echo skip; return; } ;;
+            fibers)   [[ "$ENABLE_FIBER_TESTS"    == "1" ]] || { echo skip; return; } ;;
+            internet) [[ "$ENABLE_INTERNET_TESTS" == "1" ]] || { echo skip; return; } ;;
+            # Anything else names an external command the test shells out
+            # to. Absent tool → skip, so a stripped host (the FreeBSD CI
+            # VM installs neither python3 nor curl) degrades to running
+            # less rather than failing on someone else's missing package.
+            *)        command -v "$tok" >/dev/null 2>&1 || { echo skip; return; } ;;
+        esac
+    done
 }
 
 # Exported together so a runner that fans out with `xargs -P bash -c`
 # gets the whole predicate set in each worker, and cannot half-export it.
-export -f is_skipped http_runs_by_default http_needs_net net_needs_net
-export NURL_TESTS_DIR NURL_TESTS_ROOT ENABLE_HTTP_TESTS ENABLE_NET_TESTS
+export -f is_skipped test_requires
+export NURL_TESTS_DIR NURL_TESTS_ROOT \
+       ENABLE_LIVE_TESTS ENABLE_FIBER_TESTS ENABLE_INTERNET_TESTS

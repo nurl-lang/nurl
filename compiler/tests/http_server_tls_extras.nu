@@ -1,7 +1,7 @@
 // http_server_tls_extras.nu — SNI + live cert reload + mTLS coverage.
 //
-// Three TLS-stack additions tested live (NURL_NET_TESTS=1) via openssl
-// CLI for cert generation + python3 for the client side:
+// Three TLS-stack additions tested live, via the openssl CLI for cert
+// generation + python3 for the client side:
 //
 //   §1 SNI: register two virtual-host certs, connect with two different
 //      SNI hostnames, verify each negotiation returns the matching cert.
@@ -12,13 +12,13 @@
 //      peer subject DN surfaced through tcp_peer_cert_subject.
 //
 // Pre-flight: openssl + python3 + ssl module must be on $PATH.
+// requires: live openssl bash
 
 $ `stdlib/std/net.nu`
 $ `stdlib/std/process.nu`
 $ `stdlib/std/thread.nu`
 $ `stdlib/std/time.nu`
 $ `stdlib/core/string.nu`
-$ `stdlib/ext/env.nu`
 $ `stdlib/ext/http_request.nu`
 $ `stdlib/ext/http_response.nu`
 $ `stdlib/ext/http_server.nu`
@@ -222,6 +222,15 @@ $ `stdlib/ext/http_server.nu`
     ^ ( response_text 200 `mtls-ok` )
 }
 
+// Did the listener actually accept the mTLS requirement? The pure-NURL
+// TLS server does not implement client-cert verification yet and says
+// so (NetOther, deliberately — see std/net.nu). Probe 1 must then be
+// scored against that fact: a certless client getting in when nothing
+// asked it for a cert is the documented state, not a broken gate. The
+// verdict word says which of the two it is, so the golden cannot be
+// misread as an enforcement regression.
+: ~ b g_mtls_enforced F
+
 @ run_mtls_section → v {
     ( nurl_print `--- §3 mTLS ---\n` )
     : !TcpListener NetErr lr ( tcp_listen_tls `127.0.0.1` 18792
@@ -232,7 +241,10 @@ $ `stdlib/ext/http_server.nu`
             : !v NetErr mr ( tcp_tls_require_client_cert listener
             `/tmp/nurl_tls_ca.crt` T )
             ?? mr {
-                T _ → ( println_label `mtls_setup` `ok` )
+                T _ → {
+                    = g_mtls_enforced T
+                    ( println_label `mtls_setup` `ok` )
+                }
                 F e → ( println_label `mtls_setup` ( net_err_name e ) )
             }
 
@@ -256,7 +268,9 @@ $ `stdlib/ext/http_server.nu`
                     ( sleep_ms 100 )
                     : String r1 ( shell_capture `bash -c "openssl s_client -connect 127.0.0.1:18792 -servername localhost </dev/null 2>&1 | grep -E 'handshake failure|alert certificate required|peer did not return a certificate' | head -n1"` )
                     ( nurl_print `mtls_no_cert=` )
-                    ( nurl_print ? > ( string_len r1 ) 0 `rejected` `unexpected_ok` )
+                    ( nurl_print ? > ( string_len r1 ) 0 `rejected`
+                    ? g_mtls_enforced `ENFORCEMENT-BYPASSED`
+                    `not-enforced (mTLS unsupported)` )
                     ( nurl_print `\n` )
                     ( string_free r1 )
                     : i _jr ( thread_join th )
@@ -290,18 +304,9 @@ $ `stdlib/ext/http_server.nu`
 }
 
 @ main → i {
-    : ?String gate ( env_get `NURL_NET_TESTS` )
-    ?? gate {
-        T s → {
-            ( string_free s )
-            ( run_setup )
-            ( run_sni_section )
-            ( run_reload_section )
-            ( run_mtls_section )
-        }
-        F → {
-            ( nurl_print `live TLS extras test skipped (NURL_NET_TESTS != 1)\n` )
-        }
-    }
+    ( run_setup )
+    ( run_sni_section )
+    ( run_reload_section )
+    ( run_mtls_section )
     ^ 0
 }

@@ -2,4 +2,12 @@ COMPILE OK
 LINK OK
 EXIT 0
 OUTPUT
-live arc thread tests skipped (set NURL_NET_TESTS=1 to enable)
+worker saw value=42
+worker saw value=42
+worker saw value=42
+worker saw value=42
+worker saw value=42
+worker saw value=42
+worker saw value=42
+worker saw value=42
+final count=1

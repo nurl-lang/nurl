@@ -11,14 +11,14 @@
 //       (we have no thread-cancellation primitives), but the
 //       client never sees the over-budget output.
 //
-// Gating: NURL_NET_TESTS=1 (same as http_server_seq / pipelined).
-// Two listeners on adjacent ports so the cases don't interleave.
+// Needs a loopback socket + python3 (same as http_server_seq /
+// pipelined). Two listeners on adjacent ports so the cases don't
+// interleave.
+// requires: live python3
 
 $ `stdlib/std/net.nu`
 $ `stdlib/std/process.nu`
 $ `stdlib/std/time.nu`
-$ `stdlib/core/string.nu`
-$ `stdlib/ext/env.nu`
 $ `stdlib/ext/http_request.nu`
 $ `stdlib/ext/http_response.nu`
 $ `stdlib/ext/http_server.nu`
@@ -129,14 +129,7 @@ sys.stdout.write('case2_status='+first+chr(10))" > /tmp/http_server_limits2.out 
 }
 
 @ main → i {
-    : ?String gate ( env_get `NURL_NET_TESTS` )
-    ?? gate {
-        T s → {
-            ( string_free s )
-            ( run_head_too_large_test )
-            ( run_request_timeout_test )
-        }
-        F → { ( nurl_print `live limits test skipped (set NURL_NET_TESTS=1 to enable)\n` ) }
-    }
+    ( run_head_too_large_test )
+    ( run_request_timeout_test )
     ^ 0
 }

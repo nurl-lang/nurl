@@ -17,4 +17,6 @@ OUTPUT
   handler ran = 1
   handler ran after empty dispatch = 1
   pending after clear = F
-live signal tests skipped (set NURL_NET_TESTS=1 to enable)
+── live shutdown ──
+  worker err = clean-shutdown
+  joined

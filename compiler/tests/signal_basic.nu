@@ -2,7 +2,7 @@
 //
 // Two layers, mirroring the module itself:
 //
-//   1. Generic per-signum handlers (always-on, no NURL_NET_TESTS gate):
+//   1. Generic per-signum handlers (no OS facilities beyond signals):
 //      * signal_constant / signal_name round-trip on SIGTERM (cross-
 //        platform — Win32 CRT exposes SIGTERM).
 //      * signal_install / signal_raise / signal_dispatch on SIGUSR1
@@ -12,9 +12,11 @@
 //      * signal_clear restores the default disposition and zeroes
 //        the slot — repeat raise must NOT call the handler again.
 //
-//   2. Legacy listener-shutdown bridge (live socket path, gated by
-//      NURL_NET_TESTS=1):
+//   2. Legacy listener-shutdown bridge (loopback socket + a worker
+//      thread — the `live` half of the declaration below):
 //      * signal_install_shutdown stores listener fd globally.
+//      * The listener binds port 0, so parallel runs of this suite
+//        cannot collide on a fixed port.
 //      * Worker thread blocked in tcp_accept returns Err when the
 //        handler runs (mirrors the SIGINT path; NetAccept / NetClosed
 //        both signal "listener went away cleanly").
@@ -22,12 +24,12 @@
 //      Spawns a worker, sleeps 50 ms to ensure it's blocked in
 //      accept, then calls signal_trigger_shutdown; the worker should
 //      return within ~50 ms.
+// requires: live
 
 $ `stdlib/std/signal.nu`
 $ `stdlib/std/net.nu`
 $ `stdlib/std/thread.nu`
 $ `stdlib/std/time.nu`
-$ `stdlib/ext/env.nu`
 $ `stdlib/core/string.nu`
 
 // Top-level mutable observed from inside the SIGUSR1 closure.
@@ -124,8 +126,31 @@ $ `stdlib/core/string.nu`
                         ( tcp_close_conn conn )
                     }
                     F e → {
+                        // NetAccept and NetClosed both mean "the listener
+                        // went away cleanly" — which of the two surfaces
+                        // depends on whether the shutdown closed the fd
+                        // before or after accept() was entered, i.e. on
+                        // thread timing. The assertion is that the wait
+                        // ended in a clean-shutdown error, so collapse
+                        // the pair rather than print a racy name into a
+                        // byte-exact golden.
+                        //
+                        // Written as a statement `?`, not a value-level
+                        // `? c \`literal\` ident`: a literal ternary arm is
+                        // copied so a join with an owning sibling comes
+                        // out uniformly owned, but an untracked-ident arm
+                        // is deliberately not (`s` also spells an opaque
+                        // handle). Mixing the two publishes "not owned"
+                        // and leaks the copy — 15 bytes here, and LSan
+                        // says so.
                         : s nm ( net_err_name e )
-                        ( println_str `  worker err = ` nm )
+                        : i clean ? != 0 ( nurl_str_eq nm `NetAccept` ) 1
+                        ( nurl_str_eq nm `NetClosed` )
+                        ? != clean 0 {
+                            ( println_str `  worker err = ` `clean-shutdown` )
+                        } {
+                            ( println_str `  worker err = ` nm )
+                        }
                     }
                 }
             }
@@ -141,6 +166,12 @@ $ `stdlib/core/string.nu`
                 }
                 F _ → ( nurl_print `  spawn failed\n` )
             }
+            // The worker has joined, so its heap-captured env is dead —
+            // release it. `thread_spawn` borrows the env and never frees
+            // it (§7.4: an escaped closure's env belongs to the
+            // consumer), so without this the test leaks it.
+            : *u worker_env # *u worker 1
+            ( nurl_free # s worker_env )
             ( signal_clear_shutdown )
             ( tcp_close_listener listener )
         }
@@ -156,23 +187,6 @@ $ `stdlib/core/string.nu`
     ( run_constant_smoke )
     ( run_generic_dispatch )
 
-    : ?String live ( env_get `NURL_NET_TESTS` )
-    ?? live {
-        T v → {
-            ? != 0 ( nurl_str_eq ( string_data v ) `1` ) {
-                ( run_live_shutdown )
-            } { ( nurl_print `live signal tests skipped (NURL_NET_TESTS != 1)\n` ) }
-            ( string_free v )
-        }
-        F → {
-            // Option's F arm carries no payload — DON'T bind `e` here.
-            // The previous `F e → ( string_free e ) ...` shape passed
-            // the F-tag's undef payload slot to string_free, which
-            // triggered UBSan's "applying zero offset to null pointer"
-            // inside nurl_peek. Runtime is now defensive against this
-            // (see runtime.c §9), but the cleanest fix is to not bind.
-            ( nurl_print `live signal tests skipped (set NURL_NET_TESTS=1 to enable)\n` )
-        }
-    }
+    ( run_live_shutdown )
     ^ 0
 }

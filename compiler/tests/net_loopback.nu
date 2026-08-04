@@ -1,7 +1,7 @@
 // net_loopback.nu — Phase 1 acceptance test for HTTP_SERVER_PLAN.
-// Gated behind NURL_NET_TESTS=1 (run_tests.sh) because it opens a
-// real listening socket and shells out to python3 for a client-side
-// connect. Skipped on hosts without python3.
+// Opens a real listening socket and shells out to python3 for a
+// client-side connect, so it declares both — skipped on hosts
+// without python3.
 //
 // Round-trip:
 //   1. Listen on 127.0.0.1:18765 (loopback only).
@@ -10,6 +10,7 @@
 //   3. Server accepts, reads "ping", writes "pong", closes the conn.
 //   4. Verifies the captured bytes round-trip end-to-end and that
 //      tcp_peer_addr is non-empty.
+// requires: live python3
 
 $ `stdlib/std/net.nu`
 $ `stdlib/std/process.nu`
