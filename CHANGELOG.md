@@ -22,6 +22,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   owned `"ip:port"` from `getsockname`, mirroring the UDP pair
   including the ownership rule (caller frees with `string_free`).
 
+### Changed
+
+- **The landing page's contributor strip is faces and names only.** It
+  read `Built by` and hung a role line under each name — editorial text
+  that had to be written by hand in `nurlweb/contributors.json` for
+  everyone who shipped something, and that fell back to a raw commit
+  count for everyone who was not listed yet. The strip is now headed
+  `Contributors` and carries nothing but the avatar and the name, so a
+  new contributor appears complete rather than tagged with a number.
+- **The strip is ordered by commits, and asks for two of them.** The
+  order used to be the order logins were written in
+  `contributors.json`, with everyone else appended by commit count —
+  an editorial ranking that had to be maintained by hand and that
+  said nothing a reader could check. It is now most commits first,
+  full stop, and new `min_commits` (default 2) keeps a single merged
+  typo fix off the page; `limit` (6) still caps it. Both cuts are
+  reported by name-count on stdout rather than applied silently, and
+  GitHub's own contributor page remains the exhaustive list.
+  `contributors.json` shrinks to a login → display-name map — listing
+  someone there no longer places or moves them, it only spells their
+  name for when they qualify. `limit` and `exclude` are unchanged.
+
 ### Fixed
 
 - **nurlc leaked while compiling a `select`.** `gen_select` builds the
