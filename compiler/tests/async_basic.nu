@@ -4,7 +4,8 @@
 // scheduler (default workers = sysconf(_SC_NPROCESSORS_ONLN); override
 // with NURL_WORKERS env) should drain all 100 000 yields and let every
 // fiber finish. Verifies:
-//   * ucontext-based context switch works
+//   * the stackful context switch works (runtime_ctx.c where it
+//     exists, ucontext elsewhere)
 //   * mmap'd 64 KB stacks + guard page are reachable & releasable
 //   * fair scheduling — every spawned fiber eventually gets every
 //     yield slice
@@ -14,8 +15,10 @@
 //     increments are protected
 //   * `runtime_shutdown` joins every worker cleanly
 //
-// POSIX-only at v1: on WASI / Windows the FFI returns failure and
-// total_yields / finished print 0.
+// On a platform with no fiber backend (WASI / Windows) the FFI
+// returns failure, the closures never run, and total_yields / finished
+// print 0 — see docs/ASYNC.md §5 on why that is a silent wrong answer
+// rather than a degraded one.
 
 $ `stdlib/std/async.nu`
 $ `stdlib/std/thread.nu`

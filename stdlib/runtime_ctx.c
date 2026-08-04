@@ -18,9 +18,9 @@
  *   3. A freestanding target has no ucontext at all, so the unikernel
  *      work needs this regardless.
  *
- * It is deliberately NOT wired into the fiber runtime yet: this file
- * lands with its own tests first, so the switch is proven in isolation
- * before anything depends on it.
+ * The fiber runtime in runtime_ffi.c switches through this primitive
+ * wherever it is available (see the NURL_FIBER_OWN_CTX gate there) and
+ * falls back to ucontext elsewhere.
  *
  * WHAT MUST BE SAVED (x86_64 System V)
  *
@@ -57,7 +57,86 @@
 #  define NURL_CTX_X86_64 1
 #endif
 
+/* Mach-O gives every C symbol a leading underscore; ELF does not. A
+ * basic-asm block writes the assembler-level name, so a bare
+ * "callq nurl_ctx_switch" links on Linux and leaves an undefined
+ * `nurl_ctx_switch` (no underscore) on macOS. Every symbol named from
+ * inside an asm string goes through this. */
+#if defined(__APPLE__)
+#  define NURL_CTX_SYM(name) "_" #name
+#else
+#  define NURL_CTX_SYM(name) #name
+#endif
+
 typedef struct { void *sp; } nurl_ctx_t;
+
+/* ── ASan fiber annotations ──────────────────────────────────────────
+ *
+ * ASan tracks stack frames against the one stack it knows a thread has.
+ * Code running on a switched-in stack therefore looks like an
+ * out-of-bounds write into whatever object backs that stack — a false
+ * positive by construction. The annotation pair tells ASan where the
+ * stack went: `start` before the switch (naming the destination), and
+ * `finish` on arrival. The void** carries the fake stack that
+ * detect_stack_use_after_return keeps per stack; passing NULL to
+ * `start` means "this stack is being left for good", which is how a
+ * finished fiber gets its fake stack destroyed instead of leaked.
+ *
+ * ucontext callers need none of this — ASan intercepts swapcontext and
+ * annotates it internally. These are for switches through
+ * nurl_ctx_switch, which no interceptor can see.
+ *
+ * Compiled to empty calls in an uninstrumented build. */
+#if defined(__has_feature)
+#  if __has_feature(address_sanitizer)
+#    define NURL_CTX_ASAN 1
+#  endif
+#endif
+#if defined(__SANITIZE_ADDRESS__)
+#  define NURL_CTX_ASAN 1
+#endif
+
+#ifdef NURL_CTX_ASAN
+/* Declared rather than #included: sanitizer/common_interface_defs.h is
+ * not on a freestanding include path, and the ABI is two fixed
+ * signatures. __SIZE_TYPE__ is the compiler's own size_t. */
+void __sanitizer_start_switch_fiber(void **fake_stack_save,
+                                    const void *bottom, __SIZE_TYPE__ size);
+void __sanitizer_finish_switch_fiber(void *fake_stack_save,
+                                     const void **bottom_old,
+                                     __SIZE_TYPE__ *size_old);
+#endif
+
+/* About to leave the current stack for [bottom, bottom+size). Pass NULL
+ * for fake_save when the current stack is being abandoned for good. */
+void nurl_ctx_asan_start_switch(void **fake_save, const void *bottom,
+                                unsigned long size)
+{
+#ifdef NURL_CTX_ASAN
+    __sanitizer_start_switch_fiber(fake_save, bottom, (__SIZE_TYPE__)size);
+#else
+    (void)fake_save; (void)bottom; (void)size;
+#endif
+}
+
+/* Just arrived on a new stack. `bottom_old`/`size_old` report the stack
+ * control came FROM — the only way to learn a thread stack's bounds
+ * without libc-specific pthread calls, which is exactly what the fiber
+ * side needs in order to name the worker loop's stack on the way back. */
+void nurl_ctx_asan_finish_switch(void *fake_save, const void **bottom_old,
+                                 unsigned long *size_old)
+{
+#ifdef NURL_CTX_ASAN
+    __SIZE_TYPE__ sz = 0;
+    __sanitizer_finish_switch_fiber(fake_save, bottom_old,
+                                    size_old ? &sz : (__SIZE_TYPE__ *)0);
+    if (size_old) *size_old = (unsigned long)sz;
+#else
+    (void)fake_save;
+    if (bottom_old) *bottom_old = (const void *)0;
+    if (size_old)   *size_old   = 0;
+#endif
+}
 
 #ifdef NURL_CTX_X86_64
 
@@ -183,35 +262,109 @@ static long nurl__ctx_arg_seen;
 
 static void nurl__ctx_fpbounce(void *arg);
 
+/* ASan bookkeeping for the test fibers. The main side knows the fiber
+ * stack (it is the array right there); the fiber side has to be TOLD
+ * where the main stack is, and learns it from the finish call's
+ * out-params on its first arrival. */
+static void          *nurl__ctx_main_fake;
+static void          *nurl__ctx_fib_fake;
+static const void    *nurl__ctx_main_lo;
+static unsigned long  nurl__ctx_main_size;
+
+/* Called on the FIBER, the instant it gains control.
+ *
+ * `used` is load-bearing, and for the same reason the trampoline traps
+ * with `ud2` instead of calling a helper: the only reference to these
+ * two lives inside an asm string, which LTO cannot see. Without it the
+ * optimizer concludes they are dead, strips them, and the link fails on
+ * an undefined symbol the source plainly contains. */
+__attribute__((used))
+void nurl__ctx_test_enter(void)
+{
+    nurl_ctx_asan_finish_switch(nurl__ctx_fib_fake,
+                                &nurl__ctx_main_lo, &nurl__ctx_main_size);
+}
+
+/* Called on the FIBER, immediately before it hands control back.
+ * `used` for the same reason as above. */
+__attribute__((used))
+void nurl__ctx_test_leave(void)
+{
+    nurl_ctx_asan_start_switch(&nurl__ctx_fib_fake,
+                               nurl__ctx_main_lo, nurl__ctx_main_size);
+}
+
+/* Every hook re-inits the one shared fiber context, abandoning whatever
+ * fiber was parked in it. The saved fake stack goes with it: the next
+ * arrival is a FIRST arrival, and those take NULL. */
+static void nurl__ctx_test_init(void (*entry)(void *), void *arg)
+{
+    nurl__ctx_fib_fake = 0;
+    nurl_ctx_init(&nurl__ctx_fiber, nurl__ctx_stack, sizeof nurl__ctx_stack,
+                  entry, arg);
+}
+
+/* The main-side half of the same pair. */
+static void nurl__ctx_test_to_fiber(void)
+{
+    nurl_ctx_asan_start_switch(&nurl__ctx_main_fake,
+                               nurl__ctx_stack, sizeof nurl__ctx_stack);
+}
+static void nurl__ctx_test_from_fiber(void)
+{
+    nurl_ctx_asan_finish_switch(nurl__ctx_main_fake, 0, 0);
+}
+
 /* A fiber that trashes every callee-saved GPR, hands control back, and
  * then idles. Trashing them is the point: if the switch did not save
- * and restore, the caller would see THESE values instead of its own. */
+ * and restore, the caller would see THESE values instead of its own.
+ *
+ * The enter/leave calls are ordinary C functions, so the ABI makes them
+ * preserve rbx/r12-r15 — the sentinels are still live in the registers
+ * at the switch itself, which is what gives the test its teeth. The
+ * `subq $8` is not decoration: a function is entered with rsp ≡ 8
+ * (mod 16), so calling out from here without it would hand every callee
+ * a misaligned stack. */
 __attribute__((naked, noinline))
 static void nurl__ctx_bounce(void *arg)
 {
     __asm__ volatile(
+        "subq  $8, %rsp\n\t"
+        "callq " NURL_CTX_SYM(nurl__ctx_test_enter) "\n\t"
         "movabsq $0xdeadbeefdeadbeef, %rbx\n\t"
         "movabsq $0xdeadbeefdeadbeef, %r12\n\t"
         "movabsq $0xdeadbeefdeadbeef, %r13\n\t"
         "movabsq $0xdeadbeefdeadbeef, %r14\n\t"
         "movabsq $0xdeadbeefdeadbeef, %r15\n\t"
         "1:\n\t"
-        "leaq nurl__ctx_fiber(%rip), %rdi\n\t"
-        "leaq nurl__ctx_main(%rip), %rsi\n\t"
-        "callq nurl_ctx_switch\n\t"
+        "callq " NURL_CTX_SYM(nurl__ctx_test_leave) "\n\t"
+        "leaq " NURL_CTX_SYM(nurl__ctx_fiber) "(%rip), %rdi\n\t"
+        "leaq " NURL_CTX_SYM(nurl__ctx_main) "(%rip), %rsi\n\t"
+        "callq " NURL_CTX_SYM(nurl_ctx_switch) "\n\t"
+        "callq " NURL_CTX_SYM(nurl__ctx_test_enter) "\n\t"
         "jmp 1b\n\t"
     );
+}
+
+/* Hand control back to whoever switched us in, annotated. Every C test
+ * fiber below yields through this. */
+static void nurl__ctx_test_yield(void)
+{
+    nurl__ctx_test_leave();
+    nurl_ctx_switch(&nurl__ctx_fiber, &nurl__ctx_main);
+    nurl__ctx_test_enter();
 }
 
 /* A fiber that sets its own rounding modes before handing control back. */
 static void nurl__ctx_fpbounce(void *arg)
 {
     (void)arg;
+    nurl__ctx_test_enter();
     unsigned       mx = 0x1f80u;              /* default, all masked   */
     unsigned short cw = 0x037fu;              /* x87 default           */
     __asm__ volatile("ldmxcsr %0" :: "m"(mx));
     __asm__ volatile("fldcw   %0" :: "m"(cw));
-    for (;;) nurl_ctx_switch(&nurl__ctx_fiber, &nurl__ctx_main);
+    for (;;) nurl__ctx_test_yield();
 }
 
 /* Do the callee-saved GPRs survive a round trip?
@@ -226,16 +379,16 @@ static void nurl__ctx_fpbounce(void *arg)
  */
 long nurl_ctx_test_preserve(void)
 {
-    nurl_ctx_init(&nurl__ctx_fiber, nurl__ctx_stack, sizeof nurl__ctx_stack,
-                  nurl__ctx_bounce, (void *)0UL);
+    nurl__ctx_test_init(nurl__ctx_bounce, (void *)0UL);
     long ok;
+    nurl__ctx_test_to_fiber();
     __asm__ volatile(
         "movabsq $0x1111111111111111, %%rbx\n\t"
         "movabsq $0x2222222222222222, %%r12\n\t"
         "movabsq $0x3333333333333333, %%r13\n\t"
         "movabsq $0x4444444444444444, %%r14\n\t"
         "movabsq $0x5555555555555555, %%r15\n\t"
-        "callq   nurl_ctx_switch\n\t"
+        "callq   " NURL_CTX_SYM(nurl_ctx_switch) "\n\t"
         "xorl    %%eax, %%eax\n\t"
         "movabsq $0x1111111111111111, %%rcx\n\t"
         "cmpq    %%rcx, %%rbx\n\t"
@@ -257,6 +410,7 @@ long nurl_ctx_test_preserve(void)
         : "=a"(ok)
         : "D"(&nurl__ctx_main), "S"(&nurl__ctx_fiber)
         : "rbx", "r12", "r13", "r14", "r15", "rcx", "memory", "cc");
+    nurl__ctx_test_from_fiber();
     return ok;
 }
 
@@ -265,8 +419,7 @@ long nurl_ctx_test_preserve(void)
  * get ours back. */
 long nurl_ctx_test_fpcw(void)
 {
-    nurl_ctx_init(&nurl__ctx_fiber, nurl__ctx_stack, sizeof nurl__ctx_stack,
-                  nurl__ctx_fpbounce, (void *)0UL);
+    nurl__ctx_test_init(nurl__ctx_fpbounce, (void *)0UL);
     unsigned mx_before, mx_after;
     unsigned short cw_before, cw_after;
     __asm__ volatile("stmxcsr %0" : "=m"(mx_before));
@@ -277,7 +430,9 @@ long nurl_ctx_test_fpcw(void)
     __asm__ volatile("ldmxcsr %0" :: "m"(mx_ours));
     __asm__ volatile("fldcw   %0" :: "m"(cw_ours));
 
+    nurl__ctx_test_to_fiber();
     nurl_ctx_switch(&nurl__ctx_main, &nurl__ctx_fiber);
+    nurl__ctx_test_from_fiber();
 
     __asm__ volatile("stmxcsr %0" : "=m"(mx_after));
     __asm__ volatile("fnstcw  %0" : "=m"(cw_after));
@@ -290,15 +445,16 @@ long nurl_ctx_test_fpcw(void)
  * the fresh-frame path work. */
 static void nurl__ctx_pingpong(void *arg)
 {
+    nurl__ctx_test_enter();
     long n = (long)(unsigned long)arg;
     nurl__ctx_arg_seen = n;
     for (long i = 0; i < n; i++) {
         nurl__ctx_counter++;
-        nurl_ctx_switch(&nurl__ctx_fiber, &nurl__ctx_main);
+        nurl__ctx_test_yield();
     }
     for (;;) {
         nurl__ctx_switches++;
-        nurl_ctx_switch(&nurl__ctx_fiber, &nurl__ctx_main);
+        nurl__ctx_test_yield();
     }
 }
 
@@ -307,10 +463,12 @@ long nurl_ctx_test_pingpong(long n)
     nurl__ctx_counter  = 0;
     nurl__ctx_switches = 0;
     nurl__ctx_arg_seen = -1;
-    nurl_ctx_init(&nurl__ctx_fiber, nurl__ctx_stack, sizeof nurl__ctx_stack,
-                  nurl__ctx_pingpong, (void *)(unsigned long)n);
-    for (long i = 0; i < n + 1; i++)
+    nurl__ctx_test_init(nurl__ctx_pingpong, (void *)(unsigned long)n);
+    for (long i = 0; i < n + 1; i++) {
+        nurl__ctx_test_to_fiber();
         nurl_ctx_switch(&nurl__ctx_main, &nurl__ctx_fiber);
+        nurl__ctx_test_from_fiber();
+    }
     return nurl__ctx_counter;
 }
 
@@ -326,9 +484,12 @@ static volatile double nurl__ctx_fp_result;
 static void nurl__ctx_fpfresh(void *arg)
 {
     (void)arg;
+    /* The annotation call touches no floating point, so the division
+     * below is still the fiber's first FP instruction. */
+    nurl__ctx_test_enter();
     volatile double a = 1.0, b = 3.0;
     nurl__ctx_fp_result = a / b;
-    for (;;) nurl_ctx_switch(&nurl__ctx_fiber, &nurl__ctx_main);
+    for (;;) nurl__ctx_test_yield();
 }
 
 /* 1 when a fresh fiber can do arithmetic without trapping and the
@@ -336,9 +497,10 @@ static void nurl__ctx_fpfresh(void *arg)
 long nurl_ctx_test_fresh_fp(void)
 {
     nurl__ctx_fp_result = 0.0;
-    nurl_ctx_init(&nurl__ctx_fiber, nurl__ctx_stack, sizeof nurl__ctx_stack,
-                  nurl__ctx_fpfresh, (void *)0UL);
+    nurl__ctx_test_init(nurl__ctx_fpfresh, (void *)0UL);
+    nurl__ctx_test_to_fiber();
     nurl_ctx_switch(&nurl__ctx_main, &nurl__ctx_fiber);
+    nurl__ctx_test_from_fiber();
     double d = nurl__ctx_fp_result - (1.0 / 3.0);
     if (d < 0) d = -d;
     return d < 1e-15;

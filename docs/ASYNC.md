@@ -21,12 +21,13 @@ $ `stdlib/std/async.nu`
 
 ## 1. The model
 
-- **Stackful.** Each fiber owns a real (mmap'd) stack, switched with
-  `ucontext` — so *any* existing function can yield anywhere beneath any
-  call depth. No compiler transformation, no state machines, no
-  colouring. The cost is memory per fiber (fixed-size stacks) instead of
-  Go-style movable stacks; the benefit is that every existing nurlc IR
-  pattern works unchanged.
+- **Stackful.** Each fiber owns a real (mmap'd) stack, switched by
+  swapping the callee-saved registers and `rsp` (see §5) — so *any*
+  existing function can yield anywhere beneath any call depth. No
+  compiler transformation, no state machines, no colouring. The cost is
+  memory per fiber (fixed-size stacks) instead of Go-style movable
+  stacks; the benefit is that every existing nurlc IR pattern works
+  unchanged.
 - **M:N.** `runtime_init workers` starts a pool of OS threads
   (`workers = 0` reads `$NURL_WORKERS`, defaulting to the core count).
   Fibers are scheduled onto whichever worker is free.
@@ -103,22 +104,34 @@ drains.
 
 ## 5. Platform support
 
-Fibers need `ucontext` (`getcontext`/`makecontext`/`swapcontext`). The
-runtime enables them where that is reliable and **stubs them
-elsewhere** — on a stubbed platform `spawn` and the `*_async` calls
-degrade transparently to their blocking forms, so the same program
-still runs (just without fiber concurrency).
+Fibers need pthreads, `mmap`, and a stackful context switch. The switch
+has two backends:
+
+- **`stdlib/runtime_ctx.c`** — NURL's own, in x86_64 SysV asm. It
+  depends on the instruction set alone, so it needs no libc support at
+  all, and it does not pay `swapcontext`'s `sigprocmask` syscall: 8 M
+  yields through the scheduler take 0.38 s against ucontext's 6.90 s,
+  with `sys` time going from 2.1 s to zero.
+- **`ucontext`** (`getcontext`/`makecontext`/`swapcontext`) — everywhere
+  else, on the libcs that ship a working one.
 
 | Platform | Fibers |
 |---|---|
-| Linux (glibc) | ✔ ucontext |
-| macOS | ✔ ucontext (`_XOPEN_SOURCE`) |
-| FreeBSD / NetBSD / DragonFly | ✔ ucontext |
-| Linux (musl), OpenBSD | stubbed (musl ships deprecated-removed ucontext) |
+| Linux x86_64 (glibc **or musl**) | ✔ own switch |
+| macOS x86_64 | ✔ own switch |
+| Linux/macOS arm64, FreeBSD / NetBSD / DragonFly | ✔ ucontext |
+| OpenBSD | stubbed (removed `swapcontext`) |
 | Windows, WASI | stubbed |
 
 The reactor is POSIX-only (`poll(2)`); it starts only where fibers are
 enabled.
+
+**What "stubbed" means, precisely.** The `*_async` I/O calls do degrade
+to their blocking forms and stay correct. `spawn` does **not**: with no
+backend it returns a null handle and *the closure never runs at all*.
+A program that spawns work and prints the result gets zeros and exit 0
+— a silent wrong answer, not a slower right one. Treat a stubbed
+platform as "no async", not as "async without concurrency".
 
 ## 6. Design lineage
 

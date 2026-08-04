@@ -104,22 +104,23 @@ TIMEOUT="${TIMEOUT:-30}"
 JOBS="${NURL_SAN_JOBS:-$(nproc 2>/dev/null || echo 4)}"
 
 # Leak detection off by default — see file header.
-export ASAN_OPTIONS="${ASAN_OPTIONS:-detect_leaks=${LSAN_DETECT_LEAKS:-0}:abort_on_error=0:halt_on_error=0:print_stacktrace=1}"
+#
+# When it IS on, drop stack roots. LSan scans the exiting thread's stack
+# for pointers, and by the time it runs main has already returned — so a
+# dead frame that happens to still hold the pointer marks a real leak
+# "reachable". Whether it does is a property of the machine: a 12-core
+# dev box called async_chan clean and a 4-core CI runner called the same
+# binary leaky, and the leak was real. Without this the gate is a coin
+# flip that lands heads on the developer's machine. The whole pinned set
+# passes with it, so nothing here relies on a stack root.
+LSAN_ROOT_OPTS=""
+[[ "${LSAN_DETECT_LEAKS:-0}" == "1" ]] && LSAN_ROOT_OPTS="use_stacks=0:"
+export ASAN_OPTIONS="${ASAN_OPTIONS:-${LSAN_ROOT_OPTS}detect_leaks=${LSAN_DETECT_LEAKS:-0}:abort_on_error=0:halt_on_error=0:print_stacktrace=1}"
 export UBSAN_OPTIONS="${UBSAN_OPTIONS:-print_stacktrace=1:halt_on_error=0}"
 
 # should_fail_* are compile-time negative tests; nurlfmt_idempotent is a
 # shell round-trip, not a binary; *_mod are helper modules without main().
-#
-# ctx_switch drives runtime_ctx.c's stackful context switch, which runs
-# code on a stack ASan does not own. ASan tracks stack frames against
-# the thread stack it knows about, so every frame the fiber builds looks
-# like an out-of-bounds write into the backing array — a false positive
-# by construction, not a finding. Making it observable needs the
-# __sanitizer_{start,finish}_switch_fiber annotations bracketing the
-# switch; until those are wired in (they belong with the fiber-runtime
-# rewire, not with the primitive), the test runs in the ordinary corpus
-# and sits out the sanitized one.
-SKIP_RE='(should_fail_|diag_|nurlfmt_idempotent|alias_rewrite_types_mod|ctx_switch)'
+SKIP_RE='(should_fail_|diag_|nurlfmt_idempotent|alias_rewrite_types_mod)'
 
 # ── per-test worker (exported, fanned out with xargs -P) ─────────
 # Echoes a single "<name> <VERDICT>" line; writes its own logs under

@@ -116,19 +116,27 @@ EOF
     # to flow in to avoid `wasm-ld: undefined symbol: nurl_*` at link
     # time. We compile inside a throwaway container that already has
     # wasi-sdk so the host doesn't need its own toolchain.
-    # stdlib/runtime.c is the A9 aggregator — it #includes runtime_core.c +
-    # runtime_ffi.c (resolved relative to /src/), so all three must be
-    # mounted and any of them being newer forces a rebuild.
+    # stdlib/runtime.c is the A9 aggregator — it #includes its siblings
+    # (resolved relative to /src/), so every one of them must be mounted
+    # and any of them being newer forces a rebuild. The list is read out
+    # of runtime.c: spelled out by hand it is a hand-synced twin, and a
+    # missing mount does not degrade — the compile fails outright on the
+    # unmounted #include.
     RUNTIME_C="$SCRIPT_DIR/stdlib/runtime.c"
-    RUNTIME_CORE_C="$SCRIPT_DIR/stdlib/runtime_core.c"
-    RUNTIME_FFI_C="$SCRIPT_DIR/stdlib/runtime_ffi.c"
     RUNTIME_WASM="$SCRIPT_DIR/stdlib/runtime.wasm.o.bind"
-    if [[ "$RUNTIME_C" -nt "$RUNTIME_WASM" || "$RUNTIME_CORE_C" -nt "$RUNTIME_WASM" || "$RUNTIME_FFI_C" -nt "$RUNTIME_WASM" ]]; then
+    RUNTIME_SRCS=(runtime.c)
+    while read -r _inc; do RUNTIME_SRCS+=("$_inc"); done < <(
+        sed -n 's/^#include "\([A-Za-z0-9_]*\.c\)".*/\1/p' "$RUNTIME_C")
+    RUNTIME_MOUNTS=()
+    RUNTIME_DIRTY=0
+    for _src in "${RUNTIME_SRCS[@]}"; do
+        RUNTIME_MOUNTS+=(-v "$SCRIPT_DIR/stdlib/$_src:/src/$_src:ro")
+        [[ "$SCRIPT_DIR/stdlib/$_src" -nt "$RUNTIME_WASM" ]] && RUNTIME_DIRTY=1
+    done
+    if [[ $RUNTIME_DIRTY -eq 1 ]]; then
         echo "[nurlapi/bind] rebuilding stdlib/runtime.wasm.o (wasi target)…"
         docker run --rm \
-            -v "$RUNTIME_C:/src/runtime.c:ro" \
-            -v "$RUNTIME_CORE_C:/src/runtime_core.c:ro" \
-            -v "$RUNTIME_FFI_C:/src/runtime_ffi.c:ro" \
+            "${RUNTIME_MOUNTS[@]}" \
             -v "$SCRIPT_DIR/stdlib:/dst" \
             --entrypoint /opt/wasi-sdk/bin/clang \
             "$IMAGE" \
