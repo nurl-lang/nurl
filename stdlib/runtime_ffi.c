@@ -849,7 +849,15 @@ long long nurl_tcp_listen(const char *host, long long port, long long backlog) {
 #endif
     NurlTcp *h = nurl__tcp_new_handle(NURL_TCP_KIND_LISTENER);
     if (!h) return 0;
-    if (port <= 0 || port > 65535) {
+    /* port 0 = "kernel picks an ephemeral port", the POSIX contract, and
+     * the only collision-free way for parallel tests and short-lived
+     * servers to bind. Read the assigned port back with
+     * nurl_tcp_local_addr. nurl_udp_bind has always accepted it; this
+     * side rejected it as invalid, which made the whole pattern
+     * unavailable on TCP (and reported as NetBind, a bind failure that
+     * never happened). Only nurl_tcp_connect keeps `<= 0`, where a
+     * destination port of 0 really is meaningless. */
+    if (port < 0 || port > 65535) {
         h->err_kind = NURL_NET_ERR_BIND;
         return (long long)(uintptr_t)h;
     }
@@ -1502,6 +1510,34 @@ const char *nurl_tcp_peer_addr(long long handle) {
     NurlTcp *h = (NurlTcp*)(uintptr_t)handle;
     if (!h || !h->peer) return "";
     return h->peer;
+}
+
+/* Defined with the UDP block below (§18b) — one formatter for both
+ * families and both protocols, rather than a TCP-shaped copy. */
+static char *nurl__net_format_sockaddr(const struct sockaddr *sa,
+                                       socklen_t salen);
+
+/* Heap "ip:port" of the locally-bound endpoint of a listener or conn.
+ * Caller frees via nurl_free; empty string on error. This is what makes
+ * `nurl_tcp_listen(host, 0, …)` usable: the ephemeral port the kernel
+ * chose is otherwise unknowable to the process that asked for it.
+ * Mirrors nurl_udp_local_addr exactly, including the ownership rule. */
+char *nurl_tcp_local_addr(long long handle) {
+    NurlTcp *h = (NurlTcp*)(uintptr_t)handle;
+    if (!h || h->fd == NURL_INVALID_SOCK) return strdup("");
+    struct sockaddr_storage sa;
+    memset(&sa, 0, sizeof(sa));
+#ifdef _WIN32
+    int salen = (int)sizeof(sa);
+#else
+    socklen_t salen = (socklen_t)sizeof(sa);
+#endif
+    if (getsockname(h->fd, (struct sockaddr*)&sa, &salen) != 0) {
+        return strdup("");
+    }
+    char *out = nurl__net_format_sockaddr((struct sockaddr*)&sa,
+                                          (socklen_t)salen);
+    return out ? out : strdup("");
 }
 
 void nurl_tcp_set_timeout(long long handle, long long ms) {
@@ -2346,6 +2382,7 @@ void nurl_tcp_close(long long h) { (void)h; }
 void nurl_tcp_shutdown(long long h) { (void)h; }
 long long nurl_tcp_err_kind(long long h) { (void)h; return NURL_NET_ERR_OTHER; }
 const char *nurl_tcp_peer_addr(long long h) { (void)h; return ""; }
+char       *nurl_tcp_local_addr(long long h) { (void)h; return strdup(""); }
 void nurl_tcp_set_timeout(long long h, long long ms) { (void)h; (void)ms; }
 /* Async-runtime hooks. The non-WASI variants live above the #else gate;
  * mirror them as no-ops here so wasm-ld doesn't fail with undefined
