@@ -5921,8 +5921,10 @@
     ( seq fname `thread_spawn` )
     // A `*_free` destructor consumes (frees) its first argument.
     // `nurl_free` is excluded — it frees raw *T / i8* FFI memory,
-    // which the borrow checker does not track.
-    : b is_consume_call & ( bck_is_destructor_name fname )
+    // which the borrow checker does not track. The callee's return
+    // type is consulted too: a `_free`-suffixed function that returns
+    // a value is a free-space QUERY, not a destructor.
+    : b is_consume_call & ( bck_is_destructor_call fname ( nurl_sym_get syms fname ) )
     ! ( seq fname `nurl_free` )
     : ~ i arg_idx 0
     // Space-separated 0-based indices of the callee's `inout`
@@ -10290,16 +10292,40 @@
 // analyze walk transitions the binding Owned -> Moved; a `let` / `=`
 // of the binding revives it to Owned.
 
-// True when `name` ends with the literal suffix `_free` — i.e. the
-// callee is a typed heap destructor. NB: this predicate must NOT
-// itself be named with a `_free` (or `..._is_free`) suffix — the
-// Phase 1 move rule keys on a `_free`-suffixed callee, so such a
-// helper would be misread as a destructor and flag its own
-// bare-identifier argument as moved (a false positive in nurlc.nu).
+// True when `name` ends with the literal suffix `_free`.
+//
+// The suffix ALONE does not make a destructor — see
+// `bck_is_destructor_call`, which is what the move rule keys on. A
+// name-only rule misreads any query whose name happens to end in
+// `_free` (`virtq_num_free`, `pool_num_free`, `arena_bytes_free`) as
+// consuming its receiver, so the second read of that receiver is
+// reported as a use-after-move. That is a false positive with no
+// workaround other than renaming a correctly-named function — which
+// is exactly what this compiler had to do to its own helper before
+// the return-type test below existed.
 @ bck_is_destructor_name s name → b {
     : i len ( nurl_str_len name )
     ? < len 5 { ^ F } {}
     ( seq ( nurl_str_slice name - len 5 5 ) `_free` )
+}
+
+// True when a call to `name` really consumes its first argument.
+//
+// A typed heap destructor takes the value, releases it, and has
+// nothing left to report: every `_free` in the stdlib returns `v`
+// (`vec_free`, `string_free`, `x509_free`, …, audited). A `_free`-
+// suffixed function that RETURNS a value is therefore not a
+// destructor but a query about free space — it hands back a count,
+// which a destructor has no reason to do.
+//
+// `ret_ll` is the callee's recorded LLVM return type. When it is
+// empty the callee's signature is not visible here (a forward
+// reference); fall back to the name rule so this can only ever be
+// more permissive than before, never less safe.
+@ bck_is_destructor_call s name s ret_ll → b {
+    ? ! ( bck_is_destructor_name name ) { ^ F } {}
+    ? == 0 ( nurl_str_len ret_ll ) { ^ T } {}
+    ^ ( seq ret_ll `void` )
 }
 
 // ── Borrow checker — iterator invalidation ─────────────────────────
