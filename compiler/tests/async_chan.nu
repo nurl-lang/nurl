@@ -69,6 +69,10 @@ $ `stdlib/std/channel.nu`
     ( chan_close [i] b2a )
     ( chan_free [i] a2b )
     ( chan_free [i] b2a )
+    // Escaped closure envs — ours to release once runtime_run has
+    // drained every fiber (docs/MEMORY.md §7.4).
+    ( nurl_free # s # *u fiber_a 1 )
+    ( nurl_free # s # *u fiber_b 1 )
     ( runtime_shutdown )
     ^ 0
 }

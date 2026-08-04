@@ -98,6 +98,10 @@ $ `stdlib/std/thread.nu`
     ( nurl_print `\n` )
 
     ( mutex_free m )
+    // Escaped closure envs — ours to release now that every fiber has
+    // been joined / drained (docs/MEMORY.md §7.4).
+    ( nurl_free # s # *u tiny 1 )
+    ( nurl_free # s # *u yielder 1 )
     ( runtime_shutdown )
     ^ 0
 }

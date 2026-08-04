@@ -4195,6 +4195,47 @@
     = . types idx # s ( nurl_strdup value )
 }
 
+// Overwrite the value of `name` WHERE IT LIVES, at whatever scope depth
+// that turns out to be, instead of shadowing it in the current one.
+//
+// `nurl_sym_def` and `nurl_sym_set` both write into the CURRENT scope,
+// so a value they store inside a `?` / `~` body dies with the matching
+// `nurl_sym_pop`. That is exactly right for a binding — an inner scope
+// must not mutate an outer one — and exactly wrong for the handful of
+// FUNCTION-level accumulators that happen to share the table. The
+// owned-closure set is one: reset once per function, drained once per
+// function. A removal recorded inside a loop body has to outlive that
+// body, because it records a fact about the whole function — this
+// closure escaped. Losing it resurrects the binding, and the
+// function-exit drain then frees an env its consumer is still holding
+// (docs/MEMORY.md §7.4).
+//
+// Falls back to `def` when the name is absent, so the first write in a
+// function still lands normally.
+@ nurl_sym_set_deep i h s name s value → v {
+    : s t # s h
+    : i count ( nurl_peek t 0 )
+    : *s names # *s # s ( nurl_peek t 3 )
+    : *s types # *s # s ( nurl_peek t 4 )
+    : *i buckets # *i # s ( nurl_peek t 7 )
+    : *i prev # *i # s ( nurl_peek t 8 )
+    : i bh ( __sym_hash name ( nurl_peek t 6 ) )
+    // Same newest-first bucket walk as nurl_sym_get — the entry it would
+    // read is the entry we overwrite, so reads and writes cannot disagree.
+    : ~ i cur . buckets bh
+    ~ != cur 0 {
+        : i idx - cur 1
+        ? >= idx count { = cur 0 } {
+            ? == 0 # i ( strcmp name . names idx )
+            { ( nurl_free . types idx )
+                = . types idx # s ( nurl_strdup value )
+                ^ v }
+            { = cur . prev idx }
+        }
+    }
+    ( nurl_sym_def h name value )
+}
+
 // Append to the value of `name` in place, under the same depth rule.
 //
 // The accumulate-into-the-symbol-table idiom — get the value, cat, def
@@ -9978,7 +10019,7 @@
 @ mem_own_closure_add i syms s name → v {
     : s cur ( nurl_sym_get syms `__owned_closure_envs__` )
     ? ( str_contains_word cur name ) {}
-    { ( nurl_sym_def syms `__owned_closure_envs__`
+    { ( nurl_sym_set_deep syms `__owned_closure_envs__`
         ? == 0 ( nurl_str_len cur ) ( nurl_str_cat name `` ) ( nurl_str_cat3 cur ` ` name ) ) }
 }
 
@@ -9995,7 +10036,7 @@
             ? ( seq w name ) {}
             { = out ? == 0 ( nurl_str_len out ) ( nurl_str_cat w `` ) ( nurl_str_cat3 out ` ` w ) }
         }
-        ( nurl_sym_def syms `__owned_closure_envs__` out ) }
+        ( nurl_sym_set_deep syms `__owned_closure_envs__` out ) }
     {}
 }
 
@@ -10051,7 +10092,7 @@
         { = keep ? == 0 ( nurl_str_len keep ) ( nurl_str_cat name `` ) ( nurl_str_cat3 keep ` ` name ) }
         { ( mem_emit_closure_env_drop syms cg name ) }
     }
-    ( nurl_sym_def syms `__owned_closure_envs__` keep )
+    ( nurl_sym_set_deep syms `__owned_closure_envs__` keep )
 }
 
 // Panic-unwind journal for a user `% Drop` value. `ptr` is its alloca

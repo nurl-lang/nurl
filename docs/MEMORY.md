@@ -853,11 +853,24 @@ yours to release. This is the complete list; nothing else leaks.
   An env is left for *you* only when the closure genuinely outlives the
   frame: it is returned (`^ \ …` / `^ f`), stored into a struct field or
   container, captured into another closure, detached onto a thread
-  (`thread_spawn`), or decomposed (`recover` frees its own). The signal
-  is positive (escape sites untrack the binding; the default is to free
-  nothing), so the reclamation is never a use-after-free — an escaped
-  closure is the consumer's to release via the env pointer (`# *u f 1`),
-  exactly like a returned `Vec`.
+  (`thread_spawn`) or a fiber (`spawn`), or decomposed (`recover` frees
+  its own). The signal is positive (escape sites untrack the binding;
+  the default is to free nothing), so the reclamation is never a
+  use-after-free — an escaped closure is the consumer's to release via
+  the env pointer (`# *u f 1`), exactly like a returned `Vec`.
+
+  **An escape recorded inside a block escapes the whole function.** The
+  owned-closure set is function-level state, not block-level: the escape
+  site records a fact about the closure, not about the block it was
+  written in, so it survives the enclosing `?` / `~` body. It did not
+  always — the set lives in the scoped symbol table, the untracking was
+  written into the block's scope, and the matching pop restored the
+  binding — which made the same call free the env or not depending on
+  whether it sat inside a loop, and freed an env its consumer still
+  held. Doubly silent: the runtime recycles small blocks through a
+  freelist, so the free neither traps nor registers with ASan, and the
+  closure simply reads the next allocation's bytes as its captures.
+  `closure_env_escape_loop` pins it.
 - a value passed to a **`sink`** parameter — the callee frees it.
 
 These are deliberate seams, not defects: the conservatism that makes

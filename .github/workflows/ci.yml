@@ -311,18 +311,19 @@ jobs:
         # and the ARP cache's owned entry table. That stack is destined
         # for a unikernel, where there is no process exit to sweep up
         # after a leak — so it is held leak-clean from its first commit.
-        # ctx_switch + async_basic + async_sleep pin the fiber runtime now
-        # that it switches through runtime_ctx.c instead of swapcontext: a
-        # fiber that ends leaks its 68 KB stack mapping and its control
-        # block if the DONE handoff is got wrong, and a missed switch
-        # annotation surfaces here as an ASan stack overflow — both
-        # signals belong on a hard gate, not only in the plain corpus.
-        # async_chan / async_mn are NOT on the gate: they leak a closure
-        # env each, which is docs/MEMORY.md §7.4 behaviour (`spawn`
-        # decomposes the closure, so the env is the caller's to free) and
-        # the tests never free it. Adding them waits on the escaped-env
-        # miscompile that makes the same closure behave differently
-        # depending on whether the spawn sits inside a loop.
+        # The async_* set pins the fiber runtime now that it switches
+        # through runtime_ctx.c instead of swapcontext: a fiber that ends
+        # leaks its 68 KB stack mapping and its control block if the DONE
+        # handoff is got wrong, and a missed switch annotation surfaces
+        # here as an ASan stack overflow — both signals belong on a hard
+        # gate, not only in the plain corpus. async_chan and async_mn
+        # rejoin it here: their closures escape through `spawn`, so the
+        # envs were theirs to free under §7.4 all along, and they now do.
+        # closure_env_escape_loop pins §7.4 from the consumer's side —
+        # it frees an escaped env by hand, exactly as the contract says a
+        # consumer must, so the gate catches either way that can break:
+        # the compiler freeing it too (a double free, not a leak) or the
+        # program losing the ability to free it at all.
         run: |
           LSAN_DETECT_LEAKS=1 ./compiler/tests/run_san_tests.sh \
             struct_nested_field_drop arm_local_drop arm_local_trailing_drop \
@@ -330,8 +331,8 @@ jobs:
             ternary_slice_owned match_slice_owned arm_assign_tail_drop \
             defer_drop_reclaim defer_scoped defer_ret_transfer \
             net_inet net_frames net_dhcp net_stack net_tcp net_tcp_fuzz \
-            virtq_split free_suffix_query \
-            ctx_switch async_basic async_sleep
+            virtq_split free_suffix_query closure_env_escape_loop \
+            ctx_switch async_basic async_chan async_mn async_sleep
 
   webdocs-build:
     name: web docs build (fumadocs)

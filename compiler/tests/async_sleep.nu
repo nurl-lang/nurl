@@ -53,6 +53,9 @@ $ `stdlib/std/time.nu`
     ( nurl_print `\n` )
 
     ( mutex_free m )
+    // Escaped closure env — ours to release once runtime_run has drained
+    // every fiber (docs/MEMORY.md §7.4).
+    ( nurl_free # s # *u sleeper 1 )
     ( runtime_shutdown )
     ^ 0
 }
