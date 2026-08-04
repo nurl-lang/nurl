@@ -24,6 +24,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **nurlc leaked while compiling a `select`.** `gen_select` builds the
+  construct's real body as source and compiles it through a sub-lexer;
+  `gen_stmt` returns that statement's IR value, which for a block is an
+  owned string, and the call was left unbound — 6 bytes per `select`
+  compiled. The self-compile leak gate could not see it: `nurlc.nu`
+  contains no `select`, so `gen_select` never runs on its own input.
+  `select_basic` — the only test in the corpus that compiles one — is
+  now pinned in the CI leak gate, which leak-checks nurlc's compile as
+  well as the program's run. (Its own producer closure, escaped through
+  `thread_spawn`, is freed the way §7.4 says a consumer must.)
 - **SIGINT could not stop a server's accept loop on FreeBSD or macOS.**
   The listener-shutdown bridge woke the accepting thread by calling
   `shutdown(2)` on the *listening* socket — a Linux extension. Linux

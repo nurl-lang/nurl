@@ -32,6 +32,11 @@ $ `stdlib/core/string.nu`
         }
         F e → { ( nurl_print `spawn fail\n` ) }
     }
+    // The producer has joined, so its heap-captured env is dead — release
+    // it. `thread_spawn` borrows the env and never frees it (§7.4: an
+    // escaped closure's env belongs to the consumer).
+    : *u prod_env # *u prod 1
+    ( nurl_free # s prod_env )
     ( chan_close [i] ints ) ( chan_close [String] strs )
     ( chan_free [i] ints ) ( chan_free [String] strs )
 }

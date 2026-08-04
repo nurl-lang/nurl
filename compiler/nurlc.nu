@@ -7539,8 +7539,19 @@
     = src ( nurl_str_cat src `}\n` )
 
     // ── Compile the synthesised block through a sub-lexer ──
+    // gen_stmt returns the statement's IR value, and for a block that is
+    // an owned string. Called for its effects and left unbound, that
+    // buffer had no owner: 6 bytes per `select` compiled — 30 in
+    // select_basic, which is the only test in the corpus that compiles a
+    // select, and therefore the only place the self-compile leak gate
+    // could never see it (nurlc.nu contains no select). Bind it and let
+    // the scope-exit drop take it. Do NOT free it by hand: reassignment
+    // and scope exit already drop a tracked owned string, so a manual
+    // free is a double free, and the runtime's small-block freelist
+    // hides the second one from ASan until the compiler hangs on some
+    // later input.
     : i sub ( nurl_lex_new src `<select>` )
-    ( gen_stmt sub syms cg )
+    : s __sub_rv ( gen_stmt sub syms cg )
     ( nurl_lex_free sub )
     ( nurl_set_last_type `void` )
     ^ ( nurl_str_cat `` `` )
