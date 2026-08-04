@@ -132,7 +132,7 @@ $ `stdlib/std/thread.nu`
                             }
                             ( unix_close_conn client )
                         }
-                        F _ → ( nurl_print `live connect err\n` )
+                        F e → { ( nurl_print `live connect err=` ) ( nurl_print ( unix_err_name e ) ) ( nurl_print `\n` ) }
                     }
                     : i _j ( thread_join th )
                 }
@@ -140,7 +140,7 @@ $ `stdlib/std/thread.nu`
             }
             ( unix_close_listener listener )
         }
-        F _ → ( nurl_print `live listen err\n` )
+        F e → { ( nurl_print `live listen err=` ) ( nurl_print ( unix_err_name e ) ) ( nurl_print `\n` ) }
     }
     ( string_free path )
 }

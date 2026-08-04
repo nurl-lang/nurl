@@ -2539,9 +2539,43 @@ static volatile NurlTcp *g_signal_listener = NULL;
 static int g_signal_pipe[2] = { -1, -1 };
 #  endif
 
+/* Stop the registered listener's accept loop, from anywhere — including
+ * async-signal context, which is why every step here is on SUSv4
+ * §2.4.3's safe list (a plain store, shutdown(2), write(2)).
+ *
+ * `shutdown(2)` on a LISTENING socket is a Linux extension. Linux wakes
+ * a blocked accept/poll; BSD returns ENOTCONN and leaves the thread
+ * parked, so on FreeBSD and macOS SIGINT could not stop a NURL server's
+ * accept loop at all — the signal arrived, the flag was set, and the
+ * accepting thread stayed asleep forever. It surfaced as a hung
+ * signal_basic on FreeBSD the first time that test was allowed to run.
+ *
+ * The listener already carries the self-pipe that cross-thread
+ * nurl_tcp_shutdown uses (see the wake_rfd/wake_wfd comment on NurlTcp):
+ * accept polls {fd, wake_rfd}, and one never-drained byte wakes every
+ * current and future poll. Use it here too, and keep the shutdown(2)
+ * call as the Linux fast path and as the only lever when pipe() failed
+ * at listen time. `shutting_down` is what the loop actually tests, so it
+ * must be set before the wake, not after. */
+static void nurl__signal_stop_listener(void) {
+    NurlTcp *h = (NurlTcp *)g_signal_listener;
+    if (!h || h->fd == NURL_INVALID_SOCK) return;
+    h->shutting_down = 1;
+#  ifdef _WIN32
+    shutdown(h->fd, SD_BOTH);
+#  else
+    shutdown(h->fd, SHUT_RDWR);
+    if (h->wake_wfd != NURL_INVALID_SOCK) {
+        char b = 1;
+        ssize_t w = write(h->wake_wfd, &b, 1);
+        (void)w;
+    }
+#  endif
+}
+
 /* OS-level handler. Async-signal-safe: only sig_atomic_t writes,
- * a non-blocking single-byte write(2), and shutdown(2) on the
- * legacy listener slot if SIGINT/SIGTERM fired. */
+ * a non-blocking single-byte write(2), and the listener stop above
+ * if SIGINT/SIGTERM fired. */
 static void nurl__signal_os_handler(int sig) {
     if (sig > 0 && sig < NURL_SIG_MAX) {
         g_signal_pending[sig] = 1;
@@ -2557,14 +2591,7 @@ static void nurl__signal_os_handler(int sig) {
     }
 #  endif
     if (sig == SIGINT || sig == SIGTERM) {
-        NurlTcp *h = (NurlTcp *)g_signal_listener;
-        if (h && h->fd != NURL_INVALID_SOCK) {
-#  ifdef _WIN32
-            shutdown(h->fd, SD_BOTH);
-#  else
-            shutdown(h->fd, SHUT_RDWR);
-#  endif
-        }
+        nurl__signal_stop_listener();
     }
 }
 
@@ -2749,13 +2776,7 @@ void nurl_signal_install_shutdown(long long listener) {
  * the signal (Win32 can't deliver SIGINT programmatically; POSIX
  * raise() is fine but the registration order in tests can be racy). */
 void nurl_signal_trigger_shutdown(void) {
-    NurlTcp *h = (NurlTcp *)g_signal_listener;
-    if (!h || h->fd == NURL_INVALID_SOCK) return;
-#  ifdef _WIN32
-    shutdown(h->fd, SD_BOTH);
-#  else
-    shutdown(h->fd, SHUT_RDWR);
-#  endif
+    nurl__signal_stop_listener();
 }
 
 #else  /* WASI — no signals at all. Every entry is a no-op stub. */

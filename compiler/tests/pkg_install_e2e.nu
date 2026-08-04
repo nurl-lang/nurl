@@ -11,8 +11,13 @@
 //     GET /pkgs/foo/foo-1.0.0.tar.gz       → the tarball bytes
 // A client pthread resolves `foo ^1.0`, installs it into a temp deps dir,
 // checks the unpacked files exist, then exercises a wrong-checksum reject.
-// Everything is loopback — no third-party host is contacted.
-// requires: live
+// Everything is loopback — no third-party host is contacted, but the
+// client half goes through nurlpkg, whose HTTP transport shells out to
+// the `curl` BINARY (ext/http_cli.nu: no libcurl link, on purpose). On a
+// host without curl the fetch fails at the transport layer and the
+// client thread never reaches the registry, so the server thread's join
+// never returns — the FreeBSD CI VM, which ships no curl, hung here.
+// requires: live curl
 
 $ `stdlib/std/net.nu`
 $ `stdlib/std/thread.nu`

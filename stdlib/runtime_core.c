@@ -1601,6 +1601,7 @@ int  poll(void *fds, unsigned long n, int timeout) {
 #elif !defined(__wasi__)
 #  include <pthread.h>
 #  include <sys/socket.h>
+#  include <sys/un.h>
 #  include <netinet/in.h>
 #  include <fcntl.h>
 #  include <poll.h>
@@ -1717,6 +1718,28 @@ long long nurl_native_constant(const char *name) {
     /* AF_UNIX / SOCK_STREAM for stdlib/std/unixsock.nu (local IPC). */
     if (strcmp(name, "AF_UNIX")     == 0) return AF_UNIX;
     if (strcmp(name, "SOCK_STREAM") == 0) return SOCK_STREAM;
+    /* `struct sockaddr_un` is laid out differently by the two families
+     * this toolchain targets, and getting it wrong fails silently:
+     * Linux/musl put a 2-byte sun_family at offset 0, BSD and macOS put
+     * a 1-byte sun_len there and sun_family at offset 1. Writing the
+     * Linux encoding on a BSD lands AF_UNIX in sun_len and leaves
+     * sun_family as AF_UNSPEC, so every bind and connect fails — which
+     * is exactly what FreeBSD CI showed the first time unixsock's live
+     * section was allowed to run.
+     *
+     * Surfaced as offsets the compiler reads out of the real header,
+     * not as an OS-macro enumeration: a platform this list has never
+     * heard of gets the right answer without a change here. sun_path's
+     * offset is 2 on both today, but it is derived rather than assumed
+     * for the same reason. */
+    if (strcmp(name, "SOCKADDR_UN_FAMILY_OFF")  == 0)
+        return (long long)offsetof(struct sockaddr_un, sun_family);
+    if (strcmp(name, "SOCKADDR_UN_FAMILY_SIZE") == 0)
+        return (long long)sizeof(((struct sockaddr_un*)0)->sun_family);
+    if (strcmp(name, "SOCKADDR_UN_PATH_OFF")    == 0)
+        return (long long)offsetof(struct sockaddr_un, sun_path);
+    if (strcmp(name, "SOCKADDR_UN_PATH_MAX")    == 0)
+        return (long long)sizeof(((struct sockaddr_un*)0)->sun_path);
     /* termios actions for stdlib/std/term.nu (raw mode). */
     if (strcmp(name, "TCSANOW")     == 0) return TCSANOW;
     if (strcmp(name, "TCSAFLUSH")   == 0) return TCSAFLUSH;

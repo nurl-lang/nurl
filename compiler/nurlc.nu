@@ -9830,8 +9830,18 @@
     ? == 0 ( nurl_str_len w ) { ^ } {}
     : s cur ( nurl_sym_get g_fn_escapes `__dret_skips__` )
     ? ( str_contains_word cur w ) { ^ } {}
-    ( nurl_sym_set g_fn_escapes `__dret_skips__`
-    ? == 0 ( nurl_str_len cur ) w ( nurl_str_cat3 cur ` ` w ) )
+    // Two statement arms, not `( f ? c w ( cat3 … ) )`. The value-level
+    // form joins an UNTRACKED ident (`w`, a parameter) with an owning
+    // call result: the join publishes "not owned" — `s` also spells an
+    // opaque handle, so the ident arm is deliberately never copied —
+    // and the cat3 buffer leaks. LSan saw it as 7 bytes per compile of
+    // defer_ret_transfer, once nurlc's own stderr stopped going to
+    // /dev/null in the sanitized runner.
+    ? == 0 ( nurl_str_len cur ) {
+        ( nurl_sym_set g_fn_escapes `__dret_skips__` w )
+    } {
+        ( nurl_sym_set g_fn_escapes `__dret_skips__` ( nurl_str_cat3 cur ` ` w ) )
+    }
 }
 
 // fn_cleanup: reclaim every snapshot entry the defer chain may have

@@ -24,6 +24,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **SIGINT could not stop a server's accept loop on FreeBSD or macOS.**
+  The listener-shutdown bridge woke the accepting thread by calling
+  `shutdown(2)` on the *listening* socket — a Linux extension. Linux
+  wakes a blocked `accept`/`poll`; BSD returns `ENOTCONN` and leaves the
+  thread parked, so the signal arrived, the flag was set, and the server
+  slept on. The listener already carries the self-pipe that cross-thread
+  `nurl_tcp_shutdown` uses, and both a plain store and `write(2)` are on
+  SUSv4 §2.4.3's async-signal-safe list, so the signal path now uses the
+  same mechanism (with the `shutdown(2)` call kept as the Linux fast
+  path and as the fallback when `pipe()` failed at listen time).
+- **Unix-domain sockets never worked on FreeBSD or macOS.**
+  `std/unixsock.nu` built `struct sockaddr_un` with the Linux layout —
+  a 2-byte `sun_family` at offset 0. BSD and macOS put a 1-byte
+  `sun_len` there and `sun_family` at offset 1, so the Linux encoding
+  landed `AF_UNIX` in `sun_len` and left `sun_family` as `AF_UNSPEC`:
+  every `bind` and `connect` failed. The layout now comes from
+  `posix_const` (`SOCKADDR_UN_FAMILY_OFF` / `_FAMILY_SIZE` /
+  `_PATH_OFF` / `_PATH_MAX`), which the C side computes with `offsetof`
+  and `sizeof` against the platform's own header rather than
+  enumerating OS macros — a platform this list has never heard of gets
+  the right answer without a change.
+- **nurlc leaked while recording a return-site ownership transfer.**
+  `__dret_skip_add` built its new skip list with
+  `( nurl_sym_set … ? c w ( nurl_str_cat3 … ) )`, a value-level ternary
+  joining an untracked ident (a parameter) with an owning call result.
+  The join publishes "not owned" — `s` also spells an opaque handle, so
+  the ident arm is deliberately never copied — and the `cat3` buffer
+  leaked. Two statement arms instead. Invisible until the sanitized
+  runner stopped sending nurlc's own stderr to `/dev/null`.
 - **The compiler test corpus gated its own live surface out of CI.**
   Both runners consulted hand-kept lists of test *names* while the
   facts lived in the tests, and the lists had drifted: `net_basic`
