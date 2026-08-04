@@ -1,0 +1,79 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+eth parse valid: YES
+eth dst: YES
+eth src: YES
+eth type arp: YES
+eth payload off: YES
+eth runt rejected: YES
+addressed to us: YES
+broadcast to us: YES
+other unicast not ours: YES
+padded frame is 60 bytes: YES
+ip parse valid: YES
+ip src: YES
+ip dst: YES
+ip proto udp: YES
+eth payload_len is padded (46): YES
+ip payload_len from total_len (12): YES
+udp parse valid: YES
+udp src port: YES
+udp dst port: YES
+udp payload_len is 4, not padding: YES
+udp payload byte 0: YES
+udp payload byte 3: YES
+udp ignores trailing padding: YES
+bad ip checksum rejected: YES
+fragment rejected distinctly: YES
+truncated (total_len > avail) rejected: YES
+icmp parse valid: YES
+icmp is echo request: YES
+icmp id: YES
+icmp seq: YES
+icmp payload_len: YES
+reply parses (checksum ok): YES
+reply is echo reply: YES
+reply mirrors id: YES
+reply mirrors seq: YES
+reply mirrors payload len: YES
+reply mirrors payload bytes: YES
+reply src/dst swapped: YES
+corrupt icmp rejected: YES
+udp checksum never transmitted as 0: YES
+every emitted udp datagram verifies: YES
+sweep exercised the 0xffff substitution: YES
+udp checksum 0 accepted unverified: YES
+wrong udp checksum rejected: YES
+udp bogus length rejected: YES
+arp request frame len 42: YES
+arp request is broadcast: YES
+arp ethertype: YES
+arp parse valid: YES
+arp op request: YES
+arp sender mac: YES
+arp sender ip: YES
+arp target ip: YES
+arp target mac unknown: YES
+arp reply unicast to us: YES
+arp reply op: YES
+arp reply sender is peer: YES
+arp reply target is us: YES
+foreign arp htype rejected: YES
+cold lookup misses: YES
+first send asks: YES
+immediate retry suppressed: YES
+retry after 1s allowed: YES
+not failed yet: YES
+third retry allowed: YES
+fourth suppressed (max retries): YES
+now reported failed: YES
+resolved lookup hits: YES
+resolved stops requests: YES
+no longer failed: YES
+lookup after ttl misses: YES
+expire reclaims 1: YES
+expire again reclaims 0: YES
+cache stays bounded at max: YES
+most recent insert survived: YES

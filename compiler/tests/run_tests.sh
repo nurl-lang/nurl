@@ -147,6 +147,23 @@ http_needs_net() {
     return 1
 }
 
+# Same idea for the net_ prefix: gate on what a test actually DOES,
+# not on its name. Most net_ tests are pure wire-format / state-machine
+# logic (the sans-IO stack) and must run on every commit — that is the
+# whole point of writing them sans-IO. Only the ones that open a real
+# socket are opt-in.
+#
+# Listing the socket-using tests explicitly, rather than exempting the
+# offline ones one by one, keeps the default SAFE: a new net_ test runs
+# by default, and a test that forgets to declare its socket use fails
+# loudly on a sandboxed host instead of silently never running.
+net_needs_net() {
+    case "$1" in
+        net_loopback) return 0 ;;
+    esac
+    return 1
+}
+
 # Decide whether a test is skipped in the current environment.
 # Echoes "skip" if so. Kept in sync with the golden-bijection check
 # below (skipped tests are exempt from missing/orphan accounting).
@@ -174,7 +191,7 @@ is_skipped() {
             echo skip; return
         fi
     fi
-    if [[ "$name" == net_* && "$name" != "net_basic" && "$ENABLE_NET_TESTS" != "1" ]]; then
+    if [[ "$name" == net_* ]] && net_needs_net "$name" && [[ "$ENABLE_NET_TESTS" != "1" ]]; then
         echo skip; return
     fi
 }
@@ -297,7 +314,7 @@ run_one() {
         echo FAIL
     fi
 }
-export -f run_one is_skipped append_capped strip_root http_runs_by_default http_needs_net
+export -f run_one is_skipped append_capped strip_root http_runs_by_default http_needs_net net_needs_net
 export NURLC RUNTIME OUTDIR WORKDIR SCRIPT_DIR ROOT_DIR CLANG LINK_LIBS
 export ENABLE_HTTP_TESTS ENABLE_NET_TESTS MAX_OUT_LINES TIMEOUT UPDATE
 

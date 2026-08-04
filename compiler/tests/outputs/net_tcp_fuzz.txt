@@ -1,0 +1,10 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+fuzz completed without hanging: YES
+segments were actually accepted: YES
+no ACK beyond what the peer sent: YES
+state stayed inside RFC 793: YES
+reset and CLOSED stay paired: YES
+receive queue stayed within the window: YES

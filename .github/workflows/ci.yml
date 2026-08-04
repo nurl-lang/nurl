@@ -305,12 +305,19 @@ jobs:
         # defer_drop_reclaim + defer_scoped + defer_ret_transfer pin the
         # defer-vs-auto-drop fix (a `;` defer used to disable every owned
         # drop in the function; scoped defers emitted invalid IR).
+        # net_inet + net_frames + net_dhcp pin the sans-IO net stack's
+        # manual-handle discipline (§7.4): per-iteration Vec frees in a
+        # 65k-datagram sweep, String results from the address formatters,
+        # and the ARP cache's owned entry table. That stack is destined
+        # for a unikernel, where there is no process exit to sweep up
+        # after a leak — so it is held leak-clean from its first commit.
         run: |
           LSAN_DETECT_LEAKS=1 ./compiler/tests/run_san_tests.sh \
             struct_nested_field_drop arm_local_drop arm_local_trailing_drop \
             recover_unwind loop_drop_reclaim closure_env_reclaim closure_env_binding \
             ternary_slice_owned match_slice_owned arm_assign_tail_drop \
-            defer_drop_reclaim defer_scoped defer_ret_transfer
+            defer_drop_reclaim defer_scoped defer_ret_transfer \
+            net_inet net_frames net_dhcp net_stack net_tcp net_tcp_fuzz
 
   webdocs-build:
     name: web docs build (fumadocs)

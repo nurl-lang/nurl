@@ -1,0 +1,54 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+first send is ARP-pending: YES
+an ARP request was emitted: YES
+ARP request is 42 bytes: YES
+B handled the ARP: YES
+B emitted a reply: YES
+B learned A's address: YES
+A handled the ARP reply: YES
+A emitted nothing back: YES
+A learned B's address: YES
+retry sends for real: YES
+frame is 57 bytes: YES
+B received a UDP datagram: YES
+src ip is A: YES
+dst ip is B: YES
+src port: YES
+dst port: YES
+payload length: YES
+payload bytes survive the round trip: YES
+reply needs no new ARP: YES
+A received the reply: YES
+reply ports swapped: YES
+A answered the ping: YES
+a reply frame was emitted: YES
+pong addressed to B: YES
+pong ip valid (checksum ok): YES
+pong from A to B: YES
+pong icmp valid (checksum ok): YES
+pong is an echo reply: YES
+pong mirrors id and seq: YES
+pong mirrors payload length: YES
+pong mirrors payload bytes: YES
+off-link send is ARP-pending: YES
+ARPs for the gateway, not the destination: YES
+off-link send now succeeds: YES
+ethernet dst is the gateway MAC: YES
+ip dst is still 8.8.8.8: YES
+unknown host: first attempt ARPs: YES
+after max retries: unreachable: YES
+runt frame dropped as bad_eth: YES
+frame for another MAC dropped: YES
+IPv6 dropped as unknown ethertype: YES
+fragment counted as fragment: YES
+bad_eth counter is 1: YES
+not_for_us counter is 1: YES
+unknown_ethertype counter is 1: YES
+fragment counter is 1: YES
+no spurious bad_udp drops: YES
+no address → tx refused: YES
+broadcast from 0.0.0.0 works: YES
+DHCP-shaped frame is broadcast: YES
