@@ -8,6 +8,62 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`nurl_fast_atof` is correctly rounded — NURL could not read back the
+  floats it wrote** (`stdlib/runtime_core.c` §2c). The parser behind
+  `stdlib/ext/csv.nu`'s typed float columns accumulated digits in a
+  double (`r = r*10 + d`, then `r += d * scale` with `scale *= 0.1`) and
+  applied the exponent by binary powering of `10.0`. Measured against
+  `strtod`: **33.5 % of ordinary six-to-nine-significant-digit values
+  came back at least one ulp off**, every value below ~1e-308 parsed as
+  **0** (the multiplier overflows to `inf` and `r / inf` is 0), and the
+  largest finite double parsed as **`inf`**. A CSV of doubles written by
+  NURL's own formatter did not survive its own round trip.
+
+  Replaced with a correctly-rounded parser — same double `strtod`
+  returns, ties to even — that is also **4.5–8.4× faster than `strtod`**
+  and faster than the inexact loop it replaces (12 ns vs 26 ns per value
+  on plain decimals, `strtod` 101 ns). Three paths ordered by the work the answer needs: exact
+  double arithmetic where one IEEE operation settles it; one 128-bit
+  product against the same power-of-five table the formatter uses, taken
+  *only* when the rounding is provably identical for every value the
+  product could stand for; and an exact big-integer comparison for the
+  rest, which needs no division and is reached by 0 of 900 000 values on
+  realistic data. Correctness rests on the fast path declining what it
+  cannot prove — including every exact tie — not on it usually being
+  right. Verified against `strtod` over 16 M formatter round trips, 8 M
+  random digit strings, long (> 19-digit) inputs and **exact midpoints
+  between adjacent doubles**, with and without `__int128`, under
+  ASan/UBSan; `float_parse` pins it.
+
+### Changed
+
+- **Float formatting generates its digits instead of asking libc five
+  times** (`stdlib/runtime_core.c` §2b, `stdlib/nurl_pow5_table.h`,
+  `tools/gen_pow5_table.py`). `nurl_str_float` used to find the shortest
+  round-tripping text by printing with `snprintf("%.*g")` and parsing it
+  back with `strtod`, binary-searching the precision — five of those
+  pairs per number. It now computes the shortest digits directly (Ryū,
+  over generated 125-bit power-of-five tables): **28–55× faster**
+  (4398 → 80 ns per value on full-precision doubles, 1853 → 67 ns on
+  short "data" floats, measured on an idle box), and `snprintf`,
+  `strtod` and `floor` leave `runtime_core`'s libc surface entirely
+  (52 → 49 undefined symbols), which is what the freestanding/unikernel
+  target needs from this file.
+
+  The text is unchanged for every double except **46 of the 2098 powers
+  of two**, where the old search could not find the shortest form and
+  printed one digit too many (e.g. `7.1202363472230444e-307`, now
+  `7.120236347223045e-307` — same double, one digit shorter). A power of
+  two's rounding interval is asymmetric, so the shortest decimal inside
+  it is not always the one a correctly-rounding `printf` produces at that
+  precision, and a search that only ever sees `printf` output cannot
+  reach it. Verified byte-for-byte against the old implementation over
+  systematic (every power of two, both neighbours of each, denormal and
+  overflow edges) and random doubles, with every output independently
+  re-parsed to prove the round trip; `float_shortest` pins it.
+
 ### Added
 
 - **`tcp_listen` accepts port 0, and `tcp_local_addr` reads back what
