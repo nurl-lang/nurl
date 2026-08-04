@@ -186,16 +186,6 @@ section { padding: 4rem 0; }
   color: var(--fg-dim);
   font-weight: 500;
 }
-.hero-contributors a span {
-  display: flex; flex-direction: column;
-  line-height: 1.2;
-  text-align: left;
-}
-.hero-contributors a small {
-  color: var(--fg-faint);
-  font-weight: 400;
-  font-size: 0.75rem;
-}
 .hero-contributors a:hover { color: var(--accent); text-decoration: none; }
 .hero-contributors img {
   border-radius: 50%;

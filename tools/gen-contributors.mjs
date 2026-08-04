@@ -1,7 +1,7 @@
 // Copyright (c) 2026 The NURL Project Developers
 // SPDX-License-Identifier: MIT OR Apache-2.0
 // ============================================================
-//  gen-contributors.mjs — render the landing page's "Built by" strip
+//  gen-contributors.mjs — render the landing page's "Contributors" strip
 //  from GitHub's contributor list at publish time.
 //
 //  The strip used to be three hand-typed <a> tags, which meant a fourth
@@ -11,9 +11,12 @@
 //  static at serve time (no JS, no fetch from the browser) and still
 //  names whoever actually shipped the release it was built from.
 //
-//  Display names and role lines cannot come from an API — they are
-//  editorial. nurlweb/contributors.json supplies them per login;
-//  a contributor with no entry there gets their commit count instead.
+//  Faces and names only — no role lines, no commit counts. Most commits
+//  first, `min_commits` to qualify, `limit` faces on the page; the full
+//  list is one click away on GitHub, which is where an exhaustive one
+//  belongs. The one thing an API cannot supply is how a person spells
+//  their display name, so nurlweb/contributors.json maps logins to
+//  names; anyone missing there is shown under their GitHub login.
 //
 //  Run it by hand any time:  node tools/gen-contributors.mjs
 //  It is also part of nurlweb's `predeploy` hook.
@@ -61,11 +64,12 @@ try {
 // GitHub logins are case-insensitive and the API returns whatever casing the
 // account was registered with, which is not necessarily how it is spelled in
 // the config. Key the lookup on lowercase so `hindurable` still matches
-// `Hindurable` instead of silently falling back to a commit count.
-const people = new Map(Object.entries(config.people ?? {}).map(([login, v]) => [login.toLowerCase(), v]));
-// Insertion order of `people` is the editorial order of the strip.
-const curatedOrder = new Map([...people.keys()].map((login, i) => [login, i]));
+// `Hindurable` instead of silently falling back to the raw login.
+const people = new Map(Object.entries(config.people ?? {}).map(([login, name]) => [login.toLowerCase(), name]));
 const limit = Number.isInteger(config.limit) && config.limit > 0 ? config.limit : 6;
+// One merged typo fix is not what the strip is for. Two commits is the
+// floor for a face on the page; everyone else is one click away on GitHub.
+const minCommits = Number.isInteger(config.min_commits) && config.min_commits > 0 ? config.min_commits : 2;
 // Match on the bare login so an entry covers both `dependabot` and the
 // `dependabot[bot]` form the API actually returns.
 const excluded = new Set((config.exclude ?? []).map((name) => name.toLowerCase().replace(/\[bot\]$/, "")));
@@ -91,28 +95,23 @@ try {
 
 if (!Array.isArray(payload)) keepExisting("unexpected API response shape");
 
-// Order: the logins named in contributors.json first, in the order they are
-// written there, then everyone else by commit count. Straight commit-count
-// order reads as a leaderboard and buries whoever authored the thing under
-// whoever touched it most; the curated prefix is the editorial answer to that,
-// and the tail still means a new contributor shows up without an edit here.
+// Order: most commits first, nothing editorial on top of it. The page is a
+// contributor list, not a credits roll — whoever has put the most in stands
+// first, and the ordering needs no edit here when that changes.
 const humans = payload
     .filter((c) => c && c.type === "User" && typeof c.login === "string")
     .filter((c) => !excluded.has(c.login.toLowerCase().replace(/\[bot\]$/, "")));
 
-const contributors = humans
-    .sort((a, b) => {
-        const ra = curatedOrder.get(a.login.toLowerCase()) ?? Infinity;
-        const rb = curatedOrder.get(b.login.toLowerCase()) ?? Infinity;
-        if (ra !== rb) return ra - rb;
-        return (b.contributions ?? 0) - (a.contributions ?? 0);
-    })
-    .slice(0, limit);
+const eligible = humans.filter((c) => (c.contributions ?? 0) >= minCommits);
 
-if (contributors.length === 0) keepExisting("no human contributors in the API response");
+const contributors = eligible.sort((a, b) => (b.contributions ?? 0) - (a.contributions ?? 0)).slice(0, limit);
 
-// Never let `limit` quietly hide people: say who did not make the strip.
-const dropped = humans.length - contributors.length;
+if (contributors.length === 0) keepExisting(`no contributor has the ${minCommits} commits the strip asks for`);
+
+// Never let `limit` or `min_commits` quietly hide people: say who did not
+// make the strip, and why.
+const belowFloor = humans.length - eligible.length;
+const overLimit = eligible.length - contributors.length;
 
 // GitHub serves whatever the account uploaded; ask for the size the page
 // actually renders so a 460px avatar is not shipped into a 40px slot.
@@ -123,24 +122,21 @@ function avatar(contributor) {
 
 const entries = contributors
     .map((contributor) => {
-        const entry = people.get(contributor.login.toLowerCase()) ?? {};
-        const name = entry.name ?? contributor.login;
-        const commits = contributor.contributions ?? 0;
-        const role = entry.role ?? `${commits.toLocaleString("en-US")} commits`;
+        const name = people.get(contributor.login.toLowerCase()) ?? contributor.login;
         return (
             `    <a href="${escapeHtml(contributor.html_url)}" target="_blank" rel="noopener">` +
             `<img src="${escapeHtml(avatar(contributor))}" alt="${escapeHtml(name)}" width="40" height="40" loading="lazy" />` +
-            `<span>${escapeHtml(name)} <small>${escapeHtml(role)}</small></span></a>`
+            `${escapeHtml(name)}</a>`
         );
     })
     .join("\n");
 
 const strip = `${BEGIN}
   <!-- Generated by tools/gen-contributors.mjs from the GitHub contributor API. -->
-  <!-- Do not edit by hand: the next publish overwrites it. Names and roles -->
+  <!-- Do not edit by hand: the next publish overwrites it. Display names -->
   <!-- come from nurlweb/contributors.json. -->
   <p class="hero-contributors">
-    <span>Built by</span>
+    <span>Contributors</span>
 ${entries}
   </p>
   ${END}`;
@@ -156,5 +152,6 @@ if (start === -1 || stop === -1 || stop < start) {
 writeFileSync(HTML, html.slice(0, start) + strip + html.slice(stop + END.length));
 console.log(
     `contributors → ${HTML}\n  ${contributors.length} shown: ${contributors.map((c) => c.login).join(", ")}` +
-        (dropped > 0 ? `\n  ${dropped} contributor(s) over the limit of ${limit} are not on the page` : ""),
+        (overLimit > 0 ? `\n  ${overLimit} contributor(s) over the limit of ${limit} are not on the page` : "") +
+        (belowFloor > 0 ? `\n  ${belowFloor} contributor(s) under ${minCommits} commits are not on the page` : ""),
 );

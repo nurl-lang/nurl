@@ -1,21 +1,25 @@
 {
   "_comment": [
-    "Editorial half of the landing page's contributor strip. The list itself",
-    "is not here — it comes from GitHub at publish time (see",
-    "tools/gen-contributors.mjs). This file only supplies the parts an API",
-    "cannot know: the display name and the one-line role under it.",
+    "Display names for the landing page's Contributors strip. The list",
+    "itself is not here — it comes from GitHub at publish time (see",
+    "tools/gen-contributors.mjs). This file only supplies the one thing an",
+    "API cannot know: how a person spells their name.",
     "",
-    "A contributor with no entry below still appears; their role line falls",
-    "back to their commit count. Add them here to give it a name.",
+    "A contributor with no entry below still appears, under their login.",
+    "Listing someone here does not put them on the page and does not move",
+    "them up it: the strip is the top `limit` contributors by commit count,",
+    "and `min_commits` is the floor for appearing at all. GitHub's own",
+    "contributor page is the complete list.",
     "",
-    "The order of `people` is the order of the strip. Anyone not listed is",
-    "appended after them, most commits first, up to `limit` faces total."
+    "So an entry below can name someone who is not on the page yet — it is",
+    "waiting for them to cross the floor, not putting them there."
   ],
   "limit": 6,
+  "min_commits": 2,
   "exclude": ["dependabot", "renovate", "github-actions"],
   "people": {
-    "tero-punos": { "name": "Tero Andelin", "role": "compiler & language" },
-    "hindurable": { "name": "Hindurable", "role": "stdlib & tooling" },
-    "iljasrb": { "name": "iljasrb", "role": "web documentation" }
+    "tero-punos": "Tero Andelin",
+    "hindurable": "Hindurable",
+    "iljasrb": "iljasrb"
   }
 }
