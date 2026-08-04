@@ -317,7 +317,8 @@ jobs:
             recover_unwind loop_drop_reclaim closure_env_reclaim closure_env_binding \
             ternary_slice_owned match_slice_owned arm_assign_tail_drop \
             defer_drop_reclaim defer_scoped defer_ret_transfer \
-            net_inet net_frames net_dhcp net_stack net_tcp net_tcp_fuzz
+            net_inet net_frames net_dhcp net_stack net_tcp net_tcp_fuzz \
+            virtq_split free_suffix_query
 
   webdocs-build:
     name: web docs build (fumadocs)

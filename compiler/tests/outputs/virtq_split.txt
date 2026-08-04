@@ -1,0 +1,57 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+qsize 8 valid: YES
+qsize 0 invalid: YES
+qsize 3 invalid (not a power of two): YES
+qsize 32768 valid (spec max): YES
+qsize 65536 invalid (over max): YES
+desc table at 0: YES
+avail after 16·qsize: YES
+used is 4-byte aligned: YES
+used after avail: YES
+total covers the used ring: YES
+all 8 descriptors free: YES
+ring starts zeroed: YES
+8 allocations all distinct: YES
+queue now empty: YES
+9th allocation fails: YES
+all returned to the free list: YES
+device idle initially: YES
+published a buffer: YES
+avail.idx advanced: YES
+one descriptor consumed: YES
+device sees work: YES
+device completed our head: YES
+used.idx advanced: YES
+driver sees a completion: YES
+reaped the same head: YES
+written length reported: YES
+nothing left to reap: YES
+descriptor returned: YES
+desc addr preserved: YES
+desc len preserved: YES
+device-writable flag set: YES
+three descriptors in use: YES
+device walked to our chain head: YES
+reaped the chain: YES
+free_chain walked all three: YES
+all descriptors back: YES
+idx_lt basic: YES
+idx_lt not reflexive: YES
+idx wraps: 65530 < 4: YES
+idx wrap not reversed: YES
+idx_add wraps: YES
+idx_diff across wrap: YES
+70000 buffers all completed: YES
+every completion matched its head: YES
+every written length round-tripped: YES
+avail.idx wrapped correctly: YES
+and did wrap (idx < pushes): YES
+queue is whole again: YES
+out-of-range used id refused: YES
+free list not corrupted: YES
+notify needed by default: YES
+device NO_NOTIFY honoured: YES
+avail NO_INTERRUPT set (polling driver): YES

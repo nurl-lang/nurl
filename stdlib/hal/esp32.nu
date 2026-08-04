@@ -20,9 +20,12 @@
 //   ( esp32_uart_getc       ) → i blocking: wait for a byte, return 0..255
 //   ( esp32_uart_puts  s str ) → v write a NUL-terminated string
 //
-// NOTE: esp32_uart_putc/getc spin on an MMIO status read. NURL has no
-// `volatile`, so compile any program that calls them at -O0/-O1 or the spin
-// loop may be hoisted away (LICM). See examples/esp32/idf-uart.
+// NOTE: esp32_uart_putc/getc spin on an MMIO status read. That is safe at
+// any optimization level — stdlib/hal/mmio.nu emits `load volatile` /
+// `store volatile`, which LICM will not hoist out of the spin loop. (This
+// note used to say NURL had no `volatile` and to build at -O0/-O1; the
+// volatile intrinsics have since landed and that restriction is gone.)
+// See examples/esp32/idf-uart.
 
 $ `stdlib/hal/mmio.nu`
 
