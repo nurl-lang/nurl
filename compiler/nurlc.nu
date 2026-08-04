@@ -5924,8 +5924,18 @@
     // which the borrow checker does not track. The callee's return
     // type is consulted too: a `_free`-suffixed function that returns
     // a value is a free-space QUERY, not a destructor.
-    : b is_consume_call & ( bck_is_destructor_call fname ( nurl_sym_get syms fname ) )
+    //
+    // The type lookup is guarded by the cheap name test, and its result
+    // is bound to a local: `nurl_sym_get` hands back a fresh string the
+    // caller owns, so calling it inline on the hot path of every call
+    // site would both strdup for nothing and leak the result.
+    : b __bck_free_name & ( bck_is_destructor_name fname )
     ! ( seq fname `nurl_free` )
+    : ~ b is_consume_call F
+    ? __bck_free_name
+    { : s __bck_callee_ret ( nurl_sym_get syms fname )
+        = is_consume_call ( bck_is_destructor_call fname __bck_callee_ret ) }
+    {}
     : ~ i arg_idx 0
     // Space-separated 0-based indices of the callee's `inout`
     // parameters (recorded into g_fn_inout by gen_fn_decl_concrete as
