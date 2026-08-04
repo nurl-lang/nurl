@@ -14,6 +14,11 @@
  *     math, panic/recover. Self-contained; defines the symbol set a
  *     `no_std` / bootstrap target must provide (ROADMAP D2).
  *
+ *   • stdlib/runtime_ctx.c — the portable stackful context switch
+ *     (a libc-free getcontext/makecontext/swapcontext). Depends only on
+ *     the instruction set, so it works where ucontext does not: musl,
+ *     and any freestanding target.
+ *
  *   • stdlib/runtime_ffi.c — the stdlib FFI shims: HTTP, process,
  *     TCP/TLS + UDP sockets, DNS, thread trampolines, signals, and the
  *     async fiber runtime + I/O reactor.
@@ -29,4 +34,5 @@
  */
 
 #include "runtime_core.c"
+#include "runtime_ctx.c"
 #include "runtime_ffi.c"

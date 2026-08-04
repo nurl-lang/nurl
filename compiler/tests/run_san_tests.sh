@@ -109,7 +109,17 @@ export UBSAN_OPTIONS="${UBSAN_OPTIONS:-print_stacktrace=1:halt_on_error=0}"
 
 # should_fail_* are compile-time negative tests; nurlfmt_idempotent is a
 # shell round-trip, not a binary; *_mod are helper modules without main().
-SKIP_RE='(should_fail_|diag_|nurlfmt_idempotent|alias_rewrite_types_mod)'
+#
+# ctx_switch drives runtime_ctx.c's stackful context switch, which runs
+# code on a stack ASan does not own. ASan tracks stack frames against
+# the thread stack it knows about, so every frame the fiber builds looks
+# like an out-of-bounds write into the backing array — a false positive
+# by construction, not a finding. Making it observable needs the
+# __sanitizer_{start,finish}_switch_fiber annotations bracketing the
+# switch; until those are wired in (they belong with the fiber-runtime
+# rewire, not with the primitive), the test runs in the ordinary corpus
+# and sits out the sanitized one.
+SKIP_RE='(should_fail_|diag_|nurlfmt_idempotent|alias_rewrite_types_mod|ctx_switch)'
 
 # ── per-test worker (exported, fanned out with xargs -P) ─────────
 # Echoes a single "<name> <VERDICT>" line; writes its own logs under
