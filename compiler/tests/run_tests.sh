@@ -112,8 +112,12 @@ DL_LIB=""
 case "$(uname -s)" in Linux) DL_LIB="-ldl" ;; esac
 LINK_LIBS="$(printf '%s' "-lm -lpthread $DL_LIB $CURL_LIBS $OPENSSL_LIBS $SQLITE3_LIBS $PQ_LIBS $ZLIB_LIBS $ZSTD_LIBS" | tr -s ' ' | sed 's/ *$//')"
 
-ENABLE_HTTP_TESTS="${NURL_HTTP_TESTS:-0}"
-ENABLE_NET_TESTS="${NURL_NET_TESTS:-0}"
+# Which tests this host can run at all — network, optional native libs,
+# platform APIs, helper modules. Shared verbatim with run_san_tests.sh;
+# see test_skips.sh for why it does not live here any more.
+# shellcheck source=compiler/tests/test_skips.sh
+. "$SCRIPT_DIR/test_skips.sh"
+
 MAX_OUT_LINES="${MAX_OUT_LINES:-200}"
 # A healthy test finishes in well under a second; the timeout only
 # exists to catch a genuine hang. Kept generous so it never fires
@@ -124,77 +128,6 @@ TIMEOUT="${TIMEOUT:-60}"
 JOBS="${NURL_TEST_JOBS:-$(nproc 2>/dev/null || echo 4)}"
 
 mkdir -p "$OUTDIR" "$WORKDIR"
-
-# ── HTTP / net tests are network-dependent; opt-in via env. The
-#    handful listed here are pure (parser/builder/router) and run
-#    by default even though they share the http_ prefix.
-http_runs_by_default() {
-    case "$1" in
-        http_request_parser|http_response_builder|http_options|http_router|\
-        http_static_traversal|http_extras|http_middleware|http_form|\
-        http_multipart|http_proxy|http_server_seq|http_server_pipelined|\
-        http_server_limits|http_server_tls|http_server_panic|\
-        http_binary_body|http_response_binary) return 0 ;;
-    esac
-    return 1
-}
-http_needs_net() {
-    case "$1" in
-        http_server_seq|http_server_pipelined|http_server_limits|\
-        http_server_tls|http_server_panic|http_binary_body|\
-        http_response_binary) return 0 ;;
-    esac
-    return 1
-}
-
-# Same idea for the net_ prefix: gate on what a test actually DOES,
-# not on its name. Most net_ tests are pure wire-format / state-machine
-# logic (the sans-IO stack) and must run on every commit — that is the
-# whole point of writing them sans-IO. Only the ones that open a real
-# socket are opt-in.
-#
-# Listing the socket-using tests explicitly, rather than exempting the
-# offline ones one by one, keeps the default SAFE: a new net_ test runs
-# by default, and a test that forgets to declare its socket use fails
-# loudly on a sandboxed host instead of silently never running.
-net_needs_net() {
-    case "$1" in
-        net_loopback) return 0 ;;
-    esac
-    return 1
-}
-
-# Decide whether a test is skipped in the current environment.
-# Echoes "skip" if so. Kept in sync with the golden-bijection check
-# below (skipped tests are exempt from missing/orphan accounting).
-is_skipped() {
-    local name="$1"
-    case "$name" in *_mod|*_helper|*_lib) echo skip; return ;; esac
-    # FFI tests whose ext/ module needs an optional native library. build.sh
-    # drops a sentinel (stdlib/runtime.<lib>) when pkg-config finds the lib;
-    # without it the program legitimately fails to compile ("FFI library X is
-    # required ..."). Skip such tests when the sentinel is absent so the corpus
-    # self-adapts to a minimal environment (e.g. FreeBSD base, which ships no
-    # sqlite3/libpq) instead of spuriously failing on a missing optional dep.
-    case "$name" in
-        sqlite_*)   [[ -f "$ROOT_DIR/stdlib/runtime.sqlite3" ]] || { echo skip; return; } ;;
-        postgres_*) [[ -f "$ROOT_DIR/stdlib/runtime.pq"      ]] || { echo skip; return; } ;;
-        # std/fswatch.nu is Linux-only (inotify is a Linux kernel API; the
-        # symbols don't exist to link elsewhere — FreeBSD/macOS CI).
-        fswatch_*)  [[ "$(uname -s)" == "Linux" ]] || { echo skip; return; } ;;
-    esac
-    if [[ "$name" == http_* ]]; then
-        if ! http_runs_by_default "$name" && [[ "$ENABLE_HTTP_TESTS" != "1" ]]; then
-            echo skip; return
-        fi
-        if http_needs_net "$name" && [[ "$ENABLE_NET_TESTS" != "1" ]]; then
-            echo skip; return
-        fi
-    fi
-    if [[ "$name" == net_* ]] && net_needs_net "$name" && [[ "$ENABLE_NET_TESTS" != "1" ]]; then
-        echo skip; return
-    fi
-}
 
 # Append out_file to dst, capping lines to avoid runaway-output
 # golden explosions.
@@ -314,9 +247,12 @@ run_one() {
         echo FAIL
     fi
 }
-export -f run_one is_skipped append_capped strip_root http_runs_by_default http_needs_net net_needs_net
+# is_skipped and its helpers are exported by test_skips.sh itself, so a
+# runner cannot half-export the predicate set and gate differently in
+# the workers than in the parent.
+export -f run_one append_capped strip_root
 export NURLC RUNTIME OUTDIR WORKDIR SCRIPT_DIR ROOT_DIR CLANG LINK_LIBS
-export ENABLE_HTTP_TESTS ENABLE_NET_TESTS MAX_OUT_LINES TIMEOUT UPDATE
+export MAX_OUT_LINES TIMEOUT UPDATE
 
 # ── collect the test set ────────────────────────────────────────
 shopt -s nullglob
