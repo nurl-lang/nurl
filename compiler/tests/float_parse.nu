@@ -24,7 +24,10 @@ $ `stdlib/std/floatbits.nu`
     ( nurl_print txt )
     ( nurl_print ? == ( f64_to_bits back ) ( f64_to_bits x ) ` ok` ` MISMATCH` )
     ( nurl_print `\n` )
-    ( nurl_free txt )
+    // no `nurl_free txt` here: `txt` is a tracked owned string and
+    // auto-drop already releases it at scope exit. Freeing it by hand is
+    // a double free that the runtime's small-block freelist hides — the
+    // sanitized runner is what named it.
 }
 
 // parse a literal text and compare against the double the compiler
