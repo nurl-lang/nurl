@@ -40,6 +40,11 @@
 #include <string.h>
 #include <ctype.h>
 #include <stdint.h>
+/* offsetof — used by the sockaddr_un layout constants below. glibc drags
+ * it in transitively, FreeBSD's headers do not, so the omission compiled
+ * on Linux and failed only on the BSD leg. Include it where every
+ * platform sees it, not inside the _WIN32 branch further down. */
+#include <stddef.h>
 #include <sys/stat.h>
 #include <errno.h>
 #include <math.h>
