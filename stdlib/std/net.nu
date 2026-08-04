@@ -15,6 +15,7 @@
 //   ( tcp_close_listener  TcpListener l )                   → v
 //   ( tcp_close_conn      TcpConn c )                       → v
 //   ( tcp_peer_addr       TcpConn c )                       → s    BORROWED view
+//   ( tcp_local_addr      TcpListener l )                   → String OWNED
 //   ( tcp_set_timeout     TcpConn c i ms )                  → v
 //   ( net_err_name        NetErr e )                        → s    diagnostic
 //
@@ -155,6 +156,10 @@ $ `stdlib/std/pkey.nu`
 // ── Listener lifecycle ─────────────────────────────────────────────
 
 // Bind on host:port and start listening with the given backlog.
+//
+// `port` 0 means "let the kernel pick a free ephemeral port" — the way
+// to bind without racing another process for a fixed number. Read back
+// what it picked with `tcp_local_addr`.
 @ tcp_listen_with_backlog s host i port i backlog → !TcpListener NetErr {
     : i raw ( nurl_tcp_listen host port backlog )
     ? == raw 0 { ^ @ !TcpListener NetErr { F # NetErr NetOther } } {}
@@ -591,6 +596,23 @@ $ `stdlib/std/pkey.nu`
 
 @ tcp_peer_addr TcpConn c → s {
     ^ ( nurl_tcp_peer_addr ( __conn_fd c ) )
+}
+
+& `c` @ nurl_tcp_local_addr i handle → s
+
+// OWNED String "ip:port" of the address a listener is actually bound to,
+// read fresh from getsockname. This is the counterpart of listening on
+// port 0: the kernel picks the port, and this is how the process that
+// asked for it finds out. Caller frees with `string_free`.
+//
+// Note the ownership difference from `tcp_peer_addr`, which hands back a
+// BORROWED view cached on the handle: there is no cached local address,
+// so this one is computed and owned. Same shape as `udp_local_addr`.
+@ tcp_local_addr TcpListener l → String {
+    : s raw_s ( nurl_tcp_local_addr # i . l raw )
+    : String out ( string_from raw_s )
+    ( nurl_free raw_s )
+    ^ out
 }
 
 @ tcp_set_timeout TcpConn c i ms → v {

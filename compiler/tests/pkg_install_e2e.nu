@@ -11,7 +11,13 @@
 //     GET /pkgs/foo/foo-1.0.0.tar.gz       → the tarball bytes
 // A client pthread resolves `foo ^1.0`, installs it into a temp deps dir,
 // checks the unpacked files exist, then exercises a wrong-checksum reject.
-// Gated behind NURL_NET_TESTS=1.
+// Everything is loopback — no third-party host is contacted, but the
+// client half goes through nurlpkg, whose HTTP transport shells out to
+// the `curl` BINARY (ext/http_cli.nu: no libcurl link, on purpose). On a
+// host without curl the fetch fails at the transport layer and the
+// client thread never reaches the registry, so the server thread's join
+// never returns — the FreeBSD CI VM, which ships no curl, hung here.
+// requires: live curl
 
 $ `stdlib/std/net.nu`
 $ `stdlib/std/thread.nu`
@@ -253,10 +259,7 @@ version = "1.0.0"
 }
 
 @ main → i {
-    : ?String gate ( env_get `NURL_NET_TESTS` )
-    ?? gate {
-        T s → { ( string_free s ) ( run_e2e ) ( nurl_print `done\n` ) }
-        F → { ( nurl_print `pkg install e2e skipped (set NURL_NET_TESTS=1)\n` ) }
-    }
+    ( run_e2e )
+    ( nurl_print `done\n` )
     ^ 0
 }

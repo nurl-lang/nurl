@@ -2,15 +2,14 @@
 // construct (Go-style select over channels).
 //
 // The deterministic single-threaded cases (default arm, value-ready arm,
-// closed-channel arm, case priority) run unconditionally. The blocking
-// path (a producer thread waking a parked selector) needs concurrency,
-// so it is gated behind NURL_NET_TESTS=1 — same convention as
-// thread_basic.nu / net_loopback.nu (thread spawn is occasionally flaky
-// on loaded CI hosts; the gate keeps the default baseline deterministic).
+// closed-channel arm, case priority) need nothing from the OS. The
+// blocking path — a producer thread waking a parked selector — spawns a
+// real thread, hence `requires: live`. Its output is deterministic
+// because the selector cannot proceed until the producer has sent.
+// requires: live
 
 $ `stdlib/std/channel.nu`
 $ `stdlib/std/thread.nu`
-$ `stdlib/ext/env.nu`
 $ `stdlib/core/string.nu`
 
 @ run_blocking_test → v {
@@ -75,10 +74,6 @@ $ `stdlib/core/string.nu`
     ( chan_free [i] ch )
 
     // 5) blocking path — concurrency-gated.
-    : ?String gate ( env_get `NURL_NET_TESTS` )
-    ?? gate {
-        T s → { ( string_free s ) ( run_blocking_test ) }
-        F → { ( nurl_print `blocking select test skipped (set NURL_NET_TESTS=1)\n` ) }
-    }
+    ( run_blocking_test )
     ^ 0
 }

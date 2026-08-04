@@ -13,16 +13,15 @@
 //   3. python3 client does an HTTPS GET with verify=False against
 //      the self-signed cert; prints status line + body.
 //
-// Gating: NURL_NET_TESTS=1 (loopback socket + python3 + openssl CLI
-// for cert gen). When openssl wasn't detected at build time
+// Needs a loopback socket + python3 + the openssl CLI for cert gen.
+// When openssl wasn't detected at build time
 // (stdlib/runtime.openssl absent), tcp_listen_tls returns
 // NetTlsCtxInit and the test prints that fact instead — so the
 // baseline tells us whether the build-host openssl path is wired.
+// requires: live openssl python3
 
 $ `stdlib/std/net.nu`
 $ `stdlib/std/process.nu`
-$ `stdlib/core/string.nu`
-$ `stdlib/ext/env.nu`
 $ `stdlib/ext/http_request.nu`
 $ `stdlib/ext/http_response.nu`
 $ `stdlib/ext/http_server.nu`
@@ -94,13 +93,6 @@ sys.stdout.write('tls_body='+body)" > /tmp/http_server_tls_client.out 2>&1 & ech
 }
 
 @ main → i {
-    : ?String gate ( env_get `NURL_NET_TESTS` )
-    ?? gate {
-        T s → {
-            ( string_free s )
-            ( run_live_tls_test )
-        }
-        F → { ( nurl_print `live tls test skipped (set NURL_NET_TESTS=1 to enable)\n` ) }
-    }
+    ( run_live_tls_test )
     ^ 0
 }

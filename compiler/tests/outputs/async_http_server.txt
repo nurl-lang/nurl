@@ -2,4 +2,5 @@ COMPILE OK
 LINK OK
 EXIT 0
 OUTPUT
-async HTTP test skipped (set NURL_NET_TESTS=1)
+server_run=ok
+client_ok=1

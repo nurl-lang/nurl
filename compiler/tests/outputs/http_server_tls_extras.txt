@@ -1,0 +1,18 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+--- §1 SNI ---
+add_sni_api=NetOther
+add_sni_www=NetOther
+sni_api=subject=CN = localhost
+sni_www=subject=CN = localhost
+sni_fallback=subject=CN = localhost
+--- §2 live reload ---
+reload_before=subject=CN = localhost
+reload_swap=NetOther
+reload_after=subject=CN = localhost
+--- §3 mTLS ---
+mtls_setup=NetOther
+mtls_no_cert=not-enforced (mTLS unsupported)
+mtls_with_cert=ok

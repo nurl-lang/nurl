@@ -15,14 +15,11 @@
 // Pre-fix (no panic model): the handler's `panic` would abort the
 // process — the test would die before producing any client output.
 // Post-fix: the panic is recovered, 500 sent, process keeps running.
-//
-// Gating: NURL_NET_TESTS=1.
+// requires: live python3
 
 $ `stdlib/std/net.nu`
 $ `stdlib/std/process.nu`
 $ `stdlib/std/panic.nu`
-$ `stdlib/core/string.nu`
-$ `stdlib/ext/env.nu`
 $ `stdlib/ext/http_request.nu`
 $ `stdlib/ext/http_response.nu`
 $ `stdlib/ext/http_server.nu`
@@ -81,13 +78,6 @@ sys.stdout.write('client_status='+first+chr(10))" > /tmp/http_server_panic_clien
 }
 
 @ main → i {
-    : ?String gate ( env_get `NURL_NET_TESTS` )
-    ?? gate {
-        T s → {
-            ( string_free s )
-            ( run_live_panic_test )
-        }
-        F → { ( nurl_print `live panic test skipped (set NURL_NET_TESTS=1 to enable)\n` ) }
-    }
+    ( run_live_panic_test )
     ^ 0
 }

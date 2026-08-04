@@ -79,28 +79,52 @@ $ `stdlib/core/posix.nu`  // read / write / close / posix_const / errno
 
 // ── sockaddr_un ─────────────────────────────────────────────────────
 
-// Build a `struct sockaddr_un` { sun_family (2 bytes); sun_path[108] }
-// on the heap with family = AF_UNIX and the NUL-terminated `path`
-// copied in. Caller frees. The Linux sun_path ceiling is 108 bytes;
-// longer paths are truncated (bind will then fail cleanly).
+// Build a `struct sockaddr_un` on the heap with family = AF_UNIX and the
+// NUL-terminated `path` copied in. Caller frees. A path longer than the
+// platform's sun_path is truncated (bind then fails cleanly).
+//
+// The layout is NOT the same everywhere and the difference is silent:
+// Linux/musl have a 2-byte sun_family at offset 0, BSD and macOS have a
+// 1-byte sun_len there and sun_family at offset 1. The Linux encoding
+// written on a BSD puts AF_UNIX into sun_len and leaves sun_family at
+// AF_UNSPEC, so every bind and connect fails — which is what FreeBSD CI
+// showed the first time this module's live section ran. So ask the
+// platform for the offsets (posix_const reads them out of the real
+// header via offsetof) rather than hardcoding one family's answer.
+@ __un_path_cap s path → i {
+    : i pmax ( posix_const `SOCKADDR_UN_PATH_MAX` )
+    : i lim - pmax 1
+    : i pathlen ( nurl_str_len path )
+    ^ ? > pathlen lim lim pathlen
+}
+
 @ __un_addr s path → s {
     : i af ( posix_const `AF_UNIX` )
-    : i pathlen ( nurl_str_len path )
-    : i cap ? > pathlen 107 107 pathlen
-    : s addr ( nurl_zalloc 110 )
+    : i foff ( posix_const `SOCKADDR_UN_FAMILY_OFF` )
+    : i fsize ( posix_const `SOCKADDR_UN_FAMILY_SIZE` )
+    : i poff ( posix_const `SOCKADDR_UN_PATH_OFF` )
+    : i pmax ( posix_const `SOCKADDR_UN_PATH_MAX` )
+    : i cap ( __un_path_cap path )
+    : s addr ( nurl_zalloc + poff + pmax 2 )
     : *u ap # *u addr
-    = . ap 0 # u & af 255
-    = . ap 1 # u & / af 256 255
+    // sun_family, little-endian across however many bytes it occupies.
+    : ~ i b 0
+    ~ < b fsize {
+        = . ap + foff b # u & >> af * 8 b 255
+        = b + b 1
+    }
+    // Where sun_family sits at offset 1 the byte before it is sun_len.
+    // BSD kernels overwrite it from the socklen argument, but a correct
+    // value costs one store and makes the struct valid on its own terms.
+    ? > foff 0 { = . ap 0 # u & 255 + poff + cap 1 } {}
     : ~ i k 0
-    ~ < k cap { = . ap + 2 k # u ( nurl_str_get path k ) = k + k 1 }
+    ~ < k cap { = . ap + poff k # u ( nurl_str_get path k ) = k + k 1 }
     ^ addr
 }
 
-// socklen for a path: offsetof(sun_path)=2 + path + NUL.
+// socklen for a path: offsetof(sun_path) + path + NUL.
 @ __un_socklen s path → i {
-    : i pathlen ( nurl_str_len path )
-    : i cap ? > pathlen 107 107 pathlen
-    ^ + + 2 cap 1
+    ^ + + ( posix_const `SOCKADDR_UN_PATH_OFF` ) ( __un_path_cap path ) 1
 }
 
 // errno → UnixErr, with `dflt` for anything unmapped.

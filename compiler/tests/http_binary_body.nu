@@ -15,8 +15,9 @@
 //
 // Both results funnel through globals and are printed in fixed order
 // after the client thread joins, so the two-thread output stays
-// deterministic for the baseline diff. Live socket exercise gated
-// behind NURL_NET_TESTS=1.
+// deterministic for the baseline diff. Opens a loopback socket, hence
+// `requires: live`.
+// requires: live
 
 $ `stdlib/std/net.nu`
 $ `stdlib/std/thread.nu`
@@ -25,9 +26,7 @@ $ `stdlib/ext/http.nu`
 $ `stdlib/ext/http_server.nu`
 $ `stdlib/ext/http_response.nu`
 $ `stdlib/ext/http_request.nu`
-$ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
-$ `stdlib/ext/env.nu`
 
 : ~ i g_saw_len -1
 : ~ i g_client_status -1
@@ -90,10 +89,6 @@ $ `stdlib/ext/env.nu`
 }
 
 @ main → i {
-    : ?String gate ( env_get `NURL_NET_TESTS` )
-    ?? gate {
-        T s → { ( string_free s ) ( run_binary_body_test ) }
-        F → { ( nurl_print `binary body test skipped (set NURL_NET_TESTS=1)\n` ) }
-    }
+    ( run_binary_body_test )
     ^ 0
 }

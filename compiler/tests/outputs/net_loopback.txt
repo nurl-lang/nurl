@@ -1,0 +1,9 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+peer_addr_nonempty=T
+bytes_read=4
+payload_in=ping
+write_pong=OK
+client_out=pong

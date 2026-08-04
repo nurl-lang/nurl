@@ -1,7 +1,8 @@
 // mcp_client.nu — MCP HTTP client acceptance test. Pure offline:
 // envelope shapes + response inspection are exercised directly.
-// The actual HTTP round-trip (mcp_call against a live server) is
-// gated by NURL_HTTP_TESTS=1 — same convention as `http_basic.nu`.
+// The actual HTTP round-trip (mcp_call against a live server) is not
+// exercised here — that path belongs to a test declaring `internet`,
+// the way `http_basic.nu` does.
 //
 // Coverage:
 //   * mcp_client_new + free (empty + populated endpoint).

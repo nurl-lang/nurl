@@ -2,5 +2,4 @@ COMPILE OK
 LINK OK
 EXIT 0
 OUTPUT
-server_run=ok
-client_ok=1
+chunked keep-alive ok

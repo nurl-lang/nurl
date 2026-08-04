@@ -2,4 +2,11 @@ COMPILE OK
 LINK OK
 EXIT 0
 OUTPUT
-live channel tests skipped (set NURL_NET_TESTS=1 to enable)
+T1 sum=5050
+T1 count=100
+T2 send_to_closed=F
+T2 recv=None
+T3 tr_empty=None
+T3 tr_after_send=7
+T4 sum=5050
+T4 count=100

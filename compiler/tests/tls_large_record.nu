@@ -12,14 +12,13 @@
 //
 // The python client reads to EOF and prints the body length plus a
 // content check (repeating '0123456789' pattern), both deterministic.
-// Gated on NURL_NET_TESTS=1 (loopback socket + python3), like
-// http_server_tls.nu.
+// Needs a loopback socket + python3, like http_server_tls.nu.
+// requires: live python3
 
 $ `stdlib/std/net.nu`
 $ `stdlib/std/process.nu`
 $ `stdlib/core/string.nu`
 $ `stdlib/std/fs.nu`
-$ `stdlib/ext/env.nu`
 $ `stdlib/std/x509_gen.nu`
 $ `stdlib/ext/http_request.nu`
 $ `stdlib/ext/http_response.nu`
@@ -96,13 +95,6 @@ sys.stdout.write('body_ok='+str(body==b'0123456789'*10000)+chr(10))" > /tmp/nurl
 }
 
 @ main → i {
-    : ?String gate ( env_get `NURL_NET_TESTS` )
-    ?? gate {
-        T s → {
-            ( string_free s )
-            ( run_live_test )
-        }
-        F → { ( nurl_print `tls large-record test skipped (set NURL_NET_TESTS=1 to enable)\n` ) }
-    }
+    ( run_live_test )
     ^ 0
 }

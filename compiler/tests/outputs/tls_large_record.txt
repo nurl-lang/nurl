@@ -2,4 +2,6 @@ COMPILE OK
 LINK OK
 EXIT 0
 OUTPUT
-tls large-record test skipped (set NURL_NET_TESTS=1 to enable)
+serve=OK
+body_len=100000
+body_ok=True

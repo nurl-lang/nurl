@@ -1,0 +1,9 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+handled path=/a body_len=5 body0=65
+handled path=/b body_len=5 body0=66
+serve=OK
+client_status_lines=2
+client_total_bytes=183

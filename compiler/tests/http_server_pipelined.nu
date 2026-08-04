@@ -15,16 +15,15 @@
 // exactly one `handled` line in the output. Post-fix snapshot: two
 // `handled` lines, body_len=5 each.
 //
-// Gating: NURL_NET_TESTS=1 (loopback socket + python3 client). Default
-// run prints the skip notice — the listen / accept / serve plumbing
-// is already covered by `http_server_seq.nu`; this test isolates the
-// pipelining correctness story.
+// Needs a loopback socket + a python3 client. The listen / accept /
+// serve plumbing is already covered by `http_server_seq.nu`; this test
+// isolates the pipelining correctness story.
+// requires: live python3
 
 $ `stdlib/std/net.nu`
 $ `stdlib/std/process.nu`
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
-$ `stdlib/ext/env.nu`
 $ `stdlib/ext/http_request.nu`
 $ `stdlib/ext/http_response.nu`
 $ `stdlib/ext/http_server.nu`
@@ -133,13 +132,6 @@ sys.stdout.write('client_total_bytes='+str(len(buf))+chr(10))" > /tmp/http_serve
 }
 
 @ main → i {
-    : ?String gate ( env_get `NURL_NET_TESTS` )
-    ?? gate {
-        T s → {
-            ( string_free s )
-            ( run_live_pipelined_test )
-        }
-        F → { ( nurl_print `live pipelined test skipped (set NURL_NET_TESTS=1 to enable)\n` ) }
-    }
+    ( run_live_pipelined_test )
     ^ 0
 }

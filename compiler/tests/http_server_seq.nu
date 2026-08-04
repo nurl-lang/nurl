@@ -1,7 +1,7 @@
 // http_server_seq.nu — Phase 4 acceptance test for
-// stdlib/ext/http_server.nu. Gated behind NURL_NET_TESTS=1
-// (run_tests.sh) because it opens a real listening socket and shells
-// out to curl for the client side. Skipped on hosts without curl.
+// stdlib/ext/http_server.nu. Opens a real listening socket and shells
+// out to curl for the client side, so it declares both — skipped on
+// hosts without curl.
 //
 // Round-trip:
 //   1. Listen on 127.0.0.1:18766 (loopback only).
@@ -17,6 +17,7 @@
 // The handler's job: echo back the request method + path + body,
 // JSON-shaped, status 200. That gives us several things to check at
 // once (status line, content-type, content-length, body bytes).
+// requires: live curl
 
 $ `stdlib/std/net.nu`
 $ `stdlib/std/process.nu`

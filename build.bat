@@ -324,9 +324,14 @@ if "%NO_TESTS%"=="1" (
 REM ── Test suite ───────────────────────────────────────────────
 REM Per-test golden runner, ported from run_tests.sh, with Windows
 REM goldens in compiler\tests\outputs-windows\ and parallel execution.
-REM Requires PowerShell 7+ (pwsh) for ForEach-Object -Parallel; the
-REM legacy run_tests.bat (monolithic correct.txt) is kept only as a
-REM Windows-PowerShell 5.1 fallback.
+REM Requires PowerShell 7+ (pwsh) for ForEach-Object -Parallel. There is
+REM no Windows-PowerShell 5.1 fallback: the run_tests.bat that used to
+REM serve as one compared against a monolithic correct.txt that is not
+REM in the repo, so its first run wrote its own baseline and declared
+REM success — a runner that cannot fail — and it carried a third, stale
+REM copy of the by-name skip lists that test_skips.sh replaced. Deleted
+REM rather than repaired: a missing pwsh already exits non-zero below,
+REM which is the honest answer.
 set "PWSH=pwsh"
 where pwsh >nul 2>&1
 if errorlevel 1 (

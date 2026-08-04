@@ -5,15 +5,14 @@
 // The counting logic is checked deterministically and single-threaded via
 // sem_try_acquire (no scheduler dependence). A live multi-threaded
 // exercise — N threads bounded by a sem(K), asserting the observed peak
-// concurrency never exceeds K — is gated behind NURL_NET_TESTS=1, the
-// same convention thread_basic.nu uses (thread spawn is occasionally
-// flaky on loaded CI hosts; the default path stays deterministic).
+// concurrency never exceeds K — spawns real threads, hence
+// `requires: live`. It asserts a bound, not a schedule, so its output
+// is deterministic however the threads interleave.
 //
 // main returns the number of failed checks (0 = all pass).
+// requires: live
 
 $ `stdlib/std/thread.nu`
-$ `stdlib/ext/env.nu`
-$ `stdlib/core/string.nu`
 
 // Shared state for the live concurrency test (module-level mutables, the
 // pattern thread_basic.nu uses for closure-captured counters).
@@ -93,28 +92,19 @@ $ `stdlib/core/string.nu`
     = f + f ( chk ! ( sem_try_acquire z ) `neg_no_permit` )
     ( sem_free z )
 
-    // ── Live concurrency bound (gated) ──
-    : ?String gate_env ( env_get `NURL_NET_TESTS` )
-    ?? gate_env {
-        T g → {
-            ( string_free g )
-            : i permits 3
-            : Mutex guard ( mutex_new )
-            : Semaphore gate ( sem_new permits )
-            = live_active 0
-            = live_peak 0
-            ( run_live_test 8 permits guard gate )
-            // The hard invariant: peak concurrency never exceeded the
-            // permit count, and the region was actually entered.
-            = f + f ( chk <= live_peak permits `live_peak_within_bound` )
-            = f + f ( chk >= live_peak 1 `live_region_entered` )
-            ( sem_free gate )
-            ( mutex_free guard )
-        }
-        F _ → {
-            ( nurl_print `live_concurrency skipped (set NURL_NET_TESTS=1)\n` )
-        }
-    }
+    // ── Live concurrency bound ──
+    : i permits 3
+    : Mutex guard ( mutex_new )
+    : Semaphore gate ( sem_new permits )
+    = live_active 0
+    = live_peak 0
+    ( run_live_test 8 permits guard gate )
+    // The hard invariant: peak concurrency never exceeded the permit
+    // count, and the region was actually entered.
+    = f + f ( chk <= live_peak permits `live_peak_within_bound` )
+    = f + f ( chk >= live_peak 1 `live_region_entered` )
+    ( sem_free gate )
+    ( mutex_free guard )
 
     ^ f
 }

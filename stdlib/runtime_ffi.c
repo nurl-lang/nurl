@@ -849,7 +849,15 @@ long long nurl_tcp_listen(const char *host, long long port, long long backlog) {
 #endif
     NurlTcp *h = nurl__tcp_new_handle(NURL_TCP_KIND_LISTENER);
     if (!h) return 0;
-    if (port <= 0 || port > 65535) {
+    /* port 0 = "kernel picks an ephemeral port", the POSIX contract, and
+     * the only collision-free way for parallel tests and short-lived
+     * servers to bind. Read the assigned port back with
+     * nurl_tcp_local_addr. nurl_udp_bind has always accepted it; this
+     * side rejected it as invalid, which made the whole pattern
+     * unavailable on TCP (and reported as NetBind, a bind failure that
+     * never happened). Only nurl_tcp_connect keeps `<= 0`, where a
+     * destination port of 0 really is meaningless. */
+    if (port < 0 || port > 65535) {
         h->err_kind = NURL_NET_ERR_BIND;
         return (long long)(uintptr_t)h;
     }
@@ -1502,6 +1510,34 @@ const char *nurl_tcp_peer_addr(long long handle) {
     NurlTcp *h = (NurlTcp*)(uintptr_t)handle;
     if (!h || !h->peer) return "";
     return h->peer;
+}
+
+/* Defined with the UDP block below (§18b) — one formatter for both
+ * families and both protocols, rather than a TCP-shaped copy. */
+static char *nurl__net_format_sockaddr(const struct sockaddr *sa,
+                                       socklen_t salen);
+
+/* Heap "ip:port" of the locally-bound endpoint of a listener or conn.
+ * Caller frees via nurl_free; empty string on error. This is what makes
+ * `nurl_tcp_listen(host, 0, …)` usable: the ephemeral port the kernel
+ * chose is otherwise unknowable to the process that asked for it.
+ * Mirrors nurl_udp_local_addr exactly, including the ownership rule. */
+char *nurl_tcp_local_addr(long long handle) {
+    NurlTcp *h = (NurlTcp*)(uintptr_t)handle;
+    if (!h || h->fd == NURL_INVALID_SOCK) return strdup("");
+    struct sockaddr_storage sa;
+    memset(&sa, 0, sizeof(sa));
+#ifdef _WIN32
+    int salen = (int)sizeof(sa);
+#else
+    socklen_t salen = (socklen_t)sizeof(sa);
+#endif
+    if (getsockname(h->fd, (struct sockaddr*)&sa, &salen) != 0) {
+        return strdup("");
+    }
+    char *out = nurl__net_format_sockaddr((struct sockaddr*)&sa,
+                                          (socklen_t)salen);
+    return out ? out : strdup("");
 }
 
 void nurl_tcp_set_timeout(long long handle, long long ms) {
@@ -2346,6 +2382,7 @@ void nurl_tcp_close(long long h) { (void)h; }
 void nurl_tcp_shutdown(long long h) { (void)h; }
 long long nurl_tcp_err_kind(long long h) { (void)h; return NURL_NET_ERR_OTHER; }
 const char *nurl_tcp_peer_addr(long long h) { (void)h; return ""; }
+char       *nurl_tcp_local_addr(long long h) { (void)h; return strdup(""); }
 void nurl_tcp_set_timeout(long long h, long long ms) { (void)h; (void)ms; }
 /* Async-runtime hooks. The non-WASI variants live above the #else gate;
  * mirror them as no-ops here so wasm-ld doesn't fail with undefined
@@ -2502,9 +2539,43 @@ static volatile NurlTcp *g_signal_listener = NULL;
 static int g_signal_pipe[2] = { -1, -1 };
 #  endif
 
+/* Stop the registered listener's accept loop, from anywhere — including
+ * async-signal context, which is why every step here is on SUSv4
+ * §2.4.3's safe list (a plain store, shutdown(2), write(2)).
+ *
+ * `shutdown(2)` on a LISTENING socket is a Linux extension. Linux wakes
+ * a blocked accept/poll; BSD returns ENOTCONN and leaves the thread
+ * parked, so on FreeBSD and macOS SIGINT could not stop a NURL server's
+ * accept loop at all — the signal arrived, the flag was set, and the
+ * accepting thread stayed asleep forever. It surfaced as a hung
+ * signal_basic on FreeBSD the first time that test was allowed to run.
+ *
+ * The listener already carries the self-pipe that cross-thread
+ * nurl_tcp_shutdown uses (see the wake_rfd/wake_wfd comment on NurlTcp):
+ * accept polls {fd, wake_rfd}, and one never-drained byte wakes every
+ * current and future poll. Use it here too, and keep the shutdown(2)
+ * call as the Linux fast path and as the only lever when pipe() failed
+ * at listen time. `shutting_down` is what the loop actually tests, so it
+ * must be set before the wake, not after. */
+static void nurl__signal_stop_listener(void) {
+    NurlTcp *h = (NurlTcp *)g_signal_listener;
+    if (!h || h->fd == NURL_INVALID_SOCK) return;
+    h->shutting_down = 1;
+#  ifdef _WIN32
+    shutdown(h->fd, SD_BOTH);
+#  else
+    shutdown(h->fd, SHUT_RDWR);
+    if (h->wake_wfd != NURL_INVALID_SOCK) {
+        char b = 1;
+        ssize_t w = write(h->wake_wfd, &b, 1);
+        (void)w;
+    }
+#  endif
+}
+
 /* OS-level handler. Async-signal-safe: only sig_atomic_t writes,
- * a non-blocking single-byte write(2), and shutdown(2) on the
- * legacy listener slot if SIGINT/SIGTERM fired. */
+ * a non-blocking single-byte write(2), and the listener stop above
+ * if SIGINT/SIGTERM fired. */
 static void nurl__signal_os_handler(int sig) {
     if (sig > 0 && sig < NURL_SIG_MAX) {
         g_signal_pending[sig] = 1;
@@ -2520,14 +2591,7 @@ static void nurl__signal_os_handler(int sig) {
     }
 #  endif
     if (sig == SIGINT || sig == SIGTERM) {
-        NurlTcp *h = (NurlTcp *)g_signal_listener;
-        if (h && h->fd != NURL_INVALID_SOCK) {
-#  ifdef _WIN32
-            shutdown(h->fd, SD_BOTH);
-#  else
-            shutdown(h->fd, SHUT_RDWR);
-#  endif
-        }
+        nurl__signal_stop_listener();
     }
 }
 
@@ -2712,13 +2776,7 @@ void nurl_signal_install_shutdown(long long listener) {
  * the signal (Win32 can't deliver SIGINT programmatically; POSIX
  * raise() is fine but the registration order in tests can be racy). */
 void nurl_signal_trigger_shutdown(void) {
-    NurlTcp *h = (NurlTcp *)g_signal_listener;
-    if (!h || h->fd == NURL_INVALID_SOCK) return;
-#  ifdef _WIN32
-    shutdown(h->fd, SD_BOTH);
-#  else
-    shutdown(h->fd, SHUT_RDWR);
-#  endif
+    nurl__signal_stop_listener();
 }
 
 #else  /* WASI — no signals at all. Every entry is a no-op stub. */

@@ -4,4 +4,6 @@ EXIT 0
 OUTPUT
 thread_err_name(ThreadCreate)=ThreadCreate
 thread_err_name(ThreadOther)=ThreadOther
-live thread tests skipped (set NURL_NET_TESTS=1 to enable)
+T1 counter=1
+T2 counter=800
+T3 flag=1

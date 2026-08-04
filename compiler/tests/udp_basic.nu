@@ -1,7 +1,7 @@
 // udp_basic.nu — runtime §18b acceptance.
 //
-// Always-on (no NURL_NET_TESTS gate) because everything happens on
-// loopback inside a single process: no external client is spawned,
+// Needs only `live`: everything happens on loopback inside a single
+// process — no external client is spawned,
 // no real DNS lookup, no broadcast/multicast packet leaves the host.
 // The setsockopt calls for broadcast / multicast TTL are exercised
 // but with the loop disabled so they're no-ops on the wire.
@@ -16,6 +16,7 @@
 //   7. Zero-length datagram round-trip.
 //   8. Setsockopt smoke: SO_BROADCAST + IP_MULTICAST_TTL.
 //   9. Wildcard dual-stack bind sanity check (port 0).
+// requires: live
 
 $ `stdlib/std/udp.nu`
 $ `stdlib/std/net.nu`

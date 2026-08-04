@@ -41,10 +41,26 @@
 #    pwsh run_tests.ps1 -Update         # (re)write all goldens
 #    pwsh run_tests.ps1 -Update a b …   # update only the named tests
 #
+#  Which tests run: the same `// requires:` declaration the POSIX
+#  runners read (see test_skips.sh for the contract and for why the
+#  name lists that used to live here were wrong). Tokens: `live`,
+#  `internet`, or the name of a tool that must be on PATH.
+#
+#  ONE difference from the POSIX side, and it is a capability fact
+#  rather than a policy: `fibers` is OFF here. NURL has no Win64
+#  context-switch backend (docs/ASYNC.md), so `spawn` returns a null
+#  handle and the closure never runs — a test that pairs a fiber-side
+#  server with a blocking client would wait forever for a peer that
+#  cannot exist. `live` is ON, same as everywhere else: Windows has
+#  threads and sockets, and udp_basic / websocket_basic / net_basic
+#  have been exercising them here all along.
+#
 #  Environment (mirrors run_tests.sh):
 #    NURL_TEST_JOBS=N   parallelism (default: CPU count)
-#    NURL_HTTP_TESTS=1  opt in to network-dependent http_* tests
-#    NURL_NET_TESTS=1   opt in to net_* / http server tests
+#    NURL_LIVE_TESTS=0  turn off the live (threads/sockets) tests
+#    NURL_FIBER_TESTS=1 force the fiber tests on (see above)
+#    NURL_HTTP_TESTS=1  opt in to the tests that contact a third party
+#    NURL_NET_TESTS=1   same as NURL_HTTP_TESTS (both spellings exist)
 #    TIMEOUT=N          per-test run timeout, seconds (default 60)
 #    MAX_OUT_LINES=N    cap captured output lines (default 200)
 #    CLANG=path         override clang
@@ -114,8 +130,11 @@ if (Test-Path $winFile) {
 $MaxOutLines = if ($env:MAX_OUT_LINES) { [int]$env:MAX_OUT_LINES } else { 200 }
 $Timeout     = if ($env:TIMEOUT)       { [int]$env:TIMEOUT }       else { 60 }
 $Jobs        = if ($env:NURL_TEST_JOBS){ [int]$env:NURL_TEST_JOBS} else { [Environment]::ProcessorCount }
-$EnableHttp  = if ($env:NURL_HTTP_TESTS){ $env:NURL_HTTP_TESTS }   else { '0' }
-$EnableNet   = if ($env:NURL_NET_TESTS) { $env:NURL_NET_TESTS }    else { '0' }
+$EnableLive     = if ($env:NURL_LIVE_TESTS) { $env:NURL_LIVE_TESTS } else { '1' }
+# See the header: no Win64 context-switch backend, so this one differs
+# from the POSIX default on purpose.
+$EnableFibers   = if ($env:NURL_FIBER_TESTS) { $env:NURL_FIBER_TESTS } else { '0' }
+$EnableInternet = if (($env:NURL_HTTP_TESTS -eq '1') -or ($env:NURL_NET_TESTS -eq '1')) { '1' } else { '0' }
 
 New-Item -ItemType Directory -Force -Path $OutDir, $WorkDir | Out-Null
 
@@ -144,8 +163,9 @@ $results = $names | ForEach-Object -ThrottleLimit $Jobs -Parallel {
     $MaxOutLines = $using:MaxOutLines
     $Timeout     = $using:Timeout
     $Update      = $using:updateFlag
-    $EnableHttp  = $using:EnableHttp
-    $EnableNet   = $using:EnableNet
+    $EnableLive     = $using:EnableLive
+    $EnableFibers   = $using:EnableFibers
+    $EnableInternet = $using:EnableInternet
 
     function Read-TextOrEmpty([string]$p) {
         if (-not (Test-Path -LiteralPath $p)) { return '' }
@@ -243,7 +263,28 @@ $results = $names | ForEach-Object -ThrottleLimit $Jobs -Parallel {
     $gold = Join-Path $OutDir  "$name.txt"
     foreach ($f in @($ll, $bin, $err)) { if (Test-Path -LiteralPath $f) { Remove-Item -LiteralPath $f -Force } }
 
-    # ── is_skipped (name-based) ─────────────────────────────────
+    # Echo a test's declared requirement tokens (test_skips.sh's
+    # test_requires, in PowerShell). Leading comment block only: the
+    # block ends at the first line that is neither a comment nor blank,
+    # which is the real boundary — a fixed line window would stop seeing
+    # the declaration of any test that grew a longer header, and losing
+    # a declaration means the test runs where it cannot.
+    function Get-Requires([string]$path) {
+        if (-not (Test-Path -LiteralPath $path)) { return @() }
+        foreach ($line in [System.IO.File]::ReadLines($path)) {
+            if ($line -match '^\s*$')   { continue }
+            if ($line -match '^\s*//') {
+                if ($line -match '^\s*//\s*requires:\s*(.+)$') {
+                    return ($Matches[1] -split '\s+' | Where-Object { $_ })
+                }
+                continue
+            }
+            break
+        }
+        return @()
+    }
+
+    # ── is_skipped ──────────────────────────────────────────────
     $skip = $false
     if ($name -match '(_mod|_helper|_lib)$') { $skip = $true }
     # POSIX-only surfaces with no Windows equivalent: termios raw mode and
@@ -255,19 +296,20 @@ $results = $names | ForEach-Object -ThrottleLimit $Jobs -Parallel {
     # Windows golden RECORDED the link failure, which is a blessed
     # breakage, not coverage.
     elseif ($name -like 'fswatch_*') { $skip = $true }
-    elseif ($name -like 'http_*') {
-        $httpDefault = @('http_request_parser','http_response_builder','http_options','http_router',
-                         'http_static_traversal','http_extras','http_middleware','http_form',
-                         'http_multipart','http_proxy','http_server_seq','http_server_pipelined',
-                         'http_server_limits','http_server_tls','http_server_panic',
-                         'http_binary_body','http_response_binary')
-        $httpNet     = @('http_server_seq','http_server_pipelined','http_server_limits',
-                         'http_server_tls','http_server_panic','http_binary_body','http_response_binary')
-        if (($httpDefault -notcontains $name) -and ($EnableHttp -ne '1')) { $skip = $true }
-        elseif (($httpNet -contains $name) -and ($EnableNet -ne '1'))     { $skip = $true }
-    }
-    elseif (($name -like 'net_*') -and ($name -ne 'net_basic') -and ($EnableNet -ne '1')) {
-        $skip = $true
+    else {
+        foreach ($tok in (Get-Requires (Join-Path $ScriptDir "$name.nu"))) {
+            switch ($tok) {
+                'live'     { if ($EnableLive     -ne '1') { $skip = $true } }
+                'fibers'   { if ($EnableFibers   -ne '1') { $skip = $true } }
+                'internet' { if ($EnableInternet -ne '1') { $skip = $true } }
+                # Anything else names an external command the test shells
+                # out to. Absent tool → skip, so a stripped host degrades
+                # to running less rather than failing on someone else's
+                # missing package.
+                default    { if (-not (Get-Command $tok -ErrorAction SilentlyContinue)) { $skip = $true } }
+            }
+            if ($skip) { break }
+        }
     }
     if ($skip) { return [pscustomobject]@{ Name = $name; Verdict = 'SKIP'; Diff = '' } }
 

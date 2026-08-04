@@ -14,5 +14,6 @@ ws://127.0.0.1:9001/=T
 wss://host:8443/a/b=T
 ws://h=T
 http://example.com/=T
-live client test skipped (NURL_NET_TESTS != 1)
+text_echo=T
+binary_echo=T
 all offline assertions passed

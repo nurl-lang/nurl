@@ -6,4 +6,4 @@ default
 got 7
 prio a=1
 closed
-blocking select test skipped (set NURL_NET_TESTS=1)
+blk str=hi

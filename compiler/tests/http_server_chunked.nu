@@ -1,6 +1,6 @@
 // http_server_chunked.nu — live regression for chunked request bodies on
-// a keep-alive connection (stdlib/ext/http_server.nu). Gated behind
-// NURL_NET_TESTS=1 (opens a loopback socket + spawns a server thread).
+// a keep-alive connection (stdlib/ext/http_server.nu). Opens a loopback
+// socket and spawns a server thread, hence `requires: live`.
 //
 // Before the fix, _finish_body only handled Content-Length: a
 // Transfer-Encoding: chunked body was left undrained in the connection
@@ -14,10 +14,10 @@
 //   * the GET response is present and correct (no keep-alive desync).
 //
 // main returns the failure count.
+// requires: live
 
 $ `stdlib/std/net.nu`
 $ `stdlib/std/thread.nu`
-$ `stdlib/ext/env.nu`
 $ `stdlib/std/bytes.nu`
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
@@ -127,14 +127,7 @@ $ `stdlib/ext/http_server.nu`
 }
 
 @ main → i {
-    : ?String gate ( env_get `NURL_NET_TESTS` )
-    ?? gate {
-        T s → {
-            ( string_free s )
-            : i f ( run_live )
-            ? == f 0 { ( nurl_print `chunked keep-alive ok\n` ) } {}
-            ^ f
-        }
-        F → { ( nurl_print `http_server_chunked skipped (NURL_NET_TESTS != 1)\n` ) ^ 0 }
-    }
+    : i f ( run_live )
+    ? == f 0 { ( nurl_print `chunked keep-alive ok\n` ) } {}
+    ^ f
 }

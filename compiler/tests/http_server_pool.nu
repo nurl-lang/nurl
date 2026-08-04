@@ -1,8 +1,8 @@
 // http_server_pool.nu — Phase 5.3 acceptance test for
 // stdlib/ext/http_server.nu's server_run_pool.
 //
-// Live test (NURL_NET_TESTS=1) verifies the spawn / accept-loop /
-// shutdown / join lifecycle on the loopback. We don't shell out to
+// Verifies the spawn / accept-loop / shutdown / join lifecycle on the
+// loopback (hence `requires: live`). We don't shell out to
 // curl here — http_server_seq.nu already covers the end-to-end
 // request/response round-trip on the single-threaded path; this test
 // focuses on the threading harness:
@@ -23,18 +23,11 @@
 // final cleanup (~10–40% of runs in stress loops). The pool itself
 // exits cleanly — "pool: clean shutdown" always prints first. A
 // proper barrier-based graceful shutdown lives in Phase 8.
-//
-// Default (NURL_NET_TESTS unset): just prints the skip notice — the
-// pool function is exercised purely at compile + link time, so the
-// fact that this file appears in run_tests' baseline at all proves
-// the compiler accepted the closure-capture-of-HttpServer pattern
-// and the runtime symbols all link.
+// requires: live
 
 $ `stdlib/ext/http_server.nu`
 $ `stdlib/std/thread.nu`
 $ `stdlib/std/time.nu`
-$ `stdlib/ext/env.nu`
-$ `stdlib/core/string.nu`
 
 @ run_live_pool_test → v {
     : !TcpListener NetErr lr ( tcp_listen_with_backlog `127.0.0.1` 18799 16 )
@@ -89,13 +82,6 @@ $ `stdlib/core/string.nu`
 }
 
 @ main → i {
-    : ?String gate ( env_get `NURL_NET_TESTS` )
-    ?? gate {
-        T s → {
-            ( string_free s )
-            ( run_live_pool_test )
-        }
-        F → { ( nurl_print `live pool test skipped (set NURL_NET_TESTS=1 to enable)\n` ) }
-    }
+    ( run_live_pool_test )
     ^ 0
 }

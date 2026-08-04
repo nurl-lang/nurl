@@ -2,15 +2,15 @@
 //
 // The deterministic core uses socketpair() — a pure syscall, no path /
 // bind / listen / accept / thread — to exercise the read/write/close
-// path both directions. The full listen+accept+connect round-trip (with
-// a server thread over a /tmp socket) is gated on NURL_NET_TESTS=1, the
-// same convention as the TCP/websocket live tests.
+// path both directions. The full listen+accept+connect round-trip runs
+// a server thread over a /tmp socket — hence `requires: live`, the same
+// declaration the TCP/websocket live tests carry.
+// requires: live
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/unixsock.nu`
 $ `stdlib/std/thread.nu`
-$ `stdlib/ext/env.nu`
 
 @ str_to_vec s in → ( Vec u ) {
     : i n ( nurl_str_len in )
@@ -87,14 +87,7 @@ $ `stdlib/ext/env.nu`
     }
 
     // ── full listen/accept/connect round-trip (gated) ──
-    : ?String gate ( env_get `NURL_NET_TESTS` )
-    ?? gate {
-        T g → {
-            ? == 1 ( nurl_str_eq ( string_data g ) `1` ) { ( __live_roundtrip ) } { ( nurl_print `live unix round-trip skipped\n` ) }
-            ( string_free g )
-        }
-        F → ( nurl_print `live unix round-trip skipped\n` )
-    }
+    ( __live_roundtrip )
     ^ 0
 }
 
@@ -139,7 +132,7 @@ $ `stdlib/ext/env.nu`
                             }
                             ( unix_close_conn client )
                         }
-                        F _ → ( nurl_print `live connect err\n` )
+                        F e → { ( nurl_print `live connect err=` ) ( nurl_print ( unix_err_name e ) ) ( nurl_print `\n` ) }
                     }
                     : i _j ( thread_join th )
                 }
@@ -147,7 +140,7 @@ $ `stdlib/ext/env.nu`
             }
             ( unix_close_listener listener )
         }
-        F _ → ( nurl_print `live listen err\n` )
+        F e → { ( nurl_print `live listen err=` ) ( nurl_print ( unix_err_name e ) ) ( nurl_print `\n` ) }
     }
     ( string_free path )
 }

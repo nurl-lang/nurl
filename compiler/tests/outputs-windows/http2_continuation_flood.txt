@@ -2,4 +2,4 @@ COMPILE OK
 LINK OK
 EXIT 0
 OUTPUT
-http2_continuation_flood skipped (NURL_NET_TESTS != 1)
+continuation-flood defended

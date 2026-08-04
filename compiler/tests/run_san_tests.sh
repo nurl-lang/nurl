@@ -10,13 +10,34 @@
 #     3. Run; capture stdout (test output) and stderr (sanitizer
 #        reports) separately.
 #     4. Per-test verdict:
-#          - PASS:        exit code 0 (or deliberate non-zero) AND
-#                         stderr empty of sanitizer markers.
+#          - PASS:        ran to completion AND stderr empty of
+#                         sanitizer markers. A non-zero exit is fine;
+#                         several tests exit non-zero deliberately and
+#                         the code itself is baselined by run_tests.sh.
 #          - SAN_FAIL:    stderr contains ASan/UBSan/LSan output.
+#          - TIMEOUT:     the test did not finish within $TIMEOUT.
 #          - COMPILE_FAIL / LINK_FAIL: as the normal runner.
 #     5. Print per-test summary + grand totals + the first ~40
 #        lines of each sanitizer report so you can triage without
 #        diving into individual log files.
+#
+#  EVERY non-PASS verdict fails the run. This used to be true of
+#  SAN_FAIL alone, which made the script an unreliable narrator in
+#  three distinct ways, all of which read as green:
+#    * a hung test writes nothing, so the sanitizer-marker scan finds
+#      a clean stderr and scored it PASS — a deadlock, precisely what
+#      the fiber park/unpark paths risk, was indistinguishable from
+#      success;
+#    * COMPILE_FAIL/LINK_FAIL were counted and printed but did not
+#      affect the exit code, so a test that stopped building at all
+#      was quieter than one that built and misbehaved;
+#    * the borrow_* branch had its verdicts inverted — a borrow
+#      violation the checker correctly rejected was labelled
+#      COMPILE_FAIL, and the actual regression (checker goes silent)
+#      was labelled PASS.
+#  Under a sanitizer, "no output" is the shape of both perfect health
+#  and total failure. Nothing may be scored on the absence of a signal
+#  alone.
 #
 #  Parallelism mirrors run_tests.sh: a `run_one_san` function is
 #  exported and fanned out with `xargs -P`. The per-test work touches
@@ -35,16 +56,30 @@
 #  LSan would report as "leaks". Set LSAN_DETECT_LEAKS=1 to enable
 #  if you want to triage them anyway.
 #
+#  Which tests run here is decided by test_skips.sh, shared verbatim
+#  with run_tests.sh — see that file for why it is shared.
+#
 #  Environment toggles:
 #     NURL_SAN_JOBS=N     worker count (default nproc)
 #     LSAN_DETECT_LEAKS=1 enable leak detection
-#     TIMEOUT=N           per-test timeout in seconds (default 30 —
-#                         sanitized binaries run ~3× slower)
+#     TIMEOUT=N           per-test timeout in seconds
+#     NURL_HTTP_TESTS=1 / NURL_NET_TESTS=1   (see test_skips.sh)
 # ============================================================
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
+OUTDIR="$SCRIPT_DIR/outputs"
+
+# Tests that `$`-import a helper module spell the path repo-root-relative,
+# and nurlc resolves imports against the CWD — anchor to the repo root so
+# the runner works from any directory (mirrors run_tests.sh).
+cd "$ROOT_DIR" || { echo "ERROR: cannot cd to $ROOT_DIR" >&2; exit 2; }
+
+# Environment gating (network, optional native libs, platform, helper
+# modules) — one definition, shared with the normal runner.
+# shellcheck source=compiler/tests/test_skips.sh
+. "$SCRIPT_DIR/test_skips.sh"
 
 NURLC="$ROOT_DIR/build/nurlc"
 RUNTIME="$ROOT_DIR/stdlib/runtime.o"
@@ -100,7 +135,12 @@ WORKDIR="$ROOT_DIR/build/tests-san"
 LOGDIR="$WORKDIR/logs"
 mkdir -p "$WORKDIR" "$LOGDIR"
 
-TIMEOUT="${TIMEOUT:-30}"
+# Generous on purpose. A timeout is now a hard failure, so this bound
+# has exactly one job: distinguish a genuine hang from a slow test.
+# Sanitized binaries run ~3× slower and every worker is competing with
+# concurrent sanitizer links, so a bound tight enough to be "useful"
+# would only ever buy flaky red. A real deadlock never finishes.
+TIMEOUT="${TIMEOUT:-120}"
 JOBS="${NURL_SAN_JOBS:-$(nproc 2>/dev/null || echo 4)}"
 
 # Leak detection off by default — see file header.
@@ -118,9 +158,38 @@ LSAN_ROOT_OPTS=""
 export ASAN_OPTIONS="${ASAN_OPTIONS:-${LSAN_ROOT_OPTS}detect_leaks=${LSAN_DETECT_LEAKS:-0}:abort_on_error=0:halt_on_error=0:print_stacktrace=1}"
 export UBSAN_OPTIONS="${UBSAN_OPTIONS:-print_stacktrace=1:halt_on_error=0}"
 
-# should_fail_* are compile-time negative tests; nurlfmt_idempotent is a
-# shell round-trip, not a binary; *_mod are helper modules without main().
-SKIP_RE='(should_fail_|diag_|nurlfmt_idempotent|alias_rewrite_types_mod)'
+# The one definition of "a sanitizer said something": ASan
+# "AddressSanitizer:", UBSan "runtime error:" /
+# "UndefinedBehaviorSanitizer:", LSan "LeakSanitizer:". Checked against
+# every golden in outputs/ — none contains any of these strings, so a
+# match cannot be a test legitimately printing one.
+SAN_MARKERS='AddressSanitizer|UndefinedBehaviorSanitizer|runtime error:|LeakSanitizer'
+
+# ── negative tests: ask the golden, not the name ────────────────
+# A test whose golden's first line is "COMPILE FAIL" is one the corpus
+# expects the compiler to REJECT — should_fail_*, diag_*, borrow_*, and
+# whatever tomorrow's negative test is called. It never links, so there
+# is no program for ASan to instrument; but the compiler itself IS
+# instrumented in this build, so its diagnostic and error-recovery paths
+# are exactly what we want to run under the sanitizers here (a scope
+# leak in multi-error recovery is a bug this project has actually
+# shipped — PR #505). So: compile it, scan the diagnostics for
+# sanitizer markers, and stop there.
+#
+# Deriving this from the golden rather than a name prefix is the same
+# "gate on what a test DOES" rule test_skips.sh applies to the network
+# tests, and it was already wrong here: the old prefix list missed
+# struct_lit_int_field_clash — a negative test with no distinguishing
+# prefix — which spent its life reported as a spurious COMPILE_FAIL.
+# It also listed nurlfmt_idempotent, which is a .sh and can never match
+# the *.nu glob, and alias_rewrite_types_mod, which the shared *_mod
+# rule already covers. The golden cannot drift out of sync with itself.
+is_negative_test() {
+    local gold="$OUTDIR/$1.txt" first
+    [[ -f "$gold" ]] || return 1
+    IFS= read -r first < "$gold" || return 1
+    [[ "${first%$'\r'}" == "COMPILE FAIL" ]]
+}
 
 # ── per-test worker (exported, fanned out with xargs -P) ─────────
 # Echoes a single "<name> <VERDICT>" line; writes its own logs under
@@ -129,27 +198,45 @@ run_one_san() {
     local name="$1"
     local src="$SCRIPT_DIR/$name.nu"
 
-    if [[ "$name" =~ $SKIP_RE ]]; then echo "$name SKIP"; return; fi
+    if [[ -n "$(is_skipped "$name")" ]]; then echo "$name SKIP"; return; fi
 
     local ll="$WORKDIR/$name.ll"
     local bin="$WORKDIR/$name"
     local stdout_log="$LOGDIR/$name.stdout"
     local stderr_log="$LOGDIR/$name.stderr"
+    rm -f "$LOGDIR/$name.hang"
 
-    # borrow_* — borrow-checker baseline tests with *deliberate*
-    # use-after-free / double-free patterns. The normal runner compiles
-    # them with --borrowck and never links/runs them; mirror that here so
-    # ASan isn't asked to adjudicate code documented to be unsafe. A
-    # compile that produces no diagnostic at all is the real regression.
-    if [[ "$name" == borrow_* ]]; then
-        if ! "$NURLC" --borrowck "$src" > "$ll" 2>"$stderr_log"; then
-            echo "$name COMPILE_FAIL"; return
+    # ── negative tests: compile only, then judge the diagnostics ──
+    # The borrow_* subset carries deliberate use-after-free / double-free
+    # patterns, so ASan must not be asked to adjudicate code documented
+    # to be unsafe — and it isn't, because none of these ever link. The
+    # flags mirror run_tests.sh: borrow_strict_* only fire under the
+    # stricter checker. WHETHER the compile failed, and with what text,
+    # is baselined by run_tests.sh against the golden; the only question
+    # asked here is whether the compiler stayed memory-clean saying it.
+    if is_negative_test "$name"; then
+        local bflag=""
+        [[ "$name" == borrow_* ]]        && bflag="--borrowck"
+        [[ "$name" == borrow_strict_* ]] && bflag="--strict-borrowck"
+        # shellcheck disable=SC2086
+        "$NURLC" $bflag "$src" > "$ll" 2>"$stderr_log"
+        if grep -qE "$SAN_MARKERS" "$stderr_log"; then
+            echo "$name SAN_FAIL"; return
         fi
         echo "$name PASS"; return
     fi
 
-    if ! "$NURLC" "$src" > "$ll" 2>/dev/null; then
+    # The compiler is instrumented in this build too, so its own stderr is
+    # a sanitizer channel — it used to go to /dev/null, silently discarding
+    # any report nurlc produced while compiling any of the ~470 positive
+    # tests. Kept in its own log because the run phase overwrites
+    # $stderr_log, which would have swallowed it a second time.
+    local cerr="$LOGDIR/$name.compile.stderr"
+    if ! "$NURLC" "$src" > "$ll" 2>"$cerr"; then
         echo "$name COMPILE_FAIL"; return
+    fi
+    if grep -qE "$SAN_MARKERS" "$cerr"; then
+        cp -f "$cerr" "$stderr_log"; echo "$name SAN_FAIL"; return
     fi
 
     # shellcheck disable=SC2086
@@ -158,20 +245,79 @@ run_one_san() {
         echo "$name LINK_FAIL"; return
     fi
 
-    ( cd "$WORKDIR" && timeout "${TIMEOUT}s" "./$name" >"$stdout_log" 2>"$stderr_log" )
+    # Each test runs in its OWN scratch dir, as in run_tests.sh: relative-path
+    # file side effects (a test writing `out.txt`, creating `pkg/`, …) would
+    # otherwise collide with a sibling running concurrently — every worker
+    # shared one CWD here. The binary is hard-linked in and invoked as
+    # `./$name` so argv[0] stays exactly `./$name` (some tests print it).
+    local rundir="$WORKDIR/run/$name"
+    rm -rf "$rundir"; mkdir -p "$rundir"
+    ln "$bin" "$rundir/$name" 2>/dev/null || cp "$bin" "$rundir/$name"
+    local rc=0
+    # Run under our own watchdog rather than `timeout`, for one reason:
+    # `timeout` kills the process and leaves nothing to look at, and a
+    # hang reported with no evidence is only marginally better than a
+    # hang scored PASS. The next reader still cannot tell a deadlock in
+    # the program from one in the sanitizer's own at-exit leak check —
+    # and stdout cannot settle it either, because it is a file here, so
+    # a killed process loses its buffer whether or not main finished.
+    # /proc answers it without gdb: "anon_pipe_read" in the main thread
+    # is LeakSanitizer's stop-the-world tracer, "futex_wait" across
+    # several threads is our own join. Dump that, THEN kill.
+    #
+    # SIGKILL, not SIGTERM: a test spinning in a tight loop with no
+    # handler ignores SIGTERM for as long as the machine is up — four
+    # such processes, mutation-test leftovers spinning inside
+    # tcpseg_parse's option loop, were found burning a core each 12
+    # hours after the run that started them. Declaring a hang is not the
+    # same as ending it.
+    ( cd "$rundir" && exec "./$name" >"$stdout_log" 2>"$stderr_log" ) &
+    local pid=$!
+    (   sleep "$TIMEOUT"
+        kill -0 "$pid" 2>/dev/null || exit 0
+        {   echo "hung after ${TIMEOUT}s (pid $pid) — thread states at the kill:"
+            for t in /proc/"$pid"/task/*; do
+                [[ -d "$t" ]] || continue
+                printf '  tid %-8s state=%-2s wchan=%-24s comm=%s\n' \
+                    "${t##*/}" \
+                    "$(awk '{print $3}' "$t/stat" 2>/dev/null)" \
+                    "$(cat "$t/wchan" 2>/dev/null)" \
+                    "$(cat "$t/comm" 2>/dev/null)"
+            done
+        } >"$LOGDIR/$name.hang" 2>/dev/null
+        kill -KILL "$pid" 2>/dev/null
+    ) & local watchdog=$!
+    wait "$pid" 2>/dev/null || rc=$?
+    kill "$watchdog" 2>/dev/null; wait "$watchdog" 2>/dev/null
+    # The watchdog, not the exit status, is what decides "hung": a test
+    # killed for hanging exits 137, and 137 is also a legal exit status
+    # for a test that killed itself on purpose.
+    [[ -f "$LOGDIR/$name.hang" ]] && rc=124
+    rm -rf "$rundir"
 
     # Sanitizer-marker scan: ASan "AddressSanitizer:", UBSan
     # "runtime error:" / "UndefinedBehaviorSanitizer:", LSan "LeakSanitizer:".
-    if grep -qE "AddressSanitizer|UndefinedBehaviorSanitizer|runtime error:|LeakSanitizer" "$stderr_log"; then
+    #
+    # Checked before the timeout so the verdict names the root cause: with
+    # halt_on_error=0 a reported error does not stop the program, so a test
+    # can report AND then hang, and the report is the actionable half. The
+    # hang is not lost — the watchdog's .hang dump makes the report section
+    # say so, which matters when the memory bug is fixed and the hang is
+    # still there.
+    if grep -qE "$SAN_MARKERS" "$stderr_log"; then
         echo "$name SAN_FAIL"; return
+    fi
+    if (( rc == 124 )); then
+        echo "$name TIMEOUT"; return
     fi
 
     # A non-zero exit with no sanitizer report is fine here — several
-    # tests exit non-zero deliberately; the sanitizers caught nothing.
+    # tests exit non-zero deliberately, and the exit code itself is
+    # baselined by run_tests.sh; the sanitizers caught nothing.
     echo "$name PASS"
 }
-export -f run_one_san
-export SCRIPT_DIR WORKDIR LOGDIR NURLC RUNTIME CLANG LINK_LIBS TIMEOUT SKIP_RE
+export -f run_one_san is_negative_test
+export SCRIPT_DIR OUTDIR WORKDIR LOGDIR NURLC RUNTIME CLANG LINK_LIBS TIMEOUT SAN_MARKERS
 
 # ── collect the test set ────────────────────────────────────────
 shopt -s nullglob
@@ -185,15 +331,22 @@ for src in "${tests[@]}"; do names+=("$(basename "$src" .nu)"); done
 # LSAN_DETECT_LEAKS=1 (the whole corpus can't run leak-on — the compiler's
 # process-lifetime arenas and the brevity tests leak by design). No args →
 # the whole corpus, exactly as before.
+#
+# EVERY requested name must exist. Tolerating the missing ones and
+# running the rest would let the leak gate quietly shrink — rename one
+# pinned test and the gate keeps reporting green over a smaller set,
+# which is the failure mode this whole script is being fixed for.
 if [[ $# -gt 0 ]]; then
-    declare -a filtered=()
+    declare -a filtered=() unknown=()
     for want in "$@"; do
+        local_found=0
         for have in "${names[@]}"; do
-            [[ "$have" == "$want" ]] && filtered+=("$have")
+            [[ "$have" == "$want" ]] && { filtered+=("$have"); local_found=1; break; }
         done
+        (( local_found )) || unknown+=("$want")
     done
-    if [[ ${#filtered[@]} -eq 0 ]]; then
-        echo "ERROR: none of the requested tests exist: $*" >&2; exit 2
+    if [[ ${#unknown[@]} -gt 0 ]]; then
+        echo "ERROR: requested tests do not exist: ${unknown[*]}" >&2; exit 2
     fi
     names=("${filtered[@]}")
 fi
@@ -212,16 +365,18 @@ LC_ALL=C sort "$VERDICTS" | while read -r name verdict; do
     printf '%-44s %s\n' "$name" "$verdict"
 done
 
-n_total=0; n_pass=0; n_san_fail=0; n_compile_fail=0; n_link_fail=0; n_skip=0
-declare -a san_fails=()
+n_total=0; n_pass=0; n_san_fail=0; n_compile_fail=0; n_link_fail=0
+n_skip=0; n_timeout=0
+declare -a san_fails=() other_fails=()
 while read -r name verdict; do
     n_total=$((n_total + 1))
     case "$verdict" in
         PASS)         n_pass=$((n_pass + 1)) ;;
         SKIP)         n_skip=$((n_skip + 1)) ;;
         SAN_FAIL)     n_san_fail=$((n_san_fail + 1)); san_fails+=("$name") ;;
-        COMPILE_FAIL) n_compile_fail=$((n_compile_fail + 1)) ;;
-        LINK_FAIL)    n_link_fail=$((n_link_fail + 1)) ;;
+        TIMEOUT)      n_timeout=$((n_timeout + 1));      other_fails+=("$name TIMEOUT") ;;
+        COMPILE_FAIL) n_compile_fail=$((n_compile_fail + 1)); other_fails+=("$name COMPILE_FAIL") ;;
+        LINK_FAIL)    n_link_fail=$((n_link_fail + 1));  other_fails+=("$name LINK_FAIL") ;;
     esac
 done < "$VERDICTS"
 
@@ -231,6 +386,7 @@ echo "  total      : $n_total"
 echo "  PASS       : $n_pass     (includes tests with non-zero deliberate exit)"
 echo "  SKIP       : $n_skip"
 echo "  SAN_FAIL   : $n_san_fail     (AddressSanitizer / UBSan / LSan caught a problem)"
+echo "  TIMEOUT    : $n_timeout     (did not finish in ${TIMEOUT}s — treat as a hang)"
 echo "  COMPILE    : $n_compile_fail"
 echo "  LINK       : $n_link_fail"
 echo "  logs       : $LOGDIR     (jobs=$JOBS)"
@@ -241,9 +397,34 @@ if (( n_san_fail > 0 )); then
     for nm in "${san_fails[@]}"; do
         echo
         echo "▶ $nm"
+        [[ -f "$LOGDIR/$nm.hang" ]] && \
+            echo "  (this test ALSO timed out — the hang outlives the report below)"
         head -40 "$LOGDIR/$nm.stderr"
         echo "  …(see $LOGDIR/$nm.stderr for the full report)"
     done
+fi
+
+if (( ${#other_fails[@]} > 0 )); then
+    echo
+    echo "── Tests that did not produce a verdict to sanitize ──"
+    printf '  %s\n' "${other_fails[@]}"
+    # A hang with no evidence is only marginally better than a hang
+    # scored PASS: the next reader still cannot tell a deadlock in the
+    # program from one in the sanitizer's at-exit leak check. What the
+    # test managed to WRITE before it stopped separates the two — a test
+    # that printed its last line and then hung was past main's work, so
+    # the hang is in teardown or in the leak check, not in the run.
+    for nm in "${other_fails[@]%% *}"; do
+        [[ -f "$LOGDIR/$nm.hang" ]] || continue
+        echo
+        sed 's/^/  /' "$LOGDIR/$nm.hang"
+    done
+fi
+
+# Anything that is not PASS or SKIP fails the run. See the file header:
+# scoring on the absence of a sanitizer report is exactly how a hang, a
+# broken build and an inverted borrow verdict all read as success.
+if (( n_san_fail + n_timeout + n_compile_fail + n_link_fail > 0 )); then
     exit 1
 fi
 

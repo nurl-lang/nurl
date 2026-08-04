@@ -2,15 +2,19 @@
 //
 // Deterministic by construction: every observation happens AFTER the
 // joining thread has returned, so there's no scheduler-dependent
-// interleaving in the output. Live thread / mutex / cond exercise is
-// gated behind NURL_NET_TESTS=1 (same convention as net_loopback.nu /
-// http_server_seq.nu) — pthread / Win32 thread spawn is occasionally
-// flaky on heavily loaded CI hosts; the gate keeps run_tests.sh's
-// default green path deterministic.
+// interleaving in the output.
+//
+// The live thread / mutex / cond exercise used to be opt-in, on the
+// grounds that "thread spawn is occasionally flaky on heavily loaded CI
+// hosts". That claim was never measured, and it cost the runtime's
+// whole concurrency surface its CI coverage. Measured: four full-suite
+// runs at 24-way parallelism against 24 spinning CPU hogs on a 12-core
+// box — load average 34–42 — all 604 tests green, this one included.
+// Determinism here comes from the join-before-observe discipline
+// above, not from the test being skipped.
+// requires: live
 
 $ `stdlib/std/thread.nu`
-$ `stdlib/ext/env.nu`
-$ `stdlib/core/string.nu`
 
 : ~ i shared_counter 0
 : ~ i ping_flag 0
@@ -101,9 +105,8 @@ $ `stdlib/core/string.nu`
 }
 
 @ main → i {
-    // ThreadErr name table — sanity check, exercised unconditionally so
-    // a tag renumber blows the test up at link-comparison time even when
-    // NURL_NET_TESTS is off.
+    // ThreadErr name table — sanity check, so a tag renumber blows the
+    // test up at link-comparison time.
     ( nurl_print `thread_err_name(ThreadCreate)=` )
     ( nurl_print ( thread_err_name # ThreadErr ThreadCreate ) )
     ( nurl_print `\n` )
@@ -111,13 +114,6 @@ $ `stdlib/core/string.nu`
     ( nurl_print ( thread_err_name # ThreadErr ThreadOther ) )
     ( nurl_print `\n` )
 
-    : ?String gate ( env_get `NURL_NET_TESTS` )
-    ?? gate {
-        T s → {
-            ( string_free s )
-            ( run_live_thread_tests )
-        }
-        F → { ( nurl_print `live thread tests skipped (set NURL_NET_TESTS=1 to enable)\n` ) }
-    }
+    ( run_live_thread_tests )
     ^ 0
 }

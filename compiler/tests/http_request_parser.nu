@@ -3,9 +3,8 @@
 // `( Vec u )` buffers (assembled from raw `s` literals via
 // `bytes_extend_str`) through `parse_request_head` and prints the
 // outcome of each. Intentionally uses no socket, so the test is
-// deterministic on every CI host and runs without the
-// `NURL_HTTP_TESTS=1` gate (run_tests.sh exempts the
-// `http_request_parser` name explicitly).
+// deterministic on every CI host and declares no requirements at all —
+// pure is the default (see test_skips.sh).
 //
 // What we cover here:
 //   * Well-formed GET — request line + headers parsed; case-insens

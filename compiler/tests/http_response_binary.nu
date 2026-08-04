@@ -5,7 +5,8 @@
 // client reads it with http_body_bytes and confirms the full length and
 // the embedded NUL survive (http_body_str would truncate at byte 2).
 // Results funnel through globals so the two-thread output is deterministic.
-// Live socket exercise gated behind NURL_NET_TESTS=1.
+// Opens a loopback socket, hence `requires: live`.
+// requires: live
 
 $ `stdlib/std/net.nu`
 $ `stdlib/std/thread.nu`
@@ -14,9 +15,7 @@ $ `stdlib/ext/http.nu`
 $ `stdlib/ext/http_server.nu`
 $ `stdlib/ext/http_response.nu`
 $ `stdlib/ext/http_request.nu`
-$ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
-$ `stdlib/ext/env.nu`
 
 : ~ i g_len -1
 : ~ i g_nul -1
@@ -74,10 +73,6 @@ $ `stdlib/ext/env.nu`
 }
 
 @ main → i {
-    : ?String gate ( env_get `NURL_NET_TESTS` )
-    ?? gate {
-        T s → { ( string_free s ) ( run_test ) }
-        F → { ( nurl_print `response binary test skipped (set NURL_NET_TESTS=1)\n` ) }
-    }
+    ( run_test )
     ^ 0
 }
