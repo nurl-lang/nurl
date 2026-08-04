@@ -45,12 +45,12 @@ long nl_syscall6(long n, long a, long b, long c, long d, long e, long f) {
 #define MAP_PRIVATE   0x02
 #define MAP_ANONYMOUS 0x20
 
-static int nl_errno_slot;
+int nl_errno_slot;
 int *__errno_location(void) { return &nl_errno_slot; }
 
 /* -errno in, -1 out with errno set — the libc convention the runtime
  * expects from read/write/open. */
-static long nl_ret(long r) {
+long nl_ret(long r) {
     if (r < 0 && r > -4096) { nl_errno_slot = (int)-r; return -1; }
     return r;
 }
@@ -83,3 +83,68 @@ void nl_exit_group(int code) {
     nl_syscall6(SYS_exit_group, code, 0, 0, 0, 0, 0);
     for (;;) { }                       /* unreachable; keeps `noreturn` true */
 }
+
+/* ── the libc-named wrappers ────────────────────────────────────
+ * Everything above is internal (nl_*); everything below carries the
+ * name the compiler emits, because NURL's `& `libc` @ …` declarations
+ * call these directly. They are one syscall each — no libc logic, no
+ * buffering, no errno translation beyond the -errno split above — so
+ * the unikernel replaces them with device work and keeps every caller.
+ *
+ * The list is measured: it is what the corpus asked for when run under
+ * nolibc, minus the ones that need more than a syscall (execvp's PATH
+ * search, realpath, mkstemp, sigaction's restorer trampoline), which
+ * are their own work rather than a line here.
+ */
+#define SYS_open_       2
+#define SYS_stat_       4
+#define SYS_poll_       7
+#define SYS_madvise_   28
+#define SYS_dup2_      33
+#define SYS_pipe_      22
+#define SYS_getpid_    39
+#define SYS_fork_      57
+#define SYS_wait4_     61
+#define SYS_fcntl_     72
+#define SYS_ioctl_     16
+#define SYS_access_    21
+#define SYS_nanosleep_ 35
+#define SYS_rename_    82
+#define SYS_mkdir_     83
+#define SYS_rmdir_     84
+#define SYS_unlink_    87
+#define SYS_chdir_     80
+#define SYS_chmod_     90
+#define SYS_exit_      60
+#define SYS_clock_gettime_ 228
+
+long long read(int fd, void *buf, unsigned long n)  { return nl_read(fd, buf, n); }
+long long write(int fd, const void *buf, unsigned long n) { return nl_write(fd, buf, n); }
+int   close(int fd)                                 { return nl_close(fd); }
+int   open(const char *p, int fl, int mode)         { return nl_open(p, fl, mode); }
+long long lseek(int fd, long long off, int whence)  { return nl_lseek(fd, off, whence); }
+int   munmap(void *p, unsigned long len)            { return nl_unmap(p, len); }
+void *mmap(void *addr, unsigned long len, int prot, int flags, int fd, long off) {
+    long r = nl_syscall6(SYS_mmap, (long)addr, (long)len, prot, flags, fd, off);
+    if (r < 0 && r > -4096) { nl_errno_slot = (int)-r; return (void *)-1; }
+    return (void *)r;
+}
+int   getpid(void)                                  { return (int)nl_ret(nl_syscall6(SYS_getpid_,0,0,0,0,0,0)); }
+int   fork(void)                                    { return (int)nl_ret(nl_syscall6(SYS_fork_,0,0,0,0,0,0)); }
+int   waitpid(int pid, int *status, int opts)       { return (int)nl_ret(nl_syscall6(SYS_wait4_, pid, (long)status, opts, 0, 0, 0)); }
+int   pipe(int fds[2])                              { return (int)nl_ret(nl_syscall6(SYS_pipe_, (long)fds, 0, 0, 0, 0, 0)); }
+int   dup2(int a, int b)                            { return (int)nl_ret(nl_syscall6(SYS_dup2_, a, b, 0, 0, 0, 0)); }
+int   poll(void *fds, unsigned long n, int timeout) { return (int)nl_ret(nl_syscall6(SYS_poll_, (long)fds, (long)n, timeout, 0, 0, 0)); }
+int   fcntl(int fd, int cmd, long arg)              { return (int)nl_ret(nl_syscall6(SYS_fcntl_, fd, cmd, arg, 0, 0, 0)); }
+int   ioctl(int fd, unsigned long req, long arg)    { return (int)nl_ret(nl_syscall6(SYS_ioctl_, fd, (long)req, arg, 0, 0, 0)); }
+int   access(const char *p, int mode)               { return (int)nl_ret(nl_syscall6(SYS_access_, (long)p, mode, 0, 0, 0, 0)); }
+int   unlink(const char *p)                         { return (int)nl_ret(nl_syscall6(SYS_unlink_, (long)p, 0, 0, 0, 0, 0)); }
+int   mkdir(const char *p, int mode)                { return (int)nl_ret(nl_syscall6(SYS_mkdir_, (long)p, mode, 0, 0, 0, 0)); }
+int   rmdir(const char *p)                          { return (int)nl_ret(nl_syscall6(SYS_rmdir_, (long)p, 0, 0, 0, 0, 0)); }
+int   rename(const char *a, const char *b)          { return (int)nl_ret(nl_syscall6(SYS_rename_, (long)a, (long)b, 0, 0, 0, 0)); }
+int   chdir(const char *p)                          { return (int)nl_ret(nl_syscall6(SYS_chdir_, (long)p, 0, 0, 0, 0, 0)); }
+int   chmod(const char *p, int mode)                { return (int)nl_ret(nl_syscall6(SYS_chmod_, (long)p, mode, 0, 0, 0, 0)); }
+int   madvise(void *p, unsigned long len, int adv)  { return (int)nl_ret(nl_syscall6(SYS_madvise_, (long)p, (long)len, adv, 0, 0, 0)); }
+int   nanosleep(const void *req, void *rem)         { return (int)nl_ret(nl_syscall6(SYS_nanosleep_, (long)req, (long)rem, 0, 0, 0, 0)); }
+int   clock_gettime(int clk, void *ts)              { return (int)nl_ret(nl_syscall6(SYS_clock_gettime_, clk, (long)ts, 0, 0, 0, 0)); }
+void  _exit(int code)                               { nl_exit_group(code); for (;;) { } }
