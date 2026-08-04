@@ -1,0 +1,94 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+seq_lt basic: YES
+seq_gt basic: YES
+seq_lt not reflexive: YES
+seq_leq reflexive: YES
+wrap: ffffff f0 < 10: YES
+wrap: 10 > fffffff0: YES
+wrap add crosses zero: YES
+wrap diff is small: YES
+wrap diff negative: YES
+half-space boundary: YES
+beyond half-space flips: YES
+in window basic: YES
+window excludes end: YES
+window includes start: YES
+zero window holds nothing: YES
+window wraps: YES
+segment parses: YES
+src port: YES
+dst port: YES
+seq: YES
+ack: YES
+payload len: YES
+no options on non-SYN: YES
+seq_len counts payload: YES
+corrupt segment rejected: YES
+SYN parses: YES
+SYN carries options: YES
+MSS option read: YES
+window scale read: YES
+SYN occupies 1 seq: YES
+absent wscale is -1, not 0: YES
+client sends one SYN: YES
+client is SYN_SENT: YES
+server is SYN_RCVD: YES
+server sends SYN-ACK: YES
+server learned client MSS: YES
+client is ESTABLISHED: YES
+client ACKs the SYN-ACK: YES
+server is ESTABLISHED: YES
+handshake produced an RTT sample: YES
+write accepts all 24 bytes: YES
+one data segment emitted: YES
+server queued 24 bytes: YES
+read drains 24: YES
+receive queue now empty: YES
+bytes arrive intact: YES
+client send queue drained by ACK: YES
+retransmit timer disarmed: YES
+write 10 more: YES
+data segment emitted: YES
+rtx timer armed on send: YES
+nothing retransmits before RTO: YES
+RTO fires a retransmit: YES
+retransmit count incremented: YES
+RTO doubled on backoff: YES
+RTO respects the 200ms floor: YES
+server got the retransmitted data: YES
+client queue drained after recovery: YES
+rtx count reset by good ACK: YES
+retransmit cleared the RTT sample: YES
+SRTT unchanged by ambiguous ACK: YES
+write while window is zero: YES
+zero window blocks transmission: YES
+persist timer emits a probe: YES
+probe is exactly one byte: YES
+probe interval backs off: YES
+reopened window releases data: YES
+stale segment answered with an ACK: YES
+stale segment did not close us: YES
+established connection is up before RST: YES
+in-window RST tears it down: YES
+RST is not answered with a segment: YES
+zero-length option terminates the walk: YES
+window update applied: YES
+stale ACK does not shrink the window: YES
+second pair established: YES
+active close sends FIN: YES
+closer is FIN_WAIT_1: YES
+peer is CLOSE_WAIT: YES
+peer saw the FIN: YES
+closer is FIN_WAIT_2: YES
+peer sends its FIN: YES
+peer is LAST_ACK: YES
+closer is TIME_WAIT: YES
+peer is CLOSED: YES
+TIME_WAIT holds before 2MSL: YES
+TIME_WAIT expires after 2MSL: YES
+RST to SYN_SENT closes it: YES
+unanswered SYN gives up eventually: YES
+gave up within max retries: YES

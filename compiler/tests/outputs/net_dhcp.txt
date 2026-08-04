@@ -1,0 +1,66 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+starts unbound: YES
+first tick sends DISCOVER: YES
+discover broadcasts: YES
+discover src is 0.0.0.0: YES
+no immediate resend: YES
+resend after backoff: YES
+backoff doubled (no send at 6s): YES
+resend at 12s: YES
+own discover parses: YES
+discover op is request: YES
+discover xid: YES
+discover carries our mac: YES
+discover msg type: YES
+foreign xid parses as a message: YES
+foreign xid ignored: YES
+foreign chaddr ignored: YES
+still selecting: YES
+offer parses: YES
+offer yiaddr: YES
+offer server id: YES
+offer accepted: YES
+now requesting: YES
+not bound yet: YES
+request retransmits: YES
+ack accepted: YES
+bound: YES
+got our address: YES
+got subnet mask: YES
+got router: YES
+got dns: YES
+T1 defaults to lease/2: YES
+T2 defaults to 7/8 lease: YES
+lease deadline: YES
+bound is quiet: YES
+still quiet just before T1: YES
+T1 triggers renew: YES
+state renewing: YES
+renew unicasts to server: YES
+renew src is our address: YES
+renew still counts as bound: YES
+renewal ack accepted: YES
+back to bound: YES
+lease extended: YES
+explicit T1 honoured: YES
+renewing again at T1: YES
+T2 triggers rebind: YES
+state rebinding: YES
+rebind broadcasts: YES
+rebind keeps our address as src: YES
+expiry drops the address: YES
+expiry returns to INIT: YES
+no longer bound: YES
+INIT re-discovers: YES
+bound before nak: YES
+nak accepted: YES
+nak drops address at once: YES
+nak returns to INIT: YES
+short message rejected: YES
+bad magic cookie rejected: YES
+overlong option terminates walk: YES
+missing lease → 1h default: YES
+bound with defaulted lease: YES
