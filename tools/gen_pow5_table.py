@@ -21,8 +21,14 @@ import sys
 
 POW5_BITCOUNT = 125
 POW5_INV_BITCOUNT = 125
-POW5_N = 326       # 5^i for i in [0, 325]  — covers e2 down to -1076
-POW5_INV_N = 292   # 5^-i for i in [0, 291] — covers e2 up to 971
+POW5_N = 326       # 5^i for i in [0, 325]  — the formatter needs 325 at
+                   # e2 = -1076; the parser needs 320 at 10^320
+POW5_INV_N = 370   # 5^-i for i in [0, 369]. The formatter only reaches
+                   # 291 (e2 = 971); the parser reads this table for every
+                   # negative decimal exponent it is handed, down to the
+                   # -369 its own range check lets through — one table for
+                   # both directions of the conversion, at 16 bytes an
+                   # entry, rather than a second one for the parser.
 
 HEADER = """/*
  * NURL runtime — stdlib/nurl_pow5_table.h   (GENERATED, do not edit)
@@ -71,7 +77,9 @@ def main():
                         n5=POW5_N, n5inv=POW5_INV_N,
                         kb=round((POW5_N + POW5_INV_N) * 16 / 1024, 1))
     out += "\n#define NURL_POW5_BITCOUNT     %d\n" % POW5_BITCOUNT
-    out += "#define NURL_POW5_INV_BITCOUNT %d\n\n" % POW5_INV_BITCOUNT
+    out += "#define NURL_POW5_INV_BITCOUNT %d\n" % POW5_INV_BITCOUNT
+    out += "#define NURL_POW5_N            %d\n" % POW5_N
+    out += "#define NURL_POW5_INV_N        %d\n\n" % POW5_INV_N
     out += emit("NURL_POW5", pow5, POW5_N) + "\n\n"
     out += emit("NURL_POW5_INV", pow5_inv, POW5_INV_N) + "\n"
 
