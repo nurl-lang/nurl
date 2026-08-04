@@ -2770,19 +2770,40 @@ void      nurl_runtime_init(long long worker_count);
 void      nurl_runtime_run(void);
 void      nurl_runtime_shutdown(void);
 
-/* The stackful fiber runtime needs ucontext (getcontext/makecontext/
- * swapcontext). musl omits it (linker errors on include) and has no
- * detection macro, so we ALLOWLIST the libcs that ship a working
- * ucontext rather than blocklist musl: glibc, macOS, and the BSDs that
- * keep makecontext/swapcontext (FreeBSD / NetBSD / DragonFly — NOT
- * OpenBSD, which removed swapcontext). Everything else (musl, wasi,
- * Win32) falls through to the stub block. macOS gates ucontext behind
- * _XOPEN_SOURCE. Keep the twin gate below (§reactor) in sync. */
-#if !defined(__wasi__) && !defined(_WIN32) && (defined(__GLIBC__) || defined(__APPLE__) || defined(__FreeBSD__) || defined(__NetBSD__) || defined(__DragonFly__))
+/* Fiber platform gate — NURL_HAVE_FIBERS. The runtime needs pthreads,
+ * mmap and a stackful context switch; the first two are POSIX, the
+ * third is the interesting one, and there are two backends:
+ *
+ *   NURL_FIBER_OWN_CTX — runtime_ctx.c's switch. Depends on the
+ *     instruction set alone, so it works where ucontext does not
+ *     (musl ships none) and skips swapcontext's sigprocmask syscall.
+ *     Preferred wherever the primitive exists.
+ *
+ *   ucontext — everywhere else. musl omits it and has no detection
+ *     macro, so we ALLOWLIST the libcs that ship a working one rather
+ *     than blocklist musl: glibc, macOS, and the BSDs that keep
+ *     makecontext/swapcontext (FreeBSD / NetBSD / DragonFly — NOT
+ *     OpenBSD, which removed it). macOS gates it behind _XOPEN_SOURCE.
+ *
+ * wasi and Win32 have neither and fall through to the stub block.
+ * §25 (reactor) tests NURL_HAVE_FIBERS, so the two gates cannot drift
+ * apart the way two spelled-out conditions did. */
+#if !defined(__wasi__) && !defined(_WIN32)
+#  if defined(NURL_CTX_X86_64)
+#    define NURL_HAVE_FIBERS   1
+#    define NURL_FIBER_OWN_CTX 1
+#  elif defined(__GLIBC__) || defined(__APPLE__) || defined(__FreeBSD__) || defined(__NetBSD__) || defined(__DragonFly__)
+#    define NURL_HAVE_FIBERS   1
+#  endif
+#endif
+
+#ifdef NURL_HAVE_FIBERS
+#ifndef NURL_FIBER_OWN_CTX
 #if defined(__APPLE__) && !defined(_XOPEN_SOURCE)
 #  define _XOPEN_SOURCE 600
 #endif
 #include <ucontext.h>
+#endif
 #include <sys/mman.h>
 #include <unistd.h>
 #include <pthread.h>
@@ -2797,6 +2818,13 @@ void      nurl_runtime_shutdown(void);
 #define NURL_FIBER_GUARD_BYTES   4096
 #define NURL_MAX_WORKERS         64
 
+/* One name for whichever backend the gate above selected. */
+#ifdef NURL_FIBER_OWN_CTX
+typedef nurl_ctx_t NurlFiberCtx;
+#else
+typedef ucontext_t NurlFiberCtx;
+#endif
+
 /* Forward decl — full struct lives in §25 (I/O reactor). */
 struct NurlReactorWait;
 
@@ -2809,9 +2837,15 @@ typedef enum {
 } NurlFiberState;
 
 typedef struct NurlFiber {
-    ucontext_t       ctx;
+    NurlFiberCtx     ctx;
     void            *stack_base;     /* mmap origin (guard page + usable) */
     size_t           stack_total_sz;
+    void            *stack_lo;       /* usable region = base + guard      */
+    size_t           stack_usable;
+    /* ASan's per-stack fake stack, parked here across a swap-out. Only
+     * the own-ctx backend touches it — ASan annotates swapcontext by
+     * interception, so the ucontext backend needs nothing. */
+    void            *fake_stack;
     void           (*fn)(void*);
     void            *env;
     NurlFiberState   state;
@@ -2835,7 +2869,8 @@ typedef struct NurlWorker {
     pthread_t        thread;
     int              id;
     int              started;
-    ucontext_t       loop_ctx;
+    NurlFiberCtx     loop_ctx;
+    void            *fake_stack;     /* ASan, own-ctx backend only */
     /* `current` is read by the running fiber and written by the worker
      * loop on either side of swapcontext. `volatile` defeats the LTO
      * hoist that would otherwise reuse a stale load across the swap. */
@@ -2864,6 +2899,64 @@ typedef struct NurlScheduler {
 
 static NurlScheduler nurl__sched;
 static __thread NurlWorker *nurl__tls_worker = NULL;
+
+/* ── Context switching ───────────────────────────────────────────────
+ *
+ * Every switch goes through one of these two, so the ASan fiber
+ * annotations exist in exactly one place per direction. Without them a
+ * sanitized build reports every frame a fiber builds as an
+ * out-of-bounds write — ASan knows only the thread stack, and nothing
+ * intercepts our own switch the way it intercepts swapcontext.
+ *
+ * The worker loop's stack bounds are the awkward half: they belong to a
+ * pthread, and the portable way to learn them is to ask ASan from the
+ * far side of a switch. The fiber does exactly that on arrival and
+ * stashes them per thread — which is also why a fiber resumed on a
+ * DIFFERENT worker still names the right stack: it re-reads the bounds
+ * every time it is resumed, from the thread it was resumed on.
+ *
+ * All of it compiles out entirely when the build is not sanitized. The
+ * annotation helpers are already no-ops there, but their out-params are
+ * writes to thread-local state that a plain build would still perform —
+ * and this is a path that now costs ~24 ns end to end. */
+#if defined(NURL_FIBER_OWN_CTX) && defined(NURL_CTX_ASAN)
+#  define NURL_FIBER_ASAN 1
+static __thread const void   *nurl__tls_loop_lo   = NULL;
+static __thread unsigned long nurl__tls_loop_size = 0;
+#endif
+
+/* Fiber → worker loop. Returns when the fiber is resumed, which may be
+ * on another worker thread entirely. */
+static void nurl__swap_to_loop(NurlFiber *f, NurlWorker *w) {
+#ifdef NURL_FIBER_OWN_CTX
+#  ifdef NURL_FIBER_ASAN
+    nurl_ctx_asan_start_switch(&f->fake_stack,
+                               nurl__tls_loop_lo, nurl__tls_loop_size);
+#  endif
+    nurl_ctx_switch(&f->ctx, &w->loop_ctx);
+#  ifdef NURL_FIBER_ASAN
+    nurl_ctx_asan_finish_switch(f->fake_stack,
+                                &nurl__tls_loop_lo, &nurl__tls_loop_size);
+#  endif
+#else
+    swapcontext(&f->ctx, &w->loop_ctx);
+#endif
+}
+
+/* Worker loop → fiber. Returns when the fiber yields, parks or ends. */
+static void nurl__swap_to_fiber(NurlWorker *w, NurlFiber *f) {
+#ifdef NURL_FIBER_OWN_CTX
+#  ifdef NURL_FIBER_ASAN
+    nurl_ctx_asan_start_switch(&w->fake_stack, f->stack_lo, f->stack_usable);
+#  endif
+    nurl_ctx_switch(&w->loop_ctx, &f->ctx);
+#  ifdef NURL_FIBER_ASAN
+    nurl_ctx_asan_finish_switch(w->fake_stack, NULL, NULL);
+#  endif
+#else
+    swapcontext(&w->loop_ctx, &f->ctx);
+#endif
+}
 
 /* ── Pending counter ──────────────────────────────────────────────── */
 
@@ -2978,6 +3071,33 @@ static void nurl__wake_all(void) {
 
 /* ── Fiber lifecycle ─────────────────────────────────────────────── */
 
+#ifdef NURL_FIBER_OWN_CTX
+/* Fiber body, own-ctx backend: the entry takes its argument as a plain
+ * pointer, so there is no splitting to undo. */
+static void nurl__fiber_entry(void *arg) {
+    NurlFiber *f = (NurlFiber*)arg;
+#ifdef NURL_FIBER_ASAN
+    /* First arrival on this stack. NULL: a fresh stack has no fake
+     * stack to restore. The out-params are the point of the call — this
+     * is where the worker loop's bounds are learned. */
+    nurl_ctx_asan_finish_switch(NULL, &nurl__tls_loop_lo, &nurl__tls_loop_size);
+#endif
+    if (f && f->fn) f->fn(f->env);
+    if (f) f->state = NF_DONE;
+    NurlWorker *w = nurl__tls_worker;
+    if (w) {
+#ifdef NURL_FIBER_ASAN
+        /* Leaving for good — NULL destroys the fake stack instead of
+         * leaking it, which matters because the worker is about to
+         * munmap the stack this frame sits on. */
+        nurl_ctx_asan_start_switch(NULL, nurl__tls_loop_lo, nurl__tls_loop_size);
+#endif
+        /* Never returns: the loop sees NF_DONE and never resumes us. */
+        nurl_ctx_switch(&f->ctx, &w->loop_ctx);
+    }
+    pthread_exit(NULL);  /* unreachable */
+}
+#else
 /* makecontext on 64-bit POSIX passes args as int (32 bits) — reassemble
  * the fiber pointer from two halves on entry. */
 static void nurl__fiber_entry(unsigned hi, unsigned lo) {
@@ -2989,6 +3109,7 @@ static void nurl__fiber_entry(unsigned hi, unsigned lo) {
     if (w) setcontext(&w->loop_ctx);
     pthread_exit(NULL);  /* unreachable */
 }
+#endif
 
 static NurlFiber *nurl__fiber_alloc(void *fn, void *env, int joinable) {
     NurlFiber *f = (NurlFiber*)calloc(1, sizeof(NurlFiber));
@@ -3017,6 +3138,9 @@ static NurlFiber *nurl__fiber_alloc(void *fn, void *env, int joinable) {
     }
     f->stack_base = base;
     f->stack_total_sz = total;
+    f->stack_lo = (char*)base + guard;
+    f->stack_usable = usable;
+    f->fake_stack = NULL;
     f->fn = (void(*)(void*))fn;
     f->env = env;
     f->state = NF_RUNNABLE;
@@ -3026,12 +3150,16 @@ static NurlFiber *nurl__fiber_alloc(void *fn, void *env, int joinable) {
         pthread_cond_init(&f->join_c, NULL);
     }
 
+#ifdef NURL_FIBER_OWN_CTX
+    nurl_ctx_init(&f->ctx, f->stack_lo, (unsigned long)usable,
+                  nurl__fiber_entry, f);
+#else
     if (getcontext(&f->ctx) != 0) {
         munmap(base, total);
         free(f);
         return NULL;
     }
-    f->ctx.uc_stack.ss_sp   = (char*)base + guard;
+    f->ctx.uc_stack.ss_sp   = f->stack_lo;
     f->ctx.uc_stack.ss_size = usable;
     f->ctx.uc_link          = NULL;     /* worker sets loop_ctx at run-time */
     uintptr_t p = (uintptr_t)f;
@@ -3039,6 +3167,7 @@ static NurlFiber *nurl__fiber_alloc(void *fn, void *env, int joinable) {
     unsigned lo = (unsigned)(p & 0xFFFFFFFFu);
     makecontext(&f->ctx, (void(*)(void))nurl__fiber_entry, 2,
                 (int)hi, (int)lo);
+#endif
     return f;
 }
 
@@ -3092,11 +3221,11 @@ void nurl_fiber_yield(void) {
     /* Do NOT publish to the run queue here. If we pushed before the
      * swap-out, another worker could steal this fiber, run it to
      * completion, and free it — all before the worker loop finishes
-     * reading f->state after swapcontext returns (a heap-use-after-free).
+     * reading f->state after the swap returns (a heap-use-after-free).
      * The worker loop re-queues it (see the NF_RUNNABLE branch) only
      * once it is done inspecting the fiber, keeping it private until its
      * context is fully saved. */
-    swapcontext(&cur->ctx, &w->loop_ctx);
+    nurl__swap_to_loop(cur, w);
 }
 
 __attribute__((noinline))
@@ -3134,7 +3263,7 @@ void nurl_fiber_park_with_mutex(long long mutex_h) {
     pthread_mutex_t *m = (pthread_mutex_t *)(uintptr_t)mutex_h;
     cur->pending_unlock = m;
     cur->state = NF_PARKED;
-    swapcontext(&cur->ctx, &w->loop_ctx);
+    nurl__swap_to_loop(cur, w);
 }
 
 void nurl_fiber_unpark(long long fiber_h) {
@@ -3210,7 +3339,7 @@ static void *nurl__worker_loop(void *arg) {
         if (!f) break;     /* shutdown */
         f->state = NF_RUNNING;
         __atomic_store_n(&w->current, f, __ATOMIC_SEQ_CST);
-        swapcontext(&w->loop_ctx, &f->ctx);
+        nurl__swap_to_fiber(w, f);
         __atomic_store_n(&w->current, (NurlFiber*)NULL, __ATOMIC_SEQ_CST);
         if (f->state == NF_DONE) {
             if (f->joinable) {
@@ -3282,6 +3411,7 @@ void nurl_runtime_init(long long worker_count) {
         w->id = i;
         w->started = 0;
         w->current = NULL;
+        w->fake_stack = NULL;
         w->rq_head = w->rq_tail = NULL;
         pthread_mutex_init(&w->rq_lock, NULL);
         w->steal_rng = (unsigned)(0xC2B2AE35u ^ (unsigned)(i * 2654435761u));
@@ -3338,7 +3468,7 @@ void nurl_runtime_shutdown(void) {
 #  pragma clang diagnostic pop
 #endif
 
-#else  /* WASI or Windows — stubs until a later phase */
+#else  /* no fiber backend (WASI, Windows) — stubs until a later phase */
 
 long long nurl_fiber_spawn(void *fn, void *env) {
     (void)fn; (void)env; return 0;
@@ -3378,8 +3508,9 @@ long long nurl_reactor_wait_read(long long fd, long long timeout_ms);
 long long nurl_reactor_wait_write(long long fd, long long timeout_ms);
 long long nurl_fiber_sleep_ms(long long ms);
 
-/* Same platform guard as §24 — needs the fiber primitives. */
-#if !defined(__wasi__) && !defined(_WIN32) && (defined(__GLIBC__) || defined(__APPLE__) || defined(__FreeBSD__) || defined(__NetBSD__) || defined(__DragonFly__))
+/* The reactor is built on the fiber primitives, so it lives or dies with
+ * them — one macro, not a second copy of the platform condition. */
+#ifdef NURL_HAVE_FIBERS
 #include <poll.h>
 #include <fcntl.h>
 #include <errno.h>
@@ -3609,7 +3740,7 @@ static int nurl__reactor_wait(int fd, short events, long long timeout_ms) {
     cur->pending_unlock = NULL;
     cur->pending_reactor_wait = wt;
     cur->state = NF_PARKED;
-    swapcontext(&cur->ctx, &w->loop_ctx);
+    nurl__swap_to_loop(cur, w);
     return cur->last_park_result;
 }
 

@@ -567,14 +567,23 @@ fi
 LTO_FLAG="-flto"
 RUNTIME_TO_LINK="$RUNTIME"
 SAN_LINK_FLAGS=""
-# The runtime is split across three files (A9): stdlib/runtime.c is a thin
-# aggregator that #includes runtime_core.c + runtime_ffi.c. The side-by-side
-# san/debug objects are compiled from the aggregator, so they go stale when
-# ANY of the three changes — not just when runtime.c's mtime moves.
+# stdlib/runtime.c is a thin aggregator (A9): it #includes the real
+# sources into one translation unit. The side-by-side san/debug objects
+# are compiled from the aggregator, so they go stale when ANY of them
+# changes — not just when runtime.c's mtime moves.
+#
+# The list is READ OUT of runtime.c rather than spelled out here: a
+# hand-copied list is a hand-synced twin, and this one had already
+# drifted (runtime_ctx.c joined the aggregator and this list did not,
+# so a ctx edit silently kept a stale runtime_san.o).
+runtime_sources() {
+    echo runtime.c
+    sed -n 's/^#include "\([A-Za-z0-9_]*\.c\)".*/\1/p' "$SCRIPT_DIR/stdlib/runtime.c"
+}
 runtime_stale() {
     _target="$1"
     [ ! -f "$_target" ] && return 0
-    for _src in runtime.c runtime_core.c runtime_ffi.c; do
+    for _src in $(runtime_sources); do
         [ "$SCRIPT_DIR/stdlib/$_src" -nt "$_target" ] && return 0
     done
     return 1
