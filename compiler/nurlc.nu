@@ -18071,6 +18071,24 @@
     // redefinition of function" error, so skip the emit — the symbol is
     // still registered above so callers resolve correctly.
     : b is_prelude_cfn | | | | ( seq fname `malloc` ) ( seq fname `free` ) ( seq fname `puts` ) ( seq fname `printf` ) ( seq fname `realpath` )
+    // A NURL @-function of the same name DEFINES this symbol, so the
+    // declare is both redundant and illegal — LLVM rejects a `declare`
+    // and a `define` of one name as "invalid redefinition". That is not
+    // a hypothetical: it is how a program supplies its own version of a
+    // runtime symbol, which is exactly what the unikernel's socket
+    // shims do (NURL code providing `nurl_tcp_*` over the sans-IO stack
+    // in stdlib/net/, where the hosted build has C). Before this, such
+    // a program compiled to IR that clang refused, with the error
+    // pointing at generated code — the worst place for a diagnostic.
+    //
+    // `__arity` and not `__src_file`: the latter is written for types
+    // and consts too, so a type sharing a name with an FFI symbol would
+    // have suppressed a declare that was still needed. `__arity` is set
+    // by scan_fn_sigs, a complete whole-program pre-pass, for real
+    // @-functions only — so a definition anywhere in the program,
+    // including in a file imported after this one, is already visible
+    // here.
+    : b defined_in_nurl != 0 ( nurl_sym_len2 syms fname `__arity` )
     // Dedupe `declare`s by symbol name across the whole compilation: two
     // imported modules may legitimately declare the same libc/runtime
     // extern (e.g. `nurl_rand_fill` in both std/random.nu and tls.nu), and
@@ -18081,7 +18099,7 @@
     // generalises the prelude-symbol skip.
     : s emitkey ( nurl_str_cat fname `__ffi_emitted` )
     : b already != 0 ( nurl_sym_len syms emitkey )
-    ? | is_prelude_cfn already
+    ? | | is_prelude_cfn already defined_in_nurl
     {}
     { ( nurl_sym_def syms emitkey `1` )
         ( nurl_print `declare ` ) ( nurl_print ( nurl_llty ret_ty ) )
