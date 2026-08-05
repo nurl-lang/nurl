@@ -1,0 +1,41 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+listener created: ok
+nothing pending yet: ok
+connection allocated: ok
+A is in SYN_SENT: ok
+first frame out is ARP, not the SYN: ok
+B has still seen nothing: ok
+A resolved B's MAC: ok
+the RTO resent the SYN: ok
+A is ESTABLISHED: ok
+B queued a connection: ok
+B accepted it: ok
+and it is ESTABLISHED: ok
+accept consumed the queue entry: ok
+the listener is still listening: ok
+B sees A's address: ok
+B sees A's port: ok
+A queued the request: ok
+B read the whole request: ok
+and the bytes match: ok
+A read the whole reply: ok
+and those bytes match too: ok
+the second connection is ESTABLISHED: ok
+it is a different connection: ok
+with a different local port: ok
+B queued the second one: ok
+and it is not the first: ok
+the first is still ESTABLISHED: ok
+a SYN to a closed port is refused: ok
+B counted it: ok
+A gave up on the refused connection: ok
+the RST drew no reply: ok
+B saw the FIN: ok
+A reached TIME_WAIT: ok
+TIME_WAIT expired into CLOSED: ok
+and the slot is reusable: ok
+next timeout is a real deadline or none: ok
+net_tcpstack: all ok

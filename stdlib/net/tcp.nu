@@ -434,6 +434,29 @@ $ `stdlib/net/tcpseg.nu`
 
 // Returns bytes emitted. Drives retransmission, the persist timer and
 // the 2MSL wait.
+// When does this connection next need attention, in milliseconds from
+// `now`, or -1 if it is waiting on the peer alone?
+//
+// A Tcb keeps three absolute deadlines and `tcb_tick` acts on whichever
+// have passed. That is all a scripted test needs, but an event loop
+// needs the other direction: with nothing runnable, how long may it
+// sleep? Without this it can only poll, which on a guest with one vCPU
+// is the difference between idling and burning it. Deadlines already
+// past answer 0 — there is work now.
+@ tcb_next_timeout * Tcb c i now → i {
+    : ~ i best -1
+    : ~ i k 0
+    ~ < k 3 {
+        : i d ? == k 0 . c rtx_deadline ? == k 1 . c probe_deadline . c tw_deadline
+        ? != d 0 {
+            : i delta ? > d now - d now 0
+            ? || < best 0 < delta best { = best delta } {}
+        } {}
+        = k + k 1
+    }
+    ^ best
+}
+
 @ tcb_tick * Tcb c i now * TcpOut out → i {
     : i before ( vec_len [u] . out bytes )
     // TIME_WAIT expiry
@@ -586,9 +609,12 @@ $ `stdlib/net/tcpseg.nu`
     ? == . c state ( tcp_listen_st ) {
         ? has_rst { ^ 0 } {}
         // An ACK to a LISTEN socket is bogus — RST it (RFC 793 §3.4).
+        // The comment said so; the body assigned a field to itself and
+        // returned, so the peer got silence and kept retransmitting into
+        // a socket that was never going to answer.
         ? has_ack {
-            = . c remote_ip . c remote_ip
-            ^ 0
+            ( __emit_empty c out ( tcp_rst ) . s ack 0 )
+            ^ - ( vec_len [u] . out bytes ) before
         } {}
         ? has_syn {
             = . c remote_port . s src_port

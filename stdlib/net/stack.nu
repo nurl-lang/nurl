@@ -52,6 +52,13 @@ $ `stdlib/net/udp4.nu`
 
 @ rx_dropped → i { ^ 4 }
 
+// A TCP segment for us. This layer stops here on purpose: demultiplexing
+// to a connection is the business of net/tcpstack.nu, which owns the
+// table. What comes back is the IP payload's extent plus the addresses
+// the pseudo-header checksum needs — everything the TCP parse requires
+// and nothing it would have to be told twice.
+@ rx_tcp → i { ^ 5 }
+
 // drop reasons — every discarded frame lands in exactly one bucket
 @ drop_not_for_us → i { ^ 0 }
 
@@ -264,6 +271,11 @@ $ `stdlib/net/udp4.nu`
         ^ ( __rx_drop ( drop_not_our_ip ) )
     } {}
     ? == . ih proto ( ip_proto_icmp ) { ^ ( __rx_icmp st frame ih now out ) } {}
+    ? == . ih proto ( ip_proto_tcp ) {
+        ^ @ RxResult {
+            ( rx_tcp ) 0 . ih src . ih dst 0 0 . ih payload_off . ih payload_len 0
+        }
+    } {}
     ? == . ih proto ( ip_proto_udp ) {
         : Udp4Hdr uh ( udp4_parse frame . ih payload_off . ih payload_len . ih src . ih dst )
         ? ! . uh valid {
@@ -285,7 +297,18 @@ $ `stdlib/net/udp4.nu`
 // caller retries after the reply arrives. Returning "pending" rather
 // than queueing internally keeps the buffer-ownership story simple:
 // this module never holds on to the caller's payload.
-@ stack_tx_udp * NetStack st i dst_ip i src_port i dst_port ( Vec u ) payload i pay_off i pay_len i now ( Vec u ) out → TxResult {
+// Frame and send an already-built layer-4 datagram. Routing, ARP and
+// the Ethernet/IPv4 headers live here and nowhere else, so TCP and UDP
+// resolve their next hop by the same code and a fix to it fixes both.
+// `dg` is BORROWED — the caller built it and the caller frees it.
+//
+// On a cache miss this emits an ARP request and answers `tx_arp_pending`
+// rather than queueing the datagram. Keeping the queue outside means
+// this module never holds a pointer to someone else's buffer, and the
+// retry is the caller's to schedule — which for TCP is free, because a
+// segment that did not go out is exactly what its retransmit timer is
+// already for.
+@ stack_tx_ip4 * NetStack st i dst_ip i proto ( Vec u ) dg i dg_off i dg_len i now ( Vec u ) out → TxResult {
     ? == . st our_ip 0 { ^ @ TxResult { ( tx_no_address ) 0 } } {}
     : i hop ( __next_hop st dst_ip )
     : ~ i dst_mac 0
@@ -306,14 +329,19 @@ $ `stdlib/net/udp4.nu`
         ^ @ TxResult { ( tx_arp_pending ) 0 }
     } {}
     : i before ( vec_len [u] out )
-    : ( Vec u ) dg ( vec_new [u] )
-    ( udp4_push dg . st our_ip dst_ip src_port dst_port payload pay_off pay_len )
     ( eth_push_header out dst_mac . st our_mac ( ethertype_ipv4 ) )
-    ( ip4_push_header out . st our_ip dst_ip ( ip_proto_udp ) ( vec_len [u] dg ) ( __next_id st ) 64 T )
-    ( vec_extend [u] out dg )
-    ( vec_free [u] dg )
+    ( ip4_push_header out . st our_ip dst_ip proto dg_len ( __next_id st ) 64 T )
+    ( vec_extend_range [u] out dg dg_off dg_len )
     = . st tx_frames + . st tx_frames 1
     ^ @ TxResult { ( tx_sent ) - ( vec_len [u] out ) before }
+}
+
+@ stack_tx_udp * NetStack st i dst_ip i src_port i dst_port ( Vec u ) payload i pay_off i pay_len i now ( Vec u ) out → TxResult {
+    : ( Vec u ) dg ( vec_new [u] )
+    ( udp4_push dg . st our_ip dst_ip src_port dst_port payload pay_off pay_len )
+    : TxResult r ( stack_tx_ip4 st dst_ip ( ip_proto_udp ) dg 0 ( vec_len [u] dg ) now out )
+    ( vec_free [u] dg )
+    ^ r
 }
 
 // Broadcast a UDP datagram from 0.0.0.0 — the shape DHCP needs before
