@@ -5707,6 +5707,48 @@
     ^ & & ( __is_named_agg at ) ( __is_named_agg pt ) ! ( seq at pt )
 }
 
+// The length of a type's named-aggregate BASE — `%X` and `%X*` both
+// answer len(`%X`) — or 0 when the type is not a named aggregate or a
+// pointer to one. Returns a length rather than the substring on
+// purpose: a helper whose result is a borrowed argument on one path and
+// a freshly allocated slice on another has mixed ownership, which
+// all-paths auto-drop turns into a free of a string the caller never
+// owned. Lengths cannot be freed.
+@ __named_agg_base_len s t → i {
+    : i n ( nurl_str_len t )
+    ? == n 0 { ^ 0 } {}
+    ? != ( nurl_str_get t 0 ) 37 { ^ 0 } {}  // leading '%'
+    : i b ? == ( nurl_str_get t - n 1 ) 42 - n 1 n
+    ? == b 0 { ^ 0 } {}
+    ? == ( nurl_str_get t - b 1 ) 42 { ^ 0 } {}  // `%X**` — not our business
+    ^ b
+}
+
+// Two DIFFERENT named types where at least one side is a POINTER:
+// `%X*` vs `%Y*`, `%X*` vs `%Y`, `%X` vs `%Y*`. The same silent
+// miscompile as passing the wrong struct by value — clang accepts the
+// call and the callee reads one struct's bytes as another's fields —
+// and the one member of the family the checks above do not cover:
+// __arg_ptr_depth_mismatch requires an IDENTICAL base, and
+// __arg_named_struct_mismatch requires both sides to be values.
+//
+// It stays narrow on purpose: both sides must reduce to a `%Name`, so
+// `*u`/`*i` (u8*/i64*), `s` (i8*), opaque handles stashed as i64 and
+// every numeric coercion are untouched.
+@ __arg_named_ptr_mismatch s at s pt → b {
+    ? & ( __is_named_agg at ) ( __is_named_agg pt ) { ^ F } {}
+    : i ab ( __named_agg_base_len at )
+    : i pb ( __named_agg_base_len pt )
+    ? | == ab 0 == pb 0 { ^ F } {}
+    ? != ab pb { ^ T } {}
+    : ~ i k 0
+    ~ < k ab {
+        ? != ( nurl_str_get at k ) ( nurl_str_get pt k ) { ^ T } {}
+        = k + k 1
+    }
+    F
+}
+
 // Exactly one operand lowers to a pointer, the other to a non-pointer
 // scalar (i64/i32/double/i1/i8…). Catches the different-base pointer↔scalar
 // class that __arg_ptr_depth_mismatch misses — e.g. an `i8*` string passed
@@ -6320,6 +6362,12 @@
                         ( nurl_str_cat4 `argument ` ( nurl_str_int + arg_idx 1 ) ` to '` fname )
                         ( nurl_str_cat4 `': value of type '` at `' passed where parameter expects '` __pllvm )
                         `' — wrong struct type passed by value (a value of one named type where a different one is declared); the call would silently reinterpret its fields` ) ) }
+                    {}
+                    ? ( __arg_named_ptr_mismatch at __pllvm )
+                    { ( die lex ( nurl_str_cat3
+                        ( nurl_str_cat4 `argument ` ( nurl_str_int + arg_idx 1 ) ` to '` fname )
+                        ( nurl_str_cat4 `': value of type '` at `' passed where parameter expects '` __pllvm )
+                        `' — different named types; a pointer to one struct is not a pointer to another, and the callee would read this object's bytes as the declared type's fields` ) ) }
                     {}
                     ? ( __arg_ptr_scalar_mismatch at __pllvm )
                     { ( die lex ( nurl_str_cat3
