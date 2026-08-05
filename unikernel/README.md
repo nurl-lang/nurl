@@ -46,23 +46,29 @@ worth anything.
 ## State (2026-08-05)
 
 ```
-  PASS         446    corpus tests that build and run with no libc at all
+  PASS         449    corpus tests that build and run with no libc at all
   FAIL           0
-  NEEDS-BARE    24    processes, signals, UDP, DNS
+  NEEDS-BARE    21    processes and signals — a unikernel has neither
   NEEDS-LIBM     0
   NEEDS-NOLIBC   7    realpath, mkstemp, inotify, execvp, unix sockets
   NEEDS-LIB      4    libsqlite3 x3, libzstd x1 — third-party C libraries
   SKIP         144    compile-fail tests and tests with no standalone build
 ```
 
-TCP is in that PASS column. `async_tcp`, `async_http_server`,
-`http_server_pool`, `http_server_stop_direct`, `websocket_client`,
-`http2_client`, `net_basic` and the rest run a real client and a real
-server against each other with no kernel sockets anywhere:
-`unikernel/net/sockets.nu` implements the socket ABI in NURL over the
-sans-IO stack, the frames go around a loopback that is literally "what
-this stack emits, it receives", and a blocking read PARKS on its fd —
-so the scheduler can still say "nothing can run" and mean it.
+TCP, UDP and name resolution are all in that PASS column. `async_tcp`,
+`async_http_server`, `http_server_pool`, `http_server_stop_direct`,
+`websocket_client`, `http2_client`, `udp_basic`, `dns_basic`,
+`net_basic` and the rest run real clients and real servers against each
+other with no kernel sockets anywhere: `unikernel/net/sockets.nu`
+implements the socket ABI in NURL over the sans-IO stack, the frames go
+around a loopback that is literally "what this stack emits, it
+receives", and a blocking read PARKS on its fd — so the scheduler can
+still say "nothing can run" and mean it.
+
+What is left in NEEDS-BARE is `fork`/`exec`, signals and the process
+API. That is not remaining work in the sense the other columns are: the
+plan's non-goals list processes explicitly, and a machine with one
+address space has nothing to fork.
 
 The bucket a blocked test lands in is **measured**, not listed: each
 missing symbol is looked up with `nm` in the hosted `stdlib/runtime.o`

@@ -471,6 +471,25 @@ $ `stdlib/net/socket.nu`
     ^ ( __addr_string ( sock_local_ip st handle ) ( sock_local_port st handle ) )
 }
 
+// "ip:port" as a pointer the compiler does NOT track, for a cache that
+// outlives the call that filled it.
+//
+// This is the one place the distinction matters. `__addr_string`
+// returns a TRACKED owned string, and auto-drop releases it when the
+// function that made it returns — which is exactly right when the
+// value is returned, and exactly wrong when it is stashed in a table as
+// an integer, where the compiler cannot see that ownership moved. The
+// first version of the UDP cache did the second thing and handed
+// callers a pointer to freed memory: `peer=0Tp#~` where an address
+// belonged.
+@ __addr_own i ip i port → i {
+    : s a ( __addr_string ip port )
+    : i n ( nurl_str_len a )
+    : s p # s ( nurl_alloc + n 1 )
+    ( nurl_memcpy p a + n 1 )
+    ^ # i p
+}
+
 // BORROWED — the contract says the view lives as long as the
 // connection does, so the string is cached per fd and released by
 // close. A fresh allocation per call would leak on every caller that
@@ -482,8 +501,8 @@ $ `stdlib/net/socket.nu`
     ~ <= ( vec_len [i] . sh peer ) slot { ( vec_push [i] . sh peer 0 ) }
     : i cached ?? ( vec_get [i] . sh peer slot ) { T x → x F → 0 }
     ? != cached 0 { ^ # s cached } {}
-    : s a ( __addr_string ( sock_peer_ip . sh st conn ) ( sock_peer_port . sh st conn ) )
-    : b _ok ( vec_set [i] . sh peer slot # i a )
+    : i a ( __addr_own ( sock_peer_ip . sh st conn ) ( sock_peer_port . sh st conn ) )
+    : b _ok ( vec_set [i] . sh peer slot a )
     ^ # s a
 }
 
@@ -494,4 +513,242 @@ $ `stdlib/net/socket.nu`
     ? == cached 0 { ^ } {}
     ( nurl_free # s cached )
     : b _ok ( vec_set [i] . sh peer slot 0 )
+}
+
+// ── UDP ──────────────────────────────────────────────────────────
+//
+// Same shape as the TCP half: the socket layer answers `again` and
+// this file decides what waiting means. A datagram socket has less to
+// wait for — there is no handshake and no window — so only the receive
+// side ever blocks.
+
+@ nurl_udp_bind s host i port → i {
+    : *SockTab st ( __tab )
+    : i ip ( __resolve host )
+    // An empty host means "any address", the way `udp_bind \`\` 0` spells
+    // a wildcard bind.
+    : i want ? < ip 0 ? == 0 ( nurl_str_len host ) 0 -1 ip
+    ? < want 0 { ^ ( sock_err_fd st ( sock_err_bind ) ) } {}
+    ? && != want 0 != want ( __lo_ip ) { ^ ( sock_err_fd st ( sock_err_bind ) ) } {}
+    ^ ( sock_udp_bind st want port )
+}
+
+@ nurl_udp_close i handle → v {
+    : *Shim sh ( __shim )
+    ( __peer_forget sh handle )
+    ( sock_close . sh st handle ( __ms ) )
+    ( __wake_ready )
+}
+
+@ nurl_udp_err_kind i handle → i { ^ ( sock_err ( __tab ) handle ) }
+
+@ nurl_udp_get_fd i handle → i { ^ handle }
+
+// IPv4 only, and it says so rather than guessing: this stack has no
+// IPv6 and a caller that branches on the family should take the branch
+// that is true.
+@ nurl_udp_family i handle → i { ^ 4 }
+
+@ nurl_udp_set_nonblock i handle i on → v {
+    ( sock_set_nonblock ( __tab ) handle != on 0 )
+}
+
+@ nurl_udp_set_timeout i handle i ms → v { ( sock_set_timeout ( __tab ) handle ms ) }
+
+@ nurl_udp_connect i handle s host i port → i {
+    : *SockTab st ( __tab )
+    : i ip ( __resolve host )
+    ? < ip 0 { ^ -1 } {}
+    ? < ( sock_udp_connect st handle ip port ) 0 { ^ -1 } {}
+    ^ 0
+}
+
+@ __udp_send * SockTab st i handle i ip i port s buf i n → i {
+    // NOT `n <= 0 → 0`. A zero-length datagram is a datagram: it is
+    // sent, it arrives, and the receiver reads 0 bytes — which is a
+    // different fact from "nothing has arrived yet". Short-circuiting
+    // here sent nothing and reported success, so the peer's receive
+    // timed out with no explanation on either side.
+    ? < n 0 { ^ -1 } {}
+    : ( Vec u ) src ( vec_new [u] )
+    ( bytes_extend_raw src buf n )
+    : i r ? >= ip 0 ( sock_udp_send_to st handle ip port src 0 n ( __ms ) )
+    ( sock_udp_send st handle src 0 n ( __ms ) )
+    ( vec_free [u] src )
+    // Whatever went out is on the wire before this returns: on
+    // loopback the datagram IS delivered by the same call chain, and a
+    // send that left frames queued would make the peer's next receive
+    // depend on somebody else moving the stack.
+    ( __drive ( __ms ) )
+    ? < r 0 { ^ -1 } {}
+    ^ r
+}
+
+@ nurl_udp_send_to i handle s buf i n s host i port → i {
+    : *SockTab st ( __tab )
+    : i ip ( __resolve host )
+    ? < ip 0 {
+        ^ -1
+    } {}
+    ^ ( __udp_send st handle ip port buf n )
+}
+
+@ nurl_udp_send i handle s buf i n → i {
+    ^ ( __udp_send ( __tab ) handle -1 0 buf n )
+}
+
+@ __udp_recv i handle s buf i n → i {
+    : *SockTab st ( __tab )
+    ? <= n 0 { ^ 0 } {}
+    ~ T {
+        : ( Vec u ) tmp ( vec_new [u] )
+        : i got ( sock_udp_recv_from st handle tmp n )
+        ? > got 0 {
+            ( nurl_memcpy buf # s ( vec_data [u] tmp ) got )
+            ( vec_free [u] tmp )
+            ( __udp_cache_peer handle )
+            ^ got
+        } {}
+        ( vec_free [u] tmp )
+        // A zero-length datagram is a datagram: it must be delivered,
+        // not mistaken for "nothing arrived". That is the difference
+        // between UDP and a stream, and the test that pins it sends an
+        // empty payload on purpose.
+        ? == got 0 {
+            ( __udp_cache_peer handle )
+            ^ 0
+        } {}
+        : i err - 0 got
+        ? != err ( sock_err_again ) { ^ -1 } {}
+        ? == ( __should_retry handle 0 ) 0 { ^ -1 } {}
+    }
+    ^ -1
+}
+
+@ nurl_udp_recv_from i handle s buf i n → i { ^ ( __udp_recv handle buf n ) }
+
+@ nurl_udp_recv i handle s buf i n → i { ^ ( __udp_recv handle buf n ) }
+
+// The address the last received datagram came from, cached per fd so
+// the borrowed view outlives the call the way the ABI promises.
+@ __udp_cache_peer i handle → v {
+    : *Shim sh ( __shim )
+    ( __peer_forget sh handle )
+    : i slot - handle 3
+    ? < slot 0 { ^ } {}
+    ~ <= ( vec_len [i] . sh peer ) slot { ( vec_push [i] . sh peer 0 ) }
+    : i a ( __addr_own ( sock_udp_last_ip . sh st handle ) ( sock_udp_last_port . sh st handle ) )
+    : b _ok ( vec_set [i] . sh peer slot a )
+}
+
+@ nurl_udp_peer_addr i handle → s {
+    : *Shim sh ( __shim )
+    : i slot - handle 3
+    ? < slot 0 { ^ `` } {}
+    ? >= slot ( vec_len [i] . sh peer ) { ^ `` } {}
+    : i cached ?? ( vec_get [i] . sh peer slot ) { T x → x F → 0 }
+    ? == cached 0 { ^ `` } {}
+    ^ # s cached
+}
+
+@ nurl_udp_local_addr i handle → s {
+    : *SockTab st ( __tab )
+    ^ ( __addr_string ( sock_local_ip st handle ) ( sock_local_port st handle ) )
+}
+
+// Socket options this build records rather than performs — see
+// `sock_udp_setopt`. Bit per option so a driver can read back what it
+// was asked for instead of being told nothing was.
+@ nurl_udp_set_broadcast i handle i on → i { ^ ( sock_udp_setopt ( __tab ) handle 1 ) }
+
+@ nurl_udp_set_multicast_ttl i handle i ttl → i { ^ ( sock_udp_setopt ( __tab ) handle 2 ) }
+
+@ nurl_udp_set_multicast_loop i handle i on → i { ^ ( sock_udp_setopt ( __tab ) handle 4 ) }
+
+// Joining a group needs a driver that can accept multicast frames, and
+// this build has one interface that receives exactly what it sent.
+// Refusing is the honest answer: a join that silently succeeds is a
+// receiver that never receives, debugged much later.
+@ nurl_udp_join_group i handle s group s iface → i { ^ -1 }
+
+@ nurl_udp_leave_group i handle s group s iface → i { ^ -1 }
+
+// ── name resolution ──────────────────────────────────────────────
+//
+// There is no resolver on a machine whose only interface is a
+// loopback: no DNS server is reachable, and inventing an answer would
+// be worse than saying so. What CAN be answered is answered — an
+// address literal, and the one name every hosts file agrees on — and
+// everything else returns empty, which std/dns.nu turns into an error
+// the caller already handles.
+//
+// A real `net/dnsclient` over UDP is A1a's stub resolver, and it plugs
+// into the same seam: the socket half it needs now exists.
+
+// An IPv6 literal, syntactically. This stack has no IPv6 and never
+// will answer a NAME with one — but a literal is already an address,
+// and `getaddrinfo` hands it straight back. Refusing it here would
+// make a program that merely PARSES `::1` fail at the parse.
+@ __dns_is_v6_literal s host → b {
+    : i n ( nurl_str_len host )
+    ? == n 0 { ^ F } {}
+    : ~ b colon F
+    : ~ i k 0
+    ~ < k n {
+        : i c ( nurl_str_get host k )
+        ? == c 58 { = colon T } {}
+        ? ! || || == c 58 || == c 46 && >= c 48 <= c 57
+        || && >= c 97 <= c 102 && >= c 65 <= c 70 { ^ F } {}
+        = k + k 1
+    }
+    ^ colon
+}
+
+@ __dns_is_local s host → b {
+    ? ( nurl_str_eq host `localhost` ) { ^ T } {}
+    ? ( nurl_str_eq host `localhost.localdomain` ) { ^ T } {}
+    ^ F
+}
+
+@ nurl_dns_resolve s host → s {
+    ? ( __dns_is_local host ) { ^ ( nurl_str_cat `127.0.0.1` `\n` ) } {}
+    ? ( __dns_is_v6_literal host ) { ^ ( nurl_str_cat host `\n` ) } {}
+    ?? ( ipv4_parse host ) {
+        T _a → ( nurl_str_cat host `\n` )
+        F → ( nurl_str_cat `` `` )
+    }
+}
+
+@ nurl_dns_resolve_port s host i port → s {
+    : s base ( nurl_dns_resolve host )
+    ? == 0 ( nurl_str_len base ) { ^ base } {}
+    // "ip:port\n" — and "[v6]:port", because a colon inside the
+    // address and the colon before the port are the same character,
+    // and only the brackets tell them apart. Built from the answer
+    // already in hand rather than resolved a second time.
+    : b v6 ( __dns_is_v6_literal host )
+    : String out ( string_new )
+    : i n ( nurl_str_len base )
+    : ~ i k 0
+    ? v6 { ( string_push_char out 91 ) } {}
+    ~ < k n {
+        : i c ( nurl_str_get base k )
+        ? == c 10 {
+            ? v6 { ( string_push_char out 93 ) } {}
+            ( string_push_char out 58 )
+            ( string_push_int out port )
+        } {}
+        ( string_push_char out c )
+        = k + k 1
+    }
+    : s r ( nurl_str_cat ( string_data out ) `` )
+    ( string_free out )
+    ^ r
+}
+
+@ nurl_dns_reverse s ip → s {
+    ?? ( ipv4_parse ip ) {
+        T a → ? == a ( __lo_ip ) ( nurl_str_cat `localhost` `\n` ) ( nurl_str_cat `` `` )
+        F → ( nurl_str_cat `` `` )
+    }
 }

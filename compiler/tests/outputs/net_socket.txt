@@ -56,6 +56,27 @@ accept on a shut listener fails rather than waiting: ok
 and a shut fd reports itself readable: ok
 a referenced fd survives one close: ok
 and is gone after the second: ok
+a UDP bind picks a port: ok
+an empty mailbox says "again": ok
+and is not readable: ok
+but a datagram socket is always writable: ok
+a second bind on a taken UDP port is refused: ok
+the same number is free for TCP: ok
+send_to reports what it sent: ok
+the datagram arrived: ok
+and the socket is readable: ok
+recv_from returns the payload: ok
+with the bytes intact: ok
+and the sender's port: ok
+the mailbox is empty again: ok
+two sends are two datagrams: ok
+a short read truncates its own datagram: ok
+and the next read is the NEXT datagram: ok
+not the remainder of the first: ok
+connect records a peer: ok
+send with no address uses it: ok
+and it arrives: ok
+send without a peer is an error, not a silent drop: ok
 the seeded stack sends the SYN, not an ARP request: ok
 and connects with no retransmit at all: ok
 the far end accepted it: ok

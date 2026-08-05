@@ -70,10 +70,25 @@ $ `stdlib/net/stack.nu`
     i kind  // stack.nu's RxResult kind when result == trx_other
     i conn  // index into the connection table, or -1
     i emitted  // bytes appended to `out`
+    // The verdict for everything that was not TCP, passed through
+    // intact. A caller that also speaks UDP would otherwise have to
+    // parse the frame a second time to learn what this layer already
+    // knows — and the two parses would be free to disagree.
+    i src_ip
+    i dst_ip
+    i src_port
+    i dst_port
+    i payload_off  // into the frame handed to tstack_rx
+    i payload_len
 }
 
 @ __trx i result i kind i conn i emitted → TRx {
-    ^ @ TRx { result kind conn emitted }
+    ^ @ TRx { result kind conn emitted 0 0 0 0 0 0 }
+}
+
+@ __trx_other RxResult rr → TRx {
+    ^ @ TRx { ( trx_other ) . rr kind -1 . rr emitted . rr src_ip . rr dst_ip
+        . rr src_port . rr dst_port . rr payload_off . rr payload_len }
 }
 
 // ── the connection table ─────────────────────────────────────────
@@ -425,9 +440,7 @@ $ `stdlib/net/stack.nu`
 // everything rather than two that disagree about which is authoritative.
 @ tstack_rx * TcpStack ts ( Vec u ) frame i now * PktBuf out → TRx {
     : RxResult rr ( stack_rx . ts net frame now out )
-    ? != . rr kind ( rx_tcp ) {
-        ^ ( __trx ( trx_other ) . rr kind -1 . rr emitted )
-    } {}
+    ? != . rr kind ( rx_tcp ) { ^ ( __trx_other rr ) } {}
     : TcpSeg s ( tcpseg_parse frame . rr payload_off . rr payload_len . rr src_ip . rr dst_ip )
     ? ! . s valid { ^ ( __trx ( trx_none ) 0 -1 0 ) } {}
 
