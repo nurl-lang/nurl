@@ -51,6 +51,7 @@ $ `stdlib/net/ipv4.nu`
 $ `stdlib/net/arp.nu`
 $ `stdlib/net/icmp.nu`
 $ `stdlib/net/udp4.nu`
+$ `stdlib/net/dhcp.nu`
 $ `stdlib/net/stack.nu`
 $ `stdlib/net/tcpseg.nu`
 $ `stdlib/net/tcp.nu`
@@ -119,7 +120,16 @@ $ `stdlib/net/socket.nu`
     ? != g_shim 0 { ^ # *Shim g_shim } {}
     : *Shim sh # *Shim ( nurl_alloc Z Shim )
     : i now ( __ms )
-    = . sh net ( stack_new ( __lo_mac ) ( __lo_ip ) ( __lo_mask ) 0 )
+    : i have ( netdev_open )
+    // With an interface the machine's MAC is the DEVICE's — the one in
+    // its config space, which the hypervisor's filters and the peer's
+    // ARP table already know. Inventing one makes every frame we send
+    // unanswerable.
+    : i mac ? != have 0 ( netdev_mac ) ( __lo_mac )
+    // …and its address is whatever DHCP says, which is not known yet.
+    // Loopback works throughout regardless: 127.0.0.0/8 is ours before
+    // any interface has an address (net/stack.nu).
+    = . sh net ( stack_new mac ? != have 0 0 ( __lo_ip ) ? != have 0 0 ( __lo_mask ) 0 )
     // The ISS seed is the clock. RFC 793 wants a clock-driven initial
     // sequence number so an old duplicate from a previous incarnation
     // cannot be mistaken for live data, and a machine that boots into
@@ -130,13 +140,79 @@ $ `stdlib/net/socket.nu`
     = . sh w_fd ( vec_new [i] )
     = . sh w_wr ( vec_new [i] )
     = . sh w_coro ( vec_new [i] )
-    = . sh has_device ( netdev_open )
+    = . sh has_device have
     // An interface knows its own MAC. Without this the first connect
     // to 127.0.0.1 ARPs for itself and waits a retransmit timeout for
     // the answer.
+    ( sock_seed_addr . sh st ( __lo_ip ) now )
     ( sock_seed_self . sh st now )
     = g_shim # i sh
+    // The address comes from the network, and it has to be there
+    // before the first bind: a listener with a source address of
+    // 0.0.0.0 checksums every segment against the wrong pseudo-header
+    // and goes unanswered.
+    ? != have 0 { ( __dhcp_configure sh ) } {}
     ^ sh
+}
+
+// Run the DHCP client — the same state machine `net/dhcp.nu` covers
+// with 62 host assertions — until it holds a lease or the deadline
+// passes. Bounded by the CLOCK, not by a round count: the retransmit
+// backoff is measured in seconds and a busy loop gets through a
+// hundred thousand rounds in the time a server takes to answer once.
+@ __dhcp_configure * Shim sh → v {
+    : *NetStack net . sh net
+    : *DhcpClient c ( dhcp_client_new . net our_mac & ( __ms ) 4294967295 )
+    : i deadline + ( __ms ) 10000
+    ~ && ! ( dhcp_bound c ) < ( __ms ) deadline {
+        ( __dhcp_turn sh c ( __ms ) )
+    }
+    ? ( dhcp_bound c ) {
+        ( stack_set_address net . c our_ip . c subnet . c router )
+        ( sock_set_our_ip . sh st . c our_ip )
+        ( sock_seed_addr . sh st . c our_ip ( __ms ) )
+    } {}
+    ( dhcp_client_free c )
+}
+
+@ __dhcp_turn * Shim sh * DhcpClient c i now → v {
+    : *PktBuf out ( pktbuf_new )
+    : i want ( dhcp_tick c now )
+    ? != want 0 {
+        : ( Vec u ) msg ( vec_new [u] )
+        ( dhcp_push_message msg want . c xid . c mac 0
+        ? == want ( dhcp_msg_request ) . c our_ip 0
+        ? == want ( dhcp_msg_request ) . c server_id 0 )
+        : i _n ( stack_tx_udp_broadcast . sh net ( dhcp_src_ip c ) ( dhcp_client_port )
+        ( dhcp_server_port ) ( dhcp_dest_ip c ) msg 0 ( vec_len [u] msg ) out )
+        ( vec_free [u] msg )
+        : i n ( pktbuf_count out )
+        : ~ i k 0
+        ~ < k n {
+            : ( Vec u ) f ( vec_new [u] )
+            ( pktbuf_copy_to f out k )
+            : i _t ( netdev_tx # s ( vec_data [u] f ) ( vec_len [u] f ) )
+            ( vec_free [u] f )
+            = k + k 1
+        }
+        ( pktbuf_clear out )
+    } {}
+    : ~ b more T
+    ~ more {
+        : ( Vec u ) in ( vec_with_cap [u] 2048 )
+        ( vec_set_len [u] in 2048 )
+        : i len ( netdev_rx # s ( vec_data [u] in ) 2048 )
+        ? > len 0 {
+            ( vec_set_len [u] in len )
+            : RxResult r ( stack_rx . sh net in now out )
+            ? && == . r kind ( rx_udp ) == . r dst_port ( dhcp_client_port ) {
+                : DhcpMsg m ( dhcp_parse in . r payload_off . r payload_len )
+                ? . m valid { : b _h ( dhcp_handle c m now ) } {}
+            } {}
+        } { = more F }
+        ( vec_free [u] in )
+    }
+    ( pktbuf_free out )
 }
 
 @ __tab → *SockTab { ^ . ( __shim ) st }
