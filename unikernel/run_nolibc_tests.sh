@@ -145,7 +145,7 @@ clang -O2 -c "$ROOT/stdlib/runtime_core.c" -o "$OUTDIR/runtime_core.o" || exit 2
 clang -O2 -c "$ROOT/stdlib/runtime_ctx.c"  -o "$OUTDIR/runtime_ctx.o"  || exit 2
 clang -O2 -ffreestanding -fno-stack-protector \
       -c "$ROOT/unikernel/runtime_bare.c" -o "$OUTDIR/runtime_bare.o"  || exit 2
-for f in string malloc stdio dtoa misc syscall_linux tls_linux; do
+for f in string malloc stdio dtoa math misc syscall_linux tls_linux; do
     clang -O2 -ffreestanding -fno-builtin -fno-stack-protector \
           -c "$ROOT/unikernel/nolibc/$f.c" -o "$OUTDIR/nl_$f.o" || exit 2
 done

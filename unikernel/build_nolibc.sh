@@ -63,7 +63,7 @@ OUT="${OUT:-$OUTDIR/$base}"
       -c "$ROOT/unikernel/runtime_bare.c" -o "$OUTDIR/runtime_bare.o"
 
 # 4. nolibc itself.
-for f in string malloc stdio dtoa misc syscall_linux tls_linux; do
+for f in string malloc stdio dtoa math misc syscall_linux tls_linux; do
     "$CC" -O2 -ffreestanding -fno-builtin -fno-stack-protector \
           -c "$NOLIBC/$f.c" -o "$OUTDIR/nl_$f.o"
 done

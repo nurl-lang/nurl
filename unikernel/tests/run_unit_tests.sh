@@ -22,6 +22,13 @@
 #                     the process rather than hang or corrupt.
 #    pthread_layout   the bare mutex/cond fit the allocation the NURL
 #                     side makes from the real <pthread.h>.
+#    math_diff        every libm entry against glibc's, in ULPS, over
+#                     ranges chosen for where a libm actually breaks —
+#                     the huge argument, the near-cancellation, the
+#                     branch boundary. sqrt/fabs/floor/ceil/trunc/round
+#                     are held to bit equality; cbrt is checked against
+#                     arithmetic instead, because glibc's cbrt is the
+#                     less accurate of the two.
 #
 #  Usage: unikernel/tests/run_unit_tests.sh
 # ============================================================
@@ -72,7 +79,7 @@ for seed in 7 1234 99999; do
 done
 
 # 3. the allocator, with no libc under it at all
-for f in string malloc stdio dtoa misc syscall_linux tls_linux; do
+for f in string malloc stdio dtoa math misc syscall_linux tls_linux; do
     # shellcheck disable=SC2086
     $CC $FREE -c "$NOLIBC/$f.c" -o "$OUT/nl_$f.o" || exit 2
 done
@@ -125,7 +132,21 @@ expect_signal stack-overflow 139 "coroutine stack overflow faults"
 expect_signal guard-write    139 "one byte below the stack faults — the guard page is armed"
 expect_signal entropy-fault  134 "a refusing entropy source ends the program"
 
-# 5. the bare mutex/cond fit what the NURL side allocates for them.
+# 5. libm, against glibc, in one process — the nolibc names renamed so
+#    both implementations are callable. Several seeds: the ranges are
+#    sampled, and one seed's worst case is not the function's.
+# shellcheck disable=SC2086
+$CC $FREE $(for f in sqrt fabs floor ceil trunc round copysign exp log log2 log10 \
+                    sin cos tan atan atan2 pow cbrt hypot erf erfc; do
+                printf -- '-D%s=nl_%s ' "$f" "$f"; done) \
+    -c "$NOLIBC/math.c" -o "$OUT/test_math_renamed.o" || exit 2
+$CC -O2 "$ROOT/unikernel/tests/math_diff.c" "$OUT/test_math_renamed.o" \
+    -o "$OUT/math_diff" -lm || exit 2
+for seed in 7 99 12345; do
+    step "math_diff(seed $seed)" "$OUT/math_diff" 60000 "$seed"
+done
+
+# 6. the bare mutex/cond fit what the NURL side allocates for them.
 #    Hosted on purpose: the comparison needs the real <pthread.h>, which
 #    is precisely what the freestanding build does not have.
 $CC -O2 "$ROOT/unikernel/tests/pthread_layout.c" "$OUT/runtime_bare.o" \
