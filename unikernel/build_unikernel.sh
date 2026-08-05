@@ -52,7 +52,8 @@ KFLAGS="-ffreestanding -fno-stack-protector -fno-builtin -mno-red-zone
 # The NURL program, plus the socket layer if it uses one. Same script as
 # the Linux freestanding build — the decision is measured there, and
 # duplicating it here is how the two would drift.
-"$ROOT/unikernel/compile_nu.sh" "$SRC" "$OUTDIR/$base.ll" "$OUTDIR"
+NURL_NETDEV="$ROOT/unikernel/net/netdev_virtio.nu" \
+    "$ROOT/unikernel/compile_nu.sh" "$SRC" "$OUTDIR/$base.ll" "$OUTDIR"
 # compile_nu.sh leaves a hosted-flavoured object; recompile the IR with
 # the kernel flags. `zig cc` drops -O for .ll inputs (#644) and plain
 # clang needs the target flags spelled out for IR input too.
