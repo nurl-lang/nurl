@@ -89,6 +89,8 @@ $ `stdlib/net/tcpstack.nu`
 
 @ sock_kind_conn → i { ^ 2 }
 
+@ sock_kind_udp → i { ^ 3 }
+
 // ── connection status, as `connect` reports it ───────────────────
 
 @ sock_conn_pending → i { ^ 0 }
@@ -96,6 +98,18 @@ $ `stdlib/net/tcpstack.nu`
 @ sock_conn_ready → i { ^ 1 }
 
 @ sock_conn_failed → i { ^ 2 }
+
+// A bound UDP socket's mailbox. Datagram boundaries are the whole
+// point of UDP, so the payloads go in a PktBuf — the same "bytes plus
+// where each one ends" the frame path uses — and the sender's address
+// travels alongside, two integers per datagram.
+: UdpBox {
+    * PktBuf q
+    ( Vec i ) src  // stride 2: ip, port — one pair per datagram in `q`
+    i head  // datagrams already delivered; `q` is drained on read
+    i last_ip  // sender of the datagram the last recv returned
+    i last_port
+}
 
 : Sock {
     i kind
@@ -112,6 +126,9 @@ $ `stdlib/net/tcpstack.nu`
     b eof  // peer FIN seen AND the receive queue drained
     b shut  // sock_shutdown was called: wake and refuse
     b used
+    i udp  // *UdpBox for a UDP socket, 0 otherwise
+    b connected  // UDP: a default peer is set
+    i opts  // UDP: setsockopt bits, recorded and answered
 }
 
 : SockTab {
@@ -143,7 +160,18 @@ $ `stdlib/net/tcpstack.nu`
     : ~ i k 0
     ~ < k n {
         : *Sock s ( __sock_at st k )
-        ? != # i s 0 { ( nurl_free # s s ) } {}
+        ? != # i s 0 {
+            // A UDP socket still open at teardown owns its mailbox.
+            ? && . s used == . s kind ( sock_kind_udp ) {
+                : *UdpBox b # *UdpBox . s udp
+                ? != # i b 0 {
+                    ( pktbuf_free . b q )
+                    ( vec_free [i] . b src )
+                    ( nurl_free # s b )
+                } {}
+            } {}
+            ( nurl_free # s s )
+        } {}
         = k + k 1
     }
     ( vec_free [i] . st fds )
@@ -190,6 +218,9 @@ $ `stdlib/net/tcpstack.nu`
     = . s eof F
     = . s shut F
     = . s used T
+    = . s udp 0
+    = . s connected F
+    = . s opts 0
 }
 
 @ __alloc_fd * SockTab st → i {
@@ -317,7 +348,38 @@ $ `stdlib/net/tcpstack.nu`
 // wired to a callback.
 @ sock_rx * SockTab st ( Vec u ) frame i now → i {
     : TRx r ( tstack_rx . st ts frame now . st out )
+    ? && == . r result ( trx_other ) == . r kind ( rx_udp ) {
+        ( __udp_deliver st frame r )
+    } {}
     ^ . r result
+}
+
+// A received datagram belongs to the socket bound to its destination
+// port. No match is not an error here: ICMP port-unreachable is what a
+// host owes the sender, and this stack does not send it yet — dropping
+// it silently is at least honest about that, where inventing a reply
+// would not be.
+@ __udp_deliver * SockTab st ( Vec u ) frame TRx r → v {
+    : i n ( vec_len [i] . st fds )
+    : ~ i k 0
+    ~ < k n {
+        : *Sock s ( __sock_at st k )
+        ? && != # i s 0 && . s used && == . s kind ( sock_kind_udp )
+        && == . s local_port . r dst_port
+        || == . s local_ip 0 == . s local_ip . r dst_ip {
+            : *UdpBox b # *UdpBox . s udp
+            ? != # i b 0 {
+                ( vec_extend_range [u] . . b q bytes frame . r payload_off . r payload_len )
+                // …_empty, not _mark: a zero-length datagram is a
+                // datagram, and it has to arrive as one.
+                ( pktbuf_mark_empty . b q )
+                ( vec_push [i] . b src . r src_ip )
+                ( vec_push [i] . b src . r src_port )
+            } {}
+            ^
+        } {}
+        = k + k 1
+    }
 }
 
 @ sock_tick * SockTab st i now → i { ^ ( tstack_tick . st ts now . st out ) }
@@ -362,12 +424,15 @@ $ `stdlib/net/tcpstack.nu`
 
 // ── binding ──────────────────────────────────────────────────────
 
-@ __port_taken * SockTab st i port → b {
+// Is `port` already bound — in THIS protocol's port space? TCP and UDP
+// have separate ones, and a check that pooled them would refuse a DNS
+// client on 53 because something was listening on TCP 53.
+@ __port_taken_kind * SockTab st i kind i port → b {
     : i n ( vec_len [i] . st fds )
     : ~ i k 0
     ~ < k n {
         : *Sock s ( __sock_at st k )
-        ? && != # i s 0 && . s used && == . s kind ( sock_kind_listener ) == . s local_port port {
+        ? && != # i s 0 && . s used && == . s kind kind == . s local_port port {
             ^ T
         } {}
         = k + k 1
@@ -380,7 +445,11 @@ $ `stdlib/net/tcpstack.nu`
     ~ < tries 16384 {
         : i p . st ephemeral
         = . st ephemeral ? >= + p 1 49152 32768 + p 1
-        ? ! ( __port_taken st p ) { ^ p } {}
+        // An ephemeral port must be free in BOTH spaces: the caller
+        // asked for "a port nobody is using", and handing back one
+        // that the other protocol holds makes the next bind on it fail
+        // for a reason nobody can see.
+        ? && ! ( __port_taken_kind st ( sock_kind_listener ) p ) ! ( __port_taken_kind st ( sock_kind_udp ) p ) { ^ p } {}
         = tries + tries 1
     }
     ^ 0
@@ -399,7 +468,7 @@ $ `stdlib/net/tcpstack.nu`
     } {}
     : i p ? == port 0 ( __next_free_port st ) port
     ? == p 0 { ^ ( sock_err_fd st ( sock_err_bind ) ) } {}
-    ? && != port 0 ( __port_taken st p ) {
+    ? && != port 0 ( __port_taken_kind st ( sock_kind_listener ) p ) {
         ^ ( sock_err_fd st ( sock_err_addr_in_use ) )
     } {}
     : i lidx ( tstack_listen . st ts ip p backlog )
@@ -459,6 +528,171 @@ $ `stdlib/net/tcpstack.nu`
     : *Sock s ( __sock st fd )
     ? == # i s 0 { ^ F } {}
     ^ . s shut
+}
+
+// ── UDP ──────────────────────────────────────────────────────────
+//
+// A datagram socket has no state machine, no window and no timers —
+// what it has is a mailbox, and what this layer owes it is the same fd
+// semantics TCP gets: an ephemeral bind that reads back, ADDRINUSE,
+// `again` when the mailbox is empty, and readiness an event loop can
+// ask about.
+
+@ sock_udp_bind * SockTab st i ip i port → i {
+    ? || < port 0 > port 65535 { ^ ( sock_err_fd st ( sock_err_bind ) ) } {}
+    : i p ? == port 0 ( __next_free_port st ) port
+    ? == p 0 { ^ ( sock_err_fd st ( sock_err_bind ) ) } {}
+    ? && != port 0 ( __port_taken_kind st ( sock_kind_udp ) p ) {
+        ^ ( sock_err_fd st ( sock_err_addr_in_use ) )
+    } {}
+    : i fd ( __alloc_fd st )
+    : *Sock s ( __sock st fd )
+    : *UdpBox b # *UdpBox ( nurl_alloc Z UdpBox )
+    = . b q ( pktbuf_new )
+    = . b src ( vec_new [i] )
+    = . b head 0
+    = . b last_ip 0
+    = . b last_port 0
+    = . s kind ( sock_kind_udp )
+    = . s idx -1
+    = . s local_ip ip
+    = . s local_port p
+    = . s udp # i b
+    ^ fd
+}
+
+@ __udp_box * SockTab st i fd → *UdpBox {
+    : *Sock s ( __sock st fd )
+    ? == # i s 0 { ^ # *UdpBox 0 } {}
+    ? != . s kind ( sock_kind_udp ) { ^ # *UdpBox 0 } {}
+    ^ # *UdpBox . s udp
+}
+
+@ sock_udp_pending * SockTab st i fd → i {
+    : *UdpBox b ( __udp_box st fd )
+    ? == # i b 0 { ^ 0 } {}
+    ^ - ( pktbuf_count . b q ) . b head
+}
+
+// Set a default peer. UDP's `connect` filters nothing here — it
+// records where `sock_udp_send` goes, which is the half of the POSIX
+// contract a caller can actually observe on a host with one address.
+@ sock_udp_connect * SockTab st i fd i ip i port → i {
+    : *Sock s ( __sock st fd )
+    ? == # i s 0 { ^ - 0 ( sock_err_other ) } {}
+    ? != . s kind ( sock_kind_udp ) { ^ - 0 ( sock_err_other ) } {}
+    = . s peer_ip ip
+    = . s peer_port port
+    = . s connected T
+    ^ 0
+}
+
+@ sock_udp_is_connected * SockTab st i fd → b {
+    : *Sock s ( __sock st fd )
+    ? == # i s 0 { ^ F } {}
+    ^ . s connected
+}
+
+@ sock_udp_send_to * SockTab st i fd i ip i port ( Vec u ) src i off i len i now → i {
+    : *Sock s ( __sock st fd )
+    ? == # i s 0 { ^ - 0 ( sock_err_other ) } {}
+    ? != . s kind ( sock_kind_udp ) { ^ - 0 ( sock_err_write ) } {}
+    ? . s shut {
+        = . s err ( sock_err_closed )
+        ^ - 0 ( sock_err_closed )
+    } {}
+    : TxResult t ( stack_tx_udp . . st ts net ip . s local_port port src off len now . st out )
+    ? == . t status ( tx_sent ) {
+        = . s err 0
+        ^ len
+    } {}
+    // ARP has not resolved yet, or there is no route. A datagram
+    // socket has no retransmit timer to fall back on, so this is
+    // `again` rather than a loss the caller never hears about.
+    = . s err ( sock_err_again )
+    ^ - 0 ( sock_err_again )
+}
+
+@ sock_udp_send * SockTab st i fd ( Vec u ) src i off i len i now → i {
+    : *Sock s ( __sock st fd )
+    ? == # i s 0 { ^ - 0 ( sock_err_other ) } {}
+    ? ! . s connected {
+        = . s err ( sock_err_write )
+        ^ - 0 ( sock_err_write )
+    } {}
+    ^ ( sock_udp_send_to st fd . s peer_ip . s peer_port src off len now )
+}
+
+// Take the next datagram into `dst`, truncating to `max` — which is
+// what recvfrom(2) does, and the reason a caller passes a buffer at
+// least as large as the MTU. The sender's address is readable with
+// `sock_udp_last_ip` / `sock_udp_last_port` until the next recv.
+@ sock_udp_recv_from * SockTab st i fd ( Vec u ) dst i max → i {
+    : *Sock s ( __sock st fd )
+    ? == # i s 0 { ^ - 0 ( sock_err_other ) } {}
+    ? . s shut {
+        = . s err ( sock_err_closed )
+        ^ - 0 ( sock_err_closed )
+    } {}
+    : *UdpBox b ( __udp_box st fd )
+    ? == # i b 0 {
+        = . s err ( sock_err_read )
+        ^ - 0 ( sock_err_read )
+    } {}
+    ? >= . b head ( pktbuf_count . b q ) {
+        = . s err ( sock_err_again )
+        ^ - 0 ( sock_err_again )
+    } {}
+    : i idx . b head
+    : i start ( pktbuf_start . b q idx )
+    : i n ( pktbuf_len . b q idx )
+    : i take ? < max n max n
+    ? > take 0 { ( vec_extend_range [u] dst . . b q bytes start take ) } {}
+    = . b last_ip ?? ( vec_get [i] . b src * idx 2 ) { T x → x F → 0 }
+    = . b last_port ?? ( vec_get [i] . b src + * idx 2 1 ) { T x → x F → 0 }
+    = . b head + idx 1
+    // Drained: reclaim rather than grow a queue that is never reset.
+    // A socket that receives for a week would otherwise hold every
+    // datagram it ever saw.
+    ? >= . b head ( pktbuf_count . b q ) {
+        ( pktbuf_clear . b q )
+        ( vec_clear [i] . b src )
+        = . b head 0
+    } {}
+    = . s err 0
+    ^ take
+}
+
+@ sock_udp_last_ip * SockTab st i fd → i {
+    : *UdpBox b ( __udp_box st fd )
+    ? == # i b 0 { ^ 0 } {}
+    ^ . b last_ip
+}
+
+@ sock_udp_last_port * SockTab st i fd → i {
+    : *UdpBox b ( __udp_box st fd )
+    ? == # i b 0 { ^ 0 } {}
+    ^ . b last_port
+}
+
+// setsockopt, recorded rather than performed. Broadcast, multicast TTL
+// and multicast loopback are properties of a driver this build does
+// not have; answering OK and remembering the bit is what lets a
+// program that sets them run, and `sock_udp_opts` is how a future
+// driver reads what it was asked for. Nothing here pretends a
+// multicast datagram left the machine.
+@ sock_udp_setopt * SockTab st i fd i bit → i {
+    : *Sock s ( __sock st fd )
+    ? == # i s 0 { ^ - 0 ( sock_err_other ) } {}
+    ? != . s kind ( sock_kind_udp ) { ^ - 0 ( sock_err_other ) } {}
+    = . s opts | . s opts bit
+    ^ 0
+}
+
+@ sock_udp_opts * SockTab st i fd → i {
+    : *Sock s ( __sock st fd )
+    ? == # i s 0 { ^ 0 } {}
+    ^ . s opts
 }
 
 // ── connecting ───────────────────────────────────────────────────
@@ -624,6 +858,7 @@ $ `stdlib/net/tcpstack.nu`
     ? == . s kind ( sock_kind_listener ) {
         ^ > ( tstack_pending_count . st ts . s idx ) 0
     } {}
+    ? == . s kind ( sock_kind_udp ) { ^ > ( sock_udp_pending st fd ) 0 } {}
     ? ! ( __live st s ) { ^ T } {}
     : *Tcb c ( tstack_conn_tcb . st ts . s idx )
     ? == # i c 0 { ^ T } {}
@@ -634,6 +869,9 @@ $ `stdlib/net/tcpstack.nu`
     : *Sock s ( __sock st fd )
     ? == # i s 0 { ^ T } {}
     ? . s shut { ^ T } {}
+    // A datagram socket is always writable: there is no window to
+    // fill and nothing to wait for.
+    ? == . s kind ( sock_kind_udp ) { ^ T } {}
     ? != . s kind ( sock_kind_conn ) { ^ F } {}
     ? ! ( __live st s ) { ^ T } {}
     : i state ( tstack_conn_state . st ts . s idx )
@@ -668,6 +906,15 @@ $ `stdlib/net/tcpstack.nu`
     = . s shut T
     = . s refs - . s refs 1
     ? > . s refs 0 { ^ } {}
+    ? == . s kind ( sock_kind_udp ) {
+        : *UdpBox b # *UdpBox . s udp
+        ? != # i b 0 {
+            ( pktbuf_free . b q )
+            ( vec_free [i] . b src )
+            ( nurl_free # s b )
+        } {}
+        = . s udp 0
+    } {}
     ? == . s kind ( sock_kind_listener ) {
         ( tstack_listener_close . st ts . s idx )
     } {

@@ -87,6 +87,18 @@ $ `stdlib/core/vec.nu`
     ( vec_push [i] . p ends n )
 }
 
+// Close the current packet even when it is EMPTY.
+//
+// `pktbuf_mark` treats "nothing appended" as "no packet", which is
+// right for a frame or a segment: an emitter that decided not to write
+// anything did not emit a packet. A zero-length DATAGRAM is a
+// different thing — it is a datagram, the receiver must be handed it,
+// and dropping it turns "the peer sent nothing" into "the peer has
+// sent nothing yet". UDP is the caller that needs this one.
+@ pktbuf_mark_empty * PktBuf p → v {
+    ( vec_push [i] . p ends ( vec_len [u] . p bytes ) )
+}
+
 // Append packet `idx` to `dst`. Returns how many bytes were appended.
 // The consuming half of the seam: a device driver walks 0..count and
 // hands each one to the hardware.

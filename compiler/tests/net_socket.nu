@@ -219,6 +219,62 @@ $ `stdlib/net/socket.nu`
     ( sock_close st s3 6000 )
     ( pb `and is gone after the second: ` == ( sock_kind st s3 ) ( sock_kind_free ) )
 
+    // ── UDP: a mailbox, not a stream ─────────────────────────────
+    // Same fd semantics as TCP — ephemeral bind, ADDRINUSE, `again` on
+    // an empty mailbox — over a protocol with none of TCP's machinery.
+    : i us ( sock_udp_bind st ( lo_ip ) 0 )
+    : i uc ( sock_udp_bind st ( lo_ip ) 0 )
+    : i usp ( sock_local_port st us )
+    ( pb `a UDP bind picks a port: ` && > usp 0 != usp ( sock_local_port st uc ) )
+    ( pb `an empty mailbox says "again": ` == ( sock_udp_recv_from st us scratch 64 ) ( again ) )
+    ( pb `and is not readable: ` ! ( sock_readable st us ) )
+    ( pb `but a datagram socket is always writable: ` ( sock_writable st us ) )
+    : i udup ( sock_udp_bind st ( lo_ip ) usp )
+    ( pb `a second bind on a taken UDP port is refused: ` == ( sock_err st udup ) ( sock_err_addr_in_use ) )
+    ( sock_close st udup 8000 )
+    // …and TCP's port space is a different one: the same number is
+    // free for a listener.
+    : i tsame ( sock_listen st ( lo_ip ) usp 1 )
+    ( pb `the same number is free for TCP: ` == 0 ( sock_err st tsame ) )
+    ( sock_close st tsame 8000 )
+
+    : ( Vec u ) ping ( vec_new [u] )
+    ( bytes_extend_str ping `ping` )
+    ( pb `send_to reports what it sent: ` == 4 ( sock_udp_send_to st uc ( lo_ip ) usp ping 0 4 8000 ) )
+    ( pump st 8000 8 )
+    ( pb `the datagram arrived: ` == 1 ( sock_udp_pending st us ) )
+    ( pb `and the socket is readable: ` ( sock_readable st us ) )
+    : ( Vec u ) ugot ( vec_new [u] )
+    ( pb `recv_from returns the payload: ` == 4 ( sock_udp_recv_from st us ugot 64 ) )
+    ( pb `with the bytes intact: ` ( bytes_eq ugot ping ) )
+    ( pb `and the sender's port: ` == ( sock_udp_last_port st us ) ( sock_local_port st uc ) )
+    ( pb `the mailbox is empty again: ` == ( sock_udp_recv_from st us ugot 64 ) ( again ) )
+
+    // Datagram boundaries are the point: two sends are two receives,
+    // never one concatenation, and a short read truncates the rest of
+    // THAT datagram rather than leaving it queued.
+    ( sock_udp_send_to st uc ( lo_ip ) usp ping 0 4 8100 )
+    ( sock_udp_send_to st uc ( lo_ip ) usp ping 0 2 8100 )
+    ( pump st 8100 8 )
+    ( pb `two sends are two datagrams: ` == 2 ( sock_udp_pending st us ) )
+    : ( Vec u ) u1 ( vec_new [u] )
+    ( pb `a short read truncates its own datagram: ` == 2 ( sock_udp_recv_from st us u1 2 ) )
+    ( pb `and the next read is the NEXT datagram: ` == 2 ( sock_udp_recv_from st us u1 64 ) )
+    ( pb `not the remainder of the first: ` == 0 ( sock_udp_pending st us ) )
+
+    // connect() on a datagram socket records a default peer.
+    ( sock_udp_connect st uc ( lo_ip ) usp )
+    ( pb `connect records a peer: ` ( sock_udp_is_connected st uc ) )
+    ( pb `send with no address uses it: ` == 4 ( sock_udp_send st uc ping 0 4 8200 ) )
+    ( pump st 8200 8 )
+    ( pb `and it arrives: ` == 1 ( sock_udp_pending st us ) )
+    ( sock_udp_recv_from st us u1 64 )
+    ( pb `send without a peer is an error, not a silent drop: ` == ( sock_udp_send st us ping 0 4 8300 ) - 0 ( sock_err_write ) )
+
+    ( sock_close st us 8400 )
+    ( sock_close st uc 8400 )
+    ( vec_free [u] ping ) ( vec_free [u] ugot ) ( vec_free [u] u1 )
+
     // ── a stack that knows its own address ───────────────────────
     // Everything above resolved 127.0.0.1 by asking the wire for it and
     // waiting a retransmit timeout for the answer. An interface knows
