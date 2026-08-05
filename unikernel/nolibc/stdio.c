@@ -65,8 +65,19 @@ int fflush(FILE *f) {
     return 0;
 }
 
+/* Drop read-ahead before writing: the kernel offset is ahead of the
+ * caller's position by whatever we prefetched, and writing there would
+ * land the bytes in the wrong place. */
+static void nl_drop_readahead(FILE *f) {
+    if (f->buflen > f->bufpos)
+        nl_lseek(f->fd, -(nl_off_t)(f->buflen - f->bufpos), 1 /* SEEK_CUR */);
+    f->bufpos = f->buflen = 0;
+    f->ungot = -1;
+}
+
 static int nl_putb(FILE *f, unsigned char c) {
     if (!(f->flags & NL_F_WRITE)) { f->flags |= NL_F_ERR; return -1; }
+    if (f->buflen) nl_drop_readahead(f);
     f->buf[f->bufpos++] = c;
     if (f->bufpos == NL_BUFSZ || (f->flags & NL_F_UNBUF) ||
         ((f->flags & NL_F_LINEBUF) && c == '\n'))
@@ -277,6 +288,11 @@ int fileno(FILE *f) { return f ? f->fd : -1; }
 int fgetc(FILE *f) {
     if (f->ungot >= 0) { int c = f->ungot; f->ungot = -1; return c; }
     if (!(f->flags & NL_F_READ)) return -1;
+    /* An update stream shares one buffer between the directions, so a
+     * pending write has to reach the file before a read can see past
+     * it. buflen == 0 with bufpos > 0 is what "write-buffered" looks
+     * like here. */
+    if (f->buflen == 0 && f->bufpos > 0) fflush(f);
     if (f->bufpos >= f->buflen) {
         nl_ssize_t r = nl_read(f->fd, f->buf, NL_BUFSZ);
         if (r <= 0) { f->flags |= (r == 0) ? NL_F_EOF : NL_F_ERR; return -1; }
@@ -328,12 +344,22 @@ nl_size_t fread(void *p, nl_size_t sz, nl_size_t n, FILE *f) {
 #define NL_O_APPEND 02000
 
 FILE *fopen(const char *path, const char *mode) {
-    int flags = NL_O_RDONLY, wr = 0;
+    /* "+" anywhere after the first letter means update, and 'b' may sit
+     * on either side of it ("r+b" and "rb+" are the same stream). A
+     * mode parser that only looks at mode[1] gets "rb+" wrong, which
+     * shows up much later as a read returning nothing. */
+    int flags, sflags, plus = 0, i;
     FILE *f;
     int fd;
-    if (mode[0] == 'w') { flags = NL_O_WRONLY | NL_O_CREAT | NL_O_TRUNC; wr = 1; }
-    else if (mode[0] == 'a') { flags = NL_O_WRONLY | NL_O_CREAT | NL_O_APPEND; wr = 1; }
-    else if (mode[1] == '+' || (mode[1] == 'b' && mode[2] == '+')) flags = NL_O_RDWR;
+    for (i = 1; mode[i]; i++) if (mode[i] == '+') plus = 1;
+    switch (mode[0]) {
+    case 'w': flags = (plus ? NL_O_RDWR : NL_O_WRONLY) | NL_O_CREAT | NL_O_TRUNC;
+              sflags = plus ? (NL_F_READ | NL_F_WRITE) : NL_F_WRITE; break;
+    case 'a': flags = (plus ? NL_O_RDWR : NL_O_WRONLY) | NL_O_CREAT | NL_O_APPEND;
+              sflags = plus ? (NL_F_READ | NL_F_WRITE) : NL_F_WRITE; break;
+    default:  flags = plus ? NL_O_RDWR : NL_O_RDONLY;
+              sflags = plus ? (NL_F_READ | NL_F_WRITE) : NL_F_READ; break;
+    }
     fd = nl_open(path, flags, 0666);
     if (fd < 0) return 0;
     f = (FILE *)malloc(sizeof(FILE));
@@ -341,7 +367,7 @@ FILE *fopen(const char *path, const char *mode) {
     memset(f, 0, sizeof(FILE));
     f->fd = fd;
     f->ungot = -1;
-    f->flags = (wr ? NL_F_WRITE : NL_F_READ) | NL_F_ALLOC;
+    f->flags = sflags | NL_F_ALLOC;
     return f;
 }
 
@@ -356,8 +382,19 @@ int fclose(FILE *f) {
 
 int fseek(FILE *f, long off, int whence) {
     /* Whatever is buffered describes the old position. Drop it, both
-     * directions, or the next read returns bytes from before the seek. */
+     * directions, or the next read returns bytes from before the seek.
+     *
+     * SEEK_CUR needs more than dropping: the kernel's offset is ahead
+     * of the caller's by every byte we read ahead and have not handed
+     * out, so a relative seek must subtract them first. Without that,
+     * "read 11 bytes, then seek +9" lands at 4105 instead of 20 —
+     * which is exactly how fs_write_handle failed the moment the rest
+     * of nolibc was complete enough for it to link. */
     if (f->flags & NL_F_WRITE) fflush(f);
+    if (whence == 1 /* SEEK_CUR */) {
+        off -= (long)(f->buflen - f->bufpos);
+        if (f->ungot >= 0) off -= 1;
+    }
     f->bufpos = f->buflen = 0;
     f->ungot = -1;
     f->flags &= ~NL_F_EOF;
@@ -374,3 +411,9 @@ long ftell(FILE *f) {
     if (f->ungot >= 0) pos -= 1;
     return (long)pos;
 }
+
+/* ── the stdio names a program reaches that the runtime does not ── */
+int putchar(int c) { return fputc(c, stdout); }
+int feof(FILE *f)   { return (f->flags & NL_F_EOF) ? 1 : 0; }
+int ferror(FILE *f) { return (f->flags & NL_F_ERR) ? 1 : 0; }
+int remove(const char *path) { extern int unlink(const char *); return unlink(path); }

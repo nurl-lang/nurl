@@ -39,15 +39,22 @@ from a baked-in image) and the second (the boot shim enters at
 with a different bottom edge, which is what makes testing it on Linux
 worth anything.
 
-## State (2026-08-04)
+## State (2026-08-05)
 
 ```
-  PASS       339      corpus tests that build and run with no libc at all
-  NEEDS-FFI  139      call into runtime_ffi — sockets, threads, processes.
+  PASS       393      corpus tests that build and run with no libc at all
+  NEEDS-FFI   85      call into runtime_ffi — sockets, threads, entropy.
                       That list is the remaining A3 work, measured.
   SKIP       143      compile-fail tests and tests with no standalone build
   FAIL         0
 ```
+
+What blocks the remaining 85, by how many tests each name blocks:
+`nurl_rand_fill` 35, the pthread mutex quartet 28, and the
+`nurl_tcp_*` / `nurl_reactor_*` / `nurl_fiber_*` family 20-28 each.
+All of it is `runtime_bare.c` — the cooperative sync shims and the
+socket seam — which is the next A3 item and, by A4, the place the
+sans-IO stack plugs in.
 
 `build/nolibc/results.txt` carries the per-test verdict, and every
 `NEEDS-FFI` line names the symbols that were missing, so the next piece

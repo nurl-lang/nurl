@@ -20,6 +20,9 @@
 
 extern nl_ssize_t nl_write(int fd, const void *buf, nl_size_t n);
 extern void nl_exit_group(int code);
+extern int  nl_open(const char *path, int flags, int mode);
+extern int  nl_close(int fd);
+extern long nl_ret(long r);
 
 char **nl_environ;
 
@@ -87,11 +90,83 @@ int isatty(int fd) { (void)fd; return 0; }
 int tcgetattr(int fd, void *t) { (void)fd; (void)t; return -1; }
 int tcsetattr(int fd, int act, const void *t) { (void)fd; (void)act; (void)t; return -1; }
 
-/* ── directories and stat ───────────────────────────────────────── */
-void *opendir(const char *path) { (void)path; return 0; }
-void *readdir(void *d) { (void)d; return 0; }
-int   closedir(void *d) { (void)d; return -1; }
-int   lstat(const char *path, void *st) { (void)path; (void)st; return -1; }
+/* ── directories and stat ───────────────────────────────────────
+ * Real, over getdents64 and the stat syscalls, because the stubs that
+ * "refused honestly" turned out to refuse a test the corpus expects to
+ * work: fs_dir_list linked as soon as open/read existed and then
+ * reported "not found" for a directory that was right there. A stub is
+ * the right answer when the capability does not exist on the target;
+ * on Linux it does, and the freestanding version of this file is where
+ * the baked-in image reader will go (plan B7).
+ *
+ * The kernel's linux_dirent64 IS glibc's `struct dirent` field for
+ * field — d_ino, d_off, d_reclen, d_type, d_name — which is how glibc
+ * gets away with handing the raw buffer back, and why readdir can
+ * return a pointer into it here. Same for `struct stat`: on x86_64 the
+ * kernel's layout is the one the headers declare. runtime_core.o was
+ * compiled against those headers, so anything else would be silent
+ * corruption rather than a compile error. */
+#define NL_SYS_getdents64 217
+#define NL_SYS_stat        4
+#define NL_SYS_fstat       5
+#define NL_SYS_lstat       6
+#define NL_O_RDONLY_DIR   (0 | 0200000)   /* O_RDONLY | O_DIRECTORY */
+
+struct nl_dir {
+    int fd;
+    int pos;
+    int len;
+    char buf[8192];
+};
+
+void *opendir(const char *path) {
+    struct nl_dir *d;
+    int fd = nl_open(path, NL_O_RDONLY_DIR, 0);
+    if (fd < 0) return 0;
+    d = (struct nl_dir *)malloc(sizeof(struct nl_dir));
+    if (!d) { nl_close(fd); return 0; }
+    d->fd = fd; d->pos = 0; d->len = 0;
+    return d;
+}
+
+void *readdir(void *dp) {
+    struct nl_dir *d = (struct nl_dir *)dp;
+    if (!d) return 0;
+    if (d->pos >= d->len) {
+        long r = nl_syscall6(NL_SYS_getdents64, d->fd, (long)d->buf,
+                             (long)sizeof d->buf, 0, 0, 0);
+        if (r <= 0) return 0;                  /* end of directory, or error */
+        d->len = (int)r;
+        d->pos = 0;
+    }
+    {
+        char *ent = d->buf + d->pos;
+        unsigned short reclen;
+        memcpy(&reclen, ent + 16, sizeof reclen);   /* d_reclen */
+        if (reclen == 0) return 0;                  /* malformed: stop, do not spin */
+        d->pos += reclen;
+        return ent;
+    }
+}
+
+int closedir(void *dp) {
+    struct nl_dir *d = (struct nl_dir *)dp;
+    int r;
+    if (!d) return -1;
+    r = nl_close(d->fd);
+    free(d);
+    return r;
+}
+
+int lstat(const char *path, void *st) {
+    return (int)nl_ret(nl_syscall6(NL_SYS_lstat, (long)path, (long)st, 0, 0, 0, 0));
+}
+int stat(const char *path, void *st) {
+    return (int)nl_ret(nl_syscall6(NL_SYS_stat, (long)path, (long)st, 0, 0, 0, 0));
+}
+int fstat(int fd, void *st) {
+    return (int)nl_ret(nl_syscall6(NL_SYS_fstat, fd, (long)st, 0, 0, 0, 0));
+}
 
 /* ── backtrace ──────────────────────────────────────────────────── */
 /* glibc's backtrace walks .eh_frame; a -nostdlib link has no unwinder,
@@ -100,4 +175,76 @@ int   lstat(const char *path, void *st) { (void)path; (void)st; return -1; }
 int backtrace(void **buf, int size) { (void)buf; (void)size; return 0; }
 void backtrace_symbols_fd(void *const *buf, int size, int fd) {
     (void)buf; (void)size; (void)fd;
+}
+
+/* ── environment ────────────────────────────────────────────────
+ * setenv/unsetenv rewrite the vector `_start` captured. The strings
+ * are heap copies and the vector is reallocated, so the kernel's
+ * original block is never written to — that block is above the stack
+ * and shared with argv, and growing it in place is how a nolibc
+ * corrupts its own arguments. */
+static char **nl_env_owned;      /* our copy, once we have made one */
+static int nl_env_n, nl_env_cap;
+
+static int nl_env_adopt(void) {
+    int n = 0, i;
+    char **e;
+    if (nl_env_owned) return 1;
+    for (e = nl_environ; e && *e; e++) n++;
+    nl_env_cap = n + 8;
+    nl_env_owned = (char **)malloc((nl_size_t)(nl_env_cap + 1) * sizeof(char *));
+    if (!nl_env_owned) return 0;
+    for (i = 0; i < n; i++) nl_env_owned[i] = nl_environ[i];
+    nl_env_owned[n] = 0;
+    nl_env_n = n;
+    nl_environ = nl_env_owned;
+    return 1;
+}
+
+static int nl_env_find(const char *name, nl_size_t len) {
+    int i;
+    for (i = 0; i < nl_env_n; i++) {
+        nl_size_t j;
+        for (j = 0; j < len; j++) if (nl_env_owned[i][j] != name[j]) break;
+        if (j == len && nl_env_owned[i][len] == '=') return i;
+    }
+    return -1;
+}
+
+int setenv(const char *name, const char *value, int overwrite) {
+    nl_size_t nlen = strlen(name), vlen = strlen(value);
+    char *entry;
+    int at;
+    if (!nl_env_adopt()) return -1;
+    at = nl_env_find(name, nlen);
+    if (at >= 0 && !overwrite) return 0;
+    entry = (char *)malloc(nlen + vlen + 2);
+    if (!entry) return -1;
+    memcpy(entry, name, nlen);
+    entry[nlen] = '=';
+    memcpy(entry + nlen + 1, value, vlen);
+    entry[nlen + vlen + 1] = 0;
+    if (at >= 0) { nl_env_owned[at] = entry; return 0; }
+    if (nl_env_n + 1 >= nl_env_cap) {
+        int newcap = nl_env_cap * 2 + 8;
+        char **grown = (char **)realloc(nl_env_owned,
+                                        (nl_size_t)(newcap + 1) * sizeof(char *));
+        if (!grown) return -1;
+        nl_env_owned = grown;
+        nl_env_cap = newcap;
+        nl_environ = nl_env_owned;
+    }
+    nl_env_owned[nl_env_n++] = entry;
+    nl_env_owned[nl_env_n] = 0;
+    return 0;
+}
+
+int unsetenv(const char *name) {
+    int at;
+    if (!nl_env_adopt()) return -1;
+    at = nl_env_find(name, strlen(name));
+    if (at < 0) return 0;
+    for (; at < nl_env_n - 1; at++) nl_env_owned[at] = nl_env_owned[at + 1];
+    nl_env_owned[--nl_env_n] = 0;
+    return 0;
 }

@@ -47,7 +47,10 @@ echo "── nolibc unit gates ──"
 # shellcheck disable=SC2086
 $CC $FREE -Dmemcpy=nl_memcpy -Dmemmove=nl_memmove -Dmemset=nl_memset \
     -Dmemchr=nl_memchr -Dmemcmp=nl_memcmp -Dbcmp=nl_bcmp \
-    -Dstrlen=nl_strlen -Dstrcmp=nl_strcmp \
+    -Dstrlen=nl_strlen -Dstrcmp=nl_strcmp -Dstrchr=nl_strchr \
+    -Dstrrchr=nl_strrchr -Dstrncmp=nl_strncmp -Dmemmem=nl_memmem -Dstrstr=nl_strstr \
+    -Dstrncpy=nl_strncpy -Datoll=nl_atoll -Datol=nl_atol -Datoi=nl_atoi -Dabs=nl_abs \
+    -Dllabs=nl_llabs -Dstrdup=nl_strdup \
     -c "$NOLIBC/string.c" -o "$OUT/test_string_renamed.o" || exit 2
 $CC -O2 "$ROOT/unikernel/tests/string_diff.c" "$OUT/test_string_renamed.o" \
     -o "$OUT/string_diff" || exit 2

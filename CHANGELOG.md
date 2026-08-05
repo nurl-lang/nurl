@@ -16,10 +16,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `%f`/`%e`/`%g`, `setjmp`/`longjmp`, and the thread-pointer setup
   `__thread` needs. **339 corpus tests build and run with `-nostdlib`
   and glibc nowhere in the link line**, matching their ordinary
-  goldens; 139 more still call into `runtime_ffi` (sockets, threads,
-  processes) and `unikernel/run_nolibc_tests.sh` prints the missing
-  symbols for each, so the remaining work is measured rather than
-  guessed. A hello-world built this way is a 75 KB static binary that
+  goldens (393 once the libc surface NURL *programs* call — `atoll`,
+  `strstr`, `strchr`, the mechanical syscall wrappers, real `readdir`
+  and `stat` — was added on top of the 49 the runtime itself needs);
+  85 more still call into `runtime_ffi` (sockets, threads, entropy) and
+  `unikernel/run_nolibc_tests.sh` prints the missing symbols for each,
+  so the remaining work is measured rather than guessed. A hello-world built this way is a 75 KB static binary that
   makes four syscalls in its whole life.
 
   Gated by three differentials, not by "it didn't crash":

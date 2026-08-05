@@ -14,6 +14,13 @@ void *nl_memchr(const void*,int,nl_size_t);
 int   nl_memcmp(const void*,const void*,nl_size_t);
 nl_size_t nl_strlen(const char*);
 int   nl_strcmp(const char*,const char*);
+char *nl_strchr(const char*,int);
+char *nl_strrchr(const char*,int);
+int   nl_strncmp(const char*,const char*,nl_size_t);
+void *nl_memmem(const void*,nl_size_t,const void*,nl_size_t);
+char *nl_strstr(const char*,const char*);
+char *nl_strncpy(char*,const char*,nl_size_t);
+long long nl_atoll(const char*);
 
 static long bad = 0, checked = 0;
 #define CHECK(cond, ...) do { checked++; if (!(cond)) { if (bad<10) fprintf(stderr, __VA_ARGS__); bad++; } } while (0)
@@ -66,6 +73,42 @@ int main(void) {
                   "strcmp- off %d len %d pos %d\n", off, len, i);
             t[off+i] = save;
         }
+    }
+    /* the functions NURL programs reach directly: same sweep, and the
+     * needle/haystack cases a hand-written search gets wrong (empty
+     * needle, needle longer than hay, match at the very end). */
+    {
+        static const char *hays[] = {"", "a", "abc", "abcabcabd", "aaaaab",
+            "the quick brown fox", "xxxxxxxxxxxxxxxxxxxxy", "\r\n\r\n"};
+        static const char *nees[] = {"", "a", "b", "abc", "abd", "abcabd",
+            "fox", "y", "\r\n", "zzz", "the quick brown fox "};
+        for (unsigned h = 0; h < sizeof hays/sizeof *hays; h++) {
+            for (unsigned n = 0; n < sizeof nees/sizeof *nees; n++) {
+                CHECK(strstr(hays[h], nees[n]) == nl_strstr(hays[h], nees[n]),
+                      "strstr(%s,%s)\n", hays[h], nees[n]);
+                CHECK(memmem(hays[h], strlen(hays[h]), nees[n], strlen(nees[n]))
+                      == nl_memmem(hays[h], strlen(hays[h]), nees[n], strlen(nees[n])),
+                      "memmem(%s,%s)\n", hays[h], nees[n]);
+                for (nl_size_t k = 0; k <= strlen(hays[h]) + 1; k++)
+                    CHECK(sgn(strncmp(hays[h], nees[n], k)) == sgn(nl_strncmp(hays[h], nees[n], k)),
+                          "strncmp(%s,%s,%lu)\n", hays[h], nees[n], (unsigned long)k);
+            }
+            for (int c = 0; c < 256; c++) {
+                CHECK(strchr(hays[h], c) == nl_strchr(hays[h], c), "strchr %d\n", c);
+                CHECK(strrchr(hays[h], c) == nl_strrchr(hays[h], c), "strrchr %d\n", c);
+            }
+            for (nl_size_t k = 0; k <= 24; k++) {
+                char x[32], y[32];
+                memset(x, 0x7E, sizeof x); memset(y, 0x7E, sizeof y);
+                strncpy(x, hays[h], k); nl_strncpy(y, hays[h], k);
+                CHECK(memcmp(x, y, sizeof x) == 0, "strncpy(%s,%lu)\n", hays[h], (unsigned long)k);
+            }
+        }
+        static const char *nums[] = {"0", "1", "-1", "+42", "  12", "\t-7", "999999999999",
+            "9223372036854775807", "-9223372036854775808", "12abc", "abc", "", "-", "007"};
+        for (unsigned i = 0; i < sizeof nums/sizeof *nums; i++)
+            CHECK(atoll(nums[i]) == nl_atoll(nums[i]), "atoll(%s): %lld vs %lld\n",
+                  nums[i], atoll(nums[i]), nl_atoll(nums[i]));
     }
     printf("string differential: %ld checks, %ld mismatches\n", checked, bad);
     return bad ? 1 : 0;

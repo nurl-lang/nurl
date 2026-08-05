@@ -54,8 +54,11 @@ one() {
     fi
     if ! clang -nostdlib -static -o "$work/$name" "$work/$name.o" \
             "$OUTDIR/runtime_core.o" "$OUTDIR"/nl_*.o 2>"$work/link.err"; then
-        missing=$(grep -oE "undefined symbol: [A-Za-z0-9_]+" "$work/link.err" \
-                  | sed 's/undefined symbol: //' | sort -u | tr '\n' ' ')
+        # GNU ld says "undefined reference to `name'"; lld says
+        # "undefined symbol: name". Match both, or the list this runner
+        # exists to produce is the string "<link error>" 139 times.
+        missing=$(grep -oE "undefined (reference to \`|symbol: )[A-Za-z0-9_]+" "$work/link.err" \
+                  | sed -E "s/undefined (reference to \`|symbol: )//" | sort -u | tr '\n' ' ')
         echo "NEEDS-FFI $name :: ${missing:-<link error>}"
         return 0
     fi
