@@ -41,6 +41,7 @@ $ `stdlib/net/inet.nu`
 $ `stdlib/net/ipv4.nu`
 $ `stdlib/net/tcpseg.nu`
 $ `stdlib/net/tcp.nu`
+$ `stdlib/net/pktbuf.nu`
 $ `stdlib/net/stack.nu`
 
 // ── rx outcomes ──────────────────────────────────────────────────
@@ -301,25 +302,25 @@ $ `stdlib/net/stack.nu`
 
 // ── sending ──────────────────────────────────────────────────────
 
-// Drain a connection's TcpOut into `out` as IPv4 datagrams — one
-// datagram per SEGMENT, which is why TcpOut carries end offsets at all:
+// Drain a connection's PktBuf into `out` as IPv4 datagrams — one
+// datagram per SEGMENT, which is why PktBuf carries end offsets at all:
 // TCP has no length field of its own and concatenating segments into
 // one buffer is irreversible.
-@ __flush * TcpStack ts i idx * TcpOut o i now ( Vec u ) out → i {
+@ __flush * TcpStack ts i idx * PktBuf o i now * PktBuf out → i {
     : *TConn c ( __tconn_ptr ts idx )
-    : i nseg ( tcpout_count o )
+    : i nseg ( pktbuf_count o )
     : ~ i emitted 0
     : ~ i k 0
     ~ < k nseg {
-        : i s ( tcpout_seg_start o k )
-        : i n ( tcpout_seg_len o k )
-        // Straight from the TcpOut buffer — no temporary Vec, because
+        : i s ( pktbuf_start o k )
+        : i n ( pktbuf_len o k )
+        // Straight from the PktBuf buffer — no temporary Vec, because
         // the segment is already sitting there as a range.
         : TxResult r ( stack_tx_ip4 . ts net . c remote_ip ( ip_proto_tcp ) . o bytes s n now out )
         = emitted + emitted . r emitted
         = k + k 1
     }
-    ( tcpout_clear o )
+    ( pktbuf_clear o )
     ^ emitted
 }
 
@@ -354,7 +355,7 @@ $ `stdlib/net/stack.nu`
 // RFC 793: a segment that belongs to no connection is answered with a
 // RST, unless it IS a RST — which would loop forever between two hosts
 // that each think the other is confused.
-@ __send_rst * TcpStack ts i src_ip i dst_ip TcpSeg s i now ( Vec u ) out → i {
+@ __send_rst * TcpStack ts i src_ip i dst_ip TcpSeg s i now * PktBuf out → i {
     ? == & . s flags 4 4 { ^ 0 } {}
     = . ts rst_sent + . ts rst_sent 1
     : ( Vec u ) dg ( vec_new [u] )
@@ -376,7 +377,7 @@ $ `stdlib/net/stack.nu`
 
 // A SYN to a listening port. The listener stays listening; a new
 // connection is created in SYN_RCVD and queued for accept.
-@ __passive_open * TcpStack ts i lidx i local_ip i local_port TcpSeg s i src_ip i now ( Vec u ) frame * TcpOut o ( Vec u ) out → TRx {
+@ __passive_open * TcpStack ts i lidx i local_ip i local_port TcpSeg s i src_ip i now ( Vec u ) frame * PktBuf o * PktBuf out → TRx {
     : *TListener l ( __tlisten_ptr ts lidx )
     ? >= ( vec_len [i] . l pending ) . l backlog {
         // The backlog is full. Dropping the SYN is what a listening
@@ -422,7 +423,7 @@ $ `stdlib/net/stack.nu`
 // Feed one frame in. Non-TCP frames are handed to stack.nu and their
 // verdict passed straight through, so a caller can run one loop for
 // everything rather than two that disagree about which is authoritative.
-@ tstack_rx * TcpStack ts ( Vec u ) frame i now ( Vec u ) out → TRx {
+@ tstack_rx * TcpStack ts ( Vec u ) frame i now * PktBuf out → TRx {
     : RxResult rr ( stack_rx . ts net frame now out )
     ? != . rr kind ( rx_tcp ) {
         ^ ( __trx ( trx_other ) . rr kind -1 . rr emitted )
@@ -431,13 +432,13 @@ $ `stdlib/net/stack.nu`
     ? ! . s valid { ^ ( __trx ( trx_none ) 0 -1 0 ) } {}
 
     : i idx ( __find_conn ts . rr dst_ip . s dst_port . rr src_ip . s src_port )
-    : *TcpOut o ( tcpout_new )
+    : *PktBuf o ( pktbuf_new )
     ? >= idx 0 {
         : *TConn c ( __tconn_ptr ts idx )
         : i before ( tcb_recv_queue_len . c tcb )
         : i r ( tcb_input . c tcb s frame now o )
         : i emitted ( __flush ts idx o now out )
-        ( tcpout_free o )
+        ( pktbuf_free o )
         : i st . . c tcb state
         ? . . c tcb reset {
             ( __conn_release ts idx )
@@ -459,11 +460,11 @@ $ `stdlib/net/stack.nu`
         : i lidx ( __find_listener ts . rr dst_ip . s dst_port )
         ? >= lidx 0 {
             : TRx res ( __passive_open ts lidx . rr dst_ip . s dst_port s . rr src_ip now frame o out )
-            ( tcpout_free o )
+            ( pktbuf_free o )
             ^ res
         } {}
     } {}
-    ( tcpout_free o )
+    ( pktbuf_free o )
     = . ts no_conn + . ts no_conn 1
     : i em ( __send_rst ts . rr src_ip . rr dst_ip s now out )
     ^ ( __trx ( trx_no_conn ) 0 -1 em )
@@ -481,31 +482,31 @@ $ `stdlib/net/stack.nu`
 // `tstack_conn_state` (or waits for the socket layer's wakeup) for
 // ESTABLISHED. A SYN that could not be framed because ARP has not
 // resolved yet is NOT an error — the retransmit timer will send it.
-@ tstack_connect * TcpStack ts i remote_ip i remote_port i local_port i now ( Vec u ) out → i {
+@ tstack_connect * TcpStack ts i remote_ip i remote_port i local_port i now * PktBuf out → i {
     : i idx ( __conn_alloc ts )
     : *TConn c ( __tconn_ptr ts idx )
     = . c local_ip . . ts net our_ip
     = . c local_port ? > local_port 0 local_port ( __next_ephemeral ts )
     = . c remote_ip remote_ip
     = . c remote_port remote_port
-    : *TcpOut o ( tcpout_new )
+    : *PktBuf o ( pktbuf_new )
     ( tcb_connect . c tcb . c local_ip . c local_port remote_ip remote_port ( __next_iss ts ) now o )
     ( __flush ts idx o now out )
-    ( tcpout_free o )
+    ( pktbuf_free o )
     ^ idx
 }
 
 // ── the rest of the socket surface, as pure logic ────────────────
 
-@ tstack_write * TcpStack ts i idx ( Vec u ) data i off i len i now ( Vec u ) out → i {
+@ tstack_write * TcpStack ts i idx ( Vec u ) data i off i len i now * PktBuf out → i {
     : *TConn c ( __tconn_ptr ts idx )
     ? == # i c 0 { ^ -1 } {}
     ? ! . c used { ^ -1 } {}
     : i n ( tcb_write . c tcb data off len 65536 )
-    : *TcpOut o ( tcpout_new )
+    : *PktBuf o ( pktbuf_new )
     ( tcb_pump . c tcb now o )
     ( __flush ts idx o now out )
-    ( tcpout_free o )
+    ( pktbuf_free o )
     ^ n
 }
 
@@ -516,25 +517,25 @@ $ `stdlib/net/stack.nu`
     ^ ( tcb_read . c tcb dst n )
 }
 
-@ tstack_close * TcpStack ts i idx i now ( Vec u ) out → v {
+@ tstack_close * TcpStack ts i idx i now * PktBuf out → v {
     : *TConn c ( __tconn_ptr ts idx )
     ? == # i c 0 { ^ } {}
     ? ! . c used { ^ } {}
-    : *TcpOut o ( tcpout_new )
+    : *PktBuf o ( pktbuf_new )
     ( tcb_close . c tcb now o )
     ( __flush ts idx o now out )
-    ( tcpout_free o )
+    ( pktbuf_free o )
     ? == . . c tcb state ( tcp_closed ) { ( __conn_release ts idx ) } {}
 }
 
-@ tstack_abort * TcpStack ts i idx i now ( Vec u ) out → v {
+@ tstack_abort * TcpStack ts i idx i now * PktBuf out → v {
     : *TConn c ( __tconn_ptr ts idx )
     ? == # i c 0 { ^ } {}
     ? ! . c used { ^ } {}
-    : *TcpOut o ( tcpout_new )
+    : *PktBuf o ( pktbuf_new )
     ( tcb_abort . c tcb o )
     ( __flush ts idx o now out )
-    ( tcpout_free o )
+    ( pktbuf_free o )
     ( __conn_release ts idx )
 }
 
@@ -544,7 +545,7 @@ $ `stdlib/net/stack.nu`
 // ARP cache's own expiry. Returns the number of frames emitted, so a
 // caller that wants to know whether the loop did anything does not have
 // to diff the output buffer.
-@ tstack_tick * TcpStack ts i now ( Vec u ) out → i {
+@ tstack_tick * TcpStack ts i now * PktBuf out → i {
     ( stack_tick . ts net now out )
     : i n ( vec_len [i] . ts conns )
     : ~ i emitted 0
@@ -552,10 +553,10 @@ $ `stdlib/net/stack.nu`
     ~ < k n {
         : *TConn c ( __tconn_ptr ts k )
         ? && != # i c 0 . c used {
-            : *TcpOut o ( tcpout_new )
+            : *PktBuf o ( pktbuf_new )
             : i fired ( tcb_tick . c tcb now o )
             = emitted + emitted ( __flush ts k o now out )
-            ( tcpout_free o )
+            ( pktbuf_free o )
             ? == . . c tcb state ( tcp_closed ) { ( __conn_release ts k ) } {}
         } {}
         = k + k 1

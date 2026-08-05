@@ -68,6 +68,7 @@ $ `stdlib/core/vec.nu`
 $ `stdlib/std/bytes.nu`
 $ `stdlib/net/inet.nu`
 $ `stdlib/net/ipv4.nu`
+$ `stdlib/net/pktbuf.nu`
 $ `stdlib/net/tcpseg.nu`
 
 // ── states (RFC 793 §3.2) ───────────────────────────────────────
@@ -116,48 +117,13 @@ $ `stdlib/net/tcpseg.nu`
 // enclosing IP datagram. Concatenating emitted segments into one flat
 // buffer would therefore be irreversible: the consumer could not tell
 // where one ends and the next begins. So emission records boundaries
-// alongside the bytes, and the IP layer wraps each segment in its own
-// datagram. This is not a test convenience; it is what the real
-// integration needs, and finding it out at the seam rather than in
-// the driver is the point of building sans-IO.
-
-: TcpOut {
-    ( Vec u ) bytes
-    ( Vec i ) ends  // end offset of each emitted segment
-}
-
-@ tcpout_new → *TcpOut {
-    : *TcpOut o # *TcpOut ( nurl_alloc Z TcpOut )
-    = . o bytes ( vec_new [u] )
-    = . o ends ( vec_new [i] )
-    ^ o
-}
-
-@ tcpout_free * TcpOut o → v {
-    ( vec_free [u] . o bytes )
-    ( vec_free [i] . o ends )
-    ( free o )
-}
-
-@ tcpout_clear * TcpOut o → v {
-    ( vec_clear [u] . o bytes )
-    ( vec_clear [i] . o ends )
-}
-
-@ tcpout_count * TcpOut o → i { ^ ( vec_len [i] . o ends ) }
-
-@ tcpout_seg_end * TcpOut o i idx → i {
-    ^ ?? ( vec_get [i] . o ends idx ) { T x → x F → 0 }
-}
-
-@ tcpout_seg_start * TcpOut o i idx → i {
-    ? <= idx 0 { ^ 0 } {}
-    ^ ( tcpout_seg_end o - idx 1 )
-}
-
-@ tcpout_seg_len * TcpOut o i idx → i {
-    ^ - ( tcpout_seg_end o idx ) ( tcpout_seg_start o idx )
-}
+// alongside the bytes (net/pktbuf.nu), and the IP layer wraps each
+// segment in its own datagram. This is not a test convenience; it is
+// what the real integration needs, and finding it out at the seam
+// rather than in the driver is the point of building sans-IO.
+//
+// The frame path one layer down has the same problem for the same
+// reason, and uses the same type.
 
 : Tcb {
     i state
@@ -264,13 +230,13 @@ $ `stdlib/net/tcpseg.nu`
     ^ || == . c state ( tcp_closed ) . c reset
 }
 
-@ __emit * Tcb c * TcpOut out i flags i seq i ack ( Vec u ) payload i pay_off i pay_len → v {
+@ __emit * Tcb c * PktBuf out i flags i seq i ack ( Vec u ) payload i pay_off i pay_len → v {
     ( tcpseg_push . out bytes . c local_ip . c remote_ip . c local_port . c remote_port
     seq ack flags . c rcv_wnd . c mss . c snd_wscale payload pay_off pay_len )
-    ( vec_push [i] . out ends ( vec_len [u] . out bytes ) )
+    ( pktbuf_mark out )
 }
 
-@ __emit_empty * Tcb c * TcpOut out i flags i seq i ack → v {
+@ __emit_empty * Tcb c * PktBuf out i flags i seq i ack → v {
     : ( Vec u ) none ( vec_new [u] )
     ( __emit c out flags seq ack none 0 0 )
     ( vec_free [u] none )
@@ -308,7 +274,7 @@ $ `stdlib/net/tcpseg.nu`
 // Active open. `iss` is the initial send sequence — the caller
 // supplies it because a good ISS needs entropy this layer must not
 // invent (RFC 6528); a predictable ISS is a connection-hijack vector.
-@ tcb_connect * Tcb c i local_ip i local_port i remote_ip i remote_port i iss i now * TcpOut out → v {
+@ tcb_connect * Tcb c i local_ip i local_port i remote_ip i remote_port i iss i now * PktBuf out → v {
     = . c local_ip local_ip
     = . c local_port local_port
     = . c remote_ip remote_ip
@@ -368,7 +334,7 @@ $ `stdlib/net/tcpseg.nu`
 
 // Emit whatever may legally be sent right now: new data within the
 // peer's window, and a FIN once the queue has drained.
-@ tcb_pump * Tcb c i now * TcpOut out → i {
+@ tcb_pump * Tcb c i now * PktBuf out → i {
     ? . c reset { ^ 0 } {}
     : i before ( vec_len [u] . out bytes )
     : ~ b sent_any F
@@ -412,7 +378,7 @@ $ `stdlib/net/tcpseg.nu`
 
 // Ask for a graceful close. The FIN itself leaves via tcb_pump once
 // the send queue drains — a close must never truncate queued data.
-@ tcb_close * Tcb c i now * TcpOut out → v {
+@ tcb_close * Tcb c i now * PktBuf out → v {
     = . c close_requested T
     ? == . c state ( tcp_listen_st ) { = . c state ( tcp_closed ) ^ } {}
     ? == . c state ( tcp_syn_sent ) { = . c state ( tcp_closed ) ^ } {}
@@ -420,7 +386,7 @@ $ `stdlib/net/tcpseg.nu`
 }
 
 // Abort: send RST and drop the connection.
-@ tcb_abort * Tcb c * TcpOut out → v {
+@ tcb_abort * Tcb c * PktBuf out → v {
     ? || == . c state ( tcp_closed ) == . c state ( tcp_listen_st ) {
         = . c state ( tcp_closed )
         ^
@@ -457,7 +423,7 @@ $ `stdlib/net/tcpseg.nu`
     ^ best
 }
 
-@ tcb_tick * Tcb c i now * TcpOut out → i {
+@ tcb_tick * Tcb c i now * PktBuf out → i {
     : i before ( vec_len [u] . out bytes )
     // TIME_WAIT expiry
     ? && == . c state ( tcp_time_wait ) && != . c tw_deadline 0 >= now . c tw_deadline {
@@ -596,7 +562,7 @@ $ `stdlib/net/tcpseg.nu`
 
 // Feed one parsed segment. `buf` is the buffer it was parsed from.
 // Returns bytes emitted into `out`.
-@ tcb_input * Tcb c TcpSeg s ( Vec u ) buf i now * TcpOut out → i {
+@ tcb_input * Tcb c TcpSeg s ( Vec u ) buf i now * PktBuf out → i {
     ? ! . s valid { ^ 0 } {}
     : i before ( vec_len [u] . out bytes )
     : b has_rst == & . s flags 4 4

@@ -27,6 +27,7 @@
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/bytes.nu`
+$ `stdlib/net/pktbuf.nu`
 $ `stdlib/net/inet.nu`
 $ `stdlib/net/ipv4.nu`
 $ `stdlib/net/tcpseg.nu`
@@ -61,7 +62,7 @@ $ `stdlib/net/tcp.nu`
         // active open and a listening socket so both entry paths get
         // hammered.
         : *Tcb c ( tcb_new )
-        : *TcpOut out ( tcpout_new )
+        : *PktBuf out ( pktbuf_new )
         ? == % round 2 0 {
             ( tcb_connect c ( ip_c ) 12345 ( ip_s ) 80 + 100000 * round 7 0 out )
         } {
@@ -110,16 +111,16 @@ $ `stdlib/net/tcp.nu`
             : TcpSeg sg ( tcpseg_parse sb 0 ( vec_len [u] sb ) ( ip_s ) ( ip_c ) )
             ? . sg valid {
                 = accepted + accepted 1
-                ( tcpout_clear out )
+                ( pktbuf_clear out )
                 : i _n ( tcb_input c sg sb + 1000 * step 50 out )
                 = handled + handled 1
 
                 // (2) every emitted segment must acknowledge only data
                 // that actually exists.
-                : i nseg ( tcpout_count out )
+                : i nseg ( pktbuf_count out )
                 : ~ i si 0
                 ~ < si nseg {
-                    : TcpSeg es ( tcpseg_parse . out bytes ( tcpout_seg_start out si ) ( tcpout_seg_len out si ) ( ip_c ) ( ip_s ) )
+                    : TcpSeg es ( tcpseg_parse . out bytes ( pktbuf_start out si ) ( pktbuf_len out si ) ( ip_c ) ( ip_s ) )
                     ? . es valid {
                         ? == & . es flags 16 16 {
                             ? ( seq_gt . es ack . c rcv_nxt ) { = no_bad_ack F } {}
@@ -150,7 +151,7 @@ $ `stdlib/net/tcp.nu`
             = step + step 1
         }
         ( tcb_free c )
-        ( tcpout_free out )
+        ( pktbuf_free out )
         = round + round 1
     }
 
