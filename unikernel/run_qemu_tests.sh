@@ -62,5 +62,33 @@ for name in "${names[@]}"; do
     fi
 done
 
-echo "── QEMU guest run: $((${#names[@]} - fails))/${#names[@]} ──"
+# ── the demos, which only exist in the guest ────────────────────
+# A corpus test cannot cover these: they talk to hardware, so there is
+# no hosted golden to compare against and no host on which to produce
+# one. Each demo carries its own expected output beside it, and the
+# QEMU arguments it needs are named here — a virtio-net device for the
+# one that goes looking for devices.
+demos=0
+if [ $# -eq 0 ]; then
+    for demo in devices; do
+        src="$ROOT/unikernel/demos/$demo.nu"
+        exp="$ROOT/unikernel/demos/$demo.expected"
+        [ -f "$src" ] && [ -f "$exp" ] || continue
+        demos=$((demos + 1))
+        if ! "$ROOT/unikernel/build_unikernel.sh" "$src" >/dev/null 2>&1; then
+            echo "FAIL $demo (build)"; fails=$((fails + 1)); continue
+        fi
+        got=$("$ROOT/unikernel/run_qemu.sh" "$ROOT/build/unikernel/$demo.elf" -t 60 -- \
+              -netdev user,id=n0 -device virtio-net-device,netdev=n0 2>&1)
+        if [ "$got" = "$(cat "$exp")" ]; then
+            echo "PASS $demo (guest-only demo)"
+        else
+            echo "FAIL $demo"
+            diff "$exp" <(printf '%s\n' "$got") | head -6 | sed 's/^/     /'
+            fails=$((fails + 1))
+        fi
+    done
+fi
+
+echo "── QEMU guest run: $((${#names[@]} + demos - fails))/$((${#names[@]} + demos)) ──"
 [ "$fails" -eq 0 ]

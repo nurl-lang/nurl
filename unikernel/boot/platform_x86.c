@@ -278,6 +278,7 @@ static u64 wall_base_sec;      /* CLOCK_REALTIME epoch at boot, 0 = unset */
  * command-line error.
  */
 static const char *cmdline;
+const char *nurl_boot_cmdline(void);
 
 static u64 cmdline_u64(const char *key) {
     const char *p = cmdline;
@@ -511,6 +512,19 @@ static void pf_shutdown(int code) {
  * Defining them here would duplicate the symbols AND skip both. The
  * machine's part is nl_exit_group, above. */
 void _exit(int code) { pf_shutdown(code); for (;;) { } }
+
+/* ── the command line, for NURL ──────────────────────────────────
+ *
+ * Device discovery happens in NURL (hal/virtio.nu parses the
+ * `virtio_mmio.device=` entries), so the string has to cross the
+ * boundary. Borrowed, not copied: it lives in memory the hypervisor
+ * placed and nothing here writes to it.
+ *
+ * The Linux freestanding build has no such thing and does not define
+ * this symbol — a program that reaches for the guest's command line
+ * fails to LINK there rather than reading an empty string and
+ * concluding there are no devices. */
+const char *nurl_boot_cmdline(void) { return cmdline ? cmdline : ""; }
 
 /* ── entry ───────────────────────────────────────────────────────── */
 
