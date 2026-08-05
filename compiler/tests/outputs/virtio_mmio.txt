@@ -1,0 +1,40 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+an empty window is no device: ok
+a populated window probes as virtio-net: ok
+a LEGACY device is refused, not driven: ok
+a wrong magic is refused: ok
+device id 0 is an empty slot: ok
+the handshake completes: ok
+ACKNOWLEDGE and DRIVER were set: ok
+FEATURES_OK was set: ok
+DRIVER_OK was NOT — that is the caller's call: ok
+the driver took VERSION_1: ok
+a device that refuses the feature set fails the init: ok
+and is left FAILED, not half-ready: ok
+no VERSION_1 on offer is a refusal: ok
+…also left FAILED: ok
+the device's queue limit is readable: ok
+a queue within the limit is accepted: ok
+and marked ready: ok
+the size went in: ok
+the descriptor address is split correctly: ok
+so is the used ring's: ok
+a queue larger than the device allows is refused: ok
+a queue that is already ready is refused: ok
+notify names the queue: ok
+the ISR is readable: ok
+and acknowledged by writing back the bits: ok
+the first device parses: ok
+base: ok
+size: ok
+irq: ok
+the second one too: ok
+with the K suffix expanded: ok
+and its own irq: ok
+there is no third: ok
+so the count is two: ok
+a command line with none says zero: ok
+virtio_mmio: all ok
