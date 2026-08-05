@@ -90,5 +90,41 @@ if [ $# -eq 0 ]; then
     done
 fi
 
+# ── the one demo with a client on the other end ─────────────────
+# The rest of the gate reads what the guest printed. This one needs
+# something to talk TO it, through QEMU's port forward, which is the
+# whole point: the server is in the guest and the client is not on the
+# machine at all.
+if [ $# -eq 0 ] && command -v curl >/dev/null 2>&1; then
+    demos=$((demos + 1))
+    if "$ROOT/unikernel/build_unikernel.sh" "$ROOT/unikernel/demos/httpd.nu" >/dev/null 2>&1; then
+        out=$(mktemp)
+        ( "$ROOT/unikernel/run_qemu.sh" "$ROOT/build/unikernel/httpd.elf" -t 90 -- \
+            -netdev user,id=n0,hostfwd=tcp:127.0.0.1:18080-:8080 \
+            -device virtio-net-device,netdev=n0 > "$out" 2>&1 ) &
+        qpid=$!
+        # The guest boots, then leases an address, and only then
+        # binds. Retry rather than guess how long that takes on a
+        # machine running QEMU under TCG.
+        body=""
+        for _ in 1 2 3 4 5 6 7 8 9 10; do
+            sleep 2
+            body=$(curl -sS --max-time 8 http://127.0.0.1:18080/ 2>/dev/null)
+            [ -n "$body" ] && break
+        done
+        wait $qpid
+        if [ "$body" = "hello from a guest" ] && grep -q "response written" "$out"; then
+            echo "PASS httpd (guest server, host client)"
+        else
+            echo "FAIL httpd (curl got \"$body\")"
+            head -6 "$out" | sed 's/^/     /'
+            fails=$((fails + 1))
+        fi
+        rm -f "$out"
+    else
+        echo "FAIL httpd (build)"; fails=$((fails + 1))
+    fi
+fi
+
 echo "── QEMU guest run: $((${#names[@]} + demos - fails))/$((${#names[@]} + demos)) ──"
 [ "$fails" -eq 0 ]

@@ -419,8 +419,21 @@ $ `stdlib/net/tcpstack.nu`
 @ sock_seed_self * SockTab st i now → v {
     : *NetStack net . . st ts net
     ? == . net our_ip 0 { ^ } {}
-    ( arp_cache_insert . net arp . net our_ip . net our_mac now )
+    ( sock_seed_addr st . net our_ip now )
 }
+
+// The same, for an address we answer to that is not the interface's:
+// 127.0.0.1 is ours whatever DHCP later says, and a loopback frame has
+// to find a MAC for it before the interface has an address at all.
+@ sock_seed_addr * SockTab st i ip i now → v {
+    : *NetStack net . . st ts net
+    ( arp_cache_insert . net arp ip . net our_mac now )
+}
+
+// The address the socket layer reports as local. DHCP changes it after
+// the fact, and an fd table that kept the boot-time answer would hand
+// out a source address the peer cannot reply to.
+@ sock_set_our_ip * SockTab st i ip → v { = . st our_ip ip }
 
 // ── binding ──────────────────────────────────────────────────────
 
