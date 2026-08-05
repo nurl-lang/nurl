@@ -46,8 +46,8 @@ worth anything.
 ## State (2026-08-05)
 
 ```
-  PASS         444    corpus tests that build and run with no libc at all
-  FAIL           2    http2_client, http_server_stop_direct — see below
+  PASS         446    corpus tests that build and run with no libc at all
+  FAIL           0
   NEEDS-BARE    24    processes, signals, UDP, DNS
   NEEDS-LIBM     0
   NEEDS-NOLIBC   7    realpath, mkstemp, inotify, execvp, unix sockets
@@ -55,23 +55,14 @@ worth anything.
   SKIP         144    compile-fail tests and tests with no standalone build
 ```
 
-TCP is in that PASS column now. `async_tcp`, `async_http_server`,
-`http_server_pool`, `websocket_client`, `net_basic` and the rest run a
-real client and a real server against each other with no kernel
-sockets anywhere: `unikernel/net/sockets.nu` implements the socket ABI
-in NURL over the sans-IO stack, the frames go around a loopback that is
-literally "what this stack emits, it receives", and the blocking reads
-park on the cooperative scheduler.
-
-The two FAILs are one open problem, and it is named rather than
-counted: **two waiters can livelock**. A wait on the main context and a
-wait inside a coroutine each conclude the other is making progress —
-main's scheduler step returns "something ran" because it ran the
-coroutine, and the coroutine yields because main is not parked in the
-scheduler — so neither ever reports the wait as hopeless. The fix is
-for a socket wait to PARK on the fd rather than poll, which also gives
-the virtio-net driver the wake-up path it will want; until then those
-two tests spin until the runner's timeout.
+TCP is in that PASS column. `async_tcp`, `async_http_server`,
+`http_server_pool`, `http_server_stop_direct`, `websocket_client`,
+`http2_client`, `net_basic` and the rest run a real client and a real
+server against each other with no kernel sockets anywhere:
+`unikernel/net/sockets.nu` implements the socket ABI in NURL over the
+sans-IO stack, the frames go around a loopback that is literally "what
+this stack emits, it receives", and a blocking read PARKS on its fd —
+so the scheduler can still say "nothing can run" and mean it.
 
 The bucket a blocked test lands in is **measured**, not listed: each
 missing symbol is looked up with `nm` in the hosted `stdlib/runtime.o`
