@@ -14,6 +14,7 @@
 $ `stdlib/core/io.nu`
 $ `stdlib/core/string.nu`
 $ `stdlib/std/floatbits.nu`
+$ `stdlib/std/float.nu`
 
 // format -> parse -> bit-compare
 @ rt s label f x → v {
@@ -37,6 +38,30 @@ $ `stdlib/std/floatbits.nu`
     ( nurl_print txt )
     ( nurl_print ? == ( f64_to_bits got ) ( f64_to_bits want ) ` ok` ` MISMATCH` )
     ( nurl_print `\n` )
+}
+
+// float_parse must accept `txt` and return exactly `want`
+@ ck_ok s txt f want → v {
+    : !f ParseErr r ( float_parse txt )
+    ( nurl_print `[` ) ( nurl_print txt ) ( nurl_print `] ` )
+    ?? r {
+        T x → { ( nurl_print ? == ( f64_to_bits x ) ( f64_to_bits want ) `ok\n` `WRONG VALUE\n` ) }
+        F e → { ( nurl_print `REJECTED: ` )
+            ( nurl_print ( parse_err_msg # ParseErr e ) )
+            ( nurl_print `\n` ) }
+    }
+}
+
+// float_parse must reject `txt`, and say why
+@ ck_bad s txt → v {
+    : !f ParseErr r ( float_parse txt )
+    ( nurl_print `[` ) ( nurl_print txt ) ( nurl_print `] ` )
+    ?? r {
+        T x → { ( nurl_print `ACCEPTED\n` ) }
+        F e → { ( nurl_print `rejected: ` )
+            ( nurl_print ( parse_err_msg # ParseErr e ) )
+            ( nurl_print `\n` ) }
+    }
 }
 
 @ main → i {
@@ -64,6 +89,46 @@ $ `stdlib/std/floatbits.nu`
     ( lit `-0.000000000000000000000000000001` -1.0e-30 )
     ( lit `1e309` ? T / 1.0 0.0 0.0 )  // overflows to inf
     ( lit `1e-400` 0.0 )  // underflows to zero
+
+    // ── the non-finite values the FORMATTER emits ────────────────
+    // nurl_str_float prints "inf" / "-inf" / "nan", so a parser that
+    // stops at digits leaves a hole in the very round-trip guarantee
+    // the formatter exists to provide: an infinity in a CSV column
+    // came back as 0.0, silently. Read back, case-insensitively, with
+    // the "infinity" spelling libc also takes.
+    ( rt `inf` ? T / 1.0 0.0 0.0 )
+    ( rt `ninf` ? T / -1.0 0.0 0.0 )
+    ( lit `inf` ? T / 1.0 0.0 0.0 )
+    ( lit `INF` ? T / 1.0 0.0 0.0 )
+    ( lit `Infinity` ? T / 1.0 0.0 0.0 )
+    ( lit `-inf` ? T / -1.0 0.0 0.0 )
+    // NaN has no single bit pattern to compare, so check the predicate.
+    ( nurl_print ? ( float_is_nan ( nurl_fast_atof `nan` 3 ) ) `nan ok\n` `nan MISMATCH\n` )
+    ( nurl_print ? ( float_is_nan ( nurl_fast_atof `NaN` 3 ) ) `NaN ok\n` `NaN MISMATCH\n` )
+    // …and nothing that merely starts like them is one.
+    ( lit `infin` ? T / 1.0 0.0 0.0 )  // "inf" then garbage: still inf
+    ( lit `na` 0.0 )
+    ( lit `-` 0.0 )  // a lone sign is not -0.0
+    ( lit `.` 0.0 )
+
+    // ── the strict parser, now over the same code path ───────────
+    ( ck_ok `3.14` 3.14 )
+    ( ck_ok `  -1.5e2  ` -150.0 )
+    ( ck_ok `inf` ? T / 1.0 0.0 0.0 )
+    ( ck_bad `1.5xyz` )
+    ( ck_bad `5e` )  // an `e` with no digits is not part of the number
+    ( ck_bad `1e400` )  // overflow
+    ( ck_bad `1e-400` )  // underflow to zero
+    ( ck_bad `1e-320` )  // subnormal: an underflow that kept some bits,
+    // which is what libc reports as ERANGE too
+    ( ck_bad `0x10` )  // hex floats are libc's, not ours
+    ( ck_bad `-` )
+    ( ck_bad `` )  // empty, not malformed — the message says which
+    ( ck_bad `   ` )
+
+    // ── the lenient one skips leading whitespace, like atof did ──
+    ( nurl_print ? == ( nurl_str_to_float `  2.5` ) 2.5 `ws ok\n` `ws MISMATCH\n` )
+    ( nurl_print ? == ( nurl_str_to_float `\tnope` ) 0.0 `ws-garbage ok\n` `ws-garbage MISMATCH\n` )
 
     // ── the digits BEYOND the ones we keep ───────────────────────
     // 807 significant digits whose first 800 are exactly the midpoint

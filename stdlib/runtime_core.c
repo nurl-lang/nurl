@@ -1214,31 +1214,94 @@ static uint64_t nurl__parse_exact(const unsigned char *sig, int nsig,
     return (M & 1) ? lo + 1 : lo;       /* exactly halfway: to even */
 }
 
-/* Decimal float over a byte range (no NUL needed). Recognises
- * `[+-]?digits[.digits][(e|E)[+-]?digits]`; 0.0 for empty / non-numeric.
- * No locale, no leading space, no hex, no "inf"/"nan" — use strtod when
- * those matter. Correctly rounded, ties to even. */
-double nurl_fast_atof(const char *p, long long len) {
+/* ±inf and a quiet NaN without <math.h> — the freestanding target has
+ * none, and building them from bits also avoids raising FE_OVERFLOW the
+ * way `1e308 * 10.0` does. */
+static double nurl__inf(void) {
+    uint64_t b = 0x7ff0000000000000ULL; double d; memcpy(&d, &b, 8); return d;
+}
+static double nurl__qnan(void) {
+    uint64_t b = 0x7ff8000000000000ULL; double d; memcpy(&d, &b, 8); return d;
+}
+
+/* Case-insensitive ASCII prefix test over a byte range. */
+static int nurl__ci_prefix(const char *p, long long len, const char *word,
+                           long long wlen) {
+    if (len < wlen) return 0;
+    for (long long k = 0; k < wlen; k++) {
+        unsigned char a = (unsigned char)p[k];
+        if (a >= 'A' && a <= 'Z') a = (unsigned char)(a + 32);
+        if (a != (unsigned char)word[k]) return 0;
+    }
+    return 1;
+}
+
+/* The parser proper. `consumed` (optional) receives the number of bytes
+ * that belong to the number — 0 when there was no number at all, which
+ * is how a caller tells "0.0" from "banana". `range` (optional) is set
+ * when a decimal with digits in it overflowed to ±inf or underflowed to
+ * ±0, i.e. exactly the condition strtod reports as ERANGE.
+ *
+ * Recognises `[+-]?digits[.digits][(e|E)[+-]?digits]` and, since the
+ * matching formatter emits them, `[+-]?(inf|infinity|nan)`
+ * case-insensitively. No locale, no leading space, no hex, no
+ * `nan(chars)` payload syntax. Correctly rounded, ties to even. */
+static double nurl__atof_core(const char *p, long long len,
+                              long long *consumed, int *range) {
     unsigned char sig[NURL_ATOF_MAXSIG];
     int nsig = 0, truncated = 0, sawdot = 0, neg = 0, certain = 0, nw;
-    long long i = 0, E = 0;
+    int sawdigit = 0, nonzero = 0;
+    long long i = 0, E = 0, endpos = 0;
     uint64_t w = 0, bits, seed = 0;
     double out;
 
+    if (consumed) *consumed = 0;
+    if (range)    *range    = 0;
     if (!p || len <= 0) return 0.0;
     if (p[0] == '-')      { neg = 1; i = 1; }
     else if (p[0] == '+') {          i = 1; }
+
+    /* Non-finite spellings: `nurl_str_float` prints "inf", "-inf" and
+     * "nan", so a parser that cannot read them back leaves a hole in
+     * the round-trip guarantee the formatter exists to provide — the
+     * CSV column that held an infinity would come back as zero.
+     *
+     * Behind one test on the first byte, so the path that matters —
+     * digits, millions of them, from a CSV loader — pays a single
+     * comparison for this rather than three prefix scans. */
+    {
+        unsigned char c0 = (i < len) ? (unsigned char)p[i] : 0;
+        if (!((c0 >= '0' && c0 <= '9') || c0 == '.')) {
+            if (nurl__ci_prefix(p + i, len - i, "infinity", 8)) {
+                if (consumed) *consumed = i + 8;
+                return neg ? -nurl__inf() : nurl__inf();
+            }
+            if (nurl__ci_prefix(p + i, len - i, "inf", 3)) {
+                if (consumed) *consumed = i + 3;
+                return neg ? -nurl__inf() : nurl__inf();
+            }
+            if (nurl__ci_prefix(p + i, len - i, "nan", 3)) {
+                if (consumed) *consumed = i + 3;
+                return neg ? -nurl__qnan() : nurl__qnan();
+            }
+        }
+    }
 
     for (; i < len; i++) {
         unsigned char c = (unsigned char)p[i];
         if (c == '.') { if (sawdot) break; sawdot = 1; continue; }
         if (c < '0' || c > '9') break;
+        sawdigit = 1;
         c -= '0';
+        if (c) nonzero = 1;
         if (nsig == 0 && c == 0) { if (sawdot) E--; continue; }   /* leading 0s */
         if (nsig < NURL_ATOF_MAXSIG) { sig[nsig++] = c; if (sawdot) E--; }
         else { if (!sawdot) E++; if (c) truncated = 1; }
     }
-    if (i < len && (p[i] == 'e' || p[i] == 'E')) {
+    /* A lone sign, or a lone dot, is not a number: nothing was consumed,
+     * and `endpos` stays 0 so the caller sees that. */
+    endpos = sawdigit ? i : 0;
+    if (i < len && sawdigit && (p[i] == 'e' || p[i] == 'E')) {
         long long j = i + 1, ev = 0;
         int eneg = 0, any = 0;
         if (j < len && (p[j] == '-' || p[j] == '+')) { eneg = p[j] == '-'; j++; }
@@ -1250,16 +1313,20 @@ double nurl_fast_atof(const char *p, long long len) {
                                                            * settles it */
             any = 1;
         }
-        if (any) E += eneg ? -ev : ev;
+        /* An `e` with no digits after it is not part of the number:
+         * "5e" is the number 5 followed by the letter e, and endpos
+         * must say so or a strict caller accepts it as well-formed. */
+        if (any) { E += eneg ? -ev : ev; endpos = j; }
     }
-    if (nsig == 0) return neg ? -0.0 : 0.0;
+    if (consumed) *consumed = endpos;
+    if (nsig == 0) { out = 0.0; goto done; }
     /* [derived] speed, not value: keeps nsig inside the fast paths' 19. */
     while (nsig > 1 && sig[nsig - 1] == 0) { nsig--; E++; }
 
     /* Decided on magnitude alone: 10^320 is past +inf's threshold and
      * 10^-350 is below half the smallest subnormal. */
-    if (E + nsig > 320)  { NURL_ATOF_HIT(0); out = 1e308 * 10.0; return neg ? -out : out; }
-    if (E + nsig < -350) { NURL_ATOF_HIT(0); return neg ? -0.0 : 0.0; }
+    if (E + nsig > 320)  { NURL_ATOF_HIT(0); out = nurl__inf(); goto done; }
+    if (E + nsig < -350) { NURL_ATOF_HIT(0); out = 0.0;         goto done; }
 
     for (nw = 0; nw < nsig && nw < 19; nw++) w = w * 10 + sig[nw];
 
@@ -1270,13 +1337,13 @@ double nurl_fast_atof(const char *p, long long len) {
                 1e18, 1e19, 1e20, 1e21, 1e22 };
             NURL_ATOF_HIT(1);
             out = E >= 0 ? (double)w * p10[E] : (double)w / p10[-E];
-            return neg ? -out : out;
+            goto done;
         }
         seed = nurl__approx_pow10(w, (int)E, &certain);    /* path B */
         if (certain) {
             NURL_ATOF_HIT(2);
             memcpy(&out, &seed, 8);
-            return neg ? -out : out;
+            goto done;
         }
     } else if (E + nsig - 19 > -400 && E + nsig - 19 < 400) {
         /* a within-one-ulp starting point for the search below */
@@ -1287,7 +1354,48 @@ double nurl_fast_atof(const char *p, long long len) {
     NURL_ATOF_HIT(3);
     bits = nurl__parse_exact(sig, nsig, truncated, E, seed);   /* path C */
     memcpy(&out, &bits, 8);
+
+done:
+    /* Nothing was consumed — "-", "+", "." and the like. The sign is
+     * then not part of any number, so it must not reach the result:
+     * strtod answers +0.0 for all of them, and `-0.0` here would be a
+     * value the input never contained. */
+    if (!endpos) return 0.0;
+
+    /* Out of range is read off the ANSWER, not off the branch that
+     * produced it, so every path — including the exact big-integer
+     * search — reports it without a second place to keep in step.
+     *
+     * The condition is strtod's, not the obvious one: a decimal with a
+     * nonzero digit that lands on ±inf overflowed, and one that lands
+     * anywhere BELOW the smallest normal underflowed — a subnormal is
+     * an underflow that kept some bits, and glibc sets ERANGE for it.
+     * Answering only on a flush to zero would quietly widen what
+     * stdlib/std/float.nu accepts. */
+    if (range && nonzero) {
+        uint64_t ob;
+        memcpy(&ob, &out, 8);
+        if (ob >= 0x7ff0000000000000ULL || ob < 0x0010000000000000ULL)
+            *range = 1;
+    }
     return neg ? -out : out;
+}
+
+double nurl_fast_atof(const char *p, long long len) {
+    return nurl__atof_core(p, len, 0, 0);
+}
+
+/* Same parser, with the two answers a strict caller needs:
+ * out[0] = bytes consumed (0 = there was no number here),
+ * out[1] = 1 when the value is out of range (strtod's ERANGE).
+ * One out-parameter block rather than two pointers because the NURL
+ * caller allocates it once and reads both slots with nurl_peek. */
+double nurl_fast_atof_ex(const char *p, long long len, long long *out) {
+    long long used = 0;
+    int range = 0;
+    double v = nurl__atof_core(p, len, &used, &range);
+    if (out) { out[0] = used; out[1] = range; }
+    return v;
 }
 
 /* First-occurrence offset of needle in hay[0..hlen), or -1 if absent.
