@@ -17,7 +17,7 @@
 // The handler's job: echo back the request method + path + body,
 // JSON-shaped, status 200. That gives us several things to check at
 // once (status line, content-type, content-length, body bytes).
-// requires: live curl
+// requires: live fibers curl
 
 $ `stdlib/std/net.nu`
 $ `stdlib/std/process.nu`

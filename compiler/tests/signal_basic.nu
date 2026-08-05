@@ -24,7 +24,7 @@
 //      Spawns a worker, sleeps 50 ms to ensure it's blocked in
 //      accept, then calls signal_trigger_shutdown; the worker should
 //      return within ~50 ms.
-// requires: live
+// requires: live fibers
 
 $ `stdlib/std/signal.nu`
 $ `stdlib/std/net.nu`

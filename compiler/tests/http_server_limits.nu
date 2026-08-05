@@ -14,7 +14,7 @@
 // Needs a loopback socket + python3 (same as http_server_seq /
 // pipelined). Two listeners on adjacent ports so the cases don't
 // interleave.
-// requires: live python3
+// requires: live fibers python3
 
 $ `stdlib/std/net.nu`
 $ `stdlib/std/process.nu`

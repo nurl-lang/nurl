@@ -12,7 +12,7 @@
 //      peer subject DN surfaced through tcp_peer_cert_subject.
 //
 // Pre-flight: openssl + python3 + ssl module must be on $PATH.
-// requires: live openssl bash
+// requires: live fibers openssl bash
 
 $ `stdlib/std/net.nu`
 $ `stdlib/std/process.nu`

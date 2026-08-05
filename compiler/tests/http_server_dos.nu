@@ -7,7 +7,7 @@
 //
 // Verification: count how many of the 4 conns receive any data on
 // the read. accepted_count must equal 2 (cap value).
-// requires: live python3
+// requires: live fibers python3
 
 $ `stdlib/std/net.nu`
 $ `stdlib/std/process.nu`

@@ -1,7 +1,0 @@
-COMPILE OK
-LINK OK
-EXIT 0
-OUTPUT
-serve=OK
-body_len=100000
-body_ok=True
