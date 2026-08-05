@@ -33,10 +33,12 @@ OUTDIR="${NURL_UNIKERNEL_OUT:-$ROOT/build/unikernel}"
 CC="${CC:-clang}"
 SRC=""
 OUT=""
+FSDIR=""
 
 while [ $# -gt 0 ]; do
     case "$1" in
         -o) OUT="$2"; shift 2 ;;
+        --fs) FSDIR="$2"; shift 2 ;;
         *)  SRC="$1"; shift ;;
     esac
 done
@@ -67,6 +69,24 @@ for f in string malloc stdio dtoa math misc; do
     $CC $KFLAGS -c "$NOLIBC/$f.c" -o "$OUTDIR/nl_$f.o"
 done
 $CC $KFLAGS -c "$BOOT/platform_x86.c" -o "$OUTDIR/platform.o"
+$CC $KFLAGS -c "$BOOT/initfs.c"       -o "$OUTDIR/boot_initfs.o"
+
+# The baked-in filesystem: a directory becomes a tar, and the tar
+# becomes an object with two symbols around it. With no --fs the
+# archive is empty rather than absent, so "no files" is a zero-length
+# lookup instead of a conditional in every reader.
+: > "$OUTDIR/initfs.tar"
+if [ -n "$FSDIR" ]; then
+    tar cf "$OUTDIR/initfs.tar" -C "$FSDIR" .
+fi
+( cd "$OUTDIR" && ld -r -b binary -o initfs_data.o initfs.tar )
+# `ld -b binary` names its symbols after the path it was given; rename
+# them to something a C file can declare without knowing that path.
+objcopy \
+    --redefine-sym _binary_initfs_tar_start=nurl_initfs_start \
+    --redefine-sym _binary_initfs_tar_end=nurl_initfs_end \
+    --redefine-sym _binary_initfs_tar_size=nurl_initfs_size_sym \
+    "$OUTDIR/initfs_data.o"
 $CC $KFLAGS -c "$BOOT/tls_guest.c"    -o "$OUTDIR/tls_guest.o"
 $CC -c "$BOOT/boot.S"                 -o "$OUTDIR/boot.o"
 $CC $KFLAGS -c "$NOLIBC/setjmp_x86_64.S" -o "$OUTDIR/nl_setjmp.o" 2>/dev/null \
@@ -77,6 +97,7 @@ $CC -nostdlib -static -no-pie -Wl,-T,"$BOOT/link.ld" -Wl,--build-id=none \
     "$OUTDIR/boot.o" "$OUTDIR/$base.o" \
     "$OUTDIR/runtime_core.o" "$OUTDIR/runtime_ctx.o" "$OUTDIR/runtime_bare.o" \
     "$OUTDIR/platform.o" "$OUTDIR/tls_guest.o" \
+    "$OUTDIR/boot_initfs.o" "$OUTDIR/initfs_data.o" \
     "$OUTDIR"/nl_*.o
 
 echo "built $OUT"

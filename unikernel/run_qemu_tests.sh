@@ -90,6 +90,28 @@ if [ $# -eq 0 ]; then
     done
 fi
 
+# ── the demo with a filesystem and arguments ────────────────────
+# Built with --fs, run with args on the kernel command line: the two
+# halves of B7, and the only demo whose build and invocation differ
+# from the rest.
+if [ $# -eq 0 ]; then
+    demos=$((demos + 1))
+    if "$ROOT/unikernel/build_unikernel.sh" --fs "$ROOT/unikernel/demos/initfs_root" \
+            "$ROOT/unikernel/demos/initfs.nu" >/dev/null 2>&1; then
+        got=$(NURL_APPEND='args="--token abc --verbose"' \
+              "$ROOT/unikernel/run_qemu.sh" "$ROOT/build/unikernel/initfs.elf" -t 60 2>&1)
+        if [ "$got" = "$(cat "$ROOT/unikernel/demos/initfs.expected")" ]; then
+            echo "PASS initfs (guest-only demo)"
+        else
+            echo "FAIL initfs"
+            diff "$ROOT/unikernel/demos/initfs.expected" <(printf '%s\n' "$got") | head -6 | sed 's/^/     /'
+            fails=$((fails + 1))
+        fi
+    else
+        echo "FAIL initfs (build)"; fails=$((fails + 1))
+    fi
+fi
+
 # ── the one demo with a client on the other end ─────────────────
 # The rest of the gate reads what the guest printed. This one needs
 # something to talk TO it, through QEMU's port forward, which is the
