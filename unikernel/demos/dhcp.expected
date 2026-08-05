@@ -1,0 +1,5 @@
+lease acquired: yes
+address: 10.0.2.15
+gateway: 10.0.2.2
+netmask is a real one: yes
+lease has a deadline: yes
