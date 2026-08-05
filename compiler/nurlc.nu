@@ -19017,16 +19017,31 @@
 // producing a duplicate LLVM rejects with "invalid redefinition of
 // function". The symbol name is parsed out of the line (between '@'
 // and '(') so the list below stays single-source.
+// One line of the runtime preamble. The name is extracted so the line
+// can be deduped against a user `&`-declaration of the same symbol
+// (gen_ffi_decl reads `__ffi_emitted`) — and so it can be SKIPPED when
+// the program defines that symbol itself.
+//
+// The skip is the same rule gen_ffi_decl applies to imported FFI
+// declarations: a definition supersedes a declaration, exactly as in C,
+// and in textual IR the two cannot coexist at all ("invalid redefinition
+// of function"). This half was missing because the preamble is emitted
+// from one hardcoded list rather than from the program's imports — so a
+// program defining `nurl_tcp_err_kind` (the unikernel's socket ABI over
+// the sans-IO stack) got a declare it never asked for and could not
+// compile. It reads `__arity`, which is why emit_header runs after
+// scan_fn_sigs.
 @ __emit_rt_decl i syms s line → v {
-    ( emit line )
     : i at ( nurl_str_find line `@` )
-    ? >= at 0 {
-        : i lp ( nurl_str_find line `(` )
-        ? > lp at {
-            : s nm ( nurl_str_slice line + at 1 - lp + at 1 )
-            ( nurl_sym_def syms ( nurl_str_cat nm `__ffi_emitted` ) `1` )
-        } {}
+    : i lp ( nurl_str_find line `(` )
+    ? && >= at 0 > lp at {
+        : s nm ( nurl_str_slice line + at 1 - lp + at 1 )
+        ? != 0 ( nurl_sym_len2 syms nm `__arity` ) { ^ } {}
+        ( emit line )
+        ( nurl_sym_def syms ( nurl_str_cat nm `__ffi_emitted` ) `1` )
+        ^
     } {}
+    ( emit line )
 }
 
 @ emit_header i syms → v {
@@ -22673,7 +22688,6 @@
     // discarded with it — which is what a caller does with post-error
     // IR anyway.
     ( nurl_print_buf_start )
-    ( emit_header syms )
     ? != g_dbg_enabled 0 { ( dbg_init path ) } {}
     ( init_syms syms )
     : i lex0 ( nurl_lex_new src path )
@@ -22682,6 +22696,12 @@
     : i lex1 ( nurl_lex_new src path )
     ( scan_fn_sigs lex1 syms )
     ( nurl_lex_free lex1 )
+    // AFTER scan_fn_sigs, and this is load-bearing: the preamble must
+    // not declare a symbol the program itself defines (__emit_rt_decl),
+    // and only the whole-program signature pass knows which those are.
+    // Module-level order in LLVM IR carries no meaning, so the header
+    // landing here rather than first changes nothing else.
+    ( emit_header syms )
     // Every impl across the program is now registered — enforce that each
     // implemented subtrait's supertraits are implemented for the same type.
     ( verify_super_obligations )

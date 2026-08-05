@@ -407,6 +407,25 @@ static void nb_wake_joiners(NbCoro *c) {
  * context it must return through. Everything that could block from
  * inside a coroutine parks instead. */
 static int nurl__bare_step(void) {
+    /* A DUE timer is work, whether or not anything else is runnable.
+     *
+     * Expiring timers only in the idle branch below made `sleep_ms(50)`
+     * mean "50 ms, or until the machine goes idle, whichever is LATER"
+     * — and a coroutine that polls (`while (!ready) yield;`) keeps the
+     * run queue non-empty forever, so every sleeping coroutine sleeps
+     * forever with it. The hosted runtime cannot have this bug: its
+     * timers are checked by the reactor thread, which the OS schedules
+     * whatever the workers are doing. Here the schedule is the whole
+     * runtime, so the check has to be here.
+     *
+     * Found through the socket layer — a fiber blocked in accept polls
+     * while the client fiber sleeps 50 ms before connecting, and the
+     * two starved each other into a hang that looked like a socket
+     * deadlock and was not. */
+    if (nb_timers) {
+        long long tnow = nb_now_ms();
+        if (nb_timers->wake_at_ms <= tnow && nb_timers_expire(tnow) > 0) return 1;
+    }
     NbCoro *c = nb_rq_pop();
     if (!c) {
         if (!nb_timers) return 0;
@@ -447,11 +466,21 @@ static int nurl__bare_step(void) {
     return 1;
 }
 
+/* Depth of nb_drive_until: non-zero means the MAIN context is parked
+ * inside the scheduler waiting for a predicate, and will do no further
+ * application work until a coroutine or a timer satisfies it. A
+ * coroutine that is itself waiting needs this to tell "yielding lets
+ * main get on with its work" from "yielding hands control to a context
+ * that is only going to hand it straight back" — see nurl_bare_blocked. */
+static int nb_drive_depth;
+
 /* Drive the scheduler until `pred(arg)` holds. Main context only. */
 static void nb_drive_until(int (*pred)(void *), void *arg, const char *what) {
+    nb_drive_depth++;
     while (!pred(arg)) {
-        if (!nurl__bare_step()) nurl__bare_deadlock(what);
+        if (!nurl__bare_step()) { nb_drive_depth--; nurl__bare_deadlock(what); return; }
     }
+    nb_drive_depth--;
 }
 
 /* ── §8  Mutexes ──────────────────────────────────────────────────
@@ -869,6 +898,63 @@ long long nurl_fiber_sleep_ms(long long ms) {
         if (now >= deadline) return 0;
         if (!nurl__bare_step()) nb_sleep_ms(deadline - now);
     }
+}
+
+/* ── §12b  The socket seam's two questions ────────────────────────
+ *
+ * A blocking socket read has no kernel to hand the CPU to. The wait
+ * loop lives above this file — in NURL, over the sans-IO stack
+ * (unikernel/net/sockets.nu) — and needs exactly two things this file
+ * knows and it does not:
+ *
+ *   nurl_bare_poll  run one scheduler step; 1 if anything ran. It is
+ *                   also the only correct place to sleep: a step with
+ *                   nothing runnable and a timer armed waits for the
+ *                   timer rather than spinning the one vCPU.
+ *   nurl_bare_idle  1 when nothing is runnable and no timer is armed
+ *                   — i.e. when the caller blocks, nothing moves.
+ *
+ * The second is what makes a socket deadlock DECIDABLE rather than a
+ * hang: no frames queued, nothing runnable, no timer, and no device
+ * that could deliver unprompted means this fd will never be ready.
+ * Whether a device exists is the caller's knowledge, not ours.
+ *
+ * Only the main context may step (nurl__bare_step switches through
+ * nb_loop_ctx, which a coroutine would have to return through), so a
+ * coroutine gets 0 and yields instead. */
+
+long long nurl_bare_poll(void) {
+    if (nb_current) return 0;
+    if (!nb_initialized) nurl_runtime_init(0);
+    return nurl__bare_step() ? 1 : 0;
+}
+
+long long nurl_bare_runnable(void) {
+    return nb_rq_head ? 1 : 0;
+}
+
+/* 1 when the main context is parked inside the scheduler (chan_recv,
+ * join, runtime_run) rather than running application code.
+ *
+ * This is the fact a waiting coroutine cannot see for itself: the main
+ * context is never in the run queue, so `nurl_bare_runnable` answering
+ * 0 does NOT mean nothing can happen — usually it means main is busy
+ * and yielding is exactly the right move. Only when main is blocked
+ * too, with an empty run queue and no timer armed, is a coroutine's
+ * wait provably hopeless. */
+long long nurl_bare_blocked(void) {
+    return nb_drive_depth > 0 ? 1 : 0;
+}
+
+/* Milliseconds until the earliest armed timer, 0 if one is already due,
+ * -1 if none is armed. A waiter that is the only runnable coroutine
+ * uses this to PARK instead of spinning: with nothing else runnable and
+ * no frames queued, nothing can change its answer before that deadline,
+ * and parking is what lets the machine actually idle. */
+long long nurl_bare_timer_ms(void) {
+    if (!nb_timers) return -1;
+    long long d = nb_timers->wake_at_ms - nb_now_ms();
+    return d > 0 ? d : 0;
 }
 
 /* ── §13  Entropy ─────────────────────────────────────────────────

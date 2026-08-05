@@ -320,6 +320,40 @@ static void test_sleep_order(void) {
     ck_str(trace, "abc", "timers fire in deadline order, not spawn order");
 }
 
+/* ── 5b. a polling coroutine must not starve the timer queue ────
+ *
+ * The socket wait loop polls: drive the stack, yield, re-test. That
+ * keeps the run queue non-empty, and while timers were expired only in
+ * the idle branch of a step, "non-empty run queue" meant "no timer ever
+ * fires". `sleep_ms(20)` became "20 ms, or until the machine goes idle,
+ * whichever is LATER" — unbounded — and the two coroutines starved each
+ * other into a hang that looked like a socket deadlock and was not.
+ *
+ * The trace is the assertion: the sleeper must mark BEFORE the spinner
+ * gives up, so a schedule that only wakes it once the poller finishes
+ * still fails. */
+static int nap_woke;
+static void nap_sleeper(void *env) {
+    (void)env;
+    nurl_fiber_sleep_ms(20);
+    nap_woke = 1;
+    mark('s');
+}
+static void nap_poller(void *env) {
+    (void)env;
+    for (int i = 0; i < 200000 && !nap_woke; i++) nurl_fiber_yield();
+    mark('p');
+}
+
+static void test_timer_vs_poller(void) {
+    trace_reset();
+    nap_woke = 0;
+    nurl_fiber_spawn(nap_sleeper, 0);
+    nurl_fiber_spawn(nap_poller, 0);
+    nurl_runtime_run();
+    ck_str(trace, "sp", "a polling coroutine does not starve the timer queue");
+}
+
 /* ── 6. park/unpark, the async.nu primitive pair ────────────────── */
 
 static long long parked_h;
@@ -453,6 +487,7 @@ int main(int argc, char **argv) {
     test_cond_signal_vs_broadcast();
     test_threads();
     test_sleep_order();
+    test_timer_vs_poller();
     test_park_unpark();
     test_entropy();
     nurl_runtime_shutdown();
