@@ -117,6 +117,8 @@ void nl_exit_group(int code) {
 #define SYS_chmod_     90
 #define SYS_exit_      60
 #define SYS_clock_gettime_ 228
+#define SYS_mprotect_  10
+#define SYS_getrandom_ 318
 
 long long read(int fd, void *buf, unsigned long n)  { return nl_read(fd, buf, n); }
 long long write(int fd, const void *buf, unsigned long n) { return nl_write(fd, buf, n); }
@@ -145,6 +147,15 @@ int   rename(const char *a, const char *b)          { return (int)nl_ret(nl_sysc
 int   chdir(const char *p)                          { return (int)nl_ret(nl_syscall6(SYS_chdir_, (long)p, 0, 0, 0, 0, 0)); }
 int   chmod(const char *p, int mode)                { return (int)nl_ret(nl_syscall6(SYS_chmod_, (long)p, mode, 0, 0, 0, 0)); }
 int   madvise(void *p, unsigned long len, int adv)  { return (int)nl_ret(nl_syscall6(SYS_madvise_, (long)p, (long)len, adv, 0, 0, 0)); }
+int   mprotect(void *p, unsigned long len, int prot) { return (int)nl_ret(nl_syscall6(SYS_mprotect_, (long)p, (long)len, prot, 0, 0, 0)); }
+/* The kernel's own CSPRNG. runtime_bare.c's nurl_rand_fill is the only
+ * caller and it treats any failure as fatal, so nothing here needs a
+ * /dev/urandom fallback — a source that cannot answer is a machine that
+ * must not generate keys. Under the unikernel this wrapper becomes
+ * RDRAND/RDSEED (or virtio-rng) and every caller stays put. */
+long long getrandom(void *buf, unsigned long len, unsigned int flags) {
+    return nl_ret(nl_syscall6(SYS_getrandom_, (long)buf, (long)len, flags, 0, 0, 0));
+}
 int   nanosleep(const void *req, void *rem)         { return (int)nl_ret(nl_syscall6(SYS_nanosleep_, (long)req, (long)rem, 0, 0, 0, 0)); }
 int   clock_gettime(int clk, void *ts)              { return (int)nl_ret(nl_syscall6(SYS_clock_gettime_, clk, (long)ts, 0, 0, 0, 0)); }
 void  _exit(int code)                               { nl_exit_group(code); for (;;) { } }

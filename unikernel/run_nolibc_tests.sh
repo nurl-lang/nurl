@@ -53,7 +53,8 @@ one() {
         return 0
     fi
     if ! clang -nostdlib -static -o "$work/$name" "$work/$name.o" \
-            "$OUTDIR/runtime_core.o" "$OUTDIR"/nl_*.o 2>"$work/link.err"; then
+            "$OUTDIR/runtime_core.o" "$OUTDIR/runtime_ctx.o" \
+            "$OUTDIR/runtime_bare.o" "$OUTDIR"/nl_*.o 2>"$work/link.err"; then
         # GNU ld says "undefined reference to `name'"; lld says
         # "undefined symbol: name". Match both, or the list this runner
         # exists to produce is the string "<link error>" 139 times.
@@ -93,6 +94,9 @@ export ROOT TESTS OUTDIR
 
 # Build the shared objects once.
 clang -O2 -c "$ROOT/stdlib/runtime_core.c" -o "$OUTDIR/runtime_core.o" || exit 2
+clang -O2 -c "$ROOT/stdlib/runtime_ctx.c"  -o "$OUTDIR/runtime_ctx.o"  || exit 2
+clang -O2 -ffreestanding -fno-stack-protector \
+      -c "$ROOT/unikernel/runtime_bare.c" -o "$OUTDIR/runtime_bare.o"  || exit 2
 for f in string malloc stdio dtoa misc syscall_linux tls_linux; do
     clang -O2 -ffreestanding -fno-builtin -fno-stack-protector \
           -c "$ROOT/unikernel/nolibc/$f.c" -o "$OUTDIR/nl_$f.o" || exit 2
