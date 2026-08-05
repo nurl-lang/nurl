@@ -11,6 +11,7 @@
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/bytes.nu`
+$ `stdlib/net/pktbuf.nu`
 $ `stdlib/net/inet.nu`
 $ `stdlib/net/ipv4.nu`
 $ `stdlib/net/tcpseg.nu`
@@ -24,24 +25,24 @@ $ `stdlib/net/tcp.nu`
 
 // Deliver segment `idx` of `from` into connection `to`. Returns how
 // many bytes `to` emitted in response.
-@ hand * TcpOut from i idx * Tcb to * TcpOut reply i now i src_ip i dst_ip → i {
-    : i start ( tcpout_seg_start from idx )
-    : i len ( tcpout_seg_len from idx )
+@ hand * PktBuf from i idx * Tcb to * PktBuf reply i now i src_ip i dst_ip → i {
+    : i start ( pktbuf_start from idx )
+    : i len ( pktbuf_len from idx )
     : TcpSeg sg ( tcpseg_parse . from bytes start len src_ip dst_ip )
     ? ! . sg valid { ^ -1 } {}
     ^ ( tcb_input to sg . from bytes now reply )
 }
 
 // Deliver every segment in `from` to `to`, then clear `from`.
-@ hand_all * TcpOut from * Tcb to * TcpOut reply i now i src_ip i dst_ip → i {
-    : i n ( tcpout_count from )
+@ hand_all * PktBuf from * Tcb to * PktBuf reply i now i src_ip i dst_ip → i {
+    : i n ( pktbuf_count from )
     : ~ i k 0
     : ~ i bad 0
     ~ < k n {
         ? < ( hand from k to reply now src_ip dst_ip ) 0 { = bad + bad 1 } {}
         = k + k 1
     }
-    ( tcpout_clear from )
+    ( pktbuf_clear from )
     ^ bad
 }
 
@@ -99,23 +100,23 @@ $ `stdlib/net/tcp.nu`
     // ── three-way handshake ──────────────────────────────────────
     : *Tcb cl ( tcb_new )
     : *Tcb sv ( tcb_new )
-    : *TcpOut oc ( tcpout_new )
-    : *TcpOut os ( tcpout_new )
+    : *PktBuf oc ( pktbuf_new )
+    : *PktBuf os ( pktbuf_new )
     ( tcb_listen sv ( ip_s ) 80 )
     = . sv iss 700000
     = . sv remote_ip ( ip_c )
     ( tcb_connect cl ( ip_c ) 12345 ( ip_s ) 80 100000 0 oc )
-    ( pb `client sends one SYN: ` == ( tcpout_count oc ) 1 )
+    ( pb `client sends one SYN: ` == ( pktbuf_count oc ) 1 )
     ( pb `client is SYN_SENT: ` == . cl state ( tcp_syn_sent ) )
 
     : i _h1 ( hand_all oc sv os 1 ( ip_c ) ( ip_s ) )
     ( pb `server is SYN_RCVD: ` == . sv state ( tcp_syn_rcvd ) )
-    ( pb `server sends SYN-ACK: ` == ( tcpout_count os ) 1 )
+    ( pb `server sends SYN-ACK: ` == ( pktbuf_count os ) 1 )
     ( pb `server learned client MSS: ` == . sv mss 1460 )
 
     : i _h2 ( hand_all os cl oc 2 ( ip_s ) ( ip_c ) )
     ( pb `client is ESTABLISHED: ` ( tcb_is_established cl ) )
-    ( pb `client ACKs the SYN-ACK: ` == ( tcpout_count oc ) 1 )
+    ( pb `client ACKs the SYN-ACK: ` == ( pktbuf_count oc ) 1 )
 
     : i _h3 ( hand_all oc sv os 3 ( ip_c ) ( ip_s ) )
     ( pb `server is ESTABLISHED: ` ( tcb_is_established sv ) )
@@ -126,7 +127,7 @@ $ `stdlib/net/tcp.nu`
     ( bytes_extend_str msg `hello from the unikernel` )
     ( pb `write accepts all 24 bytes: ` == ( tcb_write cl msg 0 24 65536 ) 24 )
     : i _p1 ( tcb_pump cl 10 oc )
-    ( pb `one data segment emitted: ` == ( tcpout_count oc ) 1 )
+    ( pb `one data segment emitted: ` == ( pktbuf_count oc ) 1 )
     : i _d1 ( hand_all oc sv os 10 ( ip_c ) ( ip_s ) )
     ( pb `server queued 24 bytes: ` == ( tcb_recv_queue_len sv ) 24 )
     : ( Vec u ) got ( vec_new [u] )
@@ -149,10 +150,10 @@ $ `stdlib/net/tcp.nu`
     // ── retransmission after loss ────────────────────────────────
     ( pb `write 10 more: ` == ( tcb_write cl msg 0 10 65536 ) 10 )
     : i _p2 ( tcb_pump cl 100 oc )
-    ( pb `data segment emitted: ` == ( tcpout_count oc ) 1 )
+    ( pb `data segment emitted: ` == ( pktbuf_count oc ) 1 )
     ( pb `rtx timer armed on send: ` > . cl rtx_deadline 0 )
     // DROP it: clear the buffer without delivering.
-    ( tcpout_clear oc )
+    ( pktbuf_clear oc )
     // Bind the timing to the connection's own RTO — a hard-coded
     // millisecond here would only be testing the test's guess about
     // Jacobson's estimator, not the retransmit logic.
@@ -185,25 +186,25 @@ $ `stdlib/net/tcp.nu`
     // must not be sent, and a probe must eventually go out.
     = . cl snd_wnd 0
     ( pb `write while window is zero: ` == ( tcb_write cl msg 0 8 65536 ) 8 )
-    ( tcpout_clear oc )
+    ( pktbuf_clear oc )
     : i _p3 ( tcb_pump cl 3000 oc )
-    ( pb `zero window blocks transmission: ` == ( tcpout_count oc ) 0 )
+    ( pb `zero window blocks transmission: ` == ( pktbuf_count oc ) 0 )
     = . cl probe_deadline 3500
     : i probe ( tcb_tick cl 3600 oc )
     ( pb `persist timer emits a probe: ` > probe 0 )
-    ( pb `probe is exactly one byte: ` == ( tcpseg_seq_len ( tcpseg_parse . oc bytes ( tcpout_seg_start oc 0 ) ( tcpout_seg_len oc 0 ) ( ip_c ) ( ip_s ) ) ) 1 )
+    ( pb `probe is exactly one byte: ` == ( tcpseg_seq_len ( tcpseg_parse . oc bytes ( pktbuf_start oc 0 ) ( pktbuf_len oc 0 ) ( ip_c ) ( ip_s ) ) ) 1 )
     ( pb `probe interval backs off: ` > . cl probe_deadline 3600 )
-    ( tcpout_clear oc )
+    ( pktbuf_clear oc )
     // Window reopens → the queued data flows.
     = . cl snd_wnd 65535
     : i _p4 ( tcb_pump cl 4000 oc )
-    ( pb `reopened window releases data: ` == ( tcpout_count oc ) 1 )
+    ( pb `reopened window releases data: ` == ( pktbuf_count oc ) 1 )
 
     // ── out-of-window segment is ACKed, not swallowed ────────────
     : ( Vec u ) oldbuf ( vec_new [u] )
     ( tcpseg_push oldbuf ( ip_s ) ( ip_c ) 80 12345 ( seq_sub . cl rcv_nxt 5000 ) . cl snd_nxt ( tcp_ack ) 65535 0 0 empty 0 0 )
     : TcpSeg oldseg ( tcpseg_parse oldbuf 0 ( vec_len [u] oldbuf ) ( ip_s ) ( ip_c ) )
-    ( tcpout_clear oc )
+    ( pktbuf_clear oc )
     : i oldn ( tcb_input cl oldseg oldbuf 5000 oc )
     ( pb `stale segment answered with an ACK: ` > oldn 0 )
     ( pb `stale segment did not close us: ` ( tcb_is_established cl ) )
@@ -215,10 +216,10 @@ $ `stdlib/net/tcp.nu`
     ( tcpseg_push rst2 ( ip_s ) ( ip_c ) 80 12345 . cl rcv_nxt . cl snd_nxt | ( tcp_rst ) ( tcp_ack ) 0 0 0 empty 0 0 )
     : TcpSeg rseg2 ( tcpseg_parse rst2 0 ( vec_len [u] rst2 ) ( ip_s ) ( ip_c ) )
     ( pb `established connection is up before RST: ` ( tcb_is_established cl ) )
-    ( tcpout_clear oc )
+    ( pktbuf_clear oc )
     : i _rs ( tcb_input cl rseg2 rst2 5100 oc )
     ( pb `in-window RST tears it down: ` ( tcb_is_closed cl ) )
-    ( pb `RST is not answered with a segment: ` == ( tcpout_count oc ) 0 )
+    ( pb `RST is not answered with a segment: ` == ( pktbuf_count oc ) 0 )
 
     // ── malformed TCP option must not hang the parser ────────────
     // A length byte below 2 does not advance the option cursor. A
@@ -243,9 +244,9 @@ $ `stdlib/net/tcp.nu`
     // A reordered ACK carrying an old, smaller window would otherwise
     // stall the sender permanently (RFC 793 SND.WL1/WL2 rule).
     : *Tcb w ( tcb_new )
-    : *TcpOut ow ( tcpout_new )
+    : *PktBuf ow ( pktbuf_new )
     : *Tcb wp ( tcb_new )
-    : *TcpOut owp ( tcpout_new )
+    : *PktBuf owp ( pktbuf_new )
     ( tcb_listen wp ( ip_s ) 80 )
     = . wp iss 950000
     = . wp remote_ip ( ip_c )
@@ -267,14 +268,14 @@ $ `stdlib/net/tcp.nu`
     ( tcpseg_push stale ( ip_s ) ( ip_c ) 80 8888 . w rcv_nxt ( seq_sub . w snd_nxt 1 ) ( tcp_ack ) 1 0 0 empty 0 0 )
     : i _ws ( tcb_input w ( tcpseg_parse stale 0 ( vec_len [u] stale ) ( ip_s ) ( ip_c ) ) stale 11 ow )
     ( pb `stale ACK does not shrink the window: ` == . w snd_wnd 60000 )
-    ( tcb_free w ) ( tcb_free wp ) ( tcpout_free ow ) ( tcpout_free owp )
+    ( tcb_free w ) ( tcb_free wp ) ( pktbuf_free ow ) ( pktbuf_free owp )
     ( vec_free [u] big ) ( vec_free [u] stale )
 
     // ── graceful close: FIN → TIME_WAIT → CLOSED ────────────────
     : *Tcb a ( tcb_new )
     : *Tcb b ( tcb_new )
-    : *TcpOut oa ( tcpout_new )
-    : *TcpOut ob ( tcpout_new )
+    : *PktBuf oa ( pktbuf_new )
+    : *PktBuf ob ( pktbuf_new )
     ( tcb_listen b ( ip_s ) 80 )
     = . b iss 900000
     = . b remote_ip ( ip_c )
@@ -284,18 +285,18 @@ $ `stdlib/net/tcp.nu`
     : i _c3 ( hand_all oa b ob 3 ( ip_c ) ( ip_s ) )
     ( pb `second pair established: ` && ( tcb_is_established a ) ( tcb_is_established b ) )
 
-    ( tcpout_clear oa ) ( tcpout_clear ob )
+    ( pktbuf_clear oa ) ( pktbuf_clear ob )
     ( tcb_close a 100 oa )
-    ( pb `active close sends FIN: ` == ( tcpout_count oa ) 1 )
+    ( pb `active close sends FIN: ` == ( pktbuf_count oa ) 1 )
     ( pb `closer is FIN_WAIT_1: ` == . a state ( tcp_fin_wait_1 ) )
     : i _f1 ( hand_all oa b ob 100 ( ip_c ) ( ip_s ) )
     ( pb `peer is CLOSE_WAIT: ` == . b state ( tcp_close_wait ) )
     ( pb `peer saw the FIN: ` . b fin_rcvd )
     : i _f2 ( hand_all ob a oa 100 ( ip_s ) ( ip_c ) )
     ( pb `closer is FIN_WAIT_2: ` == . a state ( tcp_fin_wait_2 ) )
-    ( tcpout_clear ob )
+    ( pktbuf_clear ob )
     ( tcb_close b 200 ob )
-    ( pb `peer sends its FIN: ` == ( tcpout_count ob ) 1 )
+    ( pb `peer sends its FIN: ` == ( pktbuf_count ob ) 1 )
     ( pb `peer is LAST_ACK: ` == . b state ( tcp_last_ack ) )
     : i _f3 ( hand_all ob a oa 200 ( ip_s ) ( ip_c ) )
     ( pb `closer is TIME_WAIT: ` == . a state ( tcp_time_wait ) )
@@ -309,7 +310,7 @@ $ `stdlib/net/tcp.nu`
 
     // ── RST tears the connection down ────────────────────────────
     : *Tcb r ( tcb_new )
-    : *TcpOut orr ( tcpout_new )
+    : *PktBuf orr ( pktbuf_new )
     ( tcb_connect r ( ip_c ) 6666 ( ip_s ) 80 300000 0 orr )
     : ( Vec u ) rstbuf ( vec_new [u] )
     ( tcpseg_push rstbuf ( ip_s ) ( ip_c ) 80 6666 0 ( seq_add 300000 1 ) | ( tcp_rst ) ( tcp_ack ) 0 0 0 empty 0 0 )
@@ -319,7 +320,7 @@ $ `stdlib/net/tcp.nu`
 
     // ── give-up: endless retransmits eventually reset ────────────
     : *Tcb g ( tcb_new )
-    : *TcpOut og ( tcpout_new )
+    : *PktBuf og ( pktbuf_new )
     ( tcb_connect g ( ip_c ) 7777 ( ip_s ) 80 400000 0 og )
     : ~ i t 1000
     : ~ i guard 0
@@ -333,8 +334,8 @@ $ `stdlib/net/tcp.nu`
 
     ( tcb_free cl ) ( tcb_free sv ) ( tcb_free a ) ( tcb_free b )
     ( tcb_free r ) ( tcb_free g )
-    ( tcpout_free oc ) ( tcpout_free os ) ( tcpout_free oa )
-    ( tcpout_free ob ) ( tcpout_free orr ) ( tcpout_free og )
+    ( pktbuf_free oc ) ( pktbuf_free os ) ( pktbuf_free oa )
+    ( pktbuf_free ob ) ( pktbuf_free orr ) ( pktbuf_free og )
     ( vec_free [u] buf ) ( vec_free [u] pay ) ( vec_free [u] synbuf )
     ( vec_free [u] empty ) ( vec_free [u] msg ) ( vec_free [u] got )
     ( vec_free [u] oldbuf ) ( vec_free [u] rstbuf )

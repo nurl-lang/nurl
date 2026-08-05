@@ -26,6 +26,8 @@ Decided by coupling, not convenience:
 |---|---|
 | `nolibc/` | the libc subset: `string.c`, `malloc.c`, `stdio.c`, `dtoa.c`, `math.c` (+ the generated `math_tables.h`), `misc.c`, `syscall_linux.c`, `tls_linux.c`, `start_x86_64.S`, `setjmp_x86_64.S` |
 | `runtime_bare.c` | threads, fibers, sync and entropy for one vCPU with nothing under it |
+| `net/sockets.nu` | the socket ABI (`nurl_tcp_*`, `nurl_reactor_wait_*`) in NURL, over the sans-IO stack in `stdlib/net/` |
+| `compile_nu.sh` | compile one program, pulling in `net/sockets.nu` when (and only when) it calls the socket ABI |
 | `tests/` | the unit gates — differentials against glibc for strings, float formatting and libm; an allocator fuzzer; the scheduler's schedule and its deadlock detector |
 | `build_nolibc.sh` | build one `.nu` program against nolibc with `-nostdlib` |
 | `run_nolibc_tests.sh` | build and run the **whole corpus** that way |
@@ -44,14 +46,32 @@ worth anything.
 ## State (2026-08-05)
 
 ```
-  PASS         433    corpus tests that build and run with no libc at all
-  FAIL           0
-  NEEDS-BARE    34    sockets and the reactor (phase A4), processes, signals
+  PASS         444    corpus tests that build and run with no libc at all
+  FAIL           2    http2_client, http_server_stop_direct — see below
+  NEEDS-BARE    24    processes, signals, UDP, DNS
   NEEDS-LIBM     0
   NEEDS-NOLIBC   7    realpath, mkstemp, inotify, execvp, unix sockets
   NEEDS-LIB      4    libsqlite3 x3, libzstd x1 — third-party C libraries
-  SKIP         143    compile-fail tests and tests with no standalone build
+  SKIP         144    compile-fail tests and tests with no standalone build
 ```
+
+TCP is in that PASS column now. `async_tcp`, `async_http_server`,
+`http_server_pool`, `websocket_client`, `net_basic` and the rest run a
+real client and a real server against each other with no kernel
+sockets anywhere: `unikernel/net/sockets.nu` implements the socket ABI
+in NURL over the sans-IO stack, the frames go around a loopback that is
+literally "what this stack emits, it receives", and the blocking reads
+park on the cooperative scheduler.
+
+The two FAILs are one open problem, and it is named rather than
+counted: **two waiters can livelock**. A wait on the main context and a
+wait inside a coroutine each conclude the other is making progress —
+main's scheduler step returns "something ran" because it ran the
+coroutine, and the coroutine yields because main is not parked in the
+scheduler — so neither ever reports the wait as hopeless. The fix is
+for a socket wait to PARK on the fd rather than poll, which also gives
+the virtio-net driver the wake-up path it will want; until then those
+two tests spin until the runner's timeout.
 
 The bucket a blocked test lands in is **measured**, not listed: each
 missing symbol is looked up with `nm` in the hosted `stdlib/runtime.o`

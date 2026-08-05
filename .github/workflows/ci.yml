@@ -332,6 +332,11 @@ jobs:
         # it is the one that can leak a Tcb: a connection reclaimed on
         # RST, on FIN, or by the TIME_WAIT timer takes three different
         # paths out, and each has to return the same allocation.
+        # net_socket adds the fd table on top of it — an fd outlives the
+        # connection it named (FIN, then TIME_WAIT) and a connection
+        # outlives its fd, so the two lifetimes have to be reclaimed
+        # independently and neither may take the other's allocation with
+        # it.
         # net_inet + net_frames + net_dhcp pin the sans-IO net stack's
         # manual-handle discipline (§7.4): per-iteration Vec frees in a
         # 65k-datagram sweep, String results from the address formatters,
@@ -365,7 +370,7 @@ jobs:
             ternary_slice_owned match_slice_owned arm_assign_tail_drop \
             defer_drop_reclaim defer_scoped defer_ret_transfer \
             net_inet net_frames net_dhcp net_stack net_tcp net_tcp_fuzz \
-            net_tcpstack \
+            net_tcpstack net_socket \
             virtq_split free_suffix_query closure_env_escape_loop \
             ctx_switch async_basic async_chan async_mn async_sleep \
             select_basic

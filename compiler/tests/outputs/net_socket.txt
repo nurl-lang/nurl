@@ -1,0 +1,63 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+an ephemeral bind picks a port: ok
+and reports no error: ok
+the fd is a listener: ok
+a second listener on that port is refused: ok
+an impossible port is a bind error: ok
+accept with nothing pending says "again": ok
+and the listener is not readable: ok
+a listener is never writable: ok
+connect returns an fd: ok
+one frame is out — the ARP request, not the SYN: ok
+the connection is pending: ok
+a pending connection is not writable: ok
+writing to it says "again": ok
+ARP resolved against ourselves: ok
+but the SYN still has not gone: ok
+nothing was queued waiting for it: ok
+the RTO sent the SYN: ok
+the connection is established: ok
+and now it is writable: ok
+the listener has something to accept: ok
+accept produced a connection fd: ok
+it is a connection, not a listener: ok
+the server sees the client's port: ok
+the client sees the server's port: ok
+the listener is back to empty: ok
+a fresh connection has nothing to read: ok
+and is not readable: ok
+the client wrote the whole request: ok
+the server can read it: ok
+and reads exactly what was sent: ok
+after which there is nothing left: ok
+the send queue drained: ok
+the client reads the response: ok
+a short read takes what it asked for: ok
+and the rest is still there: ok
+the client is readable at EOF: ok
+read answers 0, which is not an error: ok
+and keeps answering 0: ok
+the connection is still alive for writing: ok
+an operation on a closed fd is refused: ok
+the second connection is established: ok
+and was accepted: ok
+the reset peer reads as closed: ok
+the error is on the fd too: ok
+a reset connection is readable — the waiter must wake: ok
+writing to it fails, and not with "again": ok
+both connections came up: ok
+both were accepted, as distinct fds: ok
+with distinct peer ports: ok
+each stream landed on its own connection: ok
+accept on a shut listener fails rather than waiting: ok
+and a shut fd reports itself readable: ok
+a referenced fd survives one close: ok
+and is gone after the second: ok
+the seeded stack sends the SYN, not an ARP request: ok
+and connects with no retransmit at all: ok
+the far end accepted it: ok
+no fd is left open: ok
+net_socket: all ok

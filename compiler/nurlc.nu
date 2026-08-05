@@ -5707,6 +5707,48 @@
     ^ & & ( __is_named_agg at ) ( __is_named_agg pt ) ! ( seq at pt )
 }
 
+// The length of a type's named-aggregate BASE — `%X` and `%X*` both
+// answer len(`%X`) — or 0 when the type is not a named aggregate or a
+// pointer to one. Returns a length rather than the substring on
+// purpose: a helper whose result is a borrowed argument on one path and
+// a freshly allocated slice on another has mixed ownership, which
+// all-paths auto-drop turns into a free of a string the caller never
+// owned. Lengths cannot be freed.
+@ __named_agg_base_len s t → i {
+    : i n ( nurl_str_len t )
+    ? == n 0 { ^ 0 } {}
+    ? != ( nurl_str_get t 0 ) 37 { ^ 0 } {}  // leading '%'
+    : i b ? == ( nurl_str_get t - n 1 ) 42 - n 1 n
+    ? == b 0 { ^ 0 } {}
+    ? == ( nurl_str_get t - b 1 ) 42 { ^ 0 } {}  // `%X**` — not our business
+    ^ b
+}
+
+// Two DIFFERENT named types where at least one side is a POINTER:
+// `%X*` vs `%Y*`, `%X*` vs `%Y`, `%X` vs `%Y*`. The same silent
+// miscompile as passing the wrong struct by value — clang accepts the
+// call and the callee reads one struct's bytes as another's fields —
+// and the one member of the family the checks above do not cover:
+// __arg_ptr_depth_mismatch requires an IDENTICAL base, and
+// __arg_named_struct_mismatch requires both sides to be values.
+//
+// It stays narrow on purpose: both sides must reduce to a `%Name`, so
+// `*u`/`*i` (u8*/i64*), `s` (i8*), opaque handles stashed as i64 and
+// every numeric coercion are untouched.
+@ __arg_named_ptr_mismatch s at s pt → b {
+    ? & ( __is_named_agg at ) ( __is_named_agg pt ) { ^ F } {}
+    : i ab ( __named_agg_base_len at )
+    : i pb ( __named_agg_base_len pt )
+    ? | == ab 0 == pb 0 { ^ F } {}
+    ? != ab pb { ^ T } {}
+    : ~ i k 0
+    ~ < k ab {
+        ? != ( nurl_str_get at k ) ( nurl_str_get pt k ) { ^ T } {}
+        = k + k 1
+    }
+    F
+}
+
 // Exactly one operand lowers to a pointer, the other to a non-pointer
 // scalar (i64/i32/double/i1/i8…). Catches the different-base pointer↔scalar
 // class that __arg_ptr_depth_mismatch misses — e.g. an `i8*` string passed
@@ -6320,6 +6362,12 @@
                         ( nurl_str_cat4 `argument ` ( nurl_str_int + arg_idx 1 ) ` to '` fname )
                         ( nurl_str_cat4 `': value of type '` at `' passed where parameter expects '` __pllvm )
                         `' — wrong struct type passed by value (a value of one named type where a different one is declared); the call would silently reinterpret its fields` ) ) }
+                    {}
+                    ? ( __arg_named_ptr_mismatch at __pllvm )
+                    { ( die lex ( nurl_str_cat3
+                        ( nurl_str_cat4 `argument ` ( nurl_str_int + arg_idx 1 ) ` to '` fname )
+                        ( nurl_str_cat4 `': value of type '` at `' passed where parameter expects '` __pllvm )
+                        `' — different named types; a pointer to one struct is not a pointer to another, and the callee would read this object's bytes as the declared type's fields` ) ) }
                     {}
                     ? ( __arg_ptr_scalar_mismatch at __pllvm )
                     { ( die lex ( nurl_str_cat3
@@ -18969,16 +19017,31 @@
 // producing a duplicate LLVM rejects with "invalid redefinition of
 // function". The symbol name is parsed out of the line (between '@'
 // and '(') so the list below stays single-source.
+// One line of the runtime preamble. The name is extracted so the line
+// can be deduped against a user `&`-declaration of the same symbol
+// (gen_ffi_decl reads `__ffi_emitted`) — and so it can be SKIPPED when
+// the program defines that symbol itself.
+//
+// The skip is the same rule gen_ffi_decl applies to imported FFI
+// declarations: a definition supersedes a declaration, exactly as in C,
+// and in textual IR the two cannot coexist at all ("invalid redefinition
+// of function"). This half was missing because the preamble is emitted
+// from one hardcoded list rather than from the program's imports — so a
+// program defining `nurl_tcp_err_kind` (the unikernel's socket ABI over
+// the sans-IO stack) got a declare it never asked for and could not
+// compile. It reads `__arity`, which is why emit_header runs after
+// scan_fn_sigs.
 @ __emit_rt_decl i syms s line → v {
-    ( emit line )
     : i at ( nurl_str_find line `@` )
-    ? >= at 0 {
-        : i lp ( nurl_str_find line `(` )
-        ? > lp at {
-            : s nm ( nurl_str_slice line + at 1 - lp + at 1 )
-            ( nurl_sym_def syms ( nurl_str_cat nm `__ffi_emitted` ) `1` )
-        } {}
+    : i lp ( nurl_str_find line `(` )
+    ? && >= at 0 > lp at {
+        : s nm ( nurl_str_slice line + at 1 - lp + at 1 )
+        ? != 0 ( nurl_sym_len2 syms nm `__arity` ) { ^ } {}
+        ( emit line )
+        ( nurl_sym_def syms ( nurl_str_cat nm `__ffi_emitted` ) `1` )
+        ^
     } {}
+    ( emit line )
 }
 
 @ emit_header i syms → v {
@@ -22625,7 +22688,6 @@
     // discarded with it — which is what a caller does with post-error
     // IR anyway.
     ( nurl_print_buf_start )
-    ( emit_header syms )
     ? != g_dbg_enabled 0 { ( dbg_init path ) } {}
     ( init_syms syms )
     : i lex0 ( nurl_lex_new src path )
@@ -22634,6 +22696,12 @@
     : i lex1 ( nurl_lex_new src path )
     ( scan_fn_sigs lex1 syms )
     ( nurl_lex_free lex1 )
+    // AFTER scan_fn_sigs, and this is load-bearing: the preamble must
+    // not declare a symbol the program itself defines (__emit_rt_decl),
+    // and only the whole-program signature pass knows which those are.
+    // Module-level order in LLVM IR carries no meaning, so the header
+    // landing here rather than first changes nothing else.
+    ( emit_header syms )
     // Every impl across the program is now registered — enforce that each
     // implemented subtrait's supertraits are implemented for the same type.
     ( verify_super_obligations )

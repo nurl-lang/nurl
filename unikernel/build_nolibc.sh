@@ -42,13 +42,15 @@ mkdir -p "$OUTDIR"
 base="$(basename "${SRC%.nu}")"
 OUT="${OUT:-$OUTDIR/$base}"
 
-# 1. NURL -> LLVM IR (the ordinary compiler; nothing target-specific yet)
-"$ROOT/build/nurlc" "$SRC" > "$OUTDIR/$base.ll"
-
-# 2. IR -> object. `zig cc` drops -O for .ll inputs (#644) and so does
-#    plain clang for some flag combinations, so compile IR to an object
-#    in its own step with the flags spelled out.
-"$CC" -O2 -c "$OUTDIR/$base.ll" -o "$OUTDIR/$base.o"
+# 1+2. NURL -> LLVM IR -> object. Two steps in one script because the
+#      second answers a question the first needs: if the program calls
+#      the socket ABI, it is recompiled together with the NURL
+#      implementation of it (unikernel/net/sockets.nu), since a
+#      freestanding link has no runtime_ffi.c to provide it.
+#      `zig cc` drops -O for .ll inputs (#644) and so does plain clang
+#      for some flag combinations, so the IR becomes an object in its
+#      own step with the flags spelled out.
+"$ROOT/unikernel/compile_nu.sh" "$SRC" "$OUTDIR/$base.ll" "$OUTDIR"
 
 # 3. The runtime, minus runtime_ffi.c. Three objects where the hosted
 #    build has one, because the aggregator stdlib/runtime.c exists to

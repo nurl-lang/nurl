@@ -65,14 +65,15 @@ one() {
     case "$name" in should_*|borrow_*|diag_*) echo "SKIP $name (compile-fail test)"; return 0 ;; esac
     [ -f "$golden" ] || { echo "SKIP $name (no golden)"; return 0; }
 
-    if ! "$ROOT/build/nurlc" "$src" > "$work/$name.ll" 2>"$work/compile.err"; then
-        echo "SKIP $name (does not compile standalone)"
-        return 0
-    fi
-    if ! clang -O2 -c "$work/$name.ll" -o "$work/$name.o" 2>"$work/cc.err"; then
-        echo "SKIP $name (IR would not compile)"
-        return 0
-    fi
+    # Compile, and link in the NURL socket layer if this program needs
+    # it — see unikernel/compile_nu.sh for why that is a recompile
+    # rather than another object on the link line.
+    "$ROOT/unikernel/compile_nu.sh" "$src" "$work/$name.ll" "$work"
+    case $? in
+        0) ;;
+        3) echo "SKIP $name (does not compile standalone)"; return 0 ;;
+        *) echo "SKIP $name (IR would not compile)"; return 0 ;;
+    esac
     if ! clang -nostdlib -static -o "$work/$name" "$work/$name.o" \
             "$OUTDIR/runtime_core.o" "$OUTDIR/runtime_ctx.o" \
             "$OUTDIR/runtime_bare.o" "$OUTDIR"/nl_*.o 2>"$work/link.err"; then

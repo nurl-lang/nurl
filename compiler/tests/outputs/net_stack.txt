@@ -4,7 +4,7 @@ EXIT 0
 OUTPUT
 first send is ARP-pending: YES
 an ARP request was emitted: YES
-ARP request is 42 bytes: YES
+one frame out, and it is the 42-byte ARP request: YES
 B handled the ARP: YES
 B emitted a reply: YES
 B learned A's address: YES
