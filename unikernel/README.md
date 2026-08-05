@@ -26,7 +26,10 @@ Decided by coupling, not convenience:
 |---|---|
 | `nolibc/` | the libc subset: `string.c`, `malloc.c`, `stdio.c`, `dtoa.c`, `math.c` (+ the generated `math_tables.h`), `misc.c`, `syscall_linux.c`, `tls_linux.c`, `start_x86_64.S`, `setjmp_x86_64.S` |
 | `runtime_bare.c` | threads, fibers, sync and entropy for one vCPU with nothing under it |
-| `net/sockets.nu` | the socket ABI (`nurl_tcp_*`, `nurl_reactor_wait_*`) in NURL, over the sans-IO stack in `stdlib/net/` |
+| `net/sockets.nu` | the socket ABI (`nurl_tcp_*`, `nurl_udp_*`, `nurl_dns_*`, `nurl_reactor_wait_*`) in NURL, over the sans-IO stack in `stdlib/net/` |
+| `boot/` | the guest: PVH entry + long mode + SSE (`boot.S`), the address space (`link.ld`), the machine's bottom edge (`platform_x86.c`), the thread pointer without an auxv (`tls_guest.c`) |
+| `build_unikernel.sh` | build a `.nu` into a bootable PVH kernel image |
+| `run_qemu.sh` · `run_qemu_tests.sh` | boot one image · run corpus tests inside the guest against their goldens |
 | `compile_nu.sh` | compile one program, pulling in `net/sockets.nu` when (and only when) it calls the socket ABI |
 | `tests/` | the unit gates — differentials against glibc for strings, float formatting and libm; an allocator fuzzer; the scheduler's schedule and its deadlock detector |
 | `build_nolibc.sh` | build one `.nu` program against nolibc with `-nostdlib` |
@@ -90,6 +93,35 @@ symbols, so the next piece of work reads itself off the output.
 A hello-world built this way is a 75 KB static binary that makes **four
 syscalls** in its whole life: `execve`, `arch_prctl` (the thread
 pointer), one `mmap` (the first allocator arena) and one `write`.
+
+## It boots
+
+```sh
+unikernel/build_unikernel.sh compiler/tests/hello.nu
+unikernel/run_qemu.sh build/unikernel/hello.elf     # → Hello, NURL! … exit 0
+unikernel/run_qemu_tests.sh                         # 5/5 against the goldens
+```
+
+QEMU microvm, PVH direct boot, no BIOS and no bootloader: the
+hypervisor reads the ELF note, jumps to `_pvh_start` in 32-bit mode,
+and 60 instructions later a NURL program is printing through the
+ordinary stdlib path. `net_socket` and `net_tcpstack` are in the guest
+gate because they run the whole TCP/UDP stack — connection table,
+socket layer, loopback — on bare metal.
+
+Exactly three files differ from the Linux freestanding build, and they
+are the ones that talk to the machine: `boot/boot.S`,
+`boot/platform_x86.c` and `boot/tls_guest.c` replace
+`nolibc/start_x86_64.S`, `nolibc/syscall_linux.c` and
+`nolibc/tls_linux.c`. Everything else — nolibc, runtime_core.c,
+runtime_bare.c, the NURL program — is the same object code.
+
+**Fibers are not available in the guest yet**, and they say so: a
+coroutine's guard page needs the boot page tables' 2 MiB mapping split
+into 4 KiB pages, which is the memory phase (B2). Until then
+`mprotect` refuses and `nb_coro_new` stops loudly, because a fiber
+that reports success and computes nothing is the failure this
+directory exists to avoid.
 
 ## Accuracy, stated
 
