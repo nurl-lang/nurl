@@ -18,6 +18,9 @@
 #    net_socket   the sans-IO stack, the socket layer and the loopback,
 #                 all of it, on bare metal
 #    net_tcpstack the connection table, likewise
+#    async_*      the cooperative scheduler on stacks whose guard pages
+#                 are real page-table entries, and — async_sleep — the
+#                 TSC, which is the one clock this machine has
 #
 #  Requires qemu-system-x86_64; skips (exit 0) with a message when it
 #  is absent, because a developer without QEMU should still be able to
@@ -35,7 +38,9 @@ command -v "$QEMU" >/dev/null 2>&1 || {
 }
 
 names=("$@")
-[ ${#names[@]} -gt 0 ] || names=(hello vec_basic float_format net_socket net_tcpstack)
+[ ${#names[@]} -gt 0 ] || names=(hello vec_basic float_format
+                                 net_socket net_tcpstack
+                                 async_basic async_chan async_mn async_sleep)
 
 fails=0
 for name in "${names[@]}"; do

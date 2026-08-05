@@ -41,6 +41,13 @@ done
 [ -n "$IMG" ] || { echo "usage: run_qemu.sh image.elf [-t seconds]" >&2; exit 2; }
 command -v "$QEMU" >/dev/null 2>&1 || { echo "run_qemu.sh: $QEMU not found" >&2; exit 3; }
 
+# The clock, stated rather than guessed. Under KVM the guest reads the
+# TSC frequency from CPUID leaf 0x40000010 and ignores what we say here;
+# under TCG no leaf reports one, QEMU's virtual TSC ticks at 1 GHz, and
+# a guest that refuses to invent a frequency (correctly) would have no
+# clock at all. `wallclock` is the boot epoch — a functionality input,
+# not a security control: the host already controls the whole image.
+#
 # KVM when it is there, TCG when it is not. CI runners have no /dev/kvm,
 # and the difference is speed, not behaviour — except for the TSC
 # frequency, which under TCG no leaf reports, so the guest panics on the
@@ -54,7 +61,7 @@ timeout -k 5s "${TIMEOUT}s" "$QEMU" \
     -M microvm,acpi=off,rtc=off \
     -accel "$ACCEL" -cpu max -m 256 \
     -nodefaults -no-reboot -no-user-config \
-    -kernel "$IMG" \
+    -kernel "$IMG" -append "tsc_khz=${NURL_TSC_KHZ:-1000000} wallclock=$(date +%s)" \
     -serial stdio -display none \
     ${EXTRA[@]+"${EXTRA[@]}"} > "$out" 2>&1
 qemu_status=$?
