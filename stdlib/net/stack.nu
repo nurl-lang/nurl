@@ -175,7 +175,17 @@ $ `stdlib/net/pktbuf.nu`
 // Which MAC should carry a datagram for `dst`? On-link destinations
 // resolve to themselves; everything else goes to the gateway. Broadcast
 // and directed-broadcast go to the Ethernet broadcast address.
+// 127.0.0.0/8 is this machine, whatever address the interface has.
+@ ipv4_is_loopback i addr → b { ^ == & addr 4278190080 2130706432 }
+
 @ __next_hop * NetStack st i dst → i {
+    // A datagram for ourselves goes to our own MAC, so it comes back
+    // through the same door every other frame does. Loopback is not a
+    // special case in the stack — it is a destination that happens to
+    // be us, and the driver above decides that a frame addressed to
+    // our own MAC never reaches the wire.
+    ? ( ipv4_is_loopback dst ) { ^ dst } {}
+    ? == dst . st our_ip { ^ dst } {}
     ? ( ipv4_is_broadcast dst ) { ^ dst } {}
     ? && != . st netmask 0 == dst ( ipv4_subnet_broadcast . st our_ip . st netmask ) { ^ 4294967295 } {}
     ? && != . st netmask 0 ( ipv4_in_subnet dst . st our_ip . st netmask ) { ^ dst } {}
@@ -269,7 +279,10 @@ $ `stdlib/net/pktbuf.nu`
     // DHCP completes) for 255.255.255.255 — the DHCP reply itself
     // arrives before we own an address, so a strict "must match our
     // IP" test here would make the lease unobtainable.
-    : b for_us ? != . st our_ip 0 {
+    // Loopback is always ours, even before DHCP has given us anything
+    // else: a program that talks to 127.0.0.1 does not care whether
+    // the machine has an address on any network.
+    : b for_us ? ( ipv4_is_loopback . ih dst ) T ? != . st our_ip 0 {
         || || == . ih dst . st our_ip ( ipv4_is_broadcast . ih dst ) && != . st netmask 0 == . ih dst ( ipv4_subnet_broadcast . st our_ip . st netmask )
     } ( ipv4_is_broadcast . ih dst )
     ? ! for_us {

@@ -57,6 +57,11 @@ $ `stdlib/net/tcp.nu`
 $ `stdlib/net/tcpstack.nu`
 $ `stdlib/net/socket.nu`
 
+// The interface, whichever one this build has: netdev_virtio.nu in the
+// guest, netdev_none.nu everywhere else. Two implementations of three
+// functions, chosen by the build, so this file has a seam rather than
+// a conditional — and so the loopback path is the same code on both.
+
 // One coroutine step, and whether anything ran. Main context only —
 // `nurl_bare_poll` answers 0 on a fiber rather than switching through
 // the loop context it would have to return through.
@@ -125,7 +130,7 @@ $ `stdlib/net/socket.nu`
     = . sh w_fd ( vec_new [i] )
     = . sh w_wr ( vec_new [i] )
     = . sh w_coro ( vec_new [i] )
-    = . sh has_device 0
+    = . sh has_device ( netdev_open )
     // An interface knows its own MAC. Without this the first connect
     // to 127.0.0.1 ARPs for itself and waits a retransmit timeout for
     // the answer.
@@ -197,9 +202,61 @@ $ `stdlib/net/socket.nu`
 
 // One turn of the event loop: deliver what the stack has queued, then
 // let its timers run. Returns 1 if anything happened.
+// Where a frame goes. A frame addressed to our own MAC is a frame for
+// us — that is what `net/stack.nu` routes 127.0.0.0/8 and our own
+// address to — and it never reaches the wire. Everything else does.
+//
+// One interface plus loopback, decided per frame by the destination
+// MAC, is the whole routing table. It is enough because it is the
+// truth about this machine.
+@ __frame_is_local ( Vec u ) f → b {
+    : *Shim sh ( __shim )
+    : EthHdr eh ( eth_parse f )
+    ? ! . eh valid { ^ T } {}
+    ^ == . eh dst . . sh net our_mac
+}
+
 @ __drive i now → i {
-    : *SockTab st ( __tab )
-    ? > ( sock_loopback st now ) 0 { ( __wake_ready ) ^ 1 } {}
+    : *Shim sh ( __shim )
+    : *SockTab st . sh st
+    : ~ i moved 0
+
+    // Out first: whatever the stack queued goes to the wire or back
+    // through the door, one frame at a time.
+    : *PktBuf w ( sock_take_out st )
+    : i n ( pktbuf_count w )
+    : ~ i k 0
+    ~ < k n {
+        : ( Vec u ) f ( vec_new [u] )
+        ( pktbuf_copy_to f w k )
+        ? ( __frame_is_local f ) {
+            : i _r ( sock_rx st f now )
+        } {
+            : i _t ( netdev_tx # s ( vec_data [u] f ) ( vec_len [u] f ) )
+        }
+        ( vec_free [u] f )
+        = moved + moved 1
+        = k + k 1
+    }
+    ( pktbuf_free w )
+
+    // Then in: everything the device has for us.
+    ? != . sh has_device 0 {
+        : ~ b more T
+        ~ more {
+            : ( Vec u ) in ( vec_with_cap [u] 2048 )
+            ( vec_set_len [u] in 2048 )
+            : i len ( netdev_rx # s ( vec_data [u] in ) 2048 )
+            ? > len 0 {
+                ( vec_set_len [u] in len )
+                : i _r ( sock_rx st in now )
+                = moved + moved 1
+            } { = more F }
+            ( vec_free [u] in )
+        }
+    } {}
+
+    ? > moved 0 { ( __wake_ready ) ^ 1 } {}
     ? > ( sock_tick st now ) 0 { ( __wake_ready ) ^ 1 } {}
     ^ 0
 }

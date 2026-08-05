@@ -60,6 +60,11 @@ root_nu="$WORK/__with_sockets.nu"
     echo "// $name needs:$(printf ' %s' $need)"
     printf '$ `%s`\n' "$(cd "$(dirname "$SRC")" && pwd)/$(basename "$SRC")"
     printf '$ `%s`\n' "$SHIM"
+    # The interface implementation, chosen by the target rather than by
+    # a conditional inside the shim: the guest has a virtio-net device,
+    # a Linux -nostdlib process has none, and both spellings of "the
+    # network" are the same three functions.
+    printf '$ `%s`\n' "${NURL_NETDEV:-$ROOT/unikernel/net/netdev_none.nu}"
 } > "$root_nu"
 
 "$ROOT/build/nurlc" "$root_nu" > "$OUT_LL" 2>"$WORK/compile.err" || exit 3
