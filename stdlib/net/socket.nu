@@ -1,0 +1,702 @@
+// stdlib/net/socket.nu — BSD socket semantics over the sans-IO stack.
+//
+// Phase A4. Below this file everything speaks frames and segments and
+// takes `now` as an argument; above it, a program calls `tcp_listen` /
+// `tcp_accept` / `tcp_read_chunk` and expects a socket. This is the
+// layer that turns one into the other, and it is STILL sans-IO: no
+// clock, no device, no fibers, no FFI. What it adds is everything a
+// socket has that a connection does not:
+//
+//   * a file-descriptor table, so a connection is named by a small
+//     integer that survives the table moving underneath it;
+//   * the errno seam — every operation reports one of the runtime's
+//     NURL_NET_ERR_* codes, `sock_err_again` being the one that means
+//     "not now, come back", which is what a blocking wrapper turns
+//     into a park and a non-blocking one into EAGAIN;
+//   * readiness, so an event loop can ask what to wake without
+//     performing the operation;
+//   * bind semantics: ephemeral ports, and a second listener on a
+//     taken port failing with ADDRINUSE rather than quietly stealing
+//     the first one's traffic.
+//
+// WHAT IS NOT HERE, ON PURPOSE
+//
+// Blocking. A socket read that must wait cannot be expressed without a
+// clock and a scheduler, and both are the caller's. `sock_read`
+// answers `-sock_err_again` and the caller decides whether that means
+// "park this fiber" (the unikernel's runtime_bare shims), "return
+// EAGAIN" (a non-blocking fd) or "pump the device once more and retry"
+// (a single-threaded driver). Keeping that decision out of this file
+// is what lets the whole socket surface be tested under a scripted
+// clock with no operating system in the picture.
+//
+// ── the fd contract ──────────────────────────────────────────────
+//
+// An fd is a positive integer. Every operation that can fail returns
+// either a non-negative result or `- err` (a negative errno), AND
+// records the same code on the fd, because the runtime's socket ABI
+// reports errors out of band through `nurl_tcp_err_kind`.
+//
+// A connection is identified inside the stack by (index, generation).
+// An fd holds both, so an operation on a closed connection whose slot
+// has been recycled is refused rather than silently addressed to
+// whoever moved in — the use-after-close a bare index would invite.
+$ `stdlib/core/vec.nu`
+$ `stdlib/std/bytes.nu`
+$ `stdlib/net/pktbuf.nu`
+$ `stdlib/net/inet.nu`
+$ `stdlib/net/arp.nu`
+$ `stdlib/net/ipv4.nu`
+$ `stdlib/net/tcp.nu`
+$ `stdlib/net/stack.nu`
+$ `stdlib/net/tcpstack.nu`
+
+// ── error codes ──────────────────────────────────────────────────
+//
+// These ARE the runtime's NURL_NET_ERR_* constants (stdlib/runtime.c
+// §18, mirrored in stdlib/std/net.nu's `_net_err_of`). The socket
+// shims hand them to `nurl_tcp_err_kind` unchanged, so a NURL program
+// gets the same `NetErr` variant whether its bytes went through a
+// Linux kernel or through this file.
+
+@ sock_err_none → i { ^ 0 }
+
+@ sock_err_bind → i { ^ 1 }
+
+@ sock_err_addr_in_use → i { ^ 2 }
+
+@ sock_err_accept → i { ^ 3 }
+
+@ sock_err_read → i { ^ 4 }
+
+@ sock_err_write → i { ^ 5 }
+
+@ sock_err_closed → i { ^ 6 }
+
+// EAGAIN / EWOULDBLOCK. The runtime spells it NetTimeout because a
+// blocking socket only produces it once SO_RCVTIMEO fires; here it is
+// the ordinary "the answer is not here yet" and every waiting caller
+// keys on it.
+@ sock_err_again → i { ^ 7 }
+
+@ sock_err_other → i { ^ 8 }
+
+// ── fd kinds ─────────────────────────────────────────────────────
+
+@ sock_kind_free → i { ^ 0 }
+
+@ sock_kind_listener → i { ^ 1 }
+
+@ sock_kind_conn → i { ^ 2 }
+
+// ── connection status, as `connect` reports it ───────────────────
+
+@ sock_conn_pending → i { ^ 0 }
+
+@ sock_conn_ready → i { ^ 1 }
+
+@ sock_conn_failed → i { ^ 2 }
+
+: Sock {
+    i kind
+    i idx  // index into the TcpStack's connection or listener table
+    i gen  // its generation when this fd was made
+    i err  // last error — what nurl_tcp_err_kind reports
+    i refs
+    i local_ip
+    i local_port
+    i peer_ip
+    i peer_port
+    i timeout_ms
+    b nonblock
+    b eof  // peer FIN seen AND the receive queue drained
+    b shut  // sock_shutdown was called: wake and refuse
+    b used
+}
+
+: SockTab {
+    * TcpStack ts
+    * PktBuf out  // frames waiting for the device
+    ( Vec i ) fds  // *Sock, as integers — NURL has no Vec of pointers
+    i ephemeral  // next ephemeral port for an unbound listener
+    i our_ip
+}
+
+// fds start at 3. Not decoration: 0 is how the socket ABI spells a
+// failed handle, and a program that prints an fd should not be able to
+// confuse one with stdin/stdout/stderr on the host it is pretending to
+// be.
+@ __fd_base → i { ^ 3 }
+
+@ sock_new * TcpStack ts i our_ip → *SockTab {
+    : *SockTab st # *SockTab ( nurl_alloc Z SockTab )
+    = . st ts ts
+    = . st out ( pktbuf_new )
+    = . st fds ( vec_new [i] )
+    = . st ephemeral 32768
+    = . st our_ip our_ip
+    ^ st
+}
+
+@ sock_free * SockTab st → v {
+    : i n ( vec_len [i] . st fds )
+    : ~ i k 0
+    ~ < k n {
+        : *Sock s ( __sock_at st k )
+        ? != # i s 0 { ( nurl_free # s s ) } {}
+        = k + k 1
+    }
+    ( vec_free [i] . st fds )
+    ( pktbuf_free . st out )
+    ( nurl_free # s st )
+}
+
+@ __sock_at * SockTab st i slot → *Sock {
+    ^ # *Sock ?? ( vec_get [i] . st fds slot ) { T p → p F → 0 }
+}
+
+// The Sock behind an fd, or a null pointer. Bounds and the used flag
+// are checked here so no caller has to.
+@ __sock * SockTab st i fd → *Sock {
+    : i slot - fd ( __fd_base )
+    ? || < slot 0 >= slot ( vec_len [i] . st fds ) { ^ # *Sock 0 } {}
+    : *Sock s ( __sock_at st slot )
+    ? == # i s 0 { ^ # *Sock 0 } {}
+    ? ! . s used { ^ # *Sock 0 } {}
+    ^ s
+}
+
+// Every field, in one place. `nurl_alloc Z Sock` is sizeof-and-malloc,
+// NOT calloc, and the runtime recycles small blocks through a freelist
+// — so a fresh Sock arrives full of the last one's bytes, and a `b`
+// field left unwritten is not merely undefined, it is reliably true
+// about a third of the time. A fresh slot and a recycled slot need
+// exactly the same initialisation, so they share it: the version of
+// this file that wrote the fields out twice had one path setting `shut`
+// and the other not, and the symptom was a freshly accepted connection
+// answering "closed" to its first read.
+@ __sock_reset * Sock s → v {
+    = . s kind ( sock_kind_free )
+    = . s idx -1
+    = . s gen 0
+    = . s err 0
+    = . s refs 1
+    = . s local_ip 0
+    = . s local_port 0
+    = . s peer_ip 0
+    = . s peer_port 0
+    = . s timeout_ms 0
+    = . s nonblock F
+    = . s eof F
+    = . s shut F
+    = . s used T
+}
+
+@ __alloc_fd * SockTab st → i {
+    : i n ( vec_len [i] . st fds )
+    : ~ i k 0
+    ~ < k n {
+        : *Sock s ( __sock_at st k )
+        ? && != # i s 0 ! . s used {
+            ( __sock_reset s )
+            ^ + k ( __fd_base )
+        } {}
+        = k + k 1
+    }
+    : *Sock s # *Sock ( nurl_alloc Z Sock )
+    ( __sock_reset s )
+    ( vec_push [i] . st fds # i s )
+    ^ + n ( __fd_base )
+}
+
+// An fd that exists only to carry an error. The socket ABI reports a
+// failed `connect`/`listen`/`accept` as a HANDLE whose `err_kind` is
+// set — not as a null — because the caller closes it either way. This
+// is what the shims hand back on those paths.
+@ sock_err_fd * SockTab st i err → i {
+    : i fd ( __alloc_fd st )
+    : *Sock s ( __sock st fd )
+    = . s err err
+    ^ fd
+}
+
+@ sock_err * SockTab st i fd → i {
+    : *Sock s ( __sock st fd )
+    ? == # i s 0 { ^ ( sock_err_other ) } {}
+    ^ . s err
+}
+
+@ sock_clear_err * SockTab st i fd → v {
+    : *Sock s ( __sock st fd )
+    ? == # i s 0 { ^ } {}
+    = . s err 0
+}
+
+@ sock_set_nonblock * SockTab st i fd b on → v {
+    : *Sock s ( __sock st fd )
+    ? == # i s 0 { ^ } {}
+    = . s nonblock on
+}
+
+@ sock_is_nonblock * SockTab st i fd → b {
+    : *Sock s ( __sock st fd )
+    ? == # i s 0 { ^ F } {}
+    ^ . s nonblock
+}
+
+@ sock_set_timeout * SockTab st i fd i ms → v {
+    : *Sock s ( __sock st fd )
+    ? == # i s 0 { ^ } {}
+    = . s timeout_ms ms
+}
+
+@ sock_timeout * SockTab st i fd → i {
+    : *Sock s ( __sock st fd )
+    ? == # i s 0 { ^ 0 } {}
+    ^ . s timeout_ms
+}
+
+@ sock_kind * SockTab st i fd → i {
+    : *Sock s ( __sock st fd )
+    ? == # i s 0 { ^ ( sock_kind_free ) } {}
+    ^ . s kind
+}
+
+@ sock_ref * SockTab st i fd → v {
+    : *Sock s ( __sock st fd )
+    ? == # i s 0 { ^ } {}
+    = . s refs + . s refs 1
+}
+
+@ sock_local_ip * SockTab st i fd → i {
+    : *Sock s ( __sock st fd )
+    ? == # i s 0 { ^ 0 } {}
+    ^ . s local_ip
+}
+
+@ sock_local_port * SockTab st i fd → i {
+    : *Sock s ( __sock st fd )
+    ? == # i s 0 { ^ 0 } {}
+    ^ . s local_port
+}
+
+@ sock_peer_ip * SockTab st i fd → i {
+    : *Sock s ( __sock st fd )
+    ? == # i s 0 { ^ 0 } {}
+    ^ . s peer_ip
+}
+
+@ sock_peer_port * SockTab st i fd → i {
+    : *Sock s ( __sock st fd )
+    ? == # i s 0 { ^ 0 } {}
+    ^ . s peer_port
+}
+
+// ── the device seam ──────────────────────────────────────────────
+
+// Everything the stack wants to transmit, boundaries intact. BORROWED:
+// the driver walks it and then either clears it or takes it.
+@ sock_out * SockTab st → *PktBuf { ^ . st out }
+
+@ sock_pending_frames * SockTab st → i { ^ ( pktbuf_count . st out ) }
+
+// Hand the pending frames to the caller and install a fresh buffer.
+// A driver MUST take rather than iterate in place: delivering a frame
+// can emit more frames into the same buffer, and a loop over a vector
+// that grows underneath it is the oldest bug there is. The caller owns
+// the returned PktBuf and frees it.
+@ sock_take_out * SockTab st → *PktBuf {
+    : *PktBuf p . st out
+    = . st out ( pktbuf_new )
+    ^ p
+}
+
+// One received frame in. Returns tcpstack's TRx result code so a
+// driver can count what it delivered; every socket-visible effect is
+// observable through the fd operations, so nothing here has to be
+// wired to a callback.
+@ sock_rx * SockTab st ( Vec u ) frame i now → i {
+    : TRx r ( tstack_rx . st ts frame now . st out )
+    ^ . r result
+}
+
+@ sock_tick * SockTab st i now → i { ^ ( tstack_tick . st ts now . st out ) }
+
+@ sock_next_timeout * SockTab st i now → i { ^ ( tstack_next_timeout . st ts now ) }
+
+// The device that is not a device: every complete frame goes straight
+// back in. That is what 127.0.0.1 is — a stack configured on a
+// loopback address ARPs for itself, answers itself, and its own frames
+// are the ones it receives — and it is enough to run a server and a
+// client in one address space with no hardware under either.
+//
+// Returns the number of frames looped. Runs ONE round: frames produced
+// by delivering these are left for the next call, so a caller in an
+// event loop keeps its own turn bounded.
+@ sock_loopback * SockTab st i now → i {
+    : *PktBuf w ( sock_take_out st )
+    : i n ( pktbuf_count w )
+    : ~ i k 0
+    ~ < k n {
+        : ( Vec u ) f ( vec_new [u] )
+        ( pktbuf_copy_to f w k )
+        : i _r ( sock_rx st f now )
+        ( vec_free [u] f )
+        = k + k 1
+    }
+    ( pktbuf_free w )
+    ^ n
+}
+
+// Put our own address in the ARP cache. An interface knows its own
+// MAC without asking for it, and on loopback the alternative is real:
+// the first SYN cannot be framed, nothing queues it, and the
+// connection waits a full retransmit timeout — a second of latency on
+// every connect to 127.0.0.1 — before the second attempt finds the
+// answer the stack had all along.
+@ sock_seed_self * SockTab st i now → v {
+    : *NetStack net . . st ts net
+    ? == . net our_ip 0 { ^ } {}
+    ( arp_cache_insert . net arp . net our_ip . net our_mac now )
+}
+
+// ── binding ──────────────────────────────────────────────────────
+
+@ __port_taken * SockTab st i port → b {
+    : i n ( vec_len [i] . st fds )
+    : ~ i k 0
+    ~ < k n {
+        : *Sock s ( __sock_at st k )
+        ? && != # i s 0 && . s used && == . s kind ( sock_kind_listener ) == . s local_port port {
+            ^ T
+        } {}
+        = k + k 1
+    }
+    ^ F
+}
+
+@ __next_free_port * SockTab st → i {
+    : ~ i tries 0
+    ~ < tries 16384 {
+        : i p . st ephemeral
+        = . st ephemeral ? >= + p 1 49152 32768 + p 1
+        ? ! ( __port_taken st p ) { ^ p } {}
+        = tries + tries 1
+    }
+    ^ 0
+}
+
+// Bind and listen. `port` 0 means "pick a free one" — the POSIX
+// contract, and the only way to take a port without racing whoever
+// else wants it; `sock_local_port` reads back what was chosen.
+//
+// Always returns an fd, even on failure, with the error recorded on
+// it: that is the socket ABI's shape, and the caller closes the handle
+// either way.
+@ sock_listen * SockTab st i ip i port i backlog → i {
+    ? || < port 0 > port 65535 {
+        ^ ( sock_err_fd st ( sock_err_bind ) )
+    } {}
+    : i p ? == port 0 ( __next_free_port st ) port
+    ? == p 0 { ^ ( sock_err_fd st ( sock_err_bind ) ) } {}
+    ? && != port 0 ( __port_taken st p ) {
+        ^ ( sock_err_fd st ( sock_err_addr_in_use ) )
+    } {}
+    : i lidx ( tstack_listen . st ts ip p backlog )
+    ? < lidx 0 { ^ ( sock_err_fd st ( sock_err_bind ) ) } {}
+    : i fd ( __alloc_fd st )
+    : *Sock s ( __sock st fd )
+    = . s kind ( sock_kind_listener )
+    = . s idx lidx
+    = . s local_ip ip
+    = . s local_port p
+    ^ fd
+}
+
+// Take the next completed connection, or `- sock_err_again` when none
+// is waiting. A listener that has been shut down answers
+// `- sock_err_accept` instead, so a thread parked on it wakes up and
+// stops rather than waiting for a connection that will never come.
+@ sock_accept * SockTab st i lfd → i {
+    : *Sock l ( __sock st lfd )
+    ? == # i l 0 { ^ - 0 ( sock_err_other ) } {}
+    ? != . l kind ( sock_kind_listener ) {
+        = . l err ( sock_err_accept )
+        ^ - 0 ( sock_err_accept )
+    } {}
+    ? . l shut {
+        = . l err ( sock_err_accept )
+        ^ - 0 ( sock_err_accept )
+    } {}
+    : i cidx ( tstack_accept . st ts . l idx )
+    ? < cidx 0 {
+        = . l err ( sock_err_again )
+        ^ - 0 ( sock_err_again )
+    } {}
+    : i fd ( __alloc_fd st )
+    : *Sock s ( __sock st fd )
+    = . s kind ( sock_kind_conn )
+    = . s idx cidx
+    = . s gen ( tstack_conn_gen . st ts cidx )
+    = . s local_ip . l local_ip
+    = . s local_port . l local_port
+    = . s peer_ip ( tstack_conn_peer_ip . st ts cidx )
+    = . s peer_port ( tstack_conn_peer_port . st ts cidx )
+    = . l err 0
+    ^ fd
+}
+
+// Wake anything waiting on this fd and refuse further use of it. The
+// listener half of this is how a server is stopped from another
+// context; the connection half makes a parked reader give up.
+@ sock_shutdown * SockTab st i fd → v {
+    : *Sock s ( __sock st fd )
+    ? == # i s 0 { ^ } {}
+    = . s shut T
+}
+
+@ sock_is_shutdown * SockTab st i fd → b {
+    : *Sock s ( __sock st fd )
+    ? == # i s 0 { ^ F } {}
+    ^ . s shut
+}
+
+// ── connecting ───────────────────────────────────────────────────
+
+// Start an active open. The fd is usable immediately and the
+// connection is NOT established yet — `sock_status` says when it is.
+// A SYN that could not be framed because ARP has not resolved is not
+// an error: TCP's own retransmit timer sends it.
+@ sock_connect * SockTab st i ip i port i local_port i now → i {
+    ? || <= port 0 > port 65535 { ^ ( sock_err_fd st ( sock_err_other ) ) } {}
+    : i cidx ( tstack_connect . st ts ip port local_port now . st out )
+    ? < cidx 0 { ^ ( sock_err_fd st ( sock_err_other ) ) } {}
+    : i fd ( __alloc_fd st )
+    : *Sock s ( __sock st fd )
+    = . s kind ( sock_kind_conn )
+    = . s idx cidx
+    = . s gen ( tstack_conn_gen . st ts cidx )
+    = . s local_ip . st our_ip
+    = . s local_port ( tstack_conn_local_port . st ts cidx )
+    = . s peer_ip ip
+    = . s peer_port port
+    ^ fd
+}
+
+@ __live * SockTab st * Sock s → b {
+    ? != . s kind ( sock_kind_conn ) { ^ F } {}
+    ^ ( tstack_conn_live . st ts . s idx . s gen )
+}
+
+// Where an active open has got to. A connection that vanished from the
+// table without this layer ever seeing a FIN did not close, it DIED —
+// a RST, or a retransmit timer that ran out of patience — because a
+// peer's FIN leaves the connection in CLOSE_WAIT, alive and readable,
+// until the application closes its side.
+@ sock_status * SockTab st i fd → i {
+    : *Sock s ( __sock st fd )
+    ? == # i s 0 { ^ ( sock_conn_failed ) } {}
+    ? ! ( __live st s ) { ^ ? . s eof ( sock_conn_ready ) ( sock_conn_failed ) } {}
+    : i state ( tstack_conn_state . st ts . s idx )
+    ? == state ( tcp_syn_sent ) { ^ ( sock_conn_pending ) } {}
+    ? == state ( tcp_syn_rcvd ) { ^ ( sock_conn_pending ) } {}
+    ? == state ( tcp_closed ) { ^ ( sock_conn_failed ) } {}
+    ^ ( sock_conn_ready )
+}
+
+@ sock_state * SockTab st i fd → i {
+    : *Sock s ( __sock st fd )
+    ? == # i s 0 { ^ ( tcp_closed ) } {}
+    ? ! ( __live st s ) { ^ ( tcp_closed ) } {}
+    ^ ( tstack_conn_state . st ts . s idx )
+}
+
+// ── reading and writing ──────────────────────────────────────────
+
+// Drain up to `max` received bytes into `dst`.
+//
+//   > 0   bytes appended
+//     0   end of stream: the peer sent FIN and everything it sent has
+//         been read. This is `read()` returning 0, and it is a
+//         DIFFERENT thing from an error, which is why it is not an
+//         error code.
+//   < 0   `- err`
+@ sock_read * SockTab st i fd ( Vec u ) dst i max → i {
+    : *Sock s ( __sock st fd )
+    ? == # i s 0 { ^ - 0 ( sock_err_other ) } {}
+    ? != . s kind ( sock_kind_conn ) {
+        = . s err ( sock_err_read )
+        ^ - 0 ( sock_err_read )
+    } {}
+    ? . s shut {
+        = . s err ( sock_err_closed )
+        ^ - 0 ( sock_err_closed )
+    } {}
+    ? ! ( __live st s ) {
+        ? . s eof { ^ 0 } {}
+        = . s err ( sock_err_closed )
+        ^ - 0 ( sock_err_closed )
+    } {}
+    ? <= max 0 { ^ 0 } {}
+    : i n ( tstack_read . st ts . s idx dst max )
+    ? > n 0 {
+        = . s err 0
+        ^ n
+    } {}
+    // Nothing buffered. If the peer has sent its FIN, this is the end
+    // of the stream rather than a stall — the whole reason the state
+    // machine keeps `fin_rcvd` around after it has ACKed it.
+    : *Tcb c ( tstack_conn_tcb . st ts . s idx )
+    ? && != # i c 0 . c fin_rcvd {
+        = . s eof T
+        = . s err 0
+        ^ 0
+    } {}
+    = . s err ( sock_err_again )
+    ^ - 0 ( sock_err_again )
+}
+
+// Queue bytes for transmission. Returns how many were ACCEPTED into
+// the send buffer — a short write is normal and means the window or
+// the buffer is full, exactly as `send(2)` on a non-blocking socket.
+// Zero accepted with bytes offered is reported as `- sock_err_again`
+// so a caller never spins on a full buffer mistaking it for progress.
+@ sock_write * SockTab st i fd ( Vec u ) src i off i len i now → i {
+    : *Sock s ( __sock st fd )
+    ? == # i s 0 { ^ - 0 ( sock_err_other ) } {}
+    ? != . s kind ( sock_kind_conn ) {
+        = . s err ( sock_err_write )
+        ^ - 0 ( sock_err_write )
+    } {}
+    ? ! ( __live st s ) {
+        = . s err ( sock_err_closed )
+        ^ - 0 ( sock_err_closed )
+    } {}
+    : i state ( tstack_conn_state . st ts . s idx )
+    ? || == state ( tcp_syn_sent ) == state ( tcp_syn_rcvd ) {
+        = . s err ( sock_err_again )
+        ^ - 0 ( sock_err_again )
+    } {}
+    // Our own FIN is out: the send side is closed and more data would
+    // arrive after the end of the stream.
+    : *Tcb c ( tstack_conn_tcb . st ts . s idx )
+    ? && != # i c 0 . c fin_sent {
+        = . s err ( sock_err_write )
+        ^ - 0 ( sock_err_write )
+    } {}
+    ? <= len 0 { ^ 0 } {}
+    : i n ( tstack_write . st ts . s idx src off len now . st out )
+    ? < n 0 {
+        = . s err ( sock_err_write )
+        ^ - 0 ( sock_err_write )
+    } {}
+    ? == n 0 {
+        = . s err ( sock_err_again )
+        ^ - 0 ( sock_err_again )
+    } {}
+    = . s err 0
+    ^ n
+}
+
+// Bytes queued for transmission and not yet acknowledged. A caller
+// that wants "everything is on the wire" waits for this to reach 0
+// rather than assuming a return from `sock_write` means delivery.
+@ sock_send_queue * SockTab st i fd → i {
+    : *Sock s ( __sock st fd )
+    ? == # i s 0 { ^ 0 } {}
+    ? ! ( __live st s ) { ^ 0 } {}
+    : *Tcb c ( tstack_conn_tcb . st ts . s idx )
+    ? == # i c 0 { ^ 0 } {}
+    ^ ( tcb_send_queue_len c )
+}
+
+// ── readiness ────────────────────────────────────────────────────
+//
+// What an event loop asks BEFORE performing an operation. Both answer
+// true for a dead or shut-down fd on purpose: the waiter must wake and
+// discover the error, and a readiness predicate that answers "not
+// ready" for a connection that will never be ready is a hang.
+
+@ sock_readable * SockTab st i fd → b {
+    : *Sock s ( __sock st fd )
+    ? == # i s 0 { ^ T } {}
+    ? . s shut { ^ T } {}
+    ? == . s kind ( sock_kind_listener ) {
+        ^ > ( tstack_pending_count . st ts . s idx ) 0
+    } {}
+    ? ! ( __live st s ) { ^ T } {}
+    : *Tcb c ( tstack_conn_tcb . st ts . s idx )
+    ? == # i c 0 { ^ T } {}
+    ^ || > ( tcb_recv_queue_len c ) 0 . c fin_rcvd
+}
+
+@ sock_writable * SockTab st i fd → b {
+    : *Sock s ( __sock st fd )
+    ? == # i s 0 { ^ T } {}
+    ? . s shut { ^ T } {}
+    ? != . s kind ( sock_kind_conn ) { ^ F } {}
+    ? ! ( __live st s ) { ^ T } {}
+    : i state ( tstack_conn_state . st ts . s idx )
+    ? || == state ( tcp_syn_sent ) == state ( tcp_syn_rcvd ) { ^ F } {}
+    : *Tcb c ( tstack_conn_tcb . st ts . s idx )
+    ? == # i c 0 { ^ T } {}
+    ? . c fin_sent { ^ T } {}
+    ^ < ( tcb_send_queue_len c ) ( sock_send_buf_max )
+}
+
+// The send-queue ceiling `sock_write` fills to. Matches the limit
+// tcpstack passes to `tcb_write`; a writability test that used a
+// different number would either report a socket writable that accepts
+// nothing, or never report one writable at all.
+@ sock_send_buf_max → i { ^ 65536 }
+
+// ── closing ──────────────────────────────────────────────────────
+
+// Release the fd. The CONNECTION may outlive it — a FIN has to be
+// acknowledged and TIME_WAIT has to elapse — which is precisely why
+// the connection table reclaims by timer and the fd table does not.
+@ sock_close * SockTab st i fd i now → v {
+    : *Sock s ( __sock st fd )
+    ? == # i s 0 { ^ } {}
+    = . s refs - . s refs 1
+    ? > . s refs 0 { ^ } {}
+    ? == . s kind ( sock_kind_listener ) {
+        ( tstack_listener_close . st ts . s idx )
+    } {
+        ? == . s kind ( sock_kind_conn ) {
+            ? ( __live st s ) { ( tstack_close . st ts . s idx now . st out ) } {}
+        } {}
+    }
+    = . s used F
+    = . s kind ( sock_kind_free )
+}
+
+// Tear the connection down with a RST rather than a FIN — what a
+// server does to a client that has misbehaved, and what SO_LINGER 0
+// buys on a hosted socket. The peer sees a reset, not an orderly
+// close, which is the honest signal when the application is refusing
+// to continue.
+@ sock_abort * SockTab st i fd i now → v {
+    : *Sock s ( __sock st fd )
+    ? == # i s 0 { ^ } {}
+    ? && == . s kind ( sock_kind_conn ) ( __live st s ) {
+        ( tstack_abort . st ts . s idx now . st out )
+    } {}
+    = . s refs 0
+    = . s used F
+    = . s kind ( sock_kind_free )
+}
+
+// ── statistics ───────────────────────────────────────────────────
+
+@ sock_open_count * SockTab st → i {
+    : i n ( vec_len [i] . st fds )
+    : ~ i live 0
+    : ~ i k 0
+    ~ < k n {
+        : *Sock s ( __sock_at st k )
+        ? && != # i s 0 . s used { = live + live 1 } {}
+        = k + k 1
+    }
+    ^ live
+}
