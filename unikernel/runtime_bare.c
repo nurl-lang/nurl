@@ -363,9 +363,16 @@ static NbCoro *nb_coro_new(void *fn, void *env, int joinable) {
      * at the instruction that did it. Worth it even here, where a
      * SIGSEGV is all the diagnosis available. */
     if (mprotect(base, guard, NB_PROT_NONE) != 0) {
-        munmap(base, total);
-        free(c);
-        return 0;
+        /* Not "no coroutine, quietly". A caller that gets 0 back from
+         * `nurl_fiber_spawn` runs nothing, reports success and prints
+         * zeroes — the exact silent-wrong-answer shape the async docs
+         * once promised as a graceful degradation and this project has
+         * now hit twice. A platform that cannot arm a guard page says
+         * so, once, and stops. */
+        fprintf(stderr, "nurl: cannot arm a coroutine guard page — this "
+                        "target has no page protection, and a fiber "
+                        "without one corrupts its neighbour on overflow\n");
+        abort();
     }
 
     c->stack_base   = base;
