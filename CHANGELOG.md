@@ -8,15 +8,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.33.0] — 2026-08-05
+
 ### Added
 
 - **`unikernel/nolibc` — NURL programs that link no libc at all**
   (unikernel plan A3). The freestanding libc subset the runtime calls:
   `mem*`/`str*`, an allocator, buffered stdio over six syscalls, exact
   `%f`/`%e`/`%g`, `setjmp`/`longjmp`, and the thread-pointer setup
-  `__thread` needs. **339 corpus tests build and run with `-nostdlib`
+  `__thread` needs. **394 corpus tests build and run with `-nostdlib`
   and glibc nowhere in the link line**, matching their ordinary
-  goldens (393 once the libc surface NURL *programs* call — `atoll`,
+  goldens (394 once the libc surface NURL *programs* call — `atoll`,
   `strstr`, `strchr`, the mechanical syscall wrappers, real `readdir`
   and `stat` — was added on top of the 49 the runtime itself needs);
   85 more still call into `runtime_ffi` (sockets, threads, entropy) and
@@ -32,6 +34,65 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   — ASan cannot supervise an allocator it has replaced, so the data is
   the oracle. Everything except `syscall_linux.c` and the two `.S`
   files is portable C the guest will run unchanged.
+
+- **`tcp_listen` accepts port 0, and `tcp_local_addr` reads back what
+  the kernel picked** (`stdlib/std/net.nu`, `stdlib/runtime_ffi.c`).
+  Binding an ephemeral port is the POSIX contract and the only way to
+  take a listening port without racing whoever else wants it.
+  `nurl_udp_bind` had always accepted it and `nurl_udp_local_addr` had
+  always existed to read the result back; the TCP half of the same
+  runtime section had neither — `nurl_tcp_listen` rejected `port == 0`
+  as invalid and reported `NetBind`, a bind failure that never
+  happened. New `nurl_tcp_local_addr` / `tcp_local_addr` return an
+  owned `"ip:port"` from `getsockname`, mirroring the UDP pair
+  including the ownership rule (caller frees with `string_free`).
+
+### Changed
+
+- **Float formatting generates its digits instead of asking libc five
+  times** (`stdlib/runtime_core.c` §2b, `stdlib/nurl_pow5_table.h`,
+  `tools/gen_pow5_table.py`). `nurl_str_float` used to find the shortest
+  round-tripping text by printing with `snprintf("%.*g")` and parsing it
+  back with `strtod`, binary-searching the precision — five of those
+  pairs per number. It now computes the shortest digits directly (Ryū,
+  over generated 125-bit power-of-five tables): **28–55× faster**
+  (4398 → 80 ns per value on full-precision doubles, 1853 → 67 ns on
+  short "data" floats, measured on an idle box), and `snprintf`,
+  `strtod` and `floor` leave `runtime_core`'s libc surface entirely
+  (52 → 49 undefined symbols), which is what the freestanding/unikernel
+  target needs from this file.
+
+  The text is unchanged for every double except **46 of the 2098 powers
+  of two**, where the old search could not find the shortest form and
+  printed one digit too many (e.g. `7.1202363472230444e-307`, now
+  `7.120236347223045e-307` — same double, one digit shorter). A power of
+  two's rounding interval is asymmetric, so the shortest decimal inside
+  it is not always the one a correctly-rounding `printf` produces at that
+  precision, and a search that only ever sees `printf` output cannot
+  reach it. Verified byte-for-byte against the old implementation over
+  systematic (every power of two, both neighbours of each, denormal and
+  overflow edges) and random doubles, with every output independently
+  re-parsed to prove the round trip; `float_shortest` pins it.
+
+- **The landing page's contributor strip is faces and names only.** It
+  read `Built by` and hung a role line under each name — editorial text
+  that had to be written by hand in `nurlweb/contributors.json` for
+  everyone who shipped something, and that fell back to a raw commit
+  count for everyone who was not listed yet. The strip is now headed
+  `Contributors` and carries nothing but the avatar and the name, so a
+  new contributor appears complete rather than tagged with a number.
+- **The strip is ordered by commits, and asks for two of them.** The
+  order used to be the order logins were written in
+  `contributors.json`, with everyone else appended by commit count —
+  an editorial ranking that had to be maintained by hand and that
+  said nothing a reader could check. It is now most commits first,
+  full stop, and new `min_commits` (default 2) keeps a single merged
+  typo fix off the page; `limit` (6) still caps it. Both cuts are
+  reported by name-count on stdout rather than applied silently, and
+  GitHub's own contributor page remains the exhaustive list.
+  `contributors.json` shrinks to a login → display-name map — listing
+  someone there no longer places or moves them, it only spells their
+  name for when they qualify. `limit` and `exclude` are unchanged.
 
 ### Fixed
 
@@ -61,71 +122,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   random digit strings, long (> 19-digit) inputs and **exact midpoints
   between adjacent doubles**, with and without `__int128`, under
   ASan/UBSan; `float_parse` pins it.
-
-### Changed
-
-- **Float formatting generates its digits instead of asking libc five
-  times** (`stdlib/runtime_core.c` §2b, `stdlib/nurl_pow5_table.h`,
-  `tools/gen_pow5_table.py`). `nurl_str_float` used to find the shortest
-  round-tripping text by printing with `snprintf("%.*g")` and parsing it
-  back with `strtod`, binary-searching the precision — five of those
-  pairs per number. It now computes the shortest digits directly (Ryū,
-  over generated 125-bit power-of-five tables): **28–55× faster**
-  (4398 → 80 ns per value on full-precision doubles, 1853 → 67 ns on
-  short "data" floats, measured on an idle box), and `snprintf`,
-  `strtod` and `floor` leave `runtime_core`'s libc surface entirely
-  (52 → 49 undefined symbols), which is what the freestanding/unikernel
-  target needs from this file.
-
-  The text is unchanged for every double except **46 of the 2098 powers
-  of two**, where the old search could not find the shortest form and
-  printed one digit too many (e.g. `7.1202363472230444e-307`, now
-  `7.120236347223045e-307` — same double, one digit shorter). A power of
-  two's rounding interval is asymmetric, so the shortest decimal inside
-  it is not always the one a correctly-rounding `printf` produces at that
-  precision, and a search that only ever sees `printf` output cannot
-  reach it. Verified byte-for-byte against the old implementation over
-  systematic (every power of two, both neighbours of each, denormal and
-  overflow edges) and random doubles, with every output independently
-  re-parsed to prove the round trip; `float_shortest` pins it.
-
-### Added
-
-- **`tcp_listen` accepts port 0, and `tcp_local_addr` reads back what
-  the kernel picked** (`stdlib/std/net.nu`, `stdlib/runtime_ffi.c`).
-  Binding an ephemeral port is the POSIX contract and the only way to
-  take a listening port without racing whoever else wants it.
-  `nurl_udp_bind` had always accepted it and `nurl_udp_local_addr` had
-  always existed to read the result back; the TCP half of the same
-  runtime section had neither — `nurl_tcp_listen` rejected `port == 0`
-  as invalid and reported `NetBind`, a bind failure that never
-  happened. New `nurl_tcp_local_addr` / `tcp_local_addr` return an
-  owned `"ip:port"` from `getsockname`, mirroring the UDP pair
-  including the ownership rule (caller frees with `string_free`).
-
-### Changed
-
-- **The landing page's contributor strip is faces and names only.** It
-  read `Built by` and hung a role line under each name — editorial text
-  that had to be written by hand in `nurlweb/contributors.json` for
-  everyone who shipped something, and that fell back to a raw commit
-  count for everyone who was not listed yet. The strip is now headed
-  `Contributors` and carries nothing but the avatar and the name, so a
-  new contributor appears complete rather than tagged with a number.
-- **The strip is ordered by commits, and asks for two of them.** The
-  order used to be the order logins were written in
-  `contributors.json`, with everyone else appended by commit count —
-  an editorial ranking that had to be maintained by hand and that
-  said nothing a reader could check. It is now most commits first,
-  full stop, and new `min_commits` (default 2) keeps a single merged
-  typo fix off the page; `limit` (6) still caps it. Both cuts are
-  reported by name-count on stdout rather than applied silently, and
-  GitHub's own contributor page remains the exhaustive list.
-  `contributors.json` shrinks to a login → display-name map — listing
-  someone there no longer places or moves them, it only spells their
-  name for when they qualify. `limit` and `exclude` are unchanged.
-
-### Fixed
 
 - **nurlc leaked while compiling a `select`.** `gen_select` builds the
   construct's real body as source and compiles it through a sub-lexer;
@@ -10671,7 +10667,8 @@ releases are measured.
   compile-server (`api/`), browser playground (`nurlweb/`).
 * Dual license: MIT (LICENSE-MIT) or Apache-2.0 (LICENSE-APACHE).
 
-[Unreleased]: https://github.com/nurl-lang/nurl/compare/v0.32.0...HEAD
+[Unreleased]: https://github.com/nurl-lang/nurl/compare/v0.33.0...HEAD
+[0.33.0]: https://github.com/nurl-lang/nurl/compare/v0.32.0...v0.33.0
 [0.32.0]: https://github.com/nurl-lang/nurl/compare/v0.31.1...v0.32.0
 [0.31.1]: https://github.com/nurl-lang/nurl/compare/v0.31.0...v0.31.1
 [0.31.0]: https://github.com/nurl-lang/nurl/compare/v0.30.0...v0.31.0
