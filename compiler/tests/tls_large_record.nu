@@ -13,7 +13,7 @@
 // The python client reads to EOF and prints the body length plus a
 // content check (repeating '0123456789' pattern), both deterministic.
 // Needs a loopback socket + python3, like http_server_tls.nu.
-// requires: live python3
+// requires: live fibers python3
 
 $ `stdlib/std/net.nu`
 $ `stdlib/std/process.nu`

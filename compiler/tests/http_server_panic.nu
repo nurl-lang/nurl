@@ -25,7 +25,7 @@
 // Pre-fix (no panic model): the handler's `panic` would abort the
 // process — the test would die before producing any client output.
 // Post-fix: the panic is recovered, 500 sent, process keeps running.
-// requires: live python3
+// requires: live fibers python3
 
 $ `stdlib/std/net.nu`
 $ `stdlib/std/process.nu`

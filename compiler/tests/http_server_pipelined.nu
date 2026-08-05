@@ -18,7 +18,7 @@
 // Needs a loopback socket + a python3 client. The listen / accept /
 // serve plumbing is already covered by `http_server_seq.nu`; this test
 // isolates the pipelining correctness story.
-// requires: live python3
+// requires: live fibers python3
 
 $ `stdlib/std/net.nu`
 $ `stdlib/std/process.nu`

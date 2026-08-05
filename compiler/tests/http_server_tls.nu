@@ -18,7 +18,7 @@
 // (stdlib/runtime.openssl absent), tcp_listen_tls returns
 // NetTlsCtxInit and the test prints that fact instead — so the
 // baseline tells us whether the build-host openssl path is wired.
-// requires: live openssl python3
+// requires: live fibers openssl python3
 
 $ `stdlib/std/net.nu`
 $ `stdlib/std/process.nu`

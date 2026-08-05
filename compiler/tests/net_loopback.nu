@@ -10,7 +10,7 @@
 //   3. Server accepts, reads "ping", writes "pong", closes the conn.
 //   4. Verifies the captured bytes round-trip end-to-end and that
 //      tcp_peer_addr is non-empty.
-// requires: live python3
+// requires: live fibers python3
 
 $ `stdlib/std/net.nu`
 $ `stdlib/std/process.nu`
