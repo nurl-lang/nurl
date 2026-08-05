@@ -45,7 +45,6 @@
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/errors.nu`
-$ `stdlib/core/posix.nu`  // posix_const + nurl_errno_get for strtod ERANGE detection
 
 // ── Constants ──────────────────────────────────────────────────────
 
@@ -179,22 +178,33 @@ $ `stdlib/core/posix.nu`  // posix_const + nurl_errno_get for strtod ERANGE dete
 
 // ── Strict parser ──────────────────────────────────────────────────
 //
-// Direct FFI to libc `strtod` — PURIFY §11 batch (2026-05-24) eliminated
-// the runtime sideband (`nurl_str_to_float_safe` + `nurl_str_float_value`
-// + static `g_last_parsed_float`). Strictness is enforced here:
+// Built on `nurl_fast_atof_ex` (runtime_core §2c), not on libc
+// `strtod`. The parser is the same one the formatter's round-trip
+// guarantee is stated against — one implementation for both directions
+// of the conversion — and it is locale-independent, correctly rounded,
+// and present on a target with no libc at all, which `strtod` is not.
+//
+// It answers all three questions in one call: the value, how many
+// bytes belonged to the number, and whether the result was out of
+// range. Strictness is enforced here:
 //
 //   - empty input                                → Empty
 //   - leading whitespace ok, but at least one non-WS must follow → BadFormat
-//   - no digits consumed (`endptr == str_after_ws`)              → BadFormat
-//   - errno = ERANGE on overflow / underflow                     → BadFormat
+//   - nothing consumed                                           → BadFormat
+//   - overflow to ±inf, or underflow below the smallest normal    → BadFormat
+//     (the same condition libc reports as ERANGE)
 //   - non-whitespace trailing garbage                            → BadFormat
+//
+// `inf` / `infinity` / `nan` ARE accepted, case-insensitively and with
+// an optional sign, because `float_to_string` prints them. Hexadecimal
+// floats (`0x1p3`) and `nan(payload)` are not — libc accepts both and
+// nothing in NURL emits either.
 
 @ float_parse s str → !f ParseErr {
     : i n ( nurl_str_len str )
     ? == n 0 { ^ @ !f ParseErr { F @ ParseErr { Empty } } } {}
-    // strtod skips leading whitespace itself, but we still need to
-    // detect "all whitespace" inputs so the caller can distinguish
-    // Empty from BadFormat. Walk past spaces / tabs explicitly.
+    // Walk past leading spaces / tabs, so the caller can distinguish an
+    // all-whitespace input (Empty) from a malformed one.
     : ~ i pre 0
     : ~ b stopped F
     ~ & < pre n ! stopped {
@@ -203,31 +213,21 @@ $ `stdlib/core/posix.nu`  // posix_const + nurl_errno_get for strtod ERANGE dete
     }
     ? >= pre n { ^ @ !f ParseErr { F @ ParseErr { Empty } } } {}
 
-    : s ep_buf ( nurl_alloc 8 )
-    ? == # i ep_buf 0 { ^ @ !f ParseErr { F @ ParseErr { BadFormat } } } {}
-    ( nurl_poke ep_buf 0 0 )
-    ( nurl_errno_set 0 )
-    : f v ( strtod str # *u ep_buf )
-    : i end ( nurl_peek ep_buf 0 )
-    ( nurl_free ep_buf )
+    // Two i64 slots: bytes consumed, and the out-of-range flag.
+    : s ob ( nurl_alloc 16 )
+    ? == # i ob 0 { ^ @ !f ParseErr { F @ ParseErr { BadFormat } } } {}
+    ( nurl_poke ob 0 0 )
+    ( nurl_poke ob 1 0 )
+    : f v ( nurl_fast_atof_ex # s + # i str pre - n pre # *u ob )
+    : i used ( nurl_peek ob 0 )
+    : i rng ( nurl_peek ob 1 )
+    ( nurl_free ob )
 
-    // No digits consumed: endptr stayed at the first non-whitespace
-    // byte (which strtod's internal whitespace skip reached).
-    : i sptr + # i str pre
-    ? == end sptr { ^ @ !f ParseErr { F @ ParseErr { BadFormat } } } {}
+    ? == used 0 { ^ @ !f ParseErr { F @ ParseErr { BadFormat } } } {}
+    ? != rng 0 { ^ @ !f ParseErr { F @ ParseErr { BadFormat } } } {}
 
-    // Out-of-range overflow / underflow.
-    : i e ( nurl_errno_get )
-    ? == e ( posix_const `ERANGE` ) {
-        ^ @ !f ParseErr { F @ ParseErr { BadFormat } }
-    } {}
-
-    // Trailing garbage check: skip whitespace at endptr, then require
-    // NUL terminator. NURL has no direct *u read-byte primitive in
-    // this context — convert end back to an offset and re-read via
-    // `nurl_str_get` which is bounds-aware.
-    : i tail_off - end # i str
-    : ~ i tk tail_off
+    // Trailing garbage: everything after the number must be whitespace.
+    : ~ i tk + pre used
     ~ < tk n {
         : i tc ( nurl_str_get str tk )
         ? || == tc 32 == tc 9 { = tk + tk 1 } {

@@ -90,8 +90,23 @@ $ `stdlib/core/char.nu`
     ^ ( atoll str )
 }
 
+// String → f64, the lenient form: leading whitespace is skipped and
+// anything that is not a number reads as 0.0. Goes through
+// `nurl_fast_atof`, not libc `atof`, so the answer does not depend on
+// the process locale (LC_NUMERIC=de_DE makes `atof` read "3.14" as 3),
+// is correctly rounded on every platform rather than only where libc
+// happens to be, and exists on a target with no libc. Hexadecimal
+// floats are the one thing `atof` takes and this does not.
+// stdlib/std/float.nu's `float_parse` is the checking version.
 @ nurl_str_to_float s str → f {
-    ^ ( atof str )
+    : i n ( strlen str )
+    : ~ i k 0
+    : ~ b stop F
+    ~ & < k n ! stop {
+        : i c ( nurl_str_get str k )
+        ? || || == c 32 == c 9 || == c 10 == c 13 { = k + k 1 } { = stop T }
+    }
+    ^ ( nurl_fast_atof # s + # i str k - n k )
 }
 
 @ nurl_str_starts s str s prefix → i {
@@ -257,28 +272,20 @@ $ `stdlib/core/char.nu`
     ^ * acc sign
 }
 
-// strtod via FFI for byte-range float parsing. nurl_str_int and
-// nurl_str_float keep their C bodies — str_int because moving it
-// would force `$ stdlib/core/string.nu` into 72 corpus tests that
-// use it transitively; str_float because its digit generator
-// (runtime_core §2b) multiplies by 125-bit table entries, which needs
-// a 64x64→128 widening multiply NURL has no operator for yet.
+// nurl_str_int and nurl_str_float keep their C bodies — str_int
+// because moving it would force `$ stdlib/core/string.nu` into 72
+// corpus tests that use it transitively; str_float because its digit
+// generator (runtime_core §2b) multiplies by 125-bit table entries,
+// which needs a 64x64→128 widening multiply NURL has no operator for
+// yet.
 
-// Parse f64 from byte range [p, p+len) via libc `strtod`. Copies
-// into a NUL-terminated scratch buffer, passes NULL as endptr.
-// Returns 0.0 on empty / null input.
+// Parse f64 from byte range [p, p+len), no NUL needed. This used to
+// malloc a scratch buffer, copy the bytes into it and call libc
+// `strtod`; `nurl_fast_atof` takes the range directly, is correctly
+// rounded, and is 4.5-8.4x faster than strtod even before the copy.
+// 0.0 on empty / null input, and on anything that is not a number.
 @ nurl_parse_float_range s p i len → f {
-    ? == # i p 0 { ^ 0.0 } {}
-    ? <= len 0 { ^ 0.0 } {}
-    : s buf # s ( nurl_alloc + len 1 )
-    ( memcpy buf p len )
-    : *u bp # *u buf
-    : u zero # u 0
-    = . bp len zero
-    : **u endptr # **u 0
-    : f v ( strtod buf endptr )
-    ( nurl_free buf )
-    ^ v
+    ^ ( nurl_fast_atof p len )
 }
 
 : String {

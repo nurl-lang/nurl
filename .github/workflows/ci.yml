@@ -131,11 +131,17 @@ jobs:
         # Track B months later. Takes about a second.
         run: ./tools/check_nolibc_symbols.sh
 
-      - name: nolibc unit gates (string / float-format differentials, allocator fuzz)
+      - name: nolibc + runtime_bare unit gates (differentials, fuzz, schedule, deadlock)
         # Differentials against glibc, not "it didn't crash": every
         # mem*/str* over all alignments and lengths, %f/%e/%g at every
-        # precision, and an allocator fuzzer that keeps a pattern in each
-        # live block (ASan cannot supervise an allocator it replaced).
+        # precision, every libm entry in ULPS over the ranges where a
+        # libm actually breaks, and an allocator fuzzer that keeps a
+        # pattern in each live block (ASan cannot supervise an allocator
+        # it replaced). Plus the cooperative scheduler: its SCHEDULE
+        # asserted as a trace string, and the negative half — four
+        # deadlocks, a stack overflow, a guard-page write and a refusing
+        # entropy source, each of which must END THE PROCESS in bounded
+        # time rather than hang.
         run: ./unikernel/tests/run_unit_tests.sh
 
       - name: runtime-builtins doc module in sync with the compiler preamble

@@ -75,15 +75,29 @@
 // round-trips back to the same double. Owned result.
 & `c` @ nurl_str_float f x → s
 
-// Parse a float from the first `len` bytes at `p` (fast path, no
-// locale). Prefer stdlib/std/float.nu's checked parsers for input
-// validation.
+// Parse a float from the first `len` bytes at `p`. Correctly rounded
+// (the same double `strtod` returns, ties to even), no locale, no
+// leading space, no hex. Recognises `inf` / `infinity` / `nan`
+// case-insensitively, because `nurl_str_float` prints them.
 & `c` @ nurl_fast_atof s p i len → f
 
-// libc: parse an integer / float from a NUL-terminated string.
-// No error reporting — 0 on garbage. Prefer string.nu / float.nu.
+// The same parser, answering the two questions a validating caller
+// also needs. `out` is a 16-byte block: slot 0 receives the number of
+// bytes consumed (0 = there was no number here), slot 1 receives 1 when
+// the value is out of range — overflow to ±inf, or an underflow below
+// the smallest normal, which is what libc reports as ERANGE.
+// stdlib/std/float.nu's `float_parse` is built on this.
+& `c` @ nurl_fast_atof_ex s p i len *u out → f
+
+// libc: parse an integer from a NUL-terminated string.
+// No error reporting — 0 on garbage. Prefer string.nu.
 & `c` @ atoll s text → i
 
+// libc `atof` — declared for programs that want libc's exact
+// behaviour (locale, hex floats, `nan(payload)`). The stdlib itself
+// does not call it: `nurl_str_to_float` and `float_parse` go through
+// nurl_fast_atof, which is locale-independent, correctly rounded, and
+// available on a target with no libc at all.
 & `c` @ atof s text → f
 
 // ── Byte scanning (SIMD hot paths) ─────────────────────────────────

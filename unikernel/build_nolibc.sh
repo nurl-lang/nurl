@@ -50,13 +50,20 @@ OUT="${OUT:-$OUTDIR/$base}"
 #    in its own step with the flags spelled out.
 "$CC" -O2 -c "$OUTDIR/$base.ll" -o "$OUTDIR/$base.o"
 
-# 3. The runtime's bootstrap half, alone. runtime_ffi.c is NOT here:
-#    it needs pthreads, sockets and ucontext, which is what runtime_bare.c
-#    will replace (A3, still open).
+# 3. The runtime, minus runtime_ffi.c. Three objects where the hosted
+#    build has one, because the aggregator stdlib/runtime.c exists to
+#    concatenate exactly these and runtime_ffi.c — and runtime_ffi.c is
+#    the one a freestanding target cannot have.
+#      runtime_core.c — the bootstrap half, byte-for-byte the hosted one
+#      runtime_ctx.c  — the stackful switch, likewise shared verbatim
+#      runtime_bare.c — the cooperative twin of runtime_ffi.c
 "$CC" -O2 -c "$ROOT/stdlib/runtime_core.c" -o "$OUTDIR/runtime_core.o"
+"$CC" -O2 -c "$ROOT/stdlib/runtime_ctx.c"  -o "$OUTDIR/runtime_ctx.o"
+"$CC" -O2 -ffreestanding -fno-stack-protector \
+      -c "$ROOT/unikernel/runtime_bare.c" -o "$OUTDIR/runtime_bare.o"
 
 # 4. nolibc itself.
-for f in string malloc stdio dtoa misc syscall_linux tls_linux; do
+for f in string malloc stdio dtoa math misc syscall_linux tls_linux; do
     "$CC" -O2 -ffreestanding -fno-builtin -fno-stack-protector \
           -c "$NOLIBC/$f.c" -o "$OUTDIR/nl_$f.o"
 done
@@ -66,8 +73,8 @@ done
 
 # 5. Link with no libc, no crt, no dynamic loader.
 "$CC" -nostdlib -static -no-pie -o "$OUT" \
-      "$OUTDIR/$base.o" "$OUTDIR/runtime_core.o" \
-      "$OUTDIR"/nl_*.o
+      "$OUTDIR/$base.o" "$OUTDIR/runtime_core.o" "$OUTDIR/runtime_ctx.o" \
+      "$OUTDIR/runtime_bare.o" "$OUTDIR"/nl_*.o
 
 echo "built $OUT"
 if command -v ldd >/dev/null 2>&1; then

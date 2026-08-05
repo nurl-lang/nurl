@@ -73,4 +73,28 @@ echo "check_nolibc_symbols: OK — all $n_need libc symbols runtime_core needs a
 # means someone is writing libc for its own sake.
 extra=$(comm -13 "$TMP/needed" "$TMP/provided" | grep -vE '^(nl_|_start)' | tr '\n' ' ')
 [ -n "$extra" ] && echo "  (nolibc also defines, for programs rather than the core: $extra)"
+
+# ── the other twin: a GENERATED file and its generator ────────────
+# unikernel/nolibc/math_tables.h is produced by tools/gen_libm_tables.py
+# and committed. That is one more pair that drifts silently — someone
+# edits a coefficient by hand, or changes a fit degree and forgets to
+# regenerate, and the header stops being what the generator says it is.
+# Regenerating into a temp file and diffing costs four seconds and makes
+# the claim checkable rather than hopeful.
+if command -v python3 >/dev/null; then
+    if python3 "$ROOT/tools/gen_libm_tables.py" > "$TMP/math_tables.h" 2>"$TMP/gen.err"; then
+        if ! diff -q "$TMP/math_tables.h" "$NOLIBC/math_tables.h" >/dev/null; then
+            echo "check_nolibc_symbols: unikernel/nolibc/math_tables.h differs from what" >&2
+            echo "  tools/gen_libm_tables.py produces. Regenerate it:" >&2
+            echo "    python3 tools/gen_libm_tables.py > unikernel/nolibc/math_tables.h" >&2
+            diff "$NOLIBC/math_tables.h" "$TMP/math_tables.h" | head -20 >&2
+            exit 1
+        fi
+        echo "check_nolibc_symbols: math_tables.h matches its generator"
+    else
+        echo "check_nolibc_symbols: gen_libm_tables.py failed" >&2
+        head -5 "$TMP/gen.err" >&2
+        exit 1
+    fi
+fi
 exit 0
