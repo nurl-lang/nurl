@@ -99,7 +99,7 @@ pointer), one `mmap` (the first allocator arena) and one `write`.
 ```sh
 unikernel/build_unikernel.sh compiler/tests/hello.nu
 unikernel/run_qemu.sh build/unikernel/hello.elf     # → Hello, NURL! … exit 0
-unikernel/run_qemu_tests.sh                         # 5/5 against the goldens
+unikernel/run_qemu_tests.sh                         # 9/9 against the goldens
 ```
 
 QEMU microvm, PVH direct boot, no BIOS and no bootloader: the
@@ -116,12 +116,20 @@ are the ones that talk to the machine: `boot/boot.S`,
 `nolibc/tls_linux.c`. Everything else — nolibc, runtime_core.c,
 runtime_bare.c, the NURL program — is the same object code.
 
-**Fibers are not available in the guest yet**, and they say so: a
-coroutine's guard page needs the boot page tables' 2 MiB mapping split
-into 4 KiB pages, which is the memory phase (B2). Until then
-`mprotect` refuses and `nb_coro_new` stops loudly, because a fiber
-that reports success and computes nothing is the failure this
-directory exists to avoid.
+Fibers run there too, on stacks whose guard pages are real page-table
+entries: the 2 MiB boot mapping is split into 4 KiB pages on demand,
+from a page-table pool reserved at boot. The pool is the point — the
+version that took a table from the shared bump heap while editing the
+mapping of the region that heap lives in faulted inside `nurl_free`.
+Splitting now allocates nothing and cannot fail for want of memory;
+running out of tables is a panic, because a guard page that quietly
+does not exist is the bug the mechanism is for.
+
+The clock is the TSC, and its frequency is never guessed: CPUID leaf
+0x40000010 under KVM, or `tsc_khz=` on the kernel command line, or
+asking for the time panics. `wallclock=` carries the boot epoch the
+same way — a functionality input, not a security control, since the
+host already controls the whole image.
 
 ## Accuracy, stated
 

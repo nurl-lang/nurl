@@ -140,6 +140,10 @@ void pf_panic(const char *msg) {
 static unsigned char *heap_next;
 static unsigned char *heap_end;
 
+#define PT_POOL_TABLES 64
+static u64 *pt_pool;              /* PT_POOL_TABLES × 512 entries */
+static u32  pt_pool_used;
+
 /* The largest usable region at or above the image. Anything below the
  * image is where the image is, and a second region we could stitch on
  * buys nothing until there is a real allocator to stitch it into. */
@@ -164,6 +168,14 @@ static void mem_init(const struct hvm_start_info *si) {
 
     heap_next = (unsigned char *)(unsigned long)best_base;
     heap_end  = heap_next + best_len;
+
+    /* The page-table pool, taken before anything else and aligned the
+     * way a page table must be. */
+    heap_next = (unsigned char *)(((unsigned long)heap_next + 4095) & ~4095UL);
+    pt_pool = (u64 *)heap_next;
+    heap_next += (unsigned long)PT_POOL_TABLES * 4096;
+    if (heap_next > heap_end) pf_panic("not enough memory for the page-table pool");
+    for (unsigned long i = 0; i < (unsigned long)PT_POOL_TABLES * 512; i++) pt_pool[i] = 0;
 }
 
 /* mmap, as much of it as a guest needs: anonymous, private, and never
@@ -183,33 +195,115 @@ void *mmap(void *addr, unsigned long len, int prot, int flags, int fd, long off)
 
 int munmap(void *p, unsigned long len) { (void)p; (void)len; return 0; }
 
-/* ── mprotect ────────────────────────────────────────────────────
+/* ── page protection ─────────────────────────────────────────────
  *
- * The only caller is runtime_bare's coroutine allocator, arming the
- * guard page below each 64 KiB stack. This target cannot yet do it:
- * the boot page tables map the low 4 GiB with 2 MiB pages, and a 4 KiB
- * guard needs the containing 2 MiB page split into 512 small ones
- * first. The split is written and is NOT here, because the version
- * that was faulted inside `nurl_free` — the freestanding allocator and
- * the coroutine stacks come out of one bump region, so unmapping a
- * page inside it is not the local act it is on Linux. Getting that
- * right is the memory phase (B2), which is where the guest grows a
- * real allocator instead of a bump pointer.
+ * The boot page tables map the low 4 GiB with 2 MiB pages, and the one
+ * caller of `mprotect` — runtime_bare arming a 4 KiB guard page below
+ * each coroutine stack — needs a finer grain than that. So the 2 MiB
+ * page containing the range is split into 512 4 KiB pages, once, and
+ * the bits then say what the caller asked for.
  *
- * Until then this REFUSES, and `nb_coro_new` turns the refusal into a
- * loud stop rather than a fiber that silently never runs. A guest
- * without fibers is a limitation; a guest whose fibers report success
- * and compute nothing is a bug report from six months later.
+ * The page tables for the split come from a POOL RESERVED AT BOOT, not
+ * from the heap. That is the whole difference between this and the
+ * version that faulted: `mprotect` is called from inside the
+ * allocator's world — a coroutine's stack has just been handed out —
+ * and taking a fresh page from the same bump pointer while editing the
+ * mapping of the region it lives in is one interaction too many to
+ * reason about. A pool sized at boot removes the question: splitting
+ * allocates nothing and cannot fail for want of memory.
+ *
+ * 64 tables covers 128 MiB of split range, which is 1900 coroutine
+ * stacks. Running out is a panic, not a silent refusal — a guard page
+ * that quietly does not exist is the bug this whole mechanism is for.
  */
+static u64 *pd_entry_for(u64 va) {
+    u64 cr3;
+    __asm__ __volatile__("mov %%cr3, %0" : "=r"(cr3));
+    u64 *pml4 = (u64 *)(unsigned long)(cr3 & 0x000FFFFFFFFFF000ULL);
+    if (!(pml4[(va >> 39) & 511] & 1)) return 0;
+    u64 *pdpt = (u64 *)(unsigned long)(pml4[(va >> 39) & 511] & 0x000FFFFFFFFFF000ULL);
+    if (!(pdpt[(va >> 30) & 511] & 1)) return 0;
+    u64 *pd = (u64 *)(unsigned long)(pdpt[(va >> 30) & 511] & 0x000FFFFFFFFFF000ULL);
+    return &pd[(va >> 21) & 511];
+}
+
+/* One 2 MiB mapping becomes 512 4 KiB ones over the same frames. */
+static void split_2m(u64 *pde) {
+    if (!(*pde & (1ULL << 7))) return;               /* already 4 KiB */
+    if (pt_pool_used >= PT_POOL_TABLES)
+        pf_panic("out of page tables — more coroutine stacks than the "
+                 "boot-time pool was sized for");
+    u64 frame = *pde & 0x000FFFFFFFE00000ULL;        /* the 2 MiB frame */
+    u64 *pt = pt_pool + (unsigned long)pt_pool_used * 512;
+    pt_pool_used++;
+    for (int i = 0; i < 512; i++) pt[i] = (frame + (u64)i * 4096) | 0x3;
+    *pde = ((u64)(unsigned long)pt) | 0x3;           /* present | writable */
+}
+
 int mprotect(void *p, unsigned long len, int prot) {
-    (void)p; (void)len; (void)prot;
-    return -1;
+    u64 va = (u64)(unsigned long)p & ~0xFFFULL;
+    u64 end = ((u64)(unsigned long)p + len + 4095) & ~0xFFFULL;
+
+    if (!pt_pool) return -1;
+    for (; va < end; va += 4096) {
+        u64 *pde = pd_entry_for(va);
+        if (!pde || !(*pde & 1)) return -1;
+        split_2m(pde);
+        u64 *pt = (u64 *)(unsigned long)(*pde & 0x000FFFFFFFFFF000ULL);
+        u64 *pte = &pt[(va >> 12) & 511];
+        u64 frame = *pte & 0x000FFFFFFFFFF000ULL;
+        /* PROT_NONE (0) unmaps; PROT_WRITE (2) implies read. */
+        if (prot == 0)       *pte = frame;                  /* not present */
+        else if (prot & 0x2) *pte = frame | 0x3;
+        else                 *pte = frame | 0x1;
+        __asm__ __volatile__("invlpg (%0)" :: "r"((unsigned long)va) : "memory");
+    }
+    return 0;
 }
 
 /* ── time ────────────────────────────────────────────────────────── */
 
 static u64 tsc_khz;            /* 0 = nobody told us */
 static u64 tsc_base;
+static u64 wall_base_sec;      /* CLOCK_REALTIME epoch at boot, 0 = unset */
+
+/* ── the kernel command line ─────────────────────────────────────
+ *
+ * Three consumers share one string (plan B0): the boot layer reads
+ * `tsc_khz=` and `wallclock=`, B5 will read `virtio_mmio.device=`, and
+ * the application's argv arrives in a single `args="…"` key. Anything
+ * unrecognised is consumed here and never reaches the program, because
+ * QEMU appends its own entries after `-append` and handing those to a
+ * program's argument parser is how a boot flag becomes a mysterious
+ * command-line error.
+ */
+static const char *cmdline;
+
+static u64 cmdline_u64(const char *key) {
+    const char *p = cmdline;
+    unsigned long klen = 0;
+    if (!p) return 0;
+    while (key[klen]) klen++;
+    while (*p) {
+        const char *k = p;
+        unsigned long n = 0;
+        while (p[n] && p[n] != ' ' && p[n] != '=') n++;
+        if (n == klen && p[n] == '=') {
+            unsigned long i = 0;
+            for (; i < klen; i++) if (k[i] != key[i]) break;
+            if (i == klen) {
+                u64 v = 0;
+                const char *d = p + n + 1;
+                if (*d < '0' || *d > '9') return 0;
+                while (*d >= '0' && *d <= '9') { v = v * 10 + (u64)(*d - '0'); d++; }
+                return v;
+            }
+        }
+        while (*p && *p != ' ') p++;
+        while (*p == ' ') p++;
+    }
+    return 0;
+}
 
 static inline u64 rdtsc(void) {
     u32 lo, hi;
@@ -245,6 +339,14 @@ static void time_init(void) {
                 tsc_khz = ((u64)crystal * num) / den / 1000;
         }
     }
+    /* Last: the host says so on the command line. Not a guess — a
+     * stated input, the same trust model the plan gives the wall-clock
+     * epoch (the host already controls the entire image). It is what
+     * makes a TCG run possible at all: no leaf reports a frequency
+     * there, and refusing to invent one is right, while refusing to be
+     * TOLD one would just mean the clock never works without KVM. */
+    if (!tsc_khz) tsc_khz = cmdline_u64("tsc_khz");
+    wall_base_sec = cmdline_u64("wallclock");
     tsc_base = rdtsc();
 }
 
@@ -260,9 +362,13 @@ int clock_gettime(int clk, void *tsp) {
                  "RTO and a certificate that expires when it feels like it)");
     u64 ticks = rdtsc() - tsc_base;
     u64 us = ticks / (tsc_khz / 1000 ? tsc_khz / 1000 : 1);
-    (void)clk;
     ts[0] = us / 1000000;
     ts[1] = (us % 1000000) * 1000;
+    /* CLOCK_REALTIME (0) is the boot epoch plus the monotonic delta.
+     * Without one it stays boot-relative and says so by being obviously
+     * wrong (1970), rather than by looking plausible: X.509 validity is
+     * the caller that cares, and it fails closed on a 1970 clock. */
+    if (clk == 0) ts[0] += wall_base_sec;
     return 0;
 }
 
@@ -422,6 +528,7 @@ void kmain(unsigned long start_info_paddr) {
         pf_panic("not a PVH boot — no hvm_start_info at the handover "
                  "address (was this image loaded with -kernel?)");
 
+    cmdline = si->cmdline_paddr ? (const char *)(unsigned long)si->cmdline_paddr : 0;
     mem_init(si);
     time_init();
     nl_tls_init_guest();          /* before the first __thread access */
