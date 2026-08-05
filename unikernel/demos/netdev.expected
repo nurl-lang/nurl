@@ -1,0 +1,6 @@
+nic ready: yes
+mac from config space: yes
+first send is ARP-pending: yes
+gateway MAC learned over the wire: yes
+datagram sent: yes
+frames received: yes
