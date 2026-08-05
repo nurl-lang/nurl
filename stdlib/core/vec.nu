@@ -380,6 +380,41 @@
     }
 }
 
+// Append `src[off .. off+n)` to `dst` (bitwise), with the same
+// trivial-element-type rule as vec_extend below.
+//
+// The whole-vector form makes a caller who has only a sub-range build a
+// temporary Vec to pass it — a full copy of the data, plus an
+// allocation and a free, to move bytes it already had. net/tcpstack.nu
+// hits this on every outgoing segment (TCP carries no length field, so
+// the segments arrive as offsets into one buffer), which is the wrong
+// place to be allocating.
+//
+// Out-of-range requests are clamped rather than trapped: `off` past the
+// end appends nothing, and a length running past the end appends what
+// is there. A caller computing a range from a parsed header should not
+// have to re-verify what the vector can already answer.
+@ vec_extend_range [A] ( Vec A ) dst ( Vec A ) src i off i n → v {
+    : s sctl . src ctl
+    : i slen ( __vec_len_raw sctl )
+    : i start ? < off 0 0 off
+    ? >= start slen { ^ } {}
+    : i want ? < n 0 0 n
+    : i cnt ? > + start want slen - slen start want
+    ? <= cnt 0 { ^ } {}
+    : s dctl . dst ctl
+    : i dlen ( __vec_len_raw dctl )
+    ( __vec_grow [A] dctl + dlen cnt )
+    : *A ddata # *A ( nurl_peek dctl 0 )
+    : *A sdata # *A ( nurl_peek sctl 0 )
+    : ~ i i 0
+    ~ < i cnt {
+        = . ddata + dlen i . sdata + start i
+        = i + i 1
+    }
+    ( nurl_poke dctl 1 + dlen cnt )
+}
+
 // Append every element of `src` to `dst` (bitwise). Like vec_map, this
 // is safe only for trivial element types (i, f, b, raw s, slice). For
 // owned element types the caller must clone manually with vec_each +

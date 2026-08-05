@@ -328,6 +328,10 @@ jobs:
         # defer_drop_reclaim + defer_scoped + defer_ret_transfer pin the
         # defer-vs-auto-drop fix (a `;` defer used to disable every owned
         # drop in the function; scoped defers emitted invalid IR).
+        # net_tcpstack is the layer where the connection TABLE lives, so
+        # it is the one that can leak a Tcb: a connection reclaimed on
+        # RST, on FIN, or by the TIME_WAIT timer takes three different
+        # paths out, and each has to return the same allocation.
         # net_inet + net_frames + net_dhcp pin the sans-IO net stack's
         # manual-handle discipline (§7.4): per-iteration Vec frees in a
         # 65k-datagram sweep, String results from the address formatters,
@@ -361,6 +365,7 @@ jobs:
             ternary_slice_owned match_slice_owned arm_assign_tail_drop \
             defer_drop_reclaim defer_scoped defer_ret_transfer \
             net_inet net_frames net_dhcp net_stack net_tcp net_tcp_fuzz \
+            net_tcpstack \
             virtq_split free_suffix_query closure_env_escape_loop \
             ctx_switch async_basic async_chan async_mn async_sleep \
             select_basic
