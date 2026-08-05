@@ -658,6 +658,14 @@ $ `stdlib/net/tcpstack.nu`
 @ sock_close * SockTab st i fd i now → v {
     : *Sock s ( __sock st fd )
     ? == # i s 0 { ^ } {}
+    // Closed is closed, whoever else still holds a reference. A pooled
+    // server retains its listener for the spawn→join window precisely
+    // so a concurrent stop cannot free the handle underneath the
+    // workers — and those workers are parked in accept, waiting for
+    // this fd to say something. Marking it shut is what says it: the
+    // waiters wake, `sock_accept` refuses, and the last reference
+    // releases the connection.
+    = . s shut T
     = . s refs - . s refs 1
     ? > . s refs 0 { ^ } {}
     ? == . s kind ( sock_kind_listener ) {

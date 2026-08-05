@@ -176,6 +176,8 @@ struct NbCoro {
                                    * one such list at a time           */
     void        *pending_unlock;  /* NbMutex* released after swap-out  */
     int          last_park_result;
+    int          wake_pending;    /* an unpark that arrived before the
+                                   * park — consumed by the next park   */
 };
 
 /* Defined in §8 — named here because §7's scheduler step performs the
@@ -266,6 +268,20 @@ static void nb_timer_add(NbCoro *c, long long at) {
 }
 
 /* Move every expired timer back to the run queue. Returns how many. */
+/* Take `c` off the timer list, if it is on it. Needed the moment a
+ * coroutine can be woken by something OTHER than its own deadline: a
+ * wake that only pushed it to the run queue would leave it on the timer
+ * list too, and the later expiry would push it a SECOND time — one
+ * coroutine on the run queue twice, which is the same object running in
+ * two places as far as the scheduler is concerned. */
+static void nb_timer_remove(NbCoro *c) {
+    NbCoro **pp = &nb_timers;
+    while (*pp) {
+        if (*pp == c) { *pp = c->tnext; c->tnext = 0; return; }
+        pp = &(*pp)->tnext;
+    }
+}
+
 static int nb_timers_expire(long long now) {
     int n = 0;
     while (nb_timers && nb_timers->wake_at_ms <= now) {
@@ -858,6 +874,14 @@ long long nurl_fiber_worker_id(void) { return nb_current ? 0 : -1; }
 
 void nurl_fiber_park_with_mutex(long long mutex_h) {
     if (!nb_current) return;             /* same as hosted: no-op off-fiber */
+    if (nb_current->wake_pending) {
+        /* Already woken. Do not park — but the mutex still has to be
+         * released, because the caller handed it over expecting the
+         * scheduler to drop it on the way out. */
+        nb_current->wake_pending = 0;
+        if (mutex_h) nurl__bare_mutex_release((void *)(unsigned long)mutex_h);
+        return;
+    }
     nb_current->pending_unlock = (void *)(unsigned long)mutex_h;
     nb_park();
 }
@@ -865,8 +889,46 @@ void nurl_fiber_park_with_mutex(long long mutex_h) {
 void nurl_fiber_unpark(long long h) {
     NbCoro *c = (NbCoro *)(unsigned long)h;
     if (!c) return;
+    /* Only a PARKED coroutine goes back on the run queue. Unparking one
+     * that is already runnable (or running) would enqueue it twice — the
+     * same object running in two places as far as the scheduler is
+     * concerned — and a waiter that several parties may wake gets
+     * exactly that unless the state is checked here, once, rather than
+     * at every call site.
+     *
+     * An unpark that arrives BEFORE the park is not lost, it is banked:
+     * the coroutine that is about to park consumes the permit and does
+     * not park at all. Without that, "decide to wait" and "wait" are two
+     * steps with a window between them, which is the lost-wakeup hang
+     * every park/unpark pair has to answer for. */
+    if (c->state != NB_PARKED) { c->wake_pending = 1; return; }
+    nb_timer_remove(c);               /* it may have parked with a deadline */
+    c->last_park_result = 1;          /* woken, not timed out */
     c->state = NB_RUNNABLE;
     nb_rq_push(c);
+}
+
+/* Park until someone unparks this coroutine, or until `ms` have passed
+ * (ms < 0 = no deadline). 1 = woken by an unpark, 0 = the deadline
+ * passed — the reactor ABI, which is what the socket layer above needs:
+ * a wait on an fd is woken by whoever makes it ready, and by the
+ * protocol's own retransmit timer when nobody does.
+ *
+ * This is what a socket wait uses INSTEAD of polling, and the
+ * difference is not efficiency. A polling waiter is RUNNABLE, so the
+ * scheduler can never say "nothing can run" — the one statement this
+ * runtime exists to be able to make. Parked, it is invisible to the run
+ * queue, and a machine whose every waiter is parked with no timer armed
+ * is provably stuck rather than merely quiet. */
+long long nurl_bare_park_ms(long long ms) {
+    NbCoro *c = nb_current;
+    if (!c) return -1;                /* main cannot park inside itself */
+    if (c->wake_pending) { c->wake_pending = 0; return 1; }
+    c->last_park_result = 0;
+    if (ms >= 0) nb_timer_add(c, nb_now_ms() + ms);
+    nb_park();
+    if (ms >= 0) nb_timer_remove(c);  /* no-op unless the wake beat it */
+    return c->last_park_result;
 }
 
 void nurl_fiber_join(long long h) {

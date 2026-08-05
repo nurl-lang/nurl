@@ -78,11 +78,25 @@ $ `stdlib/net/socket.nu`
 
 & `c` @ nurl_fiber_sleep_ms i ms → i
 
+// Park the current coroutine until it is unparked or `ms` pass
+// (ms < 0 = no deadline). 1 = woken, 0 = the deadline passed, -1 = not
+// on a coroutine. This is what a socket wait uses INSTEAD of polling.
+& `c` @ nurl_bare_park_ms i ms → i
+
+& `c` @ nurl_fiber_unpark i handle → v
+
 : Shim {
     * NetStack net
     * TcpStack ts
     * SockTab st
     ( Vec i ) peer  // cached "ip:port" per fd slot — see nurl_tcp_peer_addr
+    // The waiter registry: who is parked on which fd. Three parallel
+    // vectors rather than a vector of structs, because a Vec of
+    // pointers is not a thing here and the three are always written
+    // together. `coro` 0 means the slot is free.
+    ( Vec i ) w_fd
+    ( Vec i ) w_wr
+    ( Vec i ) w_coro
     i has_device
 }
 
@@ -108,6 +122,9 @@ $ `stdlib/net/socket.nu`
     = . sh ts ( tstack_new . sh net & now 4294967295 )
     = . sh st ( sock_new . sh ts ( __lo_ip ) )
     = . sh peer ( vec_new [i] )
+    = . sh w_fd ( vec_new [i] )
+    = . sh w_wr ( vec_new [i] )
+    = . sh w_coro ( vec_new [i] )
     = . sh has_device 0
     // An interface knows its own MAC. Without this the first connect
     // to 127.0.0.1 ARPs for itself and waits a retransmit timeout for
@@ -119,14 +136,71 @@ $ `stdlib/net/socket.nu`
 
 @ __tab → *SockTab { ^ . ( __shim ) st }
 
+// ── the waiter registry ──────────────────────────────────────────
+//
+// A coroutine waiting on an fd PARKS, and whoever moves the stack wakes
+// it. The alternative — polling — is what this file did first, and the
+// cost is not efficiency: a polling waiter is RUNNABLE, so the
+// scheduler can never say "nothing can run", which is the one statement
+// this runtime exists to be able to make. Two pollers then each
+// conclude the other is making progress and neither ever gives up.
+
+@ __waiter_add i fd i for_write → i {
+    : *Shim sh ( __shim )
+    : i me ( nurl_fiber_current )
+    ? == me 0 { ^ -1 } {}  // the main context cannot park inside itself
+    : i n ( vec_len [i] . sh w_coro )
+    : ~ i k 0
+    ~ < k n {
+        ? == 0 ?? ( vec_get [i] . sh w_coro k ) { T x → x F → 1 } {
+            : b _a ( vec_set [i] . sh w_fd k fd )
+            : b _b ( vec_set [i] . sh w_wr k for_write )
+            : b _c ( vec_set [i] . sh w_coro k me )
+            ^ k
+        } {}
+        = k + k 1
+    }
+    ( vec_push [i] . sh w_fd fd )
+    ( vec_push [i] . sh w_wr for_write )
+    ( vec_push [i] . sh w_coro me )
+    ^ n
+}
+
+@ __waiter_del i slot → v {
+    ? < slot 0 { ^ } {}
+    : *Shim sh ( __shim )
+    ? >= slot ( vec_len [i] . sh w_coro ) { ^ } {}
+    : b _ok ( vec_set [i] . sh w_coro slot 0 )
+}
+
+// Wake every parked waiter whose fd has become ready. Called after
+// anything that can change readiness — frames delivered, a timer fired,
+// a shutdown. Unparking a coroutine that is not parked is banked as a
+// permit by the runtime, so waking one that is mid-check is harmless.
+@ __wake_ready → v {
+    : *Shim sh ( __shim )
+    : i me ( nurl_fiber_current )
+    : i n ( vec_len [i] . sh w_coro )
+    : ~ i k 0
+    ~ < k n {
+        : i coro ?? ( vec_get [i] . sh w_coro k ) { T x → x F → 0 }
+        ? && != coro 0 != coro me {
+            : i fd ?? ( vec_get [i] . sh w_fd k ) { T x → x F → 0 }
+            : i wr ?? ( vec_get [i] . sh w_wr k ) { T x → x F → 0 }
+            ? ( __ready fd wr ) { ( nurl_fiber_unpark coro ) } {}
+        } {}
+        = k + k 1
+    }
+}
+
 // ── driving the machine ──────────────────────────────────────────
 
 // One turn of the event loop: deliver what the stack has queued, then
 // let its timers run. Returns 1 if anything happened.
 @ __drive i now → i {
     : *SockTab st ( __tab )
-    ? > ( sock_loopback st now ) 0 { ^ 1 } {}
-    ? > ( sock_tick st now ) 0 { ^ 1 } {}
+    ? > ( sock_loopback st now ) 0 { ( __wake_ready ) ^ 1 } {}
+    ? > ( sock_tick st now ) 0 { ( __wake_ready ) ^ 1 } {}
     ^ 0
 }
 
@@ -136,58 +210,60 @@ $ `stdlib/net/socket.nu`
     ^ ( sock_readable st fd )
 }
 
+// How long may this waiter park? The earliest of the stack's own next
+// deadline (a retransmit, a persist probe, TIME_WAIT) and whatever is
+// left of the caller's timeout. -1 = neither: park until woken, and if
+// nobody ever does, the scheduler's own detector says so — with every
+// waiter parked and no timer armed, "nothing is runnable" is a proof
+// again rather than a symptom.
+@ __park_ms i now i timeout_ms i start → i {
+    : i tmo ( sock_next_timeout ( __tab ) now )
+    : ~ i d -1
+    ? >= tmo 0 { = d ? > tmo 0 tmo 1 } {}
+    ? > timeout_ms 0 {
+        : i left - timeout_ms - now start
+        : i l ? > left 0 left 0
+        ? || < d 0 < l d { = d l } {}
+    } {}
+    ^ d
+}
+
 // Wait until `fd` is ready. 1 = ready, 0 = the deadline passed,
 // -1 = nothing can ever make it ready (see the header).
+//
+// On a coroutine this PARKS: it registers on the fd, and whoever moves
+// the stack wakes it. On the main context — which cannot park inside
+// the scheduler it is — it drives the scheduler a step at a time, and a
+// step that runs nothing, with no frames queued and no device, is the
+// end of the road for this wait.
 @ __wait i fd i for_write i timeout_ms → i {
     : i start ( __ms )
-    ~ T {
-        ? ( __ready fd for_write ) { ^ 1 } {}
-        : i now ( __ms )
-        ? == ( __drive now ) 0 {
-            // The stack is quiet. Somebody else may still produce work.
-            ? != ( nurl_fiber_current ) 0 {
-                // On a coroutine, yielding is right whenever ANYTHING
-                // else can run — and the main context counts even
-                // though it is never in the run queue. Reading only the
-                // run queue here declared a deadlock in the commonest
-                // shape there is: a server coroutine waiting for a
-                // request while the client on the main context was
-                // still writing it.
-                ? || > ( nurl_bare_runnable ) 0 == ( nurl_bare_blocked ) 0 {
-                    ( nurl_fiber_yield )
+    : i slot ( __waiter_add fd for_write )
+    : ~ i rc -1
+    : ~ b again T
+    ~ again {
+        ? ( __ready fd for_write ) { = rc 1 = again F } {
+            : i now ( __ms )
+            : i moved ( __drive now )
+            ? ( __ready fd for_write ) { = rc 1 = again F } {
+                ? >= slot 0 {
+                    : i unused ( nurl_bare_park_ms ( __park_ms now timeout_ms start ) )
                 } {
-                    // Main is parked in the scheduler and the run queue
-                    // is empty: yielding would hand control to a
-                    // context that hands it straight back, and a run
-                    // queue that never empties is one whose idle path
-                    // never sleeps. Park on the earliest deadline
-                    // instead — with no frames queued and nothing
-                    // runnable, nothing can change this fd's readiness
-                    // before then.
-                    : i t ( nurl_bare_timer_ms )
-                    ? >= t 0 {
-                        : i unused ( nurl_fiber_sleep_ms ? > t 1 t 1 )
-                    } {
-                        // Nothing runnable, no timer, main blocked, no
-                        // device: this fd will never be ready.
-                        ? == . ( __shim ) has_device 0 { ^ -1 } {}
-                        ( nurl_fiber_yield )
-                    }
-                } {}
-            } {
-                // On the main context a step also SLEEPS when the only
-                // pending work is a timer, so an idle machine idles
-                // rather than burning its one vCPU.
-                ? == ( nurl_bare_poll ) 0 {
-                    ? == . ( __shim ) has_device 0 { ^ -1 } {}
+                    ? == ( nurl_bare_poll ) 0 {
+                        ? && == 0 ( sock_pending_frames ( __tab ) ) == 0 . ( __shim ) has_device {
+                            = rc -1
+                            = again F
+                        } {}
+                    } {}
+                }
+                ? && again > timeout_ms 0 {
+                    ? >= - ( __ms ) start timeout_ms { = rc 0 = again F } {}
                 } {}
             }
-        } {}
-        ? > timeout_ms 0 {
-            ? >= - ( __ms ) start timeout_ms { ^ 0 } {}
-        } {}
+        }
     }
-    ^ 0
+    ( __waiter_del slot )
+    ^ rc
 }
 
 // The blocking/non-blocking decision, in one place. Returns 1 when the
@@ -220,12 +296,23 @@ $ `stdlib/net/socket.nu`
 
 @ nurl_tcp_unref i handle → v { ( nurl_tcp_close handle ) }
 
-@ nurl_tcp_shutdown i handle → v { ( sock_shutdown ( __tab ) handle ) }
+@ nurl_tcp_shutdown i handle → v {
+    ( sock_shutdown ( __tab ) handle )
+    // A shut fd reports itself ready so a waiter wakes and finds the
+    // error — but only if something wakes it. Nothing else will: this
+    // path emits no frames.
+    ( __wake_ready )
+}
 
 @ nurl_tcp_close i handle → v {
     : *Shim sh ( __shim )
     ( __peer_forget sh handle )
     ( sock_close . sh st handle ( __ms ) )
+    // Anyone parked on this fd has to wake and find it gone. Closing a
+    // listener from another context IS how a server is stopped — the
+    // workers are parked in accept and nothing else is going to move
+    // the stack on their behalf.
+    ( __wake_ready )
     // Give the FIN a chance to leave and be answered. A close that
     // returns before its own frames are on the wire would strand the
     // peer on a connection this side has already forgotten — on a
