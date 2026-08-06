@@ -420,6 +420,7 @@ jobs:
             ternary_slice_owned match_slice_owned arm_assign_tail_drop \
             defer_drop_reclaim defer_scoped defer_ret_transfer \
             net_inet net_frames net_dhcp net_stack net_tcp net_tcp_fuzz \
+            net_frame_fuzz \
             net_tcpstack net_socket \
             virtq_split free_suffix_query closure_env_escape_loop \
             ctx_switch async_basic async_chan async_mn async_sleep \

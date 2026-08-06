@@ -1,0 +1,12 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+every payload handed up lies inside its frame: YES
+every drop has exactly one reason, in range: YES
+drop counters add up: YES
+every emitted frame is one a device could send: YES
+frames not addressed to us are never answered: YES
+emitted bytes agree with the buffer: YES
+the fuzz completed without hanging: YES
+the deep parsers were reached (some replies emitted): YES
