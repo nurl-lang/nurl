@@ -256,6 +256,13 @@ the answer stopped coming:
 | the HTTPS server, TLS 1.3 with an RSA-2048 certificate | answers on **4 MiB** |
 | below that | it SAYS so: 3 MiB of TLS is `nurl: out of memory (requested 24 bytes)` and an abort; 2 MiB is `the hypervisor reported no usable memory above the image` and exit 127 |
 
+A fiber is the one thing that makes a program's appetite jump: each one
+costs **68 KiB** — a 64 KiB stack and a 4 KiB guard page — so a program
+holding 500 of them needs 34 MiB before anything else. Asking for more
+than the machine can hold is an abort with a count (`cannot create a
+fiber — out of memory for its stack (11 live)`), not a program that
+quietly runs eleven of them and reports what the eleven did.
+
 The gates run with 256 MiB, which hides that question entirely, so
 `run_qemu_tests.sh` also boots `hello` on 4 MiB and the server on 8 —
 headroom over the floor, because what is worth pinning is appetite, and

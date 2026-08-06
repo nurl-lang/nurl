@@ -841,11 +841,30 @@ void nurl_runtime_shutdown(void) {
     nb_initialized = 0;
 }
 
+/* A fiber that could not be created is not a fiber the caller can be
+ * handed. `spawn` in stdlib/std/async.nu has nowhere to put a failure —
+ * it returns a Fiber, not a Result — so a zero here becomes a handle to
+ * nothing, the body never runs, and the program reports whatever a
+ * missing worker's absence looks like. MEASURED, on a 4 MiB guest:
+ * async_mn asks for 200 fibers, gets 11, prints `counter=11` and exits
+ * 0. That is the silent-wrong-answer shape this file's own guard-page
+ * comment argues against, arrived at by a different road.
+ *
+ * So it aborts, the way the runtime already aborts when malloc fails:
+ * a fiber stack is an allocation like any other, and "the machine is
+ * too small for this program" is a thing to say, not to hide. */
+static void nb_spawn_failed(void) {
+    fprintf(stderr,
+            "nurl: cannot create a fiber — out of memory for its stack "
+            "(%lld live)\n", nurl__bare_live_coros);
+    abort();
+}
+
 long long nurl_fiber_spawn(void *fn, void *env) {
     if (!fn) return 0;
     if (!nb_initialized) nurl_runtime_init(0);
     NbCoro *c = nb_coro_new(fn, env, 0);
-    if (!c) return 0;
+    if (!c) nb_spawn_failed();
     nb_live++;
     nb_rq_push(c);
     return (long long)(unsigned long)c;
@@ -855,7 +874,7 @@ long long nurl_fiber_spawn_joinable(void *fn, void *env) {
     if (!fn) return 0;
     if (!nb_initialized) nurl_runtime_init(0);
     NbCoro *c = nb_coro_new(fn, env, 1);
-    if (!c) return 0;
+    if (!c) nb_spawn_failed();
     nb_live++;
     nb_rq_push(c);
     return (long long)(unsigned long)c;

@@ -154,6 +154,16 @@ if [ $# -eq 0 ]; then
     printf '%s' "$tiny" | grep -q 'no usable memory above the image' || ok=0
     [ "$tinycode" = 127 ] || ok=0
 
+    # A program that asks for more fibers than the machine can hold must
+    # SAY so. async_mn wants 500 of them at 68 KiB each; on 4 MiB it used
+    # to get eleven, print the count of the eleven as though that were
+    # the answer, and exit 0.
+    "$ROOT/unikernel/build_unikernel.sh" "$TESTS/async_mn.nu" >/dev/null 2>&1 || ok=0
+    fibers=$("$ROOT/unikernel/run_qemu.sh" "$ROOT/build/unikernel/async_mn.elf" -t 60 -- -m 4 2>&1)
+    fiberscode=$?
+    printf '%s' "$fibers" | grep -q 'cannot create a fiber' || ok=0
+    [ "$fiberscode" = 134 ] || ok=0
+
     if command -v curl >/dev/null 2>&1; then
         "$ROOT/unikernel/build_unikernel.sh" "$ROOT/unikernel/demos/httpd.nu" >/dev/null 2>&1 || ok=0
         out=$(mktemp)
@@ -173,7 +183,7 @@ if [ $# -eq 0 ]; then
     fi
 
     if [ "$ok" = 1 ]; then
-        echo "PASS smallmem (4 MiB hello, 8 MiB server, 2 MiB says why not)"
+        echo "PASS smallmem (4 MiB hello, 8 MiB server, 2 MiB and 500 fibers say why not)"
     else
         echo "FAIL smallmem"
         printf '%s\n' "$tiny" | head -3 | sed 's/^/     /'
