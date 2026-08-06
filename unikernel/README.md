@@ -131,6 +131,29 @@ asking for the time panics. `wallclock=` carries the boot epoch the
 same way — a functionality input, not a security control, since the
 host already controls the whole image.
 
+## An MCP endpoint that IS the machine
+
+```
+$ curl -X POST -d '{"jsonrpc":"2.0","id":3,"method":"tools/call",
+                    "params":{"name":"echo","arguments":{"text":"from the host"}}}' \
+       http://127.0.0.1:18771/mcp
+{"jsonrpc":"2.0","id":3,"result":{"content":[{"type":"text","text":"from the host"}],
+ "isError":false,"resultType":"complete"}}
+```
+
+The plan's endpoint milestone is a unikernel that boots straight into a
+running MCP node. `unikernel/demos/mcpd.nu` is that shape: the dispatch
+function and every layer under it are the repository's own echo server
+(`examples/mcp_echo_server_http.nu`), unchanged — JSON-RPC over
+Streamable HTTP, the same `mcp_http_handler` the corpus tests drive.
+The only differences are the address it binds and the machine it binds
+on.
+
+The gate asks it three questions, because one would not tell "the
+server answered" from "the server answered correctly": `initialize`
+settles the protocol, `tools/list` settles the catalogue, and
+`tools/call` settles that a tool ran and its output came back.
+
 ## The flagship, so far
 
 ```
