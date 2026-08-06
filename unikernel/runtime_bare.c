@@ -429,7 +429,19 @@ static void nb_wake_joiners(NbCoro *c) {
  * nb_loop_ctx, and a coroutine calling it would overwrite the very
  * context it must return through. Everything that could block from
  * inside a coroutine parks instead. */
-static int nurl__bare_step(void) {
+/* `budget_ms` bounds the IDLE SLEEP: -1 = sleep until the next timer,
+ * 0 = do not sleep at all, N = sleep at most N ms.
+ *
+ * The bound exists because the machine's idle branch used to sleep until
+ * the next COROUTINE timer, whoever was asking. A caller with a sooner
+ * deadline of its own — the main context waiting 300 ms, or a socket
+ * wait that has readiness to re-check — was put to sleep for as long as
+ * some other coroutine's park lasted. Measured: a reader parked for a
+ * second, and main's 300 ms sleep returned a second later, so the write
+ * it was about to make arrived after the reader had already timed out.
+ * The whole exchange then failed by the reader's own deadline, which is
+ * how a timed park could break what an infinite one did not. */
+static int nb_step_bounded(long long budget_ms) {
     /* A DUE timer is work, whether or not anything else is runnable.
      *
      * Expiring timers only in the idle branch below made `sleep_ms(50)`
@@ -456,8 +468,11 @@ static int nurl__bare_step(void) {
         if (nb_timers->wake_at_ms > now) {
             /* Nothing runnable and the earliest wake-up is in the
              * future: this is the only place the machine is allowed to
-             * be idle, and the only place a real sleep is correct. */
-            nb_sleep_ms(nb_timers->wake_at_ms - now);
+             * be idle, and the only place a real sleep is correct — for
+             * no longer than the caller's own budget. */
+            long long wait = nb_timers->wake_at_ms - now;
+            if (budget_ms >= 0 && wait > budget_ms) wait = budget_ms;
+            if (wait > 0) nb_sleep_ms(wait);
             now = nb_now_ms();
         }
         return nb_timers_expire(now) > 0;
@@ -488,6 +503,11 @@ static int nurl__bare_step(void) {
     }
     return 1;
 }
+
+/* The unbounded step: sleep until the next timer if there is nothing to
+ * do. What `runtime_run`, `join` and `chan_recv` want — they have no
+ * deadline of their own. */
+static int nurl__bare_step(void) { return nb_step_bounded(-1); }
 
 /* Depth of nb_drive_until: non-zero means the MAIN context is parked
  * inside the scheduler waiting for a predicate, and will do no further
@@ -988,12 +1008,15 @@ long long nurl_fiber_sleep_ms(long long ms) {
         return 0;
     }
     /* Main: run whatever is runnable while the clock catches up, and
-     * only actually sleep when nothing is. A busy-wait here would burn
-     * the one CPU the guest has. */
+     * only actually sleep when nothing is — and never past THIS
+     * deadline, however long the coroutines' own parks are. */
     for (;;) {
         long long now = nb_now_ms();
         if (now >= deadline) return 0;
-        if (!nurl__bare_step()) nb_sleep_ms(deadline - now);
+        if (!nb_step_bounded(deadline - now)) {
+            long long left = deadline - nb_now_ms();
+            if (left > 0) nb_sleep_ms(left);
+        }
     }
 }
 
@@ -1023,6 +1046,11 @@ long long nurl_fiber_sleep_ms(long long ms) {
 long long nurl_bare_poll(void) {
     if (nb_current) return 0;
     if (!nb_initialized) nurl_runtime_init(0);
+    /* UNBOUNDED, deliberately: the socket wait above this asks "can
+     * anything still happen?" and reads a zero as "no". A step that
+     * refused to wait for a timer that is about to fire would answer no
+     * while a coroutine was one millisecond from waking — and a server
+     * blocked in accept would call its own clean shutdown an error. */
     return nurl__bare_step() ? 1 : 0;
 }
 

@@ -811,14 +811,16 @@ $ `stdlib/std/async_ffi.nu`
         } {
             ( nurl_tcp_close craw )
             ? == ek 7 {  // NetTimeout / EAGAIN
-                : i rc ( nurl_reactor_wait_read fd ( __wait_ms lraw ) )
+                // ACCEPT KEEPS WAITING. `tcp_set_timeout` is about a
+                // CONNECTION's reads and writes; a listener has no such
+                // deadline, and a server loop reads "the accept ended"
+                // as "we were stopped" — report a timeout there and
+                // every clean shutdown becomes an error.
+                : i rc ( nurl_reactor_wait_read fd - 0 1 )
                 // wait_readable returns -1 outside a fiber; in that
                 // case the sync accept already blocked, so EAGAIN
-                // shouldn't recur — bail to NetAccept. A listener with
-                // a timeout set reports one; without, it waits, which
-                // is what an accept loop is for.
+                // shouldn't recur — bail to NetAccept.
                 ? < rc 0 { ^ @ !TcpConn NetErr { F # NetErr NetAccept } } {}
-                ? == rc 0 { ^ @ !TcpConn NetErr { F # NetErr NetTimeout } } {}
             } {
                 ^ @ !TcpConn NetErr { F ( _net_err_of ek ) }
             }
