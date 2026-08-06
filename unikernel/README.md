@@ -147,6 +147,25 @@ checked against arithmetic instead of against glibc, because glibc's
 `cbrt` is the less accurate of the two: it answers 3.0000000000000004
 for the cube root of 27, and this one answers 3.
 
+## What CI watches
+
+Both gates run on every code change (the `unikernel` job):
+
+| | |
+|---|---|
+| `run_nolibc_tests.sh` | the ordinary corpus, no libc linked — 450 programs against their existing goldens |
+| `tests/run_unit_tests.sh` | the differentials, the allocator fuzzer, the scheduler's schedule and its deadlock detector |
+| `run_qemu_tests.sh` | the guest: boot, memory, TSC, fibers, the TCP/UDP stack, virtio-net, DHCP, a baked-in filesystem, and a server answering a client on the host |
+
+The QEMU job runs under TCG because no runner has `/dev/kvm`. Slower,
+identical otherwise — except for the TSC frequency, which no leaf
+reports there, so `run_qemu.sh` states it on the kernel command line
+the way the plan says the host states the epoch.
+
+A gate that only exists on a developer's machine is a gate that
+drifts; this repo has been bitten by that twice (the plan's findings 1
+and 11), which is why these are jobs rather than instructions.
+
 ## Running the gates
 
 ```sh

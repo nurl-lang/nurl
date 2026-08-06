@@ -220,6 +220,56 @@ jobs:
           sudo apt-get install -y --no-install-recommends gdb
           ./tools/dwarf_test.sh
 
+  unikernel:
+    name: unikernel (no libc, and then no operating system)
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    # Two gates, and they are different questions. The first asks
+    # whether the ordinary test corpus still runs with no libc linked —
+    # 450 programs against their existing goldens, which is what keeps
+    # the freestanding twin honest without a hypervisor in the loop.
+    # The second boots the result under QEMU and asks whether it still
+    # does with no operating system either: the boot path, the UART,
+    # the memory map, the TSC, the virtio-net device, DHCP, and a
+    # server that answers a client on the host.
+    #
+    # Neither was watched by CI until now, and both are exactly the
+    # shape this repo has been bitten by twice — a gate that exists on
+    # a developer's machine is a gate that drifts.
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install build deps
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            clang binutils qemu-system-x86 curl
+
+      - name: Build the compiler
+        run: ./build.sh --no-tests
+
+      - name: The corpus, with no libc at all
+        # A FAIL here is a nolibc or runtime_bare bug: the program
+        # linked and ran and disagreed with the golden the hosted build
+        # produces. NEEDS-* columns are not failures — they are work
+        # that has not been done or, for the third-party libraries a
+        # unikernel never links, work that never will be.
+        run: ./unikernel/run_nolibc_tests.sh
+
+      - name: nolibc + runtime_bare unit gates
+        run: ./unikernel/tests/run_unit_tests.sh
+
+      - name: The guest, under QEMU
+        # TCG, because no runner has /dev/kvm. Slower, identical
+        # otherwise — except for the TSC frequency, which no leaf
+        # reports there, so run_qemu.sh states it on the kernel command
+        # line the way the plan says the host states the epoch.
+        run: ./unikernel/run_qemu_tests.sh
+
   freebsd:
     name: FreeBSD (build + bootstrap fixed point + tests, in a VM)
     needs: changes
