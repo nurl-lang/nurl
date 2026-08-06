@@ -64,3 +64,7 @@ bad magic cookie rejected: YES
 overlong option terminates walk: YES
 missing lease → 1h default: YES
 bound with defaulted lease: YES
+an unusable address is refused (0, 127.x, multicast, broadcast): YES
+bound despite the bad mask: YES
+a non-contiguous mask falls back to /24: YES
+600 mutated option streams left the client sane: YES

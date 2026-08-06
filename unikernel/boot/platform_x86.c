@@ -123,6 +123,16 @@ static void uart_putu(unsigned long v) {
     while (n) uart_putc(b[--n]);
 }
 
+static void uart_puthex(u64 v) {
+    static const char digits[] = "0123456789abcdef";
+    char b[16];
+    int n = 0;
+    uart_puts("0x");
+    if (!v) { uart_putc('0'); return; }
+    while (v) { b[n++] = digits[v & 15]; v >>= 4; }
+    while (n) uart_putc(b[--n]);
+}
+
 /* ── panic ───────────────────────────────────────────────────────── */
 
 static void pf_shutdown(int code);
@@ -135,10 +145,183 @@ void pf_panic(const char *msg) {
     for (;;) __asm__ __volatile__("cli; hlt");
 }
 
+/* ── faults ──────────────────────────────────────────────────────
+ *
+ * A machine with no IDT answers every exception the same way: the CPU
+ * cannot deliver it, cannot deliver the double fault either, and shuts
+ * down. From outside that is indistinguishable from a clean exit —
+ * QEMU quits, the exit sentinel is simply absent — so the first thing
+ * anyone knows about a null dereference is that the output stopped.
+ * Every fault below is a bug in something above; the machine's job is
+ * to say which one, where, and stop.
+ *
+ * IST1 for #DF and #PF, because the fault this most needs to survive is
+ * a stack that hit its guard page: delivering that on the same stack
+ * faults again, and the second fault is the last thing that happens.
+ */
+
+/* The register file `isr_common` in boot.S pushes, low address first.
+ * The two files are read together; changing one without the other is a
+ * fault report that describes the wrong registers. */
+struct fault_frame {
+    u64 r15, r14, r13, r12, r11, r10, r9, r8;
+    u64 rbp, rdi, rsi, rdx, rcx, rbx, rax;
+    u64 vector, errcode;
+    u64 rip, cs, rflags, rsp, ss;
+};
+
+struct idt_entry {
+    unsigned short off_lo;
+    unsigned short sel;
+    unsigned char  ist;
+    unsigned char  type_attr;
+    unsigned short off_mid;
+    u32            off_hi;
+    u32            zero;
+} __attribute__((packed));
+
+extern char isr_stubs[];              /* boot.S: 256 stubs, 16 bytes each */
+extern char fault_stack_top[];
+extern unsigned char tss64[];
+extern u64 gdt64[];
+
+static struct idt_entry idt[256];
+
+/* The names are the ones every manual and every search result uses.
+ * "vector 14" is a number; "#PF" is a thing someone can look up. */
+static const char *fault_name(u64 v) {
+    switch (v) {
+    case 0:  return "#DE divide error";
+    case 1:  return "#DB debug";
+    case 2:  return "NMI";
+    case 3:  return "#BP breakpoint";
+    case 4:  return "#OF overflow";
+    case 5:  return "#BR bound range";
+    case 6:  return "#UD invalid opcode";
+    case 7:  return "#NM device not available";
+    case 8:  return "#DF double fault";
+    case 10: return "#TS invalid TSS";
+    case 11: return "#NP segment not present";
+    case 12: return "#SS stack fault";
+    case 13: return "#GP general protection";
+    case 14: return "#PF page fault";
+    case 16: return "#MF x87 exception";
+    case 17: return "#AC alignment check";
+    case 18: return "#MC machine check";
+    case 19: return "#XM SIMD exception";
+    default: return "unexpected interrupt";
+    }
+}
+
+/* Called from isr_common with the frame it built and CR2 as read at
+ * entry — reading CR2 here would be too late if anything in between
+ * faulted, and nothing in between may. */
+void pf_exception(struct fault_frame *f, u64 cr2);
+
+void pf_exception(struct fault_frame *f, u64 cr2) {
+    uart_puts("\nnurl: fault ");
+    uart_puts(fault_name(f->vector));
+    uart_puts(" vector=");
+    uart_putu((unsigned long)f->vector);
+    uart_puts(" err=");
+    uart_puthex(f->errcode);
+    uart_puts("\n  rip=");
+    uart_puthex(f->rip);
+    uart_puts(" rsp=");
+    uart_puthex(f->rsp);
+    uart_puts(" rflags=");
+    uart_puthex(f->rflags);
+    if (f->vector == 14) {
+        uart_puts("\n  cr2=");
+        uart_puthex(cr2);
+        /* The error code's bits are the difference between "wrote to a
+         * page that is not there" and "read one that is" — the first
+         * question anyone asks, answered without a manual. */
+        uart_puts(f->errcode & 1 ? " (protection)" : " (not present)");
+        uart_puts(f->errcode & 2 ? " on write" : " on read");
+        if (f->errcode & 16) uart_puts(" on instruction fetch");
+    }
+    uart_puts("\n  rax="); uart_puthex(f->rax);
+    uart_puts(" rbx=");    uart_puthex(f->rbx);
+    uart_puts(" rcx=");    uart_puthex(f->rcx);
+    uart_puts(" rdx=");    uart_puthex(f->rdx);
+    uart_puts("\n  rsi="); uart_puthex(f->rsi);
+    uart_puts(" rdi=");    uart_puthex(f->rdi);
+    uart_puts(" rbp=");    uart_puthex(f->rbp);
+    uart_putc('\n');
+    /* 126, not 127: a fault is not the same event as a panic, and a
+     * harness that can tell them apart can say which one it saw. */
+    pf_shutdown(126);
+    for (;;) __asm__ __volatile__("cli; hlt");
+}
+
+static void idt_set(int n, unsigned long handler, unsigned char ist) {
+    idt[n].off_lo    = (unsigned short)(handler & 0xFFFF);
+    idt[n].sel       = 0x08;                    /* the 64-bit code segment */
+    idt[n].ist       = ist;
+    idt[n].type_attr = 0x8E;                    /* present, DPL 0, interrupt gate */
+    idt[n].off_mid   = (unsigned short)((handler >> 16) & 0xFFFF);
+    idt[n].off_hi    = (u32)(handler >> 32);
+    idt[n].zero      = 0;
+}
+
+/* The TSS descriptor is sixteen bytes in long mode and its base is
+ * split across three fields, which is why it is written here rather
+ * than in the assembler's table. Type 9 = available 64-bit TSS. */
+static void tss_init(void) {
+    unsigned long base  = (unsigned long)tss64;
+    unsigned long limit = 104 - 1;
+
+    /* IST1, at offset 36 in the TSS: the stack #DF and #PF arrive on. */
+    u64 top = (u64)(unsigned long)fault_stack_top;
+    for (int i = 0; i < 104; i++) tss64[i] = 0;
+    tss64[36] = (unsigned char)(top      & 0xFF);
+    tss64[37] = (unsigned char)((top >> 8)  & 0xFF);
+    tss64[38] = (unsigned char)((top >> 16) & 0xFF);
+    tss64[39] = (unsigned char)((top >> 24) & 0xFF);
+    tss64[40] = (unsigned char)((top >> 32) & 0xFF);
+    tss64[41] = (unsigned char)((top >> 40) & 0xFF);
+    tss64[42] = (unsigned char)((top >> 48) & 0xFF);
+    tss64[43] = (unsigned char)((top >> 56) & 0xFF);
+    /* No I/O permission bitmap: the limit says where it would start and
+     * it starts past the end, which is how a TSS says "none". */
+    tss64[102] = (unsigned char)(104 & 0xFF);
+    tss64[103] = (unsigned char)((104 >> 8) & 0xFF);
+
+    gdt64[3] = (u64)(limit & 0xFFFF)
+             | ((u64)(base & 0xFFFFFF) << 16)
+             | ((u64)0x9 << 40)                 /* type: available 64-bit TSS */
+             | ((u64)1 << 47)                   /* present */
+             | ((u64)((limit >> 16) & 0xF) << 48)
+             | ((u64)((base >> 24) & 0xFF) << 56);
+    gdt64[4] = (u64)(base >> 32);
+
+    __asm__ __volatile__("ltr %w0" :: "r"((unsigned short)0x18));
+}
+
+static void idt_init(void) {
+    for (int n = 0; n < 256; n++) {
+        unsigned char ist = (n == 8 || n == 14) ? 1 : 0;
+        idt_set(n, (unsigned long)(isr_stubs + 16 * n), ist);
+    }
+    struct { unsigned short limit; unsigned long base; } __attribute__((packed))
+        idtr = { (unsigned short)(sizeof idt - 1), (unsigned long)idt };
+    __asm__ __volatile__("lidt %0" :: "m"(idtr));
+}
+
 /* ── memory ──────────────────────────────────────────────────────── */
 
 static unsigned char *heap_next;
 static unsigned char *heap_end;
+
+/* unikernel/boot/pagealloc.c — the pages themselves. Portable C, tested
+ * on the host, so the one thing a guest cannot debug is the one thing
+ * that is not written here. */
+void          pa_init(unsigned long base, unsigned long len);
+unsigned long pa_alloc(unsigned long want);
+int           pa_free(unsigned long p, unsigned long len);
+void          pa_stats(unsigned long *live, unsigned long *peak, unsigned long *avail,
+                       unsigned long *largest, unsigned long *lost, int *holes);
 
 #define PT_POOL_TABLES 64
 static u64 *pt_pool;              /* PT_POOL_TABLES × 512 entries */
@@ -176,13 +359,18 @@ static void mem_init(const struct hvm_start_info *si) {
     heap_next += (unsigned long)PT_POOL_TABLES * 4096;
     if (heap_next > heap_end) pf_panic("not enough memory for the page-table pool");
     for (unsigned long i = 0; i < (unsigned long)PT_POOL_TABLES * 512; i++) pt_pool[i] = 0;
+
+    /* Everything past the pool is the program's, and from here on it is
+     * the page allocator's to hand out and take back. */
+    pa_init((unsigned long)heap_next, (unsigned long)(heap_end - heap_next));
 }
 
-/* mmap, as much of it as a guest needs: anonymous, private, and never
- * unmapped. munmap is a no-op that reports success, which is honest
- * here — a bump allocator cannot return a hole in the middle, and the
- * one caller that unmaps (a finished coroutine's stack) is reclaimed by
- * runtime_bare's own free list rather than by the kernel. */
+/* mmap and munmap, over the page allocator in boot/pagealloc.c: the
+ * region the hypervisor reported, handed out in pages and TAKEN BACK.
+ * The version this replaced was a bump pointer with a munmap that
+ * reported success and did nothing, which is fine for a program that
+ * runs once and wrong for a server — measured, it died on the 251st
+ * megabyte of allocate-and-free on a 256 MiB machine. */
 /* unikernel/boot/initfs.c — the baked-in filesystem. Declared here
  * because every one of these is reached from the POSIX names below,
  * which are what NURL's FFI actually calls. */
@@ -197,20 +385,40 @@ void *mmap(void *addr, unsigned long len, int prot, int flags, int fd, long off)
     /* A file-backed mapping of the baked-in filesystem is a pointer
      * into it — the image is already in memory, and read-only is
      * exactly what the mapping asked for. Anonymous mappings fall
-     * through to the bump allocator below. */
+     * through to the page allocator below. */
     if (fd >= 0 && fs_is_file_fd(fd)) {
         const unsigned char *p = fs_map_fd(fd, (unsigned long)off);
         return p ? (void *)p : (void *)-1;
     }
-    unsigned long need = (len + 4095) & ~4095UL;
-    if (!heap_next || (unsigned long)(heap_end - heap_next) < need)
-        return (void *)-1;                  /* MAP_FAILED — the caller checks */
-    unsigned char *p = heap_next;
-    heap_next += need;
-    return p;
+    unsigned long p = pa_alloc(len);
+    return p ? (void *)p : (void *)-1;      /* MAP_FAILED — the caller checks */
 }
 
-int munmap(void *p, unsigned long len) { (void)p; (void)len; return 0; }
+int munmap(void *p, unsigned long len) {
+    /* A mapping of the baked-in filesystem points into the image, not
+     * into the heap; pa_free rejects it by address, which is exactly the
+     * check that keeps the image out of the free list. */
+    return pa_free((unsigned long)p, len) == 0 ? 0 : 0;
+}
+
+/* What the machine has and what it is using — the numbers a long-running
+ * guest is judged by, and the reason `mem_stats` exists at all: a soak
+ * test that cannot see the heap can only report "it did not crash yet".
+ * Reported through the same FFI shape everything else here uses. */
+long long nurl_guest_mem(int which) {
+    unsigned long live = 0, peak = 0, avail = 0, largest = 0, lost = 0;
+    int holes = 0;
+    pa_stats(&live, &peak, &avail, &largest, &lost, &holes);
+    switch (which) {
+    case 0:  return (long long)live;
+    case 1:  return (long long)peak;
+    case 2:  return (long long)avail;
+    case 3:  return (long long)largest;
+    case 4:  return (long long)lost;
+    case 5:  return (long long)holes;
+    default: return 0;
+    }
+}
 
 /* ── page protection ─────────────────────────────────────────────
  *
@@ -286,6 +494,40 @@ int mprotect(void *p, unsigned long len, int prot) {
     return 0;
 }
 
+/* The boot stack gets the same treatment a coroutine's does. It is the
+ * stack every program starts on and the one `main` recurses on, and
+ * until this call the page under it was ordinary .bss: a recursion that
+ * ran off the end overwrote the page tables' neighbours and the program
+ * kept going with someone else's variables. Now it faults, and the
+ * handler says where.
+ *
+ * Called after mem_init, because splitting a 2 MiB mapping needs the
+ * page-table pool that mem_init reserves. */
+extern unsigned char boot_stack_bottom[];
+
+static void pf_guard_boot_stack(void) {
+    (void)mprotect(boot_stack_bottom, 4096, 0);
+}
+
+/* The other guard page, and the one every C programmer already expects
+ * to exist. The boot tables identity-map the low 4 GiB present and
+ * writable, page zero included, so a store through a null pointer in
+ * this guest QUIETLY SUCCEEDED: it wrote a word into physical page zero
+ * and the program carried on with a bug that would have been a segfault
+ * on any hosted target. Unmapping the page turns it back into the fault
+ * every caller's error handling was written against.
+ *
+ * Only the first page, and only if nothing we still need lives in it:
+ * the hypervisor chooses where the handover block and the command line
+ * go, and this guest keeps reading the command line long after boot. */
+static const char *cmdline;              /* set in kmain, read for ever after */
+
+static void pf_guard_null_page(const void *si) {
+    if ((unsigned long)si < 4096) return;
+    if (cmdline && (unsigned long)cmdline < 4096) return;
+    (void)mprotect((void *)0, 4096, 0);
+}
+
 /* ── time ────────────────────────────────────────────────────────── */
 
 static u64 tsc_khz;            /* 0 = nobody told us */
@@ -302,7 +544,6 @@ static u64 wall_base_sec;      /* CLOCK_REALTIME epoch at boot, 0 = unset */
  * program's argument parser is how a boot flag becomes a mysterious
  * command-line error.
  */
-static const char *cmdline;
 const char *nurl_boot_cmdline(void);
 
 static u64 cmdline_u64(const char *key) {
@@ -495,7 +736,18 @@ int fs_close_fd(int fd);
 pf_ssize_t nl_read(int fd, void *buf, pf_size_t n) { return (pf_ssize_t)read(fd, buf, n); }
 int nl_close(int fd) { return close(fd); }
 long long nl_lseek(int fd, long long off, int whence) { return lseek(fd, off, whence); }
-void *nl_map(pf_size_t len) { return mmap(0, len, 0, 0, -1, 0); }
+/* ZERO on failure, not MAP_FAILED. `mmap` answers the POSIX way and
+ * `nl_map` answers the way nolibc's allocator asks — `if (!p)` is the
+ * check in malloc.c, and the Linux twin (syscall_linux.c) has always
+ * converted. This one did not, so a guest that ran out of memory handed
+ * back (void *)-1 and the first write through it faulted at
+ * 0xffffffffffffffff: exhaustion turned into a wild store instead of an
+ * "out of memory" line. Twins that drift is what this whole directory
+ * is arranged to prevent; here it drifted. */
+void *nl_map(pf_size_t len) {
+    void *p = mmap(0, len, 0, 0, -1, 0);
+    return p == (void *)-1 ? 0 : p;
+}
 int nl_unmap(void *p, pf_size_t len) { return munmap(p, len); }
 /* Straight to the machine. nolibc's `exit` flushes stdio and then
  * calls THIS — routing it back through `exit` is an infinite
@@ -629,12 +881,18 @@ void kmain(unsigned long start_info_paddr) {
         (const struct hvm_start_info *)start_info_paddr;
 
     uart_init();
+    /* Before anything that can fault, which is everything: an IDT
+     * installed after the first mistake describes nothing. */
+    tss_init();
+    idt_init();
     if (!si || si->magic != HVM_START_MAGIC)
         pf_panic("not a PVH boot — no hvm_start_info at the handover "
                  "address (was this image loaded with -kernel?)");
 
     cmdline = si->cmdline_paddr ? (const char *)(unsigned long)si->cmdline_paddr : 0;
     mem_init(si);
+    pf_guard_boot_stack();
+    pf_guard_null_page(si);
     time_init();
     nl_tls_init_guest();          /* before the first __thread access */
 

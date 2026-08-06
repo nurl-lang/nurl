@@ -74,9 +74,38 @@ rm -f "$out"
 echo "boot to first answer:  $(( (end - start) / 1000000 )) ms  (cold VM, includes DHCP)"
 
 # ── requests per second ─────────────────────────────────────────
-# The demo exits after one answer, so a throughput number needs a
-# server that keeps serving. Rather than a second demo, the httpd one
-# is rebuilt with a large answer count — measured, not extrapolated
-# from a single request.
-echo "note: throughput needs a long-running demo; the one in tree exits after"
-echo "      one answer by design (it is a gate, not a benchmark)."
+# Measured against demos/soak.nu, which answers 200 requests and then
+# reports what its own page allocator did — the same program the guest
+# gate uses, so the throughput number and the "does it leak" number come
+# from one run of one server rather than from two servers that might
+# differ. Sequential, one connection each: this is latency's reciprocal,
+# not a concurrency figure, and calling it anything else would flatter it.
+if [ "$TLS" = 0 ]; then
+    "$ROOT/unikernel/build_unikernel.sh" "$ROOT/unikernel/demos/soak.nu" >/dev/null || exit 2
+    out=$(mktemp)
+    ( "$ROOT/unikernel/run_qemu.sh" "$ROOT/build/unikernel/soak.elf" -t 300 -- \
+        -netdev "user,id=n0,hostfwd=tcp:127.0.0.1:18090-:8080" \
+        -device virtio-net-device,netdev=n0 > "$out" 2>&1 ) &
+    qpid=$!
+    for _ in $(seq 1 200); do
+        curl -sS --max-time 15 http://127.0.0.1:18090/ >/dev/null 2>&1 && break
+        sleep 0.2
+    done
+    tstart=$(date +%s%N)
+    ok=0
+    for _ in $(seq 1 "$N"); do
+        curl -sS --max-time 15 http://127.0.0.1:18090/ >/dev/null 2>&1 && ok=$((ok + 1))
+    done
+    tend=$(date +%s%N)
+    ms=$(( (tend - tstart) / 1000000 ))
+    [ "$ms" -gt 0 ] || ms=1
+    echo "requests per second:   $(( ok * 1000 / ms ))  ($ok sequential requests in ${ms} ms, one connection each)"
+    # Let the guest finish its 200 so its own verdict lands in the log.
+    for _ in $(seq 1 200); do curl -sS --max-time 15 http://127.0.0.1:18090/ >/dev/null 2>&1; done
+    wait $qpid
+    grep -E '^soak: (live at the end|verdict)' "$out" | sed 's/^soak: /heap:                  /'
+    rm -f "$out"
+else
+    echo "note: throughput is measured on the plaintext run; a TLS number here"
+    echo "      would be an RSA handshake benchmark under an interpreter."
+fi

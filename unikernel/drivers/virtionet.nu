@@ -46,6 +46,13 @@ $ `stdlib/hal/virtio.nu`
 // the header plus a 1500-byte MTU with room to spare.
 @ vnet_buf_len → i { ^ 2048 }
 
+// What is left for a frame once the 12-byte header has its share. Both
+// directions are bounded by it: a frame longer than this cannot be
+// transmitted (it is refused, not truncated), and a device that claims
+// to have written more than this into a 2048-byte buffer is not
+// believed.
+@ vnet_max_frame → i { ^ 2036 }
+
 // A Vec is a value — a handle struct, not a pointer — so a pool of
 // them is a pool of heap copies of the handle. Boxing says that once,
 // here, instead of at every push.
@@ -168,28 +175,36 @@ $ `stdlib/hal/virtio.nu`
     ^ . nic mac
 }
 
-// Keep the receive queue full. Every descriptor the device has
-// completed is refilled with the same buffer, so the buffer pool is
-// allocated once and never grows: a driver that allocates per packet
-// is a driver that stops working under load, which is exactly when it
-// matters.
+// Fill the receive queue once, at bring-up. Every descriptor the device
+// completes is handed straight back with the same buffer (see vnet_rx),
+// so the pool is allocated here and never grows: a driver that allocates
+// per packet is a driver that stops working under load, which is exactly
+// when it matters.
+//
+// The loop is bounded by the queue rather than by "until something
+// fails". `num_free > 0` and "the last add worked" are two different
+// conditions, and a version that trusted the first one spun for ever the
+// moment they disagreed.
 @ __rx_refill * VirtioNet nic → i {
     : ~ i added 0
-    ~ > ( virtq_num_free . nic rx ) 0 {
-        : i slot ( vec_len [i] . nic rxbuf )
+    : ~ i tries 0
+    : i limit . . nic rx qsize
+    ~ && < tries limit > ( virtq_num_free . nic rx ) 0 {
+        = tries + tries 1
         : ( Vec u ) b ( __buf_new ( vnet_buf_len ) )
+        : ~ b ok F
         ?? ( virtq_add_single . nic rx ( __buf_phys b ) ( vnet_buf_len ) T ) {
             T _d → {
                 ( vec_push [i] . nic rxbuf ( __vec_box b ) )
                 = added + added 1
+                = ok T
             }
             F → {
                 ( vec_free [u] b )
-                = added added
+                = ok F
             }
         }
-        ? == added 0 { ^ 0 } {}
-        ? >= ( vec_len [i] . nic rxbuf ) 1024 { ^ added } {}
+        ? ! ok { = tries limit } {}
     }
     ? > added 0 { ( virtio_notify . nic base ( vnet_rxq ) ) } {}
     ^ added
@@ -204,7 +219,14 @@ $ `stdlib/hal/virtio.nu`
         T head → {
             : i len ( virtq_last_used_len . nic rx )
             : i addr ( virtq_desc_addr . nic rx head )
-            : i n ? > len ( vnet_hdr_len ) - len ( vnet_hdr_len ) 0
+            // The length is the DEVICE's number, and the buffer is ours.
+            // A device that reports more than it was given a place to
+            // write is broken or hostile either way, and copying what it
+            // claims would read past the end of the buffer into whatever
+            // the allocator put next. Clamp, and let the frame be short:
+            // the stack above checks lengths again from the IP header.
+            : ~ i n ? > len ( vnet_hdr_len ) - len ( vnet_hdr_len ) 0
+            ? > n ( vnet_max_frame ) { = n ( vnet_max_frame ) } {}
             ? > n 0 {
                 ( bytes_extend_raw out # s + addr ( vnet_hdr_len ) n )
             } {}
@@ -219,31 +241,61 @@ $ `stdlib/hal/virtio.nu`
     }
 }
 
-// Send one frame. The header is a separate descriptor rather than a
-// copy into a bigger buffer: the caller's frame is already contiguous,
-// and a chain of two says so without moving it.
+// The transmit buffer belonging to descriptor `d`, allocated the first
+// time that descriptor is used and kept for ever after.
+//
+// THE POOL IS INDEXED BY DESCRIPTOR, and that is the whole fix. The
+// version this replaces allocated a fresh buffer for every frame and
+// pushed it onto a list that only `vnet_close` ever emptied: the device
+// finished with the buffer, the descriptor went back on the free list,
+// and the two kilobytes stayed allocated. A server leaked them at line
+// rate — which is a leak nobody sees in a demo that answers one request
+// and nobody survives in a machine that answers a million.
+@ __tx_buffer * VirtioNet nic i d → ( Vec u ) {
+    ~ <= ( vec_len [i] . nic txbuf ) d { ( vec_push [i] . nic txbuf 0 ) }
+    : i cur ?? ( vec_get [i] . nic txbuf d ) { T x → x F → 0 }
+    ? != cur 0 {
+        : *VecBox bx # *VecBox cur
+        ^ . bx v
+    } {}
+    : ( Vec u ) fresh ( __buf_new ( vnet_buf_len ) )
+    : i boxed ( __vec_box fresh )
+    : b _set ( vec_set [i] . nic txbuf d boxed )
+    : *VecBox nbx # *VecBox boxed
+    ^ . nbx v
+}
+
+// Send one frame: header and payload in one buffer, one descriptor.
+//
+// A frame longer than the buffer is REFUSED rather than truncated. The
+// stack above never builds one — the MTU is 1500 and the buffer holds
+// 2036 — so this is the answer to a bug elsewhere, and "the send failed"
+// is a fact its caller can act on where "the peer got half a packet" is
+// not.
 @ vnet_tx * VirtioNet nic ( Vec u ) frame i off i len → b {
     ? ! ( vnet_ready nic ) { ^ F } {}
     ? <= len 0 { ^ F } {}
+    ? > len ( vnet_max_frame ) { ^ F } {}
     ( __tx_reap nic )
 
-    : ( Vec u ) pkt ( __buf_new + ( vnet_hdr_len ) len )
-    : ~ i k 0
-    ~ < k len {
-        : b _ok ( vec_set [u] pkt + ( vnet_hdr_len ) k
-        ?? ( vec_get [u] frame + off k ) { T x → x F → # u 0 } )
-        = k + k 1
-    }
-    ?? ( virtq_add_single . nic tx ( __buf_phys pkt ) + ( vnet_hdr_len ) len F ) {
-        T _d → {
-            ( vec_push [i] . nic txbuf ( __vec_box pkt ) )
+    // The descriptor comes first: the buffer is chosen by its index, and
+    // publishing a descriptor before its buffer is filled would hand the
+    // device the previous frame's bytes.
+    ?? ( virtq_alloc_desc . nic tx ) {
+        T d → {
+            : ( Vec u ) pkt ( __tx_buffer nic d )
+            : ~ i k 0
+            ~ < k len {
+                : b _ok ( vec_set [u] pkt + ( vnet_hdr_len ) k
+                ?? ( vec_get [u] frame + off k ) { T x → x F → # u 0 } )
+                = k + k 1
+            }
+            ( virtq_desc_set . nic tx d ( __buf_phys pkt ) + ( vnet_hdr_len ) len 0 ( vq_null ) )
+            ( virtq_avail_push . nic tx d )
             ( virtio_notify . nic base ( vnet_txq ) )
             ^ T
         }
-        F → {
-            ( vec_free [u] pkt )
-            ^ F
-        }
+        F → ^ F
     }
 }
 

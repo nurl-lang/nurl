@@ -65,6 +65,15 @@ void *malloc(nl_size_t n) {
     struct nl_head *h;
     int c;
     if (n == 0) n = 1;
+    /* A length that cannot have a header and a page of rounding added to
+     * it is a length no allocation can satisfy. Saying so here is not
+     * pedantry: without it `n + sizeof(head)` wraps, lands in a small
+     * size class, and a request for nearly the whole address space is
+     * answered with a 32-byte block — which the caller then fills. Sizes
+     * near the top come from length arithmetic on attacker-supplied
+     * numbers often enough that this is the ordinary case, not the
+     * exotic one. */
+    if (n > (nl_size_t)-1 - sizeof(struct nl_head) - 4095) return 0;
     c = nl_class_of(n + sizeof(struct nl_head));
     if (c < 0) {                                   /* big: its own mapping */
         nl_size_t total = n + sizeof(struct nl_head);

@@ -90,6 +90,97 @@ if [ $# -eq 0 ]; then
     done
 fi
 
+# ── the machine's own failure report ────────────────────────────
+# Every other gate here checks that something worked. This one checks
+# what happens when something does not: a guest with no IDT answers a
+# null dereference by shutting down silently, which from the host is
+# indistinguishable from a clean exit. Two faults, two reports, one
+# distinct exit code — 126, which is neither a panic (127) nor anything
+# a program can return.
+if [ $# -eq 0 ]; then
+    demos=$((demos + 1))
+    if "$ROOT/unikernel/build_unikernel.sh" "$ROOT/unikernel/demos/fault.nu" >/dev/null 2>&1; then
+        nullout=$(NURL_APPEND='args="null 0"' \
+                  "$ROOT/unikernel/run_qemu.sh" "$ROOT/build/unikernel/fault.elf" -t 60 2>&1)
+        nullcode=$?
+        stackout=$(NURL_APPEND='args="stack 100000000"' \
+                   "$ROOT/unikernel/run_qemu.sh" "$ROOT/build/unikernel/fault.elf" -t 60 2>&1)
+        stackcode=$?
+        ok=1
+        # A null store must be a page fault at address zero, not a quiet
+        # write to physical page zero — which is what an identity-mapped
+        # guest does until the page is unmapped on purpose.
+        printf '%s' "$nullout" | grep -q '#PF page fault' || ok=0
+        printf '%s' "$nullout" | grep -q 'cr2=0x0 (not present) on write' || ok=0
+        [ "$nullcode" = 126 ] || ok=0
+        # A recursion past the end of the boot stack must be a fault on
+        # its guard page, reported from the IST stack — the ordinary one
+        # is exactly what ran out.
+        printf '%s' "$stackout" | grep -q '#PF page fault' || ok=0
+        [ "$stackcode" = 126 ] || ok=0
+        if [ "$ok" = 1 ]; then
+            echo "PASS fault (both faults reported, exit 126)"
+        else
+            echo "FAIL fault (null exit $nullcode, stack exit $stackcode)"
+            printf '%s\n' "$nullout" | head -4 | sed 's/^/     /'
+            printf '%s\n' "$stackout" | head -4 | sed 's/^/     /'
+            fails=$((fails + 1))
+        fi
+    else
+        echo "FAIL fault (build)"; fails=$((fails + 1))
+    fi
+fi
+
+# ── the smallest machine it still works on ──────────────────────
+# Everything else here runs with 256 MiB, which hides the question a
+# density-minded operator actually asks. The floor was measured — hello
+# answers on 3 MiB, the HTTP server on 4 — and these run with headroom
+# over it, so what this gate really pins is APPETITE: a change that
+# doubles what the guest needs before it can answer fails here rather
+# than on somebody's Firecracker host.
+#
+# The last case is the one that matters most: below the floor the
+# machine must say so. A guest that quietly wanders off is what the
+# memory work in this directory was about.
+if [ $# -eq 0 ]; then
+    demos=$((demos + 1))
+    ok=1
+    "$ROOT/unikernel/build_unikernel.sh" "$TESTS/hello.nu" >/dev/null 2>&1 || ok=0
+    small=$("$ROOT/unikernel/run_qemu.sh" "$ROOT/build/unikernel/hello.elf" -t 60 -- -m 4 2>&1)
+    printf '%s' "$small" | grep -q 'Hello, NURL!' || ok=0
+
+    tiny=$("$ROOT/unikernel/run_qemu.sh" "$ROOT/build/unikernel/hello.elf" -t 60 -- -m 2 2>&1)
+    tinycode=$?
+    printf '%s' "$tiny" | grep -q 'no usable memory above the image' || ok=0
+    [ "$tinycode" = 127 ] || ok=0
+
+    if command -v curl >/dev/null 2>&1; then
+        "$ROOT/unikernel/build_unikernel.sh" "$ROOT/unikernel/demos/httpd.nu" >/dev/null 2>&1 || ok=0
+        out=$(mktemp)
+        ( "$ROOT/unikernel/run_qemu.sh" "$ROOT/build/unikernel/httpd.elf" -t 90 -- -m 8 \
+            -netdev user,id=n0,hostfwd=tcp:127.0.0.1:18099-:8080 \
+            -device virtio-net-device,netdev=n0 > "$out" 2>&1 ) &
+        qpid=$!
+        body=""
+        for _ in 1 2 3 4 5 6 7 8 9 10; do
+            sleep 2
+            body=$(curl -sS --max-time 8 http://127.0.0.1:18099/ 2>/dev/null)
+            [ -n "$body" ] && break
+        done
+        wait $qpid
+        [ "$body" = "hello from a guest" ] || ok=0
+        rm -f "$out"
+    fi
+
+    if [ "$ok" = 1 ]; then
+        echo "PASS smallmem (4 MiB hello, 8 MiB server, 2 MiB says why not)"
+    else
+        echo "FAIL smallmem"
+        printf '%s\n' "$tiny" | head -3 | sed 's/^/     /'
+        fails=$((fails + 1))
+    fi
+fi
+
 # ── the demo with a filesystem and arguments ────────────────────
 # Built with --fs, run with args on the kernel command line: the two
 # halves of B7, and the only demo whose build and invocation differ
@@ -148,7 +239,49 @@ if [ $# -eq 0 ] && command -v curl >/dev/null 2>&1; then
     fi
 fi
 
+# ── the same server, two hundred times ──────────────────────────
+# The httpd gate proves a request can be answered. This one proves the
+# two-hundredth can, which is a different property and the one an
+# appliance is judged on: a leak per packet is invisible in a demo and
+# fatal in a machine that runs for a week. The guest reports its own
+# page allocator's numbers and reaches the verdict itself — the harness
+# only reads it, because nothing outside the guest can see its heap.
+if [ $# -eq 0 ] && command -v curl >/dev/null 2>&1; then
+    demos=$((demos + 1))
+    if "$ROOT/unikernel/build_unikernel.sh" "$ROOT/unikernel/demos/soak.nu" >/dev/null 2>&1; then
+        out=$(mktemp)
+        ( "$ROOT/unikernel/run_qemu.sh" "$ROOT/build/unikernel/soak.elf" -t 300 -- \
+            -netdev user,id=n0,hostfwd=tcp:127.0.0.1:18090-:8080 \
+            -device virtio-net-device,netdev=n0 > "$out" 2>&1 ) &
+        qpid=$!
+        for _ in 1 2 3 4 5 6 7 8 9 10; do
+            sleep 2
+            curl -sS --max-time 8 http://127.0.0.1:18090/ >/dev/null 2>&1 && break
+        done
+        # Ten more than the guest will answer: the port forward accepts
+        # before the guest listens, so the first few may never arrive.
+        for _ in $(seq 1 210); do
+            curl -sS --max-time 8 http://127.0.0.1:18090/ >/dev/null 2>&1
+        done
+        wait $qpid
+        if grep -q 'verdict STABLE' "$out"; then
+            echo "PASS soak ($(sed -n 's/.*answered \([0-9]*\) requests/\1/p' "$out" | tail -1) requests, heap flat)"
+        else
+            echo "FAIL soak"
+            grep -E 'soak:' "$out" | tail -6 | sed 's/^/     /'
+            fails=$((fails + 1))
+        fi
+        rm -f "$out"
+    else
+        echo "FAIL soak (build)"; fails=$((fails + 1))
+    fi
+fi
+
 # ── the MCP endpoint, spoken to as a client would ───────────────
+# HOST PORTS HERE MUST NOT BE PORTS THE CORPUS BINDS. This gate used to
+# forward 18771, which `compiler/tests/http_server_limits.nu` listens on:
+# run the two suites on one machine and one of them fails with
+# NetAddrInUse, in a test that has nothing to do with either change.
 # Three requests, because one would not distinguish "the server
 # answered" from "the server answered correctly": initialize settles
 # the protocol, tools/list settles the catalogue, and tools/call
@@ -158,7 +291,7 @@ if [ $# -eq 0 ] && command -v curl >/dev/null 2>&1; then
     if "$ROOT/unikernel/build_unikernel.sh" "$ROOT/unikernel/demos/mcpd.nu" >/dev/null 2>&1; then
         out=$(mktemp)
         ( "$ROOT/unikernel/run_qemu.sh" "$ROOT/build/unikernel/mcpd.elf" -t 120 -- \
-            -netdev user,id=n0,hostfwd=tcp:127.0.0.1:18771-:18770 \
+            -netdev user,id=n0,hostfwd=tcp:127.0.0.1:18992-:18770 \
             -device virtio-net-device,netdev=n0 > "$out" 2>&1 ) &
         qpid=$!
         init=""
@@ -166,15 +299,15 @@ if [ $# -eq 0 ] && command -v curl >/dev/null 2>&1; then
             sleep 2
             init=$(curl -sS --max-time 10 -X POST -H 'Content-Type: application/json' \
                    -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"gate","version":"1"}}}' \
-                   http://127.0.0.1:18771/mcp 2>/dev/null)
+                   http://127.0.0.1:18992/mcp 2>/dev/null)
             [ -n "$init" ] && break
         done
         tools=$(curl -sS --max-time 10 -X POST -H 'Content-Type: application/json' \
                 -d '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' \
-                http://127.0.0.1:18771/mcp 2>/dev/null)
+                http://127.0.0.1:18992/mcp 2>/dev/null)
         called=$(curl -sS --max-time 10 -X POST -H 'Content-Type: application/json' \
                  -d '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"echo","arguments":{"text":"from the host"}}}' \
-                 http://127.0.0.1:18771/mcp 2>/dev/null)
+                 http://127.0.0.1:18992/mcp 2>/dev/null)
         kill $qpid 2>/dev/null; wait $qpid 2>/dev/null
         if printf '%s' "$init" | grep -q '"protocolVersion"' \
            && printf '%s' "$tools" | grep -q '"echo"' \
