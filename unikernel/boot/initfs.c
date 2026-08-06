@@ -60,9 +60,16 @@ static fs_size_t tar_octal(const char *p, int n) {
     return v;
 }
 
-static int fs_streq(const char *a, const char *b) {
-    while (*a && *a == *b) { a++; b++; }
-    return *a == *b;
+/* Name comparison, with the archive side BOUNDED: a tar name field
+ * is 100 bytes and is only NUL-terminated when the name is shorter than
+ * that. A plain `strcmp` against a full-width name walks out of the
+ * field and into the mode digits, so a 100-character name would be
+ * compared against something that is not a name at all. */
+static int fs_streq_n(const char *hdr, int n, const char *want) {
+    int i = 0;
+    for (; i < n && hdr[i] && want[i] && hdr[i] == want[i]; i++) { }
+    if (i == n) return want[i] == 0;             /* the field ran out */
+    return hdr[i] == want[i];
 }
 
 /* Leading "./" and a leading "/" are the same file: `tar cf` writes
@@ -87,13 +94,24 @@ static const unsigned char *fs_lookup(const char *name, fs_size_t *size_out) {
         fs_size_t size = tar_octal(hdr + 124, 12);
         char type = hdr[156];
         const unsigned char *body = p + 512;
-        fs_size_t stride = 512 + ((size + 511) & ~(fs_size_t)511);
+        fs_size_t stride;
+
+        /* A size field is twelve octal digits and can name a number no
+         * archive this size could hold. Rounding it up would then wrap,
+         * `p += stride` would move BACKWARDS, and the walk would never
+         * end. The archive is built by our own build script, so this is
+         * a corrupt-image check rather than a hostile-input one — and a
+         * corrupt image is exactly when a loop that never ends is the
+         * worst possible behaviour. */
+        if (size > (fs_size_t)(end - body)) return 0;
+        stride = 512 + ((size + 511) & ~(fs_size_t)511);
 
         /* '0' and '\0' are both "regular file"; anything else (a
          * directory, a symlink) is skipped rather than served, because
          * serving a directory's zero bytes as a file is how a missing
          * certificate becomes an empty one. */
-        if ((type == '0' || type == 0) && fs_streq(fs_norm(hdr), want)) {
+        if ((type == '0' || type == 0) &&
+            fs_streq_n(fs_norm(hdr), 100 - (int)(fs_norm(hdr) - hdr), want)) {
             if (body + size > end) return 0;    /* truncated archive */
             if (size_out) *size_out = size;
             return body;
