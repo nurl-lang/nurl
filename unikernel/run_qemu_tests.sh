@@ -189,6 +189,44 @@ if [ $# -eq 0 ] && command -v curl >/dev/null 2>&1; then
     fi
 fi
 
+# ── the same server, two hundred times ──────────────────────────
+# The httpd gate proves a request can be answered. This one proves the
+# two-hundredth can, which is a different property and the one an
+# appliance is judged on: a leak per packet is invisible in a demo and
+# fatal in a machine that runs for a week. The guest reports its own
+# page allocator's numbers and reaches the verdict itself — the harness
+# only reads it, because nothing outside the guest can see its heap.
+if [ $# -eq 0 ] && command -v curl >/dev/null 2>&1; then
+    demos=$((demos + 1))
+    if "$ROOT/unikernel/build_unikernel.sh" "$ROOT/unikernel/demos/soak.nu" >/dev/null 2>&1; then
+        out=$(mktemp)
+        ( "$ROOT/unikernel/run_qemu.sh" "$ROOT/build/unikernel/soak.elf" -t 300 -- \
+            -netdev user,id=n0,hostfwd=tcp:127.0.0.1:18090-:8080 \
+            -device virtio-net-device,netdev=n0 > "$out" 2>&1 ) &
+        qpid=$!
+        for _ in 1 2 3 4 5 6 7 8 9 10; do
+            sleep 2
+            curl -sS --max-time 8 http://127.0.0.1:18090/ >/dev/null 2>&1 && break
+        done
+        # Ten more than the guest will answer: the port forward accepts
+        # before the guest listens, so the first few may never arrive.
+        for _ in $(seq 1 210); do
+            curl -sS --max-time 8 http://127.0.0.1:18090/ >/dev/null 2>&1
+        done
+        wait $qpid
+        if grep -q 'verdict STABLE' "$out"; then
+            echo "PASS soak ($(sed -n 's/.*answered \([0-9]*\) requests/\1/p' "$out" | tail -1) requests, heap flat)"
+        else
+            echo "FAIL soak"
+            grep -E 'soak:' "$out" | tail -6 | sed 's/^/     /'
+            fails=$((fails + 1))
+        fi
+        rm -f "$out"
+    else
+        echo "FAIL soak (build)"; fails=$((fails + 1))
+    fi
+fi
+
 # ── the MCP endpoint, spoken to as a client would ───────────────
 # Three requests, because one would not distinguish "the server
 # answered" from "the server answered correctly": initialize settles
