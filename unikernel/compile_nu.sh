@@ -36,10 +36,29 @@ SHIM="$ROOT/unikernel/net/sockets.nu"
 CC="${CC:-clang}"
 
 SRC="$1"; OUT_LL="$2"; WORK="$3"
+# Absolute, before anything cds anywhere: the workdir below is chosen
+# per source, and a relative path stops meaning the same thing the
+# moment it changes.
+SRC="$(cd "$(dirname "$SRC")" && pwd)/$(basename "$SRC")"
+case "$OUT_LL" in /*) ;; *) OUT_LL="$PWD/$OUT_LL" ;; esac
+case "$WORK" in /*) ;; *) WORK="$PWD/$WORK" ;; esac
 name="$(basename "${OUT_LL%.ll}")"
 OBJ="$WORK/$name.o"
 
-cd "$ROOT" || exit 2
+# Where nurlc runs from decides how a program's `$` imports resolve. A
+# package writes them relative to its own root ("deps/x/src/y.nu"), a
+# program in this repo writes them relative to the repo. So: the
+# nearest directory at or above the source that has a nurl.toml, else
+# the repo root. Guessing wrong is not a subtle failure — nurlc says
+# "cannot open deps/…" and stops.
+srcdir="$(dirname "$SRC")"
+workdir="$ROOT"
+probe="$srcdir"
+while [ "$probe" != "/" ]; do
+    if [ -f "$probe/nurl.toml" ]; then workdir="$probe"; break; fi
+    probe="$(dirname "$probe")"
+done
+cd "$workdir" || exit 2
 
 "$ROOT/build/nurlc" "$SRC" > "$OUT_LL" 2>"$WORK/compile.err" || exit 3
 "$CC" -O2 -c "$OUT_LL" -o "$OBJ" 2>"$WORK/cc.err" || exit 4
