@@ -199,6 +199,17 @@ const unsigned char *fs_map_fd(int fd, fs_size_t off) {
     return f->data + off;
 }
 
+/* Is this path a file in the image? `access(2)` is how a program asks —
+ * `std/fs.nu`'s `file_exists` is exactly that call — and answering "no"
+ * for a file the image demonstrably contains is the kind of stub that
+ * becomes somebody's bug report: swarm-mcp asked whether its baked-in
+ * certificate was there, was told no, and tried to generate one onto a
+ * read-only filesystem. */
+int fs_exists(const char *path) {
+    fs_size_t size = 0;
+    return fs_lookup(path, &size) != 0;
+}
+
 /* Does the image contain anything at all? The boot banner uses it, and
  * so does the decision not to look for a certificate that cannot be
  * there. */

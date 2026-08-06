@@ -970,6 +970,15 @@ void nurl_fiber_join(long long h) {
  * exists in this file — see the header on why the fd half is a link
  * error rather than a stub. */
 
+/* Yes: one vCPU, no preemption, and every "thread" in this program is a
+ * coroutine on it. `std/time.nu` asks so that a sleep in the MAIN
+ * context routes to `nurl_fiber_sleep_ms` below — which runs whatever is
+ * runnable while the clock catches up — instead of a `nanosleep` that
+ * stops every coroutine for the duration. A program that spawned a
+ * server, slept in main and then connected to it found the port closed:
+ * the server had never run. */
+long long nurl_runtime_is_cooperative(void) { return 1; }
+
 long long nurl_fiber_sleep_ms(long long ms) {
     if (ms <= 0) { nurl_fiber_yield(); return 0; }
     long long deadline = nb_now_ms() + ms;

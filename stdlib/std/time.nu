@@ -74,6 +74,13 @@ $ `stdlib/std/async_ffi.nu`
 
 & `c` @ nanosleep *u req *u rem → i32
 
+// Does this runtime multiplex EVERYTHING onto the calling thread? 1 on
+// the freestanding runtime, where "threads" are coroutines on one vCPU;
+// 0 wherever the operating system schedules for us. It is the only
+// question `sleep_ms` needs to answer below, and only the runtime can
+// answer it.
+& `c` @ nurl_runtime_is_cooperative → i
+
 @ now_ms → i {
     : s ts ( nurl_zalloc 16 )
     : i32 rc ( clock_gettime # i32 ( posix_const `CLOCK_REALTIME` ) # *u ts )
@@ -140,13 +147,27 @@ $ `stdlib/std/async_ffi.nu`
 // WASI / Windows where the fiber runtime is stubbed), falls back to
 // `nanosleep`-style blocking. The dispatch is invisible to the
 // caller — same name, same signature, same observable wait time.
+//
+// THE MAIN CONTEXT ON A COOPERATIVE RUNTIME IS THE THIRD CASE, and it
+// used to take the second one. There, "threads" are coroutines on one
+// vCPU, so a `nanosleep` in main does not merely wait — it stops every
+// other coroutine for the duration. Measured, on the freestanding
+// runtime: a program that spawns a server thread, sleeps 500 ms in main
+// and then connects gets its connection REFUSED, because the server
+// never ran and never bound. The runtime's own fiber sleep already
+// handles the main context correctly (it runs whatever is runnable
+// while the clock catches up); it was simply never reached from there.
 @ sleep_ms i ms → v {
     : i fcur ( nurl_fiber_current )
     ? != fcur 0 {
         : i unused ( nurl_fiber_sleep_ms ms )
-    } {
-        ( __sleep_ms_blocking ms )
-    }
+        ^
+    } {}
+    ? != ( nurl_runtime_is_cooperative ) 0 {
+        : i unused2 ( nurl_fiber_sleep_ms ms )
+        ^
+    } {}
+    ( __sleep_ms_blocking ms )
 }
 
 @ elapsed_ms_since i t0 → i {

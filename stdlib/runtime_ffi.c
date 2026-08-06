@@ -3579,6 +3579,15 @@ void      nurl_runtime_shutdown(void) {}
 
 long long nurl_reactor_wait_read(long long fd, long long timeout_ms);
 long long nurl_reactor_wait_write(long long fd, long long timeout_ms);
+/* Does this runtime multiplex everything onto the caller's thread?
+ * Here: no. There is an operating system underneath and the fibers ride
+ * real threads, so a thread that blocks blocks only itself. The
+ * freestanding twin (unikernel/runtime_bare.c) answers 1, and
+ * `std/time.nu`'s `sleep_ms` is the caller that needs to know: a plain
+ * sleep in the main context is harmless here and stops the whole
+ * machine there. */
+long long nurl_runtime_is_cooperative(void) { return 0; }
+
 long long nurl_fiber_sleep_ms(long long ms);
 
 /* The reactor is built on the fiber primitives, so it lives or dies with

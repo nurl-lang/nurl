@@ -243,7 +243,9 @@ $ `stdlib/net/pktbuf.nu`
     : ( Vec u ) msg ( vec_new [u] )
     ( icmp_push_echo_reply msg im frame )
     ( eth_push_header . out bytes . ( eth_parse frame ) src . st our_mac ( ethertype_ipv4 ) )
-    ( ip4_push_header . out bytes . st our_ip . ih src ( ip_proto_icmp ) ( vec_len [u] msg ) ( __next_id st ) 64 T )
+    // From the address it was sent TO — a ping to 127.0.0.1 is answered
+    // by 127.0.0.1, not by whatever DHCP handed the interface.
+    ( ip4_push_header . out bytes . ih dst . ih src ( ip_proto_icmp ) ( vec_len [u] msg ) ( __next_id st ) 64 T )
     ( vec_extend [u] . out bytes msg )
     ( vec_free [u] msg )
     ( pktbuf_mark out )
@@ -327,8 +329,20 @@ $ `stdlib/net/pktbuf.nu`
 // retry is the caller's to schedule — which for TCP is free, because a
 // segment that did not go out is exactly what its retransmit timer is
 // already for.
-@ stack_tx_ip4 * NetStack st i dst_ip i proto ( Vec u ) dg i dg_off i dg_len i now * PktBuf out → TxResult {
-    ? == . st our_ip 0 { ^ @ TxResult { ( tx_no_address ) 0 } } {}
+//
+// `src_ip` is the address the datagram is sent FROM, and it is a
+// parameter rather than always `our_ip` because a machine has more than
+// one address. A reply to something addressed to 127.0.0.1 must come
+// FROM 127.0.0.1: the sender checksummed it over that pseudo-header, so
+// a datagram that says otherwise is a datagram the receiver computes a
+// different checksum for and silently discards as corrupt. That is
+// exactly what happened — a guest with an interface address could not
+// talk to itself over loopback at all, and nothing anywhere reported a
+// drop, because a TCP segment failing its checksum is not a frame-level
+// drop. Zero means "whatever this interface's address is".
+@ stack_tx_ip4 * NetStack st i src_ip i dst_ip i proto ( Vec u ) dg i dg_off i dg_len i now * PktBuf out → TxResult {
+    : i src ? != src_ip 0 src_ip . st our_ip
+    ? == src 0 { ^ @ TxResult { ( tx_no_address ) 0 } } {}
     : i hop ( __next_hop st dst_ip )
     : ~ i dst_mac 0
     ? || ( ipv4_is_broadcast hop ) ( ipv4_is_multicast hop ) {
@@ -350,17 +364,21 @@ $ `stdlib/net/pktbuf.nu`
     } {}
     : i before ( pktbuf_total out )
     ( eth_push_header . out bytes dst_mac . st our_mac ( ethertype_ipv4 ) )
-    ( ip4_push_header . out bytes . st our_ip dst_ip proto dg_len ( __next_id st ) 64 T )
+    ( ip4_push_header . out bytes src dst_ip proto dg_len ( __next_id st ) 64 T )
     ( vec_extend_range [u] . out bytes dg dg_off dg_len )
     ( pktbuf_mark out )
     = . st tx_frames + . st tx_frames 1
     ^ @ TxResult { ( tx_sent ) - ( pktbuf_total out ) before }
 }
 
-@ stack_tx_udp * NetStack st i dst_ip i src_port i dst_port ( Vec u ) payload i pay_off i pay_len i now * PktBuf out → TxResult {
+// `src_ip` as above: zero means this interface's address, and a socket
+// bound to loopback passes 127.0.0.1 so its datagrams checksum the way
+// their receiver — itself — expects.
+@ stack_tx_udp * NetStack st i src_ip i dst_ip i src_port i dst_port ( Vec u ) payload i pay_off i pay_len i now * PktBuf out → TxResult {
+    : i src ? != src_ip 0 src_ip . st our_ip
     : ( Vec u ) dg ( vec_new [u] )
-    ( udp4_push dg . st our_ip dst_ip src_port dst_port payload pay_off pay_len )
-    : TxResult r ( stack_tx_ip4 st dst_ip ( ip_proto_udp ) dg 0 ( vec_len [u] dg ) now out )
+    ( udp4_push dg src dst_ip src_port dst_port payload pay_off pay_len )
+    : TxResult r ( stack_tx_ip4 st src dst_ip ( ip_proto_udp ) dg 0 ( vec_len [u] dg ) now out )
     ( vec_free [u] dg )
     ^ r
 }
