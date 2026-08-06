@@ -208,11 +208,77 @@ $ `stdlib/net/dhcp.nu`
     ( pb `bound with defaulted lease: ` ( dhcp_bound c3 ) )
     ( dhcp_client_free c3 )
 
+    // ── a server that is lying, or broken ────────────────────────
+    //
+    // A DHCP server is the first party a guest talks to on a network it
+    // does not own, and it is unauthenticated by construction: anyone on
+    // the segment can answer first. None of these is exotic — a wrong
+    // `yiaddr` is one typo in a server config — and every one of them
+    // takes the machine off the network without anything failing, which
+    // is the worst way for a configuration bug to present.
+    : ~ ( Vec u ) hostile ( vec_new [u] )
+    : ~ b refused_all T
+    : ~ i hk 0
+    ~ < hk 4 {
+        : i bad ? == hk 0 0 ? == hk 1 ( ipv4_make 127 0 0 1 ) ? == hk 2 ( ipv4_make 224 0 0 1 ) 4294967295
+        : *DhcpClient hc ( dhcp_client_new ( cl_mac ) 305419896 )
+        : i _ht ( dhcp_tick hc 0 )
+        ( vec_free [u] hostile )
+        = hostile ( mk_reply ( dhcp_msg_offer ) 305419896 ( cl_mac ) bad 3600 0 0 )
+        : b took ( dhcp_handle hc ( dhcp_parse hostile 0 ( vec_len [u] hostile ) ) 1000 )
+        ? || took != . hc our_ip 0 { = refused_all F } {}
+        ( dhcp_client_free hc )
+        = hk + hk 1
+    }
+    ( pb `an unusable address is refused (0, 127.x, multicast, broadcast): ` refused_all )
+
+    // A mask is a run of ones then a run of zeros. 255.0.255.0 is not
+    // one, and taking it makes "is this destination on my link" mean
+    // something nobody wrote down.
+    : *DhcpClient c4 ( dhcp_client_new ( cl_mac ) 305419896 )
+    : i _d4 ( dhcp_tick c4 0 )
+    : ( Vec u ) offer4 ( mk_reply ( dhcp_msg_offer ) 305419896 ( cl_mac ) ( off_ip ) 3600 0 0 )
+    : b _o4 ( dhcp_handle c4 ( dhcp_parse offer4 0 ( vec_len [u] offer4 ) ) 1000 )
+    : ( Vec u ) ack4 ( mk_reply ( dhcp_msg_ack ) 305419896 ( cl_mac ) ( off_ip ) 3600 0 0 )
+    // The subnet option's value is at 251..254 (four bytes after the
+    // magic at 236, the message-type option and the server id).
+    : b _m4 ( vec_set [u] ack4 252 # u 0 )  // 255.255.255.0 → 255.0.255.0
+    : b _a4 ( dhcp_handle c4 ( dhcp_parse ack4 0 ( vec_len [u] ack4 ) ) 2000 )
+    ( pb `bound despite the bad mask: ` ( dhcp_bound c4 ) )
+    ( pb `a non-contiguous mask falls back to /24: ` == . c4 subnet ( ipv4_mask_from_prefix 24 ) )
+    ( dhcp_client_free c4 )
+
+    // Every option byte, fuzzed: the walk must terminate and the client
+    // must never end up bound to something it was not offered.
+    : ~ i fseed 20260806
+    : ~ b fuzz_ok T
+    : ~ i fk 0
+    ( vec_free [u] hostile )
+    = hostile ( mk_reply ( dhcp_msg_ack ) 305419896 ( cl_mac ) ( off_ip ) 3600 0 0 )
+    : i hlen ( vec_len [u] hostile )
+    ~ < fk 600 {
+        = fseed & + * fseed 6364136223846793005 1442695040888963407 4294967295
+        : i at + 240 % >> fseed 7 - hlen 240
+        : i was ?? ( vec_get [u] hostile at ) { T x → # i x F → 0 }
+        : b _f1 ( vec_set [u] hostile at # u & >> fseed 17 255 )
+        : DhcpMsg fm ( dhcp_parse hostile 0 hlen )
+        : *DhcpClient fc ( dhcp_client_new ( cl_mac ) 305419896 )
+        : i _ft ( dhcp_tick fc 0 )
+        : b _fh ( dhcp_handle fc fm 1000 )
+        ? && ( dhcp_bound fc ) ! ( ipv4_is_assignable . fc our_ip ) { = fuzz_ok F } {}
+        ? && ( dhcp_bound fc ) ! ( ipv4_mask_is_contiguous . fc subnet ) { = fuzz_ok F } {}
+        ( dhcp_client_free fc )
+        : b _f2 ( vec_set [u] hostile at # u & was 255 )
+        = fk + fk 1
+    }
+    ( pb `600 mutated option streams left the client sane: ` fuzz_ok )
+
     // Vec is a manually-managed handle (docs/MEMORY.md §7.4).
     ( vec_free [u] disc ) ( vec_free [u] wrong_xid ) ( vec_free [u] wrong_mac )
     ( vec_free [u] offer ) ( vec_free [u] ack ) ( vec_free [u] ack2 )
     ( vec_free [u] offer2 ) ( vec_free [u] ack3 ) ( vec_free [u] nak )
     ( vec_free [u] tiny ) ( vec_free [u] nomagic ) ( vec_free [u] badopt )
     ( vec_free [u] nolease ) ( vec_free [u] offer3 )
+    ( vec_free [u] hostile ) ( vec_free [u] offer4 ) ( vec_free [u] ack4 )
     ^ 0
 }

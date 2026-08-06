@@ -175,9 +175,9 @@ $ `stdlib/net/pktbuf.nu`
 // Which MAC should carry a datagram for `dst`? On-link destinations
 // resolve to themselves; everything else goes to the gateway. Broadcast
 // and directed-broadcast go to the Ethernet broadcast address.
-// 127.0.0.0/8 is this machine, whatever address the interface has.
-@ ipv4_is_loopback i addr → b { ^ == & addr 4278190080 2130706432 }
-
+// 127.0.0.0/8 is this machine, whatever address the interface has —
+// `ipv4_is_loopback` lives in net/inet.nu with the rest of the address
+// predicates, because the DHCP client needs the same question answered.
 @ __next_hop * NetStack st i dst → i {
     // A datagram for ourselves goes to our own MAC, so it comes back
     // through the same door every other frame does. Loopback is not a

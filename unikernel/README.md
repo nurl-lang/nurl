@@ -269,9 +269,13 @@ unikernel/run_qemu.sh myserver.elf -t 60 -- \
     -device virtio-net-device,netdev=n0
 ```
 
-Under Firecracker the same ELF is `--kernel-image`, with `boot-args`
-carrying the same keys; the exit sentinel is how it reports its status,
-since Firecracker has no other channel for one.
+Firecracker should take the same ELF as `--kernel-image` with `boot-args`
+carrying the same keys — PVH is its boot protocol too, and the exit
+sentinel exists because Firecracker has no channel for an exit code.
+**Not gated, and therefore not claimed**: every measurement and every
+gate in this directory is QEMU microvm. The plan has Firecracker as a
+later step, and until a job boots one, treat the paragraph above as a
+design intent rather than a tested path.
 
 **The threat model, stated.** The hypervisor and whoever writes the
 kernel command line are TRUSTED — they choose the image, its

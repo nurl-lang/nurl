@@ -342,6 +342,15 @@ $ `stdlib/net/udp4.nu`
     ? != . m op ( dhcp_op_reply ) { ^ F } {}
     ? != . m xid . c xid { ^ F } {}
     ? != . m chaddr_mac . c mac { ^ F } {}
+    // An address a host cannot own is not an offer, it is a way to take
+    // this machine off the network without anything failing: zero,
+    // 127.x, multicast and the broadcast address are all things a server
+    // can put in `yiaddr`, and a client that accepts one configures
+    // itself into silence. Ignore the message and keep asking — the
+    // retransmit timer is already the answer to "the server is useless".
+    ? && || == . m msg_type ( dhcp_msg_offer ) == . m msg_type ( dhcp_msg_ack ) ! ( ipv4_is_assignable . m yiaddr ) {
+        ^ F
+    } {}
     ? && == . m msg_type ( dhcp_msg_offer ) == . c state ( dhcp_state_selecting ) {
         = . c our_ip . m yiaddr
         = . c server_id . m server_id
@@ -355,7 +364,12 @@ $ `stdlib/net/udp4.nu`
         ? || || == . c state ( dhcp_state_requesting ) == . c state ( dhcp_state_renewing ) == . c state ( dhcp_state_rebinding ) {
             = . c our_ip . m yiaddr
             ? != . m server_id 0 { = . c server_id . m server_id } {}
-            = . c subnet ? != . m subnet 0 . m subnet ( ipv4_mask_from_prefix 24 )
+            // A mask is a run of ones followed by a run of zeros.
+            // Anything else makes `ipv4_in_subnet` and the directed
+            // broadcast mean something other than what they are named
+            // after, so a mask that is not one is treated as a mask that
+            // was not sent.
+            = . c subnet ? ( ipv4_mask_is_contiguous . m subnet ) . m subnet ( ipv4_mask_from_prefix 24 )
             = . c router . m router
             = . c dns . m dns
             : i lease ? > . m lease_secs 0 . m lease_secs 3600

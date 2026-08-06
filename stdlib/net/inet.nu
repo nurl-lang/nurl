@@ -149,6 +149,34 @@ $ `stdlib/core/vec.nu`
 
 @ ipv4_is_broadcast i addr → b { ^ == addr 4294967295 }
 
+// 127.0.0.0/8
+@ ipv4_is_loopback i addr → b { ^ == & addr 4278190080 2130706432 }
+
+// Is this an address a host can call its own? Zero is "no address", the
+// loopback block belongs to the machine's own stack, and multicast and
+// broadcast are destinations rather than identities. Every one of them
+// is something a DHCP server can put in `yiaddr`, and a host that
+// accepts one has configured itself off the network — silently, because
+// nothing fails until the first packet nobody answers.
+@ ipv4_is_assignable i addr → b {
+    ? == addr 0 { ^ F } {}
+    ? ( ipv4_is_loopback addr ) { ^ F } {}
+    ? ( ipv4_is_multicast addr ) { ^ F } {}
+    ? ( ipv4_is_broadcast addr ) { ^ F } {}
+    ^ T
+}
+
+// A netmask is a run of ones followed by a run of zeros — nothing else
+// is a mask, and the arithmetic underneath `ipv4_in_subnet` and
+// `ipv4_subnet_broadcast` quietly means something else if it is handed
+// one that is not. `mask | (mask - 1)` is all-ones exactly when the
+// zeros are a suffix; zero itself is not a usable mask here.
+@ ipv4_mask_is_contiguous i mask → b {
+    ? == mask 0 { ^ F } {}
+    ? == mask 4294967295 { ^ T } {}
+    ^ == & | mask - mask 1 4294967295 4294967295
+}
+
 // The all-ones directed broadcast for a subnet, e.g. 10.0.2.255.
 @ ipv4_subnet_broadcast i net i mask → i {
     ^ | & net mask & ^^ mask 4294967295 4294967295
