@@ -228,6 +228,10 @@ if [ $# -eq 0 ] && command -v curl >/dev/null 2>&1; then
 fi
 
 # ── the MCP endpoint, spoken to as a client would ───────────────
+# HOST PORTS HERE MUST NOT BE PORTS THE CORPUS BINDS. This gate used to
+# forward 18771, which `compiler/tests/http_server_limits.nu` listens on:
+# run the two suites on one machine and one of them fails with
+# NetAddrInUse, in a test that has nothing to do with either change.
 # Three requests, because one would not distinguish "the server
 # answered" from "the server answered correctly": initialize settles
 # the protocol, tools/list settles the catalogue, and tools/call
@@ -237,7 +241,7 @@ if [ $# -eq 0 ] && command -v curl >/dev/null 2>&1; then
     if "$ROOT/unikernel/build_unikernel.sh" "$ROOT/unikernel/demos/mcpd.nu" >/dev/null 2>&1; then
         out=$(mktemp)
         ( "$ROOT/unikernel/run_qemu.sh" "$ROOT/build/unikernel/mcpd.elf" -t 120 -- \
-            -netdev user,id=n0,hostfwd=tcp:127.0.0.1:18771-:18770 \
+            -netdev user,id=n0,hostfwd=tcp:127.0.0.1:18992-:18770 \
             -device virtio-net-device,netdev=n0 > "$out" 2>&1 ) &
         qpid=$!
         init=""
@@ -245,15 +249,15 @@ if [ $# -eq 0 ] && command -v curl >/dev/null 2>&1; then
             sleep 2
             init=$(curl -sS --max-time 10 -X POST -H 'Content-Type: application/json' \
                    -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"gate","version":"1"}}}' \
-                   http://127.0.0.1:18771/mcp 2>/dev/null)
+                   http://127.0.0.1:18992/mcp 2>/dev/null)
             [ -n "$init" ] && break
         done
         tools=$(curl -sS --max-time 10 -X POST -H 'Content-Type: application/json' \
                 -d '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' \
-                http://127.0.0.1:18771/mcp 2>/dev/null)
+                http://127.0.0.1:18992/mcp 2>/dev/null)
         called=$(curl -sS --max-time 10 -X POST -H 'Content-Type: application/json' \
                  -d '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"echo","arguments":{"text":"from the host"}}}' \
-                 http://127.0.0.1:18771/mcp 2>/dev/null)
+                 http://127.0.0.1:18992/mcp 2>/dev/null)
         kill $qpid 2>/dev/null; wait $qpid 2>/dev/null
         if printf '%s' "$init" | grep -q '"protocolVersion"' \
            && printf '%s' "$tools" | grep -q '"echo"' \

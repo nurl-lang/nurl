@@ -51,7 +51,7 @@ worth anything.
 ## State (2026-08-06)
 
 ```
-  PASS         450    corpus tests that build and run with no libc at all
+  PASS         451    corpus tests that build and run with no libc at all
   FAIL           0
   NEEDS-BARE    21    processes and signals — a unikernel has neither
   NEEDS-LIBM     0
@@ -290,7 +290,7 @@ privilege boundary with nothing on the other side of it is ceremony.
 ```
 $ curl -X POST -d '{"jsonrpc":"2.0","id":3,"method":"tools/call",
                     "params":{"name":"echo","arguments":{"text":"from the host"}}}' \
-       http://127.0.0.1:18771/mcp
+       http://127.0.0.1:18992/mcp
 {"jsonrpc":"2.0","id":3,"result":{"content":[{"type":"text","text":"from the host"}],
  "isError":false,"resultType":"complete"}}
 ```
@@ -381,7 +381,7 @@ All three gates run on every code change (the `unikernel` job):
 
 | | |
 |---|---|
-| `run_nolibc_tests.sh` | the ordinary corpus, no libc linked — 450 programs against their existing goldens |
+| `run_nolibc_tests.sh` | the ordinary corpus, no libc linked — 451 programs against their existing goldens |
 | `tests/run_unit_tests.sh` | the differentials against glibc, BOTH allocators fuzzed (the size-class one and the page allocator under it), the scheduler's schedule and its deadlock detector |
 | `run_qemu_tests.sh` | the guest, 18 checks: boot, memory, TSC, fibers, the TCP/UDP stack, virtio-net, DHCP, a baked-in filesystem, two deliberate CPU faults and their reports, a 200-request soak with the heap watched, and three servers answering a client on the host — plaintext, MCP and TLS 1.3 |
 
