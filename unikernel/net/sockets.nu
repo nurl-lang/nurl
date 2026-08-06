@@ -395,8 +395,22 @@ $ `stdlib/net/socket.nu`
     ^ d
 }
 
-// Wait until `fd` is ready. 1 = ready, 0 = the deadline passed,
-// -1 = nothing can ever make it ready (see the header).
+// Wait until `fd` is ready. The REACTOR contract, same as the hosted
+// runtime_ffi.c reactor: timeout_ms > 0 is a deadline, timeout_ms < 0
+// waits for ever, and timeout_ms == 0 is a POLL — answer "is it ready
+// right now" and return without waiting. 1 = ready, 0 = the deadline
+// passed (or a poll found nothing), -1 = nothing can ever make it
+// ready (see the header).
+//
+// The zero case is load-bearing, not a degenerate deadline: callers
+// probe readiness with 0 to decide whether a read would block (the
+// HTTP/2 pump drains frames while `wait_read(fd, 0)` says yes). Before
+// it was distinguished, 0 fell into "no deadline" — and the probe
+// blocked. Nobody noticed while nothing else armed a timer: with the
+// machine fully idle the deadlock detector answered -1, which reads as
+// "not readable" and let the pump continue by accident. The moment a
+// peer's read parked WITH a deadline, the probe really waited — for the
+// peer's whole timeout — and both sides starved each other into it.
 //
 // On a coroutine this PARKS: it registers on the fd, and whoever moves
 // the stack wakes it. On the main context — which cannot park inside
@@ -404,6 +418,14 @@ $ `stdlib/net/socket.nu`
 // step that runs nothing, with no frames queued and no device, is the
 // end of the road for this wait.
 @ __wait i fd i for_write i timeout_ms → i {
+    ? == timeout_ms 0 {
+        // A poll still drives once: readiness on this machine only
+        // changes when someone moves the stack, so "right now" means
+        // "after delivering what is already queued".
+        ? ( __ready fd for_write ) { ^ 1 } {}
+        : i _m ( __drive ( __ms ) )
+        ^ ? ( __ready fd for_write ) 1 0
+    } {}
     : i start ( __ms )
     : i slot ( __waiter_add fd for_write )
     : ~ i rc -1
@@ -433,12 +455,19 @@ $ `stdlib/net/socket.nu`
     ^ rc
 }
 
+// A socket's timeout in `__wait`'s reactor vocabulary: `sock_timeout`
+// says 0 for "none set", which to a blocking socket means "wait for
+// ever" — the reactor spells that -1, and its 0 means "do not wait at
+// all". Translate here, once, so no caller hands the reactor a poll
+// when it meant a block.
+@ __block_ms i tmo → i { ^ ? > tmo 0 tmo - 0 1 }
+
 // The blocking/non-blocking decision, in one place. Returns 1 when the
 // caller should retry the operation, 0 when it should report `err`.
 @ __should_retry i fd i for_write → i {
     : *SockTab st ( __tab )
     ? ( sock_is_nonblock st fd ) { ^ 0 } {}
-    : i tmo ( sock_timeout st fd )
+    : i tmo ( __block_ms ( sock_timeout st fd ) )
     : i r ( __wait fd for_write tmo )
     ? == r 1 { ^ 1 } {}
     // A deadline that passed is SO_RCVTIMEO firing, which the socket
@@ -547,7 +576,7 @@ $ `stdlib/net/socket.nu`
         } {}
         // Not there yet. A pending connection becomes writable exactly
         // when it is established, so the ordinary wait does the job.
-        : i r ( __wait fd 1 ( sock_timeout st fd ) )
+        : i r ( __wait fd 1 ( __block_ms ( sock_timeout st fd ) ) )
         ? != r 1 {
             ( sock_close st fd ( __ms ) )
             ^ ( sock_err_fd st ? == r 0 ( sock_err_again ) ( sock_err_closed ) )
