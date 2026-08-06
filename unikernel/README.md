@@ -131,6 +131,21 @@ asking for the time panics. `wallclock=` carries the boot epoch the
 same way — a functionality input, not a security control, since the
 host already controls the whole image.
 
+## The flagship, so far
+
+```
+$ curl --insecure https://127.0.0.1:18443/
+hello from a guest over TLS
+```
+
+A 369 KiB image, and everything the handshake needs it owns: the
+certificate and the key come out of the filesystem baked into it, the
+entropy is RDRAND with a panic and no fallback, the clock X.509
+validity is checked against arrives on the kernel command line, and the
+bytes travel over the pure TCP stack and the virtio-net driver. The
+handshake is `stdlib/std/tls.nu` — pure NURL, no libssl, which is why
+it links here at all.
+
 ## Accuracy, stated
 
 `nolibc/math.c` is a from-scratch libm and does not claim correct
@@ -155,7 +170,7 @@ Both gates run on every code change (the `unikernel` job):
 |---|---|
 | `run_nolibc_tests.sh` | the ordinary corpus, no libc linked — 450 programs against their existing goldens |
 | `tests/run_unit_tests.sh` | the differentials, the allocator fuzzer, the scheduler's schedule and its deadlock detector |
-| `run_qemu_tests.sh` | the guest: boot, memory, TSC, fibers, the TCP/UDP stack, virtio-net, DHCP, a baked-in filesystem, and a server answering a client on the host |
+| `run_qemu_tests.sh` | the guest: boot, memory, TSC, fibers, the TCP/UDP stack, virtio-net, DHCP, a baked-in filesystem, and two servers answering a client on the host — one plaintext, one TLS 1.3 |
 
 The QEMU job runs under TCG because no runner has `/dev/kvm`. Slower,
 identical otherwise — except for the TSC frequency, which no leaf
