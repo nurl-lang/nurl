@@ -80,5 +80,13 @@ send without a peer is an error, not a silent drop: ok
 the seeded stack sends the SYN, not an ARP request: ok
 and connects with no retransmit at all: ok
 the far end accepted it: ok
+the default ceiling is a POSIX-shaped 1024: ok
+accept past the ceiling is refused: ok
+and the pending connection is still pending: ok
+an established connection was not orphaned: ok
+with room, the same connection accepts: ok
+the pending queue drained: ok
+listen past the ceiling reports an error: ok
+a ceiling of 0 means no ceiling: ok
 no fd is left open: ok
 net_socket: all ok

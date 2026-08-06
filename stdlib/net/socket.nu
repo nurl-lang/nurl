@@ -137,7 +137,21 @@ $ `stdlib/net/tcpstack.nu`
     ( Vec i ) fds  // *Sock, as integers — NURL has no Vec of pointers
     i ephemeral  // next ephemeral port for an unbound listener
     i our_ip
+    i max_fds  // the ceiling; 0 means "no ceiling"
 }
+
+// How many sockets may be open at once. A hosted program has this
+// whether it asks for one or not — the kernel answers EMFILE and the
+// server keeps serving what it already has. This layer had no such
+// limit: the table grew for every concurrent connection, so a peer that
+// opens ten thousand of them against a small machine does not get
+// refused, it gets the machine. A ceiling turns that back into what
+// every server's accept loop is already written for.
+//
+// 1024 is the number a POSIX programmer expects, and the point of the
+// default is familiarity rather than tuning — `sock_set_max_fds` is
+// there for a machine that knows its own size.
+@ sock_default_max_fds → i { ^ 1024 }
 
 // fds start at 3. Not decoration: 0 is how the socket ABI spells a
 // failed handle, and a program that prints an fd should not be able to
@@ -152,6 +166,7 @@ $ `stdlib/net/tcpstack.nu`
     = . st fds ( vec_new [i] )
     = . st ephemeral 32768
     = . st our_ip our_ip
+    = . st max_fds ( sock_default_max_fds )
     ^ st
 }
 
@@ -223,7 +238,24 @@ $ `stdlib/net/tcpstack.nu`
     = . s opts 0
 }
 
-@ __alloc_fd * SockTab st → i {
+// The ceiling, and a way to raise or remove it (0 = no ceiling). A
+// machine that knows how much memory it has knows this number better
+// than the default does.
+@ sock_set_max_fds * SockTab st i n → v { = . st max_fds ? > n 0 n 0 }
+
+@ sock_max_fds * SockTab st → i { ^ . st max_fds }
+
+// Would one more socket fit? Asked BEFORE anything irreversible
+// happens — `sock_accept` in particular checks it before dequeuing a
+// pending connection, so a refusal leaves that connection in the
+// backlog for the next call instead of orphaning an established one
+// nobody holds an fd for.
+@ sock_can_open * SockTab st → b {
+    ? <= . st max_fds 0 { ^ T } {}
+    ^ < ( sock_open_count st ) . st max_fds
+}
+
+@ __alloc_fd_unbounded * SockTab st → i {
     : i n ( vec_len [i] . st fds )
     : ~ i k 0
     ~ < k n {
@@ -240,12 +272,26 @@ $ `stdlib/net/tcpstack.nu`
     ^ + n ( __fd_base )
 }
 
+// -1 when the table is full. Every caller turns that into the error its
+// own operation reports, because "too many open files" arrives at a
+// NURL program through whatever `accept` or `listen` answers.
+@ __alloc_fd * SockTab st → i {
+    ? ! ( sock_can_open st ) { ^ -1 } {}
+    ^ ( __alloc_fd_unbounded st )
+}
+
 // An fd that exists only to carry an error. The socket ABI reports a
 // failed `connect`/`listen`/`accept` as a HANDLE whose `err_kind` is
 // set — not as a null — because the caller closes it either way. This
 // is what the shims hand back on those paths.
+//
+// It IGNORES the ceiling, and has to: the ceiling's whole purpose is to
+// turn "the machine ran out" into an error the caller receives, and an
+// error that cannot be allocated is not an error the caller receives.
+// These handles are transient — every caller closes one immediately —
+// so the exemption is bounded by the number of failures in flight.
 @ sock_err_fd * SockTab st i err → i {
-    : i fd ( __alloc_fd st )
+    : i fd ( __alloc_fd_unbounded st )
     : *Sock s ( __sock st fd )
     = . s err err
     ^ fd
@@ -486,6 +532,10 @@ $ `stdlib/net/tcpstack.nu`
     } {}
     : i lidx ( tstack_listen . st ts ip p backlog )
     ? < lidx 0 { ^ ( sock_err_fd st ( sock_err_bind ) ) } {}
+    ? ! ( sock_can_open st ) {
+        ( tstack_listener_close . st ts lidx )
+        ^ ( sock_err_fd st ( sock_err_other ) )
+    } {}
     : i fd ( __alloc_fd st )
     : *Sock s ( __sock st fd )
     = . s kind ( sock_kind_listener )
@@ -507,6 +557,21 @@ $ `stdlib/net/tcpstack.nu`
         ^ - 0 ( sock_err_accept )
     } {}
     ? . l shut {
+        = . l err ( sock_err_accept )
+        ^ - 0 ( sock_err_accept )
+    } {}
+    // The ceiling is checked BEFORE the connection is dequeued. Taking
+    // it out of the backlog and then finding nowhere to put it would
+    // leave an established connection nobody holds an fd for — the peer
+    // thinks it is connected and nothing will ever read it. Left in the
+    // backlog it is simply not accepted yet, which is a state TCP and
+    // every accept loop already understand.
+    //
+    // The error is `accept`, not `again`: `again` means "ask me later"
+    // and a listener with a pending connection stays readable, so a
+    // reactor would hand the loop straight back and spin. A hard error
+    // stops that, and the connection is still there when an fd frees.
+    ? ! ( sock_can_open st ) {
         = . l err ( sock_err_accept )
         ^ - 0 ( sock_err_accept )
     } {}
@@ -558,6 +623,7 @@ $ `stdlib/net/tcpstack.nu`
     ? && != port 0 ( __port_taken_kind st ( sock_kind_udp ) p ) {
         ^ ( sock_err_fd st ( sock_err_addr_in_use ) )
     } {}
+    ? ! ( sock_can_open st ) { ^ ( sock_err_fd st ( sock_err_other ) ) } {}
     : i fd ( __alloc_fd st )
     : *Sock s ( __sock st fd )
     : *UdpBox b # *UdpBox ( nurl_alloc Z UdpBox )
@@ -716,6 +782,10 @@ $ `stdlib/net/tcpstack.nu`
 // an error: TCP's own retransmit timer sends it.
 @ sock_connect * SockTab st i ip i port i local_port i now → i {
     ? || <= port 0 > port 65535 { ^ ( sock_err_fd st ( sock_err_other ) ) } {}
+    // Before the connection exists, not after: a SYN sent for a socket
+    // that cannot be created is a connection the peer accepts and this
+    // machine has forgotten about.
+    ? ! ( sock_can_open st ) { ^ ( sock_err_fd st ( sock_err_other ) ) } {}
     : i cidx ( tstack_connect . st ts ip port local_port now . st out )
     ? < cidx 0 { ^ ( sock_err_fd st ( sock_err_other ) ) } {}
     : i fd ( __alloc_fd st )
