@@ -131,6 +131,56 @@ if [ $# -eq 0 ]; then
     fi
 fi
 
+# ── the smallest machine it still works on ──────────────────────
+# Everything else here runs with 256 MiB, which hides the question a
+# density-minded operator actually asks. The floor was measured — hello
+# answers on 3 MiB, the HTTP server on 4 — and these run with headroom
+# over it, so what this gate really pins is APPETITE: a change that
+# doubles what the guest needs before it can answer fails here rather
+# than on somebody's Firecracker host.
+#
+# The last case is the one that matters most: below the floor the
+# machine must say so. A guest that quietly wanders off is what the
+# memory work in this directory was about.
+if [ $# -eq 0 ]; then
+    demos=$((demos + 1))
+    ok=1
+    "$ROOT/unikernel/build_unikernel.sh" "$TESTS/hello.nu" >/dev/null 2>&1 || ok=0
+    small=$("$ROOT/unikernel/run_qemu.sh" "$ROOT/build/unikernel/hello.elf" -t 60 -- -m 4 2>&1)
+    printf '%s' "$small" | grep -q 'Hello, NURL!' || ok=0
+
+    tiny=$("$ROOT/unikernel/run_qemu.sh" "$ROOT/build/unikernel/hello.elf" -t 60 -- -m 2 2>&1)
+    tinycode=$?
+    printf '%s' "$tiny" | grep -q 'no usable memory above the image' || ok=0
+    [ "$tinycode" = 127 ] || ok=0
+
+    if command -v curl >/dev/null 2>&1; then
+        "$ROOT/unikernel/build_unikernel.sh" "$ROOT/unikernel/demos/httpd.nu" >/dev/null 2>&1 || ok=0
+        out=$(mktemp)
+        ( "$ROOT/unikernel/run_qemu.sh" "$ROOT/build/unikernel/httpd.elf" -t 90 -- -m 8 \
+            -netdev user,id=n0,hostfwd=tcp:127.0.0.1:18099-:8080 \
+            -device virtio-net-device,netdev=n0 > "$out" 2>&1 ) &
+        qpid=$!
+        body=""
+        for _ in 1 2 3 4 5 6 7 8 9 10; do
+            sleep 2
+            body=$(curl -sS --max-time 8 http://127.0.0.1:18099/ 2>/dev/null)
+            [ -n "$body" ] && break
+        done
+        wait $qpid
+        [ "$body" = "hello from a guest" ] || ok=0
+        rm -f "$out"
+    fi
+
+    if [ "$ok" = 1 ]; then
+        echo "PASS smallmem (4 MiB hello, 8 MiB server, 2 MiB says why not)"
+    else
+        echo "FAIL smallmem"
+        printf '%s\n' "$tiny" | head -3 | sed 's/^/     /'
+        fails=$((fails + 1))
+    fi
+fi
+
 # ── the demo with a filesystem and arguments ────────────────────
 # Built with --fs, run with args on the kernel command line: the two
 # halves of B7, and the only demo whose build and invocation differ

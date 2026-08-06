@@ -246,12 +246,28 @@ rather than guessed:
 | `virtio_mmio.device=…` | where the devices are | appended by the hypervisor; the guest parses it, and a guest with no match reports "no device" rather than probing blindly |
 | `args="…"` | the program's argv | when the program takes arguments. ONE key, quoted, because QEMU appends its own entries after `-append` and a program that read the tail of the line would be handed them |
 
+**How small it goes.** Measured, by asking QEMU for less and less until
+the answer stopped coming:
+
+| | |
+|---|---|
+| `hello` | answers on **3 MiB** |
+| the HTTP server, over virtio-net and DHCP | answers on **4 MiB** |
+| the HTTPS server, TLS 1.3 with an RSA-2048 certificate | answers on **4 MiB** |
+| below that | it SAYS so: 3 MiB of TLS is `nurl: out of memory (requested 24 bytes)` and an abort; 2 MiB is `the hypervisor reported no usable memory above the image` and exit 127 |
+
+The gates run with 256 MiB, which hides that question entirely, so
+`run_qemu_tests.sh` also boots `hello` on 4 MiB and the server on 8 —
+headroom over the floor, because what is worth pinning is appetite, and
+a change that doubles what the guest needs should fail here rather than
+on somebody's Firecracker host.
+
 **Sizes and limits**, all of them deliberate and all of them checkable:
 
 | | |
 |---|---|
 | vCPUs | one. Fibers are cooperative; there is no preemption and no SMP |
-| memory | whatever the hypervisor reports; 256 MiB is what the gates run with |
+| memory | whatever the hypervisor reports; 256 MiB is what the gates run with, 4 MiB is what a server needs (see above) |
 | MTU | 1500. Frames are refused above 2036 bytes rather than truncated |
 | IP fragments | dropped, counted, never reassembled. A datagram over the MTU does not arrive |
 | open files | 16, from the baked-in archive, read-only |
@@ -387,7 +403,7 @@ All three gates run on every code change (the `unikernel` job):
 |---|---|
 | `run_nolibc_tests.sh` | the ordinary corpus, no libc linked — 451 programs against their existing goldens |
 | `tests/run_unit_tests.sh` | the differentials against glibc, BOTH allocators fuzzed (the size-class one and the page allocator under it), the scheduler's schedule and its deadlock detector |
-| `run_qemu_tests.sh` | the guest, 18 checks: boot, memory, TSC, fibers, the TCP/UDP stack, virtio-net, DHCP, a baked-in filesystem, two deliberate CPU faults and their reports, a 200-request soak with the heap watched, and three servers answering a client on the host — plaintext, MCP and TLS 1.3 |
+| `run_qemu_tests.sh` | the guest, 19 checks: boot, memory, TSC, fibers, the TCP/UDP stack, virtio-net, DHCP, a baked-in filesystem, two deliberate CPU faults and their reports, a 200-request soak with the heap watched, a 4 MiB machine and a 2 MiB one that refuses to boot, and three servers answering a client on the host — plaintext, MCP and TLS 1.3 |
 
 The frame path has a gate of its own in the ordinary corpus:
 `net_frame_fuzz` drives `stack_rx` with bytes nobody chose and asserts
