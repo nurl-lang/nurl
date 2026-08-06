@@ -16,6 +16,9 @@
 #  code back at all. isa-debug-exit is a QEMU-side cross-check and is
 #  attached when the machine supports it.
 #
+#  NURL_APPEND is added to the kernel command line — that is where a
+#  program's own arguments go, as a single `args="…"` key (plan B0).
+#
 #  Exit status: the guest's, or 124 if the deadline passed with no
 #  sentinel line (a hang looks like a hang, not like a pass).
 # ============================================================
@@ -69,7 +72,7 @@ timeout -k 5s "${TIMEOUT}s" "$QEMU" \
     -accel "$ACCEL" -cpu max -m 256 \
     -nodefaults -no-reboot -no-user-config \
     -global virtio-mmio.force-legacy=false \
-    -kernel "$IMG" -append "tsc_khz=${NURL_TSC_KHZ:-1000000} wallclock=$(date +%s)" \
+    -kernel "$IMG" -append "tsc_khz=${NURL_TSC_KHZ:-1000000} wallclock=$(date +%s) ${NURL_APPEND:-}" \
     -serial stdio -display none \
     ${EXTRA[@]+"${EXTRA[@]}"} > "$out" 2>&1
 qemu_status=$?

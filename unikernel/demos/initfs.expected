@@ -1,0 +1,6 @@
+argc: 4
+arg: --token
+arg: abc
+arg: --verbose
+file: hello from the baked-in filesystem
+a file that is not there: ENOENT

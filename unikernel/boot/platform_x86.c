@@ -183,8 +183,25 @@ static void mem_init(const struct hvm_start_info *si) {
  * here — a bump allocator cannot return a hole in the middle, and the
  * one caller that unmaps (a finished coroutine's stack) is reclaimed by
  * runtime_bare's own free list rather than by the kernel. */
+/* unikernel/boot/initfs.c — the baked-in filesystem. Declared here
+ * because every one of these is reached from the POSIX names below,
+ * which are what NURL's FFI actually calls. */
+int fs_is_file_fd(int fd);
+pf_ssize_t fs_read_fd(int fd, void *buf, pf_size_t n);
+long long fs_lseek_fd(int fd, long long off, int whence);
+int fs_close_fd(int fd);
+const unsigned char *fs_map_fd(int fd, unsigned long off);
+
 void *mmap(void *addr, unsigned long len, int prot, int flags, int fd, long off) {
-    (void)addr; (void)prot; (void)flags; (void)fd; (void)off;
+    (void)addr; (void)prot; (void)flags;
+    /* A file-backed mapping of the baked-in filesystem is a pointer
+     * into it — the image is already in memory, and read-only is
+     * exactly what the mapping asked for. Anonymous mappings fall
+     * through to the bump allocator below. */
+    if (fd >= 0 && fs_is_file_fd(fd)) {
+        const unsigned char *p = fs_map_fd(fd, (unsigned long)off);
+        return p ? (void *)p : (void *)-1;
+    }
     unsigned long need = (len + 4095) & ~4095UL;
     if (!heap_next || (unsigned long)(heap_end - heap_next) < need)
         return (void *)-1;                  /* MAP_FAILED — the caller checks */
@@ -238,6 +255,14 @@ static void split_2m(u64 *pde) {
     pt_pool_used++;
     for (int i = 0; i < 512; i++) pt[i] = (frame + (u64)i * 4096) | 0x3;
     *pde = ((u64)(unsigned long)pt) | 0x3;           /* present | writable */
+}
+
+/* An advisory call about pages this machine does not reclaim. Success
+ * is the honest answer — the advice was heard and there is nothing to
+ * act on — and it is what every caller of madvise already handles. */
+int madvise(void *p, unsigned long len, int advice) {
+    (void)p; (void)len; (void)advice;
+    return 0;
 }
 
 int mprotect(void *p, unsigned long len, int prot) {
@@ -427,15 +452,31 @@ long long write(int fd, const void *buf, unsigned long n) {
 }
 
 /* No console input. 0 is EOF, which every reader already handles; -1
- * with an errno would make them retry forever. */
+ * with an errno would make them retry forever.
+ *
+ * The POSIX names are the ones NURL's FFI calls — `std/fs.nu` opens
+ * with `open` and sizes with `lseek` — so they are the ones that
+ * dispatch to the baked-in filesystem. Defining only the `nl_*` layer
+ * left `lseek` returning -1 for every file in the image, and
+ * `read_file` reported ENOENT about a file it had successfully
+ * opened. */
 long long read(int fd, void *buf, unsigned long n) {
-    (void)fd; (void)buf; (void)n;
+    if (fs_is_file_fd(fd)) return (long long)fs_read_fd(fd, buf, n);
+    (void)buf; (void)n;
     return 0;
 }
 
-int open(const char *p, int fl, int mode) { (void)p; (void)fl; (void)mode; return -1; }
-int close(int fd) { (void)fd; return 0; }
-long long lseek(int fd, long long off, int whence) { (void)fd; (void)off; (void)whence; return -1; }
+int nl_open(const char *path, int flags, int mode);
+int open(const char *p, int fl, int mode) { return nl_open(p, fl, mode); }
+int close(int fd) {
+    if (fs_is_file_fd(fd)) return fs_close_fd(fd);
+    return 0;
+}
+long long lseek(int fd, long long off, int whence) {
+    if (fs_is_file_fd(fd)) return fs_lseek_fd(fd, off, whence);
+    (void)off; (void)whence;
+    return -1;
+}
 
 static void pf_shutdown(int code);
 
@@ -443,8 +484,15 @@ static void pf_shutdown(int code);
  * that is the seam syscall_linux.c defines, so a guest that replaces
  * that file has to define it too. Same functions, one indirection up. */
 pf_ssize_t nl_write(int fd, const void *buf, pf_size_t n) { return (pf_ssize_t)write(fd, buf, n); }
+/* Reads come from the baked-in filesystem when the descriptor names a
+ * file in it, and from the console otherwise — which has nothing to
+ * say. `nl_open` lives in initfs.c: opening is entirely that file's
+ * business, and there is nothing else on this machine to open. */
+pf_ssize_t fs_read_fd(int fd, void *buf, pf_size_t n);
+long long fs_lseek_fd(int fd, long long off, int whence);
+int fs_close_fd(int fd);
+
 pf_ssize_t nl_read(int fd, void *buf, pf_size_t n) { return (pf_ssize_t)read(fd, buf, n); }
-int nl_open(const char *path, int flags, int mode) { return open(path, flags, mode); }
 int nl_close(int fd) { return close(fd); }
 long long nl_lseek(int fd, long long off, int whence) { return lseek(fd, off, whence); }
 void *nl_map(pf_size_t len) { return mmap(0, len, 0, 0, -1, 0); }
@@ -532,6 +580,49 @@ extern char **nl_environ;          /* nolibc/misc.c owns the storage */
 extern void nl_tls_init_guest(void);
 extern int main(int argc, char **argv);
 
+/* `args="…"` from the command line, split on spaces into argv.
+ *
+ * One key, not "everything after the last flag": QEMU's
+ * auto-kernel-cmdline APPENDS its virtio entries after -append, so a
+ * program that took the tail of the line would receive the
+ * hypervisor's device list as arguments (plan B0). The quotes are
+ * required for the same reason — they say where the program's
+ * arguments end. */
+#define ARGV_MAX 32
+static char *guest_argv[ARGV_MAX + 1];
+static char  argv_buf[1024];
+
+static int build_argv(const char *cl) {
+    int argc = 1;
+    guest_argv[0] = (char *)"nurl";
+    if (!cl) return argc;
+
+    const char *p = cl;
+    while (*p) {
+        if (p[0] == 'a' && p[1] == 'r' && p[2] == 'g' && p[3] == 's' &&
+            p[4] == '=' && p[5] == '"') {
+            const char *q = p + 6;
+            unsigned long n = 0;
+            while (*q && *q != '"' && n < sizeof argv_buf - 1) argv_buf[n++] = *q++;
+            argv_buf[n] = 0;
+            /* Split in place: every run of non-spaces is one argument,
+             * and the terminator goes where the space was. */
+            unsigned long i = 0;
+            while (i < n && argc < ARGV_MAX) {
+                while (i < n && argv_buf[i] == ' ') argv_buf[i++] = 0;
+                if (i >= n) break;
+                guest_argv[argc++] = &argv_buf[i];
+                while (i < n && argv_buf[i] != ' ') i++;
+            }
+            break;
+        }
+        while (*p && *p != ' ') p++;
+        while (*p == ' ') p++;
+    }
+    guest_argv[argc] = 0;
+    return argc;
+}
+
 void kmain(unsigned long start_info_paddr) {
     static char *no_argv[2];
     const struct hvm_start_info *si =
@@ -547,9 +638,9 @@ void kmain(unsigned long start_info_paddr) {
     time_init();
     nl_tls_init_guest();          /* before the first __thread access */
 
-    no_argv[0] = (char *)"nurl";
-    no_argv[1] = 0;
-    nl_environ = &no_argv[1];     /* an empty environment, terminated */
+    no_argv[0] = 0;
+    nl_environ = no_argv;         /* an empty environment, terminated */
 
-    exit(main(1, no_argv));
+    int argc = build_argv(cmdline);
+    exit(main(argc, guest_argv));
 }
