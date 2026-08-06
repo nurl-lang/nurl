@@ -148,6 +148,50 @@ if [ $# -eq 0 ] && command -v curl >/dev/null 2>&1; then
     fi
 fi
 
+# ── the MCP endpoint, spoken to as a client would ───────────────
+# Three requests, because one would not distinguish "the server
+# answered" from "the server answered correctly": initialize settles
+# the protocol, tools/list settles the catalogue, and tools/call
+# settles that a tool actually ran and its output came back.
+if [ $# -eq 0 ] && command -v curl >/dev/null 2>&1; then
+    demos=$((demos + 1))
+    if "$ROOT/unikernel/build_unikernel.sh" "$ROOT/unikernel/demos/mcpd.nu" >/dev/null 2>&1; then
+        out=$(mktemp)
+        ( "$ROOT/unikernel/run_qemu.sh" "$ROOT/build/unikernel/mcpd.elf" -t 120 -- \
+            -netdev user,id=n0,hostfwd=tcp:127.0.0.1:18771-:18770 \
+            -device virtio-net-device,netdev=n0 > "$out" 2>&1 ) &
+        qpid=$!
+        init=""
+        for _ in 1 2 3 4 5 6 7 8 9 10; do
+            sleep 2
+            init=$(curl -sS --max-time 10 -X POST -H 'Content-Type: application/json' \
+                   -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"gate","version":"1"}}}' \
+                   http://127.0.0.1:18771/mcp 2>/dev/null)
+            [ -n "$init" ] && break
+        done
+        tools=$(curl -sS --max-time 10 -X POST -H 'Content-Type: application/json' \
+                -d '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' \
+                http://127.0.0.1:18771/mcp 2>/dev/null)
+        called=$(curl -sS --max-time 10 -X POST -H 'Content-Type: application/json' \
+                 -d '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"echo","arguments":{"text":"from the host"}}}' \
+                 http://127.0.0.1:18771/mcp 2>/dev/null)
+        kill $qpid 2>/dev/null; wait $qpid 2>/dev/null
+        if printf '%s' "$init" | grep -q '"protocolVersion"' \
+           && printf '%s' "$tools" | grep -q '"echo"' \
+           && printf '%s' "$called" | grep -q 'from the host'; then
+            echo "PASS mcpd (MCP endpoint in the guest, client on the host)"
+        else
+            echo "FAIL mcpd"
+            printf '     init=%.90s\n     tools=%.90s\n     call=%.90s\n' "$init" "$tools" "$called"
+            head -4 "$out" | sed 's/^/     /'
+            fails=$((fails + 1))
+        fi
+        rm -f "$out"
+    else
+        echo "FAIL mcpd (build)"; fails=$((fails + 1))
+    fi
+fi
+
 # ── TLS, which needs a certificate that is not in the repo ──────
 # Generated here rather than committed: a private key in a git history
 # is a private key forever, even a throwaway one, and `openssl req` is
