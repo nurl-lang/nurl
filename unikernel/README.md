@@ -146,6 +146,33 @@ bytes travel over the pure TCP stack and the virtio-net driver. The
 handshake is `stdlib/std/tls.nu` — pure NURL, no libssl, which is why
 it links here at all.
 
+## Measured
+
+`unikernel/bench_boot.sh` (QEMU 8.2, **TCG** — no `/dev/kvm` on this
+machine):
+
+| | |
+|---|---|
+| plaintext image | 353 936 bytes |
+| TLS image | 377 992 bytes (the extra 24 KiB is the whole of TLS 1.3) |
+| cold VM to first HTTP answer | 2.5 – 6.6 s |
+| cold VM to first HTTPS answer | ~11 s |
+
+Two honest caveats, because the numbers are worth less without them.
+TCG is an **interpreter**: it is the floor, not the ceiling, and the
+plan's "low single-digit ms" target is a KVM number that this machine
+cannot produce. And the spread on the plaintext figure is the
+measurement's, not the guest's — the harness polls, so its resolution
+is its retry interval plus QEMU's own start-up jitter. What the number
+is good for today is noticing a regression; a real boot-time figure
+needs the guest to timestamp its own first answer, which is the next
+thing to add to it.
+
+Everything above the "answer" is included: the hypervisor starting, the
+guest booting, DHCP completing against QEMU's server, the socket
+binding, and — for the TLS row — an RSA handshake, which is where most
+of that eleven seconds goes on an interpreter.
+
 ## Accuracy, stated
 
 `nolibc/math.c` is a from-scratch libm and does not claim correct
