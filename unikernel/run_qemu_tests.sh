@@ -148,5 +148,44 @@ if [ $# -eq 0 ] && command -v curl >/dev/null 2>&1; then
     fi
 fi
 
+# ── TLS, which needs a certificate that is not in the repo ──────
+# Generated here rather than committed: a private key in a git history
+# is a private key forever, even a throwaway one, and `openssl req` is
+# already required by the corpus's own TLS test.
+if [ $# -eq 0 ] && command -v curl >/dev/null 2>&1 && command -v openssl >/dev/null 2>&1; then
+    demos=$((demos + 1))
+    tlsdir=$(mktemp -d)
+    mkdir -p "$tlsdir/etc/tls"
+    openssl req -x509 -newkey rsa:2048 -keyout "$tlsdir/etc/tls/key.pem" \
+        -out "$tlsdir/etc/tls/cert.pem" -days 3650 -nodes -subj "/CN=nurl-guest" \
+        >/dev/null 2>&1
+    if "$ROOT/unikernel/build_unikernel.sh" --fs "$tlsdir" \
+            "$ROOT/unikernel/demos/httpsd.nu" >/dev/null 2>&1; then
+        out=$(mktemp)
+        ( "$ROOT/unikernel/run_qemu.sh" "$ROOT/build/unikernel/httpsd.elf" -t 120 -- \
+            -netdev user,id=n0,hostfwd=tcp:127.0.0.1:18443-:8443 \
+            -device virtio-net-device,netdev=n0 > "$out" 2>&1 ) &
+        qpid=$!
+        body=""
+        for _ in 1 2 3 4 5 6 7 8 9 10; do
+            sleep 3
+            body=$(curl -sS --insecure --max-time 10 https://127.0.0.1:18443/ 2>/dev/null)
+            [ -n "$body" ] && break
+        done
+        wait $qpid
+        if [ "$body" = "hello from a guest over TLS" ]; then
+            echo "PASS httpsd (TLS 1.3 in the guest, curl on the host)"
+        else
+            echo "FAIL httpsd (curl got \"$body\")"
+            head -6 "$out" | sed 's/^/     /'
+            fails=$((fails + 1))
+        fi
+        rm -f "$out"
+    else
+        echo "FAIL httpsd (build)"; fails=$((fails + 1))
+    fi
+    rm -rf "$tlsdir"
+fi
+
 echo "── QEMU guest run: $((${#names[@]} + demos - fails))/$((${#names[@]} + demos)) ──"
 [ "$fails" -eq 0 ]
