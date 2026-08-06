@@ -87,7 +87,7 @@ $ `unikernel/drivers/virtionet.nu`
     // whole path back.
     : ( Vec u ) payload ( vec_new [u] )
     ( bytes_extend_str payload `nurl` )
-    : TxResult t ( stack_tx_udp st ( gw_ip ) 4000 9 payload 0 4 ( ms ) out )
+    : TxResult t ( stack_tx_udp st 0 ( gw_ip ) 4000 9 payload 0 4 ( ms ) out )
     ( nurl_print `first send is ARP-pending: ` )
     ( nurl_print ? == . t status ( tx_arp_pending ) `yes` `no` )
     ( nurl_print `\n` )
@@ -107,7 +107,7 @@ $ `unikernel/drivers/virtionet.nu`
     // answers port 9 (discard), so what is asserted is that the send
     // path completed rather than that anything replied.
     ? resolved {
-        : TxResult t2 ( stack_tx_udp st ( gw_ip ) 4000 9 payload 0 4 ( ms ) out )
+        : TxResult t2 ( stack_tx_udp st 0 ( gw_ip ) 4000 9 payload 0 4 ( ms ) out )
         ( nurl_print `datagram sent: ` )
         ( nurl_print ? == . t2 status ( tx_sent ) `yes` `no` )
         ( nurl_print `\n` )

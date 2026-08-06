@@ -31,6 +31,12 @@ static FILE nl_stdin  = { 0, NL_F_READ,  -1, 0, 0, { 0 } };
 static FILE nl_stdout = { 1, NL_F_WRITE, -1, 0, 0, { 0 } };
 static FILE nl_stderr = { 2, NL_F_WRITE | NL_F_UNBUF, -1, 0, 0, { 0 } };
 
+/* The flags word of a stream, for a caller that has no business seeing
+ * the struct. The unikernel's boot code uses it to say what only it
+ * knows: this machine's stdout is a serial console, so it is line
+ * buffered. */
+int *nl_file_flags(FILE *f) { return &f->flags; }
+
 FILE *stdin  = &nl_stdin;
 FILE *stdout = &nl_stdout;
 FILE *stderr = &nl_stderr;

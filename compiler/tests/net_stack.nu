@@ -54,7 +54,7 @@ $ `stdlib/net/stack.nu`
 
     // ── A sends UDP to B: ARP must resolve first ─────────────────
     : *PktBuf w1 ( pktbuf_new )
-    : TxResult t1 ( stack_tx_udp a ( ip_b ) 4000 7000 payload 0 15 1000 w1 )
+    : TxResult t1 ( stack_tx_udp a 0 ( ip_b ) 4000 7000 payload 0 15 1000 w1 )
     ( pb `first send is ARP-pending: ` == . t1 status ( tx_arp_pending ) )
     ( pb `an ARP request was emitted: ` > . t1 emitted 0 )
     ( pb `one frame out, and it is the 42-byte ARP request: ` && == ( pktbuf_count w1 ) 1 == ( pktbuf_len w1 0 ) 42 )
@@ -75,7 +75,7 @@ $ `stdlib/net/stack.nu`
 
     // ── retry: now the datagram actually goes out ────────────────
     : *PktBuf w4 ( pktbuf_new )
-    : TxResult t2 ( stack_tx_udp a ( ip_b ) 4000 7000 payload 0 15 1000 w4 )
+    : TxResult t2 ( stack_tx_udp a 0 ( ip_b ) 4000 7000 payload 0 15 1000 w4 )
     ( pb `retry sends for real: ` == . t2 status ( tx_sent ) )
     // 14 eth + 20 ip + 8 udp + 15 payload = 57
     ( pb `frame is 57 bytes: ` && == ( pktbuf_count w4 ) 1 == ( pktbuf_len w4 0 ) 57 )
@@ -100,7 +100,7 @@ $ `stdlib/net/stack.nu`
 
     // ── B replies to A: no ARP needed, B already learned A ───────
     : *PktBuf w6 ( pktbuf_new )
-    : TxResult t3 ( stack_tx_udp b ( ip_a ) 7000 4000 payload 0 15 1100 w6 )
+    : TxResult t3 ( stack_tx_udp b 0 ( ip_a ) 7000 4000 payload 0 15 1100 w6 )
     ( pb `reply needs no new ARP: ` == . t3 status ( tx_sent ) )
     : *PktBuf w7 ( pktbuf_new )
     : RxResult r4 ( deliver a . w6 bytes 1100 w7 )
@@ -146,7 +146,7 @@ $ `stdlib/net/stack.nu`
 
     // ── routing: an off-link destination goes via the gateway ────
     : *PktBuf w8 ( pktbuf_new )
-    : TxResult t4 ( stack_tx_udp a ( ipv4_make 8 8 8 8 ) 4000 53 payload 0 15 2000 w8 )
+    : TxResult t4 ( stack_tx_udp a 0 ( ipv4_make 8 8 8 8 ) 4000 53 payload 0 15 2000 w8 )
     ( pb `off-link send is ARP-pending: ` == . t4 status ( tx_arp_pending ) )
     : EthHdr geh ( eth_parse . w8 bytes )
     : ArpPkt gap ( arp_parse . w8 bytes . geh payload_off . geh payload_len )
@@ -157,7 +157,7 @@ $ `stdlib/net/stack.nu`
     // MAC but 8.8.8.8 still in the IP header.
     ( arp_cache_insert . a arp ( ip_gw ) ( mac_gw ) 2000 )
     : *PktBuf w9 ( pktbuf_new )
-    : TxResult t5 ( stack_tx_udp a ( ipv4_make 8 8 8 8 ) 4000 53 payload 0 15 2000 w9 )
+    : TxResult t5 ( stack_tx_udp a 0 ( ipv4_make 8 8 8 8 ) 4000 53 payload 0 15 2000 w9 )
     ( pb `off-link send now succeeds: ` == . t5 status ( tx_sent ) )
     : EthHdr feh ( eth_parse . w9 bytes )
     ( pb `ethernet dst is the gateway MAC: ` == . feh dst ( mac_gw ) )
@@ -166,11 +166,11 @@ $ `stdlib/net/stack.nu`
 
     // ── unreachable: ARP gives up rather than queueing forever ───
     : *PktBuf w10 ( pktbuf_new )
-    : TxResult u1 ( stack_tx_udp a ( ipv4_make 10 0 2 99 ) 4000 9 payload 0 15 3000 w10 )
+    : TxResult u1 ( stack_tx_udp a 0 ( ipv4_make 10 0 2 99 ) 4000 9 payload 0 15 3000 w10 )
     ( pb `unknown host: first attempt ARPs: ` == . u1 status ( tx_arp_pending ) )
-    : TxResult u2 ( stack_tx_udp a ( ipv4_make 10 0 2 99 ) 4000 9 payload 0 15 4100 w10 )
-    : TxResult u3 ( stack_tx_udp a ( ipv4_make 10 0 2 99 ) 4000 9 payload 0 15 5200 w10 )
-    : TxResult u4 ( stack_tx_udp a ( ipv4_make 10 0 2 99 ) 4000 9 payload 0 15 6300 w10 )
+    : TxResult u2 ( stack_tx_udp a 0 ( ipv4_make 10 0 2 99 ) 4000 9 payload 0 15 4100 w10 )
+    : TxResult u3 ( stack_tx_udp a 0 ( ipv4_make 10 0 2 99 ) 4000 9 payload 0 15 5200 w10 )
+    : TxResult u4 ( stack_tx_udp a 0 ( ipv4_make 10 0 2 99 ) 4000 9 payload 0 15 6300 w10 )
     ( pb `after max retries: unreachable: ` == . u4 status ( tx_unreachable ) )
 
     // ── drop accounting ─────────────────────────────────────────
@@ -217,7 +217,7 @@ $ `stdlib/net/stack.nu`
     // ── addressless stack (pre-DHCP) ────────────────────────────
     : *NetStack c ( stack_new ( mac_gw ) 0 0 0 )
     : *PktBuf w11 ( pktbuf_new )
-    : TxResult t6 ( stack_tx_udp c ( ip_a ) 68 67 payload 0 15 100 w11 )
+    : TxResult t6 ( stack_tx_udp c 0 ( ip_a ) 68 67 payload 0 15 100 w11 )
     ( pb `no address → tx refused: ` == . t6 status ( tx_no_address ) )
     // …but a broadcast datagram from 0.0.0.0 still goes out: that is
     // exactly the shape DHCP DISCOVER needs.

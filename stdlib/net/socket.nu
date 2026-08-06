@@ -680,7 +680,9 @@ $ `stdlib/net/tcpstack.nu`
         = . s err ( sock_err_closed )
         ^ - 0 ( sock_err_closed )
     } {}
-    : TxResult t ( stack_tx_udp . . st ts net ip . s local_port port src off len now . st out )
+    // A socket bound to loopback sends FROM loopback; an unbound one
+    // passes 0 and gets the interface's address.
+    : TxResult t ( stack_tx_udp . . st ts net . s local_ip ip . s local_port port src off len now . st out )
     ? == . t status ( tx_sent ) {
         = . s err 0
         ^ len

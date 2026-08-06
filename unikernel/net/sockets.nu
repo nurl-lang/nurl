@@ -91,6 +91,11 @@ $ `stdlib/net/socket.nu`
 
 & `c` @ nurl_fiber_unpark i handle → v
 
+// The device poller below is a coroutine like any other; spawning one
+// is the two halves of a closure handed to the runtime, exactly as
+// std/async.nu does it.
+& `c` @ nurl_fiber_spawn *u fn *u env → i
+
 : Shim {
     * NetStack net
     * TcpStack ts
@@ -152,7 +157,36 @@ $ `stdlib/net/socket.nu`
     // 0.0.0.0 checksums every segment against the wrong pseudo-header
     // and goes unanswered.
     ? != have 0 { ( __dhcp_configure sh ) } {}
+    ? != have 0 { ( __start_poller ) } {}
     ^ sh
+}
+
+// A device needs somebody to ask it. Every socket wait drives the
+// machine while it waits, which is enough for a program that is always
+// waiting for something — and not enough for a server whose every
+// coroutine is parked: then nobody is left to call `netdev_rx`, the run
+// queue is empty, no timer is armed, and the runtime correctly concludes
+// that nothing can ever happen and aborts. It is wrong only because the
+// world is bigger than this program, and the machine has an interface
+// the world can knock on.
+//
+// So the interface gets a coroutine of its own: drive, then sleep a
+// millisecond, forever. It costs one 68 KiB stack and a 1 kHz tick on a
+// machine that polls its driver anyway, and it exists ONLY when there is
+// a device — a loopback-only program keeps the deadlock detector's proof
+// intact, because for it "nothing runnable, no timer" really is the end.
+@ __poll_forever → v {
+    ~ T {
+        : i _m ( __drive ( __ms ) )
+        ( nurl_fiber_sleep_ms 1 )
+    }
+}
+
+@ __start_poller → v {
+    : ( @ v ) body \ → v { ( __poll_forever ) }
+    : *u fnp # *u body 0
+    : *u env # *u body 1
+    : i _f ( nurl_fiber_spawn fnp env )
 }
 
 // Run the DHCP client — the same state machine `net/dhcp.nu` covers

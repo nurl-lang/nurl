@@ -71,6 +71,7 @@ done
 $CC $KFLAGS -c "$BOOT/platform_x86.c" -o "$OUTDIR/platform.o"
 $CC $KFLAGS -c "$BOOT/initfs.c"       -o "$OUTDIR/boot_initfs.o"
 $CC $KFLAGS -c "$BOOT/pagealloc.c"    -o "$OUTDIR/boot_pagealloc.o"
+$CC $KFLAGS -c "$BOOT/nosys.c"        -o "$OUTDIR/boot_nosys.o"
 
 # The baked-in filesystem: a directory becomes a tar, and the tar
 # becomes an object with two symbols around it. With no --fs the
@@ -98,7 +99,8 @@ $CC -nostdlib -static -no-pie -Wl,-T,"$BOOT/link.ld" -Wl,--build-id=none \
     "$OUTDIR/boot.o" "$OUTDIR/$base.o" \
     "$OUTDIR/runtime_core.o" "$OUTDIR/runtime_ctx.o" "$OUTDIR/runtime_bare.o" \
     "$OUTDIR/platform.o" "$OUTDIR/tls_guest.o" \
-    "$OUTDIR/boot_initfs.o" "$OUTDIR/boot_pagealloc.o" "$OUTDIR/initfs_data.o" \
+    "$OUTDIR/boot_initfs.o" "$OUTDIR/boot_pagealloc.o" "$OUTDIR/boot_nosys.o" \
+    "$OUTDIR/initfs_data.o" \
     "$OUTDIR"/nl_*.o
 
 echo "built $OUT"

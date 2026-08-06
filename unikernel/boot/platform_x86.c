@@ -44,6 +44,14 @@ long long lseek(int fd, long long off, int whence);
 void *mmap(void *addr, unsigned long len, int prot, int flags, int fd, long off);
 int munmap(void *p, unsigned long len);
 
+/* The two things this file needs from nolibc's stdio: the stream and
+ * the flag that makes a console behave like one. Declared rather than
+ * included, the way the rest of this file declares what it uses. */
+struct nl_file;
+extern struct nl_file *stdout;
+int *nl_file_flags(struct nl_file *f);
+#define PF_F_LINEBUF 0x20
+
 typedef unsigned long      pf_size_t;
 typedef long               pf_ssize_t;
 typedef unsigned long long u64;
@@ -379,6 +387,7 @@ pf_ssize_t fs_read_fd(int fd, void *buf, pf_size_t n);
 long long fs_lseek_fd(int fd, long long off, int whence);
 int fs_close_fd(int fd);
 const unsigned char *fs_map_fd(int fd, unsigned long off);
+int fs_exists(const char *path);
 
 void *mmap(void *addr, unsigned long len, int prot, int flags, int fd, long off) {
     (void)addr; (void)prot; (void)flags;
@@ -778,7 +787,23 @@ long nl_ret(long r) {
     return r;
 }
 int mkdir(const char *p, int mode) { (void)p; (void)mode; return -1; }
-int access(const char *p, int mode) { (void)p; (void)mode; return -1; }
+
+/* access(2), against the filesystem this machine actually has. F_OK (0)
+ * and R_OK (4) are answerable — the image either contains the file or it
+ * does not — and W_OK (2) and X_OK (1) are refused, because the archive
+ * lives in the text segment and nothing in it is writable or runnable.
+ *
+ * The version that refused everything was worse than useless: a program
+ * that checks `file_exists` before reading its certificate was told the
+ * certificate was not there, and went off to write a new one onto a
+ * read-only filesystem. A stub that lies about the machine's own
+ * contents produces exactly that shape of bug. */
+int access(const char *p, int mode) {
+    if (!p) return -1;
+    if (mode & 3) { nl_errno_slot = 13 /* EACCES */; return -1; }
+    if (!fs_exists(p)) { nl_errno_slot = 2 /* ENOENT */; return -1; }
+    return 0;
+}
 int getpid(void) { return 1; }
 
 /* ── shutdown ────────────────────────────────────────────────────── */
@@ -881,6 +906,19 @@ void kmain(unsigned long start_info_paddr) {
         (const struct hvm_start_info *)start_info_paddr;
 
     uart_init();
+    /* This machine's stdout is a SERIAL CONSOLE, so it is line
+     * buffered — the flag nolibc has always had and nothing ever set.
+     *
+     * Fully buffered was the wrong default here in the way that only
+     * shows up on the programs this target is for: a server does not
+     * exit, so it never flushes, so a guest that printed a startup
+     * banner and then spent an hour answering requests had printed
+     * NOTHING as far as anyone watching the console could tell. The
+     * first thing an operator does with an appliance is read its log.
+     * Guest only: the Linux -nostdlib build keeps libc's rule (a
+     * redirected stdout is fully buffered), which is what its goldens
+     * are written against. */
+    *nl_file_flags(stdout) |= PF_F_LINEBUF;
     /* Before anything that can fault, which is everything: an IDT
      * installed after the first mistake describes nothing. */
     tss_init();

@@ -331,7 +331,12 @@ $ `stdlib/net/stack.nu`
         : i n ( pktbuf_len o k )
         // Straight from the PktBuf buffer — no temporary Vec, because
         // the segment is already sitting there as a range.
-        : TxResult r ( stack_tx_ip4 . ts net . c remote_ip ( ip_proto_tcp ) . o bytes s n now out )
+        // FROM the address this connection was checksummed with. A
+        // connection to 127.0.0.1 is sourced from 127.0.0.1 even on a
+        // machine whose interface has an address of its own; sending it
+        // from the interface's address instead makes the pseudo-header
+        // disagree with the receiver's and the segment vanishes.
+        : TxResult r ( stack_tx_ip4 . ts net . c local_ip . c remote_ip ( ip_proto_tcp ) . o bytes s n now out )
         = emitted + emitted . r emitted
         = k + k 1
     }
@@ -385,7 +390,10 @@ $ `stdlib/net/stack.nu`
         ( seq_add . s seq ( tcpseg_seq_len s ) ) 20 0 0 -1 empty 0 0 )
     }
     ( vec_free [u] empty )
-    : TxResult r ( stack_tx_ip4 . ts net src_ip ( ip_proto_tcp ) dg 0 ( vec_len [u] dg ) now out )
+    // The refusal comes from the address the offending segment was sent
+    // TO — including 127.0.0.1, whose RST must not claim to come from
+    // the interface.
+    : TxResult r ( stack_tx_ip4 . ts net dst_ip src_ip ( ip_proto_tcp ) dg 0 ( vec_len [u] dg ) now out )
     ( vec_free [u] dg )
     ^ . r emitted
 }
