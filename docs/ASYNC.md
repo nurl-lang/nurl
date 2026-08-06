@@ -133,6 +133,24 @@ A program that spawns work and prints the result gets zeros and exit 0
 — a silent wrong answer, not a slower right one. Treat a stubbed
 platform as "no async", not as "async without concurrency".
 
+**Where the backend exists, a spawn that fails is now loud.** It used to
+have the same shape as the stub for a different reason: `spawn` returns
+a `Fiber`, not a `Result`, so when the runtime could not allocate a
+fiber's stack the caller was handed a handle to nothing. Measured on a
+4 MiB unikernel guest, a program that asked for 200 fibers got eleven,
+printed the count of the eleven as though that were the answer, and
+exited 0. Both runtimes now print
+
+```
+nurl: cannot create a fiber — out of memory for its stack (11 live)
+```
+
+and abort, the way the runtime already aborts when `malloc` fails — a
+fiber's stack is an allocation like any other, and "this machine is too
+small for this program" is a thing to say rather than to hide. Budget
+**68 KiB per fiber** (a 64 KiB stack and a 4 KiB guard page) when
+sizing a machine.
+
 ## 6. Design lineage
 
 The shape pulls from Go's M:N scheduler, Boost.Fiber's runtime API

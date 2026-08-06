@@ -3249,11 +3249,26 @@ static void nurl__enqueue_new(NurlFiber *f) {
     nurl__wake_one();
 }
 
+/* A fiber that could not be created cannot be handed back. `spawn` in
+ * stdlib/std/async.nu returns a Fiber, not a Result, so a zero here
+ * becomes a handle to nothing: the body never runs and the program
+ * reports whatever the missing worker's absence looks like — measured
+ * on a small machine, a program that asked for 200 fibers printed the
+ * count of the 11 it got and exited 0. The runtime already aborts when
+ * malloc fails; a fiber stack is an allocation like any other. */
+static void nurl__fiber_spawn_failed(void) {
+    fprintf(stderr, "nurl: cannot create a fiber — out of memory for its "
+                    "stack (or the stack could not be protected)\n");
+    fflush(stderr);
+    fflush(stdout);
+    abort();
+}
+
 long long nurl_fiber_spawn(void *fn, void *env) {
     if (!fn) return 0;
     if (!nurl__sched.initialized) nurl_runtime_init(0);
     NurlFiber *f = nurl__fiber_alloc(fn, env, 0);
-    if (!f) return 0;
+    if (!f) nurl__fiber_spawn_failed();
     nurl__enqueue_new(f);
     return (long long)(uintptr_t)f;
 }
@@ -3262,7 +3277,7 @@ long long nurl_fiber_spawn_joinable(void *fn, void *env) {
     if (!fn) return 0;
     if (!nurl__sched.initialized) nurl_runtime_init(0);
     NurlFiber *f = nurl__fiber_alloc(fn, env, 1);
-    if (!f) return 0;
+    if (!f) nurl__fiber_spawn_failed();
     nurl__enqueue_new(f);
     return (long long)(uintptr_t)f;
 }
