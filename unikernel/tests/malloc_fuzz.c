@@ -127,6 +127,40 @@ int main(void) {
             printf("CORRUPT slot %ld at the end\n", i);
             return 1;
         }
+
+    /* ── the sizes that cannot be served ────────────────────────────
+     *
+     * A length near the top of the word is where a size-class allocator
+     * quietly goes wrong: `n + sizeof(header)` wraps, the wrapped value
+     * lands in a small class, and the caller is handed thirty-two bytes
+     * for a request it believes was granted in full. The answer must be
+     * a refusal, and a refusal is a NULL — never a short block.
+     */
+    {
+        static const nl_size_t huge[] = {
+            (nl_size_t)-1, (nl_size_t)-2, (nl_size_t)-16, (nl_size_t)-4096,
+            ((nl_size_t)-1) / 2 + 1,
+        };
+        unsigned h;
+        for (h = 0; h < sizeof huge / sizeof huge[0]; h++) {
+            void *p = malloc(huge[h]);
+            if (p) {
+                printf("malloc(%llu) returned a block of %llu usable bytes\n",
+                       (unsigned long long)huge[h],
+                       (unsigned long long)malloc_usable_size(p));
+                return 1;
+            }
+        }
+        if (calloc((nl_size_t)-1, 2)) { printf("calloc overflow returned a block\n"); return 1; }
+        {   /* a refused realloc must leave the original block alone */
+            unsigned char *p = (unsigned char *)malloc(64);
+            if (!p) { printf("the 64-byte control allocation failed\n"); return 1; }
+            p[0] = 0xA5;
+            if (realloc(p, (nl_size_t)-1)) { printf("realloc to SIZE_MAX succeeded\n"); return 1; }
+            if (p[0] != 0xA5) { printf("a refused realloc freed or moved the block\n"); return 1; }
+            free(p);
+        }
+    }
     printf("malloc fuzz ok: %ld ops (%ld malloc, %ld calloc, %ld realloc, %ld free)\n",
            (long)OPS, allocs, callocs, reallocs, frees);
     return 0;

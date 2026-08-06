@@ -91,6 +91,14 @@ $CC $FREE -c "$ROOT/unikernel/tests/malloc_fuzz.c" -o "$OUT/malloc_fuzz.o" || ex
 $CC -nostdlib -static -o "$OUT/malloc_fuzz" "$OUT/malloc_fuzz.o" "$OUT"/nl_*.o || exit 2
 step malloc_fuzz "$OUT/malloc_fuzz"
 
+# 3b. the page allocator under that allocator — the guest's mmap and
+# munmap. Ordinary hosted C: it is portable by construction, and the
+# oracle needs a real region to write patterns into.
+# shellcheck disable=SC2086
+$CC -O2 -o "$OUT/pagealloc_fuzz" "$ROOT/unikernel/tests/pagealloc_fuzz.c" \
+    "$ROOT/unikernel/boot/pagealloc.c" || exit 2
+step pagealloc_fuzz "$OUT/pagealloc_fuzz"
+
 # 4. the cooperative scheduler, with no libc under it either.
 # shellcheck disable=SC2086
 $CC $FREE -c "$ROOT/unikernel/runtime_bare.c" -o "$OUT/runtime_bare.o" || exit 2

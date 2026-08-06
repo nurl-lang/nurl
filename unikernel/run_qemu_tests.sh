@@ -90,6 +90,47 @@ if [ $# -eq 0 ]; then
     done
 fi
 
+# ── the machine's own failure report ────────────────────────────
+# Every other gate here checks that something worked. This one checks
+# what happens when something does not: a guest with no IDT answers a
+# null dereference by shutting down silently, which from the host is
+# indistinguishable from a clean exit. Two faults, two reports, one
+# distinct exit code — 126, which is neither a panic (127) nor anything
+# a program can return.
+if [ $# -eq 0 ]; then
+    demos=$((demos + 1))
+    if "$ROOT/unikernel/build_unikernel.sh" "$ROOT/unikernel/demos/fault.nu" >/dev/null 2>&1; then
+        nullout=$(NURL_APPEND='args="null 0"' \
+                  "$ROOT/unikernel/run_qemu.sh" "$ROOT/build/unikernel/fault.elf" -t 60 2>&1)
+        nullcode=$?
+        stackout=$(NURL_APPEND='args="stack 100000000"' \
+                   "$ROOT/unikernel/run_qemu.sh" "$ROOT/build/unikernel/fault.elf" -t 60 2>&1)
+        stackcode=$?
+        ok=1
+        # A null store must be a page fault at address zero, not a quiet
+        # write to physical page zero — which is what an identity-mapped
+        # guest does until the page is unmapped on purpose.
+        printf '%s' "$nullout" | grep -q '#PF page fault' || ok=0
+        printf '%s' "$nullout" | grep -q 'cr2=0x0 (not present) on write' || ok=0
+        [ "$nullcode" = 126 ] || ok=0
+        # A recursion past the end of the boot stack must be a fault on
+        # its guard page, reported from the IST stack — the ordinary one
+        # is exactly what ran out.
+        printf '%s' "$stackout" | grep -q '#PF page fault' || ok=0
+        [ "$stackcode" = 126 ] || ok=0
+        if [ "$ok" = 1 ]; then
+            echo "PASS fault (both faults reported, exit 126)"
+        else
+            echo "FAIL fault (null exit $nullcode, stack exit $stackcode)"
+            printf '%s\n' "$nullout" | head -4 | sed 's/^/     /'
+            printf '%s\n' "$stackout" | head -4 | sed 's/^/     /'
+            fails=$((fails + 1))
+        fi
+    else
+        echo "FAIL fault (build)"; fails=$((fails + 1))
+    fi
+fi
+
 # ── the demo with a filesystem and arguments ────────────────────
 # Built with --fs, run with args on the kernel command line: the two
 # halves of B7, and the only demo whose build and invocation differ

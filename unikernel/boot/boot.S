@@ -31,6 +31,11 @@
  * The start_info pointer is saved before any of that, because %ebx is
  * not preserved across the transition and it is the only handle on the
  * memory map, the command line and the modules.
+ *
+ * This file also holds the 256 interrupt stubs the IDT points at (see
+ * `idt_init` in platform_x86.c). They are here rather than in C because
+ * an entry point that must not touch a register before saving it is not
+ * something a compiler can be asked for.
  */
 
 /* ── the PVH note ─────────────────────────────────────────────────
@@ -160,12 +165,80 @@ long_entry:
     hlt
     jmp     3b
 
-    .section .rodata
+/* ── the interrupt stubs ──────────────────────────────────────────
+ *
+ * One entry per vector, all the same size, so the IDT can be filled in
+ * C with `isr_stubs + 16 * n` instead of a 256-line table of symbols
+ * that has to be kept in step with itself.
+ *
+ * Ten vectors push an error code and the rest do not. The stub for the
+ * rest pushes a zero in its place, so `isr_common` and the C handler
+ * see one frame shape and neither has to know which kind it got.
+ *
+ * Nothing here touches a register before it is saved: the whole point
+ * of a fault handler is to report what the machine was doing, and a
+ * handler that clobbers %rax first has destroyed part of the evidence.
+ */
+    .section .text
+    .code64
     .align 16
+    .globl isr_stubs
+isr_stubs:
+    .set    vec, 0
+    .rept   256
+    .align  16
+    .if (vec == 8) || (vec == 10) || (vec == 11) || (vec == 12) || \
+        (vec == 13) || (vec == 14) || (vec == 17) || (vec == 21) || \
+        (vec == 29) || (vec == 30)
+    /* the CPU already pushed an error code */
+    .else
+    pushq   $0
+    .endif
+    pushq   $vec
+    jmp     isr_common
+    .set    vec, vec + 1
+    .endr
+
+/* The saved frame, low address first — this order IS `struct
+ * fault_frame` in platform_x86.c, and the two are read together. */
+isr_common:
+    pushq   %rax
+    pushq   %rbx
+    pushq   %rcx
+    pushq   %rdx
+    pushq   %rsi
+    pushq   %rdi
+    pushq   %rbp
+    pushq   %r8
+    pushq   %r9
+    pushq   %r10
+    pushq   %r11
+    pushq   %r12
+    pushq   %r13
+    pushq   %r14
+    pushq   %r15
+
+    movq    %cr2, %rsi              /* the faulting address, if there is one */
+    movq    %rsp, %rdi              /* the frame we just built */
+    call    pf_exception            /* does not return */
+1:  cli
+    hlt
+    jmp     1b
+
+    .section .data
+    .align 16
+    .globl gdt64
 gdt64:
     .quad   0                                   /* null */
     .quad   0x00AF9A000000FFFF                  /* 0x08: 64-bit code */
     .quad   0x00CF92000000FFFF                  /* 0x10: data */
+    /* 0x18: the TSS descriptor, sixteen bytes and filled in at run time
+     * by `tss_init`. It cannot be written here: its base is a link-time
+     * symbol and the descriptor wants that address in three separate
+     * fields, which is not a relocation any assembler can emit. That is
+     * also why this table lives in .data now rather than .rodata. */
+    .quad   0
+    .quad   0
 gdt64_end:
 gdt64_ptr:
     .word   gdt64_end - gdt64 - 1
@@ -179,10 +252,35 @@ pd0:    .skip 4096 * 4
     .align 8
 boot_start_info: .skip 8
 
-    /* 64 KiB, the same size a coroutine gets. This is the only stack
-     * until the fiber runtime hands out its own. */
+    /* The task-state segment exists for one field: IST1, the stack a
+     * double fault and a page fault switch to. Without it, a fault
+     * caused by a stack that ran off its guard page is delivered on
+     * that same dead stack — the push faults, the double fault's push
+     * faults, and the machine triple-faults with nothing printed,
+     * which is precisely the failure the handler exists to describe. */
     .align 16
+    .globl tss64
+tss64:  .skip 104
+tss64_end:
+
+    .align 16
+    .skip 16 * 1024
+    .globl fault_stack_top
+fault_stack_top:
+
+    /* 64 KiB, the same size a coroutine gets. This is the only stack
+     * until the fiber runtime hands out its own.
+     *
+     * Page-aligned with its bottom exported, because a coroutine's
+     * stack gets a guard page and this one deserves the same: without
+     * it, a recursion that runs off the end writes into whatever .bss
+     * put underneath and the program carries on with someone else's
+     * variables. `pf_guard_boot_stack` arms it once memory is up. */
+    .align 4096
+    .globl boot_stack_bottom
+boot_stack_bottom:
     .skip 64 * 1024
+    .align 16
 boot_stack_top:
 
     .section .note.GNU-stack, "", @progbits
