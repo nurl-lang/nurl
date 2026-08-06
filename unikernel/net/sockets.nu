@@ -459,6 +459,11 @@ $ `stdlib/net/socket.nu`
 
 @ nurl_tcp_set_timeout i handle i ms → v { ( sock_set_timeout ( __tab ) handle ms ) }
 
+// What a read on this socket should wait for, in ms; 0 = for ever. The
+// fiber path in std/net.nu asks, because it parks on the reactor rather
+// than on SO_RCVTIMEO and has to be told the deadline.
+@ nurl_tcp_timeout_ms i handle → i { ^ ( sock_timeout ( __tab ) handle ) }
+
 @ nurl_tcp_ref i handle → v { ( sock_ref ( __tab ) handle ) }
 
 @ nurl_tcp_unref i handle → v { ( nurl_tcp_close handle ) }

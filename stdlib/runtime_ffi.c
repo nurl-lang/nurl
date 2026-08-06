@@ -754,6 +754,11 @@ typedef struct NurlTcp {
      * server_stop from another thread) defers the struct free until the
      * parked accept fiber has resumed and stopped touching the handle. */
     int           refcount;
+    /* What `nurl_tcp_set_timeout` was last told, in milliseconds (0 =
+     * none). The socket option is the authority for a BLOCKING read;
+     * this copy is for the fiber path, which cannot use SO_RCVTIMEO —
+     * it parks on the reactor instead, and has to be told how long. */
+    long long     timeout_ms;
 } NurlTcp;
 
 /* Wake the async reactor (if running) so it re-polls. Called after a fd is
@@ -1540,9 +1545,19 @@ char *nurl_tcp_local_addr(long long handle) {
     return out ? out : strdup("");
 }
 
+/* The deadline a read on this socket should honour, in ms; 0 = wait for
+ * ever. `std/net.nu`'s fiber path asks, because a parked fiber does not
+ * go through SO_RCVTIMEO and would otherwise wait for ever on a socket
+ * whose owner asked for 150 ms. */
+long long nurl_tcp_timeout_ms(long long handle) {
+    NurlTcp *h = (NurlTcp*)(uintptr_t)handle;
+    return h ? h->timeout_ms : 0;
+}
+
 void nurl_tcp_set_timeout(long long handle, long long ms) {
     NurlTcp *h = (NurlTcp*)(uintptr_t)handle;
     if (!h || h->fd == NURL_INVALID_SOCK) return;
+    h->timeout_ms = ms > 0 ? ms : 0;
 #ifdef _WIN32
     /* Win32 SO_RCVTIMEO is a DWORD of ms (not a timeval). */
     DWORD tv = (ms > 0) ? (DWORD)ms : 0;
