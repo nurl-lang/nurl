@@ -278,7 +278,7 @@ on somebody's Firecracker host.
 | MTU | 1500. Frames are refused above 2036 bytes rather than truncated |
 | IP fragments | dropped, counted, never reassembled. A datagram over the MTU does not arrive |
 | open files | 16, from the baked-in archive, read-only |
-| sockets | the fd table in `stdlib/net/socket.nu`; ephemeral ports are per-protocol, TCP and UDP have separate spaces |
+| sockets | 1024 open at once (`sock_set_max_fds` to change it); past that `accept` refuses and leaves the connection in the backlog rather than the machine running out. Ephemeral ports are per-protocol; TCP and UDP have separate spaces |
 | name resolution | literals and `localhost`. Anything else is refused, not guessed |
 | processes, signals | none. `fork`/`exec` report unsupported; there is one address space and nothing to fork |
 | GPU | none in a microVM; a swarm node advertises CPU-wasm capability only |

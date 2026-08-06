@@ -297,6 +297,56 @@ $ `stdlib/net/socket.nu`
     ( tstack_free ts2 )
     ( stack_free net2 )
 
+    // ── the ceiling on open sockets ──────────────────────────────
+    //
+    // A hosted program gets this from the kernel whether it asks or
+    // not: past RLIMIT_NOFILE, `accept` answers EMFILE and the server
+    // keeps serving what it already has. This layer had no such limit,
+    // so the fd table grew for every concurrent connection and a peer
+    // that opened enough of them did not get refused — it got the
+    // machine. Three things are asserted: that the refusal happens,
+    // that it does NOT consume the pending connection (which would
+    // orphan an established one nobody holds an fd for), and that the
+    // same accept succeeds once an fd is free.
+    : *NetStack net3 ( stack_new ( lo_mac ) ( lo_ip ) ( lo_mask ) 0 )
+    : *TcpStack ts3 ( tstack_new net3 7000 )
+    : *SockTab st3 ( sock_new ts3 ( lo_ip ) )
+    ( sock_seed_self st3 7000 )
+    ( pb `the default ceiling is a POSIX-shaped 1024: ` == ( sock_max_fds st3 ) 1024 )
+
+    : i l3 ( sock_listen st3 0 9100 8 )
+    : i k3 ( sock_connect st3 ( lo_ip ) 9100 0 7000 )
+    ( pump st3 7000 12 )
+    // Two fds are open (the listener and the client); a ceiling of two
+    // means the next accept has nowhere to put the connection.
+    ( sock_set_max_fds st3 2 )
+    : i refused ( sock_accept st3 l3 )
+    ( pb `accept past the ceiling is refused: ` == refused - 0 ( sock_err_accept ) )
+    ( pb `and the pending connection is still pending: ` == ( tstack_pending_count ts3 0 ) 1 )
+    ( pb `an established connection was not orphaned: ` == ( sock_open_count st3 ) 2 )
+
+    // Room again, and the same connection is accepted — nothing about
+    // it was consumed by the refusal.
+    ( sock_set_max_fds st3 8 )
+    : i a3 ( sock_accept st3 l3 )
+    ( pb `with room, the same connection accepts: ` > a3 0 )
+    ( pb `the pending queue drained: ` == ( tstack_pending_count ts3 0 ) 0 )
+
+    // The ceiling applies to what a program opens for itself, too.
+    ( sock_set_max_fds st3 3 )
+    : i denied ( sock_listen st3 0 9200 4 )
+    ( pb `listen past the ceiling reports an error: ` != ( sock_err st3 denied ) 0 )
+    ( sock_close st3 denied 7000 )
+    ( sock_set_max_fds st3 0 )
+    ( pb `a ceiling of 0 means no ceiling: ` ( sock_can_open st3 ) )
+
+    ( sock_close st3 a3 7000 ) ( sock_close st3 k3 7000 ) ( sock_close st3 l3 7000 )
+    ( pump st3 7000 24 )
+    ( sock_tick st3 + 7000 ( tcp_2msl_ms ) )
+    ( sock_free st3 )
+    ( tstack_free ts3 )
+    ( stack_free net3 )
+
     // ── teardown ─────────────────────────────────────────────────
     // Every handle here is manually managed and this stack is bound
     // for a machine with no process exit to sweep up after it, so the
