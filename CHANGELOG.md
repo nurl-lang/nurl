@@ -10,6 +10,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`boot: true` — the playground proves the image boots** (plan phase
+  U3). `POST /build_unikernel` can now boot the image it just built,
+  inside the container: TCG (no /dev/kvm there), no network device,
+  its own wall-clock bound via timeout(1) (`NURL_UNIKERNEL_BOOT_SECS`,
+  default 20 s), concurrency bounded by the compile permit the request
+  already holds. The reply's `boot_result` carries the guest console
+  (CR-stripped, capped at 64 KB), the parsed `[nurl-exit]` status,
+  `timed_out`, and qemu's own stderr — a failed boot is a diagnosis,
+  not an empty log. A server program that would listen forever still
+  proves it boots: the log holds what it printed, `exit` stays null.
+  qemu-system-x86 adds ~72 MB to the image. e2e: the booted guest's
+  print and exit 0 are asserted through the HTTP surface; a deployment
+  without qemu answers `ran: false` with a reason instead of failing.
+
 - **`POST /build_unikernel` — the playground builds bootable unikernel
   images** (plan phase U2). Body: `source` (+ `filename`), optional
   `args` (the guest's argv — returned inside the boot command, never

@@ -758,7 +758,26 @@ def t_build_unikernel_rest(c: Client) -> None:
         )
         assert_eq(f"files key {bad_key!r} rejected", status, 400)
 
-    # 3. A broken program answers with the compiler's message, loudly.
+    # 3. boot:true — the server boots the image and returns the console.
+    status, _, raw = c.post(
+        "/build_unikernel",
+        {"source": src, "boot": True},
+        timeout=240.0,
+    )
+    assert_eq("boot:true status 200", status, 200)
+    try:
+        j = json.loads(raw)
+        br = j.get("boot_result") or {}
+        if br.get("ran") is False and "not available" in (br.get("error") or ""):
+            print("  boot skipped: qemu not in this deployment")
+        else:
+            assert_true("boot ran", br.get("ran") is True, str(br)[:200])
+            assert_true("guest printed", "uk-e2e" in (br.get("log") or ""), (br.get("log") or "")[:200])
+            assert_eq("guest exited 0", br.get("exit"), 0)
+    except json.JSONDecodeError:
+        bad("boot result is JSON", f"got {raw[:200]!r}")
+
+    # 4. A broken program answers with the compiler's message, loudly.
     status, _, raw = c.post(
         "/build_unikernel",
         {"source": "@ main → i { ( nurl_println nope ) ^ 0 }"},
