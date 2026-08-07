@@ -11,6 +11,29 @@ and the concrete cure inline, so a wrong program tells you what to fix at the
 point you wrote it. If you hit a NURL compile error, the diagnostic is the
 source of truth — read it rather than guessing.
 
+One trap deserves naming because the compiler's report is a **warning**
+by default, and the program it describes still builds: every operator has
+a **fixed arity**, and `&` / `|` take exactly two operands. So
+
+```nurl
+? & a b c d { then } { else }        // NOT a four-way AND
+```
+
+reads as `? (& a b) c d`, leaving `c` and `d` consumed as the bare
+then/else values and the two blocks running as ordinary statements — the
+conditional logic is wrong and the binary works, which is why nothing
+downstream notices. Write n-1 operators for n conditions:
+
+```nurl
+? & & & a b c d { then } { else }    // (((a & b) & c) & d)
+```
+
+`nurlc` points its caret at the `?` and names the cure. Compile with
+`--strict-arity` to make it an error; this repo runs
+`tools/check_strict_arity.sh` over its whole first-party tree in CI, and
+that gate's first run found a shipped example culling every particle on
+every frame for exactly this reason.
+
 The few things that are *not* surprises but fixed properties of the language
 or its runtime live in their proper homes, not here:
 

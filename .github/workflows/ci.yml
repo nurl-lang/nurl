@@ -204,6 +204,18 @@ jobs:
         # nurlfmt IR-transparent (compiler/tests/nurlfmt_idempotent.sh).
         run: ./compiler/tests/nurlfmt_check.sh
 
+      - name: strict-arity gate (the n-ary '&'/'|' trap)
+        # `? & a b c d { then } { else }` reads as a four-way AND and is
+        # not one: `&` is BINARY, so `c` and `d` become the bare
+        # then/else values and the two blocks run as plain statements.
+        # The conditional logic is wrong and the compiler still emits a
+        # working binary, so nothing downstream can notice. nurlc warns
+        # by default and errors under --strict-arity; this runs the
+        # strict compiler over the whole first-party tree. Its first run
+        # found examples/audio_sparcles2.nu culling every particle on
+        # every frame, which is the class of bug it exists to stop.
+        run: ./tools/check_strict_arity.sh
+
       - name: HTTP-server per-request leak gate
         # Builds the leakcheck HTTP server with ASan+LSan and fails on ANY
         # leak across 21 requests. Uses the normal build/nurlc from ./build.sh

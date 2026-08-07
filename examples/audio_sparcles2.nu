@@ -158,8 +158,11 @@
                         = . fb + * y W x col
                     } {}
                 } {}
-                // Kill particles that wander off‑screen.
-                ? & >= x 0 < x W & >= y 0 < y H {} { = . plife i 0 }
+                // Kill particles that wander off‑screen. Four conditions,
+                // so three `&` — with two, the y test was consumed as the
+                // bare then-value and the kill ran as an unconditional
+                // statement, culling every particle on every frame.
+                ? & & & >= x 0 < x W >= y 0 < y H {} { = . plife i 0 }
             } {}
             = i + i 1
         }

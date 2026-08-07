@@ -179,6 +179,18 @@ run_one() {
             { echo "COMPILE FAIL"; } > "$act"
             if [[ -s "$err" ]]; then strip_root "$err"; echo "ERRORS" >> "$act"; append_capped "$act" "$err"; fi
         fi
+    # ── arity_strict_* — the n-ary '&'/'|' trap, which is only an
+    #                     error under --strict-arity. The diagnostic
+    #                     text is baselined because WHERE it points is
+    #                     the point: it must name the `?`, not the `{}`
+    #                     that finally revealed the mistake.
+    elif [[ "$name" == arity_strict_* ]]; then
+        if "$NURLC" --strict-arity "$src" > "$ll" 2>"$err"; then
+            { echo "COMPILE OK"; echo "(expected COMPILE FAIL but compiler accepted it)"; } > "$act"
+        else
+            { echo "COMPILE FAIL"; } > "$act"
+            if [[ -s "$err" ]]; then strip_root "$err"; echo "ERRORS" >> "$act"; append_capped "$act" "$err"; fi
+        fi
     # ── should_fail_* — COMPILE FAIL is the expected outcome ──
     elif [[ "$name" == should_fail_* ]]; then
         if "$NURLC" "$src" > "$ll" 2>"$err"; then
