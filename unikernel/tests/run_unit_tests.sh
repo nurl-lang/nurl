@@ -154,7 +154,12 @@ for seed in 7 99 12345; do
     step "math_diff(seed $seed)" "$OUT/math_diff" 60000 "$seed"
 done
 
-# 6. the bare mutex/cond fit what the NURL side allocates for them.
+# 6. build_unikernel.sh is a tool: foreign cwd, read-only repo,
+#    concurrent byte-identical builds, loud failures. Skips itself
+#    when build/nurlc is absent (the other gates here need only $CC).
+step build_tool_gate "$ROOT/unikernel/tests/build_tool_gate.sh"
+
+# 7. the bare mutex/cond fit what the NURL side allocates for them.
 #    Hosted on purpose: the comparison needs the real <pthread.h>, which
 #    is precisely what the freestanding build does not have.
 $CC -O2 "$ROOT/unikernel/tests/pthread_layout.c" "$OUT/runtime_bare.o" \

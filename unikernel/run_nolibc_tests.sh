@@ -68,7 +68,7 @@ one() {
     # Compile, and link in the NURL socket layer if this program needs
     # it — see unikernel/compile_nu.sh for why that is a recompile
     # rather than another object on the link line.
-    "$ROOT/unikernel/compile_nu.sh" "$src" "$work/$name.ll" "$work"
+    NURL_COMPILE_QUIET=1 "$ROOT/unikernel/compile_nu.sh" "$src" "$work/$name.ll" "$work"
     case $? in
         0) ;;
         3) echo "SKIP $name (does not compile standalone)"; return 0 ;;

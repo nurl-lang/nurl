@@ -35,6 +35,30 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SHIM="$ROOT/unikernel/net/sockets.nu"
 CC="${CC:-clang}"
 
+# The stdlib is HERE, and this script knows it. Without this a package
+# build (cwd = the package root, see below) resolved `stdlib/…` imports
+# against the package directory and died with "cannot open
+# stdlib/core/string.nu" — and worse, died SILENTLY, because the error
+# went to compile.err and nothing printed it. Callers may still point
+# NURL_STDLIB somewhere else; the default is the repo this script is in.
+export NURL_STDLIB="${NURL_STDLIB:-$ROOT}"
+
+# A failed step says WHY, on stderr, prefixed with whose voice it is.
+# The err files stay in the workdir for tooling; the human gets the
+# message at the moment of failure. This script cost its author twenty
+# minutes of "exit 3, no output" — never again.
+#
+# NURL_COMPILE_QUIET=1 restores the old silence for the one caller that
+# wants it: the corpus runner compiles a thousand tests and CLASSIFIES
+# failures by exit code — for it the noise would drown the report.
+fail() { # fail <exit-code> <errfile> <what>
+    if [ -z "${NURL_COMPILE_QUIET:-}" ]; then
+        echo "compile_nu.sh: $3 failed for $name:" >&2
+        sed 's/^/  /' "$2" >&2
+    fi
+    exit "$1"
+}
+
 SRC="$1"; OUT_LL="$2"; WORK="$3"
 # Absolute, before anything cds anywhere: the workdir below is chosen
 # per source, and a relative path stops meaning the same thing the
@@ -60,8 +84,8 @@ while [ "$probe" != "/" ]; do
 done
 cd "$workdir" || exit 2
 
-"$ROOT/build/nurlc" "$SRC" > "$OUT_LL" 2>"$WORK/compile.err" || exit 3
-"$CC" -O2 -c "$OUT_LL" -o "$OBJ" 2>"$WORK/cc.err" || exit 4
+"$ROOT/build/nurlc" "$SRC" > "$OUT_LL" 2>"$WORK/compile.err" || fail 3 "$WORK/compile.err" "nurlc"
+"$CC" -O2 -c "$OUT_LL" -o "$OBJ" 2>"$WORK/cc.err" || fail 4 "$WORK/cc.err" "$CC"
 
 # What does the shim define? Its own `@ nurl_*` definitions, read from
 # the file that defines them.
@@ -86,6 +110,6 @@ root_nu="$WORK/__with_sockets.nu"
     printf '$ `%s`\n' "${NURL_NETDEV:-$ROOT/unikernel/net/netdev_none.nu}"
 } > "$root_nu"
 
-"$ROOT/build/nurlc" "$root_nu" > "$OUT_LL" 2>"$WORK/compile.err" || exit 3
-"$CC" -O2 -c "$OUT_LL" -o "$OBJ" 2>"$WORK/cc.err" || exit 4
+"$ROOT/build/nurlc" "$root_nu" > "$OUT_LL" 2>"$WORK/compile.err" || fail 3 "$WORK/compile.err" "nurlc (with socket shim)"
+"$CC" -O2 -c "$OUT_LL" -o "$OBJ" 2>"$WORK/cc.err" || fail 4 "$WORK/cc.err" "$CC (with socket shim)"
 exit 0
