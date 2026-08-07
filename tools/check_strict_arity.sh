@@ -59,15 +59,27 @@ else
     )
 fi
 
-# compiler/tests/ carries fixtures whose JOB is to be wrong: the runner
-# reads their name prefix and expects them to fail. `arity_strict_*` is
-# this diagnostic's own regression, so the gate would flag the test that
-# proves the gate works. Those prefixes are skipped — a fixture that
-# demonstrates the trap is not a file that ships it.
+# compiler/tests/ carries fixtures whose JOB is to be wrong — including
+# this diagnostic's own regression, so without an exclusion the gate
+# flags the test that proves the gate works.
+#
+# Ask the GOLDEN, not the name. A golden whose first line is
+# "COMPILE FAIL" marks a test the corpus expects the compiler to reject;
+# run_san_tests.sh chose that rule for exactly this reason ("and
+# whatever tomorrow's negative test is called"). A name list would be
+# the fourth copy in this repo, and the copy that gets forgotten fails
+# in a way that reads as a real defect.
 is_deliberate_failure() {
     case "$1" in
-        compiler/tests/should_fail_*|compiler/tests/borrow_*|\
-        compiler/tests/diag_*|compiler/tests/arity_strict_*) return 0 ;;
+        compiler/tests/*) ;;
+        *) return 1 ;;
+    esac
+    local base golden
+    base="$(basename "$1" .nu)"
+    golden="$ROOT_DIR/compiler/tests/outputs/$base.txt"
+    [[ -f "$golden" ]] || return 1
+    case "$(head -n 1 "$golden")" in
+        "COMPILE FAIL"*) return 0 ;;
         *) return 1 ;;
     esac
 }
