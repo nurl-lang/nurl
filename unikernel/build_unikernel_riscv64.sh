@@ -102,7 +102,7 @@ cache_inputs() {
         "$NOLIBC"/dtoa.c "$NOLIBC"/math.c "$NOLIBC"/misc.c \
         "$NOLIBC"/setjmp_riscv64.S \
         "$BOOT"/platform_riscv64.c "$BOOT"/initfs.c "$BOOT"/pagealloc.c \
-        "$BOOT"/nosys.c "$BOOT"/fdt.c \
+        "$BOOT"/nosys.c "$BOOT"/fdt.c "$BOOT"/virtio_rng.c \
         "$BOOT"/tls_guest_riscv64.c "$BOOT"/boot_riscv64.S \
         "${BASH_SOURCE[0]}"
 }
@@ -120,6 +120,7 @@ cache_build() {
     $ZIG cc $KFLAGS -c "$BOOT/pagealloc.c"       -o "$CACHE/boot_pagealloc.o"
     $ZIG cc $KFLAGS -c "$BOOT/nosys.c"           -o "$CACHE/boot_nosys.o"
     $ZIG cc $KFLAGS -c "$BOOT/fdt.c"             -o "$CACHE/boot_fdt.o"
+    $ZIG cc $KFLAGS -c "$BOOT/virtio_rng.c"      -o "$CACHE/boot_virtio_rng.o"
     $ZIG cc $KFLAGS -c "$BOOT/tls_guest_riscv64.c" -o "$CACHE/tls_guest.o"
     $ZIG cc $KFLAGS -c "$BOOT/boot_riscv64.S"      -o "$CACHE/boot.o"
     $ZIG cc $KFLAGS -c "$NOLIBC/setjmp_riscv64.S" -o "$CACHE/nl_setjmp.o"
@@ -194,7 +195,7 @@ $ZIG cc -target $TARGET -nostdlib -static -Wl,-T,"$BOOT/link_riscv64.ld" \
     "$CACHE/runtime_core.o" "$CACHE/runtime_ctx.o" "$CACHE/runtime_bare.o" \
     "$CACHE/platform.o" "$CACHE/tls_guest.o" \
     "$CACHE/boot_initfs.o" "$CACHE/boot_pagealloc.o" "$CACHE/boot_nosys.o" \
-    "$CACHE/boot_fdt.o" \
+    "$CACHE/boot_fdt.o" "$CACHE/boot_virtio_rng.o" \
     "$OUTDIR/$base.initfs_data.o" \
     "$CACHE"/nl_*.o
 

@@ -46,12 +46,20 @@ typedef unsigned int       u32;
  * `nurl_boot_cmdline`: bootargs first, then the synthesized device
  * entries, so a program's `args="…"` is found before them and QEMU's
  * device list never reaches an argument parser. */
+#define FDT_MAX_DEVS 32
+
 struct fdt_facts {
     u64   ram_base;
     u64   ram_size;
     char  cmdline[2048];
     unsigned long cmdline_len;
     int   devices;            /* how many virtio-mmio nodes were seen */
+    /* …and where they are. The synthesized cmdline is for the NURL
+     * layer, which parses the x86 spelling; the boot layer has a
+     * driver of its own (boot/virtio_rng.c — this architecture may
+     * have no entropy instruction) and re-parsing a string it just
+     * produced would be one format conversion too many. */
+    u64   dev_base[FDT_MAX_DEVS];
 };
 
 static u32 fdt_be32(const unsigned char *p) {
@@ -184,6 +192,8 @@ int fdt_probe(const void *fdt_p, struct fdt_facts *out) {
                     cl_puthex(&devs, lvl[depth].reg_base);
                     cl_puts(&devs, ":");
                     cl_putu(&devs, lvl[depth].irq + 32);
+                    if (out->devices < FDT_MAX_DEVS)
+                        out->dev_base[out->devices] = lvl[depth].reg_base;
                     out->devices++;
                 }
                 if (lvl[depth].is_memory && lvl[depth].reg_size && !out->ram_size) {

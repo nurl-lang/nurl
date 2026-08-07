@@ -107,6 +107,34 @@ if [ $# -eq 0 ]; then
         echo "FAIL fault (build)"; fails=$((fails + 1))
     fi
 
+    # Entropy from a device, because this ISA has no instruction for
+    # it: with `-device virtio-rng-device` a draw must return bytes
+    # that are neither all zero nor equal to the next draw, and WITHOUT
+    # the device the guest must refuse by name rather than invent
+    # anything. Both halves matter — a fake entropy source passes the
+    # first check and fails nothing.
+    demos=$((demos + 1))
+    if build "$ROOT/unikernel/tests/entropy_rv.nu" >/dev/null 2>&1; then
+        withdev=$(boot "$OUTDIR/entropy_rv.elf" -t 120 -- -device virtio-rng-device 2>&1)
+        wrc=$?
+        nodev=$(boot "$OUTDIR/entropy_rv.elf" -t 120 2>&1)
+        nrc=$?
+        if [ "$wrc" = 0 ] \
+           && printf '%s' "$withdev" | grep -q '^zeros=0$' \
+           && printf '%s' "$withdev" | grep -q '^same_bytes=0$' \
+           && [ "$nrc" = 127 ] \
+           && printf '%s' "$nodev" | grep -q 'virtio-rng'; then
+            echo "PASS entropy (device gives bytes; absence is refused by name)"
+        else
+            echo "FAIL entropy (with-device exit $wrc, without exit $nrc)"
+            printf '%s\n' "$withdev" | head -4 | sed 's/^/     /'
+            printf '%s\n' "$nodev" | head -2 | sed 's/^/     /'
+            fails=$((fails + 1))
+        fi
+    else
+        echo "FAIL entropy (build)"; fails=$((fails + 1))
+    fi
+
     # An HTTP server in the guest, answering a client on the host.
     if command -v curl >/dev/null 2>&1; then
         demos=$((demos + 1))

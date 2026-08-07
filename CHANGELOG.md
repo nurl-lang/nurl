@@ -10,6 +10,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **TLS works on RISC-V: entropy from a virtio-rng device**
+  (`unikernel/boot/virtio_rng.c`). This architecture has no entropy
+  INSTRUCTION — the `seed` CSR is the optional Zkr extension and
+  QEMU's rv64 CPU does not implement it — so the answer comes from a
+  device, at the same layer x86 answers with RDRAND and AArch64 with
+  RNDR. With `-device virtio-rng-device` an RSA-2048 TLS 1.3 handshake
+  against the guest completes (84 s under TCG — the interpreter's
+  price, not the protocol's); without it the machine refuses BY NAME
+  rather than inventing anything, because "your TLS handshake failed"
+  is a much worse way to learn a device is missing.
+
+  The driver is C in the boot layer and deliberately not the NURL
+  virtqueue: `getrandom` must work with no NURL module linked, for a
+  program that never touches the socket layer. One queue, one buffer,
+  no negotiation beyond the version bit. It trusts the device for
+  bytes and not for the count — one claiming to have written more than
+  the buffer holds is refused. The gate checks both halves, because a
+  fake source passes the obvious one: with the device a draw must be
+  neither all zeroes nor equal to the next draw, and without it the
+  refusal must name the device.
+
 - **The AArch64 image now boots on Firecracker and cloud-hypervisor
   too** — as a flat `Image`, the container those two take on this
   architecture where x86 gives them the ELF's PVH note.

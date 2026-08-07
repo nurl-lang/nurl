@@ -408,7 +408,7 @@ address agree.
 | memory from | PVH memmap | device tree | device tree |
 | devices from | kernel command line | device tree | device tree |
 | clock | TSC, frequency **told** | CNTFRQ_EL0 | `rdtime`, tree's rate |
-| entropy | RDRAND | RNDR | **none — refuses** |
+| entropy | RDRAND | RNDR | **virtio-rng** (no instruction exists) |
 | hello image | 132 760 B (ELF) | 131 784 B (ELF) · 102 632 B (Image) | 155 344 B (ELF) |
 
 The per-architecture files are the bottom edge and nothing else:
@@ -457,12 +457,30 @@ Three things this port had to say out loud rather than assume:
   (`[nurl-boot]`) and the run script drops everything up to it. The
   rule belongs to us rather than to whatever the banner looks like
   this year.
-- **There is no entropy source.** RISC-V's `seed` CSR is the optional
-  Zkr extension and QEMU's rv64 CPU does not implement it, so this
-  port PANICS on a request for randomness, naming what is missing.
-  Everything else works; a TLS handshake here waits for a virtio-rng
-  driver. That is the plan's absolute rule applied to an architecture
-  that cannot satisfy it — refuse, do not invent.
+- **There is no entropy INSTRUCTION**, so the answer comes from a
+  device. RISC-V's `seed` CSR is the optional Zkr extension and QEMU's
+  rv64 CPU does not implement it, so `boot/virtio_rng.c` drives a
+  virtio-rng device instead — the same layer the other two answer
+  from, a different source. A machine started without `-device
+  virtio-rng-device` is told so BY NAME: the rule stays absolute, no
+  source is a panic and never a fallback, because "your TLS handshake
+  failed" is a much worse way to learn it. With the device, **TLS 1.3
+  works on this architecture** — an RSA-2048 handshake against the
+  guest completes in 84 s under TCG, which is the interpreter's price
+  rather than the protocol's.
+
+  The driver is C in the boot layer and deliberately not
+  `stdlib/hal/virtq.nu`: `getrandom` is a libc-level call that must
+  work with no NURL module linked, for a program that never touches
+  the socket layer. One queue, one buffer, no negotiation beyond the
+  version bit — the same protocol as the network driver at a different
+  layer, not a second implementation of it. It trusts the device for
+  BYTES and not for the count: a device claiming to have written more
+  than the buffer holds is refused rather than believed.
+
+  The gate checks both halves, because a fake source passes the
+  obvious one: with the device, a draw must be neither all zeroes nor
+  equal to the next draw; without it, the machine must refuse by name.
 
 `unikernel/run_qemu_riscv64_tests.sh` is the gate — **15/15**, the
 same corpus programs against the same hosted goldens, the device

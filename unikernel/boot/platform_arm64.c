@@ -188,12 +188,18 @@ void pf_exception(u64 vector, struct fault_frame *f) {
  * parsing one tree separately is where two machines start disagreeing
  * about what it says. This file keeps only what is machine-specific.
  */
+#define FDT_MAX_DEVS 32
 struct fdt_facts {
     unsigned long long ram_base;
     unsigned long long ram_size;
     char  cmdline[2048];
     unsigned long cmdline_len;
     int   devices;
+    /* Where they are. This port answers entropy from RNDR and does not
+     * need the list, but the struct is fdt.c's and a declaration that
+     * drifts from it would read the wrong fields — the twin-file rule
+     * this directory exists to enforce. */
+    unsigned long long dev_base[FDT_MAX_DEVS];
 };
 int fdt_is_tree(const void *p);
 int fdt_probe(const void *fdt, struct fdt_facts *out);
