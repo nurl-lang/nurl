@@ -164,6 +164,9 @@ FROM debian:bookworm-slim
 # `*.pc` files it sees, and the native build link here must resolve the
 # matching -lcurl / -lssl / -lsqlite3 / -lpq / -lz / -lzstd. Keeping both
 # stages in sync is what stops `ld: cannot find -lz` at link time.
+# binutils: the plain (non-mingw) ld/objcopy/nm — the unikernel build
+# embeds the initfs with `ld -r -b binary` + objcopy and measures a
+# program's undefined symbols with nm, all on the request path.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         clang-16 \
         libcurl4-openssl-dev \
@@ -174,6 +177,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libzstd-dev \
         ca-certificates \
         binaryen \
+        binutils \
         gcc-mingw-w64-x86-64 \
         binutils-mingw-w64-x86-64 \
     && rm -rf /var/lib/apt/lists/* \
@@ -244,15 +248,59 @@ COPY --from=builder /src/LICENSE-MIT             /opt/nurl/LICENSE-MIT
 COPY --from=builder /src/LICENSE-APACHE          /opt/nurl/LICENSE-APACHE
 COPY --from=builder /src/NOTICE                  /opt/nurl/NOTICE
 COPY --from=builder /src/spec                    /opt/nurl/spec
+# The unikernel toolchain: build_unikernel.sh + the boot shim, nolibc
+# and the bare runtime it compiles. build_unikernel.sh finds nurlc and
+# the stdlib from its own location (/opt/nurl), same as it does in the
+# repo — that is what U0 made true.
+COPY --from=builder /src/unikernel               /opt/nurl/unikernel
+
+# ── The unikernel smoke check (U1) ────────────────────────────────────
+# Build two images with the EXACT toolchain a request will use — this
+# stage, not the builder: a hello (the boot shim + nolibc + runtimes,
+# and this populates the object cache the image ships warm), and a
+# listener (pulls the NURL socket layer + virtio netdev through
+# compile_nu.sh's nm seam). If either does not link, the docker build
+# fails — the playground can never ship an image whose unikernel
+# toolchain is broken.
+ENV NURL_UNIKERNEL_CACHE=/opt/unikernel-cache
+RUN <<'SMOKE'
+set -eux
+cat > /tmp/uhello.nu <<'NU'
+@ main → i {
+    ( nurl_println `hello unikernel` )
+    ^ 0
+}
+NU
+cat > /tmp/ulisten.nu <<'NU'
+$ `stdlib/std/net.nu`
+
+@ main → i {
+    : !TcpListener NetErr lr ( tcp_listen `127.0.0.1` 0 )
+    ?? lr {
+        T l → { ( tcp_close_listener l ) ( nurl_println `ok` ) }
+        F _ → { ( nurl_println `listen failed` ) ^ 1 }
+    }
+    ^ 0
+}
+NU
+/opt/nurl/unikernel/build_unikernel.sh /tmp/uhello.nu  --out-dir /tmp/uout
+/opt/nurl/unikernel/build_unikernel.sh /tmp/ulisten.nu --out-dir /tmp/uout
+test -s /tmp/uout/uhello.elf && test -s /tmp/uout/ulisten.elf
+rm -rf /tmp/uhello.nu /tmp/ulisten.nu /tmp/uout
+SMOKE
 
 # ── Run unprivileged (M11) ────────────────────────────────────────────
 # The server compiles untrusted source with nurlc/clang/zig; none of that
 # needs root. Writable surface is exactly what the tools touch at request
 # time: /app/output (build artifacts), /opt/zig-cache (zig target cache),
 # /tmp (compiler temps), plus a HOME for zig/clang dotfiles.
+# /opt/unikernel-cache is writable by the server for the same reason
+# /opt/zig-cache is: it is a CACHE — build_unikernel.sh takes its flock
+# there on every run, and a bind-mounted stdlib (nurlapi.sh bind) with
+# newer mtimes makes it rebuild itself at request time.
 RUN groupadd -g 10001 nurl \
     && useradd -m -u 10001 -g nurl -d /home/nurl -s /usr/sbin/nologin nurl \
-    && chown -R nurl:nurl /app/output /opt/zig-cache
+    && chown -R nurl:nurl /app/output /opt/zig-cache /opt/unikernel-cache
 USER nurl
 ENV HOME=/home/nurl
 
