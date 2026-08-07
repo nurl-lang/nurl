@@ -134,12 +134,21 @@ boot_ch() {
         --cmdline "tsc_khz=1000000 wallclock=$(date +%s)" \
         --cpus boot=1 --memory size=64M \
         --console off --serial tty 2>&1)
-    if printf '%s' "$out" | grep -q '\[nurl-exit\] 0'; then
+    # `case`, not `printf | grep -q`: grep exits the moment it matches,
+    # printf then gets EPIPE, and under `set -o pipefail` the pipeline
+    # reports THAT — so a guest that booted perfectly was reported as a
+    # failed boot, with its own successful output printed underneath.
+    # A glob match needs no pipe and no subprocess.
+    case "$out" in
+      *"[nurl-exit] 0"*)
         say "PASS cloud-hypervisor booted the unchanged image"
-    else
-        say "FAIL cloud-hypervisor"; printf '%s\n' "$out" | head -6 | sed 's/^/     /'
+        ;;
+      *)
+        say "FAIL cloud-hypervisor"
+        printf '%s\n' "$out" | head -6 | sed 's/^/     /' || true
         fail=1
-    fi
+        ;;
+    esac
 }
 
 boot_fc() {
@@ -157,12 +166,16 @@ boot_fc() {
 EOF
     out=$(timeout -k 5s 60s "$FC" --no-api --config-file "$cfg" 2>&1)
     rm -f "$cfg" "$log"
-    if printf '%s' "$out" | grep -q '\[nurl-exit\] 0'; then
+    case "$out" in
+      *"[nurl-exit] 0"*)
         say "PASS firecracker booted the unchanged image"
-    else
-        say "FAIL firecracker"; printf '%s\n' "$out" | head -6 | sed 's/^/     /'
+        ;;
+      *)
+        say "FAIL firecracker"
+        printf '%s\n' "$out" | head -6 | sed 's/^/     /' || true
         fail=1
-    fi
+        ;;
+    esac
 }
 
 boot_ch
