@@ -167,6 +167,9 @@ FROM debian:bookworm-slim
 # binutils: the plain (non-mingw) ld/objcopy/nm — the unikernel build
 # embeds the initfs with `ld -r -b binary` + objcopy and measures a
 # program's undefined symbols with nm, all on the request path.
+# qemu-system-x86: the smoke boot (U3) — `boot: true` on
+# POST /build_unikernel boots the built image under TCG (the container
+# has no /dev/kvm), no network device, killed by timeout(1).
 RUN apt-get update && apt-get install -y --no-install-recommends \
         clang-16 \
         libcurl4-openssl-dev \
@@ -178,6 +181,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates \
         binaryen \
         binutils \
+        qemu-system-x86 \
         gcc-mingw-w64-x86-64 \
         binutils-mingw-w64-x86-64 \
     && rm -rf /var/lib/apt/lists/* \

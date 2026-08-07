@@ -4149,6 +4149,139 @@ s combined_stdout s combined_stderr → v {
     ^ c
 }
 
+// ── Smoke boot (U3): prove the image boots, from inside the container ──
+//
+// TCG only — the container has no /dev/kvm — bounded by its own wall
+// clock via timeout(1) and run with NO network device, so the guest can
+// print and exit but never reach anything. A server program that would
+// listen forever still proves it boots: the log holds everything it
+// printed before the deadline and `exit` stays null. Concurrency is
+// bounded by the compile gate the request already holds (≤ 4 boots),
+// and the timeout's -k makes the kill unconditional.
+
+@ get_qemu_path → String { ^ ( env_var_or `NURL_QEMU` `/usr/bin/qemu-system-x86_64` ) }
+
+@ get_boot_secs → String { ^ ( env_var_or `NURL_UNIKERNEL_BOOT_SECS` `20` ) }
+
+// Last `[nurl-exit] N` in the console, -1 if the guest never exited.
+// nurl_str_find answers the FIRST hit, so the scan advances a borrowed
+// pointer past each one — the last hit wins, which matters because a
+// program's own output may legitimately contain the marker text.
+@ __uk_exit_code s log → i {
+    : ~ i best - 0 1
+    : ~ s cur log
+    : ~ b more T
+    ~ more {
+        : i at ( nurl_str_find cur `[nurl-exit] ` )
+        ? < at 0 { = more F } {
+            : s tail # s + # i cur + at 12
+            : i tn ( nurl_str_len tail )
+            : ~ i v 0
+            : ~ i k 0
+            : ~ b digits F
+            : ~ b run T
+            ~ & run < k tn {
+                : i c ( nurl_str_get tail k )
+                ? & >= c 48 <= c 57 {
+                    = v + * v 10 - c 48
+                    = digits T
+                    = k + k 1
+                } { = run F }
+            }
+            ? digits { = best v } {}
+            = cur # s + # i cur + at 1
+        }
+    }
+    ^ best
+}
+
+@ __uk_smoke_boot s elf_path s uargs → Json {
+    : Json o ( json_obj_new )
+    : String qemu ( get_qemu_path )
+    ? ! ( file_exists ( string_data qemu ) ) {
+        ( json_obj_set o `ran` ( json_bool F ) )
+        ( json_obj_set o `error` ( json_str_lit `qemu is not available in this deployment` ) )
+        ( string_free qemu )
+        ^ o
+    } {}
+    : String secs ( get_boot_secs )
+    : String append ( string_with_cap 256 )
+    ( string_push_str append `tsc_khz=1000000 wallclock=` )
+    ( string_push_str append ( nurl_str_int / ( now_ms ) 1000 ) )
+    ? > ( nurl_str_len uargs ) 0 {
+        ( string_push_str append ` args="` )
+        ( string_push_str append uargs )
+        ( string_push_str append `"` )
+    } {}
+    : ( Vec s ) qa ( vec_new [s] )
+    ( vec_push [s] qa `-k` )
+    ( vec_push [s] qa `5` )
+    ( vec_push [s] qa ( string_data secs ) )
+    ( vec_push [s] qa ( string_data qemu ) )
+    ( vec_push [s] qa `-M` ) ( vec_push [s] qa `microvm,acpi=off,rtc=off` )
+    ( vec_push [s] qa `-accel` ) ( vec_push [s] qa `tcg` )
+    ( vec_push [s] qa `-cpu` ) ( vec_push [s] qa `max` )
+    ( vec_push [s] qa `-m` ) ( vec_push [s] qa `64` )
+    ( vec_push [s] qa `-nodefaults` )
+    ( vec_push [s] qa `-no-reboot` )
+    ( vec_push [s] qa `-no-user-config` )
+    ( vec_push [s] qa `-global` ) ( vec_push [s] qa `virtio-mmio.force-legacy=false` )
+    ( vec_push [s] qa `-serial` ) ( vec_push [s] qa `stdio` )
+    ( vec_push [s] qa `-display` ) ( vec_push [s] qa `none` )
+    // A relocated qemu (not installed under /usr) finds its firmware
+    // only when told where — the packaged one never needs this.
+    : String share ( env_var_or `NURL_QEMU_SHARE` `` )
+    ? > ( string_len share ) 0 {
+        ( vec_push [s] qa `-L` ) ( vec_push [s] qa ( string_data share ) )
+    } {}
+    ( vec_push [s] qa `-kernel` ) ( vec_push [s] qa elf_path )
+    ( vec_push [s] qa `-append` ) ( vec_push [s] qa ( string_data append ) )
+    : !Output ProcessErr br ( process_run `/usr/bin/timeout` qa `` )
+    ( vec_free [s] qa )
+    ( string_free append )
+    ( string_free secs )
+    ( string_free qemu )
+    ( string_free share )
+    ?? br {
+        T bout → {
+            : i brc ( output_exit_code bout )
+            // The UART's CRLF is transport, not content; and a hostile
+            // program can print for ever, so the log is capped.
+            : s raw_log ( output_stdout bout )
+            : i rl ( nurl_str_len raw_log )
+            : i cap ? > rl 65536 65536 rl
+            : String log ( string_with_cap + cap 1 )
+            : ~ i k 0
+            ~ < k cap {
+                : i c ( nurl_str_get raw_log k )
+                ? != c 13 { ( string_push_char log c ) } {}
+                = k + k 1
+            }
+            : i gexit ( __uk_exit_code ( string_data log ) )
+            ( json_obj_set o `ran` ( json_bool T ) )
+            ( json_obj_set o `timed_out` ( json_bool ? == brc 124 T F ) )
+            ( json_obj_set o `log` ( json_str_lit ( string_data log ) ) )
+            ? >= gexit 0 {
+                ( json_obj_set o `exit` ( json_int gexit ) )
+            } {
+                ( json_obj_set o `exit` ( json_null ) )
+            }
+            ( json_obj_set o `truncated` ( json_bool ? > rl 65536 T F ) )
+            // qemu's OWN complaints (bad firmware path, bad flags) are
+            // stderr, not console — without this a failed boot is an
+            // empty log and nothing to debug with.
+            ( json_obj_set o `qemu_stderr` ( json_str_lit ( output_stderr bout ) ) )
+            ( string_free log )
+            ( output_free bout )
+        }
+        F _ → {
+            ( json_obj_set o `ran` ( json_bool F ) )
+            ( json_obj_set o `error` ( json_str_lit `boot process failed to start` ) )
+        }
+    }
+    ^ o
+}
+
 @ h_build_unikernel HttpRequest req Params params → HttpResponse {
     ( nurl_print `[srv] POST /build_unikernel\n` )
     : String body_str ( get_body_str req )
@@ -4159,6 +4292,8 @@ s combined_stdout s combined_stderr → v {
             ? == ( nurl_str_len source ) 0 { ( json_free root ) ( string_free body_str ) ^ ( response_text 400 `{"error":"source is required"}\n` ) } {}
             : s filename ( get_common_json root `filename` `main.nu` )
             : s uargs ( get_common_json root `args` `` )
+            : ~ b want_boot F
+            ?? ( json_obj_get root `boot` ) { T bj → { = want_boot ( json_as_bool bj ) } F → {} }
 
             : String build_id ( create_build_id )
             : String build_dir ( path_join ( string_data ( get_output_dir ) ) ( string_data build_id ) )
@@ -4248,6 +4383,10 @@ s combined_stdout s combined_stderr → v {
                             ( json_obj_set res `script_returncode` ( json_int t_rc ) )
                             ( json_obj_set res `stderr` ( json_str_lit ( output_stderr t_out ) ) )
                             ? == t_rc 0 {
+                                ? want_boot {
+                                    ( json_obj_set res `boot_result`
+                                    ( __uk_smoke_boot ( string_data elf_path ) uargs ) )
+                                } {}
                                 : !i IoErr esz ( file_size ( string_data elf_path ) )
                                 : i ebytes ?? esz { T sz → sz F _ → 0 }
                                 ( json_obj_set res `elf_artifact`
