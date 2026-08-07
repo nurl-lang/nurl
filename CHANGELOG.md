@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.35.1] — 2026-08-07
+
 ### Added
 
 - **MCP tool `nurl_docs` — the documentation tree an agent could not
@@ -11106,7 +11108,8 @@ releases are measured.
   compile-server (`api/`), browser playground (`nurlweb/`).
 * Dual license: MIT (LICENSE-MIT) or Apache-2.0 (LICENSE-APACHE).
 
-[Unreleased]: https://github.com/nurl-lang/nurl/compare/v0.35.0...HEAD
+[Unreleased]: https://github.com/nurl-lang/nurl/compare/v0.35.1...HEAD
+[0.35.1]: https://github.com/nurl-lang/nurl/compare/v0.35.0...v0.35.1
 [0.35.0]: https://github.com/nurl-lang/nurl/compare/v0.34.0...v0.35.0
 [0.34.0]: https://github.com/nurl-lang/nurl/compare/v0.33.0...v0.34.0
 [0.33.0]: https://github.com/nurl-lang/nurl/compare/v0.32.0...v0.33.0
