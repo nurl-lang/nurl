@@ -247,7 +247,7 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
-            clang binutils qemu-system-x86 curl
+            clang binutils qemu-system-x86 qemu-system-arm curl
 
       - name: Build the compiler
         run: ./build.sh --no-tests
@@ -269,6 +269,27 @@ jobs:
         # reports there, so run_qemu.sh states it on the kernel command
         # line the way the plan says the host states the epoch.
         run: ./unikernel/run_qemu_tests.sh
+
+      - name: Fetch zig (the AArch64 cross toolchain)
+        # The same zig the ecosystem's install ships and the playground
+        # image carries; the aarch64 image is built with it rather than
+        # with a distro cross-gcc, so the toolchain in CI is the one a
+        # user gets.
+        run: |
+          ZIG_VERSION=0.13.0
+          curl -fsSL --retry 5 -o /tmp/zig.tar.xz \
+            "https://ziglang.org/download/${ZIG_VERSION}/zig-linux-x86_64-${ZIG_VERSION}.tar.xz"
+          mkdir -p /opt/zig && sudo tar -xJf /tmp/zig.tar.xz -C /opt/zig --strip-components=1
+
+      - name: The guest, on the OTHER architecture
+        # The claim the aarch64 port makes is that nothing above the
+        # bottom edge changed: the same corpus programs against the same
+        # hosted goldens, plus the device demos, on QEMU's virt board.
+        # A second architecture is what turns "portable" from a design
+        # intention into a measured property.
+        env:
+          NURL_ZIG: /opt/zig/zig
+        run: ./unikernel/run_qemu_arm64_tests.sh
 
   freebsd:
     name: FreeBSD (build + bootstrap fixed point + tests, in a VM)

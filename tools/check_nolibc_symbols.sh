@@ -42,8 +42,24 @@ for f in "$NOLIBC"/*.c; do
         exit 2
     }
 done
+# The assembly is per-architecture by name — start_x86_64.S,
+# setjmp_x86_64.S, setjmp_aarch64.S — and only THIS host's files
+# assemble with THIS host's compiler. Selecting by suffix keeps the
+# gate a statement about the machine it runs on; compiling all of them
+# would fail on whichever architecture the runner is not, which is
+# exactly what the aarch64 port did to this gate on an x86 runner.
+case "$(uname -m)" in
+    x86_64|amd64) arch_sfx=x86_64 ;;
+    aarch64|arm64) arch_sfx=aarch64 ;;
+    *) arch_sfx="" ;;
+esac
 for f in "$NOLIBC"/*.S; do
-    "$CC" -c "$f" -o "$TMP/nl/$(basename "${f%.S}").o" || exit 2
+    b="$(basename "${f%.S}")"
+    case "$b" in
+        *_x86_64|*_aarch64|*_riscv64)
+            [ -n "$arch_sfx" ] && [ "${b%_$arch_sfx}" != "$b" ] || continue ;;
+    esac
+    "$CC" -c "$f" -o "$TMP/nl/$b.o" || exit 2
 done
 
 nm -u "$TMP/core.o" | sed 's/^ *U //' | sort -u > "$TMP/needed"

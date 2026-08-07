@@ -10,6 +10,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A NURL program boots as its own kernel on AArch64 too** (unikernel
+  plan phase U6). QEMU's `virt` board, and the port is the size the
+  design predicted: **four files** differ — `boot/boot_arm64.S`
+  (EL2→EL1, FP/SIMD, vector table, stacks, `.bss`),
+  `boot/platform_arm64.c` (PL011, device tree, MMU, generic timer,
+  RNDR, PSCI), `boot/tls_guest_arm64.c` (the thread pointer) and
+  `nolibc/setjmp_aarch64.S`. Everything above that bottom edge is the
+  same code the x86_64 image runs, which the gate proves rather than
+  claims: `unikernel/run_qemu_arm64_tests.sh` is **15/15** — the same
+  corpus programs against the same hosted goldens, the device demos,
+  faults reported with exit 126, and an HTTP server in the guest
+  answering curl on the host. A hello image is 131 784 bytes, within a
+  kilobyte of the x86_64 one; the memory floor is 5 MiB. CI builds and
+  boots it on every commit, with zig as the cross toolchain — the same
+  zig the ecosystem installs.
+
+  `stdlib/runtime_ctx.c` gained an AArch64 fiber switch (AAPCS64:
+  x19–x28, x29/x30, d8–d15 and FPCR) beside the x86 one, so fibers,
+  channels and the M:N runtime work there natively rather than falling
+  back to ucontext.
+
+  Three machine differences are absorbed in the port rather than
+  pushed upward: `virt` announces its virtio-mmio devices in the DEVICE
+  TREE, so `platform_arm64.c` parses the tree and synthesizes the same
+  `virtio_mmio.device=` entries the x86 guest reads off its command
+  line; `virt` defaults to LEGACY virtio-mmio exactly as microvm does
+  (the guest read `version=1` and refused every device — correctly);
+  and the clock states its own frequency in `CNTFRQ_EL0`, so the
+  `tsc_khz=` handshake turns out to be an x86 quirk rather than part
+  of the contract. The TLS image's offset from the thread pointer is
+  MEASURED, not assumed: the boot code places the image, reads a
+  canary `__thread` back through the compiler's own addressing, and
+  refuses to run if the value is not there — a thread-local block off
+  by sixteen bytes reads plausible garbage.
+
+### Fixed
+
+- **nolibc was missing `getchar`** and nothing noticed, because
+  glibc's `<stdio.h>` defines it as a macro (`getc(stdin)`) — every
+  x86 build resolved the call in the preprocessor and never reached
+  the library. A libc whose completeness depends on which headers
+  happen to be installed is not complete; the AArch64 port, whose
+  headers declare it as a function, found it at the link line.
+  `nolibc/math.c`'s `sqrt` likewise assumed `sqrtsd`; it now selects
+  the architecture's instruction and refuses to compile (rather than
+  answer differently) on one where neither is known.
+
 - **MCP tool `nurl_build_unikernel`** (plan phase U5). An agent builds
   a bootable image and — because the tool's `boot` defaults ON, and an
   agent cannot run qemu — gets the guest console and exit status back

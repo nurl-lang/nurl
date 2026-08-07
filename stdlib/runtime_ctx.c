@@ -55,6 +55,13 @@
 
 #if defined(__x86_64__) && !defined(_WIN32)
 #  define NURL_CTX_X86_64 1
+#elif defined(__aarch64__) && !defined(_WIN32)
+/* AArch64 (AAPCS64). Callee-saved: x19–x28, fp (x29), lr (x30), sp,
+ * the low 64 bits of v8–v15 (d8–d15), and FPCR — the rounding-mode
+ * register, this architecture's half of what MXCSR+x87cw are on x86
+ * (there is no separate mask register to seed: FPCR's trap-enable
+ * bits default to off and live in the same register). */
+#  define NURL_CTX_AARCH64 1
 #endif
 
 /* Mach-O gives every C symbol a leading underscore; ELF does not. A
@@ -227,7 +234,96 @@ void nurl_ctx_init(nurl_ctx_t *ctx, void *stack, unsigned long size,
 
 int nurl_ctx_available(void) { return 1; }
 
-#else /* !NURL_CTX_X86_64 — other architectures still use ucontext */
+#elif defined(NURL_CTX_AARCH64)
+
+/* The switch. Frame, from ctx->sp upward (11 pairs, 176 bytes, so sp
+ * stays 16-aligned — AAPCS64 requires it at every public interface,
+ * with none of x86's +8 asymmetry):
+ *
+ *     +0    fpcr           +8   (pad)
+ *     +16   d8  d9         +32  d10 d11
+ *     +48   d12 d13        +64  d14 d15
+ *     +80   x19 x20   <- entry arg / entry fn on first entry
+ *     +96   x21 x22        +112 x23 x24
+ *     +128  x25 x26        +144 x27 x28
+ *     +160  x29 x30   <- lr = where the restored context resumes
+ *
+ * The first switch into a fresh context `ret`s into the trampoline,
+ * which moves x19/x20 into place and calls the entry. */
+__attribute__((naked, noinline))
+void nurl_ctx_switch(nurl_ctx_t *save, nurl_ctx_t *restore)
+{
+    __asm__ volatile(
+        "stp x29, x30, [sp, #-16]!\n\t"
+        "stp x27, x28, [sp, #-16]!\n\t"
+        "stp x25, x26, [sp, #-16]!\n\t"
+        "stp x23, x24, [sp, #-16]!\n\t"
+        "stp x21, x22, [sp, #-16]!\n\t"
+        "stp x19, x20, [sp, #-16]!\n\t"
+        "stp d14, d15, [sp, #-16]!\n\t"
+        "stp d12, d13, [sp, #-16]!\n\t"
+        "stp d10, d11, [sp, #-16]!\n\t"
+        "stp d8,  d9,  [sp, #-16]!\n\t"
+        "mrs x2, fpcr\n\t"
+        "str x2, [sp, #-16]!\n\t"
+        "mov x2, sp\n\t"
+        "str x2, [x0]\n\t"            /* save->sp = sp                 */
+        "ldr x2, [x1]\n\t"
+        "mov sp, x2\n\t"              /* sp = restore->sp              */
+        "ldr x2, [sp], #16\n\t"
+        "msr fpcr, x2\n\t"
+        "ldp d8,  d9,  [sp], #16\n\t"
+        "ldp d10, d11, [sp], #16\n\t"
+        "ldp d12, d13, [sp], #16\n\t"
+        "ldp d14, d15, [sp], #16\n\t"
+        "ldp x19, x20, [sp], #16\n\t"
+        "ldp x21, x22, [sp], #16\n\t"
+        "ldp x23, x24, [sp], #16\n\t"
+        "ldp x25, x26, [sp], #16\n\t"
+        "ldp x27, x28, [sp], #16\n\t"
+        "ldp x29, x30, [sp], #16\n\t"
+        "ret\n\t"
+    );
+}
+
+/* First-entry trampoline: x19 holds the argument, x20 the entry point.
+ * `brk #0` and not a call to a diagnostic helper, for the same LTO
+ * reason the x86 version uses `ud2`: a fiber entry must never return,
+ * and below this frame is the bottom of a fresh stack, not a caller. */
+__attribute__((naked, noinline))
+static void nurl__ctx_trampoline(void)
+{
+    __asm__ volatile(
+        "mov x0, x19\n\t"
+        "blr x20\n\t"
+        "brk #0\n\t"
+    );
+}
+
+void nurl_ctx_init(nurl_ctx_t *ctx, void *stack, unsigned long size,
+                   void (*entry)(void *), void *arg)
+{
+    unsigned char *top = (unsigned char *)stack + size;
+    unsigned long  t   = (unsigned long)top & ~(unsigned long)15;
+    unsigned long *fp  = (unsigned long *)(t - 176);
+    unsigned long  i;
+
+    for (i = 0; i < 22; i++) fp[i] = 0;
+    /* Seed FPCR from the CURRENT thread so a fresh fiber starts in the
+     * process's rounding mode — the x86 lesson (a zeroed control word
+     * is a different machine), applied before it can bite here. */
+    __asm__ volatile("mrs %0, fpcr" : "=r"(fp[0]));
+    fp[10] = (unsigned long)arg;                 /* x19 */
+    fp[11] = (unsigned long)entry;               /* x20 */
+    fp[20] = 0;                                  /* x29 — ends the chain */
+    fp[21] = (unsigned long)&nurl__ctx_trampoline; /* x30 = lr          */
+
+    ctx->sp = (void *)fp;
+}
+
+int nurl_ctx_available(void) { return 1; }
+
+#else /* neither x86_64 nor aarch64 — other architectures still use ucontext */
 
 void nurl_ctx_switch(nurl_ctx_t *save, nurl_ctx_t *restore)
 {
@@ -258,7 +354,7 @@ static long nurl__ctx_counter;
 static long nurl__ctx_switches;
 static long nurl__ctx_arg_seen;
 
-#ifdef NURL_CTX_X86_64
+#if defined(NURL_CTX_X86_64) || defined(NURL_CTX_AARCH64)
 
 static void nurl__ctx_fpbounce(void *arg);
 
@@ -325,6 +421,7 @@ static void nurl__ctx_test_from_fiber(void)
  * `subq $8` is not decoration: a function is entered with rsp ≡ 8
  * (mod 16), so calling out from here without it would hand every callee
  * a misaligned stack. */
+#ifdef NURL_CTX_X86_64
 __attribute__((naked, noinline))
 static void nurl__ctx_bounce(void *arg)
 {
@@ -345,6 +442,31 @@ static void nurl__ctx_bounce(void *arg)
         "jmp 1b\n\t"
     );
 }
+#else /* NURL_CTX_AARCH64 — same fiber, this ISA's callee-saved set.
+       * `bl` clobbers lr, which is fine: this fiber never returns. */
+__attribute__((naked, noinline))
+static void nurl__ctx_bounce(void *arg)
+{
+    __asm__ volatile(
+        "bl " NURL_CTX_SYM(nurl__ctx_test_enter) "\n\t"
+        "movz x19, #0xbeef\n\t" "movk x19, #0xdead, lsl #16\n\t"
+        "movk x19, #0xbeef, lsl #32\n\t" "movk x19, #0xdead, lsl #48\n\t"
+        "mov x20, x19\n\t"
+        "mov x21, x19\n\t"
+        "mov x22, x19\n\t"
+        "mov x23, x19\n\t"
+        "1:\n\t"
+        "bl " NURL_CTX_SYM(nurl__ctx_test_leave) "\n\t"
+        "adrp x0, " NURL_CTX_SYM(nurl__ctx_fiber) "\n\t"
+        "add  x0, x0, :lo12:" NURL_CTX_SYM(nurl__ctx_fiber) "\n\t"
+        "adrp x1, " NURL_CTX_SYM(nurl__ctx_main) "\n\t"
+        "add  x1, x1, :lo12:" NURL_CTX_SYM(nurl__ctx_main) "\n\t"
+        "bl " NURL_CTX_SYM(nurl_ctx_switch) "\n\t"
+        "bl " NURL_CTX_SYM(nurl__ctx_test_enter) "\n\t"
+        "b 1b\n\t"
+    );
+}
+#endif
 
 /* Hand control back to whoever switched us in, annotated. Every C test
  * fiber below yields through this. */
@@ -360,10 +482,15 @@ static void nurl__ctx_fpbounce(void *arg)
 {
     (void)arg;
     nurl__ctx_test_enter();
+#ifdef NURL_CTX_X86_64
     unsigned       mx = 0x1f80u;              /* default, all masked   */
     unsigned short cw = 0x037fu;              /* x87 default           */
     __asm__ volatile("ldmxcsr %0" :: "m"(mx));
     __asm__ volatile("fldcw   %0" :: "m"(cw));
+#else
+    unsigned long fpcr = 0;                   /* RN, no traps — default */
+    __asm__ volatile("msr fpcr, %0" :: "r"(fpcr));
+#endif
     for (;;) nurl__ctx_test_yield();
 }
 
@@ -377,6 +504,7 @@ static void nurl__ctx_fpbounce(void *arg)
  * the comparison happens without the compiler touching any of it; the
  * clobber list makes it save whatever it had in those registers.
  */
+#ifdef NURL_CTX_X86_64
 long nurl_ctx_test_preserve(void)
 {
     nurl__ctx_test_init(nurl__ctx_bounce, (void *)0UL);
@@ -413,10 +541,61 @@ long nurl_ctx_test_preserve(void)
     nurl__ctx_test_from_fiber();
     return ok;
 }
+#else /* NURL_CTX_AARCH64 */
+long nurl_ctx_test_preserve(void)
+{
+    nurl__ctx_test_init(nurl__ctx_bounce, (void *)0UL);
+    long ok;
+    nurl__ctx_test_to_fiber();
+    /* Sentinels in x19–x23, switch, compare — one asm block for the
+     * same reason as the x86 version: register variables are not
+     * guaranteed to survive a call, so a C-level test would measure
+     * the compiler's spill choices rather than the switch. */
+    __asm__ volatile(
+        "movz x19, #0x1111\n\t" "movk x19, #0x1111, lsl #16\n\t"
+        "movk x19, #0x1111, lsl #32\n\t" "movk x19, #0x1111, lsl #48\n\t"
+        "movz x20, #0x2222\n\t" "movk x20, #0x2222, lsl #16\n\t"
+        "movk x20, #0x2222, lsl #32\n\t" "movk x20, #0x2222, lsl #48\n\t"
+        "movz x21, #0x3333\n\t" "movk x21, #0x3333, lsl #16\n\t"
+        "movk x21, #0x3333, lsl #32\n\t" "movk x21, #0x3333, lsl #48\n\t"
+        "movz x22, #0x4444\n\t" "movk x22, #0x4444, lsl #16\n\t"
+        "movk x22, #0x4444, lsl #32\n\t" "movk x22, #0x4444, lsl #48\n\t"
+        "movz x23, #0x5555\n\t" "movk x23, #0x5555, lsl #16\n\t"
+        "movk x23, #0x5555, lsl #32\n\t" "movk x23, #0x5555, lsl #48\n\t"
+        "mov x0, %[m]\n\t"
+        "mov x1, %[f]\n\t"
+        "bl " NURL_CTX_SYM(nurl_ctx_switch) "\n\t"
+        "mov %[ok], #0\n\t"
+        "movz x9, #0x1111\n\t" "movk x9, #0x1111, lsl #16\n\t"
+        "movk x9, #0x1111, lsl #32\n\t" "movk x9, #0x1111, lsl #48\n\t"
+        "cmp x19, x9\n\t" "b.ne 1f\n\t"
+        "movz x9, #0x2222\n\t" "movk x9, #0x2222, lsl #16\n\t"
+        "movk x9, #0x2222, lsl #32\n\t" "movk x9, #0x2222, lsl #48\n\t"
+        "cmp x20, x9\n\t" "b.ne 1f\n\t"
+        "movz x9, #0x3333\n\t" "movk x9, #0x3333, lsl #16\n\t"
+        "movk x9, #0x3333, lsl #32\n\t" "movk x9, #0x3333, lsl #48\n\t"
+        "cmp x21, x9\n\t" "b.ne 1f\n\t"
+        "movz x9, #0x4444\n\t" "movk x9, #0x4444, lsl #16\n\t"
+        "movk x9, #0x4444, lsl #32\n\t" "movk x9, #0x4444, lsl #48\n\t"
+        "cmp x22, x9\n\t" "b.ne 1f\n\t"
+        "movz x9, #0x5555\n\t" "movk x9, #0x5555, lsl #16\n\t"
+        "movk x9, #0x5555, lsl #32\n\t" "movk x9, #0x5555, lsl #48\n\t"
+        "cmp x23, x9\n\t" "b.ne 1f\n\t"
+        "mov %[ok], #1\n\t"
+        "1:\n\t"
+        : [ok] "=r"(ok)
+        : [m] "r"(&nurl__ctx_main), [f] "r"(&nurl__ctx_fiber)
+        : "x0", "x1", "x9", "x19", "x20", "x21", "x22", "x23", "x30",
+          "memory", "cc");
+    nurl__ctx_test_from_fiber();
+    return ok;
+}
+#endif
 
 /* Same question for the floating-point control words: set a non-default
  * rounding mode, bounce through a fiber that sets its own, and check we
  * get ours back. */
+#ifdef NURL_CTX_X86_64
 long nurl_ctx_test_fpcw(void)
 {
     nurl__ctx_test_init(nurl__ctx_fpbounce, (void *)0UL);
@@ -440,6 +619,26 @@ long nurl_ctx_test_fpcw(void)
     __asm__ volatile("fldcw   %0" :: "m"(cw_before));
     return (mx_after == mx_ours) && (cw_after == cw_ours);
 }
+#else /* NURL_CTX_AARCH64 — FPCR's RMode field plays both control words' part */
+long nurl_ctx_test_fpcw(void)
+{
+    nurl__ctx_test_init(nurl__ctx_fpbounce, (void *)0UL);
+    unsigned long fpcr_before, fpcr_after;
+    __asm__ volatile("mrs %0, fpcr" : "=r"(fpcr_before));
+
+    /* RMode [23:22] = 0b11, round toward zero. */
+    unsigned long fpcr_ours = (fpcr_before & ~(3UL << 22)) | (3UL << 22);
+    __asm__ volatile("msr fpcr, %0" :: "r"(fpcr_ours));
+
+    nurl__ctx_test_to_fiber();
+    nurl_ctx_switch(&nurl__ctx_main, &nurl__ctx_fiber);
+    nurl__ctx_test_from_fiber();
+
+    __asm__ volatile("mrs %0, fpcr" : "=r"(fpcr_after));
+    __asm__ volatile("msr fpcr, %0" :: "r"(fpcr_before));
+    return fpcr_after == fpcr_ours;
+}
+#endif
 
 /* Plain ping-pong, to count switches and prove the entry argument and
  * the fresh-frame path work. */
