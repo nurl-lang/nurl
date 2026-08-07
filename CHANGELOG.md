@@ -8,6 +8,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`ext/json` string parsing now follows RFC 8259, and the module's own
+  promise holds.** json.nu states "the serializer's output is guaranteed
+  valid JSON". Two string paths falsified it. §7 forbids unescaped
+  U+0000..U+001F inside a string; a raw one was accepted — by *two*
+  routes, because the escape-free fast path memcpy'd its span without
+  looking at it and only strings that also carried a backslash ever
+  reached the decoder. Both are checked now, so a future optimisation
+  that reintroduces a blind copy fails the test rather than the spec.
+  §8.1 requires the text to be UTF-8, and a lone surrogate half has no
+  UTF-8 encoding: `["\uD800"]` decoded through the 3-byte path to the
+  bytes ED A0 80 (WTF-8) and `json_stringify` handed them straight back,
+  so a round-trip produced output no conforming parser accepts. Lone
+  halves now become U+FFFD, substituted at the single choke point every
+  code point passes through, so no future caller can reopen the hole. A
+  valid surrogate *pair* is untouched — 😀 still decodes to U+1F600.
+  Found while fixing this: `json_basic` asserted that a raw newline
+  inside a string parses, because a NURL backtick literal turns `\n`
+  into a real 0x0A; the test was encoding the bug, and now uses the
+  conforming spelling for the same value.
+
+- **The arity warning points at the `?`, not at the `}` that revealed
+  it.** `? & a b c d { … } { … }` — the n-ary foot-gun the language
+  documents — can only be detected once the `{` after the conditional is
+  reached, and the diagnostic reported the lexer's position at that
+  moment. For a multi-line body the caret landed on the closing `} {}`,
+  several lines below the mistake, pointing at the consequence. gen_cond
+  already captured the `?`'s line for the borrow checker; it now keeps
+  the column too and reports there, via a new `warn_pos` (the non-fatal
+  twin of the existing `die_pos`, which exists for exactly this reason).
+
+### Added
+
+- **`nurl_docs` reads a section instead of a document.** Answering "who
+  frees a String?" cost the whole 44 KB of MEMORY.md, and `spec.md`
+  (63 KB) did not fit the per-call cap at all. Documents are already
+  carved into headings, so: `query=` searches every section of every
+  document — whole-word, ranked by coverage, headings outranking body
+  prose — and returns the best few *with the keys to fetch them*;
+  `outline=true` is one document's heading map (1.5 KB for MEMORY.md);
+  `section='7.4'` or `section='manually-managed'` returns one section
+  (3.4 KB). Search and retrieval deliberately use different boundaries:
+  retrieval is hierarchical, so asking for §2 includes its §2.x
+  children, while search treats each heading's own prose as the unit —
+  otherwise a document's H1, having no same-level sibling, spans the
+  entire file, outscores every real subsection, and hands back exactly
+  the 44 KB the feature exists to avoid.
+
 ## [0.35.1] — 2026-08-07
 
 ### Added

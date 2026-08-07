@@ -108,7 +108,14 @@ $ `stdlib/ext/json.nu`
     }
 
     // 6. string with escape
-    : !Json JsonError r6 ( json_parse `"hi\n"` )
+    //
+    // `\\n` — two source characters, backslash and n — is the escape as
+    // JSON spells it. A NURL backtick literal turns `\n` into a real
+    // 0x0A byte, so the old spelling here fed the parser a RAW newline
+    // inside a string, which RFC 8259 §7 forbids; the test was asserting
+    // that non-conforming input parses. Both spellings decode to the
+    // same value ("hi" + newline), so the expected output is unchanged.
+    : !Json JsonError r6 ( json_parse `"hi\\n"` )
     ?? r6 {
         T j → {
             ( nurl_print `parse "hi\\n" ok type=` )

@@ -1,0 +1,13 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+ctrl fast-path rejected
+ctrl slow-path rejected
+ctrl NUL rejected
+escaped tab accepted: 4 bytes
+lone high surrogate: EF BF BD
+lone low surrogate: EF BF BD
+surrogate pair intact: F0 9F 98 80
+ascii intact: hello
+multibyte intact accepted: 7 bytes

@@ -491,28 +491,37 @@ $ `stdlib/core/vec.nu`
 }
 
 // Encode a Unicode code point (0..0x10FFFF) as 1–4 UTF-8 bytes and
-// append them to `out`. Code points above U+10FFFF or in the
-// surrogate range U+D800..U+DFFF (which should have been merged into
-// a single code point by the caller) are passed through bytewise via
-// the 3-byte path; downstream consumers will see invalid UTF-8 but at
-// least no information is silently dropped.
+// append them to `out`.
+//
+// A surrogate half (U+D800..U+DFFF) and anything past U+10FFFF have no
+// UTF-8 encoding at all, so they become U+FFFD. This used to run them
+// through the 3-byte path, which emitted WTF-8: `["\uD800"]` parsed to
+// the bytes ED A0 80 and json_stringify handed them straight back, so
+// the module's own promise — the serializer's output is valid JSON —
+// was false for any input carrying a lone surrogate (RFC 8259 §8.1
+// requires the text to be UTF-8, and ED A0 80 is not). Replacing here
+// rather than at the call sites is deliberate: this is the single
+// choke point every code point passes through, so no future caller can
+// reintroduce the hole.
 @ __jp_push_utf8 String out i cp → v {
-    ? <= cp 127 {
-        ( string_push_char out cp )
+    : ~ i c cp
+    ? | | < c 0 > c 1114111 & >= c 55296 <= c 57343 { = c 65533 } {}
+    ? <= c 127 {
+        ( string_push_char out c )
     } {
-        ? <= cp 2047 {
-            ( string_push_char out | 192 >> cp 6 )
-            ( string_push_char out | 128 & cp 63 )
+        ? <= c 2047 {
+            ( string_push_char out | 192 >> c 6 )
+            ( string_push_char out | 128 & c 63 )
         } {
-            ? <= cp 65535 {
-                ( string_push_char out | 224 >> cp 12 )
-                ( string_push_char out | 128 & >> cp 6 63 )
-                ( string_push_char out | 128 & cp 63 )
+            ? <= c 65535 {
+                ( string_push_char out | 224 >> c 12 )
+                ( string_push_char out | 128 & >> c 6 63 )
+                ( string_push_char out | 128 & c 63 )
             } {
-                ( string_push_char out | 240 >> cp 18 )
-                ( string_push_char out | 128 & >> cp 12 63 )
-                ( string_push_char out | 128 & >> cp 6 63 )
-                ( string_push_char out | 128 & cp 63 )
+                ( string_push_char out | 240 >> c 18 )
+                ( string_push_char out | 128 & >> c 12 63 )
+                ( string_push_char out | 128 & >> c 6 63 )
+                ( string_push_char out | 128 & c 63 )
             }
         }
     }
@@ -536,6 +545,22 @@ $ `stdlib/core/vec.nu`
     }
     ? bad { ^ -1 } {}
     ^ acc
+}
+
+// RFC 8259 §7: U+0000..U+001F must be escaped inside a string — a raw
+// one makes the document invalid. Returns the offset of the first such
+// byte in [span, span+n), or -1. There is no memchr for "any byte below
+// N" (32 separate memchr passes would cost more than one walk), so the
+// escape-free fast path pays one linear scan for conformance. It still
+// skips the whole per-char push loop, which is where its speed came
+// from.
+@ __jp_span_ctrl s span i n → i {
+    : ~ i k 0
+    ~ < k n {
+        ? < ( nurl_str_get span k ) 32 { ^ k } {}
+        = k + k 1
+    }
+    ^ -1
 }
 
 @ __jp_parse_string * JsonParser p → !String JsonError {
@@ -570,6 +595,14 @@ $ `stdlib/core/vec.nu`
         // directly without walking the escape decoder.
         : s esc_p ( memchr body_start_ptr 92 hit_len )
         ? == # i esc_p 0 {
+            // The bytes are literal — which is exactly why they still
+            // have to be checked. This path memcpy'd the span verbatim,
+            // so a raw control byte in an escape-free string was copied
+            // straight through and never saw the decoder below.
+            : i ctrl ( __jp_span_ctrl body_start_ptr hit_len )
+            ? >= ctrl 0 {
+                ^ @ !String JsonError { F ( __jp_err_at p + body_start ctrl @ ParseErr { BadFormat } ) }
+            } {}
             : *u from # *u body_start_ptr
             : String fs ( string_from_bytes_packed from hit_len )
             = . p pos + close_off 1
@@ -653,6 +686,13 @@ $ `stdlib/core/vec.nu`
                                                     ^ @ !String JsonError { F ( __jp_err_at p token_start @ ParseErr { BadFormat } ) }
                                                 } } } } } } } } }
             } {
+                // The other half of the §7 check: a string that DOES
+                // carry an escape falls through to this loop, so the
+                // fast path's scan never sees it.
+                ? < c 32 {
+                    ( string_free out )
+                    ^ @ !String JsonError { F ( __jp_err_at p . p pos @ ParseErr { BadFormat } ) }
+                } {}
                 ( string_push_char out c )
                 = . p pos + . p pos 1
             }
