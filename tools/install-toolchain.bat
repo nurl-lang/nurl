@@ -18,6 +18,7 @@ REM  Layout (%NURL_HOME%, default %USERPROFILE%\.nurl):
 REM    %PREFIX%\build\nurlc.exe          the compiler
 REM    %PREFIX%\build\nurlpkg.exe        the package manager
 REM    %PREFIX%\stdlib\                  the stdlib tree (+ runtime.o)
+REM    %PREFIX%\docs\                    the documentation tree (nurl_docs)
 REM    %PREFIX%\nurl.bat                 the .nu -> native build driver
 REM    %PREFIX%\bin\{nurl,nurlc,nurlpkg}.bat   PATH shims (set NURL_STDLIB)
 REM    %PREFIX%\env.bat                  sets NURL_STDLIB + PATH for a session
@@ -69,6 +70,10 @@ if exist "%ROOT%\build\nurlfmt.exe" (
 
 REM Stdlib tree (incl. runtime.o, runtime.<feature> link sentinels, canvas.o).
 xcopy /e /i /y /q "%ROOT%\stdlib" "%PREFIX%\stdlib" >nul
+
+REM Documentation tree - what the nurl-mcp nurl_docs tool serves
+REM (%NURL_STDLIB%\docs, i.e. right here). Text only, a few hundred KB.
+xcopy /e /i /y /q "%ROOT%\docs" "%PREFIX%\docs" >nul
 
 REM Build driver (resolves build\nurlc.exe + stdlib\runtime.o relative to itself).
 copy /y "%ROOT%\nurl.bat" "%PREFIX%\nurl.bat" >nul
@@ -149,6 +154,7 @@ if "%HAVE_NURLFMT%"=="1" (
   echo   installed:  nurl, nurlc, nurlpkg  -^> %PREFIX%\bin
 )
 echo   stdlib:     %%NURL_STDLIB%%        -^> %PREFIX%\stdlib
+echo   docs:                             -^> %PREFIX%\docs
 echo.
 echo Activate it in this shell:
 echo     call "%PREFIX%\env.bat"
@@ -165,6 +171,7 @@ exit /b 0
 if exist "%PREFIX%\bin"      rmdir /s /q "%PREFIX%\bin"
 if exist "%PREFIX%\build"    rmdir /s /q "%PREFIX%\build"
 if exist "%PREFIX%\stdlib"   rmdir /s /q "%PREFIX%\stdlib"
+if exist "%PREFIX%\docs"     rmdir /s /q "%PREFIX%\docs"
 if exist "%PREFIX%\zig"      rmdir /s /q "%PREFIX%\zig"
 if exist "%PREFIX%\nurl.bat" del /q "%PREFIX%\nurl.bat"
 if exist "%PREFIX%\env.bat"  del /q "%PREFIX%\env.bat"

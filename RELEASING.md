@@ -39,8 +39,10 @@ FreeBSD archive if that VM build fails. Use the `workflow_dispatch` input
 for a dry run that builds the artifacts without publishing.
 
 An archive is just the `~/.nurl` layout (`bin/`, `build/`, `stdlib/`,
-`nurl.{sh,bat}`, `env`) with shims that resolve their own location, so it
-works wherever it is unpacked.
+`docs/`, `nurl.{sh,bat}`, `env`) with shims that resolve their own
+location, so it works wherever it is unpacked. `docs/` is the prose tree
+the nurl-mcp `nurl_docs` tool serves, so an installed toolchain answers
+questions about ownership, crypto and platforms without the network.
 
 ## Runtime dependencies (dynamic linking)
 

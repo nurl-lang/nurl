@@ -132,6 +132,19 @@ Cursor, Windsurf, Zed and other MCP-capable IDEs accept the same URL
   native Linux / Windows / macOS / cross targets / wasm), *browse* (list
   examples, stdlib, tests), and *read* (examples, stdlib, tests, grammar,
   readme, roadmap, gotchas).
+- **Search** — `nurl_api` (a module's or a registry package's API surface,
+  or a term search over every stdlib declaration) and `nurl_grep` (ranked
+  substring search across stdlib, examples, tests and the registry).
+  A `nurl_api` query no single declaration satisfies is re-run as a
+  whole-word OR ranked by coverage, so a concept-shaped query — the kind a
+  model actually types, `string builder append` or `vec_push new
+  string_new` — lands on the real functions instead of an empty result.
+- **`nurl_docs`** — this documentation tree, the questions the API surface
+  cannot answer: `MEMORY.md` (who frees what, and when), `CRYPTO.md`,
+  `ASYNC.md`, `PLATFORMS.md`, `spec.md`, `dev/COMPILER_INTERNALS.md`, …
+  No argument lists everything with its size and title; `name=` returns one
+  document (the `docs/` prefix and `.md` suffix optional), `offset=` pages
+  past 48 KB.
 - **Resources** mirroring the read-tools as `nurl://` URIs (`nurl://grammar`,
   `nurl://readme`, `nurl://stdlib/<path>`, `nurl://example/<name>`, …) for
   clients that prefer resource semantics.
