@@ -124,11 +124,12 @@ if [ ! -r /dev/kvm ] || [ ! -w /dev/kvm ]; then
     fi
     say "     (QEMU covers the boot path under TCG; this gate covers the"
     say "     artifact's portability to the other two.)"
+    [ "$fail" = 0 ] && say "verified: PVH note (no usable KVM here to boot it under)"
     exit $fail
 fi
 
 boot_ch() {
-    command -v "$CH" >/dev/null 2>&1 || { say "SKIP cloud-hypervisor (not installed)"; return 0; }
+    command -v "$CH" >/dev/null 2>&1 || { skipped="$skipped cloud-hypervisor"; return 0; }
     out=$(timeout -k 5s 60s "$CH" \
         --kernel "$IMG" \
         --cmdline "tsc_khz=1000000 wallclock=$(date +%s)" \
@@ -142,6 +143,7 @@ boot_ch() {
     case "$out" in
       *"[nurl-exit] 0"*)
         say "PASS cloud-hypervisor booted the unchanged image"
+        booted="$booted cloud-hypervisor"
         ;;
       *)
         say "FAIL cloud-hypervisor"
@@ -152,7 +154,7 @@ boot_ch() {
 }
 
 boot_fc() {
-    command -v "$FC" >/dev/null 2>&1 || { say "SKIP firecracker (not installed)"; return 0; }
+    command -v "$FC" >/dev/null 2>&1 || { skipped="$skipped firecracker"; return 0; }
     # Firecracker is API-driven; the one-shot form takes a JSON config.
     cfg=$(mktemp); log=$(mktemp)
     cat > "$cfg" <<EOF
@@ -169,6 +171,7 @@ EOF
     case "$out" in
       *"[nurl-exit] 0"*)
         say "PASS firecracker booted the unchanged image"
+        booted="$booted firecracker"
         ;;
       *)
         say "FAIL firecracker"
@@ -178,6 +181,19 @@ EOF
     esac
 }
 
+booted=""
+skipped=""
 boot_ch
 boot_fc
+# One last line naming what actually ran. The unit-gate runner shows a
+# step's LAST line, and "SKIP firecracker (not installed)" is the least
+# informative thing this gate can say — the fact worth seeing is that a
+# hypervisor other than QEMU booted the image.
+if [ "$fail" = 0 ]; then
+    if [ -n "$booted" ]; then
+        say "verified: PVH note + booted under$booted${skipped:+ (skipped:$skipped)}"
+    else
+        say "verified: PVH note (no other hypervisor available to boot it)"
+    fi
+fi
 exit $fail
