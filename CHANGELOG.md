@@ -8,6 +8,155 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.34.0] — 2026-08-07
+
+### Added
+
+- **A NURL program boots as its own kernel** (unikernel Track B,
+  PRs #780–#792). `unikernel/build_unikernel.sh prog.nu` produces a
+  PVH ELF that QEMU's microvm machine boots directly — no host OS, no
+  libc, no interpreter: the same `runtime_core.c`, the same nolibc,
+  and exactly three files that talk to the machine (`boot/boot.S`,
+  `boot/platform_x86.c`, `boot/tls_guest.c`). What the image contains,
+  in the order it was earned: real guard pages under every coroutine
+  stack and a clock that is *told* (`tsc_khz=`, `wallclock=` on the
+  kernel command line) rather than guessed (#781); the virtio-mmio
+  transport with the ring logic host-tested before it ever met a
+  device (#782–#784); virtio-net and DHCP, so the guest asks the
+  network who it is (#785–#787); a filesystem baked into the image as
+  a tar and program arguments from the command line's `args="…"` key
+  (#788); TLS 1.3 served from the guest — RSA certificate read from
+  the image, RDRAND entropy, X.509 validity checked against the told
+  wallclock (#790); and an MCP endpoint that IS the machine,
+  answering initialize / tools/list / tools/call from a client on the
+  host (#792). Measured, under TCG (an interpreter — the floor, not
+  the ceiling): 354 KB plaintext image, 378 KB with TLS; hello
+  answers on a 3 MiB guest, the HTTPS server on 4 MiB; cold VM to
+  first HTTP answer 2.5–6.6 s. The `unikernel` CI job runs the boot
+  gates on every commit (#789), and the guest gate stands at 20/20.
+
+- **Threads and fibers with no operating system under them**
+  (`unikernel/runtime_bare.c`, PR #774). One coroutine type carries
+  both `thread_spawn` and `spawn` on a single vCPU, cooperatively.
+  The property the design buys: deadlock is DECIDABLE — with no
+  coroutine runnable, no timer armed and no device that could deliver
+  unprompted, the runtime prints which wait can never be satisfied
+  and exits, instead of hanging. nolibc also grew a libm whose
+  coefficients are generated, not copied, with Payne–Hanek reduction
+  — accurate on purpose, gated differentially against glibc.
+
+- **The TCP/IP stack itself, in pure NURL, sans-IO** (phase A4,
+  PRs #776–#779). `stdlib/net/` gains ethernet, ARP, IPv4, ICMP,
+  TCP (connection table, retransmit, persist probes, TIME_WAIT), UDP
+  as a mailbox that preserves datagram boundaries, and DHCP — none
+  of it touches an fd, a clock or a device, which is what lets it be
+  tested under a scripted clock and fuzzed frame-by-frame
+  (`net_frame_fuzz`, 5 injected parser bugs caught). On top of it
+  `unikernel/net/sockets.nu` implements the socket ABI
+  (`nurl_tcp_*`, `nurl_reactor_*`) in NURL, so the ordinary corpus
+  — async servers, websockets, HTTP — runs with **no libc and no
+  kernel sockets: 452 tests pass** against their unmodified goldens.
+  A socket wait parks on its fd (#778): a machine whose every waiter
+  is parked is provably idle rather than merely quiet.
+
+- **A connection flood is refused, not fatal** (PR #796). The socket
+  layer takes an fd ceiling (`sock_max_fds`, default 1024,
+  `sock_set_max_fds` to change, 0 = none), checked before accept
+  dequeues so a refused connection is never half-adopted. Reported as
+  an accept error, not EAGAIN — EAGAIN plus a still-readable listener
+  is a reactor spin.
+
+- **`unikernel/README.md`** (#794): what this machine promises, what
+  it refuses (fork/exec, signals, a writable filesystem), and what it
+  costs, with the measured numbers above pinned in one place.
+
+### Fixed
+
+- **A socket's timeout survives being read from a fiber** (PR #799).
+  `std/net.nu`'s async paths parked on the reactor with a hard-coded
+  "for ever", so `tcp_set_timeout` was silently discarded the moment
+  a read happened inside a coroutine — invisible on hosted targets
+  (threads are OS threads there), fatal on the bare runtime (a thread
+  IS a coroutine there). The socket now keeps its deadline in the
+  handle (`nurl_tcp_timeout_ms`, both runtimes) and the fiber paths
+  honour it. Fixing it uncovered three more, each real on its own:
+  the bare scheduler's idle sleep waited for the next *coroutine*
+  timer regardless of the caller's own deadline; the bare reactor had
+  no `timeout_ms == 0` POLL semantics (0 fell into "no deadline" and
+  blocked — it had always been wrong, and passed only because the
+  deadlock detector's −1 read as "not readable"); and the HTTP/2
+  client's readiness probe counted that poll's honest "not ready" as
+  READABLE (`>= 0` where the contract is `== 1`), sending its drain
+  loop into a blocking frame read with no frame coming — this last
+  one lived in the hosted stdlib too. End to end: the swarm-mcp
+  unikernel appliance now forms its cluster, serves MCP over HTTPS,
+  and completes a submitted compute task with the correct result.
+
+- **`spawn` can no longer hand back a fiber that does not exist**
+  (PR #795). When a fiber stack cannot be allocated, both runtimes
+  abort with `cannot create a fiber — out of memory for its stack
+  (N live)` instead of returning a phantom handle that made a
+  200-fiber program quietly compute with 11. A fiber costs 68 KiB
+  (64 KiB stack + 4 KiB guard); the figure is now in `docs/ASYNC.md`.
+
+- **The guest stopped failing silently** (PR #794, the hardening
+  pass — every item is a bug the previous gates could not see). No
+  IDT meant every CPU exception was indistinguishable from a clean
+  shutdown: 256 stubs now report vector/err/rip/rsp/rflags/cr2 and
+  exit 126, with #DF and #PF on their own interrupt stack because the
+  fault worth surviving is a stack that hit its guard page. The boot
+  stack had no guard page and page 0 was mapped, so a null store
+  quietly succeeded — both unmapped. `munmap` was a no-op over a bump
+  pointer, so alloc/free cycles ran a 256 MiB guest out of memory at
+  ~250 iterations — replaced with a real page allocator, fuzzed on
+  the host against a model. virtio-net leaked a 2 KiB buffer per
+  transmitted frame (5.2 MB per 200 requests) — the soak gate now
+  proves the heap flat. And DHCP took `yiaddr`/mask off the wire
+  unchecked, so a hostile or broken server could configure the guest
+  off the network silently.
+
+- **A machine can talk to itself, and a sleeping main does not stop
+  it** (PR #797 — five bugs found by running the real swarm-mcp
+  package as an image, three of them in the hosted runtime's own
+  contract). `sleep_ms` in the main context was a nanosleep that
+  froze every coroutine on the cooperative runtime — it now runs
+  whatever is runnable while the clock catches up
+  (`nurl_runtime_is_cooperative` is the twin seam). The stack's
+  transmit path had no source-address parameter, so a guest with a
+  NIC checksummed loopback replies against the wrong pseudo-header
+  and dropped them without moving a counter. A guest with a device
+  was declared deadlocked while every coroutine legitimately waited
+  on the network — a device gets a poller coroutine, and
+  loopback-only programs keep the deadlock proof. `access()` refused
+  everything, so `file_exists` could not see the baked-in
+  certificate. And the guest console was fully buffered, so a server
+  that never exits never printed a byte.
+
+- **nurlc: a pointer to one struct was accepted as a pointer to
+  another** (in PR #794's run-up). Four argument-clash families
+  existed; the hole was exactly two different named types with a
+  pointer on at least one side — `( takes_alpha b )` with `b : *Beta`
+  compiled clean and reinterpreted memory at run time. Now a
+  compile-time mismatch, with zero false positives over all 1202
+  `.nu` files in the tree.
+
+- **NURL can read back the infinities it writes**. `nurl_fast_atof`
+  — the parser the formatter's round-trip guarantee is stated
+  against — stopped at digits and answered 0.0 for `inf`, `-inf` and
+  `nan`, so a CSV float column holding an infinity came back as zero
+  silently. The three conversions now round-trip, and the stdlib's
+  own paths go through the one parser instead of through libc.
+
+- **A NURL function may define a symbol an FFI declaration names**
+  (PR #775): a definition supersedes the declare instead of
+  colliding with it — the rule that lets `unikernel/net/sockets.nu`
+  BE the socket ABI without `std/net.nu` changing a line.
+
+- **A package's imports resolve from the package, not the repo**
+  (PR #793): `compile_nu.sh` ran nurlc from the repository root, so
+  the first real package handed to the unikernel build stopped at
+  "cannot open deps/…" — true statement, wrong directory.
+
 ## [0.33.0] — 2026-08-05
 
 ### Added
@@ -10667,7 +10816,8 @@ releases are measured.
   compile-server (`api/`), browser playground (`nurlweb/`).
 * Dual license: MIT (LICENSE-MIT) or Apache-2.0 (LICENSE-APACHE).
 
-[Unreleased]: https://github.com/nurl-lang/nurl/compare/v0.33.0...HEAD
+[Unreleased]: https://github.com/nurl-lang/nurl/compare/v0.34.0...HEAD
+[0.34.0]: https://github.com/nurl-lang/nurl/compare/v0.33.0...v0.34.0
 [0.33.0]: https://github.com/nurl-lang/nurl/compare/v0.32.0...v0.33.0
 [0.32.0]: https://github.com/nurl-lang/nurl/compare/v0.31.1...v0.32.0
 [0.31.1]: https://github.com/nurl-lang/nurl/compare/v0.31.0...v0.31.1
