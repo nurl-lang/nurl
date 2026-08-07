@@ -51,12 +51,14 @@ typedef unsigned int       u32;
 extern unsigned char __heap_start[];
 
 /* ── the device tree, in boot/fdt.c ──────────────────────────────── */
+#define FDT_MAX_DEVS 32
 struct fdt_facts {
     u64   ram_base;
     u64   ram_size;
     char  cmdline[2048];
     unsigned long cmdline_len;
     int   devices;
+    u64   dev_base[FDT_MAX_DEVS];
 };
 int fdt_is_tree(const void *p);
 int fdt_probe(const void *fdt, struct fdt_facts *out);
@@ -476,20 +478,41 @@ int nanosleep(const void *req, void *rem) {
 
 /* ── entropy ─────────────────────────────────────────────────────
  *
- * There is no entropy instruction in this machine's profile: the Zkr
+ * There is no entropy INSTRUCTION in this machine's profile: the Zkr
  * extension's `seed` CSR is optional and QEMU's rv64 CPU does not
- * implement it, so reading it is an illegal instruction rather than a
- * weak number. The plan's rule is absolute — no source is a panic,
- * never a fallback — and this port applies it by refusing, naming what
- * is missing. Everything except key generation works; a TLS handshake
- * on this architecture waits for a virtio-rng driver.
+ * implement it, so reading it would be an illegal instruction rather
+ * than a weak number. The answer therefore comes from a DEVICE —
+ * virtio-rng, driven by boot/virtio_rng.c — which is the same layer
+ * the other two architectures answer from, just a different source.
+ *
+ * The rule stays absolute: no source is a panic, never a fallback.
+ * A machine started without `-device virtio-rng-device` is told so by
+ * name, because "your TLS handshake failed" is a much worse way to
+ * learn it than "this machine has no entropy device".
  */
+int virtio_rng_start(const u64 *bases, int n);
+long long virtio_rng_read(void *dst, unsigned long len);
+
 long long getrandom(void *buf, unsigned long len, unsigned int flags) {
-    (void)buf; (void)len; (void)flags;
-    pf_panic("no entropy source on this machine — RISC-V's seed CSR (Zkr) "
-             "is optional and absent here, and there is no virtio-rng "
-             "driver yet. Refusing to generate keys from nothing.");
-    return 0;
+    unsigned char *p = (unsigned char *)buf;
+    unsigned long done = 0;
+    (void)flags;
+
+    if (!virtio_rng_start(facts.dev_base, facts.devices))
+        pf_panic("no entropy source on this machine — RISC-V's seed CSR "
+                 "(Zkr) is optional and absent here, and no virtio-rng "
+                 "device was found. Start the guest with "
+                 "`-device virtio-rng-device`. Refusing to generate keys "
+                 "from nothing.");
+
+    while (done < len) {
+        long long got = virtio_rng_read(p + done, len - done);
+        if (got <= 0)
+            pf_panic("the virtio-rng device stopped answering — refusing "
+                     "to continue with partial entropy");
+        done += (unsigned long)got;
+    }
+    return (long long)len;
 }
 
 /* ── the file surface nolibc expects ─────────────────────────────── */

@@ -302,6 +302,10 @@ jobs:
           mkdir -p /opt/zig && sudo tar -xJf /tmp/zig.tar.xz -C /opt/zig --strip-components=1
 
       - name: The guest, on the THIRD architecture
+        # …including the entropy gate: this ISA has no instruction for
+        # randomness, so the RISC-V guest drives a virtio-rng device
+        # and the gate checks both halves — real bytes with the device,
+        # a refusal BY NAME without it.
         # RISC-V, QEMU's virt board with OpenSBI underneath. The third
         # port is the one that proves the second was not a coincidence:
         # by now the per-architecture surface is four files and a
