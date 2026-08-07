@@ -381,6 +381,79 @@ what the AArch64 guest gate boots), while Firecracker and
 cloud-hypervisor want a PE-format `Image` there — a packaging step
 this target has not taken, rather than a property it has.
 
+## Three architectures, and what a port actually costs
+
+| | x86_64 | AArch64 | RV64 |
+|---|---|---|---|
+| board | QEMU microvm (PVH) | QEMU `virt` | QEMU `virt` + OpenSBI |
+| entry | 32-bit, `%ebx` = handover | EL2 or EL1, `x0` = DTB | S-mode, `a1` = DTB |
+| memory from | PVH memmap | device tree | device tree |
+| devices from | kernel command line | device tree | device tree |
+| clock | TSC, frequency **told** | CNTFRQ_EL0 | `rdtime`, tree's rate |
+| entropy | RDRAND | RNDR | **none — refuses** |
+| hello image | 132 760 B | 131 784 B | 155 344 B |
+
+The per-architecture files are the bottom edge and nothing else:
+`boot_<arch>.S`, `platform_<arch>.c`, `tls_guest_<arch>.c`,
+`nolibc/setjmp_<arch>.S`, `link_<arch>.ld`. Everything above them —
+the runtime, nolibc, the sans-IO TCP/IP stack, the socket ABI, the
+virtio driver, the program — is the same code, which each guest gate
+proves by running the ordinary corpus against its ORDINARY hosted
+goldens.
+
+Two things became shared rather than copied when the third port
+arrived, which is the right time for it:
+
+- **`boot/fdt.c`** — the device-tree walk. AArch64 and RV64 need the
+  same three answers (where RAM is, what the command line says, which
+  virtio-mmio devices exist) out of the same format, and two ports
+  parsing one tree separately is where two machines start disagreeing
+  about what it says. It also does the translation that keeps the
+  layer above architecture-blind: `hal/virtio.nu` reads the x86
+  spelling `virtio_mmio.device=size@base:irq`, so the walker
+  SYNTHESIZES those entries from the tree.
+- **`boot/pagealloc.c`** and **`boot/initfs.c`** were already portable
+  C and are linked by all three unchanged.
+
+### RV64 (QEMU `virt`), the third one
+
+OpenSBI runs first and hands the kernel S-mode with `a0` = hart id and
+`a1` = the device tree, so this port does less at entry than either
+twin: no mode change, no page tables before C. What it does do is park
+every hart but one (this runtime is a single vCPU by design), set
+`stvec` before anything can trap, turn FP on (`sstatus.FS` comes up
+Off, and LLVM emits FP for ordinary doubles), and switch the trap
+handler to its own stack by hand — this architecture has no automatic
+stack switch on trap, which AArch64 gets free from SP_EL1 and x86 from
+the TSS's IST.
+
+Three things this port had to say out loud rather than assume:
+
+- **`fp` IS `s0`.** The device-tree pointer was parked in `s0` and
+  three instructions later `li fp, 0` ended the frame-pointer chain —
+  zeroing it. The guest then reported "no device tree in a1", which
+  was a true statement about a register this file had just cleared.
+  An assembly probe of the firmware handover is what told them apart.
+- **The firmware talks.** OpenSBI prints a banner on the same UART
+  before the kernel runs, so the guest marks its own first byte
+  (`[nurl-boot]`) and the run script drops everything up to it. The
+  rule belongs to us rather than to whatever the banner looks like
+  this year.
+- **There is no entropy source.** RISC-V's `seed` CSR is the optional
+  Zkr extension and QEMU's rv64 CPU does not implement it, so this
+  port PANICS on a request for randomness, naming what is missing.
+  Everything else works; a TLS handshake here waits for a virtio-rng
+  driver. That is the plan's absolute rule applied to an architecture
+  that cannot satisfy it — refuse, do not invent.
+
+`unikernel/run_qemu_riscv64_tests.sh` is the gate — **15/15**, the
+same corpus programs against the same hosted goldens, the device
+demos, faults reported with exit 126, and an HTTP server in the guest
+answering curl on the host. The hello image is 155 344 B, about 23 KB
+more than the other two: this ISA needs more instructions to say the
+same things, which is the honest reading of the number rather than
+something to tune away.
+
 ## The second architecture (AArch64, QEMU `virt`)
 
 A second machine is what turns "portable" from an intention into a
@@ -523,6 +596,7 @@ unikernel/run_nolibc_tests.sh            # the corpus, with no libc
 unikernel/run_qemu_tests.sh              # the guest, under a hypervisor
 unikernel/run_qemu_tests.sh hello        # one of them
 unikernel/run_qemu_arm64_tests.sh        # the guest, on the other architecture
+unikernel/run_qemu_riscv64_tests.sh      # …and on the third
 unikernel/tests/hypervisor_gate.sh       # the image is not a QEMU image
 unikernel/build_nolibc.sh prog.nu        # build one program, no libc
 unikernel/build_unikernel.sh prog.nu     # build one bootable image (x86_64)

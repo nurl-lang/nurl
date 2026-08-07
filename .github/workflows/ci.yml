@@ -247,7 +247,7 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
-            clang binutils qemu-system-x86 qemu-system-arm curl
+            clang binutils qemu-system-x86 qemu-system-arm qemu-system-misc curl
 
       - name: Build the compiler
         run: ./build.sh --no-tests
@@ -300,6 +300,16 @@ jobs:
           curl -fsSL --retry 5 -o /tmp/zig.tar.xz \
             "https://ziglang.org/download/${ZIG_VERSION}/zig-linux-x86_64-${ZIG_VERSION}.tar.xz"
           mkdir -p /opt/zig && sudo tar -xJf /tmp/zig.tar.xz -C /opt/zig --strip-components=1
+
+      - name: The guest, on the THIRD architecture
+        # RISC-V, QEMU's virt board with OpenSBI underneath. The third
+        # port is the one that proves the second was not a coincidence:
+        # by now the per-architecture surface is four files and a
+        # linker script, and everything above it is the same code
+        # running against the same hosted goldens.
+        env:
+          NURL_ZIG: /opt/zig/zig
+        run: ./unikernel/run_qemu_riscv64_tests.sh
 
       - name: The guest, on the OTHER architecture
         # The claim the aarch64 port makes is that nothing above the

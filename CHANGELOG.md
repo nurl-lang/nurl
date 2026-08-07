@@ -10,6 +10,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A NURL program boots as its own kernel on RISC-V too** — the third
+  architecture, and the one that proves the second was not a
+  coincidence. QEMU's `virt` board with OpenSBI underneath, four files
+  and a linker script (`boot_riscv64.S`, `platform_riscv64.c`,
+  `tls_guest_riscv64.c`, `nolibc/setjmp_riscv64.S`, `link_riscv64.ld`)
+  plus an RV64 fiber switch in `runtime_ctx.c`. Gate
+  `unikernel/run_qemu_riscv64_tests.sh` is **15/15** — the same corpus
+  programs against the same hosted goldens, the device demos, faults
+  reported with exit 126, and an HTTP server in the guest answering
+  curl on the host. CI builds and boots all three architectures on
+  every commit.
+
+  Three things this machine made explicit rather than let pass:
+  **`fp` IS `s0`** on this ISA, so parking the device-tree pointer in
+  `s0` and ending the frame-pointer chain three instructions later
+  zeroed it — the guest reported "no device tree", which was a true
+  statement about a register the boot code had just cleared, and an
+  assembly probe of the firmware handover is what told the two apart.
+  **The firmware talks**: OpenSBI prints on the same UART before the
+  kernel runs, so the guest marks its own first byte and the run
+  script drops everything before it — a rule that belongs to us rather
+  than to whatever the banner looks like this year. And **there is no
+  entropy source**: RISC-V's `seed` CSR is the optional Zkr extension
+  and QEMU's rv64 CPU does not implement it, so this port panics on a
+  request for randomness, naming what is missing, instead of inventing
+  it.
+
+### Changed
+
+- **The device-tree walk is shared rather than copied**
+  (`unikernel/boot/fdt.c`). AArch64 and RISC-V need the same three
+  answers out of the same format, and the third port is the right
+  moment to stop copying the second's. Generalising it found a real
+  narrowness in the AArch64 original: it classified nodes at a
+  hard-coded depth, and RISC-V's virt puts its devices under `/soc`
+  where AArch64's puts them at the root — so the walker found nothing
+  and the guest reported "no virtio-net device" about a machine that
+  had one. Nodes are now classified by NAME at any depth, with
+  address/size cells tracked per level because a bus node may state
+  its own.
+
 - **The image is not a QEMU image, and there is now a gate that says
   so** (plan phase U7). Firecracker and cloud-hypervisor both boot an
   x86_64 kernel by reading the same `XEN_ELFNOTE_PHYS32_ENTRY` note

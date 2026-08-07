@@ -183,163 +183,22 @@ void pf_exception(u64 vector, struct fault_frame *f) {
 
 /* ── the device tree ─────────────────────────────────────────────
  *
- * The one authoritative statement of what this machine is. A minimal
- * walker, not a library: the flattened format is four token types and
- * big-endian integers, and this file needs exactly three answers from
- * it — /chosen/bootargs, /memory reg, and every "virtio,mmio" node's
- * reg + interrupts.
+ * In unikernel/boot/fdt.c, because the RISC-V port needs exactly the
+ * same three answers from exactly the same format — and two ports
+ * parsing one tree separately is where two machines start disagreeing
+ * about what it says. This file keeps only what is machine-specific.
  */
-#define FDT_MAGIC       0xd00dfeed
-#define FDT_BEGIN_NODE  1
-#define FDT_END_NODE    2
-#define FDT_PROP        3
-#define FDT_NOP         4
-#define FDT_END         9
+struct fdt_facts {
+    unsigned long long ram_base;
+    unsigned long long ram_size;
+    char  cmdline[2048];
+    unsigned long cmdline_len;
+    int   devices;
+};
+int fdt_is_tree(const void *p);
+int fdt_probe(const void *fdt, struct fdt_facts *out);
 
-static u32 be32(const unsigned char *p) {
-    return ((u32)p[0] << 24) | ((u32)p[1] << 16) | ((u32)p[2] << 8) | (u32)p[3];
-}
-static u64 be64(const unsigned char *p) {
-    return ((u64)be32(p) << 32) | be32(p + 4);
-}
-
-static int str_eq(const char *a, const char *b) {
-    while (*a && *a == *b) { a++; b++; }
-    return *a == *b;
-}
-static int str_prefix(const char *s, const char *pre) {
-    while (*pre && *s == *pre) { s++; pre++; }
-    return *pre == 0;
-}
-
-/* What the walk fills in. */
-static u64 fdt_ram_base, fdt_ram_size;
-static const char *fdt_bootargs;
-
-/* The synthesized command line: the DTB's bootargs plus one
- * `virtio_mmio.device=` entry per device node, so the NURL layer sees
- * the exact format microvm's auto-cmdline gives the x86 guest. */
-static char cmdline_buf[2048];
-static unsigned long cmdline_len;
-
-static void cl_puts(const char *s) {
-    while (*s && cmdline_len < sizeof cmdline_buf - 1)
-        cmdline_buf[cmdline_len++] = *s++;
-    cmdline_buf[cmdline_len] = 0;
-}
-static void cl_puthex(u64 v) {
-    static const char hex[] = "0123456789abcdef";
-    char b[17];
-    int i = 16;
-    b[i] = 0;
-    if (!v) b[--i] = '0';
-    while (v) { b[--i] = hex[v & 0xF]; v >>= 4; }
-    cl_puts("0x");
-    cl_puts(&b[i]);
-}
-static void cl_putu(u64 v) {
-    char b[21];
-    int i = 20;
-    b[i] = 0;
-    if (!v) b[--i] = '0';
-    while (v) { b[--i] = (char)('0' + v % 10); v /= 10; }
-    cl_puts(&b[i]);
-}
-
-/* One pass over the structure block. Depth-1 node names decide what a
- * property means; #address-cells/#size-cells are read from the root
- * (virt says 2/2, and the walker believes the tree, not the doc). */
-static void fdt_parse(const unsigned char *fdt) {
-    u32 off_struct  = be32(fdt + 8);
-    u32 off_strings = be32(fdt + 12);
-    const unsigned char *p = fdt + off_struct;
-    const char *strings = (const char *)fdt + off_strings;
-
-    int depth = 0;
-    u32 addr_cells = 2, size_cells = 2;
-    /* Per-node state for the virtio nodes: reg and irq arrive as
-     * separate properties, compatible may come after either, so the
-     * node is judged at its END. */
-    int  node_is_virtio = 0, node_is_memory = 0;
-    u64  node_reg_base = 0, node_reg_size = 0;
-    u64  node_irq = 0;
-    int  node_depth = -1;
-
-    for (;;) {
-        u32 tok = be32(p); p += 4;
-        if (tok == FDT_END) break;
-        if (tok == FDT_NOP) continue;
-        if (tok == FDT_BEGIN_NODE) {
-            const char *name = (const char *)p;
-            unsigned long n = 0;
-            while (name[n]) n++;
-            p += (n + 1 + 3) & ~3UL;
-            depth++;
-            if (depth == 2) {
-                node_is_virtio = str_prefix(name, "virtio_mmio@");
-                node_is_memory = str_prefix(name, "memory@") || str_eq(name, "memory");
-                node_reg_base = node_reg_size = node_irq = 0;
-                node_depth = depth;
-            }
-            continue;
-        }
-        if (tok == FDT_END_NODE) {
-            if (depth == node_depth) {
-                if (node_is_virtio && node_reg_size) {
-                    /* The x86 format: size@base:irq. The IRQ is the
-                     * GIC SPI number plus the SPI base (32) — the
-                     * number Linux would print — though the polling
-                     * driver above never uses it. */
-                    cl_puts(" virtio_mmio.device=");
-                    cl_puthex(node_reg_size);
-                    cl_puts("@");
-                    cl_puthex(node_reg_base);
-                    cl_puts(":");
-                    cl_putu(node_irq + 32);
-                }
-                if (node_is_memory && node_reg_size && !fdt_ram_size) {
-                    fdt_ram_base = node_reg_base;
-                    fdt_ram_size = node_reg_size;
-                }
-                node_is_virtio = node_is_memory = 0;
-                node_depth = -1;
-            }
-            depth--;
-            continue;
-        }
-        if (tok == FDT_PROP) {
-            u32 len  = be32(p);
-            u32 noff = be32(p + 4);
-            const unsigned char *val = p + 8;
-            const char *pname = strings + noff;
-            p += 8 + ((len + 3) & ~3UL);
-
-            if (depth == 1) {
-                if (str_eq(pname, "#address-cells")) addr_cells = be32(val);
-                if (str_eq(pname, "#size-cells"))    size_cells = be32(val);
-            }
-            if (depth == 2 && str_eq(pname, "bootargs")) {
-                /* /chosen/bootargs — only /chosen carries it at this
-                 * depth on virt, and believing a stray one elsewhere
-                 * would take a device's property as the command line. */
-                fdt_bootargs = (const char *)val;
-            }
-            if (depth == node_depth && str_eq(pname, "reg") &&
-                len >= (addr_cells + size_cells) * 4) {
-                node_reg_base = addr_cells == 2 ? be64(val) : be32(val);
-                node_reg_size = size_cells == 2 ? be64(val + addr_cells * 4)
-                                                : be32(val + addr_cells * 4);
-            }
-            if (depth == node_depth && str_eq(pname, "interrupts") && len >= 12) {
-                node_irq = be32(val + 4);        /* <type irq flags>   */
-            }
-            continue;
-        }
-        /* An unknown token means the walk is lost; stop rather than
-         * interpret noise as devices. */
-        break;
-    }
-}
+static struct fdt_facts facts;
 
 /* ── the kernel command line ─────────────────────────────────────── */
 
@@ -390,10 +249,10 @@ static u32  pt_pool_used;
 
 static void mem_init(void) {
     u64 img = (u64)(unsigned long)__heap_start;
-    if (!fdt_ram_size)
+    if (!facts.ram_size)
         pf_panic("the device tree reported no memory — refusing to guess "
                  "how much RAM this machine has");
-    u64 base = fdt_ram_base, len = fdt_ram_size;
+    u64 base = facts.ram_base, len = facts.ram_size;
     if (base + len <= img)
         pf_panic("no usable memory above the image");
     if (base < img) { len -= (img - base); base = img; }
@@ -495,8 +354,8 @@ static void mmu_init(void) {
 
     /* RAM, from where the tree says it starts to where it says it
      * ends, one L2 table per gigabyte. */
-    u64 ram_end = fdt_ram_base + fdt_ram_size;
-    u64 gb_first = fdt_ram_base >> 30;
+    u64 ram_end = facts.ram_base + facts.ram_size;
+    u64 gb_first = facts.ram_base >> 30;
     u64 gb_last  = (ram_end - 1) >> 30;
     if (gb_last - gb_first + 1 > MAX_RAM_L2)
         pf_panic("more RAM than the boot page tables cover (raise MAX_RAM_L2)");
@@ -823,31 +682,14 @@ void kmain(unsigned long x0) {
      * convention, the start of RAM otherwise (where QEMU's virt board
      * puts it for a bare-metal ELF). Without one this port knows
      * neither its memory nor its devices, and says so. */
-    const unsigned char *fdt = 0;
-    if (x0 && be32((const unsigned char *)x0) == FDT_MAGIC)
-        fdt = (const unsigned char *)x0;
-    else if (be32((const unsigned char *)0x40000000UL) == FDT_MAGIC)
-        fdt = (const unsigned char *)0x40000000UL;
+    const void *fdt = 0;
+    if (x0 && fdt_is_tree((const void *)x0))          fdt = (const void *)x0;
+    else if (fdt_is_tree((const void *)0x40000000UL)) fdt = (const void *)0x40000000UL;
     if (!fdt)
         pf_panic("no device tree in x0 or at the start of RAM — was this "
                  "image started with qemu-system-aarch64 -M virt -kernel?");
-    fdt_parse(fdt);
-
-    /* The command line the layers above see: the DTB's bootargs, then
-     * the virtio entries the walk synthesized (fdt_parse appended them
-     * to cmdline_buf already — bootargs go in FRONT of them now). */
-    {
-        char tail[sizeof cmdline_buf];
-        unsigned long tn = cmdline_len;
-        for (unsigned long i = 0; i < tn; i++) tail[i] = cmdline_buf[i];
-        cmdline_len = 0;
-        cmdline_buf[0] = 0;
-        if (fdt_bootargs) cl_puts(fdt_bootargs);
-        for (unsigned long i = 0; i < tn && cmdline_len < sizeof cmdline_buf - 1; i++)
-            cmdline_buf[cmdline_len++] = tail[i];
-        cmdline_buf[cmdline_len] = 0;
-        cmdline = cmdline_buf;
-    }
+    fdt_probe(fdt, &facts);
+    cmdline = facts.cmdline;
 
     mem_init();
     mmu_init();

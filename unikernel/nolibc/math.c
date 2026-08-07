@@ -85,6 +85,8 @@ double sqrt(double x) {
     __asm__("sqrtsd %1, %0" : "=x"(r) : "x"(x));
 #elif defined(__aarch64__)
     __asm__("fsqrt %d0, %d1" : "=w"(r) : "w"(x));
+#elif defined(__riscv) && defined(__riscv_flen) && __riscv_flen >= 64
+    __asm__("fsqrt.d %0, %1" : "=f"(r) : "f"(x));
 #else
 #  error "nolibc sqrt: no hardware square root known for this target"
 #endif
