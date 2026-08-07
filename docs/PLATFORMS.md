@@ -56,6 +56,8 @@ container's cross-compile endpoints (see [`PLAYGROUND.md`](PLAYGROUND.md)).
 | macOS ARM64 | LLVM + zig cc | 3 | `POST /build_target` (`target=macos-arm64`) — native Apple Silicon Mach-O, links only libSystem. Unsigned: clear quarantine before running |
 | WebAssembly | wasm32-wasi | 3 | via the `nurlapi/` container (WASI SDK 24.0); browser execution via `browser_wasi_shim`. The self-hosting compiler itself also builds to wasm — see [`PLAYGROUND.md`](PLAYGROUND.md) |
 | Linux ARM64 / RISC-V64 | LLVM + zig cc | 3 | `POST /build_target` — fully-static `musl` ELFs (`linux-arm64-musl`, `linux-riscv64-musl`) or dynamic glibc (`linux-arm64-gnu`). Milk-V Duo (RISC-V C906) validated on-device (one-off, not CI) |
+| Unikernel x86_64 | LLVM + unikernel nolibc | 1 | the program **boots as its own kernel** — PVH ELF for QEMU microvm, and the same image boots under Firecracker and cloud-hypervisor. The guest gate (corpus subset against hosted goldens, device demos, faults, an HTTP server answering the host — not the full corpus) runs in CI on every change and blocks merge. `POST /build_unikernel` in the playground. See [`unikernel/README.md`](../unikernel/README.md) |
+| Unikernel AArch64 / RISC-V64 | LLVM + zig cc + unikernel nolibc | 1 | QEMU `virt`; AArch64 also emits a flat `Image` for Firecracker / cloud-hypervisor (those need an ARM64 host). Per-arch QEMU gates (same scope as x86_64's) run in CI on every change and block merge. AArch64 via `POST /build_unikernel` `arch` |
 | Android / iOS | LLVM cross | — | planned |
 | Embedded (no_std) | LLVM | — | planned |
 

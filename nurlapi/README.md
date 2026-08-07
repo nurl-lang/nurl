@@ -18,8 +18,11 @@
     - **WebAssembly** — WASI SDK 24 + `wasm-opt` (binaryen) for Asyncify
   - **Pure-NURL HTTP API** (`nurlapi/main.nu`, compiled to a native binary at image-build time) with `/build`, `/build_wasm`, `/build_windows`,
     `/build_macos`, `/build_target`, `/build_unikernel` (a bootable
-    x86_64 PVH image + ready-to-paste QEMU boot commands; `files` bakes
-    a read-only filesystem into the image) build endpoints and `/targets` (the
+    unikernel image — x86_64 PVH/microvm by default, AArch64 QEMU virt
+    via `arch` — plus ready-to-paste QEMU boot commands; `files` bakes
+    a read-only filesystem into the image, `boot: true` boots it
+    server-side and returns the guest console; also exposed as MCP tool
+    `nurl_build_unikernel`) build endpoints and `/targets` (the
     cross-compile target registry the playground's dropdown is built from). HTTP server, router, JSON, MCP transport — all stdlib (`stdlib/ext/http_*.nu`, `stdlib/ext/json.nu`, `stdlib/ext/mcp_*.nu`).
   - **Browser playground** at `/` — Monaco editor, examples dropdown, build+run in-page via
   [`@bjorn3/browser_wasi_shim`](https://github.com/bjorn3/browser_wasi_shim).

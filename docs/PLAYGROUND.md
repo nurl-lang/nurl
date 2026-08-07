@@ -34,7 +34,17 @@ and serves a public **MCP endpoint** at `/mcp`.
   `linux-{x64,arm64,riscv64}-musl` (fully-static ELF), `linux-arm64-gnu`
   (dynamic glibc), `macos-{x64,arm64}` (Mach-O incl. native Apple Silicon).
   Body adds `"target":"<id>"`. canvas/audio/HTTP unsupported on these targets.
-- `GET /targets` — list every selectable compile target (the playground's
+- `POST /build_unikernel` — build a **bootable unikernel image**: the
+  program compiled freestanding (unikernel nolibc + `runtime_bare`, no
+  host OS) into an x86_64 PVH ELF (QEMU microvm; the same image boots
+  under Firecracker and cloud-hypervisor) or, with `"arch":"aarch64"`,
+  an ELF + flat `Image` for QEMU `virt`. Optional `"args"` (the guest's
+  argv — returned inside the boot command, never executed server-side),
+  `"files"` (`{relative/path: base64}` baked in as a read-only
+  filesystem) and `"boot": true` (boot the image server-side and return
+  the guest console + exit status). The reply carries the artifact plus
+  ready-to-paste QEMU commands. The same build is exposed to agents as
+  MCP tool `nurl_build_unikernel`.
   **Target** dropdown is built from this).
 - `GET /download/{build_id}/{filename}` — stream a build artifact
   produced by a `/build*` endpoint. Artifacts expire automatically

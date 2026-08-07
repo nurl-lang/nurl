@@ -16,7 +16,7 @@ NURL takes a few design positions that are uncommon together:
 - **Locally parseable** — a construct's shape (arity and nesting) is fixed by a short window of surrounding tokens, with no long-range parse dependencies. (A few operators — `.`, `&`, `|`, `#` — resolve their *lowering* by operand type; see [`docs/spec.md`](docs/spec.md) §4.9/§6.)
 - **Deterministic compiler** — the same source always produces identical output, with no platform-dependent codegen. The self-hosted compiler reaches a byte-identical fixed point on its own source. (Raw `*T` pointers and out-of-range shifts inherit LLVM semantics — spec §4.2, §6.1.)
 - **Single-owner memory + default-on static borrow checker** — auto-drop at scope exit, plus a diagnostic pass (on by default, `--no-borrowck` to disable) that catches use-after-move, alias-double-free, escaping closure-captures, and iterator invalidation as hard errors.
-- **LLVM-based codegen, broad platform reach** — one pipeline targets Linux, macOS, Windows, wasm32-wasi, RISC-V, and ARM64.
+- **LLVM-based codegen, broad platform reach** — one pipeline targets Linux, macOS, Windows, wasm32-wasi, RISC-V, and ARM64 — and a NURL program can **boot as its own kernel**: bootable unikernel images (no host OS, no libc) on x86_64, AArch64 and RISC-V64. See [`unikernel/README.md`](unikernel/README.md).
 
 A reproducible benchmark suite lives in [`bench/`](bench/): 15 benchmarks
 implemented five times each — NURL, C, Rust, Node and Python — with every row
@@ -208,6 +208,7 @@ pure-NURL runtime. Details: [`docs/TOOLING.md`](docs/TOOLING.md).
 | Distributed stack (NAT traversal, overlay, SWIM, CRDTs) | [`docs/DISTRIBUTED.md`](docs/DISTRIBUTED.md) |
 | HTTP API, playground & MCP server | [`docs/PLAYGROUND.md`](docs/PLAYGROUND.md) |
 | Platforms — codegen targets & host OSes (incl. FreeBSD) | [`docs/PLATFORMS.md`](docs/PLATFORMS.md) |
+| Unikernel — a NURL program as its own kernel | [`unikernel/README.md`](unikernel/README.md) |
 | Known limitations | [`docs/LIMITATIONS.md`](docs/LIMITATIONS.md) |
 | Gotchas (compiler-diagnosed) | [`docs/GOTCHAS.md`](docs/GOTCHAS.md) |
 | Compiler internals (for contributors) | [`docs/dev/COMPILER_INTERNALS.md`](docs/dev/COMPILER_INTERNALS.md) |
@@ -236,6 +237,7 @@ nurl/
 │   └── runtime.o, …      — runtime objects (build outputs of build.sh)
 ├── examples/               — curated .nu programs (see examples/README.md)
 ├── nurlapi/                — NURL-native container: compiler-as-a-service + playground + MCP
+├── unikernel/              — bootable unikernel images (x86_64 / AArch64 / RISC-V64)
 ├── tooling/vscode-nurl/    — editor extension (syntax + LSP client)
 ├── tools/                  — nurl-lsp, nurlfmt, nurlpkg build scripts
 ├── docs/                   — topic documentation (see the table above)
