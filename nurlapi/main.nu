@@ -2127,6 +2127,7 @@ s combined_stdout s combined_stderr → v {
     ( __oa_path paths `/build_windows` `post` `Cross-compile to a Windows .exe via mingw-w64` `nurlc → clang+mingw link → PE/COFF. Static libcurl + Schannel TLS.` )
     ( __oa_path paths `/build_macos` `post` `Cross-compile to a macOS x86_64 Mach-O binary via zig cc` `Unsigned — clear quarantine attribute before running on macOS.` )
     ( __oa_path paths `/build_target` `post` `Cross-compile to a registered zig target (linux-arm64-musl, riscv64, …)` `See GET /targets for available target ids.` )
+    ( __oa_path paths `/build_unikernel` `post` `Build a bootable x86_64 PVH unikernel image (QEMU microvm / Firecracker-class)` `nurlc → freestanding link against unikernel/nolibc + runtime_bare. Body: source, filename?, args? (guest argv, display only), files? ({relative/path: base64} baked into the image as a read-only filesystem). Returns elf_artifact + image size + ready-to-paste qemu boot commands.` )
     ( __oa_path paths `/targets` `get` `List available cross-compile targets` `Returns the TargetInfo[] used by the playground's dropdown.` )
 
     ( __oa_path paths `/examples` `get` `List bundled example programs` `JSON array of {name, path, bytes}.` )
@@ -4080,6 +4081,213 @@ s combined_stdout s combined_stderr → v {
     }
 }
 
+// ── Build handler (unikernel x86_64 PVH image) ───────────────────────
+//
+// One tool call: unikernel/build_unikernel.sh does nurlc + kernel-flag
+// clang + the initfs embed + the PVH link, and since phase U0 it is
+// loud on failure and safe to run concurrently — per-request --out-dir,
+// shared flocked object cache (NURL_UNIKERNEL_CACHE, shipped warm in
+// the image). The handler's own work is exactly: unpack the request,
+// guard the initfs paths, run the tool, shape the reply.
+
+@ get_unikernel_build_script → String {
+    ^ ( env_var_or `NURL_UNIKERNEL_BUILD` `/opt/nurl/unikernel/build_unikernel.sh` )
+}
+
+// An initfs key is a RELATIVE path that stays inside the archive: no
+// leading slash, no backslash, no empty / "." / ".." segment. The tar
+// is built with `tar -C dir .`, so a "../" key would write outside the
+// build workspace before the guest ever saw it.
+@ __initfs_path_ok s p → b {
+    : i n ( nurl_str_len p )
+    ? == n 0 { ^ F } {}
+    ? == ( nurl_str_get p 0 ) 47 { ^ F } {}
+    : ~ i k 0
+    : ~ i seg 0
+    // dots ≥ 0 while every byte of the segment so far is '.', −1 after
+    // any other byte — "..." is a legal (if odd) name, "." and ".." are
+    // path steps and are refused.
+    : ~ i dots 0
+    : ~ b ok T
+    ~ & ok < k n {
+        : i c ( nurl_str_get p k )
+        ? == c 92 { = ok F } {}
+        ? == c 47 {
+            ? | == seg 0 & > dots 0 <= seg 2 { = ok F } {}
+            = seg 0
+            = dots 0
+        } {
+            = seg + seg 1
+            ? == c 46 { ? >= dots 0 { = dots + dots 1 } {} } { = dots - 0 1 }
+        }
+        = k + k 1
+    }
+    ? & ok | == seg 0 & > dots 0 <= seg 2 { = ok F } {}
+    ^ ok
+}
+
+// The boot command, exactly as unikernel/run_qemu.sh runs it — the
+// flags the guest gate boots 20/20 with. `$(date +%s)` is left for the
+// user's shell to fill (X.509 validity in the guest is checked against
+// the told wallclock), and `args="…"` is the program's argv. The whole
+// string is DISPLAY TEXT — the server never executes it.
+@ __uk_boot_cmd s elf_name s args b with_net → String {
+    : String c ( string_with_cap 512 )
+    ( string_push_str c `qemu-system-x86_64 -M microvm,acpi=off,rtc=off -accel kvm -cpu max -m 64 -nodefaults -no-reboot -no-user-config -global virtio-mmio.force-legacy=false -serial stdio -display none` )
+    ? with_net {
+        ( string_push_str c ` -netdev user,id=n0,hostfwd=tcp:127.0.0.1:8080-:8080 -device virtio-net-device,netdev=n0` )
+    } {}
+    ( string_push_str c ` -kernel ` )
+    ( string_push_str c elf_name )
+    ( string_push_str c ` -append "tsc_khz=1000000 wallclock=$(date +%s)` )
+    ? > ( nurl_str_len args ) 0 {
+        ( string_push_str c ` args=\\"` )
+        ( string_push_str c args )
+        ( string_push_str c `\\"` )
+    } {}
+    ( string_push_str c `"` )
+    ^ c
+}
+
+@ h_build_unikernel HttpRequest req Params params → HttpResponse {
+    ( nurl_print `[srv] POST /build_unikernel\n` )
+    : String body_str ( get_body_str req )
+    : !Json JsonError root_res ( json_parse ( string_data body_str ) )
+    ?? root_res {
+        T root → {
+            : s source ( get_common_json root `source` `` )
+            ? == ( nurl_str_len source ) 0 { ( json_free root ) ( string_free body_str ) ^ ( response_text 400 `{"error":"source is required"}\n` ) } {}
+            : s filename ( get_common_json root `filename` `main.nu` )
+            : s uargs ( get_common_json root `args` `` )
+
+            : String build_id ( create_build_id )
+            : String build_dir ( path_join ( string_data ( get_output_dir ) ) ( string_data build_id ) )
+            : !v IoErr dr ( dir_create ( string_data build_dir ) )
+            ?? dr {
+                T _ → {
+                    : String nu_path ( path_join ( string_data build_dir ) filename )
+                    ( write_file ( string_data nu_path ) source )
+                    : ~ String elf_name ( string_from filename )
+                    ? ( string_ends_with elf_name `.nu` ) { : String tmp ( string_substr elf_name 0 - ( string_len elf_name ) 3 ) ( string_free elf_name ) = elf_name tmp } {}
+                    ( string_push_str elf_name `.elf` )
+                    : String elf_path ( path_join ( string_data build_dir ) ( string_data elf_name ) )
+
+                    // The optional baked-in filesystem: {"files": {"etc/x": base64}}.
+                    : String fs_dir ( path_join ( string_data build_dir ) `initfs` )
+                    : ~ b fs_used F
+                    : ~ b fs_bad F
+                    ?? ( json_obj_get root `files` ) {
+                        T fo → {
+                            : ( Vec String ) keys ( json_obj_keys fo )
+                            : i nk ( vec_len [String] keys )
+                            : ~ i ki 0
+                            ~ & ! fs_bad < ki nk {
+                                : s key ?? ( vec_get [String] keys ki ) { T ks → ( string_data ks ) F → `` }
+                                ? ! ( __initfs_path_ok key ) { = fs_bad T } {
+                                    ?? ( json_obj_get fo key ) {
+                                        T fv → {
+                                            ?? ( b64_decode_vec ( json_str_data fv ) ) {
+                                                T bytes → {
+                                                    : String fpath ( path_join ( string_data fs_dir ) key )
+                                                    : String fdir ( path_dirname ( string_data fpath ) )
+                                                    : !v IoErr mk ( dir_create_all ( string_data fdir ) )
+                                                    ?? mk {
+                                                        T _ → {
+                                                            : !v IoErr wr ( write_file_bytes ( string_data fpath ) bytes )
+                                                            ?? wr { T _ → { = fs_used T } F _ → { = fs_bad T } }
+                                                        }
+                                                        F _ → { = fs_bad T }
+                                                    }
+                                                    ( string_free fdir )
+                                                    ( string_free fpath )
+                                                    ( vec_free [u] bytes )
+                                                }
+                                                F _ → { = fs_bad T }
+                                            }
+                                        }
+                                        F → { = fs_bad T }
+                                    }
+                                }
+                                = ki + ki 1
+                            }
+                            : ~ i kf 0
+                            ~ < kf nk { ?? ( vec_get [String] keys kf ) { T ks → ( string_free ks ) F → {} } = kf + kf 1 }
+                            ( vec_free [String] keys )
+                        }
+                        F → {}
+                    }
+                    ? fs_bad {
+                        ( json_free root ) ( string_free body_str )
+                        ( string_free nu_path ) ( string_free elf_name ) ( string_free elf_path )
+                        ( string_free fs_dir ) ( string_free build_id ) ( string_free build_dir )
+                        ^ ( response_text 400 `{"error":"files: every key must be a relative path with no '..' segments, and every value valid base64"}\n` )
+                    } {}
+
+                    : ( Vec s ) targs ( vec_new [s] )
+                    ( vec_push [s] targs ( string_data nu_path ) )
+                    ( vec_push [s] targs `--out-dir` )
+                    ( vec_push [s] targs ( string_data build_dir ) )
+                    ? fs_used {
+                        ( vec_push [s] targs `--fs` )
+                        ( vec_push [s] targs ( string_data fs_dir ) )
+                    } {}
+                    : String script ( get_unikernel_build_script )
+                    : !Output ProcessErr t_res ( run_tool ( string_data script ) targs )
+                    ( vec_free [s] targs )
+                    ( string_free script )
+
+                    ?? t_res {
+                        T t_out → {
+                            : i t_rc ( output_exit_code t_out )
+                            : Json res ( json_obj_new )
+                            ( json_obj_set res `status` ( json_str_lit ? == t_rc 0 `ok` `error` ) )
+                            ( json_obj_set res `message` ( json_str_lit ? == t_rc 0
+                            `compiled nurl → bootable x86_64 PVH unikernel image`
+                            `build failed (see stderr)` ) )
+                            ( json_obj_set res `filename` ( json_str_lit filename ) )
+                            ( json_obj_set res `script_returncode` ( json_int t_rc ) )
+                            ( json_obj_set res `stderr` ( json_str_lit ( output_stderr t_out ) ) )
+                            ? == t_rc 0 {
+                                : !i IoErr esz ( file_size ( string_data elf_path ) )
+                                : i ebytes ?? esz { T sz → sz F _ → 0 }
+                                ( json_obj_set res `elf_artifact`
+                                ( make_artifact_json ( string_data elf_name ) ebytes ( string_data build_id ) ) )
+                                ( json_obj_set res `image_bytes` ( json_int ebytes ) )
+                                // How to run it: the plain command, and the
+                                // networked variant for a program that serves
+                                // (virtio-net + a host port forward).
+                                : Json boot ( json_obj_new )
+                                : String bc ( __uk_boot_cmd ( string_data elf_name ) uargs F )
+                                : String bn ( __uk_boot_cmd ( string_data elf_name ) uargs T )
+                                ( json_obj_set boot `qemu` ( json_str_lit ( string_data bc ) ) )
+                                ( json_obj_set boot `qemu_net` ( json_str_lit ( string_data bn ) ) )
+                                ( json_obj_set boot `notes` ( json_str_lit `Use -accel tcg on a machine without /dev/kvm. Memory floor: a hello answers on -m 3, an HTTPS server on -m 4; -m 64 leaves headroom. The hostfwd in qemu_net forwards host 127.0.0.1:8080 to guest port 8080 — edit both to your program's port.` ) )
+                                ( string_free bc )
+                                ( string_free bn )
+                                ( json_obj_set res `boot` boot )
+                            } {}
+                            : String body ( json_stringify res )
+                            : HttpResponse hr ( response_text 200 ( string_data body ) )
+                            ( response_set_header hr `Content-Type` `application/json` )
+                            ( json_free res )
+                            ( string_free body )
+                            ( output_free t_out )
+                            ( json_free root )
+                            ( string_free nu_path ) ( string_free elf_name ) ( string_free elf_path )
+                            ( string_free fs_dir ) ( string_free build_id ) ( string_free build_dir )
+                            ( string_free body_str )
+                            ^ hr
+                        }
+                        F _ → { ^ ( response_text 500 `{"error":"unikernel build process failed to start"}\n` ) }
+                    }
+                }
+                F _ → { ^ ( response_text 500 `{"error":"could not create build dir"}\n` ) }
+            }
+        }
+        F err → { ^ ( response_text 400 `{"error":"invalid json"}\n` ) }
+    }
+}
+
 // ═════════════════════════════════════════════════════════════════════
 //
 //   MCP (Model Context Protocol) — POST /mcp Streamable HTTP transport
@@ -5656,6 +5864,7 @@ s combined_stdout s combined_stderr → v {
             ( router_post r `/build_windows` \ HttpRequest req Params params → HttpResponse { ^ ( h_build_windows req params ) } )
             ( router_post r `/build_macos` \ HttpRequest req Params params → HttpResponse { ^ ( h_build_macos req params ) } )
             ( router_post r `/build_target` \ HttpRequest req Params params → HttpResponse { ^ ( h_build_target req params ) } )
+            ( router_post r `/build_unikernel` \ HttpRequest req Params params → HttpResponse { ^ ( h_build_unikernel req params ) } )
             ( router_get r `/download/:build_id/:filename` \ HttpRequest req Params params → HttpResponse { ^ ( h_download req params ) } )
             ( router_get r `/examples` \ HttpRequest req Params params → HttpResponse { ^ ( h_examples req params ) } )
             ( router_get r `/examples/*name` \ HttpRequest req Params params → HttpResponse { ^ ( h_get_example req params ) } )
