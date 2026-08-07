@@ -10,6 +10,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The AArch64 image now boots on Firecracker and cloud-hypervisor
+  too** — as a flat `Image`, the container those two take on this
+  architecture where x86 gives them the ELF's PVH note.
+  `boot/boot_arm64.S` carries the format's 64-byte header at offset 0
+  and `build_unikernel_arm64.sh` emits `prog.Image` beside `prog.elf`;
+  `POST /build_unikernel` returns it as `image_artifact`. One program,
+  two wrappers, no second build: `code0` is a branch over the header,
+  so a loader jumping to offset 0 and an ELF loader jumping to the
+  entry point arrive at the same instruction. `text_offset` is 2 MiB
+  because the image is **not** position-independent — the field is
+  what makes a loader place it where its absolute addresses already
+  point — and `image_size` covers `.bss`. The hypervisor gate checks
+  the header the way it checks the PVH note (magic, `code0` really a
+  branch, `text_offset` equal to the link offset, `image_size` ≥ the
+  file), with four mutations caught; QEMU boots the flat Image, which
+  is what proves the branch and the load address agree. Booting the
+  other two on this container needs an AArch64 **host** — neither
+  emulates — and the gate says so instead of implying coverage.
+
 - **A NURL program boots as its own kernel on RISC-V too** — the third
   architecture, and the one that proves the second was not a
   coincidence. QEMU's `virt` board with OpenSBI underneath, four files

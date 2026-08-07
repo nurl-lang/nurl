@@ -194,4 +194,26 @@ $ZIG cc -target $TARGET -nostdlib -static -Wl,-T,"$BOOT/link_arm64.ld" \
     "$OUTDIR/$base.initfs_data.o" \
     "$CACHE"/nl_*.o
 
-echo "built $OUT"
+# ── the flat Image, beside the ELF ───────────────────────────────
+#
+# Two containers, one program. QEMU's virt board loads the ELF with
+# -kernel; Firecracker and cloud-hypervisor take a flat `Image` on this
+# architecture — the format a Linux arm64 kernel ships in — and
+# `boot/boot_arm64.S` puts that format's 64-byte header at offset 0, so
+# the same build answers both. `code0` is a branch over the header, so
+# a loader that jumps to offset 0 and an ELF loader that jumps to the
+# entry point arrive at the same instruction.
+OBJCOPY="${NURL_OBJCOPY:-}"
+if [ -z "$OBJCOPY" ]; then
+    for c in llvm-objcopy llvm-objcopy-16 aarch64-linux-gnu-objcopy; do
+        command -v "$c" >/dev/null 2>&1 && { OBJCOPY="$c"; break; }
+    done
+fi
+if [ -n "$OBJCOPY" ]; then
+    "$OBJCOPY" -O binary "$OUT" "${OUT%.elf}.Image"
+    echo "built $OUT and ${OUT%.elf}.Image"
+else
+    # Plain binutils objcopy is built per-target and usually cannot read
+    # a foreign ELF; saying so beats writing a file that is not an image.
+    echo "built $OUT (no llvm-objcopy — skipped the flat Image; set NURL_OBJCOPY)" >&2
+fi

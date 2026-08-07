@@ -375,11 +375,29 @@ than passing quietly. Three deliberate mutations — the entry point
 moved, the note's type changed, the section renamed away — are all
 caught by the structure half.
 
-On AArch64 the honest answer is different, and the gate gives it:
-PVH is x86-only. QEMU's `virt` board loads the ELF directly (which is
-what the AArch64 guest gate boots), while Firecracker and
-cloud-hypervisor want a PE-format `Image` there — a packaging step
-this target has not taken, rather than a property it has.
+On AArch64 the container differs and the build now produces both.
+PVH is x86-only; what Firecracker and cloud-hypervisor take there is a
+flat **`Image`** — the format a Linux arm64 kernel ships in — so
+`boot_arm64.S` puts that format's 64-byte header at offset 0 of the
+same build and `build_unikernel_arm64.sh` emits `prog.Image` beside
+`prog.elf`. One program, two wrappers: `code0` is a branch over the
+header, so a loader that jumps to offset 0 and an ELF loader that
+jumps to the entry point arrive at the same instruction. `text_offset`
+is 2 MiB because this image is **not** position-independent — the
+field is what makes a loader place it where its absolute addresses
+already point — and `image_size` covers `.bss`, so the loader reserves
+what the program grows into rather than what the file holds.
+
+The gate checks the header the same way it checks the PVH note (magic,
+`code0` really a branch, `text_offset` equal to where the image is
+linked inside its region, `image_size` ≥ the file), and four
+mutations — magic cleared, `code0` zeroed, offset zeroed, size shrunk
+— are all caught. Booting Firecracker or cloud-hypervisor on this
+container needs an **AArch64 host**: neither emulates, so there is
+nothing on an x86 developer machine to run them on, and the gate says
+that rather than implying coverage it does not have. QEMU boots the
+flat Image here, which is what proves the header's branch and its load
+address agree.
 
 ## Three architectures, and what a port actually costs
 
@@ -391,7 +409,7 @@ this target has not taken, rather than a property it has.
 | devices from | kernel command line | device tree | device tree |
 | clock | TSC, frequency **told** | CNTFRQ_EL0 | `rdtime`, tree's rate |
 | entropy | RDRAND | RNDR | **none — refuses** |
-| hello image | 132 760 B | 131 784 B | 155 344 B |
+| hello image | 132 760 B (ELF) | 131 784 B (ELF) · 102 632 B (Image) | 155 344 B (ELF) |
 
 The per-architecture files are the bottom edge and nothing else:
 `boot_<arch>.S`, `platform_<arch>.c`, `tls_guest_<arch>.c`,

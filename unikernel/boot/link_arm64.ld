@@ -48,5 +48,11 @@ SECTIONS
     . = ALIGN(2M);
     __heap_start = .;
 
+    /* What the image header tells a loader to reserve: everything from
+     * the first byte of the image through .bss, so the program's
+     * zero-initialised data is memory the loader has kept for it
+     * rather than memory it happens not to have used yet. */
+    __image_size = . - 0x40200000;
+
     /DISCARD/ : { *(.comment) *(.note.GNU-stack) *(.eh_frame) }
 }

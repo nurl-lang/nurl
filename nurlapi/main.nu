@@ -4503,6 +4503,29 @@ s combined_stdout s combined_stderr → v {
                                 ( json_obj_set res `elf_artifact`
                                 ( make_artifact_json ( string_data elf_name ) ebytes ( string_data build_id ) ) )
                                 ( json_obj_set res `image_bytes` ( json_int ebytes ) )
+                                // On AArch64 the build also emits the flat
+                                // `Image` — the container Firecracker and
+                                // cloud-hypervisor take on this architecture,
+                                // where x86 gives them the ELF's PVH note.
+                                // Same program, second wrapper; offered only
+                                // when the build actually produced one.
+                                ? ( __uk_is_arm arch ) {
+                                    : ~ String img_name ( string_from ( string_data elf_name ) )
+                                    ? ( string_ends_with img_name `.elf` ) {
+                                        : String t2 ( string_substr img_name 0 - ( string_len img_name ) 4 )
+                                        ( string_free img_name ) = img_name t2
+                                    } {}
+                                    ( string_push_str img_name `.Image` )
+                                    : String img_path ( path_join ( string_data build_dir ) ( string_data img_name ) )
+                                    ? ( file_exists ( string_data img_path ) ) {
+                                        : !i IoErr isz ( file_size ( string_data img_path ) )
+                                        ( json_obj_set res `image_artifact`
+                                        ( make_artifact_json ( string_data img_name )
+                                        ?? isz { T sz → sz F _ → 0 } ( string_data build_id ) ) )
+                                    } {}
+                                    ( string_free img_path )
+                                    ( string_free img_name )
+                                } {}
                                 // How to run it: the plain command, and the
                                 // networked variant for a program that serves
                                 // (virtio-net + a host port forward).
@@ -4511,7 +4534,9 @@ s combined_stdout s combined_stderr → v {
                                 : String bn ( __uk_boot_cmd arch ( string_data elf_name ) uargs T )
                                 ( json_obj_set boot `qemu` ( json_str_lit ( string_data bc ) ) )
                                 ( json_obj_set boot `qemu_net` ( json_str_lit ( string_data bn ) ) )
-                                ( json_obj_set boot `notes` ( json_str_lit `Use -accel tcg on a machine without /dev/kvm. Memory floor: a hello answers on -m 3, an HTTPS server on -m 4; -m 64 leaves headroom. The hostfwd in qemu_net forwards host 127.0.0.1:8080 to guest port 8080 — edit both to your program's port.` ) )
+                                ( json_obj_set boot `notes` ( json_str_lit ? ( __uk_is_arm arch )
+                                `Use -accel tcg on a machine without /dev/kvm. The hostfwd in qemu_net forwards host 127.0.0.1:8080 to guest port 8080 — edit both to your program's port. QEMU takes the .elf shown here; Firecracker and cloud-hypervisor take the .Image beside it (the flat container this architecture uses, where x86 uses the ELF's PVH note) and need an AArch64 host.`
+                                `Use -accel tcg on a machine without /dev/kvm. Memory floor: a hello answers on -m 3, an HTTPS server on -m 4; -m 64 leaves headroom. The hostfwd in qemu_net forwards host 127.0.0.1:8080 to guest port 8080 — edit both to your program's port. The same .elf boots under Firecracker and cloud-hypervisor unchanged — all three read its PVH note.` ) )
                                 ( string_free bc )
                                 ( string_free bn )
                                 ( json_obj_set res `boot` boot )
