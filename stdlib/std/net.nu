@@ -739,6 +739,11 @@ $ `stdlib/std/async_ffi.nu`
 
 & `c` @ nurl_tcp_get_fd i handle → i
 
+// What a read/write on this socket should wait for, in milliseconds;
+// 0 = for ever. The fiber paths below need it because they park on the
+// reactor instead of on SO_RCVTIMEO — see `__wait_ms`.
+& `c` @ nurl_tcp_timeout_ms i handle → i
+
 & `c` @ nurl_tcp_set_nonblock i handle i on → v
 
 & `c` @ nurl_tcp_ref i handle → v
@@ -777,6 +782,15 @@ $ `stdlib/std/async_ffi.nu`
     ( nurl_tcp_set_nonblock raw on )
 }
 
+// The deadline to hand the reactor for this socket: what the caller set
+// with `tcp_set_timeout`, or −1 ("no deadline") when they set none. The
+// reactor spells "for ever" as −1 and 0 would mean "do not wait at all",
+// so the translation lives here rather than at four call sites.
+@ __wait_ms i raw → i {
+    : i ms ( nurl_tcp_timeout_ms raw )
+    ^ ? > ms 0 ms - 0 1
+}
+
 // Non-blocking accept. Loops: try accept; if NetTimeout (EAGAIN),
 // wait_readable on listener fd, retry. On non-fiber callers,
 // wait_readable returns -1 immediately and we fall back to the
@@ -797,6 +811,11 @@ $ `stdlib/std/async_ffi.nu`
         } {
             ( nurl_tcp_close craw )
             ? == ek 7 {  // NetTimeout / EAGAIN
+                // ACCEPT KEEPS WAITING. `tcp_set_timeout` is about a
+                // CONNECTION's reads and writes; a listener has no such
+                // deadline, and a server loop reads "the accept ended"
+                // as "we were stopped" — report a timeout there and
+                // every clean shutdown becomes an error.
                 : i rc ( nurl_reactor_wait_read fd - 0 1 )
                 // wait_readable returns -1 outside a fiber; in that
                 // case the sync accept already blocked, so EAGAIN
@@ -836,8 +855,20 @@ $ `stdlib/std/async_ffi.nu`
         } {}
         : i ek ( nurl_tcp_err_kind raw )
         ? == ek 7 {
-            : i rc ( nurl_reactor_wait_read fd - 0 1 )
+            // The socket's OWN deadline, not "for ever". A blocking read
+            // gets it from SO_RCVTIMEO; a parked fiber has to be told,
+            // and a hard-coded −1 here silently discarded every
+            // `tcp_set_timeout` the caller had made. It cost a
+            // distributed node its startup: a relay read that should
+            // have given up after 150 ms waited for a message that was
+            // never going to come, and only on a runtime where threads
+            // ARE fibers — which is why no hosted test saw it.
+            : i rc ( nurl_reactor_wait_read fd ( __wait_ms raw ) )
             ? < rc 0 {
+                ( vec_free [u] v )
+                ^ @ !( Vec u ) NetErr { F # NetErr NetTimeout }
+            } {}
+            ? == rc 0 {
                 ( vec_free [u] v )
                 ^ @ !( Vec u ) NetErr { F # NetErr NetTimeout }
             } {}
@@ -873,8 +904,8 @@ $ `stdlib/std/async_ffi.nu`
             ? < n 0 {
                 : i ek ( nurl_tcp_err_kind raw )
                 ? == ek 7 {
-                    : i rc ( nurl_reactor_wait_write fd - 0 1 )
-                    ? < rc 0 {
+                    : i rc ( nurl_reactor_wait_write fd ( __wait_ms raw ) )
+                    ? <= rc 0 {
                         ^ @ !v NetErr { F # NetErr NetTimeout }
                     } {}
                 } {
@@ -883,8 +914,8 @@ $ `stdlib/std/async_ffi.nu`
             } {
                 // n == 0 — kernel says "wrote nothing" without error.
                 // Treat as EAGAIN to avoid spinning.
-                : i rc ( nurl_reactor_wait_write fd - 0 1 )
-                ? < rc 0 { ^ @ !v NetErr { F # NetErr NetTimeout } } {}
+                : i rc ( nurl_reactor_wait_write fd ( __wait_ms raw ) )
+                ? <= rc 0 { ^ @ !v NetErr { F # NetErr NetTimeout } } {}
             }
         }
     }

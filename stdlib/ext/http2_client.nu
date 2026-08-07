@@ -189,10 +189,16 @@ $ `stdlib/ext/http2_hpack.nu`
 // Underlying socket fd, for readiness polling (nurl_reactor_wait_*).
 @ __h2c_fd H2Client c → i { ^ ( nurl_tcp_get_fd # i . . c tcp raw ) }
 
-// Non-blocking readiness probes. `nurl_reactor_wait_{read,write}` return
-// >= 0 when the fd is ready and < 0 on timeout; a 0 ms timeout makes them
-// pure polls. (Runtime builtins, also used by std/net.nu's async path.)
-@ __h2c_readable i fd → b { ^ >= ( nurl_reactor_wait_read fd 0 ) 0 }
+// Non-blocking readiness probe: a 0 ms timeout makes the reactor wait
+// a pure poll. (Runtime builtin, also used by std/net.nu's async path.)
+//
+// Readable is rc == 1 and NOTHING ELSE. The reactor's poll answers
+// 1 ready / 0 not ready / -1 "this caller cannot wait" (a non-fiber
+// on the hosted runtime, a provably-dead fd on the freestanding one).
+// The old `>= 0` read "not ready" as "readable", so the drain loop
+// entered a frame read with no frame coming — and a blocking read
+// taken on a hunch holds the connection for the whole socket timeout.
+@ __h2c_readable i fd → b { ^ == ( nurl_reactor_wait_read fd 0 ) 1 }
 
 @ __h2c_goaway H2Client c → i { ^ ( nurl_peek . c st 7 ) }
 
