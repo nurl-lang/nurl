@@ -8,6 +8,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **The playground container can build unikernel images** (plan phase
+  U1). The nurlapi Docker image ships `unikernel/` (477 kB), plain
+  binutils, and a pre-warmed boot-object cache (205 kB), and its build
+  now ends with a smoke check that compiles two images with the exact
+  toolchain a request will use — a hello, and a listener that pulls
+  the NURL socket layer through the `nm` seam. If either does not
+  link, `docker build` fails: the playground can never ship an image
+  whose unikernel toolchain is broken. Building an image inside the
+  running container as the unprivileged server user takes ~1 s warm
+  (132 KB hello ELF). The HTTP endpoint over this is the next phase.
+
 ### Changed
 
 - **`unikernel/build_unikernel.sh` is a tool now, not a repo-rooted
