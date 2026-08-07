@@ -173,6 +173,8 @@
     <input id="filename" type="text" value="main.nu" size="12" title="Filename used for diagnostics" />
     <label for="target">Target:</label>
     <select id="target" title="Compile target — see the hint to the right"></select>
+    <input id="ukargs" type="text" size="16" placeholder="guest args" style="display:none"
+           title="The guest program&#39;s argv — passed on the kernel command line as args=&quot;…&quot;" />
     <button id="build" class="primary" type="button">Build ⌘B</button>
     <button id="run" class="run" type="button" disabled>Run ⌘R</button>
     <button id="stop" class="stop" type="button" disabled>Stop</button>
@@ -236,6 +238,7 @@ const examples  = $("#examples");
 const filename  = $("#filename");
 const buildBtn  = $("#build");
 const targetSel = $("#target");
+const ukArgs    = $("#ukargs");
 const runBtn    = $("#run");
 const dlBtn     = $("#download");
 const output    = $("#output");
@@ -464,8 +467,13 @@ async function loadExamples() {
       const opt = document.createElement("option");
       opt.value = ex.name;
       opt.textContent = `${ex.name}  (${ex.bytes} B)`;
+      // Measured at image-build time by unikernel/measure_capability.sh;
+      // absent (= unknown) on a deployment that never measured.
+      opt.dataset.uk = ex.unikernel === undefined ? "unknown" : (ex.unikernel ? "yes" : "no");
+      opt.dataset.ukReason = ex.unikernel_reason || "";
       examples.appendChild(opt);
     }
+    applyExampleCapability(isUnikernelTarget());
   } catch (e) { /* no-op */ }
 }
 examples.addEventListener("change", async () => {
@@ -1039,10 +1047,30 @@ async function loadTargets() {
 
 // Surface the selected target's constraints in the build-info slot so
 // "no HTTP/canvas" is visible without hovering the dropdown.
+function isUnikernelTarget() {
+  const meta = targetMeta.get(targetSel.value);
+  return !!meta && meta.endpoint === "/build_unikernel";
+}
+
+// When the unikernel target is selected, examples the image build
+// MEASURED as incapable grey out, with the missing symbols as the
+// tooltip. Unknown (no manifest in this deployment) stays selectable.
+function applyExampleCapability(isUk) {
+  for (const opt of examples.options) {
+    if (!opt.value) continue;
+    const incapable = isUk && opt.dataset.uk === "no";
+    opt.disabled = incapable;
+    opt.title = incapable ? opt.dataset.ukReason : "";
+  }
+}
+
 function onTargetChange() {
   const meta = targetMeta.get(targetSel.value);
   buildInfo.textContent = (meta && meta.notes) || "";
   targetSel.title = (meta && meta.notes) || "Compile target";
+  const uk = isUnikernelTarget();
+  ukArgs.style.display = uk ? "" : "none";
+  applyExampleCapability(uk);
 }
 targetSel.addEventListener("change", onTargetChange);
 
@@ -1149,11 +1177,115 @@ async function buildBinary(meta) {
   targetSel.disabled = false;
 }
 
+// ── Unikernel build: image + in-playground boot ────────────────
+//
+// The server builds a PVH image, boots it under TCG with no network
+// device, and returns the guest console — so the browser user sees
+// their program RUN as a kernel without owning qemu. The ready-to-
+// paste commands cover taking it home.
+async function buildUnikernel(meta) {
+  clearOutput();
+  buildBtn.disabled = true;
+  targetSel.disabled = true;
+  runBtn.disabled = true;
+  dlBtn.disabled = true;
+  currentWasm = null;
+  buildInfo.textContent = `building ${meta.label}… (boots in the playground — allow ~10 s)`;
+
+  const payload = {
+    source: editorAPI.getValue(),
+    filename: filename.value || "main.nu",
+    boot: true,
+  };
+  const a = ukArgs.value.trim();
+  if (a) payload.args = a;
+
+  const t0 = performance.now();
+  let resp, body;
+  try {
+    resp = await fetch("/build_unikernel", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    body = await resp.json();
+  } catch (e) {
+    logLine("network error: " + e.message, "stderr");
+    buildBtn.disabled = false;
+    targetSel.disabled = false;
+    buildInfo.textContent = "";
+    return;
+  }
+  const ms = Math.round(performance.now() - t0);
+
+  if (!resp.ok) {
+    section("BUILD FAILED (unikernel)");
+    logLine(typeof body.error === "string" ? body.error : JSON.stringify(body, null, 2), "stderr");
+    buildInfo.textContent = `failed in ${ms} ms`;
+    buildBtn.disabled = false;
+    targetSel.disabled = false;
+    return;
+  }
+
+  const ok = body.status === "ok";
+  section(ok ? "BUILD OK (unikernel image)" : "BUILD FAILED (unikernel)");
+  if (body.message) logLine(body.message, ok ? "ok" : "stderr");
+
+  if (ok) {
+    logLine(`image ${(body.image_bytes ?? 0).toLocaleString()} B · ${ms} ms total`, "dim");
+    const br = body.boot_result;
+    if (br && br.ran) {
+      section("GUEST CONSOLE (booted in the playground, TCG, no network)");
+      log(br.log || "(no output before the boot window closed)");
+      log("\n");
+      if (br.exit === 0) logLine("guest exit 0", "ok");
+      else if (typeof br.exit === "number") logLine(`guest exit ${br.exit}`, "warn");
+      else logLine(br.timed_out
+        ? "still running when the boot window closed (a server would — see the commands below to run it with a network)"
+        : "no exit recorded", "dim");
+      if (br.truncated) logLine("(console truncated at 64 KB)", "dim");
+    } else if (br && br.error) {
+      logLine("boot skipped: " + br.error, "warn");
+    }
+    if (body.elf_artifact) {
+      section("DOWNLOADS");
+      const art = body.elf_artifact;
+      const link = document.createElement("a");
+      link.href = art.download_url;
+      link.download = art.name;
+      link.textContent = `↓ bootable image  (${art.name}, ${art.bytes.toLocaleString()} B)`;
+      link.style.color = "var(--accent)";
+      link.style.display = "block";
+      link.style.margin = ".15rem 0";
+      output.appendChild(link);
+      log("\n");
+    }
+    if (body.boot) {
+      section("RUN IT YOURSELF");
+      logLine("plain (prints to your terminal):", "dim");
+      log(body.boot.qemu + "\n\n");
+      logLine("with a network (edit both 8080s to your program's port):", "dim");
+      log(body.boot.qemu_net + "\n");
+      if (body.boot.notes) logLine(body.boot.notes, "info");
+    }
+  } else if (body.stderr) {
+    section("stderr");
+    log(body.stderr, "stderr");
+  }
+
+  buildInfo.textContent = ok
+    ? `unikernel · ${(body.image_bytes ?? 0).toLocaleString()} B · ${ms} ms`
+    : `failed in ${ms} ms`;
+  buildBtn.disabled = false;
+  targetSel.disabled = false;
+}
+
 // ── Dispatch: build the currently selected target ─────────────
 function doBuild() {
   const meta = targetMeta.get(targetSel.value);
   if (!meta) { build(); return; }            // pre-/targets fallback
   if (meta.endpoint === "/build_wasm") build();
+  else if (meta.endpoint === "/build_unikernel") buildUnikernel(meta);
   else buildBinary(meta);
 }
 

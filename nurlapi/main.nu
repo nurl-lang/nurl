@@ -1894,6 +1894,39 @@ s combined_stdout s combined_stderr → v {
 
 // ── Examples handler ────────────────────────────────────────────────
 
+// The measured unikernel capability of the bundled examples — written
+// at image-build time by unikernel/measure_capability.sh, absent in a
+// deployment that never measured (annotation is skipped, not faked).
+@ get_uk_examples_path → String {
+    ^ ( env_var_or `NURL_UNIKERNEL_EXAMPLES` `/opt/nurl/unikernel-examples.json` )
+}
+
+// Borrowed lookup into the parsed manifest: T when `name` is listed as
+// capable; reason (borrowed) via the out param convention is avoided —
+// the caller re-asks with __uk_example_reason. Two O(n) scans over a
+// 64-entry array cost nothing next to the dir listing around them.
+@ __uk_example_entry Json man s name → ?Json {
+    : i n ( json_arr_len man )
+    : ~ i k 0
+    ~ < k n {
+        ?? ( json_arr_get man k ) {
+            T e → {
+                ?? ( json_obj_get e `name` ) {
+                    T nj → {
+                        ? != 0 ( nurl_str_eq ( json_str_data nj ) name ) {
+                            ^ @ ?Json { T e }
+                        } {}
+                    }
+                    F → {}
+                }
+            }
+            F → {}
+        }
+        = k + k 1
+    }
+    ^ @ ?Json { F 0 }
+}
+
 @ h_examples HttpRequest req Params params → HttpResponse {
     ( nurl_print `[srv] GET /examples\n` )
     : String edir ( get_examples_dir )
@@ -1901,14 +1934,34 @@ s combined_stdout s combined_stderr → v {
     ?? dr {
         T files → {
             : Json arr ( json_arr_new )
+            // The capability manifest, when this deployment has one.
+            // Json is an enum with owned payloads — held in a plain
+            // mutable binding plus a flag, never smuggled through an
+            // integer cast.
+            : String mpath ( get_uk_examples_path )
+            : ~ b have_man F
+            : ~ Json man ( json_null )
+            ? ( file_exists ( string_data mpath ) ) {
+                : !String IoErr mr ( read_file ( string_data mpath ) )
+                ?? mr {
+                    T mtxt → {
+                        : !Json JsonError mj ( json_parse ( string_data mtxt ) )
+                        ?? mj { T m → { ( json_free man ) = man m = have_man T } F _ → {} }
+                        ( string_free mtxt )
+                    }
+                    F _ → {}
+                }
+            } {}
+            ( string_free mpath )
             : ~ i i 0 ~ < i ( vec_len [String] files ) {
                 : ?String fs_opt ( vec_get [String] files i )
-                ?? fs_opt { T f → { ? ( string_ends_with f `.nu` ) { : String fpath ( path_join ( string_data edir ) ( string_data f ) ) : !i IoErr szr ( file_size ( string_data fpath ) ) : Json obj ( json_obj_new ) ( json_obj_set obj `name` ( json_str_lit ( string_data f ) ) ) ( json_obj_set obj `path` ( json_str_lit ( string_data f ) ) ) ( json_obj_set obj `bytes` ( json_int ?? szr { T s → s F _ → 0 } ) ) ( json_arr_push arr obj ) ( string_free fpath ) } {} } F → {} }
+                ?? fs_opt { T f → { ? ( string_ends_with f `.nu` ) { : String fpath ( path_join ( string_data edir ) ( string_data f ) ) : !i IoErr szr ( file_size ( string_data fpath ) ) : Json obj ( json_obj_new ) ( json_obj_set obj `name` ( json_str_lit ( string_data f ) ) ) ( json_obj_set obj `path` ( json_str_lit ( string_data f ) ) ) ( json_obj_set obj `bytes` ( json_int ?? szr { T s → s F _ → 0 } ) ) ? have_man { ?? ( __uk_example_entry man ( string_data f ) ) { T e → { ?? ( json_obj_get e `unikernel` ) { T uj → { ( json_obj_set obj `unikernel` ( json_bool ( json_as_bool uj ) ) ) } F → {} } ?? ( json_obj_get e `reason` ) { T rj → { ( json_obj_set obj `unikernel_reason` ( json_str_lit ( json_str_data rj ) ) ) } F → {} } } F _ → {} } } {} ( json_arr_push arr obj ) ( string_free fpath ) } {} } F → {} }
                 = i + i 1
             }
             : String body ( json_stringify arr )
             : HttpResponse res ( response_text 200 ( string_data body ) ) ( response_set_header res `Content-Type` `application/json` )
             ( json_free arr )
+            ( json_free man )
             : ~ i k 0 ~ < k ( vec_len [String] files ) { ?? ( vec_get [String] files k ) { T fs → ( string_free fs ) F → {} } = k + k 1 } ( vec_free [String] files ) ( string_free edir ) ( string_free body )
             ^ res
         }
@@ -3934,6 +3987,7 @@ s combined_stdout s combined_stderr → v {
     ( __push_target arr `macos-x64` `macOS x86_64 · Intel` `macOS` `/build_target` F `libSystem only · no HTTP/canvas/audio` )
     ( __push_target arr `macos-arm64` `macOS ARM64 · Apple Silicon` `macOS` `/build_target` F `libSystem only · no HTTP/canvas/audio` )
     ( __push_target arr `windows-x64` `Windows x86_64 · .exe (mingw-w64)` `Windows` `/build_windows` F `static libcurl HTTP · no canvas/audio` )
+    ( __push_target arr `unikernel-x64` `Unikernel x86_64 · bootable image (QEMU microvm)` `Unikernel` `/build_unikernel` F `boots as its own kernel · pure-NURL TCP/IP + TLS · no fork/exec/signals, no sqlite/canvas` )
     : String body ( json_stringify arr )
     : HttpResponse r ( response_text 200 ( string_data body ) )
     ( response_set_header r `Content-Type` `application/json; charset=utf-8` )

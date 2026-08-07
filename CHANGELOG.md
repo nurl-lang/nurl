@@ -10,6 +10,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The playground UI builds and boots unikernels** (plan phase U4).
+  The target dropdown gains **Unikernel x86_64 · bootable image**: one
+  Build click compiles the editor's program into a PVH image, boots it
+  in the playground, and renders the guest console with its exit
+  status, the image download, and both ready-to-paste QEMU commands. A
+  guest-args field appears for the kernel command line's `args="…"`.
+  The examples dropdown greys out what cannot boot — **measured, not
+  listed**: `unikernel/measure_capability.sh` links every bundled
+  example at image-build time exactly as a request would (42/64
+  capable today) and GET /examples serves each verdict with the
+  missing symbols as the reason, so the tooltip says *why* (signals,
+  canvas/audio, hosted-HTTP FFI). A deployment that never measured
+  skips the annotation instead of faking it.
+
 - **`boot: true` — the playground proves the image boots** (plan phase
   U3). `POST /build_unikernel` can now boot the image it just built,
   inside the container: TCG (no /dev/kvm there), no network device,
