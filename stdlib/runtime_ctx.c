@@ -84,6 +84,19 @@
 #  define NURL_CTX_SYM(name) #name
 #endif
 
+/* The adrp/add pair that materialises a symbol's address needs the same
+ * treatment: ELF spells the two halves `sym` and `:lo12:sym`, Mach-O
+ * spells them `sym@PAGE` and `sym@PAGEOFF` — each assembler rejects the
+ * other's form. Both symbols this is used on are static locals of this
+ * file, so no GOT indirection is needed on either format. */
+#if defined(__APPLE__)
+#  define NURL_CTX_PAGE(name)    NURL_CTX_SYM(name) "@PAGE"
+#  define NURL_CTX_PAGEOFF(name) NURL_CTX_SYM(name) "@PAGEOFF"
+#else
+#  define NURL_CTX_PAGE(name)    NURL_CTX_SYM(name)
+#  define NURL_CTX_PAGEOFF(name) ":lo12:" NURL_CTX_SYM(name)
+#endif
+
 typedef struct { void *sp; } nurl_ctx_t;
 
 /* ── ASan fiber annotations ──────────────────────────────────────────
@@ -583,10 +596,10 @@ static void nurl__ctx_bounce(void *arg)
         "mov x23, x19\n\t"
         "1:\n\t"
         "bl " NURL_CTX_SYM(nurl__ctx_test_leave) "\n\t"
-        "adrp x0, " NURL_CTX_SYM(nurl__ctx_fiber) "\n\t"
-        "add  x0, x0, :lo12:" NURL_CTX_SYM(nurl__ctx_fiber) "\n\t"
-        "adrp x1, " NURL_CTX_SYM(nurl__ctx_main) "\n\t"
-        "add  x1, x1, :lo12:" NURL_CTX_SYM(nurl__ctx_main) "\n\t"
+        "adrp x0, " NURL_CTX_PAGE(nurl__ctx_fiber) "\n\t"
+        "add  x0, x0, " NURL_CTX_PAGEOFF(nurl__ctx_fiber) "\n\t"
+        "adrp x1, " NURL_CTX_PAGE(nurl__ctx_main) "\n\t"
+        "add  x1, x1, " NURL_CTX_PAGEOFF(nurl__ctx_main) "\n\t"
         "bl " NURL_CTX_SYM(nurl_ctx_switch) "\n\t"
         "bl " NURL_CTX_SYM(nurl__ctx_test_enter) "\n\t"
         "b 1b\n\t"
