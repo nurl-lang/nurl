@@ -301,6 +301,23 @@ jobs:
             "https://ziglang.org/download/${ZIG_VERSION}/zig-linux-x86_64-${ZIG_VERSION}.tar.xz"
           mkdir -p /opt/zig && sudo tar -xJf /tmp/zig.tar.xz -C /opt/zig --strip-components=1
 
+      - name: runtime.c compiles for every playground cross target
+        # The playground image warms stdlib/runtime.<target>.o for six
+        # zig targets at docker-build time (nurlapi/Dockerfile), two of
+        # them Mach-O — an object format nothing else in this workflow
+        # assembles. The v0.35.0 deploy found that out: the AArch64
+        # fiber switch's adrp/:lo12: pair is ELF spelling, and the
+        # release tag was the first build to feed it to a Mach-O
+        # assembler. Compile the same file for the same targets here,
+        # so the next such mismatch fails the PR instead of the deploy.
+        run: |
+          set -eux
+          for t in x86_64-macos-none aarch64-macos-none \
+                   x86_64-linux-musl aarch64-linux-musl \
+                   aarch64-linux-gnu.2.31 riscv64-linux-musl; do
+            /opt/zig/zig cc -target "$t" -O2 -c stdlib/runtime.c -o /tmp/rt-gate.o
+          done
+
       - name: The guest, on the THIRD architecture
         # …including the entropy gate: this ISA has no instruction for
         # randomness, so the RISC-V guest drives a virtio-rng device
