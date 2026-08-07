@@ -260,11 +260,31 @@ jobs:
         # unikernel never links, work that never will be.
         run: ./unikernel/run_nolibc_tests.sh
 
+      - name: Fetch cloud-hypervisor (the other PVH loader)
+        # 4.5 MB static binary, fetched BEFORE the unit gates because
+        # one of them (hypervisor_gate) uses it. It boots the SAME
+        # artifact QEMU does — both read the PVH note — so this is the
+        # cheapest possible check that the image is not secretly a QEMU
+        # image. Whether it actually boots depends on the runner having
+        # /dev/kvm; the gate reports which half it ran.
+        run: |
+          sudo curl -fsSL --retry 5 -o /usr/local/bin/cloud-hypervisor \
+            https://github.com/cloud-hypervisor/cloud-hypervisor/releases/download/v46.0/cloud-hypervisor-static
+          sudo chmod +x /usr/local/bin/cloud-hypervisor
+          # The runner HAS /dev/kvm and denies the job user access to it
+          # (group kvm). Granting it turns the gate's boot half from a
+          # skip into a real boot on a real hypervisor — which is the
+          # whole point of the phase. `|| true`: on a runner without the
+          # device the gate skips and says so.
+          sudo chmod 0666 /dev/kvm 2>/dev/null || true
+          ls -l /dev/kvm 2>/dev/null || echo "no /dev/kvm on this runner"
+
       - name: nolibc + runtime_bare unit gates
         run: ./unikernel/tests/run_unit_tests.sh
 
       - name: The guest, under QEMU
-        # TCG, because no runner has /dev/kvm. Slower, identical
+        # TCG, because a runner may or may not have /dev/kvm and the
+        # boot path must be covered either way. Slower, identical
         # otherwise — except for the TSC frequency, which no leaf
         # reports there, so run_qemu.sh states it on the kernel command
         # line the way the plan says the host states the epoch.

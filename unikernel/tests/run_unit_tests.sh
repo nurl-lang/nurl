@@ -159,7 +159,13 @@ done
 #    when build/nurlc is absent (the other gates here need only $CC).
 step build_tool_gate "$ROOT/unikernel/tests/build_tool_gate.sh"
 
-# 7. the bare mutex/cond fit what the NURL side allocates for them.
+# 7. the image is not a QEMU image: the PVH note Firecracker and
+#    cloud-hypervisor dispatch on is present, well-formed, and agrees
+#    with the ELF's entry point. Boots under those two as well when
+#    the machine has KVM; says so and skips when it does not.
+step hypervisor_gate "$ROOT/unikernel/tests/hypervisor_gate.sh"
+
+# 8. the bare mutex/cond fit what the NURL side allocates for them.
 #    Hosted on purpose: the comparison needs the real <pthread.h>, which
 #    is precisely what the freestanding build does not have.
 $CC -O2 "$ROOT/unikernel/tests/pthread_layout.c" "$OUT/runtime_bare.o" \
