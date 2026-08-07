@@ -445,6 +445,7 @@
       <div class="target"><span class="dot"></span><span class="name">WebAssembly</span><span class="meta">wasm32-wasi · in-browser</span></div>
       <div class="target"><span class="dot"></span><span class="name">Linux ARM64</span><span class="meta">musl + glibc · playground</span></div>
       <div class="target"><span class="dot"></span><span class="name">Linux RISC-V 64</span><span class="meta">static musl · playground</span></div>
+      <div class="target"><span class="dot"></span><span class="name">Unikernel (x64 · ARM64 · RISC-V)</span><span class="meta">boots as its own kernel · CI every push</span></div>
       <div class="target"><span class="dot"></span><span class="name">Milk-V Duo</span><span class="meta">riscv64 C906 · on-device</span></div>
       <div class="target"><span class="dot"></span><span class="name">ESP32 (Xtensa)</span><span class="meta">flashed &amp; verified</span></div>
       <div class="target"><span class="dot"></span><span class="name">ESP32-C3/C6</span><span class="meta">RISC-V firmware ELF</span></div>
@@ -465,6 +466,15 @@
       downloadable binaries for Linux (x86_64 / ARM64 / RISC-V), Windows, and macOS
       (x86_64 + ARM64). The self-hosting compiler itself also builds to wasm, so the
       entire toolchain can run in a sandbox.
+    </p>
+    <p class="section-note">
+      <strong>A NURL program can boot as its own kernel.</strong>
+      The playground's <code>/build_unikernel</code> endpoint links your program
+      freestanding — no host OS, no libc — into a bootable image for x86_64
+      (QEMU microvm, Firecracker, cloud-hypervisor) or AArch64 (QEMU virt), boots
+      it server-side, and shows you the guest console. RISC-V 64 boots in the
+      repository's QEMU gate. Pure-NURL TCP/IP and TLS run inside the guest.
+      Sources: <a href="https://github.com/nurl-lang/nurl/tree/main/unikernel" target="_blank" rel="noopener">unikernel/</a>.
     </p>
   </div>
 </section>

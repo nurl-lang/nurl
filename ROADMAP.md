@@ -7,7 +7,7 @@ Anything marked done here has a regression test in
 [`compiler/tests/`](compiler/tests/) and is covered by the bootstrap fixed
 point.
 
-_Last reviewed: 2026-08-03 · Current release: **0.32.0** · Language: **Grammar
+_Last reviewed: 2026-08-07 · Current release: **0.35.0** · Language: **Grammar
 v2.3** ([`spec/grammar.ebnf`](spec/grammar.ebnf))._
 
 ---
@@ -45,8 +45,10 @@ What is solid today:
   stack, database clients, distributed systems (p2p overlay, CRDTs), MCP, and the Anthropic Claude API.
 - **Targets.** Linux x86_64 (primary, CI-tested), Windows x86_64 (CI-built,
   corpus runs locally), macOS x86_64/ARM64 (cross-compiled Mach-O — no CI, no
-  prebuilt toolchain), `wasm32-wasi`, and static Linux ARM64 / RISC-V64
-  (musl). Tier definitions: [`docs/PLATFORMS.md`](docs/PLATFORMS.md).
+  prebuilt toolchain), `wasm32-wasi`, static Linux ARM64 / RISC-V64
+  (musl), and **bootable unikernel images** — a NURL program as its own
+  kernel on x86_64, AArch64 and RISC-V64, no host OS and no libc.
+  Tier definitions: [`docs/PLATFORMS.md`](docs/PLATFORMS.md).
 - **Tooling.** `nurlc` (compiler), `nurlfmt` (canonical formatter), `nurl-lsp`
   (language server), `nurlpkg` (package manager + test/bench runner), `nurldoc`
   (API-doc generator), `tools/repl`, DWARF debug info (`--g`), a
@@ -170,6 +172,17 @@ platform-specific shims.
   under the reference `wasmtime` and under this pure-NURL runtime.
 - Static cross-compiles: Linux ARM64 / RISC-V64 (musl). Milk-V Duo (RISC-V
   C906) validated on-device.
+- **Unikernel: a NURL program boots as its own kernel** — no host OS, no
+  libc, no interpreter — on three architectures: x86_64 (QEMU microvm,
+  and the same PVH image boots under Firecracker and cloud-hypervisor),
+  AArch64 and RISC-V64 (QEMU virt; on AArch64 a flat `Image` wrapper
+  covers Firecracker/cloud-hypervisor). Per-arch QEMU gates run the
+  hosted corpus against the same goldens (15/15 each), with virtio
+  net/rng drivers, TLS handshakes in the guest, native fiber switches
+  on all three ISAs, and CI booting every architecture on every commit.
+  The playground builds and boots these images (`POST /build_unikernel`
+  + target dropdown), and agents do the same over MCP
+  (`nurl_build_unikernel`).
 - `nurlfmt` canonical formatter (idempotent, IR-preserving), `nurl-lsp`
   (completion, references, unused-symbol lint), `nurlpkg` package manager,
   DWARF debugging, VS Code extension, and the `nurlapi` compiler-as-a-service

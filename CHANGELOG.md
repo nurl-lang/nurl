@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.35.0] — 2026-08-07
+
 ### Added
 
 - **TLS works on RISC-V: entropy from a virtio-rng device**
@@ -77,49 +79,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   request for randomness, naming what is missing, instead of inventing
   it.
 
-### Changed
-
-- **The device-tree walk is shared rather than copied**
-  (`unikernel/boot/fdt.c`). AArch64 and RISC-V need the same three
-  answers out of the same format, and the third port is the right
-  moment to stop copying the second's. Generalising it found a real
-  narrowness in the AArch64 original: it classified nodes at a
-  hard-coded depth, and RISC-V's virt puts its devices under `/soc`
-  where AArch64's puts them at the root — so the walker found nothing
-  and the guest reported "no virtio-net device" about a machine that
-  had one. Nodes are now classified by NAME at any depth, with
-  address/size cells tracked per level because a bus node may state
-  its own.
-
-- **The image is not a QEMU image, and there is now a gate that says
-  so** (plan phase U7). Firecracker and cloud-hypervisor both boot an
-  x86_64 kernel by reading the same `XEN_ELFNOTE_PHYS32_ENTRY` note
-  QEMU reads, so the artifact needs no repackaging for either.
-  `unikernel/tests/hypervisor_gate.sh` checks the note structurally on
-  any machine — present, owned by `Xen`, type 18, four-byte
-  descriptor, and the address in it **equal to the ELF's entry point**,
-  which are set by two different files and whose disagreement is a
-  boot that works under one loader and not another — and then boots
-  the image under cloud-hypervisor and Firecracker where `/dev/kvm`
-  exists, skipping loudly where it does not (neither has an
-  interpreter fallback). Three mutations (entry moved, note type
-  changed, section renamed) are all caught. On AArch64 the gate gives
-  the honest answer instead: PVH is x86-only, QEMU's virt board loads
-  the ELF directly, and the other two want a PE-format `Image` there —
-  a packaging step not taken rather than a property claimed.
-
-- **The playground builds AArch64 unikernel images too.** `POST
-  /build_unikernel` takes `arch` (`"x86_64"` default, `"aarch64"`),
-  the MCP tool takes the same field, and the target dropdown gains
-  **Unikernel AArch64 · bootable image (QEMU virt)**. Everything the
-  x86_64 path already had follows the field: the smoke boot runs
-  `qemu-system-aarch64 -M virt`, the returned boot commands name the
-  right machine, and the AArch64 ones carry no `tsc_khz=` because that
-  clock states its own frequency. An unknown arch is a 400, never a
-  silent build for the default — an image that builds, downloads and
-  does not boot is the worst possible answer. e2e covers both
-  architectures end to end, including the guest console from each.
-
 - **A NURL program boots as its own kernel on AArch64 too** (unikernel
   plan phase U6). QEMU's `virt` board, and the port is the size the
   design predicted: **four files** differ — `boot/boot_arm64.S`
@@ -154,18 +113,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   canary `__thread` back through the compiler's own addressing, and
   refuses to run if the value is not there — a thread-local block off
   by sixteen bytes reads plausible garbage.
-
-### Fixed
-
-- **nolibc was missing `getchar`** and nothing noticed, because
-  glibc's `<stdio.h>` defines it as a macro (`getc(stdin)`) — every
-  x86 build resolved the call in the preprocessor and never reached
-  the library. A libc whose completeness depends on which headers
-  happen to be installed is not complete; the AArch64 port, whose
-  headers declare it as a function, found it at the link line.
-  `nolibc/math.c`'s `sqrt` likewise assumed `sqrtsd`; it now selects
-  the architecture's instruction and refuses to compile (rather than
-  answer differently) on one where neither is known.
 
 - **MCP tool `nurl_build_unikernel`** (plan phase U5). An agent builds
   a bootable image and — because the tool's `boot` defaults ON, and an
@@ -232,6 +179,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The device-tree walk is shared rather than copied**
+  (`unikernel/boot/fdt.c`). AArch64 and RISC-V need the same three
+  answers out of the same format, and the third port is the right
+  moment to stop copying the second's. Generalising it found a real
+  narrowness in the AArch64 original: it classified nodes at a
+  hard-coded depth, and RISC-V's virt puts its devices under `/soc`
+  where AArch64's puts them at the root — so the walker found nothing
+  and the guest reported "no virtio-net device" about a machine that
+  had one. Nodes are now classified by NAME at any depth, with
+  address/size cells tracked per level because a bus node may state
+  its own.
+
+- **The image is not a QEMU image, and there is now a gate that says
+  so** (plan phase U7). Firecracker and cloud-hypervisor both boot an
+  x86_64 kernel by reading the same `XEN_ELFNOTE_PHYS32_ENTRY` note
+  QEMU reads, so the artifact needs no repackaging for either.
+  `unikernel/tests/hypervisor_gate.sh` checks the note structurally on
+  any machine — present, owned by `Xen`, type 18, four-byte
+  descriptor, and the address in it **equal to the ELF's entry point**,
+  which are set by two different files and whose disagreement is a
+  boot that works under one loader and not another — and then boots
+  the image under cloud-hypervisor and Firecracker where `/dev/kvm`
+  exists, skipping loudly where it does not (neither has an
+  interpreter fallback). Three mutations (entry moved, note type
+  changed, section renamed) are all caught. On AArch64 the gate gives
+  the honest answer instead: PVH is x86-only, QEMU's virt board loads
+  the ELF directly, and the other two want a PE-format `Image` there —
+  a packaging step not taken rather than a property claimed.
+
+- **The playground builds AArch64 unikernel images too.** `POST
+  /build_unikernel` takes `arch` (`"x86_64"` default, `"aarch64"`),
+  the MCP tool takes the same field, and the target dropdown gains
+  **Unikernel AArch64 · bootable image (QEMU virt)**. Everything the
+  x86_64 path already had follows the field: the smoke boot runs
+  `qemu-system-aarch64 -M virt`, the returned boot commands name the
+  right machine, and the AArch64 ones carry no `tsc_khz=` because that
+  clock states its own frequency. An unknown arch is a 400, never a
+  silent build for the default — an image that builds, downloads and
+  does not boot is the worst possible answer. e2e covers both
+  architectures end to end, including the guest console from each.
+
 - **`unikernel/build_unikernel.sh` is a tool now, not a repo-rooted
   script** (unikernel-in-the-playground plan, phase U0). It takes
   `--out-dir`, compiles the program-independent objects once into a
@@ -248,6 +236,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   properties are pinned by a new unit gate
   (`unikernel/tests/build_tool_gate.sh`): foreign-cwd build,
   read-only repo, concurrent byte-identical ELFs, loud failure.
+
+### Fixed
+
+- **nolibc was missing `getchar`** and nothing noticed, because
+  glibc's `<stdio.h>` defines it as a macro (`getc(stdin)`) — every
+  x86 build resolved the call in the preprocessor and never reached
+  the library. A libc whose completeness depends on which headers
+  happen to be installed is not complete; the AArch64 port, whose
+  headers declare it as a function, found it at the link line.
+  `nolibc/math.c`'s `sqrt` likewise assumed `sqrtsd`; it now selects
+  the architecture's instruction and refuses to compile (rather than
+  answer differently) on one where neither is known.
 
 ## [0.34.0] — 2026-08-07
 
@@ -11057,7 +11057,8 @@ releases are measured.
   compile-server (`api/`), browser playground (`nurlweb/`).
 * Dual license: MIT (LICENSE-MIT) or Apache-2.0 (LICENSE-APACHE).
 
-[Unreleased]: https://github.com/nurl-lang/nurl/compare/v0.34.0...HEAD
+[Unreleased]: https://github.com/nurl-lang/nurl/compare/v0.35.0...HEAD
+[0.35.0]: https://github.com/nurl-lang/nurl/compare/v0.34.0...v0.35.0
 [0.34.0]: https://github.com/nurl-lang/nurl/compare/v0.33.0...v0.34.0
 [0.33.0]: https://github.com/nurl-lang/nurl/compare/v0.32.0...v0.33.0
 [0.32.0]: https://github.com/nurl-lang/nurl/compare/v0.31.1...v0.32.0
