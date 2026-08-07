@@ -2076,6 +2076,7 @@ s combined_stdout s combined_stderr → v {
     ( __mcp_info_push_str tools `nurl_build_macos` )
     ( __mcp_info_push_str tools `nurl_build_wasm` )
     ( __mcp_info_push_str tools `nurl_build_target` )
+    ( __mcp_info_push_str tools `nurl_build_unikernel` )
     ( __mcp_info_push_str tools `nurl_list_examples` )
     ( __mcp_info_push_str tools `nurl_read_example` )
     ( __mcp_info_push_str tools `nurl_list_stdlib` )
@@ -4730,6 +4731,50 @@ s combined_stdout s combined_stderr → v {
     ^ result
 }
 
+@ __mcp_schema_build_unikernel → Json {
+    : Json schema ( json_obj_new )
+    ( json_obj_set schema `type` ( json_str_lit `object` ) )
+    : Json props ( json_obj_new )
+    ( json_obj_set props `source`
+    ( __mcp_prop `string` `NURL source code (full file contents)` ) )
+    ( json_obj_set props `filename`
+    ( __mcp_prop `string` `Logical filename for diagnostics (default main.nu)` ) )
+    ( json_obj_set props `args`
+    ( __mcp_prop `string` `The guest program's argv, passed on the kernel command line as args="…"` ) )
+    ( json_obj_set props `files`
+    ( __mcp_prop `object` `Optional read-only filesystem baked into the image: {"relative/path": "<base64>"} — no absolute paths, no ".." segments` ) )
+    ( json_obj_set props `boot`
+    ( __mcp_prop `boolean` `Boot the built image in the server (TCG, no network, ~20 s cap) and return the guest console. Default true — the boot log is the point of the tool.` ) )
+    ( json_obj_set schema `properties` props )
+    : Json req ( json_arr_new )
+    ( json_arr_push req ( json_str_lit `source` ) )
+    ( json_obj_set schema `required` req )
+    ^ schema
+}
+
+// The MCP twin of POST /build_unikernel. Boot defaults ON here — an
+// agent cannot run qemu, so the guest console in the tool result is
+// what turns "here is an ELF" into something it can iterate against.
+@ __mcp_tool_build_unikernel_impl Json args → Json {
+    : s source ( __mcp_args_get `source` args `` )
+    : s filename ( __mcp_args_get `filename` args `main.nu` )
+    : s uargs ( __mcp_args_get `args` args `` )
+    ? == ( nurl_str_len source ) 0 { ^ ( __mcp_result_error `argument 'source' is required` ) } {}
+    : Json body ( json_obj_new )
+    ( json_obj_set body `source` ( json_str_lit source ) )
+    ( json_obj_set body `filename` ( json_str_lit filename ) )
+    ? > ( nurl_str_len uargs ) 0 { ( json_obj_set body `args` ( json_str_lit uargs ) ) } {}
+    : ~ b boot T
+    ?? ( json_obj_get args `boot` ) { T bj → { = boot ( json_as_bool bj ) } F → {} }
+    ( json_obj_set body `boot` ( json_bool boot ) )
+    // json_obj_get hands back a BORROW; the request body owns its
+    // values, so the files object is cloned in.
+    ?? ( json_obj_get args `files` ) { T fo → { ( json_obj_set body `files` ( json_clone fo ) ) } F → {} }
+    : Json result ( __mcp_build_endpoint `/build_unikernel` body )
+    ( json_free body )
+    ^ result
+}
+
 @ __mcp_tool_build_target_impl Json args → Json {
     : s source ( __mcp_args_get `source` args `` )
     : s target ( __mcp_args_get `target` args `` )
@@ -5313,6 +5358,9 @@ s combined_stdout s combined_stderr → v {
     ? != 0 ( nurl_str_eq name `nurl_build_target` ) {
         ^ ( __mcp_tool_build_target_impl args )
     } {}
+    ? != 0 ( nurl_str_eq name `nurl_build_unikernel` ) {
+        ^ ( __mcp_tool_build_unikernel_impl args )
+    } {}
 
     // Browse — three catalogues.
     ? != 0 ( nurl_str_eq name `nurl_list_examples` ) {
@@ -5432,6 +5480,9 @@ s combined_stdout s combined_stderr → v {
     ( json_arr_push arr ( __mcp_tool_desc `nurl_build_target`
     `Cross-compile NURL source to one of several extra targets via zig cc. target selects which: *-musl static ELFs (x86_64/ARM64/RISC-V 64 Linux), linux-arm64-gnu dynamic glibc ELF, macos-x64/macos-arm64 unsigned Mach-O. Equivalent to POST /build_target.`
     ( __mcp_schema_build_target ) ) )
+    ( json_arr_push arr ( __mcp_tool_desc `nurl_build_unikernel`
+    `Build NURL source into a bootable x86_64 PVH unikernel image (no OS, no libc — the pure-NURL TCP/IP + TLS stack; fork/exec/signals and C libraries are unavailable). By default also BOOTS the image server-side (TCG, no network, ~20 s cap) and returns the guest console + exit status, plus an ELF download link and ready-to-paste QEMU commands. files bakes {"relative/path": base64} into a read-only in-image filesystem. Equivalent to POST /build_unikernel.`
+    ( __mcp_schema_build_unikernel ) ) )
 
     // Browse.
     ( json_arr_push arr ( __mcp_tool_desc `nurl_list_examples`
@@ -5658,7 +5709,9 @@ s combined_stdout s combined_stderr → v {
     ( string_push_char s bt ) ( string_push_str s `nurl_build_macos` ) ( string_push_char s bt )
     ( string_push_str s ` (macOS x86_64 Mach-O), ` )
     ( string_push_char s bt ) ( string_push_str s `nurl_build_target` ) ( string_push_char s bt )
-    ( string_push_str s ` (cross-compile to RISC-V / ARM64 Linux or ARM64 macOS), or ` )
+    ( string_push_str s ` (cross-compile to RISC-V / ARM64 Linux or ARM64 macOS), ` )
+    ( string_push_char s bt ) ( string_push_str s `nurl_build_unikernel` ) ( string_push_char s bt )
+    ( string_push_str s ` (a bootable x86_64 unikernel image, booted server-side with the guest console returned), or ` )
     ( string_push_char s bt ) ( string_push_str s `nurl_build_wasm` ) ( string_push_char s bt )
     ( string_push_str s ` to compile source. The language uses a terse prefix notation: functions are declared with ` )
     ( string_push_char s bt ) ( string_push_str s `@ name → ret_ty { body }` ) ( string_push_char s bt )

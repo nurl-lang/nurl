@@ -10,6 +10,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **MCP tool `nurl_build_unikernel`** (plan phase U5). An agent builds
+  a bootable image and — because the tool's `boot` defaults ON, and an
+  agent cannot run qemu — gets the guest console and exit status back
+  in the tool result: write program → build → read the boot log →
+  iterate. `files` bakes a read-only filesystem, `args` is the guest
+  argv, and the ELF comes back as a download link, never inline bytes.
+  Listed in tools/list, /mcp-info and the server's instructions text.
+
 - **The playground UI builds and boots unikernels** (plan phase U4).
   The target dropdown gains **Unikernel x86_64 · bootable image**: one
   Build click compiles the editor's program into a PVH image, boots it

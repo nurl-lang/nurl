@@ -677,6 +677,28 @@ def _shim_signature_mismatches(ir: str) -> list[str]:
     return sorted(set(out))
 
 
+def t_tools_call_build_unikernel(c: Client) -> None:
+    # The tool's default is boot:true — an agent cannot run qemu, so the
+    # guest console in the result is what makes the tool usable at all.
+    print("\n[MCP] tools/call nurl_build_unikernel (boots, console in result)")
+    src = "@ main → i {\n    ( nurl_println `uk-mcp-e2e` )\n    ^ 0\n}\n"
+    env = _tool_call(c, "nurl_build_unikernel", {"source": src})
+    text = _tool_text(env)
+    try:
+        j = json.loads(text)
+    except json.JSONDecodeError:
+        bad("unikernel tool result is JSON", f"got {text[:200]!r}")
+        return
+    assert_eq("unikernel tool build ok", j.get("status"), "ok")
+    assert_true("tool result has elf artifact", bool((j.get("elf_artifact") or {}).get("download_url")), str(j)[:200])
+    br = j.get("boot_result") or {}
+    if br.get("ran") is False and "not available" in (br.get("error") or ""):
+        print("  boot skipped: qemu not in this deployment")
+    else:
+        assert_true("tool result carries the guest console", "uk-mcp-e2e" in (br.get("log") or ""), str(br)[:200])
+        assert_eq("guest exit 0 via MCP", br.get("exit"), 0)
+
+
 def t_build_wasm_libc_shims(c: Client) -> None:
     print("\n[REST] /build_wasm — libc shims match their call sites")
     # `& `libc` @ rand → i` makes nurlc emit `declare i64 @rand()`, so the
@@ -925,12 +947,14 @@ def main() -> int:
         t_build_wasm_libc_shims(c)
         t_build_wasm_links_only_rest(c)
         t_build_unikernel_rest(c)
+        t_tools_call_build_unikernel(c)
     else:
         print("\n[MCP] tools/call nurl_build_native — skipped (--quick)")
         print("[MCP] tools/call nurl_build_wasm — skipped (--quick)")
         print("[REST] /build_wasm libc shims — skipped (--quick)")
         print("[REST] /build_wasm links_only — skipped (--quick)")
         print("[REST] /build_unikernel — skipped (--quick)")
+        print("[MCP] tools/call nurl_build_unikernel — skipped (--quick)")
 
     t_resources(c)
     t_prompts(c)
