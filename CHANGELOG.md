@@ -10,6 +10,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The image is not a QEMU image, and there is now a gate that says
+  so** (plan phase U7). Firecracker and cloud-hypervisor both boot an
+  x86_64 kernel by reading the same `XEN_ELFNOTE_PHYS32_ENTRY` note
+  QEMU reads, so the artifact needs no repackaging for either.
+  `unikernel/tests/hypervisor_gate.sh` checks the note structurally on
+  any machine — present, owned by `Xen`, type 18, four-byte
+  descriptor, and the address in it **equal to the ELF's entry point**,
+  which are set by two different files and whose disagreement is a
+  boot that works under one loader and not another — and then boots
+  the image under cloud-hypervisor and Firecracker where `/dev/kvm`
+  exists, skipping loudly where it does not (neither has an
+  interpreter fallback). Three mutations (entry moved, note type
+  changed, section renamed) are all caught. On AArch64 the gate gives
+  the honest answer instead: PVH is x86-only, QEMU's virt board loads
+  the ELF directly, and the other two want a PE-format `Image` there —
+  a packaging step not taken rather than a property claimed.
+
 - **The playground builds AArch64 unikernel images too.** `POST
   /build_unikernel` takes `arch` (`"x86_64"` default, `"aarch64"`),
   the MCP tool takes the same field, and the target dropdown gains

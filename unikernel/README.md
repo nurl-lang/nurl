@@ -352,6 +352,35 @@ bytes travel over the pure TCP stack and the virtio-net driver. The
 handshake is `stdlib/std/tls.nu` — pure NURL, no libssl, which is why
 it links here at all.
 
+## Which hypervisors, and what the artifact actually is
+
+The image is an ELF with a `XEN_ELFNOTE_PHYS32_ENTRY` note in it. That
+note is the whole PVH direct-boot protocol: a loader reads the address
+out of it and jumps there, in 32-bit protected mode, with the handover
+block in `%ebx`. **QEMU, Firecracker and cloud-hypervisor all do
+exactly that**, so the same file boots on all three with no
+repackaging — Firecracker documents PVH as the mode it picks when the
+note is present, and it is what FreeBSD boots there with.
+
+`unikernel/tests/hypervisor_gate.sh` is the check, and it has two
+halves because they answer different questions. The STRUCTURE half
+runs anywhere: the note exists, is owned by `Xen`, is type 18, carries
+a four-byte descriptor, and the address in it **equals the ELF's own
+entry point** — those last two are set by different files (`boot.S`
+and `link.ld`) and a mismatch is a boot that works under one loader
+and not another. The BOOT half runs cloud-hypervisor and Firecracker
+for real; both require `/dev/kvm` and neither has an interpreter
+fallback, so on a machine without it the gate says so and skips rather
+than passing quietly. Three deliberate mutations — the entry point
+moved, the note's type changed, the section renamed away — are all
+caught by the structure half.
+
+On AArch64 the honest answer is different, and the gate gives it:
+PVH is x86-only. QEMU's `virt` board loads the ELF directly (which is
+what the AArch64 guest gate boots), while Firecracker and
+cloud-hypervisor want a PE-format `Image` there — a packaging step
+this target has not taken, rather than a property it has.
+
 ## The second architecture (AArch64, QEMU `virt`)
 
 A second machine is what turns "portable" from an intention into a
@@ -494,6 +523,7 @@ unikernel/run_nolibc_tests.sh            # the corpus, with no libc
 unikernel/run_qemu_tests.sh              # the guest, under a hypervisor
 unikernel/run_qemu_tests.sh hello        # one of them
 unikernel/run_qemu_arm64_tests.sh        # the guest, on the other architecture
+unikernel/tests/hypervisor_gate.sh       # the image is not a QEMU image
 unikernel/build_nolibc.sh prog.nu        # build one program, no libc
 unikernel/build_unikernel.sh prog.nu     # build one bootable image (x86_64)
 unikernel/build_unikernel_arm64.sh p.nu  # …and for AArch64 (needs zig)
