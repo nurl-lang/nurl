@@ -1,0 +1,6 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/arity_strict_nary.nu:20:5: error: '?' consumed bare then/else values, but a '{ ... }' block follows. Likely too few '&'/'|' operators in the condition (each is BINARY — write '& & a b c d' for n-ary).
+    ? & >= a 0 < a b >= c 0 < c d {
+    ^
+error: aborting due to 1 previous error

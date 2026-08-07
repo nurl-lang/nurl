@@ -61,9 +61,17 @@ one() {
     golden="$TESTS/outputs/$name.txt"
     work="$OUTDIR/work/$name"
     mkdir -p "$work"
-    # should_fail_* and friends never produce a binary; skip by shape.
-    case "$name" in should_*|borrow_*|diag_*) echo "SKIP $name (compile-fail test)"; return 0 ;; esac
     [ -f "$golden" ] || { echo "SKIP $name (no golden)"; return 0; }
+    # A negative test never produces a binary, so there is nothing to run
+    # here. Ask the GOLDEN, not the name: run_san_tests.sh settled this
+    # rule already — "should_fail_*, diag_*, borrow_*, and whatever
+    # tomorrow's negative test is called". A name list has to be updated
+    # in every runner that keeps one, and the one that gets forgotten
+    # fails confusingly: arity_strict_* was added to the corpus and this
+    # runner tried to execute a program that is meant not to compile.
+    case "$(head -n 1 "$golden")" in
+        "COMPILE FAIL"*) echo "SKIP $name (compile-fail test)"; return 0 ;;
+    esac
 
     # Compile, and link in the NURL socket layer if this program needs
     # it — see unikernel/compile_nu.sh for why that is a recompile

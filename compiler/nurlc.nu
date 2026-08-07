@@ -868,6 +868,14 @@
 // Disabled by default because the extensions have a meaningful
 // false-positive rate against existing stdlib code.
 : ~ i g_strict_borrowck 0  // 1 when --strict-borrowck passed on the CLI
+// --strict-arity: promote the n-ary `&`/`|` arity warning to an error.
+// The trap is the language's one documented foot-gun and it currently
+// produces `status: ok` plus a binary whose conditional logic is wrong
+// — the worst possible outcome, because nothing downstream can tell.
+// Default stays a warning so existing trees keep building; a project
+// that wants the guarantee turns it on in CI, which is what this repo
+// now does for its own corpus.
+: ~ i g_strict_arity 0  // 1 when --strict-arity passed on the CLI
 : ~ i g_ptrtab 0  // sym handle for the dangling-borrow tracker (unscoped)
 : ~ i g_bck 0  // sym handle for the borrow checker's per-function
 //  data (statement list etc.); allocated in main()
@@ -7311,7 +7319,9 @@
     // `{ ... }` blocks then run as side-effect statements. Warn —
     // the program compiles but the conditional logic is wrong.
     ? == ( nurl_lex_type lex ) TT_LBRACE
-    { ( warn_pos lex bck_cline bck_ccol `'?' consumed bare then/else values, but a '{ ... }' block follows. Likely too few '&'/'|' operators in the condition (each is BINARY — write '& & a b c d' for n-ary).` ) }
+    { ? != 0 g_strict_arity
+        { ( die_pos lex bck_cline bck_ccol `error: '?' consumed bare then/else values, but a '{ ... }' block follows. Likely too few '&'/'|' operators in the condition (each is BINARY — write '& & a b c d' for n-ary).` ) }
+        { ( warn_pos lex bck_cline bck_ccol `'?' consumed bare then/else values, but a '{ ... }' block follows. Likely too few '&'/'|' operators in the condition (each is BINARY — write '& & a b c d' for n-ary). Compile with --strict-arity to make this an error.` ) } }
     {}
     // pick a consistent phi type: prefer the non-void live branch type;
     // if both live and types differ, fall back to void (no phi needed).
@@ -22623,21 +22633,23 @@
                             { = g_borrowck 0 }
                             { ? ( seq a `--strict-borrowck` )
                                 { = g_borrowck 1 = g_strict_borrowck 1 }
-                                { ? ( seq a `--ffi-host-imports` )
-                                    { = g_ffi_host_imports 1 }
-                                    { ? ( seq a `--no-dce` )
-                                        { = g_dce 0 }
-                                        { ? != 0 ( nurl_str_starts a `--split=` )
-                                            { = g_split_max ( nurl_str_to_int ( nurl_str_slice a 8 - ( nurl_str_len a ) 8 ) ) }
-                                            { ? != 0 ( nurl_str_starts a `--split-out=` )
-                                                { = g_split_out ( nurl_str_slice a 12 - ( nurl_str_len a ) 12 ) }
-                                                { ? != 0 ( nurl_str_starts a `--split-min=` )
-                                                    { = g_split_min ( nurl_str_to_int ( nurl_str_slice a 12 - ( nurl_str_len a ) 12 ) ) }
-                                                    { = path a } } } } } } } } } } } }
+                                { ? ( seq a `--strict-arity` )
+                                    { = g_strict_arity 1 }
+                                    { ? ( seq a `--ffi-host-imports` )
+                                        { = g_ffi_host_imports 1 }
+                                        { ? ( seq a `--no-dce` )
+                                            { = g_dce 0 }
+                                            { ? != 0 ( nurl_str_starts a `--split=` )
+                                                { = g_split_max ( nurl_str_to_int ( nurl_str_slice a 8 - ( nurl_str_len a ) 8 ) ) }
+                                                { ? != 0 ( nurl_str_starts a `--split-out=` )
+                                                    { = g_split_out ( nurl_str_slice a 12 - ( nurl_str_len a ) 12 ) }
+                                                    { ? != 0 ( nurl_str_starts a `--split-min=` )
+                                                        { = g_split_min ( nurl_str_to_int ( nurl_str_slice a 12 - ( nurl_str_len a ) 12 ) ) }
+                                                        { = path a } } } } } } } } } } } } }
         = ai + ai 1
     }
     ? == 0 ( nurl_str_len path )
-    { ( nurl_eprintln `usage: nurlc [--version] [--g] [--lint] [--no-borrowck | --strict-borrowck] [--ffi-host-imports] [--no-dce] [--split=N --split-out=PREFIX] <file.nu>` ) ( nurl_exit 1 ) }
+    { ( nurl_eprintln `usage: nurlc [--version] [--g] [--lint] [--no-borrowck | --strict-borrowck] [--strict-arity] [--ffi-host-imports] [--no-dce] [--split=N --split-out=PREFIX] <file.nu>` ) ( nurl_exit 1 ) }
     {}
     // --split writes files, so it needs somewhere to write them. Cap it
     // at 64: past the core count the parts only get smaller, and each

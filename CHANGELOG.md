@@ -8,6 +8,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`--strict-arity`, and a CI gate that runs it over the whole tree.**
+  The n-ary `&`/`|` foot-gun is the language's one remaining
+  source-level trap, and its outcome is the worst available: `? & a b c
+  d { … } { … }` reads as `? (& a b) c d`, so the last two comparisons
+  become the bare then/else values, both blocks run as ordinary
+  statements, the conditional logic is wrong — and the compiler emits a
+  working binary with `status: ok`, so nothing downstream can notice.
+  `nurlc --strict-arity` makes it an error; the default stays a warning
+  (now naming the flag) so existing trees keep building.
+  `tools/check_strict_arity.sh` runs the strict compiler over every
+  first-party `.nu` file and is wired into CI.
+
+  The gate found the shape it was written for on its first run.
+  `examples/audio_sparcles2.nu` had `? & >= x 0 < x W & >= y 0 < y H {}
+  { = . plife i 0 }` for "kill particles that wander off-screen": the
+  condition was only the x test, the y test was swallowed as the bare
+  then-value, and the kill ran unconditionally — culling **every**
+  particle on **every** frame. Fixed with the third `&` it always needed.
+
 ### Fixed
 
 - **`ext/json` string parsing now follows RFC 8259, and the module's own
