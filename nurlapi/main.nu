@@ -5376,8 +5376,26 @@ s combined_stdout s combined_stderr → v {
 
 @ __mcp_tool_docs Json args → Json {
     : s name ( __mcp_args_get `name` args `` )
+    : s section ( __mcp_args_get `section` args `` )
+    : s query ( __mcp_args_get `query` args `` )
+    : b outline ( __mcp_args_get_bool `outline` args F )
     : i offset ( __mcp_args_get_int `offset` args 0 )
     : String dd ( get_docs_dir )
+
+    // query= — search every SECTION of every document. This is the
+    // answer to "who frees a String?": one section, not the 44 KB file
+    // that happens to contain it.
+    ? & == ( nurl_str_len name ) 0 > ( nurl_str_len query ) 0 {
+        : ( Vec i ) hits ( vec_new [i] )
+        ( vec_push [i] hits 0 )
+        : String text ( msearch_docs_query ( string_data dd ) query hits )
+        ( vec_free [i] hits )
+        ( string_free dd )
+        : Json r ( __mcp_result_text ( string_data text ) )
+        ( string_free text )
+        ^ r
+    } {}
+
     ? == ( nurl_str_len name ) 0 {
         : String listing ( msearch_docs_list ( string_data dd ) )
         ( string_free dd )
@@ -5385,6 +5403,48 @@ s combined_stdout s combined_stderr → v {
         ( string_free listing )
         ^ r
     } {}
+
+    // name= + outline=true — the heading map, so a model can pick a
+    // section instead of paging a whole document to find one.
+    ? outline {
+        : String o ( msearch_docs_outline ( string_data dd ) name )
+        ? > ( string_len o ) 0 {
+            ( string_free dd )
+            : Json r ( __mcp_result_text ( string_data o ) )
+            ( string_free o )
+            ^ r
+        } {}
+        ( string_free o )
+    } {}
+
+    // name= + section= — one section, bounded by the next heading of
+    // the same or higher level. A miss answers with the outline, so the
+    // next call is informed rather than another guess.
+    ? > ( nurl_str_len section ) 0 {
+        : String sec ( msearch_docs_section ( string_data dd ) name section )
+        ? > ( string_len sec ) 0 {
+            ( string_free dd )
+            : Json r ( __mcp_result_text ( string_data sec ) )
+            ( string_free sec )
+            ^ r
+        } {}
+        ( string_free sec )
+        : String o ( msearch_docs_outline ( string_data dd ) name )
+        ? > ( string_len o ) 0 {
+            ( string_free dd )
+            : String msg ( string_with_cap + ( string_len o ) 128 )
+            ( string_push_str msg `no section matches '` )
+            ( string_push_str msg section )
+            ( string_push_str msg `'. ` )
+            ( string_push_str msg ( string_data o ) )
+            ( string_free o )
+            : Json e ( __mcp_result_error ( string_data msg ) )
+            ( string_free msg )
+            ^ e
+        } {}
+        ( string_free o )
+    } {}
+
     : String text ( msearch_docs_read ( string_data dd ) name offset )
     ? == ( string_len text ) 0 {
         // Unknown name → answer with what DOES exist rather than a bare
@@ -5414,8 +5474,14 @@ s combined_stdout s combined_stderr → v {
     : Json props ( json_obj_new )
     ( json_obj_set props `name`
     ( __mcp_prop `string` `Which document to return, e.g. 'MEMORY.md', 'CRYPTO.md', 'dev/COMPILER_INTERNALS.md'. The 'docs/' prefix and the '.md' suffix are both optional and matching is case-insensitive. Omit to list every document with its size and title.` ) )
+    ( json_obj_set props `section`
+    ( __mcp_prop `string` `Return ONE section of 'name' instead of the whole document — by its number ('7.4', '2') or by words from its heading ('move checking'). The section runs to the next heading of the same or higher level, so '2' includes its 2.x subsections and '2.1' does not. This is the cheap way to answer a specific question: MEMORY.md is 44 KB, the section that says who frees a String is a fraction of that. A miss replies with the outline.` ) )
+    ( json_obj_set props `outline`
+    ( __mcp_prop `boolean` `With 'name': return that document's heading map (section titles + byte sizes) instead of its text, so you can pick a 'section' without reading the document first.` ) )
+    ( json_obj_set props `query`
+    ( __mcp_prop `string` `Search every SECTION of every document for these terms (whole-word, ranked by how many they cover, heading matches outranking body matches) and return the best few with their 'section=' keys. Use this when you know the question but not which document answers it. Ignored when 'name' is set.` ) )
     ( json_obj_set props `offset`
-    ( __mcp_prop `integer` `Byte offset to start from (default 0). Documents are capped at 48 KB per call; a truncated reply prints the exact offset to pass next.` ) )
+    ( __mcp_prop `integer` `Byte offset to start from (default 0). Documents are capped at 48 KB per call; a truncated reply prints the exact offset to pass next. Prefer 'section' or 'query' — paging a whole document to find one paragraph is the expensive way.` ) )
     ( json_obj_set schema `properties` props )
     ^ schema
 }
@@ -5674,7 +5740,7 @@ s combined_stdout s combined_stderr → v {
     ( __mcp_schema_empty ) ) )
 
     ( json_arr_push arr ( __mcp_tool_desc `nurl_docs`
-    `The docs/ prose tree — the questions the API surface cannot answer: MEMORY.md (ownership: who frees what, and when), CRYPTO.md (the shipped cipher suites + TLS stack), ASYNC.md (stackful fibers), BUILDING.md, PLATFORMS.md, NETWORKING.md, DISTRIBUTED.md, FORMAT.md, LIMITATIONS.md, TOOLING.md, PLAYGROUND.md, spec.md (the full language reference), dev/COMPILER_INTERNALS.md. Call with NO arguments for the index (path, size, title); then name='MEMORY.md' for one document. The 'docs/' prefix and '.md' suffix are optional, matching is case-insensitive, and 'offset' pages a document longer than 48 KB. Read this before guessing at memory, crypto, or platform behaviour — every one of these topics is documented.`
+    `The docs/ prose tree — the questions the API surface cannot answer: MEMORY.md (ownership: who frees what, and when), CRYPTO.md (the shipped cipher suites + TLS stack), ASYNC.md (stackful fibers), BUILDING.md, PLATFORMS.md, NETWORKING.md, DISTRIBUTED.md, FORMAT.md, LIMITATIONS.md, TOOLING.md, PLAYGROUND.md, spec.md (the full language reference), dev/COMPILER_INTERNALS.md. Four ways in: NO arguments lists every document (path, size, title); query='who frees a string' searches every SECTION of every document and returns the best few with their section keys; name='MEMORY.md' outline=true gives that document's heading map; name='MEMORY.md' section='2.1' returns one section. name= alone returns the whole document ('docs/' prefix and '.md' suffix optional, case-insensitive, 'offset' pages past 48 KB) — prefer query or section, since MEMORY.md is 44 KB and spec.md 63 KB. Read this before guessing at memory, crypto, or platform behaviour — every one of these topics is documented.`
     ( __mcp_schema_docs ) ) )
 
     // Changelog.

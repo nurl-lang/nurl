@@ -430,6 +430,54 @@ def t_tools_call_docs(c: Client) -> None:
     text = _tool_text(env)
     assert_true("offset page reports its range", f"[bytes {off}" in text)
 
+    # outline=true — the heading map, a fraction of the document.
+    env = _tool_call(c, "nurl_docs", {"name": "MEMORY.md", "outline": True})
+    outline = _tool_text(env)
+    assert_true("outline reports the section count", "sections. Ask for one with section=" in outline)
+    assert_true("outline lists a numbered section", "7.4 Manually-managed handles" in outline)
+
+    # section= by number, and by words from the heading — both reach the
+    # same section, and it is a fraction of the 44 KB document.
+    env = _tool_call(c, "nurl_docs", {"name": "MEMORY", "section": "7.4"})
+    by_num = _tool_text(env)
+    assert_true("section by number", by_num.startswith("docs/MEMORY.md \u203a 7.4 Manually-managed handles"))
+    env = _tool_call(c, "nurl_docs", {"name": "MEMORY", "section": "manually-managed"})
+    by_words = _tool_text(env)
+    assert_true("section by words reaches the same one", by_words.startswith("docs/MEMORY.md \u203a 7.4"))
+
+    env = _tool_call(c, "nurl_docs", {"name": "MEMORY.md"})
+    whole = _tool_text(env)
+    assert_true(
+        "a section costs a fraction of the document",
+        len(by_num) * 4 < len(whole),
+        f"section {len(by_num)}B vs document {len(whole)}B",
+    )
+
+    # spec.md is past the per-call cap, so before this it could not be
+    # read in one call at all. A section of it can.
+    env = _tool_call(c, "nurl_docs", {"name": "spec", "section": "4.9"})
+    assert_true("oversize doc still yields one section", _tool_text(env).startswith("docs/spec.md \u203a 4.9"))
+
+    # A section miss answers with the outline, not a bare error.
+    env = _tool_call(c, "nurl_docs", {"name": "MEMORY", "section": "99.9"})
+    assert_true("section miss errors", bool(env.get("result", {}).get("isError")))
+    assert_true("section miss shows the outline", "sections. Ask for one with section=" in _tool_text(env))
+
+    # query= searches every section of every document.
+    env = _tool_call(c, "nurl_docs", {"query": "string_free manually managed handles"})
+    q = _tool_text(env)
+    assert_true("query reports a section count", "documentation section(s) match" in q)
+    assert_true("query finds the handle section", "7.4 Manually-managed handles" in q)
+    assert_true("query hands back a section key", "[section=7.4]" in q)
+    assert_true(
+        "query returns sections, not whole documents",
+        len(q) * 2 < len(whole),
+        f"query {len(q)}B vs document {len(whole)}B",
+    )
+
+    env = _tool_call(c, "nurl_docs", {"query": "zzzqqq wwwxxx qqzzwwx"})
+    assert_true("dead query says so", "Nothing matched" in _tool_text(env))
+
     # Traversal is refused, and an unknown name answers with the index
     # rather than a bare error.
     env = _tool_call(c, "nurl_docs", {"name": "../../etc/passwd"})

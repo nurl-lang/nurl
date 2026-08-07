@@ -2626,6 +2626,22 @@
 // has already advanced past the offending token (e.g. gen_ident's
 // undefined-identifier check runs one token late; the caller captured
 // the identifier's own position before advancing).
+// warn_pos — die_pos's non-fatal twin. Same reason to exist: a check
+// that fires after the lexer has advanced past the token it is really
+// about must not report the lexer's current position, or the caret
+// lands on the consequence instead of the cause. The arity warning
+// below is exactly that shape — it can only be detected once the `{`
+// after the conditional has been reached, which for a multi-line body
+// is far from the `?` the user has to fix.
+@ warn_pos i lex i line i col s msg → v {
+    : s loc ( nurl_str_cat ( nurl_lex_filename lex )
+    ( nurl_str_cat `:` ( nurl_str_cat ( nurl_str_int line )
+    ( nurl_str_cat `:` ( nurl_str_int col ) ) ) ) )
+    ( nurl_eprintln ( nurl_str_cat3 loc `: warning: ` msg ) )
+    ( nurl_eprintln ( nurl_lex_line_text_at lex line ) )
+    ( nurl_eprintln ( nurl_diag_caret col ) )
+}
+
 @ die_pos i lex i line i col s msg → v {
     : s loc ( nurl_str_cat ( nurl_lex_filename lex )
     ( nurl_str_cat `:` ( nurl_str_cat ( nurl_str_int line )
@@ -7032,6 +7048,10 @@
     // Borrow checker (Phase 0d): source line of the `?`, for the
     // `cond`/`endcond` structural markers bracketing this conditional.
     : i bck_cline ( nurl_lex_line lex )
+    // …and its column, so the arity warning at the bottom of this
+    // function can point at the `?` rather than at the `{` that
+    // finally revealed the mistake.
+    : i bck_ccol ( nurl_lex_col lex )
     ( nurl_lex_advance lex )
     // The condition is a value operand — a `^` here is a cascade.
     : ~ s cv ( gen_operand lex syms cg )
@@ -7291,7 +7311,7 @@
     // `{ ... }` blocks then run as side-effect statements. Warn —
     // the program compiles but the conditional logic is wrong.
     ? == ( nurl_lex_type lex ) TT_LBRACE
-    { ( warn lex `'?' consumed bare then/else values, but a '{ ... }' block follows. Likely too few '&'/'|' operators in the condition (each is BINARY — write '& & a b c d' for n-ary).` ) }
+    { ( warn_pos lex bck_cline bck_ccol `'?' consumed bare then/else values, but a '{ ... }' block follows. Likely too few '&'/'|' operators in the condition (each is BINARY — write '& & a b c d' for n-ary).` ) }
     {}
     // pick a consistent phi type: prefer the non-void live branch type;
     // if both live and types differ, fall back to void (no phi needed).

@@ -1584,6 +1584,401 @@ $ `stdlib/ext/nurldoc.nu`
 
 // One document, from byte `offset`, capped. "" when `name` resolves to
 // nothing — the caller turns that into an error listing what exists.
+// ── Documents by section ───────────────────────────────────────────
+//
+// Whole-document reads answer "what does this cover"; they are a bad
+// way to answer "who frees a String?". MEMORY.md is 44 KB and spec.md
+// is 63 KB — past the per-call cap, so the whole-file path cannot even
+// return it in one call. Both files are already carved into ATX
+// headings, and the question a model actually has almost always maps
+// to one of them. So: index the headings, and let a caller name a
+// section, ask for the outline, or search every section at once.
+//
+// A section runs from its heading to the next heading of the SAME OR
+// HIGHER level, so asking for `## 2. The borrow checker` yields its
+// `###` subsections too, while asking for `### 2.1` yields just that.
+
+// Count the leading '#' of an ATX heading line at `off`; 0 if the line
+// is not a heading. A '#' must be followed by a space to count, so a
+// `#define` inside a fenced code block is not mistaken for one.
+@ __ms_heading_level s raw i n i off → i {
+    : ~ i k off
+    ~ & < k n == ( nurl_str_get raw k ) 35 { = k + k 1 }
+    : i lvl - k off
+    ? == lvl 0 { ^ 0 } {}
+    ? >= k n { ^ 0 } {}
+    ? != ( nurl_str_get raw k ) 32 { ^ 0 } {}
+    ^ lvl
+}
+
+// Index every heading in `src`: byte offset of the line, its level, and
+// its title text. Lines inside ``` fences are skipped — a Markdown
+// document about a prefix language is full of `# comment` lines that
+// are code, not structure.
+@ __ms_doc_headings String src ( Vec i ) starts ( Vec i ) levels ( Vec String ) titles → v {
+    : s raw ( string_data src )
+    : i n ( string_len src )
+    : ~ i k 0
+    : ~ b fenced F
+    ~ < k n {
+        : ~ i e k
+        ~ & < e n != ( nurl_str_get raw e ) 10 { = e + e 1 }
+        // Fence toggle: a line whose first three bytes are ```.
+        ? & <= + k 3 e & & == ( nurl_str_get raw k ) 96 == ( nurl_str_get raw + k 1 ) 96 == ( nurl_str_get raw + k 2 ) 96 {
+            = fenced ! fenced
+        } {
+            ? ! fenced {
+                : i lvl ( __ms_heading_level raw n k )
+                ? > lvl 0 {
+                    ( vec_push [i] starts k )
+                    ( vec_push [i] levels lvl )
+                    : String t ( string_with_cap 96 )
+                    : ~ i j + k + lvl 1
+                    ~ < j e {
+                        ( string_push_char t ( nurl_str_get raw j ) )
+                        = j + j 1
+                    }
+                    ( vec_push [String] titles t )
+                } {}
+            } {}
+        }
+        = k + e 1
+    }
+}
+
+// Where heading `idx`'s prose ends, ignoring hierarchy: the very next
+// heading, whatever its level. This is the unit SEARCH works on. The
+// hierarchical rule below is wrong for search: a document's H1 has no
+// same-or-higher sibling, so its "section" is the entire file — it then
+// contains every term, outscores every real subsection, and the query
+// path hands back the whole 44 KB document it was meant to replace.
+// Retrieval still wants the hierarchy (asking for §2 should include
+// §2.1), so the two rules stay separate on purpose.
+@ __ms_section_end_flat ( Vec i ) starts i idx i n_src → i {
+    : i nh ( vec_len [i] starts )
+    ? >= + idx 1 nh { ^ n_src } {}
+    ^ ?? ( vec_get [i] starts + idx 1 ) { T v → v F _ → n_src }
+}
+
+// Where the section owning heading `idx` ends: the next heading whose
+// level is <= this one, or EOF.
+@ __ms_section_end ( Vec i ) starts ( Vec i ) levels i idx i n_src → i {
+    : i nh ( vec_len [i] starts )
+    : i lvl ?? ( vec_get [i] levels idx ) { T v → v F _ → 1 }
+    : ~ i k + idx 1
+    ~ < k nh {
+        : i l2 ?? ( vec_get [i] levels k ) { T v → v F _ → 1 }
+        ? <= l2 lvl {
+            ^ ?? ( vec_get [i] starts k ) { T v → v F _ → n_src }
+        } {}
+        = k + k 1
+    }
+    ^ n_src
+}
+
+// Does heading `title` answer to `want`? Either the title's leading
+// number token matches exactly ("7.4", "2"), or `want` occurs in the
+// title case-insensitively. The number form is what a table of
+// contents gives a model; the text form is what it guesses.
+@ __ms_section_matches String title s want → b {
+    : String tl ( string_to_lower title )
+    : s t ( string_data tl )
+    : i tn ( string_len tl )
+    // Leading number token, e.g. "2.1 move checking" → "2.1".
+    : ~ i e 0
+    ~ & < e tn | & >= ( nurl_str_get t e ) 48 <= ( nurl_str_get t e ) 57 == ( nurl_str_get t e ) 46 { = e + e 1 }
+    : ~ b hit F
+    ? > e 0 {
+        : String num ( string_substr tl 0 e )
+        // Trailing '.' is decoration in "2." — compare without it.
+        : ~ String num2 ( string_from ( string_data num ) )
+        ? & > ( string_len num2 ) 0 == ( string_get num2 - ( string_len num2 ) 1 ) 46 {
+            : String cut ( string_substr num2 0 - ( string_len num2 ) 1 )
+            ( string_free num2 )
+            = num2 cut
+        } {}
+        ? != 0 ( nurl_str_eq ( string_data num2 ) want ) { = hit T } {}
+        ? != 0 ( nurl_str_eq ( string_data num ) want ) { = hit T } {}
+        ( string_free num ) ( string_free num2 )
+    } {}
+    ? ! hit {
+        : String w ( __ms_lc want )
+        ? >= ( nurl_str_find t ( string_data w ) ) 0 { = hit T } {}
+        ( string_free w )
+    } {}
+    ( string_free tl )
+    ^ hit
+}
+
+// The heading list of one document — what a model reads to find out
+// which section to ask for, at a fraction of the document's bytes.
+@ msearch_docs_outline s docs_dir s name → String {
+    : String rel ( msearch_docs_resolve docs_dir name )
+    : String out ( string_with_cap 2048 )
+    ? == ( string_len rel ) 0 {
+        ( string_free rel )
+        ^ out
+    } {}
+    : String fp ( path_join docs_dir ( string_data rel ) )
+    : !( Vec u ) IoErr rd ( read_file_bytes ( string_data fp ) )
+    ( string_free fp )
+    ?? rd {
+        T bytes → {
+            : String src ( bytes_to_str bytes )
+            ( vec_free [u] bytes )
+            : ( Vec i ) starts ( vec_new [i] )
+            : ( Vec i ) levels ( vec_new [i] )
+            : ( Vec String ) titles ( vec_new [String] )
+            ( __ms_doc_headings src starts levels titles )
+            : i nh ( vec_len [i] starts )
+            ( string_push_str out `docs/` )
+            ( string_push_str out ( string_data rel ) )
+            ( string_push_str out ` — ` )
+            ( string_push_int out ( string_len src ) )
+            ( string_push_str out ` bytes, ` )
+            ( string_push_int out nh )
+            ( string_push_str out ` sections. Ask for one with section='<number or words>'.\n\n` )
+            : ~ i k 0
+            ~ < k nh {
+                : i lvl ?? ( vec_get [i] levels k ) { T v → v F _ → 1 }
+                : ~ i pad 1
+                ~ < pad lvl { ( string_push_str out `  ` ) = pad + pad 1 }
+                ( string_push_str out `- ` )
+                ?? ( vec_get [String] titles k ) {
+                    T t → ( string_push_str out ( string_data t ) )
+                    F _ → {}
+                }
+                : i s0 ?? ( vec_get [i] starts k ) { T v → v F _ → 0 }
+                : i e0 ( __ms_section_end starts levels k ( string_len src ) )
+                ( string_push_str out `  (` )
+                ( string_push_int out - e0 s0 )
+                ( string_push_str out ` B)\n` )
+                = k + k 1
+            }
+            ( vec_free [i] starts ) ( vec_free [i] levels )
+            ( vec_free_with [String] titles \ String t → v { ( string_free t ) } )
+            ( string_free src )
+        }
+        F _ → {}
+    }
+    ( string_free rel )
+    ^ out
+}
+
+// One named section of one document, "" when the document or the
+// section is not found. On a miss the caller shows the outline.
+@ msearch_docs_section s docs_dir s name s section → String {
+    : String rel ( msearch_docs_resolve docs_dir name )
+    : String out ( string_with_cap 4096 )
+    ? == ( string_len rel ) 0 {
+        ( string_free rel )
+        ^ out
+    } {}
+    : String fp ( path_join docs_dir ( string_data rel ) )
+    : !( Vec u ) IoErr rd ( read_file_bytes ( string_data fp ) )
+    ( string_free fp )
+    ?? rd {
+        T bytes → {
+            : String src ( bytes_to_str bytes )
+            ( vec_free [u] bytes )
+            : ( Vec i ) starts ( vec_new [i] )
+            : ( Vec i ) levels ( vec_new [i] )
+            : ( Vec String ) titles ( vec_new [String] )
+            ( __ms_doc_headings src starts levels titles )
+            : i nh ( vec_len [i] starts )
+            : ~ i found -1
+            : ~ i k 0
+            ~ < k nh {
+                ? < found 0 {
+                    ?? ( vec_get [String] titles k ) {
+                        T t → { ? ( __ms_section_matches t section ) { = found k } {} }
+                        F _ → {}
+                    }
+                } {}
+                = k + k 1
+            }
+            ? >= found 0 {
+                : i s0 ?? ( vec_get [i] starts found ) { T v → v F _ → 0 }
+                : i e0 ( __ms_section_end starts levels found ( string_len src ) )
+                ( string_push_str out `docs/` )
+                ( string_push_str out ( string_data rel ) )
+                ( string_push_str out ` › ` )
+                ?? ( vec_get [String] titles found ) {
+                    T t → ( string_push_str out ( string_data t ) )
+                    F _ → {}
+                }
+                ( string_push_str out `\n\n` )
+                : i want - e0 s0
+                : i keep ? > want ( __ms_docs_cap ) ( __ms_docs_cap ) want
+                : String slice ( string_substr src s0 keep )
+                ( string_push_str out ( string_data slice ) )
+                ( string_free slice )
+                ? > want keep {
+                    ( string_push_str out `\n… section truncated — read the whole file with offset=` )
+                    ( string_push_int out + s0 keep )
+                    ( string_push_char out 10 )
+                } {}
+            } {}
+            ( vec_free [i] starts ) ( vec_free [i] levels )
+            ( vec_free_with [String] titles \ String t → v { ( string_free t ) } )
+            ( string_free src )
+        }
+        F _ → {}
+    }
+    ( string_free rel )
+    ^ out
+}
+
+// Search every section of every document. Terms are matched as whole
+// words and ranked by coverage — the same scorer nurl_api's OR pass
+// uses, with the heading as the "signature" haystack, so a section
+// titled "Move checking" outranks one that merely mentions moves.
+// Returns the reply text; `hits` (≥1 element) receives the count.
+@ msearch_docs_query s docs_dir s query ( Vec i ) hits → String {
+    : String q_lc ( __ms_lc query )
+    : ( Vec String ) terms ( string_split q_lc ` ` )
+    : ( Vec i ) scores ( vec_new [i] )
+    : ( Vec String ) texts ( vec_new [String] )
+    : ( Vec i ) stats ( vec_new [i] )
+    ( vec_push [i] stats 0 )
+    : ~ i matched 0
+    : Json files ( json_arr_new )
+    ( msearch_walk_md_files files docs_dir `` )
+    : i nf ( json_arr_len files )
+    : ~ i fi 0
+    ~ < fi nf {
+        ?? ( json_arr_get files fi ) {
+            T fo → {
+                : ~ s rel ``
+                ?? ( json_obj_get fo `path` ) {
+                    T pj → { ? ( json_is_str pj ) { = rel ( json_as_str pj ) } {} }
+                    F _ → {}
+                }
+                ? > ( nurl_str_len rel ) 0 {
+                    : String fp ( path_join docs_dir rel )
+                    : !( Vec u ) IoErr rd ( read_file_bytes ( string_data fp ) )
+                    ( string_free fp )
+                    ?? rd {
+                        T bytes → {
+                            : String src ( bytes_to_str bytes )
+                            ( vec_free [u] bytes )
+                            : ( Vec i ) starts ( vec_new [i] )
+                            : ( Vec i ) levels ( vec_new [i] )
+                            : ( Vec String ) titles ( vec_new [String] )
+                            ( __ms_doc_headings src starts levels titles )
+                            : i nh ( vec_len [i] starts )
+                            : ~ i k 0
+                            ~ < k nh {
+                                : i s0 ?? ( vec_get [i] starts k ) { T v → v F _ → 0 }
+                                : i e0 ( __ms_section_end_flat starts k ( string_len src ) )
+                                : String body ( string_substr src s0 - e0 s0 )
+                                : String body_lc ( string_to_lower body )
+                                : String sig ( string_with_cap 128 )
+                                ( string_push_str sig rel )
+                                ( string_push_char sig 32 )
+                                ?? ( vec_get [String] titles k ) {
+                                    T t → ( string_push_str sig ( string_data t ) )
+                                    F _ → {}
+                                }
+                                : String sig_lc ( string_to_lower sig )
+                                ( string_free sig )
+                                : i sc ( __ms_or_score2 ( string_data sig_lc ) ( string_data body_lc ) terms stats )
+                                ( string_free sig_lc ) ( string_free body_lc )
+                                ? > sc 0 {
+                                    = matched + matched 1
+                                    : String snip ( string_with_cap 1200 )
+                                    ( string_push_str snip `docs/` )
+                                    ( string_push_str snip rel )
+                                    ( string_push_str snip ` › ` )
+                                    ?? ( vec_get [String] titles k ) {
+                                        T t → ( string_push_str snip ( string_data t ) )
+                                        F _ → {}
+                                    }
+                                    ( string_push_str snip `  [section=` )
+                                    ?? ( vec_get [String] titles k ) {
+                                        T t → ( __ms_push_section_key snip t )
+                                        F _ → {}
+                                    }
+                                    ( string_push_str snip `]\n` )
+                                    : i bn ( string_len body )
+                                    : i keep ? > bn 900 900 bn
+                                    : s braw ( string_data body )
+                                    : ~ i j 0
+                                    ~ < j keep {
+                                        ( string_push_char snip ( nurl_str_get braw j ) )
+                                        = j + j 1
+                                    }
+                                    ? > bn keep { ( string_push_str snip `\n…` ) } {}
+                                    ( __ms_topk_push scores texts 6 sc ( string_data snip ) )
+                                    ( string_free snip )
+                                } {}
+                                ( string_free body )
+                                = k + k 1
+                            }
+                            ( vec_free [i] starts ) ( vec_free [i] levels )
+                            ( vec_free_with [String] titles \ String t → v { ( string_free t ) } )
+                            ( string_free src )
+                        }
+                        F _ → {}
+                    }
+                } {}
+            }
+            F _ → {}
+        }
+        = fi + fi 1
+    }
+    ( json_free files )
+    : String out ( string_with_cap 4096 )
+    : i shown ( vec_len [String] texts )
+    ( string_push_int out matched )
+    ( string_push_str out ` documentation section(s) match '` )
+    ( string_push_str out query )
+    ( string_push_str out `'` )
+    ? > matched shown {
+        ( string_push_str out `; the ` )
+        ( string_push_int out shown )
+        ( string_push_str out ` best follow` )
+    } {}
+    ( string_push_str out `. Read a whole one with name= and section=.\n\n` )
+    : ~ i j 0
+    ~ < j shown {
+        ?? ( vec_get [String] texts j ) {
+            T t → {
+                ( string_push_str out ( string_data t ) )
+                ( string_push_str out `\n\n` )
+            }
+            F _ → {}
+        }
+        = j + j 1
+    }
+    ? == matched 0 {
+        ( string_push_str out `Nothing matched — terms are whole words. Call nurl_docs with no arguments for the index, or name=<doc> alone for that document's outline.\n` )
+    } {}
+    ( vec_set [i] hits 0 matched )
+    ( vec_free [i] scores ) ( vec_free [i] stats )
+    ( vec_free_with [String] texts \ String t → v { ( string_free t ) } )
+    ( vec_free_with [String] terms \ String t → v { ( string_free t ) } )
+    ( string_free q_lc )
+    ^ out
+}
+
+// The shortest unambiguous way to name a section back to the tool: its
+// leading number if it has one, else the whole title.
+@ __ms_push_section_key String out String title → v {
+    : s t ( string_data title )
+    : i n ( string_len title )
+    : ~ i e 0
+    ~ & < e n | & >= ( nurl_str_get t e ) 48 <= ( nurl_str_get t e ) 57 == ( nurl_str_get t e ) 46 { = e + e 1 }
+    ? > e 0 {
+        : ~ i stop e
+        ? & > stop 0 == ( nurl_str_get t - stop 1 ) 46 { = stop - stop 1 } {}
+        : ~ i j 0
+        ~ < j stop { ( string_push_char out ( nurl_str_get t j ) ) = j + j 1 }
+    } {
+        ( string_push_str out ( string_data title ) )
+    }
+}
+
 @ msearch_docs_read s docs_dir s name i offset → String {
     : String rel ( msearch_docs_resolve docs_dir name )
     ? == ( string_len rel ) 0 {

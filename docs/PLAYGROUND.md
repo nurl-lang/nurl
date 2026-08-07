@@ -142,9 +142,13 @@ Cursor, Windsurf, Zed and other MCP-capable IDEs accept the same URL
 - **`nurl_docs`** — this documentation tree, the questions the API surface
   cannot answer: `MEMORY.md` (who frees what, and when), `CRYPTO.md`,
   `ASYNC.md`, `PLATFORMS.md`, `spec.md`, `dev/COMPILER_INTERNALS.md`, …
-  No argument lists everything with its size and title; `name=` returns one
-  document (the `docs/` prefix and `.md` suffix optional), `offset=` pages
-  past 48 KB.
+  No argument lists everything with its size and title. `query=` searches
+  every **section** of every document and hands back the best few with the
+  keys to fetch them; `name=X outline=true` is one document's heading map;
+  `name=X section='7.4'` is one section — a few KB rather than MEMORY.md's
+  44 KB, and the only way to read part of `spec.md`, which exceeds the
+  per-call cap. `name=` alone still returns the whole document, `offset=`
+  pages it.
 - **Resources** mirroring the read-tools as `nurl://` URIs (`nurl://grammar`,
   `nurl://readme`, `nurl://stdlib/<path>`, `nurl://example/<name>`, …) for
   clients that prefer resource semantics.

@@ -800,9 +800,24 @@ version = "0.0.0"
         T nj → { ? ( json_is_str nj ) { = name ( json_as_str nj ) } {} }
         F _ → {}
     }
+    : ~ s section ``
+    ?? ( json_obj_get args `section` ) {
+        T sj → { ? ( json_is_str sj ) { = section ( json_as_str sj ) } {} }
+        F _ → {}
+    }
+    : ~ s query ``
+    ?? ( json_obj_get args `query` ) {
+        T qj → { ? ( json_is_str qj ) { = query ( json_as_str qj ) } {} }
+        F _ → {}
+    }
+    : ~ b outline F
+    ?? ( json_obj_get args `outline` ) {
+        T oj → { ? ( json_is_bool oj ) { = outline ( json_as_bool oj ) } {} }
+        F _ → {}
+    }
     : ~ i offset 0
     ?? ( json_obj_get args `offset` ) {
-        T oj → { ? ( json_is_num oj ) { = offset ( json_as_int oj ) } {} }
+        T oj2 → { ? ( json_is_num oj2 ) { = offset ( json_as_int oj2 ) } {} }
         F _ → {}
     }
     : String dd ( nm_docs_root )
@@ -810,6 +825,20 @@ version = "0.0.0"
         ( string_free dd )
         ^ ( mcp_tool_result_error `neither NURL_DOCS nor NURL_STDLIB is set — run via the installed toolchain shims, or export NURL_DOCS to a docs/ directory` )
     } {}
+
+    // query= — search every SECTION of every document. The answer to
+    // "who frees a String?" is one section, not the 44 KB file it lives in.
+    ? & == ( nurl_str_len name ) 0 > ( nurl_str_len query ) 0 {
+        : ( Vec i ) hits ( vec_new [i] )
+        ( vec_push [i] hits 0 )
+        : String text ( msearch_docs_query ( string_data dd ) query hits )
+        ( vec_free [i] hits )
+        ( string_free dd )
+        : Json r ( mcp_tool_result_text ( string_data text ) )
+        ( string_free text )
+        ^ r
+    } {}
+
     ? == ( nurl_str_len name ) 0 {
         : String listing ( msearch_docs_list ( string_data dd ) )
         ( string_free dd )
@@ -817,6 +846,46 @@ version = "0.0.0"
         ( string_free listing )
         ^ r
     } {}
+
+    // name= + outline=true — the heading map, so a section can be picked
+    // without reading the document to find one.
+    ? outline {
+        : String o ( msearch_docs_outline ( string_data dd ) name )
+        ? > ( string_len o ) 0 {
+            ( string_free dd )
+            : Json r ( mcp_tool_result_text ( string_data o ) )
+            ( string_free o )
+            ^ r
+        } {}
+        ( string_free o )
+    } {}
+
+    // name= + section= — one section. A miss answers with the outline.
+    ? > ( nurl_str_len section ) 0 {
+        : String sec ( msearch_docs_section ( string_data dd ) name section )
+        ? > ( string_len sec ) 0 {
+            ( string_free dd )
+            : Json r ( mcp_tool_result_text ( string_data sec ) )
+            ( string_free sec )
+            ^ r
+        } {}
+        ( string_free sec )
+        : String o2 ( msearch_docs_outline ( string_data dd ) name )
+        ? > ( string_len o2 ) 0 {
+            ( string_free dd )
+            : String msg ( string_with_cap + ( string_len o2 ) 128 )
+            ( string_push_str msg `no section matches '` )
+            ( string_push_str msg section )
+            ( string_push_str msg `'. ` )
+            ( string_push_str msg ( string_data o2 ) )
+            ( string_free o2 )
+            : Json e ( mcp_tool_result_error ( string_data msg ) )
+            ( string_free msg )
+            ^ e
+        } {}
+        ( string_free o2 )
+    } {}
+
     : String text ( msearch_docs_read ( string_data dd ) name offset )
     ? == ( string_len text ) 0 {
         // Unknown name → reply with what DOES exist, so the model's next
@@ -1005,12 +1074,22 @@ version = "0.0.0"
     ( json_obj_set props name p )
 }
 
+@ nm_prop_bool Json props s name s desc → v {
+    : Json p ( json_obj_new )
+    ( json_obj_set p `type` ( json_str_lit `boolean` ) )
+    ( json_obj_set p `description` ( json_str_lit desc ) )
+    ( json_obj_set props name p )
+}
+
 @ nm_schema_docs → Json {
     : Json schema ( json_obj_new )
     ( json_obj_set schema `type` ( json_str_lit `object` ) )
     : Json props ( json_obj_new )
     ( nm_prop props `name` `Which document to return, e.g. 'MEMORY.md', 'CRYPTO.md', 'dev/COMPILER_INTERNALS.md'. The 'docs/' prefix and the '.md' suffix are both optional and matching is case-insensitive. Omit to list every document with its size and title.` )
-    ( nm_prop_int props `offset` `Byte offset to start from (default 0). Documents are capped at 48 KB per call; a truncated reply prints the exact offset to pass next.` )
+    ( nm_prop props `section` `Return ONE section of 'name' instead of the whole document — by its number ('7.4', '2') or by words from its heading ('move checking'). The section runs to the next heading of the same or higher level, so '2' includes its 2.x subsections and '2.1' does not. MEMORY.md is 44 KB; the section that says who frees a String is a fraction of that. A miss replies with the outline.` )
+    ( nm_prop_bool props `outline` `With 'name': return that document's heading map (section titles + byte sizes) instead of its text, so you can pick a 'section' without reading the document first.` )
+    ( nm_prop props `query` `Search every SECTION of every document for these terms (whole-word, ranked by how many they cover, heading matches outranking body matches) and return the best few with their 'section=' keys. Use this when you know the question but not which document answers it. Ignored when 'name' is set.` )
+    ( nm_prop_int props `offset` `Byte offset to start from (default 0). Documents are capped at 48 KB per call; a truncated reply prints the exact offset to pass next. Prefer 'section' or 'query' — paging a whole document to find one paragraph is the expensive way.` )
     ( json_obj_set schema `properties` props )
     ^ schema
 }
@@ -1093,7 +1172,7 @@ version = "0.0.0"
     `Read one module from the installed standard library by relative path.`
     ( nm_schema_name ) ) )
     ( vec_push [Json] tools ( mcp_tool_descriptor `nurl_docs`
-    `The docs/ prose tree shipped with the toolchain — the questions the API surface cannot answer: MEMORY.md (ownership: who frees what, and when), CRYPTO.md (the shipped cipher suites + TLS stack), ASYNC.md (stackful fibers), BUILDING.md, PLATFORMS.md, NETWORKING.md, DISTRIBUTED.md, FORMAT.md, LIMITATIONS.md, TOOLING.md, spec.md (the full language reference), dev/COMPILER_INTERNALS.md. Call with NO arguments for the index (path, size, title); then name='MEMORY.md' for one document. The 'docs/' prefix and '.md' suffix are optional, matching is case-insensitive, and 'offset' pages a document longer than 48 KB. Read this before guessing at memory, crypto, or platform behaviour — every one of those topics is documented.`
+    `The docs/ prose tree shipped with the toolchain — the questions the API surface cannot answer: MEMORY.md (ownership: who frees what, and when), CRYPTO.md (the shipped cipher suites + TLS stack), ASYNC.md (stackful fibers), BUILDING.md, PLATFORMS.md, NETWORKING.md, DISTRIBUTED.md, FORMAT.md, LIMITATIONS.md, TOOLING.md, spec.md (the full language reference), dev/COMPILER_INTERNALS.md. Four ways in: NO arguments lists every document (path, size, title); query='who frees a string' searches every SECTION of every document and returns the best few with their section keys; name='MEMORY.md' outline=true gives that document's heading map; name='MEMORY.md' section='2.1' returns one section. name= alone returns the whole document ('docs/' prefix and '.md' suffix optional, case-insensitive, 'offset' pages past 48 KB) — prefer query or section, since MEMORY.md is 44 KB and spec.md 63 KB. Read this before guessing at memory, crypto, or platform behaviour — every one of those topics is documented.`
     ( nm_schema_docs ) ) )
     ( vec_push [Json] tools ( mcp_tool_descriptor `nurl_api`
     `A stdlib module's API surface, or a search across all of them — strongly prefer this over nurl_read_stdlib (whole modules waste context; ext/csv.nu is 63 KB, its API surface 11 KB, one matching declaration ~0.3 KB). module='ext/csv.nu' renders signatures + doc comments + type definitions; query='csv quote' finds matching declarations. The import-free C-runtime builtins (nurl_println, nurl_str_float, …) are indexed too, as core/builtins.nu. A query no single declaration satisfies is re-run as a whole-word OR ranked by term coverage (so 'string builder append' still finds string_push_str), and only then widens to the package registry; an exact package-name term is footnoted regardless.`
