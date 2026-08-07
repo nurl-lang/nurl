@@ -55,6 +55,15 @@
 
 #if defined(__x86_64__) && !defined(_WIN32)
 #  define NURL_CTX_X86_64 1
+#elif defined(__riscv) && __riscv_xlen == 64 && !defined(_WIN32)
+/* RV64 (the standard calling convention). Callee-saved: s0–s11 (x8–x9,
+ * x18–x27), ra (x1), sp (x2), and — when the target has the D
+ * extension — fs0–fs11. There is no control-word register to save: the
+ * rounding mode lives in fcsr, which the ABI marks CALLER-saved, so a
+ * fiber that changes it is required to restore it itself. That is the
+ * one real difference from both other architectures, and it is why
+ * this switch saves no FP control state while the other two must. */
+#  define NURL_CTX_RISCV64 1
 #elif defined(__aarch64__) && !defined(_WIN32)
 /* AArch64 (AAPCS64). Callee-saved: x19–x28, fp (x29), lr (x30), sp,
  * the low 64 bits of v8–v15 (d8–d15), and FPCR — the rounding-mode
@@ -234,6 +243,104 @@ void nurl_ctx_init(nurl_ctx_t *ctx, void *stack, unsigned long size,
 
 int nurl_ctx_available(void) { return 1; }
 
+#elif defined(NURL_CTX_RISCV64)
+
+/* The switch. Frame, from ctx->sp upward — 14 integer slots plus the
+ * FP set when the target has doubles, 16-byte aligned as the ABI
+ * requires at every call boundary:
+ *
+ *     +0    ra    <- where the restored context resumes
+ *     +8    s0/fp
+ *     +16…  s1–s11
+ *     +112  (pad to 16)
+ *     +120… fs0–fs11, when __riscv_flen >= 64
+ *
+ * s1 carries the entry argument and s2 the entry point on a first
+ * switch; the trampoline moves them into place. */
+#if defined(__riscv_flen) && __riscv_flen >= 64
+#  define NURL_RV_FRAME 224
+#  define NURL_RV_SAVE_FP                     \
+        "fsd fs0,  120(sp)\n\t" "fsd fs1,  128(sp)\n\t"  \
+        "fsd fs2,  136(sp)\n\t" "fsd fs3,  144(sp)\n\t"  \
+        "fsd fs4,  152(sp)\n\t" "fsd fs5,  160(sp)\n\t"  \
+        "fsd fs6,  168(sp)\n\t" "fsd fs7,  176(sp)\n\t"  \
+        "fsd fs8,  184(sp)\n\t" "fsd fs9,  192(sp)\n\t"  \
+        "fsd fs10, 200(sp)\n\t" "fsd fs11, 208(sp)\n\t"
+#  define NURL_RV_LOAD_FP                     \
+        "fld fs0,  120(sp)\n\t" "fld fs1,  128(sp)\n\t"  \
+        "fld fs2,  136(sp)\n\t" "fld fs3,  144(sp)\n\t"  \
+        "fld fs4,  152(sp)\n\t" "fld fs5,  160(sp)\n\t"  \
+        "fld fs6,  168(sp)\n\t" "fld fs7,  176(sp)\n\t"  \
+        "fld fs8,  184(sp)\n\t" "fld fs9,  192(sp)\n\t"  \
+        "fld fs10, 200(sp)\n\t" "fld fs11, 208(sp)\n\t"
+#else
+#  define NURL_RV_FRAME 112
+#  define NURL_RV_SAVE_FP
+#  define NURL_RV_LOAD_FP
+#endif
+
+#define NURL_RV_STR2(x) #x
+#define NURL_RV_STR(x)  NURL_RV_STR2(x)
+
+__attribute__((naked, noinline))
+void nurl_ctx_switch(nurl_ctx_t *save, nurl_ctx_t *restore)
+{
+    __asm__ volatile(
+        "addi sp, sp, -" NURL_RV_STR(NURL_RV_FRAME) "\n\t"
+        "sd ra,  0(sp)\n\t"
+        "sd s0,  8(sp)\n\t"  "sd s1,  16(sp)\n\t"
+        "sd s2,  24(sp)\n\t" "sd s3,  32(sp)\n\t"
+        "sd s4,  40(sp)\n\t" "sd s5,  48(sp)\n\t"
+        "sd s6,  56(sp)\n\t" "sd s7,  64(sp)\n\t"
+        "sd s8,  72(sp)\n\t" "sd s9,  80(sp)\n\t"
+        "sd s10, 88(sp)\n\t" "sd s11, 96(sp)\n\t"
+        NURL_RV_SAVE_FP
+        "sd sp, 0(a0)\n\t"          /* save->sp = sp     */
+        "ld sp, 0(a1)\n\t"          /* sp = restore->sp  */
+        NURL_RV_LOAD_FP
+        "ld ra,  0(sp)\n\t"
+        "ld s0,  8(sp)\n\t"  "ld s1,  16(sp)\n\t"
+        "ld s2,  24(sp)\n\t" "ld s3,  32(sp)\n\t"
+        "ld s4,  40(sp)\n\t" "ld s5,  48(sp)\n\t"
+        "ld s6,  56(sp)\n\t" "ld s7,  64(sp)\n\t"
+        "ld s8,  72(sp)\n\t" "ld s9,  80(sp)\n\t"
+        "ld s10, 88(sp)\n\t" "ld s11, 96(sp)\n\t"
+        "addi sp, sp, " NURL_RV_STR(NURL_RV_FRAME) "\n\t"
+        "ret\n\t"
+    );
+}
+
+/* First-entry trampoline: s1 holds the argument, s2 the entry point.
+ * `unimp` and not a call to a diagnostic helper, for the same LTO
+ * reason x86 uses `ud2` and AArch64 `brk`. */
+__attribute__((naked, noinline))
+static void nurl__ctx_trampoline(void)
+{
+    __asm__ volatile(
+        "mv a0, s1\n\t"
+        "jalr s2\n\t"
+        "unimp\n\t"
+    );
+}
+
+void nurl_ctx_init(nurl_ctx_t *ctx, void *stack, unsigned long size,
+                   void (*entry)(void *), void *arg)
+{
+    unsigned char *top = (unsigned char *)stack + size;
+    unsigned long  t   = (unsigned long)top & ~(unsigned long)15;
+    unsigned long *fp  = (unsigned long *)(t - NURL_RV_FRAME);
+    unsigned long  i;
+
+    for (i = 0; i < NURL_RV_FRAME / 8; i++) fp[i] = 0;
+    fp[0] = (unsigned long)&nurl__ctx_trampoline;   /* ra            */
+    fp[2] = (unsigned long)arg;                     /* s1            */
+    fp[3] = (unsigned long)entry;                   /* s2            */
+
+    ctx->sp = (void *)fp;
+}
+
+int nurl_ctx_available(void) { return 1; }
+
 #elif defined(NURL_CTX_AARCH64)
 
 /* The switch. Frame, from ctx->sp upward (11 pairs, 176 bytes, so sp
@@ -354,7 +461,7 @@ static long nurl__ctx_counter;
 static long nurl__ctx_switches;
 static long nurl__ctx_arg_seen;
 
-#if defined(NURL_CTX_X86_64) || defined(NURL_CTX_AARCH64)
+#if defined(NURL_CTX_X86_64) || defined(NURL_CTX_AARCH64) || defined(NURL_CTX_RISCV64)
 
 static void nurl__ctx_fpbounce(void *arg);
 
@@ -442,6 +549,25 @@ static void nurl__ctx_bounce(void *arg)
         "jmp 1b\n\t"
     );
 }
+#elif defined(NURL_CTX_RISCV64)
+/* Same fiber, RV64's callee-saved set. `call` clobbers ra, which is
+ * fine: this fiber never returns. */
+__attribute__((naked, noinline))
+static void nurl__ctx_bounce(void *arg)
+{
+    __asm__ volatile(
+        "call " NURL_CTX_SYM(nurl__ctx_test_enter) "\n\t"
+        "li s1, 0xdead\n\t"
+        "mv s2, s1\n\t" "mv s3, s1\n\t" "mv s4, s1\n\t" "mv s5, s1\n\t"
+        "1:\n\t"
+        "call " NURL_CTX_SYM(nurl__ctx_test_leave) "\n\t"
+        "la a0, " NURL_CTX_SYM(nurl__ctx_fiber) "\n\t"
+        "la a1, " NURL_CTX_SYM(nurl__ctx_main) "\n\t"
+        "call " NURL_CTX_SYM(nurl_ctx_switch) "\n\t"
+        "call " NURL_CTX_SYM(nurl__ctx_test_enter) "\n\t"
+        "j 1b\n\t"
+    );
+}
 #else /* NURL_CTX_AARCH64 — same fiber, this ISA's callee-saved set.
        * `bl` clobbers lr, which is fine: this fiber never returns. */
 __attribute__((naked, noinline))
@@ -482,14 +608,22 @@ static void nurl__ctx_fpbounce(void *arg)
 {
     (void)arg;
     nurl__ctx_test_enter();
-#ifdef NURL_CTX_X86_64
+#if defined(NURL_CTX_X86_64)
     unsigned       mx = 0x1f80u;              /* default, all masked   */
     unsigned short cw = 0x037fu;              /* x87 default           */
     __asm__ volatile("ldmxcsr %0" :: "m"(mx));
     __asm__ volatile("fldcw   %0" :: "m"(cw));
-#else
+#elif defined(NURL_CTX_AARCH64)
     unsigned long fpcr = 0;                   /* RN, no traps — default */
     __asm__ volatile("msr fpcr, %0" :: "r"(fpcr));
+#else
+    /* RV64: there is no callee-saved control word to set — fcsr is
+     * CALLER-saved by this ABI. What the switch IS responsible for is
+     * fs0–fs11, so this fiber trashes one and the test below checks
+     * the caller got its own value back. Same question, asked against
+     * the register set this ABI actually makes the switch answer for. */
+    unsigned long junk = 0x7ff8000000000000UL;   /* a NaN pattern */
+    __asm__ volatile("fmv.d.x fs0, %0" :: "r"(junk) : "fs0");
 #endif
     for (;;) nurl__ctx_test_yield();
 }
@@ -538,6 +672,33 @@ long nurl_ctx_test_preserve(void)
         : "=a"(ok)
         : "D"(&nurl__ctx_main), "S"(&nurl__ctx_fiber)
         : "rbx", "r12", "r13", "r14", "r15", "rcx", "memory", "cc");
+    nurl__ctx_test_from_fiber();
+    return ok;
+}
+#elif defined(NURL_CTX_RISCV64)
+long nurl_ctx_test_preserve(void)
+{
+    nurl__ctx_test_init(nurl__ctx_bounce, (void *)0UL);
+    long ok;
+    nurl__ctx_test_to_fiber();
+    __asm__ volatile(
+        "li s1, 0x1111\n\t" "li s2, 0x2222\n\t" "li s3, 0x3333\n\t"
+        "li s4, 0x4444\n\t" "li s5, 0x5555\n\t"
+        "mv a0, %[m]\n\t"
+        "mv a1, %[f]\n\t"
+        "call " NURL_CTX_SYM(nurl_ctx_switch) "\n\t"
+        "li %[ok], 0\n\t"
+        "li t0, 0x1111\n\t" "bne s1, t0, 1f\n\t"
+        "li t0, 0x2222\n\t" "bne s2, t0, 1f\n\t"
+        "li t0, 0x3333\n\t" "bne s3, t0, 1f\n\t"
+        "li t0, 0x4444\n\t" "bne s4, t0, 1f\n\t"
+        "li t0, 0x5555\n\t" "bne s5, t0, 1f\n\t"
+        "li %[ok], 1\n\t"
+        "1:\n\t"
+        : [ok] "=r"(ok)
+        : [m] "r"(&nurl__ctx_main), [f] "r"(&nurl__ctx_fiber)
+        : "a0", "a1", "t0", "s1", "s2", "s3", "s4", "s5", "ra",
+          "memory");
     nurl__ctx_test_from_fiber();
     return ok;
 }
@@ -618,6 +779,30 @@ long nurl_ctx_test_fpcw(void)
     __asm__ volatile("ldmxcsr %0" :: "m"(mx_before));
     __asm__ volatile("fldcw   %0" :: "m"(cw_before));
     return (mx_after == mx_ours) && (cw_after == cw_ours);
+}
+#elif defined(NURL_CTX_RISCV64)
+/* This ABI has no callee-saved control word: fcsr is caller-saved, so
+ * a switch that did not preserve it would still be correct. What it
+ * DOES have to preserve is fs0–fs11, and that is the same question —
+ * "does my floating-point state survive a round trip" — asked against
+ * the registers this ABI makes the switch answer for. */
+long nurl_ctx_test_fpcw(void)
+{
+    nurl__ctx_test_init(nurl__ctx_fpbounce, (void *)0UL);
+    unsigned long ours = 0x400a000000000000UL;   /* 3.25 */
+    unsigned long back = 0;
+    nurl__ctx_test_to_fiber();
+    __asm__ volatile(
+        "fmv.d.x fs0, %[ours]\n\t"
+        "mv a0, %[m]\n\t"
+        "mv a1, %[f]\n\t"
+        "call " NURL_CTX_SYM(nurl_ctx_switch) "\n\t"
+        "fmv.x.d %[back], fs0\n\t"
+        : [back] "=r"(back)
+        : [ours] "r"(ours), [m] "r"(&nurl__ctx_main), [f] "r"(&nurl__ctx_fiber)
+        : "a0", "a1", "fs0", "ra", "memory");
+    nurl__ctx_test_from_fiber();
+    return back == ours;
 }
 #else /* NURL_CTX_AARCH64 — FPCR's RMode field plays both control words' part */
 long nurl_ctx_test_fpcw(void)

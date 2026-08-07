@@ -51,6 +51,7 @@ done
 case "$(uname -m)" in
     x86_64|amd64) arch_sfx=x86_64 ;;
     aarch64|arm64) arch_sfx=aarch64 ;;
+    riscv64) arch_sfx=riscv64 ;;
     *) arch_sfx="" ;;
 esac
 for f in "$NOLIBC"/*.S; do
