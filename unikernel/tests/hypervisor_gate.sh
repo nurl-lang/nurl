@@ -107,9 +107,21 @@ fi
 [ "$fail" = 0 ] && say "PVH note OK — type 18, 4-byte descriptor, address == ELF entry"
 
 # ── the boot, when there is a machine to boot on ────────────────
-if [ ! -e /dev/kvm ]; then
-    say "SKIP boot: no /dev/kvm — Firecracker and cloud-hypervisor have no"
-    say "     interpreter fallback, so there is nothing to run them on here."
+#
+# USABILITY, not existence. A GitHub runner HAS /dev/kvm and denies the
+# job user access to it (group kvm), so `[ -e ]` said "boot it" and the
+# gate then reported a permission error as a defect in the image. What
+# the gate is asking is "can this process open KVM", and the honest
+# answer to "no" is a skip with the reason — an environment the gate
+# cannot run in is not a failing artifact.
+if [ ! -r /dev/kvm ] || [ ! -w /dev/kvm ]; then
+    if [ -e /dev/kvm ]; then
+        say "SKIP boot: /dev/kvm exists but this user cannot open it"
+        say "     (add the user to the 'kvm' group, or chmod it in CI)."
+    else
+        say "SKIP boot: no /dev/kvm — Firecracker and cloud-hypervisor have"
+        say "     no interpreter fallback, so there is nothing to run them on."
+    fi
     say "     (QEMU covers the boot path under TCG; this gate covers the"
     say "     artifact's portability to the other two.)"
     exit $fail

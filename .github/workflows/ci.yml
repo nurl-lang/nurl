@@ -271,6 +271,13 @@ jobs:
           sudo curl -fsSL --retry 5 -o /usr/local/bin/cloud-hypervisor \
             https://github.com/cloud-hypervisor/cloud-hypervisor/releases/download/v46.0/cloud-hypervisor-static
           sudo chmod +x /usr/local/bin/cloud-hypervisor
+          # The runner HAS /dev/kvm and denies the job user access to it
+          # (group kvm). Granting it turns the gate's boot half from a
+          # skip into a real boot on a real hypervisor — which is the
+          # whole point of the phase. `|| true`: on a runner without the
+          # device the gate skips and says so.
+          sudo chmod 0666 /dev/kvm 2>/dev/null || true
+          ls -l /dev/kvm 2>/dev/null || echo "no /dev/kvm on this runner"
 
       - name: nolibc + runtime_bare unit gates
         run: ./unikernel/tests/run_unit_tests.sh
