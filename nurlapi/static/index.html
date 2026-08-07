@@ -1052,6 +1052,12 @@ function isUnikernelTarget() {
   return !!meta && meta.endpoint === "/build_unikernel";
 }
 
+// Which machine the selected unikernel target means. The id carries it
+// — one endpoint, two architectures — so the dropdown stays one list.
+function unikernelArch() {
+  return targetSel.value === "unikernel-arm64" ? "aarch64" : "x86_64";
+}
+
 // When the unikernel target is selected, examples the image build
 // MEASURED as incapable grey out, with the missing symbols as the
 // tooltip. Unknown (no manifest in this deployment) stays selectable.
@@ -1195,6 +1201,7 @@ async function buildUnikernel(meta) {
   const payload = {
     source: editorAPI.getValue(),
     filename: filename.value || "main.nu",
+    arch: unikernelArch(),
     boot: true,
   };
   const a = ukArgs.value.trim();
@@ -1228,7 +1235,8 @@ async function buildUnikernel(meta) {
   }
 
   const ok = body.status === "ok";
-  section(ok ? "BUILD OK (unikernel image)" : "BUILD FAILED (unikernel)");
+  section(ok ? `BUILD OK (unikernel image, ${body.arch || unikernelArch()})`
+             : "BUILD FAILED (unikernel)");
   if (body.message) logLine(body.message, ok ? "ok" : "stderr");
 
   if (ok) {

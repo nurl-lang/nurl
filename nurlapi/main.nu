@@ -2181,7 +2181,7 @@ s combined_stdout s combined_stderr → v {
     ( __oa_path paths `/build_windows` `post` `Cross-compile to a Windows .exe via mingw-w64` `nurlc → clang+mingw link → PE/COFF. Static libcurl + Schannel TLS.` )
     ( __oa_path paths `/build_macos` `post` `Cross-compile to a macOS x86_64 Mach-O binary via zig cc` `Unsigned — clear quarantine attribute before running on macOS.` )
     ( __oa_path paths `/build_target` `post` `Cross-compile to a registered zig target (linux-arm64-musl, riscv64, …)` `See GET /targets for available target ids.` )
-    ( __oa_path paths `/build_unikernel` `post` `Build a bootable x86_64 PVH unikernel image (QEMU microvm / Firecracker-class)` `nurlc → freestanding link against unikernel/nolibc + runtime_bare. Body: source, filename?, args? (guest argv, display only), files? ({relative/path: base64} baked into the image as a read-only filesystem). Returns elf_artifact + image size + ready-to-paste qemu boot commands.` )
+    ( __oa_path paths `/build_unikernel` `post` `Build a bootable unikernel image (x86_64 PVH/microvm or AArch64 QEMU virt)` `nurlc → freestanding link against unikernel/nolibc + runtime_bare. Body: source, filename?, arch? ("x86_64" default | "aarch64"), args? (guest argv, display only), files? ({relative/path: base64} baked into the image as a read-only filesystem), boot? (boot it server-side and return the guest console). Returns elf_artifact + image size + ready-to-paste qemu boot commands.` )
     ( __oa_path paths `/targets` `get` `List available cross-compile targets` `Returns the TargetInfo[] used by the playground's dropdown.` )
 
     ( __oa_path paths `/examples` `get` `List bundled example programs` `JSON array of {name, path, bytes}.` )
@@ -3989,6 +3989,7 @@ s combined_stdout s combined_stderr → v {
     ( __push_target arr `macos-arm64` `macOS ARM64 · Apple Silicon` `macOS` `/build_target` F `libSystem only · no HTTP/canvas/audio` )
     ( __push_target arr `windows-x64` `Windows x86_64 · .exe (mingw-w64)` `Windows` `/build_windows` F `static libcurl HTTP · no canvas/audio` )
     ( __push_target arr `unikernel-x64` `Unikernel x86_64 · bootable image (QEMU microvm)` `Unikernel` `/build_unikernel` F `boots as its own kernel · pure-NURL TCP/IP + TLS · no fork/exec/signals, no sqlite/canvas` )
+    ( __push_target arr `unikernel-arm64` `Unikernel AArch64 · bootable image (QEMU virt)` `Unikernel` `/build_unikernel` F `the same image on the other architecture · device tree instead of a command line · no fork/exec/signals, no sqlite/canvas` )
     : String body ( json_stringify arr )
     : HttpResponse r ( response_text 200 ( string_data body ) )
     ( response_set_header r `Content-Type` `application/json; charset=utf-8` )
@@ -4145,8 +4146,31 @@ s combined_stdout s combined_stderr → v {
 // the image). The handler's own work is exactly: unpack the request,
 // guard the initfs paths, run the tool, shape the reply.
 
-@ get_unikernel_build_script → String {
+// The two architectures this endpoint can build, and everything that
+// differs between them, in one place: the build script, the qemu the
+// smoke boot runs, the machine flags, and whether the clock has to be
+// told its frequency. A third architecture adds a row here and a file
+// in unikernel/boot — that is what the port surface being four files
+// buys the layer above it.
+@ __uk_arch_ok s arch → b {
+    ^ | != 0 ( nurl_str_eq arch `x86_64` ) != 0 ( nurl_str_eq arch `aarch64` )
+}
+
+@ __uk_is_arm s arch → b { ^ != 0 ( nurl_str_eq arch `aarch64` ) }
+
+@ get_unikernel_build_script s arch → String {
+    ? ( __uk_is_arm arch ) {
+        ^ ( env_var_or `NURL_UNIKERNEL_BUILD_ARM64`
+        `/opt/nurl/unikernel/build_unikernel_arm64.sh` )
+    } {}
     ^ ( env_var_or `NURL_UNIKERNEL_BUILD` `/opt/nurl/unikernel/build_unikernel.sh` )
+}
+
+@ get_qemu_path_for s arch → String {
+    ? ( __uk_is_arm arch ) {
+        ^ ( env_var_or `NURL_QEMU_ARM64` `/usr/bin/qemu-system-aarch64` )
+    } {}
+    ^ ( env_var_or `NURL_QEMU` `/usr/bin/qemu-system-x86_64` )
 }
 
 // An initfs key is a RELATIVE path that stays inside the archive: no
@@ -4186,15 +4210,25 @@ s combined_stdout s combined_stderr → v {
 // user's shell to fill (X.509 validity in the guest is checked against
 // the told wallclock), and `args="…"` is the program's argv. The whole
 // string is DISPLAY TEXT — the server never executes it.
-@ __uk_boot_cmd s elf_name s args b with_net → String {
+@ __uk_boot_cmd s arch s elf_name s args b with_net → String {
+    : b arm ( __uk_is_arm arch )
     : String c ( string_with_cap 512 )
-    ( string_push_str c `qemu-system-x86_64 -M microvm,acpi=off,rtc=off -accel kvm -cpu max -m 64 -nodefaults -no-reboot -no-user-config -global virtio-mmio.force-legacy=false -serial stdio -display none` )
+    ? arm {
+        // virt, not microvm; and force-legacy is needed on BOTH boards
+        // (the virt default is legacy too, which cost a debugging
+        // round). No tsc_khz=: CNTFRQ_EL0 states the frequency.
+        ( string_push_str c `qemu-system-aarch64 -M virt -accel kvm -cpu max -m 64 -nodefaults -no-reboot -no-user-config -global virtio-mmio.force-legacy=false -serial stdio -display none` )
+    } {
+        ( string_push_str c `qemu-system-x86_64 -M microvm,acpi=off,rtc=off -accel kvm -cpu max -m 64 -nodefaults -no-reboot -no-user-config -global virtio-mmio.force-legacy=false -serial stdio -display none` )
+    }
     ? with_net {
         ( string_push_str c ` -netdev user,id=n0,hostfwd=tcp:127.0.0.1:8080-:8080 -device virtio-net-device,netdev=n0` )
     } {}
     ( string_push_str c ` -kernel ` )
     ( string_push_str c elf_name )
-    ( string_push_str c ` -append "tsc_khz=1000000 wallclock=$(date +%s)` )
+    ( string_push_str c ` -append "` )
+    ? arm {} { ( string_push_str c `tsc_khz=1000000 ` ) }
+    ( string_push_str c `wallclock=$(date +%s)` )
     ? > ( nurl_str_len args ) 0 {
         ( string_push_str c ` args=\\"` )
         ( string_push_str c args )
@@ -4250,9 +4284,10 @@ s combined_stdout s combined_stderr → v {
     ^ best
 }
 
-@ __uk_smoke_boot s elf_path s uargs → Json {
+@ __uk_smoke_boot s arch s elf_path s uargs → Json {
+    : b arm ( __uk_is_arm arch )
     : Json o ( json_obj_new )
-    : String qemu ( get_qemu_path )
+    : String qemu ( get_qemu_path_for arch )
     ? ! ( file_exists ( string_data qemu ) ) {
         ( json_obj_set o `ran` ( json_bool F ) )
         ( json_obj_set o `error` ( json_str_lit `qemu is not available in this deployment` ) )
@@ -4261,7 +4296,10 @@ s combined_stdout s combined_stderr → v {
     } {}
     : String secs ( get_boot_secs )
     : String append ( string_with_cap 256 )
-    ( string_push_str append `tsc_khz=1000000 wallclock=` )
+    // No tsc_khz= on AArch64: the generic timer states its own
+    // frequency, so the x86 handshake is an x86 quirk.
+    ? arm {} { ( string_push_str append `tsc_khz=1000000 ` ) }
+    ( string_push_str append `wallclock=` )
     ( string_push_str append ( nurl_str_int / ( now_ms ) 1000 ) )
     ? > ( nurl_str_len uargs ) 0 {
         ( string_push_str append ` args="` )
@@ -4273,7 +4311,11 @@ s combined_stdout s combined_stderr → v {
     ( vec_push [s] qa `5` )
     ( vec_push [s] qa ( string_data secs ) )
     ( vec_push [s] qa ( string_data qemu ) )
-    ( vec_push [s] qa `-M` ) ( vec_push [s] qa `microvm,acpi=off,rtc=off` )
+    ? arm {
+        ( vec_push [s] qa `-M` ) ( vec_push [s] qa `virt` )
+    } {
+        ( vec_push [s] qa `-M` ) ( vec_push [s] qa `microvm,acpi=off,rtc=off` )
+    }
     ( vec_push [s] qa `-accel` ) ( vec_push [s] qa `tcg` )
     ( vec_push [s] qa `-cpu` ) ( vec_push [s] qa `max` )
     ( vec_push [s] qa `-m` ) ( vec_push [s] qa `64` )
@@ -4286,6 +4328,7 @@ s combined_stdout s combined_stderr → v {
     // A relocated qemu (not installed under /usr) finds its firmware
     // only when told where — the packaged one never needs this.
     : String share ( env_var_or `NURL_QEMU_SHARE` `` )
+    // (the same override serves both architectures — one qemu install)
     ? > ( string_len share ) 0 {
         ( vec_push [s] qa `-L` ) ( vec_push [s] qa ( string_data share ) )
     } {}
@@ -4347,6 +4390,16 @@ s combined_stdout s combined_stderr → v {
             ? == ( nurl_str_len source ) 0 { ( json_free root ) ( string_free body_str ) ^ ( response_text 400 `{"error":"source is required"}\n` ) } {}
             : s filename ( get_common_json root `filename` `main.nu` )
             : s uargs ( get_common_json root `args` `` )
+            // Which machine. x86_64 stays the default: it is what every
+            // caller written before this field asked for, and a silent
+            // change of architecture would be the worst kind of
+            // compatibility break — the image builds, downloads, and
+            // does not boot.
+            : s arch ( get_common_json root `arch` `x86_64` )
+            ? ! ( __uk_arch_ok arch ) {
+                ( json_free root ) ( string_free body_str )
+                ^ ( response_text 400 `{"error":"arch must be \"x86_64\" or \"aarch64\""}\n` )
+            } {}
             : ~ b want_boot F
             ?? ( json_obj_get root `boot` ) { T bj → { = want_boot ( json_as_bool bj ) } F → {} }
 
@@ -4421,7 +4474,7 @@ s combined_stdout s combined_stderr → v {
                         ( vec_push [s] targs `--fs` )
                         ( vec_push [s] targs ( string_data fs_dir ) )
                     } {}
-                    : String script ( get_unikernel_build_script )
+                    : String script ( get_unikernel_build_script arch )
                     : !Output ProcessErr t_res ( run_tool ( string_data script ) targs )
                     ( vec_free [s] targs )
                     ( string_free script )
@@ -4432,15 +4485,18 @@ s combined_stdout s combined_stderr → v {
                             : Json res ( json_obj_new )
                             ( json_obj_set res `status` ( json_str_lit ? == t_rc 0 `ok` `error` ) )
                             ( json_obj_set res `message` ( json_str_lit ? == t_rc 0
+                            ? ( __uk_is_arm arch )
+                            `compiled nurl → bootable AArch64 unikernel image (QEMU virt)`
                             `compiled nurl → bootable x86_64 PVH unikernel image`
                             `build failed (see stderr)` ) )
                             ( json_obj_set res `filename` ( json_str_lit filename ) )
+                            ( json_obj_set res `arch` ( json_str_lit arch ) )
                             ( json_obj_set res `script_returncode` ( json_int t_rc ) )
                             ( json_obj_set res `stderr` ( json_str_lit ( output_stderr t_out ) ) )
                             ? == t_rc 0 {
                                 ? want_boot {
                                     ( json_obj_set res `boot_result`
-                                    ( __uk_smoke_boot ( string_data elf_path ) uargs ) )
+                                    ( __uk_smoke_boot arch ( string_data elf_path ) uargs ) )
                                 } {}
                                 : !i IoErr esz ( file_size ( string_data elf_path ) )
                                 : i ebytes ?? esz { T sz → sz F _ → 0 }
@@ -4451,8 +4507,8 @@ s combined_stdout s combined_stderr → v {
                                 // networked variant for a program that serves
                                 // (virtio-net + a host port forward).
                                 : Json boot ( json_obj_new )
-                                : String bc ( __uk_boot_cmd ( string_data elf_name ) uargs F )
-                                : String bn ( __uk_boot_cmd ( string_data elf_name ) uargs T )
+                                : String bc ( __uk_boot_cmd arch ( string_data elf_name ) uargs F )
+                                : String bn ( __uk_boot_cmd arch ( string_data elf_name ) uargs T )
                                 ( json_obj_set boot `qemu` ( json_str_lit ( string_data bc ) ) )
                                 ( json_obj_set boot `qemu_net` ( json_str_lit ( string_data bn ) ) )
                                 ( json_obj_set boot `notes` ( json_str_lit `Use -accel tcg on a machine without /dev/kvm. Memory floor: a hello answers on -m 3, an HTTPS server on -m 4; -m 64 leaves headroom. The hostfwd in qemu_net forwards host 127.0.0.1:8080 to guest port 8080 — edit both to your program's port.` ) )
@@ -4745,6 +4801,12 @@ s combined_stdout s combined_stderr → v {
     ( __mcp_prop `object` `Optional read-only filesystem baked into the image: {"relative/path": "<base64>"} — no absolute paths, no ".." segments` ) )
     ( json_obj_set props `boot`
     ( __mcp_prop `boolean` `Boot the built image in the server (TCG, no network, ~20 s cap) and return the guest console. Default true — the boot log is the point of the tool.` ) )
+    : ( Vec s ) uarchs ( vec_new [s] )
+    ( vec_push [s] uarchs `x86_64` )
+    ( vec_push [s] uarchs `aarch64` )
+    ( json_obj_set props `arch`
+    ( __mcp_prop_enum `string` `Which machine: x86_64 (QEMU microvm / PVH) or aarch64 (QEMU virt). Default x86_64.` uarchs ) )
+    ( vec_free [s] uarchs )
     ( json_obj_set schema `properties` props )
     : Json req ( json_arr_new )
     ( json_arr_push req ( json_str_lit `source` ) )
@@ -4764,6 +4826,8 @@ s combined_stdout s combined_stderr → v {
     ( json_obj_set body `source` ( json_str_lit source ) )
     ( json_obj_set body `filename` ( json_str_lit filename ) )
     ? > ( nurl_str_len uargs ) 0 { ( json_obj_set body `args` ( json_str_lit uargs ) ) } {}
+    : s uarch ( __mcp_args_get `arch` args `x86_64` )
+    ( json_obj_set body `arch` ( json_str_lit uarch ) )
     : ~ b boot T
     ?? ( json_obj_get args `boot` ) { T bj → { = boot ( json_as_bool bj ) } F → {} }
     ( json_obj_set body `boot` ( json_bool boot ) )
@@ -5481,7 +5545,7 @@ s combined_stdout s combined_stderr → v {
     `Cross-compile NURL source to one of several extra targets via zig cc. target selects which: *-musl static ELFs (x86_64/ARM64/RISC-V 64 Linux), linux-arm64-gnu dynamic glibc ELF, macos-x64/macos-arm64 unsigned Mach-O. Equivalent to POST /build_target.`
     ( __mcp_schema_build_target ) ) )
     ( json_arr_push arr ( __mcp_tool_desc `nurl_build_unikernel`
-    `Build NURL source into a bootable x86_64 PVH unikernel image (no OS, no libc — the pure-NURL TCP/IP + TLS stack; fork/exec/signals and C libraries are unavailable). By default also BOOTS the image server-side (TCG, no network, ~20 s cap) and returns the guest console + exit status, plus an ELF download link and ready-to-paste QEMU commands. files bakes {"relative/path": base64} into a read-only in-image filesystem. Equivalent to POST /build_unikernel.`
+    `Build NURL source into a bootable unikernel image — x86_64 (PVH/microvm) or aarch64 (QEMU virt), chosen with arch (no OS, no libc — the pure-NURL TCP/IP + TLS stack; fork/exec/signals and C libraries are unavailable). By default also BOOTS the image server-side (TCG, no network, ~20 s cap) and returns the guest console + exit status, plus an ELF download link and ready-to-paste QEMU commands. files bakes {"relative/path": base64} into a read-only in-image filesystem. Equivalent to POST /build_unikernel.`
     ( __mcp_schema_build_unikernel ) ) )
 
     // Browse.
