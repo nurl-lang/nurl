@@ -119,14 +119,29 @@ if [ $# -eq 0 ]; then
         wrc=$?
         nodev=$(boot "$OUTDIR/entropy_rv.elf" -t 120 2>&1)
         nrc=$?
+        # The two ways a FAKE source looks plausible are the ones the
+        # guest counts: a draw that is ALL zeroes (a device that
+        # answered without writing), and two draws that are IDENTICAL
+        # (a constant, or one buffer read twice). So the thresholds are
+        # 32, not 0.
+        #
+        # Asserting zeros=0 and same_bytes=0 — "no byte is zero, and no
+        # position matches" — is not a property of randomness but of
+        # unlikely randomness. With 32 uniform bytes each has
+        # probability 1-(255/256)^32 = 11.8%, so the gate rejected
+        # CORRECT entropy on ~22% of runs, about one in 4.5. That is
+        # what it was doing: the same commit passed and failed hours
+        # apart with nothing between the two runs but the dice.
+        wz=$(printf '%s' "$withdev" | sed -n 's/^zeros=\([0-9]*\)$/\1/p')
+        ws=$(printf '%s' "$withdev" | sed -n 's/^same_bytes=\([0-9]*\)$/\1/p')
         if [ "$wrc" = 0 ] \
-           && printf '%s' "$withdev" | grep -q '^zeros=0$' \
-           && printf '%s' "$withdev" | grep -q '^same_bytes=0$' \
+           && [ -n "$wz" ] && [ "$wz" != 32 ] \
+           && [ -n "$ws" ] && [ "$ws" != 32 ] \
            && [ "$nrc" = 127 ] \
            && printf '%s' "$nodev" | grep -q 'virtio-rng'; then
             echo "PASS entropy (device gives bytes; absence is refused by name)"
         else
-            echo "FAIL entropy (with-device exit $wrc, without exit $nrc)"
+            echo "FAIL entropy (with-device exit $wrc, without exit $nrc; zeros=${wz:-?}/32, same_bytes=${ws:-?}/32 — 32 means a fake source)"
             printf '%s\n' "$withdev" | head -4 | sed 's/^/     /'
             printf '%s\n' "$nodev" | head -2 | sed 's/^/     /'
             fails=$((fails + 1))
