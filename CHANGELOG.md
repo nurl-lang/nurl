@@ -8,6 +8,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **`unikernel/build_unikernel.sh` is a tool now, not a repo-rooted
+  script** (unikernel-in-the-playground plan, phase U0). It takes
+  `--out-dir`, compiles the program-independent objects once into a
+  locked, stamped cache (`NURL_UNIKERNEL_CACHE`; warm rebuild of a
+  hello image: 0.14 s), names every per-program artifact after the
+  program so concurrent builds cannot clobber each other, and with
+  both directories pointed elsewhere never writes the repository at
+  all. `compile_nu.sh` defaults `NURL_STDLIB` to the repo it lives in
+  — a package build from a foreign cwd used to die with "cannot open
+  stdlib/core/string.nu", and die SILENTLY, because compile errors
+  went to a file nothing printed; failures now carry the compiler's
+  message on stderr (`NURL_COMPILE_QUIET=1` restores the silence for
+  the corpus runner, which classifies by exit code). All four
+  properties are pinned by a new unit gate
+  (`unikernel/tests/build_tool_gate.sh`): foreign-cwd build,
+  read-only repo, concurrent byte-identical ELFs, loud failure.
+
 ## [0.34.0] — 2026-08-07
 
 ### Added
