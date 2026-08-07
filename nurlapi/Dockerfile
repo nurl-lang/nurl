@@ -293,6 +293,15 @@ test -s /tmp/uout/uhello.elf && test -s /tmp/uout/ulisten.elf
 rm -rf /tmp/uhello.nu /tmp/ulisten.nu /tmp/uout
 SMOKE
 
+# Which bundled examples build as unikernel images — MEASURED here, at
+# image-build time, by linking each one exactly as a request would
+# (U4). GET /examples serves the verdicts so the playground can grey
+# out what cannot boot, with the missing symbols as the reason. A
+# hand-kept list would rot; this one is remeasured on every image.
+ENV NURL_UNIKERNEL_EXAMPLES=/opt/nurl/unikernel-examples.json
+RUN /opt/nurl/unikernel/measure_capability.sh /opt/nurl/examples \
+        /opt/nurl/unikernel-examples.json
+
 # ── Run unprivileged (M11) ────────────────────────────────────────────
 # The server compiles untrusted source with nurlc/clang/zig; none of that
 # needs root. Writable surface is exactly what the tools touch at request
