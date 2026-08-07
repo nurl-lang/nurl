@@ -10,6 +10,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The playground builds AArch64 unikernel images too.** `POST
+  /build_unikernel` takes `arch` (`"x86_64"` default, `"aarch64"`),
+  the MCP tool takes the same field, and the target dropdown gains
+  **Unikernel AArch64 · bootable image (QEMU virt)**. Everything the
+  x86_64 path already had follows the field: the smoke boot runs
+  `qemu-system-aarch64 -M virt`, the returned boot commands name the
+  right machine, and the AArch64 ones carry no `tsc_khz=` because that
+  clock states its own frequency. An unknown arch is a 400, never a
+  silent build for the default — an image that builds, downloads and
+  does not boot is the worst possible answer. e2e covers both
+  architectures end to end, including the guest console from each.
+
 - **A NURL program boots as its own kernel on AArch64 too** (unikernel
   plan phase U6). QEMU's `virt` board, and the port is the size the
   design predicted: **four files** differ — `boot/boot_arm64.S`

@@ -62,7 +62,13 @@ if [ -n "$FSDIR" ] && [ ! -d "$FSDIR" ]; then
     exit 2
 fi
 
-CACHE="${NURL_UNIKERNEL_CACHE:-$OUTDIR/cache}"
+# A cache of its OWN, and deliberately not NURL_UNIKERNEL_CACHE: the
+# object filenames are identical across architectures (runtime_core.o,
+# nl_string.o, boot.o…), so one directory shared by both builds means
+# an x86 link can pick up AArch64 objects — or, with the stamp saving
+# it, both builds rebuilding everything on every alternation. The arch
+# belongs in the cache's identity, not only in its stamp.
+CACHE="${NURL_UNIKERNEL_CACHE_ARM64:-$OUTDIR/cache}"
 mkdir -p "$OUTDIR" "$CACHE"
 base="$(basename "${SRC%.nu}")"
 OUT="${OUT:-$OUTDIR/$base.elf}"

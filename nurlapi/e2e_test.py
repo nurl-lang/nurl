@@ -799,7 +799,42 @@ def t_build_unikernel_rest(c: Client) -> None:
     except json.JSONDecodeError:
         bad("boot result is JSON", f"got {raw[:200]!r}")
 
-    # 4. A broken program answers with the compiler's message, loudly.
+    # 4. The other architecture: same endpoint, one field.
+    status, _, raw = c.post(
+        "/build_unikernel",
+        {"source": src.replace("uk-e2e", "uk-e2e-arm"), "arch": "aarch64", "boot": True},
+        timeout=300.0,
+    )
+    assert_eq("aarch64 build status 200", status, 200)
+    try:
+        j = json.loads(raw)
+        assert_eq("aarch64 build ok", j.get("status"), "ok")
+        assert_eq("reply names the arch", j.get("arch"), "aarch64")
+        assert_true("aarch64 boot command targets virt",
+                    "-M virt" in ((j.get("boot") or {}).get("qemu") or ""),
+                    (j.get("boot") or {}).get("qemu") or "")
+        assert_true("aarch64 boot command has no tsc_khz (self-describing clock)",
+                    "tsc_khz" not in ((j.get("boot") or {}).get("qemu") or ""), "")
+        br = j.get("boot_result") or {}
+        if br.get("ran") is False and "not available" in (br.get("error") or ""):
+            print("  aarch64 boot skipped: qemu not in this deployment")
+        else:
+            assert_true("aarch64 guest printed", "uk-e2e-arm" in (br.get("log") or ""), str(br)[:200])
+            assert_eq("aarch64 guest exited 0", br.get("exit"), 0)
+    except json.JSONDecodeError:
+        bad("aarch64 result is JSON", f"got {raw[:200]!r}")
+
+    # An unknown arch is refused, not silently built for the default —
+    # an image that builds, downloads and does not boot is the worst
+    # possible answer.
+    status, _, raw = c.post(
+        "/build_unikernel",
+        {"source": src, "arch": "sparc"},
+        timeout=60.0,
+    )
+    assert_eq("unknown arch rejected", status, 400)
+
+    # 5. A broken program answers with the compiler's message, loudly.
     status, _, raw = c.post(
         "/build_unikernel",
         {"source": "@ main → i { ( nurl_println nope ) ^ 0 }"},

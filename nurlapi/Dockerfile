@@ -182,6 +182,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         binaryen \
         binutils \
         qemu-system-x86 \
+        qemu-system-arm \
         gcc-mingw-w64-x86-64 \
         binutils-mingw-w64-x86-64 \
     && rm -rf /var/lib/apt/lists/* \
@@ -266,7 +267,9 @@ COPY --from=builder /src/unikernel               /opt/nurl/unikernel
 # compile_nu.sh's nm seam). If either does not link, the docker build
 # fails — the playground can never ship an image whose unikernel
 # toolchain is broken.
-ENV NURL_UNIKERNEL_CACHE=/opt/unikernel-cache
+ENV NURL_UNIKERNEL_CACHE=/opt/unikernel-cache \
+    NURL_UNIKERNEL_CACHE_ARM64=/opt/unikernel-cache-arm64 \
+    NURL_ZIG=/opt/zig/zig
 RUN <<'SMOKE'
 set -eux
 cat > /tmp/uhello.nu <<'NU'
@@ -290,7 +293,15 @@ NU
 /opt/nurl/unikernel/build_unikernel.sh /tmp/uhello.nu  --out-dir /tmp/uout
 /opt/nurl/unikernel/build_unikernel.sh /tmp/ulisten.nu --out-dir /tmp/uout
 test -s /tmp/uout/uhello.elf && test -s /tmp/uout/ulisten.elf
-rm -rf /tmp/uhello.nu /tmp/ulisten.nu /tmp/uout
+# The other architecture, with the same two programs — and this also
+# warms the aarch64 object cache the image ships. zig is already here
+# for /build_target; the unikernel cross build uses that same one.
+NURL_ZIG=/opt/zig/zig /opt/nurl/unikernel/build_unikernel_arm64.sh \
+    /tmp/uhello.nu  --out-dir /tmp/uout64
+NURL_ZIG=/opt/zig/zig /opt/nurl/unikernel/build_unikernel_arm64.sh \
+    /tmp/ulisten.nu --out-dir /tmp/uout64
+test -s /tmp/uout64/uhello.elf && test -s /tmp/uout64/ulisten.elf
+rm -rf /tmp/uhello.nu /tmp/ulisten.nu /tmp/uout /tmp/uout64
 SMOKE
 
 # Which bundled examples build as unikernel images — MEASURED here, at
@@ -313,7 +324,8 @@ RUN /opt/nurl/unikernel/measure_capability.sh /opt/nurl/examples \
 # newer mtimes makes it rebuild itself at request time.
 RUN groupadd -g 10001 nurl \
     && useradd -m -u 10001 -g nurl -d /home/nurl -s /usr/sbin/nologin nurl \
-    && chown -R nurl:nurl /app/output /opt/zig-cache /opt/unikernel-cache
+    && chown -R nurl:nurl /app/output /opt/zig-cache /opt/unikernel-cache \
+                          /opt/unikernel-cache-arm64
 USER nurl
 ENV HOME=/home/nurl
 
