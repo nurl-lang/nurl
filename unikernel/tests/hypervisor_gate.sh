@@ -58,12 +58,79 @@ fi
 machine=$(readelf -hW "$IMG" | awk -F: '/Machine:/ {print $2}' | sed 's/^ *//')
 case "$machine" in
     *AArch64*)
-        say "AArch64 image — PVH is x86-only, so there is no note to check."
-        say "     QEMU virt loads this ELF directly (the AArch64 guest gate"
-        say "     boots it). Firecracker and cloud-hypervisor want a"
-        say "     PE-format Image on this architecture: a packaging step"
-        say "     this target has not taken, not a property it has."
-        exit 0
+        # PVH is x86-only. What Firecracker and cloud-hypervisor take on
+        # THIS architecture is a flat `Image` — the format a Linux arm64
+        # kernel ships in — and boot_arm64.S puts its 64-byte header at
+        # offset 0 of the same build. So the question here is the same
+        # question, asked of the other container: is the header what a
+        # loader dispatches on?
+        img="${IMG%.elf}.Image"
+        if [ ! -f "$img" ]; then
+            objc="${NURL_OBJCOPY:-llvm-objcopy}"
+            command -v "$objc" >/dev/null 2>&1 || {
+                say "SKIP AArch64 Image check (no llvm-objcopy to flatten the ELF)"
+                exit 0
+            }
+            img="$(mktemp)"
+            "$objc" -O binary "$IMG" "$img" || { say "FAIL: could not flatten the ELF"; exit 1; }
+        fi
+        hdr=$(od -A n -t x1 -N 64 "$img" | tr -d ' \n')
+        # magic "ARM\x64" at offset 0x38, little-endian in the file as
+        # the four ASCII bytes 41 52 4d 64.
+        if [ "${hdr:112:8}" != "41524d64" ]; then
+            say "FAIL: no ARM64 image magic at offset 0x38 — Firecracker and"
+            say "      cloud-hypervisor have nothing to dispatch on"
+            exit 1
+        fi
+        # code0 must be a real instruction: a b/bl (top byte 0x14/0x94 in
+        # little-endian byte order → the 4th byte of the word). A zeroed
+        # code0 is what a header written as pure data looks like, and a
+        # loader jumping to offset 0 would execute it.
+        c0b3="${hdr:6:2}"
+        case "$c0b3" in
+            14|94) ;;
+            *) say "FAIL: code0 is not a branch (byte 3 = 0x$c0b3) — a loader"
+               say "      that jumps to offset 0 would not reach the boot code"
+               fail=1 ;;
+        esac
+        # text_offset (0x08) must match where the image is LINKED inside
+        # its 2 MiB-aligned region: this image is not position-independent
+        # and the field is what makes a loader put it where its absolute
+        # addresses already point.
+        toff=$(python3 -c "import sys;h=sys.argv[1];print(int.from_bytes(bytes.fromhex(h[16:32]),'little'))" "$hdr" 2>/dev/null || echo -1)
+        # The image's BASE, not its entry point: the header describes
+        # where byte 0 of the image goes, and the entry sits 64 bytes
+        # further on because the header itself is those 64 bytes. The
+        # first check written here used the entry and reported a 64-byte
+        # discrepancy as a defect — a gate being precise about which
+        # address a field means.
+        base=$(readelf -lW "$IMG" | awk '/LOAD/ {print $3; exit}')
+        # Offset within the gigabyte the image is linked into: RAM on
+        # this board starts at a gigabyte boundary, so this is the
+        # distance from DRAM start that the loader must reproduce.
+        region=$(( $((base)) - ($((base)) & ~0x3FFFFFFF) ))
+        if [ "$toff" -lt 0 ]; then
+            say "FAIL: could not read text_offset"
+            fail=1
+        elif [ "$toff" != "$region" ]; then
+            say "FAIL: text_offset is $toff but the image is linked $region bytes"
+            say "      into its region — a loader would place it where its own"
+            say "      absolute addresses do not point"
+            fail=1
+        fi
+        # image_size must cover the file, .bss included.
+        isize=$(python3 -c "import sys;h=sys.argv[1];print(int.from_bytes(bytes.fromhex(h[32:48]),'little'))" "$hdr" 2>/dev/null || echo 0)
+        fsize=$(stat -c %s "$img")
+        if [ "$isize" -lt "$fsize" ]; then
+            say "FAIL: image_size ($isize) is smaller than the image ($fsize)"
+            fail=1
+        fi
+        [ "$fail" = 0 ] && say "AArch64 Image header OK — magic, code0 is a branch, text_offset $toff, image_size $isize"
+        say "     (Firecracker and cloud-hypervisor take this container on"
+        say "     this architecture; booting them needs an AArch64 HOST —"
+        say "     neither emulates, so there is nothing here to run them on.)"
+        [ "$fail" = 0 ] && say "verified: AArch64 Image header (no AArch64 host to boot it under)"
+        exit $fail
         ;;
 esac
 

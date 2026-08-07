@@ -36,6 +36,42 @@
  */
 
     .section .text.boot, "ax", %progbits
+
+/* ── the AArch64 image header ─────────────────────────────────────
+ *
+ * 64 bytes, at offset 0 of the image, exactly as
+ * Documentation/arch/arm64/booting.rst specifies. It is what turns
+ * this ELF into something Firecracker and cloud-hypervisor will load:
+ * on x86 those two read the PVH note out of the ELF, and on THIS
+ * architecture they take a flat `Image` — the format a Linux arm64
+ * kernel ships in — and this header is that format.
+ *
+ * The header costs nothing on the paths that do not use it: `code0`
+ * is a real instruction (a branch over the header), so a loader that
+ * jumps to offset 0 lands in the same boot code an ELF loader reaches
+ * through the ELF entry point. One image, two ways in.
+ *
+ * `text_offset` is 2 MiB, and that is not decoration: this image is
+ * NOT position-independent — the linker script fixes it at
+ * 0x4020_0000, which is 2 MiB above the start of QEMU virt's RAM. The
+ * field says exactly that, so a loader places the image where its
+ * absolute addresses already point. `image_size` covers .bss too, so
+ * the loader reserves the memory the program will grow into rather
+ * than the bytes the file happens to hold.
+ */
+    .globl _arm64_image_header
+_arm64_image_header:
+    b       _arm64_start            /* code0: branch over the header  */
+    .long   0                       /* code1                          */
+    .quad   0x200000                /* text_offset: 2 MiB above base  */
+    .quad   __image_size            /* image_size, .bss included      */
+    .quad   0                       /* flags: LE, 2 MiB-aligned base  */
+    .quad   0                       /* res2                           */
+    .quad   0                       /* res3                           */
+    .quad   0                       /* res4                           */
+    .ascii  "ARM\x64"               /* magic                          */
+    .long   0                       /* res5: no PE/COFF header        */
+
     .globl _arm64_start
 _arm64_start:
     mov     x21, x0                 /* the possible DTB pointer        */

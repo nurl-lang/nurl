@@ -815,6 +815,20 @@ def t_build_unikernel_rest(c: Client) -> None:
                     (j.get("boot") or {}).get("qemu") or "")
         assert_true("aarch64 boot command has no tsc_khz (self-describing clock)",
                     "tsc_khz" not in ((j.get("boot") or {}).get("qemu") or ""), "")
+        art = j.get("image_artifact") or {}
+        assert_true("aarch64 build also emits the flat Image",
+                    (art.get("name") or "").endswith(".Image"), str(j)[:200])
+        assert_true("the Image is smaller than the ELF it came from",
+                    0 < (art.get("bytes") or 0) < (j.get("image_bytes") or 0), str(art))
+        istat, _, ibody = c.get(f"/download/{art.get('token')}")
+        assert_eq("Image downloads", istat, 200)
+        # The 64-byte ARM64 image header: magic "ARM\x64" at 0x38, and
+        # code0 a branch so a loader jumping to offset 0 reaches the
+        # boot code. Firecracker and cloud-hypervisor dispatch on this.
+        assert_true("Image carries the ARM64 header magic",
+                    ibody[0x38:0x3c] == b"ARM\x64", repr(ibody[0x38:0x3c]))
+        assert_true("Image code0 is a branch",
+                    ibody[3] in (0x14, 0x94), hex(ibody[3]) if ibody else "empty")
         br = j.get("boot_result") or {}
         if br.get("ran") is False and "not available" in (br.get("error") or ""):
             print("  aarch64 boot skipped: qemu not in this deployment")
