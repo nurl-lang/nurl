@@ -708,6 +708,75 @@ def t_build_wasm_libc_shims(c: Client) -> None:
     assert_true("no shim/call-site signature mismatch", not mismatched, "; ".join(mismatched))
 
 
+def t_build_unikernel_rest(c: Client) -> None:
+    print("\n[REST] /build_unikernel — image + initfs + guards")
+    # 1. A hello builds into a PVH ELF with boot commands attached.
+    src = "@ main → i {\n    ( nurl_println `uk-e2e` )\n    ^ 0\n}\n"
+    status, _, raw = c.post(
+        "/build_unikernel",
+        {"source": src, "args": "--demo yes"},
+        timeout=180.0,
+    )
+    assert_eq("build_unikernel status 200", status, 200)
+    try:
+        j = json.loads(raw)
+    except json.JSONDecodeError:
+        bad("build_unikernel result is JSON", f"got {raw[:200]!r}")
+        return
+    assert_eq("build_unikernel ok", j.get("status"), "ok", )
+    art = j.get("elf_artifact") or {}
+    assert_true("elf artifact returned", bool(art.get("token")), f"keys={list(j)}")
+    assert_true("image has a size", (j.get("image_bytes") or 0) > 50000, str(j.get("image_bytes")))
+    boot = j.get("boot") or {}
+    assert_true("boot.qemu names the microvm machine", "-M microvm" in (boot.get("qemu") or ""), boot.get("qemu") or "")
+    assert_true("boot command carries the argv", 'args=' in (boot.get("qemu") or ""), boot.get("qemu") or "")
+    assert_true("qemu_net adds virtio-net", "virtio-net-device" in (boot.get("qemu_net") or ""), "")
+    # The artifact must actually download and be an ELF.
+    tok = art.get("token")
+    dstat, _, dbody = c.get(f"/download/{tok}")
+    assert_eq("elf downloads", dstat, 200)
+    assert_true("downloaded file is an ELF", dbody[:4] == b"\x7fELF", repr(dbody[:4]))
+
+    # 2. An initfs file rides inside the image; keys are path-checked.
+    import base64 as _b64
+    payload = _b64.b64encode(b"uk-e2e-initfs").decode()
+    status, _, raw = c.post(
+        "/build_unikernel",
+        {"source": src, "files": {"etc/msg.txt": payload}},
+        timeout=180.0,
+    )
+    assert_eq("build_unikernel with files 200", status, 200)
+    try:
+        assert_eq("build_unikernel with files ok", json.loads(raw).get("status"), "ok")
+    except json.JSONDecodeError:
+        bad("files build result is JSON", f"got {raw[:200]!r}")
+    for bad_key in ("../evil", "/abs", "a/../b", "a//b"):
+        status, _, raw = c.post(
+            "/build_unikernel",
+            {"source": src, "files": {bad_key: payload}},
+            timeout=60.0,
+        )
+        assert_eq(f"files key {bad_key!r} rejected", status, 400)
+
+    # 3. A broken program answers with the compiler's message, loudly.
+    status, _, raw = c.post(
+        "/build_unikernel",
+        {"source": "@ main → i { ( nurl_println nope ) ^ 0 }"},
+        timeout=60.0,
+    )
+    assert_eq("broken source still 200 (structured error)", status, 200)
+    try:
+        j = json.loads(raw)
+        assert_eq("broken source status=error", j.get("status"), "error")
+        assert_true(
+            "stderr carries the compiler's diagnosis",
+            "undefined identifier" in (j.get("stderr") or ""),
+            (j.get("stderr") or "")[:200],
+        )
+    except json.JSONDecodeError:
+        bad("broken-source result is JSON", f"got {raw[:200]!r}")
+
+
 def t_tools_call_build_wasm(c: Client) -> None:
     # The MCP tool must answer with download links, never the inline
     # base64 module (which would land verbatim in the caller's context).
@@ -836,11 +905,13 @@ def main() -> int:
         t_tools_call_build_wasm(c)
         t_build_wasm_libc_shims(c)
         t_build_wasm_links_only_rest(c)
+        t_build_unikernel_rest(c)
     else:
         print("\n[MCP] tools/call nurl_build_native — skipped (--quick)")
         print("[MCP] tools/call nurl_build_wasm — skipped (--quick)")
         print("[REST] /build_wasm libc shims — skipped (--quick)")
         print("[REST] /build_wasm links_only — skipped (--quick)")
+        print("[REST] /build_unikernel — skipped (--quick)")
 
     t_resources(c)
     t_prompts(c)

@@ -10,6 +10,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`POST /build_unikernel` — the playground builds bootable unikernel
+  images** (plan phase U2). Body: `source` (+ `filename`), optional
+  `args` (the guest's argv — returned inside the boot command, never
+  executed server-side), optional `files` (`{relative/path: base64}`
+  baked into the image as a read-only filesystem; keys are refused on
+  a leading `/`, a backslash, or any empty/`.`/`..` segment, because
+  the tar is built with `tar -C dir .`). The reply carries the ELF
+  artifact + size and a `boot` object with ready-to-paste QEMU
+  commands — the exact flags the guest gate boots 20/20 with, plus a
+  networked variant — verified by pasting them verbatim: the built
+  image boots and prints. Rate limiting, the compile semaphore, body
+  caps and artifact GC all apply automatically (`/build*` prefix).
+  End-to-end tests cover build, download, initfs bake, all four
+  traversal shapes, and that a broken program answers with the
+  compiler's own diagnosis.
+
 - **The playground container can build unikernel images** (plan phase
   U1). The nurlapi Docker image ships `unikernel/` (477 kB), plain
   binutils, and a pre-warmed boot-object cache (205 kB), and its build
