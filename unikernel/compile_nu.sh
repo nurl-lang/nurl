@@ -33,7 +33,22 @@ set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SHIM="$ROOT/unikernel/net/sockets.nu"
-CC="${CC:-clang}"
+# The compiler for the OBJECT this script produces. NURL_TARGET_CC lets
+# a cross build pass a whole command ("zig cc -target aarch64-…"): the
+# nm measurement below has to be made on the object for the TARGET,
+# because "which symbols are undefined" is an answer about the machine
+# the program will run on.
+CC="${NURL_TARGET_CC:-${CC:-clang}}"
+# nm reads whatever the CC above produced. llvm-nm handles every target
+# clang can emit; plain nm on a foreign object says "file format not
+# recognized" and the socket layer would then be linked in never or
+# always, silently.
+NM="${NURL_NM:-}"
+if [ -z "$NM" ]; then
+    if command -v llvm-nm >/dev/null 2>&1; then NM="llvm-nm"
+    elif command -v llvm-nm-16 >/dev/null 2>&1; then NM="llvm-nm-16"
+    else NM="nm"; fi
+fi
 
 # The stdlib is HERE, and this script knows it. Without this a package
 # build (cwd = the package root, see below) resolved `stdlib/…` imports
@@ -85,14 +100,14 @@ done
 cd "$workdir" || exit 2
 
 "$ROOT/build/nurlc" "$SRC" > "$OUT_LL" 2>"$WORK/compile.err" || fail 3 "$WORK/compile.err" "nurlc"
-"$CC" -O2 -c "$OUT_LL" -o "$OBJ" 2>"$WORK/cc.err" || fail 4 "$WORK/cc.err" "$CC"
+$CC -O2 -c "$OUT_LL" -o "$OBJ" 2>"$WORK/cc.err" || fail 4 "$WORK/cc.err" "$CC"
 
 # What does the shim define? Its own `@ nurl_*` definitions, read from
 # the file that defines them.
 shim_syms=$(grep -oE '^@ nurl_[A-Za-z0-9_]+' "$SHIM" | awk '{print $2}' | sort -u)
 [ -n "$shim_syms" ] || exit 0
 
-undef=$(nm -u "$OBJ" 2>/dev/null | awk '{print $NF}' | sort -u)
+undef=$($NM -u "$OBJ" 2>/dev/null | awk '{print $NF}' | sort -u)
 need=$(comm -12 <(printf '%s\n' "$undef") <(printf '%s\n' "$shim_syms"))
 [ -n "$need" ] || exit 0
 
@@ -111,5 +126,5 @@ root_nu="$WORK/__with_sockets.nu"
 } > "$root_nu"
 
 "$ROOT/build/nurlc" "$root_nu" > "$OUT_LL" 2>"$WORK/compile.err" || fail 3 "$WORK/compile.err" "nurlc (with socket shim)"
-"$CC" -O2 -c "$OUT_LL" -o "$OBJ" 2>"$WORK/cc.err" || fail 4 "$WORK/cc.err" "$CC (with socket shim)"
+$CC -O2 -c "$OUT_LL" -o "$OBJ" 2>"$WORK/cc.err" || fail 4 "$WORK/cc.err" "$CC (with socket shim)"
 exit 0

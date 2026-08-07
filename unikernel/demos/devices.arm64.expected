@@ -1,0 +1,4 @@
+cmdline devices: 32
+device 31: id=1 (net) irq=yes queues=yes
+  features negotiated: yes
+probed ok: 1

@@ -76,10 +76,18 @@ double copysign(double x, double y) {
 /* The hardware square root is correctly rounded, so there is nothing to
  * approximate. Written as asm rather than __builtin_sqrt because
  * -fno-builtin is on for this directory and the builtin would lower to
- * a call to this very function. */
+ * a call to this very function. Every target this file is built for
+ * has the instruction; one that does not would need an algorithm here,
+ * not a silently different answer, so the #error says so. */
 double sqrt(double x) {
     double r;
+#if defined(__x86_64__)
     __asm__("sqrtsd %1, %0" : "=x"(r) : "x"(x));
+#elif defined(__aarch64__)
+    __asm__("fsqrt %d0, %d1" : "=w"(r) : "w"(x));
+#else
+#  error "nolibc sqrt: no hardware square root known for this target"
+#endif
     return r;
 }
 

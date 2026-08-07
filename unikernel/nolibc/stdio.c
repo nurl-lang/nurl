@@ -310,6 +310,16 @@ int fgetc(FILE *f) {
 
 int getc(FILE *f) { return fgetc(f); }
 
+/* getchar was MISSING here until the aarch64 port asked for it, and
+ * nothing noticed because glibc's <stdio.h> defines it as a macro
+ * (`getc(stdin)`) — so every x86 build resolved the call in the
+ * preprocessor and never reached the library. musl declares it as a
+ * function, the way the standard describes it, and the link failed on
+ * runtime_core.c's `nurl_read_int`. A libc that provides getc and
+ * fgetc but not getchar is a libc whose completeness depended on which
+ * headers happened to be installed. */
+int getchar(void) { return fgetc(stdin); }
+
 int ungetc(int c, FILE *f) {
     if (c < 0) return -1;
     f->ungot = c & 0xff;

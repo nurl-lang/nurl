@@ -27,10 +27,12 @@ Decided by coupling, not convenience:
 | `nolibc/` | the libc subset: `string.c`, `malloc.c`, `stdio.c`, `dtoa.c`, `math.c` (+ the generated `math_tables.h`), `misc.c`, `syscall_linux.c`, `tls_linux.c`, `start_x86_64.S`, `setjmp_x86_64.S` |
 | `runtime_bare.c` | threads, fibers, sync and entropy for one vCPU with nothing under it |
 | `net/sockets.nu` | the socket ABI (`nurl_tcp_*`, `nurl_udp_*`, `nurl_dns_*`, `nurl_reactor_wait_*`) in NURL, over the sans-IO stack in `stdlib/net/` |
-| `boot/` | the guest: PVH entry + long mode + SSE + the interrupt stubs (`boot.S`), the address space (`link.ld`), the machine's bottom edge (`platform_x86.c`), the pages themselves (`pagealloc.c`), the baked-in filesystem (`initfs.c`), the thread pointer without an auxv (`tls_guest.c`) |
+| `boot/` | the guest: PVH entry + long mode + SSE + the interrupt stubs (`boot.S`), the address space (`link.ld`), the machine's bottom edge (`platform_x86.c`), the pages themselves (`pagealloc.c`), the baked-in filesystem (`initfs.c`), the thread pointer without an auxv (`tls_guest.c`) — and their AArch64 counterparts `boot_arm64.S`, `link_arm64.ld`, `platform_arm64.c`, `tls_guest_arm64.c` (`pagealloc.c` and `initfs.c` are shared: portable C, one copy) |
 | `drivers/` | `virtionet.nu` — frames in and out over a real device |
-| `build_unikernel.sh` | build a `.nu` into a bootable PVH kernel image |
+| `build_unikernel.sh` | build a `.nu` into a bootable PVH kernel image (x86_64) |
+| `build_unikernel_arm64.sh` | the same, for AArch64 / QEMU `virt` |
 | `run_qemu.sh` · `run_qemu_tests.sh` | boot one image · run corpus tests inside the guest against their goldens |
+| `run_qemu_arm64.sh` · `run_qemu_arm64_tests.sh` | the AArch64 twins of those two |
 | `compile_nu.sh` | compile one program, pulling in `net/sockets.nu` when (and only when) it calls the socket ABI |
 | `demos/` | the programs that only make sense in the guest: devices, DHCP, a filesystem, a server, an MCP endpoint, TLS — and the two that are about failure, `fault.nu` and `soak.nu` |
 | `tests/` | the unit gates — differentials against glibc for strings, float formatting and libm; two allocator fuzzers; the scheduler's schedule and its deadlock detector |
@@ -350,6 +352,59 @@ bytes travel over the pure TCP stack and the virtio-net driver. The
 handshake is `stdlib/std/tls.nu` — pure NURL, no libssl, which is why
 it links here at all.
 
+## The second architecture (AArch64, QEMU `virt`)
+
+A second machine is what turns "portable" from an intention into a
+measured property, and the port is the size the design predicted:
+**four files** differ, and they are the four that talk to the machine.
+
+| | |
+|---|---|
+| `boot/boot_arm64.S` | EL2→EL1, FP/SIMD un-trapped, the vector table, `.bss`, the two stacks |
+| `boot/platform_arm64.c` | PL011 UART, the device tree, the MMU, the generic timer, RNDR, PSCI shutdown |
+| `boot/tls_guest_arm64.c` | the thread pointer — variant I, and **measured**, not assumed |
+| `nolibc/setjmp_aarch64.S` | `panic`/`recover`'s callee-saved set (which here includes `d8`–`d15`) |
+
+Everything else is the same code the x86_64 image runs: the runtime,
+nolibc, the sans-IO TCP/IP stack, the socket ABI, the virtio driver,
+the NURL program. `stdlib/runtime_ctx.c` gained an AArch64 fiber
+switch (AAPCS64: `x19`–`x28`, `x29`/`x30`, `d8`–`d15` and FPCR) beside
+the x86 one; the two are read together.
+
+The gate is `unikernel/run_qemu_arm64_tests.sh` — **15/15**: the same
+corpus programs against the same hosted goldens, the device demos,
+faults reported with exit 126, and an HTTP server in the guest
+answering `curl` on the host. A hello image is **131 784 bytes**, which
+is within a kilobyte of the x86_64 one (132 760) — the same program,
+the same runtime, two instruction sets. The floor is **5 MiB** (4 fails
+with `no usable memory above the image`: `virt` starts RAM at 1 GiB and
+the image links 2 MiB in).
+
+Three differences worth stating, because each was a debugging round:
+
+- **The device tree replaces the command line.** microvm announces its
+  virtio-mmio devices on the kernel command line; `virt` announces them
+  in the DTB. `platform_arm64.c` parses the tree and SYNTHESIZES the
+  same `virtio_mmio.device=size@base:irq` entries, so the NURL layer
+  above sees one format on both machines. `/chosen/bootargs` becomes
+  the command line the same way.
+- **`virt` is legacy virtio-mmio by default**, exactly as microvm is —
+  the guest read `version=1` off the register and refused every device,
+  correctly. `-global virtio-mmio.force-legacy=false` is as necessary
+  here as there.
+- **The clock is self-describing.** `CNTFRQ_EL0` states the frequency,
+  so there is no `tsc_khz=` handshake — that flag is an x86 quirk, not
+  part of the contract. `wallclock=` stays: a wall clock is the host's
+  to state on any machine.
+
+And one thing that is deliberately not assumed: the TLS image's offset
+from the thread pointer depends on the PT_TLS alignment the LINKER
+chose. `tls_guest_arm64.c` places the image, reads a canary
+`__thread` variable back through the compiler's own addressing, and
+accepts the placement only when the value is there — otherwise it says
+so and stops. A thread-local block that is off by sixteen bytes reads
+plausible garbage, which is the worst way for a port to be wrong.
+
 ## Measured
 
 `unikernel/bench_boot.sh` (QEMU 8.2, **TCG** — no `/dev/kvm` on this
@@ -438,8 +493,10 @@ unikernel/tests/run_unit_tests.sh        # strings / float format / libm /
 unikernel/run_nolibc_tests.sh            # the corpus, with no libc
 unikernel/run_qemu_tests.sh              # the guest, under a hypervisor
 unikernel/run_qemu_tests.sh hello        # one of them
+unikernel/run_qemu_arm64_tests.sh        # the guest, on the other architecture
 unikernel/build_nolibc.sh prog.nu        # build one program, no libc
-unikernel/build_unikernel.sh prog.nu     # build one bootable image
+unikernel/build_unikernel.sh prog.nu     # build one bootable image (x86_64)
+unikernel/build_unikernel_arm64.sh p.nu  # …and for AArch64 (needs zig)
 ```
 
 QEMU is the only thing the guest gate needs that a checkout does not
