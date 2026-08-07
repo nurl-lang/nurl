@@ -55,8 +55,9 @@ For any other client, configure an MCP server whose `command` is
 | `nurl_fmt` | `source` *or* `path` | Format to canonical form (`nurlfmt`); return the formatted source. |
 | `nurl_list_stdlib` | — | List the `.nu` modules in the installed stdlib (`$NURL_STDLIB`). |
 | `nurl_read_stdlib` | `name` | Read one stdlib module by path relative to the stdlib root (e.g. `core/string.nu`). |
-| `nurl_api` | `module` \| `query` | A module's API surface via nurldoc (signatures + doc comments + type definitions, no bodies — `ext/csv.nu` is 63 KB, its surface 11 KB), or an AND-term search over every module's declarations. Zero hits widen to the package registry; an exact package-name term is footnoted regardless. |
+| `nurl_api` | `module` \| `package` \| `query` | A module's API surface via nurldoc (signatures + doc comments + type definitions, no bodies — `ext/csv.nu` is 63 KB, its surface 11 KB), or an AND-term search over every module's declarations. A query no single declaration satisfies is re-run as a **whole-word OR ranked by coverage** — `string builder append` still lands on `string_push_bytes`, `vec_push new string_new` on `string_new` and `vec_push` — and only if that finds nothing does the reply widen to the package registry; an exact package-name term is footnoted regardless. |
 | `nurl_grep` | `pattern`, `where?`, `word?` | Case-insensitive search over the installed stdlib (`path:line:` hits, word-boundary matches ranked first) and the registry's package names + descriptions — "is there a package for X" from any MCP-only editor. |
+| `nurl_docs` | `name?`, `offset?` | The shipped `docs/` tree — the questions the API surface cannot answer: `MEMORY.md` (who frees what, and when), `CRYPTO.md`, `ASYNC.md`, `PLATFORMS.md`, `spec.md`, `dev/COMPILER_INTERNALS.md`, … No `name` lists everything with its size and title; a `name` returns that document (the `docs/` prefix and `.md` suffix optional, case-insensitive), paged with `offset` past 48 KB. Served from `$NURL_DOCS`, else `$NURL_STDLIB/docs` — `install-toolchain.sh` puts it there. |
 
 `source` is inline NURL; `path` is a `.nu` file on the host. Inline source is
 written to a unique temp file that is deleted after the call (build artifacts
@@ -84,7 +85,7 @@ nurl-mcp --http [--host ADDR] [--port N] [--token TOK] [--read-only] [--allow-ru
 | `--host ADDR` | `127.0.0.1` | Bind address. |
 | `--port N` | `8080` | Bind port. |
 | `--token TOK` | none | Require `Authorization: Bearer TOK` on every request (401 otherwise). |
-| `--read-only` | off | Expose only `nurl_check`, `nurl_fmt`, `nurl_list_stdlib`, `nurl_read_stdlib`, `nurl_api`, `nurl_grep` — no build, no run. |
+| `--read-only` | off | Expose only `nurl_check`, `nurl_fmt`, `nurl_list_stdlib`, `nurl_read_stdlib`, `nurl_api`, `nurl_grep`, `nurl_docs` — no build, no run. |
 | `--allow-run` | off | Allow `nurl_run` over HTTP (see Security). |
 
 ```

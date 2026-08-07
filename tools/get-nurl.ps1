@@ -133,7 +133,7 @@ try {
         # registry token (credentials), the model cache (models\), tool
         # assets (share\), and any program installed with `nurlpkg install`
         # (bin\<other>). Only the toolchain's own paths are removed; the
-        # archive overwrites the rest. build\, stdlib\, zig\ and libexec\
+        # archive overwrites the rest. build\, stdlib\, docs\, zig\ and libexec\
         # go wholesale so a file deleted upstream cannot linger.
         #
         # Windows cannot DELETE a running executable — and `nurl upgrade`
@@ -148,7 +148,7 @@ try {
                         Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
                 }
             }
-            foreach ($d in @("build", "stdlib", "zig", "libexec")) {
+            foreach ($d in @("build", "stdlib", "docs", "zig", "libexec")) {
                 Remove-ToolchainPath (Join-Path $Prefix $d)
             }
             foreach ($f in @("nurl.bat", "nurl.sh", "env",

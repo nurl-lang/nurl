@@ -58,7 +58,7 @@ $ `deps/wasmbuilder/src/build.nu`
 // to bump (previously the banners drifted to a stale 0.2.0 while the
 // handshake reported 0.4.0).
 
-@ nm_version → s { ^ `0.8.0` }
+@ nm_version → s { ^ `0.9.0` }
 
 // Log a startup banner "nurl-mcp <version> <suffix>" through mcp_log,
 // building the line from the single-source version so the banners can
@@ -776,6 +776,70 @@ version = "0.0.0"
     ^ ( env_var_or `NURL_STDLIB` `` )
 }
 
+// ── Tool: nurl_docs (shared engine: stdlib/ext/mcp_search) ──────────
+//
+// nurl_api answers "what is the signature", never "who frees this" or
+// "which cipher suites ship" — that is docs/MEMORY.md and
+// docs/CRYPTO.md. install-toolchain.sh ships the tree next to the
+// stdlib, so $NURL_STDLIB/docs is the default; $NURL_DOCS overrides it
+// (a source checkout, or a prefix assembled by hand).
+@ nm_docs_root → String {
+    : String explicit ( env_var_or `NURL_DOCS` `` )
+    ? > ( string_len explicit ) 0 { ^ explicit } {}
+    ( string_free explicit )
+    : String root ( nm_stdlib_root )
+    ? == ( string_len root ) 0 { ^ root } {}
+    : String d ( path_join ( string_data root ) `docs` )
+    ( string_free root )
+    ^ d
+}
+
+@ nm_tool_docs Json args → Json {
+    : ~ s name ``
+    ?? ( json_obj_get args `name` ) {
+        T nj → { ? ( json_is_str nj ) { = name ( json_as_str nj ) } {} }
+        F _ → {}
+    }
+    : ~ i offset 0
+    ?? ( json_obj_get args `offset` ) {
+        T oj → { ? ( json_is_num oj ) { = offset ( json_as_int oj ) } {} }
+        F _ → {}
+    }
+    : String dd ( nm_docs_root )
+    ? == ( string_len dd ) 0 {
+        ( string_free dd )
+        ^ ( mcp_tool_result_error `neither NURL_DOCS nor NURL_STDLIB is set — run via the installed toolchain shims, or export NURL_DOCS to a docs/ directory` )
+    } {}
+    ? == ( nurl_str_len name ) 0 {
+        : String listing ( msearch_docs_list ( string_data dd ) )
+        ( string_free dd )
+        : Json r ( mcp_tool_result_text ( string_data listing ) )
+        ( string_free listing )
+        ^ r
+    } {}
+    : String text ( msearch_docs_read ( string_data dd ) name offset )
+    ? == ( string_len text ) 0 {
+        // Unknown name → reply with what DOES exist, so the model's next
+        // call is the right one instead of another guess.
+        ( string_free text )
+        : String listing ( msearch_docs_list ( string_data dd ) )
+        ( string_free dd )
+        : String msg ( string_with_cap + ( string_len listing ) 128 )
+        ( string_push_str msg `no document matches '` )
+        ( string_push_str msg name )
+        ( string_push_str msg `'. ` )
+        ( string_push_str msg ( string_data listing ) )
+        ( string_free listing )
+        : Json e ( mcp_tool_result_error ( string_data msg ) )
+        ( string_free msg )
+        ^ e
+    } {}
+    ( string_free dd )
+    : Json r ( mcp_tool_result_text ( string_data text ) )
+    ( string_free text )
+    ^ r
+}
+
 @ nm_tool_api Json args → Json {
     : String root ( nm_stdlib_root )
     ? == ( string_len root ) 0 {
@@ -908,7 +972,7 @@ version = "0.0.0"
     ( nm_prop props `module` `Render ONE installed-stdlib module's API surface (signatures, doc comments, full type definitions — no function bodies). A nurl_list_stdlib path, e.g. 'ext/csv.nu'.` )
     ( nm_prop props `package` `Render a PUBLISHED registry package's API surface — nurldoc over its src/*.nu, streamed from the tarball. The name from a registry search, e.g. 'nn'. Use this after a registry hit to learn the functions/types a package exposes (their names are not otherwise searchable).` )
     ( nm_prop props `version` `Optional package version (e.g. '0.1.1'); defaults to the latest. Only meaningful with 'package'.` )
-    ( nm_prop props `query` `Search every installed-stdlib module's declarations: space-separated terms, ALL must occur (case-insensitive) in a declaration's signature + doc comment + module path. Zero hits widen to the package registry; an exact package-name term is noted regardless. Ignored when 'module' or 'package' is set.` )
+    ( nm_prop props `query` `Search every installed-stdlib module's declarations: space-separated terms, ALL must occur (case-insensitive) in a declaration's signature + doc comment + module path. When no declaration has all of them, the terms are re-run as an OR — each matched as a WHOLE word (bounded by a digit or any non-letter, so 'string' hits string_push_str but not substring) — and the best-covering declarations come back ranked, most terms covered first; only if that finds nothing too does the reply widen to the package registry. So a concept-shaped query like 'string builder append' is fine here. An exact package-name term is noted regardless. Ignored when 'module' or 'package' is set.` )
     ( json_obj_set schema `properties` props )
     ^ schema
 }
@@ -932,6 +996,23 @@ version = "0.0.0"
     ( json_obj_set p `type` ( json_str_lit `string` ) )
     ( json_obj_set p `description` ( json_str_lit desc ) )
     ( json_obj_set props name p )
+}
+
+@ nm_prop_int Json props s name s desc → v {
+    : Json p ( json_obj_new )
+    ( json_obj_set p `type` ( json_str_lit `integer` ) )
+    ( json_obj_set p `description` ( json_str_lit desc ) )
+    ( json_obj_set props name p )
+}
+
+@ nm_schema_docs → Json {
+    : Json schema ( json_obj_new )
+    ( json_obj_set schema `type` ( json_str_lit `object` ) )
+    : Json props ( json_obj_new )
+    ( nm_prop props `name` `Which document to return, e.g. 'MEMORY.md', 'CRYPTO.md', 'dev/COMPILER_INTERNALS.md'. The 'docs/' prefix and the '.md' suffix are both optional and matching is case-insensitive. Omit to list every document with its size and title.` )
+    ( nm_prop_int props `offset` `Byte offset to start from (default 0). Documents are capped at 48 KB per call; a truncated reply prints the exact offset to pass next.` )
+    ( json_obj_set schema `properties` props )
+    ^ schema
 }
 
 @ nm_schema_src_path → Json {
@@ -1011,8 +1092,11 @@ version = "0.0.0"
     ( vec_push [Json] tools ( mcp_tool_descriptor `nurl_read_stdlib`
     `Read one module from the installed standard library by relative path.`
     ( nm_schema_name ) ) )
+    ( vec_push [Json] tools ( mcp_tool_descriptor `nurl_docs`
+    `The docs/ prose tree shipped with the toolchain — the questions the API surface cannot answer: MEMORY.md (ownership: who frees what, and when), CRYPTO.md (the shipped cipher suites + TLS stack), ASYNC.md (stackful fibers), BUILDING.md, PLATFORMS.md, NETWORKING.md, DISTRIBUTED.md, FORMAT.md, LIMITATIONS.md, TOOLING.md, spec.md (the full language reference), dev/COMPILER_INTERNALS.md. Call with NO arguments for the index (path, size, title); then name='MEMORY.md' for one document. The 'docs/' prefix and '.md' suffix are optional, matching is case-insensitive, and 'offset' pages a document longer than 48 KB. Read this before guessing at memory, crypto, or platform behaviour — every one of those topics is documented.`
+    ( nm_schema_docs ) ) )
     ( vec_push [Json] tools ( mcp_tool_descriptor `nurl_api`
-    `A stdlib module's API surface, or a search across all of them — strongly prefer this over nurl_read_stdlib (whole modules waste context; ext/csv.nu is 63 KB, its API surface 11 KB, one matching declaration ~0.3 KB). module='ext/csv.nu' renders signatures + doc comments + type definitions; query='csv quote' finds matching declarations. The import-free C-runtime builtins (nurl_println, nurl_str_float, …) are indexed too, as core/builtins.nu. Zero hits widen to the package registry; an exact package-name term is footnoted regardless.`
+    `A stdlib module's API surface, or a search across all of them — strongly prefer this over nurl_read_stdlib (whole modules waste context; ext/csv.nu is 63 KB, its API surface 11 KB, one matching declaration ~0.3 KB). module='ext/csv.nu' renders signatures + doc comments + type definitions; query='csv quote' finds matching declarations. The import-free C-runtime builtins (nurl_println, nurl_str_float, …) are indexed too, as core/builtins.nu. A query no single declaration satisfies is re-run as a whole-word OR ranked by term coverage (so 'string builder append' still finds string_push_str), and only then widens to the package registry; an exact package-name term is footnoted regardless.`
     ( nm_schema_api ) ) )
     ( vec_push [Json] tools ( mcp_tool_descriptor `nurl_grep`
     `Case-insensitive search across the installed stdlib (path:line: text; word-boundary matches ranked first, in-word substring hits in a labeled tail) and the package registry (name + description) — "is there a package for X" works from any MCP-only editor. word=true for short acronyms.`
@@ -1041,6 +1125,7 @@ version = "0.0.0"
     ? != ( nurl_str_eq name `nurl_fmt` ) 0 { ^ ( nm_tool_fmt args ) } {}
     ? != ( nurl_str_eq name `nurl_list_stdlib` ) 0 { ^ ( nm_tool_list_stdlib args ) } {}
     ? != ( nurl_str_eq name `nurl_read_stdlib` ) 0 { ^ ( nm_tool_read_stdlib args ) } {}
+    ? != ( nurl_str_eq name `nurl_docs` ) 0 { ^ ( nm_tool_docs args ) } {}
     ? != ( nurl_str_eq name `nurl_api` ) 0 { ^ ( nm_tool_api args ) } {}
     ? != ( nurl_str_eq name `nurl_grep` ) 0 { ^ ( nm_tool_grep args ) } {}
     ^ ( mcp_tool_result_error `unknown tool` )
@@ -1066,7 +1151,7 @@ version = "0.0.0"
     ( json_obj_set caps `tools` ( json_obj_new ) )
     : Json result ( mcp_discover_result `nurl-mcp` ( nm_version )
     caps
-    `Local NURL toolchain: build/run/check/format NURL code, compile to wasm32-wasi, read the installed stdlib, browse API surfaces (nurl_api), search stdlib + the package registry (nurl_grep), and build registry-dependent projects (nurl_build_project). Start with nurl_api or nurl_grep to discover symbols, then nurl_check to validate code cheaply before nurl_build.` )
+    `Local NURL toolchain: build/run/check/format NURL code, compile to wasm32-wasi, read the installed stdlib, browse API surfaces (nurl_api), search stdlib + the package registry (nurl_grep), read the shipped documentation (nurl_docs), and build registry-dependent projects (nurl_build_project). Start with nurl_api or nurl_grep to discover symbols, nurl_docs for how the language behaves (ownership, crypto, async, platforms), then nurl_check to validate code cheaply before nurl_build.` )
     ^ ( mcp_response_result id result )
 }
 

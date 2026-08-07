@@ -8,6 +8,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **MCP tool `nurl_docs` — the documentation tree an agent could not
+  reach.** `nurl_api` answers "what is the signature"; it never answers
+  "who frees this", "which cipher suites ship", or "does this target
+  have threads". Those answers live in `docs/MEMORY.md`,
+  `docs/CRYPTO.md` and `docs/PLATFORMS.md`, and until now exactly one of
+  the fourteen documents had a tool (`nurl_read_gotchas`) — so a model
+  driving NURL through MCP guessed at precisely the questions the
+  project has already written down. `nurl_docs` with no argument lists
+  the tree (path, size, title); with `name=` it returns one document.
+  The name is matched forgivingly — `MEMORY`, `memory.md`,
+  `docs/MEMORY.md` and `./memory.md` all reach the same file, and a bare
+  basename reaches a nested one (`COMPILER_INTERNALS` →
+  `dev/COMPILER_INTERNALS.md`) — because a model that has to guess the
+  exact spelling will spend calls guessing it. Documents are capped at
+  48 KB per call and the truncation line prints the exact `offset` to
+  pass for the rest, so `spec.md` is reachable in two calls instead of
+  being silently cut. A name that matches nothing answers with the index
+  rather than a bare error, which turns a wrong guess into the right
+  next call. Both servers expose it: the hosted playground
+  (`NURL_DOCS_DIR`, default `/opt/nurl/docs`) and the local `nurl-mcp`
+  package (`$NURL_DOCS`, else `$NURL_STDLIB/docs`) —
+  `install-toolchain.{sh,bat}` now ship `docs/` into the prefix, so an
+  installed toolchain carries its own documentation.
+
+### Changed
+
+- **`nurl_api` answers concept queries instead of shrugging at them.**
+  The query search AND-matches its terms, which is right when a model
+  names one thing two ways and wrong when it names a concept: nothing in
+  the stdlib is one declaration that contains all of `string`, `builder`
+  and `append`, and `vec_push new string_new` is three *different*
+  functions. Both used to return zero and jump straight to examples and
+  the package registry — past `string_push_str`, which was sitting right
+  there. Now a zero-hit query is re-run as an OR over the same
+  declaration blocks, with two rules that keep the result small. Terms
+  match as WHOLE words (the adjacent byte must not be a letter, so
+  `string` hits `string_push_str`, `string_new` and "a string", and
+  misses `substring`), and each hit is ranked by how much of the query it
+  covers — terms weighted by LENGTH, since `new` is three characters half
+  the constructors contain while `vec_push` is eight that name one
+  function, and a term in the declaration's own name outranks one in its
+  prose. The top twelve come back labelled `[2/3 terms]`. Only if the OR
+  pass finds nothing does the reply widen to examples and the registry as
+  before, so the corpus fallback no longer buries a real answer. Shared
+  engine (`stdlib/ext/mcp_search.nu`), so the playground and the local
+  `nurl-mcp` gained it together.
+
 ## [0.35.0] — 2026-08-07
 
 ### Added

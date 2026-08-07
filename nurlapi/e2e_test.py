@@ -188,12 +188,13 @@ def t_mcp_info(c: Client) -> None:
     assert_eq("transport", j.get("transport"), "streamable-http")
     assert_eq("url_path", j.get("url_path"), "/mcp")
     tools = j.get("tools", [])
-    assert_eq("18 tools advertised", len(tools), 18)
+    assert_eq("20 tools advertised", len(tools), 20)
     for t in (
         "nurl_build_native",
         "nurl_build_wasm",
         "nurl_list_examples",
         "nurl_read_grammar",
+        "nurl_docs",
         "nurl_changelog",
         "nurl_api",
         "nurl_grep",
@@ -267,7 +268,7 @@ def t_tools_list(c: Client) -> None:
     print("\n[MCP] tools/list")
     _, _, env = c.rpc({"jsonrpc": "2.0", "id": 3, "method": "tools/list"})
     tools = env.get("result", {}).get("tools", [])
-    assert_eq("18 tools", len(tools), 18)
+    assert_eq("20 tools", len(tools), 20)
     names = {t.get("name") for t in tools}
     for required in (
         "nurl_build_native",
@@ -285,6 +286,7 @@ def t_tools_list(c: Client) -> None:
         "nurl_read_readme",
         "nurl_read_roadmap",
         "nurl_read_gotchas",
+        "nurl_docs",
         "nurl_changelog",
         "nurl_api",
         "nurl_grep",
@@ -388,6 +390,56 @@ def t_tools_call_changelog(c: Client) -> None:
     assert_true("no-match has guidance", "No matches" in text)
 
 
+def t_tools_call_docs(c: Client) -> None:
+    print("\n[MCP] tools/call nurl_docs (index / read / forgiving names / paging)")
+
+    # No arguments → the index of everything under docs/.
+    env = _tool_call(c, "nurl_docs", {})
+    text = _tool_text(env)
+    assert_true("index reports a count", "document(s) under docs/" in text)
+    assert_true("index lists MEMORY.md", "MEMORY.md" in text)
+    assert_true("index lists a nested doc", "dev/COMPILER_INTERNALS.md" in text)
+    assert_true("index carries titles", "NURL Memory Model" in text)
+
+    # Exact name.
+    env = _tool_call(c, "nurl_docs", {"name": "CRYPTO.md"})
+    text = _tool_text(env)
+    assert_true("read echoes the path", text.startswith("docs/CRYPTO.md"))
+    assert_true("read returns the body", "Cryptography & TLS" in text)
+
+    # The 'docs/' prefix, the '.md' suffix and the case are all optional,
+    # and a basename reaches a nested document.
+    for name in ("memory", "MEMORY.md", "docs/MEMORY.md", "./memory.md"):
+        env = _tool_call(c, "nurl_docs", {"name": name})
+        text = _tool_text(env)
+        assert_true(f"name {name!r} resolves to MEMORY.md", text.startswith("docs/MEMORY.md"))
+    env = _tool_call(c, "nurl_docs", {"name": "COMPILER_INTERNALS"})
+    assert_true(
+        "basename reaches the nested doc",
+        _tool_text(env).startswith("docs/dev/COMPILER_INTERNALS.md"),
+    )
+
+    # spec.md is past the 48 KB cap: the reply says where it stopped and
+    # the printed offset returns the rest.
+    env = _tool_call(c, "nurl_docs", {"name": "spec"})
+    text = _tool_text(env)
+    assert_true("oversize doc is truncated", "truncated at" in text)
+    assert_true("truncation names the next offset", "continue with offset=" in text)
+    off = int(text.split("continue with offset=")[1].split()[0])
+    env = _tool_call(c, "nurl_docs", {"name": "spec", "offset": off})
+    text = _tool_text(env)
+    assert_true("offset page reports its range", f"[bytes {off}" in text)
+
+    # Traversal is refused, and an unknown name answers with the index
+    # rather than a bare error.
+    env = _tool_call(c, "nurl_docs", {"name": "../../etc/passwd"})
+    assert_true("traversal refused", bool(env.get("result", {}).get("isError")))
+    env = _tool_call(c, "nurl_docs", {"name": "no-such-doc"})
+    res = env.get("result", {})
+    assert_true("unknown name errors", bool(res.get("isError")))
+    assert_true("unknown name lists what exists", "document(s) under docs/" in _tool_text(env))
+
+
 def t_tools_call_api(c: Client) -> None:
     print("\n[MCP] tools/call nurl_api (module / query / errors)")
 
@@ -418,11 +470,39 @@ def t_tools_call_api(c: Client) -> None:
 
     # 0-hit widening: 'calculator' exists in examples but no stdlib
     # declaration carries it — the same reply must surface the example.
+    # One term, so the OR pass (which needs two) never runs.
     env = _tool_call(c, "nurl_api", {"query": "calculator"})
     text = _tool_text(env)
     assert_true("0-hit reports widening", "widened the search" in text)
     assert_true("0-hit lists the example", "examples/calculator.nu" in text)
     assert_true("example carries its blurb", "expression evaluator" in text)
+
+    # Concept queries: no declaration holds all the terms, so the same
+    # terms are re-run as a whole-word OR ranked by coverage. This has to
+    # answer with the real functions instead of jumping to the registry.
+    env = _tool_call(c, "nurl_api", {"query": "vec_push new string_new"})
+    text = _tool_text(env)
+    assert_true("OR pass announces itself", "matching ANY term as a whole word" in text)
+    assert_true("OR pass labels coverage", "[2/3 terms]" in text)
+    assert_true("OR pass finds string_new", "string_new" in text)
+    assert_true("OR pass finds vec_push", "vec_push" in text)
+    assert_true("OR hit suppresses the corpus widening", "widened the search" not in text)
+
+    env = _tool_call(c, "nurl_api", {"query": "hash map insert"})
+    text = _tool_text(env)
+    assert_true("OR pass reaches the hashmap module", "std/hashmap.nu" in text)
+
+    # Whole-word only: 'string' must reach string_push_str, never a
+    # declaration whose only claim is the word 'substring'.
+    env = _tool_call(c, "nurl_api", {"query": "string builder append"})
+    text = _tool_text(env)
+    assert_true("OR pass ranks by module", "core/string.nu" in text)
+
+    # Nothing anywhere: two terms, no whole-word hit either — the corpus
+    # widening still has to run.
+    env = _tool_call(c, "nurl_api", {"query": "zzzqqq wwwxxx"})
+    text = _tool_text(env)
+    assert_true("dead query still widens", "widened the search" in text)
 
     # Errors: unknown module, and neither argument.
     env = _tool_call(c, "nurl_api", {"module": "ext/zzz-nope.nu"})
@@ -986,6 +1066,7 @@ def main() -> int:
     t_tools_call_listing(c)
     t_tools_call_reads(c)
     t_tools_call_changelog(c)
+    t_tools_call_docs(c)
     t_tools_call_api(c)
     t_tools_call_grep(c)
     t_tools_call_traversal(c)

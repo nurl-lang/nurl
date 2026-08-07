@@ -169,7 +169,7 @@ esac
 #   bin/<other tools>    programs installed via nurlpkg install
 # Wiping the whole prefix (as this did) silently logged the user out and
 # removed every installed tool. Remove only the toolchain's OWN paths —
-# the four shipped binaries, build/, stdlib/, zig/, libexec/, the shims —
+# the four shipped binaries, build/, stdlib/, docs/, zig/, libexec/, the shims —
 # and let tar overwrite the rest. Those directories are removed wholesale
 # so a file deleted upstream cannot linger.
 #
@@ -179,7 +179,7 @@ esac
 # Windows installer has to work around the same case differently.
 if [ -e "$PREFIX" ]; then
     if [ -x "$PREFIX/bin/nurl" ] || [ -x "$PREFIX/bin/nurlc" ] || [ -z "$(ls -A "$PREFIX" 2>/dev/null)" ]; then
-        rm -rf "$PREFIX/build" "$PREFIX/stdlib" "$PREFIX/zig" "$PREFIX/libexec"
+        rm -rf "$PREFIX/build" "$PREFIX/stdlib" "$PREFIX/docs" "$PREFIX/zig" "$PREFIX/libexec"
         rm -f  "$PREFIX/nurl.sh" "$PREFIX/nurl.bat" "$PREFIX/env" \
                "$PREFIX/bin/nurl" "$PREFIX/bin/nurlc" \
                "$PREFIX/bin/nurlfmt" "$PREFIX/bin/nurlpkg"

@@ -18,6 +18,7 @@
 #    $PREFIX/build/nurlc            the compiler
 #    $PREFIX/build/nurlpkg          the package manager
 #    $PREFIX/stdlib/                the stdlib tree (+ runtime.o, sentinels)
+#    $PREFIX/docs/                  the documentation tree (nurl-mcp nurl_docs)
 #    $PREFIX/nurl.sh               the .nu → native build driver
 #    $PREFIX/bin/{nurl,nurlc,nurlpkg}   PATH shims (export NURL_STDLIB)
 #    $PREFIX/env                   sourceable: exports NURL_STDLIB + PATH
@@ -33,7 +34,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PREFIX="${NURL_HOME:-$HOME/.nurl}"
 
 if [[ "${1:-}" == "--uninstall" ]]; then
-    rm -rf "$PREFIX/bin" "$PREFIX/build" "$PREFIX/stdlib" "$PREFIX/zig" "$PREFIX/nurl.sh" "$PREFIX/env"
+    rm -rf "$PREFIX/bin" "$PREFIX/build" "$PREFIX/stdlib" "$PREFIX/docs" "$PREFIX/zig" "$PREFIX/nurl.sh" "$PREFIX/env"
     echo "Removed NURL toolchain from $PREFIX"
     echo "(You may want to drop the 'source $PREFIX/env' line from your shell rc.)"
     exit 0
@@ -67,6 +68,14 @@ fi
 # nurl.sh consults, and any canvas.o. Copy the whole directory so the
 # installed driver links exactly like the in-tree one.
 cp -a "$ROOT/stdlib/." "$PREFIX/stdlib/"
+
+# Documentation tree — MEMORY.md, CRYPTO.md, spec.md, … This is what the
+# nurl-mcp `nurl_docs` tool serves ($NURL_STDLIB/docs, i.e. right here),
+# so an agent driving the installed toolchain can read how ownership,
+# crypto or async actually behave instead of inferring it from
+# signatures. Text only; a few hundred KB.
+mkdir -p "$PREFIX/docs"
+cp -a "$ROOT/docs/." "$PREFIX/docs/"
 
 # Build driver (resolves build/nurlc + stdlib/runtime.o relative to itself).
 install -m755 "$ROOT/nurl.sh" "$PREFIX/nurl.sh"
@@ -189,6 +198,7 @@ else
     echo "  installed:  nurl, nurlc, nurlpkg  → $PREFIX/bin"
 fi
 echo "  stdlib:     \$NURL_STDLIB                  → $PREFIX/stdlib"
+echo "  docs:                                     → $PREFIX/docs"
 echo
 echo "Activate it in this shell and future ones:"
 echo "    source $PREFIX/env"

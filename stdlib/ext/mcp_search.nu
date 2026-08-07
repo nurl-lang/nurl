@@ -5,15 +5,20 @@
 //   * msearch_api_module — one module's API surface via nurldoc
 //     (signatures + doc comments + full type definitions, no bodies)
 //   * msearch_api_query  — AND-term search over every module's
-//     declaration blocks; zero hits widen automatically to example
-//     programs and the package registry; an exact package-name term is
-//     noted in a footer regardless of hit count
+//     declaration blocks; zero hits re-run the terms as a whole-word OR
+//     ranked by coverage, and only if THAT finds nothing does the search
+//     widen to example programs and the package registry; an exact
+//     package-name term is noted in a footer regardless of hit count
 //   * msearch_grep       — case-insensitive substring grep with
 //     word-boundary RANKING (boundary-clean lines first, in-word tail
 //     labeled; word=T drops the tail), plus registry name+description
 //     search
-//   * msearch_walk_nu_files — recursive .nu lister ({name,path,bytes}
-//     into a Json array), shared by the corpus walkers and list tools
+//   * msearch_docs_list / msearch_docs_resolve / msearch_docs_read —
+//     the docs/ prose tree (MEMORY.md, CRYPTO.md, …): what exists, and
+//     one document by a forgiving name
+//   * msearch_walk_nu_files / msearch_walk_md_files — recursive
+//     listers ({name,path,bytes} into a Json array), shared by the
+//     corpus walkers and list tools
 //
 // All entry points take explicit directory paths and a registry base
 // URL ("" skips that part) — no environment reads in here; resolve
@@ -54,14 +59,14 @@ $ `stdlib/ext/nurldoc.nu`
     ^ ( string_from root )
 }
 
-// Walk `root_dir` recursively. For every regular .nu file found,
-// append { name: <rel>, path: <rel>, bytes: N } to `arr`. `rel` is
-// the path relative to root_dir (POSIX-style, "/" separator).
+// Walk `root_dir` recursively. For every regular file whose name ends
+// in `ext`, append { name: <rel>, path: <rel>, bytes: N } to `arr`.
+// `rel` is the path relative to root_dir (POSIX-style, "/" separator).
 // Subdirectories are entered if dir_list succeeds on them. Entries
 // at each level are sorted alphabetically before walking, which gives
 // a globally sorted output (top-level "foo.nu" comes before subdir
 // "g/bar.nu" iff "foo.nu" < "g" lexicographically).
-@ msearch_walk_nu_files Json arr s root_dir s rel_prefix → v {
+@ __ms_walk_ext Json arr s root_dir s rel_prefix s ext → v {
     : String full ( __ms_join_or_root root_dir rel_prefix )
     : !( Vec String ) IoErr dr ( dir_list ( string_data full ) )
     ?? dr {
@@ -76,7 +81,7 @@ $ `stdlib/ext/nurldoc.nu`
                     T name → {
                         : String child_rel ( __ms_join_or_root rel_prefix ( string_data name ) )
                         : String child_full ( path_join ( string_data full ) ( string_data name ) )
-                        ? ( string_ends_with name `.nu` ) {
+                        ? ( string_ends_with name ext ) {
                             : !i IoErr sz ( file_size ( string_data child_full ) )
                             ?? sz {
                                 T bytes → {
@@ -90,7 +95,7 @@ $ `stdlib/ext/nurldoc.nu`
                             }
                         } {
                             // Try to recurse — if it's a directory, dir_list succeeds.
-                            ( msearch_walk_nu_files arr root_dir ( string_data child_rel ) )
+                            ( __ms_walk_ext arr root_dir ( string_data child_rel ) ext )
                         }
                         ( string_free child_full )
                         ( string_free child_rel )
@@ -109,6 +114,16 @@ $ `stdlib/ext/nurldoc.nu`
         F _ → {}
     }
     ( string_free full )
+}
+
+// The .nu corpus walker every search path uses.
+@ msearch_walk_nu_files Json arr s root_dir s rel_prefix → v {
+    ( __ms_walk_ext arr root_dir rel_prefix `.nu` )
+}
+
+// The .md corpus walker behind nurl_docs.
+@ msearch_walk_md_files Json arr s root_dir s rel_prefix → v {
+    ( __ms_walk_ext arr root_dir rel_prefix `.md` )
 }
 
 // Render one stdlib module's doc surface; "" when unreadable.
@@ -746,6 +761,300 @@ $ `stdlib/ext/nurldoc.nu`
     ( json_free files )
 }
 
+// ── nurl_api: OR widening when every term together matches nothing ──
+//
+// A model that asks for "string builder append" or "vec_push new
+// string_new" is naming a CONCEPT, not a conjunction any single
+// declaration satisfies — and the AND search answers 0. Jumping
+// straight from there to examples + registry throws away the fact that
+// the stdlib does have string_push_str and vec_push; it just never has
+// them in one declaration.
+//
+// So before widening the corpus, widen the OPERATOR: re-run the same
+// terms as an OR over the same declaration blocks — but counting only
+// WHOLE-word occurrences (the adjacent byte must not be a letter, so
+// `string` hits string_push_str, string_new and `a string`, and misses
+// substring), and rank each block by how much of the query it covers —
+// see __ms_or_score2 for the weighting. That floats vec_push and
+// string_new to the top of a three-term query instead of burying them
+// under the ~200 declarations that merely say `new`.
+
+// How many blocks the OR pass shows. Small on purpose: the point is the
+// two or three declarations the model actually meant, not a corpus dump.
+@ __ms_api_or_cap → i { ^ 12 }
+
+// Terms shorter than this are dropped from the OR pass — a one-letter
+// whole word matches half the corpus and tells the model nothing.
+@ __ms_or_min_term → i { ^ 2 }
+
+@ __ms_or_usable_terms ( Vec String ) terms → i {
+    : i n ( vec_len [String] terms )
+    : ~ i c 0
+    : ~ i k 0
+    ~ < k n {
+        ?? ( vec_get [String] terms k ) {
+            T t → { ? >= ( string_len t ) ( __ms_or_min_term ) { = c + c 1 } {} }
+            F _ → {}
+        }
+        = k + k 1
+    }
+    ^ c
+}
+
+// Whole-word occurrences of `pat` in `hay` (both already lowercase) —
+// the counting twin of __ms_grep_line_class, same boundary rule.
+@ __ms_word_occ s hay s pat → i {
+    : i n ( nurl_str_len hay )
+    : i m ( nurl_str_len pat )
+    ? | == m 0 > m n { ^ 0 } {}
+    : ~ i cnt 0
+    : ~ i k 0
+    ~ <= k - n m {
+        : ~ b hit T
+        : ~ i j 0
+        ~ & hit < j m {
+            ? != ( nurl_str_get hay + k j ) ( nurl_str_get pat j ) { = hit F } {}
+            = j + j 1
+        }
+        ? hit {
+            : ~ b lb T
+            ? > k 0 { = lb ! ( __ms_grep_alpha ( nurl_str_get hay - k 1 ) ) } {}
+            : ~ b rb T
+            ? < + k m n { = rb ! ( __ms_grep_alpha ( nurl_str_get hay + k m ) ) } {}
+            ? & lb rb { = cnt + cnt 1 } {}
+        } {}
+        = k + k 1
+    }
+    ^ cnt
+}
+
+// Coverage score for one declaration, packed into a single sortable i:
+//
+//   coverage: Σ length of the distinct terms found  × 100000
+//   the same sum restricted to `sig_lc`             ×   1000
+//   total occurrences (clamped to 999)                        tiebreak
+//
+// Terms are weighted by LENGTH, not counted: `new` is three characters
+// that half the stdlib constructors contain, `vec_push` is eight that
+// name one function, and a ranking that scores them equally buries the
+// exact hit under the generic ones. `sig_lc` — module path + the
+// declaration's signature line — then separates a term in the NAME from
+// a term in the prose, so "string builder append" reaches
+// string_push_bytes before the ArgParser struct, which wins on raw
+// repetition alone (its body says String eight times).
+//
+// `stats` (≥ 1 element) receives the distinct-term count at [0] for the
+// "[2/3 terms]" label. Pass "" as sig_lc for a plain any-term test.
+// Returns 0 ⇔ no term occurs at all.
+@ __ms_or_score2 s sig_lc s hay_lc ( Vec String ) terms ( Vec i ) stats → i {
+    : i n ( vec_len [String] terms )
+    : ~ i hits 0
+    : ~ i cov 0
+    : ~ i sig_cov 0
+    : ~ i total 0
+    : ~ i k 0
+    ~ < k n {
+        ?? ( vec_get [String] terms k ) {
+            T t → {
+                : i tl ( string_len t )
+                ? >= tl ( __ms_or_min_term ) {
+                    : i c ( __ms_word_occ hay_lc ( string_data t ) )
+                    ? > c 0 {
+                        = hits + hits 1
+                        = cov + cov tl
+                        = total + total c
+                    } {}
+                    ? > ( nurl_str_len sig_lc ) 0 {
+                        ? > ( __ms_word_occ sig_lc ( string_data t ) ) 0 { = sig_cov + sig_cov tl } {}
+                    } {}
+                } {}
+            }
+            F _ → {}
+        }
+        = k + k 1
+    }
+    ( vec_set [i] stats 0 hits )
+    ? == hits 0 { ^ 0 } {}
+    ^ + + * cov 100000 * sig_cov 1000 ? > total 999 999 total
+}
+
+// Keep the `cap` highest-scoring snippets, best first. `scores`/`texts`
+// stay parallel and sorted descending; a snippet that cannot make the
+// cut is simply not copied.
+@ __ms_topk_push ( Vec i ) scores ( Vec String ) texts i cap i score s text → v {
+    : i n ( vec_len [i] scores )
+    : ~ i pos n
+    : ~ i k 0
+    ~ < k n {
+        ?? ( vec_get [i] scores k ) {
+            T sv → { ? & == pos n > score sv { = pos k } {} }
+            F _ → {}
+        }
+        = k + k 1
+    }
+    ? | < n cap < pos cap {
+        ( vec_insert [i] scores pos score )
+        ( vec_insert [String] texts pos ( string_from text ) )
+        ? > ( vec_len [i] scores ) cap {
+            ( vec_remove [i] scores cap )
+            ?? ( vec_remove [String] texts cap ) { T old → ( string_free old ) F _ → {} }
+        } {}
+    } {}
+}
+
+// Score one rendered module's declaration blocks against the OR terms
+// and offer each hit to the top-K. ctr = [matched].
+@ __ms_or_match_blocks String md s rel ( Vec String ) terms i nterms ( Vec i ) scores ( Vec String ) texts ( Vec i ) ctr ( Vec i ) stats → v {
+    : ( Vec String ) parts ( string_split md `\n### ` )
+    : i np ( vec_len [String] parts )
+    : ~ i k 1  // part 0 = title + module header, not a declaration block
+    ~ < k np {
+        ?? ( vec_get [String] parts k ) {
+            T blk → {
+                : String hay ( string_with_cap + ( string_len blk ) 64 )
+                ( string_push_str hay rel )
+                ( string_push_char hay 32 )
+                ( string_push_str hay ( string_data blk ) )
+                : String hay_lc ( string_to_lower hay )
+                ( string_free hay )
+                // The signature haystack: module path + the block's first
+                // line, which nurldoc renders as the declaration itself.
+                : String sig ( string_with_cap 160 )
+                ( string_push_str sig rel )
+                ( string_push_char sig 32 )
+                : s braw ( string_data blk )
+                : i bl ( string_len blk )
+                : ~ i si 0
+                ~ & < si bl != ( nurl_str_get braw si ) 10 {
+                    ( string_push_char sig ( nurl_str_get braw si ) )
+                    = si + si 1
+                }
+                : String sig_lc ( string_to_lower sig )
+                ( string_free sig )
+                : i sc ( __ms_or_score2 ( string_data sig_lc ) ( string_data hay_lc ) terms stats )
+                ( string_free sig_lc )
+                ( string_free hay_lc )
+                ? > sc 0 {
+                    : i m ?? ( vec_get [i] ctr 0 ) { T v → v F _ → 0 }
+                    ( vec_set [i] ctr 0 + m 1 )
+                    : String snip ( string_with_cap 640 )
+                    ( string_push_str snip rel )
+                    ( string_push_str snip ` [` )
+                    ( string_push_int snip ?? ( vec_get [i] stats 0 ) { T v → v F _ → 0 } )
+                    ( string_push_char snip 47 )
+                    ( string_push_int snip nterms )
+                    ( string_push_str snip ` terms] › ` )
+                    : i bn ( string_len blk )
+                    : i keep ? > bn 500 500 bn
+                    : s raw ( string_data blk )
+                    : ~ i j 0
+                    ~ < j keep {
+                        ( string_push_char snip ( nurl_str_get raw j ) )
+                        = j + j 1
+                    }
+                    ? > bn keep { ( string_push_str snip `…` ) } {}
+                    ( __ms_topk_push scores texts ( __ms_api_or_cap ) sc ( string_data snip ) )
+                    ( string_free snip )
+                } {}
+            }
+            F _ → {}
+        }
+        = k + k 1
+    }
+    ( vec_free_with [String] parts \ String p → v { ( string_free p ) } )
+}
+
+// Run the OR pass over every module under stdlib_dir, append the ranked
+// hits to `out`, and return how many declarations matched at least one
+// term (0 ⇒ nothing found; the caller falls through to the corpus
+// widening exactly as before).
+@ __ms_api_or_widen s stdlib_dir ( Vec String ) terms String out → i {
+    : i nterms ( __ms_or_usable_terms terms )
+    ? < nterms 2 { ^ 0 } {}
+    : ( Vec i ) scores ( vec_new [i] )
+    : ( Vec String ) texts ( vec_new [String] )
+    : ( Vec i ) ctr ( vec_new [i] )
+    ( vec_push [i] ctr 0 )
+    : ( Vec i ) stats ( vec_new [i] )
+    ( vec_push [i] stats 0 )
+    : String dir ( string_from stdlib_dir )
+    : Json files ( json_arr_new )
+    ( msearch_walk_nu_files files ( string_data dir ) `` )
+    : i nf ( json_arr_len files )
+    : ~ i k 0
+    ~ < k nf {
+        ?? ( json_arr_get files k ) {
+            T fo → {
+                : ~ s rel ``
+                ?? ( json_obj_get fo `path` ) {
+                    T pj → { ? ( json_is_str pj ) { = rel ( json_as_str pj ) } {} }
+                    F _ → {}
+                }
+                ? > ( nurl_str_len rel ) 0 {
+                    : String fp ( path_join ( string_data dir ) rel )
+                    : !( Vec u ) IoErr rd ( read_file_bytes ( string_data fp ) )
+                    ( string_free fp )
+                    ?? rd {
+                        T bytes → {
+                            : String src ( bytes_to_str bytes )
+                            ( vec_free [u] bytes )
+                            // Same raw-source pre-filter as the AND pass,
+                            // ORed: render only modules that can contribute.
+                            : String pre ( string_with_cap + ( string_len src ) 64 )
+                            ( string_push_str pre rel )
+                            ( string_push_char pre 32 )
+                            ( string_push_str pre ( string_data src ) )
+                            : String pre_lc ( string_to_lower pre )
+                            ( string_free pre )
+                            ? > ( __ms_or_score2 `` ( string_data pre_lc ) terms stats ) 0 {
+                                : String md ( nurldoc_render ( string_data src ) rel )
+                                ( __ms_or_match_blocks md rel terms nterms scores texts ctr stats )
+                                ( string_free md )
+                            } {}
+                            ( string_free pre_lc )
+                            ( string_free src )
+                        }
+                        F _ → {}
+                    }
+                } {}
+            }
+            F _ → {}
+        }
+        = k + k 1
+    }
+    ( json_free files )
+    ( string_free dir )
+
+    : i matched ?? ( vec_get [i] ctr 0 ) { T v → v F _ → 0 }
+    : i shown ( vec_len [String] texts )
+    ? > shown 0 {
+        ( string_push_str out `No declaration contains every term. Nearest declarations matching ANY term as a whole word, ranked by how much of the query they cover — a longer, more specific term counts for more than a short common one, and a term in the declaration's own name counts for more than one in its prose:\n\n` )
+        : ~ i j 0
+        ~ < j shown {
+            ?? ( vec_get [String] texts j ) {
+                T t → {
+                    ( string_push_str out ( string_data t ) )
+                    ( string_push_str out `\n\n` )
+                }
+                F _ → {}
+            }
+            = j + j 1
+        }
+        ? > matched shown {
+            ( string_push_str out `(` )
+            ( string_push_int out matched )
+            ( string_push_str out ` declarations match at least one term; the ` )
+            ( string_push_int out shown )
+            ( string_push_str out ` with the best coverage are above. Search one of the terms alone for the rest, or read a module with 'module'.)\n` )
+        } {}
+    } {}
+    ( vec_free [i] scores )
+    ( vec_free [i] ctr )
+    ( vec_free [i] stats )
+    ( vec_free_with [String] texts \ String t → v { ( string_free t ) } )
+    ^ matched
+}
+
 // One module's API surface (nurldoc render, byte-capped with a note);
 // "" when the module is unreadable/missing.
 @ msearch_api_module s stdlib_dir s rel → String {
@@ -827,17 +1136,29 @@ $ `stdlib/ext/nurldoc.nu`
     ( string_push_str hdr query )
     ( string_push_str hdr `'.\n\n` )
     ( string_push_str hdr ( string_data out ) )
+    // `widened` = the corpus fallback ran and already listed registry
+    // matches in full, so the one-line exact-name footer would repeat it.
+    : ~ b widened F
     ? == matched 0 {
-        // Widen rather than shrug: the same terms against example files
-        // and the package registry, in the same reply.
-        ( string_push_str hdr `No stdlib declaration matches — widened the search:\n\n` )
-        : ~ i ex_n 0
-        ? > ( nurl_str_len examples_dir ) 0 { = ex_n ( __ms_api_fallback_examples examples_dir terms hdr ) } {}
-        ? > ex_n 0 { ( string_push_char hdr 10 ) } {}
-        : ~ i pk_n 0
-        ? > ( nurl_str_len regbase ) 0 { = pk_n ( __ms_api_fallback_packages regbase terms hdr ) } {}
-        ? == + ex_n pk_n 0 {
-            ( string_push_str hdr `Nothing in examples or the registry either — terms are AND-ed substrings; try fewer or shorter terms, or nurl_grep for raw line search.\n` )
+        // Widen the OPERATOR first: the same terms ORed, whole-word,
+        // ranked by coverage. A multi-term concept query ("string builder
+        // append") lands on real declarations here, and when it does the
+        // corpus fallback stays out of the reply — the point of the pass
+        // is fewer, better hits, not more of them.
+        : i or_n ( __ms_api_or_widen stdlib_dir terms hdr )
+        ? == or_n 0 {
+            // Widen rather than shrug: the same terms against example files
+            // and the package registry, in the same reply.
+            = widened T
+            ( string_push_str hdr `No stdlib declaration matches — widened the search:\n\n` )
+            : ~ i ex_n 0
+            ? > ( nurl_str_len examples_dir ) 0 { = ex_n ( __ms_api_fallback_examples examples_dir terms hdr ) } {}
+            ? > ex_n 0 { ( string_push_char hdr 10 ) } {}
+            : ~ i pk_n 0
+            ? > ( nurl_str_len regbase ) 0 { = pk_n ( __ms_api_fallback_packages regbase terms hdr ) } {}
+            ? == + ex_n pk_n 0 {
+                ( string_push_str hdr `Nothing in examples or the registry either — terms are AND-ed substrings; try fewer or shorter terms, or nurl_grep for raw line search.\n` )
+            } {}
         } {}
     } {}
     ? > matched emitted {
@@ -845,9 +1166,8 @@ $ `stdlib/ext/nurldoc.nu`
         ( string_push_int hdr - matched emitted )
         ( string_push_str hdr ` more matching declarations omitted (byte cap) — narrow the query or read one module with 'module'.\n` )
     } {}
-    // The 0-hit path already listed registry matches in full; otherwise an
-    // exact package-name hit still deserves its one-line footer.
-    ? & > matched 0 > ( nurl_str_len regbase ) 0 { ( __ms_api_exact_pkg_note regbase terms hdr ) } {}
+    // An exact package-name hit still deserves its one-line footer.
+    ? & ! widened > ( nurl_str_len regbase ) 0 { ( __ms_api_exact_pkg_note regbase terms hdr ) } {}
     ( string_free out ) ( vec_free [i] ctr )
     ( vec_free_with [String] terms \ String t → v { ( string_free t ) } )
     ( string_free q_lc )
@@ -1053,6 +1373,271 @@ $ `stdlib/ext/nurldoc.nu`
         ^ cut
     } {}
     ^ md
+}
+
+// ── Documentation corpus (item: nurl_docs) ─────────────────────────
+//
+// docs/ is the prose the API surface cannot answer: MEMORY.md (who owns
+// what, and when it is freed), CRYPTO.md (which cipher suites ship),
+// GOTCHAS.md, spec.md, … An agent that can only reach nurl_api ends up
+// guessing at exactly the questions these files answer, so both servers
+// expose the tree as one tool: no `name` lists what exists, a `name`
+// returns that document verbatim.
+
+// Byte budget for one document. spec.md (63 KB) and MEMORY.md (45 KB)
+// are the outliers; the rest fit whole. `offset` pages past the cut.
+@ __ms_docs_cap → i { ^ 49152 }
+
+// A document's `# ` title, "" when the file has none in its first few
+// lines. Used as the one-line blurb in the listing.
+@ __ms_docs_title String src → String {
+    : s raw ( string_data src )
+    : i n ( string_len src )
+    : ~ i k 0
+    : ~ i lines 0
+    : String t ( string_new )
+    ~ & & < k n < lines 8 == ( string_len t ) 0 {
+        : ~ i e k
+        ~ & < e n != ( nurl_str_get raw e ) 10 { = e + e 1 }
+        // "# Title" — one hash, then the text after the spaces.
+        ? & & < + k 1 e == ( nurl_str_get raw k ) 35 != ( nurl_str_get raw + k 1 ) 35 {
+            : ~ i b + k 1
+            ~ & < b e == ( nurl_str_get raw b ) 32 { = b + b 1 }
+            : ~ i j b
+            ~ & < j e < - j b 110 {
+                ( string_push_char t ( nurl_str_get raw j ) )
+                = j + j 1
+            }
+            ? > - e b 110 { ( string_push_str t `…` ) } {}
+        } {}
+        = k + e 1
+        = lines + lines 1
+    }
+    ^ t
+}
+
+// Strip the decoration a model is likely to type around a doc name:
+// a leading "./", "/" or "docs/", and a trailing "/". Lowercased, so
+// callers compare case-insensitively. "" when `name` escapes the tree.
+@ __ms_docs_norm s name → String {
+    : ~ String w ( __ms_lc name )
+    ? >= ( nurl_str_find ( string_data w ) `..` ) 0 {
+        ( string_free w )
+        ^ ( string_new )
+    } {}
+    : ~ b more T
+    ~ more {
+        = more F
+        ? ( string_starts_with w `/` ) {
+            : String c1 ( string_substr w 1 - ( string_len w ) 1 )
+            ( string_free w ) = w c1 = more T
+        } {}
+        ? ( string_starts_with w `./` ) {
+            : String c2 ( string_substr w 2 - ( string_len w ) 2 )
+            ( string_free w ) = w c2 = more T
+        } {}
+        ? ( string_starts_with w `docs/` ) {
+            : String c3 ( string_substr w 5 - ( string_len w ) 5 )
+            ( string_free w ) = w c3 = more T
+        } {}
+    }
+    ~ ( string_ends_with w `/` ) {
+        : String c4 ( string_substr w 0 - ( string_len w ) 1 )
+        ( string_free w ) = w c4
+    }
+    ^ w
+}
+
+// How well `rel` (a path under docs/) answers a request for `want`
+// (already normalised + lowercased): 1 exact, 2 exact minus the .md
+// suffix, 3 basename, 4 basename minus .md, 0 no match. Lower wins, so
+// name='MEMORY' and name='docs/memory.md' both land on MEMORY.md while
+// a request that names a directory does not silently match a file.
+@ __ms_docs_rank s rel s want → i {
+    : String rl ( __ms_lc rel )
+    : String base ( __ms_basename ( string_data rl ) )
+    : ~ String rl_stem ( string_from ( string_data rl ) )
+    ? ( string_ends_with rl_stem `.md` ) {
+        : String cut ( string_substr rl_stem 0 - ( string_len rl_stem ) 3 )
+        ( string_free rl_stem )
+        = rl_stem cut
+    } {}
+    : ~ String base_stem ( string_from ( string_data base ) )
+    ? ( string_ends_with base_stem `.md` ) {
+        : String cut2 ( string_substr base_stem 0 - ( string_len base_stem ) 3 )
+        ( string_free base_stem )
+        = base_stem cut2
+    } {}
+    : ~ i rank 0
+    ? != 0 ( nurl_str_eq ( string_data rl ) want ) { = rank 1 } {}
+    ? & == rank 0 != 0 ( nurl_str_eq ( string_data rl_stem ) want ) { = rank 2 } {}
+    ? & == rank 0 != 0 ( nurl_str_eq ( string_data base ) want ) { = rank 3 } {}
+    ? & == rank 0 != 0 ( nurl_str_eq ( string_data base_stem ) want ) { = rank 4 } {}
+    ( string_free rl ) ( string_free base )
+    ( string_free rl_stem ) ( string_free base_stem )
+    ^ rank
+}
+
+// Resolve a requested document to its path relative to docs_dir; ""
+// when nothing matches (or the name tried to escape the tree).
+@ msearch_docs_resolve s docs_dir s name → String {
+    : String want ( __ms_docs_norm name )
+    : ~ String best ( string_new )
+    ? == ( string_len want ) 0 {
+        ( string_free want )
+        ^ best
+    } {}
+    : Json files ( json_arr_new )
+    ( msearch_walk_md_files files docs_dir `` )
+    : i nf ( json_arr_len files )
+    : ~ i best_rank 0
+    : ~ i k 0
+    ~ < k nf {
+        ?? ( json_arr_get files k ) {
+            T fo → {
+                ?? ( json_obj_get fo `path` ) {
+                    T pj → {
+                        ? ( json_is_str pj ) {
+                            : s rel ( json_as_str pj )
+                            : i rank ( __ms_docs_rank rel ( string_data want ) )
+                            ? & > rank 0 | == best_rank 0 < rank best_rank {
+                                = best_rank rank
+                                ( string_free best )
+                                = best ( string_from rel )
+                            } {}
+                        } {}
+                    }
+                    F _ → {}
+                }
+            }
+            F _ → {}
+        }
+        = k + k 1
+    }
+    ( json_free files )
+    ( string_free want )
+    ^ best
+}
+
+// The listing an agent gets when it calls nurl_docs with no `name`:
+// every document under docs_dir with its size and title.
+@ msearch_docs_list s docs_dir → String {
+    : Json files ( json_arr_new )
+    ( msearch_walk_md_files files docs_dir `` )
+    : i nf ( json_arr_len files )
+    : String out ( string_with_cap 2048 )
+    ( string_push_int out nf )
+    ( string_push_str out ` document(s) under docs/ — pass 'name' to read one (e.g. name='MEMORY.md').\n\n` )
+    : ~ i k 0
+    ~ < k nf {
+        ?? ( json_arr_get files k ) {
+            T fo → {
+                : ~ s rel ``
+                ?? ( json_obj_get fo `path` ) {
+                    T pj → { ? ( json_is_str pj ) { = rel ( json_as_str pj ) } {} }
+                    F _ → {}
+                }
+                ? > ( nurl_str_len rel ) 0 {
+                    ( string_push_str out `  ` )
+                    ( string_push_str out rel )
+                    // Pad to a column so the sizes line up.
+                    : ~ i pad ( nurl_str_len rel )
+                    ~ < pad 30 { ( string_push_char out 32 ) = pad + pad 1 }
+                    ?? ( json_obj_get fo `bytes` ) {
+                        T bj → {
+                            ( string_push_char out 32 )
+                            ( string_push_int out / ( json_as_int bj ) 1024 )
+                            ( string_push_str out ` KB` )
+                        }
+                        F _ → {}
+                    }
+                    : String fp ( path_join docs_dir rel )
+                    : !( Vec u ) IoErr rd ( read_file_bytes ( string_data fp ) )
+                    ( string_free fp )
+                    ?? rd {
+                        T bytes → {
+                            : String src ( bytes_to_str bytes )
+                            ( vec_free [u] bytes )
+                            : String t ( __ms_docs_title src )
+                            ? > ( string_len t ) 0 {
+                                ( string_push_str out ` — ` )
+                                ( string_push_str out ( string_data t ) )
+                            } {}
+                            ( string_free t )
+                            ( string_free src )
+                        }
+                        F _ → {}
+                    }
+                    ( string_push_char out 10 )
+                } {}
+            }
+            F _ → {}
+        }
+        = k + k 1
+    }
+    ( json_free files )
+    ? == nf 0 {
+        ( string_push_str out `(no .md files under the configured docs directory)\n` )
+    } {}
+    ^ out
+}
+
+// One document, from byte `offset`, capped. "" when `name` resolves to
+// nothing — the caller turns that into an error listing what exists.
+@ msearch_docs_read s docs_dir s name i offset → String {
+    : String rel ( msearch_docs_resolve docs_dir name )
+    ? == ( string_len rel ) 0 {
+        ( string_free rel )
+        ^ ( string_new )
+    } {}
+    : String fp ( path_join docs_dir ( string_data rel ) )
+    : !( Vec u ) IoErr rd ( read_file_bytes ( string_data fp ) )
+    ( string_free fp )
+    : String out ( string_with_cap 4096 )
+    ?? rd {
+        T bytes → {
+            : String src ( bytes_to_str bytes )
+            ( vec_free [u] bytes )
+            : i n ( string_len src )
+            : ~ i from ? < offset 0 0 offset
+            ? > from n { = from n } {}
+            : i left - n from
+            : i keep ? > left ( __ms_docs_cap ) ( __ms_docs_cap ) left
+            ( string_push_str out `docs/` )
+            ( string_push_str out ( string_data rel ) )
+            ? > from 0 {
+                ( string_push_str out ` [bytes ` )
+                ( string_push_int out from )
+                ( string_push_str out `–` )
+                ( string_push_int out + from keep )
+                ( string_push_str out ` of ` )
+                ( string_push_int out n )
+                ( string_push_char out 93 )
+            } {}
+            ( string_push_char out 10 )
+            ( string_push_char out 10 )
+            : String slice ( string_substr src from keep )
+            ( string_push_str out ( string_data slice ) )
+            ( string_free slice )
+            ( string_free src )
+            ? > left keep {
+                ( string_push_str out `\n… truncated at ` )
+                ( string_push_int out + from keep )
+                ( string_push_str out ` of ` )
+                ( string_push_int out n )
+                ( string_push_str out ` bytes — continue with offset=` )
+                ( string_push_int out + from keep )
+                ( string_push_char out 10 )
+            } {}
+        }
+        F _ → {
+            ( string_push_str out `docs/` )
+            ( string_push_str out ( string_data rel ) )
+            ( string_push_str out ` could not be read.\n` )
+        }
+    }
+    ( string_free rel )
+    ^ out
 }
 
 // basename after the last '/'

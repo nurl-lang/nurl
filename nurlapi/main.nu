@@ -63,6 +63,9 @@ $ `nurlapi/pptws.nu`
 
 @ get_gotchas_path → String { ^ ( env_var_or `NURL_GOTCHAS_PATH` `/opt/nurl/docs/GOTCHAS.md` ) }
 
+// The docs/ prose tree behind nurl_docs and the /docs/* routes.
+@ get_docs_dir → String { ^ ( env_var_or `NURL_DOCS_DIR` `/opt/nurl/docs` ) }
+
 @ get_license_mit_path → String { ^ ( env_var_or `NURL_LICENSE_MIT_PATH` `/opt/nurl/LICENSE-MIT` ) }
 
 @ get_license_apache_path → String { ^ ( env_var_or `NURL_LICENSE_APACHE_PATH` `/opt/nurl/LICENSE-APACHE` ) }
@@ -2087,6 +2090,7 @@ s combined_stdout s combined_stderr → v {
     ( __mcp_info_push_str tools `nurl_read_readme` )
     ( __mcp_info_push_str tools `nurl_read_roadmap` )
     ( __mcp_info_push_str tools `nurl_read_gotchas` )
+    ( __mcp_info_push_str tools `nurl_docs` )
     ( __mcp_info_push_str tools `nurl_changelog` )
     ( __mcp_info_push_str tools `nurl_api` )
     ( __mcp_info_push_str tools `nurl_grep` )
@@ -5360,6 +5364,62 @@ s combined_stdout s combined_stderr → v {
     ^ result
 }
 
+// ── nurl_docs — the docs/ prose tree ─────────────────────────────────
+//
+// nurl_api answers "what is the signature", never "who frees this" or
+// "which cipher suites ship" — those live in docs/MEMORY.md and
+// docs/CRYPTO.md. Only GOTCHAS.md had a tool, so the other dozen
+// documents were invisible to an MCP-only agent, which then guessed.
+// No 'name' lists the tree (path, size, title); a 'name' returns that
+// document, matched forgivingly ('MEMORY', 'memory.md', 'docs/MEMORY.md'
+// all land on the same file) and paged with 'offset' when it is large.
+
+@ __mcp_tool_docs Json args → Json {
+    : s name ( __mcp_args_get `name` args `` )
+    : i offset ( __mcp_args_get_int `offset` args 0 )
+    : String dd ( get_docs_dir )
+    ? == ( nurl_str_len name ) 0 {
+        : String listing ( msearch_docs_list ( string_data dd ) )
+        ( string_free dd )
+        : Json r ( __mcp_result_text ( string_data listing ) )
+        ( string_free listing )
+        ^ r
+    } {}
+    : String text ( msearch_docs_read ( string_data dd ) name offset )
+    ? == ( string_len text ) 0 {
+        // Unknown name → answer with what DOES exist rather than a bare
+        // error, so the model's next call is the right one.
+        ( string_free text )
+        : String listing ( msearch_docs_list ( string_data dd ) )
+        ( string_free dd )
+        : String msg ( string_with_cap + ( string_len listing ) 128 )
+        ( string_push_str msg `no document matches '` )
+        ( string_push_str msg name )
+        ( string_push_str msg `'. ` )
+        ( string_push_str msg ( string_data listing ) )
+        ( string_free listing )
+        : Json e ( __mcp_result_error ( string_data msg ) )
+        ( string_free msg )
+        ^ e
+    } {}
+    ( string_free dd )
+    : Json result ( __mcp_result_text ( string_data text ) )
+    ( string_free text )
+    ^ result
+}
+
+@ __mcp_schema_docs → Json {
+    : Json schema ( json_obj_new )
+    ( json_obj_set schema `type` ( json_str_lit `object` ) )
+    : Json props ( json_obj_new )
+    ( json_obj_set props `name`
+    ( __mcp_prop `string` `Which document to return, e.g. 'MEMORY.md', 'CRYPTO.md', 'dev/COMPILER_INTERNALS.md'. The 'docs/' prefix and the '.md' suffix are both optional and matching is case-insensitive. Omit to list every document with its size and title.` ) )
+    ( json_obj_set props `offset`
+    ( __mcp_prop `integer` `Byte offset to start from (default 0). Documents are capped at 48 KB per call; a truncated reply prints the exact offset to pass next.` ) )
+    ( json_obj_set schema `properties` props )
+    ^ schema
+}
+
 @ __mcp_schema_api → Json {
     : Json schema ( json_obj_new )
     ( json_obj_set schema `type` ( json_str_lit `object` ) )
@@ -5371,7 +5431,7 @@ s combined_stdout s combined_stderr → v {
     ( json_obj_set props `version`
     ( __mcp_prop `string` `Optional package version (e.g. '0.1.1'); defaults to the latest. Only meaningful with 'package'.` ) )
     ( json_obj_set props `query`
-    ( __mcp_prop `string` `Search every stdlib module's declarations instead: space-separated terms, ALL must occur (case-insensitive) in a declaration's signature + doc comment + module path. On zero hits the search widens automatically to example programs and registry packages (name + description) in the same reply. Ignored when 'module' or 'package' is set.` ) )
+    ( __mcp_prop `string` `Search every stdlib module's declarations instead: space-separated terms, ALL must occur (case-insensitive) in a declaration's signature + doc comment + module path. When no declaration has all of them, the terms are re-run as an OR — each matched as a WHOLE word (bounded by a digit or any non-letter, so 'string' hits string_push_str but not substring) — and the best-covering declarations come back ranked, most terms covered first. Only when that finds nothing does the reply widen to example programs and registry packages. So a concept-shaped query like 'string builder append' is fine here. Ignored when 'module' or 'package' is set.` ) )
     ( json_obj_set schema `properties` props )
     ^ schema
 }
@@ -5529,6 +5589,10 @@ s combined_stdout s combined_stderr → v {
         ( string_free fp ) ^ result
     } {}
 
+    ? != 0 ( nurl_str_eq name `nurl_docs` ) {
+        ^ ( __mcp_tool_docs args )
+    } {}
+
     // Targeted changelog retrieval.
     ? != 0 ( nurl_str_eq name `nurl_changelog` ) {
         ^ ( __mcp_tool_changelog args )
@@ -5609,13 +5673,17 @@ s combined_stdout s combined_stderr → v {
     `Return docs/GOTCHAS.md verbatim — known compiler quirks with workarounds.`
     ( __mcp_schema_empty ) ) )
 
+    ( json_arr_push arr ( __mcp_tool_desc `nurl_docs`
+    `The docs/ prose tree — the questions the API surface cannot answer: MEMORY.md (ownership: who frees what, and when), CRYPTO.md (the shipped cipher suites + TLS stack), ASYNC.md (stackful fibers), BUILDING.md, PLATFORMS.md, NETWORKING.md, DISTRIBUTED.md, FORMAT.md, LIMITATIONS.md, TOOLING.md, PLAYGROUND.md, spec.md (the full language reference), dev/COMPILER_INTERNALS.md. Call with NO arguments for the index (path, size, title); then name='MEMORY.md' for one document. The 'docs/' prefix and '.md' suffix are optional, matching is case-insensitive, and 'offset' pages a document longer than 48 KB. Read this before guessing at memory, crypto, or platform behaviour — every one of these topics is documented.`
+    ( __mcp_schema_docs ) ) )
+
     // Changelog.
     ( json_arr_push arr ( __mcp_tool_desc `nurl_changelog`
     `Targeted CHANGELOG.md retrieval — the changelog is large (240+ KB) and growing, so never fetch it whole. Call with NO arguments first to get a compact index (releases + entry counts). Then pass query (space-separated terms, ALL must occur, case-insensitive) and/or release (e.g. 0.9.6 or Unreleased) to get complete changelog entries, each prefixed with its '[release] — date › category' provenance, ranked by relevance (title hits first). The top 'limit' matches come in full; every further match is listed as a one-line title so nothing relevant is invisible. Pass compact=true for a titles-only overview. Use this to find out when/whether a feature, fix, or rename happened.`
     ( __mcp_schema_changelog ) ) )
 
     ( json_arr_push arr ( __mcp_tool_desc `nurl_api`
-    `A stdlib module's API surface, a published package's API surface, or a search across all stdlib modules — strongly prefer this over nurl_read_stdlib (whole modules waste context; ext/csv.nu is 63 KB, its API surface 11 KB, one matching declaration ~0.3 KB). module='ext/csv.nu' renders one stdlib module's signatures + doc comments + full type definitions, no function bodies. package='nn' renders a registry package's API the same way (streamed from its tarball) — the step after a registry hit to see the functions/types it exposes. query='csv quote' finds every stdlib declaration whose signature/doc/module-path contains ALL terms (0 hits widen to examples + registry). The import-free C-runtime builtins (nurl_println, nurl_str_float, …) are indexed too, as core/builtins.nu.`
+    `A stdlib module's API surface, a published package's API surface, or a search across all stdlib modules — strongly prefer this over nurl_read_stdlib (whole modules waste context; ext/csv.nu is 63 KB, its API surface 11 KB, one matching declaration ~0.3 KB). module='ext/csv.nu' renders one stdlib module's signatures + doc comments + full type definitions, no function bodies. package='nn' renders a registry package's API the same way (streamed from its tarball) — the step after a registry hit to see the functions/types it exposes. query='csv quote' finds every stdlib declaration whose signature/doc/module-path contains ALL terms; if nothing contains all of them the SAME terms are re-run as a whole-word OR, ranked by how many of them each declaration covers (so 'string builder append' or 'vec_push new string_new' still lands on the real functions), and only if that finds nothing too does the search widen to examples + registry. The import-free C-runtime builtins (nurl_println, nurl_str_float, …) are indexed too, as core/builtins.nu.`
     ( __mcp_schema_api ) ) )
 
     ( json_arr_push arr ( __mcp_tool_desc `nurl_grep`
