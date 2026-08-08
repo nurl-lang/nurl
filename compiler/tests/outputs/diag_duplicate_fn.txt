@@ -1,5 +1,5 @@
 COMPILE FAIL
 ERRORS
-compiler/tests/diag_duplicate_fn.nu:16:17: duplicate function '@ shared_helper' — already defined at compiler/tests/diag_duplicate_fn_mod.nu:4
+compiler/tests/diag_duplicate_fn.nu:16:17: error: duplicate function '@ shared_helper' — already defined at compiler/tests/diag_duplicate_fn_mod.nu:4
 @ shared_helper i x → i {
                 ^

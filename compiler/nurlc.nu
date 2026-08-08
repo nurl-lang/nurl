@@ -115,6 +115,51 @@
     ( nurl_exit 1 )
 }
 
+// Render the token the lexer is sitting on, for a diagnostic that
+// needs to say what it FOUND and not only what it wanted.
+//
+// "expected X" alone is the shape of every parser error here, and it
+// is the half that does not help: a reader who knew which construct
+// they were in would not have written the mistake. Naming the token
+// closes the loop — "expected a pattern name, found '('" points at the
+// paren the writer typed, and from there the fix is visible.
+//
+// Identifiers, literals and keywords render as themselves; punctuation
+// renders as the character; EOF says so, because "found end of file"
+// is the one case where the caret has nothing under it.
+@ tok_here i lex → s {
+    : i tt ( nurl_lex_type lex )
+    ? == tt TT_EOF { ^ `end of file` } {}
+    ? | | == tt TT_IDENT == tt TT_INT | == tt TT_FLOAT == tt TT_STR
+    { ^ ( nurl_str_cat3 `'` ( nurl_lex_val lex ) `'` ) } {}
+    ? | == tt TT_BOOL == tt TT_TYPE_KW
+    { ^ ( nurl_str_cat3 `'` ( nurl_lex_val lex ) `'` ) } {}
+    ? == tt TT_LPAREN { ^ `'('` } {}
+    ? == tt TT_RPAREN { ^ `')'` } {}
+    ? == tt TT_LBRACE { ^ `'{'` } {}
+    ? == tt TT_RBRACE { ^ `'}'` } {}
+    ? == tt TT_LBRACK { ^ `'['` } {}
+    ? == tt TT_RBRACK { ^ `']'` } {}
+    ? == tt TT_ARROW { ^ `'→'` } {}
+    ? == tt TT_COLON { ^ `':'` } {}
+    ? == tt TT_EQ { ^ `'='` } {}
+    ? == tt TT_AT { ^ `'@'` } {}
+    ? == tt TT_CARET { ^ `'^'` } {}
+    ? == tt TT_QUEST { ^ `'?'` } {}
+    ? == tt TT_QUESTQUEST { ^ `'??'` } {}
+    ? == tt TT_TILDE { ^ `'~'` } {}
+    ? == tt TT_DOT { ^ `'.'` } {}
+    ? == tt TT_HASH { ^ `'#'` } {}
+    ? == tt TT_BANG { ^ `'!'` } {}
+    ? == tt TT_BACKSLASH { ^ `'\\'` } {}
+    ? == tt TT_DOLLAR { ^ `'$'` } {}
+    ? == tt TT_SEMICOL { ^ `';'` } {}
+    ? == tt TT_PUB { ^ `'pub'` } {}
+    ? == tt TT_BREAK { ^ `'break'` } {}
+    ? == tt TT_CONTINUE { ^ `'continue'` } {}
+    ^ `a different token`
+}
+
 @ die i lex s msg → v {
     // Format:
     //   file:line:col: msg
@@ -123,11 +168,19 @@
     // GCC/Clang-style — parseable by editors and LLM agents consuming
     // the /build_wasm endpoint without regex acrobatics, and with a
     // human-friendly caret pointer for terminal readers.
+    //
+    // The `error: ` severity is emitted HERE, by all four die emitters,
+    // not written into each message. It was missing from every one of
+    // the 160-odd die sites while the borrow checker's diagnostics
+    // carried it, so one build could print two lines that looked like
+    // different kinds of output and a consumer classifying them had to
+    // know which pass had spoken. Four messages hand-rolled the prefix
+    // to compensate; they no longer need to.
     : i col ( nurl_lex_col lex )
     : s loc ( nurl_str_cat ( nurl_lex_filename lex )
     ( nurl_str_cat `:` ( nurl_str_cat ( nurl_str_int ( nurl_lex_line lex ) )
     ( nurl_str_cat `:` ( nurl_str_int col ) ) ) ) )
-    ( nurl_eprintln ( nurl_str_cat3 loc `: ` msg ) )
+    ( nurl_eprintln ( nurl_str_cat3 loc `: error: ` msg ) )
     ( nurl_eprintln ( nurl_lex_line_text lex ) )
     ( nurl_eprintln ( nurl_diag_caret col ) )
     ( __diag_abort )
@@ -139,7 +192,7 @@
 // supertrait-obligation sweep, which runs after every impl in the program has
 // been registered and so cannot point at a single lexer position.
 @ die_at s loc s msg → v {
-    ( nurl_eprintln ( nurl_str_cat3 loc `: ` msg ) )
+    ( nurl_eprintln ( nurl_str_cat3 loc `: error: ` msg ) )
     ( __diag_abort )
 }
 
@@ -422,7 +475,9 @@
         {}
         ^ lt
     }
-    { ( die lex `expected type` ) }
+    { ( die lex ( nurl_str_cat3
+        `expected a type, found ` ( tok_here lex )
+        `. Types are the single-letter keywords 'i u f b s v', a fixed width like 'i32' / 'u64', a declared struct or enum name, or a parenthesised form: '( Vec i )', '( @ i i )' for a closure, '*T' for a pointer, '?T' for an option, '!T E' for a result.` ) ) }
 }
 
 @ parse_type_enum i lex → s {
@@ -433,7 +488,9 @@
         ( nurl_lex_advance lex )
         ^ ( nurl_str_cat `%` v )
     }
-    { ( die lex `expected enum name after |` ) }
+    { ( die lex ( nurl_str_cat3
+        `expected the enum's name after ': |', found ` ( tok_here lex )
+        `. A sum type is ': | Name { Variant Variant Payload ... }' — the name comes before the brace and each variant may carry one payload type. E.g. ': | Shape { Circle f  Rect f f }'.` ) ) }
 }
 
 // sizeof_nurl: compile-time sizeof for known LLVM types (conservative: 8 for unknowns).
@@ -2782,7 +2839,7 @@
     : s loc ( nurl_str_cat ( nurl_lex_filename lex )
     ( nurl_str_cat `:` ( nurl_str_cat ( nurl_str_int g_stmt_line )
     ( nurl_str_cat `:` ( nurl_str_int g_stmt_col ) ) ) ) )
-    ( nurl_eprintln ( nurl_str_cat3 loc `: ` msg ) )
+    ( nurl_eprintln ( nurl_str_cat3 loc `: error: ` msg ) )
     ( __diag_abort )
 }
 
@@ -2811,7 +2868,7 @@
     : s loc ( nurl_str_cat ( nurl_lex_filename lex )
     ( nurl_str_cat `:` ( nurl_str_cat ( nurl_str_int line )
     ( nurl_str_cat `:` ( nurl_str_int col ) ) ) ) )
-    ( nurl_eprintln ( nurl_str_cat3 loc `: ` msg ) )
+    ( nurl_eprintln ( nurl_str_cat3 loc `: error: ` msg ) )
     ( nurl_eprintln ( nurl_lex_line_text_at lex line ) )
     ( nurl_eprintln ( nurl_diag_caret col ) )
     ( __diag_abort )
@@ -7526,7 +7583,7 @@
     // the program compiles but the conditional logic is wrong.
     ? == ( nurl_lex_type lex ) TT_LBRACE
     { ? != 0 g_strict_arity
-        { ( die_pos lex bck_cline bck_ccol `error: '?' consumed bare then/else values, but a '{ ... }' block follows. Likely too few '&'/'|' operators in the condition (each is BINARY — write '& & a b c d' for n-ary).` ) }
+        { ( die_pos lex bck_cline bck_ccol `'?' consumed bare then/else values, but a '{ ... }' block follows. Likely too few '&'/'|' operators in the condition (each is BINARY — write '& & a b c d' for n-ary).` ) }
         { ( warn_pos lex bck_cline bck_ccol `'?' consumed bare then/else values, but a '{ ... }' block follows. Likely too few '&'/'|' operators in the condition (each is BINARY — write '& & a b c d' for n-ary). Compile with --strict-arity to make this an error.` ) } }
     {}
     // pick a consistent phi type: prefer the non-void live branch type;
@@ -8111,7 +8168,9 @@
                         = pvc + pvc 1
                         ( nurl_lex_advance lex )
                     } {
-                        ( die lex `expected arrow or payload variable` )
+                        ( die lex ( nurl_str_cat3
+                        `expected '→' or a payload name after the variant, found ` ( tok_here lex )
+                        `. A match arm binds its payload before the arrow: '?? r { T v → body  F e → body }'. A payload-less variant goes straight to the arrow: 'JNull → body'.` ) )
                     }
                 }
             }
@@ -8174,7 +8233,9 @@
                 : ~ i gd 0
                 ~ | != ( nurl_lex_type lex ) TT_ARROW != gd 0 {
                     : i gt ( nurl_lex_type lex )
-                    ? == gt TT_EOF { ( die lex `expected -> after match guard` ) } {}
+                    ? == gt TT_EOF { ( die lex ( nurl_str_cat3
+                        `expected '→' after the match guard, found ` ( tok_here lex )
+                        `. A guarded arm is 'Variant payload ? guard → body' — the guard is one expression between the payload and the arrow. E.g. 'T n ? > n 0 → body'.` ) ) } {}
                     ? | == gt TT_LPAREN == gt TT_LBRACK { = gd + gd 1 } {}
                     ? | == gt TT_RPAREN == gt TT_RBRACK { = gd - gd 1 } {}
                     ( nurl_lex_advance lex )
@@ -9029,7 +9090,9 @@
                 = fallback_pred ``
             }
         } {
-            ( die lex `expected pattern identifier` )
+            ( die lex ( nurl_str_cat3
+            `expected the next match arm's pattern, found ` ( tok_here lex )
+            `. An arm body is ONE expression or a '{ ... }' block, so a second expression on the same arm is read as the next pattern. Wrap the body: 'F e → { ( a ) ( b ) }'. Arms are 'Variant payload → body', '_ → body' for the wildcard.` ) )
         }
     }
 
@@ -9333,8 +9396,8 @@
     ( nurl_sym_get syms `__loop_check__` )
     ? == 0 ( nurl_str_len target )
     { ( die_pos lex jline jcol ? is_break
-        `error: 'break' outside a loop — there is nothing to leave. It is valid only inside a '~' loop body.`
-        `error: 'continue' outside a loop — there is no next iteration. It is valid only inside a '~' loop body.` ) }
+        `'break' outside a loop — there is nothing to leave. It is valid only inside a '~' loop body.`
+        `'continue' outside a loop — there is no next iteration. It is valid only inside a '~' loop body.` ) }
     {}
     // The drop emitters do not just emit: each rewrites the owned-list
     // it walks, because at a function's single exit that bookkeeping is
@@ -12401,7 +12464,9 @@
             { ( die lex `expected variable name in let — 'pub' is a reserved keyword (the visibility prefix on top-level declarations) and cannot name a binding` ) }
             { ? == ( nurl_lex_type lex ) TT_BOOL
                 { ( die lex `expected variable name in let — 'T' and 'F' are the boolean literals and cannot name a binding; pick another name` ) }
-                { ( die lex `expected variable name in let` ) } } }
+                { ( die lex ( nurl_str_cat3
+                    `expected a binding name, found ` ( tok_here lex )
+                    `. A binding is ': type name value' — the TYPE comes before the name, and ': ~' makes it mutable. E.g. ': i n 0', ': ~ String s ( string_new )'. The type may be omitted only when the value's type is inferable: ': n 0'.` ) ) } } }
     }
 }
 
@@ -12737,7 +12802,9 @@
         // caller freed memory once gen_* results carry ownership.
         ^ ( nurl_str_cat store_val `` )
     }
-    { ( die lex `expected name after =` ) }
+    { ( die lex ( nurl_str_cat3
+        `expected the target of '=', found ` ( tok_here lex )
+        `. Assignment is '= name value' or '= . obj field value' — the target comes first, then the value, with no '=' between them. E.g. '= i + i 1', '= . p x 3'. Only a ': ~' binding can be assigned to.` ) ) }
 }
 
 // ── Field store = . ptr field val ─────────────────────────────────────
@@ -13860,7 +13927,9 @@
                     ^ res
                 }
             }
-            { ( die lex `expected field name or index after .` ) }
+            { ( die lex ( nurl_str_cat3
+                `expected a field name or an index after '.', found ` ( tok_here lex )
+                `. Field access is '. obj field' and element access is '. arr index' — the object comes FIRST, prefix style, not 'obj.field'. E.g. '. p x', '. buf 0'.` ) ) }
         }
     }
 }
@@ -15369,7 +15438,9 @@
         : s pty ( parse_type lex )
 
         ? ! ( is_ident_tok ( nurl_lex_type lex ) )
-        { ( die lex `expected parameter name after type` ) }
+        { ( die lex ( nurl_str_cat3
+            `expected a parameter name after its type, found ` ( tok_here lex )
+            `. Parameters are written 'type name', repeated, with no commas: '@ f i a i b → i'. A parenthesised type keeps the pair shape: '( Vec i ) v'.` ) ) }
         {}
 
         : s pname ( nurl_lex_val lex )
@@ -15394,7 +15465,9 @@
 
     // Analyze closure body for captured variables
     ? != ( nurl_lex_type lex ) TT_LBRACE
-    { ( die lex `expected { after closure return type` ) }
+    { ( die lex ( nurl_str_cat3
+        `expected '{' to open the closure body, found ` ( tok_here lex )
+        `. A closure is '\\ params → ret { body }' — the body is ALWAYS braced, even for one expression: '\\ i x → i { ^ + x 1 }'. Its type is written '( @ ret params )', e.g. '( @ i i )' for that closure.` ) ) }
     {}
 
     // Save lexer position at the opening '{' so we can re-parse the body
@@ -17278,7 +17351,9 @@
         }
         { ( gen_fn_decl_concrete fname lex syms cg ) }
     }
-    { ( die lex `expected function name after @` ) }
+    { ( die lex ( nurl_str_cat3
+        `expected a function name after '@', found ` ( tok_here lex )
+        `. A declaration is '@ name params → ret { body }' — parameters are 'type name' pairs and the return type follows '→'. E.g. '@ add i a i b → i { ^ + a b }'. For a generic, the type list goes right after the name: '@ push [A] ( Vec A ) v A x → v { ... }'.` ) ) }
 }
 
 @ gen_fn_decl_concrete s fname i lex i syms i cg → v {
@@ -17971,7 +18046,9 @@
         ( nurl_set_last_type entry )
         ( nurl_set_last_type ( nurl_str_cat3 cur_params `, ` entry ) )
     }
-    { ( die lex `expected parameter name after type` ) }
+    { ( die lex ( nurl_str_cat3
+        `expected a parameter name after its type, found ` ( tok_here lex )
+        `. Parameters are written 'type name', repeated, with no commas: '@ f i a i b → i'. A parenthesised type keeps the pair shape: '( Vec i ) v'.` ) ) }
 }
 
 // Iterate __fn_params__ at function entry and emit alloca + store for
@@ -19332,7 +19409,7 @@
         ( nurl_str_cat4 caller_file `:` caller_line `: ` )
         ``
         ( nurl_eprintln ( nurl_str_cat3 loc
-        ( nurl_str_cat3 `error: call to generic function '` fname `' but no generic of that name is defined in this file or any '$'-imported file` )
+        ( nurl_str_cat3 `call to generic function '` fname `' but no generic of that name is defined in this file or any '$'-imported file` )
         ` — add the '$' import for the file that defines it` ) )
         ( nurl_exit 1 )
     }
@@ -21330,7 +21407,9 @@
                         ? != 0 ( nurl_str_len __impl_sk )
                         { ( nurl_sym_def g_fn_sink mname __impl_sk ) } {}
                     }
-                    { ( die lex `expected method name in impl` ) }
+                    { ( die lex ( nurl_str_cat3
+                        `expected a method name after '@' in this impl block, found ` ( tok_here lex )
+                        `. An impl is '% Trait Type { @ name params → ret { body } ... }' — every method repeats the '@ name' form the trait declared.` ) ) }
                 }
                 { ( nurl_lex_advance lex ) } }
         }

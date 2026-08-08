@@ -1,8 +1,8 @@
 COMPILE FAIL
 ERRORS
-compiler/tests/diag_multi_error.nu:9:5: value of type 'i8*' cannot initialise / assign a binding of type 'i64' — NURL has no implicit conversions; use a matching value or convert with '# T expr'
-compiler/tests/diag_multi_error.nu:14:22: call to unknown function 'no_such_fn' — it is not defined in this file, not in any '$'-imported file processed so far, and not a known FFI/builtin. Add the missing '$' import (or move it above this file's import in the program), or check the spelling.
+compiler/tests/diag_multi_error.nu:9:5: error: value of type 'i8*' cannot initialise / assign a binding of type 'i64' — NURL has no implicit conversions; use a matching value or convert with '# T expr'
+compiler/tests/diag_multi_error.nu:14:22: error: call to unknown function 'no_such_fn' — it is not defined in this file, not in any '$'-imported file processed so far, and not a known FFI/builtin. Add the missing '$' import (or move it above this file's import in the program), or check the spelling.
     ^ ( no_such_fn 1 )
                      ^
-compiler/tests/diag_multi_error.nu:18:5: value of type 'double' cannot initialise / assign a binding of type 'i64' — NURL has no implicit conversions; use a matching value or convert with '# T expr'
+compiler/tests/diag_multi_error.nu:18:5: error: value of type 'double' cannot initialise / assign a binding of type 'i64' — NURL has no implicit conversions; use a matching value or convert with '# T expr'
 error: aborting due to 3 previous errors
