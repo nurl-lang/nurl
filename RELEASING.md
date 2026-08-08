@@ -177,11 +177,13 @@ the Actions tab.
 - The Linux client path (download → verify → unpack → run) is verified
   end to end against a local mirror; the relocatable prefix is verified by
   moving it after install.
-- The Windows job builds and verifies the bootstrap fixed point on
-  `windows-latest` and ships in releases, but **no test corpus or smoke
-  test runs on Windows in CI** — the Windows goldens
-  (`compiler/tests/outputs-windows/`) are exercised only by a local
-  `build.bat` with PowerShell 7.
+- The Windows release job builds with `--no-tests`, but Windows is not
+  untested: the separate `windows-tests` workflow runs `build.bat` — the
+  bootstrap fixed point plus the full Windows golden corpus
+  (`compiler/tests/outputs-windows/`, via `run_tests.ps1`) — on every
+  push to `main` and every PR. (This entry previously said no corpus ran
+  on Windows in CI at all; that stopped being true when the workflow
+  landed, and it now gates PRs too.)
 - The FreeBSD release leg is best-effort (`continue-on-error`); a release
   can ship without the FreeBSD archive.
 - macOS is not built yet (the installer rejects it with a clear message);

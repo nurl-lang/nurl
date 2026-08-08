@@ -22,7 +22,7 @@ verifies — not by intent:
 | Linux x86_64 (glibc ≥ 2.28) | **1** | `build.sh` bootstrap fixed point + full corpus + examples gate + ASan/UBSan/LSan + peak-RSS / symbol-collision / leak gates, every push and PR; release artifact smoke-tested | `install.sh` |
 | FreeBSD x86_64 | **1** | build + bootstrap + full corpus on a FreeBSD 14.2 VM in CI (hard gate); the *release* artifact leg is best-effort (`continue-on-error`) | `install.sh` |
 | Linux ARM64 (glibc) | **2** | release workflow builds natively on an ARM64 runner (`--no-tests`) and smoke-tests a hello-world; not in `ci.yml` | `install.sh` |
-| Windows x86_64 | **2** | the `windows-tests` workflow runs `build.bat` — bootstrap fixed point + the full Windows golden corpus (`run_tests.ps1`) — on every push to `main` (not a per-PR merge gate); the release job builds with `--no-tests` | `install.ps1` |
+| Windows x86_64 | **1** | the `windows-tests` workflow runs `build.bat` — bootstrap fixed point + the full Windows golden corpus (`run_tests.ps1`) — on every push to `main` **and every PR**, so a Windows-only regression cannot reach `main`; the release job builds with `--no-tests` | `install.ps1` |
 | macOS (x86_64 / ARM64) | **3** | expected to build from source with Homebrew LLVM; unverified — no CI job, no release artifact, and the installer rejects Darwin | build from source |
 | Alpine / musl | **3** | build from source only. The shipped Linux archives are glibc-linked and do **not** load under musl | build from source |
 
@@ -51,7 +51,7 @@ container's cross-compile endpoints (see [`PLAYGROUND.md`](PLAYGROUND.md)).
 | Target | Backend | Tier | Notes |
 |---|---|---|---|
 | Linux x86_64 | LLVM | 1 | primary target — `build.sh` + full corpus |
-| Windows x86_64 | LLVM (mingw-w64) | 2 | separate Windows goldens (`compiler/tests/outputs-windows/`); corpus runs on `main` pushes via the `windows-tests` workflow |
+| Windows x86_64 | LLVM (mingw-w64) | 1 | separate Windows goldens (`compiler/tests/outputs-windows/`); corpus runs on every push and PR via the `windows-tests` workflow |
 | macOS x86_64 | LLVM + zig cc | 3 | `POST /build_macos`; Mach-O links only libSystem (no Apple SDK). Runs on Apple Silicon via Rosetta 2. canvas/audio/libcurl-HTTP not supported |
 | macOS ARM64 | LLVM + zig cc | 3 | `POST /build_target` (`target=macos-arm64`) — native Apple Silicon Mach-O, links only libSystem. Unsigned: clear quarantine before running |
 | WebAssembly | wasm32-wasi | 3 | via the `nurlapi/` container (WASI SDK 24.0); browser execution via `browser_wasi_shim`. The self-hosting compiler itself also builds to wasm — see [`PLAYGROUND.md`](PLAYGROUND.md) |

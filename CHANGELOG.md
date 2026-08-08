@@ -8,6 +8,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Windows is a per-PR merge gate — tier 1.** The `windows-tests`
+  workflow ran on `main` pushes only, reasoning that PRs were already
+  gated by the Linux+FreeBSD corpus and that "a main breakage surfaces
+  here within one push". That rationale was falsified twice in one
+  batch: `run_tests.ps1` is a separate implementation of *how do I run
+  this test*, so two corpus additions carrying a compiler flag
+  (`arity_strict_*` → `--strict-arity`, `lint_*` → `--lint`) passed
+  every PR gate and turned `main` red on merge. Surfacing within one
+  push is not the same as being caught, and each cost a second PR to
+  undo.
+
+  It now runs on PRs as well, with a `changes` classify job so a
+  docs-only PR does not spend an hour of the slowest runner, and a
+  concurrency group so a superseded run is cancelled.
+  `docs/PLATFORMS.md` moves Windows from tier 2 to tier 1 on both
+  tables, which is what the tier definition has always said: tier 1 is
+  "every push and PR".
+
+  `RELEASING.md` claimed no test corpus ran on Windows in CI at all.
+  That stopped being true when the workflow landed and is now corrected.
+
 ### Added
 
 - **`nurl_build_native run=true` — compile and run in one call.** The
