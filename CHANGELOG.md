@@ -10,6 +10,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **A 30-case probe suite over realistic mistakes, and what it found.**
+  Counting cue words in the source had reached its limit, so the next
+  pass wrote thirty programs an agent plausibly writes wrong — wrong
+  arity, wrong types, unwrapped options, missing arms, generics without
+  brackets, assignment to a parameter — and read every answer.
+
+  Most already taught well. Three did not and were rewritten: assignment
+  to an immutable parameter (which named neither ': ~' nor 'inout'),
+  parameter shadowing, and field access on a scalar.
+
+  One taught something **false**. Returning a bool from an `→ i`
+  function said *"NURL has no implicit conversions"* — but a bool DOES
+  widen into an integer binding, deliberately and by design, so
+  `': i n ( > a b )'` is fine. An agent that took the sentence at its
+  word would have learned a rule the compiler does not enforce. It now
+  states the real one: a bool widens into a binding, a return type is a
+  contract and must match exactly.
+
+  The probe also found nine programs that compile clean where an error
+  seemed likely. Seven turn out to be legal or to fail later by design;
+  the remaining two are recorded for a separate look, because a missing
+  diagnostic is a type-system question and not a wording one.
+
 - **The use-after-move error now names what consumed the value.** It
   said "consumed at line 3", which makes a reader scan that line for the
   operation and, on a line with several calls, guess. It now says "by

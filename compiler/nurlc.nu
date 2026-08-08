@@ -2635,7 +2635,7 @@
         { : s cure ? ( seq fn_rt `i1` )
             `' — NURL has no implicit conversions; compare the value to get a b, e.g. '^ != 0 ( … )'`
             ? ( seq lt `i1` )
-            `' — NURL has no implicit conversions; select to widen the b, e.g. '^ ? cond 1 0'`
+            `' — a bool widens into an integer BINDING (': i n ( > a b )' is fine), but a return type is a contract and must match exactly. Select the value you mean: '^ ? cond 1 0'.`
             `' — NURL has no implicit conversions; convert with '# T expr'`
             ( die lex ( nurl_str_cat ( nurl_str_cat4
             `return value type '` ( llvm_to_nurl lt ) `' does not match the declared return type '` ( llvm_to_nurl fn_rt ) )
@@ -11859,7 +11859,7 @@
 @ __warn_if_shadows_param i lex i syms s name → v {
     : s param_names ( nurl_sym_get syms `__fn_param_names__` )
     ? & != 0 ( nurl_str_len param_names ) ( str_contains_word param_names name )
-    { ( warn lex ( nurl_str_cat3 `'` name `' shadows the enclosing function's parameter - rename` ) ) }
+    { ( warn lex ( nurl_str_cat3 `'` name `' shadows the enclosing function's parameter — the inner binding hides it for the rest of the scope, which is almost never intended. Rename one of them.` ) ) }
     {}
 }
 
@@ -12502,7 +12502,8 @@
             ``
             : s kind ? != 0 ( nurl_str_len param_check ) `parameter`
             ? != 0 ( nurl_str_len glb ) `global` `variable`
-            ( die lex ( nurl_str_cat3 ( nurl_str_cat `cannot assign to immutable ` kind ) ( nurl_str_cat `: ` name ) where ) )
+            ( die lex ( nurl_str_cat3 ( nurl_str_cat `cannot assign to immutable ` kind ) ( nurl_str_cat3 ` '` name `'` )
+            ( nurl_str_cat where `. Bindings are immutable unless declared ': ~', and parameters are always immutable: add the tilde at the declaration, copy the parameter into a ': ~' local, or take it as 'inout' if the caller should see the write.` ) ) )
         }
         {}
         // Silent-snapshot footgun: assigning to a binding the enclosing
@@ -13783,7 +13784,7 @@
         // operand must be aggregate type"). Reject it at the source.
         ? != 0 ( nurl_str_len ot )
         { ? & != ( nurl_str_get ot 0 ) 123 != ( nurl_str_get ot 0 ) 37
-            { ( die lex ( nurl_str_cat3 `cannot access a field or element of '` ( llvm_to_nurl ot ) `' — it is not a struct, enum, slice, or pointer` ) ) }
+            { ( die lex ( nurl_str_cat3 `cannot access a field or element of '` ( llvm_to_nurl ot ) `' — it is not a struct, enum, slice, or pointer, so it has no fields and no elements. Field access is prefix ('. obj field'); indexing needs a slice or pointer.` ) ) }
             {} }
         {}
         ? == ( nurl_lex_type lex ) TT_INT
