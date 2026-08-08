@@ -938,6 +938,39 @@
 // check (docs/MEMORY.md §2.7). Allocated in main().
 : ~ i g_fn_escapes 0
 
+// Per-function EMBEDDED-parameter map.
+// `g_fn_embeds[fname]` is the space-separated list of 0-based indices
+// of parameters the body stores into an aggregate literal.
+//
+// Deliberately NOT part of g_fn_escapes, which answers a different
+// question. Escape means the value outlives the whole call chain — a
+// heap container, a worker thread — so a stack reference handed to such
+// a parameter dangles and must be rejected. Embedding does not imply
+// that: `@ wrap ( @ v ) cb → Slot { ^ @ Slot { cb } }` puts a closure
+// in a struct the CALLER may well consume inside the referent's own
+// scope, which is legal and has a negative control pinning it
+// (compiler/tests/ret_escape_agg_ok.nu). Folding the two together turns
+// that test red.
+//
+// What embedding does answer is OWNERSHIP: a handle stored into a
+// structure the callee built is no longer the caller's to free —
+// whether the structure is returned, kept, or dropped there. That is
+// what the unfreed-handle lint needs, and it is the only consumer.
+: ~ i g_fn_embeds 0
+
+// Per-function RETURNS-A-VIEW map. `g_fn_ret_view[fname]` is set when
+// the body builds an aggregate one of whose fields is a POINTER read
+// out of something else — `@ __sbuf String str → ( Vec u ) { ^ @ ( Vec
+// u ) { . str ctl } }` hands back a Vec over the String's own buffer.
+// The result aliases; freeing it would double-free.
+//
+// Lint-only, like g_fn_embeds, and for the same reason: the existing
+// borrow-provenance flag (__fn_ret_borrow__) feeds auto-drop, and a
+// wrong "this is a borrow" there SKIPS a drop, which leaks. This
+// summary only ever makes a diagnostic quieter, so an over-approximation
+// costs a missed report and never a miscompile.
+: ~ i g_fn_ret_view 0
+
 // Per-function *invoke-only* parameter map (closure-env reclamation,
 // docs/MEMORY.md §7.4). `g_fn_invoke_only[fname]` is the space-separated
 // list of 0-based parameter indices that the body uses ONLY as the
@@ -1548,6 +1581,17 @@
 : ~ i g_lint_syms 0
 : ~ i g_lint_used 0
 : ~ i g_lint_reads 0
+// g_lint_handles — per-function roster of MANUALLY-MANAGED handles
+//                  (docs/MEMORY.md §7.4: Vec and String, the two the
+//                  compiler deliberately does not auto-drop). Rows are
+//                  "name\tline\tcol\n", same shape as `binds`.
+// g_lint_released — set of handles whose ownership provably LEFT the
+//                  binding: freed, sunk, aliased away, or returned.
+//                  Keyed "<gen> <name>" like g_lint_reads, so a name in
+//                  one function never satisfies the same name in
+//                  another.
+: ~ i g_lint_handles 0
+: ~ i g_lint_released 0
 : ~ i g_lint_gen 0
 // 1 only during the main parse_program pass. Cleared before
 // flush_deferred_instantiations so synthetic generic monomorphisations
@@ -1652,6 +1696,9 @@
     = g_lint_syms ( nurl_sym_new )
     = g_lint_used ( nurl_sym_new )
     = g_lint_reads ( nurl_sym_new )
+    = g_lint_handles ( nurl_sym_new )
+    = g_lint_released ( nurl_sym_new )
+    ( nurl_sym_def g_lint_handles `rows` `` )
     ( nurl_sym_def g_lint_syms `top` top )
     ( nurl_sym_def g_lint_syms `fns` `` )
     ( nurl_sym_def g_lint_syms `binds` `` )
@@ -1799,12 +1846,66 @@
     {}
 }
 
+// The manually-managed handle set, exactly as docs/MEMORY.md §7.4
+// enumerates it: `String` and `Vec`. Everything else with a heap
+// interior is auto-dropped at scope exit, so it is not the caller's to
+// release and must never be reported here. Keyed on the LLVM type name
+// (`%String`, `%Vec__i64`, `%Vec__String`) because that is what is in
+// scope where a binding is recorded.
+@ lint_is_manual_handle s lty → b {
+    ? ( seq lty `%String` ) { ^ T } {}
+    ^ != 0 ( nurl_str_starts lty `%Vec__` )
+}
+
+// Record a `:` binding that owns a manually-managed handle. Re-binding
+// the same name clears any earlier release — `= s ( string_from … )`
+// after a free makes it owned again, and the new value needs its own.
+//
+// `owns` says the right-hand side PRODUCED the handle rather than
+// borrowed one: a call, or an alias copy into an IMMUTABLE binding —
+// the same `! is_mut` rule bck_let_alias uses to tell a move from the
+// cursor idiom. `: ~ ( Vec TomlEntry ) current root` is a mutable
+// working alias walking a structure whose source stays the owner; it
+// owns nothing and must never be asked to free anything.
+// `: ( Vec i ) t . scr t` — a Vec read out of a scratch struct that
+// still owns it — is a field read, neither of those, and was 21 false
+// positives in p256_field.nu alone. A diagnostic about leaks must only
+// claim ownership it can see being created.
+@ lint_note_handle i line i col s name s lty b owns → v {
+    ? & & & & != g_lint 0 != g_lint_recording 0 ( lint_in_top_file )
+    ( lint_is_manual_handle lty ) owns
+    { ? == ( nurl_str_get name 0 ) 95 {}
+        { : s row ( nurl_str_cat
+            ( nurl_str_cat3 name `\t` ( nurl_str_int line ) )
+            ( nurl_str_cat3 `\t` ( nurl_str_int col ) `\n` ) )
+            : s cur ( nurl_sym_get g_lint_handles `rows` )
+            ( nurl_sym_def g_lint_handles `rows` ( nurl_str_cat cur row ) )
+            ( nurl_sym_def g_lint_released
+            ( nurl_str_cat3 ( nurl_str_int g_lint_gen ) ` ` name ) `` ) }
+    }
+    {}
+}
+
+// Ownership left `name`. Called from every site that transfers it: a
+// `*_free` destructor call, a `sink` argument, a binding-to-binding
+// alias copy, and `^`-return. Those are the transfer routes the
+// compiler already models — the same ones that produce a borrow-checker
+// `move`. A handle that reaches the end of its function without one of
+// these has nothing that could have released it.
+@ lint_note_released s name → v {
+    ? & != g_lint 0 > ( nurl_str_len name ) 0
+    { ( nurl_sym_def g_lint_released
+        ( nurl_str_cat3 ( nurl_str_int g_lint_gen ) ` ` name ) `1` ) }
+    {}
+}
+
 // Begin a fresh per-function lint scope: bump the read generation and
 // clear the binding roster. Called at every function-body start.
 @ lint_fn_begin → v {
     ? != g_lint 0
     { = g_lint_gen + g_lint_gen 1
-        ( nurl_sym_def g_lint_syms `binds` `` ) }
+        ( nurl_sym_def g_lint_syms `binds` `` )
+        ( nurl_sym_def g_lint_handles `rows` `` ) }
     {}
 }
 
@@ -1846,6 +1947,28 @@
     }
 }
 
+// Parse one handle row and warn when ownership never left the binding.
+@ lint_check_handle s file s row → v {
+    : i t1 ( nurl_str_find row `\t` )
+    ? < t1 0 {} {
+        : i rl ( nurl_str_len row )
+        : s nm ( nurl_str_slice row 0 t1 )
+        : s tail ( nurl_str_slice row + t1 1 - rl + t1 1 )
+        : i t2 ( nurl_str_find tail `\t` )
+        ? < t2 0 {} {
+            : i tl ( nurl_str_len tail )
+            : s ln ( nurl_str_slice tail 0 t2 )
+            : s cl ( nurl_str_slice tail + t2 1 - tl + t2 1 )
+            : s key ( nurl_str_cat3 ( nurl_str_int g_lint_gen ) ` ` nm )
+            ? ( seq ( nurl_sym_get g_lint_released key ) `1` ) {} {
+                ( lint_warn file ( nurl_str_to_int ln ) ( nurl_str_to_int cl )
+                ( nurl_str_cat3 `'` nm
+                `' owns a manually-managed handle that is never released - Vec and String are not auto-dropped (docs/MEMORY.md 7.4), so free it, return it, or pass it to a 'sink'` ) )
+            }
+        }
+    }
+}
+
 // At function-body end, warn for every recorded `:` binding never read
 // in this function. Reads were tracked unconditionally (including
 // inside closures), so a binding used only by a captured closure is
@@ -1860,6 +1983,18 @@
             : s row ? < nl 0 rest ( nurl_str_slice rest 0 nl )
             = rest ? < nl 0 `` ( nurl_str_slice rest + nl 1 - rl + nl 1 )
             ( lint_check_bind file row )
+        }
+        // …and for every manually-managed handle whose ownership never
+        // left. A handle is released by exactly the routes the compiler
+        // already models as a move: a `*_free` destructor, a `sink`
+        // argument, an alias copy, or a `^`-return.
+        : ~ s hrest ( nurl_sym_get g_lint_handles `rows` )
+        ~ != 0 ( nurl_str_len hrest ) {
+            : i hnl ( nurl_str_find hrest `\n` )
+            : i hrl ( nurl_str_len hrest )
+            : s hrow ? < hnl 0 hrest ( nurl_str_slice hrest 0 hnl )
+            = hrest ? < hnl 0 `` ( nurl_str_slice hrest + hnl 1 - hrl + hnl 1 )
+            ( lint_check_handle file hrow )
         }
     }
     {}
@@ -2399,6 +2534,20 @@
     // uniformly. Only consulted when --borrowck is on.
     ( bck_esc_check_return lex syms bck_line
     ( nurl_sym_get syms `__last_ident_name__` ) )
+    // Returning a handle hands it to the caller — that is a release.
+    //
+    // `__last_ident_name__` is the last identifier PARSED, not the value
+    // being returned: for `^ ( string_len s )` it is `s`, which would
+    // mark a leaked handle as released and silence the whole check. So
+    // this only fires when the function's declared return type is itself
+    // a manually-managed handle — the only case where a return can carry
+    // one out. That over-suppresses (every handle in a String-returning
+    // function is treated as possibly-returned) and never under-reports,
+    // which is the right direction for a diagnostic that must not cry
+    // wolf.
+    ? ( lint_is_manual_handle ( nurl_llty ( nurl_sym_get syms `__fn_ret_ty__` ) ) )
+    { ( lint_note_released ( nurl_sym_get syms `__last_ident_name__` ) ) }
+    {}
     // Diagnose cases where gen_expr produced no usable value (last_type =
     // void, e.g. a `? cond then else` whose two arms have incompatible
     // types so gen_cond degrades silently to void) while the function
@@ -3614,6 +3763,11 @@
     ( nurl_sym_def syms `__last_value_borrow__`
     ? | != 0 ( nurl_sym_len2 syms cn `__ret_borrow` )
     != 0 ( nurl_str_starts cn `vec_get` ) `1` `` )
+    // Lint-only view provenance — the sibling of the channel set on the
+    // other call path; both have to publish it or the summary reaches
+    // only half the call sites.
+    ( nurl_sym_def syms `__last_call_ret_view__`
+    ( nurl_sym_get g_fn_ret_view cn ) )
 }
 
 // gen_inout_field_addr: lex is positioned at the TT_DOT of an
@@ -5688,6 +5842,11 @@
     ( nurl_sym_def syms `__last_value_borrow__`
     ? | != 0 ( nurl_sym_len2 syms fname `__ret_borrow` )
     != 0 ( nurl_str_starts fname `vec_get` ) `1` `` )
+    // Lint-only view provenance (see g_fn_ret_view): kept in its own
+    // channel so it cannot reach the auto-drop decision that
+    // __last_value_borrow__ drives.
+    ( nurl_sym_def syms `__last_call_ret_view__`
+    ( nurl_sym_get g_fn_ret_view fname ) )
     : s rl ( nurl_sym_get syms fname )
     : s rlt ? == 0 ( nurl_str_len rl ) `i64` rl
     ? ( seq rlt `void` )
@@ -6454,11 +6613,26 @@
         : b builtin_escape_slot & is_escape_call ! & vec_family_call == arg_idx 0
         : b arg_pos_escapes | builtin_escape_slot
         ( str_contains_word callee_escapes ( nurl_str_int arg_idx ) )
+        // Ownership, not lifetime: an argument the callee stores into an
+        // aggregate belongs to that structure now, so the caller has
+        // nothing left to free. Kept apart from the escape check below
+        // on purpose — see g_fn_embeds for why folding them turns
+        // ret_escape_agg_ok red.
+        ? & ( str_contains_word ( nurl_sym_get g_fn_embeds fname ) ( nurl_str_int arg_idx ) )
+        ( is_ident_tok bck_arg_tt )
+        { ( lint_note_released bck_arg_val ) }
+        {}
         ? arg_pos_escapes
         { ( bck_esc_check_call_arg lex syms bck_arg_line
             ( nurl_sym_get syms `__last_ident_name__` ) fname )
             ? ( is_ident_tok bck_arg_tt )
-            { ( bck_record_inferred_escape syms bck_arg_val ) } {} }
+            { ( bck_record_inferred_escape syms bck_arg_val )
+                // The callee retains this argument past the call — a
+                // container push, a thread detach. Ownership left the
+                // binding, so the unfreed-handle lint must stop
+                // expecting a free: `( vec_push [String] v s )` is how
+                // most String handles legitimately end their life.
+                ( lint_note_released bck_arg_val ) } {} }
         {}
         // Thread-safety: the thread_spawn closure (arg 0) detaches onto a
         // worker thread. If it captures a non-Send value (an Rc — non-atomic
@@ -6517,6 +6691,7 @@
         // move (flushed after the enclosing statement).
         ? & & is_consume_call == arg_idx 0 ( is_ident_tok bck_arg_tt )
         { ( bck_stash_move bck_arg_val ( nurl_lex_line lex ) )
+            ( lint_note_released bck_arg_val )
             // Auto-sink inference: if the consumed bare-ident is the
             // enclosing fn's parameter, record its index so
             // gen_fn_decl_concrete can append it to g_fn_sink[fname].
@@ -6543,6 +6718,7 @@
                 `'` bck_arg_val
                 `' is a compiler-auto-dropped value; passing it to a 'sink' parameter is not yet supported - pass a Vec or other manually-managed handle, or pass it as an ordinary parameter` ) ) }
             { ( bck_stash_move bck_arg_val ( nurl_lex_line lex ) )
+                ( lint_note_released bck_arg_val )
                 // Auto-sink cascade: if THIS fn passes its own
                 // parameter as a sink arg to another fn, mark this
                 // parameter as auto-sink too — the caller of this fn
@@ -10672,7 +10848,7 @@
 @ bck_let_alias i syms b is_mut i rhs_tt s rhs_val s vt i line → v {
     ? & & & ! is_mut ( is_ident_tok rhs_tt ) ( bck_is_heap_lty vt )
     ! ( str_contains_word ( nurl_sym_get syms `__fn_param_names__` ) rhs_val )
-    { ( bck_stash_move rhs_val line ) }
+    { ( bck_stash_move rhs_val line ) ( lint_note_released rhs_val ) }
     {}
 }
 
@@ -11780,6 +11956,12 @@
 @ gen_let_or_struct i lex i syms i cg → s {
     // Borrow checker: source line of the `:` token, for the record.
     : i bck_line ( nurl_lex_line lex )
+    // …and its column. The handle lint reports at the DECLARATION; by
+    // the time the type is known the lexer has walked the whole
+    // right-hand side, so the live position points at a use several
+    // lines down — the same "caret on the consequence" the `?` arity
+    // warning had.
+    : i bck_col ( nurl_lex_col lex )
     ( nurl_lex_advance lex )
     // Check for optional ~ (mutable) token
     : b had_mutability_check | == ( nurl_lex_type lex ) TT_TILDE ( is_type_start ( nurl_lex_type lex ) )
@@ -11882,6 +12064,10 @@
         : s rhs_borrow ( nurl_sym_get syms `__last_value_borrow__` )
         // Borrow checker: record this binding (inference path).
         ( bck_record `let` name bck_line )
+        ( lint_note_handle bck_line bck_col name vt
+        & & == 0 ( nurl_str_len rhs_borrow )
+        == 0 ( nurl_str_len ( nurl_sym_get syms `__last_call_ret_view__` ) )
+        | == bck_rhs_tt TT_LPAREN & ( is_ident_tok bck_rhs_tt ) ! is_mutable )
         ( bck_let_alias syms is_mutable bck_rhs_tt bck_rhs_val vt bck_line )
         : b rhs_is_owned_call != 0 ( nurl_sym_len syms `__last_call_ret_owned__` )
         // A `?`-ternary whose live arms are all fresh owned slices hands the
@@ -12115,6 +12301,10 @@
                 : s rhs_borrow ( nurl_sym_get syms `__last_value_borrow__` )
                 // Borrow checker: record this binding (typed path).
                 ( bck_record `let` name bck_line )
+                ( lint_note_handle bck_line bck_col name vt
+                & & == 0 ( nurl_str_len rhs_borrow )
+                == 0 ( nurl_str_len ( nurl_sym_get syms `__last_call_ret_view__` ) )
+                | == bck_rhs_tt TT_LPAREN & ( is_ident_tok bck_rhs_tt ) ! is_mutable )
                 ( bck_let_alias syms is_mutable bck_rhs_tt bck_rhs_val vt bck_line )
                 : b rhs_is_owned_call != 0 ( nurl_sym_len syms `__last_call_ret_owned__` )
                 // A `?`-ternary whose live arms are all fresh owned slices
@@ -12288,6 +12478,12 @@
         // RHS would publish.
         : i bck_rhs_tt ( nurl_lex_type lex )
         : s bck_rhs_val ( nurl_lex_val lex )
+        // `= dst src` with a bare identifier on the right is the same
+        // alias move `: T dst src` already is — `( string_free w ) = w c1`
+        // is the canonical grow-a-String idiom, and `c1`'s handle lives
+        // on in `w`. Only the `:` form was recorded, so every use of the
+        // idiom read as a leak of the temporary.
+        ? ( is_ident_tok bck_rhs_tt ) { ( lint_note_released bck_rhs_val ) } {}
         ( nurl_sym_def syms `__last_expr_refdepth__` `` )
         ( nurl_sym_def syms `__last_call_guard__` `` )
         : ~ s val ( gen_operand lex syms cg )
@@ -12560,6 +12756,20 @@
     ( __arg_named_struct_mismatch vt dt ) ( __arg_str_cstr_mismatch vt dt )
 }
 
+// The value side of a field store, wherever the store lands. There are
+// eight of those sites in gen_field_store — one per shape (slice,
+// pointer-to-struct, struct-by-value, indexed, …) — and a bare
+// identifier stored into ANY of them moves its handle into the
+// aggregate: `= . c rxbuf rest` is how tls.nu hands over its receive
+// buffer, and the struct owns it from there. Recording that in one
+// place rather than eight is the difference between a rule and a list
+// of the shapes someone remembered.
+@ gen_field_rhs i lex i syms i cg → s {
+    ? ( is_ident_tok ( nurl_lex_type lex ) )
+    { ( lint_note_released ( nurl_lex_val lex ) ) } {}
+    ^ ( gen_expr lex syms cg )
+}
+
 @ gen_field_store i lex i syms i cg → s {
     ( nurl_lex_advance lex )  // consume '.'
     // Save object name before gen_expr consumes the token (needed for struct-by-value alloca lookup)
@@ -12583,7 +12793,7 @@
         ? == ( nurl_lex_type lex ) TT_INT
         { : i idx ( nurl_lex_inum lex )
             ( nurl_lex_advance lex )
-            : s rhs ( gen_expr lex syms cg )
+            : s rhs ( gen_field_rhs lex syms cg )
             // Same store-time contract as the named-field path:
             // reject never-valid mixes, width-coerce the rest.
             // Bind the RHS type first: an owned nurl_get_last_type
@@ -12617,7 +12827,7 @@
             // load paths were already correct, so a program could read at
             // an unsigned index but not write at one.
             : s idx_type ( nurl_get_last_type )
-            : s rhs ( gen_expr lex syms cg )
+            : s rhs ( gen_field_rhs lex syms cg )
             // Same store-time contract as the named-field path:
             // reject never-valid mixes, width-coerce the rest.
             // Bind the RHS type first: an owned nurl_get_last_type
@@ -12651,7 +12861,7 @@
             : i ptlen ( nurl_str_len pt )
             : s elem_type ( nurl_str_slice pt 0 - ptlen 1 )
             // Generate RHS
-            : s rhs ( gen_expr lex syms cg )
+            : s rhs ( gen_field_rhs lex syms cg )
             // Same store-time contract as the named-field path:
             // reject never-valid mixes, width-coerce the rest.
             // Bind the RHS type first: an owned nurl_get_last_type
@@ -12721,7 +12931,7 @@
                         // shadowing a field) — array-style store *T[idx] = rhs.
                         : s idx_val ( gen_expr lex syms cg )
                         : s idx_type ( nurl_get_last_type )
-                        : s rhs ( gen_expr lex syms cg )
+                        : s rhs ( gen_field_rhs lex syms cg )
                         // Same store-time contract as the named-field path:
                         // reject never-valid mixes, width-coerce the rest.
                         // Bind the RHS type first: an owned nurl_get_last_type
@@ -12751,7 +12961,7 @@
                             ( nurl_lex_advance lex )
                             : s ftype ( nurl_sym_get2 syms sname ( nurl_str_cat `__` ( nurl_str_cat fname `__type` ) ) )
                             : i fidx ( nurl_str_to_int fidx_s )
-                            : s rhs ( gen_expr lex syms cg )
+                            : s rhs ( gen_field_rhs lex syms cg )
                             ? ( __store_type_clash ( nurl_get_last_type ) ftype )
                             { ( die lex ( nurl_str_cat ( nurl_str_cat4
                                 `cannot store a value of type '` ( nurl_get_last_type ) `' into field '` fname )
@@ -12789,7 +12999,7 @@
                             ? | != 0 ( nurl_str_len var_t ) ! is_field_ident
                             { : s idx_val ( gen_expr lex syms cg )
                                 : s idx_type ( nurl_get_last_type )
-                                : s rhs ( gen_expr lex syms cg )
+                                : s rhs ( gen_field_rhs lex syms cg )
                                 // Same store-time contract as the named-field path:
                                 // reject never-valid mixes, width-coerce the rest.
                                 // Bind the RHS type first: an owned nurl_get_last_type
@@ -12820,7 +13030,7 @@
                 {  // Raw pointer with variable index: one-index GEP
                     : s idx_val ( gen_expr lex syms cg )
                     : s idx_type ( nurl_get_last_type )
-                    : s rhs ( gen_expr lex syms cg )
+                    : s rhs ( gen_field_rhs lex syms cg )
                     // Same store-time contract as the named-field path:
                     // reject never-valid mixes, width-coerce the rest.
                     // Bind the RHS type first: an owned nurl_get_last_type
@@ -12854,7 +13064,7 @@
                 : s fidx_s ( nurl_sym_get2 syms sname ( nurl_str_cat `__` ( nurl_str_cat fname `__idx` ) ) )
                 : s ftype ( nurl_sym_get2 syms sname ( nurl_str_cat `__` ( nurl_str_cat fname `__type` ) ) )
                 : i fidx ( nurl_str_to_int fidx_s )
-                : s rhs ( gen_expr lex syms cg )
+                : s rhs ( gen_field_rhs lex syms cg )
                 ? ( __store_type_clash ( nurl_get_last_type ) ftype )
                 { ( die lex ( nurl_str_cat ( nurl_str_cat4
                     `cannot store a value of type '` ( nurl_get_last_type ) `' into field '` fname )
@@ -13769,10 +13979,38 @@
         // a direct parameter embed (`{ cb }`) from a derived value.
         : i fld_first_tt ( nurl_lex_type lex )
         : s fld_first_val ( nurl_lex_val lex )
+        // For a `. obj field` value: the object's name, needed below to
+        // tell a read out of a PARAMETER (which the caller still owns)
+        // from a read out of something this function just allocated.
+        : s fld_dot_obj ? == fld_first_tt TT_DOT ( nurl_lex_peek_val lex ) ``
         // Result tag (idx 0): `T` ⇒ Ok (payload→field 1), `F` ⇒ Err (→field 2).
         ? & agg_is_res == idx 0 { = res_is_ok ( seq fld_first_val `T` ) } {}
+        // A bare identifier as a field value moves the handle INTO the
+        // aggregate — `^ @ SseEvent { n_ d_ id_ }` is how a builder
+        // hands three Strings to its caller. Recorded before gen_expr
+        // consumes the token, because after it the snapshot is gone.
+        ? ( is_ident_tok fld_first_tt )
+        { ( lint_note_released fld_first_val )
+            ( bck_record_embedded_param syms fld_first_val ) }
+        {}
         : s fval ( gen_expr lex syms cg )
         : s fty ( nurl_get_last_type )
+        // A POINTER read out of something else, stored into this
+        // aggregate: the aggregate now aliases whatever that pointer
+        // belongs to. `. str ctl` inside `@ ( Vec u ) { … }` is how
+        // __sbuf hands back a Vec over a String's buffer.
+        // …and only when that object is a PARAMETER. `string_from` also
+        // ends with a pointer read into an aggregate, but the pointer is
+        // one it just allocated — the result owns it. `__sbuf` reads
+        // from its `str` parameter, which the caller still owns, so the
+        // Vec it returns is a view. Without the parameter test the rule
+        // silences every allocator in the stdlib.
+        ? & & == fld_first_tt TT_DOT
+        ( str_contains_word ( nurl_sym_get syms `__fn_param_names__` ) fld_dot_obj )
+        & > ( nurl_str_len fty ) 0
+        == ( nurl_str_get fty - ( nurl_str_len fty ) 1 ) 42
+        { ( nurl_sym_def syms `__fn_builds_view__` `1` ) }
+        {}
         // Struct-literal field checks. PLAIN structs only — enum / option /
         // result variant literals reach here too but use the enum_paycount
         // path (overflow) + zeroinitializer for omitted payload slots, so
@@ -16064,6 +16302,24 @@
         ? == 0 ( nurl_str_len cur ) ( nurl_str_cat name `` ) ( nurl_str_cat3 cur ` ` name ) ) }
 }
 
+// Record that `arg_name`, if it is one of this function's parameters,
+// was stored into an aggregate literal. Unlike the escape recorder this
+// is NOT gated on the borrow checker: the lint that consumes it runs
+// under --lint, which is independent of --borrowck.
+@ bck_record_embedded_param i syms s arg_name → v {
+    : s pn ( nurl_sym_get syms `__fn_param_names__` )
+    : i idx ( str_word_index pn arg_name )
+    ? >= idx 0
+    { : s cur ( nurl_sym_get syms `__fn_embedded_params__` )
+        : s new ( nurl_str_int idx )
+        ? ! ( str_contains_word cur new )
+        { ( nurl_sym_def syms `__fn_embedded_params__`
+            ? == 0 ( nurl_str_len cur ) ( nurl_str_cat new `` )
+            ( nurl_str_cat3 cur ` ` new ) ) }
+        {} }
+    {}
+}
+
 @ bck_record_inferred_escape i syms s arg_name → v {
     ? == g_borrowck 0 {} {
         : s pn ( nurl_sym_get syms `__fn_param_names__` )
@@ -17207,6 +17463,8 @@
     // the accumulator; gen_call appends param indices that reach an
     // escaping argument position; merged into g_fn_escapes[fname] below.
     ( nurl_sym_def syms `__fn_inferred_escape__` `` )
+    ( nurl_sym_def syms `__fn_embedded_params__` `` )
+    ( nurl_sym_def syms `__fn_builds_view__` `` )
     // Invoke-only inference (docs/MEMORY.md §7.4): reset the value-read
     // accumulator; gen_ident / the capture path append a parameter name
     // whenever it is loaded as a value; the complement (params never
@@ -17271,6 +17529,15 @@
                 ( nurl_str_cat3 __ae_merged ` ` __ae_w ) }
             {} }
         ( nurl_sym_def g_fn_escapes fname __ae_merged ) }
+    {}
+    // Publish the embedded-parameter set. Authoritative per function:
+    // the body is compiled, so the set is complete.
+    : s __em_set ( nurl_sym_get syms `__fn_embedded_params__` )
+    ? != 0 ( nurl_str_len __em_set )
+    { ( nurl_sym_def g_fn_embeds fname __em_set ) }
+    {}
+    ? != 0 ( nurl_str_len ( nurl_sym_get syms `__fn_builds_view__` ) )
+    { ( nurl_sym_def g_fn_ret_view fname `1` ) }
     {}
     // Invoke-only inference (docs/MEMORY.md §7.4): a parameter never
     // loaded as a value (only ever a call's callee, or unused) is a pure
@@ -22821,6 +23088,8 @@
     = g_fn_inout ( nurl_sym_new )
     = g_fn_sink ( nurl_sym_new )
     = g_fn_escapes ( nurl_sym_new )
+    = g_fn_embeds ( nurl_sym_new )
+    = g_fn_ret_view ( nurl_sym_new )
     = g_fn_invoke_only ( nurl_sym_new )
     = g_pending_escape ( nurl_sym_new )
     = g_fn_ret_param ( nurl_sym_new )
@@ -22956,6 +23225,8 @@
     // no-op on a 0 handle.
     ( nurl_sym_free g_lint_syms )
     ( nurl_sym_free g_lint_reads )
+    ( nurl_sym_free g_lint_handles )
+    ( nurl_sym_free g_lint_released )
     ( nurl_sym_free g_lint_used )
     ( nurl_sym_free g_dbg_file_syms )
     ( nurl_sym_free g_dbg_type_syms )

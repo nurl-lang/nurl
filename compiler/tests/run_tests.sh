@@ -179,6 +179,18 @@ run_one() {
             { echo "COMPILE FAIL"; } > "$act"
             if [[ -s "$err" ]]; then strip_root "$err"; echo "ERRORS" >> "$act"; append_capped "$act" "$err"; fi
         fi
+    # ── lint_* — diagnostics that only fire under --lint. Compiles
+    #             clean (the program is valid); it is the WARNINGS that
+    #             are baselined, so a lint that stops firing, starts
+    #             firing somewhere new, or moves its caret is caught.
+    elif [[ "$name" == lint_* ]]; then
+        if "$NURLC" --lint "$src" > "$ll" 2>"$err"; then
+            { echo "COMPILE OK"; } > "$act"
+            if [[ -s "$err" ]]; then strip_root "$err"; echo "WARNINGS" >> "$act"; append_capped "$act" "$err"; fi
+        else
+            { echo "COMPILE FAIL"; echo "(expected COMPILE OK)"; } > "$act"
+            if [[ -s "$err" ]]; then strip_root "$err"; append_capped "$act" "$err"; fi
+        fi
     # ── arity_strict_* — the n-ary '&'/'|' trap, which is only an
     #                     error under --strict-arity. The diagnostic
     #                     text is baselined because WHERE it points is

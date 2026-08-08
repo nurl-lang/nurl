@@ -1,0 +1,4 @@
+COMPILE OK
+WARNINGS
+compiler/tests/lint_unfreed_handle.nu:28:5: warning: 's' owns a manually-managed handle that is never released - Vec and String are not auto-dropped (docs/MEMORY.md 7.4), so free it, return it, or pass it to a 'sink'
+compiler/tests/lint_unfreed_handle.nu:33:5: warning: 'v' owns a manually-managed handle that is never released - Vec and String are not auto-dropped (docs/MEMORY.md 7.4), so free it, return it, or pass it to a 'sink'

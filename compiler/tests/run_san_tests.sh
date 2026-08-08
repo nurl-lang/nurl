@@ -188,7 +188,13 @@ is_negative_test() {
     local gold="$OUTDIR/$1.txt" first
     [[ -f "$gold" ]] || return 1
     IFS= read -r first < "$gold" || return 1
-    [[ "${first%$'\r'}" == "COMPILE FAIL" ]]
+    [[ "${first%$'\r'}" == "COMPILE FAIL" ]] && return 0
+    # The general form of the same question: a golden with no `EXIT`
+    # line does not describe running the program. Negative tests have
+    # none because they never link; `lint_*` tests have none because
+    # what they baseline is the WARNINGS the source provokes. Both
+    # belong on the compile-only path.
+    ! grep -q '^EXIT ' "$gold"
 }
 
 # ── per-test worker (exported, fanned out with xargs -P) ─────────
