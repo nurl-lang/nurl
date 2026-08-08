@@ -1827,13 +1827,21 @@
 // Record a `:` binding that owns a manually-managed handle. Re-binding
 // the same name clears any earlier release — `= s ( string_from … )`
 // after a free makes it owned again, and the new value needs its own.
-@ lint_note_handle i lex s name s lty → v {
-    ? & & & != g_lint 0 != g_lint_recording 0 ( lint_in_top_file )
-    ( lint_is_manual_handle lty )
+//
+// `owns` says the right-hand side PRODUCED the handle rather than
+// borrowed one: a call or an alias copy, and not a value the borrow
+// provenance already flagged as aliasing something its owner keeps.
+// `: ( Vec i ) t . scr t` — a Vec read out of a scratch struct that
+// still owns it — is a field read, neither of those, and was 21 false
+// positives in p256_field.nu alone. A diagnostic about leaks must only
+// claim ownership it can see being created.
+@ lint_note_handle i line i col s name s lty b owns → v {
+    ? & & & & != g_lint 0 != g_lint_recording 0 ( lint_in_top_file )
+    ( lint_is_manual_handle lty ) owns
     { ? == ( nurl_str_get name 0 ) 95 {}
         { : s row ( nurl_str_cat
-            ( nurl_str_cat3 name `\t` ( nurl_str_int ( nurl_lex_line lex ) ) )
-            ( nurl_str_cat3 `\t` ( nurl_str_int ( nurl_lex_col lex ) ) `\n` ) )
+            ( nurl_str_cat3 name `\t` ( nurl_str_int line ) )
+            ( nurl_str_cat3 `\t` ( nurl_str_int col ) `\n` ) )
             : s cur ( nurl_sym_get g_lint_handles `rows` )
             ( nurl_sym_def g_lint_handles `rows` ( nurl_str_cat cur row ) )
             ( nurl_sym_def g_lint_released
@@ -6563,7 +6571,13 @@
         { ( bck_esc_check_call_arg lex syms bck_arg_line
             ( nurl_sym_get syms `__last_ident_name__` ) fname )
             ? ( is_ident_tok bck_arg_tt )
-            { ( bck_record_inferred_escape syms bck_arg_val ) } {} }
+            { ( bck_record_inferred_escape syms bck_arg_val )
+                // The callee retains this argument past the call — a
+                // container push, a thread detach. Ownership left the
+                // binding, so the unfreed-handle lint must stop
+                // expecting a free: `( vec_push [String] v s )` is how
+                // most String handles legitimately end their life.
+                ( lint_note_released bck_arg_val ) } {} }
         {}
         // Thread-safety: the thread_spawn closure (arg 0) detaches onto a
         // worker thread. If it captures a non-Send value (an Rc — non-atomic
@@ -11887,6 +11901,12 @@
 @ gen_let_or_struct i lex i syms i cg → s {
     // Borrow checker: source line of the `:` token, for the record.
     : i bck_line ( nurl_lex_line lex )
+    // …and its column. The handle lint reports at the DECLARATION; by
+    // the time the type is known the lexer has walked the whole
+    // right-hand side, so the live position points at a use several
+    // lines down — the same "caret on the consequence" the `?` arity
+    // warning had.
+    : i bck_col ( nurl_lex_col lex )
     ( nurl_lex_advance lex )
     // Check for optional ~ (mutable) token
     : b had_mutability_check | == ( nurl_lex_type lex ) TT_TILDE ( is_type_start ( nurl_lex_type lex ) )
@@ -11989,7 +12009,9 @@
         : s rhs_borrow ( nurl_sym_get syms `__last_value_borrow__` )
         // Borrow checker: record this binding (inference path).
         ( bck_record `let` name bck_line )
-        ( lint_note_handle lex name vt )
+        ( lint_note_handle bck_line bck_col name vt
+        & == 0 ( nurl_str_len rhs_borrow )
+        | == bck_rhs_tt TT_LPAREN ( is_ident_tok bck_rhs_tt ) )
         ( bck_let_alias syms is_mutable bck_rhs_tt bck_rhs_val vt bck_line )
         : b rhs_is_owned_call != 0 ( nurl_sym_len syms `__last_call_ret_owned__` )
         // A `?`-ternary whose live arms are all fresh owned slices hands the
@@ -12223,7 +12245,9 @@
                 : s rhs_borrow ( nurl_sym_get syms `__last_value_borrow__` )
                 // Borrow checker: record this binding (typed path).
                 ( bck_record `let` name bck_line )
-                ( lint_note_handle lex name vt )
+                ( lint_note_handle bck_line bck_col name vt
+                & == 0 ( nurl_str_len rhs_borrow )
+                | == bck_rhs_tt TT_LPAREN ( is_ident_tok bck_rhs_tt ) )
                 ( bck_let_alias syms is_mutable bck_rhs_tt bck_rhs_val vt bck_line )
                 : b rhs_is_owned_call != 0 ( nurl_sym_len syms `__last_call_ret_owned__` )
                 // A `?`-ternary whose live arms are all fresh owned slices
@@ -12397,6 +12421,12 @@
         // RHS would publish.
         : i bck_rhs_tt ( nurl_lex_type lex )
         : s bck_rhs_val ( nurl_lex_val lex )
+        // `= dst src` with a bare identifier on the right is the same
+        // alias move `: T dst src` already is — `( string_free w ) = w c1`
+        // is the canonical grow-a-String idiom, and `c1`'s handle lives
+        // on in `w`. Only the `:` form was recorded, so every use of the
+        // idiom read as a leak of the temporary.
+        ? ( is_ident_tok bck_rhs_tt ) { ( lint_note_released bck_rhs_val ) } {}
         ( nurl_sym_def syms `__last_expr_refdepth__` `` )
         ( nurl_sym_def syms `__last_call_guard__` `` )
         : ~ s val ( gen_operand lex syms cg )
@@ -12669,6 +12699,20 @@
     ( __arg_named_struct_mismatch vt dt ) ( __arg_str_cstr_mismatch vt dt )
 }
 
+// The value side of a field store, wherever the store lands. There are
+// eight of those sites in gen_field_store — one per shape (slice,
+// pointer-to-struct, struct-by-value, indexed, …) — and a bare
+// identifier stored into ANY of them moves its handle into the
+// aggregate: `= . c rxbuf rest` is how tls.nu hands over its receive
+// buffer, and the struct owns it from there. Recording that in one
+// place rather than eight is the difference between a rule and a list
+// of the shapes someone remembered.
+@ gen_field_rhs i lex i syms i cg → s {
+    ? ( is_ident_tok ( nurl_lex_type lex ) )
+    { ( lint_note_released ( nurl_lex_val lex ) ) } {}
+    ^ ( gen_expr lex syms cg )
+}
+
 @ gen_field_store i lex i syms i cg → s {
     ( nurl_lex_advance lex )  // consume '.'
     // Save object name before gen_expr consumes the token (needed for struct-by-value alloca lookup)
@@ -12692,7 +12736,7 @@
         ? == ( nurl_lex_type lex ) TT_INT
         { : i idx ( nurl_lex_inum lex )
             ( nurl_lex_advance lex )
-            : s rhs ( gen_expr lex syms cg )
+            : s rhs ( gen_field_rhs lex syms cg )
             // Same store-time contract as the named-field path:
             // reject never-valid mixes, width-coerce the rest.
             // Bind the RHS type first: an owned nurl_get_last_type
@@ -12726,7 +12770,7 @@
             // load paths were already correct, so a program could read at
             // an unsigned index but not write at one.
             : s idx_type ( nurl_get_last_type )
-            : s rhs ( gen_expr lex syms cg )
+            : s rhs ( gen_field_rhs lex syms cg )
             // Same store-time contract as the named-field path:
             // reject never-valid mixes, width-coerce the rest.
             // Bind the RHS type first: an owned nurl_get_last_type
@@ -12760,7 +12804,7 @@
             : i ptlen ( nurl_str_len pt )
             : s elem_type ( nurl_str_slice pt 0 - ptlen 1 )
             // Generate RHS
-            : s rhs ( gen_expr lex syms cg )
+            : s rhs ( gen_field_rhs lex syms cg )
             // Same store-time contract as the named-field path:
             // reject never-valid mixes, width-coerce the rest.
             // Bind the RHS type first: an owned nurl_get_last_type
@@ -12830,7 +12874,7 @@
                         // shadowing a field) — array-style store *T[idx] = rhs.
                         : s idx_val ( gen_expr lex syms cg )
                         : s idx_type ( nurl_get_last_type )
-                        : s rhs ( gen_expr lex syms cg )
+                        : s rhs ( gen_field_rhs lex syms cg )
                         // Same store-time contract as the named-field path:
                         // reject never-valid mixes, width-coerce the rest.
                         // Bind the RHS type first: an owned nurl_get_last_type
@@ -12860,7 +12904,7 @@
                             ( nurl_lex_advance lex )
                             : s ftype ( nurl_sym_get2 syms sname ( nurl_str_cat `__` ( nurl_str_cat fname `__type` ) ) )
                             : i fidx ( nurl_str_to_int fidx_s )
-                            : s rhs ( gen_expr lex syms cg )
+                            : s rhs ( gen_field_rhs lex syms cg )
                             ? ( __store_type_clash ( nurl_get_last_type ) ftype )
                             { ( die lex ( nurl_str_cat ( nurl_str_cat4
                                 `cannot store a value of type '` ( nurl_get_last_type ) `' into field '` fname )
@@ -12898,7 +12942,7 @@
                             ? | != 0 ( nurl_str_len var_t ) ! is_field_ident
                             { : s idx_val ( gen_expr lex syms cg )
                                 : s idx_type ( nurl_get_last_type )
-                                : s rhs ( gen_expr lex syms cg )
+                                : s rhs ( gen_field_rhs lex syms cg )
                                 // Same store-time contract as the named-field path:
                                 // reject never-valid mixes, width-coerce the rest.
                                 // Bind the RHS type first: an owned nurl_get_last_type
@@ -12929,7 +12973,7 @@
                 {  // Raw pointer with variable index: one-index GEP
                     : s idx_val ( gen_expr lex syms cg )
                     : s idx_type ( nurl_get_last_type )
-                    : s rhs ( gen_expr lex syms cg )
+                    : s rhs ( gen_field_rhs lex syms cg )
                     // Same store-time contract as the named-field path:
                     // reject never-valid mixes, width-coerce the rest.
                     // Bind the RHS type first: an owned nurl_get_last_type
@@ -12963,7 +13007,7 @@
                 : s fidx_s ( nurl_sym_get2 syms sname ( nurl_str_cat `__` ( nurl_str_cat fname `__idx` ) ) )
                 : s ftype ( nurl_sym_get2 syms sname ( nurl_str_cat `__` ( nurl_str_cat fname `__type` ) ) )
                 : i fidx ( nurl_str_to_int fidx_s )
-                : s rhs ( gen_expr lex syms cg )
+                : s rhs ( gen_field_rhs lex syms cg )
                 ? ( __store_type_clash ( nurl_get_last_type ) ftype )
                 { ( die lex ( nurl_str_cat ( nurl_str_cat4
                     `cannot store a value of type '` ( nurl_get_last_type ) `' into field '` fname )
@@ -13880,6 +13924,11 @@
         : s fld_first_val ( nurl_lex_val lex )
         // Result tag (idx 0): `T` ⇒ Ok (payload→field 1), `F` ⇒ Err (→field 2).
         ? & agg_is_res == idx 0 { = res_is_ok ( seq fld_first_val `T` ) } {}
+        // A bare identifier as a field value moves the handle INTO the
+        // aggregate — `^ @ SseEvent { n_ d_ id_ }` is how a builder
+        // hands three Strings to its caller. Recorded before gen_expr
+        // consumes the token, because after it the snapshot is gone.
+        ? ( is_ident_tok fld_first_tt ) { ( lint_note_released fld_first_val ) } {}
         : s fval ( gen_expr lex syms cg )
         : s fty ( nurl_get_last_type )
         // Struct-literal field checks. PLAIN structs only — enum / option /
