@@ -1548,6 +1548,17 @@
 : ~ i g_lint_syms 0
 : ~ i g_lint_used 0
 : ~ i g_lint_reads 0
+// g_lint_handles — per-function roster of MANUALLY-MANAGED handles
+//                  (docs/MEMORY.md §7.4: Vec and String, the two the
+//                  compiler deliberately does not auto-drop). Rows are
+//                  "name\tline\tcol\n", same shape as `binds`.
+// g_lint_released — set of handles whose ownership provably LEFT the
+//                  binding: freed, sunk, aliased away, or returned.
+//                  Keyed "<gen> <name>" like g_lint_reads, so a name in
+//                  one function never satisfies the same name in
+//                  another.
+: ~ i g_lint_handles 0
+: ~ i g_lint_released 0
 : ~ i g_lint_gen 0
 // 1 only during the main parse_program pass. Cleared before
 // flush_deferred_instantiations so synthetic generic monomorphisations
@@ -1652,6 +1663,9 @@
     = g_lint_syms ( nurl_sym_new )
     = g_lint_used ( nurl_sym_new )
     = g_lint_reads ( nurl_sym_new )
+    = g_lint_handles ( nurl_sym_new )
+    = g_lint_released ( nurl_sym_new )
+    ( nurl_sym_def g_lint_handles `rows` `` )
     ( nurl_sym_def g_lint_syms `top` top )
     ( nurl_sym_def g_lint_syms `fns` `` )
     ( nurl_sym_def g_lint_syms `binds` `` )
@@ -1799,12 +1813,55 @@
     {}
 }
 
+// The manually-managed handle set, exactly as docs/MEMORY.md §7.4
+// enumerates it: `String` and `Vec`. Everything else with a heap
+// interior is auto-dropped at scope exit, so it is not the caller's to
+// release and must never be reported here. Keyed on the LLVM type name
+// (`%String`, `%Vec__i64`, `%Vec__String`) because that is what is in
+// scope where a binding is recorded.
+@ lint_is_manual_handle s lty → b {
+    ? ( seq lty `%String` ) { ^ T } {}
+    ^ != 0 ( nurl_str_starts lty `%Vec__` )
+}
+
+// Record a `:` binding that owns a manually-managed handle. Re-binding
+// the same name clears any earlier release — `= s ( string_from … )`
+// after a free makes it owned again, and the new value needs its own.
+@ lint_note_handle i lex s name s lty → v {
+    ? & & & != g_lint 0 != g_lint_recording 0 ( lint_in_top_file )
+    ( lint_is_manual_handle lty )
+    { ? == ( nurl_str_get name 0 ) 95 {}
+        { : s row ( nurl_str_cat
+            ( nurl_str_cat3 name `\t` ( nurl_str_int ( nurl_lex_line lex ) ) )
+            ( nurl_str_cat3 `\t` ( nurl_str_int ( nurl_lex_col lex ) ) `\n` ) )
+            : s cur ( nurl_sym_get g_lint_handles `rows` )
+            ( nurl_sym_def g_lint_handles `rows` ( nurl_str_cat cur row ) )
+            ( nurl_sym_def g_lint_released
+            ( nurl_str_cat3 ( nurl_str_int g_lint_gen ) ` ` name ) `` ) }
+    }
+    {}
+}
+
+// Ownership left `name`. Called from every site that transfers it: a
+// `*_free` destructor call, a `sink` argument, a binding-to-binding
+// alias copy, and `^`-return. Those are the transfer routes the
+// compiler already models — the same ones that produce a borrow-checker
+// `move`. A handle that reaches the end of its function without one of
+// these has nothing that could have released it.
+@ lint_note_released s name → v {
+    ? & != g_lint 0 > ( nurl_str_len name ) 0
+    { ( nurl_sym_def g_lint_released
+        ( nurl_str_cat3 ( nurl_str_int g_lint_gen ) ` ` name ) `1` ) }
+    {}
+}
+
 // Begin a fresh per-function lint scope: bump the read generation and
 // clear the binding roster. Called at every function-body start.
 @ lint_fn_begin → v {
     ? != g_lint 0
     { = g_lint_gen + g_lint_gen 1
-        ( nurl_sym_def g_lint_syms `binds` `` ) }
+        ( nurl_sym_def g_lint_syms `binds` `` )
+        ( nurl_sym_def g_lint_handles `rows` `` ) }
     {}
 }
 
@@ -1846,6 +1903,28 @@
     }
 }
 
+// Parse one handle row and warn when ownership never left the binding.
+@ lint_check_handle s file s row → v {
+    : i t1 ( nurl_str_find row `\t` )
+    ? < t1 0 {} {
+        : i rl ( nurl_str_len row )
+        : s nm ( nurl_str_slice row 0 t1 )
+        : s tail ( nurl_str_slice row + t1 1 - rl + t1 1 )
+        : i t2 ( nurl_str_find tail `\t` )
+        ? < t2 0 {} {
+            : i tl ( nurl_str_len tail )
+            : s ln ( nurl_str_slice tail 0 t2 )
+            : s cl ( nurl_str_slice tail + t2 1 - tl + t2 1 )
+            : s key ( nurl_str_cat3 ( nurl_str_int g_lint_gen ) ` ` nm )
+            ? ( seq ( nurl_sym_get g_lint_released key ) `1` ) {} {
+                ( lint_warn file ( nurl_str_to_int ln ) ( nurl_str_to_int cl )
+                ( nurl_str_cat3 `'` nm
+                `' owns a manually-managed handle that is never released - Vec and String are not auto-dropped (docs/MEMORY.md 7.4), so free it, return it, or pass it to a 'sink'` ) )
+            }
+        }
+    }
+}
+
 // At function-body end, warn for every recorded `:` binding never read
 // in this function. Reads were tracked unconditionally (including
 // inside closures), so a binding used only by a captured closure is
@@ -1860,6 +1939,18 @@
             : s row ? < nl 0 rest ( nurl_str_slice rest 0 nl )
             = rest ? < nl 0 `` ( nurl_str_slice rest + nl 1 - rl + nl 1 )
             ( lint_check_bind file row )
+        }
+        // …and for every manually-managed handle whose ownership never
+        // left. A handle is released by exactly the routes the compiler
+        // already models as a move: a `*_free` destructor, a `sink`
+        // argument, an alias copy, or a `^`-return.
+        : ~ s hrest ( nurl_sym_get g_lint_handles `rows` )
+        ~ != 0 ( nurl_str_len hrest ) {
+            : i hnl ( nurl_str_find hrest `\n` )
+            : i hrl ( nurl_str_len hrest )
+            : s hrow ? < hnl 0 hrest ( nurl_str_slice hrest 0 hnl )
+            = hrest ? < hnl 0 `` ( nurl_str_slice hrest + hnl 1 - hrl + hnl 1 )
+            ( lint_check_handle file hrow )
         }
     }
     {}
@@ -2399,6 +2490,20 @@
     // uniformly. Only consulted when --borrowck is on.
     ( bck_esc_check_return lex syms bck_line
     ( nurl_sym_get syms `__last_ident_name__` ) )
+    // Returning a handle hands it to the caller — that is a release.
+    //
+    // `__last_ident_name__` is the last identifier PARSED, not the value
+    // being returned: for `^ ( string_len s )` it is `s`, which would
+    // mark a leaked handle as released and silence the whole check. So
+    // this only fires when the function's declared return type is itself
+    // a manually-managed handle — the only case where a return can carry
+    // one out. That over-suppresses (every handle in a String-returning
+    // function is treated as possibly-returned) and never under-reports,
+    // which is the right direction for a diagnostic that must not cry
+    // wolf.
+    ? ( lint_is_manual_handle ( nurl_llty ( nurl_sym_get syms `__fn_ret_ty__` ) ) )
+    { ( lint_note_released ( nurl_sym_get syms `__last_ident_name__` ) ) }
+    {}
     // Diagnose cases where gen_expr produced no usable value (last_type =
     // void, e.g. a `? cond then else` whose two arms have incompatible
     // types so gen_cond degrades silently to void) while the function
@@ -6517,6 +6622,7 @@
         // move (flushed after the enclosing statement).
         ? & & is_consume_call == arg_idx 0 ( is_ident_tok bck_arg_tt )
         { ( bck_stash_move bck_arg_val ( nurl_lex_line lex ) )
+            ( lint_note_released bck_arg_val )
             // Auto-sink inference: if the consumed bare-ident is the
             // enclosing fn's parameter, record its index so
             // gen_fn_decl_concrete can append it to g_fn_sink[fname].
@@ -6543,6 +6649,7 @@
                 `'` bck_arg_val
                 `' is a compiler-auto-dropped value; passing it to a 'sink' parameter is not yet supported - pass a Vec or other manually-managed handle, or pass it as an ordinary parameter` ) ) }
             { ( bck_stash_move bck_arg_val ( nurl_lex_line lex ) )
+                ( lint_note_released bck_arg_val )
                 // Auto-sink cascade: if THIS fn passes its own
                 // parameter as a sink arg to another fn, mark this
                 // parameter as auto-sink too — the caller of this fn
@@ -10672,7 +10779,7 @@
 @ bck_let_alias i syms b is_mut i rhs_tt s rhs_val s vt i line → v {
     ? & & & ! is_mut ( is_ident_tok rhs_tt ) ( bck_is_heap_lty vt )
     ! ( str_contains_word ( nurl_sym_get syms `__fn_param_names__` ) rhs_val )
-    { ( bck_stash_move rhs_val line ) }
+    { ( bck_stash_move rhs_val line ) ( lint_note_released rhs_val ) }
     {}
 }
 
@@ -11882,6 +11989,7 @@
         : s rhs_borrow ( nurl_sym_get syms `__last_value_borrow__` )
         // Borrow checker: record this binding (inference path).
         ( bck_record `let` name bck_line )
+        ( lint_note_handle lex name vt )
         ( bck_let_alias syms is_mutable bck_rhs_tt bck_rhs_val vt bck_line )
         : b rhs_is_owned_call != 0 ( nurl_sym_len syms `__last_call_ret_owned__` )
         // A `?`-ternary whose live arms are all fresh owned slices hands the
@@ -12115,6 +12223,7 @@
                 : s rhs_borrow ( nurl_sym_get syms `__last_value_borrow__` )
                 // Borrow checker: record this binding (typed path).
                 ( bck_record `let` name bck_line )
+                ( lint_note_handle lex name vt )
                 ( bck_let_alias syms is_mutable bck_rhs_tt bck_rhs_val vt bck_line )
                 : b rhs_is_owned_call != 0 ( nurl_sym_len syms `__last_call_ret_owned__` )
                 // A `?`-ternary whose live arms are all fresh owned slices
@@ -22956,6 +23065,8 @@
     // no-op on a 0 handle.
     ( nurl_sym_free g_lint_syms )
     ( nurl_sym_free g_lint_reads )
+    ( nurl_sym_free g_lint_handles )
+    ( nurl_sym_free g_lint_released )
     ( nurl_sym_free g_lint_used )
     ( nurl_sym_free g_dbg_file_syms )
     ( nurl_sym_free g_dbg_type_syms )
