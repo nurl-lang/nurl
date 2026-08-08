@@ -10,6 +10,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`--lint` reports a `Vec` or `String` nobody releases.** Those two
+  are the handles the compiler deliberately does *not* auto-drop
+  (docs/MEMORY.md §7.4), so forgetting one leaks with no diagnostic
+  anywhere — and it is the mistake a language model makes most, because
+  the type looks owned and the code looks finished.
+
+  Ownership leaves a binding by the routes the compiler already models,
+  and the report fires only when none of them was taken: a `*_free`
+  destructor, a `sink` argument, an alias copy into an immutable
+  binding, a `^`-return, a store into an aggregate literal, a store into
+  a struct field, or an argument the callee embeds.
+
+  Two of those the compiler could not previously see, so they are new
+  summaries — deliberately **separate** from `g_fn_escapes` rather than
+  folded into it. Escape means the value outlives the whole call chain,
+  so a stack reference handed there must be rejected; embedding a value
+  in an aggregate does not imply that (`wrap` puts a closure in a `Slot`
+  the caller may consume in the referent's own scope, which
+  `ret_escape_agg_ok` exists to keep legal). Conflating them turns that
+  negative control red — which is how the distinction was found.
+
+  Measured against stdlib + examples + the corpus while it was built:
+  **645 → 126** warnings, stdlib **97 → 14**, each step a root cause
+  rather than a suppression. What remains is dominated by forward
+  references — a callee that frees its parameter, defined after its call
+  site, so the sink summary is not yet known — a limitation the existing
+  inference already documents for itself.
+
+### Added
+
 - **`break` and `continue` (grammar v2.4).** Every parsing loop in this
   tree was `: ~ b run T` plus `= run F` plus a condition that reads the
   flag — three lines for one, and three places to forget the reset.

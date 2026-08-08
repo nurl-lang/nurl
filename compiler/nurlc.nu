@@ -938,6 +938,39 @@
 // check (docs/MEMORY.md §2.7). Allocated in main().
 : ~ i g_fn_escapes 0
 
+// Per-function EMBEDDED-parameter map.
+// `g_fn_embeds[fname]` is the space-separated list of 0-based indices
+// of parameters the body stores into an aggregate literal.
+//
+// Deliberately NOT part of g_fn_escapes, which answers a different
+// question. Escape means the value outlives the whole call chain — a
+// heap container, a worker thread — so a stack reference handed to such
+// a parameter dangles and must be rejected. Embedding does not imply
+// that: `@ wrap ( @ v ) cb → Slot { ^ @ Slot { cb } }` puts a closure
+// in a struct the CALLER may well consume inside the referent's own
+// scope, which is legal and has a negative control pinning it
+// (compiler/tests/ret_escape_agg_ok.nu). Folding the two together turns
+// that test red.
+//
+// What embedding does answer is OWNERSHIP: a handle stored into a
+// structure the callee built is no longer the caller's to free —
+// whether the structure is returned, kept, or dropped there. That is
+// what the unfreed-handle lint needs, and it is the only consumer.
+: ~ i g_fn_embeds 0
+
+// Per-function RETURNS-A-VIEW map. `g_fn_ret_view[fname]` is set when
+// the body builds an aggregate one of whose fields is a POINTER read
+// out of something else — `@ __sbuf String str → ( Vec u ) { ^ @ ( Vec
+// u ) { . str ctl } }` hands back a Vec over the String's own buffer.
+// The result aliases; freeing it would double-free.
+//
+// Lint-only, like g_fn_embeds, and for the same reason: the existing
+// borrow-provenance flag (__fn_ret_borrow__) feeds auto-drop, and a
+// wrong "this is a borrow" there SKIPS a drop, which leaks. This
+// summary only ever makes a diagnostic quieter, so an over-approximation
+// costs a missed report and never a miscompile.
+: ~ i g_fn_ret_view 0
+
 // Per-function *invoke-only* parameter map (closure-env reclamation,
 // docs/MEMORY.md §7.4). `g_fn_invoke_only[fname]` is the space-separated
 // list of 0-based parameter indices that the body uses ONLY as the
@@ -1829,8 +1862,11 @@
 // after a free makes it owned again, and the new value needs its own.
 //
 // `owns` says the right-hand side PRODUCED the handle rather than
-// borrowed one: a call or an alias copy, and not a value the borrow
-// provenance already flagged as aliasing something its owner keeps.
+// borrowed one: a call, or an alias copy into an IMMUTABLE binding —
+// the same `! is_mut` rule bck_let_alias uses to tell a move from the
+// cursor idiom. `: ~ ( Vec TomlEntry ) current root` is a mutable
+// working alias walking a structure whose source stays the owner; it
+// owns nothing and must never be asked to free anything.
 // `: ( Vec i ) t . scr t` — a Vec read out of a scratch struct that
 // still owns it — is a field read, neither of those, and was 21 false
 // positives in p256_field.nu alone. A diagnostic about leaks must only
@@ -3727,6 +3763,11 @@
     ( nurl_sym_def syms `__last_value_borrow__`
     ? | != 0 ( nurl_sym_len2 syms cn `__ret_borrow` )
     != 0 ( nurl_str_starts cn `vec_get` ) `1` `` )
+    // Lint-only view provenance — the sibling of the channel set on the
+    // other call path; both have to publish it or the summary reaches
+    // only half the call sites.
+    ( nurl_sym_def syms `__last_call_ret_view__`
+    ( nurl_sym_get g_fn_ret_view cn ) )
 }
 
 // gen_inout_field_addr: lex is positioned at the TT_DOT of an
@@ -5801,6 +5842,11 @@
     ( nurl_sym_def syms `__last_value_borrow__`
     ? | != 0 ( nurl_sym_len2 syms fname `__ret_borrow` )
     != 0 ( nurl_str_starts fname `vec_get` ) `1` `` )
+    // Lint-only view provenance (see g_fn_ret_view): kept in its own
+    // channel so it cannot reach the auto-drop decision that
+    // __last_value_borrow__ drives.
+    ( nurl_sym_def syms `__last_call_ret_view__`
+    ( nurl_sym_get g_fn_ret_view fname ) )
     : s rl ( nurl_sym_get syms fname )
     : s rlt ? == 0 ( nurl_str_len rl ) `i64` rl
     ? ( seq rlt `void` )
@@ -6567,6 +6613,15 @@
         : b builtin_escape_slot & is_escape_call ! & vec_family_call == arg_idx 0
         : b arg_pos_escapes | builtin_escape_slot
         ( str_contains_word callee_escapes ( nurl_str_int arg_idx ) )
+        // Ownership, not lifetime: an argument the callee stores into an
+        // aggregate belongs to that structure now, so the caller has
+        // nothing left to free. Kept apart from the escape check below
+        // on purpose — see g_fn_embeds for why folding them turns
+        // ret_escape_agg_ok red.
+        ? & ( str_contains_word ( nurl_sym_get g_fn_embeds fname ) ( nurl_str_int arg_idx ) )
+        ( is_ident_tok bck_arg_tt )
+        { ( lint_note_released bck_arg_val ) }
+        {}
         ? arg_pos_escapes
         { ( bck_esc_check_call_arg lex syms bck_arg_line
             ( nurl_sym_get syms `__last_ident_name__` ) fname )
@@ -12010,8 +12065,9 @@
         // Borrow checker: record this binding (inference path).
         ( bck_record `let` name bck_line )
         ( lint_note_handle bck_line bck_col name vt
-        & == 0 ( nurl_str_len rhs_borrow )
-        | == bck_rhs_tt TT_LPAREN ( is_ident_tok bck_rhs_tt ) )
+        & & == 0 ( nurl_str_len rhs_borrow )
+        == 0 ( nurl_str_len ( nurl_sym_get syms `__last_call_ret_view__` ) )
+        | == bck_rhs_tt TT_LPAREN & ( is_ident_tok bck_rhs_tt ) ! is_mutable )
         ( bck_let_alias syms is_mutable bck_rhs_tt bck_rhs_val vt bck_line )
         : b rhs_is_owned_call != 0 ( nurl_sym_len syms `__last_call_ret_owned__` )
         // A `?`-ternary whose live arms are all fresh owned slices hands the
@@ -12246,8 +12302,9 @@
                 // Borrow checker: record this binding (typed path).
                 ( bck_record `let` name bck_line )
                 ( lint_note_handle bck_line bck_col name vt
-                & == 0 ( nurl_str_len rhs_borrow )
-                | == bck_rhs_tt TT_LPAREN ( is_ident_tok bck_rhs_tt ) )
+                & & == 0 ( nurl_str_len rhs_borrow )
+                == 0 ( nurl_str_len ( nurl_sym_get syms `__last_call_ret_view__` ) )
+                | == bck_rhs_tt TT_LPAREN & ( is_ident_tok bck_rhs_tt ) ! is_mutable )
                 ( bck_let_alias syms is_mutable bck_rhs_tt bck_rhs_val vt bck_line )
                 : b rhs_is_owned_call != 0 ( nurl_sym_len syms `__last_call_ret_owned__` )
                 // A `?`-ternary whose live arms are all fresh owned slices
@@ -13922,15 +13979,38 @@
         // a direct parameter embed (`{ cb }`) from a derived value.
         : i fld_first_tt ( nurl_lex_type lex )
         : s fld_first_val ( nurl_lex_val lex )
+        // For a `. obj field` value: the object's name, needed below to
+        // tell a read out of a PARAMETER (which the caller still owns)
+        // from a read out of something this function just allocated.
+        : s fld_dot_obj ? == fld_first_tt TT_DOT ( nurl_lex_peek_val lex ) ``
         // Result tag (idx 0): `T` ⇒ Ok (payload→field 1), `F` ⇒ Err (→field 2).
         ? & agg_is_res == idx 0 { = res_is_ok ( seq fld_first_val `T` ) } {}
         // A bare identifier as a field value moves the handle INTO the
         // aggregate — `^ @ SseEvent { n_ d_ id_ }` is how a builder
         // hands three Strings to its caller. Recorded before gen_expr
         // consumes the token, because after it the snapshot is gone.
-        ? ( is_ident_tok fld_first_tt ) { ( lint_note_released fld_first_val ) } {}
+        ? ( is_ident_tok fld_first_tt )
+        { ( lint_note_released fld_first_val )
+            ( bck_record_embedded_param syms fld_first_val ) }
+        {}
         : s fval ( gen_expr lex syms cg )
         : s fty ( nurl_get_last_type )
+        // A POINTER read out of something else, stored into this
+        // aggregate: the aggregate now aliases whatever that pointer
+        // belongs to. `. str ctl` inside `@ ( Vec u ) { … }` is how
+        // __sbuf hands back a Vec over a String's buffer.
+        // …and only when that object is a PARAMETER. `string_from` also
+        // ends with a pointer read into an aggregate, but the pointer is
+        // one it just allocated — the result owns it. `__sbuf` reads
+        // from its `str` parameter, which the caller still owns, so the
+        // Vec it returns is a view. Without the parameter test the rule
+        // silences every allocator in the stdlib.
+        ? & & == fld_first_tt TT_DOT
+        ( str_contains_word ( nurl_sym_get syms `__fn_param_names__` ) fld_dot_obj )
+        & > ( nurl_str_len fty ) 0
+        == ( nurl_str_get fty - ( nurl_str_len fty ) 1 ) 42
+        { ( nurl_sym_def syms `__fn_builds_view__` `1` ) }
+        {}
         // Struct-literal field checks. PLAIN structs only — enum / option /
         // result variant literals reach here too but use the enum_paycount
         // path (overflow) + zeroinitializer for omitted payload slots, so
@@ -16222,6 +16302,24 @@
         ? == 0 ( nurl_str_len cur ) ( nurl_str_cat name `` ) ( nurl_str_cat3 cur ` ` name ) ) }
 }
 
+// Record that `arg_name`, if it is one of this function's parameters,
+// was stored into an aggregate literal. Unlike the escape recorder this
+// is NOT gated on the borrow checker: the lint that consumes it runs
+// under --lint, which is independent of --borrowck.
+@ bck_record_embedded_param i syms s arg_name → v {
+    : s pn ( nurl_sym_get syms `__fn_param_names__` )
+    : i idx ( str_word_index pn arg_name )
+    ? >= idx 0
+    { : s cur ( nurl_sym_get syms `__fn_embedded_params__` )
+        : s new ( nurl_str_int idx )
+        ? ! ( str_contains_word cur new )
+        { ( nurl_sym_def syms `__fn_embedded_params__`
+            ? == 0 ( nurl_str_len cur ) ( nurl_str_cat new `` )
+            ( nurl_str_cat3 cur ` ` new ) ) }
+        {} }
+    {}
+}
+
 @ bck_record_inferred_escape i syms s arg_name → v {
     ? == g_borrowck 0 {} {
         : s pn ( nurl_sym_get syms `__fn_param_names__` )
@@ -17365,6 +17463,8 @@
     // the accumulator; gen_call appends param indices that reach an
     // escaping argument position; merged into g_fn_escapes[fname] below.
     ( nurl_sym_def syms `__fn_inferred_escape__` `` )
+    ( nurl_sym_def syms `__fn_embedded_params__` `` )
+    ( nurl_sym_def syms `__fn_builds_view__` `` )
     // Invoke-only inference (docs/MEMORY.md §7.4): reset the value-read
     // accumulator; gen_ident / the capture path append a parameter name
     // whenever it is loaded as a value; the complement (params never
@@ -17429,6 +17529,15 @@
                 ( nurl_str_cat3 __ae_merged ` ` __ae_w ) }
             {} }
         ( nurl_sym_def g_fn_escapes fname __ae_merged ) }
+    {}
+    // Publish the embedded-parameter set. Authoritative per function:
+    // the body is compiled, so the set is complete.
+    : s __em_set ( nurl_sym_get syms `__fn_embedded_params__` )
+    ? != 0 ( nurl_str_len __em_set )
+    { ( nurl_sym_def g_fn_embeds fname __em_set ) }
+    {}
+    ? != 0 ( nurl_str_len ( nurl_sym_get syms `__fn_builds_view__` ) )
+    { ( nurl_sym_def g_fn_ret_view fname `1` ) }
     {}
     // Invoke-only inference (docs/MEMORY.md §7.4): a parameter never
     // loaded as a value (only ever a call's callee, or unused) is a pure
@@ -22979,6 +23088,8 @@
     = g_fn_inout ( nurl_sym_new )
     = g_fn_sink ( nurl_sym_new )
     = g_fn_escapes ( nurl_sym_new )
+    = g_fn_embeds ( nurl_sym_new )
+    = g_fn_ret_view ( nurl_sym_new )
     = g_fn_invoke_only ( nurl_sym_new )
     = g_pending_escape ( nurl_sym_new )
     = g_fn_ret_param ( nurl_sym_new )
