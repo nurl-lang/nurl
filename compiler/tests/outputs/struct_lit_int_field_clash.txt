@@ -1,6 +1,6 @@
 COMPILE FAIL
 ERRORS
-compiler/tests/struct_lit_int_field_clash.nu:15:31: error: field 2 of struct literal 'Outer' expects type '%Gv' but the value has type 'i64' — NURL has no implicit conversions
+compiler/tests/struct_lit_int_field_clash.nu:15:31: error: field 2 of struct literal 'Outer' expects type '%Gv' but the value has type 'i64' — NURL has no implicit conversions; give the field a value of its declared type, or convert explicitly with '# T expr'
     : Outer o @ Outer { g g 0 }
                               ^
 error: aborting due to 1 previous error

@@ -1,0 +1,6 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_call_inout_type_mismatch.nu:11:14: error: argument 1 to 'bump' is passed 'inout' as 'i64*' but the parameter is declared 'f' — an 'inout' argument is passed by address, so the binding's type must match the declared parameter type exactly (no width or float coercion is possible through a pointer; the callee would write its own type's bytes into the caller's differently-typed slot). Declare the binding with the parameter's type, or change the parameter.
+    ( bump n )
+             ^
+error: aborting due to 1 previous error

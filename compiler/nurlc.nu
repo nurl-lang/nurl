@@ -2618,6 +2618,16 @@
             `return value type '` lt `' does not match the declared return type '` fn_rt )
             `' — NURL has no implicit conversions; return a value of the declared type or convert with '# T expr'` ) ) }
         {}
+        // Float WIDTH mismatch — the floating dual of the integer-width
+        // contract below. `^ x` of `f32` from a `→ f` function lowered
+        // `ret float` out of a `define double` — invalid IR that nurlc
+        // accepted (rc 0) and only the LLVM verifier rejected, with a .ll
+        // line number and no source location.
+        ? & & ret_vf ret_df ! ( seq lt fn_rt )
+        { ( die lex ( nurl_str_cat ( nurl_str_cat4
+            `return value type '` ( llvm_to_nurl lt ) `' does not match the declared return type '` ( llvm_to_nurl fn_rt ) )
+            `' — a float width widens into a BINDING (': f x f32val' is fine), but a return type is a contract and must match exactly. Convert with '# f expr' (widen, lossless) or '# f32 expr' (narrow).` ) ) }
+        {}
         // Return the wrong named struct by value (the return-position dual of
         // the call-site struct check): `^ b` from a `→ A` fn where b is a B.
         ? ( __arg_named_struct_mismatch lt fn_rt )
@@ -3289,6 +3299,69 @@
         `', right is '` ( llvm_to_nurl rt ) )
         `' — NURL has no implicit numeric conversions; widen or truncate one side with '# T expr'` ) ) }
     {}
+    // Exactly ONE register operand, the other an integer constant, at
+    // DIFFERENT widths. The instruction below is emitted at one shared
+    // type, and that type must be one the register operand actually
+    // has — the old code always printed the LEFT type, so `+ 10 c`
+    // with c: b produced `add i64 10, %c` (%c is i1): invalid IR that
+    // nurlc accepted (rc 0) and only clang rejected, with a .ll line
+    // and no source location. Three shapes:
+    //   * i1 register + integer constant — the bool WIDENS (zext, the
+    //     binding law: T is 1, never -1): `+ 10 flag` means 10 or 11.
+    //     Evaluating at i1 instead would wrap (`+ 1 flag` → 0).
+    //   * narrow-int register + a constant that FITS its width — emit
+    //     at the register's width (the documented reinterpret
+    //     exemption, now direction-correct for a LEFT constant too).
+    //   * narrow-int register + a constant that does NOT fit — die:
+    //     LLVM would either reject the emitted constant (.ll-line
+    //     error) or silently wrap it.
+    : b __l_reg == ( nurl_str_get lv 0 ) 37
+    : b __r_reg == ( nurl_str_get rv 0 ) 37
+    : ~ s __arith_ty ( nurl_str_cat lt `` )
+    ? & & & > __lw 0 > __rw 0 != __lw __rw != __l_reg __r_reg {
+        : i __regw ? __l_reg __lw __rw
+        : i __cv ( nurl_str_to_int ? __l_reg rv lv )
+        ? == __regw 1 {
+            : s __wv ( nurl_cg_reg cg )
+            ( nurl_print `  ` ) ( nurl_print __wv )
+            ( nurl_print ` = zext i1 ` ) ( nurl_print ? __l_reg lv rv )
+            ( nurl_print ` to ` ) ( nurl_print ( nurl_llty ? __l_reg rt lt ) ) ( nurl_print `\n` )
+            ? __l_reg { = lv __wv } { = rv __wv }
+            = __arith_ty ? __l_reg ( nurl_str_cat rt `` ) ( nurl_str_cat lt `` )
+        } {
+            ? < __regw 64 {
+                : i __rlo - 0 << 1 - __regw 1
+                : i __rhi - << 1 __regw 1
+                ? | < __cv __rlo > __cv __rhi
+                { ( die lex ( nurl_str_cat ( nurl_str_cat4
+                    `integer literal ` ( nurl_str_int __cv ) ` does not fit the '` ( llvm_to_nurl ? __l_reg lt rt ) )
+                    ( nurl_str_cat3 `' operand it is combined with (that type holds ` ( nurl_str_int __rlo )
+                    ( nurl_str_cat3 `..` ( nurl_str_int __rhi ) `) — NURL evaluates the operator at the typed operand's width. Widen the typed operand with '# i expr', or use a literal in range.` ) ) ) ) }
+                { = __arith_ty ? __l_reg ( nurl_str_cat lt `` ) ( nurl_str_cat rt `` ) }
+            } {}
+        }
+    } {}
+    // The float dual: `+ 1.5 y` with y: f32 printed `fadd double 1.5,
+    // %y` (%y is float) — same invalid-IR class. A float CONSTANT is
+    // always double-typed, so the f32 REGISTER widens via fpext
+    // (lossless), mirroring the zext above. Two REGISTERS of different
+    // float widths have no reinterpret exemption at all — that is a
+    // width clash the int side already rejects; demand the cast.
+    ? & & lf rf ! ( seq ( nurl_llty lt ) ( nurl_llty rt ) ) {
+        ? & __l_reg __r_reg
+        { ( die lex ( nurl_str_cat ( nurl_str_cat4
+            `operator mixes float operands of different widths: left is '` ( llvm_to_nurl ( nurl_llty lt ) )
+            `', right is '` ( llvm_to_nurl ( nurl_llty rt ) ) )
+            `' — NURL has no implicit numeric conversions; widen with '# f expr' (lossless) or narrow with '# f32 expr'` ) ) }
+        { : s __ffrom ? ( seq ( nurl_llty lt ) `float` ) lt rt
+            : s __fval ? ( seq ( nurl_llty lt ) `float` ) lv rv
+            : s __fwv ( nurl_cg_reg cg )
+            ( nurl_print `  ` ) ( nurl_print __fwv )
+            ( nurl_print ` = fpext float ` ) ( nurl_print __fval ) ( nurl_print ` to double\n` )
+            ? ( seq ( nurl_llty lt ) `float` ) { = lv __fwv } { = rv __fwv }
+            = __arith_ty `double`
+        }
+    } {}
     // A CONSTANT shift amount out of the value type's range is LLVM
     // poison at every opt level (spec §6.1) — statically known, so
     // reject it here instead of letting an optimised build turn the
@@ -3304,7 +3377,7 @@
         {}
     }
     {}
-    : ~ s cmp_ty lt
+    : ~ s cmp_ty ( nurl_str_cat __arith_ty `` )
     ? & is_cmp | ( is_ptr_ty lt ) ( is_ptr_ty rt ) {
         ? ( is_ptr_ty lt ) {
             : s lvi ( nurl_cg_reg cg )
@@ -3352,7 +3425,7 @@
     // ( + a + b c ) emits the right ops for the outer +.
     ? | & >= tt TT_LT <= tt TT_GE | == tt TT_EQEQ == tt TT_NE
     ( nurl_set_last_type `i1` )
-    ( nurl_set_last_type ? isu ( ty_to_unsigned lt ) lt )
+    ( nurl_set_last_type ? isu ( ty_to_unsigned __arith_ty ) __arith_ty )
     res
 }
 
@@ -3852,7 +3925,7 @@
     : s objty ( nurl_sym_get syms obj )
     ? == 0 ( nurl_str_len objptr )
     { ( die lex ( nurl_str_cat3
-        `inout field argument: '` obj `' is not a struct binding in scope. An 'inout' argument must be a plain binding in scope, or one of its fields: '( f inout v )' or '( f inout . s field )'. The callee writes through it, so a temporary or an expression has nowhere to write back to.` ) ) }
+        `inout field argument: '` obj `' is not a struct binding in scope. An 'inout' argument must be a plain binding in scope, or one of its fields — the call site names the value plainly, '( f v )' or '( f . s field )'; the 'inout' marker appears only in the DECLARATION. The callee writes through it, so a temporary or an expression has nowhere to write back to.` ) ) }
     {}
     ? == 0 ( nurl_sym_len2 syms obj `__mutable` )
     { ( die lex ( nurl_str_cat3
@@ -3861,7 +3934,7 @@
     {}
     ? | == 0 ( nurl_str_len objty ) ! == 37 ( nurl_str_get objty 0 )
     { ( die lex ( nurl_str_cat3
-        `inout field argument: '` obj `' is not a named-struct binding — the field form needs a struct with declared field names. An 'inout' argument must be a plain binding in scope, or one of its fields: '( f inout v )' or '( f inout . s field )'. The callee writes through it, so a temporary or an expression has nowhere to write back to.` ) ) }
+        `inout field argument: '` obj `' is not a named-struct binding — the field form needs a struct with declared field names. An 'inout' argument must be a plain binding in scope, or one of its fields — the call site names the value plainly, '( f v )' or '( f . s field )'; the 'inout' marker appears only in the DECLARATION. The callee writes through it, so a temporary or an expression has nowhere to write back to.` ) ) }
     {}
     ? ! ( is_ident_tok ( nurl_lex_type lex ) )
     { ( die lex ( nurl_str_cat3
@@ -5811,6 +5884,193 @@
     ^ ( nurl_str_cat4 `__kwslot_` ( nurl_str_int sq ) `_` ( nurl_str_int i ) )
 }
 
+// Map a SOURCE-spelling scalar token to its canonical sized-int type
+// ("" when the token is not a sized-int scalar). Used by the call-arg
+// width coercion, where the declared parameter type is the pre-pass
+// source string (`u`, `u16`, `i`, …) rather than an LLVM type.
+@ src_int_ty s t → s {
+    ? ( seq t `u` ) `u8`
+    ? ( seq t `u8` ) `u8`
+    ? ( seq t `u16` ) `u16`
+    ? ( seq t `u32` ) `u32`
+    ? ( seq t `u64` ) `u64`
+    ? ( seq t `i8` ) `i8`
+    ? ( seq t `i16` ) `i16`
+    ? ( seq t `i32` ) `i32`
+    ? ( seq t `i64` ) `i64`
+    ? ( seq t `i` ) `i64`
+    // `b` participates as the width-1 member of the integer family, the
+    // same status the BINDING law gives it (': b z n' truncs, ': i n cond'
+    // zexts). Before this entry a `b`-declared parameter simply skipped
+    // the coercion and the call was emitted with the caller's i64 against
+    // the callee's i1 — a signature mismatch clang assembles anyway
+    // (opaque-pointer call types are per-site), so the callee read a
+    // garbage register.
+    ? ( seq t `b` ) `i1`
+    ? ( seq t `i1` ) `i1`
+    ``
+}
+
+// The float dual of src_int_ty: map a SOURCE- or LLVM-spelling scalar
+// to its LLVM float type, `` when the token is not float-family. Used
+// by the same call-argument agreement path.
+@ src_float_ty s t → s {
+    ? ( seq t `f` ) `double`
+    ? ( seq t `double` ) `double`
+    ? ( seq t `f32` ) `float`
+    ? ( seq t `float` ) `float`
+    ``
+}
+
+// Emit a float-width bridge `%r = fpext|fptrunc <from> <val> to <to>`
+// and return the new register — the floating dual of __emit_iwiden,
+// shared by the same call-argument coercion sites (FFI + NURL callee).
+@ __emit_fwiden i cg s val s from_ll s to_ll → s {
+    : s r ( nurl_cg_reg cg )
+    : s ins ? ( seq from_ll `float` ) ` = fpext ` ` = fptrunc `
+    ( nurl_print `  ` ) ( nurl_print r ) ( nurl_print ins )
+    ( nurl_print from_ll ) ( nurl_print ` ` ) ( nurl_print val )
+    ( nurl_print ` to ` ) ( nurl_print to_ll ) ( nurl_print `\n` )
+    ^ r
+}
+
+// Emit an integer-width bridge `%r = trunc|sext|zext <from> <val> to
+// <to>` and return the new register; used by BOTH call-arg coercion
+// sites (FFI + NURL callee) so the widen/narrow logic lives once. Widen
+// direction follows the SOURCE type (A1: an unsigned u8/u16/u32
+// zero-extends). Caller updates its own arg-type to `to_ty` after.
+@ __emit_iwiden i cg s val s from_ty s to_ty → s {
+    : s r ( nurl_cg_reg cg )
+    // i1 always ZERO-extends: a bool's widened spelling is 1, not the
+    // -1 a sign-extend would produce (matches the binding-law zext).
+    : s ins ? > ( int_width from_ty ) ( int_width to_ty ) ` = trunc `
+    ? | ( ty_is_unsigned from_ty ) ( seq ( nurl_llty from_ty ) `i1` ) ` = zext ` ` = sext `
+    ( nurl_print `  ` ) ( nurl_print r ) ( nurl_print ins )
+    ( nurl_print ( nurl_llty from_ty ) ) ( nurl_print ` ` ) ( nurl_print val )
+    ( nurl_print ` to ` ) ( nurl_print ( nurl_llty to_ty ) ) ( nurl_print `\n` )
+    ^ r
+}
+
+// Call-site scalar agreement between ONE argument and its declared
+// parameter type (`psrc`, source or LLVM spelling; generic tparams must
+// already be substituted). Enforces the binding law at the call
+// boundary:
+//   * integer widths (including the i1/`b` boundary) coerce — bare
+//     literals are i64, so a `u8` parameter must accept `( f 3 )`;
+//   * float widths coerce (`f32` ↔ `f`, fpext/fptrunc), same rule;
+//   * float ↔ integer NEVER coerces — die, with the cure spelled out.
+//     Emitting the call anyway used to produce `call i64 @f(double …)`:
+//     textually valid IR under opaque pointers (the call carries its own
+//     function type), so clang assembled it and the callee read an
+//     unrelated register at runtime — garbage, not even a crash.
+// Returns "" when nothing changed, else the space-joined pair
+// `<new-type> <new-value>` (scalar spellings never contain spaces).
+// EVERY return path allocates (even the empty one): a mixed
+// owned/.rodata return would classify as "not owned" and the caller's
+// binding would never free the coerced pair (LSan caught exactly that).
+// Pointer-typed arguments are left alone: the pointer-vs-value checks
+// and the FFI inttoptr/ptrtoint paths own that territory.
+@ __call_arg_scalar i lex i cg s fname i arg_idx s psrc s at s av → s {
+    ? == 0 ( nurl_str_len psrc ) { ^ ( nurl_str_cat `` `` ) } {}
+    : s want_i ( src_int_ty psrc )
+    : s want_f ( src_float_ty psrc )
+    ? & == 0 ( nurl_str_len want_i ) == 0 ( nurl_str_len want_f ) { ^ ( nurl_str_cat `` `` ) } {}
+    : s at_ll ( nurl_llty at )
+    ? ( is_ptr_ty at_ll ) { ^ ( nurl_str_cat `` `` ) } {}
+    : b have_f ( is_float_ty at_ll )
+    : ~ i hw ( int_width at )
+    ? == hw 0 { = hw ( int_width ( src_int_ty at ) ) } {}
+    ? & != 0 ( nurl_str_len want_f ) > hw 0
+    { ( die lex ( nurl_str_cat3
+        ( nurl_str_cat4 `argument ` ( nurl_str_int + arg_idx 1 ) ` to '` fname )
+        ( nurl_str_cat4 `' has integer type '` ( llvm_to_nurl at_ll ) `' but the parameter is declared '` ( llvm_to_nurl ( nurl_llty want_f ) ) )
+        `' (a float) — NURL has no implicit integer↔float conversions. Emitting the call anyway would hand the callee an integer register where it reads a float register: silent garbage, not even a crash. Write a float value ('2.0', not '2') or convert explicitly with '# f expr'.` ) ) }
+    {}
+    ? & != 0 ( nurl_str_len want_i ) have_f
+    { ( die lex ( nurl_str_cat3
+        ( nurl_str_cat4 `argument ` ( nurl_str_int + arg_idx 1 ) ` to '` fname )
+        ( nurl_str_cat4 `' has float type '` ( llvm_to_nurl at_ll ) `' but the parameter is declared '` ( llvm_to_nurl ( nurl_llty want_i ) ) )
+        `' (an integer) — NURL has no implicit float↔integer conversions. Emitting the call anyway would hand the callee a float register where it reads an integer register: silent garbage, not even a crash. Convert explicitly ('# i expr' truncates toward zero), or declare the parameter to take a float.` ) ) }
+    {}
+    // A wider integer into a `b` parameter would keep only the LOW BIT
+    // (2 → F, 3 → T) — a truncation that silently rewrote `( probe … 2 )`
+    // into `( probe … F )` in a real test. A bool WIDENING into an
+    // integer parameter is lossless (T is exactly 1) and stays legal,
+    // like the bool-into-integer-binding rule; the narrowing direction
+    // is a contract violation, like the return-type law.
+    ? & ( seq want_i `i1` ) > hw 1
+    { ( die lex ( nurl_str_cat3
+        ( nurl_str_cat4 `argument ` ( nurl_str_int + arg_idx 1 ) ` to '` fname )
+        ( nurl_str_cat4 `' has integer type '` ( llvm_to_nurl at_ll ) `' but the parameter is declared 'b` `'` )
+        ` — narrowing an integer to a bool keeps only the low bit (2 becomes F, 3 becomes T): almost never what the call means. Pass the comparison you mean ('!= 0 x'), a bool literal 'T'/'F', or change the parameter to an integer type.` ) ) }
+    {}
+    ? & & != 0 ( nurl_str_len want_f ) have_f ! ( seq at_ll want_f )
+    { ^ ( nurl_str_cat3 want_f ` ` ( __emit_fwiden cg av at_ll want_f ) ) }
+    {}
+    ? != 0 ( nurl_str_len want_i ) {
+        : i ww ( int_width want_i )
+        ? & & > ww 0 > hw 0 != ww hw
+        { ^ ( nurl_str_cat3 want_i ` ` ( __emit_iwiden cg av at want_i ) ) }
+        {}
+    } {}
+    ^ ( nurl_str_cat `` `` )
+}
+
+@ seplist_first s str → s {
+    : i n ( nurl_str_len str )
+    : ~ i i 0
+    ~ < i n {
+        ? == ( nurl_str_get str i ) 59 { ^ ( nurl_str_slice str 0 i ) } {}
+        = i + i 1
+    }
+    // Fresh copy, not `^ str`: every path returns OWNED (the nurl_llty
+    // idiom). The old borrow tail made this a mixed-ownership return —
+    // the exact shape the __fn_ret_str_mixed__ poison now rejects — and
+    // a caller that freed its (owned) argument temp left the borrowed
+    // result dangling.
+    ^ ( nurl_str_cat str `` )
+}
+
+@ seplist_rest s str → s {
+    : i n ( nurl_str_len str )
+    : ~ i i 0
+    ~ < i n {
+        ? == ( nurl_str_get str i ) 59 { ^ ( nurl_str_slice str + i 1 - n + i 1 ) } {}
+        = i + i 1
+    }
+    // Fresh empty, not the `` literal — every path returns OWNED (see
+    // seplist_first above).
+    ^ ( nurl_str_cat `` `` )
+}
+
+// The arg_idx-th entry of a `;`-joined param-type-source list (empty when
+// out of range).
+@ __ptypes_nth s lst i idx → s {
+    // Own a copy so the cursor is TRACKED: `= cur ( seplist_rest cur )`
+    // on an untracked alias stored each fresh tail without freeing the
+    // previous one — one leak per hop, ~20k per self-compile.
+    : ~ s cur ( nurl_str_cat lst `` )
+    : ~ i k 0
+    ~ < k idx { = cur ( seplist_rest cur ) = k + k 1 }
+    ^ ( seplist_first cur )
+}
+
+@ __kw_key s fname s tag i idx → s {
+    ^ ( nurl_str_cat fname ( nurl_str_cat4 `__kw_` tag `_` ( nurl_str_int idx ) ) )
+}
+
+// Trim trailing whitespace from a captured source slice.
+@ __kw_trim s raw → s {
+    : ~ i n ( nurl_str_len raw )
+    ~ > n 0 {
+        : i c ( nurl_str_get raw - n 1 )
+        ? | | | == c 32 == c 9 == c 13 == c 10
+        { = n - n 1 }
+        { ^ ( nurl_str_slice raw 0 n ) }
+    }
+    ^ ( nurl_str_slice raw 0 n )
+}
+
 // argstr piece for parameter k that was not supplied: its default, or a
 // missing-argument error.
 @ __kw_default_or_die i lex i syms i cg s fname i k → s {
@@ -5821,7 +6081,25 @@
         ( nurl_str_cat3 `' is missing required argument '`
         ( nurl_sym_get syms ( __kw_key fname `pn` k ) ) `'. Every parameter must be supplied — NURL has no defaults and no overloading. Pass it positionally in declaration order, or name it: 'name: value'.` ) ) ) }
     {}
-    ^ ( __kw_emit_default syms cg dsrc )
+    : ~ s __kdp ( __kw_emit_default syms cg dsrc )
+    // The default's value is spliced verbatim into the call's argument
+    // list, so it needs the same scalar agreement as an explicit
+    // argument: a `u k = 5` default is lexed as an i64 literal and used
+    // to splice `i64 5` against the callee's `i8` parameter — a call
+    // signature mismatch the native ABI happens to mask and wasm-ld
+    // turns into a trapping stub. Same law, same helper.
+    : ~ s __kdt ( str_first_word __kdp )
+    : ~ s __kdv ( str_skip_word __kdp )
+    : s __kdroster ( nurl_sym_get2 syms fname `__ptypes_src` )
+    ? != 0 ( nurl_str_len __kdroster ) {
+        : s __kdpsrc ( __kw_trim ( __ptypes_nth __kdroster k ) )
+        : s __kdsc ( __call_arg_scalar lex cg fname k __kdpsrc __kdt __kdv )
+        ? != 0 ( nurl_str_len __kdsc ) {
+            = __kdt ( str_first_word __kdsc )
+            = __kdv ( str_skip_word __kdsc )
+        } {}
+    } {}
+    ^ ( nurl_str_cat3 ( nurl_llty __kdt ) ` ` __kdv )
 }
 
 // Named-argument call path. Evaluates each argument (positional or
@@ -5860,9 +6138,38 @@
             = slot posk
             = posk + posk 1
         }
-        : s av ( gen_operand lex syms cg )
-        : s at ( nurl_get_last_type )
-        ( nurl_sym_def syms ( __kw_slot_key kwseq slot ) ( nurl_str_cat3 at ` ` av ) )
+        : ~ s av ( gen_operand lex syms cg )
+        : ~ s at ( nurl_get_last_type )
+        // The same per-argument type law as gen_call's positional path.
+        // The kwargs reorder previously bypassed EVERY argument check —
+        // `( scale x: 1.5 k: 2 )` slid a float into an 'i' parameter
+        // unflagged (and skipped the integer width coercion, so a `u8`
+        // parameter got a raw i64 call type). `slot` is the argument's
+        // DECLARED position, so the diagnostics number arguments the way
+        // the declaration reads. Generic callees never reach this path
+        // with a substituted roster, so they are excluded (same rule as
+        // the positional named-type checks).
+        ? == 0 ( nurl_sym_len2 g_generic_syms fname `__tparams` ) {
+            : s __kwroster ( nurl_sym_get2 syms fname `__ptypes_src` )
+            ? != 0 ( nurl_str_len __kwroster ) {
+                : s __kwpsrc ( __kw_trim ( __ptypes_nth __kwroster slot ) )
+                ? != 0 ( nurl_str_len __kwpsrc ) {
+                    : i __kwplx ( nurl_lex_new __kwpsrc `<param>` )
+                    : s __kwpllvm ( parse_type __kwplx )
+                    ( nurl_lex_free __kwplx )
+                    ( __arg_param_checks lex fname slot at __kwpllvm )
+                    : s __ksc ( __call_arg_scalar lex cg fname slot __kwpsrc at av )
+                    ? != 0 ( nurl_str_len __ksc ) {
+                        = at ( str_first_word __ksc )
+                        = av ( str_skip_word __ksc )
+                    } {}
+                } {}
+            } {}
+        } {}
+        // Store the LOWERED type: the pieces are pasted verbatim into the
+        // emitted call's argument list, and a signedness-carrying internal
+        // spelling (`u8`, from a `: u x` argument) is not an LLVM type.
+        ( nurl_sym_def syms ( __kw_slot_key kwseq slot ) ( nurl_str_cat3 ( nurl_llty at ) ` ` av ) )
         ? & & != 0 g_auto_drop_strings ( seq ( nurl_llty at ) `i8*` )
         ( seq ( nurl_sym_get syms `__last_call_ret_owned__` ) `str` )
         { = owned_temps ? == 0 ( nurl_str_len owned_temps ) ( nurl_str_cat av `` ) ( nurl_str_cat3 owned_temps ` ` av ) }
@@ -5916,18 +6223,6 @@
     ( mem_drop_arg_temps owned_temps )
     ( nurl_set_last_type rlt )
     ^ res
-}
-
-// The arg_idx-th entry of a `;`-joined param-type-source list (empty when
-// out of range).
-@ __ptypes_nth s lst i idx → s {
-    // Own a copy so the cursor is TRACKED: `= cur ( seplist_rest cur )`
-    // on an untracked alias stored each fresh tail without freeing the
-    // previous one — one leak per hop, ~20k per self-compile.
-    : ~ s cur ( nurl_str_cat lst `` )
-    : ~ i k 0
-    ~ < k idx { = cur ( seplist_rest cur ) = k + k 1 }
-    ^ ( seplist_first cur )
 }
 
 // A one-level pointer-depth mismatch on an identical base — `%X` vs `%X*`
@@ -6030,6 +6325,90 @@
     ^ != ( is_ptr_ty at_ll ) ( is_ptr_ty pt_ll )
 }
 
+// Copy of `t` with every space removed. Different lowering paths spell
+// the same function-aggregate type with different whitespace
+// (`{ void(i8*)*, i8* }` vs `{ void (i8*)*, i8* }`), so the closure
+// comparison below must be whitespace-blind.
+@ __strip_spaces s t → s {
+    : i n ( nurl_str_len t )
+    : ~ s out ``
+    : ~ i p 0
+    ~ < p n {
+        : i c ( nurl_str_get t p )
+        ? != c 32
+        { = out ( nurl_str_cat out ( nurl_str_slice t p 1 ) ) }
+        {}
+        = p + p 1
+    }
+    ^ out
+}
+
+// Both spellings are closure/function aggregates (`{ <ret> (<params>…)*,
+// i8* }` — the only LLVM aggregate spelling that contains a `(`) but they
+// differ: the callee would invoke the passed closure with a different
+// signature than the closure was compiled for. Compared with whitespace
+// stripped, since the spellings' spacing is not canonical.
+@ __arg_closure_mismatch s at s pt → b {
+    ? | == 0 ( nurl_str_len at ) == 0 ( nurl_str_len pt ) { ^ F } {}
+    ? | != ( nurl_str_get at 0 ) 123 != ( nurl_str_get pt 0 ) 123 { ^ F } {}
+    ? | == ( nurl_str_find at `(` ) -1 == ( nurl_str_find pt `(` ) -1 { ^ F } {}
+    ^ ! ( seq ( __strip_spaces at ) ( __strip_spaces pt ) )
+}
+
+// The per-argument never-legal-clash battery, shared by gen_call's
+// positional path and gen_call_kwargs (which previously bypassed every
+// one of these). `at` is the argument's type as gen_expr left it,
+// `pllvm` the declared parameter type after parse_type. Each clash is a
+// silent miscompile if allowed through — the call would assemble (clang
+// coerces or the opaque-pointer call type papers over it) and the callee
+// would read reinterpreted bytes.
+@ __arg_param_checks i lex s fname i arg_idx s at s pllvm → v {
+    // Detect pointer-ness from the LOWERED types so pointer aliases with
+    // no literal `*` (e.g. `s` → i8*) are covered. That is what lets the
+    // reverse case — a bare scalar passed to an `s`/pointer parameter —
+    // reach the checks below, not just an explicit `*T` argument.
+    : b __at_ptr ( is_ptr_ty at )
+    : b __ps_ptr ( is_ptr_ty pllvm )
+    ? | | | __at_ptr __ps_ptr ( seq at `%String` ) ( __is_named_agg at )
+    { ? ( __arg_ptr_depth_mismatch at pllvm )
+        { ( die lex ( nurl_str_cat3
+            ( nurl_str_cat4 `argument ` ( nurl_str_int + arg_idx 1 ) ` to '` fname )
+            ( nurl_str_cat4 `': value of type '` at `' passed where parameter expects '` pllvm )
+            `' — pointer-vs-value mismatch (a '*T' was passed where a 'T' value is expected, or vice versa)` ) ) }
+        {}
+        ? ( __arg_str_cstr_mismatch at pllvm )
+        { ( die lex ( nurl_str_cat3
+            ( nurl_str_cat4 `argument ` ( nurl_str_int + arg_idx 1 ) ` to '` fname )
+            ( nurl_str_cat4 `': value of type '` at `' passed where parameter expects '` pllvm )
+            `' — String vs raw C-string mismatch: 'String' is a managed string, 's' (i8*) a bare char pointer; convert with 'string_data' (String→s) or 'string_from' (s→String)` ) ) }
+        {}
+        ? ( __arg_named_struct_mismatch at pllvm )
+        { ( die lex ( nurl_str_cat3
+            ( nurl_str_cat4 `argument ` ( nurl_str_int + arg_idx 1 ) ` to '` fname )
+            ( nurl_str_cat4 `': value of type '` at `' passed where parameter expects '` pllvm )
+            `' — wrong struct type passed by value (a value of one named type where a different one is declared); the call would silently reinterpret its fields` ) ) }
+        {}
+        ? ( __arg_named_ptr_mismatch at pllvm )
+        { ( die lex ( nurl_str_cat3
+            ( nurl_str_cat4 `argument ` ( nurl_str_int + arg_idx 1 ) ` to '` fname )
+            ( nurl_str_cat4 `': value of type '` at `' passed where parameter expects '` pllvm )
+            `' — different named types; a pointer to one struct is not a pointer to another, and the callee would read this object's bytes as the declared type's fields` ) ) }
+        {}
+        ? ( __arg_ptr_scalar_mismatch at pllvm )
+        { ( die lex ( nurl_str_cat3
+            ( nurl_str_cat4 `argument ` ( nurl_str_int + arg_idx 1 ) ` to '` fname )
+            ( nurl_str_cat4 `': value of type '` at `' passed where parameter expects '` pllvm )
+            `' — pointer-vs-scalar type mismatch; NURL has no implicit conversion between a pointer and an integer/float (convert explicitly with '# T expr' if this is intended)` ) ) }
+        {} }
+    {}
+    ? ( __arg_closure_mismatch ( nurl_llty at ) pllvm )
+    { ( die lex ( nurl_str_cat3
+        ( nurl_str_cat4 `argument ` ( nurl_str_int + arg_idx 1 ) ` to '` fname )
+        ( nurl_str_cat4 `': closure of LLVM type '` at `' passed where the parameter declares '` pllvm )
+        `' — the closure's signature differs from the declared '(@ …)' parameter type. The callee invokes the closure with the DECLARED signature, so every argument and the return value would be reinterpreted bit patterns. Make the closure's parameter/return types match the declaration, or fix the declaration.` ) ) }
+    {}
+}
+
 // Referent depth of the expression just evaluated by gen_expr: the
 // transient `__last_expr_refdepth__` (set by a closure / aggregate
 // literal), else — when the expression was a bare identifier — that
@@ -6044,24 +6423,6 @@
         ? != 0 ( nurl_str_len rd ) { ^ ( nurl_str_to_int rd ) } {}
     } {}
     0
-}
-
-// Map a SOURCE-spelling scalar token to its canonical sized-int type
-// ("" when the token is not a sized-int scalar). Used by the call-arg
-// width coercion, where the declared parameter type is the pre-pass
-// source string (`u`, `u16`, `i`, …) rather than an LLVM type.
-@ src_int_ty s t → s {
-    ? ( seq t `u` ) `u8`
-    ? ( seq t `u8` ) `u8`
-    ? ( seq t `u16` ) `u16`
-    ? ( seq t `u32` ) `u32`
-    ? ( seq t `u64` ) `u64`
-    ? ( seq t `i8` ) `i8`
-    ? ( seq t `i16` ) `i16`
-    ? ( seq t `i32` ) `i32`
-    ? ( seq t `i64` ) `i64`
-    ? ( seq t `i` ) `i64`
-    ``
 }
 
 // Phase 2D gate: an arm's fall-through drop is safe when the arm's
@@ -6497,7 +6858,7 @@
                 : s iptr ( nurl_sym_get2 syms bck_arg_val `__ptr` )
                 : s ity ( nurl_sym_get syms bck_arg_val )
                 ? == 0 ( nurl_str_len iptr )
-                { ( die lex ( nurl_str_cat3 `inout argument '` bck_arg_val `' is not a binding in scope. An 'inout' argument must be a plain binding in scope, or one of its fields: '( f inout v )' or '( f inout . s field )'. The callee writes through it, so a temporary or an expression has nowhere to write back to.` ) ) }
+                { ( die lex ( nurl_str_cat3 `inout argument '` bck_arg_val `' is not a binding in scope. An 'inout' argument must be a plain binding in scope, or one of its fields — the call site names the value plainly, '( f v )' or '( f . s field )'; the 'inout' marker appears only in the DECLARATION. The callee writes through it, so a temporary or an expression has nowhere to write back to.` ) ) }
                 {}
                 ? == 0 ( nurl_sym_len2 syms bck_arg_val `__mutable` )
                 { ( die lex ( nurl_str_cat3 `inout argument '` bck_arg_val `' must be a mutable ': ~' binding — the callee mutates it in place` ) ) }
@@ -6603,45 +6964,7 @@
             { : i __plx ( nurl_lex_new __psrc `<param>` )
                 : s __pllvm ( parse_type __plx )
                 ( nurl_lex_free __plx )
-                // Detect pointer-ness from the LOWERED types so pointer
-                // aliases with no literal `*` (e.g. `s` → i8*) are covered.
-                // That is what lets the reverse case — a bare scalar passed
-                // to an `s`/pointer parameter — reach the checks below, not
-                // just an explicit `*T` argument.
-                : b __at_ptr ( is_ptr_ty at )
-                : b __ps_ptr ( is_ptr_ty __pllvm )
-                ? | | | __at_ptr __ps_ptr ( seq at `%String` ) ( __is_named_agg at )
-                { ? ( __arg_ptr_depth_mismatch at __pllvm )
-                    { ( die lex ( nurl_str_cat3
-                        ( nurl_str_cat4 `argument ` ( nurl_str_int + arg_idx 1 ) ` to '` fname )
-                        ( nurl_str_cat4 `': value of type '` at `' passed where parameter expects '` __pllvm )
-                        `' — pointer-vs-value mismatch (a '*T' was passed where a 'T' value is expected, or vice versa)` ) ) }
-                    {}
-                    ? ( __arg_str_cstr_mismatch at __pllvm )
-                    { ( die lex ( nurl_str_cat3
-                        ( nurl_str_cat4 `argument ` ( nurl_str_int + arg_idx 1 ) ` to '` fname )
-                        ( nurl_str_cat4 `': value of type '` at `' passed where parameter expects '` __pllvm )
-                        `' — String vs raw C-string mismatch: 'String' is a managed string, 's' (i8*) a bare char pointer; convert with 'string_data' (String→s) or 'string_from' (s→String)` ) ) }
-                    {}
-                    ? ( __arg_named_struct_mismatch at __pllvm )
-                    { ( die lex ( nurl_str_cat3
-                        ( nurl_str_cat4 `argument ` ( nurl_str_int + arg_idx 1 ) ` to '` fname )
-                        ( nurl_str_cat4 `': value of type '` at `' passed where parameter expects '` __pllvm )
-                        `' — wrong struct type passed by value (a value of one named type where a different one is declared); the call would silently reinterpret its fields` ) ) }
-                    {}
-                    ? ( __arg_named_ptr_mismatch at __pllvm )
-                    { ( die lex ( nurl_str_cat3
-                        ( nurl_str_cat4 `argument ` ( nurl_str_int + arg_idx 1 ) ` to '` fname )
-                        ( nurl_str_cat4 `': value of type '` at `' passed where parameter expects '` __pllvm )
-                        `' — different named types; a pointer to one struct is not a pointer to another, and the callee would read this object's bytes as the declared type's fields` ) ) }
-                    {}
-                    ? ( __arg_ptr_scalar_mismatch at __pllvm )
-                    { ( die lex ( nurl_str_cat3
-                        ( nurl_str_cat4 `argument ` ( nurl_str_int + arg_idx 1 ) ` to '` fname )
-                        ( nurl_str_cat4 `': value of type '` at `' passed where parameter expects '` __pllvm )
-                        `' — pointer-vs-scalar type mismatch; NURL has no implicit conversion between a pointer and an integer/float (convert explicitly with '# T expr' if this is intended)` ) ) }
-                    {} }
-                {} }
+                ( __arg_param_checks lex fname arg_idx at __pllvm ) }
             {} }
         {}
         // Escape analysis (docs/MEMORY.md §2.3 + §2.7). An argument
@@ -6801,8 +7124,17 @@
                 : b __wp ( is_ptr_ty __want )
                 : b __hp ( is_ptr_ty at )
                 ? & != 0 ( nurl_str_len __want ) ! ( seq ( nurl_llty at ) ( nurl_llty __want ) ) {
-                    ? & & > __ww 0 > __hw 0 != __ww __hw {
-                        = av ( __emit_iwiden cg av at __want ) = at __want
+                    // Scalar agreement first: dies on float↔integer, coerces
+                    // integer widths (was the `? > __ww 0 > __hw 0` branch)
+                    // and float widths (`f32` arg to a `double` C param —
+                    // previously emitted a mismatched call signature that
+                    // clang assembled and the callee misread). Returns ``
+                    // when it neither died nor coerced — the pointer cases,
+                    // which the inttoptr/ptrtoint branches below own.
+                    : s __fsc ( __call_arg_scalar lex cg fname arg_idx __want at av )
+                    ? != 0 ( nurl_str_len __fsc ) {
+                        = at ( str_first_word __fsc )
+                        = av ( str_skip_word __fsc )
                     } {
                         ? & __wp > __hw 0 {
                             // integer arg (e.g. a bare `0` / a handle held as i64)
@@ -6827,7 +7159,7 @@
                     }
                 } {}
             } {}
-            // NURL callee (no __ffi_params): the same width coercion
+            // NURL callee (no __ffi_params): the same scalar agreement
             // against the DECLARED parameter's source type. A sized-int
             // parameter (`u`, `u16`, `i32`, …) called with an i64 value —
             // any bare literal, or a plain `i` variable — used to emit
@@ -6837,6 +7169,15 @@
             // trapping `_bitcast_invalid` stub. Generic calls substitute
             // this call's type args for bare tparam names first
             // (`vec_push [u] d 0` → param `A` → `u` → trunc to i8).
+            // __call_arg_scalar additionally REJECTS a float↔integer
+            // clash (the t4_type case: `( twice y )` with y `f` against
+            // `i x` emitted `call i64 @twice(double …)` — clang assembles
+            // that under opaque pointers and the callee reads a garbage
+            // register) and float-width-coerces `f32` ↔ `f`, both of
+            // which previously slid through this integer-only block.
+            // Because the tparam substitution above feeds it, the same
+            // agreement covers generic instantiations (`vec_push [i] v
+            // 1.5` dies here too).
             ? == 0 ( nurl_str_len __ffp ) {
                 : s __roster ( nurl_sym_get2 syms fname `__ptypes_src` )
                 ? != 0 ( nurl_str_len __roster ) {
@@ -6852,15 +7193,42 @@
                             ? ( seq __psrc __tp ) { = __psrc __ta } {}
                         }
                     } {}
-                    : s __wsrc ( src_int_ty __psrc )
-                    ? != 0 ( nurl_str_len __wsrc ) {
-                        : i __ww ( int_width __wsrc )
-                        : ~ i __hw ( int_width at )
-                        ? == __hw 0 { = __hw ( int_width ( src_int_ty at ) ) } {}
-                        ? & & > __ww 0 > __hw 0 != __ww __hw {
-                            = av ( __emit_iwiden cg av at __wsrc ) = at __wsrc
+                    // Non-generic callees only: the whole-word substitution
+                    // above does not reach a tparam INSIDE a compound
+                    // spelling (`( Stack T )` stays unsubstituted), and
+                    // parse_type on that would fabricate a false clash for
+                    // every generic inout receiver.
+                    ? & is_inout_arg ( seq call_name fname ) {
+                        // An `inout` argument passes the binding's ADDRESS,
+                        // so the binding's type must equal the declared
+                        // parameter type EXACTLY — there is no register to
+                        // coerce, and a width/float clash means the callee
+                        // writes N bytes of one interpretation through a
+                        // pointer to a slot holding another (`( bump n )`
+                        // with `: ~ i n` against `inout f x` emitted
+                        // `call @bump(i64* …)` into `define @bump(double*
+                        // …)`: the callee stores a double's bits into the
+                        // caller's integer). The substitution above makes
+                        // this cover generic inout receivers too.
+                        ? != 0 ( nurl_str_len __psrc ) {
+                            : i __ioplx ( nurl_lex_new __psrc `<param>` )
+                            : s __iopll ( parse_type __ioplx )
+                            ( nurl_lex_free __ioplx )
+                            : s __iowant ( nurl_str_cat ( nurl_llty __iopll ) `*` )
+                            ? ! ( seq ( __strip_spaces ( nurl_llty at ) ) ( __strip_spaces __iowant ) )
+                            { ( die lex ( nurl_str_cat3
+                                ( nurl_str_cat4 `argument ` ( nurl_str_int + arg_idx 1 ) ` to '` fname )
+                                ( nurl_str_cat4 `' is passed 'inout' as '` ( nurl_llty at ) `' but the parameter is declared '` __psrc )
+                                `' — an 'inout' argument is passed by address, so the binding's type must match the declared parameter type exactly (no width or float coercion is possible through a pointer; the callee would write its own type's bytes into the caller's differently-typed slot). Declare the binding with the parameter's type, or change the parameter.` ) ) }
+                            {}
                         } {}
-                    } {}
+                    } {
+                        : s __nsc ( __call_arg_scalar lex cg fname arg_idx __psrc at av )
+                        ? != 0 ( nurl_str_len __nsc ) {
+                            = at ( str_first_word __nsc )
+                            = av ( str_skip_word __nsc )
+                        } {}
+                    }
                 } {}
             } {}
         } {}
@@ -7325,7 +7693,7 @@
     : s ct ( nurl_get_last_type )
     // Allow non-i1 integer conditions (e.g. `? & i64a i64b { … }`) by
     // narrowing to i1 via `icmp ne … 0`.
-    = cv ( coerce_to_i1 cv ct cg )
+    = cv ( coerce_to_i1 lex syms cv ct cg )
     : s lt ( nurl_cg_lbl cg `then` )
     : s le ( nurl_cg_lbl cg `else` )
     : s lend ( nurl_cg_lbl cg `end` )
@@ -9458,7 +9826,7 @@
     {
         // It's a loop.
         // Narrow non-i1 integer loop conditions (see gen_cond).
-        = cv ( coerce_to_i1 cv cvt cg )
+        = cv ( coerce_to_i1 lex syms cv cvt cg )
         ( nurl_print `  br i1 ` ) ( nurl_print cv )
         ( nurl_print `, label %` ) ( nurl_print lb )
         ( nurl_print `, label %` ) ( nurl_print le ) ( emit_dbg_eol )
@@ -13199,21 +13567,6 @@
     ^ ( seq ty `i64` )
 }
 
-// Emit an integer-width bridge `%r = trunc|sext|zext <from> <val> to
-// <to>` and return the new register; used by BOTH call-arg coercion
-// sites (FFI + NURL callee) so the widen/narrow logic lives once. Widen
-// direction follows the SOURCE type (A1: an unsigned u8/u16/u32
-// zero-extends). Caller updates its own arg-type to `to_ty` after.
-@ __emit_iwiden i cg s val s from_ty s to_ty → s {
-    : s r ( nurl_cg_reg cg )
-    : s ins ? > ( int_width from_ty ) ( int_width to_ty ) ` = trunc `
-    ? ( ty_is_unsigned from_ty ) ` = zext ` ` = sext `
-    ( nurl_print `  ` ) ( nurl_print r ) ( nurl_print ins )
-    ( nurl_print ( nurl_llty from_ty ) ) ( nurl_print ` ` ) ( nurl_print val )
-    ( nurl_print ` to ` ) ( nurl_print ( nurl_llty to_ty ) ) ( nurl_print `\n` )
-    ^ r
-}
-
 // An LLVM type string denotes a pointer iff it ends in `*` (e.g.
 // `i8*`, `%Foo*`, `i8**`). Used by comparison codegen to coerce
 // pointer operands to i64 before `icmp`, so `== ptr 0` / `!= ptr 0`
@@ -13507,6 +13860,13 @@
     {  // float-or-double → int: fptoui when the TARGET is unsigned (so a
         // value above the signed max converts correctly instead of becoming
         // poison via fptosi), else fptosi.
+        // Except `# b`: an i1 can only represent 0 and 1, so `fptosi
+        // double 3.5 to i1` is poison, not a truth test — and there is no
+        // meaning of "cast a float to bool" that a reader could rely on.
+        // Demand the comparison instead.
+        ? ( seq ( nurl_llty dt ) `i1` )
+        { ( die lex `'# b' of a float value is not a truth test — an i1 holds only 0 or 1, so the conversion is poison for any other value (LLVM 'fptosi double 3.5 to i1'). Write the comparison you mean: ': b nz != 0.0 x' (non-zero), or compare against the threshold you have in mind.` ) }
+        {}
         ( nurl_print `  ` ) ( nurl_print res )
         ( nurl_print ? dst_unsigned ` = fptoui ` ` = fptosi ` )
         ( nurl_print ( nurl_llty st ) ) ( nurl_print ` ` )
@@ -14131,11 +14491,27 @@
                         {}
                     }
                     {}
-                    ? | | != __slvf __sldf ( __arg_named_struct_mismatch fty __sldft ) __slint_ps
+                    // (d) a POINTER value into a scalar field. The insertvalue
+                    // would carry `i8*` into an i64 slot — invalid IR that
+                    // only clang used to reject, with a .ll line number and
+                    // no source location. The reverse direction (an integer
+                    // into a pointer-typed field) stays legal: it is the
+                    // `@ P { 0 }` null idiom and the handle-stash coercion.
+                    // The field's declared source spelling goes through
+                    // parse_type so pointer aliases (`s` → i8*, `*u8` →
+                    // i8*) classify correctly.
+                    : ~ b __slps F
+                    ? & ( is_ptr_ty fty ) ! ( is_ptr_ty __sldft )
+                    { : i __slplx ( nurl_lex_new __sldft `<field>` )
+                        : s __sldll ( parse_type __slplx )
+                        ( nurl_lex_free __slplx )
+                        ? ! ( is_ptr_ty __sldll ) { = __slps T } {} }
+                    {}
+                    ? | | | != __slvf __sldf ( __arg_named_struct_mismatch fty __sldft ) __slint_ps __slps
                     { ( die lex ( nurl_str_cat3
                         ( nurl_str_cat4 `field ` ( nurl_str_int idx ) ` of struct literal '` cur_sname )
                         ( nurl_str_cat4 `' expects type '` __sldft `' but the value has type '` fty )
-                        `' — NURL has no implicit conversions` ) ) }
+                        `' — NURL has no implicit conversions; give the field a value of its declared type, or convert explicitly with '# T expr'` ) ) }
                     {}
                 }
                 {}
@@ -14778,7 +15154,58 @@
     : ~ s vals ``
     : ~ i count 0
     ~ != ( nurl_lex_type lex ) TT_RBRACK {
-        : s v ( gen_expr lex syms cg )
+        : ~ s v ( gen_expr lex syms cg )
+        : s vt ( nurl_get_last_type )
+        // Element ↔ declared-type agreement. The stores below are emitted
+        // with the DECLARED element type, so a mismatched element used to
+        // become `store i64 2.5, …` — invalid IR that nurlc accepted
+        // (rc 0) and only clang rejected, with a .ll line number and no
+        // source location; a register-borne mismatch would instead store
+        // a silently reinterpreted bit pattern. Same law as everywhere:
+        // integer and float WIDTHS coerce (binding law), float↔integer
+        // and pointer↔scalar never do.
+        : s __sew ( src_int_ty elem_ty )
+        : s __sef ( src_float_ty elem_ty )
+        : s __svll ( nurl_llty vt )
+        : b __svf ( is_float_ty __svll )
+        : ~ i __svw ( int_width vt )
+        ? == __svw 0 { = __svw ( int_width ( src_int_ty vt ) ) } {}
+        ? & != 0 ( nurl_str_len __sef ) > __svw 0
+        { ( die lex ( nurl_str_cat3
+            ( nurl_str_cat4 `element ` ( nurl_str_int + count 1 ) ` of this slice literal has integer type '` ( llvm_to_nurl __svll ) )
+            ( nurl_str_cat4 `' but the slice's declared element type is '` ( llvm_to_nurl ( nurl_llty elem_ty ) ) `' (a float) — NURL has no implicit integer↔float conversions. Write the element as a float ('` `2.0` )
+            `', not '2'), or convert with '# f expr'.` ) ) }
+        {}
+        ? & != 0 ( nurl_str_len __sew ) __svf
+        { ( die lex ( nurl_str_cat3
+            ( nurl_str_cat4 `element ` ( nurl_str_int + count 1 ) ` of this slice literal has float type '` ( llvm_to_nurl __svll ) )
+            ( nurl_str_cat4 `' but the slice's declared element type is '` ( llvm_to_nurl ( nurl_llty elem_ty ) ) `' (an integer) — NURL has no implicit float↔integer conversions; the emitted store would reinterpret the bits. Convert explicitly ('# ` ( llvm_to_nurl ( nurl_llty elem_ty ) ) )
+            ` expr' truncates toward zero), or declare the slice '[ f | … ]'.` ) ) }
+        {}
+        ? != ( is_ptr_ty __svll ) ( is_ptr_ty ( nurl_llty elem_ty ) )
+        { ( die lex ( nurl_str_cat3
+            ( nurl_str_cat4 `element ` ( nurl_str_int + count 1 ) ` of this slice literal has type '` ( llvm_to_nurl __svll ) )
+            ( nurl_str_cat3 `' but the slice's declared element type is '` ( llvm_to_nurl ( nurl_llty elem_ty ) ) `' — pointer-vs-scalar mismatch; NURL has no implicit conversion between a pointer and a scalar` )
+            `. Store the value the declaration promises, or convert explicitly with '# T expr' if the reinterpretation is intended.` ) ) }
+        {}
+        ? ( __arg_named_struct_mismatch vt elem_ty )
+        { ( die lex ( nurl_str_cat3
+            ( nurl_str_cat4 `element ` ( nurl_str_int + count 1 ) ` of this slice literal has type '` ( llvm_to_nurl __svll ) )
+            ( nurl_str_cat3 `' but the slice's declared element type is '` ( llvm_to_nurl ( nurl_llty elem_ty ) ) `' — a value of one named struct type where a different one is declared` )
+            `; the store would silently reinterpret its fields.` ) ) }
+        {}
+        // Width bridges (the legal coercions): a bare literal is i64 and
+        // must narrow into a `[ u | … ]` buffer; an f32 value widens into
+        // a `[ f | … ]` one.
+        ? & & != 0 ( nurl_str_len __sef ) __svf ! ( seq __svll __sef )
+        { = v ( __emit_fwiden cg v __svll __sef ) }
+        {}
+        ? != 0 ( nurl_str_len __sew ) {
+            : i __seww ( int_width __sew )
+            ? & & > __seww 0 > __svw 0 != __seww __svw
+            { = v ( __emit_iwiden cg v vt __sew ) }
+            {}
+        } {}
         = vals ? == 0 count v ( nurl_str_cat vals ( nurl_str_cat ` ` v ) )
         = count + count 1
     }
@@ -15093,12 +15520,47 @@
 // `? & can_l can_r { … }` with i64 operands, the `&` lowers to
 // `and i64` — this helper emits `icmp ne i64 %v, 0` to produce the
 // required i1. No-op when the value is already i1.
-@ coerce_to_i1 s val s ty i cg → s {
+//
+// Anything OUTSIDE the integer family has no truth value and is
+// rejected here, with the cure per family. Blindly emitting the icmp
+// used to produce `icmp ne double %r, 0` / `icmp ne i8* %r, 0` —
+// invalid IR that nurlc accepted (rc 0) and only clang rejected, with
+// a .ll line number and no source location.
+@ coerce_to_i1 i lex i syms s val s ty i cg → s {
     ? ( seq ty `i1` )
     { ( nurl_str_cat val `` ) }
-    { : s r ( nurl_cg_reg cg )
+    { : s ll ( nurl_llty ty )
+        ? == 0 ( int_width ll ) {
+            // Enum first: it is %-named like a struct but the useful cure
+            // is different — compare against a variant, don't destructure.
+            ? == ( nurl_str_get ll 0 ) 37 {
+                : s __c1en ( nurl_str_slice ll 1 - ( nurl_str_len ll ) 1 )
+                ? != 0 ( nurl_sym_len2 syms __c1en `__variants` )
+                { ( die lex ( nurl_str_cat3
+                    `this condition has enum type '` __c1en
+                    `' — an enum has no truth value (which variant would be 'false'?). Compare against the variant you mean: '? == c SomeVariant { … }', or match with '?? c { … }'.` ) ) }
+                {}
+            } {}
+            ? ( seq ll `void` )
+            { ( die lex `this condition produces no value (the expression is 'v'/void — a call that returns nothing?) — a condition must be 'b', or an integer tested against zero. Call something that returns a value, or bind the state you want to test first.` ) }
+            {}
+            ? ( is_float_ty ll )
+            { ( die lex ( nurl_str_cat3
+                `this condition has float type '` ( llvm_to_nurl ll )
+                `' — a condition must be 'b', or an integer (tested non-zero); a float has no truth value in NURL, and NaN would make any implicit zero-test lie. Write the comparison you mean explicitly, e.g. '? != 0.0 x { … }'.` ) ) }
+            {}
+            ? ( is_ptr_ty ll )
+            { ( die lex ( nurl_str_cat3
+                `this condition has pointer type '` ( llvm_to_nurl ll )
+                `' — a condition must be 'b', or an integer (tested non-zero); a pointer/string has no truth value in NURL. Test the property you actually mean: emptiness '? != 0 ( nurl_str_len p ) { … }', or null-ness '? != 0 ( # i p ) { … }'.` ) ) }
+            {}
+            ( die lex ( nurl_str_cat3
+            `this condition has type '` ( llvm_to_nurl ll )
+            `' which has no truth value — a condition must be 'b', or an integer (tested non-zero). An aggregate cannot be tested directly; extract or compute the scalar you mean to test first.` ) )
+        } {}
+        : s r ( nurl_cg_reg cg )
         ( nurl_print `  ` ) ( nurl_print r )
-        ( nurl_print ` = icmp ne ` ) ( nurl_print ( nurl_llty ty ) )
+        ( nurl_print ` = icmp ne ` ) ( nurl_print ll )
         ( nurl_print ` ` ) ( nurl_print val ) ( nurl_print `, 0\n` )
         r
     }
@@ -15863,33 +16325,6 @@
     ~ < k n { = rest ( seplist_rest rest ) = k + k 1 }
     ? == 0 ( nurl_str_len rest ) { ^ ( nurl_str_cat `` `` ) } {}
     ^ ( seplist_first rest )
-}
-
-@ seplist_first s str → s {
-    : i n ( nurl_str_len str )
-    : ~ i i 0
-    ~ < i n {
-        ? == ( nurl_str_get str i ) 59 { ^ ( nurl_str_slice str 0 i ) } {}
-        = i + i 1
-    }
-    // Fresh copy, not `^ str`: every path returns OWNED (the nurl_llty
-    // idiom). The old borrow tail made this a mixed-ownership return —
-    // the exact shape the __fn_ret_str_mixed__ poison now rejects — and
-    // a caller that freed its (owned) argument temp left the borrowed
-    // result dangling.
-    ^ ( nurl_str_cat str `` )
-}
-
-@ seplist_rest s str → s {
-    : i n ( nurl_str_len str )
-    : ~ i i 0
-    ~ < i n {
-        ? == ( nurl_str_get str i ) 59 { ^ ( nurl_str_slice str + i 1 - n + i 1 ) } {}
-        = i + i 1
-    }
-    // Fresh empty, not the `` literal — every path returns OWNED (see
-    // seplist_first above).
-    ^ ( nurl_str_cat `` `` )
 }
 
 // ── String Helpers ───────────────────────────────────────────────
@@ -21628,6 +22063,13 @@
     {}
     ? == tt TT_LPAREN { ^ ( scan_skip_paren lex ) } {}
     ? ( is_ident_tok tt ) { ( nurl_lex_advance lex ) ^ 1 } {}
+    // `T` / `F` lex as boolean literals, but at a TYPE position they can
+    // only be a type word — the canonical generic tparam `[T] T x`, or a
+    // single-uppercase-letter struct name. Refusing them here silently
+    // abandoned the whole parameter roster of any `[T]`-generic function,
+    // which in turn skipped every call-site argument-type check for it
+    // (`( gid [i] y )` with a float `y` sailed through unchecked).
+    ? == tt TT_BOOL { ( nurl_lex_advance lex ) ^ 1 } {}
     0
 }
 
@@ -21644,22 +22086,6 @@
 // A default value is a single source token (literal / const / atom),
 // which covers the common cases (`= `Task``, `= 50`, `= F`); a richer
 // default can be a named const.
-
-@ __kw_key s fname s tag i idx → s {
-    ^ ( nurl_str_cat fname ( nurl_str_cat4 `__kw_` tag `_` ( nurl_str_int idx ) ) )
-}
-
-// Trim trailing whitespace from a captured source slice.
-@ __kw_trim s raw → s {
-    : ~ i n ( nurl_str_len raw )
-    ~ > n 0 {
-        : i c ( nurl_str_get raw - n 1 )
-        ? | | | == c 32 == c 9 == c 13 == c 10
-        { = n - n 1 }
-        { ^ ( nurl_str_slice raw 0 n ) }
-    }
-    ^ ( nurl_str_slice raw 0 n )
-}
 
 // Evaluate a parameter default's source (e.g. ``Task`` / `50`) through a
 // sub-lexer that shares the caller's codegen + symbol state, and return

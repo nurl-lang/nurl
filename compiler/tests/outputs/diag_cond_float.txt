@@ -1,0 +1,6 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_cond_float.nu:8:9: error: this condition has float type 'f' — a condition must be 'b', or an integer (tested non-zero); a float has no truth value in NURL, and NaN would make any implicit zero-test lie. Write the comparison you mean explicitly, e.g. '? != 0.0 x { … }'.
+    ? y { ^ 1 } {}
+        ^
+error: aborting due to 1 previous error

@@ -315,22 +315,58 @@ wild-pointer UB — so the compiler **rejects it at the call site**
 (in either direction). Convert explicitly: `string_data` (`String → s`)
 or `string_from` (`s → String`).
 
-More generally, the call-site argument check rejects three silent-coercion
+More generally, the call-site argument check rejects the silent-coercion
 classes for calls to non-generic functions: a pointer-vs-value mismatch
 (`*T` where a `T` value is declared, or vice versa), the `String`/`s`
-confusion above, and **passing one named struct value where a different
+confusion above, **passing one named struct value where a different
 named struct is declared** (`%A` vs `%B` by value — clang would otherwise
-coerce the call and reinterpret the foreign struct's leading fields).
-Scalars (including enums, which are `i64`) and pointers are untouched by
-the struct check.
+coerce the call and reinterpret the foreign struct's leading fields),
+and **a closure whose signature differs from the declared `(@ …)`
+parameter type** (the callee invokes it with the declared signature, so
+every argument would be a reinterpreted bit pattern).
+
+**Scalar arguments follow the binding law at every call boundary** —
+positional, named (`name:` kwargs, including spliced default values),
+FFI, and generic instantiations (checked after tparam substitution):
+
+- integer **widths coerce** (a bare literal is `i64`, so a `u8`
+  parameter accepts `( f 3 )`; `trunc`/`sext`/`zext` are emitted so the
+  call signature matches the callee — an `i1` always zero-extends,
+  `T` is `1`, never `-1`);
+- **float widths coerce** (`f32` ↔ `f` via `fpext`/`fptrunc`);
+- **float ↔ integer never coerces** — rejected in both directions.
+  Emitting the call anyway would be textually valid IR under opaque
+  pointers (a call carries its own function type), so clang assembles
+  it and the callee reads an unrelated register: garbage, not a crash;
+- a **bool widens** into an integer parameter (lossless), but a wider
+  integer into a `b` parameter is **rejected** — the truncation would
+  keep only the low bit (`2` becomes `F`), and a parameter is a
+  contract, like a return type;
+- an **`inout` argument must match the declared parameter type
+  exactly** — it is passed by address, so no register coercion is
+  possible and a width/float clash would make the callee write its own
+  type's bytes into the caller's differently-typed slot.
 
 The same never-legal clashes are rejected at the other type boundaries:
 returning the wrong type from a function (`^ b` of type `B` from a `→ A`
-function — the float/pointer/struct dual of the argument check), and
-**struct-literal fields** — `@ A { 3.5 }` into an `i` field, or more
-field values than the struct declares. Omitting trailing fields stays
-legal (they zero-initialise), and integer width / signedness narrowing
-into sized or unsigned fields is a legal coercion, not flagged.
+function — the float/pointer/struct dual of the argument check; float
+*widths* must also match exactly at a return, like integer widths),
+**struct-literal fields** — `@ A { 3.5 }` into an `i` field, a pointer
+value into a scalar field, or more field values than the struct declares
+— and **slice-literal elements** (`[ i | 1 2.5 ]` is rejected; widths
+coerce, float↔int and pointer↔scalar never do). Omitting trailing
+struct-literal fields stays legal (they zero-initialise), integer width
+/ signedness narrowing into sized or unsigned fields is a legal
+coercion, and an integer into a pointer-typed field remains the `@ P
+{ 0 }` null idiom.
+
+A **condition** (`?` / `~`) must be `b` or an integer (tested non-zero).
+A float, pointer/string, enum, or aggregate condition is rejected with
+the comparison to write instead — none of them has a truth value, and
+the blind `icmp ne … 0` narrowing used to emit invalid IR that only
+clang reported. Likewise `# b` of a float is rejected (an `i1` holds
+only 0 or 1, so the conversion is poison for any other value — write
+the comparison).
 
 ### 4.2 Pointer types
 
@@ -815,7 +851,15 @@ convention; only the low 6 bits matter for `i64` operands. Out-of-range
 counts behave per LLVM (poison for `>=` bitwidth).
 
 Comparison operators yield `b` (`i1`). All other binary operators
-require operand types to match.
+require operand types to match: mixing float/non-float,
+pointer/non-pointer (outside equality-against-`0` null checks), two
+registers of different integer or float widths, or a bool register with
+an integer register is a compile error naming the cast to write. An
+integer **literal** combined with a typed operand evaluates at the typed
+operand's width and must fit it (`+ 300 u8val` is rejected, not
+wrapped); a bool operand combined with an integer literal **widens**
+(`+ 10 flag` is 10 or 11 — `zext`, the binding law); an `f32` operand
+combined with a float literal widens to `f` (`fpext`, lossless).
 
 For an n-ary chain write n-1 operators:
 
