@@ -62,7 +62,10 @@ $ `stdlib/net/inet.nu`
     ( pb `octet 0: ` == ( ipv4_octet ( ipv4_make 10 0 2 15 ) 0 ) 10 )
     ( pb `octet 3: ` == ( ipv4_octet ( ipv4_make 10 0 2 15 ) 3 ) 15 )
     : String astr ( ipv4_str ( ipv4_make 192 168 1 200 ) )
-    ( pb `str round-trip: ` ( nurl_str_eq ( string_data astr ) `192.168.1.200` ) )
+    // nurl_str_eq returns a C-style i (0/1), and pb's parameter is a
+    // contract-typed b — write the comparison out (the compiler now
+    // rejects the silent int→bool narrowing at call sites).
+    ( pb `str round-trip: ` != 0 ( nurl_str_eq ( string_data astr ) `192.168.1.200` ) )
     ( string_free astr )
 
     ( pb `parse 10.0.2.15: ` ?? ( ipv4_parse `10.0.2.15` ) { T a → == a 167772687 F → F } )

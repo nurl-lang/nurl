@@ -1,0 +1,6 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_struct_lit_ptr_field.nu:9:22: error: field 0 of struct literal 'P' expects type 'i64' but the value has type 'i8*' — NURL has no implicit conversions; give the field a value of its declared type, or convert explicitly with '# T expr'
+    : P p @ P { `hi` 2 }
+                     ^
+error: aborting due to 1 previous error

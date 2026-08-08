@@ -1,0 +1,6 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_cond_enum.nu:7:9: error: this condition has enum type 'Color' — an enum has no truth value (which variant would be 'false'?). Compare against the variant you mean: '? == c SomeVariant { … }', or match with '?? c { … }'.
+    ? c { ^ 1 } {}
+        ^
+error: aborting due to 1 previous error

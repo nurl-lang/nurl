@@ -1,0 +1,6 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_call_int_to_bool_param.nu:11:16: error: argument 1 to 'pick' has integer type 'i' but the parameter is declared 'b' — narrowing an integer to a bool keeps only the low bit (2 becomes F, 3 becomes T): almost never what the call means. Pass the comparison you mean ('!= 0 x'), a bool literal 'T'/'F', or change the parameter to an integer type.
+    ^ ( pick y )
+               ^
+error: aborting due to 1 previous error

@@ -1,0 +1,6 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_call_generic_float_arg.nu:11:23: error: argument 1 to 'gid' has float type 'f' but the parameter is declared 'i' (an integer) — NURL has no implicit float↔integer conversions. Emitting the call anyway would hand the callee a float register where it reads an integer register: silent garbage, not even a crash. Convert explicitly ('# i expr' truncates toward zero), or declare the parameter to take a float.
+    : i z ( gid [i] y )
+                      ^
+error: aborting due to 1 previous error

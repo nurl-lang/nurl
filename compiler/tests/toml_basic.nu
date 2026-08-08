@@ -57,7 +57,7 @@ $ `stdlib/ext/toml.nu`
     }
 }
 
-@ probe s label TomlValue root s path b kind → v {
+@ probe s label TomlValue root s path i kind → v {
     : ?TomlValue r ( toml_get_path root path )
     ?? r {
         T v → {

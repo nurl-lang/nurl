@@ -1,49 +1,6 @@
-COMPILE OK
-LINK OK
-EXIT 0
-OUTPUT
-ipv4 header checksum = 0xb861: YES
-verify folds to 0xffff: YES
-odd-length pad: YES
-empty range: YES
-carry folds: YES
-split sum == one-shot: YES
-sum_u32 == byte sum: YES
-sum_u16 == byte sum: YES
-make 10.0.2.15: YES
-octet 0: YES
-octet 3: YES
-str round-trip: YES
-parse 10.0.2.15: YES
-parse 0.0.0.0: YES
-parse 255.255.255.255: YES
-reject 256.0.0.1: YES
-reject 1.2.3: YES
-reject 1.2.3.4.5: YES
-reject 1.2.3.: YES
-reject .1.2.3: YES
-reject 1..2.3: YES
-reject empty: YES
-reject 1.2.3.4x: YES
-reject 0300.1.2.3: YES
-mask /24: YES
-mask /0: YES
-mask /32: YES
-in subnet: YES
-not in subnet: YES
-subnet broadcast: YES
-is broadcast: YES
-is multicast 224.0.0.251: YES
-not multicast 10.0.0.1: YES
-parse mac: YES
-parse mac dashes: YES
-parse mac upper: YES
-reject short mac: YES
-reject bad sep: YES
-reject non-hex: YES
-mac str round-trip: YES
-mac octet 0: YES
-mac octet 5: YES
-broadcast mac: YES
-broadcast is multicast: YES
-unicast not multicast: YES
+COMPILE FAIL
+ERRORS
+compiler/tests/net_inet.nu:105:90: error: argument 2 to 'pb' has integer type 'i' but the parameter is declared 'b' — narrowing an integer to a bool keeps only the low bit (2 becomes F, 3 becomes T): almost never what the call means. Pass the comparison you mean ('!= 0 x'), a bool literal 'T'/'F', or change the parameter to an integer type.
+    ( pb `mac str round-trip: ` ( nurl_str_eq ( string_data mstr ) `02:00:00:00:00:01` ) )
+                                                                                         ^
+error: aborting due to 1 previous error

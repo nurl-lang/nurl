@@ -8,6 +8,89 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **The scalar-agreement sweep: nine ways a wrong-typed value slid
+  through a call, and the boundaries around it.** Found live via the
+  playground: `( twice y )` with `y` a float against `@ twice i x`
+  compiled clean and returned garbage — under opaque pointers a call
+  carries its own function type, so `call i64 @twice(double …)` is
+  textually valid IR, clang assembles it, and the callee reads a
+  register the caller never wrote. Probing that class systematically
+  found the same hole in nine coats:
+
+  * **positional calls** — float↔integer in either direction, now
+    rejected with the register-level consequence spelled out;
+  * **FFI calls** — the width-coercion block handled ints and pointers
+    but let `( labs y )` hand a double to C's `long` parameter;
+  * **generic calls** — checked after tparam substitution
+    (`( vec_push [i] v 1.5 )` dies). Root cause was two-layer: the
+    call-site checks skip generic callees by design, *and* any
+    `[T]`-generic's parameter roster was silently abandoned because `T`
+    lexes as a boolean literal and `scan_skip_type` refused it at a
+    type position;
+  * **kwargs calls** — the `name:` reorder path bypassed *every*
+    per-argument check and spliced default values verbatim (`u k = 5`
+    put a raw `i64 5` in the call's argument list); it now runs the same
+    battery, and stores lowered types so a `u`-typed argument no longer
+    prints an internal spelling into the IR;
+  * **closures** — a `(@ f f)` closure passed to a `(@ i i)` parameter
+    invoked it with the declared signature and reinterpreted every
+    argument; now compared whitespace-blind and rejected;
+  * **`inout` arguments** — passed by address, so `( bump n )` with
+    `: ~ i n` against `inout f x` had the callee storing a double's bits
+    into the caller's integer; the binding's type must now match the
+    declared parameter type exactly;
+  * **`b` parameters** — a wider integer used to be emitted raw
+    (mismatched signature); the fix surfaced that toml_basic.nu itself
+    passed `0/1/2` into a `b kind` parameter and silently double-printed
+    through two `? == kind N` arms. Narrowing int→`b` is now rejected
+    (a parameter is a contract; the truncation keeps only the low bit),
+    while `b` still widens losslessly into integer parameters — and an
+    `i1` now always zero-extends (`T` is 1, never the -1 a sign-extend
+    produced);
+  * **float widths** — `f32` ↔ `f` now coerce at call boundaries via
+    `fpext`/`fptrunc` (the binding law; previously a mismatched call
+    signature), and a **return** must match the declared float width
+    exactly, like integer widths (`^ x` of `f32` from `→ f` emitted
+    `ret float` out of a `define double`);
+  * **literals in operators** — `+ 10 flag` printed `add i64 10, %c`
+    with `%c: i1` (invalid IR, clang-only error). A bool operand now
+    widens (10 or 11, the C reading), an integer literal evaluates at
+    the typed operand's width and must fit it (`+ 300 u8val` is
+    rejected, not wrapped), an `f32` register widens against a float
+    literal, and two registers of different float widths are rejected
+    like their integer duals.
+
+  The same law now guards the remaining aggregate boundaries:
+  **slice-literal elements** (`[ i | 1 2.5 3 ]` used to emit
+  `store i64 2.5` — invalid IR with a `.ll` line number and no source
+  location; widths coerce, float↔int and pointer↔scalar die) and
+  **struct-literal fields** (a pointer value into a scalar field died
+  only in clang; the `@ P { 0 }` null idiom and handle-stash coercion
+  stay legal).
+
+  **Conditions grew a type.** `?` / `~` accept `b` or an integer
+  (tested non-zero) — that part is unchanged — but a float, string,
+  enum, or aggregate condition used to become `icmp ne double %r, 0` /
+  `icmp ne i8* %r, 0`: invalid IR only clang reported. Each now dies at
+  the source with the comparison to write instead (floats get the NaN
+  caveat, strings get both readings — emptiness vs null-ness, enums get
+  "which variant would be false?"). `# b` of a float — poison for any
+  value but 0/1 — is rejected the same way.
+
+  Every new diagnostic names the argument position, both types in NURL
+  spelling, the exact runtime consequence being prevented, and the cure
+  with the operator to type. All are pinned as `diag_*` goldens so the
+  text itself is regression-checked (16 new), plus a behavioral test
+  pinning the *legal* coercions (`call_scalar_width_coercions`).
+  net_inet.nu (an `i` result into a `b` parameter) and toml_basic.nu
+  were fixed where the new checks caught them red-handed, and
+  toml_basic's golden no longer bakes in the double-print. The
+  misleading `'( f inout v )'` call-syntax suggestion in three inout
+  diagnostics — a form the language never accepted — now shows the real
+  shape and where the `inout` marker actually lives.
+
 ## [0.36.0] — 2026-08-08
 
 ### Added
