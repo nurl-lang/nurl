@@ -1,9 +1,9 @@
 COMPILE FAIL
 ERRORS
-compiler/tests/diag_duplicate_type.nu:12:5: error: duplicate type ': Shape' — already defined at compiler/tests/diag_duplicate_type_mod.nu:5
+compiler/tests/diag_duplicate_type.nu:12:5: error: duplicate type ': Shape' — already defined at compiler/tests/diag_duplicate_type_mod.nu:5. NURL has no overloading and no shadowing at file scope: rename one, or delete the duplicate. If the two are in different files, both are visible to the importer, so the names must still differ.
     i x
     ^
-compiler/tests/diag_duplicate_type.nu:16:7: error: duplicate global ': g_shared_count' — already defined at compiler/tests/diag_duplicate_type_mod.nu:9
+compiler/tests/diag_duplicate_type.nu:16:7: error: duplicate global ': g_shared_count' — already defined at compiler/tests/diag_duplicate_type_mod.nu:9. NURL has no overloading and no shadowing at file scope: rename one, or delete the duplicate. If the two are in different files, both are visible to the importer, so the names must still differ.
 : ~ i g_shared_count 5
       ^
 error: aborting due to 2 previous errors

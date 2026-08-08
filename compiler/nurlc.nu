@@ -216,7 +216,8 @@
     { ( die lex ( nurl_str_cat3
         ( nurl_str_cat `expected ` ( __tok_label tt `` ) )
         ` but found `
-        ( __tok_label ( nurl_lex_type lex ) ( nurl_lex_val lex ) ) ) ) }
+        ( nurl_str_cat ( __tok_label ( nurl_lex_type lex ) ( nurl_lex_val lex ) )
+        `. The construct being parsed needs that token here; a missing operand earlier in the line is the usual cause, because every NURL operator has fixed arity and no closing bracket.` ) ) ) }
     {}
     ( nurl_lex_advance lex )
 }
@@ -3478,7 +3479,7 @@
             { ( die lex `FFI declaration inside a function body — an '&' library import ('& <lib> @ name args → ret') is a top-level form; move it to the top of the file next to the '$' imports` ) }
             {}
             : s msg ( nurl_str_cat `operator & requires matching types — got ` ( llvm_to_nurl lt ) )
-            ( die lex ( nurl_str_cat msg ` and unknown` ) )
+            ( die lex ( nurl_str_cat msg ` and unknown — the operand types could not be resolved, which usually means an earlier error in this expression. Fix the first diagnostic and re-run.` ) )
             ^ ( nurl_str_cat `error` `` )
         }
     }
@@ -3497,7 +3498,7 @@
     { ? > ( int_width lt ) 0
         { ^ ( gen_bitwise_binary lv lt lex syms cg TT_PIPE ) }
         { : s msg ( nurl_str_cat `operator | requires matching types — got ` ( llvm_to_nurl lt ) )
-            ( die lex ( nurl_str_cat msg ` and unknown` ) )
+            ( die lex ( nurl_str_cat msg ` and unknown — the operand types could not be resolved, which usually means an earlier error in this expression. Fix the first diagnostic and re-run.` ) )
             ^ ( nurl_str_cat `error` `` )
         }
     }
@@ -3864,7 +3865,7 @@
     {}
     ? ! ( is_ident_tok ( nurl_lex_type lex ) )
     { ( die lex ( nurl_str_cat3
-        `inout field argument: expected a field name after '. ` obj `'` ) ) }
+        `inout field argument: expected a field name after '. ` obj `'. The form is '( f inout . s field )' — object first, then the field name, prefix style.` ) ) }
     {}
     : s fld ( nurl_lex_val lex )
     ( nurl_lex_advance lex )
@@ -5712,7 +5713,7 @@
                 ? == 0 ( nurl_sym_len g_trait_syms ( nurl_str_cat3 bt `##` ta_llvm ) )
                 { : s m1 ( nurl_str_cat4 `type '` ta `' does not implement trait '` bt )
                     : s m2 ( nurl_str_cat3 m1 `' required by bound ` ( nurl_str_cat3 tp `: ` bt ) )
-                    ( die lex ( nurl_str_cat3 m2 ` on generic '` ( nurl_str_cat fname `'` ) ) ) }
+                    ( die lex ( nurl_str_cat3 m2 ` on generic '` ( nurl_str_cat fname `'. Supply a type that implements the trait, or add the impl.` ) ) ) }
                 {}
             }
         } {}
@@ -5818,7 +5819,7 @@
     { ( die lex ( nurl_str_cat3
         `call to '` fname
         ( nurl_str_cat3 `' is missing required argument '`
-        ( nurl_sym_get syms ( __kw_key fname `pn` k ) ) `'` ) ) ) }
+        ( nurl_sym_get syms ( __kw_key fname `pn` k ) ) `'. Every parameter must be supplied — NURL has no defaults and no overloading. Pass it positionally in declaration order, or name it: 'name: value'.` ) ) ) }
     {}
     ^ ( __kw_emit_default syms cg dsrc )
 }
@@ -8198,7 +8199,7 @@
             ? & is_bool_pat > pvc 1
             { ( die lex ( nurl_str_cat
                 ( nurl_str_cat3 `match arm binds ` ( nurl_str_int pvc ) ` payloads but an option/result '` )
-                ( nurl_str_cat pattern_name `' arm binds at most one (the T-arm value / Ok payload, or the F-arm error)` ) ) ) }
+                ( nurl_str_cat pattern_name `' arm binds at most one name: the T-arm takes the value (or the Ok payload), the F-arm takes the error. Write 'T v → body  F e → body'.` ) ) ) }
             {}
             // Payload binding requires an aggregate scrutinee — an enum (`%E`)
             // or an option / result (`{ i1, … }`). Binding a payload while
@@ -13336,7 +13337,7 @@
     { : ~ s vr ``
         ? != 0 ( nurl_str_len g_void_reason ) { = vr ( nurl_str_cat ` — ` g_void_reason ) } {}
         ( die lex ( nurl_str_cat ( nurl_str_cat3
-        `'# ` dt `' has no value to convert — the operand expression produces none` ) vr ) ) }
+        `'# ` dt `' has no value to convert — the operand produces nothing. '#' converts a VALUE, so its operand must be an expression that yields one; a call returning 'v', an assignment or a block does not.` ) vr ) ) }
     {}
     : s res ( nurl_cg_reg cg )
     // Detect pointer source/destination (LLVM type ends with '*')
@@ -13918,7 +13919,7 @@
                     // emitting a malformed index. Reject the typo at the source.
                     ? == 0 ( nurl_str_len fidx_s )
                     { ( die lex ( nurl_str_cat3 `type '` ( llvm_to_nurl ot )
-                        ( nurl_str_cat3 `' has no field '` fname `'` ) ) ) }
+                        ( nurl_str_cat3 `' has no field '` fname `'. Check the field name against the struct's declaration; field access is prefix ('. obj field').` ) ) ) }
                     {}
                     : s ftype ( nurl_sym_get2 syms sname ( nurl_str_cat `__` ( nurl_str_cat fname `__type` ) ) )
                     : i fidx ( nurl_str_to_int fidx_s )
@@ -15055,7 +15056,7 @@
     { : ~ s vr ``
         ? != 0 ( nurl_str_len g_void_reason ) { = vr ( nurl_str_cat ` — ` g_void_reason ) } {}
         ( die_stmt lex ( nurl_str_cat ( nurl_str_cat3
-        `the expression produces no value to bind or assign, but a '` to_ty `')` ) vr ) ) }
+        `the expression produces no value to bind or assign, but a '` to_ty `' was required. A call returning 'v', an assignment or a bare block yields nothing — bind the result of an expression that produces one.` ) vr ) ) }
     {}
     // No coercion above bridged from_ty → to_ty. If they are a never-valid
     // mix — a float and a non-float, or a pointer/string stored into a
@@ -16176,7 +16177,7 @@
             : s call_e ( str_first_word ( str_skip_word ( str_skip_word call_nurl ) ) )
             : s fn_e ( str_first_word ( str_skip_word ( str_skip_word fn_nurl ) ) )
             ? ! ( seq call_e fn_e )
-            { ( die lex ( nurl_str_cat4 `try propagation type mismatch — function returns `
+            { ( die lex ( nurl_str_cat4 `the try operator propagates the error type unchanged, so the enclosing function must return a Result whose error type matches. It returns `
                 fn_nurl ` but \\ received ` call_nurl ) ) }
             {}
         }
@@ -18206,7 +18207,7 @@
     ? & != 0 ( nurl_str_len __tprev ) ! ( seq __tprev __tpos )
     { ( die lex ( nurl_str_cat `duplicate type ': `
         ( nurl_str_cat sname
-        ( nurl_str_cat `' — already defined at ` __tprev ) ) ) )
+        ( nurl_str_cat3 `' — already defined at ` __tprev `. NURL has no overloading and no shadowing at file scope: rename one, or delete the duplicate. If the two are in different files, both are visible to the importer, so the names must still differ.` ) ) ) )
     }
     { ( nurl_sym_def g_fn_pos_syms __tkey __tpos ) }
     // Grammar v2.0+: consume the parse-program-staged `pub` flag and
@@ -18346,7 +18347,7 @@
         ? & != 0 ( nurl_str_len __gprev ) ! ( seq __gprev __gpos )
         { ( die lex ( nurl_str_cat `duplicate global ': `
             ( nurl_str_cat cname
-            ( nurl_str_cat `' — already defined at ` __gprev ) ) ) )
+            ( nurl_str_cat3 `' — already defined at ` __gprev `. NURL has no overloading and no shadowing at file scope: rename one, or delete the duplicate. If the two are in different files, both are visible to the importer, so the names must still differ.` ) ) ) )
         }
         { ( nurl_sym_def g_fn_pos_syms __gkey __gpos ) }
         ( vis_record_const cname const_pub )
@@ -20575,7 +20576,7 @@
     ( nurl_lex_advance lex )  // consume the name
     : s aval ( capture_impl_nurl_name lex )
     ? == 0 ( nurl_str_len aval )
-    { ( die lex ( nurl_str_cat3 `associated type '` aname `' must be bound to a simple type name` ) ) }
+    { ( die lex ( nurl_str_cat3 `associated type '` aname `' must be bound to a simple type name — write 'type Name = i' or 'type Name = MyStruct', not a parenthesised or generic form.` ) ) }
     {}
     ( nurl_lex_advance lex )  // consume the bound type
     ^ ( nurl_str_cat aname ( nurl_str_cat ` ` aval ) )
@@ -20765,7 +20766,7 @@
         ? ! ( str_contains_word declared bn )
         { ( die lex ( nurl_str_cat
             ( nurl_str_cat3 `trait '` tname `' has no associated type '` )
-            ( nurl_str_cat3 bn `' to bind for type '` ( nurl_str_cat impl_nurl `'` ) ) ) ) }
+            ( nurl_str_cat3 bn `' to bind for type '` ( nurl_str_cat3 impl_nurl `'. An impl may only bind the associated types the trait declares — check the name, or add 'type ` ( nurl_str_cat bn `' to the trait declaration.` ) ) ) ) ) }
         {}
     }
     // (b) every declared associated type is bound
@@ -21067,7 +21068,7 @@
 @ dyn_check_object_safe i lex s tname → v {
     : s tparam ( nurl_sym_get2 g_trait_syms tname `__tparam` )
     ? == 0 ( nurl_str_len tparam )
-    { ( die lex ( nurl_str_cat ( nurl_str_cat3 `trait '` tname `' has no Self type parameter '[T]', so it cannot be a dynamic object '%` )
+    { ( die lex ( nurl_str_cat ( nurl_str_cat3 `trait '` tname `' is not object-safe: a dynamic object needs the trait to be generic over Self ('% Name [T] { ... }'). Add the parameter, or dispatch statically. Wanted '%` )
         ( nurl_str_cat tname `'` ) ) ) }
     {}
     : s assoc ( nurl_sym_get2 g_trait_syms tname `__assoc` )
@@ -21303,7 +21304,7 @@
     : s implkey ( nurl_str_cat3 tname `##` ct )
     ? == 0 ( nurl_sym_len g_trait_syms implkey )
     { ( die lex ( nurl_str_cat ( nurl_str_cat3 `type '` ct `' does not implement trait '` )
-        ( nurl_str_cat3 tname `', so it cannot be made into a '%` ( nurl_str_cat tname `' object` ) ) ) ) }
+        ( nurl_str_cat3 tname `', so it cannot be made into a '%` ( nurl_str_cat3 tname `' object. Write the impl first: '% ` ( nurl_str_cat tname ` <Type> { ... }', supplying every method the trait declares.` ) ) ) ) ) }
     {}
     : s cmangle ( mangle_type ct )
     : s dynty ( nurl_str_cat `%dyn.` tname )
@@ -21830,7 +21831,7 @@
                             ? & != 0 ( nurl_str_len __fprev ) ! ( seq __fprev __fpos )
                             { ( die lex ( nurl_str_cat `duplicate function '@ `
                                 ( nurl_str_cat fname
-                                ( nurl_str_cat `' — already defined at ` __fprev ) ) ) )
+                                ( nurl_str_cat3 `' — already defined at ` __fprev `. NURL has no overloading and no shadowing at file scope: rename one, or delete the duplicate. If the two are in different files, both are visible to the importer, so the names must still differ.` ) ) ) )
                             }
                             { ( nurl_sym_def g_fn_pos_syms __fkey __fpos ) }
                             ? & at_lbrack | | gen1s gen2s gen3s

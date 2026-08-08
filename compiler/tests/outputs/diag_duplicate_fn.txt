@@ -1,5 +1,5 @@
 COMPILE FAIL
 ERRORS
-compiler/tests/diag_duplicate_fn.nu:16:17: error: duplicate function '@ shared_helper' — already defined at compiler/tests/diag_duplicate_fn_mod.nu:4
+compiler/tests/diag_duplicate_fn.nu:16:17: error: duplicate function '@ shared_helper' — already defined at compiler/tests/diag_duplicate_fn_mod.nu:4. NURL has no overloading and no shadowing at file scope: rename one, or delete the duplicate. If the two are in different files, both are visible to the importer, so the names must still differ.
 @ shared_helper i x → i {
                 ^

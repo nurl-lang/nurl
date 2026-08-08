@@ -8,6 +8,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **The diagnostic sweep finished: 170 of 173 `die` sites now carry an
+  explanation.** The remainder are the generic "expected X but found Y"
+  fallback (which now also names the usual cause), a message whose cure
+  arrives in a variable, and one comment the scanner counts as a call.
+
+  This pass took the last ~20: the `inout` field forms, associated-type
+  binding, object safety, duplicate declarations (which say NURL has
+  neither overloading nor file-scope shadowing), missing required
+  arguments (no defaults, no overloading), match arms that bind too many
+  payloads, and the "produces no value" family.
+
+  Two of the edits were rejected by the compiler's own arity diagnostic
+  — `nurl_str_cat` given three arguments — which named the call, the
+  expected count and the received one. The feature being built caught
+  its author twice while being built, which is the shortest description
+  of what it is for.
+
 ### Fixed
 
 - **No ordering between an address and a number.** The pointer/scalar
