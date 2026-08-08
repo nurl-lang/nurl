@@ -1,6 +1,6 @@
 COMPILE FAIL
 ERRORS
-compiler/tests/diag_slice_lit_float_elem.nu:7:26: error: element 2 of this slice literal has float type 'f' but the slice's declared element type is 'i' (an integer) — NURL has no implicit float↔integer conversions; the emitted store would reinterpret the bits. Convert explicitly ('# i expr' truncates toward zero), or declare the slice '[ f | … ]'.
-    : [ i xs [ i | 1 2.5 3 ]
-                         ^
+compiler/tests/diag_slice_lit_float_elem.nu:7:24: error: element 2 of this slice literal has float type 'f' but the slice's declared element type is 'i' (an integer) — NURL has no implicit float↔integer conversions; the emitted store would reinterpret the bits. Convert explicitly ('# i expr' truncates toward zero), or declare the slice '[ f | … ]'.
+    : [i xs [i | 1 2.5 3]
+                       ^
 error: aborting due to 1 previous error

@@ -1,6 +1,6 @@
 COMPILE FAIL
 ERRORS
-compiler/tests/diag_call_closure_sig_mismatch.nu:10:17: error: argument 1 to 'apply': closure of LLVM type '{ double (i8*, double)*, i8* }' passed where the parameter declares '{ i64 (i8*, i64)*, i8* }' — the closure's signature differs from the declared '(@ …)' parameter type. The callee invokes the closure with the DECLARED signature, so every argument and the return value would be reinterpreted bit patterns. Make the closure's parameter/return types match the declaration, or fix the declaration.
+compiler/tests/diag_call_closure_sig_mismatch.nu:11:17: error: argument 1 to 'apply': closure of LLVM type '{ double (i8*, double)*, i8* }' passed where the parameter declares '{ i64 (i8*, i64)*, i8* }' — the closure's signature differs from the declared '(@ …)' parameter type. The callee invokes the closure with the DECLARED signature, so every argument and the return value would be reinterpreted bit patterns. Make the closure's parameter/return types match the declaration, or fix the declaration.
     ^ ( apply g 3 )
                 ^
 error: aborting due to 1 previous error

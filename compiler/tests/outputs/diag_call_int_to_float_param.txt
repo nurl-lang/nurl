@@ -1,6 +1,6 @@
 COMPILE FAIL
 ERRORS
-compiler/tests/diag_call_int_to_float_param.nu:8:20: error: argument 1 to 'half' has integer type 'i' but the parameter is declared 'f' (a float) — NURL has no implicit integer↔float conversions. Emitting the call anyway would hand the callee an integer register where it reads a float register: silent garbage, not even a crash. Write a float value ('2.0', not '2') or convert explicitly with '# f expr'.
+compiler/tests/diag_call_int_to_float_param.nu:9:20: error: argument 1 to 'half' has integer type 'i' but the parameter is declared 'f' (a float) — NURL has no implicit integer↔float conversions. Emitting the call anyway would hand the callee an integer register where it reads a float register: silent garbage, not even a crash. Write a float value ('2.0', not '2') or convert explicitly with '# f expr'.
     : f z ( half y )
                    ^
 error: aborting due to 1 previous error
