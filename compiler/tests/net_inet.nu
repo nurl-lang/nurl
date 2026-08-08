@@ -102,7 +102,7 @@ $ `stdlib/net/inet.nu`
     ( pb `reject bad sep: ` ?? ( mac_parse `02x00:00:00:00:01` ) { T m → F F → T } )
     ( pb `reject non-hex: ` ?? ( mac_parse `0g:00:00:00:00:01` ) { T m → F F → T } )
     : String mstr ( mac_str 2199023255553 )
-    ( pb `mac str round-trip: ` ( nurl_str_eq ( string_data mstr ) `02:00:00:00:00:01` ) )
+    ( pb `mac str round-trip: ` != 0 ( nurl_str_eq ( string_data mstr ) `02:00:00:00:00:01` ) )
     ( string_free mstr )
     ( pb `mac octet 0: ` == ( mac_octet 2199023255553 0 ) 2 )
     ( pb `mac octet 5: ` == ( mac_octet 2199023255553 5 ) 1 )
