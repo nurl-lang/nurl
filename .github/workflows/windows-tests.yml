@@ -6,12 +6,24 @@ name: windows-tests
 #
 # This is what backs docs/PLATFORMS.md's Windows tier: without this
 # workflow the 447 Windows goldens were exercised only on a developer's
-# machine. Runs on pushes to main (not per-PR: the Windows leg is the
-# slowest runner and PRs are already gated by the Linux+FreeBSD corpus;
-# a main breakage surfaces here within one push) and on demand.
+# machine.
+#
+# It used to run on main pushes only, reasoning that PRs are already
+# gated by the Linux+FreeBSD corpus and "a main breakage surfaces here
+# within one push". That rationale was falsified: run_tests.ps1 is a
+# separate implementation of "how do I run this test", so two corpus
+# additions that carry a compiler flag (arity_strict_* → --strict-arity,
+# lint_* → --lint) passed every PR gate and turned main red the moment
+# they merged. Surfacing within one push is not the same as being
+# caught, and it cost a second PR to undo each time.
+#
+# So: PRs too. That is what makes Windows a per-PR merge gate, and what
+# moves it to tier 1 in docs/PLATFORMS.md.
 
 on:
   push:
+    branches: [main]
+  pull_request:
     branches: [main]
   workflow_dispatch:
     inputs:
@@ -23,8 +35,39 @@ on:
         type: boolean
         default: false
 
+# The Windows leg is the slowest runner in the repo; do not leave a
+# superseded run burning it.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
+  changes:
+    name: classify changed paths
+    runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.filter.outputs.code }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      # Same shape as ci.yml, and for the same reason recorded there: the
+      # skip is an `if:` on the job rather than workflow-level
+      # `paths-ignore`, because a skipped job still satisfies a branch
+      # -protection required check while a path-filtered workflow that
+      # never starts would leave a docs-only PR blocked forever.
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            code:
+              - '!webdocs/**'
+
   windows:
+    needs: changes
+    # On a push or a manual dispatch there is no PR base to diff against,
+    # so the filter has nothing to say — run. On a PR, skip a docs-only
+    # change rather than spend an hour of the slowest runner on it.
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.code == 'true' }}
     runs-on: windows-latest
     timeout-minutes: 60
     steps:

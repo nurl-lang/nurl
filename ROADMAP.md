@@ -43,8 +43,9 @@ What is solid today:
 - **Standard library.** A broad pure-NURL stdlib (see the inventory below)
   spanning collections, hashing, serialization, a full HTTP/1.1+2 + WebSocket
   stack, database clients, distributed systems (p2p overlay, CRDTs), MCP, and the Anthropic Claude API.
-- **Targets.** Linux x86_64 (primary, CI-tested), Windows x86_64 (CI-built,
-  corpus runs locally), macOS x86_64/ARM64 (cross-compiled Mach-O — no CI, no
+- **Targets.** Linux x86_64 (primary, CI-tested), Windows x86_64 (CI-tested:
+  bootstrap fixed point + the Windows golden corpus on every push and PR),
+  macOS x86_64/ARM64 (cross-compiled Mach-O — no CI, no
   prebuilt toolchain), `wasm32-wasi`, static Linux ARM64 / RISC-V64
   (musl), and **bootable unikernel images** — a NURL program as its own
   kernel on x86_64, AArch64 and RISC-V64, no host OS and no libc.
@@ -154,7 +155,7 @@ platform-specific shims.
 
 ### Targets & tooling
 
-- Native: Linux x86_64 (CI-tested), Windows x86_64 (CI-built), macOS
+- Native: Linux x86_64 (CI-tested), Windows x86_64 (CI-tested), macOS
   x86_64/ARM64 (cross-compiled, not CI-tested, no prebuilt toolchain).
 - WebAssembly `wasm32-wasi` (WASI SDK), including the compiler itself running
   in the browser playground, and **whole neural networks running client-side
