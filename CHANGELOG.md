@@ -8,175 +8,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Changed
-
-- **The diagnostic sweep finished: 170 of 173 `die` sites now carry an
-  explanation.** The remainder are the generic "expected X but found Y"
-  fallback (which now also names the usual cause), a message whose cure
-  arrives in a variable, and one comment the scanner counts as a call.
-
-  This pass took the last ~20: the `inout` field forms, associated-type
-  binding, object safety, duplicate declarations (which say NURL has
-  neither overloading nor file-scope shadowing), missing required
-  arguments (no defaults, no overloading), match arms that bind too many
-  payloads, and the "produces no value" family.
-
-  Two of the edits were rejected by the compiler's own arity diagnostic
-  — `nurl_str_cat` given three arguments — which named the call, the
-  expected count and the received one. The feature being built caught
-  its author twice while being built, which is the shortest description
-  of what it is for.
-
-### Fixed
-
-- **No ordering between an address and a number.** The pointer/scalar
-  operand check exempted all comparisons, for a reason that is only
-  about equality: `== ptr 0` is a null check and pointer-to-pointer
-  compares in i64. Written as "comparisons", the exemption also covered
-  `<` `>` `<=` `>=`, where a pointer against an integer means nothing —
-  so `? > 1 \`s\`` compiled clean, linked, and produced a running binary
-  that silently compared an i64 against an address.
-
-  Found by the diagnostic probe suite, in the group that compiled with
-  no diagnostic at all. A missing check is the worst AX outcome there
-  is: no wording can teach what the compiler never says.
-
-  Ordering comparisons are checked now; equality keeps the exemption
-  exactly as before, pinned from the other side by `cmp_ptr_null_ok`.
-
-### Changed
-
-- **A 30-case probe suite over realistic mistakes, and what it found.**
-  Counting cue words in the source had reached its limit, so the next
-  pass wrote thirty programs an agent plausibly writes wrong — wrong
-  arity, wrong types, unwrapped options, missing arms, generics without
-  brackets, assignment to a parameter — and read every answer.
-
-  Most already taught well. Three did not and were rewritten: assignment
-  to an immutable parameter (which named neither ': ~' nor 'inout'),
-  parameter shadowing, and field access on a scalar.
-
-  One taught something **false**. Returning a bool from an `→ i`
-  function said *"NURL has no implicit conversions"* — but a bool DOES
-  widen into an integer binding, deliberately and by design, so
-  `': i n ( > a b )'` is fine. An agent that took the sentence at its
-  word would have learned a rule the compiler does not enforce. It now
-  states the real one: a bool widens into a binding, a return type is a
-  contract and must match exactly.
-
-  The probe also found nine programs that compile clean where an error
-  seemed likely. Seven turn out to be legal or to fail later by design;
-  the remaining two are recorded for a separate look, because a missing
-  diagnostic is a type-system question and not a wording one.
-
-- **The use-after-move error now names what consumed the value.** It
-  said "consumed at line 3", which makes a reader scan that line for the
-  operation and, on a line with several calls, guess. It now says "by
-  string_free" or "by an alias copy" — the cause is stashed at the move
-  site under name+line, the pair the diagnostic already resolves. The
-  cure was also written for a move rather than a free ("pass a fresh
-  value or rebind it"); it now leads with the rule that explains both:
-  a heap handle has exactly one owner, so after the consuming operation
-  the binding is dead.
-
-- **Diagnostics, second pass: 33 more messages, one misleading cure
-  fixed, and the two token tables merged into one.** The first pass took
-  the twelve an agent is most likely to reach; this one works the list.
-  The `select` family (8) and the or-pattern constraints (5) now state
-  the arm shape they want. Operator errors say which operators are
-  bool-only and how to test an integer instead. `inout`, FFI
-  declarations, associated types, supertraits, named arguments, literal
-  formats, duplicate match arms, immutable mutation and the try operator
-  all name the correct form.
-
-  One message was not terse but **wrong in its advice**. `^ f 1` — a
-  call with the parentheses left off — led with *"does not auto-coerce
-  to a closure value. Wrap it: `\ args → R { ( f args ) }`"*. True,
-  rarer, and it sends a reader who simply forgot the parens to rewrite
-  working code into a closure. The statement-position sibling had been
-  saying the right thing all along. Both readings are still offered; the
-  likely one leads. Found by running realistic mistakes through the
-  compiler and reading what came back, which is the only measure that
-  matches the goal.
-
-  Also: `tok_here`, added in the first pass, duplicated the `__tok_label`
-  table that already existed. Merged — with the entries each was missing
-  folded in, so `'^' (return)`, `'?' (a conditional starts here)` and
-  the loop keywords now render everywhere instead of "this token".
-
-- **Every compiler diagnostic now says which severity it is, and the
-  parser errors say what to write instead.** Two gaps, both about what
-  an agent can do with the output.
-
-  The four `die` emitters printed `file:line:col: message` with no
-  `error:` — while the borrow checker's diagnostics carried one. The
-  same build could print two lines that looked like different kinds of
-  output, and a consumer classifying them had to know which pass had
-  spoken. Four messages had hand-rolled the prefix to compensate. It is
-  emitted centrally now, so all ~160 sites gained it at once.
-
-  Twelve parser errors said only what they wanted: `expected type`,
-  `expected pattern identifier`, `expected { after closure return
-  type`. That is the half that does not help — a reader who knew which
-  construct they were in would not have written the mistake. Each now
-  names what was FOUND (via a new `tok_here`) and what the correct form
-  IS. The one most likely to be hit:
-
-  > expected the next match arm's pattern, found `'('`. An arm body is
-  > ONE expression or a `{ ... }` block, so a second expression on the
-  > same arm is read as the next pattern. Wrap the body:
-  > `F e → { ( a ) ( b ) }`.
-
-  That one is picked from experience rather than a list: it is the error
-  this session actually hit while writing NURL, and the old text gave
-  nothing to act on. `diag_ax_parser_cures` baselines it, because the
-  text is the feature.
-
-### Changed
-
-- **Windows is a per-PR merge gate — tier 1.** The `windows-tests`
-  workflow ran on `main` pushes only, reasoning that PRs were already
-  gated by the Linux+FreeBSD corpus and that "a main breakage surfaces
-  here within one push". That rationale was falsified twice in one
-  batch: `run_tests.ps1` is a separate implementation of *how do I run
-  this test*, so two corpus additions carrying a compiler flag
-  (`arity_strict_*` → `--strict-arity`, `lint_*` → `--lint`) passed
-  every PR gate and turned `main` red on merge. Surfacing within one
-  push is not the same as being caught, and each cost a second PR to
-  undo.
-
-  It now runs on PRs as well, with a `changes` classify job so a
-  docs-only PR does not spend an hour of the slowest runner, and a
-  concurrency group so a superseded run is cancelled.
-  `docs/PLATFORMS.md` moves Windows from tier 2 to tier 1 on both
-  tables, which is what the tier definition has always said: tier 1 is
-  "every push and PR".
-
-  `RELEASING.md` claimed no test corpus ran on Windows in CI at all.
-  That stopped being true when the workflow landed and is now corrected.
+## [0.36.0] — 2026-08-08
 
 ### Added
 
-- **`nurl_build_native run=true` — compile and run in one call.** The
-  hosted playground could build a native binary and hand back a download
-  link, but the only way to see a program's OUTPUT was
-  `nurl_build_unikernel`: boot it as its own kernel under QEMU and read
-  the guest console. That works and stays the sandboxed path, but it is
-  a heavyweight answer to "what does this print".
+- **`break` and `continue` (grammar v2.4).** Every parsing loop in this
+  tree was `: ~ b run T` plus `= run F` plus a condition that reads the
+  flag — three lines for one, and three places to forget the reset.
+  Both are **reserved identifiers**, classified by the lexer like `pub`,
+  not symbols: every two-character prefix spelling collides with a
+  program that already exists. `~>` in particular would have swallowed
+  the 28 loops written `~ > cond { … }`, turning `~ > i idx {` into
+  `continue i idx {`. Two identifier names is the cheaper price.
 
-  `run=true` executes the program under the same `timeout(1)` wrapper
-  every build tool uses and returns exit code, stdout and stderr.
+  Both terminate the block they appear in, exactly as `^` does, and both
+  bind to the **innermost** `~` body. Using either outside a loop is a
+  compile error naming the reason rather than a silent no-op.
 
-  It ships **off**. Executing a freshly compiled binary is unsandboxed
-  code execution against the container's filesystem, network and
-  environment, and the hosted instance is an unauthenticated public
-  compile farm. `NURL_ALLOW_RUN=1` is the operator saying otherwise —
-  the same switch, and the same reasoning, as `nurl-mcp --allow-run`
-  over HTTP. Asking for a run while it is off returns an error naming
-  both the switch and the sandboxed alternative, rather than a build
-  with no output, which a caller would read as "it printed nothing".
+  The subtlety is ownership. A jump leaves the block without running the
+  code the normal path would, so the compiler emits the loop body's
+  whole drop sequence at the jump before branching. Getting that wrong
+  is invisible in a functional test: the first implementation leaked
+  because the drop emitters *rewrite* the owned-value lists they walk —
+  correct at a function's single exit, wrong at a branch, because the
+  fall-through still runs on every other iteration and still needs its
+  own drops. A `continue` taken once left 49 of 50 iterations' closure
+  environments unfreed. The lists are now snapshotted and restored
+  around the jump, and the ASan+LSan gates cover both jumps over a
+  capturing closure.
 
-### Added
+- **`--strict-arity`, and a CI gate that runs it over the whole tree.**
+  The n-ary `&`/`|` foot-gun is the language's one remaining
+  source-level trap, and its outcome is the worst available: `? & a b c
+  d { … } { … }` reads as `? (& a b) c d`, so the last two comparisons
+  become the bare then/else values, both blocks run as ordinary
+  statements, the conditional logic is wrong — and the compiler emits a
+  working binary with `status: ok`, so nothing downstream can notice.
+  `nurlc --strict-arity` makes it an error; the default stays a warning
+  (now naming the flag) so existing trees keep building.
+  `tools/check_strict_arity.sh` runs the strict compiler over every
+  first-party `.nu` file and is wired into CI.
+
+  The gate found the shape it was written for on its first run.
+  `examples/audio_sparcles2.nu` had `? & >= x 0 < x W & >= y 0 < y H {}
+  { = . plife i 0 }` for "kill particles that wander off-screen": the
+  condition was only the x test, the y test was swallowed as the bare
+  then-value, and the kill ran unconditionally — culling **every**
+  particle on **every** frame. Fixed with the third `&` it always needed.
 
 - **`--lint` reports a `Vec` or `String` nobody releases.** Those two
   are the handles the compiler deliberately does *not* auto-drop
@@ -206,32 +84,101 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   site, so the sink summary is not yet known — a limitation the existing
   inference already documents for itself.
 
-### Added
+- **`nurl_docs` reads a section instead of a document.** Answering "who
+  frees a String?" cost the whole 44 KB of MEMORY.md, and `spec.md`
+  (63 KB) did not fit the per-call cap at all. Documents are already
+  carved into headings, so: `query=` searches every section of every
+  document — whole-word, ranked by coverage, headings outranking body
+  prose — and returns the best few *with the keys to fetch them*;
+  `outline=true` is one document's heading map (1.5 KB for MEMORY.md);
+  `section='7.4'` or `section='manually-managed'` returns one section
+  (3.4 KB). Search and retrieval deliberately use different boundaries:
+  retrieval is hierarchical, so asking for §2 includes its §2.x
+  children, while search treats each heading's own prose as the unit —
+  otherwise a document's H1, having no same-level sibling, spans the
+  entire file, outscores every real subsection, and hands back exactly
+  the 44 KB the feature exists to avoid.
 
-- **`break` and `continue` (grammar v2.4).** Every parsing loop in this
-  tree was `: ~ b run T` plus `= run F` plus a condition that reads the
-  flag — three lines for one, and three places to forget the reset.
-  Both are **reserved identifiers**, classified by the lexer like `pub`,
-  not symbols: every two-character prefix spelling collides with a
-  program that already exists. `~>` in particular would have swallowed
-  the 28 loops written `~ > cond { … }`, turning `~ > i idx {` into
-  `continue i idx {`. Two identifier names is the cheaper price.
+- **`nurl_build_native run=true` — compile and run in one call.** The
+  hosted playground could build a native binary and hand back a download
+  link, but the only way to see a program's OUTPUT was
+  `nurl_build_unikernel`: boot it as its own kernel under QEMU and read
+  the guest console. That works and stays the sandboxed path, but it is
+  a heavyweight answer to "what does this print".
 
-  Both terminate the block they appear in, exactly as `^` does, and both
-  bind to the **innermost** `~` body. Using either outside a loop is a
-  compile error naming the reason rather than a silent no-op.
+  `run=true` executes the program under the same `timeout(1)` wrapper
+  every build tool uses and returns exit code, stdout and stderr.
 
-  The subtlety is ownership. A jump leaves the block without running the
-  code the normal path would, so the compiler emits the loop body's
-  whole drop sequence at the jump before branching. Getting that wrong
-  is invisible in a functional test: the first implementation leaked
-  because the drop emitters *rewrite* the owned-value lists they walk —
-  correct at a function's single exit, wrong at a branch, because the
-  fall-through still runs on every other iteration and still needs its
-  own drops. A `continue` taken once left 49 of 50 iterations' closure
-  environments unfreed. The lists are now snapshotted and restored
-  around the jump, and the ASan+LSan gates cover both jumps over a
-  capturing closure.
+  It ships **off**. Executing a freshly compiled binary is unsandboxed
+  code execution against the container's filesystem, network and
+  environment, and the hosted instance is an unauthenticated public
+  compile farm. `NURL_ALLOW_RUN=1` is the operator saying otherwise —
+  the same switch, and the same reasoning, as `nurl-mcp --allow-run`
+  over HTTP. Asking for a run while it is off returns an error naming
+  both the switch and the sandboxed alternative, rather than a build
+  with no output, which a caller would read as "it printed nothing".
+
+### Changed
+
+- **Compiler diagnostics: every error now says what to write instead.**
+  The compiler is the only teacher an agent has, so a message that names
+  what it wanted without naming the cure costs a whole iteration. This
+  release swept the 173 `die` sites; **170 now carry an explanation, up
+  from 95**.
+
+  Severity came first, and centrally: the four `die` emitters printed
+  `file:line:col: message` with no `error:`, while the borrow checker's
+  diagnostics carried one, so a single build printed two lines that
+  looked like different kinds of output. All ~160 sites gained it at
+  once.
+
+  Then the messages. Parser errors name what was **found** as well as
+  what was expected, and the correct form with an example — arms,
+  bindings, declarations, closure bodies, field access, `select`,
+  or-patterns, traits, `inout`. Type and borrow errors state the rule
+  that transfers: *a heap handle has exactly one owner*; *NURL has no
+  overloading and no file-scope shadowing*; *every parameter must be
+  supplied*. The use-after-move error now names **what** consumed the
+  value (`by string_free`, `by an alias copy`) rather than only the
+  line.
+
+  Two messages were not terse but wrong, and both were found by writing
+  the mistake and reading the answer rather than by scanning the source:
+
+    * `^ f 1` — a call with the parentheses left off — led with the
+      closure reading and told the writer to wrap working code in a
+      closure. The likely cure leads now.
+    * returning a bool from an `→ i` function asserted *"NURL has no
+      implicit conversions"*, which is false: a bool widens into an
+      integer binding, deliberately. An agent that believed the sentence
+      would have learned a rule the compiler does not enforce. It now
+      states the real one.
+
+  A 30-case probe suite over realistic mistakes backs the sweep, and it
+  is what found the missing check listed under Fixed below — a program
+  that compiled clean is the worst outcome of all, because no wording
+  can teach what the compiler never says.
+
+- **Windows is a per-PR merge gate — tier 1.** The `windows-tests`
+  workflow ran on `main` pushes only, reasoning that PRs were already
+  gated by the Linux+FreeBSD corpus and that "a main breakage surfaces
+  here within one push". That rationale was falsified twice in one
+  batch: `run_tests.ps1` is a separate implementation of *how do I run
+  this test*, so two corpus additions carrying a compiler flag
+  (`arity_strict_*` → `--strict-arity`, `lint_*` → `--lint`) passed
+  every PR gate and turned `main` red on merge. Surfacing within one
+  push is not the same as being caught, and each cost a second PR to
+  undo.
+
+  It now runs on PRs as well, with a `changes` classify job so a
+  docs-only PR does not spend an hour of the slowest runner, and a
+  concurrency group so a superseded run is cancelled.
+  `docs/PLATFORMS.md` moves Windows from tier 2 to tier 1 on both
+  tables, which is what the tier definition has always said: tier 1 is
+  "every push and PR".
+
+  `RELEASING.md` claimed no test corpus ran on Windows in CI at all.
+  That stopped being true when the workflow landed and is now corrected.
 
 ### Fixed
 
@@ -245,28 +192,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   memory. It is now a `use of moved value` error like every other
   use-after-free, with a `borrow_vec_free_with` regression.
 
-### Added
+- **No ordering between an address and a number.** The pointer/scalar
+  operand check exempted all comparisons, for a reason that is only
+  about equality: `== ptr 0` is a null check and pointer-to-pointer
+  compares in i64. Written as "comparisons", the exemption also covered
+  `<` `>` `<=` `>=`, where a pointer against an integer means nothing —
+  so `? > 1 \`s\`` compiled clean, linked, and produced a running binary
+  that silently compared an i64 against an address.
 
-- **`--strict-arity`, and a CI gate that runs it over the whole tree.**
-  The n-ary `&`/`|` foot-gun is the language's one remaining
-  source-level trap, and its outcome is the worst available: `? & a b c
-  d { … } { … }` reads as `? (& a b) c d`, so the last two comparisons
-  become the bare then/else values, both blocks run as ordinary
-  statements, the conditional logic is wrong — and the compiler emits a
-  working binary with `status: ok`, so nothing downstream can notice.
-  `nurlc --strict-arity` makes it an error; the default stays a warning
-  (now naming the flag) so existing trees keep building.
-  `tools/check_strict_arity.sh` runs the strict compiler over every
-  first-party `.nu` file and is wired into CI.
+  Found by the diagnostic probe suite, in the group that compiled with
+  no diagnostic at all. A missing check is the worst AX outcome there
+  is: no wording can teach what the compiler never says.
 
-  The gate found the shape it was written for on its first run.
-  `examples/audio_sparcles2.nu` had `? & >= x 0 < x W & >= y 0 < y H {}
-  { = . plife i 0 }` for "kill particles that wander off-screen": the
-  condition was only the x test, the y test was swallowed as the bare
-  then-value, and the kill ran unconditionally — culling **every**
-  particle on **every** frame. Fixed with the third `&` it always needed.
-
-### Fixed
+  Ordering comparisons are checked now; equality keeps the exemption
+  exactly as before, pinned from the other side by `cmp_ptr_null_ok`.
 
 - **`ext/json` string parsing now follows RFC 8259, and the module's own
   promise holds.** json.nu states "the serializer's output is guaranteed
@@ -297,23 +236,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   already captured the `?`'s line for the borrow checker; it now keeps
   the column too and reports there, via a new `warn_pos` (the non-fatal
   twin of the existing `die_pos`, which exists for exactly this reason).
-
-### Added
-
-- **`nurl_docs` reads a section instead of a document.** Answering "who
-  frees a String?" cost the whole 44 KB of MEMORY.md, and `spec.md`
-  (63 KB) did not fit the per-call cap at all. Documents are already
-  carved into headings, so: `query=` searches every section of every
-  document — whole-word, ranked by coverage, headings outranking body
-  prose — and returns the best few *with the keys to fetch them*;
-  `outline=true` is one document's heading map (1.5 KB for MEMORY.md);
-  `section='7.4'` or `section='manually-managed'` returns one section
-  (3.4 KB). Search and retrieval deliberately use different boundaries:
-  retrieval is hierarchical, so asking for §2 includes its §2.x
-  children, while search treats each heading's own prose as the unit —
-  otherwise a document's H1, having no same-level sibling, spans the
-  entire file, outscores every real subsection, and hands back exactly
-  the 44 KB the feature exists to avoid.
 
 ## [0.35.1] — 2026-08-07
 
@@ -11415,7 +11337,8 @@ releases are measured.
   compile-server (`api/`), browser playground (`nurlweb/`).
 * Dual license: MIT (LICENSE-MIT) or Apache-2.0 (LICENSE-APACHE).
 
-[Unreleased]: https://github.com/nurl-lang/nurl/compare/v0.35.1...HEAD
+[Unreleased]: https://github.com/nurl-lang/nurl/compare/v0.36.0...HEAD
+[0.36.0]: https://github.com/nurl-lang/nurl/compare/v0.35.1...v0.36.0
 [0.35.1]: https://github.com/nurl-lang/nurl/compare/v0.35.0...v0.35.1
 [0.35.0]: https://github.com/nurl-lang/nurl/compare/v0.34.0...v0.35.0
 [0.34.0]: https://github.com/nurl-lang/nurl/compare/v0.33.0...v0.34.0

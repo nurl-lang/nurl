@@ -7,7 +7,7 @@ Anything marked done here has a regression test in
 [`compiler/tests/`](compiler/tests/) and is covered by the bootstrap fixed
 point.
 
-_Last reviewed: 2026-08-07 · Current release: **0.35.1** · Language: **Grammar
+_Last reviewed: 2026-08-08 · Current release: **0.36.0** · Language: **Grammar
 v2.4** ([`spec/grammar.ebnf`](spec/grammar.ebnf))._
 
 ---
@@ -71,11 +71,12 @@ A high-level map of what exists. Dates and per-feature detail are in
 - Self-hosted compiler (`compiler/nurlc.nu`) with a deterministic, byte-identical
   bootstrap; stage-0 links the committed `nurlc_lastgood.ll` snapshot (no
   Python in the toolchain).
-- Grammar evolved v0.1 → **v2.3** (snapshots in [`spec/`](spec/)). v2.x added:
+- Grammar evolved v0.1 → **v2.4** (snapshots in [`spec/`](spec/)). v2.x added:
   visibility (`pub`) enforcement across functions, types, consts, and enum
   variants; trait bounds; match guards + or-patterns; const folding; channel
-  select; **dynamic trait objects** (`%Trait` + `( dyn Trait v )`, v2.3); and
-  locked the prefix-arity grouping decision.
+  select; **dynamic trait objects** (`%Trait` + `( dyn Trait v )`, v2.3);
+  **`break` / `continue`** as reserved identifiers (v2.4); and locked the
+  prefix-arity grouping decision.
 - Type system: strong, static, inferred, algebraic; no subtyping, no implicit
   conversions. Sized integer/float types with **signedness carried in the
   type representation itself** (`u`/`u16`/`u32`/`u64` distinct from the
