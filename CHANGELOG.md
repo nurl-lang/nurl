@@ -10,6 +10,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`nurl_build_native run=true` — compile and run in one call.** The
+  hosted playground could build a native binary and hand back a download
+  link, but the only way to see a program's OUTPUT was
+  `nurl_build_unikernel`: boot it as its own kernel under QEMU and read
+  the guest console. That works and stays the sandboxed path, but it is
+  a heavyweight answer to "what does this print".
+
+  `run=true` executes the program under the same `timeout(1)` wrapper
+  every build tool uses and returns exit code, stdout and stderr.
+
+  It ships **off**. Executing a freshly compiled binary is unsandboxed
+  code execution against the container's filesystem, network and
+  environment, and the hosted instance is an unauthenticated public
+  compile farm. `NURL_ALLOW_RUN=1` is the operator saying otherwise —
+  the same switch, and the same reasoning, as `nurl-mcp --allow-run`
+  over HTTP. Asking for a run while it is off returns an error naming
+  both the switch and the sandboxed alternative, rather than a build
+  with no output, which a caller would read as "it printed nothing".
+
+### Added
+
 - **`--lint` reports a `Vec` or `String` nobody releases.** Those two
   are the handles the compiler deliberately does *not* auto-drop
   (docs/MEMORY.md §7.4), so forgetting one leaks with no diagnostic

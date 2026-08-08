@@ -159,6 +159,19 @@ Cursor, Windsurf, Zed and other MCP-capable IDEs accept the same URL
 run the server binary directly. `nurlapi/main.nu` is a NURL program — no
 Python or Node runtime involved.
 
+**Running what you built.** `nurl_build_native` takes `run=true` to
+execute the program and return its exit code, stdout and stderr in the
+same call — one round trip from source to output. It is **off** on the
+hosted instance and returns an error saying so, because executing a
+freshly compiled binary is unsandboxed: it gets the container's
+filesystem, network and environment. A self-hosted deployment enables it
+with `NURL_ALLOW_RUN=1`, the same switch and the same reasoning as
+`nurl-mcp --allow-run` over HTTP.
+
+The sandboxed way to see output needs no switch: `nurl_build_unikernel`
+boots the program as its own kernel under QEMU, with no network and a
+time cap, and hands back the guest console.
+
 **Caveats:**
 - Open and unauthenticated. The hosted instance is a free public endpoint —
   don't push secrets through it; assume the source is logged. For

@@ -66,6 +66,46 @@ $ `nurlapi/pptws.nu`
 // The docs/ prose tree behind nurl_docs and the /docs/* routes.
 @ get_docs_dir → String { ^ ( env_var_or `NURL_DOCS_DIR` `/opt/nurl/docs` ) }
 
+// Running a freshly compiled program is UNSANDBOXED code execution: the
+// binary gets this container's filesystem, its network and its
+// environment. The playground is an unauthenticated public compile
+// farm, so the capability ships OFF and the hosted deployment leaves it
+// off. `NURL_ALLOW_RUN=1` is the operator saying otherwise — the same
+// switch, and the same reasoning, as nurl-mcp's `--allow-run` over HTTP.
+//
+// The one sandboxed execution path the server already offers stays the
+// recommended one: nurl_build_unikernel boots the program as its own
+// kernel under QEMU with no network and a time cap.
+@ run_allowed → b {
+    : String v ( env_var_or `NURL_ALLOW_RUN` `` )
+    : b r | != 0 ( nurl_str_eq ( string_data v ) `1` ) != 0 ( nurl_str_eq ( string_data v ) `true` )
+    ( string_free v )
+    ^ r
+}
+
+// Execute a just-built binary under the same timeout(1) wrapper every
+// build tool uses, and fold the result into the response.
+@ __run_built_binary Json res s bin_path → v {
+    : ( Vec s ) noargs ( vec_new [s] )
+    : !Output ProcessErr r ( run_tool bin_path noargs )
+    ( vec_free [s] noargs )
+    ?? r {
+        T o → {
+            : Json run ( json_obj_new )
+            ( json_obj_set run `exit_code` ( json_int ( output_exit_code o ) ) )
+            ( json_obj_set run `stdout` ( json_str_lit ( output_stdout o ) ) )
+            ( json_obj_set run `stderr` ( json_str_lit ( output_stderr o ) ) )
+            ( json_obj_set res `run` run )
+            ( output_free o )
+        }
+        F e → {
+            : Json run ( json_obj_new )
+            ( json_obj_set run `error` ( json_str_lit `the built binary could not be executed` ) )
+            ( json_obj_set res `run` run )
+        }
+    }
+}
+
 @ get_license_mit_path → String { ^ ( env_var_or `NURL_LICENSE_MIT_PATH` `/opt/nurl/LICENSE-MIT` ) }
 
 @ get_license_apache_path → String { ^ ( env_var_or `NURL_LICENSE_APACHE_PATH` `/opt/nurl/LICENSE-APACHE` ) }
@@ -1319,6 +1359,20 @@ s combined_stdout s combined_stderr → v {
                                             ( json_obj_set res `binary_artifact`
                                             ( make_artifact_json ( string_data bin_name )
                                             ?? bn_sz { T s → s F _ → 0 } ( string_data build_id ) ) )
+                                            // Compile-and-run in one call, when the
+                                            // operator has enabled it. Refusing loudly
+                                            // beats ignoring the flag: a caller that
+                                            // asked to run and got only a build would
+                                            // read the silence as "it printed nothing".
+                                            ? ( get_common_bool root `run` F ) {
+                                                ? ( run_allowed ) {
+                                                    ( __run_built_binary res ( string_data bin_path ) )
+                                                } {
+                                                    : Json rj ( json_obj_new )
+                                                    ( json_obj_set rj `error` ( json_str_lit `running built programs is disabled on this server - it is unsandboxed code execution against the container's filesystem, network and environment. Set NURL_ALLOW_RUN=1 to enable it, or use build_unikernel, which boots the program under QEMU with no network and a time cap.` ) )
+                                                    ( json_obj_set res `run` rj )
+                                                } }
+                                            {}
                                         } {}
 
                                         : String body ( json_stringify res )
@@ -4810,10 +4864,26 @@ s combined_stdout s combined_stderr → v {
     : Json body ( json_obj_new )
     ( json_obj_set body `source` ( json_str_lit source ) )
     ( json_obj_set body `filename` ( json_str_lit filename ) )
+    ? ( __mcp_args_get_bool `run` args F ) { ( json_obj_set body `run` ( json_bool T ) ) } {}
     ? links_only { ( json_obj_set body `links_only` ( json_bool T ) ) } {}
     : Json result ( __mcp_build_endpoint endpoint body )
     ( json_free body )
     ^ result
+}
+
+// The native build tool's schema, with the opt-in `run`.
+@ __mcp_schema_build_native → Json {
+    : Json schema ( json_obj_new )
+    ( json_obj_set schema `type` ( json_str_lit `object` ) )
+    : Json props ( json_obj_new )
+    ( json_obj_set props `source`
+    ( __mcp_prop `string` `NURL source code (full file contents)` ) )
+    ( json_obj_set props `filename`
+    ( __mcp_prop `string` `Logical filename for diagnostics (default main.nu)` ) )
+    ( json_obj_set props `run`
+    ( __mcp_prop `boolean` `Also RUN the compiled program and return its exit code, stdout and stderr, so one call gets you output instead of an artifact you cannot execute. Disabled on this server unless the operator set NURL_ALLOW_RUN=1 — running a freshly compiled program is unsandboxed code execution against the container's filesystem, network and environment, and asking for it while it is off returns an error saying so rather than a silent build. The sandboxed alternative is nurl_build_unikernel, which boots the program as its own kernel under QEMU with no network and a time cap.` ) )
+    ( json_obj_set schema `properties` props )
+    ^ schema
 }
 
 @ __mcp_schema_build_unikernel → Json {
@@ -5685,8 +5755,8 @@ s combined_stdout s combined_stderr → v {
 
     // Build tools.
     ( json_arr_push arr ( __mcp_tool_desc `nurl_build_native`
-    `Compile NURL source to a native x86_64 Linux ELF binary. Returns build status, nurlc+clang return codes, combined stderr, download URLs for the generated .ll and the binary. Equivalent to POST /build.`
-    ( __mcp_schema_source_filename ) ) )
+    `Compile NURL source to a native x86_64 Linux ELF binary. Returns build status, nurlc+clang return codes, combined stderr, download URLs for the generated .ll and the binary. Pass run=true to also EXECUTE it and get back exit code, stdout and stderr in the same call — the difference between an artifact you cannot run and an answer. That is unsandboxed code execution, so it is off unless the operator set NURL_ALLOW_RUN=1, and asking for it while it is off returns an error saying so rather than a silent build; nurl_build_unikernel is the sandboxed way to see output (QEMU, no network, time cap). Equivalent to POST /build.`
+    ( __mcp_schema_build_native ) ) )
     ( json_arr_push arr ( __mcp_tool_desc `nurl_build_wasm`
     `Compile NURL source to a wasm32-wasi WebAssembly module. Returns build status, compile logs, and download URLs for the generated .wasm module (wasm_artifact) and the LLVM IR (ll_artifact) — no inline base64. Runs in-browser via a WASI shim or with wasmtime. Equivalent to POST /build_wasm with links_only:true.`
     ( __mcp_schema_source_filename ) ) )
