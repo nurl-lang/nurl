@@ -10,6 +10,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Diagnostics, second pass: 33 more messages, one misleading cure
+  fixed, and the two token tables merged into one.** The first pass took
+  the twelve an agent is most likely to reach; this one works the list.
+  The `select` family (8) and the or-pattern constraints (5) now state
+  the arm shape they want. Operator errors say which operators are
+  bool-only and how to test an integer instead. `inout`, FFI
+  declarations, associated types, supertraits, named arguments, literal
+  formats, duplicate match arms, immutable mutation and the try operator
+  all name the correct form.
+
+  One message was not terse but **wrong in its advice**. `^ f 1` — a
+  call with the parentheses left off — led with *"does not auto-coerce
+  to a closure value. Wrap it: `\ args → R { ( f args ) }`"*. True,
+  rarer, and it sends a reader who simply forgot the parens to rewrite
+  working code into a closure. The statement-position sibling had been
+  saying the right thing all along. Both readings are still offered; the
+  likely one leads. Found by running realistic mistakes through the
+  compiler and reading what came back, which is the only measure that
+  matches the goal.
+
+  Also: `tok_here`, added in the first pass, duplicated the `__tok_label`
+  table that already existed. Merged — with the entries each was missing
+  folded in, so `'^' (return)`, `'?' (a conditional starts here)` and
+  the loop keywords now render everywhere instead of "this token".
+
 - **Every compiler diagnostic now says which severity it is, and the
   parser errors say what to write instead.** Two gaps, both about what
   an agent can do with the output.

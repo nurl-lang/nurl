@@ -1,0 +1,6 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_ax_cures_2.nu:16:20: error: bare function name 'f' used as a value. If you meant to CALL it, calls need parentheses: '( f args )', never 'f args'. If you really wanted the function AS a value, a bare name does not auto-coerce to a closure — wrap it: '\ args → R { ( f args ) }' — but that is the rarer reading.
+@ main → i { ^ f 1 }
+                   ^
+error: aborting due to 1 previous error
