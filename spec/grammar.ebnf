@@ -1,5 +1,5 @@
 (* NURL — Neural Unified Representation Language
-   Grammar v2.3 — complete language specification
+   Grammar v2.4 — complete language specification
    File extension: .nu
 
    All expressions use PREFIX NOTATION.
@@ -247,8 +247,28 @@ stmt = let_stmt      (*  :              *)
      | set_stmt      (*  =              *)
      | defer_stmt    (*  ;              *)
      | tilde_stmt    (*  ~              *)
+     | jump_stmt     (*  break/continue *)
      | expr          (*  side-effect    *)
      ;
+
+
+(* break | continue  (grammar v2.4)
+   Loop control for the innermost enclosing `~` loop body: `break`
+   leaves it, `continue` re-evaluates its condition. Both terminate the
+   block they appear in, exactly like `^` — anything after one in the
+   same block is unreachable.
+
+   Both are RESERVED IDENTIFIERS, not symbols. Every two-character
+   prefix spelling collides with an existing program: `~>` would swallow
+   the loops written `~ > cond { … }`, and the sequences left free carry
+   no meaning a reader could guess. The cost is two identifier names.
+
+   Using either outside a `~` body is a compile error, not a no-op.
+
+   Example:  ~ < i n { ? ( skip i ) { continue } {}
+                       ? ( done i ) { break    } {}
+                       = i + i 1 }                          *)
+jump_stmt = 'break' | 'continue' ;
 
 
 (* : ~? type? IDENT expr
@@ -761,6 +781,8 @@ IDENT       = IDENT_PLAIN ( '::' IDENT_PLAIN )* ;
      T F                     →  boolean literals          (TT_BOOL)
      Z                       →  sizeof keyword            (TT_SIZEOF)
      pub                     →  visibility prefix         (TT_PUB)
+     break                   →  leave innermost loop      (TT_BREAK)
+     continue                →  next iteration            (TT_CONTINUE)
 
    Multi-byte operator tokens (lexed greedily — longest match wins;
    the 3-byte forms below precede their shorter prefixes in the lex

@@ -8,6 +8,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`break` and `continue` (grammar v2.4).** Every parsing loop in this
+  tree was `: ~ b run T` plus `= run F` plus a condition that reads the
+  flag — three lines for one, and three places to forget the reset.
+  Both are **reserved identifiers**, classified by the lexer like `pub`,
+  not symbols: every two-character prefix spelling collides with a
+  program that already exists. `~>` in particular would have swallowed
+  the 28 loops written `~ > cond { … }`, turning `~ > i idx {` into
+  `continue i idx {`. Two identifier names is the cheaper price.
+
+  Both terminate the block they appear in, exactly as `^` does, and both
+  bind to the **innermost** `~` body. Using either outside a loop is a
+  compile error naming the reason rather than a silent no-op.
+
+  The subtlety is ownership. A jump leaves the block without running the
+  code the normal path would, so the compiler emits the loop body's
+  whole drop sequence at the jump before branching. Getting that wrong
+  is invisible in a functional test: the first implementation leaked
+  because the drop emitters *rewrite* the owned-value lists they walk —
+  correct at a function's single exit, wrong at a branch, because the
+  fall-through still runs on every other iteration and still needs its
+  own drops. A `continue` taken once left 49 of 50 iterations' closure
+  environments unfreed. The lists are now snapshotted and restored
+  around the jump, and the ASan+LSan gates cover both jumps over a
+  capturing closure.
+
 ### Fixed
 
 - **The borrow checker did not know `vec_free_with` frees its Vec.** The

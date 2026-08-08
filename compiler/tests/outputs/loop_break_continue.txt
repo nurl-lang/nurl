@@ -1,0 +1,8 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+break at 5, seen=5
+odds=5
+nested hits=6
+done
