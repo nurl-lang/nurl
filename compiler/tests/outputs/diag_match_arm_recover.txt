@@ -1,6 +1,6 @@
 COMPILE FAIL
 ERRORS
-compiler/tests/diag_match_arm_recover_mod.nu:23:17: expected variable name in let — 'pub' is a reserved keyword (the visibility prefix on top-level declarations) and cannot name a binding
+compiler/tests/diag_match_arm_recover_mod.nu:23:17: error: expected variable name in let — 'pub' is a reserved keyword (the visibility prefix on top-level declarations) and cannot name a binding
             : i pub 5
                 ^
 error: aborting due to 1 previous error

@@ -10,6 +10,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Every compiler diagnostic now says which severity it is, and the
+  parser errors say what to write instead.** Two gaps, both about what
+  an agent can do with the output.
+
+  The four `die` emitters printed `file:line:col: message` with no
+  `error:` — while the borrow checker's diagnostics carried one. The
+  same build could print two lines that looked like different kinds of
+  output, and a consumer classifying them had to know which pass had
+  spoken. Four messages had hand-rolled the prefix to compensate. It is
+  emitted centrally now, so all ~160 sites gained it at once.
+
+  Twelve parser errors said only what they wanted: `expected type`,
+  `expected pattern identifier`, `expected { after closure return
+  type`. That is the half that does not help — a reader who knew which
+  construct they were in would not have written the mistake. Each now
+  names what was FOUND (via a new `tok_here`) and what the correct form
+  IS. The one most likely to be hit:
+
+  > expected the next match arm's pattern, found `'('`. An arm body is
+  > ONE expression or a `{ ... }` block, so a second expression on the
+  > same arm is read as the next pattern. Wrap the body:
+  > `F e → { ( a ) ( b ) }`.
+
+  That one is picked from experience rather than a list: it is the error
+  this session actually hit while writing NURL, and the old text gave
+  nothing to act on. `diag_ax_parser_cures` baselines it, because the
+  text is the feature.
+
+### Changed
+
 - **Windows is a per-PR merge gate — tier 1.** The `windows-tests`
   workflow ran on `main` pushes only, reasoning that PRs were already
   gated by the Linux+FreeBSD corpus and that "a main breakage surfaces

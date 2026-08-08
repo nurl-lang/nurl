@@ -1,6 +1,6 @@
 COMPILE FAIL
 ERRORS
-compiler/tests/diag_priv_ambiguous.nu:8:9: private function '__amb' is defined in several files (compiler/tests/diag_priv_ambiguous_mod.nu, compiler/tests/diag_priv_ambiguous_second_mod.nu) and this file is not one of them — a '__' function is file-scoped; call it from its own file, or rename the shared one with ONE underscore
+compiler/tests/diag_priv_ambiguous.nu:8:9: error: private function '__amb' is defined in several files (compiler/tests/diag_priv_ambiguous_mod.nu, compiler/tests/diag_priv_ambiguous_second_mod.nu) and this file is not one of them — a '__' function is file-scoped; call it from its own file, or rename the shared one with ONE underscore
     ^ ( __amb )
         ^
 error: aborting due to 1 previous error

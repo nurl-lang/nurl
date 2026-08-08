@@ -1,15 +1,15 @@
 COMPILE FAIL
 ERRORS
-compiler/tests/diag_did_you_mean.nu:13:19: call to unknown function 'comptue' — did you mean 'compute'? If not: it is not defined in this file, not in any '$'-imported file processed so far, and not a known FFI/builtin — add the missing '$' import, or check the spelling.
+compiler/tests/diag_did_you_mean.nu:13:19: error: call to unknown function 'comptue' — did you mean 'compute'? If not: it is not defined in this file, not in any '$'-imported file processed so far, and not a known FFI/builtin — add the missing '$' import, or check the spelling.
     ^ ( comptue 3 )
                   ^
-compiler/tests/diag_did_you_mean.nu:17:22: call to unknown function 'nurl_pritn' — did you mean 'nurl_print'? If not: it is not defined in this file, not in any '$'-imported file processed so far, and not a known FFI/builtin — add the missing '$' import, or check the spelling.
+compiler/tests/diag_did_you_mean.nu:17:22: error: call to unknown function 'nurl_pritn' — did you mean 'nurl_print'? If not: it is not defined in this file, not in any '$'-imported file processed so far, and not a known FFI/builtin — add the missing '$' import, or check the spelling.
     ( nurl_pritn `x` )
                      ^
-compiler/tests/diag_did_you_mean.nu:23:7: use of undefined identifier 'cuont' — did you mean 'count'? No binding, parameter, constant, enum variant, or function with this name is in scope
+compiler/tests/diag_did_you_mean.nu:23:7: error: use of undefined identifier 'cuont' — did you mean 'count'? No binding, parameter, constant, enum variant, or function with this name is in scope
     ^ cuont
       ^
-compiler/tests/diag_did_you_mean.nu:27:20: call to unknown function 'zzqqxxyy' — it is not defined in this file, not in any '$'-imported file processed so far, and not a known FFI/builtin. Add the missing '$' import (or move it above this file's import in the program), or check the spelling.
+compiler/tests/diag_did_you_mean.nu:27:20: error: call to unknown function 'zzqqxxyy' — it is not defined in this file, not in any '$'-imported file processed so far, and not a known FFI/builtin. Add the missing '$' import (or move it above this file's import in the program), or check the spelling.
     ^ ( zzqqxxyy 1 )
                    ^
 error: aborting due to 4 previous errors

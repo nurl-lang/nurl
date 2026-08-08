@@ -1,0 +1,6 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_ax_parser_cures.nu:25:36: error: expected the next match arm's pattern, found '('. An arm body is ONE expression or a '{ ... }' block, so a second expression on the same arm is read as the next pattern. Wrap the body: 'F e → { ( a ) ( b ) }'. Arms are 'Variant payload → body', '_ → body' for the wildcard.
+        F e → ( nurl_print `a` ) ( nurl_print `b` )
+                                   ^
+error: aborting due to 1 previous error
