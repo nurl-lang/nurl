@@ -3240,11 +3240,19 @@
     {}
     : b lp ( is_ptr_ty lt )
     : b rp ( is_ptr_ty rt )
-    ? & ! is_cmp != lp rp
+    // ORDERING comparisons join the arithmetic ops here. The exemption
+    // above exists for `== ptr 0` and ptr↔ptr, which are equality; it was
+    // written as "comparisons" and so also covered '<' '>' '<=' '>=',
+    // where a pointer against an integer means nothing. `? > 1 \`s\`` —
+    // an int literal against a string — compiled clean and produced a
+    // running binary that silently compared an i64 with an address.
+    // Equality keeps the exemption exactly as before.
+    : b is_order | | == tt TT_LT == tt TT_GT | == tt TT_LE == tt TT_GE
+    ? & | ! is_cmp is_order != lp rp
     { ( die lex ( nurl_str_cat ( nurl_str_cat4
-        `arithmetic operator mixes a pointer/string and a non-pointer operand: left is '` lt
+        `operator mixes a pointer/string and a non-pointer operand: left is '` lt
         `', right is '` rt )
-        `' — operator-level pointer arithmetic is not supported; index with '. ptr idx' or convert explicitly` ) ) }
+        `' — there is no ordering between an address and a number, and operator-level pointer arithmetic is not supported. Index with '. ptr idx', compare like with like, or convert explicitly with '# i expr'. (Equality against 0 for a null check is allowed.)` ) ) }
     {}
     // Bool (i1) vs non-bool. NURL has no implicit bool↔int conversion, so an
     // operator with exactly one i1 operand emitted e.g. `icmp slt i1 %f, %n`

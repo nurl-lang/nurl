@@ -8,6 +8,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **No ordering between an address and a number.** The pointer/scalar
+  operand check exempted all comparisons, for a reason that is only
+  about equality: `== ptr 0` is a null check and pointer-to-pointer
+  compares in i64. Written as "comparisons", the exemption also covered
+  `<` `>` `<=` `>=`, where a pointer against an integer means nothing —
+  so `? > 1 \`s\`` compiled clean, linked, and produced a running binary
+  that silently compared an i64 against an address.
+
+  Found by the diagnostic probe suite, in the group that compiled with
+  no diagnostic at all. A missing check is the worst AX outcome there
+  is: no wording can teach what the compiler never says.
+
+  Ordering comparisons are checked now; equality keeps the exemption
+  exactly as before, pinned from the other side by `cmp_ptr_null_ok`.
+
 ### Changed
 
 - **A 30-case probe suite over realistic mistakes, and what it found.**
