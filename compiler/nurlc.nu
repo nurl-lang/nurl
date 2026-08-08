@@ -10463,8 +10463,15 @@
 // the return-type test below existed.
 @ bck_is_destructor_name s name → b {
     : i len ( nurl_str_len name )
-    ? < len 5 { ^ F } {}
-    ( seq ( nurl_str_slice name - len 5 5 ) `_free` )
+    ? & >= len 5 ( seq ( nurl_str_slice name - len 5 5 ) `_free` ) { ^ T } {}
+    // `vec_free_with` releases the container AND every element through
+    // the dropper it is handed — the same consumption as `vec_free`,
+    // spelled with a suffix the `_free`-ending rule did not reach. It is
+    // how the stdlib frees every Vec of owned elements, so the checker
+    // was blind to the use-after-free that follows one: a Vec read after
+    // vec_free_with compiled clean and ran on freed memory.
+    ? & >= len 10 ( seq ( nurl_str_slice name - len 10 10 ) `_free_with` ) { ^ T } {}
+    ^ F
 }
 
 // True when a call to `name` really consumes its first argument.

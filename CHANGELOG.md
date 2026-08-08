@@ -8,6 +8,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **The borrow checker did not know `vec_free_with` frees its Vec.** The
+  destructor rule keyed on a `_free` SUFFIX, so `vec_free` consumed its
+  argument and `vec_free_with` did not — even though it releases
+  strictly more: the container, and every element through the dropper it
+  is handed. That is how the stdlib frees every `Vec` of owned elements,
+  so the blind spot sat on the most common shape. A Vec read after
+  `vec_free_with` compiled clean, with no diagnostic, and ran on freed
+  memory. It is now a `use of moved value` error like every other
+  use-after-free, with a `borrow_vec_free_with` regression.
+
 ### Added
 
 - **`--strict-arity`, and a CI gate that runs it over the whole tree.**

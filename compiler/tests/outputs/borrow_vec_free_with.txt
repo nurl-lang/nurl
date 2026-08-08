@@ -1,0 +1,5 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/borrow_vec_free_with.nu:19: error: use of moved value 'v' — it was consumed at line 18 (pass a fresh value or rebind it before reuse)
+    ^ ( vec_len [String] v )
+error: compilation aborted — 1 borrow-checker violation (re-run with --no-borrowck to bypass)
