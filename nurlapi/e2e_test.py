@@ -390,6 +390,37 @@ def t_tools_call_changelog(c: Client) -> None:
     assert_true("no-match has guidance", "No matches" in text)
 
 
+def t_build_native_run_optin(c: Client) -> None:
+    print("\n[MCP] nurl_build_native run= (opt-in, off by default)")
+
+    src = "@ main \u2192 i { ( nurl_print `run opt-in\\n` ) ^ 4 }"
+    env = _tool_call(c, "nurl_build_native", {"source": src, "run": True})
+    try:
+        payload = json.loads(_tool_text(env))
+    except json.JSONDecodeError:
+        bad("build_native run returns JSON", "reply was not JSON")
+        return
+
+    run = payload.get("run")
+    assert_true("run= is answered, never ignored", run is not None,
+                "no 'run' key: a caller that asked to run must not get silence")
+
+    if os.environ.get("E2E_EXPECT_RUN_ENABLED") == "1":
+        # Operator turned it on: the program's own output comes back.
+        assert_eq("exit code round-trips", run.get("exit_code"), 4)
+        assert_true("stdout round-trips", "run opt-in" in (run.get("stdout") or ""))
+    else:
+        # Default posture. The refusal has to say what to do about it —
+        # both the switch and the sandboxed alternative — or the caller
+        # is left guessing why an artifact appeared and no output did.
+        err = run.get("error") or ""
+        assert_true("run refused by default", bool(err))
+        assert_true("refusal names the switch", "NURL_ALLOW_RUN" in err)
+        assert_true("refusal names the sandboxed path", "unikernel" in err)
+        assert_true("build itself still succeeded",
+                    payload.get("binary_artifact") is not None)
+
+
 def t_tools_call_docs(c: Client) -> None:
     print("\n[MCP] tools/call nurl_docs (index / read / forgiving names / paging)")
 
@@ -1114,6 +1145,7 @@ def main() -> int:
     t_tools_call_listing(c)
     t_tools_call_reads(c)
     t_tools_call_changelog(c)
+    t_build_native_run_optin(c)
     t_tools_call_docs(c)
     t_tools_call_api(c)
     t_tools_call_grep(c)
