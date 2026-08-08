@@ -8,7 +8,7 @@ Anything marked done here has a regression test in
 point.
 
 _Last reviewed: 2026-08-07 · Current release: **0.35.1** · Language: **Grammar
-v2.3** ([`spec/grammar.ebnf`](spec/grammar.ebnf))._
+v2.4** ([`spec/grammar.ebnf`](spec/grammar.ebnf))._
 
 ---
 
@@ -21,7 +21,7 @@ stage2). The only build dependency is clang / LLVM 15+.
 
 What is solid today:
 
-- **Language (Grammar v2.3).** Sum types (`|`) and product types (structs),
+- **Language (Grammar v2.4).** Sum types (`|`) and product types (structs),
   generics over structs and functions (incl. generics over option/result
   types), pattern matching with **match guards**, **or-patterns**, and
   **N-ary payloads**, **trait bounds** on type parameters (`[A: Ord]`), **compile-time constant

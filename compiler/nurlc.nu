@@ -1,5 +1,5 @@
 // nurlc.nu — NURL compiler written in NURL.
-// Grammar: v2.3
+// Grammar: v2.4
 //
 // Copyright (c) 2026 The NURL Project Developers
 // SPDX-License-Identifier: MIT OR Apache-2.0
@@ -76,6 +76,14 @@
 : i TT_CARETCARET 45  // `^^` — bitwise / logical XOR (lexer pairs `^^`)
 : i TT_OROR 46  // `||` — short-circuit logical OR  (binary, bool only)
 : i TT_ANDAND 47  // `&&` — short-circuit logical AND (binary, bool only)
+// Loop control. Reserved identifiers, classified by the lexer like
+// `pub` — NOT symbols. Every two-character symbolic spelling collides:
+// `~>` would swallow the 28 loops written `~ > cond {`, and the free
+// sequences left (`~$`, `~~`) carry no meaning a reader could guess.
+// A reserved word costs two identifier names and reads the same to
+// every model that has ever seen another language.
+: i TT_BREAK 48  // `break`    — leave the innermost loop
+: i TT_CONTINUE 49  // `continue` — jump to the innermost loop's condition
 
 // ── Abort helpers ─────────────────────────────────────────────────
 
@@ -4999,6 +5007,28 @@
                     = ttype TT_PUB
                 } {}
             } {}
+            // `break` (5) and `continue` (8) — loop control.
+            ? & == ttype TT_IDENT == n 5 {
+                ? & & & & == & # i . idp 0 255 98
+                == & # i . idp 1 255 114
+                == & # i . idp 2 255 101
+                == & # i . idp 3 255 97
+                == & # i . idp 4 255 107 {
+                    = ttype TT_BREAK
+                } {}
+            } {}
+            ? & == ttype TT_IDENT == n 8 {
+                ? & & & & & & & == & # i . idp 0 255 99
+                == & # i . idp 1 255 111
+                == & # i . idp 2 255 110
+                == & # i . idp 3 255 116
+                == & # i . idp 4 255 105
+                == & # i . idp 5 255 110
+                == & # i . idp 6 255 117
+                == & # i . idp 7 255 101 {
+                    = ttype TT_CONTINUE
+                } {}
+            } {}
             ? & == ttype TT_IDENT | | == n 2 == n 3 == n 4 {
                 // i8 i16 i32 i64 u16 u32 u64 f32
                 : i c0 & # i . idp 0 255
@@ -9107,6 +9137,63 @@
 
 // ── Loop ~ cond { body } ──────────────────────────────────────────
 
+// `break` / `continue`. Both leave the current position by branching,
+// so both must first release everything the loop body allocated — the
+// normal fall-through at the bottom of gen_loop emits exactly that
+// sequence, and this emits the same one against the same snapshots.
+// Doing it here rather than letting the enclosing blocks unwind is not
+// an optimisation: the branch skips those blocks' own drop code
+// entirely, so anything not freed here leaks.
+//
+// `is_break` picks the target: the loop's exit label, or its condition
+// block. Outside a loop both are unset and the statement is an error
+// naming the reason — a `break` with nothing to break out of is always
+// a mistake, never a no-op.
+@ gen_loop_jump i lex i syms i cg b is_break → s {
+    : i jline ( nurl_lex_line lex )
+    : i jcol ( nurl_lex_col lex )
+    ( nurl_lex_advance lex )
+    : s target ? is_break ( nurl_sym_get syms `__loop_exit__` )
+    ( nurl_sym_get syms `__loop_check__` )
+    ? == 0 ( nurl_str_len target )
+    { ( die_pos lex jline jcol ? is_break
+        `error: 'break' outside a loop — there is nothing to leave. It is valid only inside a '~' loop body.`
+        `error: 'continue' outside a loop — there is no next iteration. It is valid only inside a '~' loop body.` ) }
+    {}
+    // The drop emitters do not just emit: each rewrites the owned-list
+    // it walks, because at a function's single exit that bookkeeping is
+    // finished with. A branch is not that. `break` is ONE path out of
+    // this block — the fall-through still runs on every other
+    // iteration and still needs its own drops emitted later. Letting
+    // these calls truncate the shared lists made the loop's normal exit
+    // emit nothing: a `continue` taken once left 49 of 50 iterations'
+    // closure envs unfreed. So snapshot the lists, emit against them,
+    // and put them back.
+    : s save_strs ( nurl_sym_get syms `__owned_strings__` )
+    : s save_structs ( nurl_sym_get syms `__owned_struct_fields__` )
+    : s save_user ( nurl_sym_get syms `__user_drops__` )
+    : s save_slices ( nurl_sym_get syms `__slice_decls__` )
+    : s save_cenv ( nurl_sym_get syms `__owned_closure_envs__` )
+    ? != 0 g_auto_drop_strings
+    { ( mem_drop_new_strings syms cg ( nurl_sym_get syms `__loop_snap_strs__` ) )
+        ( mem_drop_new_struct_fields syms cg ( nurl_sym_get syms `__loop_snap_structs__` ) )
+        ( mem_drop_new_user_drops syms cg ( nurl_sym_get syms `__loop_snap_user__` ) )
+        ? != 0 g_fn_slice_decls
+        { ( mem_drop_new_slices syms cg ( nurl_sym_get syms `__loop_snap_slices__` ) ) } {} }
+    {}
+    ( mem_drop_new_closure_envs syms cg ( nurl_sym_get syms `__loop_snap_cenv__` ) )
+    ( nurl_sym_set_deep syms `__owned_strings__` save_strs )
+    ( nurl_sym_set_deep syms `__owned_struct_fields__` save_structs )
+    ( nurl_sym_set_deep syms `__user_drops__` save_user )
+    ( nurl_sym_set_deep syms `__slice_decls__` save_slices )
+    ( nurl_sym_set_deep syms `__owned_closure_envs__` save_cenv )
+    ( nurl_print `  br label %` ) ( nurl_print target ) ( emit_dbg_eol )
+    // The block is terminated. Same contract as `^`: whatever follows in
+    // this block is unreachable and must not get a second terminator.
+    = g_did_ret 1
+    ^ ( nurl_str_cat `` `` )
+}
+
 @ gen_loop i lex i syms i cg → s {
     ( nurl_lex_advance lex )
     // For-each: ~ IDENT(var) IDENT(slice) { body }
@@ -9156,11 +9243,39 @@
             ( nurl_sym_push syms )
         } {}
         ( nurl_sym_def syms `__cur_lbl__` lb )
+        // Publish this loop's exit / check labels and the drop
+        // snapshots taken above, so a `break` or `continue` anywhere in
+        // the body — however deeply nested inside `?` / `??` blocks —
+        // can emit exactly the same drop sequence the normal
+        // fall-through emits below, then branch. Saved and restored
+        // around the body so an inner loop shadows an outer one and
+        // `break` always means the innermost.
+        : s old_bc_exit ( nurl_sym_get syms `__loop_exit__` )
+        : s old_bc_check ( nurl_sym_get syms `__loop_check__` )
+        : s old_bc_strs ( nurl_sym_get syms `__loop_snap_strs__` )
+        : s old_bc_structs ( nurl_sym_get syms `__loop_snap_structs__` )
+        : s old_bc_user ( nurl_sym_get syms `__loop_snap_user__` )
+        : s old_bc_slices ( nurl_sym_get syms `__loop_snap_slices__` )
+        : s old_bc_cenv ( nurl_sym_get syms `__loop_snap_cenv__` )
+        ( nurl_sym_def syms `__loop_exit__` le )
+        ( nurl_sym_def syms `__loop_check__` lc )
+        ( nurl_sym_def syms `__loop_snap_strs__` old_strs_lp )
+        ( nurl_sym_def syms `__loop_snap_structs__` old_structs_lp )
+        ( nurl_sym_def syms `__loop_snap_user__` old_user_lp )
+        ( nurl_sym_def syms `__loop_snap_slices__` old_slices_lp )
+        ( nurl_sym_def syms `__loop_snap_cenv__` old_closure_lp )
         = g_did_ret 0
         // Borrow checker (Phase 0c): a `~` while-body is a back-edge —
         // the analyze walk must iterate it to a fixpoint.
         ( bck_set_block_kind `loop` )
         ( gen_block_stmts lex syms cg )
+        ( nurl_sym_def syms `__loop_exit__` old_bc_exit )
+        ( nurl_sym_def syms `__loop_check__` old_bc_check )
+        ( nurl_sym_def syms `__loop_snap_strs__` old_bc_strs )
+        ( nurl_sym_def syms `__loop_snap_structs__` old_bc_structs )
+        ( nurl_sym_def syms `__loop_snap_user__` old_bc_user )
+        ( nurl_sym_def syms `__loop_snap_slices__` old_bc_slices )
+        ( nurl_sym_def syms `__loop_snap_cenv__` old_bc_cenv )
         ? == g_did_ret 0
         { ? != 0 g_auto_drop_strings
             { ( mem_drop_new_strings syms cg old_strs_lp )
@@ -11405,6 +11520,8 @@
     : s gs_rv ? == tt TT_COLON ( gen_let_or_struct lex syms cg )
     ? == tt TT_EQ ( gen_assign lex syms cg )
     ? == tt TT_TILDE ( gen_loop lex syms cg )
+    ? == tt TT_BREAK ( gen_loop_jump lex syms cg T )
+    ? == tt TT_CONTINUE ( gen_loop_jump lex syms cg F )
     ? == tt TT_SEMICOL ( gen_defer lex syms cg )
     {  // Bare expression in statement position. Record a `call`-shaped
         // statement only for a parenthesised call `( fn ... )`; `?` / `??`

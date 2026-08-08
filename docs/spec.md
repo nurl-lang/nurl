@@ -1,6 +1,6 @@
 # NURL Language Reference
 
-**Status:** language specification, grammar v2.3. This document is the
+**Status:** language specification, grammar v2.4. This document is the
 normative reference for the NURL — Neural Unified Representation Language —
 source language as implemented by `compiler/nurlc.nu`.
 
@@ -78,6 +78,8 @@ used as variable, parameter, field, or function names:
 | `TT_BOOL` | `T` `F` | boolean literals |
 | `TT_SIZEOF` | `Z` | sizeof operator |
 | `TT_PUB` | `pub` | visibility prefix (v2.0) |
+| `TT_BREAK` | `break` | leave the innermost loop (v2.4) |
+| `TT_CONTINUE` | `continue` | next iteration of the innermost loop (v2.4) |
 
 Additionally, the contextual keyword `entry` is rejected as a parameter
 name (it collides with LLVM's reserved `%entry` basic-block label).
@@ -704,6 +706,33 @@ In a foreach, the element binding is a *borrow* from the iterated
 slice. It is not owned and is not dropped at iteration end. Mutating
 the iterated container from inside the loop body is rejected by the
 borrow checker (§9.5).
+
+### 5.4.1 `break` and `continue` (v2.4)
+
+Loop control for the **innermost enclosing** `~` loop body:
+
+```
+~ < i n {
+    ? ( skip i ) { continue } {}   // re-evaluate the loop condition
+    ? ( done i ) { break    } {}   // leave the loop
+    = i + i 1
+}
+```
+
+Both **terminate the block they appear in**, exactly as `^` does —
+anything after one in the same block is unreachable. Both are reserved
+identifiers (§2.4.1), not symbols: every two-character prefix spelling
+collides with an existing program, and `~>` in particular would swallow
+every loop written `~ > cond { … }`.
+
+Using either outside a `~` body is a compile error naming the reason,
+not a silent no-op.
+
+Note the interaction with §7 (ownership): a jump leaves the block
+*without* running the code the normal path would, so the compiler emits
+the loop body's whole drop sequence at the jump before branching. A
+`continue` past a closure that captured by value therefore releases that
+closure's environment exactly once, on every path.
 
 ### 5.5 Expression statements
 
