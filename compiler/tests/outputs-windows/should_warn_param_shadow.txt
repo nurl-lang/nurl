@@ -1,6 +1,6 @@
 COMPILE OK
 WARNINGS
-compiler/tests/should_warn_param_shadow.nu:19:9: warning: 'z' shadows the enclosing function's parameter - rename
+compiler/tests/should_warn_param_shadow.nu:19:9: warning: 'z' shadows the enclosing function's parameter — the inner binding hides it for the rest of the scope, which is almost never intended. Rename one of them.
     : i z + z 7  // ← warns: 'z' shadows parameter z
         ^
 LINK OK
