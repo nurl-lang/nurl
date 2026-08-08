@@ -118,46 +118,17 @@
 // Render the token the lexer is sitting on, for a diagnostic that
 // needs to say what it FOUND and not only what it wanted.
 //
-// "expected X" alone is the shape of every parser error here, and it
-// is the half that does not help: a reader who knew which construct
-// they were in would not have written the mistake. Naming the token
-// closes the loop — "expected a pattern name, found '('" points at the
-// paren the writer typed, and from there the fix is visible.
+// "expected X" alone is the shape of every parser error here, and it is
+// the half that does not help: a reader who knew which construct they
+// were in would not have written the mistake. Naming the token closes
+// the loop — "expected a pattern name, found '('" points at the paren
+// the writer typed, and from there the fix is visible.
 //
-// Identifiers, literals and keywords render as themselves; punctuation
-// renders as the character; EOF says so, because "found end of file"
-// is the one case where the caret has nothing under it.
+// One line, because __tok_label already IS the token table. Keeping a
+// second copy here would mean the next token added renders one way in
+// half the diagnostics and another way in the rest.
 @ tok_here i lex → s {
-    : i tt ( nurl_lex_type lex )
-    ? == tt TT_EOF { ^ `end of file` } {}
-    ? | | == tt TT_IDENT == tt TT_INT | == tt TT_FLOAT == tt TT_STR
-    { ^ ( nurl_str_cat3 `'` ( nurl_lex_val lex ) `'` ) } {}
-    ? | == tt TT_BOOL == tt TT_TYPE_KW
-    { ^ ( nurl_str_cat3 `'` ( nurl_lex_val lex ) `'` ) } {}
-    ? == tt TT_LPAREN { ^ `'('` } {}
-    ? == tt TT_RPAREN { ^ `')'` } {}
-    ? == tt TT_LBRACE { ^ `'{'` } {}
-    ? == tt TT_RBRACE { ^ `'}'` } {}
-    ? == tt TT_LBRACK { ^ `'['` } {}
-    ? == tt TT_RBRACK { ^ `']'` } {}
-    ? == tt TT_ARROW { ^ `'→'` } {}
-    ? == tt TT_COLON { ^ `':'` } {}
-    ? == tt TT_EQ { ^ `'='` } {}
-    ? == tt TT_AT { ^ `'@'` } {}
-    ? == tt TT_CARET { ^ `'^'` } {}
-    ? == tt TT_QUEST { ^ `'?'` } {}
-    ? == tt TT_QUESTQUEST { ^ `'??'` } {}
-    ? == tt TT_TILDE { ^ `'~'` } {}
-    ? == tt TT_DOT { ^ `'.'` } {}
-    ? == tt TT_HASH { ^ `'#'` } {}
-    ? == tt TT_BANG { ^ `'!'` } {}
-    ? == tt TT_BACKSLASH { ^ `'\\'` } {}
-    ? == tt TT_DOLLAR { ^ `'$'` } {}
-    ? == tt TT_SEMICOL { ^ `';'` } {}
-    ? == tt TT_PUB { ^ `'pub'` } {}
-    ? == tt TT_BREAK { ^ `'break'` } {}
-    ? == tt TT_CONTINUE { ^ `'continue'` } {}
-    ^ `a different token`
+    ^ ( __tok_label ( nurl_lex_type lex ) ( nurl_lex_val lex ) )
 }
 
 @ die i lex s msg → v {
@@ -1738,7 +1709,7 @@
             ? & ( seq strict `1` ) ! ( seq is_pub `1` )
             { ( die lex ( nurl_str_cat4
                 `private ` kind_label
-                ( nurl_str_cat3 ` '` name `' is not visible across files; defined in '` )
+                ( nurl_str_cat3 ` '` name `' is not visible across files. A declaration is private to its file unless marked 'pub' — add the prefix at its definition ('pub @ name ...'). Defined in '` )
                 ( nurl_str_cat callee_sf `'` ) ) ) }
             {}
         }
@@ -2913,6 +2884,22 @@
     ? == tt TT_AT { ^ ( nurl_str_cat `'@'` `` ) } {}
     ? == tt TT_EOF { ^ ( nurl_str_cat `end of input` `` ) } {}
     ? == tt TT_ARROW { ^ ( nurl_str_cat `'->'` `` ) } {}
+    // Prefix operators a reader is likely to have mistyped, and the two
+    // loop keywords. Without these each falls through to the value test
+    // below, which is empty for punctuation, and the diagnostic ends up
+    // saying "this token" — the one phrasing that names nothing.
+    ? == tt TT_CARET { ^ ( nurl_str_cat `'^' (return)` `` ) } {}
+    ? == tt TT_QUEST { ^ ( nurl_str_cat `'?' (a conditional starts here)` `` ) } {}
+    ? == tt TT_QUESTQUEST { ^ ( nurl_str_cat `'??' (a match starts here)` `` ) } {}
+    ? == tt TT_TILDE { ^ ( nurl_str_cat `'~' (a loop starts here)` `` ) } {}
+    ? == tt TT_BACKSLASH { ^ ( nurl_str_cat `the closure marker` `` ) } {}
+    ? == tt TT_DOLLAR { ^ ( nurl_str_cat `'$' (an import starts here)` `` ) } {}
+    ? == tt TT_DOT { ^ ( nurl_str_cat `'.' (a field access starts here)` `` ) } {}
+    ? == tt TT_HASH { ^ ( nurl_str_cat `'#' (a conversion starts here)` `` ) } {}
+    ? == tt TT_BANG { ^ ( nurl_str_cat `'!'` `` ) } {}
+    ? == tt TT_BREAK { ^ ( nurl_str_cat `'break'` `` ) } {}
+    ? == tt TT_CONTINUE { ^ ( nurl_str_cat `'continue'` `` ) } {}
+    ? == tt TT_PUB { ^ ( nurl_str_cat `'pub'` `` ) } {}
     ? != 0 ( nurl_str_len val ) { ^ ( nurl_str_cat3 `'` val `'` ) } {}
     ( nurl_str_cat `this token` `` )
 }
@@ -2967,7 +2954,7 @@
     : s lv ( gen_operand lex syms cg )
     : s lt ( nurl_get_last_type )
     ? ! ( seq lt `i1` )
-    { ( die lex `operator || requires bool operands — left operand has non-bool type` ) }
+    { ( die lex `operator '||' requires bool operands and the left one is not bool. '||' and '&&' short-circuit and are bool-only; for bitwise work on integers use '|' and '&'. To test an integer, compare it: '|| != n 0 ( f )'.` ) }
     {}
     : s left_lbl ( nurl_sym_get syms `__cur_lbl__` )
     ^ ( gen_logical_or lv left_lbl lex syms cg )
@@ -2978,7 +2965,7 @@
     : s lv ( gen_operand lex syms cg )
     : s lt ( nurl_get_last_type )
     ? ! ( seq lt `i1` )
-    { ( die lex `operator && requires bool operands — left operand has non-bool type` ) }
+    { ( die lex `operator '&&' requires bool operands and the left one is not bool. '&&' and '||' short-circuit and are bool-only; for bitwise work on integers use '&' and '|'. To test an integer, compare it: '&& != n 0 ( f )'.` ) }
     {}
     : s left_lbl ( nurl_sym_get syms `__cur_lbl__` )
     ^ ( gen_logical_and lv left_lbl lex syms cg )
@@ -3080,11 +3067,11 @@
         // (not a const / enum variant). Die with the canonical
         // wrap-in-closure-literal cure.
         ? & & & == 0 ( nurl_str_len ptr ) == 0 ( nurl_str_len glb ) == 0 ( nurl_sym_len2 syms name `__param` ) != 0 ( nurl_sym_len2 g_vis_syms name `__src_file` )
-        { : s tail ( nurl_str_cat name ` args ) }'.` )
+        { : s tail ( nurl_str_cat name ` args ) }' — but that is the rarer reading.` )
             ( die lex ( nurl_str_cat4
-            `bare '@-fn' name '` name
-            `' does not auto-coerce to a closure value. Wrap it: '\ args → R { ( `
-            tail ) ) }
+            `bare function name '` name
+            `' used as a value. If you meant to CALL it, calls need parentheses: '( `
+            ( nurl_str_cat3 name ` args )', never '` ( nurl_str_cat3 name ` args'. If you really wanted the function AS a value, a bare name does not auto-coerce to a closure — wrap it: '\ args → R { ( ` tail ) ) ) ) }
         {}
         // Cross-file visibility check for globals (consts + enum
         // variants). Locals have a `__ptr` entry and skip this entirely
@@ -3161,7 +3148,7 @@
             ( nurl_str_cat3 `unexpected ` un ` where a value expression is required —` )
             where
             ` a prefix operator is short an argument: every NURL operator has fixed arity and no closing bracket, so a missing operand silently consumes whatever follows. See docs/LIMITATIONS.md -> Grammar.` ) ) }
-        { ( die lex ( nurl_str_cat3 `unexpected ` un ` in expression` ) ) } }
+        { ( die lex ( nurl_str_cat3 `unexpected ` un ` where a value was required. Every NURL operator has FIXED arity and no closing bracket, so a missing operand silently swallows whatever follows — count the operands on the operator before this point. Calls need parentheses: '( f a b )', never 'f a b'.` ) ) } }
 }
 
 // ── Binary op OP lhs rhs ─────────────────────────────────────────
@@ -3215,7 +3202,7 @@
     : b isf | ( seq lt `double` ) ( seq lt `float` )
     // `^^` (XOR) is integer/bool-only — LLVM has no float `xor`.
     ? & == tt TT_CARETCARET isf
-    { ( die lex `operator '^^' (XOR) requires integer or bool operands, not a float` ) }
+    { ( die lex `operator '^^' (XOR) takes integers or bools, not a float — there is no bitwise XOR on floating point. Convert first with '# i x', or compare instead. (Note '^' alone is return, not XOR.)` ) }
     {}
     // Unsigned operand path. Signedness is IN the type repr (A1): `u8`
     // stays distinct from signed `i8` end to end, so the operand types
@@ -3375,7 +3362,7 @@
     : s rt ( nurl_get_last_type )
     // Check type compatibility
     ? ! ( seq rt `i1` )
-    ( die lex `operator & requires matching types — right operand must be b` )
+    ( die lex `operator '&' has a bool on the left, so the right operand must be bool too — NURL does not mix bool and integer operands. Every operator is BINARY: for n conditions write n-1 of them, '& & a b c'.` )
     {}
     : s right_lbl ( nurl_sym_get syms `__cur_lbl__` )
     ( nurl_print `  br label %` ) ( nurl_print lend ) ( emit_dbg_eol )
@@ -3406,7 +3393,7 @@
     : s rt ( nurl_get_last_type )
     // Check type compatibility
     ? ! ( seq rt `i1` )
-    ( die lex `operator | requires matching types — right operand must be b` )
+    ( die lex `operator '|' has a bool on the left, so the right operand must be bool too — NURL does not mix bool and integer operands. Every operator is BINARY: for n conditions write n-1 of them, '| | a b c'.` )
     {}
     : s right_lbl ( nurl_sym_get syms `__cur_lbl__` )
     ( nurl_print `  br label %` ) ( nurl_print lend ) ( emit_dbg_eol )
@@ -3856,7 +3843,7 @@
     : s objty ( nurl_sym_get syms obj )
     ? == 0 ( nurl_str_len objptr )
     { ( die lex ( nurl_str_cat3
-        `inout field argument: '` obj `' is not a struct binding in scope` ) ) }
+        `inout field argument: '` obj `' is not a struct binding in scope. An 'inout' argument must be a plain binding in scope, or one of its fields: '( f inout v )' or '( f inout . s field )'. The callee writes through it, so a temporary or an expression has nowhere to write back to.` ) ) }
     {}
     ? == 0 ( nurl_sym_len2 syms obj `__mutable` )
     { ( die lex ( nurl_str_cat3
@@ -3865,7 +3852,7 @@
     {}
     ? | == 0 ( nurl_str_len objty ) ! == 37 ( nurl_str_get objty 0 )
     { ( die lex ( nurl_str_cat3
-        `inout field argument: '` obj `' is not a named-struct binding` ) ) }
+        `inout field argument: '` obj `' is not a named-struct binding — the field form needs a struct with declared field names. An 'inout' argument must be a plain binding in scope, or one of its fields: '( f inout v )' or '( f inout . s field )'. The callee writes through it, so a temporary or an expression has nowhere to write back to.` ) ) }
     {}
     ? ! ( is_ident_tok ( nurl_lex_type lex ) )
     { ( die lex ( nurl_str_cat3
@@ -5097,7 +5084,7 @@
                 = hacc + * hacc 16 ( __lx_hex_val & # i . src pos 255 )
                 = pos + pos 1
             }
-            ? == pos hdig0 { ( die lex `malformed hex literal: expected hex digit after '0x'` ) } {}
+            ? == pos hdig0 { ( die lex `malformed hex literal — '0x' must be followed by at least one hex digit (0-9, a-f, A-F). E.g. '0xFF', '0x1a2b'.` ) } {}
             : i hn - pos lit0
             : s hsv # s ( nurl_alloc + hn 1 )
             ( memcpy hsv # s + # i # *u # s ( nurl_peek p LX_SRC ) lit0 hn )
@@ -5115,7 +5102,7 @@
                 = bacc + * bacc 2 - & # i . src pos 255 48
                 = pos + pos 1
             }
-            ? == pos bdig0 { ( die lex `malformed binary literal: expected 0/1 after '0b'` ) } {}
+            ? == pos bdig0 { ( die lex `malformed binary literal — '0b' must be followed by at least one 0 or 1. E.g. '0b1011'.` ) } {}
             : i bn - pos lit0
             : s bsv # s ( nurl_alloc + bn 1 )
             ( memcpy bsv # s + # i # *u # s ( nurl_peek p LX_SRC ) lit0 bn )
@@ -5753,7 +5740,7 @@
     : s pt ( nurl_get_last_type )
     ( expect lex TT_RPAREN )
     ? ! ( __is_ptr_ty pt )
-    { ( die lex `volatile_load expects a typed pointer argument (*T)` ) }
+    { ( die lex `volatile_load expects a typed pointer '*T', so it knows the width to read. Write '( volatile_load p )' where p is '*u32' or similar; cast with '# *u32 addr' if you hold a raw address.` ) }
     {}
     : s et ( __ptr_pointee pt )
     : s r ( nurl_cg_reg cg )
@@ -5769,7 +5756,7 @@
     : s pv ( gen_operand lex syms cg )
     : s pt ( nurl_get_last_type )
     ? ! ( __is_ptr_ty pt )
-    { ( die lex `volatile_store expects a typed pointer first argument (*T)` ) }
+    { ( die lex `volatile_store expects a typed pointer '*T' first, so it knows the width to write. Write '( volatile_store p v )' where p is '*u32' or similar; cast with '# *u32 addr' if you hold a raw address.` ) }
     {}
     : s et ( __ptr_pointee pt )
     : s vv ( gen_operand lex syms cg )
@@ -5856,11 +5843,11 @@
             }
             ? == slot -1
             { ( die lex ( nurl_str_cat3 `call to '` fname
-                ( nurl_str_cat3 `' has no parameter named '` aname `'` ) ) ) }
+                ( nurl_str_cat3 `' has no parameter named '` aname `'. Named arguments must match the declared parameter names exactly — check the declaration, or pass them positionally in declaration order.` ) ) ) }
             {}
         }
         { ? seen_named
-            { ( die lex `positional argument after a named argument is not allowed` ) } {}
+            { ( die lex `a positional argument cannot follow a named one — once you write 'name: value', every later argument must be named too. Either name them all from that point, or pass them all positionally in declaration order.` ) } {}
             = slot posk
             = posk + posk 1
         }
@@ -6160,7 +6147,7 @@
         : s is_pub ( nurl_sym_get2 g_vis_syms fname `__pub` )
         ? & ( seq strict `1` ) ! ( seq is_pub `1` )
         { ( die lex ( nurl_str_cat4
-            `private function '` fname_bare `' is not visible across files; defined in '` callee_sf ) ) }
+            `private function '` fname_bare `' is not visible across files. A declaration is private to its file unless marked 'pub' — add the prefix at its definition ('pub @ name ...'). Defined in '` callee_sf ) ) }
         {}
     }
     {}
@@ -6501,7 +6488,7 @@
                 : s iptr ( nurl_sym_get2 syms bck_arg_val `__ptr` )
                 : s ity ( nurl_sym_get syms bck_arg_val )
                 ? == 0 ( nurl_str_len iptr )
-                { ( die lex ( nurl_str_cat3 `inout argument '` bck_arg_val `' is not a binding in scope` ) ) }
+                { ( die lex ( nurl_str_cat3 `inout argument '` bck_arg_val `' is not a binding in scope. An 'inout' argument must be a plain binding in scope, or one of its fields: '( f inout v )' or '( f inout . s field )'. The callee writes through it, so a temporary or an expression has nowhere to write back to.` ) ) }
                 {}
                 ? == 0 ( nurl_sym_len2 syms bck_arg_val `__mutable` )
                 { ( die lex ( nurl_str_cat3 `inout argument '` bck_arg_val `' must be a mutable ': ~' binding — the callee mutates it in place` ) ) }
@@ -7776,7 +7763,7 @@
             : ~ i bdepth 1
             ~ > bdepth 0 {
                 : i tt ( nurl_lex_type lex )
-                ? == tt TT_EOF { ( die lex `unterminated [type] in select case` ) } {}
+                ? == tt TT_EOF { ( die lex ( nurl_str_cat `unterminated '[' in a select arm — expected ']' after the element type. A select arm is '[T] chan → name { body }' — the element type in brackets, the channel, then the name the received value binds to. The default arm is '_ → { body }'. E.g. '?? { [i] c → v { ( use v ) }  _ → { ( idle ) } }'.` `` ) ) } {}
                 ? == tt TT_LBRACK { = bdepth + bdepth 1 } {}
                 ? == tt TT_RBRACK { = bdepth - bdepth 1 } {}
                 ? > bdepth 0 { ( nurl_lex_advance lex ) } {}
@@ -7789,7 +7776,7 @@
             : ~ i pdepth 0
             ~ | != ( nurl_lex_type lex ) TT_ARROW != pdepth 0 {
                 : i tt ( nurl_lex_type lex )
-                ? == tt TT_EOF { ( die lex `expected -> in select case` ) } {}
+                ? == tt TT_EOF { ( die lex ( nurl_str_cat3 `expected '→' after the channel in this select arm, found ` ( tok_here lex ) `. A select arm is '[T] chan → name { body }' — the element type in brackets, the channel, then the name the received value binds to. The default arm is '_ → { body }'. E.g. '?? { [i] c → v { ( use v ) }  _ → { ( idle ) } }'.` ) ) } {}
                 ? | == tt TT_LPAREN == tt TT_LBRACK { = pdepth + pdepth 1 } {}
                 ? | == tt TT_RPAREN == tt TT_RBRACK { = pdepth - pdepth 1 } {}
                 ( nurl_lex_advance lex )
@@ -7799,12 +7786,12 @@
             ( nurl_lex_advance lex )  // consume '→'
 
             ? ! ( is_ident_tok ( nurl_lex_type lex ) )
-            { ( die lex `expected binding name after -> in select case` ) } {}
+            { ( die lex ( nurl_str_cat3 `expected the received value's name after '→', found ` ( tok_here lex ) `. A select arm is '[T] chan → name { body }' — the element type in brackets, the channel, then the name the received value binds to. The default arm is '_ → { body }'. E.g. '?? { [i] c → v { ( use v ) }  _ → { ( idle ) } }'.` ) ) } {}
             : s bind ( nurl_lex_val lex )
             ( nurl_lex_advance lex )  // consume binding name
 
             ? != ( nurl_lex_type lex ) TT_LBRACE
-            { ( die lex `expected { body } in select case` ) } {}
+            { ( die lex ( nurl_str_cat3 `expected '{' to open this select arm's body, found ` ( tok_here lex ) `. A select arm's body is always braced. A select arm is '[T] chan → name { body }' — the element type in brackets, the channel, then the name the received value binds to. The default arm is '_ → { body }'. E.g. '?? { [i] c → v { ( use v ) }  _ → { ( idle ) } }'.` ) ) } {}
             : i bstart ( nurl_lex_cur_start lex )
             ( skip_balanced lex )  // cur now sits just after the body's '}'
             : i bend ( nurl_lex_cur_start lex )
@@ -7845,12 +7832,12 @@
         } {
             // ── _ → { body }  (default / non-blocking) ──
             ? ! ( is_ident_tok ( nurl_lex_type lex ) )
-            { ( die lex `select case must start with [T] or _` ) } {}
-            ? != 0 has_default { ( die lex `select has more than one default (_) arm` ) } {}
+            { ( die lex ( nurl_str_cat3 `expected '[' or '_' to start a select arm, found ` ( tok_here lex ) `. A select arm is '[T] chan → name { body }' — the element type in brackets, the channel, then the name the received value binds to. The default arm is '_ → { body }'. E.g. '?? { [i] c → v { ( use v ) }  _ → { ( idle ) } }'.` ) ) } {}
+            ? != 0 has_default { ( die lex ( nurl_str_cat `select has more than one default '_' arm — only one is allowed, and it runs when no channel is ready. Merge the two bodies into a single '_ → { ... }'.` `` ) ) } {}
             ( nurl_lex_advance lex )  // consume '_'
             ( expect lex TT_ARROW )
             ? != ( nurl_lex_type lex ) TT_LBRACE
-            { ( die lex `expected { body } in select default` ) } {}
+            { ( die lex ( nurl_str_cat3 `expected '{' to open the default arm's body, found ` ( tok_here lex ) `. The default arm is '_ → { body }'.` ) ) } {}
             : i dstart ( nurl_lex_cur_start lex )
             ( skip_balanced lex )
             : i dend ( nurl_lex_cur_start lex )
@@ -7860,7 +7847,7 @@
     }
     ( expect lex TT_RBRACE )  // consume select's closing '}'
 
-    ? == bidx 0 { ( die lex `select has no channel cases` ) } {}
+    ? == bidx 0 { ( die lex ( nurl_str_cat `select has no channel arms — a '?? { ... }' with only a default '_' arm would spin without ever waiting. Add at least one '[T] chan → name { body }'.` `` ) ) } {}
 
     // ── Assemble the synthesised source ──
     : ~ s src `{\n`
@@ -8122,7 +8109,7 @@
                         ( nurl_lex_val lex )
                         ( nurl_str_cat3 or_names ` ` ( nurl_lex_val lex ) )
                         ( nurl_lex_advance lex ) }
-                    { ( die lex `expected variant name after '|' in or-pattern` ) }
+                    { ( die lex ( nurl_str_cat3 `expected a variant name after '|', found ` ( tok_here lex ) `. An or-pattern lists bare variant names: 'A | B | C → body'. The variants must belong to the same enum, carry no payload, and the arm takes no guard.` ) ) }
                 } }
             {}
             : b has_or != 0 ( nurl_str_len or_names )
@@ -8255,7 +8242,7 @@
             ? & != 0 has_guard ( seq pattern_name `_` )
             { ( die lex `a guard (? cond) on a wildcard arm is not supported - guard a specific pattern instead` ) } {}
             ? & != 0 has_guard has_or
-            { ( die lex `cannot combine an or-pattern with a guard` ) } {}
+            { ( die lex ( nurl_str_cat `an or-pattern cannot carry a guard — 'A | B ? cond → body' would have to hold for both variants and the compiler cannot tell which matched. Write the arms separately: 'A ? cond → body  B ? cond → body'.` `` ) ) } {}
             ? ( seq pattern_name `_` ) {
                 // Wildcard: unconditional branch — no tag load, no icmp
                 = has_wildcard 1
@@ -8281,7 +8268,7 @@
                     // exhaustively cover the variant — only catch-all arms (no literals)
                     // count towards exhaustiveness and as duplicate-arm blockers.
                     ? ( str_contains_word seen_variants pattern_name ) {
-                        ( die lex ( nurl_str_cat `duplicate match arm for variant: ` pattern_name ) )
+                        ( die lex ( nurl_str_cat3 `a match arm already covers variant '` pattern_name `' — each variant may appear once. Remove the duplicate, or fold the two bodies together.` ) )
                     } {}
                     // A guarded arm does NOT cover its variant for
                     // exhaustiveness (the guard may be false) — same as a
@@ -8330,15 +8317,15 @@
                     // literal, named variants only). Record every
                     // alternative for exhaustiveness + duplicate checks.
                     ? has_or {
-                        ? != 0 pvc { ( die lex `or-pattern variants cannot bind payloads` ) } {}
-                        ? has_lit { ( die lex `or-pattern cannot mix literal constraints` ) } {}
-                        ? is_bool_pat { ( die lex `or-pattern applies to named enum variants, not T/F` ) } {}
+                        ? != 0 pvc { ( die lex ( nurl_str_cat `an or-pattern's variants cannot bind payloads — the arms would disagree about what the name holds. List payload-carrying variants as separate arms: 'A v → body  B v → body'.` `` ) ) } {}
+                        ? has_lit { ( die lex ( nurl_str_cat `an or-pattern cannot mix a literal constraint with variant names — write the literal case as its own arm.` `` ) ) } {}
+                        ? is_bool_pat { ( die lex ( nurl_str_cat `an or-pattern lists named enum variants; 'T' and 'F' are the option/result arms and there are only two of them, so 'T | F' is the wildcard. Write '_ → body' instead.` `` ) ) } {}
                         : ~ s orr ( nurl_str_cat or_names `` )
                         ~ != 0 ( nurl_str_len orr ) {
                             : s vn ( str_first_word orr )
                             = orr ( str_skip_word orr )
                             ? ( str_contains_word seen_variants vn )
-                            { ( die lex ( nurl_str_cat `duplicate match arm for variant: ` vn ) ) } {}
+                            { ( die lex ( nurl_str_cat3 `a match arm already covers variant '` vn `' — each variant may appear once. Remove the duplicate, or fold the two bodies together.` ) ) } {}
                             = seen_variants ? == 0 ( nurl_str_len seen_variants )
                             vn ( nurl_str_cat3 seen_variants ` ` vn )
                         }
@@ -13090,7 +13077,7 @@
                                 ( nurl_print `* ` ) ( nurl_print gep ) ( nurl_print `\n` )
                                 ^ rhs
                             }
-                            { ( die lex ( nurl_str_cat `unknown field or variable: ` fname ) ) }
+                            { ( die lex ( nurl_str_cat3 `unknown field or variable '` fname `' — it is not a field of the struct being accessed, nor a binding in scope. Field access is prefix: '. obj field'. Check the spelling and that the field is declared on this struct.` ) ) }
                         }
                     }
                 }
@@ -13431,7 +13418,7 @@
         : s f0t ? != 0 ( nurl_str_len is_enum_c ) `i64`
         ( nurl_sym_get syms ( nurl_str_cat3 sname_c `__idx_0` `__type` ) )
         ? == 0 ( nurl_str_len f0t )
-        { ( die lex ( nurl_str_cat3 `cannot cast '` st `' to an integer` ) ) }
+        { ( die lex ( nurl_str_cat3 `cannot cast '` st `' to an integer — '# i expr' converts numbers and pointers, not this type. There are no implicit conversions in NURL.` ) ) }
         {}
         : s xv ( nurl_cg_reg cg )
         ( nurl_print `  ` ) ( nurl_print xv )
@@ -13448,7 +13435,7 @@
             ( nurl_set_last_type dt ) ^ res }
         {}
         ? & & ! f0_is_fp ! f0_is_ptr == f0iw 0
-        { ( die lex ( nurl_str_cat3 `cannot cast '` st `' to an integer: field 0 is an aggregate` ) ) }
+        { ( die lex ( nurl_str_cat3 `cannot cast '` st `' to an integer: its first field is itself an aggregate, so there is no scalar to take. Convert the inner field explicitly.` ) ) }
         {}
         : s norm ? & ! f0_is_ptr == f0iw 64 xv ( nurl_cg_reg cg )
         ? f0_is_ptr
@@ -13813,7 +13800,7 @@
                 { ( die lex ( nurl_str_cat
                     ( nurl_str_cat3 `index ` ( nurl_str_int idx ) ` is out of range for type '` )
                     ( nurl_str_cat ( llvm_to_nurl ot )
-                    ( nurl_str_cat3 `' — it has ` ( nurl_str_int fcount ) ` field(s)` ) ) ) ) }
+                    ( nurl_str_cat3 `' — it has ` ( nurl_str_int fcount ) ` field(s). Field indices are 0-based and must be written literally.` ) ) ) ) }
                 {}
                 : s ft ( compound_field_type ot idx )
                 : s res ( nurl_cg_reg cg )
@@ -15049,7 +15036,7 @@
     { : ~ s vr ``
         ? != 0 ( nurl_str_len g_void_reason ) { = vr ( nurl_str_cat ` — ` g_void_reason ) } {}
         ( die_stmt lex ( nurl_str_cat ( nurl_str_cat3
-        `the expression produces no value to bind / assign (expected '` to_ty `')` ) vr ) ) }
+        `the expression produces no value to bind or assign, but a '` to_ty `')` ) vr ) ) }
     {}
     // No coercion above bridged from_ty → to_ty. If they are a never-valid
     // mix — a float and a non-float, or a pointer/string stored into a
@@ -15945,11 +15932,11 @@
                             : s param_marker ( nurl_sym_get2 outer_syms target_var `__param` )
                             : b is_param != 0 ( nurl_str_len param_marker )
                             ? is_param
-                            { ( die lex ( nurl_str_cat `cannot mutate immutable parameter: ` target_var ) ) }
+                            { ( die lex ( nurl_str_cat3 `cannot mutate immutable parameter '` target_var `' — parameters are immutable bindings. Copy it into a ': ~' local first (': ~ i n p'), or take the argument as 'inout' if the caller should see the change.` ) ) }
                             {
                                 : s mut_marker ( nurl_sym_get2 outer_syms target_var `__mutable` )
                                 ? == 0 ( nurl_str_len mut_marker )
-                                { ( die lex ( nurl_str_cat `cannot mutate immutable variable: ` target_var ) ) }
+                                { ( die lex ( nurl_str_cat3 `cannot mutate immutable variable '` target_var `' — bindings are immutable unless declared ': ~'. Add the tilde at the declaration (': ~ i n 0'), or bind the new value to a fresh name.` ) ) }
                                 {}
                             }
                             // Assignment counts as a USE of `target_var`
@@ -16159,7 +16146,7 @@
     : b is_opt_res & >= ( nurl_str_len vt ) 6
     ( seq ( nurl_str_slice vt 0 6 ) `{ i1, ` )
     ? ! is_opt_res
-    { ( die lex ( nurl_str_cat `try operator \\ used on non-Result type: ` ( llvm_to_nurl vt ) ) ) }
+    { ( die lex ( nurl_str_cat3 `the try operator can only be applied to a Result ('!T E'), not to ` ( llvm_to_nurl vt ) `. It unwraps the Ok value and returns the Err early, so the enclosing function must itself return a Result with a compatible error type. To inspect a non-Result, match it with '??'.` ) ) }
     {}
     // T8: for res_type, verify error type matches enclosing function's error type
     : s call_nurl ( nurl_sym_get syms `__last_nurl_call__` )
@@ -16503,7 +16490,7 @@
                 : s vname ( str_first_word rest )
                 = rest ( str_skip_word rest )
                 ? ! ( str_contains_word seen vname ) {
-                    ( die lex ( nurl_str_cat4 `non-exhaustive match on ` ename `, unhandled: ` vname ) )
+                    ( die lex ( nurl_str_cat4 `non-exhaustive match on enum '` ename `' — no arm covers variant '` ( nurl_str_cat vname `'. Every variant must be handled, or add a wildcard arm '_ → body' to absorb the rest.` ) ) )
                 } {}
             }
         } {}
@@ -17955,7 +17942,7 @@
         // a parameter NAME keeps the scan_fn_sigs forward-reference
         // check (`<fname>__has_inout`) exact.
         ? ( seq pname `inout` )
-        { ( die lex `parameter name 'inout' is a reserved convention keyword - rename it` ) }
+        { ( die lex `'inout' is a parameter CONVENTION, not a name: it goes before the type, as in '@ f inout ( Vec i ) v → v'. Rename this parameter to something else.` ) }
         {}
         ( nurl_lex_advance lex )
         // Default value `= <single-token>` (keyword-args). The callee does
@@ -18554,7 +18541,7 @@
     // name and emitted `declare T @<garbage>(…)` — IR only clang/llvm-as
     // rejected ("expected function name").
     ? ! ( is_ident_tok ( nurl_lex_type lex ) )
-    { ( die lex `expected the C function name (an identifier) after '@' in an FFI declaration` ) }
+    { ( die lex ( nurl_str_cat3 `expected the C function's name after '@' in this FFI declaration, found ` ( tok_here lex ) `. An FFI declaration is: '&', the library name in backticks, then '@ name params → ret'. E.g. the c-library memchr is declared as: & (backtick c backtick) @ memchr s buf i c i n → s. The name must match the C symbol exactly.` ) ) }
     {}
     : s fname ( nurl_lex_val lex )
     // Lint: `&` externs belong to the declaring file's def roster so
@@ -20419,7 +20406,7 @@
         ? & == ( nurl_lex_type lex ) TT_IDENT ( seq ( nurl_lex_val lex ) `type` )
         { ( nurl_lex_advance lex )  // skip 'type'
             ? ! ( is_ident_tok ( nurl_lex_type lex ) )
-            { ( die lex `'type' in a trait body must be followed by an associated-type name` ) }
+            { ( die lex ( nurl_str_cat3 `expected an associated-type name after 'type', found ` ( tok_here lex ) `. A trait declares one as 'type Name', and each impl binds it with 'type Name = ConcreteType'.` ) ) }
             {}
             : s aname ( nurl_lex_val lex )
             ( nurl_lex_advance lex )  // consume the associated-type name
@@ -20563,7 +20550,7 @@
 @ __parse_assoc_binding i lex → s {
     ( nurl_lex_advance lex )  // skip 'type'
     ? ! ( is_ident_tok ( nurl_lex_type lex ) )
-    { ( die lex `'type' in an impl body must be followed by an associated-type name` ) }
+    { ( die lex ( nurl_str_cat3 `expected an associated-type name after 'type', found ` ( tok_here lex ) `. An impl binds what the trait declared: 'type Name = ConcreteType'.` ) ) }
     {}
     : s aname ( nurl_lex_val lex )
     ( nurl_lex_advance lex )  // consume the name
@@ -20648,7 +20635,7 @@
             ( nurl_lex_advance lex )
         }
         ? == 0 ( nurl_str_len supers )
-        { ( die lex `supertrait clause ':' must be followed by at least one trait name` ) }
+        { ( die lex ( nurl_str_cat3 `expected at least one trait name after the supertrait ':', found ` ( tok_here lex ) `. A trait requiring others is '% Name : Base1 Base2 { ... }'; drop the ':' if there are none.` ) ) }
         {}
     }
     {}
@@ -20664,7 +20651,7 @@
     }
     {  // impl_decl: read implementing type, then scan methods
         ? != 0 ( nurl_str_len supers )
-        { ( die lex `':' supertrait clause is only valid on a trait declaration, not an impl` ) }
+        { ( die lex `a supertrait ':' clause belongs on the trait DECLARATION ('% Name : Base { ... }'), not on an impl. An impl names the trait and the type only: '% Trait Type { ... }'.` ) }
         {}
         : s impl_nurl ( capture_impl_nurl_name lex )
         : s impl_llvm ( parse_type lex )  // e.g. "i64", "i8*", "%Point"
