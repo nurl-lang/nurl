@@ -10,6 +10,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The use-after-move error now names what consumed the value.** It
+  said "consumed at line 3", which makes a reader scan that line for the
+  operation and, on a line with several calls, guess. It now says "by
+  string_free" or "by an alias copy" — the cause is stashed at the move
+  site under name+line, the pair the diagnostic already resolves. The
+  cure was also written for a move rather than a free ("pass a fresh
+  value or rebind it"); it now leads with the rule that explains both:
+  a heap handle has exactly one owner, so after the consuming operation
+  the binding is dead.
+
 - **Diagnostics, second pass: 33 more messages, one misleading cure
   fixed, and the two token tables merged into one.** The first pass took
   the twelve an agent is most likely to reach; this one works the list.

@@ -6734,7 +6734,7 @@
         // identifier, names a binding being consumed — stash it as a
         // move (flushed after the enclosing statement).
         ? & & is_consume_call == arg_idx 0 ( is_ident_tok bck_arg_tt )
-        { ( bck_stash_move bck_arg_val ( nurl_lex_line lex ) )
+        { ( bck_stash_move bck_arg_val ( nurl_lex_line lex ) fname )
             ( lint_note_released bck_arg_val )
             // Auto-sink inference: if the consumed bare-ident is the
             // enclosing fn's parameter, record its index so
@@ -6761,7 +6761,7 @@
             { ( die lex ( nurl_str_cat3
                 `'` bck_arg_val
                 `' is a compiler-auto-dropped value; passing it to a 'sink' parameter is not yet supported - pass a Vec or other manually-managed handle, or pass it as an ordinary parameter` ) ) }
-            { ( bck_stash_move bck_arg_val ( nurl_lex_line lex ) )
+            { ( bck_stash_move bck_arg_val ( nurl_lex_line lex ) fname )
                 ( lint_note_released bck_arg_val )
                 // Auto-sink cascade: if THIS fn passes its own
                 // parameter as a sink arg to another fn, mark this
@@ -10898,13 +10898,18 @@
 @ bck_let_alias i syms b is_mut i rhs_tt s rhs_val s vt i line → v {
     ? & & & ! is_mut ( is_ident_tok rhs_tt ) ( bck_is_heap_lty vt )
     ! ( str_contains_word ( nurl_sym_get syms `__fn_param_names__` ) rhs_val )
-    { ( bck_stash_move rhs_val line ) ( lint_note_released rhs_val ) }
+    { ( bck_stash_move rhs_val line `an alias copy` ) ( lint_note_released rhs_val ) }
     {}
 }
 
 // Stash `name` (consumed at `line`) for the current statement.
-@ bck_stash_move s name i line → v {
+@ bck_stash_move s name i line s cause → v {
     ? & != g_borrowck 0 == g_bck_closure_depth 0 {
+        // Remember WHAT consumed it, keyed by name+line — the pair the
+        // diagnostic already resolves. "consumed at line 3" makes a
+        // reader scan that line for the operation; naming it removes the
+        // scan, and on a line with several calls removes the guess.
+        ( nurl_sym_set g_bck ( nurl_str_cat3 `mc_` name ( nurl_str_int line ) ) cause )
         : s cur ( nurl_sym_get g_bck `pmoves` )
         : s add ( nurl_str_cat3 name ` ` ( nurl_str_int line ) )
         ( nurl_sym_set g_bck `pmoves`
@@ -11315,10 +11320,15 @@
         // binding's name — rv_ is the reverse mapping bck_intern kept.
         : s name ( nurl_sym_get2 g_bck `rv_` ids )
         : s ml ( nurl_sym_get2 g_bck `ml_` ids )
+        // Name the operation that consumed it, not just the line. The
+        // cause was stashed under name+line at the move site.
+        : s cause ( nurl_sym_get g_bck ( nurl_str_cat3 `mc_` name ml ) )
+        : s by ? == 0 ( nurl_str_len cause ) ( nurl_str_cat `` `` )
+        ( nurl_str_cat3 ` by ` cause `` )
         ( bck_emit_error ( nurl_sym_get g_bck `file` ) useline
         ( nurl_str_cat4 `use of moved value '` name
-        `' — it was consumed at line ` ( nurl_str_cat3 ml
-        ` (pass a fresh value or rebind it before reuse)` `` ) ) )
+        `' — a heap handle has exactly one owner, and this one was consumed at line ` ( nurl_str_cat3 ml
+        ( nurl_str_cat by `. After that the binding is dead: free or read the value through whatever owns it now, or rebind this name to a fresh value.` ) `` ) ) )
     }
 }
 

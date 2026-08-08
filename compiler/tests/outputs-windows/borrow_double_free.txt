@@ -1,5 +1,5 @@
 COMPILE FAIL
 ERRORS
-compiler/tests/borrow_double_free.nu:12: error: use of moved value 'a' — it was consumed at line 11 (pass a fresh value or rebind it before reuse)
+compiler/tests/borrow_double_free.nu:12: error: use of moved value 'a' — a heap handle has exactly one owner, and this one was consumed at line 11 by an alias copy. After that the binding is dead: free or read the value through whatever owns it now, or rebind this name to a fresh value.
     ( vec_free [i] a )
 error: compilation aborted — 1 borrow-checker violation (re-run with --no-borrowck to bypass)
