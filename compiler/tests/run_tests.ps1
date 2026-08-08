@@ -21,7 +21,7 @@
 #
 #  Record shapes (the golden holds exactly these lines):
 #
-#    normal test          should_fail_* / borrow_*
+#    normal test          should_fail_* / borrow_* / arity_strict_* / lint_*
 #    ───────────          ────────────────────────
 #    COMPILE OK           COMPILE FAIL
 #    LINK OK              ERRORS              (borrow_* only, if any)
@@ -325,6 +325,34 @@ $results = $names | ForEach-Object -ThrottleLimit $Jobs -Parallel {
         if ($name -like 'borrow_strict_*') { $nargs += '--strict-borrowck' }
         $nargs += $src
         $r = Run-Proc $Nurlc $nargs $RootDir
+        if ($r.Code -eq 0) {
+            $act = "COMPILE OK`n(expected COMPILE FAIL but compiler accepted it)`n"
+        } else {
+            $act = "COMPILE FAIL`n"
+            $e = Normalize $r.Err
+            if ($e.Length -gt 0) { $act += "ERRORS`n" + (Cap-Lines (Strip-Root $e)) }
+        }
+    }
+    elseif ($name -like 'lint_*') {
+        # lint_* — diagnostics that only fire under --lint. Compiles
+        # clean (the program is valid); it is the WARNINGS that are
+        # baselined. Mirrors run_tests.sh.
+        $r = Run-Proc $Nurlc @('--lint', $src) $RootDir
+        if ($r.Code -eq 0) {
+            $act = "COMPILE OK`n"
+            $e = Normalize $r.Err
+            if ($e.Length -gt 0) { $act += "WARNINGS`n" + (Cap-Lines (Strip-Root $e)) }
+        } else {
+            $act = "COMPILE FAIL`n(expected COMPILE OK)`n"
+            $e = Normalize $r.Err
+            if ($e.Length -gt 0) { $act += (Cap-Lines (Strip-Root $e)) }
+        }
+    }
+    elseif ($name -like 'arity_strict_*') {
+        # arity_strict_* — the n-ary '&'/'|' trap, an error only under
+        # --strict-arity. The diagnostic TEXT is baselined because where
+        # it points is the point. Mirrors run_tests.sh.
+        $r = Run-Proc $Nurlc @('--strict-arity', $src) $RootDir
         if ($r.Code -eq 0) {
             $act = "COMPILE OK`n(expected COMPILE FAIL but compiler accepted it)`n"
         } else {

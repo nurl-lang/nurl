@@ -212,6 +212,26 @@ boot_ch() {
         say "PASS cloud-hypervisor booted the unchanged image"
         booted="$booted cloud-hypervisor"
         ;;
+      *"Failed to set Cpuid"*|*"VcpuConfiguration"*|*"SetSupportedCpusFailed"*)
+        # The host declined to give the VM a vCPU. This says nothing
+        # about the image: the failure is before any guest instruction
+        # runs, and the structural PVH check above — the part that IS
+        # about our artifact — already passed.
+        #
+        # The gate's KVM test above asks whether this process can OPEN
+        # /dev/kvm, which a runner can allow while still refusing to
+        # host a VM (nested virtualisation off, KVM_GET_SUPPORTED_CPUID
+        # unavailable). That is the same "present is not usable" lesson
+        # the readability check above was written for, one step further
+        # along, and it turned main red for an environment property.
+        #
+        # An image defect looks different and is still caught: the VM
+        # starts and the guest never prints its exit line, or the loader
+        # complains about the ELF or the PVH note.
+        say "SKIP boot: cloud-hypervisor could not configure a vCPU on this host"
+        say "     (KVM opens but will not host a VM — nested virt off?)"
+        skipped="$skipped cloud-hypervisor"
+        ;;
       *)
         say "FAIL cloud-hypervisor"
         printf '%s\n' "$out" | head -6 | sed 's/^/     /' || true
@@ -239,6 +259,14 @@ EOF
       *"[nurl-exit] 0"*)
         say "PASS firecracker booted the unchanged image"
         booted="$booted firecracker"
+        ;;
+      *"Failed to set Cpuid"*|*"VcpuConfiguration"*|*"SetSupportedCpusFailed"*|*"Cannot create Vcpu"*)
+        # Same host-declined-a-vCPU case as cloud-hypervisor above, in
+        # the other loader's wording. Both are given the exclusion, or
+        # the next runner without nested virt fails on whichever one it
+        # happens to have installed.
+        say "SKIP boot: firecracker could not configure a vCPU on this host"
+        skipped="$skipped firecracker"
         ;;
       *)
         say "FAIL firecracker"
