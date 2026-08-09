@@ -73,6 +73,24 @@
 #  define NURL_CTX_AARCH64 1
 #endif
 
+/* Whether this file supplies a context switch at all — one name for
+ * "any of the three above". Everything that needs to know asks THIS,
+ * rather than re-listing the ISAs and drifting from the list that
+ * actually decides.
+ *
+ * The drift is not hypothetical. runtime_ffi.c's fiber-backend gate
+ * spelled out `defined(NURL_CTX_X86_64)` alone, so aarch64 and riscv64
+ * hosts fell through to the ucontext branch even though the switch
+ * below covers them. On Linux that is merely slower — glibc's ucontext
+ * works — which is why it survived; on macOS/arm64 it is fatal, because
+ * Apple's arm64 makecontext/swapcontext are deprecated and do not
+ * produce a usable frame. Every async test SIGSEGV'd there, on a
+ * machine whose own switch backend had been passing the AArch64
+ * unikernel gate in CI the whole time. */
+#if defined(NURL_CTX_X86_64) || defined(NURL_CTX_AARCH64) || defined(NURL_CTX_RISCV64)
+#  define NURL_CTX_AVAILABLE 1
+#endif
+
 /* Mach-O gives every C symbol a leading underscore; ELF does not. A
  * basic-asm block writes the assembler-level name, so a bare
  * "callq nurl_ctx_switch" links on Linux and leaves an undefined
@@ -474,7 +492,7 @@ static long nurl__ctx_counter;
 static long nurl__ctx_switches;
 static long nurl__ctx_arg_seen;
 
-#if defined(NURL_CTX_X86_64) || defined(NURL_CTX_AARCH64) || defined(NURL_CTX_RISCV64)
+#ifdef NURL_CTX_AVAILABLE
 
 static void nurl__ctx_fpbounce(void *arg);
 

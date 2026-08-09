@@ -302,7 +302,11 @@ $ `stdlib/ext/env.nu`  // $COLUMNS / $LINES fallback for term_width
 // xpixel, ypixel) on every POSIX platform; the ioctl request value
 // differs per OS and is surfaced through nurl_native_constant.
 
-& `c` @ ioctl i32 fd i req *u argp → i32
+// ioctl(2) is `int ioctl(int, unsigned long, ...)` — variadic, so the
+// argp pointer must go through the variadic ABI. See the note on fcntl
+// in core/posix.nu for why a fixed-arity spelling is silently wrong on
+// Apple arm64 and silently fine everywhere else.
+& `c` @ ioctl i32 fd i req ... → i32
 
 @ __term_winsz i fd i idx → i {
     : i req ( posix_const `TIOCGWINSZ` )

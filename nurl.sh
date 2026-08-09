@@ -353,19 +353,45 @@ else
     resolve_clang
     cc_run() { "$CLANG" "$@"; }
     # nurlc emits LLVM IR with opaque pointers (`ptr`) — the default since
-    # LLVM 15, which is NURL's minimum supported clang. Older clangs (13/14
-    # behind `-opaque-pointers`) are no longer supported. (zig's bundled
-    # LLVM never needs this.)
-    CLANG_MAJOR="$("$CLANG" --version 2>/dev/null | sed -nE 's/.*version ([0-9]+).*/\1/p' | head -1)"
-    if [ -n "$CLANG_MAJOR" ] && [ "$CLANG_MAJOR" -lt 15 ]; then
-        {
-            echo "ERROR: clang $CLANG_MAJOR is too old to build NURL programs."
-            echo "       nurlc emits LLVM IR with opaque pointers (needs clang/LLVM 15+)."
-            echo "       Install a newer clang (e.g. clang-15) and set CLANG=clang-15,"
-            echo "       or use the bundled zig backend (set NURL_ZIG=/path/to/zig)."
-        } >&2
-        exit 1
+    # LLVM 15. (zig's bundled LLVM never needs this, which is why the probe
+    # sits in the no-zig branch.)
+    #
+    # This used to read the major version out of `clang --version` and
+    # refuse anything below 15. That test is wrong on macOS, and wrong in
+    # the direction that hurts: `Apple clang version 15.0.0` is not
+    # upstream LLVM 15 — Apple numbers its releases independently — and
+    # Xcode 15.4's clang cannot parse nurlc's IR at all, with or without
+    # the flag. The gate said 15 ≥ 15, waved it through, and the user got
+    # LLVM's IR parser complaining "expected type" about a .ll file they
+    # never wrote. Ask the compiler what it can parse instead of what it is
+    # called: one declaration, plain, then under the cc1 flag that turns
+    # the feature on for the transitional releases. It mixes `i8*` and
+    # `ptr` deliberately — that is what nurlc emits, and a probe using
+    # `ptr` alone passes on the exact Apple clang this catches, because
+    # LLVM 15 takes a module's pointer mode from whichever spelling it
+    # meets first. See build.sh for the long version.
+    _probe_ll="${TMPDIR:-/tmp}/nurl_opaque_probe.$$.ll"
+    printf 'declare void @nurl_opaque_probe(i8*, ptr)\n' > "$_probe_ll"
+    if ! "$CLANG" -c -x ir "$_probe_ll" -o /dev/null >/dev/null 2>&1; then
+        if "$CLANG" -Xclang -opaque-pointers -c -x ir "$_probe_ll" -o /dev/null >/dev/null 2>&1; then
+            OPAQUE_FLAGS="-Xclang -opaque-pointers"
+        else
+            rm -f "$_probe_ll"
+            {
+                echo "ERROR: $CLANG cannot parse the LLVM IR nurlc emits."
+                echo "       nurlc uses opaque pointers (\`ptr\`), the LLVM default since 15."
+                echo "       Version reported: $("$CLANG" --version 2>/dev/null | head -1)"
+                echo ""
+                echo "       Apple's version numbers are not upstream LLVM's — 'Apple clang 15'"
+                echo "       is not LLVM 15. On macOS install a real LLVM:"
+                echo "         brew install llvm && export CLANG=\"\$(brew --prefix llvm)/bin/clang\""
+                echo "       Elsewhere install clang 15 or newer and set CLANG=/path/to/clang,"
+                echo "       or use the bundled zig backend (set NURL_ZIG=/path/to/zig)."
+            } >&2
+            exit 1
+        fi
     fi
+    rm -f "$_probe_ll"
 fi
 
 # Debug flag passthrough. Without `!dbg` metadata in the IR, `-g` yields
@@ -415,6 +441,13 @@ DL_LIB=""
 case "$(uname -s)" in
     Linux) DL_LIB="-ldl" ;;
 esac
+
+# `--as-needed` is GNU ld / lld spelling. Apple's ld64 errors on the
+# unknown flag rather than ignoring it, so a macOS host needs the ld64
+# name for the same behaviour: -dead_strip_dylibs prunes LC_LOAD_DYLIB
+# entries the program references no symbol from.
+AS_NEEDED="-Wl,--as-needed"
+case "$(uname -s)" in Darwin) AS_NEEDED="-Wl,-dead_strip_dylibs" ;; esac
 if grep -qE '@canvas_(open|present|sleep|should_close|close|mouse_x|mouse_y|mouse_btn)\b' "$LLFILE"; then
     CANVAS_O="$SCRIPT_DIR/stdlib/canvas.o"
     if [ ! -f "$CANVAS_O" ]; then
@@ -675,7 +708,7 @@ if [ "$SPLIT_N" -gt 0 ]; then
         exit 1
     fi
     # shellcheck disable=SC2086
-    cc_run $OPT $ZIG_OPT_FIX -flto=thin -Wl,--as-needed $OPAQUE_FLAGS $QUIET_FLAGS $SPLIT_OBJS "$RUNTIME_TO_LINK" $EXTRA_OBJS -o "$OUTBASE" -lm -lpthread $DL_LIB $EXTRA_LIBS
+    cc_run $OPT $ZIG_OPT_FIX -flto=thin $AS_NEEDED $OPAQUE_FLAGS $QUIET_FLAGS $SPLIT_OBJS "$RUNTIME_TO_LINK" $EXTRA_OBJS -o "$OUTBASE" -lm -lpthread $DL_LIB $EXTRA_LIBS
     # The parts are an artifact of how the link was parallelised; the
     # documented one is $LLFILE, which still holds the whole module.
     # shellcheck disable=SC2086
@@ -684,7 +717,7 @@ else
     # `-flto` is required because stdlib/runtime.o is compiled with -flto
     # (build.sh) and therefore carries LLVM bitcode instead of native code.
     # shellcheck disable=SC2086
-    cc_run $OPT $ZIG_OPT_FIX $LTO_FLAG -Wl,--as-needed $OPAQUE_FLAGS $QUIET_FLAGS $DEBUG_FLAGS $COVERAGE_FLAGS $SAN_LINK_FLAGS "$LLFILE" "$RUNTIME_TO_LINK" $EXTRA_OBJS -o "$OUTBASE" -lm -lpthread $DL_LIB $EXTRA_LIBS
+    cc_run $OPT $ZIG_OPT_FIX $LTO_FLAG $AS_NEEDED $OPAQUE_FLAGS $QUIET_FLAGS $DEBUG_FLAGS $COVERAGE_FLAGS $SAN_LINK_FLAGS "$LLFILE" "$RUNTIME_TO_LINK" $EXTRA_OBJS -o "$OUTBASE" -lm -lpthread $DL_LIB $EXTRA_LIBS
 fi
 
 echo ""

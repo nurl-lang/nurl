@@ -33,6 +33,16 @@ if [[ ! -f "$RUNTIME" ]]; then
 fi
 
 CLANG="${CLANG:-clang}"
+
+# The link flags build.sh resolved, when this runs under it. `--as-needed`
+# is GNU ld / lld spelling and Apple's ld64 errors on it; $OPAQUE_FLAGS
+# carries whatever this clang needs to parse nurlc's opaque-pointer IR.
+# Standalone, fall back the way build.sh does.
+OPAQUE_FLAGS="${OPAQUE_FLAGS-}"
+if [ -z "${AS_NEEDED+set}" ]; then
+    AS_NEEDED="-Wl,--as-needed"
+    case "$(uname -s)" in Darwin) AS_NEEDED="-Wl,-dead_strip_dylibs" ;; esac
+fi
 if ! command -v "$CLANG" >/dev/null 2>&1; then
     echo "ERROR: clang not on PATH (set CLANG=/path/to/clang to override)." >&2
     exit 1
@@ -83,7 +93,8 @@ if [[ -f "$ROOT_DIR/stdlib/runtime.pq" ]]; then
 fi
 
 echo "[2/2] build/nurlfmt.ll → build/nurlfmt"
-"$CLANG" -O2 -flto "$ROOT_DIR/build/nurlfmt.ll" "$RUNTIME" -Wl,--as-needed -lm -lpthread "${EXTRA_LIBS[@]}" -o "$ROOT_DIR/build/nurlfmt"
+# shellcheck disable=SC2086
+"$CLANG" -O2 -flto $OPAQUE_FLAGS "$ROOT_DIR/build/nurlfmt.ll" "$RUNTIME" $AS_NEEDED -lm -lpthread "${EXTRA_LIBS[@]}" -o "$ROOT_DIR/build/nurlfmt"
 
 echo ""
 echo "Done: $ROOT_DIR/build/nurlfmt"

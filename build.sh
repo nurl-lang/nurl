@@ -149,8 +149,11 @@ step() {
 }
 
 # ── Locate clang ─────────────────────────────────────────────
-CLANG="clang"
-if ! command -v clang &>/dev/null; then
+# $CLANG wins when set, so a host whose default clang is unusable (an
+# Apple clang that cannot read opaque pointers — see the probe below)
+# can be pointed at a real LLVM without editing anything.
+CLANG="${CLANG:-clang}"
+if ! command -v "$CLANG" &>/dev/null; then
     for candidate in /usr/lib/llvm/bin/clang /usr/local/bin/clang; do
         if [ -x "$candidate" ]; then CLANG="$candidate"; break; fi
     done
@@ -158,6 +161,56 @@ if ! command -v clang &>/dev/null; then
         echo "ERROR: clang not found"; exit 1
     fi
 fi
+
+# ── Can this clang read the IR nurlc emits? ──────────────────
+# nurlc emits opaque pointers (`ptr`), the LLVM default since 15, and
+# the toolchain has always gated on that by reading the major version out
+# of `clang --version`. That gate is wrong on exactly one platform, and
+# it is the one macOS users have: `Apple clang version 15.0.0` is NOT
+# upstream LLVM 15 — Apple's numbering is its own, and Xcode 15.4's
+# clang parses `ptr` only under an explicit flag. So the version check
+# passed, the build proceeded, and stage0 died inside LLVM's IR parser
+# with "expected type" and a .ll line number — a diagnostic about our
+# bootstrap snapshot, for what is actually a toolchain-too-old problem.
+#
+# Ask the compiler what it can do instead of what it is called: hand it
+# a declaration and see. Plain first, then under the cc1 flag that turns
+# opaque pointers on for the transitional LLVM releases. A clang that
+# can do neither cannot build NURL at all, and says so here rather than
+# 200 lines into a build log.
+#
+# The probe's shape is load-bearing. `declare void @f(ptr)` ALONE parses
+# on the very Apple clang this exists to catch, because LLVM 15 picks a
+# module's pointer mode from what it sees first — `ptr` first and the
+# module is opaque, and all is well. nurlc emits BOTH spellings in one
+# module (`declare void @nurl_journal_push_drop(i8*, ptr)` is line 71 of
+# the bootstrap snapshot), so `i8*` pins the module to typed mode and the
+# `ptr` after it is a parse error. A probe that does not mix them reports
+# a capability the real IR does not get. Mirror what nurlc emits.
+OPAQUE_FLAGS=""
+_probe_ll="$(mktemp -t nurl_probe.XXXXXX)" || _probe_ll="build/.opaque_probe"
+printf 'declare void @nurl_opaque_probe(i8*, ptr)\n' > "$_probe_ll"
+if ! "$CLANG" -c -x ir "$_probe_ll" -o /dev/null >/dev/null 2>&1; then
+    if "$CLANG" -Xclang -opaque-pointers -c -x ir "$_probe_ll" -o /dev/null >/dev/null 2>&1; then
+        OPAQUE_FLAGS="-Xclang -opaque-pointers"
+    else
+        rm -f "$_probe_ll"
+        {
+            echo "ERROR: $CLANG cannot parse the LLVM IR nurlc emits."
+            echo "       nurlc uses opaque pointers (\`ptr\`), the LLVM default since 15."
+            echo "       This clang rejects them even with -Xclang -opaque-pointers, so it"
+            echo "       predates the feature entirely."
+            echo "       Version reported: $("$CLANG" --version 2>/dev/null | head -1)"
+            echo ""
+            echo "       Note that Apple's version numbers are not upstream LLVM's —"
+            echo "       'Apple clang 15' is not LLVM 15. On macOS install a real LLVM:"
+            echo "         brew install llvm && export CLANG=\"\$(brew --prefix llvm)/bin/clang\""
+            echo "       Elsewhere, install clang 15 or newer and set CLANG=/path/to/clang."
+        } >&2
+        exit 1
+    fi
+fi
+rm -f "$_probe_ll"
 
 mkdir -p build
 
@@ -313,7 +366,7 @@ step "runtime"       bash -c "'$CLANG' -O2 $LTO_FLAG $SAN_CFLAGS $CURL_CFLAGS $O
 # so the feature defines stay identical to `runtime.o`. With LTO off
 # `runtime.o` is already an ELF object, so just copy it.
 if [ -n "$LTO_FLAG" ]; then
-    step "runtime-native" "$CLANG" -O2 -c -x ir stdlib/runtime.o -o stdlib/runtime.native.o
+    step "runtime-native" "$CLANG" -O2 $OPAQUE_FLAGS -c -x ir stdlib/runtime.o -o stdlib/runtime.native.o
 else
     step "runtime-native" cp stdlib/runtime.o stdlib/runtime.native.o
 fi
@@ -387,6 +440,23 @@ step "clean"         bash -c 'rm -f build/nurlc_lastgood.bin \
 DL_LIB=""
 case "$(uname -s)" in Linux) DL_LIB="-ldl" ;; esac
 
+# `--as-needed` is GNU ld / lld spelling; Apple's ld64 rejects the flag
+# outright rather than ignoring it, so a macOS host cannot use the same
+# string. ld64's equivalent of "drop the libraries nothing referenced"
+# is -dead_strip_dylibs, which prunes LC_LOAD_DYLIB the same way.
+AS_NEEDED="-Wl,--as-needed"
+case "$(uname -s)" in Darwin) AS_NEEDED="-Wl,-dead_strip_dylibs" ;; esac
+
+# Hand the resolved toolchain down to every script this build drives —
+# split_equivalence.sh, the tools/*/build.sh scripts, run_tests.sh. Each
+# of them links NURL IR, so each of them needs the same four answers,
+# and each used to work them out again (or hardcode them: `clang`,
+# `-Wl,--as-needed` and `-ldl` were all literals in split_equivalence.sh
+# until macOS CI ran it). Resolve once, export, let the children default
+# to the environment. They keep their own fallbacks so they still run
+# standalone.
+export CLANG OPAQUE_FLAGS AS_NEEDED DL_LIB
+
 # ── Parallel stage links ─────────────────────────────────────
 # Lowering nurlc's own 3.2 MB of IR is ~11 s of single-threaded LLVM,
 # and the bootstrap pays it three times. `nurlc --split=N` writes the
@@ -457,20 +527,20 @@ link_stage() {  # link_stage <ir-prefix> <out> <opt-level>
     if compgen -G "$pre.[0-9]*.ll" > /dev/null; then
         for p in "$pre".[0-9]*.ll; do
             objs="$objs ${p%.ll}.o"
-            "$CLANG" "$opt" -flto=thin -Wno-override-module -c "$p" -o "${p%.ll}.o" &
+            "$CLANG" "$opt" -flto=thin $OPAQUE_FLAGS -Wno-override-module -c "$p" -o "${p%.ll}.o" &
             pids="$pids $!"
         done
         for p in $pids; do wait "$p" || rc=1; done
         (( rc == 0 )) || return 1
         # shellcheck disable=SC2086
-        "$CLANG" "$opt" -flto=thin -Wno-override-module -Wl,--as-needed $objs stdlib/runtime.o \
+        "$CLANG" "$opt" -flto=thin $OPAQUE_FLAGS -Wno-override-module $AS_NEEDED $objs stdlib/runtime.o \
             -lm -lpthread $DL_LIB $CURL_LIBS $OPENSSL_LIBS $SQLITE3_LIBS $ZLIB_LIBS $ZSTD_LIBS \
             -o "$out" || return 1
         # shellcheck disable=SC2086
         rm -f $objs "$pre".[0-9]*.ll
     else
         # shellcheck disable=SC2086
-        "$CLANG" "$opt" $LTO_FLAG $SAN_LDFLAGS -Wl,--as-needed "$pre.ll" stdlib/runtime.o \
+        "$CLANG" "$opt" $LTO_FLAG $OPAQUE_FLAGS $SAN_LDFLAGS $AS_NEEDED "$pre.ll" stdlib/runtime.o \
             -lm -lpthread $DL_LIB $CURL_LIBS $OPENSSL_LIBS $SQLITE3_LIBS $ZLIB_LIBS $ZSTD_LIBS \
             -o "$out" || return 1
     fi
@@ -479,7 +549,7 @@ link_stage() {  # link_stage <ir-prefix> <out> <opt-level>
 # Stage 0 is the one link that cannot be split — the committed snapshot
 # is a single file by definition — so it is also the one that gains most
 # from $BOOT_OPT: 8.4 s to 1.6 s, link and emit together.
-step "stage0 link"   "$CLANG" $BOOT_OPT $LTO_FLAG $SAN_LDFLAGS -Wl,--as-needed compiler/nurlc_lastgood.ll stdlib/runtime.o -lm -lpthread $DL_LIB $CURL_LIBS $OPENSSL_LIBS $SQLITE3_LIBS $ZLIB_LIBS $ZSTD_LIBS -o build/nurlc_lastgood.bin
+step "stage0 link"   "$CLANG" $BOOT_OPT $LTO_FLAG $OPAQUE_FLAGS $SAN_LDFLAGS $AS_NEEDED compiler/nurlc_lastgood.ll stdlib/runtime.o -lm -lpthread $DL_LIB $CURL_LIBS $OPENSSL_LIBS $SQLITE3_LIBS $ZLIB_LIBS $ZSTD_LIBS -o build/nurlc_lastgood.bin
 
 # Stage 1 is a throwaway: its only job is to emit stage 2's IR, and it
 # is rebuilt on every single build. Split it, and do not optimise it.

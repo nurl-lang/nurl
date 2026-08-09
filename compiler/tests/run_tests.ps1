@@ -296,6 +296,15 @@ $results = $names | ForEach-Object -ThrottleLimit $Jobs -Parallel {
     # Windows golden RECORDED the link failure, which is a blessed
     # breakage, not coverage.
     elseif ($name -like 'fswatch_*') { $skip = $true }
+    # fs_glob_symlink builds a symlinked directory under /tmp and globs
+    # through it. Windows has neither an unprivileged symlink() nor /tmp.
+    # It first declared `requires: ln` as a capability probe, on the
+    # reasoning that a host without `ln` is a host without symlinks —
+    # which is false HERE specifically: this runner has Git for Windows
+    # on PATH, so `ln.exe` resolves, the gate passed, and the test ran
+    # and failed. A POSIX-only test belongs in this list, next to the
+    # termios and AF_UNIX ones, not behind a command-presence guess.
+    elseif ($name -eq 'fs_glob_symlink') { $skip = $true }
     else {
         foreach ($tok in (Get-Requires (Join-Path $ScriptDir "$name.nu"))) {
             switch ($tok) {

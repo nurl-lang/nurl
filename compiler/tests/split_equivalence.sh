@@ -57,6 +57,25 @@ fi
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
+# The toolchain build.sh resolved, when this runs under it. Standalone,
+# fall back the same way build.sh does — every one of these was a bare
+# literal here (`clang`, `-Wl,--as-needed`, `-ldl`) and all three are
+# wrong on macOS: the system clang is an Apple clang that cannot parse
+# nurlc's IR, ld64 errors on --as-needed rather than ignoring it, and
+# there is no libdl. The failure was quiet in an instructive way — the
+# one-module builds "skipped" and only the split leg reported, so the
+# log read like a partial platform gap instead of a wrong compiler.
+CLANG="${CLANG:-clang}"
+OPAQUE_FLAGS="${OPAQUE_FLAGS-}"
+if [[ -z "${AS_NEEDED+set}" ]]; then
+    AS_NEEDED="-Wl,--as-needed"
+    case "$(uname -s)" in Darwin) AS_NEEDED="-Wl,-dead_strip_dylibs" ;; esac
+fi
+if [[ -z "${DL_LIB+set}" ]]; then
+    DL_LIB=""
+    case "$(uname -s)" in Linux) DL_LIB="-ldl" ;; esac
+fi
+
 # Programs that print deterministically and exercise a different corner
 # of the emitter each. `--split` is off below the size floor nurl.sh
 # applies, so these are driven through nurlc directly with an explicit
@@ -75,8 +94,9 @@ build_one() {  # build_one <src> <out> <parts>   (parts=0 → one module)
     local src="$1" out="$2" n="$3" p objs=()
     if (( n == 0 )); then
         "$NURLC" "$src" > "$out.ll" 2>"$out.cerr" || return 1
-        clang -O2 -flto -Wno-override-module -Wl,--as-needed "$out.ll" \
-            stdlib/runtime.o -o "$out" -lm -lpthread -ldl 2>"$out.lerr" || return 1
+        # shellcheck disable=SC2086
+        "$CLANG" -O2 -flto $OPAQUE_FLAGS -Wno-override-module $AS_NEEDED "$out.ll" \
+            stdlib/runtime.o -o "$out" -lm -lpthread $DL_LIB 2>"$out.lerr" || return 1
         return 0
     fi
     # --split-min=1 defeats the size floor nurlc applies by default:
@@ -84,11 +104,13 @@ build_one() {  # build_one <src> <out> <parts>   (parts=0 → one module)
     # partitioning this particular program would pay for itself.
     "$NURLC" "--split=$n" "--split-out=$out" --split-min=1 "$src" > "$out.ll" 2>"$out.cerr" || return 1
     for p in "$out".[0-9]*.ll; do
-        clang -O2 -flto=thin -Wno-override-module -c "$p" -o "${p%.ll}.o" 2>>"$out.lerr" || return 1
+        # shellcheck disable=SC2086
+        "$CLANG" -O2 -flto=thin $OPAQUE_FLAGS -Wno-override-module -c "$p" -o "${p%.ll}.o" 2>>"$out.lerr" || return 1
         objs+=("${p%.ll}.o")
     done
-    clang -O2 -flto=thin -Wno-override-module -Wl,--as-needed "${objs[@]}" \
-        stdlib/runtime.o -o "$out" -lm -lpthread -ldl 2>>"$out.lerr" || return 1
+    # shellcheck disable=SC2086
+    "$CLANG" -O2 -flto=thin $OPAQUE_FLAGS -Wno-override-module $AS_NEEDED "${objs[@]}" \
+        stdlib/runtime.o -o "$out" -lm -lpthread $DL_LIB 2>>"$out.lerr" || return 1
 }
 
 for src in "${PROGRAMS[@]}"; do

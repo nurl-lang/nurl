@@ -125,7 +125,21 @@ $ `stdlib/core/cell.nu`
 
 // fcntl(2) — only the 3-arg integer form (used for F_GETFL/F_SETFL/
 // F_GETFD/F_SETFD with O_NONBLOCK / FD_CLOEXEC). Returns int.
-& `c` @ fcntl i fd i cmd i arg → i
+// fcntl(2) is `int fcntl(int, int, ...)` — VARIADIC in C, and the `...`
+// marker is load-bearing rather than cosmetic. Apple's arm64 calling
+// convention passes variadic arguments on the STACK, where x86-64 SysV
+// and Linux AAPCS64 both pass them in the same registers as fixed ones.
+// So a fixed-arity declaration works by accident on those two and hands
+// the callee garbage on macOS arm64: `fcntl(fd, F_SETFD, FD_CLOEXEC)`
+// put the flag in x2 while fcntl's va_arg read the stack.
+//
+// Nothing reported an error — F_SETFD simply set some other value. What
+// it cost: process_spawn hung forever on macOS, because the exec-errno
+// pipe's write end never became close-on-exec, so the child kept it open
+// past execvp and the parent's read waited for an EOF that could not
+// come. Sockets stayed blocking for the same reason (__set_nonblock is
+// the same call), which stalled every async server on a worker thread.
+& `c` @ fcntl i fd i cmd ... → i
 
 // read(2) / write(2): bytes through `*u` buffer. Return count
 // (positive), 0 (EOF on read), -1 with errno on error.
@@ -144,7 +158,9 @@ $ `stdlib/core/cell.nu`
 // open(2): low-level fd-based file open. `flags` is `O_RDONLY` / etc.
 // from `posix_const`; `mode` matters only when O_CREAT is set
 // (typical caller passes 0). Returns the new fd or -1 with errno.
-& `c` @ open s path i32 flags i32 mode → i32
+// open(2) is likewise `int open(const char *, int, ...)`; `mode` is the
+// variadic argument. Same ABI reasoning as fcntl above.
+& `c` @ open s path i32 flags ... → i32
 
 // lseek(2): reposition the read/write head. `whence` is 0 (SET) /
 // 1 (CUR) / 2 (END) — universal POSIX values. Returns the new

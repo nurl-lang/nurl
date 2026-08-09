@@ -90,6 +90,20 @@ if ! command -v "$CLANG" &>/dev/null; then
     exit 2
 fi
 
+# Opaque-pointer capability, asked of the compiler rather than inferred
+# from its version string — see the long note in build.sh for why the
+# version number lies on macOS. build.sh has already gated the build on
+# this; here it only needs to reach the per-test link, since a corpus
+# whose every test fails to compile is not a useful diagnosis.
+OPAQUE_FLAGS=""
+_probe_ll="$WORKDIR/.opaque_probe.ll"
+mkdir -p "$WORKDIR"
+printf 'declare void @nurl_opaque_probe(i8*, ptr)\n' > "$_probe_ll"
+if ! "$CLANG" -c -x ir "$_probe_ll" -o /dev/null >/dev/null 2>&1; then
+    OPAQUE_FLAGS="-Xclang -opaque-pointers"
+fi
+rm -f "$_probe_ll"
+
 # Per-feature link flags — resolved once, shared by every worker.
 # Programs that don't pull in the matching stdlib module link fine
 # either way; these just satisfy the symbols when something does.
@@ -126,6 +140,20 @@ MAX_OUT_LINES="${MAX_OUT_LINES:-200}"
 # libcurl/openssl/pq/sqlite, inflating loader cost under contention).
 TIMEOUT="${TIMEOUT:-60}"
 JOBS="${NURL_TEST_JOBS:-$(nproc 2>/dev/null || echo 4)}"
+
+# `timeout(1)` is coreutils on Linux and base on FreeBSD, but macOS ships
+# neither — there it arrives as `gtimeout` with Homebrew coreutils. Resolve
+# the name once. With no watchdog at all a hung test would wedge the whole
+# runner forever, so say so loudly rather than discovering it as a stalled
+# CI job; the run continues, because a corpus that cannot run is worse than
+# one that cannot bound a hang.
+TIMEOUT_CMD=""
+if command -v timeout >/dev/null 2>&1; then TIMEOUT_CMD="timeout"
+elif command -v gtimeout >/dev/null 2>&1; then TIMEOUT_CMD="gtimeout"
+else
+    echo "WARNING: neither timeout nor gtimeout on PATH — tests run unbounded." >&2
+    echo "         On macOS: brew install coreutils" >&2
+fi
 
 mkdir -p "$OUTDIR" "$WORKDIR"
 
@@ -230,7 +258,7 @@ run_one() {
         if ! "$NURLC" "$src" > "$ll" 2>"$cerr"; then
             strip_root "$cerr"
             { echo "COMPILE FAIL"; echo "ERRORS"; } > "$act"; append_capped "$act" "$cerr"
-        elif ! "$CLANG" -O2 -flto "$ll" "$RUNTIME" $LINK_LIBS -o "$bin" 2>"$err"; then
+        elif ! "$CLANG" -O2 -flto $OPAQUE_FLAGS "$ll" "$RUNTIME" $LINK_LIBS -o "$bin" 2>"$err"; then
             strip_root "$err"
             { echo "COMPILE OK"; echo "LINK FAIL"; } > "$act"; append_capped "$act" "$err"
         else
@@ -247,7 +275,7 @@ run_one() {
             # a tight loop can ignore indefinitely — such leftovers have been
             # found burning a core each 12 hours after their run. Declaring a
             # hang is not the same as ending it.
-            ( cd "$rundir" && timeout -k 5s "${TIMEOUT}s" "./$name" > "$out" 2>&1 ) 2>/dev/null
+            ( cd "$rundir" && $TIMEOUT_CMD ${TIMEOUT_CMD:+-k 5s "${TIMEOUT}s"} "./$name" > "$out" 2>&1 ) 2>/dev/null
             local code=$?
             rm -rf "$rundir"
             { echo "COMPILE OK"; } > "$act"
@@ -279,7 +307,7 @@ run_one() {
 # runner cannot half-export the predicate set and gate differently in
 # the workers than in the parent.
 export -f run_one append_capped strip_root
-export NURLC RUNTIME OUTDIR WORKDIR SCRIPT_DIR ROOT_DIR CLANG LINK_LIBS
+export NURLC RUNTIME OUTDIR WORKDIR SCRIPT_DIR ROOT_DIR CLANG LINK_LIBS TIMEOUT_CMD OPAQUE_FLAGS
 export MAX_OUT_LINES TIMEOUT UPDATE
 
 # ── collect the test set ────────────────────────────────────────

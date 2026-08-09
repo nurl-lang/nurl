@@ -1,0 +1,10 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+symlink_created=T
+lstat_type=3
+star: 2 a.nu b.nu
+literal: 1 a.nu
+nested: 1 deep.nu
+doublestar: 3 a.nu b.nu deep.nu

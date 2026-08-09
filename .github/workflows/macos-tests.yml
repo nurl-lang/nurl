@@ -1,0 +1,176 @@
+name: macos-tests
+
+# Runs the FULL macOS host path — ./build.sh bootstrap fixed point + the
+# per-test golden corpus (compiler/tests/run_tests.sh) — on a real Apple
+# Silicon runner.
+#
+# This is what backs docs/PLATFORMS.md's macOS tier. Before it, macOS was
+# tier 3: "expected to build from source with Homebrew LLVM; unverified".
+# Expected-to-build is a claim nobody had checked, and the two host legs
+# that DID have CI (Linux, FreeBSD) share a heritage macOS does not —
+# both are GNU-ld-family linkers, both ship timeout(1). Neither gap was
+# visible from a Linux runner:
+#
+#   * `-Wl,--as-needed` is GNU ld / lld spelling. Apple's ld64 does not
+#     ignore an unknown flag, it errors — so every link in build.sh and
+#     nurl.sh failed on the first line. ld64 spells the same intent
+#     -dead_strip_dylibs.
+#   * run_tests.sh's hang watchdog is `timeout -k`, which macOS ships
+#     under no name at all (Homebrew coreutils calls it gtimeout).
+#   * the toolchain's "is this clang new enough" gate read the major
+#     version out of `clang --version`, which on macOS reports Apple's
+#     own numbering — `Apple clang 15` is not LLVM 15, and Xcode 15.4's
+#     clang cannot parse nurlc's IR at all. The gate passed it anyway.
+#     Now a capability probe decides, and the diagnostic names Homebrew
+#     LLVM instead of leaking an LLVM parse error about a .ll file the
+#     user never wrote.
+#
+# The corpus runs against the SAME compiler/tests/outputs/ goldens as
+# Linux and FreeBSD — deliberately. A separate outputs-macos/ tree would
+# make a macOS-only miscompile look like a platform difference, which is
+# exactly the failure mode the Windows goldens have to live with. If a
+# golden genuinely cannot hold on Darwin, the test declares the
+# requirement it needs in its own source (compiler/tests/test_skips.sh)
+# and is skipped by capability, not pinned to a divergent expectation.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# macOS runners are the scarcest minutes in the repo; do not leave a
+# superseded run burning them.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  changes:
+    name: classify changed paths
+    runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.filter.outputs.code }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      # Same shape as ci.yml and windows-tests.yml, and for the same
+      # reason recorded there: the skip is an `if:` on the job rather
+      # than a workflow-level `paths-ignore`, because a skipped job still
+      # satisfies a branch-protection required check while a
+      # path-filtered workflow that never starts would leave a docs-only
+      # PR blocked forever.
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            code:
+              - '!webdocs/**'
+
+  macos:
+    needs: changes
+    # On a push or a manual dispatch there is no PR base to diff
+    # against, so the filter has nothing to say — run. On a PR, skip a
+    # docs-only change rather than spend macOS minutes on it.
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.code == 'true' }}
+    # Apple Silicon only, and that is a capacity fact rather than a
+    # preference. This started as a matrix with `macos-13` (the last
+    # Intel image) as its second leg; across ten runs that job never once
+    # left the queue — twenty-plus minutes each time, then cancelled by
+    # the next push. As a required check it would block every PR forever,
+    # which is worse than not claiming the arch at all: a gate people
+    # learn to ignore is not a gate. docs/PLATFORMS.md therefore lists
+    # macOS ARM64 as tier 1 and macOS x86_64 as tier 3, which is what is
+    # actually true. Restore the leg when Intel capacity comes back.
+    name: build + bootstrap fixed point + test corpus (arm64)
+    runs-on: macos-14
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install build deps
+        # Homebrew LLVM, not Xcode's clang — the configuration
+        # docs/BUILDING.md has always told macOS users to set up, now
+        # gated rather than assumed.
+        #
+        # The first version of this job tried Xcode's clang instead, on
+        # the reasoning that it is what a Mac already has. Measured, it
+        # cannot build NURL at all: Xcode 15.4 ships `Apple clang
+        # version 15.0.0`, whose IR parser rejects the mixed `i8*`/`ptr`
+        # module nurlc emits, and rejects it even under -Xclang
+        # -opaque-pointers. Apple's version numbers are not upstream
+        # LLVM's, so "clang 15" there is not LLVM 15. The build now says
+        # exactly that instead of leaking an LLVM parse error; this job
+        # gates the path that does work.
+        #
+        # coreutils is for gtimeout — run_tests.sh's hang watchdog. It
+        # degrades to running unbounded without one, which on a CI
+        # runner means a hung test burns the full 90 minutes instead of
+        # failing a test, so it is a hard dependency here even though
+        # the runner tolerates its absence.
+        run: |
+          brew install llvm coreutils pkg-config sqlite zstd
+          echo "CLANG=$(brew --prefix llvm)/bin/clang" >> "$GITHUB_ENV"
+          "$(brew --prefix llvm)/bin/clang" --version
+          echo "gtimeout: $(command -v gtimeout || echo MISSING)"
+
+      - name: ./build.sh (stage1 ≡ stage2 fixed point + run_tests.sh)
+        # build.sh prints "BUILD SUCCESS & TESTS PASSED" only when the
+        # bootstrap fixed point holds AND the corpus baseline matches;
+        # any failure surfaces the relevant diff itself, so there is
+        # nothing to grep for here.
+        #
+        # $CLANG comes from GITHUB_ENV above and is read by build.sh,
+        # run_tests.sh and nurl.sh alike — the three places that each
+        # resolve their own compiler.
+        env:
+          # Keg-only formulae: brew does not link sqlite/zstd into the
+          # default prefix, so build.sh's pkg-config probes miss them
+          # and the corresponding ext/ modules quietly fall back to
+          # their *_Unsupported variants — a green run that tested
+          # less than it looks like it did. Both brew prefixes are
+          # listed so the step keeps working if an Intel leg
+          # (/usr/local rather than /opt/homebrew) is restored.
+          PKG_CONFIG_PATH: /opt/homebrew/opt/sqlite/lib/pkgconfig:/opt/homebrew/opt/zstd/lib/pkgconfig:/usr/local/opt/sqlite/lib/pkgconfig:/usr/local/opt/zstd/lib/pkgconfig
+        run: ./build.sh
+
+      # ── The DRIVER, which build.sh does not exercise ───────────────
+      # build.sh links the toolchain; nurl.sh is what a USER runs to
+      # build a program, and it carries its own copy of the link line —
+      # which is how the --as-needed break could have been fixed in
+      # build.sh alone and still shipped broken to every macOS user.
+      # Import a wide surface so the link covers more than core/io.
+      - name: nurl.sh builds and runs a program
+        run: |
+          mkdir -p "smoke dir"
+          cat > "smoke dir/s.nu" <<'NU'
+          $ `stdlib/core/io.nu`
+          $ `stdlib/core/string.nu`
+          $ `stdlib/core/vec.nu`
+          $ `stdlib/std/time.nu`
+          $ `stdlib/std/fs.nu`
+          $ `stdlib/std/net.nu`
+          $ `stdlib/std/process.nu`
+          $ `stdlib/std/term.nu`
+          $ `stdlib/std/path.nu`
+          $ `stdlib/ext/http.nu`
+          $ `stdlib/ext/env.nu`
+          @ main → i {
+          ? > ( now_ms ) 0 { ( nurl_print `ok` ) } { ( nurl_print `bad-clock` ) }
+          ^ 0
+          }
+          NU
+          ./nurl.sh "smoke dir/s.nu" "smoke dir/s"
+          out="$("smoke dir/s")"
+          [ "$out" = "ok" ] || { echo "unexpected output: $out" >&2; exit 1; }
+          echo "driver OK"
+
+      - name: examples corpus frontend gate
+        # Frontend-only, so it costs seconds and cannot depend on
+        # platform libraries — but it does depend on the compiler, and
+        # a macOS-specific frontend break would otherwise only surface
+        # in whichever corpus test happened to touch it.
+        run: ./tools/check_examples.sh

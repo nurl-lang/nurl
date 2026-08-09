@@ -8,7 +8,74 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **macOS is a host platform CI actually checks (Apple Silicon, tier 1).**
+  `docs/PLATFORMS.md` used to say macOS was "expected to build from
+  source with Homebrew LLVM; unverified". Expected-to-build was a claim
+  nobody had run, and running it found five real defects — four of them
+  invisible from Linux and FreeBSD, because those two share a heritage
+  macOS does not (GNU-ld-family linkers, `timeout(1)` in base).
+
+  The new `macos-tests` workflow runs the full host path on every push to
+  `main` and every PR: `./build.sh` (bootstrap fixed point + the corpus),
+  the `nurl.sh` driver end to end, and the examples gate. The corpus runs
+  against the **same** `compiler/tests/outputs/` goldens as Linux and
+  FreeBSD rather than a divergent `outputs-macos/` tree, so a macOS-only
+  miscompile cannot hide as a platform difference: 641 of 641.
+
+  Apple Silicon only. `macos-13`, GitHub's last Intel image, never left
+  the queue across ten runs, and a required check that cannot schedule
+  blocks every PR — so macOS x86_64 stays tier 3 rather than being
+  claimed on a gate that never reports.
+
 ### Fixed
+
+- **Five defects the macOS leg found, three of which were never about
+  macOS.** Bringing the platform under CI turned up:
+
+  * **`fcntl`, `open` and `ioctl` were declared fixed-arity** though all
+    three are variadic in C. x86-64 SysV and Linux AAPCS64 pass variadic
+    arguments in the same registers as fixed ones, so the wrong
+    declaration is indistinguishable from the right one there; Apple's
+    arm64 convention passes them on the *stack*. So
+    `fcntl(fd, F_SETFD, FD_CLOEXEC)` set some other value, silently:
+    `__set_cloexec` did nothing, the exec-errno pipe's write end survived
+    `execvp`, and `process_spawn` waited forever for an EOF that could
+    not come — while `__set_nonblock`, the same call, left sockets
+    blocking so every async server stalled its worker thread instead of
+    parking on the reactor. Ten corpus failures, one wrong arity. The
+    `...` marker (already used by `ext/sqlite.nu` for exactly this
+    reason) now says so.
+  * **aarch64 and riscv64 hosts ran fibers on `ucontext`.** The backend
+    gate named `NURL_CTX_X86_64` alone, so two ISAs whose context switch
+    `runtime_ctx.c` has long provided — and whose AArch64 backend passes
+    the unikernel gate in CI — fell through to the libc path. Harmless
+    on glibc, fatal on Apple's deprecated arm64 `makecontext`. Both gates
+    now ask one name, `NURL_CTX_AVAILABLE`, defined where the coverage is
+    decided.
+  * **`fs_glob` would not descend a symlinked directory.** `glob(3)`
+    resolves links in intermediate components; the helpers were using the
+    lstat-based classifier that `dir_remove_all` needs (so an `rm -rf`
+    cannot follow a link out of its tree) and rejecting type 3. macOS
+    made it total — `/tmp` is a symlink there — but it reproduces on
+    Linux, which is what `fs_glob_symlink.nu` pins.
+  * **The "is this clang new enough" gate read a version string.** Apple
+    numbers its releases independently, so `Apple clang 15` passed a
+    check meant to admit LLVM 15 and then failed inside LLVM's IR parser,
+    naming our bootstrap snapshot for what is a toolchain problem. A
+    capability probe decides now, and names Homebrew LLVM in the cure.
+  * **`-Wl,--as-needed` reached Apple's ld64**, which errors on an
+    unknown flag rather than ignoring it. `-dead_strip_dylibs` is the
+    same intent, picked by `uname` in both `build.sh` and `nurl.sh` —
+    both, because the driver carries its own link line.
+
+  Supporting plumbing: `run_tests.sh` resolves `timeout`/`gtimeout`
+  rather than assuming the former, and `build.sh` exports the compiler
+  and link flags it resolves so `split_equivalence.sh` and the
+  `tools/*/build.sh` scripts stop each working them out again — that
+  drift is how a run reached for the system Apple clang in the middle of
+  a Homebrew-LLVM build.
 
 - **The scalar-agreement sweep: nine ways a wrong-typed value slid
   through a call, and the boundaries around it.** Found live via the

@@ -24,11 +24,25 @@ PowerShell, or Git Bash all work.
 
 **Linux (Fedora/RHEL)** — `sudo dnf install clang`
 
-**macOS** — `brew install llvm`, then add it to `PATH`. Note: macOS host
-builds are not covered by CI (see [`PLATFORMS.md`](PLATFORMS.md)):
+**macOS** — `brew install llvm`, then put it ahead of Xcode's clang:
 ```sh
 export PATH="$(brew --prefix llvm)/bin:$PATH"   # add to ~/.zshrc to persist
 ```
+Homebrew's LLVM is **required**, not a preference. Xcode's clang cannot
+build NURL: `Apple clang version 15.0.0` (Xcode 15.4) is not upstream
+LLVM 15 — Apple numbers its releases independently — and its IR parser
+rejects the mix of `i8*` and `ptr` that `nurlc` emits, with or without
+`-opaque-pointers`. The build detects this by probing the compiler and
+stops with this instruction rather than leaking an LLVM parse error
+about a `.ll` file you never wrote. If you keep Xcode's clang first on
+`PATH`, point the build at Homebrew's explicitly instead:
+```sh
+export CLANG="$(brew --prefix llvm)/bin/clang"
+```
+Also `brew install coreutils` — the test runner's hang watchdog is
+`timeout(1)`, which macOS ships under no name (Homebrew installs it as
+`gtimeout`, which the runner looks for). macOS host builds are covered
+by CI on both Apple Silicon and Intel; see [`PLATFORMS.md`](PLATFORMS.md).
 
 **FreeBSD** — the base system already ships `clang`; `build.sh` needs `bash`
 (`pkg install -y bash`), plus `pkgconf` + `sqlite3` for the SQLite FFI tests.

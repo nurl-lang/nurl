@@ -502,6 +502,12 @@ $ `stdlib/core/posix.nu`  // open / lseek / mmap / munmap + posix_const
 // linked). nurl_path_type: 0 missing, 1 file, 2 dir, 3 symlink, 4 other.
 & `c` @ nurl_path_type s path → i
 
+// The same classification FOLLOWING symlinks (stat, not lstat), so a link
+// to a directory answers 2 and can be descended. glob(3) resolves links in
+// intermediate path components, so the glob helpers below use this one;
+// dir_remove_all deliberately keeps the unlinked answer above.
+& `c` @ nurl_path_type_follow s path → i
+
 // ── nurl_file_* via libc stdio ─────────────────────────────────────
 // fopen / fclose / fputs / fwrite / fputc / fread / feof come from
 // the nurlc preamble (globally declared). Handles are *v throughout.
@@ -1041,7 +1047,7 @@ $ `stdlib/core/posix.nu`  // open / lseek / mmap / munmap + posix_const
                         ? ( __fnmatch_seg seg ( string_data name ) ) {
                             : String full ( _glob_join base ( string_data name ) )
                             ? dirs_only {
-                                ? == 2 ( nurl_path_type ( string_data full ) )
+                                ? == 2 ( nurl_path_type_follow ( string_data full ) )
                                 { ( vec_push [String] acc full ) }
                                 { ( string_free full ) }
                             } {
@@ -1077,7 +1083,7 @@ $ `stdlib/core/posix.nu`  // open / lseek / mmap / munmap + posix_const
                         // '**' does not descend into dotfile dirs.
                         ? != ( nurl_str_get ( string_data name ) 0 ) 46 {
                             : String full ( _glob_join base ( string_data name ) )
-                            ? == 2 ( nurl_path_type ( string_data full ) )
+                            ? == 2 ( nurl_path_type_follow ( string_data full ) )
                             { ( __glob_walk_dirs acc ( string_data full ) ) } {}
                             ( string_free full )
                         } {}
@@ -1152,10 +1158,17 @@ $ `stdlib/core/posix.nu`  // open / lseek / mmap / munmap + posix_const
                     ? ( __glob_has_meta seg ) {
                         ( __glob_expand_seg next base seg ! is_last )
                     } {
-                        // literal segment: extend if the path exists
+                        // literal segment: extend if the path exists.
+                        // The two tests ask different questions, so they
+                        // use different classifiers. A FINAL segment only
+                        // has to exist as an entry — unlinked, so a
+                        // dangling symlink still matches, as glob(3) has
+                        // it. An INTERMEDIATE segment has to be something
+                        // we can descend, which follows links.
                         : String full ( _glob_join base seg )
                         : i ty ( nurl_path_type ( string_data full ) )
-                        ? | & is_last > ty 0 & ! is_last == ty 2
+                        : i tyf ( nurl_path_type_follow ( string_data full ) )
+                        ? | & is_last > ty 0 & ! is_last == tyf 2
                         { ( vec_push [String] next full ) }
                         { ( string_free full ) }
                     }
