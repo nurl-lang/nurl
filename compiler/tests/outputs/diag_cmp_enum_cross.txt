@@ -1,0 +1,6 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_cmp_enum_cross.nu:11:14: error: '==' between two DIFFERENT enums: left is 'Color', right is 'Fruit' — two enums are distinct nominal types even when their tags overlap; equality between them would compare unrelated variant sets. Compare values of one enum, or match each with '??'.
+    ? == c x { ^ 1 } {}
+             ^
+error: aborting due to 1 previous error

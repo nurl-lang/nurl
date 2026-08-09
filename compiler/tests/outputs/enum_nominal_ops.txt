@@ -1,0 +1,12 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+eq_variant
+ne_variant
+eq_same_enum
+eq_call_lhs_variant
+join_assign
+join_init
+join_ret
+match_green
