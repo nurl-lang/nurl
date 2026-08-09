@@ -1539,6 +1539,31 @@ long long nurl_path_type(const char *path) {
     return 4;
 }
 
+/* Same classification, following symlinks — stat(2) rather than lstat(2),
+ * so a link to a directory answers 2 and the caller can descend it. Never
+ * returns 3: stat resolves the link, and a dangling one is 0.
+ *
+ * The lstat spelling above is deliberate and must stay: dir_remove_all
+ * classifies with it precisely so an `rm -rf` can never follow a link out
+ * of the tree it was handed. But glob(3) has the opposite rule — an
+ * intermediate path component follows links — and using the unlinked
+ * answer there makes a symlinked directory undescendable.
+ *
+ * That was invisible on Linux and total on macOS, because /tmp there is a
+ * symlink to private/tmp: the fs_glob corpus test rooted its tree under
+ * /tmp, so the FIRST segment of every absolute pattern classified as 3,
+ * failed the `== 2` descend test, and emptied the frontier. All nine
+ * patterns returned zero matches, including the literal one with no
+ * metacharacter in it. */
+long long nurl_path_type_follow(const char *path) {
+    struct stat st;
+    if (!path) return 0;
+    if (stat(path, &st) != 0) return 0;
+    if (S_ISDIR(st.st_mode)) return 2;
+    if (S_ISREG(st.st_mode)) return 1;
+    return 4;
+}
+
 /* ── §9  Memory allocation ─────────────────────────────────────── */
 
 /* Count of NURL-level allocations (every nurl_alloc / nurl_zalloc —
