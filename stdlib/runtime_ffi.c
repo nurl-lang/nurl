@@ -2862,7 +2862,7 @@ void      nurl_runtime_shutdown(void);
  * §25 (reactor) tests NURL_HAVE_FIBERS, so the two gates cannot drift
  * apart the way two spelled-out conditions did. */
 #if !defined(__wasi__) && !defined(_WIN32)
-#  if defined(NURL_CTX_X86_64)
+#  if defined(NURL_CTX_AVAILABLE)
 #    define NURL_HAVE_FIBERS   1
 #    define NURL_FIBER_OWN_CTX 1
 #  elif defined(__GLIBC__) || defined(__APPLE__) || defined(__FreeBSD__) || defined(__NetBSD__) || defined(__DragonFly__)
