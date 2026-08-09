@@ -397,6 +397,24 @@
     ^ # s ( nurl_strdup t )
 }
 
+// Copy of `t` with every space removed. Different lowering paths spell
+// the same function-aggregate type with different whitespace
+// (`{ void(i8*)*, i8* }` vs `{ void (i8*)*, i8* }`), so the closure
+// comparison below must be whitespace-blind.
+@ __strip_spaces s t → s {
+    : i n ( nurl_str_len t )
+    : ~ s out ``
+    : ~ i p 0
+    ~ < p n {
+        : i c ( nurl_str_get t p )
+        ? != c 32
+        { = out ( nurl_str_cat out ( nurl_str_slice t p 1 ) ) }
+        {}
+        = p + p 1
+    }
+    ^ out
+}
+
 @ parse_type i lex → s {
     : i tt ( nurl_lex_type lex )
     ? == tt TT_STAR { ^ ( parse_type_ptr lex ) } {}
@@ -2627,6 +2645,21 @@
         { ( die lex ( nurl_str_cat ( nurl_str_cat4
             `return value type '` ( llvm_to_nurl lt ) `' does not match the declared return type '` ( llvm_to_nurl fn_rt ) )
             `' — a float width widens into a BINDING (': f x f32val' is fine), but a return type is a contract and must match exactly. Convert with '# f expr' (widen, lossless) or '# f32 expr' (narrow).` ) ) }
+        {}
+        // Anonymous/function AGGREGATE spelling mismatch — `^ @ ? f { T x }`
+        // out of a `→ ?i` function (`ret { i1, double }` from a
+        // `{ i1, i64 }` one: invalid IR only the LLVM verifier saw, three
+        // build stages later), or a closure returned from a fn whose
+        // declared `(@ …)` return has a different signature (that one
+        // ASSEMBLES — and every later invoke reinterprets its arguments).
+        // Compared whitespace-blind: the spellings' spacing is not
+        // canonical across lowering paths.
+        ? & & == ( nurl_str_get ( nurl_llty lt ) 0 ) 123
+        == ( nurl_str_get ( nurl_llty fn_rt ) 0 ) 123
+        ! ( seq ( __strip_spaces ( nurl_llty lt ) ) ( __strip_spaces ( nurl_llty fn_rt ) ) )
+        { ( die lex ( nurl_str_cat ( nurl_str_cat4
+            `return value type '` ( nurl_llty lt ) `' does not match the declared return type '` ( nurl_llty fn_rt ) )
+            `' — the payload/signature inside the aggregate differs, and NURL has no implicit conversions between option/result/slice/closure shapes. Construct the declared shape ('@ ? i { T … }' for '→ ?i'), or fix the declaration.` ) ) }
         {}
         // Return the wrong named struct by value (the return-position dual of
         // the call-site struct check): `^ b` from a `→ A` fn where b is a B.
@@ -5911,6 +5944,25 @@
     ``
 }
 
+// Copy of `src` with every space-separated word equal to `from`
+// replaced by `to`. Used by the generic call path to substitute a
+// tparam into a parameter's SOURCE spelling wherever it appears —
+// including inside a compound like `( Box T )`, which the former
+// whole-word compare could not reach.
+@ __subst_word s src s from s to → s {
+    : ~ s out ``
+    : ~ s rest ( nurl_str_cat src `` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s w ( str_first_word rest )
+        = rest ( str_skip_word rest )
+        : s rw ? ( seq w from ) to w
+        = out ? == 0 ( nurl_str_len out )
+        ( nurl_str_cat rw `` )
+        ( nurl_str_cat3 out ` ` rw )
+    }
+    ^ out
+}
+
 // The float dual of src_int_ty: map a SOURCE- or LLVM-spelling scalar
 // to its LLVM float type, `` when the token is not float-family. Used
 // by the same call-argument agreement path.
@@ -5970,16 +6022,61 @@
 // binding would never free the coerced pair (LSan caught exactly that).
 // Pointer-typed arguments are left alone: the pointer-vs-value checks
 // and the FFI inttoptr/ptrtoint paths own that territory.
-@ __call_arg_scalar i lex i cg s fname i arg_idx s psrc s at s av → s {
+@ __call_arg_scalar i lex i syms i cg s fname i arg_idx s psrc s at s av → s {
     ? == 0 ( nurl_str_len psrc ) { ^ ( nurl_str_cat `` `` ) } {}
     : s want_i ( src_int_ty psrc )
     : s want_f ( src_float_ty psrc )
-    ? & == 0 ( nurl_str_len want_i ) == 0 ( nurl_str_len want_f ) { ^ ( nurl_str_cat `` `` ) } {}
     : s at_ll ( nurl_llty at )
-    ? ( is_ptr_ty at_ll ) { ^ ( nurl_str_cat `` `` ) } {}
     : b have_f ( is_float_ty at_ll )
     : ~ i hw ( int_width at )
     ? == hw 0 { = hw ( int_width ( src_int_ty at ) ) } {}
+    // Enums are NOMINAL: an i64 under the hood, but the set of legal
+    // values is the variant list, so no numeric value converts in and
+    // the tag does not convert out. Before these checks a float slid in
+    // as a mismatched call register (`call i64 @show(double …)` — the
+    // t4_type shape again), an integer slid in as an out-of-range "tag"
+    // (`( show 7 )` against three variants), and an enum slid OUT into a
+    // numeric parameter as `call @f(%Color …)` — a struct where the
+    // callee reads a scalar register.
+    : ~ s at_enum ``
+    ? == ( nurl_str_get at_ll 0 ) 37 {
+        : s __aen ( nurl_str_slice at_ll 1 - ( nurl_str_len at_ll ) 1 )
+        ? != 0 ( nurl_sym_len2 syms __aen `__variants` ) { = at_enum ( nurl_str_cat __aen `` ) } {}
+    } {}
+    ? & & == 0 ( nurl_str_len want_i ) == 0 ( nurl_str_len want_f )
+    != 0 ( nurl_sym_len2 syms psrc `__variants` )
+    {  // Enum-declared parameter.
+        ? != 0 ( nurl_str_len at_enum ) {
+            ? ( seq at_enum psrc ) { ^ ( nurl_str_cat `` `` ) } {}
+            ( die lex ( nurl_str_cat3
+            ( nurl_str_cat4 `argument ` ( nurl_str_int + arg_idx 1 ) ` to '` fname )
+            ( nurl_str_cat4 `' has enum type '` at_enum `' but the parameter is declared enum '` psrc )
+            `' — two enums are distinct nominal types even when their tags overlap; the callee would read this value's tag as the OTHER enum's variants. Pass a variant of the declared enum.` ) ) }
+        {}
+        ? | > hw 0 have_f
+        {  // A bare tag-only VARIANT of the declared enum evaluates to its
+            // i64 tag — that is the legal way to pass one. Only reject a
+            // numeric value that is not spelled as a variant name.
+            : s __vident ( nurl_sym_get syms `__last_ident_name__` )
+            ? & & > hw 0 != 0 ( nurl_str_len __vident )
+            ( str_contains_word ( nurl_sym_get2 syms psrc `__variants` ) __vident )
+            { ^ ( nurl_str_cat `` `` ) }
+            {}
+            ( die lex ( nurl_str_cat3
+            ( nurl_str_cat4 `argument ` ( nurl_str_int + arg_idx 1 ) ` to '` fname )
+            ( nurl_str_cat4 `' has numeric type '` ( llvm_to_nurl at_ll ) `' but the parameter is declared enum '` psrc )
+            `' — an enum is a closed set of named variants, and no number converts into one implicitly (the value could name no variant at all). Pass a variant by name (e.g. the enum's first variant), or change the parameter to a numeric type.` ) ) }
+        {}
+        ^ ( nurl_str_cat `` `` )
+    } {}
+    ? & != 0 ( nurl_str_len at_enum ) | != 0 ( nurl_str_len want_i ) != 0 ( nurl_str_len want_f )
+    { ( die lex ( nurl_str_cat3
+        ( nurl_str_cat4 `argument ` ( nurl_str_int + arg_idx 1 ) ` to '` fname )
+        ( nurl_str_cat4 `' has enum type '` at_enum `' but the parameter is declared '` psrc )
+        `' — an enum's tag is not a number without an explicit conversion; the emitted call would pass the whole enum value where the callee reads a scalar register. Convert intentionally with '# i x', or declare the parameter to take the enum.` ) ) }
+    {}
+    ? & == 0 ( nurl_str_len want_i ) == 0 ( nurl_str_len want_f ) { ^ ( nurl_str_cat `` `` ) } {}
+    ? ( is_ptr_ty at_ll ) { ^ ( nurl_str_cat `` `` ) } {}
     ? & != 0 ( nurl_str_len want_f ) > hw 0
     { ( die lex ( nurl_str_cat3
         ( nurl_str_cat4 `argument ` ( nurl_str_int + arg_idx 1 ) ` to '` fname )
@@ -6093,7 +6190,7 @@
     : s __kdroster ( nurl_sym_get2 syms fname `__ptypes_src` )
     ? != 0 ( nurl_str_len __kdroster ) {
         : s __kdpsrc ( __kw_trim ( __ptypes_nth __kdroster k ) )
-        : s __kdsc ( __call_arg_scalar lex cg fname k __kdpsrc __kdt __kdv )
+        : s __kdsc ( __call_arg_scalar lex syms cg fname k __kdpsrc __kdt __kdv )
         ? != 0 ( nurl_str_len __kdsc ) {
             = __kdt ( str_first_word __kdsc )
             = __kdv ( str_skip_word __kdsc )
@@ -6158,7 +6255,7 @@
                     : s __kwpllvm ( parse_type __kwplx )
                     ( nurl_lex_free __kwplx )
                     ( __arg_param_checks lex fname slot at __kwpllvm )
-                    : s __ksc ( __call_arg_scalar lex cg fname slot __kwpsrc at av )
+                    : s __ksc ( __call_arg_scalar lex syms cg fname slot __kwpsrc at av )
                     ? != 0 ( nurl_str_len __ksc ) {
                         = at ( str_first_word __ksc )
                         = av ( str_skip_word __ksc )
@@ -6323,24 +6420,6 @@
     : s pt_ll ( nurl_llty pt )
     ? | ( __is_named_agg at_ll ) ( __is_named_agg pt_ll ) { ^ F } {}
     ^ != ( is_ptr_ty at_ll ) ( is_ptr_ty pt_ll )
-}
-
-// Copy of `t` with every space removed. Different lowering paths spell
-// the same function-aggregate type with different whitespace
-// (`{ void(i8*)*, i8* }` vs `{ void (i8*)*, i8* }`), so the closure
-// comparison below must be whitespace-blind.
-@ __strip_spaces s t → s {
-    : i n ( nurl_str_len t )
-    : ~ s out ``
-    : ~ i p 0
-    ~ < p n {
-        : i c ( nurl_str_get t p )
-        ? != c 32
-        { = out ( nurl_str_cat out ( nurl_str_slice t p 1 ) ) }
-        {}
-        = p + p 1
-    }
-    ^ out
 }
 
 // Both spellings are closure/function aggregates (`{ <ret> (<params>…)*,
@@ -7131,7 +7210,7 @@
                     // clang assembled and the callee misread). Returns ``
                     // when it neither died nor coerced — the pointer cases,
                     // which the inttoptr/ptrtoint branches below own.
-                    : s __fsc ( __call_arg_scalar lex cg fname arg_idx __want at av )
+                    : s __fsc ( __call_arg_scalar lex syms cg fname arg_idx __want at av )
                     ? != 0 ( nurl_str_len __fsc ) {
                         = at ( str_first_word __fsc )
                         = av ( str_skip_word __fsc )
@@ -7190,15 +7269,33 @@
                             = __tpr ( str_skip_word __tpr )
                             : s __ta ( str_first_word __tar )
                             = __tar ( str_skip_word __tar )
-                            ? ( seq __psrc __tp ) { = __psrc __ta } {}
+                            // Tokenwise, not whole-word: a tparam INSIDE a
+                            // compound spelling (`( Box T )` → `( Box i )`)
+                            // must substitute too, or the inout receiver
+                            // check below sees an uncomparable template.
+                            = __psrc ( __subst_word __psrc __tp __ta )
                         }
                     } {}
-                    // Non-generic callees only: the whole-word substitution
-                    // above does not reach a tparam INSIDE a compound
-                    // spelling (`( Stack T )` stays unsubstituted), and
-                    // parse_type on that would fabricate a false clash for
-                    // every generic inout receiver.
-                    ? & is_inout_arg ( seq call_name fname ) {
+                    // Generic callees included: the tokenwise substitution
+                    // above reaches tparams inside compound spellings
+                    // (`( Box T )` → `( Box i )`), so a generic inout
+                    // receiver compares like a concrete one — `( put [i]
+                    // bf 3 )` with bf: (Box f) used to emit `call
+                    // @put__i64(%Box__f64* …)` and the callee rewrote the
+                    // caller's double field with an i64. Belt-and-braces:
+                    // if any tparam survives in __psrc (an arity edge the
+                    // substitution walk missed), skip rather than
+                    // parse_type a template spelling into a false clash.
+                    : ~ b __io_sub_ok T
+                    ? ! ( seq call_name fname ) {
+                        : ~ s __tpr2 ( nurl_sym_get2 g_generic_syms fname `__tparams` )
+                        ~ != 0 ( nurl_str_len __tpr2 ) {
+                            : s __tp2 ( str_first_word __tpr2 )
+                            = __tpr2 ( str_skip_word __tpr2 )
+                            ? ( str_contains_word __psrc __tp2 ) { = __io_sub_ok F } {}
+                        }
+                    } {}
+                    ? & is_inout_arg __io_sub_ok {
                         // An `inout` argument passes the binding's ADDRESS,
                         // so the binding's type must equal the declared
                         // parameter type EXACTLY — there is no register to
@@ -7223,7 +7320,7 @@
                             {}
                         } {}
                     } {
-                        : s __nsc ( __call_arg_scalar lex cg fname arg_idx __psrc at av )
+                        : s __nsc ( __call_arg_scalar lex syms cg fname arg_idx __psrc at av )
                         ? != 0 ( nurl_str_len __nsc ) {
                             = at ( str_first_word __nsc )
                             = av ( str_skip_word __nsc )
@@ -14750,16 +14847,28 @@
                             = actual_fty `i64`
                         }
                     }
-                    ? ( seq fty `double` )
-                    {  // double → i64 via bitcast (payload slot is i64).
-                        // The receiving ?? match arm does the inverse via
-                        // bitcast i64→double when reconstructing the value.
-                        : s db_bc ( nurl_cg_reg cg )
-                        ( nurl_print `  ` ) ( nurl_print db_bc )
-                        ( nurl_print ` = bitcast double ` ) ( nurl_print fval )
-                        ( nurl_print ` to i64\n` )
-                        = actual_fval db_bc
-                        = actual_fty `i64`
+                    ? ( is_float_ty ( nurl_llty fty ) )
+                    {  // Float value into the payload slot: legal ONLY when
+                        // the declared payload is float-family (width-bridge
+                        // it) or the i64 box of a NURL-typed slot whose
+                        // reader bitcasts back (payload_ty i64 with the
+                        // recorded NURL payload type also `f` — the `! f E`
+                        // shape; its ?? arm reconstructs via bitcast). A
+                        // float into a genuinely-INTEGER payload (`@ ? i
+                        // { T 1.5 }`) used to bitcast 1.5's BITS into the
+                        // slot — the match arm then read 4609434218613702656,
+                        // silently.
+                        : s __pfl ( src_float_ty payload_ty )
+                        ? != 0 ( nurl_str_len __pfl )
+                        { ? ( seq ( nurl_llty fty ) __pfl )
+                            {}  // exact match handled by payload_matches above; width differs:
+                            { : s __fw ( __emit_fwiden cg fval ( nurl_llty fty ) __pfl )
+                                = actual_fval __fw
+                                = actual_fty ( nurl_str_cat payload_ty `` ) } }
+                        { ( die lex ( nurl_str_cat3
+                            ( nurl_str_cat `payload of this option/result literal has float type '` ( llvm_to_nurl ( nurl_llty fty ) ) )
+                            ( nurl_str_cat3 `' but the declared payload type is '` ( llvm_to_nurl payload_ty ) `' — NURL has no implicit float↔integer conversions` )
+                            `; storing the bits anyway would make the '??' match arm read the float's raw bit pattern as an integer. Convert explicitly ('# i expr' truncates toward zero), or declare the payload 'f'.` ) ) }
                     }
                     {  // Integer payload whose width differs from the value's.
                         // For `! T E` the payload slot is always i64, so an
@@ -14784,7 +14893,17 @@
                             ( nurl_print `\n` )
                             = actual_fval __cv
                             = actual_fty payload_ty }
-                        {  // payload_ty is not an int. The one remaining
+                        {  // Integer value into a FLOAT payload (`@ ? f
+                            // { T 3 }`) — the dual of the float→int die
+                            // above; the raw insertvalue was invalid IR
+                            // only clang reported.
+                            ? & > __vw 0 ( is_float_ty ( nurl_llty payload_ty ) )
+                            { ( die lex ( nurl_str_cat3
+                                ( nurl_str_cat `payload of this option/result literal has integer type '` ( llvm_to_nurl ( nurl_llty fty ) ) )
+                                ( nurl_str_cat3 `' but the declared payload type is '` ( llvm_to_nurl payload_ty ) `' (a float) — NURL has no implicit integer↔float conversions` )
+                                `. Write the payload as a float ('2.0', not '2'), or convert with '# f expr'.` ) ) }
+                            {}
+                            // payload_ty is not an int. The one remaining
                             // shape is an OPTION whose payload is a named
                             // enum (`? E`, payload field `%E`) carrying a
                             // bare no-payload variant — which evaluates to
@@ -15504,10 +15623,29 @@
         // rejected.
         : b csv_agg & > ( int_width from_ty ) 0
         == ( nurl_str_get ( nurl_llty to_ty ) 0 ) 123
-        ? | | != csv_sf csv_tf & ( is_ptr_ty from_ty ) ! ( is_ptr_ty to_ty ) csv_agg
+        // Two anonymous/function aggregates spelled differently — a
+        // `{ i1, double }` option bound to a ': ?i' declaration, or a
+        // '(@ f f)' closure bound to '(@ i i)'. The store is invalid IR
+        // for the option shapes (only clang saw it), and for closures it
+        // ASSEMBLES — every later invoke then reinterprets its arguments.
+        // Whitespace-blind: aggregate spacing is not canonical.
+        : b csv_agg2 & & == ( nurl_str_get ( nurl_llty from_ty ) 0 ) 123
+        == ( nurl_str_get ( nurl_llty to_ty ) 0 ) 123
+        ! ( seq ( __strip_spaces ( nurl_llty from_ty ) ) ( __strip_spaces ( nurl_llty to_ty ) ) )
+        // An aggregate value into a plain scalar binding (`: i x` from an
+        // option/result/slice value) — the legal unwraps all returned
+        // above, so what reaches here would be `store i64 { i1, i64 }…`.
+        : b csv_agg_src & == ( nurl_str_get ( nurl_llty from_ty ) 0 ) 123
+        | > ( int_width ( nurl_llty to_ty ) ) 0 ( is_float_ty ( nurl_llty to_ty ) )
+        // The cure differs by shape: an aggregate value wants '??'
+        // destructuring (or matching shapes), a scalar wants a cast.
+        : s __csv_cure ? | csv_agg2 csv_agg_src
+        `' — NURL has no implicit conversions between differently-shaped aggregates; make the option/result/closure shapes match exactly, or destructure with '??' and bind the payload`
+        `' — NURL has no implicit conversions; use a matching value or convert with '# T expr'`
+        ? | | | | != csv_sf csv_tf & ( is_ptr_ty from_ty ) ! ( is_ptr_ty to_ty ) csv_agg csv_agg2 csv_agg_src
         { ( die_stmt lex ( nurl_str_cat ( nurl_str_cat4
             `value of type '` from_ty `' cannot initialise / assign a binding of type '` to_ty )
-            `' — NURL has no implicit conversions; use a matching value or convert with '# T expr'` ) ) }
+            __csv_cure ) ) }
         {}
     }
     {}

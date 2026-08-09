@@ -1,0 +1,6 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_call_enum_cross_enum.nu:14:16: error: argument 1 to 'show': value of type '%Fruit' passed where parameter expects '%Color' — wrong struct type passed by value (a value of one named type where a different one is declared); the call would silently reinterpret its fields
+    ^ ( show x )
+               ^
+error: aborting due to 1 previous error

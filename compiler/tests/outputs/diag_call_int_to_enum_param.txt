@@ -1,0 +1,6 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_call_int_to_enum_param.nu:12:16: error: argument 1 to 'show' has numeric type 'i' but the parameter is declared enum 'Color' — an enum is a closed set of named variants, and no number converts into one implicitly (the value could name no variant at all). Pass a variant by name (e.g. the enum's first variant), or change the parameter to a numeric type.
+    ^ ( show 7 )
+               ^
+error: aborting due to 1 previous error
