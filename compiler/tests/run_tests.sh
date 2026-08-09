@@ -90,6 +90,20 @@ if ! command -v "$CLANG" &>/dev/null; then
     exit 2
 fi
 
+# Opaque-pointer capability, asked of the compiler rather than inferred
+# from its version string — see the long note in build.sh for why the
+# version number lies on macOS. build.sh has already gated the build on
+# this; here it only needs to reach the per-test link, since a corpus
+# whose every test fails to compile is not a useful diagnosis.
+OPAQUE_FLAGS=""
+_probe_ll="$WORKDIR/.opaque_probe.ll"
+mkdir -p "$WORKDIR"
+printf 'declare void @nurl_opaque_probe(ptr)\n' > "$_probe_ll"
+if ! "$CLANG" -c -x ir "$_probe_ll" -o /dev/null >/dev/null 2>&1; then
+    OPAQUE_FLAGS="-Xclang -opaque-pointers"
+fi
+rm -f "$_probe_ll"
+
 # Per-feature link flags — resolved once, shared by every worker.
 # Programs that don't pull in the matching stdlib module link fine
 # either way; these just satisfy the symbols when something does.
@@ -244,7 +258,7 @@ run_one() {
         if ! "$NURLC" "$src" > "$ll" 2>"$cerr"; then
             strip_root "$cerr"
             { echo "COMPILE FAIL"; echo "ERRORS"; } > "$act"; append_capped "$act" "$cerr"
-        elif ! "$CLANG" -O2 -flto "$ll" "$RUNTIME" $LINK_LIBS -o "$bin" 2>"$err"; then
+        elif ! "$CLANG" -O2 -flto $OPAQUE_FLAGS "$ll" "$RUNTIME" $LINK_LIBS -o "$bin" 2>"$err"; then
             strip_root "$err"
             { echo "COMPILE OK"; echo "LINK FAIL"; } > "$act"; append_capped "$act" "$err"
         else
@@ -293,7 +307,7 @@ run_one() {
 # runner cannot half-export the predicate set and gate differently in
 # the workers than in the parent.
 export -f run_one append_capped strip_root
-export NURLC RUNTIME OUTDIR WORKDIR SCRIPT_DIR ROOT_DIR CLANG LINK_LIBS TIMEOUT_CMD
+export NURLC RUNTIME OUTDIR WORKDIR SCRIPT_DIR ROOT_DIR CLANG LINK_LIBS TIMEOUT_CMD OPAQUE_FLAGS
 export MAX_OUT_LINES TIMEOUT UPDATE
 
 # ── collect the test set ────────────────────────────────────────

@@ -353,19 +353,41 @@ else
     resolve_clang
     cc_run() { "$CLANG" "$@"; }
     # nurlc emits LLVM IR with opaque pointers (`ptr`) — the default since
-    # LLVM 15, which is NURL's minimum supported clang. Older clangs (13/14
-    # behind `-opaque-pointers`) are no longer supported. (zig's bundled
-    # LLVM never needs this.)
-    CLANG_MAJOR="$("$CLANG" --version 2>/dev/null | sed -nE 's/.*version ([0-9]+).*/\1/p' | head -1)"
-    if [ -n "$CLANG_MAJOR" ] && [ "$CLANG_MAJOR" -lt 15 ]; then
-        {
-            echo "ERROR: clang $CLANG_MAJOR is too old to build NURL programs."
-            echo "       nurlc emits LLVM IR with opaque pointers (needs clang/LLVM 15+)."
-            echo "       Install a newer clang (e.g. clang-15) and set CLANG=clang-15,"
-            echo "       or use the bundled zig backend (set NURL_ZIG=/path/to/zig)."
-        } >&2
-        exit 1
+    # LLVM 15. (zig's bundled LLVM never needs this, which is why the probe
+    # sits in the no-zig branch.)
+    #
+    # This used to read the major version out of `clang --version` and
+    # refuse anything below 15. That test is wrong on macOS, and wrong in
+    # the direction that hurts: `Apple clang version 15.0.0` is not
+    # upstream LLVM 15 — Apple numbers its releases independently — and
+    # Xcode 15.4's clang parses `ptr` only under an explicit flag. The
+    # gate said 15 ≥ 15, waved it through, and the user got LLVM's IR
+    # parser complaining "expected type" about a .ll file they never
+    # wrote. Ask the compiler what it can parse instead of what it is
+    # called: one declaration using `ptr`, plain, then under the cc1 flag
+    # that turns the feature on for the transitional releases.
+    _probe_ll="${TMPDIR:-/tmp}/nurl_opaque_probe.$$.ll"
+    printf 'declare void @nurl_opaque_probe(ptr)\n' > "$_probe_ll"
+    if ! "$CLANG" -c -x ir "$_probe_ll" -o /dev/null >/dev/null 2>&1; then
+        if "$CLANG" -Xclang -opaque-pointers -c -x ir "$_probe_ll" -o /dev/null >/dev/null 2>&1; then
+            OPAQUE_FLAGS="-Xclang -opaque-pointers"
+        else
+            rm -f "$_probe_ll"
+            {
+                echo "ERROR: $CLANG cannot parse the LLVM IR nurlc emits."
+                echo "       nurlc uses opaque pointers (\`ptr\`), the LLVM default since 15."
+                echo "       Version reported: $("$CLANG" --version 2>/dev/null | head -1)"
+                echo ""
+                echo "       Apple's version numbers are not upstream LLVM's — 'Apple clang 15'"
+                echo "       is not LLVM 15. On macOS install a real LLVM:"
+                echo "         brew install llvm && export CLANG=\"\$(brew --prefix llvm)/bin/clang\""
+                echo "       Elsewhere install clang 15 or newer and set CLANG=/path/to/clang,"
+                echo "       or use the bundled zig backend (set NURL_ZIG=/path/to/zig)."
+            } >&2
+            exit 1
+        fi
     fi
+    rm -f "$_probe_ll"
 fi
 
 # Debug flag passthrough. Without `!dbg` metadata in the IR, `-g` yields
