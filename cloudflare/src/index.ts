@@ -1,5 +1,6 @@
 import { Container, getContainer } from "@cloudflare/containers";
 import { decideAction, stampAction } from "./recovery";
+import { downloadKey, extractArtifactTokens, shouldScanForArtifacts } from "./artifacts";
 
 // ── Why this file has a custom fetch override ─────────────────────────────
 //
@@ -167,13 +168,86 @@ export class NurlContainer extends Container<Env> {
   }
 }
 
+// Copy a set of build artifacts from the container's disk into R2. Runs in
+// waitUntil, racing the instance's idle recycle — which it wins by minutes.
+// Failures are logged and swallowed: mirroring is a durability upgrade, never
+// a reason to fail the build that produced the artifacts.
+async function mirrorArtifacts(
+  tokens: string[],
+  container: { fetch(request: Request): Promise<Response> },
+  env: Env,
+  origin: string,
+): Promise<void> {
+  await Promise.all(
+    tokens.map(async (token) => {
+      try {
+        if (await env.NURL_ARTIFACTS.head(token)) return;
+        const res = await container.fetch(new Request(`${origin}/download/${token}`));
+        if (res.status !== 200) return;
+        await env.NURL_ARTIFACTS.put(token, await res.arrayBuffer(), {
+          httpMetadata: {
+            contentType: res.headers.get("Content-Type") ?? "application/octet-stream",
+          },
+        });
+      } catch (e) {
+        console.error(`[nurl-artifacts] mirroring ${token} failed:`, e);
+      }
+    }),
+  );
+}
+
 export default {
-  async fetch(request: Request, env: Env): Promise<Response> {
+  async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     // Singleton: one container instance routes all requests. The fetch
     // override above makes that instance self-heal, so a wedge recovers
     // within a request instead of becoming a sticky outage. For horizontal
     // scaling swap to getRandom(env.NURL_CONTAINER, N) (uses max_instances).
     const container = getContainer(env.NURL_CONTAINER);
-    return container.fetch(request);
+    const url = new URL(request.url);
+
+    // Artifact downloads are served R2-first: the container's build dirs die
+    // with the instance (idle sleep, deploy adoption, wedge recovery), but a
+    // mirrored artifact keeps its URL alive across generations — and an R2
+    // hit doesn't wake a sleeping container at all. A miss falls through to
+    // the container (covers the build→mirror completion window) and mirrors
+    // what it finds, so even artifacts whose build-time mirror was missed
+    // become durable on first download.
+    const key = request.method === "GET" ? downloadKey(url.pathname) : null;
+    if (key) {
+      const stored = await env.NURL_ARTIFACTS.get(key);
+      if (stored) {
+        const headers = new Headers();
+        stored.writeHttpMetadata(headers);
+        if (!headers.has("Content-Type")) headers.set("Content-Type", "application/octet-stream");
+        return new Response(stored.body, { status: 200, headers });
+      }
+      const res = await container.fetch(request);
+      if (res.status !== 200) return res;
+      const body = await res.arrayBuffer();
+      ctx.waitUntil(
+        env.NURL_ARTIFACTS.put(key, body, {
+          httpMetadata: {
+            contentType: res.headers.get("Content-Type") ?? "application/octet-stream",
+          },
+        }),
+      );
+      return new Response(body, res);
+    }
+
+    const res = await container.fetch(request);
+
+    // Build responses (REST /build* and MCP tool calls alike) name the
+    // artifacts they produced by /download/ URL. Mirror them to R2 now,
+    // off the response path, before a recycle can take the disk with them.
+    if (shouldScanForArtifacts(request.method, url.pathname) && res.status === 200) {
+      const copy = res.clone();
+      ctx.waitUntil(
+        (async () => {
+          const tokens = extractArtifactTokens(await copy.text());
+          if (tokens.length > 0) await mirrorArtifacts(tokens, container, env, url.origin);
+        })(),
+      );
+    }
+    return res;
   },
 } satisfies ExportedHandler<Env>;

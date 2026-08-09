@@ -6,6 +6,7 @@
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
     "test:recovery": "node --test test-recovery.ts",
+    "test:artifacts": "node --test test-artifacts.ts",
     "cf-typegen": "wrangler types"
   },
   "dependencies": {
