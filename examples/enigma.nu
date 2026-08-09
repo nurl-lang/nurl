@@ -51,7 +51,7 @@
     }
 }
 
-@ alg::r [i s ( @ i i i i ) m i z → i {
+@ alg::r [i s ( @ i i i ) m i z → i {
     : ~ i o z
     : ~ i i 0
     : i n . s length
@@ -95,7 +95,7 @@
     }
 
     // A closure doing chaotic math via prefix-notation
-    : ( @ i i i i ) cl \ i a i e → i {
+    : ( @ i i i ) cl \ i a i e → i {
         ^ ? > e 4
         + a * e 2
         - a e

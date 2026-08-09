@@ -1,0 +1,6 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_optlit_float_to_int_payload.nu:6:25: error: payload of this option/result literal has float type 'f' but the declared payload type is 'i' — NURL has no implicit float↔integer conversions; storing the bits anyway would make the '??' match arm read the float's raw bit pattern as an integer. Convert explicitly ('# i expr' truncates toward zero), or declare the payload 'f'.
+    : ?i o @ ?i { T 1.5 }
+                        ^
+error: aborting due to 1 previous error

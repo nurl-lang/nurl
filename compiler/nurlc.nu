@@ -397,6 +397,24 @@
     ^ # s ( nurl_strdup t )
 }
 
+// Copy of `t` with every space removed. Different lowering paths spell
+// the same function-aggregate type with different whitespace
+// (`{ void(i8*)*, i8* }` vs `{ void (i8*)*, i8* }`), so the closure
+// comparison below must be whitespace-blind.
+@ __strip_spaces s t → s {
+    : i n ( nurl_str_len t )
+    : ~ s out ``
+    : ~ i p 0
+    ~ < p n {
+        : i c ( nurl_str_get t p )
+        ? != c 32
+        { = out ( nurl_str_cat out ( nurl_str_slice t p 1 ) ) }
+        {}
+        = p + p 1
+    }
+    ^ out
+}
+
 @ parse_type i lex → s {
     : i tt ( nurl_lex_type lex )
     ? == tt TT_STAR { ^ ( parse_type_ptr lex ) } {}
@@ -693,19 +711,30 @@
 // word — `nurl_lex_val` alone would grab only the leading `?`. Paren-
 // compound args are handled separately by the caller.
 @ capture_type_arg_src i lex → s {
+    // Every return path allocates, and each recursive result is BOUND
+    // before the cat (an owned temp passed straight into an arg list is
+    // never collected — LSan, 31 objects per generic-option compile).
+    // The old bare-`^ v` tail made this a mixed owned/borrowed return,
+    // which classifies as not-owned so no caller freed the cat paths.
     : i tt ( nurl_lex_type lex )
     ? == tt TT_QUEST
-    { ( nurl_lex_advance lex ) ^ ( nurl_str_cat `?` ( capture_type_arg_src lex ) ) }
+    { ( nurl_lex_advance lex )
+        : s __in ( capture_type_arg_src lex )
+        ^ ( nurl_str_cat `?` __in ) }
     {}
     ? == tt TT_QUESTQUEST
-    { ( nurl_lex_advance lex ) ^ ( nurl_str_cat `??` ( capture_type_arg_src lex ) ) }
+    { ( nurl_lex_advance lex )
+        : s __in ( capture_type_arg_src lex )
+        ^ ( nurl_str_cat `??` __in ) }
     {}
     ? == tt TT_STAR
-    { ( nurl_lex_advance lex ) ^ ( nurl_str_cat `*` ( capture_type_arg_src lex ) ) }
+    { ( nurl_lex_advance lex )
+        : s __in ( capture_type_arg_src lex )
+        ^ ( nurl_str_cat `*` __in ) }
     {}
     : s v ( nurl_lex_val lex )
     ( nurl_lex_advance lex )
-    ^ v
+    ^ ( nurl_str_cat v `` )
 }
 
 // [ T  →  { T*, i64 }
@@ -2552,7 +2581,7 @@
     // taken a different path — e.g. a literal or operator — that
     // never reached gen_call to consume it).
     ( nurl_sym_def syms `__tail_call_pending__` `` )
-    : s lt ( nurl_get_last_type )
+    : ~ s lt ( nurl_get_last_type )
     // Escape analysis: warn if the returned value
     // is a stack reference — a closure capturing a binding by pointer,
     // an aggregate holding one, or a binding holding either. The
@@ -2628,6 +2657,21 @@
             `return value type '` ( llvm_to_nurl lt ) `' does not match the declared return type '` ( llvm_to_nurl fn_rt ) )
             `' — a float width widens into a BINDING (': f x f32val' is fine), but a return type is a contract and must match exactly. Convert with '# f expr' (widen, lossless) or '# f32 expr' (narrow).` ) ) }
         {}
+        // Anonymous/function AGGREGATE spelling mismatch — `^ @ ? f { T x }`
+        // out of a `→ ?i` function (`ret { i1, double }` from a
+        // `{ i1, i64 }` one: invalid IR only the LLVM verifier saw, three
+        // build stages later), or a closure returned from a fn whose
+        // declared `(@ …)` return has a different signature (that one
+        // ASSEMBLES — and every later invoke reinterprets its arguments).
+        // Compared whitespace-blind: the spellings' spacing is not
+        // canonical across lowering paths.
+        ? & & == ( nurl_str_get ( nurl_llty lt ) 0 ) 123
+        == ( nurl_str_get ( nurl_llty fn_rt ) 0 ) 123
+        ! ( seq ( __strip_spaces ( nurl_llty lt ) ) ( __strip_spaces ( nurl_llty fn_rt ) ) )
+        { ( die lex ( nurl_str_cat ( nurl_str_cat4
+            `return value type '` ( nurl_llty lt ) `' does not match the declared return type '` ( nurl_llty fn_rt ) )
+            `' — the payload/signature inside the aggregate differs, and NURL has no implicit conversions between option/result/slice/closure shapes. Construct the declared shape ('@ ? i { T … }' for '→ ?i'), or fix the declaration.` ) ) }
+        {}
         // Return the wrong named struct by value (the return-position dual of
         // the call-site struct check): `^ b` from a `→ A` fn where b is a B.
         ? ( __arg_named_struct_mismatch lt fn_rt )
@@ -2651,6 +2695,39 @@
             ( die lex ( nurl_str_cat ( nurl_str_cat4
             `return value type '` ( llvm_to_nurl lt ) `' does not match the declared return type '` ( llvm_to_nurl fn_rt ) )
             cure ) ) }
+        {}
+        // Enum return type. A bare variant (`^ Green` from a `→ Color`
+        // fn) evaluates to its i64 tag, so the ret was `ret i64` out of
+        // a `define %Color` function — invalid IR only clang saw, three
+        // build stages later. Wrap the tag into the enum shape (the
+        // return-position dual of the binding wrap in coerce_store_val).
+        // Any OTHER integer dies: an enum is a closed set of named
+        // variants, and no number converts into one.
+        ? & & == ( nurl_str_get fn_rt 0 ) 37 ( is_int_ty lt ) ! ( is_ptr_ty fn_rt )
+        { : s __ren ( nurl_str_slice fn_rt 1 - ( nurl_str_len fn_rt ) 1 )
+            : s __rvl ( nurl_sym_get2 syms __ren `__variants` )
+            ? != 0 ( nurl_str_len __rvl )
+            {  // A variant is recognised from the return expression's
+                // FIRST token (already snapshotted for the §2.8 passthrough
+                // check — `__last_ident_name__` would also bless
+                // `^ ( f Red )`-shaped stale idents), or from a `?`-join
+                // both of whose arms gen_cond proved variants of this
+                // enum (`^ ? cond Red Green`). Consume-once channel.
+                : s __rjve ( nurl_str_cat ( nurl_sym_get syms `__last_join_variant_enum__` ) `` )
+                ( nurl_sym_def syms `__last_join_variant_enum__` `` )
+                ? | & & == ( int_width lt ) 64 ( is_ident_tok ret_first_tt )
+                ( str_contains_word __rvl ret_first_val )
+                & == ( int_width lt ) 64 ( seq __rjve __ren )
+                { : s __ewr ( nurl_cg_reg cg )
+                    ( nurl_print `  ` ) ( nurl_print __ewr )
+                    ( nurl_print ` = insertvalue ` ) ( nurl_print ( nurl_llty fn_rt ) )
+                    ( nurl_print ` undef, i64 ` ) ( nurl_print val ) ( nurl_print `, 0\n` )
+                    = val __ewr
+                    = lt ( nurl_str_cat fn_rt `` ) }
+                { ( die lex ( nurl_str_cat ( nurl_str_cat4
+                    `return value type '` ( llvm_to_nurl lt ) `' does not match the declared return type: enum '` __ren )
+                    `' — an enum is a closed set of named variants, and no number converts into one implicitly (the value could name no variant at all). Return a variant by name ('^ Red'), or declare a numeric return type.` ) ) } }
+            {} }
         {}
     }
     {}
@@ -3203,12 +3280,104 @@
     ? == tt TT_PIPE ^ ( gen_logical_or_bitwise_or lex syms cg )
     // Original binary operation logic for other operators
     ( nurl_lex_advance lex )
+    // Snapshot each operand's FIRST token before gen_operand consumes
+    // it: the enum rules below need to know whether an operand was
+    // spelled as a bare VARIANT name, and the lexer is the only place
+    // that can say so without touching the `__last_ident_name__`
+    // side-channel (whose stale value is load-bearing elsewhere).
+    : i __ltok ( nurl_lex_type lex )
+    : s __lvid ( nurl_str_cat ( nurl_lex_val lex ) `` )
     : ~ s lv ( gen_operand lex syms cg )
-    : s lt ( nurl_get_last_type )
+    : ~ s lt ( nurl_get_last_type )
+    : i __rtok ( nurl_lex_type lex )
+    : s __rvid ( nurl_str_cat ( nurl_lex_val lex ) `` )
     : ~ s rv ( gen_operand lex syms cg )
-    : s rt ( nurl_get_last_type )
+    : ~ s rt ( nurl_get_last_type )
     ( die_if_void lex lv `binary operator's left` )
     ( die_if_void lex rv `binary operator's right` )
+    // ── Enum operands are NOMINAL ─────────────────────────────────────
+    // `== c Green` used to emit `icmp eq %Color %r4, %r5` with %r5 an
+    // i64 tag — invalid IR only clang saw (so the diag_cond_enum cure
+    // text recommended a comparison that could not compile). Every other
+    // mix — `== c 7`, a cross-enum `==`, `+ c 1`, `< c d` — likewise
+    // emitted invalid IR, or assembled into a silent tag/number pun.
+    //   * ==/!= between two values of the SAME payload-free enum
+    //     compares their tags (extractvalue slot 0 each side).
+    //   * ==/!= against a bare VARIANT of the operand's own enum
+    //     compares the tag against that variant's tag.
+    //   * everything else dies: arithmetic/ordering has no meaning on a
+    //     closed set of names, a payload-carrying enum compares by '??'
+    //     match, and a number or an unrelated enum never converts in.
+    : ~ s __eln ``
+    ? & != 0 ( nurl_str_len lt ) == ( nurl_str_get lt 0 ) 37
+    { : s __en0 ( nurl_str_slice lt 1 - ( nurl_str_len lt ) 1 )
+        ? != 0 ( nurl_sym_len2 syms __en0 `__variants` ) { = __eln ( nurl_str_cat __en0 `` ) } {} }
+    {}
+    : ~ s __ern ``
+    ? & != 0 ( nurl_str_len rt ) == ( nurl_str_get rt 0 ) 37
+    { : s __en1 ( nurl_str_slice rt 1 - ( nurl_str_len rt ) 1 )
+        ? != 0 ( nurl_sym_len2 syms __en1 `__variants` ) { = __ern ( nurl_str_cat __en1 `` ) } {} }
+    {}
+    ? | != 0 ( nurl_str_len __eln ) != 0 ( nurl_str_len __ern ) {
+        ? ! | == tt TT_EQEQ == tt TT_NE
+        { ( die lex ( nurl_str_cat ( nurl_str_cat4
+            `operator applied to an enum operand: left is '` ( llvm_to_nurl lt )
+            `', right is '` ( llvm_to_nurl rt ) )
+            `' — an enum is a closed set of named variants, not a number: arithmetic and ordering have no meaning on it. Compare with '==' against a variant, match with '??', or read the tag intentionally with '# i x'.` ) ) }
+        {}
+        : ~ s __een ``
+        ? != 0 ( nurl_str_len __eln ) { = __een ( nurl_str_cat __eln `` ) } { = __een ( nurl_str_cat __ern `` ) }
+        ? > ( nurl_str_to_int ( nurl_sym_get2 syms __een `__max_payloads` ) ) 0
+        { ( die lex ( nurl_str_cat3
+            `'==' on enum '` __een
+            `' whose variants carry payloads — tag equality would ignore the payloads. Match with '?? x { … }' and compare what the variants carry.` ) ) }
+        {}
+        ? & != 0 ( nurl_str_len __eln ) != 0 ( nurl_str_len __ern )
+        { ? ! ( seq __eln __ern )
+            { ( die lex ( nurl_str_cat ( nurl_str_cat4
+                `'==' between two DIFFERENT enums: left is '` __eln
+                `', right is '` __ern )
+                `' — two enums are distinct nominal types even when their tags overlap; equality between them would compare unrelated variant sets. Compare values of one enum, or match each with '??'.` ) ) }
+            {}
+            : s __exl ( nurl_cg_reg cg )
+            ( nurl_print `  ` ) ( nurl_print __exl ) ( nurl_print ` = extractvalue ` )
+            ( nurl_print ( nurl_llty lt ) ) ( nurl_print ` ` ) ( nurl_print lv ) ( nurl_print `, 0\n` )
+            = lv __exl
+            = lt ( nurl_str_cat `i64` `` )
+            : s __exr ( nurl_cg_reg cg )
+            ( nurl_print `  ` ) ( nurl_print __exr ) ( nurl_print ` = extractvalue ` )
+            ( nurl_print ( nurl_llty rt ) ) ( nurl_print ` ` ) ( nurl_print rv ) ( nurl_print `, 0\n` )
+            = rv __exr
+            = rt ( nurl_str_cat `i64` `` ) }
+        { : ~ s __evid ``
+            : ~ i __othw 0
+            : ~ b __evok F
+            ? != 0 ( nurl_str_len __eln )
+            { = __evid ( nurl_str_cat __rvid `` ) = __othw ( int_width rt ) = __evok ( is_ident_tok __rtok ) }
+            { = __evid ( nurl_str_cat __lvid `` ) = __othw ( int_width lt ) = __evok ( is_ident_tok __ltok ) }
+            ? & & & __evok == __othw 64 != 0 ( nurl_str_len __evid )
+            ( str_contains_word ( nurl_sym_get2 syms __een `__variants` ) __evid )
+            { ? != 0 ( nurl_str_len __eln )
+                { : s __exv ( nurl_cg_reg cg )
+                    ( nurl_print `  ` ) ( nurl_print __exv ) ( nurl_print ` = extractvalue ` )
+                    ( nurl_print ( nurl_llty lt ) ) ( nurl_print ` ` ) ( nurl_print lv ) ( nurl_print `, 0\n` )
+                    = lv __exv
+                    = lt ( nurl_str_cat `i64` `` ) }
+                { : s __exv ( nurl_cg_reg cg )
+                    ( nurl_print `  ` ) ( nurl_print __exv ) ( nurl_print ` = extractvalue ` )
+                    ( nurl_print ( nurl_llty rt ) ) ( nurl_print ` ` ) ( nurl_print rv ) ( nurl_print `, 0\n` )
+                    = rv __exv
+                    = rt ( nurl_str_cat `i64` `` ) } }
+            { : ~ s __eot ``
+                ? != 0 ( nurl_str_len __eln )
+                { = __eot ( nurl_str_cat ( llvm_to_nurl rt ) `` ) }
+                { = __eot ( nurl_str_cat ( llvm_to_nurl lt ) `` ) }
+                ( die lex ( nurl_str_cat ( nurl_str_cat4
+                `'==' between enum '` __een
+                `' and a value of type '` __eot )
+                `' — an enum is a closed set of named variants, and no number converts into one implicitly. Compare against a variant by name ('== c Red'), match with '?? c { … }', or read the tag intentionally with '# i x'.` ) ) } }
+    }
+    {}
     : s res ( nurl_cg_reg cg )
     : b isf | ( seq lt `double` ) ( seq lt `float` )
     // `^^` (XOR) is integer/bool-only — LLVM has no float `xor`.
@@ -5911,6 +6080,30 @@
     ``
 }
 
+// Copy of `src` with every space-separated word equal to `from`
+// replaced by `to`. Used by the generic call path to substitute a
+// tparam into a parameter's SOURCE spelling wherever it appears —
+// including inside a compound like `( Box T )`, which the former
+// whole-word compare could not reach.
+@ __subst_word s src s from s to → s {
+    // Every temp is TRACKED and no `?`-join carries a bare tracked
+    // ident: the arm protocol hands such a join a strdup'd COPY that no
+    // scope owns — one leaked word per substitution step (LSan, 154
+    // objects per test compile). Reassigning `w` in a branch instead
+    // keeps a single tracked owner throughout.
+    : ~ s out ( nurl_str_cat `` `` )
+    : ~ s rest ( nurl_str_cat src `` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : ~ s w ( str_first_word rest )
+        = rest ( str_skip_word rest )
+        ? ( seq w from ) { = w ( nurl_str_cat to `` ) } {}
+        = out ? == 0 ( nurl_str_len out )
+        ( nurl_str_cat w `` )
+        ( nurl_str_cat3 out ` ` w )
+    }
+    ^ out
+}
+
 // The float dual of src_int_ty: map a SOURCE- or LLVM-spelling scalar
 // to its LLVM float type, `` when the token is not float-family. Used
 // by the same call-argument agreement path.
@@ -5970,16 +6163,61 @@
 // binding would never free the coerced pair (LSan caught exactly that).
 // Pointer-typed arguments are left alone: the pointer-vs-value checks
 // and the FFI inttoptr/ptrtoint paths own that territory.
-@ __call_arg_scalar i lex i cg s fname i arg_idx s psrc s at s av → s {
+@ __call_arg_scalar i lex i syms i cg s fname i arg_idx s psrc s at s av → s {
     ? == 0 ( nurl_str_len psrc ) { ^ ( nurl_str_cat `` `` ) } {}
     : s want_i ( src_int_ty psrc )
     : s want_f ( src_float_ty psrc )
-    ? & == 0 ( nurl_str_len want_i ) == 0 ( nurl_str_len want_f ) { ^ ( nurl_str_cat `` `` ) } {}
     : s at_ll ( nurl_llty at )
-    ? ( is_ptr_ty at_ll ) { ^ ( nurl_str_cat `` `` ) } {}
     : b have_f ( is_float_ty at_ll )
     : ~ i hw ( int_width at )
     ? == hw 0 { = hw ( int_width ( src_int_ty at ) ) } {}
+    // Enums are NOMINAL: an i64 under the hood, but the set of legal
+    // values is the variant list, so no numeric value converts in and
+    // the tag does not convert out. Before these checks a float slid in
+    // as a mismatched call register (`call i64 @show(double …)` — the
+    // t4_type shape again), an integer slid in as an out-of-range "tag"
+    // (`( show 7 )` against three variants), and an enum slid OUT into a
+    // numeric parameter as `call @f(%Color …)` — a struct where the
+    // callee reads a scalar register.
+    : ~ s at_enum ``
+    ? == ( nurl_str_get at_ll 0 ) 37 {
+        : s __aen ( nurl_str_slice at_ll 1 - ( nurl_str_len at_ll ) 1 )
+        ? != 0 ( nurl_sym_len2 syms __aen `__variants` ) { = at_enum ( nurl_str_cat __aen `` ) } {}
+    } {}
+    ? & & == 0 ( nurl_str_len want_i ) == 0 ( nurl_str_len want_f )
+    != 0 ( nurl_sym_len2 syms psrc `__variants` )
+    {  // Enum-declared parameter.
+        ? != 0 ( nurl_str_len at_enum ) {
+            ? ( seq at_enum psrc ) { ^ ( nurl_str_cat `` `` ) } {}
+            ( die lex ( nurl_str_cat3
+            ( nurl_str_cat4 `argument ` ( nurl_str_int + arg_idx 1 ) ` to '` fname )
+            ( nurl_str_cat4 `' has enum type '` at_enum `' but the parameter is declared enum '` psrc )
+            `' — two enums are distinct nominal types even when their tags overlap; the callee would read this value's tag as the OTHER enum's variants. Pass a variant of the declared enum.` ) ) }
+        {}
+        ? | > hw 0 have_f
+        {  // A bare tag-only VARIANT of the declared enum evaluates to its
+            // i64 tag — that is the legal way to pass one. Only reject a
+            // numeric value that is not spelled as a variant name.
+            : s __vident ( nurl_sym_get syms `__last_ident_name__` )
+            ? & & > hw 0 != 0 ( nurl_str_len __vident )
+            ( str_contains_word ( nurl_sym_get2 syms psrc `__variants` ) __vident )
+            { ^ ( nurl_str_cat `` `` ) }
+            {}
+            ( die lex ( nurl_str_cat3
+            ( nurl_str_cat4 `argument ` ( nurl_str_int + arg_idx 1 ) ` to '` fname )
+            ( nurl_str_cat4 `' has numeric type '` ( llvm_to_nurl at_ll ) `' but the parameter is declared enum '` psrc )
+            `' — an enum is a closed set of named variants, and no number converts into one implicitly (the value could name no variant at all). Pass a variant by name (e.g. the enum's first variant), or change the parameter to a numeric type.` ) ) }
+        {}
+        ^ ( nurl_str_cat `` `` )
+    } {}
+    ? & != 0 ( nurl_str_len at_enum ) | != 0 ( nurl_str_len want_i ) != 0 ( nurl_str_len want_f )
+    { ( die lex ( nurl_str_cat3
+        ( nurl_str_cat4 `argument ` ( nurl_str_int + arg_idx 1 ) ` to '` fname )
+        ( nurl_str_cat4 `' has enum type '` at_enum `' but the parameter is declared '` psrc )
+        `' — an enum's tag is not a number without an explicit conversion; the emitted call would pass the whole enum value where the callee reads a scalar register. Convert intentionally with '# i x', or declare the parameter to take the enum.` ) ) }
+    {}
+    ? & == 0 ( nurl_str_len want_i ) == 0 ( nurl_str_len want_f ) { ^ ( nurl_str_cat `` `` ) } {}
+    ? ( is_ptr_ty at_ll ) { ^ ( nurl_str_cat `` `` ) } {}
     ? & != 0 ( nurl_str_len want_f ) > hw 0
     { ( die lex ( nurl_str_cat3
         ( nurl_str_cat4 `argument ` ( nurl_str_int + arg_idx 1 ) ` to '` fname )
@@ -6093,7 +6331,7 @@
     : s __kdroster ( nurl_sym_get2 syms fname `__ptypes_src` )
     ? != 0 ( nurl_str_len __kdroster ) {
         : s __kdpsrc ( __kw_trim ( __ptypes_nth __kdroster k ) )
-        : s __kdsc ( __call_arg_scalar lex cg fname k __kdpsrc __kdt __kdv )
+        : s __kdsc ( __call_arg_scalar lex syms cg fname k __kdpsrc __kdt __kdv )
         ? != 0 ( nurl_str_len __kdsc ) {
             = __kdt ( str_first_word __kdsc )
             = __kdv ( str_skip_word __kdsc )
@@ -6158,7 +6396,7 @@
                     : s __kwpllvm ( parse_type __kwplx )
                     ( nurl_lex_free __kwplx )
                     ( __arg_param_checks lex fname slot at __kwpllvm )
-                    : s __ksc ( __call_arg_scalar lex cg fname slot __kwpsrc at av )
+                    : s __ksc ( __call_arg_scalar lex syms cg fname slot __kwpsrc at av )
                     ? != 0 ( nurl_str_len __ksc ) {
                         = at ( str_first_word __ksc )
                         = av ( str_skip_word __ksc )
@@ -6323,24 +6561,6 @@
     : s pt_ll ( nurl_llty pt )
     ? | ( __is_named_agg at_ll ) ( __is_named_agg pt_ll ) { ^ F } {}
     ^ != ( is_ptr_ty at_ll ) ( is_ptr_ty pt_ll )
-}
-
-// Copy of `t` with every space removed. Different lowering paths spell
-// the same function-aggregate type with different whitespace
-// (`{ void(i8*)*, i8* }` vs `{ void (i8*)*, i8* }`), so the closure
-// comparison below must be whitespace-blind.
-@ __strip_spaces s t → s {
-    : i n ( nurl_str_len t )
-    : ~ s out ``
-    : ~ i p 0
-    ~ < p n {
-        : i c ( nurl_str_get t p )
-        ? != c 32
-        { = out ( nurl_str_cat out ( nurl_str_slice t p 1 ) ) }
-        {}
-        = p + p 1
-    }
-    ^ out
 }
 
 // Both spellings are closure/function aggregates (`{ <ret> (<params>…)*,
@@ -7131,7 +7351,7 @@
                     // clang assembled and the callee misread). Returns ``
                     // when it neither died nor coerced — the pointer cases,
                     // which the inttoptr/ptrtoint branches below own.
-                    : s __fsc ( __call_arg_scalar lex cg fname arg_idx __want at av )
+                    : s __fsc ( __call_arg_scalar lex syms cg fname arg_idx __want at av )
                     ? != 0 ( nurl_str_len __fsc ) {
                         = at ( str_first_word __fsc )
                         = av ( str_skip_word __fsc )
@@ -7190,15 +7410,33 @@
                             = __tpr ( str_skip_word __tpr )
                             : s __ta ( str_first_word __tar )
                             = __tar ( str_skip_word __tar )
-                            ? ( seq __psrc __tp ) { = __psrc __ta } {}
+                            // Tokenwise, not whole-word: a tparam INSIDE a
+                            // compound spelling (`( Box T )` → `( Box i )`)
+                            // must substitute too, or the inout receiver
+                            // check below sees an uncomparable template.
+                            = __psrc ( __subst_word __psrc __tp __ta )
                         }
                     } {}
-                    // Non-generic callees only: the whole-word substitution
-                    // above does not reach a tparam INSIDE a compound
-                    // spelling (`( Stack T )` stays unsubstituted), and
-                    // parse_type on that would fabricate a false clash for
-                    // every generic inout receiver.
-                    ? & is_inout_arg ( seq call_name fname ) {
+                    // Generic callees included: the tokenwise substitution
+                    // above reaches tparams inside compound spellings
+                    // (`( Box T )` → `( Box i )`), so a generic inout
+                    // receiver compares like a concrete one — `( put [i]
+                    // bf 3 )` with bf: (Box f) used to emit `call
+                    // @put__i64(%Box__f64* …)` and the callee rewrote the
+                    // caller's double field with an i64. Belt-and-braces:
+                    // if any tparam survives in __psrc (an arity edge the
+                    // substitution walk missed), skip rather than
+                    // parse_type a template spelling into a false clash.
+                    : ~ b __io_sub_ok T
+                    ? ! ( seq call_name fname ) {
+                        : ~ s __tpr2 ( nurl_sym_get2 g_generic_syms fname `__tparams` )
+                        ~ != 0 ( nurl_str_len __tpr2 ) {
+                            : s __tp2 ( str_first_word __tpr2 )
+                            = __tpr2 ( str_skip_word __tpr2 )
+                            ? ( str_contains_word __psrc __tp2 ) { = __io_sub_ok F } {}
+                        }
+                    } {}
+                    ? & is_inout_arg __io_sub_ok {
                         // An `inout` argument passes the binding's ADDRESS,
                         // so the binding's type must equal the declared
                         // parameter type EXACTLY — there is no register to
@@ -7223,7 +7461,7 @@
                             {}
                         } {}
                     } {
-                        : s __nsc ( __call_arg_scalar lex cg fname arg_idx __psrc at av )
+                        : s __nsc ( __call_arg_scalar lex syms cg fname arg_idx __psrc at av )
                         ? != 0 ( nurl_str_len __nsc ) {
                             = at ( str_first_word __nsc )
                             = av ( str_skip_word __nsc )
@@ -7751,10 +7989,18 @@
     // path's scope-exit drop then freed .rodata (SEGV).
     ( nurl_sym_def syms `__last_call_ret_owned__` `` )
     ( nurl_sym_def syms `__last_value_alias__` `` )
+    // Variant-join blessing gets the same per-arm reset+snapshot
+    // discipline as the ownership channels above: a nested `?`-join of
+    // variants publishes into it, and stale residue must not bless an
+    // unrelated arm.
+    ( nurl_sym_def syms `__last_join_variant_enum__` `` )
     // First token of the arm: a bare string-literal arm's value is a
     // .rodata GEP — provably non-null, so it can be copied to make a
-    // MIXED join uniformly owned (see the dup blocks below).
+    // MIXED join uniformly owned (see the dup blocks below). The token
+    // VALUE says whether the arm is a bare identifier (`Red`) — the only
+    // spelling the variant blessing below may trust.
     : i t_tt0 ( nurl_lex_type lex )
+    : s t_v0 ( nurl_str_cat ( nurl_lex_val lex ) `` )
     : ~ s tv ( gen_expr lex syms cg )
     : s tt2 ( nurl_get_last_type )
     : s t_slice_flag ( nurl_str_cat ( nurl_sym_get syms `__last_slice_owned__` ) `` )
@@ -7800,6 +8046,13 @@
         = tv __td
         = t_dup T
     } {}
+    // Which enum this arm's value is a variant TAG of, if any: a bare
+    // variant name (`Red` — token and last-ident agree), or a nested
+    // `?`-join that already proved both ITS arms variants of one enum.
+    : ~ s t_ven ``
+    ? & ( is_ident_tok t_tt0 ) & ( seq t_v0 t_retid ) != 0 ( nurl_str_len t_retid )
+    { = t_ven ( nurl_str_cat ( nurl_sym_get2 syms t_retid `__enum_of` ) `` ) }
+    { = t_ven ( nurl_str_cat ( nurl_sym_get syms `__last_join_variant_enum__` ) `` ) }
     : s tlbl ( nurl_sym_get syms `__cur_lbl__` )
     : i tdr g_did_ret
     // Lossless 64-bit shadow of an integer branch value, emitted while
@@ -7866,7 +8119,9 @@
     ( nurl_sym_def syms `__last_slice_owned__` `` )
     ( nurl_sym_def syms `__last_call_ret_owned__` `` )
     ( nurl_sym_def syms `__last_value_alias__` `` )
+    ( nurl_sym_def syms `__last_join_variant_enum__` `` )
     : i e_tt0 ( nurl_lex_type lex )
+    : s e_v0 ( nurl_str_cat ( nurl_lex_val lex ) `` )
     : ~ s ev ( gen_expr lex syms cg )
     : s et2 ( nurl_get_last_type )
     : s e_slice_flag ( nurl_str_cat ( nurl_sym_get syms `__last_slice_owned__` ) `` )
@@ -7889,6 +8144,11 @@
         = ev __ed
         = e_dup T
     } {}
+    // Mirror of t_ven above.
+    : ~ s e_ven ``
+    ? & ( is_ident_tok e_tt0 ) & ( seq e_v0 e_retid ) != 0 ( nurl_str_len e_retid )
+    { = e_ven ( nurl_str_cat ( nurl_sym_get2 syms e_retid `__enum_of` ) `` ) }
+    { = e_ven ( nurl_str_cat ( nurl_sym_get syms `__last_join_variant_enum__` ) `` ) }
     : s elbl ( nurl_sym_get syms `__cur_lbl__` )
     : i edr g_did_ret
     : ~ s ev64 ( nurl_str_cat ev `` )
@@ -7938,6 +8198,16 @@
     // `br`, producing label cascades with no terminators (LLVM error
     // "expected instruction opcode").
     ? & != 0 tdr != 0 edr { ( emit_call_term `unreachable` ) = g_did_ret 1 } { = g_did_ret 0 }
+    // A `?`-join whose BOTH arms are variants of the same enum yields
+    // the tag of whichever arm ran — publish which enum, so the enum
+    // wrap sites (binding init/assign, return) can bless
+    // `= ferr ? cond ResolveConflict ResolveNoMatch` exactly as they
+    // bless a bare `= ferr ResolveConflict`. Consume-once: readers
+    // clear it, and each arm above resets it against stale residue.
+    ( nurl_sym_def syms `__last_join_variant_enum__` `` )
+    ? & != 0 ( nurl_str_len t_ven ) ( seq t_ven e_ven )
+    { ( nurl_sym_def syms `__last_join_variant_enum__` t_ven ) }
+    {}
     // Prefix-arity grammar: `?` consumed bare expressions for
     // then/else, but the very next token is `{`. Almost always the
     // n-ary `&`/`|` foot-gun: user wrote `? & a b c d { then } { else }`
@@ -12754,6 +13024,12 @@
 
                 // Widen i1 short-circuit / comparison results to the declared
                 // integer width before storing (`: i can_l & …` etc.).
+                // Hand the RHS's first-token evidence to the enum-wrap
+                // gate (consume-once; branch form, not a `?`-join of a
+                // tracked ident — that join leaks its phi copy).
+                ? ( is_ident_tok bck_rhs_tt )
+                { ( nurl_sym_def syms `__store_rhs_tok__` bck_rhs_val ) }
+                { ( nurl_sym_def syms `__store_rhs_tok__` `-` ) }
                 : s widened_val ( coerce_store_val lex val vt ptype syms cg )
                 // Handle closure to function pointer conversion
                 : s store_val ( convert_closure_arg widened_val vt ptype cg )
@@ -13125,6 +13401,13 @@
         // Widen i1 short-circuit / comparison results to the LHS's
         // declared integer width, so `= myi64 & a b` stores cleanly.
         : s rhs_ty ( nurl_get_last_type )
+        // RHS first-token evidence for the enum-wrap gate (see the
+        // binding-init site): a non-ident RHS must VETO the stale
+        // last-ident heuristic (`= c 7` after `: Color c Red` wrapped 7
+        // on Red's residue, silently).
+        ? ( is_ident_tok bck_rhs_tt )
+        { ( nurl_sym_def syms `__store_rhs_tok__` bck_rhs_val ) }
+        { ( nurl_sym_def syms `__store_rhs_tok__` `-` ) }
         : s store_val ( coerce_store_val lex val rhs_ty vt syms cg )
         ? != 0 ( nurl_str_len ptr )
         { ( nurl_print `  store ` ) ( nurl_print ( nurl_llty vt ) ) ( nurl_print ` ` )
@@ -14750,16 +15033,28 @@
                             = actual_fty `i64`
                         }
                     }
-                    ? ( seq fty `double` )
-                    {  // double → i64 via bitcast (payload slot is i64).
-                        // The receiving ?? match arm does the inverse via
-                        // bitcast i64→double when reconstructing the value.
-                        : s db_bc ( nurl_cg_reg cg )
-                        ( nurl_print `  ` ) ( nurl_print db_bc )
-                        ( nurl_print ` = bitcast double ` ) ( nurl_print fval )
-                        ( nurl_print ` to i64\n` )
-                        = actual_fval db_bc
-                        = actual_fty `i64`
+                    ? ( is_float_ty ( nurl_llty fty ) )
+                    {  // Float value into the payload slot: legal ONLY when
+                        // the declared payload is float-family (width-bridge
+                        // it) or the i64 box of a NURL-typed slot whose
+                        // reader bitcasts back (payload_ty i64 with the
+                        // recorded NURL payload type also `f` — the `! f E`
+                        // shape; its ?? arm reconstructs via bitcast). A
+                        // float into a genuinely-INTEGER payload (`@ ? i
+                        // { T 1.5 }`) used to bitcast 1.5's BITS into the
+                        // slot — the match arm then read 4609434218613702656,
+                        // silently.
+                        : s __pfl ( src_float_ty payload_ty )
+                        ? != 0 ( nurl_str_len __pfl )
+                        { ? ( seq ( nurl_llty fty ) __pfl )
+                            {}  // exact match handled by payload_matches above; width differs:
+                            { : s __fw ( __emit_fwiden cg fval ( nurl_llty fty ) __pfl )
+                                = actual_fval __fw
+                                = actual_fty ( nurl_str_cat payload_ty `` ) } }
+                        { ( die lex ( nurl_str_cat3
+                            ( nurl_str_cat `payload of this option/result literal has float type '` ( llvm_to_nurl ( nurl_llty fty ) ) )
+                            ( nurl_str_cat3 `' but the declared payload type is '` ( llvm_to_nurl payload_ty ) `' — NURL has no implicit float↔integer conversions` )
+                            `; storing the bits anyway would make the '??' match arm read the float's raw bit pattern as an integer. Convert explicitly ('# i expr' truncates toward zero), or declare the payload 'f'.` ) ) }
                     }
                     {  // Integer payload whose width differs from the value's.
                         // For `! T E` the payload slot is always i64, so an
@@ -14784,7 +15079,17 @@
                             ( nurl_print `\n` )
                             = actual_fval __cv
                             = actual_fty payload_ty }
-                        {  // payload_ty is not an int. The one remaining
+                        {  // Integer value into a FLOAT payload (`@ ? f
+                            // { T 3 }`) — the dual of the float→int die
+                            // above; the raw insertvalue was invalid IR
+                            // only clang reported.
+                            ? & > __vw 0 ( is_float_ty ( nurl_llty payload_ty ) )
+                            { ( die lex ( nurl_str_cat3
+                                ( nurl_str_cat `payload of this option/result literal has integer type '` ( llvm_to_nurl ( nurl_llty fty ) ) )
+                                ( nurl_str_cat3 `' but the declared payload type is '` ( llvm_to_nurl payload_ty ) `' (a float) — NURL has no implicit integer↔float conversions` )
+                                `. Write the payload as a float ('2.0', not '2'), or convert with '# f expr'.` ) ) }
+                            {}
+                            // payload_ty is not an int. The one remaining
                             // shape is an OPTION whose payload is a named
                             // enum (`? E`, payload field `%E`) carrying a
                             // bare no-payload variant — which evaluates to
@@ -15351,6 +15656,14 @@
 // no-op in every other case. Placed here so both the let-binding and
 // `=`-assign paths can share it.
 @ coerce_store_val i lex s val s from_ty s to_ty i syms i cg → s {
+    // RHS first-token evidence from the binding-init / assignment call
+    // sites, consume-once: `` = no evidence (fall back to the last-ident
+    // heuristic), `-` = the RHS was NOT a bare identifier (a stale
+    // last-ident must not bless the enum wrap — `: Color c Red` followed
+    // by `= c 7` used to wrap 7 on Red's residue), anything else = the
+    // identifier the RHS was spelled as.
+    : s __srv ( nurl_str_cat ( nurl_sym_get syms `__store_rhs_tok__` ) `` )
+    ( nurl_sym_def syms `__store_rhs_tok__` `` )
     // The void/unit value (a bare type keyword `v`) is never storable —
     // `: i y v` / `= x v` used to emit `store i64 void`. Reject at the source.
     ( die_if_void lex val `initialiser / assignment` )
@@ -15386,7 +15699,24 @@
     { : s tname ( nurl_str_slice to_ty 1 - ( nurl_str_len to_ty ) 1 )
         : s vlist ( nurl_sym_get2 syms tname `__variants` )
         ? != 0 ( nurl_str_len vlist )
-        { : s r ( nurl_cg_reg cg )
+        {  // Only a VARIANT of the declared enum may wrap: a bare variant
+            // name, or a `?`-join both of whose arms gen_cond proved
+            // variants of this enum. Any other i64 (`: Color c 7`,
+            // `= c 7`, an int binding) used to wrap silently — a number
+            // became an enum value whose tag may name no variant at all,
+            // and every later match walked past it.
+            : s __wvid ( nurl_sym_get syms `__last_ident_name__` )
+            : s __wjve ( nurl_str_cat ( nurl_sym_get syms `__last_join_variant_enum__` ) `` )
+            ( nurl_sym_def syms `__last_join_variant_enum__` `` )
+            ? | | & != 0 ( nurl_str_len __srv ) ( str_contains_word vlist __srv )
+            ( seq __wjve tname )
+            & & == 0 ( nurl_str_len __srv ) != 0 ( nurl_str_len __wvid )
+            ( str_contains_word vlist __wvid )
+            {}
+            { ( die_stmt lex ( nurl_str_cat ( nurl_str_cat4
+                `value of numeric type '` ( llvm_to_nurl ( nurl_llty from_ty ) ) `' cannot initialise / assign a binding of enum type '` tname )
+                `' — an enum is a closed set of named variants, and no number converts into one implicitly (the value could name no variant at all). Assign a variant by name (': Color c Red'), or declare the binding numeric.` ) ) }
+            : s r ( nurl_cg_reg cg )
             ( nurl_print `  ` ) ( nurl_print r )
             ( nurl_print ` = insertvalue ` ) ( nurl_print ( nurl_llty to_ty ) )
             ( nurl_print ` undef, i64 ` ) ( nurl_print val ) ( nurl_print `, 0\n` )
@@ -15504,10 +15834,42 @@
         // rejected.
         : b csv_agg & > ( int_width from_ty ) 0
         == ( nurl_str_get ( nurl_llty to_ty ) 0 ) 123
-        ? | | != csv_sf csv_tf & ( is_ptr_ty from_ty ) ! ( is_ptr_ty to_ty ) csv_agg
+        // Two anonymous/function aggregates spelled differently — a
+        // `{ i1, double }` option bound to a ': ?i' declaration, or a
+        // '(@ f f)' closure bound to '(@ i i)'. The store is invalid IR
+        // for the option shapes (only clang saw it), and for closures it
+        // ASSEMBLES — every later invoke then reinterprets its arguments.
+        // Whitespace-blind: aggregate spacing is not canonical.
+        : b csv_agg2 & & == ( nurl_str_get ( nurl_llty from_ty ) 0 ) 123
+        == ( nurl_str_get ( nurl_llty to_ty ) 0 ) 123
+        ! ( seq ( __strip_spaces ( nurl_llty from_ty ) ) ( __strip_spaces ( nurl_llty to_ty ) ) )
+        // An aggregate value into a plain scalar binding (`: i x` from an
+        // option/result/slice value) — the legal unwraps all returned
+        // above, so what reaches here would be `store i64 { i1, i64 }…`.
+        : b csv_agg_src & == ( nurl_str_get ( nurl_llty from_ty ) 0 ) 123
+        | > ( int_width ( nurl_llty to_ty ) ) 0 ( is_float_ty ( nurl_llty to_ty ) )
+        // NAMED types (`%A` — a struct or enum, by value: pointers are
+        // excluded) are NOMINAL: a `%Fruit` value stored into a `%Color`
+        // binding, a `%B` into a `: A`, a narrow int into a `%S`, or a
+        // `%S` into a `: i` all reached the raw `store` — cross-enum and
+        // cross-struct stores were invalid IR only clang saw, and the
+        // enum ones share a layout, one silent reinterpretation away.
+        // Every legal wrap (variant tag, single-handle) returned above.
+        : b csv_named & & ! ( is_ptr_ty from_ty ) ! ( is_ptr_ty to_ty )
+        | == ( nurl_str_get ( nurl_llty from_ty ) 0 ) 37
+        == ( nurl_str_get ( nurl_llty to_ty ) 0 ) 37
+        // The cure differs by shape: an aggregate value wants '??'
+        // destructuring (or matching shapes), a named type is nominal,
+        // a scalar wants a cast.
+        : s __csv_cure ? | csv_agg2 csv_agg_src
+        `' — NURL has no implicit conversions between differently-shaped aggregates; make the option/result/closure shapes match exactly, or destructure with '??' and bind the payload`
+        ? csv_named
+        `' — NURL named types are NOMINAL: no value converts into or out of one implicitly (two enums stay distinct even when their tags overlap). Construct/pass the declared type; an enum takes a variant by name, and '# i x' reads an enum's tag intentionally.`
+        `' — NURL has no implicit conversions; use a matching value or convert with '# T expr'`
+        ? | | | | | != csv_sf csv_tf & ( is_ptr_ty from_ty ) ! ( is_ptr_ty to_ty ) csv_agg csv_agg2 csv_agg_src csv_named
         { ( die_stmt lex ( nurl_str_cat ( nurl_str_cat4
             `value of type '` from_ty `' cannot initialise / assign a binding of type '` to_ty )
-            `' — NURL has no implicit conversions; use a matching value or convert with '# T expr'` ) ) }
+            __csv_cure ) ) }
         {}
     }
     {}
@@ -19507,6 +19869,11 @@
         ( nurl_print ( nurl_str_int tag ) ) ( nurl_print `\n` )
         ( nurl_sym_def syms vname `i64` )
         ( nurl_sym_def syms ( nurl_str_cat vname `__global` ) `1` )
+        // Reverse map variant → owning enum, for the `?`-join variant
+        // blessing (gen_cond) and any future "which enum is this tag
+        // from" query. First writer wins on a (reported-elsewhere)
+        // duplicate variant name.
+        ( nurl_sym_def syms ( nurl_str_cat vname `__enum_of` ) ename )
         // Per-variant visibility = enum's visibility. Records origin so
         // a bare-variant use site (`# NetErr NetBind`) can be cross-
         // file-checked the same way @-fn calls are.

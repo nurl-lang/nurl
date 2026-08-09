@@ -1,0 +1,6 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_cmp_enum_payload.nu:13:14: error: '==' on enum 'E' whose variants carry payloads — tag equality would ignore the payloads. Match with '?? x { … }' and compare what the variants carry.
+    ? == a b { ^ 1 } {}
+             ^
+error: aborting due to 1 previous error

@@ -1,0 +1,4 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_init_int_to_enum.nu:8:5: error: value of numeric type 'i' cannot initialise / assign a binding of enum type 'Color' — an enum is a closed set of named variants, and no number converts into one implicitly (the value could name no variant at all). Assign a variant by name (': Color c Red'), or declare the binding numeric.
+error: aborting due to 1 previous error

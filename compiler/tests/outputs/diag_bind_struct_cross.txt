@@ -1,0 +1,4 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_bind_struct_cross.nu:10:5: error: value of type '%B' cannot initialise / assign a binding of type '%A' — NURL named types are NOMINAL: no value converts into or out of one implicitly (two enums stay distinct even when their tags overlap). Construct/pass the declared type; an enum takes a variant by name, and '# i x' reads an enum's tag intentionally.
+error: aborting due to 1 previous error
