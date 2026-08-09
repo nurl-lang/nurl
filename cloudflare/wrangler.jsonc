@@ -10,6 +10,15 @@
   "vars": {
     "NURL_API_URL": "https://play.nurl-lang.org"
   },
+  // Build artifacts are mirrored here so /download URLs survive container
+  // recycles (idle sleep, deploy adoption, wedge recovery) — the container's
+  // own disk is ephemeral. See src/artifacts.ts.
+  "r2_buckets": [
+    {
+      "binding": "NURL_ARTIFACTS",
+      "bucket_name": "nurl-playground-artifacts"
+    }
+  ],
   "containers": [
     {
       "class_name": "NurlContainer",
