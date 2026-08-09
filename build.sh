@@ -173,14 +173,23 @@ fi
 # with "expected type" and a .ll line number — a diagnostic about our
 # bootstrap snapshot, for what is actually a toolchain-too-old problem.
 #
-# Ask the compiler what it can do instead of what it is called: parse a
-# one-line module that uses `ptr`. Plain first, then under the cc1 flag
-# that turns opaque pointers on for the transitional LLVM releases. A
-# clang that cannot do either cannot build NURL at all, and says so here
-# rather than 200 lines into a build log.
+# Ask the compiler what it can do instead of what it is called: hand it
+# a declaration and see. Plain first, then under the cc1 flag that turns
+# opaque pointers on for the transitional LLVM releases. A clang that
+# can do neither cannot build NURL at all, and says so here rather than
+# 200 lines into a build log.
+#
+# The probe's shape is load-bearing. `declare void @f(ptr)` ALONE parses
+# on the very Apple clang this exists to catch, because LLVM 15 picks a
+# module's pointer mode from what it sees first — `ptr` first and the
+# module is opaque, and all is well. nurlc emits BOTH spellings in one
+# module (`declare void @nurl_journal_push_drop(i8*, ptr)` is line 71 of
+# the bootstrap snapshot), so `i8*` pins the module to typed mode and the
+# `ptr` after it is a parse error. A probe that does not mix them reports
+# a capability the real IR does not get. Mirror what nurlc emits.
 OPAQUE_FLAGS=""
 _probe_ll="$(mktemp -t nurl_probe.XXXXXX)" || _probe_ll="build/.opaque_probe"
-printf 'declare void @nurl_opaque_probe(ptr)\n' > "$_probe_ll"
+printf 'declare void @nurl_opaque_probe(i8*, ptr)\n' > "$_probe_ll"
 if ! "$CLANG" -c -x ir "$_probe_ll" -o /dev/null >/dev/null 2>&1; then
     if "$CLANG" -Xclang -opaque-pointers -c -x ir "$_probe_ll" -o /dev/null >/dev/null 2>&1; then
         OPAQUE_FLAGS="-Xclang -opaque-pointers"

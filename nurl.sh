@@ -364,10 +364,14 @@ else
     # gate said 15 ≥ 15, waved it through, and the user got LLVM's IR
     # parser complaining "expected type" about a .ll file they never
     # wrote. Ask the compiler what it can parse instead of what it is
-    # called: one declaration using `ptr`, plain, then under the cc1 flag
-    # that turns the feature on for the transitional releases.
+    # called: one declaration, plain, then under the cc1 flag that turns
+    # the feature on for the transitional releases. It mixes `i8*` and
+    # `ptr` deliberately — that is what nurlc emits, and a probe using
+    # `ptr` alone passes on the exact Apple clang this catches, because
+    # LLVM 15 takes a module's pointer mode from whichever spelling it
+    # meets first. See build.sh for the long version.
     _probe_ll="${TMPDIR:-/tmp}/nurl_opaque_probe.$$.ll"
-    printf 'declare void @nurl_opaque_probe(ptr)\n' > "$_probe_ll"
+    printf 'declare void @nurl_opaque_probe(i8*, ptr)\n' > "$_probe_ll"
     if ! "$CLANG" -c -x ir "$_probe_ll" -o /dev/null >/dev/null 2>&1; then
         if "$CLANG" -Xclang -opaque-pointers -c -x ir "$_probe_ll" -o /dev/null >/dev/null 2>&1; then
             OPAQUE_FLAGS="-Xclang -opaque-pointers"
