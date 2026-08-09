@@ -9900,6 +9900,28 @@
 // Iterates over a slice { T*, i64 }, binding each element to var.
 // Disambiguation: after '~', IDENT then IDENT → for-each (not while).
 
+// Push `cont` onto the iterated-container stack; return the prior
+// value so the caller can restore it once the loop body is parsed.
+// No-op (returns ``) when --borrowck is off. Lives ABOVE gen_foreach —
+// its ONLY caller — so the owned-return summary is live at the call
+// site; defined below it, the returned save-stack copy was
+// conservatively kept (one leaked strdup per foreach, LSan-visible;
+// the __call_arg_scalar cluster had the same movement in #833).
+@ bck_iter_enter s cont → s {
+    ? == g_borrowck 0 { ^ ( nurl_str_cat `` `` ) } {}
+    : s saved ( nurl_sym_get g_bck `iter_containers` )
+    ? != 0 ( nurl_str_len cont )
+    { ( nurl_sym_set g_bck `iter_containers`
+        ? == 0 ( nurl_str_len saved ) ( nurl_str_cat cont `` )
+        ( nurl_str_cat3 saved ` ` cont ) ) }
+    {}
+    saved
+}
+
+@ bck_iter_exit s saved → v {
+    ? == g_borrowck 0 {} { ( nurl_sym_set g_bck `iter_containers` saved ) }
+}
+
 @ gen_foreach i lex i syms i cg → s {
     : s var_name ( nurl_lex_val lex )
     ( nurl_lex_advance lex )
@@ -11558,23 +11580,10 @@
     fname )
 }
 
-// Push `cont` onto the iterated-container stack; return the prior
-// value so the caller can restore it once the loop body is parsed.
-// No-op (returns ``) when --borrowck is off.
-@ bck_iter_enter s cont → s {
-    ? == g_borrowck 0 { ^ ( nurl_str_cat `` `` ) } {}
-    : s saved ( nurl_sym_get g_bck `iter_containers` )
-    ? != 0 ( nurl_str_len cont )
-    { ( nurl_sym_set g_bck `iter_containers`
-        ? == 0 ( nurl_str_len saved ) ( nurl_str_cat cont `` )
-        ( nurl_str_cat3 saved ` ` cont ) ) }
-    {}
-    saved
-}
-
-@ bck_iter_exit s saved → v {
-    ? == g_borrowck 0 {} { ( nurl_sym_set g_bck `iter_containers` saved ) }
-}
+// (bck_iter_enter / bck_iter_exit moved above gen_foreach — an owned
+// return whose callee sits BELOW its only caller has no ownership
+// summary at the call site, so the saved-stack copy was conservatively
+// kept: one leaked strdup per foreach, LSan-visible.)
 
 // True when LLVM type `lty` is a heap-owned aggregate the borrow
 // checker tracks — a named struct/enum (`%Name`) or an anonymous
@@ -15549,8 +15558,41 @@
     : ~ s vals ``
     : ~ i count 0
     ~ != ( nurl_lex_type lex ) TT_RBRACK {
+        // First token of the element — the enum branch below may only
+        // trust a bare VARIANT spelling (`Red`), never ident residue.
+        : i __setok ( nurl_lex_type lex )
+        : s __sev0 ( nurl_str_cat ( nurl_lex_val lex ) `` )
         : ~ s v ( gen_expr lex syms cg )
-        : s vt ( nurl_get_last_type )
+        : ~ s vt ( nurl_get_last_type )
+        // ENUM element type (`[Color | Red Green]`): a bare variant
+        // evaluates to its i64 tag, and the store below is emitted at
+        // the declared `%Color` — `store %Color <i64>` was invalid IR
+        // only clang reported, so an enum slice literal never compiled.
+        // Wrap a bare variant of the declared enum (or a `?`-join
+        // gen_cond proved variants of it); any other number dies — the
+        // closed-set rule, same as every other enum position.
+        ? & & == ( nurl_str_get ( nurl_llty elem_ty ) 0 ) 37
+        ! ( is_ptr_ty ( nurl_llty elem_ty ) )
+        == ( int_width vt ) 64
+        { : s __setn ( nurl_str_slice ( nurl_llty elem_ty ) 1 - ( nurl_str_len ( nurl_llty elem_ty ) ) 1 )
+            : s __sevl ( nurl_sym_get2 syms __setn `__variants` )
+            ? != 0 ( nurl_str_len __sevl )
+            { : s __sejv ( nurl_str_cat ( nurl_sym_get syms `__last_join_variant_enum__` ) `` )
+                ( nurl_sym_def syms `__last_join_variant_enum__` `` )
+                ? | & ( is_ident_tok __setok ) ( str_contains_word __sevl __sev0 )
+                ( seq __sejv __setn )
+                { : s __sew2 ( nurl_cg_reg cg )
+                    ( nurl_print `  ` ) ( nurl_print __sew2 )
+                    ( nurl_print ` = insertvalue ` ) ( nurl_print ( nurl_llty elem_ty ) )
+                    ( nurl_print ` undef, i64 ` ) ( nurl_print v ) ( nurl_print `, 0\n` )
+                    = v __sew2
+                    = vt ( nurl_str_cat ( nurl_llty elem_ty ) `` ) }
+                { ( die lex ( nurl_str_cat3
+                    ( nurl_str_cat4 `element ` ( nurl_str_int + count 1 ) ` of this slice literal has numeric type '` ( llvm_to_nurl ( nurl_llty vt ) ) )
+                    ( nurl_str_cat3 `' but the slice's declared element type is enum '` __setn `' — an enum is a closed set of named variants, and no number converts into one implicitly` )
+                    `. Write the element as a variant by name.` ) ) } }
+            {} }
+        {}
         // Element ↔ declared-type agreement. The stores below are emitted
         // with the DECLARED element type, so a mismatched element used to
         // become `store i64 2.5, …` — invalid IR that nurlc accepted

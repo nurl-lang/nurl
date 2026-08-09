@@ -1,0 +1,6 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_slice_lit_int_enum_elem.nu:9:32: error: element 2 of this slice literal has numeric type 'i' but the slice's declared element type is enum 'Color' — an enum is a closed set of named variants, and no number converts into one implicitly. Write the element as a variant by name.
+    : [Color cs [Color | Red 7 Blue]
+                               ^
+error: aborting due to 1 previous error
