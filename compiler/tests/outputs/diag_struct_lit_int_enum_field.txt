@@ -1,0 +1,6 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_struct_lit_int_enum_field.nu:9:19: error: field 0 of struct literal 'S' is declared enum 'Color' but the value has numeric type 'i' — an enum is a closed set of named variants, and no number converts into one implicitly. Give the field a variant by name.
+    : S s @ S { 7 }
+                  ^
+error: aborting due to 1 previous error

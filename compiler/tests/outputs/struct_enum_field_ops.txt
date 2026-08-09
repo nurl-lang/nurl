@@ -1,0 +1,9 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+lit_variant
+lit_join
+field_assign
+field_read
+match_green

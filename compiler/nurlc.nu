@@ -15390,6 +15390,39 @@
             = actual_fval cvd
             = actual_fty `double` }
         {}
+        // ENUM-typed field of a plain struct. A bare variant evaluates
+        // to its i64 tag, and the check above deliberately let it
+        // through — but nothing ever WRAPPED it, so `@ S { Green }`
+        // emitted `insertvalue %S …, i64 …` against a `%Color` slot:
+        // invalid IR only clang reported, with no source location. Wrap
+        // a bare variant of the field's enum (or a `?`-join gen_cond
+        // proved to be variants of it) into the enum shape; any other
+        // number dies — the closed-set rule, same as binding/return
+        // position.
+        ? & & & != 0 ( nurl_str_len decl_fty )
+        == ( nurl_str_get decl_fty 0 ) 37
+        != ( nurl_str_get decl_fty - ( nurl_str_len decl_fty ) 1 ) 42
+        == ( int_width actual_fty ) 64
+        { : s __eftn ( nurl_str_slice decl_fty 1 - ( nurl_str_len decl_fty ) 1 )
+            : s __efvl ( nurl_sym_get2 syms __eftn `__variants` )
+            ? != 0 ( nurl_str_len __efvl )
+            { : s __efjv ( nurl_str_cat ( nurl_sym_get syms `__last_join_variant_enum__` ) `` )
+                ( nurl_sym_def syms `__last_join_variant_enum__` `` )
+                ? | & ( is_ident_tok fld_first_tt )
+                ( str_contains_word __efvl fld_first_val )
+                ( seq __efjv __eftn )
+                { : s __efw ( nurl_cg_reg cg )
+                    ( nurl_print `  ` ) ( nurl_print __efw )
+                    ( nurl_print ` = insertvalue ` ) ( nurl_print ( nurl_llty decl_fty ) )
+                    ( nurl_print ` undef, i64 ` ) ( nurl_print actual_fval ) ( nurl_print `, 0\n` )
+                    = actual_fval __efw
+                    = actual_fty ( nurl_str_cat decl_fty `` ) }
+                { ( die lex ( nurl_str_cat3
+                    ( nurl_str_cat4 `field ` ( nurl_str_int idx ) ` of struct literal '` cur_sname )
+                    ( nurl_str_cat4 `' is declared enum '` __eftn `' but the value has numeric type '` ( llvm_to_nurl actual_fty ) )
+                    `' — an enum is a closed set of named variants, and no number converts into one implicitly. Give the field a variant by name.` ) ) } }
+            {} }
+        {}
 
         : s r ( nurl_cg_reg cg )
         ( nurl_print `  ` ) ( nurl_print r )
