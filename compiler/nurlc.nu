@@ -289,6 +289,12 @@
     ? ( seq ty `i16` ) `i16`
     ? ( seq ty `i32` ) `i32`
     ? ( seq ty `i64` ) `i64`
+    // `u8` was MISSING from this ladder (only bare `u` mapped to it),
+    // so the documented `u8` spelling fell through to the named-type
+    // default and every `: u8 x` binding carried the phantom type
+    // `%u8` — undeclared in the module, surfacing as far-away invalid
+    // IR (or a wrong-type binding) at first real use.
+    ? ( seq ty `u8` ) `u8`
     ? ( seq ty `u16` ) `u16`
     ? ( seq ty `u32` ) `u32`
     ? ( seq ty `u64` ) `u64`
@@ -302,6 +308,7 @@
 @ nurl_type_is_unsigned s nt → b {
     ? == 0 ( nurl_str_len nt ) { ^ F } {}
     ? ( seq nt `u` ) { ^ T } {}
+    ? ( seq nt `u8` ) { ^ T } {}
     ? ( seq nt `u16` ) { ^ T } {}
     ? ( seq nt `u32` ) { ^ T } {}
     ? ( seq nt `u64` ) { ^ T } {}
@@ -14230,6 +14237,16 @@
         ? ( seq ( nurl_llty dt ) `i1` )
         { ( die lex `'# b' of a float value is not a truth test — an i1 holds only 0 or 1, so the conversion is poison for any other value (LLVM 'fptosi double 3.5 to i1'). Write the comparison you mean: ': b nz != 0.0 x' (non-zero), or compare against the threshold you have in mind.` ) }
         {}
+        // …and only an INTEGER target takes a float at all. A pointer or
+        // aggregate target emitted `fptosi double … to i8*` / `to %S` —
+        // invalid IR only clang reported, with no source location.
+        // (Width off the LLVM spelling: int_width does not read the
+        // `u8`/`u16`/`u32` source spellings.)
+        ? == 0 ( int_width ( nurl_llty dt ) )
+        { ( die lex ( nurl_str_cat3
+            `a float value does not cast to '` ( llvm_to_nurl dt )
+            `' — only integer targets take a float ('# i x' truncates toward zero). Format to text with ( nurl_str_float x ), or construct the aggregate you mean from its fields.` ) ) }
+        {}
         ( nurl_print `  ` ) ( nurl_print res )
         ( nurl_print ? dst_unsigned ` = fptoui ` ` = fptosi ` )
         ( nurl_print ( nurl_llty st ) ) ( nurl_print ` ` )
@@ -14245,6 +14262,22 @@
         // unsigned value with the high bit set must NOT be read as a
         // negative number), else sitofp. The source's signedness is in
         // its type (A1) — `u8`..`u64` stay distinct from the i-types.
+        // Only an INTEGER source converts. `# f a` of a struct emitted
+        // `sitofp %A … to double`, and of a string `sitofp i8* …` —
+        // invalid IR only clang reported, with no source location.
+        // REGISTER values only: a bare integer literal reaches here
+        // with whatever stale type the previous statement left (a
+        // literal sets no last-type), and a constant sitofp is valid
+        // at any spelled width — the invalid-IR shapes are all
+        // register-borne. (Width off the LLVM spelling — see the
+        // target-side note.)
+        ? & == ( nurl_str_get val 0 ) 37 == 0 ( int_width ( nurl_llty st ) )
+        { ? ( is_ptr_ty st )
+            { ( die lex `'# f' of a pointer/string value — an address's bytes have no numeric meaning. Parse a string's TEXT with ( nurl_str_to_float s ), or read the numeric field you mean first.` ) }
+            { ( die lex ( nurl_str_cat3
+                `'# f' of an aggregate value of type '` ( llvm_to_nurl st )
+                `' — an option/result/struct/enum does not convert to a number by cast. Extract or '??'-destructure the numeric payload first ('# i x' reads an ENUM's tag; a float payload needs no cast at all).` ) ) } }
+        {}
         ( nurl_print `  ` ) ( nurl_print res )
         ( nurl_print ? ( ty_is_unsigned st ) ` = uitofp ` ` = sitofp ` )
         ( nurl_print ( nurl_llty st ) )
@@ -14256,7 +14289,16 @@
         ( nurl_set_last_type dt )
         ^ res
     }
-    { ? & src_ptr == ( int_width dt ) 64
+    {  // A pointer converts to a 64-BIT int only (the ptrtoint below).
+        // A narrower integer target — `# b p` as a would-be null test,
+        // `# u8 p` — fell through every branch and emitted a nonsense
+        // cast only clang rejected, location-free.
+        ? & & src_ptr > ( int_width ( nurl_llty dt ) ) 0 != ( int_width ( nurl_llty dt ) ) 64
+        { ( die lex ( nurl_str_cat3
+            `cannot cast a pointer/string to '` ( llvm_to_nurl ( nurl_llty dt ) )
+            `' — an address converts to a 64-bit integer only ('# i p'), then narrow that if you mean the low bits. For a null test write the comparison: '!= 0 # i p'.` ) ) }
+        {}
+        ? & src_ptr == ( int_width dt ) 64
         {  // pointer → 64-bit int (i64 or u64): ptrtoint
             ( nurl_print `  ` ) ( nurl_print res )
             ( nurl_print ` = ptrtoint ` ) ( nurl_print ( nurl_llty st ) )
@@ -19606,6 +19648,21 @@
         ( nurl_print ` @` ) ( nurl_print fname )
         ( nurl_print `(` ) ( nurl_print params_str ) ( nurl_print `)\n\n` )
     }
+    // Non-variadic FFI arity: register the same `__arity` key
+    // scan_fn_sigs writes for @-functions, so the existing call-site
+    // count check covers FFI too. `( sin 1.0 2.0 )` against a
+    // one-param declaration ASSEMBLED (an opaque-pointer call carries
+    // its own signature) and ran — the surplus ignored; a missing
+    // argument read an unset ABI register, silently. Registered LAST:
+    // the declare-suppression above reads `__arity` as "defined by a
+    // NURL @-function", so writing it any earlier suppressed every
+    // FFI declare in the module. A NURL definition of the same name
+    // (the unikernel-shim case) parses via scan_fn_sigs before any
+    // call site, so the count it registered stays authoritative —
+    // matching what the linker will actually bind.
+    ? & == 0 ( nurl_sym_len2 syms fname `__variadic` ) ! defined_in_nurl
+    { ( nurl_sym_def syms ( nurl_str_cat fname `__arity` ) ( nurl_str_int pct ) ) }
+    {}
 }
 
 // Check if current token could be a payload type (without consuming it)

@@ -1,0 +1,6 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_cast_ptr_to_bool.nu:9:5: error: cannot cast a pointer/string to 'b' — an address converts to a 64-bit integer only ('# i p'), then narrow that if you mean the low bits. For a null test write the comparison: '!= 0 # i p'.
+    ^ 0
+    ^
+error: aborting due to 1 previous error
