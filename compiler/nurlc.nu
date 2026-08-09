@@ -15801,15 +15801,19 @@
         ( nurl_print ` to ` ) ( nurl_print csv_tll ) ( nurl_print `\n` )
         ^ r }
     {}
+    // A dead store never executes, so there is NOTHING to diagnose — bail
+    // before every clash check below, not just the void one. This is the
+    // `: i x ^ a` case (the binding is dead code past a return, legal and
+    // separately warned about), and equally a `?` whose arms BOTH return:
+    // the join leaves g_did_ret=1 and a 'void' last-type residue that is
+    // not a value at all. The nominal/aggregate checks below used to fire
+    // on that residue and reject code that cannot run.
+    ? & ( seq from_ty `void` ) != 0 g_did_ret { ^ val } {}
     // A void source can NEVER initialise anything — it is not a type clash,
     // it is the absence of a value. Before this check, `: i x ?? m { T v → v
     // F → 0.0 }` (arms of different types) bound `undef` and the program
     // printed whatever was in the register — a pointer, usually.
-    //
-    // EXCEPT when the RHS just RETURNED (`: i x ^ a` — the binding is dead
-    // code past a return, legal and separately warned about): g_did_ret
-    // says the store will never execute, so there is nothing to diagnose.
-    ? & & ( seq from_ty `void` ) == 0 g_did_ret & != 0 ( nurl_str_len to_ty ) ! ( seq to_ty `void` )
+    ? & ( seq from_ty `void` ) & != 0 ( nurl_str_len to_ty ) ! ( seq to_ty `void` )
     { : ~ s vr ``
         ? != 0 ( nurl_str_len g_void_reason ) { = vr ( nurl_str_cat ` — ` g_void_reason ) } {}
         ( die_stmt lex ( nurl_str_cat ( nurl_str_cat3
