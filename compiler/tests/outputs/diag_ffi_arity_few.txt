@@ -1,0 +1,6 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_ffi_arity_few.nu:7:21: error: call to 'pow' has the wrong number of arguments: expected 2, got 1 — every NURL operator has fixed arity, so a missing or extra argument shifts every token after it; check this call.
+    : f z ( pow 2.0 )
+                    ^
+error: aborting due to 1 previous error

@@ -1,0 +1,6 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_cast_struct_to_float.nu:9:5: error: '# f' of an aggregate value of type 'A' — an option/result/struct/enum does not convert to a number by cast. Extract or '??'-destructure the numeric payload first ('# i x' reads an ENUM's tag; a float payload needs no cast at all).
+    ^ 0
+    ^
+error: aborting due to 1 previous error

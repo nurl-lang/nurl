@@ -1,0 +1,6 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_cast_float_to_string.nu:6:5: error: a float value does not cast to 's' — only integer targets take a float ('# i x' truncates toward zero). Format to text with ( nurl_str_float x ), or construct the aggregate you mean from its fields.
+    ^ 0
+    ^
+error: aborting due to 1 previous error
