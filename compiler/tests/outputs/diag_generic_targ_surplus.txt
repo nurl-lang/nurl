@@ -1,0 +1,6 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_generic_targ_surplus.nu:10:28: error: generic function 'vec_get' declares 1 type parameter(s) (A) but this call supplies 2 — every tparam is substituted by position, so the counts must match exactly.
+    : ?i o ( vec_get [i i] v 0 )
+                           ^
+error: aborting due to 1 previous error

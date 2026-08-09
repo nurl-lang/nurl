@@ -1,0 +1,6 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_generic_targ_deficit.nu:10:26: error: generic function 'opt_map' declares 2 type parameter(s) (A B) but this call supplies 1 — every tparam is substituted by position, so the counts must match exactly.
+    : ?i m ( opt_map [i] o sq )
+                         ^
+error: aborting due to 1 previous error

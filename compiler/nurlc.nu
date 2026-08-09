@@ -6842,6 +6842,20 @@
         ( expect lex TT_RBRACK )
         : s mangled ( nurl_str_cat fname mangle_sfx )
         = call_targs type_args
+        // Type-argument ARITY. A surplus type arg (`vec_get [i i] …`)
+        // was silently ignored: the mangle used every arg, the
+        // instantiation substituted only the declared tparams, and the
+        // call resolved to a monomorph whose name no other site shares
+        // — compiling clean while saying something the user didn't
+        // mean. A deficit died later with an unrelated substitution
+        // error. Count both sides here, where the list is complete.
+        : s __gtpr ( nurl_sym_get2 g_generic_syms fname `__tparams` )
+        : i __gtpn ( count_words __gtpr )
+        ? & > __gtpn 0 != ( count_words type_args ) __gtpn
+        { ( die lex ( nurl_str_cat ( nurl_str_cat4
+            `generic function '` fname `' declares ` ( nurl_str_int __gtpn ) )
+            ( nurl_str_cat4 ` type parameter(s) (` __gtpr `) but this call supplies ` ( nurl_str_cat ( nurl_str_int ( count_words type_args ) ) ` — every tparam is substituted by position, so the counts must match exactly.` ) ) ) ) }
+        {}
         // Trait-bound check: each `A: Trait` tparam's concrete type must
         // have an impl of Trait (no-op for unbounded generics).
         ( check_generic_bounds lex fname type_args )
