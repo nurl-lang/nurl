@@ -5950,15 +5950,20 @@
 // including inside a compound like `( Box T )`, which the former
 // whole-word compare could not reach.
 @ __subst_word s src s from s to → s {
-    : ~ s out ``
+    // Every temp is TRACKED and no `?`-join carries a bare tracked
+    // ident: the arm protocol hands such a join a strdup'd COPY that no
+    // scope owns — one leaked word per substitution step (LSan, 154
+    // objects per test compile). Reassigning `w` in a branch instead
+    // keeps a single tracked owner throughout.
+    : ~ s out ( nurl_str_cat `` `` )
     : ~ s rest ( nurl_str_cat src `` )
     ~ != 0 ( nurl_str_len rest ) {
-        : s w ( str_first_word rest )
+        : ~ s w ( str_first_word rest )
         = rest ( str_skip_word rest )
-        : s rw ? ( seq w from ) to w
+        ? ( seq w from ) { = w ( nurl_str_cat to `` ) } {}
         = out ? == 0 ( nurl_str_len out )
-        ( nurl_str_cat rw `` )
-        ( nurl_str_cat3 out ` ` rw )
+        ( nurl_str_cat w `` )
+        ( nurl_str_cat3 out ` ` w )
     }
     ^ out
 }
