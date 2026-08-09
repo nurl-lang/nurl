@@ -17,6 +17,13 @@ name: macos-tests
 #     -dead_strip_dylibs.
 #   * run_tests.sh's hang watchdog is `timeout -k`, which macOS ships
 #     under no name at all (Homebrew coreutils calls it gtimeout).
+#   * the toolchain's "is this clang new enough" gate read the major
+#     version out of `clang --version`, which on macOS reports Apple's
+#     own numbering — `Apple clang 15` is not LLVM 15, and Xcode 15.4's
+#     clang cannot parse nurlc's IR at all. The gate passed it anyway.
+#     Now a capability probe decides, and the diagnostic names Homebrew
+#     LLVM instead of leaking an LLVM parse error about a .ll file the
+#     user never wrote.
 #
 # The corpus runs against the SAME compiler/tests/outputs/ goldens as
 # Linux and FreeBSD — deliberately. A separate outputs-macos/ tree would
@@ -97,12 +104,19 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Install build deps
-        # Deliberately NOT installing Homebrew LLVM. The compiler that
-        # matters on macOS is the one a user already has — Xcode's
-        # clang, which every Mac with the command line tools carries and
-        # which nothing in the toolchain has ever been tested against.
-        # Pulling brew's llvm would test a configuration almost nobody
-        # runs and hide an Apple-clang-specific break.
+        # Homebrew LLVM, not Xcode's clang — the configuration
+        # docs/BUILDING.md has always told macOS users to set up, now
+        # gated rather than assumed.
+        #
+        # The first version of this job tried Xcode's clang instead, on
+        # the reasoning that it is what a Mac already has. Measured, it
+        # cannot build NURL at all: Xcode 15.4 ships `Apple clang
+        # version 15.0.0`, whose IR parser rejects the mixed `i8*`/`ptr`
+        # module nurlc emits, and rejects it even under -Xclang
+        # -opaque-pointers. Apple's version numbers are not upstream
+        # LLVM's, so "clang 15" there is not LLVM 15. The build now says
+        # exactly that instead of leaking an LLVM parse error; this job
+        # gates the path that does work.
         #
         # coreutils is for gtimeout — run_tests.sh's hang watchdog. It
         # degrades to running unbounded without one, which on a CI
@@ -110,8 +124,9 @@ jobs:
         # failing a test, so it is a hard dependency here even though
         # the runner tolerates its absence.
         run: |
-          brew install coreutils pkg-config sqlite zstd
-          clang --version
+          brew install llvm coreutils pkg-config sqlite zstd
+          echo "CLANG=$(brew --prefix llvm)/bin/clang" >> "$GITHUB_ENV"
+          "$(brew --prefix llvm)/bin/clang" --version
           echo "gtimeout: $(command -v gtimeout || echo MISSING)"
 
       - name: ./build.sh (stage1 ≡ stage2 fixed point + run_tests.sh)
@@ -119,12 +134,18 @@ jobs:
         # bootstrap fixed point holds AND the corpus baseline matches;
         # any failure surfaces the relevant diff itself, so there is
         # nothing to grep for here.
+        #
+        # $CLANG comes from GITHUB_ENV above and is read by build.sh,
+        # run_tests.sh and nurl.sh alike — the three places that each
+        # resolve their own compiler.
         env:
           # Keg-only formulae: brew does not link sqlite/zstd into the
           # default prefix, so build.sh's pkg-config probes miss them
           # and the corresponding ext/ modules quietly fall back to
           # their *_Unsupported variants — a green run that tested
-          # less than it looks like it did.
+          # less than it looks like it did. Both prefixes are listed
+          # because the matrix spans Apple Silicon (/opt/homebrew) and
+          # Intel (/usr/local).
           PKG_CONFIG_PATH: /opt/homebrew/opt/sqlite/lib/pkgconfig:/opt/homebrew/opt/zstd/lib/pkgconfig:/usr/local/opt/sqlite/lib/pkgconfig:/usr/local/opt/zstd/lib/pkgconfig
         run: ./build.sh
 

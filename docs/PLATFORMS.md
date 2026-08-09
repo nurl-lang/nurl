@@ -23,7 +23,7 @@ verifies — not by intent:
 | FreeBSD x86_64 | **1** | build + bootstrap + full corpus on a FreeBSD 14.2 VM in CI (hard gate); the *release* artifact leg is best-effort (`continue-on-error`) | `install.sh` |
 | Linux ARM64 (glibc) | **2** | release workflow builds natively on an ARM64 runner (`--no-tests`) and smoke-tests a hello-world; not in `ci.yml` | `install.sh` |
 | Windows x86_64 | **1** | the `windows-tests` workflow runs `build.bat` — bootstrap fixed point + the full Windows golden corpus (`run_tests.ps1`) — on every push to `main` **and every PR**, so a Windows-only regression cannot reach `main`; the release job builds with `--no-tests` | `install.ps1` |
-| macOS (x86_64 / ARM64) | **3** | expected to build from source with Homebrew LLVM; unverified — no CI job, no release artifact, and the installer rejects Darwin | build from source |
+| macOS (x86_64 / ARM64) | **1** | the `macos-tests` workflow runs `./build.sh` — bootstrap fixed point + the full corpus, against the **same** `outputs/` goldens as Linux and FreeBSD — on Apple Silicon (`macos-14`) and Intel (`macos-13`), on every push to `main` **and every PR**. It also drives `nurl.sh` end to end, because the driver carries its own link line. No release artifact yet: the installer still rejects Darwin, so the install route stays build-from-source | build from source |
 | Alpine / musl | **3** | build from source only. The shipped Linux archives are glibc-linked and do **not** load under musl | build from source |
 
 On **Windows**, building a program works with no Visual Studio and no

@@ -360,10 +360,10 @@ else
     # refuse anything below 15. That test is wrong on macOS, and wrong in
     # the direction that hurts: `Apple clang version 15.0.0` is not
     # upstream LLVM 15 — Apple numbers its releases independently — and
-    # Xcode 15.4's clang parses `ptr` only under an explicit flag. The
-    # gate said 15 ≥ 15, waved it through, and the user got LLVM's IR
-    # parser complaining "expected type" about a .ll file they never
-    # wrote. Ask the compiler what it can parse instead of what it is
+    # Xcode 15.4's clang cannot parse nurlc's IR at all, with or without
+    # the flag. The gate said 15 ≥ 15, waved it through, and the user got
+    # LLVM's IR parser complaining "expected type" about a .ll file they
+    # never wrote. Ask the compiler what it can parse instead of what it is
     # called: one declaration, plain, then under the cc1 flag that turns
     # the feature on for the transitional releases. It mixes `i8*` and
     # `ptr` deliberately — that is what nurlc emits, and a probe using
