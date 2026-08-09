@@ -1,4 +1,4 @@
-// requires: live ln
+// requires: live
 //
 // fs_glob must descend a symlink to a directory.
 //
@@ -15,9 +15,12 @@
 // segment. The whole glob section of fs_glob returned empty on the macOS
 // CI leg while passing everywhere else.
 //
-// `ln` is declared as the host-capability probe rather than because this
-// test shells out to it: a host with no `ln` is a host with no symlinks
-// (Windows), and both runners already gate on command presence.
+// POSIX-only: it needs an unprivileged symlink(2) and /tmp. Windows is
+// skipped by name in run_tests.ps1, alongside the termios and AF_UNIX
+// tests, rather than behind a `requires:` command probe — the first
+// version declared `ln` on the reasoning that a host without it is a
+// host without symlinks, and the Windows runner has Git for Windows on
+// PATH, so `ln.exe` resolved and the test ran anyway.
 
 $ `stdlib/core/io.nu`
 $ `stdlib/core/string.nu`
