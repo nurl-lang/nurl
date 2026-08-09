@@ -149,6 +149,17 @@ jobs:
           PKG_CONFIG_PATH: /opt/homebrew/opt/sqlite/lib/pkgconfig:/opt/homebrew/opt/zstd/lib/pkgconfig:/usr/local/opt/sqlite/lib/pkgconfig:/usr/local/opt/zstd/lib/pkgconfig
         run: ./build.sh
 
+      # TEMPORARY diagnostic — remove with tools/macos_process_probe.nu
+      # before merging. `if: always()` because it runs AFTER build.sh,
+      # which is red on the corpus step: the toolchain and runtime.o are
+      # built by then, so the probe has everything it needs, and the
+      # eleven remaining failures are exactly what it is asking about.
+      - name: process-path probe (diagnostic)
+        if: always()
+        run: |
+          ./nurl.sh tools/macos_process_probe.nu /tmp/nurl_probe || exit 0
+          gtimeout -k 5s 45s /tmp/nurl_probe || echo "[probe] exited rc=$?"
+
       # ── The DRIVER, which build.sh does not exercise ───────────────
       # build.sh links the toolchain; nurl.sh is what a USER runs to
       # build a program, and it carries its own copy of the link line —
