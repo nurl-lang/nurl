@@ -1,0 +1,6 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_closure_arity_many.nu:8:1: error: call to 'f' passes 2 argument(s) but the declared closure/function type takes 1 — the emitted call would leave parameter registers unset (or drop values); the callee reads garbage. Match the declaration.
+}
+^
+error: aborting due to 1 previous error

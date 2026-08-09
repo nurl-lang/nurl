@@ -1,0 +1,7 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_dup_variant_cross_enum.nu:7:11: error: variant 'X' is already declared by enum 'A' at compiler/tests/diag_dup_variant_cross_enum.nu:6. Variant names are file-scope constants (each becomes a global '@X', and a bare 'X' must name exactly one enum's tag): rename one.
+: | B { Z X }
+          ^
+compiler/tests/diag_dup_variant_cross_enum.nu:10:5: error: value of type 'i64' cannot initialise / assign a binding of type '%B' — NURL named types are NOMINAL: no value converts into or out of one implicitly (two enums stay distinct even when their tags overlap). Construct/pass the declared type; an enum takes a variant by name, and '# i x' reads an enum's tag intentionally.
+error: aborting due to 2 previous errors

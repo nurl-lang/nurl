@@ -3748,6 +3748,59 @@
 
 // ── Call ( fn args... ) ───────────────────────────────────────────
 
+// Number of parameters in an LLVM function-pointer/closure spelling —
+// top-level comma count inside the first `(…)`, nesting-aware (an
+// aggregate parameter like `{ i1, i64 }` carries commas of its own).
+// For a closure struct (`{ <ret> (i8*, …)*, i8* }`) the first slot is
+// the environment, so USER params = this count minus nothing: the env
+// occupies the comma-free first position, making user params == the
+// top-level comma count. For a bare fn ptr (`i64 (i64, i64)*`) total
+// params = commas + 1 when any parameter text is present, 0 otherwise.
+// Returns the raw comma count and whether any parameter text was seen,
+// packed as: -1 malformed (no '('), else commas * 2 + (any ? 1 : 0).
+@ __fnty_paren_commas s t → i {
+    : i n ( nurl_str_len t )
+    : ~ i p 0
+    ~ & < p n != ( nurl_str_get t p ) 40 { = p + p 1 }
+    ? >= p n { ^ -1 } {}
+    = p + p 1
+    : ~ i depth 0
+    : ~ i commas 0
+    : ~ b any F
+    ~ < p n {
+        : i c ( nurl_str_get t p )
+        ? & == c 41 == depth 0
+        { ^ + * commas 2 ? any 1 0 }
+        {}
+        ? | == c 40 == c 123 { = depth + depth 1 }
+        { ? | == c 41 == c 125 { = depth - depth 1 }
+            { ? & == c 44 == depth 0 { = commas + commas 1 } {} } }
+        ? & ! any != c 32 { = any T } {}
+        = p + p 1
+    }
+    ^ -1
+}
+
+// Die when a closure / fn-ptr call's argument count disagrees with the
+// declared type. Under opaque pointers the emitted `call` carries its
+// own signature, so clang ASSEMBLED an arity mismatch (`( f 1 )` on a
+// two-param closure) and the callee read unset registers — garbage,
+// not even a crash.
+@ __closure_arity_check i lex s call_name s ty_ll b is_closure i argc → v {
+    : i __pc ( __fnty_paren_commas ty_ll )
+    ? < __pc 0 { ^ } {}
+    : ~ i want / __pc 2
+    ? ! is_closure
+    { ? == % __pc 2 1 { = want + want 1 } {} }
+    {}
+    ? != want argc
+    { ( die lex ( nurl_str_cat ( nurl_str_cat4
+        `call to '` call_name `' passes ` ( nurl_str_int argc ) )
+        ( nurl_str_cat4 ` argument(s) but the declared closure/function type takes ` ( nurl_str_int want )
+        ` — the emitted call would leave parameter registers unset (or drop values); the callee reads garbage. Match the declaration.` `` ) ) ) }
+    {}
+}
+
 // Call a closure function pointer (closure struct with function + environment)
 @ call_closure_function s closure_var s closure_type s argstr i cg → s {
     : s ret_type ( extract_fn_ptr_return_type closure_type )
@@ -7785,10 +7838,12 @@
         ? ( str_contains call_type `{` )
         {
             // Closure struct - extract function pointer and call with environment
+            ( __closure_arity_check lex call_name call_type_ll T arg_idx )
             = final_result ( call_closure_function loaded_closure call_type argstr cg )
         }
         {
             // Simple function pointer - call directly
+            ( __closure_arity_check lex call_name call_type_ll F arg_idx )
             : s fn_ret_type ( extract_fn_ptr_return_type rlt )
             : s res ( nurl_cg_reg cg )
             ( nurl_print `  ` ) ( nurl_print res )
@@ -7807,9 +7862,11 @@
             : ~ s final_result ( nurl_str_cat `` `` )
             ? ( str_contains call_type `{` )
             {  // Closure struct parameter
+                ( __closure_arity_check lex call_name call_type_ll T arg_idx )
                 = final_result ( call_closure_function var_llvm_val call_type argstr cg )
             }
             {  // Simple function pointer parameter - call directly
+                ( __closure_arity_check lex call_name call_type_ll F arg_idx )
                 : s fn_return_type ( extract_fn_ptr_return_type rlt )
                 : s res ( nurl_cg_reg cg )
                 ( nurl_print `  ` ) ( nurl_print res )
@@ -19872,6 +19929,21 @@
 @ gen_enum_decl i lex i syms → v {
     ( nurl_lex_advance lex )  // consume '|'
     : s ename ( nurl_lex_val lex )
+    // Same flat-namespace guard as struct types (`ty##`, shared key
+    // space so a struct and an enum cannot collide either): a second
+    // `: | Name { … }` emitted a second `%Name = type` and duplicate
+    // variant globals — errors only clang reported, location-free.
+    // Same-position re-registration stays idempotent (import replay).
+    : s __epos ( nurl_str_cat ( vis_current_src_file )
+    ( nurl_str_cat `:` ( nurl_str_int ( nurl_lex_line lex ) ) ) )
+    : s __ekey ( nurl_str_cat `ty##` ename )
+    : s __eprev ( nurl_sym_get g_fn_pos_syms __ekey )
+    ? & != 0 ( nurl_str_len __eprev ) ! ( seq __eprev __epos )
+    { ( die lex ( nurl_str_cat `duplicate type ': | `
+        ( nurl_str_cat ename
+        ( nurl_str_cat3 `' — already defined at ` __eprev `. NURL has no overloading and no shadowing at file scope: rename one, or delete the duplicate. If the two are in different files, both are visible to the importer, so the names must still differ.` ) ) ) )
+    }
+    { ( nurl_sym_def g_fn_pos_syms __ekey __epos ) }
     ( nurl_lex_advance lex )  // consume enum name
     // Grammar v2.0+: consume the staged `pub` flag for the whole
     // enum. Variants inherit the parent enum's visibility — there is
@@ -19893,6 +19965,27 @@
     // because their inner sub-parsers hit EOF first.)
     ~ & != ( nurl_lex_type lex ) TT_RBRACE != ( nurl_lex_type lex ) TT_EOF {
         : s vname ( nurl_lex_val lex )
+        // Variant names are file-scope constants: each becomes a global
+        // `@X`, and a bare `X` expression must name exactly one enum's
+        // tag. A duplicate — within this enum (`{ X X }`: two tags, one
+        // name) or against ANOTHER enum's variant (two `@X` globals) —
+        // emitted IR only clang rejected, location-free; and had it
+        // linked, every bare `X` would resolve to the wrong enum's tag.
+        // Same-position re-registration stays idempotent (import replay).
+        ? ( str_contains_word variants_str vname )
+        { ( die lex ( nurl_str_cat3
+            `duplicate variant '` vname
+            `' — each variant of an enum may be declared once (two tags cannot share a name). Remove or rename the duplicate.` ) ) }
+        {}
+        : s __vpos ( nurl_str_cat ( vis_current_src_file )
+        ( nurl_str_cat `:` ( nurl_str_int ( nurl_lex_line lex ) ) ) )
+        : s __vkey ( nurl_str_cat `var##` vname )
+        : s __vprev ( nurl_sym_get g_fn_pos_syms __vkey )
+        ? & != 0 ( nurl_str_len __vprev ) ! ( seq __vprev __vpos )
+        { ( die lex ( nurl_str_cat ( nurl_str_cat4
+            `variant '` vname `' is already declared by enum '` ( nurl_sym_get2 syms vname `__enum_of` ) )
+            ( nurl_str_cat3 `' at ` __vprev `. Variant names are file-scope constants (each becomes a global '@X', and a bare 'X' must name exactly one enum's tag): rename one.` ) ) ) }
+        { ( nurl_sym_def g_fn_pos_syms __vkey __vpos ) }
         ( nurl_lex_advance lex )
         = variants_str ? == 0 ( nurl_str_len variants_str )
         ( nurl_str_cat vname `` )
