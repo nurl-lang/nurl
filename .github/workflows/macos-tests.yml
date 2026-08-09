@@ -1,8 +1,8 @@
 name: macos-tests
 
 # Runs the FULL macOS host path — ./build.sh bootstrap fixed point + the
-# per-test golden corpus (compiler/tests/run_tests.sh) — on real Apple
-# Silicon and Intel runners.
+# per-test golden corpus (compiler/tests/run_tests.sh) — on a real Apple
+# Silicon runner.
 #
 # This is what backs docs/PLATFORMS.md's macOS tier. Before it, macOS was
 # tier 3: "expected to build from source with Homebrew LLVM; unverified".
@@ -35,10 +35,7 @@ name: macos-tests
 
 on:
   push:
-    # TEMPORARY: claude/** so this workflow can be iterated on before it
-    # reaches main — workflow_dispatch cannot reach a file that is not on
-    # the default branch yet. Drop the pattern before merging.
-    branches: [main, 'claude/**']
+    branches: [main]
   pull_request:
     branches: [main]
   workflow_dispatch:
@@ -77,26 +74,17 @@ jobs:
     # against, so the filter has nothing to say — run. On a PR, skip a
     # docs-only change rather than spend macOS minutes on it.
     if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.code == 'true' }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          # Apple Silicon. The arch the overwhelming majority of Mac
-          # developers are on, and the one the ARM64 Mach-O
-          # cross-compile target (`POST /build_target macos-arm64`) has
-          # only ever been verified against by cross-building, never by
-          # running the toolchain itself.
-          - runner: macos-14
-            arch: arm64
-          # Intel. Still the arch every macOS release artifact was
-          # historically cut for, and the only one Rosetta 2 makes a
-          # universal story out of — a break here is invisible on the
-          # ARM64 leg because the two use different zig/clang codegen
-          # paths entirely.
-          - runner: macos-13
-            arch: x86_64
-    name: build + bootstrap fixed point + test corpus (${{ matrix.arch }})
-    runs-on: ${{ matrix.runner }}
+    # Apple Silicon only, and that is a capacity fact rather than a
+    # preference. This started as a matrix with `macos-13` (the last
+    # Intel image) as its second leg; across ten runs that job never once
+    # left the queue — twenty-plus minutes each time, then cancelled by
+    # the next push. As a required check it would block every PR forever,
+    # which is worse than not claiming the arch at all: a gate people
+    # learn to ignore is not a gate. docs/PLATFORMS.md therefore lists
+    # macOS ARM64 as tier 1 and macOS x86_64 as tier 3, which is what is
+    # actually true. Restore the leg when Intel capacity comes back.
+    name: build + bootstrap fixed point + test corpus (arm64)
+    runs-on: macos-14
     timeout-minutes: 90
 
     steps:
@@ -143,26 +131,11 @@ jobs:
           # default prefix, so build.sh's pkg-config probes miss them
           # and the corresponding ext/ modules quietly fall back to
           # their *_Unsupported variants — a green run that tested
-          # less than it looks like it did. Both prefixes are listed
-          # because the matrix spans Apple Silicon (/opt/homebrew) and
-          # Intel (/usr/local).
+          # less than it looks like it did. Both brew prefixes are
+          # listed so the step keeps working if an Intel leg
+          # (/usr/local rather than /opt/homebrew) is restored.
           PKG_CONFIG_PATH: /opt/homebrew/opt/sqlite/lib/pkgconfig:/opt/homebrew/opt/zstd/lib/pkgconfig:/usr/local/opt/sqlite/lib/pkgconfig:/usr/local/opt/zstd/lib/pkgconfig
         run: ./build.sh
-
-      # TEMPORARY diagnostic — remove with tools/macos_process_probe.nu
-      # before merging. `if: always()` because it runs AFTER build.sh,
-      # which is red on the corpus step: the toolchain and runtime.o are
-      # built by then, so the probe has everything it needs, and the
-      # eleven remaining failures are exactly what it is asking about.
-      - name: process-path probe (diagnostic)
-        if: always()
-        # `|| echo` and not `|| exit 0`: the first version swallowed a
-        # build failure into a green step, and a probe that silently
-        # does not run is worse than no probe.
-        run: |
-          ./nurl.sh tools/macos_process_probe.nu /tmp/nurl_probe \
-            || echo "[probe] BUILD FAILED rc=$?"
-          gtimeout -k 5s 90s /tmp/nurl_probe || echo "[probe] exited rc=$?"
 
       # ── The DRIVER, which build.sh does not exercise ───────────────
       # build.sh links the toolchain; nurl.sh is what a USER runs to
