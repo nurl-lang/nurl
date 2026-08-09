@@ -156,9 +156,13 @@ jobs:
       # eleven remaining failures are exactly what it is asking about.
       - name: process-path probe (diagnostic)
         if: always()
+        # `|| echo` and not `|| exit 0`: the first version swallowed a
+        # build failure into a green step, and a probe that silently
+        # does not run is worse than no probe.
         run: |
-          ./nurl.sh tools/macos_process_probe.nu /tmp/nurl_probe || exit 0
-          gtimeout -k 5s 45s /tmp/nurl_probe || echo "[probe] exited rc=$?"
+          ./nurl.sh tools/macos_process_probe.nu /tmp/nurl_probe \
+            || echo "[probe] BUILD FAILED rc=$?"
+          gtimeout -k 5s 90s /tmp/nurl_probe || echo "[probe] exited rc=$?"
 
       # ── The DRIVER, which build.sh does not exercise ───────────────
       # build.sh links the toolchain; nurl.sh is what a USER runs to
