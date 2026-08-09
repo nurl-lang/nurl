@@ -1,0 +1,6 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_dup_enum_name.nu:6:5: error: duplicate type ': | A' — already defined at compiler/tests/diag_dup_enum_name.nu:5. NURL has no overloading and no shadowing at file scope: rename one, or delete the duplicate. If the two are in different files, both are visible to the importer, so the names must still differ.
+: | A { Z }
+    ^
+error: aborting due to 1 previous error

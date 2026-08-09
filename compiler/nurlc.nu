@@ -3748,6 +3748,59 @@
 
 // ── Call ( fn args... ) ───────────────────────────────────────────
 
+// Number of parameters in an LLVM function-pointer/closure spelling —
+// top-level comma count inside the first `(…)`, nesting-aware (an
+// aggregate parameter like `{ i1, i64 }` carries commas of its own).
+// For a closure struct (`{ <ret> (i8*, …)*, i8* }`) the first slot is
+// the environment, so USER params = this count minus nothing: the env
+// occupies the comma-free first position, making user params == the
+// top-level comma count. For a bare fn ptr (`i64 (i64, i64)*`) total
+// params = commas + 1 when any parameter text is present, 0 otherwise.
+// Returns the raw comma count and whether any parameter text was seen,
+// packed as: -1 malformed (no '('), else commas * 2 + (any ? 1 : 0).
+@ __fnty_paren_commas s t → i {
+    : i n ( nurl_str_len t )
+    : ~ i p 0
+    ~ & < p n != ( nurl_str_get t p ) 40 { = p + p 1 }
+    ? >= p n { ^ -1 } {}
+    = p + p 1
+    : ~ i depth 0
+    : ~ i commas 0
+    : ~ b any F
+    ~ < p n {
+        : i c ( nurl_str_get t p )
+        ? & == c 41 == depth 0
+        { ^ + * commas 2 ? any 1 0 }
+        {}
+        ? | == c 40 == c 123 { = depth + depth 1 }
+        { ? | == c 41 == c 125 { = depth - depth 1 }
+            { ? & == c 44 == depth 0 { = commas + commas 1 } {} } }
+        ? & ! any != c 32 { = any T } {}
+        = p + p 1
+    }
+    ^ -1
+}
+
+// Die when a closure / fn-ptr call's argument count disagrees with the
+// declared type. Under opaque pointers the emitted `call` carries its
+// own signature, so clang ASSEMBLED an arity mismatch (`( f 1 )` on a
+// two-param closure) and the callee read unset registers — garbage,
+// not even a crash.
+@ __closure_arity_check i lex s call_name s ty_ll b is_closure i argc → v {
+    : i __pc ( __fnty_paren_commas ty_ll )
+    ? < __pc 0 { ^ } {}
+    : ~ i want / __pc 2
+    ? ! is_closure
+    { ? == % __pc 2 1 { = want + want 1 } {} }
+    {}
+    ? != want argc
+    { ( die lex ( nurl_str_cat ( nurl_str_cat4
+        `call to '` call_name `' passes ` ( nurl_str_int argc ) )
+        ( nurl_str_cat4 ` argument(s) but the declared closure/function type takes ` ( nurl_str_int want )
+        ` — the emitted call would leave parameter registers unset (or drop values); the callee reads garbage. Match the declaration.` `` ) ) ) }
+    {}
+}
+
 // Call a closure function pointer (closure struct with function + environment)
 @ call_closure_function s closure_var s closure_type s argstr i cg → s {
     : s ret_type ( extract_fn_ptr_return_type closure_type )
@@ -7785,10 +7838,12 @@
         ? ( str_contains call_type `{` )
         {
             // Closure struct - extract function pointer and call with environment
+            ( __closure_arity_check lex call_name call_type_ll T arg_idx )
             = final_result ( call_closure_function loaded_closure call_type argstr cg )
         }
         {
             // Simple function pointer - call directly
+            ( __closure_arity_check lex call_name call_type_ll F arg_idx )
             : s fn_ret_type ( extract_fn_ptr_return_type rlt )
             : s res ( nurl_cg_reg cg )
             ( nurl_print `  ` ) ( nurl_print res )
@@ -7807,9 +7862,11 @@
             : ~ s final_result ( nurl_str_cat `` `` )
             ? ( str_contains call_type `{` )
             {  // Closure struct parameter
+                ( __closure_arity_check lex call_name call_type_ll T arg_idx )
                 = final_result ( call_closure_function var_llvm_val call_type argstr cg )
             }
             {  // Simple function pointer parameter - call directly
+                ( __closure_arity_check lex call_name call_type_ll F arg_idx )
                 : s fn_return_type ( extract_fn_ptr_return_type rlt )
                 : s res ( nurl_cg_reg cg )
                 ( nurl_print `  ` ) ( nurl_print res )
@@ -9843,6 +9900,28 @@
 // Iterates over a slice { T*, i64 }, binding each element to var.
 // Disambiguation: after '~', IDENT then IDENT → for-each (not while).
 
+// Push `cont` onto the iterated-container stack; return the prior
+// value so the caller can restore it once the loop body is parsed.
+// No-op (returns ``) when --borrowck is off. Lives ABOVE gen_foreach —
+// its ONLY caller — so the owned-return summary is live at the call
+// site; defined below it, the returned save-stack copy was
+// conservatively kept (one leaked strdup per foreach, LSan-visible;
+// the __call_arg_scalar cluster had the same movement in #833).
+@ bck_iter_enter s cont → s {
+    ? == g_borrowck 0 { ^ ( nurl_str_cat `` `` ) } {}
+    : s saved ( nurl_sym_get g_bck `iter_containers` )
+    ? != 0 ( nurl_str_len cont )
+    { ( nurl_sym_set g_bck `iter_containers`
+        ? == 0 ( nurl_str_len saved ) ( nurl_str_cat cont `` )
+        ( nurl_str_cat3 saved ` ` cont ) ) }
+    {}
+    saved
+}
+
+@ bck_iter_exit s saved → v {
+    ? == g_borrowck 0 {} { ( nurl_sym_set g_bck `iter_containers` saved ) }
+}
+
 @ gen_foreach i lex i syms i cg → s {
     : s var_name ( nurl_lex_val lex )
     ( nurl_lex_advance lex )
@@ -11501,23 +11580,10 @@
     fname )
 }
 
-// Push `cont` onto the iterated-container stack; return the prior
-// value so the caller can restore it once the loop body is parsed.
-// No-op (returns ``) when --borrowck is off.
-@ bck_iter_enter s cont → s {
-    ? == g_borrowck 0 { ^ ( nurl_str_cat `` `` ) } {}
-    : s saved ( nurl_sym_get g_bck `iter_containers` )
-    ? != 0 ( nurl_str_len cont )
-    { ( nurl_sym_set g_bck `iter_containers`
-        ? == 0 ( nurl_str_len saved ) ( nurl_str_cat cont `` )
-        ( nurl_str_cat3 saved ` ` cont ) ) }
-    {}
-    saved
-}
-
-@ bck_iter_exit s saved → v {
-    ? == g_borrowck 0 {} { ( nurl_sym_set g_bck `iter_containers` saved ) }
-}
+// (bck_iter_enter / bck_iter_exit moved above gen_foreach — an owned
+// return whose callee sits BELOW its only caller has no ownership
+// summary at the call site, so the saved-stack copy was conservatively
+// kept: one leaked strdup per foreach, LSan-visible.)
 
 // True when LLVM type `lty` is a heap-owned aggregate the borrow
 // checker tracks — a named struct/enum (`%Name`) or an anonymous
@@ -15390,6 +15456,39 @@
             = actual_fval cvd
             = actual_fty `double` }
         {}
+        // ENUM-typed field of a plain struct. A bare variant evaluates
+        // to its i64 tag, and the check above deliberately let it
+        // through — but nothing ever WRAPPED it, so `@ S { Green }`
+        // emitted `insertvalue %S …, i64 …` against a `%Color` slot:
+        // invalid IR only clang reported, with no source location. Wrap
+        // a bare variant of the field's enum (or a `?`-join gen_cond
+        // proved to be variants of it) into the enum shape; any other
+        // number dies — the closed-set rule, same as binding/return
+        // position.
+        ? & & & != 0 ( nurl_str_len decl_fty )
+        == ( nurl_str_get decl_fty 0 ) 37
+        != ( nurl_str_get decl_fty - ( nurl_str_len decl_fty ) 1 ) 42
+        == ( int_width actual_fty ) 64
+        { : s __eftn ( nurl_str_slice decl_fty 1 - ( nurl_str_len decl_fty ) 1 )
+            : s __efvl ( nurl_sym_get2 syms __eftn `__variants` )
+            ? != 0 ( nurl_str_len __efvl )
+            { : s __efjv ( nurl_str_cat ( nurl_sym_get syms `__last_join_variant_enum__` ) `` )
+                ( nurl_sym_def syms `__last_join_variant_enum__` `` )
+                ? | & ( is_ident_tok fld_first_tt )
+                ( str_contains_word __efvl fld_first_val )
+                ( seq __efjv __eftn )
+                { : s __efw ( nurl_cg_reg cg )
+                    ( nurl_print `  ` ) ( nurl_print __efw )
+                    ( nurl_print ` = insertvalue ` ) ( nurl_print ( nurl_llty decl_fty ) )
+                    ( nurl_print ` undef, i64 ` ) ( nurl_print actual_fval ) ( nurl_print `, 0\n` )
+                    = actual_fval __efw
+                    = actual_fty ( nurl_str_cat decl_fty `` ) }
+                { ( die lex ( nurl_str_cat3
+                    ( nurl_str_cat4 `field ` ( nurl_str_int idx ) ` of struct literal '` cur_sname )
+                    ( nurl_str_cat4 `' is declared enum '` __eftn `' but the value has numeric type '` ( llvm_to_nurl actual_fty ) )
+                    `' — an enum is a closed set of named variants, and no number converts into one implicitly. Give the field a variant by name.` ) ) } }
+            {} }
+        {}
 
         : s r ( nurl_cg_reg cg )
         ( nurl_print `  ` ) ( nurl_print r )
@@ -15459,8 +15558,41 @@
     : ~ s vals ``
     : ~ i count 0
     ~ != ( nurl_lex_type lex ) TT_RBRACK {
+        // First token of the element — the enum branch below may only
+        // trust a bare VARIANT spelling (`Red`), never ident residue.
+        : i __setok ( nurl_lex_type lex )
+        : s __sev0 ( nurl_str_cat ( nurl_lex_val lex ) `` )
         : ~ s v ( gen_expr lex syms cg )
-        : s vt ( nurl_get_last_type )
+        : ~ s vt ( nurl_get_last_type )
+        // ENUM element type (`[Color | Red Green]`): a bare variant
+        // evaluates to its i64 tag, and the store below is emitted at
+        // the declared `%Color` — `store %Color <i64>` was invalid IR
+        // only clang reported, so an enum slice literal never compiled.
+        // Wrap a bare variant of the declared enum (or a `?`-join
+        // gen_cond proved variants of it); any other number dies — the
+        // closed-set rule, same as every other enum position.
+        ? & & == ( nurl_str_get ( nurl_llty elem_ty ) 0 ) 37
+        ! ( is_ptr_ty ( nurl_llty elem_ty ) )
+        == ( int_width vt ) 64
+        { : s __setn ( nurl_str_slice ( nurl_llty elem_ty ) 1 - ( nurl_str_len ( nurl_llty elem_ty ) ) 1 )
+            : s __sevl ( nurl_sym_get2 syms __setn `__variants` )
+            ? != 0 ( nurl_str_len __sevl )
+            { : s __sejv ( nurl_str_cat ( nurl_sym_get syms `__last_join_variant_enum__` ) `` )
+                ( nurl_sym_def syms `__last_join_variant_enum__` `` )
+                ? | & ( is_ident_tok __setok ) ( str_contains_word __sevl __sev0 )
+                ( seq __sejv __setn )
+                { : s __sew2 ( nurl_cg_reg cg )
+                    ( nurl_print `  ` ) ( nurl_print __sew2 )
+                    ( nurl_print ` = insertvalue ` ) ( nurl_print ( nurl_llty elem_ty ) )
+                    ( nurl_print ` undef, i64 ` ) ( nurl_print v ) ( nurl_print `, 0\n` )
+                    = v __sew2
+                    = vt ( nurl_str_cat ( nurl_llty elem_ty ) `` ) }
+                { ( die lex ( nurl_str_cat3
+                    ( nurl_str_cat4 `element ` ( nurl_str_int + count 1 ) ` of this slice literal has numeric type '` ( llvm_to_nurl ( nurl_llty vt ) ) )
+                    ( nurl_str_cat3 `' but the slice's declared element type is enum '` __setn `' — an enum is a closed set of named variants, and no number converts into one implicitly` )
+                    `. Write the element as a variant by name.` ) ) } }
+            {} }
+        {}
         // Element ↔ declared-type agreement. The stores below are emitted
         // with the DECLARED element type, so a mismatched element used to
         // become `store i64 2.5, …` — invalid IR that nurlc accepted
@@ -19843,6 +19975,21 @@
 @ gen_enum_decl i lex i syms → v {
     ( nurl_lex_advance lex )  // consume '|'
     : s ename ( nurl_lex_val lex )
+    // Same flat-namespace guard as struct types (`ty##`, shared key
+    // space so a struct and an enum cannot collide either): a second
+    // `: | Name { … }` emitted a second `%Name = type` and duplicate
+    // variant globals — errors only clang reported, location-free.
+    // Same-position re-registration stays idempotent (import replay).
+    : s __epos ( nurl_str_cat ( vis_current_src_file )
+    ( nurl_str_cat `:` ( nurl_str_int ( nurl_lex_line lex ) ) ) )
+    : s __ekey ( nurl_str_cat `ty##` ename )
+    : s __eprev ( nurl_sym_get g_fn_pos_syms __ekey )
+    ? & != 0 ( nurl_str_len __eprev ) ! ( seq __eprev __epos )
+    { ( die lex ( nurl_str_cat `duplicate type ': | `
+        ( nurl_str_cat ename
+        ( nurl_str_cat3 `' — already defined at ` __eprev `. NURL has no overloading and no shadowing at file scope: rename one, or delete the duplicate. If the two are in different files, both are visible to the importer, so the names must still differ.` ) ) ) )
+    }
+    { ( nurl_sym_def g_fn_pos_syms __ekey __epos ) }
     ( nurl_lex_advance lex )  // consume enum name
     // Grammar v2.0+: consume the staged `pub` flag for the whole
     // enum. Variants inherit the parent enum's visibility — there is
@@ -19864,6 +20011,27 @@
     // because their inner sub-parsers hit EOF first.)
     ~ & != ( nurl_lex_type lex ) TT_RBRACE != ( nurl_lex_type lex ) TT_EOF {
         : s vname ( nurl_lex_val lex )
+        // Variant names are file-scope constants: each becomes a global
+        // `@X`, and a bare `X` expression must name exactly one enum's
+        // tag. A duplicate — within this enum (`{ X X }`: two tags, one
+        // name) or against ANOTHER enum's variant (two `@X` globals) —
+        // emitted IR only clang rejected, location-free; and had it
+        // linked, every bare `X` would resolve to the wrong enum's tag.
+        // Same-position re-registration stays idempotent (import replay).
+        ? ( str_contains_word variants_str vname )
+        { ( die lex ( nurl_str_cat3
+            `duplicate variant '` vname
+            `' — each variant of an enum may be declared once (two tags cannot share a name). Remove or rename the duplicate.` ) ) }
+        {}
+        : s __vpos ( nurl_str_cat ( vis_current_src_file )
+        ( nurl_str_cat `:` ( nurl_str_int ( nurl_lex_line lex ) ) ) )
+        : s __vkey ( nurl_str_cat `var##` vname )
+        : s __vprev ( nurl_sym_get g_fn_pos_syms __vkey )
+        ? & != 0 ( nurl_str_len __vprev ) ! ( seq __vprev __vpos )
+        { ( die lex ( nurl_str_cat ( nurl_str_cat4
+            `variant '` vname `' is already declared by enum '` ( nurl_sym_get2 syms vname `__enum_of` ) )
+            ( nurl_str_cat3 `' at ` __vprev `. Variant names are file-scope constants (each becomes a global '@X', and a bare 'X' must name exactly one enum's tag): rename one.` ) ) ) }
+        { ( nurl_sym_def g_fn_pos_syms __vkey __vpos ) }
         ( nurl_lex_advance lex )
         = variants_str ? == 0 ( nurl_str_len variants_str )
         ( nurl_str_cat vname `` )
