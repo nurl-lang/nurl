@@ -447,6 +447,16 @@ case "$(uname -s)" in Linux) DL_LIB="-ldl" ;; esac
 AS_NEEDED="-Wl,--as-needed"
 case "$(uname -s)" in Darwin) AS_NEEDED="-Wl,-dead_strip_dylibs" ;; esac
 
+# Hand the resolved toolchain down to every script this build drives —
+# split_equivalence.sh, the tools/*/build.sh scripts, run_tests.sh. Each
+# of them links NURL IR, so each of them needs the same four answers,
+# and each used to work them out again (or hardcode them: `clang`,
+# `-Wl,--as-needed` and `-ldl` were all literals in split_equivalence.sh
+# until macOS CI ran it). Resolve once, export, let the children default
+# to the environment. They keep their own fallbacks so they still run
+# standalone.
+export CLANG OPAQUE_FLAGS AS_NEEDED DL_LIB
+
 # ── Parallel stage links ─────────────────────────────────────
 # Lowering nurlc's own 3.2 MB of IR is ~11 s of single-threaded LLVM,
 # and the bootstrap pays it three times. `nurlc --split=N` writes the
