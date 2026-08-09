@@ -14289,7 +14289,16 @@
         ( nurl_set_last_type dt )
         ^ res
     }
-    { ? & src_ptr == ( int_width dt ) 64
+    {  // A pointer converts to a 64-BIT int only (the ptrtoint below).
+        // A narrower integer target — `# b p` as a would-be null test,
+        // `# u8 p` — fell through every branch and emitted a nonsense
+        // cast only clang rejected, location-free.
+        ? & & src_ptr > ( int_width ( nurl_llty dt ) ) 0 != ( int_width ( nurl_llty dt ) ) 64
+        { ( die lex ( nurl_str_cat3
+            `cannot cast a pointer/string to '` ( llvm_to_nurl ( nurl_llty dt ) )
+            `' — an address converts to a 64-bit integer only ('# i p'), then narrow that if you mean the low bits. For a null test write the comparison: '!= 0 # i p'.` ) ) }
+        {}
+        ? & src_ptr == ( int_width dt ) 64
         {  // pointer → 64-bit int (i64 or u64): ptrtoint
             ( nurl_print `  ` ) ( nurl_print res )
             ( nurl_print ` = ptrtoint ` ) ( nurl_print ( nurl_llty st ) )
