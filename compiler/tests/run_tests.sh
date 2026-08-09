@@ -127,6 +127,20 @@ MAX_OUT_LINES="${MAX_OUT_LINES:-200}"
 TIMEOUT="${TIMEOUT:-60}"
 JOBS="${NURL_TEST_JOBS:-$(nproc 2>/dev/null || echo 4)}"
 
+# `timeout(1)` is coreutils on Linux and base on FreeBSD, but macOS ships
+# neither — there it arrives as `gtimeout` with Homebrew coreutils. Resolve
+# the name once. With no watchdog at all a hung test would wedge the whole
+# runner forever, so say so loudly rather than discovering it as a stalled
+# CI job; the run continues, because a corpus that cannot run is worse than
+# one that cannot bound a hang.
+TIMEOUT_CMD=""
+if command -v timeout >/dev/null 2>&1; then TIMEOUT_CMD="timeout"
+elif command -v gtimeout >/dev/null 2>&1; then TIMEOUT_CMD="gtimeout"
+else
+    echo "WARNING: neither timeout nor gtimeout on PATH — tests run unbounded." >&2
+    echo "         On macOS: brew install coreutils" >&2
+fi
+
 mkdir -p "$OUTDIR" "$WORKDIR"
 
 # Append out_file to dst, capping lines to avoid runaway-output
@@ -247,7 +261,7 @@ run_one() {
             # a tight loop can ignore indefinitely — such leftovers have been
             # found burning a core each 12 hours after their run. Declaring a
             # hang is not the same as ending it.
-            ( cd "$rundir" && timeout -k 5s "${TIMEOUT}s" "./$name" > "$out" 2>&1 ) 2>/dev/null
+            ( cd "$rundir" && $TIMEOUT_CMD ${TIMEOUT_CMD:+-k 5s "${TIMEOUT}s"} "./$name" > "$out" 2>&1 ) 2>/dev/null
             local code=$?
             rm -rf "$rundir"
             { echo "COMPILE OK"; } > "$act"
@@ -279,7 +293,7 @@ run_one() {
 # runner cannot half-export the predicate set and gate differently in
 # the workers than in the parent.
 export -f run_one append_capped strip_root
-export NURLC RUNTIME OUTDIR WORKDIR SCRIPT_DIR ROOT_DIR CLANG LINK_LIBS
+export NURLC RUNTIME OUTDIR WORKDIR SCRIPT_DIR ROOT_DIR CLANG LINK_LIBS TIMEOUT_CMD
 export MAX_OUT_LINES TIMEOUT UPDATE
 
 # ── collect the test set ────────────────────────────────────────

@@ -415,6 +415,13 @@ DL_LIB=""
 case "$(uname -s)" in
     Linux) DL_LIB="-ldl" ;;
 esac
+
+# `--as-needed` is GNU ld / lld spelling. Apple's ld64 errors on the
+# unknown flag rather than ignoring it, so a macOS host needs the ld64
+# name for the same behaviour: -dead_strip_dylibs prunes LC_LOAD_DYLIB
+# entries the program references no symbol from.
+AS_NEEDED="-Wl,--as-needed"
+case "$(uname -s)" in Darwin) AS_NEEDED="-Wl,-dead_strip_dylibs" ;; esac
 if grep -qE '@canvas_(open|present|sleep|should_close|close|mouse_x|mouse_y|mouse_btn)\b' "$LLFILE"; then
     CANVAS_O="$SCRIPT_DIR/stdlib/canvas.o"
     if [ ! -f "$CANVAS_O" ]; then
@@ -675,7 +682,7 @@ if [ "$SPLIT_N" -gt 0 ]; then
         exit 1
     fi
     # shellcheck disable=SC2086
-    cc_run $OPT $ZIG_OPT_FIX -flto=thin -Wl,--as-needed $OPAQUE_FLAGS $QUIET_FLAGS $SPLIT_OBJS "$RUNTIME_TO_LINK" $EXTRA_OBJS -o "$OUTBASE" -lm -lpthread $DL_LIB $EXTRA_LIBS
+    cc_run $OPT $ZIG_OPT_FIX -flto=thin $AS_NEEDED $OPAQUE_FLAGS $QUIET_FLAGS $SPLIT_OBJS "$RUNTIME_TO_LINK" $EXTRA_OBJS -o "$OUTBASE" -lm -lpthread $DL_LIB $EXTRA_LIBS
     # The parts are an artifact of how the link was parallelised; the
     # documented one is $LLFILE, which still holds the whole module.
     # shellcheck disable=SC2086
@@ -684,7 +691,7 @@ else
     # `-flto` is required because stdlib/runtime.o is compiled with -flto
     # (build.sh) and therefore carries LLVM bitcode instead of native code.
     # shellcheck disable=SC2086
-    cc_run $OPT $ZIG_OPT_FIX $LTO_FLAG -Wl,--as-needed $OPAQUE_FLAGS $QUIET_FLAGS $DEBUG_FLAGS $COVERAGE_FLAGS $SAN_LINK_FLAGS "$LLFILE" "$RUNTIME_TO_LINK" $EXTRA_OBJS -o "$OUTBASE" -lm -lpthread $DL_LIB $EXTRA_LIBS
+    cc_run $OPT $ZIG_OPT_FIX $LTO_FLAG $AS_NEEDED $OPAQUE_FLAGS $QUIET_FLAGS $DEBUG_FLAGS $COVERAGE_FLAGS $SAN_LINK_FLAGS "$LLFILE" "$RUNTIME_TO_LINK" $EXTRA_OBJS -o "$OUTBASE" -lm -lpthread $DL_LIB $EXTRA_LIBS
 fi
 
 echo ""

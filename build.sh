@@ -387,6 +387,13 @@ step "clean"         bash -c 'rm -f build/nurlc_lastgood.bin \
 DL_LIB=""
 case "$(uname -s)" in Linux) DL_LIB="-ldl" ;; esac
 
+# `--as-needed` is GNU ld / lld spelling; Apple's ld64 rejects the flag
+# outright rather than ignoring it, so a macOS host cannot use the same
+# string. ld64's equivalent of "drop the libraries nothing referenced"
+# is -dead_strip_dylibs, which prunes LC_LOAD_DYLIB the same way.
+AS_NEEDED="-Wl,--as-needed"
+case "$(uname -s)" in Darwin) AS_NEEDED="-Wl,-dead_strip_dylibs" ;; esac
+
 # ── Parallel stage links ─────────────────────────────────────
 # Lowering nurlc's own 3.2 MB of IR is ~11 s of single-threaded LLVM,
 # and the bootstrap pays it three times. `nurlc --split=N` writes the
@@ -463,14 +470,14 @@ link_stage() {  # link_stage <ir-prefix> <out> <opt-level>
         for p in $pids; do wait "$p" || rc=1; done
         (( rc == 0 )) || return 1
         # shellcheck disable=SC2086
-        "$CLANG" "$opt" -flto=thin -Wno-override-module -Wl,--as-needed $objs stdlib/runtime.o \
+        "$CLANG" "$opt" -flto=thin -Wno-override-module $AS_NEEDED $objs stdlib/runtime.o \
             -lm -lpthread $DL_LIB $CURL_LIBS $OPENSSL_LIBS $SQLITE3_LIBS $ZLIB_LIBS $ZSTD_LIBS \
             -o "$out" || return 1
         # shellcheck disable=SC2086
         rm -f $objs "$pre".[0-9]*.ll
     else
         # shellcheck disable=SC2086
-        "$CLANG" "$opt" $LTO_FLAG $SAN_LDFLAGS -Wl,--as-needed "$pre.ll" stdlib/runtime.o \
+        "$CLANG" "$opt" $LTO_FLAG $SAN_LDFLAGS $AS_NEEDED "$pre.ll" stdlib/runtime.o \
             -lm -lpthread $DL_LIB $CURL_LIBS $OPENSSL_LIBS $SQLITE3_LIBS $ZLIB_LIBS $ZSTD_LIBS \
             -o "$out" || return 1
     fi
@@ -479,7 +486,7 @@ link_stage() {  # link_stage <ir-prefix> <out> <opt-level>
 # Stage 0 is the one link that cannot be split — the committed snapshot
 # is a single file by definition — so it is also the one that gains most
 # from $BOOT_OPT: 8.4 s to 1.6 s, link and emit together.
-step "stage0 link"   "$CLANG" $BOOT_OPT $LTO_FLAG $SAN_LDFLAGS -Wl,--as-needed compiler/nurlc_lastgood.ll stdlib/runtime.o -lm -lpthread $DL_LIB $CURL_LIBS $OPENSSL_LIBS $SQLITE3_LIBS $ZLIB_LIBS $ZSTD_LIBS -o build/nurlc_lastgood.bin
+step "stage0 link"   "$CLANG" $BOOT_OPT $LTO_FLAG $SAN_LDFLAGS $AS_NEEDED compiler/nurlc_lastgood.ll stdlib/runtime.o -lm -lpthread $DL_LIB $CURL_LIBS $OPENSSL_LIBS $SQLITE3_LIBS $ZLIB_LIBS $ZSTD_LIBS -o build/nurlc_lastgood.bin
 
 # Stage 1 is a throwaway: its only job is to emit stage 2's IR, and it
 # is rebuilt on every single build. Split it, and do not optimise it.
