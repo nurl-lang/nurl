@@ -1,0 +1,6 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_volatile_load_untyped.nu:7:5: error: volatile_load expects a typed pointer '*T', so it knows the width to read. Write '( volatile_load p )' where p is '*u32' or similar; cast with '# *u32 addr' if you hold a raw address.
+    ^ v
+    ^
+error: aborting due to 1 previous error
