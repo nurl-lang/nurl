@@ -1,0 +1,5 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_assoc_type_eq_form.nu:18:15: error: associated type 'Elem' must be bound to a simple type name — write 'type Elem i' or 'type Elem MyStruct', with no '=' and no parenthesised or generic form.
+    type Elem = i
+              ^

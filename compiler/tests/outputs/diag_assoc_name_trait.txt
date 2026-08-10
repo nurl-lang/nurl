@@ -1,0 +1,5 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_assoc_name_trait.nu:10:10: error: expected an associated-type name after 'type', found '=' (an assignment starts here). A trait declares one as 'type Name', and each impl binds it with 'type Name ConcreteType' — three tokens, no '='.
+    type = Elem
+         ^

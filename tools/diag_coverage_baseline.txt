@@ -24,7 +24,6 @@
 5ad763372c6c  method ' ' of trait ' ' has no Self receiver as its first parameter — not object-safe for '% '
 5dfdf7d4ec64  expected '{' to open the default arm's body, found . The default arm is '_ → { body }'.
 6490ab011ef9  expected '{' to open this select arm's body, found . A select arm's body is always braced. A select 
-66899da59bce  expected an associated-type name after 'type', found . A trait declares one as 'type Name', and each
 697d73c26332  expected a binding name, found . A binding is ': type name value' — the TYPE comes before the name, 
 6a7a475738c9  an or-pattern cannot carry a guard — 'A | B ? cond → body' would have to hold for both variants and 
 70153c509a6c  inout field argument: ' ' is not a named-struct binding — the field form needs a struct with declare
@@ -33,7 +32,6 @@
 7f5fb5327ef2  element of this slice literal has type ' ' but the slice's declared element type is ' ' — a value of
 802e2cc68a45  string_len expects %String, got 'i8*' (raw C-string). Use 'nurl_str_len' for raw C-string pointers.
 812c266928da  a supertrait ':' clause belongs on the trait DECLARATION ('% Name : Base { ... }'), not on an impl. 
-863b07109626  expected an associated-type name after 'type', found . An impl binds what the trait declared: 'type 
 88d59a9c07fe  element of this slice literal has type ' ' but the slice's declared element type is ' ' — pointer-vs
 89608f397d6c  cannot mutate immutable parameter ' ' — parameters are immutable bindings. Copy it into a ': ~' loca
 8f1f18d7ebfd  parameter name 'entry' collides with LLVM's reserved entry: block label. Rename (e.g. 'ent', 'tab_en
@@ -45,7 +43,6 @@
 9a6844424ec4  type ' ' does not implement trait ' ', so it cannot be made into a '% ' object. Write the impl first
 a000cdd254fc  '#' is the cast operator; struct/enum literals use '@'. Write '@ { ... }' instead.
 a193bc7b84db  inout field argument: struct ' ' has no field '
-a76c19aaaa52  associated type ' ' must be bound to a simple type name — write 'type Name = i' or 'type Name = MySt
 a7b912fa462f  expected '→' after the match guard, found . A guarded arm is 'Variant payload ? guard → body' — the 
 aba81704d0f4  inout argument to ' ' must be a mutable ': ~' binding or a '. binding field' field target, not an ex
 abd79dec9f97  '%' in a type position must be followed by a trait name (dynamic trait object '%Trait')
@@ -68,9 +65,6 @@ dbb6645738fc  ( in type position must be followed by @ or type name
 e13f6093bfb5  expected '{' to open the closure body, found . A closure is '\\ params → ret { body }' — the body is
 ea01dc19d4df  volatile_load expects a typed pointer '*T', so it knows the width to read. Write '( volatile_load p 
 ea026f9d2966  this condition produces no value (the expression is 'v'/void — a call that returns nothing?) — a con
-eb8fe812ca4f  expected '→' after the channel in this select arm, found . A select arm is '[T] chan → name { body }
-eb8fe812ca4f  expected the received value's name after '→', found . A select arm is '[T] chan → name { body }' — t
-eb8fe812ca4f  expected '[' or '_' to start a select arm, found . A select arm is '[T] chan → name { body }' — the 
 f61ec29769e4  an or-pattern lists named enum variants; 'T' and 'F' are the option/result arms and there are only t
 f79c4038b6f2  cannot store a value of type ' ' into this element — the element type differs and NURL has no implic
 f79c4038b6f2  cannot store a value of type ' ' into this element — the element type differs and NURL has no implic

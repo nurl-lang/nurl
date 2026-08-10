@@ -1,0 +1,6 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_enum_variant_outside_braces.nu:12:15: error: enum variant 'A' belongs INSIDE the braces — write '@ E { A <payload> }'. An enum literal is '@ EnumName { Variant payload }': the variant is the first item in the brace list, not a word between the name and the brace. A payload-less variant is just '@ EnumName { Variant }'.
+    : E e @ E A 1
+              ^
+error: aborting due to 1 previous error
