@@ -2658,7 +2658,7 @@
     { : b ret_vf | ( seq lt `double` ) ( seq lt `float` )
         : b ret_df | ( seq fn_rt `double` ) ( seq fn_rt `float` )
         ? | != ret_vf ret_df & ( is_ptr_ty lt ) ! ( is_ptr_ty fn_rt )
-        { ( die lex ( nurl_str_cat ( nurl_str_cat4
+        { ( die_stmt lex ( nurl_str_cat ( nurl_str_cat4
             `return value type '` lt `' does not match the declared return type '` fn_rt )
             `' — NURL has no implicit conversions; return a value of the declared type or convert with '# T expr'` ) ) }
         {}
@@ -2668,7 +2668,7 @@
         // accepted (rc 0) and only the LLVM verifier rejected, with a .ll
         // line number and no source location.
         ? & & ret_vf ret_df ! ( seq lt fn_rt )
-        { ( die lex ( nurl_str_cat ( nurl_str_cat4
+        { ( die_stmt lex ( nurl_str_cat ( nurl_str_cat4
             `return value type '` ( llvm_to_nurl lt ) `' does not match the declared return type '` ( llvm_to_nurl fn_rt ) )
             `' — a float width widens into a BINDING (': f x f32val' is fine), but a return type is a contract and must match exactly. Convert with '# f expr' (widen, lossless) or '# f32 expr' (narrow).` ) ) }
         {}
@@ -2683,14 +2683,14 @@
         ? & & == ( nurl_str_get ( nurl_llty lt ) 0 ) 123
         == ( nurl_str_get ( nurl_llty fn_rt ) 0 ) 123
         ! ( seq ( __strip_spaces ( nurl_llty lt ) ) ( __strip_spaces ( nurl_llty fn_rt ) ) )
-        { ( die lex ( nurl_str_cat ( nurl_str_cat4
+        { ( die_stmt lex ( nurl_str_cat ( nurl_str_cat4
             `return value type '` ( nurl_llty lt ) `' does not match the declared return type '` ( nurl_llty fn_rt ) )
             `' — the payload/signature inside the aggregate differs, and NURL has no implicit conversions between option/result/slice/closure shapes. Construct the declared shape ('@ ? i { T … }' for '→ ?i'), or fix the declaration.` ) ) }
         {}
         // Return the wrong named struct by value (the return-position dual of
         // the call-site struct check): `^ b` from a `→ A` fn where b is a B.
         ? ( __arg_named_struct_mismatch lt fn_rt )
-        { ( die lex ( nurl_str_cat ( nurl_str_cat4
+        { ( die_stmt lex ( nurl_str_cat ( nurl_str_cat4
             `return value type '` lt `' does not match the declared return type '` fn_rt )
             `' — wrong struct type returned by value (the fields would be silently reinterpreted)` ) ) }
         {}
@@ -2707,7 +2707,7 @@
             ? ( seq lt `i1` )
             `' — a bool widens into an integer BINDING (': i n ( > a b )' is fine), but a return type is a contract and must match exactly. Select the value you mean: '^ ? cond 1 0'.`
             `' — NURL has no implicit conversions; convert with '# T expr'`
-            ( die lex ( nurl_str_cat ( nurl_str_cat4
+            ( die_stmt lex ( nurl_str_cat ( nurl_str_cat4
             `return value type '` ( llvm_to_nurl lt ) `' does not match the declared return type '` ( llvm_to_nurl fn_rt ) )
             cure ) ) }
         {}
@@ -2739,7 +2739,7 @@
                     ( nurl_print ` undef, i64 ` ) ( nurl_print val ) ( nurl_print `, 0\n` )
                     = val __ewr
                     = lt ( nurl_str_cat fn_rt `` ) }
-                { ( die lex ( nurl_str_cat ( nurl_str_cat4
+                { ( die_stmt lex ( nurl_str_cat ( nurl_str_cat4
                     `return value type '` ( llvm_to_nurl lt ) `' does not match the declared return type: enum '` __ren )
                     `' — an enum is a closed set of named variants, and no number converts into one implicitly (the value could name no variant at all). Return a variant by name ('^ Red'), or declare a numeric return type.` ) ) } }
             {} }
@@ -3335,7 +3335,7 @@
     {}
     ? | != 0 ( nurl_str_len __eln ) != 0 ( nurl_str_len __ern ) {
         ? ! | == tt TT_EQEQ == tt TT_NE
-        { ( die lex ( nurl_str_cat ( nurl_str_cat4
+        { ( die_stmt lex ( nurl_str_cat ( nurl_str_cat4
             `operator applied to an enum operand: left is '` ( llvm_to_nurl lt )
             `', right is '` ( llvm_to_nurl rt ) )
             `' — an enum is a closed set of named variants, not a number: arithmetic and ordering have no meaning on it. Compare with '==' against a variant, match with '??', or read the tag intentionally with '# i x'.` ) ) }
@@ -3940,7 +3940,7 @@
     { ? == % __pc 2 1 { = want + want 1 } {} }
     {}
     ? != want argc
-    { ( die lex ( nurl_str_cat ( nurl_str_cat4
+    { ( die_stmt lex ( nurl_str_cat ( nurl_str_cat4
         `call to '` call_name `' passes ` ( nurl_str_int argc ) )
         ( nurl_str_cat4 ` argument(s) but the declared closure/function type takes ` ( nurl_str_int want )
         ` — the emitted call would leave parameter registers unset (or drop values); the callee reads garbage. Match the declaration.` `` ) ) ) }
@@ -7953,7 +7953,7 @@
     == 0 ( nurl_sym_len2 syms fname `__arity` )
     == 0 ( nurl_sym_len2 syms fname `__ptr` )
     == 0 ( nurl_sym_len2 syms fname `__ffi` )
-    { ( die lex ( nurl_str_cat ( nurl_str_cat4
+    { ( die_stmt lex ( nurl_str_cat ( nurl_str_cat4
         `method '` fname `' has no impl for receiver type '` ( llvm_to_nurl first_arg_type ) )
         `' — the name is implemented for other type(s) only. Add a '% Trait <Type> { … }' impl for this type, or pass a value of an implementing type as the first argument.` ) ) }
     {}
@@ -7964,7 +7964,7 @@
         // callee read an unset register for volume, silently.
         : s __im_ar ( nurl_sym_get g_impl_ret_syms ( nurl_str_cat impl_key `__arity` ) )
         ? & != 0 ( nurl_str_len __im_ar ) != ( nurl_str_to_int __im_ar ) arg_idx
-        { ( die lex ( nurl_str_cat ( nurl_str_cat4
+        { ( die_stmt lex ( nurl_str_cat ( nurl_str_cat4
             `call to method '` fname `' for receiver type '` ( llvm_to_nurl first_arg_type ) )
             ( nurl_str_cat4 `' passes ` ( nurl_str_int arg_idx ) ` argument(s) but the impl declares ` ( nurl_str_cat ( nurl_str_int ( nurl_str_to_int __im_ar ) ) ` (receiver included) — match the declaration.` ) ) ) ) }
         {}
@@ -20235,6 +20235,18 @@
 
 @ gen_enum_decl i lex i syms → v {
     ( nurl_lex_advance lex )  // consume '|'
+    // The name was taken on trust, so `: | { A B }` registered whatever
+    // `{` renders as and then failed at the brace it had already eaten,
+    // as "expected '{' but found 'A'" blaming the fixed-arity operand
+    // trap — which is not what happened. parse_type_enum has carried the
+    // right message all along, but it only sees `: |` in TYPE position;
+    // the top-level declaration is a different path and never consulted
+    // it. Same text in both, so the two spellings answer alike.
+    ? ! ( is_ident_tok ( nurl_lex_type lex ) )
+    { ( die lex ( nurl_str_cat3
+        `expected the enum's name after ': |', found ` ( tok_here lex )
+        `. A sum type is ': | Name { Variant Variant Payload ... }' — the name comes before the brace and each variant may carry one payload type. E.g. ': | Shape { Circle f  Rect f f }'.` ) ) }
+    {}
     : s ename ( nurl_lex_val lex )
     // Same flat-namespace guard as struct types (`ty##`, shared key
     // space so a struct and an enum cannot collide either): a second

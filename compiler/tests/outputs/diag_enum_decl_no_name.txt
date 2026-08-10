@@ -1,0 +1,6 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_enum_decl_no_name.nu:9:5: error: expected the enum's name after ': |', found '{'. A sum type is ': | Name { Variant Variant Payload ... }' — the name comes before the brace and each variant may carry one payload type. E.g. ': | Shape { Circle f  Rect f f }'.
+: | { A B }
+    ^
+error: aborting due to 1 previous error

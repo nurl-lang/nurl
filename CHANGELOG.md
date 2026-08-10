@@ -70,7 +70,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   blocks every PR — so macOS x86_64 stays tier 3 rather than being
   claimed on a gate that never reports.
 
+- **`tools/check_diag_anchor.sh` — a diagnostic must point at the
+  mistake.** Coverage answers "has anything ever printed this?"; it
+  cannot answer "did it point at the right thing?", and the two are not
+  equally bad. A precise message against the wrong line is worse for a
+  reader than a vague one against the right line, because it sends them
+  somewhere real to look for a problem that is not there.
+
+  No annotation is needed to catch the mechanical case. Many checks can
+  only fire once their operands are consumed, and by then the lexer sits
+  past the statement — so `die lex` anchors on whatever came next. When
+  the mistake is a function's LAST statement, what came next is the
+  closing brace, and the compiler prints a caret under a `}`. The gate
+  reads the committed goldens (they already hold the location, the
+  echoed line and the caret) and rejects two shapes: an anchor line
+  holding nothing but closing delimiters, and a caret column past the
+  end of the line it echoes. Unterminated-construct messages are exempt
+  — there, end-of-input really is the subject.
+
+  **It found nine on its first run**, and a tenth once the column rule
+  was added. Fixed and held at zero, so this one gates rather than
+  ratchets.
+
 ### Fixed
+
+- **Ten diagnostics pointed somewhere the mistake could not be.** Nine
+  printed a caret under a bare `}` — closure and fn-pointer call arity,
+  dyn and impl method arity, the no-impl dispatch miss, three
+  return-type mismatches and enum arithmetic — and one printed a caret
+  two columns past the end of the line it echoed. All ten are the same
+  cause the three fixed in the previous release had: the check runs
+  after `gen_expr` has consumed the operands. Anchored with `die_stmt`,
+  which now has 17 callers, up from 7.
+
+- **A top-level sum type with no name got the generic message.**
+  `: | { A B }` answered "expected '{' but found 'A'" and blamed the
+  fixed-arity operand trap, which is not what happened: `gen_enum_decl`
+  took the name on trust, registered whatever `{` renders as, and then
+  failed at the brace it had already eaten. `parse_type_enum` had
+  carried the right message all along, but it only sees `: |` in TYPE
+  position — the top-level declaration is a different path and never
+  consulted it. Both spellings now answer alike.
 
 - **A binding's type was the one type position nothing validated.**
   `check_type_known` already guarded parameter, struct-field, return and

@@ -1,6 +1,4 @@
 COMPILE FAIL
 ERRORS
-compiler/tests/diag_ret_int_to_enum.nu:9:1: error: return value type 'i' does not match the declared return type: enum 'Color' — an enum is a closed set of named variants, and no number converts into one implicitly (the value could name no variant at all). Return a variant by name ('^ Red'), or declare a numeric return type.
-}
-^
+compiler/tests/diag_ret_int_to_enum.nu:8:5: error: return value type 'i' does not match the declared return type: enum 'Color' — an enum is a closed set of named variants, and no number converts into one implicitly (the value could name no variant at all). Return a variant by name ('^ Red'), or declare a numeric return type.
 error: aborting due to 1 previous error
