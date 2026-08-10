@@ -1,0 +1,6 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_int_lit_width_range.nu:13:5: error: integer literal 9999 does not fit the 'i8' operand it is combined with. NURL evaluates the operator at the typed operand's width, and 8 bits accept -128..255 — the signed range union the unsigned one, since the check does not read the operand's signedness. Widen the typed operand with '# i expr', or use a literal in range.
+    ^ 0
+    ^
+error: aborting due to 1 previous error

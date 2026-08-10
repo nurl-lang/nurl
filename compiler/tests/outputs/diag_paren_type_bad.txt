@@ -1,0 +1,6 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_paren_type_bad.nu:6:9: error: a parenthesised type must open with '@' or a type name, found '5'. There are exactly two parenthesised forms: a closure type '( @ ret params )' — the RETURN type first, as in '( @ i i )' for a closure taking an i and returning one — and a generic instantiation '( Name T )', as in '( Vec i )' or '( Channel String )'. Parentheses are not grouping here; a plain type needs none.
+    : ( 5 ) x 0
+        ^
+error: aborting due to 1 previous error

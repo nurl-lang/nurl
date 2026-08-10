@@ -94,6 +94,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Assigning to a field of a by-value struct parameter emitted invalid
+  IR, silently.** A by-value struct parameter has no alloca to GEP from,
+  so `= . s a 5` printed `getelementptr %S, %S* , i32 0, i32 0` — with
+  an **empty pointer operand** — and nurlc exited 0. Only clang objected,
+  as "expected value token" against generated IR the author never wrote.
+  Rejected at the source now, naming both cures: take the argument as
+  `inout` if the caller should see the write, or copy it into a `: ~`
+  local first.
+
+- **"that type holds -128..255" is not true of `i8`.** The narrow-operand
+  literal check accepts the signed range *union* the unsigned one,
+  because it does not read the operand's signedness — so the window is a
+  fact about eight bits, not about `i8`, which holds -128..127. Stating
+  it as the type's range taught a rule the language does not have. The
+  semantics are unchanged; only the claim is.
+
 - **A supertrait ':' written on an impl silently deleted the impl.**
   `% Speaker : Dog { @ speak Dog self → i { ^ 1 } }` consumes `Dog` as a
   supertrait name, which leaves the lexer on `{` — so the declaration is

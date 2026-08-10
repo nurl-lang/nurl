@@ -1,0 +1,6 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_field_store_by_value_param.nu:15:11: error: cannot assign to a field of 's': it is a by-value S with no storage to write through — a parameter (parameters are immutable bindings and arrive by value), or a temporary. Take the argument as 'inout' if the caller should see the write ('@ f inout S s → v'), or copy it into a mutable local first (': ~ S t s', then '= . t <field> <value>').
+    = . s a 5
+          ^
+error: aborting due to 1 previous error
