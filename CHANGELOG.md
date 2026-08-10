@@ -10,6 +10,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`tools/check_diag_coverage.sh` — a diagnostic is not finished when it
+  is written, it is finished when something has read it.** The `ax` work
+  scored diagnostics by scanning `compiler/nurlc.nu`: does the message
+  name a cure, state the rule, show a spelling. That instrument is blind
+  to the one thing that decides whether a message is any good — whether
+  it is ever REACHED. The new gate compiles the corpus, matches every
+  emitted diagnostic back to its source site, and reports the sites
+  nothing made speak. **132 of 220 sites are exercised; 81 are not.**
+
+  An unfired message is unverified in every way that matters. Its wording
+  has never been read next to the program that caused it, which is how
+  the one FALSE message found in `ecc058c` survived a source scan that
+  scored it as excellent. Its caret has never been checked. It may be
+  dead outright, preempted by a looser check upstream — so the good
+  message exists and the user still gets the generic one.
+
+  The count ratchets against `tools/diag_coverage_baseline.txt`: existing
+  gaps do not fail the build, a new die site with no test that fires it
+  does. Adding a diagnostic and adding the program that triggers it are
+  one change, not two.
+
 - **macOS is a host platform CI actually checks (Apple Silicon, tier 1).**
   `docs/PLATFORMS.md` used to say macOS was "expected to build from
   source with Homebrew LLVM; unverified". Expected-to-build was a claim
@@ -30,6 +51,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   claimed on a gate that never reports.
 
 ### Fixed
+
+- **"NURL has no defaults and no overloading" — said by the function
+  named `__kw_default_or_die`.** NURL has had default parameter values
+  since kwargs landed (`@ box s label i width = 10 → v`), and this error
+  fires *precisely* when the skipped parameter has none. The message
+  asserted the opposite as a language rule, so a model that read it
+  learned to never use a feature the language has. It now names the
+  parameter, states the real rule (optional iff the declaration gives it
+  a default), and offers all three cures including adding one.
+
+  The first thing the coverage gate found, and the second message of this
+  shape after the bool-widening one in `ecc058c` — both shipped because
+  nothing ever printed them.
+
+- **Three diagnostics printed a correct message against the wrong line.**
+  The bool-mix checks in `gen_logical_or` / `gen_logical_and` and the
+  missing-argument check in `__kw_default_or_die` all fire only after
+  `gen_expr` has consumed the operands, by which point the lexer sits on
+  the NEXT statement — `die lex` blamed it. Anchored with `die_stmt`,
+  which exists for exactly this and already had four callers. A model
+  reading a precise message about the wrong line is worse off than with a
+  vague message about the right one.
 
 - **Five defects the macOS leg found, three of which were never about
   macOS.** Bringing the platform under CI turned up:

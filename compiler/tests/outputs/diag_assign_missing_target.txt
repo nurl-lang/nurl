@@ -1,0 +1,6 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_assign_missing_target.nu:7:7: error: expected the target of '=', found '5'. Assignment is '= name value' or '= . obj field value' — the target comes first, then the value, with no '=' between them. E.g. '= i + i 1', '= . p x 3'. Only a ': ~' binding can be assigned to.
+    = 5 n
+      ^
+error: aborting due to 1 previous error

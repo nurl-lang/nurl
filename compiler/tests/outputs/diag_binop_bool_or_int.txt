@@ -1,0 +1,4 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_binop_bool_or_int.nu:8:5: error: operator '|' has a bool on the left, so the right operand must be bool too — NURL does not mix bool and integer operands. Every operator is BINARY: for n conditions write n-1 of them, '| | a b c'.
+error: aborting due to 1 previous error
