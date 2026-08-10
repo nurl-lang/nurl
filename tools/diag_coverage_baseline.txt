@@ -3,7 +3,6 @@
 1919b534d625  volatile_store expects a typed pointer '*T' first, so it knows the width to write. Write '( volatile
 248dd68fff80  'inout' is a parameter CONVENTION, not a name: it goes before the type, as in '@ f inout ( Vec i ) v
 265709a49431  argument to ' ' has enum type ' ' but the parameter is declared enum ' ' — two enums are distinct no
-34501728d174  expected the enum's name after ': |', found . A sum type is ': | Name { Variant Variant Payload ... 
 3842aa6639a4  method ' ' of trait ' ' has a 'sink' (by-value consuming) receiver — not object-safe for '% ' dispat
 39986b65138d  expected a field name or an index after '.', found . Field access is '. obj field' and element acces
 39cb62532ea8  the expression produces no value to bind or assign, but a ' ' was required. A call returning 'v', an

@@ -1,6 +1,4 @@
 COMPILE FAIL
 ERRORS
-compiler/tests/diag_impl_call_arity.nu:16:1: error: call to method 'speak' for receiver type 'Dog' passes 1 argument(s) but the impl declares 2 (receiver included) — match the declaration.
-}
-^
+compiler/tests/diag_impl_call_arity.nu:15:5: error: call to method 'speak' for receiver type 'Dog' passes 1 argument(s) but the impl declares 2 (receiver included) — match the declaration.
 error: aborting due to 1 previous error

@@ -1,6 +1,4 @@
 COMPILE FAIL
 ERRORS
-compiler/tests/diag_method_no_impl.nu:18:1: error: method 'speak' has no impl for receiver type 'Cat' — the name is implemented for other type(s) only. Add a '% Trait <Type> { … }' impl for this type, or pass a value of an implementing type as the first argument.
-}
-^
+compiler/tests/diag_method_no_impl.nu:17:5: error: method 'speak' has no impl for receiver type 'Cat' — the name is implemented for other type(s) only. Add a '% Trait <Type> { … }' impl for this type, or pass a value of an implementing type as the first argument.
 error: aborting due to 1 previous error

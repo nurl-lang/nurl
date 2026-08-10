@@ -53,6 +53,29 @@ gaps do not fail, a **new** die site with no test that fires it does.
 Adding a diagnostic and adding the program that triggers it are one
 change, not two.
 
+## Diagnostic anchors
+
+Coverage answers "has anything ever printed this?". It cannot answer
+"did it point at the right thing?", and the two are not equally bad: a
+precise message against the wrong line is worse than a vague one against
+the right line, because it sends the reader somewhere real to look for a
+problem that is not there.
+
+`./tools/check_diag_anchor.sh` reads the goldens — they already carry
+the location, the echoed line and the caret — and rejects two shapes
+that are wrong whatever the message says:
+
+* the anchor line holds nothing but closing delimiters (a caret under a
+  bare `}`), and
+* the caret column falls past the end of the line it echoes.
+
+Both mean the same thing: the check fired after its operands were
+consumed, so `die lex` recorded whatever came next. Use `die_stmt` (the
+statement's own start) or `die_pos` (a position captured before
+advancing) at those sites. Unterminated-construct messages are exempt —
+when the closer is what went missing, end-of-input really is the
+subject.
+
 ## Golden files (`outputs/`)
 
 One file per test, holding exactly the record the runner builds:
