@@ -1060,6 +1060,44 @@ $ `deps/gpukit/src/dev.nu`
     ^ ok
 }
 
+// ── the window schedule ──────────────────────────────────────────────
+//
+// Window for step st: (st · stride) mod nwin. Stride 1 is the sequential
+// legacy order — which means a run shorter than one epoch reads ONLY the
+// first steps·seq tokens of the corpus (a 4000-step seq-56 run over a
+// 7.4M-token corpus sees 3% of it, all from the front). A stride COPRIME
+// with nwin makes the schedule a permutation of the windows: any prefix
+// of it samples the whole corpus evenly, and a full epoch still visits
+// every window exactly once.
+
+@ __ft_gcd i a i b2 → i {
+    : ~ i x a
+    : ~ i y b2
+    ~ != y 0 {
+        : i t2 % x y
+        = x y
+        = y t2
+    }
+    ^ x
+}
+
+// The golden-ratio point of [1, nwin), nudged up to the nearest value
+// coprime with nwin — consecutive steps land maximally far apart.
+@ ft_auto_stride i nwin → i {
+    ? > nwin 2 {} { ^ 1 }
+    : ~ i s2 # i * 0.6180339887498949 # f nwin
+    ? < s2 1 { = s2 1 } {}
+    ~ != ( __ft_gcd s2 nwin ) 1 { = s2 + s2 1 }
+    = s2 % s2 nwin
+    ? == s2 0 { = s2 1 } {}
+    ^ s2
+}
+
+@ ft_win_at i st i nwin i stride → i {
+    ? > nwin 0 {} { ^ 0 }
+    ^ % * st stride nwin
+}
+
 // ── checkpointing: adapters + Adam state + step, resumable ───────────
 //
 // A crash five hours into a run must not cost the run. Every `ckevery`
@@ -1099,7 +1137,7 @@ $ `deps/gpukit/src/dev.nu`
     } { ( __ft_st_add so name val n 0 ) }
 }
 
-@ __ft_ckpt_save s path * FtModel m i r * GProg pg * GpOpt go * u pids i nslot i step i dtype → b {
+@ __ft_ckpt_save s path * FtModel m i r * GProg pg * GpOpt go * u pids i nslot i step i dtype i wstr → b {
     : *StWriter so ( stw_new )
     : ( Vec i ) meta ( vec_new [i] )
     ( vec_push [i] meta 1 )
@@ -1107,8 +1145,9 @@ $ `deps/gpukit/src/dev.nu`
     ( vec_push [i] meta ( gpopt_t go ) )
     ( vec_push [i] meta nslot )
     ( vec_push [i] meta r )
+    ( vec_push [i] meta wstr )
     : ( Vec i ) msh ( vec_new [i] )
-    ( vec_push [i] msh 5 )
+    ( vec_push [i] msh 6 )
     ( stw_add_i64 so `ckpt.meta` msh meta )
     ( vec_free [i] msh ) ( vec_free [i] meta )
     : ~ b ok T
@@ -1227,7 +1266,7 @@ $ `deps/gpukit/src/dev.nu`
 // caller starts fresh); a shape/meta MISMATCH also reports F after
 // printing why — resuming a different run over it would be silent ruin,
 // so the caller must treat mismatch as fatal (mismb is poked 1).
-@ __ft_ckpt_load s path * FtModel m i r * GProg pg * GpOpt go * u pids i nslot * u stepb * u mismb → b {
+@ __ft_ckpt_load s path * FtModel m i r * GProg pg * GpOpt go * u pids i nslot i wstr * u stepb * u mismb → b {
     ( nurl_poke mismb 0 0 )
     ?? ( st_open path ) {
         T st → {
@@ -1241,14 +1280,23 @@ $ `deps/gpukit/src/dev.nu`
                     T by → {
                         : ( Vec f ) mv ( __ft_ckpt_vals by )
                         ( vec_free [u] by )
-                        ? == ( vec_len [f] mv ) 5 {
+                        // 5 entries = a pre-stride checkpoint (its schedule
+                        // was the sequential stride 1)
+                        : i mn ( vec_len [f] mv )
+                        ? | == mn 5 == mn 6 {
                             : i ver # i ( _tf mv 0 )
                             = step # i ( _tf mv 1 )
                             = t # i ( _tf mv 2 )
                             : i cslot # i ( _tf mv 3 )
                             : i cr # i ( _tf mv 4 )
+                            : i cws ? == mn 6 # i ( _tf mv 5 ) 1
                             ? & & == ver 1 == cslot nslot == cr r {} {
                                 ( nurl_eprintln `nurllama: checkpoint does not match this run (model/rank differ)` )
+                                ( nurl_poke mismb 0 1 )
+                                = ok F
+                            }
+                            ? == cws wstr {} {
+                                ( nurl_eprintln `nurllama: checkpoint was trained with a different --window-stride — resuming would silently change which data the run sees` )
                                 ( nurl_poke mismb 0 1 )
                                 = ok F
                             }
@@ -1300,15 +1348,28 @@ $ `deps/gpukit/src/dev.nu`
 }
 
 @ ft_train * FtModel m ( Vec i ) corpus i win i r f alpha i seed i steps f lr i dtype b verbose → FtTrain {
-    ^ ( ft_train_ck m corpus win r alpha seed steps lr dtype verbose `` 0 F )
+    ^ ( ft_train_ck m corpus win r alpha seed steps lr dtype verbose `` 0 F 1 )
 }
 
-@ ft_train_ck * FtModel m ( Vec i ) corpus i win i r f alpha i seed i steps f lr i dtype b verbose s ckptp i ckevery b resume → FtTrain {
+// wstride: 1 = sequential legacy order · 0 = auto (golden-ratio coprime,
+// ft_auto_stride) · else used as given, mod nwin.
+@ ft_train_ck * FtModel m ( Vec i ) corpus i win i r f alpha i seed i steps f lr i dtype b verbose s ckptp i ckevery b resume i wstride → FtTrain {
     : i total ( vec_len [i] corpus )
     : ~ i T2 win
     ? > T2 total { = T2 total } {}
     : ~ i nwin / total T2
     ? < nwin 1 { = nwin 1 } {}
+    : ~ i wstr wstride
+    ? == wstr 0 { = wstr ( ft_auto_stride nwin ) } {}
+    ? < wstr 1 { = wstr 1 } {}
+    ? >= wstr nwin { = wstr % wstr nwin ? == wstr 0 { = wstr 1 } {} } {}
+    ? verbose {
+        ( nurl_print `windows: ` )
+        ( nurl_print ( nurl_str_int nwin ) )
+        ( nurl_print ` · stride ` )
+        ( nurl_print ( nurl_str_int wstr ) )
+        ( nurl_print ? == wstr 1 ` (sequential)\n` ` (spread)\n` )
+    } {}
     : ( Vec i ) ids ( vec_with_cap [i] T2 )
     : ~ i k0 0
     ~ < k0 T2 { ( vec_push [i] ids ( _ti corpus k0 ) ) = k0 + k0 1 }
@@ -1351,7 +1412,7 @@ $ `deps/gpukit/src/dev.nu`
         ? & & ok resume > ( nurl_str_len ckptp ) 0 {
             : *u stb ( nurl_alloc 8 )
             : *u mismb ( nurl_alloc 8 )
-            ? ( __ft_ckpt_load ckptp m r pg go pids nslot stb mismb ) {
+            ? ( __ft_ckpt_load ckptp m r pg go pids nslot wstr stb mismb ) {
                 = st ( nurl_peek stb 0 )
                 ( nurl_print `resumed from checkpoint: step ` )
                 ( nurl_print ( nurl_str_int st ) )
@@ -1368,8 +1429,8 @@ $ `deps/gpukit/src/dev.nu`
         : ~ i cur 0
         : ~ b first T
         ~ & < st steps ok {
-            // round-robin window switch: refresh the two input consts
-            : i w % st nwin
+            // window switch: refresh the two input consts
+            : i w ( ft_win_at st nwin wstr )
             ? & > nwin 1 != w cur {
                 : ( Vec i ) wids ( vec_with_cap [i] T2 )
                 : ~ i q 0
@@ -1396,7 +1457,7 @@ $ `deps/gpukit/src/dev.nu`
             = ok & ok ( gpopt_step go pg )
             = st + st 1
             ? & & & ok > ( nurl_str_len ckptp ) 0 > ckevery 0 == % st ckevery 0 {
-                ? ( __ft_ckpt_save ckptp m r pg go pids nslot st dtype ) {
+                ? ( __ft_ckpt_save ckptp m r pg go pids nslot st dtype wstr ) {
                     ? verbose {
                         ( nurl_print `checkpoint: step ` )
                         ( nurl_print ( nurl_str_int st ) )
@@ -1410,7 +1471,7 @@ $ `deps/gpukit/src/dev.nu`
         // final state, so a crash in the adapter save / merge that follows
         // resumes here instead of retraining
         ? & ok > ( nurl_str_len ckptp ) 0 {
-            ? ( __ft_ckpt_save ckptp m r pg go pids nslot st dtype ) {} {
+            ? ( __ft_ckpt_save ckptp m r pg go pids nslot st dtype wstr ) {} {
                 ( nurl_eprintln `nurllama: final checkpoint save failed` )
             }
         } {}
@@ -1709,7 +1770,7 @@ $ `deps/gpukit/src/dev.nu`
 // shape; multi-window scheduling lands with gput_set_input plumbing),
 // save the adapters, and optionally write a merged full-model safetensors
 // runnable via `nurllama run model.gguf PROMPT --weights merged.st`.
-@ nurllama_finetune s modp s datap s outp s mergedp i steps f lr i rank f alpha i seq i seed b f32 b mixed s ckptp i ckevery b resume → i {
+@ nurllama_finetune s modp s datap s outp s mergedp i steps f lr i rank f alpha i seq i seed b f32 b mixed s ckptp i ckevery b resume i wstride → i {
     : ~ s text ``
     : ~ b haderr F
     : ~ String textS ( string_new )
@@ -1773,7 +1834,7 @@ $ `deps/gpukit/src/dev.nu`
             : i dt ? mixed 2 ? f32 1 0
             ? mixed { ( nurl_print `precision: mixed (f32 storage, f64 accumulation — half VRAM, near-f64 accuracy)\n` ) } {}
             ? & f32 == mixed F { ( nurl_print `precision: float32 device replay (half VRAM; float32 precision, not bit-exact to f64)\n` ) } {}
-            : FtTrain tr ( ft_train_ck m ids seq rank alpha seed steps lr dt T ckptp ckevery resume )
+            : FtTrain tr ( ft_train_ck m ids seq rank alpha seed steps lr dt T ckptp ckevery resume wstride )
             ? . tr ok {} {
                 ( nurl_eprintln `nurllama: finetune training failed (no device? poisoned graph?)` )
                 ( ft_train_free tr ) ( ft_free m ) ( vec_free [i] ids )

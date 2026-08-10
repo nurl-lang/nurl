@@ -102,12 +102,12 @@ $ `deps/gpukit/src/dev.nu`
             ( check . trA ok `A: 40 straight steps (reference)` )
 
             // B: 20 steps with checkpointing — the run that "crashes"
-            : FtTrain trB ( ft_train_ck m ids HW 8 16.0 42 20 0.002 0 F ckpt 10 F )
+            : FtTrain trB ( ft_train_ck m ids HW 8 16.0 42 20 0.002 0 F ckpt 10 F 1 )
             ( check . trB ok `B: 20 steps, checkpoint every 10` )
             ( check ( file_exists ckpt ) `B: checkpoint file exists` )
 
             // C: resume B's checkpoint and finish to 40
-            : FtTrain trC ( ft_train_ck m ids HW 8 16.0 42 40 0.002 0 F ckpt 10 T )
+            : FtTrain trC ( ft_train_ck m ids HW 8 16.0 42 40 0.002 0 F ckpt 10 T 1 )
             ( check . trC ok `C: resumed to 40 steps` )
             : i abad ( vec_diff . trA aflat . trC aflat )
             : i bbad ( vec_diff . trA bflat . trC bflat )
@@ -121,7 +121,7 @@ $ `deps/gpukit/src/dev.nu`
             ( check == . trA l1 . trC l1 `final loss identical` )
 
             // refusal: same checkpoint, different rank → must fail, not train
-            : FtTrain trX ( ft_train_ck m ids HW 4 16.0 42 40 0.002 0 F ckpt 10 T )
+            : FtTrain trX ( ft_train_ck m ids HW 4 16.0 42 40 0.002 0 F ckpt 10 T 1 )
             ( check == . trX ok F `rank mismatch refuses to resume (ok=F)` )
 
             ( ft_train_free trA )

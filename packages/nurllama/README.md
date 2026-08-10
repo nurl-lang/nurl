@@ -268,6 +268,18 @@ a run killed at step 100 of 200 and resumed produces adapters
 **byte-identical** to the uninterrupted run (`tests/finetune_ckpt_test.nu`,
 and the same check killed-for-real over the CLI).
 
+**`--window-stride N`** picks which window step k trains: `(k·N) mod nwin`.
+The sequential default (1) means a run shorter than one epoch reads only
+the corpus *head* — a 4000-step seq-56 run over a 7.4M-token corpus sees
+3% of it, all from the front. `--window-stride 0` chooses a golden-ratio
+stride made coprime with `nwin`, which turns the schedule into a
+permutation of the windows: any prefix samples the whole corpus evenly and
+a full epoch still visits every window exactly once. The schedule stays a
+pure function of the step index, so checkpoint resume replays it exactly —
+the stride is recorded in the checkpoint, and resuming under a different
+one is refused rather than silently changing which data the run sees
+(`tests/finetune_sched_test.nu`).
+
 ## How it is checked
 
 Not by trusting itself:

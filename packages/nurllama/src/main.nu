@@ -33,6 +33,7 @@
 //                     [--out a.st] [--merged m.st] [--steps N] [--lr X]
 //                     [--rank R] [--alpha A] [--seq T] [--seed S] [--f32]
 //                     [--checkpoint c.st] [--save-every N] [--resume]
+//                     [--window-stride N]  (0 = spread over the corpus)
 //     --type q8_0 (default) | f16 | bf16 | f32
 //   nurllama logits <model.gguf> <prompt>     final-position logits, one
 //                                             per line (verification tap)
@@ -611,6 +612,7 @@ $ `stdlib/std/term.nu`
     ( args_opt p `checkpoint` 0 `FILE` `finetune: write resumable training state here (adapters + Adam moments + step) every --save-every steps and at the end` )
     ( args_opt p `save-every` 0 `N` `finetune: checkpoint interval in steps (default 200)` )
     ( args_flag p `resume` 0 `finetune: continue from --checkpoint if it holds a matching run; start fresh when the file is absent` )
+    ( args_opt p `window-stride` 0 `N` `finetune: step k trains window (k·N) mod nwin. 1 = sequential (default; a short run reads only the corpus head), 0 = auto — a golden-ratio stride coprime with nwin, so even a short run samples the whole corpus evenly` )
     ( args_opt p `n-predict` 110 `N` `run: max tokens to generate (default 64)` )
     ( args_opt p `temp` 0 `F` `run: temperature; 0 = greedy (default 0.8)` )
     ( args_opt p `topk` 0 `N` `run: top-k filter (default 40; 0 = off)` )
@@ -639,7 +641,7 @@ $ `stdlib/std/term.nu`
         ^ 0
     } {}
     ? ( args_present p `version` ) {
-        ( nurl_print `nurllama 0.14.0\n` )
+        ( nurl_print `nurllama 0.15.0\n` )
         ( args_free p )
         ^ 0
     } {}
@@ -783,11 +785,14 @@ $ `stdlib/std/term.nu`
         : ~ i ckevery 200
         ?? ( string_to_int severy ) { T v → { = ckevery v } F _ → {} }
         : b resume ? == ( args_present p `resume` ) 1 T F
-        : i rc ( nurllama_finetune modp datap ( string_data souts ) ( string_data smerged ) steps lr rank alpha seq seed f32 mixed ( string_data sckpt ) ckevery resume )
+        : String swstr ( args_value_or p `window-stride` `1` )
+        : ~ i wstride 1
+        ?? ( string_to_int swstr ) { T v → { = wstride v } F _ → {} }
+        : i rc ( nurllama_finetune modp datap ( string_data souts ) ( string_data smerged ) steps lr rank alpha seq seed f32 mixed ( string_data sckpt ) ckevery resume wstride )
         ( string_free souts ) ( string_free smerged ) ( string_free ssteps )
         ( string_free slr ) ( string_free srank ) ( string_free salpha )
         ( string_free sseq ) ( string_free sseed )
-        ( string_free sckpt ) ( string_free severy )
+        ( string_free sckpt ) ( string_free severy ) ( string_free swstr )
         ( args_free p )
         ^ rc
     } {}
