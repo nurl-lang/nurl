@@ -1,0 +1,6 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_bind_bool_literal_name.nu:4:9: error: expected variable name in let — 'T' and 'F' are the boolean literals and cannot name a binding; pick another name
+    : i T 5
+        ^
+error: aborting due to 1 previous error

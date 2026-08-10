@@ -1,0 +1,6 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_str_len_on_string.nu:8:28: error: nurl_str_len expects 's' (i8* C-string), got %String. Use 'string_len' for String values.
+    : i n ( nurl_str_len s )
+                           ^
+error: aborting due to 1 previous error

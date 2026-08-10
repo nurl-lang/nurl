@@ -1,0 +1,6 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_bind_unknown_ptr_type.nu:9:12: error: unknown type 'Foo' in a binding type — no struct or enum with this name is declared (a typo, or a missing '$' import?)
+    : *Foo p ( nurl_alloc 8 )
+           ^
+error: aborting due to 1 previous error

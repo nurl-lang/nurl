@@ -1,0 +1,6 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_select_arm_unterminated.nu:11:1: error: unterminated '[' in a select arm — expected ']' after the element type. A select arm is '[T] chan → name { body }' — the element type in brackets, the channel, then the name the received value binds to. The default arm is '_ → { body }'. E.g. '?? { [i] c → v { ( use v ) }  _ → { ( idle ) } }'.
+
+^
+error: aborting due to 1 previous error

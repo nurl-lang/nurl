@@ -1,0 +1,6 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_orpattern_option_tf.nu:8:22: error: expected a variant name after '|', found 'F'. An or-pattern lists bare variant names: 'A | B | C → body'. The variants must belong to the same enum, carry no payload, and the arm takes no guard.
+    : i r ?? o { T | F → 1 }
+                     ^
+error: aborting due to 1 previous error

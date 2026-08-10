@@ -1,0 +1,6 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_match_arm_no_arrow.nu:7:22: error: expected '→' or a payload name after the variant, found '{'. A match arm binds its payload before the arrow: '?? r { T v → body  F e → body }'. A payload-less variant goes straight to the arrow: 'JNull → body'.
+    : i r ?? e { A v { ^ v } B → 0 }
+                     ^
+error: aborting due to 1 previous error

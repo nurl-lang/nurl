@@ -1,0 +1,6 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_bad_type_token.nu:5:7: error: expected a type, found '5'. Types are the single-letter keywords 'i u f b s v', a fixed width like 'i32' / 'u64', a declared struct or enum name, or a parenthesised form: '( Vec i )', '( @ i i )' for a closure, '*T' for a pointer, '?T' for an option, '!T E' for a result.
+    : 5 n 0
+      ^
+error: aborting due to 1 previous error

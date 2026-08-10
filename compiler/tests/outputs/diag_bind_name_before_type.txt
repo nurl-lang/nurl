@@ -1,0 +1,6 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_bind_name_before_type.nu:11:9: error: 'i' is a type, and it is sitting where the VALUE belongs. A binding is ': type name value' — the type comes FIRST: write ': i n <value>' instead. The type may also be left out entirely when the value's type is inferable: ': n 0'.
+    : n i 0
+        ^
+error: aborting due to 1 previous error

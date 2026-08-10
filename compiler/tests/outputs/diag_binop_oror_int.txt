@@ -1,0 +1,6 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_binop_oror_int.nu:6:16: error: operator '||' requires bool operands and the left one is not bool. '||' and '&&' short-circuit and are bool-only; for bitwise work on integers use '|' and '&'. To test an integer, compare it: '|| != n 0 ( f )'.
+    : b r || n T
+               ^
+error: aborting due to 1 previous error

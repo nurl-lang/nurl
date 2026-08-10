@@ -1,0 +1,5 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_lex_malformed_binary.nu:4:9: error: malformed binary literal — '0b' must be followed by at least one 0 or 1. E.g. '0b1011'.
+    : i n 0b
+        ^
