@@ -1,0 +1,6 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_dyn_not_generic.nu:9:21: error: trait 'Speaker' is not object-safe: a dynamic object needs the trait to be generic over Self ('% Name [T] { ... }'). Add the parameter, or dispatch statically. Wanted '%Speaker'
+@ announce %Speaker s → i { ^ ( speak s ) }
+                    ^
+error: aborting due to 1 previous error

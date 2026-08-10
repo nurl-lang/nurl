@@ -1,0 +1,6 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_pct_not_trait.nu:3:6: error: '%' in a type position must be followed by a trait name (dynamic trait object '%Trait')
+@ f %5 x → i { ^ 0 }
+     ^
+error: aborting due to 1 previous error

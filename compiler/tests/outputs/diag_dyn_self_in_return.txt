@@ -1,0 +1,6 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_dyn_self_in_return.nu:10:14: error: method 'make' of trait 'Maker' mentions Self beyond the receiver (a parameter or the return type) — not object-safe for '%Maker'
+@ use %Maker m → i { ^ 0 }
+             ^
+error: aborting due to 1 previous error

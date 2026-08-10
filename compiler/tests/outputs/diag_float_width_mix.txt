@@ -1,0 +1,6 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_float_width_mix.nu:8:5: error: operator mixes float operands of different widths: left is 'f32', right is 'f' — NURL has no implicit numeric conversions; widen with '# f expr' (lossless) or narrow with '# f32 expr'
+    ^ 0
+    ^
+error: aborting due to 1 previous error

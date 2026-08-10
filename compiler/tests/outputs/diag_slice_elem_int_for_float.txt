@@ -1,0 +1,6 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_slice_elem_int_for_float.nu:4:20: error: element 1 of this slice literal has integer type 'i' but the slice's declared element type is 'f' (a float) — NURL has no implicit integer↔float conversions. Write the element as a float ('2.0', not '2'), or convert with '# f expr'.
+    : [f xs [f | 1 2 3]
+                   ^
+error: aborting due to 1 previous error

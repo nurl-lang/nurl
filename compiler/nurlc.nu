@@ -597,7 +597,7 @@
             {}
             ^ ( nurl_str_cat `%` ( nurl_str_cat sname mangle_sfx ) )
         }
-        { ( die lex `( in type position must be followed by @ or type name` ) ^ ( nurl_str_cat `i64` `` ) }
+        { ( die lex ( nurl_str_cat3 `a parenthesised type must open with '@' or a type name, found ` ( tok_here lex ) `. There are exactly two parenthesised forms: a closure type '( @ ret params )' — the RETURN type first, as in '( @ i i )' for a closure taking an i and returning one — and a generic instantiation '( Name T )', as in '( Vec i )' or '( Channel String )'. Parentheses are not grouping here; a plain type needs none.` ) ) ^ ( nurl_str_cat `i64` `` ) }
     }
 }
 
@@ -3527,8 +3527,8 @@
                 ? | < __cv __rlo > __cv __rhi
                 { ( die lex ( nurl_str_cat ( nurl_str_cat4
                     `integer literal ` ( nurl_str_int __cv ) ` does not fit the '` ( llvm_to_nurl ? __l_reg lt rt ) )
-                    ( nurl_str_cat3 `' operand it is combined with (that type holds ` ( nurl_str_int __rlo )
-                    ( nurl_str_cat3 `..` ( nurl_str_int __rhi ) `) — NURL evaluates the operator at the typed operand's width. Widen the typed operand with '# i expr', or use a literal in range.` ) ) ) ) }
+                    ( nurl_str_cat3 `' operand it is combined with. NURL evaluates the operator at the typed operand's width, and ` ( nurl_str_int __regw )
+                    ( nurl_str_cat3 ` bits accept ` ( nurl_str_cat4 ( nurl_str_int __rlo ) `..` ( nurl_str_int __rhi ) ` — the signed range union the unsigned one, since the check does not read the operand's signedness. Widen the typed operand with '# i expr', or use a literal in range.` ) `` ) ) ) ) }
                 { = __arith_ty ? __l_reg ( nurl_str_cat lt `` ) ( nurl_str_cat rt `` ) }
             } {}
         }
@@ -14070,6 +14070,19 @@
             }
             {  // Struct by value "%T": use alloca ptr from obj_name__ptr as GEP base
                 : s alloca_ptr ( nurl_sym_get2 syms obj_name `__ptr` )
+                // No alloca means the object has no storage to write
+                // through: a by-value struct PARAMETER (parameters are
+                // immutable bindings and arrive in registers), or a
+                // temporary. The GEP was emitted with an empty pointer
+                // operand — `getelementptr %S, %S* , i32 0, i32 0` —
+                // which nurlc printed with status 0 and only clang
+                // rejected, as "expected value token" against generated
+                // IR. Reject it at the source instead.
+                ? == 0 ( nurl_str_len alloca_ptr )
+                { ( die lex ( nurl_str_cat ( nurl_str_cat4
+                    `cannot assign to a field of '` obj_name `': it is a by-value ` ( llvm_to_nurl pt ) )
+                    ` with no storage to write through — a parameter (parameters are immutable bindings and arrive by value), or a temporary. Take the argument as 'inout' if the caller should see the write ('@ f inout S s → v'), or copy it into a mutable local first (': ~ S t s', then '= . t <field> <value>').` ) ) }
+                {}
                 : s pt_ptr ( nurl_str_cat pt `*` )
                 : s sname ( nurl_str_slice pt 1 - ptlen 1 )
                 : s fname ( nurl_lex_val lex )
