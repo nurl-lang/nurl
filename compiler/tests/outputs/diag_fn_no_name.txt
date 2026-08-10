@@ -1,0 +1,6 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_fn_no_name.nu:3:3: error: expected a function name after '@', found '5'. A declaration is '@ name params → ret { body }' — parameters are 'type name' pairs and the return type follows '→'. E.g. '@ add i a i b → i { ^ + a b }'. For a generic, the type list goes right after the name: '@ push [A] ( Vec A ) v A x → v { ... }'.
+@ 5 i x → i { ^ x }
+  ^
+error: aborting due to 1 previous error

@@ -1,0 +1,5 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_dup_trait.nu:18:17: error: duplicate trait '% Speaker' — already declared at compiler/tests/diag_dup_trait.nu:16. NURL has no overloading and no shadowing at file scope: rename one, or delete the duplicate. If you meant to IMPLEMENT the trait, an impl names the trait and the type with no ':' between them — '% Trait Type { ... }'; a ':' here is the supertrait clause, which belongs on the declaration.
+% Speaker : Dog { @ speak Dog self → i { ^ 1 } }
+                ^

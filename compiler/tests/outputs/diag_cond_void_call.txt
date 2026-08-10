@@ -1,0 +1,6 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_cond_void_call.nu:5:19: error: this condition produces no value (the expression is 'v'/void — a call that returns nothing?) — a condition must be 'b', or an integer tested against zero. Call something that returns a value, or bind the state you want to test first.
+    ? ( nothing ) { ^ 1 } {}
+                  ^
+error: aborting due to 1 previous error

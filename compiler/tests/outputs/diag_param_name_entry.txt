@@ -1,0 +1,6 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_param_name_entry.nu:4:7: error: parameter name 'entry' collides with LLVM's reserved entry: block label. Rename (e.g. 'ent', 'tab_entry').
+@ f i entry → i { ^ entry }
+      ^
+error: aborting due to 1 previous error

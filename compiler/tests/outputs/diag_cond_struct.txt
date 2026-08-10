@@ -1,0 +1,6 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_cond_struct.nu:6:9: error: this condition has type 'S' which has no truth value — a condition must be 'b', or an integer (tested non-zero). An aggregate cannot be tested directly; extract or compute the scalar you mean to test first.
+    ? s { ^ 1 } {}
+        ^
+error: aborting due to 1 previous error

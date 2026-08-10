@@ -1,0 +1,6 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_param_no_name.nu:4:7: error: expected a parameter name after its type, found '→'. Parameters are written 'type name', repeated, with no commas: '@ f i a i b → i'. A parenthesised type keeps the pair shape: '( Vec i ) v'.
+@ f i → i { ^ 0 }
+      ^
+error: aborting due to 1 previous error

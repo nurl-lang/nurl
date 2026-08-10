@@ -1,0 +1,4 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_bind_void_call.nu:5:5: error: the expression produces no value to bind or assign, but a 'i64' was required. A call returning 'v', an assignment or a bare block yields nothing — bind the result of an expression that produces one.
+error: aborting due to 1 previous error

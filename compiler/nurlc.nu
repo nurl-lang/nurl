@@ -472,7 +472,15 @@
         {}
         ^ lt
     }
-    { ( die lex ( nurl_str_cat3
+    {  // `@ f i x -> i` — the ASCII arrow. It is not the token: `-` and
+        // `>` lex separately, so the parse dies asking for a TYPE and the
+        // arrow is never mentioned. NURL's arrow is one character, U+2192,
+        // and a model that cannot emit it has no way to learn that from
+        // "expected a type, found '-'".
+        ? & == ( nurl_lex_type lex ) TT_MINUS == ( nurl_lex_peek_type lex ) TT_GT
+        { ( die lex `NURL's arrow is '→' (U+2192, a single character), not the two-character '->'. Write '@ f i x → i { ... }'. The ASCII pair does not lex as an arrow at all — '-' and '>' are read as two separate operators, which is why the parse asks for a type here.` ) }
+        {}
+        ( die lex ( nurl_str_cat3
         `expected a type, found ` ( tok_here lex )
         `. Types are the single-letter keywords 'i u f b s v', a fixed width like 'i32' / 'u64', a declared struct or enum name, or a parenthesised form: '( Vec i )', '( @ i i )' for a closure, '*T' for a pointer, '?T' for an option, '!T E' for a result.` ) ) }
 }
@@ -2986,7 +2994,7 @@
     ? == tt TT_LBRACK { ^ ( nurl_str_cat `'['` `` ) } {}
     ? == tt TT_AT { ^ ( nurl_str_cat `'@'` `` ) } {}
     ? == tt TT_EOF { ^ ( nurl_str_cat `end of input` `` ) } {}
-    ? == tt TT_ARROW { ^ ( nurl_str_cat `'->'` `` ) } {}
+    ? == tt TT_ARROW { ^ ( nurl_str_cat `'→'` `` ) } {}
     // Prefix operators a reader is likely to have mistyped, and the two
     // loop keywords. Without these each falls through to the value test
     // below, which is empty for punctuation, and the diagnostic ends up
@@ -21917,6 +21925,26 @@
     // Disambiguate: '{' → trait_decl, else → impl_decl
     ? == ( nurl_lex_type lex ) TT_LBRACE
     {  // trait: remember its type param and scan for default methods
+        // Structs (`ty##`), enums and impls all guard against a second
+        // declaration of the same name. Traits did not, and the hole is
+        // not merely cosmetic: `% Speaker : Dog { @ speak … }` — a
+        // supertrait clause written on what was meant to be an IMPL —
+        // consumes `Dog` as a supertrait, leaves the lexer on `{`, and
+        // so lands HERE instead of the impl branch. The impl silently
+        // vanished: no `speak` was emitted at all, and the program
+        // still compiled and linked. The supertrait-on-impl message
+        // below can never fire for that shape, because by then it is
+        // not being read as an impl.
+        // Same position twice is import replay, not a duplicate.
+        : s __tpos ( nurl_str_cat ( vis_current_src_file )
+        ( nurl_str_cat `:` ( nurl_str_int ( nurl_lex_line lex ) ) ) )
+        : s __tkey ( nurl_str_cat `tr##` tname )
+        : s __tprev ( nurl_sym_get g_fn_pos_syms __tkey )
+        ? & != 0 ( nurl_str_len __tprev ) ! ( seq __tprev __tpos )
+        { ( die lex ( nurl_str_cat `duplicate trait '% `
+            ( nurl_str_cat tname
+            ( nurl_str_cat3 `' — already declared at ` __tprev `. NURL has no overloading and no shadowing at file scope: rename one, or delete the duplicate. If you meant to IMPLEMENT the trait, an impl names the trait and the type with no ':' between them — '% Trait Type { ... }'; a ':' here is the supertrait clause, which belongs on the declaration.` ) ) ) ) }
+        { ( nurl_sym_def g_fn_pos_syms __tkey __tpos ) }
         ( nurl_sym_def g_trait_syms ( nurl_str_cat tname `__tparam` ) tparam )
         ( nurl_sym_def g_trait_syms ( nurl_str_cat tname `__istrait` ) `1` )
         ? != 0 ( nurl_str_len supers )
