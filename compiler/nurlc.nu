@@ -8721,7 +8721,7 @@
             = bidx + bidx 1
         } {
             // ── _ → { body }  (default / non-blocking) ──
-            ? ! ( is_ident_tok ( nurl_lex_type lex ) )
+            ? | ! ( is_ident_tok ( nurl_lex_type lex ) ) ! ( seq ( nurl_lex_val lex ) `_` )
             { ( die lex ( nurl_str_cat3 `expected '[' or '_' to start a select arm, found ` ( tok_here lex ) `. A select arm is '[T] chan → name { body }' — the element type in brackets, the channel, then the name the received value binds to. The default arm is '_ → { body }'. E.g. '?? { [i] c → v { ( use v ) }  _ → { ( idle ) } }'.` ) ) } {}
             ? != 0 has_default { ( die lex ( nurl_str_cat `select has more than one default '_' arm — only one is allowed, and it runs when no channel is ready. Merge the two bodies into a single '_ → { ... }'.` `` ) ) } {}
             ( nurl_lex_advance lex )  // consume '_'
@@ -14897,7 +14897,37 @@
         : s tail ( nurl_str_cat3 ` ( nurl_alloc Z ` sname ` )', then '= . x <field> <value>' per field.` )
         ( die lex ( nurl_str_cat3 head mid tail ) ) }
     {}
+    // `@ E A 1` — the variant named OUTSIDE the braces, which is what
+    // every language with `E::A(1)` teaches. NURL puts it inside:
+    // `@ E { A 1 }`. Left to the generic `expect` this said "expected
+    // '{' but found 'A'", which names the token and not the rule — and
+    // the writer has no way to guess the variant belongs one bracket to
+    // the right. Only fires when the ident really is a variant of a
+    // declared enum, so a genuine stray token still gets the generic
+    // arity-trap message it deserves.
+    ? & != ( nurl_lex_type lex ) TT_LBRACE ( is_ident_tok ( nurl_lex_type lex ) )
+    { ? != 0 ( nurl_sym_len2 syms ( nurl_lex_val lex ) `__paycount` )
+        { ( die lex ( nurl_str_cat4
+            ( nurl_str_cat3 `enum variant '` ( nurl_lex_val lex ) `' belongs INSIDE the braces — write '@ ` )
+            ( nurl_str_slice agg_ty 1 - ( nurl_str_len agg_ty ) 1 )
+            ( nurl_str_cat3 ` { ` ( nurl_lex_val lex ) ` <payload> }'. ` )
+            `An enum literal is '@ EnumName { Variant payload }': the variant is the first item in the brace list, not a word between the name and the brace. A payload-less variant is just '@ EnumName { Variant }'.` ) ) }
+        {} }
+    {}
     ( expect lex TT_LBRACE )  // consume '{'
+    // `@ S { a : 1 b : 2 }` — field NAMES, the habit every other
+    // language teaches. NURL struct literals are positional: values in
+    // declaration order, no names. Left alone the name lexed as a value
+    // expression and died as "use of undefined identifier 'a'", which
+    // points at the field name as though it were a typo and says
+    // nothing about the rule. A ':' after a bare name at field position
+    // can only be this mistake — a keyword argument is a CALL form and
+    // its name sits inside parens, never at the head of a literal field.
+    ? & ( is_ident_tok ( nurl_lex_type lex ) ) == ( nurl_lex_peek_type lex ) TT_COLON
+    { ( die lex ( nurl_str_cat3
+        `struct literal fields are positional, and '` ( nurl_lex_val lex )
+        ` :' names one. NURL has no named-field literals: supply the values in DECLARATION order instead — ': Point { i x i y }' is built as '@ Point { 3 4 }'. (A ':' after a name is a keyword ARGUMENT, which is a call form: '( f width : 5 )'.)` ) ) }
+    {}
     // zeroinitializer (not undef) so fields the literal leaves out are
     // all-zero. Matters for payload-less None — `@ ?T { F }` — where the
     // payload slot must read as a NULL handle (the runtime and stdlib
@@ -21603,7 +21633,7 @@
         ? & == ( nurl_lex_type lex ) TT_IDENT ( seq ( nurl_lex_val lex ) `type` )
         { ( nurl_lex_advance lex )  // skip 'type'
             ? ! ( is_ident_tok ( nurl_lex_type lex ) )
-            { ( die lex ( nurl_str_cat3 `expected an associated-type name after 'type', found ` ( tok_here lex ) `. A trait declares one as 'type Name', and each impl binds it with 'type Name = ConcreteType'.` ) ) }
+            { ( die lex ( nurl_str_cat3 `expected an associated-type name after 'type', found ` ( tok_here lex ) `. A trait declares one as 'type Name', and each impl binds it with 'type Name ConcreteType' — three tokens, no '='.` ) ) }
             {}
             : s aname ( nurl_lex_val lex )
             ( nurl_lex_advance lex )  // consume the associated-type name
@@ -21755,13 +21785,13 @@
 @ __parse_assoc_binding i lex → s {
     ( nurl_lex_advance lex )  // skip 'type'
     ? ! ( is_ident_tok ( nurl_lex_type lex ) )
-    { ( die lex ( nurl_str_cat3 `expected an associated-type name after 'type', found ` ( tok_here lex ) `. An impl binds what the trait declared: 'type Name = ConcreteType'.` ) ) }
+    { ( die lex ( nurl_str_cat3 `expected an associated-type name after 'type', found ` ( tok_here lex ) `. An impl binds what the trait declared: 'type Name ConcreteType' — the keyword, the name, then the concrete type, with no '=' between them.` ) ) }
     {}
     : s aname ( nurl_lex_val lex )
     ( nurl_lex_advance lex )  // consume the name
     : s aval ( capture_impl_nurl_name lex )
     ? == 0 ( nurl_str_len aval )
-    { ( die lex ( nurl_str_cat3 `associated type '` aname `' must be bound to a simple type name — write 'type Name = i' or 'type Name = MyStruct', not a parenthesised or generic form.` ) ) }
+    { ( die lex ( nurl_str_cat3 `associated type '` aname `' must be bound to a simple type name — write 'type Elem i' or 'type Elem MyStruct', with no '=' and no parenthesised or generic form.` ) ) }
     {}
     ( nurl_lex_advance lex )  // consume the bound type
     ^ ( nurl_str_cat aname ( nurl_str_cat ` ` aval ) )

@@ -1,0 +1,6 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_struct_lit_named_fields.nu:12:25: error: struct literal fields are positional, and 'x :' names one. NURL has no named-field literals: supply the values in DECLARATION order instead — ': Point { i x i y }' is built as '@ Point { 3 4 }'. (A ':' after a name is a keyword ARGUMENT, which is a call form: '( f width : 5 )'.)
+    : Point p @ Point { x : 3 y : 4 }
+                        ^
+error: aborting due to 1 previous error

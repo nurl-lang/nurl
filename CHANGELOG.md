@@ -52,6 +52,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Three messages taught an associated-type syntax the compiler
+  rejects.** The binding is three tokens — `type Elem i` — as
+  `docs/spec.md` §4.9, `docs/LIMITATIONS.md` and
+  `__parse_assoc_binding`'s own comment all say. All three diagnostics
+  about it said `type Name = ConcreteType`, and the one that fires on a
+  malformed binding said it *while rejecting the very form it asked
+  for*: write `type Elem = i` and the compiler answers "must be bound to
+  a simple type name — write `type Name = i`". A model that did what the
+  message said hit the same message again, with nothing in the text to
+  break the loop.
+
+  Found by probing the never-fired list, which is what it is for. The
+  coverage gate then flagged all three rewrites as unread — a rewritten
+  message has been read by nobody, which is why the ratchet keys on
+  message identity and not on a count.
+
+- **A select arm that lost its `[T]` was told about the default arm.**
+  The default-arm branch tested only "is this an identifier", so
+  `ints → oi { … }` was accepted *as* the `_` marker and the parse then
+  failed one token later with "expected '{' to open the default arm's
+  body" — a message about a construct the writer never used, offering a
+  cure (`_ → { body }`) with no bearing on the mistake. The marker must
+  literally be `_`; anything else is a channel arm missing its brackets,
+  and the arm-shape message that was already written for exactly this
+  now gets to say so.
+
+- **Two mistakes every other language teaches now get an answer.** Both
+  produced a message with no die site of its own — the compiler fell
+  through to something generic — so both were invisible to the source
+  scan and to the coverage gate alike, and only writing the wrong
+  program found them:
+
+  * `@ Point { x : 3 y : 4 }` (named struct-literal fields) died as
+    **"use of undefined identifier 'x'"**, pointing at the field name as
+    though it were a typo. It now states that literals are positional
+    and shows the declaration beside the literal that builds it.
+  * `@ E A 1` (the variant outside the braces, as in `E::A(1)`) died as
+    **"expected '{' but found 'A'"**, blaming the fixed-arity operand
+    trap — which is not what happened. It now names the variant and
+    shows where it goes. The check fires only when the ident really is a
+    declared variant, so a genuine stray token still gets the arity
+    message it deserves.
+
 - **"NURL has no defaults and no overloading" — said by the function
   named `__kw_default_or_die`.** NURL has had default parameter values
   since kwargs landed (`@ box s label i width = 10 → v`), and this error

@@ -1,0 +1,5 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_assoc_name_impl.nu:13:10: error: expected an associated-type name after 'type', found '=' (an assignment starts here). An impl binds what the trait declared: 'type Name ConcreteType' — the keyword, the name, then the concrete type, with no '=' between them.
+    type = i
+         ^
