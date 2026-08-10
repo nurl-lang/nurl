@@ -4314,8 +4314,9 @@
     : s idx_s ( nurl_sym_get2 syms sname ( nurl_str_cat `__` ( nurl_str_cat fld `__idx` ) ) )
     : s fty ( nurl_sym_get2 syms sname ( nurl_str_cat `__` ( nurl_str_cat fld `__type` ) ) )
     ? == 0 ( nurl_str_len idx_s )
-    { ( die lex ( nurl_str_cat4
-        `inout field argument: struct '` sname `' has no field '` fld ) ) }
+    { ( die lex ( nurl_str_cat ( nurl_str_cat4
+        `inout field argument: struct '` sname `' has no field '` fld )
+        `'. The field form is '( f inout . <binding> <field> )' — check the spelling against the struct's declaration.` ) ) }
     {}
     : s gep ( nurl_cg_reg cg )
     ( nurl_print `  ` ) ( nurl_print gep )
@@ -12950,6 +12951,22 @@
         ( __warn_if_shadows_param lex syms name )
         ( lint_note_bind lex name )
         ( nurl_lex_advance lex )
+        // `: n i 0` — the name first and the type second, which is how
+        // Go and Rust spell it. NURL puts the TYPE first. Reaching this
+        // branch already means the first token was NOT a known type, so
+        // a type keyword sitting in the VALUE slot is that swap and
+        // nothing else: a bare type keyword yields no value, so it can
+        // never legitimately open an initialiser. Left alone it reached
+        // gen_ident and came back as "use of undefined identifier 'i'"
+        // — which names the token and then calls it the wrong thing,
+        // sending the reader to look for a binding that was never the
+        // problem.
+        ? == ( nurl_lex_type lex ) TT_TYPE_KW
+        { ( die lex ( nurl_str_cat ( nurl_str_cat4
+            `'` ( nurl_lex_val lex ) `' is a type, and it is sitting where the VALUE belongs. A binding is ': type name value' — the type comes FIRST: write ': `
+            ( nurl_str_cat4 ( nurl_lex_val lex ) ` ` name ` <value>' ` ) )
+            `instead. The type may also be left out entirely when the value's type is inferable: ': n 0'.` ) ) }
+        {}
         : b rhs_is_slice_lit == ( nurl_lex_type lex ) TT_LBRACK
         // Borrow checker (Phase 2): snapshot the RHS's first token —
         // a bare identifier RHS is a binding-to-binding alias copy.
@@ -13134,6 +13151,12 @@
     // Explicit type annotation.
     { ( nurl_sym_def g_res_type_syms `__last_res_nurl__` `` )
         : s ptype ( parse_type lex )
+        // A binding's type went unchecked while parameter, field, return
+        // and FFI types were all validated — so `: Foo x 0` against an
+        // undeclared Foo built a `%Foo` binding and failed later as
+        // "use of undefined identifier 'x'", blaming the NAME. Same
+        // helper, same wording as the parameter case, so the two agree.
+        ( check_type_known lex syms ptype `a binding type` )
         // Capture the NURL form of `! T E` when present, so gen_match can
         // recover the inner T (e.g. `Json`) for struct-handle reconstruction.
         // parse_type's recursive descent through parse_type_res leaves the

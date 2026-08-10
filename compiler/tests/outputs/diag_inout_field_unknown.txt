@@ -1,0 +1,6 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_inout_field_unknown.nu:10:19: error: inout field argument: struct 'S' has no field 'zz'. The field form is '( f inout . <binding> <field> )' — check the spelling against the struct's declaration.
+    ( bump . s zz )
+                  ^
+error: aborting due to 1 previous error

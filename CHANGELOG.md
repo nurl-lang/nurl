@@ -72,6 +72,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A binding's type was the one type position nothing validated.**
+  `check_type_known` already guarded parameter, struct-field, return and
+  FFI types — and not the place a type is written most often. So
+  `: *Foo p …` against an undeclared `Foo` leaked `%Foo` into the IR,
+  nurlc exited 0, and clang objected a stage later about generated code.
+  Same helper, same wording as the parameter case, so the two now agree
+  instead of disagreeing by omission.
+
+- **`: n i 0` — the name first, then the type — said "use of undefined
+  identifier 'i'".** That is how Go and Rust spell a binding, so it is a
+  mistake worth expecting; the old answer named the token and then called
+  it the wrong thing, sending the reader to look for a binding that was
+  never the problem. A bare type keyword yields no value and so can never
+  open a legitimate initialiser: in the inference branch it is this swap
+  and nothing else, and the message now says which order NURL uses.
+
+- **An `inout` field diagnostic ended mid-quote.** `struct 'S' has no
+  field 'zz` — its `nurl_str_cat4` had no room left for the closing
+  quote, so the message trailed off exactly where the field name ended.
+
 - **Three messages taught an associated-type syntax the compiler
   rejects.** The binding is three tokens — `type Elem i` — as
   `docs/spec.md` §4.9, `docs/LIMITATIONS.md` and

@@ -1,0 +1,6 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_orpattern_bool_arm.nu:13:28: error: an or-pattern lists named enum variants; 'T' and 'F' are the option/result arms and there are only two of them, so 'T | F' is the wildcard. Write '_ → body' instead.
+    : i r ?? o { T | A → 1 _ → 0 }
+                           ^
+error: aborting due to 1 previous error

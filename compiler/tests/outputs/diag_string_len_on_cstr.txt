@@ -1,0 +1,6 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_string_len_on_cstr.nu:6:29: error: string_len expects %String, got 'i8*' (raw C-string). Use 'nurl_str_len' for raw C-string pointers.
+    : i n ( string_len `hi` )
+                            ^
+error: aborting due to 1 previous error
