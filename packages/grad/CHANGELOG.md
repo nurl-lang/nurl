@@ -2,7 +2,12 @@
 
 ## 0.10.1
 
-**One String leaked per kernel launch on the f32/mixed replay.** `__gp_kn`
+**Two per-launch host leaks on the f32/mixed replay** — together ~10 MB
+of host RAM per 36-layer training step, which is the kernel OOM killer
+ending two five-hour Qwen3-4B finetunes (28 GB anon RSS on a 31 GB box)
+before the arithmetic was anywhere near done.
+
+Leak 1 (the big one): one String per kernel launch. `__gp_kn`
 built the `gpf_`/`gpm_`-prefixed kernel name as an owned String but
 returned a borrowed `s`, so nothing ever freed it — and it sat in the
 f64 path's blind spot because there the function returned the caller's
@@ -11,9 +16,20 @@ launches: ~10 MB of host RAM per step, which is the kernel OOM killer
 ending a five-hour Qwen3-4B run at step ~1170 and again at ~2200 (28 GB
 anon RSS on a 31 GB box) before the arithmetic was anywhere near done.
 `__gp_kn` now returns an owned String for every dtype and `_gp_run`
-frees it after the launch. Found by RSS-slope bisection on the CPU
-backend (per-step alloc/free of the corpus-window tensors measured flat;
-the leak scaled with launch count and only on dtype 1/2).
+frees it after the launch.
+
+Leak 2 (found by the same census once leak 1 was gone): `string_from
+? == dtype 2 'gpm_' 'gpf_'` — a string-literal ternary in argument
+position is a COMPILER bug (critic.md 2026-08-10): the picked literal
+materializes as an owned temporary that no drop is emitted for, ~32
+bytes per launch. The prefix is now picked with a branch into a `~ s`
+binding, which the compiler drops correctly.
+
+Both found by RSS-slope bisection on the CPU backend plus an LD_PRELOAD
+live-allocation census (per-step alloc/free of the corpus-window tensors
+measured flat; the leaks scaled with launch count and only on dtype 1/2).
+After both: 35 B/step residual on a 20k-step mixed loop — the f64
+baseline's noise floor.
 
 ## 0.10.0
 

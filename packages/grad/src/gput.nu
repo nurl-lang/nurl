@@ -535,9 +535,18 @@ extern "C" __global__ void gp_opt(double* w, const double* g, double* m, double*
 // step is ~45k launches, ~10 MB of host RAM per step, and the kernel OOM
 // killer ended two long finetunes before the arithmetic did. The caller
 // frees it after the launch (gk_run_dev copies the name into its cache).
+// (The prefix is picked with a branch, not `string_from ? cond `a` `b``:
+// a string-literal ternary in argument position materializes the picked
+// literal as an owned temporary the compiler never drops — ~32 bytes per
+// call, which on this hot path was the SECOND finetune leak, ~3.6 MB per
+// 4B training step after the big one was fixed. Minimized repro in
+// compiler/tests once the compiler bug is fixed; until then no literal
+// ternaries in call arguments on hot paths.)
 @ __gp_kn * GProg pg s name → String {
     ? | == . pg dtype 1 == . pg dtype 2 {
-        : String o ( string_from ? == . pg dtype 2 `gpm_` `gpf_` )
+        : ~ s pre `gpf_`
+        ? == . pg dtype 2 { = pre `gpm_` } {}
+        : String o ( string_from pre )
         ( string_push_str o # s + # i name 3 )
         ^ o
     } {}
