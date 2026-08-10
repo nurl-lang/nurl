@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.10.1
+
+**One String leaked per kernel launch on the f32/mixed replay.** `__gp_kn`
+built the `gpf_`/`gpm_`-prefixed kernel name as an owned String but
+returned a borrowed `s`, so nothing ever freed it — and it sat in the
+f64 path's blind spot because there the function returned the caller's
+own name. A 36-layer mixed finetune step is tens of thousands of
+launches: ~10 MB of host RAM per step, which is the kernel OOM killer
+ending a five-hour Qwen3-4B run at step ~1170 and again at ~2200 (28 GB
+anon RSS on a 31 GB box) before the arithmetic was anywhere near done.
+`__gp_kn` now returns an owned String for every dtype and `_gp_run`
+frees it after the launch. Found by RSS-slope bisection on the CPU
+backend (per-step alloc/free of the corpus-window tensors measured flat;
+the leak scaled with launch count and only on dtype 1/2).
+
 ## 0.10.0
 
 **Optimizer-state access + bulk f32 transfers — resumable checkpoints.**

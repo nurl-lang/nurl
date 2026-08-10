@@ -529,13 +529,19 @@ extern "C" __global__ void gp_opt(double* w, const double* g, double* m, double*
 }
 
 // A kernel's name for the dtype (gp_ -> gpf_ in f32, gpm_ in mixed).
-@ __gp_kn * GProg pg s name → s {
+// Returns an OWNED String either way — the f32/mixed prefix needs an
+// allocation, and an owned-sometimes return is exactly how the previous
+// version leaked one String per kernel launch: a 36-layer mixed training
+// step is ~45k launches, ~10 MB of host RAM per step, and the kernel OOM
+// killer ended two long finetunes before the arithmetic did. The caller
+// frees it after the launch (gk_run_dev copies the name into its cache).
+@ __gp_kn * GProg pg s name → String {
     ? | == . pg dtype 1 == . pg dtype 2 {
         : String o ( string_from ? == . pg dtype 2 `gpm_` `gpf_` )
         ( string_push_str o # s + # i name 3 )
-        ^ ( string_data o )
+        ^ o
     } {}
-    ^ name
+    ^ ( string_from name )
 }
 
 // A scalar float arg for the dtype. Only pure f32 (dtype 1) narrows scalars
@@ -994,7 +1000,10 @@ extern "C" __global__ void gp_opt(double* w, const double* g, double* m, double*
 // ── replay: forward ──────────────────────────────────────────────────
 
 @ _gp_run * GProg pg s name i grid i block ( Vec i ) args → b {
-    ^ ( gk_run_dev . pg kit ( _gp_src pg ) ( __gp_kn pg name ) grid block args )
+    : String kn ( __gp_kn pg name )
+    : b r ( gk_run_dev . pg kit ( _gp_src pg ) ( string_data kn ) grid block args )
+    ( string_free kn )
+    ^ r
 }
 
 @ _gp_fill_buf * GProg pg GkBuf b f v → b {
