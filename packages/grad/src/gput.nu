@@ -921,13 +921,74 @@ extern "C" __global__ void gp_opt(double* w, const double* g, double* m, double*
     }
 }
 
+// ── bulk f32 transfers ───────────────────────────────────────────────
+//
+// gk_dbuf_upload/download convert f32 buffers on the HOST, one FFI call
+// per element — fine for a norm vector, minutes for the ~100M elements a
+// checkpoint save or a per-step minibatch refresh walks. These stage
+// through a transient f64 device buffer instead: one straight memcpy plus
+// one cast kernel. Every failure path falls back to the host loop —
+// slower, never wrong (a mid-training step can leave too little free VRAM
+// for the staging buffer).
+
+@ __gp_dl_f32 * GpuKit kit GkBuf b ( Vec f ) dst → b {
+    : i n . b n
+    : GkBuf stg ( gk_dbuf_new kit n GK_F64 )
+    ? ( gk_buf_ok stg ) {} { ^ ( gk_dbuf_download kit b dst ) }
+    : s src `extern "C" __global__ void gp_f2d(const float* in, double* out, long long n){ long long i = (long long)blockIdx.x * blockDim.x + threadIdx.x; if (i < n) out[i] = (double)in[i]; }`
+    : ( Vec i ) a ( vec_new [i] )
+    ( vec_push [i] a ( gk_arg_dev b ) )
+    ( vec_push [i] a ( gk_arg_dev stg ) )
+    ( vec_push [i] a ( gpu_arg_i64 n ) )
+    : ~ b r ( gk_run_dev kit src `gp_f2d` ( gk_grid n 256 ) 256 a )
+    ( vec_free [i] a )
+    = r & r ( gk_dbuf_download kit stg dst )
+    ( gk_dbuf_free stg )
+    ? r { ^ T } {}
+    ^ ( gk_dbuf_download kit b dst )
+}
+
+// The cast kernel is __gp_upload_f32's gp_f2f — same source, same cache
+// entry — but filling an EXISTING buffer instead of allocating one.
+@ __gp_ul_f32 * GpuKit kit GkBuf b ( Vec f ) src → b {
+    : i n . b n
+    : GkBuf stg ( gk_dbuf_new kit n GK_F64 )
+    ? ( gk_buf_ok stg ) {} { ^ ( gk_dbuf_upload kit b src ) }
+    : ~ b r ( gk_dbuf_upload kit stg src )
+    : s src2 `extern "C" __global__ void gp_f2f(const double* in, float* out, long long n){ long long i = (long long)blockIdx.x * blockDim.x + threadIdx.x; if (i < n) out[i] = (float)in[i]; }`
+    : ( Vec i ) a ( vec_new [i] )
+    ( vec_push [i] a ( gk_arg_dev stg ) )
+    ( vec_push [i] a ( gk_arg_dev b ) )
+    ( vec_push [i] a ( gpu_arg_i64 n ) )
+    = r & r ( gk_run_dev kit src2 `gp_f2f` ( gk_grid n 256 ) 256 a )
+    ( vec_free [i] a )
+    ( gk_dbuf_free stg )
+    ? r { ^ T } {}
+    ^ ( gk_dbuf_upload kit b src )
+}
+
+// dtype-aware transfers: f64 buffers take gk's straight-memcpy path, big
+// f32 buffers the staged cast. The 4096-element floor keeps small vectors
+// (norms, biases) off the kernel-launch overhead.
+@ _gp_dl * GpuKit kit GkBuf b ( Vec f ) dst → b {
+    ? & == ( gk_buf_dtype b ) GK_F32 > . b n 4096 { ^ ( __gp_dl_f32 kit b dst ) } {}
+    ^ ( gk_dbuf_download kit b dst )
+}
+
+@ _gp_ul * GpuKit kit GkBuf b ( Vec f ) src → b {
+    ? & & == ( gk_buf_dtype b ) GK_F32 > . b n 4096 == ( vec_len [f] src ) . b n {
+        ^ ( __gp_ul_f32 kit b src )
+    } {}
+    ^ ( gk_dbuf_upload kit b src )
+}
+
 // Fresh values for an input slot (a const's minibatch rows, or a param).
 @ gput_set_input * GProg pg GVar v ( Vec f ) data → b {
     ? . pg ok {} { ^ F }
     ? & >= . v id 0 < . v id ( vec_len [GpNode] . pg nodes ) {} { ^ F }
     : GpNode nd ( _gp_node pg . v id )
     ? == ( vec_len [f] data ) . nd n {} { ^ F }
-    ^ ( gk_dbuf_upload . pg kit . nd val data )
+    ^ ( _gp_ul . pg kit . nd val data )
 }
 
 // ── replay: forward ──────────────────────────────────────────────────
@@ -1445,7 +1506,7 @@ extern "C" __global__ void gp_opt(double* w, const double* g, double* m, double*
     ? & >= . v id 0 < . v id ( vec_len [GpNode] . pg nodes ) {} { ^ F }
     : GpNode nd ( _gp_node pg . v id )
     ? == ( vec_len [f] out ) . nd n {} { ^ F }
-    ^ ( gk_dbuf_download . pg kit . nd val out )
+    ^ ( _gp_dl . pg kit . nd val out )
 }
 
 @ gput_grad * GProg pg GVar v ( Vec f ) out → b {
@@ -1460,7 +1521,7 @@ extern "C" __global__ void gp_opt(double* w, const double* g, double* m, double*
         ~ < k . nd n { ( vec_set [f] out k 0.0 ) = k + k 1 }
         ^ T
     }
-    ^ ( gk_dbuf_download . pg kit . nd grad out )
+    ^ ( _gp_dl . pg kit . nd grad out )
 }
 
 // The loss scalar (node value element 0).
@@ -1486,7 +1547,7 @@ extern "C" __global__ void gp_opt(double* w, const double* g, double* m, double*
         : GpNode nd ( _gp_node pg k )
         ? == . nd op ( gop_param ) {
             : *Tensor tv # *Tensor ( _g_val tp k )
-            = r ( gk_dbuf_download . pg kit . nd val . tv data )
+            = r ( _gp_dl . pg kit . nd val . tv data )
         } {}
         = k + k 1
     }
@@ -1535,6 +1596,54 @@ extern "C" __global__ void gp_opt(double* w, const double* g, double* m, double*
 }
 
 @ gpopt_set_clip * GpOpt o f maxn → v { = . o clip maxn }
+
+// ── optimizer-state access (checkpoint / resume) ─────────────────────
+//
+// A resumable checkpoint needs the Adam moments and the step counter, not
+// just the parameter values — restarting with zero moments and t=0 warps
+// the next ~100 updates (bias correction alone scales the first step 10×).
+// Params are read/written through gput_value / gput_set_input; these cover
+// the rest. `pi` is the gpopt_add registration index.
+
+@ gpopt_t * GpOpt o → i { ^ . o t }
+
+@ gpopt_set_t * GpOpt o i t2 → v { = . o t t2 }
+
+@ gpopt_count * GpOpt o → i { ^ ( vec_len [i] . o ids ) }
+
+@ __gpopt_buf * GpOpt o b want_v i pi → GkBuf {
+    ^ ?? ( vec_get [GkBuf] ? want_v . o v . o m pi ) { T x → x F → ( _gp_nobuf ) }
+}
+
+@ __gpopt_mv_dl * GpOpt o * GProg pg b want_v i pi ( Vec f ) out → b {
+    ? & & . o ok >= pi 0 < pi ( vec_len [GkBuf] . o m ) {} { ^ F }
+    : GkBuf b ( __gpopt_buf o want_v pi )
+    ? & ( gk_buf_ok b ) == ( vec_len [f] out ) . b n {} { ^ F }
+    ^ ( _gp_dl . pg kit b out )
+}
+
+@ __gpopt_mv_ul * GpOpt o * GProg pg b want_v i pi ( Vec f ) src → b {
+    ? & & . o ok >= pi 0 < pi ( vec_len [GkBuf] . o m ) {} { ^ F }
+    : GkBuf b ( __gpopt_buf o want_v pi )
+    ? & ( gk_buf_ok b ) == ( vec_len [f] src ) . b n {} { ^ F }
+    ^ ( _gp_ul . pg kit b src )
+}
+
+@ gpopt_m_download * GpOpt o * GProg pg i pi ( Vec f ) out → b {
+    ^ ( __gpopt_mv_dl o pg F pi out )
+}
+
+@ gpopt_v_download * GpOpt o * GProg pg i pi ( Vec f ) out → b {
+    ^ ( __gpopt_mv_dl o pg T pi out )
+}
+
+@ gpopt_m_upload * GpOpt o * GProg pg i pi ( Vec f ) src → b {
+    ^ ( __gpopt_mv_ul o pg F pi src )
+}
+
+@ gpopt_v_upload * GpOpt o * GProg pg i pi ( Vec f ) src → b {
+    ^ ( __gpopt_mv_ul o pg T pi src )
+}
 
 // Register one parameter (its Adam moments start at zero, on the device).
 @ gpopt_add * GpOpt o * GProg pg GVar p f alpha → v {

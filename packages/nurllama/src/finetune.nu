@@ -1060,7 +1060,250 @@ $ `deps/gpukit/src/dev.nu`
     ^ ok
 }
 
+// ── checkpointing: adapters + Adam state + step, resumable ───────────
+//
+// A crash five hours into a run must not cost the run. Every `ckevery`
+// steps the trainer writes one safetensors file: the LoRA parameter
+// values, both Adam moment vectors, the optimizer's step counter and the
+// step index — everything the update rule reads. --resume loads it and
+// continues; with f32 device storage (--mixed / --f32) the f32 file is a
+// lossless round-trip, so a resumed run replays the uninterrupted one.
+// The write goes to `<path>.tmp` then rename(2)s over, so a crash mid-
+// write leaves the previous checkpoint intact.
+
+@ __ft_ckpt_name s kind i pi → String {
+    : String nm ( string_from `ckpt.` )
+    ( string_push_str nm kind )
+    ( string_push_str nm `.` )
+    ( string_push_str nm ( nurl_str_int pi ) )
+    ^ nm
+}
+
+// The element count of pids entry `pi` (A blocks are even, B odd).
+@ __ft_ckpt_n * FtModel m i r i pi → i {
+    : i sl / pi 2
+    ? == % pi 2 0 { ^ * ( __ft_ain m sl ) r } {}
+    ^ * r ( __ft_aout m sl )
+}
+
+// One checkpoint tensor, stored at the DEVICE's precision: f64 replay
+// (dtype 0) writes F64, f32/mixed write F32 — either way the file holds
+// exactly what the device buffers hold, so a resume is a lossless
+// round-trip for every capture dtype.
+@ __ft_ckpt_add * StWriter so s name ( Vec f ) val i n i dtype → v {
+    ? == dtype 0 {
+        : ( Vec i ) sh ( vec_new [i] )
+        ( vec_push [i] sh n )
+        ( stw_add_f64 so name sh val )
+        ( vec_free [i] sh )
+    } { ( __ft_st_add so name val n 0 ) }
+}
+
+@ __ft_ckpt_save s path * FtModel m i r * GProg pg * GpOpt go * u pids i nslot i step i dtype → b {
+    : *StWriter so ( stw_new )
+    : ( Vec i ) meta ( vec_new [i] )
+    ( vec_push [i] meta 1 )
+    ( vec_push [i] meta step )
+    ( vec_push [i] meta ( gpopt_t go ) )
+    ( vec_push [i] meta nslot )
+    ( vec_push [i] meta r )
+    : ( Vec i ) msh ( vec_new [i] )
+    ( vec_push [i] msh 5 )
+    ( stw_add_i64 so `ckpt.meta` msh meta )
+    ( vec_free [i] msh ) ( vec_free [i] meta )
+    : ~ b ok T
+    : ~ i pi 0
+    ~ & < pi * 2 nslot ok {
+        : i n ( __ft_ckpt_n m r pi )
+        : ( Vec f ) val ( vec_with_cap [f] n )
+        : ~ i k 0
+        ~ < k n { ( vec_push [f] val 0.0 ) = k + k 1 }
+        = ok & ok ( gput_value pg @ GVar { ( nurl_peek pids pi ) } val )
+        ? ok {
+            : String nm ( __ft_ckpt_name `p` pi )
+            ( __ft_ckpt_add so ( string_data nm ) val n dtype )
+            ( string_free nm )
+        } {}
+        = ok & ok ( gpopt_m_download go pg pi val )
+        ? ok {
+            : String nm ( __ft_ckpt_name `m` pi )
+            ( __ft_ckpt_add so ( string_data nm ) val n dtype )
+            ( string_free nm )
+        } {}
+        = ok & ok ( gpopt_v_download go pg pi val )
+        ? ok {
+            : String nm ( __ft_ckpt_name `v` pi )
+            ( __ft_ckpt_add so ( string_data nm ) val n dtype )
+            ( string_free nm )
+        } {}
+        ( vec_free [f] val )
+        = pi + pi 1
+    }
+    ? ok {
+        : String tmp ( string_from path )
+        ( string_push_str tmp `.tmp` )
+        ?? ( stw_write so ( string_data tmp ) ) {
+            T _ → {
+                ?? ( fs_rename ( string_data tmp ) path ) {
+                    T _ → {}
+                    F _ → { = ok F }
+                }
+            }
+            F e → { ( string_free e ) = ok F }
+        }
+        ( string_free tmp )
+    } {}
+    ( stw_free so )
+    ^ ok
+}
+
+// f32 little-endian bytes (st_dequant's output) → f64 values.
+@ __ft_ckpt_vals ( Vec u ) by → ( Vec f ) {
+    : i n / ( vec_len [u] by ) 4
+    : ( Vec f ) o ( vec_with_cap [f] n )
+    : ~ i k 0
+    ~ < k n {
+        : i p * k 4
+        : i b0 # i ?? ( vec_get [u] by p ) { T x → x F → # u 0 }
+        : i b1 # i ?? ( vec_get [u] by + p 1 ) { T x → x F → # u 0 }
+        : i b2 # i ?? ( vec_get [u] by + p 2 ) { T x → x F → # u 0 }
+        : i b3 # i ?? ( vec_get [u] by + p 3 ) { T x → x F → # u 0 }
+        : i bits + + + b0 * b1 256 * b2 65536 * b3 16777216
+        ( vec_push [f] o # f ( bits_to_f32 bits ) )
+        = k + k 1
+    }
+    ^ o
+}
+
+// An F64 checkpoint tensor read raw off the mapping — st_dequant narrows
+// everything through f32, which would round an f64-replay checkpoint.
+@ __ft_ckpt_vals64 * St st StTensor t → ( Vec f ) {
+    : *u P ( st_tensor_ptr st t )
+    : i n . t nelems
+    : ( Vec f ) o ( vec_with_cap [f] n )
+    : ~ i k 0
+    ~ < k n {
+        ( vec_push [f] o ( bits_to_f64 ( nurl_peek P k ) ) )
+        = k + k 1
+    }
+    ^ o
+}
+
+// One checkpoint tensor into a Vec f of exactly `want` elements, at the
+// precision the file stored (F64 raw, everything else via st_dequant).
+@ __ft_ckpt_read * St st s kind i pi i want → !( Vec f ) String {
+    : String nm ( __ft_ckpt_name kind pi )
+    : i ti ( st_find_tensor st ( string_data nm ) )
+    ( string_free nm )
+    ? >= ti 0 {} {
+        ^ @ !( Vec f ) String { F ( string_from `finetune: checkpoint tensor missing` ) }
+    }
+    // fallback dtype -1: never ST_F64 (0), so a failed get cannot fall
+    // into the raw-pointer path
+    : StTensor tt ?? ( vec_get [StTensor] . st tensors ti ) {
+        T x → x
+        F → @ StTensor { ( string_new ) -1 0 0 0 0 0 0 0 0 }
+    }
+    ? == . tt dtype ST_F64 {
+        : ( Vec f ) o ( __ft_ckpt_vals64 st tt )
+        ? == ( vec_len [f] o ) want { ^ @ !( Vec f ) String { T o } } {}
+        ( vec_free [f] o )
+        ^ @ !( Vec f ) String { F ( string_from `finetune: checkpoint tensor size mismatch` ) }
+    } {}
+    ?? ( st_dequant st ti ) {
+        T by → {
+            : ( Vec f ) o ( __ft_ckpt_vals by )
+            ( vec_free [u] by )
+            ? == ( vec_len [f] o ) want { ^ @ !( Vec f ) String { T o } } {}
+            ( vec_free [f] o )
+            ^ @ !( Vec f ) String { F ( string_from `finetune: checkpoint tensor size mismatch` ) }
+        }
+        F e → { ^ @ !( Vec f ) String { F e } }
+    }
+}
+
+// Load `path` into the captured program + optimizer. T on success, with
+// stepb holding the completed-step count. F = no usable checkpoint (the
+// caller starts fresh); a shape/meta MISMATCH also reports F after
+// printing why — resuming a different run over it would be silent ruin,
+// so the caller must treat mismatch as fatal (mismb is poked 1).
+@ __ft_ckpt_load s path * FtModel m i r * GProg pg * GpOpt go * u pids i nslot * u stepb * u mismb → b {
+    ( nurl_poke mismb 0 0 )
+    ?? ( st_open path ) {
+        T st → {
+            : ~ b ok T
+            : ~ i step 0
+            : ~ i t 0
+            : i mi ( st_find_tensor st `ckpt.meta` )
+            ? >= mi 0 {} { = ok F }
+            ? ok {
+                ?? ( st_dequant st mi ) {
+                    T by → {
+                        : ( Vec f ) mv ( __ft_ckpt_vals by )
+                        ( vec_free [u] by )
+                        ? == ( vec_len [f] mv ) 5 {
+                            : i ver # i ( _tf mv 0 )
+                            = step # i ( _tf mv 1 )
+                            = t # i ( _tf mv 2 )
+                            : i cslot # i ( _tf mv 3 )
+                            : i cr # i ( _tf mv 4 )
+                            ? & & == ver 1 == cslot nslot == cr r {} {
+                                ( nurl_eprintln `nurllama: checkpoint does not match this run (model/rank differ)` )
+                                ( nurl_poke mismb 0 1 )
+                                = ok F
+                            }
+                        } { = ok F }
+                        ( vec_free [f] mv )
+                    }
+                    F e → { ( string_free e ) = ok F }
+                }
+            } {}
+            : ~ i pi 0
+            ~ & < pi * 2 nslot ok {
+                : i n ( __ft_ckpt_n m r pi )
+                ?? ( __ft_ckpt_read st `p` pi n ) {
+                    T val → {
+                        = ok ( gput_set_input pg @ GVar { ( nurl_peek pids pi ) } val )
+                        ( vec_free [f] val )
+                    }
+                    F e → { ( string_free e ) = ok F }
+                }
+                ? ok {
+                    ?? ( __ft_ckpt_read st `m` pi n ) {
+                        T val → {
+                            = ok ( gpopt_m_upload go pg pi val )
+                            ( vec_free [f] val )
+                        }
+                        F e → { ( string_free e ) = ok F }
+                    }
+                } {}
+                ? ok {
+                    ?? ( __ft_ckpt_read st `v` pi n ) {
+                        T val → {
+                            = ok ( gpopt_v_upload go pg pi val )
+                            ( vec_free [f] val )
+                        }
+                        F e → { ( string_free e ) = ok F }
+                    }
+                } {}
+                = pi + pi 1
+            }
+            ( st_close st )
+            ? ok {
+                ( nurl_poke stepb 0 step )
+                ( gpopt_set_t go t )
+            } {}
+            ^ ok
+        }
+        F e → { ( string_free e ) ^ F }
+    }
+}
+
 @ ft_train * FtModel m ( Vec i ) corpus i win i r f alpha i seed i steps f lr i dtype b verbose → FtTrain {
+    ^ ( ft_train_ck m corpus win r alpha seed steps lr dtype verbose `` 0 F )
+}
+
+@ ft_train_ck * FtModel m ( Vec i ) corpus i win i r f alpha i seed i steps f lr i dtype b verbose s ckptp i ckevery b resume → FtTrain {
     : i total ( vec_len [i] corpus )
     : ~ i T2 win
     ? > T2 total { = T2 total } {}
@@ -1104,8 +1347,26 @@ $ `deps/gpukit/src/dev.nu`
             ( gpopt_add go pg @ GVar { ( nurl_peek pids pi ) } 0.0 )
             = pi + pi 1
         }
-        : ~ i cur 0
         : ~ i st 0
+        ? & & ok resume > ( nurl_str_len ckptp ) 0 {
+            : *u stb ( nurl_alloc 8 )
+            : *u mismb ( nurl_alloc 8 )
+            ? ( __ft_ckpt_load ckptp m r pg go pids nslot stb mismb ) {
+                = st ( nurl_peek stb 0 )
+                ( nurl_print `resumed from checkpoint: step ` )
+                ( nurl_print ( nurl_str_int st ) )
+                ( nurl_print `/` )
+                ( nurl_print ( nurl_str_int steps ) )
+                ( nurl_print `\n` )
+            } {
+                ? == ( nurl_peek mismb 0 ) 1 { = ok F } {
+                    ( nurl_print `no usable checkpoint — starting from step 0\n` )
+                }
+            }
+            ( nurl_free stb ) ( nurl_free mismb )
+        } {}
+        : ~ i cur 0
+        : ~ b first T
         ~ & < st steps ok {
             // round-robin window switch: refresh the two input consts
             : i w % st nwin
@@ -1125,7 +1386,7 @@ $ `deps/gpukit/src/dev.nu`
             = ok & ok ( gput_forward pg )
             = ok & ok ( gput_backward pg )
             : f lc ( gput_loss pg )
-            ? == st 0 { = l0 lc } {}
+            ? first { = l0 lc = first F } {}
             ? == st - steps 1 { = l1 lc } {}
             ? & verbose == % st 10 0 {
                 ( nurl_print `step ` ) ( nurl_print ( nurl_str_int st ) )
@@ -1134,7 +1395,25 @@ $ `deps/gpukit/src/dev.nu`
             } {}
             = ok & ok ( gpopt_step go pg )
             = st + st 1
+            ? & & & ok > ( nurl_str_len ckptp ) 0 > ckevery 0 == % st ckevery 0 {
+                ? ( __ft_ckpt_save ckptp m r pg go pids nslot st dtype ) {
+                    ? verbose {
+                        ( nurl_print `checkpoint: step ` )
+                        ( nurl_print ( nurl_str_int st ) )
+                        ( nurl_print ` → ` )
+                        ( nurl_print ckptp )
+                        ( nurl_print `\n` )
+                    } {}
+                } { ( nurl_eprintln `nurllama: checkpoint save failed (training continues)` ) }
+            } {}
         }
+        // final state, so a crash in the adapter save / merge that follows
+        // resumes here instead of retraining
+        ? & ok > ( nurl_str_len ckptp ) 0 {
+            ? ( __ft_ckpt_save ckptp m r pg go pids nslot st dtype ) {} {
+                ( nurl_eprintln `nurllama: final checkpoint save failed` )
+            }
+        } {}
         = ok & ok ( gput_param_sync_host pg tp )
         ( gpopt_free go )
         ( gput_free pg )
@@ -1430,7 +1709,7 @@ $ `deps/gpukit/src/dev.nu`
 // shape; multi-window scheduling lands with gput_set_input plumbing),
 // save the adapters, and optionally write a merged full-model safetensors
 // runnable via `nurllama run model.gguf PROMPT --weights merged.st`.
-@ nurllama_finetune s modp s datap s outp s mergedp i steps f lr i rank f alpha i seq i seed b f32 b mixed → i {
+@ nurllama_finetune s modp s datap s outp s mergedp i steps f lr i rank f alpha i seq i seed b f32 b mixed s ckptp i ckevery b resume → i {
     : ~ s text ``
     : ~ b haderr F
     : ~ String textS ( string_new )
@@ -1494,7 +1773,7 @@ $ `deps/gpukit/src/dev.nu`
             : i dt ? mixed 2 ? f32 1 0
             ? mixed { ( nurl_print `precision: mixed (f32 storage, f64 accumulation — half VRAM, near-f64 accuracy)\n` ) } {}
             ? & f32 == mixed F { ( nurl_print `precision: float32 device replay (half VRAM; float32 precision, not bit-exact to f64)\n` ) } {}
-            : FtTrain tr ( ft_train m ids seq rank alpha seed steps lr dt T )
+            : FtTrain tr ( ft_train_ck m ids seq rank alpha seed steps lr dt T ckptp ckevery resume )
             ? . tr ok {} {
                 ( nurl_eprintln `nurllama: finetune training failed (no device? poisoned graph?)` )
                 ( ft_train_free tr ) ( ft_free m ) ( vec_free [i] ids )

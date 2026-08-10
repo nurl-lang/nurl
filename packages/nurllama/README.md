@@ -252,6 +252,22 @@ replay and f32 alike (`tests/finetune_stream_test.nu`). The values go through
 the same loader the eager path uses, NORM-rope un-permute included, so there
 is one definition of what a base weight is, not two that must agree.
 
+**`--checkpoint FILE [--save-every N] [--resume]`** makes a long run
+survivable. Every N steps (default 200) — and once more after the last step —
+the trainer writes one safetensors file holding the LoRA parameter values,
+both Adam moment vectors and the step counters: everything the update rule
+reads. The write goes to `FILE.tmp` and then `rename(2)`s over `FILE`, so a
+crash mid-write leaves the previous checkpoint intact. `--resume` loads it
+and continues the schedule exactly where it stopped (the window round-robin
+is a function of the step index), refuses a checkpoint whose shape or rank
+does not match the run, and starts fresh when the file does not exist — so
+one command line is idempotent: run it, and rerun it until the merge lands.
+The tensors are stored at the device's own precision (F64 for the f64
+replay, F32 for `--f32`/`--mixed`), so a resume is a lossless round-trip:
+a run killed at step 100 of 200 and resumed produces adapters
+**byte-identical** to the uninterrupted run (`tests/finetune_ckpt_test.nu`,
+and the same check killed-for-real over the CLI).
+
 ## How it is checked
 
 Not by trusting itself:
