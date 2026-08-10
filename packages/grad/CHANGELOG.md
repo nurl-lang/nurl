@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.10.0
+
+**Optimizer-state access + bulk f32 transfers — resumable checkpoints.**
+
+A trainer checkpoint that restores only the parameter values is not a
+resume: Adam's update reads the two moment vectors and the step counter,
+and restarting them at zero warps the next ~100 updates (bias correction
+alone scales the first step ~10×). New API, `pi` = `gpopt_add`
+registration index:
+
+- `gpopt_t` / `gpopt_set_t` — the step counter behind lr_t.
+- `gpopt_count` — registered parameter count.
+- `gpopt_m_download` / `gpopt_v_download` / `gpopt_m_upload` /
+  `gpopt_v_upload` — the moment vectors, sized-checked, fails closed.
+
+With f32 device storage (dtype 1/2) an f32 checkpoint file round-trips
+losslessly, so a killed-and-resumed run replays the uninterrupted one bit
+for bit (nurllama's finetune interrupt test: byte-identical adapters).
+
+And the transfers that make a checkpoint affordable: `gput_set_input`,
+`gput_value`, `gput_grad` and `gput_param_sync_host` used to convert f32
+buffers on the host, one FFI call per element — minutes for the ~100M
+elements a LoRA checkpoint walks, and the same cost again on every
+per-step minibatch refresh. Large f32 buffers (> 4096 elements) now move
+through a transient f64 staging buffer plus a device cast kernel: one
+memcpy and one launch. Every failure path (staging allocation included —
+a mid-training step can leave little free VRAM) falls back to the
+per-element loop: slower, never wrong.
+
 ## 0.8.2
 
 - Requirements widened to gpu `^0.11` / gpukit `^0.6`. No source change.
