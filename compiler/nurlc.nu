@@ -898,6 +898,11 @@
 // the recursive supertrait walk threads its result through these globals).
 : ~ s g_dyn_flat_out ``
 : ~ s g_dyn_flat_seen ``
+// dyn_method_decltrait's result rides a global too: its callers sit
+// ABOVE its definition, so an owned return would be conservatively
+// kept (never freed) at those call sites — a borrow of this global
+// needs no freeing at all.
+: ~ s g_dyn_dtout ``
 : ~ s g_super_obligations ``  // one "<Sub> <impl_llvm> <nurl_type> <file:line>\n"
 //   record per impl block, verified after scan_fn_sigs once every impl across
 //   the program (incl. imports) is registered: a supertrait of an implemented
@@ -3751,6 +3756,137 @@
             ^ ( nurl_str_cat `error` `` )
         }
     }
+}
+
+// ── Dyn-dispatch call-site helpers ──────────────────────────────────
+// Moved ABOVE gen_call: their owned string returns are held by the
+// dyn call site, and a callee defined below its caller has no
+// ownership summary there — the results were conservatively kept,
+// one leaked allocation per dyn call site (LSan). The flat-methods
+// family stays below: it returns no strings to gen_call, and its
+// own str_first/skip_word hops need THOSE summaries in turn.
+
+// pipe_first / pipe_rest: split a `|`-delimited packed string (used for method
+// signature parts, since LLVM type strings contain spaces but never `|`).
+@ pipe_first s str → s {
+    : i n ( nurl_str_len str )
+    : ~ i i 0
+    ~ & < i n != ( nurl_str_get str i ) 124 { = i + i 1 }
+    ^ ( nurl_str_slice str 0 i )
+}
+
+@ pipe_rest s str → s {
+    : i n ( nurl_str_len str )
+    : ~ i i 0
+    ~ & < i n != ( nurl_str_get str i ) 124 { = i + i 1 }
+    // No `|` separator: return a fresh owned EMPTY heap string (not a bare
+    // `` literal). pipe_rest is classified as returning an owned string (its
+    // other arm is nurl_str_slice), so a caller `: s x ( pipe_rest … )`
+    // auto-drops the result — freeing a `.rodata` literal would SEGV. A
+    // zero-length nurl_str_slice mallocs a 1-byte owned buffer, matching that
+    // contract exactly (same as pipe_first's empty-first-word case).
+    ? >= i n { ^ ( nurl_str_slice str 0 0 ) } {}
+    ^ ( nurl_str_slice str + i 1 - n + i 1 )
+}
+
+// subst_source_raw: replace whole-identifier occurrences of 'from' with 'to'
+// in a raw source string (preserves whitespace, backticks, punctuation).
+// Identifier chars: alpha, digit, underscore (95).
+@ subst_source_raw s src s from s to → s {
+    : ~ s result ``
+    : i slen ( nurl_str_len src )
+    : ~ i pos 0
+    : ~ i word_start 0
+    ~ < pos slen {
+        : i ch ( nurl_str_get src pos )
+        : b is_ident ( __is_ident_char ch )
+        ? is_ident
+        { = pos + pos 1 }
+        { ? > pos word_start
+            { : s word ( nurl_str_slice src word_start - pos word_start )
+                = result ( nurl_str_cat result ? ( seq word from )
+                ( nurl_str_cat to `` ) ( nurl_str_cat word `` ) )
+            }
+            {}
+            = result ( nurl_str_cat result ( nurl_str_slice src pos 1 ) )
+            = pos + pos 1
+            = word_start pos
+        }
+    }
+    ? > pos word_start
+    { : s word ( nurl_str_slice src word_start - pos word_start )
+        = result ( nurl_str_cat result ? ( seq word from )
+        ( nurl_str_cat to `` ) ( nurl_str_cat word `` ) )
+    }
+    {}
+    result
+}
+
+// dyn_sig_parts: parse a SUBSTITUTED method signature "…params… → ret" into the
+// packed string  ret|recvmode|recv_llvm[|p1|p2…]  where recvmode ∈ val/inout/
+// sink. Non-receiver params of an object-safe method are concrete (no Self), so
+// the caller may substitute Self→any concrete type before calling.
+@ dyn_sig_parts s subst_sig → s {
+    : i sx ( nurl_lex_new subst_sig `<dynsig>` )
+    : ~ s recvmode `val`
+    ? ( seq ( nurl_lex_val sx ) `inout` ) { = recvmode `inout` ( nurl_lex_advance sx ) } {}
+    ? ( seq ( nurl_lex_val sx ) `sink` ) { = recvmode `sink` ( nurl_lex_advance sx ) } {}
+    : s recv_llvm ( parse_type sx )
+    ? ( is_ident_tok ( nurl_lex_type sx ) ) { ( nurl_lex_advance sx ) } {}  // receiver name
+    : ~ s params ``
+    ~ & != ( nurl_lex_type sx ) TT_ARROW != ( nurl_lex_type sx ) TT_EOF {
+        : s pt ( parse_type sx )
+        = params ? == 0 ( nurl_str_len params ) ( nurl_str_cat pt `` ) ( nurl_str_cat3 params `|` pt )
+        ? ( is_ident_tok ( nurl_lex_type sx ) ) { ( nurl_lex_advance sx ) } {}  // param name
+    }
+    : ~ s ret ( nurl_str_cat `void` `` )
+    ? == ( nurl_lex_type sx ) TT_ARROW { ( nurl_lex_advance sx ) = ret ( parse_type sx ) } {}
+    // Inner cat bound first — an owned temp inline in an arg list is
+    // never collected (see dyn_call_fnty).
+    : s __rtl ( nurl_str_cat `|` recv_llvm )
+    : s head ( nurl_str_cat4 ret `|` recvmode __rtl )
+    : s __dsr ? == 0 ( nurl_str_len params ) ( nurl_str_cat head `` ) ( nurl_str_cat3 head `|` params )
+    ( nurl_lex_free sx )
+    ^ __dsr
+}
+
+// dyn_subst_parts: the sig parts of (declaring trait, method) with Self
+// substituted to `to`. For a thunk, `to` is the impl's NURL type name; for a
+// call-site fn-pointer type, any concrete type works (object-safe ⇒ Self only
+// appears as the receiver, which the caller passes as i8*).
+@ dyn_subst_parts s declTrait s m s to → s {
+    : s tparam ( nurl_sym_get2 g_trait_syms declTrait `__tparam` )
+    : s rawsig ( nurl_sym_get2 g_trait_syms declTrait ( nurl_str_cat `__` ( nurl_str_cat m `__sig` ) ) )
+    // Branch form, not a `?`-join with a tracked-ident arm — the join
+    // hands back a strdup'd phi copy no scope owns (LSan, one per dyn
+    // call site; the __subst_word lesson).
+    : ~ s subst ( nurl_str_cat rawsig `` )
+    ? != 0 ( nurl_str_len tparam ) { = subst ( subst_source_raw rawsig tparam to ) } {}
+    ^ ( dyn_sig_parts subst )
+}
+
+// dyn_call_fnty: the uniform dyn-ABI function-pointer type of method `m` as
+// seen at a call site — `<ret> (i8*, p1, p2, …)*`. Self is erased to i8*.
+@ dyn_call_fnty s parts → s {
+    : s ret ( pipe_first parts )
+    : s r1 ( pipe_rest parts )  // recvmode|recv_llvm|params…
+    // Every owned intermediate BOUND before use: an owned temp passed
+    // straight into an arg list (the inline nurl_llty results and the
+    // nested pipe_rest here) is never collected (LSan, one per dyn
+    // call site). And `pr` starts as an owned copy so the hop cursor
+    // is tracked (the __ptypes_nth idiom).
+    : s __r2 ( pipe_rest r1 )
+    : s rest ( pipe_rest __r2 )  // params… (drop recvmode + recv_llvm)
+    // Pure IR text (the vtable fn-ptr bitcast target) — lowered.
+    : s __rll ( nurl_llty ret )
+    : ~ s out ( nurl_str_cat __rll ` (i8*` )
+    : ~ s pr ( nurl_str_cat rest `` )
+    ~ != 0 ( nurl_str_len pr ) {
+        : s pt ( pipe_first pr ) = pr ( pipe_rest pr )
+        : s __pll ( nurl_llty pt )
+        = out ( nurl_str_cat3 out `, ` __pll )
+    }
+    ^ ( nurl_str_cat out `)*` )
 }
 
 // ── Call ( fn args... ) ───────────────────────────────────────────
@@ -7764,6 +7900,13 @@
             : s __parts ( dyn_subst_parts __dt fname `i64` )
             : s __ret ( pipe_first __parts )
             : s __fnty ( dyn_call_fnty __parts )
+            // Trait-declared arity at the dyn call site: params after
+            // the erased self = the fn-ptr spelling's top-level commas
+            // (the self slot is comma-free, like a closure's env).
+            // `( speak sd )` against a `speak T self i volume` trait
+            // method ASSEMBLED — the indirect call carries its own
+            // signature — and the thunk read an unset register.
+            ( __closure_arity_check lex fname __fnty T - arg_idx 1 )
             : s __fnr ( nurl_cg_reg cg )
             ( nurl_print `  ` ) ( nurl_print __fnr ) ( nurl_print ` = bitcast i8* ` ) ( nurl_print __fp ) ( nurl_print ` to ` ) ( nurl_print __fnty ) ( nurl_print `\n` )
             : s __cargs ? == 0 ( nurl_str_len rest_argstr ) ( nurl_str_cat `i8* ` __data ) ( nurl_str_cat4 `i8* ` __data `, ` rest_argstr )
@@ -7797,8 +7940,30 @@
         = impl_mangle_key ( nurl_sym_get g_impl_name_syms impl_key )
     }
     {}
+    // Method name known to impl dispatch (`__impl_seen`) but NO impl
+    // exists for THIS receiver type, and nothing else defines the bare
+    // name: the fall-through emitted `call @speak(%Cat …)` against an
+    // undefined symbol — an error only clang reported, far from here.
+    ? & & & & == 0 ( nurl_str_len impl_mangle_key )
+    != 0 ( nurl_sym_len2 g_impl_name_syms fname `__impl_seen` )
+    == 0 ( nurl_sym_len2 syms fname `__arity` )
+    == 0 ( nurl_sym_len2 syms fname `__ptr` )
+    == 0 ( nurl_sym_len2 syms fname `__ffi` )
+    { ( die lex ( nurl_str_cat ( nurl_str_cat4
+        `method '` fname `' has no impl for receiver type '` ( llvm_to_nurl first_arg_type ) )
+        `' — the name is implemented for other type(s) only. Add a '% Trait <Type> { … }' impl for this type, or pass a value of an implementing type as the first argument.` ) ) }
+    {}
     ? != 0 ( nurl_str_len impl_mangle_key )
     { : s impl_ret ( nurl_sym_get g_impl_ret_syms impl_key )
+        // Declared arity (receiver included), recorded by the impl scan.
+        // `( speak d )` against `speak Dog d i volume` assembled and the
+        // callee read an unset register for volume, silently.
+        : s __im_ar ( nurl_sym_get g_impl_ret_syms ( nurl_str_cat impl_key `__arity` ) )
+        ? & != 0 ( nurl_str_len __im_ar ) != ( nurl_str_to_int __im_ar ) arg_idx
+        { ( die lex ( nurl_str_cat ( nurl_str_cat4
+            `call to method '` fname `' for receiver type '` ( llvm_to_nurl first_arg_type ) )
+            ( nurl_str_cat4 `' passes ` ( nurl_str_int arg_idx ) ` argument(s) but the impl declares ` ( nurl_str_cat ( nurl_str_int ( nurl_str_to_int __im_ar ) ) ` (receiver included) — match the declaration.` ) ) ) ) }
+        {}
         : s impl_name ( nurl_str_cat fname ( nurl_str_cat `__` impl_mangle_key ) )
         // Publish the callee's return side-channels (ownership, borrow, signedness,
         // try-propagation types) exactly like the Regular-call path below — the
@@ -17634,39 +17799,6 @@
     result
 }
 
-// subst_source_raw: replace whole-identifier occurrences of 'from' with 'to'
-// in a raw source string (preserves whitespace, backticks, punctuation).
-// Identifier chars: alpha, digit, underscore (95).
-@ subst_source_raw s src s from s to → s {
-    : ~ s result ``
-    : i slen ( nurl_str_len src )
-    : ~ i pos 0
-    : ~ i word_start 0
-    ~ < pos slen {
-        : i ch ( nurl_str_get src pos )
-        : b is_ident ( __is_ident_char ch )
-        ? is_ident
-        { = pos + pos 1 }
-        { ? > pos word_start
-            { : s word ( nurl_str_slice src word_start - pos word_start )
-                = result ( nurl_str_cat result ? ( seq word from )
-                ( nurl_str_cat to `` ) ( nurl_str_cat word `` ) )
-            }
-            {}
-            = result ( nurl_str_cat result ( nurl_str_slice src pos 1 ) )
-            = pos + pos 1
-            = word_start pos
-        }
-    }
-    ? > pos word_start
-    { : s word ( nurl_str_slice src word_start - pos word_start )
-        = result ( nurl_str_cat result ? ( seq word from )
-        ( nurl_str_cat to `` ) ( nurl_str_cat word `` ) )
-    }
-    {}
-    result
-}
-
 // __assoc_val: look up an associated-type binding by name in an impl's
 // "name1 val1 name2 val2 …" binding string. Returns the bound NURL type name,
 // or "" if `name` is not bound (binding values are never empty, so "" is an
@@ -21585,6 +21717,14 @@
             : s key ( nurl_str_cat mname ( nurl_str_cat `##` impl_llvm ) )
             ( __coherence_register lex mname impl_llvm impl_nurl tname )
             ( nurl_sym_def g_impl_ret_syms key ret_ty )
+            // Declared param count (receiver included) for the call-site
+            // arity check — same entry the explicit-method scan writes.
+            // dyn_sig_parts fields: ret|recvmode|recv|p1|…, so the count
+            // is fields minus the ret and recvmode slots.
+            : ~ i __dpn 0
+            : ~ s __dpr ( nurl_str_cat ( dyn_sig_parts subst ) `` )
+            ~ != 0 ( nurl_str_len __dpr ) { = __dpn + __dpn 1 = __dpr ( pipe_rest __dpr ) }
+            ( nurl_sym_def g_impl_ret_syms ( nurl_str_cat key `__arity` ) ( nurl_str_int - __dpn 2 ) )
             ( nurl_sym_def g_impl_name_syms key impl_mangle )
             // Mark the bare method name as impl-backed so gen_call's
             // unknown-callee check lets it through to impl dispatch.
@@ -21753,16 +21893,28 @@
                         = provided ? == 0 ( nurl_str_len provided )
                         ( nurl_str_cat mname `` )
                         ( nurl_str_cat provided ( nurl_str_cat ` ` mname ) )
-                        // Skip params until →
+                        // Walk (not blind-skip) the params until `→`,
+                        // COUNTING them: the call-site arity check needs
+                        // the declared count, receiver included. An
+                        // `inout`/`sink` marker prefixes a param and is
+                        // not one itself.
+                        : ~ i __mpct 0
                         ~ & != ( nurl_lex_type lex ) TT_ARROW
                         != ( nurl_lex_type lex ) TT_EOF
-                        { ( nurl_lex_advance lex ) }
+                        { ? & ( is_ident_tok ( nurl_lex_type lex ) )
+                            | ( seq ( nurl_lex_val lex ) `inout` ) ( seq ( nurl_lex_val lex ) `sink` )
+                            { ( nurl_lex_advance lex ) } {}
+                            : s __mpt ( parse_type lex )
+                            ? ( is_ident_tok ( nurl_lex_type lex ) ) { ( nurl_lex_advance lex ) } {}
+                            = __mpct + __mpct 1
+                        }
                         ? == ( nurl_lex_type lex ) TT_ARROW
                         { ( nurl_lex_advance lex )
                             : s ret_ty ( parse_type lex )
                             : s key ( nurl_str_cat mname ( nurl_str_cat `##` impl_llvm ) )
                             ( __coherence_register lex mname impl_llvm impl_nurl tname )
                             ( nurl_sym_def g_impl_ret_syms key ret_ty )
+                            ( nurl_sym_def g_impl_ret_syms ( nurl_str_cat key `__arity` ) ( nurl_str_int __mpct ) )
                             ( nurl_sym_def g_impl_name_syms key impl_mangle )
                             // Mark the bare method name as impl-backed so
                             // gen_call's unknown-callee check lets it
@@ -21908,29 +22060,6 @@
 // boxed value, then frees the box.
 // ══════════════════════════════════════════════════════════════════════
 
-// pipe_first / pipe_rest: split a `|`-delimited packed string (used for method
-// signature parts, since LLVM type strings contain spaces but never `|`).
-@ pipe_first s str → s {
-    : i n ( nurl_str_len str )
-    : ~ i i 0
-    ~ & < i n != ( nurl_str_get str i ) 124 { = i + i 1 }
-    ^ ( nurl_str_slice str 0 i )
-}
-
-@ pipe_rest s str → s {
-    : i n ( nurl_str_len str )
-    : ~ i i 0
-    ~ & < i n != ( nurl_str_get str i ) 124 { = i + i 1 }
-    // No `|` separator: return a fresh owned EMPTY heap string (not a bare
-    // `` literal). pipe_rest is classified as returning an owned string (its
-    // other arm is nurl_str_slice), so a caller `: s x ( pipe_rest … )`
-    // auto-drops the result — freeing a `.rodata` literal would SEGV. A
-    // zero-length nurl_str_slice mallocs a 1-byte owned buffer, matching that
-    // contract exactly (same as pipe_first's empty-first-word case).
-    ? >= i n { ^ ( nurl_str_slice str 0 0 ) } {}
-    ^ ( nurl_str_slice str + i 1 - n + i 1 )
-}
-
 // parse_type_dyn: `% Trait` (type position) → the trait-object type
 // `%dyn.<Trait>`. Records the trait as needing an emitted fat-pointer type
 // (idempotent). Object-safety is enforced at the concrete use sites (here when
@@ -22012,7 +22141,11 @@
 // this + 1 for the drop slot).
 @ dyn_flat_count s tname → i {
     ( __dyn_flat_reset )
-    : ~ s fl ( dyn_flat_methods tname )
+    // Own a copy so the cursor is TRACKED (the __ptypes_nth idiom):
+    // dyn_flat_methods returns a BORROW of its global accumulator, and
+    // skip-word hops on an untracked alias each leak their fresh tail
+    // (LSan: one nurl_alloc per hop per dyn call site).
+    : ~ s fl ( nurl_str_cat ( dyn_flat_methods tname ) `` )
     : ~ i c 0
     ~ != 0 ( nurl_str_len fl ) {
         = fl ( str_skip_word fl )  // method
@@ -22026,7 +22159,11 @@
 // list (slot 0 is the destructor). -1 if `m` is not a method of the trait.
 @ dyn_method_slot s tname s m → i {
     ( __dyn_flat_reset )
-    : ~ s fl ( dyn_flat_methods tname )
+    // Own a copy so the cursor is TRACKED (the __ptypes_nth idiom):
+    // dyn_flat_methods returns a BORROW of its global accumulator, and
+    // skip-word hops on an untracked alias each leak their fresh tail
+    // (LSan: one nurl_alloc per hop per dyn call site).
+    : ~ s fl ( nurl_str_cat ( dyn_flat_methods tname ) `` )
     : ~ i idx 0
     : ~ i found -1
     ~ != 0 ( nurl_str_len fl ) {
@@ -22043,66 +22180,22 @@
 // method `m` — used to read the method's signature for the call/thunk type.
 @ dyn_method_decltrait s tname s m → s {
     ( __dyn_flat_reset )
-    : ~ s fl ( dyn_flat_methods tname )
-    : ~ s res ``
+    // Own a copy so the cursor is TRACKED (the __ptypes_nth idiom):
+    // dyn_flat_methods returns a BORROW of its global accumulator, and
+    // skip-word hops on an untracked alias each leak their fresh tail
+    // (LSan: one nurl_alloc per hop per dyn call site).
+    : ~ s fl ( nurl_str_cat ( dyn_flat_methods tname ) `` )
+    = g_dyn_dtout ``
     ~ != 0 ( nurl_str_len fl ) {
         : s mm ( str_first_word fl ) = fl ( str_skip_word fl )
         : s dt ( str_first_word fl ) = fl ( str_skip_word fl )
-        ? & == 0 ( nurl_str_len res ) ( seq mm m ) { = res dt } {}
+        ? & == 0 ( nurl_str_len g_dyn_dtout ) ( seq mm m )
+        { = g_dyn_dtout ( nurl_str_cat dt `` ) }
+        {}
     }
-    ^ res
-}
-
-// dyn_sig_parts: parse a SUBSTITUTED method signature "…params… → ret" into the
-// packed string  ret|recvmode|recv_llvm[|p1|p2…]  where recvmode ∈ val/inout/
-// sink. Non-receiver params of an object-safe method are concrete (no Self), so
-// the caller may substitute Self→any concrete type before calling.
-@ dyn_sig_parts s subst_sig → s {
-    : i sx ( nurl_lex_new subst_sig `<dynsig>` )
-    : ~ s recvmode `val`
-    ? ( seq ( nurl_lex_val sx ) `inout` ) { = recvmode `inout` ( nurl_lex_advance sx ) } {}
-    ? ( seq ( nurl_lex_val sx ) `sink` ) { = recvmode `sink` ( nurl_lex_advance sx ) } {}
-    : s recv_llvm ( parse_type sx )
-    ? ( is_ident_tok ( nurl_lex_type sx ) ) { ( nurl_lex_advance sx ) } {}  // receiver name
-    : ~ s params ``
-    ~ & != ( nurl_lex_type sx ) TT_ARROW != ( nurl_lex_type sx ) TT_EOF {
-        : s pt ( parse_type sx )
-        = params ? == 0 ( nurl_str_len params ) ( nurl_str_cat pt `` ) ( nurl_str_cat3 params `|` pt )
-        ? ( is_ident_tok ( nurl_lex_type sx ) ) { ( nurl_lex_advance sx ) } {}  // param name
-    }
-    : ~ s ret ( nurl_str_cat `void` `` )
-    ? == ( nurl_lex_type sx ) TT_ARROW { ( nurl_lex_advance sx ) = ret ( parse_type sx ) } {}
-    : s head ( nurl_str_cat4 ret `|` recvmode ( nurl_str_cat `|` recv_llvm ) )
-    : s __dsr ? == 0 ( nurl_str_len params ) ( nurl_str_cat head `` ) ( nurl_str_cat3 head `|` params )
-    ( nurl_lex_free sx )
-    ^ __dsr
-}
-
-// dyn_subst_parts: the sig parts of (declaring trait, method) with Self
-// substituted to `to`. For a thunk, `to` is the impl's NURL type name; for a
-// call-site fn-pointer type, any concrete type works (object-safe ⇒ Self only
-// appears as the receiver, which the caller passes as i8*).
-@ dyn_subst_parts s declTrait s m s to → s {
-    : s tparam ( nurl_sym_get2 g_trait_syms declTrait `__tparam` )
-    : s rawsig ( nurl_sym_get2 g_trait_syms declTrait ( nurl_str_cat `__` ( nurl_str_cat m `__sig` ) ) )
-    : s subst ? != 0 ( nurl_str_len tparam ) ( subst_source_raw rawsig tparam to ) rawsig
-    ^ ( dyn_sig_parts subst )
-}
-
-// dyn_call_fnty: the uniform dyn-ABI function-pointer type of method `m` as
-// seen at a call site — `<ret> (i8*, p1, p2, …)*`. Self is erased to i8*.
-@ dyn_call_fnty s parts → s {
-    : s ret ( pipe_first parts )
-    : s r1 ( pipe_rest parts )  // recvmode|recv_llvm|params…
-    : s rest ( pipe_rest ( pipe_rest r1 ) )  // params… (drop recvmode + recv_llvm)
-    // Pure IR text (the vtable fn-ptr bitcast target) — lowered.
-    : ~ s out ( nurl_str_cat ( nurl_llty ret ) ` (i8*` )
-    : ~ s pr rest
-    ~ != 0 ( nurl_str_len pr ) {
-        : s pt ( pipe_first pr ) = pr ( pipe_rest pr )
-        = out ( nurl_str_cat3 out `, ` ( nurl_llty pt ) )
-    }
-    ^ ( nurl_str_cat out `)*` )
+    // BORROW return (see the global's comment): callers above this
+    // definition would conservatively keep an owned result.
+    ^ g_dyn_dtout
 }
 
 // dyn_check_object_safe: a trait is usable as `%Trait` only if every method can
@@ -22178,11 +22271,15 @@
     // thunk parameter list + inner-call tail (value args passed straight on)
     : ~ s thunk_params `i8* %self`
     : ~ s inner_tail ( nurl_str_cat `` `` )
-    : ~ s pr params
+    // Owned copy — a bare alias of the tracked `params` is untracked,
+    // so the pipe hops each leaked their fresh tail (LSan); and the
+    // llty temp is BOUND, not inline in the arg list.
+    : ~ s pr ( nurl_str_cat params `` )
     : ~ i pidx 1
     ~ != 0 ( nurl_str_len pr ) {
         : s pt ( pipe_first pr ) = pr ( pipe_rest pr )
-        : s piece ( nurl_str_cat4 `, ` ( nurl_llty pt ) ` %a` ( nurl_str_int pidx ) )
+        : s __tll ( nurl_llty pt )
+        : s piece ( nurl_str_cat4 `, ` __tll ` %a` ( nurl_str_int pidx ) )
         = thunk_params ( nurl_str_cat thunk_params piece )
         = inner_tail ( nurl_str_cat inner_tail piece )
         = pidx + pidx 1
@@ -22220,7 +22317,7 @@
     {}
     // Pass 1: emit each method thunk (idempotent).
     ( __dyn_flat_reset )
-    : ~ s fl1 ( dyn_flat_methods tname )
+    : ~ s fl1 ( nurl_str_cat ( dyn_flat_methods tname ) `` )  // owned copy — tracked cursor (see dyn_flat_count)
     ~ != 0 ( nurl_str_len fl1 ) {
         : s m ( str_first_word fl1 ) = fl1 ( str_skip_word fl1 )
         : s dt ( str_first_word fl1 ) = fl1 ( str_skip_word fl1 )
@@ -22232,11 +22329,15 @@
     ( nurl_print ` = constant [` ) ( nurl_print ( nurl_str_int vsize ) ) ( nurl_print ` x i8*] [ ` )
     ( nurl_print slot0 )
     ( __dyn_flat_reset )
-    : ~ s fl2 ( dyn_flat_methods tname )
+    // Owned copy — tracked cursor (see dyn_flat_count); and the parts
+    // BOUND before the call: an owned temp inline in an arg list is
+    // never collected.
+    : ~ s fl2 ( nurl_str_cat ( dyn_flat_methods tname ) `` )
     ~ != 0 ( nurl_str_len fl2 ) {
         : s m ( str_first_word fl2 ) = fl2 ( str_skip_word fl2 )
         : s dt ( str_first_word fl2 ) = fl2 ( str_skip_word fl2 )
-        : s fnty ( dyn_call_fnty ( dyn_subst_parts dt m impl_nurl ) )
+        : s __vparts ( dyn_subst_parts dt m impl_nurl )
+        : s fnty ( dyn_call_fnty __vparts )
         ( nurl_print `, i8* bitcast (` ) ( nurl_print fnty ) ( nurl_print ` @__dynm.` )
         ( nurl_print tname ) ( nurl_print `.` ) ( nurl_print impl_mangle ) ( nurl_print `.` ) ( nurl_print m )
         ( nurl_print ` to i8*)` )
