@@ -219,11 +219,12 @@ run_one() {
             { echo "COMPILE FAIL"; echo "(expected COMPILE OK)"; } > "$act"
             if [[ -s "$err" ]]; then strip_root "$err"; append_capped "$act" "$err"; fi
         fi
-    # ── arity_strict_* — the n-ary '&'/'|' trap, which is only an
-    #                     error under --strict-arity. The diagnostic
-    #                     text is baselined because WHERE it points is
-    #                     the point: it must name the `?`, not the `{}`
-    #                     that finally revealed the mistake.
+    # ── arity_strict_* — the n-ary '&'/'|' trap, an error by default
+    #                     (--strict-arity is kept as an explicit no-op
+    #                     here). The diagnostic text is baselined
+    #                     because WHERE it points is the point: it must
+    #                     name the `?`, not the `{}` that finally
+    #                     revealed the mistake.
     elif [[ "$name" == arity_strict_* ]]; then
         if "$NURLC" --strict-arity "$src" > "$ll" 2>"$err"; then
             { echo "COMPILE OK"; echo "(expected COMPILE FAIL but compiler accepted it)"; } > "$act"

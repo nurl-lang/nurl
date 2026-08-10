@@ -946,14 +946,17 @@
 // Disabled by default because the extensions have a meaningful
 // false-positive rate against existing stdlib code.
 : ~ i g_strict_borrowck 0  // 1 when --strict-borrowck passed on the CLI
-// --strict-arity: promote the n-ary `&`/`|` arity warning to an error.
-// The trap is the language's one documented foot-gun and it currently
-// produces `status: ok` plus a binary whose conditional logic is wrong
-// — the worst possible outcome, because nothing downstream can tell.
-// Default stays a warning so existing trees keep building; a project
-// that wants the guarantee turns it on in CI, which is what this repo
-// now does for its own corpus.
-: ~ i g_strict_arity 0  // 1 when --strict-arity passed on the CLI
+// strict-arity: the n-ary `&`/`|` arity trap is an ERROR by default.
+// The trap is the language's one documented foot-gun and, as a warning,
+// it produced `status: ok` plus a binary whose conditional logic is
+// wrong — the worst possible outcome, because nothing downstream can
+// tell. The check has two known legitimate-but-flagged shapes (a `~`
+// loop whose condition is a bare-arm `?`, and a bare `{ … }` scoping
+// block right after a bare-arm `?`); both have trivial rewrites, and
+// `--no-strict-arity` demotes the error back to a warning for trees
+// that need to keep building. `--strict-arity` is accepted as a no-op
+// for compatibility (CI scripts pass it).
+: ~ i g_strict_arity 1  // 0 when --no-strict-arity passed on the CLI
 : ~ i g_ptrtab 0  // sym handle for the dangling-borrow tracker (unscoped)
 : ~ i g_bck 0  // sym handle for the borrow checker's per-function
 //  data (statement list etc.); allocated in main()
@@ -8456,12 +8459,14 @@
     // n-ary `&`/`|` foot-gun: user wrote `? & a b c d { then } { else }`
     // intending an n-ary AND, but `& a b` only takes 2 operands so
     // `c` and `d` got consumed as the bare then/else, and the
-    // `{ ... }` blocks then run as side-effect statements. Warn —
-    // the program compiles but the conditional logic is wrong.
+    // `{ ... }` blocks then run as side-effect statements. An error by
+    // default (--no-strict-arity demotes it to a warning): as a warning
+    // the program compiled with wrong conditional logic and nothing
+    // downstream could tell.
     ? == ( nurl_lex_type lex ) TT_LBRACE
     { ? != 0 g_strict_arity
-        { ( die_pos lex bck_cline bck_ccol `'?' consumed bare then/else values, but a '{ ... }' block follows. Likely too few '&'/'|' operators in the condition (each is BINARY — write '& & a b c d' for n-ary).` ) }
-        { ( warn_pos lex bck_cline bck_ccol `'?' consumed bare then/else values, but a '{ ... }' block follows. Likely too few '&'/'|' operators in the condition (each is BINARY — write '& & a b c d' for n-ary). Compile with --strict-arity to make this an error.` ) } }
+        { ( die_pos lex bck_cline bck_ccol `'?' consumed bare then/else values, but a '{ ... }' block follows. Likely too few '&'/'|' operators in the condition (each is BINARY — write '& & a b c d' for n-ary). If this shape is intentional, --no-strict-arity demotes it to a warning.` ) }
+        { ( warn_pos lex bck_cline bck_ccol `'?' consumed bare then/else values, but a '{ ... }' block follows. Likely too few '&'/'|' operators in the condition (each is BINARY — write '& & a b c d' for n-ary).` ) } }
     {}
     // pick a consistent phi type: prefer the non-void live branch type;
     // if both live and types differ, fall back to void (no phi needed).
@@ -24238,6 +24243,7 @@
     ( nurl_print `  --lint              run lint-only diagnostics (e.g. unused imports)\n` )
     ( nurl_print `  --no-borrowck       disable the borrow-checker pass (on by default)\n` )
     ( nurl_print `  --strict-borrowck   run the borrow-checker in strict mode\n` )
+    ( nurl_print `  --no-strict-arity   demote the n-ary '&'/'|' arity-trap error to a warning\n` )
     ( nurl_print `  --no-dce            emit unreachable functions too (on by default)\n` )
     ( nurl_print `  --ffi-host-imports  emit FFI calls as wasm host imports\n` )
     ( nurl_print `  --split=N           ALSO write the module as up to N independent ones,\n` )
@@ -24279,21 +24285,23 @@
                                 { = g_borrowck 1 = g_strict_borrowck 1 }
                                 { ? ( seq a `--strict-arity` )
                                     { = g_strict_arity 1 }
-                                    { ? ( seq a `--ffi-host-imports` )
-                                        { = g_ffi_host_imports 1 }
-                                        { ? ( seq a `--no-dce` )
-                                            { = g_dce 0 }
-                                            { ? != 0 ( nurl_str_starts a `--split=` )
-                                                { = g_split_max ( nurl_str_to_int ( nurl_str_slice a 8 - ( nurl_str_len a ) 8 ) ) }
-                                                { ? != 0 ( nurl_str_starts a `--split-out=` )
-                                                    { = g_split_out ( nurl_str_slice a 12 - ( nurl_str_len a ) 12 ) }
-                                                    { ? != 0 ( nurl_str_starts a `--split-min=` )
-                                                        { = g_split_min ( nurl_str_to_int ( nurl_str_slice a 12 - ( nurl_str_len a ) 12 ) ) }
-                                                        { = path a } } } } } } } } } } } } }
+                                    { ? ( seq a `--no-strict-arity` )
+                                        { = g_strict_arity 0 }
+                                        { ? ( seq a `--ffi-host-imports` )
+                                            { = g_ffi_host_imports 1 }
+                                            { ? ( seq a `--no-dce` )
+                                                { = g_dce 0 }
+                                                { ? != 0 ( nurl_str_starts a `--split=` )
+                                                    { = g_split_max ( nurl_str_to_int ( nurl_str_slice a 8 - ( nurl_str_len a ) 8 ) ) }
+                                                    { ? != 0 ( nurl_str_starts a `--split-out=` )
+                                                        { = g_split_out ( nurl_str_slice a 12 - ( nurl_str_len a ) 12 ) }
+                                                        { ? != 0 ( nurl_str_starts a `--split-min=` )
+                                                            { = g_split_min ( nurl_str_to_int ( nurl_str_slice a 12 - ( nurl_str_len a ) 12 ) ) }
+                                                            { = path a } } } } } } } } } } } } } }
         = ai + ai 1
     }
     ? == 0 ( nurl_str_len path )
-    { ( nurl_eprintln `usage: nurlc [--version] [--g] [--lint] [--no-borrowck | --strict-borrowck] [--strict-arity] [--ffi-host-imports] [--no-dce] [--split=N --split-out=PREFIX] <file.nu>` ) ( nurl_exit 1 ) }
+    { ( nurl_eprintln `usage: nurlc [--version] [--g] [--lint] [--no-borrowck | --strict-borrowck] [--no-strict-arity] [--ffi-host-imports] [--no-dce] [--split=N --split-out=PREFIX] <file.nu>` ) ( nurl_exit 1 ) }
     {}
     // --split writes files, so it needs somewhere to write them. Cap it
     // at 64: past the core count the parts only get smaller, and each

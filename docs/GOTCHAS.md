@@ -28,8 +28,9 @@ downstream notices. Write n-1 operators for n conditions:
 ? & & & a b c d { then } { else }    // (((a & b) & c) & d)
 ```
 
-`nurlc` points its caret at the `?` and names the cure. Compile with
-`--strict-arity` to make it an error; this repo runs
+`nurlc` points its caret at the `?` and names the cure. The trap is a
+hard **error by default**; `--no-strict-arity` demotes it to a warning
+for trees that need to keep building. This repo additionally runs
 `tools/check_strict_arity.sh` over its whole first-party tree in CI, and
 that gate's first run found a shipped example culling every particle on
 every frame for exactly this reason.

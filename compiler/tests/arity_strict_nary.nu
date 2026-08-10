@@ -4,9 +4,9 @@
 // three of them. Written with one, `?` takes `& a b` as the condition
 // and then consumes the remaining two comparisons as its bare then/else
 // values — after which the `{ … } { … }` blocks run as ordinary
-// statements. The conditional logic is wrong and the program still
-// compiles, which is the entire reason this needs a flag and a gate:
-// nothing downstream of the compiler can tell.
+// statements. The conditional logic is wrong and, as a warning, the
+// program still compiled — the entire reason this trap is now an
+// error by default: nothing downstream of the compiler can tell.
 //
 // Baselined for the diagnostic TEXT, because where it points is the
 // point. The trap can only be DETECTED once the `{` after the
@@ -14,7 +14,7 @@
 // moment put the caret on the closing `} {}` — below the mistake,
 // pointing at the consequence. It must name the `?` on line 20.
 //
-// Expected: COMPILE FAIL under --strict-arity, caret at 20:5.
+// Expected: COMPILE FAIL (strict arity is the default), caret at 20:5.
 
 @ f i a i b i c i d → i {
     ? & >= a 0 < a b >= c 0 < c d {

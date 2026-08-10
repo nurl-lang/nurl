@@ -8,6 +8,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **The n-ary `&`/`|` arity trap is a hard error by default;
+  `--no-strict-arity` demotes it back to a warning.** As a warning the
+  trap was the worst possible outcome: `? & a b c d { … } { … }`
+  compiled to `status: ok` and a binary whose conditional logic is
+  wrong, and nothing downstream could tell — the whole reason
+  `--strict-arity` and its CI gate existed. The first-party tree has
+  been strict-clean since that gate landed, so the default now matches
+  what the repo already enforced. `--strict-arity` stays accepted as a
+  no-op for compatibility.
+
+  The check has two known legitimate-but-flagged shapes — a `~` loop
+  whose condition is a bare-arm `?` (`~ ? flip < n 3 < n 5 { … }`), and
+  a bare `{ … }` scoping block immediately after a bare-arm `?` — both
+  with trivial rewrites (fold the ternary into `&`/`|` logic; drop or
+  move the scoping block). A tree that hits them faster than it can fix
+  them builds with `--no-strict-arity`, and the error message names
+  that escape hatch.
+
 ### Added
 
 - **`tools/check_diag_coverage.sh` — a diagnostic is not finished when it

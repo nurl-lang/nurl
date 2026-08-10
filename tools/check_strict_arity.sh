@@ -13,9 +13,11 @@
 #  and the compiler still emits a working binary — nothing
 #  downstream can tell, which is what makes it worth a gate.
 #
-#  nurlc warns about this by default (so third-party trees keep
-#  building) and errors under --strict-arity. This script runs the
-#  strict compiler over every first-party .nu file.
+#  nurlc errors on this by default (--no-strict-arity demotes it to
+#  a warning for trees that need to keep building). This script runs
+#  the compiler over every first-party .nu file; it predates the
+#  strict default and stays as a belt-and-braces gate — it still
+#  passes --strict-arity explicitly, which is now a no-op.
 #
 #  It found the shape it was written for on its first run:
 #  examples/audio_sparcles2.nu culled EVERY particle on every frame
