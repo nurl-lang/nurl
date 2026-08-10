@@ -91,8 +91,12 @@ enough — we'll iterate on the design in the issue thread.
   golden under `compiler/tests/outputs/` (record it with
   `compiler/tests/run_tests.sh --update <name>`; run a single test with
   `run_tests.sh <name>`). Programs that must be *rejected* go in as
-  `should_fail_*.nu` / `borrow_*.nu`, with their expected diagnostic as
-  the golden.
+  `diag_*.nu`, `should_fail_*.nu` or `borrow_*.nu` — and the prefix
+  decides what the golden keeps. `diag_*` and `borrow_*` baseline the
+  **diagnostic text**; `should_fail_*` records only the single word
+  `COMPILE FAIL`, so a message behind one can be gutted without a golden
+  moving. If the wording is the point — and for an error message it
+  usually is — use `diag_*`.
 - **Update docs** if you change observable behaviour. The README is a
   thin overview that links to topic docs under [`docs/`](docs/); update
   the relevant one (`docs/spec.md`, `docs/LIMITATIONS.md`,
