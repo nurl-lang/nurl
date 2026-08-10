@@ -151,14 +151,35 @@ $ `safetensor.nu`
     ^ out
 }
 
+// Write the file WITHOUT stw_finish's concatenation: the prefix (u64 +
+// JSON header) goes first, then the data region is appended straight from
+// the writer's own buffer. stw_finish materializes prefix + data as one
+// new vector — a second full copy of every tensor byte, which for a 4B
+// model's 16 GB merge briefly doubles the writer to 32 GB and is the
+// difference between finishing and the OOM killer. Zero extra copies
+// here; the on-disk bytes are identical.
 @ stw_write * StWriter w s path → !v String {
-    : ( Vec u ) out ( stw_finish w )
+    ( string_push_str . w hdr `}` )
+    : i hlen ( string_len . w hdr )
+    : ( Vec u ) pre ( vec_new [u] )
+    ( bytes_push_u64_le pre # u64 hlen )
+    : ~ i k 0
+    ~ < k hlen {
+        ( vec_push [u] pre ( nurl_str_get ( string_data . w hdr ) k ) )
+        = k + k 1
+    }
     : ~ b wok T
-    ?? ( write_file_bytes path out ) {
+    ?? ( write_file_bytes path pre ) {
         T _ → {}
         F _ → { = wok F }
     }
-    ( vec_free [u] out )
+    ( vec_free [u] pre )
+    ? wok {
+        ?? ( append_file_bytes path . w data ) {
+            T _ → {}
+            F _ → { = wok F }
+        }
+    } {}
     ? wok { ^ @ !v String { T } }
     ^ @ !v String { F ( string_from `safetensor: cannot write file` ) }
 }

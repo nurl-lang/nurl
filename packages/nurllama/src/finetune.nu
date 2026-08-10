@@ -1565,6 +1565,100 @@ $ `deps/gpukit/src/dev.nu`
     ^ res
 }
 
+// The slot's adapter tensor name, matching ft_adapters_save exactly.
+@ __ft_adapter_name i sl s suffix → String {
+    : i L / sl 7
+    : i w % sl 7
+    : ~ s wn `q`
+    ? == w 1 { = wn `k` } {}
+    ? == w 2 { = wn `v` } {}
+    ? == w 3 { = wn `o` } {}
+    ? == w 4 { = wn `gate` } {}
+    ? == w 5 { = wn `up` } {}
+    ? == w 6 { = wn `down` } {}
+    : String nm ( string_from `blk.` )
+    ( string_push_str nm ( nurl_str_int L ) )
+    ( string_push_str nm `.` )
+    ( string_push_str nm wn )
+    ( string_push_str nm suffix )
+    ^ nm
+}
+
+// Read a saved adapters file back into an FtTrain (per-slot A blocks then
+// B blocks, flat, exactly as ft_train downloads them) — the merge path's
+// input when the training happened in ANOTHER process: `finetune
+// --merge-only` after a crash between the adapter save and the merge, or
+// merging an adapter file someone shipped. The rank is read from the
+// file's own blk.0.q.lora_a [in, r] shape and poked into rankb.
+@ ft_adapters_load s path * FtModel m * u rankb → !FtTrain String {
+    ?? ( st_open path ) {
+        T st → {
+            : ~ i r 0
+            : i ti0 ( st_find_tensor st `blk.0.q.lora_a` )
+            ? >= ti0 0 {
+                ?? ( vec_get [StTensor] . st tensors ti0 ) { T t → { = r . t d1 } F → {} }
+            } {}
+            ? & > r 0 <= r 4096 {} {
+                ( st_close st )
+                ^ @ !FtTrain String { F ( string_from `finetune: not an adapters file (blk.0.q.lora_a missing or malformed)` ) }
+            }
+            : i nslot * 7 . m n_layer
+            : ( Vec f ) aflat ( vec_new [f] )
+            : ( Vec f ) bflat ( vec_new [f] )
+            : ~ b ok T
+            : ~ i sl 0
+            ~ & < sl nslot ok {
+                : i in ( __ft_ain m sl )
+                : i out ( __ft_aout m sl )
+                : String na ( __ft_adapter_name sl `.lora_a` )
+                : i ta ( st_find_tensor st ( string_data na ) )
+                ( string_free na )
+                : String nb ( __ft_adapter_name sl `.lora_b` )
+                : i tb ( st_find_tensor st ( string_data nb ) )
+                ( string_free nb )
+                ? & >= ta 0 >= tb 0 {} { = ok F }
+                ? ok {
+                    ?? ( st_dequant st ta ) {
+                        T by → {
+                            : ( Vec f ) av ( __ft_ckpt_vals by )
+                            ( vec_free [u] by )
+                            ? == ( vec_len [f] av ) * in r {
+                                : ~ i k 0
+                                ~ < k * in r { ( vec_push [f] aflat ( _tf av k ) ) = k + k 1 }
+                            } { = ok F }
+                            ( vec_free [f] av )
+                        }
+                        F e → { ( string_free e ) = ok F }
+                    }
+                } {}
+                ? ok {
+                    ?? ( st_dequant st tb ) {
+                        T by → {
+                            : ( Vec f ) bv ( __ft_ckpt_vals by )
+                            ( vec_free [u] by )
+                            ? == ( vec_len [f] bv ) * r out {
+                                : ~ i k 0
+                                ~ < k * r out { ( vec_push [f] bflat ( _tf bv k ) ) = k + k 1 }
+                            } { = ok F }
+                            ( vec_free [f] bv )
+                        }
+                        F e → { ( string_free e ) = ok F }
+                    }
+                } {}
+                = sl + sl 1
+            }
+            ( st_close st )
+            ? ok {} {
+                ( vec_free [f] aflat ) ( vec_free [f] bflat )
+                ^ @ !FtTrain String { F ( string_from `finetune: adapters file does not match this model (missing slot or shape mismatch)` ) }
+            }
+            ( nurl_poke rankb 0 r )
+            ^ @ !FtTrain String { T @ FtTrain { T 0.0 0.0 aflat bflat } }
+        }
+        F e → { ^ @ !FtTrain String { F e } }
+    }
+}
+
 // ── merge: base + (α/r)·A·B → a full-weights safetensors file ────────
 // nurllama's verified `--weights` path (llm_open_st) then runs the merged
 // model with the GGUF supplying metadata + tokenizer. Weights are emitted
@@ -1628,9 +1722,15 @@ $ `deps/gpukit/src/dev.nu`
         }
     } {}
     : *StWriter so ( stw_new )
-    // embeddings + final norm (frozen; [V,H] is already [out,in])
+    // embeddings + final norm (frozen; [V,H] is already [out,in]).
+    // The merge CONSUMES m.embd: once its bytes are in the writer the 3 GB
+    // f64 host copy has no further reader here, and every caller merges
+    // once and then ft_free's the model — keeping it alive would stack it
+    // on top of the writer's own copy for the rest of the merge.
     ? == % mask 2 1 {
         ( __ft_st_add so `model.embed_tokens.weight` . m embd . m n_vocab . m n_embd )
+        ( vec_free [f] . m embd )
+        = . m embd ( vec_new [f] )
     } {}
     ? == % / mask 8 2 1 {
         ( __ft_st_add so `model.norm.weight` . m norm_f . m n_embd 0 )
@@ -1770,7 +1870,63 @@ $ `deps/gpukit/src/dev.nu`
 // shape; multi-window scheduling lands with gput_set_input plumbing),
 // save the adapters, and optionally write a merged full-model safetensors
 // runnable via `nurllama run model.gguf PROMPT --weights merged.st`.
-@ nurllama_finetune s modp s datap s outp s mergedp i steps f lr i rank f alpha i seq i seed b f32 b mixed s ckptp i ckevery b resume i wstride → i {
+@ nurllama_finetune s modp s datap s outp s mergedp i steps f lr i rank f alpha i seq i seed b f32 b mixed s ckptp i ckevery b resume i wstride b mergeonly → i {
+    // --merge-only: no corpus, no tape, no device — read the adapters file
+    // (--out) back and write the merged model. This is both a shipped-
+    // adapter merger and the low-memory recovery path: the in-training
+    // merge holds the capture's host structures UNDER the 16 GB the
+    // full-model writer needs, which on a 31 GB box is the difference
+    // between finishing and the OOM killer.
+    ? mergeonly {
+        ? > ( nurl_str_len mergedp ) 0 {} {
+            ( nurl_eprintln `nurllama: --merge-only needs --merged <out.st>` )
+            ^ 1
+        }
+        ?? ( ft_open modp ) {
+            T m → {
+                : *u rb ( nurl_alloc 8 )
+                : ~ i rc 0
+                ?? ( ft_adapters_load outp m rb ) {
+                    T tr → {
+                        : i r ( nurl_peek rb 0 )
+                        ( nurl_print `merge-only: adapters ` )
+                        ( nurl_print outp )
+                        ( nurl_print ` (rank ` )
+                        ( nurl_print ( nurl_str_int r ) )
+                        ( nurl_print `) + base → ` )
+                        ( nurl_print mergedp )
+                        ( nurl_print `\n` )
+                        ?? ( ft_merge_st mergedp m tr r alpha ) {
+                            T _ → {
+                                ( nurl_print `merged model → ` )
+                                ( nurl_print mergedp )
+                                ( nurl_print `\n` )
+                            }
+                            F e → {
+                                ( nurl_eprintln ( string_data e ) )
+                                ( string_free e )
+                                = rc 1
+                            }
+                        }
+                        ( ft_train_free tr )
+                    }
+                    F e → {
+                        ( nurl_eprintln ( string_data e ) )
+                        ( string_free e )
+                        = rc 1
+                    }
+                }
+                ( nurl_free rb )
+                ( ft_free m )
+                ^ rc
+            }
+            F e → {
+                ( nurl_eprintln ( string_data e ) )
+                ( string_free e )
+                ^ 1
+            }
+        }
+    } {}
     : ~ s text ``
     : ~ b haderr F
     : ~ String textS ( string_new )
