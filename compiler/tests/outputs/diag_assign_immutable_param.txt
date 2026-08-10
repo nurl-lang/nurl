@@ -1,0 +1,6 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_assign_immutable_param.nu:10:9: error: cannot assign to immutable parameter 'p'. Bindings are immutable unless declared ': ~', and parameters are always immutable: add the tilde at the declaration, copy the parameter into a ': ~' local, or take it as 'inout' if the caller should see the write.
+    = p + p 1
+        ^
+error: aborting due to 1 previous error

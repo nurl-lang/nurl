@@ -1,0 +1,6 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_call_unknown_named_arg.nu:7:27: error: call to 'add' has no parameter named 'z'. Named arguments must match the declared parameter names exactly — check the declaration, or pass them positionally in declaration order.
+    : i r ( add x : 1 z : 2 )
+                          ^
+error: aborting due to 1 previous error

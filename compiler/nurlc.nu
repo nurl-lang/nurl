@@ -3625,7 +3625,7 @@
     : s rt ( nurl_get_last_type )
     // Check type compatibility
     ? ! ( seq rt `i1` )
-    ( die lex `operator '&' has a bool on the left, so the right operand must be bool too — NURL does not mix bool and integer operands. Every operator is BINARY: for n conditions write n-1 of them, '& & a b c'.` )
+    ( die_stmt lex `operator '&' has a bool on the left, so the right operand must be bool too — NURL does not mix bool and integer operands. Every operator is BINARY: for n conditions write n-1 of them, '& & a b c'.` )
     {}
     : s right_lbl ( nurl_sym_get syms `__cur_lbl__` )
     ( nurl_print `  br label %` ) ( nurl_print lend ) ( emit_dbg_eol )
@@ -3656,7 +3656,7 @@
     : s rt ( nurl_get_last_type )
     // Check type compatibility
     ? ! ( seq rt `i1` )
-    ( die lex `operator '|' has a bool on the left, so the right operand must be bool too — NURL does not mix bool and integer operands. Every operator is BINARY: for n conditions write n-1 of them, '| | a b c'.` )
+    ( die_stmt lex `operator '|' has a bool on the left, so the right operand must be bool too — NURL does not mix bool and integer operands. Every operator is BINARY: for n conditions write n-1 of them, '| | a b c'.` )
     {}
     : s right_lbl ( nurl_sym_get syms `__cur_lbl__` )
     ( nurl_print `  br label %` ) ( nurl_print lend ) ( emit_dbg_eol )
@@ -6510,10 +6510,10 @@
 @ __kw_default_or_die i lex i syms i cg s fname i k → s {
     : s dsrc ( nurl_sym_get syms ( __kw_key fname `pd` k ) )
     ? == 0 ( nurl_str_len dsrc )
-    { ( die lex ( nurl_str_cat3
+    { ( die_stmt lex ( nurl_str_cat3
         `call to '` fname
         ( nurl_str_cat3 `' is missing required argument '`
-        ( nurl_sym_get syms ( __kw_key fname `pn` k ) ) `'. Every parameter must be supplied — NURL has no defaults and no overloading. Pass it positionally in declaration order, or name it: 'name: value'.` ) ) ) }
+        ( nurl_sym_get syms ( __kw_key fname `pn` k ) ) `', and that parameter declares no default. A parameter is optional only when its declaration gives it one ('@ f i width = 10 → v'); every other parameter must be supplied, and there is no overloading to fall back on. Pass it positionally in declaration order, name it ('name : value'), or give it a default at the declaration.` ) ) ) }
     {}
     : ~ s __kdp ( __kw_emit_default syms cg dsrc )
     // The default's value is spliced verbatim into the call's argument

@@ -19,11 +19,39 @@ is missing, and no golden is orphaned. Wall-clock target: under 3 min
 | Prefix              | Expected outcome                                   |
 |---------------------|----------------------------------------------------|
 | *(none)*            | compiles, links, runs — golden records exit + stdout |
-| `should_fail_*`     | compile **fails** (golden: `COMPILE FAIL`)         |
+| `should_fail_*`     | compile **fails** (golden: `COMPILE FAIL` — the text is *not* kept) |
+| `diag_*`            | compile fails and the **diagnostic text is baselined** — use this whenever the wording is the point |
 | `borrow_*`          | borrow-checker rejects it; the diagnostic is baselined. `borrow_strict_*` only fire under `--strict-borrowck` |
 | `should_warn_*`     | compiles, but the warning text is baselined        |
 | `*_mod` `*_helper` `*_lib` | not a test — a module `$`-imported by another test (skipped) |
 | `http_*` `net_*`    | network-dependent; most are skipped unless `NURL_HTTP_TESTS=1` / `NURL_NET_TESTS=1` |
+
+### `should_fail_*` vs `diag_*`
+
+`should_fail_*` records one word: `COMPILE FAIL`. It proves the compiler
+*rejects* the program and nothing about what it says while doing it, so a
+message can be gutted down to "expected ')'" without a single golden
+moving. `diag_*` keeps the whole diagnostic.
+
+The `ax` goal — a model handed a compile error learns the rule and the
+fix from the message alone — lives entirely in text `should_fail_*`
+throws away. **New negative tests should be `diag_*` unless the wording
+genuinely does not matter.**
+
+## Diagnostic coverage
+
+`./tools/check_diag_coverage.sh` compiles the corpus, matches every
+emitted diagnostic back to its site in `compiler/nurlc.nu`, and lists
+the sites nothing made speak. An unfired message is unverified in every
+way that matters: its wording has never been read next to the program
+that caused it, its caret placement has never been checked, and it may
+be dead outright — preempted by a looser check upstream, so the good
+message exists and the user still gets the generic one.
+
+The check ratchets against `tools/diag_coverage_baseline.txt`: existing
+gaps do not fail, a **new** die site with no test that fires it does.
+Adding a diagnostic and adding the program that triggers it are one
+change, not two.
 
 ## Golden files (`outputs/`)
 

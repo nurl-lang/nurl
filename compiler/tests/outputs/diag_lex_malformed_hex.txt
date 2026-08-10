@@ -1,0 +1,5 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_lex_malformed_hex.nu:5:9: error: malformed hex literal — '0x' must be followed by at least one hex digit (0-9, a-f, A-F). E.g. '0xFF', '0x1a2b'.
+    : i n 0x
+        ^

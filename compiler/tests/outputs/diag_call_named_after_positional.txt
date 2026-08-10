@@ -1,0 +1,6 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_call_named_after_positional.nu:10:23: error: a positional argument cannot follow a named one — once you write 'name: value', every later argument must be named too. Either name them all from that point, or pass them all positionally in declaration order.
+    : i r ( add x : 1 2 )
+                      ^
+error: aborting due to 1 previous error
