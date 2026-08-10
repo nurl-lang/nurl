@@ -159,9 +159,9 @@ mutation with `: ~`). A **static borrow checker** — on by default,
 `--no-borrowck` to disable, `--strict-borrowck` to tighten — catches
 use-after-move, alias-double-free, escaping closure-captures, and iterator
 invalidation as hard compile errors, without ever changing generated code.
-`--strict-arity` closes the one remaining source-level trap, the n-ary
-`&`/`|` foot-gun, which is a warning by default because the program it
-describes still compiles.
+The one remaining source-level trap, the n-ary `&`/`|` foot-gun, is a
+hard error by default; `--no-strict-arity` demotes it to a warning for
+trees that need to keep building.
 Full model and the not-yet-checked list: [`docs/MEMORY.md`](docs/MEMORY.md).
 
 The type system is strong, static, inferred, algebraic (sum types `|`,
