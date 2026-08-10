@@ -613,6 +613,7 @@ $ `stdlib/std/term.nu`
     ( args_opt p `save-every` 0 `N` `finetune: checkpoint interval in steps (default 200)` )
     ( args_flag p `resume` 0 `finetune: continue from --checkpoint if it holds a matching run; start fresh when the file is absent` )
     ( args_opt p `window-stride` 0 `N` `finetune: step k trains window (k·N) mod nwin. 1 = sequential (default; a short run reads only the corpus head), 0 = auto — a golden-ratio stride coprime with nwin, so even a short run samples the whole corpus evenly` )
+    ( args_flag p `merge-only` 0 `finetune: skip training — read the adapters file (--out) and write the merged model (--merged). Works with any saved adapters; also the low-memory recovery path when the in-training merge OOMs` )
     ( args_opt p `n-predict` 110 `N` `run: max tokens to generate (default 64)` )
     ( args_opt p `temp` 0 `F` `run: temperature; 0 = greedy (default 0.8)` )
     ( args_opt p `topk` 0 `N` `run: top-k filter (default 40; 0 = off)` )
@@ -788,7 +789,8 @@ $ `stdlib/std/term.nu`
         : String swstr ( args_value_or p `window-stride` `1` )
         : ~ i wstride 1
         ?? ( string_to_int swstr ) { T v → { = wstride v } F _ → {} }
-        : i rc ( nurllama_finetune modp datap ( string_data souts ) ( string_data smerged ) steps lr rank alpha seq seed f32 mixed ( string_data sckpt ) ckevery resume wstride )
+        : b mergeonly ? == ( args_present p `merge-only` ) 1 T F
+        : i rc ( nurllama_finetune modp datap ( string_data souts ) ( string_data smerged ) steps lr rank alpha seq seed f32 mixed ( string_data sckpt ) ckevery resume wstride mergeonly )
         ( string_free souts ) ( string_free smerged ) ( string_free ssteps )
         ( string_free slr ) ( string_free srank ) ( string_free salpha )
         ( string_free sseq ) ( string_free sseed )
