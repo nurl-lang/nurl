@@ -58,7 +58,7 @@ single aggregated object instead.
 
 ## What it runs
 
-**Architectures:** `llama`, `qwen2`, `gemma3` and `phi3`. Each model's own
+**Architectures:** `llama`, `qwen2`, `qwen3`, `gemma3` and `phi3`. Each model's own
 metadata decides the details that actually change the output — get one
 wrong and the model still runs while quietly producing nonsense, so
 nurllama reads them from the file rather than guessing:
@@ -67,6 +67,18 @@ nurllama reads them from the file rather than guessing:
   adjacent pairs of each head (NORM).
 * **qwen2** — adds Q/K/V biases and rotates the two halves of a head
   together (NEOX), with its own BPE pre-tokenizer variant.
+* **qwen3** — NEOX like qwen2 but with the biases **gone**, `head_dim`
+  stated outright (Qwen3-0.6B is 16 heads × 128 = 2048 against an
+  `n_embd` of **1024**, so the attention projections do not land back on
+  `n_embd`), and Q and K RMSNormed *per head* before the rotation. All
+  four are silent when wrong — the model runs either way — so they are
+  checked against an independent numpy implementation reading the same
+  GGUF (`tests/qwen3_ref.py`): identical argmax and top-5, a max logit
+  delta of 5.1e-5 against a span of 31.6, and a 20-token greedy
+  continuation that is text-identical. Training carries the same shape:
+  the LoRA tape applies the per-head norm, `--merged` writes the
+  `q_norm`/`k_norm` weights, and the wiring oracle (tape top-1 ==
+  engine top-1) closes the chain numpy → engine → tape.
 * **gemma3** — a different shape throughout: the embedding row is scaled
   by `sqrt(n_embd)`, `head_dim` is stated outright rather than being
   `n_embd / n_head` (gemma3-270m: 640/4 = 160, but head_dim is **256**),
@@ -225,6 +237,20 @@ at load (half-split rope then reproduces the exact rotations; scores are
 permutation-invariant). `--f32` runs the device replay in float32 (half the base-weight VRAM;
 float32 precision, not bit-exact to the f64 tape) for larger models. The
 PEFT reference curve lands next in this arc.
+
+**`--stream`** is what makes a model past ~1B trainable on an ordinary
+machine. Eagerly, every base weight is lifted into f64 host tensors *and*
+cloned into the tape's own const, so the host peak is two copies of the whole
+model at the moment of capture — 13.8 GB for Qwen3-0.6B, 2.9× the model's own
+f64 size. A frozen weight is read exactly once, when the capture uploads it,
+so there is no reason for it to be resident at all: with `--stream`, `ft_open`
+reads the *shapes*, `ft_graph` declares each base weight as one of grad's
+lazy consts, and `ft_stream_upload` fills each device buffer straight from
+the GGUF after the capture, freeing it before the next. Same run, 6.1 GB
+instead of 13.8, and the step-0 loss is identical to the last bit — f64
+replay and f32 alike (`tests/finetune_stream_test.nu`). The values go through
+the same loader the eager path uses, NORM-rope un-permute included, so there
+is one definition of what a base weight is, not two that must agree.
 
 ## How it is checked
 

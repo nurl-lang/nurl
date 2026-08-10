@@ -716,8 +716,11 @@ $ `stdlib/std/utf8.nu`
         ? & > pl best_len <= + p pl n {
             : ~ b eq T
             : ~ i c 0
+            // nurl_str_at, not nurl_str_get: `text` is the WHOLE corpus here
+            // and nurl_str_get re-runs strlen on every call, which turns this
+            // scan quadratic (2 MB took 98 s; 25 MB would have taken hours)
             ~ & eq < c pl {
-                ? != ( nurl_str_get text + p c ) ( nurl_str_get pc c ) { = eq F } {}
+                ? != ( nurl_str_at text n + p c ) ( nurl_str_at pc pl c ) { = eq F } {}
                 = c + c 1
             }
             ? eq { = best id = best_len pl } {}
@@ -746,7 +749,9 @@ $ `stdlib/std/utf8.nu`
         : String buf ( string_new )
         : ~ i p 0
         ~ < p n {
-            : i b0 ( nurl_str_get text p )
+            // nurl_str_at with the hoisted length — nurl_str_get would run
+            // strlen over the whole corpus once per BYTE
+            : i b0 ( nurl_str_at text n p )
             : ~ i hit -1
             ? != 0 ( _tk_geti . t sp_first b0 0 ) { = hit ( __tk_special_at t text p n ) } {}
             ? >= hit 0 {
