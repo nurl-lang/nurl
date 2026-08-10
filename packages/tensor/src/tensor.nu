@@ -39,6 +39,17 @@ $ `stdlib/std/floatbits.nu`
 
 @ _tf ( Vec f ) v i k → f { ?? ( vec_get [f] v k ) { T x → { ^ x } F _ → { ^ 0.0 } } }
 
+// A tensor with a SHAPE but no values — a constant whose data arrives later
+// (grad's grad_const_lazy, so a model's frozen weights never all sit in host
+// RAM at once). Every accessor above is bounds-checked, so reading one just
+// yields zeros; what it must never reach is a kernel that uploads `data`
+// sized by the SHAPE. That upload would read past a zero-length buffer, and
+// on CUDA the error is sticky: the next allocation fails instead, pointing
+// at the wrong place entirely.
+@ _t_absent Tensor t → b {
+    ^ & == ( vec_len [f] . t data ) 0 > ( _t_prod . t shape ) 0
+}
+
 // Row-major strides for a shape.
 @ _t_strides ( Vec i ) shape → ( Vec i ) {
     : i n ( vec_len [i] shape )

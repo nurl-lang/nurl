@@ -260,7 +260,11 @@ $ `tensor.nu`
     : i rdt ( __t_result_dtype a b )
     : ( Vec f ) c ( _fvec_t * M N 0.0 )
     : ~ b done F
-    ? >= * * M N K 100000 {
+    // an operand whose values have not arrived yet (_t_absent) contributes
+    // zeros; `c` already is zeros, so there is nothing to compute — and
+    // nothing to hand a kernel that would upload a zero-length buffer
+    ? | ( _t_absent a ) ( _t_absent b ) { = done T } {}
+    ? & == done F >= * * M N K 100000 {
         ? ( __t_gpu_ready ) {
             ? ( gk_matmul_f ( __t_kit ) c . a data . b data M K N ) { = done T } {}
         } {}

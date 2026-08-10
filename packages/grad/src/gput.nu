@@ -658,7 +658,15 @@ extern "C" __global__ void gp_opt(double* w, const double* g, double* m, double*
 
 // Upload a CPU tensor's data into a fresh device buffer of the given dtype.
 // GK_F64 is a straight memcpy; GK_F32 converts on the device (see above).
+// A LAZY const (grad_const_lazy) carries a shape and no values: allocate
+// its buffer from the shape and upload nothing — the caller fills it after
+// the capture via gput_set_input.
+@ _gp_lazy * Tensor t → b {
+    ^ & == ( vec_len [f] . t data ) 0 > ( _t_prod . t shape ) 0
+}
+
 @ _gp_upload_tensor * GpuKit kit * Tensor t i edt → GkBuf {
+    ? ( _gp_lazy t ) { ^ ( gk_dbuf_new kit ( _t_prod . t shape ) edt ) } {}
     ? == edt GK_F32 { ^ ( __gp_upload_f32 kit t ) } {}
     : i n ( vec_len [f] . t data )
     : GkBuf b ( gk_dbuf_new kit n edt )
@@ -742,14 +750,27 @@ extern "C" __global__ void gp_opt(double* w, const double* g, double* m, double*
         : GNode nd ?? ( vec_get [GNode] . tp nodes k ) { T x → x F → @ GNode { -1 -1 -1 0.0 } }
         : *Tensor tv # *Tensor ( _g_val tp k )
         ? == . tv dtype TE_F64 {} { ( _gp_fail pg `only TE_F64 tapes` ) }
-        : i n ( vec_len [f] . tv data )
+        // a lazy const has a shape and no values yet — size from the shape
+        : i n ? ( _gp_lazy tv ) ( _t_prod . tv shape ) ( vec_len [f] . tv data )
         : GkBuf val ( _gp_upload_tensor kit tv ( __gp_edt pg ) )
         : ~ GkBuf grad ( _gp_nobuf )
         ? == ( _ti gbuf k ) 1 { = grad ( gk_dbuf_new kit n ( __gp_edt pg ) ) } {}
         : ~ GkBuf scr ( _gp_nobuf )
         : ~ GkBuf meta ( _gp_nobuf )
         : ( Vec i ) dims ( vec_new [i] )
-        ? ( gk_buf_ok val ) {} { ( _gp_fail pg `device alloc failed` ) }
+        ? ( gk_buf_ok val ) {} {
+            // say WHICH node and how big — "device alloc failed" alone
+            // cannot distinguish a real out-of-memory from a zero-sized
+            // buffer, and the two want opposite fixes
+            : String wm ( string_from `value buffer alloc failed: node ` )
+            ( string_push_str wm ( nurl_str_int k ) )
+            ( string_push_str wm ` op ` )
+            ( string_push_str wm ( nurl_str_int . nd op ) )
+            ( string_push_str wm ` elements ` )
+            ( string_push_str wm ( nurl_str_int n ) )
+            ( _gp_fail pg ( string_data wm ) )
+            ( string_free wm )
+        }
         ? == ( _ti gbuf k ) 1 {
             ? ( gk_buf_ok grad ) {} { ( _gp_fail pg `device alloc failed` ) }
         } {}

@@ -9,7 +9,8 @@
 // cost no gradient memory or backward compute (grad 0.3.0's requires-grad
 // propagation).
 //
-// Architectures: llama-family and qwen2 (bias'd q/k/v, NEOX rope). The
+// Architectures: llama-family, qwen2 (bias'd q/k/v, NEOX rope) and qwen3
+// (no biases, NEOX rope, per-head Q/K RMSNorm before the rotation). The
 // llama family's NORM-style rope rotates ADJACENT lanes (2j, 2j+1), which
 // a contiguous-slice tape cannot express — so the loader UN-PERMUTES the
 // q/k projection columns per head (evens first, odds second) and the graph
@@ -76,10 +77,33 @@ $ `deps/gpukit/src/dev.nu`
     ( Vec FtW ) wg ( Vec FtW ) wu ( Vec FtW ) wd
     ( Vec s ) bq ( Vec s ) bk ( Vec s ) bv  // *( Vec f ) or 0 (qwen2 bias)
     ( Vec s ) an ( Vec s ) fn  // attn_norm / ffn_norm, *( Vec f ) per layer
+    // qwen3's per-head Q/K RMSNorm weights [head_dim], *( Vec f ) or 0.
+    // Absent for llama/qwen2 — a 0 here simply skips the norm.
+    ( Vec s ) qn ( Vec s ) kn
     String src_path  // the GGUF path — so the per-layer base matrices can be
     // freed after device capture (ft_drop_base) and streamed back for the
     // merge (ft_reload_base), keeping host RAM off the base during training
+    // STREAMING mode (ft_set_stream). The base weights are never all resident
+    // host-side: ft_open reads their SHAPES only, ft_graph declares them as
+    // lazy consts, and ft_stream_upload fills each one straight into its
+    // device buffer after the capture, freeing it again before the next.
+    // Host peak becomes one layer instead of the whole model — the
+    // difference between training a 4B model on a 31 GB box and not.
+    b stream
+    ( Vec i ) lz_node  // tape node id of each lazy base const
+    ( Vec i ) lz_key  // its identity: layer * 16 + slot (__ft_base_name)
+    i mgg  // a Gguf held open across a streamed merge (0 = none)
 }
+
+// Streaming base upload, OFF by default: the finetune tests compare the CPU
+// tape's loss against the device's, and a lazy const has no host values to
+// compare with. `nurllama finetune --stream` turns it on for models whose
+// f64 host copy would not fit.
+: ~ b __ft_stream_on F
+
+@ ft_set_stream b on → v { = __ft_stream_on on }
+
+@ __ft_stream_wanted → b { ^ __ft_stream_on }
 
 @ __ft_wfree FtW w → v { ( vec_free [f] . w data ) }
 
@@ -117,6 +141,8 @@ $ `deps/gpukit/src/dev.nu`
     ( vec_free [FtW] . m wd )
     ( __ft_vfree . m bq ) ( __ft_vfree . m bk ) ( __ft_vfree . m bv )
     ( __ft_vfree . m an ) ( __ft_vfree . m fn )
+    ( __ft_vfree . m qn ) ( __ft_vfree . m kn )
+    ( vec_free [i] . m lz_node ) ( vec_free [i] . m lz_key )
     ( string_free . m src_path )
     ( nurl_free # s m )
 }
@@ -204,6 +230,26 @@ $ `deps/gpukit/src/dev.nu`
     ^ s
 }
 
+// The tape-layout SHAPE of a layer weight, read from the GGUF's tensor
+// table without touching a byte of its data. Rows/cols mirror __ft_raw +
+// __ft_transpose exactly: rows = d0 (in), cols = d1 (out). An absent tensor
+// gives 0×0, which callers read as "not present".
+@ __ft_lshape * Gguf gg i layer s suffix * u rowsb * u colsb → v {
+    ( nurl_poke rowsb 0 0 )
+    ( nurl_poke colsb 0 0 )
+    : String nm ( __ft_lname layer suffix )
+    : i idx ( gguf_find_tensor gg ( string_data nm ) )
+    ( string_free nm )
+    ? >= idx 0 {} { ^ v }
+    ?? ( vec_get [GgufTensor] . gg tensors idx ) {
+        T t → {
+            ( nurl_poke rowsb 0 . t d0 )
+            ( nurl_poke colsb 0 . t d1 )
+        }
+        F → {}
+    }
+}
+
 // A layer weight in tape layout (poisons `okb` on a missing tensor).
 @ __ft_lw * Gguf gg i layer s suffix * u okb → FtW {
     : String nm ( __ft_lname layer suffix )
@@ -241,7 +287,59 @@ $ `deps/gpukit/src/dev.nu`
 // / norms into `m`'s (already-created) vecs, un-permuting NORM-rope q/k the
 // same way whether called at open or at merge-time reload. `gg` stays the
 // caller's to close. Poisons m.ok on a missing tensor.
+// One shape-only per-layer weight: real rows/cols, no data.
+@ __ft_shape_push * Gguf gg i L s suffix ( Vec FtW ) dst * u rb * u cb → v {
+    ( __ft_lshape gg L suffix rb cb )
+    ( vec_push [FtW] dst @ FtW { ( nurl_peek rb 0 ) ( nurl_peek cb 0 ) ( vec_new [f] ) } )
+}
+
+// One shape-only per-layer 1-D tensor: an FtV holding an empty vec when the
+// model HAS this tensor, 0 when it does not (llama has no attn_q_norm).
+@ __ft_shape_vec * Gguf gg i L s suffix ( Vec s ) dst → v {
+    : String nm ( __ft_lname L suffix )
+    : i idx ( gguf_find_tensor gg ( string_data nm ) )
+    ( string_free nm )
+    ? >= idx 0 {
+        : *FtV p # *FtV ( nurl_alloc Z FtV )
+        = . p v ( vec_new [f] )
+        ( vec_push [s] dst # s p )
+    } { ( vec_push [s] dst # s 0 ) }
+}
+
+// The streaming counterpart of __ft_load_bases: read every per-layer
+// SHAPE and no data at all. ft_graph turns each into a lazy const and
+// ft_stream_upload fills them one at a time after the capture.
+@ __ft_load_shapes * Gguf gg * FtModel m → v {
+    : *u rb ( nurl_alloc 8 )
+    : *u cb ( nurl_alloc 8 )
+    = . m n_ff 0
+    : ~ i L 0
+    ~ < L . m n_layer {
+        ( __ft_shape_push gg L `attn_q.weight` . m wq rb cb )
+        ( __ft_shape_push gg L `attn_k.weight` . m wk rb cb )
+        ( __ft_shape_push gg L `attn_v.weight` . m wv rb cb )
+        ( __ft_shape_push gg L `attn_output.weight` . m wo rb cb )
+        ( __ft_shape_push gg L `ffn_gate.weight` . m wg rb cb )
+        ? == . m n_ff 0 {
+            ?? ( vec_get [FtW] . m wg L ) { T w → { = . m n_ff . w cols } F → {} }
+        } {}
+        ( __ft_shape_push gg L `ffn_up.weight` . m wu rb cb )
+        ( __ft_shape_push gg L `ffn_down.weight` . m wd rb cb )
+        ( __ft_shape_vec gg L `attn_q.bias` . m bq )
+        ( __ft_shape_vec gg L `attn_k.bias` . m bk )
+        ( __ft_shape_vec gg L `attn_v.bias` . m bv )
+        ( __ft_shape_vec gg L `attn_norm.weight` . m an )
+        ( __ft_shape_vec gg L `ffn_norm.weight` . m fn )
+        ( __ft_shape_vec gg L `attn_q_norm.weight` . m qn )
+        ( __ft_shape_vec gg L `attn_k_norm.weight` . m kn )
+        = L + L 1
+    }
+    ( nurl_free rb ) ( nurl_free cb )
+    ? > . m n_ff 0 {} { = . m ok F }
+}
+
 @ __ft_load_bases * Gguf gg * FtModel m → v {
+    ? . m stream { ( __ft_load_shapes gg m ) ^ v } {}
     : *u okb ( nurl_alloc 8 )
     ( nurl_poke okb 0 1 )
     // ffn size read from the first gate tensor
@@ -278,6 +376,12 @@ $ `deps/gpukit/src/dev.nu`
         ( vec_push [s] . m bv ( __ft_lvec gg L `attn_v.bias` ) )
         ( vec_push [s] . m an ( __ft_lvec gg L `attn_norm.weight` ) )
         ( vec_push [s] . m fn ( __ft_lvec gg L `ffn_norm.weight` ) )
+        // qwen3 only; 0 everywhere else. NOT un-permuted for NORM rope:
+        // the weight is per-LANE inside a head, and the un-permute
+        // reorders lanes, so a NORM-rope model carrying these would need
+        // the same reorder — none does (qwen3 is NEOX).
+        ( vec_push [s] . m qn ( __ft_lvec gg L `attn_q_norm.weight` ) )
+        ( vec_push [s] . m kn ( __ft_lvec gg L `attn_k_norm.weight` ) )
         = L + L 1
     }
     ? == ( nurl_peek okb 0 ) 1 {} { = . m ok F }
@@ -321,6 +425,7 @@ $ `deps/gpukit/src/dev.nu`
     ( vec_clear [FtW] . m wd )
     ( __ft_clear_svec . m bq ) ( __ft_clear_svec . m bk ) ( __ft_clear_svec . m bv )
     ( __ft_clear_svec . m an ) ( __ft_clear_svec . m fn )
+    ( __ft_clear_svec . m qn ) ( __ft_clear_svec . m kn )
 }
 
 // Re-stream the per-layer base from the source GGUF into `m`'s (empty)
@@ -344,6 +449,7 @@ $ `deps/gpukit/src/dev.nu`
             : s arch ( gguf_kv_str_or gg `general.architecture` `` )
             : *FtModel m # *FtModel ( nurl_alloc Z FtModel )
             = . m ok T
+            = . m stream ( __ft_stream_wanted )
             : String kb ( string_from arch )
             ( string_push_str kb `.embedding_length` )
             = . m n_embd ( gguf_kv_int_or gg ( string_data kb ) 0 )
@@ -368,16 +474,27 @@ $ `deps/gpukit/src/dev.nu`
             ( string_push_str kb6 `.rope.freq_base` )
             = . m rope_base ( gguf_kv_f_or gg ( string_data kb6 ) 10000.0 )
             ( string_free kb6 )
+            // head_dim is NOT n_embd/n_head in general — qwen3-4B states
+            // 128 against a 2560/32 = 80 — so read key_length when the
+            // model publishes it. Everything downstream already sizes
+            // attention off n_head·head_dim rather than n_embd.
             ? > . m n_head 0 { = . m head_dim / . m n_embd . m n_head } {}
+            : String kb8 ( string_from arch )
+            ( string_push_str kb8 `.attention.key_length` )
+            = . m head_dim ( gguf_kv_int_or gg ( string_data kb8 ) . m head_dim )
+            ( string_free kb8 )
             : String kb7 ( string_from arch )
             ( string_push_str kb7 `.rope.dimension_count` )
             = . m rope_dim ( gguf_kv_int_or gg ( string_data kb7 ) . m head_dim )
             ( string_free kb7 )
-            = . m rope_style ? == ( nurl_str_eq arch `qwen2` ) 1 1 0
+            // qwen2 and qwen3 both rotate the two halves of the span (NEOX);
+            // llama rotates adjacent lanes (NORM, un-permuted at load).
+            : b is_q3 != 0 ( nurl_str_eq arch `qwen3` )
+            = . m rope_style ? | == ( nurl_str_eq arch `qwen2` ) 1 is_q3 1 0
             ? & > . m n_embd 0 > . m n_layer 0 {} {
                 ( gguf_close gg )
                 ( nurl_free # s m )
-                ^ @ !*FtModel String { F ( string_from `finetune: not a llama/qwen2 GGUF` ) }
+                ^ @ !*FtModel String { F ( string_from `finetune: not a llama/qwen2/qwen3 GGUF` ) }
             }
             // embeddings [vocab, n_embd]
             : *u rb ( nurl_alloc 8 )
@@ -385,17 +502,23 @@ $ `deps/gpukit/src/dev.nu`
             = . m embd ( __ft_raw gg `token_embd.weight` rb cb )
             = . m n_vocab ( nurl_peek rb 0 )
             ? > ( vec_len [f] . m embd ) 0 {} { = . m ok F }
-            // lm_head: output.weight, or the tied embedding table
+            // lm_head: output.weight, or the tied embedding table. Streaming
+            // takes its SHAPE only — a 151936 x 2560 f64 transpose is 3.1 GB
+            // of host RAM that a device buffer needs for one upload.
             : i oi ( gguf_find_tensor gg `output.weight` )
-            ? >= oi 0 {
-                : *u rb2 ( nurl_alloc 8 )
-                : *u cb2 ( nurl_alloc 8 )
-                : ( Vec f ) raw ( __ft_raw gg `output.weight` rb2 cb2 )
-                = . m wout ( __ft_transpose raw ( nurl_peek rb2 0 ) ( nurl_peek cb2 0 ) )
-                ( vec_free [f] raw )
-                ( nurl_free rb2 ) ( nurl_free cb2 )
+            ? . m stream {
+                = . m wout @ FtW { . m n_embd . m n_vocab ( vec_new [f] ) }
             } {
-                = . m wout ( __ft_transpose . m embd . m n_vocab . m n_embd )
+                ? >= oi 0 {
+                    : *u rb2 ( nurl_alloc 8 )
+                    : *u cb2 ( nurl_alloc 8 )
+                    : ( Vec f ) raw ( __ft_raw gg `output.weight` rb2 cb2 )
+                    = . m wout ( __ft_transpose raw ( nurl_peek rb2 0 ) ( nurl_peek cb2 0 ) )
+                    ( vec_free [f] raw )
+                    ( nurl_free rb2 ) ( nurl_free cb2 )
+                } {
+                    = . m wout ( __ft_transpose . m embd . m n_vocab . m n_embd )
+                }
             }
             : *u rb3 ( nurl_alloc 8 )
             : *u cb3 ( nurl_alloc 8 )
@@ -414,6 +537,11 @@ $ `deps/gpukit/src/dev.nu`
             = . m bv ( vec_new [s] )
             = . m an ( vec_new [s] )
             = . m fn ( vec_new [s] )
+            = . m qn ( vec_new [s] )
+            = . m kn ( vec_new [s] )
+            = . m mgg 0
+            = . m lz_node ( vec_new [i] )
+            = . m lz_key ( vec_new [i] )
             = . m src_path ( string_from path )
             ( __ft_load_bases gg m )
             ( gguf_close gg )
@@ -451,6 +579,15 @@ $ `deps/gpukit/src/dev.nu`
     : ( Vec i ) s ( vec_new [i] )
     ? > r 0 { ( vec_push [i] s r ) } {}
     ( vec_push [i] s c )
+    // A shape with no values is a STREAMED base weight: the capture sizes
+    // its device buffer from the shape and ft_stream_upload fills it after,
+    // so the whole model never sits in host RAM at once.
+    : i nel * ? > r 0 r 1 c
+    ? & == ( vec_len [f] v ) 0 > nel 0 {
+        : GVar g ( grad_const_lazy tp s TE_F64 )
+        ( vec_free [i] s )
+        ^ g
+    } {}
     : Tensor t ( tensor_from_data TE_F64 s v )
     : GVar o ( grad_const tp t )
     ( tensor_free t )
@@ -463,6 +600,58 @@ $ `deps/gpukit/src/dev.nu`
     ~ < k n { ( vec_push [f] v 1.0 ) = k + k 1 }
     : GVar o ( __ft_const tp v n 1 )
     ( vec_free [f] v )
+    ^ o
+}
+
+// Which GGUF tensor a streamed base const streams from. The key packed into
+// lz_key is layer * 16 + k, so one definition pairs the graph's consts with
+// the loader's tensors — there are not two orderings that must agree.
+@ __ft_base_name i k → s {
+    ? == k 0 { ^ `attn_norm.weight` } {}
+    ? == k 1 { ^ `ffn_norm.weight` } {}
+    ? == k 2 { ^ `attn_q.weight` } {}
+    ? == k 3 { ^ `attn_k.weight` } {}
+    ? == k 4 { ^ `attn_v.weight` } {}
+    ? == k 5 { ^ `attn_output.weight` } {}
+    ? == k 6 { ^ `ffn_gate.weight` } {}
+    ? == k 7 { ^ `ffn_up.weight` } {}
+    ? == k 8 { ^ `ffn_down.weight` } {}
+    ? == k 9 { ^ `attn_q_norm.weight` } {}
+    ? == k 10 { ^ `attn_k_norm.weight` } {}
+    ? == k 11 { ^ `attn_q.bias` } {}
+    ? == k 12 { ^ `attn_k.bias` } {}
+    ? == k 13 { ^ `attn_v.bias` } {}
+    ^ ``
+}
+
+// Note a streamed base const's tape node so ft_stream_upload can fill it.
+@ __ft_rec * FtModel m GVar g i L i k → GVar {
+    ? . m stream {
+        ( vec_push [i] . m lz_node . g id )
+        ( vec_push [i] . m lz_key + * L 16 k )
+    } {}
+    ^ g
+}
+
+// qwen3: RMSNorm every head's Q (or K) vector before the rotation. The
+// projection is [T, heads·head_dim] and the norm runs over head_dim, so
+// the rows to normalise are a [T·heads, head_dim] VIEW of the same
+// elements — row-major order already lays them out that way, which makes
+// this two reshapes around the ordinary rmsnorm. `wp` 0 (llama, qwen2)
+// returns the input untouched.
+@ __ft_head_norm * GTape tp GVar x GVar W b have i T2 i heads i hd GVar ones f eps → GVar {
+    ? have {} { ^ x }
+    : ( Vec i ) flat_s ( vec_new [i] )
+    ( vec_push [i] flat_s * T2 heads )
+    ( vec_push [i] flat_s hd )
+    : GVar flat ( g_reshape tp x flat_s )
+    ( vec_free [i] flat_s )
+    : GVar normed ( nn_rmsnorm tp flat W ones hd eps )
+    : ( Vec i ) back_s ( vec_new [i] )
+    ( vec_push [i] back_s T2 )
+    ( vec_push [i] back_s * heads hd )
+    : GVar o ( g_reshape tp normed back_s )
+    ( vec_free [i] back_s )
     ^ o
 }
 
@@ -541,6 +730,7 @@ $ `deps/gpukit/src/dev.nu`
     : GVar xin @ GVar { . x id }
     ( vec_free [f] xrows )
     : GVar onesH ( __ft_ones tp H )
+    : GVar onesHD ( __ft_ones tp hd )
     : GVar onesF ( __ft_ones tp . m n_ff )
     : GVar onesV ( __ft_ones tp . m n_vocab )
     : i half / hd 2
@@ -582,19 +772,31 @@ $ `deps/gpukit/src/dev.nu`
         : FtW gw ?? ( vec_get [FtW] . m wg L ) { T w → w F → @ FtW { 0 0 ( vec_new [f] ) } }
         : FtW uw ?? ( vec_get [FtW] . m wu L ) { T w → w F → @ FtW { 0 0 ( vec_new [f] ) } }
         : FtW dw ?? ( vec_get [FtW] . m wd L ) { T w → w F → @ FtW { 0 0 ( vec_new [f] ) } }
-        : GVar Wq ( __ft_const tp . qw data . qw rows . qw cols )
-        : GVar Wk ( __ft_const tp . kw data . kw rows . kw cols )
-        : GVar Wv ( __ft_const tp . vw data . vw rows . vw cols )
-        : GVar Wo ( __ft_const tp . ow data . ow rows . ow cols )
-        : GVar Wg ( __ft_const tp . gw data . gw rows . gw cols )
-        : GVar Wu ( __ft_const tp . uw data . uw rows . uw cols )
-        : GVar Wd ( __ft_const tp . dw data . dw rows . dw cols )
+        : GVar Wq ( __ft_rec m ( __ft_const tp . qw data . qw rows . qw cols ) L 2 )
+        : GVar Wk ( __ft_rec m ( __ft_const tp . kw data . kw rows . kw cols ) L 3 )
+        : GVar Wv ( __ft_rec m ( __ft_const tp . vw data . vw rows . vw cols ) L 4 )
+        : GVar Wo ( __ft_rec m ( __ft_const tp . ow data . ow rows . ow cols ) L 5 )
+        : GVar Wg ( __ft_rec m ( __ft_const tp . gw data . gw rows . gw cols ) L 6 )
+        : GVar Wu ( __ft_rec m ( __ft_const tp . uw data . uw rows . uw cols ) L 7 )
+        : GVar Wd ( __ft_rec m ( __ft_const tp . dw data . dw rows . dw cols ) L 8 )
         : s anp ?? ( vec_get [s] . m an L ) { T x → x F → # s 0 }
         : *FtV anv # *FtV anp
-        : GVar N1 ( __ft_const tp . anv v 0 H )
+        : GVar N1 ( __ft_rec m ( __ft_const tp . anv v 0 H ) L 0 )
         : s fnp ?? ( vec_get [s] . m fn L ) { T x → x F → # s 0 }
         : *FtV fnv # *FtV fnp
-        : GVar N2 ( __ft_const tp . fnv v 0 H )
+        : GVar N2 ( __ft_rec m ( __ft_const tp . fnv v 0 H ) L 1 )
+        // qwen3's per-head Q/K norms, declared here so every base const of
+        // this layer is created in one place (the streamer pairs by key).
+        : s qnp ?? ( vec_get [s] . m qn L ) { T x → x F → # s 0 }
+        : s knp ?? ( vec_get [s] . m kn L ) { T x → x F → # s 0 }
+        : b haveqn != # i qnp 0
+        : b havekn != # i knp 0
+        : *FtV qnv # *FtV ? haveqn { qnp } { # s 0 }
+        : *FtV knv # *FtV ? havekn { knp } { # s 0 }
+        : ~ GVar QN @ GVar { -1 }
+        : ~ GVar KN @ GVar { -1 }
+        ? haveqn { = QN ( __ft_rec m ( __ft_const tp . qnv v 0 hd ) L 9 ) } {}
+        ? havekn { = KN ( __ft_rec m ( __ft_const tp . knv v 0 hd ) L 10 ) } {}
         // attention
         : GVar xn ( nn_rmsnorm tp x N1 onesH H . m eps )
         : ~ GVar q ( __ft_lora_lin tp xn Wq pids + s7 0 scale )
@@ -603,18 +805,22 @@ $ `deps/gpukit/src/dev.nu`
         : s bqp ?? ( vec_get [s] . m bq L ) { T x → x F → # s 0 }
         ? != # i bqp 0 {
             : *FtV bqv # *FtV bqp
-            = q ( g_add tp q ( __ft_const tp . bqv v 0 * NH hd ) )
+            = q ( g_add tp q ( __ft_rec m ( __ft_const tp . bqv v 0 * NH hd ) L 11 ) )
         } {}
         : s bkp ?? ( vec_get [s] . m bk L ) { T x → x F → # s 0 }
         ? != # i bkp 0 {
             : *FtV bkv # *FtV bkp
-            = kk ( g_add tp kk ( __ft_const tp . bkv v 0 * NKV hd ) )
+            = kk ( g_add tp kk ( __ft_rec m ( __ft_const tp . bkv v 0 * NKV hd ) L 12 ) )
         } {}
         : s bvp ?? ( vec_get [s] . m bv L ) { T x → x F → # s 0 }
         ? != # i bvp 0 {
             : *FtV bvv # *FtV bvp
-            = vv ( g_add tp vv ( __ft_const tp . bvv v 0 * NKV hd ) )
+            = vv ( g_add tp vv ( __ft_rec m ( __ft_const tp . bvv v 0 * NKV hd ) L 13 ) )
         } {}
+        // qwen3 norms every head's Q and K before the rotation; absent
+        // weights (llama, qwen2) leave q and kk untouched.
+        = q ( __ft_head_norm tp q QN haveqn T2 NH hd onesHD . m eps )
+        = kk ( __ft_head_norm tp kk KN havekn T2 NKV hd onesHD . m eps )
         : GVar ctx ( nn_gqa_attention tp q kk vv Cos Sin Mask T2 NH NKV hd iscale )
         : GVar attn ( __ft_lora_lin tp ctx Wo pids + s7 3 scale )
         : GVar x1 ( g_add tp x attn )
@@ -630,7 +836,8 @@ $ `deps/gpukit/src/dev.nu`
     : GVar NF ( __ft_const tp . m norm_f 0 H )
     : GVar xf ( nn_rmsnorm tp x NF onesH H . m eps )
     : FtW wo2 . m wout
-    : GVar WOUT ( __ft_const tp . wo2 data . wo2 rows . wo2 cols )
+    : GVar WOUT ( __ft_rec m ( __ft_const tp . wo2 data . wo2 rows . wo2 cols )
+    . m n_layer 15 )
     : GVar logits ( g_matmul tp xf WOUT )
     // next-token CE over rows 0..T-2: one-hot [T,V] with row t = ids[t+1]
     // (the last row is all-zero — its softmax pick is masked out of the
@@ -702,6 +909,157 @@ $ `deps/gpukit/src/dev.nu`
 // Adam ROUND-ROBIN over every `win`-token window of the corpus: the graph
 // is static (fixed T), so a window switch is two gput_set_input uploads
 // (the embedded rows + the one-hot targets) — no rebuild, no recapture.
+// ── streaming the base weights onto the device ────────────────────────
+//
+// Every value here goes through the SAME loader the eager path uses
+// (__ft_lw / __ft_lvec, NORM-rope un-permute included), so a streamed run
+// and an eager run upload identical bytes — what changes is only that one
+// tensor is resident at a time instead of the whole model.
+
+@ __ft_up_vec * FtModel m * Gguf gg * GProg pg i node i L s suf → b {
+    : s p ( __ft_lvec gg L suf )
+    ? != # i p 0 {} { ^ F }
+    : *FtV pv # *FtV p
+    ? == . m rope_style 0 {
+        ? ( nurl_str_eq suf `attn_q.bias` ) { ( __ft_unperm_vec pv . m n_head . m head_dim ) } {}
+        ? ( nurl_str_eq suf `attn_k.bias` ) { ( __ft_unperm_vec pv . m n_kv . m head_dim ) } {}
+    } {}
+    : b r ( gput_set_input pg @ GVar { node } . pv v )
+    ( vec_free [f] . pv v )
+    ( nurl_free p )
+    ^ r
+}
+
+@ __ft_up_layer * FtModel m * Gguf gg * GProg pg i node i L i slot → b {
+    : s suf ( __ft_base_name slot )
+    ? | | | | | | == slot 0 == slot 1 == slot 9 == slot 10 == slot 11 == slot 12 == slot 13 {
+        ^ ( __ft_up_vec m gg pg node L suf )
+    } {}
+    : *u okb ( nurl_alloc 8 )
+    ( nurl_poke okb 0 1 )
+    : FtW w ( __ft_lw gg L suf okb )
+    : i lok ( nurl_peek okb 0 )
+    ( nurl_free okb )
+    ? == lok 1 {} { ( __ft_wfree w ) ^ F }
+    ? == . m rope_style 0 {
+        ? == slot 2 { ( __ft_unperm w . m n_head . m head_dim ) } {}
+        ? == slot 3 { ( __ft_unperm w . m n_kv . m head_dim ) } {}
+    } {}
+    : b r ( gput_set_input pg @ GVar { node } . w data )
+    ( __ft_wfree w )
+    ^ r
+}
+
+@ __ft_up_wout * FtModel m * Gguf gg * GProg pg i node → b {
+    : i oi ( gguf_find_tensor gg `output.weight` )
+    ? >= oi 0 {
+        : *u rb ( nurl_alloc 8 )
+        : *u cb ( nurl_alloc 8 )
+        : ( Vec f ) raw ( __ft_raw gg `output.weight` rb cb )
+        : FtW w ( __ft_transpose raw ( nurl_peek rb 0 ) ( nurl_peek cb 0 ) )
+        ( vec_free [f] raw )
+        ( nurl_free rb ) ( nurl_free cb )
+        : b r ( gput_set_input pg @ GVar { node } . w data )
+        ( __ft_wfree w )
+        ^ r
+    } {}
+    : FtW w2 ( __ft_transpose . m embd . m n_vocab . m n_embd )
+    : b r2 ( gput_set_input pg @ GVar { node } . w2 data )
+    ( __ft_wfree w2 )
+    ^ r2
+}
+
+// ── one layer in, one layer out (the streamed merge) ──────────────────
+//
+// The merge walks the model layer by layer, so it needs exactly one layer
+// of base weights resident at a time — the same trade the training path
+// makes. These swap a layer's shape-only placeholders for the real tensors
+// and back.
+
+@ __ft_slot_set ( Vec FtW ) v i L FtW w → v {
+    ?? ( vec_get [FtW] v L ) { T old → { ( __ft_wfree old ) } F → {} }
+    ( vec_set [FtW] v L w )
+}
+
+@ __ft_vslot_set ( Vec s ) v i L s p → v {
+    ?? ( vec_get [s] v L ) {
+        T old → {
+            ? != # i old 0 {
+                : *FtV ov # *FtV old
+                ( vec_free [f] . ov v )
+                ( nurl_free old )
+            } {}
+        }
+        F → {}
+    }
+    ( vec_set [s] v L p )
+}
+
+@ __ft_layer_in * Gguf gg * FtModel m i L → b {
+    : *u okb ( nurl_alloc 8 )
+    ( nurl_poke okb 0 1 )
+    : FtW q ( __ft_lw gg L `attn_q.weight` okb )
+    : FtW k2 ( __ft_lw gg L `attn_k.weight` okb )
+    ? == . m rope_style 0 {
+        ( __ft_unperm q . m n_head . m head_dim )
+        ( __ft_unperm k2 . m n_kv . m head_dim )
+    } {}
+    ( __ft_slot_set . m wq L q )
+    ( __ft_slot_set . m wk L k2 )
+    ( __ft_slot_set . m wv L ( __ft_lw gg L `attn_v.weight` okb ) )
+    ( __ft_slot_set . m wo L ( __ft_lw gg L `attn_output.weight` okb ) )
+    ( __ft_slot_set . m wg L ( __ft_lw gg L `ffn_gate.weight` okb ) )
+    ( __ft_slot_set . m wu L ( __ft_lw gg L `ffn_up.weight` okb ) )
+    ( __ft_slot_set . m wd L ( __ft_lw gg L `ffn_down.weight` okb ) )
+    ( __ft_vslot_set . m an L ( __ft_lvec gg L `attn_norm.weight` ) )
+    ( __ft_vslot_set . m fn L ( __ft_lvec gg L `ffn_norm.weight` ) )
+    ( __ft_vslot_set . m qn L ( __ft_lvec gg L `attn_q_norm.weight` ) )
+    ( __ft_vslot_set . m kn L ( __ft_lvec gg L `attn_k_norm.weight` ) )
+    : i r ( nurl_peek okb 0 )
+    ( nurl_free okb )
+    ^ == r 1
+}
+
+@ __ft_layer_out * FtModel m i L → v {
+    ( __ft_slot_set . m wq L @ FtW { 0 0 ( vec_new [f] ) } )
+    ( __ft_slot_set . m wk L @ FtW { 0 0 ( vec_new [f] ) } )
+    ( __ft_slot_set . m wv L @ FtW { 0 0 ( vec_new [f] ) } )
+    ( __ft_slot_set . m wo L @ FtW { 0 0 ( vec_new [f] ) } )
+    ( __ft_slot_set . m wg L @ FtW { 0 0 ( vec_new [f] ) } )
+    ( __ft_slot_set . m wu L @ FtW { 0 0 ( vec_new [f] ) } )
+    ( __ft_slot_set . m wd L @ FtW { 0 0 ( vec_new [f] ) } )
+    ( __ft_vslot_set . m an L # s 0 )
+    ( __ft_vslot_set . m fn L # s 0 )
+    ( __ft_vslot_set . m qn L # s 0 )
+    ( __ft_vslot_set . m kn L # s 0 )
+}
+
+// Fill every lazy base const's device buffer. Call once, right after the
+// capture; T when every tensor landed.
+@ ft_stream_upload * FtModel m * GProg pg → b {
+    ? . m stream {} { ^ T }
+    : i n ( vec_len [i] . m lz_node )
+    ? > n 0 {} { ^ F }
+    : ~ b ok T
+    ?? ( gguf_open ( string_data . m src_path ) ) {
+        T gg → {
+            : ~ i k 0
+            ~ & < k n ok {
+                : i node ( _ti . m lz_node k )
+                : i key ( _ti . m lz_key k )
+                : i L / key 16
+                : i slot % key 16
+                ? == slot 15 { = ok ( __ft_up_wout m gg pg node ) }
+                { = ok ( __ft_up_layer m gg pg node L slot ) }
+                = k + k 1
+            }
+            ( gguf_close gg )
+        }
+        F e → { ( string_free e ) = ok F }
+    }
+    ^ ok
+}
+
 @ ft_train * FtModel m ( Vec i ) corpus i win i r f alpha i seed i steps f lr i dtype b verbose → FtTrain {
     : i total ( vec_len [i] corpus )
     : ~ i T2 win
@@ -731,6 +1089,9 @@ $ `deps/gpukit/src/dev.nu`
     ? ok {
         : *GProg pg ( gput_capture_dt kit tp . fg loss dtype )
         = ok ( gput_ok pg )
+        // streamed base: the capture allocated the buffers from the shapes,
+        // now fill them one tensor at a time
+        ? ok { = ok ( ft_stream_upload m pg ) } {}
         // The base weights are now on the device; their f64 host copies are
         // dead weight during training. Free BOTH the tape's const nodes and
         // the model's per-layer base matrices — host RAM drops to the
@@ -849,8 +1210,16 @@ $ `deps/gpukit/src/dev.nu`
         ( string_free na ) ( string_free nb )
         = aoff + aoff * in r
         = boff + boff * r out
+        ? & . m stream == w 6 { ( __ft_layer_out m L ) } {}
         = sl + sl 1
     }
+    ? . m stream {
+        ? != . m mgg 0 {
+            : *Gguf mgg2 # *Gguf . m mgg
+            ( gguf_close mgg2 )
+            = . m mgg 0
+        } {}
+    } {}
     : !v String res ( stw_write so path )
     ( stw_free so )
     ^ res
@@ -909,6 +1278,15 @@ $ `deps/gpukit/src/dev.nu`
             ^ @ !v String { F ( string_from `finetune: cannot reload base weights for merge` ) }
         }
     } {}
+    // A streamed model holds shape-only placeholders, so the check above
+    // cannot see that the values are missing — merging them would write a
+    // model of zeros. Hold the GGUF open and page one layer in at a time.
+    ? . m stream {
+        ?? ( gguf_open ( string_data . m src_path ) ) {
+            T gg → { = . m mgg # i gg }
+            F e → { ^ @ !v String { F e } }
+        }
+    } {}
     : *StWriter so ( stw_new )
     // embeddings + final norm (frozen; [V,H] is already [out,in])
     ? == % mask 2 1 {
@@ -926,6 +1304,13 @@ $ `deps/gpukit/src/dev.nu`
         : i w % sl 7
         : i in ( __ft_ain m sl )
         : i out ( __ft_aout m sl )
+        // streamed model: this layer's base is not resident — bring it in
+        // for its seven slots and drop it again after the last one, so the
+        // merge costs one layer of host RAM, not the whole model
+        ? & . m stream == w 0 {
+            : *Gguf mgg # *Gguf . m mgg
+            : b _li ( __ft_layer_in mgg m L )
+        } {}
         // the per-layer norms, once per layer (at slot 0; norm mask bit3)
         ? & == w 0 == % / mask 8 2 1 {
             : s anp ?? ( vec_get [s] . m an L ) { T x → x F → # s 0 }
@@ -942,6 +1327,26 @@ $ `deps/gpukit/src/dev.nu`
             ( string_push_str n2 `.post_attention_layernorm.weight` )
             ( __ft_st_add so ( string_data n2 ) . fnv v . m n_embd 0 )
             ( string_free n2 )
+            // qwen3's per-head Q/K norms are frozen too, but a merged
+            // model without them is a DIFFERENT model — emit when present.
+            : s qnp ?? ( vec_get [s] . m qn L ) { T x → x F → # s 0 }
+            ? != # i qnp 0 {
+                : *FtV qnv # *FtV qnp
+                : String n3 ( string_from `model.layers.` )
+                ( string_push_str n3 ( nurl_str_int L ) )
+                ( string_push_str n3 `.self_attn.q_norm.weight` )
+                ( __ft_st_add so ( string_data n3 ) . qnv v . m head_dim 0 )
+                ( string_free n3 )
+            } {}
+            : s knp ?? ( vec_get [s] . m kn L ) { T x → x F → # s 0 }
+            ? != # i knp 0 {
+                : *FtV knv # *FtV knp
+                : String n4 ( string_from `model.layers.` )
+                ( string_push_str n4 ( nurl_str_int L ) )
+                ( string_push_str n4 `.self_attn.k_norm.weight` )
+                ( __ft_st_add so ( string_data n4 ) . knv v . m head_dim 0 )
+                ( string_free n4 )
+            } {}
         } {}
         : ~ FtW w0 @ FtW { 0 0 ( vec_new [f] ) }
         ? == w 0 { = w0 ?? ( vec_get [FtW] . m wq L ) { T x → x F → w0 } } {}

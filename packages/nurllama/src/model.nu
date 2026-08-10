@@ -33,6 +33,12 @@
 // and `qwen2` both are. Hyperparameters are read under the model's own
 // key prefix (`llama.*` / `qwen2.*`), and qwen2's per-layer Q/K/V
 // biases are applied when present (llama models simply have none).
+// `qwen3` is that same shape with two differences, both already
+// tensor-driven: it drops the Q/K/V biases, and it RMSNorms every head's
+// Q and K vector before the rotation (`attn_q_norm`/`attn_k_norm`, the
+// per-head norm gemma3 introduced). Nothing about it is special-cased
+// beyond the NEOX rotary style — a weight that is absent is simply not
+// applied.
 // Tied-embedding models (no output.weight) reuse token_embd as the
 // output projection.
 
@@ -694,12 +700,16 @@ $ `src/tokenizer.nu`
     : b is_gemma3 != 0 ( nurl_str_eq arch `gemma3` )
     : b is_phi3 != 0 ( nurl_str_eq arch `phi3` )
     : b is_llada2 != 0 ( nurl_str_eq arch `llada2` )
-    ? | | | | != 0 ( nurl_str_eq arch `llama` ) != 0 ( nurl_str_eq arch `qwen2` )
-    is_gemma3 is_phi3 is_llada2 {} {
-        ( gguf_close gg )
+    : b is_qwen3 != 0 ( nurl_str_eq arch `qwen3` )
+    ? | | | | | != 0 ( nurl_str_eq arch `llama` ) != 0 ( nurl_str_eq arch `qwen2` )
+    is_qwen3 is_gemma3 is_phi3 is_llada2 {} {
+        // `arch` BORROWS the Gguf's kv string, so the message has to be
+        // built while the file is still open — closing first left this
+        // printing freed bytes.
         : String msg ( string_from `nurllama: unsupported architecture '` )
         ( string_push_str msg arch )
-        ( string_push_str msg `' (supported: llama, qwen2, gemma3, phi3, llada2)` )
+        ( string_push_str msg `' (supported: llama, qwen2, qwen3, gemma3, phi3, llada2)` )
+        ( gguf_close gg )
         ^ @ !*Llm String { F msg }
     }
 
@@ -737,11 +747,11 @@ $ `src/tokenizer.nu`
     = . m q_dim * . m n_head . m head_dim
     = . m rope_dim ( __lm_kv_i gg arch `rope.dimension_count` . m head_dim )
     // Rotary layout is architecture-defined: llama rotates adjacent pairs
-    // (NORM), qwen2, gemma and llada2 rotate the two halves of the span
-    // (NEOX). llada2's rotation is PARTIAL on top: rope.dimension_count
+    // (NORM), qwen2, qwen3, gemma and llada2 rotate the two halves of the
+    // span (NEOX). llada2's rotation is PARTIAL on top: rope.dimension_count
     // (64) covers only half of head_dim (128), the rest passes through —
     // the rope kernel already takes rope_dim separately.
-    = . m rope_style ? | | | != 0 ( nurl_str_eq arch `qwen2` ) is_gemma3 is_phi3 is_llada2 1 0
+    = . m rope_style ? | | | | != 0 ( nurl_str_eq arch `qwen2` ) is_qwen3 is_gemma3 is_phi3 is_llada2 1 0
 
     // ── the llada2 shape ────────────────────────────────────────────────
     // A block-diffusion MoE: bidirectional attention (no causal mask —

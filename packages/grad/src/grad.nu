@@ -288,6 +288,24 @@ $ `deps/tensor/src/ops.nu`
     ^ ( _g_push tp ( gop_const ) -1 -1 0.0 ( tensor_clone c ) )
 }
 
+// A constant declared by SHAPE, with its values supplied later — after the
+// device capture, through gput_set_input, one tensor at a time.
+//
+// Why: a frozen base weight is read exactly once, when the capture uploads
+// it. Building the graph eagerly still makes every one of them resident in
+// host RAM as f64 at the same moment, so the host peak is the whole model
+// however little of it the training step actually needs. Declared this way
+// the graph costs a shape, and the caller streams the values in from
+// wherever they live.
+//
+// The CPU tape CANNOT evaluate through a lazy const — it has no values.
+// Use it only on a graph that will be captured and run on the device.
+@ grad_const_lazy * GTape tp ( Vec i ) shape i dtype → GVar {
+    ? == . tp ok 1 {} { ^ @ GVar { -1 } }
+    : Tensor t @ Tensor { dtype ( vec_clone [i] shape ) ( vec_new [f] ) }
+    ^ ( _g_push tp ( gop_const ) -1 -1 0.0 t )
+}
+
 // ── borrows out ──────────────────────────────────────────────────────
 
 // The node's value as a BORROWED Tensor view (do not free; invalid after

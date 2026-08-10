@@ -606,6 +606,7 @@ $ `stdlib/std/term.nu`
     ( args_opt p `seed` 0 `N` `finetune: adapter init seed (default 42)` )
     ( args_flag p `f32` 0 `finetune: run the device replay in float32 (half VRAM; float32 precision, not bit-exact to f64)` )
     ( args_flag p `mixed` 0 `finetune: mixed precision — f32 storage, f64 accumulation (half VRAM, near-f64 accuracy; preferred over --f32 at scale)` )
+    ( args_flag p `stream` 0 `finetune: stream the frozen base weights onto the device one tensor at a time — host RAM holds one weight instead of the whole model (needed above ~1B params; identical loss, see tests/finetune_stream_test.nu)` )
     ( args_opt p `n-predict` 110 `N` `run: max tokens to generate (default 64)` )
     ( args_opt p `temp` 0 `F` `run: temperature; 0 = greedy (default 0.8)` )
     ( args_opt p `topk` 0 `N` `run: top-k filter (default 40; 0 = off)` )
@@ -634,7 +635,7 @@ $ `stdlib/std/term.nu`
         ^ 0
     } {}
     ? ( args_present p `version` ) {
-        ( nurl_print `nurllama 0.12.3\n` )
+        ( nurl_print `nurllama 0.13.0\n` )
         ( args_free p )
         ^ 0
     } {}
@@ -772,6 +773,7 @@ $ `stdlib/std/term.nu`
         ?? ( string_to_float salpha ) { T v → { = alpha v } F _ → {} }
         : b f32 ? == ( args_present p `f32` ) 1 T F
         : b mixed ? == ( args_present p `mixed` ) 1 T F
+        ( ft_set_stream ? == ( args_present p `stream` ) 1 T F )
         : i rc ( nurllama_finetune modp datap ( string_data souts ) ( string_data smerged ) steps lr rank alpha seq seed f32 mixed )
         ( string_free souts ) ( string_free smerged ) ( string_free ssteps )
         ( string_free slr ) ( string_free srank ) ( string_free salpha )
