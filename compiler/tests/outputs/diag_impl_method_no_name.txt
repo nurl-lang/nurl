@@ -1,0 +1,6 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_impl_method_no_name.nu:7:19: error: expected a method name after '@' in this impl block, found '5'. An impl is '% Trait Type { @ name params → ret { body } ... }' — every method repeats the '@ name' form the trait declared.
+% Speaker Dog { @ 5 Dog self → i { ^ 1 } }
+                  ^
+error: aborting due to 1 previous error

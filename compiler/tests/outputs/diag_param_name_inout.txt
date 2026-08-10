@@ -1,0 +1,6 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_param_name_inout.nu:4:7: error: 'inout' is a parameter CONVENTION, not a name: it goes before the type, as in '@ f inout ( Vec i ) v → v'. Rename this parameter to something else.
+@ f i inout → i { ^ 0 }
+      ^
+error: aborting due to 1 previous error

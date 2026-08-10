@@ -1,0 +1,6 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_closure_body_unbraced.nu:4:31: error: expected '{' to open the closure body, found '^' (return). A closure is '\ params → ret { body }' — the body is ALWAYS braced, even for one expression: '\ i x → i { ^ + x 1 }'. Its type is written '( @ ret params )', e.g. '( @ i i )' for that closure.
+    : ( @ i i ) f \ i x → i ^ + x 1
+                              ^
+error: aborting due to 1 previous error

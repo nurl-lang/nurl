@@ -1,0 +1,5 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_assoc_unknown_name.nu:15:1: error: trait 'Boxed' has no associated type 'Zzz' to bind for type 'IntBox'. An impl may only bind the associated types the trait declares — check the name, or add 'type Zzz' to the trait declaration.
+@ main → i { ^ 0 }
+^

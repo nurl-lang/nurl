@@ -94,6 +94,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A supertrait ':' written on an impl silently deleted the impl.**
+  `% Speaker : Dog { @ speak Dog self → i { ^ 1 } }` consumes `Dog` as a
+  supertrait name, which leaves the lexer on `{` — so the declaration is
+  read as a *re-declaration of the trait*, and the impl body vanishes.
+  No `speak` was emitted at all, and the program still compiled and
+  linked. The supertrait-on-impl message that exists for this can never
+  fire for that shape, because by then it is not being read as an impl.
+
+  The hole underneath was that structs, enums and impls each guard
+  against a duplicate declaration and **traits did not** — so a second
+  `% Name { … }` quietly replaced the first. Traits now carry the same
+  position-keyed guard, which makes import replay idempotent and this
+  shape an error that names both the duplicate and the impl spelling.
+
+- **`->` where NURL's `→` belongs said "expected a type".** The ASCII
+  pair does not lex as an arrow at all: `-` and `>` are two separate
+  operators, so the parse died asking for a type and never mentioned the
+  arrow. A model that cannot emit U+2192 had no way to learn that from
+  the answer. The token table was telling the same lie from the other
+  side — it rendered `TT_ARROW` as `'->'`, naming a spelling that cannot
+  produce that token, so "found '->'" sent the reader looking for two
+  characters their source does not contain. Both now say `'→'`, and the
+  minus-then-greater-than pair gets a message of its own.
+
 - **Ten diagnostics pointed somewhere the mistake could not be.** Nine
   printed a caret under a bare `}` — closure and fn-pointer call arity,
   dyn and impl method arity, the no-impl dispatch miss, three

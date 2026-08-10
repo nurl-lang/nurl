@@ -1,0 +1,6 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_ascii_arrow.nu:17:9: error: NURL's arrow is '→' (U+2192, a single character), not the two-character '->'. Write '@ f i x → i { ... }'. The ASCII pair does not lex as an arrow at all — '-' and '>' are read as two separate operators, which is why the parse asks for a type here.
+@ f i x - > i { ^ x }
+        ^
+error: aborting due to 1 previous error
