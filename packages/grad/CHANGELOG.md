@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.10.2
+
+The 0.10.1 release note below describes TWO leaks, but the second fix
+(the string-literal-ternary workaround in `__gp_kn`) missed the 0.10.1
+merge by minutes — the PR was merged between the branch's two pushes, so
+the published 0.10.1 carries only leak 1's fix. 0.10.2 is that second
+commit, cherry-picked: the `gpm_`/`gpf_` prefix is picked with a branch
+into a `~ s` binding instead of a literal ternary in argument position
+(the compiler never drops that ternary's temporary — critic.md
+2026-08-10). Verified live: a 4B mixed run on 0.10.1 still leaked ~3.9
+MB/step; the fixed build's tiny-tape repro is at the f64 noise floor.
+
 ## 0.10.1
 
 **Two per-launch host leaks on the f32/mixed replay** — together ~10 MB
