@@ -1856,6 +1856,11 @@ $ `deps/gpukit/src/dev.nu`
         } {}
         = aoff + aoff * in r
         = boff + boff * r out
+        // page the layer's f64 base back OUT after its last slot — without
+        // this a streamed merge held every visited layer resident (~850 MB
+        // each on a 4B model, ~30 GB by the last layer: the OOM the layer
+        // paging exists to prevent). ft_adapters_save already did this.
+        ? & . m stream == w 6 { ( __ft_layer_out m L ) } {}
         = sl + sl 1
     }
     : !v String res ( stw_write so path )
