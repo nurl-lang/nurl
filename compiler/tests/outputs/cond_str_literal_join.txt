@@ -1,0 +1,12 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+gpm_
+gpf_
+lit_
+aabb
+aabb
+lit_
+gpm_tail
+gpf_tail
