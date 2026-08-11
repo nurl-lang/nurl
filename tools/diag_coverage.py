@@ -29,6 +29,7 @@ import json
 import os
 import re
 import sys
+import collections
 from collections import Counter
 
 # Every emitter that puts a diagnostic in front of the user. die_if_void
@@ -130,14 +131,32 @@ def load_stderr(errdir):
 
 
 def classify(sites, captured):
-    covered, uncovered, unmatchable = [], [], []
+    """covered / uncovered / unmatchable / ambiguous.
+
+    `ambiguous` is the honest half of the instrument. Text matching
+    cannot tell two sites apart when they emit the SAME sentence — and
+    six of them did, for six different container shapes. One test made
+    all six read as exercised, so the covered count overstated by five.
+    Sites sharing a fingerprint are reported separately rather than
+    counted as independently reached: a number that flatters the tool is
+    worse than a smaller number that is true.
+    """
+    shared = collections.Counter(s["fingerprint"] for s in sites
+                                 if s["fingerprint"])
+    covered, uncovered, unmatchable, ambiguous = [], [], [], []
     for s in sites:
         if s["fingerprint"] is None:
             unmatchable.append(s)
             continue
         s["hits"] = [k for k, v in captured.items() if s["fingerprint"] in v]
-        (covered if s["hits"] else uncovered).append(s)
-    return covered, uncovered, unmatchable
+        s["shares_text_with"] = shared[s["fingerprint"]] - 1
+        if not s["hits"]:
+            uncovered.append(s)
+        elif s["shares_text_with"]:
+            ambiguous.append(s)
+        else:
+            covered.append(s)
+    return covered, uncovered, unmatchable, ambiguous
 
 
 def main():
@@ -147,7 +166,7 @@ def main():
 
     sites = scan_sites(src)
     captured = load_stderr(errdir)
-    covered, uncovered, unmatchable = classify(sites, captured)
+    covered, uncovered, unmatchable, ambiguous = classify(sites, captured)
 
     if mode == "fingerprints":
         # The baseline format: one `key  text` line per never-fired site,
@@ -158,7 +177,8 @@ def main():
 
     if mode == "json":
         json.dump({"covered": covered, "uncovered": uncovered,
-                   "unmatchable": unmatchable}, sys.stdout, indent=1)
+                   "unmatchable": unmatchable, "ambiguous": ambiguous},
+                  sys.stdout, indent=1)
         return 0
 
     if mode == "report":
@@ -166,6 +186,13 @@ def main():
               "─────────────────────────────")
         for s in sorted(uncovered, key=lambda x: x["line"]):
             print(f"{src}:{s['line']}: {s['emitter']}: {s['text'][:150]}")
+        if ambiguous:
+            print(f"── ambiguous ({len(ambiguous)}) — share their text with "
+                  "another site, so a hit cannot be attributed ──")
+            for a in sorted(ambiguous, key=lambda x: x["line"]):
+                print(f"{src}:{a['line']}: {a['emitter']}: "
+                      f"(+{a['shares_text_with']} twin) {a['text'][:110]}")
+            print()
         if unmatchable:
             print(f"\n── unmatchable by text ({len(unmatchable)}) "
                   "— message is built in a variable ──")
@@ -179,6 +206,8 @@ def main():
     print(f"  exercised      : {len(covered)}"
           f"  ({100 * len(covered) // max(total, 1)}%)")
     print(f"  never fired    : {len(uncovered)}")
+    print(f"  ambiguous      : {len(ambiguous)}"
+          f"  (a test printed this text, but so would sibling sites)")
     print(f"  unmatchable    : {len(unmatchable)}")
     print(f"  by emitter     : {dict(Counter(s['emitter'] for s in sites))}")
     print(f"  corpus files   : {len(captured)}")

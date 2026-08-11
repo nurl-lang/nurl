@@ -53,6 +53,18 @@ gaps do not fail, a **new** die site with no test that fires it does.
 Adding a diagnostic and adding the program that triggers it are one
 change, not two.
 
+It also reports an **ambiguous** count, and that number is the tool
+being honest about its own method. Matching is by message text, so two
+sites emitting the *same sentence* are indistinguishable: one test makes
+both read as exercised. Six sites print `cannot store a value of type …
+into an element of type …` for six different container shapes, and there
+were eleven such groups in all. Those sites are counted separately
+rather than folded into "exercised" — a number that flatters the
+instrument is worse than a smaller one that is true.
+
+Two sites sharing a sentence is also a finding in its own right: a
+reader cannot tell which check rejected their program either.
+
 ## Diagnostic anchors
 
 Coverage answers "has anything ever printed this?". It cannot answer
