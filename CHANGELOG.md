@@ -92,7 +92,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   was added. Fixed and held at zero, so this one gates rather than
   ratchets.
 
+### Changed
+
+- **The diagnostic-coverage number was overstated, and now is not.**
+  Matching is by message text, so two sites emitting the *same sentence*
+  are indistinguishable — one test made both read as exercised. Eleven
+  such groups existed, covering 30 sites; the worst prints
+  `cannot store a value of type … into an element of type …` from **six**
+  places. Those are reported as **ambiguous** rather than folded into
+  "exercised", which moves the honest figure from 205 to **177 of 228**.
+  A number that flatters the instrument is worse than a smaller one that
+  is true, and this instrument had been reporting its own best case for
+  eight passes.
+
 ### Fixed
+
+- **Six element-store diagnostics never said what type the element
+  was.** They named the value's type and then said "into this element",
+  leaving the reader to find the container's declaration to learn what
+  was wanted. All six had the expected type in scope at the point of the
+  message. They print it now.
 
 - **`# S { 1 }` was accepted silently for every single-field struct.**
   The guard that catches `'#' is the cast operator; struct/enum literals

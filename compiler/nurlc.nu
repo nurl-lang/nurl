@@ -13825,7 +13825,7 @@
             // self-compile); a tracked local frees at scope exit.
             : s __fs_rt ( nurl_get_last_type )
             ? ( __store_type_clash __fs_rt elem_ty )
-            { ( die lex ( nurl_str_cat3 `cannot store a value of type '` __fs_rt `' into this element — the element type differs and NURL has no implicit conversions` ) ) }
+            { ( die lex ( nurl_str_cat ( nurl_str_cat4 `cannot store a value of type '` __fs_rt `' into an element of type '` elem_ty ) `' — the element type differs and NURL has no implicit conversions. Convert the value explicitly, or declare the container with the type you mean to store in it.` ) ) }
             {}
             : s rhsc ( coerce_store_val lex rhs __fs_rt elem_ty syms cg )
             : s gep ( nurl_cg_reg cg )
@@ -13859,7 +13859,7 @@
             // self-compile); a tracked local frees at scope exit.
             : s __fs_rt ( nurl_get_last_type )
             ? ( __store_type_clash __fs_rt elem_ty )
-            { ( die lex ( nurl_str_cat3 `cannot store a value of type '` __fs_rt `' into this element — the element type differs and NURL has no implicit conversions` ) ) }
+            { ( die lex ( nurl_str_cat ( nurl_str_cat4 `cannot store a value of type '` __fs_rt `' into an element of type '` elem_ty ) `' — the element type differs and NURL has no implicit conversions. Convert the value explicitly, or declare the container with the type you mean to store in it.` ) ) }
             {}
             : s rhsc ( coerce_store_val lex rhs __fs_rt elem_ty syms cg )
             : s gep ( nurl_cg_reg cg )
@@ -13893,7 +13893,7 @@
             // self-compile); a tracked local frees at scope exit.
             : s __fs_rt ( nurl_get_last_type )
             ? ( __store_type_clash __fs_rt elem_type )
-            { ( die lex ( nurl_str_cat3 `cannot store a value of type '` __fs_rt `' into this element — the element type differs and NURL has no implicit conversions` ) ) }
+            { ( die lex ( nurl_str_cat ( nurl_str_cat4 `cannot store a value of type '` __fs_rt `' into an element of type '` elem_type ) `' — the element type differs and NURL has no implicit conversions. Convert the value explicitly, or declare the container with the type you mean to store in it.` ) ) }
             {}
             : s rhsc ( coerce_store_val lex rhs __fs_rt elem_type syms cg )
             // Emit array indexing GEP + store
@@ -13963,7 +13963,7 @@
                         // self-compile); a tracked local frees at scope exit.
                         : s __fs_rt ( nurl_get_last_type )
                         ? ( __store_type_clash __fs_rt st )
-                        { ( die lex ( nurl_str_cat3 `cannot store a value of type '` __fs_rt `' into this element — the element type differs and NURL has no implicit conversions` ) ) }
+                        { ( die lex ( nurl_str_cat ( nurl_str_cat4 `cannot store a value of type '` __fs_rt `' into an element of type '` st ) `' — the element type differs and NURL has no implicit conversions. Convert the value explicitly, or declare the container with the type you mean to store in it.` ) ) }
                         {}
                         : s rhsc ( coerce_store_val lex rhs __fs_rt st syms cg )
                         : s gep ( nurl_cg_reg cg )
@@ -14031,7 +14031,7 @@
                                 // self-compile); a tracked local frees at scope exit.
                                 : s __fs_rt ( nurl_get_last_type )
                                 ? ( __store_type_clash __fs_rt st )
-                                { ( die lex ( nurl_str_cat3 `cannot store a value of type '` __fs_rt `' into this element — the element type differs and NURL has no implicit conversions` ) ) }
+                                { ( die lex ( nurl_str_cat ( nurl_str_cat4 `cannot store a value of type '` __fs_rt `' into an element of type '` st ) `' — the element type differs and NURL has no implicit conversions. Convert the value explicitly, or declare the container with the type you mean to store in it.` ) ) }
                                 {}
                                 : s rhsc ( coerce_store_val lex rhs __fs_rt st syms cg )
                                 : s gep ( nurl_cg_reg cg )
@@ -14062,7 +14062,7 @@
                     // self-compile); a tracked local frees at scope exit.
                     : s __fs_rt ( nurl_get_last_type )
                     ? ( __store_type_clash __fs_rt st )
-                    { ( die lex ( nurl_str_cat3 `cannot store a value of type '` __fs_rt `' into this element — the element type differs and NURL has no implicit conversions` ) ) }
+                    { ( die lex ( nurl_str_cat ( nurl_str_cat4 `cannot store a value of type '` __fs_rt `' into an element of type '` st ) `' — the element type differs and NURL has no implicit conversions. Convert the value explicitly, or declare the container with the type you mean to store in it.` ) ) }
                     {}
                     : s rhsc ( coerce_store_val lex rhs __fs_rt st syms cg )
                     : s gep ( nurl_cg_reg cg )
