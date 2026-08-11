@@ -1394,6 +1394,14 @@ long long nurl_tcp_get_fd(long long handle) {
 void nurl_tcp_set_nonblock(long long handle, long long on) {
     NurlTcp *h = (NurlTcp*)(uintptr_t)handle;
     if (!h || h->fd < 0) return;
+    /* Memoized on h->nonblock — every mutation of the fd's O_NONBLOCK
+     * goes through here (or through the accept path, which normalises
+     * the flag AND the cache together), so a matching cache means the
+     * kernel flag already agrees. The async net wrappers call this at
+     * the top of EVERY read/write; without the memo that was 2 fcntl
+     * syscalls per operation = 4 per HTTP request, 46% of the async
+     * server's syscall time. */
+    if (h->nonblock == (on ? 1 : 0)) return;
 #if defined(_WIN32)
     u_long mode = on ? 1 : 0;
     ioctlsocket(h->fd, FIONBIO, &mode);
@@ -1603,6 +1611,8 @@ typedef struct NurlUdp {
     nurl_sockfd_t fd;
     long long     err_kind;
     int           family;     /* AF_INET / AF_INET6 / AF_UNSPEC */
+    int           nonblock;   /* cache of the fd's O_NONBLOCK — see
+                                 nurl_udp_set_nonblock's memo note */
     char         *peer;       /* owned "ip:port" of last peer; NULL if none */
 } NurlUdp;
 
@@ -1975,6 +1985,12 @@ long long nurl_udp_family(long long handle) {
 void nurl_udp_set_nonblock(long long handle, long long on) {
     NurlUdp *h = (NurlUdp*)(uintptr_t)handle;
     if (!h || h->fd == NURL_INVALID_SOCK) return;
+    /* Memoized like nurl_tcp_set_nonblock: the async wrappers call
+     * this per operation; the fd's flag only ever changes through this
+     * function, so a matching cache skips both fcntl syscalls. UDP
+     * sockets are created blocking (nonblock=0 via calloc), matching
+     * the fresh fd. */
+    if (h->nonblock == (on ? 1 : 0)) return;
 #ifdef _WIN32
     u_long mode = on ? 1 : 0;
     ioctlsocket(h->fd, FIONBIO, &mode);
@@ -1985,6 +2001,7 @@ void nurl_udp_set_nonblock(long long handle, long long on) {
     else    fl &= ~O_NONBLOCK;
     fcntl(h->fd, F_SETFL, fl);
 #endif
+    h->nonblock = on ? 1 : 0;
 }
 
 void nurl_udp_set_timeout(long long handle, long long ms) {

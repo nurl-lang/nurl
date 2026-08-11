@@ -62,7 +62,7 @@ Configuration (call before serving):
 | `( http_app_static_dir a dir )` | off | serve files for unmatched GET/HEAD (traversal-safe) |
 | `( http_app_cors a )` | off | permissive CORS + 204 OPTIONS preflight |
 | `( http_app_logging a )` | off | access log (method path → status) to stderr |
-| `( http_app_recover a on )` | **on** | handler panic → 500 instead of a dropped connection |
+| `( http_app_recover a on )` | — | deprecated no-op: panic → 500 is an unconditional stdlib-server guarantee |
 | `( http_app_workers a n )` | 0 | 0 = single-threaded keep-alive; n > 0 = worker pool |
 | `( http_app_idle_ms a ms )` | 5000 | keep-alive idle timeout |
 | `( http_app_body_max a bytes )` | 10 MiB | request-body cap (parser answers 413 above it) — raise for upload endpoints |

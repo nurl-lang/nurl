@@ -42,7 +42,6 @@ $ `stdlib/ext/http_static.nu`
     Router router
     i idle_ms  // keep-alive idle timeout (ms) for the server
     i workers  // 0 → single-threaded server_run; >0 → server_run_pool(n)
-    b recover_panics  // wrap dispatch in `recover`, turning a panic into 500
     b log_requests  // access log (method/path/status) to stderr
     b cors  // permissive CORS + OPTIONS preflight
     b quiet  // suppress the "serving on host:port" banner
@@ -61,7 +60,6 @@ $ `stdlib/ext/http_static.nu`
     = . a router ( router_new )
     = . a idle_ms 5000
     = . a workers 0
-    = . a recover_panics T
     = . a log_requests F
     = . a cors F
     = . a quiet F
@@ -103,9 +101,14 @@ $ `stdlib/ext/http_static.nu`
 // closes the connection (0 = disabled).
 @ http_app_request_timeout * HttpApp a i ms → v { = . a req_timeout_ms ms }
 
-// Toggle panic→500 recovery (on by default). A handler that panics then
-// yields a 500 instead of tearing down the connection loop.
-@ http_app_recover * HttpApp a b on → v { = . a recover_panics on }
+// DEPRECATED (0.3.2): panic→500 is an unconditional guarantee of the
+// stdlib server itself — its keep-alive loop wraps every handler call
+// (including this facade's whole dispatch + middleware chain) in
+// `recover` and answers 500 on panic. The facade used to duplicate
+// that wrapper here, which cost a throwaway 500-response build and a
+// second `recover` on EVERY request for zero added safety. The knob
+// is kept for API compatibility and is a no-op.
+@ http_app_recover * HttpApp a b on → v {}
 
 // Log every request (method path → status) to stderr.
 @ http_app_logging * HttpApp a → v { = . a log_requests T }
@@ -194,28 +197,12 @@ $ `stdlib/ext/http_static.nu`
     ^ resp
 }
 
-// Optional panic→500 wrapper. `recover` sits directly in this top-level
-// function body (not inside another closure), the shape the runtime wants.
-@ __httpapp_dispatch * HttpApp a HttpRequest req → HttpResponse {
-    ? . a recover_panics {
-        // `placeholder` is returned only when the handler panics. On
-        // the success path the closure overwrites `resp`, so the
-        // placeholder must be freed there or every request leaks it.
-        // (recover itself frees the closure's env — panic.nu contract.)
-        : HttpResponse placeholder ( response_text 500 `internal error: handler panicked\n` )
-        : ~ HttpResponse resp placeholder
-        : !v PanicInfo pr ( recover \ → v { = resp ( __httpapp_route_and_static a req ) } )
-        ?? pr {
-            T _ → { ( http_response_free placeholder ) }
-            F p → { ( panic_info_free p ) }
-        }
-        ^ resp
-    } {
-        ^ ( __httpapp_route_and_static a req )
-    }
-}
-
 // ── Serving ───────────────────────────────────────────────────────────
+//
+// Panic safety: the stdlib server's keep-alive loop wraps every handler
+// invocation (= this facade's full dispatch + middleware chain) in
+// `recover` and turns a panic into a 500, so the facade adds no wrapper
+// of its own.
 
 @ __httpapp_banner * HttpApp a s scheme s host i port → v {
     ? . a quiet { ^ v } {}
@@ -258,7 +245,7 @@ $ `stdlib/ext/http_static.nu`
     // Each middleware layer is held in its own binding so every closure
     // env can be released after the server returns (closures have no
     // drop-glue — envs are manual).
-    : ( @ HttpResponse HttpRequest ) disp \ HttpRequest req → HttpResponse { ^ ( __httpapp_dispatch a req ) }
+    : ( @ HttpResponse HttpRequest ) disp \ HttpRequest req → HttpResponse { ^ ( __httpapp_route_and_static a req ) }
     : ~ ( @ HttpResponse HttpRequest ) base disp
     : ~ ( @ HttpResponse HttpRequest ) corsw disp
     : ~ b has_cors F
