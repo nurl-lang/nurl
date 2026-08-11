@@ -554,10 +554,17 @@ $ `stdlib/core/vec.nu`
 // escape-free fast path pays one linear scan for conformance. It still
 // skips the whole per-char push loop, which is where its speed came
 // from.
+//
+// The walk must read through a raw pointer: `span` points into the
+// middle of the document, so `nurl_str_get`'s per-call strlen runs to
+// the document's END on every byte — the scan that shipped with the
+// conformance fix did exactly that and took json_parse from fastest in
+// the benchmark table (8.8 ms) to slowest (42 ms).
 @ __jp_span_ctrl s span i n → i {
+    : *u p # *u span
     : ~ i k 0
     ~ < k n {
-        ? < ( nurl_str_get span k ) 32 { ^ k } {}
+        ? < & # i . p k 255 32 { ^ k } {}
         = k + k 1
     }
     ^ -1

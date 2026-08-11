@@ -12,13 +12,22 @@
 // emitted by the nurlapi app itself.
 
 // Substrings (matched case-insensitively) in a 500 body.
-//   wedged    — instance reachable but server not accepting on the port; the
-//               DO won't re-check on its own, so the instance must be torn down
-//               ("The container is not listening in the TCP address …").
+//   wedged    — the DO's picture of the instance is wrong, so the instance
+//               must be torn down before a retry can help:
+//               * "The container is not listening in the TCP address …" —
+//                 alive but the server stopped accepting; the DO never
+//                 re-checks the port on its own.
+//               * "The container is not running, consider calling start()" —
+//                 the DO proxied to an instance that no longer exists (seen
+//                 fleet-wide during the v0.37.0 image rollout, surfaced to
+//                 users as a 500 because this policy didn't know the string).
+//                 destroy() clears the stale state; the retry cold-starts.
 //   transient — instance is mid-restart; a plain retry suffices.
 export const WEDGE_MARKERS: readonly string[] = [
   "is not listening",
   "not listening in the tcp address",
+  "is not running",
+  "consider calling start",
 ];
 export const TRANSIENT_MARKERS: readonly string[] = [
   "network connection lost",
