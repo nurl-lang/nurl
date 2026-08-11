@@ -2,7 +2,12 @@
 
 All notable changes to the `nurllama` package.
 
-## 0.17.0 — 2026-08-11
+## 0.17.1 — 2026-08-11
+
+- Republish of 0.17.0: the 0.17.0 upload to the registry was corrupted
+  by a transport failure and has been yanked; 0.17.1 is the same code.
+
+## 0.17.0 — 2026-08-11 (yanked)
 
 Serve/UX overhaul: the web chat server is usable straight from `serve`,
 and every "that's not a model" path says what to do instead.
