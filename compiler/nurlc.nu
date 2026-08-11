@@ -7961,16 +7961,38 @@
         }
         {} }
     {}
-    // Group F: impl method dispatch based on first arg's LLVM type
+    // Group F: impl method dispatch based on first arg's LLVM type.
+    //
+    // A LOCAL callable shadows a same-named trait/impl method: a
+    // function-typed parameter (`__param`, e.g. vec_free_with's
+    // `( @ v A ) drop` callback) or a stored closure binding (`__ptr`)
+    // must win over impl dispatch, exactly as it already wins over the
+    // bare-@fn arity check above. Without this, importing ANY file
+    // with a `% Drop <T>` impl (sqlite.nu) made every call through a
+    // parameter named `drop` resolve as trait dispatch — path.nu's
+    // vec_free_with then died with "no impl for receiver type
+    // 'String'" in whatever program linked the two, and a program
+    // whose receiver type DID have an impl would have silently called
+    // the impl instead of the parameter. Callable-ness is judged by
+    // the binding's LLVM type shape — a closure struct or bare fn
+    // pointer, the same discriminators the stored-closure call path
+    // below uses — so a scalar or plain-struct local with a method's
+    // name still dispatches. (The stored type is the LLVM spelling,
+    // e.g. `{ void (i8*, i64)*, i8* }` for `( @ v i )`.)
+    : s __cal_ll ( nurl_llty ( nurl_sym_get syms fname ) )
+    : b __cal_fnish | | | | != 0 ( nurl_str_starts __cal_ll `i64 (` ) != 0 ( nurl_str_starts __cal_ll `void (` ) != 0 ( nurl_str_starts __cal_ll `i8* (` ) != 0 ( nurl_str_starts __cal_ll `i8*(` ) != 0 ( nurl_str_starts __cal_ll `{` )
+    : b __callee_shadowed & | != 0 ( nurl_sym_len2 syms fname `__ptr` )
+    != 0 ( nurl_sym_len2 syms fname `__param` )
+    __cal_fnish
     : ~ s impl_key ( nurl_str_cat fname ( nurl_str_cat `##` first_arg_type ) )
-    : ~ s impl_mangle_key ( nurl_sym_get g_impl_name_syms impl_key )
+    : ~ s impl_mangle_key ? __callee_shadowed `` ( nurl_sym_get g_impl_name_syms impl_key )
     // `inout` receiver: the first argument is passed as `%T*`, but impls
     // are registered by the value type `%T` (g_impl_name_syms key
     // `method##%T`). On a miss with a pointer-typed first arg, retry with
     // the trailing `*` stripped so an `inout`/`sink` impl method still
     // dispatches. (Without this, applying `inout` pointerised the arg and
     // the dispatch fell through to an undefined bare `@method`.)
-    ? & == 0 ( nurl_str_len impl_mangle_key )
+    ? & & ! __callee_shadowed == 0 ( nurl_str_len impl_mangle_key )
     & > ( nurl_str_len first_arg_type ) 1
     == ( nurl_str_get first_arg_type - ( nurl_str_len first_arg_type ) 1 ) 42
     { : s __fa_base ( nurl_str_slice first_arg_type 0 - ( nurl_str_len first_arg_type ) 1 )
@@ -7982,7 +8004,7 @@
     // exists for THIS receiver type, and nothing else defines the bare
     // name: the fall-through emitted `call @speak(%Cat …)` against an
     // undefined symbol — an error only clang reported, far from here.
-    ? & & & & == 0 ( nurl_str_len impl_mangle_key )
+    ? & & & & & ! __callee_shadowed == 0 ( nurl_str_len impl_mangle_key )
     != 0 ( nurl_sym_len2 g_impl_name_syms fname `__impl_seen` )
     == 0 ( nurl_sym_len2 syms fname `__arity` )
     == 0 ( nurl_sym_len2 syms fname `__ptr` )
