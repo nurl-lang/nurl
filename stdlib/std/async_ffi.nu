@@ -14,6 +14,8 @@
 
 & `c` @ nurl_fiber_spawn *u fn *u env → i
 
+& `c` @ nurl_fiber_spawn_owned *u fn *u env → i
+
 & `c` @ nurl_fiber_spawn_joinable *u fn *u env → i
 
 & `c` @ nurl_fiber_join i fiber → v

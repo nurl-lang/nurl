@@ -1128,7 +1128,10 @@ $ `stdlib/std/async.nu`
         : !TcpConn NetErr cr ( tcp_accept listener )
         ?? cr {
             T c → {
-                ( spawn \ → v { ( __async_serve_conn s c ) } )
+                // spawn_owned: the runtime frees this per-connection
+                // closure's env when the conn fiber finishes — with
+                // plain `spawn` (env BORROWED) it leaked per accept.
+                ( spawn_owned \ → v { ( __async_serve_conn s c ) } )
             }
             F e → { = done T }
         }
