@@ -1,0 +1,6 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_match_guard_no_arrow.nu:13:30: error: expected '→' after the match guard, found '{'. A guarded arm is 'Variant payload ? guard → body' — the guard is one expression between the payload and the arrow, and the arrow is not optional. E.g. 'T n ? > n 0 → body', or with a braced body 'T n ? > n 0 → { ... }'.
+    : i r ?? e { A v ? > v 0 { ^ v } B → 0 }
+                             ^
+error: aborting due to 1 previous error

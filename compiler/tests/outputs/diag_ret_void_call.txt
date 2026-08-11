@@ -1,0 +1,4 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_ret_void_call.nu:8:16: error: return expression has no value (expected i) — the commonest cause is returning a call whose declared return type is 'v', which yields nothing to return; a conditional whose branches disagree on type does the same. Check what the '^' operand produces.
+error: aborting due to 1 previous error

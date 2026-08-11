@@ -1,0 +1,6 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_inout_field_no_field.nu:9:16: error: inout field argument: expected a field name after '. s'. The form is '( f inout . s field )' — object first, then the field name, prefix style.
+    ( bump . s )
+               ^
+error: aborting due to 1 previous error

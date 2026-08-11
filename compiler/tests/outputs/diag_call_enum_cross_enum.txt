@@ -1,6 +1,6 @@
 COMPILE FAIL
 ERRORS
-compiler/tests/diag_call_enum_cross_enum.nu:14:16: error: argument 1 to 'show': value of type '%Fruit' passed where parameter expects '%Color' — wrong struct type passed by value (a value of one named type where a different one is declared); the call would silently reinterpret its fields
+compiler/tests/diag_call_enum_cross_enum.nu:24:16: error: argument 1 to 'show': value of type '%Fruit' passed where parameter expects '%Color' — wrong named type passed by value. Structs and enums are both NOMINAL: two of them are different types even when their fields or tags line up, and no conversion is implied. The call would reinterpret this value as the declared type's fields.
     ^ ( show x )
                ^
 error: aborting due to 1 previous error

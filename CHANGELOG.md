@@ -94,6 +94,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A forgotten `→` on a guarded match arm was reported as a
+  non-exhaustive match.** The guard scan ran to the next `→` at paren
+  depth 0, and braces do not affect that depth — so `A v ? > v 0 { ^ v }
+  B → 0` swallowed the arm's body *and the whole next variant*, and the
+  failure surfaced as "no arm covers variant 'A'" about the arm the
+  writer had just finished writing. A guard is one expression and never
+  contains a brace at depth 0, so a `{` there is the missing arrow and
+  nothing else.
+
+- **Two enums were reported as a "wrong struct type".** The check that
+  runs first has no symbol table to test enum-ness with, so it described
+  every named-type mismatch as a struct one. Its parenthetical was
+  already accurate; the lead was not, and *struct* is the word a reader
+  takes away. Both kinds are nominal, which is the rule that matters and
+  is true of either.
+
+- **"likely a conditional with incompatible branch types" was a guess,
+  and the wrong one.** Returning a call whose declared return type is
+  `v` is the commonest way to reach that error and went unmentioned. It
+  is named first now.
+
 - **Assigning to a field of a by-value struct parameter emitted invalid
   IR, silently.** A by-value struct parameter has no alloca to GEP from,
   so `= . s a 5` printed `getelementptr %S, %S* , i32 0, i32 0` — with

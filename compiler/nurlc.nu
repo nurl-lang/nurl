@@ -2640,8 +2640,8 @@
     ? & & ( seq lt `void` ) != 0 ( nurl_str_len fn_rt ) ! ( seq fn_rt `void` )
     { : s hint ? returning_match
         `) — match arms contain '^' so '?? …' is statement-form, not an expression. Refactor to ': ~ T rc init / ?? mr { … = rc v } / ^ rc'.`
-        `) — likely a conditional with incompatible branch types`
-        ( die lex ( nurl_str_cat `return expression has no value (expected `
+        `) — the commonest cause is returning a call whose declared return type is 'v', which yields nothing to return; a conditional whose branches disagree on type does the same. Check what the '^' operand produces.`
+        ( die_stmt lex ( nurl_str_cat `return expression has no value (expected `
         ( nurl_str_cat ( llvm_to_nurl fn_rt ) hint ) ) ) }
     {}
     // Inverse of the above: the function is declared `→ v` (returns
@@ -6814,7 +6814,7 @@
         { ( die lex ( nurl_str_cat3
             ( nurl_str_cat4 `argument ` ( nurl_str_int + arg_idx 1 ) ` to '` fname )
             ( nurl_str_cat4 `': value of type '` at `' passed where parameter expects '` pllvm )
-            `' — wrong struct type passed by value (a value of one named type where a different one is declared); the call would silently reinterpret its fields` ) ) }
+            `' — wrong named type passed by value. Structs and enums are both NOMINAL: two of them are different types even when their fields or tags line up, and no conversion is implied. The call would reinterpret this value as the declared type's fields.` ) ) }
         {}
         ? ( __arg_named_ptr_mismatch at pllvm )
         { ( die lex ( nurl_str_cat3
@@ -9127,6 +9127,16 @@
                     ? == gt TT_EOF { ( die lex ( nurl_str_cat3
                         `expected '→' after the match guard, found ` ( tok_here lex )
                         `. A guarded arm is 'Variant payload ? guard → body' — the guard is one expression between the payload and the arrow. E.g. 'T n ? > n 0 → body'.` ) ) } {}
+                    // A '{' at depth 0 means the arrow was forgotten and
+                    // this is the arm's BODY. Without this the scan ran
+                    // on to the next arm's arrow, swallowing the body and
+                    // a whole variant with it — and the failure surfaced
+                    // as "non-exhaustive match: no arm covers 'A'" about
+                    // the arm the writer had just written. A guard is one
+                    // expression; it never contains a brace at depth 0.
+                    ? & == gt TT_LBRACE == gd 0 { ( die lex ( nurl_str_cat3
+                        `expected '→' after the match guard, found ` ( tok_here lex )
+                        `. A guarded arm is 'Variant payload ? guard → body' — the guard is one expression between the payload and the arrow, and the arrow is not optional. E.g. 'T n ? > n 0 → body', or with a braced body 'T n ? > n 0 → { ... }'.` ) ) } {}
                     ? | == gt TT_LPAREN == gt TT_LBRACK { = gd + gd 1 } {}
                     ? | == gt TT_RPAREN == gt TT_RBRACK { = gd - gd 1 } {}
                     ( nurl_lex_advance lex )
@@ -9144,7 +9154,7 @@
             // a contradiction anyway). Or-patterns + guards are kept
             // orthogonal for v1.
             ? & != 0 has_guard ( seq pattern_name `_` )
-            { ( die lex `a guard (? cond) on a wildcard arm is not supported - guard a specific pattern instead` ) } {}
+            { ( die_stmt lex `a guard on the wildcard arm is not supported. '_' already means "everything not matched above", so '_ ? cond' would leave the remaining variants unhandled when the guard is false, and a match must be exhaustive. Guard a named variant instead ('A v ? > v 0 → body'), and let a plain '_ → body' absorb the rest.` ) } {}
             ? & != 0 has_guard has_or
             { ( die lex ( nurl_str_cat `an or-pattern cannot carry a guard — 'A | B ? cond → body' would have to hold for both variants and the compiler cannot tell which matched. Write the arms separately: 'A ? cond → body  B ? cond → body'.` `` ) ) } {}
             ? ( seq pattern_name `_` ) {

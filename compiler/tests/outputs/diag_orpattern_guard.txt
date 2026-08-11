@@ -1,0 +1,6 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_orpattern_guard.nu:7:32: error: an or-pattern cannot carry a guard — 'A | B ? cond → body' would have to hold for both variants and the compiler cannot tell which matched. Write the arms separately: 'A ? cond → body  B ? cond → body'.
+    : i r ?? d { N | S ? T → 1 E → 2 W → 3 }
+                               ^
+error: aborting due to 1 previous error

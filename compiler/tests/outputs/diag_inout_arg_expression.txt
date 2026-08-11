@@ -1,0 +1,6 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_inout_arg_expression.nu:8:12: error: inout argument to 'bump' must be a mutable ': ~' binding or a '. binding field' field target, not an expression
+    ( bump + n 1 )
+           ^
+error: aborting due to 1 previous error

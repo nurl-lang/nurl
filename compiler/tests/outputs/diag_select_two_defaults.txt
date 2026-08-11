@@ -1,0 +1,6 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_select_two_defaults.nu:6:34: error: select has more than one default '_' arm — only one is allowed, and it runs when no channel is ready. Merge the two bodies into a single '_ → { ... }'.
+    ?? { [i] c → v {} _ → {} _ → {} }
+                                 ^
+error: aborting due to 1 previous error

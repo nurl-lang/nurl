@@ -7,13 +7,9 @@
 3ef3446b70cc  ' ' is a compiler-auto-dropped value; passing it to a 'sink' parameter is not yet supported - pass a
 43a9804d1c0b  inout argument ' ' is not a binding in scope. An 'inout' argument must be a plain binding in scope, 
 50c9a5e6a8a5  cannot cast ' ' to an integer: its first field is itself an aggregate, so there is no scalar to take
-52d29a5350d6  select has no channel arms — a '?? { ... }' with only a default '_' arm would spin without ever wait
-554c34e0f923  a guard (? cond) on a wildcard arm is not supported - guard a specific pattern instead
 5ad763372c6c  method ' ' of trait ' ' has no Self receiver as its first parameter — not object-safe for '% '
 5dfdf7d4ec64  expected '{' to open the default arm's body, found . The default arm is '_ → { body }'.
 697d73c26332  expected a binding name, found . A binding is ': type name value' — the TYPE comes before the name, 
-6a7a475738c9  an or-pattern cannot carry a guard — 'A | B ? cond → body' would have to hold for both variants and 
-70153c509a6c  inout field argument: ' ' is not a named-struct binding — the field form needs a struct with declare
 737e4e2f64a2  an or-pattern's variants cannot bind payloads — the arms would disagree about what the name holds. L
 7f5fb5327ef2  element of this slice literal has type ' ' but the slice's declared element type is ' ' — a value of
 812c266928da  a supertrait ':' clause belongs on the trait DECLARATION ('% Name : Base { ... }'), not on an impl. 
@@ -21,21 +17,14 @@
 89608f397d6c  cannot mutate immutable parameter ' ' — parameters are immutable bindings. Copy it into a ': ~' loca
 8f8423944aed  const expression must be integer literals combined with + - * / << >> & | ^^ (use a precomputed lite
 8fa0e2858d9c  unexpected where a value was required. Every NURL operator has FIXED arity and no closing bracket, s
-90e2e7e59d8d  return expression has no value (expected
-996c90fa8fe7  select has more than one default '_' arm — only one is allowed, and it runs when no channel is ready
 a000cdd254fc  '#' is the cast operator; struct/enum literals use '@'. Write '@ { ... }' instead.
 a7b912fa462f  expected '→' after the match guard, found . A guarded arm is 'Variant payload ? guard → body' — the 
-aba81704d0f4  inout argument to ' ' must be a mutable ': ~' binding or a '. binding field' field target, not an ex
 ac66e0e045a5  and unknown — the operand types could not be resolved, which usually means an earlier error in this 
 ac66e0e045a5  and unknown — the operand types could not be resolved, which usually means an earlier error in this 
 af5a83d74d0f  cannot cast ' ' to an integer — '# i expr' converts numbers and pointers, not this type. There are n
-bde8adc30e81  inout field argument: ' ' is not a struct binding in scope. An 'inout' argument must be a plain bind
-c5d859907bb0  operator '&&' requires bool operands and the left one is not bool. '&&' and '||' short-circuit and a
 ca92cb54d21f  expected at least one trait name after the supertrait ':', found . A trait requiring others is '% Na
-cfe21e33fd77  inout field argument: expected a field name after '. '. The form is '( f inout . s field )' — object
 d82fbf1f85b6  an or-pattern cannot mix a literal constraint with variant names — write the literal case as its own
 e13f6093bfb5  expected '{' to open the closure body, found . A closure is '\\ params → ret { body }' — the body is
-ea01dc19d4df  volatile_load expects a typed pointer '*T', so it knows the width to read. Write '( volatile_load p 
 f79c4038b6f2  cannot store a value of type ' ' into this element — the element type differs and NURL has no implic
 f79c4038b6f2  cannot store a value of type ' ' into this element — the element type differs and NURL has no implic
 f79c4038b6f2  cannot store a value of type ' ' into this element — the element type differs and NURL has no implic

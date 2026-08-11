@@ -1,0 +1,6 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_select_no_channel_arms.nu:7:5: error: select has no channel arms — a '?? { ... }' with only a default '_' arm would spin without ever waiting. Add at least one '[T] chan → name { body }'.
+    ^ 0
+    ^
+error: aborting due to 1 previous error
