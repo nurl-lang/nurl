@@ -1,6 +1,6 @@
 [package]
 name = "http"
-version = "0.3.1"
+version = "0.3.2"
 description = "The unified HTTP server interface for NURL — one dependency for anything that needs to SERVE HTTP. A single importable facade over the stdlib HTTP stack (sockets + TLS, request parser, response builder, keep-alive server with worker pools and DoS limits, router, static-file serving, auth / jwt / multipart / middleware / websocket / streaming SSE-NDJSON responses). Where the stdlib ships the building blocks, `http` ships the glue: an ergonomic `HttpApp` that collapses bind → router → shutdown-signal → logging / CORS / panic-recovery → keep-alive loop into a few calls, so `( http_app_new )`, a handful of `( http_get a ... )` registrations, and `( http_listen a host port )` stand up a complete server — over plain TCP or TLS."
 license = "MIT OR Apache-2.0"
 

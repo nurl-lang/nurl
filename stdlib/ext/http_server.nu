@@ -293,16 +293,9 @@ $ `stdlib/ext/http_response.nu`
             ( vec_clear [u] buf )
         } {
             : i remaining - total n
-            : ( Vec u ) tail ( vec_with_cap [u] remaining )
             : *u p ( vec_data [u] buf )
-            : ~ i k 0
-            ~ < k remaining {
-                ( vec_push [u] tail . p + n k )
-                = k + k 1
-            }
-            ( vec_clear [u] buf )
-            ( vec_extend [u] buf tail )
-            ( vec_free [u] tail )
+            ( nurl_memmove # s p # s # *u + # i p n remaining )
+            ( vec_set_len [u] buf remaining )
         }
     }
 }
@@ -605,10 +598,12 @@ $ `stdlib/ext/http_response.nu`
     : i la ( string_len value )
     : i lb ( nurl_str_len lit )
     ? != la lb { ^ F } {}
+    : *u pa # *u ( string_data value )
+    : *u pb # *u lit
     : ~ i k 0
     ~ < k la {
-        : ~ i ca ( string_get value k )
-        : ~ i cb ( nurl_str_get lit k )
+        : ~ i ca & 255 # i . pa k
+        : ~ i cb & 255 # i . pb k
         ? & >= ca 65 <= ca 90 { = ca + ca 32 } {}
         ? & >= cb 65 <= cb 90 { = cb + cb 32 } {}
         ? != ca cb { ^ F } {}
@@ -625,33 +620,34 @@ $ `stdlib/ext/http_response.nu`
 //     need persistent connections must speak 1.1.
 //   * HTTP/1.1 + bare `Connection: close` value → close.
 //   * HTTP/1.1 + missing or other Connection header → keep-alive.
+// Borrowed scan for `Connection: close` — walks the Header vec in
+// place (first name match wins, mirroring header_get) instead of
+// materialising an owned String copy of the value per request.
+@ __conn_header_says_close ( Vec Header ) hs → b {
+    : i n ( vec_len [Header] hs )
+    : *Header hdata ( vec_data [Header] hs )
+    : ~ i k 0
+    ~ < k n {
+        : Header h . hdata k
+        ? ( _header_name_eq_ci . h name `Connection` ) {
+            ^ ( __header_value_eq_ci . h value `close` )
+        } {}
+        = k + k 1
+    }
+    ^ F
+}
+
 @ __request_says_close HttpRequest req → b {
     : s ver ( string_data . req version )
     ? == 0 ( nurl_str_eq ver `HTTP/1.1` ) { ^ T } {}
-    : ?String hv ( header_get . req headers `Connection` )
-    ?? hv {
-        T value → {
-            : b says_close ( __header_value_eq_ci value `close` )
-            ( string_free value )
-            ^ says_close
-        }
-        F empty → { ( string_free empty ) ^ F }
-    }
+    ^ ( __conn_header_says_close . req headers )
 }
 
 // Returns T if the response carries `Connection: close`. The handler
 // can opt this connection out of keep-alive by setting that header
 // explicitly.
 @ __response_says_close HttpResponse r → b {
-    : ?String hv ( header_get . r headers `Connection` )
-    ?? hv {
-        T value → {
-            : b says_close ( __header_value_eq_ci value `close` )
-            ( string_free value )
-            ^ says_close
-        }
-        F empty → { ( string_free empty ) ^ F }
-    }
+    ^ ( __conn_header_says_close . r headers )
 }
 
 // ── server_run_once ──────────────────────────────────────────────────
@@ -757,6 +753,13 @@ $ `stdlib/ext/http_response.nu`
     // visible to the next _read_request_head call without re-reading
     // from the socket.
     : ( Vec u ) carry ( vec_with_cap [u] 4096 )
+    // Pre-allocated panic fallback response, hoisted OUT of the request
+    // loop: on the success path the handler's response replaces it and
+    // it survives untouched into the next iteration, so a keep-alive
+    // connection builds it once instead of once per request. It is
+    // rebuilt below only after a panic (or panic+timeout) actually
+    // consumed it — a cold path — and freed at connection end.
+    : ~ HttpResponse panic_resp ( response_text 500 `internal server error\n` )
     : ~ b done F
     : ~ i n_served 0
     ~ ! done {
@@ -795,17 +798,12 @@ $ `stdlib/ext/http_response.nu`
                         : ( @ HttpResponse HttpRequest ) f . s handler
                         // Wrap the handler in `recover` so a panic inside
                         // the handler doesn't kill the worker thread. On
-                        // panic the default `resp` (500) flows out to the
-                        // client; the captured message is logged to stderr.
-                        // Owned allocations inside the handler that didn't
-                        // run their auto-drop leak — see
-                        // stdlib/std/panic.nu's header for the cost model.
-                        //
-                        // `panic_resp` keeps a handle on the pre-allocated
-                        // 500 so it can be freed once the handler replaces
-                        // `resp` — without it the default leaked (headers
-                        // Vec + body Vec + strings) on EVERY successful
-                        // request.
+                        // panic the connection-level `panic_resp` (500)
+                        // flows out to the client; the captured message is
+                        // logged to stderr. Owned allocations inside the
+                        // handler that didn't run their auto-drop leak —
+                        // see stdlib/std/panic.nu's header for the cost
+                        // model.
                         //
                         // Replacement is detected by comparing the body-Vec
                         // DATA pointers, not via a captured flag: closures
@@ -816,8 +814,9 @@ $ `stdlib/ext/http_response.nu`
                         // share a body allocation, so pointer inequality
                         // is exact; and if `= resp` ever failed to
                         // propagate, the compare degrades to "not
-                        // replaced" — a leak, never a use-after-free.
-                        : HttpResponse panic_resp ( response_text 500 `internal server error\n` )
+                        // replaced" — treated as a panic, so `panic_resp`
+                        // is written out and rebuilt: never a double free
+                        // or use-after-free.
                         : ~ HttpResponse resp panic_resp
                         : !v PanicInfo pr ( recover \ → v { = resp ( f req ) } )
                         ?? pr {
@@ -827,8 +826,7 @@ $ `stdlib/ext/http_response.nu`
                                 ( panic_info_free p )
                             }
                         }
-                        ? != # i ( vec_data [u] . resp body ) # i ( vec_data [u] . panic_resp body )
-                        { ( http_response_free panic_resp ) } {}
+                        : b replaced != # i ( vec_data [u] . resp body ) # i ( vec_data [u] . panic_resp body )
                         // Per-request total timeout enforcement: free the
                         // handler's response and substitute 504 if we blew
                         // the budget. `should_close` forces `Connection:
@@ -850,6 +848,10 @@ $ `stdlib/ext/http_response.nu`
                         : b should_close | | | req_close resp_close at_cap timed_out
                         : !v NetErr wr ( __write_response conn final_resp should_close )
                         ( request_free req )
+                        // A panic (or panic+timeout) consumed the
+                        // connection-level fallback — rebuild it. Cold
+                        // path: never taken on a successful request.
+                        ? ! replaced { = panic_resp ( response_text 500 `internal server error\n` ) } {}
                         ?? wr {
                             T _ → {
                                 ? should_close { = done T } {}
@@ -888,6 +890,7 @@ $ `stdlib/ext/http_response.nu`
             }
         }
     }
+    ( http_response_free panic_resp )
     ( vec_free [u] carry )
 }
 

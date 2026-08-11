@@ -111,7 +111,7 @@ $ `stdlib/ext/json.nu`
     : ~ b found F
     ~ & ! found < k n {
         : Header h . hdata k
-        ? ( __header_name_eq_ci . h name name ) {
+        ? ( _header_name_eq_ci . h name name ) {
             ( header_free h )
             ( vec_set [Header] . r headers k ( header_new name value ) )
             = found T
@@ -209,11 +209,26 @@ $ `stdlib/ext/json.nu`
 // lossless for any well-formed header.
 @ __push_header_no_crlf ( Vec u ) out s str → v {
     : i n ( nurl_str_len str )
+    : *u p # *u str
+    // Fast path — no CR/LF present (every well-formed header): one
+    // scan + one memcpy, instead of a per-byte push (which re-checked
+    // capacity per byte) driven by nurl_str_get (which re-ran strlen
+    // per call — O(n²) on the header string).
     : ~ i k 0
-    ~ < k n {
-        : i c & 255 ( nurl_str_get str k )
-        ? | == c 13 == c 10 {} { ( vec_push [u] out # u c ) }
-        = k + k 1
+    : ~ b clean T
+    ~ & clean < k n {
+        : i c & 255 # i . p k
+        ? | == c 13 == c 10 { = clean F } { = k + k 1 }
+    }
+    ? clean {
+        ( bytes_extend_raw out str n )
+    } {
+        = k 0
+        ~ < k n {
+            : i c & 255 # i . p k
+            ? | == c 13 == c 10 {} { ( vec_push [u] out # u c ) }
+            = k + k 1
+        }
     }
 }
 
@@ -269,7 +284,7 @@ $ `stdlib/ext/json.nu`
     : ~ i k 0
     ~ < k n {
         : Header h . hdata k
-        ? ( __header_name_eq_ci . h name name ) { ^ T } {}
+        ? ( _header_name_eq_ci . h name name ) { ^ T } {}
         = k + k 1
     }
     ^ F
@@ -278,14 +293,16 @@ $ `stdlib/ext/json.nu`
 // Case-insensitive ASCII compare between an owned String and a
 // NUL-terminated raw `s`. Mirrors `__string_eq_ci` in http_request.nu;
 // kept inline here so this module doesn't depend on http_request.
-@ __header_name_eq_ci String name s raw → b {
+@ _header_name_eq_ci String name s raw → b {
     : i la ( string_len name )
     : i lb ( nurl_str_len raw )
     ? != la lb { ^ F } {}
+    : *u pa # *u ( string_data name )
+    : *u pb # *u raw
     : ~ i k 0
     ~ < k la {
-        : ~ i ca ( string_get name k )
-        : ~ i cb ( nurl_str_get raw k )
+        : ~ i ca & 255 # i . pa k
+        : ~ i cb & 255 # i . pb k
         ? & >= ca 65 <= ca 90 { = ca + ca 32 } {}
         ? & >= cb 65 <= cb 90 { = cb + cb 32 } {}
         ? != ca cb { ^ F } {}
