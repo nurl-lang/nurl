@@ -10,6 +10,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A missing `}` cascade now leads with the real cause, and the
+  no-generic error carries a full location.** A function declaration
+  swallowed into the previous body by a missing `}` parsed as a
+  struct-literal opener and died with "expected '{' but found 'b'" —
+  blaming a missing operand on the wrong line entirely (263 of the
+  probe's drop-close-brace mutants cascaded from that misdiagnosis).
+  An `@ name …` statement whose tail reads like a function header (a
+  `→` before any `{`) now says exactly that: declarations do not nest,
+  the `}` above never closed the previous function. And the "call to
+  generic function … but no generic of that name" error gained its
+  column (`file:line:col: error:` like every other diagnostic).
+
 - **A surplus operand spilling into a statement-form arm's tail is now
   a diagnostic, not a silent no-op.** `= fails + fails 1 1` inside a
   `? … { }` statement parsed as `= fails + fails 1` plus a bare

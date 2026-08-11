@@ -1,0 +1,6 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_decl_inside_body.nu:13:17: error: this '@ name …' line reads like a function DECLARATION (a '→' follows before any '{'), but it sits inside a function body, where '@' begins a struct/enum literal. Declarations do not nest: the '}' above this line never closed the previous function — add it (nurlfmt's re-indent shows where the nesting runs away).
+        @ inner b flag s name → v {
+                ^
+error: aborting due to 1 previous error
