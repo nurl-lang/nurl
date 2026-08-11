@@ -94,8 +94,9 @@ def scan_sites(path):
             "emitter": m.group(1),
             "line": src.count("\n", 0, m.start()) + 1,
             "text": norm(" ".join(lits)),
-            "fingerprint": fingerprint(lits),
+            "candidates": candidates(lits),
         })
+    assign_fingerprints(sites)
     return sites
 
 
@@ -103,16 +104,36 @@ def norm(s):
     return re.sub(r"\s+", " ", s).strip()
 
 
-def fingerprint(lits):
-    """The longest literal run in a message — what to grep stderr for.
+def candidates(lits):
+    """Every literal at a site long enough to identify it, longest first."""
+    return [c for c in sorted((norm(l) for l in lits), key=len, reverse=True)
+            if len(c) >= MIN_FINGERPRINT]
 
-    None when every fragment is short or the whole message arrives in a
-    variable: those sites are unmatchable by text and are reported
-    separately rather than counted as uncovered, because a false "never
-    fired" is worse than an honest gap in the instrument.
+
+def fingerprint(lits):
+    """Back-compat single-site pick: the longest usable literal."""
+    return next(iter(candidates(lits)), None)
+
+
+def assign_fingerprints(sites):
+    """Choose each site's fingerprint to DISCRIMINATE, not merely to be long.
+
+    Picking the longest literal is the obvious rule and the wrong one:
+    the longest run is usually the shared explainer tail two sibling
+    messages both end with, while the sentence that differs — the one
+    that actually says which construct was rejected — is shorter and got
+    discarded. Nine sites read as indistinguishable for that reason
+    alone, which is the instrument's fault and not the compiler's.
+
+    So: prefer a literal no other site carries, and fall back to the
+    longest only when every candidate is shared. What remains ambiguous
+    after this really is duplicated text.
     """
-    cands = sorted((norm(l) for l in lits), key=len, reverse=True)
-    return next((c for c in cands if len(c) >= MIN_FINGERPRINT), None)
+    seen = Counter(c for s in sites for c in s["candidates"])
+    for s in sites:
+        uniq = [c for c in s["candidates"] if seen[c] == 1]
+        s["fingerprint"] = (uniq[0] if uniq
+                            else (s["candidates"][0] if s["candidates"] else None))
 
 
 def site_key(site):

@@ -3,14 +3,15 @@
 265709a49431  argument to ' ' has enum type ' ' but the parameter is declared enum ' ' — two enums are distinct no
 3cc2e514ea86  inout field argument to ' ' must be '. <binding> <field>' naming a plain struct binding
 3ef3446b70cc  ' ' is a compiler-auto-dropped value; passing it to a 'sink' parameter is not yet supported - pass a
+4e42515f9201  and unknown — the operands of '|' could not both be resolved, which usually means an earlier error i
+4fd2d2fa785d  expected a parameter name after its type in this closure's parameter list, found . Parameters are wr
+6b1dab732ec2  and unknown — the operands of '&' could not both be resolved, which usually means an earlier error i
 737e4e2f64a2  an or-pattern's variants cannot bind payloads — the arms would disagree about what the name holds. L
 812c266928da  a supertrait ':' clause belongs on the trait DECLARATION ('% Name : Base { ... }'), not on an impl. 
 88d59a9c07fe  element of this slice literal has type ' ' but the slice's declared element type is ' ' — pointer-vs
 89608f397d6c  cannot mutate immutable parameter ' ' — parameters are immutable bindings. Copy it into a ': ~' loca
 8fa0e2858d9c  unexpected where a value was required. Every NURL operator has FIXED arity and no closing bracket, s
 a7b912fa462f  expected '→' after the match guard, found . A guarded arm is 'Variant payload ? guard → body' — the 
-ac66e0e045a5  and unknown — the operand types could not be resolved, which usually means an earlier error in this 
-ac66e0e045a5  and unknown — the operand types could not be resolved, which usually means an earlier error in this 
 af5a83d74d0f  cannot cast ' ' to an integer — '# i expr' converts numbers and pointers, not this type. There are n
 d82fbf1f85b6  an or-pattern cannot mix a literal constraint with variant names — write the literal case as its own
 e13f6093bfb5  expected '{' to open the closure body, found . A closure is '\\ params → ret { body }' — the body is
