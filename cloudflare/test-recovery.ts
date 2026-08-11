@@ -13,8 +13,17 @@ import { classifyError, decideAction, stampAction } from "./src/recovery.ts";
 const PROD_WEDGE =
   "Error proxying request to container: The container is not listening in the TCP address 10.0.0.1:8000";
 
+// The literal string observed fleet-wide during the v0.37.0 image rollout —
+// the DO proxied to an instance that no longer existed.
+const PROD_NOT_RUNNING =
+  "Error proxying request to container: The container is not running, consider calling start()";
+
 test("classifyError: the production wedge body → 'wedged'", () => {
   assert.equal(classifyError(PROD_WEDGE), "wedged");
+});
+
+test("classifyError: the production not-running body → 'wedged'", () => {
+  assert.equal(classifyError(PROD_NOT_RUNNING), "wedged");
 });
 
 test("classifyError: case-insensitive marker match", () => {

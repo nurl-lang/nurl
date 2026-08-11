@@ -6,6 +6,36 @@ are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **`json_parse` back to fastest in the benchmark table — the RFC 8259
+  control-byte scan was accidentally quadratic.** The conformance fix
+  in 0.36.0 (#817) added `__jp_span_ctrl`, a linear scan over the
+  escape-free fast path's span, and indexed it with `nurl_str_get` —
+  whose bounds check re-runs `strlen` on every call. The span is a
+  pointer into the *middle* of the document, so every one of those
+  strlens walked to the document's end: the "linear" scan was
+  O(span × rest-of-document), and the benchmark's `json_parse` went
+  from fastest of the five languages (8.8 ms) to slowest of the
+  compiled three (42 ms). The scan now reads through a raw pointer,
+  the way the accessor's own documentation says every parser loop
+  must. Conformance is untouched — the same tests pass — and the row
+  is NURL's again.
+
+- **Playground: the "container is not running" rollout window no longer
+  reaches users.** During the v0.37.0 image rollout play.nurl-lang.org
+  served `Error proxying request to container: The container is not
+  running, consider calling start()` — the Durable Object proxied to an
+  instance that no longer existed, and the Worker's recovery policy,
+  which knows the *not listening* wedge and the transient restart
+  strings, did not know this one, so it passed through as a 500 instead
+  of triggering a teardown and cold-start retry. The string now
+  classifies as wedged: destroy clears the stale instance state and the
+  replay lands on a fresh container. Covered by `test:recovery` with
+  the literal production body.
+
 ## [0.37.0] — 2026-08-11
 
 ### Added
