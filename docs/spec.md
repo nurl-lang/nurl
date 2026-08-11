@@ -355,10 +355,12 @@ function — the float/pointer/struct dual of the argument check; float
 value into a scalar field, or more field values than the struct declares
 — and **slice-literal elements** (`[ i | 1 2.5 ]` is rejected; widths
 coerce, float↔int and pointer↔scalar never do). Omitting trailing
-struct-literal fields stays legal (they zero-initialise), integer width
-/ signedness narrowing into sized or unsigned fields is a legal
-coercion, and an integer into a pointer-typed field remains the `@ P
-{ 0 }` null idiom.
+struct-literal fields stays legal (they zero-initialise), and integer
+width / signedness narrowing into sized or unsigned fields is a legal
+coercion. An integer never converts into a pointer type implicitly —
+not into a field, a binding, an assignment, or a return value; the
+explicit cast `# *T expr` converts intentionally, and `# *T 0` is the
+null pointer.
 
 A **condition** (`?` / `~`) must be `b` or an integer (tested non-zero).
 A float, pointer/string, enum, or aggregate condition is rejected with

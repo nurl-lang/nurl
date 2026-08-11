@@ -6,6 +6,58 @@ are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **Every value a function hands back is now type-checked — the
+  implicit fall-off tail and closure tails included, and the
+  integer→pointer hole is closed at all four value positions.** A
+  corpus-wide mutation probe (one realistic mistake per program, 5331
+  mutants) found 401 broken programs that nurlc accepted (rc 0) and
+  only clang/the LLVM verifier rejected — three build stages later,
+  with a .ll line number and no source location. 390 of them were one
+  hole: an integer value where a pointer/string type is declared
+  (`^ n` from a `→ s` fn emitted `ret i64 %n` out of a `define i8*`).
+  The old carve-outs for a "null idiom" (`^ 0`, `: *T p 0`, `@ P { 0 }`)
+  protected IR that was itself invalid — `store i64* 0` /
+  `insertvalue %P …, i64 0` never linked, so no working program used
+  them. Implicit integer→pointer conversion is now rejected at return,
+  binding init, assignment, and struct-literal fields, each with the
+  cure spelled out (`# *T expr`; the null pointer is `# *T 0`), and the
+  spec's null-idiom paragraph is rewritten to match reality.
+
+  The return-agreement battery (float/pointer/width/aggregate/nominal/
+  enum checks + the enum wrap) moved into one shared helper
+  (`ret_ty_agree`) that every return path runs — explicit `^`, the
+  function fall-off tail, and closure tails. Fall-off consequences:
+
+  * a value-returning body that falls off with **no value** used to
+    emit `ret i64 undef` — *valid* IR returning garbage; it is now the
+    "function body ends without a return value" error (with the
+    count-your-braces hint, since an extra `}` truncating a body is the
+    other way to arrive there);
+  * a **bare enum variant** or a **`??` whose value arms are all
+    variants of the declared enum** returned by fall-off used to emit
+    `ret %Color <i64 tag>` — invalid IR; both now wrap correctly
+    (gen_match learned to publish the join-variant proof gen_cond
+    already had);
+  * an exhaustive `??` whose arms all `^`-return now terminates its
+    end label (`unreachable`) even without a fallback edge, so the
+    two-way T/F result dispatch counts as a closed path;
+  * a tail call into a noreturn chain is exempt: `nurl_exit` /
+    `nurl_panic` seed a registry, functions whose bodies contain no
+    `^` and whose tails diverge are inferred noreturn (private-name
+    mangling respected), and a `~ T` loop with no `break` targeting it
+    counts as diverging — so `die`-style helpers and loop-only-return
+    functions (stdlib's Hoare partition) need no dead `^`.
+
+  `llvm_to_nurl` also learned to spell pointers back as NURL types
+  (`i64*` → `*i`), so the new messages name types the way the user
+  wrote them. Re-running the probe: 0 of the 488 wrong-return-type
+  mutants reach the linker; each dies with one diagnostic naming the
+  rule and the fix.
+
 ## [0.38.0] — 2026-08-11
 
 ### Fixed

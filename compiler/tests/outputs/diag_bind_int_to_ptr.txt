@@ -1,0 +1,4 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_bind_int_to_ptr.nu:8:5: error: value of type 'i64' cannot initialise / assign a binding of type 'i64*' — NURL has no implicit integer-to-pointer conversion; use a pointer-typed value, or cast an address intentionally with '# T expr' (the null pointer is '# T 0' for a pointer type T)
+error: aborting due to 1 previous error

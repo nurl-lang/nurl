@@ -1,0 +1,4 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_ret_int_to_ptr.nu:9:5: error: return value type 'i' does not match the declared return type 's' — NURL has no implicit integer-to-pointer conversion; return a value of the declared type, or cast an address intentionally with '# T expr' (the null pointer is '# T 0' for a pointer type T)
+error: aborting due to 1 previous error
