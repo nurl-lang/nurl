@@ -40,7 +40,7 @@ $ `stdlib/core/string.nu`
 }
 
 // lit/lit bound through a tracked binding, then used — the binding form.
-@ bind i dt → String {
+@ bind_form i dt → String {
     : ~ s pre `gpf_`
     ? == dt 2 { = pre `gpm_` } {}
     : String o ( string_from pre )
@@ -60,7 +60,7 @@ $ `stdlib/core/string.nu`
     ( pr ( lo 1 `aa` `bb` ) )
     ( pr ( ol 2 `aa` `bb` ) )
     ( pr ( ol 1 `aa` `bb` ) )
-    ( pr ( bind 2 ) )
-    ( pr ( bind 1 ) )
+    ( pr ( bind_form 2 ) )
+    ( pr ( bind_form 1 ) )
     ^ 0
 }
