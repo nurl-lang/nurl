@@ -47,6 +47,12 @@ AT_EOF_OK = re.compile(
     r"\b(unterminated|unclosed|end of (file|input)|reached EOF|missing '\}')",
     re.I)
 
+# A message that reports FINDING the closing delimiter is anchored on its
+# own subject, not on the token after it. `^ . s` at the end of a block
+# really does run out of source at the '}', and "found '}'" is the honest
+# answer — so the closing-delimiter rule must not fire on it.
+NAMES_CLOSER = re.compile(r"found '[)\]}]'")
+
 # `<path>:<line>:<col>: error|warning: <msg>` — the shape all four
 # emitters print. die_at has no column and is skipped: with no column
 # there is no caret to misplace.
@@ -96,7 +102,7 @@ def check(tests_dir, repo_root):
             text = source_line(src, a["line"])
             if text is None:
                 continue  # the diagnostic names a file the golden does not carry
-            if AT_EOF_OK.search(a["msg"]):
+            if AT_EOF_OK.search(a["msg"]) or NAMES_CLOSER.search(a["msg"]):
                 continue
             if CLOSERS_ONLY.match(text) and text.strip():
                 a["text"] = text.strip()

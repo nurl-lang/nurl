@@ -3179,7 +3179,7 @@
         // wrap-in-closure-literal cure.
         ? & & & == 0 ( nurl_str_len ptr ) == 0 ( nurl_str_len glb ) == 0 ( nurl_sym_len2 syms name `__param` ) != 0 ( nurl_sym_len2 g_vis_syms name `__src_file` )
         { : s tail ( nurl_str_cat name ` args ) }' — but that is the rarer reading.` )
-            ( die lex ( nurl_str_cat4
+            ( die_stmt lex ( nurl_str_cat4
             `bare function name '` name
             `' used as a value. If you meant to CALL it, calls need parentheses: '( `
             ( nurl_str_cat3 name ` args )', never '` ( nurl_str_cat3 name ` args'. If you really wanted the function AS a value, a bare name does not auto-coerce to a closure — wrap it: '\ args → R { ( ` tail ) ) ) ) }
@@ -14270,7 +14270,11 @@
     ? & == ( nurl_lex_type lex ) TT_LBRACE & > ( nurl_str_len dt ) 1 == ( nurl_str_get dt 0 ) 37
     { : s tname ( nurl_str_slice dt 1 - ( nurl_str_len dt ) 1 )
         : s is_enum ( nurl_sym_get2 syms tname `__variants` )
-        : s is_struct ( nurl_sym_get syms ( nurl_str_cat3 tname `__idx_1` `__type` ) )
+        // Field INDEX 0, not 1. Reading the second field's key meant
+        // every single-field struct failed the "is this a struct" test
+        // and slipped through silently — and a single-field struct is
+        // the newtype wrapper, one of the commonest shapes there is.
+        : s is_struct ( nurl_sym_get syms ( nurl_str_cat3 tname `__idx_0` `__type` ) )
         ? | != 0 ( nurl_str_len is_enum ) != 0 ( nurl_str_len is_struct )
         { ( die lex ( nurl_str_cat3
             `'#' is the cast operator; struct/enum literals use '@'. Write '@ `

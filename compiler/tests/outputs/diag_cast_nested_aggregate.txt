@@ -1,0 +1,6 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_cast_nested_aggregate.nu:9:5: error: cannot cast '%Outer' to an integer: its first field is itself an aggregate, so there is no scalar to take. Convert the inner field explicitly.
+    ^ n
+    ^
+error: aborting due to 1 previous error
