@@ -1,0 +1,10 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+param-cb 7
+gen-i 1
+gen-i 2
+gen-s aa
+binding-cb 9
+impl-drop 8
