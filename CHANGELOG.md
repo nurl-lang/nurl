@@ -6,6 +6,114 @@ are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.38.0] — 2026-08-11
+
+### Fixed
+
+- **A local callable now shadows a same-named trait/impl method at call
+  sites — `nurlpkg install nurllama` works again.** On v0.37.1 the
+  install died inside the *stdlib*:
+
+  ```
+  <generic vec_free_with__String from stdlib/std/path.nu:352>: error:
+  method 'drop' has no impl for receiver type 'String'
+  ```
+
+  `vec_free_with [A] v ( @ v A ) drop` calls its callback **parameter**
+  as `( drop . buf i )`. Function-typed parameters resolve via the
+  `__param` marker, not `__ptr` — and impl-method dispatch only excused
+  `__ptr`/`__arity`/`__ffi` names. So the moment any file with a
+  `% Drop <T>` impl entered the import closure (nurllama 0.16.0's new
+  `history.nu` imports `ext/sqlite.nu`, which impls `% Drop Database`),
+  every call through a parameter named `drop` was treated as trait
+  dispatch. Worse than the error: a receiver type that *did* have an
+  impl would have silently called the impl instead of the parameter.
+  The callee is now checked for a local callable (closure-struct or
+  fn-pointer typed `__ptr`/`__param` binding) before impl dispatch,
+  exactly as locals already shadow the bare-`@fn` arity check; scalar
+  and named-struct locals sharing a method's name still dispatch.
+  Gate: a differential sweep of all 1437 tracked `.nu` files —
+  byte-identical IR/stderr/exit everywhere except the two files that
+  flip from compile-error to compiling (`nurllama/history.nu`,
+  `registry/db.nu` — the same sqlite + path combination). (#868)
+
+- **A string-literal `?`-arm used directly as a call argument no longer
+  leaks the picked literal per evaluation.** `( f ? cond `a` `b` )`
+  materialised the chosen literal as an owned heap temporary that no
+  drop was ever emitted for — ~32 bytes *per evaluation*, which a
+  4-billion-parameter LoRA finetune turned into ~3.6 MB/step of host
+  leak (the per-launch kernel-name prefix had exactly this shape) and
+  the kernel OOM killer ended two 5-hour training runs. Literal/literal
+  joins are now uniformly borrowed with zero allocations; literal/owned
+  mixes are repaired at the join block (copy the picked pointer, free
+  the owned original through a null-select); owned/literal keeps a
+  correctly-gated eager copy. Covered by a test running every
+  ownedness mix through both paths. (#865)
+
+- **`server_run_async` no longer leaks ~192 bytes per accepted
+  connection.** The accept loop spawns a fire-and-forget closure per
+  connection, and `spawn` BORROWS its env — there was no correct place
+  to free it (LSan: 101 allocations for 101 connections). The loop now
+  uses the new `spawn_owned` (below). (#867)
+
+- **The whole fiber `spawn` family is now `noinline` — closing a
+  TLS-under-LTO miscompile window.** Adding a new spawn entry point
+  made the async HTTP test hang *deterministically*: LTO inlined it
+  into NURL code and mislowered the `__thread` scheduler-worker access
+  (the exact class the existing `noinline` on `nurl_fiber_current` /
+  `yield` / `park` documents), so the spawned fiber was enqueued onto a
+  queue no worker drains. The existing entry points dodged this only by
+  the optimizer's inlining choices. (#867)
+
+### Added
+
+- **`spawn_owned` — a fire-and-forget fiber that owns its closure
+  env.** `( spawn_owned \ → v { … } )` transfers the env to the fiber;
+  the runtime frees it right after the body returns. Use it for
+  per-item inline closures nothing else holds a handle to (one fiber
+  per accepted connection); plain `spawn` still borrows, which is right
+  for a long-lived closure the spawner frees later. (#867)
+
+### Changed
+
+- **HTTP serving got measurably faster at the root, not the margins.**
+  Profiled under load (perf + `strace -c` + per-thread CPU accounting)
+  and removed every per-request cost that was structural rather than
+  essential: the keep-alive loop built **and freed a full fallback-500
+  response on every request** (now hoisted to the connection, rebuilt
+  only after a panic actually consumed it); the Connection-header
+  checks allocated an owned String copy per request even on a miss (now
+  an allocation-free in-place scan); carry-buffer compaction was three
+  per-byte copies (now one `memmove`); header serialisation indexed
+  with `nurl_str_get` — strlen per byte, O(n²) — and pushed
+  byte-at-a-time (now one scan + one `memcpy`). The async net wrappers
+  toggled `O_NONBLOCK` per operation — **4 fcntl syscalls per request,
+  46 % of the async server's syscall time** — now memoized on the
+  handle; an HTTP request is served in 2 syscalls. (#866)
+
+- **The async scheduler stopped paying for work it wasn't doing.**
+  Under an HTTP load the work-stealing path ran **26 steal attempts per
+  request with a 0.008 % hit rate** — ~24 futile victim-lock
+  acquisitions per request; each worker now keeps an exact queue length
+  read lock-free by the probe, and stealing skips empty/singleton
+  victims without touching their lock. Every reactor park also
+  calloc'd/free'd its wait entry across threads; entries now recycle
+  through a freelist under the existing lock. Async hello server:
+  **44.4 → 38.4 µs CPU/request, C=200 throughput 237k → 261k rps**.
+  (#867)
+
+- **`bench/http_server.nu` now serves through the `packages/http`
+  HttpApp facade** — the surface a real NURL service deploys — and
+  `bench/HTTP_RESULTS.md` is refreshed (the old table was months
+  stale). Fresh medians (i7-5930K, oha, 3×10 s): **NURL 15.3k / 166k /
+  144k / 151k req/s at C=1/10/50/200 — ahead of Rust hyper at C=1 and
+  C=10** with p50 flat at 0.06 ms; the C≥50 gap is the blocking-pool
+  ceiling, and the async path's remaining reactor serialization is
+  recorded in the backlog with measurements. The packages/http facade
+  itself (0.3.2) dropped a recover layer that duplicated the stdlib
+  server's unconditional panic→500 guarantee — one throwaway
+  500-response build per request for zero added safety. (#866)
+
 ## [0.37.1] — 2026-08-11
 
 ### Fixed
@@ -11862,6 +11970,7 @@ releases are measured.
 * Dual license: MIT (LICENSE-MIT) or Apache-2.0 (LICENSE-APACHE).
 
 [Unreleased]: https://github.com/nurl-lang/nurl/compare/v0.37.1...HEAD
+[0.38.0]: https://github.com/nurl-lang/nurl/compare/v0.37.1...v0.38.0
 [0.37.1]: https://github.com/nurl-lang/nurl/compare/v0.37.0...v0.37.1
 [0.37.0]: https://github.com/nurl-lang/nurl/compare/v0.36.0...v0.37.0
 [0.36.0]: https://github.com/nurl-lang/nurl/compare/v0.35.1...v0.36.0

@@ -7,7 +7,7 @@ Anything marked done here has a regression test in
 [`compiler/tests/`](compiler/tests/) and is covered by the bootstrap fixed
 point.
 
-_Last reviewed: 2026-08-11 · Current release: **0.37.0** · Language: **Grammar
+_Last reviewed: 2026-08-11 · Current release: **0.38.0** · Language: **Grammar
 v2.4** ([`spec/grammar.ebnf`](spec/grammar.ebnf))._
 
 ---
@@ -150,7 +150,10 @@ platform-specific shims.
   reverse proxy with binary-safe streaming. The stack has had a
   dedicated security-hardening pass (path-traversal, SSRF, request-smuggling,
   HTTP/2 CONTINUATION-flood + stream-accounting, and clean cross-thread
-  listener shutdown) with regression tests.
+  listener shutdown) with regression tests, and its serve path is
+  peer-benchmarked against Rust hyper and Node
+  ([`bench/HTTP_RESULTS.md`](bench/HTTP_RESULTS.md): ahead of hyper at
+  low concurrency, an HTTP request served in 2 syscalls).
 - **ext/data services** — `sqlite` (production-hardened), `mqtt` 5.0 client,
   `smtp` (mail submission). Postgres and Redis clients live in the registry
   packages `psql` and `redis` (pure NURL — no libpq, no hiredis).
