@@ -5,16 +5,24 @@
  * saying so matters, because mixing them yields either relocation
  * errors or silently wrong addresses (see the plan's B1 notes).
  *
- * The PVH note goes FIRST and is KEEP'd: it is how the hypervisor
- * finds the 32-bit entry point, it is referenced by nothing, and
- * --gc-sections would otherwise drop the one section that makes this
+ * The two handover headers go FIRST and are KEEP'd: they are how a
+ * loader finds the 32-bit entry point, they are referenced by nothing,
+ * and --gc-sections would otherwise drop the sections that make this
  * file bootable.
+ *
+ * The Multiboot2 header is first of the two because a bootloader
+ * scans only the first 32 KiB of the FILE for it and gives up
+ * quietly if it is not there — a placement that is a link-script
+ * detail here and an unbootable USB stick on the other end. The PVH
+ * note has no such rule (a hypervisor walks PT_NOTE) so it follows.
  */
 ENTRY(_pvh_start)
 
 SECTIONS
 {
     . = 1M;
+
+    .multiboot2 : { KEEP(*(.multiboot2)) }
 
     .note.Xen : { KEEP(*(.note.Xen)) }
 

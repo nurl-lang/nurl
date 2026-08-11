@@ -256,10 +256,17 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Install build deps
+        # The grub/xorriso/mtools half is what lets `baremetal_gate`
+        # package a hybrid BIOS+UEFI disk and boot it, rather than
+        # checking the Multiboot2 header and skipping the rest. Both
+        # module directories are named because a missing one produces a
+        # single-firmware image, which is a bug that only shows up on
+        # hardware the CI runner is not.
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
-            clang binutils qemu-system-x86 qemu-system-arm qemu-system-misc curl
+            clang binutils qemu-system-x86 qemu-system-arm qemu-system-misc curl \
+            grub-common grub-pc-bin grub-efi-amd64-bin xorriso mtools
 
       - name: Build the compiler
         run: ./build.sh --no-tests

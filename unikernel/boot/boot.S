@@ -4,13 +4,28 @@
  * Copyright (c) 2026 The NURL Project Developers
  * SPDX-License-Identifier: MIT OR Apache-2.0
  *
- * From the hypervisor's first instruction to `kmain`.
+ * From the loader's first instruction to `kmain`.
  *
- * PVH direct boot: QEMU (and Firecracker) load this ELF, read the
- * XEN_ELFNOTE_PHYS32_ENTRY note below, and jump to `_pvh_start` in
- * 32-bit protected mode with paging off, interrupts off, a flat GDT
- * already loaded, and %ebx holding the physical address of the
- * hvm_start_info block. No real mode, no bootloader, no BIOS.
+ * TWO ways in, and they arrive in almost the same machine state:
+ *
+ *   PVH direct boot — QEMU, Firecracker and cloud-hypervisor load this
+ *   ELF, read the XEN_ELFNOTE_PHYS32_ENTRY note below, and jump to
+ *   `_pvh_start` with %ebx holding the physical address of the
+ *   hvm_start_info block. No real mode, no bootloader, no BIOS.
+ *
+ *   Multiboot2 — GRUB reads the header below and jumps to
+ *   `_mb2_start` with %eax = 0x36d76289 and %ebx holding the physical
+ *   address of the multiboot information structure. This is the path
+ *   that boots REAL HARDWARE off a USB stick, under either a legacy
+ *   BIOS or UEFI, because a PVH note is something only a hypervisor
+ *   reads and a PC firmware needs a bootloader in between.
+ *
+ * Both enter in 32-bit protected mode with paging off, interrupts off
+ * and a flat GDT already loaded, which is why everything after the
+ * first six instructions is shared. The two handover blocks are
+ * different shapes; `mb2_to_start_info` in multiboot2.c converts one
+ * into the other so that `kmain` and everything below it never learns
+ * there was more than one way to get here.
  *
  * What has to happen before the first line of compiled NURL runs:
  *
@@ -28,7 +43,7 @@
  *      ABI promises anything using SSE.
  *   5. .bss cleared. The loader does not do it for us.
  *
- * The start_info pointer is saved before any of that, because %ebx is
+ * The handover pointer is saved before any of that, because %ebx is
  * not preserved across the transition and it is the only handle on the
  * memory map, the command line and the modules.
  *
@@ -51,8 +66,86 @@
     .align 4
     .long   _pvh_start
 
+/* ── the Multiboot2 header ────────────────────────────────────────
+ * A bootloader searches the first 32 KiB of the file for this, 8-byte
+ * aligned, so the link script places the section first. Three tags:
+ *
+ *   3  entry address — without it GRUB jumps to the ELF entry, which
+ *      is `_pvh_start`, which would read %ebx as an hvm_start_info
+ *      pointer and panic about a boot that was perfectly good.
+ *   4  console flags — bit 1 says this OS can drive an EGA text
+ *      console, so a BIOS boot is allowed to stay in text mode
+ *      instead of being handed a graphics framebuffer it did not ask
+ *      for. Bit 0 (require a console) is deliberately NOT set: a
+ *      serial-only machine is a machine this image still runs on.
+ *   5  framebuffer — width/height/depth all zero means "no
+ *      preference, you pick". This tag is what makes a UEFI boot
+ *      visible: UEFI has no VGA text memory at 0xB8000, so without a
+ *      framebuffer handed over there is nowhere on the screen to
+ *      write and the machine looks dead while running correctly.
+ *
+ * The checksum is the field that makes the header valid, and the
+ * assembler computes it here rather than it being a constant that
+ * silently rots the next time a tag is added. */
+    .section .multiboot2, "a", @progbits
+    .align 8
+mb2_header:
+    .long   0xE85250D6                        /* magic                  */
+    .long   0                                 /* architecture: i386     */
+    .long   mb2_header_end - mb2_header       /* header length          */
+    .long   -(0xE85250D6 + 0 + (mb2_header_end - mb2_header))
+
+    .align 8                                  /* entry address tag      */
+    .short  3
+    .short  0
+    .long   12
+    .long   _mb2_start
+
+    .align 8                                  /* console flags tag      */
+    .short  4
+    .short  0
+    .long   12
+    .long   2                                 /* OS has EGA text support */
+
+    .align 8                                  /* framebuffer tag        */
+    .short  5
+    .short  0
+    .long   20
+    .long   0                                 /* width  — you pick      */
+    .long   0                                 /* height                 */
+    .long   0                                 /* depth                  */
+
+    .align 8                                  /* end tag                */
+    .short  0
+    .short  0
+    .long   8
+mb2_header_end:
+
     .section .text.boot, "ax", @progbits
     .code32
+
+/* ── Multiboot2 entry ─────────────────────────────────────────────
+ * %eax = 0x36d76289, %ebx = the multiboot information structure.
+ *
+ * The magic is SAVED here rather than checked: a wrong one deserves a
+ * sentence on the console saying so, and there is no console until C
+ * runs. %ebp holds it across the .bss clear because the clear uses
+ * eax/ecx/edi and %ebp is the one register in reach that it does not
+ * touch — the same reason the PVH path keeps its pointer in %ebx. */
+    .globl _mb2_start
+_mb2_start:
+    cli
+    cld
+    movl    %eax, %ebp
+    movl    $__bss_start, %edi
+    movl    $__bss_end, %ecx
+    subl    %edi, %ecx
+    xorl    %eax, %eax
+    rep stosb
+    movl    %ebp, boot_mb2_magic
+    movl    %ebx, boot_mbi
+    jmp     boot_paging
+
     .globl _pvh_start
 _pvh_start:
     cli
@@ -75,6 +168,11 @@ _pvh_start:
     rep stosb
 
     movl    %ebx, boot_start_info   /* now it has somewhere to live */
+
+    /* Everything from here down is shared with the Multiboot2 entry:
+     * the machine state the two loaders hand over is the same, only
+     * the block they point at differs. */
+boot_paging:
 
     /* ── page tables ──────────────────────────────────────────────
      * PML4[0] -> PDPT, PDPT[0..3] -> PD0..PD3, each PD entry a 2 MiB
@@ -156,8 +254,20 @@ long_entry:
     andq    $~15, %rsp
     xorl    %ebp, %ebp
 
-    movl    boot_start_info(%rip), %edi   /* zero-extends to rdi */
-    call    kmain
+    /* ── which loader was it? ─────────────────────────────────────
+     * A Multiboot2 boot has its magic banked; convert its information
+     * structure into the hvm_start_info shape the rest of the guest
+     * already speaks, so that exactly one file knows there are two
+     * boot protocols. A PVH boot passes its block straight through. */
+    movl    boot_mb2_magic(%rip), %eax
+    cmpl    $0x36D76289, %eax
+    jne     4f
+    movl    boot_mbi(%rip), %edi          /* zero-extends to rdi */
+    call    mb2_to_start_info
+    movq    %rax, %rdi
+    jmp     5f
+4:  movl    boot_start_info(%rip), %edi   /* zero-extends to rdi */
+5:  call    kmain
 
     /* kmain does not return. If it somehow does, stop the CPU rather
      * than execute whatever follows in memory. */
@@ -251,6 +361,8 @@ pdpt:   .skip 4096
 pd0:    .skip 4096 * 4
     .align 8
 boot_start_info: .skip 8
+boot_mbi:        .skip 8
+boot_mb2_magic:  .skip 8
 
     /* The task-state segment exists for one field: IST1, the stack a
      * double fault and a page fault switch to. Without it, a fault

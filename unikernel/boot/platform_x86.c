@@ -13,18 +13,25 @@
  *
  * Five things a program needs and a machine has to provide:
  *
- *   write        an 8250 UART at 0x3F8. Reads answer 0 (EOF): there is
- *                no console input, and pretending otherwise would hang
- *                a reader forever instead of ending its loop.
+ *   write        an 8250 UART at 0x3F8, and — on a Multiboot2 boot,
+ *                i.e. real hardware — the screen as well (see con.c;
+ *                a laptop booted off a USB stick has no serial port
+ *                for anyone to be listening on). Reads answer 0 (EOF):
+ *                there is no console input, and pretending otherwise
+ *                would hang a reader forever instead of ending its
+ *                loop.
  *   memory       a bump allocator over the RAM the hypervisor reported.
  *                The upper bound is READ, never assumed — a guessed
  *                limit is a guest that corrupts itself on a machine
  *                with less RAM than the guess.
- *   time         the TSC, with its frequency from the hypervisor. If
- *                nobody says what the frequency is, asking for the
- *                time PANICS rather than returning a made-up number;
- *                the plan's rule for entropy, applied to the clock for
- *                the same reason.
+ *   time         the TSC, with its frequency from whichever of four
+ *                sources can supply one: the hypervisor, the core
+ *                crystal, the command line, the CPU's nameplate, or —
+ *                on iron, where none of those exists — measured
+ *                against the PIT. If nothing can supply one, asking
+ *                for the time PANICS rather than returning a made-up
+ *                number; the plan's rule for entropy, applied to the
+ *                clock for the same reason.
  *   entropy      RDRAND, CPUID-gated. No source is a panic, never a
  *                fallback: this is where a "later TODO" becomes a
  *                weak key nobody notices.
@@ -32,6 +39,9 @@
  *                hypervisors can carry), then isa-debug-exit as a
  *                QEMU-side cross-check, then triple fault.
  */
+
+#include "con.h"
+#include "mb2.h"
 
 /* Forward declarations for the POSIX-named half, which the `nl_*`
  * wrappers below reach before their definitions. */
@@ -110,25 +120,47 @@ static void uart_init(void) {
     outb(COM1 + 4, 0x03);      /* DTR | RTS                            */
 }
 
-static void uart_putc(char c) {
-    /* Line feeds become CRLF: a serial terminal does not do it for us,
-     * and the goldens this boot is checked against are line-oriented. */
-    if (c == '\n') {
-        while (!(inb(COM1 + 5) & 0x20)) { }
-        outb(COM1, '\r');
-    }
-    while (!(inb(COM1 + 5) & 0x20)) { }
+/* Wait for the transmit holding register to empty, but not for ever.
+ *
+ * Under a hypervisor there is always a UART and it is always ready. On
+ * real hardware there may be no UART at all, and an absent port on a
+ * PC bus usually reads back 0xFF — which has bit 5 set, so the loop
+ * exits and the write goes nowhere, which is correct. "Usually" is the
+ * problem: a machine whose chipset answers 0x00 instead would hang
+ * here, in the console, before printing the thing that would have said
+ * why. A bound turns that from a dead machine into a slow one. */
+#define UART_SPIN 100000
+
+static void uart_putc_raw(char c) {
+    unsigned n = UART_SPIN;
+    while (n-- && !(inb(COM1 + 5) & 0x20)) { }
     outb(COM1, (unsigned char)c);
 }
 
-static void uart_puts(const char *s) { while (*s) uart_putc(*s++); }
+/* Everything the guest prints goes through here: `write`, the panic
+ * path and the fault report alike. Both sinks get every byte, because
+ * which of them a human is actually looking at is a property of the
+ * machine — a hypervisor holds the serial line, a laptop booted off a
+ * USB stick has only the screen — and the guest cannot tell. */
+static void pf_putc(char c) {
+    /* Line feeds become CRLF: a serial terminal does not do it for us,
+     * and the goldens this boot is checked against are line-oriented.
+     * The screen wants no such thing — con_putc reads '\n' as "next
+     * line, first column" — so the carriage return is the serial
+     * port's alone. */
+    if (c == '\n') uart_putc_raw('\r');
+    uart_putc_raw(c);
+    con_putc(c);
+}
+
+static void uart_puts(const char *s) { while (*s) pf_putc(*s++); }
 
 static void uart_putu(unsigned long v) {
     char b[24];
     int n = 0;
-    if (!v) { uart_putc('0'); return; }
+    if (!v) { pf_putc('0'); return; }
     while (v) { b[n++] = (char)('0' + (v % 10)); v /= 10; }
-    while (n) uart_putc(b[--n]);
+    while (n) pf_putc(b[--n]);
 }
 
 static void uart_puthex(u64 v) {
@@ -136,9 +168,9 @@ static void uart_puthex(u64 v) {
     char b[16];
     int n = 0;
     uart_puts("0x");
-    if (!v) { uart_putc('0'); return; }
+    if (!v) { pf_putc('0'); return; }
     while (v) { b[n++] = digits[v & 15]; v >>= 4; }
-    while (n) uart_putc(b[--n]);
+    while (n) pf_putc(b[--n]);
 }
 
 /* ── panic ───────────────────────────────────────────────────────── */
@@ -148,7 +180,7 @@ static void pf_shutdown(int code);
 void pf_panic(const char *msg) {
     uart_puts("nurl: ");
     uart_puts(msg);
-    uart_putc('\n');
+    pf_putc('\n');
     pf_shutdown(127);
     for (;;) __asm__ __volatile__("cli; hlt");
 }
@@ -256,7 +288,7 @@ void pf_exception(struct fault_frame *f, u64 cr2) {
     uart_puts("\n  rsi="); uart_puthex(f->rsi);
     uart_puts(" rdi=");    uart_puthex(f->rdi);
     uart_puts(" rbp=");    uart_puthex(f->rbp);
-    uart_putc('\n');
+    pf_putc('\n');
     /* 126, not 127: a fault is not the same event as a panic, and a
      * harness that can tell them apart can say which one it saw. */
     pf_shutdown(126);
@@ -338,6 +370,8 @@ static u32  pt_pool_used;
 /* The largest usable region at or above the image. Anything below the
  * image is where the image is, and a second region we could stitch on
  * buys nothing until there is a real allocator to stitch it into. */
+static u64 ram_total;             /* every usable region, added up */
+
 static void mem_init(const struct hvm_start_info *si) {
     u64 best_base = 0, best_len = 0;
     u64 img = (u64)(unsigned long)__heap_start;
@@ -348,6 +382,12 @@ static void mem_init(const struct hvm_start_info *si) {
         for (u32 i = 0; i < si->memmap_entries; i++) {
             u64 base = e[i].addr, len = e[i].size;
             if (e[i].type != 1) continue;
+            /* Counted before the "is it above the image" filter below:
+             * this is the machine's RAM as the firmware described it,
+             * which is the number a person compares against the sticker
+             * on the memory module. What the allocator can reach is a
+             * smaller and separate question. */
+            ram_total += len;
             if (base + len <= img) continue;      /* entirely below us */
             if (base < img) { len -= (img - base); base = img; }
             if (len > best_len) { best_base = base; best_len = len; }
@@ -540,6 +580,12 @@ static void pf_guard_null_page(const void *si) {
 /* ── time ────────────────────────────────────────────────────────── */
 
 static u64 tsc_khz;            /* 0 = nobody told us */
+/* WHERE that number came from. Printed rather than kept private
+ * because a clock is exactly as trustworthy as its source, and on
+ * this machine there are four of them with very different
+ * standing — a hypervisor stating a fact, a CPU stating a ratio, a
+ * nameplate rounded to the megahertz, and a measurement. */
+static const char *tsc_source = "nowhere — the clock does not work";
 static u64 tsc_base;
 static u64 wall_base_sec;      /* CLOCK_REALTIME epoch at boot, 0 = unset */
 
@@ -593,6 +639,62 @@ static inline void cpuid(u32 leaf, u32 *a, u32 *b, u32 *c, u32 *d) {
                          : "a"(leaf), "c"(0));
 }
 
+/* ── the TSC against the PIT ─────────────────────────────────────
+ *
+ * Channel 2 is the one of the three an operating system may use as a
+ * stopwatch: channels 0 and 1 belong to the interrupt controller and
+ * to DMA refresh, while channel 2 drives the PC speaker and therefore
+ * has both a gate software owns (port 0x61 bit 0) and an output
+ * software can read (bit 5). No interrupt, no IDT entry, no wiring —
+ * arm it, watch the bit, count TSC ticks in between.
+ *
+ * Bit 1 of port 0x61 is the speaker itself and is left CLEAR. It is
+ * one bit away from a calibration routine that beeps.
+ *
+ * 10 ms is the window: long enough that the few hundred cycles of
+ * `inb` overhead round away, short enough not to be felt at boot.
+ * Returns 0 — "still nobody knows" — if the timer never fires, which
+ * is what a machine without a PIT looks like, and leaves the caller's
+ * refusal to invent a frequency intact.
+ */
+#define PIT_HZ    1193182u
+#define PIT_TICKS (PIT_HZ / 100u)      /* 10 ms */
+
+static u64 pit_calibrate_khz(void) {
+    unsigned char saved = inb(0x61);
+
+    /* Gate on, speaker off. */
+    outb(0x61, (unsigned char)((saved & ~0x02) | 0x01));
+    /* Channel 2, access lobyte+hibyte, mode 0 (interrupt on terminal
+     * count — OUT goes low now and high when the count runs out, which
+     * is the edge this waits for), binary. */
+    outb(0x43, 0xB0);
+    outb(0x42, (unsigned char)(PIT_TICKS & 0xFF));
+    outb(0x42, (unsigned char)(PIT_TICKS >> 8));
+
+    /* Restart the count by taking the gate down and back up, so the
+     * window begins where the TSC is read and not where the divisor
+     * happened to be written. */
+    outb(0x61, (unsigned char)(inb(0x61) & ~0x01));
+    outb(0x61, (unsigned char)(inb(0x61) | 0x01));
+
+    u64 t0 = rdtsc();
+    /* The bound is generous — a slow machine reading a port takes
+     * microseconds — and exists so that a chipset with no PIT behind
+     * the ports produces an answer instead of a hang. */
+    for (unsigned spins = 0; !(inb(0x61) & 0x20); spins++)
+        if (spins > 20000000u) { outb(0x61, saved); return 0; }
+    u64 t1 = rdtsc();
+
+    outb(0x61, saved);
+
+    u64 ticks = t1 - t0;                    /* over 10 ms            */
+    u64 khz   = ticks / 10;                 /* ticks per millisecond */
+    /* A plausibility floor, not a guess: anything under 10 MHz means
+     * the gate never moved and this measured its own loop. */
+    return khz > 10000 ? khz : 0;
+}
+
 static void time_init(void) {
     u32 a, b, c, d;
 
@@ -603,7 +705,7 @@ static void time_init(void) {
     cpuid(0x40000000, &a, &b, &c, &d);
     if (a >= 0x40000010) {
         cpuid(0x40000010, &a, &b, &c, &d);
-        if (a) tsc_khz = a;
+        if (a) { tsc_khz = a; tsc_source = "the hypervisor (CPUID 0x40000010)"; }
     }
     if (!tsc_khz) {
         /* Leaf 0x15: core crystal frequency and the TSC/crystal ratio. */
@@ -612,7 +714,10 @@ static void time_init(void) {
             u32 den, num, crystal, unused;
             cpuid(0x15, &den, &num, &crystal, &unused);
             if (den && num && crystal)
+            {
                 tsc_khz = ((u64)crystal * num) / den / 1000;
+                tsc_source = "the core crystal (CPUID 0x15)";
+            }
         }
     }
     /* Last: the host says so on the command line. Not a guess — a
@@ -621,7 +726,47 @@ static void time_init(void) {
      * makes a TCG run possible at all: no leaf reports a frequency
      * there, and refusing to invent one is right, while refusing to be
      * TOLD one would just mean the clock never works without KVM. */
-    if (!tsc_khz) tsc_khz = cmdline_u64("tsc_khz");
+    if (!tsc_khz) {
+        tsc_khz = cmdline_u64("tsc_khz");
+        if (tsc_khz) tsc_source = "the kernel command line";
+    }
+
+    /* Leaf 0x16: the processor's base frequency, in MHz. Coarser than
+     * 0x15 — it is a rounded nameplate number, not a crystal ratio —
+     * and on the machines that have one but not the other it is the
+     * difference between a clock and a panic. Below the command line
+     * on purpose: someone who states a frequency has measured it. */
+    if (!tsc_khz) {
+        cpuid(0, &a, &b, &c, &d);
+        if (a >= 0x16) {
+            u32 base_mhz, unused1, unused2, unused3;
+            cpuid(0x16, &base_mhz, &unused1, &unused2, &unused3);
+            base_mhz &= 0xFFFF;
+            if (base_mhz) {
+                tsc_khz = (u64)base_mhz * 1000;
+                tsc_source = "the base frequency (CPUID 0x16)";
+            }
+        }
+    }
+
+    /* Last resort on real hardware: measure it against the PIT.
+     *
+     * Nobody tells a PC what its TSC frequency is. There is no
+     * hypervisor to ask, the command line was written by whoever made
+     * the USB stick, and on an AMD part neither CPUID leaf exists — so
+     * a machine that boots off iron would panic the first time
+     * anything asked what time it was. A PC does, however, have a
+     * 1.193182 MHz oscillator that has not changed since 1981, and
+     * counting TSC ticks against it is measuring rather than guessing,
+     * which is the only thing this file will do with a clock.
+     *
+     * Multiboot2 only: a microvm has no PIT, and probing for one there
+     * would spin out the bound and slow every boot down to no purpose. */
+    if (!tsc_khz && mb2_booted()) {
+        tsc_khz = pit_calibrate_khz();
+        if (tsc_khz) tsc_source = "measurement against the PIT";
+    }
+
     wall_base_sec = cmdline_u64("wallclock");
     tsc_base = rdtsc();
 }
@@ -697,7 +842,7 @@ int *__errno_location(void) { return &nl_errno_slot; }
 long long write(int fd, const void *buf, unsigned long n) {
     const char *p = (const char *)buf;
     (void)fd;                        /* stdout and stderr are the same wire */
-    for (unsigned long i = 0; i < n; i++) uart_putc(p[i]);
+    for (unsigned long i = 0; i < n; i++) pf_putc(p[i]);
     return (long long)n;
 }
 
@@ -815,7 +960,7 @@ static void pf_shutdown(int code) {
      * cross-check, not the mechanism. */
     uart_puts("[nurl-exit] ");
     uart_putu((unsigned long)(code & 0xff));
-    uart_putc('\n');
+    pf_putc('\n');
 
     /* isa-debug-exit: the guest's code appears as (code << 1) | 1, so 0
      * is not expressible — hence the sentinel line above being primary
@@ -851,6 +996,63 @@ void _exit(int code) { pf_shutdown(code); for (;;) { } }
  * concluding there are no devices. */
 const char *nurl_boot_cmdline(void) { return cmdline ? cmdline : ""; }
 
+/* ── what machine is this? ───────────────────────────────────────
+ *
+ * A guest under a hypervisor is running on a machine somebody
+ * configured and can go and look at. A guest on iron is running on a
+ * machine whose properties are the whole question — is this the RAM I
+ * think it is, did the clock calibrate, is anything reaching the
+ * screen — and the only thing that can answer is the guest.
+ *
+ * So these exist for `demos/baremetal.nu` to print. They report what
+ * was measured or handed over, never a default: a number that might be
+ * a fallback and might be the truth is worse than no number.
+ */
+
+void pa_stats(unsigned long *live, unsigned long *peak, unsigned long *avail,
+              unsigned long *largest, unsigned long *lost, int *holes);
+
+unsigned long nurl_mem_total(void) { return (unsigned long)ram_total; }
+
+unsigned long nurl_mem_used(void) {
+    unsigned long live = 0;
+    pa_stats(&live, 0, 0, 0, 0, 0);
+    return live;
+}
+
+unsigned long nurl_tsc_khz(void) { return (unsigned long)tsc_khz; }
+
+const char *nurl_clock_source(void) { return tsc_source; }
+
+/* CPUID leaves 0x80000002..4, forty-eight bytes of brand string that
+ * the part names itself with. Absent on parts older than about 2000,
+ * where saying so is the honest answer. */
+const char *nurl_cpu_brand(void) {
+    static char brand[49];
+    static int  done;
+    if (done) return brand;
+    done = 1;
+
+    u32 a, b, c, d;
+    cpuid(0x80000000, &a, &b, &c, &d);
+    if (a < 0x80000004) {
+        brand[0] = 0;
+        return "unknown (no CPUID brand string)";
+    }
+    u32 *w = (u32 *)brand;
+    for (u32 leaf = 0x80000002; leaf <= 0x80000004; leaf++) {
+        cpuid(leaf, &a, &b, &c, &d);
+        *w++ = a; *w++ = b; *w++ = c; *w++ = d;
+    }
+    brand[48] = 0;
+    /* Intel pads the front with spaces, AMD does not. */
+    const char *p = brand;
+    while (*p == ' ') p++;
+    return p;
+}
+
+const char *nurl_console_kind(void) { return con_kind_name(); }
+
 /* ── entry ───────────────────────────────────────────────────────── */
 
 extern char **nl_environ;          /* nolibc/misc.c owns the storage */
@@ -869,32 +1071,69 @@ extern int main(int argc, char **argv);
 static char *guest_argv[ARGV_MAX + 1];
 static char  argv_buf[1024];
 
+/* Where the value of `args=` starts and what ends it.
+ *
+ * Two loaders write this key and they do not agree on where the quotes
+ * go. QEMU passes `-append` through untouched, so the guest sees
+ * exactly what was typed: args="alpha beta". GRUB's script parser
+ * consumes the quotes while tokenising and puts them back around the
+ * WHOLE token when it builds the Multiboot2 command line, so the guest
+ * sees "args=alpha beta" — the same information, a quote earlier.
+ * Matching the literal six characters `args="` finds the first and
+ * silently misses the second, which is a program that gets no
+ * arguments and no explanation.
+ *
+ * So: find the key, then let the QUOTING decide the end. Opening quote
+ * after the '=' or before the 'a', either way the value ends at the
+ * next quote; unquoted, it ends at the next space, which also makes
+ * `args=solo` mean what it looks like.
+ *
+ * The end is still an explicit terminator rather than "the rest of the
+ * line", and that has not changed: QEMU's auto-kernel-cmdline APPENDS
+ * its virtio entries after -append, so a program taking the tail would
+ * receive the hypervisor's device list as arguments.
+ */
+static const char *args_value(const char *cl, const char *p, char *endc) {
+    const char *v = p + 5;                 /* past "args="            */
+    if (*v == '"')      { *endc = '"'; return v + 1; }
+    if (p > cl && p[-1] == '"') { *endc = '"'; return v; }
+    *endc = ' ';
+    return v;
+}
+
 static int build_argv(const char *cl) {
     int argc = 1;
     guest_argv[0] = (char *)"nurl";
     if (!cl) return argc;
 
-    const char *p = cl;
-    while (*p) {
-        if (p[0] == 'a' && p[1] == 'r' && p[2] == 'g' && p[3] == 's' &&
-            p[4] == '=' && p[5] == '"') {
-            const char *q = p + 6;
-            unsigned long n = 0;
-            while (*q && *q != '"' && n < sizeof argv_buf - 1) argv_buf[n++] = *q++;
-            argv_buf[n] = 0;
-            /* Split in place: every run of non-spaces is one argument,
-             * and the terminator goes where the space was. */
-            unsigned long i = 0;
-            while (i < n && argc < ARGV_MAX) {
-                while (i < n && argv_buf[i] == ' ') argv_buf[i++] = 0;
-                if (i >= n) break;
-                guest_argv[argc++] = &argv_buf[i];
-                while (i < n && argv_buf[i] != ' ') i++;
-            }
-            break;
+    /* Scanned character by character rather than token by token,
+     * because under GRUB the key is INSIDE a quoted token that contains
+     * spaces — splitting on spaces first would cut "args=alpha beta"
+     * into `"args=alpha` and `beta"` and never see the key at the front
+     * of anything. The boundary test is what a token scan was for: only
+     * a match at the start of the line, after a space or just inside an
+     * opening quote counts, so `myargs=` is not this key. */
+    for (const char *p = cl; *p; p++) {
+        if (p[0] != 'a' || p[1] != 'r' || p[2] != 'g' || p[3] != 's' ||
+            p[4] != '=')
+            continue;
+        if (p != cl && p[-1] != ' ' && p[-1] != '"') continue;
+
+        char end;
+        const char *q = args_value(cl, p, &end);
+        unsigned long n = 0;
+        while (*q && *q != end && n < sizeof argv_buf - 1) argv_buf[n++] = *q++;
+        argv_buf[n] = 0;
+        /* Split in place: every run of non-spaces is one argument, and
+         * the terminator goes where the space was. */
+        unsigned long i = 0;
+        while (i < n && argc < ARGV_MAX) {
+            while (i < n && argv_buf[i] == ' ') argv_buf[i++] = 0;
+            if (i >= n) break;
+            guest_argv[argc++] = &argv_buf[i];
+            while (i < n && argv_buf[i] != ' ') i++;
         }
-        while (*p && *p != ' ') p++;
-        while (*p == ' ') p++;
+        break;
     }
     guest_argv[argc] = 0;
     return argc;
@@ -923,9 +1162,26 @@ void kmain(unsigned long start_info_paddr) {
      * installed after the first mistake describes nothing. */
     tss_init();
     idt_init();
+
+    /* The screen, and only on real hardware. It comes after the IDT
+     * because it is the first code to touch an address the firmware
+     * chose rather than one this image did, and a fault there should
+     * be a report rather than a reboot. */
+    if (mb2_booted()) {
+        con_init(mb2_framebuffer());
+        /* The Multiboot2 conversion runs before any of this exists, so
+         * it records its complaint instead of making it. Now there is
+         * somewhere for the words to go. */
+        const char *why = mb2_failure();
+        if (why) pf_panic(why);
+    }
+
     if (!si || si->magic != HVM_START_MAGIC)
-        pf_panic("not a PVH boot — no hvm_start_info at the handover "
-                 "address (was this image loaded with -kernel?)");
+        pf_panic(mb2_booted()
+                 ? "the multiboot2 handover did not convert — this is a "
+                   "bug in boot/multiboot2.c, not in the bootloader"
+                 : "not a PVH boot — no hvm_start_info at the handover "
+                   "address (was this image loaded with -kernel?)");
 
     cmdline = si->cmdline_paddr ? (const char *)(unsigned long)si->cmdline_paddr : 0;
     mem_init(si);
