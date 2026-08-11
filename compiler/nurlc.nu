@@ -3561,6 +3561,23 @@
         `', right is '` rt )
         `' — there is no ordering between an address and a number, and operator-level pointer arithmetic is not supported. Index with '. ptr idx', compare like with like, or convert explicitly with '# i expr'. (Equality against 0 for a null check is allowed.)` ) ) }
     {}
+    // AGGREGATE operands. An option/result/slice (`{ i1, i64 }`, from a
+    // value-form `??`/`?` join) or a named struct BY VALUE reaching an
+    // operator emitted `add i64 %n, %r6` with %r6 an aggregate —
+    // invalid IR that nurlc accepted (rc 0) and only the LLVM verifier
+    // rejected. (Enum operands died above with their own nominal rule;
+    // pointers-to-struct are addresses and keep the pointer rules.)
+    // The commonest way an aggregate lands here is the prefix-arity
+    // cascade: `= n + n` short an operand swallowed the `??` that was
+    // meant to be the NEXT statement.
+    : b l_agg & ! lp | == ( nurl_str_get ( nurl_llty lt ) 0 ) 123 == ( nurl_str_get ( nurl_llty lt ) 0 ) 37
+    : b r_agg & ! rp | == ( nurl_str_get ( nurl_llty rt ) 0 ) 123 == ( nurl_str_get ( nurl_llty rt ) 0 ) 37
+    ? | l_agg r_agg
+    { ( die_stmt lex ( nurl_str_cat ( nurl_str_cat4
+        `operator applied to an aggregate operand: left is '` ( llvm_to_nurl lt )
+        `', right is '` ( llvm_to_nurl rt ) )
+        `' — an option/result/slice/struct value has no arithmetic or ordering; destructure with '??' (or read a field with '. value field') and combine the payload. If the aggregate is a whole '??'/'?' expression you meant as the NEXT statement, this operator is one operand short and swallowed it: every NURL operator has fixed arity and no closing bracket, so count the operands.` ) ) }
+    {}
     // Bool (i1) vs non-bool. NURL has no implicit bool↔int conversion, so an
     // operator with exactly one i1 operand emitted e.g. `icmp slt i1 %f, %n`
     // (the other a wider integer) — IR only clang/llvm-as rejected. A CONSTANT
@@ -10802,6 +10819,41 @@
     {}
 }
 
+// A statement in a block that has ALREADY terminated (a `^` return, a
+// break/continue, an infinite no-break loop, or a diverging noreturn
+// call earlier in the same block) is unreachable. Its instructions used
+// to land after the block's terminator — invalid IR the moment the
+// dead run did not itself end in a `^` ("expected instruction opcode"
+// from the LLVM verifier, with a .ll line and no source location; the
+// extra-operand mutants died exactly there). Park codegen in a fresh
+// unreferenced block instead: the statements compile as before, the IR
+// is well-formed on every shape, and LLVM's DCE drops the block. The
+// defensive trailing `^` after an all-paths-return loop — an idiom all
+// over the corpus — keeps compiling untouched.
+@ __handle_unreachable_stmt i lex i syms i cg → v {
+    ? == g_did_ret 0 { ^ } {}
+    // Cap whatever is open. Right after a real terminator this is a
+    // one-instruction implicit block (harmless, DCE'd); after a dead
+    // statement's stray instructions (a dead store past a both-arms-ret
+    // join) it is the terminator that block was missing.
+    ( emit_call_term `unreachable` )
+    : s __dl ( nurl_cg_lbl cg `dead` )
+    ( emit ( nurl_str_cat __dl `:` ) )
+    ( nurl_sym_def syms `__cur_lbl__` __dl )
+    = g_did_ret 0
+}
+
+// Block-close half of the dead-statement protocol: if the block entered
+// dead mode and its final dead statement did not end in its own
+// terminator (`^`), the dead label is still open — cap it and restore
+// the terminated status the enclosing arm/return machinery expects.
+@ __close_dead_block b dead_any → v {
+    ? & dead_any == g_did_ret 0
+    { ( emit_call_term `unreachable` )
+        = g_did_ret 1 }
+    {}
+}
+
 @ gen_block_expr i lex i syms i cg → s {
     : i bck_line ( nurl_lex_line lex )
     ( nurl_lex_advance lex )
@@ -10816,7 +10868,10 @@
     : ~ i __tail_tt 0
     : ~ s __tail_tv ``
     : ~ s __tail_callee ``
+    : ~ b __dead_any F
     ~ != ( nurl_lex_type lex ) TT_RBRACE {
+        ? != 0 g_did_ret { = __dead_any T } {}
+        ( __handle_unreachable_stmt lex syms cg )
         = __tail_tt ( nurl_lex_type lex )
         = __tail_tv ( nurl_lex_val lex )
         = __tail_callee ? == __tail_tt TT_LPAREN ( nurl_lex_peek_val lex ) ``
@@ -10831,6 +10886,7 @@
         ( nurl_sym_def syms `__tail_callee__` __tail_callee )
         ( __tail_noreturn_close syms __tail_callee ) }
     {}
+    ( __close_dead_block __dead_any )
     // An empty block `{}` is the unit / void value. Without typing it as
     // void, `nurl_get_last_type` retains whatever it was before the block
     // (i64 by default, i1 inside a conditional), so a `^ {}` in a void
@@ -10868,7 +10924,10 @@
     // Noreturn-tail detection — same protocol as gen_block_expr.
     : ~ s __tail_callee ``
     : ~ b __tail_any F
+    : ~ b __dead_any F
     ~ != ( nurl_lex_type lex ) TT_RBRACE {
+        ? != 0 g_did_ret { = __dead_any T } {}
+        ( __handle_unreachable_stmt lex syms cg )
         = __tail_callee ? == ( nurl_lex_type lex ) TT_LPAREN ( nurl_lex_peek_val lex ) ``
         = __tail_any T
         // Bind the statement's value: gen_stmt hands back the IR value
@@ -10886,6 +10945,7 @@
     ( expect lex TT_RBRACE )
     ( bck_block_exit )
     ? __tail_any { ( __tail_noreturn_close syms __tail_callee ) } {}
+    ( __close_dead_block __dead_any )
 }
 
 // gen_block_ret: like gen_block_stmts but returns the last stmt value.
@@ -10905,7 +10965,10 @@
     : ~ s __tail_tv ``
     : ~ s __tail_callee ``
     : ~ b __tail_any F
+    : ~ b __dead_any F
     ~ != ( nurl_lex_type lex ) TT_RBRACE {
+        ? != 0 g_did_ret { = __dead_any T } {}
+        ( __handle_unreachable_stmt lex syms cg )
         = __tail_tt ( nurl_lex_type lex )
         = __tail_tv ( nurl_lex_val lex )
         = __tail_callee ? == __tail_tt TT_LPAREN ( nurl_lex_peek_val lex ) ``
@@ -10929,6 +10992,7 @@
         ( nurl_sym_def syms `__tail_callee__` __tail_callee )
         ( __tail_noreturn_close syms __tail_callee ) }
     {}
+    ( __close_dead_block __dead_any )
     last
 }
 
@@ -16121,6 +16185,22 @@
             {} }
         {}
 
+        // Overflow check for ANON aggregate literals (`@ ?i { … }`,
+        // `@ !T E { … }`): the named-struct arity check above keys on a
+        // registered field count, which an anonymous shape does not
+        // have. A surplus value either emitted an `insertvalue` past
+        // the last slot — invalid IR only the LLVM verifier saw
+        // ("invalid indices for insertvalue") — or, for a result,
+        // silently overwrote the sibling arm's slot. The usual cause is
+        // a prefix operator inside the payload with one operand too
+        // many, spilling its surplus into a new "field".
+        ? & == 0 ( nurl_str_len cur_sname )
+        | >= ins_idx ( agg_field_count syms agg_ty )
+        & agg_is_res >= idx 2
+        { ( die lex ( nurl_str_cat ( nurl_str_cat3
+            `too many values in this aggregate literal: value ` ( nurl_str_int + idx 1 ) ` has no slot — ` )
+            ( nurl_str_cat3 `an option is a tag and one payload ('@ ?i { T 7 }'), a result a tag and one payload ('@ !i E { F e }'). If the payload looks right, a prefix operator inside it has one operand too many and the surplus spilled here: count the operands (fixed arity, no closing bracket). The aggregate shape is '` ( nurl_llty agg_ty ) `'.` ) ) ) }
+        {}
         : s r ( nurl_cg_reg cg )
         ( nurl_print `  ` ) ( nurl_print r )
         ( nurl_print ` = insertvalue ` ) ( nurl_print ( nurl_llty agg_ty ) )
@@ -18600,6 +18680,19 @@
                             // type. Require the `%`-type form so `@ f rand x → i`
                             // (using the FFI symbol `rand` as a parameter type) is
                             // rejected too, not just a wholly-unknown name.
+                            // A GENERIC TEMPLATE name is not a type — it
+                            // names a family of them. `Vec data` /
+                            // `Pair p` as a field or binding type used
+                            // to emit `%Vec` — an undefined (unsized)
+                            // named type only the LLVM verifier saw
+                            // ("loading unsized types is not allowed"),
+                            // far from the source.
+                            ? & != 0 g_generic_struct_syms
+                            != 0 ( nurl_sym_len2 g_generic_struct_syms name `__stparams` )
+                            { ( die lex ( nurl_str_cat
+                                ( nurl_str_cat4 `generic struct '` name `' used without type arguments in ` ctx )
+                                ( nurl_str_cat3 ` — a generic names a family of types, not a type. Instantiate it in parentheses with concrete type argument(s): '( ` name ` i )' — the parenthesised form, one argument per type parameter.` ) ) ) }
+                            {}
                             : s sv ( nurl_sym_get syms name )
                             ? & != 0 ( nurl_str_len sv ) == ( nurl_str_get sv 0 ) 37
                             {}
@@ -19945,6 +20038,24 @@
     : b const_pub ( vis_take_pending_pub )
     ? ( is_ident_tok ( nurl_lex_type lex ) )
     { : s cname ( nurl_lex_val lex )
+        // Unknown declared type. `: PI_FIXED i 314` used to emit
+        // `@i = global %PI_FIXED zeroinitializer` — an undefined named
+        // type only the LLVM verifier rejected, far from the source.
+        // With a TYPE KEYWORD sitting in the name slot the mistake is
+        // almost always the swap (type first, then name) — say exactly
+        // that; any other unknown name gets the standard unknown-type
+        // message (check_type_known).
+        ? & == ( nurl_str_get lt 0 ) 37
+        ! == ( nurl_str_get ( nurl_sym_get syms ty_tok ) 0 ) 37
+        { ? == ( nurl_lex_type lex ) TT_TYPE_KW
+            { ( die lex ( nurl_str_cat ( nurl_str_cat4
+                `unknown type '` ty_tok `' — and the name slot holds '` cname )
+                ( nurl_str_cat ( nurl_str_cat4
+                `', which is a type keyword. A declaration is ': TYPE name value' — the type comes FIRST. Swap them: ': ` cname ` ` ty_tok )
+                ` <value>'.` ) ) ) }
+            { ( check_type_known lex syms lt `a global declaration's type` ) }
+        }
+        {}
         // Flat-namespace guard for globals, twin of the struct one above: a
         // second `: name` / `: ~ name` from a different file:line is two
         // `@name = global` emissions — and two files SHARING one mutable
@@ -20761,6 +20872,12 @@
         : ~ i pcount 0
         ~ & != ( nurl_lex_type lex ) TT_RBRACE ( could_be_payload_type lex syms ) {
             : s pt ( parse_type lex )
+            // `JArr Vec` (a bare generic-template name as the payload
+            // type) parsed to `%Vec` — an undefined, unsized named type
+            // whose alloca only the LLVM verifier rejected. Same check
+            // as fields/params/returns; instantiated forms
+            // (`( Vec Json )` → `%Vec__Json`) pass untouched.
+            ( check_type_known lex syms pt `an enum variant's payload type` )
             ( nurl_sym_def syms ( nurl_str_cat vname ( nurl_str_cat `__payload__` ( nurl_str_int pcount ) ) ) pt )
             // pt is the raw internal payload type — a `u`-family payload
             // stays unsigned end to end and the match binding widens

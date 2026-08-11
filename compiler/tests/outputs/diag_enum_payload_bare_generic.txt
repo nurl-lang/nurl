@@ -1,0 +1,6 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_enum_payload_bare_generic.nu:16:1: error: generic struct 'Pair' used without type arguments in an enum variant's payload type — a generic names a family of types, not a type. Instantiate it in parentheses with concrete type argument(s): '( Pair i )' — the parenthesised form, one argument per type parameter.
+}
+^
+error: aborting due to 1 previous error
