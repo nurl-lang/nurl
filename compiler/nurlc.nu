@@ -17522,6 +17522,9 @@
 @ simple_capture_analysis i lex i outer_syms s closure_params → s {
     : ~ s captured_vars ( nurl_str_cat `` `` )
     : ~ i captured_count 0
+    // Anchor for the unclosed-brace diagnostic below: the opening '{'.
+    : i sca_open_line ( nurl_lex_line lex )
+    : i sca_open_col ( nurl_lex_col lex )
     ( nurl_lex_advance lex )  // consume opening '{'
 
     // Scan tokens in closure body until closing brace
@@ -17529,6 +17532,13 @@
     ~ > brace_depth 0 {
         : i tt ( nurl_lex_type lex )
 
+        // Unbalanced braces used to spin this loop at EOF forever — the
+        // capture pre-scan runs before the body parse, so a closure
+        // whose '}' is missing HUNG the compiler instead of erroring.
+        ? == tt TT_EOF
+        { ( die_pos lex sca_open_line sca_open_col
+            `end of file inside this closure body — the '{' here is never closed. Add the missing '}' (an extra '{' somewhere inside pushes the count off the same way); running nurlfmt shows where the nesting runs away.` ) }
+        {}
         ? == tt TT_LBRACE
         { = brace_depth + brace_depth 1 }
         {
@@ -18316,12 +18326,26 @@
 // Returns space-separated, source-faithful token text (string literals
 // keep their backticks via __tok_src_text), so the result re-lexes to the
 // identical token stream — safe for generic template bodies.
-@ collect_fn_body i lex → s {
+@ collect_fn_body i lex s what → s {
+    // Anchor for the unclosed-brace diagnostic: the opening '{' itself.
+    // Reported there, not at EOF — EOF has no useful source line, and
+    // the brace that never closed is the thing the user must find.
+    : i open_line ( nurl_lex_line lex )
+    : i open_col ( nurl_lex_col lex )
     : ~ s result ( nurl_str_cat ( __tok_src_text lex ) ` ` )
     ( nurl_lex_advance lex )
     : ~ i depth 1
     ~ != depth 0 {
         : i tt2 ( nurl_lex_type lex )
+        // Unbalanced braces used to spin this loop at EOF forever — the
+        // compiler HUNG on `nurlc file.nu` with a missing '}' in any
+        // generic template. EOF inside the body is a hard error at the
+        // opening brace.
+        ? == tt2 TT_EOF
+        { ( die_pos lex open_line open_col ( nurl_str_cat3
+            `end of file inside this ` what
+            ` body — the '{' here is never closed. Add the missing '}' (an extra '{' somewhere inside pushes the count off the same way); running nurlfmt shows where the nesting runs away.` ) ) }
+        {}
         ? == tt2 TT_LBRACE { = depth + depth 1 } {}
         ? == tt2 TT_RBRACE { = depth - depth 1 } {}
         = result ( nurl_str_cat result ( nurl_str_cat ( __tok_src_text lex ) ` ` ) )
@@ -18450,7 +18474,7 @@
         ( nurl_lex_advance lex )
     }
     ? != ( nurl_lex_type lex ) TT_EOF
-    { = src ( nurl_str_cat src ( collect_fn_body lex ) ) }
+    { = src ( nurl_str_cat src ( collect_fn_body lex `generic function` ) ) }
     {}
     ( nurl_sym_def g_generic_syms ( nurl_str_cat fname `__tparams` ) tparams )
     ( nurl_sym_def g_generic_syms ( nurl_str_cat fname `__gsrc` ) src )
@@ -23150,7 +23174,7 @@
                     }
                     ? == ( nurl_lex_type lex ) TT_RBRACK { ( nurl_lex_advance lex ) } {}
                     ? == ( nurl_lex_type lex ) TT_LBRACE {
-                        : s body ( collect_fn_body lex )
+                        : s body ( collect_fn_body lex `generic struct` )
                         ( nurl_sym_def g_generic_struct_syms ( nurl_str_cat sname `__stparams` ) tparams )
                         ( nurl_sym_def g_generic_struct_syms ( nurl_str_cat sname `__sbody` ) body )
                         // Lint: generic struct templates never reach
