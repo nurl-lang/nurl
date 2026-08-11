@@ -8301,23 +8301,28 @@
     // call — then the dup is redundant and the call's buffer leaks,
     // never a UAF.
     : ~ b t_dup F
-    // Either a tracked-ident arm (copy so the binding keeps its own
-    // drop) or a string-literal arm (copy so a join with an owning
-    // sibling is UNIFORMLY owned instead of publishing "not owned" and
-    // leaking the sibling's buffer — 16k per self-compile in
-    // `? == 0 ( nurl_str_len lt ) `i64` lt` alone).
+    // A tracked-ident arm is copied so the binding keeps its own drop.
+    // A string-LITERAL arm is deliberately NOT copied here: this block
+    // closes before the else-arm's ownedness is knowable (single pass),
+    // and the old eager copy leaked one buffer per EVALUATION whenever
+    // the join had no tracked consumer — `( f ? c `a` `b` )` in a hot
+    // loop was ~10 MB/step of a 4B finetune (grad's per-launch kernel
+    // name). A literal join arm is static: a lit/lit join is uniformly
+    // borrowed with no copy at all, and a lit/owned join is repaired at
+    // the join block below, where both arms' ownedness is known.
     // An UNTRACKED ident arm is deliberately NOT copied. `s` is also
     // NURL's spelling for an opaque handle (a sqlite connection reaches
     // a binding as `# s <i64>`), and a handle is not a NUL-terminated
     // string: copying one hands the callee a garbage pointer. Only a
-    // tracked owned string (or a literal) is provably copyable, so a
-    // mixed `? c ( owner ) param` join keeps publishing "not owned" and
-    // the owning arm's buffer leaks — the standing leak-not-UAF trade.
-    ? & & & & & == 0 g_did_ret ( seq ( nurl_llty tt2 ) `i8*` )
+    // tracked owned string is provably copyable, so a mixed
+    // `? c ( owner ) param` join keeps publishing "not owned" and the
+    // owning arm's buffer leaks — the standing leak-not-UAF trade.
+    : b t_is_lit & == t_tt0 TT_STR ( seq ( nurl_llty tt2 ) `i8*` )
+    ? & & & & & & == 0 g_did_ret ( seq ( nurl_llty tt2 ) `i8*` )
     ! t_alias
     ! ( seq t_str_flag `str` )
-    | == t_tt0 TT_STR != 0 ( nurl_str_len t_retid )
-    | == t_tt0 TT_STR
+    ! t_is_lit
+    != 0 ( nurl_str_len t_retid )
     ( str_contains_word ( nurl_sym_get syms `__owned_strings__` )
     ( nurl_sym_get2 syms t_retid `__ptr` ) )
     { : s __td ( nurl_cg_reg cg )
@@ -8409,13 +8414,21 @@
     : s e_str_flag ( nurl_str_cat ( nurl_sym_get syms `__last_call_ret_owned__` ) `` )
     : b e_alias != 0 ( nurl_sym_len syms `__last_value_alias__` )
     : s e_retid ( nurl_str_cat ( nurl_sym_get syms `__last_ident_name__` ) `` )
-    // Mirror of the then-arm's tracked-ident copy (see above).
+    // Mirror of the then-arm's tracked-ident copy (see above) — plus the
+    // one case where a LITERAL else-arm still copies eagerly: the
+    // then-arm is already a live fresh owner, so uniform ownership needs
+    // an owned copy on this side too. (The then-arm's flags are known by
+    // now — the else side has no single-pass blindness.) A literal
+    // beside a non-owned then-arm copies nothing: the join is uniformly
+    // borrowed, which is what the old unconditional copy leaked.
     : ~ b e_dup F
-    ? & & & & & == 0 g_did_ret ( seq ( nurl_llty et2 ) `i8*` )
+    : b e_is_lit & == e_tt0 TT_STR ( seq ( nurl_llty et2 ) `i8*` )
+    : b t_arm_owned & == 0 tdr | ( seq t_str_flag `str` ) t_dup
+    ? & & & & == 0 g_did_ret ( seq ( nurl_llty et2 ) `i8*` )
     ! e_alias
     ! ( seq e_str_flag `str` )
-    | == e_tt0 TT_STR != 0 ( nurl_str_len e_retid )
-    | == e_tt0 TT_STR
+    | & e_is_lit t_arm_owned
+    & != 0 ( nurl_str_len e_retid )
     ( str_contains_word ( nurl_sym_get syms `__owned_strings__` )
     ( nurl_sym_get2 syms e_retid `__ptr` ) )
     { : s __ed ( nurl_cg_reg cg )
@@ -8570,6 +8583,30 @@
             }
             ( nurl_set_last_type phi_ty )
             = result res
+            // then-LITERAL beside an OWNED else-arm: the then block was
+            // emitted before the else's ownedness was knowable (see
+            // t_is_lit above), so uniform ownership is repaired HERE,
+            // where the cond register still dominates: copy whichever
+            // pointer the phi picked, then free the else's original —
+            // on the then path the select feeds nurl_free a null, a
+            // no-op — and the join becomes a uniform fresh owner on
+            // both paths. Nothing static is ever freed, and the old
+            // owning-arm leak of this mix is gone with it.
+            ? & & & & t_is_lit == 0 tdr == 0 edr
+            | ( seq e_str_flag `str` ) e_dup
+            ( seq ( nurl_llty phi_ty ) `i8*` )
+            { : s __jd ( nurl_cg_reg cg )
+                ( nurl_print `  ` ) ( nurl_print __jd )
+                ( nurl_print ` = call i8* @nurl_strdup(i8* ` ) ( nurl_print res )
+                ( nurl_print `)` ) ( emit_dbg_eol )
+                : s __jr ( nurl_cg_reg cg )
+                ( nurl_print `  ` ) ( nurl_print __jr )
+                ( nurl_print ` = select i1 ` ) ( nurl_print cv )
+                ( nurl_print `, i8* null, i8* ` ) ( nurl_print res ) ( nurl_print `\n` )
+                ( nurl_print `  call void @nurl_free(i8* ` ) ( nurl_print __jr )
+                ( nurl_print `)` ) ( emit_dbg_eol )
+                = result __jd
+            } {}
         }
         { ( nurl_set_last_type `void` ) }
     }
@@ -8594,7 +8631,12 @@
     // leak-not-UAF) rather than the borrowing arm's crash.
     : b __t_str_ok ? != 0 tdr T | ( seq t_str_flag `str` ) t_dup
     : b __e_str_ok ? != 0 edr T | ( seq e_str_flag `str` ) e_dup
-    : b __str_res & & & __t_str_ok __e_str_ok __slice_live
+    // The join-block repair above turned a lit/owned mix into a uniform
+    // fresh owner — publish it as one.
+    : b __jfix & & & & t_is_lit == 0 tdr == 0 edr
+    | ( seq e_str_flag `str` ) e_dup
+    ( seq ( nurl_llty phi_ty ) `i8*` )
+    : b __str_res | __jfix & & & __t_str_ok __e_str_ok __slice_live
     ( seq ( nurl_llty phi_ty ) `i8*` )
     ( nurl_sym_def syms `__last_call_ret_owned__` ? __str_res `str` `` )
     // Alias provenance of the `?`-result, by the same every-live-arm rule.
