@@ -82,6 +82,21 @@ $ `stdlib/std/async_ffi.nu`
     ^ @ Fiber { rp }
 }
 
+// Spawn a fiber that OWNS its closure env: the runtime frees the env
+// right after the body returns. Use for fire-and-forget per-item
+// inline closures nothing else holds a handle to (one fiber per
+// accepted connection, say) — with plain `spawn` those envs leaked,
+// one per spawn, because `spawn` BORROWS the env and a fire-and-forget
+// caller has no correct place to free it. Do NOT use when the spawner
+// keeps the closure binding around to free (or reuse) it later.
+@ spawn_owned ( @ v ) body → Fiber {
+    : *u fnp # *u body 0
+    : *u env # *u body 1
+    : i raw ( nurl_fiber_spawn_owned fnp env )
+    : s rp # s raw
+    ^ @ Fiber { rp }
+}
+
 // Spawn a joinable fiber. The returned handle survives the fiber's
 // completion; the caller MUST call `fiber_join` exactly once on it,
 // which both waits for completion AND releases the control block.

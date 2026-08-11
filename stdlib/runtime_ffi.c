@@ -2849,6 +2849,7 @@ void      nurl_signal_trigger_shutdown(void)              {}
  * POSIX-only (pthreads + ucontext); Win32 + WASI are stubbed below.
  * Closure shape matches nurl_thread_spawn in §19. */
 long long nurl_fiber_spawn(void *fn, void *env);
+long long nurl_fiber_spawn_owned(void *fn, void *env);
 long long nurl_fiber_spawn_joinable(void *fn, void *env);
 void      nurl_fiber_join(long long fiber);
 void      nurl_fiber_yield(void);
@@ -2941,6 +2942,13 @@ typedef struct NurlFiber {
     NurlFiberState   state;
     struct NurlFiber*next;           /* intrusive runqueue link */
     int              joinable;       /* survives DONE for join() */
+    /* Fire-and-forget spawn whose closure env the FIBER owns: freed
+     * (nurl_free — envs come from nurl_malloc) right after the body
+     * returns. The plain spawn BORROWS its env, which is right for a
+     * long-lived closure the spawner frees later — but a per-item
+     * inline closure (one fiber per accepted connection, say) leaked
+     * its env per spawn with no correct place to free it. */
+    int              own_env;
     int              done_taken;     /* set after join freed it */
     pthread_mutex_t  join_m;
     pthread_cond_t   join_c;
@@ -2968,6 +2976,17 @@ typedef struct NurlWorker {
     NurlFiber       *rq_head;
     NurlFiber       *rq_tail;
     pthread_mutex_t  rq_lock;
+    /* Exact queue length, maintained under rq_lock but READ without it
+     * by the steal path's pre-probe. Stealing only ever takes from a
+     * queue holding >= 2 fibers, so a relaxed length read lets a thief
+     * skip empty/singleton victims without touching their lock — under
+     * an HTTP-serving load the steal loop ran ~26 attempts per request
+     * with a 0.008% hit rate, i.e. ~24 futile mutex acquisitions per
+     * request that this probe eliminates. A stale read is benign either
+     * way: a missed just-pushed fiber is found via the global queue or
+     * the next probe round; a spurious probe just falls through to the
+     * locked steal, which re-checks under the lock. */
+    int              rq_len;         /* accessed via __atomic_* only */
     unsigned         steal_rng;      /* xorshift victim picker */
 } NurlWorker;
 
@@ -3071,6 +3090,7 @@ static void nurl__rq_push_local(NurlWorker *w, NurlFiber *f) {
     if (w->rq_tail) w->rq_tail->next = f;
     else            w->rq_head = f;
     w->rq_tail = f;
+    __atomic_fetch_add(&w->rq_len, 1, __ATOMIC_RELAXED);
     pthread_mutex_unlock(&w->rq_lock);
 }
 
@@ -3081,6 +3101,7 @@ static NurlFiber *nurl__rq_pop_local(NurlWorker *w) {
         w->rq_head = f->next;
         if (!w->rq_head) w->rq_tail = NULL;
         f->next = NULL;
+        __atomic_fetch_sub(&w->rq_len, 1, __ATOMIC_RELAXED);
     }
     pthread_mutex_unlock(&w->rq_lock);
     return f;
@@ -3091,13 +3112,20 @@ static NurlFiber *nurl__rq_pop_local(NurlWorker *w) {
  * Empirically balances load faster than single-fiber stealing. */
 static NurlFiber *nurl__rq_steal_from(NurlWorker *victim, NurlWorker *thief) {
     if (victim == thief) return NULL;
+    /* Lock-free pre-probe: stealing only takes from a queue of >= 2, so
+     * skip victims below that without touching their lock (see the
+     * rq_len field note). The locked path below re-counts under the
+     * lock, so a stale probe can only cost a wasted lock, never a
+     * miscounted steal. */
+    if (__atomic_load_n(&victim->rq_len, __ATOMIC_RELAXED) < 2) return NULL;
     NurlFiber *taken_head = NULL, *taken_tail = NULL;
     int count = 0;
+    int take = 0;
     pthread_mutex_lock(&victim->rq_lock);
     NurlFiber *p = victim->rq_head;  /* runqueues are short — linear count is fine */
     while (p) { count++; p = p->next; }
     if (count >= 2) {
-        int take = count / 2;
+        take = count / 2;
         taken_head = victim->rq_head;
         p = taken_head;
         for (int i = 1; i < take; i++) p = p->next;
@@ -3105,6 +3133,7 @@ static NurlFiber *nurl__rq_steal_from(NurlWorker *victim, NurlWorker *thief) {
         victim->rq_head = p->next;
         if (!victim->rq_head) victim->rq_tail = NULL;
         taken_tail->next = NULL;
+        __atomic_fetch_sub(&victim->rq_len, take, __ATOMIC_RELAXED);
     }
     pthread_mutex_unlock(&victim->rq_lock);
     if (!taken_head) return NULL;
@@ -3114,10 +3143,13 @@ static NurlFiber *nurl__rq_steal_from(NurlWorker *victim, NurlWorker *thief) {
     if (rest_head) {
         pthread_mutex_lock(&thief->rq_lock);
         NurlFiber *rest_tail = rest_head;
-        while (rest_tail->next) rest_tail = rest_tail->next;
+        int rest = 0;
+        while (rest_tail->next) { rest++; rest_tail = rest_tail->next; }
+        rest++;
         if (thief->rq_tail) thief->rq_tail->next = rest_head;
         else                thief->rq_head = rest_head;
         thief->rq_tail = rest_tail;
+        __atomic_fetch_add(&thief->rq_len, rest, __ATOMIC_RELAXED);
         pthread_mutex_unlock(&thief->rq_lock);
     }
     return next;
@@ -3173,6 +3205,7 @@ static void nurl__fiber_entry(void *arg) {
     nurl_ctx_asan_finish_switch(NULL, &nurl__tls_loop_lo, &nurl__tls_loop_size);
 #endif
     if (f && f->fn) f->fn(f->env);
+    if (f && f->own_env && f->env) { nurl_free(f->env); f->env = NULL; }
     if (f) f->state = NF_DONE;
     NurlWorker *w = nurl__tls_worker;
     if (w) {
@@ -3194,6 +3227,7 @@ static void nurl__fiber_entry(unsigned hi, unsigned lo) {
     uintptr_t p = ((uintptr_t)hi << 32) | (uintptr_t)lo;
     NurlFiber *f = (NurlFiber*)p;
     if (f && f->fn) f->fn(f->env);
+    if (f && f->own_env && f->env) { nurl_free(f->env); f->env = NULL; }
     if (f) f->state = NF_DONE;
     NurlWorker *w = nurl__tls_worker;
     if (w) setcontext(&w->loop_ctx);
@@ -3296,6 +3330,14 @@ static void nurl__fiber_spawn_failed(void) {
     abort();
 }
 
+/* noinline on the whole spawn family: nurl__enqueue_new reads the
+ * __thread nurl__tls_worker, and letting LTO inline a spawn into NURL
+ * code mislowers that TLS access (same class as nurl_fiber_current
+ * below — measured as a fiber enqueued onto a queue no worker ever
+ * drains: the async HTTP test hung deterministically the moment a NEW
+ * spawn entry point was added and inlined, while the existing ones
+ * dodged it only by the optimizer's inlining choices). */
+__attribute__((noinline))
 long long nurl_fiber_spawn(void *fn, void *env) {
     if (!fn) return 0;
     if (!nurl__sched.initialized) nurl_runtime_init(0);
@@ -3305,6 +3347,21 @@ long long nurl_fiber_spawn(void *fn, void *env) {
     return (long long)(uintptr_t)f;
 }
 
+/* Fire-and-forget spawn that takes OWNERSHIP of `env` — freed after the
+ * fiber body returns (see NurlFiber.own_env). For per-item inline
+ * closures that nothing else holds a handle to. */
+__attribute__((noinline))
+long long nurl_fiber_spawn_owned(void *fn, void *env) {
+    if (!fn) return 0;
+    if (!nurl__sched.initialized) nurl_runtime_init(0);
+    NurlFiber *f = nurl__fiber_alloc(fn, env, 0);
+    if (!f) nurl__fiber_spawn_failed();
+    f->own_env = 1;
+    nurl__enqueue_new(f);
+    return (long long)(uintptr_t)f;
+}
+
+__attribute__((noinline))
 long long nurl_fiber_spawn_joinable(void *fn, void *env) {
     if (!fn) return 0;
     if (!nurl__sched.initialized) nurl_runtime_init(0);
@@ -3518,6 +3575,7 @@ void nurl_runtime_init(long long worker_count) {
         w->current = NULL;
         w->fake_stack = NULL;
         w->rq_head = w->rq_tail = NULL;
+        __atomic_store_n(&w->rq_len, 0, __ATOMIC_RELAXED);
         pthread_mutex_init(&w->rq_lock, NULL);
         w->steal_rng = (unsigned)(0xC2B2AE35u ^ (unsigned)(i * 2654435761u));
     }
@@ -3576,6 +3634,9 @@ void nurl_runtime_shutdown(void) {
 #else  /* no fiber backend (WASI, Windows) — stubs until a later phase */
 
 long long nurl_fiber_spawn(void *fn, void *env) {
+    (void)fn; (void)env; return 0;
+}
+long long nurl_fiber_spawn_owned(void *fn, void *env) {
     (void)fn; (void)env; return 0;
 }
 long long nurl_fiber_spawn_joinable(void *fn, void *env) {
@@ -3644,8 +3705,15 @@ typedef struct NurlReactorWait {
 typedef struct NurlReactor {
     pthread_t        thread;
     int              wake_pipe[2];   /* [0] = read, [1] = write */
-    pthread_mutex_t  lock;           /* protects `waits` */
+    pthread_mutex_t  lock;           /* protects `waits` and `freelist` */
     NurlReactorWait *waits;
+    /* Recycled wait entries. Every park used to calloc an entry on the
+     * worker thread and free it on the reactor thread — one
+     * cross-thread malloc/free pair per parked I/O operation (= per
+     * HTTP request on a keep-alive connection). The freelist reuses
+     * entries under the lock both sides already take; its size is
+     * bounded by the peak number of concurrently parked fibers. */
+    NurlReactorWait *freelist;
     int              shutdown;
     int              started;
 } NurlReactor;
@@ -3777,17 +3845,30 @@ static void *nurl__reactor_loop(void *arg) {
 
         /* Unpark outside the lock. Write the result onto the fiber
          * BEFORE unparking — once unparked it may resume on another
-         * worker and read the value. */
+         * worker and read the value. Entries are recycled onto the
+         * freelist in one batch afterwards instead of free()d one by
+         * one on this thread (the callocs happened on worker threads). */
+        NurlReactorWait *recycle = NULL;
         for (NurlReactorWait *w = to_unpark; w; ) {
             NurlReactorWait *next = w->next;
             NurlFiber *fb = w->fiber;
             int result = w->result;
-            free(w);
+            w->fiber = NULL;
+            w->next = recycle;
+            recycle = w;
             if (fb) {
                 fb->last_park_result = result;
                 nurl_fiber_unpark((long long)(uintptr_t)fb);
             }
             w = next;
+        }
+        if (recycle) {
+            NurlReactorWait *rt = recycle;
+            while (rt->next) rt = rt->next;
+            pthread_mutex_lock(&nurl__reactor.lock);
+            rt->next = nurl__reactor.freelist;
+            nurl__reactor.freelist = recycle;
+            pthread_mutex_unlock(&nurl__reactor.lock);
         }
     }
     return NULL;
@@ -3801,6 +3882,7 @@ static void nurl__reactor_init_once(void) {
     fcntl(nurl__reactor.wake_pipe[1], F_SETFL, fl1 | O_NONBLOCK);
     pthread_mutex_init(&nurl__reactor.lock, NULL);
     nurl__reactor.waits = NULL;
+    nurl__reactor.freelist = NULL;
     nurl__reactor.shutdown = 0;
     if (pthread_create(&nurl__reactor.thread, NULL,
                        nurl__reactor_loop, NULL) == 0) {
@@ -3833,8 +3915,15 @@ static int nurl__reactor_wait(int fd, short events, long long timeout_ms) {
     if (!w || !w->current) return -1;  /* not on a fiber */
     nurl__reactor_start_if_needed();
 
-    NurlReactorWait *wt = (NurlReactorWait*)calloc(1, sizeof(NurlReactorWait));
-    if (!wt) return -1;
+    pthread_mutex_lock(&nurl__reactor.lock);
+    NurlReactorWait *wt = nurl__reactor.freelist;
+    if (wt) nurl__reactor.freelist = wt->next;
+    else {
+        pthread_mutex_unlock(&nurl__reactor.lock);
+        wt = (NurlReactorWait*)calloc(1, sizeof(NurlReactorWait));
+        if (!wt) return -1;
+        pthread_mutex_lock(&nurl__reactor.lock);
+    }
     wt->fd = fd;
     wt->events = events;
     wt->deadline_ms = (timeout_ms < 0) ? -1 :
@@ -3842,8 +3931,6 @@ static int nurl__reactor_wait(int fd, short events, long long timeout_ms) {
     wt->fiber = w->current;
     wt->result = 0;
     wt->active = 0;
-
-    pthread_mutex_lock(&nurl__reactor.lock);
     wt->next = nurl__reactor.waits;
     nurl__reactor.waits = wt;
     pthread_mutex_unlock(&nurl__reactor.lock);
@@ -3884,6 +3971,9 @@ void nurl__reactor_shutdown(void) {
     NurlReactorWait *w = nurl__reactor.waits;
     while (w) { NurlReactorWait *n = w->next; free(w); w = n; }
     nurl__reactor.waits = NULL;
+    w = nurl__reactor.freelist;
+    while (w) { NurlReactorWait *n = w->next; free(w); w = n; }
+    nurl__reactor.freelist = NULL;
 }
 
 #else  /* WASI / Windows — Phase 5 stubs */
