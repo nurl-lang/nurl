@@ -1023,7 +1023,7 @@ $ `stdlib/core/vec.nu`
                     T jk → ( __js_emit_value out jk )
                     F → {}
                 }
-                ? + k 1 < n {
+                ? < + k 1 n {
                     ( string_push_char out 58 )
                     : ?Json ev ( vec_get [Json] v + k 1 )
                     ?? ev {
@@ -1264,7 +1264,7 @@ $ `stdlib/core/vec.nu`
                     T jk → {
                         ?? jk {
                             JStr ks → {
-                                ? + k 1 < n {
+                                ? < + k 1 n {
                                     : ?Json ev ( vec_get [Json] v + k 1 )
                                     ?? ev {
                                         T jv → ( f ( string_data ks ) jv )

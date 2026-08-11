@@ -92,6 +92,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   was added. Fixed and held at zero, so this one gates rather than
   ratchets.
 
+### Added
+
+- **`tools/diag_mutate.py` — one realistic mistake in a real program.**
+  Every negative test in the corpus is minimal by construction: the
+  mistake *is* the program, so there is nothing after it to go wrong. A
+  model writes a hundred lines and gets one of them wrong, usually not
+  the last one. This probe takes working programs, injects a single
+  mistake a model plausibly makes, and counts what comes out — one
+  diagnostic (good), several (a cascade to triage), or **none**.
+
+  Not a gate: the mutation set is a judgement about what models get
+  wrong, and the interesting result is a program to go and read, never a
+  number to enforce. Its first run reported six programs silently
+  accepted; every one was the mutation landing inside a comment, which
+  is the same masking lesson `diag_coverage.py` already carries, learned
+  the same way.
+
 ### Changed
 
 - **Coverage fingerprints now discriminate rather than merely being
@@ -117,6 +134,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   eight passes.
 
 ### Fixed
+
+- **A binary operator one operand short swallowed the next statement and
+  compiled.** `= n + n` followed by `( side )` took the call as its
+  second operand; a `v`-returning call's value is `undef`, so nurlc
+  emitted `add i64 %r2, undef` **with status 0**. The program linked,
+  ran, computed garbage, and still performed the swallowed call as a side
+  effect of an addition. `die_if_void` could not see it — it tests the
+  operand's *value* against `void`, and a void call's value is `undef`.
+  The rule now lives at the binary-operator site alone: an initialiser
+  may legitimately take a `?` whose arms both return, which also yields
+  `undef`.
+
+- **`stdlib/ext/json.nu` emitted the `:` separator unconditionally.**
+  Two lines read `? + k 1 < n {`, which in prefix form is the condition
+  `k + 1` — always true — followed by a dead `< n { … }`. The IR shows
+  it plainly: `icmp ne i64 %r4, 0` as the branch test, and
+  `icmp slt i64 %r6, undef` computed and discarded. Written `? < + k 1 n
+  {`. Found by the new probe, via the guard above: the object emitter had
+  been taking the value branch whether or not a value followed.
 
 - **Three pairs of diagnostics were word-for-word identical, so neither
   member said which construct it meant.** A closure's parameter list and
