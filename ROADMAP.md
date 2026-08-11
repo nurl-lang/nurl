@@ -7,7 +7,7 @@ Anything marked done here has a regression test in
 [`compiler/tests/`](compiler/tests/) and is covered by the bootstrap fixed
 point.
 
-_Last reviewed: 2026-08-08 · Current release: **0.36.0** · Language: **Grammar
+_Last reviewed: 2026-08-11 · Current release: **0.37.0** · Language: **Grammar
 v2.4** ([`spec/grammar.ebnf`](spec/grammar.ebnf))._
 
 ---
@@ -29,7 +29,10 @@ What is solid today:
   `u` = byte/u8, plus sized `i8`/`i16`/`i32`, `u16`/`u32`/`u64`, `f` = f64
   and `f32`), tail-call optimization, and
   **variadic FFI** (the `printf` family callable directly). The grammar decision
-  for prefix-arity (no grouping delimiter) is formally locked.
+  for prefix-arity (no grouping delimiter) is formally locked, and since
+  0.37.0 the n-ary `&`/`|` arity trap it makes possible is a **hard error
+  by default** (`--no-strict-arity` demotes it to a warning) — the shape
+  compiled to working, wrong code before.
 - **Memory & safety.** Single-owner memory with compiler-inserted auto-drop at
   scope exit — no GC, no hidden boxing. A **static borrow checker, on
   by default** (`--no-borrowck` to disable, `--strict-borrowck` to tighten),
@@ -95,7 +98,14 @@ A high-level map of what exists. Dates and per-feature detail are in
   identifiers, call-arity mismatches, unbalanced braces / stray top-level
   tokens, and visibility violations are hard errors with source locations —
   nothing malformed reaches the backend silently.
-- Emission: only the functions `main` can reach reach the `.ll`
+- Diagnostics are *measured*, not asserted. `check_diag_coverage.sh` reports
+  which of the compiler's ~230 messages a test has ever made it print;
+  `check_diag_anchor.sh` gates that every baselined diagnostic points at the
+  mistake rather than at the token after it; `diag_mutate.py` injects one
+  realistic error into a working program and reads the answer. Between them
+  they have found messages that were false, messages that were unreachable,
+  and programs the compiler accepted and miscompiled.
+- Emission: only the functions `main` can reach the `.ll`
   (`--no-dce` to emit everything). Reachability is computed over the
   finished IR, so closures, monomorphs, drop glue and dyn vtable thunks
   need no special casing — worth 30–40% of the clang step on a

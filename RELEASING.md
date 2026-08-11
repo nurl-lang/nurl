@@ -129,8 +129,7 @@ Consequences worth knowing:
 `nurl.sh` also links a feature library (`-lcurl` / `-lssl` / `-lsqlite3` /
 `-lpq` / `-lz` / `-lzstd`) **only when the emitted IR actually references
 that back-end's symbols** — so a feature-free program (the common tool)
-links against libc only and never demands a library the box may lack
-— so a feature-free program never demands a library the box may lack.
+links against libc only and never demands a library the box may lack.
 
 (A prebuilt-binary package channel — install a tool with no local compile at
 all — remains the future bombproofing; see the registry roadmap.)
@@ -186,5 +185,12 @@ the Actions tab.
   landed, and it now gates PRs too.)
 - The FreeBSD release leg is best-effort (`continue-on-error`); a release
   can ship without the FreeBSD archive.
-- macOS is not built yet (the installer rejects it with a clear message);
-  add a `macos-14` (arm64) / `macos-13` (x86_64) matrix when wanted.
+- macOS ships no release artifact yet — the installer rejects Darwin with a
+  clear message and the install route stays build-from-source. It is *not*
+  untested: the `macos-tests` workflow runs `./build.sh` on Apple Silicon
+  (bootstrap fixed point + the full corpus against the same `outputs/`
+  goldens as Linux) on every push to `main` and every PR. Adding a release
+  leg means `macos-14` (arm64) only — the Intel `macos-13` image never left
+  GitHub's queue across ten attempted runs, which is why that leg was
+  removed rather than left permanently pending (see
+  [`docs/PLATFORMS.md`](docs/PLATFORMS.md)).
