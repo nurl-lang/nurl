@@ -4016,7 +4016,15 @@
     // call site; the __subst_word lesson).
     : ~ s subst ( nurl_str_cat rawsig `` )
     ? != 0 ( nurl_str_len tparam ) { = subst ( subst_source_raw rawsig tparam to ) } {}
-    ^ ( dyn_sig_parts subst )
+    // Context for any diagnostic the sig re-parse raises: the `<dynsig>`
+    // location alone names no trait, method, or file to look at.
+    : s saved_ctx ( nurl_str_cat g_diag_ctx `` )
+    = g_diag_ctx ( nurl_str_cat ( nurl_str_cat4
+    ` [in the signature of method '` m `' of trait '` declTrait )
+    ( nurl_str_cat3 `' (Self = '` to `') — fix it at the trait declaration]` ) )
+    : s __dsp ( dyn_sig_parts subst )
+    = g_diag_ctx saved_ctx
+    ^ __dsp
 }
 
 // dyn_call_fnty: the uniform dyn-ABI function-pointer type of method `m` as
@@ -22819,7 +22827,15 @@
             : s mangled ( nurl_str_cat mname ( nurl_str_cat `__` impl_mangle ) )
             : s full_src ( nurl_str_cat `@ ` ( nurl_str_cat mangled ( nurl_str_cat ` ` subst ) ) )
             : i lex2 ( nurl_lex_new full_src `<trait_default>` )
+            // Context for any diagnostic inside the default body's
+            // re-parse: the `<trait_default>` location alone names no
+            // trait, method, or impl to look at.
+            : s saved_ctx ( nurl_str_cat g_diag_ctx `` )
+            = g_diag_ctx ( nurl_str_cat ( nurl_str_cat4
+            ` [in the default body of method '` mname `' of trait '` tname )
+            ( nurl_str_cat3 `', emitted for impl type '` impl_nurl `' — fix it at the trait declaration]` ) )
             ( gen_fn_decl lex2 syms cg )
+            = g_diag_ctx saved_ctx
             ( nurl_lex_free lex2 )
         }
     }

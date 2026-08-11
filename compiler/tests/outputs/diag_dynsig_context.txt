@@ -1,0 +1,6 @@
+COMPILE FAIL
+ERRORS
+<dynsig>:1:10: error: NURL's arrow is '→' (U+2192, a single character), not the two-character '->'. Write '@ f i x → i { ... }'. The ASCII pair does not lex as an arrow at all — '-' and '>' are read as two separate operators, which is why the parse asks for a type here. [in the signature of method 'sound' of trait 'Speaker' (Self = 'Dog') — fix it at the trait declaration]
+Dog self - > s
+         ^
+error: aborting due to 1 previous error
