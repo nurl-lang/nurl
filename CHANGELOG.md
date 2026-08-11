@@ -6,27 +6,7 @@ are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
-
-### Changed
-
-- **The n-ary `&`/`|` arity trap is a hard error by default;
-  `--no-strict-arity` demotes it back to a warning.** As a warning the
-  trap was the worst possible outcome: `? & a b c d { … } { … }`
-  compiled to `status: ok` and a binary whose conditional logic is
-  wrong, and nothing downstream could tell — the whole reason
-  `--strict-arity` and its CI gate existed. The first-party tree has
-  been strict-clean since that gate landed, so the default now matches
-  what the repo already enforced. `--strict-arity` stays accepted as a
-  no-op for compatibility.
-
-  The check has two known legitimate-but-flagged shapes — a `~` loop
-  whose condition is a bare-arm `?` (`~ ? flip < n 3 < n 5 { … }`), and
-  a bare `{ … }` scoping block immediately after a bare-arm `?` — both
-  with trivial rewrites (fold the ternary into `&`/`|` logic; drop or
-  move the scoping block). A tree that hits them faster than it can fix
-  them builds with `--no-strict-arity`, and the error message names
-  that escape hatch.
+## [0.37.0] — 2026-08-11
 
 ### Added
 
@@ -37,7 +17,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   to the one thing that decides whether a message is any good — whether
   it is ever REACHED. The new gate compiles the corpus, matches every
   emitted diagnostic back to its source site, and reports the sites
-  nothing made speak. **132 of 220 sites are exercised; 81 are not.**
+  nothing made speak. It found **88 of 220 sites unread** on its first
+  run. At this release: **191 of 229 exercised, 17 never fired, 14
+  ambiguous, 7 unmatchable by text** — the three categories after
+  "exercised" are the tool declining to claim more than it can prove.
 
   An unfired message is unverified in every way that matters. Its wording
   has never been read next to the program that caused it, which is how
@@ -63,7 +46,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the `nurl.sh` driver end to end, and the examples gate. The corpus runs
   against the **same** `compiler/tests/outputs/` goldens as Linux and
   FreeBSD rather than a divergent `outputs-macos/` tree, so a macOS-only
-  miscompile cannot hide as a platform difference: 641 of 641.
+  miscompile cannot hide as a platform difference — it passed 641 of 641
+  when the leg landed, and the corpus has grown to 780 files since.
 
   Apple Silicon only. `macos-13`, GitHub's last Intel image, never left
   the queue across ten runs, and a required check that cannot schedule
@@ -92,8 +76,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   was added. Fixed and held at zero, so this one gates rather than
   ratchets.
 
-### Added
-
 - **`tools/diag_mutate.py` — one realistic mistake in a real program.**
   Every negative test in the corpus is minimal by construction: the
   mistake *is* the program, so there is nothing after it to go wrong. A
@@ -110,6 +92,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the same way.
 
 ### Changed
+
+- **The n-ary `&`/`|` arity trap is a hard error by default;
+  `--no-strict-arity` demotes it back to a warning.** As a warning the
+  trap was the worst possible outcome: `? & a b c d { … } { … }`
+  compiled to `status: ok` and a binary whose conditional logic is
+  wrong, and nothing downstream could tell — the whole reason
+  `--strict-arity` and its CI gate existed. The first-party tree has
+  been strict-clean since that gate landed, so the default now matches
+  what the repo already enforced. `--strict-arity` stays accepted as a
+  no-op for compatibility.
+
+  The check has two known legitimate-but-flagged shapes — a `~` loop
+  whose condition is a bare-arm `?` (`~ ? flip < n 3 < n 5 { … }`), and
+  a bare `{ … }` scoping block immediately after a bare-arm `?` — both
+  with trivial rewrites (fold the ternary into `&`/`|` logic; drop or
+  move the scoping block). A tree that hits them faster than it can fix
+  them builds with `--no-strict-arity`, and the error message names
+  that escape hatch.
 
 - **Coverage fingerprints now discriminate rather than merely being
   long.** Picking the longest literal at a site is the obvious rule and
@@ -128,12 +128,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   such groups existed, covering 30 sites; the worst prints
   `cannot store a value of type … into an element of type …` from **six**
   places. Those are reported as **ambiguous** rather than folded into
-  "exercised", which moves the honest figure from 205 to **177 of 228**.
-  A number that flatters the instrument is worse than a smaller one that
-  is true, and this instrument had been reporting its own best case for
-  eight passes.
+  "exercised". A number that flatters the instrument is worse than a
+  smaller one that is true, and this instrument had been reporting its
+  own best case for eight passes. The correction cost 28 sites at the
+  time; the entry above carries the figure as it stands at release,
+  since a later pass sharpened the matching again.
 
 ### Fixed
+
+- **Five silent-compile sweeps landed without release notes.** They were
+  merged after 0.36.0 was cut and each shipped its own tests, but none
+  wrote a `CHANGELOG` entry, so the release would have understated what
+  it contains. Recorded here from their commits:
+
+  * **Trait dispatch.** Calling a trait method with a receiver whose
+    type has no impl fell through dispatch and emitted a call against an
+    undefined symbol — an error only clang reported, far from the call.
+    Impl-method calls, static and through the vtable, never checked
+    arity at all: `( speak d )` against `speak Dog d i volume`
+    assembled, and the callee read an unset register. Five pre-existing
+    leaks in the dyn path went with it.
+  * **FFI call arity, float casts, and `u8`.** `( sin 1.0 2.0 )` against
+    a one-parameter declaration assembled and ran with the surplus
+    ignored; `( pow 2.0 )` read an unset ABI register. `# f x` emitted
+    `sitofp` from a struct, an enum or a string — invalid IR only clang
+    saw. And the documented `u8` spelling had never worked: it was
+    missing from `llvm_type`'s ladder, so every `: u8 x` carried a
+    phantom `%u8` type.
+  * **Generic call type-argument arity.** A surplus type argument
+    compiled clean and resolved to a monomorph no other site shares —
+    silently meaning something else. A deficit died deep inside
+    instantiation with an unrelated substitution error.
+  * **Aggregate, enum and payload shapes.** Returning a `?f` out of a
+    `→ ?i`, a differently-signed closure out of a declared closure
+    return, a number into an enum parameter, and a float payload into a
+    declared integer payload — the last bitcast the bits into the slot,
+    so the `??` arm read 4609434218613702656.
+  * **Dead-store clash checks fired on a `?` join whose arms both
+    return.** A store that can never execute was diagnosed as a type
+    error, which broke the playground image build.
 
 - **A binary operator one operand short swallowed the next statement and
   compiled.** `= n + n` followed by `( side )` took the call as its
