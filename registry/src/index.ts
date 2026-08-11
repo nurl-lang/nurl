@@ -987,6 +987,11 @@ export default {
 
     if (req.method === "GET") {
       if (path === "/") return handleCatalog(url, env);
+      if (path === "/robots.txt") {
+        return new Response("User-agent: *\nAllow: /\n", {
+          headers: { "content-type": "text/plain; charset=utf-8" },
+        });
+      }
       if (path === "/login") return handleLogin(env);
       if (path === "/auth/callback") return handleCallback(req, env);
       if (path === "/api/v1/search") return handleSearch(req, url, env);
