@@ -1105,6 +1105,32 @@
 // Allocated in main().
 : ~ i g_fn_ret_param 0
 
+// Noreturn registry. `g_fn_noreturn[fname]` is `1` when a call to
+// fname never returns to its caller. Seeded with the runtime's true
+// noreturn primitives (nurl_exit, nurl_panic) and grown by inference in
+// gen_fn: a function whose body contains no `^` at all and whose final
+// statement is a direct call to a noreturn function is itself noreturn
+// (every path that reaches its end diverges). Consumed by the fall-off
+// return battery: a void tail that is a noreturn call is not a missing
+// return value — the `ret undef` after it is dead — so the no-value
+// diagnostic must not fire on it. Populated in codegen order like
+// g_fn_sink: a forward call merely misses the inference (the diagnostic
+// then asks for an explicit `^`, never miscompiles).
+: ~ i g_fn_noreturn 0
+
+// Count of `^` statements seen while compiling the current function
+// body (closure bodies included — that over-count only makes the
+// noreturn inference more conservative, never wrong). Reset by gen_fn.
+: ~ i g_fn_ret_count 0
+
+// `g_loop_break_used[exit_label]` is `1` when a `break` targeting that
+// loop's exit label was compiled. Exit labels are globally unique (cg
+// label counter), so one flat map serves every loop. Consumed by
+// gen_loop: a literal-true loop whose exit label no break targets never
+// reaches it — the label is terminated with `unreachable` and the loop
+// counts as a returning tail. Allocated in main().
+: ~ i g_loop_break_used 0
+
 // ── DWARF debug-info state ───────────────────────────────────────
 // All zero/empty when --g is OFF; emit helpers then produce IR that
 // is byte-identical to a pre-DWARF build. Toggled in main().
@@ -2475,7 +2501,178 @@
     {}
 }
 
+// ── Return-type agreement: the shared battery ────────────────────────
+// Every path that hands a value back to a caller routes through here:
+// the explicit `^` (gen_ret), the implicit fall-off tail of a function
+// body (gen_fn), and the closure-body tail. NURL has no implicit
+// conversions, so a mismatch that reaches the `ret` is invalid IR only
+// the LLVM verifier sees — three build stages later, with a .ll line
+// number and no source location — or worse, `ret i64 undef` from a
+// body that fell off with no value: VALID IR returning garbage. Checked
+// here instead, each shape with its cure.
+//
+// `lt0` / `val0` — the returned value's type / SSA name. `first_tt` /
+// `first_val` — the return expression's FIRST token: variant-name
+// evidence for the enum wrap (`__last_ident_name__` would also bless
+// `^ ( f Red )`-shaped stale idents, the first token cannot).
+// `returning_match` — the operand was a `??` (selects the
+// statement-form hint in the no-value message). `is_falloff` — implicit
+// tail return: selects the fall-off wording of the no-value message and
+// skips the `^`-only value-from-void check (a discarded tail value in a
+// `→ v` function is legal statement position).
+// Returns the value to `ret` (the enum wrap may re-register it) and
+// publishes its final type through nurl_set_last_type.
+@ ret_ty_agree i lex i syms i cg s lt0 s val0 i first_tt s first_val b returning_match b is_falloff → s {
+    : ~ s lt ( nurl_str_cat lt0 `` )
+    : ~ s val ( nurl_str_cat val0 `` )
+    : s fn_rt ( nurl_sym_get syms `__fn_ret_ty__` )
+    // No usable value (last_type = void, e.g. a `? cond then else` whose
+    // arms disagree on type so gen_cond degrades silently to void; a
+    // statement-form `??`; a `→ v` call) while the function expects a
+    // real return value. Without this the `ret` is `ret void` out of an
+    // i64 function (LLVM reject) or `ret i64 undef` (garbage).
+    : b hint_match | returning_match == first_tt TT_QUESTQUEST
+    ? & & ( seq lt `void` ) != 0 ( nurl_str_len fn_rt ) ! ( seq fn_rt `void` )
+    { : s hint ? hint_match
+        `) — match arms contain '^' so '?? …' is statement-form, not an expression. Refactor to ': ~ T rc init / ?? mr { … = rc v } / ^ rc'.`
+        ? is_falloff
+        `) — the final statement yields nothing (a call returning 'v', an assignment, a loop or a bare block produce no value). End the body with an expression of the declared type, or return one explicitly with '^ <value>'. If the body LOOKS like it ends with a value, count the braces: an extra '}' closes the function early and strands the rest at the top level.`
+        `) — the commonest cause is returning a call whose declared return type is 'v', which yields nothing to return; a conditional whose branches disagree on type does the same. Check what the '^' operand produces.`
+        : s lead ? is_falloff
+        `the function body ends without a return value (expected `
+        `return expression has no value (expected `
+        ( die_stmt lex ( nurl_str_cat lead
+        ( nurl_str_cat ( llvm_to_nurl fn_rt ) hint ) ) ) }
+    {}
+    // Inverse of the above: the function is declared `→ v` (returns
+    // nothing) but `^` was handed a real value. Lowering it would emit
+    // `ret <ty> <val>` out of a `void` LLVM function — invalid IR that
+    // historically only clang caught (`ret i64 0` from `→ v`). Reject it
+    // here; the cure is a bare `^` (early return) or a non-void type.
+    // Fall-off is exempt: a value-producing final STATEMENT in a `→ v`
+    // function is ordinary discarded statement position.
+    ? & & ! is_falloff ! ( seq lt `void` ) ( seq fn_rt `void` )
+    { ( die lex ( nurl_str_cat ( nurl_str_cat
+        `this function is declared '→ v' (returns nothing) but '^' is given a value of type '` ( llvm_to_nurl lt ) )
+        `' to return — use a bare '^' to return early, or declare a return type` ) ) }
+    {}
+    // Never-valid clashes (mirrors the binary-operator check): returning
+    // a float where a non-float is declared (or vice versa), or a
+    // pointer/string where a non-pointer scalar is declared, used to
+    // emit `ret i64 <double>` / `ret i64 i8* …` that nurlc accepted
+    // (rc 0) and only clang rejected ("value doesn't match function
+    // result type"). Loose pointer-to-pointer returns stay valid
+    // (opaque pointers make them one LLVM type).
+    ? & & != 0 ( nurl_str_len fn_rt ) ! ( seq lt `void` ) ! ( seq fn_rt `void` )
+    { : b ret_vf | ( seq lt `double` ) ( seq lt `float` )
+        : b ret_df | ( seq fn_rt `double` ) ( seq fn_rt `float` )
+        ? | != ret_vf ret_df & ( is_ptr_ty lt ) ! ( is_ptr_ty fn_rt )
+        { ( die_stmt lex ( nurl_str_cat ( nurl_str_cat4
+            `return value type '` ( llvm_to_nurl lt ) `' does not match the declared return type '` ( llvm_to_nurl fn_rt ) )
+            `' — NURL has no implicit conversions; return a value of the declared type or convert with '# T expr'` ) ) }
+        {}
+        // Integer value where a POINTER type is declared. `^ n` from a
+        // `→ s` fn lowered `ret i64 %n` out of a `define i8*` function —
+        // invalid IR that nurlc accepted (rc 0) and only the LLVM
+        // verifier rejected, with a .ll line number and no source
+        // location. The old carve-out for a `^ 0` null idiom protected
+        // IR that was itself invalid (`ret i64 0` from a `define ptr`),
+        // so no linked program ever used it; the one honest spelling of
+        // a null pointer is the explicit '# *T 0' cast.
+        ? & > ( int_width lt ) 0 ( is_ptr_ty fn_rt )
+        { ( die_stmt lex ( nurl_str_cat ( nurl_str_cat4
+            `return value type '` ( llvm_to_nurl lt ) `' does not match the declared return type '` ( llvm_to_nurl fn_rt ) )
+            `' — NURL has no implicit integer-to-pointer conversion; return a value of the declared type, or cast an address intentionally with '# T expr' (the null pointer is '# T 0' for a pointer type T)` ) ) }
+        {}
+        // Float WIDTH mismatch — the floating dual of the integer-width
+        // contract below. `^ x` of `f32` from a `→ f` function lowered
+        // `ret float` out of a `define double` — invalid IR that nurlc
+        // accepted (rc 0) and only the LLVM verifier rejected, with a .ll
+        // line number and no source location.
+        ? & & ret_vf ret_df ! ( seq lt fn_rt )
+        { ( die_stmt lex ( nurl_str_cat ( nurl_str_cat4
+            `return value type '` ( llvm_to_nurl lt ) `' does not match the declared return type '` ( llvm_to_nurl fn_rt ) )
+            `' — a float width widens into a BINDING (': f x f32val' is fine), but a return type is a contract and must match exactly. Convert with '# f expr' (widen, lossless) or '# f32 expr' (narrow).` ) ) }
+        {}
+        // Anonymous/function AGGREGATE spelling mismatch — `^ @ ? f { T x }`
+        // out of a `→ ?i` function (`ret { i1, double }` from a
+        // `{ i1, i64 }` one: invalid IR only the LLVM verifier saw, three
+        // build stages later), or a closure returned from a fn whose
+        // declared `(@ …)` return has a different signature (that one
+        // ASSEMBLES — and every later invoke reinterprets its arguments).
+        // Compared whitespace-blind: the spellings' spacing is not
+        // canonical across lowering paths.
+        ? & & == ( nurl_str_get ( nurl_llty lt ) 0 ) 123
+        == ( nurl_str_get ( nurl_llty fn_rt ) 0 ) 123
+        ! ( seq ( __strip_spaces ( nurl_llty lt ) ) ( __strip_spaces ( nurl_llty fn_rt ) ) )
+        { ( die_stmt lex ( nurl_str_cat ( nurl_str_cat4
+            `return value type '` ( nurl_llty lt ) `' does not match the declared return type '` ( nurl_llty fn_rt ) )
+            `' — the payload/signature inside the aggregate differs, and NURL has no implicit conversions between option/result/slice/closure shapes. Construct the declared shape ('@ ? i { T … }' for '→ ?i'), or fix the declaration.` ) ) }
+        {}
+        // Return the wrong named struct by value (the return-position dual of
+        // the call-site struct check): `^ b` from a `→ A` fn where b is a B.
+        ? ( __arg_named_struct_mismatch lt fn_rt )
+        { ( die_stmt lex ( nurl_str_cat ( nurl_str_cat4
+            `return value type '` ( llvm_to_nurl lt ) `' does not match the declared return type '` ( llvm_to_nurl fn_rt ) )
+            `' — wrong struct type returned by value (the fields would be silently reinterpreted)` ) ) }
+        {}
+        // Integer WIDTH mismatch — above all the bool boundary. `^ ( ffi )` in
+        // a `→ b` function lowered `ret i64 …` out of an i1 function (and the
+        // mirror image, `^ == a b` from `→ i`, lowered `ret i1` out of an i64
+        // one): invalid IR that nurlc accepted (rc 0) and only the LLVM
+        // verifier rejected, three build stages later, with a line number
+        // into the .ll. Same policy as the float/pointer clashes: no
+        // implicit conversions, say so HERE with the cure spelled out.
+        ? & & ( is_int_ty lt ) ( is_int_ty fn_rt ) ! ( seq lt fn_rt )
+        { : s cure ? ( seq fn_rt `i1` )
+            `' — NURL has no implicit conversions; compare the value to get a b, e.g. '^ != 0 ( … )'`
+            ? ( seq lt `i1` )
+            `' — a bool widens into an integer BINDING (': i n ( > a b )' is fine), but a return type is a contract and must match exactly. Select the value you mean: '^ ? cond 1 0'.`
+            `' — NURL has no implicit conversions; convert with '# T expr'`
+            ( die_stmt lex ( nurl_str_cat ( nurl_str_cat4
+            `return value type '` ( llvm_to_nurl lt ) `' does not match the declared return type '` ( llvm_to_nurl fn_rt ) )
+            cure ) ) }
+        {}
+        // Enum return type. A bare variant (`^ Green` from a `→ Color`
+        // fn) evaluates to its i64 tag, so the ret was `ret i64` out of
+        // a `define %Color` function — invalid IR only clang saw, three
+        // build stages later. Wrap the tag into the enum shape (the
+        // return-position dual of the binding wrap in coerce_store_val).
+        // Any OTHER integer dies: an enum is a closed set of named
+        // variants, and no number converts into one.
+        ? & & == ( nurl_str_get fn_rt 0 ) 37 ( is_int_ty lt ) ! ( is_ptr_ty fn_rt )
+        { : s __ren ( nurl_str_slice fn_rt 1 - ( nurl_str_len fn_rt ) 1 )
+            : s __rvl ( nurl_sym_get2 syms __ren `__variants` )
+            ? != 0 ( nurl_str_len __rvl )
+            {  // A variant is recognised from the return expression's
+                // FIRST token, or from a `?`-join both of whose arms
+                // gen_cond proved variants of this enum
+                // (`^ ? cond Red Green`). Consume-once channel.
+                : s __rjve ( nurl_str_cat ( nurl_sym_get syms `__last_join_variant_enum__` ) `` )
+                ( nurl_sym_def syms `__last_join_variant_enum__` `` )
+                ? | & & == ( int_width lt ) 64 ( is_ident_tok first_tt )
+                ( str_contains_word __rvl first_val )
+                & == ( int_width lt ) 64 ( seq __rjve __ren )
+                { : s __ewr ( nurl_cg_reg cg )
+                    ( nurl_print `  ` ) ( nurl_print __ewr )
+                    ( nurl_print ` = insertvalue ` ) ( nurl_print ( nurl_llty fn_rt ) )
+                    ( nurl_print ` undef, i64 ` ) ( nurl_print val ) ( nurl_print `, 0\n` )
+                    = val __ewr
+                    = lt ( nurl_str_cat fn_rt `` ) }
+                { ( die_stmt lex ( nurl_str_cat ( nurl_str_cat4
+                    `return value type '` ( llvm_to_nurl lt ) `' does not match the declared return type: enum '` __ren )
+                    `' — an enum is a closed set of named variants, and no number converts into one implicitly (the value could name no variant at all). Return a variant by name ('^ Red'), or declare a numeric return type.` ) ) } }
+            {} }
+        {}
+    }
+    {}
+    ( nurl_set_last_type lt )
+    val
+}
+
 @ gen_ret i lex i syms i cg → s {
+    // Noreturn inference input: this body does return somewhere.
+    = g_fn_ret_count + g_fn_ret_count 1
     // Cascade guard: a `^` reached here while parsing a value operand
     // (g_ret_forbidden set by gen_operand / a `?`-condition / `??`-
     // scrutinee / a return value) means a preceding fixed-arity prefix
@@ -2644,131 +2841,12 @@
     ? ( lint_is_manual_handle ( nurl_llty ( nurl_sym_get syms `__fn_ret_ty__` ) ) )
     { ( lint_note_released ( nurl_sym_get syms `__last_ident_name__` ) ) }
     {}
-    // Diagnose cases where gen_expr produced no usable value (last_type =
-    // void, e.g. a `? cond then else` whose two arms have incompatible
-    // types so gen_cond degrades silently to void) while the function
-    // expects a real return value. Without this, gen_ret would emit
-    // `ret void` from an i64-returning function and LLVM would reject it
-    // downstream with the cryptic "value doesn't match function result
-    // type" error.
-    : s fn_rt ( nurl_sym_get syms `__fn_ret_ty__` )
-    ? & & ( seq lt `void` ) != 0 ( nurl_str_len fn_rt ) ! ( seq fn_rt `void` )
-    { : s hint ? returning_match
-        `) — match arms contain '^' so '?? …' is statement-form, not an expression. Refactor to ': ~ T rc init / ?? mr { … = rc v } / ^ rc'.`
-        `) — the commonest cause is returning a call whose declared return type is 'v', which yields nothing to return; a conditional whose branches disagree on type does the same. Check what the '^' operand produces.`
-        ( die_stmt lex ( nurl_str_cat `return expression has no value (expected `
-        ( nurl_str_cat ( llvm_to_nurl fn_rt ) hint ) ) ) }
-    {}
-    // Inverse of the above: the function is declared `→ v` (returns
-    // nothing) but `^` was handed a real value. Lowering it would emit
-    // `ret <ty> <val>` out of a `void` LLVM function — invalid IR that
-    // historically only clang caught (`ret i64 0` from `→ v`). Reject it
-    // here; the cure is a bare `^` (early return) or a non-void type.
-    ? & ! ( seq lt `void` ) ( seq fn_rt `void` )
-    { ( die lex ( nurl_str_cat ( nurl_str_cat
-        `this function is declared '→ v' (returns nothing) but '^' is given a value of type '` ( llvm_to_nurl lt ) )
-        `' to return — use a bare '^' to return early, or declare a return type` ) ) }
-    {}
-    // Return-type agreement (narrow, never-valid clashes only — mirrors the
-    // binary-operator check). NURL has no implicit conversions, so returning a
-    // float where a non-float is declared (or vice versa), or a pointer/string
-    // where a non-pointer scalar is declared, used to emit `ret i64 <double>` /
-    // `ret i64 i8* …` that nurlc accepted (rc 0) and only clang rejected
-    // ("value doesn't match function result type"). Only these two directions
-    // are flagged so the null-as-`0` idiom (`^ 0` from a `*T`-returning fn) and
-    // loose pointer-to-pointer returns stay valid.
-    ? & & != 0 ( nurl_str_len fn_rt ) ! ( seq lt `void` ) ! ( seq fn_rt `void` )
-    { : b ret_vf | ( seq lt `double` ) ( seq lt `float` )
-        : b ret_df | ( seq fn_rt `double` ) ( seq fn_rt `float` )
-        ? | != ret_vf ret_df & ( is_ptr_ty lt ) ! ( is_ptr_ty fn_rt )
-        { ( die_stmt lex ( nurl_str_cat ( nurl_str_cat4
-            `return value type '` lt `' does not match the declared return type '` fn_rt )
-            `' — NURL has no implicit conversions; return a value of the declared type or convert with '# T expr'` ) ) }
-        {}
-        // Float WIDTH mismatch — the floating dual of the integer-width
-        // contract below. `^ x` of `f32` from a `→ f` function lowered
-        // `ret float` out of a `define double` — invalid IR that nurlc
-        // accepted (rc 0) and only the LLVM verifier rejected, with a .ll
-        // line number and no source location.
-        ? & & ret_vf ret_df ! ( seq lt fn_rt )
-        { ( die_stmt lex ( nurl_str_cat ( nurl_str_cat4
-            `return value type '` ( llvm_to_nurl lt ) `' does not match the declared return type '` ( llvm_to_nurl fn_rt ) )
-            `' — a float width widens into a BINDING (': f x f32val' is fine), but a return type is a contract and must match exactly. Convert with '# f expr' (widen, lossless) or '# f32 expr' (narrow).` ) ) }
-        {}
-        // Anonymous/function AGGREGATE spelling mismatch — `^ @ ? f { T x }`
-        // out of a `→ ?i` function (`ret { i1, double }` from a
-        // `{ i1, i64 }` one: invalid IR only the LLVM verifier saw, three
-        // build stages later), or a closure returned from a fn whose
-        // declared `(@ …)` return has a different signature (that one
-        // ASSEMBLES — and every later invoke reinterprets its arguments).
-        // Compared whitespace-blind: the spellings' spacing is not
-        // canonical across lowering paths.
-        ? & & == ( nurl_str_get ( nurl_llty lt ) 0 ) 123
-        == ( nurl_str_get ( nurl_llty fn_rt ) 0 ) 123
-        ! ( seq ( __strip_spaces ( nurl_llty lt ) ) ( __strip_spaces ( nurl_llty fn_rt ) ) )
-        { ( die_stmt lex ( nurl_str_cat ( nurl_str_cat4
-            `return value type '` ( nurl_llty lt ) `' does not match the declared return type '` ( nurl_llty fn_rt ) )
-            `' — the payload/signature inside the aggregate differs, and NURL has no implicit conversions between option/result/slice/closure shapes. Construct the declared shape ('@ ? i { T … }' for '→ ?i'), or fix the declaration.` ) ) }
-        {}
-        // Return the wrong named struct by value (the return-position dual of
-        // the call-site struct check): `^ b` from a `→ A` fn where b is a B.
-        ? ( __arg_named_struct_mismatch lt fn_rt )
-        { ( die_stmt lex ( nurl_str_cat ( nurl_str_cat4
-            `return value type '` lt `' does not match the declared return type '` fn_rt )
-            `' — wrong struct type returned by value (the fields would be silently reinterpreted)` ) ) }
-        {}
-        // Integer WIDTH mismatch — above all the bool boundary. `^ ( ffi )` in
-        // a `→ b` function lowered `ret i64 …` out of an i1 function (and the
-        // mirror image, `^ == a b` from `→ i`, lowered `ret i1` out of an i64
-        // one): invalid IR that nurlc accepted (rc 0) and only the LLVM
-        // verifier rejected, three build stages later, with a line number
-        // into the .ll. Same policy as the float/pointer clashes: no
-        // implicit conversions, say so HERE with the cure spelled out.
-        ? & & ( is_int_ty lt ) ( is_int_ty fn_rt ) ! ( seq lt fn_rt )
-        { : s cure ? ( seq fn_rt `i1` )
-            `' — NURL has no implicit conversions; compare the value to get a b, e.g. '^ != 0 ( … )'`
-            ? ( seq lt `i1` )
-            `' — a bool widens into an integer BINDING (': i n ( > a b )' is fine), but a return type is a contract and must match exactly. Select the value you mean: '^ ? cond 1 0'.`
-            `' — NURL has no implicit conversions; convert with '# T expr'`
-            ( die_stmt lex ( nurl_str_cat ( nurl_str_cat4
-            `return value type '` ( llvm_to_nurl lt ) `' does not match the declared return type '` ( llvm_to_nurl fn_rt ) )
-            cure ) ) }
-        {}
-        // Enum return type. A bare variant (`^ Green` from a `→ Color`
-        // fn) evaluates to its i64 tag, so the ret was `ret i64` out of
-        // a `define %Color` function — invalid IR only clang saw, three
-        // build stages later. Wrap the tag into the enum shape (the
-        // return-position dual of the binding wrap in coerce_store_val).
-        // Any OTHER integer dies: an enum is a closed set of named
-        // variants, and no number converts into one.
-        ? & & == ( nurl_str_get fn_rt 0 ) 37 ( is_int_ty lt ) ! ( is_ptr_ty fn_rt )
-        { : s __ren ( nurl_str_slice fn_rt 1 - ( nurl_str_len fn_rt ) 1 )
-            : s __rvl ( nurl_sym_get2 syms __ren `__variants` )
-            ? != 0 ( nurl_str_len __rvl )
-            {  // A variant is recognised from the return expression's
-                // FIRST token (already snapshotted for the §2.8 passthrough
-                // check — `__last_ident_name__` would also bless
-                // `^ ( f Red )`-shaped stale idents), or from a `?`-join
-                // both of whose arms gen_cond proved variants of this
-                // enum (`^ ? cond Red Green`). Consume-once channel.
-                : s __rjve ( nurl_str_cat ( nurl_sym_get syms `__last_join_variant_enum__` ) `` )
-                ( nurl_sym_def syms `__last_join_variant_enum__` `` )
-                ? | & & == ( int_width lt ) 64 ( is_ident_tok ret_first_tt )
-                ( str_contains_word __rvl ret_first_val )
-                & == ( int_width lt ) 64 ( seq __rjve __ren )
-                { : s __ewr ( nurl_cg_reg cg )
-                    ( nurl_print `  ` ) ( nurl_print __ewr )
-                    ( nurl_print ` = insertvalue ` ) ( nurl_print ( nurl_llty fn_rt ) )
-                    ( nurl_print ` undef, i64 ` ) ( nurl_print val ) ( nurl_print `, 0\n` )
-                    = val __ewr
-                    = lt ( nurl_str_cat fn_rt `` ) }
-                { ( die_stmt lex ( nurl_str_cat ( nurl_str_cat4
-                    `return value type '` ( llvm_to_nurl lt ) `' does not match the declared return type: enum '` __ren )
-                    `' — an enum is a closed set of named variants, and no number converts into one implicitly (the value could name no variant at all). Return a variant by name ('^ Red'), or declare a numeric return type.` ) ) } }
-            {} }
-        {}
-    }
-    {}
+    // Return-type agreement + enum wrap: the shared battery
+    // (ret_ty_agree above — also run at the fall-off and closure-tail
+    // return sites). It publishes the final type via nurl_set_last_type;
+    // the enum wrap may hand back a new SSA value.
+    = val ( ret_ty_agree lex syms cg lt val ret_first_tt ret_first_val returning_match F )
+    = lt ( nurl_get_last_type )
     // Determine which owned-slice binding (if any) is escaping as the return value.
     // Ownership transfers only when the return type is itself a slice AND the
     // returned expression resolved to a simple identifier load.
@@ -9043,6 +9121,15 @@
     // the function block is well-formed.
     : ~ i arms_total 0
     : ~ i arms_ret 0
+    // Which enum every VALUE arm's result is a variant tag of, if any —
+    // gen_cond's t_ven/e_ven generalised to N arms. `m_ven` holds the
+    // one agreed enum; `m_ven_ok` drops to F on the first arm that is
+    // not a bare variant of the same enum. Published on the join
+    // channel below so the enum wrap sites bless
+    // `?? n { 0 → Red  _ → Blue }` in a `→ Color` position exactly as
+    // they bless `? cond Red Blue`.
+    : ~ s m_ven ``
+    : ~ b m_ven_ok T
     // fallback_pred = label of the open block right before the trailing
     // `br end_label` after the loop.  Empty when that br lands inside an
     // already-terminated block (wildcard-last) and is therefore dead.
@@ -9934,6 +10021,13 @@
             ( nurl_sym_def syms `__last_ident_name__` `` )
             ( nurl_sym_def syms `__last_call_ret_owned__` `` )
             ( nurl_sym_def syms `__last_value_alias__` `` )
+            // Reset the join-variant channel against residue, and
+            // snapshot the arm body's FIRST token: variant evidence must
+            // come from the token itself, not a stale last-ident
+            // (`( f Red )` must not bless).
+            ( nurl_sym_def syms `__last_join_variant_enum__` `` )
+            : i arm_tt0 ( nurl_lex_type lex )
+            : s arm_v0 ( nurl_lex_val lex )
             : ~ s arm_result ( gen_stmt lex syms cg )
             = g_in_match_arm __saved_in_arm
             : s arm_type ( nurl_get_last_type )
@@ -9985,6 +10079,18 @@
             } {}
             = arms_total + arms_total 1
             ? != 0 arm_did_ret { = arms_ret + arms_ret 1 } {}
+            // Variant evidence for this VALUE arm (gen_cond's t_ven
+            // twin): a bare variant name (first token and last-ident
+            // agree), or a nested join that already proved its arms.
+            ? == arm_did_ret 0
+            { : ~ s arm_ven ``
+                ? & ( is_ident_tok arm_tt0 ) & ( seq arm_v0 arm_retid ) != 0 ( nurl_str_len arm_retid )
+                { = arm_ven ( nurl_str_cat ( nurl_sym_get2 syms arm_retid `__enum_of` ) `` ) }
+                { = arm_ven ( nurl_str_cat ( nurl_sym_get syms `__last_join_variant_enum__` ) `` ) }
+                ? == 0 ( nurl_str_len arm_ven ) { = m_ven_ok F }
+                { ? == 0 ( nurl_str_len m_ven ) { = m_ven ( nurl_str_cat arm_ven `` ) }
+                    { ? ( seq m_ven arm_ven ) {} { = m_ven_ok F } } } }
+            {}
             // Dangling-borrow tracking: an arm that returns never reaches the
             // merge label, so only falling-through arms join.
             ? == arm_did_ret 0 {
@@ -10119,11 +10225,16 @@
     ( nurl_print end_label ) ( nurl_print `:\n` )
     ( nurl_sym_def syms `__cur_lbl__` end_label )
 
-    // All arms ended in `^` AND the trailing fallback br landed here:
-    // end_label is technically reachable but the match is exhaustive,
-    // so no real path arrives. Emit unreachable + flag did_ret so the
-    // function epilogue doesn't try to ret void into a non-void return.
-    ? & & > arms_total 0 == arms_ret arms_total != 0 ( nurl_str_len fallback_pred )
+    // All arms ended in `^`: no real path arrives at end_label. With a
+    // trailing fallback br the label is technically reachable but the
+    // match is exhaustive; without one (wildcard-last, or the two-way
+    // T/F result dispatch) it has no predecessors at all. Either way,
+    // terminate it with `unreachable` + flag did_ret so the function
+    // epilogue doesn't try to ret void into a non-void return — and so
+    // the fall-off return battery knows this `??` tail closed every
+    // path (it used to see a void tail and demand a value the code
+    // provably never needs).
+    ? & > arms_total 0 == arms_ret arms_total
     { ( emit_call_term `unreachable` ) = g_did_ret 1 } { = g_did_ret 0 }
 
     // Emit phi if every live arm produced a value of one consistent
@@ -10168,6 +10279,13 @@
         ? | > ( int_width phi_type ) 0 ( seq phi_type `double` )
         { ( nurl_sym_def syms `__last_ident_name__` `` ) }
         {}
+        // Publish the join-variant channel (consume-once, gen_cond's
+        // twin): every value arm proved a variant of the one enum, so
+        // the phi carries a tag of it and the enum wrap sites may bless
+        // this match's value. Cleared otherwise — the last arm's nested
+        // residue must not leak out as this match's proof.
+        ( nurl_sym_def syms `__last_join_variant_enum__`
+        ? & m_ven_ok != 0 ( nurl_str_len m_ven ) m_ven `` )
         ^ final_reg
     } {}
     // Arms of DIFFERENT integer widths: join losslessly at 64 bits over the
@@ -10412,6 +10530,9 @@
         `'break' outside a loop — there is nothing to leave. It is valid only inside a '~' loop body.`
         `'continue' outside a loop — there is no next iteration. It is valid only inside a '~' loop body.` ) }
     {}
+    // Record that this loop's exit label is a real branch target — an
+    // infinite loop with a `break` DOES reach its exit (see gen_loop).
+    ? is_break { ( nurl_sym_def g_loop_break_used target `1` ) } {}
     // The drop emitters do not just emit: each rewrites the owned-list
     // it walks, because at a function's single exit that bookkeeping is
     // finished with. A branch is not that. `break` is ONE path out of
@@ -10465,6 +10586,15 @@
     : s lc ( nurl_cg_lbl cg `loop_check` )
     : s lb ( nurl_cg_lbl cg `loop_body` )
     : s le ( nurl_cg_lbl cg `loop_exit` )
+
+    // Literal-true condition (`~ T {` / `~ 1 {`)? Prefix grammar makes
+    // this exact: an expression whose first token is a literal IS that
+    // literal. Such a loop's exit label is unreachable unless the body
+    // contains a `break` that targets it (g_loop_break_used, recorded
+    // by gen_loop_jump) — checked after the body below.
+    : i __lp_tt0 ( nurl_lex_type lex )
+    : b __lp_true | & == __lp_tt0 TT_BOOL ( seq ( nurl_lex_val lex ) `T` )
+    & == __lp_tt0 TT_INT != 0 ( nurl_lex_inum lex )
 
     ( nurl_print `  br label %` ) ( nurl_print lc ) ( emit_dbg_eol )
     ( emit ( nurl_str_cat lc `:` ) )
@@ -10541,6 +10671,18 @@
         ( emit ( nurl_str_cat le `:` ) )
         ( nurl_sym_def syms `__cur_lbl__` le )
         ( nurl_set_last_type `void` )
+        // An infinite loop (`~ T {`) with no `break` targeting it never
+        // reaches its exit label: terminate the label with `unreachable`
+        // and flag did_ret, so the fall-off return battery knows control
+        // cannot leave this statement (a `→ i` fn whose only returns are
+        // `^` inside the loop is complete — it used to get a dead
+        // `ret i64 undef` here, and would now be asked for a value it
+        // provably never needs). A loop that CAN exit resets did_ret:
+        // its exit path is live even when the body returned somewhere.
+        ? & __lp_true == 0 ( nurl_sym_len g_loop_break_used le )
+        { ( emit_call_term `unreachable` )
+            = g_did_ret 1 }
+        { = g_did_ret 0 }
         ^ ( nurl_str_cat `undef` `` )
     }
     {
@@ -10632,18 +10774,63 @@
 
 // ── Block expression { stmts... } ─────────────────────────────────
 
+// A block whose FINAL statement is a direct call to a noreturn function
+// (g_fn_noreturn: nurl_exit / nurl_panic and everything inferred from
+// them — die, panic wrappers) is terminated exactly like a `^` tail:
+// emit `unreachable` (the call never comes back, and without a
+// terminator-shaped tail the enclosing arm/join machinery would emit a
+// dead `br` out of the block) and set g_did_ret so every "did this path
+// return" consumer — arm join suppression, both-arms-terminated
+// detection, the fall-off return battery — treats the path as closed.
+@ __tail_noreturn_close i syms s callee → v {
+    ? == g_did_ret 0 {} { ^ }
+    // A local binding shadowing the name (a closure call) is never
+    // noreturn — priv_resolve applies the same local-first rule.
+    ? != 0 ( nurl_sym_len2 syms callee `__ptr` ) { ^ } {}
+    // Registry lookup, tolerant of private-name mangling: a `__` callee
+    // is registered under its emitted name `__name__fp<fileid>`
+    // (priv_mangle_for), and a same-file call site spells the source
+    // name. Lookup-only twin of priv_resolve's same-file case — a miss
+    // just means no exemption, never a wrong diagnostic.
+    : ~ s mark ( nurl_sym_get g_fn_noreturn callee )
+    ? & == 0 ( nurl_str_len mark ) ( priv_is_private callee )
+    { = mark ( nurl_sym_get g_fn_noreturn ( priv_mangle_for callee ( priv_file_id ) ) ) }
+    {}
+    ? ( seq mark `1` )
+    { ( emit_call_term `unreachable` )
+        = g_did_ret 1 }
+    {}
+}
+
 @ gen_block_expr i lex i syms i cg → s {
     : i bck_line ( nurl_lex_line lex )
     ( nurl_lex_advance lex )
     ( bck_block_enter bck_line )
     : ~ s last ( nurl_str_cat `undef` `` )
     : ~ b any F
+    // Tail evidence for the fall-off return battery (ret_ty_agree): the
+    // first token of the block's FINAL statement. Captured per iteration
+    // into locals and published only after the loop, so an inner block's
+    // own publication cannot clobber this block's (the outermost write
+    // is the last one executed).
+    : ~ i __tail_tt 0
+    : ~ s __tail_tv ``
+    : ~ s __tail_callee ``
     ~ != ( nurl_lex_type lex ) TT_RBRACE {
+        = __tail_tt ( nurl_lex_type lex )
+        = __tail_tv ( nurl_lex_val lex )
+        = __tail_callee ? == __tail_tt TT_LPAREN ( nurl_lex_peek_val lex ) ``
         = last ( gen_stmt lex syms cg )
         = any T
     }
     ( nurl_lex_advance lex )
     ( bck_block_exit )
+    ? any
+    { ( nurl_sym_def syms `__tail_first_tt__` ( nurl_str_int __tail_tt ) )
+        ( nurl_sym_def syms `__tail_first_val__` __tail_tv )
+        ( nurl_sym_def syms `__tail_callee__` __tail_callee )
+        ( __tail_noreturn_close syms __tail_callee ) }
+    {}
     // An empty block `{}` is the unit / void value. Without typing it as
     // void, `nurl_get_last_type` retains whatever it was before the block
     // (i64 by default, i1 inside a conditional), so a `^ {}` in a void
@@ -10678,7 +10865,12 @@
     : i bck_line ( nurl_lex_line lex )
     ( expect lex TT_LBRACE )
     ( bck_block_enter bck_line )
+    // Noreturn-tail detection — same protocol as gen_block_expr.
+    : ~ s __tail_callee ``
+    : ~ b __tail_any F
     ~ != ( nurl_lex_type lex ) TT_RBRACE {
+        = __tail_callee ? == ( nurl_lex_type lex ) TT_LPAREN ( nurl_lex_peek_val lex ) ``
+        = __tail_any T
         // Bind the statement's value: gen_stmt hands back the IR value
         // string it emitted, and a bare `( gen_stmt … )` here would
         // DISCARD an owned string — 492 leaked per self-compile. The
@@ -10693,6 +10885,7 @@
     }
     ( expect lex TT_RBRACE )
     ( bck_block_exit )
+    ? __tail_any { ( __tail_noreturn_close syms __tail_callee ) } {}
 }
 
 // gen_block_ret: like gen_block_stmts but returns the last stmt value.
@@ -10705,7 +10898,18 @@
     // condition that was evaluated just before this arm.
     ( bck_block_enter bck_line )
     : ~ s last ( nurl_str_cat `undef` `` )
+    // Tail evidence for the fall-off return battery — same protocol as
+    // gen_block_expr (locals per iteration, publish after the loop so
+    // inner blocks cannot clobber the outer block's snapshot).
+    : ~ i __tail_tt 0
+    : ~ s __tail_tv ``
+    : ~ s __tail_callee ``
+    : ~ b __tail_any F
     ~ != ( nurl_lex_type lex ) TT_RBRACE {
+        = __tail_tt ( nurl_lex_type lex )
+        = __tail_tv ( nurl_lex_val lex )
+        = __tail_callee ? == __tail_tt TT_LPAREN ( nurl_lex_peek_val lex ) ``
+        = __tail_any T
         = last ( gen_stmt lex syms cg )
         // A bare literal that is NOT the block's final expression (its
         // return value) has its value discarded — reject it as a dangling
@@ -10719,6 +10923,12 @@
     }
     ( expect lex TT_RBRACE )
     ( bck_block_exit )
+    ? __tail_any
+    { ( nurl_sym_def syms `__tail_first_tt__` ( nurl_str_int __tail_tt ) )
+        ( nurl_sym_def syms `__tail_first_val__` __tail_tv )
+        ( nurl_sym_def syms `__tail_callee__` __tail_callee )
+        ( __tail_noreturn_close syms __tail_callee ) }
+    {}
     last
 }
 
@@ -15244,12 +15454,18 @@
                         {}
                     }
                     {}
-                    // (d) a POINTER value into a scalar field. The insertvalue
-                    // would carry `i8*` into an i64 slot — invalid IR that
-                    // only clang used to reject, with a .ll line number and
-                    // no source location. The reverse direction (an integer
-                    // into a pointer-typed field) stays legal: it is the
-                    // `@ P { 0 }` null idiom and the handle-stash coercion.
+                    // (d) a POINTER value into a scalar field, and (e) an
+                    // INTEGER value into a pointer-typed field. Either
+                    // direction emits an insertvalue whose value operand
+                    // disagrees with the slot (`i8*` into an i64 slot, or
+                    // `i64 0` into a ptr slot) — invalid IR that only clang
+                    // used to reject, with a .ll line number and no source
+                    // location. The old carve-out for an `@ P { 0 }` null
+                    // idiom in direction (e) protected IR that was itself
+                    // invalid, so no linked program ever used it; the honest
+                    // null spelling is the explicit '# *T 0' cast. Handle
+                    // structs (Vec/String — case (c)'s inttoptr wrap) and
+                    // enum fields are excluded above and stay legal.
                     // The field's declared source spelling goes through
                     // parse_type so pointer aliases (`s` → i8*, `*u8` →
                     // i8*) classify correctly.
@@ -15260,11 +15476,22 @@
                         ( nurl_lex_free __slplx )
                         ? ! ( is_ptr_ty __sldll ) { = __slps T } {} }
                     {}
-                    ? | | | != __slvf __sldf ( __arg_named_struct_mismatch fty __sldft ) __slint_ps __slps
+                    // (e) classifies the declared side without a parse: the
+                    // registry stores the parsed repr (`i64*`, `i8*` — a
+                    // trailing star, is_ptr_ty), and a generic instantiation
+                    // may store the source spelling (`*T` — a leading star,
+                    // or the `s` alias).
+                    : b __slip & > ( int_width fty ) 0
+                    | | ( is_ptr_ty __sldft )
+                    == ( nurl_str_get __sldft 0 ) 42 ( seq __sldft `s` )
+                    : s __slcure ? __slip
+                    `' — NURL has no implicit integer-to-pointer conversion; give the field a pointer-typed value, or cast an address intentionally with '# T expr' (the null pointer is '# T 0' for a pointer type T)`
+                    `' — NURL has no implicit conversions; give the field a value of its declared type, or convert explicitly with '# T expr'`
+                    ? | | | | != __slvf __sldf ( __arg_named_struct_mismatch fty __sldft ) __slint_ps __slps __slip
                     { ( die lex ( nurl_str_cat3
                         ( nurl_str_cat4 `field ` ( nurl_str_int idx ) ` of struct literal '` cur_sname )
                         ( nurl_str_cat4 `' expects type '` __sldft `' but the value has type '` fty )
-                        `' — NURL has no implicit conversions; give the field a value of its declared type, or convert explicitly with '# T expr'` ) ) }
+                        __slcure ) ) }
                     {}
                 }
                 {}
@@ -16132,6 +16359,12 @@
     ? == ( nurl_str_get lt 0 ) 37
     { ^ ( nurl_str_slice lt 1 - ( nurl_str_len lt ) 1 ) }
     {}
+    // pointer: `i64*` reads back as `*i`, `%Foo*` as `*Foo` (`i8*` → `s`
+    // matched above). Recursion peels one star per level (`i64**` → `**i`).
+    : i __l2n_n ( nurl_str_len lt )
+    ? & > __l2n_n 1 == ( nurl_str_get lt - __l2n_n 1 ) 42
+    { ^ ( nurl_str_cat `*` ( llvm_to_nurl ( nurl_str_slice lt 0 - __l2n_n 1 ) ) ) }
+    {}
     ( nurl_str_cat lt `` )
 }
 
@@ -16362,8 +16595,12 @@
     // Reject at the source (covers `: i x 1.5`, `: i x `hi``, `= n 1.5`).
     // Equal types and every coercion above (i1-widen, enum-wrap, single-handle,
     // int-width; closure→fn-ptr happens next in convert_closure_arg) never
-    // reach here as a clash. The reverse pointer direction (`: *T p 0`,
-    // null-as-0) is intentionally allowed.
+    // reach here as a clash. The reverse pointer direction (an integer into
+    // a `*T` / `s` binding) is a clash too: the old carve-out for a
+    // `: *T p 0` null idiom protected IR that was itself invalid
+    // (`store i64* 0` — LLVM rejects an integer constant of pointer type),
+    // so no linked program ever used it. The honest null spelling is the
+    // explicit '# *T 0' cast.
     ? & ! ( seq ( nurl_llty from_ty ) ( nurl_llty to_ty ) ) != 0 ( nurl_str_len to_ty )
     { : b csv_sf | ( seq from_ty `double` ) ( seq from_ty `float` )
         : b csv_tf | ( seq to_ty `double` ) ( seq to_ty `float` )
@@ -16398,6 +16635,12 @@
         : b csv_named & & ! ( is_ptr_ty from_ty ) ! ( is_ptr_ty to_ty )
         | == ( nurl_str_get ( nurl_llty from_ty ) 0 ) 37
         == ( nurl_str_get ( nurl_llty to_ty ) 0 ) 37
+        // An INTEGER value into a plain pointer/string binding — every
+        // legal wrap (enum tag, single-handle inttoptr) returned above,
+        // so what reaches here would be `store i8* %n` / `store i64* 0`
+        // with an i64 register or integer constant of pointer type —
+        // invalid IR that nurlc accepted (rc 0) and only clang rejected.
+        : b csv_int_ptr & > ( int_width from_ty ) 0 ( is_ptr_ty ( nurl_llty to_ty ) )
         // The cure differs by shape: an aggregate value wants '??'
         // destructuring (or matching shapes), a named type is nominal,
         // a scalar wants a cast.
@@ -16405,8 +16648,10 @@
         `' — NURL has no implicit conversions between differently-shaped aggregates; make the option/result/closure shapes match exactly, or destructure with '??' and bind the payload`
         ? csv_named
         `' — NURL named types are NOMINAL: no value converts into or out of one implicitly (two enums stay distinct even when their tags overlap). Construct/pass the declared type; an enum takes a variant by name, and '# i x' reads an enum's tag intentionally.`
+        ? csv_int_ptr
+        `' — NURL has no implicit integer-to-pointer conversion; use a pointer-typed value, or cast an address intentionally with '# T expr' (the null pointer is '# T 0' for a pointer type T)`
         `' — NURL has no implicit conversions; use a matching value or convert with '# T expr'`
-        ? | | | | | != csv_sf csv_tf & ( is_ptr_ty from_ty ) ! ( is_ptr_ty to_ty ) csv_agg csv_agg2 csv_agg_src csv_named
+        ? | | | | | | != csv_sf csv_tf & ( is_ptr_ty from_ty ) ! ( is_ptr_ty to_ty ) csv_agg csv_agg2 csv_agg_src csv_named csv_int_ptr
         { ( die_stmt lex ( nurl_str_cat ( nurl_str_cat4
             `value of type '` from_ty `' cannot initialise / assign a binding of type '` to_ty )
             __csv_cure ) ) }
@@ -17104,7 +17349,8 @@
     ( nurl_sym_set g_fn_escapes `__dsnap_cenv__` `` )
     ( nurl_sym_set g_fn_escapes `__dsnap_slice__` `` )
     ( nurl_sym_set g_fn_escapes `__dret_skips__` `` )
-    : s body_val ( gen_stmt lex body_syms cg )
+    : ~ s body_val ( gen_stmt lex body_syms cg )
+    : s __cl_tail_lt ( nurl_get_last_type )
     = g_bck_closure_depth - g_bck_closure_depth 1
     ? == g_did_ret 0 { ( mem_drain_deferred cg ) } {}
     ( nurl_sym_set g_fn_escapes `__deferred_drops__` __cl_defer_saved )
@@ -17116,6 +17362,20 @@
     ( nurl_sym_set g_fn_escapes `__dsnap_slice__` __cl_snapsl_saved )
     ( nurl_sym_set g_fn_escapes `__dret_skips__` __cl_rskips_saved )
 
+    // The closure tail is a return value like any other: run the shared
+    // agreement battery (ret_ty_agree) before emitting the `ret`. Same
+    // holes as the function fall-off — a mismatched or void tail used
+    // to emit invalid IR (or `ret i64 undef`, garbage) that only the
+    // LLVM verifier saw. body_syms carries the closure's own
+    // __fn_ret_ty__ and the tail-token evidence.
+    // Closure-tail battery — a body whose tail diverges (noreturn call)
+    // set g_did_ret via __tail_noreturn_close and is exempt like the
+    // function fall-off site.
+    ? & == g_did_ret 0 ! ( seq ret_type `void` )
+    { = body_val ( ret_ty_agree lex body_syms cg __cl_tail_lt body_val
+        ( nurl_str_to_int ( nurl_sym_get body_syms `__tail_first_tt__` ) )
+        ( nurl_sym_get body_syms `__tail_first_val__` ) F T ) }
+    {}
     // Emit return
     ? == g_did_ret 0
     {
@@ -18866,6 +19126,7 @@
     // index of any parameter returned directly; merged into
     // g_fn_ret_param[fname] after the body.
     ( nurl_sym_def syms `__fn_ret_param__` `` )
+    = g_fn_ret_count 0
     : ~ s last ( gen_block_ret lex syms cg )
     // Type of the value the body actually falls off with. A body whose
     // tail is a `die` block (or that returned on every path) produces
@@ -18873,6 +19134,27 @@
     // the fall-off ownership rule below.
     : s __fall_ty ( nurl_get_last_type )
     : b __has_fall & == 0 g_did_ret ( seq ( nurl_llty __fall_ty ) `i8*` )
+    // Noreturn inference: the body contains no `^` at all, yet it
+    // terminated (g_did_ret) — every path through it diverges (a
+    // noreturn tail call via __tail_noreturn_close, or a conditional
+    // whose arms all diverge), so a call to this function never returns
+    // either.
+    ? & == g_fn_ret_count 0 != 0 g_did_ret
+    { ( nurl_sym_def g_fn_noreturn fname `1` ) }
+    {}
+    // The fall-off value is a return value like any other: run the
+    // shared agreement battery (ret_ty_agree — float / pointer / width /
+    // aggregate / named / enum checks, the enum wrap, and the no-value
+    // check: a void tail in a value-returning function used to emit
+    // `ret i64 undef` — valid IR returning garbage). Tail-token evidence
+    // was published by gen_block_ret. A body whose tail diverges
+    // (noreturn call) set g_did_ret and is exempt — its `ret` is never
+    // emitted.
+    ? & == 0 g_did_ret ! ( seq ret_ty `void` )
+    { = last ( ret_ty_agree lex syms cg __fall_ty last
+        ( nurl_str_to_int ( nurl_sym_get syms `__tail_first_tt__` ) )
+        ( nurl_sym_get syms `__tail_first_val__` ) F T ) }
+    {}
     // Borrow provenance for an IMPLICIT (no `^`) block return: the body's
     // final expression IS the return value, so if it left a borrow on
     // __last_value_borrow__ (e.g. a `?? param { … }` yielding a payload
@@ -24534,6 +24816,10 @@
     = g_fn_invoke_only ( nurl_sym_new )
     = g_pending_escape ( nurl_sym_new )
     = g_fn_ret_param ( nurl_sym_new )
+    = g_fn_noreturn ( nurl_sym_new )
+    ( nurl_sym_def g_fn_noreturn `nurl_exit` `1` )
+    ( nurl_sym_def g_fn_noreturn `nurl_panic` `1` )
+    = g_loop_break_used ( nurl_sym_new )
     = g_type_count 0
     = g_func_count 0
     = g_closure_emit_base 0

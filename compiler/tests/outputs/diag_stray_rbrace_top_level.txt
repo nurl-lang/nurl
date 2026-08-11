@@ -1,0 +1,6 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_stray_rbrace_top_level.nu:13:1: error: unexpected '}' (the enclosing block ends here) at the top level — expected a declaration (@ fn, : const/struct/enum, & ffi, $ import, or % trait/impl). A stray '}' or leftover expression here usually means an earlier function body has unbalanced braces.
+}
+^
+error: aborting due to 1 previous error

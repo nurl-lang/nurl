@@ -1,0 +1,6 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_field_int_to_ptr.nu:11:19: error: field 0 of struct literal 'P' expects type 'i64*' but the value has type 'i64' — NURL has no implicit integer-to-pointer conversion; give the field a pointer-typed value, or cast an address intentionally with '# T expr' (the null pointer is '# T 0' for a pointer type T)
+    : P a @ P { 0 }
+                  ^
+error: aborting due to 1 previous error
