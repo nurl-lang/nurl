@@ -1,0 +1,6 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_const_type_name_swap.nu:8:12: error: unknown type 'PI_FIXED' — and the name slot holds 'i', which is a type keyword. A declaration is ': TYPE name value' — the type comes FIRST. Swap them: ': i PI_FIXED <value>'.
+: PI_FIXED i 314
+           ^
+error: aborting due to 1 previous error

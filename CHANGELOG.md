@@ -10,6 +10,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The last invalid-IR escape hatches from the mutation probe are
+  closed.** Four more ways broken source reached the LLVM verifier
+  (rc 0 from nurlc, a .ll line number, no source location) are now
+  front-end diagnostics, and one is now simply correct output:
+
+  * a top-level declaration with type and name swapped
+    (`: PI_FIXED i 314`) emitted an undefined-type global; with a type
+    keyword in the name slot the diagnostic names the swap and spells
+    the corrected declaration;
+  * a generic template's bare name used as a type (`Pair p` field,
+    `JArr Vec` enum payload) emitted unsized `%Pair` / `%Vec`; both
+    sites now run the known-type check, which learned to say "a
+    generic names a family of types" with the instantiation spelling;
+  * an aggregate value as a binary-operator operand (`= cnt + cnt`
+    swallowing the `??` below it) emitted `add i64 …, { i1, i64 }`;
+    rejected with both facets named — no aggregate arithmetic, and the
+    arity cascade that put one there;
+  * a surplus value in an anonymous aggregate literal
+    (`@ ?i { T + n 2 2 }`) emitted an insertvalue past the last slot
+    (or silently overwrote a result's sibling arm); anonymous shapes
+    now get the arity check named structs already had;
+  * statements after a terminator (`^ 1` then a call; cleanup + a
+    defensive `^` after an infinite loop) rode LLVM's
+    implicit-block-after-terminator quirk and were invalid IR whenever
+    the dead run did not itself end in `^`; dead statements now
+    compile into a fresh unreferenced block — valid IR on every shape,
+    identical semantics, and LLVM's DCE drops it.
+
 - **A missing `}` in a generic template or a closure body no longer
   hangs the compiler.** `collect_fn_body` (generic function/struct
   template capture) and `simple_capture_analysis` (closure capture

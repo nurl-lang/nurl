@@ -1,0 +1,4 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_binop_agg_operand.nu:16:15: error: operator applied to an aggregate operand: left is 'i', right is '{ i1, i64 }' — an option/result/slice/struct value has no arithmetic or ordering; destructure with '??' (or read a field with '. value field') and combine the payload. If the aggregate is a whole '??'/'?' expression you meant as the NEXT statement, this operator is one operand short and swallowed it: every NURL operator has fixed arity and no closing bracket, so count the operands.
+error: aborting due to 1 previous error
