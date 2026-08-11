@@ -1,0 +1,6 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_cast_struct_literal.nu:12:15: error: '#' is the cast operator; struct/enum literals use '@'. Write '@ S { ... }' instead.
+    : S s # S { 1 }
+              ^
+error: aborting due to 1 previous error

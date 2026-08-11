@@ -1,0 +1,6 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_slice_elem_wrong_struct.nu:9:21: error: element 2 of this slice literal has type 'B' but the slice's declared element type is 'A' — a value of one named struct type where a different one is declared; the store would silently reinterpret its fields.
+    : [A xs [A | a b]
+                    ^
+error: aborting due to 1 previous error

@@ -1,0 +1,6 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_inout_arg_not_in_scope.nu:5:12: error: inout argument 'zzz' is not a binding in scope. An 'inout' argument must be a plain binding in scope, or one of its fields — the call site names the value plainly, '( f v )' or '( f . s field )'; the 'inout' marker appears only in the DECLARATION. The callee writes through it, so a temporary or an expression has nowhere to write back to.
+    ( bump zzz )
+           ^
+error: aborting due to 1 previous error

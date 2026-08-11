@@ -1,0 +1,6 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_objsafe_sink_receiver.nu:9:14: error: method 'eat' of trait 'Eater' has a 'sink' (by-value consuming) receiver — not object-safe for '%Eater' dispatch; use a by-value or 'inout' receiver
+@ use %Eater e → i { ^ 0 }
+             ^
+error: aborting due to 1 previous error

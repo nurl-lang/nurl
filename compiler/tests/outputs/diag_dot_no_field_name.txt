@@ -1,0 +1,6 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_dot_no_field_name.nu:9:1: error: expected a field name or an index after '.', found '}' (the enclosing block ends here). Field access is '. obj field' and element access is '. arr index' — the object comes FIRST, prefix style, not 'obj.field'. E.g. '. p x', '. buf 0'.
+}
+^
+error: aborting due to 1 previous error

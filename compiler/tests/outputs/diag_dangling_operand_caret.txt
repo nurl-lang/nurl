@@ -1,0 +1,6 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_dangling_operand_caret.nu:6:5: error: '^' (return) cannot appear here — it is being read as a value operand. A preceding prefix operator is short an argument and consumed this '^': every NURL operator has fixed arity and no closing bracket, so a missing operand silently swallows what follows. Count the operands on the operator before this '^'.
+    ^ n
+    ^
+error: aborting due to 1 previous error

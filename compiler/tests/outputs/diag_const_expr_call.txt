@@ -1,0 +1,6 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_const_expr_call.nu:4:11: error: const expression must be integer literals combined with + - * / << >> & | ^^ (use a precomputed literal for %)
+: i K + 1 ( f )
+          ^
+error: aborting due to 1 previous error

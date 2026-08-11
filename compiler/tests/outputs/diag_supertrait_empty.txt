@@ -1,0 +1,5 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_supertrait_empty.nu:2:13: error: expected at least one trait name after the supertrait ':', found '{'. A trait requiring others is '% Name : Base1 Base2 { ... }'; drop the ':' if there are none.
+% Speaker : { @ speak i self → i }
+            ^

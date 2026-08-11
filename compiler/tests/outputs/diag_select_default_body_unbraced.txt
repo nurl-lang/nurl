@@ -1,0 +1,6 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_select_default_body_unbraced.nu:7:31: error: expected '{' to open the default arm's body, found '^' (return). The default arm is '_ → { body }'.
+    ?? { [i] c → v {} _ → ^ 0 }
+                              ^
+error: aborting due to 1 previous error

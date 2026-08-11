@@ -1,0 +1,6 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_elem_store_clash.nu:7:5: error: cannot store a value of type 'double' into this element — the element type differs and NURL has no implicit conversions
+    ^ 0
+    ^
+error: aborting due to 1 previous error

@@ -94,6 +94,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`# S { 1 }` was accepted silently for every single-field struct.**
+  The guard that catches `'#' is the cast operator; struct/enum literals
+  use '@'` tested whether the name is a struct by reading the key for
+  field **index 1** — the *second* field. A struct with one field failed
+  that test and the literal went through unremarked, while a two-field
+  struct was caught all along, which is what kept the gap invisible. A
+  single-field struct is the newtype wrapper, one of the commonest
+  shapes there is.
+
 - **A forgotten `→` on a guarded match arm was reported as a
   non-exhaustive match.** The guard scan ran to the next `→` at paren
   depth 0, and braces do not affect that depth — so `A v ? > v 0 { ^ v }

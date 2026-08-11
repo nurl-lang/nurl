@@ -1,0 +1,6 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_bind_name_paren.nu:3:9: error: expected a binding name, found '('. A binding is ': type name value' — the TYPE comes before the name, and ': ~' makes it mutable. E.g. ': i n 0', ': ~ String s ( string_new )'. The type may be omitted only when the value's type is inferable: ': n 0'.
+    : i ( x ) 0
+        ^
+error: aborting due to 1 previous error
