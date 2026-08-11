@@ -196,6 +196,21 @@
 // keyword emits the literal value `void`, which is what breaks. `ctx` names the
 // consuming construct.
 @ die_if_void i lex s val s ctx → v {
+    // `undef` is the second spelling, and the one that mattered. The
+    // header above says a `v`-returning CALL "yields a real register
+    // whose type is void but whose value is a valid SSA name", so the
+    // consuming instruction is well-formed. It is not: gen_call gives a
+    // void call the value `undef`, and `+ n ( side )` emitted
+    //
+    //     %r3 = add i64 %r2, undef
+    //
+    // with status 0. That shape arrives by ACCIDENT far more often than
+    // a bare `v` is written on purpose — a binary operator one operand
+    // short swallows the next statement, and if that statement is a
+    // `v`-returning call the arity trap closes silently and the program
+    // computes garbage. Found by mutating a working program: dropping
+    // one operand from `= shared_counter + shared_counter 1` compiled
+    // clean and unlocked a mutex as a side effect of an addition.
     ? ( seq val `void` )
     { ( die lex ( nurl_str_cat ctx ` operand is the void/unit value 'v' — a bare type keyword yields no value and cannot be used here` ) ) }
     {}
@@ -3318,6 +3333,17 @@
     : ~ s rt ( nurl_get_last_type )
     ( die_if_void lex lv `binary operator's left` )
     ( die_if_void lex rv `binary operator's right` )
+    // The OTHER spelling of "no value", and the one that arrives by
+    // accident. gen_call gives a `v`-returning call the value `undef`,
+    // so `+ n ( side )` emitted `add i64 %r2, undef` with status 0 —
+    // and a binary operator one operand short swallows the following
+    // statement, which is how a call lands in operand position at all.
+    // Only binary operators get this rule: an initialiser may take a
+    // '?' whose arms both return, which also yields undef and is legal
+    // (dead_store_both_arms_ret), so die_if_void itself stays value-only.
+    ? | & ( seq lv `undef` ) ( seq lt `void` ) & ( seq rv `undef` ) ( seq rt `void` )
+    { ( die_stmt lex `an operand of this binary operator is a call that returns 'v', so it has no value to combine. Usually the operator is one operand SHORT and has swallowed the following statement: every NURL operator has fixed arity and no closing bracket, so count the operands before this one. If the call was meant to run for its effect, put it on its own line.` ) }
+    {}
     // ── Enum operands are NOMINAL ─────────────────────────────────────
     // `== c Green` used to emit `icmp eq %Color %r4, %r5` with %r5 an
     // i64 tag — invalid IR only clang saw (so the diag_cond_enum cure

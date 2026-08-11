@@ -1,0 +1,4 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_binop_void_call_operand.nu:24:5: error: an operand of this binary operator is a call that returns 'v', so it has no value to combine. Usually the operator is one operand SHORT and has swallowed the following statement: every NURL operator has fixed arity and no closing bracket, so count the operands before this one. If the call was meant to run for its effect, put it on its own line.
+error: aborting due to 1 previous error
