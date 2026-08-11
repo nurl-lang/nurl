@@ -94,6 +94,17 @@ $ `stdlib/ext/uuid.nu`
     } {}
 }
 
+// serve --weights: when set, every model this server opens takes its
+// tensors from this safetensors file instead of the GGUF's own (the GGUF
+// still supplies the hyperparameters and the tokenizer) — the API twin of
+// `run --weights`, for serving a finetuned/merged checkpoint. The pointed
+// string is the CLI's; it outlives the server loop.
+: ~ i g_api_weights 0
+
+@ api_set_weights s w → v {
+    = g_api_weights ? > ( nurl_str_len w ) 0 # i w 0
+}
+
 // Load `name` unless it is already resident. Empty error = success.
 @ __api_ensure s name → String {
     ? & != g_api_llm 0 != 0 ( nurl_str_eq g_api_name name ) { ^ ( string_new ) } {}
@@ -112,7 +123,9 @@ $ `stdlib/ext/uuid.nu`
                 }
                 F e → { ( string_free e ) }
             }
-            : !*Llm String lr ( llm_open ( string_data path ) 0 )
+            : !*Llm String lr ? != g_api_weights 0
+            ( llm_open_st ( string_data path ) # s g_api_weights 0 )
+            ( llm_open ( string_data path ) 0 )
             ( string_free path )
             ?? lr {
                 T m → {
