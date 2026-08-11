@@ -15418,6 +15418,28 @@
             `An enum literal is '@ EnumName { Variant payload }': the variant is the first item in the brace list, not a word between the name and the brace. A payload-less variant is just '@ EnumName { Variant }'.` ) ) }
         {} }
     {}
+    // `@ name …` whose tail reads like a function HEADER — a '→'
+    // arrives before any '{' — is a function DECLARATION sitting inside
+    // a body: the '}' above never closed the previous function, so the
+    // parser is reading the header as a struct/enum literal (the
+    // drop-close-brace mutants died here as "expected '{' but found
+    // 'b'", blaming a missing operand on the wrong line entirely).
+    ? != ( nurl_lex_type lex ) TT_LBRACE
+    { : i __al_save ( nurl_lex_cur_start lex )
+        : ~ i __al_k 0
+        : ~ b __al_arrow F
+        ~ & & < __al_k 24 ! __al_arrow
+        & != ( nurl_lex_type lex ) TT_LBRACE != ( nurl_lex_type lex ) TT_EOF {
+            ? == ( nurl_lex_type lex ) TT_ARROW { = __al_arrow T } {}
+            ( nurl_lex_advance lex )
+            = __al_k + __al_k 1
+        }
+        ( nurl_lex_set_pos lex __al_save )
+        ? __al_arrow
+        { ( die lex `this '@ name …' line reads like a function DECLARATION (a '→' follows before any '{'), but it sits inside a function body, where '@' begins a struct/enum literal. Declarations do not nest: the '}' above this line never closed the previous function — add it (nurlfmt's re-indent shows where the nesting runs away).` ) }
+        {}
+    }
+    {}
     ( expect lex TT_LBRACE )  // consume '{'
     // `@ S { a : 1 b : 2 }` — field NAMES, the habit every other
     // language teaches. NURL struct literals are positional: values in
@@ -18954,6 +18976,7 @@
     // instead of the opaque `<generic>:1:21:`.
     : s caller_file ( nurl_lex_filename lex )
     : i caller_line ( nurl_lex_line lex )
+    : i caller_col ( nurl_lex_col lex )
     : s ret_ty ( compute_generic_ret_ty fname type_args )
     ( nurl_sym_def syms mangled ret_ty )
     : s cnt_s ( nurl_sym_get g_generic_syms `__deferred_count__` )
@@ -18965,6 +18988,7 @@
     ( nurl_sym_def g_generic_syms ( nurl_str_cat base `_ta` ) type_args )
     ( nurl_sym_def g_generic_syms ( nurl_str_cat base `_cf` ) caller_file )
     ( nurl_sym_def g_generic_syms ( nurl_str_cat base `_cl` ) ( nurl_str_int caller_line ) )
+    ( nurl_sym_def g_generic_syms ( nurl_str_cat base `_cc` ) ( nurl_str_int caller_col ) )
 }
 
 // emit_str_globals: emit global constants for string literals [base..top).
@@ -21327,7 +21351,7 @@
 // fields), then again to actually emit the function. The two passes
 // share `syms` so the rescan's emitted instantiations are visible to
 // the body-parsing pass.
-@ emit_one_instantiation s fname s mangled s type_args s caller_file s caller_line i syms i cg → v {
+@ emit_one_instantiation s fname s mangled s type_args s caller_file s caller_line s caller_col i syms i cg → v {
     : s tparams ( nurl_sym_get2 g_generic_syms fname `__tparams` )
     : s gsrc ( nurl_sym_get2 g_generic_syms fname `__gsrc` )
     // No stored template for this name: the call site referenced a
@@ -21337,8 +21361,11 @@
     // end of input` pointing at synthetic `<generic …>:1` — useless
     // for finding the actual problem (a missing `$` import).
     ? == 0 ( nurl_str_len gsrc )
-    { : s loc ? != 0 ( nurl_str_len caller_file )
-        ( nurl_str_cat4 caller_file `:` caller_line `: error: ` )
+    { : s __cc_sfx ? != 0 ( nurl_str_len caller_col )
+        ( nurl_str_cat3 `:` caller_col `: error: ` )
+        `: error: `
+        : s loc ? != 0 ( nurl_str_len caller_file )
+        ( nurl_str_cat4 caller_file `:` caller_line __cc_sfx )
         `error: `
         ( nurl_eprintln ( nurl_str_cat3 loc
         ( nurl_str_cat3 `call to generic function '` fname `' but no generic of that name is defined in this file or any '$'-imported file` )
@@ -21455,7 +21482,8 @@
         : s type_args ( nurl_sym_get2 g_generic_syms base `_ta` )
         : s caller_file ( nurl_sym_get2 g_generic_syms base `_cf` )
         : s caller_line ( nurl_sym_get2 g_generic_syms base `_cl` )
-        ( emit_one_instantiation fname mangled type_args caller_file caller_line syms cg )
+        : s caller_col ( nurl_sym_get2 g_generic_syms base `_cc` )
+        ( emit_one_instantiation fname mangled type_args caller_file caller_line caller_col syms cg )
         = k + k 1
     }
 }
