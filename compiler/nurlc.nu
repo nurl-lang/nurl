@@ -100,6 +100,14 @@
 : ~ i g_diag_recover_active 0
 : i NURLC_MAX_ERRORS 20
 
+// Diagnostic context suffix, appended to every die/warn message while
+// non-empty. Set (and saved/restored — instantiations nest) around a
+// generic instantiation's re-parse: the location then points at the
+// TEMPLATE's real file:line, and this carries the other half — which
+// instantiation, called from where — since a mono error can depend on
+// the concrete type arguments.
+: ~ s g_diag_ctx ``
+
 // die → __diag_abort: print-position variants share this exit/panic tail.
 @ __diag_abort → v {
     ? != g_diag_recover_active 0
@@ -151,7 +159,7 @@
     : s loc ( nurl_str_cat ( nurl_lex_filename lex )
     ( nurl_str_cat `:` ( nurl_str_cat ( nurl_str_int ( nurl_lex_line lex ) )
     ( nurl_str_cat `:` ( nurl_str_int col ) ) ) ) )
-    ( nurl_eprintln ( nurl_str_cat3 loc `: error: ` msg ) )
+    ( nurl_eprintln ( nurl_str_cat3 loc `: error: ` ( nurl_str_cat msg g_diag_ctx ) ) )
     ( nurl_eprintln ( nurl_lex_line_text lex ) )
     ( nurl_eprintln ( nurl_diag_caret col ) )
     ( __diag_abort )
@@ -163,7 +171,7 @@
 // supertrait-obligation sweep, which runs after every impl in the program has
 // been registered and so cannot point at a single lexer position.
 @ die_at s loc s msg → v {
-    ( nurl_eprintln ( nurl_str_cat3 loc `: error: ` msg ) )
+    ( nurl_eprintln ( nurl_str_cat3 loc `: error: ` ( nurl_str_cat msg g_diag_ctx ) ) )
     ( __diag_abort )
 }
 
@@ -176,7 +184,7 @@
     : s loc ( nurl_str_cat ( nurl_lex_filename lex )
     ( nurl_str_cat `:` ( nurl_str_cat ( nurl_str_int ( nurl_lex_line lex ) )
     ( nurl_str_cat `:` ( nurl_str_int col ) ) ) ) )
-    ( nurl_eprintln ( nurl_str_cat3 loc `: warning: ` msg ) )
+    ( nurl_eprintln ( nurl_str_cat3 loc `: warning: ` ( nurl_str_cat msg g_diag_ctx ) ) )
     ( nurl_eprintln ( nurl_lex_line_text lex ) )
     ( nurl_eprintln ( nurl_diag_caret col ) )
 }
@@ -3014,7 +3022,7 @@
     : s loc ( nurl_str_cat ( nurl_lex_filename lex )
     ( nurl_str_cat `:` ( nurl_str_cat ( nurl_str_int g_stmt_line )
     ( nurl_str_cat `:` ( nurl_str_int g_stmt_col ) ) ) ) )
-    ( nurl_eprintln ( nurl_str_cat3 loc `: error: ` msg ) )
+    ( nurl_eprintln ( nurl_str_cat3 loc `: error: ` ( nurl_str_cat msg g_diag_ctx ) ) )
     ( __diag_abort )
 }
 
@@ -3034,7 +3042,7 @@
     : s loc ( nurl_str_cat ( nurl_lex_filename lex )
     ( nurl_str_cat `:` ( nurl_str_cat ( nurl_str_int line )
     ( nurl_str_cat `:` ( nurl_str_int col ) ) ) ) )
-    ( nurl_eprintln ( nurl_str_cat3 loc `: warning: ` msg ) )
+    ( nurl_eprintln ( nurl_str_cat3 loc `: warning: ` ( nurl_str_cat msg g_diag_ctx ) ) )
     ( nurl_eprintln ( nurl_lex_line_text_at lex line ) )
     ( nurl_eprintln ( nurl_diag_caret col ) )
 }
@@ -3043,7 +3051,7 @@
     : s loc ( nurl_str_cat ( nurl_lex_filename lex )
     ( nurl_str_cat `:` ( nurl_str_cat ( nurl_str_int line )
     ( nurl_str_cat `:` ( nurl_str_int col ) ) ) ) )
-    ( nurl_eprintln ( nurl_str_cat3 loc `: error: ` msg ) )
+    ( nurl_eprintln ( nurl_str_cat3 loc `: error: ` ( nurl_str_cat msg g_diag_ctx ) ) )
     ( nurl_eprintln ( nurl_lex_line_text_at lex line ) )
     ( nurl_eprintln ( nurl_diag_caret col ) )
     ( __diag_abort )
@@ -13279,7 +13287,7 @@
     ( nurl_str_cat3 `' is stale: '` cont
     ( nurl_str_cat3 `' was mutated on line ` ( nurl_str_int dline )
     ` and may have reallocated its buffer` ) ) ) )
-    ( nurl_eprintln ( nurl_str_cat3 loc `: warning: ` msg ) )
+    ( nurl_eprintln ( nurl_str_cat3 loc `: warning: ` ( nurl_str_cat msg g_diag_ctx ) ) )
     ( nurl_eprintln ( nurl_str_cat3 `  note: re-fetch the pointer after the mutation (` name
     ( nurl_str_cat3 ` = ( vec_data … ` cont ` ) )` ) ) )
 }
@@ -18413,6 +18421,14 @@
     : i open_line ( nurl_lex_line lex )
     : i open_col ( nurl_lex_col lex )
     : ~ s result ( nurl_str_cat ( __tok_src_text lex ) ` ` )
+    // Line-preserving reconstruction: when the next token sits on a
+    // later SOURCE line, join with that many newlines instead of a
+    // space. A template body used to flatten to one line, so any
+    // diagnostic inside an instantiation pointed at `<generic …>:1` —
+    // with the line structure kept (and the re-lex buffer padded to
+    // the template's own start line at the instantiation site), the
+    // same diagnostic points at the template's real file:line.
+    : ~ i prev_ln ( nurl_lex_line lex )
     ( nurl_lex_advance lex )
     : ~ i depth 1
     ~ != depth 0 {
@@ -18428,10 +18444,27 @@
         {}
         ? == tt2 TT_LBRACE { = depth + depth 1 } {}
         ? == tt2 TT_RBRACE { = depth - depth 1 } {}
+        : i cur_ln ( nurl_lex_line lex )
+        ~ < prev_ln cur_ln {
+            = result ( nurl_str_cat result `\n` )
+            = prev_ln + prev_ln 1
+        }
         = result ( nurl_str_cat result ( nurl_str_cat ( __tok_src_text lex ) ` ` ) )
         ( nurl_lex_advance lex )
     }
     result
+}
+
+// N newlines — the re-lex padding that maps a template buffer's line 1
+// onto the template's real source line (see collect_fn_body).
+@ __nl_pad i n → s {
+    : ~ s r ``
+    : ~ i k 0
+    ~ < k n {
+        = r ( nurl_str_cat r `\n` )
+        = k + k 1
+    }
+    r
 }
 
 // compute_generic_inout_sink: derive a generic function's `inout` and
@@ -18547,14 +18580,28 @@
         }
     }
     ( expect lex TT_RBRACK )
-    // Collect params/return/body tokens until EOF
+    // Collect params/return/body tokens until EOF. Line-preserving, the
+    // same protocol as collect_fn_body: the signature may wrap over
+    // several lines and a diagnostic inside an instantiation must keep
+    // pointing at the template's real lines.
     : ~ s src ( nurl_str_cat `` `` )
+    : ~ i __gc_prev_ln ( nurl_lex_line lex )
     ~ & != ( nurl_lex_type lex ) TT_LBRACE != ( nurl_lex_type lex ) TT_EOF {
+        : i __gc_ln ( nurl_lex_line lex )
+        ~ < __gc_prev_ln __gc_ln {
+            = src ( nurl_str_cat src `\n` )
+            = __gc_prev_ln + __gc_prev_ln 1
+        }
         = src ( nurl_str_cat src ( nurl_str_cat ( __tok_src_text lex ) ` ` ) )
         ( nurl_lex_advance lex )
     }
     ? != ( nurl_lex_type lex ) TT_EOF
-    { = src ( nurl_str_cat src ( collect_fn_body lex `generic function` ) ) }
+    { : i __gc_bln ( nurl_lex_line lex )
+        ~ < __gc_prev_ln __gc_bln {
+            = src ( nurl_str_cat src `\n` )
+            = __gc_prev_ln + __gc_prev_ln 1
+        }
+        = src ( nurl_str_cat src ( collect_fn_body lex `generic function` ) ) }
     {}
     ( nurl_sym_def g_generic_syms ( nurl_str_cat fname `__tparams` ) tparams )
     ( nurl_sym_def g_generic_syms ( nurl_str_cat fname `__gsrc` ) src )
@@ -21143,6 +21190,19 @@
     result
 }
 
+// A missing import file used to die inside the runtime's
+// nurl_read_file as a bare `nurlc: cannot open '<path>'` — no file,
+// line, or `error:` tag, so nothing (editor, agent, the multi-error
+// machinery) could anchor it. Every reader of an import — the two
+// pre-scans and gen_import_decl — calls this first: the diagnostic
+// lands on the `$` directive with the resolution order spelled out.
+@ __require_import_file i lex i iline i icol s path → v {
+    ? == ( nurl_file_exists path ) 1 { ^ } {}
+    ( die_pos lex iline icol ( nurl_str_cat ( nurl_str_cat3
+    `cannot open import '` path `' — no such file. The path is tried relative to the importing file's directory, the working directory, and $NURL_STDLIB, in that order` )
+    `; check the spelling (stdlib modules are written e.g. 'stdlib/core/vec.nu'), or run nurlc from the project root.` ) )
+}
+
 @ gen_import_decl i lex i syms i cg → v {
     // Lint: capture the `$` token's position before consuming it so
     // the unused-import warning points at the directive itself.
@@ -21163,6 +21223,7 @@
     ? ( mem_is_imported syms __imp_key )
     {}
     { ( mem_mark_imported syms __imp_key )
+        ( __require_import_file lex __li_line __li_col path )
         : s src ( nurl_read_file path )
         : s eff_src ? != 0 ( nurl_str_len alias )
         { : s names ( collect_alias_targets src path )
@@ -21208,8 +21269,8 @@
     // for finding the actual problem (a missing `$` import).
     ? == 0 ( nurl_str_len gsrc )
     { : s loc ? != 0 ( nurl_str_len caller_file )
-        ( nurl_str_cat4 caller_file `:` caller_line `: ` )
-        ``
+        ( nurl_str_cat4 caller_file `:` caller_line `: error: ` )
+        `error: `
         ( nurl_eprintln ( nurl_str_cat3 loc
         ( nurl_str_cat3 `call to generic function '` fname `' but no generic of that name is defined in this file or any '$'-imported file` )
         ` — add the '$' import for the file that defines it` ) )
@@ -21226,24 +21287,47 @@
         = ta_rest ( str_skip_word ta_rest )
         = subst_src ( subst_source subst_src tp ta )
     }
-    : s full_src ( nurl_str_cat `@ ` ( nurl_str_cat mangled ( nurl_str_cat ` ` subst_src ) ) )
+    : s sl_s ( nurl_sym_get2 g_generic_syms fname `__src_line` )
+    : s sf_pre ( nurl_sym_get2 g_generic_syms fname `__src_file` )
+    // The template body's line structure is preserved (collect_fn_body)
+    // and the buffer is padded up to the template's own declaration
+    // line, so a diagnostic inside the re-parse carries the template's
+    // REAL file:line — the old synthetic `<generic … from file:N>:1:…`
+    // location was unparseable and pointed at line 1 of a one-line
+    // buffer. The instantiation half of the story (which type args,
+    // called from where) rides g_diag_ctx onto the message text.
+    : s __inst_pad ? != 0 ( nurl_str_len sl_s )
+    ( __nl_pad - ( nurl_str_to_int sl_s ) 1 )
+    ``
+    : s full_src ( nurl_str_cat __inst_pad
+    ( nurl_str_cat `@ ` ( nurl_str_cat mangled ( nurl_str_cat ` ` subst_src ) ) ) )
     : i lex_scan ( nurl_lex_new full_src `<generic-scan>` )
     ( scan_generic_structs lex_scan syms )
     ( nurl_lex_free lex_scan )
-    // Critic v0.9.0 §2: synthesise a filename that includes the call
-    // site so any diagnostic emitted while re-parsing the substituted
-    // body points the user at THEIR code, not the opaque `<generic>`.
-    : s synth_name ? & != 0 ( nurl_str_len caller_file ) != 0 ( nurl_str_len caller_line )
+    // The re-parse lexer speaks with the template's defining file as
+    // its filename whenever it is known; the synthetic `<generic …>`
+    // spelling survives only as the fallback.
+    : s synth_name ? != 0 ( nurl_str_len sf_pre )
+    ( nurl_str_cat sf_pre `` )
+    ? & != 0 ( nurl_str_len caller_file ) != 0 ( nurl_str_len caller_line )
     ( nurl_str_cat3 `<generic ` mangled
     ( nurl_str_cat4 ` from ` caller_file `:` ( nurl_str_cat caller_line `>` ) ) )
     ( nurl_str_cat3 `<generic ` mangled `>` )
     : i lex2 ( nurl_lex_new full_src synth_name )
+    // Context suffix for every diagnostic raised inside this re-parse.
+    // Saved/restored — instantiations nest.
+    : s saved_diag_ctx ( nurl_str_cat g_diag_ctx `` )
+    : s __ctx_from ? & != 0 ( nurl_str_len caller_file ) != 0 ( nurl_str_len caller_line )
+    ( nurl_str_cat4 `; first call site: ` caller_file `:` caller_line )
+    ``
+    = g_diag_ctx ( nurl_str_cat3
+    ` [while instantiating '` mangled
+    ( nurl_str_cat3 `' — the error may depend on the concrete type arguments` __ctx_from `]` ) )
     // DWARF Phase 7: stash the original generic-decl line so
     // gen_fn_decl_concrete points this mono's !DISubprogram at the
     // real source, not the synthetic `<generic>:1`. Cleared in a
     // `defer`-ish trailing assignment after the recursive call.
     : i saved_override g_dbg_override_line
-    : s sl_s ( nurl_sym_get2 g_generic_syms fname `__src_line` )
     ? != 0 ( nurl_str_len sl_s )
     { = g_dbg_override_line ( nurl_str_to_int sl_s ) }
     {}
@@ -21285,6 +21369,7 @@
     { ( gen_fn_decl lex2 syms cg ) }
     ( nurl_lex_free lex2 )
     ( vis_set_current_src_file saved_vis_sf )
+    = g_diag_ctx saved_diag_ctx
     = g_dbg_override_line saved_override
     = g_dbg_override_file saved_override_file
     = g_mono_tparam_tys saved_mono_tys
@@ -23340,6 +23425,8 @@
         // Follow $ imports (same dedup list as scan_fn_sigs, kept separate
         // here so the ordering of the two scans doesn't matter).
         ? & ! handled == tt TT_DOLLAR {
+            : i __im_ln ( nurl_lex_line lex )
+            : i __im_cl ( nurl_lex_col lex )
             ( nurl_lex_advance lex )
             ? == ( nurl_lex_type lex ) TT_STR {
                 : s path ( __norm_import_path ( nurl_lex_val lex ) )
@@ -23351,6 +23438,7 @@
                     : s new_marker ? == 0 ( nurl_str_len marker ) ( nurl_str_cat __gs_key `` )
                     ( nurl_str_cat3 marker ` ` __gs_key )
                     ( nurl_sym_def g_generic_struct_syms `__scanned__` new_marker )
+                    ( __require_import_file lex __im_ln __im_cl path )
                     : s src2 ( nurl_read_file path )
                     : i lex2 ( nurl_lex_new src2 path )
                     // Track the imported file so its imports resolve
@@ -23767,7 +23855,9 @@
                     }
                     // import_decl: $ `path` alias?  — scan the imported file too
                     ? == tt TT_DOLLAR
-                    { ( nurl_lex_advance lex )  // skip '$'
+                    { : i __im_ln ( nurl_lex_line lex )
+                        : i __im_cl ( nurl_lex_col lex )
+                        ( nurl_lex_advance lex )  // skip '$'
                         : s path ( __norm_import_path ( nurl_lex_val lex ) )
                         ( nurl_lex_advance lex )  // skip path STR
                         : ~ s alias ``
@@ -23784,6 +23874,7 @@
                             ( nurl_str_cat __fs_key `` )
                             ( nurl_str_cat3 scanned ` ` __fs_key )
                             ( nurl_sym_def syms `__scanned_files__` new_scanned )
+                            ( __require_import_file lex __im_ln __im_cl path )
                             : s src2 ( nurl_read_file path )
                             : s eff_src2 ? != 0 ( nurl_str_len alias )
                             { : s names ( collect_alias_targets src2 path )
@@ -23873,6 +23964,8 @@
                 {  // Nested import: register its type names too, applying
                     // alias rewriting so an aliased import's types resolve
                     // under their `alias__` prefix (mirrors scan_fn_sigs).
+                    : i __im_ln ( nurl_lex_line lex )
+                    : i __im_cl ( nurl_lex_col lex )
                     ( nurl_lex_advance lex )
                     ? == ( nurl_lex_type lex ) TT_STR
                     { : s path ( __norm_import_path ( nurl_lex_val lex ) )
@@ -23888,6 +23981,7 @@
                         { : s new_marker ? == 0 ( nurl_str_len marker ) ( nurl_str_cat __tn_key `` )
                             ( nurl_str_cat3 marker ` ` __tn_key )
                             ( nurl_sym_def syms `__tn_scanned__` new_marker )
+                            ( __require_import_file lex __im_ln __im_cl path )
                             : s src2 ( nurl_read_file path )
                             : s eff_src2 ? != 0 ( nurl_str_len alias )
                             { : s names ( collect_alias_targets src2 path )

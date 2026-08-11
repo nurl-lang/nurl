@@ -10,6 +10,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Errors inside generic bodies now point at the template's real
+  file and line — and a missing import is a real diagnostic.** A
+  diagnostic raised while re-parsing a generic instantiation used to
+  read `<generic scale2__i64 from file:N>:1:C: …` — a "filename" with
+  spaces no tool can parse, pointing at line 1 of a one-line buffer
+  nobody can open. Template capture is now line-preserving and the
+  re-lex buffer is padded to the template's own start line, so the
+  same error reads `stdlib/std/sort.nu:37:9: error: …`; the
+  instantiation half of the story (mangled name, first call site,
+  "may depend on the concrete type arguments") is appended to the
+  message via a nesting-safe context suffix every die/warn emitter
+  understands. The no-generic-found error gained its missing `error:`
+  tag, and a `$` import naming a nonexistent file — formerly a bare
+  `nurlc: cannot open '<path>'` from the C runtime with no location —
+  is now anchored at the `$` directive in all four places imports are
+  read (the three pre-scans and the parser), with the resolution
+  order spelled out.
+
 - **The last invalid-IR escape hatches from the mutation probe are
   closed.** Four more ways broken source reached the LLVM verifier
   (rc 0 from nurlc, a .ll line number, no source location) are now
