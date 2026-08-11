@@ -1,0 +1,5 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_import_missing.nu:8:1: error: cannot open import 'stdlib/core/vek.nu' — no such file. The path is tried relative to the importing file's directory, the working directory, and $NURL_STDLIB, in that order; check the spelling (stdlib modules are written e.g. 'stdlib/core/vec.nu'), or run nurlc from the project root.
+$ `stdlib/core/vek.nu`
+^
