@@ -56,7 +56,7 @@ header.site .inner {
   margin: 0 auto;
 }
 header.site .brand { display: flex; align-items: center; }
-header.site .brand img { width: auto; height: 26px; }
+header.site .brand img { width: 140px; height: auto; }
 header.site nav { display: flex; gap: 1.2rem; flex-wrap: wrap; margin-left: auto; align-items: center; }
 header.site nav a {
   color: var(--fg-dim); font-size: 0.9rem; font-weight: 500;
