@@ -23,20 +23,30 @@ chat ready — /exit to quit
 > what is a GGUF file?
 It is a container format for model weights…
 
-$ nurllama serve
+$ nurllama serve qwen2.5-0.5b-instruct-q4_k_m
 nurllama serving on http://127.0.0.1:11434
 ```
 
+That last line is two things at once: the **ollama-compatible API** and
+a **web chat UI** — open <http://127.0.0.1:11434> in a browser and talk
+to the named model. The model you pass to `serve` is the default: the
+web UI chats with it, and an API request that names no model of its own
+falls back to it. (Without a default, the web UI cannot chat and an API
+request must carry `"model"` — `serve` will tell you so rather than
+answering 500.)
+
 ```sh
-$ curl localhost:11434/api/generate -d '{"model":"SmolLM-135M.Q4_K_M","prompt":"Once upon a time"}'
-{"model":"SmolLM-135M.Q4_K_M","response":",","done":false}
-{"model":"SmolLM-135M.Q4_K_M","response":" there","done":false}
+$ curl localhost:11434/api/generate -d '{"prompt":"Once upon a time"}'
+{"model":"qwen2.5-0.5b-instruct-q4_k_m","response":",","done":false}
+{"model":"qwen2.5-0.5b-instruct-q4_k_m","response":" there","done":false}
 …
-{"model":"SmolLM-135M.Q4_K_M","done":true,"prompt_eval_count":5,"eval_count":40}
+{"model":"qwen2.5-0.5b-instruct-q4_k_m","done":true,"prompt_eval_count":5,"eval_count":40}
 ```
 
 One object per token, the moment it decodes. `stream:false` returns a
-single aggregated object instead.
+single aggregated object instead. Naming a different model in the
+request (`"model":"SmolLM-135M.Q4_K_M"`) swaps it in — one model is
+resident at a time.
 
 ## Commands
 
@@ -46,15 +56,52 @@ single aggregated object instead.
 | `pull <src> [--name N]` | `hf.co/ORG/REPO/FILE.gguf` or any URL. Resumes an interrupted download. |
 | `run <model> "<prompt>"` | `-n` tokens, `--temp` (0 = greedy), `--topk`, `--topp`, `--seed`, `--ctx` |
 | `chat <model>` | interactive; uses the model's own chat template |
-| `serve [--host] [--port]` | ollama-compatible API on 11434 |
+| `serve [model] [--host] [--port] [--weights F]` | ollama-compatible API + web chat UI on 11434; `model` is the default the web UI uses |
 | `list` · `rm <name>` · `verify <name>` | the local store |
 | `convert <hf-dir> <out.gguf> [--type T]` | HF checkpoint → GGUF (`q8_0` default, `f16`, `bf16`, `f32`) |
 | `tokenize` · `detok` · `vocab` · `logits` | inspection taps |
 
-`<model>` is a name from `nurllama list` or a path to any `.gguf` file.
+`<model>` is one of three things, tried in this order:
+
+1. a **path** to a `.gguf` file — `./qwen3-4b.gguf`
+2. a **name** from the local store — `nurllama list`
+3. a **Hugging Face ref naming a `.gguf` file** —
+   `Qwen/Qwen2.5-0.5B-Instruct-GGUF/qwen2.5-0.5b-instruct-q4_k_m.gguf`,
+   fetched on demand into the shared `~/.nurl/models` cache
+
+A bare `org/repo` is **not** a model argument for run/chat/serve: that
+names a whole safetensors checkpoint repository, which these commands
+could not open anyway, so nurllama refuses it *before* downloading
+gigabytes and prints the working forms. To run an HF checkpoint that
+ships no GGUF, convert it first:
+
+```sh
+$ nurllama convert org/repo model.gguf     # safetensors checkpoint → GGUF
+$ nurllama serve model.gguf
+```
 
 **HTTP API:** `POST /api/generate`, `POST /api/chat`, `GET /api/tags`,
 `POST /api/show`.
+
+## Serving a finetuned model
+
+`--weights FILE` runs a model with its tensors taken from a safetensors
+file — the GGUF still supplies the hyperparameters and the tokenizer,
+which safetensors does not carry. This is how a `finetune --merged`
+checkpoint runs and serves:
+
+```sh
+$ nurllama finetune qwen3-4b.gguf data.txt --merged qwen3-4b-tuned.st
+$ nurllama run   qwen3-4b.gguf "test prompt" --weights qwen3-4b-tuned.st
+$ nurllama serve qwen3-4b.gguf --weights qwen3-4b-tuned.st
+```
+
+The GGUF and the safetensors must be the **same architecture and
+shape** — the usual pair is the base model's GGUF plus your merged
+finetune of it. `--weights` alone selects nothing (it replaces the
+tensors *of* a model), so `serve --weights` without a model is refused
+with exactly that explanation. Under `serve`, every model the server
+opens uses these weights — serve one model when using it.
 
 ## What it runs
 
@@ -158,7 +205,11 @@ The store is content-addressed — `blobs/sha256-<hex>` plus one manifest
 per name — so two names can share a blob, and `verify` re-hashes it in
 a stream and refuses drift.
 
-## `nurllama start` — the web chat server
+## `nurllama start` — the web chat server, configured once
+
+`serve <model>` already gives you the web chat UI on localhost. `start`
+is the same server behind a saved config: it walks you through model,
+bind scope, access and port once, then reuses the answers.
 
 ```sh
 $ nurllama start

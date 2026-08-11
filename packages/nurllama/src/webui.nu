@@ -84,7 +84,11 @@
       if (t) { localStorage.setItem("nl_token", t.trim()); return api(method, url, body); }
       throw new Error("unauthorized");
     }
-    if (!r.ok) throw new Error("http " + r.status);
+    if (!r.ok) {
+      var msg = "http " + r.status;
+      try { var e = await r.json(); if (e && e.error) msg = e.error; } catch (ignored) {}
+      throw new Error(msg);
+    }
     return r.json();
   }
 
@@ -162,6 +166,9 @@
     try {
       var s = await api("GET", "/web/session");
       document.getElementById("model").textContent = s.model ? ("· " + shortModel(s.model)) : "";
+      if (!s.model) {
+        addMsg("assistant", "No model is configured, so chat will not work yet. Restart the server with a model: nurllama serve MODEL (or run the setup wizard: nurllama start).");
+      }
       await loadConvs();
     } catch (e) {
       document.getElementById("log").innerHTML = "";
