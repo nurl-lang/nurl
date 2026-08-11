@@ -3744,7 +3744,7 @@
             { ( die lex `FFI declaration inside a function body — an '&' library import ('& <lib> @ name args → ret') is a top-level form; move it to the top of the file next to the '$' imports` ) }
             {}
             : s msg ( nurl_str_cat `operator & requires matching types — got ` ( llvm_to_nurl lt ) )
-            ( die lex ( nurl_str_cat msg ` and unknown — the operand types could not be resolved, which usually means an earlier error in this expression. Fix the first diagnostic and re-run.` ) )
+            ( die lex ( nurl_str_cat msg ` and unknown — the operands of '&' could not both be resolved, which usually means an earlier error in this expression. Fix the first diagnostic and re-run.` ) )
             ^ ( nurl_str_cat `error` `` )
         }
     }
@@ -3763,7 +3763,7 @@
     { ? > ( int_width lt ) 0
         { ^ ( gen_bitwise_binary lv lt lex syms cg TT_PIPE ) }
         { : s msg ( nurl_str_cat `operator | requires matching types — got ` ( llvm_to_nurl lt ) )
-            ( die lex ( nurl_str_cat msg ` and unknown — the operand types could not be resolved, which usually means an earlier error in this expression. Fix the first diagnostic and re-run.` ) )
+            ( die lex ( nurl_str_cat msg ` and unknown — the operands of '|' could not both be resolved, which usually means an earlier error in this expression. Fix the first diagnostic and re-run.` ) )
             ^ ( nurl_str_cat `error` `` )
         }
     }
@@ -9239,7 +9239,7 @@
                             : s vn ( str_first_word orr )
                             = orr ( str_skip_word orr )
                             ? ( str_contains_word seen_variants vn )
-                            { ( die lex ( nurl_str_cat3 `a match arm already covers variant '` vn `' — each variant may appear once. Remove the duplicate, or fold the two bodies together.` ) ) } {}
+                            { ( die lex ( nurl_str_cat3 `this or-pattern repeats variant '` vn `' — an or-pattern lists each alternative once, and a repeat is either a typo or a variant the arms above already took. Remove it.` ) ) } {}
                             = seen_variants ? == 0 ( nurl_str_len seen_variants )
                             vn ( nurl_str_cat3 seen_variants ` ` vn )
                         }
@@ -16720,8 +16720,8 @@
 
         ? ! ( is_ident_tok ( nurl_lex_type lex ) )
         { ( die lex ( nurl_str_cat3
-            `expected a parameter name after its type, found ` ( tok_here lex )
-            `. Parameters are written 'type name', repeated, with no commas: '@ f i a i b → i'. A parenthesised type keeps the pair shape: '( Vec i ) v'.` ) ) }
+            `expected a parameter name after its type in this closure's parameter list, found ` ( tok_here lex )
+            `. Parameters are written 'type name', repeated, with no commas: '@ f i a i b → i'. A parenthesised type keeps the pair shape: '( Vec i ) v'. A closure spells them the same way, between the '\\' and the arrow: '\\ i x i y → i { ... }'.` ) ) }
         {}
 
         : s pname ( nurl_lex_val lex )
@@ -19268,7 +19268,7 @@
         ( nurl_set_last_type ( nurl_str_cat3 cur_params `, ` entry ) )
     }
     { ( die lex ( nurl_str_cat3
-        `expected a parameter name after its type, found ` ( tok_here lex )
+        `expected a parameter name after its type in this declaration's parameter list, found ` ( tok_here lex )
         `. Parameters are written 'type name', repeated, with no commas: '@ f i a i b → i'. A parenthesised type keeps the pair shape: '( Vec i ) v'.` ) ) }
 }
 

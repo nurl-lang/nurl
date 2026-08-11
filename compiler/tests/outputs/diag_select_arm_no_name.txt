@@ -1,0 +1,6 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_select_arm_no_name.nu:8:20: error: expected the received value's name after '→', found '{'. A select arm is '[T] chan → name { body }' — the element type in brackets, the channel, then the name the received value binds to. The default arm is '_ → { body }'. E.g. '?? { [i] c → v { ( use v ) }  _ → { ( idle ) } }'.
+    ?? { [i] c → {} }
+                   ^
+error: aborting due to 1 previous error

@@ -94,6 +94,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Coverage fingerprints now discriminate rather than merely being
+  long.** Picking the longest literal at a site is the obvious rule and
+  the wrong one: the longest run is usually the shared explainer tail
+  two sibling messages both end with, while the sentence that differs —
+  the one naming which construct was rejected — is shorter and got
+  discarded. Nine sites read as indistinguishable for that reason alone,
+  which was the instrument's fault and not the compiler's. The tool now
+  prefers a literal no other site carries. **Six real gaps came out from
+  behind a sibling's hit**, having been counted as exercised for as long
+  as the tool has existed.
+
 - **The diagnostic-coverage number was overstated, and now is not.**
   Matching is by message text, so two sites emitting the *same sentence*
   are indistinguishable — one test made both read as exercised. Eleven
@@ -106,6 +117,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   eight passes.
 
 ### Fixed
+
+- **Three pairs of diagnostics were word-for-word identical, so neither
+  member said which construct it meant.** A closure's parameter list and
+  a declaration's printed the same sentence; a repeated variant inside an
+  or-pattern was reported as "a match arm already covers" it; and the
+  unresolved-operand message for `&` and for `|` did not name the
+  operator. Each now identifies itself — which a reader needs
+  independently of any tooling, since the two members are reached by
+  different mistakes.
 
 - **Six element-store diagnostics never said what type the element
   was.** They named the value's type and then said "into this element",
