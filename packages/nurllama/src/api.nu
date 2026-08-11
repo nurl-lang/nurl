@@ -140,7 +140,7 @@ $ `stdlib/ext/uuid.nu`
         F → {
             : String msg ( string_from `model '` )
             ( string_push_str msg name )
-            ( string_push_str msg `' not found — pull it first` )
+            ( string_push_str msg `' not found — not a local file and not a stored name (nurllama list; nurllama pull hf.co/ORG/REPO/FILE.gguf)` )
             ^ msg
         }
     }
@@ -396,11 +396,16 @@ i npredict f temp i topk f topp i seed → b {
     ?? pj {
         F _ → { ^ ( __api_error_chunked c 400 `invalid JSON body` ) }
         T j → {
-            : String model ( __api_str j `model` `` )
+            // the request's own model, or the server's default
+            : ~ String model ( __api_str j `model` `` )
+            ? > ( string_len model ) 0 {} {
+                ( string_free model )
+                = model ( string_from g_api_model )
+            }
             ? > ( string_len model ) 0 {} {
                 ( string_free model )
                 ( json_free j )
-                ^ ( __api_error_chunked c 400 `missing "model"` )
+                ^ ( __api_error_chunked c 400 `missing "model" and the server has no default — start it as: nurllama serve <model>` )
             }
             : String lerr ( __api_ensure ( string_data model ) )
             ? > ( string_len lerr ) 0 {
@@ -662,13 +667,14 @@ i npredict f temp i topk f topp i seed → b {
 
 // Ensure the configured model is loaded, render the message history
 // through its chat template, and return the assistant's reply — or
-// None when the model cannot be loaded.
-@ __web_reply Json history s new_content → ?String {
-    ? == 0 ( nurl_str_len g_api_model ) { ^ @ ?String { F } } {}
+// the reason it cannot (no model configured / the load failed).
+@ __web_reply Json history s new_content → !String String {
+    ? == 0 ( nurl_str_len g_api_model ) {
+        ^ @ !String String { F ( string_from `no model is configured — restart the server with a model: nurllama serve MODEL (or run the setup wizard: nurllama start)` ) }
+    } {}
     : String lerr ( __api_ensure g_api_model )
     ? > ( string_len lerr ) 0 {
-        ( string_free lerr )
-        ^ @ ?String { F }
+        ^ @ !String String { F lerr }
     } {}
     ( string_free lerr )
     : *Llm m # *Llm g_api_llm
@@ -696,7 +702,7 @@ i npredict f temp i topk f topp i seed → b {
     ( string_free prompt )
     : String reply ( __web_gen_reply m ids 512 0.0 42 )
     ( vec_free [i] ids )
-    ^ @ ?String { T reply }
+    ^ @ !String String { T reply }
 }
 
 // GET /web/session — mint/refresh the cookie, return the client id and
@@ -836,10 +842,14 @@ i npredict f temp i topk f topp i seed → b {
                         ( json_free o )
                         ( string_free reply )
                     }
-                    F → {
+                    F emsg → {
                         = rc_status 500
+                        : Json eo ( json_obj_new )
+                        : b _e1 ( json_obj_set eo `error` ( json_str_lit ( string_data emsg ) ) )
                         ( string_free out_txt )
-                        = out_txt ( string_from `{"error":"model unavailable"}` )
+                        = out_txt ( json_stringify eo )
+                        ( json_free eo )
+                        ( string_free emsg )
                     }
                 }
                 ( json_free history )
@@ -886,12 +896,12 @@ i npredict f temp i topk f topp i seed → b {
 }
 
 // Serve on `host:port`. Single worker: the decode loop owns the device,
-// so serialisation is structural rather than a lock.
-@ api_serve String root s host i port → i {
-    // The bare `serve` command: open, localhost-shaped defaults, no
-    // preconfigured model (each /api request names its own).
+// so serialisation is structural rather than a lock. `model` (may be
+// empty) is the default: the web UI chats with it, and an /api request
+// that names no model of its own falls back to it.
+@ api_serve String root s host i port s model → i {
     : NlConfig cfg @ NlConfig {
-        ( string_new ) ( string_from host ) port
+        ( string_from model ) ( string_from host ) port
         ( string_from `open` ) ( string_new ) ( string_new )
     }
     : i rc ( api_serve_cfg root cfg )

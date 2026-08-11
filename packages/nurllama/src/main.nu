@@ -15,7 +15,11 @@
 //                                             (hf.co/ORG/REPO/FILE.gguf or a
 //                                             URL; resumes a broken pull)
 //   nurllama list · rm <name> · verify <name> the local model store
-//   nurllama serve [--host H] [--port N]      ollama-compatible HTTP API
+//   nurllama serve [model] [--host H] [--port N]  ollama-compatible HTTP API
+//                                             + the web chat UI at /. The
+//                                             model is the default: the web
+//                                             UI chats with it, /api requests
+//                                             may name their own
 //   nurllama chat <model|name|hf-ref>         interactive chat (model's
 //                                             own template from GGUF)
 //   nurllama run <model|name|hf-ref> <prompt> generate (stream to stdout)
@@ -94,10 +98,31 @@ $ `stdlib/std/term.nu`
 // the shared ~/.nurl/models cache via the hub package — so `nurllama run
 // org/repo/model.gguf` just works without a separate pull. None on a fetch
 // error (already reported).
+//
+// Only a ref that names a .gguf file is fetched here. A bare org/repo is a
+// whole safetensors checkpoint repository — gigabytes that run/chat/serve
+// could not open anyway — so it gets guidance instead of a download, and an
+// argument with no slash at all (a typo, or a name missing from the store)
+// gets the short list of what a model argument can be.
 @ __nl_resolve_or_fetch String root s arg → ?String {
     ?? ( nl_resolve root arg ) {
         T p → { ^ @ ?String { T p } }
         F → {}
+    }
+    ? < ( nurl_str_find arg `/` ) 0 {
+        ( nurl_eprintln `nurllama: not a file and not a stored model name (nurllama list)` )
+        ( nurl_eprintln `  a model argument is one of:` )
+        ( nurl_eprintln `    a stored name          nurllama list` )
+        ( nurl_eprintln `    a local .gguf file     ./model.gguf` )
+        ( nurl_eprintln `    a Hugging Face ref     org/repo/model.gguf  (fetched on demand)` )
+        ^ @ ?String { F }
+    } {}
+    ? != 0 ( nurl_str_ends arg `.gguf` ) {} {
+        ( nurl_eprintln `nurllama: this ref names a whole repository, not a .gguf file — nurllama runs GGUF models` )
+        ( nurl_eprintln `  a GGUF in the repo       nurllama run org/repo/model.gguf "..."` )
+        ( nurl_eprintln `  a safetensors checkpoint nurllama convert org/repo model.gguf   (then run model.gguf)` )
+        ( nurl_eprintln `  merged finetune weights  nurllama run base.gguf "..." --weights merged.safetensors` )
+        ^ @ ?String { F }
     }
     ?? ( hub_get arg ) {
         T p → { ^ @ ?String { T p } }
@@ -628,6 +653,7 @@ $ `stdlib/std/term.nu`
     ( args_opt p `post-steps` 0 `N` `diffusion run: refinement passes after all masks resolve (default 16)` )
     ( args_opt p `host` 0 `ADDR` `serve: bind address (default 127.0.0.1)` )
     ( args_opt p `port` 0 `N` `serve: port (default 11434, ollama's)` )
+    ( args_opt p `model` 0 `MODEL` `serve: the default model (same as the positional: serve MODEL) — the web UI chats with it, and an /api request that names no model falls back to it` )
     ? ( args_parse_argv p ) {} {
         ( nurl_eprintln ( args_error p ) )
         ( args_free p )
@@ -636,13 +662,13 @@ $ `stdlib/std/term.nu`
     ? ( args_present p `help` ) {
         : String u ( args_usage p )
         ( nurl_print ( string_data u ) )
-        ( nurl_print `\ncommands:\n  start [-y]                                interactive setup wizard + web chat server\n  pull <hf.co/ORG/REPO/FILE.gguf | url> [--name N] · list · rm <name> · verify <name>\n  serve [--host H] [--port N] · chat <model|name>\n  run <model|name> <prompt> [-n N] [--temp F] [--topk N] [--topp F] [--seed N]\n  logits <model> <prompt> · tokenize <model> <text>\n  detok <model> <id> [id …] · vocab <model> [n] · selftest\n  convert <hf-dir> <out.gguf> [--type q8_0|f16|bf16|f32]\n` )
+        ( nurl_print `\ncommands:\n  start [-y]                                interactive setup wizard + web chat server\n  pull <hf.co/ORG/REPO/FILE.gguf | url> [--name N] · list · rm <name> · verify <name>\n  serve [model] [--host H] [--port N] [--weights FILE] · chat <model|name>\n  run <model|name> <prompt> [-n N] [--temp F] [--topk N] [--topp F] [--seed N]\n  logits <model> <prompt> · tokenize <model> <text>\n  detok <model> <id> [id …] · vocab <model> [n] · selftest\n  convert <hf-dir> <out.gguf> [--type q8_0|f16|bf16|f32]\n` )
         ( string_free u )
         ( args_free p )
         ^ 0
     } {}
     ? ( args_present p `version` ) {
-        ( nurl_print `nurllama 0.16.0\n` )
+        ( nurl_print `nurllama 0.17.0\n` )
         ( args_free p )
         ^ 0
     } {}
@@ -711,10 +737,55 @@ $ `stdlib/std/term.nu`
         : ~ i port 11434
         ?? ( string_to_int sport ) { T v2 → { = port v2 } F _ → {} }
         ( string_free sport )
+        // The default model: `serve MODEL` or `serve --model MODEL`. The
+        // web UI chats with it, and an /api request that names no model of
+        // its own falls back to it. Resolved NOW so a bad name fails at
+        // startup instead of as a 500 on the first chat.
+        : ~ String marg ( args_value_or p `model` `` )
+        ? >= ( args_positional_count p ) 2 {
+            ?? ( vec_get [String] pos 1 ) {
+                T c → {
+                    ( string_free marg )
+                    = marg ( string_from ( string_data c ) )
+                }
+                F → {}
+            }
+        } {}
+        : ~ String mdef ( string_new )
+        ? > ( string_len marg ) 0 {
+            ?? ( __nl_resolve_or_fetch root ( string_data marg ) ) {
+                T pth → {
+                    // keep the user's own name when the store can resolve it
+                    // (so the UI and /api echo `qwen3-4b`, not a blob path);
+                    // a hub ref needs the fetched path
+                    ( string_free mdef )
+                    ?? ( nl_resolve root ( string_data marg ) ) {
+                        T sp → {
+                            ( string_free sp )
+                            = mdef ( string_from ( string_data marg ) )
+                            ( string_free pth )
+                        }
+                        F → { = mdef pth }
+                    }
+                }
+                F → {
+                    ( string_free marg ) ( string_free mdef )
+                    ( string_free host ) ( string_free root ) ( args_free p )
+                    ^ 1
+                }
+            }
+        } {}
+        ( string_free marg )
         : String sw ( args_value_or p `weights` `` )
+        ? & > ( string_len sw ) 0 == ( string_len mdef ) 0 {
+            ( string_free sw ) ( string_free mdef )
+            ( string_free host ) ( string_free root ) ( args_free p )
+            ^ ( __nl_err ( string_from `nurllama: --weights replaces the tensors of a model, it does not select one — name the GGUF too: nurllama serve base.gguf --weights merged.safetensors` ) )
+        } {}
         ( api_set_weights ( string_data sw ) )
-        : i rc ( api_serve root ( string_data host ) port )
+        : i rc ( api_serve root ( string_data host ) port ( string_data mdef ) )
         ( string_free sw )
+        ( string_free mdef )
         ( string_free host )
         ( string_free root )
         ( args_free p )
@@ -868,9 +939,10 @@ $ `stdlib/std/term.nu`
         }
         ( string_free croot )
         ? > ( string_len cres ) 0 {} {
+            // __nl_resolve_or_fetch already reported why
             ( string_free cres )
             ( args_free p )
-            ^ ( __nl_err ( string_from `nurllama: not a file and not a stored model name (nurllama list)` ) )
+            ^ 1
         }
         : i rc ( __nl_chat ( string_data cres ) p )
         ( string_free cres )
@@ -1016,9 +1088,10 @@ $ `stdlib/std/term.nu`
         }
         ( string_free mroot )
         ? > ( string_len mres ) 0 {} {
+            // __nl_resolve_or_fetch already reported why
             ( string_free mres )
             ( args_free p )
-            ^ ( __nl_err ( string_from `nurllama: not a file and not a stored model name (nurllama list)` ) )
+            ^ 1
         }
         : s mp ( string_data mres )
         : ~ s prompt ``
@@ -1169,9 +1242,10 @@ $ `stdlib/std/term.nu`
     }
     ( string_free mroot2 )
     ? > ( string_len mres2 ) 0 {} {
+        // __nl_resolve_or_fetch already reported why
         ( string_free mres2 )
         ( args_free p )
-        ^ ( __nl_err ( string_from `nurllama: not a file and not a stored model name (nurllama list)` ) )
+        ^ 1
     }
     : s mpath ( string_data mres2 )
     : ~ i rc 0
