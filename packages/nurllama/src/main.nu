@@ -597,7 +597,7 @@ $ `stdlib/std/term.nu`
     ( args_flag p `yes` 121 `start: reuse the existing config without asking` )
     ( args_flag p `version` 0 `print the version` )
     ( args_flag p `no-special` 0 `tokenize: do not add BOS/EOS` )
-    ( args_opt p `weights` 0 `FILE` `run: take the weights from this safetensors file instead of the GGUF's own tensors (the GGUF still supplies the hyperparameters and the tokenizer)` )
+    ( args_opt p `weights` 0 `FILE` `run/serve: take the weights from this safetensors file instead of the GGUF's own tensors (the GGUF still supplies the hyperparameters and the tokenizer). Under serve, every model the server opens uses these weights — serve one model when using it` )
     ( args_opt p `out` 0 `FILE` `finetune: adapter output (default adapters.safetensors)` )
     ( args_opt p `merged` 0 `FILE` `finetune: also write the merged full-model safetensors here` )
     ( args_opt p `steps` 0 `N` `finetune: Adam steps (default 200)` )
@@ -642,7 +642,7 @@ $ `stdlib/std/term.nu`
         ^ 0
     } {}
     ? ( args_present p `version` ) {
-        ( nurl_print `nurllama 0.15.0\n` )
+        ( nurl_print `nurllama 0.16.0\n` )
         ( args_free p )
         ^ 0
     } {}
@@ -711,7 +711,10 @@ $ `stdlib/std/term.nu`
         : ~ i port 11434
         ?? ( string_to_int sport ) { T v2 → { = port v2 } F _ → {} }
         ( string_free sport )
+        : String sw ( args_value_or p `weights` `` )
+        ( api_set_weights ( string_data sw ) )
         : i rc ( api_serve root ( string_data host ) port )
+        ( string_free sw )
         ( string_free host )
         ( string_free root )
         ( args_free p )
