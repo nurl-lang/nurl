@@ -1,0 +1,5 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_generic_struct_unclosed.nu:7:14: error: end of file inside this generic struct body — the '{' here is never closed. Add the missing '}' (an extra '{' somewhere inside pushes the count off the same way); running nurlfmt shows where the nesting runs away.
+: Pair [A B] {
+             ^

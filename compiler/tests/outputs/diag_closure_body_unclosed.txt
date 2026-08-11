@@ -1,0 +1,6 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_closure_body_unclosed.nu:7:25: error: end of file inside this closure body — the '{' here is never closed. Add the missing '}' (an extra '{' somewhere inside pushes the count off the same way); running nurlfmt shows where the nesting runs away.
+    : ( @ v ) f \ → v { ( nurl_print `x` )
+                        ^
+error: aborting due to 1 previous error

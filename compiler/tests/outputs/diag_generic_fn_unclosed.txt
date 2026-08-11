@@ -1,0 +1,6 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_generic_fn_unclosed.nu:7:34: error: end of file inside this generic function body — the '{' here is never closed. Add the missing '}' (an extra '{' somewhere inside pushes the count off the same way); running nurlfmt shows where the nesting runs away.
+@ pick [T] T a T b i which → T {
+                                 ^
+error: aborting due to 1 previous error

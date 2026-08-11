@@ -10,6 +10,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A missing `}` in a generic template or a closure body no longer
+  hangs the compiler.** `collect_fn_body` (generic function/struct
+  template capture) and `simple_capture_analysis` (closure capture
+  pre-scan) walked braces with no EOF guard, so `nurlc file.nu` spun
+  forever on an unclosed body — the drop-close-brace mutation hung on
+  every generic-using corpus program (9/9). Both loops now stop at EOF
+  with a hard error anchored at the opening `{` that never closed,
+  naming the cure (add the `}`; an extra `{` inside skews the count
+  the same way) and pointing at nurlfmt, whose re-indent makes the
+  runaway nesting visible.
+
 - **Every value a function hands back is now type-checked — the
   implicit fall-off tail and closure tails included, and the
   integer→pointer hole is closed at all four value positions.** A
