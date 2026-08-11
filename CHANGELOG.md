@@ -10,6 +10,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A surplus operand spilling into a statement-form arm's tail is now
+  a diagnostic, not a silent no-op.** `= fails + fails 1 1` inside a
+  `? … { }` statement parsed as `= fails + fails 1` plus a bare
+  literal `1`, which the dangling-operand check exempted as "the
+  block's value" — but the conditional's value is discarded, so the
+  literal was dead and the mistake invisible (85 of the mutation
+  probe's extra-operand mutants compiled silently through exactly this
+  hole). The exempted literal is now recorded instead; a value join
+  (phi) consumes the record — `: i x ? c { 1 } { 2 }` stays legal —
+  and a `?`/`??` statement that finishes void with the record still
+  set dies with the caret on the surplus literal and the arity
+  cascade named.
+
 - **Errors inside generic bodies now point at the template's real
   file and line — and a missing import is a real diagnostic.** A
   diagnostic raised while re-parsing a generic instantiation used to

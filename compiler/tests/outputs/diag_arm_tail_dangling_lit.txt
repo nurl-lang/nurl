@@ -1,0 +1,6 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_arm_tail_dangling_lit.nu:18:27: error: a '?'/'??' arm ends in a bare literal, but the conditional is a STATEMENT here — its value is discarded, so the literal is dead. The usual cause is the operator before it having one operand too many (fixed arity, no closing bracket): the surplus operand spilled into the arm's tail. Remove the extra operand, or consume the conditional's value.
+        = fails + fails 1 1
+                          ^
+error: aborting due to 1 previous error

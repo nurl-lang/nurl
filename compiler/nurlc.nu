@@ -3068,6 +3068,20 @@
 // via a block iterator), so this never false-flags an arm value.
 : ~ i g_stmt_bare_lit 0
 
+// g_blk_tail_lit_line/col — the dangling-literal exemption's escape
+// hatch, closed. A bare literal as a value block's FINAL statement is
+// exempt from the dangling-operand error because it is "the block's
+// value" — but when that block is a `?`/`??` arm and the conditional
+// turns out to be a STATEMENT (its value discarded), the literal was
+// dead after all, and `= fails + fails 1 1` (the extra operand
+// spilling into the arm's tail) compiled silently. gen_block_expr /
+// gen_block_ret record the exempted literal's position here; the
+// value-join paths (gen_cond / gen_match phi) clear it — the value was
+// consumed; the statement iterators fire the dangling-operand error
+// when the flag survives a statement that produced no value.
+: ~ i g_blk_tail_lit_line 0
+: ~ i g_blk_tail_lit_col 0
+
 // g_stmt_bare_value — the literal flag's general sibling (critic A2,
 // the last silent prefix-arity cascade): set by gen_stmt to 1 when the
 // statement it just parsed produced a VALUE without being a call or
@@ -8677,7 +8691,10 @@
     : ~ s result `undef`
     ? == 0 g_did_ret
     { ? & ! ( seq phi_ty `void` ) types_ok
-        { : s res ( nurl_cg_reg cg )
+        {  // A value join CONSUMES an arm-tail literal — the exemption
+            // it was recorded under holds (see g_blk_tail_lit_line).
+            = g_blk_tail_lit_line 0
+            : s res ( nurl_cg_reg cg )
             // Ownership OUT of the arms is a copy, not a transfer: a
             // tracked-ident arm already dup'd its value in-arm (see the
             // t_dup/e_dup blocks), so the binding keeps its scheduled
@@ -10304,6 +10321,9 @@
         ? | > ( int_width phi_type ) 0 ( seq phi_type `double` )
         { ( nurl_sym_def syms `__last_ident_name__` `` ) }
         {}
+        // A value join consumes an arm-tail literal (gen_cond's twin —
+        // see g_blk_tail_lit_line).
+        = g_blk_tail_lit_line 0
         // Publish the join-variant channel (consume-once, gen_cond's
         // twin): every value arm proved a variant of the one enum, so
         // the phi carries a tag of it and the enum wrap sites may bless
@@ -10326,6 +10346,7 @@
             = phi_full64 ( nurl_str_cat phi_entries64 ( nurl_str_cat `, [ undef, %` ( nurl_str_cat fallback_pred ` ]` ) ) )
         } {}
         ( nurl_print `  ` ) ( nurl_print final64 )
+        = g_blk_tail_lit_line 0
         ( nurl_print ` = phi i64 ` ) ( nurl_print phi_full64 ) ( nurl_print `\n` )
         ( nurl_set_last_type ? any_u64 `u64` `i64` )
         ( __void_reason_clear )
@@ -10880,10 +10901,16 @@
     ~ != ( nurl_lex_type lex ) TT_RBRACE {
         ? != 0 g_did_ret { = __dead_any T } {}
         ( __handle_unreachable_stmt lex syms cg )
+        = g_blk_tail_lit_line 0
         = __tail_tt ( nurl_lex_type lex )
         = __tail_tv ( nurl_lex_val lex )
         = __tail_callee ? == __tail_tt TT_LPAREN ( nurl_lex_peek_val lex ) ``
         = last ( gen_stmt lex syms cg )
+        ? & & != 0 g_blk_tail_lit_line
+        | == __tail_tt TT_QUEST == __tail_tt TT_QUESTQUEST
+        ( seq ( nurl_get_last_type ) `void` )
+        { ( die_pos lex g_blk_tail_lit_line g_blk_tail_lit_col ( __arm_tail_lit_msg ) ) }
+        {}
         = any T
     }
     ( nurl_lex_advance lex )
@@ -10895,6 +10922,15 @@
         ( __tail_noreturn_close syms __tail_callee ) }
     {}
     ( __close_dead_block __dead_any )
+    // The tail statement was a bare literal: exempt from the
+    // dangling-operand error (it is the block's value), but RECORD it —
+    // if the enclosing conditional turns out to be a statement, the
+    // value is discarded and the exemption was wrong (see
+    // g_blk_tail_lit_line).
+    ? != 0 g_stmt_bare_lit
+    { = g_blk_tail_lit_line g_stmt_line
+        = g_blk_tail_lit_col g_stmt_col }
+    {}
     // An empty block `{}` is the unit / void value. Without typing it as
     // void, `nurl_get_last_type` retains whatever it was before the block
     // (i64 by default, i1 inside a conditional), so a `^ {}` in a void
@@ -10905,6 +10941,13 @@
     // (A non-empty block's type is set by its trailing statement.)
     ? ! any { ( nurl_set_last_type `void` ) } {}
     last
+}
+
+// The arm-tail half of the dangling-operand family: fired by the block
+// iterators when a `?`/`??` STATEMENT finished void while an arm's
+// exempted tail literal is still on record (g_blk_tail_lit_line).
+@ __arm_tail_lit_msg → s {
+    ^ `a '?'/'??' arm ends in a bare literal, but the conditional is a STATEMENT here — its value is discarded, so the literal is dead. The usual cause is the operator before it having one operand too many (fixed arity, no closing bracket): the surplus operand spilled into the arm's tail. Remove the extra operand, or consume the conditional's value.`
 }
 
 @ __dangling_operand_msg → s {
@@ -10936,6 +10979,8 @@
     ~ != ( nurl_lex_type lex ) TT_RBRACE {
         ? != 0 g_did_ret { = __dead_any T } {}
         ( __handle_unreachable_stmt lex syms cg )
+        = g_blk_tail_lit_line 0
+        : i __bs_tt ( nurl_lex_type lex )
         = __tail_callee ? == ( nurl_lex_type lex ) TT_LPAREN ( nurl_lex_peek_val lex ) ``
         = __tail_any T
         // Bind the statement's value: gen_stmt hands back the IR value
@@ -10945,6 +10990,11 @@
         // iteration's and scope exit frees the last.
         : s __gs_val ( gen_stmt lex syms cg )
         ? != 0 ( nurl_str_len __gs_val ) {} {}
+        ? & & != 0 g_blk_tail_lit_line
+        | == __bs_tt TT_QUEST == __bs_tt TT_QUESTQUEST
+        ( seq ( nurl_get_last_type ) `void` )
+        { ( die_pos lex g_blk_tail_lit_line g_blk_tail_lit_col ( __arm_tail_lit_msg ) ) }
+        {}
         // Every statement in a void block has its value discarded, so a
         // bare literal here is dead — reject it (dangling operand).
         ? != 0 g_stmt_bare_lit { ( die lex ( __dangling_operand_msg ) ) } {}
@@ -10977,11 +11027,17 @@
     ~ != ( nurl_lex_type lex ) TT_RBRACE {
         ? != 0 g_did_ret { = __dead_any T } {}
         ( __handle_unreachable_stmt lex syms cg )
+        = g_blk_tail_lit_line 0
         = __tail_tt ( nurl_lex_type lex )
         = __tail_tv ( nurl_lex_val lex )
         = __tail_callee ? == __tail_tt TT_LPAREN ( nurl_lex_peek_val lex ) ``
         = __tail_any T
         = last ( gen_stmt lex syms cg )
+        ? & & != 0 g_blk_tail_lit_line
+        | == __tail_tt TT_QUEST == __tail_tt TT_QUESTQUEST
+        ( seq ( nurl_get_last_type ) `void` )
+        { ( die_pos lex g_blk_tail_lit_line g_blk_tail_lit_col ( __arm_tail_lit_msg ) ) }
+        {}
         // A bare literal that is NOT the block's final expression (its
         // return value) has its value discarded — reject it as a dangling
         // operand. The final literal (next token `}`) is the legitimate
@@ -11001,6 +11057,11 @@
         ( __tail_noreturn_close syms __tail_callee ) }
     {}
     ( __close_dead_block __dead_any )
+    // Tail bare literal: exempt-but-recorded, gen_block_expr's twin.
+    ? != 0 g_stmt_bare_lit
+    { = g_blk_tail_lit_line g_stmt_line
+        = g_blk_tail_lit_col g_stmt_col }
+    {}
     last
 }
 
