@@ -8,11 +8,14 @@
 // conditional ±p; inversion is a fixed Fermat chain (a^(p-2)). All loops are
 // fixed-count and branch-free in the data.
 //
-// The limb radix is 2^32 and the CIOS intermediates are `u64`: a 32×32 → 64
-// product is one machine multiply, so the schoolbook body is 8×8 = 64 of
-// them per multiply instead of the 16×16 = 256 the old 16-bit radix needed,
-// and the interleaved Montgomery reduction shrinks the same way. Every limb
-// is stored masked to 32 bits, so reading one back as `u64` is exact.
+// Elements are STORED as eight 32-bit limbs, but the multiply works in
+// four 64-bit ones: it packs its inputs to 4×64 on entry and unpacks the
+// result on exit, so each partial product is a full 64×64 → 128 multiply
+// (nurl_umulhi gives the high half) and the schoolbook body is 4×4 = 16
+// products against the 8×8 = 64 the 32-bit radix ran. Add/sub/conditional-
+// subtract stay on the 32-bit limbs, where a 32×32 sum needs no wide type.
+// Every limb is stored masked to 32 bits, so reading one back as `u64` is
+// exact.
 //
 // Every operation comes in two forms: an allocating `p256ct_*` for callers
 // that just want a value, and a `_d` worker that WRITES INTO a destination
@@ -159,74 +162,122 @@ $ `stdlib/core/vec.nu`
     ^ out
 }
 
-// CIOS, radix 2^32. Each accumulator word stays below 2^32 and every
-// intermediate `t[j] + a[j]·b[i] + C` is bounded by
-// (2^32−1) + (2^32−1)^2 + (2^32−1) = 2^64 − 1, so a `u64` holds it exactly
-// — that bound is what makes this radix the largest one that needs no
-// double-word carry.
+// CIOS Montgomery multiply, radix 2^64. Four 64-bit limbs instead of eight
+// 32-bit ones: each a[j]·b[i] is now a full 64×64→128 product (nurl_umulhi
+// supplies the high half NURL's `*` drops), so the schoolbook is 16
+// products against the 64 the 2^32 radix ran, and the interleaved reduction
+// three more per step against seven. The Montgomery constant −p^-1 mod 2^64
+// is still 1 — p ≡ −1 (mod 2^64) exactly as it is (mod 2^32) — so m = t[0]
+// with no multiply, and the reduction multiplies fold against the sparse
+// 4×64 modulus p = [2^64−1, 2^32−1, 0, 2^64−2^32+1].
+//
+// The 8×32 external limb layout is unchanged: a/b are packed to 4×64 on
+// entry and the result unpacked back on exit, so every caller, constant
+// table and the whole point/inversion layer are untouched. `dst` may alias
+// a or b — both are read into the packed locals before any write to dst.
 @ __p256_mul_d P256Scratch scr ( Vec i ) dst ( Vec i ) a ( Vec i ) b → v {
-    // accumulator t has 10 limbs (n+2), starts zero.
-    : ( Vec i ) t . scr t
     : *i ap ( vec_data [i] a )
     : *i bp ( vec_data [i] b )
-    : *i tp ( vec_data [i] t )
-    : ~ i zz 0
-    ~ < zz 10 { = . tp zz 0 = zz + zz 1 }
+    // Pack the eight 32-bit limbs into four 64-bit ones (little-endian).
+    : u64 a0 | # u64 . ap 0 << # u64 . ap 1 32
+    : u64 a1 | # u64 . ap 2 << # u64 . ap 3 32
+    : u64 a2 | # u64 . ap 4 << # u64 . ap 5 32
+    : u64 a3 | # u64 . ap 6 << # u64 . ap 7 32
+    : u64 b0 | # u64 . bp 0 << # u64 . bp 1 32
+    : u64 b1 | # u64 . bp 2 << # u64 . bp 3 32
+    : u64 b2 | # u64 . bp 4 << # u64 . bp 5 32
+    : u64 b3 | # u64 . bp 6 << # u64 . bp 7 32
+    // Accumulator t[0..5]; the top two words hold the CIOS overflow.
+    : ~ u64 t0 0
+    : ~ u64 t1 0
+    : ~ u64 t2 0
+    : ~ u64 t3 0
+    : ~ u64 t4 0
+    : ~ u64 t5 0
+    : ~ u64 bi 0
+    : ~ u64 m 0
+    : ~ u64 lo 0
+    : ~ u64 hi 0
+    : ~ u64 s 0
+    : ~ u64 cr 0
+    // Each accumulate step is the same three lines: multiply, add the low
+    // half into t[j] threading the incoming carry, then form the outgoing
+    // carry as the product's high half plus the two possible add-wraps.
+    // The unsigned wrap of `x + y` is detected as `(x+y) < x`.
     : ~ i i 0
-    ~ < i 8 {
-        : u64 bi # u64 . bp i
-        // t += a * b[i]
-        : ~ u64 C 0
-        : ~ i j 0
-        ~ < j 8 {
-            : u64 x + + # u64 . tp j * # u64 . ap j bi C
-            = . tp j # i & x 0xFFFFFFFF
-            = C >> x 32
-            = j + j 1
-        }
-        : u64 x8 + # u64 . tp 8 C
-        = . tp 8 # i & x8 0xFFFFFFFF
-        = . tp 9 # i >> x8 32
-        // t = (t + m·p) / 2^32, where m = t[0]·pinv mod 2^32.
-        //
-        // NOT A SINGLE MULTIPLY: pinv is 1, so m is just t[0], and
-        // p = [2^32−1, 2^32−1, 2^32−1, 0, 0, 0, 1, 2^32−1] — every
-        // partial product m·p[j] is a shift, a zero, or m itself. That
-        // is half of this routine's multiplies gone, and it is the whole
-        // reason a Montgomery-friendly prime is chosen with this shape.
-        : u64 m # u64 . tp 0
-        : u64 mp << m 32  // m·(2^32−1) = mp − m
-        // j=0: t[0] + (mp − m) = mp, since m IS t[0] — low word zero
-        //      (as the reduction requires) and carry m.
-        // j=1,2: t[j] + (mp − m) + m = t[j] + mp — the limb falls
-        //      through unchanged and the carry stays m.
-        = . tp 0 . tp 1
-        = . tp 1 . tp 2
-        // j=3,4,5: p[j] = 0.
-        : u64 y3 + # u64 . tp 3 m
-        = . tp 2 # i & y3 0xFFFFFFFF
-        : ~ u64 C2 >> y3 32
-        : u64 y4 + # u64 . tp 4 C2
-        = . tp 3 # i & y4 0xFFFFFFFF
-        = C2 >> y4 32
-        : u64 y5 + # u64 . tp 5 C2
-        = . tp 4 # i & y5 0xFFFFFFFF
-        = C2 >> y5 32
-        // j=6: p[6] = 1.
-        : u64 y6 + + # u64 . tp 6 m C2
-        = . tp 5 # i & y6 0xFFFFFFFF
-        = C2 >> y6 32
-        // j=7: p[7] = 2^32−1 again.
-        : u64 y7 + + # u64 . tp 7 - mp m C2
-        = . tp 6 # i & y7 0xFFFFFFFF
-        = C2 >> y7 32
-        : u64 y8 + # u64 . tp 8 C2
-        = . tp 7 # i & y8 0xFFFFFFFF
-        = . tp 8 + . tp 9 # i >> y8 32
+    ~ < i 4 {
+        = bi ? == i 0 b0 ? == i 1 b1 ? == i 2 b2 b3
+        // t += a · bi  (four 64×64→128 products, carry threaded through cr)
+        = lo * a0 bi = hi ( nurl_umulhi a0 bi )
+        = s + t0 lo = t0 + s 0
+        = cr + hi ? < s lo 1 0
+        = lo * a1 bi = hi ( nurl_umulhi a1 bi )
+        = s + t1 lo = t1 + s cr
+        = cr + hi + ? < s lo 1 0 ? < t1 s 1 0
+        = lo * a2 bi = hi ( nurl_umulhi a2 bi )
+        = s + t2 lo = t2 + s cr
+        = cr + hi + ? < s lo 1 0 ? < t2 s 1 0
+        = lo * a3 bi = hi ( nurl_umulhi a3 bi )
+        = s + t3 lo = t3 + s cr
+        = cr + hi + ? < s lo 1 0 ? < t3 s 1 0
+        = s + t4 cr
+        = t5 + t5 ? < s t4 1 0
+        = t4 s
+        // Reduction: m = t0 (since −p^-1 ≡ 1), then t += m·p, drop the low
+        // limb. p limbs: P0 = 2^64−1, P1 = 2^32−1, P2 = 0, P3 = 2^64−2^32+1.
+        = m t0
+        // j=0: t0 + m·P0 is 0 in the low word (the reduction's point);
+        // only its carry survives.
+        = lo * m 18446744073709551615 = hi ( nurl_umulhi m 18446744073709551615 )
+        = s + t0 lo
+        = cr + hi ? < s lo 1 0
+        // j=1: P1 = 2^32−1
+        = lo * m 4294967295 = hi ( nurl_umulhi m 4294967295 )
+        = s + t1 lo = t1 + s cr
+        = cr + hi + ? < s lo 1 0 ? < t1 s 1 0
+        // j=2: P2 = 0 — just fold the incoming carry. The wrap must be read
+        // against `cr` (the addend), not the just-overwritten t2.
+        = s + t2 cr
+        = t2 s
+        = cr ? < s cr 1 0
+        // j=3: P3 = 2^64−2^32+1
+        = lo * m 18446744069414584321 = hi ( nurl_umulhi m 18446744069414584321 )
+        = s + t3 lo = t3 + s cr
+        = cr + hi + ? < s lo 1 0 ? < t3 s 1 0
+        // Fold cr into the top words, then divide by 2^64: shift down one limb.
+        = s + t4 cr
+        = t5 + t5 ? < s t4 1 0
+        = t4 s
+        = t0 t1 = t1 t2 = t2 t3 = t3 t4 = t4 t5 = t5 0
         = i + i 1
     }
-    // t is 9 meaningful limbs (t[0..8]); value < 2p. Conditional subtract p.
-    ( __p256_cond_sub_d scr dst t )
+    // t0..t3 is the 256-bit result, t4 the extra top word; value < 2p.
+    // Conditional subtract p (4×64), then unpack the winner to 8×32 in dst.
+    : u64 d0 - t0 18446744073709551615
+    : ~ u64 bb ? < t0 18446744073709551615 1 0
+    : u64 d1 - - t1 4294967295 bb
+    = bb | ? < t1 4294967295 1 0 ? < - t1 4294967295 bb 1 0
+    : u64 d2 - t2 bb
+    = bb ? < t2 bb 1 0
+    : u64 d3 - - t3 18446744069414584321 bb
+    = bb | ? < t3 18446744069414584321 1 0 ? < - t3 18446744069414584321 bb 1 0
+    // top word minus the final borrow: negative ⇒ t < p ⇒ keep t.
+    : i topb - # i t4 # i bb
+    : u64 mask ? < topb 0 0 18446744073709551615
+    : u64 imask ^^ mask 18446744073709551615
+    : u64 o0 | & mask d0 & imask t0
+    : u64 o1 | & mask d1 & imask t1
+    : u64 o2 | & mask d2 & imask t2
+    : u64 o3 | & mask d3 & imask t3
+    : *i op ( vec_data [i] dst )
+    = . op 0 # i & o0 4294967295
+    = . op 1 # i & >> o0 32 4294967295
+    = . op 2 # i & o1 4294967295
+    = . op 3 # i & >> o1 32 4294967295
+    = . op 4 # i & o2 4294967295
+    = . op 5 # i & >> o2 32 4294967295
+    = . op 6 # i & o3 4294967295
+    = . op 7 # i & >> o3 32 4294967295
 }
 
 // Given a 9-limb t in [0, 2p), write (t mod p) as 8 limbs into dst,
