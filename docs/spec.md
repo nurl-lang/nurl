@@ -364,9 +364,8 @@ null pointer.
 
 A **condition** (`?` / `~`) must be `b` or an integer (tested non-zero).
 A float, pointer/string, enum, or aggregate condition is rejected with
-the comparison to write instead — none of them has a truth value, and
-the blind `icmp ne … 0` narrowing used to emit invalid IR that only
-clang reported. Likewise `# b` of a float is rejected (an `i1` holds
+the comparison to write instead — none of them has a truth value.
+Likewise `# b` of a float is rejected (an `i1` holds
 only 0 or 1, so the conversion is poison for any other value — write
 the comparison).
 
@@ -1504,6 +1503,15 @@ foo.nu:6:3: error: bare identifier 'nurl_print' as a statement has no
   nurl_print `oops`
   ^
 ```
+
+**Re-parsed contexts.** A diagnostic raised inside a generic
+instantiation's body is anchored at the **template's own** `file:line:col`
+(the re-lex buffer preserves the template's line structure), and the
+message carries a bracketed context suffix naming the instantiation and
+its first call site — `[while instantiating 'f__i64' — the error may
+depend on the concrete type arguments; first call site: main.nu:12]`.
+Trait-method signature and default-body re-parses carry the analogous
+suffix naming the method, the trait, and the Self/impl type.
 
 **Multi-error reporting.** One `nurlc` run reports the errors of *every*
 failing top-level declaration, not just the first: a diagnostic aborts

@@ -180,9 +180,7 @@ the Actions tab.
   untested: the separate `windows-tests` workflow runs `build.bat` — the
   bootstrap fixed point plus the full Windows golden corpus
   (`compiler/tests/outputs-windows/`, via `run_tests.ps1`) — on every
-  push to `main` and every PR. (This entry previously said no corpus ran
-  on Windows in CI at all; that stopped being true when the workflow
-  landed, and it now gates PRs too.)
+  push to `main` and every PR.
 - The FreeBSD release leg is best-effort (`continue-on-error`); a release
   can ship without the FreeBSD archive.
 - macOS ships no release artifact yet — the installer rejects Darwin with a
