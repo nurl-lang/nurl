@@ -21709,6 +21709,25 @@
     ( emit `pw.done:` )
     ( emit `  ret void` )
     ( emit `}` )
+    // `nurl_umulhi` — high 64 bits of the unsigned 128-bit product.
+    // NURL's `*` is the low half; this completes the 64×64→128 multiply
+    // the language cannot spell, which is the primitive under every
+    // big-number hot path (Poly1305, curve25519, P-256 — the arithmetic
+    // of a TLS connection). Same shape as nurl_peek above and for the
+    // same reason: defined in-module so it inlines to ONE `mul`
+    // instruction with or without LTO, while runtime.o's C definition
+    // still prevails at link. i128 is target-independent IR; backends
+    // without a wide multiply legalize it (wasm32 → compiler-rt's
+    // __multi3, which the bundled zig links by default).
+    ( emit `define linkonce_odr i64 @nurl_umulhi(i64 %a, i64 %b) alwaysinline {` )
+    ( emit `entry:` )
+    ( emit `  %mh.a = zext i64 %a to i128` )
+    ( emit `  %mh.b = zext i64 %b to i128` )
+    ( emit `  %mh.p = mul i128 %mh.a, %mh.b` )
+    ( emit `  %mh.h = lshr i128 %mh.p, 64` )
+    ( emit `  %mh.r = trunc i128 %mh.h to i64` )
+    ( emit `  ret i64 %mh.r` )
+    ( emit `}` )
     ( __emit_rt_decl syms `declare void @nurl_vec_drop(i8*, ptr, i64)` )
     // nurl_file_* (open/write/write_range/write_byte/close/read_chunk
     // /eof/exists/del/dir_create/dir_remove) are pure-NURL @-fns in
@@ -22345,6 +22364,7 @@
     // unregistered name, so this table must cover every `declare` that
     // emit_header writes. Keep the two in sync.
     ( nurl_sym_def syms `nurl_peek` `i64` )
+    ( nurl_sym_def syms `nurl_umulhi` `i64` )
     ( nurl_sym_def syms `nurl_init` `void` )
     ( nurl_sym_def syms `nurl_memset` `void` )
     ( nurl_sym_def syms `nurl_vec_drop` `void` )

@@ -1997,6 +1997,28 @@ void nurl_poke_f32(void *base, long long idx, double val) {
     ((float*)base)[(size_t)idx] = (float)val;
 }
 
+/* High 64 bits of the unsigned 128-bit product a·b. The low half is
+ * what NURL's own `*` already computes (wrapping i64 multiply), so this
+ * one function completes the 64×64→128 multiply the language cannot
+ * spell — the primitive every big-number hot path (Poly1305, curve25519,
+ * P-256: the arithmetic under each TLS connection) is built from.
+ * Without it those stacks are forced into small-radix limbs to keep
+ * partial products inside 63 bits, at 2-4× the multiply count. LTO
+ * inlines this to one `mul`/`umulh` instruction; the no-__int128
+ * fallback is the same 32-bit-halves schoolbook nurl__mul_shift's
+ * differential sweep already proves out. */
+long long nurl_umulhi(long long a, long long b) {
+#ifdef NURL_HAVE_U128
+    return (long long)(uint64_t)(((nurl_u128)(uint64_t)a * (uint64_t)b) >> 64);
+#else
+    uint64_t a0 = (uint64_t)a & 0xffffffffULL, a1 = (uint64_t)a >> 32;
+    uint64_t b0 = (uint64_t)b & 0xffffffffULL, b1 = (uint64_t)b >> 32;
+    uint64_t p00 = a0 * b0, p01 = a0 * b1, p10 = a1 * b0, p11 = a1 * b1;
+    uint64_t mid = (p00 >> 32) + (p01 & 0xffffffffULL) + (p10 & 0xffffffffULL);
+    return (long long)(p11 + (p01 >> 32) + (p10 >> 32) + (mid >> 32));
+#endif
+}
+
 /* Indirect-call trampoline for the packages/gpu CPU backend. A CUDA-C kernel
  * compiled for the host (by cpu.nu, via the system C++ compiler) exposes a
  * fixed entry `void __cpu_launch(void** params, long long grid, long long

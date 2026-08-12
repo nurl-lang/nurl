@@ -100,6 +100,14 @@
 : ~ i g_diag_recover_active 0
 : i NURLC_MAX_ERRORS 20
 
+// Diagnostic context suffix, appended to every die/warn message while
+// non-empty. Set (and saved/restored — instantiations nest) around a
+// generic instantiation's re-parse: the location then points at the
+// TEMPLATE's real file:line, and this carries the other half — which
+// instantiation, called from where — since a mono error can depend on
+// the concrete type arguments.
+: ~ s g_diag_ctx ``
+
 // die → __diag_abort: print-position variants share this exit/panic tail.
 @ __diag_abort → v {
     ? != g_diag_recover_active 0
@@ -151,7 +159,7 @@
     : s loc ( nurl_str_cat ( nurl_lex_filename lex )
     ( nurl_str_cat `:` ( nurl_str_cat ( nurl_str_int ( nurl_lex_line lex ) )
     ( nurl_str_cat `:` ( nurl_str_int col ) ) ) ) )
-    ( nurl_eprintln ( nurl_str_cat3 loc `: error: ` msg ) )
+    ( nurl_eprintln ( nurl_str_cat3 loc `: error: ` ( nurl_str_cat msg g_diag_ctx ) ) )
     ( nurl_eprintln ( nurl_lex_line_text lex ) )
     ( nurl_eprintln ( nurl_diag_caret col ) )
     ( __diag_abort )
@@ -163,7 +171,7 @@
 // supertrait-obligation sweep, which runs after every impl in the program has
 // been registered and so cannot point at a single lexer position.
 @ die_at s loc s msg → v {
-    ( nurl_eprintln ( nurl_str_cat3 loc `: error: ` msg ) )
+    ( nurl_eprintln ( nurl_str_cat3 loc `: error: ` ( nurl_str_cat msg g_diag_ctx ) ) )
     ( __diag_abort )
 }
 
@@ -176,7 +184,7 @@
     : s loc ( nurl_str_cat ( nurl_lex_filename lex )
     ( nurl_str_cat `:` ( nurl_str_cat ( nurl_str_int ( nurl_lex_line lex ) )
     ( nurl_str_cat `:` ( nurl_str_int col ) ) ) ) )
-    ( nurl_eprintln ( nurl_str_cat3 loc `: warning: ` msg ) )
+    ( nurl_eprintln ( nurl_str_cat3 loc `: warning: ` ( nurl_str_cat msg g_diag_ctx ) ) )
     ( nurl_eprintln ( nurl_lex_line_text lex ) )
     ( nurl_eprintln ( nurl_diag_caret col ) )
 }
@@ -1122,6 +1130,14 @@
 // body (closure bodies included — that over-count only makes the
 // noreturn inference more conservative, never wrong). Reset by gen_fn.
 : ~ i g_fn_ret_count 0
+
+// `g_loop_break_used[exit_label]` is `1` when a `break` targeting that
+// loop's exit label was compiled. Exit labels are globally unique (cg
+// label counter), so one flat map serves every loop. Consumed by
+// gen_loop: a literal-true loop whose exit label no break targets never
+// reaches it — the label is terminated with `unreachable` and the loop
+// counts as a returning tail. Allocated in main().
+: ~ i g_loop_break_used 0
 
 // ── DWARF debug-info state ───────────────────────────────────────
 // All zero/empty when --g is OFF; emit helpers then produce IR that
@@ -2528,7 +2544,7 @@
     { : s hint ? hint_match
         `) — match arms contain '^' so '?? …' is statement-form, not an expression. Refactor to ': ~ T rc init / ?? mr { … = rc v } / ^ rc'.`
         ? is_falloff
-        `) — the final statement yields nothing (a call returning 'v', an assignment, a loop or a bare block produce no value). End the body with an expression of the declared type, or return one explicitly with '^ <value>'.`
+        `) — the final statement yields nothing (a call returning 'v', an assignment, a loop or a bare block produce no value). End the body with an expression of the declared type, or return one explicitly with '^ <value>'. If the body LOOKS like it ends with a value, count the braces: an extra '}' closes the function early and strands the rest at the top level.`
         `) — the commonest cause is returning a call whose declared return type is 'v', which yields nothing to return; a conditional whose branches disagree on type does the same. Check what the '^' operand produces.`
         : s lead ? is_falloff
         `the function body ends without a return value (expected `
@@ -2560,7 +2576,7 @@
         : b ret_df | ( seq fn_rt `double` ) ( seq fn_rt `float` )
         ? | != ret_vf ret_df & ( is_ptr_ty lt ) ! ( is_ptr_ty fn_rt )
         { ( die_stmt lex ( nurl_str_cat ( nurl_str_cat4
-            `return value type '` lt `' does not match the declared return type '` fn_rt )
+            `return value type '` ( llvm_to_nurl lt ) `' does not match the declared return type '` ( llvm_to_nurl fn_rt ) )
             `' — NURL has no implicit conversions; return a value of the declared type or convert with '# T expr'` ) ) }
         {}
         // Integer value where a POINTER type is declared. `^ n` from a
@@ -2605,7 +2621,7 @@
         // the call-site struct check): `^ b` from a `→ A` fn where b is a B.
         ? ( __arg_named_struct_mismatch lt fn_rt )
         { ( die_stmt lex ( nurl_str_cat ( nurl_str_cat4
-            `return value type '` lt `' does not match the declared return type '` fn_rt )
+            `return value type '` ( llvm_to_nurl lt ) `' does not match the declared return type '` ( llvm_to_nurl fn_rt ) )
             `' — wrong struct type returned by value (the fields would be silently reinterpreted)` ) ) }
         {}
         // Integer WIDTH mismatch — above all the bool boundary. `^ ( ffi )` in
@@ -3006,7 +3022,7 @@
     : s loc ( nurl_str_cat ( nurl_lex_filename lex )
     ( nurl_str_cat `:` ( nurl_str_cat ( nurl_str_int g_stmt_line )
     ( nurl_str_cat `:` ( nurl_str_int g_stmt_col ) ) ) ) )
-    ( nurl_eprintln ( nurl_str_cat3 loc `: error: ` msg ) )
+    ( nurl_eprintln ( nurl_str_cat3 loc `: error: ` ( nurl_str_cat msg g_diag_ctx ) ) )
     ( __diag_abort )
 }
 
@@ -3026,7 +3042,7 @@
     : s loc ( nurl_str_cat ( nurl_lex_filename lex )
     ( nurl_str_cat `:` ( nurl_str_cat ( nurl_str_int line )
     ( nurl_str_cat `:` ( nurl_str_int col ) ) ) ) )
-    ( nurl_eprintln ( nurl_str_cat3 loc `: warning: ` msg ) )
+    ( nurl_eprintln ( nurl_str_cat3 loc `: warning: ` ( nurl_str_cat msg g_diag_ctx ) ) )
     ( nurl_eprintln ( nurl_lex_line_text_at lex line ) )
     ( nurl_eprintln ( nurl_diag_caret col ) )
 }
@@ -3035,7 +3051,7 @@
     : s loc ( nurl_str_cat ( nurl_lex_filename lex )
     ( nurl_str_cat `:` ( nurl_str_cat ( nurl_str_int line )
     ( nurl_str_cat `:` ( nurl_str_int col ) ) ) ) )
-    ( nurl_eprintln ( nurl_str_cat3 loc `: error: ` msg ) )
+    ( nurl_eprintln ( nurl_str_cat3 loc `: error: ` ( nurl_str_cat msg g_diag_ctx ) ) )
     ( nurl_eprintln ( nurl_lex_line_text_at lex line ) )
     ( nurl_eprintln ( nurl_diag_caret col ) )
     ( __diag_abort )
@@ -3051,6 +3067,20 @@
 // Match arms whose body is a bare literal call gen_stmt directly (not
 // via a block iterator), so this never false-flags an arm value.
 : ~ i g_stmt_bare_lit 0
+
+// g_blk_tail_lit_line/col — the dangling-literal exemption's escape
+// hatch, closed. A bare literal as a value block's FINAL statement is
+// exempt from the dangling-operand error because it is "the block's
+// value" — but when that block is a `?`/`??` arm and the conditional
+// turns out to be a STATEMENT (its value discarded), the literal was
+// dead after all, and `= fails + fails 1 1` (the extra operand
+// spilling into the arm's tail) compiled silently. gen_block_expr /
+// gen_block_ret record the exempted literal's position here; the
+// value-join paths (gen_cond / gen_match phi) clear it — the value was
+// consumed; the statement iterators fire the dangling-operand error
+// when the flag survives a statement that produced no value.
+: ~ i g_blk_tail_lit_line 0
+: ~ i g_blk_tail_lit_col 0
 
 // g_stmt_bare_value — the literal flag's general sibling (critic A2,
 // the last silent prefix-arity cascade): set by gen_stmt to 1 when the
@@ -3553,6 +3583,23 @@
         `', right is '` rt )
         `' — there is no ordering between an address and a number, and operator-level pointer arithmetic is not supported. Index with '. ptr idx', compare like with like, or convert explicitly with '# i expr'. (Equality against 0 for a null check is allowed.)` ) ) }
     {}
+    // AGGREGATE operands. An option/result/slice (`{ i1, i64 }`, from a
+    // value-form `??`/`?` join) or a named struct BY VALUE reaching an
+    // operator emitted `add i64 %n, %r6` with %r6 an aggregate —
+    // invalid IR that nurlc accepted (rc 0) and only the LLVM verifier
+    // rejected. (Enum operands died above with their own nominal rule;
+    // pointers-to-struct are addresses and keep the pointer rules.)
+    // The commonest way an aggregate lands here is the prefix-arity
+    // cascade: `= n + n` short an operand swallowed the `??` that was
+    // meant to be the NEXT statement.
+    : b l_agg & ! lp | == ( nurl_str_get ( nurl_llty lt ) 0 ) 123 == ( nurl_str_get ( nurl_llty lt ) 0 ) 37
+    : b r_agg & ! rp | == ( nurl_str_get ( nurl_llty rt ) 0 ) 123 == ( nurl_str_get ( nurl_llty rt ) 0 ) 37
+    ? | l_agg r_agg
+    { ( die_stmt lex ( nurl_str_cat ( nurl_str_cat4
+        `operator applied to an aggregate operand: left is '` ( llvm_to_nurl lt )
+        `', right is '` ( llvm_to_nurl rt ) )
+        `' — an option/result/slice/struct value has no arithmetic or ordering; destructure with '??' (or read a field with '. value field') and combine the payload. If the aggregate is a whole '??'/'?' expression you meant as the NEXT statement, this operator is one operand short and swallowed it: every NURL operator has fixed arity and no closing bracket, so count the operands.` ) ) }
+    {}
     // Bool (i1) vs non-bool. NURL has no implicit bool↔int conversion, so an
     // operator with exactly one i1 operand emitted e.g. `icmp slt i1 %f, %n`
     // (the other a wider integer) — IR only clang/llvm-as rejected. A CONSTANT
@@ -3969,7 +4016,15 @@
     // call site; the __subst_word lesson).
     : ~ s subst ( nurl_str_cat rawsig `` )
     ? != 0 ( nurl_str_len tparam ) { = subst ( subst_source_raw rawsig tparam to ) } {}
-    ^ ( dyn_sig_parts subst )
+    // Context for any diagnostic the sig re-parse raises: the `<dynsig>`
+    // location alone names no trait, method, or file to look at.
+    : s saved_ctx ( nurl_str_cat g_diag_ctx `` )
+    = g_diag_ctx ( nurl_str_cat ( nurl_str_cat4
+    ` [in the signature of method '` m `' of trait '` declTrait )
+    ( nurl_str_cat3 `' (Self = '` to `') — fix it at the trait declaration]` ) )
+    : s __dsp ( dyn_sig_parts subst )
+    = g_diag_ctx saved_ctx
+    ^ __dsp
 }
 
 // dyn_call_fnty: the uniform dyn-ABI function-pointer type of method `m` as
@@ -8644,7 +8699,10 @@
     : ~ s result `undef`
     ? == 0 g_did_ret
     { ? & ! ( seq phi_ty `void` ) types_ok
-        { : s res ( nurl_cg_reg cg )
+        {  // A value join CONSUMES an arm-tail literal — the exemption
+            // it was recorded under holds (see g_blk_tail_lit_line).
+            = g_blk_tail_lit_line 0
+            : s res ( nurl_cg_reg cg )
             // Ownership OUT of the arms is a copy, not a transfer: a
             // tracked-ident arm already dup'd its value in-arm (see the
             // t_dup/e_dup blocks), so the binding keeps its scheduled
@@ -9113,6 +9171,15 @@
     // the function block is well-formed.
     : ~ i arms_total 0
     : ~ i arms_ret 0
+    // Which enum every VALUE arm's result is a variant tag of, if any —
+    // gen_cond's t_ven/e_ven generalised to N arms. `m_ven` holds the
+    // one agreed enum; `m_ven_ok` drops to F on the first arm that is
+    // not a bare variant of the same enum. Published on the join
+    // channel below so the enum wrap sites bless
+    // `?? n { 0 → Red  _ → Blue }` in a `→ Color` position exactly as
+    // they bless `? cond Red Blue`.
+    : ~ s m_ven ``
+    : ~ b m_ven_ok T
     // fallback_pred = label of the open block right before the trailing
     // `br end_label` after the loop.  Empty when that br lands inside an
     // already-terminated block (wildcard-last) and is therefore dead.
@@ -10004,6 +10071,13 @@
             ( nurl_sym_def syms `__last_ident_name__` `` )
             ( nurl_sym_def syms `__last_call_ret_owned__` `` )
             ( nurl_sym_def syms `__last_value_alias__` `` )
+            // Reset the join-variant channel against residue, and
+            // snapshot the arm body's FIRST token: variant evidence must
+            // come from the token itself, not a stale last-ident
+            // (`( f Red )` must not bless).
+            ( nurl_sym_def syms `__last_join_variant_enum__` `` )
+            : i arm_tt0 ( nurl_lex_type lex )
+            : s arm_v0 ( nurl_lex_val lex )
             : ~ s arm_result ( gen_stmt lex syms cg )
             = g_in_match_arm __saved_in_arm
             : s arm_type ( nurl_get_last_type )
@@ -10055,6 +10129,18 @@
             } {}
             = arms_total + arms_total 1
             ? != 0 arm_did_ret { = arms_ret + arms_ret 1 } {}
+            // Variant evidence for this VALUE arm (gen_cond's t_ven
+            // twin): a bare variant name (first token and last-ident
+            // agree), or a nested join that already proved its arms.
+            ? == arm_did_ret 0
+            { : ~ s arm_ven ``
+                ? & ( is_ident_tok arm_tt0 ) & ( seq arm_v0 arm_retid ) != 0 ( nurl_str_len arm_retid )
+                { = arm_ven ( nurl_str_cat ( nurl_sym_get2 syms arm_retid `__enum_of` ) `` ) }
+                { = arm_ven ( nurl_str_cat ( nurl_sym_get syms `__last_join_variant_enum__` ) `` ) }
+                ? == 0 ( nurl_str_len arm_ven ) { = m_ven_ok F }
+                { ? == 0 ( nurl_str_len m_ven ) { = m_ven ( nurl_str_cat arm_ven `` ) }
+                    { ? ( seq m_ven arm_ven ) {} { = m_ven_ok F } } } }
+            {}
             // Dangling-borrow tracking: an arm that returns never reaches the
             // merge label, so only falling-through arms join.
             ? == arm_did_ret 0 {
@@ -10189,11 +10275,16 @@
     ( nurl_print end_label ) ( nurl_print `:\n` )
     ( nurl_sym_def syms `__cur_lbl__` end_label )
 
-    // All arms ended in `^` AND the trailing fallback br landed here:
-    // end_label is technically reachable but the match is exhaustive,
-    // so no real path arrives. Emit unreachable + flag did_ret so the
-    // function epilogue doesn't try to ret void into a non-void return.
-    ? & & > arms_total 0 == arms_ret arms_total != 0 ( nurl_str_len fallback_pred )
+    // All arms ended in `^`: no real path arrives at end_label. With a
+    // trailing fallback br the label is technically reachable but the
+    // match is exhaustive; without one (wildcard-last, or the two-way
+    // T/F result dispatch) it has no predecessors at all. Either way,
+    // terminate it with `unreachable` + flag did_ret so the function
+    // epilogue doesn't try to ret void into a non-void return — and so
+    // the fall-off return battery knows this `??` tail closed every
+    // path (it used to see a void tail and demand a value the code
+    // provably never needs).
+    ? & > arms_total 0 == arms_ret arms_total
     { ( emit_call_term `unreachable` ) = g_did_ret 1 } { = g_did_ret 0 }
 
     // Emit phi if every live arm produced a value of one consistent
@@ -10238,6 +10329,16 @@
         ? | > ( int_width phi_type ) 0 ( seq phi_type `double` )
         { ( nurl_sym_def syms `__last_ident_name__` `` ) }
         {}
+        // A value join consumes an arm-tail literal (gen_cond's twin —
+        // see g_blk_tail_lit_line).
+        = g_blk_tail_lit_line 0
+        // Publish the join-variant channel (consume-once, gen_cond's
+        // twin): every value arm proved a variant of the one enum, so
+        // the phi carries a tag of it and the enum wrap sites may bless
+        // this match's value. Cleared otherwise — the last arm's nested
+        // residue must not leak out as this match's proof.
+        ( nurl_sym_def syms `__last_join_variant_enum__`
+        ? & m_ven_ok != 0 ( nurl_str_len m_ven ) m_ven `` )
         ^ final_reg
     } {}
     // Arms of DIFFERENT integer widths: join losslessly at 64 bits over the
@@ -10253,6 +10354,7 @@
             = phi_full64 ( nurl_str_cat phi_entries64 ( nurl_str_cat `, [ undef, %` ( nurl_str_cat fallback_pred ` ]` ) ) )
         } {}
         ( nurl_print `  ` ) ( nurl_print final64 )
+        = g_blk_tail_lit_line 0
         ( nurl_print ` = phi i64 ` ) ( nurl_print phi_full64 ) ( nurl_print `\n` )
         ( nurl_set_last_type ? any_u64 `u64` `i64` )
         ( __void_reason_clear )
@@ -10482,6 +10584,9 @@
         `'break' outside a loop — there is nothing to leave. It is valid only inside a '~' loop body.`
         `'continue' outside a loop — there is no next iteration. It is valid only inside a '~' loop body.` ) }
     {}
+    // Record that this loop's exit label is a real branch target — an
+    // infinite loop with a `break` DOES reach its exit (see gen_loop).
+    ? is_break { ( nurl_sym_def g_loop_break_used target `1` ) } {}
     // The drop emitters do not just emit: each rewrites the owned-list
     // it walks, because at a function's single exit that bookkeeping is
     // finished with. A branch is not that. `break` is ONE path out of
@@ -10535,6 +10640,15 @@
     : s lc ( nurl_cg_lbl cg `loop_check` )
     : s lb ( nurl_cg_lbl cg `loop_body` )
     : s le ( nurl_cg_lbl cg `loop_exit` )
+
+    // Literal-true condition (`~ T {` / `~ 1 {`)? Prefix grammar makes
+    // this exact: an expression whose first token is a literal IS that
+    // literal. Such a loop's exit label is unreachable unless the body
+    // contains a `break` that targets it (g_loop_break_used, recorded
+    // by gen_loop_jump) — checked after the body below.
+    : i __lp_tt0 ( nurl_lex_type lex )
+    : b __lp_true | & == __lp_tt0 TT_BOOL ( seq ( nurl_lex_val lex ) `T` )
+    & == __lp_tt0 TT_INT != 0 ( nurl_lex_inum lex )
 
     ( nurl_print `  br label %` ) ( nurl_print lc ) ( emit_dbg_eol )
     ( emit ( nurl_str_cat lc `:` ) )
@@ -10611,6 +10725,18 @@
         ( emit ( nurl_str_cat le `:` ) )
         ( nurl_sym_def syms `__cur_lbl__` le )
         ( nurl_set_last_type `void` )
+        // An infinite loop (`~ T {`) with no `break` targeting it never
+        // reaches its exit label: terminate the label with `unreachable`
+        // and flag did_ret, so the fall-off return battery knows control
+        // cannot leave this statement (a `→ i` fn whose only returns are
+        // `^` inside the loop is complete — it used to get a dead
+        // `ret i64 undef` here, and would now be asked for a value it
+        // provably never needs). A loop that CAN exit resets did_ret:
+        // its exit path is live even when the body returned somewhere.
+        ? & __lp_true == 0 ( nurl_sym_len g_loop_break_used le )
+        { ( emit_call_term `unreachable` )
+            = g_did_ret 1 }
+        { = g_did_ret 0 }
         ^ ( nurl_str_cat `undef` `` )
     }
     {
@@ -10730,6 +10856,41 @@
     {}
 }
 
+// A statement in a block that has ALREADY terminated (a `^` return, a
+// break/continue, an infinite no-break loop, or a diverging noreturn
+// call earlier in the same block) is unreachable. Its instructions used
+// to land after the block's terminator — invalid IR the moment the
+// dead run did not itself end in a `^` ("expected instruction opcode"
+// from the LLVM verifier, with a .ll line and no source location; the
+// extra-operand mutants died exactly there). Park codegen in a fresh
+// unreferenced block instead: the statements compile as before, the IR
+// is well-formed on every shape, and LLVM's DCE drops the block. The
+// defensive trailing `^` after an all-paths-return loop — an idiom all
+// over the corpus — keeps compiling untouched.
+@ __handle_unreachable_stmt i lex i syms i cg → v {
+    ? == g_did_ret 0 { ^ } {}
+    // Cap whatever is open. Right after a real terminator this is a
+    // one-instruction implicit block (harmless, DCE'd); after a dead
+    // statement's stray instructions (a dead store past a both-arms-ret
+    // join) it is the terminator that block was missing.
+    ( emit_call_term `unreachable` )
+    : s __dl ( nurl_cg_lbl cg `dead` )
+    ( emit ( nurl_str_cat __dl `:` ) )
+    ( nurl_sym_def syms `__cur_lbl__` __dl )
+    = g_did_ret 0
+}
+
+// Block-close half of the dead-statement protocol: if the block entered
+// dead mode and its final dead statement did not end in its own
+// terminator (`^`), the dead label is still open — cap it and restore
+// the terminated status the enclosing arm/return machinery expects.
+@ __close_dead_block b dead_any → v {
+    ? & dead_any == g_did_ret 0
+    { ( emit_call_term `unreachable` )
+        = g_did_ret 1 }
+    {}
+}
+
 @ gen_block_expr i lex i syms i cg → s {
     : i bck_line ( nurl_lex_line lex )
     ( nurl_lex_advance lex )
@@ -10744,11 +10905,20 @@
     : ~ i __tail_tt 0
     : ~ s __tail_tv ``
     : ~ s __tail_callee ``
+    : ~ b __dead_any F
     ~ != ( nurl_lex_type lex ) TT_RBRACE {
+        ? != 0 g_did_ret { = __dead_any T } {}
+        ( __handle_unreachable_stmt lex syms cg )
+        = g_blk_tail_lit_line 0
         = __tail_tt ( nurl_lex_type lex )
         = __tail_tv ( nurl_lex_val lex )
         = __tail_callee ? == __tail_tt TT_LPAREN ( nurl_lex_peek_val lex ) ``
         = last ( gen_stmt lex syms cg )
+        ? & & != 0 g_blk_tail_lit_line
+        | == __tail_tt TT_QUEST == __tail_tt TT_QUESTQUEST
+        ( seq ( nurl_get_last_type ) `void` )
+        { ( die_pos lex g_blk_tail_lit_line g_blk_tail_lit_col ( __arm_tail_lit_msg ) ) }
+        {}
         = any T
     }
     ( nurl_lex_advance lex )
@@ -10758,6 +10928,16 @@
         ( nurl_sym_def syms `__tail_first_val__` __tail_tv )
         ( nurl_sym_def syms `__tail_callee__` __tail_callee )
         ( __tail_noreturn_close syms __tail_callee ) }
+    {}
+    ( __close_dead_block __dead_any )
+    // The tail statement was a bare literal: exempt from the
+    // dangling-operand error (it is the block's value), but RECORD it —
+    // if the enclosing conditional turns out to be a statement, the
+    // value is discarded and the exemption was wrong (see
+    // g_blk_tail_lit_line).
+    ? != 0 g_stmt_bare_lit
+    { = g_blk_tail_lit_line g_stmt_line
+        = g_blk_tail_lit_col g_stmt_col }
     {}
     // An empty block `{}` is the unit / void value. Without typing it as
     // void, `nurl_get_last_type` retains whatever it was before the block
@@ -10769,6 +10949,13 @@
     // (A non-empty block's type is set by its trailing statement.)
     ? ! any { ( nurl_set_last_type `void` ) } {}
     last
+}
+
+// The arm-tail half of the dangling-operand family: fired by the block
+// iterators when a `?`/`??` STATEMENT finished void while an arm's
+// exempted tail literal is still on record (g_blk_tail_lit_line).
+@ __arm_tail_lit_msg → s {
+    ^ `a '?'/'??' arm ends in a bare literal, but the conditional is a STATEMENT here — its value is discarded, so the literal is dead. The usual cause is the operator before it having one operand too many (fixed arity, no closing bracket): the surplus operand spilled into the arm's tail. Remove the extra operand, or consume the conditional's value.`
 }
 
 @ __dangling_operand_msg → s {
@@ -10796,7 +10983,12 @@
     // Noreturn-tail detection — same protocol as gen_block_expr.
     : ~ s __tail_callee ``
     : ~ b __tail_any F
+    : ~ b __dead_any F
     ~ != ( nurl_lex_type lex ) TT_RBRACE {
+        ? != 0 g_did_ret { = __dead_any T } {}
+        ( __handle_unreachable_stmt lex syms cg )
+        = g_blk_tail_lit_line 0
+        : i __bs_tt ( nurl_lex_type lex )
         = __tail_callee ? == ( nurl_lex_type lex ) TT_LPAREN ( nurl_lex_peek_val lex ) ``
         = __tail_any T
         // Bind the statement's value: gen_stmt hands back the IR value
@@ -10806,6 +10998,11 @@
         // iteration's and scope exit frees the last.
         : s __gs_val ( gen_stmt lex syms cg )
         ? != 0 ( nurl_str_len __gs_val ) {} {}
+        ? & & != 0 g_blk_tail_lit_line
+        | == __bs_tt TT_QUEST == __bs_tt TT_QUESTQUEST
+        ( seq ( nurl_get_last_type ) `void` )
+        { ( die_pos lex g_blk_tail_lit_line g_blk_tail_lit_col ( __arm_tail_lit_msg ) ) }
+        {}
         // Every statement in a void block has its value discarded, so a
         // bare literal here is dead — reject it (dangling operand).
         ? != 0 g_stmt_bare_lit { ( die lex ( __dangling_operand_msg ) ) } {}
@@ -10814,6 +11011,7 @@
     ( expect lex TT_RBRACE )
     ( bck_block_exit )
     ? __tail_any { ( __tail_noreturn_close syms __tail_callee ) } {}
+    ( __close_dead_block __dead_any )
 }
 
 // gen_block_ret: like gen_block_stmts but returns the last stmt value.
@@ -10833,12 +11031,21 @@
     : ~ s __tail_tv ``
     : ~ s __tail_callee ``
     : ~ b __tail_any F
+    : ~ b __dead_any F
     ~ != ( nurl_lex_type lex ) TT_RBRACE {
+        ? != 0 g_did_ret { = __dead_any T } {}
+        ( __handle_unreachable_stmt lex syms cg )
+        = g_blk_tail_lit_line 0
         = __tail_tt ( nurl_lex_type lex )
         = __tail_tv ( nurl_lex_val lex )
         = __tail_callee ? == __tail_tt TT_LPAREN ( nurl_lex_peek_val lex ) ``
         = __tail_any T
         = last ( gen_stmt lex syms cg )
+        ? & & != 0 g_blk_tail_lit_line
+        | == __tail_tt TT_QUEST == __tail_tt TT_QUESTQUEST
+        ( seq ( nurl_get_last_type ) `void` )
+        { ( die_pos lex g_blk_tail_lit_line g_blk_tail_lit_col ( __arm_tail_lit_msg ) ) }
+        {}
         // A bare literal that is NOT the block's final expression (its
         // return value) has its value discarded — reject it as a dangling
         // operand. The final literal (next token `}`) is the legitimate
@@ -10856,6 +11063,12 @@
         ( nurl_sym_def syms `__tail_first_val__` __tail_tv )
         ( nurl_sym_def syms `__tail_callee__` __tail_callee )
         ( __tail_noreturn_close syms __tail_callee ) }
+    {}
+    ( __close_dead_block __dead_any )
+    // Tail bare literal: exempt-but-recorded, gen_block_expr's twin.
+    ? != 0 g_stmt_bare_lit
+    { = g_blk_tail_lit_line g_stmt_line
+        = g_blk_tail_lit_col g_stmt_col }
     {}
     last
 }
@@ -13143,7 +13356,7 @@
     ( nurl_str_cat3 `' is stale: '` cont
     ( nurl_str_cat3 `' was mutated on line ` ( nurl_str_int dline )
     ` and may have reallocated its buffer` ) ) ) )
-    ( nurl_eprintln ( nurl_str_cat3 loc `: warning: ` msg ) )
+    ( nurl_eprintln ( nurl_str_cat3 loc `: warning: ` ( nurl_str_cat msg g_diag_ctx ) ) )
     ( nurl_eprintln ( nurl_str_cat3 `  note: re-fetch the pointer after the mutation (` name
     ( nurl_str_cat3 ` = ( vec_data … ` cont ` ) )` ) ) )
 }
@@ -15205,6 +15418,28 @@
             `An enum literal is '@ EnumName { Variant payload }': the variant is the first item in the brace list, not a word between the name and the brace. A payload-less variant is just '@ EnumName { Variant }'.` ) ) }
         {} }
     {}
+    // `@ name …` whose tail reads like a function HEADER — a '→'
+    // arrives before any '{' — is a function DECLARATION sitting inside
+    // a body: the '}' above never closed the previous function, so the
+    // parser is reading the header as a struct/enum literal (the
+    // drop-close-brace mutants died here as "expected '{' but found
+    // 'b'", blaming a missing operand on the wrong line entirely).
+    ? != ( nurl_lex_type lex ) TT_LBRACE
+    { : i __al_save ( nurl_lex_cur_start lex )
+        : ~ i __al_k 0
+        : ~ b __al_arrow F
+        ~ & & < __al_k 24 ! __al_arrow
+        & != ( nurl_lex_type lex ) TT_LBRACE != ( nurl_lex_type lex ) TT_EOF {
+            ? == ( nurl_lex_type lex ) TT_ARROW { = __al_arrow T } {}
+            ( nurl_lex_advance lex )
+            = __al_k + __al_k 1
+        }
+        ( nurl_lex_set_pos lex __al_save )
+        ? __al_arrow
+        { ( die lex `this '@ name …' line reads like a function DECLARATION (a '→' follows before any '{'), but it sits inside a function body, where '@' begins a struct/enum literal. Declarations do not nest: the '}' above this line never closed the previous function — add it (nurlfmt's re-indent shows where the nesting runs away).` ) }
+        {}
+    }
+    {}
     ( expect lex TT_LBRACE )  // consume '{'
     // `@ S { a : 1 b : 2 }` — field NAMES, the habit every other
     // language teaches. NURL struct literals are positional: values in
@@ -16049,6 +16284,22 @@
             {} }
         {}
 
+        // Overflow check for ANON aggregate literals (`@ ?i { … }`,
+        // `@ !T E { … }`): the named-struct arity check above keys on a
+        // registered field count, which an anonymous shape does not
+        // have. A surplus value either emitted an `insertvalue` past
+        // the last slot — invalid IR only the LLVM verifier saw
+        // ("invalid indices for insertvalue") — or, for a result,
+        // silently overwrote the sibling arm's slot. The usual cause is
+        // a prefix operator inside the payload with one operand too
+        // many, spilling its surplus into a new "field".
+        ? & == 0 ( nurl_str_len cur_sname )
+        | >= ins_idx ( agg_field_count syms agg_ty )
+        & agg_is_res >= idx 2
+        { ( die lex ( nurl_str_cat ( nurl_str_cat3
+            `too many values in this aggregate literal: value ` ( nurl_str_int + idx 1 ) ` has no slot — ` )
+            ( nurl_str_cat3 `an option is a tag and one payload ('@ ?i { T 7 }'), a result a tag and one payload ('@ !i E { F e }'). If the payload looks right, a prefix operator inside it has one operand too many and the surplus spilled here: count the operands (fixed arity, no closing bracket). The aggregate shape is '` ( nurl_llty agg_ty ) `'.` ) ) ) }
+        {}
         : s r ( nurl_cg_reg cg )
         ( nurl_print `  ` ) ( nurl_print r )
         ( nurl_print ` = insertvalue ` ) ( nurl_print ( nurl_llty agg_ty ) )
@@ -17450,6 +17701,9 @@
 @ simple_capture_analysis i lex i outer_syms s closure_params → s {
     : ~ s captured_vars ( nurl_str_cat `` `` )
     : ~ i captured_count 0
+    // Anchor for the unclosed-brace diagnostic below: the opening '{'.
+    : i sca_open_line ( nurl_lex_line lex )
+    : i sca_open_col ( nurl_lex_col lex )
     ( nurl_lex_advance lex )  // consume opening '{'
 
     // Scan tokens in closure body until closing brace
@@ -17457,6 +17711,13 @@
     ~ > brace_depth 0 {
         : i tt ( nurl_lex_type lex )
 
+        // Unbalanced braces used to spin this loop at EOF forever — the
+        // capture pre-scan runs before the body parse, so a closure
+        // whose '}' is missing HUNG the compiler instead of erroring.
+        ? == tt TT_EOF
+        { ( die_pos lex sca_open_line sca_open_col
+            `end of file inside this closure body — the '{' here is never closed. Add the missing '}' (an extra '{' somewhere inside pushes the count off the same way); running nurlfmt shows where the nesting runs away.` ) }
+        {}
         ? == tt TT_LBRACE
         { = brace_depth + brace_depth 1 }
         {
@@ -18244,18 +18505,57 @@
 // Returns space-separated, source-faithful token text (string literals
 // keep their backticks via __tok_src_text), so the result re-lexes to the
 // identical token stream — safe for generic template bodies.
-@ collect_fn_body i lex → s {
+@ collect_fn_body i lex s what → s {
+    // Anchor for the unclosed-brace diagnostic: the opening '{' itself.
+    // Reported there, not at EOF — EOF has no useful source line, and
+    // the brace that never closed is the thing the user must find.
+    : i open_line ( nurl_lex_line lex )
+    : i open_col ( nurl_lex_col lex )
     : ~ s result ( nurl_str_cat ( __tok_src_text lex ) ` ` )
+    // Line-preserving reconstruction: when the next token sits on a
+    // later SOURCE line, join with that many newlines instead of a
+    // space. A template body used to flatten to one line, so any
+    // diagnostic inside an instantiation pointed at `<generic …>:1` —
+    // with the line structure kept (and the re-lex buffer padded to
+    // the template's own start line at the instantiation site), the
+    // same diagnostic points at the template's real file:line.
+    : ~ i prev_ln ( nurl_lex_line lex )
     ( nurl_lex_advance lex )
     : ~ i depth 1
     ~ != depth 0 {
         : i tt2 ( nurl_lex_type lex )
+        // Unbalanced braces used to spin this loop at EOF forever — the
+        // compiler HUNG on `nurlc file.nu` with a missing '}' in any
+        // generic template. EOF inside the body is a hard error at the
+        // opening brace.
+        ? == tt2 TT_EOF
+        { ( die_pos lex open_line open_col ( nurl_str_cat3
+            `end of file inside this ` what
+            ` body — the '{' here is never closed. Add the missing '}' (an extra '{' somewhere inside pushes the count off the same way); running nurlfmt shows where the nesting runs away.` ) ) }
+        {}
         ? == tt2 TT_LBRACE { = depth + depth 1 } {}
         ? == tt2 TT_RBRACE { = depth - depth 1 } {}
+        : i cur_ln ( nurl_lex_line lex )
+        ~ < prev_ln cur_ln {
+            = result ( nurl_str_cat result `\n` )
+            = prev_ln + prev_ln 1
+        }
         = result ( nurl_str_cat result ( nurl_str_cat ( __tok_src_text lex ) ` ` ) )
         ( nurl_lex_advance lex )
     }
     result
+}
+
+// N newlines — the re-lex padding that maps a template buffer's line 1
+// onto the template's real source line (see collect_fn_body).
+@ __nl_pad i n → s {
+    : ~ s r ``
+    : ~ i k 0
+    ~ < k n {
+        = r ( nurl_str_cat r `\n` )
+        = k + k 1
+    }
+    r
 }
 
 // compute_generic_inout_sink: derive a generic function's `inout` and
@@ -18371,14 +18671,28 @@
         }
     }
     ( expect lex TT_RBRACK )
-    // Collect params/return/body tokens until EOF
+    // Collect params/return/body tokens until EOF. Line-preserving, the
+    // same protocol as collect_fn_body: the signature may wrap over
+    // several lines and a diagnostic inside an instantiation must keep
+    // pointing at the template's real lines.
     : ~ s src ( nurl_str_cat `` `` )
+    : ~ i __gc_prev_ln ( nurl_lex_line lex )
     ~ & != ( nurl_lex_type lex ) TT_LBRACE != ( nurl_lex_type lex ) TT_EOF {
+        : i __gc_ln ( nurl_lex_line lex )
+        ~ < __gc_prev_ln __gc_ln {
+            = src ( nurl_str_cat src `\n` )
+            = __gc_prev_ln + __gc_prev_ln 1
+        }
         = src ( nurl_str_cat src ( nurl_str_cat ( __tok_src_text lex ) ` ` ) )
         ( nurl_lex_advance lex )
     }
     ? != ( nurl_lex_type lex ) TT_EOF
-    { = src ( nurl_str_cat src ( collect_fn_body lex ) ) }
+    { : i __gc_bln ( nurl_lex_line lex )
+        ~ < __gc_prev_ln __gc_bln {
+            = src ( nurl_str_cat src `\n` )
+            = __gc_prev_ln + __gc_prev_ln 1
+        }
+        = src ( nurl_str_cat src ( collect_fn_body lex `generic function` ) ) }
     {}
     ( nurl_sym_def g_generic_syms ( nurl_str_cat fname `__tparams` ) tparams )
     ( nurl_sym_def g_generic_syms ( nurl_str_cat fname `__gsrc` ) src )
@@ -18504,6 +18818,19 @@
                             // type. Require the `%`-type form so `@ f rand x → i`
                             // (using the FFI symbol `rand` as a parameter type) is
                             // rejected too, not just a wholly-unknown name.
+                            // A GENERIC TEMPLATE name is not a type — it
+                            // names a family of them. `Vec data` /
+                            // `Pair p` as a field or binding type used
+                            // to emit `%Vec` — an undefined (unsized)
+                            // named type only the LLVM verifier saw
+                            // ("loading unsized types is not allowed"),
+                            // far from the source.
+                            ? & != 0 g_generic_struct_syms
+                            != 0 ( nurl_sym_len2 g_generic_struct_syms name `__stparams` )
+                            { ( die lex ( nurl_str_cat
+                                ( nurl_str_cat4 `generic struct '` name `' used without type arguments in ` ctx )
+                                ( nurl_str_cat3 ` — a generic names a family of types, not a type. Instantiate it in parentheses with concrete type argument(s): '( ` name ` i )' — the parenthesised form, one argument per type parameter.` ) ) ) }
+                            {}
                             : s sv ( nurl_sym_get syms name )
                             ? & != 0 ( nurl_str_len sv ) == ( nurl_str_get sv 0 ) 37
                             {}
@@ -18649,6 +18976,7 @@
     // instead of the opaque `<generic>:1:21:`.
     : s caller_file ( nurl_lex_filename lex )
     : i caller_line ( nurl_lex_line lex )
+    : i caller_col ( nurl_lex_col lex )
     : s ret_ty ( compute_generic_ret_ty fname type_args )
     ( nurl_sym_def syms mangled ret_ty )
     : s cnt_s ( nurl_sym_get g_generic_syms `__deferred_count__` )
@@ -18660,6 +18988,7 @@
     ( nurl_sym_def g_generic_syms ( nurl_str_cat base `_ta` ) type_args )
     ( nurl_sym_def g_generic_syms ( nurl_str_cat base `_cf` ) caller_file )
     ( nurl_sym_def g_generic_syms ( nurl_str_cat base `_cl` ) ( nurl_str_int caller_line ) )
+    ( nurl_sym_def g_generic_syms ( nurl_str_cat base `_cc` ) ( nurl_str_int caller_col ) )
 }
 
 // emit_str_globals: emit global constants for string literals [base..top).
@@ -19849,6 +20178,24 @@
     : b const_pub ( vis_take_pending_pub )
     ? ( is_ident_tok ( nurl_lex_type lex ) )
     { : s cname ( nurl_lex_val lex )
+        // Unknown declared type. `: PI_FIXED i 314` used to emit
+        // `@i = global %PI_FIXED zeroinitializer` — an undefined named
+        // type only the LLVM verifier rejected, far from the source.
+        // With a TYPE KEYWORD sitting in the name slot the mistake is
+        // almost always the swap (type first, then name) — say exactly
+        // that; any other unknown name gets the standard unknown-type
+        // message (check_type_known).
+        ? & == ( nurl_str_get lt 0 ) 37
+        ! == ( nurl_str_get ( nurl_sym_get syms ty_tok ) 0 ) 37
+        { ? == ( nurl_lex_type lex ) TT_TYPE_KW
+            { ( die lex ( nurl_str_cat ( nurl_str_cat4
+                `unknown type '` ty_tok `' — and the name slot holds '` cname )
+                ( nurl_str_cat ( nurl_str_cat4
+                `', which is a type keyword. A declaration is ': TYPE name value' — the type comes FIRST. Swap them: ': ` cname ` ` ty_tok )
+                ` <value>'.` ) ) ) }
+            { ( check_type_known lex syms lt `a global declaration's type` ) }
+        }
+        {}
         // Flat-namespace guard for globals, twin of the struct one above: a
         // second `: name` / `: ~ name` from a different file:line is two
         // `@name = global` emissions — and two files SHARING one mutable
@@ -20665,6 +21012,12 @@
         : ~ i pcount 0
         ~ & != ( nurl_lex_type lex ) TT_RBRACE ( could_be_payload_type lex syms ) {
             : s pt ( parse_type lex )
+            // `JArr Vec` (a bare generic-template name as the payload
+            // type) parsed to `%Vec` — an undefined, unsized named type
+            // whose alloca only the LLVM verifier rejected. Same check
+            // as fields/params/returns; instantiated forms
+            // (`( Vec Json )` → `%Vec__Json`) pass untouched.
+            ( check_type_known lex syms pt `an enum variant's payload type` )
             ( nurl_sym_def syms ( nurl_str_cat vname ( nurl_str_cat `__payload__` ( nurl_str_int pcount ) ) ) pt )
             // pt is the raw internal payload type — a `u`-family payload
             // stays unsigned end to end and the match binding widens
@@ -20930,6 +21283,19 @@
     result
 }
 
+// A missing import file used to die inside the runtime's
+// nurl_read_file as a bare `nurlc: cannot open '<path>'` — no file,
+// line, or `error:` tag, so nothing (editor, agent, the multi-error
+// machinery) could anchor it. Every reader of an import — the two
+// pre-scans and gen_import_decl — calls this first: the diagnostic
+// lands on the `$` directive with the resolution order spelled out.
+@ __require_import_file i lex i iline i icol s path → v {
+    ? == ( nurl_file_exists path ) 1 { ^ } {}
+    ( die_pos lex iline icol ( nurl_str_cat ( nurl_str_cat3
+    `cannot open import '` path `' — no such file. The path is tried relative to the importing file's directory, the working directory, and $NURL_STDLIB, in that order` )
+    `; check the spelling (stdlib modules are written e.g. 'stdlib/core/vec.nu'), or run nurlc from the project root.` ) )
+}
+
 @ gen_import_decl i lex i syms i cg → v {
     // Lint: capture the `$` token's position before consuming it so
     // the unused-import warning points at the directive itself.
@@ -20950,6 +21316,7 @@
     ? ( mem_is_imported syms __imp_key )
     {}
     { ( mem_mark_imported syms __imp_key )
+        ( __require_import_file lex __li_line __li_col path )
         : s src ( nurl_read_file path )
         : s eff_src ? != 0 ( nurl_str_len alias )
         { : s names ( collect_alias_targets src path )
@@ -20984,7 +21351,7 @@
 // fields), then again to actually emit the function. The two passes
 // share `syms` so the rescan's emitted instantiations are visible to
 // the body-parsing pass.
-@ emit_one_instantiation s fname s mangled s type_args s caller_file s caller_line i syms i cg → v {
+@ emit_one_instantiation s fname s mangled s type_args s caller_file s caller_line s caller_col i syms i cg → v {
     : s tparams ( nurl_sym_get2 g_generic_syms fname `__tparams` )
     : s gsrc ( nurl_sym_get2 g_generic_syms fname `__gsrc` )
     // No stored template for this name: the call site referenced a
@@ -20994,9 +21361,12 @@
     // end of input` pointing at synthetic `<generic …>:1` — useless
     // for finding the actual problem (a missing `$` import).
     ? == 0 ( nurl_str_len gsrc )
-    { : s loc ? != 0 ( nurl_str_len caller_file )
-        ( nurl_str_cat4 caller_file `:` caller_line `: ` )
-        ``
+    { : s __cc_sfx ? != 0 ( nurl_str_len caller_col )
+        ( nurl_str_cat3 `:` caller_col `: error: ` )
+        `: error: `
+        : s loc ? != 0 ( nurl_str_len caller_file )
+        ( nurl_str_cat4 caller_file `:` caller_line __cc_sfx )
+        `error: `
         ( nurl_eprintln ( nurl_str_cat3 loc
         ( nurl_str_cat3 `call to generic function '` fname `' but no generic of that name is defined in this file or any '$'-imported file` )
         ` — add the '$' import for the file that defines it` ) )
@@ -21013,24 +21383,47 @@
         = ta_rest ( str_skip_word ta_rest )
         = subst_src ( subst_source subst_src tp ta )
     }
-    : s full_src ( nurl_str_cat `@ ` ( nurl_str_cat mangled ( nurl_str_cat ` ` subst_src ) ) )
+    : s sl_s ( nurl_sym_get2 g_generic_syms fname `__src_line` )
+    : s sf_pre ( nurl_sym_get2 g_generic_syms fname `__src_file` )
+    // The template body's line structure is preserved (collect_fn_body)
+    // and the buffer is padded up to the template's own declaration
+    // line, so a diagnostic inside the re-parse carries the template's
+    // REAL file:line — the old synthetic `<generic … from file:N>:1:…`
+    // location was unparseable and pointed at line 1 of a one-line
+    // buffer. The instantiation half of the story (which type args,
+    // called from where) rides g_diag_ctx onto the message text.
+    : s __inst_pad ? != 0 ( nurl_str_len sl_s )
+    ( __nl_pad - ( nurl_str_to_int sl_s ) 1 )
+    ``
+    : s full_src ( nurl_str_cat __inst_pad
+    ( nurl_str_cat `@ ` ( nurl_str_cat mangled ( nurl_str_cat ` ` subst_src ) ) ) )
     : i lex_scan ( nurl_lex_new full_src `<generic-scan>` )
     ( scan_generic_structs lex_scan syms )
     ( nurl_lex_free lex_scan )
-    // Critic v0.9.0 §2: synthesise a filename that includes the call
-    // site so any diagnostic emitted while re-parsing the substituted
-    // body points the user at THEIR code, not the opaque `<generic>`.
-    : s synth_name ? & != 0 ( nurl_str_len caller_file ) != 0 ( nurl_str_len caller_line )
+    // The re-parse lexer speaks with the template's defining file as
+    // its filename whenever it is known; the synthetic `<generic …>`
+    // spelling survives only as the fallback.
+    : s synth_name ? != 0 ( nurl_str_len sf_pre )
+    ( nurl_str_cat sf_pre `` )
+    ? & != 0 ( nurl_str_len caller_file ) != 0 ( nurl_str_len caller_line )
     ( nurl_str_cat3 `<generic ` mangled
     ( nurl_str_cat4 ` from ` caller_file `:` ( nurl_str_cat caller_line `>` ) ) )
     ( nurl_str_cat3 `<generic ` mangled `>` )
     : i lex2 ( nurl_lex_new full_src synth_name )
+    // Context suffix for every diagnostic raised inside this re-parse.
+    // Saved/restored — instantiations nest.
+    : s saved_diag_ctx ( nurl_str_cat g_diag_ctx `` )
+    : s __ctx_from ? & != 0 ( nurl_str_len caller_file ) != 0 ( nurl_str_len caller_line )
+    ( nurl_str_cat4 `; first call site: ` caller_file `:` caller_line )
+    ``
+    = g_diag_ctx ( nurl_str_cat3
+    ` [while instantiating '` mangled
+    ( nurl_str_cat3 `' — the error may depend on the concrete type arguments` __ctx_from `]` ) )
     // DWARF Phase 7: stash the original generic-decl line so
     // gen_fn_decl_concrete points this mono's !DISubprogram at the
     // real source, not the synthetic `<generic>:1`. Cleared in a
     // `defer`-ish trailing assignment after the recursive call.
     : i saved_override g_dbg_override_line
-    : s sl_s ( nurl_sym_get2 g_generic_syms fname `__src_line` )
     ? != 0 ( nurl_str_len sl_s )
     { = g_dbg_override_line ( nurl_str_to_int sl_s ) }
     {}
@@ -21072,6 +21465,7 @@
     { ( gen_fn_decl lex2 syms cg ) }
     ( nurl_lex_free lex2 )
     ( vis_set_current_src_file saved_vis_sf )
+    = g_diag_ctx saved_diag_ctx
     = g_dbg_override_line saved_override
     = g_dbg_override_file saved_override_file
     = g_mono_tparam_tys saved_mono_tys
@@ -21088,7 +21482,8 @@
         : s type_args ( nurl_sym_get2 g_generic_syms base `_ta` )
         : s caller_file ( nurl_sym_get2 g_generic_syms base `_cf` )
         : s caller_line ( nurl_sym_get2 g_generic_syms base `_cl` )
-        ( emit_one_instantiation fname mangled type_args caller_file caller_line syms cg )
+        : s caller_col ( nurl_sym_get2 g_generic_syms base `_cc` )
+        ( emit_one_instantiation fname mangled type_args caller_file caller_line caller_col syms cg )
         = k + k 1
     }
 }
@@ -21313,6 +21708,25 @@
     ( emit `  br label %pw.done` )
     ( emit `pw.done:` )
     ( emit `  ret void` )
+    ( emit `}` )
+    // `nurl_umulhi` — high 64 bits of the unsigned 128-bit product.
+    // NURL's `*` is the low half; this completes the 64×64→128 multiply
+    // the language cannot spell, which is the primitive under every
+    // big-number hot path (Poly1305, curve25519, P-256 — the arithmetic
+    // of a TLS connection). Same shape as nurl_peek above and for the
+    // same reason: defined in-module so it inlines to ONE `mul`
+    // instruction with or without LTO, while runtime.o's C definition
+    // still prevails at link. i128 is target-independent IR; backends
+    // without a wide multiply legalize it (wasm32 → compiler-rt's
+    // __multi3, which the bundled zig links by default).
+    ( emit `define linkonce_odr i64 @nurl_umulhi(i64 %a, i64 %b) alwaysinline {` )
+    ( emit `entry:` )
+    ( emit `  %mh.a = zext i64 %a to i128` )
+    ( emit `  %mh.b = zext i64 %b to i128` )
+    ( emit `  %mh.p = mul i128 %mh.a, %mh.b` )
+    ( emit `  %mh.h = lshr i128 %mh.p, 64` )
+    ( emit `  %mh.r = trunc i128 %mh.h to i64` )
+    ( emit `  ret i64 %mh.r` )
     ( emit `}` )
     ( __emit_rt_decl syms `declare void @nurl_vec_drop(i8*, ptr, i64)` )
     // nurl_file_* (open/write/write_range/write_byte/close/read_chunk
@@ -21950,6 +22364,7 @@
     // unregistered name, so this table must cover every `declare` that
     // emit_header writes. Keep the two in sync.
     ( nurl_sym_def syms `nurl_peek` `i64` )
+    ( nurl_sym_def syms `nurl_umulhi` `i64` )
     ( nurl_sym_def syms `nurl_init` `void` )
     ( nurl_sym_def syms `nurl_memset` `void` )
     ( nurl_sym_def syms `nurl_vec_drop` `void` )
@@ -22460,7 +22875,15 @@
             : s mangled ( nurl_str_cat mname ( nurl_str_cat `__` impl_mangle ) )
             : s full_src ( nurl_str_cat `@ ` ( nurl_str_cat mangled ( nurl_str_cat ` ` subst ) ) )
             : i lex2 ( nurl_lex_new full_src `<trait_default>` )
+            // Context for any diagnostic inside the default body's
+            // re-parse: the `<trait_default>` location alone names no
+            // trait, method, or impl to look at.
+            : s saved_ctx ( nurl_str_cat g_diag_ctx `` )
+            = g_diag_ctx ( nurl_str_cat ( nurl_str_cat4
+            ` [in the default body of method '` mname `' of trait '` tname )
+            ( nurl_str_cat3 `', emitted for impl type '` impl_nurl `' — fix it at the trait declaration]` ) )
             ( gen_fn_decl lex2 syms cg )
+            = g_diag_ctx saved_ctx
             ( nurl_lex_free lex2 )
         }
     }
@@ -23078,7 +23501,7 @@
                     }
                     ? == ( nurl_lex_type lex ) TT_RBRACK { ( nurl_lex_advance lex ) } {}
                     ? == ( nurl_lex_type lex ) TT_LBRACE {
-                        : s body ( collect_fn_body lex )
+                        : s body ( collect_fn_body lex `generic struct` )
                         ( nurl_sym_def g_generic_struct_syms ( nurl_str_cat sname `__stparams` ) tparams )
                         ( nurl_sym_def g_generic_struct_syms ( nurl_str_cat sname `__sbody` ) body )
                         // Lint: generic struct templates never reach
@@ -23127,6 +23550,8 @@
         // Follow $ imports (same dedup list as scan_fn_sigs, kept separate
         // here so the ordering of the two scans doesn't matter).
         ? & ! handled == tt TT_DOLLAR {
+            : i __im_ln ( nurl_lex_line lex )
+            : i __im_cl ( nurl_lex_col lex )
             ( nurl_lex_advance lex )
             ? == ( nurl_lex_type lex ) TT_STR {
                 : s path ( __norm_import_path ( nurl_lex_val lex ) )
@@ -23138,6 +23563,7 @@
                     : s new_marker ? == 0 ( nurl_str_len marker ) ( nurl_str_cat __gs_key `` )
                     ( nurl_str_cat3 marker ` ` __gs_key )
                     ( nurl_sym_def g_generic_struct_syms `__scanned__` new_marker )
+                    ( __require_import_file lex __im_ln __im_cl path )
                     : s src2 ( nurl_read_file path )
                     : i lex2 ( nurl_lex_new src2 path )
                     // Track the imported file so its imports resolve
@@ -23554,7 +23980,9 @@
                     }
                     // import_decl: $ `path` alias?  — scan the imported file too
                     ? == tt TT_DOLLAR
-                    { ( nurl_lex_advance lex )  // skip '$'
+                    { : i __im_ln ( nurl_lex_line lex )
+                        : i __im_cl ( nurl_lex_col lex )
+                        ( nurl_lex_advance lex )  // skip '$'
                         : s path ( __norm_import_path ( nurl_lex_val lex ) )
                         ( nurl_lex_advance lex )  // skip path STR
                         : ~ s alias ``
@@ -23571,6 +23999,7 @@
                             ( nurl_str_cat __fs_key `` )
                             ( nurl_str_cat3 scanned ` ` __fs_key )
                             ( nurl_sym_def syms `__scanned_files__` new_scanned )
+                            ( __require_import_file lex __im_ln __im_cl path )
                             : s src2 ( nurl_read_file path )
                             : s eff_src2 ? != 0 ( nurl_str_len alias )
                             { : s names ( collect_alias_targets src2 path )
@@ -23660,6 +24089,8 @@
                 {  // Nested import: register its type names too, applying
                     // alias rewriting so an aliased import's types resolve
                     // under their `alias__` prefix (mirrors scan_fn_sigs).
+                    : i __im_ln ( nurl_lex_line lex )
+                    : i __im_cl ( nurl_lex_col lex )
                     ( nurl_lex_advance lex )
                     ? == ( nurl_lex_type lex ) TT_STR
                     { : s path ( __norm_import_path ( nurl_lex_val lex ) )
@@ -23675,6 +24106,7 @@
                         { : s new_marker ? == 0 ( nurl_str_len marker ) ( nurl_str_cat __tn_key `` )
                             ( nurl_str_cat3 marker ` ` __tn_key )
                             ( nurl_sym_def syms `__tn_scanned__` new_marker )
+                            ( __require_import_file lex __im_ln __im_cl path )
                             : s src2 ( nurl_read_file path )
                             : s eff_src2 ? != 0 ( nurl_str_len alias )
                             { : s names ( collect_alias_targets src2 path )
@@ -24747,6 +25179,7 @@
     = g_fn_noreturn ( nurl_sym_new )
     ( nurl_sym_def g_fn_noreturn `nurl_exit` `1` )
     ( nurl_sym_def g_fn_noreturn `nurl_panic` `1` )
+    = g_loop_break_used ( nurl_sym_new )
     = g_type_count 0
     = g_func_count 0
     = g_closure_emit_base 0
