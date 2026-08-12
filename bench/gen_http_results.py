@@ -4,59 +4,92 @@
 # by hand; run_http.sh drives it and overwrites HTTP_RESULTS.md with the
 # result, the same way bench.sh generates bench/RESULTS.md.
 #
-# Input (tab-separated) on stdin:
-#   ENV<TAB>key<TAB>value        one per environment field
-#   ROW<TAB>scheme name c rps p50 p99   one per measured cell
-# where scheme is http|https, name is nurl|rust|node, and rps/p50/p99 are
-# numbers or the literal "n/a" / "FAIL".
+# Input (on stdin):
+#   ENV<TAB>key<TAB>value            one per environment field
+#   ROW scheme name c rps p50 p99 mean   one per closed-loop cell
+#   HS  scheme name conn_per_s       one connection-setup-rate cell/server
+# scheme is http|https, name is nurl|rust|node; numeric fields are numbers
+# or the literal "n/a" / "FAIL". Latencies are in ms, `mean` is the mean
+# latency in ms used for the effective-concurrency (Little's-law) check.
 
 import sys
 
 SERVERS = [("nurl", "NURL"), ("rust", "Rust"), ("node", "Node")]
 SCHEMES = [("http", "1. Plaintext HTTP"), ("https", "2. TLS (HTTPS)")]
+DAGGER = "‡"  # ‡ marks a closed-loop-starved latency cell
+
+
+def num(v):
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
 
 
 def main():
     env = {}
-    # cells[(scheme, name, c)] = (rps, p50, p99) as strings
-    cells = {}
+    cells = {}   # (scheme, name, c) -> (rps, p50, p99, mean) strings
+    conn = {}    # (scheme, name) -> conn_per_s string
     for line in sys.stdin:
-        parts = line.rstrip("\n").split("\t")
-        if not parts:
-            continue
-        if parts[0] == "ENV" and len(parts) >= 3:
-            env[parts[1]] = "\t".join(parts[2:])
-        elif parts[0] == "ROW" and len(parts) >= 2:
-            f = parts[1].split()
-            if len(f) == 6:
-                scheme, name, c, rps, p50, p99 = f
-                cells[(scheme, name, c)] = (rps, p50, p99)
+        line = line.rstrip("\n")
+        if line.startswith("ENV\t"):
+            parts = line.split("\t")
+            if len(parts) >= 3:
+                env[parts[1]] = "\t".join(parts[2:])
+        elif line.startswith("ROW "):
+            f = line.split()[1:]
+            if len(f) == 7:
+                scheme, name, c, rps, p50, p99, mean = f
+                cells[(scheme, name, c)] = (rps, p50, p99, mean)
+        elif line.startswith("HS "):
+            f = line.split()[1:]
+            if len(f) == 3:
+                conn[(f[0], f[1])] = f[2]
 
     concs = env.get("concurrencies", "1 10 50 200").split()
 
-    def num(v):
+    def starved(scheme, name, c):
+        # Little's law: the number of connections actually in flight is
+        # rps * mean_latency. A closed-loop cell that offered C but kept
+        # far fewer busy is measuring the latency of the served few, not
+        # of the C that were offered.
+        #
+        # Two conditions so low-C cells are not false-flagged: the ratio
+        # must be well under 1 AND at least ~2 offered connections must
+        # have failed to reach the server. At C=1 the ratio dips below 0.9
+        # from send-gap granularity alone (~0.8 in flight), but the
+        # absolute gap is a fraction of a connection, not real starvation.
+        cell = cells.get((scheme, name, c))
+        if not cell:
+            return False
+        rps, _, _, mean = cell
+        r, m = num(rps), num(mean)
+        if r is None or m is None:
+            return False
+        n_eff = r * (m / 1000.0)
         try:
-            return float(v)
-        except (TypeError, ValueError):
-            return None
+            offered = float(c)
+        except ValueError:
+            return False
+        return n_eff < 0.9 * offered and (offered - n_eff) >= 2.0
+
+    def n_eff_of(scheme, name, c):
+        cell = cells.get((scheme, name, c))
+        rps, _, _, mean = cell
+        return num(rps) * (num(mean) / 1000.0)
 
     def fmt_rps(v):
         n = num(v)
-        if n is None:
-            return v  # "n/a" / "FAIL"
-        # thousands separator with a thin space, matching the prior table
-        return f"{int(round(n)):,}".replace(",", " ")
+        return v if n is None else f"{int(round(n)):,}".replace(",", " ")
 
     def fmt_lat(v):
         n = num(v)
         return v if n is None else f"{n:.2f}"
 
     def best(values, want_max):
-        nums = [num(v) for v in values]
-        present = [x for x in nums if x is not None]
-        if not present:
-            return None
-        return max(present) if want_max else min(present)
+        present = [num(v) for v in values]
+        present = [x for x in present if x is not None]
+        return (max(present) if want_max else min(present)) if present else None
 
     out = []
     w = out.append
@@ -72,11 +105,25 @@ def main():
         "HTTP/1.1 request and writes a 14-byte `Hello, World!\\n` body "
         "(`text/plain`), keep-alive. The TLS section runs the *same* "
         "servers and the same load over a self-signed EC (P-256) "
-        "certificate; the load generator (`oha`) accepts it with "
-        "`--insecure`. The NURL server is the `packages/http` HttpApp "
-        "facade (`http_app_listen` / `http_app_listen_tls`) with a "
-        "10-thread worker pool — the surface a real NURL service "
-        "deploys."
+        "certificate, which `oha` accepts with `--insecure`. The NURL "
+        "server is the `packages/http` HttpApp facade (`http_app_listen` "
+        "/ `http_app_listen_tls`) with a 10-thread worker pool — the "
+        "surface a real NURL service deploys."
+    )
+    w("")
+    w(
+        "**Read the throughput columns, not the latency columns, at high "
+        "concurrency.** These are *closed-loop* measurements: `oha` holds "
+        "C connections open and fires the next request the instant one "
+        "returns. When a server's in-flight work saturates below C (NURL's "
+        "10 blocking workers do, by design), the extra connections queue "
+        "inside `oha` and never reach the server, so `req/s` is the "
+        "server's true saturation throughput but the latency percentiles "
+        f"describe only the few connections in flight. Such cells are "
+        f"marked {DAGGER} and left un-bold: their latency is not a "
+        "service-level number (that needs an open-loop generator — see "
+        "*Planned rigor*). The effective in-flight count is "
+        "`req/s x mean-latency` (Little's law)."
     )
     w("")
 
@@ -99,14 +146,18 @@ def main():
     w("| Setting | Value |")
     w("|---|---|")
     w(
-        f"| Measurement | median of {env.get('iters','3')} × "
-        f"{env.get('duration','10')} s runs per cell, HTTP/1.1 keep-alive |"
+        f"| Throughput/latency | median of {env.get('iters','3')} x "
+        f"{env.get('duration','10')} s closed-loop runs, keep-alive |"
     )
     w(f"| Concurrencies | {' , '.join(concs)} |")
+    w(
+        f"| Connection-setup rate | {env.get('hs_reqs','20000')} "
+        f"connections at c={env.get('hs_conc','20')}, `--disable-keepalive` |"
+    )
     w("| TLS cert | self-signed EC P-256, `CN=localhost` |")
     w("")
 
-    # ── one table per scheme ─────────────────────────────────────
+    # ── one throughput/latency table per scheme ──────────────────
     for scheme, title in SCHEMES:
         w(f"## {title}\n")
         header = "|              | Server  | " + " | ".join(
@@ -115,28 +166,35 @@ def main():
         sep = "|--------------|---------|" + "|".join(["--------:"] * len(concs)) + "|"
 
         rows = []
-        # For each metric block, compute best per column across servers.
-        for metric_label, idx, want_max, fmt in (
-            ("**req/s**", 0, True, fmt_rps),
-            ("**p50 (ms)**", 1, False, fmt_lat),
-            ("**p99 (ms)**", 2, False, fmt_lat),
+        for metric_label, idx, want_max, fmt, is_lat in (
+            ("**req/s**", 0, True, fmt_rps, False),
+            ("**p50 (ms)**", 1, False, fmt_lat, True),
+            ("**p99 (ms)**", 2, False, fmt_lat, True),
         ):
-            # best value per concurrency column
+            # Best per concurrency column, ignoring starved latency cells
+            # so a starved 0.06 ms never wins (or bolds) a latency row.
             col_best = {}
             for c in concs:
-                vals = [
-                    cells.get((scheme, name, c), ("n/a", "n/a", "n/a"))[idx]
-                    for name, _ in SERVERS
-                ]
+                vals = []
+                for name, _ in SERVERS:
+                    if is_lat and starved(scheme, name, c):
+                        continue
+                    cell = cells.get((scheme, name, c))
+                    if cell:
+                        vals.append(cell[idx])
                 col_best[c] = best(vals, want_max)
             for si, (name, disp) in enumerate(SERVERS):
                 left = metric_label if si == 0 else ""
                 out_cells = []
                 for c in concs:
-                    raw = cells.get((scheme, name, c), ("n/a", "n/a", "n/a"))[idx]
+                    cell = cells.get((scheme, name, c), ("n/a", "n/a", "n/a", "n/a"))
+                    raw = cell[idx]
                     txt = fmt(raw)
                     n = num(raw)
-                    if n is not None and col_best[c] is not None and abs(n - col_best[c]) < 1e-9:
+                    st = is_lat and starved(scheme, name, c)
+                    if st:
+                        txt = f"{txt}{DAGGER}"
+                    elif n is not None and col_best[c] is not None and abs(n - col_best[c]) < 1e-9:
                         txt = f"**{txt}**"
                     out_cells.append(txt)
                 rows.append(
@@ -149,30 +207,101 @@ def main():
             w(r)
         w("")
 
-    w("(Best per row in **bold**. Higher is better for req/s, lower for "
-      "latency. `n/a` = tool absent at measurement time; `FAIL` = the "
-      "server did not complete that cell.)")
+        # Per-scheme starvation footnote naming the effective in-flight
+        # count for every marked cell, so the number is on the page.
+        marks = []
+        for c in concs:
+            for name, disp in SERVERS:
+                if starved(scheme, name, c):
+                    marks.append(f"{disp} C={c}: ~{n_eff_of(scheme, name, c):.1f} in flight")
+        if marks:
+            w(f"{DAGGER} closed-loop starved ({'; '.join(marks)}).")
+            w("")
+
+    w(
+        "(Best per row in **bold**; latency winners are chosen only among "
+        f"non-starved cells. {DAGGER} = closed-loop starved. `n/a` = tool "
+        "absent; `FAIL` = the server did not complete that cell.)"
+    )
     w("")
 
-    # ── reading notes (generated, factual) ───────────────────────
+    # ── connection-setup / TLS-handshake rate ────────────────────
+    w("## 3. Connection-setup rate (new connection per request)\n")
+    w(
+        "`--disable-keepalive`, so each request pays a fresh connection. "
+        "For `http` that is the accept/teardown rate; for `https` it is "
+        "**TLS handshakes per second** — the pure-NURL P-256 ECDHE + "
+        "ECDSA-verify path (no OpenSSL, no AES-NI-tier handshake assembly) "
+        "against rustls and Node. This is the cost a short-lived-"
+        "connection edge deployment actually pays, and the one the keep-"
+        "alive tables above amortise to nothing."
+    )
+    w("")
+    w("| Server | http conn/s | https handshakes/s |")
+    w("|--------|------------:|-------------------:|")
+    for name, disp in SERVERS:
+        h = conn.get(("http", name), "n/a")
+        s = conn.get(("https", name), "n/a")
+        # bold the best of each column
+        hvals = [conn.get(("http", n), "n/a") for n, _ in SERVERS]
+        svals = [conn.get(("https", n), "n/a") for n, _ in SERVERS]
+        hb, sb = best(hvals, True), best(svals, True)
+        ht = fmt_rps(h); st = fmt_rps(s)
+        if num(h) is not None and hb is not None and abs(num(h) - hb) < 1e-9:
+            ht = f"**{ht}**"
+        if num(s) is not None and sb is not None and abs(num(s) - sb) < 1e-9:
+            st = f"**{st}**"
+        w(f"| {disp:<6} | {ht} | {st} |")
+    w("")
+
+    # ── notes ────────────────────────────────────────────────────
     w("## Notes\n")
     w(
-        "- The TLS rows carry the full handshake + record-layer cost of "
-        "NURL's pure-NURL TLS 1.3 stack (no OpenSSL); with keep-alive "
-        "the handshake is amortised across a connection's requests, so "
-        "the gap to plaintext is the per-record AEAD, not a per-request "
-        "handshake."
+        "- **What the TLS tables measure.** With keep-alive, a connection "
+        "handshakes once and then serves many requests, so the section-2 "
+        "gap to plaintext is the per-record AEAD, *not* the handshake. The "
+        "handshake cost lives in section 3, where every request is a new "
+        "connection."
     )
     w(
         "- Rust serves TLS through `tokio-rustls`; Node through its "
-        "built-in `https` module. Each implementation uses its "
-        "conventional stack, so the columns compare deployments, not "
-        "just ciphers."
+        "built-in `https` module. Each uses its conventional stack, so the "
+        "columns compare deployments, not just ciphers."
     )
     w(
-        "- Loopback only, HTTP/1.1 only. No HTTP/2. Absolute numbers "
-        "depend heavily on the host; compare columns within one run, "
-        "not across machines."
+        "- Loopback only, HTTP/1.1 only, 14-byte body. No HTTP/2. Absolute "
+        "numbers depend heavily on the host; compare columns within one "
+        "run, not across machines."
+    )
+    w("")
+    w("### Planned rigor\n")
+    w(
+        "Known limits of this harness, in priority order — each is a "
+        "measurement this run does **not** yet make, called out so a "
+        "reader does not have to guess:"
+    )
+    w(
+        "1. **Open-loop latency.** Replace the closed-loop latency columns "
+        "with a fixed-rate generator (`oha -q`, or `wrk2`/`vegeta`) at "
+        "50/80/95 % of each server's measured throughput, reporting "
+        "p50/p99/p99.9/max. Closed loop cannot measure latency above "
+        "capacity (coordinated omission), which is why saturated cells are "
+        f"marked {DAGGER} rather than trusted."
+    )
+    w(
+        "2. **Core isolation.** Pin the server and the load generator to "
+        "disjoint core sets (`taskset`) and equalise pool sizes, so `oha`'s "
+        "threads do not compete with the server for CPU."
+    )
+    w(
+        "3. **CPU-time per request.** `getrusage(RUSAGE_SELF)` in each "
+        "server → `(utime+stime)/requests`: the one figure immune to "
+        "loopback, generator contention and pool size."
+    )
+    w(
+        "4. **Record-layer throughput.** Re-run TLS with 16 KB and 1 MB "
+        "bodies; a 14-byte body exercises the handshake and framing, not "
+        "the AEAD stream."
     )
 
     sys.stdout.write("\n".join(out) + "\n")
