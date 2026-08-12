@@ -31,9 +31,7 @@ downstream notices. Write n-1 operators for n conditions:
 `nurlc` points its caret at the `?` and names the cure. The trap is a
 hard **error by default**; `--no-strict-arity` demotes it to a warning
 for trees that need to keep building. This repo additionally runs
-`tools/check_strict_arity.sh` over its whole first-party tree in CI, and
-that gate's first run found a shipped example culling every particle on
-every frame for exactly this reason.
+`tools/check_strict_arity.sh` over its whole first-party tree in CI.
 
 The few things that are *not* surprises but fixed properties of the language
 or its runtime live in their proper homes, not here:

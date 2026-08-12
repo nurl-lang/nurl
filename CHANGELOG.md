@@ -6,7 +6,16 @@ are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.39.0] — 2026-08-12
+
+The diagnostics-hardening release. A corpus-wide mutation probe (one
+realistic mistake injected into each of the ~790 test programs, ~5 400
+mutants per run) drove six root-cause series (#874–#879): at the start it
+found 401 broken programs the compiler accepted and only the LLVM
+verifier/linker rejected, plus 9 inputs that hung the compiler forever;
+at the end it finds **zero** — every mutant either compiles correctly or
+dies with a single anchored `file:line:col: error:` naming the rule and
+the cure.
 
 ### Fixed
 
@@ -12103,7 +12112,8 @@ releases are measured.
   compile-server (`api/`), browser playground (`nurlweb/`).
 * Dual license: MIT (LICENSE-MIT) or Apache-2.0 (LICENSE-APACHE).
 
-[Unreleased]: https://github.com/nurl-lang/nurl/compare/v0.37.1...HEAD
+[Unreleased]: https://github.com/nurl-lang/nurl/compare/v0.39.0...HEAD
+[0.39.0]: https://github.com/nurl-lang/nurl/compare/v0.38.0...v0.39.0
 [0.38.0]: https://github.com/nurl-lang/nurl/compare/v0.37.1...v0.38.0
 [0.37.1]: https://github.com/nurl-lang/nurl/compare/v0.37.0...v0.37.1
 [0.37.0]: https://github.com/nurl-lang/nurl/compare/v0.36.0...v0.37.0

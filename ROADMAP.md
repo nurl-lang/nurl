@@ -7,7 +7,7 @@ Anything marked done here has a regression test in
 [`compiler/tests/`](compiler/tests/) and is covered by the bootstrap fixed
 point.
 
-_Last reviewed: 2026-08-11 · Current release: **0.38.0** · Language: **Grammar
+_Last reviewed: 2026-08-12 · Current release: **0.39.0** · Language: **Grammar
 v2.4** ([`spec/grammar.ebnf`](spec/grammar.ebnf))._
 
 ---
@@ -97,7 +97,13 @@ A high-level map of what exists. Dates and per-feature detail are in
 - Front-end is diagnostic-first: malformed prefix-arity programs, undefined
   identifiers, call-arity mismatches, unbalanced braces / stray top-level
   tokens, and visibility violations are hard errors with source locations —
-  nothing malformed reaches the backend silently.
+  nothing malformed reaches the backend silently. Since 0.39.0 that claim
+  is measured corpus-wide: a mutation probe (one realistic mistake injected
+  into each of the ~790 test programs, ~5 400 mutants) produces **zero**
+  compiler hangs, zero crashes, and zero broken programs reaching the LLVM
+  verifier or linker; every return path is type-checked (implicit fall-off
+  and closure tails included), and errors inside generic/trait re-parses
+  point at the template's real file:line with the instantiation named.
 - Diagnostics are *measured*, not asserted. `check_diag_coverage.sh` reports
   which of the compiler's ~230 messages a test has ever made it print;
   `check_diag_anchor.sh` gates that every baselined diagnostic points at the
