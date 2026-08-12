@@ -6,9 +6,10 @@
 // Noise / age / any AEAD need on a host with nothing installed.
 //
 // ChaCha20 words are kept in i64 limbs masked to 32 bits;
-// Poly1305 is a port of the well-trodden poly1305-donna radix-2^26
-// reference, whose partial products stay well under 2^63 so plain i64
-// arithmetic suffices.
+// Poly1305 is a port of the well-trodden poly1305-donna radix-2^44
+// reference — three 44/44/42-bit limbs whose h·r terms are full
+// 64×64→128 products (nurl_umulhi supplies the high half), 9 multiplies
+// a block against the 25 a 2^26 form needs.
 //
 // Public surface:
 //   ( chacha20_block key counter nonce )      → ( Vec u )  64-byte block
@@ -461,162 +462,169 @@ $ `stdlib/core/vec.nu`
     ^ out
 }
 
-// ── Poly1305 (poly1305-donna, radix 2^26) ─────────────────────────
-// otk = 32-byte one-time key (r || s). Returns the 16-byte tag.
-@ poly1305_mac ( Vec u ) otk ( Vec u ) msg → ( Vec u ) {
-    // Clamp r into five 26-bit limbs.
-    : i r0 & ( __ld32 otk 0 ) 67108863  // 0x3ffffff
-    : i r1 & >> ( __ld32 otk 3 ) 2 67108611  // 0x3ffff03
-    : i r2 & >> ( __ld32 otk 6 ) 4 67092735  // 0x3ffc0ff
-    : i r3 & >> ( __ld32 otk 9 ) 6 66076671  // 0x3f03fff
-    : i r4 & >> ( __ld32 otk 12 ) 8 1048575  // 0x00fffff
-    : i s1 * r1 5
-    : i s2 * r2 5
-    : i s3 * r3 5
-    : i s4 * r4 5
+// ── Poly1305 (poly1305-donna, radix 2^44) ─────────────────────────
+// The accumulator is THREE 44/44/42-bit limbs, not five 26-bit ones.
+// The wider radix is what `nurl_umulhi` (64×64→128) buys: each h·r term
+// is a full 128-bit product instead of one kept artificially under 2^63,
+// so the schoolbook is 9 multiplies a block against the 25 the 26-bit
+// form needed — and this MAC runs over every byte of every TLS record,
+// both directions. (Floodyberry's poly1305-donna-64, the reference every
+// fast Poly1305 descends from.)
 
-    : ~ i h0 0
-    : ~ i h1 0
-    : ~ i h2 0
-    : ~ i h3 0
-    : ~ i h4 0
+// Little-endian 64-bit load of the 8 bytes at `mp[off .. off+7]`, built
+// from bytes so it is correct on any target and needs no alignment. The
+// full-block path calls it at 8-aligned offsets, but the two `<< 32`
+// halves keep it valid off-alignment too.
+@ __ld64 * u mp i off → i {
+    : i lo | | | # i . mp off << # i . mp + off 1 8 << # i . mp + off 2 16 << # i . mp + off 3 24
+    : i hi | | | # i . mp + off 4 << # i . mp + off 5 8 << # i . mp + off 6 16 << # i . mp + off 7 24
+    ^ | lo << hi 32
+}
+
+// otk = 32-byte one-time key (r || s). Returns the 16-byte tag.
+//
+// h and r are held as three unsigned limbs at radix 2^44 (h2/r2 are the
+// 42-bit top). Each h·r term is a full 64×64→128 product, accumulated as
+// an explicit (lo, hi) pair — NURL's `*` gives the low half, nurl_umulhi
+// the high — because the sum of three such products overflows 64 bits and
+// the reduction needs the bits above 2^44 that a truncating multiply drops.
+@ poly1305_mac ( Vec u ) otk ( Vec u ) msg → ( Vec u ) {
+    : *u kp ( vec_data [u] otk )
+    // Clamp r (otk[0..15]) into three 44-bit limbs. These are RFC 8439's
+    // clamp mask re-expressed for the 44/44/42 split (poly1305-donna-64).
+    : u64 kt0 # u64 ( __ld64 kp 0 )
+    : u64 kt1 # u64 ( __ld64 kp 8 )
+    : u64 r0 & kt0 0xffc0fffffff
+    : u64 r1 & | >> kt0 44 << kt1 20 0xfffffc0ffff
+    : u64 r2 & >> kt1 24 0x00ffffffc0f
+    : u64 s1 * r1 20  // 5·r1·4 → the 2^130-5 wrap fold (5<<2)
+    : u64 s2 * r2 20
+
+    : ~ u64 h0 0
+    : ~ u64 h1 0
+    : ~ u64 h2 0
 
     : i mlen ( vec_len [u] msg )
     : *u mp ( vec_data [u] msg )
     : ~ i off 0
     ~ < off mlen {
         : i rem - mlen off
-        // Full 16-byte blocks — the whole message but its tail — load
-        // their four words straight off the message pointer: the
-        // per-block 17-byte scratch Vec and its bounds-checked reads
-        // were a fifth of the whole MAC.
+        : ~ u64 t0 0
+        : ~ u64 t1 0
+        : ~ u64 hibit 0x10000000000  // 1<<40: the 2^128 block marker in h2
         ? >= rem 16 {
-            : i w0 | | | # i . mp off << # i . mp + off 1 8 << # i . mp + off 2 16 << # i . mp + off 3 24
-            : i w1 | | | # i . mp + off 4 << # i . mp + off 5 8 << # i . mp + off 6 16 << # i . mp + off 7 24
-            : i w2 | | | # i . mp + off 8 << # i . mp + off 9 8 << # i . mp + off 10 16 << # i . mp + off 11 24
-            : i w3 | | | # i . mp + off 12 << # i . mp + off 13 8 << # i . mp + off 14 16 << # i . mp + off 15 24
-            = h0 + h0 & w0 67108863
-            = h1 + h1 & | >> w0 26 << w1 6 67108863
-            = h2 + h2 & | >> w1 20 << w2 12 67108863
-            = h3 + h3 & | >> w2 14 << w3 18 67108863
-            = h4 + h4 | >> w3 8 16777216
+            = t0 # u64 ( __ld64 mp off )
+            = t1 # u64 ( __ld64 mp + off 8 )
         } {
+            // Tail: gather the remaining bytes into a 16-byte zero buffer,
+            // set the 0x01 marker byte after them, and clear `hibit` — the
+            // marker now rides inside t0/t1 at its natural position.
             : i blk rem
-            // Tail: load into a 17-byte little-endian scratch, append the
-            // 0x01 marker at 2^(8*blk), zero-pad the rest.
-            : ( Vec u ) b ( vec_with_cap [u] 17 )
+            : *u bb # *u ( nurl_zalloc 16 )
             : ~ i j 0
-            ~ < j 16 {
-                ? < j blk { ( vec_push [u] b # u ( __cc_bget msg + off j ) ) } { ( vec_push [u] b # u 0 ) }
-                = j + j 1
-            }
-            ( vec_push [u] b # u 0 )
-            ( vec_set [u] b blk # u 1 )
-
-            = h0 + h0 & ( __ld32 b 0 ) 67108863
-            = h1 + h1 & >> ( __ld32 b 3 ) 2 67108863
-            = h2 + h2 & >> ( __ld32 b 6 ) 4 67108863
-            = h3 + h3 & >> ( __ld32 b 9 ) 6 67108863
-            = h4 + h4 | >> ( __ld32 b 12 ) 8 << ( __cc_bget b 16 ) 24
-            ( vec_free [u] b )
+            ~ < j blk { = . bb j . mp + off j = j + j 1 }
+            = . bb blk # u 1
+            = t0 # u64 ( __ld64 bb 0 )
+            = t1 # u64 ( __ld64 bb 8 )
+            = hibit 0
+            ( nurl_free # s bb )
         }
+        // h += m (three 44/44/42-bit limbs plus the block-marker bit).
+        = h0 + h0 & t0 0xfffffffffff
+        = h1 + h1 & | >> t0 44 << t1 20 0xfffffffffff
+        = h2 + + h2 & >> t1 24 0x3ffffffffff hibit
 
-        // d = h * r mod 2^130-5  (schoolbook with the s_i = 5·r_i fold)
-        : i d0 + + + + * h0 r0 * h1 s4 * h2 s3 * h3 s2 * h4 s1
-        : ~ i d1 + + + + * h0 r1 * h1 r0 * h2 s4 * h3 s3 * h4 s2
-        : ~ i d2 + + + + * h0 r2 * h1 r1 * h2 r0 * h3 s4 * h4 s3
-        : ~ i d3 + + + + * h0 r3 * h1 r2 * h2 r1 * h3 r0 * h4 s4
-        : ~ i d4 + + + + * h0 r4 * h1 r3 * h2 r2 * h3 r1 * h4 r0
+        // d0 = h0·r0 + h1·s2 + h2·s1, as a 128-bit (lo,hi) accumulator.
+        : ~ u64 d0lo * h0 r0
+        : ~ u64 d0hi ( nurl_umulhi h0 r0 )
+        : u64 pa * h1 s2
+        = d0lo + d0lo pa
+        = d0hi + + d0hi ( nurl_umulhi h1 s2 ) ? < d0lo pa 1 0
+        : u64 pb * h2 s1
+        = d0lo + d0lo pb
+        = d0hi + + d0hi ( nurl_umulhi h2 s1 ) ? < d0lo pb 1 0
+        // d1 = h0·r1 + h1·r0 + h2·s2
+        : ~ u64 d1lo * h0 r1
+        : ~ u64 d1hi ( nurl_umulhi h0 r1 )
+        : u64 pc * h1 r0
+        = d1lo + d1lo pc
+        = d1hi + + d1hi ( nurl_umulhi h1 r0 ) ? < d1lo pc 1 0
+        : u64 pd * h2 s2
+        = d1lo + d1lo pd
+        = d1hi + + d1hi ( nurl_umulhi h2 s2 ) ? < d1lo pd 1 0
+        // d2 = h0·r2 + h1·r1 + h2·r0
+        : ~ u64 d2lo * h0 r2
+        : ~ u64 d2hi ( nurl_umulhi h0 r2 )
+        : u64 pe * h1 r1
+        = d2lo + d2lo pe
+        = d2hi + + d2hi ( nurl_umulhi h1 r1 ) ? < d2lo pe 1 0
+        : u64 pf * h2 r0
+        = d2lo + d2lo pf
+        = d2hi + + d2hi ( nurl_umulhi h2 r0 ) ? < d2lo pf 1 0
 
-        : ~ i c >> d0 26
-        = h0 & d0 67108863
-        = d1 + d1 c
-        = c >> d1 26
-        = h1 & d1 67108863
-        = d2 + d2 c
-        = c >> d2 26
-        = h2 & d2 67108863
-        = d3 + d3 c
-        = c >> d3 26
-        = h3 & d3 67108863
-        = d4 + d4 c
-        = c >> d4 26
-        = h4 & d4 67108863
+        // Partial reduction: carry each di>>44 (di>>42 for d2) up a limb.
+        : ~ u64 c | << d0hi 20 >> d0lo 44
+        = h0 & d0lo 0xfffffffffff
+        = d1lo + d1lo c
+        = d1hi + d1hi ? < d1lo c 1 0
+        = c | << d1hi 20 >> d1lo 44
+        = h1 & d1lo 0xfffffffffff
+        = d2lo + d2lo c
+        = d2hi + d2hi ? < d2lo c 1 0
+        = c | << d2hi 22 >> d2lo 42
+        = h2 & d2lo 0x3ffffffffff
         = h0 + h0 * c 5
-        = c >> h0 26
-        = h0 & h0 67108863
+        = c >> h0 44
+        = h0 & h0 0xfffffffffff
         = h1 + h1 c
 
         = off + off 16
     }
 
     // Fully carry h.
-    : ~ i c >> h1 26
-    = h1 & h1 67108863
+    : ~ u64 c >> h1 44
+    = h1 & h1 0xfffffffffff
     = h2 + h2 c
-    = c >> h2 26
-    = h2 & h2 67108863
-    = h3 + h3 c
-    = c >> h3 26
-    = h3 & h3 67108863
-    = h4 + h4 c
-    = c >> h4 26
-    = h4 & h4 67108863
+    = c >> h2 42
+    = h2 & h2 0x3ffffffffff
     = h0 + h0 * c 5
-    = c >> h0 26
-    = h0 & h0 67108863
+    = c >> h0 44
+    = h0 & h0 0xfffffffffff
     = h1 + h1 c
 
-    // Compute h + -p (i.e. h - p) and select if h >= p.
-    : ~ i g0 + h0 5
-    : ~ i cc >> g0 26
-    = g0 & g0 67108863
-    : ~ i g1 + h1 cc
-    = cc >> g1 26
-    = g1 & g1 67108863
-    : ~ i g2 + h2 cc
-    = cc >> g2 26
-    = g2 & g2 67108863
-    : ~ i g3 + h3 cc
-    = cc >> g3 26
-    = g3 & g3 67108863
-    : ~ i g4 - + h4 cc 67108864
+    // Compute h + -p and select h if h < p (constant-time).
+    : ~ u64 g0 + h0 5
+    : ~ u64 cc >> g0 44
+    = g0 & g0 0xfffffffffff
+    : ~ u64 g1 + h1 cc
+    = cc >> g1 44
+    = g1 & g1 0xfffffffffff
+    : ~ u64 g2 - + h2 cc 0x40000000000  // − (1<<42)
 
-    // mask = 0 when g4 borrowed (h < p) → keep h; else 0xff..ff → take g.
-    : i mask ? < g4 0 0 -1
+    // g2's top bit is set exactly when it borrowed (h < p): mask 0 keeps h,
+    // otherwise all-ones takes g. `>> g2 63` is a logical shift (u64).
+    : u64 mask - >> g2 63 1
     = g0 & g0 mask
     = g1 & g1 mask
     = g2 & g2 mask
-    = g3 & g3 mask
-    = g4 & g4 mask
-    : i imask ^^ mask -1
+    : u64 imask ^^ mask -1
     = h0 | & h0 imask g0
     = h1 | & h1 imask g1
     = h2 | & h2 imask g2
-    = h3 | & h3 imask g3
-    = h4 | & h4 imask g4
 
-    // Pack the 130-bit value down to four 32-bit words (mod 2^128).
-    : i p0 & | h0 << h1 26 4294967295
-    : i p1 & | >> h1 6 << h2 20 4294967295
-    : i p2 & | >> h2 12 << h3 14 4294967295
-    : i p3 & | >> h3 18 << h4 8 4294967295
-
-    // tag = (h + s) mod 2^128, where s is otk[16..32].
-    : ~ i f + p0 ( __ld32 otk 16 )
-    : i t0 & f 4294967295
-    = f + + p1 ( __ld32 otk 20 ) >> f 32
-    : i t1 & f 4294967295
-    = f + + p2 ( __ld32 otk 24 ) >> f 32
-    : i t2 & f 4294967295
-    = f + + p3 ( __ld32 otk 28 ) >> f 32
-    : i t3 & f 4294967295
-
+    // tag = (h + s) mod 2^128: repack the three limbs into two 64-bit
+    // words at the 44-bit boundary, add the pad s = otk[16..32] with carry.
+    : u64 st0 # u64 ( __ld64 kp 16 )
+    : u64 st1 # u64 ( __ld64 kp 24 )
+    : ~ u64 f0 | h0 << h1 44
+    : ~ u64 f1 | >> h1 20 << h2 24
+    = f0 + f0 st0
+    = f1 + + f1 st1 ? < f0 st0 1 0
     : ( Vec u ) tag ( vec_with_cap [u] 16 )
-    ( __push_le32 tag t0 )
-    ( __push_le32 tag t1 )
-    ( __push_le32 tag t2 )
-    ( __push_le32 tag t3 )
+    ( __push_le32 tag # i & f0 4294967295 )
+    ( __push_le32 tag # i & >> f0 32 4294967295 )
+    ( __push_le32 tag # i & f1 4294967295 )
+    ( __push_le32 tag # i & >> f1 32 4294967295 )
     ^ tag
 }
 
