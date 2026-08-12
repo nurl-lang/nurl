@@ -6,7 +6,7 @@
  *
  * What `multiboot2.c` learned at handover, for the two files that
  * need it afterwards: `platform_x86.c` (did this boot fail, and on
- * what) and `con.c` (is there a screen, and what shape is it).
+ * what) and `console.c` (is there a screen, and what shape is it).
  */
 
 #ifndef NURL_BOOT_MB2_H

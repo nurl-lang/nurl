@@ -14,7 +14,7 @@
  * Five things a program needs and a machine has to provide:
  *
  *   write        an 8250 UART at 0x3F8, and — on a Multiboot2 boot,
- *                i.e. real hardware — the screen as well (see con.c;
+ *                i.e. real hardware — the screen as well (see console.c;
  *                a laptop booted off a USB stick has no serial port
  *                for anyone to be listening on). Reads answer 0 (EOF):
  *                there is no console input, and pretending otherwise
@@ -40,7 +40,7 @@
  *                QEMU-side cross-check, then triple fault.
  */
 
-#include "con.h"
+#include "console.h"
 #include "mb2.h"
 
 /* Forward declarations for the POSIX-named half, which the `nl_*`
@@ -145,12 +145,12 @@ static void uart_putc_raw(char c) {
 static void pf_putc(char c) {
     /* Line feeds become CRLF: a serial terminal does not do it for us,
      * and the goldens this boot is checked against are line-oriented.
-     * The screen wants no such thing — con_putc reads '\n' as "next
+     * The screen wants no such thing — console_putc reads '\n' as "next
      * line, first column" — so the carriage return is the serial
      * port's alone. */
     if (c == '\n') uart_putc_raw('\r');
     uart_putc_raw(c);
-    con_putc(c);
+    console_putc(c);
 }
 
 static void uart_puts(const char *s) { while (*s) pf_putc(*s++); }
@@ -1051,7 +1051,7 @@ const char *nurl_cpu_brand(void) {
     return p;
 }
 
-const char *nurl_console_kind(void) { return con_kind_name(); }
+const char *nurl_console_kind(void) { return console_kind_name(); }
 
 /* ── entry ───────────────────────────────────────────────────────── */
 
@@ -1168,7 +1168,7 @@ void kmain(unsigned long start_info_paddr) {
      * chose rather than one this image did, and a fault there should
      * be a report rather than a reboot. */
     if (mb2_booted()) {
-        con_init(mb2_framebuffer());
+        console_init(mb2_framebuffer());
         /* The Multiboot2 conversion runs before any of this exists, so
          * it records its complaint instead of making it. Now there is
          * somewhere for the words to go. */

@@ -193,6 +193,18 @@ jobs:
         # published. No in-repo test can catch it; this can.
         run: ./tools/check_package_imports.sh
 
+      - name: every tracked path can be checked out on Windows
+        # CON, PRN, AUX, NUL, COM1-9 and LPT1-9 are DOS device names at
+        # every directory, in any case, with any extension — so
+        # `boot/con.c`, the obvious name for a console, is a path git
+        # REFUSES to check out on Windows. The Windows job then dies at
+        # its checkout step, before the change has run, with a log that
+        # says `invalid path` and nothing about why. This gate reports
+        # it here, on Linux, naming the file and the rule. Same class:
+        # reserved characters, trailing dots or spaces, and paths that
+        # differ only in case.
+        run: ./tools/check_windows_paths.sh
+
       - name: nurlfmt --check (canonical-form gate)
         # Every first-party .nu file must be in canonical nurlfmt
         # form. build.sh above already produced build/nurlfmt, so

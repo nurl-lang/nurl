@@ -1,5 +1,5 @@
 /*
- * NURL unikernel — unikernel/boot/con.c
+ * NURL unikernel — unikernel/boot/console.c
  *
  * Copyright (c) 2026 The NURL Project Developers
  * SPDX-License-Identifier: MIT OR Apache-2.0
@@ -35,7 +35,7 @@
  * no effect is not an improvement worth a regression risk.
  */
 
-#include "con.h"
+#include "console.h"
 #include "font8x16.h"
 
 typedef unsigned long long u64;
@@ -122,7 +122,7 @@ static void scroll(void) {
 
 /* ── the interface ───────────────────────────────────────────────── */
 
-void con_init(const struct mb2_fb *info) {
+void console_init(const struct mb2_fb *info) {
     if (!info) {
         /* A Multiboot2 boot with no framebuffer tag is a BIOS boot
          * that stayed in text mode. That mode is at a fixed address
@@ -165,7 +165,7 @@ void con_init(const struct mb2_fb *info) {
     if (kind == CON_TEXT) cursor_to(0, 0);
 }
 
-void con_putc(char c) {
+void console_putc(char c) {
     if (kind == CON_NONE) return;
 
     /* The font covers ASCII and this project writes UTF-8. A character
@@ -193,12 +193,12 @@ done:
     if (kind == CON_TEXT) cursor_to(cx, cy);
 }
 
-int con_active(void) { return kind != CON_NONE; }
+int console_active(void) { return kind != CON_NONE; }
 
 /* For the guest to print. "Which console am I on" is the first
  * question when output appears in one place and not another, and the
  * machine is the only thing that can answer it. */
-const char *con_kind_name(void) {
+const char *console_kind_name(void) {
     switch (kind) {
     case CON_TEXT: return "VGA text (0xB8000)";
     case CON_FB:   return "linear framebuffer, 8x16 font";

@@ -1,15 +1,15 @@
 /*
- * NURL unikernel — unikernel/boot/con.h
+ * NURL unikernel — unikernel/boot/console.h
  *
  * Copyright (c) 2026 The NURL Project Developers
  * SPDX-License-Identifier: MIT OR Apache-2.0
  *
- * The screen. See con.c for why a serial port is not enough on real
+ * The screen. See console.c for why a serial port is not enough on real
  * hardware.
  */
 
-#ifndef NURL_BOOT_CON_H
-#define NURL_BOOT_CON_H
+#ifndef NURL_BOOT_CONSOLE_H
+#define NURL_BOOT_CONSOLE_H
 
 #include "mb2.h"
 
@@ -17,15 +17,15 @@
  * NULL, which on a Multiboot2 boot means a BIOS that stayed in text
  * mode; the console then uses the fixed 80x25 at 0xB8000. Safe to call
  * with a shape it cannot drive — it leaves itself off instead. */
-void con_init(const struct mb2_fb *info);
+void console_init(const struct mb2_fb *info);
 
 /* One character, or nothing at all when there is no console. */
-void con_putc(char c);
+void console_putc(char c);
 
 /* Whether anything is being drawn. */
-int con_active(void);
+int console_active(void);
 
 /* Which console, in words, for the guest to print. */
-const char *con_kind_name(void);
+const char *console_kind_name(void);
 
-#endif /* NURL_BOOT_CON_H */
+#endif /* NURL_BOOT_CONSOLE_H */

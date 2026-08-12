@@ -99,8 +99,8 @@ cache_inputs() {
         "$NOLIBC"/setjmp_x86_64.S \
         "$BOOT"/platform_x86.c "$BOOT"/initfs.c "$BOOT"/pagealloc.c \
         "$BOOT"/nosys.c "$BOOT"/tls_guest.c "$BOOT"/boot.S \
-        "$BOOT"/multiboot2.c "$BOOT"/con.c "$BOOT"/font8x16.c \
-        "$BOOT"/mb2.h "$BOOT"/con.h "$BOOT"/font8x16.h \
+        "$BOOT"/multiboot2.c "$BOOT"/console.c "$BOOT"/font8x16.c \
+        "$BOOT"/mb2.h "$BOOT"/console.h "$BOOT"/font8x16.h \
         "${BASH_SOURCE[0]}"
 }
 
@@ -117,7 +117,7 @@ cache_build() {
     $CC $KFLAGS -c "$BOOT/nosys.c"        -o "$CACHE/boot_nosys.o"
     $CC $KFLAGS -c "$BOOT/tls_guest.c"    -o "$CACHE/tls_guest.o"
     $CC $KFLAGS -c "$BOOT/multiboot2.c"   -o "$CACHE/boot_multiboot2.o"
-    $CC $KFLAGS -c "$BOOT/con.c"          -o "$CACHE/boot_con.o"
+    $CC $KFLAGS -c "$BOOT/console.c"          -o "$CACHE/boot_console.o"
     $CC $KFLAGS -c "$BOOT/font8x16.c"     -o "$CACHE/boot_font8x16.o"
     $CC -c "$BOOT/boot.S"                 -o "$CACHE/boot.o"
     $CC $KFLAGS -c "$NOLIBC/setjmp_x86_64.S" -o "$CACHE/nl_setjmp.o" 2>/dev/null \
@@ -181,7 +181,7 @@ $CC -nostdlib -static -no-pie -Wl,-T,"$BOOT/link.ld" -Wl,--build-id=none \
     "$CACHE/runtime_core.o" "$CACHE/runtime_ctx.o" "$CACHE/runtime_bare.o" \
     "$CACHE/platform.o" "$CACHE/tls_guest.o" \
     "$CACHE/boot_initfs.o" "$CACHE/boot_pagealloc.o" "$CACHE/boot_nosys.o" \
-    "$CACHE/boot_multiboot2.o" "$CACHE/boot_con.o" "$CACHE/boot_font8x16.o" \
+    "$CACHE/boot_multiboot2.o" "$CACHE/boot_console.o" "$CACHE/boot_font8x16.o" \
     "$OUTDIR/$base.initfs_data.o" \
     "$CACHE"/nl_*.o
 

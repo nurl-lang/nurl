@@ -444,7 +444,7 @@ unprivileged, in CI and in a container.
 
 **No serial port.** A laptop has no 8250 at `0x3F8`, so a guest that
 prints only there is indistinguishable from one that never started.
-`boot/con.c` draws the same bytes on the screen: EGA text at `0xB8000`
+`boot/console.c` draws the same bytes on the screen: EGA text at `0xB8000`
 under a BIOS, and a linear framebuffer with the 8x16 font in
 `boot/font8x16.c` under UEFI, which has no text memory at all. Only
 white on black is drawn, which is why no pixel-format masks are needed
