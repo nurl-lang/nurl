@@ -19,6 +19,11 @@ hyper-util = { version = "0.1", features = ["tokio"] }
 http-body-util = "0.1"
 tokio = { version = "1", features = ["rt-multi-thread", "net", "macros", "io-util"] }
 bytes = "1"
+# TLS peer: tokio-rustls is the same rustls stack axum/warp use. Pinned to
+# the ring crypto provider so a CI runner needs no system OpenSSL to build.
+tokio-rustls = "0.26"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
+rustls-pemfile = "2"
 
 [profile.release]
 opt-level = 3
