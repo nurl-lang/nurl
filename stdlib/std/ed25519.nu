@@ -157,7 +157,8 @@ $ `stdlib/std/hash_sha512.nu`
 
 // ── the window table ──────────────────────────────────────────────
 // Sixteen multiples of the input point, 0·Q … 15·Q, in one flat limb
-// vector: entry d occupies [d·40, d·40+40) as x‖y‖z‖t, ten limbs each.
+// vector: entry d occupies [d·20, d·20+20) as x‖y‖z‖t, five limbs each
+// (the donna-c64 field is five 2^51 limbs — see stdlib/std/x25519.nu).
 
 @ __ed_tbl_put ( Vec i ) tbl i d EdPt q → v {
     : *i tb ( vec_data [i] tbl )
@@ -165,13 +166,13 @@ $ `stdlib/std/hash_sha512.nu`
     : *i qy ( vec_data [i] . q y )
     : *i qz ( vec_data [i] . q z )
     : *i qt ( vec_data [i] . q t )
-    : i base * d 40
+    : i base * d 20
     : ~ i k 0
-    ~ < k 10 {
+    ~ < k 5 {
         = . tb + base k . qx k
-        = . tb + + base 10 k . qy k
-        = . tb + + base 20 k . qz k
-        = . tb + + base 30 k . qt k
+        = . tb + + base 5 k . qy k
+        = . tb + + base 10 k . qz k
+        = . tb + + base 15 k . qt k
         = k + k 1
     }
 }
@@ -191,18 +192,18 @@ $ `stdlib/std/hash_sha512.nu`
     : *i dz ( vec_data [i] . dst z )
     : *i dt ( vec_data [i] . dst t )
     : ~ i k 0
-    ~ < k 10 { = . dx k 0 = . dy k 0 = . dz k 0 = . dt k 0 = k + k 1 }
+    ~ < k 5 { = . dx k 0 = . dy k 0 = . dz k 0 = . dt k 0 = k + k 1 }
     : ~ i d 0
     ~ < d 16 {
         : u64 z ^^ # u64 d # u64 digit
         : i mask - 0 # i >> - z 1 63
-        : i base * d 40
+        : i base * d 20
         : ~ i j 0
-        ~ < j 10 {
+        ~ < j 5 {
             = . dx j | . dx j & mask . tb + base j
-            = . dy j | . dy j & mask . tb + + base 10 j
-            = . dz j | . dz j & mask . tb + + base 20 j
-            = . dt j | . dt j & mask . tb + + base 30 j
+            = . dy j | . dy j & mask . tb + + base 5 j
+            = . dz j | . dz j & mask . tb + + base 10 j
+            = . dt j | . dt j & mask . tb + + base 15 j
             = j + j 1
         }
         = d + d 1
@@ -226,7 +227,7 @@ $ `stdlib/std/hash_sha512.nu`
 // public loop counters.
 @ __ed_scalarmult EdPt p EdPt q ( Vec u ) s ( Vec i ) d2 → v {
     : EdScratch sc ( __ed_scr_new )
-    : ( Vec i ) tbl ( _zeros_i 640 )
+    : ( Vec i ) tbl ( _zeros_i 320 )
     : EdPt cur ( __ed_pt )
     : EdPt sel ( __ed_pt )
     // T[0] = identity (0, 1, 1, 0); T[1] = Q; T[d] = T[d-1] + Q.
@@ -243,7 +244,7 @@ $ `stdlib/std/hash_sha512.nu`
     }
     // p ← identity
     : ~ i z 0
-    ~ < z 10 { ( _vset . p x z 0 ) ( _vset . p y z 0 ) ( _vset . p z z 0 ) ( _vset . p t z 0 ) = z + z 1 }
+    ~ < z 5 { ( _vset . p x z 0 ) ( _vset . p y z 0 ) ( _vset . p z z 0 ) ( _vset . p t z 0 ) = z + z 1 }
     ( _vset . p y 0 1 )
     ( _vset . p z 0 1 )
     : i nwin * ( vec_len [u] s ) 2
