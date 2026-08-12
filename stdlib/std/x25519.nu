@@ -5,10 +5,11 @@
 // exchange for TLS 1.3 / Noise / age with nothing installed on the host.
 //
 // The ladder is the well-trodden TweetNaCl one (Bernstein et al.); the
-// field underneath it is the classic 32-bit curve25519 representation —
-// ten signed 64-bit limbs at radix 2^25.5, carried with `__car25519`.
-// Every branch is data-independent (the conditional swap is a constant-
-// time mask), so the ladder runs in constant time w.r.t. the scalar.
+// field underneath it is curve25519-donna-c64 — five unsigned 64-bit
+// limbs at radix 2^51, each product a full 64×64→128 multiply via
+// nurl_umulhi. Every branch is data-independent (the conditional swap is
+// a constant-time mask), so the ladder runs in constant time w.r.t. the
+// scalar.
 //
 // Public surface:
 //   ( x25519 scalar point ) → ( Vec u )   scalar·point  (both 32 bytes)
@@ -66,106 +67,46 @@ $ `stdlib/core/vec.nu`
     ^ v
 }
 
-// ── the field: ten limbs at radix 2^25.5 ──────────────────────────
-// A field element is ten SIGNED limbs, limb i weighing 2^ceil(25.5·i) —
-// alternately 26 and 25 bits. That is the classic 32-bit curve25519
-// layout, and the reason for it is the multiply: sixteen 16-bit limbs
-// (the TweetNaCl shape this module used to carry) need 16×16 = 256
-// products, ten need 10×10 = 100, and a 26×26 → 52-bit product still
-// leaves room to accumulate ten of them, times the 2 and 19 folding
-// factors, inside a signed 64-bit limb — 2^57 at the worst point of a
-// real ladder, measured, against a 2^63 ceiling.
+// ── the field: five limbs at radix 2^51 ───────────────────────────
+// A field element is FIVE unsigned limbs, limb i weighing 2^(51·i). This
+// is curve25519-donna-c64 (Bernstein/Langley): each limb·limb term is a
+// full 64×64→128 product (nurl_umulhi gives the high half NURL's `*`
+// drops), so the multiply is 5×5 = 25 products against the 10×10 = 100
+// the old radix-2^25.5 form ran, and the square 15. The reduction folds
+// 2^255 ≡ 19 straight into the product limbs. Values stay below ~2^54, so
+// each limb sits in an i64 as a plain non-negative bit pattern; the
+// multiply reads them back as u64.
+//
+// M51 = 2^51−1 = 2251799813685247 recurs as the limb mask throughout.
 
 // A fresh field element, all zero.
-@ _gf_zero → ( Vec i ) { ^ ( _zeros_i 10 ) }
+@ _gf_zero → ( Vec i ) { ^ ( _zeros_i 5 ) }
 
-// Copy the ten limbs of `a` into a new gf.
+// Copy the five limbs of `a` into a new gf.
 @ _gf_copy ( Vec i ) a → ( Vec i ) {
     : ( Vec i ) o ( _gf_zero )
     : *i op ( vec_data [i] o )
     : *i ap ( vec_data [i] a )
     : ~ i k 0
-    ~ < k 10 { = . op k . ap k = k + k 1 }
+    ~ < k 5 { = . op k . ap k = k + k 1 }
     ^ o
 }
 
-// dst ← src (ten limbs), in place.
+// dst ← src (five limbs), in place.
 @ _gf_into ( Vec i ) dst ( Vec i ) src → v {
     : *i dp ( vec_data [i] dst )
     : *i sp ( vec_data [i] src )
     : ~ i k 0
-    ~ < k 10 { = . dp k . sp k = k + k 1 }
+    ~ < k 5 { = . dp k . sp k = k + k 1 }
 }
 
-// The constant 121665 as a gf — it fits limb 0 whole.
+// The constant 121665 as a gf — it fits limb 0 whole. The ladder's
+// `( _M a c k121665 )` is a full field multiply by this element, which is
+// exactly a·121665, so keeping it as a gf leaves the ladder untouched.
 @ __gf_121665 → ( Vec i ) {
     : ( Vec i ) o ( _gf_zero )
     ( _vset o 0 121665 )
     ^ o
-}
-
-// Propagate carries so every limb is back within its width. The order is
-// the reference one: the two halves are carried in parallel so each step
-// depends on the step two back, not the one before it, and limb 9 wraps
-// into limb 0 with the ×19 that 2^255 ≡ 19 gives.
-@ __car25519 ( Vec i ) o → v {
-    : *i op ( vec_data [i] o )
-    : ~ i h0 . op 0
-    : ~ i h1 . op 1
-    : ~ i h2 . op 2
-    : ~ i h3 . op 3
-    : ~ i h4 . op 4
-    : ~ i h5 . op 5
-    : ~ i h6 . op 6
-    : ~ i h7 . op 7
-    : ~ i h8 . op 8
-    : ~ i h9 . op 9
-    : ~ i cc >> + h0 33554432 26
-    = h1 + h1 cc
-    = h0 - h0 << cc 26
-    = cc >> + h4 33554432 26
-    = h5 + h5 cc
-    = h4 - h4 << cc 26
-    = cc >> + h1 16777216 25
-    = h2 + h2 cc
-    = h1 - h1 << cc 25
-    = cc >> + h5 16777216 25
-    = h6 + h6 cc
-    = h5 - h5 << cc 25
-    = cc >> + h2 33554432 26
-    = h3 + h3 cc
-    = h2 - h2 << cc 26
-    = cc >> + h6 33554432 26
-    = h7 + h7 cc
-    = h6 - h6 << cc 26
-    = cc >> + h3 16777216 25
-    = h4 + h4 cc
-    = h3 - h3 << cc 25
-    = cc >> + h7 16777216 25
-    = h8 + h8 cc
-    = h7 - h7 << cc 25
-    = cc >> + h4 33554432 26
-    = h5 + h5 cc
-    = h4 - h4 << cc 26
-    = cc >> + h8 33554432 26
-    = h9 + h9 cc
-    = h8 - h8 << cc 26
-    = cc >> + h9 16777216 25
-    = h0 + h0 * 19 cc
-    = h9 - h9 << cc 25
-    = cc >> + h0 33554432 26
-    = h1 + h1 cc
-    = h0 - h0 << cc 26
-    = . op 0 h0
-    = . op 1 h1
-    = . op 2 h2
-    = . op 3 h3
-    = . op 4 h4
-    = . op 5 h5
-    = . op 6 h6
-    = . op 7 h7
-    = . op 8 h8
-    = . op 9 h9
 }
 
 // Constant-time conditional swap of p and q when b = 1.
@@ -174,7 +115,7 @@ $ `stdlib/core/vec.nu`
     : *i pp ( vec_data [i] p )
     : *i qp ( vec_data [i] q )
     : ~ i i 0
-    ~ < i 10 {
+    ~ < i 5 {
         : i t & c ^^ . pp i . qp i
         = . pp i ^^ . pp i t
         = . qp i ^^ . qp i t
@@ -182,246 +123,255 @@ $ `stdlib/core/vec.nu`
     }
 }
 
-// Decode 32 little-endian bytes into a gf (the top bit is dropped, per
-// RFC 7748 §5). Limb i is the 25-or-26 bits starting at 2^ceil(25.5·i);
-// five bytes always cover one limb whatever the bit offset, and a read
-// past the end yields 0.
+// Little-endian 64-bit load of the 8 bytes at n[off..off+7].
+@ _ld64u ( Vec u ) n i off → i {
+    : i lo | | | ( _x_bget n off ) << ( _x_bget n + off 1 ) 8 << ( _x_bget n + off 2 ) 16 << ( _x_bget n + off 3 ) 24
+    : i hi | | | ( _x_bget n + off 4 ) << ( _x_bget n + off 5 ) 8 << ( _x_bget n + off 6 ) 16 << ( _x_bget n + off 7 ) 24
+    ^ | lo << hi 32
+}
+
+// Decode 32 little-endian bytes into a gf (top bit dropped, per RFC 7748
+// §5). Five overlapping 64-bit loads, each shifted to its limb boundary
+// and masked to 51 bits (donna-c64 fexpand).
 @ _unpack25519 ( Vec u ) n → ( Vec i ) {
     : ( Vec i ) o ( _gf_zero )
     : *i op ( vec_data [i] o )
-    = . op 0 & >> | | | | ( _x_bget n 0 ) << ( _x_bget n 1 ) 8 << ( _x_bget n 2 ) 16 << ( _x_bget n 3 ) 24 << ( _x_bget n 4 ) 32 0 67108863
-    = . op 1 & >> | | | | ( _x_bget n 3 ) << ( _x_bget n 4 ) 8 << ( _x_bget n 5 ) 16 << ( _x_bget n 6 ) 24 << ( _x_bget n 7 ) 32 2 33554431
-    = . op 2 & >> | | | | ( _x_bget n 6 ) << ( _x_bget n 7 ) 8 << ( _x_bget n 8 ) 16 << ( _x_bget n 9 ) 24 << ( _x_bget n 10 ) 32 3 67108863
-    = . op 3 & >> | | | | ( _x_bget n 9 ) << ( _x_bget n 10 ) 8 << ( _x_bget n 11 ) 16 << ( _x_bget n 12 ) 24 << ( _x_bget n 13 ) 32 5 33554431
-    = . op 4 & >> | | | | ( _x_bget n 12 ) << ( _x_bget n 13 ) 8 << ( _x_bget n 14 ) 16 << ( _x_bget n 15 ) 24 << ( _x_bget n 16 ) 32 6 67108863
-    = . op 5 & >> | | | | ( _x_bget n 16 ) << ( _x_bget n 17 ) 8 << ( _x_bget n 18 ) 16 << ( _x_bget n 19 ) 24 << ( _x_bget n 20 ) 32 0 33554431
-    = . op 6 & >> | | | | ( _x_bget n 19 ) << ( _x_bget n 20 ) 8 << ( _x_bget n 21 ) 16 << ( _x_bget n 22 ) 24 << ( _x_bget n 23 ) 32 1 67108863
-    = . op 7 & >> | | | | ( _x_bget n 22 ) << ( _x_bget n 23 ) 8 << ( _x_bget n 24 ) 16 << ( _x_bget n 25 ) 24 << ( _x_bget n 26 ) 32 3 33554431
-    = . op 8 & >> | | | | ( _x_bget n 25 ) << ( _x_bget n 26 ) 8 << ( _x_bget n 27 ) 16 << ( _x_bget n 28 ) 24 << ( _x_bget n 29 ) 32 4 67108863
-    = . op 9 & >> | | | | ( _x_bget n 28 ) << ( _x_bget n 29 ) 8 << ( _x_bget n 30 ) 16 << ( _x_bget n 31 ) 24 << ( _x_bget n 32 ) 32 6 33554431
+    = . op 0 # i & # u64 ( _ld64u n 0 ) 2251799813685247
+    = . op 1 # i & >> # u64 ( _ld64u n 6 ) 3 2251799813685247
+    = . op 2 # i & >> # u64 ( _ld64u n 12 ) 6 2251799813685247
+    = . op 3 # i & >> # u64 ( _ld64u n 19 ) 1 2251799813685247
+    = . op 4 # i & >> # u64 ( _ld64u n 24 ) 12 2251799813685247
     ^ o
 }
 
-// Fully reduce `n` mod 2^255−19 and emit 32 little-endian bytes.
-// The leading pass computes q, the number of times p divides the value
-// (0 or 1 for a carried input), by running the carry chain's shifts
-// against p's own limbs; adding 19·q then puts the value in [0, p) and
-// a plain non-negative carry chain makes every limb canonical.
+// Fully reduce `n` mod 2^255−19 and emit 32 little-endian bytes
+// (donna-c64 fcontract). Two fold-carries bring the value below 2^255;
+// adding 19 then (2^255 − 19) resolves the single "is it ≥ p" case in
+// constant time; the final carry has no ×19 fold, so masking limb 4 drops
+// the 2^255 bit and leaves the canonical residue. The five 51-bit limbs
+// are then repacked into four 64-bit words and emitted as bytes.
 @ _pack25519 ( Vec i ) n → ( Vec u ) {
     : *i np ( vec_data [i] n )
-    : ~ i h0 . np 0
-    : ~ i h1 . np 1
-    : ~ i h2 . np 2
-    : ~ i h3 . np 3
-    : ~ i h4 . np 4
-    : ~ i h5 . np 5
-    : ~ i h6 . np 6
-    : ~ i h7 . np 7
-    : ~ i h8 . np 8
-    : ~ i h9 . np 9
-    : ~ i q >> + * 19 h9 16777216 25
-    = q >> + h0 q 26
-    = q >> + h1 q 25
-    = q >> + h2 q 26
-    = q >> + h3 q 25
-    = q >> + h4 q 26
-    = q >> + h5 q 25
-    = q >> + h6 q 26
-    = q >> + h7 q 25
-    = q >> + h8 q 26
-    = q >> + h9 q 25
-    = h0 + h0 * 19 q
-    : ~ i cc 0
-    = cc >> h0 26
-    = h1 + h1 cc
-    = h0 - h0 << cc 26
-    = cc >> h1 25
-    = h2 + h2 cc
-    = h1 - h1 << cc 25
-    = cc >> h2 26
-    = h3 + h3 cc
-    = h2 - h2 << cc 26
-    = cc >> h3 25
-    = h4 + h4 cc
-    = h3 - h3 << cc 25
-    = cc >> h4 26
-    = h5 + h5 cc
-    = h4 - h4 << cc 26
-    = cc >> h5 25
-    = h6 + h6 cc
-    = h5 - h5 << cc 25
-    = cc >> h6 26
-    = h7 + h7 cc
-    = h6 - h6 << cc 26
-    = cc >> h7 25
-    = h8 + h8 cc
-    = h7 - h7 << cc 25
-    = cc >> h8 26
-    = h9 + h9 cc
-    = h8 - h8 << cc 26
-    = cc >> h9 25
-    = h9 - h9 << cc 25
+    : ~ u64 h0 # u64 . np 0
+    : ~ u64 h1 # u64 . np 1
+    : ~ u64 h2 # u64 . np 2
+    : ~ u64 h3 # u64 . np 3
+    : ~ u64 h4 # u64 . np 4
+    : ~ i pass 0
+    ~ < pass 2 {
+        = h1 + h1 >> h0 51 = h0 & h0 2251799813685247
+        = h2 + h2 >> h1 51 = h1 & h1 2251799813685247
+        = h3 + h3 >> h2 51 = h2 & h2 2251799813685247
+        = h4 + h4 >> h3 51 = h3 & h3 2251799813685247
+        = h0 + h0 * 19 >> h4 51 = h4 & h4 2251799813685247
+        = pass + pass 1
+    }
+    = h0 + h0 19
+    = h1 + h1 >> h0 51 = h0 & h0 2251799813685247
+    = h2 + h2 >> h1 51 = h1 & h1 2251799813685247
+    = h3 + h3 >> h2 51 = h2 & h2 2251799813685247
+    = h4 + h4 >> h3 51 = h3 & h3 2251799813685247
+    = h0 + h0 * 19 >> h4 51 = h4 & h4 2251799813685247
+    = h0 + h0 2251799813685229
+    = h1 + h1 2251799813685247
+    = h2 + h2 2251799813685247
+    = h3 + h3 2251799813685247
+    = h4 + h4 2251799813685247
+    = h1 + h1 >> h0 51 = h0 & h0 2251799813685247
+    = h2 + h2 >> h1 51 = h1 & h1 2251799813685247
+    = h3 + h3 >> h2 51 = h2 & h2 2251799813685247
+    = h4 + h4 >> h3 51 = h3 & h3 2251799813685247
+    = h4 & h4 2251799813685247
+    // Repack the five 51-bit limbs into four 64-bit words (u64 shifts wrap
+    // to the correct low bits), then emit each word little-endian.
+    : u64 w0 | h0 << h1 51
+    : u64 w1 | >> h1 13 << h2 38
+    : u64 w2 | >> h2 26 << h3 25
+    : u64 w3 | >> h3 39 << h4 12
     : ( Vec u ) o ( _zeros_u 32 )
-    ( _bset o 0 & >> h0 0 255 )
-    ( _bset o 1 & >> h0 8 255 )
-    ( _bset o 2 & >> h0 16 255 )
-    ( _bset o 3 & + >> h0 24 << h1 2 255 )
-    ( _bset o 4 & >> h1 6 255 )
-    ( _bset o 5 & >> h1 14 255 )
-    ( _bset o 6 & + >> h1 22 << h2 3 255 )
-    ( _bset o 7 & >> h2 5 255 )
-    ( _bset o 8 & >> h2 13 255 )
-    ( _bset o 9 & + >> h2 21 << h3 5 255 )
-    ( _bset o 10 & >> h3 3 255 )
-    ( _bset o 11 & >> h3 11 255 )
-    ( _bset o 12 & + >> h3 19 << h4 6 255 )
-    ( _bset o 13 & >> h4 2 255 )
-    ( _bset o 14 & >> h4 10 255 )
-    ( _bset o 15 & >> h4 18 255 )
-    ( _bset o 16 & >> h5 0 255 )
-    ( _bset o 17 & >> h5 8 255 )
-    ( _bset o 18 & >> h5 16 255 )
-    ( _bset o 19 & + >> h5 24 << h6 1 255 )
-    ( _bset o 20 & >> h6 7 255 )
-    ( _bset o 21 & >> h6 15 255 )
-    ( _bset o 22 & + >> h6 23 << h7 3 255 )
-    ( _bset o 23 & >> h7 5 255 )
-    ( _bset o 24 & >> h7 13 255 )
-    ( _bset o 25 & + >> h7 21 << h8 4 255 )
-    ( _bset o 26 & >> h8 4 255 )
-    ( _bset o 27 & >> h8 12 255 )
-    ( _bset o 28 & + >> h8 20 << h9 6 255 )
-    ( _bset o 29 & >> h9 2 255 )
-    ( _bset o 30 & >> h9 10 255 )
-    ( _bset o 31 & >> h9 18 255 )
+    : ~ i k 0
+    ~ < k 8 {
+        ( _bset o k # i & >> w0 * 8 k 255 )
+        ( _bset o + k 8 # i & >> w1 * 8 k 255 )
+        ( _bset o + k 16 # i & >> w2 * 8 k 255 )
+        ( _bset o + k 24 # i & >> w3 * 8 k 255 )
+        = k + k 1
+    }
     ^ o
 }
 
 // ── field ops (write into dst; aliasing-safe) ─────────────────────
+// _A / _Z read every operand limb before writing dst, so dst may alias a
+// or b. _M / _S read all inputs into locals first, same guarantee.
+
+// o ← a + b (limbwise; limbs grow, the next multiply carries them).
 @ _A ( Vec i ) o ( Vec i ) a ( Vec i ) b → v {
     : *i op ( vec_data [i] o )
     : *i ap ( vec_data [i] a )
     : *i bp ( vec_data [i] b )
     : ~ i i 0
-    ~ < i 10 { = . op i + . ap i . bp i = i + i 1 }
+    ~ < i 5 { = . op i + . ap i . bp i = i + i 1 }
 }
 
+// o ← a − b mod p. Add 2p limbwise before subtracting so no limb goes
+// negative (donna-c64 fdifference_backwards): 2p = [2^52−38, 2^52−2, …].
 @ _Z ( Vec i ) o ( Vec i ) a ( Vec i ) b → v {
     : *i op ( vec_data [i] o )
     : *i ap ( vec_data [i] a )
     : *i bp ( vec_data [i] b )
-    : ~ i i 0
-    ~ < i 10 { = . op i - . ap i . bp i = i + i 1 }
+    = . op 0 - + . ap 0 4503599627370458 . bp 0
+    = . op 1 - + . ap 1 4503599627370494 . bp 1
+    = . op 2 - + . ap 2 4503599627370494 . bp 2
+    = . op 3 - + . ap 3 4503599627370494 . bp 3
+    = . op 4 - + . ap 4 4503599627370494 . bp 4
 }
 
-// o ← a·b mod 2^255−19. Schoolbook over the ten limbs, with the two
-// coefficient shapes folded into the OPERANDS instead of the terms:
-//   * a product of two odd-indexed limbs lands one bit low, because
-//     ceil(25.5j) + ceil(25.5k) = ceil(25.5(j+k)) + 1 when both are odd,
-//     so it is taken against a pre-doubled `f`;
-//   * a product that runs past limb 9 wraps by 2^255 ≡ 19, so it is
-//     taken against a pre-nineteened `g`.
-// Each of the hundred terms is then a single multiply, and the doublings
-// and ×19s are five and ten cheap ops done once. Operands are read into
-// locals before anything is written, so `o` may alias `a` or `b`.
+// o ← a · b mod 2^255−19. Schoolbook over the five limbs; each t[i] is a
+// 128-bit sum of products held as an (lo, hi) pair (nurl_umulhi high
+// half), with the 2^255 ≡ 19 wrap folded into the r1..r4 factors. Then
+// one carry pass reduces the ten 128-bit words back to five 51-bit limbs.
 @ _M ( Vec i ) o ( Vec i ) a ( Vec i ) b → v {
-    : *i fp ( vec_data [i] a )
-    : *i gp ( vec_data [i] b )
-    : i f0 . fp 0
-    : i f1 . fp 1
-    : i f2 . fp 2
-    : i f3 . fp 3
-    : i f4 . fp 4
-    : i f5 . fp 5
-    : i f6 . fp 6
-    : i f7 . fp 7
-    : i f8 . fp 8
-    : i f9 . fp 9
-    : i f1_2 * 2 f1
-    : i f3_2 * 2 f3
-    : i f5_2 * 2 f5
-    : i f7_2 * 2 f7
-    : i f9_2 * 2 f9
-    : i g0 . gp 0
-    : i g1 . gp 1
-    : i g2 . gp 2
-    : i g3 . gp 3
-    : i g4 . gp 4
-    : i g5 . gp 5
-    : i g6 . gp 6
-    : i g7 . gp 7
-    : i g8 . gp 8
-    : i g9 . gp 9
-    : i g0_19 * 19 g0
-    : i g1_19 * 19 g1
-    : i g2_19 * 19 g2
-    : i g3_19 * 19 g3
-    : i g4_19 * 19 g4
-    : i g5_19 * 19 g5
-    : i g6_19 * 19 g6
-    : i g7_19 * 19 g7
-    : i g8_19 * 19 g8
-    : i g9_19 * 19 g9
-    : ~ i h0 + + + + + + + + + * f0 g0 * f1_2 g9_19 * f2 g8_19 * f3_2 g7_19 * f4 g6_19 * f5_2 g5_19 * f6 g4_19 * f7_2 g3_19 * f8 g2_19 * f9_2 g1_19
-    : ~ i h1 + + + + + + + + + * f0 g1 * f1 g0 * f2 g9_19 * f3 g8_19 * f4 g7_19 * f5 g6_19 * f6 g5_19 * f7 g4_19 * f8 g3_19 * f9 g2_19
-    : ~ i h2 + + + + + + + + + * f0 g2 * f1_2 g1 * f2 g0 * f3_2 g9_19 * f4 g8_19 * f5_2 g7_19 * f6 g6_19 * f7_2 g5_19 * f8 g4_19 * f9_2 g3_19
-    : ~ i h3 + + + + + + + + + * f0 g3 * f1 g2 * f2 g1 * f3 g0 * f4 g9_19 * f5 g8_19 * f6 g7_19 * f7 g6_19 * f8 g5_19 * f9 g4_19
-    : ~ i h4 + + + + + + + + + * f0 g4 * f1_2 g3 * f2 g2 * f3_2 g1 * f4 g0 * f5_2 g9_19 * f6 g8_19 * f7_2 g7_19 * f8 g6_19 * f9_2 g5_19
-    : ~ i h5 + + + + + + + + + * f0 g5 * f1 g4 * f2 g3 * f3 g2 * f4 g1 * f5 g0 * f6 g9_19 * f7 g8_19 * f8 g7_19 * f9 g6_19
-    : ~ i h6 + + + + + + + + + * f0 g6 * f1_2 g5 * f2 g4 * f3_2 g3 * f4 g2 * f5_2 g1 * f6 g0 * f7_2 g9_19 * f8 g8_19 * f9_2 g7_19
-    : ~ i h7 + + + + + + + + + * f0 g7 * f1 g6 * f2 g5 * f3 g4 * f4 g3 * f5 g2 * f6 g1 * f7 g0 * f8 g9_19 * f9 g8_19
-    : ~ i h8 + + + + + + + + + * f0 g8 * f1_2 g7 * f2 g6 * f3_2 g5 * f4 g4 * f5_2 g3 * f6 g2 * f7_2 g1 * f8 g0 * f9_2 g9_19
-    : ~ i h9 + + + + + + + + + * f0 g9 * f1 g8 * f2 g7 * f3 g6 * f4 g5 * f5 g4 * f6 g3 * f7 g2 * f8 g1 * f9 g0
-    : ~ i cc >> + h0 33554432 26
-    = h1 + h1 cc
-    = h0 - h0 << cc 26
-    = cc >> + h4 33554432 26
-    = h5 + h5 cc
-    = h4 - h4 << cc 26
-    = cc >> + h1 16777216 25
-    = h2 + h2 cc
-    = h1 - h1 << cc 25
-    = cc >> + h5 16777216 25
-    = h6 + h6 cc
-    = h5 - h5 << cc 25
-    = cc >> + h2 33554432 26
-    = h3 + h3 cc
-    = h2 - h2 << cc 26
-    = cc >> + h6 33554432 26
-    = h7 + h7 cc
-    = h6 - h6 << cc 26
-    = cc >> + h3 16777216 25
-    = h4 + h4 cc
-    = h3 - h3 << cc 25
-    = cc >> + h7 16777216 25
-    = h8 + h8 cc
-    = h7 - h7 << cc 25
-    = cc >> + h4 33554432 26
-    = h5 + h5 cc
-    = h4 - h4 << cc 26
-    = cc >> + h8 33554432 26
-    = h9 + h9 cc
-    = h8 - h8 << cc 26
-    = cc >> + h9 16777216 25
-    = h0 + h0 * 19 cc
-    = h9 - h9 << cc 25
-    = cc >> + h0 33554432 26
-    = h1 + h1 cc
-    = h0 - h0 << cc 26
-    : *i op ( vec_data [i] o )
-    = . op 0 h0
-    = . op 1 h1
-    = . op 2 h2
-    = . op 3 h3
-    = . op 4 h4
-    = . op 5 h5
-    = . op 6 h6
-    = . op 7 h7
-    = . op 8 h8
-    = . op 9 h9
+    : *i ap ( vec_data [i] a )
+    : *i bp ( vec_data [i] b )
+    : u64 r0 # u64 . ap 0
+    : u64 r1 # u64 . ap 1
+    : u64 r2 # u64 . ap 2
+    : u64 r3 # u64 . ap 3
+    : u64 r4 # u64 . ap 4
+    : u64 s0 # u64 . bp 0
+    : u64 s1 # u64 . bp 1
+    : u64 s2 # u64 . bp 2
+    : u64 s3 # u64 . bp 3
+    : u64 s4 # u64 . bp 4
+    : u64 f1 * r1 19
+    : u64 f2 * r2 19
+    : u64 f3 * r3 19
+    : u64 f4 * r4 19
+    : ~ u64 pl 0
+    : ~ u64 ph 0
+    // t0 = r0·s0 + f4·s1 + f1·s4 + f2·s3 + f3·s2
+    : ~ u64 l0 * r0 s0
+    : ~ u64 h0 ( nurl_umulhi r0 s0 )
+    = pl * f4 s1 = ph ( nurl_umulhi f4 s1 ) = l0 + l0 pl = h0 + + h0 ph ? < l0 pl 1 0
+    = pl * f1 s4 = ph ( nurl_umulhi f1 s4 ) = l0 + l0 pl = h0 + + h0 ph ? < l0 pl 1 0
+    = pl * f2 s3 = ph ( nurl_umulhi f2 s3 ) = l0 + l0 pl = h0 + + h0 ph ? < l0 pl 1 0
+    = pl * f3 s2 = ph ( nurl_umulhi f3 s2 ) = l0 + l0 pl = h0 + + h0 ph ? < l0 pl 1 0
+    // t1 = r0·s1 + r1·s0 + f4·s2 + f2·s4 + f3·s3
+    : ~ u64 l1 * r0 s1
+    : ~ u64 h1 ( nurl_umulhi r0 s1 )
+    = pl * r1 s0 = ph ( nurl_umulhi r1 s0 ) = l1 + l1 pl = h1 + + h1 ph ? < l1 pl 1 0
+    = pl * f4 s2 = ph ( nurl_umulhi f4 s2 ) = l1 + l1 pl = h1 + + h1 ph ? < l1 pl 1 0
+    = pl * f2 s4 = ph ( nurl_umulhi f2 s4 ) = l1 + l1 pl = h1 + + h1 ph ? < l1 pl 1 0
+    = pl * f3 s3 = ph ( nurl_umulhi f3 s3 ) = l1 + l1 pl = h1 + + h1 ph ? < l1 pl 1 0
+    // t2 = r0·s2 + r1·s1 + r2·s0 + f4·s3 + f3·s4
+    : ~ u64 l2 * r0 s2
+    : ~ u64 h2 ( nurl_umulhi r0 s2 )
+    = pl * r1 s1 = ph ( nurl_umulhi r1 s1 ) = l2 + l2 pl = h2 + + h2 ph ? < l2 pl 1 0
+    = pl * r2 s0 = ph ( nurl_umulhi r2 s0 ) = l2 + l2 pl = h2 + + h2 ph ? < l2 pl 1 0
+    = pl * f4 s3 = ph ( nurl_umulhi f4 s3 ) = l2 + l2 pl = h2 + + h2 ph ? < l2 pl 1 0
+    = pl * f3 s4 = ph ( nurl_umulhi f3 s4 ) = l2 + l2 pl = h2 + + h2 ph ? < l2 pl 1 0
+    // t3 = r0·s3 + r1·s2 + r2·s1 + r3·s0 + f4·s4
+    : ~ u64 l3 * r0 s3
+    : ~ u64 h3 ( nurl_umulhi r0 s3 )
+    = pl * r1 s2 = ph ( nurl_umulhi r1 s2 ) = l3 + l3 pl = h3 + + h3 ph ? < l3 pl 1 0
+    = pl * r2 s1 = ph ( nurl_umulhi r2 s1 ) = l3 + l3 pl = h3 + + h3 ph ? < l3 pl 1 0
+    = pl * r3 s0 = ph ( nurl_umulhi r3 s0 ) = l3 + l3 pl = h3 + + h3 ph ? < l3 pl 1 0
+    = pl * f4 s4 = ph ( nurl_umulhi f4 s4 ) = l3 + l3 pl = h3 + + h3 ph ? < l3 pl 1 0
+    // t4 = r0·s4 + r1·s3 + r2·s2 + r3·s1 + r4·s0
+    : ~ u64 l4 * r0 s4
+    : ~ u64 h4 ( nurl_umulhi r0 s4 )
+    = pl * r1 s3 = ph ( nurl_umulhi r1 s3 ) = l4 + l4 pl = h4 + + h4 ph ? < l4 pl 1 0
+    = pl * r2 s2 = ph ( nurl_umulhi r2 s2 ) = l4 + l4 pl = h4 + + h4 ph ? < l4 pl 1 0
+    = pl * r3 s1 = ph ( nurl_umulhi r3 s1 ) = l4 + l4 pl = h4 + + h4 ph ? < l4 pl 1 0
+    = pl * r4 s0 = ph ( nurl_umulhi r4 s0 ) = l4 + l4 pl = h4 + + h4 ph ? < l4 pl 1 0
+    ( __mul_carry_out o l0 h0 l1 h1 l2 h2 l3 h3 l4 h4 )
 }
 
-@ _S ( Vec i ) o ( Vec i ) a → v { ( _M o a a ) }
+// o ← a² mod 2^255−19. donna-c64 fsquare: the cross terms are doubled
+// once via d0..d4 instead of appearing twice, so 15 products, not 25.
+@ _S ( Vec i ) o ( Vec i ) a → v {
+    : *i ap ( vec_data [i] a )
+    : u64 r0 # u64 . ap 0
+    : u64 r1 # u64 . ap 1
+    : u64 r2 # u64 . ap 2
+    : u64 r3 # u64 . ap 3
+    : u64 r4 # u64 . ap 4
+    : u64 d0 * r0 2
+    : u64 d1 * r1 2
+    : u64 d2 * r2 38
+    : u64 d419 * r4 19
+    : u64 d4 * d419 2
+    : u64 r319 * r3 19
+    : ~ u64 pl 0
+    : ~ u64 ph 0
+    // t0 = r0·r0 + d4·r1 + d2·r3
+    : ~ u64 l0 * r0 r0
+    : ~ u64 h0 ( nurl_umulhi r0 r0 )
+    = pl * d4 r1 = ph ( nurl_umulhi d4 r1 ) = l0 + l0 pl = h0 + + h0 ph ? < l0 pl 1 0
+    = pl * d2 r3 = ph ( nurl_umulhi d2 r3 ) = l0 + l0 pl = h0 + + h0 ph ? < l0 pl 1 0
+    // t1 = d0·r1 + d4·r2 + r3·(r3·19)
+    : ~ u64 l1 * d0 r1
+    : ~ u64 h1 ( nurl_umulhi d0 r1 )
+    = pl * d4 r2 = ph ( nurl_umulhi d4 r2 ) = l1 + l1 pl = h1 + + h1 ph ? < l1 pl 1 0
+    = pl * r3 r319 = ph ( nurl_umulhi r3 r319 ) = l1 + l1 pl = h1 + + h1 ph ? < l1 pl 1 0
+    // t2 = d0·r2 + r1·r1 + d4·r3
+    : ~ u64 l2 * d0 r2
+    : ~ u64 h2 ( nurl_umulhi d0 r2 )
+    = pl * r1 r1 = ph ( nurl_umulhi r1 r1 ) = l2 + l2 pl = h2 + + h2 ph ? < l2 pl 1 0
+    = pl * d4 r3 = ph ( nurl_umulhi d4 r3 ) = l2 + l2 pl = h2 + + h2 ph ? < l2 pl 1 0
+    // t3 = d0·r3 + d1·r2 + r4·d419
+    : ~ u64 l3 * d0 r3
+    : ~ u64 h3 ( nurl_umulhi d0 r3 )
+    = pl * d1 r2 = ph ( nurl_umulhi d1 r2 ) = l3 + l3 pl = h3 + + h3 ph ? < l3 pl 1 0
+    = pl * r4 d419 = ph ( nurl_umulhi r4 d419 ) = l3 + l3 pl = h3 + + h3 ph ? < l3 pl 1 0
+    // t4 = d0·r4 + d1·r3 + r2·r2
+    : ~ u64 l4 * d0 r4
+    : ~ u64 h4 ( nurl_umulhi d0 r4 )
+    = pl * d1 r3 = ph ( nurl_umulhi d1 r3 ) = l4 + l4 pl = h4 + + h4 ph ? < l4 pl 1 0
+    = pl * r2 r2 = ph ( nurl_umulhi r2 r2 ) = l4 + l4 pl = h4 + + h4 ph ? < l4 pl 1 0
+    ( __mul_carry_out o l0 h0 l1 h1 l2 h2 l3 h3 l4 h4 )
+}
+
+// Shared reduction tail: five 128-bit accumulators (lo,hi) → five 51-bit
+// limbs, carrying c = t[i] >> 51 up the chain and folding the top ×19.
+@ __mul_carry_out ( Vec i ) o u64 pl0 u64 ph0 u64 pl1 u64 ph1 u64 pl2 u64 ph2 u64 pl3 u64 ph3 u64 pl4 u64 ph4 → v {
+    : ~ u64 l0 pl0
+    : ~ u64 h0 ph0
+    : ~ u64 l1 pl1
+    : ~ u64 h1 ph1
+    : ~ u64 l2 pl2
+    : ~ u64 h2 ph2
+    : ~ u64 l3 pl3
+    : ~ u64 h3 ph3
+    : ~ u64 l4 pl4
+    : ~ u64 h4 ph4
+    : ~ u64 c 0
+    : ~ u64 g0 & l0 2251799813685247
+    = c | << h0 13 >> l0 51
+    = l1 + l1 c = h1 + h1 ? < l1 c 1 0
+    : ~ u64 g1 & l1 2251799813685247
+    = c | << h1 13 >> l1 51
+    = l2 + l2 c = h2 + h2 ? < l2 c 1 0
+    : ~ u64 g2 & l2 2251799813685247
+    = c | << h2 13 >> l2 51
+    = l3 + l3 c = h3 + h3 ? < l3 c 1 0
+    : ~ u64 g3 & l3 2251799813685247
+    = c | << h3 13 >> l3 51
+    = l4 + l4 c = h4 + h4 ? < l4 c 1 0
+    : ~ u64 g4 & l4 2251799813685247
+    = c | << h4 13 >> l4 51
+    = g0 + g0 * c 19
+    = c >> g0 51 = g0 & g0 2251799813685247
+    = g1 + g1 c
+    = c >> g1 51 = g1 & g1 2251799813685247
+    = g2 + g2 c
+    : *i op ( vec_data [i] o )
+    = . op 0 # i g0
+    = . op 1 # i g1
+    = . op 2 # i g2
+    = . op 3 # i g3
+    = . op 4 # i g4
+}
 
 // io ← io^(p-2) = io^-1  (Fermat inversion, 254 squarings).
 @ _inv25519 ( Vec i ) io → v {
