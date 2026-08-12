@@ -38,6 +38,8 @@ SETTLE_MS="${SETTLE_MS:-500}"           # post-start spin-up before bench
 WARMUP_SEC="${WARMUP_SEC:-2}"            # short pre-bench warmup load
 KILL_WAIT="${KILL_WAIT:-1}"             # post-bench grace before SIGKILL
 ITERS="${ITERS:-3}"                      # measurement runs per cell, median wins
+HS_REQS="${HS_REQS:-20000}"             # connections for the setup-rate cell
+HS_CONC="${HS_CONC:-20}"                # its concurrency (kept low to bound TIME_WAIT)
 MD_OUT="${MD_OUT:-$BENCH/HTTP_RESULTS.md}"
 
 while (( $# > 0 )); do
@@ -131,18 +133,39 @@ stop_pid() {
     wait "$pid" 2>/dev/null || true
 }
 
-# Run oha against <scheme>://127.0.0.1:<port>/ for $DURATION seconds at the
-# given concurrency, then echo `<rps> <p50_ms> <p99_ms>`. `scheme` is http
-# or https; an https run adds `--insecure` so oha accepts the self-signed
-# bench cert. The JSON report is parsed via Python (already a build-dep of
-# bench/gen_data.py, so a sibling reliance).
+# Parse an oha `-j` report into `<rps> <p50_ms> <p99_ms> <mean_ms>`, or
+# `FAIL FAIL FAIL FAIL` on a failed run. The mean latency is what the
+# effective-concurrency check (Little's law, N ≈ rps × mean) uses to flag
+# a closed-loop cell whose latency reflects fewer connections than were
+# offered — see gen_http_results.py.
+_parse_oha() {
+    python3 - "$1" <<'PY'
+import json, sys
+try:
+    with open(sys.argv[1]) as f:
+        r = json.load(f)
+except Exception:
+    print("FAIL FAIL FAIL FAIL"); raise SystemExit
+summary = r.get("summary", {})
+if (summary.get("successRate", 0.0) or 0.0) < 0.99:
+    print("FAIL FAIL FAIL FAIL"); raise SystemExit
+rps = summary.get("requestsPerSec", 0.0) or 0.0
+mean = summary.get("average", 0.0) or 0.0
+lat = r.get("latencyPercentiles", {})
+def ms(v):
+    return (v * 1000.0) if isinstance(v, (int, float)) else 0.0
+print(f"{rps:.0f} {ms(lat.get('p50')):.2f} {ms(lat.get('p99')):.2f} {mean*1000.0:.4f}")
+PY
+}
+
+# Closed-loop throughput/latency cell. Runs oha against
+# <scheme>://127.0.0.1:<port>/ for $DURATION seconds at the given
+# concurrency, keep-alive on, and echoes `<rps> <p50> <p99> <mean_ms>`.
+# `scheme` https adds `--insecure` so oha accepts the self-signed cert.
 run_oha() {
-    local scheme="$1"
-    local port="$2"
-    local concurrency="$3"
+    local scheme="$1" port="$2" concurrency="$3"
     local report="$BENCH/_build/oha-$scheme-$port-c$concurrency.json"
-    local insecure=()
-    [[ "$scheme" == https ]] && insecure=(--insecure)
+    local insecure=(); [[ "$scheme" == https ]] && insecure=(--insecure)
     mkdir -p "$BENCH/_build"
 
     # Warmup: hit it briefly so JIT / OS-level caches settle (matters
@@ -151,33 +174,36 @@ run_oha() {
     "$OHA" --no-tui "${insecure[@]}" -n 1000 -c "$concurrency" \
         "$scheme://127.0.0.1:$port/" >/dev/null 2>&1 || true
 
-    # Actual measurement. `-j` writes the report JSON to stdout, so
-    # capture stdout into the file; stderr is muted (oha prints a
-    # progress line that would otherwise contaminate the JSON).
     "$OHA" --no-tui "${insecure[@]}" -j -z "${DURATION}s" -c "$concurrency" \
         "$scheme://127.0.0.1:$port/" > "$report" 2>/dev/null \
-        || { echo "FAIL FAIL FAIL"; return; }
+        || { echo "FAIL FAIL FAIL FAIL"; return; }
+    _parse_oha "$report"
+}
 
-    python3 - "$report" <<'PY'
-import json, sys
-try:
-    with open(sys.argv[1]) as f:
-        r = json.load(f)
-except Exception:
-    print("FAIL FAIL FAIL")
-    raise SystemExit
-summary = r.get("summary", {})
-if (summary.get("successRate", 0.0) or 0.0) < 0.99:
-    print("FAIL FAIL FAIL")
-    raise SystemExit
-rps = summary.get("requestsPerSec", 0.0) or 0.0
-lat = r.get("latencyPercentiles", {})
-def ms(v):
-    return (v * 1000.0) if isinstance(v, (int, float)) else 0.0
-p50 = ms(lat.get("p50"))
-p99 = ms(lat.get("p99"))
-print(f"{rps:.0f} {p50:.2f} {p99:.2f}")
-PY
+# Connection-setup-rate cell. `--disable-keepalive` opens a fresh
+# connection per request, so oha's rps here IS connections/second — and
+# for an https run, TLS handshakes/second: the pure-NURL P-256 ECDHE +
+# ECDSA-verify cost against rustls, the one number a short-lived-
+# connection edge deployment actually pays and that the keep-alive tables
+# amortise away. Bounded by a fixed request count (not duration) so the
+# fast plaintext case cannot flood the loopback with TIME_WAIT sockets.
+# Echoes `<conn_per_s>` or `FAIL`.
+run_oha_conn() {
+    local scheme="$1" port="$2"
+    local report="$BENCH/_build/ohaconn-$scheme-$port.json"
+    local insecure=(); [[ "$scheme" == https ]] && insecure=(--insecure)
+    "$OHA" --no-tui "${insecure[@]}" --disable-keepalive -j -n "$HS_REQS" -c "$HS_CONC" \
+        "$scheme://127.0.0.1:$port/" > "$report" 2>/dev/null \
+        || { echo "FAIL"; return; }
+    _parse_oha "$report" | awk '{print $1}'
+}
+
+median3() {   # median of the numbers on argv, printed with 2 decimals
+    python3 -c "
+import sys
+vals=sorted(float(x) for x in sys.argv[1:])
+m=vals[len(vals)//2] if len(vals)%2 else (vals[len(vals)//2-1]+vals[len(vals)//2])/2
+print(f'{m:.2f}')" "$@"
 }
 
 median3() {   # median of the numbers on argv, printed with 2 decimals
@@ -245,7 +271,9 @@ run_server() {
     "${cmd[@]}" > "$BENCH/_build/${name}-${scheme}.stdout.log" 2> "$BENCH/_build/${name}-${scheme}.stderr.log" &
     local pid=$!
     if ! wait_listen "$port"; then
-        for c in $CONCURRENCIES; do echo "$scheme $name $c FAIL FAIL FAIL"; done
+        local c
+        for c in $CONCURRENCIES; do echo "ROW $scheme $name $c FAIL FAIL FAIL FAIL"; done
+        echo "HS $scheme $name FAIL"
         stop_pid "$pid"
         return
     fi
@@ -255,19 +283,19 @@ run_server() {
 
     for c in $CONCURRENCIES; do
         # Run ITERS measurements at each cell, pick the median of rps.
-        local rps_list=() p50_list=() p99_list=() i
+        local rps_list=() p50_list=() p99_list=() mean_list=() i
         for i in $(seq 1 "$ITERS"); do
-            local r rps p50 p99
+            local r rps p50 p99 mean
             r=$(run_oha "$scheme" "$port" "$c")
-            read -r rps p50 p99 <<<"$r"
+            read -r rps p50 p99 mean <<<"$r"
             if [[ "$rps" == "FAIL" ]]; then
-                echo "$scheme $name $c FAIL FAIL FAIL"
+                echo "ROW $scheme $name $c FAIL FAIL FAIL FAIL"
                 rps_list=(); break
             fi
-            rps_list+=("$rps"); p50_list+=("$p50"); p99_list+=("$p99")
+            rps_list+=("$rps"); p50_list+=("$p50"); p99_list+=("$p99"); mean_list+=("$mean")
         done
         (( ${#rps_list[@]} == 0 )) && continue
-        local rps_med p50_med p99_med
+        local rps_med p50_med p99_med mean_med
         rps_med=$(python3 -c "
 import sys
 vals=sorted(float(x) for x in sys.argv[1:])
@@ -275,20 +303,32 @@ m=vals[len(vals)//2] if len(vals)%2 else (vals[len(vals)//2-1]+vals[len(vals)//2
 print(int(round(m)))" "${rps_list[@]}")
         p50_med=$(median3 "${p50_list[@]}")
         p99_med=$(median3 "${p99_list[@]}")
-        echo "$scheme $name $c $rps_med $p50_med $p99_med"
+        mean_med=$(median3 "${mean_list[@]}")
+        echo "ROW $scheme $name $c $rps_med $p50_med $p99_med $mean_med"
     done
+
+    # Connection-setup rate (one bounded run, this server still up): plain
+    # conn/s for http, TLS handshakes/s for https.
+    local conn
+    conn=$(run_oha_conn "$scheme" "$port")
+    echo "HS $scheme $name $conn"
 
     stop_pid "$pid"
 }
 
 # ── run every (server × scheme) combination ─────────────────────────
-# Plaintext ports 1808x; TLS ports 1844x. Collect flat result rows:
-#   "<scheme> <name> <concurrency> <rps> <p50> <p99>"
+# Plaintext ports 1808x; TLS ports 1844x. run_server emits its own
+# tokenised lines (`ROW scheme name c rps p50 p99 mean` and
+# `HS scheme name conn_per_s`), collected verbatim.
 echo "# duration=${DURATION}s iters=${ITERS} concurrencies=\"$CONCURRENCIES\"" >&2
 
 results=()
 collect() { while read -r line; do results+=("$line"); done; }
-na_rows() { local scheme="$1" name="$2" c; for c in $CONCURRENCIES; do results+=("$scheme $name $c n/a n/a n/a"); done; }
+na_rows() {
+    local scheme="$1" name="$2" c
+    for c in $CONCURRENCIES; do results+=("ROW $scheme $name $c n/a n/a n/a n/a"); done
+    results+=("HS $scheme $name n/a")
+}
 
 nurl_ready=0; prep_nurl && nurl_ready=1
 rust_ready=0; prep_rust && rust_ready=1
@@ -329,8 +369,11 @@ fi
     printf 'ENV\tduration\t%s\n' "$DURATION"
     printf 'ENV\titers\t%s\n' "$ITERS"
     printf 'ENV\tconcurrencies\t%s\n' "$CONCURRENCIES"
+    printf 'ENV\ths_reqs\t%s\n' "$HS_REQS"
+    printf 'ENV\ths_conc\t%s\n' "$HS_CONC"
+    # run_server / na_rows lines already carry their ROW / HS tag.
     for row in "${results[@]}"; do
-        printf 'ROW\t%s\n' "$row"
+        printf '%s\n' "$row"
     done
 } | python3 "$BENCH/gen_http_results.py" > "$MD_OUT"
 
