@@ -193,6 +193,18 @@ jobs:
         # published. No in-repo test can catch it; this can.
         run: ./tools/check_package_imports.sh
 
+      - name: every tracked path can be checked out on Windows
+        # CON, PRN, AUX, NUL, COM1-9 and LPT1-9 are DOS device names at
+        # every directory, in any case, with any extension — so
+        # `boot/con.c`, the obvious name for a console, is a path git
+        # REFUSES to check out on Windows. The Windows job then dies at
+        # its checkout step, before the change has run, with a log that
+        # says `invalid path` and nothing about why. This gate reports
+        # it here, on Linux, naming the file and the rule. Same class:
+        # reserved characters, trailing dots or spaces, and paths that
+        # differ only in case.
+        run: ./tools/check_windows_paths.sh
+
       - name: nurlfmt --check (canonical-form gate)
         # Every first-party .nu file must be in canonical nurlfmt
         # form. build.sh above already produced build/nurlfmt, so
@@ -256,10 +268,17 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Install build deps
+        # The grub/xorriso/mtools half is what lets `baremetal_gate`
+        # package a hybrid BIOS+UEFI disk and boot it, rather than
+        # checking the Multiboot2 header and skipping the rest. Both
+        # module directories are named because a missing one produces a
+        # single-firmware image, which is a bug that only shows up on
+        # hardware the CI runner is not.
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
-            clang binutils qemu-system-x86 qemu-system-arm qemu-system-misc curl
+            clang binutils qemu-system-x86 qemu-system-arm qemu-system-misc curl \
+            grub-common grub-pc-bin grub-efi-amd64-bin xorriso mtools
 
       - name: Build the compiler
         run: ./build.sh --no-tests

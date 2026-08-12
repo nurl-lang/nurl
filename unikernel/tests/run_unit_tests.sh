@@ -165,7 +165,15 @@ step build_tool_gate "$ROOT/unikernel/tests/build_tool_gate.sh"
 #    the machine has KVM; says so and skips when it does not.
 step hypervisor_gate "$ROOT/unikernel/tests/hypervisor_gate.sh"
 
-# 8. the bare mutex/cond fit what the NURL side allocates for them.
+# 8. …and it is not a hypervisor image either: the Multiboot2 header a
+#    bootloader dispatches on when the machine is a real PC. Structural
+#    always; packages a hybrid BIOS+UEFI disk and boots it under SeaBIOS
+#    where GRUB's build tools and QEMU exist. Every failure this catches
+#    presents identically on the target — as a machine that sits there —
+#    which is why it is checked here and not by looking at a screen.
+step baremetal_gate "$ROOT/unikernel/tests/baremetal_gate.sh"
+
+# 9. the bare mutex/cond fit what the NURL side allocates for them.
 #    Hosted on purpose: the comparison needs the real <pthread.h>, which
 #    is precisely what the freestanding build does not have.
 $CC -O2 "$ROOT/unikernel/tests/pthread_layout.c" "$OUT/runtime_bare.o" \

@@ -399,6 +399,105 @@ that rather than implying coverage it does not have. QEMU boots the
 flat Image here, which is what proves the header's branch and its load
 address agree.
 
+## On real hardware, off a USB stick
+
+None of the above helps on a PC. A PVH note is a thing hypervisors
+read; a BIOS reads a 512-byte boot sector and a UEFI firmware reads a
+PE executable off a FAT partition, and neither has ever heard of it. So
+`boot/boot.S` carries a **Multiboot2 header** beside the PVH note and
+has a second entry point, `_mb2_start`, for the loader that reads it.
+
+The two entries meet six instructions later. PVH and Multiboot2 hand
+over in the same machine state — 32-bit protected mode, paging off,
+interrupts off, a flat GDT, the handover block in `%ebx` — so
+everything from the page tables onwards is shared. What differs is the
+shape of that block, and `boot/multiboot2.c` converts one into the
+other: it walks the tag stream once and writes an `hvm_start_info`
+with a flat memory-map array behind it, so `kmain` and `mem_init`
+never learn there was more than one way in. The memory records agree
+field for field and both use E820's numbering, which is what makes the
+conversion a copy rather than a translation.
+
+    unikernel/build_unikernel.sh        prog.nu -o prog.elf
+    unikernel/build_bootable_image.sh   prog.elf -o prog.img
+    sudo dd if=prog.img of=/dev/sdX bs=4M conv=fsync status=progress
+
+`prog.img` is a hybrid: an El Torito ISO that is also a valid MBR/GPT
+disk with a FAT EFI system partition inside it. One `dd` serves both
+firmwares. The kernel and the GRUB config are embedded in each boot
+image's **memdisk** rather than read off the filesystem, which takes
+iso9660, FAT and the partition-table drivers out of the boot path
+entirely — by the time GRUB runs `multiboot2`, everything it needs is
+already in memory.
+
+`grub-mkrescue` is the obvious tool and is not used. Its `-d` takes one
+platform directory and derives nothing, so pointed at a module tree
+outside `/usr/lib/grub` it builds for one firmware and silently omits
+the other. That would make "the UEFI half is missing" the normal
+consequence of not having root, and the symptom is a machine that sits
+there, on someone else's desk. The two boot images are built separately
+with `grub-mkstandalone` and assembled with `xorriso` instead, both of
+which take an explicit module directory — so the build runs
+unprivileged, in CI and in a container.
+
+### What a PC has that a microvm does not, and the reverse
+
+**No serial port.** A laptop has no 8250 at `0x3F8`, so a guest that
+prints only there is indistinguishable from one that never started.
+`boot/console.c` draws the same bytes on the screen: EGA text at `0xB8000`
+under a BIOS, and a linear framebuffer with the 8x16 font in
+`boot/font8x16.c` under UEFI, which has no text memory at all. Only
+white on black is drawn, which is why no pixel-format masks are needed
+— white is all bits set in every RGB layout there is. The console is
+armed **only** on a Multiboot2 boot, so the hypervisor path keeps
+exactly the output its 20/20 gate is written against.
+
+That console is also why the Multiboot2 header requests a framebuffer
+and why `build_bootable_image.sh` writes `insmod all_video` into its
+GRUB config. Having the module in the image is not the same as having
+loaded it, nothing loads a video driver on demand, and without that one
+line a UEFI boot reports `no suitable video mode found`, hands over no
+framebuffer, and runs perfectly with a blank screen.
+
+**Nobody states the TSC frequency.** There is no hypervisor to ask, and
+on an AMD part neither CPUID leaf 0x15 nor 0x16 exists — so a machine
+booted off iron would panic the first time anything asked what time it
+was. A PC does have a 1.193182 MHz oscillator that has not changed
+since 1981, so `pit_calibrate_khz` counts TSC ticks against PIT channel
+2 for 10 ms. Measured, not guessed, which is the only thing this
+directory will do with a clock; `nurl_clock_source` reports which of
+the five sources answered, because a clock is exactly as trustworthy as
+whatever told you its rate.
+
+**The bootloader re-quotes the command line.** QEMU passes `-append`
+through untouched, so the guest sees `args="alpha beta"`. GRUB's parser
+consumes the quotes while tokenising and puts them back around the
+whole token, so the guest sees `"args=alpha beta"` — the same
+information, one quote earlier. Matching the literal six characters
+`args="` finds the first spelling and silently misses the second, which
+is a program that gets no arguments and no explanation. `build_argv`
+now finds the key and lets the quoting decide where the value ends.
+
+`demos/baremetal.nu` is the program to put on the stick first. It
+prints what the machine says about itself — console, CPU brand, RAM,
+clock and its provenance, command line, argv — runs four checks that
+verify rather than print (a vector past its first allocation, 400 bytes
+of string, `sqrt(2)` squared, a fold), and then beats once a second for
+ever. It never exits: on iron there is nothing to exit to, and
+returning from `main` switches the computer off in front of whoever
+just plugged the stick in.
+
+`unikernel/tests/baremetal_gate.sh` is the check, in three levels that
+each degrade to a loud skip. HEADER runs anywhere: the magic is 8-byte
+aligned within the first 32 KiB of the **file** (which is what a loader
+scans), the checksum sums to zero, the entry tag points at
+`_mb2_start` and not at `_pvh_start`, the framebuffer tag is there.
+IMAGE packages the hybrid disk and confirms El Torito records for both
+firmwares. BOOT runs it under SeaBIOS and waits for the guest's own
+exit line. Three mutations — the entry tag moved to `_pvh_start`, the
+framebuffer tag deleted, the checksum broken — are all caught, and two
+of them break a real boot as well.
+
 ## Three architectures, and what a port actually costs
 
 | | x86_64 | AArch64 | RV64 |
