@@ -9,6 +9,6 @@
 $ `stdlib/core/io.nu`
 
 @ main → i {
-    ( nurl_print `nurlpkg-smoketest 0.1.0 — registry round-trip OK\n` )
+    ( nurl_print `nurlpkg-smoketest 0.1.1 — registry round-trip OK\n` )
     ^ 0
 }
