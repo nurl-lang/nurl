@@ -75,6 +75,7 @@ used as variable, parameter, field, or function names:
 | `TT_TYPE_KW` | `i8 i16 i32 i64` | signed fixed-width integers |
 | `TT_TYPE_KW` | `u16 u32 u64` | unsigned fixed-width integers (v1.8) |
 | `TT_TYPE_KW` | `f32` | 32-bit float (v1.8) |
+| `TT_TYPE_KW` | `v128` | 128-bit SIMD vector (v2.5, §4.1b) |
 | `TT_BOOL` | `T` `F` | boolean literals |
 | `TT_SIZEOF` | `Z` | sizeof operator |
 | `TT_PUB` | `pub` | visibility prefix (v2.0) |
@@ -296,6 +297,7 @@ explicit cast (`#`).
 | `i8` `i16` `i32` `i64` | `i8` `i16` `i32` `i64` | signed sized integers |
 | `u16` `u32` `u64` | `i16` `i32` `i64` | unsigned sized integers (v1.8) |
 | `f32` | `float` | 32-bit float (v1.8) |
+| `v128` | `<4 x i32>` | 128-bit SIMD vector (v2.5) — see §4.1b |
 
 The unsigned variants share LLVM types with their signed counterparts;
 the compiler tracks signedness in a side-channel and selects `udiv` /
@@ -368,6 +370,97 @@ the comparison to write instead — none of them has a truth value.
 Likewise `# b` of a float is rejected (an `i1` holds
 only 0 or 1, so the conversion is poison for any other value — write
 the comparison).
+
+### 4.1b `v128` — the SIMD lane type (v2.5)
+
+`v128` is one 128-bit vector register. It behaves like any other
+by-value scalar type — a `:` binding holds one, a parameter passes one
+in a vector register, `^` returns one, and it owns nothing, so auto-drop
+never touches it — but it has no operators. Every operation on it is a
+`nurl_v128_*` primitive, because `+` on a vector must say *which lane
+width* it adds and an operator cannot; the primitive names do.
+
+128 bits, and not 256, because that width is **baseline** on every
+64-bit target NURL supports: SSE2 is part of the x86-64 ABI and NEON
+part of AArch64. A `v128` kernel therefore needs no CPUID probe, no
+target-feature attribute and no scalar fallback path — it is correct
+and fast everywhere, and it lowers to `simd128` on wasm and to a
+scalarised loop on a target with no vector unit at all.
+
+One type carries every lane width. A register does not have a lane
+width, an *instruction* does; `<4 x i32>` is only the carrier, and each
+primitive bitcasts to the lanes it operates on (a bitcast between
+same-width vector types is a relabelling and generates no code).
+
+The primitives, all defined in the compiler's preamble as
+`linkonce_odr alwaysinline` so each is one machine instruction at the
+call site:
+
+| Group | Primitives |
+|---|---|
+| load / store | `nurl_v128_ld(*u) → v128`, `nurl_v128_st(*u, v128)` — unaligned |
+| construct | `nurl_v128_zero`, `_set32(a b c d)`, `_set64(a b)`, `_bcast32(x)`, `_bcast8(x)` |
+| extract | `nurl_v128_get32(v, i) → u64`, `_get64(v, i) → u64` |
+| bitwise | `nurl_v128_xor`, `_and`, `_or`, `_andnot` |
+| lane arithmetic | `nurl_v128_add8`, `_add32`, `_sub32`, `_add64`, `_mul32u` |
+| shift / rotate | `nurl_v128_rotl32(v, n)`, `_shl64(v, n)`, `_shr64(v, n)` |
+| lane permute | `nurl_v128_rotlanes1/2/3(v)` |
+| byte compare | `nurl_v128_eqmask8(a, b) → u64`, `_ltmask8(a, b) → u64` — 16-bit bitmask |
+| case folding | `nurl_v128_lower8(v)` — ASCII `A`–`Z` only |
+
+Lane indices are masked into range and shift counts are masked to the
+lane width, so no primitive has undefined behaviour on an input the
+language cannot reject at compile time.
+
+`_eqmask8` is the primitive that makes a vector byte scan possible:
+sixteen comparisons in one instruction, read out as a 16-bit integer
+whose bit *k* answers for byte *k*. Paired with `nurl_ctz` it finds the
+first match with one branch per sixteen bytes. `stdlib/std/simd.nu`
+builds the scanners the rest of the stdlib uses on exactly that pattern
+(`simd_index_byte`, `simd_index_crlf`, `simd_index_head_end`,
+`simd_index_ows_end`, `simd_bytes_eq`, `simd_bytes_eq_ci`,
+`simd_xor_into`).
+
+**Scalar bit primitives** ship alongside, for the operations every ISA
+has an instruction for and the language previously had to spell as a
+loop or a shift tree: `nurl_ctz`, `nurl_clz`, `nurl_popcnt`,
+`nurl_bswap32`, `nurl_bswap64`, `nurl_rotl32`, `nurl_rotr32`,
+`nurl_rotl64`, `nurl_rotr64`. `ctz`/`clz` are defined at zero (they
+return 64) rather than poison.
+
+**Wide arithmetic** completes the same story for integers wider than
+the language can spell. `nurl_umulhi(a, b)` gives the high half of a
+product; these give the high half of a sum and of a multiply-accumulate:
+
+| Primitive | Value |
+|---|---|
+| `nurl_addc_lo/_hi(a, b, c)` | `a + b + c`, low 64 bits / carry-out |
+| `nurl_subb_lo/_hi(a, b, c)` | `a − b − c`, low 64 bits / borrow-out |
+| `nurl_mac_lo/_hi(a, b, c, d)` | `a·b + c + d`, low / high 64 bits |
+
+`c` and `d` are the previous step's `_hi` (0 or 1 for addc/subb).
+`nurl_mac` cannot overflow 128 bits for any 64-bit inputs, which is why
+it is one primitive and not three: it is exactly one limb step of a
+schoolbook or Montgomery multiply.
+
+The language can already *spell* a carry — the unsigned wrap of `x+y`
+is `x+y < x` — so these exist for the shape the **backend** recognises,
+not for expressiveness. A hand-written wrap test lowers to a compare, a
+zero-extend and a separate add; chained across four limbs that is an
+add/cmp/setb/add tree, serialised through the ALU, and the multiplies
+feeding it cannot become a flag-free widening multiply because the tree
+is reading the flags. Written through these primitives the same four
+limbs legalise to `add; adc; adc; adc; setb`.
+
+Two functions rather than one returning a pair, because a NURL function
+returns one value and a pointer out-param would put the sum in memory —
+the one place a carry chain must not go. Both halves are `alwaysinline`
+over identical operands, so the shared computation is CSEd and the pair
+costs one instruction. **That CSE is a contract on the caller**: load
+limbs into bindings *first* and chain over those. Called on `. p k`
+operands straight out of memory, the two halves reload through a
+possibly-aliasing pointer, the CSE cannot happen, and the chain
+collapses back to the tree it was meant to replace.
 
 ### 4.2 Pointer types
 

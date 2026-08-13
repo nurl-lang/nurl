@@ -322,6 +322,12 @@
     ? ( seq ty `u32` ) `u32`
     ? ( seq ty `u64` ) `u64`
     ? ( seq ty `f32` ) `float`
+    // `v128` — the SIMD lane type (§ nurl_llty). Internal repr and
+    // source spelling are the same word; only nurl_llty knows it is
+    // `<4 x i32>`, exactly as `u64` stays `u64` here and becomes `i64`
+    // at the IR boundary. Listed here so it does not fall through to
+    // the named-type default and become the phantom type `%v128`.
+    ? ( seq ty `v128` ) `v128`
     ( nurl_str_cat `%` ty )
 }
 
@@ -412,6 +418,32 @@
     ? ( seq t `u16` ) { ^ # s ( nurl_strdup `i16` ) } {}
     ? ( seq t `u32` ) { ^ # s ( nurl_strdup `i32` ) } {}
     ? ( seq t `u64` ) { ^ # s ( nurl_strdup `i64` ) } {}
+    // ── The SIMD lane type ────────────────────────────────────────
+    //
+    // `v128` is the language's vector register: one 128-bit value, held
+    // in an XMM / Q / v128 register rather than in memory. It lowers to
+    // LLVM's target-independent `<4 x i32>`, so one NURL kernel compiles
+    // to SSE2 on x86-64, NEON on aarch64, simd128 on wasm, and a
+    // scalarised loop on anything else — and 128 bits specifically
+    // because that width is BASELINE on every 64-bit target NURL
+    // supports (SSE2 is part of the x86-64 ABI, NEON part of AArch64),
+    // so a vector kernel needs no CPUID dispatch, no target-feature
+    // attribute, and no runtime fallback to be safe to run anywhere.
+    //
+    // ONE type, not one per lane width: a register does not have a lane
+    // width, an INSTRUCTION does. `<4 x i32>` is only the carrier; each
+    // `v128_*` primitive bitcasts to the lanes it operates on (bitcast
+    // between vector types is free — it is a relabelling, not a move).
+    // Four sibling types would have bought nothing but a conversion
+    // matrix and a class of silent lane-width mismatches.
+    //
+    // A v128 behaves like any other by-value type: a `:` binding allocas
+    // one, a parameter passes one in a vector register, `^` returns one,
+    // and it owns nothing so auto-drop never touches it. It is opaque to
+    // NURL's operators — every operation is a `v128_*` primitive
+    // (stdlib/std/simd.nu), because `+` on a vector must say WHICH lane
+    // width it adds and an operator cannot; the primitive names do.
+    ? ( seq t `v128` ) { ^ # s ( nurl_strdup `<4 x i32>` ) } {}
     : i tl ( nurl_str_len t )
     : ~ i p 0
     ~ < p tl {
@@ -5852,6 +5884,22 @@
                         ? & == c1 51 == c2 50 { = ttype TT_TYPE_KW } {}  // ?32
                         ? & == c1 54 == c2 52 { = ttype TT_TYPE_KW } {}  // ?64
                     } {}
+                } {}
+            } {}
+            // `v128` — the SIMD lane type. A type has to LEX as a type
+            // keyword, not just resolve as one: `: v128 a …` reaches
+            // gen_let_or_struct, which decides "type then name" versus
+            // inferred "name then value" from the token class alone. As
+            // a plain TT_IDENT it took the type-inference branch, bound
+            // `v128` as the NAME, and reported the real name as an
+            // undefined identifier — a diagnostic pointing one token
+            // past the cause.
+            ? & == ttype TT_IDENT == n 4 {
+                ? & & & == & # i . idp 0 255 118
+                == & # i . idp 1 255 49
+                == & # i . idp 2 255 50
+                == & # i . idp 3 255 56 {
+                    = ttype TT_TYPE_KW
                 } {}
             } {}
             ( __tok_write lex base ttype id inum line start )
@@ -21526,6 +21574,376 @@
     ( emit line )
 }
 
+// ── The v128 SIMD primitive layer ────────────────────────────────────
+//
+// Everything a `v128` value can have done to it. Emitted, like
+// nurl_peek / nurl_umulhi / nurl_mac, as `linkonce_odr alwaysinline`
+// definitions inside the module: a vector primitive that stayed a CALL
+// would cost more than the arithmetic it performs, and would force the
+// value out of its register to be passed — the exact thing the type
+// exists to avoid. Inlined, each of these IS one machine instruction,
+// and a NURL kernel written on them keeps its whole working set in
+// vector registers between them.
+//
+// The carrier type is `<4 x i32>`; the lane-typed operations bitcast
+// into `<16 x i8>` / `<2 x i64>` and back. A bitcast between two vector
+// types of the same width is a relabelling — it generates no code.
+//
+// Nothing here is x86-specific. `icmp` + `bitcast <16 x i1> to i16` is
+// how LLVM spells a byte movemask portably: x86 emits `pmovmskb`,
+// AArch64 the shift-and-narrow sequence, wasm `i8x16.bitmask`. Likewise
+// `@llvm.fshl` is a funnel shift everywhere and becomes a rotate where
+// the ISA has one.
+@ emit_simd_preamble → v {
+    // ── construction ──────────────────────────────────────────────
+    // Unaligned load / store: NURL buffers come from malloc, and a
+    // slice into one is unaligned by construction, so `align 1` is the
+    // only honest alignment. On x86 and AArch64 an unaligned vector
+    // load is the same instruction as an aligned one.
+    ( emit `define linkonce_odr <4 x i32> @nurl_v128_ld(i8* %p) alwaysinline {` )
+    ( emit `entry:` )
+    ( emit `  %vl.v = load <4 x i32>, i8* %p, align 1` )
+    ( emit `  ret <4 x i32> %vl.v` )
+    ( emit `}` )
+    ( emit `define linkonce_odr void @nurl_v128_st(i8* %p, <4 x i32> %v) alwaysinline {` )
+    ( emit `entry:` )
+    ( emit `  store <4 x i32> %v, i8* %p, align 1` )
+    ( emit `  ret void` )
+    ( emit `}` )
+    ( emit `define linkonce_odr <4 x i32> @nurl_v128_zero() alwaysinline {` )
+    ( emit `entry:` )
+    ( emit `  ret <4 x i32> zeroinitializer` )
+    ( emit `}` )
+    // Four 32-bit lanes from four scalars, lane 0 first (little-endian
+    // memory order, so `set32 a b c d` then `st` writes a,b,c,d).
+    ( emit `define linkonce_odr <4 x i32> @nurl_v128_set32(i64 %a, i64 %b, i64 %c, i64 %d) alwaysinline {` )
+    ( emit `entry:` )
+    ( emit `  %vs.a = trunc i64 %a to i32` )
+    ( emit `  %vs.b = trunc i64 %b to i32` )
+    ( emit `  %vs.c = trunc i64 %c to i32` )
+    ( emit `  %vs.d = trunc i64 %d to i32` )
+    ( emit `  %vs.0 = insertelement <4 x i32> undef,  i32 %vs.a, i32 0` )
+    ( emit `  %vs.1 = insertelement <4 x i32> %vs.0, i32 %vs.b, i32 1` )
+    ( emit `  %vs.2 = insertelement <4 x i32> %vs.1, i32 %vs.c, i32 2` )
+    ( emit `  %vs.3 = insertelement <4 x i32> %vs.2, i32 %vs.d, i32 3` )
+    ( emit `  ret <4 x i32> %vs.3` )
+    ( emit `}` )
+    ( emit `define linkonce_odr <4 x i32> @nurl_v128_bcast32(i64 %x) alwaysinline {` )
+    ( emit `entry:` )
+    ( emit `  %vb.t = trunc i64 %x to i32` )
+    ( emit `  %vb.0 = insertelement <4 x i32> undef, i32 %vb.t, i32 0` )
+    ( emit `  %vb.s = shufflevector <4 x i32> %vb.0, <4 x i32> undef, <4 x i32> zeroinitializer` )
+    ( emit `  ret <4 x i32> %vb.s` )
+    ( emit `}` )
+    ( emit `define linkonce_odr <4 x i32> @nurl_v128_bcast8(i64 %x) alwaysinline {` )
+    ( emit `entry:` )
+    ( emit `  %vc.t = trunc i64 %x to i8` )
+    ( emit `  %vc.0 = insertelement <16 x i8> undef, i8 %vc.t, i32 0` )
+    ( emit `  %vc.s = shufflevector <16 x i8> %vc.0, <16 x i8> undef, <16 x i32> zeroinitializer` )
+    ( emit `  %vc.r = bitcast <16 x i8> %vc.s to <4 x i32>` )
+    ( emit `  ret <4 x i32> %vc.r` )
+    ( emit `}` )
+    // Lane extraction. The index is a runtime value (extractelement
+    // takes one), so a computed lane index is legal; a literal folds.
+    // Out-of-range is poison in LLVM, so it is masked to 0..3 here —
+    // a language primitive may not have undefined behaviour on an
+    // input the language cannot reject at compile time.
+    ( emit `define linkonce_odr i64 @nurl_v128_get32(<4 x i32> %v, i64 %i) alwaysinline {` )
+    ( emit `entry:` )
+    ( emit `  %vg.i = and i64 %i, 3` )
+    ( emit `  %vg.e = extractelement <4 x i32> %v, i64 %vg.i` )
+    ( emit `  %vg.r = zext i32 %vg.e to i64` )
+    ( emit `  ret i64 %vg.r` )
+    ( emit `}` )
+    ( emit `define linkonce_odr i64 @nurl_v128_get64(<4 x i32> %v, i64 %i) alwaysinline {` )
+    ( emit `entry:` )
+    ( emit `  %vh.b = bitcast <4 x i32> %v to <2 x i64>` )
+    ( emit `  %vh.i = and i64 %i, 1` )
+    ( emit `  %vh.r = extractelement <2 x i64> %vh.b, i64 %vh.i` )
+    ( emit `  ret i64 %vh.r` )
+    ( emit `}` )
+    ( emit `define linkonce_odr <4 x i32> @nurl_v128_set64(i64 %a, i64 %b) alwaysinline {` )
+    ( emit `entry:` )
+    ( emit `  %vt.0 = insertelement <2 x i64> undef, i64 %a, i32 0` )
+    ( emit `  %vt.1 = insertelement <2 x i64> %vt.0, i64 %b, i32 1` )
+    ( emit `  %vt.r = bitcast <2 x i64> %vt.1 to <4 x i32>` )
+    ( emit `  ret <4 x i32> %vt.r` )
+    ( emit `}` )
+    // ── bitwise (lane-width independent) ──────────────────────────
+    ( emit `define linkonce_odr <4 x i32> @nurl_v128_xor(<4 x i32> %a, <4 x i32> %b) alwaysinline {` )
+    ( emit `entry:` )
+    ( emit `  %vx.r = xor <4 x i32> %a, %b` )
+    ( emit `  ret <4 x i32> %vx.r` )
+    ( emit `}` )
+    ( emit `define linkonce_odr <4 x i32> @nurl_v128_and(<4 x i32> %a, <4 x i32> %b) alwaysinline {` )
+    ( emit `entry:` )
+    ( emit `  %va.r = and <4 x i32> %a, %b` )
+    ( emit `  ret <4 x i32> %va.r` )
+    ( emit `}` )
+    ( emit `define linkonce_odr <4 x i32> @nurl_v128_or(<4 x i32> %a, <4 x i32> %b) alwaysinline {` )
+    ( emit `entry:` )
+    ( emit `  %vo.r = or <4 x i32> %a, %b` )
+    ( emit `  ret <4 x i32> %vo.r` )
+    ( emit `}` )
+    ( emit `define linkonce_odr <4 x i32> @nurl_v128_andnot(<4 x i32> %a, <4 x i32> %b) alwaysinline {` )
+    ( emit `entry:` )
+    ( emit `  %vn.n = xor <4 x i32> %a, <i32 -1, i32 -1, i32 -1, i32 -1>` )
+    ( emit `  %vn.r = and <4 x i32> %vn.n, %b` )
+    ( emit `  ret <4 x i32> %vn.r` )
+    ( emit `}` )
+    // ── lane arithmetic ───────────────────────────────────────────
+    ( emit `define linkonce_odr <4 x i32> @nurl_v128_add32(<4 x i32> %a, <4 x i32> %b) alwaysinline {` )
+    ( emit `entry:` )
+    ( emit `  %vd.r = add <4 x i32> %a, %b` )
+    ( emit `  ret <4 x i32> %vd.r` )
+    ( emit `}` )
+    ( emit `define linkonce_odr <4 x i32> @nurl_v128_sub32(<4 x i32> %a, <4 x i32> %b) alwaysinline {` )
+    ( emit `entry:` )
+    ( emit `  %ve.r = sub <4 x i32> %a, %b` )
+    ( emit `  ret <4 x i32> %ve.r` )
+    ( emit `}` )
+    ( emit `define linkonce_odr <4 x i32> @nurl_v128_add64(<4 x i32> %a, <4 x i32> %b) alwaysinline {` )
+    ( emit `entry:` )
+    ( emit `  %vf.a = bitcast <4 x i32> %a to <2 x i64>` )
+    ( emit `  %vf.b = bitcast <4 x i32> %b to <2 x i64>` )
+    ( emit `  %vf.s = add <2 x i64> %vf.a, %vf.b` )
+    ( emit `  %vf.r = bitcast <2 x i64> %vf.s to <4 x i32>` )
+    ( emit `  ret <4 x i32> %vf.r` )
+    ( emit `}` )
+    ( emit `define linkonce_odr <4 x i32> @nurl_v128_add8(<4 x i32> %a, <4 x i32> %b) alwaysinline {` )
+    ( emit `entry:` )
+    ( emit `  %vi.a = bitcast <4 x i32> %a to <16 x i8>` )
+    ( emit `  %vi.b = bitcast <4 x i32> %b to <16 x i8>` )
+    ( emit `  %vi.s = add <16 x i8> %vi.a, %vi.b` )
+    ( emit `  %vi.r = bitcast <16 x i8> %vi.s to <4 x i32>` )
+    ( emit `  ret <4 x i32> %vi.r` )
+    ( emit `}` )
+    // 32×32→64 of the EVEN lanes (x86 `pmuludq`, the primitive under
+    // every vectorised big-number multiply).
+    ( emit `define linkonce_odr <4 x i32> @nurl_v128_mul32u(<4 x i32> %a, <4 x i32> %b) alwaysinline {` )
+    ( emit `entry:` )
+    ( emit `  %vm.a = bitcast <4 x i32> %a to <2 x i64>` )
+    ( emit `  %vm.b = bitcast <4 x i32> %b to <2 x i64>` )
+    ( emit `  %vm.x = and <2 x i64> %vm.a, <i64 4294967295, i64 4294967295>` )
+    ( emit `  %vm.y = and <2 x i64> %vm.b, <i64 4294967295, i64 4294967295>` )
+    ( emit `  %vm.p = mul <2 x i64> %vm.x, %vm.y` )
+    ( emit `  %vm.r = bitcast <2 x i64> %vm.p to <4 x i32>` )
+    ( emit `  ret <4 x i32> %vm.r` )
+    ( emit `}` )
+    // ── shifts and rotates ────────────────────────────────────────
+    // The count is a scalar broadcast to every lane, so this is the
+    // uniform-shift form (x86 `pslld`/`psrld` with an XMM count), not
+    // the per-lane variable shift. A literal count folds to the
+    // immediate form.
+    ( emit `define linkonce_odr <4 x i32> @nurl_v128_rotl32(<4 x i32> %a, i64 %n) alwaysinline {` )
+    ( emit `entry:` )
+    ( emit `  %vr.t = trunc i64 %n to i32` )
+    ( emit `  %vr.m = and i32 %vr.t, 31` )
+    ( emit `  %vr.0 = insertelement <4 x i32> undef, i32 %vr.m, i32 0` )
+    ( emit `  %vr.s = shufflevector <4 x i32> %vr.0, <4 x i32> undef, <4 x i32> zeroinitializer` )
+    ( emit `  %vr.r = call <4 x i32> @llvm.fshl.v4i32(<4 x i32> %a, <4 x i32> %a, <4 x i32> %vr.s)` )
+    ( emit `  ret <4 x i32> %vr.r` )
+    ( emit `}` )
+    ( emit `define linkonce_odr <4 x i32> @nurl_v128_shl64(<4 x i32> %a, i64 %n) alwaysinline {` )
+    ( emit `entry:` )
+    ( emit `  %vp.a = bitcast <4 x i32> %a to <2 x i64>` )
+    ( emit `  %vp.m = and i64 %n, 63` )
+    ( emit `  %vp.0 = insertelement <2 x i64> undef, i64 %vp.m, i32 0` )
+    ( emit `  %vp.s = shufflevector <2 x i64> %vp.0, <2 x i64> undef, <2 x i32> zeroinitializer` )
+    ( emit `  %vp.v = shl <2 x i64> %vp.a, %vp.s` )
+    ( emit `  %vp.r = bitcast <2 x i64> %vp.v to <4 x i32>` )
+    ( emit `  ret <4 x i32> %vp.r` )
+    ( emit `}` )
+    ( emit `define linkonce_odr <4 x i32> @nurl_v128_shr64(<4 x i32> %a, i64 %n) alwaysinline {` )
+    ( emit `entry:` )
+    ( emit `  %vq.a = bitcast <4 x i32> %a to <2 x i64>` )
+    ( emit `  %vq.m = and i64 %n, 63` )
+    ( emit `  %vq.0 = insertelement <2 x i64> undef, i64 %vq.m, i32 0` )
+    ( emit `  %vq.s = shufflevector <2 x i64> %vq.0, <2 x i64> undef, <2 x i32> zeroinitializer` )
+    ( emit `  %vq.v = lshr <2 x i64> %vq.a, %vq.s` )
+    ( emit `  %vq.r = bitcast <2 x i64> %vq.v to <4 x i32>` )
+    ( emit `  ret <4 x i32> %vq.r` )
+    ( emit `}` )
+    // ── lane permutation ──────────────────────────────────────────
+    // Rotate the four 32-bit lanes left by 1, 2 or 3 positions. A
+    // shufflevector mask must be a literal, so the three rotations are
+    // three primitives rather than one taking a count — which is no
+    // loss: ChaCha's diagonalisation, the reason these exist, needs
+    // exactly these three. x86 folds each into one `pshufd`.
+    ( emit `define linkonce_odr <4 x i32> @nurl_v128_rotlanes1(<4 x i32> %a) alwaysinline {` )
+    ( emit `entry:` )
+    ( emit `  %w1.r = shufflevector <4 x i32> %a, <4 x i32> undef, <4 x i32> <i32 1, i32 2, i32 3, i32 0>` )
+    ( emit `  ret <4 x i32> %w1.r` )
+    ( emit `}` )
+    ( emit `define linkonce_odr <4 x i32> @nurl_v128_rotlanes2(<4 x i32> %a) alwaysinline {` )
+    ( emit `entry:` )
+    ( emit `  %w2.r = shufflevector <4 x i32> %a, <4 x i32> undef, <4 x i32> <i32 2, i32 3, i32 0, i32 1>` )
+    ( emit `  ret <4 x i32> %w2.r` )
+    ( emit `}` )
+    ( emit `define linkonce_odr <4 x i32> @nurl_v128_rotlanes3(<4 x i32> %a) alwaysinline {` )
+    ( emit `entry:` )
+    ( emit `  %w3.r = shufflevector <4 x i32> %a, <4 x i32> undef, <4 x i32> <i32 3, i32 0, i32 1, i32 2>` )
+    ( emit `  ret <4 x i32> %w3.r` )
+    ( emit `}` )
+    // ── byte compare → bitmask ────────────────────────────────────
+    // The whole point of a vector byte scan: sixteen comparisons in one
+    // instruction, their results read out as a 16-bit integer whose bit
+    // k answers for byte k. Paired with `nurl_ctz`, a scan loop finds
+    // the first match with one branch per sixteen bytes instead of one
+    // per byte.
+    ( emit `define linkonce_odr i64 @nurl_v128_eqmask8(<4 x i32> %a, <4 x i32> %b) alwaysinline {` )
+    ( emit `entry:` )
+    ( emit `  %y1.a = bitcast <4 x i32> %a to <16 x i8>` )
+    ( emit `  %y1.b = bitcast <4 x i32> %b to <16 x i8>` )
+    ( emit `  %y1.c = icmp eq <16 x i8> %y1.a, %y1.b` )
+    ( emit `  %y1.m = bitcast <16 x i1> %y1.c to i16` )
+    ( emit `  %y1.r = zext i16 %y1.m to i64` )
+    ( emit `  ret i64 %y1.r` )
+    ( emit `}` )
+    ( emit `define linkonce_odr i64 @nurl_v128_ltmask8(<4 x i32> %a, <4 x i32> %b) alwaysinline {` )
+    ( emit `entry:` )
+    ( emit `  %y2.a = bitcast <4 x i32> %a to <16 x i8>` )
+    ( emit `  %y2.b = bitcast <4 x i32> %b to <16 x i8>` )
+    ( emit `  %y2.c = icmp ult <16 x i8> %y2.a, %y2.b` )
+    ( emit `  %y2.m = bitcast <16 x i1> %y2.c to i16` )
+    ( emit `  %y2.r = zext i16 %y2.m to i64` )
+    ( emit `  ret i64 %y2.r` )
+    ( emit `}` )
+    // ASCII case-folding, branchless and CORRECT: add 32 only to bytes
+    // in 'A'..'Z'. The obvious `x | 32` is wrong — it also folds '^'
+    // onto '~' and '@' onto '`', all four of which are legal HTTP token
+    // characters, so a header-name comparison built on it would match
+    // two different headers.
+    ( emit `define linkonce_odr <4 x i32> @nurl_v128_lower8(<4 x i32> %a) alwaysinline {` )
+    ( emit `entry:` )
+    ( emit `  %z1.a = bitcast <4 x i32> %a to <16 x i8>` )
+    ( emit `  %z1.s = sub <16 x i8> %z1.a, <i8 65, i8 65, i8 65, i8 65, i8 65, i8 65, i8 65, i8 65, i8 65, i8 65, i8 65, i8 65, i8 65, i8 65, i8 65, i8 65>` )
+    ( emit `  %z1.c = icmp ult <16 x i8> %z1.s, <i8 26, i8 26, i8 26, i8 26, i8 26, i8 26, i8 26, i8 26, i8 26, i8 26, i8 26, i8 26, i8 26, i8 26, i8 26, i8 26>` )
+    ( emit `  %z1.d = select <16 x i1> %z1.c, <16 x i8> <i8 32, i8 32, i8 32, i8 32, i8 32, i8 32, i8 32, i8 32, i8 32, i8 32, i8 32, i8 32, i8 32, i8 32, i8 32, i8 32>, <16 x i8> zeroinitializer` )
+    ( emit `  %z1.o = add <16 x i8> %z1.a, %z1.d` )
+    ( emit `  %z1.r = bitcast <16 x i8> %z1.o to <4 x i32>` )
+    ( emit `  ret <4 x i32> %z1.r` )
+    ( emit `}` )
+    ( emit `declare <4 x i32> @llvm.fshl.v4i32(<4 x i32>, <4 x i32>, <4 x i32>)` )
+    // ── scalar bit primitives ─────────────────────────────────────
+    //
+    // The scalar half of the same story: operations every ISA has an
+    // instruction for and NURL had to spell as a loop or a shift tree.
+    // `nurl_ctz` is what turns a compare bitmask back into a byte
+    // index; `nurl_bswap` is the byte-order flip under every hash and
+    // wire format in the stdlib, previously eight shifts and masks;
+    // the rotates are the primitive of ChaCha, SHA-2 and BLAKE.
+    //
+    // ctz/clz are given the `false` (defined-at-zero) form and then
+    // clamped, so ctz(0) = 64 rather than poison — a primitive must not
+    // have undefined behaviour on a value the caller can hold.
+    ( emit `define linkonce_odr i64 @nurl_ctz(i64 %x) alwaysinline {` )
+    ( emit `entry:` )
+    ( emit `  %t1.r = call i64 @llvm.cttz.i64(i64 %x, i1 false)` )
+    ( emit `  ret i64 %t1.r` )
+    ( emit `}` )
+    ( emit `define linkonce_odr i64 @nurl_clz(i64 %x) alwaysinline {` )
+    ( emit `entry:` )
+    ( emit `  %t2.r = call i64 @llvm.ctlz.i64(i64 %x, i1 false)` )
+    ( emit `  ret i64 %t2.r` )
+    ( emit `}` )
+    ( emit `define linkonce_odr i64 @nurl_popcnt(i64 %x) alwaysinline {` )
+    ( emit `entry:` )
+    ( emit `  %t3.r = call i64 @llvm.ctpop.i64(i64 %x)` )
+    ( emit `  ret i64 %t3.r` )
+    ( emit `}` )
+    ( emit `define linkonce_odr i64 @nurl_bswap64(i64 %x) alwaysinline {` )
+    ( emit `entry:` )
+    ( emit `  %t4.r = call i64 @llvm.bswap.i64(i64 %x)` )
+    ( emit `  ret i64 %t4.r` )
+    ( emit `}` )
+    ( emit `define linkonce_odr i64 @nurl_bswap32(i64 %x) alwaysinline {` )
+    ( emit `entry:` )
+    ( emit `  %t5.t = trunc i64 %x to i32` )
+    ( emit `  %t5.b = call i32 @llvm.bswap.i32(i32 %t5.t)` )
+    ( emit `  %t5.r = zext i32 %t5.b to i64` )
+    ( emit `  ret i64 %t5.r` )
+    ( emit `}` )
+    ( emit `define linkonce_odr i64 @nurl_rotl32(i64 %x, i64 %n) alwaysinline {` )
+    ( emit `entry:` )
+    ( emit `  %t6.x = trunc i64 %x to i32` )
+    ( emit `  %t6.n = trunc i64 %n to i32` )
+    ( emit `  %t6.v = call i32 @llvm.fshl.i32(i32 %t6.x, i32 %t6.x, i32 %t6.n)` )
+    ( emit `  %t6.r = zext i32 %t6.v to i64` )
+    ( emit `  ret i64 %t6.r` )
+    ( emit `}` )
+    ( emit `define linkonce_odr i64 @nurl_rotr32(i64 %x, i64 %n) alwaysinline {` )
+    ( emit `entry:` )
+    ( emit `  %t7.x = trunc i64 %x to i32` )
+    ( emit `  %t7.n = trunc i64 %n to i32` )
+    ( emit `  %t7.v = call i32 @llvm.fshr.i32(i32 %t7.x, i32 %t7.x, i32 %t7.n)` )
+    ( emit `  %t7.r = zext i32 %t7.v to i64` )
+    ( emit `  ret i64 %t7.r` )
+    ( emit `}` )
+    ( emit `define linkonce_odr i64 @nurl_rotl64(i64 %x, i64 %n) alwaysinline {` )
+    ( emit `entry:` )
+    ( emit `  %t8.r = call i64 @llvm.fshl.i64(i64 %x, i64 %x, i64 %n)` )
+    ( emit `  ret i64 %t8.r` )
+    ( emit `}` )
+    ( emit `define linkonce_odr i64 @nurl_rotr64(i64 %x, i64 %n) alwaysinline {` )
+    ( emit `entry:` )
+    ( emit `  %t9.r = call i64 @llvm.fshr.i64(i64 %x, i64 %x, i64 %n)` )
+    ( emit `  ret i64 %t9.r` )
+    ( emit `}` )
+    ( emit `declare i64 @llvm.cttz.i64(i64, i1)` )
+    ( emit `declare i64 @llvm.ctlz.i64(i64, i1)` )
+    ( emit `declare i64 @llvm.ctpop.i64(i64)` )
+    ( emit `declare i64 @llvm.bswap.i64(i64)` )
+    ( emit `declare i32 @llvm.bswap.i32(i32)` )
+    ( emit `declare i32 @llvm.fshl.i32(i32, i32, i32)` )
+    ( emit `declare i32 @llvm.fshr.i32(i32, i32, i32)` )
+    ( emit `declare i64 @llvm.fshl.i64(i64, i64, i64)` )
+    ( emit `declare i64 @llvm.fshr.i64(i64, i64, i64)` )
+}
+
+// Register the SIMD + wide-arithmetic primitives in the symbol table,
+// so gen_call knows each one's return type. Kept next to
+// emit_simd_preamble: the two tables must stay in step, exactly as
+// emit_header and its sym_def block must.
+@ register_simd_syms i syms → v {
+    ( nurl_sym_def syms `nurl_v128_ld` `v128` )
+    ( nurl_sym_def syms `nurl_v128_st` `void` )
+    ( nurl_sym_def syms `nurl_v128_zero` `v128` )
+    ( nurl_sym_def syms `nurl_v128_set32` `v128` )
+    ( nurl_sym_def syms `nurl_v128_set64` `v128` )
+    ( nurl_sym_def syms `nurl_v128_bcast32` `v128` )
+    ( nurl_sym_def syms `nurl_v128_bcast8` `v128` )
+    ( nurl_sym_def syms `nurl_v128_get32` `u64` )
+    ( nurl_sym_def syms `nurl_v128_get64` `u64` )
+    ( nurl_sym_def syms `nurl_v128_xor` `v128` )
+    ( nurl_sym_def syms `nurl_v128_and` `v128` )
+    ( nurl_sym_def syms `nurl_v128_or` `v128` )
+    ( nurl_sym_def syms `nurl_v128_andnot` `v128` )
+    ( nurl_sym_def syms `nurl_v128_add32` `v128` )
+    ( nurl_sym_def syms `nurl_v128_sub32` `v128` )
+    ( nurl_sym_def syms `nurl_v128_add64` `v128` )
+    ( nurl_sym_def syms `nurl_v128_add8` `v128` )
+    ( nurl_sym_def syms `nurl_v128_mul32u` `v128` )
+    ( nurl_sym_def syms `nurl_v128_rotl32` `v128` )
+    ( nurl_sym_def syms `nurl_v128_shl64` `v128` )
+    ( nurl_sym_def syms `nurl_v128_shr64` `v128` )
+    ( nurl_sym_def syms `nurl_v128_rotlanes1` `v128` )
+    ( nurl_sym_def syms `nurl_v128_rotlanes2` `v128` )
+    ( nurl_sym_def syms `nurl_v128_rotlanes3` `v128` )
+    ( nurl_sym_def syms `nurl_v128_eqmask8` `u64` )
+    ( nurl_sym_def syms `nurl_v128_ltmask8` `u64` )
+    ( nurl_sym_def syms `nurl_v128_lower8` `v128` )
+    ( nurl_sym_def syms `nurl_ctz` `u64` )
+    ( nurl_sym_def syms `nurl_clz` `u64` )
+    ( nurl_sym_def syms `nurl_popcnt` `u64` )
+    ( nurl_sym_def syms `nurl_bswap64` `u64` )
+    ( nurl_sym_def syms `nurl_bswap32` `u64` )
+    ( nurl_sym_def syms `nurl_rotl32` `u64` )
+    ( nurl_sym_def syms `nurl_rotr32` `u64` )
+    ( nurl_sym_def syms `nurl_rotl64` `u64` )
+    ( nurl_sym_def syms `nurl_rotr64` `u64` )
+}
+
 @ emit_header i syms → v {
     ( emit `; NURL compiler output (nurlc.nu)` )
     ( emit `; link: clang <this.ll> stdlib/runtime.o -o out` )
@@ -21728,6 +22146,124 @@
     ( emit `  %mh.r = trunc i128 %mh.h to i64` )
     ( emit `  ret i64 %mh.r` )
     ( emit `}` )
+    // ── Wide arithmetic: carry, borrow, multiply-accumulate ───────
+    //
+    // `nurl_umulhi` gave the language the high half of a PRODUCT. These
+    // give it the high half of a SUM and of a multiply-accumulate:
+    //
+    //   nurl_addc_lo/_hi (a, b, c)      →  a + b + c        (65-bit)
+    //   nurl_subb_lo/_hi (a, b, c)      →  a − b − c        (borrow out)
+    //   nurl_mac_lo/_hi  (a, b, c, d)   →  a·b + c + d      (128-bit)
+    //
+    // `_lo` is the low 64 bits, `_hi` the part that does not fit — the
+    // carry-out (0/1) for addc, the borrow-out (0/1) for subb, the high
+    // word for mac. Same lo/hi split as umulhi, so the naming carries
+    // over. `nurl_mac` subsumes umulhi (`c = d = 0`) and is the actual
+    // primitive of schoolbook and Montgomery multiplication: one limb
+    // step of every bignum routine is exactly "multiply, add the running
+    // limb, add the incoming carry", and that expression cannot overflow
+    // 128 bits for any 64-bit inputs — the reason it is one primitive
+    // and not three.
+    //
+    // Why primitives and not NURL expressions: the language can already
+    // SPELL a carry — the unsigned wrap of x+y is `x+y < x`, which is
+    // what every big-number routine in the stdlib writes as
+    // `? < s lo 1 0`. What it cannot spell is a form the BACKEND
+    // recognises. A hand-written wrap test lowers to a compare, a
+    // zext and a separate add; chained across four limbs that is an
+    // add/cmp/setb/add tree, serialised through the ALU, and the
+    // multiplies feeding it cannot become `mulx` because the tree is
+    // reading the flags a plain `mul` would clobber. Written as i128,
+    // the same four limbs legalise to the textbook
+    // `add; adc; adc; adc; setb` — and the products to `mulx`.
+    // Measured on a 4-limb add: 15 instructions against 26 for the
+    // hand-rolled wrap test and 28 for `uadd.with.overflow` + `or i1`
+    // (which the DAG does NOT fuse into a carry chain — the obvious
+    // shape is the wrong one here; i128 is the one the legaliser owns).
+    //
+    // lo and hi are two functions rather than one returning a pair
+    // because a NURL function returns one value, and a pointer out-param
+    // would put the sum in memory — the one place a carry chain must not
+    // go. Both are alwaysinline over identical operands, so GVN CSEs the
+    // shared i128 computation and the pair costs one instruction. That
+    // CSE is why callers must load limbs into bindings FIRST and chain
+    // over those: called on `. p k` operands straight out of memory, the
+    // two halves reload through a possibly-aliasing pointer, GVN cannot
+    // merge them, and the chain collapses back to the tree.
+    //
+    // carry_in / borrow_in must be 0 or 1 (always a previous `_hi`).
+    // i128 is target-independent IR, like umulhi: backends without wide
+    // arithmetic legalise it (wasm32 → compiler-rt's __multi3, which
+    // the bundled zig links by default).
+    ( emit `define linkonce_odr i64 @nurl_addc_lo(i64 %a, i64 %b, i64 %c) alwaysinline {` )
+    ( emit `entry:` )
+    ( emit `  %ac.a = zext i64 %a to i128` )
+    ( emit `  %ac.b = zext i64 %b to i128` )
+    ( emit `  %ac.c = zext i64 %c to i128` )
+    ( emit `  %ac.s = add i128 %ac.a, %ac.b` )
+    ( emit `  %ac.t = add i128 %ac.s, %ac.c` )
+    ( emit `  %ac.r = trunc i128 %ac.t to i64` )
+    ( emit `  ret i64 %ac.r` )
+    ( emit `}` )
+    ( emit `define linkonce_odr i64 @nurl_addc_hi(i64 %a, i64 %b, i64 %c) alwaysinline {` )
+    ( emit `entry:` )
+    ( emit `  %ah.a = zext i64 %a to i128` )
+    ( emit `  %ah.b = zext i64 %b to i128` )
+    ( emit `  %ah.c = zext i64 %c to i128` )
+    ( emit `  %ah.s = add i128 %ah.a, %ah.b` )
+    ( emit `  %ah.t = add i128 %ah.s, %ah.c` )
+    ( emit `  %ah.h = lshr i128 %ah.t, 64` )
+    ( emit `  %ah.r = trunc i128 %ah.h to i64` )
+    ( emit `  ret i64 %ah.r` )
+    ( emit `}` )
+    ( emit `define linkonce_odr i64 @nurl_subb_lo(i64 %a, i64 %b, i64 %c) alwaysinline {` )
+    ( emit `entry:` )
+    ( emit `  %sc.a = zext i64 %a to i128` )
+    ( emit `  %sc.b = zext i64 %b to i128` )
+    ( emit `  %sc.c = zext i64 %c to i128` )
+    ( emit `  %sc.d = sub i128 %sc.a, %sc.b` )
+    ( emit `  %sc.e = sub i128 %sc.d, %sc.c` )
+    ( emit `  %sc.r = trunc i128 %sc.e to i64` )
+    ( emit `  ret i64 %sc.r` )
+    ( emit `}` )
+    ( emit `define linkonce_odr i64 @nurl_subb_hi(i64 %a, i64 %b, i64 %c) alwaysinline {` )
+    ( emit `entry:` )
+    ( emit `  %sh.a = zext i64 %a to i128` )
+    ( emit `  %sh.b = zext i64 %b to i128` )
+    ( emit `  %sh.c = zext i64 %c to i128` )
+    ( emit `  %sh.d = sub i128 %sh.a, %sh.b` )
+    ( emit `  %sh.e = sub i128 %sh.d, %sh.c` )
+    ( emit `  %sh.h = lshr i128 %sh.e, 64` )
+    ( emit `  %sh.t = trunc i128 %sh.h to i64` )
+    ( emit `  %sh.r = and i64 %sh.t, 1` )
+    ( emit `  ret i64 %sh.r` )
+    ( emit `}` )
+    ( emit `define linkonce_odr i64 @nurl_mac_lo(i64 %a, i64 %b, i64 %c, i64 %d) alwaysinline {` )
+    ( emit `entry:` )
+    ( emit `  %ml.a = zext i64 %a to i128` )
+    ( emit `  %ml.b = zext i64 %b to i128` )
+    ( emit `  %ml.c = zext i64 %c to i128` )
+    ( emit `  %ml.d = zext i64 %d to i128` )
+    ( emit `  %ml.p = mul i128 %ml.a, %ml.b` )
+    ( emit `  %ml.s = add i128 %ml.p, %ml.c` )
+    ( emit `  %ml.t = add i128 %ml.s, %ml.d` )
+    ( emit `  %ml.r = trunc i128 %ml.t to i64` )
+    ( emit `  ret i64 %ml.r` )
+    ( emit `}` )
+    ( emit `define linkonce_odr i64 @nurl_mac_hi(i64 %a, i64 %b, i64 %c, i64 %d) alwaysinline {` )
+    ( emit `entry:` )
+    ( emit `  %mv.a = zext i64 %a to i128` )
+    ( emit `  %mv.b = zext i64 %b to i128` )
+    ( emit `  %mv.c = zext i64 %c to i128` )
+    ( emit `  %mv.d = zext i64 %d to i128` )
+    ( emit `  %mv.p = mul i128 %mv.a, %mv.b` )
+    ( emit `  %mv.s = add i128 %mv.p, %mv.c` )
+    ( emit `  %mv.t = add i128 %mv.s, %mv.d` )
+    ( emit `  %mv.h = lshr i128 %mv.t, 64` )
+    ( emit `  %mv.r = trunc i128 %mv.h to i64` )
+    ( emit `  ret i64 %mv.r` )
+    ( emit `}` )
+    ( emit_simd_preamble )
     ( __emit_rt_decl syms `declare void @nurl_vec_drop(i8*, ptr, i64)` )
     // nurl_file_* (open/write/write_range/write_byte/close/read_chunk
     // /eof/exists/del/dir_create/dir_remove) are pure-NURL @-fns in
@@ -22365,6 +22901,13 @@
     // emit_header writes. Keep the two in sync.
     ( nurl_sym_def syms `nurl_peek` `i64` )
     ( nurl_sym_def syms `nurl_umulhi` `i64` )
+    ( nurl_sym_def syms `nurl_addc_lo` `u64` )
+    ( nurl_sym_def syms `nurl_addc_hi` `u64` )
+    ( nurl_sym_def syms `nurl_subb_lo` `u64` )
+    ( nurl_sym_def syms `nurl_subb_hi` `u64` )
+    ( nurl_sym_def syms `nurl_mac_lo` `u64` )
+    ( nurl_sym_def syms `nurl_mac_hi` `u64` )
+    ( register_simd_syms syms )
     ( nurl_sym_def syms `nurl_init` `void` )
     ( nurl_sym_def syms `nurl_memset` `void` )
     ( nurl_sym_def syms `nurl_vec_drop` `void` )

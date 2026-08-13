@@ -247,43 +247,41 @@ $ `stdlib/core/vec.nu`
     : u64 f2 * r2 19
     : u64 f3 * r3 19
     : u64 f4 * r4 19
-    : ~ u64 pl 0
-    : ~ u64 ph 0
     // t0 = r0·s0 + f4·s1 + f1·s4 + f2·s3 + f3·s2
     : ~ u64 l0 * r0 s0
     : ~ u64 h0 ( nurl_umulhi r0 s0 )
-    = pl * f4 s1 = ph ( nurl_umulhi f4 s1 ) = l0 + l0 pl = h0 + + h0 ph ? < l0 pl 1 0
-    = pl * f1 s4 = ph ( nurl_umulhi f1 s4 ) = l0 + l0 pl = h0 + + h0 ph ? < l0 pl 1 0
-    = pl * f2 s3 = ph ( nurl_umulhi f2 s3 ) = l0 + l0 pl = h0 + + h0 ph ? < l0 pl 1 0
-    = pl * f3 s2 = ph ( nurl_umulhi f3 s2 ) = l0 + l0 pl = h0 + + h0 ph ? < l0 pl 1 0
+    = h0 + h0 ( nurl_mac_hi f4 s1 l0 0 ) = l0 ( nurl_mac_lo f4 s1 l0 0 )
+    = h0 + h0 ( nurl_mac_hi f1 s4 l0 0 ) = l0 ( nurl_mac_lo f1 s4 l0 0 )
+    = h0 + h0 ( nurl_mac_hi f2 s3 l0 0 ) = l0 ( nurl_mac_lo f2 s3 l0 0 )
+    = h0 + h0 ( nurl_mac_hi f3 s2 l0 0 ) = l0 ( nurl_mac_lo f3 s2 l0 0 )
     // t1 = r0·s1 + r1·s0 + f4·s2 + f2·s4 + f3·s3
     : ~ u64 l1 * r0 s1
     : ~ u64 h1 ( nurl_umulhi r0 s1 )
-    = pl * r1 s0 = ph ( nurl_umulhi r1 s0 ) = l1 + l1 pl = h1 + + h1 ph ? < l1 pl 1 0
-    = pl * f4 s2 = ph ( nurl_umulhi f4 s2 ) = l1 + l1 pl = h1 + + h1 ph ? < l1 pl 1 0
-    = pl * f2 s4 = ph ( nurl_umulhi f2 s4 ) = l1 + l1 pl = h1 + + h1 ph ? < l1 pl 1 0
-    = pl * f3 s3 = ph ( nurl_umulhi f3 s3 ) = l1 + l1 pl = h1 + + h1 ph ? < l1 pl 1 0
+    = h1 + h1 ( nurl_mac_hi r1 s0 l1 0 ) = l1 ( nurl_mac_lo r1 s0 l1 0 )
+    = h1 + h1 ( nurl_mac_hi f4 s2 l1 0 ) = l1 ( nurl_mac_lo f4 s2 l1 0 )
+    = h1 + h1 ( nurl_mac_hi f2 s4 l1 0 ) = l1 ( nurl_mac_lo f2 s4 l1 0 )
+    = h1 + h1 ( nurl_mac_hi f3 s3 l1 0 ) = l1 ( nurl_mac_lo f3 s3 l1 0 )
     // t2 = r0·s2 + r1·s1 + r2·s0 + f4·s3 + f3·s4
     : ~ u64 l2 * r0 s2
     : ~ u64 h2 ( nurl_umulhi r0 s2 )
-    = pl * r1 s1 = ph ( nurl_umulhi r1 s1 ) = l2 + l2 pl = h2 + + h2 ph ? < l2 pl 1 0
-    = pl * r2 s0 = ph ( nurl_umulhi r2 s0 ) = l2 + l2 pl = h2 + + h2 ph ? < l2 pl 1 0
-    = pl * f4 s3 = ph ( nurl_umulhi f4 s3 ) = l2 + l2 pl = h2 + + h2 ph ? < l2 pl 1 0
-    = pl * f3 s4 = ph ( nurl_umulhi f3 s4 ) = l2 + l2 pl = h2 + + h2 ph ? < l2 pl 1 0
+    = h2 + h2 ( nurl_mac_hi r1 s1 l2 0 ) = l2 ( nurl_mac_lo r1 s1 l2 0 )
+    = h2 + h2 ( nurl_mac_hi r2 s0 l2 0 ) = l2 ( nurl_mac_lo r2 s0 l2 0 )
+    = h2 + h2 ( nurl_mac_hi f4 s3 l2 0 ) = l2 ( nurl_mac_lo f4 s3 l2 0 )
+    = h2 + h2 ( nurl_mac_hi f3 s4 l2 0 ) = l2 ( nurl_mac_lo f3 s4 l2 0 )
     // t3 = r0·s3 + r1·s2 + r2·s1 + r3·s0 + f4·s4
     : ~ u64 l3 * r0 s3
     : ~ u64 h3 ( nurl_umulhi r0 s3 )
-    = pl * r1 s2 = ph ( nurl_umulhi r1 s2 ) = l3 + l3 pl = h3 + + h3 ph ? < l3 pl 1 0
-    = pl * r2 s1 = ph ( nurl_umulhi r2 s1 ) = l3 + l3 pl = h3 + + h3 ph ? < l3 pl 1 0
-    = pl * r3 s0 = ph ( nurl_umulhi r3 s0 ) = l3 + l3 pl = h3 + + h3 ph ? < l3 pl 1 0
-    = pl * f4 s4 = ph ( nurl_umulhi f4 s4 ) = l3 + l3 pl = h3 + + h3 ph ? < l3 pl 1 0
+    = h3 + h3 ( nurl_mac_hi r1 s2 l3 0 ) = l3 ( nurl_mac_lo r1 s2 l3 0 )
+    = h3 + h3 ( nurl_mac_hi r2 s1 l3 0 ) = l3 ( nurl_mac_lo r2 s1 l3 0 )
+    = h3 + h3 ( nurl_mac_hi r3 s0 l3 0 ) = l3 ( nurl_mac_lo r3 s0 l3 0 )
+    = h3 + h3 ( nurl_mac_hi f4 s4 l3 0 ) = l3 ( nurl_mac_lo f4 s4 l3 0 )
     // t4 = r0·s4 + r1·s3 + r2·s2 + r3·s1 + r4·s0
     : ~ u64 l4 * r0 s4
     : ~ u64 h4 ( nurl_umulhi r0 s4 )
-    = pl * r1 s3 = ph ( nurl_umulhi r1 s3 ) = l4 + l4 pl = h4 + + h4 ph ? < l4 pl 1 0
-    = pl * r2 s2 = ph ( nurl_umulhi r2 s2 ) = l4 + l4 pl = h4 + + h4 ph ? < l4 pl 1 0
-    = pl * r3 s1 = ph ( nurl_umulhi r3 s1 ) = l4 + l4 pl = h4 + + h4 ph ? < l4 pl 1 0
-    = pl * r4 s0 = ph ( nurl_umulhi r4 s0 ) = l4 + l4 pl = h4 + + h4 ph ? < l4 pl 1 0
+    = h4 + h4 ( nurl_mac_hi r1 s3 l4 0 ) = l4 ( nurl_mac_lo r1 s3 l4 0 )
+    = h4 + h4 ( nurl_mac_hi r2 s2 l4 0 ) = l4 ( nurl_mac_lo r2 s2 l4 0 )
+    = h4 + h4 ( nurl_mac_hi r3 s1 l4 0 ) = l4 ( nurl_mac_lo r3 s1 l4 0 )
+    = h4 + h4 ( nurl_mac_hi r4 s0 l4 0 ) = l4 ( nurl_mac_lo r4 s0 l4 0 )
     ( __mul_carry_out o l0 h0 l1 h1 l2 h2 l3 h3 l4 h4 )
 }
 
@@ -302,33 +300,31 @@ $ `stdlib/core/vec.nu`
     : u64 d419 * r4 19
     : u64 d4 * d419 2
     : u64 r319 * r3 19
-    : ~ u64 pl 0
-    : ~ u64 ph 0
     // t0 = r0·r0 + d4·r1 + d2·r3
     : ~ u64 l0 * r0 r0
     : ~ u64 h0 ( nurl_umulhi r0 r0 )
-    = pl * d4 r1 = ph ( nurl_umulhi d4 r1 ) = l0 + l0 pl = h0 + + h0 ph ? < l0 pl 1 0
-    = pl * d2 r3 = ph ( nurl_umulhi d2 r3 ) = l0 + l0 pl = h0 + + h0 ph ? < l0 pl 1 0
+    = h0 + h0 ( nurl_mac_hi d4 r1 l0 0 ) = l0 ( nurl_mac_lo d4 r1 l0 0 )
+    = h0 + h0 ( nurl_mac_hi d2 r3 l0 0 ) = l0 ( nurl_mac_lo d2 r3 l0 0 )
     // t1 = d0·r1 + d4·r2 + r3·(r3·19)
     : ~ u64 l1 * d0 r1
     : ~ u64 h1 ( nurl_umulhi d0 r1 )
-    = pl * d4 r2 = ph ( nurl_umulhi d4 r2 ) = l1 + l1 pl = h1 + + h1 ph ? < l1 pl 1 0
-    = pl * r3 r319 = ph ( nurl_umulhi r3 r319 ) = l1 + l1 pl = h1 + + h1 ph ? < l1 pl 1 0
+    = h1 + h1 ( nurl_mac_hi d4 r2 l1 0 ) = l1 ( nurl_mac_lo d4 r2 l1 0 )
+    = h1 + h1 ( nurl_mac_hi r3 r319 l1 0 ) = l1 ( nurl_mac_lo r3 r319 l1 0 )
     // t2 = d0·r2 + r1·r1 + d4·r3
     : ~ u64 l2 * d0 r2
     : ~ u64 h2 ( nurl_umulhi d0 r2 )
-    = pl * r1 r1 = ph ( nurl_umulhi r1 r1 ) = l2 + l2 pl = h2 + + h2 ph ? < l2 pl 1 0
-    = pl * d4 r3 = ph ( nurl_umulhi d4 r3 ) = l2 + l2 pl = h2 + + h2 ph ? < l2 pl 1 0
+    = h2 + h2 ( nurl_mac_hi r1 r1 l2 0 ) = l2 ( nurl_mac_lo r1 r1 l2 0 )
+    = h2 + h2 ( nurl_mac_hi d4 r3 l2 0 ) = l2 ( nurl_mac_lo d4 r3 l2 0 )
     // t3 = d0·r3 + d1·r2 + r4·d419
     : ~ u64 l3 * d0 r3
     : ~ u64 h3 ( nurl_umulhi d0 r3 )
-    = pl * d1 r2 = ph ( nurl_umulhi d1 r2 ) = l3 + l3 pl = h3 + + h3 ph ? < l3 pl 1 0
-    = pl * r4 d419 = ph ( nurl_umulhi r4 d419 ) = l3 + l3 pl = h3 + + h3 ph ? < l3 pl 1 0
+    = h3 + h3 ( nurl_mac_hi d1 r2 l3 0 ) = l3 ( nurl_mac_lo d1 r2 l3 0 )
+    = h3 + h3 ( nurl_mac_hi r4 d419 l3 0 ) = l3 ( nurl_mac_lo r4 d419 l3 0 )
     // t4 = d0·r4 + d1·r3 + r2·r2
     : ~ u64 l4 * d0 r4
     : ~ u64 h4 ( nurl_umulhi d0 r4 )
-    = pl * d1 r3 = ph ( nurl_umulhi d1 r3 ) = l4 + l4 pl = h4 + + h4 ph ? < l4 pl 1 0
-    = pl * r2 r2 = ph ( nurl_umulhi r2 r2 ) = l4 + l4 pl = h4 + + h4 ph ? < l4 pl 1 0
+    = h4 + h4 ( nurl_mac_hi d1 r3 l4 0 ) = l4 ( nurl_mac_lo d1 r3 l4 0 )
+    = h4 + h4 ( nurl_mac_hi r2 r2 l4 0 ) = l4 ( nurl_mac_lo r2 r2 l4 0 )
     ( __mul_carry_out o l0 h0 l1 h1 l2 h2 l3 h3 l4 h4 )
 }
 

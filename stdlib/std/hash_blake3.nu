@@ -32,9 +32,11 @@ $ `stdlib/core/vec.nu`
 
 // Right-rotate a u32 by c bits (0 < c < 32).
 @ __b3_rotr u32 x i c → u32 {
-    : u32 cu # u32 c
-    : u32 inv # u32 - 32 c
-    ^ | >> x cu << x inv
+    // One `ror` instruction via the compiler's funnel-shift primitive,
+    // rather than a shift pair, an `or` and the two intermediate
+    // values they need materialised — see __sha256_rotr for the full
+    // note. Every ISA NURL targets has the instruction.
+    ^ # u32 ( nurl_rotr32 # u64 x # u64 c )
 }
 
 // BLAKE3 IV = the SHA-256 initial hash values.

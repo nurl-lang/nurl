@@ -19,10 +19,16 @@ $ `stdlib/std/bytes.nu`
 }
 
 // Right-rotate u32 by c bits (0 < c < 32).
+//
+// `nurl_rotr32` is the compiler's funnel-shift primitive: one `ror`
+// instruction on every ISA that has one. Spelled as the shift pair and
+// the `or` it replaces, the two shifts also had to be materialised as
+// 32-bit values first, and the six rotations a SHA-256 round performs
+// each paid for that. This routine runs 64 times per 64-byte block, on
+// every transcript hash, every HKDF expansion and every HMAC of the TLS
+// handshake.
 @ __sha256_rotr u32 x i c → u32 {
-    : u32 cu # u32 c
-    : u32 inv # u32 - 32 c
-    ^ | >> x cu << x inv
+    ^ # u32 ( nurl_rotr32 # u64 x # u64 c )
 }
 
 // ── 64-entry round-constant table per FIPS 180-4 §4.2.2 ────────────

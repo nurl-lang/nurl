@@ -30,9 +30,23 @@ build() { NURL_UNIKERNEL_OUT="$OUTDIR" "$ROOT/unikernel/build_unikernel_arm64.sh
 boot()  { "$ROOT/unikernel/run_qemu_arm64.sh" "$@"; }
 
 names=("$@")
+# The corpus this gate boots. The four SIMD entries are here because
+# `v128` is the one part of the language whose CODEGEN differs per
+# architecture: `nurl_v128_eqmask8` is a `pmovmskb` on x86-64 and a
+# shift-and-narrow sequence on AArch64, a scalarised loop where there is
+# no vector unit at all, and an `align 1` vector load is a different
+# instruction on each. Every one of them compares against the SAME hosted
+# golden, so a lane order or a bit order that came out backwards on one
+# ISA fails here rather than in someone's TLS session. simd_scan and
+# wide_arith check the primitives against scalar references,
+# chacha20_simd_agree checks the vector cipher against the scalar one at
+# every length, and http_request_parser is the head parser those scanners
+# are actually under. Four seconds, all told, under TCG.
 [ ${#names[@]} -gt 0 ] || names=(hello vec_basic float_format
                                  net_socket net_tcpstack
-                                 async_basic async_chan async_mn async_sleep)
+                                 async_basic async_chan async_mn async_sleep
+                                 simd_scan wide_arith chacha20_simd_agree
+                                 http_request_parser)
 
 fails=0
 for name in "${names[@]}"; do

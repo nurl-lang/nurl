@@ -78,52 +78,158 @@ $ `stdlib/core/vec.nu`
 @ __sn_mul ( Vec i ) dst ( Vec i ) a ( Vec i ) b → v {
     : *i ap ( vec_data [i] a )
     : *i bp ( vec_data [i] b )
-    : *i tp # *i ( nurl_zalloc 48 )  // t[0..5] (6 i64 slots), zeroed
-    : ~ i i 0
-    ~ < i 4 {
-        : u64 bi # u64 . bp i
-        : ~ u64 C 0
-        : ~ i j 0
-        ~ < j 4 {
-            : u64 aj # u64 . ap j
-            : u64 lo * aj bi
-            : u64 s1 + lo # u64 . tp j
-            : u64 s2 + s1 C
-            = . tp j # i s2
-            = C + + ( nurl_umulhi aj bi ) ? < s1 lo 1 0 ? < s2 s1 1 0
-            = j + j 1
-        }
-        : u64 t4 # u64 . tp 4
-        : u64 s4 + t4 C
-        = . tp 4 # i s4
-        = . tp 5 # i + # u64 . tp 5 ? < s4 t4 1 0
-        : u64 m * # u64 . tp 0 0xccd1c8aaee00bc4f
-        = C 0
-        = j 0
-        ~ < j 4 {
-            : u64 nj ? == j 0 0xf3b9cac2fc632551 ? == j 1 0xbce6faada7179e84 ? == j 2 0xffffffffffffffff 0xffffffff00000000
-            : u64 lo * m nj
-            : u64 s1 + lo # u64 . tp j
-            : u64 s2 + s1 C
-            = . tp j # i s2
-            = C + + ( nurl_umulhi m nj ) ? < s1 lo 1 0 ? < s2 s1 1 0
-            = j + j 1
-        }
-        : u64 t4b # u64 . tp 4
-        : u64 s4b + t4b C
-        = . tp 4 # i s4b
-        = . tp 5 # i + # u64 . tp 5 ? < s4b t4b 1 0
-        = . tp 0 . tp 1 = . tp 1 . tp 2 = . tp 2 . tp 3
-        = . tp 3 . tp 4 = . tp 4 . tp 5 = . tp 5 # i 0
-        = i + i 1
-    }
-    : u64 r0 # u64 . tp 0
-    : u64 r1 # u64 . tp 1
-    : u64 r2 # u64 . tp 2
-    : u64 r3 # u64 . tp 3
-    : u64 r4 # u64 . tp 4
-    ( nurl_free # s tp )
-    ( __sn_condsub dst r0 r1 r2 r3 r4 )
+    : u64 a0 # u64 . ap 0
+    : u64 a1 # u64 . ap 1
+    : u64 a2 # u64 . ap 2
+    : u64 a3 # u64 . ap 3
+    : u64 b0 # u64 . bp 0
+    : u64 b1 # u64 . bp 1
+    : u64 b2 # u64 . bp 2
+    : u64 b3 # u64 . bp 3
+    // Accumulator t[0..5], in registers. It used to live in a 48-byte
+    // `nurl_zalloc` — one heap allocation and free per scalar multiply,
+    // and every limb step a load and a store — while the two nested
+    // loops re-derived `b[i]` and the modulus limb `n[j]` from a chain
+    // of compares on each pass. Written out, the accumulator never
+    // leaves registers, the constants become multiply operands, and the
+    // allocator is not involved at all.
+    : ~ u64 t0 0
+    : ~ u64 t1 0
+    : ~ u64 t2 0
+    : ~ u64 t3 0
+    : ~ u64 t4 0
+    : ~ u64 t5 0
+    : ~ u64 m 0
+    : ~ u64 cr 0
+    // ── round 0: t += a·b0, then one Montgomery reduction ──
+    = cr ( nurl_mac_hi a0 b0 t0 0 )
+    = t0 ( nurl_mac_lo a0 b0 t0 0 )
+    : u64 q01 ( nurl_mac_lo a1 b0 t1 cr )
+    = cr ( nurl_mac_hi a1 b0 t1 cr )
+    = t1 q01
+    : u64 q02 ( nurl_mac_lo a2 b0 t2 cr )
+    = cr ( nurl_mac_hi a2 b0 t2 cr )
+    = t2 q02
+    : u64 q03 ( nurl_mac_lo a3 b0 t3 cr )
+    = cr ( nurl_mac_hi a3 b0 t3 cr )
+    = t3 q03
+    = t5 ( nurl_addc_lo t5 ( nurl_addc_hi t4 cr 0 ) 0 )
+    = t4 ( nurl_addc_lo t4 cr 0 )
+    // m = t0 · (−n^-1 mod 2^64). Unlike the prime field, n0 is not 1
+    // here, so the reduction multiplier costs a real multiply.
+    = m * t0 0xccd1c8aaee00bc4f
+    // j=0: the low word of t0 + m·n0 is 0 by construction — that IS
+    // the reduction — so only the carry out of it survives.
+    = cr ( nurl_mac_hi m 0xf3b9cac2fc632551 t0 0 )
+    : u64 w01 ( nurl_mac_lo m 0xbce6faada7179e84 t1 cr )
+    = cr ( nurl_mac_hi m 0xbce6faada7179e84 t1 cr )
+    = t1 w01
+    : u64 w02 ( nurl_mac_lo m 0xffffffffffffffff t2 cr )
+    = cr ( nurl_mac_hi m 0xffffffffffffffff t2 cr )
+    = t2 w02
+    : u64 w03 ( nurl_mac_lo m 0xffffffff00000000 t3 cr )
+    = cr ( nurl_mac_hi m 0xffffffff00000000 t3 cr )
+    = t3 w03
+    = t5 ( nurl_addc_lo t5 ( nurl_addc_hi t4 cr 0 ) 0 )
+    = t4 ( nurl_addc_lo t4 cr 0 )
+    = t0 t1 = t1 t2 = t2 t3 = t3 t4 = t4 t5 = t5 0
+    // ── round 1: t += a·b1, then one Montgomery reduction ──
+    = cr ( nurl_mac_hi a0 b1 t0 0 )
+    = t0 ( nurl_mac_lo a0 b1 t0 0 )
+    : u64 q11 ( nurl_mac_lo a1 b1 t1 cr )
+    = cr ( nurl_mac_hi a1 b1 t1 cr )
+    = t1 q11
+    : u64 q12 ( nurl_mac_lo a2 b1 t2 cr )
+    = cr ( nurl_mac_hi a2 b1 t2 cr )
+    = t2 q12
+    : u64 q13 ( nurl_mac_lo a3 b1 t3 cr )
+    = cr ( nurl_mac_hi a3 b1 t3 cr )
+    = t3 q13
+    = t5 ( nurl_addc_lo t5 ( nurl_addc_hi t4 cr 0 ) 0 )
+    = t4 ( nurl_addc_lo t4 cr 0 )
+    // m = t0 · (−n^-1 mod 2^64). Unlike the prime field, n0 is not 1
+    // here, so the reduction multiplier costs a real multiply.
+    = m * t0 0xccd1c8aaee00bc4f
+    // j=0: the low word of t0 + m·n0 is 0 by construction — that IS
+    // the reduction — so only the carry out of it survives.
+    = cr ( nurl_mac_hi m 0xf3b9cac2fc632551 t0 0 )
+    : u64 w11 ( nurl_mac_lo m 0xbce6faada7179e84 t1 cr )
+    = cr ( nurl_mac_hi m 0xbce6faada7179e84 t1 cr )
+    = t1 w11
+    : u64 w12 ( nurl_mac_lo m 0xffffffffffffffff t2 cr )
+    = cr ( nurl_mac_hi m 0xffffffffffffffff t2 cr )
+    = t2 w12
+    : u64 w13 ( nurl_mac_lo m 0xffffffff00000000 t3 cr )
+    = cr ( nurl_mac_hi m 0xffffffff00000000 t3 cr )
+    = t3 w13
+    = t5 ( nurl_addc_lo t5 ( nurl_addc_hi t4 cr 0 ) 0 )
+    = t4 ( nurl_addc_lo t4 cr 0 )
+    = t0 t1 = t1 t2 = t2 t3 = t3 t4 = t4 t5 = t5 0
+    // ── round 2: t += a·b2, then one Montgomery reduction ──
+    = cr ( nurl_mac_hi a0 b2 t0 0 )
+    = t0 ( nurl_mac_lo a0 b2 t0 0 )
+    : u64 q21 ( nurl_mac_lo a1 b2 t1 cr )
+    = cr ( nurl_mac_hi a1 b2 t1 cr )
+    = t1 q21
+    : u64 q22 ( nurl_mac_lo a2 b2 t2 cr )
+    = cr ( nurl_mac_hi a2 b2 t2 cr )
+    = t2 q22
+    : u64 q23 ( nurl_mac_lo a3 b2 t3 cr )
+    = cr ( nurl_mac_hi a3 b2 t3 cr )
+    = t3 q23
+    = t5 ( nurl_addc_lo t5 ( nurl_addc_hi t4 cr 0 ) 0 )
+    = t4 ( nurl_addc_lo t4 cr 0 )
+    // m = t0 · (−n^-1 mod 2^64). Unlike the prime field, n0 is not 1
+    // here, so the reduction multiplier costs a real multiply.
+    = m * t0 0xccd1c8aaee00bc4f
+    // j=0: the low word of t0 + m·n0 is 0 by construction — that IS
+    // the reduction — so only the carry out of it survives.
+    = cr ( nurl_mac_hi m 0xf3b9cac2fc632551 t0 0 )
+    : u64 w21 ( nurl_mac_lo m 0xbce6faada7179e84 t1 cr )
+    = cr ( nurl_mac_hi m 0xbce6faada7179e84 t1 cr )
+    = t1 w21
+    : u64 w22 ( nurl_mac_lo m 0xffffffffffffffff t2 cr )
+    = cr ( nurl_mac_hi m 0xffffffffffffffff t2 cr )
+    = t2 w22
+    : u64 w23 ( nurl_mac_lo m 0xffffffff00000000 t3 cr )
+    = cr ( nurl_mac_hi m 0xffffffff00000000 t3 cr )
+    = t3 w23
+    = t5 ( nurl_addc_lo t5 ( nurl_addc_hi t4 cr 0 ) 0 )
+    = t4 ( nurl_addc_lo t4 cr 0 )
+    = t0 t1 = t1 t2 = t2 t3 = t3 t4 = t4 t5 = t5 0
+    // ── round 3: t += a·b3, then one Montgomery reduction ──
+    = cr ( nurl_mac_hi a0 b3 t0 0 )
+    = t0 ( nurl_mac_lo a0 b3 t0 0 )
+    : u64 q31 ( nurl_mac_lo a1 b3 t1 cr )
+    = cr ( nurl_mac_hi a1 b3 t1 cr )
+    = t1 q31
+    : u64 q32 ( nurl_mac_lo a2 b3 t2 cr )
+    = cr ( nurl_mac_hi a2 b3 t2 cr )
+    = t2 q32
+    : u64 q33 ( nurl_mac_lo a3 b3 t3 cr )
+    = cr ( nurl_mac_hi a3 b3 t3 cr )
+    = t3 q33
+    = t5 ( nurl_addc_lo t5 ( nurl_addc_hi t4 cr 0 ) 0 )
+    = t4 ( nurl_addc_lo t4 cr 0 )
+    // m = t0 · (−n^-1 mod 2^64). Unlike the prime field, n0 is not 1
+    // here, so the reduction multiplier costs a real multiply.
+    = m * t0 0xccd1c8aaee00bc4f
+    // j=0: the low word of t0 + m·n0 is 0 by construction — that IS
+    // the reduction — so only the carry out of it survives.
+    = cr ( nurl_mac_hi m 0xf3b9cac2fc632551 t0 0 )
+    : u64 w31 ( nurl_mac_lo m 0xbce6faada7179e84 t1 cr )
+    = cr ( nurl_mac_hi m 0xbce6faada7179e84 t1 cr )
+    = t1 w31
+    : u64 w32 ( nurl_mac_lo m 0xffffffffffffffff t2 cr )
+    = cr ( nurl_mac_hi m 0xffffffffffffffff t2 cr )
+    = t2 w32
+    : u64 w33 ( nurl_mac_lo m 0xffffffff00000000 t3 cr )
+    = cr ( nurl_mac_hi m 0xffffffff00000000 t3 cr )
+    = t3 w33
+    = t5 ( nurl_addc_lo t5 ( nurl_addc_hi t4 cr 0 ) 0 )
+    = t4 ( nurl_addc_lo t4 cr 0 )
+    = t0 t1 = t1 t2 = t2 t3 = t3 t4 = t4 t5 = t5 0
+    ( __sn_condsub dst t0 t1 t2 t3 t4 )
 }
 
 // Conditional subtract of n from a value held as (r0..r3, top word r4),
@@ -131,15 +237,14 @@ $ `stdlib/core/vec.nu`
 // carry word from the multiply's accumulator (0 or 1); together with a
 // borrow past r3 it decides whether the value was ≥ n.
 @ __sn_condsub ( Vec i ) dst u64 w0 u64 w1 u64 w2 u64 w3 u64 w4 → v {
-    : ~ u64 bb 0
-    : u64 d0 - w0 0xf3b9cac2fc632551
-    = bb ? < w0 0xf3b9cac2fc632551 1 0
-    : u64 d1 - - w1 0xbce6faada7179e84 bb
-    = bb | ? < w1 0xbce6faada7179e84 1 0 ? < - w1 0xbce6faada7179e84 bb 1 0
-    : u64 d2 - - w2 0xffffffffffffffff bb
-    = bb | ? < w2 0xffffffffffffffff 1 0 ? < - w2 0xffffffffffffffff bb 1 0
-    : u64 d3 - - w3 0xffffffff00000000 bb
-    = bb | ? < w3 0xffffffff00000000 1 0 ? < - w3 0xffffffff00000000 bb 1 0
+    : u64 d0 ( nurl_subb_lo w0 0xf3b9cac2fc632551 0 )
+    : ~ u64 bb ( nurl_subb_hi w0 0xf3b9cac2fc632551 0 )
+    : u64 d1 ( nurl_subb_lo w1 0xbce6faada7179e84 bb )
+    = bb ( nurl_subb_hi w1 0xbce6faada7179e84 bb )
+    : u64 d2 ( nurl_subb_lo w2 0xffffffffffffffff bb )
+    = bb ( nurl_subb_hi w2 0xffffffffffffffff bb )
+    : u64 d3 ( nurl_subb_lo w3 0xffffffff00000000 bb )
+    = bb ( nurl_subb_hi w3 0xffffffff00000000 bb )
     // topb < 0 ⇒ the value was < n ⇒ keep w; else take d = w − n.
     : i topb - # i w4 # i bb
     : u64 mask ? < topb 0 0 0xffffffffffffffff

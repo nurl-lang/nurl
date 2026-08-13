@@ -25,9 +25,11 @@ $ `stdlib/std/bytes.nu`
 
 // Left-rotate u32 by c bits (0 < c < 32).
 @ __sha1_rotl u32 x i c → u32 {
-    : u32 cu # u32 c
-    : u32 inv # u32 - 32 c
-    ^ | << x cu >> x inv
+    // One `rol` instruction via the compiler's funnel-shift primitive,
+    // rather than a shift pair, an `or` and the two intermediate
+    // values they need materialised — see __sha256_rotr for the full
+    // note. Every ISA NURL targets has the instruction.
+    ^ # u32 ( nurl_rotl32 # u64 x # u64 c )
 }
 
 // ── Round constants for the four 20-round groups ───────────────────
