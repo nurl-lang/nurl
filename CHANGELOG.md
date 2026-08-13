@@ -10,6 +10,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **MCP tasks extension — `stdlib/ext/mcp_tasks.nu`.** The
+  `io.modelcontextprotocol/tasks` extension lets a server answer a
+  `tools/call` with an asynchronous task handle instead of a final
+  result, so expensive work no longer has to hold a JSON-RPC response
+  open. The new module is the whole protocol side of it: a task store
+  (unguessable 32-hex ids, TTL sweep, bounded retention), the wire
+  shapes (`CreateTaskResult` with `resultType: "task"`, the
+  `DetailedTask` body `tasks/get` and `notifications/tasks` share),
+  per-request capability negotiation, and handlers for `tasks/get`,
+  `tasks/update` and `tasks/cancel` — including the two rules the spec
+  makes non-negotiable: a `CreateTaskResult` may never go to a client
+  that did not declare the extension **on that request**, and a
+  non-declaring client issuing a `tasks/*` method gets −32003 with
+  `data.requiredCapabilities`. Multi-round-trip execution is supported
+  through `inputRequests`/`inputResponses`, with responses to unknown or
+  already-answered keys ignored as the spec requires.
+
+  The module deliberately does not run the work: a server that wants
+  tasks already owns a job engine, so a task carries an opaque `link`
+  integer to tie the handle back to it, and the server drives
+  `mcp_task_complete` / `mcp_task_fail` / `mcp_task_request_input`
+  itself. `packages/swarm-mcp` 0.23.0 is the first consumer — its
+  `compute_submit` family now hands a task-capable client a
+  `CreateTaskResult` it polls over the protocol instead of through the
+  bespoke `compute_result` tool.
+
+  Note: the extension draft pins MISSING_REQUIRED_CLIENT_CAPABILITY to
+  −32003, whereas the base 2026-07-28 spec renumbered its own reserved
+  codes into −32020…−32099. The extension is normative for its own
+  methods, so `mcp_tasks_err_missing_capability` is −32003 while
+  `mcp_err_missing_client_capability` stays −32021.
+
 - **The build caches: a rebuild costs less than a C compile.** On
   native Linux, `nurl.sh` now links with ThinLTO by default and keeps
   three caches under `~/.cache/nurl`: the link's per-module backend

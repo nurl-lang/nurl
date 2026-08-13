@@ -1,5 +1,39 @@
 # Changelog
 
+## 0.23.0
+
+**MCP tasks: the compute_submit family now speaks
+`io.modelcontextprotocol/tasks`.** The submit tools were already a task API
+expressed in tool arguments — submit, get a `task_id`, poll `compute_result`.
+That same flow is now available in the PROTOCOL, so a task-capable client
+drives a distributed reduction with no swarm-specific tool knowledge at all.
+
+- `server/discover` declares `capabilities.extensions`
+  `{"io.modelcontextprotocol/tasks": {}}`.
+- A client that declares the extension on a `tools/call` for
+  `compute_submit`, `compute_submit_kernel`, `compute_submit_cuda`,
+  `compute_sample_cuda`, `compute_histogram_cuda` or `compute_run_wasm` gets a
+  **`CreateTaskResult`** (`resultType: "task"`, 32-hex `taskId`, `ttlMs`,
+  `pollIntervalMs`) instead of the tool result, and polls **`tasks/get`** until
+  the task reaches `completed`. The completed task inlines exactly the
+  `CallToolResult` `compute_result` would have returned, so both polling
+  styles see identical payloads.
+- `tasks/cancel` and `tasks/update` are served too. Cancellation is
+  cooperative per the spec — the ack is guaranteed, a transition to
+  `cancelled` is not (a swarm task in flight runs to completion).
+- Task creation is **server-directed and per-request**: a client that does not
+  declare the extension gets exactly the previous behaviour, and a call that
+  registers no swarm task (an argument error, an empty cluster, a
+  non-eligible tool like `swarm_help`) is never augmented.
+- A non-declaring client issuing `tasks/*` gets **−32003** with
+  `data.requiredCapabilities`; an unknown or expired `taskId` gets **−32602**.
+  Task handles carry a 1 h TTL and are swept on access.
+
+Covered end-to-end by `tests/tasks_smoke.sh` (CPU only — no GPU needed).
+The protocol machinery lives in the toolchain's `stdlib/ext/mcp_tasks.nu`;
+this package only decides which calls become tasks and how a swarm task's
+state maps onto a task status.
+
 ## 0.22.0
 
 **Dual-era MCP — the 2026-07-28 stateless revision, without dropping legacy

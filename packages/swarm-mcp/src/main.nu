@@ -30,6 +30,7 @@ $ `stdlib/ext/env.nu`
 $ `stdlib/ext/json.nu`
 $ `stdlib/ext/mcp.nu`
 $ `stdlib/ext/mcp_http.nu`
+$ `stdlib/ext/mcp_tasks.nu`
 $ `stdlib/net/relay.nu`
 $ `stdlib/net/transport.nu`
 $ `stdlib/dist/ring.nu`
@@ -768,6 +769,8 @@ $ `cudakernel.nu`
     ( Vec s ) datasets  // *Dataset — uploaded data the CUDA tools map over
     i next_ds
     ( Vec String ) seeded  // "blockhex|chunk|epoch" — blocks CONFIRMED cached at their owner
+    McpTaskStore mcptasks  // io.modelcontextprotocol/tasks handles, keyed by task id
+    s last_task  // *Task the tool call currently in flight registered (0 = none)
 }
 
 // Constructor. The params share the field names (`lo`, `hi`, …); `= . t lo lo`
@@ -798,6 +801,21 @@ $ `cudakernel.nu`
 }
 
 : ~ i g_mcp 0
+
+// Register a freshly-submitted task and remember it as the one the
+// in-flight tool call produced. Every submit path goes through here so
+// the MCP tasks layer (below) can link its handle to the swarm task
+// without each tool having to thread the pointer back out.
+//
+// `last_task` is a single-slot handoff, which is sound because the MCP
+// endpoint is a SERIAL accept loop (`server_run`): exactly one tool call
+// is ever in flight. It is cleared before dispatch and read immediately
+// after, so a tool that submits nothing leaves it at 0.
+@ task_register * Task t → v {
+    : *McpState st # *McpState g_mcp
+    ( vec_push [s] . st tasks # s t )
+    = . st last_task # s t
+}
 
 // ── datasets: uploaded arrays the CUDA tools map over ────────────
 // A dataset is a flat f64 array held at the coordinator as raw LE bytes.
@@ -1393,7 +1411,7 @@ $ `cudakernel.nu`
     : *McpState st # *McpState g_mcp
     : *Task t ( task_new . st next_id eb dtype lo hi op nchunks tids )
     = . st next_id + . st next_id 1
-    ( vec_push [s] . st tasks # s t )
+    ( task_register t )
 
     // Pump briefly so small tasks come back as "done" immediately.
     ( mcp_pump 8 )
@@ -1428,7 +1446,7 @@ $ `cudakernel.nu`
     : *McpState st # *McpState g_mcp
     : *Task t ( task_new . st next_id ( bytes_from_str ? != gpu 0 `<wasm kernel (gpu)>` `<wasm kernel>` ) dtype lo hi op nchunks tids )
     = . st next_id + . st next_id 1
-    ( vec_push [s] . st tasks # s t )
+    ( task_register t )
     ( mcp_pump 8 )
     ( task_refresh t )
     ^ ( tool_result_json ( task_to_json t ) )
@@ -1660,7 +1678,7 @@ $ `cudakernel.nu`
     ( nurl_free nseed )
     ? > ( nurl_str_len out_file ) 0 { ( string_push_str . t out_file out_file ) } {}
     = . st next_id + . st next_id 1
-    ( vec_push [s] . st tasks # s t )
+    ( task_register t )
     ( mcp_pump 8 )
     ( task_refresh t )
     ^ ( tool_result_json ( task_to_json t ) )
@@ -2711,6 +2729,111 @@ $ `cudakernel.nu`
     ^ ( tool_result_json ( task_to_json t ) )
 }
 
+// ── MCP tasks extension (io.modelcontextprotocol/tasks) ──────────
+//
+// The compute_submit family already IS a task API: the call shards the
+// work across the cluster, returns a handle, and the client polls
+// compute_result until the reduction lands. The tasks extension is that
+// same flow expressed in the protocol instead of in tool arguments — so
+// a task-capable client gets a CreateTaskResult from the submit call and
+// polls `tasks/get`, with no swarm-specific tool knowledge at all.
+//
+// The mapping is one MCP task handle per swarm *Task, linked by the
+// swarm task's integer id (mcp_task_set_link). Everything else — id
+// generation, TTL, the wire shapes, the capability gate — is the
+// stdlib's (stdlib/ext/mcp_tasks.nu); this file only decides WHICH calls
+// become tasks and how a swarm task's state maps onto a task status.
+//
+// Task creation is server-directed and per-request: a client that does
+// not declare the extension on the call gets exactly the old behaviour.
+
+@ mcp_task_store → McpTaskStore {
+    : *McpState st # *McpState g_mcp
+    ^ . st mcptasks
+}
+
+// An hour is far longer than any submit takes, but a client that walks
+// away should not pin the result set forever.
+@ __mcp_task_ttl → i { ^ 3600000 }
+
+// Chunks land in well under a second on a local cluster; a 1 s poll
+// keeps an interactive submit feeling immediate without a busy loop.
+@ __mcp_task_poll → i { ^ 1000 }
+
+// Tools that register a swarm task and are therefore worth augmenting.
+// The rest either answer immediately (help, list, upload) or run their
+// whole loop inside the call (iterate, shuffle) with no pollable handle.
+@ __mcp_task_eligible s name → b {
+    ? != 0 ( nurl_str_eq name `compute_submit` ) { ^ T } {}
+    ? != 0 ( nurl_str_eq name `compute_submit_kernel` ) { ^ T } {}
+    ? != 0 ( nurl_str_eq name `compute_submit_cuda` ) { ^ T } {}
+    ? != 0 ( nurl_str_eq name `compute_sample_cuda` ) { ^ T } {}
+    ? != 0 ( nurl_str_eq name `compute_histogram_cuda` ) { ^ T } {}
+    ? != 0 ( nurl_str_eq name `compute_run_wasm` ) { ^ T } {}
+    ^ F
+}
+
+// Reflect the linked swarm task's state onto the MCP task. A finished
+// swarm task completes the MCP task with exactly the CallToolResult
+// compute_result would have returned, so a task-polling client and a
+// compute_result-polling client see identical payloads.
+//
+// Note the status split the spec insists on: failed chunks are a TOOL
+// outcome, not a JSON-RPC fault, so they still COMPLETE the task (the
+// payload's own "status" field says "error"). `failed` is reserved for
+// the case where the swarm task itself has vanished.
+@ __mcp_task_sync s mt → v {
+    ? ( mcp_task_status_is_terminal ( mcp_task_status mt ) ) { ^ v } {}
+    : s tp ( task_find ( mcp_task_link mt ) )
+    ? == # i tp 0 {
+        ( mcp_task_fail mt mcp_err_internal_error
+        `the underlying swarm task is no longer registered` )
+        ^ v
+    } {}
+    : *Task t # *Task tp
+    ( task_refresh t )
+    ? == . t done 1 {
+        ? > . t failed 0 {
+            ( mcp_task_set_message mt `finished with failed chunks` )
+        } {
+            ( mcp_task_set_message mt `finished` )
+        }
+        ( mcp_task_complete mt ( tool_result_json ( task_to_json t ) ) )
+    } {
+        ( mcp_task_set_message mt `chunks in flight` )
+    }
+}
+
+// Advance every live task before answering a poll. Cheap: a finished
+// swarm task short-circuits in task_refresh, and a completed MCP task
+// is skipped outright.
+@ __mcp_tasks_sync_all → v {
+    : McpTaskStore store ( mcp_task_store )
+    : i n ( mcp_task_store_count store )
+    : ~ i k 0
+    ~ < k n {
+        ( __mcp_task_sync ( mcp_task_nth store k ) )
+        = k + k 1
+    }
+}
+
+// Wrap the swarm task a just-completed tool call registered into an MCP
+// task handle. None when the call registered nothing — an argument
+// error or an empty cluster is an immediate tool result, not a task.
+@ __mcp_task_augment s name Json args → ?Json {
+    : *McpState st # *McpState g_mcp
+    : s lt . st last_task
+    ? == # i lt 0 { ^ @ ?Json { F @ Json { JNull } } } {}
+    : *Task t # *Task lt
+    : s mt ( mcp_task_create ( mcp_task_store ) `tools/call` name ( json_clone args )
+    ( __mcp_task_ttl ) ( __mcp_task_poll ) )
+    ( mcp_task_set_link mt . t id )
+    // The submit path already pumped once, so a small range may well be
+    // done here — seeding the state now saves the client a round trip.
+    ( __mcp_task_sync mt )
+    ^ @ ?Json { T ( mcp_task_create_result mt ) }
+}
+
 // ── tool descriptors ─────────────────────────────────────────────
 
 @ ms_prop Json props s name s ty s desc → v {
@@ -3067,7 +3190,7 @@ $ `cudakernel.nu`
 // Single source of truth for the server version — the MCP handshake,
 // server/discover, and the --version banner all read this (the
 // handshake had drifted to a stale hand-written 0.20.0).
-@ sm_version → s { ^ `0.22.0` }
+@ sm_version → s { ^ `0.23.0` }
 
 @ handle_initialize Json id ? Json params → Json {
     : Json result ( mcp_initialize_result `swarm-mcp` ( sm_version ) )
@@ -3083,6 +3206,9 @@ $ `cudakernel.nu`
 @ handle_discover Json id → Json {
     : Json caps ( json_obj_new )
     ( json_obj_set caps `tools` ( json_obj_new ) )
+    // io.modelcontextprotocol/tasks: the compute_submit family answers a
+    // task-declaring client with a CreateTaskResult it polls via tasks/get.
+    ( mcp_caps_declare_tasks caps )
     : Json result ( mcp_discover_result `swarm-mcp` ( sm_version )
     caps
     `Distributed compute over a swarm cluster: submit expression / NURL / CUDA-C kernels over integer ranges or uploaded datasets, sample or histogram on GPU workers, and iterate (SGD or a custom update rule). Call swarm_help first — topic "start" for the workflow, "limits" for the envelope.` )
@@ -3114,13 +3240,30 @@ $ `cudakernel.nu`
     ^ ( mcp_response_result id result )
 }
 
-@ handle_tools_call Json id Json params → Json {
+// `want_task` is the per-request tasks capability the client declared.
+// It only ENABLES augmentation — the decision stays the server's, per
+// tool (__mcp_task_eligible) and per call (a tool that registered no
+// swarm task returns its result directly).
+@ handle_tools_call Json id Json params b want_task → Json {
     : ?Json name_j ( json_obj_get params `name` )
     ?? name_j {
         T nv → {
             : s name ( json_str_data nv )
             : Json args ?? ( json_obj_get params `arguments` ) { T av → ( json_clone av ) F → ( json_obj_new ) }
+            : b augment & want_task ( __mcp_task_eligible name )
+            : *McpState st # *McpState g_mcp
+            ? augment { = . st last_task # s 0 } {}
             : Json result ( dispatch_tool name args )
+            ? augment {
+                ?? ( __mcp_task_augment name args ) {
+                    T ctr → {
+                        ( json_free result )
+                        ( json_free args )
+                        ^ ( mcp_response_result id ctr )
+                    }
+                    F _ → {}
+                }
+            } {}
             ( json_free args )
             ^ ( mcp_response_result id result )
         }
@@ -3164,9 +3307,22 @@ $ `cudakernel.nu`
                     ? != ( nurl_str_eq method `tools/list` ) 0 { ^ ( finish_reply ( handle_tools_list id ) modern ) } {}
                     ? != ( nurl_str_eq method `tools/call` ) 0 {
                         : Json params ?? ( json_obj_get req `params` ) { T pv → ( json_clone pv ) F → ( json_obj_new ) }
-                        : Json out ( handle_tools_call id params )
+                        : Json out ( handle_tools_call id params ( mcp_request_declares_tasks req ) )
                         ( json_free params )
                         ^ ( finish_reply out modern )
+                    } {}
+                    // tasks/get, tasks/update, tasks/cancel. Every live
+                    // task is advanced first so a poll answers from the
+                    // cluster's current state rather than the state at
+                    // submit time; the stdlib layer then applies the
+                    // capability gate and the taskId lookup.
+                    ? ( mcp_tasks_is_method method ) {
+                        ( mcp_pump 4 )
+                        ( __mcp_tasks_sync_all )
+                        ?? ( mcp_tasks_dispatch ( mcp_task_store ) req id method ) {
+                            T out → { ^ ( finish_reply out modern ) }
+                            F _ → {}
+                        }
                     } {}
                     ^ @ ?Json { T ( handle_unknown id method ) }
                 }
@@ -3257,6 +3413,8 @@ $ `cudakernel.nu`
             = . st next_ds 1
             = . st next_id 1
             = . st seeded ( vec_new [String] )
+            = . st mcptasks ( mcp_task_store_new )
+            = . st last_task # s 0
             = g_mcp # i st
             = g_mcp_relays # i relays
             = g_mcp_from % + cur 1 ( vec_len [String] relays )
