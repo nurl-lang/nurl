@@ -305,6 +305,95 @@ $ `stdlib/std/p256_scalar.nu`  // fixed-width GF(n) for the signing scalar arith
 // (ECDSA signing nonce, ECDHE private scalar) — no operand-time-dependent
 // BigInt, no secret-dependent branch, so no scalar blinding is needed (the
 // op is leak-free by construction). Identity result → 64 zero bytes.
+// ── fixed-base comb for the generator G (ECDSA k·G, ECDH keygen) ──────
+// k·G with G the P-256 generator is a FIXED-base multiply, so most of the
+// point doublings the variable-base window ladder pays can be precomputed
+// away. This is a 4-tooth Lim–Lee comb: the 256-bit scalar is four 64-bit
+// blocks, and `__p256_comb_tbl` holds the 15 non-trivial sums
+// b0·G + b1·2^64·G + b2·2^128·G + b3·2^192·G (T[0] = identity). The main
+// loop is then 64 iterations of one doubling + one constant-time 16-way
+// table select + one complete addition — ~64 D + 64 A against the window
+// path's ~256 D + 64 A. Still fully constant-time: the same masked table
+// scan the secret-path window ladder uses.
+//
+// The table is affine (x‖y, 32-byte big-endian each), converted to
+// Montgomery projective once per call. Verified against k·G in Python.
+@ __p256_comb_tbl_hex → s { ^ `6b17d1f2e12c4247f8bce6e563a440f277037d812deb33a0f4a13945d898c2964fe342e2fe1a7f9b8ee7eb4a7c0f9e162bce33576b315ececbb6406837bf51f50fa822bc2811aaa58492592e326e25de29493baaad651f7e90e75cb48e14db63bff44ae8f5dba80d6f4ad4bcb3df188b34b1a65050fe82f5e41124545f462ee7300a4bbc89d6726fb257c0de95e02789e96c98fd0d35f1fa93391ce2097992af72aac7e0d09b46447f1ddb25ff1e3c6f5bb1eeada9d806a5aa54a291c08127a0447d739beedb5e67fb982fd588c6766efc35ff7dc297eac357c84fc9d789bd852d4825ab834131eee12e9d953a4aaff73d349b95a7fae5000c7e33c972e25b32ef9519328a9c72ffddc6068bb91dfc60ef7fbd2b1a0a11b713949c932a1d367f611e9fc37dbb2c9bc1ee9807022c219c23183b0895ca1740196035a77376d8a8550663797b51f5d87dea6482e11238bf2936df5ec6c9bc36cae2b1920b57f4bc157164848aecb8510afa40018d9d50e59fb3d576dbdefbe144ffe216348a964ceb5d7745b21141eaa2e8f483f43e43917ccd84e70d715f26e48ecafffc5cde01eafd72ebdbecc17b0990e6a158006cee85f22cfe2844b645cac917e2731a3479a6d39677a78492762736ff8344315fc596439591a3c6b94a6cf20ffb313728be674f84749b0b881666b8babd2d27ecdf824a920c2284059bf2bab833c357f5f44e769e7672c9ddad31855f7db8c7fedb74e02f080203a56b2df48c04677c8a3e42b99082de8306631ec0057206947281fb9ae16f3b9122a5a4c36165b824bbb078878ef61c6ce04d7fdc1ca008a1c478d1f89e799c0ce1316ef95150dda868b9b6cb3f5d7b72c321de53142c12309def6ace570ebde08d4f9c62b9121fe0d9760c88bc4d716b1287595c5220812ffcae5b82dd5bd54fb4967f991ed2c31a3573dd5ddea3f3901dc618d1b5b39c04e6aa7c8181f4df2564f33a57bf635f48aca868f344af6b317466efe0a423083e49f343a0a28c42ba792fe96a79fb3e72ad0c31b9c405f8540a20604ed93c24d67ff3668bfc2271f5c626cdfe17db3fb24d4a4052bf4b6f461db9663c62c3edbad7a00d1a10144ec39c28d36b4789a2582e7ffecf4d5190b0fc61862be6bd71d70cc8e724f33999bfcc5b235a27c3188d25eb1eddbae2c802e41a123202a8f62bff7aafdf5cc08526a7a474346c10a1d4cfac43104d86560ebcfc0c45f45273db33a036e06b7e4c7019178fa0af2dd603f844b48e26b484f7a21c0a4a46fb6aaf363a66b0de3225c4744b9615b5110d1d78e5fac015404d4d3dab64131bcdfed6f668c004e4048b7b0f9806ebb0f621a01b2d` }
+
+// 32 big-endian bytes at offset `off` → eight little-endian 2^32 limbs.
+@ __p256_be32_to_limbs ( Vec u ) src i off → ( Vec i ) {
+    : ( Vec i ) out ( vec_with_cap [i] 8 )
+    : ~ i k 0
+    ~ < k 8 {
+        : i b0 ?? ( vec_get [u] src + off - 31 * 4 k ) { T b → # i b F _ → 0 }
+        : i b1 ?? ( vec_get [u] src + off - 30 * 4 k ) { T b → # i b F _ → 0 }
+        : i b2 ?? ( vec_get [u] src + off - 29 * 4 k ) { T b → # i b F _ → 0 }
+        : i b3 ?? ( vec_get [u] src + off - 28 * 4 k ) { T b → # i b F _ → 0 }
+        ( vec_push [i] out | | | b0 << b1 8 << b2 16 << b3 24 )
+        = k + k 1
+    }
+    ^ out
+}
+
+// scalar · G → 64 bytes X‖Y, constant-time fixed-base comb.
+@ p256ct_scalarmult_base ( Vec u ) kbytes → ( Vec u ) {
+    : P256Scratch scr ( __p256_scr_new )
+    : ( Vec i ) aplain ( __p256_a_plain )
+    : ( Vec i ) am ( __p256_to_mont_s scr aplain ) ( vec_free [i] aplain )
+    : ( Vec i ) b3plain ( __p256_b3_plain )
+    : ( Vec i ) b3m ( __p256_to_mont_s scr b3plain ) ( vec_free [i] b3plain )
+    : ( Vec u ) tbytes ?? ( bytes_from_hex ( __p256_comb_tbl_hex ) ) { T v → v F _ → ( vec_new [u] ) }
+    : ( Vec i ) tbl ( __magn 384 )
+    : P256Pt acc ( __p256_pt_mag )
+    ( __p256_set_identity_d scr acc )
+    ( __p256_tbl_put tbl 0 acc )
+    : P256Pt tmp ( __p256_pt_mag )
+    : ~ i s 1
+    ~ < s 16 {
+        : i off * - s 1 64
+        : ( Vec i ) xl ( __p256_be32_to_limbs tbytes off )
+        : ( Vec i ) yl ( __p256_be32_to_limbs tbytes + off 32 )
+        ( __p256_to_mont_d scr . tmp x xl )
+        ( __p256_to_mont_d scr . tmp y yl )
+        ( __p256_one_mont_d scr . tmp z )
+        ( __p256_tbl_put tbl s tmp )
+        ( vec_free [i] xl ) ( vec_free [i] yl )
+        = s + s 1
+    }
+    ( vec_free [u] tbytes )
+    ( __p256_set_identity_d scr acc )
+    : P256Pt selp ( __p256_pt_mag )
+    : ~ i i 63
+    ~ >= i 0 {
+        ( p256ct_padd_d scr acc acc acc am b3m )
+        : ~ i idx 0
+        : ~ i j 0
+        ~ < j 4 {
+            : i bitpos + * 64 j i
+            : i byteidx - 31 >> bitpos 3
+            : i bit & 1 >> ?? ( vec_get [u] kbytes byteidx ) { T b → # i b F _ → 0 } & bitpos 7
+            = idx | idx << bit j
+            = j + j 1
+        }
+        ( __p256_tbl_get_d selp tbl idx )
+        ( p256ct_padd_d scr acc acc selp am b3m )
+        = i - i 1
+    }
+    : ( Vec i ) zinv ( __mag8 )
+    ( __p256_inv_d scr zinv . acc z )
+    ( __p256_mul_d scr . acc x . acc x zinv )
+    ( __p256_mul_d scr . acc y . acc y zinv )
+    ( __p256_from_mont_d scr . acc x . acc x )
+    ( __p256_from_mont_d scr . acc y . acc y )
+    : ( Vec u ) out ( vec_with_cap [u] 64 )
+    ( __p256_limbs_to_be out . acc x )
+    ( __p256_limbs_to_be out . acc y )
+    ( p256pt_free acc ) ( p256pt_free tmp ) ( p256pt_free selp )
+    ( vec_free [i] tbl ) ( vec_free [i] am ) ( vec_free [i] b3m ) ( vec_free [i] zinv )
+    ( __p256_scr_free scr )
+    ^ out
+}
+
 @ __p256_mul_affine ( Vec u ) scalar BigInt bx BigInt by → ( Vec u ) {
     : ( Vec i ) bxl ( __big_to_limbs8 bx )
     : ( Vec i ) byl ( __big_to_limbs8 by )
@@ -321,13 +410,12 @@ $ `stdlib/std/p256_scalar.nu`  // fixed-width GF(n) for the signing scalar arith
 
 // Private scalar → 65-byte uncompressed public point.
 @ p256_ecdh_keygen ( Vec u ) scalar → ( Vec u ) {
-    : BigInt gx ( __p256_gx )
-    : BigInt gy ( __p256_gy )
-    : ( Vec u ) xy ( __p256_mul_affine scalar gx gy )
+    // scalar·G — fixed-base comb (G is the generator).
+    : ( Vec u ) xy ( p256ct_scalarmult_base scalar )
     : ( Vec u ) out ( vec_with_cap [u] 65 )
     ( vec_push [u] out # u 4 )
     ( bytes_extend_bytes out xy )
-    ( bigint_free gx ) ( bigint_free gy ) ( vec_free [u] xy )
+    ( vec_free [u] xy )
     ^ out
 }
 
@@ -511,11 +599,9 @@ $ `stdlib/std/p256_scalar.nu`  // fixed-width GF(n) for the signing scalar arith
         ? < ( bigint_cmp k one ) 0 { = valid F } {}
         ? >= ( bigint_cmp k n ) 0 { = valid F } {}
         ? valid {
-            : BigInt gx ( __p256_gx )
-            : BigInt gy ( __p256_gy )
-            : ( Vec u ) Rxy ( __p256_mul_affine V gx gy )
+            // k·G — fixed-base comb (G is the generator), constant-time.
+            : ( Vec u ) Rxy ( p256ct_scalarmult_base V )
             : ( Vec u ) Rxb ( bytes_slice Rxy 0 32 )
-            ( bigint_free gx ) ( bigint_free gy )
             ( vec_free [u] Rxy )
             // r = R.x mod n, and the scalar arithmetic s = k⁻¹·(z + r·d)
             // mod n, all on the fixed-width Montgomery GF(n) field
