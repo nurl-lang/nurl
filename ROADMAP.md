@@ -7,7 +7,7 @@ Anything marked done here has a regression test in
 [`compiler/tests/`](compiler/tests/) and is covered by the bootstrap fixed
 point.
 
-_Last reviewed: 2026-08-13 · Current release: **0.40.0** · Language: **Grammar
+_Last reviewed: 2026-08-14 · Current release: **0.41.0** · Language: **Grammar
 v2.5** ([`spec/grammar.ebnf`](spec/grammar.ebnf))._
 
 ---
@@ -297,6 +297,9 @@ platform-specific shims.
   unpacking, **mandatory and fail-closed**. Release archives are signed too;
   the installers always verify the checksum fail-closed and verify the
   minisign signature against a pinned key when `minisign` is available.
+  Since 0.41.0 the packer also excludes compiler output by extension, so a
+  given revision packs to the same bytes from any clean checkout — a
+  checksum identifies the source, not the machine that happened to build it.
 
 ---
 
