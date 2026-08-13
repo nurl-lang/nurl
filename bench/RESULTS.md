@@ -1,6 +1,6 @@
 # Benchmark results — NURL vs C vs Rust vs Node vs Python
 
-Generated `2026-08-13T07:23:44Z` by `bench/bench.sh`. **Do not edit by hand** — the next
+Generated `2026-08-13T09:48:52Z` by `bench/bench.sh`. **Do not edit by hand** — the next
 run overwrites it. The machine-readable form of this same run is
 [`results/latest.json`](results/latest.json), which is what the landing
 page renders its table from.
@@ -12,10 +12,10 @@ page renders its table from.
 | Host | `GitHub Actions ubuntu-latest runner` |
 | Kernel | `Linux 6.17.0-1020-azure x86_64` |
 | CPU | AMD EPYC 7763 64-Core Processor (4 logical cores) |
-| Memory | 16373452 KiB |
-| Commit | `e8f0047441bd6497459dfe783d9654f273c081b8` |
-| CI run | https://github.com/nurl-lang/nurl/actions/runs/31677256835 |
-| NURL | `v0.39.0-31-ge8f00474` |
+| Memory | 16373456 KiB |
+| Commit | `4a4da90961ecd252f721c373fa2063366389cbb4` |
+| CI run | https://github.com/nurl-lang/nurl/actions/runs/31687945543 |
+| NURL | `v0.39.0-35-g4a4da909` |
 | C | Ubuntu clang version 18.1.3 (1ubuntu1) |
 | Rust | rustc 1.97.1 (8bab26f4f 2026-07-14) |
 | Node | v22.23.1 |
@@ -36,51 +36,57 @@ same computation. **Bold** is the fastest cell in the row.
 
 | Benchmark | NURL | C | Rust | Node | Python |
 |---|---:|---:|---:|---:|---:|
-| _(floor: empty program)_ | _1.668_ | _1.741_ | _1.908_ | _23.517_ | _17.115_ |
-| `lcg` | **39.374** | 39.454 | 39.626 | 1880.385 | 5090.876 |
-| `packet_classifier` | **56.702** | 56.709 | 56.775 | 162.790 | 4421.980 |
-| `ring_write` | **42.493** | 42.528 | 42.690 | 68.406 | 6205.245 |
-| `histogram_bins` | **39.895** | 41.487 | 40.084 | 68.092 | 6656.034 |
-| `prefix_scan` | **21.908** | 21.999 | 22.129 | 65.496 | 4647.192 |
-| `binary_search` | 40.119 | **38.699** | 43.625 | 106.925 | 6325.623 |
-| `sort_window` | 27.474 | 27.554 | **27.096** | 199.026 | 12381.582 |
-| `bloom_filter` | **18.086** | 18.303 | 18.649 | 2856.289 | 7759.196 |
-| `hash_join` | **28.258** | 30.514 | 30.230 | 3442.203 | 8295.637 |
-| `sieve` | 20.559 | 20.592 | **20.406** | 67.663 | 3215.350 |
-| `fib` | **25.295** | 30.071 | 28.370 | 132.789 | 1372.581 |
-| `collatz` | **12.533** | 12.537 | 12.609 | 49.709 | 711.003 |
-| `matmul` | 33.795 | **33.719** | 33.984 | 76.637 | 3140.990 |
-| `json_parse` | 8.983 | **8.856** | 11.783 | 36.023 | 38.176 |
-| `nbody` | 41.164 | 41.056 | **39.203** | 101.423 | 3072.269 |
+| _(floor: empty program)_ | _1.662_ | _1.733_ | _1.843_ | _21.968_ | _16.878_ |
+| `lcg` | 39.492 | **39.481** | 39.557 | 1875.202 | 5235.791 |
+| `packet_classifier` | **56.292** | 56.432 | 56.537 | 161.415 | 4778.533 |
+| `ring_write` | **42.416** | 42.438 | 42.551 | 65.137 | 6505.114 |
+| `histogram_bins` | **39.656** | 41.431 | 39.794 | 65.618 | 6070.312 |
+| `prefix_scan` | **21.851** | 21.956 | 22.046 | 65.837 | 4618.896 |
+| `binary_search` | **36.316** | 38.531 | 43.215 | 106.018 | 7756.208 |
+| `sort_window` | **26.846** | 27.545 | 26.995 | 195.649 | 11568.234 |
+| `bloom_filter` | **18.047** | 18.276 | 18.512 | 2837.874 | 7640.393 |
+| `hash_join` | **27.177** | 30.372 | 30.039 | 3483.813 | 8212.032 |
+| `sieve` | 20.509 | **20.099** | 20.424 | 67.453 | 3280.263 |
+| `fib` | **25.347** | 30.006 | 28.306 | 131.574 | 1341.484 |
+| `collatz` | 12.481 | **12.473** | 12.621 | 50.574 | 715.478 |
+| `matmul` | **33.680** | 33.693 | 33.867 | 77.108 | 3075.938 |
+| `json_parse` | 8.968 | **8.858** | 11.853 | 35.852 | 37.253 |
+| `nbody` | **25.316** | 40.988 | 39.149 | 99.416 | 3095.571 |
 
 ## 2. Compile time (median, ms)
 
 NURL's compile is two stages: `nurlc` emits LLVM IR, then `clang`
 lowers and links it against `stdlib/runtime.o`. **NURL total** is the
-number comparable to the C and Rust columns. The floor row is what each
-toolchain costs for a program that does nothing — for NURL that is
-dominated by the LTO link every NURL binary pays for, so subtract it to
-read the marginal cost of the benchmark itself. Node and Python have no
-column here: they compile at run time, inside their own cells above.
+number comparable to the C and Rust columns: a cold compile, measured
+against a wiped cache exactly as C and Rust pay their full cost every
+time. **NURL rebuild** is the same compile again with the ThinLTO
+cache warm — `nurl.sh`'s default on Linux (docs/BUILDING.md → The
+ThinLTO cache) — which is what every build after the first costs; C
+and Rust have no default equivalent (`ccache`/`sccache` are opt-in
+add-ons). The floor row is what each toolchain costs for a program
+that does nothing — for NURL that is dominated by the LTO link every
+NURL binary pays for, so subtract it to read the marginal cost of the
+benchmark itself. Node and Python have no column here: they compile
+at run time, inside their own cells above.
 
-| Benchmark | NURL `nurlc` | NURL `clang` | **NURL total** | C `clang` | Rust `rustc` |
-|---|---:|---:|---:|---:|---:|
-| _(floor: empty program)_ | _2.772_ | _83.784_ | _**86.556**_ | _60.813_ | _66.371_ |
-| `lcg` | 2.887 | 88.158 | **91.045** | 68.954 | 72.124 |
-| `packet_classifier` | 2.985 | 91.781 | **94.766** | 69.113 | 72.077 |
-| `ring_write` | 3.091 | 92.137 | **95.228** | 71.079 | 71.746 |
-| `histogram_bins` | 3.131 | 93.902 | **97.033** | 73.051 | 73.607 |
-| `prefix_scan` | 3.209 | 96.065 | **99.274** | 76.009 | 73.586 |
-| `binary_search` | 3.351 | 96.126 | **99.477** | 72.579 | 75.481 |
-| `sort_window` | 3.486 | 102.807 | **106.293** | 76.870 | 79.372 |
-| `bloom_filter` | 3.561 | 99.016 | **102.577** | 79.883 | 75.329 |
-| `hash_join` | 5.846 | 213.897 | **219.743** | 120.977 | 112.162 |
-| `sieve` | 3.184 | 94.253 | **97.437** | 80.985 | 79.712 |
-| `fib` | 2.969 | 86.755 | **89.724** | 69.744 | 68.056 |
-| `collatz` | 3.086 | 90.866 | **93.952** | 70.938 | 71.921 |
-| `matmul` | 3.412 | 99.303 | **102.715** | 83.492 | 94.488 |
-| `json_parse` | 45.162 | 542.069 | **587.231** | 123.920 | 180.170 |
-| `nbody` | 4.576 | 113.913 | **118.489** | 99.092 | 94.407 |
+| Benchmark | NURL `nurlc` | NURL `clang` | **NURL total** | NURL rebuild | C `clang` | Rust `rustc` |
+|---|---:|---:|---:|---:|---:|---:|
+| _(floor: empty program)_ | _2.786_ | _89.304_ | _**92.090**_ | _58.565_ | _55.880_ | _59.770_ |
+| `lcg` | 2.860 | 90.320 | **93.180** | 57.409 | 65.505 | 69.819 |
+| `packet_classifier` | 2.991 | 92.141 | **95.132** | 58.484 | 67.831 | 70.333 |
+| `ring_write` | 3.042 | 91.385 | **94.427** | 57.685 | 67.113 | 70.032 |
+| `histogram_bins` | 3.095 | 111.624 | **114.719** | 57.830 | 68.771 | 72.073 |
+| `prefix_scan` | 3.148 | 96.308 | **99.456** | 57.569 | 70.723 | 72.709 |
+| `binary_search` | 3.321 | 101.347 | **104.668** | 58.228 | 68.981 | 74.804 |
+| `sort_window` | 3.350 | 103.708 | **107.058** | 58.245 | 74.989 | 79.426 |
+| `bloom_filter` | 3.595 | 100.923 | **104.518** | 58.489 | 75.228 | 76.673 |
+| `hash_join` | 5.911 | 254.756 | **260.667** | 61.455 | 120.420 | 111.309 |
+| `sieve` | 3.179 | 97.449 | **100.628** | 58.528 | 79.742 | 79.890 |
+| `fib` | 2.946 | 91.594 | **94.540** | 58.529 | 67.619 | 68.175 |
+| `collatz` | 3.112 | 96.038 | **99.150** | 59.041 | 69.691 | 71.579 |
+| `matmul` | 3.430 | 101.232 | **104.662** | 59.797 | 81.242 | 100.336 |
+| `json_parse` | 47.600 | 432.047 | **479.647** | 105.275 | 124.678 | 178.382 |
+| `nbody` | 4.646 | 125.113 | **129.759** | 61.072 | 97.078 | 96.288 |
 
 ## 3. Correctness gate
 
