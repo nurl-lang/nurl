@@ -8,6 +8,120 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.41.0] — 2026-08-14
+
+The honest-failure release. Nothing here is a new capability; every entry
+is a place where the system already knew what had gone wrong and threw
+the answer away before anyone could read it. The compiler emitted invalid
+IR and let clang deliver the news from another function entirely. The
+package manager mapped curl's exit code to a precise transport error and
+then flattened four distinct causes into one `PubHttp`. A cluster read
+the top byte of a big-endian partial as a status flag and reported every
+healthy chunk as failed. And `nurlpkg` packed whatever happened to be
+lying in the directory, so the same commit published different bytes from
+different clones.
+
+The through-line is that each of these failures pointed away from itself.
+That is the expensive kind: a wrong answer costs one debugging session, an
+answer that indicts the wrong component costs several.
+
+### Added
+
+- **The stdlib HTTP client takes a deadline.** `httpc_request_timeout`
+  caps one exchange in seconds, and `httpc_default_max_time` names the
+  300 s default that was previously an unexplained literal in the curl
+  argument list. A server that calls an external service on a request
+  path needs this: with only the default, a hung peer is indistinguishable
+  from a hang of your own program, and 300 s is far past the point where
+  an interactive caller should have given up.
+
+- **`packages/nurlpkg-smoketest`** — a dependency-free ~1.8 KB package
+  whose only purpose is to exercise the registry end to end (pack →
+  publish → index → resolve → download → verify → extract → build → run)
+  and to act as the canary for packer determinism: two clean clones must
+  produce one checksum. It also retires an old hazard — probing the
+  publish endpoint used to mean uploading a real package, and a garbage
+  body once became a real published version.
+
+### Changed
+
+- **`nurlpkg publish` says which transport failed.** `PublishErr` gains
+  `PubTimeout`, `PubConnect`, `PubDns` and `PubTls`, each with its own
+  hint. The information was always there — `http_cli` maps curl's exit
+  code to `HttpcErr` — but `pkg_publish` collapsed every variant into
+  `PubHttp`, which reads identically whether the registry is down, a
+  proxy is eating the request, or the upload stalled mid-flight.
+
+- **The MCP ready event identifies the transport, not a server name.**
+  The SSE `event: ready` payload carried a hardcoded
+  `{"server":"nurl-mcp"}` from inside the stdlib, which was wrong for
+  every other server built on it; it now reports
+  `{"transport":"streamable-http"}`.
+
+### Fixed
+
+- **A closure containing a short-circuit `|` or `&` emitted IR that
+  named a block in a different function.** A closure is lifted into its
+  own `define` whose first block is `entry`, but the body inherited the
+  enclosing function's `__cur_lbl__`. The first construct to phi over the
+  block it started in then wrote an incoming label belonging to the
+  parent — `phi i1 [ 1, %divok_11 ], …` inside a closure that has no
+  `divok_11` — and the user met clang's "use of undefined value" pointing
+  at neither the closure nor the cause. The bug hid from reduced repros
+  because it only appears once the enclosing function has left its own
+  entry block; below that, the stale name coincides with the closure's
+  `entry` and the IR happens to be valid. The regression test seeds a
+  branch before the closure so the shape actually reproduces.
+
+- **`# name expr` where `name` is a binding compiled to a phantom type.**
+  `llvm_type` maps any unknown identifier to the named type `%name`, so
+  `# d + d 1` — a mistyped `= d + d 1` — passed with rc=0 and a discarded-
+  value warning, then emitted `insertvalue %d undef, i64 …` against a type
+  the module never declares. It is now a pointing diagnostic that names
+  the likely typo. The check fires only when the cast target is a bare
+  `%ident` that is neither a declared struct nor an enum *and* is a live
+  binding, so every legitimate cast is untouched.
+
+- **The same commit packed to different bytes in different clones.**
+  `nurlpkg`'s file filter was a fixed name blacklist (`deps`, `nurl.lock`,
+  `target`, `build`, dotfiles) with no notion of compiler output, so a
+  stray `wasmbuilder.ll` left by a local build was swept into the tarball:
+  269 147 bytes from one checkout against 35 847 from another, at the same
+  revision, under different checksums. Build output is now excluded by
+  extension (`.ll`, `.o`, `.obj`, `.a`, `.so`, `.dylib`, `.dll`, `.exe`).
+  The filter is still extension-based, so an extensionless compiled binary
+  left in the package root is packed as before — `build/` and `target/`
+  remain the intended homes for it.
+
+- **A publish whose connection died mid-transfer sat for the full 300 s.**
+  `--max-time` alone cannot tell a stalled transfer from a slow one, so a
+  dead upload held the terminal for five minutes and then reported
+  `PubHttp`. The client now passes `--speed-limit 1 --speed-time 30`: a
+  transfer that stops moving gives up in about half a minute, while a
+  genuinely slow upload keeps its full deadline. Measured against a real
+  fault, 300 s → 37 s.
+
+- **Every local wasm build whose IR declared `open`/`fcntl`/`printf`
+  failed to link.** `wasmbuilder` mirrored a `declare`'s parameters into a
+  libc shim and copied the vararg marker in as a *named* parameter
+  (`define i32 @__nurl_open_shim(i8* %a0, i32 %a1, ... %a2)`), which is not
+  legal LLVM. The shim had no call sites at all. Dropping the `...` in
+  `__wb_ir_decl_params` restores the whole generated-kernel family
+  (`gpu_smoke.sh` 7/7, was 0/7). Shipped as `wasmbuilder` 0.1.5, with
+  `nurl-mcp` 0.10.1 and `swarm-mcp` 0.24.0 requiring `^0.1.5` — a `^0.1.0`
+  requirement could still resolve the broken 0.1.4.
+
+- **A distributed task reported healthy chunks as failed, and a dead
+  worker was never evicted.** `swarm-mcp` 0.24.0: the retry plan read
+  `body[0]` as an "ok" flag, but an expression chunk answers with a bare
+  `[partial:8]` whose top big-endian byte is almost always 0, so every
+  successful chunk looked like a failure; frames are now parsed by job
+  kind. Because `dist/job` *forwards* a job whose key the receiving node
+  does not own, expiring members on the coordinator alone made workers
+  bounce re-dispatched chunks back to a dead peer forever — every node now
+  ages its own roster, and never itself (a node hears no HELLO of its own,
+  and without the exemption would time itself out of its own ring).
+
 ## [0.40.0] — 2026-08-13
 
 The machine-width release. NURL could always describe what a CPU does
@@ -12451,7 +12565,8 @@ releases are measured.
   compile-server (`api/`), browser playground (`nurlweb/`).
 * Dual license: MIT (LICENSE-MIT) or Apache-2.0 (LICENSE-APACHE).
 
-[Unreleased]: https://github.com/nurl-lang/nurl/compare/v0.40.0...HEAD
+[Unreleased]: https://github.com/nurl-lang/nurl/compare/v0.41.0...HEAD
+[0.41.0]: https://github.com/nurl-lang/nurl/compare/v0.40.0...v0.41.0
 [0.40.0]: https://github.com/nurl-lang/nurl/compare/v0.39.0...v0.40.0
 [0.39.0]: https://github.com/nurl-lang/nurl/compare/v0.38.0...v0.39.0
 [0.38.0]: https://github.com/nurl-lang/nurl/compare/v0.37.1...v0.38.0
