@@ -14,6 +14,7 @@ $ `stdlib/std/bytes.nu`
 $ `stdlib/std/bigint.nu`
 $ `stdlib/std/hash_sha256.nu`  // hmac_sha256_pure for the RFC 6979 nonce
 $ `stdlib/std/p256_field.nu`  // fully constant-time scalar mult (secret path)
+$ `stdlib/std/p256_scalar.nu`  // fixed-width GF(n) for the signing scalar arithmetic
 
 // ── curve constants (hex → BigInt) ────────────────────────────────
 @ __hx s h → BigInt {
@@ -458,6 +459,15 @@ $ `stdlib/std/p256_field.nu`  // fully constant-time scalar mult (secret path)
     ^ v
 }
 
+// True iff all 32 bytes are zero (an r or s of 0 must be retried). OR-fold
+// so the scan is data-independent, like the rest of the signing path.
+@ __ec_zero32 ( Vec u ) v → b {
+    : ~ i acc 0
+    : ~ i k 0
+    ~ < k 32 { = acc | acc ?? ( vec_get [u] v k ) { T x → # i x F _ → 0 } = k + k 1 }
+    ^ == acc 0
+}
+
 // V ‖ sep ‖ priv32 ‖ b2o32  (the RFC 6979 HMAC input blocks)
 @ __ec_hmac_msg ( Vec u ) V i sep ( Vec u ) priv32 ( Vec u ) b2o → ( Vec u ) {
     : ( Vec u ) m ( vec_new [u] )
@@ -505,32 +515,31 @@ $ `stdlib/std/p256_field.nu`  // fully constant-time scalar mult (secret path)
             : BigInt gy ( __p256_gy )
             : ( Vec u ) Rxy ( __p256_mul_affine V gx gy )
             : ( Vec u ) Rxb ( bytes_slice Rxy 0 32 )
-            : BigInt rx ( bigint_from_bytes_be Rxb )
-            : BigInt r ( bigint_rem rx n )
-            ( bigint_free gx ) ( bigint_free gy ) ( bigint_free rx )
-            ( vec_free [u] Rxy ) ( vec_free [u] Rxb )
+            ( bigint_free gx ) ( bigint_free gy )
+            ( vec_free [u] Rxy )
+            // r = R.x mod n, and the scalar arithmetic s = k⁻¹·(z + r·d)
+            // mod n, all on the fixed-width Montgomery GF(n) field
+            // (stdlib/std/p256_scalar.nu) rather than the generic bigint —
+            // the k⁻¹ Fermat inverse alone was ~half a handshake's crypto.
+            // priv32 is d, b2o is z mod n (both 32-byte big-endian).
+            : ( Vec u ) r ( p256n_reduce_be Rxb )
+            ( vec_free [u] Rxb )
             // identity result → X = 0 → r ≡ 0, retried below (no inf branch).
-            ? ( bigint_is_zero r ) {
+            ? ( __ec_zero32 r ) {
                 = valid F
-                ( bigint_free r )
+                ( vec_free [u] r )
             } {
-                : BigInt kinv ( __finv k n )
-                : BigInt rx2 ( bigint_mul r x )
-                : BigInt zrx ( bigint_add z rx2 )
-                : BigInt zrxm ( bigint_rem zrx n )
-                : BigInt sm ( bigint_mul kinv zrxm )
-                : BigInt s ( bigint_rem sm n )
-                ( bigint_free kinv ) ( bigint_free rx2 ) ( bigint_free zrx )
-                ( bigint_free zrxm ) ( bigint_free sm )
-                ? ( bigint_is_zero s ) {
+                : ( Vec u ) kinv ( p256n_inv_be V )
+                : ( Vec u ) rd ( p256n_mulmod_be r priv32 )
+                : ( Vec u ) zrd ( p256n_addmod_be b2o rd )
+                : ( Vec u ) s ( p256n_mulmod_be kinv zrd )
+                ( vec_free [u] kinv ) ( vec_free [u] rd ) ( vec_free [u] zrd )
+                ? ( __ec_zero32 s ) {
                     = valid F
-                    ( bigint_free r ) ( bigint_free s )
+                    ( vec_free [u] r ) ( vec_free [u] s )
                 } {
-                    : ( Vec u ) rb ( bigint_to_bytes_be r 32 )
-                    : ( Vec u ) sb ( bigint_to_bytes_be s 32 )
-                    ( bigint_free r ) ( bigint_free s )
-                    ( bytes_extend_bytes sig rb ) ( bytes_extend_bytes sig sb )
-                    ( vec_free [u] rb ) ( vec_free [u] sb )
+                    ( bytes_extend_bytes sig r ) ( bytes_extend_bytes sig s )
+                    ( vec_free [u] r ) ( vec_free [u] s )
                     = done T
                 }
             }

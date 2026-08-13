@@ -1,0 +1,302 @@
+// stdlib/std/p256_scalar.nu — constant-width arithmetic mod the NIST
+// P-256 GROUP ORDER n (the "scalar field"), for ECDSA signing.
+//
+// ECDSA's point arithmetic is mod the prime p (stdlib/std/p256_field.nu,
+// already a fast fixed-width Montgomery field). Its SCALAR arithmetic —
+// r·d, z+r·d, and above all k⁻¹, all mod n — used to run on the generic
+// variable-length std/bigint.nu, where k⁻¹ is a 256-iteration Fermat
+// exponentiation that clones a heap magnitude every step. On a TLS 1.3
+// handshake that CertificateVerify signature was the single largest
+// crypto cost — roughly half of it in bigint_rem / __mag_clone.
+//
+// This is the same treatment: four 64-bit limbs, Montgomery CIOS with
+// nurl_umulhi, and Fermat inversion over that field. n has no
+// p ≡ −1 (mod 2^64) shortcut, so the reduction uses the general
+// Montgomery constant n0 = −n⁻¹ mod 2^64.
+//
+//   n   = 0xffffffff00000000ffffffffffffffffbce6faada7179e84f3b9cac2fc632551
+//   n0  = 0xccd1c8aaee00bc4f
+//
+// Public surface (all 32-byte big-endian `( Vec u )`, the shape ECDSA
+// scalars travel in):
+//   ( p256n_reduce_be x )     → x mod n
+//   ( p256n_mulmod_be a b )   → a·b mod n
+//   ( p256n_addmod_be a b )   → (a+b) mod n
+//   ( p256n_inv_be a )        → a⁻¹ mod n   (a ≠ 0)
+
+$ `stdlib/core/vec.nu`
+
+// ── limb helpers ──────────────────────────────────────────────────
+// A field element is four 64-bit limbs, little-endian, stored as i64 bit
+// patterns in a length-4 ( Vec i ).
+@ __sn_mag4 → ( Vec i ) {
+    : ( Vec i ) v ( vec_with_cap [i] 4 )
+    : b _l ( vec_set_len [i] v 4 )
+    ^ v
+}
+
+@ __sn_cp ( Vec i ) dst ( Vec i ) src → v {
+    : *i d ( vec_data [i] dst )
+    : *i s ( vec_data [i] src )
+    = . d 0 . s 0 = . d 1 . s 1 = . d 2 . s 2 = . d 3 . s 3
+}
+
+// R^2 mod n — multiply by this (Montgomery) to enter the domain.
+@ __sn_rr → ( Vec i ) {
+    : ( Vec i ) v ( __sn_mag4 )
+    : *i q ( vec_data [i] v )
+    = . q 0 # i 0x83244c95be79eea2
+    = . q 1 # i 0x4699799c49bd6fa6
+    = . q 2 # i 0x2845b2392b6bec59
+    = . q 3 # i 0x66e12d94f3d95620
+    ^ v
+}
+
+// 1 in Montgomery form (= R mod n).
+@ __sn_one_mont → ( Vec i ) {
+    : ( Vec i ) v ( __sn_mag4 )
+    : *i q ( vec_data [i] v )
+    = . q 0 # i 0x0c46353d039cdaaf
+    = . q 1 # i 0x4319055258e8617b
+    = . q 2 # i 0
+    = . q 3 # i 0xffffffff
+    ^ v
+}
+
+// 1 in plain form.
+@ __sn_one → ( Vec i ) {
+    : ( Vec i ) v ( __sn_mag4 )
+    : *i q ( vec_data [i] v )
+    = . q 0 # i 1 = . q 1 # i 0 = . q 2 # i 0 = . q 3 # i 0
+    ^ v
+}
+
+// ── Montgomery multiply, radix 2^64, general CIOS ─────────────────
+// dst ← a·b·R^-1 mod n. Each a[j]·b[i] and m·n[j] is a full 64×64→128
+// product via nurl_umulhi; the reduction multiplier is m = t0·n0 (n0 is
+// not 1 here, unlike the prime field). `dst` may alias a or b.
+@ __sn_mul ( Vec i ) dst ( Vec i ) a ( Vec i ) b → v {
+    : *i ap ( vec_data [i] a )
+    : *i bp ( vec_data [i] b )
+    : *i tp # *i ( nurl_zalloc 48 )  // t[0..5] (6 i64 slots), zeroed
+    : ~ i i 0
+    ~ < i 4 {
+        : u64 bi # u64 . bp i
+        : ~ u64 C 0
+        : ~ i j 0
+        ~ < j 4 {
+            : u64 aj # u64 . ap j
+            : u64 lo * aj bi
+            : u64 s1 + lo # u64 . tp j
+            : u64 s2 + s1 C
+            = . tp j # i s2
+            = C + + ( nurl_umulhi aj bi ) ? < s1 lo 1 0 ? < s2 s1 1 0
+            = j + j 1
+        }
+        : u64 t4 # u64 . tp 4
+        : u64 s4 + t4 C
+        = . tp 4 # i s4
+        = . tp 5 # i + # u64 . tp 5 ? < s4 t4 1 0
+        : u64 m * # u64 . tp 0 0xccd1c8aaee00bc4f
+        = C 0
+        = j 0
+        ~ < j 4 {
+            : u64 nj ? == j 0 0xf3b9cac2fc632551 ? == j 1 0xbce6faada7179e84 ? == j 2 0xffffffffffffffff 0xffffffff00000000
+            : u64 lo * m nj
+            : u64 s1 + lo # u64 . tp j
+            : u64 s2 + s1 C
+            = . tp j # i s2
+            = C + + ( nurl_umulhi m nj ) ? < s1 lo 1 0 ? < s2 s1 1 0
+            = j + j 1
+        }
+        : u64 t4b # u64 . tp 4
+        : u64 s4b + t4b C
+        = . tp 4 # i s4b
+        = . tp 5 # i + # u64 . tp 5 ? < s4b t4b 1 0
+        = . tp 0 . tp 1 = . tp 1 . tp 2 = . tp 2 . tp 3
+        = . tp 3 . tp 4 = . tp 4 . tp 5 = . tp 5 # i 0
+        = i + i 1
+    }
+    : u64 r0 # u64 . tp 0
+    : u64 r1 # u64 . tp 1
+    : u64 r2 # u64 . tp 2
+    : u64 r3 # u64 . tp 3
+    : u64 r4 # u64 . tp 4
+    ( nurl_free # s tp )
+    ( __sn_condsub dst r0 r1 r2 r3 r4 )
+}
+
+// Conditional subtract of n from a value held as (r0..r3, top word r4),
+// which is < 2n. Writes the reduced four limbs into dst. `r4` is the
+// carry word from the multiply's accumulator (0 or 1); together with a
+// borrow past r3 it decides whether the value was ≥ n.
+@ __sn_condsub ( Vec i ) dst u64 w0 u64 w1 u64 w2 u64 w3 u64 w4 → v {
+    : ~ u64 bb 0
+    : u64 d0 - w0 0xf3b9cac2fc632551
+    = bb ? < w0 0xf3b9cac2fc632551 1 0
+    : u64 d1 - - w1 0xbce6faada7179e84 bb
+    = bb | ? < w1 0xbce6faada7179e84 1 0 ? < - w1 0xbce6faada7179e84 bb 1 0
+    : u64 d2 - - w2 0xffffffffffffffff bb
+    = bb | ? < w2 0xffffffffffffffff 1 0 ? < - w2 0xffffffffffffffff bb 1 0
+    : u64 d3 - - w3 0xffffffff00000000 bb
+    = bb | ? < w3 0xffffffff00000000 1 0 ? < - w3 0xffffffff00000000 bb 1 0
+    // topb < 0 ⇒ the value was < n ⇒ keep w; else take d = w − n.
+    : i topb - # i w4 # i bb
+    : u64 mask ? < topb 0 0 0xffffffffffffffff
+    : u64 imask ^^ mask 0xffffffffffffffff
+    : *i op ( vec_data [i] dst )
+    = . op 0 # i | & mask d0 & imask w0
+    = . op 1 # i | & mask d1 & imask w1
+    = . op 2 # i | & mask d2 & imask w2
+    = . op 3 # i | & mask d3 & imask w3
+}
+
+@ __sn_to_mont ( Vec i ) a → ( Vec i ) {
+    : ( Vec i ) rr ( __sn_rr )
+    : ( Vec i ) o ( __sn_mag4 )
+    ( __sn_mul o a rr )
+    ( vec_free [i] rr )
+    ^ o
+}
+
+@ __sn_from_mont ( Vec i ) a → ( Vec i ) {
+    : ( Vec i ) one ( __sn_one )
+    : ( Vec i ) o ( __sn_mag4 )
+    ( __sn_mul o a one )
+    ( vec_free [i] one )
+    ^ o
+}
+
+// ── byte <-> limb (32-byte big-endian) ────────────────────────────
+@ _snbget ( Vec u ) v i k → i { ?? ( vec_get [u] v k ) { T x → ^ # i x F _ → ^ 0 } }
+
+@ _snld_be ( Vec u ) v i off → i {
+    : ~ i acc 0
+    : ~ i k 0
+    ~ < k 8 { = acc | << acc 8 ( _snbget v + off k ) = k + k 1 }
+    ^ acc
+}
+
+// 32 big-endian bytes → four little-endian limbs (no reduction).
+@ __sn_from_be_raw ( Vec u ) be → ( Vec i ) {
+    : ( Vec i ) v ( __sn_mag4 )
+    : *i q ( vec_data [i] v )
+    = . q 3 ( _snld_be be 0 )
+    = . q 2 ( _snld_be be 8 )
+    = . q 1 ( _snld_be be 16 )
+    = . q 0 ( _snld_be be 24 )
+    ^ v
+}
+
+// Reduce raw four limbs in [0, 2^256) modulo n (2^256 < 2n, one sub).
+@ __sn_reduce ( Vec i ) v → v {
+    : *i q ( vec_data [i] v )
+    ( __sn_condsub v # u64 . q 0 # u64 . q 1 # u64 . q 2 # u64 . q 3 0 )
+}
+
+// Four little-endian limbs → 32 big-endian bytes.
+@ __sn_to_be ( Vec i ) v → ( Vec u ) {
+    : *i q ( vec_data [i] v )
+    : ( Vec u ) o ( vec_with_cap [u] 32 )
+    : b _l ( vec_set_len [u] o 32 )
+    : *u op ( vec_data [u] o )
+    : ~ i limb 3
+    : ~ i pos 0
+    ~ >= limb 0 {
+        : u64 w # u64 . q limb
+        : ~ i k 0
+        ~ < k 8 { = . op + pos k # u & >> w * 8 - 7 k 255 = k + k 1 }
+        = pos + pos 8
+        = limb - limb 1
+    }
+    ^ o
+}
+
+// ── public: 32-byte big-endian in/out ─────────────────────────────
+@ p256n_reduce_be ( Vec u ) x → ( Vec u ) {
+    : ( Vec i ) v ( __sn_from_be_raw x )
+    ( __sn_reduce v )
+    : ( Vec u ) o ( __sn_to_be v )
+    ( vec_free [i] v )
+    ^ o
+}
+
+@ p256n_mulmod_be ( Vec u ) a ( Vec u ) b → ( Vec u ) {
+    : ( Vec i ) av ( __sn_from_be_raw a ) ( __sn_reduce av )
+    : ( Vec i ) bv ( __sn_from_be_raw b ) ( __sn_reduce bv )
+    : ( Vec i ) am ( __sn_to_mont av )
+    : ( Vec i ) bm ( __sn_to_mont bv )
+    : ( Vec i ) pm ( __sn_mag4 )
+    ( __sn_mul pm am bm )
+    : ( Vec i ) pr ( __sn_from_mont pm )
+    : ( Vec u ) o ( __sn_to_be pr )
+    ( vec_free [i] av ) ( vec_free [i] bv ) ( vec_free [i] am )
+    ( vec_free [i] bm ) ( vec_free [i] pm ) ( vec_free [i] pr )
+    ^ o
+}
+
+@ p256n_addmod_be ( Vec u ) a ( Vec u ) b → ( Vec u ) {
+    : ( Vec i ) av ( __sn_from_be_raw a ) ( __sn_reduce av )
+    : ( Vec i ) bv ( __sn_from_be_raw b ) ( __sn_reduce bv )
+    : *i xp ( vec_data [i] av )
+    : *i yp ( vec_data [i] bv )
+    : ( Vec i ) s ( __sn_mag4 )
+    : *i sp ( vec_data [i] s )
+    : ~ u64 cy 0
+    : ~ i k 0
+    ~ < k 4 {
+        : u64 x # u64 . xp k
+        : u64 s1 + x # u64 . yp k
+        : u64 s2 + s1 cy
+        = . sp k # i s2
+        = cy + ? < s1 x 1 0 ? < s2 s1 1 0
+        = k + k 1
+    }
+    ( __sn_condsub s # u64 . sp 0 # u64 . sp 1 # u64 . sp 2 # u64 . sp 3 cy )
+    : ( Vec u ) o ( __sn_to_be s )
+    ( vec_free [i] av ) ( vec_free [i] bv ) ( vec_free [i] s )
+    ^ o
+}
+
+// n − 2, big-endian.
+@ __sn_nm2_be → ( Vec u ) {
+    : ( Vec u ) v ( vec_with_cap [u] 32 )
+    : b _l ( vec_set_len [u] v 32 )
+    : *u q ( vec_data [u] v )
+    = . q 0 # u 0xff = . q 1 # u 0xff = . q 2 # u 0xff = . q 3 # u 0xff
+    = . q 4 # u 0x00 = . q 5 # u 0x00 = . q 6 # u 0x00 = . q 7 # u 0x00
+    = . q 8 # u 0xff = . q 9 # u 0xff = . q 10 # u 0xff = . q 11 # u 0xff
+    = . q 12 # u 0xff = . q 13 # u 0xff = . q 14 # u 0xff = . q 15 # u 0xff
+    = . q 16 # u 0xbc = . q 17 # u 0xe6 = . q 18 # u 0xfa = . q 19 # u 0xad
+    = . q 20 # u 0xa7 = . q 21 # u 0x17 = . q 22 # u 0x9e = . q 23 # u 0x84
+    = . q 24 # u 0xf3 = . q 25 # u 0xb9 = . q 26 # u 0xca = . q 27 # u 0xc2
+    = . q 28 # u 0xfc = . q 29 # u 0x63 = . q 30 # u 0x25 = . q 31 # u 0x4f
+    ^ v
+}
+
+// a^-1 mod n, Fermat: a^(n-2), constant square-and-multiply schedule
+// over the Montgomery field (~256 squarings + the bits n-2 selects).
+@ p256n_inv_be ( Vec u ) a → ( Vec u ) {
+    : ( Vec i ) av ( __sn_from_be_raw a ) ( __sn_reduce av )
+    : ( Vec i ) am ( __sn_to_mont av )
+    : ( Vec i ) r ( __sn_one_mont )
+    : ( Vec u ) e ( __sn_nm2_be )
+    : ( Vec i ) sq ( __sn_mag4 )
+    : ( Vec i ) pr ( __sn_mag4 )
+    : ~ i bit 255
+    ~ >= bit 0 {
+        ( __sn_mul sq r r )
+        ( __sn_cp r sq )
+        : i byte ( _snbget e - 31 >> bit 3 )
+        ? & 1 >> byte & bit 7 {
+            ( __sn_mul pr r am )
+            ( __sn_cp r pr )
+        } {}
+        = bit - bit 1
+    }
+    : ( Vec i ) out ( __sn_from_mont r )
+    : ( Vec u ) o ( __sn_to_be out )
+    ( vec_free [i] av ) ( vec_free [i] am ) ( vec_free [i] r )
+    ( vec_free [u] e ) ( vec_free [i] sq ) ( vec_free [i] pr ) ( vec_free [i] out )
+    ^ o
+}
