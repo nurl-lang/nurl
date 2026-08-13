@@ -41,6 +41,24 @@
 #                        131072). A program too small for two of them is
 #                        never split — cutting a small module up makes it
 #                        slower, not just cheaper to build.
+#    NURL_LTO=full       Link as ONE full-LTO module instead of the
+#                        default ThinLTO-with-cache (Linux native). Full
+#                        LTO can inline marginally more across the
+#                        runtime boundary on a program too small to be
+#                        split; the trade is that nothing is cached, so
+#                        every build re-lowers everything. Use for a
+#                        release build together with NURL_SPLIT=0.
+#    NURL_CACHE=0        Disable the build caches (default on): the
+#                        ThinLTO codegen cache (Linux native builds —
+#                        an unchanged module's backend codegen becomes
+#                        a file-copy on the next build of ANY program)
+#                        and the toolchain probe cache (the trial
+#                        compiles the driver otherwise reruns before
+#                        every build). Details: docs/BUILDING.md →
+#                        The ThinLTO cache.
+#    NURL_CACHE_DIR=DIR  Move the cache (default $XDG_CACHE_HOME/nurl,
+#                        i.e. usually ~/.cache/nurl; the ThinLTO part
+#                        is auto-pruned to 2 GB).
 #    NURL_SAN=1          Link with AddressSanitizer + UndefinedBehaviorSanitizer.
 #                        Auto-builds a side-by-side stdlib/runtime_san.o (non-LTO,
 #                        same -fsanitize flags). LTO is dropped because clang's
@@ -246,6 +264,16 @@ SPLIT_FLAGS=""
 if [ "$SPLIT_N" -gt 0 ]; then
     SPLIT_FLAGS="--split=$SPLIT_N --split-out=$OUTBASE"
     if [ -n "${NURL_SPLIT_MIN:-}" ]; then
+        # NURL_SPLIT_MIN=16384 is the fast-edit-loop knob on the cached
+        # ThinLTO path: finer parts mean the parts an edit didn't touch
+        # come out of the object cache and the link's ThinLTO cache
+        # instead of being re-optimised (bench/json_parse rebuild after
+        # a one-line edit: 574 ms → 310 ms). It is NOT the default
+        # because parts this small cost run speed — ThinLTO importing
+        # does not recover every inline full LTO found (json_parse
+        # retires +7% instructions split ×12, and a raised
+        # -import-instr-limit only halves that) — and the default
+        # posture is that a NURL binary is never quietly slower.
         SPLIT_FLAGS="$SPLIT_FLAGS --split-min=$NURL_SPLIT_MIN"
     fi
     # A previous build may have left MORE parts than this one writes;
@@ -345,13 +373,50 @@ QUIET_FLAGS="-Wno-override-module"
 #
 # `-Xclang <level>` goes straight to cc1 and survives, so it is appended
 # after the driver's own -O. Harmless for C inputs (same level twice).
+
+# ── Probe cache ──────────────────────────────────────────────────
+# The driver runs three trial compiles before every build: the
+# opaque-pointer parse probe below and the two feature-lib trial links
+# (sqlite3, zstd — see add_feature_lib). Together they cost ~190 ms —
+# twice the warm build itself — and their answers are properties of the
+# TOOLCHAIN and the installed libraries, not of the program. Cache them,
+# keyed by everything that could change an answer: the compiler binary
+# (path, size, mtime), the system library directories' mtimes (a
+# `libsqlite3-dev` install or removal touches its directory), the
+# LIBRARY_PATH/LDFLAGS environment, and the stdlib feature sentinels
+# (build.sh rewrites those). Any of them changing misses to a fresh
+# probe; NURL_CACHE=0 turns the whole thing off.
+PROBE_CACHE=""
+PROBE_LOADED=0
+PROBED_FEATURE_LIBS=""
+probe_cache_init() {
+    [ "${NURL_CACHE:-1}" = "0" ] && return 0
+    _cc_path="$(command -v "$1" 2>/dev/null || echo "$1")"
+    _key="$( {
+        ls -Ll "$_cc_path" 2>/dev/null
+        ls -ld /usr/lib/*-linux-gnu /usr/lib /usr/local/lib /usr/lib64 2>/dev/null
+        echo "${LIBRARY_PATH:-}|${LDFLAGS:-}"
+        ls -l "$SCRIPT_DIR"/stdlib/runtime.sqlite3 "$SCRIPT_DIR"/stdlib/runtime.pq "$SCRIPT_DIR"/stdlib/runtime.zstd 2>/dev/null
+    } | cksum | tr -s ' \t' '_')"
+    PROBE_CACHE="${NURL_CACHE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/nurl}/probes.$_key"
+    if [ -f "$PROBE_CACHE" ]; then
+        # The file assigns OPAQUE_FLAGS and PROBED_FEATURE_LIBS; it was
+        # written by this script under a key only this toolchain hashes to.
+        . "$PROBE_CACHE"
+        PROBE_LOADED=1
+    fi
+    return 0
+}
+
 USING_ZIG=0
 if [ -x "$ZIG_BIN" ]; then
     USING_ZIG=1
     cc_run() { "$ZIG_BIN" cc "$@"; }
+    probe_cache_init "$ZIG_BIN"
 else
     resolve_clang
     cc_run() { "$CLANG" "$@"; }
+    probe_cache_init "$CLANG"
     # nurlc emits LLVM IR with opaque pointers (`ptr`) — the default since
     # LLVM 15. (zig's bundled LLVM never needs this, which is why the probe
     # sits in the no-zig branch.)
@@ -372,7 +437,9 @@ else
     # meets first. See build.sh for the long version.
     _probe_ll="${TMPDIR:-/tmp}/nurl_opaque_probe.$$.ll"
     printf 'declare void @nurl_opaque_probe(i8*, ptr)\n' > "$_probe_ll"
-    if ! "$CLANG" -c -x ir "$_probe_ll" -o /dev/null >/dev/null 2>&1; then
+    if [ "$PROBE_LOADED" = "1" ]; then
+        : # cached answer already in OPAQUE_FLAGS
+    elif ! "$CLANG" -c -x ir "$_probe_ll" -o /dev/null >/dev/null 2>&1; then
         if "$CLANG" -Xclang -opaque-pointers -c -x ir "$_probe_ll" -o /dev/null >/dev/null 2>&1; then
             OPAQUE_FLAGS="-Xclang -opaque-pointers"
         else
@@ -486,28 +553,47 @@ fi
 #     unconditional `-lpq` used to fail with `cannot find -lpq`. A program
 #     that truly needs an absent lib still fails, with a clear
 #     undefined-symbol error.
-__probe_c="$(mktemp "${TMPDIR:-/tmp}/nurl-probe.XXXXXX.c")"
-__probe_o="$(mktemp "${TMPDIR:-/tmp}/nurl-probe.XXXXXX.out")"
-printf 'int main(void){return 0;}\n' > "$__probe_c"
-add_feature_lib() {
-    # $1 sentinel basename, $2.. the link flags (e.g. -lssl -lcrypto).
-    sentinel="$1"; shift
-    [ -f "$SCRIPT_DIR/stdlib/$sentinel" ] || return 0
-    # A FAILED probe (lib absent — common: the runtime .so.N is present but
-    # the -dev `.so` linker symlink is not) means "don't link it". Use an
-    # `if`, never `probe && add`: the latter makes this function return the
-    # probe's non-zero exit, which under the caller's `set -e` aborts the
-    # whole build at the first unavailable library. `return 0` keeps the
-    # function total regardless.
-    if cc_run "$__probe_c" "$@" -o "$__probe_o" >/dev/null 2>&1; then
-        EXTRA_LIBS="$EXTRA_LIBS $*"
+if [ "$PROBE_LOADED" = "1" ]; then
+    # Cached trial-link answers (see probe_cache_init for the key).
+    EXTRA_LIBS="$EXTRA_LIBS$PROBED_FEATURE_LIBS"
+else
+    __probe_c="$(mktemp "${TMPDIR:-/tmp}/nurl-probe.XXXXXX.c")"
+    __probe_o="$(mktemp "${TMPDIR:-/tmp}/nurl-probe.XXXXXX.out")"
+    printf 'int main(void){return 0;}\n' > "$__probe_c"
+    add_feature_lib() {
+        # $1 sentinel basename, $2.. the link flags (e.g. -lssl -lcrypto).
+        sentinel="$1"; shift
+        [ -f "$SCRIPT_DIR/stdlib/$sentinel" ] || return 0
+        # A FAILED probe (lib absent — common: the runtime .so.N is present but
+        # the -dev `.so` linker symlink is not) means "don't link it". Use an
+        # `if`, never `probe && add`: the latter makes this function return the
+        # probe's non-zero exit, which under the caller's `set -e` aborts the
+        # whole build at the first unavailable library. `return 0` keeps the
+        # function total regardless.
+        if cc_run "$__probe_c" "$@" -o "$__probe_o" >/dev/null 2>&1; then
+            EXTRA_LIBS="$EXTRA_LIBS $*"
+            PROBED_FEATURE_LIBS="$PROBED_FEATURE_LIBS $*"
+        fi
+        return 0
+    }
+    add_feature_lib runtime.sqlite3 -lsqlite3
+    add_feature_lib runtime.pq      -lpq
+    add_feature_lib runtime.zstd    -lzstd
+    rm -f "$__probe_c" "$__probe_o"
+    # Persist this run's probe answers for the next build. Written to a
+    # temp name then renamed, so a concurrent build never sources a
+    # half-written file.
+    if [ -n "$PROBE_CACHE" ]; then
+        if mkdir -p "$(dirname "$PROBE_CACHE")" 2>/dev/null; then
+            {
+                printf 'OPAQUE_FLAGS=%s\n' "'$OPAQUE_FLAGS'"
+                printf 'PROBED_FEATURE_LIBS=%s\n' "'$PROBED_FEATURE_LIBS'"
+            } > "$PROBE_CACHE.$$" 2>/dev/null \
+                && mv "$PROBE_CACHE.$$" "$PROBE_CACHE" 2>/dev/null \
+                || rm -f "$PROBE_CACHE.$$" 2>/dev/null || true
+        fi
     fi
-    return 0
-}
-add_feature_lib runtime.sqlite3 -lsqlite3
-add_feature_lib runtime.pq      -lpq
-add_feature_lib runtime.zstd    -lzstd
-rm -f "$__probe_c" "$__probe_o"
+fi
 
 # Auto-link libopus / ALSA when the program references their FFI symbols
 # (pttvoice and any audio app). Linked only when actually used, so other
@@ -663,17 +749,115 @@ elif [ $DEBUG_INFO -eq 1 ]; then
     fi
     RUNTIME_TO_LINK="$DBG_RUNTIME"
 fi
-if [ "$SPLIT_N" -gt 0 ]; then
-    echo "[2/2] $LLFILE → $OUTBASE  ($OPT -flto=thin ×$SPLIT_N${EXTRA_LIBS:+ $EXTRA_LIBS})"
-else
-    echo "[2/2] $LLFILE → $OUTBASE  ($OPT${LTO_FLAG:+ $LTO_FLAG}${DEBUG_FLAGS:+ $DEBUG_FLAGS}${COVERAGE_FLAGS:+ $COVERAGE_FLAGS}${SAN_LINK_FLAGS:+ $SAN_LINK_FLAGS}${EXTRA_LIBS:+ $EXTRA_LIBS})"
+# ── ThinLTO by default, with a persistent codegen cache ─────────────
+#
+# The LTO link is what a NURL build waits on (see the timing table in
+# docs/BUILDING.md): the program's IR and runtime.o's bitcode are
+# re-optimised and re-lowered from scratch on EVERY build, even though
+# the runtime — and, on a rebuild, most of the program — hasn't changed.
+# ThinLTO keys each module's backend work by content hash, so pointing
+# the linker at a cache directory makes every unchanged module's
+# codegen a file-copy on the next build. Together with the object and
+# probe caches below, measured on bench/json_parse (this driver, same
+# flags): 840 ms → 156 ms on an unchanged rebuild; the empty-program
+# floor drops 305 ms → 99 ms.
+#
+# Two things make thin-with-cache safe to be the DEFAULT rather than a
+# dev-mode trade:
+#
+#   * `-plugin-opt,O3` runs the ThinLTO *backend* at O3 (the pre-link
+#     compile stays at $OPT). Plain thin at O2 loses full LTO's second
+#     optimisation round — bench/sort_window's compare/exchange mill
+#     came out 2.3× the instructions (branches where full LTO's second
+#     round had found 50 cmovs). The O3 backend restores every such
+#     case measured (identical instruction counts suite-wide) and
+#     improves one: nbody retires 37% FEWER instructions than the old
+#     full-LTO default. So the cached path is never slower at run time
+#     than the `-flto` it replaces.
+#   * The cache key is the module hash plus the entire codegen flag
+#     set (LLVM bakes its own version in too), so a clang upgrade or
+#     an -O change misses cleanly instead of linking stale code.
+#
+# Scope: native Linux builds (GNU ld/gold load LLVMgold.so, and lld
+# accepts the same `-plugin-opt` spellings). The zig-cc cross paths and
+# Darwin's ld64 spell these flags differently and keep the plain
+# `-flto` behaviour for now. `NURL_LTO=full` opts a release build back
+# into single-module full LTO (marginally better cross-runtime-boundary
+# inlining on programs below the --split threshold); `NURL_CACHE=0`
+# disables the cache; `NURL_CACHE_DIR` moves it.
+LTO_TUNE_FLAGS=""
+LTO_CACHED=""
+if [ -n "$LTO_FLAG" ] && [ "$USING_ZIG" != "1" ] && [ "$(uname -s)" = "Linux" ] \
+   && [ "${NURL_LTO:-thin}" != "full" ]; then
+    LTO_FLAG="-flto=thin"
+    case "$OPT" in
+        -O2|-O3) LTO_TUNE_FLAGS="-Wl,-plugin-opt,O3" ;;
+    esac
+    if [ "${NURL_CACHE:-1}" != "0" ]; then
+        _lto_cache="${NURL_CACHE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/nurl}/thinlto"
+        if mkdir -p "$_lto_cache" 2>/dev/null; then
+            LTO_TUNE_FLAGS="$LTO_TUNE_FLAGS -Wl,-plugin-opt,cache-dir=$_lto_cache -Wl,-plugin-opt,cache-policy=cache_size_bytes=2g:prune_interval=20m"
+            LTO_CACHED=" cached"
+        fi
+    fi
 fi
-# An LTO link is not optional: stdlib/runtime.o is compiled with -flto
-# (build.sh) and therefore carries LLVM bitcode instead of native code.
-# The matching link-time flag here drives the LTO pipeline, inlining
-# every vec_data / nurl_peek / nurl_poke / nurl_print across the
-# runtime ↔ user-code boundary. Either flavour does that; which one is
-# used depends on whether the module was split.
+
+# ── Object cache for the pre-link compile ────────────────────────────
+# The ThinLTO cache above covers the LINK's backend codegen; the other
+# recurring cost is the `-c` step that turns the emitted .ll into thin
+# bitcode — the full -O2 module pipeline, re-run on every build even
+# when nurlc just emitted byte-identical IR (a rebuild after no edit, a
+# CI re-run, an unchanged split part). Its output is a pure function of
+# the IR bytes and the flags, so it caches the same way: key on
+# cksum(.ll) + the compile flags + the toolchain (the probe-cache key
+# already hashes the compiler binary's path/size/mtime). A hit is a
+# file copy; a miss compiles and populates. Entries untouched for two
+# weeks are pruned on the way in. Active only alongside the ThinLTO
+# cache (Linux native, NURL_CACHE not 0) and never in coverage mode,
+# whose instrumentation flags would otherwise need to join the key.
+OBJ_CACHE_DIR=""
+if [ -n "$LTO_CACHED" ] && [ -z "$COVERAGE_FLAGS" ] && [ -n "$PROBE_CACHE" ]; then
+    OBJ_CACHE_DIR="${NURL_CACHE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/nurl}/objs"
+    mkdir -p "$OBJ_CACHE_DIR" 2>/dev/null || OBJ_CACHE_DIR=""
+    if [ -n "$OBJ_CACHE_DIR" ]; then
+        find "$OBJ_CACHE_DIR" -type f -mtime +14 -exec rm -f {} + 2>/dev/null || true
+    fi
+fi
+# cc_c_cached <src.ll> <out.o> — compile through the cache. The flag
+# string is fixed (it is part of the key): $OPT $OPAQUE_FLAGS -flto=thin.
+cc_c_cached() {
+    if [ -n "$OBJ_CACHE_DIR" ]; then
+        _ck="$( { cksum < "$1"; echo "$OPT$OPAQUE_FLAGS${PROBE_CACHE##*.}"; } | cksum | tr -s ' \t' '_')"
+        _hit="$OBJ_CACHE_DIR/$_ck.o"
+        if [ -f "$_hit" ] && cp "$_hit" "$2" 2>/dev/null; then
+            touch "$_hit" 2>/dev/null || true
+            return 0
+        fi
+        # shellcheck disable=SC2086
+        cc_run $OPT $ZIG_OPT_FIX -flto=thin $OPAQUE_FLAGS $QUIET_FLAGS -c "$1" -o "$2" || return 1
+        # Populate via temp-then-rename so a concurrent build never
+        # copies a half-written object; failing to populate is not a
+        # build failure.
+        { cp "$2" "$_hit.$$" 2>/dev/null && mv "$_hit.$$" "$_hit" 2>/dev/null; } || rm -f "$_hit.$$" 2>/dev/null || true
+        return 0
+    fi
+    # shellcheck disable=SC2086
+    cc_run $OPT $ZIG_OPT_FIX -flto=thin $OPAQUE_FLAGS $QUIET_FLAGS -c "$1" -o "$2"
+}
+
+if [ "$SPLIT_N" -gt 0 ]; then
+    echo "[2/2] $LLFILE → $OUTBASE  ($OPT -flto=thin ×$SPLIT_N${LTO_CACHED:-}${EXTRA_LIBS:+ $EXTRA_LIBS})"
+else
+    echo "[2/2] $LLFILE → $OUTBASE  ($OPT${LTO_FLAG:+ $LTO_FLAG}${LTO_CACHED:-}${DEBUG_FLAGS:+ $DEBUG_FLAGS}${COVERAGE_FLAGS:+ $COVERAGE_FLAGS}${SAN_LINK_FLAGS:+ $SAN_LINK_FLAGS}${EXTRA_LIBS:+ $EXTRA_LIBS})"
+fi
+# An LTO link is not optional: stdlib/runtime.o is compiled with
+# -flto=thin (build.sh) and therefore carries LLVM bitcode instead of
+# native code. The matching link-time flag here drives the LTO
+# pipeline, inlining every vec_data / nurl_peek / nurl_poke /
+# nurl_print across the runtime ↔ user-code boundary. Either flavour
+# does that (thin bitcode is valid input to both); which one is used
+# depends on the ThinLTO default above and whether the module was
+# split.
 #
 # `-Wl,--as-needed` drops DT_NEEDED entries for any auto-linked library
 # the program does not actually reference a symbol from — so a program
@@ -695,8 +879,7 @@ if [ "$SPLIT_N" -gt 0 ]; then
     for _part in "$OUTBASE".[0-9]*.ll; do
         _pobj="${_part%.ll}.o"
         SPLIT_OBJS="$SPLIT_OBJS $_pobj"
-        # shellcheck disable=SC2086
-        cc_run $OPT $ZIG_OPT_FIX -flto=thin $OPAQUE_FLAGS $QUIET_FLAGS -c "$_part" -o "$_pobj" &
+        cc_c_cached "$_part" "$_pobj" &
         SPLIT_PIDS="$SPLIT_PIDS $!"
     done
     SPLIT_RC=0
@@ -708,16 +891,26 @@ if [ "$SPLIT_N" -gt 0 ]; then
         exit 1
     fi
     # shellcheck disable=SC2086
-    cc_run $OPT $ZIG_OPT_FIX -flto=thin $AS_NEEDED $OPAQUE_FLAGS $QUIET_FLAGS $SPLIT_OBJS "$RUNTIME_TO_LINK" $EXTRA_OBJS -o "$OUTBASE" -lm -lpthread $DL_LIB $EXTRA_LIBS
+    cc_run $OPT $ZIG_OPT_FIX -flto=thin $LTO_TUNE_FLAGS $AS_NEEDED $OPAQUE_FLAGS $QUIET_FLAGS $SPLIT_OBJS "$RUNTIME_TO_LINK" $EXTRA_OBJS -o "$OUTBASE" -lm -lpthread $DL_LIB $EXTRA_LIBS
     # The parts are an artifact of how the link was parallelised; the
     # documented one is $LLFILE, which still holds the whole module.
     # shellcheck disable=SC2086
     rm -f $SPLIT_OBJS "$OUTBASE".[0-9]*.ll
-else
-    # `-flto` is required because stdlib/runtime.o is compiled with -flto
-    # (build.sh) and therefore carries LLVM bitcode instead of native code.
+elif [ -n "$OBJ_CACHE_DIR" ]; then
+    # Cached-path variant of the one-shot below: compile the module
+    # through the object cache first, then link the (possibly copied)
+    # bitcode object. Byte-identical inputs skip the -O2 pipeline
+    # entirely on a rebuild.
+    cc_c_cached "$LLFILE" "$OUTBASE.__cc.o"
     # shellcheck disable=SC2086
-    cc_run $OPT $ZIG_OPT_FIX $LTO_FLAG $AS_NEEDED $OPAQUE_FLAGS $QUIET_FLAGS $DEBUG_FLAGS $COVERAGE_FLAGS $SAN_LINK_FLAGS "$LLFILE" "$RUNTIME_TO_LINK" $EXTRA_OBJS -o "$OUTBASE" -lm -lpthread $DL_LIB $EXTRA_LIBS
+    cc_run $OPT $ZIG_OPT_FIX $LTO_FLAG $LTO_TUNE_FLAGS $AS_NEEDED $OPAQUE_FLAGS $QUIET_FLAGS $DEBUG_FLAGS $SAN_LINK_FLAGS "$OUTBASE.__cc.o" "$RUNTIME_TO_LINK" $EXTRA_OBJS -o "$OUTBASE" -lm -lpthread $DL_LIB $EXTRA_LIBS
+    rm -f "$OUTBASE.__cc.o"
+else
+    # An LTO-flavoured link is required because stdlib/runtime.o is
+    # compiled with -flto=thin (build.sh) and therefore carries LLVM
+    # bitcode instead of native code.
+    # shellcheck disable=SC2086
+    cc_run $OPT $ZIG_OPT_FIX $LTO_FLAG $LTO_TUNE_FLAGS $AS_NEEDED $OPAQUE_FLAGS $QUIET_FLAGS $DEBUG_FLAGS $COVERAGE_FLAGS $SAN_LINK_FLAGS "$LLFILE" "$RUNTIME_TO_LINK" $EXTRA_OBJS -o "$OUTBASE" -lm -lpthread $DL_LIB $EXTRA_LIBS
 fi
 
 echo ""

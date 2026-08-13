@@ -485,8 +485,16 @@ int nurl_ctx_available(void) { return 0; }
  * across a switch; the NURL side drives them and asserts.
  */
 
-static nurl_ctx_t nurl__ctx_main;
-static nurl_ctx_t nurl__ctx_fiber;
+/* NOT static, and for a cousin of the reason `used` is load-bearing
+ * below: nurl__ctx_bounce takes their addresses inside an asm string,
+ * which LTO cannot see. A ThinLTO link may IMPORT the bounce fiber into
+ * another module (runtime.o is thin bitcode since the cached-link
+ * change in nurl.sh); a file-scope static referenced only by the asm
+ * text is not promoted along with it, and the copy in the destination
+ * module fails to link — undefined reference to nurl__ctx_main. With
+ * external linkage the asm reference resolves from any module. */
+nurl_ctx_t nurl__ctx_main;
+nurl_ctx_t nurl__ctx_fiber;
 static unsigned char nurl__ctx_stack[64 * 1024];
 static long nurl__ctx_counter;
 static long nurl__ctx_switches;
