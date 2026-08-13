@@ -10,6 +10,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The build caches: a rebuild costs less than a C compile.** On
+  native Linux, `nurl.sh` now links with ThinLTO by default and keeps
+  three caches under `~/.cache/nurl`: the link's per-module backend
+  codegen (`stdlib/runtime.o` is thin bitcode now, so the runtime —
+  re-optimised from scratch by every full-LTO link since the language
+  existed — is a cache hit for every build after the first, of *any*
+  program), the pre-link `-c` object keyed by content hash of the
+  emitted IR (a rebuild whose IR didn't change is a file copy, per
+  split part), and the driver's toolchain probes (~190 ms of trial
+  compiles that answered questions about the toolchain, not the
+  program). What made thin-with-cache safe as the *default* rather
+  than a dev-mode trade is running the ThinLTO backend at O3: plain
+  thin at O2 loses full LTO's second optimisation round —
+  `bench/sort_window`'s compare/exchange mill came out 2.3× the
+  instructions — and the O3 backend restores every such case measured,
+  improving one outright (`bench/nbody` retires 36% fewer
+  instructions). Measured: empty program 305 → 99 ms, `json_parse`
+  840 → 156 ms (rebuild) / 574 ms (rebuild after a one-line edit),
+  `http_server` 1.96 s → 0.67 s. `bench/RESULTS.md` §2 now carries a
+  "NURL rebuild" column — a warm NURL rebuild (129 ms on `json_parse`)
+  is cheaper than that row's *cold* C compile (144 ms) — with the cold
+  columns still measured against a wiped cache so the C and Rust
+  comparisons stay honest. `NURL_LTO=full` + `NURL_SPLIT=0` remains
+  the maximal-inlining release build; `NURL_CACHE=0` opts out;
+  `NURL_SPLIT_MIN=16384` is the opt-in fastest-edit-loop knob
+  (`json_parse` edit rebuild 574 → 310 ms, at +7% run-time
+  instructions). Scope: native Linux clang; the zig-cc, macOS ld64 and
+  Windows paths keep the previous behaviour. One runtime fix rode
+  along: the fiber test hooks' context structs are now extern — a
+  ThinLTO link may import `nurl__ctx_bounce` into another module, and
+  the asm string inside it names those structs, which LTO cannot see
+  (the `used`-is-load-bearing comment in `runtime_ctx.c`, one clause
+  further). Details: docs/BUILDING.md → The ThinLTO cache.
+
 - **SIMD in the language: the `v128` type and its primitive layer.**
   NURL now has a vector register. `v128` is a first-class by-value type
   (bindings, parameters, returns) lowered to LLVM's target-independent
