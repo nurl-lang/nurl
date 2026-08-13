@@ -7,8 +7,8 @@ Anything marked done here has a regression test in
 [`compiler/tests/`](compiler/tests/) and is covered by the bootstrap fixed
 point.
 
-_Last reviewed: 2026-08-12 · Current release: **0.39.0** · Language: **Grammar
-v2.4** ([`spec/grammar.ebnf`](spec/grammar.ebnf))._
+_Last reviewed: 2026-08-13 · Current release: **0.40.0** · Language: **Grammar
+v2.5** ([`spec/grammar.ebnf`](spec/grammar.ebnf))._
 
 ---
 
@@ -21,14 +21,21 @@ stage2). The only build dependency is clang / LLVM 15+.
 
 What is solid today:
 
-- **Language (Grammar v2.4).** Sum types (`|`) and product types (structs),
+- **Language (Grammar v2.5).** Sum types (`|`) and product types (structs),
   generics over structs and functions (incl. generics over option/result
   types), pattern matching with **match guards**, **or-patterns**, and
   **N-ary payloads**, **trait bounds** on type parameters (`[A: Ord]`), **compile-time constant
   folding** (`const_eval_int`), a full numeric type set (`i` = i64 and
   `u` = byte/u8, plus sized `i8`/`i16`/`i32`, `u16`/`u32`/`u64`, `f` = f64
   and `f32`), tail-call optimization, and
-  **variadic FFI** (the `printf` family callable directly). The grammar decision
+  **variadic FFI** (the `printf` family callable directly). Since 0.40.0 the
+  language also spells the two shapes a fast numeric kernel is written in:
+  **`v128`**, a first-class by-value SIMD vector type over ~27
+  `nurl_v128_*` primitives (§4.1b) that lowers to SSE2 / NEON / wasm
+  `simd128` with no CPUID probe and no fallback path, and **wide
+  arithmetic** — `nurl_umulhi` (the high half of a 64×64 multiply) plus
+  `nurl_addc` / `nurl_subb` / `nurl_mac` for carry chains the backend
+  recognises. The grammar decision
   for prefix-arity (no grouping delimiter) is formally locked, and since
   0.37.0 the n-ary `&`/`|` arity trap it makes possible is a **hard error
   by default** (`--no-strict-arity` demotes it to a warning) — the shape
@@ -121,7 +128,14 @@ A high-level map of what exists. Dates and per-feature detail are in
   3.2 MB of IR from 11.3 s to 2.0 s — at a measured 3.4% of the built
   program's own speed, which is why `nurl.sh` splits your program and
   `build.sh` does not split the compiler it installs (`NURL_SPLIT=0`
-  opts out). Both passes: [`docs/BUILDING.md`](docs/BUILDING.md).
+  opts out). Since 0.40.0 that link is also **cached** — per-module
+  ThinLTO backend codegen, the pre-link object keyed by content hash of
+  the emitted IR, and the driver's toolchain probes, all under
+  `~/.cache/nurl` — so an empty program links in 99 ms instead of 305
+  and a warm rebuild costs less than the equivalent C compile
+  (`NURL_CACHE=0` opts out; `NURL_LTO=full` is still the
+  maximal-inlining release build). Both passes:
+  [`docs/BUILDING.md`](docs/BUILDING.md).
 - Debugging: DWARF emission (`nurlc --g`) with `ptype`/`print` over structs.
 
 ### Standard library
@@ -150,7 +164,7 @@ platform-specific shims.
 - **ext/web stack** — full HTTP/1.1 server (keep-alive, pipelining, static,
   auth, JWT bearer-auth, cookies, forms, multipart, router, middleware, access log + Prometheus
   metrics, DoS caps, graceful shutdown, per-request timeouts, panic recovery),
-  HTTP client (with cookie jar), **TLS** (SNI + ALPN + mTLS + live cert reload; the pure ChaCha20-Poly1305 record path serves past gigabit wire speed), **HTTP/2**
+  HTTP client (with cookie jar), **TLS** (SNI + ALPN + mTLS + live cert reload; the pure ChaCha20-Poly1305 record path serves past gigabit wire speed, and since 0.40.0 the pure-NURL handshake — X25519 + P-256 ECDHE, ECDSA sign/verify, no assembly and no OpenSSL — runs at 4 894 handshakes/s, 2× its 0.39.0 rate), **HTTP/2**
   (RFC 9113 + HPACK, **server and client**), **WebSocket** (RFC 6455, **server
   and client**, with **permessage-deflate** compression — RFC 7692),
   reverse proxy with binary-safe streaming. The stack has had a
@@ -164,8 +178,11 @@ platform-specific shims.
   `smtp` (mail submission). Postgres and Redis clients live in the registry
   packages `psql` and `redis` (pure NURL — no libpq, no hiredis).
 - **ext/AI & agents** — `mcp` (+ `client`, `http`, `session`, `stdio`,
-  `registry`) and `anthropic` (Claude Messages API incl. streaming SSE +
-  tool-use deltas).
+  `registry`, and since 0.40.0 `tasks` — the
+  `io.modelcontextprotocol/tasks` extension, so a long-running
+  `tools/call` returns a pollable task handle instead of holding a
+  JSON-RPC response open) and `anthropic` (Claude Messages API incl.
+  streaming SSE + tool-use deltas).
 - **ext/packaging** — `semver`, `manifest`, `lockfile`, `resolver`,
   `registry_index`, `pkg_fetch`, `pkg_publish` (the `nurlpkg` backend).
 - **ext/misc** — `compress` (zlib/zstd/gzip), `zip` (archives), `tar`, `uuid` (v4/v7),
@@ -200,10 +217,16 @@ platform-specific shims.
   libc, no interpreter — on three architectures: x86_64 (QEMU microvm,
   and the same PVH image boots under Firecracker and cloud-hypervisor),
   AArch64 and RISC-V64 (QEMU virt; on AArch64 a flat `Image` wrapper
-  covers Firecracker/cloud-hypervisor). Per-arch QEMU gates run the
-  hosted corpus against the same goldens (15/15 each), with virtio
-  net/rng drivers, TLS handshakes in the guest, native fiber switches
-  on all three ISAs, and CI booting every architecture on every commit.
+  covers Firecracker/cloud-hypervisor). Since 0.40.0 the x86_64 image
+  also carries a Multiboot2 header beside its PVH note and packages into
+  a hybrid BIOS+UEFI disk, so it **boots on real PC hardware off a USB
+  stick** — with screen output (EGA text or a UEFI framebuffer) where a
+  microvm had a serial port, and a PIT-calibrated TSC where no firmware
+  states the frequency. Per-arch QEMU gates run the hosted corpus
+  against the same goldens (19–20 each, including the SIMD corpus),
+  with virtio net/rng drivers, TLS handshakes in the guest, native fiber
+  switches on all three ISAs, and CI booting every architecture on every
+  commit.
   The playground builds and boots these images (`POST /build_unikernel`
   + target dropdown), and agents do the same over MCP
   (`nurl_build_unikernel`).

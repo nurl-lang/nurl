@@ -8,6 +8,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.40.0] — 2026-08-13
+
+The machine-width release. NURL could always describe what a CPU does
+one word at a time; what it could not describe was the two shapes every
+fast numeric kernel is actually written in — a 128-bit product and a
+vector register. Both are now in the language: `nurl_umulhi` gives the
+high half of a 64×64 multiply, `nurl_addc`/`nurl_subb`/`nurl_mac` give
+carry chains the backend recognises, and `v128` is a first-class
+by-value type over ~27 primitives that each cost exactly one machine
+instruction. None of it is a target-feature gamble — 128-bit vectors and
+a 64×64→128 multiply are baseline on every 64-bit target NURL supports.
+
+The point is what came downstream, all of it in ordinary high-level
+NURL: ChaCha20 at 1.84×, HTTP head parsing sixteen bytes at a time, and
+a pure-NURL TLS 1.3 handshake at 2 470 → 4 894 handshakes/s — with no
+assembly, no AES-NI-tier intrinsics and no OpenSSL anywhere in the path.
+Alongside: the build now caches (an empty program links in 99 ms instead
+of 305, a warm `json_parse` rebuild is cheaper than that row's *cold* C
+compile), the unikernel boots off a USB stick on real PC hardware, and
+the MCP layer speaks the tasks extension.
+
 ### Added
 
 - **MCP tasks extension — `stdlib/ext/mcp_tasks.nu`.** The
@@ -90,6 +111,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `nurl_clz`, `nurl_popcnt`, `nurl_bswap32/64`, `nurl_rotl/rotr32/64`.
   See docs/spec.md §4.1b.
 
+- **`nurl_umulhi` — the high half of a 64×64 multiply.** NURL's `*`
+  already gave the low 64 bits; together they are the 64×64→128 multiply
+  the language could not spell, and its absence was the reason every
+  wide-radix numeric kernel in the stdlib had to pick a narrow limb size
+  that kept partial products inside an i64. Defined in
+  `stdlib/runtime_core.c` over `unsigned __int128` (with a 32-bit-halves
+  fallback under `NURL_NO_INT128`) **and** emitted as a
+  `linkonce_odr`/`alwaysinline` i128 definition in nurlc's preamble,
+  exactly like `nurl_peek` — so it inlines to one `mul`/`umulh` with or
+  without LTO, on every backend, while runtime.o's C definition still
+  wins at link. Every crypto speedup below is downstream of it.
+
 - **Wide arithmetic: `nurl_addc`, `nurl_subb`, `nurl_mac`.** The
   companions to `nurl_umulhi` — the high half of a sum, of a difference,
   and of a multiply-accumulate (`a·b + c + d`, which cannot overflow 128
@@ -99,7 +132,135 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   instructions through these, against 26 for the hand-rolled wrap test
   they replace — the four limbs now legalise to `add; adc; adc; adc`.
 
+- **The unikernel boots on real hardware, off a USB stick.** The x86_64
+  image booted QEMU, Firecracker and cloud-hypervisor because they read
+  its PVH note; no PC firmware does — a BIOS reads a boot sector, UEFI
+  reads a PE binary off a FAT partition. The same ELF now carries a
+  second door, a Multiboot2 header and `_mb2_start` beside the PVH note,
+  and `build_bootable_image.sh` packages it into a hybrid BIOS+UEFI disk
+  that `dd` writes straight to a stick. The two entries meet six
+  instructions later — they hand over in the same machine state — so
+  `kmain` and `mem_init` are untouched and the PVH gate stays 20/20.
+  Four things a PC has that a microvm does not, each fixed at the root:
+  no serial port (`boot/console.c` draws the same bytes on the screen —
+  EGA text under BIOS, a linear framebuffer with an 8×16 font under
+  UEFI, armed only on a Multiboot2 boot); nobody states the TSC
+  frequency and on an AMD part neither CPUID leaf exists
+  (`pit_calibrate_khz` counts TSC ticks against PIT channel 2 for 10 ms,
+  and `nurl_clock_source` reports which of five sources answered); GRUB
+  re-quotes the command line, so `build_argv` now finds the key and lets
+  the quoting decide where the value ends; and the UART wait loop was
+  unbounded, so a chipset answering 0x00 would hang before printing what
+  would have said why. `grub-mkrescue` is deliberately not used — its
+  `-d` takes one platform directory and derives nothing, so outside
+  `/usr/lib/grub` it silently omits one firmware's image; the two boot
+  images are built with `grub-mkstandalone` and assembled with
+  `xorriso`, so the build runs unprivileged and in CI.
+  `demos/baremetal.nu` is what goes on the stick first, and
+  `tests/baremetal_gate.sh` checks the header structurally everywhere
+  and boots the hybrid disk under SeaBIOS where the tooling exists
+  (three mutations caught). Verified end to end under both SeaBIOS and
+  OVMF. Font glyphs are generated from Spleen (BSD-2-Clause); NOTICE
+  carries the notice.
+
+- **`stdlib/std/p256_scalar.nu` — fixed-width arithmetic mod the P-256
+  group order.** The point multiply already ran on the fast Montgomery
+  field mod *p*; the SCALAR arithmetic mod *n* (`r·d`, `z+r·d`, and
+  above all `k⁻¹`) still ran on variable-length `std/bigint.nu`, where
+  `k⁻¹` is a 256-iteration Fermat modpow that clones a heap magnitude
+  every step. The new module gives *n* the same treatment *p* had: four
+  64-bit limbs, Montgomery CIOS via `nurl_umulhi`, no allocation in the
+  multiply, Fermat inversion over that field. *n* has no `p ≡ −1
+  (mod 2^64)` shortcut, so the reduction carries the general Montgomery
+  constant `n0 = −n⁻¹ mod 2^64`. It exposes reduce / mulmod / addmod /
+  inv over 32-byte big-endian scalars — the shape ECDSA already carries
+  them in.
+
+- **The HTTP benchmark measures TLS, and its report is generated.**
+  `bench/run_http.sh` measured only plaintext and printed a table
+  someone pasted into a hand-maintained `bench/HTTP_RESULTS.md`. It now
+  runs a second HTTPS pass against all three peers — NURL through the
+  same `HttpApp` facade's `http_app_listen_tls`, Rust through
+  `tokio-rustls` (the stack axum/warp use), Node through the built-in
+  `https` module, each switched at startup so the plaintext path is
+  unchanged — with a self-signed EC P-256 cert generated per run. The
+  measurements feed `bench/gen_http_results.py`, which overwrites
+  `HTTP_RESULTS.md` wholesale, giving it the same "do not edit by hand"
+  contract `bench/RESULTS.md` has. `.github/workflows/http-bench.yml`
+  runs the same install → build → run → commit flow as `bench.yml`,
+  deliberately `workflow_dispatch` only: HTTP load numbers on a shared
+  CI VM are far noisier than the wall-clock suite, so a refresh is
+  opt-in.
+
+- **`tools/check_windows_paths.sh` — a CI gate for paths Windows cannot
+  represent.** Reserved DOS device names (CON, PRN, AUX, NUL, COM1–9,
+  LPT1–9, at every directory, in any case, with any extension),
+  reserved characters, trailing dots or spaces (Win32 strips them, so
+  the file that arrives is not the one committed), and paths differing
+  only in case. Catching these on Windows is catching them too late —
+  the failure lands at the *checkout* step, upstream of anything that
+  can explain itself, and the log names neither the rule nor the file.
+  The gate reports it on Linux, naming both. 4/4 mutations caught.
+
 ### Changed
+
+- **The pure-NURL TLS 1.3 handshake is ~2× faster: 2 470 → 4 894
+  handshakes/s.** A profile of the handshake put its cost in four
+  places, and each was taken in turn — all in high-level NURL, with no
+  assembly and no AES-NI-tier intrinsics. `nurl_umulhi` (above) is what
+  made every one of them expressible.
+
+  - **Poly1305 to radix 2^44.** The accumulator was five 26-bit limbs,
+    a radix chosen only so each `h·r` partial product stayed under 2^63
+    and plain i64 arithmetic sufficed. Rewritten as poly1305-donna-64:
+    three 44/44/42-bit limbs, each `h·r` term a full 128-bit product
+    accumulated as an explicit (lo, hi) pair — nine multiplies a block
+    instead of twenty-five. Poly1305 alone 1 206 → 1 617 MB/s (+34%);
+    ChaCha20-Poly1305 seal 397 → 432 MB/s, open 398 → 435 MB/s.
+  - **P-256 field multiply to 4×64 CIOS.** `__p256_mul_d` was
+    Montgomery CIOS over eight 32-bit limbs — 64 partial products a
+    multiply. It now works in four 64-bit limbs (16 full 64×64→128
+    products) while the field's external representation stays 8×32, so
+    add / sub / conditional-subtract, every constant table and the whole
+    point-addition and inversion layer are untouched. P-256 ECDH keygen
+    654 → 375 µs/op (−43%).
+  - **X25519 and Ed25519 field to 5×51 donna-c64.** The shared
+    GF(2^255−19) field was the TweetNaCl 10-limb radix-2^25.5 form,
+    whose limbs are narrow precisely so ten accumulate inside an i64.
+    Rewritten as curve25519-donna-c64: five unsigned 2^51 limbs, so the
+    multiply is 25 products against 100 and the square 15. The ladder,
+    Fermat inversion and public surface are untouched. X25519 scalar
+    mult 137 → 69 µs/op (2.0×); Ed25519 sign 387 → 225 µs/op (−42%).
+  - **ECDSA signing off generic bigint.** `ecdsa_p256_sign`'s tail
+    swaps its five bigint operations for `p256_scalar` (above),
+    dropping the generic path and its allocation churn out of the hot
+    path entirely. Handshake-crypto microbench 47.4G → 12.3G
+    instructions; live handshake rate 2 470 → 6 079/s single-core.
+  - **Fixed-base combs for `k·G` and `x25519_base`.** Both are
+    fixed-base multiplies — the base is the same constant every time —
+    so the doublings a variable-base ladder pays can be precomputed
+    away. `p256ct_scalarmult_base` is a 4-tooth Lim–Lee comb over a
+    baked 15-entry table: ~64 D + 64 A against ~256 D + 64 A, still
+    fully constant-time (it reuses the masked table scan the secret-path
+    window ladder already uses). For X25519 the Montgomery x-only ladder
+    *cannot* precompute — x-only has no complete addition — so
+    `x25519_base` instead computes `scalar·B` on twisted Edwards, which
+    does, and converts to the Montgomery u-coordinate via
+    `u = (Z+Y)/(Z−Y)`; self-contained in `x25519.nu` on its own
+    donna-c64 field, so it adds no dependency on `ed25519.nu`. Both
+    variable-base paths (ECDH shared secret) are unchanged.
+    Handshake-crypto microbench 12.3G → 7.9G instructions;
+    `x25519_base` alone 73.5 → 50 µs (1.47×).
+
+  Every one of these was ported **Python-first**: a reference oracle
+  reproduced the exact limb arithmetic and was diffed against a bigint
+  or reference implementation before a line of NURL changed. That is how
+  the P-256 reduction's carry bug (a wrap flag read against the
+  just-overwritten accumulator limb, always false) was found at the
+  source rather than worked around. RFC 8439 / RFC 7748 / RFC 6979
+  vectors, `crypto_evp`, `noise_handshake` and `minisign_verify` pass
+  throughout, and the changed paths are ASan-clean. All compiler-clean
+  apart from `nurl_umulhi` itself — no bootstrap movement.
 
 - **ChaCha20 is a vector kernel: 577 → 1064 MB/s (1.84×).** Written in
   pure NURL on the `v128` primitives, two blocks interleaved. The
@@ -152,6 +313,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and `riscv64-linux-musl` serves correct plaintext responses under
   qemu-user, and negotiates TLS 1.3 `TLS_CHACHA20_POLY1305_SHA256` with
   a real OpenSSL client on both.
+
+- **The HTTP benchmark report says where its own numbers stop being
+  trustworthy.** The high-concurrency latency cells were a closed-loop
+  coordinated-omission artifact: at C=200 NURL's 10 blocking workers
+  saturate, the other ~190 connections queue inside `oha` and never
+  reach the server, so a p50 of 0.06 ms describes the handful in flight
+  — not the 200 offered. Every closed-loop cell now carries its mean
+  latency, the renderer computes the in-flight count by Little's law,
+  and a cell is marked `‡` when that falls ≥2 connections below the
+  offered concurrency. Throughput stays — it is the server's true
+  saturation figure — but latency winners are now chosen only among
+  non-starved cells, so a starved 0.06 ms no longer bolds or beats a
+  real one (Rust's genuine 0.63 ms at C=200 wins that row). A new
+  connection-setup section measures what the keep-alive tables amortise
+  away: HTTP conn/s and, for HTTPS, TLS handshakes/s — the cost a
+  short-lived-connection edge deployment actually pays — which also
+  corrects an old note that claimed the TLS tables measured the
+  handshake and then contradicted itself. A "planned rigor" section
+  names what the harness does *not* yet do (open-loop latency, core
+  isolation, µs/req via getrusage, large-body record throughput), so the
+  limits are on the page instead of left for a reader to discover.
+
+### Fixed
+
+- **The Windows CI job died at `Checkout`, before a line of the build
+  ran.** `unikernel/boot/con.c` — the obvious name for a console — is a
+  path Windows cannot create: CON is a reserved character device at
+  every directory, in any case, with any extension, so git refuses to
+  try. Renamed to `console.c`/`console.h` with a `console_*` prefix so
+  nothing is left that tempts the name back, and the class as a whole is
+  now gated on Linux (see `tools/check_windows_paths.sh` above).
 
 ## [0.39.0] — 2026-08-12
 
@@ -12259,7 +12451,8 @@ releases are measured.
   compile-server (`api/`), browser playground (`nurlweb/`).
 * Dual license: MIT (LICENSE-MIT) or Apache-2.0 (LICENSE-APACHE).
 
-[Unreleased]: https://github.com/nurl-lang/nurl/compare/v0.39.0...HEAD
+[Unreleased]: https://github.com/nurl-lang/nurl/compare/v0.40.0...HEAD
+[0.40.0]: https://github.com/nurl-lang/nurl/compare/v0.39.0...v0.40.0
 [0.39.0]: https://github.com/nurl-lang/nurl/compare/v0.38.0...v0.39.0
 [0.38.0]: https://github.com/nurl-lang/nurl/compare/v0.37.1...v0.38.0
 [0.37.1]: https://github.com/nurl-lang/nurl/compare/v0.37.0...v0.37.1
