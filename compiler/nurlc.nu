@@ -14771,6 +14771,28 @@
         {}
     }
     {}
+    // `# name expr` where `name` is a BINDING, not a type. llvm_type maps any
+    // unknown identifier to the named type `%name`, so this used to compile
+    // (rc=0, only a discarded-value warning) and emit `insertvalue %name undef,
+    // …` against a type the module never declares — the user meets it as an
+    // opaque `use of undefined value` from clang, far from the typo. The
+    // common source is a mistyped assignment: `# d + d 1` for `= d + d 1`.
+    // Only fires when the target is a bare `%ident` that is NOT a declared
+    // struct or enum AND IS a live binding, so a legitimate cast to any
+    // registered type is untouched.
+    ? & > ( nurl_str_len dt ) 1 == ( nurl_str_get dt 0 ) 37 {
+        : s cname ( nurl_str_slice dt 1 - ( nurl_str_len dt ) 1 )
+        ? == 0 ( nurl_str_len ( nurl_sym_get2 syms cname `__variants` ) ) {
+            ? == 0 ( nurl_str_len ( nurl_sym_get syms ( nurl_str_cat3 cname `__idx_0` `__type` ) ) ) {
+                : s bty ( nurl_sym_get syms cname )
+                ? != 0 ( nurl_str_len bty ) { ( die lex ( nurl_str_cat4
+                    ( nurl_str_cat3 `'# ` cname `' casts to the type '` )
+                    ( nurl_str_cat3 cname `', but '` cname )
+                    `' is a binding here, not a type. Did you mean to ASSIGN to it — '= `
+                    ( nurl_str_cat cname ` …'? (Casts are '# i x', '# f x', '# *T x' or a declared struct/enum name.)` ) ) ) } {}
+            } {}
+        } {}
+    } {}
     : s val ( gen_operand lex syms cg )
     : s st ( nurl_get_last_type )
     ? ( seq st `void` )
@@ -17386,6 +17408,13 @@
     // Build closure body symtable: copy outer scope + add params + captured vars
     ( nurl_sym_push syms )
     : i body_syms syms
+    // The closure is a SEPARATE function whose first block is `entry`. Without
+    // this the body inherits the enclosing function's current-block name, and
+    // the first construct that emits a phi over the block it started in — a
+    // short-circuit `|`/`&` — names an incoming block that does not exist in
+    // this function (`phi i1 [ 1, %divok_11 ]` from whatever the outer frame
+    // last emitted), which clang rejects as `use of undefined value`.
+    ( nurl_sym_def body_syms `__cur_lbl__` `entry` )
     // Shadow outer __owned_slices__ with empty list for the closure body
     ( nurl_sym_def body_syms `__owned_slices__` `` )
     ( nurl_sym_def body_syms `__slice_decls__` `` )
