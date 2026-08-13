@@ -303,7 +303,7 @@ $ `stdlib/core/vec.nu`
         // without a 405. Connection is closed immediately after the
         // single event. v2 extension point.
         ? != 0 ( nurl_str_eq rm `GET` ) {
-            : HttpResponse r ( response_text 200 `event: ready\ndata: {"server":"nurl-mcp","streaming":"single-event"}\n\n` )
+            : HttpResponse r ( response_text 200 `event: ready\ndata: {"transport":"streamable-http","streaming":"single-event"}\n\n` )
             ( response_set_header r `Content-Type` `text/event-stream` )
             ( response_set_header r `Cache-Control` `no-cache` )
             ( response_set_header r `Connection` `close` )
@@ -684,7 +684,7 @@ McpSessionStore store
                 }
                 F _ → {}
             }
-            ? ! have { ( string_push_str body `event: ready\r\ndata: {"server":"nurl-mcp"}\r\n\r\n` ) } {}
+            ? ! have { ( string_push_str body `event: ready\r\ndata: {"transport":"streamable-http"}\r\n\r\n` ) } {}
             : HttpResponse r ( response_text 200 ( string_data body ) )
             ( string_free body )
             ( response_set_header r `Content-Type` `text/event-stream` )

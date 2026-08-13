@@ -1,5 +1,72 @@
 # Changelog
 
+## 0.24.0
+
+**Everything an agent-experience pass found, fixed.** A full run against the
+installed 0.22.0 package (report in `AX_REPORT.md`) turned up one dead surface
+and a set of ways the server could mislead the model driving it. All of them
+are closed here.
+
+- **The GPU tool family works again.** Every CUDA tool failed to build its
+  kernel, because wasmbuilder emitted a named vararg parameter
+  (`... %a2`) in a libc shim, which is not legal LLVM — so any module whose IR
+  declares `open`/`fcntl`/`printf` failed to link. Fixed in
+  `packages/wasmbuilder` (`__wb_ir_decl_params` drops the `...` marker);
+  verified end to end on real hardware: π·10⁸ in 3.5 s, sample, histogram,
+  dataset reduce, `compute_iterate`, `compute_shuffle`.
+- **A failed chunk now says WHY.** Workers append their reason (a wasm trap,
+  a missing runtime, a CUDA error, a failed HMAC check) to the result frame,
+  and the task reports it as `"error": "…"` next to `failed_chunks`. The
+  suffix is appended after the existing frame, so mixed-version clusters are
+  unaffected.
+- **An unknown `reduce` is an error,** not a silent `sum`. `{"reduce":"avg"}`
+  used to return a plausible wrong number with `"reduce":"sum"` echoed back.
+- **A dead worker leaves the cluster.** Roster members carry a liveness stamp
+  refreshed by the ~2 s HELLO heartbeat; one silent past 90 s is evicted from
+  the roster and both rings. Before this a killed worker stayed in the ring
+  forever and *every* later submit paid a full round of re-dispatches around
+  a node that was never coming back. Eviction is self-healing: a worker that
+  returns re-announces and rejoins.
+- **Expression and CPU-wasm tasks are fault-tolerant too.** They now carry the
+  same retry plan the GPU tools had, so a worker that dies mid-task no longer
+  leaves the task `running` forever (an agent's infinite poll loop). Their
+  liveness test is roster eviction rather than a fixed deadline — a legitimate
+  multi-minute chunk is not mistaken for a dead node — with a 30 min backstop.
+  A task whose ring runs empty finishes as an honest error instead of retrying
+  into the void.
+- **Liveness is aged on EVERY node, not just the coordinator.** `dist/job`
+  forwards a job whose key a node does not own to whoever *its* ring says owns
+  it, so a worker still holding a dead peer bounced re-dispatched chunks
+  straight back into the void — a task submitted while a dead worker was still
+  in the ring could never finish. Workers now expire members on the same
+  heartbeat tick (never themselves: a node hears no HELLO of its own).
+- **New tool `swarm_status`** — the cluster as the coordinator sees it: worker
+  count, which are GPU-capable, how long since each was last heard from, task
+  and dataset counts, and the liveness TTL. "No workers found" and a task that
+  keeps retrying were previously unreasonable-about from the outside.
+- **A long expression chunk keeps its worker visibly alive**: the fold calls a
+  keepalive every few million elements, so a busy worker still heartbeats
+  (its handler runs inside the pump loop).
+- **The build-service fallback is honest.** The local build error is no longer
+  discarded: it is logged, it leads the message when both paths fail, and the
+  fallback itself is announced (it ships kernel source to a third-party host).
+  The request is capped at 90 s — a hung service used to block one MCP call
+  for 300 s and then report "could not reach the build API", which was wrong.
+- **A role that cannot start is fatal.** A relay or MCP listener that fails to
+  bind used to leave the process running with the surviving roles, so a
+  duplicate instance looked alive while serving nothing.
+- **`--worker` preflights its wasm runtime** at startup: `--gpu` refuses to
+  start without a runtime that has `--allow-gpu`, and a CPU worker warns. This
+  used to surface only as an unexplained `failed_chunks` on a later task.
+- **The MCP endpoint is `/mcp`.** Any other path answers 404 instead of
+  serving the same body everywhere; the SSE ready event no longer claims to be
+  a different server (`nurl-mcp`).
+- New offline test `tests/liveness_test.nu` covers the liveness stamp,
+  eviction from roster and ring, the self-exemption, rejoining, and the
+  failed-chunk reason suffix (ASan/LSan clean).
+- Smaller: the startup banner is flushed (a redirected `-v` log stayed empty),
+  and the dev CLI prints its summary on one line again.
+
 ## 0.23.0
 
 **MCP tasks: the compute_submit family now speaks

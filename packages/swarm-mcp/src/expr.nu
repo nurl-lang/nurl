@@ -332,8 +332,8 @@ $ `stdlib/std/floatbits.nu`
     : i a ( __ar p node 1 )
     : i b ( __ar p node 2 )
     : i c ( __ar p node 3 )
-    ? == tag 0 { ^ # f a } {}                // INT literal → double
-    ? == tag 20 { ^ ( bits_to_f64 a ) } {}   // FLT literal
+    ? == tag 0 { ^ # f a } {}  // INT literal → double
+    ? == tag 20 { ^ ( bits_to_f64 a ) } {}  // FLT literal
     ? == tag 1 { ^ x } {}
     ? == tag 2 { ^ - 0.0 ( expr_eval_f p a x ) } {}
     ? == tag 3 { ^ + ( expr_eval_f p a x ) ( expr_eval_f p b x ) } {}

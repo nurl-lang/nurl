@@ -142,6 +142,10 @@ $ `stdlib/core/vec.nu`
 }
 
 // Parameter types of a `declare` line, in order, trimmed. `()` → empty.
+// A vararg marker (`...`) is dropped: a shim mirrors only the fixed
+// parameters its call sites pass, and `... %aN` in a define's parameter
+// list is not legal LLVM — emitting it made every module whose IR
+// declares a vararg libc symbol (`open`, `fcntl`, `printf`) fail to link.
 @ __wb_ir_decl_params String line → ( Vec String ) {
     : ( Vec String ) out ( vec_new [String] )
     : ?i lp_o ( string_index_of line `(` )
@@ -156,7 +160,10 @@ $ `stdlib/core/vec.nu`
                 : ( Vec String ) parts ( string_split inner `,` )
                 : ~ i i 0
                 ~ < i ( vec_len [String] parts ) {
-                    ?? ( vec_get [String] parts i ) { T p → { ( vec_push [String] out ( string_trim p ) ) } F → {} }
+                    ?? ( vec_get [String] parts i ) { T p → {
+                            : String tp ( string_trim p )
+                            ? != 0 ( nurl_str_eq ( string_data tp ) `...` ) { ( string_free tp ) } { ( vec_push [String] out tp ) }
+                        } F → {} }
                     = i + i 1
                 }
                 ( vec_free_with [String] parts \ String s → v { ( string_free s ) } )

@@ -26,6 +26,9 @@ $ `deps/wasmbuilder/src/build.nu`
 
 @ build_api_url → String { ^ ( env_var_or `NURL_BUILD_API` `https://play.nurl-lang.org` ) }
 
+// Wall-clock cap on one fallback build request.
+@ __build_api_timeout → i { ^ 90 }
+
 // ── kernel wrapping ──────────────────────────────────────────────
 // The caller supplies just a per-element kernel `@ kernel i x → i { … }`
 // (plus any imports/helpers). wrap_kernel generates the rest of the program:
@@ -52,9 +55,9 @@ $ `deps/wasmbuilder/src/build.nu`
 // Float (f64) duals — must match work.nu's red_id_f / red_fold_f. ±∞ identities
 // come from their f64 bit patterns (see work.nu).
 @ __red_identity_src_f i op → s {
-    ? == op 1 { ^ `1.0` } {}                                  // product
+    ? == op 1 { ^ `1.0` } {}  // product
     ? == op 2 { ^ `( bits_to_f64 9218868437227405312 )` } {}  // min → +∞
-    ? == op 3 { ^ `( bits_to_f64 -4503599627370496 )` } {}    // max → −∞
+    ? == op 3 { ^ `( bits_to_f64 -4503599627370496 )` } {}  // max → −∞
     ^ `0.0`  // sum, count
 }
 
@@ -198,10 +201,33 @@ $ `deps/wasmbuilder/src/build.nu`
         T wasm → { ^ @ !( Vec u ) String { T wasm } }
         F le → {
             ? ( string_contains le `nurlc failed` ) { ^ @ !( Vec u ) String { F le } } {}
-            ( string_free le )
+            // Anything else means this box could not build wasm — say so out
+            // loud before falling back. Swallowing it hid a real toolchain bug
+            // behind a build-service error for a long time, and the fallback
+            // ships the caller's kernel source to a third-party host, which is
+            // never something to do silently.
+            ( nurl_eprint `swarm-mcp: local wasm build failed: ` )
+            ( nurl_eprint ( string_data le ) )
+            ( nurl_eprint `\nswarm-mcp: falling back to the build API at ` )
+            : String bu ( build_api_url )
+            ( nurl_eprintln ( string_data bu ) )
+            ( string_free bu )
+            : !( Vec u ) String rr ( __compile_via_api source )
+            ?? rr {
+                T wasm → { ( string_free le ) ^ @ !( Vec u ) String { T wasm } }
+                F re → {
+                    // Both paths failed: the LOCAL error is the actionable one,
+                    // so lead with it and keep the remote note as context.
+                    : String both ( string_concat ( string_from `local build failed: ` ) le )
+                    ( string_push_str both ` — and the build-service fallback also failed: ` )
+                    ( string_push_str both ( string_data re ) )
+                    ( string_free re )
+                    ^ @ !( Vec u ) String { F both }
+                }
+            }
         }
     }
-    ^ ( __compile_via_api source )
+    ^ @ !( Vec u ) String { F ( string_from `wasm build failed` ) }
 }
 
 // The remote fallback: POST the kernel to <NURL_BUILD_API>/build_wasm.
@@ -216,11 +242,21 @@ $ `deps/wasmbuilder/src/build.nu`
     : String hb ( string_new )
     ( string_push_str hb `Content-Type: application/json\r\n` )
     ( string_push_str hb `Accept: application/wasm\r\n` )
-    : !HttpcResp HttpcErr rr ( httpc_request `POST` ( string_data url ) ( string_data body ) ( string_data hb ) )
+    // A build service that hangs must not hang the MCP tool call with it: the
+    // library default is a 300 s cap, which an agent experiences as a dead
+    // server. 90 s is far past a healthy build (~10 s) and still answerable.
+    : !HttpcResp HttpcErr rr ( httpc_request_timeout `POST` ( string_data url ) ( string_data body ) ( string_data hb ) ( __build_api_timeout ) )
     ( string_free body ) ( string_free hb )
     : ~ ! ( Vec u ) String out @ !( Vec u ) String { F ( string_from `internal` ) }
     ?? rr {
-        F e → { = out @ !( Vec u ) String { F ( string_concat ( string_from `could not reach the build API at ` ) url ) } }
+        F e → {
+            // "could not reach" was wrong for the common case — the service
+            // answered the connect and then never finished. Name both.
+            : String m ( string_concat ( string_from `the build API at ` ) ( string_concat ( string_from ( string_data url ) ) ( string_from ` did not answer within ` ) ) )
+            ( string_push_str m ( nurl_str_int ( __build_api_timeout ) ) )
+            ( string_push_str m `s (unreachable, or it accepted the request and never finished)` )
+            = out @ !( Vec u ) String { F m }
+        }
         T resp → {
             : ( Vec u ) rb ( httpc_body_bytes resp )
             ( httpc_resp_free resp )

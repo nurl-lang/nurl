@@ -68,7 +68,12 @@ $ `stdlib/dist/ring.nu`
 // A node tracks the pubkeys it has folded into its ring so a re-heard HELLO is
 // idempotent (adding a member twice would double its ring points and skew load).
 
-: Member { ( Vec u ) pubkey i id i caps }
+// `last_ms` is when this member's HELLO was last heard. Workers re-announce on
+// a ~2 s heartbeat, so a member silent far longer than that is gone: without
+// this the ring kept a dead worker forever and every later submit paid a full
+// round of chunk re-dispatches routing at a node that is never coming back.
+// Eviction is self-healing — a worker that comes back re-announces and rejoins.
+: Member { ( Vec u ) pubkey i id i caps i last_ms }
 
 : Roster { ( Vec s ) members }  // *Member
 
@@ -116,7 +121,8 @@ $ `stdlib/dist/ring.nu`
 }
 
 // Fold a worker into the roster + ring, once. Returns T if newly added.
-@ roster_add * Roster r * Ring ring ( Vec u ) pubkey i id i vnodes i caps → b {
+// `now` is the caller's clock (ms); the member's liveness stamp starts there.
+@ roster_add * Roster r * Ring ring ( Vec u ) pubkey i id i vnodes i caps i now → b {
     ? ( roster_has r pubkey ) { ^ F } {}
     : *Member m # *Member ( nurl_alloc Z Member )
     : ( Vec u ) cp ( vec_with_cap [u] ( vec_len [u] pubkey ) )
@@ -124,7 +130,70 @@ $ `stdlib/dist/ring.nu`
     = . m pubkey cp
     = . m id id
     = . m caps caps
+    = . m last_ms now
     ( vec_push [s] . r members # s m )
     ( ring_add_member ring pubkey vnodes )
     ^ T
+}
+
+// Refresh a member's liveness stamp (a re-heard HELLO). Unknown pubkey: no-op.
+@ roster_touch * Roster r ( Vec u ) pubkey i now → v {
+    : i n ( vec_len [s] . r members )
+    : ~ i k 0
+    ~ < k n {
+        : s pp ?? ( vec_get [s] . r members k ) { T x → x F → # s 0 }
+        ? != # i pp 0 {
+            : *Member m # *Member pp
+            ? ( bytes_eq . m pubkey pubkey ) { = . m last_ms now = k n } {}
+        } {}
+        = k + k 1
+    }
+}
+
+// Drop every member silent for longer than `ttl_ms` and return their pubkeys
+// (owned by the caller, which also removes them from its rings). The roster
+// entry — not the ring — is the source of truth for who is live, so callers
+// must apply the returned removals to every ring they maintain.
+//
+// `exempt` is never evicted (pass a node's own pubkey, empty for none): a
+// worker hears no HELLO of its own, so without the exemption it would time
+// itself out of its own ring and stop owning — and therefore stop executing —
+// every key it holds.
+@ roster_expire * Roster r i now i ttl_ms ( Vec u ) exempt → ( Vec ( Vec u ) ) {
+    : ( Vec ( Vec u ) ) gone ( vec_new [( Vec u )] )
+    : ( Vec s ) keep ( vec_new [s] )
+    : i n ( vec_len [s] . r members )
+    : ~ i k 0
+    ~ < k n {
+        : s pp ?? ( vec_get [s] . r members k ) { T x → x F → # s 0 }
+        ? != # i pp 0 {
+            : *Member m # *Member pp
+            ? & > - now . m last_ms ttl_ms ! ( bytes_eq . m pubkey exempt ) {
+                ( vec_push [( Vec u )] gone . m pubkey )
+                ( nurl_free # s m )
+            } { ( vec_push [s] keep pp ) }
+        } {}
+        = k + k 1
+    }
+    ( vec_free [s] . r members )
+    = . r members keep
+    ^ gone
+}
+
+// True when `pubkey` is a live roster member (the coordinator's liveness test
+// for the worker a chunk was routed to).
+@ roster_is_live * Roster r ( Vec u ) pubkey → b { ^ ( roster_has r pubkey ) }
+
+// Read-only view of member k: its node id, capability bits and last-heard
+// stamp. Out of range → id 0. Used by the status tool, so an operator (or the
+// model) can see the cluster the coordinator believes it has.
+: MemberView { i id i caps i last_ms }
+
+@ roster_view * Roster r i k → MemberView {
+    : i n ( vec_len [s] . r members )
+    ? | < k 0 >= k n { ^ @ MemberView { 0 0 0 } } {}
+    : s pp ?? ( vec_get [s] . r members k ) { T x → x F → # s 0 }
+    ? == # i pp 0 { ^ @ MemberView { 0 0 0 } } {}
+    : *Member m # *Member pp
+    ^ @ MemberView { . m id . m caps . m last_ms }
 }

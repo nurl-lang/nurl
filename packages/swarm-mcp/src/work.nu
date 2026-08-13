@@ -62,18 +62,18 @@ $ `token.nu`
 // 0xFFF0… = ±(2⁶³−2⁵²) signed): coordination-free and exact.
 
 @ red_id_f i op → f {
-    ? == op 1 { ^ 1.0 } {}                                  // product
+    ? == op 1 { ^ 1.0 } {}  // product
     ? == op 2 { ^ ( bits_to_f64 9218868437227405312 ) } {}  // min → +∞
-    ? == op 3 { ^ ( bits_to_f64 -4503599627370496 ) } {}    // max → −∞
+    ? == op 3 { ^ ( bits_to_f64 -4503599627370496 ) } {}  // max → −∞
     ^ 0.0  // sum, count
 }
 
 @ red_fold_f i op f acc f v → f {
-    ? == op 0 { ^ + acc v } {}                       // sum
-    ? == op 1 { ^ * acc v } {}                       // product
-    ? == op 2 { ^ ? < v acc v acc } {}               // min
-    ? == op 3 { ^ ? > v acc v acc } {}               // max
-    ? == op 4 { ^ ? != v 0.0 + acc 1.0 acc } {}      // count of truthy
+    ? == op 0 { ^ + acc v } {}  // sum
+    ? == op 1 { ^ * acc v } {}  // product
+    ? == op 2 { ^ ? < v acc v acc } {}  // min
+    ? == op 3 { ^ ? > v acc v acc } {}  // max
+    ? == op 4 { ^ ? != v 0.0 + acc 1.0 acc } {}  // count of truthy
     ^ acc
 }
 
@@ -113,7 +113,18 @@ $ `token.nu`
 //
 // `key` is the cluster HMAC key (token_key), captured by the handler closure.
 
+// `ka` is a keepalive the fold calls every __ka_stride elements. A worker
+// executes a chunk inside its pump loop, so a long fold used to silence its
+// membership heartbeat for the whole chunk and the coordinator could not tell
+// a busy worker from a dead one. Calling back mid-fold keeps a working node
+// visibly alive. kernel_handler keeps the old signature (no keepalive).
+@ __ka_stride → i { ^ 4194304 }
+
 @ kernel_handler ( Vec u ) key → ( @ ( Vec u ) ( Vec u ) ) {
+    ^ ( kernel_handler_ka key \ → v {} )
+}
+
+@ kernel_handler_ka ( Vec u ) key ( @ v ) ka → ( @ ( Vec u ) ( Vec u ) ) {
     ^ \ ( Vec u ) p → ( Vec u ) {
         ?? ( token_untag key p ) {
             F → {
@@ -137,14 +148,22 @@ $ `token.nu`
                     : ~ f facc ( red_id_f op )
                     ? . ep ok {
                         : ~ i xx lo
-                        ~ < xx hi { = facc ( red_fold_f op facc ( expr_eval_f ep root # f xx ) ) = xx + xx 1 }
+                        ~ < xx hi {
+                            = facc ( red_fold_f op facc ( expr_eval_f ep root # f xx ) )
+                            = xx + xx 1
+                            ? == % - xx lo ( __ka_stride ) 0 { ( ka ) } {}
+                        }
                     } {}
                     = acc ( f64_to_bits facc )
                 } {
                     = acc ( red_id op )
                     ? . ep ok {
                         : ~ i xx lo
-                        ~ < xx hi { = acc ( red_fold op acc ( expr_eval ep root xx ) ) = xx + xx 1 }
+                        ~ < xx hi {
+                            = acc ( red_fold op acc ( expr_eval ep root xx ) )
+                            = xx + xx 1
+                            ? == % - xx lo ( __ka_stride ) 0 { ( ka ) } {}
+                        }
                     } {}
                 }
                 ( eparser_free ep )
@@ -183,7 +202,7 @@ $ `token.nu`
 @ shard_free ( Vec s ) chunks → v {
     : i n ( vec_len [s] chunks )
     : ~ i k 0
-    ~ < k n { ?? ( vec_get [s] chunks k ) { T pp → ?!= # i pp 0 { ( nurl_free pp ) } {} F → {} } = k + k 1 }
+    ~ < k n { ?? ( vec_get [s] chunks k ) { T pp → ? != # i pp 0 { ( nurl_free pp ) } {} F → {} } = k + k 1 }
     ( vec_free [s] chunks )
 }
 
@@ -192,6 +211,18 @@ $ `token.nu`
     : ( Vec u ) b ( vec_new [u] )
     ( bytes_push_u64_be b # u64 idx )
     ^ b
+}
+
+// True for a recognised reduce-op name. The MCP layer rejects anything else
+// instead of quietly folding with the fallback: an unknown op used to return a
+// plausible-but-wrong number (`"avg"` reduced as `sum`), which is the one
+// failure an agent cannot detect.
+@ reduce_op_known s name → b {
+    ^ | != 0 ( nurl_str_eq name `sum` )
+    | != 0 ( nurl_str_eq name `product` )
+    | != 0 ( nurl_str_eq name `min` )
+    | != 0 ( nurl_str_eq name `max` )
+    != 0 ( nurl_str_eq name `count` )
 }
 
 // True for a recognised reduce-op name; sets *op. Keeps the MCP layer thin.
