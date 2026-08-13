@@ -1645,14 +1645,15 @@ Four new diagnostics shipped 2026-05-25 closing the remaining
 
 ### 11.1 Grammar version
 
-This document corresponds to **grammar v2.3** (dynamic trait objects —
-`%Trait` object type + `( dyn Trait value )` construction, §4.9). The
-authoritative grammar lives in [`spec/grammar.ebnf`](../spec/grammar.ebnf);
-changes since v1.x are tracked in that file's prelude.
+This document corresponds to **grammar v2.5** (the `v128` SIMD lane
+type, §4.1b; v2.4 added `break` / `continue`, v2.3 dynamic trait
+objects). The authoritative grammar lives in
+[`spec/grammar.ebnf`](../spec/grammar.ebnf); changes since v1.x are
+tracked in that file's prelude.
 
-A compiler is "v2.3 conformant" if it accepts every program the EBNF
+A compiler is "v2.5 conformant" if it accepts every program the EBNF
 generates and rejects every program the EBNF does not generate, with
-the semantics defined here. A program is "v2.3 portable" if it relies
+the semantics defined here. A program is "v2.5 portable" if it relies
 only on features documented in this spec or in
 [`spec/grammar.ebnf`](../spec/grammar.ebnf) — not on
 compiler-internal accidents.

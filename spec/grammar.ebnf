@@ -1,5 +1,5 @@
 (* NURL — Neural Unified Representation Language
-   Grammar v2.4 — complete language specification
+   Grammar v2.5 — complete language specification
    File extension: .nu
 
    All expressions use PREFIX NOTATION.
@@ -668,13 +668,24 @@ type = base_type     (*  i u f b s v                                  *)
      | IDENT         (*  named struct, enum, or type variable         *)
      ;
 
+(* The sized type keywords (i8 i16 i32, u16 u32 u64, f32) and 'v128' lex
+   as TT_TYPE_KW exactly like the single-char forms — see the reserved-
+   identifier list under § LEXICAL. *)
 base_type = 'i'  (*  signed 64-bit integer  →  i64    *)
           | 'u'  (*  unsigned 8-bit byte    →  i8     (since v1.6) *)
           | 'f'  (*  64-bit IEEE 754 float  →  double *)
           | 'b'  (*  boolean                →  i1     *)
           | 's'  (*  UTF-8 string           →  i8*    *)
           | 'v'  (*  void                            *)
+          | sized_type
+          | 'v128'  (*  128-bit SIMD vector →  <4 x i32>  (v2.5, docs/spec.md §4.1b)
+                        By-value like any scalar: bindings, params, returns.
+                        No arithmetic operator applies — every operation is a
+                        `nurl_v128_*` primitive, because `+` on a vector must
+                        say which lane width it means. *)
           ;
+
+sized_type = 'i8' | 'i16' | 'i32' | 'u16' | 'u32' | 'u64' | 'f32' ;
 
 (* dyn_type: a DYNAMIC trait object (grammar v2.3, docs/spec.md §4.9). The '%'
    sigil — otherwise the trait/impl declaration sigil and the modulo operator —
@@ -778,6 +789,7 @@ IDENT       = IDENT_PLAIN ( '::' IDENT_PLAIN )* ;
      i8 i16 i32              →  signed fixed-width ints   (TT_TYPE_KW)
      u16 u32 u64             →  unsigned fixed-width ints (TT_TYPE_KW)
      f32                     →  32-bit float              (TT_TYPE_KW)
+     v128                    →  SIMD vector    (v2.5)     (TT_TYPE_KW)
      T F                     →  boolean literals          (TT_BOOL)
      Z                       →  sizeof keyword            (TT_SIZEOF)
      pub                     →  visibility prefix         (TT_PUB)
