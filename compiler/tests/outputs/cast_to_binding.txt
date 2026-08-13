@@ -1,0 +1,6 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/cast_to_binding.nu:10:13: error: '# d' casts to the type 'd', but 'd' is a binding here, not a type. Did you mean to ASSIGN to it — '= d …'? (Casts are '# i x', '# f x', '# *T x' or a declared struct/enum name.)
+        # d + d 1
+            ^
+error: aborting due to 1 previous error
