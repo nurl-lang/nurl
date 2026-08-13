@@ -460,10 +460,224 @@ $ `stdlib/core/vec.nu`
 }
 
 // scalar · basepoint(9) — derive the public key from a 32-byte secret.
-@ x25519_base ( Vec u ) scalar → ( Vec u ) {
-    : ( Vec u ) base ( _zeros_u 32 )
-    ( _bset base 0 9 )
-    : ( Vec u ) out ( __scalarmult scalar base )
-    ( vec_free [u] base )
+// ── fixed-base comb for the keygen basepoint (X25519 public key) ──────
+// scalar·9 on the Montgomery curve equals scalar·B on the birationally
+// equivalent Ed25519 curve (B ↦ u=9), and the twisted-Edwards complete
+// addition makes a constant-time fixed-base comb clean where the
+// Montgomery x-only ladder cannot. So the ephemeral public key is
+// scalar·B on Edwards via a 4-tooth comb (baked table, no per-call
+// build), then u = (Z+Y)/(Z−Y). Verified against the ladder for the
+// RFC 7748 vectors. Fixed-base only — the variable-base
+// x25519(scalar, peer) ECDH stays on the Montgomery ladder above.
+
+: XEP { ( Vec i ) x ( Vec i ) y ( Vec i ) z ( Vec i ) t }
+: XEScr { ( Vec i ) a ( Vec i ) b ( Vec i ) c ( Vec i ) d ( Vec i ) e ( Vec i ) f ( Vec i ) g ( Vec i ) h ( Vec i ) tt }
+
+@ __xe_pt → XEP { ^ @ XEP { ( _gf_zero ) ( _gf_zero ) ( _gf_zero ) ( _gf_zero ) } }
+
+@ __xe_pt_free XEP p → v { ( vec_free [i] . p x ) ( vec_free [i] . p y ) ( vec_free [i] . p z ) ( vec_free [i] . p t ) }
+
+@ __xe_scr → XEScr { ^ @ XEScr { ( _gf_zero ) ( _gf_zero ) ( _gf_zero ) ( _gf_zero ) ( _gf_zero ) ( _gf_zero ) ( _gf_zero ) ( _gf_zero ) ( _gf_zero ) } }
+
+@ __xe_scr_free XEScr s → v {
+    ( vec_free [i] . s a ) ( vec_free [i] . s b ) ( vec_free [i] . s c ) ( vec_free [i] . s d ) ( vec_free [i] . s e )
+    ( vec_free [i] . s f ) ( vec_free [i] . s g ) ( vec_free [i] . s h ) ( vec_free [i] . s tt )
+}
+
+// 2d, the Ed25519 addition constant, baked as five 2^51 limbs.
+@ __xe_d2 → ( Vec i ) {
+    : ( Vec i ) v ( _gf_zero )
+    : *i q ( vec_data [i] v )
+    = . q 0 # i 1859910466990425 = . q 1 # i 932731440258426 = . q 2 # i 1072319116312658
+    = . q 3 # i 1815898335770999 = . q 4 # i 633789495995903
+    ^ v
+}
+
+@ __xe_comb_table → ( Vec i ) {
+    : ( Vec i ) v ( vec_with_cap [i] 320 )
+    : b _l ( vec_set_len [i] v 320 )
+    : *i q ( vec_data [i] v )
+    = . q 0 # i 0 = . q 1 # i 0 = . q 2 # i 0 = . q 3 # i 0
+    = . q 4 # i 0 = . q 5 # i 1 = . q 6 # i 0 = . q 7 # i 0
+    = . q 8 # i 0 = . q 9 # i 0 = . q 10 # i 1 = . q 11 # i 0
+    = . q 12 # i 0 = . q 13 # i 0 = . q 14 # i 0 = . q 15 # i 0
+    = . q 16 # i 0 = . q 17 # i 0 = . q 18 # i 0 = . q 19 # i 0
+    = . q 20 # i 1738742601995546 = . q 21 # i 1146398526822698 = . q 22 # i 2070867633025821 = . q 23 # i 562264141797630
+    = . q 24 # i 587772402128613 = . q 25 # i 1801439850948184 = . q 26 # i 1351079888211148 = . q 27 # i 450359962737049
+    = . q 28 # i 900719925474099 = . q 29 # i 1801439850948198 = . q 30 # i 1 = . q 31 # i 0
+    = . q 32 # i 0 = . q 33 # i 0 = . q 34 # i 0 = . q 35 # i 1841354044333475
+    = . q 36 # i 16398895984059 = . q 37 # i 755974180946558 = . q 38 # i 900171276175154 = . q 39 # i 1821297809914039
+    = . q 40 # i 962690963841538 = . q 41 # i 2210719638316993 = . q 42 # i 706068330177389 = . q 43 # i 1384191282407386
+    = . q 44 # i 1726421572252383 = . q 45 # i 1964103625364243 = . q 46 # i 307116021699043 = . q 47 # i 120882883216088
+    = . q 48 # i 20816463754899 = . q 49 # i 55369446368493 = . q 50 # i 1 = . q 51 # i 0
+    = . q 52 # i 0 = . q 53 # i 0 = . q 54 # i 0 = . q 55 # i 1568907369646169
+    = . q 56 # i 514127314339263 = . q 57 # i 40774287502072 = . q 58 # i 1976251032040224 = . q 59 # i 1733588893334842
+    = . q 60 # i 7041092221858 = . q 61 # i 1794296929354574 = . q 62 # i 1237236946531720 = . q 63 # i 2250546736920861
+    = . q 64 # i 259111526187668 = . q 65 # i 1617510425255494 = . q 66 # i 1984488342256828 = . q 67 # i 1321950222407495
+    = . q 68 # i 2136088219447137 = . q 69 # i 425530124582567 = . q 70 # i 1 = . q 71 # i 0
+    = . q 72 # i 0 = . q 73 # i 0 = . q 74 # i 0 = . q 75 # i 922449501748080
+    = . q 76 # i 782850774712250 = . q 77 # i 75404956566566 = . q 78 # i 1540981272636625 = . q 79 # i 999254495388672
+    = . q 80 # i 78814272546852 = . q 81 # i 343446598238096 = . q 82 # i 1469662686845463 = . q 83 # i 446722075312752
+    = . q 84 # i 1339733442806879 = . q 85 # i 770831939905131 = . q 86 # i 1066752177064823 = . q 87 # i 855905013023480
+    = . q 88 # i 1194941381303059 = . q 89 # i 1674322643330780 = . q 90 # i 1 = . q 91 # i 0
+    = . q 92 # i 0 = . q 93 # i 0 = . q 94 # i 0 = . q 95 # i 2025065385374602
+    = . q 96 # i 84441031851324 = . q 97 # i 1769310306558354 = . q 98 # i 26295680040963 = . q 99 # i 99051874860870
+    = . q 100 # i 841304234563226 = . q 101 # i 288336583122812 = . q 102 # i 859273953516464 = . q 103 # i 641862895460166
+    = . q 104 # i 1942073973586062 = . q 105 # i 1453985943769243 = . q 106 # i 866246220448934 = . q 107 # i 1936536679015493
+    = . q 108 # i 1230582470035868 = . q 109 # i 989307346767029 = . q 110 # i 1 = . q 111 # i 0
+    = . q 112 # i 0 = . q 113 # i 0 = . q 114 # i 0 = . q 115 # i 194323669222313
+    = . q 116 # i 1986849483265063 = . q 117 # i 1940458793072969 = . q 118 # i 1262977539333204 = . q 119 # i 1255393699631181
+    = . q 120 # i 860244430014981 = . q 121 # i 689939600126334 = . q 122 # i 1756444480111041 = . q 123 # i 604611337970161
+    = . q 124 # i 1934228889371123 = . q 125 # i 1115840552254004 = . q 126 # i 1042279514255678 = . q 127 # i 1769279693616433
+    = . q 128 # i 1033836220221303 = . q 129 # i 1695643946154600 = . q 130 # i 1 = . q 131 # i 0
+    = . q 132 # i 0 = . q 133 # i 0 = . q 134 # i 0 = . q 135 # i 1926874165278898
+    = . q 136 # i 592675951759993 = . q 137 # i 1086762887648803 = . q 138 # i 1624474402714719 = . q 139 # i 1415896675539756
+    = . q 140 # i 1625679944571491 = . q 141 # i 1175657876638287 = . q 142 # i 1157221053353163 = . q 143 # i 528230055263805
+    = . q 144 # i 878345893388895 = . q 145 # i 442279965111911 = . q 146 # i 692289219476686 = . q 147 # i 1388532760188106
+    = . q 148 # i 447879249267108 = . q 149 # i 1078013435304617 = . q 150 # i 1 = . q 151 # i 0
+    = . q 152 # i 0 = . q 153 # i 0 = . q 154 # i 0 = . q 155 # i 1070778974337849
+    = . q 156 # i 1967157437419015 = . q 157 # i 1898027052522780 = . q 158 # i 811855559975557 = . q 159 # i 1378799308038890
+    = . q 160 # i 798540852548237 = . q 161 # i 1186388878089071 = . q 162 # i 554557418141563 = . q 163 # i 2038592377592718
+    = . q 164 # i 488711206961541 = . q 165 # i 833812069173299 = . q 166 # i 646939731425630 = . q 167 # i 1538221673810424
+    = . q 168 # i 2137163637965756 = . q 169 # i 1721356815521377 = . q 170 # i 1 = . q 171 # i 0
+    = . q 172 # i 0 = . q 173 # i 0 = . q 174 # i 0 = . q 175 # i 76009751102151
+    = . q 176 # i 1911895294413367 = . q 177 # i 1262509771121608 = . q 178 # i 1445197895593765 = . q 179 # i 460973337299855
+    = . q 180 # i 1403677045712952 = . q 181 # i 1315744170250425 = . q 182 # i 1615520137472717 = . q 183 # i 283275291933293
+    = . q 184 # i 48798388170078 = . q 185 # i 109354245315004 = . q 186 # i 1914127539105944 = . q 187 # i 844338193600501
+    = . q 188 # i 526428908480878 = . q 189 # i 1176068453980819 = . q 190 # i 1 = . q 191 # i 0
+    = . q 192 # i 0 = . q 193 # i 0 = . q 194 # i 0 = . q 195 # i 1017297571599653
+    = . q 196 # i 1154767515845140 = . q 197 # i 2116819467069976 = . q 198 # i 1446526646935216 = . q 199 # i 281522550596263
+    = . q 200 # i 823269648550439 = . q 201 # i 486037302993554 = . q 202 # i 1474864517748821 = . q 203 # i 1908169744179899
+    = . q 204 # i 1994942704125518 = . q 205 # i 279331970100678 = . q 206 # i 1934337290044654 = . q 207 # i 960630481011071
+    = . q 208 # i 960576887927161 = . q 209 # i 1638226956763142 = . q 210 # i 1 = . q 211 # i 0
+    = . q 212 # i 0 = . q 213 # i 0 = . q 214 # i 0 = . q 215 # i 680913469064949
+    = . q 216 # i 1801805553396661 = . q 217 # i 40715869468621 = . q 218 # i 411457628042078 = . q 219 # i 1291678746780570
+    = . q 220 # i 1967955306114879 = . q 221 # i 25861803287777 = . q 222 # i 1825226422722195 = . q 223 # i 134464352348952
+    = . q 224 # i 1071891513128430 = . q 225 # i 1004361961630985 = . q 226 # i 581618394920088 = . q 227 # i 1253980602882423
+    = . q 228 # i 1065221446170931 = . q 229 # i 1110744382390146 = . q 230 # i 1 = . q 231 # i 0
+    = . q 232 # i 0 = . q 233 # i 0 = . q 234 # i 0 = . q 235 # i 1200200636115096
+    = . q 236 # i 193524975104322 = . q 237 # i 1019915809956827 = . q 238 # i 2195869670433558 = . q 239 # i 2058901671612867
+    = . q 240 # i 955325879284177 = . q 241 # i 1898787560239826 = . q 242 # i 1749051654153895 = . q 243 # i 470747919996685
+    = . q 244 # i 2084763994715858 = . q 245 # i 1315908902790139 = . q 246 # i 560089107386794 = . q 247 # i 2039185471139212
+    = . q 248 # i 1490075862619589 = . q 249 # i 241729012591394 = . q 250 # i 1 = . q 251 # i 0
+    = . q 252 # i 0 = . q 253 # i 0 = . q 254 # i 0 = . q 255 # i 2050838256499573
+    = . q 256 # i 732903749070741 = . q 257 # i 427507250779307 = . q 258 # i 218878215232455 = . q 259 # i 1093251084113008
+    = . q 260 # i 706993755603636 = . q 261 # i 132871503799025 = . q 262 # i 884316320977938 = . q 263 # i 1386218864925745
+    = . q 264 # i 1930913408590715 = . q 265 # i 2125059702603352 = . q 266 # i 2033567999166737 = . q 267 # i 1166281397275359
+    = . q 268 # i 183129527335258 = . q 269 # i 2006112367853226 = . q 270 # i 1 = . q 271 # i 0
+    = . q 272 # i 0 = . q 273 # i 0 = . q 274 # i 0 = . q 275 # i 1282967945218923
+    = . q 276 # i 1656449878990546 = . q 277 # i 959308575661592 = . q 278 # i 559944928652340 = . q 279 # i 1525862227975859
+    = . q 280 # i 658059562747718 = . q 281 # i 788771745829185 = . q 282 # i 953707210284919 = . q 283 # i 1970332484779637
+    = . q 284 # i 858969908771858 = . q 285 # i 1316342944925958 = . q 286 # i 93365034066043 = . q 287 # i 55307526446706
+    = . q 288 # i 1237317543906585 = . q 289 # i 1032567107538987 = . q 290 # i 1 = . q 291 # i 0
+    = . q 292 # i 0 = . q 293 # i 0 = . q 294 # i 0 = . q 295 # i 312585254076678
+    = . q 296 # i 1594982147435131 = . q 297 # i 1689148640964514 = . q 298 # i 150204140210568 = . q 299 # i 1387777698046063
+    = . q 300 # i 862075999903728 = . q 301 # i 2163902595352333 = . q 302 # i 2014073000973098 = . q 303 # i 1166175156245786
+    = . q 304 # i 1767804173463569 = . q 305 # i 1085602682198079 = . q 306 # i 1965932390587234 = . q 307 # i 205988781173318
+    = . q 308 # i 1051733436703390 = . q 309 # i 652575881366654 = . q 310 # i 1 = . q 311 # i 0
+    = . q 312 # i 0 = . q 313 # i 0 = . q 314 # i 0 = . q 315 # i 356077903060975
+    = . q 316 # i 2076605496446737 = . q 317 # i 1233138407901684 = . q 318 # i 1272668747979945 = . q 319 # i 71529050535104
+    ^ v
+}
+
+// p ← p + q, extended twisted-Edwards (a = −1). p may equal q (doubling):
+// every operand is read into the scratch before any of p's coords is set.
+@ __xe_add XEScr sc XEP p XEP q ( Vec i ) d2 → v {
+    ( _Z . sc a . p y . p x )
+    ( _Z . sc tt . q y . q x )
+    ( _M . sc a . sc a . sc tt )
+    ( _A . sc b . p x . p y )
+    ( _A . sc tt . q x . q y )
+    ( _M . sc b . sc b . sc tt )
+    ( _M . sc c . p t . q t )
+    ( _M . sc c . sc c d2 )
+    ( _M . sc d . p z . q z )
+    ( _A . sc d . sc d . sc d )
+    ( _Z . sc e . sc b . sc a )
+    ( _Z . sc f . sc d . sc c )
+    ( _A . sc g . sc d . sc c )
+    ( _A . sc h . sc b . sc a )
+    ( _M . p x . sc e . sc f )
+    ( _M . p y . sc h . sc g )
+    ( _M . p z . sc g . sc f )
+    ( _M . p t . sc e . sc h )
+}
+
+// Constant-time read of entry `digit` (0..15) into dst from the flat baked
+// table (stride 20): all 16 entries scanned, merged under a match mask.
+@ __xe_tbl_get ( Vec i ) tbl i digit XEP dst → v {
+    : *i tb ( vec_data [i] tbl )
+    : *i dx ( vec_data [i] . dst x ) : *i dy ( vec_data [i] . dst y )
+    : *i dz ( vec_data [i] . dst z ) : *i dt ( vec_data [i] . dst t )
+    : ~ i k 0
+    ~ < k 5 { = . dx k 0 = . dy k 0 = . dz k 0 = . dt k 0 = k + k 1 }
+    : ~ i e 0
+    ~ < e 16 {
+        : u64 z ^^ # u64 e # u64 digit
+        : i mask - 0 # i >> - z 1 63
+        : i base * e 20
+        : ~ i j 0
+        ~ < j 5 {
+            = . dx j | . dx j & mask . tb + base j
+            = . dy j | . dy j & mask . tb + + base 5 j
+            = . dz j | . dz j & mask . tb + + base 10 j
+            = . dt j | . dt j & mask . tb + + base 15 j
+            = j + j 1
+        }
+        = e + e 1
+    }
+}
+
+// scalar·B via the comb → 32-byte little-endian Montgomery u (the X25519
+// public key). Constant-time; no per-call table build.
+@ x25519_base_comb ( Vec u ) scalar → ( Vec u ) {
+    : ( Vec u ) sc ( _zeros_u 32 )
+    : ~ i k 0
+    ~ < k 32 { ( _bset sc k ( _x_bget scalar k ) ) = k + k 1 }
+    ( _bset sc 31 | & ( _x_bget scalar 31 ) 127 64 )
+    ( _bset sc 0 & ( _x_bget scalar 0 ) 248 )
+
+    : XEScr scr ( __xe_scr )
+    : ( Vec i ) d2 ( __xe_d2 )
+    : ( Vec i ) tbl ( __xe_comb_table )
+    : XEP acc ( __xe_pt )
+    : *i ay ( vec_data [i] . acc y ) : *i az ( vec_data [i] . acc z )
+    = . ay 0 1 = . az 0 1
+    : XEP selp ( __xe_pt )
+    : ~ i i 63
+    ~ >= i 0 {
+        ( __xe_add scr acc acc d2 )
+        : ~ i idx 0
+        : ~ i j 0
+        ~ < j 4 {
+            : i bitpos + * 64 j i
+            : i bit & 1 >> ( _x_bget sc >> bitpos 3 ) & bitpos 7
+            = idx | idx << bit j
+            = j + j 1
+        }
+        ( __xe_tbl_get tbl idx selp )
+        ( __xe_add scr acc selp d2 )
+        = i - i 1
+    }
+
+    : ( Vec i ) num ( _gf_zero )
+    : ( Vec i ) den ( _gf_zero )
+    ( _A num . acc z . acc y )
+    ( _Z den . acc z . acc y )
+    ( _inv25519 den )
+    : ( Vec i ) uf ( _gf_zero )
+    ( _M uf num den )
+    : ( Vec u ) out ( _pack25519 uf )
+
+    ( __xe_scr_free scr ) ( vec_free [i] d2 ) ( vec_free [i] tbl )
+    ( __xe_pt_free acc ) ( __xe_pt_free selp )
+    ( vec_free [u] sc ) ( vec_free [i] num ) ( vec_free [i] den ) ( vec_free [i] uf )
     ^ out
+}
+
+@ x25519_base ( Vec u ) scalar → ( Vec u ) {
+    // Fixed-base: the generator is constant, so a precomputed Edwards comb
+    // (x25519_base_comb) beats the Montgomery ladder. Same result, verified
+    // against the ladder for the RFC 7748 vectors.
+    ^ ( x25519_base_comb scalar )
 }
