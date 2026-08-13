@@ -1,0 +1,8 @@
+[package]
+name = "nurlpkg-smoketest"
+version = "0.1.1"
+description = "Throwaway package used to exercise the registry end to end — pack, publish, resolve, install, run. Deliberately tiny and dependency-free so a publish is a couple of kilobytes and a failure points at the registry or the transport rather than at the package. Its tarball must be byte-identical from any clean checkout, which makes it the canary for packer non-determinism: if two clones produce different checksums, the packer is picking up untracked build output."
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/nurl-lang/nurl-lang"
+
+[dependencies]

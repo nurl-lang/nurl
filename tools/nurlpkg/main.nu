@@ -2965,6 +2965,31 @@ Usage: nurlpkg login   (paste the token from the registry; kept in ~/.nurl/crede
                                     PubConflict → {
                                         ( nurl_eprintln `nurlpkg: this version is already published (versions are immutable — bump the version)` )
                                     }
+                                    // The upload got a connection but no reply.
+                                    // Small requests (login, search, info) still
+                                    // work, so this reads as "the registry is up
+                                    // but publish is broken" — when the usual
+                                    // cause is a network path that drops
+                                    // full-size packets: a publish body is the
+                                    // only request big enough to need them.
+                                    PubTimeout → {
+                                        ( nurl_eprintln `nurlpkg: publish timed out — the upload stalled after connecting` )
+                                        ( nurl_eprintln `hint: if 'nurlpkg search' works but publish stalls, suspect the network path, not the registry — a broken path MTU drops full-size packets, and only the upload is big enough to send them. Test with:` )
+                                        ( nurl_eprintln `        ping -M do -s 1472 <registry-host>` )
+                                        ( nurl_eprintln `      and try a smaller MSS (sysctl net.ipv4.tcp_mtu_probing=1, or clamp MSS on the router) before assuming the registry is down` )
+                                    }
+                                    PubConnect → {
+                                        ( nurl_eprintln `nurlpkg: cannot connect to the registry` )
+                                        ( nurl_eprintln `hint: check the registry URL ($NURL_REGISTRY or [package].registry) and any proxy/firewall` )
+                                    }
+                                    PubDns → {
+                                        ( nurl_eprintln `nurlpkg: the registry host does not resolve` )
+                                        ( nurl_eprintln `hint: check the registry URL ($NURL_REGISTRY or [package].registry) and your DNS` )
+                                    }
+                                    PubTls → {
+                                        ( nurl_eprintln `nurlpkg: TLS handshake with the registry failed` )
+                                        ( nurl_eprintln `hint: check the system CA bundle and the clock; a TLS-intercepting proxy will also do this` )
+                                    }
                                     _ → {
                                         ( nurl_eprint `nurlpkg: publish failed (` )
                                         ( nurl_eprint ( publish_err_name ue ) )

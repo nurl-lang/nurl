@@ -18,8 +18,14 @@
 // immutability (a version may not be overwritten).
 //
 // Packaging excludes installed deps and VCS/build noise: `deps`, `.git`,
-// `nurl.lock`, `target`, `build`, and any dotfile/dotdir. Member paths use
-// the 100-byte USTAR `name` field (PackTooLong otherwise).
+// `nurl.lock`, `target`, `build`, any dotfile/dotdir, and compiler/linker
+// output by extension (`.ll`, `.o`, `.obj`, `.a`, `.so`, `.dylib`, `.dll`,
+// `.exe`). That last class is what keeps a tarball REPRODUCIBLE: without it
+// the bytes depend on whether anyone happened to build in that checkout.
+// Note the blacklist is still extension-based, so an extensionless compiled
+// binary left in the package root (what `nurlpkg build` emits) would still
+// be packed — `build`/`target` are the intended homes for it.
+// Member paths use the 100-byte USTAR `name` field (PackTooLong otherwise).
 //
 // API:
 //   ( pkg_pack root )                              → ! ( Vec u ) PackErr
@@ -42,7 +48,15 @@ $ `stdlib/ext/http_cli.nu`
 
 : | PublishErr {
     PubNoToken  // empty auth token
-    PubHttp  // transport failure
+    PubHttp  // transport failure, cause not classified
+    // The transport knows *why* it failed (curl's exit code, mapped to
+    // HttpcErr). Collapsing that into one PubHttp threw the diagnosis away
+    // and left `publish failed (PubHttp)` — indistinguishable between a
+    // dead registry, a broken proxy, and a stalled upload. Keep it.
+    PubTimeout  // no response within the deadline — request stalled mid-flight
+    PubConnect  // could not establish the connection
+    PubDns  // registry host does not resolve
+    PubTls  // TLS handshake / certificate failure
     PubAuth  // 401 — a real auth/token failure (expired, wrong, or missing)
     PubForbidden  // 403 — reserved name, typosquat lookalike, or the token's
     // package scope. NOT an auth problem, so it must not suggest re-login.
@@ -59,15 +73,56 @@ $ `stdlib/ext/http_cli.nu`
     }
 }
 
+// Carry the transport's own diagnosis through to the caller.
+@ __pub_transport_err HttpcErr e → PublishErr {
+    ^ ?? e {
+        HttpcTimeout → # PublishErr PubTimeout
+        HttpcConnect → # PublishErr PubConnect
+        HttpcDns → # PublishErr PubDns
+        HttpcTls → # PublishErr PubTls
+        _ → # PublishErr PubHttp
+    }
+}
+
 @ publish_err_name PublishErr e → s {
     ^ ?? e {
         PubNoToken → `PubNoToken`
         PubHttp → `PubHttp`
+        PubTimeout → `PubTimeout`
+        PubConnect → `PubConnect`
+        PubDns → `PubDns`
+        PubTls → `PubTls`
         PubAuth → `PubAuth`
         PubForbidden → `PubForbidden`
         PubConflict → `PubConflict`
         PubRejected → `PubRejected`
     }
+}
+
+// True iff `name` ends with `ext` (an extension, dot included).
+@ __pack_has_ext s name s ext → b {
+    : String ns ( string_from name )
+    : b r ( string_ends_with ns ext )
+    ( string_free ns )
+    ^ r
+}
+
+// Compiler and linker output. These are produced *inside* the package
+// directory by `nurlpkg build` / `nurlc` and are never package source, so
+// packing them makes the tarball depend on whether someone happened to
+// build in that checkout — two clean clones of one commit then publish
+// different bytes under different checksums. (Real case: a stray 1.4 MB
+// `wasmbuilder.ll` packed to 269 KB in one clone and 36 KB in another.)
+@ __pack_build_output s name → b {
+    ? ( __pack_has_ext name `.ll` ) { ^ T } {}
+    ? ( __pack_has_ext name `.o` ) { ^ T } {}
+    ? ( __pack_has_ext name `.obj` ) { ^ T } {}
+    ? ( __pack_has_ext name `.a` ) { ^ T } {}
+    ? ( __pack_has_ext name `.so` ) { ^ T } {}
+    ? ( __pack_has_ext name `.dylib` ) { ^ T } {}
+    ? ( __pack_has_ext name `.dll` ) { ^ T } {}
+    ? ( __pack_has_ext name `.exe` ) { ^ T } {}
+    ^ F
 }
 
 // Names never packaged (installed deps, VCS, build output, dotfiles).
@@ -76,6 +131,7 @@ $ `stdlib/ext/http_cli.nu`
     ? != 0 ( nurl_str_eq name `nurl.lock` ) { ^ T } {}
     ? != 0 ( nurl_str_eq name `target` ) { ^ T } {}
     ? != 0 ( nurl_str_eq name `build` ) { ^ T } {}
+    ? ( __pack_build_output name ) { ^ T } {}
     : i n ( nurl_str_len name )
     ? > n 0 { ? == ( nurl_str_get name 0 ) 46 { ^ T } {} } {}  // leading '.'
     ^ F
@@ -204,7 +260,7 @@ $ `stdlib/ext/http_cli.nu`
     ( string_free url )
     ( string_free hb )
     ?? rr {
-        F _ → ^ @ !i PublishErr { F # PublishErr PubHttp }
+        F he → ^ @ !i PublishErr { F ( __pub_transport_err he ) }
         T resp → {
             : i st ( httpc_status resp )
             ( httpc_resp_free resp )
@@ -247,7 +303,7 @@ $ `stdlib/ext/http_cli.nu`
     ( string_free url )
     ( string_free hb )
     ?? rr {
-        F _ → ^ @ !i PublishErr { F # PublishErr PubHttp }
+        F he → ^ @ !i PublishErr { F ( __pub_transport_err he ) }
         T resp → {
             : i st ( httpc_status resp )
             ( httpc_resp_free resp )
@@ -277,7 +333,7 @@ $ `stdlib/ext/http_cli.nu`
     ( string_free url )
     ( string_free hb )
     ?? rr {
-        F _ → ^ @ !i PublishErr { F # PublishErr PubHttp }
+        F he → ^ @ !i PublishErr { F ( __pub_transport_err he ) }
         T resp → {
             : i st ( httpc_status resp )
             ( httpc_resp_free resp )
