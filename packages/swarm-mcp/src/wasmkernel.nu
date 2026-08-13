@@ -318,12 +318,107 @@ $ `token.nu`
 // Bytecode-Alliance wasmtime works equally well.
 @ __wasmtime → String { ^ ( env_var_or `WASMTIME` `wasmtime` ) }
 
+// Can this node actually run wasm modules? A worker used to accept chunks with
+// no runtime installed and only reveal it as an unexplained failed chunk once a
+// task arrived; the node knows the answer at startup, so it should say so then.
+// Returns "" when the runtime works, else the reason it does not.
+@ wasmtime_probe → String {
+    : String wt ( __wasmtime )
+    : ( Vec s ) args ( vec_new [s] )
+    ( vec_push [s] args `--version` )
+    : ~ String out ( string_new )
+    ?? ( process_run ( string_data wt ) args `` ) {
+        T o → {
+            ? == ( output_exit_code o ) 0 {} {
+                ( string_free out )
+                = out ( string_concat ( string_from `'` ) ( string_concat ( string_from ( string_data wt ) ) ( string_from `' is not a working wasm runtime (it exited non-zero on --version)` ) ) )
+            }
+            ( output_free o )
+        }
+        F e → {
+            ( string_free out )
+            = out ( string_concat ( string_from `no wasm runtime: could not execute '` ) ( string_concat ( string_from ( string_data wt ) ) ( string_from `'` ) ) )
+        }
+    }
+    ( vec_free [s] args )
+    ( string_free wt )
+    ^ out
+}
+
+// Does the resolved runtime understand --allow-gpu? Only the pure-NURL
+// wasmtime bridges CUDA/NVRTC host imports, and a --gpu worker without it can
+// never run a GPU chunk. Checked by asking for its help text.
+@ wasmtime_gpu_capable → b {
+    : String wt ( __wasmtime )
+    : ( Vec s ) args ( vec_new [s] )
+    ( vec_push [s] args `--help` )
+    : ~ b ok F
+    ?? ( process_run ( string_data wt ) args `` ) {
+        T o → {
+            : String h ( string_from ( output_stdout o ) )
+            ? ( string_contains h `--allow-gpu` ) { = ok T } {}
+            ( string_free h )
+            ( output_free o )
+        }
+        F e → {}
+    }
+    ( vec_free [s] args )
+    ( string_free wt )
+    ^ ok
+}
+
+// ── why a chunk failed ───────────────────────────────────────────
+// A failed chunk used to be a bare ok=0: the coordinator could count failures
+// but never say why, and the worker's real reason (no wasmtime on PATH, a
+// module trap, a CUDA error) was thrown away — leaving "failed_chunks: 2" as
+// the whole story an agent gets. The reason now rides home as a TRAILING
+// suffix on the result frame:
+//
+//   … existing frame … [utf8 message][len:2 BE][0xE7]
+//
+// Appending at the END keeps every existing frame parse byte-identical (both
+// the scalar [ok][partial] and the vector [ok][count][f64…] readers work off
+// leading offsets), and the 0xE7 marker makes the suffix self-describing, so a
+// coordinator can look for it without knowing which frame shape it is holding.
+// An older worker simply never appends one, and an older coordinator ignores
+// the tail — mixed-version clusters stay sound.
+@ chunk_err_marker → i { ^ 231 }
+
+@ chunk_err_max → i { ^ 400 }
+
+@ chunk_err_push ( Vec u ) r s msg → v {
+    : i n0 ( nurl_str_len msg )
+    ? == n0 0 { ^ v } {}
+    : i n ? > n0 ( chunk_err_max ) ( chunk_err_max ) n0
+    : ~ i k 0
+    ~ < k n { ( vec_push [u] r # u ( nurl_str_at msg n0 k ) ) = k + k 1 }
+    ( bytes_push_u16_be r # u16 n )
+    ( vec_push [u] r # u ( chunk_err_marker ) )
+}
+
+// The message a failed chunk carried, or an empty String when it carried none.
+@ chunk_err_read ( Vec u ) body → String {
+    : i n ( vec_len [u] body )
+    : String out ( string_new )
+    ? < n 4 { ^ out } {}
+    ? != ?? ( vec_get [u] body - n 1 ) { T x → # i x F → 0 } ( chunk_err_marker ) { ^ out } {}
+    : i mlen ?? ( bytes_read_u16_be body - n 3 ) { T x → # i x F → 0 }
+    ? | == mlen 0 > mlen - n 3 { ^ out } {}
+    : i start - - n 3 mlen
+    : ~ i k 0
+    ~ < k mlen {
+        ( string_push_char out ?? ( vec_get [u] body + start k ) { T x → # i x F → 32 } )
+        = k + k 1
+    }
+    ^ out
+}
+
 // Run a cached module over [lo, hi). ok=1 iff the runtime ran the module to a
 // zero exit — a failed chunk (missing wasmtime, module trap, GPU error path
 // exiting non-zero) is REPORTED, not folded into the reduce as a silent zero.
 // allow_gpu≠0 passes --allow-gpu so the module's env imports (CUDA/NVRTC)
 // resolve to real hardware — this needs the pure-NURL packages/wasmtime.
-: WasmRun { i ok i value }
+: WasmRun { i ok i value String err }
 
 @ __wasm_run String path i lo i hi i allow_gpu → WasmRun {
     : ( Vec s ) args ( vec_new [s] )
@@ -337,13 +432,29 @@ $ `token.nu`
     : String wt ( __wasmtime )
     : ~ i v 0
     : ~ i ok 0
+    : ~ String err ( string_new )
     ?? ( process_run ( string_data wt ) args `` ) {
-        T out → { ? == ( output_exit_code out ) 0 { = ok 1 = v ( nurl_str_to_int ( output_stdout out ) ) } {} ( output_free out ) }
-        F e → {}
+        T out → {
+            ? == ( output_exit_code out ) 0 { = ok 1 = v ( nurl_str_to_int ( output_stdout out ) ) } {
+                // The runtime's own words (a trap, a CUDA error) are the most
+                // useful thing we have; keep them for the result frame.
+                ( string_free err )
+                = err ( string_trim ( string_from ( output_stderr out ) ) )
+                ? == ( string_len err ) 0 {
+                    ( string_free err )
+                    = err ( string_from `wasm runtime exited non-zero with no message` )
+                } {}
+            }
+            ( output_free out )
+        }
+        F e → {
+            ( string_free err )
+            = err ( string_concat ( string_from `could not run the wasm runtime '` ) ( string_concat ( string_from ( string_data wt ) ) ( string_from `' — put a wasmtime on PATH or set $WASMTIME (the pure-NURL 'nurlpkg install wasmtime' is a drop-in)` ) ) )
+        }
     }
     ( string_free wt )
     ( vec_free [s] args )
-    ^ @ WasmRun { ok v }
+    ^ @ WasmRun { ok v err }
 }
 
 // The worker handler for a (CPU) wasm chunk: verify the cluster HMAC tag,
@@ -355,8 +466,9 @@ $ `token.nu`
     ^ \ ( Vec u ) p → ( Vec u ) {
         : ~ i partial 0
         : ~ i run_ok 0
+        : ~ String why ( string_new )
         ?? ( token_untag key p ) {
-            F → {}
+            F → { ( string_free why ) = why ( string_from `payload failed the cluster HMAC check (wrong --token?)` ) }
             T body → {
                 : i lo ?? ( bytes_read_u64_be body 0 ) { T x → # i x F → 0 }
                 : i hi ?? ( bytes_read_u64_be body 8 ) { T x → # i x F → 0 }
@@ -369,16 +481,21 @@ $ `token.nu`
                 : WasmRun wr ( __wasm_run path lo hi 0 )
                 = run_ok . wr ok
                 = partial . wr value
+                ( string_free why )
+                = why . wr err
                 ( string_free hex ) ( string_free path ) ( vec_free [u] wasm )
                 ( vec_free [u] body )
             }
         }
         // result wire: [ok:1][partial:8] — the coordinator counts failed
         // chunks and marks the task instead of silently reducing zeros.
-        // (An untagged/forged payload reports ok=0 too.)
+        // (An untagged/forged payload reports ok=0 too.) A failure also
+        // carries WHY, as the trailing suffix chunk_err_push writes.
         : ( Vec u ) r ( vec_new [u] )
         ( vec_push [u] r # u run_ok )
         ( bytes_push_u64_be r # u64 partial )
+        ? == run_ok 0 { ( chunk_err_push r ( string_data why ) ) } {}
+        ( string_free why )
         : ( Vec u ) out ( token_tag key r )
         ( vec_free [u] r )
         ^ out
@@ -399,7 +516,7 @@ $ `token.nu`
     ^ out
 }
 
-: GpuOut { i ok i scalar ( Vec u ) bytes }
+: GpuOut { i ok i scalar ( Vec u ) bytes String err }
 
 // Run a cached module for one GPU chunk under `wt run --allow-gpu`.
 // Scalar mode: the partial's f64 bits on stdout (as before). Sample/hist
@@ -477,7 +594,12 @@ $ `token.nu`
     : ~ i ok 0
     : ~ i scalar 0
     : ~ ( Vec u ) outb ( vec_new [u] )
-    ? ! inp_ok { ( string_free wt ) ( vec_free [s] args ) ( vec_free [i] offs ) ( string_free blob ) ( string_free inp ) ( string_free outp ) ( string_free tmp ) ^ @ GpuOut { 0 0 outb } } {}
+    : ~ String gerr ( string_new )
+    ? ! inp_ok {
+        ( string_free wt ) ( vec_free [s] args ) ( vec_free [i] offs ) ( string_free blob ) ( string_free inp ) ( string_free outp ) ( string_free tmp )
+        ( string_free gerr )
+        ^ @ GpuOut { 0 0 outb ( string_from `could not stage the chunk's input data in $TMPDIR` ) }
+    } {}
     ?? ( process_run ( string_data wt ) args `` ) {
         T out → {
             ? == ( output_exit_code out ) 0 {
@@ -497,16 +619,30 @@ $ `token.nu`
                     = ok 1
                     = scalar ( nurl_str_to_int ( output_stdout out ) )
                 }
-            } {}
+                ? == ok 0 {
+                    ( string_free gerr )
+                    = gerr ( string_from `the module ran but wrote a short or unreadable output file` )
+                } {}
+            } {
+                ( string_free gerr )
+                = gerr ( string_trim ( string_from ( output_stderr out ) ) )
+                ? == ( string_len gerr ) 0 {
+                    ( string_free gerr )
+                    = gerr ( string_from `the GPU module exited non-zero with no message` )
+                } {}
+            }
             ( output_free out )
         }
-        F e → {}
+        F e → {
+            ( string_free gerr )
+            = gerr ( string_concat ( string_from `could not run the wasm runtime '` ) ( string_concat ( string_from ( string_data wt ) ) ( string_from `' — a --gpu worker needs the pure-NURL wasmtime on PATH or in $WASMTIME` ) ) )
+        }
     }
     ? vecmode { ?? ( file_delete ( string_data outp ) ) { T _ → {} F _ → {} } } {}
     ? hasdata { ?? ( file_delete ( string_data inp ) ) { T _ → {} F _ → {} } } {}
     ( vec_free [s] args ) ( vec_free [i] offs )
     ( string_free blob ) ( string_free inp ) ( string_free outp ) ( string_free wt ) ( string_free tmp )
-    ^ @ GpuOut { ok scalar outb }
+    ^ @ GpuOut { ok scalar outb gerr }
 }
 
 // GPU worker handler: decode payload v2, cache the module, run per mode, and
@@ -518,8 +654,9 @@ $ `token.nu`
         : ~ i scalar 0
         : ~ i mode ( gpu_mode_scalar )
         : ~ ( Vec u ) outb ( vec_new [u] )
+        : ~ String why ( string_new )
         ?? ( token_untag key p ) {
-            F → {}
+            F → { ( string_free why ) = why ( string_from `payload failed the cluster HMAC check (wrong --token?)` ) }
             T body → {
                 : ~ GpuChunk c ( wasm_gpu_chunk_decode body )
                 = mode . c mode
@@ -535,8 +672,13 @@ $ `token.nu`
                     = scalar . r scalar
                     ( vec_free [u] outb )
                     = outb . r bytes
+                    ( string_free why )
+                    = why . r err
                     ( string_free hex ) ( string_free path )
-                } {}
+                } {
+                    ( string_free why )
+                    = why ( string_from `a dataset block this chunk needs is missing or failed its hash check` )
+                }
                 ( gpu_chunk_free c )
                 ( vec_free [u] body )
             }
@@ -549,6 +691,8 @@ $ `token.nu`
             ( bytes_push_u32_be r # u32 / ( vec_len [u] outb ) 8 )
             ( vec_extend [u] r outb )
         }
+        ? == run_ok 0 { ( chunk_err_push r ( string_data why ) ) } {}
+        ( string_free why )
         ( vec_free [u] outb )
         : ( Vec u ) out ( token_tag key r )
         ( vec_free [u] r )

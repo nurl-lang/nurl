@@ -56,7 +56,7 @@ deterministically (no coordination):
 
 ## The control surface (what the LLM sees)
 
-Thirteen tools, with self-describing schemas kept **deliberately short** so a
+Fifteen tools, with self-describing schemas kept **deliberately short** so a
 model uses them without wasting context. The depth an LLM needs beyond a
 one-line schema — the CUDA-C ABI, the iterate/shuffle recipes, dataset caching,
 and the honest size/support limits — lives in **`swarm_help`**, fetched one
@@ -64,6 +64,7 @@ topic at a time. Start there if unsure how a tool works.
 
 | tool | arguments | does |
 |------|-----------|------|
+| `swarm_status` | — | the cluster as the coordinator sees it: worker count, which are GPU-capable, how long since each was last heard from, tasks, datasets, and the liveness TTL. The first call to make when a submit says there are no workers, or a task keeps retrying |
 | `swarm_help` | `topic` (string, optional) | on-demand guidance, one topic at a time: `overview`, `workflow`, `expr`, `cuda`, `iterate`, `shuffle`, `datasets`, `gpu`, `limits`, `troubleshooting`. Omit `topic` for the index. The reference an LLM reaches for mid-task |
 | `compute_submit` | `expr` (string), `lo` (int), `hi` (int), `reduce` (string, default `sum`), `dtype` (string, `int` default or `float`) | shard + run an **expression** kernel over `[lo,hi)`; returns a `task_id`. `dtype:"float"` evaluates the same kernel in **f64** (`x` is the index as a double, float literals like `0.5` allowed) |
 | `compute_submit_kernel` | `source` (NURL program), `lo`, `hi`, `reduce`, `kind` (`element` default or `chunk`), `gpu` (bool) | run an **arbitrary NURL kernel given as source** — the server compiles it to wasm and runs it; for anything the expression language can't express (loops, helpers) |
@@ -81,8 +82,9 @@ topic at a time. Start there if unsure how a tool works.
 A submit returns at once with `status: running` (or `done` for tiny tasks);
 the model polls `compute_result` until it is `done`. A task whose chunks
 failed (module trap, missing runtime, GPU error) finishes as `status:"error"`
-with a `failed_chunks` count — a failed chunk is **counted, never silently
-folded as zero** into the answer. Example exchange:
+with a `failed_chunks` count **and an `error` string carrying the worker's own
+reason** — a failed chunk is counted and explained, never silently folded as
+zero into the answer. Example exchange:
 
 ```jsonc
 // → compute_submit
@@ -287,9 +289,22 @@ is on and the workers and coordinator converge on a survivor, mid-flight.
 ## Surviving a worker death — chunk re-dispatch
 
 A relay is not the only thing that can fail: a **worker** can crash or trap
-mid-task. For the non-dataset GPU tools (`compute_submit_cuda`,
-`compute_sample_cuda`, `compute_histogram_cuda`) the coordinator no longer loses
-the job — it re-dispatches the lost chunk to a surviving worker.
+mid-task. Every task kind — the expression path, CPU wasm kernels and the
+non-dataset GPU tools (`compute_submit_cuda`, `compute_sample_cuda`,
+`compute_histogram_cuda`) — carries a retry plan, so the coordinator no longer
+loses the job: it re-dispatches the lost chunk to a surviving worker.
+
+A dead worker is also **evicted from the cluster**. Roster members carry a
+liveness stamp refreshed by the ~2 s HELLO heartbeat; one silent for 90 s is
+dropped from the roster and from both rings, so later submits stop routing at
+it. **Every node ages its own roster**, not just the coordinator — `dist/job`
+forwards a job whose key a node does not own to whoever *its* ring says owns
+it, so one node still holding a dead peer would bounce re-dispatched chunks
+back into the void. Eviction is self-healing (a worker that comes back
+re-announces and rejoins), a node never expires itself, and a long expression
+chunk keeps its worker visibly alive by heartbeating from inside the fold.
+`swarm_status` shows exactly this: who is in the cluster and how long since
+each was last heard from.
 
 Each chunk is dispatched with a small **retry plan**: its (immutable, HMAC-tagged)
 payload and the worker it routed to. On every poll the coordinator checks each
@@ -499,6 +514,12 @@ module**. No CUDA toolkit is needed on any node (only the driver's `libcuda` +
 swarm-mcp --token mysecret --worker --gpu --connect <relay-host>:47700
 ```
 
+A `--worker` **preflights its wasm runtime at startup**: `--gpu` refuses to
+start unless the resolved runtime exists and supports `--allow-gpu` (only the
+pure-NURL `wasmtime` bridges CUDA/NVRTC host imports), and a CPU worker warns
+if it has none. A misconfigured node says so immediately instead of accepting
+chunks it can never run.
+
 The model then writes **only the math** — `compute_submit_cuda` takes a CUDA-C
 map function and the server generates everything else (the NVRTC JIT harness,
 a grid-stride map over the range, on-device block reduction, the host fold):
@@ -633,14 +654,17 @@ The envelope, stated plainly (and queryable at run time via `swarm_help
   **Iterate** `state ≤ 4096`, `acc_dim ≤ 65,536`, `rounds ≤ 100,000`.
 - **Fault tolerance:** a **relay** failure is survived (failover — workers and
   the coordinator converge on another relay mid-flight). A **worker** that dies
-  or traps mid-task is **auto-redispatched** for the non-dataset GPU tools
-  (`compute_submit_cuda` / `_sample_cuda` / `_histogram_cuda`): the coordinator
-  re-routes the lost chunk to another worker (the task's `retries` field counts
-  it) and only reports `failed_chunks` if it fails everywhere after several
-  attempts. **Not yet** auto-redispatched: dataset-backed tasks (a fresh worker
-  would need the blocks re-seeded — resubmit; blocks stay cached, so it is
-  cheap) and the in-call loops `compute_iterate` / `compute_shuffle` (a chunk
-  failure ends the call — resubmit).
+  or traps mid-task is **auto-redispatched** for the expression path, CPU wasm
+  kernels and the non-dataset GPU tools (`compute_submit_cuda` /
+  `_sample_cuda` / `_histogram_cuda`): the coordinator re-routes the lost chunk
+  to another worker (the task's `retries` field counts it) and only reports
+  `failed_chunks` — with the reason in `error` — if it fails everywhere after
+  several attempts. A dead worker is evicted from the rings after 90 s of
+  silence, so it stops attracting chunks at all. **Not yet** auto-redispatched:
+  dataset-backed tasks (a fresh worker would need the blocks re-seeded —
+  resubmit; blocks stay cached, so it is cheap) and the in-call loops
+  `compute_iterate` / `compute_shuffle` (a chunk failure ends the call —
+  resubmit).
 - **The coordinator** (the `--mcp` node) runs the iterate/shuffle loop and
   merges partials; it is **not hot-redundant** — an *in-flight* call is lost if
   it crashes mid-run. But it is **crash-restartable**: datasets are persisted to
@@ -656,6 +680,10 @@ The envelope, stated plainly (and queryable at run time via `swarm_help
 NURL_STDLIB=<repo> ../../nurl.sh tests/expr_test.nu  /tmp/et && /tmp/et
 NURL_STDLIB=<repo> ../../nurl.sh tests/work_test.nu  /tmp/wt && /tmp/wt
 NURL_STDLIB=<repo> ../../nurl.sh tests/token_test.nu /tmp/tt && /tmp/tt
+
+# membership liveness: the heartbeat stamp, eviction from roster AND ring,
+# the self-exemption, and the failed-chunk reason suffix
+NURL_STDLIB=<repo> ../../nurl.sh tests/liveness_test.nu /tmp/lt && /tmp/lt
 
 # HELLO capability byte + roster, CUDA kernel generator + result frames
 NURL_STDLIB=<repo> ../../nurl.sh tests/caps_test.nu       /tmp/ct && /tmp/ct

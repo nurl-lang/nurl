@@ -246,7 +246,11 @@ $ `src/wasmkernel.nu`
     ?? ( token_untag key res ) {
         T body → {
             : i b0 ?? ( vec_get [u] body 0 ) { T x → # i x F → 9 }
-            = frame_ok & == ( vec_len [u] body ) 9 == b0 0
+            // [ok:1][partial:8] plus the trailing reason suffix a failed chunk
+            // now carries — the coordinator reads it back with chunk_err_read.
+            : String why ( chunk_err_read body )
+            = frame_ok & >= ( vec_len [u] body ) 9 & == b0 0 > ( string_len why ) 0
+            ( string_free why )
             ( vec_free [u] body )
         }
         F → {}
@@ -267,7 +271,9 @@ $ `src/wasmkernel.nu`
     ?? ( token_untag gkey gres ) {
         T body → {
             : i b0 ?? ( vec_get [u] body 0 ) { T x → # i x F → 9 }
-            = gframe_ok & == ( vec_len [u] body ) 9 == b0 0
+            : String gwhy ( chunk_err_read body )
+            = gframe_ok & >= ( vec_len [u] body ) 9 & == b0 0 > ( string_len gwhy ) 0
+            ( string_free gwhy )
             ( vec_free [u] body )
         }
         F → {}

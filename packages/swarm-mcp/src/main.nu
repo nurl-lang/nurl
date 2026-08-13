@@ -107,7 +107,7 @@ $ `cudakernel.nu`
     = . sw group ( token_group_id token )
     = . sw key ( token_key token )
     ? == role ( role_worker ) {
-        ( roster_add roster ring me id ( swarm_vnodes ) caps )
+        ( roster_add roster ring me id ( swarm_vnodes ) caps ( now_ms ) )
         ? == & caps ( cap_gpu ) ( cap_gpu ) { ( ring_add_member gring me ( swarm_vnodes ) ) } {}
     } {}
     ^ sw
@@ -145,7 +145,10 @@ $ `cudakernel.nu`
 
 @ swarm_on_hello * Swarm sw Hello h → v {
     ? == . h role ( role_worker ) {
-        ? ( roster_add # *Roster . sw roster # *Ring . sw ring . h pubkey . h id ( swarm_vnodes ) . h caps ) {
+        // Every HELLO — first or heartbeat — refreshes the member's liveness
+        // stamp; swarm_expire evicts the ones that stop arriving.
+        ( roster_touch # *Roster . sw roster . h pubkey ( now_ms ) )
+        ? ( roster_add # *Roster . sw roster # *Ring . sw ring . h pubkey . h id ( swarm_vnodes ) . h caps ( now_ms ) ) {
             // A newly-heard GPU-capable worker also joins the GPU domain ring
             // (idempotent via the roster gate — a re-heard HELLO adds nothing).
             ? == & . h caps ( cap_gpu ) ( cap_gpu ) { ( ring_add_member # *Ring . sw gpu_ring . h pubkey ( swarm_vnodes ) ) } {}
@@ -160,6 +163,37 @@ $ `cudakernel.nu`
         ?? ( transport_send # *Transport . sw transport . h pubkey reply ) { T _ → {} F _ → {} }
         ( vec_free [u] reply )
     } {}
+}
+
+// How long a worker may stay silent before it is evicted from the roster and
+// both rings. Workers heartbeat every ~2 s, and the expression fold calls a
+// keepalive mid-chunk (work.nu), so this only fires for a node that is really
+// gone. Generous on purpose: a worker blocked in a single long wasm/GPU chunk
+// cannot heartbeat (its handler runs inside the pump loop), and evicting it
+// mid-chunk only costs a re-dispatch, never a wrong answer.
+@ __roster_ttl_ms → i { ^ 90000 }
+
+// Drop workers that stopped announcing, from the roster and from both rings.
+// Returns how many were evicted; a non-zero result bumps the epoch, because a
+// changed ring re-homes chunk keys and invalidates recorded block seeds.
+@ swarm_expire * Swarm sw → i {
+    : ( Vec ( Vec u ) ) gone ( roster_expire # *Roster . sw roster ( now_ms ) ( __roster_ttl_ms ) . sw self_pk )
+    : i n ( vec_len [( Vec u )] gone )
+    : ~ i k 0
+    ~ < k n {
+        ?? ( vec_get [( Vec u )] gone k ) {
+            T pk → {
+                ( ring_remove_member # *Ring . sw ring pk )
+                ( ring_remove_member # *Ring . sw gpu_ring pk )
+                ( vec_free [u] pk )
+            }
+            F → {}
+        }
+        = k + k 1
+    }
+    ( vec_free [( Vec u )] gone )
+    ? > n 0 { = . sw epoch + . sw epoch 1 } {}
+    ^ n
 }
 
 @ swarm_pump * Swarm sw i max → v {
@@ -262,7 +296,14 @@ $ `cudakernel.nu`
             ( relay_server_run p )
             ( relay_server_free p )
         }
-        F e → { ( nurl_eprintln `swarm-mcp: relay failed to bind (port in use?)` ) }
+        F e → {
+            // A requested role that cannot start is fatal for the node: a
+            // process that keeps running with the surviving roles looks alive
+            // while serving nothing, and a duplicate instance is exactly how
+            // that happens (the port is in use because the first node has it).
+            ( nurl_eprintln `swarm-mcp: relay failed to bind (port in use?) — exiting` )
+            ( nurl_exit 1 )
+        }
     }
 }
 
@@ -297,12 +338,17 @@ $ `cudakernel.nu`
                 ( vec_free [u] reg )
                 ( relay_set_timeout rc 250 )
                 : *Swarm sw ( swarm_new rc id ( role_worker ) caps token )
-                ( job_register # *JobNode . sw job ( kind_kernel ) ( kernel_handler . sw key ) )
+                // The expression fold calls back every few million elements so
+                // a worker chewing on a long chunk still announces itself —
+                // otherwise the coordinator's liveness clock cannot tell it
+                // from a dead node (the handler runs inside this pump loop).
+                ( job_register # *JobNode . sw job ( kind_kernel ) ( kernel_handler_ka . sw key \ → v { : b _ok ( swarm_announce_ok sw 1 ) } ) )
                 ( job_register # *JobNode . sw job ( kind_wasm ) ( wasm_handler . sw key ) )
                 ( job_register # *JobNode . sw job ( kind_blob ) ( blob_handler . sw key ) )
                 ? != gpu 0 { ( job_register # *JobNode . sw job ( kind_wasm_gpu ) ( wasm_gpu_handler . sw key ) ) } {}
                 ( swarm_join_group sw )
                 ( swarm_announce sw 1 )
+                ( nurl_flush_stdout )
                 ? == vflag 1 { ( nurl_print `swarm-mcp worker ` ) ( nurl_print ( nurl_str_int id ) ) ( nurl_print ` on relay ` ) ( nurl_print ( nurl_str_int cur ) ) ( nurl_print ? != gpu 0 ` ready (gpu)\n` ` ready\n` ) } {}
                 // pump; a heartbeat every ~2 s doubles as the relay-liveness
                 // probe (its send fails when the relay is gone)
@@ -313,6 +359,12 @@ $ `cudakernel.nu`
                     = beat + beat 1
                     ? >= beat 10 {
                         = beat 0
+                        // Workers age their roster too. dist/job FORWARDS a job
+                        // whose key it does not own to whoever its own ring says
+                        // owns it — so a worker still holding a dead peer sends
+                        // re-dispatched chunks straight back into the void. Every
+                        // node must converge on the same live set.
+                        : i _gone ( swarm_expire sw )
                         ? ( swarm_announce_ok sw 1 ) {} { = live F }
                     } {}
                     ( sleep_ms 5 )
@@ -380,7 +432,14 @@ $ `cudakernel.nu`
 // the ring. Bounded attempts: a chunk that fails everywhere finally reports as
 // a failed_chunk (never a silent zero), exactly as before.
 @ __ft_max_attempts → i { ^ 4 }  // initial dispatch + 3 re-dispatches
-@ __ft_deadline_ms → i { ^ 12000 }  // no result within this → owner presumed lost
+@ __ft_deadline_ms → i { ^ 12000 }  // GPU chunk: no result within this → owner presumed lost
+
+// CPU chunks (expression / plain wasm) have no useful fixed deadline — a legal
+// chunk can run for minutes — so their liveness test is the roster: an owner
+// that stopped heartbeating has been evicted (swarm_expire), and only then is
+// its chunk presumed lost. The backstop below still bounds a task that somehow
+// stalls with a live-looking owner, so nothing polls forever.
+@ __ft_cpu_backstop_ms → i { ^ 1800000 }  // 30 min
 
 : ChunkJob {
     i kind  // job kind (kind_wasm_gpu)
@@ -407,11 +466,21 @@ $ `cudakernel.nu`
     ^ b
 }
 
-// The GPU-ring owner pubkey for `key` (copied; empty on an empty ring). GPU
-// tasks route on the capability ring, so ownership resolves against it.
-@ __cj_gpu_owner * Swarm sw ( Vec u ) key → ( Vec u ) {
-    ^ ?? ( ring_owner_pk # *Ring . sw gpu_ring key ) { T pk → pk F → ( vec_new [u] ) }
+// The owner pubkey for `key` in the ring `kind` routes on (copied; empty on an
+// empty ring). GPU chunks resolve against the capability ring, everything else
+// against the general one — the same rule dist/job dispatches by.
+@ __cj_owner * Swarm sw i kind ( Vec u ) key → ( Vec u ) {
+    : *Ring r ? == kind ( kind_wasm_gpu ) # *Ring . sw gpu_ring # *Ring . sw ring
+    ^ ?? ( ring_owner_pk r key ) { T pk → pk F → ( vec_new [u] ) }
 }
+
+// Does the ring `kind` routes on still have anyone in it?
+@ __cj_ring_empty * Swarm sw i kind → b {
+    : *Ring r ? == kind ( kind_wasm_gpu ) # *Ring . sw gpu_ring # *Ring . sw ring
+    ^ == ( ring_point_count r ) 0
+}
+
+@ __cj_gpu_owner * Swarm sw ( Vec u ) key → ( Vec u ) { ^ ( __cj_owner sw ( kind_wasm_gpu ) key ) }
 
 @ cj_tids ( Vec s ) jobs → ( Vec i ) {
     : ( Vec i ) t ( vec_new [i] )
@@ -472,6 +541,67 @@ $ `cudakernel.nu`
     ^ jobs
 }
 
+// One ChunkJob around an already-tagged payload, dispatched now.
+@ __cj_dispatch * Swarm sw i kind i idx ( Vec u ) tagged i now → *ChunkJob {
+    : ( Vec u ) rkey ( chunk_key_salted idx 0 )
+    : ( Vec u ) owner ( __cj_owner sw kind rkey )
+    : i tid ( job_submit # *JobNode . sw job kind rkey tagged )
+    : *ChunkJob cj # *ChunkJob ( nurl_alloc Z ChunkJob )
+    = . cj kind kind
+    = . cj payload tagged
+    = . cj idx idx
+    = . cj salt 0
+    = . cj tid tid
+    = . cj owner owner
+    = . cj attempts 1
+    = . cj submit_ms now
+    = . cj state 0
+    ( vec_free [u] rkey )
+    ^ # *ChunkJob cj
+}
+
+// Dispatch an EXPRESSION task with a retry plan. Same wire as cluster_submit;
+// the plan is what lets task_refresh notice a worker that died mid-chunk.
+// Without it an expression task whose owner disappeared stayed `running`
+// forever, which an agent can only poll into infinity.
+@ cluster_dispatch_kernel_ft * Swarm sw i op i dtype i lo i hi ( Vec u ) expr i nchunks → ( Vec s ) {
+    : ( Vec s ) chunks ( shard lo hi nchunks )
+    : ( Vec s ) jobs ( vec_new [s] )
+    : i now ( now_ms )
+    : ~ i i 0
+    ~ < i nchunks {
+        : s cp ?? ( vec_get [s] chunks i ) { T x → x F → # s 0 }
+        : *Chunk c # *Chunk cp
+        : ( Vec u ) payload ( chunk_payload op dtype . c lo . c hi expr )
+        : ( Vec u ) tagged ( token_tag . sw key payload )
+        ( vec_push [s] jobs ( __cj_dispatch sw ( kind_kernel ) i tagged now ) )
+        ( vec_free [u] payload )
+        = i + i 1
+    }
+    ( shard_free chunks )
+    ^ jobs
+}
+
+// Dispatch a wasm-module task (CPU kind_wasm or GPU kind_wasm_gpu) with a
+// retry plan — the module bytes ride each chunk exactly as cluster_submit_wasm.
+@ cluster_dispatch_wasm_ft * Swarm sw i lo i hi ( Vec u ) wasm i nchunks i kind → ( Vec s ) {
+    : ( Vec s ) chunks ( shard lo hi nchunks )
+    : ( Vec s ) jobs ( vec_new [s] )
+    : i now ( now_ms )
+    : ~ i i 0
+    ~ < i nchunks {
+        : s cp ?? ( vec_get [s] chunks i ) { T x → x F → # s 0 }
+        : *Chunk c # *Chunk cp
+        : ( Vec u ) payload ( wasm_chunk_payload . c lo . c hi wasm )
+        : ( Vec u ) tagged ( token_tag . sw key payload )
+        ( vec_push [s] jobs ( __cj_dispatch sw kind i tagged now ) )
+        ( vec_free [u] payload )
+        = i + i 1
+    }
+    ( shard_free chunks )
+    ^ jobs
+}
+
 // Re-dispatch one failed/lost chunk: salt the key until it maps to an owner
 // other than the one that just failed (bounded probes), resubmit the retained
 // payload there, and refresh the plan. No ring mutation — steering only.
@@ -479,13 +609,13 @@ $ `cudakernel.nu`
     : *JobNode jn # *JobNode . sw job
     : ~ i s + . cj salt 1
     : ~ ( Vec u ) newkey ( chunk_key_salted . cj idx s )
-    : ~ ( Vec u ) newowner ( __cj_gpu_owner sw newkey )
+    : ~ ( Vec u ) newowner ( __cj_owner sw . cj kind newkey )
     : ~ i probes 0
     ~ & < probes 16 & > ( vec_len [u] newowner ) 0 & > ( vec_len [u] . cj owner ) 0 ( bytes_eq newowner . cj owner ) {
         ( vec_free [u] newkey ) ( vec_free [u] newowner )
         = s + s 1
         = newkey ( chunk_key_salted . cj idx s )
-        = newowner ( __cj_gpu_owner sw newkey )
+        = newowner ( __cj_owner sw . cj kind newkey )
         = probes + probes 1
     }
     : i tid ( job_submit jn . cj kind newkey . cj payload )
@@ -671,10 +801,12 @@ $ `cudakernel.nu`
             ~ & ! ( tids_ready sw tids ) < rnd 400 { ( swarm_pump sw 200 ) = rnd + rnd 1 }
             : Combined cb ( tids_combine sw 0 op tids )
             : i total . cb value
-            ? > . cb nfail 0 { ( nurl_print `swarm-mcp: WARNING ` ) ( nurl_print_int . cb nfail ) ( nurl_print ` chunk(s) failed\n` ) } {}
+            // nurl_print_int appends a newline (it is puts-shaped), so building
+            // a one-line summary out of it printed the range across four lines.
+            ? > . cb nfail 0 { ( nurl_print `swarm-mcp: WARNING ` ) ( nurl_print ( nurl_str_int . cb nfail ) ) ( nurl_print ` chunk(s) failed\n` ) } {}
             ( nurl_print ( reduce_op_name op ) ) ( nurl_print ` of (` ) ( nurl_print expr )
-            ( nurl_print `) over [` ) ( nurl_print_int lo ) ( nurl_print `,` ) ( nurl_print_int hi )
-            ( nurl_print `) = ` ) ( nurl_print_int total ) ( nurl_print `\n` )
+            ( nurl_print `) over [` ) ( nurl_print ( nurl_str_int lo ) ) ( nurl_print `,` ) ( nurl_print ( nurl_str_int hi ) )
+            ( nurl_print `) = ` ) ( nurl_print ( nurl_str_int total ) ) ( nurl_print `\n` )
             ( vec_free [i] tids ) ( vec_free [u] eb )
             ( swarm_free sw ) ( relay_close rc )
             ^ 0
@@ -719,10 +851,16 @@ $ `cudakernel.nu`
                         ~ & ! ( tids_ready sw tids ) < rnd 600 { ( swarm_pump sw 200 ) = rnd + rnd 1 }
                         : Combined cb ( tids_combine sw 0 op tids )
                         : i total . cb value
-                        ? > . cb nfail 0 { ( nurl_print `swarm-mcp: WARNING ` ) ( nurl_print_int . cb nfail ) ( nurl_print ` chunk(s) failed\n` ) } {}
+                        ? > . cb nfail 0 {
+                            ( nurl_print `swarm-mcp: WARNING ` ) ( nurl_print ( nurl_str_int . cb nfail ) ) ( nurl_print ` chunk(s) failed` )
+                            : String we ( __tids_first_error sw tids )
+                            ? > ( string_len we ) 0 { ( nurl_print `: ` ) ( nurl_print ( string_data we ) ) } {}
+                            ( string_free we )
+                            ( nurl_print `\n` )
+                        } {}
                         ( nurl_print ( reduce_op_name op ) ) ( nurl_print ` (wasm kernel) over [` )
-                        ( nurl_print_int lo ) ( nurl_print `,` ) ( nurl_print_int hi )
-                        ( nurl_print `) = ` ) ( nurl_print_int total ) ( nurl_print `\n` )
+                        ( nurl_print ( nurl_str_int lo ) ) ( nurl_print `,` ) ( nurl_print ( nurl_str_int hi ) )
+                        ( nurl_print `) = ` ) ( nurl_print ( nurl_str_int total ) ) ( nurl_print `\n` )
                         ( vec_free [i] tids )
                         ( swarm_free sw ) ( relay_close relc )
                     }
@@ -759,6 +897,7 @@ $ `cudakernel.nu`
     i seeded  // dataset blocks seeded by THIS submit (0 = all were cached)
     ( Vec s ) chunkjobs  // *ChunkJob — per-chunk retry plan (empty = no auto-retry)
     i retries  // total chunk re-dispatches performed (fault tolerance)
+    String errmsg  // why the first failed chunk failed ("" = none / not failed)
 }
 
 : McpState {
@@ -797,6 +936,7 @@ $ `cudakernel.nu`
     = . t seeded 0
     = . t chunkjobs ( vec_new [s] )
     = . t retries 0
+    = . t errmsg ( string_new )
     ^ t
 }
 
@@ -1176,12 +1316,43 @@ $ `cudakernel.nu`
     : *Swarm sw ( mcp_swarm )
     : ~ i k 0
     ~ < k rounds { ( swarm_pump sw 150 ) = k + k 1 }
+    // Every pump also ages the roster: a worker that died stops heartbeating,
+    // and leaving it in the ring made every later submit re-dispatch around a
+    // ghost. Cheap (the roster is a handful of members).
+    : i _gone ( swarm_expire sw )
 }
 
 // Refresh one task's status; combine if every chunk has landed. A finished
 // vector task with an out_file writes the raw LE f64s there (once).
 // Finalize a ready task: combine partials, write an out_file if requested,
 // mark done. Shared by the plain and fault-tolerant refresh paths.
+// The reason the first failed chunk gave, or "" when none did. Workers append
+// it to a failed result frame (wasmkernel chunk_err_push), so a task can say
+// WHY it failed instead of only how many chunks did.
+@ __tids_first_error * Swarm sw ( Vec i ) tids → String {
+    : i n ( vec_len [i] tids )
+    : ~ String out ( string_new )
+    : ~ i k 0
+    ~ & == ( string_len out ) 0 < k n {
+        ?? ( job_await # *JobNode . sw job ?? ( vec_get [i] tids k ) { T x → x F → 0 } ) {
+            T r → {
+                ?? ( token_untag . sw key r ) {
+                    T body → {
+                        : String e ( chunk_err_read body )
+                        ? > ( string_len e ) 0 { ( string_free out ) = out e } { ( string_free e ) }
+                        ( vec_free [u] body )
+                    }
+                    F → {}
+                }
+                ( vec_free [u] r )
+            }
+            F → {}
+        }
+        = k + k 1
+    }
+    ^ out
+}
+
 @ __task_finalize * Task t → v {
     : *Swarm sw ( mcp_swarm )
     ? == . t mode ( gpu_mode_scalar ) {
@@ -1200,7 +1371,23 @@ $ `cudakernel.nu`
             }
         } {}
     }
+    ? & > . t failed 0 == ( string_len . t errmsg ) 0 {
+        ( string_free . t errmsg )
+        = . t errmsg ( __tids_first_error sw . t tids )
+    } {}
     = . t done 1
+}
+
+// Is this chunk's owner gone? A GPU chunk uses the short fixed deadline it
+// always did (GPU chunks are fast, so silence past it means trouble). A CPU
+// chunk asks the roster instead: its owner is presumed lost once it has been
+// evicted for missing heartbeats, with a long backstop so a task can never run
+// forever. An owner we never resolved (empty ring at dispatch) is lost too.
+@ __cj_presumed_lost * Swarm sw * ChunkJob cj i now → b {
+    ? == . cj kind ( kind_wasm_gpu ) { ^ > - now . cj submit_ms ( __ft_deadline_ms ) } {}
+    ? > - now . cj submit_ms ( __ft_cpu_backstop_ms ) { ^ T } {}
+    ? == ( vec_len [u] . cj owner ) 0 { ^ T } {}
+    ^ ! ( roster_is_live # *Roster . sw roster . cj owner )
 }
 
 // Fault-tolerant refresh: advance each chunk's retry plan. A chunk whose result
@@ -1227,8 +1414,20 @@ $ `cudakernel.nu`
                         T r → {
                             ?? ( token_untag . sw key r ) {
                                 T body → {
-                                    : i okb ?? ( vec_get [u] body 0 ) { T x → # i x F → 0 }
-                                    = out ? == okb 1 1 2
+                                    // Two result frames ride the wire and they are
+                                    // NOT interchangeable: an expression chunk
+                                    // answers with a bare [partial:8], the wasm
+                                    // kinds with [ok:1][partial:8]. Reading the
+                                    // first byte of an expression partial as an
+                                    // "ok" flag makes every healthy chunk look
+                                    // failed (a partial's top BE byte is almost
+                                    // always 0), so the frame is parsed by kind.
+                                    ? == . cj kind ( kind_kernel ) {
+                                        = out ? >= ( vec_len [u] body ) 8 1 2
+                                    } {
+                                        : i okb ?? ( vec_get [u] body 0 ) { T x → # i x F → 0 }
+                                        = out ? == okb 1 1 2
+                                    }
                                     ( vec_free [u] body )
                                 }
                                 F → { = out 2 }
@@ -1238,15 +1437,19 @@ $ `cudakernel.nu`
                         F → { = out 2 }
                     }
                 } {
-                    ? > - now . cj submit_ms ( __ft_deadline_ms ) { = out 2 } {}
+                    ? ( __cj_presumed_lost sw cj now ) { = out 2 } {}
                 }
                 ? == out 1 { = . cj state 1 } {}
                 ? == out 2 {
-                    ? < . cj attempts ( __ft_max_attempts ) {
-                        ( __cj_redispatch sw cj )
-                        = . t retries + . t retries 1
-                        = pending + pending 1
-                    } { = . cj state 2 }
+                    // Nobody left to route to: stop burning attempts and let
+                    // the task finish as an honest error.
+                    ? ( __cj_ring_empty sw . cj kind ) { = . cj state 2 } {
+                        ? < . cj attempts ( __ft_max_attempts ) {
+                            ( __cj_redispatch sw cj )
+                            = . t retries + . t retries 1
+                            = pending + pending 1
+                        } { = . cj state 2 }
+                    }
                 } {}
                 ? == out 0 { = pending + pending 1 } {}
             } {}
@@ -1289,6 +1492,9 @@ $ `cudakernel.nu`
     ( json_obj_set o `task_id` ( json_int . t id ) )
     ( json_obj_set o `status` ( json_str_lit ? == . t done 1 ? > . t failed 0 `error` `done` `running` ) )
     ? > . t failed 0 { ( json_obj_set o `failed_chunks` ( json_int . t failed ) ) } {}
+    // WHY it failed, in the worker's own words — a bare failed_chunks count
+    // left an agent nothing to act on.
+    ? > ( string_len . t errmsg ) 0 { ( json_obj_set o `error` ( json_str_lit ( string_data . t errmsg ) ) ) } {}
     ? > . t retries 0 { ( json_obj_set o `retries` ( json_int . t retries ) ) } {}
     : String es ( bytes_to_str . t expr )
     ( json_obj_set o `kernel` ( json_str_lit ( string_data es ) ) )
@@ -1359,6 +1565,22 @@ $ `cudakernel.nu`
     }
 }
 
+// The "reduce" argument, or −1 when it names an op that does not exist. An
+// unknown op used to fall back to `sum` silently — the caller got a
+// plausible-but-wrong number with `"reduce":"sum"` echoed back at it, which is
+// the one class of failure a model cannot catch. Absent key = sum, as before.
+@ __reduce_arg Json args → i {
+    ^ ?? ( json_obj_get args `reduce` ) {
+        T v → {
+            : s name ( json_str_data v )
+            ^ ? ( reduce_op_known name ) ( reduce_op_of name 0 ) - 0 1
+        }
+        F → 0
+    }
+}
+
+@ __reduce_err → s { ^ `unknown "reduce" op — use one of: sum, product, min, max, count` }
+
 @ tool_result_json Json o → Json {
     : String s ( json_stringify o )
     : Json r ( mcp_tool_result_text ( string_data s ) )
@@ -1379,7 +1601,8 @@ $ `cudakernel.nu`
     : s expr ?? ej { T v → ( json_str_data v ) F → `` }
     : i lo ?? lj { T v → ( json_as_int v ) F → 0 }
     : i hi ?? hj { T v → ( json_as_int v ) F → 0 }
-    : i op ?? ( json_obj_get args `reduce` ) { T v → ( reduce_op_of ( json_str_data v ) 0 ) F → 0 }
+    : i op ( __reduce_arg args )
+    ? < op 0 { ^ ( mcp_tool_result_error ( __reduce_err ) ) } {}
     : i dtype ?? ( json_obj_get args `dtype` ) { T v → ? != 0 ( nurl_str_eq ( json_str_data v ) `float` ) 1 0 F → 0 }
     ? >= lo hi { ^ ( mcp_tool_result_error `empty range: need lo < hi` ) } {}
 
@@ -1406,10 +1629,12 @@ $ `cudakernel.nu`
         ^ ( mcp_tool_result_error `no workers in the cluster — start some with 'swarm-mcp worker'` )
     } {}
     : i nchunks ( nchunks_for nworkers )
-    : ( Vec i ) tids ( cluster_submit sw op dtype lo hi eb nchunks )
+    : ( Vec s ) jobs ( cluster_dispatch_kernel_ft sw op dtype lo hi eb nchunks )
+    : ( Vec i ) tids ( cj_tids jobs )
 
     : *McpState st # *McpState g_mcp
     : *Task t ( task_new . st next_id eb dtype lo hi op nchunks tids )
+    = . t chunkjobs jobs
     = . st next_id + . st next_id 1
     ( task_register t )
 
@@ -1441,10 +1666,12 @@ $ `cudakernel.nu`
     } {}
     : i nchunks ( nchunks_wasm nworkers )
     : i kind ? != gpu 0 ( kind_wasm_gpu ) ( kind_wasm )
-    : ( Vec i ) tids ( cluster_submit_wasm sw lo hi wasm nchunks kind )
+    : ( Vec s ) jobs ( cluster_dispatch_wasm_ft sw lo hi wasm nchunks kind )
+    : ( Vec i ) tids ( cj_tids jobs )
     ( vec_free [u] wasm )
     : *McpState st # *McpState g_mcp
     : *Task t ( task_new . st next_id ( bytes_from_str ? != gpu 0 `<wasm kernel (gpu)>` `<wasm kernel>` ) dtype lo hi op nchunks tids )
+    = . t chunkjobs jobs
     = . st next_id + . st next_id 1
     ( task_register t )
     ( mcp_pump 8 )
@@ -1462,7 +1689,8 @@ $ `cudakernel.nu`
     : s w64 ?? wj { T v → ( json_str_data v ) F → `` }
     : i lo ?? lj { T v → ( json_as_int v ) F → 0 }
     : i hi ?? hj { T v → ( json_as_int v ) F → 0 }
-    : i op ?? ( json_obj_get args `reduce` ) { T v → ( reduce_op_of ( json_str_data v ) 0 ) F → 0 }
+    : i op ( __reduce_arg args )
+    ? < op 0 { ^ ( mcp_tool_result_error ( __reduce_err ) ) } {}
     : i dtype ?? ( json_obj_get args `dtype` ) { T v → ? != 0 ( nurl_str_eq ( json_str_data v ) `float` ) 1 0 F → 0 }
     ? >= lo hi { ^ ( mcp_tool_result_error `empty range: need lo < hi` ) } {}
     : i gpu ?? ( json_obj_get args `gpu` ) { T v → ? ( json_as_bool v ) 1 0 F → 0 }
@@ -1485,7 +1713,8 @@ $ `cudakernel.nu`
     : s source ?? sj { T v → ( json_str_data v ) F → `` }
     : i lo ?? lj { T v → ( json_as_int v ) F → 0 }
     : i hi ?? hj { T v → ( json_as_int v ) F → 0 }
-    : i op ?? ( json_obj_get args `reduce` ) { T v → ( reduce_op_of ( json_str_data v ) 0 ) F → 0 }
+    : i op ( __reduce_arg args )
+    ? < op 0 { ^ ( mcp_tool_result_error ( __reduce_err ) ) } {}
     : i dtype ?? ( json_obj_get args `dtype` ) { T v → ? != 0 ( nurl_str_eq ( json_str_data v ) `float` ) 1 0 F → 0 }
     : i gpu ?? ( json_obj_get args `gpu` ) { T v → ? ( json_as_bool v ) 1 0 F → 0 }
     : i kkind ?? ( json_obj_get args `kind` ) { T v → ? != 0 ( nurl_str_eq ( json_str_data v ) `chunk` ) 1 0 F → 0 }
@@ -2213,7 +2442,8 @@ $ `cudakernel.nu`
     : b have_map ?? cj { T _ → T F → F }
     ? have_map {} { ^ ( mcp_tool_result_error `compute_shuffle needs "map" — a pair of CUDA device functions __device__ long long key(long long x[, double v][, const double* p]) and __device__ double value(...) that emit one (key, value) per element — plus "reduce" (sum|product|min|max|count) and "lo"/"hi" (or "dataset")` ) }
     : s cuda ?? cj { T x → ( json_str_data x ) F → `` }
-    : i op ?? ( json_obj_get args `reduce` ) { T v → ( reduce_op_of ( json_str_data v ) 0 ) F → 0 }
+    : i op ( __reduce_arg args )
+    ? < op 0 { ^ ( mcp_tool_result_error ( __reduce_err ) ) } {}
     : i dsid ?? ( json_obj_get args `dataset` ) { T x → ?? ( json_num_as_i x ) { T v → v F → 0 } F → 0 }
     : ?( Vec i ) pp ( __parse_params args )
     ? ?? pp { T _ → T F → F } {} { ^ ( mcp_tool_result_error `"params" must be an array of numbers` ) }
@@ -2390,7 +2620,8 @@ $ `cudakernel.nu`
     : s cuda ?? cj { T v → ( json_str_data v ) F → `` }
     : i lo ?? ( json_obj_get args `lo` ) { T v → ( json_as_int v ) F → - 0 1 }
     : i hi ?? ( json_obj_get args `hi` ) { T v → ( json_as_int v ) F → - 0 1 }
-    : i op ?? ( json_obj_get args `reduce` ) { T v → ( reduce_op_of ( json_str_data v ) 0 ) F → 0 }
+    : i op ( __reduce_arg args )
+    ? < op 0 { ^ ( mcp_tool_result_error ( __reduce_err ) ) } {}
     : i dsid ?? ( json_obj_get args `dataset` ) { T v → ( json_as_int v ) F → 0 }
     ?? ( __parse_params args ) {
         F → { ^ ( mcp_tool_result_error `"params" must be an array of numbers` ) }
@@ -2694,6 +2925,41 @@ $ `cudakernel.nu`
 }
 
 // ── tool: compute_list ───────────────────────────────────────────
+
+// ── tool: swarm_status ───────────────────────────────────────────
+// What the coordinator believes the cluster is. Without this, "no workers
+// found" or a task that keeps retrying gives a model nothing to reason about:
+// it cannot see whether a worker ever joined, whether it is GPU-capable, or
+// whether the node it is waiting on has gone silent.
+@ tool_status Json args → Json {
+    ? ( mcp_ensure_relay ) {} {}
+    : *Swarm sw ( mcp_swarm )
+    ( swarm_discover sw 4 )
+    : *Roster ro # *Roster . sw roster
+    : i now ( now_ms )
+    : Json o ( json_obj_new )
+    : i n ( roster_count ro )
+    ( json_obj_set o `workers` ( json_int n ) )
+    ( json_obj_set o `gpu_workers` ( json_int ( roster_count_caps ro ( cap_gpu ) ) ) )
+    : Json arr ( json_arr_new )
+    : ~ i k 0
+    ~ < k n {
+        : MemberView mv ( roster_view ro k )
+        : Json w ( json_obj_new )
+        ( json_obj_set w `node_id` ( json_str_lit ( nurl_str_int . mv id ) ) )
+        ( json_obj_set w `gpu` ( json_bool ? == & . mv caps ( cap_gpu ) ( cap_gpu ) T F ) )
+        ( json_obj_set w `last_seen_ms` ( json_int - now . mv last_ms ) )
+        ( json_arr_push arr w )
+        = k + k 1
+    }
+    ( json_obj_set o `worker_list` arr )
+    : *McpState st # *McpState g_mcp
+    ( json_obj_set o `tasks` ( json_int ( vec_len [s] . st tasks ) ) )
+    ( json_obj_set o `datasets` ( json_int ( vec_len [s] . st datasets ) ) )
+    // A worker silent past this is evicted from the rings.
+    ( json_obj_set o `liveness_ttl_ms` ( json_int ( __roster_ttl_ms ) ) )
+    ^ ( tool_result_json o )
+}
 
 @ tool_list Json args → Json {
     ( mcp_pump 4 )
@@ -3053,7 +3319,7 @@ $ `cudakernel.nu`
 // needs — the CUDA ABI, the iterate/shuffle recipes, and the honest size/
 // support envelope — lives here, fetched one topic at a time.
 @ __help_index → s {
-    ^ `swarm-mcp help. The tool schemas are deliberately short; call swarm_help with a "topic" for depth on one area.\nTopics:\n  overview        — what this is: nodes, roles, the token, the compute model\n  workflow        — submit -> poll compute_result -> done/error; failed_chunks\n  expr            — the compute_submit expression language (int/float)\n  cuda            — the CUDA-C device-function ABI shared by every GPU tool\n  iterate         — compute_iterate: gradient descent AND general fixpoints (k-means, EM, power iteration)\n  shuffle         — compute_shuffle: group-by-key / reduce-by-key\n  datasets        — compute_upload_data: bring data once, referenced by hash\n  gpu             — --gpu workers, task routing, the trust boundary\n  limits          — sizes, caps, and what is NOT yet supported (read before scaling)\n  troubleshooting — common errors and what they mean\nExample: {"name":"swarm_help","arguments":{"topic":"iterate"}}`
+    ^ `swarm-mcp help. The tool schemas are deliberately short; call swarm_help with a "topic" for depth on one area.\nTopics:\n  overview        — what this is: nodes, roles, the token, the compute model\n  workflow        — submit -> poll compute_result -> done/error; failed_chunks\n  expr            — the compute_submit expression language (int/float)\n  cuda            — the CUDA-C device-function ABI shared by every GPU tool\n  iterate         — compute_iterate: gradient descent AND general fixpoints (k-means, EM, power iteration)\n  shuffle         — compute_shuffle: group-by-key / reduce-by-key\n  datasets        — compute_upload_data: bring data once, referenced by hash\n  gpu             — --gpu workers, task routing, the trust boundary\n  limits          — sizes, caps, and what is NOT yet supported (read before scaling)\n  troubleshooting — common errors and what they mean\nCluster visibility: call swarm_status for who has joined, which workers are GPU-capable, and how long since each was heard from.\nExample: {"name":"swarm_help","arguments":{"topic":"iterate"}}`
 }
 
 @ __help_overview → s {
@@ -3061,7 +3327,7 @@ $ `cudakernel.nu`
 }
 
 @ __help_workflow → s {
-    ^ `A submit tool returns immediately with a task_id and status "running" (or "done" for tiny work). Poll compute_result {"task_id":N} until status is "done" (result present) or "error". compute_list shows every task.\nThe coordinator drains cluster traffic on each tool call, so tasks advance as you poll — poll compute_result rather than sleeping.\nFailure is explicit: a chunk that traps (bad kernel, missing runtime or GPU, a lost dataset block) is COUNTED, never folded into the answer as zero. The task then finishes status "error" with failed_chunks>0 and withholds the result — a returned result always covers every chunk.\ncompute_shuffle runs its whole loop inside the single call. compute_iterate does too by DEFAULT, but pass {\"async\":true} and it returns a task_id immediately; each compute_iterate_status poll then advances the loop by a bounded time slice (budget_ms) and reports {status, state, rounds_run} — use async for any training long enough to threaten an HTTP timeout.`
+    ^ `A submit tool returns immediately with a task_id and status "running" (or "done" for tiny work). Poll compute_result {"task_id":N} until status is "done" (result present) or "error". compute_list shows every task.\nThe coordinator drains cluster traffic on each tool call, so tasks advance as you poll — poll compute_result rather than sleeping.\nFailure is explicit: a chunk that traps (bad kernel, missing runtime or GPU, a lost dataset block) is COUNTED, never folded into the answer as zero. The task then finishes status "error" with failed_chunks>0, an "error" string carrying the worker's own reason, and no result — a returned result always covers every chunk.\ncompute_shuffle runs its whole loop inside the single call. compute_iterate does too by DEFAULT, but pass {\"async\":true} and it returns a task_id immediately; each compute_iterate_status poll then advances the loop by a bounded time slice (budget_ms) and reports {status, state, rounds_run} — use async for any training long enough to threaten an HTTP timeout.`
 }
 
 @ __help_expr → s {
@@ -3093,7 +3359,7 @@ $ `cudakernel.nu`
 }
 
 @ __help_troubleshooting → s {
-    ^ `Common errors and what they mean:\n  "no workers found" / "no GPU workers in the cluster" — no eligible worker has joined. Start one with the SAME --token (add --gpu for the CUDA tools) and give discovery a moment; a different token is invisible.\n  "the … kernel did not compile: …" — your CUDA-C or NURL source had an error; the compiler message is included. Fix it and resubmit.\n  "a chunk failed on a worker" — a chunk failed on EVERY worker it was tried on. For the non-dataset GPU tools the coordinator already re-dispatched it (see the task's "retries"); a remaining failure means the kernel itself traps (bad kernel, no GPU on any worker) or, for a dataset task, a block was lost — fix the kernel / check --gpu workers, then resubmit.\n  task stays "running" — keep polling compute_result; the coordinator advances tasks on each call, and very large ranges simply take longer.\n  dataset range errors — with "dataset", lo/hi must lie within [0, count); omit them to use the whole dataset.\n  HTTPS / cert — the server self-signs on first run; trust the cert or use curl -k. The endpoint path is /mcp.\n  "may not contain a backtick character" — CUDA and NURL kernel sources cannot contain a backtick.`
+    ^ `Common errors and what they mean:\n  "no workers found" / "no GPU workers in the cluster" — no eligible worker has joined. Call swarm_status to see what the coordinator can actually see. Start one with the SAME --token (add --gpu for the CUDA tools) and give discovery a moment; a different token is invisible.\n  "the … kernel did not compile: …" — your CUDA-C or NURL source had an error; the compiler message is included. Fix it and resubmit.\n  "unknown \"reduce\" op" — reduce must be one of sum, product, min, max, count. An unrecognised name is rejected rather than treated as sum.\n  a task's "error" field — the reason the first failed chunk gave, in the worker's words (a wasm trap, no wasm runtime on that worker, a CUDA error, a failed HMAC check). Read it before resubmitting.\n  a worker died mid-task — every task kind re-dispatches lost chunks now, and a worker silent for 90 s is evicted from the cluster, so the task finishes (with "retries" counting the re-dispatches) instead of hanging. If every worker is gone the task ends as an error rather than running forever.\n  "a chunk failed on a worker" — a chunk failed on EVERY worker it was tried on. For the non-dataset GPU tools the coordinator already re-dispatched it (see the task's "retries"); a remaining failure means the kernel itself traps (bad kernel, no GPU on any worker) or, for a dataset task, a block was lost — fix the kernel / check --gpu workers, then resubmit.\n  task stays "running" — keep polling compute_result; the coordinator advances tasks on each call, and very large ranges simply take longer.\n  dataset range errors — with "dataset", lo/hi must lie within [0, count); omit them to use the whole dataset.\n  HTTPS / cert — the server self-signs on first run; trust the cert or use curl -k. The endpoint path is /mcp.\n  "may not contain a backtick character" — CUDA and NURL kernel sources cannot contain a backtick.`
 }
 
 @ tool_help Json args → Json {
@@ -3158,6 +3424,9 @@ $ `cudakernel.nu`
     ( vec_push [Json] tools ( mcp_tool_descriptor `compute_run_wasm`
     `Like compute_submit_kernel but you provide an already-compiled wasm32-wasi module (base64) instead of NURL source — e.g. one built with the nurl_build_wasm tool. The module's main reads lo and hi from argv, folds the kernel over [lo, hi), and prints the partial. Returns a task_id; poll compute_result.`
     ( ms_schema_run_wasm ) ) )
+    ( vec_push [Json] tools ( mcp_tool_descriptor `swarm_status`
+    `The cluster as the coordinator currently sees it: how many workers have joined, which of them are GPU-capable, how long since each was last heard from (they heartbeat every ~2 s; one silent past liveness_ttl_ms is evicted), plus task and dataset counts. Check this first when a submit says there are no workers, or when a task keeps retrying.`
+    ( ms_schema_empty ) ) )
     ( vec_push [Json] tools ( mcp_tool_descriptor `compute_list`
     `List every submitted task with its status (running|done), kernel, range, reduce op, and result if finished.`
     ( ms_schema_empty ) ) )
@@ -3180,6 +3449,7 @@ $ `cudakernel.nu`
     ? != ( nurl_str_eq name `compute_upload_data` ) 0 { ^ ( tool_upload_data args ) } {}
     ? != ( nurl_str_eq name `compute_list_data` ) 0 { ^ ( tool_list_data args ) } {}
     ? != ( nurl_str_eq name `compute_run_wasm` ) 0 { ^ ( tool_run_wasm args ) } {}
+    ? != ( nurl_str_eq name `swarm_status` ) 0 { ^ ( tool_status args ) } {}
     ? != ( nurl_str_eq name `compute_list` ) 0 { ^ ( tool_list args ) } {}
     ? != ( nurl_str_eq name `compute_result` ) 0 { ^ ( tool_result args ) } {}
     ^ ( mcp_tool_result_error `unknown tool` )
@@ -3190,7 +3460,7 @@ $ `cudakernel.nu`
 // Single source of truth for the server version — the MCP handshake,
 // server/discover, and the --version banner all read this (the
 // handshake had drifted to a stale hand-written 0.20.0).
-@ sm_version → s { ^ `0.23.0` }
+@ sm_version → s { ^ `0.24.0` }
 
 @ handle_initialize Json id ? Json params → Json {
     : Json result ( mcp_initialize_result `swarm-mcp` ( sm_version ) )
@@ -3421,14 +3691,29 @@ $ `cudakernel.nu`
             = g_mcp_token token
             // recover any datasets persisted by a previous run of this coordinator
             ( __ds_load_all )
-            : ( @ HttpResponse HttpRequest ) handler ( mcp_http_handler \ Json req → ?Json { ^ ( dispatch req ) } )
+            : ( @ HttpResponse HttpRequest ) mcph ( mcp_http_handler \ Json req → ?Json { ^ ( dispatch req ) } )
+            // Serve the MCP transport at /mcp (and bare / for convenience) and
+            // answer 404 everywhere else. Serving the same body on every path
+            // made a typo'd URL look like a working endpoint.
+            : ( @ HttpResponse HttpRequest ) handler \ HttpRequest req → HttpResponse {
+                : s rp ( string_data . req path )
+                ? != 0 ( nurl_str_eq rp `/mcp` ) { ^ ( mcph req ) } {}
+                ? != 0 ( nurl_str_eq rp `/mcp/` ) { ^ ( mcph req ) } {}
+                ? != 0 ( nurl_str_eq rp `/` ) { ^ ( mcph req ) } {}
+                : HttpResponse nf ( response_text 404 `{"error":"not found — the MCP endpoint is POST /mcp"}\n` )
+                ( response_set_header nf `Content-Type` `application/json` )
+                ^ nf
+            }
             ?? ( tcp_listen_tls mcp_host mcp_port cert key ) {
                 T lst → {
                     : HttpServer srv ( server_new lst handler )
                     ?? ( server_run srv ) { T _ → {} F e → {} }
                     ( server_stop srv )
                 }
-                F e → { ( nurl_eprintln `swarm-mcp: MCP HTTPS listener failed to start (check --tls-cert/--tls-key and that the port is free)` ) }
+                F e → {
+                    ( nurl_eprintln `swarm-mcp: MCP HTTPS listener failed to start (check --tls-cert/--tls-key and that the port is free) — exiting` )
+                    ( nurl_exit 1 )
+                }
             }
             ( swarm_free # *Swarm . st swarm )
         }
@@ -3720,6 +4005,40 @@ $ `cudakernel.nu`
     ? relay_on { ( nurl_print `  relay   listening ` ) ( nurl_print ( string_data . lhp host ) ) ( nurl_print `:` ) ( nurl_print ( nurl_str_int . lhp port ) ) ( nurl_print `\n` ) } {}
     ? worker_on { ( nurl_print `  worker  x` ) ( nurl_print ( nurl_str_int nworkers ) ) ( nurl_print ? != gpuflag 0 ` (gpu)` `` ) ( nurl_print ` -> ` ) ( nurl_print ( nurl_str_int ( vec_len [String] relays ) ) ) ( nurl_print ` relay(s), first ` ) ( nurl_print ( string_data drh ) ) ( nurl_print `:` ) ( nurl_print ( nurl_str_int drp ) ) ( nurl_print `\n` ) } {}
     ? mcp_on { ( nurl_print `  mcp     https://` ) ( nurl_print ( string_data . mhp host ) ) ( nurl_print `:` ) ( nurl_print ( nurl_str_int . mhp port ) ) ( nurl_print `/  -> relay ` ) ( nurl_print ( string_data drh ) ) ( nurl_print `:` ) ( nurl_print ( nurl_str_int drp ) ) ( nurl_print `\n` ) } {}
+    // stdout is block-buffered when it is a file, so a supervisor redirecting
+    // this log saw nothing at all until the process exited.
+    ( nurl_flush_stdout )
+
+    // Preflight the worker's runtime before anything joins the cluster. A
+    // worker with no wasmtime (or, with --gpu, one that cannot bridge GPU host
+    // imports) accepts chunks it can never run, and the operator only finds out
+    // as an unexplained failed_chunks on some later task.
+    ? worker_on {
+        : String wprobe ( wasmtime_probe )
+        ? > ( string_len wprobe ) 0 {
+            ? != gpuflag 0 {
+                ( nurl_eprint `swarm-mcp: --gpu needs a wasm runtime and this node has none — ` )
+                ( nurl_eprintln ( string_data wprobe ) )
+                ( nurl_eprintln `swarm-mcp: install one with 'nurlpkg install wasmtime' (the pure-NURL runtime, required for GPU) or set $WASMTIME` )
+                ( string_free wprobe )
+                ^ 1
+            } {
+                // A CPU worker still runs expression kernels without one, so
+                // this is a warning, not a refusal.
+                ( nurl_eprint `swarm-mcp: warning — ` )
+                ( nurl_eprintln ( string_data wprobe ) )
+                ( nurl_eprintln `swarm-mcp: expression kernels still run here; wasm kernels will fail until a runtime is installed ('nurlpkg install wasmtime')` )
+            }
+        } {
+            ? & != gpuflag 0 ! ( wasmtime_gpu_capable ) {
+                ( nurl_eprintln `swarm-mcp: --gpu needs a runtime with GPU host imports, and the one on this node has no --allow-gpu` )
+                ( nurl_eprintln `swarm-mcp: install the pure-NURL runtime ('nurlpkg install wasmtime') or point $WASMTIME at it` )
+                ( string_free wprobe )
+                ^ 1
+            } {}
+        }
+        ( string_free wprobe )
+    } {}
 
     // One closure per role (held alive for the process; worker threads share
     // one closure and each takes a fresh identity inside node_worker).

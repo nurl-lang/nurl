@@ -54,9 +54,9 @@ OUTPUT
   status=200
   ct=text/event-stream
   cors=*
-  body_len=69
+  body_len=79
   body=event: ready
-data: {"server":"nurl-mcp","streaming":"single-event"}
+data: {"transport":"streamable-http","streaming":"single-event"}
 
 
 ── delete_endpoint ──

@@ -123,10 +123,20 @@ $ `stdlib/ext/env.nu`
     } {}
 }
 
+// The default wall-clock cap on one request, in seconds. A caller that must
+// not block that long (an interactive server calling out to a build service,
+// say) passes its own with the *_timeout entry points.
+@ httpc_default_max_time → i { ^ 300 }
+
 // ── Core: run one curl request ──────────────────────────────────────
 // `reqfile` is "" for no body, else a path whose contents are POSTed
-// with --data-binary. Returns the parsed HttpcResp or a transport error.
+// with --data-binary. `max_secs` caps the whole exchange. Returns the parsed
+// HttpcResp or a transport error.
 @ __httpc_exec s method s url s reqfile s headers_blob → !HttpcResp HttpcErr {
+    ^ ( __httpc_exec_t method url reqfile headers_blob ( httpc_default_max_time ) )
+}
+
+@ __httpc_exec_t s method s url s reqfile s headers_blob i max_secs → !HttpcResp HttpcErr {
     : String tdir ( __httpc_tmpdir )
     : !String IoErr rf ( fs_tempfile ( string_data tdir ) `nurlpkg-resp-` )
     ( string_free tdir )
@@ -141,7 +151,9 @@ $ `stdlib/ext/env.nu`
             ( vec_push [s] a `--connect-timeout` )
             ( vec_push [s] a `10` )
             ( vec_push [s] a `--max-time` )
-            ( vec_push [s] a `300` )
+            : String mts ( string_from ( nurl_str_int ? > max_secs 0 max_secs ( httpc_default_max_time ) ) )
+            ( vec_push [s] a ( string_data mts ) )
+            ( vec_push [String] hold mts )
             ( vec_push [s] a `-o` )
             ( vec_push [s] a ( string_data respfile ) )
             ( vec_push [s] a `-w` )
@@ -245,8 +257,15 @@ $ `stdlib/ext/env.nu`
 }
 
 @ httpc_request s method s url s body s headers_blob → !HttpcResp HttpcErr {
+    ^ ( httpc_request_timeout method url body headers_blob ( httpc_default_max_time ) )
+}
+
+// Same as httpc_request, with an explicit wall-clock cap in seconds. A server
+// that calls an external service on a request path wants this: the default cap
+// is long enough that a hung peer looks like a hang of your own program.
+@ httpc_request_timeout s method s url s body s headers_blob i max_secs → !HttpcResp HttpcErr {
     ? == ( nurl_str_len body ) 0 {
-        ^ ( __httpc_exec method url `` headers_blob )
+        ^ ( __httpc_exec_t method url `` headers_blob max_secs )
     } {}
     // Non-empty text body: stage it through a temp file so the byte path
     // and the text path are identical on the wire.
@@ -266,7 +285,7 @@ $ `stdlib/ext/env.nu`
                 ( string_free bodyfile )
                 ^ @ !HttpcResp HttpcErr { F # HttpcErr HttpcOther }
             } {}
-            : !HttpcResp HttpcErr res ( __httpc_exec method url ( string_data bodyfile ) headers_blob )
+            : !HttpcResp HttpcErr res ( __httpc_exec_t method url ( string_data bodyfile ) headers_blob max_secs )
             ( unlink ( string_data bodyfile ) )
             ( string_free bodyfile )
             ^ res
