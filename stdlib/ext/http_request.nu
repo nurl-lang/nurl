@@ -81,6 +81,7 @@ $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/errors.nu`
 $ `stdlib/ext/http.nu`
+$ `stdlib/std/simd.nu`
 
 : | HttpReqErr {
     HttpReqMalformed
@@ -165,17 +166,26 @@ $ `stdlib/ext/http.nu`
 
 // First index in [start..len-3] at which buf contains \r\n\r\n.
 //
-// One `memmem` over the tail instead of a per-byte `_bbyte` walk (a
-// bounds check plus an `?u` Option per byte). This runs on every
-// inbound request, over the whole received buffer, until the header
-// terminator arrives — libc's SIMD search is the right tool.
+// `simd_index_head_end` finds all four bytes of the terminator in one
+// pass: it compares sixteen bytes against CR and against LF, and ANDs
+// the two bitmasks against themselves shifted, so a bit survives only
+// where CR LF CR LF actually begins. This runs on every inbound
+// request, over the whole received buffer, until the terminator
+// arrives.
+//
+// It replaced a libc `memmem` call, which was already vectorised
+// internally but had to be reached through the PLT and re-derive the
+// needle length on every call — and, more to the point, was the only
+// part of the parser that was: the CRLF, header-name and OWS scans it
+// sat next to were all per-byte loops. They are all vector scans now,
+// from one module, with no libc dependency (which is what lets this
+// path work unchanged in the unikernel build).
 @ __find_head_end ( Vec u ) buf i start → i {
     : i n ( vec_len [u] buf )
     : i st ? > start 0 start 0
     ? < n + st 4 { ^ -1 } {}
     : *u data ( vec_data [u] buf )
-    : s hay # s + # i data st
-    : i rel ( nurl_memmem_range hay - n st `\r\n\r\n` 4 )
+    : i rel ( simd_index_head_end # *u + # i data st - n st )
     ? < rel 0 { ^ -1 } {}
     ^ + st rel
 }
@@ -200,40 +210,44 @@ $ `stdlib/ext/http.nu`
     ^ out
 }
 
+// The three range scanners below all share one shape: clamp the range
+// into the buffer, hand the raw pointer and length to the vector
+// scanner in stdlib/std/simd.nu, and translate its buffer-relative
+// answer back to an absolute index. Each was a per-byte loop, and each
+// runs once per header line of every request — the header-name colon
+// search alone walked every byte of every name.
+
 // First index in [from..to) at which `buf` contains the byte `target`.
 @ __bindex_byte ( Vec u ) buf i from i to i target → i {
-    : ~ i k from
-    ~ < k to {
-        ? == ( _bbyte buf k ) target { ^ k } {}
-        = k + k 1
-    }
-    ^ -1
+    : i n ( vec_len [u] buf )
+    : i a ? < from 0 0 from
+    : i b ? > to n n to
+    ? >= a b { ^ -1 } {}
+    : i rel ( simd_index_byte # *u + # i ( vec_data [u] buf ) a - b a target )
+    ? < rel 0 { ^ -1 } {}
+    ^ + a rel
 }
 
 // First index in [from..to) at which `buf` contains the two-byte
 // CRLF sequence. Returns -1 if absent.
 @ __bindex_crlf ( Vec u ) buf i from i to → i {
-    : i stop - to 1
-    : ~ i k from
-    ~ < k stop {
-        ? == ( _bbyte buf k ) 13 {
-            ? == ( _bbyte buf + k 1 ) 10 { ^ k } {}
-        } {}
-        = k + k 1
-    }
-    ^ -1
+    : i n ( vec_len [u] buf )
+    : i a ? < from 0 0 from
+    : i b ? > to n n to
+    ? >= a b { ^ -1 } {}
+    : i rel ( simd_index_crlf # *u + # i ( vec_data [u] buf ) a - b a )
+    ? < rel 0 { ^ -1 } {}
+    ^ + a rel
 }
 
 // Skip leading OWS (SP=32 / HTAB=9). Returns position of first non-OWS
 // byte in [from..to), or `to` if everything was OWS.
 @ __skip_ows ( Vec u ) buf i from i to → i {
-    : ~ i k from
-    ~ < k to {
-        : i b ( _bbyte buf k )
-        ? & != b 32 != b 9 { ^ k } {}
-        = k + k 1
-    }
-    ^ to
+    : i n ( vec_len [u] buf )
+    : i a ? < from 0 0 from
+    : i b ? > to n n to
+    ? >= a b { ^ to } {}
+    ^ + a ( simd_index_ows_end # *u + # i ( vec_data [u] buf ) a - b a )
 }
 
 // Trim trailing OWS. Returns largest k <= to such that bytes [from..k)
@@ -254,19 +268,20 @@ $ `stdlib/ext/http.nu`
 }
 
 // Case-insensitive equality between an owned String and a NUL-terminated
-// raw `s`. Used by header_get for case-insensitive name lookup.
+// raw `s`. Used by header_get for case-insensitive name lookup, and by
+// the folding check on every header line of every request.
+//
+// Sixteen bytes per comparison instead of one, and — the part that
+// mattered more — no `string_get` / `nurl_str_at` call per byte. Both
+// sides are read straight through their data pointers, which is sound
+// here because the length is established first and neither buffer is
+// touched during the scan.
 @ __string_eq_ci String s s raw → b {
     : i la ( string_len s )
     : i lb ( nurl_str_len raw )
     ? != la lb { ^ F } {}
-    : ~ i k 0
-    ~ < k la {
-        : i ca ( __ascii_lower ( string_get s k ) )
-        : i cb ( __ascii_lower ( nurl_str_at raw lb k ) )
-        ? != ca cb { ^ F } {}
-        = k + k 1
-    }
-    ^ T
+    ? == la 0 { ^ T } {}
+    ^ ( simd_bytes_eq_ci # *u ( string_data s ) # *u raw la )
 }
 
 // ── Limits ────────────────────────────────────────────────────────────

@@ -132,9 +132,11 @@ $ `stdlib/std/bytes.nu`
 // matching width); the shifts are then `shl` (left) / `lshr`
 // (right, logical because operand is u32) and the `|` combines.
 @ __md5_rotl u32 x i c → u32 {
-    : u32 cu # u32 c
-    : u32 inv # u32 - 32 c
-    ^ | << x cu >> x inv
+    // One `rol` instruction via the compiler's funnel-shift primitive,
+    // rather than a shift pair, an `or` and the two intermediate
+    // values they need materialised — see __sha256_rotr for the full
+    // note. Every ISA NURL targets has the instruction.
+    ^ # u32 ( nurl_rotl32 # u64 x # u64 c )
 }
 
 // ── Transform: process one 64-byte block starting at `offset`.

@@ -6,6 +6,87 @@ are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **SIMD in the language: the `v128` type and its primitive layer.**
+  NURL now has a vector register. `v128` is a first-class by-value type
+  (bindings, parameters, returns) lowered to LLVM's target-independent
+  `<4 x i32>`, with ~27 `nurl_v128_*` primitives — load/store, lane
+  arithmetic, shifts, rotates, lane permutes, byte-compare bitmasks and
+  ASCII case folding — each emitted `alwaysinline` so it costs exactly
+  one machine instruction. 128 bits is baseline on every 64-bit target
+  NURL supports (SSE2 is part of the x86-64 ABI, NEON part of AArch64),
+  so a vector kernel needs no CPUID probe, no target-feature attribute
+  and no fallback path; it lowers to `simd128` on wasm and scalarises
+  anywhere else. Scalar bit primitives ship alongside — `nurl_ctz`,
+  `nurl_clz`, `nurl_popcnt`, `nurl_bswap32/64`, `nurl_rotl/rotr32/64`.
+  See docs/spec.md §4.1b.
+
+- **Wide arithmetic: `nurl_addc`, `nurl_subb`, `nurl_mac`.** The
+  companions to `nurl_umulhi` — the high half of a sum, of a difference,
+  and of a multiply-accumulate (`a·b + c + d`, which cannot overflow 128
+  bits and is exactly one limb step of a Montgomery multiply). The
+  language could already *spell* a carry; what it could not spell was a
+  shape the backend recognises. Measured on a four-limb add: 15
+  instructions through these, against 26 for the hand-rolled wrap test
+  they replace — the four limbs now legalise to `add; adc; adc; adc`.
+
+### Changed
+
+- **ChaCha20 is a vector kernel: 577 → 1064 MB/s (1.84×).** Written in
+  pure NURL on the `v128` primitives, two blocks interleaved. The
+  one-block kernel was the instructive failure: a quarter of the
+  instructions but only a twentieth of the time, because a single
+  ChaCha block is one dependency chain and retires 1.5 instructions per
+  cycle where the scalar path's four independent quarter-rounds run at
+  the machine's 4.2 issue limit. Two chains fill the pipeline. Output is
+  byte-identical to the scalar path, which remains as the reference and
+  as the big-endian implementation (`compiler/tests/chacha20_simd_agree.nu`
+  pins every length 0–300 at three counters and offsets).
+
+- **HTTP head parsing scans sixteen bytes at a time.** `__find_head_end`,
+  `__bindex_crlf`, `__bindex_byte`, `__skip_ows` and `__string_eq_ci`
+  now run on `stdlib/std/simd.nu`'s vector scanners instead of per-byte
+  loops (and one libc `memmem`). The CRLF and `\r\n\r\n` searches are a
+  single pass: compare against CR and LF, then AND the two bitmasks
+  against themselves shifted, so a bit survives only where the sequence
+  actually begins. Case-insensitive header matching folds only `A`–`Z`,
+  so `^` and `~` — both legal HTTP token characters, and both folded
+  together by the usual `x | 32` trick — stay distinct.
+
+- **P-256, P-256 scalar and X25519 field arithmetic on the new
+  primitives.** The CIOS Montgomery loops in `__p256_mul_d` and
+  `__sn_mul` are unrolled and register-resident; `__sn_mul` no longer
+  allocates and frees a 48-byte accumulator on every scalar multiply.
+  The five hash modules take their rotations from `nurl_rotl/rotr`
+  rather than a shift pair and an `or`.
+
+- **Measured end to end** (12-core Haswell-E, C=10, keep-alive, against
+  the same host's `hyper` / `tokio-rustls`): plaintext 20.90 → 20.10 µs
+  CPU per request, TLS 27.60 → 26.40 µs. NURL was already cheaper per
+  request than hyper on plaintext (22.70 µs) and is now cheaper than
+  tokio-rustls on TLS too (26.70 µs).
+
+- **The QEMU guest gates boot the SIMD corpus on all three
+  architectures.** `v128` is the one part of the language whose codegen
+  genuinely differs per ISA — `nurl_v128_eqmask8` is a `pmovmskb` on
+  x86-64 and a shift-and-narrow sequence on AArch64, and an `align 1`
+  vector load is a different instruction on each — so a lane or bit
+  order that came out backwards would be silent everywhere the tests
+  did not look. `run_qemu_tests.sh`, `run_qemu_arm64_tests.sh` and
+  `run_qemu_riscv64_tests.sh` now boot `simd_scan`, `wide_arith`,
+  `chacha20_simd_agree` and `http_request_parser` against the same
+  hosted goldens, alongside the existing corpus. Four seconds under TCG.
+  Verified: AArch64 19/19, RISC-V 20/20 (both including `httpd`, the
+  guest HTTP server against a host client), x86-64 boots the four new
+  ones too. The hosted cross-builds were driven as well — the
+  `bench/http_server.nu` binary cross-linked for `aarch64-linux-musl`
+  and `riscv64-linux-musl` serves correct plaintext responses under
+  qemu-user, and negotiates TLS 1.3 `TLS_CHACHA20_POLY1305_SHA256` with
+  a real OpenSSL client on both.
+
 ## [0.39.0] — 2026-08-12
 
 The diagnostics-hardening release. A corpus-wide mutation probe (one

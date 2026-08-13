@@ -25,9 +25,11 @@ $ `stdlib/std/bytes.nu`
 
 // Right-rotate a u64 by c bits (0 < c < 64).
 @ __b2b_rotr u64 x i c → u64 {
-    : u64 cu # u64 c
-    : u64 inv # u64 - 64 c
-    ^ | >> x cu << x inv
+    // One `ror` instruction via the compiler's funnel-shift primitive,
+    // rather than a shift pair, an `or` and the two intermediate
+    // values they need materialised — see __sha256_rotr for the full
+    // note. Every ISA NURL targets has the instruction.
+    ^ # u64 ( nurl_rotr64 # u64 x # u64 c )
 }
 
 // The eight BLAKE2b IV words (identical to the SHA-512 IV).

@@ -194,73 +194,190 @@ $ `stdlib/core/vec.nu`
     : ~ u64 t3 0
     : ~ u64 t4 0
     : ~ u64 t5 0
-    : ~ u64 bi 0
     : ~ u64 m 0
-    : ~ u64 lo 0
-    : ~ u64 hi 0
-    : ~ u64 s 0
     : ~ u64 cr 0
-    // Each accumulate step is the same three lines: multiply, add the low
-    // half into t[j] threading the incoming carry, then form the outgoing
-    // carry as the product's high half plus the two possible add-wraps.
-    // The unsigned wrap of `x + y` is detected as `(x+y) < x`.
-    : ~ i i 0
-    ~ < i 4 {
-        = bi ? == i 0 b0 ? == i 1 b1 ? == i 2 b2 b3
-        // t += a · bi  (four 64×64→128 products, carry threaded through cr)
-        = lo * a0 bi = hi ( nurl_umulhi a0 bi )
-        = s + t0 lo = t0 + s 0
-        = cr + hi ? < s lo 1 0
-        = lo * a1 bi = hi ( nurl_umulhi a1 bi )
-        = s + t1 lo = t1 + s cr
-        = cr + hi + ? < s lo 1 0 ? < t1 s 1 0
-        = lo * a2 bi = hi ( nurl_umulhi a2 bi )
-        = s + t2 lo = t2 + s cr
-        = cr + hi + ? < s lo 1 0 ? < t2 s 1 0
-        = lo * a3 bi = hi ( nurl_umulhi a3 bi )
-        = s + t3 lo = t3 + s cr
-        = cr + hi + ? < s lo 1 0 ? < t3 s 1 0
-        = s + t4 cr
-        = t5 + t5 ? < s t4 1 0
-        = t4 s
-        // Reduction: m = t0 (since −p^-1 ≡ 1), then t += m·p, drop the low
-        // limb. p limbs: P0 = 2^64−1, P1 = 2^32−1, P2 = 0, P3 = 2^64−2^32+1.
-        = m t0
-        // j=0: t0 + m·P0 is 0 in the low word (the reduction's point);
-        // only its carry survives.
-        = lo * m 18446744073709551615 = hi ( nurl_umulhi m 18446744073709551615 )
-        = s + t0 lo
-        = cr + hi ? < s lo 1 0
-        // j=1: P1 = 2^32−1
-        = lo * m 4294967295 = hi ( nurl_umulhi m 4294967295 )
-        = s + t1 lo = t1 + s cr
-        = cr + hi + ? < s lo 1 0 ? < t1 s 1 0
-        // j=2: P2 = 0 — just fold the incoming carry. The wrap must be read
-        // against `cr` (the addend), not the just-overwritten t2.
-        = s + t2 cr
-        = t2 s
-        = cr ? < s cr 1 0
-        // j=3: P3 = 2^64−2^32+1
-        = lo * m 18446744069414584321 = hi ( nurl_umulhi m 18446744069414584321 )
-        = s + t3 lo = t3 + s cr
-        = cr + hi + ? < s lo 1 0 ? < t3 s 1 0
-        // Fold cr into the top words, then divide by 2^64: shift down one limb.
-        = s + t4 cr
-        = t5 + t5 ? < s t4 1 0
-        = t4 s
-        = t0 t1 = t1 t2 = t2 t3 = t3 t4 = t4 t5 = t5 0
-        = i + i 1
-    }
+    // Every accumulate step is ONE primitive pair: `t[j] + a[j]·bi + carry`
+    // is exactly `nurl_mac`, whose `_lo` is the new limb and whose `_hi` is
+    // the outgoing carry. Both halves come out of one i128 expression, so
+    // the backend emits `mulx` for the product and threads the carry in the
+    // flag register — an `adc` chain. The previous shape spelled the same
+    // arithmetic as a `*` / `nurl_umulhi` pair plus two hand-written wrap
+    // tests (`? < s lo 1 0`), which reads the flags a plain `mul` would
+    // clobber and so forced the multiply, the compare, the `setb` and the
+    // add to serialise through the ALU, four instructions deep, per limb.
+    // Every accumulate step is ONE primitive pair: `t[j] + a[j]·bi + carry`
+    // is exactly `nurl_mac`, whose `_lo` is the new limb and whose `_hi` is
+    // the outgoing carry. Both halves come out of one i128 expression, so
+    // the backend emits a single widening multiply for the product and
+    // threads the carry in the flag register as an `adc` chain. The
+    // previous shape spelled the same arithmetic as a `*` / `nurl_umulhi`
+    // pair plus two hand-written wrap tests (`? < s lo 1 0`), which read
+    // the flags a plain `mul` would clobber and so forced the multiply,
+    // the compare, the `setb` and the add to serialise through the ALU.
+    //
+    // The four rounds are written out rather than looped. `b[i]` inside a
+    // loop is a chain of three compares and three conditional moves per
+    // round — six instructions to re-derive a value that is a constant of
+    // the round — and rolled up, the accumulator t0..t5 has to survive
+    // the back edge, which pins it to memory. Unrolled, `bi` disappears
+    // into the operand of the multiply and the whole accumulator lives in
+    // registers from the first product to the last. Measured on this
+    // function: 191 instructions rolled, against 137 unrolled, for the
+    // same arithmetic.
+    // ── round 0: t += a·b0, then one Montgomery reduction ──
+    = cr ( nurl_mac_hi a0 b0 t0 0 )
+    = t0 ( nurl_mac_lo a0 b0 t0 0 )
+    : u64 q01 ( nurl_mac_lo a1 b0 t1 cr )
+    = cr ( nurl_mac_hi a1 b0 t1 cr )
+    = t1 q01
+    : u64 q02 ( nurl_mac_lo a2 b0 t2 cr )
+    = cr ( nurl_mac_hi a2 b0 t2 cr )
+    = t2 q02
+    : u64 q03 ( nurl_mac_lo a3 b0 t3 cr )
+    = cr ( nurl_mac_hi a3 b0 t3 cr )
+    = t3 q03
+    = t5 ( nurl_addc_lo t5 ( nurl_addc_hi t4 cr 0 ) 0 )
+    = t4 ( nurl_addc_lo t4 cr 0 )
+    // m = t0, since −p^-1 ≡ 1 (mod 2^64): no multiply to find it.
+    = m t0
+    // j=0: the low word of t0 + m·P0 is 0 by construction — that IS
+    // the reduction — so only the carry out of it survives.
+    = cr ( nurl_mac_hi m 18446744073709551615 t0 0 )
+    // j=1: P1 = 2^32−1
+    : u64 w01 ( nurl_mac_lo m 4294967295 t1 cr )
+    = cr ( nurl_mac_hi m 4294967295 t1 cr )
+    = t1 w01
+    // j=2: P2 = 0 — no product, just fold the incoming carry.
+    : u64 w02 ( nurl_addc_lo t2 cr 0 )
+    = cr ( nurl_addc_hi t2 cr 0 )
+    = t2 w02
+    // j=3: P3 = 2^64−2^32+1
+    : u64 w03 ( nurl_mac_lo m 18446744069414584321 t3 cr )
+    = cr ( nurl_mac_hi m 18446744069414584321 t3 cr )
+    = t3 w03
+    // Fold cr into the top words, then divide by 2^64 — the shift
+    // down by one limb that gives CIOS its name.
+    = t5 ( nurl_addc_lo t5 ( nurl_addc_hi t4 cr 0 ) 0 )
+    = t4 ( nurl_addc_lo t4 cr 0 )
+    = t0 t1 = t1 t2 = t2 t3 = t3 t4 = t4 t5 = t5 0
+    // ── round 1: t += a·b1, then one Montgomery reduction ──
+    = cr ( nurl_mac_hi a0 b1 t0 0 )
+    = t0 ( nurl_mac_lo a0 b1 t0 0 )
+    : u64 q11 ( nurl_mac_lo a1 b1 t1 cr )
+    = cr ( nurl_mac_hi a1 b1 t1 cr )
+    = t1 q11
+    : u64 q12 ( nurl_mac_lo a2 b1 t2 cr )
+    = cr ( nurl_mac_hi a2 b1 t2 cr )
+    = t2 q12
+    : u64 q13 ( nurl_mac_lo a3 b1 t3 cr )
+    = cr ( nurl_mac_hi a3 b1 t3 cr )
+    = t3 q13
+    = t5 ( nurl_addc_lo t5 ( nurl_addc_hi t4 cr 0 ) 0 )
+    = t4 ( nurl_addc_lo t4 cr 0 )
+    // m = t0, since −p^-1 ≡ 1 (mod 2^64): no multiply to find it.
+    = m t0
+    // j=0: the low word of t0 + m·P0 is 0 by construction — that IS
+    // the reduction — so only the carry out of it survives.
+    = cr ( nurl_mac_hi m 18446744073709551615 t0 0 )
+    // j=1: P1 = 2^32−1
+    : u64 w11 ( nurl_mac_lo m 4294967295 t1 cr )
+    = cr ( nurl_mac_hi m 4294967295 t1 cr )
+    = t1 w11
+    // j=2: P2 = 0 — no product, just fold the incoming carry.
+    : u64 w12 ( nurl_addc_lo t2 cr 0 )
+    = cr ( nurl_addc_hi t2 cr 0 )
+    = t2 w12
+    // j=3: P3 = 2^64−2^32+1
+    : u64 w13 ( nurl_mac_lo m 18446744069414584321 t3 cr )
+    = cr ( nurl_mac_hi m 18446744069414584321 t3 cr )
+    = t3 w13
+    // Fold cr into the top words, then divide by 2^64 — the shift
+    // down by one limb that gives CIOS its name.
+    = t5 ( nurl_addc_lo t5 ( nurl_addc_hi t4 cr 0 ) 0 )
+    = t4 ( nurl_addc_lo t4 cr 0 )
+    = t0 t1 = t1 t2 = t2 t3 = t3 t4 = t4 t5 = t5 0
+    // ── round 2: t += a·b2, then one Montgomery reduction ──
+    = cr ( nurl_mac_hi a0 b2 t0 0 )
+    = t0 ( nurl_mac_lo a0 b2 t0 0 )
+    : u64 q21 ( nurl_mac_lo a1 b2 t1 cr )
+    = cr ( nurl_mac_hi a1 b2 t1 cr )
+    = t1 q21
+    : u64 q22 ( nurl_mac_lo a2 b2 t2 cr )
+    = cr ( nurl_mac_hi a2 b2 t2 cr )
+    = t2 q22
+    : u64 q23 ( nurl_mac_lo a3 b2 t3 cr )
+    = cr ( nurl_mac_hi a3 b2 t3 cr )
+    = t3 q23
+    = t5 ( nurl_addc_lo t5 ( nurl_addc_hi t4 cr 0 ) 0 )
+    = t4 ( nurl_addc_lo t4 cr 0 )
+    // m = t0, since −p^-1 ≡ 1 (mod 2^64): no multiply to find it.
+    = m t0
+    // j=0: the low word of t0 + m·P0 is 0 by construction — that IS
+    // the reduction — so only the carry out of it survives.
+    = cr ( nurl_mac_hi m 18446744073709551615 t0 0 )
+    // j=1: P1 = 2^32−1
+    : u64 w21 ( nurl_mac_lo m 4294967295 t1 cr )
+    = cr ( nurl_mac_hi m 4294967295 t1 cr )
+    = t1 w21
+    // j=2: P2 = 0 — no product, just fold the incoming carry.
+    : u64 w22 ( nurl_addc_lo t2 cr 0 )
+    = cr ( nurl_addc_hi t2 cr 0 )
+    = t2 w22
+    // j=3: P3 = 2^64−2^32+1
+    : u64 w23 ( nurl_mac_lo m 18446744069414584321 t3 cr )
+    = cr ( nurl_mac_hi m 18446744069414584321 t3 cr )
+    = t3 w23
+    // Fold cr into the top words, then divide by 2^64 — the shift
+    // down by one limb that gives CIOS its name.
+    = t5 ( nurl_addc_lo t5 ( nurl_addc_hi t4 cr 0 ) 0 )
+    = t4 ( nurl_addc_lo t4 cr 0 )
+    = t0 t1 = t1 t2 = t2 t3 = t3 t4 = t4 t5 = t5 0
+    // ── round 3: t += a·b3, then one Montgomery reduction ──
+    = cr ( nurl_mac_hi a0 b3 t0 0 )
+    = t0 ( nurl_mac_lo a0 b3 t0 0 )
+    : u64 q31 ( nurl_mac_lo a1 b3 t1 cr )
+    = cr ( nurl_mac_hi a1 b3 t1 cr )
+    = t1 q31
+    : u64 q32 ( nurl_mac_lo a2 b3 t2 cr )
+    = cr ( nurl_mac_hi a2 b3 t2 cr )
+    = t2 q32
+    : u64 q33 ( nurl_mac_lo a3 b3 t3 cr )
+    = cr ( nurl_mac_hi a3 b3 t3 cr )
+    = t3 q33
+    = t5 ( nurl_addc_lo t5 ( nurl_addc_hi t4 cr 0 ) 0 )
+    = t4 ( nurl_addc_lo t4 cr 0 )
+    // m = t0, since −p^-1 ≡ 1 (mod 2^64): no multiply to find it.
+    = m t0
+    // j=0: the low word of t0 + m·P0 is 0 by construction — that IS
+    // the reduction — so only the carry out of it survives.
+    = cr ( nurl_mac_hi m 18446744073709551615 t0 0 )
+    // j=1: P1 = 2^32−1
+    : u64 w31 ( nurl_mac_lo m 4294967295 t1 cr )
+    = cr ( nurl_mac_hi m 4294967295 t1 cr )
+    = t1 w31
+    // j=2: P2 = 0 — no product, just fold the incoming carry.
+    : u64 w32 ( nurl_addc_lo t2 cr 0 )
+    = cr ( nurl_addc_hi t2 cr 0 )
+    = t2 w32
+    // j=3: P3 = 2^64−2^32+1
+    : u64 w33 ( nurl_mac_lo m 18446744069414584321 t3 cr )
+    = cr ( nurl_mac_hi m 18446744069414584321 t3 cr )
+    = t3 w33
+    // Fold cr into the top words, then divide by 2^64 — the shift
+    // down by one limb that gives CIOS its name.
+    = t5 ( nurl_addc_lo t5 ( nurl_addc_hi t4 cr 0 ) 0 )
+    = t4 ( nurl_addc_lo t4 cr 0 )
+    = t0 t1 = t1 t2 = t2 t3 = t3 t4 = t4 t5 = t5 0
     // t0..t3 is the 256-bit result, t4 the extra top word; value < 2p.
     // Conditional subtract p (4×64), then unpack the winner to 8×32 in dst.
-    : u64 d0 - t0 18446744073709551615
-    : ~ u64 bb ? < t0 18446744073709551615 1 0
-    : u64 d1 - - t1 4294967295 bb
-    = bb | ? < t1 4294967295 1 0 ? < - t1 4294967295 bb 1 0
-    : u64 d2 - t2 bb
-    = bb ? < t2 bb 1 0
-    : u64 d3 - - t3 18446744069414584321 bb
-    = bb | ? < t3 18446744069414584321 1 0 ? < - t3 18446744069414584321 bb 1 0
+    : u64 d0 ( nurl_subb_lo t0 18446744073709551615 0 )
+    : ~ u64 bb ( nurl_subb_hi t0 18446744073709551615 0 )
+    : u64 d1 ( nurl_subb_lo t1 4294967295 bb )
+    = bb ( nurl_subb_hi t1 4294967295 bb )
+    : u64 d2 ( nurl_subb_lo t2 0 bb )
+    = bb ( nurl_subb_hi t2 0 bb )
+    : u64 d3 ( nurl_subb_lo t3 18446744069414584321 bb )
+    = bb ( nurl_subb_hi t3 18446744069414584321 bb )
     // top word minus the final borrow: negative ⇒ t < p ⇒ keep t.
     : i topb - # i t4 # i bb
     : u64 mask ? < topb 0 0 18446744073709551615
