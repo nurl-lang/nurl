@@ -154,6 +154,16 @@ $ `stdlib/ext/env.nu`
             : String mts ( string_from ( nurl_str_int ? > max_secs 0 max_secs ( httpc_default_max_time ) ) )
             ( vec_push [s] a ( string_data mts ) )
             ( vec_push [String] hold mts )
+            // Stall detection. --max-time alone is a poor deadline: a
+            // connection that dies mid-transfer sat here for the full 300 s
+            // before reporting anything, which reads as "nurlpkg hung". Abort
+            // once the transfer has moved < 1 byte/s for 30 s — a genuinely
+            // slow upload keeps its full --max-time, a dead one gives up in
+            // half a minute. curl reports this as exit 28, same as a timeout.
+            ( vec_push [s] a `--speed-limit` )
+            ( vec_push [s] a `1` )
+            ( vec_push [s] a `--speed-time` )
+            ( vec_push [s] a `30` )
             ( vec_push [s] a `-o` )
             ( vec_push [s] a ( string_data respfile ) )
             ( vec_push [s] a `-w` )
