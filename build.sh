@@ -126,8 +126,26 @@ fi
 # runtime.o-consuming code.
 if (( NO_LTO_IN_SAN == 1 )); then
     LTO_FLAG=""
+    RT_LTO_FLAG=""
 else
     LTO_FLAG="-flto"
+    # On Linux, runtime.o itself is THIN bitcode: a ThinLTO module carries
+    # a summary on top of ordinary bitcode, and GNU ld/gold's LLVMgold
+    # plugin consumes it in a full `-flto` link unchanged (measured:
+    # identical instruction counts on the bench suite), while a
+    # `-flto=thin` link can additionally cache its backend codegen — which
+    # is what lets nurl.sh skip re-lowering the runtime on every single
+    # build (see the ThinLTO cache section there).
+    #
+    # NOT on macOS: ld64's libLTO aborts on the thin/full mix ("LLVM
+    # ERROR: Unexistent dir" out of the stage0 link), and nurl.sh's
+    # cached path is Linux-only anyway — so Darwin keeps the plain
+    # full-LTO runtime it always had.
+    if [ "$(uname -s)" = "Linux" ]; then
+        RT_LTO_FLAG="-flto=thin"
+    else
+        RT_LTO_FLAG="-flto"
+    fi
 fi
 
 LOG="$(mktemp)"
@@ -339,11 +357,12 @@ else
 fi
 
 # ── Build stages ─────────────────────────────────────────────
-# `-flto` makes runtime.o emit LLVM bitcode so vec/string/io FFI calls
-# inline across the runtime ↔ user-code boundary at link time. The
-# matching `-flto` on every clang invocation that consumes runtime.o
-# (this script, nurl.sh, compiler/tests/run_tests.sh, tools/*/build.sh)
-# triggers the LTO link pipeline.
+# $RT_LTO_FLAG makes runtime.o emit LLVM bitcode (on Linux, thin bitcode
+# — see the comment where it is minted) so vec/string/io FFI calls
+# inline across the runtime ↔ user-code boundary at link time. A
+# matching `-flto` or `-flto=thin` on every clang invocation that
+# consumes runtime.o (this script, nurl.sh, compiler/tests/run_tests.sh,
+# tools/*/build.sh) triggers the LTO link pipeline.
 # Bake the toolchain version into runtime.o so `nurlc --version` /
 # `nurlpkg --version` work. tools/version.sh is the single source of truth
 # (git describe / CHANGELOG); the generated header is git-ignored and
@@ -355,7 +374,7 @@ printf '#define NURL_VERSION "%s"\n' "$(bash tools/version.sh 2>/dev/null || ech
 # stdlib/runtime_core.c (bootstrap core) then stdlib/runtime_ffi.c (stdlib
 # FFI shims) into one translation unit, so this stays a single runtime.o.
 # A bootstrap/no_std profile compiles stdlib/runtime_core.c on its own.
-step "runtime"       bash -c "'$CLANG' -O2 $LTO_FLAG $SAN_CFLAGS $CURL_CFLAGS $OPENSSL_CFLAGS $SQLITE3_CFLAGS $ZLIB_CFLAGS -c stdlib/runtime.c -o stdlib/runtime.o"
+step "runtime"       bash -c "'$CLANG' -O2 $RT_LTO_FLAG $SAN_CFLAGS $CURL_CFLAGS $OPENSSL_CFLAGS $SQLITE3_CFLAGS $ZLIB_CFLAGS -c stdlib/runtime.c -o stdlib/runtime.o"
 
 # Under `-flto` the `runtime.o` above is LLVM bitcode, which a plain GNU
 # `ld` cannot link. The LTO consumers (this script, nurl.sh, the test

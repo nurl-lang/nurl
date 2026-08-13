@@ -171,25 +171,52 @@ time_cell() {
 # ── compile helpers ──────────────────────────────────────────────
 # nurlc resolves `$ "stdlib/..."` imports relative to its working
 # directory, so every compile and every run happens from $ROOT.
-compile_nurl() {           # <src.nu> <outbase> -> "<frontend_ms> <total_ms>" or FAIL
-    local src="$1" ll="$2.ll" bin="$2.nurl.bin"
-    local fe=() tot=() r f l
+compile_nurl() {           # <src.nu> <outbase> -> "<frontend_ms> <total_ms> <warm_total_ms>" or FAIL
+    local src="$1" ll="$2.ll" obj="$2.nurl.o" bin="$2.nurl.bin"
+    local fe=() tot=() wtot=() r f c l w cachedir="$BUILD/.ltocache"
     for ((r = 0; r < COMPILE_REPS; r++)); do
         f="$(cd "$ROOT" && TIME_STDOUT="$ll" time_ms "$NURLC" "$src")"
         [[ "$f" == FAIL || "$f" == TIMEOUT ]] && { echo FAIL; return 1; }
-        # One module, full LTO — which is also what `nurl.sh` does for
-        # every program in this corpus. Its parallel-lowering path
-        # (`nurlc --split`, docs/BUILDING.md) needs ~256 KB of IR before
-        # it engages, and the largest benchmark here emits 112 KB. If a
-        # benchmark ever grows past that, this line stops matching the
-        # driver and the compile column below has to say so.
-        # shellcheck disable=SC2086
-        l="$(cd "$ROOT" && time_ms clang $OPT -flto -Wl,--as-needed "$ll" "$RUNTIME" \
-                 -lm -lpthread $EXTRA_LIBS -o "$bin")"
-        [[ "$l" == FAIL || "$l" == TIMEOUT ]] && { echo FAIL; return 1; }
-        fe+=("$f"); tot+=("$(awk -v a="$f" -v b="$l" 'BEGIN { printf "%.3f", a + b }')")
+        if [[ "$(uname -s)" == Linux ]]; then
+            # Driver parity: `nurl.sh` lowers the module to thin bitcode,
+            # then links with a ThinLTO O3 backend and a codegen cache
+            # (docs/BUILDING.md → The ThinLTO cache). Every benchmark
+            # here is below the --split threshold, so it is one module.
+            # COLD is measured against a wiped cache — that is what the
+            # C and Rust columns mean too, so the totals stay
+            # comparable. WARM is the same link again with the cache
+            # populated: what a rebuild costs. Its total is frontend +
+            # link, no -c step — the driver's object cache serves the
+            # unchanged bitcode by content hash on a rebuild.
+            rm -rf "$cachedir" && mkdir -p "$cachedir"
+            # shellcheck disable=SC2086
+            c="$(cd "$ROOT" && time_ms clang $OPT -flto=thin -c "$ll" -o "$obj")"
+            [[ "$c" == FAIL || "$c" == TIMEOUT ]] && { echo FAIL; return 1; }
+            # shellcheck disable=SC2086
+            l="$(cd "$ROOT" && time_ms clang $OPT -flto=thin -Wl,-plugin-opt,O3 \
+                     -Wl,-plugin-opt,cache-dir="$cachedir" -Wl,--as-needed "$obj" "$RUNTIME" \
+                     -lm -lpthread $EXTRA_LIBS -o "$bin")"
+            [[ "$l" == FAIL || "$l" == TIMEOUT ]] && { echo FAIL; return 1; }
+            # shellcheck disable=SC2086
+            w="$(cd "$ROOT" && time_ms clang $OPT -flto=thin -Wl,-plugin-opt,O3 \
+                     -Wl,-plugin-opt,cache-dir="$cachedir" -Wl,--as-needed "$obj" "$RUNTIME" \
+                     -lm -lpthread $EXTRA_LIBS -o "$bin")"
+            [[ "$w" == FAIL || "$w" == TIMEOUT ]] && { echo FAIL; return 1; }
+            fe+=("$f")
+            tot+=("$(awk -v a="$f" -v b="$c" -v d="$l" 'BEGIN { printf "%.3f", a + b + d }')")
+            wtot+=("$(awk -v a="$f" -v b="$w" 'BEGIN { printf "%.3f", a + b }')")
+        else
+            # Non-Linux fallback: the plugin-opt spellings above are
+            # GNU-ld/gold/lld; match the driver's full-LTO path instead.
+            # shellcheck disable=SC2086
+            l="$(cd "$ROOT" && time_ms clang $OPT -flto -Wl,--as-needed "$ll" "$RUNTIME" \
+                     -lm -lpthread $EXTRA_LIBS -o "$bin")"
+            [[ "$l" == FAIL || "$l" == TIMEOUT ]] && { echo FAIL; return 1; }
+            fe+=("$f"); tot+=("$(awk -v a="$f" -v b="$l" 'BEGIN { printf "%.3f", a + b }')")
+            wtot+=("n/a")
+        fi
     done
-    echo "$(median "${fe[@]}") $(median "${tot[@]}")"
+    echo "$(median "${fe[@]}") $(median "${tot[@]}") $(median "${wtot[@]}")"
 }
 
 compile_c() {              # <src.c> <outbase> -> "<ms>" or FAIL
@@ -249,7 +276,7 @@ printf 'fn main() {}\n'                  > "$floor_dir/floor.rs"
 # The same compile path the benchmarks take, so the compile-time table
 # has a floor to subtract too: for NURL that floor is the LTO link
 # against stdlib/runtime.o, which every NURL binary pays whatever it does.
-read -r floor_cc_nurl_fe floor_cc_nurl <<<"$(compile_nurl "$floor_dir/floor.nu" "$floor_dir/floor")"
+read -r floor_cc_nurl_fe floor_cc_nurl floor_cc_nurl_warm <<<"$(compile_nurl "$floor_dir/floor.nu" "$floor_dir/floor")"
 floor_cc_c="$(compile_c "$floor_dir/floor.c" "$floor_dir/floor")"
 floor_cc_rust="$(compile_rust "$floor_dir/floor.rs" "$floor_dir/floor")"
 
@@ -265,7 +292,7 @@ read -r floor_python _ <<<"$(cd "$ROOT" && time_cell python3 "$floor_dir/floor.p
 r_checksum=(); r_verified=(); r_detail=()
 r_nurl=(); r_c=(); r_rust=(); r_node=(); r_python=()
 r_nurl_reps=(); r_c_reps=(); r_rust_reps=(); r_node_reps=(); r_python_reps=()
-r_cc_nurl_fe=(); r_cc_nurl=(); r_cc_c=(); r_cc_rust=()
+r_cc_nurl_fe=(); r_cc_nurl=(); r_cc_nurl_warm=(); r_cc_c=(); r_cc_rust=()
 
 progress() { printf '\r\033[K  %-18s %s' "$1" "$2" >&2; }
 
@@ -273,10 +300,11 @@ for idx in "${!names[@]}"; do
     b="${names[$idx]}"
 
     progress "$b" "compiling…"
-    read -r cc_fe cc_nurl <<<"$(compile_nurl "$BENCH/$b.nu" "$BUILD/$b")"
+    read -r cc_fe cc_nurl cc_nurl_warm <<<"$(compile_nurl "$BENCH/$b.nu" "$BUILD/$b")"
     cc_c="$(compile_c "$BENCH/$b.c" "$BUILD/$b")"
     cc_rust="$(compile_rust "$BENCH/$b.rs" "$BUILD/$b")"
     r_cc_nurl_fe+=("${cc_fe:-FAIL}"); r_cc_nurl+=("${cc_nurl:-FAIL}")
+    r_cc_nurl_warm+=("${cc_nurl_warm:-FAIL}")
     r_cc_c+=("$cc_c"); r_cc_rust+=("$cc_rust")
 
     progress "$b" "verifying…"
@@ -353,8 +381,9 @@ emit_json() {
     printf '  "floor_ms": { "nurl": %s, "c": %s, "rust": %s, "node": %s, "python": %s },\n' \
         "$(jnum "$floor_nurl")" "$(jnum "$floor_c")" "$(jnum "$floor_rust")" \
         "$(jnum "$floor_node")" "$(jnum "$floor_python")"
-    printf '  "floor_compile_ms": { "nurl_frontend": %s, "nurl": %s, "c": %s, "rust": %s },\n' \
+    printf '  "floor_compile_ms": { "nurl_frontend": %s, "nurl": %s, "nurl_warm": %s, "c": %s, "rust": %s },\n' \
         "$(jnum "$floor_cc_nurl_fe")" "$(jnum "$floor_cc_nurl")" \
+        "$(jnum "$floor_cc_nurl_warm")" \
         "$(jnum "$floor_cc_c")" "$(jnum "$floor_cc_rust")"
     printf '  "benchmarks": [\n'
     local i last=$(( ${#names[@]} - 1 ))
@@ -371,8 +400,9 @@ emit_json() {
         printf '      "reps": { "nurl": %s, "c": %s, "rust": %s, "node": %s, "python": %s },\n' \
             "${r_nurl_reps[$i]}" "${r_c_reps[$i]}" "${r_rust_reps[$i]}" \
             "${r_node_reps[$i]}" "${r_python_reps[$i]}"
-        printf '      "compile_ms": { "nurl_frontend": %s, "nurl": %s, "c": %s, "rust": %s }\n' \
+        printf '      "compile_ms": { "nurl_frontend": %s, "nurl": %s, "nurl_warm": %s, "c": %s, "rust": %s }\n' \
             "$(jnum "${r_cc_nurl_fe[$i]}")" "$(jnum "${r_cc_nurl[$i]}")" \
+            "$(jnum "${r_cc_nurl_warm[$i]}")" \
             "$(jnum "${r_cc_c[$i]}")" "$(jnum "${r_cc_rust[$i]}")"
         printf '    }%s\n' "$( (( i < last )) && echo ',' )"
     done
@@ -437,24 +467,31 @@ emit_md() {
     printf '## 2. Compile time (median, ms)\n\n'
     printf "NURL's compile is two stages: \`nurlc\` emits LLVM IR, then \`clang\`\n"
     printf 'lowers and links it against `stdlib/runtime.o`. **NURL total** is the\n'
-    printf 'number comparable to the C and Rust columns. The floor row is what each\n'
-    printf 'toolchain costs for a program that does nothing — for NURL that is\n'
-    printf 'dominated by the LTO link every NURL binary pays for, so subtract it to\n'
-    printf 'read the marginal cost of the benchmark itself. Node and Python have no\n'
-    printf 'column here: they compile at run time, inside their own cells above.\n\n'
-    printf '| Benchmark | NURL `nurlc` | NURL `clang` | **NURL total** | C `clang` | Rust `rustc` |\n'
-    printf '|---|---:|---:|---:|---:|---:|\n'
-    printf '| _(floor: empty program)_ | _%s_ | _%s_ | _**%s**_ | _%s_ | _%s_ |\n' \
+    printf 'number comparable to the C and Rust columns: a cold compile, measured\n'
+    printf 'against a wiped cache exactly as C and Rust pay their full cost every\n'
+    printf 'time. **NURL rebuild** is the same compile again with the ThinLTO\n'
+    printf "cache warm — \`nurl.sh\`'s default on Linux (docs/BUILDING.md → The\n"
+    printf 'ThinLTO cache) — which is what every build after the first costs; C\n'
+    printf 'and Rust have no default equivalent (`ccache`/`sccache` are opt-in\n'
+    printf 'add-ons). The floor row is what each toolchain costs for a program\n'
+    printf 'that does nothing — for NURL that is dominated by the LTO link every\n'
+    printf 'NURL binary pays for, so subtract it to read the marginal cost of the\n'
+    printf 'benchmark itself. Node and Python have no column here: they compile\n'
+    printf 'at run time, inside their own cells above.\n\n'
+    printf '| Benchmark | NURL `nurlc` | NURL `clang` | **NURL total** | NURL rebuild | C `clang` | Rust `rustc` |\n'
+    printf '|---|---:|---:|---:|---:|---:|---:|\n'
+    printf '| _(floor: empty program)_ | _%s_ | _%s_ | _**%s**_ | _%s_ | _%s_ | _%s_ |\n' \
         "$floor_cc_nurl_fe" \
         "$(awk -v t="$floor_cc_nurl" -v f="$floor_cc_nurl_fe" \
             'BEGIN { if (t ~ /^[0-9.]+$/ && f ~ /^[0-9.]+$/) printf "%.3f", t - f; else print "n/a" }')" \
-        "$floor_cc_nurl" "$floor_cc_c" "$floor_cc_rust"
+        "$floor_cc_nurl" "$floor_cc_nurl_warm" "$floor_cc_c" "$floor_cc_rust"
     for i in "${!names[@]}"; do
         local link
         link="$(awk -v t="${r_cc_nurl[$i]}" -v f="${r_cc_nurl_fe[$i]}" \
             'BEGIN { if (t ~ /^[0-9.]+$/ && f ~ /^[0-9.]+$/) printf "%.3f", t - f; else print "n/a" }')"
-        printf '| `%s` | %s | %s | **%s** | %s | %s |\n' "${names[$i]}" \
-            "${r_cc_nurl_fe[$i]}" "$link" "${r_cc_nurl[$i]}" "${r_cc_c[$i]}" "${r_cc_rust[$i]}"
+        printf '| `%s` | %s | %s | **%s** | %s | %s | %s |\n' "${names[$i]}" \
+            "${r_cc_nurl_fe[$i]}" "$link" "${r_cc_nurl[$i]}" "${r_cc_nurl_warm[$i]}" \
+            "${r_cc_c[$i]}" "${r_cc_rust[$i]}"
     done
     printf '\n'
 

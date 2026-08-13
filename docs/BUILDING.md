@@ -224,6 +224,73 @@ prove the programs match.
 
 Windows (`nurl.bat`) links a single module and is unaffected.
 
+## The ThinLTO cache
+
+Parallel lowering makes one build use every core; the cache makes the
+*next* build skip most of the work. On native Linux, `nurl.sh` links
+with ThinLTO by default and keeps three caches under `~/.cache/nurl`:
+
+1. **The link's backend codegen** (`thinlto/`): ThinLTO keys each
+   module's post-import optimisation and codegen by a hash of the
+   module, everything it imports, and the entire flag set (LLVM bakes
+   its own version in). `stdlib/runtime.o` is thin bitcode, so the
+   runtime — re-optimised from scratch by every full-LTO link since the
+   language existed — is a cache hit for every build after the first,
+   of *any* program. Auto-pruned to 2 GB.
+2. **The pre-link compile** (`objs/`): the `-c` step that runs the -O2
+   pipeline over the emitted `.ll` is a pure function of the IR bytes
+   and the flags, so its object is cached by content hash. A rebuild
+   whose IR didn't change — and, on a split build, every *part* an edit
+   didn't touch — is a file copy. Pruned after two weeks unused.
+3. **The toolchain probes** (`probes.*`): the opaque-pointer parse
+   probe and the feature-lib trial links (~190 ms, before every build,
+   answering questions about the *toolchain*) are cached keyed by the
+   compiler binary, the system library directories' mtimes, and the
+   stdlib feature sentinels — so installing a library or swapping
+   clang re-probes, and nothing else does.
+
+**The O3 link backend.** Plain ThinLTO at `-O2` loses full LTO's second
+optimisation round: `bench/sort_window`'s compare/exchange mill came out
+2.3× the instructions (branches where full LTO's second pass had found
+50 `cmov`s), and this is exactly the penalty the split-floor note above
+documents. Running the ThinLTO *backend* at O3 (`-plugin-opt,O3`; the
+pre-link compile stays at your `-O`) restores every such case measured —
+identical instruction counts suite-wide — and improves one outright:
+`bench/nbody` retires **36% fewer instructions** than the full-LTO
+default it replaces. The cached path is not a build-speed/run-speed
+trade; it is at worst run-speed-neutral.
+
+Measured end to end (12-core Haswell-E, warm cache, unchanged source):
+
+| build | before | first (cold) | rebuild (warm) |
+|---|---:|---:|---:|
+| empty program | 305 ms | ~310 ms | **99 ms** |
+| `bench/json_parse` | 840 ms | ~780 ms | **156 ms** |
+| `bench/json_parse`, after a one-line edit | 840 ms | — | **574 ms** |
+| `bench/http_server` (splits ×12) | 1.96 s | 1.96 s | **0.67 s** |
+
+The edit-rebuild row is the honest one: a changed module is re-optimised
+(that is the correctness contract), so what the cache buys there is the
+runtime, the probes, and every split part the edit didn't touch. For the
+fastest possible edit loop on a mid-sized program, `NURL_SPLIT_MIN=16384`
+cuts finer parts so less is re-optimised per edit (`json_parse` edit
+rebuild: 574 ms → 310 ms) — opt-in, because parts that small cost run
+speed (+7% instructions on `json_parse`; see the split-floor note).
+
+Controls:
+
+| | |
+|---|---|
+| `NURL_LTO=full` | one full-LTO module, nothing cached — with `NURL_SPLIT=0`, the maximal-inlining release build. |
+| `NURL_CACHE=0` | ThinLTO still on, all three caches off. |
+| `NURL_CACHE_DIR=DIR` | move the caches (default `$XDG_CACHE_HOME/nurl`). |
+
+Scope: native Linux clang builds (GNU `ld`/`gold` load `LLVMgold.so`,
+and `lld` accepts the same `-plugin-opt` spellings). The zig-cc cross
+paths, macOS's `ld64`, and Windows (`nurl.bat`) keep the previous
+behaviour: their linkers spell these flags differently, and wiring each
+one up is tracked follow-up work.
+
 ## Debugging with `gdb` / `lldb` (DWARF)
 
 NURL emits DWARF debug info, so a NURL binary drives under `gdb` / `lldb`
