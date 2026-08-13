@@ -92,6 +92,33 @@ folded as zero** into the answer. Example exchange:
 // ← {"task_id":1, "status":"done", ..., "result":333332833333500000}
 ```
 
+### The same flow in the protocol — MCP tasks
+
+That submit/poll pair is exactly what the MCP
+[`io.modelcontextprotocol/tasks`](https://tasks.extensions.modelcontextprotocol.io/specification/draft/tasks)
+extension standardises, so a client that speaks it needs no swarm-specific
+tool knowledge at all. `server/discover` advertises the extension; a client
+that declares it on the call gets a task handle back and polls `tasks/get`:
+
+```jsonc
+// → tools/call compute_submit, with the extension declared in params._meta
+// ← {"resultType":"task", "taskId":"9f3c…", "status":"working",
+//    "ttlMs":3600000, "pollIntervalMs":1000, "createdAt":"…"}
+// → tasks/get {"taskId":"9f3c…"}
+// ← {"resultType":"complete", "taskId":"9f3c…", "status":"completed",
+//    "result":{"content":[{"type":"text","text":"{…\"result\":3333…}"}]}}
+```
+
+The completed task inlines exactly the result `compute_result` would have
+returned, so both styles agree. Eligible tools are the ones that register a
+pollable task: `compute_submit`, `compute_submit_kernel`,
+`compute_submit_cuda`, `compute_sample_cuda`, `compute_histogram_cuda` and
+`compute_run_wasm`. Task creation is server-directed and per-request — a
+client that does not declare the extension gets the plain tool result, and a
+call that submits nothing (argument error, empty cluster) is never turned
+into a task. `tasks/cancel` acks but is cooperative: a swarm task already in
+flight runs to completion.
+
 ## The kernel language
 
 A workload's *map* step is an expression in one variable `x`,
@@ -636,6 +663,10 @@ NURL_STDLIB=<repo> ../../nurl.sh tests/cudakernel_test.nu /tmp/ck && /tmp/ck
 
 # end-to-end: an all-in-one node + MCP over HTTPS + CLI submit + token isolation
 ./tests/live_smoke.sh
+
+# the MCP tasks extension end-to-end (CPU only): capability negotiation,
+# CreateTaskResult, tasks/get polling to completed, and the error paths
+./tests/tasks_smoke.sh
 
 # live GPU end-to-end (skips cleanly without an NVIDIA GPU): compute_submit_cuda
 # on real hardware + mixed CPU/GPU cluster routing
