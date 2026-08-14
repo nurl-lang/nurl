@@ -9738,6 +9738,45 @@
                     ( nurl_print `, label %` ) ( nurl_print arm_label )
                     ( nurl_print `, label %` ) ( nurl_print next_label ) ( emit_dbg_eol )
                 } {
+                    // A named pattern has to name something the scrutinee
+                    // can actually BE. Nothing checked that, and the
+                    // consequence was not a diagnostic: the arm fell
+                    // through to the enum-variant path below, which emits
+                    // `load i64, i64* @<name>` for a global that was never
+                    // defined, and the payload binding got an empty type
+                    // (`alloca ` — "Cannot allocate unsized type"). nurlc
+                    // exited 0 and clang delivered the news, about
+                    // generated IR rather than about the arm.
+                    //
+                    // `?? ( int_parse … ) { Ok val → val  _ → -1 }` is the
+                    // shape that surfaced it, and it is the Rust habit
+                    // rather than a typo — so the message names the NURL
+                    // spelling instead of only rejecting the wrong one.
+                    ? ! ( seq pattern_name `_` ) {
+                        : b __mp_optres & >= ( nurl_str_len match_type ) 6
+                        ( seq ( nurl_str_slice match_type 0 6 ) `{ i1, ` )
+                        ? & __mp_optres ! | ( seq pattern_name `T` ) ( seq pattern_name `F` )
+                        { ( die lex ( nurl_str_cat4
+                            ( nurl_str_cat3 `'` pattern_name `' is not a match arm of an option/result. ` )
+                            `NURL spells them 'T' and 'F', not 'Ok'/'Err'/'Some'/'None': `
+                            `'?? r { T v → <v is the value / Ok payload>  F e → <e is the error> }' `
+                            `(an option's F arm binds nothing: 'F → …'). Add '_ → …' for a catch-all.` ) ) }
+                        {}
+                        // A named enum: the variant must be one of its own.
+                        ? & & ! __mp_optres > ( nurl_str_len match_type ) 1
+                        == ( nurl_str_get match_type 0 ) 37
+                        { : s __mp_en ( nurl_str_slice match_type 1 - ( nurl_str_len match_type ) 1 )
+                            : s __mp_vl ( nurl_sym_get2 syms __mp_en `__variants` )
+                            ? & != 0 ( nurl_str_len __mp_vl )
+                            ! ( str_contains_word __mp_vl pattern_name )
+                            { ( die lex ( nurl_str_cat4
+                                ( nurl_str_cat3 `'` pattern_name `' is not a variant of enum '` )
+                                ( nurl_str_cat3 __mp_en `'. Its variants are: ` __mp_vl )
+                                `. Check the spelling, or add '_ → body' to absorb the rest — a match must be `
+                                `exhaustive, and an unknown name here is not a catch-all.` ) ) }
+                            {} }
+                        {} }
+                    {}
                     // Named variant.  Literal-constrained arms (e.g. `Ok 200`) do NOT
                     // exhaustively cover the variant — only catch-all arms (no literals)
                     // count towards exhaustiveness and as duplicate-arm blockers.

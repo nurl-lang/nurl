@@ -10,6 +10,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A `??` arm must name something the scrutinee can be.** Nothing
+  checked that, and the consequence was not a diagnostic: an
+  unrecognised name fell through to the enum-variant path, which emits
+  `load i64, i64* @<name>` for a global that was never defined, and the
+  arm's payload binding got an empty type —
+
+  ```llvm
+  %r8 = alloca                    ; "Cannot allocate unsized type"
+  %r5 = load i64, i64* @Ok        ; a global that does not exist
+  ```
+
+  — so nurlc exited 0 and clang delivered the news, about generated IR
+  rather than about the arm the writer has to change.
+
+  The shape that surfaced it is the Rust habit rather than a typo:
+
+  ```
+  ?? ( int_parse `123` ) { Ok val → val  _ → -1 }
+  ```
+
+  so the message names the NURL spelling instead of only rejecting the
+  wrong one — `T` and `F`, not `Ok`/`Err`/`Some`/`None`. A misspelled
+  variant of a named enum is reported the same way, and lists the
+  variants that type actually has.
+  (`diag_match_arm_not_a_variant`)
+
+### Fixed
+
 - **Three more ways a heap handle acquires a second name.** #899 closed
   the copy, the `?` / `??` join, the assignment and the
   callee-returns-its-argument spellings. `tools/metamorph` enumerated the
