@@ -1,0 +1,9 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/borrow_strict_handle_second_name_more.nu:42: error: 'a' may already be freed here — its handle is one of the values a '?' selected between at line 40; this second free double-frees on that path (strict-borrowck; restructure so exactly one path frees it)
+    ( vec_free [i] a )
+compiler/tests/borrow_strict_handle_second_name_more.nu:50: error: 'a' may already be freed here — its handle was stored into an aggregate literal at line 48; this second free double-frees on that path (strict-borrowck; restructure so exactly one path frees it)
+    ( vec_free [i] a )
+compiler/tests/borrow_strict_handle_second_name_more.nu:58: error: 'a' may already be freed here — a closure that captured it frees it at line 57; this second free double-frees on that path (strict-borrowck; restructure so exactly one path frees it)
+    ( vec_free [i] a )
+error: compilation aborted — 3 borrow-checker violations (re-run with --no-borrowck to bypass)
