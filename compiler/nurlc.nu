@@ -1145,6 +1145,20 @@
 // Allocated in main().
 : ~ i g_fn_ret_param 0
 
+// Per-function returned-HANDLE map — the ownership dual of
+// g_fn_ret_param, and deliberately a separate map rather than more
+// entries in it. §2.8 asks "may the result be a stack reference?" and
+// drives refdepth propagation; this asks "may the result BE one of the
+// arguments' heap handles?" and drives move tracking. Widening
+// g_fn_ret_param to answer both would have quietly changed every
+// escape diagnostic that reads it.
+// `g_fn_ret_alias[fname]` is the space-separated list of 0-based
+// parameter indices whose handle the body may hand back — from `^ p`
+// and from a `?` / `??` return whose arms select one. Inferred in
+// codegen order; gen_call turns it into a maybe-move of the matching
+// argument binding. docs/MEMORY.md §2.2.
+: ~ i g_fn_ret_alias 0
+
 // Noreturn registry. `g_fn_noreturn[fname]` is `1` when a call to
 // fname never returns to its caller. Seeded with the runtime's true
 // noreturn primitives (nurl_exit, nurl_panic) and grown by inference in
@@ -2819,7 +2833,23 @@
     // stack reference out through the call result.
     ? & ( is_ident_tok ret_first_tt )
     ( seq ( nurl_sym_get syms `__last_ident_name__` ) ret_first_val )
-    { ( bck_record_ret_param syms ret_first_val ) }
+    { ( bck_record_ret_param syms ret_first_val )
+        // …and the ownership half: `^ p` hands p's HANDLE out too.
+        ( bck_record_ret_alias syms ret_first_val ) }
+    {}
+    // `^ ? c p ( fresh )` returns p's handle on one path. gen_cond /
+    // gen_match published which bindings their arms could select
+    // (`__last_phi_idents__`), so the passthrough is visible here even
+    // though the return is not a bare identifier. Ownership only — the
+    // §2.8 refdepth summary above deliberately stays on the strict
+    // `^ p` form, so no escape diagnostic moves because of this.
+    ? != g_borrowck 0
+    { : ~ s __ra_rest ( nurl_sym_get syms `__last_phi_idents__` )
+        ~ != 0 ( nurl_str_len __ra_rest ) {
+            : s __ra_w ( str_first_word __ra_rest )
+            = __ra_rest ( str_skip_word __ra_rest )
+            ( bck_record_ret_alias syms __ra_w )
+        } }
     {}
     // §2.8 (aggregate form): `^ @ T { … param … }` embeds parameters as
     // fields — the returned struct hands each one back out, so record
@@ -7317,6 +7347,10 @@
     // (docs/MEMORY.md §2.8). Empty for a function that returns a fresh
     // value.
     : ~ s callee_ret_param ( nurl_sym_get g_fn_ret_param call_name )
+    // Indices of parameters whose HANDLE the callee may hand back as
+    // its result (docs/MEMORY.md §2.2) — the ownership twin of
+    // callee_ret_param, consulted after the call.
+    : ~ s callee_ret_alias ( nurl_sym_get g_fn_ret_alias call_name )
     // Generic call: g_fn_inout / g_fn_sink for a generic function are
     // keyed by the GENERIC name (the index sets are type-independent,
     // computed once by compute_generic_inout_sink). The mangled
@@ -7335,6 +7369,9 @@
     {}
     ? & == 0 ( nurl_str_len callee_ret_param ) ! ( seq call_name fname )
     { = callee_ret_param ( nurl_sym_get g_fn_ret_param fname ) }
+    {}
+    ? & == 0 ( nurl_str_len callee_ret_alias ) ! ( seq call_name fname )
+    { = callee_ret_alias ( nurl_sym_get g_fn_ret_alias fname ) }
     {}
     // If the callee is known (scan_fn_sigs) to have `inout` parameters
     // but g_fn_inout still has no entry, it is being called BEFORE its
@@ -7377,6 +7414,10 @@
     // referent depth is the max over the callee's returned-parameter
     // indices — propagating a stack reference out (docs/MEMORY.md §2.8).
     : ~ s arg_refdepths ``
+    // Positional bare-identifier names of the arguments (`-` where the
+    // argument was not one) — the returned-handle propagation below
+    // maps the callee's ret-alias indices back to caller bindings.
+    : ~ s arg_idents ``
     // N-readers-XOR-1-writer: a binding passed to this call as
     // `inout` is mutably borrowed for the call's duration; it must
     // be the *exclusive* path to that value at the call. `p5_seen`
@@ -7682,6 +7723,15 @@
         = arg_refdepths ? == 0 ( nurl_str_len arg_refdepths )
         ( nurl_str_int bck_arg_rd )
         ( nurl_str_cat3 arg_refdepths ` ` ( nurl_str_int bck_arg_rd ) )
+        // Positional roster of the arguments that were bare identifiers,
+        // for the returned-handle propagation after the call (§2.2). A
+        // non-identifier argument holds the place with `-` so the list
+        // stays index-addressable by bck_nth_word.
+        : s bck_arg_nm ? ( is_ident_tok bck_arg_tt ) ( nurl_str_cat bck_arg_val `` )
+        ( nurl_str_cat `-` `` )
+        = arg_idents ? == 0 ( nurl_str_len arg_idents )
+        ( nurl_str_cat bck_arg_nm `` )
+        ( nurl_str_cat3 arg_idents ` ` bck_arg_nm )
         // Deferred interprocedural-escape (docs/MEMORY.md §3 forward /
         // generic). This argument is a stack reference (`bck_arg_rd > 0`)
         // that the inline check did NOT flag (`arg_pos_escapes` false —
@@ -8077,6 +8127,26 @@
     : i __ret_rd ? & != g_borrowck 0 != 0 ( nurl_str_len callee_ret_param )
     ( bck_max_ret_refdepth callee_ret_param arg_refdepths ) 0
     ( nurl_sym_def syms `__last_expr_refdepth__` ( nurl_str_int __ret_rd ) )
+    // Returned-handle propagation (docs/MEMORY.md §2.2): when the callee
+    // may hand back one of its parameters' handles, the call RESULT may
+    // be that argument's buffer — `: ( Vec i ) c ( pick a 1 )` where
+    // `pick` returns `a` on one path leaves `a` and `c` naming one
+    // allocation, and freeing both double-frees.
+    //
+    // This publishes into the same channel gen_cond / gen_match use, so
+    // the receiving `:` / `=` records it through one code path
+    // (bck_alias_from_phi). Always MAYBE, never definite: the summary
+    // says the handle *may* come back, and a callee that returns a fresh
+    // value on some paths is the common case. Written authoritatively —
+    // an empty list clears whatever an argument's own nested `?` left
+    // behind, so the result of `( f ? c a b )` is not mistaken for `a`.
+    ( nurl_sym_def syms `__last_phi_definite__` `` )
+    ( nurl_sym_def syms `__last_phi_idents__`
+    ? & != g_borrowck 0 != 0 ( nurl_str_len callee_ret_alias )
+    ( bck_ret_alias_idents callee_ret_alias arg_idents ) `` )
+    ( nurl_sym_def syms `__last_phi_cause__`
+    ( nurl_str_cat3 `it was passed to '` fname
+    `', which may hand its handle back as the result` ) )
     // Dynamic dispatch: a `%dyn.Trait` (or `%dyn.Trait*` inout) receiver whose
     // method `fname` is in the trait's flattened method set. Load the vtable
     // slot and call it indirectly through the uniform ABI `<ret>(i8* self, …)`.
@@ -8697,6 +8767,45 @@
     ? & != 0 ( nurl_str_len t_ven ) ( seq t_ven e_ven )
     { ( nurl_sym_def syms `__last_join_variant_enum__` t_ven ) }
     {}
+    // ── Handle provenance of the `?`-result (docs/MEMORY.md §2.2) ──
+    // A manually-managed handle is a value like any other, so a `?`
+    // can SELECT one: `: ( Vec i ) chosen ? f a ( make )` hands `a`'s
+    // buffer to `chosen` on the true path. Only the syntactic form
+    // `: T b a` was recorded as a move, so freeing both compiled clean
+    // and double-freed — the phi was an ownership blind spot.
+    //
+    // Publish which bindings this value MAY have come from, and whether
+    // it definitely came from exactly one of them. The consumer
+    // (bck_alias_from_phi, at the `:` / `=` that receives the value)
+    // turns that into a definite or conditional move.
+    //
+    // An arm counts only when it is live (an arm that returned never
+    // reaches the phi) and when it is EXACTLY a bare identifier load —
+    // the `is_ident_tok t_tt0` + `seq t_v0 t_retid` pair, the same test
+    // the variant blessing above trusts. `t_retid` alone is not enough:
+    // it may name the last ident loaded inside a trailing call.
+    : b t_alias_id & & == 0 tdr ( is_ident_tok t_tt0 )
+    & ( seq t_v0 t_retid ) != 0 ( nurl_str_len t_retid )
+    : b e_alias_id & & == 0 edr ( is_ident_tok e_tt0 )
+    & ( seq e_v0 e_retid ) != 0 ( nurl_str_len e_retid )
+    : i live_arms + ? == 0 tdr 1 0 ? == 0 edr 1 0
+    : i alias_arms + ? t_alias_id 1 0 ? e_alias_id 1 0
+    : b same_name & & t_alias_id e_alias_id ( seq t_retid e_retid )
+    : ~ s phi_ids ``
+    ? t_alias_id { = phi_ids ( nurl_str_cat t_retid `` ) } {}
+    ? & e_alias_id ! same_name
+    { = phi_ids ? == 0 ( nurl_str_len phi_ids ) ( nurl_str_cat e_retid `` )
+        ( nurl_str_cat3 phi_ids ` ` e_retid ) }
+    {}
+    ( nurl_sym_def syms `__last_phi_idents__` phi_ids )
+    ( nurl_sym_def syms `__last_phi_cause__`
+    `its handle is one of the values a '?' selected between` )
+    // Definite when every live arm aliases the SAME binding — `? f a a`,
+    // or a two-armed `?` whose other arm returned. Then the result IS
+    // that handle on every path, which is an ordinary move.
+    ( nurl_sym_def syms `__last_phi_definite__`
+    ? & & > live_arms 0 == alias_arms live_arms
+    | == alias_arms 1 same_name `1` `` )
     // Prefix-arity grammar: `?` consumed bare expressions for
     // then/else, but the very next token is `{`. Almost always the
     // n-ary `&`/`|` foot-gun: user wrote `? & a b c d { then } { else }`
@@ -9211,6 +9320,14 @@
     // live arm's value did. An enclosing arm must not copy such a join —
     // the join publishes "not owned", so the copy would have no consumer.
     : ~ b all_alias T
+    // Handle provenance across the arms (gen_cond's twin — see the
+    // `__last_phi_idents__` block there): which bindings' handles this
+    // `??` may hand to whoever receives its value, and whether every
+    // live arm hands the same one.
+    : ~ s m_phi_ids ``
+    : ~ i m_live_arms 0
+    : ~ i m_alias_arms 0
+    : ~ i m_distinct 0
     // arms_total / arms_ret count every parsed arm vs. those that ended
     // in `^`. When equal AND a fallback_pred is set, the `match_end`
     // label is reached only through the synthetic last-arm fallthrough
@@ -10250,6 +10367,21 @@
                     { = live_slice_arms + live_slice_arms 1
                         ? == 0 ( nurl_str_len arm_slice_flag ) { = all_slice_fresh F } {} }
                     {}
+                    // Handle provenance: this arm reaches the phi. Note
+                    // whether its value is EXACTLY a bare identifier load
+                    // (the same token-plus-retid pair gen_cond trusts —
+                    // arm_retid alone may name the last ident loaded
+                    // inside a trailing call), and collect the name.
+                    = m_live_arms + m_live_arms 1
+                    ? & & ( is_ident_tok arm_tt0 ) ( seq arm_v0 arm_retid )
+                    != 0 ( nurl_str_len arm_retid )
+                    { = m_alias_arms + m_alias_arms 1
+                        ? ( str_contains_word m_phi_ids arm_retid ) {}
+                        { = m_distinct + m_distinct 1
+                            = m_phi_ids ? == 0 ( nurl_str_len m_phi_ids )
+                            ( nurl_str_cat arm_retid `` )
+                            ( nurl_str_cat3 m_phi_ids ` ` arm_retid ) } }
+                    {}
                     : s entry ( nurl_str_cat `[ ` ( nurl_str_cat arm_result ( nurl_str_cat `, %` ( nurl_str_cat arm_lbl ` ]` ) ) ) )
                     = phi_entries ? == 0 ( nurl_str_len phi_entries )
                     ( nurl_str_cat entry `` )
@@ -10360,6 +10492,14 @@
         ( nurl_sym_def syms `__last_value_alias__`
         ? & & all_alias > live_str_arms 0
         ( seq ( nurl_llty phi_type ) `i8*` ) `1` `` )
+        // Handle provenance (gen_cond's twin): the bindings this value
+        // may have come from, and whether it definitely came from one.
+        ( nurl_sym_def syms `__last_phi_idents__` m_phi_ids )
+        ( nurl_sym_def syms `__last_phi_cause__`
+        `its handle is one of the values a '??' selected between` )
+        ( nurl_sym_def syms `__last_phi_definite__`
+        ? & & > m_live_arms 0 == m_alias_arms m_live_arms
+        == 1 m_distinct `1` `` )
         // Borrow propagation only matters when the match YIELDS an auto-Drop
         // enum (the value a `:`-binding might wrongly drop). For any other
         // result type — String, i, … — reset so a match on a borrowed param
@@ -10409,10 +10549,17 @@
         ( nurl_sym_def syms `__last_value_borrow__` `` )
         ( nurl_sym_def syms `__last_ident_name__` `` )
         ( nurl_sym_def syms `__last_value_alias__` `` )
+        // An integer join cannot carry a heap handle.
+        ( nurl_sym_def syms `__last_phi_idents__` `` )
+        ( nurl_sym_def syms `__last_phi_cause__` `` )
+        ( nurl_sym_def syms `__last_phi_definite__` `` )
         ^ final64
     } {}
     ( nurl_set_last_type `void` )
     ( nurl_sym_def syms `__last_value_alias__` `` )
+    ( nurl_sym_def syms `__last_phi_idents__` `` )
+    ( nurl_sym_def syms `__last_phi_cause__` `` )
+    ( nurl_sym_def syms `__last_phi_definite__` `` )
     ^ ( nurl_str_cat `undef` `` )
 }
 
@@ -12164,6 +12311,7 @@
         ( nurl_sym_set g_bck `reads` `` )
         ( nurl_sym_set g_bck `pending_kind` `` )
         ( nurl_sym_set g_bck `pmoves` `` )
+        ( nurl_sym_set g_bck `pmaybes` `` )
         = g_bck_depth 0
     } {}
 }
@@ -12314,6 +12462,87 @@
     {}
 }
 
+// The `?` / `??` companion of bck_let_alias: the RHS was not a bare
+// identifier but a value-producing conditional that SELECTED between
+// handles, one or more of which belong to existing bindings. gen_cond /
+// gen_match published which ones (`__last_phi_idents__`) and whether
+// exactly one of them is it on every path (`__last_phi_definite__`).
+//
+// Aliasing a handle is not itself wrong; what makes it a bug is freeing
+// through both names. So the definite case is an ordinary move (the
+// source is dead, any later use is a use-after-move, reported by
+// default) and the conditional case is a maybe-move (reported only
+// when `--strict-borrowck` is on, because the mutually-exclusive-frees
+// pattern — free the arm that was NOT chosen — is correct code and the
+// default checker promises not to flag it).
+//
+// `dest_moves` is the destination-shape gate, computed by the caller
+// because it differs by form: a `:` binding moves only when immutable
+// (a `: ~` copy is the cursor idiom — see bck_let_alias), while a `=`
+// assignment's target is mutable by construction and moves regardless.
+// The type must be a tracked heap one either way, a parameter source is
+// borrowed rather than owned so it never moves, and `dest` itself is
+// skipped: `= a ? f a ( make )` re-binds `a` to its own handle or a
+// fresh one, leaving `a` the sole owner — marking it moved there would
+// reject correct code. The channel is consume-once, cleared by the
+// caller before the RHS is generated.
+@ bck_alias_from_phi i syms b dest_moves s dest s vt i line → v {
+    ? | ! dest_moves ! ( bck_is_heap_lty vt ) { ^ v } {}
+    : ~ s rest ( nurl_sym_get syms `__last_phi_idents__` )
+    ? == 0 ( nurl_str_len rest ) { ^ v } {}
+    : b definite != 0 ( nurl_sym_len syms `__last_phi_definite__` )
+    : s why ( nurl_sym_get syms `__last_phi_cause__` )
+    : s params ( nurl_sym_get syms `__fn_param_names__` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s nm ( str_first_word rest )
+        = rest ( str_skip_word rest )
+        ? | ( seq nm dest ) ( str_contains_word params nm ) {} {
+            ? definite
+            { ( bck_stash_move nm line `an alias copy through a '?' / '??' result` ) }
+            { ( bck_stash_maybe_move nm line ? == 0 ( nurl_str_len why )
+                ( nurl_str_cat `its handle is one of the values a '?' / '??' selected between` `` )
+                ( nurl_str_cat why `` ) ) }
+            ( lint_note_released nm ) }
+    }
+}
+
+// `= dst src` with a bare identifier on the right hands `src`'s handle
+// to `dst`, and freeing through both names double-frees. gen_assign
+// recorded this only as a lint note (`lint_note_released`), so the
+// borrow checker never saw it and `= z a` followed by two frees
+// compiled clean.
+//
+// It is recorded as a MAYBE-move, not the definite move the `:` form
+// gets, and that is a statement about the analysis rather than about
+// the code: the handover is certain, but the old name stays a legal
+// way to READ the still-live buffer, and a definite move would flag
+// those reads. The stdlib's HKDF expansion is the canonical shape —
+//
+//     : ( Vec u ) t ( hmac_sha256_pure prk input )
+//     ( vec_free [u] prev )
+//     = prev t
+//     ~ … { ( vec_push [u] out # u ( __hk_bget t j ) ) … }
+//
+// — where reading `t` after the handover is correct because nothing
+// has freed the buffer yet. Deciding that in general needs liveness
+// this checker does not have, so it declines to guess: reads of a
+// maybe-moved binding are never flagged, and only a second CONSUME is
+// reported (under --strict-borrowck).
+//
+// The destination is mutable by construction here, so bck_let_alias's
+// immutable-destination gate cannot apply; what stands in for it is
+// that the RHS must be EXACTLY a bare identifier — a cursor walk
+// (`= cur ( next cur )`) is a call, not an alias. A parameter source is
+// borrowed, and `= a a` is a no-op, so both are skipped.
+@ bck_assign_alias i syms i rhs_tt s rhs_val s dest s vt i line → v {
+    ? & & & ( is_ident_tok rhs_tt ) ( bck_is_heap_lty vt )
+    ! ( seq rhs_val dest )
+    ! ( str_contains_word ( nurl_sym_get syms `__fn_param_names__` ) rhs_val )
+    { ( bck_stash_maybe_move rhs_val line
+        ( nurl_str_cat3 `its handle was handed to '` dest `' by an alias assignment` ) ) }
+    {}
+}
+
 // Stash `name` (consumed at `line`) for the current statement.
 @ bck_stash_move s name i line s cause → v {
     ? & != g_borrowck 0 == g_bck_closure_depth 0 {
@@ -12329,10 +12558,28 @@
     } {}
 }
 
+// Stash `name` as MAYBE consumed at `line` — the value-producing
+// `?` / `??` selected between this binding's handle and something
+// else, so the new owner holds it on some paths only (see the
+// `maybemove` arm of the analyze walk). Same per-statement stash
+// discipline as bck_stash_move, a separate list so the walk can tell
+// a definite consume from a conditional one.
+@ bck_stash_maybe_move s name i line s cause → v {
+    ? & != g_borrowck 0 == g_bck_closure_depth 0 {
+        ( nurl_sym_set g_bck ( nurl_str_cat3 `qc_` name ( nurl_str_int line ) ) cause )
+        : s cur ( nurl_sym_get g_bck `pmaybes` )
+        : s add ( nurl_str_cat3 name ` ` ( nurl_str_int line ) )
+        ( nurl_sym_set g_bck `pmaybes`
+        ? == 0 ( nurl_str_len cur ) ( nurl_str_cat add `` ) ( nurl_str_cat3 cur ` ` add ) )
+    } {}
+}
+
 // Drain the per-statement move stash into `move` rows. Called by
 // gen_stmt once the enclosing statement's own record is in place.
 @ bck_flush_moves → v {
     ? & != g_borrowck 0 == g_bck_closure_depth 0 {
+        : ~ s qrest ( nurl_sym_get g_bck `pmaybes` )
+        ( nurl_sym_set g_bck `pmaybes` `` )
         : ~ s rest ( nurl_sym_get g_bck `pmoves` )
         ( nurl_sym_set g_bck `pmoves` `` )
         // A statement that recorded no row of its own leaves stray
@@ -12345,6 +12592,18 @@
             : s ln ( str_first_word rest )
             = rest ( str_skip_word rest )
             ( bck_record `move` nm ( nurl_str_to_int ln ) )
+        }
+        // Conditional consumes go in after the definite ones: a
+        // statement that both moves and maybe-moves the SAME binding
+        // (`: ( Vec i ) c ? f a a` is definite, `? f a b` is not) must
+        // settle on the stronger state, and the walk's join keeps
+        // Moved once it is reached.
+        ~ != 0 ( nurl_str_len qrest ) {
+            : s qnm ( str_first_word qrest )
+            = qrest ( str_skip_word qrest )
+            : s qln ( str_first_word qrest )
+            = qrest ( str_skip_word qrest )
+            ( bck_record `maybemove` qnm ( nurl_str_to_int qln ) )
         }
     } {}
 }
@@ -12628,8 +12887,8 @@
 }
 
 // Translate one captured row into walk form: binding names become
-// interned ids — the wname of `let`/`assign`/`move` rows, and every
-// word of the reads field. A loop body is re-walked up to 18 times
+// interned ids — the wname of `let`/`assign`/`move`/`maybemove` rows,
+// and every word of the reads field. A loop body is re-walked up to 18 times
 // on the way to its fixpoint, so the walk parses each id as a small
 // int instead of re-keying a name per visit; interning happens here,
 // exactly once per row. Every other field is copied verbatim (a
@@ -12638,7 +12897,8 @@
 @ bck_xlate_row s rec → s {
     : s kind ( bck_field rec 0 )
     : s w ( bck_field rec 1 )
-    : s w2 ? | | ( seq kind `let` ) ( seq kind `assign` ) ( seq kind `move` )
+    : s w2 ? | | | ( seq kind `let` ) ( seq kind `assign` ) ( seq kind `move` )
+    ( seq kind `maybemove` )
     ( nurl_str_int ( bck_intern w ) ) ( nurl_str_cat w `` )
     : s rds ( bck_ids ( bck_field rec 2 ) )
     : s head ( nurl_str_cat4 kind `\t` w2 `\t` )
@@ -12745,10 +13005,20 @@
 }
 
 // --strict-borrowck companion of bck_diag: consuming a binding whose
-// state is MAYBE-moved (freed on one arm of a `?`, still owned on the
-// other). Deduplicated through the same warnset; the `mm:` prefix keeps
-// a strict diagnostic from suppressing a later definite one (or vice
-// versa) on the same line+name.
+// state is MAYBE-moved. There are two ways to reach that state and the
+// message must not assume the first: the binding was freed on one arm
+// of a `?` and left owned on the other, OR its handle was one of the
+// alternatives a value-producing `?` / `??` selected between, so the
+// binding that received the result may now be its owner. Both make the
+// consume here a double-free on some path.
+//
+// The alias case records its own phrase under `qc_` — deliberately NOT
+// the `mc_` channel bck_diag reads, which the definite-move path also
+// writes with a bare callee name. Absent a `qc_` phrase the wording is
+// the original branch-consume one, so the shape that already had this
+// diagnostic keeps its exact text. Deduplicated through the same
+// warnset; the `mm:` prefix keeps a strict diagnostic from suppressing
+// a later definite one (or vice versa) on the same line+name.
 @ bck_diag_maybe i id i useline → v {
     : s ids ( nurl_str_int id )
     : s tag ( nurl_str_cat3 ( nurl_str_cat `mm:` ( nurl_str_int useline ) ) `:` ids )
@@ -12758,9 +13028,13 @@
         ? == 0 ( nurl_str_len ws ) ( nurl_str_cat tag `` ) ( nurl_str_cat3 ws ` ` tag ) )
         : s name ( nurl_sym_get2 g_bck `rv_` ids )
         : s ml ( nurl_sym_get2 g_bck `ml_` ids )
+        : s cause ( nurl_sym_get g_bck ( nurl_str_cat3 `qc_` name ml ) )
+        : s by ? == 0 ( nurl_str_len cause )
+        ( nurl_str_cat ` — it was conditionally consumed (one branch only) at line ` `` )
+        ( nurl_str_cat3 ` — ` cause ` at line ` )
         ( bck_emit_error ( nurl_sym_get g_bck `file` ) useline
         ( nurl_str_cat4 `'` name
-        `' may already be freed here — it was conditionally consumed (one branch only) at line ` ( nurl_str_cat3 ml
+        ( nurl_str_cat `' may already be freed here` by ) ( nurl_str_cat3 ml
         `; this second free double-frees on that path (strict-borrowck; restructure so exactly one path frees it)` `` ) ) )
     }
 }
@@ -12834,6 +13108,27 @@
             } {}
             = st ( bck_st_set st mvid BCK_MOVED )
             ( nurl_sym_set g_bck ( nurl_str_cat `ml_` mvn )
+            ( bck_field rec 3 ) )
+            = p + p 1
+            = done T
+        } {}
+        ? & ! done ( seq kind `maybemove` ) {
+            // A binding that MAY have been consumed here: its handle is
+            // one of several a value-producing `?` / `??` could have
+            // selected, so on some paths the new owner holds it and on
+            // others it does not. That is exactly Owned ⊔ Moved, so the
+            // transition is the lattice join rather than a set — an
+            // already definitely-Moved binding stays Moved, and a second
+            // maybe-move does not walk the state back down.
+            //
+            // No diagnostic fires HERE: aliasing a handle is legal, and
+            // it is the later CONSUME of a maybe-moved binding that
+            // double-frees. The `move` arm above reports that (strict).
+            : s qvn ( bck_field rec 1 )
+            : i qvid ( nurl_str_to_int qvn )
+            = st ( bck_st_set st qvid
+            ( bck_join ( bck_st_get st qvid ) BCK_MOVED ) )
+            ( nurl_sym_set g_bck ( nurl_str_cat `ml_` qvn )
             ( bck_field rec 3 ) )
             = p + p 1
             = done T
@@ -13487,6 +13782,9 @@
         ( nurl_sym_def syms `__last_value_borrow__` `` )
         ( nurl_sym_def syms `__last_closure_env__` `` )
         ( nurl_sym_def syms `__last_slice_owned__` `` )
+        ( nurl_sym_def syms `__last_phi_idents__` `` )
+        ( nurl_sym_def syms `__last_phi_cause__` `` )
+        ( nurl_sym_def syms `__last_phi_definite__` `` )
         : ~ s val ( gen_expr lex syms cg )
         : s vt ( nurl_get_last_type )
         // Mutable string binding initialised from a string LITERAL: own
@@ -13557,6 +13855,7 @@
         == 0 ( nurl_str_len ( nurl_sym_get syms `__last_call_ret_view__` ) )
         | == bck_rhs_tt TT_LPAREN & ( is_ident_tok bck_rhs_tt ) ! is_mutable )
         ( bck_let_alias syms is_mutable bck_rhs_tt bck_rhs_val vt bck_line )
+        ( bck_alias_from_phi syms ! is_mutable name vt bck_line )
         : b rhs_is_owned_call != 0 ( nurl_sym_len syms `__last_call_ret_owned__` )
         // A `?`-ternary whose live arms are all fresh owned slices hands the
         // buffer to this binding (gen_slice_literal / gen_cond set the flag).
@@ -13737,6 +14036,9 @@
                 ( nurl_sym_def syms `__last_value_borrow__` `` )
                 ( nurl_sym_def syms `__last_closure_env__` `` )
                 ( nurl_sym_def syms `__last_slice_owned__` `` )
+                ( nurl_sym_def syms `__last_phi_idents__` `` )
+                ( nurl_sym_def syms `__last_phi_cause__` `` )
+                ( nurl_sym_def syms `__last_phi_definite__` `` )
                 : ~ s val ( gen_expr lex syms cg )
                 : s vt ( nurl_get_last_type )
                 // A mutable string binding owns its buffer from birth,
@@ -13800,6 +14102,7 @@
                 == 0 ( nurl_str_len ( nurl_sym_get syms `__last_call_ret_view__` ) )
                 | == bck_rhs_tt TT_LPAREN & ( is_ident_tok bck_rhs_tt ) ! is_mutable )
                 ( bck_let_alias syms is_mutable bck_rhs_tt bck_rhs_val vt bck_line )
+                ( bck_alias_from_phi syms ! is_mutable name vt bck_line )
                 : b rhs_is_owned_call != 0 ( nurl_sym_len syms `__last_call_ret_owned__` )
                 // A `?`-ternary whose live arms are all fresh owned slices
                 // hands the buffer to this binding (see the inference path).
@@ -13989,6 +14292,9 @@
         ? ( is_ident_tok bck_rhs_tt ) { ( lint_note_released bck_rhs_val ) } {}
         ( nurl_sym_def syms `__last_expr_refdepth__` `` )
         ( nurl_sym_def syms `__last_call_guard__` `` )
+        ( nurl_sym_def syms `__last_phi_idents__` `` )
+        ( nurl_sym_def syms `__last_phi_cause__` `` )
+        ( nurl_sym_def syms `__last_phi_definite__` `` )
         : ~ s val ( gen_operand lex syms cg )
         : s __asn_rt ( nurl_get_last_type )
         // A fresh owned slice reaching the RHS through a `?` / `??` (whose
@@ -14004,8 +14310,15 @@
             ( nurl_str_cat4 `cannot assign a value of type '` __asn_rt `' to '` name )
             ( nurl_str_cat3 `' of type '` vt `' — NURL has no implicit conversions` ) ) ) }
         {}
-        // Borrow checker: record this assignment.
+        // Borrow checker: record this assignment, then the move it
+        // performs — a bare-identifier RHS hands its handle over, and a
+        // `?` / `??` RHS may hand over one of several. Both are recorded
+        // AFTER the `assign` row so the walk revives `name` to Owned
+        // first and the sources move second (a self-referential
+        // `= a ? f a …` is skipped inside, not ordered around).
         ( bck_record `assign` name bck_line )
+        ( bck_assign_alias syms bck_rhs_tt bck_rhs_val name vt bck_line )
+        ( bck_alias_from_phi syms T name vt bck_line )
         // Escape analysis: re-target `name`. If the RHS is a stack
         // reference into a region deeper than `name`'s own, the
         // reference outlives its referent — an escape.
@@ -18299,6 +18612,27 @@
     }
 }
 
+// Returned-handle inference (docs/MEMORY.md §2.2): record that the
+// enclosing function may hand back the HANDLE of parameter `name`.
+// Merged into g_fn_ret_alias[fname] in gen_fn_decl_concrete. The
+// ownership twin of bck_record_ret_param — same shape, separate map,
+// because a caller asks the two questions for different reasons.
+@ bck_record_ret_alias i syms s name → v {
+    ? == g_borrowck 0 {} {
+        : s pn ( nurl_sym_get syms `__fn_param_names__` )
+        : i idx ( str_word_index pn name )
+        ? >= idx 0
+        { : s cur ( nurl_sym_get syms `__fn_ret_alias__` )
+            : s new ( nurl_str_int idx )
+            ? ! ( str_contains_word cur new )
+            { ( nurl_sym_def syms `__fn_ret_alias__`
+                ? == 0 ( nurl_str_len cur ) ( nurl_str_cat new `` )
+                ( nurl_str_cat3 cur ` ` new ) ) }
+            {} }
+        {}
+    }
+}
+
 // idx-th space-separated word of `list`, or empty when out of range.
 @ bck_nth_word s list i idx → s {
     : ~ s rest ( nurl_str_cat list `` )
@@ -18316,6 +18650,29 @@
 // the callee may return: for each index in `ret_params`, look up that
 // argument's recorded depth in `arg_refdepths`. 0 ⇒ the result is not a
 // stack reference.
+// Map a callee's returned-handle parameter indices back to the caller's
+// bindings: for each index in `ret_alias`, the identifier that stood at
+// that argument position (`arg_idents`, `-` where the argument was not a
+// bare identifier). Duplicates and placeholders are dropped, so the
+// result is the distinct set of caller bindings the call's value may
+// alias — the same shape gen_cond publishes. Companion of
+// bck_max_ret_refdepth, which does the §2.8 refdepth version.
+@ bck_ret_alias_idents s ret_alias s arg_idents → s {
+    : ~ s out ``
+    : ~ s rest ( nurl_str_cat ret_alias `` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s w ( str_first_word rest )
+        = rest ( str_skip_word rest )
+        : s nm ( bck_nth_word arg_idents ( nurl_str_to_int w ) )
+        ? & & != 0 ( nurl_str_len nm ) ! ( seq nm `-` )
+        ! ( str_contains_word out nm )
+        { = out ? == 0 ( nurl_str_len out ) ( nurl_str_cat nm `` )
+            ( nurl_str_cat3 out ` ` nm ) }
+        {}
+    }
+    out
+}
+
 @ bck_max_ret_refdepth s ret_params s arg_refdepths → i {
     : ~ i best 0
     : ~ s rest ( nurl_str_cat ret_params `` )
@@ -19550,6 +19907,8 @@
     // index of any parameter returned directly; merged into
     // g_fn_ret_param[fname] after the body.
     ( nurl_sym_def syms `__fn_ret_param__` `` )
+    // Returned-handle inference (§2.2): its ownership twin.
+    ( nurl_sym_def syms `__fn_ret_alias__` `` )
     = g_fn_ret_count 0
     : ~ s last ( gen_block_ret lex syms cg )
     // Type of the value the body actually falls off with. A body whose
@@ -19666,6 +20025,23 @@
                 ( nurl_str_cat3 __rp_merged ` ` __rp_w ) }
             {} }
         ( nurl_sym_def g_fn_ret_param fname __rp_merged ) }
+    {}
+    // Returned-handle inference (docs/MEMORY.md §2.2): merge the
+    // parameter indices whose handle this body may hand back into
+    // g_fn_ret_alias[fname]. Same merge shape, separate map.
+    : s __ra_inferred ( nurl_sym_get syms `__fn_ret_alias__` )
+    ? != 0 ( nurl_str_len __ra_inferred )
+    { : ~ s __ra_merged ( nurl_sym_get g_fn_ret_alias fname )
+        : ~ s __ra_rest2 ( nurl_str_cat __ra_inferred `` )
+        ~ != 0 ( nurl_str_len __ra_rest2 ) {
+            : s __ra_w2 ( str_first_word __ra_rest2 )
+            = __ra_rest2 ( str_skip_word __ra_rest2 )
+            ? ! ( str_contains_word __ra_merged __ra_w2 )
+            { = __ra_merged ? == 0 ( nurl_str_len __ra_merged )
+                ( nurl_str_cat __ra_w2 `` )
+                ( nurl_str_cat3 __ra_merged ` ` __ra_w2 ) }
+            {} }
+        ( nurl_sym_def g_fn_ret_alias fname __ra_merged ) }
     {}
     // Implicit return — route through defer chain if defers are active
     : s dtop ( nurl_sym_get g_fn_escapes `__defer_top_fn__` )
@@ -25838,6 +26214,7 @@
     = g_fn_invoke_only ( nurl_sym_new )
     = g_pending_escape ( nurl_sym_new )
     = g_fn_ret_param ( nurl_sym_new )
+    = g_fn_ret_alias ( nurl_sym_new )
     = g_fn_noreturn ( nurl_sym_new )
     ( nurl_sym_def g_fn_noreturn `nurl_exit` `1` )
     ( nurl_sym_def g_fn_noreturn `nurl_panic` `1` )
@@ -25966,6 +26343,7 @@
     ( nurl_sym_free g_fn_escapes )
     ( nurl_sym_free g_fn_invoke_only )
     ( nurl_sym_free g_fn_ret_param )
+    ( nurl_sym_free g_fn_ret_alias )
     ( nurl_sym_free g_pending_escape )
     ( nurl_sym_free g_bck )
     ( nurl_sym_free g_ptrtab )
