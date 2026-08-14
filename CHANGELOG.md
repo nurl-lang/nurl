@@ -8,6 +8,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.42.0] — 2026-08-14
+
+The second-owner release. A heap handle in NURL has exactly one owner,
+and the borrow checker's job is to notice when a second name acquires
+it. It recognised exactly one way for that to happen — the copy
+`: T b a` — and five other ways were invisible: a `?` or `??` that
+selects between handles, an assignment that hands one over, a callee
+that hands an argument back, and a generic wrapper that consumes its
+parameter. Every one of them compiled clean and double-freed under
+AddressSanitizer.
+
+Neither bug was the analysis reaching a wrong answer. Both were the
+analysis never being asked: the ownership question was asked at one
+syntactic shape, and values arrive by more routes than that. What made
+the generic case worse than a gap is that it was a *regression under
+abstraction* — the non-generic wrapper was rejected correctly, so adding
+`[T]` to a working program silently removed its checking.
+
+**Upgrading:** code that this release rejects was double-freeing before.
+The default checker now errors on the unconditional shapes; the
+conditional ones need `--strict-borrowck`, because refusing them by
+default would also refuse the mutually-exclusive-frees pattern, which is
+correct code. If a rejection is a false positive, it is a bug worth
+reporting — the default checker is meant to have none, and the whole
+first-party tree (stdlib, examples, 320 package files) compiles with no
+acceptance change in either mode.
+
 ### Fixed
 
 - **A heap handle can reach a second name without being copied — the
@@ -75,6 +102,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   template scan reads the first argument of a call rather than every
   argument position, so it can miss, never invent.
   (`borrow_generic_sink_wrapper`, `borrow_strict_generic_maybe_double_free`)
+
+- **`http_server_pipelined` no longer races its own client.** The test
+  spawned the client with `&` from a shell that then exits — orphaning
+  it — and later ran `wait $(cat pid)` in a *different* shell, where that
+  pid is not a child. The wait failed instantly (hence the `2>/dev/null`
+  hiding it) and only a fixed `sleep 0.10` made the test pass, which is
+  not enough on a loaded CI runner. The client now writes a `.part` file
+  and renames it when done — `rename(2)` is atomic, so the collector sees
+  all or nothing — and the collector polls for it instead of assuming it
+  has arrived. Verified against the real failure mode: under 32-way CPU
+  saturation the old test dropped its client's output 1 run in 10, the
+  new one 0 in 10.
 
 ## [0.41.0] — 2026-08-14
 
@@ -12633,7 +12672,8 @@ releases are measured.
   compile-server (`api/`), browser playground (`nurlweb/`).
 * Dual license: MIT (LICENSE-MIT) or Apache-2.0 (LICENSE-APACHE).
 
-[Unreleased]: https://github.com/nurl-lang/nurl/compare/v0.41.0...HEAD
+[Unreleased]: https://github.com/nurl-lang/nurl/compare/v0.42.0...HEAD
+[0.42.0]: https://github.com/nurl-lang/nurl/compare/v0.41.0...v0.42.0
 [0.41.0]: https://github.com/nurl-lang/nurl/compare/v0.40.0...v0.41.0
 [0.40.0]: https://github.com/nurl-lang/nurl/compare/v0.39.0...v0.40.0
 [0.39.0]: https://github.com/nurl-lang/nurl/compare/v0.38.0...v0.39.0
