@@ -10,6 +10,14 @@
       "struct-field"
     ],
     [
+      "handle-second-name",
+      "ternary-nested"
+    ],
+    [
+      "iterator-invalidation",
+      "push-via-helper"
+    ],
+    [
       "option-payload-type",
       "vec-into-int"
     ]
