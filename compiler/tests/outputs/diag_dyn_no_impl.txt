@@ -4,3 +4,4 @@ compiler/tests/diag_dyn_no_impl.nu:12:5: error: type '%Cat' does not implement t
     ^ 0
     ^
 error: aborting due to 1 previous error
+note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.

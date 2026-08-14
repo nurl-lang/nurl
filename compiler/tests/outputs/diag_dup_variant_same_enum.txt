@@ -4,3 +4,4 @@ compiler/tests/diag_dup_variant_same_enum.nu:6:5: error: duplicate variant 'X' â
     X
     ^
 error: aborting due to 1 previous error
+note: each error stopped its declaration â€” later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.

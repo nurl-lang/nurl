@@ -4,3 +4,4 @@ compiler/tests/diag_field_int_to_ptr.nu:11:19: error: field 0 of struct literal 
     : P a @ P { 0 }
                   ^
 error: aborting due to 1 previous error
+note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.

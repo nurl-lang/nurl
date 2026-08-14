@@ -4,3 +4,4 @@ compiler/tests/diag_int_lit_width_range.nu:13:5: error: integer literal 9999 doe
     ^ 0
     ^
 error: aborting due to 1 previous error
+note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.

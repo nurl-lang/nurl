@@ -4,3 +4,4 @@ compiler/tests/diag_match_guard_no_arrow.nu:13:30: error: expected '→' after t
     : i r ?? e { A v ? > v 0 { ^ v } B → 0 }
                              ^
 error: aborting due to 1 previous error
+note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.

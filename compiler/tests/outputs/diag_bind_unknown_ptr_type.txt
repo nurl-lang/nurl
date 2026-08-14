@@ -4,3 +4,4 @@ compiler/tests/diag_bind_unknown_ptr_type.nu:9:12: error: unknown type 'Foo' in 
     : *Foo p ( nurl_alloc 8 )
            ^
 error: aborting due to 1 previous error
+note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.

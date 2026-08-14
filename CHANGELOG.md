@@ -8,6 +8,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **An option/result payload must be the type the option was declared
+  over.** Field 1 carries T's real type in both forms — `? i` lowers to
+  `{ i1, i64 }`, `! i s` to `{ i1, i64, i8* }` — but the payload
+  coercion believed a comment saying a result's slot "is always i64" and
+  folded *any* pointer into it with `ptrtoint`. That is the correct
+  representation for a slot which is an untyped box, and the wrong one
+  for a slot declared as a number. Two shapes got past nurlc:
+
+  ```
+  @ ?s { T 42 }     // nurlc exited 0; clang rejected the insertvalue
+  @ ?i { T `x` }    // compiled clean, linked, and RAN
+  ```
+
+  The second is the dangerous one. The fold made the address fit, so
+  `?? o { T v → ^ v }` returned the low byte of a `.rodata` address from
+  a `^ v` the writer expected to be a number — a silent miscompile with
+  no diagnostic anywhere. The first only ever failed at clang, in a
+  message about `{ i1, i8* }` and `i64` that named neither the option nor
+  the line to change.
+
+  The fold now asks what the slot *is* before reinterpreting an address
+  as arithmetic, and a backstop refuses to emit an `insertvalue` the
+  coercion chain could not legally bridge — so a payload mismatch is a
+  NURL diagnostic naming both types, not IR handed to the next tool.
+  (`diag_opt_payload_ptr_into_int`, `diag_opt_payload_type_mismatch`)
+
+### Changed
+
+- **The error summary says what was *not* checked.** Diagnostic recovery
+  is per top-level declaration: a reported error skips the rest of the
+  `@` it fired in, so two bad statements in one body produce one error
+  and `aborting due to 1 previous error`. Nothing there is false, but the
+  silence reads as "the rest was checked and passed" — and for anything
+  driving nurlc in a loop, an adversarial sweep or a model fixing its own
+  output, that inference is systematically wrong: nine of ten broken
+  constructs look accepted when nine were never examined. The summary now
+  adds one line saying the count is a lower bound.
+
+  Reporting every statement instead was implemented and reverted. With no
+  statement terminator to resync on and no poison bindings, the extra
+  errors were *derived*: a failed `: 5 n 0` made the next line's `^ n`
+  read as "undefined identifier 'n'", one fixture reported the same error
+  twice, and another desynchronised its braces into "unexpected '}' at
+  the top level". Naming an innocent line costs a reader more than
+  staying silent about it does; the real fix needs poison bindings and
+  derived-error suppression, and the reasoning is recorded at the site.
+
 ## [0.42.0] — 2026-08-14
 
 The second-owner release. A heap handle in NURL has exactly one owner,

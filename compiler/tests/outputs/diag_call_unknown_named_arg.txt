@@ -4,3 +4,4 @@ compiler/tests/diag_call_unknown_named_arg.nu:7:27: error: call to 'add' has no 
     : i r ( add x : 1 z : 2 )
                           ^
 error: aborting due to 1 previous error
+note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.

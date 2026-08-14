@@ -2,3 +2,4 @@ COMPILE FAIL
 ERRORS
 compiler/tests/diag_dyn_call_arity.nu:14:5: error: call to 'speak' passes 0 argument(s) but the declared closure/function type takes 1 — the emitted call would leave parameter registers unset (or drop values); the callee reads garbage. Match the declaration.
 error: aborting due to 1 previous error
+note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.

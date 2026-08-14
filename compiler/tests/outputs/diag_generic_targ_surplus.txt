@@ -4,3 +4,4 @@ compiler/tests/diag_generic_targ_surplus.nu:10:28: error: generic function 'vec_
     : ?i o ( vec_get [i i] v 0 )
                            ^
 error: aborting due to 1 previous error
+note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.

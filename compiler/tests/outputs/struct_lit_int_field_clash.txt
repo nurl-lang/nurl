@@ -4,3 +4,4 @@ compiler/tests/struct_lit_int_field_clash.nu:15:31: error: field 2 of struct lit
     : Outer o @ Outer { g g 0 }
                               ^
 error: aborting due to 1 previous error
+note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.
