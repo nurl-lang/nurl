@@ -8269,9 +8269,18 @@
     {}
     // (c) Calling a function whose summary says it mutates Arc contents,
     //     from inside a closure, is the same race one frame down.
-    ? & & == g_lock_depth 0 != g_bck_closure_depth 0
-    != 0 ( nurl_sym_len g_fn_arc_mut call_name )
-    { = g_last_closure_sharedmut ( nurl_str_cat3 `calls '` fname `', which mutates the contents of an Arc` ) }
+    ? & == g_lock_depth 0 != 0 ( nurl_sym_len g_fn_arc_mut call_name )
+    { ? != g_bck_closure_depth 0
+        { = g_last_closure_sharedmut ( nurl_str_cat3 `calls '` fname `', which mutates the contents of an Arc` ) }
+        {}
+        // …and the summary is TRANSITIVE: a function that calls a
+        // mutating function is itself a mutating function. Without this
+        // the chain broke at depth two — `closure → outer → inner` was
+        // accepted while `closure → inner` was rejected, which is the
+        // "wrap it one level further" escape the summary exists to
+        // close. Found by tools/metamorph (arc-shared-mutation/
+        // helper-two-deep) minutes after the depth-one fix shipped.
+        = g_fn_arc_mut_witness `1` }
     {}
     // Dynamic dispatch: a `%dyn.Trait` (or `%dyn.Trait*` inout) receiver whose
     // method `fname` is in the trait's flattened method set. Load the vtable
