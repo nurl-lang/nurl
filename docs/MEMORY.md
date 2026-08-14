@@ -136,6 +136,30 @@ the caller's scope drop it. `compiler/tests/should_fail_sink_autodrop.nu`
 pins the diagnostic. Generic functions may take `sink` parameters
 (`@ consume [A] sink ( Box A ) b → v`).
 
+A parameter does not have to be *spelled* `sink` to be one. When a
+function's body consumes a parameter — passes it to a typed destructor,
+or on to another function's `sink` position — the checker records that
+index as an **auto-`sink`**, so the caller of the wrapper loses the
+binding exactly as if the marker had been written:
+
+```
+@ dispose ( Vec i ) xs → v { ( vec_free [i] xs ) }   // param 0 is a sink
+...
+( dispose xs ) ( dispose xs )     // use-after-move at the second call
+```
+
+For an ordinary function this falls out of compiling the body. A
+**generic** template is not compiled where it is written — it is stored
+and instantiated later under a mangled name — so its summary is instead
+derived from the stored template at declaration time
+(`compute_generic_inout_sink`), covering the auto-`sink` case by reading
+the body for a call whose first argument is a bare parameter. Without
+it, `@ dispose [T] ( Vec T ) xs → v { ( vec_free [T] xs ) }` was invisible
+to the checker and the double free above compiled clean
+(`compiler/tests/borrow_generic_sink_wrapper.nu`). The template scan is
+narrower than the codegen inference — it reads the first argument of a
+call, not every argument position — so it can miss, never invent.
+
 ## 2. The borrow checker
 
 The borrow checker is a **diagnostic-only** static analysis. It is
@@ -611,10 +635,14 @@ get right:
   be reused) but not their *freeing* — forget the `vec_free` and it leaks.
 - **Definition order, for the residual checks.** Summaries are built in
   codegen order. The *interprocedural escape* check (§2.7) no longer
-  depends on order — it is parked and replayed after the module compiles
-  — but the *return-escape* (§2.8) and *sink* checks still consult the
-  summary inline, so a forward / generic call to such a callee misses the
-  diagnostic (§3). Never miscompiled — only unchecked.
+  depends on order — it is parked and replayed after the module compiles.
+  The *sink* check no longer misses a **generic** callee either: a
+  generic function's `inout` / `sink` index sets, auto-`sink` included,
+  are derived from the stored template as it is declared, so a call site
+  sees them before any instantiation exists (§1). What still consults the
+  summary inline is the *return-escape* check (§2.8), and every check
+  still needs the callee *defined above its call site* — a forward call
+  misses the diagnostic (§3). Never miscompiled — only unchecked.
 
 ### 6.5 This is not Rust
 

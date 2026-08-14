@@ -18635,6 +18635,86 @@
     r
 }
 
+// generic_body_auto_sink: the auto-sink inference (critic v0.9.0 §2)
+// for a GENERIC template, run over the stored template source.
+//
+// For an ordinary function the inference is a by-product of compiling
+// the body: gen_call stashes the move and bck_record_inferred_sink
+// notes the parameter index, which gen_fn_decl_concrete merges into
+// g_fn_sink[fname]. A generic body is not compiled where it is
+// written — it is stored and instantiated later, under a MANGLED
+// name — so that summary reached neither the generic name nor any
+// call site that came before the deferred instantiation. The result
+// was a hole with no diagnostic at all: a generic wrapper that frees
+// its parameter left the caller's binding Owned, so
+//
+//     @ dispose [T] ( Vec T ) xs → v { ( vec_free [T] xs ) }
+//     ( dispose [i] xs ) ( dispose [i] xs )
+//
+// compiled clean and double-freed at runtime, while the identical
+// non-generic wrapper was rejected. This closes it by reading the
+// template text — the only form of the body available this early.
+//
+// The scan is deliberately narrower than the codegen inference: it
+// fires only on `( callee [<targs>] <param> …` — a call whose FIRST
+// argument is a bare identifier naming a parameter, where the callee
+// is a typed destructor or is already known to sink its argument 0.
+// An identifier in that position IS the first argument (a prefix
+// operator would lex as an operator token there), so no arity
+// reasoning is needed; anything more involved is left to miss rather
+// than risk a false positive on a borrowed argument.
+//
+// `lexp` must be positioned at the return type / body; the walk runs
+// it to EOF. Returns `sa` with any inferred indices merged in.
+@ generic_body_auto_sink i lexp i syms s pnames s sa → s {
+    : ~ s out ( nurl_str_cat sa `` )
+    ? == 0 ( nurl_str_len pnames ) { ^ out } {}
+    ~ != ( nurl_lex_type lexp ) TT_EOF {
+        ? != ( nurl_lex_type lexp ) TT_LPAREN
+        { ( nurl_lex_advance lexp ) }
+        { ( nurl_lex_advance lexp )  // consume '('
+            ? ( is_ident_tok ( nurl_lex_type lexp ) )
+            { : s cal ( nurl_lex_val lexp )
+                ( nurl_lex_advance lexp )
+                // Skip an explicit type-argument list `[ … ]`. Nested
+                // brackets (a slice type argument) are counted, so the
+                // walk resumes at the first real argument.
+                ? == ( nurl_lex_type lexp ) TT_LBRACK
+                { : ~ i bd 0
+                    : ~ b bdone F
+                    ~ ! bdone {
+                        : i bt ( nurl_lex_type lexp )
+                        ? == bt TT_EOF { = bdone T }
+                        { ? == bt TT_LBRACK { = bd + bd 1 } {}
+                            ? == bt TT_RBRACK { = bd - bd 1 } {}
+                            ( nurl_lex_advance lexp )
+                            ? == bd 0 { = bdone T } {} }
+                    } }
+                {}
+                ? ( is_ident_tok ( nurl_lex_type lexp ) )
+                { : s a0 ( nurl_lex_val lexp )
+                    : i pidx ( str_word_index pnames a0 )
+                    // A destructor consumes argument 0; so does any
+                    // callee whose own summary already lists index 0 as
+                    // a sink — that is the wrapper-of-wrapper cascade,
+                    // the same one bck_record_inferred_sink handles at
+                    // the sink-argument site.
+                    ? & >= pidx 0
+                    | ( bck_is_destructor_call cal ( nurl_sym_get syms cal ) )
+                    ( str_contains_word ( nurl_sym_get g_fn_sink cal ) `0` )
+                    { : s w ( nurl_str_int pidx )
+                        ? ! ( str_contains_word out w )
+                        { = out ? == 0 ( nurl_str_len out )
+                            ( nurl_str_cat w `` )
+                            ( nurl_str_cat3 out ` ` w ) }
+                        {} }
+                    {} }
+                {} }
+            {} }
+    }
+    out
+}
+
 // compute_generic_inout_sink: derive a generic function's `inout` and
 // `sink` parameter index sets from its stored template and publish
 // them under the GENERIC name in g_fn_inout / g_fn_sink.
@@ -18650,7 +18730,7 @@
 // instantiation — the scan_generic_structs pre-pass owns that — so
 // walking the raw template here, tparam tokens (`A` / `T` …) and all,
 // is side-effect-free.
-@ compute_generic_inout_sink s fname → v {
+@ compute_generic_inout_sink i syms s fname → v {
     : s gsrc ( nurl_sym_get2 g_generic_syms fname `__gsrc` )
     ? != 0 ( nurl_str_len gsrc )
     {  // Substitute every type parameter with a concrete primitive (`i`)
@@ -18669,6 +18749,9 @@
         : i lexp ( nurl_lex_new probe `<gsig>` )
         : ~ s ia ``
         : ~ s sa ``
+        // Parameter NAMES, in order — the key the body scan below
+        // resolves a bare-identifier argument back to an index with.
+        : ~ s pnames ``
         : ~ i pc 0
         // Walk the parameter region only — stop at `→` (or, defensively,
         // at the body `{` if a malformed template lacks the arrow).
@@ -18692,10 +18775,17 @@
             : s __psig_ty ( parse_type lexp )
             ? != 0 ( nurl_str_len __psig_ty ) {} {}
             ? ( is_ident_tok ( nurl_lex_type lexp ) )
-            { ( nurl_lex_advance lexp ) }
+            { : s __psig_nm ( nurl_lex_val lexp )
+                = pnames ? == 0 ( nurl_str_len pnames )
+                ( nurl_str_cat __psig_nm `` )
+                ( nurl_str_cat3 pnames ` ` __psig_nm )
+                ( nurl_lex_advance lexp ) }
             {}
             = pc + pc 1
         }
+        // Auto-sink inference over the body — a generic body is never
+        // compiled here, so the codegen-time inference cannot see it.
+        = sa ( generic_body_auto_sink lexp syms pnames sa )
         ( nurl_sym_def g_fn_inout fname ia )
         ( nurl_sym_def g_fn_sink fname sa )
         ( nurl_lex_free lexp )
@@ -18782,7 +18872,7 @@
     // parameter index sets (keyed by the generic name) so a call site
     // can pass `inout` arguments by address and move-mark `sink` ones
     // without waiting for the deferred instantiation to be compiled.
-    ( compute_generic_inout_sink fname )
+    ( compute_generic_inout_sink syms fname )
 }
 
 // compute_generic_ret_ty: determine return type of a generic instantiation

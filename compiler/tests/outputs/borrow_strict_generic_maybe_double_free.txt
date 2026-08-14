@@ -1,0 +1,5 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/borrow_strict_generic_maybe_double_free.nu:36: error: 'xs' may already be freed here — it was conditionally consumed (one branch only) at line 35; this second free double-frees on that path (strict-borrowck; restructure so exactly one path frees it)
+    ( dispose [i] xs )
+error: compilation aborted — 1 borrow-checker violation (re-run with --no-borrowck to bypass)
