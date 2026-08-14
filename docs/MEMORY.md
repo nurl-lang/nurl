@@ -721,13 +721,25 @@ safe Rust cannot:
    exactly this hole (§2.9, check 3) at the cost of also flagging the
    legitimate mutually-exclusive-frees pattern.
 2. **Data-race on shared heap state.** There is **no `Send`/`Sync`
-   system**. The one concrete footgun the compiler does reject is an
-   `Rc` captured into `thread_spawn`; but two threads sharing an
-   `Arc[Vec]` and both mutating the *contents* are entirely
-   unchecked, and a user type that is internally non-thread-safe is
-   not flagged when it crosses a thread boundary
+   system**. Two footguns are rejected concretely: an `Rc` captured
+   into `thread_spawn`, and a `thread_spawn` closure that mutates the
+   *contents* of an `Arc` it did not create — inline or through a
+   helper — without holding a lock. The second was the example this
+   section used to cite as unchecked; `Arc ( Vec i )` shared by two
+   pushing workers segfaulted 5 runs in 8 and silently lost half its
+   updates in the rest, because `arc_get` over a manually-managed
+   handle hands back a *copy of the handle* aliasing one buffer.
+   `Arc` makes the *refcount* atomic, not your data — put the data
+   behind a `Mutex` the worker locks itself.
+
+   What remains unchecked: a user type that is internally
+   non-thread-safe is not flagged when it crosses a thread boundary,
+   the lock check counts `mutex_lock`/`mutex_unlock` rather than
+   proving the lock is held on every path (so it can only miss a
+   race, never invent one), and nothing stops the *parent* thread
+   from mutating shared state while a worker runs
    ([`LIMITATIONS.md`](LIMITATIONS.md), *Concurrency / thread
-   safety*). `Arc` makes the *refcount* atomic, not your data.
+   safety*).
 
 Integer division and remainder by zero panic with a clear message —
 they are not UB.
