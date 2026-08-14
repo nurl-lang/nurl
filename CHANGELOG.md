@@ -10,6 +10,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Two threads mutating one `Arc`'s contents is now a compile error.**
+  `docs/MEMORY.md` §6.5 named this as the concrete unchecked data race —
+  "`Arc` makes the *refcount* atomic, not your data" — and it was
+  reachable from ordinary code: no `*T`, no FFI, not a single cast.
+
+  ```
+  : ( Arc ( Vec i ) ) a ( arc_new [( Vec i )] d )
+  : ( @ v ) w1 \ → v { : ( Vec i ) v ( arc_get [( Vec i )] a )  ( vec_push [i] v k ) }
+  : ( @ v ) w2 \ → v { … the same … }
+  ```
+
+  Measured, two workers × 2000 pushes: **5 of 8 runs segfaulted**, and
+  the survivors returned 2000 / 2996 / 3166 instead of 4000. `arc_get`
+  over a manually-managed handle hands back a *copy of the handle*
+  aliasing the one buffer, so both workers write the same length and the
+  same backing pointer, and whichever reallocates first frees the buffer
+  the other still holds.
+
+  `thread_spawn` now rejects a closure that mutates the contents of an
+  `Arc` it did not create, whether the mutation is inline or inside a
+  helper it calls — moving a `vec_push` into a function must not move it
+  out of the check, so a per-function summary carries it, inferred in
+  codegen order like the sink and escape summaries.
+
+  The error fires at the *detach*, not at the mutation: mutating an
+  Arc's contents from one thread is ordinary correct code. Four shapes
+  stay legal and are pinned as a control — single-threaded mutation, a
+  read-only worker, a worker mutating its own Vec, and **the cure**:
+  mutation under a lock the worker takes itself. That last one matters
+  most, because a diagnostic that forbids the fix it recommends is worse
+  than no diagnostic; it is verified to compile *and* to return
+  4000/4000 over ten runs. Lock depth is counted rather than proved, and
+  reset when a closure body is entered — a lock the defining thread
+  holds says nothing about the thread the closure is detached onto — so
+  the check can only miss a race, never invent one.
+  (`diag_thread_arc_shared_mutation`,
+  `diag_thread_arc_shared_mutation_helper`,
+  `thread_arc_shared_mutation_ok`)
+
 - **An option/result payload must be the type the option was declared
   over.** Field 1 carries T's real type in both forms — `? i` lowers to
   `{ i1, i64 }`, `! i s` to `{ i1, i64, i8* }` — but the payload
