@@ -8,6 +8,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A generic function that frees its parameter is a `sink` again.** The
+  borrow checker infers an auto-`sink` when a body consumes a parameter,
+  so the caller of a wrapper loses the binding and a second call is a
+  use-after-move. That inference is a by-product of *compiling the body*
+  — and a generic body is not compiled where it is written. It is stored
+  and instantiated later, under a mangled name, so the summary reached
+  neither the generic name nor any call site that preceded the deferred
+  instantiation. The result was a hole with no diagnostic at all:
+
+  ```
+  @ dispose [T] ( Vec T ) xs → v { ( vec_free [T] xs ) }
+  ( dispose [i] xs ) ( dispose [i] xs )     // compiled clean; double free
+  ```
+
+  The identical non-generic wrapper was rejected. `compute_generic_inout_sink`
+  now reads the stored template's body for the auto-`sink` case as well as
+  the declared markers, so the generic and ordinary forms are checked
+  alike — under the default checker for the unconditional shape, and under
+  `--strict-borrowck` when the first free is on one arm of a `?`. The
+  template scan reads the first argument of a call rather than every
+  argument position, so it can miss, never invent.
+  (`borrow_generic_sink_wrapper`, `borrow_strict_generic_maybe_double_free`)
+
 ## [0.41.0] — 2026-08-14
 
 The honest-failure release. Nothing here is a new capability; every entry
