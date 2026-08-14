@@ -12493,20 +12493,30 @@
 // caller before the RHS is generated.
 @ bck_alias_from_phi i syms b dest_moves s dest s vt i line → v {
     ? | ! dest_moves ! ( bck_is_heap_lty vt ) { ^ v } {}
-    : ~ s rest ( nurl_sym_get syms `__last_phi_idents__` )
-    ? == 0 ( nurl_str_len rest ) { ^ v } {}
+    : s ids ( nurl_sym_get syms `__last_phi_idents__` )
+    ? == 0 ( nurl_str_len ids ) { ^ v } {}
     : b definite != 0 ( nurl_sym_len syms `__last_phi_definite__` )
-    : s why ( nurl_sym_get syms `__last_phi_cause__` )
+    // Bind the phrase, do not build it inline in the call argument: a
+    // freshly allocated string handed to a USER function is not freed
+    // as an owned call temp, so the inline form leaked one per
+    // diagnosis (the LSan-pinned tests caught it). A `: s` binding is
+    // auto-dropped, and passing the NAME is a borrow.
+    : s why0 ( nurl_sym_get syms `__last_phi_cause__` )
+    : s why ? == 0 ( nurl_str_len why0 )
+    ( nurl_str_cat `its handle is one of the values a '?' / '??' selected between` `` )
+    ( nurl_str_cat why0 `` )
     : s params ( nurl_sym_get syms `__fn_param_names__` )
+    // Walk a COPY: `ids` borrows the symbol-table entry, and the
+    // cursor below reassigns itself with owned slices of it. Same
+    // idiom as bck_max_ret_refdepth.
+    : ~ s rest ( nurl_str_cat ids `` )
     ~ != 0 ( nurl_str_len rest ) {
         : s nm ( str_first_word rest )
         = rest ( str_skip_word rest )
         ? | ( seq nm dest ) ( str_contains_word params nm ) {} {
             ? definite
             { ( bck_stash_move nm line `an alias copy through a '?' / '??' result` ) }
-            { ( bck_stash_maybe_move nm line ? == 0 ( nurl_str_len why )
-                ( nurl_str_cat `its handle is one of the values a '?' / '??' selected between` `` )
-                ( nurl_str_cat why `` ) ) }
+            { ( bck_stash_maybe_move nm line why ) }
             ( lint_note_released nm ) }
     }
 }
@@ -12543,8 +12553,10 @@
     ? & & & ( is_ident_tok rhs_tt ) ( bck_is_heap_lty vt )
     ! ( seq rhs_val dest )
     ! ( str_contains_word ( nurl_sym_get syms `__fn_param_names__` ) rhs_val )
-    { ( bck_stash_maybe_move rhs_val line
-        ( nurl_str_cat3 `its handle was handed to '` dest `' by an alias assignment` ) ) }
+    {  // Bound, not inline — see bck_alias_from_phi: a fresh string
+        // passed straight to a user function is never released.
+        : s why ( nurl_str_cat3 `its handle was handed to '` dest `' by an alias assignment` )
+        ( bck_stash_maybe_move rhs_val line why ) }
     {}
 }
 
