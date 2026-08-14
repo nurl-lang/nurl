@@ -13,3 +13,4 @@ compiler/tests/diag_did_you_mean.nu:27:20: error: call to unknown function 'zzqq
     ^ ( zzqqxxyy 1 )
                    ^
 error: aborting due to 4 previous errors
+note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.

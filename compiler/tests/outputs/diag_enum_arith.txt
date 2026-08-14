@@ -2,3 +2,4 @@ COMPILE FAIL
 ERRORS
 compiler/tests/diag_enum_arith.nu:9:5: error: operator applied to an enum operand: left is 'Color', right is 'i' — an enum is a closed set of named variants, not a number: arithmetic and ordering have no meaning on it. Compare with '==' against a variant, match with '??', or read the tag intentionally with '# i x'.
 error: aborting due to 1 previous error
+note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.

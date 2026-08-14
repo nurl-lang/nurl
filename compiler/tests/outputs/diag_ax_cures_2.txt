@@ -2,3 +2,4 @@ COMPILE FAIL
 ERRORS
 compiler/tests/diag_ax_cures_2.nu:16:16: error: bare function name 'f' used as a value. If you meant to CALL it, calls need parentheses: '( f args )', never 'f args'. If you really wanted the function AS a value, a bare name does not auto-coerce to a closure — wrap it: '\ args → R { ( f args ) }' — but that is the rarer reading.
 error: aborting due to 1 previous error
+note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.

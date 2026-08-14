@@ -4,3 +4,4 @@ compiler/tests/diag_select_arm_body_unbraced.nu:7:22: error: expected '{' to ope
     ?? { [i] c → v ^ 0 }
                      ^
 error: aborting due to 1 previous error
+note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.

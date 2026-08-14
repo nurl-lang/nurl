@@ -4,3 +4,4 @@ compiler/tests/diag_select_two_defaults.nu:6:34: error: select has more than one
     ?? { [i] c → v {} _ → {} _ → {} }
                                  ^
 error: aborting due to 1 previous error
+note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.

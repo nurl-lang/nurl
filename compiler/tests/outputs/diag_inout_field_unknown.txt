@@ -4,3 +4,4 @@ compiler/tests/diag_inout_field_unknown.nu:10:19: error: inout field argument: s
     ( bump . s zz )
                   ^
 error: aborting due to 1 previous error
+note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.

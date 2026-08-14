@@ -1,0 +1,7 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_opt_payload_ptr_into_int.nu:19:25: error: payload of this option/result literal is a pointer/string ('s') but the declared payload type is 'i', a number. Storing the address in a numeric slot would make the '?? T v →' arm read a pointer as arithmetic — which is what this used to do, silently. Declare the payload as the type you are storing (write '@ ?s { T ... }' for a string), or store a number.
+    : ?i o @ ?i { T `x` }
+                        ^
+error: aborting due to 1 previous error
+note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.

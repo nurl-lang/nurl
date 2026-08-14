@@ -4,3 +4,4 @@ compiler/tests/diag_generic_targ_deficit.nu:10:26: error: generic function 'opt_
     : ?i m ( opt_map [i] o sq )
                          ^
 error: aborting due to 1 previous error
+note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.

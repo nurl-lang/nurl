@@ -4,3 +4,4 @@ compiler/tests/diag_match_mixed_arms.nu:24:5: error: '# i64' has no value to con
     : i lo2 ?? ( vec_get [f] d 0 ) { T x → x F → 0 }
     ^
 error: aborting due to 1 previous error
+note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.

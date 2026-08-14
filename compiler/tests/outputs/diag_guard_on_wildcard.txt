@@ -2,3 +2,4 @@ COMPILE FAIL
 ERRORS
 compiler/tests/diag_guard_on_wildcard.nu:6:26: error: a guard on the wildcard arm is not supported. '_' already means "everything not matched above", so '_ ? cond' would leave the remaining variants unhandled when the guard is false, and a match must be exhaustive. Guard a named variant instead ('A v ? > v 0 → body'), and let a plain '_ → body' absorb the rest.
 error: aborting due to 1 previous error
+note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.

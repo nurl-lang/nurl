@@ -2,3 +2,4 @@ COMPILE FAIL
 ERRORS
 compiler/tests/diag_call_missing_required_arg.nu:21:5: error: call to 'box' is missing required argument 'label', and that parameter declares no default. A parameter is optional only when its declaration gives it one ('@ f i width = 10 → v'); every other parameter must be supplied, and there is no overloading to fall back on. Pass it positionally in declaration order, name it ('name : value'), or give it a default at the declaration.
 error: aborting due to 1 previous error
+note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.

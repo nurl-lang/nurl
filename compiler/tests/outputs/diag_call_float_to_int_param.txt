@@ -4,3 +4,4 @@ compiler/tests/diag_call_float_to_int_param.nu:12:21: error: argument 1 to 'twic
     : i z ( twice y )
                     ^
 error: aborting due to 1 previous error
+note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.

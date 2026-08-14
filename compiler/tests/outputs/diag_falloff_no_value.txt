@@ -2,3 +2,4 @@ COMPILE FAIL
 ERRORS
 compiler/tests/diag_falloff_no_value.nu:9:5: error: the function body ends without a return value (expected i) — the final statement yields nothing (a call returning 'v', an assignment, a loop or a bare block produce no value). End the body with an expression of the declared type, or return one explicitly with '^ <value>'. If the body LOOKS like it ends with a value, count the braces: an extra '}' closes the function early and strands the rest at the top level.
 error: aborting due to 1 previous error
+note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.

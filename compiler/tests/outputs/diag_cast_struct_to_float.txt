@@ -4,3 +4,4 @@ compiler/tests/diag_cast_struct_to_float.nu:9:5: error: '# f' of an aggregate va
     ^ 0
     ^
 error: aborting due to 1 previous error
+note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.

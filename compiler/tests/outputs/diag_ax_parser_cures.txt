@@ -4,3 +4,4 @@ compiler/tests/diag_ax_parser_cures.nu:25:36: error: expected the next match arm
         F e → ( nurl_print `a` ) ( nurl_print `b` )
                                    ^
 error: aborting due to 1 previous error
+note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.

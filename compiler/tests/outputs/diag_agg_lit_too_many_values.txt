@@ -4,3 +4,4 @@ compiler/tests/diag_agg_lit_too_many_values.nu:10:24: error: too many values in 
     ^ @ ?i { T + n 2 2 }
                        ^
 error: aborting due to 1 previous error
+note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.

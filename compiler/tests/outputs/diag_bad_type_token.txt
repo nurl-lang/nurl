@@ -4,3 +4,4 @@ compiler/tests/diag_bad_type_token.nu:5:7: error: expected a type, found '5'. Ty
     : 5 n 0
       ^
 error: aborting due to 1 previous error
+note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.

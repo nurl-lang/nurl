@@ -16160,6 +16160,25 @@
                         // (which would heap-box it as if it were a by-value
                         // struct handle). The `?? T p` arm recovers it with a
                         // single inttoptr.
+                        //
+                        // …but ONLY into a slot that is a BOX. Field 1 carries
+                        // T's real type in both forms (`? i` is `{ i1, i64 }`,
+                        // `! i s` is `{ i1, i64, i8* }`), so a declared payload
+                        // of `i` is a NUMBER, not an untyped word — and folding
+                        // an address into it is not a representation choice, it
+                        // is a lie the `??` arm then reads as arithmetic.
+                        // `@ ?i { T `x` }` compiled clean and returned the low
+                        // byte of a .rodata address. The tag-carrying pointer
+                        // shapes (`?s`, `?*T`) match their slot and never reach
+                        // here; what reaches here with an integer slot is a
+                        // type error.
+                        ? > ( int_width payload_ty ) 0
+                        { ( die lex ( nurl_str_cat4
+                            ( nurl_str_cat3 `payload of this option/result literal is a pointer/string ('` ( llvm_to_nurl ( nurl_llty fty ) ) `')` )
+                            ( nurl_str_cat3 ` but the declared payload type is '` ( llvm_to_nurl payload_ty ) `', a number` )
+                            `. Storing the address in a numeric slot would make the '?? T v →' arm read a pointer as arithmetic — which is what this used to do, silently. `
+                            `Declare the payload as the type you are storing (write '@ ?s { T ... }' for a string), or store a number.` ) ) }
+                        {}
                         : s conv_reg ( nurl_cg_reg cg )
                         ( nurl_print `  ` ) ( nurl_print conv_reg )
                         ( nurl_print ` = ptrtoint ` ) ( nurl_print ( nurl_llty fty ) ) ( nurl_print ` ` )
@@ -16377,6 +16396,28 @@
                         }
                     }
                 }
+                // Nothing above could bridge the value to the declared
+                // payload slot. Every legal conversion has had its turn —
+                // exact match, pointer box, bool widen, struct handle,
+                // float width, integer width, enum-tag wrap — so what is
+                // left is a type the literal cannot hold, and emitting the
+                // insertvalue anyway produces IR only clang rejects, in a
+                // message about `{ i1, i8* }` and `i64` that names neither
+                // the option nor the line the writer has to change.
+                // `@ ?s { T 42 }` was exactly that: nurlc exited 0 and
+                // clang said "insertvalue operand and field disagree".
+                //
+                // This is the backstop, not the primary check: the branches
+                // above give the specific advice (float↔int, address↔number).
+                // Reaching here means a shape none of them named, so say
+                // plainly what was found and what was declared.
+                ? ! ( seq ( nurl_llty actual_fty ) ( nurl_llty payload_ty ) )
+                { ( die lex ( nurl_str_cat4
+                    ( nurl_str_cat3 `payload of this option/result literal has type '` ( llvm_to_nurl ( nurl_llty fty ) ) `'` )
+                    ( nurl_str_cat3 ` but the declared payload type is '` ( llvm_to_nurl payload_ty ) `'` )
+                    ` — NURL does not convert between them implicitly. `
+                    `Declare the option/result over the type you are storing, or convert the value first.` ) ) }
+                {}
             }
             {  // Check if this is actually an enum type
                 // Extract type name from agg_ty (e.g., "%Slice" from "%Slice")
@@ -26297,6 +26338,28 @@
     { ( nurl_eprintln ( nurl_str_cat ( nurl_str_cat3 `error: aborting due to `
         ( nurl_str_int g_err_count ) ` previous error` )
         ? > g_err_count 1 `s` `` ) )
+        // Say what was NOT checked. Recovery is per top-level
+        // declaration: a reported diagnostic skips the REST of the `@`
+        // it fired in, and the walk resumes at the next declaration. So
+        // the count above is a lower bound — two bad statements in one
+        // body yield one error, and a reader who assumes the untouched
+        // statements were checked and passed has been misled by silence
+        // rather than told anything false.
+        //
+        // That reading is the expensive one for anything driving nurlc
+        // in a loop — an adversarial sweep or a model fixing its own
+        // output concludes that nine of ten broken constructs are
+        // accepted, when nine were never examined. One line removes the
+        // inference. It is deliberately not a per-error note: the
+        // property is global to the run, and repeating it under each
+        // error would bury the errors.
+        //
+        // (Reporting every statement was tried and reverted: with no
+        // statement terminator to resync on and no poison bindings, the
+        // extra errors were derived — a failed `: 5 n 0` made the next
+        // line's `^ n` "undefined identifier 'n'". Naming an innocent
+        // line costs a reader more than staying silent about it does.)
+        ( nurl_eprintln `note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.` )
         ( nurl_exit 1 ) }
     {}
     // Stop recording new lint targets before flushing generic
