@@ -10,6 +10,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A heap handle can reach a second name without being copied — the
+  borrow checker now follows it there.** Move tracking recognised
+  exactly one way for two bindings to end up owning one buffer: the
+  syntactic copy `: T b a`. But any construct that yields a *value* can
+  yield an existing handle, and three that do were ownership blind
+  spots — both names looked like sole owners, so freeing both compiled
+  clean and double-freed at runtime (all three confirmed under ASan):
+
+  ```
+  : ( Vec i ) chosen ? flag a ( make )   // a `?` selects between handles
+  = prev t                               // an assignment hands one over
+  : ( Vec i ) c ( pick a 1 )             // a callee hands an argument back
+  ```
+
+  `gen_cond` / `gen_match` now publish which bindings their live arms
+  could select and whether every live arm selects the same one; the
+  `:` / `=` receiving the value turns that into a move. When the result
+  IS one binding's handle on every path it is an ordinary move, reported
+  by default. Otherwise it is a **maybe-move** — `Owned ⊔ Moved` in the
+  existing lattice — reported under `--strict-borrowck`, which is also
+  where the assignment and interprocedural forms land.
+
+  Those two are conditional even though the handover is certain, and
+  that is a statement about the analysis rather than the code: after
+  `= prev t` the old name is still a legal way to read the live buffer
+  (the stdlib's HKDF expansion does exactly that), and only liveness —
+  which this checker does not compute — could say when it stops being
+  one. Reads of a maybe-moved binding are never flagged; only a second
+  consume is. Flagging the reads instead would have rejected 77 passing
+  tests' worth of correct code.
+
+  The interprocedural case reads a new returned-handle summary,
+  `g_fn_ret_alias`, kept deliberately separate from §2.8's
+  returned-parameter summary: that one answers "may the result be a
+  stack reference?" and drives refdepth propagation, this one answers
+  "may it be an argument's heap handle?" and drives move tracking.
+  Widening one map to answer both would have moved every escape
+  diagnostic that reads it. Each shape names its own reason in the
+  diagnostic rather than sending the reader to hunt for a free on a line
+  that only aliased. (`borrow_phi_alias_definite`,
+  `borrow_strict_phi_alias`, `borrow_strict_assign_alias`,
+  `borrow_strict_ret_alias`)
+
 - **A generic function that frees its parameter is a `sink` again.** The
   borrow checker infers an auto-`sink` when a body consumes a parameter,
   so the caller of a wrapper loses the binding and a second call is a

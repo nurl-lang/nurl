@@ -208,6 +208,51 @@ not a move) and is left alone — distinguishing a borrow from a move
 in the general case is the job of the parameter-convention surface
 (`in` / `inout` / `sink`).
 
+**A handle does not have to arrive by that syntax.** A binding-to-binding
+copy is only the simplest way for one buffer to acquire a second name;
+any construct that *yields a value* can yield an existing handle. Three
+more do, and each one used to be an ownership blind spot in which both
+names looked like sole owners and freeing both compiled clean:
+
+```
+: ( Vec i ) chosen ? flag a ( make )   // a `?` SELECTS between handles
+= prev t                               // an assignment hands one over
+: ( Vec i ) c ( pick a 1 )             // a callee hands an argument back
+```
+
+`gen_cond` / `gen_match` publish which bindings their live arms could
+select and whether every live arm selects the same one; the `:` / `=`
+that receives the value turns that into a move. Which kind of move
+depends on what is actually known:
+
+- **Definite** (an ordinary move, reported by default) when the result
+  IS one binding's handle on every path — every live arm names it, or
+  the other arm returned. Any later use is a use-after-move.
+- **Conditional** — the *maybe-move*, `Owned ⊔ Moved` in the lattice of
+  §2.6, reported only under `--strict-borrowck`. This covers the `?`
+  with one aliasing arm, every assignment handover, and every
+  returned-handle case. Reads of a maybe-moved binding are **never**
+  flagged; only a second consume is.
+
+The assignment and interprocedural cases are conditional even though
+the handover itself is certain, and that is a statement about the
+analysis rather than about the code. After `= prev t` the old name is
+still a legal way to read the live buffer — the stdlib's HKDF expansion
+does exactly that — and only *liveness*, which this checker does not
+compute, could say when it stops being one. Flagging reads would reject
+working code, so it declines to guess and waits for the consume.
+
+The interprocedural case reads a **returned-handle summary**,
+`g_fn_ret_alias[fname]`: the parameter indices whose handle the body may
+hand back, inferred in codegen order from `^ p` and from a `?` / `??`
+return whose arms select one. It is deliberately a **separate map** from
+the returned-parameter summary of §2.8 rather than more entries in it:
+§2.8 asks whether the result may be a *stack reference* and drives
+refdepth propagation, this asks whether it may be an argument's *heap
+handle* and drives move tracking. Widening one map to answer both
+questions would have quietly moved every escape diagnostic that reads
+it.
+
 ### 2.3 Escape analysis
 
 A closure that captures a `: ~`-mutable multi-field struct captures it
@@ -576,9 +621,12 @@ clean compile is **not** a proof of memory safety (it is *not
 complete*). It reliably catches the **definite, common** forms of each
 class:
 
-- **Use-after-free / double-free** — use-after-move, alias double-free,
-  loop-carried double-free, indirect (auto-`sink`) use-after-free
-  (§2.1, §2.2, §2.6).
+- **Use-after-free / double-free** — use-after-move, alias double-free
+  (by copy, through a `?` / `??` result, through an assignment, or
+  through a callee that hands an argument back), loop-carried
+  double-free, indirect (auto-`sink`) use-after-free
+  (§2.1, §2.2, §2.6). The conditional forms of the alias case need
+  `--strict-borrowck`; §2.2 says which and why.
 - **Dangling stack references** reaching a return, a heap container, a
   thread, a longer-lived binding, or — interprocedurally — a helper
   that stores or returns one (§2.3, §2.7, §2.8).

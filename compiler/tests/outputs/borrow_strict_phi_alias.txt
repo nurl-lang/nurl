@@ -1,0 +1,5 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/borrow_strict_phi_alias.nu:51: error: 'a' may already be freed here — its handle is one of the values a '?' selected between at line 49; this second free double-frees on that path (strict-borrowck; restructure so exactly one path frees it)
+    ( vec_free [i] a )
+error: compilation aborted — 1 borrow-checker violation (re-run with --no-borrowck to bypass)
