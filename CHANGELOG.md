@@ -8,6 +8,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`tools/metamorph` — a metamorphic coverage harness for the checker.**
+  The fuzzers in `tools/fuzz` ask whether a program computes the right
+  value. This asks a different question, on the axis where the
+  diagnostics have actually been wrong: *the same semantic situation,
+  written N ways, must get the same verdict*.
+
+  Four consecutive fixes were one shape — the checker asked its question
+  at one syntactic spelling and missed the others (#898 generic vs plain
+  wrapper, #899 `: T b a` vs `?`/`??`/`=`/returned argument, #901 boxed
+  vs typed payload slot, #902 mutation inline vs one call deep). None was
+  the analysis being too weak in theory; each was coverage nobody had
+  enumerated.
+
+  A disagreement is not assumed to be a compiler bug: a spelling accepted
+  where its class says reject is rebuilt with `--no-borrowck` and run
+  under AddressSanitizer, and reported as UNCONFIRMED if it runs clean —
+  the template is then the thing to look at. That escalation is what
+  separates a bug finder from a generator of plausible-looking noise. A
+  `controls` class of correct programs guards the other direction, and
+  fails separately and loudly, because a false positive is the worse
+  failure.
+
+### Fixed
+
+- **The shared-mutation summary is transitive.** #902 rejected a thread
+  closure that mutates an `Arc`'s contents through a helper, but the
+  summary stopped at depth one: `closure → outer → inner` was accepted
+  while `closure → inner` was rejected, leaving open the exact
+  "wrap it one level further" escape the summary exists to close. A
+  function that calls a mutating function is now itself recorded as one.
+  Found by `tools/metamorph` on its first run, hours after #902 shipped.
+
 ### Fixed
 
 - **Two threads mutating one `Arc`'s contents is now a compile error.**

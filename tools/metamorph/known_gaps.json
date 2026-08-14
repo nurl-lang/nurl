@@ -1,0 +1,17 @@
+{
+  "_comment": "Spellings the checker does not yet cover. A NEW entry fails the gate; removing one is progress.",
+  "gaps": [
+    [
+      "handle-second-name",
+      "closure-capture"
+    ],
+    [
+      "handle-second-name",
+      "struct-field"
+    ],
+    [
+      "option-payload-type",
+      "vec-into-int"
+    ]
+  ]
+}
