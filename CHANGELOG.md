@@ -8,6 +8,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Three more ways a heap handle acquires a second name.** #899 closed
+  the copy, the `?` / `??` join, the assignment and the
+  callee-returns-its-argument spellings. `tools/metamorph` enumerated the
+  same situation across spellings and found three the verdict did not
+  agree on — each an ASan-confirmed double free (SEGV on a write):
+
+  - **a nested `?`** — the outer join's arm is not a bare identifier, so
+    the outer published no candidates and the inner's were dropped. One
+    level worked, two did not. Arms now hand their candidates up.
+  - **an aggregate-literal field** — `@ Holder { a }`. The lint already
+    treated this as released and the code comment already called it a
+    move; only the checker had not been told. Measured: the field and the
+    binding share a data pointer, and a push through one is visible
+    through the other.
+  - **a closure capture** — a closure that frees what it captured. Moves
+    recorded inside a closure body are deliberately dropped, since its
+    statements must not inline into the enclosing function's list; that
+    dropped this one too. The body's consumes are now replayed against
+    the capture list.
+
+  All three are maybe-moves, reported under `--strict-borrowck`, for the
+  reason that made the assignment case conditional in #899: the handover
+  is certain, but the old name may still be a legal way to use the live
+  buffer, and only liveness — which this checker does not compute — could
+  say when it stops being one. For the closure there is a second reason:
+  the checker knows the capture, not the call count, and a closure that
+  frees its capture but is never called leaks rather than double-frees.
+
+  Recording the aggregate case as a *definite* move was tried first and
+  reverted: it rejected the option-wrapper idiom the MCP tests are built
+  on, where `@ ?Json { T p1 }` is a transient argument wrapper and `p1`
+  is still the caller's to free.
+
+  Default-mode acceptance is unchanged across stdlib, examples and 320
+  package files. Three stdlib files gain a `--strict-borrowck`
+  diagnostic, all the documented mutually-exclusive-frees pattern that
+  strict mode is stated to flag (a handle either returned inside an
+  option or freed, never both). (`borrow_strict_handle_second_name_more`)
+
 ### Added
 
 - **`tools/metamorph` — a metamorphic coverage harness for the checker.**

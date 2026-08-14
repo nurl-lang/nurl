@@ -1014,6 +1014,16 @@
 // thread holds says nothing about the thread the closure is detached
 // onto. The body must take the lock itself, which is what the cure does.
 : ~ i g_lock_depth 0
+
+// Names a closure BODY consumed. bck_stash_move drops its records while
+// inside a closure — the body's statements must not inline into the
+// enclosing function's list, where they would conflate same-named
+// bindings — so a closure that frees a binding it CAPTURED left no
+// trace at all, and `\ → v { ( vec_free a ) }` followed by
+// `( vec_free a )` outside compiled clean and double-freed. Collected
+// here instead, and replayed against the capture list once the body is
+// done and the depth is back to zero.
+: ~ s g_closure_consumed ``
 : ~ i g_closure_defs 0  // Deferred closure function definitions
 : ~ i g_closure_types 0  // Deferred closure type definitions
 : ~ i g_type_count 0  // Count of closure types stored
@@ -8663,6 +8673,14 @@
     // (a slice literal or a nested `?` that is itself fresh). Only when BOTH
     // live arms are fresh does the `?`-result carry ownership to the binding.
     ( nurl_sym_def syms `__last_slice_owned__` `` )
+    // Handle provenance gets the same per-arm reset+snapshot discipline:
+    // an arm may itself BE a `?` / `??` that selected between handles,
+    // and the outer join then carries whatever the inner one could hand
+    // over. Without this, `? c ? c a ( make ) ( make )` published
+    // nothing — the outer's arm is not a bare identifier, so the outer
+    // saw no alias, and a nested ternary was a hole in a rule the
+    // one-level form has closed since #899.
+    ( nurl_sym_def syms `__last_phi_idents__` `` )
     // Owned-STRING provenance gets the same per-arm reset+snapshot
     // discipline. Without it, `__last_call_ret_owned__` after the whole
     // `?` was simply the LAST arm's residue — `: s x ? c `lit` ( getter )`
@@ -8688,6 +8706,7 @@
     : s t_str_flag ( nurl_str_cat ( nurl_sym_get syms `__last_call_ret_owned__` ) `` )
     : b t_alias != 0 ( nurl_sym_len syms `__last_value_alias__` )
     : s t_retid ( nurl_str_cat ( nurl_sym_get syms `__last_ident_name__` ) `` )
+    : s t_inner_ids ( nurl_str_cat ( nurl_sym_get syms `__last_phi_idents__` ) `` )
     // A tracked-owned-string ident arm hands the phi a COPY, emitted
     // here inside the arm's own block (it must only run on this path).
     // The old protocol cancelled the binding's scheduled drop instead —
@@ -8814,6 +8833,7 @@
     : s e_str_flag ( nurl_str_cat ( nurl_sym_get syms `__last_call_ret_owned__` ) `` )
     : b e_alias != 0 ( nurl_sym_len syms `__last_value_alias__` )
     : s e_retid ( nurl_str_cat ( nurl_sym_get syms `__last_ident_name__` ) `` )
+    : s e_inner_ids ( nurl_str_cat ( nurl_sym_get syms `__last_phi_idents__` ) `` )
     // Mirror of the then-arm's tracked-ident copy (see above) — plus the
     // one case where a LITERAL else-arm still copies eagerly: the
     // then-arm is already a live fresh owner, so uniform ownership needs
@@ -8932,15 +8952,28 @@
     { = phi_ids ? == 0 ( nurl_str_len phi_ids ) ( nurl_str_cat e_retid `` )
         ( nurl_str_cat3 phi_ids ` ` e_retid ) }
     {}
+    // A live arm that was ITSELF a handle-selecting `?` / `??` hands its
+    // candidates up: whatever the inner join could have produced, the
+    // outer join can produce too. Union rather than replace — the other
+    // arm may be a plain alias — and skip a dead arm, which never
+    // reaches this phi.
+    ? & == 0 tdr != 0 ( nurl_str_len t_inner_ids )
+    { = phi_ids ( __phi_ids_union phi_ids t_inner_ids ) } {}
+    ? & == 0 edr != 0 ( nurl_str_len e_inner_ids )
+    { = phi_ids ( __phi_ids_union phi_ids e_inner_ids ) } {}
     ( nurl_sym_def syms `__last_phi_idents__` phi_ids )
     ( nurl_sym_def syms `__last_phi_cause__`
     `its handle is one of the values a '?' selected between` )
     // Definite when every live arm aliases the SAME binding — `? f a a`,
     // or a two-armed `?` whose other arm returned. Then the result IS
     // that handle on every path, which is an ordinary move.
+    // Definite only when every live arm is a DIRECT alias of one
+    // binding. An inherited candidate came from a join that already had
+    // a choice, so the outer join cannot promise it on every path.
     ( nurl_sym_def syms `__last_phi_definite__`
-    ? & & > live_arms 0 == alias_arms live_arms
-    | == alias_arms 1 same_name `1` `` )
+    ? & & & > live_arms 0 == alias_arms live_arms
+    | == alias_arms 1 same_name
+    == 0 ( nurl_str_len ( nurl_str_cat t_inner_ids e_inner_ids ) ) `1` `` )
     // Prefix-arity grammar: `?` consumed bare expressions for
     // then/else, but the very next token is `{`. Almost always the
     // n-ary `&`/`|` foot-gun: user wrote `? & a b c d { then } { else }`
@@ -12597,6 +12630,34 @@
     {}
 }
 
+// The aggregate-literal companion of bck_let_alias: `@ T { a }` hands
+// `a`'s handle to the aggregate, which then owns it. Same gates as the
+// copy form — a tracked heap type, and not a parameter, since a
+// parameter is borrowed and its caller still owns it.
+//
+// A MAYBE-move, not the definite one the `: T b a` copy gets, for the
+// same reason `= dst src` is: the handover is certain but the old name
+// may still be a legal way to use the live buffer, and only liveness —
+// which this checker does not compute — could say when it stops being
+// one. Recording it as definite rejected the option-wrapper idiom the
+// MCP tests are built on:
+//
+//     : Json p1 ( complete_params … )
+//     : Json r1 ( dispatch reg `…` @ ?Json { T p1 } )
+//     ( json_free p1 )
+//
+// where the literal is a transient argument wrapper and `p1` is still
+// this function's to free. Reads of a maybe-moved binding are never
+// flagged; a second CONSUME is, under --strict-borrowck.
+@ bck_agg_field_alias i syms s name i line → v {
+    : s lty ( nurl_sym_get syms name )
+    ? & ( bck_is_heap_lty lty )
+    ! ( str_contains_word ( nurl_sym_get syms `__fn_param_names__` ) name )
+    { ( bck_stash_maybe_move name line
+        `its handle was stored into an aggregate literal` ) }
+    {}
+}
+
 // The `?` / `??` companion of bck_let_alias: the RHS was not a bare
 // identifier but a value-producing conditional that SELECTED between
 // handles, one or more of which belong to existing bindings. gen_cond /
@@ -12692,6 +12753,15 @@
 
 // Stash `name` (consumed at `line`) for the current statement.
 @ bck_stash_move s name i line s cause → v {
+    // Inside a closure body the record cannot go into the enclosing
+    // function's statement list, but the FACT that this name was
+    // consumed still matters to whoever captured it — keep the name.
+    ? & != g_borrowck 0 != g_bck_closure_depth 0
+    { ? ( str_contains_word g_closure_consumed name ) {}
+        { = g_closure_consumed ? == 0 ( nurl_str_len g_closure_consumed )
+            ( nurl_str_cat name `` )
+            ( nurl_str_cat3 g_closure_consumed ` ` name ) } }
+    {}
     ? & != g_borrowck 0 == g_bck_closure_depth 0 {
         // Remember WHAT consumed it, keyed by name+line — the pair the
         // diagnostic already resolves. "consumed at line 3" makes a
@@ -16107,7 +16177,16 @@
         // consumes the token, because after it the snapshot is gone.
         ? ( is_ident_tok fld_first_tt )
         { ( lint_note_released fld_first_val )
-            ( bck_record_embedded_param syms fld_first_val ) }
+            ( bck_record_embedded_param syms fld_first_val )
+            // …and it is a MOVE, which the borrow checker was not told.
+            // The lint has always treated this as released; the checker
+            // saw nothing, so `@ Holder { a }` followed by freeing both
+            // `. h v` and `a` compiled clean and double-freed (ASan:
+            // SEGV on a write). The field aliases the one buffer —
+            // measured: same data pointer, and a push through `a` is
+            // visible through `. h v` — so this is the `: T b a` rule
+            // wearing a different syntax.
+            ( bck_agg_field_alias syms fld_first_val ( nurl_lex_line lex ) ) }
         {}
         : s fval ( gen_expr lex syms cg )
         : s fty ( nurl_get_last_type )
@@ -18135,6 +18214,8 @@
     = g_fn_arc_mut_witness ``
     : i __cl_lock_saved g_lock_depth
     = g_lock_depth 0
+    : s __cl_consumed_saved ( nurl_str_cat g_closure_consumed `` )
+    = g_closure_consumed ``
     // A closure body is emitted as its OWN function, so it needs its own
     // deferred arm-drop list: the enclosing function's epilogue cannot
     // free slots that live in a different frame. Saving and clearing the
@@ -18169,6 +18250,24 @@
     = g_bck_closure_depth - g_bck_closure_depth 1
     = g_fn_arc_mut_witness __cl_arcmut_saved
     = g_lock_depth __cl_lock_saved
+    // Replay what the body consumed against what it CAPTURED: a
+    // consumed capture is a handle this closure may free, so the
+    // enclosing binding is maybe-moved from here on. MAYBE, because the
+    // closure may be called zero times, once, or many — the checker
+    // knows the capture, not the call count — and because a closure
+    // that frees its capture and is never called leaks rather than
+    // double-frees. Reads stay legal; a second CONSUME is reported
+    // under --strict-borrowck.
+    : ~ s __cl_cons ( nurl_str_cat g_closure_consumed `` )
+    = g_closure_consumed __cl_consumed_saved
+    ~ != 0 ( nurl_str_len __cl_cons ) {
+        : s __cl_n ( str_first_word __cl_cons )
+        = __cl_cons ( str_skip_word __cl_cons )
+        ? ( str_contains_word captured_vars __cl_n )
+        { ( bck_stash_maybe_move __cl_n ( nurl_lex_line lex )
+            `a closure that captured it frees it` ) }
+        {}
+    }
     ? == g_did_ret 0 { ( mem_drain_deferred cg ) } {}
     ( nurl_sym_set g_fn_escapes `__deferred_drops__` __cl_defer_saved )
     ( nurl_sym_set g_fn_escapes `__defer_top_fn__` __cl_dtop_saved )
@@ -18905,6 +19004,22 @@
 // result is the distinct set of caller bindings the call's value may
 // alias — the same shape gen_cond publishes. Companion of
 // bck_max_ret_refdepth, which does the §2.8 refdepth version.
+// Union two space-separated candidate lists, dropping duplicates. Used
+// where a `?` / `??` arm was itself a handle-selecting join and its
+// candidates have to travel up to the enclosing one.
+@ __phi_ids_union s a s b → s {
+    : ~ s out ( nurl_str_cat a `` )
+    : ~ s rest ( nurl_str_cat b `` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s w ( str_first_word rest )
+        = rest ( str_skip_word rest )
+        ? | == 0 ( nurl_str_len w ) ( str_contains_word out w ) {}
+        { = out ? == 0 ( nurl_str_len out ) ( nurl_str_cat w `` )
+            ( nurl_str_cat3 out ` ` w ) }
+    }
+    out
+}
+
 @ bck_ret_alias_idents s ret_alias s arg_idents → s {
     : ~ s out ``
     ? | == g_borrowck 0 == 0 ( nurl_str_len ret_alias ) { ^ out } {}
