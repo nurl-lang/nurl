@@ -8141,9 +8141,14 @@
     // an empty list clears whatever an argument's own nested `?` left
     // behind, so the result of `( f ? c a b )` is not mistaken for `a`.
     ( nurl_sym_def syms `__last_phi_definite__` `` )
-    ( nurl_sym_def syms `__last_phi_idents__`
-    ? & != g_borrowck 0 != 0 ( nurl_str_len callee_ret_alias )
-    ( bck_ret_alias_idents callee_ret_alias arg_idents ) `` )
+    // Bound, not inlined into the `nurl_sym_def` argument through a
+    // `?`: that ternary joins an OWNING call against a bare literal, so
+    // the join is not uniformly owned, nothing consumes the fresh
+    // string, and it leaks (the leak gate catches it). A plain
+    // `: s x ( call )` is auto-dropped. The empty-list and borrowck
+    // gates moved inside the helper so there is no ternary here at all.
+    : s __ra_ids ( bck_ret_alias_idents callee_ret_alias arg_idents )
+    ( nurl_sym_def syms `__last_phi_idents__` __ra_ids )
     ( nurl_sym_def syms `__last_phi_cause__`
     ( nurl_str_cat3 `it was passed to '` fname
     `', which may hand its handle back as the result` ) )
@@ -18659,6 +18664,7 @@
 // bck_max_ret_refdepth, which does the §2.8 refdepth version.
 @ bck_ret_alias_idents s ret_alias s arg_idents → s {
     : ~ s out ``
+    ? | == g_borrowck 0 == 0 ( nurl_str_len ret_alias ) { ^ out } {}
     : ~ s rest ( nurl_str_cat ret_alias `` )
     ~ != 0 ( nurl_str_len rest ) {
         : s w ( str_first_word rest )
