@@ -39,7 +39,17 @@ tools/metamorph/spellings.py --class NAME    # one class
 tools/metamorph/spellings.py --update-known  # re-baseline after fixing one
 ```
 
-`--verify` wants a sanitized runtime: `./build.sh --san --no-tests` first.
+`--verify` wants a sanitized **runtime**, never a sanitized **compiler**.
+Leaving `build/nurlc` sanitized turns each of the ~80 compiles into an
+ASan+LSan run: the sweep goes from **1.5 seconds to ~50 minutes** and looks
+hung when it is only crawling. The tool warns when it detects this. Keep a
+sanitized runtime aside and point at it:
+
+```bash
+./build.sh --san --no-tests && cp stdlib/runtime.o /tmp/rt-san.o
+./build.sh                                  # normal compiler back
+NURL_SAN_RUNTIME=/tmp/rt-san.o tools/metamorph/spellings.py --verify
+```
 
 ## How a finding is judged
 
@@ -60,12 +70,30 @@ generator of plausible-looking noise.
 
 ## The classes
 
-- **`handle-second-name`** — a heap handle acquires a second name and both
-  are freed. However it is spelled, exactly one owner may free the buffer.
-- **`option-payload-type`** — an option/result payload that is not the type
-  the option was declared over.
-- **`arc-shared-mutation`** — a thread closure mutating the contents of an
-  `Arc` it did not create, with no lock held.
+Each carries a **severity**, and the worklist ranks by it. Not every
+disagreement is a memory-safety bug, and pretending otherwise would make
+the output useless for deciding what to fix first.
+
+- **`handle-second-name`** *(memory-unsafety)* — a heap handle acquires a
+  second name and both are freed.
+- **`use-after-free`** *(memory-unsafety)* — a handle is READ after being
+  freed. Nothing frees twice; the buffer is simply gone.
+- **`loop-carried-free`** *(memory-unsafety)* — an outer binding freed
+  inside a loop body (§2.6). Its documented exemptions are controls.
+- **`arc-shared-mutation`** *(memory-unsafety)* — a thread closure mutating
+  the contents of an `Arc` it did not create, unlocked.
+- **`thread-nonsend`** *(memory-unsafety)* — an `Rc` reaching a worker.
+- **`option-payload-type`** *(silent-wrong-value)* — a payload that is not
+  the type the option was declared over. ASan has nothing to say about
+  arithmetic on a boxed pointer, so these land in UNCONFIRMED by
+  construction; a value oracle is `tools/fuzz`'s job.
+- **`iterator-invalidation`** *(diagnostic-consistency)* — mutating a
+  container under a `~ x xs` foreach (§2.5). Deliberately **not** ranked as
+  unsafety: measured, a forced realloc mid-iteration does not dangle,
+  because a `Vec` is a handle to a control block and the loop reads through
+  it. The rule is a conservative guard, so a gap is an inconsistency in
+  what gets *diagnosed* — the direct push warns, the same push one call
+  deep does not.
 - **`controls`** — correct programs, in a class of their own. A checker that
   rejects these is worse than one that misses a bug: every entry is code
   someone would reasonably write, and one of them (`mutex-guarded-mutation`)
