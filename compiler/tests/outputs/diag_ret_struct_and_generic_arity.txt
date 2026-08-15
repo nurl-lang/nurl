@@ -1,0 +1,8 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_ret_struct_and_generic_arity.nu:34:5: error: return value type 'Vec__i64' does not match the declared return type 'i' — a struct/handle value is not a number and does not convert to one. Return the declared type, read the field you mean ('. v field'), or declare the function to return this type.
+compiler/tests/diag_ret_struct_and_generic_arity.nu:39:22: error: call to 'vec_push' has the wrong number of arguments: expected 2, got 1 — every NURL operator has fixed arity, so a missing or extra argument shifts every token after it; check this call.
+    ( vec_push [i] v )
+                     ^
+error: aborting due to 2 previous errors
+note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.
