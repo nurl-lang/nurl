@@ -193,6 +193,16 @@ jobs:
         # published. No in-repo test can catch it; this can.
         run: ./tools/check_package_imports.sh
 
+      - name: a package's --version matches its manifest
+        # `cli_new prog about VERSION` takes the version as a string
+        # literal; nothing derives it from nurl.toml, so the two drift
+        # the moment a release bumps one and forgets the other. anomaly
+        # shipped 0.5.3 and 0.5.4 while `anomaly --version` kept saying
+        # 0.5.2 — found only by installing the published package and
+        # running the binary, which is two releases too late and cannot
+        # be corrected (a version can be yanked, never replaced).
+        run: ./tools/check_package_version_strings.sh
+
       - name: every tracked path can be checked out on Windows
         # CON, PRN, AUX, NUL, COM1-9 and LPT1-9 are DOS device names at
         # every directory, in any case, with any extension — so
