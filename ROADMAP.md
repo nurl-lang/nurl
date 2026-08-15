@@ -7,7 +7,7 @@ Anything marked done here has a regression test in
 [`compiler/tests/`](compiler/tests/) and is covered by the bootstrap fixed
 point.
 
-_Last reviewed: 2026-08-14 · Current release: **0.42.0** · Language: **Grammar
+_Last reviewed: 2026-08-15 · Current release: **0.43.0** · Language: **Grammar
 v2.5** ([`spec/grammar.ebnf`](spec/grammar.ebnf))._
 
 ---
@@ -49,7 +49,15 @@ What is solid today:
 - **Concurrency.** A stackful M:N work-stealing async runtime with **no
   `async`/`await` colouring** — ordinary code runs unchanged under the
   scheduler — plus threads/mutex/cond, typed channels, and Go-style `??`
-  channel **select**.
+  channel **select**. Since 0.43.0, **`Send` / `Sync`** marker traits
+  ([`stdlib/core/marker.nu`](stdlib/core/marker.nu)) are *derived* over a
+  type's whole graph and checked wherever a value crosses a thread
+  boundary — `thread_spawn`, `spawn`, `chan_send`, and an `Arc`'s payload
+  — so an `Rc` or a `Cell` reaching a worker is a compile error however
+  it is spelled, and `% NotSend` / `% Send` mark the cases a structural
+  derivation cannot see either way. It is a sound lint, not a proof:
+  [`docs/MEMORY.md`](docs/MEMORY.md) §6.5 states what it does and does
+  not guarantee.
 - **Standard library.** A broad pure-NURL stdlib (see the inventory below)
   spanning collections, hashing, serialization, a full HTTP/1.1+2 + WebSocket
   stack, database clients, distributed systems (p2p overlay, CRDTs), MCP, and the Anthropic Claude API.
