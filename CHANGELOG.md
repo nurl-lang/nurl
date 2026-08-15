@@ -8,6 +8,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.43.0] — 2026-08-15
+
+The same-verdict release. Every entry below started from one
+observation: the checker was recognising *shapes* where it should have
+been answering *questions*. It knew that `: T b a` gives a handle a
+second name, that a payload slot holds a box, that a thread closure must
+not capture something spelled `Rc` — and every one of those is a
+spelling, not a property. Written another way, the same situation got a
+different verdict.
+
+`tools/metamorph` is the instrument that made that measurable: it
+enumerates one semantic situation across N spellings and fails when the
+verdicts disagree. It found gaps in three checks that had shipped days
+earlier — one of them hours old — and it stays behind as a gate, now at
+nine situation classes plus the controls that guard the other direction,
+reporting zero gaps and zero control regressions.
+
+The headline is `Send` / `Sync`. Thread safety had been a single line,
+"is this capture spelled `Rc`?", and twelve probe programs found ten
+ways to write the same undefined behaviour that compiled clean. It is
+now a property derived over a type's whole graph, checked at every
+boundary a value can cross, with a marker for each of the two directions
+a structural derivation can be wrong in.
+
 ### Added
 
 - **`Send` / `Sync` — thread safety as a property of the type, not of
@@ -64,6 +88,116 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `diag_send_notsend_marker`, `diag_sync_arc_cell`,
   `diag_send_generic_bound`, `send_sync_markers_ok`)
 
+
+- **`tools/metamorph` doubled its classes — and stopped lying to
+  itself.** Four classes to eight (use-after-free, loop-carried-free,
+  iterator-invalidation, thread-nonsend) plus four controls for the
+  documented §2.6 exemptions, which turned up two more gaps of the usual
+  shape. The more valuable half is the three fixes to the *harness*,
+  each a way it could have handed back a confident wrong answer:
+
+  - A template with a **typo** compiled to a syntax error, which the
+    harness read as "rejected — the checker caught it": a false negative
+    wearing coverage's clothes. A rejection must now match the
+    diagnostic its class is about, and anything else is reported INVALID
+    against the template, never against nurlc. It immediately caught
+    three of the new templates, including `( ? … )` — which in NURL is a
+    call to a function named `?`.
+  - Controls were compared with `>=`, so a control that got **rejected**
+    counted as "better than asked" — precisely the false positive that
+    class exists to catch, passing in silence. Fixing it exposed a
+    second modelling error: controls were held to `--strict-borrowck`,
+    which is documented to over-flag. The no-false-positive contract is
+    the *default* checker's, so that is the bar now.
+  - Three gaps were reported as "hung (weak signal)". They were not
+    hung: ASan had already printed `SEGV on 0xfffffffffffffff8, WRITE`
+    and was stalling in its symbolizer, and the harness threw that away
+    on timeout. It now scans partial output and runs with
+    `symbolize=0`. A weak label on strong evidence is its own kind of
+    wrong answer.
+
+  Classes now carry a severity and the worklist ranks by it, because not
+  every disagreement is memory unsafety. `iterator-invalidation`
+  deliberately is not: measured, a forced realloc mid-iteration does not
+  dangle — a Vec is a handle to a control block and the loop reads
+  through it — so §2.5 is a conservative guard and a gap there is a
+  diagnostic inconsistency, not corruption. Ranking it alongside the
+  double frees would have sent the next reader at the wrong thing first.
+
+  The sequencing trap that cost the most time is documented in the
+  harness README: `--verify` wants a sanitized *runtime*, never a
+  sanitized *compiler*. Leaving `build/nurlc` sanitized turns the sweep
+  from 1.5 seconds into ~50 minutes and looks hung. The tool now warns,
+  and takes `$NURL_SAN_RUNTIME` so the sanitized runtime survives a
+  normal rebuild.
+
+- **Two measured semantics pinned as `tools/metamorph` controls.** Both
+  were suspected bugs and turned out to be defined behaviour, so they
+  are now guarded against silent drift rather than "fixed": a partially
+  filled struct literal **zero-fills** (the aggregate starts as
+  `zeroinitializer` — `@ P { 7 }` gives `7, 0, 0`, not garbage), and a
+  match arm may bind a **prefix** of a variant's payloads and ignore the
+  rest. An under-fill check written before measuring rejected the first
+  and broke five tests that rely on it deliberately.
+
+
+- **`tools/metamorph` gains an `invalid-input` class and an IR-validity
+  invariant.** The classes so far asked "the same situation spelled N
+  ways — does the verdict agree?". This adds the other question: *bad
+  input must be diagnosed, never lowered.* Two shipped bugs escaped
+  exactly there, and both times nurlc exited 0 and clang reported the
+  problem against generated IR rather than the line to change.
+
+  The invariant is the stronger half and applies to **every** spelling in
+  every class, not just the new one: whenever nurlc exits 0, the module
+  must pass the LLVM verifier (`llvm-as`). Unlike everything else in the
+  harness this is never a template bug — whatever a program says, if the
+  compiler accepted it then what it emitted has to verify.
+
+
+- **`tools/metamorph` — a metamorphic coverage harness for the checker.**
+  The fuzzers in `tools/fuzz` ask whether a program computes the right
+  value. This asks a different question, on the axis where the
+  diagnostics have actually been wrong: *the same semantic situation,
+  written N ways, must get the same verdict*.
+
+  Four consecutive fixes were one shape — the checker asked its question
+  at one syntactic spelling and missed the others (#898 generic vs plain
+  wrapper, #899 `: T b a` vs `?`/`??`/`=`/returned argument, #901 boxed
+  vs typed payload slot, #902 mutation inline vs one call deep). None was
+  the analysis being too weak in theory; each was coverage nobody had
+  enumerated.
+
+  A disagreement is not assumed to be a compiler bug: a spelling accepted
+  where its class says reject is rebuilt with `--no-borrowck` and run
+  under AddressSanitizer, and reported as UNCONFIRMED if it runs clean —
+  the template is then the thing to look at. That escalation is what
+  separates a bug finder from a generator of plausible-looking noise. A
+  `controls` class of correct programs guards the other direction, and
+  fails separately and loudly, because a false positive is the worse
+  failure.
+
+### Changed
+
+- **The error summary says what was *not* checked.** Diagnostic recovery
+  is per top-level declaration: a reported error skips the rest of the
+  `@` it fired in, so two bad statements in one body produce one error
+  and `aborting due to 1 previous error`. Nothing there is false, but the
+  silence reads as "the rest was checked and passed" — and for anything
+  driving nurlc in a loop, an adversarial sweep or a model fixing its own
+  output, that inference is systematically wrong: nine of ten broken
+  constructs look accepted when nine were never examined. The summary now
+  adds one line saying the count is a lower bound.
+
+  Reporting every statement instead was implemented and reverted. With no
+  statement terminator to resync on and no poison bindings, the extra
+  errors were *derived*: a failed `: 5 n 0` made the next line's `^ n`
+  read as "undefined identifier 'n'", one fixture reported the same error
+  twice, and another desynchronised its braces into "unexpected '}' at
+  the top level". Naming an innocent line costs a reader more than
+  staying silent about it does; the real fix needs poison bindings and
+  derived-error suppression, and the reasoning is recorded at the site.
+
 ### Fixed
 
 - **A `pub` prefix leaked out of its declaration — and out of its
@@ -107,7 +241,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   With these, `tools/metamorph` reports **zero gaps**: every spelling of
   every class now gets the same verdict as its siblings.
 
-### Fixed
 
 - **A user enum's payload slot is a number, and a pointer folded into
   it is read back as arithmetic.** The option/result form of this was
@@ -126,33 +259,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   plausible-wrong inputs as well as checking what gets lowered.
   (`diag_enum_payload_ptr_into_int`)
 
-### Added
-
-- **Two measured semantics pinned as `tools/metamorph` controls.** Both
-  were suspected bugs and turned out to be defined behaviour, so they
-  are now guarded against silent drift rather than "fixed": a partially
-  filled struct literal **zero-fills** (the aggregate starts as
-  `zeroinitializer` — `@ P { 7 }` gives `7, 0, 0`, not garbage), and a
-  match arm may bind a **prefix** of a variant's payloads and ignore the
-  rest. An under-fill check written before measuring rejected the first
-  and broke five tests that rely on it deliberately.
-
-### Added
-
-- **`tools/metamorph` gains an `invalid-input` class and an IR-validity
-  invariant.** The classes so far asked "the same situation spelled N
-  ways — does the verdict agree?". This adds the other question: *bad
-  input must be diagnosed, never lowered.* Two shipped bugs escaped
-  exactly there, and both times nurlc exited 0 and clang reported the
-  problem against generated IR rather than the line to change.
-
-  The invariant is the stronger half and applies to **every** spelling in
-  every class, not just the new one: whenever nurlc exits 0, the module
-  must pass the LLVM verifier (`llvm-as`). Unlike everything else in the
-  harness this is never a template bug — whatever a program says, if the
-  compiler accepted it then what it emitted has to verify.
-
-### Fixed
 
 - **Returning a handle where a number is declared.** `^ ( vec_new [i] )`
   from a `→ i` function lowered `ret %Vec__i64 %r1` out of a
@@ -173,7 +279,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   every call to the *local* function look one argument short.
   (`diag_ret_struct_and_generic_arity`)
 
-### Fixed
 
 - **A `??` arm must name something the scrutinee can be.** Nothing
   checked that, and the consequence was not a diagnostic: an
@@ -201,7 +306,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   variants that type actually has.
   (`diag_match_arm_not_a_variant`)
 
-### Fixed
 
 - **Three more ways a heap handle acquires a second name.** #899 closed
   the copy, the `?` / `??` join, the assignment and the
@@ -242,31 +346,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   strict mode is stated to flag (a handle either returned inside an
   option or freed, never both). (`borrow_strict_handle_second_name_more`)
 
-### Added
-
-- **`tools/metamorph` — a metamorphic coverage harness for the checker.**
-  The fuzzers in `tools/fuzz` ask whether a program computes the right
-  value. This asks a different question, on the axis where the
-  diagnostics have actually been wrong: *the same semantic situation,
-  written N ways, must get the same verdict*.
-
-  Four consecutive fixes were one shape — the checker asked its question
-  at one syntactic spelling and missed the others (#898 generic vs plain
-  wrapper, #899 `: T b a` vs `?`/`??`/`=`/returned argument, #901 boxed
-  vs typed payload slot, #902 mutation inline vs one call deep). None was
-  the analysis being too weak in theory; each was coverage nobody had
-  enumerated.
-
-  A disagreement is not assumed to be a compiler bug: a spelling accepted
-  where its class says reject is rebuilt with `--no-borrowck` and run
-  under AddressSanitizer, and reported as UNCONFIRMED if it runs clean —
-  the template is then the thing to look at. That escalation is what
-  separates a bug finder from a generator of plausible-looking noise. A
-  `controls` class of correct programs guards the other direction, and
-  fails separately and loudly, because a false positive is the worse
-  failure.
-
-### Fixed
 
 - **The shared-mutation summary is transitive.** #902 rejected a thread
   closure that mutates an `Arc`'s contents through a helper, but the
@@ -276,7 +355,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   function that calls a mutating function is now itself recorded as one.
   Found by `tools/metamorph` on its first run, hours after #902 shipped.
 
-### Fixed
 
 - **Two threads mutating one `Arc`'s contents is now a compile error.**
   `docs/MEMORY.md` §6.5 named this as the concrete unchecked data race —
@@ -343,26 +421,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   NURL diagnostic naming both types, not IR handed to the next tool.
   (`diag_opt_payload_ptr_into_int`, `diag_opt_payload_type_mismatch`)
 
-### Changed
+- **Five more network tests raced their own client.** `tls_large_record`
+  failed in CI with the client's two output lines missing — exactly the
+  shape `http_server_pipelined` had in 0.42.0. Its IR was byte-identical
+  before and after the branch it failed on, so the program under test had
+  not moved.
 
-- **The error summary says what was *not* checked.** Diagnostic recovery
-  is per top-level declaration: a reported error skips the rest of the
-  `@` it fired in, so two bad statements in one body produce one error
-  and `aborting due to 1 previous error`. Nothing there is false, but the
-  silence reads as "the rest was checked and passed" — and for anything
-  driving nurlc in a loop, an adversarial sweep or a model fixing its own
-  output, that inference is systematically wrong: nine of ten broken
-  constructs look accepted when nine were never examined. The summary now
-  adds one line saying the count is a lower bound.
+  The cause is the one fixed there: the client is spawned with `&` from a
+  shell that then exits, orphaning it, and the collector later runs
+  `wait $(cat pid)` in a *different* shell where that pid is not a child.
+  The wait fails instantly — which is what the `2>/dev/null` was hiding —
+  and only a fixed `sleep` makes it work, which a loaded runner defeats.
 
-  Reporting every statement instead was implemented and reverted. With no
-  statement terminator to resync on and no poison bindings, the extra
-  errors were *derived*: a failed `: 5 n 0` made the next line's `^ n`
-  read as "undefined identifier 'n'", one fixture reported the same error
-  twice, and another desynchronised its braces into "unexpected '}' at
-  the top level". Naming an innocent line costs a reader more than
-  staying silent about it does; the real fix needs poison bindings and
-  derived-error suppression, and the reasoning is recorded at the site.
+  The 0.42.0 note that no other test used the pattern was wrong: the grep
+  it rested on was mis-escaped and matched nothing. A correct search finds
+  `http_server_tls`, `http_server_seq`, `net_loopback`,
+  `http_server_limits` (two clients) and `tls_large_record` — six sites in
+  total. All six now use the deterministic handoff: the client writes a
+  `.part` file and **renames** it when done (rename(2) is atomic, so the
+  collector sees all or nothing), stale files are cleared first, the
+  background group redirects its own stdout so it cannot hold the pipe
+  `process_run_shell` reads, and the collector polls for the renamed file
+  instead of assuming it has arrived. Verified against the failure mode
+  rather than assumed: six rounds of all six tests under 24-way CPU
+  saturation, 6/6 clean.
 
 ## [0.42.0] — 2026-08-14
 
@@ -13028,7 +13110,8 @@ releases are measured.
   compile-server (`api/`), browser playground (`nurlweb/`).
 * Dual license: MIT (LICENSE-MIT) or Apache-2.0 (LICENSE-APACHE).
 
-[Unreleased]: https://github.com/nurl-lang/nurl/compare/v0.42.0...HEAD
+[Unreleased]: https://github.com/nurl-lang/nurl/compare/v0.43.0...HEAD
+[0.43.0]: https://github.com/nurl-lang/nurl/compare/v0.42.0...v0.43.0
 [0.42.0]: https://github.com/nurl-lang/nurl/compare/v0.41.0...v0.42.0
 [0.41.0]: https://github.com/nurl-lang/nurl/compare/v0.40.0...v0.41.0
 [0.40.0]: https://github.com/nurl-lang/nurl/compare/v0.39.0...v0.40.0
