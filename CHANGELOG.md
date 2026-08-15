@@ -8,6 +8,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A user enum's payload slot is a number, and a pointer folded into
+  it is read back as arithmetic.** The option/result form of this was
+  fixed earlier; the user-enum side kept the hole. `@ E { A `s` }` where
+  `A` declares an `i` payload compiled clean, linked, ran, and returned
+  **96** — the low byte of a `.rodata` address — from an arm the writer
+  expected to yield a number.
+
+  `docs/MEMORY.md` has carried a "user enums: SCALAR payloads only"
+  gotcha for exactly this. A gotcha in prose is what a compiler says
+  when it has no diagnostic; this is the diagnostic.
+
+  Found by `tools/metamorph`'s invalid-input class — and *not* by its
+  IR-validity invariant, because the emitted module verifies fine. It is
+  a wrong value, not malformed IR, which is why that class enumerates
+  plausible-wrong inputs as well as checking what gets lowered.
+  (`diag_enum_payload_ptr_into_int`)
+
+### Added
+
+- **Two measured semantics pinned as `tools/metamorph` controls.** Both
+  were suspected bugs and turned out to be defined behaviour, so they
+  are now guarded against silent drift rather than "fixed": a partially
+  filled struct literal **zero-fills** (the aggregate starts as
+  `zeroinitializer` — `@ P { 7 }` gives `7, 0, 0`, not garbage), and a
+  match arm may bind a **prefix** of a variant's payloads and ignore the
+  rest. An under-fill check written before measuring rejected the first
+  and broke five tests that rely on it deliberately.
+
 ### Added
 
 - **`tools/metamorph` gains an `invalid-input` class and an IR-validity

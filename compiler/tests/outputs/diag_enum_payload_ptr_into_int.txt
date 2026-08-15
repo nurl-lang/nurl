@@ -1,0 +1,7 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_enum_payload_ptr_into_int.nu:21:23: error: payload 1 of enum variant 'A' is a pointer/string, but the variant declares it as 'i', a number. The payload slot is a numeric word and the '??' arm reads it back as that type, so the address would be returned as arithmetic. Declare the payload as the type you are storing, or store a number.
+    : E e @ E { A `s` }
+                      ^
+error: aborting due to 1 previous error
+note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.
