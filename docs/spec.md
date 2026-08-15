@@ -207,11 +207,14 @@ with — nor can shadow — the other. Resolution at a call site, in order:
 1. a **local closure binding** of that name (unchanged from before);
 2. the **current file's own definition** — always, even when other files
    define the same name;
-3. a definition in exactly **one other file** — resolves, with a
-   deprecation warning (once per name): cross-file use of a `__` function
+3. a definition in exactly **one other file** — resolves, with an
+   **obsolete** warning (once per name): cross-file use of a `__` function
    is the flat-namespace era's idiom, and the migration is to rename the
    shared helper with ONE underscore (`_name`, the shared-internal
-   convention — collision-diagnosed but not scoped);
+   convention — collision-diagnosed but not scoped). This path will stop
+   resolving in a future release. Nothing in the stdlib or the first-party
+   tree reaches it any more; it survives only because package versions
+   already published were compiled under it;
 4. definitions in **several other files** — a compile error naming every
    owner, because there is no right answer.
 

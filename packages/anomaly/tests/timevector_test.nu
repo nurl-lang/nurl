@@ -232,12 +232,12 @@ $ `src/dynamic.nu`
     : !Json JsonError lr ( json_parse `{"window_minutes":0,"window_points":100,"n_estimators":200,"max_samples":256,"decision_margin":0.1,"enabled":true}` )
     ?? lr {
         T vo → {
-            : VerCfg tv ( __an_vercfg_of_json `timevector` vo )
+            : VerCfg tv ( _an_vercfg_of_json `timevector` vo )
             ( check == . tv window_size 100 `config: legacy timevector defaults to window 100` )
             ( check == . tv step_size 1 `config: legacy timevector defaults to step 1` )
             ( check == . tv window_pts 0 `config: legacy point-cap dropped for the true window` )
             ( _an_vercfg_free tv )
-            : VerCfg stv ( __an_vercfg_of_json `short_term` vo )
+            : VerCfg stv ( _an_vercfg_of_json `short_term` vo )
             ( check == . stv window_size 0 `config: plain versions stay windowless` )
             ( _an_vercfg_free stv )
             ( json_free vo )

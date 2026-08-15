@@ -591,7 +591,7 @@ $ `kernels.nu`  // _gk_partial_threads / _gk_zeros
 : i GKD_RT 8
 : i GKD_CT 32
 
-@ __gkd_ceil i x i q → i { ^ / + x - q 1 q }
+@ _gkd_ceil i x i q → i { ^ / + x - q 1 q }
 
 // The multiply-accumulate step, spelled the way each element type's
 // contract requires: F64 with explicit round-to-nearest intrinsics
@@ -669,7 +669,7 @@ $ `kernels.nu`  // _gk_partial_threads / _gk_zeros
 // weight that is then used once, and the model came out 2.4x slower even
 // though an isolated benchmark said 1.5x faster (the benchmark kept the
 // weight in L3 across repeats). Transpose at load time instead.
-@ __gkd_gemm_tiled s tn i dtype → String {
+@ _gkd_gemm_tiled s tn i dtype → String {
     : String s ( string_from `enum{RT=8,CT=32};` )
     ( string_push_str s `long long idx=blockIdx.x*blockDim.x+threadIdx.x;` )
     ( string_push_str s `long long ncb=(N+CT-1)/CT,nrb=(M+RT-1)/RT;if(idx>=nrb*ncb)return;` )
@@ -845,7 +845,7 @@ $ `kernels.nu`  // _gk_partial_threads / _gk_zeros
         ( string_push_str src `C[idx]=s;}}` )
     }
     : i total ? on_cpu
-    * ( __gkd_ceil m GKD_RT ) ( __gkd_ceil n GKD_CT )
+    * ( _gkd_ceil m GKD_RT ) ( _gkd_ceil n GKD_CT )
     * m n
     : ( Vec i ) args ( vec_new [i] )
     ( vec_push [i] args ( gk_arg_dev a ) )
@@ -938,7 +938,7 @@ $ `kernels.nu`  // _gk_partial_threads / _gk_zeros
         }
     }
     : i total ? on_cpu
-    * batch * ( __gkd_ceil m GKD_RT ) ( __gkd_ceil n GKD_CT )
+    * batch * ( _gkd_ceil m GKD_RT ) ( _gkd_ceil n GKD_CT )
     * * batch m n
     : ( Vec i ) args ( vec_new [i] )
     ( vec_push [i] args ( gk_arg_dev a ) )
@@ -953,7 +953,7 @@ $ `kernels.nu`  // _gk_partial_threads / _gk_zeros
     // the smem body maps ONE BLOCK to a 64x64 tile of one batch item, so
     // its launch is a block count, not a thread count
     : i grid ? smem
-    * batch * ( __gkd_ceil m GKD_BM ) ( __gkd_ceil n GKD_BN )
+    * batch * ( _gkd_ceil m GKD_BM ) ( _gkd_ceil n GKD_BN )
     ( gk_grid total 256 )
     : b r ( gk_run_dev kit ( string_data src ) ( string_data kname ) grid 256 args )
     ( vec_free [i] args )

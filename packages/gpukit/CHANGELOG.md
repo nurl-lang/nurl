@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.6.4
+
+- Internal rename, no API change: `_gkd_ceil` and `_gkd_gemm_tiled` were
+  `__`-private to `src/dev.nu` and called from `src/devops.nu`. A `__`
+  name is file-scoped, so those calls went through the compiler's
+  obsolete cross-file compatibility path and warned on every build. They
+  now carry the single-underscore shared-internal spelling.
+
 ## 0.6.3
 
 - **`gkd_conv2d_dil`** — atrous (dilated) 2-D convolution: tap (r,s)

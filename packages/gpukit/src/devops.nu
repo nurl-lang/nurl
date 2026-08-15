@@ -72,7 +72,7 @@ $ `dev.nu`
     //
     // transb=1 deliberately stays on the per-element kernel. Staging a
     // transpose at CALL time to reach the tiled body was measured and is
-    // a LOSS — see __gkd_gemm_tiled. Callers that want the tiled path
+    // a LOSS — see _gkd_gemm_tiled. Callers that want the tiled path
     // transpose their weights ONCE, at load.
     //
     // On the CUDA backend the shared-memory tile (_gkd_smem_body) wins on
@@ -132,7 +132,7 @@ $ `dev.nu`
             ( string_push_str src `Y[idx]=alpha*acc+beta*bias;}}` )
         } {
             ? tiled {
-                : String body ( __gkd_gemm_tiled tn . y dtype )
+                : String body ( _gkd_gemm_tiled tn . y dtype )
                 ( string_push_str src ( string_data body ) )
                 ( string_free body )
             } {
@@ -161,12 +161,12 @@ $ `dev.nu`
     // The smem body maps ONE BLOCK to a 64x64 tile, so its launch is a
     // block count, not a thread count — gk_grid would divide it by 256.
     ? smem {
-        : i nb * ( __gkd_ceil m GKD_BM ) ( __gkd_ceil n GKD_BN )
+        : i nb * ( _gkd_ceil m GKD_BM ) ( _gkd_ceil n GKD_BN )
         ^ ( __gkd_launch kit src kname nb args )
     } {}
     // one block per output element, not one thread
     ? gemv { ^ ( __gkd_launch kit src kname * m n args ) } {}
-    : i total ? tiled * ( __gkd_ceil m GKD_RT ) ( __gkd_ceil n GKD_CT ) * m n
+    : i total ? tiled * ( _gkd_ceil m GKD_RT ) ( _gkd_ceil n GKD_CT ) * m n
     ^ ( __gkd_launch kit src kname ( gk_grid total 256 ) args )
 }
 
@@ -302,7 +302,7 @@ $ `dev.nu`
     ( vec_push [i] args ( gpu_arg_i64 sw ) )
     ( vec_push [i] args ( gpu_arg_i64 hasb ) )
     ^ ( __gkd_launch kit src kname
-    ( gk_grid * * ( __gkd_ceil cout 4 ) oh ( __gkd_ceil ow 4 ) 256 ) args )
+    ( gk_grid * * ( _gkd_ceil cout 4 ) oh ( _gkd_ceil ow 4 ) 256 ) args )
 }
 
 // ── 2-D DILATED convolution, NCHW, batch 1, group 1 ──────────────────
@@ -835,7 +835,7 @@ i heads i n i nkv i hd f scale → b {
     ( vec_push [i] args ( gpu_arg_i64 n ) )
     ( vec_push [i] args ( gpu_arg_i64 nkv ) )
     ( vec_push [i] args ( _gk_scal . o dtype scale ) )
-    ^ ( __gkd_launch kit src kname * heads ( __gkd_ceil n bq ) args )
+    ^ ( __gkd_launch kit src kname * heads ( _gkd_ceil n bq ) args )
 }
 
 @ gkd_softmax_ax * GpuKit kit GkBuf y GkBuf x i outer i ax i inner → b {

@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.5.4
+
+- Internal rename, no API change: `_an_vercfg_of_json` was `__`-private
+  to `src/prep.nu` and called from `tests/timevector_test.nu`. A `__`
+  name is file-scoped, so that call went through the compiler's obsolete
+  cross-file compatibility path and warned on every build. It now carries
+  the single-underscore shared-internal spelling.
+
 ## 0.5.3
 
 - Requirements widened to gpu `^0.11` / gpukit `^0.6`. No source change:

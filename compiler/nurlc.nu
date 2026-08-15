@@ -913,15 +913,29 @@
 // site: a local closure binding wins; then the CURRENT file's own
 // definition, always — nobody can shadow my private; then, for
 // compatibility with code written under the flat namespace, a private
-// defined in exactly ONE other file still resolves, with a deprecation
+// defined in exactly ONE other file still resolves, with an OBSOLETE
 // warning (once per name) — the migration is to drop one underscore, `_x`
 // being the shared-internal convention; and a private defined in SEVERAL
 // other files is an error listing them, because there is no right answer.
+//
+// The compatibility path is obsolete, not merely discouraged: no
+// first-party source reaches it any more. stdlib's last users were the
+// seventeen `_p256_*` / `_mag*` helpers that `ecdsa_p256.nu` borrows
+// from `p256_field.nu`, and the four in-tree packages that did the same
+// within their own trees; all are renamed. What keeps the path alive is
+// only that package versions ALREADY PUBLISHED were compiled under it —
+// deleting it would break `nurlpkg install` of a release nobody can go
+// back and edit. It goes when those have turned over.
+//
+// Three test fixtures reach it on purpose and are the only things left
+// that do: `should_warn_priv_cross_file` pins the warning,
+// `diag_priv_ambiguous` the several-owners error, and
+// `should_fail_pub_visibility_neg` the interaction with `pub`.
 : ~ i g_priv_file_ids 0  // src-file path → private-scope id ("1", "2", …)
 : ~ i g_priv_file_count 0
 : ~ i g_priv_owner_ids 0  // bare __name → space-separated owner file ids
 : ~ i g_priv_owner_files 0  // bare __name → `', '`-joined owner paths (messages)
-: ~ i g_priv_warned 0  // bare __name → "1" once the legacy warning fired
+: ~ i g_priv_warned 0  // bare __name → "1" once the obsolete-path warning fired
 : ~ i g_fn_pos_syms 0  // duplicate-fn check: fname → "file:line" of the first
 //   `@ fname` scan registration. Two files are free to each have a private
 //   `__get`-style helper IN THEIR OWN HEADS, but the compilation unit is one
@@ -25651,7 +25665,7 @@
             ( nurl_sym_def g_priv_warned fname `1` )
             ( warn lex ( nurl_str_cat ( nurl_str_cat4
             `'` fname `' is file-private (defined in ` ( nurl_sym_get g_priv_owner_files fname ) )
-            `); cross-file use of a '__' function is deprecated — rename it with ONE underscore ('_name') if it is meant to be shared` ) )
+            `); cross-file use of a '__' function is OBSOLETE and will stop resolving in a future release — rename it with ONE underscore ('_name'), at its definition and at every call site, if it is meant to be shared. A '__' name is file-scoped by design; nothing in the stdlib or the first-party tree relies on this path any more.` ) )
         } {}
         ^ ( priv_mangle_for fname owners )
     } {}
