@@ -1,0 +1,7 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_sync_arc_cell.nu:16:47: error: thread_spawn closure captures 'a', which is not Send: it reaches a 'Cell' — a raw byte buffer whose reads and writes are unsynchronised, so sharing one between threads is a data race on its bytes. Put it behind a 'Mutex' (which is itself marked Sync for exactly this reason) and touch it only while holding the lock, or give each thread its own Cell. If this Cell IS safe to share and the compiler cannot see why, assert it with a '% Sync <Type> { }' marker impl (stdlib/core/marker.nu).
+    : !Thread ThreadErr r ( thread_spawn work )
+                                              ^
+error: aborting due to 1 previous error
+note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.

@@ -378,9 +378,18 @@ CLASSES = [
         "severity": "memory-unsafety",
         "doc": "An `Rc` (non-atomic refcount) reaching a worker thread. "
                "Two threads racing on the control-block count is UB; "
-               "`Arc` is the thread-safe counterpart.",
+               "`Arc` is the thread-safe counterpart. The first three "
+               "spellings are what the original name-matching check "
+               "caught — 'is this capture spelled Rc?'. Everything below "
+               "them hides the Rc one hop further into the type (a "
+               "field, an element, a payload, a generic argument) or one "
+               "hop further into the program (a nested closure, a "
+               "different boundary), and every one of them compiled "
+               "clean until the check became a walk over the type's "
+               "whole graph. Ten spellings of one bug, one of them "
+               "diagnosed, is the exact shape this tool exists to find.",
         "expect": REJECT_DEFAULT,
-        "expect_msg": ["which is an Rc"],
+        "expect_msg": ["is not Send"],
         "spellings": {
             "inline-closure": prog(
                 "    : ( Rc i ) r ( rc_new [i] 1 )\n"
@@ -400,6 +409,157 @@ CLASSES = [
                 "    ?? t { T h → { ( thread_join h ) } F e → {} }",
                 prelude="$ `stdlib/std/rc.nu`\n$ `stdlib/std/thread.nu`\n",
                 extra="@ touch ( Rc i ) r → v { ( rc_free [i] r ) }\n"),
+            # One struct field away. The capture is a `%Holder`, and
+            # nothing about that name says "Rc".
+            "struct-field": prog(
+                "    : ( Rc i ) r ( rc_new [i] 1 )\n"
+                "    : Holder hd @ Holder { r }\n"
+                "    : ( @ v ) w \\ → v { : Holder c hd }\n"
+                "    : !Thread ThreadErr t ( thread_spawn w )\n"
+                "    ?? t { T h → { ( thread_join h ) } F e → {} }",
+                prelude="$ `stdlib/std/rc.nu`\n$ `stdlib/std/thread.nu`\n",
+                extra=": Holder { ( Rc i ) r }\n"),
+            # Two struct fields away — the depth-two escape that
+            # #902's function summary left open in its own domain.
+            "struct-field-nested": prog(
+                "    : ( Rc i ) r ( rc_new [i] 1 )\n"
+                "    : Outer o @ Outer { @ Inner { r } }\n"
+                "    : ( @ v ) w \\ → v { : Outer c o }\n"
+                "    : !Thread ThreadErr t ( thread_spawn w )\n"
+                "    ?? t { T h → { ( thread_join h ) } F e → {} }",
+                prelude="$ `stdlib/std/rc.nu`\n$ `stdlib/std/thread.nu`\n",
+                extra=": Inner { ( Rc i ) r }\n: Outer { Inner in }\n"),
+            # Generic containers erase their element type from the LLVM
+            # body (`: Vec [A] { s ctl }`); it survives only in the
+            # monomorph's mangled name.
+            "vec-element": prog(
+                "    : ( Vec ( Rc i ) ) v ( vec_new [( Rc i )] )\n"
+                "    : ( @ v ) w \\ → v { : i n ( vec_len [( Rc i )] v ) }\n"
+                "    : !Thread ThreadErr t ( thread_spawn w )\n"
+                "    ?? t { T h → { ( thread_join h ) } F e → {} }",
+                prelude="$ `stdlib/std/rc.nu`\n$ `stdlib/std/thread.nu`\n"
+                        "$ `stdlib/core/vec.nu`\n"),
+            "box-payload": prog(
+                "    : ( Rc i ) r ( rc_new [i] 1 )\n"
+                "    : ( Box ( Rc i ) ) b ( box_new [( Rc i )] r )\n"
+                "    : ( @ v ) w \\ → v { : ( Rc i ) g ( box_get [( Rc i )] b ) }\n"
+                "    : !Thread ThreadErr t ( thread_spawn w )\n"
+                "    ?? t { T h → { ( thread_join h ) } F e → {} }",
+                prelude="$ `stdlib/std/rc.nu`\n$ `stdlib/std/thread.nu`\n"
+                        "$ `stdlib/core/box.nu`\n"),
+            # An atomic refcount wrapped around a non-atomic one. Also
+            # the case where Arc holds its payload to the HARDER
+            # question: shared, not merely sent.
+            "arc-payload": prog(
+                "    : ( Rc i ) r ( rc_new [i] 1 )\n"
+                "    : ( Arc ( Rc i ) ) a ( arc_new [( Rc i )] r )\n"
+                "    : ( @ v ) w \\ → v { : ( Rc i ) g ( arc_get [( Rc i )] a ) }\n"
+                "    : !Thread ThreadErr t ( thread_spawn w )\n"
+                "    ?? t { T h → { ( thread_join h ) } F e → {} }",
+                prelude="$ `stdlib/std/rc.nu`\n$ `stdlib/std/thread.nu`\n"
+                        "$ `stdlib/std/arc.nu`\n"),
+            # An enum's body is `{ i64, i64, … }` — payload slots are
+            # type-free, so only the declared payload types remember.
+            "enum-payload": prog(
+                "    : ( Rc i ) r ( rc_new [i] 1 )\n"
+                "    : Wrap wr @ Wrap { Held r }\n"
+                "    : ( @ v ) w \\ → v { : Wrap c wr }\n"
+                "    : !Thread ThreadErr t ( thread_spawn w )\n"
+                "    ?? t { T h → { ( thread_join h ) } F e → {} }",
+                prelude="$ `stdlib/std/rc.nu`\n$ `stdlib/std/thread.nu`\n",
+                extra=": | Wrap { Held ( Rc i )  Empty }\n"),
+            "option-payload": prog(
+                "    : ( Rc i ) r ( rc_new [i] 1 )\n"
+                "    : ?( Rc i ) o @ ?( Rc i ) { r }\n"
+                "    : ( @ v ) w \\ → v { : ?( Rc i ) c o }\n"
+                "    : !Thread ThreadErr t ( thread_spawn w )\n"
+                "    ?? t { T h → { ( thread_join h ) } F e → {} }",
+                prelude="$ `stdlib/std/rc.nu`\n$ `stdlib/std/thread.nu`\n"),
+            # No type walk can find this one: a closure lowers to a
+            # fn/env pair whose env contents are invisible.
+            "nested-closure": prog(
+                "    : ( Rc i ) r ( rc_new [i] 1 )\n"
+                "    : ( @ v ) inner \\ → v { ( rc_free [i] r ) }\n"
+                "    : ( @ v ) w \\ → v { ( inner ) }\n"
+                "    : !Thread ThreadErr t ( thread_spawn w )\n"
+                "    ?? t { T h → { ( thread_join h ) } F e → {} }",
+                prelude="$ `stdlib/std/rc.nu`\n$ `stdlib/std/thread.nu`\n"),
+            # A different boundary entirely: whatever chan_send takes,
+            # another thread or fiber receives.
+            "chan-send": prog(
+                "    : ( Rc i ) r ( rc_new [i] 1 )\n"
+                "    : ( Channel ( Rc i ) ) ch ( chan_new [( Rc i )] )\n"
+                "    : b ok ( chan_send [( Rc i )] ch r )",
+                prelude="$ `stdlib/std/rc.nu`\n$ `stdlib/std/thread.nu`\n"
+                        "$ `stdlib/std/channel.nu`\n"),
+            # And a third: a fiber runs on whichever M:N worker picks
+            # it up, so `spawn` is a thread boundary too.
+            "fiber-spawn": prog(
+                "    : ( Rc i ) r ( rc_new [i] 1 )\n"
+                "    : ( @ v ) w \\ → v { ( rc_free [i] r ) }\n"
+                "    ( runtime_init 4 )\n"
+                "    : Fiber f ( spawn w )",
+                prelude="$ `stdlib/std/rc.nu`\n$ `stdlib/std/async.nu`\n"),
+            # A hand-placed leaf must propagate exactly like a built-in
+            # one — the FFI-handle case the compiler cannot see.
+            "notsend-marker": prog(
+                "    : Db d @ Db { `conn` }\n"
+                "    : ( @ v ) w \\ → v { : Db c d }\n"
+                "    : !Thread ThreadErr t ( thread_spawn w )\n"
+                "    ?? t { T h → { ( thread_join h ) } F e → {} }",
+                prelude="$ `stdlib/std/thread.nu`\n$ `stdlib/core/marker.nu`\n",
+                extra=": Db { s handle }\n% NotSend Db { }\n"),
+            "notsend-marker-in-vec": prog(
+                "    : ( Vec Db ) v ( vec_new [Db] )\n"
+                "    : ( @ v ) w \\ → v { : i n ( vec_len [Db] v ) }\n"
+                "    : !Thread ThreadErr t ( thread_spawn w )\n"
+                "    ?? t { T h → { ( thread_join h ) } F e → {} }",
+                prelude="$ `stdlib/std/thread.nu`\n$ `stdlib/core/marker.nu`\n"
+                        "$ `stdlib/core/vec.nu`\n",
+                extra=": Db { s handle }\n% NotSend Db { }\n"),
+        },
+    },
+    {
+        "name": "thread-nonsync",
+        "severity": "memory-unsafety",
+        "doc": "The OTHER half of the question, and the one place the two "
+               "halves come apart. A `Cell` is a raw byte buffer with "
+               "unsynchronised reads and writes: MOVING one to a worker "
+               "is fine and must stay accepted (see the "
+               "`cell-moved-not-shared` control), SHARING one is a race "
+               "on its bytes. `Arc` is what expresses sharing in NURL, "
+               "so its payload — and only its payload — faces the "
+               "stronger demand. Every spelling here reaches a Cell "
+               "through an Arc.",
+        "expect": REJECT_DEFAULT,
+        "expect_msg": ["is not Send"],
+        "spellings": {
+            "arc-cell": prog(
+                "    : Cell c ( cell_zero 64 )\n"
+                "    : ( Arc Cell ) a ( arc_new [Cell] c )\n"
+                "    : ( @ v ) w \\ → v { : Cell g ( arc_get [Cell] a ) }\n"
+                "    : !Thread ThreadErr t ( thread_spawn w )\n"
+                "    ?? t { T h → { ( thread_join h ) } F e → {} }",
+                prelude="$ `stdlib/std/thread.nu`\n$ `stdlib/std/arc.nu`\n"
+                        "$ `stdlib/core/cell.nu`\n"),
+            "arc-struct-holding-cell": prog(
+                "    : Buf bf @ Buf { ( cell_zero 64 ) }\n"
+                "    : ( Arc Buf ) a ( arc_new [Buf] bf )\n"
+                "    : ( @ v ) w \\ → v { : Buf g ( arc_get [Buf] a ) }\n"
+                "    : !Thread ThreadErr t ( thread_spawn w )\n"
+                "    ?? t { T h → { ( thread_join h ) } F e → {} }",
+                prelude="$ `stdlib/std/thread.nu`\n$ `stdlib/std/arc.nu`\n"
+                        "$ `stdlib/core/cell.nu`\n",
+                extra=": Buf { Cell c }\n"),
+            "arc-notsync-marker": prog(
+                "    : Reg rg @ Reg { 0 }\n"
+                "    : ( Arc Reg ) a ( arc_new [Reg] rg )\n"
+                "    : ( @ v ) w \\ → v { : Reg g ( arc_get [Reg] a ) }\n"
+                "    : !Thread ThreadErr t ( thread_spawn w )\n"
+                "    ?? t { T h → { ( thread_join h ) } F e → {} }",
+                prelude="$ `stdlib/std/thread.nu`\n$ `stdlib/std/arc.nu`\n"
+                        "$ `stdlib/core/marker.nu`\n",
+                extra=": Reg { i slot }\n% NotSync Reg { }\n"),
         },
     },
     {
@@ -515,6 +675,63 @@ CLASSES = [
                 "    ?? r { T t → { ( thread_join t ) } F e → {} }\n"
                 "    ( mutex_free m )",
                 prelude=PRELUDE_ARC),
+            # Send/Sync controls. A derivation that rejects the
+            # thread-nonsend / thread-nonsync classes is worthless if it
+            # also rejects these — the no-false-positive property
+            # (docs/MEMORY.md §6.3) is what bounds the whole design, and
+            # each of these is a shape that LOOKS like a rejected one.
+            #
+            # A Cell MOVED to a worker rather than shared. Cell is the
+            # !Sync leaf, and only Arc asks about Sync: capturing one
+            # directly is Send and stays accepted.
+            "cell-moved-not-shared": prog(
+                "    : Cell c ( cell_zero 64 )\n"
+                "    : ( @ v ) w \\ → v { : i n ( cell_size c ) }\n"
+                "    : !Thread ThreadErr r ( thread_spawn w )\n"
+                "    ?? r { T t → { ( thread_join t ) } F e → {} }\n"
+                "    ( cell_free c )",
+                prelude="$ `stdlib/std/thread.nu`\n$ `stdlib/core/cell.nu`\n"),
+            # A Mutex is `{ Cell c }` — structurally the !Sync leaf, and
+            # the very thing that makes contents shareable. If the
+            # marker impls in thread.nu ever stop being consulted, this
+            # is what notices.
+            "mutex-captured": prog(
+                "    : Mutex m ( mutex_new )\n"
+                "    : ( @ v ) w \\ → v { ( mutex_lock m ) ( mutex_unlock m ) }\n"
+                "    : !Thread ThreadErr r ( thread_spawn w )\n"
+                "    ?? r { T t → { ( thread_join t ) } F e → {} }\n"
+                "    ( mutex_free m )",
+                prelude="$ `stdlib/std/thread.nu`\n"),
+            # The escape hatch must actually open: an explicit `% Send`
+            # stops the walk at that type, Rc field and all.
+            "send-marker-overrides": prog(
+                "    : ( Rc i ) r ( rc_new [i] 1 )\n"
+                "    : Wrapper wr @ Wrapper { r }\n"
+                "    : ( @ v ) w \\ → v { : Wrapper c wr }\n"
+                "    : !Thread ThreadErr t ( thread_spawn w )\n"
+                "    ?? t { T h → { ( thread_join h ) } F e → {} }\n"
+                "    ( rc_free [i] r )",
+                prelude="$ `stdlib/std/rc.nu`\n$ `stdlib/std/thread.nu`\n"
+                        "$ `stdlib/core/marker.nu`\n",
+                extra=": Wrapper { ( Rc i ) r }\n% Send Wrapper { }\n"),
+            # A String and a Vec of scalars crossing the boundary. NURL
+            # spells String and every opaque FFI handle `i8*`, so
+            # demoting either would demote both and take most correct
+            # worker code with it.
+            "string-and-vec-captured": prog(
+                "    : s label `worker`\n"
+                "    : ( Vec i ) nums ( vec_new [i] )\n"
+                "    : ( @ v ) w \\ → v { ( puts label ) : i n ( vec_len [i] nums ) }\n"
+                "    : !Thread ThreadErr r ( thread_spawn w )\n"
+                "    ?? r { T t → { ( thread_join t ) } F e → {} }\n"
+                "    ( vec_free [i] nums )",
+                prelude="$ `stdlib/std/thread.nu`\n$ `stdlib/core/vec.nu`\n"),
+            # `[T: Send]` is answered by the derivation, not by hunting
+            # for an impl — otherwise the bound is unusable for `i`.
+            "send-bound-on-scalar": prog(
+                "    : i n ( ship [i] 42 )",
+                prelude="$ `stdlib/core/marker.nu`\n",
+                extra="@ ship [T: Send] T v → i { ^ 1 }\n"),
             "mutually-exclusive-frees": prog(
                 "    : ( Vec i ) a ( vec_new [i] )\n"
                 "    : i c 1\n"

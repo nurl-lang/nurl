@@ -8,7 +8,79 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`Send` / `Sync` — thread safety as a property of the type, not of
+  its spelling.** Two marker traits (`stdlib/core/marker.nu`) name the
+  two questions a thread boundary asks: `Send` ("may this value MOVE to
+  another thread?") and `Sync` ("may two threads reach ONE of these at
+  once?"). Both are **derived structurally over a type's whole graph** —
+  struct fields, enum variant payloads, generic arguments, aggregate
+  members, closure captures — from two language-level leaves: `Rc` is
+  neither (its refcount is not atomic) and `Cell` is Send but not Sync
+  (a raw byte buffer with unsynchronised writes).
+
+  The derivation is checked where a value actually crosses:
+  `thread_spawn` and `spawn` (every capture must be Send — a fiber runs
+  on whichever M:N worker picks it up, so it is a thread boundary too),
+  `chan_send` (the value must be Send), and `Arc T`, whose payload must
+  be Send **and** Sync because an Arc exists to be shared. `[T: Send]`
+  and `[T: Sync]` bounds are answered by the same derivation instead of
+  by an impl lookup, so they accept `i`, `s` and `( Vec i )` with no
+  impl block anywhere.
+
+  What this replaces is a single line asking "is this capture spelled
+  `Rc`?". It caught that one spelling. The same undefined behaviour
+  written with the Rc one struct field, one Vec element, one Box, one
+  Arc payload, one option, one enum variant, one nested closure, or one
+  different boundary away compiled clean — ten ways to write one bug,
+  one of them diagnosed. `tools/metamorph` now enumerates fifteen
+  spellings of it plus three of the Sync half, and the diagnostic names
+  the *reason* (`it reaches an 'Rc' …`) rather than the shape it
+  happened to recognise.
+
+  Because the derivation is structural it can be wrong in two
+  directions, and there is a marker for each. `% Send T { }` /
+  `% Sync T { }` assert safety the compiler cannot see — `Mutex` is
+  `{ Cell c }` and is nonetheless the thing that *makes* contents
+  shareable, so `stdlib/std/thread.nu` marks `Mutex`, `Cond`, `Thread`
+  and `Semaphore` by hand. `% NotSend T { }` / `% NotSync T { }` assert
+  danger it cannot see: NURL spells `String` and every opaque FFI handle
+  `i8*`, so a `sqlite3*` derives as Send and there is no way for the
+  compiler to know better. A marker impl is NURL's spelling of Rust's
+  `unsafe impl` — an assertion, not a proof — and a negative one
+  outranks a positive one on the same type.
+
+  Send/Sync answer "may this value cross?", never "is this program
+  race-free": `( Vec i )` is Send and Sync, correctly, because sharing
+  one read-only is ordinary code. Two threads *mutating* it is the race
+  the existing shared-mutation check catches, at the mutation. The two
+  are complementary and neither subsumes the other; `MEMORY.md` §6.5 and
+  `LIMITATIONS.md` state exactly what each one does and does not
+  guarantee.
+  (`diag_send_struct_field`, `diag_send_generic_arg`,
+  `diag_send_enum_payload`, `diag_send_nested_closure`,
+  `diag_send_chan_send`, `diag_send_fiber_spawn`,
+  `diag_send_notsend_marker`, `diag_sync_arc_cell`,
+  `diag_send_generic_bound`, `send_sync_markers_ok`)
+
 ### Fixed
+
+- **A `pub` prefix leaked out of its declaration — and out of its
+  file.** Found while adding the marker traits above, and unrelated to
+  them. The `scan_fn_sigs` pre-pass set a pending-`pub` flag before
+  dispatching on the declaration kind, but only the `@`-function arm
+  ever cleared it. A `pub` on anything else — a trait, an impl, a
+  struct, an enum, a const — left the flag set, and the next `@` the
+  scanner reached inherited it. Once the scan crossed an import
+  boundary that `@` was in a *different file*: importing a module whose
+  last declaration was `pub % Trait [T] { }` silently made the
+  importer's next function public and flipped the importer into
+  strict-visibility mode, at which point its own unmarked types stopped
+  being visible across files. The error blamed a declaration nowhere
+  near the `pub` that caused it. The flag is now read-and-cleared where
+  the prefix is parsed, and `gen_import_decl` consumes one too.
+  (`pub_prefix_scoped`)
 
 - **A struct/handle in a payload slot declared as a number.** The
   pointer form was rejected earlier, and the user-enum form after that.

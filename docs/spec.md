@@ -576,6 +576,12 @@ a slice type never contains one.
 `should_fail_trait_bound.nu` pins the rejection; `trait_bounds.nu` pins
 the accepted path.
 
+The `Send` / `Sync` markers (§4.9) are the one exception to "MUST have an
+`impl`": those two bounds are answered by the compiler's structural derivation,
+so `[T: Send]` accepts `i`, `s` and `( Vec i )` with no impl block anywhere and
+rejects `( Rc i )` with a message saying so. `diag_send_generic_bound.nu` pins
+the rejection.
+
 Monomorphisation is deferred — instantiations are queued and emitted
 after the main parse pass. Diagnostics emitted while re-parsing a
 substituted body use the synthetic filename
@@ -667,6 +673,40 @@ usable inside the trait's own method bodies/signatures.
 names, and associated types are read from the trait when an impl is processed.
 In practice this means the trait declaration (or its `$`-import) precedes the
 impl, which is the natural order.
+
+**Marker traits — `Send` / `Sync`.** A trait with no methods carries no
+behaviour; an impl of one is a pure *assertion about the type*. Four such
+markers are declared in `stdlib/core/marker.nu` and given meaning by the
+compiler:
+
+```
+% Send [T] { }      // a value of T may MOVE to another thread
+% Sync [T] { }      // two threads may reach ONE T at the same time
+% NotSend [T] { }   // T must never cross a thread boundary
+% NotSync [T] { }   // two threads must never reach one T at once
+```
+
+Unlike every other trait, `Send` and `Sync` are **derived, not implemented**.
+The compiler answers both questions by walking a type's whole graph — struct
+fields, enum variant payloads, generic arguments, aggregate members, closure
+captures — from two built-in leaves: `Rc` is neither Send nor Sync (its
+refcount is not atomic), and `Cell` is Send but not Sync (a raw byte buffer
+with unsynchronised writes). Everything else inherits from what it contains.
+
+The derivation is enforced where a value crosses a thread boundary —
+`thread_spawn`, `spawn`, `chan_send`, and `Arc T` (whose payload must be Send
+**and** Sync, because an Arc exists to be shared) — and it answers `[T: Send]`
+and `[T: Sync]` bounds, which therefore need no impl block for `i`, `s`, or any
+struct of them.
+
+Writing a marker impl **overrides** the derivation for that type and stops the
+walk there. `% Send T { }` / `% Sync T { }` assert safety the compiler cannot
+see (`Mutex` is `{ Cell c }` and is nonetheless what makes contents shareable —
+`stdlib/std/thread.nu` marks it); `% NotSend T { }` / `% NotSync T { }` assert
+danger it cannot see (an FFI handle is an `s`, and `s` is Send). A negative
+marker outranks a positive one on the same type. These impls are NURL's
+spelling of Rust's `unsafe impl`: assertions, not proofs. See
+[`MEMORY.md` §6.5](MEMORY.md) for exactly what they do and do not guarantee.
 
 **Dynamic dispatch — `%Trait` trait objects (grammar v2.3).** Alongside the static path a trait
 may be used as a **dynamic object** so that values of *different* concrete types

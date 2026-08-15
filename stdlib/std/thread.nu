@@ -58,6 +58,7 @@
 //     surfaces `ThreadCreate` so callers can fall back to a serial path.
 
 $ `stdlib/core/cell.nu`
+$ `stdlib/core/marker.nu`
 
 // FFI: direct libpthread surface. On Linux/macOS these are libc; on
 // mingw-w64 Windows they come from libwinpthread (link with -lpthread).
@@ -128,6 +129,30 @@ $ `stdlib/core/cell.nu`
 : Mutex { Cell c }
 : Cond { Cell c }
 
+// Send / Sync markers (stdlib/core/marker.nu). These three are the
+// reason the marker traits exist at all: structurally a Mutex is
+// `{ Cell c }`, and a bare Cell is a raw byte buffer with
+// unsynchronised writes — !Sync, correctly, on its own. A Mutex is the
+// thing that MAKES its contents shareable, so the derivation has to be
+// told rather than asked. Same for Cond, and for Thread, whose `s raw`
+// is a pthread_t buffer that join/detach reach from any thread.
+//
+// Each of these is an assertion, not a proof — NURL's spelling of
+// Rust's `unsafe impl`. What backs them is the C side: every one of
+// these handles is manipulated only through the pthread primitives
+// below, which are themselves the memory-ordering points.
+% Send Mutex {}
+
+% Sync Mutex {}
+
+% Send Cond {}
+
+% Sync Cond {}
+
+% Send Thread {}
+
+% Sync Thread {}
+
 // Counting semaphore built on Mutex + Cond. The permit count lives in a
 // heap cell (`* i count`) so copying a Semaphore by value — e.g.
 // capturing it in a worker closure — shares the same count, mutex, and
@@ -137,6 +162,14 @@ $ `stdlib/core/cell.nu`
     Cond c
     * i count
 }
+
+// Sharing a Semaphore across threads is the entire point of one — the
+// permit count lives behind the Mutex above, so both questions are
+// already answered by the fields; the markers say so explicitly rather
+// than leaving it to the `* i count` field to survive the walk.
+% Send Semaphore {}
+
+% Sync Semaphore {}
 
 // ── Thread lifecycle ──────────────────────────────────────────────
 

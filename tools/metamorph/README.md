@@ -18,6 +18,7 @@ its question at one syntactic spelling and missed the others:
 | #899 | `: T b a` | `?` · `??` · `=` · a callee returning its argument |
 | #901 | a box-shaped payload slot | a slot declared as a number |
 | #902 | mutation inside the thread closure | mutation one call deep |
+| #910 | a capture *spelled* `Rc` | the Rc one field / element / payload / Arc / closure / boundary away |
 
 None of these was the analysis being *too weak in theory*. Each was coverage
 across spellings that nobody had enumerated. That is mechanizable, so this

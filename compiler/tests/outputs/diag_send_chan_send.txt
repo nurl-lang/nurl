@@ -1,0 +1,7 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_send_chan_send.nu:14:45: error: chan_send would move this value to whatever thread or fiber receives it, but its type is not Send: it reaches an 'Rc', whose refcount is NOT atomic — two threads cloning or dropping the same Rc race on its control-block count, which is UB. Use 'Arc' (stdlib/std/arc.nu) for any handle that crosses a thread boundary; it is the same API with a SEQ_CST count. If the type holding it IS safe to send and the compiler cannot see why, assert that with a '% Send <Type> { }' marker impl (stdlib/core/marker.nu). A channel can carry the DATA instead of the handle — read the value out on this side and send that.
+    : b ok ( chan_send [( Rc i )] ch shared )
+                                            ^
+error: aborting due to 1 previous error
+note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.

@@ -12,6 +12,18 @@
 // different shape entirely on Windows — come from the tiny C-side
 // `nurl_native_sizeof(name)` thunk; see `cell_for_native`.
 //
+// THREAD SAFETY — `Cell` is the language's canonical `Send`-but-not-
+// `Sync` leaf (stdlib/core/marker.nu). Its bytes are read and written
+// with plain loads and stores and nothing orders them, so MOVING a Cell
+// to a worker is fine and SHARING one between threads is a data race.
+// Only `Arc` expresses sharing in NURL, so `( Arc Cell )` — and any
+// type that reaches a Cell through an Arc — is rejected at the thread
+// boundary, while a direct capture is accepted. Types built on Cell
+// that ARE safe to share say so with a marker impl: `Mutex`, `Cond`,
+// `Thread` and `Semaphore` in `stdlib/std/thread.nu` are all
+// `{ Cell … }` and all carry `% Send` / `% Sync`, because the pthread
+// primitives they wrap are themselves the ordering points.
+//
 // API:
 //
 //   ( cell_new  i n )              → Cell      n bytes uninitialised
