@@ -135,3 +135,10 @@ stdlib/runtime.cuda
 stdlib/runtime.nvrtc
 .venv-oracle/
 *.deb
+
+# Package test scratch — a test that persists models writes its store next to
+# the package (anomaly's timevector test defaults to ./anomaly_tv_test, and
+# $ANOMALY_TEST_DIR overrides it). Running the suite must not leave 1.2 MB of
+# .forest blobs staged for the next `git add -A`, nor put them in a published
+# tarball.
+packages/*/anomaly_tv_test/
