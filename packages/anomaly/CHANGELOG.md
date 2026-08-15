@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.5.5
+
+- `anomaly --version` reports the version the package actually is. The
+  string passed to `cli_new` is hand-written and nothing derived it from
+  `nurl.toml`, so it had been answering `0.5.2` through the 0.5.3 and
+  0.5.4 releases. `tools/check_package_version_strings.sh` now fails the
+  build on that drift, so it cannot happen again silently.
+
 ## 0.5.4
 
 - Internal rename, no API change: `_an_vercfg_of_json` was `__`-private
