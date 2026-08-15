@@ -67,7 +67,7 @@ $ `src/serve.nu`
 // Is `model` a whisper.cpp ggml container? Decided by the file's own first
 // bytes ('lmgg' on disk), not the extension — a renamed file still works and
 // a directory never opens as a file.
-@ __wh_is_ggml s model → b {
+@ _wh_is_ggml s model → b {
     ?? ( file_open model ) {
         T f → {
             : ~ b yes F
@@ -526,7 +526,7 @@ $ `src/serve.nu`
 @ __wh_transcribe s dir s wavpath s lang i maxtok b use_vad b with_ts f nospeech → i {
     // whisper.cpp's ggml container: hyperparameters, tokenizer and weights in
     // ONE file — no config.json or tokenizer.json beside it
-    ? ( __wh_is_ggml dir ) {
+    ? ( _wh_is_ggml dir ) {
         ?? ( wh_open_ggml dir ) {
             T w → {
                 : ~ i rc2 1

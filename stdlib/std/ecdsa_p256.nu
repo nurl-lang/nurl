@@ -337,32 +337,32 @@ $ `stdlib/std/p256_scalar.nu`  // fixed-width GF(n) for the signing scalar arith
 
 // scalar · G → 64 bytes X‖Y, constant-time fixed-base comb.
 @ p256ct_scalarmult_base ( Vec u ) kbytes → ( Vec u ) {
-    : P256Scratch scr ( __p256_scr_new )
-    : ( Vec i ) aplain ( __p256_a_plain )
-    : ( Vec i ) am ( __p256_to_mont_s scr aplain ) ( vec_free [i] aplain )
-    : ( Vec i ) b3plain ( __p256_b3_plain )
-    : ( Vec i ) b3m ( __p256_to_mont_s scr b3plain ) ( vec_free [i] b3plain )
+    : P256Scratch scr ( _p256_scr_new )
+    : ( Vec i ) aplain ( _p256_a_plain )
+    : ( Vec i ) am ( _p256_to_mont_s scr aplain ) ( vec_free [i] aplain )
+    : ( Vec i ) b3plain ( _p256_b3_plain )
+    : ( Vec i ) b3m ( _p256_to_mont_s scr b3plain ) ( vec_free [i] b3plain )
     : ( Vec u ) tbytes ?? ( bytes_from_hex ( __p256_comb_tbl_hex ) ) { T v → v F _ → ( vec_new [u] ) }
-    : ( Vec i ) tbl ( __magn 384 )
-    : P256Pt acc ( __p256_pt_mag )
-    ( __p256_set_identity_d scr acc )
-    ( __p256_tbl_put tbl 0 acc )
-    : P256Pt tmp ( __p256_pt_mag )
+    : ( Vec i ) tbl ( _magn 384 )
+    : P256Pt acc ( _p256_pt_mag )
+    ( _p256_set_identity_d scr acc )
+    ( _p256_tbl_put tbl 0 acc )
+    : P256Pt tmp ( _p256_pt_mag )
     : ~ i s 1
     ~ < s 16 {
         : i off * - s 1 64
         : ( Vec i ) xl ( __p256_be32_to_limbs tbytes off )
         : ( Vec i ) yl ( __p256_be32_to_limbs tbytes + off 32 )
-        ( __p256_to_mont_d scr . tmp x xl )
-        ( __p256_to_mont_d scr . tmp y yl )
-        ( __p256_one_mont_d scr . tmp z )
-        ( __p256_tbl_put tbl s tmp )
+        ( _p256_to_mont_d scr . tmp x xl )
+        ( _p256_to_mont_d scr . tmp y yl )
+        ( _p256_one_mont_d scr . tmp z )
+        ( _p256_tbl_put tbl s tmp )
         ( vec_free [i] xl ) ( vec_free [i] yl )
         = s + s 1
     }
     ( vec_free [u] tbytes )
-    ( __p256_set_identity_d scr acc )
-    : P256Pt selp ( __p256_pt_mag )
+    ( _p256_set_identity_d scr acc )
+    : P256Pt selp ( _p256_pt_mag )
     : ~ i i 63
     ~ >= i 0 {
         ( p256ct_padd_d scr acc acc acc am b3m )
@@ -375,22 +375,22 @@ $ `stdlib/std/p256_scalar.nu`  // fixed-width GF(n) for the signing scalar arith
             = idx | idx << bit j
             = j + j 1
         }
-        ( __p256_tbl_get_d selp tbl idx )
+        ( _p256_tbl_get_d selp tbl idx )
         ( p256ct_padd_d scr acc acc selp am b3m )
         = i - i 1
     }
-    : ( Vec i ) zinv ( __mag8 )
-    ( __p256_inv_d scr zinv . acc z )
-    ( __p256_mul_d scr . acc x . acc x zinv )
-    ( __p256_mul_d scr . acc y . acc y zinv )
-    ( __p256_from_mont_d scr . acc x . acc x )
-    ( __p256_from_mont_d scr . acc y . acc y )
+    : ( Vec i ) zinv ( _mag8 )
+    ( _p256_inv_d scr zinv . acc z )
+    ( _p256_mul_d scr . acc x . acc x zinv )
+    ( _p256_mul_d scr . acc y . acc y zinv )
+    ( _p256_from_mont_d scr . acc x . acc x )
+    ( _p256_from_mont_d scr . acc y . acc y )
     : ( Vec u ) out ( vec_with_cap [u] 64 )
-    ( __p256_limbs_to_be out . acc x )
-    ( __p256_limbs_to_be out . acc y )
+    ( _p256_limbs_to_be out . acc x )
+    ( _p256_limbs_to_be out . acc y )
     ( p256pt_free acc ) ( p256pt_free tmp ) ( p256pt_free selp )
     ( vec_free [i] tbl ) ( vec_free [i] am ) ( vec_free [i] b3m ) ( vec_free [i] zinv )
-    ( __p256_scr_free scr )
+    ( _p256_scr_free scr )
     ^ out
 }
 

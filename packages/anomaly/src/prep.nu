@@ -795,7 +795,7 @@ $ `stdlib/ext/json.nu`
 }
 
 // One version config out of its JSON object.
-@ __an_vercfg_of_json s vname Json vo → VerCfg {
+@ _an_vercfg_of_json s vname Json vo → VerCfg {
     : ~ f cont -1.0
     ?? ( json_obj_get vo `contamination` ) {
         T cj → {
@@ -988,7 +988,7 @@ $ `stdlib/ext/json.nu`
                             ?? ( json_obj_get vers ( string_data vn ) ) {
                                 T vo → {
                                     ? ( json_is_obj vo ) {
-                                        ( vec_push [VerCfg] . m versions ( __an_vercfg_of_json ( string_data vn ) vo ) )
+                                        ( vec_push [VerCfg] . m versions ( _an_vercfg_of_json ( string_data vn ) vo ) )
                                     } {}
                                 }
                                 F _ → {}

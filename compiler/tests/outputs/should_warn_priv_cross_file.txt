@@ -1,6 +1,6 @@
 COMPILE OK
 WARNINGS
-compiler/tests/should_warn_priv_cross_file.nu:11:11: warning: '__only_here' is file-private (defined in compiler/tests/should_warn_priv_cross_file_mod.nu); cross-file use of a '__' function is deprecated — rename it with ONE underscore ('_name') if it is meant to be shared
+compiler/tests/should_warn_priv_cross_file.nu:11:11: warning: '__only_here' is file-private (defined in compiler/tests/should_warn_priv_cross_file_mod.nu); cross-file use of a '__' function is OBSOLETE and will stop resolving in a future release — rename it with ONE underscore ('_name'), at its definition and at every call site, if it is meant to be shared. A '__' name is file-scoped by design; nothing in the stdlib or the first-party tree relies on this path any more.
     ^ - ( __only_here 3 ) 30
           ^
 LINK OK

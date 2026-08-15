@@ -8,6 +8,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **The cross-file `__` path is obsolete, and nothing first-party uses
+  it any more.** A `__name` function is file-scoped by design; calling
+  one from another file resolved anyway, as a compatibility shim for
+  code written under the old flat namespace, and warned that it was
+  deprecated. The stdlib had been quietly living on that shim: seventeen
+  helpers — `_p256_scr_new`, `_p256_mul_d`, `_mag8` and the rest — were
+  defined `__`-private in `p256_field.nu` and called from
+  `ecdsa_p256.nu`, so every build of the crypto stack printed warnings
+  telling its own author to rename them. Four in-tree packages
+  (`anomaly`, `gpukit`, `whisper`) did the same within their own trees.
+
+  All twenty-one are renamed to the single-underscore shared-internal
+  spelling, at the definition and at every call site. Compiling the
+  whole stdlib now produces **zero** cross-file `__` warnings, as do the
+  packages, the examples and the tooling; the only three call sites left
+  in the repo are the fixtures that exist to pin the diagnostic itself.
+
+  The warning is relabelled from *deprecated* to **obsolete** and now
+  says the path will stop resolving. It is not removed yet, and the
+  reason is narrow: package versions **already published** were compiled
+  under it, and deleting the path would break `nurlpkg install` of a
+  release nobody can go back and edit. It goes when those have turned
+  over.
+
 ## [0.43.0] — 2026-08-15
 
 The same-verdict release. Every entry below started from one

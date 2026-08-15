@@ -627,7 +627,7 @@ $ `deps/http/src/http.nu`
     : ~ i rc 0
 
     // a whisper.cpp ggml container serves as itself: one file, no sidecars
-    ? ( __wh_is_ggml dir ) {
+    ? ( _wh_is_ggml dir ) {
         ( string_free cfg ) ( string_free wts ) ( string_free tjs )
         ?? ( wh_open_ggml dir ) {
             T w → {
