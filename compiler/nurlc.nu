@@ -2719,6 +2719,23 @@
             `return value type '` ( nurl_llty lt ) `' does not match the declared return type '` ( nurl_llty fn_rt ) )
             `' — the payload/signature inside the aggregate differs, and NURL has no implicit conversions between option/result/slice/closure shapes. Construct the declared shape ('@ ? i { T … }' for '→ ?i'), or fix the declaration.` ) ) }
         {}
+        // A named aggregate returned where a SCALAR is declared —
+        // `^ ( vec_new [i] )` from a `→ i` function, which lowered
+        // `ret %Vec__i64 %r1` out of a `define i64`. Every branch here
+        // asked about a pair of shapes it knew (float/float,
+        // int/int, `{…}`/`{…}`, struct/struct, int/enum); a struct
+        // beside a plain number matched none of them and fell through
+        // to the emit, so nurlc exited 0 and the LLVM verifier reported
+        // it against generated IR. Found by tools/metamorph's
+        // invalid-input class.
+        ? & & & == ( nurl_str_get ( nurl_llty lt ) 0 ) 37
+        ! ( is_ptr_ty lt )
+        | ( is_int_ty fn_rt ) | ( seq fn_rt `double` ) ( seq fn_rt `float` )
+        ! ( seq ( nurl_llty lt ) ( nurl_llty fn_rt ) )
+        { ( die_stmt lex ( nurl_str_cat ( nurl_str_cat4
+            `return value type '` ( llvm_to_nurl lt ) `' does not match the declared return type '` ( llvm_to_nurl fn_rt ) )
+            `' — a struct/handle value is not a number and does not convert to one. Return the declared type, read the field you mean ('. v field'), or declare the function to return this type.` ) ) }
+        {}
         // Return the wrong named struct by value (the return-position dual of
         // the call-site struct check): `^ b` from a `→ A` fn where b is a B.
         ? ( __arg_named_struct_mismatch lt fn_rt )
@@ -8173,8 +8190,21 @@
     // skip explicit against a same-named local.
     // `ar_s` is `?` when scan_fn_sigs saw conflicting definitions of
     // the name (different parameter counts) — skip the check then.
-    : s ar_s ( nurl_sym_get2 syms fname `__arity` )
-    ? & & & & ( seq call_name fname ) ! is_variadic
+    // The generic skip is gone: `( vec_push [i] v )` — one argument
+    // short — was accepted, because a generic call has call_name !=
+    // fname and the whole check was conditioned on them being equal.
+    // The guard was unnecessary: when a callee has no `__arity` entry
+    // the length test below already skips it, so a generic that
+    // registered one is simply checked like everything else, and one
+    // that did not is no worse off than before. Found by
+    // tools/metamorph's invalid-input class.
+    // A generic call (call_name is the mangled name) is measured
+    // against the TEMPLATE's count; anything else against the
+    // ordinary one. Keeping them apart is what lets a file shadow an
+    // imported generic with a non-generic function of the same name.
+    : s ar_s ? ( seq call_name fname ) ( nurl_sym_get2 syms fname `__arity` )
+    ( nurl_sym_get2 syms fname `__garity` )
+    ? & & & ! is_variadic
     != 0 ( nurl_str_len ar_s ) ! ( seq ar_s `?` )
     == 0 ( nurl_sym_len2 syms fname `__ptr` )
     { : i ar_want ( nurl_str_to_int ar_s )
@@ -19546,6 +19576,20 @@
         // Auto-sink inference over the body — a generic body is never
         // compiled here, so the codegen-time inference cannot see it.
         = sa ( generic_body_auto_sink lexp syms pnames sa )
+        // The template's parameter COUNT, so the call site's arity
+        // check has something to compare against: a generic was the one
+        // callee shape that could be called with the wrong number of
+        // arguments and say nothing (`( vec_push [i] v )`, one short,
+        // was accepted). The walk above already counted them.
+        //
+        // Under `__garity`, NOT `__arity`. A file may define its own
+        // non-generic function with the same name as an imported
+        // generic — compiler/tests/ws_permessage_deflate.nu has a
+        // 2-parameter `vec_eq` beside the stdlib's 3-parameter generic
+        // one — and writing the template's count into the shared key
+        // made every call to the LOCAL function look one argument
+        // short. Two namespaces, no clobber.
+        ( nurl_sym_def syms ( nurl_str_cat fname `__garity` ) ( nurl_str_int pc ) )
         ( nurl_sym_def g_fn_inout fname ia )
         ( nurl_sym_def g_fn_sink fname sa )
         ( nurl_lex_free lexp )

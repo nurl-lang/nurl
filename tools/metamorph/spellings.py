@@ -403,6 +403,62 @@ CLASSES = [
         },
     },
     {
+        "name": "invalid-input",
+        "severity": "invalid-ir",
+        "doc": "Programs that are simply WRONG. A different axis from "
+               "the rest of this file: not 'the same situation spelled N "
+               "ways' but 'bad input must be diagnosed, never lowered'. "
+               "Two shipped bugs escaped exactly here — #901 lowered a "
+               "type-mismatched option payload and #906 lowered a match "
+               "arm naming a variant that does not exist — and in both "
+               "cases nurlc exited 0 and clang reported the problem, "
+               "about generated IR rather than about the line to fix. "
+               "Every spelling must produce a NURL diagnostic; and the "
+               "universal IR check above catches any that is lowered "
+               "anyway, whatever this class concludes.",
+        "expect": REJECT_DEFAULT,
+        "spellings": {
+            "match-arm-rust-habit": prog(
+                "    : i n ?? ( int_parse `12` ) { Ok v → v  _ → -1 }\n"
+                "    ( nurl_print_int n )", prelude="$ `stdlib/std/int`\n"),
+            "match-arm-unknown-variant": prog(
+                "    : Color c Red\n"
+                "    : i n ?? c { Red → 1  Purple → 2  _ → 0 }\n"
+                "    ( nurl_print_int n )",
+                prelude="", extra=": | Color { Red Green Blue }\n"),
+            "payload-int-into-string": prog(
+                "    : ?s o @ ?s { T 42 }\n"
+                "    ?? o { T v → ^ 1  F → ^ 0 }", prelude=""),
+            "payload-string-into-int": prog(
+                "    : ?i o @ ?i { T `x` }\n"
+                "    ?? o { T v → ^ v  F → ^ 0 }", prelude=""),
+            "cast-to-a-binding": prog(
+                "    : ~ i d 2\n"
+                "    = d # d + d 1", prelude=""),
+            "cast-aggregate-to-float": prog(
+                "    : ?i o @ ?i { T 1 }\n"
+                "    : f x # f o\n"
+                "    ( nurl_print_int # i x )", prelude=""),
+            "unknown-function": prog(
+                "    ( no_such_function_here 1 )", prelude=""),
+            "assign-to-immutable": prog(
+                "    : i k 1\n"
+                "    = k 2\n"
+                "    ( nurl_print_int k )", prelude=""),
+            "return-type-mismatch": prog(
+                "    ^ ( vec_new [i] )"),
+            "aggregate-literal-on-pointer": prog(
+                "    : *i p @ *i { 1 }\n"
+                "    ( nurl_print_int # i p )", prelude=""),
+            "string-into-int-binding": prog(
+                "    : i k `x`\n"
+                "    ( nurl_print_int k )", prelude=""),
+            "wrong-arg-count": prog(
+                "    : ( Vec i ) v ( vec_new [i] )\n"
+                "    ( vec_push [i] v )"),
+        },
+    },
+    {
         "name": "controls",
         "doc": "Correct programs. A class of its own because a checker "
                "that rejects these is worse than one that misses a bug — "
@@ -503,6 +559,34 @@ def compile_verdict(src_path, strict):
 
 
 INVALID = "invalid"          # the template is broken, not the compiler
+
+
+def ir_is_valid(src_path):
+    """Does the module nurlc just emitted actually verify?
+
+    The strongest invariant this harness has, and the one two shipped
+    bugs broke: **whenever nurlc exits 0, the IR must be valid.** #901
+    emitted `insertvalue { i1, i8* } …, i64 42, 1` and #906 emitted
+    `alloca` with no type plus a load from a global that was never
+    defined — both times nurlc reported success and clang delivered the
+    news, about generated IR rather than about the line to change.
+
+    Unlike everything else here this is never a template bug. Whatever
+    a program says, if the compiler accepted it then the module it
+    produced has to verify; a failure is the compiler's, always."""
+    with tempfile.TemporaryDirectory() as td:
+        ll = pathlib.Path(td) / "m.ll"
+        r = subprocess.run([str(NURLC), str(src_path)],
+                           stdout=open(ll, "wb"), stderr=subprocess.DEVNULL,
+                           cwd=ROOT)
+        if r.returncode != 0:
+            return True, ""          # rejected: nothing was emitted to verify
+        v = subprocess.run(["llvm-as", str(ll), "-o", "/dev/null"],
+                           capture_output=True, cwd=ROOT)
+        if v.returncode == 0:
+            return True, ""
+        err = v.stderr.decode("utf-8", "replace").strip().splitlines()
+        return False, (err[0][:110] if err else "llvm-as rejected the module")
 
 
 def verdict_of(src_path, want_msg, default_only=False):
@@ -627,6 +711,7 @@ def main():
         known = {tuple(x) for x in json.loads(KNOWN.read_text())["gaps"]}
 
     gaps, new_gaps, control_breaks, found, invalid = [], [], [], [], []
+    bad_ir = []
     tmp = pathlib.Path(tempfile.mkdtemp(prefix="nurl-metamorph-"))
 
     for cls in CLASSES:
@@ -648,6 +733,14 @@ def main():
             # correct code compiles clean, so `reject` fails it. Using
             # `>=` here let a false positive pass as "better than asked",
             # which is the one direction this class exists to catch.
+            # The universal invariant, checked for EVERY spelling the
+            # compiler accepted, whatever its class says: an accepted
+            # program must produce a module that verifies. This is never
+            # a template bug — see ir_is_valid.
+            if got in (ACCEPT, WARN):
+                ir_ok, ir_why = ir_is_valid(p)
+                if not ir_ok:
+                    bad_ir.append((cls["name"], name, ir_why))
             ok = (got == ACCEPT) if want == ACCEPT \
                 else STRENGTH[got] >= STRENGTH[want]
             mark = "ok " if ok else "GAP"
@@ -682,17 +775,21 @@ def main():
 
     print(f"\n── summary: {len(gaps)} gap(s), {len(new_gaps)} new, "
           f"{len(control_breaks)} control regression(s), "
-          f"{len(invalid)} invalid template(s)")
+          f"{len(invalid)} invalid template(s), "
+          f"{len(bad_ir)} invalid-IR escape(s)")
     for c, n in invalid:
         print(f"   INVALID    {c}/{n}: fix the template")
+    for c, n, why in bad_ir:
+        print(f"   INVALID IR {c}/{n}: nurlc exited 0 but the module does "
+              f"not verify\n              {why}")
     for c, n, g in control_breaks:
         print(f"   REGRESSION {c}/{n}: correct code now rejected ({g})")
     for c, n in new_gaps:
         print(f"   NEW GAP    {c}/{n}")
     if args.verify:
         print("\n── worklist (most severe first)")
-        rank = {"memory-unsafety": 0, "silent-wrong-value": 1,
-                "diagnostic-consistency": 2}
+        rank = {"invalid-ir": 0, "memory-unsafety": 1,
+                "silent-wrong-value": 2, "diagnostic-consistency": 3}
         sev_of = {c["name"]: c.get("severity", "unknown") for c in CLASSES}
         confirmed = {(c, n): why for c, n, why in found}
         rows = sorted(gaps, key=lambda g: (rank.get(sev_of.get(g[0]), 9), g[0]))
@@ -704,7 +801,7 @@ def main():
             print(f"   [{sev_of.get(c,'?'):22}] {c}/{n}\n"
                   f"       {state}")
 
-    return 1 if (new_gaps or control_breaks or invalid) else 0
+    return 1 if (new_gaps or control_breaks or invalid or bad_ir) else 0
 
 
 if __name__ == "__main__":

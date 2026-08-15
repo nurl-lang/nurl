@@ -8,6 +8,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`tools/metamorph` gains an `invalid-input` class and an IR-validity
+  invariant.** The classes so far asked "the same situation spelled N
+  ways — does the verdict agree?". This adds the other question: *bad
+  input must be diagnosed, never lowered.* Two shipped bugs escaped
+  exactly there, and both times nurlc exited 0 and clang reported the
+  problem against generated IR rather than the line to change.
+
+  The invariant is the stronger half and applies to **every** spelling in
+  every class, not just the new one: whenever nurlc exits 0, the module
+  must pass the LLVM verifier (`llvm-as`). Unlike everything else in the
+  harness this is never a template bug — whatever a program says, if the
+  compiler accepted it then what it emitted has to verify.
+
+### Fixed
+
+- **Returning a handle where a number is declared.** `^ ( vec_new [i] )`
+  from a `→ i` function lowered `ret %Vec__i64 %r1` out of a
+  `define i64`. The return-type chain asked about every pair of shapes it
+  knew — float/float, int/int, `{…}`/`{…}`, struct/struct, int/enum — and
+  a struct beside a plain number matched none of them, so it fell through
+  to the emit.
+
+- **A generic called with the wrong number of arguments.** The call-site
+  arity check was conditioned on `call_name == fname`, which is false for
+  a generic, and generics recorded no parameter count anyway:
+  `( vec_push [i] v )`, one argument short, was accepted, and a missing
+  argument reads an unset ABI register — the same silent failure the FFI
+  arity check exists to prevent. The template's count is now recorded
+  under `__garity`, deliberately not the shared `__arity`: a file may
+  define its own non-generic function with the same name as an imported
+  generic, and writing the template's count into the shared key made
+  every call to the *local* function look one argument short.
+  (`diag_ret_struct_and_generic_arity`)
+
 ### Fixed
 
 - **A `??` arm must name something the scrutinee can be.** Nothing
