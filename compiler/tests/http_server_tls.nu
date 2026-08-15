@@ -51,7 +51,7 @@ $ `stdlib/ext/http_server.nu`
     ?? lr {
         T listener → {
             : s shell_cmd
-            `python3 -c "import ssl,socket,sys
+            `rm -f /tmp/http_server_tls_client.out /tmp/http_server_tls_client.part; { python3 -c "import ssl,socket,sys
 ctx=ssl.create_default_context()
 ctx.check_hostname=False
 ctx.verify_mode=ssl.CERT_NONE
@@ -66,7 +66,7 @@ while True:
 first=buf.split(b'\\r\\n',1)[0].decode('latin-1')
 body=buf.rsplit(b'\\r\\n\\r\\n',1)[-1].decode('latin-1',errors='replace')
 sys.stdout.write('tls_status='+first+chr(10))
-sys.stdout.write('tls_body='+body)" > /tmp/http_server_tls_client.out 2>&1 & echo $! > /tmp/http_server_tls_client.pid; sleep 0.20`
+sys.stdout.write('tls_body='+body)" > /tmp/http_server_tls_client.part 2>&1; mv /tmp/http_server_tls_client.part /tmp/http_server_tls_client.out; } >/dev/null 2>&1 &`
             : !Output ProcessErr bg ( process_run_shell shell_cmd )
             ?? bg {
                 T bgo → ( output_free bgo )
@@ -82,7 +82,7 @@ sys.stdout.write('tls_body='+body)" > /tmp/http_server_tls_client.out 2>&1 & ech
             }
             ( server_stop srv )
 
-            : !Output ProcessErr wait_r ( process_run_shell `wait $(cat /tmp/http_server_tls_client.pid 2>/dev/null) 2>/dev/null; cat /tmp/http_server_tls_client.out` )
+            : !Output ProcessErr wait_r ( process_run_shell `for _ in $(seq 1 200); do [ -f /tmp/http_server_tls_client.out ] && break; sleep 0.05; done; cat /tmp/http_server_tls_client.out 2>/dev/null` )
             ?? wait_r {
                 T wo → { ( nurl_print ( output_stdout wo ) ) ( output_free wo ) }
                 F e → ( println_label `wait_client` ( process_err_name e ) )

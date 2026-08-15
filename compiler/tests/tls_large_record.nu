@@ -54,7 +54,7 @@ $ `stdlib/ext/http_server.nu`
     ?? lr {
         T listener → {
             : s shell_cmd
-            `python3 -c "import ssl,socket,sys
+            `rm -f /tmp/nurl_tls_large_record.out /tmp/nurl_tls_large_record.part; { python3 -c "import ssl,socket,sys
 ctx=ssl.create_default_context()
 ctx.check_hostname=False
 ctx.verify_mode=ssl.CERT_NONE
@@ -68,7 +68,7 @@ while True:
     buf+=c
 body=buf.rsplit(b'\\r\\n\\r\\n',1)[-1]
 sys.stdout.write('body_len='+str(len(body))+chr(10))
-sys.stdout.write('body_ok='+str(body==b'0123456789'*10000)+chr(10))" > /tmp/nurl_tls_large_record.out 2>&1 & echo $! > /tmp/nurl_tls_large_record.pid; sleep 0.20`
+sys.stdout.write('body_ok='+str(body==b'0123456789'*10000)+chr(10))" > /tmp/nurl_tls_large_record.part 2>&1; mv /tmp/nurl_tls_large_record.part /tmp/nurl_tls_large_record.out; } >/dev/null 2>&1 &`
             : !Output ProcessErr bg ( process_run_shell shell_cmd )
             ?? bg {
                 T bgo → ( output_free bgo )
@@ -84,7 +84,7 @@ sys.stdout.write('body_ok='+str(body==b'0123456789'*10000)+chr(10))" > /tmp/nurl
             }
             ( server_stop srv )
 
-            : !Output ProcessErr wait_r ( process_run_shell `wait $(cat /tmp/nurl_tls_large_record.pid 2>/dev/null) 2>/dev/null; cat /tmp/nurl_tls_large_record.out` )
+            : !Output ProcessErr wait_r ( process_run_shell `for _ in $(seq 1 200); do [ -f /tmp/nurl_tls_large_record.out ] && break; sleep 0.05; done; cat /tmp/nurl_tls_large_record.out 2>/dev/null` )
             ?? wait_r {
                 T wo → { ( nurl_print ( output_stdout wo ) ) ( output_free wo ) }
                 F e → ( println_label `wait_client` ( process_err_name e ) )
