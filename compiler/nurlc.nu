@@ -16743,6 +16743,30 @@
 
                 ? is_enum
                 {  // enum payload: convert values to the uniform i64 slot
+                    // …but only for values that BELONG in a numeric slot.
+                    // The slot is uniformly i64 by design and the arm
+                    // reads it back as the variant's declared type, so a
+                    // pointer folded in here is read as arithmetic:
+                    // `@ E { A `s` }` where A's payload is `i` returned
+                    // 96 — the low byte of a .rodata address — from an
+                    // arm the writer expected to yield a number. The
+                    // option/result twin of this was fixed in #901; the
+                    // user-enum side kept the hole, and docs/MEMORY.md
+                    // has carried a "user enums: SCALAR payloads only"
+                    // gotcha rather than a diagnostic. Found by
+                    // tools/metamorph's invalid-input class.
+                    : s __ep_decl ? & != 0 ( nurl_str_len enum_vname ) >= idx 1
+                    ( nurl_sym_get syms ( nurl_str_cat3 enum_vname `__payload__` ( nurl_str_int - idx 1 ) ) )
+                    ( nurl_str_cat `` `` )
+                    ? & & != 0 ( nurl_str_len __ep_decl )
+                    | ( seq fty `sref` ) ( is_ptr_ty fty )
+                    > ( int_width __ep_decl ) 0
+                    { ( die lex ( nurl_str_cat4
+                        ( nurl_str_cat3 `payload ` ( nurl_str_int idx ) ` of enum variant '` )
+                        ( nurl_str_cat3 enum_vname `' is a pointer/string, but the variant declares it as '` ( llvm_to_nurl __ep_decl ) )
+                        `', a number. The payload slot is a numeric word and the '??' arm reads it back as that type, so the address would be returned as arithmetic. `
+                        `Declare the payload as the type you are storing, or store a number.` ) ) }
+                    {}
                     ? ( seq fty `i1` )
                     {  // Convert boolean to i64
                         : s conv_reg1 ( nurl_cg_reg cg )

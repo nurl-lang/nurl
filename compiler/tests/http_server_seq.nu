@@ -77,7 +77,7 @@ $ `stdlib/ext/http_server.nu`
             //    `-w '\nstatus=%{http_code}'` so we can see curl's view of
             //    the response status as a separate line.
             : s shell_cmd
-            `curl -s --max-time 2 -X POST -H 'X-From: nurl-test' --data 'hello srv' http://127.0.0.1:18766/echo > /tmp/http_server_seq_client.out 2>&1 & echo $! > /tmp/http_server_seq_client.pid; sleep 0.05`
+            `rm -f /tmp/http_server_seq_client.out /tmp/http_server_seq_client.part; { curl -s --max-time 2 -X POST -H 'X-From: nurl-test' --data 'hello srv' http://127.0.0.1:18766/echo > /tmp/http_server_seq_client.part 2>&1; mv /tmp/http_server_seq_client.part /tmp/http_server_seq_client.out; } >/dev/null 2>&1 &`
             : !Output ProcessErr bg ( process_run_shell shell_cmd )
             ?? bg {
                 T bgo → ( output_free bgo )
@@ -98,7 +98,7 @@ $ `stdlib/ext/http_server.nu`
             ( server_stop srv )
 
             // 4. Reap the curl client and dump what it saw.
-            : !Output ProcessErr wait_r ( process_run_shell `wait $(cat /tmp/http_server_seq_client.pid 2>/dev/null) 2>/dev/null; cat /tmp/http_server_seq_client.out` )
+            : !Output ProcessErr wait_r ( process_run_shell `for _ in $(seq 1 200); do [ -f /tmp/http_server_seq_client.out ] && break; sleep 0.05; done; cat /tmp/http_server_seq_client.out 2>/dev/null` )
             ?? wait_r {
                 T wo → {
                     : s client_out ( output_stdout wo )

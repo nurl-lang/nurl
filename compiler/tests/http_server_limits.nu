@@ -45,7 +45,7 @@ $ `stdlib/ext/http_server.nu`
             // Build a request with one large X-Big header that pushes the
             // head past 256 bytes. python3 client extracts the status line.
             : s shell_cmd
-            `python3 -c "import socket,sys
+            `rm -f /tmp/http_server_limits1.out /tmp/http_server_limits1.part; { python3 -c "import socket,sys
 s=socket.socket();s.connect(('127.0.0.1',18770))
 big='X'*600
 req='GET / HTTP/1.1\\r\\nHost: t\\r\\nX-Big: '+big+'\\r\\n\\r\\n'
@@ -57,7 +57,7 @@ while True:
     if not c: break
     buf+=c
 first=buf.split(b'\\r\\n',1)[0].decode('latin-1')
-sys.stdout.write('case1_status='+first+chr(10))" > /tmp/http_server_limits1.out 2>&1 & echo $! > /tmp/http_server_limits1.pid; sleep 0.10`
+sys.stdout.write('case1_status='+first+chr(10))" > /tmp/http_server_limits1.part 2>&1; mv /tmp/http_server_limits1.part /tmp/http_server_limits1.out; } >/dev/null 2>&1 &`
             : !Output ProcessErr bg ( process_run_shell shell_cmd )
             ?? bg {
                 T bgo → ( output_free bgo )
@@ -74,7 +74,7 @@ sys.stdout.write('case1_status='+first+chr(10))" > /tmp/http_server_limits1.out 
             }
             ( server_stop srv )
 
-            : !Output ProcessErr wait_r ( process_run_shell `wait $(cat /tmp/http_server_limits1.pid 2>/dev/null) 2>/dev/null; cat /tmp/http_server_limits1.out` )
+            : !Output ProcessErr wait_r ( process_run_shell `for _ in $(seq 1 200); do [ -f /tmp/http_server_limits1.out ] && break; sleep 0.05; done; cat /tmp/http_server_limits1.out 2>/dev/null` )
             ?? wait_r {
                 T wo → { ( nurl_print ( output_stdout wo ) ) ( output_free wo ) }
                 F e → ( println_label `case1_wait` ( process_err_name e ) )
@@ -91,7 +91,7 @@ sys.stdout.write('case1_status='+first+chr(10))" > /tmp/http_server_limits1.out 
     ?? lr {
         T listener → {
             : s shell_cmd
-            `python3 -c "import socket,sys
+            `rm -f /tmp/http_server_limits2.out /tmp/http_server_limits2.part; { python3 -c "import socket,sys
 s=socket.socket();s.connect(('127.0.0.1',18771))
 s.sendall(b'GET / HTTP/1.1\\r\\nHost: t\\r\\n\\r\\n')
 s.shutdown(socket.SHUT_WR)
@@ -101,7 +101,7 @@ while True:
     if not c: break
     buf+=c
 first=buf.split(b'\\r\\n',1)[0].decode('latin-1')
-sys.stdout.write('case2_status='+first+chr(10))" > /tmp/http_server_limits2.out 2>&1 & echo $! > /tmp/http_server_limits2.pid; sleep 0.10`
+sys.stdout.write('case2_status='+first+chr(10))" > /tmp/http_server_limits2.part 2>&1; mv /tmp/http_server_limits2.part /tmp/http_server_limits2.out; } >/dev/null 2>&1 &`
             : !Output ProcessErr bg ( process_run_shell shell_cmd )
             ?? bg {
                 T bgo → ( output_free bgo )
@@ -118,7 +118,7 @@ sys.stdout.write('case2_status='+first+chr(10))" > /tmp/http_server_limits2.out 
             }
             ( server_stop srv )
 
-            : !Output ProcessErr wait_r ( process_run_shell `wait $(cat /tmp/http_server_limits2.pid 2>/dev/null) 2>/dev/null; cat /tmp/http_server_limits2.out` )
+            : !Output ProcessErr wait_r ( process_run_shell `for _ in $(seq 1 200); do [ -f /tmp/http_server_limits2.out ] && break; sleep 0.05; done; cat /tmp/http_server_limits2.out 2>/dev/null` )
             ?? wait_r {
                 T wo → { ( nurl_print ( output_stdout wo ) ) ( output_free wo ) }
                 F e → ( println_label `case2_wait` ( process_err_name e ) )

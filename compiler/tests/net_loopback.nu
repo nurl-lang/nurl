@@ -100,7 +100,7 @@ sys.stdout.write(buf.decode())
             //    Capture the bg pid via a temp file the wrapper writes.
             : s pyclient ( python_client_src )
             : s shell_cmd ( nurl_str_cat3
-            `python3 -c "$NURL_PYCLIENT" > /tmp/net_loopback_client.out 2> /tmp/net_loopback_client.err & echo $! > /tmp/net_loopback_client.pid; sleep 0.05`
+            `rm -f /tmp/net_loopback_client.out /tmp/net_loopback_client.part; { python3 -c "$NURL_PYCLIENT" > /tmp/net_loopback_client.part 2> /tmp/net_loopback_client.err; mv /tmp/net_loopback_client.part /tmp/net_loopback_client.out; } >/dev/null 2>&1 &`
             ``
             `` )
             // Stash python source in env so quoting stays simple.
@@ -142,7 +142,7 @@ sys.stdout.write(buf.decode())
             ( tcp_close_listener listener )
 
             // 6. Reap the bg client + verify it printed "pong".
-            : !Output ProcessErr wait_r ( process_run_shell `wait $(cat /tmp/net_loopback_client.pid 2>/dev/null) 2>/dev/null; cat /tmp/net_loopback_client.out` )
+            : !Output ProcessErr wait_r ( process_run_shell `for _ in $(seq 1 200); do [ -f /tmp/net_loopback_client.out ] && break; sleep 0.05; done; cat /tmp/net_loopback_client.out 2>/dev/null` )
             ?? wait_r {
                 T wo → {
                     : s client_out ( output_stdout wo )

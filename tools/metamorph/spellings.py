@@ -453,6 +453,10 @@ CLASSES = [
             "string-into-int-binding": prog(
                 "    : i k `x`\n"
                 "    ( nurl_print_int k )", prelude=""),
+            "enum-payload-string-into-int": prog(
+                "    : E e @ E { A `s` }\n"
+                "    ^ ?? e { A v → v  B → 0 }",
+                prelude="", extra=": | E { A i  B }\n"),
             "wrong-arg-count": prog(
                 "    : ( Vec i ) v ( vec_new [i] )\n"
                 "    ( vec_push [i] v )"),
@@ -538,6 +542,22 @@ CLASSES = [
                 "    ( vec_push [i] xs 1 )\n"
                 "    ~ y xs { ( nurl_print ( nurl_str_int y ) ) }\n"
                 "    ( vec_free [i] xs )"),
+            # Both of these were SUSPECTED bugs and measured to be
+            # defined behaviour. They are controls now so the semantics
+            # cannot drift silently: a partially-filled struct literal
+            # zero-fills (the aggregate starts as `zeroinitializer`,
+            # giving 7/0/0 rather than garbage), and a match arm may bind
+            # a PREFIX of a variant's payloads and ignore the rest.
+            # An earlier draft of an under-fill check rejected the first
+            # and broke five tests that use it deliberately.
+            "struct-partial-init": prog(
+                "    : P p @ P { 7 }\n"
+                "    ( nurl_print_int . p z )",
+                prelude="", extra=": P { i x  i y  i z }\n"),
+            "match-binds-payload-prefix": prog(
+                "    : E e @ E { A 11 22 }\n"
+                "    ^ ?? e { A x → x  B → 0 }",
+                prelude="", extra=": | E { A i i  B }\n"),
             "option-payload-matches": prog(
                 "    : ?i o @ ?i { T 42 }\n"
                 "    ?? o { T v → ^ v  F → ^ 0 }", prelude=""),
