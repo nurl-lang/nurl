@@ -10,6 +10,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A struct/handle in a payload slot declared as a number.** The
+  pointer form was rejected earlier, and the user-enum form after that.
+  A `Vec` reaches the option/result payload path as `%Vec__i64` — a
+  *named struct*, not a raw pointer — so it took the struct-handle
+  branch, which folds the value to an i64 and hands it to the slot. The
+  `??` arm read it back as the declared type: `@ ?i { T d }` with a Vec
+  `d` returned **192**, the low byte of a heap address. Same lie as the
+  first two, one branch over.
+
+- **Mutating an iterated container one call deep.** A `~ x xs` foreach
+  holds a borrow of `xs` (§2.5) and the direct `( vec_push xs … )` in
+  the body has been rejected for a long time; the same push inside a
+  helper was not, which reads as "wrap it in a function" being a cure
+  for a borrow violation. A per-function summary records which
+  parameters' containers a body mutates, inferred in codegen order like
+  the sink / escape / shared-mutation summaries, and the call site
+  consults it. Measured, this shape is not memory-unsafe today — a Vec
+  is a handle to a control block, so a forced realloc mid-iteration does
+  not dangle — but a guard that applies to one spelling and not its twin
+  teaches the wrong cure.
+  (`diag_payload_struct_into_number`, `diag_foreach_mutate_one_call_deep`)
+
+  With these, `tools/metamorph` reports **zero gaps**: every spelling of
+  every class now gets the same verdict as its siblings.
+
+### Fixed
+
 - **A user enum's payload slot is a number, and a pointer folded into
   it is read back as arithmetic.** The option/result form of this was
   fixed earlier; the user-enum side kept the hole. `@ E { A `s` }` where

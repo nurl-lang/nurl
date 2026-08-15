@@ -1215,6 +1215,16 @@
 // sink/escape summaries, so a helper defined above its caller is seen.
 : ~ i g_fn_arc_mut 0
 
+// Per-function container-mutation summary (docs/MEMORY.md §2.5).
+// `g_fn_mutates[fname]` lists the 0-based parameter indices whose
+// CONTAINER the body mutates. A `~ x xs` foreach holds a borrow of xs,
+// and `( grow xs )` inside the body invalidates it exactly as an inline
+// `( vec_push xs … )` does — the mutation simply moved one call away,
+// which is where the direct check stopped looking. Inferred in codegen
+// order like the sink / escape / arc summaries.
+: ~ i g_fn_mutates 0
+: ~ s g_fn_mutates_witness ``
+
 // Noreturn registry. `g_fn_noreturn[fname]` is `1` when a call to
 // fname never returns to its caller. Seeded with the runtime's true
 // noreturn primitives (nurl_exit, nurl_panic) and grown by inference in
@@ -7591,7 +7601,15 @@
             : b fe_iterated ( str_contains_word
             ( nurl_sym_get g_bck `iter_containers` ) bck_arg_root )
             : b fe_mutates & == arg_idx 0 ( bck_is_container_mutator fname )
-            ? & fe_iterated | is_inout_arg fe_mutates
+            // …or the callee is a HELPER whose summary says it mutates
+            // the container handed to this parameter. Passing an
+            // iterated container one call deep invalidates the loop's
+            // cursor exactly as an inline mutator does; without this the
+            // direct `( vec_push xs … )` warned and `( grow xs )` did
+            // not, which reads as "wrap it in a function" being a cure.
+            : b fe_helper_mutates ( str_contains_word
+            ( nurl_sym_get g_fn_mutates call_name ) ( nurl_str_int arg_idx ) )
+            ? & fe_iterated | is_inout_arg | fe_mutates fe_helper_mutates
             { ( bck_esc_warn lex bck_arg_line ( nurl_str_cat3
                 `cannot mutate '` bck_arg_root
                 `' while iterating over it — the '~' loop holds a borrow of the container; move the mutation out of the loop body` ) ) }
@@ -8291,6 +8309,23 @@
     //     thread_spawn call site decides, because only there is it known
     //     that this closure actually crosses a thread boundary — the same
     //     closure mutated on ONE thread is ordinary correct code.
+    // Container-mutation summary (§2.5): this function mutates the
+    // container it was handed — record which parameter, so a caller
+    // iterating that container is warned one call away. A global, not a
+    // symbol-table key: the mutation is usually inside a loop body and
+    // `nurl_sym_def` writes the innermost scope, so the flag would be
+    // popped with it (the trap that silently emptied the arc summary).
+    // Not gated on lock depth — a lock says nothing about a loop cursor.
+    ? & ( bck_is_container_mutator fname ) != 0 ( nurl_str_len __sm_a0 )
+    { : i __mu_i ( str_word_index ( nurl_sym_get syms `__fn_param_names__` ) __sm_a0 )
+        ? >= __mu_i 0
+        { : s __mu_w ( nurl_str_int __mu_i )
+            ? ( str_contains_word g_fn_mutates_witness __mu_w ) {}
+            { = g_fn_mutates_witness ? == 0 ( nurl_str_len g_fn_mutates_witness )
+                ( nurl_str_cat __mu_w `` )
+                ( nurl_str_cat3 g_fn_mutates_witness ` ` __mu_w ) } }
+        {} }
+    {}
     ? & & == g_lock_depth 0 ( bck_is_container_mutator fname )
     != 0 ( nurl_str_len __sm_a0 )
     { : s __sm_v ( nurl_str_cat __sm_a0 `` )
@@ -16497,7 +16532,26 @@
                         = actual_fty `i64`
                     }
                     ? == ( nurl_str_get fty 0 ) 37
-                    {  // Named type (starts with '%'). Only treat as struct
+                    {  // …but a struct has no business in a slot declared
+                        // as a NUMBER. Every path below folds the value to
+                        // an i64 — inline-f0, or a heap box — and the `??`
+                        // arm reads the slot back as the declared type, so
+                        // `@ ?i { T d }` with a Vec `d` returned 192, the
+                        // low byte of a heap address, from an arm the
+                        // writer expected to yield a number.
+                        //
+                        // The pointer form of this was rejected in #901;
+                        // a Vec reaches here as `%Vec__i64`, a NAMED
+                        // struct rather than a raw pointer, so that guard
+                        // did not see it. Same lie, one branch over.
+                        ? > ( int_width payload_ty ) 0
+                        { ( die lex ( nurl_str_cat4
+                            ( nurl_str_cat3 `payload of this option/result literal is a struct/handle ('` ( llvm_to_nurl fty ) `')` )
+                            ( nurl_str_cat3 ` but the declared payload type is '` ( llvm_to_nurl payload_ty ) `', a number` )
+                            `. The slot is a numeric word and the '?? T v →' arm reads it back as that type, so the handle would be returned as arithmetic. `
+                            `Declare the option/result over the type you are storing ('@ ?( Vec i ) { T v }'), or store a number.` ) ) }
+                        {}
+                        // Only treat as struct
                         // handle when the type is NOT an enum — enum payload
                         // slots in `! T E` should stay as the whole enum
                         // value (its i64 tag is extracted by the caller via
@@ -18305,6 +18359,8 @@
     // would be rejected — a false positive built out of a true fact.
     : s __cl_arcmut_saved ( nurl_str_cat g_fn_arc_mut_witness `` )
     = g_fn_arc_mut_witness ``
+    : s __cl_mut_saved ( nurl_str_cat g_fn_mutates_witness `` )
+    = g_fn_mutates_witness ``
     : i __cl_lock_saved g_lock_depth
     = g_lock_depth 0
     : s __cl_consumed_saved ( nurl_str_cat g_closure_consumed `` )
@@ -18342,6 +18398,7 @@
     : s __cl_tail_lt ( nurl_get_last_type )
     = g_bck_closure_depth - g_bck_closure_depth 1
     = g_fn_arc_mut_witness __cl_arcmut_saved
+    = g_fn_mutates_witness __cl_mut_saved
     = g_lock_depth __cl_lock_saved
     // Replay what the body consumed against what it CAPTURED: a
     // consumed capture is a handle this closure may free, so the
@@ -20383,6 +20440,9 @@
     // Shared-mutation summary (§6.5): set by gen_call if this body
     // mutates the contents of an arc_get result.
     = g_fn_arc_mut_witness ``
+    // Container-mutation summary (§2.5): which parameters' containers
+    // this body mutates.
+    = g_fn_mutates_witness ``
     = g_fn_ret_count 0
     : ~ s last ( gen_block_ret lex syms cg )
     // Type of the value the body actually falls off with. A body whose
@@ -20522,6 +20582,9 @@
     // is rejected too. Authoritative per function — the body is compiled.
     ? != 0 ( nurl_str_len g_fn_arc_mut_witness )
     { ( nurl_sym_def g_fn_arc_mut fname `1` ) }
+    {}
+    ? != 0 ( nurl_str_len g_fn_mutates_witness )
+    { ( nurl_sym_def g_fn_mutates fname g_fn_mutates_witness ) }
     {}
     // Implicit return — route through defer chain if defers are active
     : s dtop ( nurl_sym_get g_fn_escapes `__defer_top_fn__` )
@@ -26696,6 +26759,7 @@
     = g_fn_ret_param ( nurl_sym_new )
     = g_fn_ret_alias ( nurl_sym_new )
     = g_fn_arc_mut ( nurl_sym_new )
+    = g_fn_mutates ( nurl_sym_new )
     = g_fn_noreturn ( nurl_sym_new )
     ( nurl_sym_def g_fn_noreturn `nurl_exit` `1` )
     ( nurl_sym_def g_fn_noreturn `nurl_panic` `1` )
@@ -26848,6 +26912,7 @@
     ( nurl_sym_free g_fn_ret_param )
     ( nurl_sym_free g_fn_ret_alias )
     ( nurl_sym_free g_fn_arc_mut )
+    ( nurl_sym_free g_fn_mutates )
     ( nurl_sym_free g_pending_escape )
     ( nurl_sym_free g_bck )
     ( nurl_sym_free g_ptrtab )
