@@ -1,0 +1,7 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_send_enum_payload.nu:16:47: error: thread_spawn closure captures 'w', which is not Send: it reaches an 'Rc', whose refcount is NOT atomic — two threads cloning or dropping the same Rc race on its control-block count, which is UB. Use 'Arc' (stdlib/std/arc.nu) for any handle that crosses a thread boundary; it is the same API with a SEQ_CST count. If the type holding it IS safe to send and the compiler cannot see why, assert that with a '% Send <Type> { }' marker impl (stdlib/core/marker.nu).
+    : !Thread ThreadErr r ( thread_spawn work )
+                                              ^
+error: aborting due to 1 previous error
+note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.

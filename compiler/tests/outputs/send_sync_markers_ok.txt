@@ -1,0 +1,8 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+worker
+got=42
+bound=1
+wrapped=7

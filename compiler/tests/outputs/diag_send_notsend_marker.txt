@@ -1,0 +1,7 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/diag_send_notsend_marker.nu:21:47: error: thread_spawn closure captures 'p', which is not Send: it reaches 'Db', which is declared '% NotSend' (stdlib/core/marker.nu) — that type is asserted never to cross a thread boundary, whatever its fields suggest. Keep the value on the thread that made it and send a message — a 'Channel' of plain data — instead of the handle. If the assertion is what is wrong, remove the '% NotSend' impl rather than working around it here.
+    : !Thread ThreadErr r ( thread_spawn work )
+                                              ^
+error: aborting due to 1 previous error
+note: each error stopped its declaration — later statements in the same '@'/'%' were not checked, so this count is a lower bound. Fix these, then re-run.

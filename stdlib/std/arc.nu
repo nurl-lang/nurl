@@ -42,7 +42,21 @@
 //   larger than the platform's pointer (i.e. anything but a single
 //   integer / pointer / bool), concurrent reads and writes are a
 //   data race. The Arc protects ownership/lifetime, NOT field
-//   integrity. For shared MUTATION across threads, wrap T in a
+//   integrity.
+//
+//   Because an Arc exists to be SHARED, its payload is the one place
+//   the compiler asks the harder of the two thread-safety questions:
+//   T must be `Sync`, not merely `Send` (stdlib/core/marker.nu). That
+//   is why `( Arc ( Rc i ) )` and `( Arc Cell )` are rejected at the
+//   thread boundary while a bare `Cell` capture — moved, not shared —
+//   is fine. What the check does NOT do is stop two threads mutating
+//   a `( Arc ( Vec i ) )`'s contents: `Vec` is Sync, correctly, since
+//   sharing one read-only is ordinary code. That race is caught
+//   separately, at the mutation, by the shared-mutation check
+//   (docs/MEMORY.md §6.5) — which recommends exactly the pattern
+//   below.
+//
+//   For shared MUTATION across threads, wrap T in a
 //   Mutex (the Arc[Mutex[T]] pattern):
 //
 //     : ( Arc Mutex ) shared ( arc_new ( mutex_new ) )

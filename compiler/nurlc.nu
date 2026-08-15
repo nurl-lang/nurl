@@ -6457,7 +6457,7 @@
 // trait(s). Dispatch already works through monomorphisation; this turns
 // a missing impl from a cryptic unresolved-call link error into a clear
 // compile-time diagnostic at the bound. No-op for unbounded generics.
-@ check_generic_bounds i lex s fname s type_args → v {
+@ check_generic_bounds i lex i syms s fname s type_args → v {
     : ~ s tp_rest ( nurl_sym_get2 g_generic_syms fname `__tparams` )
     : ~ s ta_rest ( nurl_str_cat type_args `` )
     ~ != 0 ( nurl_str_len tp_rest ) {
@@ -6472,11 +6472,33 @@
             ~ != 0 ( nurl_str_len br ) {
                 : s bt ( str_first_word br )
                 = br ( str_skip_word br )
-                ? == 0 ( nurl_sym_len g_trait_syms ( nurl_str_cat3 bt `##` ta_llvm ) )
-                { : s m1 ( nurl_str_cat4 `type '` ta `' does not implement trait '` bt )
-                    : s m2 ( nurl_str_cat3 m1 `' required by bound ` ( nurl_str_cat3 tp `: ` bt ) )
-                    ( die lex ( nurl_str_cat3 m2 ` on generic '` ( nurl_str_cat fname `'. Supply a type that implements the trait, or add the impl.` ) ) ) }
-                {}
+                // Send / Sync are answered by the structural derivation
+                // rather than the impl registry — see __thr_bound_trait.
+                : i thr_q ( __thr_bound_trait bt )
+                ? >= thr_q 0
+                {  // `NotSend` / `NotSync` ask for the same predicate,
+                    // negated — and about the same question (Send is 0,
+                    // Sync is 1), which is what the -2 recovers.
+                    : b inverted > thr_q 1
+                    : i want ? inverted - thr_q 2 thr_q
+                    : b lacks ( __thr_lacks syms ta_llvm want )
+                    // For `Send`/`Sync` the bound is violated when the
+                    // type LACKS the property; for `NotSend`/`NotSync`
+                    // it is violated when the type has it.
+                    : b violated ? inverted ! lacks lacks
+                    : s advice ? inverted
+                    `That bound demands a type which must NOT cross a thread boundary, and this one may — mark it '% NotSend <Type> { }' / '% NotSync <Type> { }' if it genuinely must not (stdlib/core/marker.nu).`
+                    `'Send' and 'Sync' are derived from the type's structure, not from an impl block, so there is nothing to add here: this type reaches something that is not safe to send or share. Use a thread-safe type, or — if it IS safe and the compiler cannot see why — assert it with a '% Send <Type> { }' marker impl (stdlib/core/marker.nu).`
+                    ? violated
+                    { : s q1 ( nurl_str_cat4 `type '` ta `' does not satisfy the bound ` ( nurl_str_cat3 tp `: ` bt ) )
+                        : s q2 ( nurl_str_cat3 q1 ` on generic '` ( nurl_str_cat fname `'. ` ) )
+                        ( die lex ( nurl_str_cat q2 advice ) ) }
+                    {} }
+                { ? == 0 ( nurl_sym_len g_trait_syms ( nurl_str_cat3 bt `##` ta_llvm ) )
+                    { : s m1 ( nurl_str_cat4 `type '` ta `' does not implement trait '` bt )
+                        : s m2 ( nurl_str_cat3 m1 `' required by bound ` ( nurl_str_cat3 tp `: ` bt ) )
+                        ( die lex ( nurl_str_cat3 m2 ` on generic '` ( nurl_str_cat fname `'. Supply a type that implements the trait, or add the impl.` ) ) ) }
+                    {} }
             }
         } {}
     }
@@ -7325,7 +7347,7 @@
         {}
         // Trait-bound check: each `A: Trait` tparam's concrete type must
         // have an impl of Trait (no-op for unbounded generics).
-        ( check_generic_bounds lex fname type_args )
+        ( check_generic_bounds lex syms fname type_args )
         // Dedup uses a global key (g_generic_syms is scope-free) because
         // local `syms` is push/popped per block — registering ret_ty in
         // syms inside a loop body would vanish when that block ends, and
@@ -7783,14 +7805,25 @@
                 // most String handles legitimately end their life.
                 ( lint_note_released bck_arg_val ) } {} }
         {}
-        // Thread-safety: the thread_spawn closure (arg 0) detaches onto a
-        // worker thread. If it captures a non-Send value (an Rc — non-atomic
-        // refcount), two threads racing on the control-block count is undefined
-        // behaviour. Reject it and point at the thread-safe Arc. A named-binding
-        // argument carries the flag via `<name>__closure_nonsend`; an inline
-        // closure literal sets the `__last_closure_nonsend__` side-channel as it
-        // is built just above.
-        ? & ( seq fname `thread_spawn` ) builtin_escape_slot {
+        // Thread-safety: a value crossing a thread boundary must be Send
+        // (stdlib/core/marker.nu). Three call shapes cross one, and the
+        // check has to sit at all three or the same bug is a compile
+        // error in one spelling and silence in the next:
+        //
+        //   ( thread_spawn f )  arg 0 detaches onto a worker pthread
+        //   ( spawn f )         arg 0 detaches onto a fiber, and fibers
+        //                       migrate across the M:N runtime's worker
+        //                       threads — a captured Rc is the same UB
+        //                       whether the migration happens or not
+        //   ( chan_send ch v )  arg 1 is handed to whoever receives it
+        //
+        // The closure cases read a verdict computed when the closure was
+        // BUILT: a named-binding argument carries it on
+        // `<name>__closure_nonsend`, an inline literal in the
+        // `g_last_closure_nonsend` side-channel set just above. chan_send
+        // has no closure and is checked against its argument's type
+        // directly, further down.
+        ? & ( __thr_is_detach fname ) == arg_idx 0 {
             // Both arms OWN their value: a mixed owned/borrow join publishes
             // "not owned" (the compiler cannot copy a borrow for you — `s`
             // is also NURL's opaque-handle spelling), so the owning arm's
@@ -7799,9 +7832,13 @@
             ( nurl_sym_get2 syms bck_arg_val `__closure_nonsend` )
             ( nurl_str_cat g_last_closure_nonsend `` )
             ? != 0 ( nurl_str_len __ts_ns )
+            // __thr_explain closes the message: the right advice
+            // differs per reason, and appending one fixed tail here
+            // told an author who had just written `% NotSend Db { }`
+            // to consider writing `% Send Db { }`.
             { ( die lex ( nurl_str_cat
-                ( nurl_str_cat3 `thread_spawn closure captures '` __ts_ns `' which is an Rc — ` )
-                `a non-atomic refcount is not safe to send across threads (two threads racing on the count is UB); use Arc (atomic) for a handle that crosses a thread boundary` ) ) }
+                ( nurl_str_cat4 fname ` closure captures '` ( str_first_word __ts_ns ) `', which is not Send: ` )
+                ( __thr_explain ( str_skip_word __ts_ns ) ) ) ) }
             {}
             // Shared MUTATION across the same boundary (docs/MEMORY.md
             // §6.5). Arc answers the refcount question and only that; the
@@ -7822,9 +7859,19 @@
             ( nurl_str_cat g_last_closure_sharedmut `` )
             ? != 0 ( nurl_str_len __ts_sm )
             { ( die lex ( nurl_str_cat
-                ( nurl_str_cat3 `thread_spawn closure ` __ts_sm ` — 'Arc' makes the REFCOUNT atomic, not the payload. ` )
+                ( nurl_str_cat4 fname ` closure ` __ts_sm ` — 'Arc' makes the REFCOUNT atomic, not the payload. ` )
                 `Two threads mutating one Arc's contents race on the container's length and backing pointer: lost updates, or a use-after-free of the buffer one thread reallocated while the other held it. Put the shared value behind a lock and mutate only while holding it — 'Mutex' + 'mutex_lock'/'mutex_unlock' (or 'mutex_with'), one Mutex shared by every worker — or give each thread its own copy and merge the results after 'thread_join'.` ) ) }
             {}
+        } {}
+        // The third boundary: `( chan_send ch v )` hands `v` to whatever
+        // thread or fiber receives it. No closure is involved, so there
+        // is no build-time verdict to read — the argument's own type is
+        // the whole question, and `at` already holds it.
+        ? & & ( seq fname `chan_send` ) == arg_idx 1 ( __thr_lacks syms at 0 ) {
+            ( die lex ( nurl_str_cat3
+            `chan_send would move this value to whatever thread or fiber receives it, but its type is not Send: `
+            ( __thr_explain ( __thr_capture_reason syms at ) )
+            ` A channel can carry the DATA instead of the handle — read the value out on this side and send that.` ) )
         } {}
         // Record this argument's referent depth (for §2.8 return-escape
         // propagation below). Read the same side-channels the escape
@@ -18024,12 +18071,6 @@
     ^ ( nurl_str_slice lty start - i start )
 }
 
-// __lty_is_nonsend: true if an LLVM type is a value that is NOT safe to send
-// across a thread boundary. Currently `Rc` (non-atomic refcount) — cloning or
-// dropping the same Rc from two threads races on its control-block count. Its
-// thread-safe counterpart is `Arc` (SEQ_CST atomic count). The check is by the
-// generic base name, so every `Rc T` monomorphisation is covered while `Arc T`
-// and the internal `RcImpl` are not.
 // Compare a name's BASE — the part before the first `__` — against
 // `want`, without building the slice `__lty_base_name` returns. It is
 // called on every gen_call, and the allocating form leaked 46182 strings
@@ -18054,8 +18095,293 @@
     ^ & == ( nurl_str_get lty after ) 95 == ( nurl_str_get lty + after 1 ) 95
 }
 
-@ __lty_is_nonsend s lty → b {
-    ^ ( seq ( __lty_base_name lty ) `Rc` )
+// ── Send / Sync: the thread-safety marker derivation ───────────────
+//
+// Two questions a thread boundary asks about a type, and nothing else
+// (stdlib/core/marker.nu declares them as marker traits):
+//
+//   Send — may a value of this type MOVE to another thread?
+//   Sync — may two threads reach ONE value of this type at once?
+//
+// This used to be one line: "is the capture spelled `Rc`?". That
+// caught the one spelling and nothing else. The SAME undefined
+// behaviour written with the Rc one struct field, one Vec element, one
+// Box, one Arc payload, one option, one enum variant or one nested
+// closure away compiled clean — ten ways to write one bug, one of them
+// diagnosed. The fix is not more special cases: it is to answer the
+// question about the type's whole GRAPH, so the spelling stops
+// mattering and the diagnostic can name the reason instead.
+//
+// Three levels, worst-wins across the graph:
+//
+//   Send + Sync    the default — scalars, handles, structs of them
+//   Send, !Sync    `Cell`, a raw byte buffer with unsynchronised writes
+//   !Send, !Sync   `Rc`, whose refcount is not atomic
+//
+// Those two leaves are language facts and live here. Everything else
+// follows from them structurally. A type may also be marked by hand at
+// either end — `% Sync Mutex { }` asserts safety the compiler cannot
+// see (a Mutex is `{ Cell c }` and is nonetheless the thing that MAKES
+// its contents shareable), `% NotSend Db { }` asserts danger it cannot
+// see (a `sqlite3*` is an `s`, and `s` is Send; the connection is not).
+//
+// `Arc` is the one type that holds its argument to the harder
+// question. An Arc exists to be shared, so its payload must be Sync,
+// not merely Send — that is where `( Arc ( Rc i ) )` dies, and it is
+// the whole reason `want` is threaded through the walk.
+//
+// What is deliberately NOT a leaf: `s`. NURL spells String and every
+// opaque FFI handle `i8*`, so demoting it would demote both, and
+// sharing a String read-only across threads is ordinary correct code.
+// Two threads MUTATING one `( Vec i )` they both hold is a real race
+// that no marker forbids — it is caught at the mutation instead, by
+// the shared-mutation check below (docs/MEMORY.md §6.5). The two are
+// complementary; neither subsumes the other.
+//
+// Like every check here the walk can only MISS — an unmarked FFI
+// handle, a graph deeper than the depth cap — never invent
+// (docs/MEMORY.md §6.3).
+//
+// The reason travels as the RETURN VALUE, not a global: "" when the
+// type satisfies `want`, else "<TypeName> <kind>" naming the offending
+// node and how it was decided (`rc`, `cell`, `notsend`, `notsync`).
+// One owned string per frame, consumed by the caller — the witness
+// globals the shared-mutation check needs exist only because ITS flag
+// is set in a scope that gets popped before the reader runs, and this
+// walk has no such problem.
+
+// __thr_marked: is there an explicit `% <trait> <type> { }` impl
+// covering this type? One type has three spellings at an impl site and
+// all three must hit — the exact monomorph (`% Sync ( Arc i ) { }`
+// registers `%Arc__i64`), the bare generic name (`% NotSend Rc { }`),
+// and the name with its `%`. `pfx` arrives with `##` already attached
+// so nurl_sym_get2 hashes base+suffix as if concatenated and the key is
+// never materialised.
+@ __thr_marked s pfx s lty s bn → b {
+    ? != 0 ( nurl_sym_len2 g_trait_syms pfx lty ) { ^ T } {}
+    ? != 0 ( nurl_sym_len2 g_trait_syms pfx bn ) { ^ T } {}
+    : s bpc ( nurl_str_cat `%` bn )
+    : b hit != 0 ( nurl_sym_len2 g_trait_syms pfx bpc )
+    ^ hit
+}
+
+// __thr_peel: a mangled type name's generic ARGUMENTS, re-read as a
+// type. Every generic container in NURL lowers to a one-pointer handle
+// (`: Vec [A] { s ctl }`), so the element type is gone from the LLVM
+// body and survives only in the monomorph's mangled name — walking
+// `%Arc__Rc__i64`'s fields finds one `i8*` and learns nothing. Peeling
+// the first `__` segment off and reading the rest as a type
+// (`%Rc__i64`) descends one level per frame with no demangling at all:
+// a multi-argument mangle (`%Pair__i64__Rc__i64`) peels to a name whose
+// own base is `i64` and whose remainder is `Rc__i64`, so every argument
+// is still visited even though the arity was never recovered. Returns
+// "" for a name with no `__`.
+@ __thr_peel s lty → s {
+    : i n ( nurl_str_len lty )
+    : i start ? & > n 0 == ( nurl_str_get lty 0 ) 37 1 0  // '%' == 37
+    : ~ i i start
+    : ~ i at -1
+    ~ & < + i 1 n < at 0 {
+        ? & == ( nurl_str_get lty i ) 95 == ( nurl_str_get lty + i 1 ) 95  // "__"
+        { = at i } { = i + i 1 }
+    }
+    ? < at 0 { ^ ( nurl_str_cat `` `` ) } {}
+    ^ ( nurl_str_cat `%` ( nurl_str_slice lty + at 2 - n + at 2 ) )
+}
+
+// __thr_check: "" if `lty` satisfies `want` (0 = Send, 1 = Sync)
+// everywhere in its type graph, else "<TypeName> <kind>".
+@ __thr_check i syms s lty i want i depth → s {
+    : i n ( nurl_str_len lty )
+    // The cap is a backstop against a type that contains itself through
+    // a handle (`: Node { ( Vec Node ) kids }`), not a budget: nothing
+    // real nests ten deep, and bailing out only ever misses.
+    ? | > depth 10 == n 0 { ^ ( nurl_str_cat `` `` ) } {}
+
+    : s bn ( __lty_base_name lty )
+
+    // A negative marker outranks everything, including a positive one
+    // on the same type: if a program asserts both, the contradiction
+    // resolves toward rejection.
+    ? ( __thr_marked `NotSend##` lty bn )
+    { ^ ( nurl_str_cat bn ` notsend` ) } {}
+    ? & == want 1 ( __thr_marked `NotSync##` lty bn )
+    { ^ ( nurl_str_cat bn ` notsync` ) } {}
+
+    // A positive marker answering the question at hand STOPS the walk.
+    // Nothing inside is examined — that is the point of writing one:
+    // the author has taken responsibility for the innards.
+    ? & == want 0 ( __thr_marked `Send##` lty bn )
+    { ^ ( nurl_str_cat `` `` ) } {}
+    ? & == want 1 ( __thr_marked `Sync##` lty bn )
+    { ^ ( nurl_str_cat `` `` ) } {}
+
+    // The two built-in leaves.
+    ? ( seq bn `Rc` ) { ^ ( nurl_str_cat `Rc` ` rc` ) } {}
+    ? & == want 1 ( seq bn `Cell` ) { ^ ( nurl_str_cat `Cell` ` cell` ) } {}
+
+    // Generic arguments. `Arc` is the one container that SHARES its
+    // payload rather than moving it, so from here down the question
+    // becomes the harder one — `( Arc ( Rc i ) )` and `( Arc Cell )`
+    // die here, and a `( Vec Cell )` correctly does not.
+    : i sub_want ? ( seq bn `Arc` ) 1 want
+    : s args ( __thr_peel lty )
+    ? != 0 ( nurl_str_len args )
+    { : s ra ( __thr_check syms args sub_want + depth 1 )
+        ? != 0 ( nurl_str_len ra ) { ^ ra } {} }
+    {}
+
+    // Named struct fields.
+    : s fc ( nurl_sym_get2 syms bn `__field_count` )
+    ? != 0 ( nurl_str_len fc )
+    { : i fn_ ( nurl_str_to_int fc )
+        : ~ i fi 0
+        ~ < fi fn_ {
+            : s ft ( nurl_sym_get syms
+            ( nurl_str_cat3 bn `__idx_` ( nurl_str_cat ( nurl_str_int fi ) `__type` ) ) )
+            : s rf ( __thr_check syms ft want + depth 1 )
+            ? != 0 ( nurl_str_len rf ) { ^ rf } {}
+            = fi + fi 1
+        } }
+    {}
+
+    // Enum variant payloads. The enum's LLVM body is `{ i64, i64, … }`
+    // — every payload slot is bit-complete and type-free (§4.7) — so
+    // the declared payload types are the only place the Rc is still
+    // visible.
+    : s vl ( nurl_sym_get2 syms bn `__variants` )
+    ? != 0 ( nurl_str_len vl )
+    { : ~ s rest ( nurl_str_cat vl `` )
+        ~ != 0 ( nurl_str_len rest ) {
+            : s vname ( str_first_word rest )
+            : s pc ( nurl_sym_get2 syms vname `__paycount` )
+            ? != 0 ( nurl_str_len pc )
+            { : i pn ( nurl_str_to_int pc )
+                : ~ i pi 0
+                ~ < pi pn {
+                    : s pt ( nurl_sym_get syms
+                    ( nurl_str_cat3 vname `__payload__` ( nurl_str_int pi ) ) )
+                    : s rp ( __thr_check syms pt want + depth 1 )
+                    ? != 0 ( nurl_str_len rp ) { ^ rp } {}
+                    = pi + pi 1
+                } }
+            {}
+            = rest ( str_skip_word rest )
+        } }
+    {}
+
+    // Inline aggregates — `?T` is `{ i1, T }`, `!T E` is `{ i1, T, E }`,
+    // a slice is `{ T*, i64 }`. These carry their element types in the
+    // spelling itself, so no registry lookup is involved.
+    ? == ( nurl_str_get lty 0 ) 123  // '{' == 123
+    { : i afc ( agg_field_count syms lty )
+        : ~ i ai 0
+        ~ & >= afc 0 < ai afc {
+            : s at_ ( compound_field_type lty ai )
+            : s ragg ( __thr_check syms at_ want + depth 1 )
+            ? != 0 ( nurl_str_len ragg ) { ^ ragg } {}
+            = ai + ai 1
+        } }
+    {}
+
+    ^ ( nurl_str_cat `` `` )
+}
+
+// __thr_explain: the offending node's name and WHY it is unsafe, from
+// the "<TypeName> <kind>" pair __thr_check returns. The advice differs
+// per kind because the fix does: an Rc has a thread-safe counterpart to
+// swap in, a Cell has a lock to go behind, and a hand-marked type has
+// an author who already knows why.
+@ __thr_explain s reason → s {
+    : s nm ( str_first_word reason )
+    : s kind ( str_skip_word reason )
+    // Each kind closes with its OWN advice, including the "assert it
+    // yourself" escape hatch where that is the right suggestion. It is
+    // not right for the marker kinds: telling an author who just wrote
+    // `% NotSend Db { }` that they could write `% Send Db { }` is
+    // advice to undo their own decision, and reads as the compiler not
+    // having noticed it.
+    ? ( seq kind `rc` )
+    { ^ ( nurl_str_cat
+        `it reaches an 'Rc', whose refcount is NOT atomic — two threads cloning or dropping the same Rc race on its control-block count, which is UB. `
+        `Use 'Arc' (stdlib/std/arc.nu) for any handle that crosses a thread boundary; it is the same API with a SEQ_CST count. If the type holding it IS safe to send and the compiler cannot see why, assert that with a '% Send <Type> { }' marker impl (stdlib/core/marker.nu).` ) } {}
+    ? ( seq kind `cell` )
+    { ^ ( nurl_str_cat
+        `it reaches a 'Cell' — a raw byte buffer whose reads and writes are unsynchronised, so sharing one between threads is a data race on its bytes. `
+        `Put it behind a 'Mutex' (which is itself marked Sync for exactly this reason) and touch it only while holding the lock, or give each thread its own Cell. If this Cell IS safe to share and the compiler cannot see why, assert it with a '% Sync <Type> { }' marker impl (stdlib/core/marker.nu).` ) } {}
+    ? ( seq kind `notsend` )
+    { ^ ( nurl_str_cat3
+        `it reaches '` nm
+        `', which is declared '% NotSend' (stdlib/core/marker.nu) — that type is asserted never to cross a thread boundary, whatever its fields suggest. Keep the value on the thread that made it and send a message — a 'Channel' of plain data — instead of the handle. If the assertion is what is wrong, remove the '% NotSend' impl rather than working around it here.` ) } {}
+    ^ ( nurl_str_cat3
+    `it reaches '` nm
+    `', which is declared '% NotSync' (stdlib/core/marker.nu) — that type may be MOVED to another thread but never reached from two at once, and this shares it. Give each thread its own, or put it behind a 'Mutex'. If the assertion is what is wrong, remove the '% NotSync' impl rather than working around it here.` )
+}
+
+// __thr_capture_reason: the Send verdict for a value about to cross a
+// thread boundary, "" when it may. A thin named wrapper so the three
+// call sites (thread_spawn, spawn, chan_send) read the same.
+@ __thr_capture_reason i syms s lty → s {
+    ^ ( __thr_check syms lty 0 0 )
+}
+
+// __thr_lacks: the same question with a BOOLEAN answer, for the callers
+// that sit above these definitions.
+//
+// A call to a function defined further down the file has its owned
+// return value conservatively kept — never freed — at the call site
+// (the same rule that put g_dyn_dtout on a global). gen_call and
+// check_generic_bounds are both such callers, so they ask the question
+// here, where the reason string is born and dies inside one scope, and
+// reach for the allocating spelling only on the path that is about to
+// `die` anyway.
+@ __thr_lacks i syms s lty i want → b {
+    : s r ( __thr_check syms lty want 0 )
+    : b bad != 0 ( nurl_str_len r )
+    ^ bad
+}
+
+// __thr_bound_trait: which thread-safety question, if any, is this
+// trait bound asking? -1 for an ordinary trait, 0 for Send, 1 for Sync.
+//
+// `[T: Send]` has to be answered by the DERIVATION, not by hunting the
+// impl registry the way every other bound is. Send and Sync are not
+// traits a type opts into one impl at a time — `i`, `s`, `( Vec i )`
+// and every struct of them are Send because of what they ARE, and
+// requiring an impl per type would mean writing thousands of empty
+// blocks to make one bound usable. So the bound asks the same question
+// the thread boundaries ask, and gets the same answer.
+//
+// `NotSend` / `NotSync` as a BOUND is the inverse demand — "this type
+// must be one that cannot cross" — which is a coherent thing to want
+// (a handle a worker must never be handed) and costs nothing to
+// support: it is the same predicate, negated.
+@ __thr_bound_trait s bt → i {
+    ? ( seq bt `Send` ) { ^ 0 } {}
+    ? ( seq bt `Sync` ) { ^ 1 } {}
+    ? ( seq bt `NotSend` ) { ^ 2 } {}
+    ? ( seq bt `NotSync` ) { ^ 3 } {}
+    ^ -1
+}
+
+// __thr_is_detach: does this call DETACH its closure argument onto
+// something that runs concurrently with the caller?
+//
+// `thread_spawn` is the obvious one. The three `spawn*` entries of
+// stdlib/std/async.nu belong here too: a fiber is not a thread, but the
+// runtime is M:N and a fiber runs on whichever worker pthread picks it
+// up, so a captured Rc is exactly the same undefined behaviour — and it
+// stays undefined whether or not a given run happens to schedule the
+// fiber elsewhere, which is what makes it worth a compile error rather
+// than a race to be found later.
+//
+// Matched by call name, as the thread_spawn check has always been.
+@ __thr_is_detach s fname → b {
+    ^ | | |
+    ( seq fname `thread_spawn` )
+    ( seq fname `spawn` )
+    ( seq fname `spawn_owned` )
+    ( seq fname `spawn_joinable` )
 }
 
 @ gen_closure_expr i lex i syms i cg → s {
@@ -18270,11 +18596,26 @@
             : s cap_name ( str_first_word caps )
             : ~ s cap_type ( nurl_sym_get syms cap_name )
             ? == 0 ( nurl_str_len cap_type ) { = cap_type `i64` } {}
-            // Thread-safety: a captured non-Send value (an Rc) makes this
-            // closure unsafe to send across threads. Record the offending
-            // capture; the thread_spawn call site turns it into an error.
-            ? ( __lty_is_nonsend cap_type )
-            { = g_last_closure_nonsend cap_name } {}
+            // Thread-safety: a captured value that is not Send makes this
+            // closure unsafe to detach. Record the offending capture and
+            // WHY — "<capture> <TypeName> <kind>" — and let the
+            // thread_spawn / spawn / chan_send sites turn it into an
+            // error, since capturing one is only a bug if the closure
+            // then crosses a thread boundary.
+            //
+            // Two ways a capture can be non-Send, and both must be seen
+            // here. Its own TYPE can reach an Rc (directly, or through a
+            // field, element, payload or Arc); or it can itself be a
+            // CLOSURE that captured one, in which case the type says
+            // nothing — a closure lowers to a fn/env pair whose env
+            // contents are invisible — and the answer is the verdict
+            // already recorded for that binding when it was built.
+            : s cap_r ( __thr_capture_reason syms cap_type )
+            ? != 0 ( nurl_str_len cap_r )
+            { = g_last_closure_nonsend ( nurl_str_cat3 cap_name ` ` cap_r ) }
+            { : s cap_inner ( nurl_sym_get2 syms cap_name `__closure_nonsend` )
+                ? != 0 ( nurl_str_len cap_inner )
+                { = g_last_closure_nonsend ( nurl_str_cat cap_inner `` ) } {} }
             : b cap_byref ( __is_capture_byref cap_name syms )
             // Escape analysis: a by-pointer capture references
             // `cap_name`'s stack slot — its declaration depth
@@ -22383,6 +22724,13 @@
 }
 
 @ gen_import_decl i lex i syms i cg → v {
+    // An import is the one top-level decl kind that took no visibility
+    // prefix and also never cleared one. `pub` means nothing on a `$`
+    // — the imported file's own markings decide what it exports — but
+    // leaving the flag set hands it to the NEXT declaration parsed,
+    // which is the same cross-declaration leak the pre-pass had. Every
+    // other handler consumes it; so does this one.
+    ( vis_take_pending_pub )
     // Lint: capture the `$` token's position before consuming it so
     // the unused-import warning points at the directive itself.
     : i __li_line ( nurl_lex_line lex )
@@ -25345,6 +25693,22 @@
                     }
                     {}
                     : i tt ( nurl_lex_type lex )
+                    // A `pub` belongs to THIS declaration and no other.
+                    // Only the TT_AT arm below ever consumed the flag, so
+                    // on any other decl kind it survived and silently
+                    // attached itself to the next `@` the scanner reached
+                    // — which, once the scan crosses an import boundary,
+                    // is a function in a DIFFERENT file. A module whose
+                    // last declaration is `pub % Trait [T] { }` (or a
+                    // `pub :` const / enum) therefore marked its
+                    // IMPORTER's next function public and flipped that
+                    // file into strict mode, at which point the
+                    // importer's own unmarked types stopped being
+                    // visible across files — an error blaming a
+                    // declaration nowhere near the `pub` that caused it.
+                    // Read-and-clear here, where the prefix was parsed,
+                    // and hand the answer to the one arm that wants it.
+                    : b decl_pub ( vis_take_pending_pub )
                     ? == tt TT_AT
                     { ( nurl_lex_advance lex )
                         ? ( is_ident_tok ( nurl_lex_type lex ) )
@@ -25363,7 +25727,7 @@
                             // preceding token was `pub`) the public flag. Strict-mode for
                             // the current file flips to "1" the first time a pub @ is
                             // seen, which gen_call later consults to enforce visibility.
-                            ( vis_record_fn fname ( vis_take_pending_pub ) )
+                            ( vis_record_fn fname decl_pub )
                             // Generic function [T U ...]: skip type params, mark as generic.
                             // Slice type param [type name]: treat like regular params (not generic).
                             // Must match the disambiguation in gen_fn_decl: accept IDENT *or*

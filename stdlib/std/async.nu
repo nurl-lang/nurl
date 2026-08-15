@@ -31,6 +31,14 @@
 //     `yield` is a no-op and `fiber_current` returns None.
 //   * Phase 1 is single-thread. M:N work-stealing across worker OS
 //     threads is Phase 3 — the API does not change.
+//   * `spawn` is a THREAD BOUNDARY for the compiler's purposes, and is
+//     checked exactly like `thread_spawn`: every value the body
+//     captures must be `Send` (stdlib/core/marker.nu). A fiber runs on
+//     whichever worker pthread picks it up, so capturing an `Rc` is
+//     the same undefined behaviour there as on a pthread — and it
+//     stays undefined whether or not a given run happens to schedule
+//     the fiber elsewhere, which is what makes it worth a compile
+//     error rather than a race to find later.
 //
 // Minimal producer / consumer pattern:
 //

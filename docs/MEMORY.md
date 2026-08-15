@@ -720,26 +720,62 @@ safe Rust cannot:
    no-false-positive property (§6.2, §6.3). `--strict-borrowck` closes
    exactly this hole (§2.9, check 3) at the cost of also flagging the
    legitimate mutually-exclusive-frees pattern.
-2. **Data-race on shared heap state.** There is **no `Send`/`Sync`
-   system**. Two footguns are rejected concretely: an `Rc` captured
-   into `thread_spawn`, and a `thread_spawn` closure that mutates the
-   *contents* of an `Arc` it did not create — inline or through a
-   helper — without holding a lock. The second was the example this
-   section used to cite as unchecked; `Arc ( Vec i )` shared by two
-   pushing workers segfaulted 5 runs in 8 and silently lost half its
-   updates in the rest, because `arc_get` over a manually-managed
-   handle hands back a *copy of the handle* aliasing one buffer.
-   `Arc` makes the *refcount* atomic, not your data — put the data
-   behind a `Mutex` the worker locks itself.
+2. **Data-race on shared heap state.** There is a `Send`/`Sync`
+   system, and it is a *lint over types*, not a proof about programs.
+   `Send` ("may move to another thread") and `Sync` ("may be reached
+   from two threads at once") are marker traits
+   (`stdlib/core/marker.nu`) that the compiler **derives structurally
+   over a type's whole graph** — struct fields, enum payloads, generic
+   arguments, aggregate members, closure captures — from two
+   language-level leaves:
 
-   What remains unchecked: a user type that is internally
-   non-thread-safe is not flagged when it crosses a thread boundary,
+   | | Send | Sync | why |
+   |---|---|---|---|
+   | `Rc` | ✗ | ✗ | the refcount is not atomic |
+   | `Cell` | ✓ | ✗ | a raw byte buffer, writes unsynchronised |
+   | everything else | ✓ | ✓ | until a field says otherwise |
+
+   The derivation is checked where a value actually crosses:
+   `thread_spawn` and `spawn` (every capture must be Send), `chan_send`
+   (the value must be Send), and `Arc T` (T must be Send **and** Sync —
+   an Arc exists to be shared, so its payload faces the harder
+   question). `[T: Send]` bounds are answered by the same derivation
+   rather than by an impl lookup.
+
+   Because it is structural it is wrong in exactly two directions, and
+   there is a marker for each: `% Send T { }` / `% Sync T { }` assert
+   safety the compiler cannot see (`Mutex` is `{ Cell c }` and is
+   nonetheless what *makes* contents shareable), and `% NotSend T { }`
+   / `% NotSync T { }` assert danger it cannot see (a `sqlite3*` is an
+   `s`, and `s` is Send; the connection is not). A marker impl is
+   NURL's spelling of Rust's `unsafe impl` — an assertion, not a proof
+   — and a negative one always outranks a positive one on the same
+   type.
+
+   Separately, a `thread_spawn`/`spawn` closure that mutates the
+   *contents* of an `Arc` it did not create — inline or through a
+   helper — without holding a lock is rejected. `Arc ( Vec i )` shared
+   by two pushing workers segfaulted 5 runs in 8 and silently lost half
+   its updates in the rest, because `arc_get` over a manually-managed
+   handle hands back a *copy of the handle* aliasing one buffer. `Arc`
+   makes the *refcount* atomic, not your data — put the data behind a
+   `Mutex` the worker locks itself.
+
+   These two checks are complementary and neither subsumes the other.
+   Send/Sync answer "may this value cross?", never "is this program
+   race-free": `( Vec i )` is Send and Sync, correctly, because sharing
+   one read-only is ordinary code — two threads *mutating* it is the
+   race the second check catches, at the mutation.
+
+   What remains unchecked: an FFI handle nobody marked `% NotSend` is
+   waved through (`s` is the spelling of both String and every opaque
+   handle, so the compiler cannot tell them apart and does not guess);
    the lock check counts `mutex_lock`/`mutex_unlock` rather than
-   proving the lock is held on every path (so it can only miss a
-   race, never invent one), and nothing stops the *parent* thread
-   from mutating shared state while a worker runs
+   proving the lock is held on every path; and nothing stops the
+   *parent* thread from mutating shared state while a worker runs
    ([`LIMITATIONS.md`](LIMITATIONS.md), *Concurrency / thread
-   safety*).
+   safety*). Every one of those is a MISS, never an invention — the
+   same direction as §6.3.
 
 Integer division and remainder by zero panic with a clear message —
 they are not UB.
@@ -749,6 +785,13 @@ construction, with the common bug classes machine-checked — not
 memory-safe by proof, and not data-race-free.** Anyone needing the
 latter two guarantees today should reach for Rust; anyone reading a
 "NURL is memory-safe like Rust" claim should be pointed here.
+
+`Send`/`Sync` does not change that sentence. NURL derives both and
+checks them at every thread boundary, but the derivation rests on
+markers a human writes and on leaves the compiler happens to know, and
+an unmarked FFI handle crosses without a word. It removes a large,
+enumerable class of data races — every route by which an `Rc` or a
+`Cell` reaches a worker — and proves nothing about the rest.
 
 ### 6.6 The gates — how the guarantees are checked
 

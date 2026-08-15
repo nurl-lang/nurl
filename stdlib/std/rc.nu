@@ -19,7 +19,13 @@
 //   * The owner is unambiguous — `Box[T]` is cheaper (one alloc, no
 //     count field, no clone/free count manipulation).
 //   * You spawn worker threads holding the same handle — that's
-//     `Arc[T]`. An `Rc[T]` shared across threads is UB.
+//     `Arc[T]`. An `Rc[T]` shared across threads is UB, and since
+//     `Send`/`Sync` (stdlib/core/marker.nu) it is a compile error
+//     rather than a race to find later: `Rc` is the language's
+//     canonical non-Send leaf, so an Rc reaching `thread_spawn`,
+//     `spawn` or `chan_send` — directly, through a struct field, a
+//     Vec element, an enum payload, an `Arc` payload or a nested
+//     closure — is rejected, and the message points here.
 //
 // API:
 //

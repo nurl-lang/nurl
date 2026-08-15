@@ -25,6 +25,14 @@
 // F) is the one place a caller-owned value isn't taken — the caller
 // must free it themselves on F.
 //
+// A channel is a THREAD BOUNDARY, so `A` must be `Send`
+// (stdlib/core/marker.nu): whatever `chan_send` accepts, some other
+// thread or fiber receives. `( Channel ( Rc i ) )` is rejected at the
+// send, with the same reason and the same wording a `thread_spawn`
+// closure capturing that Rc would get — one situation, one verdict,
+// however it is spelled. Send the data rather than the handle when the
+// payload is not Send: read the value out on this side and send that.
+//
 // API (unchanged from v1):
 //
 //   ( chan_new      [A] )                  → ( Channel A )
