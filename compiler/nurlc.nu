@@ -22993,6 +22993,12 @@
     // (forward-compat) but not enforced — FFI symbols are linker-
     // level ABI globals, the linker doesn't know about NURL files.
     ( vis_take_pending_pub )
+    // Position of the `&`, kept for the conflicting-signature diagnostic
+    // below: by the time it fires the lexer has consumed the whole
+    // declaration and `die` would put the caret on the NEXT one — the
+    // same "points at the consequence" defect arity_strict_nary pins.
+    : i __ffi_line ( nurl_lex_line lex )
+    : i __ffi_col ( nurl_lex_col lex )
     ( nurl_lex_advance lex )  // consume '&'
     // Library STR: skipped for IR emission (LLVM declare carries no
     // library name) but used for the build-time sentinel check so a
@@ -23097,6 +23103,29 @@
     // generalises the prelude-symbol skip.
     : s emitkey ( nurl_str_cat fname `__ffi_emitted` )
     : b already != 0 ( nurl_sym_len syms emitkey )
+    // …but a second declaration of the same symbol with a DIFFERENT
+    // signature is not a duplicate, it is a disagreement about the ABI
+    // of one linker symbol — and it used to compile. The first
+    // `declare` is the one emitted (above), while every later
+    // declaration overwrote the call-site metadata this function
+    // registers (`fname`, `__ffi_params`, `__variadic*`), so calls were
+    // lowered against a signature the module never declared:
+    // `stdlib/core/posix.nu` declares `open s path i32 flags ... → i32`
+    // and a package redeclaring it `s path i flags → i` produced
+    // `call i64 (i8*, i32, ...) @open(i8* %p, i64 %f)` — nurlc exited 0
+    // and clang rejected the module, which is the worst place for the
+    // news. Identical redeclarations stay harmless, which is what the
+    // dedup above exists for.
+    : s sigkey ( nurl_str_cat fname `__ffi_sig` )
+    : s newsig ( nurl_str_cat3 ret_ty `(` ( nurl_str_cat params_str `)` ) )
+    : s oldsig ( nurl_sym_get syms sigkey )
+    ? & != 0 ( nurl_str_len oldsig ) ! ( seq oldsig newsig )
+    { ( die_pos lex __ffi_line __ffi_col ( nurl_str_cat3
+        ( nurl_str_cat3 `FFI symbol '` fname `' is already declared with a different signature: '` )
+        ( nurl_str_cat3 oldsig `' here says '` newsig )
+        `'. One linker symbol has ONE ABI — the first declaration is the one the module declares, so a call written against this one would be lowered against a signature the program never declared (and clang, not nurlc, would report it). Make the declarations identical, or drop this one and import the file that has it.` ) ) }
+    {}
+    ( nurl_sym_def syms sigkey newsig )
     ? | | is_prelude_cfn already defined_in_nurl
     {}
     { ( nurl_sym_def syms emitkey `1` )

@@ -16,16 +16,18 @@
 
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/string.nu`
+// open / close / mmap / munmap come from the stdlib, which has the
+// REAL C prototypes (`int open(const char *, int, ...)` and friends).
+// This file used to restate them with `i` where C says `int`, which is
+// a different ABI for the same linker symbol — and the compiler now
+// says so instead of emitting a call the module never declared.
+$ `stdlib/core/posix.nu`
 
-& `c` @ open s path i flags → i
-
-& `c` @ close i fd → i
-
-& `c` @ ioctl i fd i req *u argp → i
-
-& `c` @ mmap *u addr i length i prot i flags i fd i offset → *u
-
-& `c` @ munmap *u addr i length → i
+// `ioctl` as C declares it — `int ioctl(int, unsigned long, ...)`.
+// stdlib/std/term.nu declares the same symbol, and one linker symbol
+// has one ABI: stating it with `i` where C says `int` is a different
+// function, which the compiler now rejects rather than miscompiling.
+& `c` @ ioctl i32 fd i req ... → i32
 
 & `c` @ nurl_peek_i32 *u base i idx → i32
 
@@ -62,7 +64,7 @@ $ `stdlib/core/string.nu`
 
 // Open a webcam and start YUYV streaming at w×h with `nbuf` ring buffers.
 @ cam_open s path i w i h i nbuf → Camera {
-    : i fd ( open path ( __O_RDWR ) )
+    : i fd # i ( open path # i32 ( __O_RDWR ) )
     ? < fd 0 { ^ @ Camera { - 0 1 w h 0 ( vec_new [i] ) ( vec_new [i] ) 0 } } {}
 
     // VIDIOC_S_FMT: request YUYV w×h, progressive.
@@ -73,7 +75,7 @@ $ `stdlib/core/string.nu`
     ( nurl_poke_i32 fmt 3 h )  // pix.height @12
     ( nurl_poke_i32 fmt 4 ( __PIXFMT_YUYV ) )  // pix.pixelformat @16
     ( nurl_poke_i32 fmt 5 ( __FIELD_NONE ) )  // pix.field @20
-    : i rf ( ioctl fd ( __VIDIOC_S_FMT ) fmt )
+    : i rf ( ioctl # i32 fd ( __VIDIOC_S_FMT ) fmt )
     ? < rf 0 { ( close fd ) ( nurl_free fmt )
         ^ @ Camera { - 0 1 w h 0 ( vec_new [i] ) ( vec_new [i] ) 0 } } {}
     // the driver may adjust geometry — read back what it granted
@@ -87,7 +89,7 @@ $ `stdlib/core/string.nu`
     ( nurl_poke_i32 rb 0 nbuf )  // count @0
     ( nurl_poke_i32 rb 1 ( __BUF_TYPE_CAPTURE ) )  // type @4
     ( nurl_poke_i32 rb 2 ( __MEMORY_MMAP ) )  // memory @8
-    : i rr ( ioctl fd ( __VIDIOC_REQBUFS ) rb )
+    : i rr ( ioctl # i32 fd ( __VIDIOC_REQBUFS ) rb )
     : i got ( nurl_peek_i32 rb 0 )
     ( nurl_free rb )
     ? | < rr 0 < got 1 { ( close fd )
@@ -104,16 +106,16 @@ $ `stdlib/core/string.nu`
         ( nurl_poke_i32 bf 0 bi )  // index @0
         ( nurl_poke_i32 bf 1 ( __BUF_TYPE_CAPTURE ) )  // type @4
         ( nurl_poke_i32 bf 15 ( __MEMORY_MMAP ) )  // memory @60
-        : i qr ( ioctl fd ( __VIDIOC_QUERYBUF ) bf )
+        : i qr ( ioctl # i32 fd ( __VIDIOC_QUERYBUF ) bf )
         : i moff ( nurl_peek_i32 bf 16 )  // m.offset @64
         : i blen ( nurl_peek_i32 bf 18 )  // length @72
         ? < qr 0 { = allok F } {
-            : *u m ( mmap # *u 0 blen ( __PROT_RW ) ( __MAP_SHARED ) fd moff )
+            : *u m ( mmap # *u 0 blen # i32 ( __PROT_RW ) # i32 ( __MAP_SHARED ) # i32 fd moff )
             ? | == # i m 0 == # i m - 0 1 { = allok F } {
                 ( vec_push [i] ptrs # i m )
                 ( vec_push [i] lens blen )
                 // queue the buffer for capture
-                ( ioctl fd ( __VIDIOC_QBUF ) bf )
+                ( ioctl # i32 fd ( __VIDIOC_QBUF ) bf )
             }
         }
         ( nurl_free bf )
@@ -123,7 +125,7 @@ $ `stdlib/core/string.nu`
     // STREAMON
     : *u t ( nurl_alloc 4 )
     ( nurl_poke_i32 t 0 ( __BUF_TYPE_CAPTURE ) )
-    : i so ( ioctl fd ( __VIDIOC_STREAMON ) t )
+    : i so ( ioctl # i32 fd ( __VIDIOC_STREAMON ) t )
     ( nurl_free t )
     ? | < so 0 ! allok { ( close fd )
         ^ @ Camera { - 0 1 aw ah got ptrs lens 0 } } {}
@@ -145,7 +147,7 @@ $ `stdlib/core/string.nu`
     ( __zero bf 22 )
     ( nurl_poke_i32 bf 1 ( __BUF_TYPE_CAPTURE ) )  // type @4
     ( nurl_poke_i32 bf 15 ( __MEMORY_MMAP ) )  // memory @60
-    : i dr ( ioctl . c fd ( __VIDIOC_DQBUF ) bf )
+    : i dr ( ioctl # i32 . c fd ( __VIDIOC_DQBUF ) bf )
     ? < dr 0 { ( nurl_free bf ) ^ F } {}
     : i idx ( nurl_peek_i32 bf 0 )  // index @0
     : *u src # *u ?? ( vec_get [i] . c bufptr idx ) { T x → x F _ → 0 }
@@ -179,7 +181,7 @@ $ `stdlib/core/string.nu`
         = gi + gi 1
     }
     // requeue this buffer
-    ( ioctl . c fd ( __VIDIOC_QBUF ) bf )
+    ( ioctl # i32 . c fd ( __VIDIOC_QBUF ) bf )
     ( nurl_free bf )
     ^ T
 }
@@ -187,7 +189,7 @@ $ `stdlib/core/string.nu`
 @ cam_close Camera c → v {
     : *u t ( nurl_alloc 4 )
     ( nurl_poke_i32 t 0 ( __BUF_TYPE_CAPTURE ) )
-    ( ioctl . c fd ( __VIDIOC_STREAMOFF ) t )
+    ( ioctl # i32 . c fd ( __VIDIOC_STREAMOFF ) t )
     ( nurl_free t )
     : ~ i k 0
     ~ < k . c nbuf {
