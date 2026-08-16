@@ -1202,7 +1202,7 @@ $ `write.nu`
         ^ 0
     } {}
     ? ( args_present p `version` ) {
-        ( nurl_print `gguf 0.3.0\n` )
+        ( nurl_print `gguf 0.3.2\n` )
         ( args_free p )
         ^ 0
     } {}

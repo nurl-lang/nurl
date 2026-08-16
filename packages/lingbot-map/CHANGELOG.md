@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.9.3 — 2026-08-16
+
+- `--version` printed `0.9.1`. The literal is hand-written and nothing
+  derived it from the manifest, so it had drifted; 0.9.2 shipped
+  announcing the wrong number and a published version can be yanked,
+  never replaced. Fixed, and the CI gate that compares the two now
+  covers this spelling as well as the `cli_new` one.
+
 ## 0.9.2 — 2026-08-16
 
 - **The package could not be built by any toolchain.** Two `?`
