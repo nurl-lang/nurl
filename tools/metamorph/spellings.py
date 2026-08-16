@@ -1270,6 +1270,20 @@ CLASSES = [
                 "    : i x # i . p 0\n"
                 "    ( vec_free [u] v )",
                 extra="@ grow ( Vec u ) v → v { ( vec_push [u] v # u 2 ) }\n"),
+            # The same helper defined BELOW its caller. Its mutation
+            # summary is empty at the call, and empty is "not known yet",
+            # not "does not mutate" — so definition order decided the
+            # verdict, the last place in the model where it still did
+            # (§6.4). The call now kills the pointer provisionally and
+            # the use site parks its report until the summary is final.
+            "push-via-forward-helper": prog(
+                "    : ~ ( Vec u ) v ( vec_new [u] )\n"
+                "    ( vec_push [u] v # u 1 )\n"
+                "    : * u p ( vec_data [u] v )\n"
+                "    ( grow v )\n"
+                "    : i x # i . p 0\n"
+                "    ( vec_free [u] v )")
+                + "@ grow ( Vec u ) v → v { ( vec_push [u] v # u 2 ) }\n",
             "push-in-loop": prog(
                 "    : ~ ( Vec u ) v ( vec_new [u] )\n"
                 "    ( vec_push [u] v # u 1 )\n"
@@ -1499,6 +1513,30 @@ CLASSES = [
                       "    : ( Vec i ) xs ( vec_new [i] )\n"
                       "    : ( @ v ) f \\ → v { ( vec_push [i] xs 1 ) }\n"
                       "    ^ f\n}\n"),
+            # §2.10 control. A forward-defined callee that does NOT
+            # mutate must stay silent — the provisional kill behind the
+            # order-independence fix is a parked QUESTION, and answering
+            # it wrongly would flag every call to a not-yet-compiled
+            # helper that merely reads its container.
+            "forward-nonmutating-callee": prog(
+                "    : ~ ( Vec u ) v ( vec_new [u] )\n"
+                "    ( vec_push [u] v # u 1 )\n"
+                "    : * u p ( vec_data [u] v )\n"
+                "    : i n ( peek v )\n"
+                "    : i x # i . p 0\n"
+                "    ( vec_free [u] v )")
+                + "@ peek ( Vec u ) v → i { ^ ( vec_len [u] v ) }\n",
+            # …and a re-fetch after the forward call clears it, exactly
+            # as it does for an inline mutation.
+            "refetch-after-forward-callee": prog(
+                "    : ~ ( Vec u ) v ( vec_new [u] )\n"
+                "    ( vec_push [u] v # u 1 )\n"
+                "    : ~ * u p ( vec_data [u] v )\n"
+                "    ( grow v )\n"
+                "    = p ( vec_data [u] v )\n"
+                "    : i x # i . p 0\n"
+                "    ( vec_free [u] v )")
+                + "@ grow ( Vec u ) v → v { ( vec_push [u] v # u 2 ) }\n",
             # §2.3 join controls. A phi is only as dangerous as what it
             # selects between: closures that capture NOTHING are values,
             # and returning a join of them is ordinary code. This is the

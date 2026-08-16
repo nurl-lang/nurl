@@ -558,12 +558,14 @@ mutates the container handed to one of its parameters — the same
 per-function summary §2.5 consults. Without that, the inline
 `( vec_push v … )` warned and `( grow v )` did not, which reads as
 "wrap the push in a function" being the cure for the diagnostic rather
-than for the bug. One residual: that summary is built in codegen order
-and this rule reads it inline, because its diagnostic fires at a later
-*read* of the pointer rather than at the call — so a mutating helper
-defined *below* the borrow is missed here (§6.4). §2.5, whose
-diagnostic does fire at the call, parks the question instead and is
-order-independent.
+than for the bug. Definition order does not decide it either: a call to
+a not-yet-compiled callee kills the pointer **provisionally**, carrying
+the callee it is conditional on inside the stale-set entry, so the arm
+snapshot / union machinery treats it exactly as it treats a certain
+kill. The use site then *parks* its report, and
+`resolve_pending_stale` prints it after the module, when the summary is
+final. A certain mutation supersedes a parked question — entry, line
+and all — so the report names the call that really reallocates.
 
 This hazard has nothing to do with `~` mutability — a `: *T` borrow
 dangles identically. (nurlc used to warn about `: ~ *T` bindings on the
@@ -590,9 +592,9 @@ hits in practice. It deliberately does **not** cover:
   a read nested inside another call). What is *not* done is any
   longer-range aliased-mutation analysis across statements. (Escape
   across a forward or generic call used to be listed here; it is not a
-  boundary any more — §2.7 and §2.8 park what they cannot answer and
-  resolve it after the module, so definition order no longer changes a
-  verdict.)
+  boundary any more — every rule that consults a per-function summary
+  parks what it cannot answer and resolves it after the module, so
+  definition order no longer changes any verdict, §6.4.)
 - **`recover` / panic unwind — reclaimed, not modelled.** A panic is a
   `setjmp`/`longjmp` jump to the nearest `recover` frame (no exception
   tables, no unwinding destructors). The owned allocations the `longjmp`
@@ -740,10 +742,11 @@ get right:
   the env of an *escaping* closure are freed by *you*, not by auto-drop
   (§7.4). The checker tracks their *moves* (so a `vec_free`d handle can't
   be reused) but not their *freeing* — forget the `vec_free` and it leaks.
-- **Definition order, for the remaining inline checks.** Summaries are
-  built in codegen order, so a check that consults one *inline* sees an
-  empty answer for a callee defined below it. The two escape checks no
-  longer do: §2.7 and §2.8 park both the check and the propagation, and
+- ~~**Definition order.**~~ **No longer a boundary — every rule is
+  order-independent.** Summaries are built in codegen order, so a check
+  that consults one *inline* sees an empty answer for a callee defined
+  below it, and each rule that could be decided that way now parks its
+  question instead. §2.7 and §2.8 park both the check and the propagation, and
   resolve them after the module (`resolve_pending_impls`,
   `resolve_pending_escapes`, `resolve_pending_ret_escapes`). The *sink*
   check does not miss a **generic** callee either — a generic function's
@@ -755,16 +758,22 @@ get right:
   parks a `pendcall` row, and the whole function's borrow walk is
   deferred to the end of the module, where both summaries are final.
   (Deferred rather than repeated: analysing a function twice would
-  report every diagnostic it holds twice.) What is left consulting a
-  summary inline is one half of one rule: `g_fn_mutates` as **§2.10**
-  reads it, to invalidate a container borrow through a helper. (§2.5's
-  use of the same summary is parked and replayed like the others, so
-  the loop rule does not depend on order either.) §2.10 cannot park it
-  the same way — the diagnostic fires at a *later read* of the pointer,
-  not at the call — so a mutating helper defined below the borrow still
-  misses that warning. It is a warning about a `*T` pointer, which is
-  the trusted surface anyway (above). Never miscompiled — only
-  unchecked.
+  report every diagnostic it holds twice.) §2.5 parks its use of
+  `g_fn_mutates` and replays it after the module, so the loop rule does
+  not depend on order either.
+
+  **§2.10** was the last one that did, and it is the interesting case
+  because its diagnostic fires at a *later read* of the pointer rather
+  than at the call, so there is no single site to park. What is parked
+  is instead the finished *report*, plus the callee it is conditional
+  on: the call kills the pointer **provisionally**, the condition rides
+  inside the stale-set entry (so the `?`/`??` snapshot-restore-union
+  machinery carries it unchanged), and `resolve_pending_stale` prints
+  the report only if the callee's final summary says it mutates. A
+  certain mutation supersedes a parked question, entry and line
+  together, so the report always names the call that really
+  reallocates. Definition order is now unable to change any verdict the
+  model gives.
 
 ### 6.5 This is not Rust
 
