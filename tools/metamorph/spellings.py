@@ -859,6 +859,142 @@ CLASSES = [
         },
     },
     {
+        "name": "aliased-mutation",
+        "severity": "diagnostic-consistency",
+        "doc": "A binding passed `inout` — an exclusive mutable borrow "
+               "for that call — and also READ by another argument of the "
+               "same call (docs/MEMORY.md §2.4). Every sibling read is a "
+               "snapshot taken before the callee runs, so this is a "
+               "'did you mean the updated value?' fault rather than "
+               "memory unsafety, and only the bare-identifier form is "
+               "reported by DEFAULT: `( grow v ( vec_len v ) )` is an "
+               "ordinary, correct idiom and the no-false-positive "
+               "contract protects it. Under --strict-borrowck, which is "
+               "documented to over-flag, the spellings must agree — a "
+               "field read reported and the same read one parenthesis "
+               "deeper ignored is the inconsistency, not the rule.",
+        "expect": REJECT_STRICT,
+        "expect_msg": ["exclusive access is violated"],
+        "spellings": {
+            "same-binding-twice": prog(
+                "    : ~ Counter c @ Counter { 3 10 }\n"
+                "    ( swap_counters c c )",
+                prelude="",
+                extra=": Counter { i n i max }\n"
+                      "@ swap_counters inout Counter a inout Counter b → v {\n"
+                      "    : i t . a n\n    = . a n . b n\n    = . b n t\n}\n"),
+            "inout-and-byvalue": prog(
+                "    : ~ Counter c @ Counter { 3 10 }\n"
+                "    ( bump c c )",
+                prelude="",
+                extra=": Counter { i n i max }\n"
+                      "@ bump inout Counter a Counter b → v { = . a n + . a n . b n }\n"),
+            "field-read": prog(
+                "    : ~ Counter c @ Counter { 3 10 }\n"
+                "    ( bump_by c . c n )",
+                prelude="",
+                extra=": Counter { i n i max }\n"
+                      "@ bump_by inout Counter a i b → v { = . a n + . a n b }\n"),
+            "field-read-in-arithmetic": prog(
+                "    : ~ Counter c @ Counter { 3 10 }\n"
+                "    ( bump_by c + . c n 1 )",
+                prelude="",
+                extra=": Counter { i n i max }\n"
+                      "@ bump_by inout Counter a i b → v { = . a n + . a n b }\n"),
+            "read-through-a-call": prog(
+                "    : ~ Counter c @ Counter { 3 10 }\n"
+                "    ( bump_by c ( peek c ) )",
+                prelude="",
+                extra=": Counter { i n i max }\n"
+                      "@ peek Counter c → i { ^ . c n }\n"
+                      "@ bump_by inout Counter a i b → v { = . a n + . a n b }\n"),
+            # The read is two calls deep and on the far side of an
+            # operator — still the same binding, still read before the
+            # callee mutates it.
+            "read-two-calls-deep": prog(
+                "    : ~ Counter c @ Counter { 3 10 }\n"
+                "    ( bump_by c + ( twice ( peek c ) ) 1 )",
+                prelude="",
+                extra=": Counter { i n i max }\n"
+                      "@ peek Counter c → i { ^ . c n }\n"
+                      "@ twice i n → i { ^ * n 2 }\n"
+                      "@ bump_by inout Counter a i b → v { = . a n + . a n b }\n"),
+            # Reader first, writer second: the order of the arguments
+            # must not decide the verdict.
+            "read-before-inout": prog(
+                "    : ~ Counter c @ Counter { 3 10 }\n"
+                "    ( bump_rev ( peek c ) c )",
+                prelude="",
+                extra=": Counter { i n i max }\n"
+                      "@ peek Counter c → i { ^ . c n }\n"
+                      "@ bump_rev i b inout Counter a → v { = . a n + . a n b }\n"),
+        },
+    },
+    {
+        "name": "stale-borrow",
+        "severity": "memory-unsafety",
+        "doc": "A raw pointer taken from a container's buffer "
+               "(`vec_data` / `string_data`) and read AFTER the "
+               "container was grown or released (docs/MEMORY.md §2.10). "
+               "The realloc moves the buffer, so the pointer reads freed "
+               "memory — and it reads plausible garbage rather than "
+               "crashing, which is what makes the diagnostic worth "
+               "having. The mutation is the same mutation however it is "
+               "spelled: inline, through a helper, on a field, in a "
+               "loop.",
+        "expect": WARN,
+        "expect_msg": ["is stale", "may have reallocated"],
+        "spellings": {
+            "push-after-borrow": prog(
+                "    : ~ ( Vec u ) v ( vec_new [u] )\n"
+                "    ( vec_push [u] v # u 1 )\n"
+                "    : * u p ( vec_data [u] v )\n"
+                "    ( vec_push [u] v # u 2 )\n"
+                "    : i x # i . p 0\n"
+                "    ( vec_free [u] v )"),
+            "reserve-after-borrow": prog(
+                "    : ~ ( Vec u ) v ( vec_new [u] )\n"
+                "    ( vec_push [u] v # u 1 )\n"
+                "    : * u p ( vec_data [u] v )\n"
+                "    ( vec_reserve [u] v 64 )\n"
+                "    : i x # i . p 0\n"
+                "    ( vec_free [u] v )"),
+            "free-after-borrow": prog(
+                "    : ~ ( Vec u ) v ( vec_new [u] )\n"
+                "    ( vec_push [u] v # u 1 )\n"
+                "    : * u p ( vec_data [u] v )\n"
+                "    ( vec_free [u] v )\n"
+                "    : i x # i . p 0"),
+            # The same push, one call deep. #902's shape: a guard that
+            # holds for the direct spelling and not for its twin teaches
+            # "wrap it in a helper" as the cure.
+            "push-via-helper": prog(
+                "    : ~ ( Vec u ) v ( vec_new [u] )\n"
+                "    ( vec_push [u] v # u 1 )\n"
+                "    : * u p ( vec_data [u] v )\n"
+                "    ( grow v )\n"
+                "    : i x # i . p 0\n"
+                "    ( vec_free [u] v )",
+                extra="@ grow ( Vec u ) v → v { ( vec_push [u] v # u 2 ) }\n"),
+            "push-in-loop": prog(
+                "    : ~ ( Vec u ) v ( vec_new [u] )\n"
+                "    ( vec_push [u] v # u 1 )\n"
+                "    : * u p ( vec_data [u] v )\n"
+                "    : ~ i k 0\n"
+                "    ~ < k 3 { ( vec_push [u] v # u 2 ) = k + k 1 }\n"
+                "    : i x # i . p 0\n"
+                "    ( vec_free [u] v )"),
+            "string-data-after-append": prog(
+                "    : ~ String s ( string_new )\n"
+                "    ( string_push_char s 65 )\n"
+                "    : s p ( string_data s )\n"
+                "    ( string_push_char s 66 )\n"
+                "    : i x ( nurl_str_len p )\n"
+                "    ( string_free s )",
+                prelude="$ `stdlib/core/string.nu`\n"),
+        },
+    },
+    {
         "name": "controls",
         "doc": "Correct programs. A class of its own because a checker "
                "that rejects these is worse than one that misses a bug — "
@@ -1072,6 +1208,33 @@ CLASSES = [
             # A helper returning a FRESH value, having merely borrowed
             # the reference, is not a passthrough — its result may be
             # returned freely.
+            # §2.4 controls. A DIFFERENT binding read alongside the
+            # `inout` one is the whole point of having two arguments.
+            "inout-with-other-binding": prog(
+                "    : ~ Counter c @ Counter { 3 10 }\n"
+                "    : ~ Counter d @ Counter { 9 10 }\n"
+                "    ( bump c d )",
+                prelude="",
+                extra=": Counter { i n i max }\n"
+                      "@ bump inout Counter a Counter b → v { = . a n + . a n . b n }\n"),
+            # §2.10 control: a borrow taken AFTER the mutation is fresh,
+            # and a container never mutated invalidates nothing.
+            "borrow-after-mutation": prog(
+                "    : ~ ( Vec u ) v ( vec_new [u] )\n"
+                "    ( vec_push [u] v # u 1 )\n"
+                "    ( vec_push [u] v # u 2 )\n"
+                "    : * u p ( vec_data [u] v )\n"
+                "    : i x # i . p 0\n"
+                "    ( vec_free [u] v )"),
+            "borrow-of-untouched-container": prog(
+                "    : ~ ( Vec u ) v ( vec_new [u] )\n"
+                "    : ~ ( Vec u ) w ( vec_new [u] )\n"
+                "    ( vec_push [u] v # u 1 )\n"
+                "    : * u p ( vec_data [u] v )\n"
+                "    ( vec_push [u] w # u 2 )\n"
+                "    : i x # i . p 0\n"
+                "    ( vec_free [u] v )\n"
+                "    ( vec_free [u] w )"),
             "fresh-result-not-passthrough": prog(
                 "    : i n ( caller )",
                 prelude="",

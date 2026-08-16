@@ -992,6 +992,21 @@
 // reads it (inline closure) or that per-binding key (named closure).
 : ~ s g_last_closure_nonsend ``
 
+// --strict-borrowck only: every binding NAME read while generating the
+// current call argument, including reads nested inside a sub-expression
+// or a called helper's argument list. §2.4 flags an `inout` binding
+// aliased by a sibling BARE-IDENTIFIER argument, and strict mode
+// generalises that to a `. obj field` read; a read one parenthesis
+// deeper (`( f inout c ( peek c ) )`) is the same situation again, and
+// only a per-argument log of what was actually loaded can see it.
+//
+// A real global with save/restore discipline around each argument, not
+// a `syms` key: a nested call resets its own argument channels, so a
+// scoped list would lose everything but the innermost argument's reads.
+// Written only under --strict-borrowck, so the default mode carries no
+// cost and emits identical IR.
+: ~ s g_arg_ident_log ``
+
 // Thread-safety, the SHARED-MUTATION half (docs/MEMORY.md §6.5). Set to
 // the offending binding name while a closure body is compiled if that
 // body mutates the CONTENTS of a value it obtained from `arc_get`.
@@ -3575,6 +3590,11 @@
         { ( vis_check_xref lex name `global` ) }
         {}
         ( nurl_sym_def syms `__last_ident_name__` name )
+        // §2.4 (strict): log this read for the enclosing call argument.
+        ? & != g_strict_borrowck 0 ! ( str_contains_word g_arg_ident_log name )
+        { = g_arg_ident_log ? == 0 ( nurl_str_len g_arg_ident_log )
+            ( nurl_str_cat name `` ) ( nurl_str_cat3 g_arg_ident_log ` ` name ) }
+        {}
         // Every READ of a guarded binding is counted here. gen_call marks
         // the subset that were arguments to a proven-copying consumer; the
         // guard frees only when the two counts agree, so an unforeseen use
@@ -7796,9 +7816,51 @@
             }
         }
         { ( nurl_sym_def syms `__in_call_arg__` `1` )
+            // §2.4 (strict): collect the names this argument reads, with
+            // save/restore so an enclosing argument keeps its own.
+            : ~ s __al_saved ( nurl_str_cat g_arg_ident_log `` )
+            = g_arg_ident_log ``
             = av ( gen_operand lex syms cg )
             ( nurl_sym_def syms `__in_call_arg__` `` )
             = at ( nurl_get_last_type )
+            ? != g_strict_borrowck 0
+            { : ~ s __al_rest ( nurl_str_cat g_arg_ident_log `` )
+                ~ != 0 ( nurl_str_len __al_rest ) {
+                    : s __al_w ( str_first_word __al_rest )
+                    = __al_rest ( str_skip_word __al_rest )
+                    // The bare-identifier form is already reported by the
+                    // check above; this adds the nested reads.
+                    ? & ! ( seq __al_w bck_arg_root )
+                    ( str_contains_word p5_inout_seen __al_w )
+                    { ( bck_esc_warn lex bck_arg_line ( nurl_str_cat3
+                        `'` __al_w
+                        `' is mutably borrowed (passed as 'inout') by this call and also read by another argument of it — exclusive access is violated` ) ) }
+                    {}
+                    // Visible to a LATER `inout` argument of the same
+                    // call, so the two orders report alike.
+                    ? ! ( str_contains_word p5_seen __al_w )
+                    { = p5_seen ? == 0 ( nurl_str_len p5_seen )
+                        ( nurl_str_cat __al_w `` )
+                        ( nurl_str_cat3 p5_seen ` ` __al_w ) }
+                    {}
+                } }
+            {}
+            // Restore by UNION, not by overwrite: a nested call runs
+            // this same save/restore for its own arguments, so plain
+            // restoration would throw away exactly the reads that are
+            // one parenthesis deeper — the case this log exists for.
+            ? != g_strict_borrowck 0
+            { : ~ s __al_r2 ( nurl_str_cat g_arg_ident_log `` )
+                ~ != 0 ( nurl_str_len __al_r2 ) {
+                    : s __al_w2 ( str_first_word __al_r2 )
+                    = __al_r2 ( str_skip_word __al_r2 )
+                    ? ( str_contains_word __al_saved __al_w2 ) {}
+                    { = __al_saved ? == 0 ( nurl_str_len __al_saved )
+                        ( nurl_str_cat __al_w2 `` )
+                        ( nurl_str_cat3 __al_saved ` ` __al_w2 ) }
+                } }
+            {}
+            = g_arg_ident_log ( nurl_str_cat __al_saved `` )
         }
         // A bare-identifier argument to a consumer proven to COPY is the
         // one read that cannot make a guarded binding's buffer outlive the
@@ -7833,6 +7895,21 @@
             ? & ( is_ident_tok bck_arg_tt ) ( __ptr_mutator fname )
             { ( __ptr_kill bck_arg_val bck_arg_line ) } {}
         } {}
+        // …and the same mutation one call deep (§2.10). A helper whose
+        // summary says it mutates the container handed to THIS parameter
+        // reallocates the buffer exactly as an inline `vec_push` does, so
+        // a pointer taken before the call is just as stale. Without it
+        // the direct spelling warned and `( grow v )` did not, which
+        // reads as "wrap the push in a function" being the cure. Same
+        // summary the iterator-invalidation rule consults (§2.5), and
+        // like that one it is built in codegen order: a helper defined
+        // below its caller is missed (§6.4).
+        ? ( is_ident_tok bck_arg_tt )
+        { : s __pk_mut ( nurl_sym_get g_fn_mutates call_name )
+            ? ( str_contains_word __pk_mut ( nurl_str_int arg_idx ) )
+            { ( __ptr_kill bck_arg_val bck_arg_line ) }
+            {} }
+        {}
         : s __cle ( nurl_sym_get syms `__last_closure_env__` )
         ? & != 0 ( nurl_str_len __cle )
         ( str_contains_word ( nurl_sym_get g_fn_invoke_only call_name ) ( nurl_str_int arg_idx ) )

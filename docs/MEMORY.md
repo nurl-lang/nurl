@@ -295,9 +295,16 @@ argument — is reported.
 
 This is the "N readers XOR 1 writer" rule, scoped to a single call
 (an `inout` borrow does not outlive its call, so there is no
-cross-statement aliasing to track). A binding read through a *nested*
-argument expression — `( f inout c (g c) )`, `( f inout c . c n )` —
-is a known gap, not yet flagged.
+cross-statement aliasing to track).
+
+By default only the **bare-identifier** spelling is reported, and that
+is deliberate rather than unfinished: every sibling read is a snapshot
+taken *before* the callee runs, so `( grow v ( vec_len v ) )` is
+ordinary correct code and flagging it would cost the no-false-positive
+property. `--strict-borrowck` (§2.9) reports any read of the binding in
+a sibling argument — a `. c n` field read, a read inside a nested call
+(`( f inout c ( peek c ) )`), at any depth, and in either argument
+order. Which spelling the read wears does not change the answer there.
 
 ### 2.5 Iterator invalidation
 
@@ -477,11 +484,15 @@ The eight rules above run by default. `--strict-borrowck` (off by
 default) adds three further checks, all diagnostic-only and all emitting
 `error:` like the rest:
 
-1. **Aliased mutation through a field argument.** §2.4 flags an `inout`
+1. **Aliased mutation through any sibling read.** §2.4 flags an `inout`
    binding aliased by another *bare-identifier* argument of the same
-   call. Strict mode generalises this to a `. obj field` argument — a
-   nested field read of the same object passed alongside its `inout`
-   borrow is reported too.
+   call. Strict mode generalises this to every other way the same
+   binding can be read by a sibling argument: a `. obj field`
+   projection, a read nested inside a called helper's arguments
+   (`( f inout c ( peek c ) )`), at any depth, and with the read on
+   either side of the `inout` one. Measured against the whole
+   first-party corpus, the generalisation adds **no** new strict
+   failures — it removes an inconsistency, it does not widen the net.
 2. **`# *T` raw-pointer escape.** A raw pointer taken (`# *T …`) from an
    owned binding whose pointer may outlive that binding's drop is
    reported — a narrow check on the otherwise-untracked `*T` surface
@@ -532,6 +543,15 @@ not make a pointer stale in the *other* (the guard-clause shape
 `? bad { ( string_free s ) ^ err } {}` is everywhere in the stdlib). At
 the join it takes the union of the arms that actually fall through — an
 arm that returns cannot invalidate anything downstream of the `?`.
+
+The mutation counts however it is spelled. A stdlib mutator applied to
+the container invalidates its borrows, and so does a **helper** that
+mutates the container handed to one of its parameters — the same
+per-function summary §2.5 consults. Without that, the inline
+`( vec_push v … )` warned and `( grow v )` did not, which reads as
+"wrap the push in a function" being the cure for the diagnostic rather
+than for the bug. (Like §2.5, this summary is built in codegen order,
+so a helper defined *below* its caller is missed — see §6.4.)
 
 This hazard has nothing to do with `~` mutability — a `: *T` borrow
 dangles identically. (nurlc used to warn about `: ~ *T` bindings on the
@@ -712,9 +732,11 @@ get right:
   `inout` / `sink` index sets, auto-`sink` included, are derived from the
   stored template as it is declared, so a call site sees them before any
   instantiation exists (§1). What is left consulting a summary inline is
-  the *move* half: auto-`sink` (§2.2) and the returned-handle summary
-  `g_fn_ret_alias`, which a forward call still misses. Never
-  miscompiled — only unchecked.
+  the *move* half — auto-`sink` (§2.2) and the returned-handle summary
+  `g_fn_ret_alias` — and the *mutation* half, `g_fn_mutates`, which
+  §2.5 and §2.10 read to follow a container mutation one call deep. For
+  all three, a callee defined below its call site misses the
+  diagnostic. Never miscompiled — only unchecked.
 
 ### 6.5 This is not Rust
 
@@ -862,8 +884,9 @@ on; they are not two separate tools or two separate builds.
    verdict from the checker for all of them, across nine classes
    (handle-second-name, use-after-free, loop-carried-free,
    iterator-invalidation, arc-shared-mutation, thread-nonsend /
-   -nonsync, option-payload-type, ret-escape, escape-into-callee) plus a
-   `controls` class of correct programs, which must keep compiling. Its
+   -nonsync, option-payload-type, ret-escape, escape-into-callee,
+   aliased-mutation, stale-borrow) plus a `controls` class of correct
+   programs, which must keep compiling. Its
    baseline (`known_gaps.json`) is **empty**: any new gap fails.
    It also checks one invariant on every accepted program, whatever its
    class: the emitted module must pass `llvm-as`. A disagreement is not

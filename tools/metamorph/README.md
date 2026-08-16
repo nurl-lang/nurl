@@ -118,6 +118,18 @@ the output useless for deciding what to fix first.
   (§2.7). Definition order is the axis: `leaky → outer → detach` written
   top-down must fail exactly as the same three functions written
   bottom-up do.
+- **`aliased-mutation`** *(diagnostic-consistency)* — a binding passed
+  `inout` and also read by a sibling argument (§2.4). Not unsafety: the
+  read is a snapshot taken before the callee runs, so the DEFAULT rule
+  stays on the bare-identifier spelling and `( grow v ( vec_len v ) )`
+  keeps compiling. The class is written against `--strict-borrowck`,
+  where a field read was reported and the same read one parenthesis
+  deeper was not.
+- **`stale-borrow`** *(memory-unsafety)* — a pointer taken from a
+  container's buffer and read after the container was grown or released
+  (§2.10). It reads plausible garbage rather than crashing, which is why
+  it is worth diagnosing; the mutation counts inline, in a loop, and one
+  call deep.
 - **`controls`** — correct programs, in a class of their own. A checker that
   rejects these is worse than one that misses a bug: every entry is code
   someone would reasonably write, and one of them (`mutex-guarded-mutation`)
