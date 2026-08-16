@@ -230,6 +230,38 @@ smoke() {
 smoke "$PREFIX/build/nurlc"
 smoke "$PREFIX/build/nurlpkg"
 
+# ── FFI sentinels: probe THIS machine, not the build runner ────────────
+# `stdlib/runtime.<lib>` tells nurlc that an FFI library is available.
+# build.sh writes them by probing the machine it runs on — which for a
+# release archive is the CI runner, not yours. libX11 is not installed
+# there, so no `runtime.X11` ships and `nurlpkg install yoloe` fails at
+# compile time with "install libX11-dev and run build.sh again" on a box
+# that already HAS libX11 and cannot run build.sh at all.
+#
+# The sentinel has to describe the machine that will link your programs,
+# so probe it here, with the same test build.sh uses. Absent library →
+# sentinel removed → the existing clean compile-time message, which is
+# the right answer on a headless box (nurl.sh would otherwise reach the
+# linker and fail there instead).
+probe_ffi_sentinel() {
+    name="$1"; shift
+    if "$@" >/dev/null 2>&1; then
+        echo 1 > "$PREFIX/stdlib/runtime.$name"
+    else
+        rm -f "$PREFIX/stdlib/runtime.$name"
+    fi
+}
+have_lib() {
+    pkg-config --exists "$1" 2>/dev/null && return 0
+    ldconfig -p 2>/dev/null | grep -q "lib$2\.so " && return 0
+    [ -e "/usr/lib/x86_64-linux-gnu/lib$2.so" ] || [ -e "/usr/lib/lib$2.so" ]
+}
+if [ -d "$PREFIX/stdlib" ]; then
+    probe_ffi_sentinel X11 have_lib x11 X11
+    probe_ffi_sentinel opus have_lib opus opus
+fi
+
+
 # ── PATH setup ─────────────────────────────────────────────────────────
 info ""
 info "NURL $VERSION installed → $PREFIX"

@@ -13,18 +13,24 @@
 $ `stdlib/core/string.nu`
 $ `image.nu`
 
-& `c` @ ioctl i fd i req *u argp → i
+// `ioctl` as C declares it — `int ioctl(int, unsigned long, ...)`.
+// stdlib/std/term.nu declares the same symbol, and one linker symbol
+// has one ABI: stating it with `i` where C says `int` is a different
+// function, which the compiler now rejects rather than miscompiling.
+& `c` @ ioctl i32 fd i req ... → i32
+
 & `c` @ nurl_poke_i32 *u base i idx i32 val → v
+
 & `c` @ nurl_peek_i32 *u base i idx → i32
 
-@ __TIOCGWINSZ → i { ^ 21523 }   // 0x5413; struct winsize { u16 row, col, xpx, ypx }
+@ __TIOCGWINSZ → i { ^ 21523 }  // 0x5413; struct winsize { u16 row, col, xpx, ypx }
 
 // Terminal (rows, cols) from ioctl on stdout; sensible fallback off a tty.
-@ __winsize *i rowcell → i {           // returns cols, writes rows via cell
+@ __winsize * i rowcell → i {  // returns cols, writes rows via cell
     : *u ws ( nurl_alloc 8 )
     ( nurl_poke_i32 ws 0 0 ) ( nurl_poke_i32 ws 1 0 )
-    : i r ( ioctl 1 ( __TIOCGWINSZ ) ws )
-    : i v ( nurl_peek_i32 ws 0 )       // [row:16][col:16] little-endian
+    : i r ( ioctl # i32 1 ( __TIOCGWINSZ ) ws )
+    : i v ( nurl_peek_i32 ws 0 )  // [row:16][col:16] little-endian
     ( nurl_free ws )
     : ~ i rows & v 65535
     : ~ i cols & >> v 16 65535
@@ -41,7 +47,7 @@ $ `image.nu`
 // 4-byte slots. This box filter (area average) is what makes the downscaled
 // preview look smooth instead of the aliased mess that point-sampling a
 // 640-wide frame into ~100 cells produces. At least one pixel is sampled.
-@ __avg3 Image im i x0 i x1 i y0 i y1 *u out → v {
+@ __avg3 Image im i x0 i x1 i y0 i y1 * u out → v {
     : i xb ? > x1 + x0 1 x1 + x0 1
     : i yb ? > y1 + y0 1 y1 + y0 1
     : ~ i sr 0
@@ -69,7 +75,7 @@ $ `image.nu`
 // Clear the screen and hide the cursor (call once before a live loop).
 @ term_enter → v {
     : String s ( string_with_cap 16 )
-    ( string_push_char s 27 ) ( string_push_str s `[2J` )    // clear
+    ( string_push_char s 27 ) ( string_push_str s `[2J` )  // clear
     ( string_push_char s 27 ) ( string_push_str s `[?25l` )  // hide cursor
     ( nurl_print ( string_data s ) ) ( string_free s )
 }
@@ -95,7 +101,7 @@ $ `image.nu`
     : ~ i out_w cols
     : i out_h_px0 / * out_w H W
     : ~ i out_rows / out_h_px0 2
-    : i max_rows - rows 2                 // leave a line for the status
+    : i max_rows - rows 2  // leave a line for the status
     ? > out_rows max_rows {
         = out_rows max_rows
         = out_w / * * 2 out_rows W H
@@ -108,7 +114,7 @@ $ `image.nu`
     : *u tcell ( nurl_alloc 16 )
     : *u bcell ( nurl_alloc 16 )
     : String s ( string_with_cap + 64 * * out_w out_rows 44 )
-    ( string_push_char s 27 ) ( string_push_str s `[H` )    // cursor home
+    ( string_push_char s 27 ) ( string_push_str s `[H` )  // cursor home
     : ~ i ry 0
     ~ < ry out_rows {
         : i syt0 / * * 2 ry H out_h_px
@@ -118,8 +124,8 @@ $ `image.nu`
         ~ < cx out_w {
             : i sx0 / * cx W out_w
             : i sx1 / * + cx 1 W out_w
-            ( __avg3 im sx0 sx1 syt0 syt1 tcell )    // top pixel (foreground)
-            ( __avg3 im sx0 sx1 syt1 syb1 bcell )    // bottom pixel (background)
+            ( __avg3 im sx0 sx1 syt0 syt1 tcell )  // top pixel (foreground)
+            ( __avg3 im sx0 sx1 syt1 syb1 bcell )  // bottom pixel (background)
             // ESC [ 38;2;tr;tg;tb;48;2;br;bg;bb m  ▀(U+2580 = 226 150 128)
             ( string_push_char s 27 ) ( string_push_str s `[38;2;` )
             ( __push_num s ( nurl_peek_i32 tcell 0 ) ) ( string_push_char s 59 )
@@ -129,12 +135,12 @@ $ `image.nu`
             ( __push_num s ( nurl_peek_i32 bcell 0 ) ) ( string_push_char s 59 )
             ( __push_num s ( nurl_peek_i32 bcell 1 ) ) ( string_push_char s 59 )
             ( __push_num s ( nurl_peek_i32 bcell 2 ) )
-            ( string_push_char s 109 )   // 'm'
+            ( string_push_char s 109 )  // 'm'
             ( string_push_char s 226 ) ( string_push_char s 150 ) ( string_push_char s 128 )
             = cx + cx 1
         }
-        ( string_push_char s 27 ) ( string_push_str s `[0m` )   // reset colours
-        ( string_push_char s 10 )                                // newline
+        ( string_push_char s 27 ) ( string_push_str s `[0m` )  // reset colours
+        ( string_push_char s 10 )  // newline
         = ry + ry 1
     }
     ( nurl_print ( string_data s ) )

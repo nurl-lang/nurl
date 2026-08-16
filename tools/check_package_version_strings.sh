@@ -41,9 +41,16 @@ for toml in packages/*/nurl.toml; do
                 echo "MISMATCH: $pkg — nurl.toml says '$manifest' but $src passes '$lit' to cli_new"
                 fail=1
             fi
+        # `cli_new prog about VERSION`: take the LAST backticked semver on
+        # the line. The first cut of this used `cli_new[^)]*`, which stops
+        # at the first `)` — and yoloe's about-string is "…detection &
+        # instance segmentation (pure NURL, GPU)". The parenthesis inside
+        # the description hid the version from the very gate written to
+        # check it, and yoloe shipped 0.6.6 announcing 0.6.0.
         done < <(sed 's://.*::' "$src" \
-                 | grep -o 'cli_new[^)]*`[0-9]\+\.[0-9]\+\.[0-9]\+`' \
-                 | grep -o '`[0-9]\+\.[0-9]\+\.[0-9]\+`$' \
+                 | grep 'cli_new' \
+                 | grep -o '`[0-9]\+\.[0-9]\+\.[0-9]\+`' \
+                 | tail -1 \
                  | tr -d '`')
 
         # …and the OTHER spelling: a literal that prints the package's own
