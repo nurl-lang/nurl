@@ -1523,7 +1523,10 @@ A closure capturing a `: ~`-mutable multi-field struct binding by
 pointer (see §8.4) is a *stack reference*. Returning it, pushing it
 into a longer-lived container, spawning a thread that holds it, or
 assigning it into a longer-lived binding is rejected. The escape rule
-also covers an aggregate (struct) literal that holds such a closure.
+also covers an aggregate (struct) literal that holds such a closure,
+a `= . obj field` store into one (the struct inherits the reference),
+and the phi of a `?` / `??` — a join carries the deepest referent depth
+any live arm carries, so `^ ? c f f` is rejected exactly as `^ f` is.
 
 ### 9.4 Exclusive access at a call site
 
@@ -1538,7 +1541,8 @@ writer" rule scoped to a single call.
 ```
 
 A read of the same binding through a *nested sub-expression* argument
-(`( f inout c (g c) )`, `( f inout c . c n )`) is **not** flagged — by
+(`( f inout c (g c) )`, `( f inout c . c n )`) is **not** flagged by
+default — by
 the language's left-to-right evaluation order and Option B's
 call-scoped borrow lifetime, that read completes before the `inout`
 borrow goes live (§6.2).
@@ -1574,13 +1578,15 @@ detaches it onto a thread. The checker computes a per-function *escape
 summary* (which parameters the body lets escape, transitively) and
 rejects passing a stack reference to an escaping parameter. Forward and
 generic calls are handled by parking the check and replaying it after the
-whole module compiles, so definition order does not matter; the one
-residual is a *pure forward chain* of helpers (§9.9).
+whole module compiles, so definition order does not matter — including a
+*pure forward chain* of helpers, whose summaries are propagated as
+implications and run to a fixed point before any parked check replays.
 
 ### 9.8 Return escape
 
-A helper that **returns one of its parameters** (directly, or inside a
-returned struct) hands the reference back out. The checker records a
+A helper that **returns one of its parameters** — directly, inside a
+returned struct at any nesting depth, inside a closure that captured it,
+or after binding it to a local first — hands the reference back out. The checker records a
 second summary of returned-parameter positions; the result of such a call
 carries the max referent depth of the arguments at those positions, so
 the existing escape sinks (§9.3 / §9.7) fire on it. A helper that returns
@@ -1590,15 +1596,13 @@ a *fresh* value is not a passthrough and stays legal.
 
 - `*T` raw pointer lifetimes (the FFI escape hatch) — except the one
   narrow `# *T`-escape check `--strict-borrowck` adds (§9 intro).
-- Aliased mutation beyond a single call (longer-range "exclusive
-  reference" analysis is not currently implemented), and a binding read
-  through a *nested* sub-expression argument (§6.2) — though
-  `--strict-borrowck` does flag aliased mutation through a `. obj field`
-  argument.
-- A *pure forward chain* of escaping helpers (§9.7) and a parameter
-  returned through a closure *capture* rather than a struct field (§9.8) —
-  the residual interprocedural gaps. Both degrade the *diagnostic* only,
-  never a miscompile.
+- Aliased mutation beyond a single call: longer-range "exclusive
+  reference" analysis is not implemented. Within one call,
+  `--strict-borrowck` flags a sibling read however it is spelled — a
+  `. obj field` projection, a read nested inside another call, at any
+  depth and in either argument order; the default mode reports only the
+  bare-identifier form, deliberately, because every sibling read is a
+  snapshot taken before the callee runs (§6.2).
 - Panic / `recover` control flow: the checker treats `recover` as an
   ordinary call and does not model panic unwind. It does not need to —
   the owned allocations a panic `longjmp` would skip are reclaimed at the
