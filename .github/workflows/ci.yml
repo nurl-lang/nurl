@@ -488,6 +488,22 @@ jobs:
         if: needs.changes.outputs.compiler == 'true'
         run: ./tools/leakgate.sh
 
+      - name: metamorphic reclamation gate (§7.2, runtime axis)
+        # The compile-verdict classes run in the build-test job; this one
+        # cannot, because its verdict is an LSan RUN rather than anything
+        # nurlc says. The panic-unwind journal is a runtime mechanism:
+        # the same abandoned allocation, spelled N ways inside a recover
+        # extent, must be reclaimed in all of them — an arm, a match arm,
+        # a loop body, a nested extent, a second extent after the first.
+        # It needs the sanitized runtime the --san build above produced,
+        # and it SKIPS loudly rather than silently passing without one.
+        #
+        # Stricter than the leak-pinned step below on purpose: it runs
+        # with use_stacks=0, because with the default an allocation whose
+        # only owner is a live `main` frame reads as "still reachable"
+        # and a deliberately-leaking control passed.
+        run: ./tools/metamorph/spellings.py --class panic-reclaim
+
       - name: ASan + UBSan corpus
         # Leak detection is opt-in via LSAN_DETECT_LEAKS=1; NURL has
         # several process-lifetime globals (g_str_pool, g_sym_arena)

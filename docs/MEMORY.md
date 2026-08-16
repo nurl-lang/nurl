@@ -926,6 +926,21 @@ on; they are not two separate tools or two separate builds.
    raw-ptr-escape, forward-callee-move) plus a
    `controls` class of correct programs, which must keep compiling. Its
    baseline (`known_gaps.json`) is **empty**: any new gap fails.
+   It carries a second, **runtime** axis for the one part of the model
+   no compile verdict can answer: the panic-unwind journal (§7.2) is a
+   mechanism, not a diagnostic, so the `panic-reclaim` class asks
+   instead whether the same abandoned allocation — spelled nine ways
+   inside a recover extent (a `?` arm, a `??` arm, a loop body, two
+   frames deep, a nested extent, a second extent after the first, an
+   escaped value the journal must *not* free) — comes back clean under
+   LSan. It runs in the sanitizers job, where the `--san` build has
+   already produced the instrumented runtime it needs, and it skips
+   *loudly* without one. It runs with `use_stacks=0`: with the default,
+   an allocation whose only owner is a live `main` frame reads as
+   "still reachable", and a deliberately-leaking control passed — the
+   oracle was mutation-tested in both directions (a leak reads `leak`,
+   a double free reads `crash`) before being trusted.
+
    It also checks one invariant on every accepted program, whatever its
    class: the emitted module must pass `llvm-as`. A disagreement is not
    assumed to be a bug — `--verify` rebuilds the accepted-but-suspect
@@ -1049,6 +1064,11 @@ double-free or use-after-free (raw entries are pointer-keyed and removed
 at `nurl_free`; typed entries are forgotten at their normal drop site and
 deduped on drain); it clears the sanitizer gate, and `recover_unwind` is
 one of the leak-pinned tests (§6.6) that pins the round trip leak-clean.
+Where in the extent the allocation was made does not change that either:
+the `panic-reclaim` class (§6.6) enumerates the spellings — a `?` arm, a
+`??` arm, a loop body, two frames deep, a nested extent, a second extent
+after the first — and requires all of them to come back clean under a
+leak check stricter than the pinned tests use.
 Single-owner scalars and slices are captured *by value* by a closure, so
 they cannot
 escape a recover extent by reference and need no forget; only multi-field
