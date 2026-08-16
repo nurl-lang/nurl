@@ -7,7 +7,7 @@ Anything marked done here has a regression test in
 [`compiler/tests/`](compiler/tests/) and is covered by the bootstrap fixed
 point.
 
-_Last reviewed: 2026-08-15 · Current release: **0.43.0** · Language: **Grammar
+_Last reviewed: 2026-08-16 · Current release: **0.44.0** · Language: **Grammar
 v2.5** ([`spec/grammar.ebnf`](spec/grammar.ebnf))._
 
 ---
@@ -46,6 +46,10 @@ What is solid today:
   catches use-after-move, alias double-free, escaping closure captures,
   interprocedural/return escape, loop-carried double-frees, and
   iterator invalidation as hard errors without changing generated code.
+  Since 0.44.0 **no rule depends on definition order**: every check that
+  consults a per-function summary parks what it cannot answer and
+  resolves it after the module, so where a helper is written can no
+  longer change a verdict.
 - **Concurrency.** A stackful M:N work-stealing async runtime with **no
   `async`/`await` colouring** — ordinary code runs unchanged under the
   scheduler — plus threads/mutex/cond, typed channels, and Go-style `??`

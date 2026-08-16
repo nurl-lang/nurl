@@ -8,6 +8,201 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.44.0] — 2026-08-16
+
+The order-independent release. Every entry started from the same
+question, asked once and then asked again of each rule in turn: *does
+this check answer a question, or does it recognise a shape?* Three
+things turned out to be shapes.
+
+A stack reference was safe until it rode a `?`. `^ f` was an error and
+`^ ? c f f` compiled clean — a branch that cannot change the answer,
+since both arms hand the caller the same dead frame. The same was true
+of a field store, and of a join nested inside a `??` arm. Every one is
+a confirmed `stack-use-after-return` or heap use-after-free under
+AddressSanitizer.
+
+And *where you wrote a function* still decided two verdicts. A helper
+defined below its caller has no summary yet, and an empty summary reads
+as "does not mutate" rather than "not compiled yet". Both rules that
+still consulted one inline now park what they cannot answer and resolve
+it after the module — §2.10 by parking the finished report rather than
+the question, because its diagnostic fires at a later read of the
+pointer and there is no call site to park at. **No rule in the memory
+model depends on definition order any more.**
+
+Underneath both is one method: §2.3 was the only default-on rule with
+no `tools/metamorph` class, which is exactly why its interprocedural
+cousins had been swept twice and the rule they build on never had. Ask
+what is *not* in the harness, not what is. The harness itself gained a
+second axis for the one part of the model no compile verdict can
+answer — the panic-unwind journal, whose question is an LSan run — and
+that oracle was found broken by mutation-testing it before it was
+trusted.
+
+### Fixed
+
+- **The same reference, however it leaves the function.**
+  `docs/MEMORY.md` listed four boundaries around the two
+  interprocedural escape checks. Enumerating the spellings found
+  **eleven**, and every one had the shape the whole 0.43.0 cycle had:
+  the check asked its question at one syntax and said nothing at the
+  others. Out through the result (§2.8) missed a nested aggregate, a
+  closure that captured the reference, a local name given to it, a
+  second helper, a ternary, and a callee defined below the call or
+  written generically. In through a parameter (§2.7) missed a whole
+  chain defined below its caller, a helper whose own escaping callee
+  sat below it, a generic escaping parameter, and a *field* of the
+  parameter reaching `thread_spawn`. ASan reports
+  `stack-use-after-return` on all of them.
+
+  Three mechanisms close them. A binding carries the parameters its
+  initialiser carried, and a call result carries those at the callee's
+  returned positions, so a reference does not lose provenance by being
+  given a name or taking another hop. Propagation between summaries is
+  parked as an implication and run to a **fixed point** before any
+  parked check replays — which is what makes a forward chain behave
+  like the same functions written bottom-up. And the return-escape
+  check parks what it cannot answer at a forward or generic call.
+
+  §2.4 and §2.10 were the two checks with no coverage class at all, and
+  each turned out to have one gap: strict-mode aliased mutation knew
+  `. c n` but not `( peek c )`, so the *depth* of the expression
+  decided the verdict; and the stale-borrow rule knew only a direct
+  stdlib mutator, so `( grow v )` was silent where `( vec_push v … )`
+  warned — which reads as "wrap the push in a function" being the cure
+  for the diagnostic rather than for the bug.
+
+- **`tools/metamorph` was not running in CI, and its baseline was
+  stale.** The harness had run only by hand. `known_gaps.json` still
+  listed two gaps that had already been fixed, and a stale baseline is
+  not cosmetic — it would have absorbed the regression had either hole
+  come back. It is a CI step now and the baseline is empty. Separately,
+  `--verify` could not see a stack bug at all: ASan instruments only
+  functions carrying `sanitize_address`, which the C frontend adds and
+  nurlc's hand-written IR does not, so escalations saw only what the
+  runtime's malloc interceptors caught and every dangling stack
+  reference ran clean and was filed UNCONFIRMED. The escalation now
+  stamps the attribute on the generated module and runs with
+  `detect_stack_use_after_return=1`. The gate also fails loudly when
+  `llvm-as` is missing rather than quietly reporting every module
+  valid.
+
+- **A stack reference stopped being safe the moment it rode a `?`.**
+  Reference-ness propagated through closure literals, aggregate
+  literals, copies and `=` assignments — but not through the phi of a
+  conditional, so `^ f` was an error and `^ ? c f f` compiled clean. The
+  branch cannot change the answer: both arms hand the caller a pointer
+  into the frame that is about to disappear. AddressSanitizer reports
+  `stack-use-after-return` on every spelling — the ternary, the `??`,
+  the join bound to a local first, a struct literal built from one, a
+  ternary between two structs, and the same join reaching `vec_push` or
+  `thread_spawn` instead of a return.
+
+  Two more of the same shape came with it. `= . box cb f` — a field
+  store — walked a stack reference into a longer-lived struct with
+  nothing said, and returning that struct handed out the dead frame;
+  the field form now has the two effects the whole-binding form always
+  had (the struct inherits the reference, and a store into a struct
+  that outlives the referent is reported at the store). And a join
+  nested inside a `??` arm dropped the handle candidates `gen_cond` has
+  carried up since 0.42.0, so `?? c { 1 → ? d a a  _ → ( make ) }`
+  handed `a`'s buffer over with nothing recorded: freeing both names
+  compiled clean into a heap use-after-free.
+
+  §2.3 was the only default-on rule with no `tools/metamorph` class,
+  which is why its interprocedural cousins had been swept twice and the
+  rule they build on never had. It has one now — eighteen spellings —
+  and so does the strict `# *T` escape check, which found no gap and
+  now cannot grow one. Four new controls pin the other direction: a
+  join between closures that capture nothing, a join that stays in its
+  frame, a same-region field store, an ordinary scalar field store.
+  (`borrow_escape_join`, `borrow_escape_field_store`,
+  `borrow_strict_nested_join_alias`)
+
+- **Iterator invalidation stopped depending on definition order too.**
+  §2.5 follows a container mutation one call deep through the
+  per-function mutation summary, and that summary is built in codegen
+  order — so `~ y xs { ( grow xs ) }` was diagnosed when `grow` sat
+  above the loop and silent when it sat below. The call now parks the
+  question and replays it against the final summary.
+
+- **Definition order can no longer change any verdict the borrow
+  checker gives.** §2.10 was the last rule where it could: a pointer
+  borrowed with `vec_data` goes stale when the container is grown
+  through a helper, and that was reported when the helper sat above the
+  borrow and silent when it sat below, because an empty mutation
+  summary reads as "does not mutate" rather than "not compiled yet".
+
+  §2.5 parks that question at the call, where its diagnostic fires.
+  This one fires at a later *read* of the pointer, so there is no
+  single site to park; what is parked is the finished report plus the
+  callee it is conditional on. The call kills the pointer
+  provisionally, and the condition rides *inside* the stale-set entry
+  rather than in a side table — a question parked before a `?` and a
+  certain kill inside one arm are precisely the pair that meet at the
+  join, and a side table does not survive the union. A certain mutation
+  supersedes a parked one, entry and line together, so the report names
+  the call that really reallocates.
+  (`should_warn_stale_borrow_forward`)
+
+- **`anomaly --version` told the truth for the first time since 0.5.2.**
+  `cli_new` takes the version as a string literal and nothing derived
+  it from `nurl.toml`, so the two drifted the moment a release bumped
+  one and forgot the other — invisibly, because no test ran `--version`
+  and compared it to anything. anomaly shipped 0.5.3 and 0.5.4 while
+  `--version` kept answering 0.5.2; a version can be yanked, never
+  replaced. `tools/check_package_version_strings.sh` now compares every
+  package's manifest against the literal it passes to `cli_new` and
+  fails on a mismatch, with comments stripped so the doc example in
+  `packages/cli` is not mistaken for a real call. All 45 packages
+  audited; anomaly was the only real drift.
+
+- **A regression test that had never run once.** `test_skips.sh`
+  skipped any test whose *name* ended in `_mod` / `_helper` / `_lib`,
+  on the theory that those are importable modules with no `main()`.
+  `diag_thread_arc_shared_mutation_helper.nu` — the regression test for
+  the Arc shared-mutation race one call deep — has a `main()` and was
+  skipped by name. It had no golden either, and neither the
+  MISSING-golden check nor the ORPHAN check fires for a skipped test,
+  so the only trace was the SKIP count. The rule now asks the *file*
+  whether it has a `main()`.
+
+- **~1.2 MB of generated test scratch had been committed to
+  `packages/anomaly`.** Model blobs and `data.jsonl` written by
+  `timevector_test.nu`, swept in by a `git add -A` and about to go into
+  a published tarball — the same class as the packer defect fixed in
+  0.41.0. Removed, and `.gitignore` now excludes the directory the test
+  writes to.
+
+### Added
+
+- **`tools/metamorph` grew a second axis, for the one part of the
+  memory model no compile verdict can answer.** Every class in the
+  harness asks the compiler a question and compares verdicts across
+  spellings. The panic-unwind allocation journal is a *runtime*
+  mechanism: a `panic` longjmps past the scope-exit frees the compiler
+  queued, and the journal reclaims what it skipped, so the question is
+  whether the program leaks — or frees something the caller still owns.
+  The `panic-reclaim` class asks it as an LSan run over nine spellings
+  of one abandoned allocation: a `?` arm, a `??` arm, a loop body, two
+  frames deep, a nested extent (the inner unwind must not touch the
+  outer's scratch), a second extent after the first (a stale journal
+  would drain twice), an extent that never panics, and the escape case
+  where a value moved into a caller's binding must *not* be freed. All
+  nine come back clean — the journal is uniform across them, measured
+  rather than assumed.
+
+  The oracle was broken first, and mutation-testing it is what found
+  that: under LSan's defaults a deliberately-leaking control reported
+  CLEAN, because the buffer's only owner is a live `main` frame and so
+  it reads as still reachable. With `use_stacks=0` the control reads
+  `leak` and a double free reads `crash`. At process exit an allocation
+  the program still owns *is* the leak being asked about; the stack
+  must not launder it. The gate runs in the sanitizers job, where the
+  `--san` build has already produced the runtime it needs, and it skips
+  *loudly* without one.
+
 ### Changed
 
 - **The cross-file `__` path is obsolete, and nothing first-party uses
@@ -13136,7 +13331,8 @@ releases are measured.
   compile-server (`api/`), browser playground (`nurlweb/`).
 * Dual license: MIT (LICENSE-MIT) or Apache-2.0 (LICENSE-APACHE).
 
-[Unreleased]: https://github.com/nurl-lang/nurl/compare/v0.43.0...HEAD
+[Unreleased]: https://github.com/nurl-lang/nurl/compare/v0.44.0...HEAD
+[0.44.0]: https://github.com/nurl-lang/nurl/compare/v0.43.0...v0.44.0
 [0.43.0]: https://github.com/nurl-lang/nurl/compare/v0.42.0...v0.43.0
 [0.42.0]: https://github.com/nurl-lang/nurl/compare/v0.41.0...v0.42.0
 [0.41.0]: https://github.com/nurl-lang/nurl/compare/v0.40.0...v0.41.0
