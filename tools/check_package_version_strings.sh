@@ -45,6 +45,24 @@ for toml in packages/*/nurl.toml; do
                  | grep -o 'cli_new[^)]*`[0-9]\+\.[0-9]\+\.[0-9]\+`' \
                  | grep -o '`[0-9]\+\.[0-9]\+\.[0-9]\+`$' \
                  | tr -d '`')
+
+        # …and the OTHER spelling: a literal that prints the package's own
+        # name followed by its version, with no framework in sight —
+        # `( nurl_print \`gguf 0.3.0\\n\` )`. The cli_new form above was
+        # the only one this gate knew, so gguf shipped 0.3.1 announcing
+        # itself as 0.3.0 hours after the gate was written to stop exactly
+        # that. Keyed on the package's OWN name so a spec version the code
+        # legitimately mentions (\`version is 3\`, a dependency's number)
+        # cannot match.
+        while IFS= read -r lit; do
+            checked=$((checked + 1))
+            if [ "$lit" != "$manifest" ]; then
+                echo "MISMATCH: $pkg — nurl.toml says '$manifest' but $src prints '$pkg $lit'"
+                fail=1
+            fi
+        done < <(sed 's://.*::' "$src" \
+                 | grep -o "\`$pkg [0-9]\+\.[0-9]\+\.[0-9]\+" \
+                 | grep -o '[0-9]\+\.[0-9]\+\.[0-9]\+$')
     done
 done
 
