@@ -115,8 +115,20 @@ test_requires() {
 # check (skipped tests are exempt from missing/orphan accounting).
 is_skipped() {
     local name="$1"
-    # Helper modules imported by other tests: no main(), nothing to run.
-    case "$name" in *_mod|*_helper|*_lib) echo skip; return ;; esac
+    # Modules imported by other tests: no main(), nothing to run. ASK THE
+    # FILE, the way the rest of this script does — the rule used to be a
+    # NAME rule (*_mod / *_helper / *_lib), and a name rule silently
+    # swallows a real test that happens to end that way. It had:
+    # diag_thread_arc_shared_mutation_helper.nu, the regression test for
+    # the shared-mutation race one call deep (PR #902), has a main() and
+    # has never run once — it had no golden either, and neither the
+    # MISSING-golden check nor the ORPHAN check fires for a skipped
+    # test, so nothing anywhere said so. The only trace was the SKIP
+    # count.
+    if [[ -f "$NURL_TESTS_DIR/$name.nu" ]] \
+       && ! grep -qE '^@ main( |$)' "$NURL_TESTS_DIR/$name.nu"; then
+        echo skip; return
+    fi
     # FFI tests whose ext/ module needs an optional native library. build.sh
     # drops a sentinel (stdlib/runtime.<lib>) when pkg-config finds the lib;
     # without it the program legitimately fails to compile ("FFI library X is
