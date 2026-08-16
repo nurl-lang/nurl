@@ -1,13 +1,4 @@
 {
   "_comment": "Spellings the checker does not yet cover. A NEW entry fails the gate; removing one is progress.",
-  "gaps": [
-    [
-      "iterator-invalidation",
-      "push-via-helper"
-    ],
-    [
-      "option-payload-type",
-      "vec-into-int"
-    ]
-  ]
+  "gaps": []
 }

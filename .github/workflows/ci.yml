@@ -238,6 +238,19 @@ jobs:
         # every frame, which is the class of bug it exists to stop.
         run: ./tools/check_strict_arity.sh
 
+      - name: metamorphic diagnostic-coverage gate
+        # The same semantic situation, written N ways, must get the same
+        # verdict from the checker. Every August 2026 borrow-checker fix
+        # was one shape — the check asked its question at one spelling
+        # and missed the others — so the spellings are enumerated and
+        # `known_gaps.json` (now empty) is the baseline: a NEW gap, or a
+        # control that starts being rejected, fails here. It ran only by
+        # hand until this step, which meant a stale baseline entry could
+        # sit in the file claiming a hole that had already been fixed
+        # and, worse, would have absorbed the regression if it came back.
+        # Two seconds, and it uses the build/nurlc from ./build.sh above.
+        run: ./tools/metamorph/spellings.py
+
       - name: HTTP-server per-request leak gate
         # Builds the leakcheck HTTP server with ASan+LSan and fails on ANY
         # leak across 21 requests. Uses the normal build/nurlc from ./build.sh

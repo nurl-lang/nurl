@@ -390,14 +390,25 @@ the parked list stays tiny) and `resolve_pending_escapes()` replays it
 once the whole module — including the generic instantiation flush — has
 compiled and the summary is final. So `( detach f )` is flagged whether
 `detach` is defined above or below the call, and a generic escaping
-helper is caught once its instantiation has populated the summary. The
-one residual is a *pure forward chain*: a forward helper that escapes
-its parameter only by handing it to *another* forward-defined helper —
-the first helper's own summary is then still incomplete when parked, so
-nothing resolves (define such chains bottom-up to get the check). A
-parameter that the callee only *reads* or *invokes* (not stores) is not
-escaping, so passing a stack reference to it stays legal — the
-distinction the §2.7 summary turns on. (A reference handed back *out*
+helper is caught once its instantiation has populated the summary.
+
+Parking the *check* is only half of it. A body that hands its own
+parameter to a not-yet-compiled callee cannot infer its own summary
+either, so that **propagation step is parked too**, as an implication
+— "parameter *i* of `F` escapes if parameter *j* of the callee does" —
+and `resolve_pending_impls()` runs the implications to a **fixed
+point** before any parked check replays. That is what makes a *pure
+forward chain* (`leaky` → `outer` → `detach`, each defined below the
+last) behave like the same three functions written bottom-up: one round
+resolves the deepest link, the next carries it one hop outward.
+Definition order no longer decides the verdict anywhere in §2.7.
+
+The argument does not have to be the parameter itself: a **field of
+it** reaching an escaping slot (`( thread_spawn . box cb )`) makes the
+whole parameter escape, since the callee keeps a pointer into the
+struct the caller passed. A parameter that the callee only *reads* or
+*invokes* (not stores) is not escaping, so passing a stack reference to
+it stays legal — the distinction the §2.7 summary turns on. (A reference handed back *out*
 of a helper, rather than stored by it, is the separate return-escape
 case — see §2.8.)
 
@@ -431,15 +442,34 @@ A helper that takes the reference but returns a **fresh** value
 result's referent depth is *authoritative* (an explicit `0` when it is
 not a reference).
 
-The summary also covers a parameter returned **inside an aggregate** —
-`@ wrap ( @ v ) cb → Slot { ^ @ Slot { cb } }` records `cb`, because the
-returned struct carries the reference exactly as a bare `^ cb` would, so
-`( wrap f )` propagates `f`'s depth out. An ordinary constructor
-returning a struct of *value* parameters (`@ mk i a i b → Point { @ Point
-{ a b } }`) records them too but never false-positives: an `int` argument
-has depth 0. Boundaries that remain: a parameter returned through a
-closure *capture* (`^ \ → … cb …`) rather than a struct field, and
-forward / generic calls, are not yet summarised.
+A parameter can leave by more than a bare `^ p`, and every way it can
+is the same situation with different syntax between the `^` and the
+name. All of these record it:
+
+| the parameter leaves via | spelling |
+|---|---|
+| a struct field | `^ @ Slot { cb }` |
+| a struct field one level deeper | `^ @ Outer { @ Inner { cb } }` |
+| a closure's captured env | `^ \ → v { ( cb ) }` |
+| a local name it was bound to | `: ( @ v ) t cb  ^ t` |
+| another helper that returns it | `^ ( id cb ) }` |
+| one arm of a join | `^ ? c cb ( fresh )` |
+
+The last three work because a *binding* carries the parameters its
+initialiser carried (`<name>__paramsrc`) and a *call result* carries the
+parameters sitting at the callee's returned positions, so the chain
+composes to any depth. An ordinary constructor returning a struct of
+*value* parameters (`@ mk i a i b → Point { @ Point { a b } }`) records
+them too but never false-positives: an `int` argument has depth 0.
+
+**Forward and generic callees** are handled the way §2.7 handles them,
+and for the same reason: at `^ ( id f )` where `id` is defined below, an
+empty summary means "not known yet", not "returns nothing". The check is
+parked with the argument positions that were stack references and
+replayed by `resolve_pending_ret_escapes()` against the finished
+summary; the *propagation* ("this function returns its parameter if the
+callee returns its own") is parked as an implication and resolved in the
+same fixed point as the escape ones.
 
 ### 2.9 `--strict-borrowck` — three opt-in checks
 
@@ -524,21 +554,11 @@ hits in practice. It deliberately does **not** cover:
 - **Aliased mutation beyond a single call.** The exclusive-access
   check (§2.4) covers a binding aliased among one call's arguments.
   A binding read through a *nested* sub-expression argument, and
-  any longer-range aliased-mutation analysis, is not done.
-- **Escape across a forward / generic call — mostly closed.** The
-  *interprocedural escape* check (§2.7) now handles a forward or
-  generic call by parking it and replaying it after the whole module
-  compiles (`resolve_pending_escapes`), so definition order no longer
-  matters for it. Two residuals remain: a *pure forward chain* (a
-  forward helper that escapes only via another forward-defined helper —
-  §2.7), and the *return-escape* summary (§2.8), which is still consulted
-  inline and so still misses a forward / generic passthrough. Both
-  degrade the *diagnostic* only — never a miscompile.
-- **Escape through a closure capture or a deeply nested aggregate.**
-  §2.8 records a parameter returned directly or as a direct struct
-  field; a parameter returned by being *captured into a closure*
-  (`^ \ → … cb …`), or embedded one aggregate level deeper
-  (`^ @ Outer { @ Inner { cb } }`), is not yet summarised.
+  any longer-range aliased-mutation analysis, is not done. (Escape
+  across a forward or generic call used to be listed here; it is not a
+  boundary any more — §2.7 and §2.8 park what they cannot answer and
+  resolve it after the module, so definition order no longer changes a
+  verdict.)
 - **`recover` / panic unwind — reclaimed, not modelled.** A panic is a
   `setjmp`/`longjmp` jump to the nearest `recover` frame (no exception
   tables, no unwinding destructors). The owned allocations the `longjmp`
@@ -583,7 +603,8 @@ hits in practice. It deliberately does **not** cover:
 | Interprocedural escape (stack ref stored by a helper) | yes (`error:`) |
 | Return escape (helper returns a passed-in stack ref) | yes (`error:`) |
 | Aliased mutation via nested-argument reads | no |
-| Returned borrows / lifetime inference | partial (§2.8) |
+| Return escape (through a field, a nested field, a closure env, a local name, a second helper, a forward / generic callee) | yes (`error:`) |
+| Returned borrows / general lifetime inference | partial (§2.8) |
 | `*T` raw pointers | no (by design) |
 
 The `no` / `partial` rows are not bugs; they are the boundary of a
@@ -681,16 +702,19 @@ get right:
   the env of an *escaping* closure are freed by *you*, not by auto-drop
   (§7.4). The checker tracks their *moves* (so a `vec_free`d handle can't
   be reused) but not their *freeing* — forget the `vec_free` and it leaks.
-- **Definition order, for the residual checks.** Summaries are built in
-  codegen order. The *interprocedural escape* check (§2.7) no longer
-  depends on order — it is parked and replayed after the module compiles.
-  The *sink* check no longer misses a **generic** callee either: a
-  generic function's `inout` / `sink` index sets, auto-`sink` included,
-  are derived from the stored template as it is declared, so a call site
-  sees them before any instantiation exists (§1). What still consults the
-  summary inline is the *return-escape* check (§2.8), and every check
-  still needs the callee *defined above its call site* — a forward call
-  misses the diagnostic (§3). Never miscompiled — only unchecked.
+- **Definition order, for the remaining inline checks.** Summaries are
+  built in codegen order, so a check that consults one *inline* sees an
+  empty answer for a callee defined below it. The two escape checks no
+  longer do: §2.7 and §2.8 park both the check and the propagation, and
+  resolve them after the module (`resolve_pending_impls`,
+  `resolve_pending_escapes`, `resolve_pending_ret_escapes`). The *sink*
+  check does not miss a **generic** callee either — a generic function's
+  `inout` / `sink` index sets, auto-`sink` included, are derived from the
+  stored template as it is declared, so a call site sees them before any
+  instantiation exists (§1). What is left consulting a summary inline is
+  the *move* half: auto-`sink` (§2.2) and the returned-handle summary
+  `g_fn_ret_alias`, which a forward call still misses. Never
+  miscompiled — only unchecked.
 
 ### 6.5 This is not Rust
 
@@ -796,7 +820,8 @@ enumerable class of data races — every route by which an `Rc` or a
 ### 6.6 The gates — how the guarantees are checked
 
 Everything above is enforced by two CI jobs
-(`.github/workflows/ci.yml`) plus a targeted leak tool. This subsection
+(`.github/workflows/ci.yml`), a diagnostic-coverage harness, and a
+targeted leak tool. This subsection
 is the single source of truth for *what is actually run*; other
 sections point here rather than re-describe it.
 
@@ -831,7 +856,25 @@ on; they are not two separate tools or two separate builds.
    exercising the §7.4 contract. So the corpus-wide gate proves
    *memory-safety*, not leak-freedom.
 
-3. **Leak verification** — pinned, not corpus-wide. Because gate 2 runs
+3. **Diagnostic-coverage gate** — `tools/metamorph/spellings.py`, in
+   the build-test job. Not a memory gate but a *consistency* one: it
+   writes the same semantic situation N ways and requires the same
+   verdict from the checker for all of them, across nine classes
+   (handle-second-name, use-after-free, loop-carried-free,
+   iterator-invalidation, arc-shared-mutation, thread-nonsend /
+   -nonsync, option-payload-type, ret-escape, escape-into-callee) plus a
+   `controls` class of correct programs, which must keep compiling. Its
+   baseline (`known_gaps.json`) is **empty**: any new gap fails.
+   It also checks one invariant on every accepted program, whatever its
+   class: the emitted module must pass `llvm-as`. A disagreement is not
+   assumed to be a bug — `--verify` rebuilds the accepted-but-suspect
+   program with `--no-borrowck`, stamps `sanitize_address` on the
+   generated IR (which hand-written IR does not carry, and without which
+   ASan sees only the runtime's own allocations) and runs it with
+   `detect_stack_use_after_return=1`, which is exactly the failure mode
+   a dangling closure has.
+
+4. **Leak verification** — pinned, not corpus-wide. Because gate 2 runs
    with leaks off, the no-leak guarantees are pinned two ways, both with
    `detect_leaks=1`:
    - `LSAN_DETECT_LEAKS=1 run_san_tests.sh` flips the *same* ASan run's
@@ -860,7 +903,7 @@ on; they are not two separate tools or two separate builds.
      by design: unlike the RSS gate there is no budget to raise, because
      the number a leak gate accepts is zero.
 
-   All three pinned checks are wired into `ci.yml`: the leak-pinned
+   All three pinned leak checks are wired into `ci.yml`: the leak-pinned
    subset runs under `LSAN_DETECT_LEAKS=1` in the sanitizers job,
    `tools/leakcheck/run.sh` runs in the build-test job, and
    `tools/leakgate.sh` runs in the sanitizers job — reusing its
