@@ -310,6 +310,46 @@ CLASSES = [
         },
     },
     {
+        "name": "forward-callee-move",
+        "severity": "memory-unsafety",
+        "doc": "The MOVE half of the interprocedural summaries — "
+               "auto-`sink` (a helper that frees its parameter, §2.2) "
+               "and the returned-handle summary (a helper that hands an "
+               "argument back, §2.2) — consulted at a call to a callee "
+               "defined BELOW it. The escape summaries park what they "
+               "cannot answer and replay it after the module (§2.7 / "
+               "§2.8); these still answer inline, and an empty summary "
+               "reads as 'does not sink' rather than 'not known yet'. "
+               "Every spelling here is the same program as its "
+               "defined-above twin, which is rejected.",
+        "expect": REJECT_DEFAULT,
+        "expect_msg": ["use of moved value", "may already be freed"],
+        "spellings": {
+            "sink-above": prog(
+                "    : ( Vec i ) v ( vec_new [i] )\n"
+                "    ( release v )\n"
+                "    ( vec_push [i] v 1 )",
+                extra="@ release ( Vec i ) v → v { ( vec_free [i] v ) }\n"),
+            "sink-forward": prog(
+                "    : ( Vec i ) v ( vec_new [i] )\n"
+                "    ( release v )\n"
+                "    ( vec_push [i] v 1 )",
+                extra="") + "@ release ( Vec i ) v → v { ( vec_free [i] v ) }\n",
+            "ret-alias-above": prog(
+                "    : ( Vec i ) a ( vec_new [i] )\n"
+                "    : ( Vec i ) b ( pick a )\n"
+                "    ( vec_free [i] b )\n"
+                "    ( vec_free [i] a )",
+                extra="@ pick ( Vec i ) v → ( Vec i ) { ^ v }\n"),
+            "ret-alias-forward": prog(
+                "    : ( Vec i ) a ( vec_new [i] )\n"
+                "    : ( Vec i ) b ( pick a )\n"
+                "    ( vec_free [i] b )\n"
+                "    ( vec_free [i] a )",
+                extra="") + "@ pick ( Vec i ) v → ( Vec i ) { ^ v }\n",
+        },
+    },
+    {
         "name": "loop-carried-free",
         "severity": "memory-unsafety",
         "doc": "An outer binding freed INSIDE a loop body: on the second "
@@ -1260,6 +1300,7 @@ def compile_verdict(src_path, strict):
 
 
 INVALID = "invalid"          # the template is broken, not the compiler
+_NO_LLVM_AS = False          # set once if llvm-as is missing (see ir_is_valid)
 
 
 def ir_is_valid(src_path):
@@ -1282,8 +1323,21 @@ def ir_is_valid(src_path):
                            cwd=ROOT)
         if r.returncode != 0:
             return True, ""          # rejected: nothing was emitted to verify
-        v = subprocess.run(["llvm-as", str(ll), "-o", "/dev/null"],
-                           capture_output=True, cwd=ROOT)
+        try:
+            v = subprocess.run(["llvm-as", str(ll), "-o", "/dev/null"],
+                               capture_output=True, cwd=ROOT)
+        except FileNotFoundError:
+            # No llvm-as on this host. Say so ONCE and loudly rather than
+            # dying with a traceback or, worse, quietly reporting every
+            # module as valid — an invariant that silently stops being
+            # checked is the failure mode this harness exists to prevent.
+            global _NO_LLVM_AS
+            if not _NO_LLVM_AS:
+                print("WARNING: llvm-as not found — the IR-validity "
+                      "invariant is NOT being checked (install llvm).",
+                      file=sys.stderr)
+                _NO_LLVM_AS = True
+            return True, ""
         if v.returncode == 0:
             return True, ""
         err = v.stderr.decode("utf-8", "replace").strip().splitlines()
