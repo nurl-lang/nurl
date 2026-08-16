@@ -119,6 +119,8 @@ void nl_exit_group(int code) {
 #define SYS_clock_gettime_ 228
 #define SYS_mprotect_  10
 #define SYS_getrandom_ 318
+#define SYS_fsync_     74
+#define SYS_truncate_  76
 
 long long read(int fd, void *buf, unsigned long n)  { return nl_read(fd, buf, n); }
 long long write(int fd, const void *buf, unsigned long n) { return nl_write(fd, buf, n); }
@@ -147,6 +149,14 @@ int   rename(const char *a, const char *b)          { return (int)nl_ret(nl_sysc
 int   chdir(const char *p)                          { return (int)nl_ret(nl_syscall6(SYS_chdir_, (long)p, 0, 0, 0, 0, 0)); }
 int   chmod(const char *p, int mode)                { return (int)nl_ret(nl_syscall6(SYS_chmod_, (long)p, mode, 0, 0, 0, 0)); }
 int   madvise(void *p, unsigned long len, int adv)  { return (int)nl_ret(nl_syscall6(SYS_madvise_, (long)p, (long)len, adv, 0, 0, 0)); }
+/* The two durability primitives. A freestanding target cannot borrow
+ * them from a host, and they are exactly one syscall each: fsync(2) is
+ * the barrier a write-ahead log needs before it may acknowledge a write,
+ * and truncate(2) is how recovery cuts a torn tail back off. Under the
+ * unikernel both become device work (a virtio-blk flush, a metadata
+ * update) and every caller stays put. */
+int   fsync(int fd)                                 { return (int)nl_ret(nl_syscall6(SYS_fsync_, fd, 0, 0, 0, 0, 0)); }
+int   truncate(const char *p, long long len)        { return (int)nl_ret(nl_syscall6(SYS_truncate_, (long)p, (long)len, 0, 0, 0, 0)); }
 int   mprotect(void *p, unsigned long len, int prot) { return (int)nl_ret(nl_syscall6(SYS_mprotect_, (long)p, (long)len, prot, 0, 0, 0)); }
 /* The kernel's own CSPRNG. runtime_bare.c's nurl_rand_fill is the only
  * caller and it treats any failure as fatal, so nothing here needs a

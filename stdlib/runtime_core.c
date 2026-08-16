@@ -1621,11 +1621,18 @@ long long nurl_file_truncate(const char *path, long long len) {
     if (!path || len < 0) return -1;
 #ifdef _WIN32
     {
-        int fd = _open(path, _O_RDWR | _O_BINARY);
-        if (fd < 0) return -1;
-        int rc = _chsize_s(fd, (__int64)len);
-        _close(fd);
-        return rc == 0 ? 0 : -1;
+        /* Win32 rather than the CRT's _chsize_s: this file is built for
+         * both the MSVC and the MinGW runtime, and the CRT spelling of
+         * truncation differs between them. SetEndOfFile does not. */
+        HANDLE h = CreateFileA(path, GENERIC_WRITE,
+                               FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
+                               OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+        if (h == INVALID_HANDLE_VALUE) return -1;
+        LARGE_INTEGER li;
+        li.QuadPart = (LONGLONG)len;
+        int ok = SetFilePointerEx(h, li, NULL, FILE_BEGIN) && SetEndOfFile(h);
+        CloseHandle(h);
+        return ok ? 0 : -1;
     }
 #elif defined(__wasi__)
     (void)len;
