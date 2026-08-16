@@ -324,7 +324,11 @@ The check fires for a stdlib container mutator applied to the
 iterated container (`vec_push` / `vec_insert` / `vec_remove` /
 `vec_pop` / `vec_clear` / `vec_set` / `vec_set_len` / `vec_reserve` /
 `vec_shrink_to_fit` / `vec_extend` / `vec_free` / `vec_free_with` /
-`vec_swap` / `vec_reverse`) and for any `inout` argument naming it.
+`vec_swap` / `vec_reverse`), for any `inout` argument naming it, and
+for a **helper** whose summary says it mutates the container handed to
+that parameter — whether that helper is defined above the loop or
+below it, since a call to a not-yet-compiled callee parks the question
+and replays it after the module.
 A counter loop (`~ k 0 ...`, a while-loop) borrows nothing, so
 `( vec_set xs k v )` in an index loop stays legal — only the
 element-borrowing `~ x xs` foreach form is guarded.
@@ -550,8 +554,12 @@ mutates the container handed to one of its parameters — the same
 per-function summary §2.5 consults. Without that, the inline
 `( vec_push v … )` warned and `( grow v )` did not, which reads as
 "wrap the push in a function" being the cure for the diagnostic rather
-than for the bug. (Like §2.5, this summary is built in codegen order,
-so a helper defined *below* its caller is missed — see §6.4.)
+than for the bug. One residual: that summary is built in codegen order
+and this rule reads it inline, because its diagnostic fires at a later
+*read* of the pointer rather than at the call — so a mutating helper
+defined *below* the borrow is missed here (§6.4). §2.5, whose
+diagnostic does fire at the call, parks the question instead and is
+order-independent.
 
 This hazard has nothing to do with `~` mutability — a `: *T` borrow
 dangles identically. (nurlc used to warn about `: ~ *T` bindings on the
@@ -739,10 +747,15 @@ get right:
   deferred to the end of the module, where both summaries are final.
   (Deferred rather than repeated: analysing a function twice would
   report every diagnostic it holds twice.) What is left consulting a
-  summary inline is the *mutation* half, `g_fn_mutates`, which §2.5 and
-  §2.10 read to follow a container mutation one call deep; there, a
-  callee defined below its call site still misses the diagnostic. Never
-  miscompiled — only unchecked.
+  summary inline is one half of one rule: `g_fn_mutates` as **§2.10**
+  reads it, to invalidate a container borrow through a helper. (§2.5's
+  use of the same summary is parked and replayed like the others, so
+  the loop rule does not depend on order either.) §2.10 cannot park it
+  the same way — the diagnostic fires at a *later read* of the pointer,
+  not at the call — so a mutating helper defined below the borrow still
+  misses that warning. It is a warning about a `*T` pointer, which is
+  the trusted surface anyway (above). Never miscompiled — only
+  unchecked.
 
 ### 6.5 This is not Rust
 

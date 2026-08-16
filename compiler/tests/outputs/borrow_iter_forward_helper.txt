@@ -1,0 +1,5 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/borrow_iter_forward_helper.nu:18: error: cannot mutate 'xs' while iterating over it — the '~' loop holds a borrow of the container; move the mutation out of the loop body
+    ~ y xs { ( grow xs ) }
+error: compilation aborted — 1 borrow-checker violation (re-run with --no-borrowck to bypass)

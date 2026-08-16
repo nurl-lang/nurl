@@ -7790,6 +7790,24 @@
             { ( bck_esc_warn lex bck_arg_line ( nurl_str_cat3
                 `cannot mutate '` bck_arg_root
                 `' while iterating over it — the '~' loop holds a borrow of the container; move the mutation out of the loop body` ) ) }
+            {}
+            // …and the same question for a callee not compiled yet: its
+            // mutation summary is empty here, which is "not known", not
+            // "does not mutate". Park it; resolve_pending_iter_mut()
+            // replays it against the final summary after the module, so
+            // `~ y xs { ( grow xs ) }` is diagnosed whether `grow` sits
+            // above or below the loop.
+            ? & & & fe_iterated ! fe_helper_mutates
+            == 0 ( nurl_sym_len g_fn_compiled call_name )
+            & | != 0 ( nurl_sym_len2 syms fname `__arity` )
+            != 0 ( nurl_sym_len2 syms fname `__garity` )
+            == 0 ( nurl_sym_len2 syms fname `__ptr` )
+            { : s __im_rec ( nurl_str_cat3
+                ( nurl_str_cat3 call_name ` ` fname )
+                ( nurl_str_cat4 ` ` ( nurl_str_int arg_idx ) ` ` bck_arg_root )
+                ( nurl_str_cat4 ` ` ( nurl_str_int bck_arg_line ) ` `
+                ( nurl_lex_filename lex ) ) )
+                ( __park_append g_pending_escape `i` __im_rec ) }
             {} }
         {}
         : ~ s av ( nurl_str_cat `` `` )
@@ -20301,10 +20319,36 @@
     }
 }
 
+// Replay the parked iterator-invalidation checks (docs/MEMORY.md §2.5):
+// a container mutated inside a `~ x xs` foreach by a helper that had not
+// been compiled when the loop body did. The rule is a conservative guard
+// rather than a memory-unsafety one, but a guard that holds for
+// `( vec_push xs … )` and not for `( grow xs )` teaches the wrong fix.
+@ resolve_pending_iter_mut → v {
+    ? == g_borrowck 0 { ^ } {}
+    : ~ s rest ( nurl_sym_get g_pending_escape `i` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s cn ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s fn ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s ai ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s nm ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s ln ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s file ( str_first_word rest ) = rest ( str_skip_word rest )
+        : ~ s mut ( nurl_sym_get g_fn_mutates cn )
+        ? == 0 ( nurl_str_len mut ) { = mut ( nurl_sym_get g_fn_mutates fn ) } {}
+        ? ( str_contains_word mut ai )
+        { ( bck_emit_error file ( nurl_str_to_int ln ) ( nurl_str_cat3
+            `cannot mutate '` nm
+            `' while iterating over it — the '~' loop holds a borrow of the container; move the mutation out of the loop body` ) ) }
+        {}
+    }
+}
+
 @ resolve_pending_escapes → v {
     ? == g_borrowck 0 {} {
         ( resolve_pending_impls )
         ( resolve_pending_ret_escapes )
+        ( resolve_pending_iter_mut )
         : ~ s rest ( nurl_sym_get g_pending_escape `l` )
         ~ != 0 ( nurl_str_len rest ) {
             : s cn ( str_first_word rest ) = rest ( str_skip_word rest )

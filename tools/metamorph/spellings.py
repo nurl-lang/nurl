@@ -422,6 +422,14 @@ CLASSES = [
                 "    ~ y xs { ( grow xs ) }\n"
                 "    ( vec_free [i] xs )",
                 extra="@ grow ( Vec i ) v → v { ( vec_push [i] v 2 ) }\n"),
+            # The helper defined BELOW the loop. Its mutation summary is
+            # empty at the call, which is "not known yet", not "does not
+            # mutate" — so definition order decided the verdict.
+            "push-via-forward-helper": prog(
+                "    : ( Vec i ) xs ( vec_new [i] )\n"
+                "    ( vec_push [i] xs 1 )\n"
+                "    ~ y xs { ( grow xs ) }\n"
+                "    ( vec_free [i] xs )") + "@ grow ( Vec i ) v → v { ( vec_push [i] v 2 ) }\n",
             "push-in-nested-foreach": prog(
                 "    : ( Vec i ) xs ( vec_new [i] )\n"
                 "    ( vec_push [i] xs 1 )\n"
