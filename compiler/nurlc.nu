@@ -9108,6 +9108,12 @@
     // saw no alias, and a nested ternary was a hole in a rule the
     // one-level form has closed since #899.
     ( nurl_sym_def syms `__last_phi_idents__` `` )
+    // Stack-reference provenance (docs/MEMORY.md §2.3) gets the same
+    // per-arm reset+snapshot discipline. Reference-ness rides a phi
+    // exactly as ownership does: `^ ? c f f` hands the caller the same
+    // dead frame `^ f` does. Reset first, so an arm cannot inherit what
+    // the CONDITION published.
+    ( nurl_sym_def syms `__last_expr_refdepth__` `` )
     // Owned-STRING provenance gets the same per-arm reset+snapshot
     // discipline. Without it, `__last_call_ret_owned__` after the whole
     // `?` was simply the LAST arm's residue — `: s x ? c `lit` ( getter )`
@@ -9134,6 +9140,9 @@
     : b t_alias != 0 ( nurl_sym_len syms `__last_value_alias__` )
     : s t_retid ( nurl_str_cat ( nurl_sym_get syms `__last_ident_name__` ) `` )
     : s t_inner_ids ( nurl_str_cat ( nurl_sym_get syms `__last_phi_idents__` ) `` )
+    // Referent depth of this arm's value, read while the arm's scope is
+    // still on the symbol table (the pop below takes its entries with it).
+    : i t_refdep ( bck_expr_refdepth syms t_retid )
     // A tracked-owned-string ident arm hands the phi a COPY, emitted
     // here inside the arm's own block (it must only run on this path).
     // The old protocol cancelled the binding's scheduled drop instead —
@@ -9252,6 +9261,8 @@
     ( nurl_sym_def syms `__last_call_ret_owned__` `` )
     ( nurl_sym_def syms `__last_value_alias__` `` )
     ( nurl_sym_def syms `__last_join_variant_enum__` `` )
+    ( nurl_sym_def syms `__last_expr_refdepth__` `` )
+    ( nurl_sym_def syms `__last_phi_idents__` `` )
     : i e_tt0 ( nurl_lex_type lex )
     : s e_v0 ( nurl_str_cat ( nurl_lex_val lex ) `` )
     : ~ s ev ( gen_expr lex syms cg )
@@ -9261,6 +9272,8 @@
     : b e_alias != 0 ( nurl_sym_len syms `__last_value_alias__` )
     : s e_retid ( nurl_str_cat ( nurl_sym_get syms `__last_ident_name__` ) `` )
     : s e_inner_ids ( nurl_str_cat ( nurl_sym_get syms `__last_phi_idents__` ) `` )
+    // Mirror of the then-arm's referent-depth snapshot.
+    : i e_refdep ( bck_expr_refdepth syms e_retid )
     // Mirror of the then-arm's tracked-ident copy (see above) — plus the
     // one case where a LITERAL else-arm still copies eagerly: the
     // then-arm is already a live fresh owner, so uniform ownership needs
@@ -9552,6 +9565,27 @@
     : b __alias_res & & & __t_alias_ok __e_alias_ok __slice_live
     ( seq ( nurl_llty phi_ty ) `i8*` )
     ( nurl_sym_def syms `__last_value_alias__` ? __alias_res `1` `` )
+    // ── Stack-reference provenance of the `?`-result (§2.3) ──────────
+    // A phi carries a stack reference exactly as it carries a handle:
+    // `^ ? c f f` returns the same pointer into the dead frame that
+    // `^ f` does, and every §2.3 sink (return, `vec_push`,
+    // `thread_spawn`, an `=` into a shallower region) consumes it the
+    // same way. Only the transient was reset per arm, so the depth an
+    // arm published was gone by the join and the whole family —
+    // `?`, `??`, a ternary bound to a local first, a struct literal
+    // built from one — compiled clean. Confirmed
+    // stack-use-after-return under ASan for six spellings.
+    //
+    // The deepest LIVE arm wins: an arm that returned never reaches
+    // this phi (and was checked at its own `^`), and one arm carrying
+    // the reference is enough — the result dangles on that path. A
+    // valueless join publishes nothing.
+    : ~ i __join_refdep 0
+    ? & == 0 tdr > t_refdep __join_refdep { = __join_refdep t_refdep } {}
+    ? & == 0 edr > e_refdep __join_refdep { = __join_refdep e_refdep } {}
+    ( nurl_sym_def syms `__last_expr_refdepth__`
+    ? & > __join_refdep 0 ! ( seq ( nurl_get_last_type ) `void` )
+    ( nurl_str_int __join_refdep ) `` )
     result
 }
 
@@ -9920,6 +9954,17 @@
     // `??` may hand to whoever receives its value, and whether every
     // live arm hands the same one.
     : ~ s m_phi_ids ``
+    // …plus the candidates a live arm INHERITED from a join of its own.
+    // gen_cond has carried these up since #899 (`? c ? c a ( make ) …`);
+    // the `??` twin did not, so `?? c { 1 → ? d a a  _ → ( make ) }`
+    // handed `a`'s buffer over with nothing recorded and freeing both
+    // names compiled clean — a confirmed heap use-after-free.
+    : ~ s m_inner_ids ``
+    // Stack-reference provenance across the arms (§2.3), gen_cond's
+    // twin: the deepest referent depth any LIVE arm's value carries. A
+    // `??` selecting a closure that captured a caller frame by pointer
+    // hands that frame out exactly as a bare `^ f` would.
+    : ~ i m_refdep 0
     : ~ i m_live_arms 0
     : ~ i m_alias_arms 0
     : ~ i m_distinct 0
@@ -10875,6 +10920,12 @@
             // come from the token itself, not a stale last-ident
             // (`( f Red )` must not bless).
             ( nurl_sym_def syms `__last_join_variant_enum__` `` )
+            // Reset the escape side-channel too, so this arm's referent
+            // depth is this arm's and not the scrutinee's residue.
+            ( nurl_sym_def syms `__last_expr_refdepth__` `` )
+            // …and the inherited-handle channel, so an arm's snapshot is
+            // its own rather than the previous arm's leftovers.
+            ( nurl_sym_def syms `__last_phi_idents__` `` )
             : i arm_tt0 ( nurl_lex_type lex )
             : s arm_v0 ( nurl_lex_val lex )
             : ~ s arm_result ( gen_stmt lex syms cg )
@@ -10885,6 +10936,11 @@
             : s arm_slice_flag ( nurl_str_cat ( nurl_sym_get syms `__last_slice_owned__` ) `` )
             : s arm_str_flag ( nurl_str_cat ( nurl_sym_get syms `__last_call_ret_owned__` ) `` )
             : s arm_retid ( nurl_str_cat ( nurl_sym_get syms `__last_ident_name__` ) `` )
+            // Referent depth of this arm's value, read before the arm
+            // scope's pop takes the binding's `__refdepth` with it.
+            : i arm_refdep ( bck_expr_refdepth syms arm_retid )
+            : s arm_inner_ids ( nurl_str_cat
+            ( nurl_sym_get syms `__last_phi_idents__` ) `` )
             : b arm_alias != 0 ( nurl_sym_len syms `__last_value_alias__` )
             // Tracked-ident arm value → hand the phi a COPY, emitted in
             // this arm's block (gen_cond's t_dup twin): the old cancel-
@@ -11007,6 +11063,16 @@
                     // arm_retid alone may name the last ident loaded
                     // inside a trailing call), and collect the name.
                     = m_live_arms + m_live_arms 1
+                    // Stack-reference provenance: one live arm carrying
+                    // the reference is enough — the join dangles on that
+                    // path. A `^`-arm never reaches this phi and was
+                    // checked at its own return.
+                    ? > arm_refdep m_refdep { = m_refdep arm_refdep } {}
+                    // Whatever a nested join in this arm could have
+                    // produced, this join can produce too.
+                    ? != 0 ( nurl_str_len arm_inner_ids )
+                    { = m_inner_ids ( __phi_ids_union m_inner_ids arm_inner_ids ) }
+                    {}
                     ? & & ( is_ident_tok arm_tt0 ) ( seq arm_v0 arm_retid )
                     != 0 ( nurl_str_len arm_retid )
                     { = m_alias_arms + m_alias_arms 1
@@ -11128,12 +11194,26 @@
         ( seq ( nurl_llty phi_type ) `i8*` ) `1` `` )
         // Handle provenance (gen_cond's twin): the bindings this value
         // may have come from, and whether it definitely came from one.
+        // Fold the inherited candidates into the accumulator rather than
+        // passing the union's result straight into nurl_sym_def: a fresh
+        // owned call result handed to a builtin as an argument is not
+        // collected, and `__phi_ids_union` is defined below this function
+        // so the call site has no ownership summary to work from either.
+        // One publish per value-bearing `??` leaked its buffer — 67 of
+        // them compiling net_tcpstack, caught by the LSan-pinned tests.
+        // Assigning into the `~ s` accumulator is the idiom gen_cond
+        // already uses for the same call, and it frees the old value.
+        ? != 0 ( nurl_str_len m_inner_ids )
+        { = m_phi_ids ( __phi_ids_union m_phi_ids m_inner_ids ) } {}
         ( nurl_sym_def syms `__last_phi_idents__` m_phi_ids )
         ( nurl_sym_def syms `__last_phi_cause__`
         `its handle is one of the values a '??' selected between` )
+        // An INHERITED candidate came from a join that already had a
+        // choice, so this join cannot promise it on every path — the
+        // same rule gen_cond applies to its `t_inner_ids`/`e_inner_ids`.
         ( nurl_sym_def syms `__last_phi_definite__`
-        ? & & > m_live_arms 0 == m_alias_arms m_live_arms
-        == 1 m_distinct `1` `` )
+        ? & & & > m_live_arms 0 == m_alias_arms m_live_arms
+        == 1 m_distinct == 0 ( nurl_str_len m_inner_ids ) `1` `` )
         // Borrow propagation only matters when the match YIELDS an auto-Drop
         // enum (the value a `:`-binding might wrongly drop). For any other
         // result type — String, i, … — reset so a match on a borrowed param
@@ -11161,6 +11241,13 @@
         // residue must not leak out as this match's proof.
         ( nurl_sym_def syms `__last_join_variant_enum__`
         ? & m_ven_ok != 0 ( nurl_str_len m_ven ) m_ven `` )
+        // Stack-reference provenance of the `??`-result (§2.3). Every
+        // exit of this function publishes it, because the per-arm reset
+        // above otherwise leaves the LAST arm's depth standing as the
+        // whole match's answer — the residue bug the ownership channels
+        // above were each fixed for in turn.
+        ( nurl_sym_def syms `__last_expr_refdepth__`
+        ? > m_refdep 0 ( nurl_str_int m_refdep ) `` )
         ^ final_reg
     } {}
     // Arms of DIFFERENT integer widths: join losslessly at 64 bits over the
@@ -11187,6 +11274,8 @@
         ( nurl_sym_def syms `__last_phi_idents__` `` )
         ( nurl_sym_def syms `__last_phi_cause__` `` )
         ( nurl_sym_def syms `__last_phi_definite__` `` )
+        // …nor a stack reference.
+        ( nurl_sym_def syms `__last_expr_refdepth__` `` )
         ^ final64
     } {}
     ( nurl_set_last_type `void` )
@@ -11194,6 +11283,8 @@
     ( nurl_sym_def syms `__last_phi_idents__` `` )
     ( nurl_sym_def syms `__last_phi_cause__` `` )
     ( nurl_sym_def syms `__last_phi_definite__` `` )
+    // A valueless `??` hands nothing out — clear the per-arm residue.
+    ( nurl_sym_def syms `__last_expr_refdepth__` `` )
     ^ ( nurl_str_cat `undef` `` )
 }
 
@@ -15427,6 +15518,41 @@
     ( __arg_named_struct_mismatch vt dt ) ( __arg_str_cstr_mismatch vt dt )
 }
 
+// Escape analysis for `= . obj field rhs` (docs/MEMORY.md §2.3). The
+// whole-binding form `= obj rhs` has always been checked (bck_esc_assign);
+// the FIELD form was not, so `= . box cb f` walked a stack reference into
+// a longer-lived struct with nothing said, and returning that struct
+// handed the caller a pointer into the dead frame — confirmed
+// stack-use-after-return under ASan.
+//
+// Two effects, matching bck_esc_assign: the struct INHERITS the
+// reference (so a later `^ obj` / `vec_push obj` fires), and a store
+// into a struct that outlives the referent is reported here. The
+// inherit-only-upwards rule is deliberate: a field store overwrites one
+// field, so a non-reference RHS cannot prove the OTHER fields stopped
+// referencing anything. Missing a diagnostic is the safe direction;
+// clearing the mark would invent a clean bill of health.
+@ bck_esc_field_store i lex i syms i line i refdepth → v {
+    ? | == g_borrowck 0 == refdepth 0 {} {
+        : s obj ( nurl_str_cat ( nurl_sym_get syms `__last_field_obj__` ) `` )
+        ? == 0 ( nurl_str_len obj ) {} {
+            : s rd ( nurl_sym_get2 syms obj `__refdepth` )
+            : i rdv ? == 0 ( nurl_str_len rd ) 0 ( nurl_str_to_int rd )
+            ? > refdepth rdv
+            { ( nurl_sym_def syms ( nurl_str_cat obj `__refdepth` )
+                ( nurl_str_int refdepth ) ) }
+            {}
+            : s bd ( nurl_sym_get2 syms obj `__bdepth` )
+            : i bdv ? == 0 ( nurl_str_len bd ) 1 ( nurl_str_to_int bd )
+            ? < bdv refdepth
+            { ( bck_esc_warn lex line ( nurl_str_cat3
+                `storing into a field of '` obj
+                `' a value that references a more deeply scoped binding by pointer — it dangles once that inner scope exits` ) ) }
+            {}
+        }
+    }
+}
+
 // The value side of a field store, wherever the store lands. There are
 // eight of those sites in gen_field_store — one per shape (slice,
 // pointer-to-struct, struct-by-value, indexed, …) — and a bare
@@ -15438,13 +15564,30 @@
 @ gen_field_rhs i lex i syms i cg → s {
     ? ( is_ident_tok ( nurl_lex_type lex ) )
     { ( lint_note_released ( nurl_lex_val lex ) ) } {}
-    ^ ( gen_expr lex syms cg )
+    // §2.3: snapshot the RHS's first token, then clear the escape
+    // side-channel so the depth read after gen_expr is this RHS's own
+    // and not the OBJECT expression's residue. Every field-store branch
+    // in gen_field_store routes its RHS through here, so hooking the one
+    // shared entry point covers the named-field, slice-element and
+    // pointer-index spellings alike.
+    : i __fs_tt ( nurl_lex_type lex )
+    : s __fs_val ( nurl_str_cat ( nurl_lex_val lex ) `` )
+    : i __fs_line ( nurl_lex_line lex )
+    ( nurl_sym_def syms `__last_expr_refdepth__` `` )
+    : s __fs_v ( gen_expr lex syms cg )
+    ( bck_esc_field_store lex syms __fs_line ( bck_expr_refdepth syms
+    ? ( is_ident_tok __fs_tt ) __fs_val `` ) )
+    ^ __fs_v
 }
 
 @ gen_field_store i lex i syms i cg → s {
     ( nurl_lex_advance lex )  // consume '.'
     // Save object name before gen_expr consumes the token (needed for struct-by-value alloca lookup)
     : s obj_name ? ( is_ident_tok ( nurl_lex_type lex ) ) ( nurl_lex_val lex ) ``
+    // …and publish it for gen_field_rhs's escape hook (§2.3), which sees
+    // only the RHS. Every branch below routes its RHS through that one
+    // function, so the target binding has to travel on a side-channel.
+    ( nurl_sym_def syms `__last_field_obj__` obj_name )
     : s pv ( gen_expr lex syms cg )  // pointer/aggregate value
     : s pt ( nurl_get_last_type )  // LLVM type, e.g. "%Node*", "i64*", "{ T*, i64 }", or "%Pair"
 

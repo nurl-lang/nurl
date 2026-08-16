@@ -1,0 +1,13 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/borrow_escape_join.nu:26: error: returning a value that references a stack binding by pointer — it dangles after this function returns (move the captured data to a heap-backed handle)
+    ^ ? > . c n 0 f f
+compiler/tests/borrow_escape_join.nu:33: error: returning a value that references a stack binding by pointer — it dangles after this function returns (move the captured data to a heap-backed handle)
+    ^ ?? . c n { 0 → f _ → f }
+compiler/tests/borrow_escape_join.nu:42: error: returning a value that references a stack binding by pointer — it dangles after this function returns (move the captured data to a heap-backed handle)
+    ^ t
+compiler/tests/borrow_escape_join.nu:50: error: returning a value that references a stack binding by pointer — it dangles after this function returns (move the captured data to a heap-backed handle)
+    ^ @ Slot { ? > . c n 0 f f }
+compiler/tests/borrow_escape_join.nu:58: error: passing a value that references a stack binding by pointer to 'vec_push' — it escapes the current stack frame and dangles (move it to a heap-backed handle)
+    ( vec_push [Slot] heap @ Slot { ? > . c n 0 f f } )
+error: compilation aborted — 5 borrow-checker violations (re-run with --no-borrowck to bypass)
