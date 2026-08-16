@@ -1096,6 +1096,15 @@
 // that need to keep building. `--strict-arity` is accepted as a no-op
 // for compatibility (CI scripts pass it).
 : ~ i g_strict_arity 1  // 0 when --no-strict-arity passed on the CLI
+// Nesting depth of "we are parsing an enclosing construct's CONDITION".
+// The arity check above fires when a `{` follows a completed ternary,
+// on the theory that the blocks are stray. Inside a condition that is
+// false: `~ & ok < i 0 ? >= s 0 s N { body }` is correct code, and the
+// `{` opens the LOOP BODY. The check could not tell, so it rejected the
+// program — a hard error by default, on a shape with no rewrite. It is
+// raised around the condition of `?` and `~` and consulted by the
+// check, which stays silent while it is non-zero.
+: ~ i g_cond_depth 0
 : ~ i g_ptrtab 0  // sym handle for the dangling-borrow tracker (unscoped)
 : ~ i g_bck 0  // sym handle for the borrow checker's per-function
 //  data (statement list etc.); allocated in main()
@@ -9160,7 +9169,11 @@
     : i bck_ccol ( nurl_lex_col lex )
     ( nurl_lex_advance lex )
     // The condition is a value operand — a `^` here is a cascade.
+    // Parsing a CONDITION: a `{` after a ternary in here opens this
+    // construct's own block, not a stray one (see g_cond_depth).
+    = g_cond_depth + g_cond_depth 1
     : ~ s cv ( gen_operand lex syms cg )
+    = g_cond_depth - g_cond_depth 1
     : s ct ( nurl_get_last_type )
     // Allow non-i1 integer conditions (e.g. `? & i64a i64b { … }`) by
     // narrowing to i1 via `icmp ne … 0`.
@@ -9538,7 +9551,7 @@
     // default (--no-strict-arity demotes it to a warning): as a warning
     // the program compiled with wrong conditional logic and nothing
     // downstream could tell.
-    ? == ( nurl_lex_type lex ) TT_LBRACE
+    ? & == g_cond_depth 0 == ( nurl_lex_type lex ) TT_LBRACE
     { ? != 0 g_strict_arity
         { ( die_pos lex bck_cline bck_ccol `'?' consumed bare then/else values, but a '{ ... }' block follows. Likely too few '&'/'|' operators in the condition (each is BINARY — write '& & a b c d' for n-ary). If this shape is intentional, --no-strict-arity demotes it to a warning.` ) }
         { ( warn_pos lex bck_cline bck_ccol `'?' consumed bare then/else values, but a '{ ... }' block follows. Likely too few '&'/'|' operators in the condition (each is BINARY — write '& & a b c d' for n-ary).` ) } }
@@ -11688,7 +11701,9 @@
     ( nurl_print `  br label %` ) ( nurl_print lc ) ( emit_dbg_eol )
     ( emit ( nurl_str_cat lc `:` ) )
     ( nurl_sym_def syms `__cur_lbl__` lc )
+    = g_cond_depth + g_cond_depth 1
     : ~ s cv ( gen_expr lex syms cg )
+    = g_cond_depth - g_cond_depth 1
     : s cvt ( nurl_get_last_type )
     ? == ( nurl_lex_type lex ) TT_LBRACE
     {
