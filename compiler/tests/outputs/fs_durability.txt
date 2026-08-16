@@ -1,0 +1,12 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+PASS file_sync on a written handle
+PASS 100 bytes landed
+PASS file_truncate shortens
+PASS truncation keeps the prefix intact
+PASS file_truncate to empty
+PASS file_truncate rejects a missing path
+PASS dir_sync on a directory
+write_bytes bytes:⚡:end

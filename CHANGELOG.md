@@ -8,6 +8,61 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`packages/lsmdb` — an embedded, crash-safe key/value store in pure
+  NURL.** A real LSM tree: a write-ahead log, a skip-list memtable over
+  a byte arena, immutable SSTables (CRC-32 per block, Bloom filter,
+  block index, 48-byte footer), ordered range scans, compaction, and
+  snapshot reads. A write is fsynced before `put` returns; every crash
+  point in the flush and compact sequences recovers to a correct state;
+  a torn log tail loses exactly the write that was never acknowledged;
+  a block that fails its checksum fails the read rather than returning
+  something wrong. Ships as a CLI and as a library.
+
+- **`file_sync` / `dir_sync` (`std/fs`) — there was no fsync at all.**
+  `file_flush` pushes libc's buffer into the kernel, which survives the
+  process dying and not the machine dying, so nothing in the tree could
+  promise a write had reached the device. `file_sync` is the barrier a
+  write-ahead log needs, and `dir_sync` is what makes a
+  publish-by-rename durable: the file's bytes and the directory entry
+  naming them are separate writes, and syncing only the file can leave
+  a recovered tree where the data is on disk and the name reaching it
+  is not. One runtime shim behind both (`fsync` on unix, `_commit` on
+  Windows, a no-op on WASI).
+
+- **`file_truncate` (`std/fs`).** The operation an append-only file
+  cannot do without: after a crash, recovery keeps the records up to
+  the last intact one and the file has to END there. Leaving the torn
+  bytes in place is not untidiness — replay stops at them, so every
+  later append lands behind bytes the next replay refuses to walk past
+  and is silently invisible from then on.
+
+- **`write_bytes` (`core/io`) — binary stdout.** NURL could read binary
+  from stdin (`read_n_bytes`) but not write it back out: every print
+  takes a NUL-terminated string, so a program holding arbitrary bytes —
+  a value out of a database, a decoded image, a proxied response body —
+  had its output silently truncated at the first zero byte.
+  `write_bytes` emits the buffer exactly, sharing stdout's buffer and
+  tty-flush rule with the ordinary prints so mixing the two never
+  reorders output.
+
+### Changed
+
+- **`std/deflate`'s CRC-32 is table-driven.** It computed the checksum
+  bitwise — eight shift-mask-xor rounds per byte — which a profile
+  found taking 66 % of the cycles of a database point read. It now
+  builds a Sarwate table for inputs from 512 bytes up (2048 steps to
+  build, then one lookup per byte; the two break even near 300) and
+  keeps the bitwise path for short inputs, which would otherwise pay
+  the setup to checksum a gzip header. A new `Crc32` context
+  (`crc32_ctx` / `crc32_ctx_hash`) holds the table for callers that
+  checksum thousands of buffers instead of one. Same values as before:
+  `tools/crc32_gate.sh` checks 610 of them — every length across the
+  threshold, plus chained updates — against python3's `zlib.crc32`, and
+  now runs in CI. Measured on a 4 KiB block: 7.8x. Every gzip, tar and
+  PNG user gets it.
+
 ## [0.44.2] — 2026-08-16
 
 The last package that could not be installed, and the three defects

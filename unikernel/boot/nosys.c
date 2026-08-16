@@ -112,3 +112,18 @@ void nurl_proc_free(long long h)           { (void)h; }
 int mkstemp(char *tmpl)                     { (void)tmpl; return ns_refuse(NS_EROFS); }
 int rename(const char *a, const char *b)    { (void)a; (void)b; return ns_refuse(NS_EROFS); }
 int rmdir(const char *p)                    { (void)p; return ns_refuse(NS_EROFS); }
+
+/* Durability, on a filesystem that is a tar inside the image.
+ *
+ * Both refuse rather than succeed quietly, for the reason the whole file
+ * exists: fsync's contract is "what you wrote is on the device", and a
+ * caller that reaches it here never got to write anything — `open` for
+ * writing was refused first. Answering 0 would tell a write-ahead log
+ * that its records are durable on a machine with nowhere to put them,
+ * which is the one lie this directory refuses to tell. truncate is the
+ * same read-only story as rename and rmdir above.
+ *
+ * A guest that grows a writable device (virtio-blk) implements these
+ * there, and every caller stays put. */
+int fsync(int fd)                           { (void)fd; return ns_refuse(NS_EROFS); }
+int truncate(const char *p, long long len)  { (void)p; (void)len; return ns_refuse(NS_EROFS); }

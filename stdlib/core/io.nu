@@ -167,6 +167,24 @@ $ `stdlib/core/posix.nu`  // read(2) for the pure-NURL stdin slurp
     ^ != 0 ( nurl_stdin_eof )
 }
 
+// ── Binary stdout ───────────────────────────────────────────────────
+//
+// The write-side dual of read_n_bytes. Every print in the language takes
+// a NUL-terminated string, so a program holding arbitrary bytes — a value
+// read out of a database, a decoded image, a response body being
+// proxied — could not emit them: output stopped at the first zero byte,
+// silently. write_bytes writes the buffer exactly, NULs and all.
+//
+// It shares stdout's stdio buffer and tty-flush rule with the ordinary
+// prints, so mixing the two never reorders output (unlike a raw write(2)
+// on fd 1, which would need an explicit ( flush ) first).
+& `c` @ nurl_print_bytes s p i n → v
+
+@ write_bytes ( Vec u ) v → v {
+    : i n ( vec_len [u] v )
+    ? > n 0 { ( nurl_print_bytes # s ( vec_data [u] v ) n ) } {}
+}
+
 @ flush → v {
     ( nurl_flush_stdout )
 }
