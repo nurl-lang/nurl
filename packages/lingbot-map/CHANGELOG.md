@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.9.2 — 2026-08-16
+
+- **The package could not be built by any toolchain.** Two `?`
+  statements carried a stray fourth block (`? okp {} { … } {}`), which
+  the n-ary arity check has rejected as a hard error since the compiler
+  made that trap fatal — so `nurlpkg install lingbot-map` failed at
+  `src/aggregator.nu` and had done since 0.9.1 was published. The stray
+  blocks are gone. Found by installing every registry package against a
+  fresh toolchain; the third site in the same file was a compiler false
+  positive (a ternary ending a loop condition) and is fixed there.
+
 ## 0.9.0 — 2026-07-29
 
 - Viewer: `--host`/`--addr` (bind address, default 127.0.0.1) and

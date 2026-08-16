@@ -895,7 +895,7 @@ $ `write.nu`
             ( __st_ck cn == ( gguf_align g ) 32 `alignment is 32` )
             ( __st_ck cn == ( gguf_n_kv g ) 14 `kv count` )
             ( __st_ck cn == ( gguf_n_tensors g ) 6 `tensor count` )
-            ( __st_ck cn ( nurl_str_eq ( gguf_kv_str_or g `general.architecture` `` ) `selftest` ) `str kv` )
+            ( __st_ck cn != 0 ( nurl_str_eq ( gguf_kv_str_or g `general.architecture` `` ) `selftest` ) `str kv` )
             ( __st_ck cn == ( gguf_kv_int_or g `selftest.u32` 0 ) 4000000000 `u32 kv` )
             ( __st_ck cn == ( gguf_kv_int_or g `selftest.i32` 0 ) -12345 `i32 kv (negative)` )
             ( __st_ck cn == ( gguf_kv_int_or g `selftest.u64` 0 ) 8589934592 `u64 kv (> 32 bit)` )
