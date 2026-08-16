@@ -19,6 +19,7 @@ its question at one syntactic spelling and missed the others:
 | #901 | a box-shaped payload slot | a slot declared as a number |
 | #902 | mutation inside the thread closure | mutation one call deep |
 | #910 | a capture *spelled* `Rc` | the Rc one field / element / payload / Arc / closure / boundary away |
+| #915 | a reference returned as `^ p` / `^ @ T { p }` | the same reference one aggregate deeper, inside a closure's env, through a local name, through a second helper, or out of a callee defined below the call |
 
 None of these was the analysis being *too weak in theory*. Each was coverage
 across spellings that nobody had enumerated. That is mechanizable, so this
@@ -67,7 +68,18 @@ accepted where its class says reject is escalated: rebuilt with
   oracle, which is what `tools/fuzz` is for.
 
 That escalation is the whole difference between a bug finder and a
-generator of plausible-looking noise.
+generator of plausible-looking noise — as long as the sanitizer can
+actually see the program. It could not, for a year: ASan instruments
+only functions carrying the `sanitize_address` attribute, which a C
+frontend adds and hand-written IR does not have, so every escalation
+saw **only** what the sanitized runtime's `malloc` interceptors caught.
+Heap double-free and heap use-after-free showed up; anything about the
+code nurlc emitted did not. A dangling *stack* reference — the whole
+content of the two escape classes — ran clean and was filed
+UNCONFIRMED, the harness reading its own blind spot as evidence of
+innocence. The escalation now stamps the attribute on every `define`
+and runs with `detect_stack_use_after_return=1`, and those programs
+report `stack-use-after-return` immediately.
 
 ## The classes
 
@@ -95,6 +107,36 @@ the output useless for deciding what to fix first.
   it. The rule is a conservative guard, so a gap is an inconsistency in
   what gets *diagnosed* — the direct push warns, the same push one call
   deep does not.
+- **`ret-escape`** *(memory-unsafety)* — a helper hands a caller's stack
+  reference back OUT through its result (§2.8) and the caller returns it.
+  What varies is only how the reference rides out — bare `^ p`, a struct
+  field, a field one level deeper, a closure's env, a local name, a
+  second helper, one arm of a join — and whether the callee's summary
+  exists yet at the call (a callee defined below it, or a generic).
+- **`escape-into-callee`** *(memory-unsafety)* — the mirror image: a
+  stack reference passed INTO a helper that retains it past the call
+  (§2.7). Definition order is the axis: `leaky → outer → detach` written
+  top-down must fail exactly as the same three functions written
+  bottom-up do.
+- **`aliased-mutation`** *(diagnostic-consistency)* — a binding passed
+  `inout` and also read by a sibling argument (§2.4). Not unsafety: the
+  read is a snapshot taken before the callee runs, so the DEFAULT rule
+  stays on the bare-identifier spelling and `( grow v ( vec_len v ) )`
+  keeps compiling. The class is written against `--strict-borrowck`,
+  where a field read was reported and the same read one parenthesis
+  deeper was not.
+- **`stale-borrow`** *(memory-unsafety)* — a pointer taken from a
+  container's buffer and read after the container was grown or released
+  (§2.10). It reads plausible garbage rather than crashing, which is why
+  it is worth diagnosing; the mutation counts inline, in a loop, and one
+  call deep.
+- **`forward-callee-move`** *(memory-unsafety)* — the MOVE half of the
+  interprocedural summaries (auto-`sink`, returned handle) at a call to
+  a callee defined BELOW it. The escape summaries park what they cannot
+  answer; these answered inline, so `( release v )` with `release`
+  defined after `main` freed the buffer under the following push in
+  silence, while the same program written the other way round was
+  rejected.
 - **`controls`** — correct programs, in a class of their own. A checker that
   rejects these is worse than one that misses a bug: every entry is code
   someone would reasonably write, and one of them (`mutex-guarded-mutation`)

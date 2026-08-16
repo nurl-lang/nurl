@@ -1,0 +1,7 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/borrow_strict_nested_alias.nu:35: error: 'c' is mutably borrowed (passed as 'inout') by this call and also read by another argument of it — exclusive access is violated
+    ( bump_by c ( peek c ) )
+compiler/tests/borrow_strict_nested_alias.nu:38: error: 'c' is mutably borrowed (passed as 'inout') by this call and also read by another argument of it — exclusive access is violated
+    ( bump_by c + ( twice ( peek c ) ) 1 )
+error: compilation aborted — 2 borrow-checker violations (re-run with --no-borrowck to bypass)

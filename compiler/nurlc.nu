@@ -992,6 +992,21 @@
 // reads it (inline closure) or that per-binding key (named closure).
 : ~ s g_last_closure_nonsend ``
 
+// --strict-borrowck only: every binding NAME read while generating the
+// current call argument, including reads nested inside a sub-expression
+// or a called helper's argument list. §2.4 flags an `inout` binding
+// aliased by a sibling BARE-IDENTIFIER argument, and strict mode
+// generalises that to a `. obj field` read; a read one parenthesis
+// deeper (`( f inout c ( peek c ) )`) is the same situation again, and
+// only a per-argument log of what was actually loaded can see it.
+//
+// A real global with save/restore discipline around each argument, not
+// a `syms` key: a nested call resets its own argument channels, so a
+// scoped list would lose everything but the innermost argument's reads.
+// Written only under --strict-borrowck, so the default mode carries no
+// cost and emits identical IR.
+: ~ s g_arg_ident_log ``
+
 // Thread-safety, the SHARED-MUTATION half (docs/MEMORY.md §6.5). Set to
 // the offending binding name while a closure body is compiled if that
 // body mutates the CONTENTS of a value it obtained from `arc_get`.
@@ -1193,6 +1208,40 @@
 // reference arguments are ever parked, so the list stays tiny.
 // Allocated in main(); the list lives under key `l`.
 : ~ i g_pending_escape 0
+
+// Deferred summary IMPLICATIONS (docs/MEMORY.md §2.7 / §2.8). A summary
+// is inferred as each body compiles, so a body that hands its parameter
+// to a callee defined BELOW it — or to a generic, whose instantiation
+// compiles at the flush — learns nothing at that point, and its own
+// summary is still empty when the parked call-site check replays
+// against it. That is the *pure forward chain*: `leaky → outer →
+// detach` written in that order compiled clean while the identical
+// program written bottom-up was rejected.
+//
+// So the propagation step itself is parked. Each record is a 5-word
+// implication `F pidx cn fn aidx` — "parameter `pidx` of `F` escapes
+// (respectively, is returned) if parameter `aidx` of the callee does" —
+// and resolve_pending_impls() runs them to a fixed point once every
+// body, including generic instantiations, has compiled. Key `e` holds
+// the escape implications, key `r` the returned-parameter ones.
+//
+// Only calls to a callee that has NOT been compiled yet are parked
+// (g_fn_compiled), because that is exactly when the inline inference
+// cannot answer — otherwise a self-compile would park a record per
+// parameter-passing call site in the whole program. Allocated in main().
+: ~ i g_pending_impl 0
+
+// Functions whose borrow-check walk is parked until the whole module
+// has compiled (see borrowck_fn_end). `n` is the count; `s<i>` / `p<i>`
+// / `f<i>` hold each parked function's statement rows, parameter names
+// and source file. Allocated in main().
+: ~ i g_deferred_bck 0
+
+// Names of functions whose body has been compiled — the "is the inline
+// summary trustworthy for this callee?" test. Set by
+// gen_fn_decl_concrete after the body, read by gen_call to decide
+// whether a propagation must be parked as an implication.
+: ~ i g_fn_compiled 0
 
 // Per-function returned-parameter map.
 // `g_fn_ret_param[fname]` is the space-separated list of 0-based
@@ -2917,6 +2966,12 @@
     ( nurl_sym_def syms `__last_agg_owned_fields__` `` )
     ( nurl_sym_def syms `__last_call_ret_struct_fields__` `` )
     ( nurl_sym_def syms `__last_agg_param_idents__` `` )
+    ( nurl_sym_def syms `__last_closure_param_idents__` `` )
+    // …and the deferred-call channels, so a `^ x` return can never read
+    // a forward call left over from an earlier statement.
+    ( nurl_sym_def syms `__last_call_forward__` `` )
+    ( nurl_sym_def syms `__last_call_ref_args__` `` )
+    ( nurl_sym_def syms `__last_call_param_args__` `` )
     // Return-escape inference (docs/MEMORY.md §2.8): snapshot whether
     // this return is a bare identifier (`^ p`) so the post-gen_operand
     // check can tell a direct parameter passthrough from a derived
@@ -2930,9 +2985,71 @@
     // stack reference out through the call result.
     ? & ( is_ident_tok ret_first_tt )
     ( seq ( nurl_sym_get syms `__last_ident_name__` ) ret_first_val )
-    { ( bck_record_ret_param syms ret_first_val )
+    { ( bck_record_ret_param_list syms ret_first_val )
         // …and the ownership half: `^ p` hands p's HANDLE out too.
         ( bck_record_ret_alias syms ret_first_val ) }
+    {}
+    // §2.8 (through a call): `^ ( id cb )` hands `cb` back out when
+    // `id` returns its own parameter. gen_call published which
+    // arguments sit at those positions; expanding them through
+    // bck_param_carriers makes the chain transitive to any depth.
+    ? & != g_borrowck 0 ret_is_direct_call
+    { : s __rpc ( nurl_sym_get syms `__last_call_ret_param_idents__` )
+        ( bck_record_ret_param_list syms __rpc ) }
+    {}
+    // §2.8 (deferred): the same return, when the callee has not been
+    // compiled yet. Nothing can be decided here — whether the result is
+    // a reference depends on a summary that does not exist — so both
+    // halves are parked and replayed after the module:
+    //
+    //   * a CHECK per stack-reference argument: if the callee turns out
+    //     to return that position, this return hands a dangling
+    //     reference to its caller;
+    //   * an IMPLICATION per argument that is one of THIS function's
+    //     parameters: if the callee returns that position, so does this
+    //     function, and its own callers must see it.
+    ? & & != g_borrowck 0 ret_is_direct_call
+    != 0 ( nurl_str_len ( nurl_sym_get syms `__last_call_forward__` ) )
+    { : s __fw ( nurl_sym_get syms `__last_call_forward__` )
+        : s __fw_cn ( str_first_word __fw )
+        : s __fw_fn ( str_first_word ( str_skip_word __fw ) )
+        : ~ s __fw_r ( nurl_sym_get syms `__last_call_ref_args__` )
+        ~ != 0 ( nurl_str_len __fw_r ) {
+            : s __fw_a ( str_first_word __fw_r )
+            = __fw_r ( str_skip_word __fw_r )
+            : s __fw_rec ( nurl_str_cat3
+            ( nurl_str_cat3 __fw_cn ` ` __fw_fn )
+            ( nurl_str_cat4 ` ` __fw_a ` ` ( nurl_str_int bck_line ) )
+            ( nurl_str_cat ` ` ( nurl_lex_filename lex ) ) )
+            ( __park_append g_pending_escape `r` __fw_rec )
+        }
+        : ~ s __fw_p ( nurl_sym_get syms `__last_call_param_args__` )
+        ~ != 0 ( nurl_str_len __fw_p ) {
+            : s __fw_ai ( str_first_word __fw_p )
+            = __fw_p ( str_skip_word __fw_p )
+            : s __fw_pn ( str_first_word __fw_p )
+            = __fw_p ( str_skip_word __fw_p )
+            : s __fw_names ( nurl_sym_get syms `__fn_param_names__` )
+            : i __fw_pi ( str_word_index __fw_names __fw_pn )
+            ? >= __fw_pi 0
+            { : s __fw_irec ( nurl_str_cat3
+                ( nurl_str_cat3 ( nurl_str_int __fw_pi ) ` ` __fw_cn )
+                ( nurl_str_cat3 ` ` __fw_fn ` ` )
+                __fw_ai )
+                ( __park_append syms `__fn_pending_rp_impl__` __fw_irec ) }
+            {}
+        } }
+    {}
+    // §2.8 (through a join): `^ ? c cb ( fresh )` returns the parameter
+    // on one path, which is enough — a caller that passes a stack
+    // reference and keeps the result holds a dangling one on that path.
+    // The arms' candidate list is the same one the ownership half
+    // below reads; only `?` / `??` returns consult it, because after a
+    // CALL that channel holds the handle-alias answer, which is a
+    // different question (g_fn_ret_alias vs g_fn_ret_param).
+    ? & != g_borrowck 0 ret_is_det_join
+    { : s __rpj ( nurl_sym_get syms `__last_phi_idents__` )
+        ( bck_record_ret_param_list syms __rpj ) }
     {}
     // `^ ? c p ( fresh )` returns p's handle on one path. gen_cond /
     // gen_match published which bindings their arms could select
@@ -2956,7 +3073,19 @@
         ~ != 0 ( nurl_str_len __rp_rest ) {
             : s __rp_w ( str_first_word __rp_rest )
             = __rp_rest ( str_skip_word __rp_rest )
-            ( bck_record_ret_param syms __rp_w )
+            ( bck_record_ret_param_list syms __rp_w )
+        } }
+    {}
+    // §2.8 (closure form): `^ \ → … cb …` hands the parameters this
+    // closure captured back out inside its env — the same situation as
+    // the aggregate above, one syntax away. gen_closure_expr published
+    // which enclosing parameters it captured.
+    ? & != g_borrowck 0 == ret_first_tt TT_BACKSLASH
+    { : ~ s __cp_rest ( nurl_sym_get syms `__last_closure_param_idents__` )
+        ~ != 0 ( nurl_str_len __cp_rest ) {
+            : s __cp_w ( str_first_word __cp_rest )
+            = __cp_rest ( str_skip_word __cp_rest )
+            ( bck_record_ret_param_list syms __cp_w )
         } }
     {}
     // XOR confusion (critic v0.9.0 §1): `^ X Y` on the same line is
@@ -3467,6 +3596,11 @@
         { ( vis_check_xref lex name `global` ) }
         {}
         ( nurl_sym_def syms `__last_ident_name__` name )
+        // §2.4 (strict): log this read for the enclosing call argument.
+        ? & != g_strict_borrowck 0 ! ( str_contains_word g_arg_ident_log name )
+        { = g_arg_ident_log ? == 0 ( nurl_str_len g_arg_ident_log )
+            ( nurl_str_cat name `` ) ( nurl_str_cat3 g_arg_ident_log ` ` name ) }
+        {}
         // Every READ of a guarded binding is counted here. gen_call marks
         // the subset that were arguments to a proven-copying consumer; the
         // guard frees only when the two counts agree, so an unforeseen use
@@ -7603,7 +7737,14 @@
         // read freed token text (heap-UAF in the stage-2 self-compile
         // once nurl_lex_val's ownership became visible to auto-drop).
         : ~ s bck_arg_root ( nurl_str_cat bck_arg_val `` )
-        ? & != g_strict_borrowck 0 == bck_arg_tt TT_DOT {
+        // Computed in BOTH modes. The aliasing test below still consults
+        // it only under --strict-borrowck (bck_treat_as_ident gates
+        // that), but the §2.7 escape summary needs it in the default
+        // mode too: `( thread_spawn . box cb )` detaches a field of
+        // `box`, which makes the whole parameter escape — the caller
+        // that handed a stack reference in as `box` has to hear about
+        // it, and the field spelling was the one that said nothing.
+        ? == bck_arg_tt TT_DOT {
             : i pk_t ( nurl_lex_peek_type lex )
             ? ( is_ident_tok pk_t ) { = bck_arg_root ( nurl_lex_peek_val lex ) } {}
         } {}
@@ -7681,9 +7822,51 @@
             }
         }
         { ( nurl_sym_def syms `__in_call_arg__` `1` )
+            // §2.4 (strict): collect the names this argument reads, with
+            // save/restore so an enclosing argument keeps its own.
+            : ~ s __al_saved ( nurl_str_cat g_arg_ident_log `` )
+            = g_arg_ident_log ``
             = av ( gen_operand lex syms cg )
             ( nurl_sym_def syms `__in_call_arg__` `` )
             = at ( nurl_get_last_type )
+            ? != g_strict_borrowck 0
+            { : ~ s __al_rest ( nurl_str_cat g_arg_ident_log `` )
+                ~ != 0 ( nurl_str_len __al_rest ) {
+                    : s __al_w ( str_first_word __al_rest )
+                    = __al_rest ( str_skip_word __al_rest )
+                    // The bare-identifier form is already reported by the
+                    // check above; this adds the nested reads.
+                    ? & ! ( seq __al_w bck_arg_root )
+                    ( str_contains_word p5_inout_seen __al_w )
+                    { ( bck_esc_warn lex bck_arg_line ( nurl_str_cat3
+                        `'` __al_w
+                        `' is mutably borrowed (passed as 'inout') by this call and also read by another argument of it — exclusive access is violated` ) ) }
+                    {}
+                    // Visible to a LATER `inout` argument of the same
+                    // call, so the two orders report alike.
+                    ? ! ( str_contains_word p5_seen __al_w )
+                    { = p5_seen ? == 0 ( nurl_str_len p5_seen )
+                        ( nurl_str_cat __al_w `` )
+                        ( nurl_str_cat3 p5_seen ` ` __al_w ) }
+                    {}
+                } }
+            {}
+            // Restore by UNION, not by overwrite: a nested call runs
+            // this same save/restore for its own arguments, so plain
+            // restoration would throw away exactly the reads that are
+            // one parenthesis deeper — the case this log exists for.
+            ? != g_strict_borrowck 0
+            { : ~ s __al_r2 ( nurl_str_cat g_arg_ident_log `` )
+                ~ != 0 ( nurl_str_len __al_r2 ) {
+                    : s __al_w2 ( str_first_word __al_r2 )
+                    = __al_r2 ( str_skip_word __al_r2 )
+                    ? ( str_contains_word __al_saved __al_w2 ) {}
+                    { = __al_saved ? == 0 ( nurl_str_len __al_saved )
+                        ( nurl_str_cat __al_w2 `` )
+                        ( nurl_str_cat3 __al_saved ` ` __al_w2 ) }
+                } }
+            {}
+            = g_arg_ident_log ( nurl_str_cat __al_saved `` )
         }
         // A bare-identifier argument to a consumer proven to COPY is the
         // one read that cannot make a guarded binding's buffer outlive the
@@ -7718,6 +7901,21 @@
             ? & ( is_ident_tok bck_arg_tt ) ( __ptr_mutator fname )
             { ( __ptr_kill bck_arg_val bck_arg_line ) } {}
         } {}
+        // …and the same mutation one call deep (§2.10). A helper whose
+        // summary says it mutates the container handed to THIS parameter
+        // reallocates the buffer exactly as an inline `vec_push` does, so
+        // a pointer taken before the call is just as stale. Without it
+        // the direct spelling warned and `( grow v )` did not, which
+        // reads as "wrap the push in a function" being the cure. Same
+        // summary the iterator-invalidation rule consults (§2.5), and
+        // like that one it is built in codegen order: a helper defined
+        // below its caller is missed (§6.4).
+        ? ( is_ident_tok bck_arg_tt )
+        { : s __pk_mut ( nurl_sym_get g_fn_mutates call_name )
+            ? ( str_contains_word __pk_mut ( nurl_str_int arg_idx ) )
+            { ( __ptr_kill bck_arg_val bck_arg_line ) }
+            {} }
+        {}
         : s __cle ( nurl_sym_get syms `__last_closure_env__` )
         ? & != 0 ( nurl_str_len __cle )
         ( str_contains_word ( nurl_sym_get g_fn_invoke_only call_name ) ( nurl_str_int arg_idx ) )
@@ -7810,6 +8008,13 @@
         ? arg_pos_escapes
         { ( bck_esc_check_call_arg lex syms bck_arg_line
             ( nurl_sym_get syms `__last_ident_name__` ) fname )
+            // A FIELD of a parameter reaching an escaping slot makes the
+            // parameter itself escape: the callee keeps a pointer into
+            // the struct the caller passed. Nothing else about the
+            // situation differs from the bare-parameter spelling.
+            ? & == bck_arg_tt TT_DOT != 0 ( nurl_str_len bck_arg_root )
+            { ( bck_record_inferred_escape syms bck_arg_root ) }
+            {}
             ? ( is_ident_tok bck_arg_tt )
             { ( bck_record_inferred_escape syms bck_arg_val )
                 // The callee retains this argument past the call — a
@@ -7916,7 +8121,8 @@
         // replays it against the final summary. If the callee turns out
         // non-escaping, the replay finds nothing — no false positive.
         ? & & & > bck_arg_rd 0 ! arg_pos_escapes
-        != 0 ( nurl_sym_len2 syms fname `__arity` )
+        | != 0 ( nurl_sym_len2 syms fname `__arity` )
+        != 0 ( nurl_sym_len2 syms fname `__garity` )
         == 0 ( nurl_sym_len2 syms fname `__ptr` )
         { : s __pe_rec ( nurl_str_cat3
             ( nurl_str_cat3 call_name ` ` fname )
@@ -7926,6 +8132,33 @@
             ( nurl_sym_def g_pending_escape `l`
             ? == 0 ( nurl_str_len __pe_cur ) ( nurl_str_cat __pe_rec `` )
             ( nurl_str_cat3 __pe_cur ` ` __pe_rec ) ) }
+        {}
+        // Deferred escape PROPAGATION (§2.7). This argument is one of
+        // the enclosing function's own parameters, handed to a callee
+        // that has not been compiled yet — a forward call, or a generic
+        // whose instantiation compiles at the flush. The inline
+        // inference above asked `callee_escapes` and got an empty
+        // answer, which is not "it does not escape" but "not known
+        // yet". Park the implication; resolve_pending_impls() runs it
+        // to a fixed point after the whole module, so the enclosing
+        // function's summary is complete before any parked call-site
+        // check replays against it. Without this, `leaky → outer →
+        // detach` in that order compiled clean while the same three
+        // functions in the reverse order were rejected.
+        ? & & & ( is_ident_tok bck_arg_tt ) ! arg_pos_escapes
+        == 0 ( nurl_sym_len g_fn_compiled call_name )
+        & | != 0 ( nurl_sym_len2 syms fname `__arity` )
+        != 0 ( nurl_sym_len2 syms fname `__garity` )
+        == 0 ( nurl_sym_len2 syms fname `__ptr` )
+        { : s __ei_pn ( nurl_sym_get syms `__fn_param_names__` )
+            : i __ei_p ( str_word_index __ei_pn bck_arg_val )
+            ? >= __ei_p 0
+            { : s __ei_rec ( nurl_str_cat3
+                ( nurl_str_cat3 ( nurl_str_int __ei_p ) ` ` call_name )
+                ( nurl_str_cat3 ` ` fname ` ` )
+                ( nurl_str_int arg_idx ) )
+                ( __park_append syms `__fn_pending_esc_impl__` __ei_rec ) }
+            {} }
         {}
         // A `*_free` destructor's first argument, when it is a bare
         // identifier, names a binding being consumed — stash it as a
@@ -7965,6 +8198,23 @@
                 // parameter as auto-sink too — the caller of this fn
                 // likewise loses access to that arg afterwards.
                 ( bck_record_inferred_sink syms bck_arg_val ) } }
+        {}
+        // …and the same question when the callee has NOT been compiled
+        // yet (§2.2 / §6.4). `callee_sink` and the returned-handle
+        // summary are both empty here, which is "not known", not "does
+        // not consume": the move half of the interprocedural summaries
+        // answered inline and so let `( release v )` — with `release`
+        // defined below — hand back a freed handle in silence, while
+        // the identical program with `release` above was rejected.
+        // Park the row; the walk resolves it after the module.
+        ? & & ( is_ident_tok bck_arg_tt )
+        ! ( str_contains_word callee_sink ( nurl_str_int arg_idx ) )
+        & == 0 ( nurl_sym_len g_fn_compiled call_name )
+        & | != 0 ( nurl_sym_len2 syms fname `__arity` )
+        != 0 ( nurl_sym_len2 syms fname `__garity` )
+        == 0 ( nurl_sym_len2 syms fname `__ptr` )
+        { ( bck_stash_pending_call bck_arg_val ( nurl_lex_line lex )
+            call_name arg_idx ) }
         {}
         // Variadic position: promote BEFORE owned-temp tracking + argstr
         // append, since promotion replaces (at, av) with the widened pair.
@@ -8336,6 +8586,39 @@
     // gates moved inside the helper so there is no ternary here at all.
     : s __ra_ids ( bck_ret_alias_idents callee_ret_alias arg_idents )
     ( nurl_sym_def syms `__last_phi_idents__` __ra_ids )
+    // §2.8 (transitive passthrough): the argument NAMES sitting at the
+    // positions this callee may return. `@ id2 ( @ v ) cb → ( @ v ) {
+    // ^ ( id cb ) }` returns its own parameter through a second helper,
+    // and the summary must see that or the chain stops at depth one.
+    // Same index→name mapping as the handle list above, different
+    // question — ret_param is "may the result be a stack REFERENCE?",
+    // ret_alias is "may it be that argument's HEAP HANDLE?" — so the
+    // two are computed from their own summaries and never shared.
+    : s __rp_ids ( bck_ret_alias_idents callee_ret_param arg_idents )
+    ( nurl_sym_def syms `__last_call_ret_param_idents__` __rp_ids )
+    // §2.8 (deferred half). When the callee has not been compiled yet,
+    // `callee_ret_param` above answered "not known", not "returns
+    // nothing" — so publish what a later replay would need: the callee's
+    // two names, which arguments were stack references, and which were
+    // the enclosing function's own parameters. gen_ret turns the first
+    // into a parked CHECK ("does this return dangle?") and the second
+    // into a parked IMPLICATION ("does this function return that
+    // parameter?"). Empty for a callee already compiled, where the
+    // inline answer above is final.
+    : b __fwd_callee & == 0 ( nurl_sym_len g_fn_compiled call_name )
+    & | != 0 ( nurl_sym_len2 syms fname `__arity` )
+    != 0 ( nurl_sym_len2 syms fname `__garity` )
+    == 0 ( nurl_sym_len2 syms fname `__ptr` )
+    ( nurl_sym_def syms `__last_call_forward__`
+    ? __fwd_callee ( nurl_str_cat3 call_name ` ` fname ) `` )
+    // The `__fwd_callee` gate lives INSIDE each helper on purpose: a
+    // `? flag ( owning_call ) ``` join mixes an owned result with a bare
+    // literal, so the join is not uniformly owned, nothing consumes the
+    // owning arm, and it leaks once per call site.
+    : s __fwd_refs ( bck_ref_arg_indices __fwd_callee arg_refdepths )
+    ( nurl_sym_def syms `__last_call_ref_args__` __fwd_refs )
+    : s __fwd_params ( bck_param_arg_pairs syms __fwd_callee arg_idents )
+    ( nurl_sym_def syms `__last_call_param_args__` __fwd_params )
     ( nurl_sym_def syms `__last_phi_cause__`
     ( nurl_str_cat3 `it was passed to '` fname
     `', which may hand its handle back as the result` ) )
@@ -12661,6 +12944,24 @@
 
 // Append one statement record, then clear the read accumulator so the
 // next statement starts fresh.
+// bck_record with two trailing fields (5, 6) — the callee name and
+// argument index of a `pendcall` row. Kept in the ROW rather than in a
+// side map keyed by name+line: line numbers repeat across files, and
+// these rows outlive their function (the walk runs after the module).
+@ bck_record2 s kind s wname i line s x5 s x6 → v {
+    ? & != g_borrowck 0 == g_bck_closure_depth 0 {
+        : s reads ( nurl_sym_get g_bck `reads` )
+        : s head ( nurl_str_cat4 kind `\t` wname `\t` )
+        : s body ( nurl_str_cat4 head reads `\t` ( nurl_str_int line ) )
+        : s rec ( nurl_str_cat3 body `\t` ( nurl_str_int g_bck_depth ) )
+        : s rec2 ( nurl_str_cat4 rec `\t` x5 `\t` )
+        ( nurl_sym_append g_bck `stmts`
+        ? == 0 ( nurl_sym_len g_bck `stmts` ) ( nurl_str_cat rec2 x6 )
+        ( nurl_str_cat3 `\n` rec2 x6 ) )
+        ( nurl_sym_set g_bck `reads` `` )
+    } {}
+}
+
 @ bck_record s kind s wname i line → v {
     ? & != g_borrowck 0 == g_bck_closure_depth 0 {
         : s reads ( nurl_sym_get g_bck `reads` )
@@ -12940,6 +13241,31 @@
     } {}
 }
 
+// Stash a call whose MOVE effect cannot be decided yet (docs/MEMORY.md
+// §2.2 / §6.4): `name` was handed to argument `argidx` of `callee`, and
+// `callee` has not been compiled, so neither its `sink` set nor its
+// returned-handle set exists. An empty summary there means "not known
+// yet", not "does not consume" — reading it as the latter is what let
+// `( release v )` followed by a use of `v` compile clean when `release`
+// was defined BELOW it, while the identical program with `release`
+// above was rejected.
+//
+// The row is resolved during the analyze walk, which for a function
+// carrying one of these rows is deferred to the end of the module
+// (borrowck_fn_end → g_deferred_bck) so every summary is final.
+@ bck_stash_pending_call s name i line s callee i argidx → v {
+    ? & != g_borrowck 0 == g_bck_closure_depth 0 {
+        : s cur ( nurl_sym_get g_bck `ppends` )
+        : s add ( nurl_str_cat3
+        ( nurl_str_cat3 name ` ` ( nurl_str_int line ) )
+        ( nurl_str_cat3 ` ` callee ` ` )
+        ( nurl_str_int argidx ) )
+        ( nurl_sym_set g_bck `ppends`
+        ? == 0 ( nurl_str_len cur ) ( nurl_str_cat add `` ) ( nurl_str_cat3 cur ` ` add ) )
+        ( nurl_sym_set g_bck `deferred` `1` )
+    } {}
+}
+
 // Stash `name` as MAYBE consumed at `line` — the value-producing
 // `?` / `??` selected between this binding's handle and something
 // else, so the new owner holds it on some paths only (see the
@@ -12986,6 +13312,20 @@
             : s qln ( str_first_word qrest )
             = qrest ( str_skip_word qrest )
             ( bck_record `maybemove` qnm ( nurl_str_to_int qln ) )
+        }
+        // …and the calls whose move effect is not decidable yet.
+        : ~ s prest ( nurl_sym_get g_bck `ppends` )
+        ( nurl_sym_set g_bck `ppends` `` )
+        ~ != 0 ( nurl_str_len prest ) {
+            : s pnm ( str_first_word prest )
+            = prest ( str_skip_word prest )
+            : s pln ( str_first_word prest )
+            = prest ( str_skip_word prest )
+            : s pcal ( str_first_word prest )
+            = prest ( str_skip_word prest )
+            : s paix ( str_first_word prest )
+            = prest ( str_skip_word prest )
+            ( bck_record2 `pendcall` pnm ( nurl_str_to_int pln ) pcal paix )
         }
     } {}
 }
@@ -13279,13 +13619,20 @@
 @ bck_xlate_row s rec → s {
     : s kind ( bck_field rec 0 )
     : s w ( bck_field rec 1 )
-    : s w2 ? | | | ( seq kind `let` ) ( seq kind `assign` ) ( seq kind `move` )
-    ( seq kind `maybemove` )
+    : s w2 ? | | | | ( seq kind `let` ) ( seq kind `assign` ) ( seq kind `move` )
+    ( seq kind `maybemove` ) ( seq kind `pendcall` )
     ( nurl_str_int ( bck_intern w ) ) ( nurl_str_cat w `` )
     : s rds ( bck_ids ( bck_field rec 2 ) )
     : s head ( nurl_str_cat4 kind `\t` w2 `\t` )
     : s body ( nurl_str_cat4 head rds `\t` ( bck_field rec 3 ) )
-    ( nurl_str_cat3 body `\t` ( bck_field rec 4 ) )
+    : s five ( nurl_str_cat3 body `\t` ( bck_field rec 4 ) )
+    // A `pendcall` row carries the callee and the argument index it was
+    // passed at; everything else stops at field 4.
+    ? ( seq kind `pendcall` )
+    { ^ ( nurl_str_cat4 five `\t` ( bck_field rec 5 )
+        ( nurl_str_cat3 `\t` ( bck_field rec 6 ) `` ) ) }
+    {}
+    five
 }
 
 // Split the captured statement list on newlines, translating each row
@@ -13515,6 +13862,36 @@
             = p + p 1
             = done T
         } {}
+        ? & ! done ( seq kind `pendcall` ) {
+            // The call whose move effect could not be decided when it
+            // was compiled (bck_stash_pending_call). Every summary is
+            // final by the time this walk runs — the function was
+            // deferred to the end of the module precisely for this — so
+            // ask them now:
+            //   the callee SINKS that parameter   → a definite move,
+            //     exactly as if the sink set had been known inline;
+            //   the callee may RETURN its handle  → a maybe-move, the
+            //     `?`-selected-handle case in another spelling;
+            //   neither                            → nothing happened.
+            : s pvn ( bck_field rec 1 )
+            : i pvid ( nurl_str_to_int pvn )
+            : s pcal ( bck_field rec 5 )
+            : s paix ( bck_field rec 6 )
+            : s psink ( nurl_sym_get g_fn_sink pcal )
+            : s palias ( nurl_sym_get g_fn_ret_alias pcal )
+            ? ( str_contains_word psink paix )
+            { ? & != 0 g_strict_borrowck == BCK_MAYBE_MOVED ( bck_st_get st pvid )
+                { ( bck_diag_maybe pvid ( nurl_str_to_int ( bck_field rec 3 ) ) ) } {}
+                = st ( bck_st_set st pvid BCK_MOVED )
+                ( nurl_sym_set g_bck ( nurl_str_cat `ml_` pvn ) ( bck_field rec 3 ) ) }
+            { ? ( str_contains_word palias paix )
+                { = st ( bck_st_set st pvid
+                    ( bck_join ( bck_st_get st pvid ) BCK_MOVED ) )
+                    ( nurl_sym_set g_bck ( nurl_str_cat `ml_` pvn ) ( bck_field rec 3 ) ) }
+                {} }
+            = p + p 1
+            = done T
+        } {}
         ? & ! done ( seq kind `cond` ) {
             : i ec ( bck_match_close p `cond` `endcond` )
             = st ( bck_handle_cond p ec st )
@@ -13698,6 +14075,39 @@
     ? != 0 ( nurl_str_len final ) {} {}
 }
 
+// Park a whole function's captured statement list for a later walk.
+// Keyed by a running index in g_deferred_bck: `s<i>` the rows, `p<i>`
+// the parameter names, `f<i>` the source file the diagnostics must name.
+@ bck_defer_fn s params → v {
+    : s ns ( nurl_sym_get g_deferred_bck `n` )
+    : i n ? == 0 ( nurl_str_len ns ) 0 ( nurl_str_to_int ns )
+    : s ix ( nurl_str_int n )
+    ( nurl_sym_def g_deferred_bck ( nurl_str_cat `s` ix )
+    ( nurl_sym_get g_bck `stmts` ) )
+    ( nurl_sym_def g_deferred_bck ( nurl_str_cat `p` ix ) params )
+    ( nurl_sym_def g_deferred_bck ( nurl_str_cat `f` ix )
+    ( nurl_sym_get g_bck `file` ) )
+    ( nurl_sym_def g_deferred_bck `n` ( nurl_str_int + n 1 ) )
+}
+
+// Walk every parked function, now that every summary is final. Called
+// from main() beside resolve_pending_escapes.
+@ resolve_deferred_borrowck → v {
+    ? == g_borrowck 0 { ^ } {}
+    : s ns ( nurl_sym_get g_deferred_bck `n` )
+    ? == 0 ( nurl_str_len ns ) { ^ } {}
+    : i n ( nurl_str_to_int ns )
+    : ~ i i 0
+    ~ < i n {
+        : s ix ( nurl_str_int i )
+        ( nurl_sym_set g_bck `file` ( nurl_sym_get g_deferred_bck ( nurl_str_cat `f` ix ) ) )
+        ( nurl_sym_set g_bck `stmts` ( nurl_sym_get g_deferred_bck ( nurl_str_cat `s` ix ) ) )
+        ( nurl_sym_set g_bck `reads` `` )
+        ( bck_analyze ( nurl_sym_get g_deferred_bck ( nurl_str_cat `p` ix ) ) )
+        = i + i 1
+    }
+}
+
 // borrowck_fn_end: called from gen_fn_decl_concrete once a function
 // body is fully parsed — runs the analyze walk over the captured
 // statement list. No-op when --borrowck is off. `lex` gives the
@@ -13705,7 +14115,17 @@
 @ borrowck_fn_end i lex i syms s fname → v {
     ? == g_borrowck 0 {} {
         ( nurl_sym_set g_bck `file` ( nurl_lex_filename lex ) )
-        ( bck_analyze ( nurl_sym_get syms `__fn_param_names__` ) )
+        // A function that called something not yet compiled with a bare
+        // binding cannot be analysed yet: a `pendcall` row's verdict
+        // depends on a summary that does not exist. Park the whole
+        // function — its statement list is one string — and walk it
+        // after the module, where the answer is final. Analysing it
+        // twice is not an option: every diagnostic it holds would be
+        // reported twice.
+        ? != 0 ( nurl_sym_len g_bck `deferred` )
+        { ( bck_defer_fn ( nurl_sym_get syms `__fn_param_names__` ) )
+            ( nurl_sym_set g_bck `deferred` `` ) }
+        { ( bck_analyze ( nurl_sym_get syms `__fn_param_names__` ) ) }
     }
 }
 
@@ -14259,6 +14679,7 @@
         // gen_call reject escapes (docs/MEMORY.md §2.3).
         ( bck_esc_let syms name ( bck_expr_refdepth syms
         ? ( is_ident_tok bck_rhs_tt ) bck_rhs_val `` ) )
+        ( bck_esc_let_carriers syms name bck_rhs_tt bck_rhs_val )
         : s ptr ( nurl_cg_reg cg )
         ( nurl_print `  ` ) ( nurl_print ptr )
         ( nurl_print ` = alloca ` ) ( nurl_print ( nurl_llty vt ) ) ( nurl_print `\n` )
@@ -14517,6 +14938,7 @@
                 // referent depth — see the type-inference path above.
                 ( bck_esc_let syms name ( bck_expr_refdepth syms
                 ? ( is_ident_tok bck_rhs_tt ) bck_rhs_val `` ) )
+                ( bck_esc_let_carriers syms name bck_rhs_tt bck_rhs_val )
 
                 // Widen i1 short-circuit / comparison results to the declared
                 // integer width before storing (`: i can_l & …` etc.).
@@ -16322,6 +16744,11 @@
         // check observes only what THIS field expression sets.
         ( nurl_sym_def syms `__last_expr_refdepth__` `` )
         ( nurl_sym_def syms `__last_ident_name__` `` )
+        // …and the two §2.8 param-carrier channels, so the absorb below
+        // reads only what THIS field published (a nested `@ T { … }` or
+        // a closure literal), never a sibling's leftovers.
+        ( nurl_sym_def syms `__last_agg_param_idents__` `` )
+        ( nurl_sym_def syms `__last_closure_param_idents__` `` )
         // Snapshot whether this field expr is a slice literal before gen_expr
         // consumes the token. Slice literals don't go through gen_call so
         // `__last_call_ret_owned__` is never set for them.
@@ -16464,11 +16891,43 @@
         // enclosing function, so `^ @ T { … param … }` propagates that
         // parameter's reference out through the returned aggregate.
         ? & & != g_borrowck 0 ( is_ident_tok fld_first_tt )
-        & ( seq ( nurl_sym_get syms `__last_ident_name__` ) fld_first_val )
-        ( str_contains_word ( nurl_sym_get syms `__fn_param_names__` ) fld_first_val )
-        { = agg_param_idents ? == 0 ( nurl_str_len agg_param_idents )
-            ( nurl_str_cat fld_first_val `` )
-            ( nurl_str_cat3 agg_param_idents ` ` fld_first_val ) }
+        ( seq ( nurl_sym_get syms `__last_ident_name__` ) fld_first_val )
+        { : s __fc0 ( bck_param_carriers syms fld_first_val )
+            : ~ s __fc ( nurl_str_cat __fc0 `` )
+            ~ != 0 ( nurl_str_len __fc ) {
+                : s __fc1 ( str_first_word __fc )
+                = __fc ( str_skip_word __fc )
+                ? ! ( str_contains_word agg_param_idents __fc1 )
+                { = agg_param_idents ? == 0 ( nurl_str_len agg_param_idents )
+                    ( nurl_str_cat __fc1 `` )
+                    ( nurl_str_cat3 agg_param_idents ` ` __fc1 ) }
+                {}
+            } }
+        {}
+        // §2.8 (composition): a field that is itself a carrier hands the
+        // same parameters out one level further. A NESTED aggregate
+        // (`@ Outer { @ Inner { cb } }`) published its own embedded
+        // parameters, and a CLOSURE literal (`@ Slot { \ → v { ( cb ) } }`)
+        // published the parameters it captured; absorbing both makes the
+        // outer aggregate carry them exactly as a direct field would.
+        // Restricted to those two literal forms on purpose: reading the
+        // channel after ANY field expression would also absorb a call's
+        // unrelated argument (`{ ( f @ Inner { cb } ) }`), which the
+        // result need not carry — an over-claim, and this summary is
+        // read by a diagnostic that must not false-positive.
+        ? & != g_borrowck 0 | == fld_first_tt TT_AT == fld_first_tt TT_BACKSLASH
+        { : ~ s __ap_rest ? == fld_first_tt TT_AT
+            ( nurl_sym_get syms `__last_agg_param_idents__` )
+            ( nurl_sym_get syms `__last_closure_param_idents__` )
+            ~ != 0 ( nurl_str_len __ap_rest ) {
+                : s __ap_w ( str_first_word __ap_rest )
+                = __ap_rest ( str_skip_word __ap_rest )
+                ? ! ( str_contains_word agg_param_idents __ap_w )
+                { = agg_param_idents ? == 0 ( nurl_str_len agg_param_idents )
+                    ( nurl_str_cat __ap_w `` )
+                    ( nurl_str_cat3 agg_param_idents ` ` __ap_w ) }
+                {}
+            } }
         {}
         // The value's signedness for the int-width coercions below (zext
         // vs sext when widening into a wider payload/field slot) rides
@@ -18521,6 +18980,12 @@
     {}
     ( nurl_print ` {\nentry:\n` )
 
+    // §2.8: the ENCLOSING function's parameter names, read before the
+    // push below shadows `__fn_param_names__` with the closure's own
+    // (empty, then its params). The capture loop needs to ask "is this
+    // capture a parameter of the function being compiled?", and after
+    // the push that question can no longer be asked.
+    : s outer_param_names ( nurl_sym_get syms `__fn_param_names__` )
     // Build closure body symtable: copy outer scope + add params + captured vars
     ( nurl_sym_push syms )
     : i body_syms syms
@@ -18587,6 +19052,16 @@
     // gen_let / gen_assign / gen_ret / gen_call reject escapes
     // (docs/MEMORY.md §2.3).
     : ~ i closure_refdepth 0
+    // Return-escape (docs/MEMORY.md §2.8): names of the ENCLOSING
+    // function's parameters this closure captured. A parameter is not a
+    // stack reference inside its own function (refdepth 0), so
+    // closure_refdepth alone cannot see that returning
+    // `\ → v { ( cb ) }` hands `cb` back out — the returned env holds
+    // it exactly as a returned struct field would. gen_ret and
+    // gen_agg_lit read this list and record those parameters as
+    // returned, so a caller passing a stack reference there is flagged
+    // just as it is for `^ cb`.
+    : ~ s closure_param_idents ``
     ? > captured_count 0
     {
         : s typed_env ( nurl_cg_reg cg )
@@ -18630,6 +19105,16 @@
             { : s cap_inner ( nurl_sym_get2 syms cap_name `__closure_nonsend` )
                 ? != 0 ( nurl_str_len cap_inner )
                 { = g_last_closure_nonsend ( nurl_str_cat cap_inner `` ) } {} }
+            // §2.8: a captured parameter of the enclosing function rides
+            // out inside this closure's env.
+            ? & != g_borrowck 0 ( str_contains_word outer_param_names cap_name )
+            { ? ! ( str_contains_word closure_param_idents cap_name )
+                { = closure_param_idents
+                    ? == 0 ( nurl_str_len closure_param_idents )
+                    ( nurl_str_cat cap_name `` )
+                    ( nurl_str_cat3 closure_param_idents ` ` cap_name ) }
+                {} }
+            {}
             : b cap_byref ( __is_capture_byref cap_name syms )
             // Escape analysis: a by-pointer capture references
             // `cap_name`'s stack slot — its declaration depth
@@ -18878,6 +19363,14 @@
     ? > closure_refdepth 0
     { ( nurl_sym_def syms `__last_expr_refdepth__`
         ( nurl_str_int closure_refdepth ) ) }
+    {}
+
+    // §2.8: publish the enclosing-function parameters this closure
+    // captured, for gen_ret (`^ \ → … cb …`) and gen_agg_lit (a closure
+    // stored as a struct field). Always published — including empty —
+    // so a consumer never reads a stale list from a sibling closure.
+    ? != g_borrowck 0
+    { ( nurl_sym_def syms `__last_closure_param_idents__` closure_param_idents ) }
     {}
 
     // Closure-env reclamation: advertise this literal's heap env pointer
@@ -19464,6 +19957,172 @@
     }
 }
 
+// Append one space-separated record to a symbol-map list under `key`.
+// The parked-work lists (implications, deferred checks) all grow this
+// way; the ternary keeps both arms owning, which is what stops the
+// join from leaking its copy.
+@ __park_append i m s key s rec → v {
+    : s cur ( nurl_sym_get m key )
+    ( nurl_sym_def m key
+    ? == 0 ( nurl_str_len cur ) ( nurl_str_cat rec `` )
+    ( nurl_str_cat3 cur ` ` rec ) )
+}
+
+// Move the 4-word implication records a body parked in `syms` into the
+// module-wide list, stamping the function they belong to. Called once
+// per function, after its body has compiled and its name is known.
+@ __merge_impls i syms s src_key s fname s dst_key → v {
+    : ~ s rest ( nurl_sym_get syms src_key )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s w1 ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s w2 ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s w3 ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s w4 ( str_first_word rest ) = rest ( str_skip_word rest )
+        ? & & != 0 ( nurl_str_len w1 ) != 0 ( nurl_str_len w2 )
+        & != 0 ( nurl_str_len w3 ) != 0 ( nurl_str_len w4 )
+        { : s rec ( nurl_str_cat3
+            ( nurl_str_cat3 fname ` ` w1 )
+            ( nurl_str_cat3 ` ` w2 ` ` )
+            ( nurl_str_cat3 w3 ` ` w4 ) )
+            ( __park_append g_pending_impl dst_key rec ) }
+        {}
+    }
+}
+
+// Indices of the arguments that were stack references, read out of the
+// per-call `arg_refdepths` roster (one word per argument).
+@ bck_ref_arg_indices b want s arg_refdepths → s {
+    ? ! want { ^ ( nurl_str_cat `` `` ) } {}
+    : ~ s out ``
+    : ~ s rest ( nurl_str_cat arg_refdepths `` )
+    : ~ i k 0
+    ~ != 0 ( nurl_str_len rest ) {
+        : s w ( str_first_word rest )
+        = rest ( str_skip_word rest )
+        ? > ( nurl_str_to_int w ) 0
+        { : s kw ( nurl_str_int k )
+            = out ? == 0 ( nurl_str_len out ) ( nurl_str_cat kw `` )
+            ( nurl_str_cat3 out ` ` kw ) }
+        {}
+        = k + k 1
+    }
+    out
+}
+
+// Alternating `idx name` pairs for the arguments that were bare
+// parameters of the ENCLOSING function — the left-hand side of a
+// returned-parameter implication.
+@ bck_param_arg_pairs i syms b want s arg_idents → s {
+    ? ! want { ^ ( nurl_str_cat `` `` ) } {}
+    : ~ s out ``
+    // Bound once, outside the loop: `nurl_sym_get` hands back a fresh
+    // string, and a fresh string handed straight to a NURL function is
+    // not released as an owned temporary — per call site, per argument,
+    // that is a leak the self-compile gate sees immediately.
+    : s pn ( nurl_sym_get syms `__fn_param_names__` )
+    : ~ s rest ( nurl_str_cat arg_idents `` )
+    : ~ i k 0
+    ~ != 0 ( nurl_str_len rest ) {
+        : s w ( str_first_word rest )
+        = rest ( str_skip_word rest )
+        : i pi ( str_word_index pn w )
+        ? >= pi 0
+        { : s rec ( nurl_str_cat3 ( nurl_str_int k ) ` ` w )
+            = out ? == 0 ( nurl_str_len out ) ( nurl_str_cat rec `` )
+            ( nurl_str_cat3 out ` ` rec ) }
+        {}
+        = k + k 1
+    }
+    out
+}
+
+// §2.8: expand a BINDING name to the enclosing function's parameters
+// it may carry. A parameter carries itself; any other binding carries
+// whatever its initialiser did (`<name>__paramsrc`, stamped by
+// bck_esc_let_carriers). This is what makes `: ( @ v ) t cb ^ t` say
+// the same thing as `^ cb` — a name in between is still the same
+// reference on its way out.
+@ bck_param_carriers i syms s name → s {
+    ? == g_borrowck 0 { ^ ( nurl_str_cat `` `` ) } {}
+    ? == 0 ( nurl_str_len name ) { ^ ( nurl_str_cat `` `` ) } {}
+    : s pn ( nurl_sym_get syms `__fn_param_names__` )
+    ? ( str_contains_word pn name )
+    { ^ ( nurl_str_cat name `` ) } {}
+    ( nurl_str_cat ( nurl_sym_get2 syms name `__paramsrc` ) `` )
+}
+
+// Expand a whitespace-separated list of binding names to the parameters
+// they carry (bck_param_carriers, deduplicated).
+@ bck_carriers_of_list i syms s names → s {
+    : ~ s out ``
+    : ~ s rest ( nurl_str_cat names `` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s w ( str_first_word rest )
+        = rest ( str_skip_word rest )
+        // Bound, then WALKED AS A COPY. A NURL function's fresh result
+        // is released at the end of the binding's scope, but only for
+        // the value the binding still names — reassigning the cursor
+        // (`= got ( str_skip_word got )`) drops that name on the floor
+        // and the original allocation has no owner left. Every cursor
+        // over an owned result therefore walks a copy.
+        : s got ( bck_param_carriers syms w )
+        : ~ s g_rest ( nurl_str_cat got `` )
+        ~ != 0 ( nurl_str_len g_rest ) {
+            : s g1 ( str_first_word g_rest )
+            = g_rest ( str_skip_word g_rest )
+            ? ! ( str_contains_word out g1 )
+            { = out ? == 0 ( nurl_str_len out ) ( nurl_str_cat g1 `` )
+                ( nurl_str_cat3 out ` ` g1 ) }
+            {}
+        }
+    }
+    out
+}
+
+// §2.8: record every parameter a list of binding names may carry as
+// returned by the enclosing function.
+@ bck_record_ret_param_list i syms s names → v {
+    : s all ( bck_carriers_of_list syms names )
+    : ~ s rest ( nurl_str_cat all `` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s w ( str_first_word rest )
+        = rest ( str_skip_word rest )
+        ( bck_record_ret_param syms w )
+    }
+}
+
+// Which parameters the initialiser of a `:` binding carries, by the
+// shape of that initialiser. Every arm returns an OWNED string (a
+// single `^` per shape rather than reassigning one accumulator), so the
+// result has exactly one owner: the `:` in bck_esc_let_carriers.
+@ bck_let_carrier_src i syms i rhs_tt s rhs_val → s {
+    ? ( is_ident_tok rhs_tt ) { ^ ( bck_param_carriers syms rhs_val ) } {}
+    ? == rhs_tt TT_AT
+    { ^ ( nurl_str_cat ( nurl_sym_get syms `__last_agg_param_idents__` ) `` ) } {}
+    ? == rhs_tt TT_BACKSLASH
+    { ^ ( nurl_str_cat ( nurl_sym_get syms `__last_closure_param_idents__` ) `` ) } {}
+    ? == rhs_tt TT_LPAREN
+    { ^ ( nurl_str_cat ( nurl_sym_get syms `__last_call_ret_param_idents__` ) `` ) } {}
+    ? | == rhs_tt TT_QUEST == rhs_tt TT_QUESTQUEST
+    { : s ids ( nurl_sym_get syms `__last_phi_idents__` )
+        ^ ( bck_carriers_of_list syms ids ) } {}
+    ( nurl_str_cat `` `` )
+}
+
+// §2.8: stamp `<name>__paramsrc` — which of the enclosing function's
+// parameters the binding's initialiser may carry. Every producer that
+// can carry one publishes it (a bare name, an aggregate literal, a
+// closure literal, a call result, a `?` / `??` join), so a reference
+// does not lose its provenance by being given a name. Called from
+// gen_let_or_struct beside bck_esc_let, which stamps the same
+// binding's referent depth.
+@ bck_esc_let_carriers i syms s name i rhs_tt s rhs_val → v {
+    ? == g_borrowck 0 {} {
+        : s src ( bck_let_carrier_src syms rhs_tt rhs_val )
+        ( nurl_sym_def syms ( nurl_str_cat name `__paramsrc` ) src )
+    }
+}
+
 // Returned-handle inference (docs/MEMORY.md §2.2): record that the
 // enclosing function may hand back the HANDLE of parameter `name`.
 // Merged into g_fn_ret_alias[fname] in gen_fn_decl_concrete. The
@@ -19564,8 +20223,88 @@
 // does dangle — emit the same diagnostic the inline check would have.
 // A callee that turned out non-escaping resolves to nothing. Called
 // once from main() after flush_deferred_instantiations.
+// Run the parked summary implications to a fixed point (docs/MEMORY.md
+// §2.7 / §2.8). Each record says "parameter `pidx` of `F` escapes / is
+// returned if parameter `aidx` of the callee is" — the propagation step
+// the inline inference could not take, because the callee had not been
+// compiled when the body asked. Iterating to a fixed point is what makes
+// a chain of forward-defined helpers behave like the same chain written
+// bottom-up: one round resolves the deepest link, the next carries it
+// one hop further out.
+//
+// The round cap is a safety net, not a semantic bound: each round can
+// only ADD indices to finite per-function sets, so the iteration
+// terminates on its own; the cap keeps a corrupted list from hanging the
+// compiler instead.
+@ resolve_pending_impls → v {
+    ? == g_borrowck 0 { ^ } {}
+    : ~ b changed T
+    : ~ i rounds 0
+    ~ & changed < rounds 64 {
+        = changed F
+        = rounds + rounds 1
+        : b ec ( __resolve_impl_round `e` g_fn_escapes )
+        : b rc ( __resolve_impl_round `r` g_fn_ret_param )
+        ? | ec rc { = changed T } {}
+    }
+}
+
+// One pass over the implications under `key`, propagating into `dst`.
+// True when anything was added.
+@ __resolve_impl_round s key i dst → b {
+    : ~ b changed F
+    : ~ s rest ( nurl_sym_get g_pending_impl key )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s fnm ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s pidx ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s cn ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s fn ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s aidx ( str_first_word rest ) = rest ( str_skip_word rest )
+        // Mangled name first, then the generic name — the same lookup
+        // order gen_call uses, so a generic callee resolves through its
+        // instantiation or through the template, whichever carries it.
+        : ~ s set ( nurl_sym_get dst cn )
+        ? == 0 ( nurl_str_len set ) { = set ( nurl_sym_get dst fn ) } {}
+        ? ( str_contains_word set aidx )
+        { : s cur ( nurl_sym_get dst fnm )
+            ? ! ( str_contains_word cur pidx )
+            { ( nurl_sym_def dst fnm
+                ? == 0 ( nurl_str_len cur ) ( nurl_str_cat pidx `` )
+                ( nurl_str_cat3 cur ` ` pidx ) )
+                = changed T }
+            {} }
+        {}
+    }
+    changed
+}
+
+// Replay the parked RETURN-escape checks (docs/MEMORY.md §2.8): a
+// `^ ( callee … )` whose callee was not compiled yet, with a stack
+// reference at argument `aidx`. If the finished summary says the callee
+// returns that position, the result IS that reference and returning it
+// dangles.
+@ resolve_pending_ret_escapes → v {
+    ? == g_borrowck 0 { ^ } {}
+    : ~ s rest ( nurl_sym_get g_pending_escape `r` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s cn ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s fn ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s ai ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s ln ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s file ( str_first_word rest ) = rest ( str_skip_word rest )
+        : ~ s rp ( nurl_sym_get g_fn_ret_param cn )
+        ? == 0 ( nurl_str_len rp ) { = rp ( nurl_sym_get g_fn_ret_param fn ) } {}
+        ? ( str_contains_word rp ai )
+        { ( bck_emit_error file ( nurl_str_to_int ln )
+            `returning a value that references a stack binding by pointer — it dangles after this function returns (move the captured data to a heap-backed handle)` ) }
+        {}
+    }
+}
+
 @ resolve_pending_escapes → v {
     ? == g_borrowck 0 {} {
+        ( resolve_pending_impls )
+        ( resolve_pending_ret_escapes )
         : ~ s rest ( nurl_sym_get g_pending_escape `l` )
         ~ != 0 ( nurl_str_len rest ) {
             : s cn ( str_first_word rest ) = rest ( str_skip_word rest )
@@ -20773,6 +21512,8 @@
     // the accumulator; gen_call appends param indices that reach an
     // escaping argument position; merged into g_fn_escapes[fname] below.
     ( nurl_sym_def syms `__fn_inferred_escape__` `` )
+    ( nurl_sym_def syms `__fn_pending_esc_impl__` `` )
+    ( nurl_sym_def syms `__fn_pending_rp_impl__` `` )
     ( nurl_sym_def syms `__fn_embedded_params__` `` )
     ( nurl_sym_def syms `__fn_builds_view__` `` )
     // Invoke-only inference (docs/MEMORY.md §7.4): reset the value-read
@@ -20870,6 +21611,13 @@
             {} }
         ( nurl_sym_def g_fn_escapes fname __ae_merged ) }
     {}
+    // Deferred propagation (§2.7 / §2.8): hand this body's parked
+    // implications to the module-wide list, and record that the
+    // function is compiled — from here on its summaries are the real
+    // answer for a call site, not a "not known yet".
+    ( __merge_impls syms `__fn_pending_esc_impl__` fname `e` )
+    ( __merge_impls syms `__fn_pending_rp_impl__` fname `r` )
+    ( nurl_sym_def g_fn_compiled fname `1` )
     // Publish the embedded-parameter set. Authoritative per function:
     // the body is compiled, so the set is complete.
     : s __em_set ( nurl_sym_get syms `__fn_embedded_params__` )
@@ -27134,6 +27882,9 @@
     = g_fn_ret_view ( nurl_sym_new )
     = g_fn_invoke_only ( nurl_sym_new )
     = g_pending_escape ( nurl_sym_new )
+    = g_pending_impl ( nurl_sym_new )
+    = g_deferred_bck ( nurl_sym_new )
+    = g_fn_compiled ( nurl_sym_new )
     = g_fn_ret_param ( nurl_sym_new )
     = g_fn_ret_alias ( nurl_sym_new )
     = g_fn_arc_mut ( nurl_sym_new )
@@ -27236,6 +27987,7 @@
     // interprocedural-escape checks parked for forward / generic calls
     // (docs/MEMORY.md §3). May bump g_bck_errors, checked below.
     ( resolve_pending_escapes )
+    ( resolve_deferred_borrowck )
     ( dbg_flush )
     // Unused-symbol lint (--lint): every call site (incl. generic
     // instantiations) has now been seen, so report the unused private
@@ -27292,6 +28044,9 @@
     ( nurl_sym_free g_fn_arc_mut )
     ( nurl_sym_free g_fn_mutates )
     ( nurl_sym_free g_pending_escape )
+    ( nurl_sym_free g_pending_impl )
+    ( nurl_sym_free g_deferred_bck )
+    ( nurl_sym_free g_fn_compiled )
     ( nurl_sym_free g_bck )
     ( nurl_sym_free g_ptrtab )
     ( nurl_sym_free g_vis_syms )

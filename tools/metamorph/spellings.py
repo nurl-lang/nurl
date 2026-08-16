@@ -44,6 +44,7 @@ import argparse
 import json
 import os
 import pathlib
+import re
 import subprocess
 import sys
 import tempfile
@@ -69,6 +70,16 @@ STRENGTH_INVALID = -1
 
 PRELUDE_VEC = "$ `stdlib/core/vec.nu`\n"
 PRELUDE_ARC = "$ `stdlib/std/arc.nu`\n$ `stdlib/std/thread.nu`\n$ `stdlib/core/vec.nu`\n"
+PRELUDE_THREAD = "$ `stdlib/std/thread.nu`\n"
+
+# The escape classes all need one thing: a value that IS a reference into
+# the current frame. In NURL that is a closure capturing a `: ~` binding
+# BY POINTER — `f` below points at `caller`'s own `c` alloca, so anything
+# that outlives `caller` and still holds `f` is holding a dead frame.
+ESC_CTR = ": Counter { i n i max }\n"
+ESC_SLOT = ": Slot { ( @ v ) cb }\n"
+ESC_MKREF = ("    : ~ Counter c @ Counter { 0 10 }\n"
+             "    : ( @ v ) f \\ → v { = . c n + . c n 1 }\n")
 
 
 def prog(body, prelude=PRELUDE_VEC, extra=""):
@@ -296,6 +307,54 @@ CLASSES = [
                 "    : ( Vec i ) b a\n"
                 "    ( vec_free [i] b )\n"
                 "    ( nurl_print ( nurl_str_int ( vec_len [i] a ) ) )"),
+        },
+    },
+    {
+        "name": "forward-callee-move",
+        "severity": "memory-unsafety",
+        "doc": "The MOVE half of the interprocedural summaries — "
+               "auto-`sink` (a helper that frees its parameter, §2.2) "
+               "and the returned-handle summary (a helper that hands an "
+               "argument back, §2.2) — consulted at a call to a callee "
+               "defined BELOW it. The escape summaries park what they "
+               "cannot answer and replay it after the module (§2.7 / "
+               "§2.8); these still answer inline, and an empty summary "
+               "reads as 'does not sink' rather than 'not known yet'. "
+               "Every spelling here is the same program as its "
+               "defined-above twin, and must get the same verdict as it. "
+               "The class asks for REJECT_STRICT rather than "
+               "REJECT_DEFAULT because the two families answer at "
+               "different strengths by design: a sink is a DEFINITE "
+               "move, while a returned handle is a MAYBE — the callee "
+               "may hand it back or may return something fresh — and "
+               "the conditional double-free is strict-only (§6.2). What "
+               "must never differ is `accept` versus either of them, "
+               "which is what definition order used to decide.",
+        "expect": REJECT_STRICT,
+        "expect_msg": ["use of moved value", "may already be freed"],
+        "spellings": {
+            "sink-above": prog(
+                "    : ( Vec i ) v ( vec_new [i] )\n"
+                "    ( release v )\n"
+                "    ( vec_push [i] v 1 )",
+                extra="@ release ( Vec i ) v → v { ( vec_free [i] v ) }\n"),
+            "sink-forward": prog(
+                "    : ( Vec i ) v ( vec_new [i] )\n"
+                "    ( release v )\n"
+                "    ( vec_push [i] v 1 )",
+                extra="") + "@ release ( Vec i ) v → v { ( vec_free [i] v ) }\n",
+            "ret-alias-above": prog(
+                "    : ( Vec i ) a ( vec_new [i] )\n"
+                "    : ( Vec i ) b ( pick a )\n"
+                "    ( vec_free [i] b )\n"
+                "    ( vec_free [i] a )",
+                extra="@ pick ( Vec i ) v → ( Vec i ) { ^ v }\n"),
+            "ret-alias-forward": prog(
+                "    : ( Vec i ) a ( vec_new [i] )\n"
+                "    : ( Vec i ) b ( pick a )\n"
+                "    ( vec_free [i] b )\n"
+                "    ( vec_free [i] a )",
+                extra="") + "@ pick ( Vec i ) v → ( Vec i ) { ^ v }\n",
         },
     },
     {
@@ -623,6 +682,367 @@ CLASSES = [
         },
     },
     {
+        "name": "ret-escape",
+        "severity": "memory-unsafety",
+        "doc": "A helper hands a caller's stack reference back OUT "
+               "through its result (docs/MEMORY.md §2.8), and the caller "
+               "then returns it. The frame the closure points at is gone "
+               "the moment the caller returns, so every spelling here "
+               "dangles. What changes between them is only HOW the "
+               "reference rides out of the helper — bare `^ p`, a struct "
+               "field, a struct field one level deeper, a closure that "
+               "captured it — and WHEN the helper's summary is known: a "
+               "callee defined below the call site, or a generic, has no "
+               "summary to consult at the call.",
+        "expect": REJECT_DEFAULT,
+        "expect_msg": ["references a stack binding", "escapes"],
+        "spellings": {
+            "bare-return": prog(
+                "    : ( @ v ) g ( caller )\n"
+                "    ( g )",
+                prelude="",
+                extra=ESC_CTR
+                      + "@ id ( @ v ) cb → ( @ v ) { ^ cb }\n"
+                      + "@ caller → ( @ v ) {\n" + ESC_MKREF
+                      + "    ^ ( id f )\n}\n"),
+            "bound-then-returned": prog(
+                "    : ( @ v ) g ( caller )\n"
+                "    ( g )",
+                prelude="",
+                extra=ESC_CTR
+                      + "@ id ( @ v ) cb → ( @ v ) { : ( @ v ) t cb ^ t }\n"
+                      + "@ caller → ( @ v ) {\n" + ESC_MKREF
+                      + "    ^ ( id f )\n}\n"),
+            "ternary-return": prog(
+                "    : ( @ v ) g ( caller )\n"
+                "    ( g )",
+                prelude="",
+                extra=ESC_CTR
+                      + "@ id ( @ v ) cb i k → ( @ v ) { ^ ? > k 0 cb cb }\n"
+                      + "@ caller → ( @ v ) {\n" + ESC_MKREF
+                      + "    ^ ( id f 1 )\n}\n"),
+            "result-bound-in-caller": prog(
+                "    : ( @ v ) g ( caller )\n"
+                "    ( g )",
+                prelude="",
+                extra=ESC_CTR
+                      + "@ id ( @ v ) cb → ( @ v ) { ^ cb }\n"
+                      + "@ caller → ( @ v ) {\n" + ESC_MKREF
+                      + "    : ( @ v ) r ( id f )\n    ^ r\n}\n"),
+            "transitive-two-deep": prog(
+                "    : ( @ v ) g ( caller )\n"
+                "    ( g )",
+                prelude="",
+                extra=ESC_CTR
+                      + "@ id ( @ v ) cb → ( @ v ) { ^ cb }\n"
+                      + "@ id2 ( @ v ) cb → ( @ v ) { ^ ( id cb ) }\n"
+                      + "@ caller → ( @ v ) {\n" + ESC_MKREF
+                      + "    ^ ( id2 f )\n}\n"),
+            "aggregate-field": prog(
+                "    : Slot s ( caller )\n"
+                "    : ( @ v ) g . s cb\n"
+                "    ( g )",
+                prelude="",
+                extra=ESC_CTR + ESC_SLOT
+                      + "@ wrap ( @ v ) cb → Slot { ^ @ Slot { cb } }\n"
+                      + "@ caller → Slot {\n" + ESC_MKREF
+                      + "    ^ ( wrap f )\n}\n"),
+            # One aggregate level deeper. Nothing about the situation
+            # changed; only the number of braces between `^` and `cb`.
+            "nested-aggregate": prog(
+                "    : Outer o ( caller )\n"
+                "    : Inner n . o it\n"
+                "    : ( @ v ) g . n cb\n"
+                "    ( g )",
+                prelude="",
+                extra=ESC_CTR
+                      + ": Inner { ( @ v ) cb }\n: Outer { Inner it }\n"
+                      + "@ wrap2 ( @ v ) cb → Outer { ^ @ Outer { @ Inner { cb } } }\n"
+                      + "@ caller → Outer {\n" + ESC_MKREF
+                      + "    ^ ( wrap2 f )\n}\n"),
+            # A closure carries the reference exactly as a struct field
+            # does — the returned env holds `cb`, which holds the frame.
+            "closure-capture": prog(
+                "    : ( @ v ) g ( caller )\n"
+                "    ( g )",
+                prelude="",
+                extra=ESC_CTR
+                      + "@ wrapc ( @ v ) cb → ( @ v ) { ^ \\ → v { ( cb ) } }\n"
+                      + "@ caller → ( @ v ) {\n" + ESC_MKREF
+                      + "    ^ ( wrapc f )\n}\n"),
+            # Definition order. The situation is identical to
+            # bare-return; the summary simply is not built yet when the
+            # call compiles.
+            "forward-callee": prog(
+                "    : ( @ v ) g ( caller )\n"
+                "    ( g )",
+                prelude="",
+                extra=ESC_CTR
+                      + "@ caller → ( @ v ) {\n" + ESC_MKREF
+                      + "    ^ ( id f )\n}\n"
+                      + "@ id ( @ v ) cb → ( @ v ) { ^ cb }\n"),
+            "generic-callee": prog(
+                "    : Slot s ( caller )\n"
+                "    : ( @ v ) g . s cb\n"
+                "    ( g )",
+                prelude="",
+                extra=ESC_CTR + ESC_SLOT
+                      + "@ idg [T] T x → T { ^ x }\n"
+                      + "@ caller → Slot {\n" + ESC_MKREF
+                      + "    : Slot s @ Slot { f }\n"
+                      + "    ^ ( idg [Slot] s )\n}\n"),
+            # Same passthrough, consumed by a different §2.3 sink: the
+            # result is stored in a heap container instead of returned.
+            "result-into-heap-vec": prog(
+                "    : ( Vec Slot ) heap ( vec_new [Slot] )\n"
+                "    ( fill heap )\n"
+                "    ( vec_free [Slot] heap )",
+                prelude=PRELUDE_VEC,
+                extra=ESC_CTR + ESC_SLOT
+                      + "@ wrap ( @ v ) cb → Slot { ^ @ Slot { cb } }\n"
+                      + "@ fill ( Vec Slot ) heap → v {\n" + ESC_MKREF
+                      + "    ( vec_push [Slot] heap ( wrap f ) )\n}\n"),
+            # …and by the thread sink.
+            "result-into-thread": prog(
+                "    ( caller )",
+                prelude=PRELUDE_THREAD,
+                extra=ESC_CTR
+                      + "@ id ( @ v ) cb → ( @ v ) { ^ cb }\n"
+                      + "@ caller → v {\n" + ESC_MKREF
+                      + "    : !Thread ThreadErr t ( thread_spawn ( id f ) )\n"
+                      + "    ?? t { T th → { : i _r ( thread_join th ) } F _ → {} }\n}\n"),
+        },
+    },
+    {
+        "name": "escape-into-callee",
+        "severity": "memory-unsafety",
+        "doc": "The mirror image of ret-escape: a stack reference passed "
+               "INTO a helper that retains it past the call — a heap "
+               "container or a worker thread (docs/MEMORY.md §2.7). The "
+               "escape summary is inferred in codegen order and replayed "
+               "after the module compiles, so definition order must not "
+               "decide the verdict: a helper defined below the call, and "
+               "a helper whose own escaping callee is defined below IT, "
+               "are the same program written in a different order.",
+        "expect": REJECT_DEFAULT,
+        "expect_msg": ["escapes", "references a stack binding"],
+        "spellings": {
+            "direct-above": prog(
+                "    ( leaky )",
+                prelude=PRELUDE_THREAD,
+                extra=ESC_CTR
+                      + "@ detach ( @ v ) cb → v {\n"
+                        "    : !Thread ThreadErr t ( thread_spawn cb )\n"
+                        "    ?? t { T th → { : i _r ( thread_join th ) } F _ → {} }\n}\n"
+                      + "@ leaky → v {\n" + ESC_MKREF + "    ( detach f )\n}\n"),
+            "forward-callee": prog(
+                "    ( leaky )",
+                prelude=PRELUDE_THREAD,
+                extra=ESC_CTR
+                      + "@ leaky → v {\n" + ESC_MKREF + "    ( detach f )\n}\n"
+                      + "@ detach ( @ v ) cb → v {\n"
+                        "    : !Thread ThreadErr t ( thread_spawn cb )\n"
+                        "    ?? t { T th → { : i _r ( thread_join th ) } F _ → {} }\n}\n"),
+            "transitive-above": prog(
+                "    ( leaky )",
+                prelude=PRELUDE_THREAD,
+                extra=ESC_CTR
+                      + "@ detach ( @ v ) cb → v {\n"
+                        "    : !Thread ThreadErr t ( thread_spawn cb )\n"
+                        "    ?? t { T th → { : i _r ( thread_join th ) } F _ → {} }\n}\n"
+                      + "@ outer ( @ v ) cb → v { ( detach cb ) }\n"
+                      + "@ leaky → v {\n" + ESC_MKREF + "    ( outer f )\n}\n"),
+            # The whole chain below the call site. `outer` compiles while
+            # `detach` is still unknown, so outer's own summary is empty
+            # when the parked check replays against it.
+            "forward-chain": prog(
+                "    ( leaky )",
+                prelude=PRELUDE_THREAD,
+                extra=ESC_CTR
+                      + "@ leaky → v {\n" + ESC_MKREF + "    ( outer f )\n}\n"
+                      + "@ outer ( @ v ) cb → v { ( detach cb ) }\n"
+                      + "@ detach ( @ v ) cb → v {\n"
+                        "    : !Thread ThreadErr t ( thread_spawn cb )\n"
+                        "    ?? t { T th → { : i _r ( thread_join th ) } F _ → {} }\n}\n"),
+            # The middle order: the helper is above the call, but its own
+            # escaping callee is below the helper.
+            "callee-above-its-callee-below": prog(
+                "    ( leaky )",
+                prelude=PRELUDE_THREAD,
+                extra=ESC_CTR
+                      + "@ outer ( @ v ) cb → v { ( detach cb ) }\n"
+                      + "@ detach ( @ v ) cb → v {\n"
+                        "    : !Thread ThreadErr t ( thread_spawn cb )\n"
+                        "    ?? t { T th → { : i _r ( thread_join th ) } F _ → {} }\n}\n"
+                      + "@ leaky → v {\n" + ESC_MKREF + "    ( outer f )\n}\n"),
+            "vec-push-sink": prog(
+                "    : ( Vec Slot ) heap ( vec_new [Slot] )\n"
+                "    ( leaky heap )\n"
+                "    ( vec_free [Slot] heap )",
+                prelude=PRELUDE_VEC,
+                extra=ESC_CTR + ESC_SLOT
+                      + "@ stash ( Vec Slot ) heap Slot item → v { ( vec_push [Slot] heap item ) }\n"
+                      + "@ leaky ( Vec Slot ) heap → v {\n" + ESC_MKREF
+                      + "    : Slot s @ Slot { f }\n    ( stash heap s )\n}\n"),
+            "generic-sink": prog(
+                "    : ( Vec Slot ) heap ( vec_new [Slot] )\n"
+                "    ( leaky heap )\n"
+                "    ( vec_free [Slot] heap )",
+                prelude=PRELUDE_VEC,
+                extra=ESC_CTR + ESC_SLOT
+                      + "@ stashg [T] ( Vec T ) heap T item → v { ( vec_push [T] heap item ) }\n"
+                      + "@ leaky ( Vec Slot ) heap → v {\n" + ESC_MKREF
+                      + "    : Slot s @ Slot { f }\n    ( stashg [Slot] heap s )\n}\n"),
+            # The reference reaches the escaping parameter wrapped in a
+            # struct rather than bare.
+            "wrapped-in-struct": prog(
+                "    ( leaky )",
+                prelude=PRELUDE_THREAD,
+                extra=ESC_CTR + ESC_SLOT
+                      + "@ detachs Slot box → v {\n"
+                        "    : !Thread ThreadErr t ( thread_spawn . box cb )\n"
+                        "    ?? t { T th → { : i _r ( thread_join th ) } F _ → {} }\n}\n"
+                      + "@ leaky → v {\n" + ESC_MKREF
+                      + "    : Slot s @ Slot { f }\n    ( detachs s )\n}\n"),
+        },
+    },
+    {
+        "name": "aliased-mutation",
+        "severity": "diagnostic-consistency",
+        "doc": "A binding passed `inout` — an exclusive mutable borrow "
+               "for that call — and also READ by another argument of the "
+               "same call (docs/MEMORY.md §2.4). Every sibling read is a "
+               "snapshot taken before the callee runs, so this is a "
+               "'did you mean the updated value?' fault rather than "
+               "memory unsafety, and only the bare-identifier form is "
+               "reported by DEFAULT: `( grow v ( vec_len v ) )` is an "
+               "ordinary, correct idiom and the no-false-positive "
+               "contract protects it. Under --strict-borrowck, which is "
+               "documented to over-flag, the spellings must agree — a "
+               "field read reported and the same read one parenthesis "
+               "deeper ignored is the inconsistency, not the rule.",
+        "expect": REJECT_STRICT,
+        "expect_msg": ["exclusive access is violated"],
+        "spellings": {
+            "same-binding-twice": prog(
+                "    : ~ Counter c @ Counter { 3 10 }\n"
+                "    ( swap_counters c c )",
+                prelude="",
+                extra=": Counter { i n i max }\n"
+                      "@ swap_counters inout Counter a inout Counter b → v {\n"
+                      "    : i t . a n\n    = . a n . b n\n    = . b n t\n}\n"),
+            "inout-and-byvalue": prog(
+                "    : ~ Counter c @ Counter { 3 10 }\n"
+                "    ( bump c c )",
+                prelude="",
+                extra=": Counter { i n i max }\n"
+                      "@ bump inout Counter a Counter b → v { = . a n + . a n . b n }\n"),
+            "field-read": prog(
+                "    : ~ Counter c @ Counter { 3 10 }\n"
+                "    ( bump_by c . c n )",
+                prelude="",
+                extra=": Counter { i n i max }\n"
+                      "@ bump_by inout Counter a i b → v { = . a n + . a n b }\n"),
+            "field-read-in-arithmetic": prog(
+                "    : ~ Counter c @ Counter { 3 10 }\n"
+                "    ( bump_by c + . c n 1 )",
+                prelude="",
+                extra=": Counter { i n i max }\n"
+                      "@ bump_by inout Counter a i b → v { = . a n + . a n b }\n"),
+            "read-through-a-call": prog(
+                "    : ~ Counter c @ Counter { 3 10 }\n"
+                "    ( bump_by c ( peek c ) )",
+                prelude="",
+                extra=": Counter { i n i max }\n"
+                      "@ peek Counter c → i { ^ . c n }\n"
+                      "@ bump_by inout Counter a i b → v { = . a n + . a n b }\n"),
+            # The read is two calls deep and on the far side of an
+            # operator — still the same binding, still read before the
+            # callee mutates it.
+            "read-two-calls-deep": prog(
+                "    : ~ Counter c @ Counter { 3 10 }\n"
+                "    ( bump_by c + ( twice ( peek c ) ) 1 )",
+                prelude="",
+                extra=": Counter { i n i max }\n"
+                      "@ peek Counter c → i { ^ . c n }\n"
+                      "@ twice i n → i { ^ * n 2 }\n"
+                      "@ bump_by inout Counter a i b → v { = . a n + . a n b }\n"),
+            # Reader first, writer second: the order of the arguments
+            # must not decide the verdict.
+            "read-before-inout": prog(
+                "    : ~ Counter c @ Counter { 3 10 }\n"
+                "    ( bump_rev ( peek c ) c )",
+                prelude="",
+                extra=": Counter { i n i max }\n"
+                      "@ peek Counter c → i { ^ . c n }\n"
+                      "@ bump_rev i b inout Counter a → v { = . a n + . a n b }\n"),
+        },
+    },
+    {
+        "name": "stale-borrow",
+        "severity": "memory-unsafety",
+        "doc": "A raw pointer taken from a container's buffer "
+               "(`vec_data` / `string_data`) and read AFTER the "
+               "container was grown or released (docs/MEMORY.md §2.10). "
+               "The realloc moves the buffer, so the pointer reads freed "
+               "memory — and it reads plausible garbage rather than "
+               "crashing, which is what makes the diagnostic worth "
+               "having. The mutation is the same mutation however it is "
+               "spelled: inline, through a helper, on a field, in a "
+               "loop.",
+        "expect": WARN,
+        "expect_msg": ["is stale", "may have reallocated"],
+        "spellings": {
+            "push-after-borrow": prog(
+                "    : ~ ( Vec u ) v ( vec_new [u] )\n"
+                "    ( vec_push [u] v # u 1 )\n"
+                "    : * u p ( vec_data [u] v )\n"
+                "    ( vec_push [u] v # u 2 )\n"
+                "    : i x # i . p 0\n"
+                "    ( vec_free [u] v )"),
+            "reserve-after-borrow": prog(
+                "    : ~ ( Vec u ) v ( vec_new [u] )\n"
+                "    ( vec_push [u] v # u 1 )\n"
+                "    : * u p ( vec_data [u] v )\n"
+                "    ( vec_reserve [u] v 64 )\n"
+                "    : i x # i . p 0\n"
+                "    ( vec_free [u] v )"),
+            "free-after-borrow": prog(
+                "    : ~ ( Vec u ) v ( vec_new [u] )\n"
+                "    ( vec_push [u] v # u 1 )\n"
+                "    : * u p ( vec_data [u] v )\n"
+                "    ( vec_free [u] v )\n"
+                "    : i x # i . p 0"),
+            # The same push, one call deep. #902's shape: a guard that
+            # holds for the direct spelling and not for its twin teaches
+            # "wrap it in a helper" as the cure.
+            "push-via-helper": prog(
+                "    : ~ ( Vec u ) v ( vec_new [u] )\n"
+                "    ( vec_push [u] v # u 1 )\n"
+                "    : * u p ( vec_data [u] v )\n"
+                "    ( grow v )\n"
+                "    : i x # i . p 0\n"
+                "    ( vec_free [u] v )",
+                extra="@ grow ( Vec u ) v → v { ( vec_push [u] v # u 2 ) }\n"),
+            "push-in-loop": prog(
+                "    : ~ ( Vec u ) v ( vec_new [u] )\n"
+                "    ( vec_push [u] v # u 1 )\n"
+                "    : * u p ( vec_data [u] v )\n"
+                "    : ~ i k 0\n"
+                "    ~ < k 3 { ( vec_push [u] v # u 2 ) = k + k 1 }\n"
+                "    : i x # i . p 0\n"
+                "    ( vec_free [u] v )"),
+            "string-data-after-append": prog(
+                "    : ~ String s ( string_new )\n"
+                "    ( string_push_char s 65 )\n"
+                "    : s p ( string_data s )\n"
+                "    ( string_push_char s 66 )\n"
+                "    : i x ( nurl_str_len p )\n"
+                "    ( string_free s )",
+                prelude="$ `stdlib/core/string.nu`\n"),
+        },
+    },
+    {
         "name": "controls",
         "doc": "Correct programs. A class of its own because a checker "
                "that rejects these is worse than one that misses a bug — "
@@ -778,6 +1198,98 @@ CLASSES = [
             "option-payload-matches": prog(
                 "    : ?i o @ ?i { T 42 }\n"
                 "    ?? o { T v → ^ v  F → ^ 0 }", prelude=""),
+            # Escape controls. The ret-escape / escape-into-callee
+            # classes above widen what counts as "the reference got
+            # out"; each of these is a shape that LOOKS like one and is
+            # entirely legal, so they bound the widening.
+            #
+            # A helper that only INVOKES the closure cannot retain it —
+            # passing a stack reference there is the documented legal
+            # case (§2.7), and the one the whole callback idiom rests on.
+            "helper-invokes-param": prog(
+                "    : i n ( caller )",
+                prelude="",
+                extra=ESC_CTR
+                      + "@ runit ( @ v ) cb → i { ( cb ) ^ 0 }\n"
+                      + "@ caller → i {\n" + ESC_MKREF
+                      + "    : i r ( runit f )\n    ^ + r . c n\n}\n"),
+            # The Slot really does carry the reference — and is consumed
+            # inside the referent's own frame, which is fine. Folding
+            # "embeds a parameter" into "escapes" turns this red.
+            "aggregate-consumed-in-scope": prog(
+                "    : i n ( caller )",
+                prelude="",
+                extra=ESC_CTR + ESC_SLOT
+                      + "@ wrap ( @ v ) cb → Slot { ^ @ Slot { cb } }\n"
+                      + "@ caller → i {\n" + ESC_MKREF
+                      + "    : Slot s ( wrap f )\n"
+                      + "    : ( @ v ) g . s cb\n    ( g )\n    ^ . c n\n}\n"),
+            # An ordinary constructor returns its parameters inside a
+            # struct. Recording them is right; flagging them is not —
+            # an `int` argument is not a reference.
+            "constructor-of-values": prog(
+                "    : Point p ( mk 3 4 )\n"
+                "    : i n . p x",
+                prelude="",
+                extra=": Point { i x i y }\n"
+                      + "@ mk i a i b → Point { ^ @ Point { a b } }\n"),
+            # The nested-aggregate twin of the constructor: depth must
+            # not be what makes a value a reference.
+            "nested-constructor-of-values": prog(
+                "    : Outer o ( mk2 3 )\n"
+                "    : Inner n . o it\n"
+                "    : i k . n x",
+                prelude="",
+                extra=": Inner { i x }\n: Outer { Inner it }\n"
+                      + "@ mk2 i a → Outer { ^ @ Outer { @ Inner { a } } }\n"),
+            # A closure over a HEAP handle is not a stack reference: the
+            # Vec control block outlives the frame, so returning the
+            # closure is the documented cure, not the disease (§4).
+            "closure-over-heap-handle": prog(
+                "    : ( @ v ) g ( caller )\n"
+                "    ( g )",
+                prelude=PRELUDE_VEC,
+                extra="@ caller → ( @ v ) {\n"
+                      "    : ( Vec i ) xs ( vec_new [i] )\n"
+                      "    : ( @ v ) f \\ → v { ( vec_push [i] xs 1 ) }\n"
+                      "    ^ f\n}\n"),
+            # A helper returning a FRESH value, having merely borrowed
+            # the reference, is not a passthrough — its result may be
+            # returned freely.
+            # §2.4 controls. A DIFFERENT binding read alongside the
+            # `inout` one is the whole point of having two arguments.
+            "inout-with-other-binding": prog(
+                "    : ~ Counter c @ Counter { 3 10 }\n"
+                "    : ~ Counter d @ Counter { 9 10 }\n"
+                "    ( bump c d )",
+                prelude="",
+                extra=": Counter { i n i max }\n"
+                      "@ bump inout Counter a Counter b → v { = . a n + . a n . b n }\n"),
+            # §2.10 control: a borrow taken AFTER the mutation is fresh,
+            # and a container never mutated invalidates nothing.
+            "borrow-after-mutation": prog(
+                "    : ~ ( Vec u ) v ( vec_new [u] )\n"
+                "    ( vec_push [u] v # u 1 )\n"
+                "    ( vec_push [u] v # u 2 )\n"
+                "    : * u p ( vec_data [u] v )\n"
+                "    : i x # i . p 0\n"
+                "    ( vec_free [u] v )"),
+            "borrow-of-untouched-container": prog(
+                "    : ~ ( Vec u ) v ( vec_new [u] )\n"
+                "    : ~ ( Vec u ) w ( vec_new [u] )\n"
+                "    ( vec_push [u] v # u 1 )\n"
+                "    : * u p ( vec_data [u] v )\n"
+                "    ( vec_push [u] w # u 2 )\n"
+                "    : i x # i . p 0\n"
+                "    ( vec_free [u] v )\n"
+                "    ( vec_free [u] w )"),
+            "fresh-result-not-passthrough": prog(
+                "    : i n ( caller )",
+                prelude="",
+                extra=ESC_CTR
+                      + "@ runit ( @ v ) cb → i { ( cb ) ^ 7 }\n"
+                      + "@ caller → i {\n" + ESC_MKREF
+                      + "    ^ ( runit f )\n}\n"),
         },
     },
 ]
@@ -796,6 +1308,7 @@ def compile_verdict(src_path, strict):
 
 
 INVALID = "invalid"          # the template is broken, not the compiler
+_NO_LLVM_AS = False          # set once if llvm-as is missing (see ir_is_valid)
 
 
 def ir_is_valid(src_path):
@@ -818,8 +1331,21 @@ def ir_is_valid(src_path):
                            cwd=ROOT)
         if r.returncode != 0:
             return True, ""          # rejected: nothing was emitted to verify
-        v = subprocess.run(["llvm-as", str(ll), "-o", "/dev/null"],
-                           capture_output=True, cwd=ROOT)
+        try:
+            v = subprocess.run(["llvm-as", str(ll), "-o", "/dev/null"],
+                               capture_output=True, cwd=ROOT)
+        except FileNotFoundError:
+            # No llvm-as on this host. Say so ONCE and loudly rather than
+            # dying with a traceback or, worse, quietly reporting every
+            # module as valid — an invariant that silently stops being
+            # checked is the failure mode this harness exists to prevent.
+            global _NO_LLVM_AS
+            if not _NO_LLVM_AS:
+                print("WARNING: llvm-as not found — the IR-validity "
+                      "invariant is NOT being checked (install llvm).",
+                      file=sys.stderr)
+                _NO_LLVM_AS = True
+            return True, ""
         if v.returncode == 0:
             return True, ""
         err = v.stderr.decode("utf-8", "replace").strip().splitlines()
@@ -870,6 +1396,19 @@ def runtime_is_broken(src_path, tmpdir):
                        stdout=open(ll, "wb"), stderr=subprocess.DEVNULL, cwd=ROOT)
     if r.returncode != 0:
         return None, "did not compile with --no-borrowck"
+    # ASan instruments only functions carrying the `sanitize_address`
+    # attribute, which the C frontend adds and hand-written IR does not
+    # have. Without this line every escalation here saw ONLY what the
+    # sanitized runtime's malloc interceptors caught — heap double-free,
+    # heap use-after-free — and nothing at all about the code nurlc
+    # emitted. A dangling STACK reference, which is what the escape
+    # classes are made of, ran clean and was reported "UNCONFIRMED":
+    # the harness was reading its own blind spot as evidence of
+    # innocence. Stamping the attribute on every `define` is what makes
+    # the generated code answerable to the sanitizer.
+    src_ll = ll.read_text()
+    ll.write_text(re.sub(r"^(define .*) \{$", r"\1 sanitize_address {",
+                         src_ll, flags=re.M))
     # Prefer the runtime `./build.sh --san` just produced; the standalone
     # runtime_san.o can be an older artifact, and linking IR against a
     # stale ABI produces confusing hangs that look like findings.
@@ -897,7 +1436,12 @@ def runtime_is_broken(src_path, tmpdir):
     # timed out and reported "hung" — throwing away a perfectly clear
     # "SEGV on 0xfffffffffffffff8, WRITE" that had already been printed.
     # A weak label on strong evidence is its own kind of wrong answer.
-    env = dict(os.environ, ASAN_OPTIONS="detect_leaks=1:symbolize=0")
+    # detect_stack_use_after_return: a closure that captured a caller's
+    # binding by pointer is a live pointer into a dead frame, and without
+    # the fake stack that read lands on memory that still happens to be
+    # mapped. It is the whole failure mode of the escape classes.
+    env = dict(os.environ, ASAN_OPTIONS=(
+        "detect_leaks=1:symbolize=0:detect_stack_use_after_return=1"))
     partial = b""
     try:
         run = subprocess.run([str(exe)], capture_output=True, timeout=30, env=env)

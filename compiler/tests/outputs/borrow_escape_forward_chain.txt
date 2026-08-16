@@ -1,0 +1,5 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/borrow_escape_forward_chain.nu:21: error: passing a value that references a stack binding by pointer to 'outer' — it escapes the current stack frame and dangles (move it to a heap-backed handle)
+    ( outer f )
+error: compilation aborted — 1 borrow-checker violation (re-run with --no-borrowck to bypass)
