@@ -8,6 +8,57 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.44.2] — 2026-08-16
+
+The last package that could not be installed, and the three defects
+standing behind it.
+
+0.44.1 took the registry from 42 of 48 installable to 44. `yoloe` was
+the one left, and reaching it meant going through a chain where each
+link only became visible once the one in front of it was gone.
+
+### Fixed
+
+- **The FFI sentinel described the machine that BUILT the toolchain,
+  not the one running it.** `stdlib/runtime.<lib>` tells nurlc an FFI
+  library is available, and `build.sh` writes it by probing the box it
+  runs on — which for a release archive is the CI runner. That runner
+  has no libX11-dev, so no release has ever shipped `runtime.X11`, and
+  `nurlpkg install yoloe` failed at compile time telling the user to
+  install libX11-dev and re-run `build.sh` — on a machine that already
+  had libX11 and cannot run `build.sh` at all. The installer now probes
+  the machine it is installing *onto*, with the same test. No library
+  → no sentinel → the same clean compile-time message as before, which
+  is the right answer on a headless box: `nurl.sh` would otherwise
+  reach the linker and fail there instead.
+
+- **A second FFI declaration of one symbol silently retargeted its
+  calls.** Two declarations of the same linker symbol cannot both be
+  emitted, so the first wins the `declare` — while every later one
+  overwrote the call-site metadata (parameter types, variadic
+  signature, return type). Calls were then lowered against a signature
+  the module never declared:
+
+  ```
+  call i64 (i8*, i32, ...) @open(i8* %path, i64 %r1)
+  ```
+
+  nurlc exited 0 and clang delivered the news, about generated IR.
+  One linker symbol has one ABI, so a *disagreement* is now an error
+  naming both signatures and pointing at the `&` rather than at the
+  next declaration the lexer had already reached. Identical
+  redeclarations stay legal — two modules declaring the same extern is
+  ordinary, and the stdlib relies on it.
+  (`should_fail_ffi_sig_conflict`)
+
+- **The version-string gate could not see past a parenthesis.** Its
+  `cli_new[^)]*` matcher stopped at the first `)`, and `yoloe`'s
+  about-string is "…segmentation (pure NURL, GPU)" — so the version sat
+  behind a parenthesis *inside the description* and the gate written to
+  check it saw nothing. yoloe shipped 0.6.6 announcing 0.6.0. It now
+  takes the last backticked semver on the line; 14 literals checked.
+
+
 ## [0.44.1] — 2026-08-16
 
 A patch cut for one reason: 0.44.0 could not compile a correct program,
@@ -13390,7 +13441,8 @@ releases are measured.
   compile-server (`api/`), browser playground (`nurlweb/`).
 * Dual license: MIT (LICENSE-MIT) or Apache-2.0 (LICENSE-APACHE).
 
-[Unreleased]: https://github.com/nurl-lang/nurl/compare/v0.44.1...HEAD
+[Unreleased]: https://github.com/nurl-lang/nurl/compare/v0.44.2...HEAD
+[0.44.2]: https://github.com/nurl-lang/nurl/compare/v0.44.1...v0.44.2
 [0.44.1]: https://github.com/nurl-lang/nurl/compare/v0.44.0...v0.44.1
 [0.44.0]: https://github.com/nurl-lang/nurl/compare/v0.43.0...v0.44.0
 [0.43.0]: https://github.com/nurl-lang/nurl/compare/v0.42.0...v0.43.0
