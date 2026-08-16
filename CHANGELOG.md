@@ -8,6 +8,65 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.44.1] — 2026-08-16
+
+A patch cut for one reason: 0.44.0 could not compile a correct program,
+and a published package was the proof.
+
+Installing all 48 registry packages with 0.44.0 — the standing rule that
+publishing proves nothing, so install it — turned up six that did not
+build. Five were the ecosystem's own defects and are fixed in the
+packages. The sixth was the compiler's.
+
+### Fixed
+
+- **A ternary may end a condition; the `{` after it is the body.** The
+  n-ary arity trap (0.37.0) fires when a `{` follows a completed
+  ternary: `? & a b c d { then } { else }` means an n-ary AND, `& a b`
+  takes two operands, `c` and `d` are eaten as the bare then/else, and
+  the blocks become stray statements. Real trap, worth the hard error
+  it became.
+
+  That signal has a second and entirely correct source:
+
+  ```
+  ~ & ok < i0 ? >= stopat 0 stopat N { body }
+  ```
+
+  Here the ternary is part of the **loop's** condition and the `{`
+  opens the loop body. Nothing is stray, there is no rewrite that
+  avoids the diagnostic, and it is an error by default — so a correct
+  program could not be compiled at all. The `?`-condition form has it
+  too. `packages/lingbot-map` had exactly this shape and could not be
+  installed by any toolchain.
+
+  The check now stays silent while a condition is being parsed and
+  fires exactly as before everywhere else. Inside a condition the two
+  cases are genuinely indistinguishable — the `{` is the enclosing
+  construct's block either way — so silence is the only answer that
+  keeps correct code compiling, and it is the direction every other
+  diagnostic here takes: miss, never invent. The corpus compiles to
+  byte-identical IR; the only exit-code change anywhere is the new test.
+  (`arity_ternary_in_condition`, with `arity_strict_nary` unmoved)
+
+- **Two published packages that could not be installed, and five that
+  announced the wrong version.** `gguf` passed an `i` where a `b` was
+  declared; `lingbot-map` carried stray fourth blocks on two `?`
+  statements. Both failed identically under 0.43.0 — they had simply
+  been uninstallable since publication, and nothing was looking,
+  because `nurlpkg publish` does not build what it publishes.
+
+  Then the freshly published `gguf 0.3.1` printed `gguf 0.3.0`: the
+  gate added days earlier to stop exactly that checks
+  `cli_new prog about VERSION`, and gguf prints its version with a bare
+  `nurl_print` of the literal `gguf 0.3.0`. It now also matches a literal
+  carrying the package's **own name** followed by a semver, went from
+  checking 1 literal to 13, and found four more drifted packages —
+  `safetensor` was two minors behind. All are bumped rather than
+  corrected in place: each had already shipped announcing the wrong
+  number, and a published version can be yanked, never replaced.
+
+
 ## [0.44.0] — 2026-08-16
 
 The order-independent release. Every entry started from the same
@@ -13331,7 +13390,8 @@ releases are measured.
   compile-server (`api/`), browser playground (`nurlweb/`).
 * Dual license: MIT (LICENSE-MIT) or Apache-2.0 (LICENSE-APACHE).
 
-[Unreleased]: https://github.com/nurl-lang/nurl/compare/v0.44.0...HEAD
+[Unreleased]: https://github.com/nurl-lang/nurl/compare/v0.44.1...HEAD
+[0.44.1]: https://github.com/nurl-lang/nurl/compare/v0.44.0...v0.44.1
 [0.44.0]: https://github.com/nurl-lang/nurl/compare/v0.43.0...v0.44.0
 [0.43.0]: https://github.com/nurl-lang/nurl/compare/v0.42.0...v0.43.0
 [0.42.0]: https://github.com/nurl-lang/nurl/compare/v0.41.0...v0.42.0
