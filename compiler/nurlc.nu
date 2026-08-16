@@ -11194,8 +11194,18 @@
         ( seq ( nurl_llty phi_type ) `i8*` ) `1` `` )
         // Handle provenance (gen_cond's twin): the bindings this value
         // may have come from, and whether it definitely came from one.
-        ( nurl_sym_def syms `__last_phi_idents__`
-        ( __phi_ids_union m_phi_ids m_inner_ids ) )
+        // Fold the inherited candidates into the accumulator rather than
+        // passing the union's result straight into nurl_sym_def: a fresh
+        // owned call result handed to a builtin as an argument is not
+        // collected, and `__phi_ids_union` is defined below this function
+        // so the call site has no ownership summary to work from either.
+        // One publish per value-bearing `??` leaked its buffer — 67 of
+        // them compiling net_tcpstack, caught by the LSan-pinned tests.
+        // Assigning into the `~ s` accumulator is the idiom gen_cond
+        // already uses for the same call, and it frees the old value.
+        ? != 0 ( nurl_str_len m_inner_ids )
+        { = m_phi_ids ( __phi_ids_union m_phi_ids m_inner_ids ) } {}
+        ( nurl_sym_def syms `__last_phi_idents__` m_phi_ids )
         ( nurl_sym_def syms `__last_phi_cause__`
         `its handle is one of the values a '??' selected between` )
         // An INHERITED candidate came from a join that already had a
