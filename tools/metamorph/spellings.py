@@ -1618,6 +1618,141 @@ CLASSES = [
 ]
 
 
+# ── The runtime axis ────────────────────────────────────────────────────
+#
+# Every class above asks a COMPILER a question and compares verdicts.
+# One part of the memory model cannot be asked that way: the
+# panic-unwind allocation journal (docs/MEMORY.md §7.2) is a RUNTIME
+# mechanism. A `panic` longjmps past the scope-exit frees the compiler
+# queued, and the journal reclaims what it skipped — so the question is
+# not "what does nurlc say" but "does the program leak, or free
+# something the caller still owns".
+#
+# The metamorphic shape is the same one, though: the same abandoned
+# allocation, spelled N ways inside a recover extent, must be reclaimed
+# in all of them. `compiler/tests/recover_unwind.nu` pins four spellings;
+# these are the ones nobody had pointed the journal at — an arm, a match
+# arm, a loop body, a nested extent, a second extent after the first.
+#
+# The verdict comes from an LSan run: CLEAN, LEAK or CRASH. A leak is
+# the journal missing an obligation; a crash is the worse failure, the
+# journal freeing something that was not abandoned. Both are the
+# mechanism's, never the template's — a template that does not compile
+# is reported separately.
+
+RECOVER_PRELUDE = "$ `stdlib/std/panic.nu`\n$ `stdlib/core/string.nu`\n"
+GUARD = ("@ guard ( @ v ) cl → v {\n"
+         "    : !v PanicInfo r ( recover cl )\n"
+         "    ?? r { T _ → {}  F p → ( panic_info_free p ) }\n}\n")
+
+RUNTIME_CLASSES = [
+    {
+        "name": "panic-reclaim",
+        "severity": "leak",
+        "doc": "An owned auto-drop allocation abandoned by a panic "
+               "inside a recover extent (docs/MEMORY.md §7.2). The "
+               "journal reclaims it before the longjmp; where in the "
+               "extent it was allocated cannot change that.",
+        "spellings": {
+            # The shape the pinned test already covers, as the control
+            # that proves the harness can see a difference at all.
+            "body-scratch": (RECOVER_PRELUDE + GUARD +
+                "@ crash → v {\n"
+                "    : s t ( nurl_str_cat `body-` `scratch` )\n"
+                "    ( nurl_print t ) ( nurl_print `\\n` )\n"
+                "    ( panic `x` )\n}\n"
+                "@ main → i {\n    ( guard \\ → v { ( crash ) } )\n    ^ 0\n}\n"),
+            "if-arm-scratch": (RECOVER_PRELUDE + GUARD +
+                "@ crash → v {\n"
+                "    ? > 1 0 {\n"
+                "        : s t ( nurl_str_cat `if-` `scratch` )\n"
+                "        ( nurl_print t ) ( nurl_print `\\n` )\n"
+                "        ( panic `x` )\n    } {}\n}\n"
+                "@ main → i {\n    ( guard \\ → v { ( crash ) } )\n    ^ 0\n}\n"),
+            "match-arm-scratch": (RECOVER_PRELUDE + GUARD +
+                "@ crash → v {\n"
+                "    : i k 1\n"
+                "    ?? k {\n"
+                "        1 → { : s t ( nurl_str_cat `match-` `scratch` )\n"
+                "              ( nurl_print t ) ( nurl_print `\\n` )\n"
+                "              ( panic `x` ) }\n"
+                "        _ → {}\n    }\n}\n"
+                "@ main → i {\n    ( guard \\ → v { ( crash ) } )\n    ^ 0\n}\n"),
+            "loop-body-scratch": (RECOVER_PRELUDE + GUARD +
+                "@ crash → v {\n"
+                "    : [i xs [i | 1 2 3]\n"
+                "    ~ x xs {\n"
+                "        : s t ( nurl_str_cat `iter-` `scratch` )\n"
+                "        ( nurl_print t ) ( nurl_print `\\n` )\n"
+                "        ? > x 1 { ( panic `x` ) } {}\n    }\n}\n"
+                "@ main → i {\n    ( guard \\ → v { ( crash ) } )\n    ^ 0\n}\n"),
+            # Two calls deep: the frames the longjmp skips are not only
+            # the one that panicked.
+            "two-frames-deep": (RECOVER_PRELUDE + GUARD +
+                "@ inner → v {\n"
+                "    : s t ( nurl_str_cat `inner-` `scratch` )\n"
+                "    ( nurl_print t ) ( nurl_print `\\n` )\n"
+                "    ( panic `x` )\n}\n"
+                "@ outer → v {\n"
+                "    : s o ( nurl_str_cat `outer-` `scratch` )\n"
+                "    ( nurl_print o ) ( nurl_print `\\n` )\n"
+                "    ( inner )\n}\n"
+                "@ main → i {\n    ( guard \\ → v { ( outer ) } )\n    ^ 0\n}\n"),
+            # A recover INSIDE a recover: the inner unwind must reclaim
+            # only its own extent, and the outer's scratch has to still
+            # be readable after it — then reclaimed by the outer unwind.
+            "nested-extent": (RECOVER_PRELUDE + GUARD +
+                "@ inner_crash → v {\n"
+                "    : s t ( nurl_str_cat `inner-` `scratch` )\n"
+                "    ( nurl_print t ) ( nurl_print `\\n` )\n"
+                "    ( panic `i` )\n}\n"
+                "@ outer_crash → v {\n"
+                "    : s o ( nurl_str_cat `outer-` `scratch` )\n"
+                "    ( guard \\ → v { ( inner_crash ) } )\n"
+                "    ( nurl_print o ) ( nurl_print `\\n` )\n"
+                "    ( panic `o` )\n}\n"
+                "@ main → i {\n    ( guard \\ → v { ( outer_crash ) } )\n"
+                "    ^ 0\n}\n"),
+            # A second extent after the first has already unwound: the
+            # journal must start empty rather than carrying stale entries
+            # that a later drain would free twice.
+            "second-extent": (RECOVER_PRELUDE + GUARD +
+                "@ crash → v {\n"
+                "    : s t ( nurl_str_cat `extent-` `scratch` )\n"
+                "    ( nurl_print t ) ( nurl_print `\\n` )\n"
+                "    ( panic `x` )\n}\n"
+                "@ main → i {\n"
+                "    ( guard \\ → v { ( crash ) } )\n"
+                "    ( guard \\ → v { ( crash ) } )\n    ^ 0\n}\n"),
+            # An extent that does NOT panic still has to leave nothing
+            # behind — the ordinary scope-exit path, journal or no.
+            "extent-without-panic": (RECOVER_PRELUDE + GUARD +
+                "@ quiet → v {\n"
+                "    : s t ( nurl_str_cat `quiet-` `scratch` )\n"
+                "    ( nurl_print t ) ( nurl_print `\\n` )\n}\n"
+                "@ main → i {\n    ( guard \\ → v { ( quiet ) } )\n    ^ 0\n}\n"),
+            # ESCAPE SOUNDNESS, the direction where a bug is a crash
+            # rather than a leak: a value moved into a by-ref-captured
+            # caller binding before the panic belongs to the CALLER now,
+            # so the journal must forget it. Reading it after the unwind
+            # faults if the journal freed it; freeing it here keeps the
+            # spelling leak-clean either way.
+            "escaped-value-survives": (RECOVER_PRELUDE +
+                ": Resp { s body i code }\n"
+                "@ main → i {\n"
+                "    : ~ Resp out @ Resp { `none` 500 }\n"
+                "    : !v PanicInfo r ( recover \\ → v {\n"
+                "        : Resp tmp @ Resp { ( nurl_str_cat `escaped-` `field` ) 201 }\n"
+                "        = out tmp\n"
+                "        ( panic `e` )\n    } )\n"
+                "    ?? r { T _ → {}  F p → ( panic_info_free p ) }\n"
+                "    ( nurl_print . out body ) ( nurl_print `\\n` )\n"
+                "    ( nurl_free # s . out body )\n    ^ 0\n}\n"),
+        },
+    },
+]
+
+
 # ── Driver ──────────────────────────────────────────────────────────────
 
 def compile_verdict(src_path, strict):
@@ -1786,6 +1921,109 @@ def runtime_is_broken(src_path, tmpdir):
     return False, "ran clean"
 
 
+RUN_CLEAN = "clean"
+RUN_LEAK = "leak"
+RUN_CRASH = "crash"
+
+
+def sanitized_runtime():
+    """The sanitized runtime object, or None. Same search order as
+    runtime_is_broken: an explicit $NURL_SAN_RUNTIME first, because a
+    plain `./build.sh` overwrites stdlib/runtime.o with an
+    uninstrumented one and linking against that checks nothing."""
+    cands = []
+    env_rt = os.environ.get("NURL_SAN_RUNTIME")
+    if env_rt:
+        cands.append(pathlib.Path(env_rt))
+    cands += [ROOT / "stdlib" / "runtime.o", ROOT / "stdlib" / "runtime_san.o"]
+    for cand in cands:
+        if cand.exists() and b"__asan_init" in subprocess.run(
+                ["nm", str(cand)], capture_output=True).stdout:
+            return cand
+    return None
+
+
+def runtime_verdict(src_path, tmpdir, san):
+    """Compile, link against the sanitized runtime, run with leak
+    detection on. Unlike runtime_is_broken this builds the program the
+    NORMAL way — the point is what the shipped compiler emits, not what
+    it emits with the checker disabled."""
+    ll = tmpdir / f"{src_path.stem}.ll"
+    exe = tmpdir / f"{src_path.stem}.bin"
+    r = subprocess.run([str(NURLC), str(src_path)],
+                       stdout=open(ll, "wb"), stderr=subprocess.PIPE, cwd=ROOT)
+    if r.returncode != 0:
+        first = r.stderr.decode("utf-8", "replace").strip().splitlines()
+        return INVALID, (first[0][:100] if first else "did not compile")
+    # Same reason as runtime_is_broken: hand-written IR carries no
+    # `sanitize_address` attribute, so without this ASan sees only the
+    # runtime's own allocations and every spelling "runs clean".
+    ll.write_text(re.sub(r"^(define .*) \{$", r"\1 sanitize_address {",
+                         ll.read_text(), flags=re.M))
+    link = subprocess.run(
+        ["clang", "-fsanitize=address,undefined", "-fno-sanitize-recover=all",
+         "-o", str(exe), str(ll), str(san), "-lm", "-lpthread"],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, cwd=ROOT)
+    if link.returncode != 0:
+        return INVALID, "did not link"
+    # use_stacks=0:use_registers=0 is what makes this an oracle at all.
+    # With the defaults, a buffer whose only owner is a live `main`
+    # frame is "still reachable" and LSan says nothing — a deliberately
+    # leaking control (a `Vec` never freed) reported CLEAN, which would
+    # have made every spelling below pass no matter what the journal
+    # did. At process exit an allocation the program still owns IS the
+    # leak we are asking about, so the stack must not launder it.
+    env = dict(os.environ, ASAN_OPTIONS="detect_leaks=1:symbolize=0",
+               LSAN_OPTIONS="use_stacks=0:use_registers=0")
+    try:
+        run = subprocess.run([str(exe)], capture_output=True, timeout=30,
+                             env=env)
+        out = (run.stderr or b"").decode("utf-8", "replace")
+        rc = run.returncode
+    except subprocess.TimeoutExpired as e:
+        return RUN_CRASH, "hung"
+    if "LeakSanitizer" in out and "AddressSanitizer:" not in out.split(
+            "LeakSanitizer")[0]:
+        first = next((l for l in out.splitlines() if "leaked" in l), "leak")
+        return RUN_LEAK, first.strip()[:80]
+    for marker in ("AddressSanitizer", "runtime error:"):
+        if marker in out:
+            first = next((l for l in out.splitlines() if "ERROR:" in l), marker)
+            return RUN_CRASH, first.strip()[:80]
+    if rc < 0:
+        return RUN_CRASH, f"killed by signal {-rc}"
+    return RUN_CLEAN, ""
+
+
+def run_runtime_classes(only, tmp):
+    """The §7.2 axis. Returns (failures, skipped)."""
+    san = sanitized_runtime()
+    fails = []
+    for cls in RUNTIME_CLASSES:
+        if only and cls["name"] != only:
+            continue
+        print(f"\n── {cls['name']}  (runtime axis — expect clean under LSan)")
+        if san is None:
+            # Loudly, and as a SKIP rather than a pass: an invariant that
+            # silently stops being checked is the failure mode this
+            # harness exists to prevent.
+            print("   SKIPPED     no sanitized runtime — build it with "
+                  "`./build.sh --san --no-tests`\n"
+                  "               (or point $NURL_SAN_RUNTIME at one)")
+            return fails, True
+        for name, src in cls["spellings"].items():
+            p = tmp / f"{cls['name']}__{name}.nu"
+            p.write_text(src)
+            got, why = runtime_verdict(p, tmp, san)
+            mark = "ok " if got == RUN_CLEAN else (
+                "INVALID" if got == INVALID else "FAIL")
+            if got not in (RUN_CLEAN,):
+                fails.append((cls["name"], name, got, why))
+            print(f"   {mark:11} {name:26} → {got}"
+                  f"{('  ' + why) if why else ''}")
+    return fails, False
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--verify", action="store_true",
@@ -1801,8 +2039,13 @@ def main():
     # into an ASan+LSan run: the sweep goes from seconds to the better
     # part of an hour and looks hung when it is only crawling. --verify
     # needs a sanitized RUNTIME, never a sanitized COMPILER.
-    if b"__asan_init" in subprocess.run(["nm", str(NURLC)],
-                                        capture_output=True).stdout:
+    # …but not when only a RUNTIME class was asked for: those need the
+    # sanitized runtime that the same `--san` build produced, so the
+    # warning would be advice against the one setup that works.
+    compile_classes_run = any(not args.only or c["name"] == args.only
+                              for c in CLASSES)
+    if compile_classes_run and b"__asan_init" in subprocess.run(
+            ["nm", str(NURLC)], capture_output=True).stdout:
         print("WARNING: build/nurlc is SANITIZED — every compile here will "
               "run under ASan and this sweep will take ~50x longer.\n"
               "         Run ./build.sh (no --san) first; --verify only needs "
@@ -1877,10 +2120,16 @@ def main():
         print(f"\nbaselined {len(gaps)} known gap(s) → {KNOWN.name}")
         return 0
 
+    rt_fails, rt_skipped = run_runtime_classes(args.only, tmp)
+
     print(f"\n── summary: {len(gaps)} gap(s), {len(new_gaps)} new, "
           f"{len(control_breaks)} control regression(s), "
           f"{len(invalid)} invalid template(s), "
-          f"{len(bad_ir)} invalid-IR escape(s)")
+          f"{len(bad_ir)} invalid-IR escape(s), "
+          f"{len(rt_fails)} runtime failure(s)"
+          f"{' [runtime axis SKIPPED]' if rt_skipped else ''}")
+    for c, n, got, why in rt_fails:
+        print(f"   {got.upper():10} {c}/{n}: {why}")
     for c, n in invalid:
         print(f"   INVALID    {c}/{n}: fix the template")
     for c, n, why in bad_ir:
@@ -1905,7 +2154,8 @@ def main():
             print(f"   [{sev_of.get(c,'?'):22}] {c}/{n}\n"
                   f"       {state}")
 
-    return 1 if (new_gaps or control_breaks or invalid or bad_ir) else 0
+    return 1 if (new_gaps or control_breaks or invalid or bad_ir
+                 or rt_fails) else 0
 
 
 if __name__ == "__main__":
