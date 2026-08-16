@@ -386,13 +386,13 @@ i stopat * i taps GkBuf out → b {
     ? okp {} {
         ( gk_dbuf_free bfr ) ( gk_dbuf_free brw ) ( gk_dbuf_free bcl )
         ^ F
-    } {}
+    }
     // the 2-D tables have to be FILLED, not just allocated
     : i rp2_max / ( gk_buf_len . ws cosb ) / hd 2
     ? ( ag_setup_rope2 kit ws hd rp2_max ) {} {
         ( gk_dbuf_free bfr ) ( gk_dbuf_free brw ) ( gk_dbuf_free bcl )
         ^ F
-    } {}
+    }
     : LmRope rp2 @ LmRope { LM_ROPE_2D . ws rows . ws cols
         @ GkBuf { 0 0 GK_F32 } . ws cosb . ws sinb }
     : LmRope rp3 @ LmRope { LM_ROPE_3D bfr brw bcl . a cos3 . a sin3 }
