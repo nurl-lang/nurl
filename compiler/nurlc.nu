@@ -3531,8 +3531,32 @@
         // per pointer, naming BOTH the mutation and the fix.
         : i __dl ( __ptr_dead_line name )
         ? >= __dl 0 {
-            ( __ptr_stale_warn lex __id_line __id_col name
-            ( __ptr_src_of name ) __dl )
+            // …unless the mutation was a call to a callee that had not
+            // been compiled yet (§6.4). Then the staleness is a parked
+            // question, not an answer: record the report and let
+            // resolve_pending_stale() print it after the module, when
+            // the callee's mutation summary is final. Everything else —
+            // the dead set, the arm union, report-once — behaved as if
+            // the mutation were certain, so this is the ONLY place the
+            // two kinds of kill differ.
+            : s __pv ( __ptr_dead_pending name )
+            // Bind the container name once. A fresh user-function result
+            // passed straight in as an argument is not collected, and
+            // this is on the path of every stale-borrow report.
+            : s __src ( __ptr_src_of name )
+            ? == 0 ( nurl_str_len __pv )
+            { ( __ptr_stale_warn lex __id_line __id_col name __src __dl ) }
+            {  // Bind the record before parking it: the park list takes
+                // a user function's argument, which does not collect a
+                // fresh buffer handed to it inline.
+                : s __rec ( nurl_str_cat3 __pv
+                ` ` ( nurl_str_cat3 name ` `
+                ( nurl_str_cat3 __src ` `
+                ( nurl_str_cat3 ( nurl_str_int __dl ) ` `
+                ( nurl_str_cat3 ( nurl_str_int __id_line ) ` `
+                ( nurl_str_cat3 ( nurl_str_int __id_col ) ` `
+                ( nurl_lex_filename lex ) ) ) ) ) ) )
+                ( __park_append g_pending_escape `s` __rec ) }
             ( __ptr_revive name )
         } {}
         // Closure-env reclamation: a value-position load disqualifies a
@@ -7932,7 +7956,19 @@
         { : s __pk_mut ( nurl_sym_get g_fn_mutates call_name )
             ? ( str_contains_word __pk_mut ( nurl_str_int arg_idx ) )
             { ( __ptr_kill bck_arg_val bck_arg_line ) }
-            {} }
+            {  // Not known to mutate — but for a callee that has not
+                // been compiled yet, "not known" is the whole point.
+                // Kill provisionally and park the question; the summary
+                // is final after the module. The `__arity` / `__garity`
+                // pair is the same "is this a function at all, and not a
+                // closure-typed binding" test the §2.5 park uses.
+                ? & == 0 ( nurl_sym_len g_fn_compiled call_name )
+                & | != 0 ( nurl_sym_len2 syms fname `__arity` )
+                != 0 ( nurl_sym_len2 syms fname `__garity` )
+                == 0 ( nurl_sym_len2 syms fname `__ptr` )
+                { ( __ptr_kill_pending bck_arg_val bck_arg_line
+                    call_name fname arg_idx ) }
+                {} } }
         {}
         : s __cle ( nurl_sym_get syms `__last_closure_env__` )
         ? & != 0 ( nurl_str_len __cle )
@@ -9010,26 +9046,105 @@
 // stdlib code before this — the no-false-positive contract, docs/MEMORY.md
 // §6). After the `?` closes, though, either arm may have run, so the join
 // takes the UNION: stale if stale on either path.
+// An entry is `<ptr> <line> <cn> <fn> <ai>`: the pointer, the line that
+// invalidated it, and the callee the invalidation is still CONDITIONAL
+// on (`- - -` once it is certain). The condition rides the entry rather
+// than a side table because it has to survive the arm snapshot/restore/
+// union above — a certain kill inside one arm and a parked question
+// before the `?` are exactly the pair that meet at the join.
+// ONE return path, and it hands back a binding: an early `^` of a fresh
+// buffer from inside the loop with a bare `^ \`\`` at the tail made the
+// owned-return summary read "returns a literal", so no call site
+// registered the buffer and every lookup leaked it.
+@ __ptr_entry_find s set s ptr → s {
+    : ~ s rest ( nurl_str_cat set `` )
+    : ~ s out ( nurl_str_cat `` `` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s p ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s l ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s cn ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s fn ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s ai ( str_first_word rest ) = rest ( str_skip_word rest )
+        ? & ( seq p ptr ) == 0 ( nurl_str_len out )
+        { = out ( nurl_str_cat3 l ` `
+            ( nurl_str_cat3 cn ` ` ( nurl_str_cat3 fn ` ` ai ) ) ) }
+        {}
+    }
+    out
+}
+
+// The set without `ptr`'s entry. Defined here, above every caller, so
+// the owned result is collected at the call site (a helper defined below
+// its caller has no ownership summary there and leaks one buffer per
+// call — the shape the leak gate keeps catching).
+@ __ptr_entry_drop s set s ptr → s {
+    : ~ s rest ( nurl_str_cat set `` )
+    : ~ s out ( nurl_str_cat `` `` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s p ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s l ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s cn ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s fn ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s ai ( str_first_word rest ) = rest ( str_skip_word rest )
+        ? ( seq p ptr ) {} {
+            : s entry ( nurl_str_cat3 p ` ` ( nurl_str_cat3 l ` `
+            ( nurl_str_cat3 cn ` ` ( nurl_str_cat3 fn ` ` ai ) ) ) )
+            = out ? == 0 ( nurl_str_len out ) ( nurl_str_cat entry `` )
+            ( nurl_str_cat3 out ` ` entry )
+        }
+    }
+    out
+}
+
+// Is this `<line> <cn> <fn> <ai>` tail a CERTAIN invalidation?
+@ __ptr_tail_certain s tail → b {
+    ? == 0 ( nurl_str_len tail ) { ^ F } {}
+    ^ ( seq ( str_first_word ( str_skip_word tail ) ) `-` )
+}
+
 @ __ptr_dead_snapshot → s { ^ ( nurl_sym_get g_ptrtab `__ptr_dead__` ) }
 
 @ __ptr_dead_restore s snap → v { ( nurl_sym_def g_ptrtab `__ptr_dead__` snap ) }
 
 @ __ptr_dead_union s a s b → v {
-    : ~ s rest ( nurl_str_cat b `` )
     // Own the accumulator from birth. Declared straight from the borrowed
     // parameter it stayed UNTRACKED, so every owned string the loop below
     // assigned into it was orphaned — 26 per import-heavy compile. A
     // mutable binding that will hold owned values has to own its buffer;
     // the copy is what makes the assignment rules free the previous one.
-    : ~ s out ( nurl_str_cat a `` )
+    : ~ s out ( nurl_str_cat `` `` )
+    : ~ s rest ( nurl_str_cat a `` )
     ~ != 0 ( nurl_str_len rest ) {
-        : s p ( str_first_word rest )
-        = rest ( str_skip_word rest )
-        : s l ( str_first_word rest )
-        = rest ( str_skip_word rest )
-        ? ( str_contains_word out p ) {} {
-            : s entry ( nurl_str_cat3 p ` ` l )
-            = out ? == 0 ( nurl_str_len out ) ( nurl_str_cat entry `` ) ( nurl_str_cat3 out ` ` entry )
+        : s p ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s l ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s cn ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s fn ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s ai ( str_first_word rest ) = rest ( str_skip_word rest )
+        // A pointer stale on BOTH paths keeps the certain answer: a
+        // question parked before the `?` must not outrank the mutation
+        // an arm actually performed.
+        : s ob ( __ptr_entry_find b p )
+        : ~ s tail ( nurl_str_cat3 l ` `
+        ( nurl_str_cat3 cn ` ` ( nurl_str_cat3 fn ` ` ai ) ) )
+        ? & ! ( seq cn `-` ) ( __ptr_tail_certain ob )
+        { = tail ( nurl_str_cat ob `` ) } {}
+        : s entry ( nurl_str_cat3 p ` ` tail )
+        = out ? == 0 ( nurl_str_len out ) ( nurl_str_cat entry `` )
+        ( nurl_str_cat3 out ` ` entry )
+    }
+    : ~ s rest2 ( nurl_str_cat b `` )
+    ~ != 0 ( nurl_str_len rest2 ) {
+        : s p ( str_first_word rest2 ) = rest2 ( str_skip_word rest2 )
+        : s l ( str_first_word rest2 ) = rest2 ( str_skip_word rest2 )
+        : s cn ( str_first_word rest2 ) = rest2 ( str_skip_word rest2 )
+        : s fn ( str_first_word rest2 ) = rest2 ( str_skip_word rest2 )
+        : s ai ( str_first_word rest2 ) = rest2 ( str_skip_word rest2 )
+        : s oa ( __ptr_entry_find a p )
+        ? != 0 ( nurl_str_len oa ) {} {
+            : s entry ( nurl_str_cat3 p ` ` ( nurl_str_cat3 l ` `
+            ( nurl_str_cat3 cn ` ` ( nurl_str_cat3 fn ` ` ai ) ) ) )
+            = out ? == 0 ( nurl_str_len out ) ( nurl_str_cat entry `` )
+            ( nurl_str_cat3 out ` ` entry )
         }
     }
     ( nurl_sym_def g_ptrtab `__ptr_dead__` out )
@@ -14543,65 +14658,109 @@
     ( nurl_sym_def syms `__ptr_src__` new )
 }
 
-// Mark every pointer borrowed from `cont` as stale (mutated at `line`).
-@ __ptr_kill s cont i line → v {
+// Mark every pointer borrowed from `cont` as stale (mutated at `line`),
+// certainly — the tail is `- - -`.
+@ __ptr_kill_tagged s cont i line s cn s fn s ai → v {
     : i syms g_ptrtab
     : ~ s rest ( nurl_sym_get syms `__ptr_src__` )
     // Fast path: no live borrows in this function — and that is the
     // overwhelmingly common case, so a container mutation costs one
     // symtab lookup, not a table write per `vec_push` in the program.
     ? == 0 ( nurl_str_len rest ) { ^ v } {}
-    : ~ s dead ( nurl_sym_get syms `__ptr_dead__` )
+    : s dead0 ( nurl_str_cat ( nurl_sym_get syms `__ptr_dead__` ) `` )
+    : ~ s dead ( nurl_str_cat dead0 `` )
+    : b certain ( seq cn `-` )
     ~ != 0 ( nurl_str_len rest ) {
-        : s p ( str_first_word rest )
-        = rest ( str_skip_word rest )
-        : s c ( str_first_word rest )
-        = rest ( str_skip_word rest )
-        : s _l ( str_first_word rest )
-        = rest ( str_skip_word rest )
-        ? & ( seq c cont ) ! ( str_contains_word dead p ) {
-            : s entry ( nurl_str_cat3 p ` ` ( nurl_str_int line ) )
-            = dead ? == 0 ( nurl_str_len dead ) ( nurl_str_cat entry `` ) ( nurl_str_cat3 dead ` ` entry )
+        : s p ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s c ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s _l ( str_first_word rest ) = rest ( str_skip_word rest )
+        ? ( seq c cont ) {
+            : s old ( __ptr_entry_find dead0 p )
+            // Nothing recorded yet, or — for a CERTAIN mutation — a
+            // parked question to supersede. The certain answer replaces
+            // it, line and all: the report has to name the mutation that
+            // really reallocates, not the call that raised the question.
+            ? | == 0 ( nurl_str_len old )
+            & certain ! ( __ptr_tail_certain old )
+            { ? != 0 ( nurl_str_len old ) { = dead ( __ptr_entry_drop dead p ) } {}
+                : s entry ( nurl_str_cat3 p ` `
+                ( nurl_str_cat3 ( nurl_str_int line ) ` `
+                ( nurl_str_cat3 cn ` ` ( nurl_str_cat3 fn ` ` ai ) ) ) )
+                = dead ? == 0 ( nurl_str_len dead ) ( nurl_str_cat entry `` )
+                ( nurl_str_cat3 dead ` ` entry ) }
+            {}
         } {}
     }
     ( nurl_sym_def syms `__ptr_dead__` dead )
 }
 
+@ __ptr_kill s cont i line → v {
+    ( __ptr_kill_tagged cont line `-` `-` `-` )
+}
+
+// The same kill for a callee that has NOT been compiled yet: its
+// mutation summary is empty here, and empty means "not known", not
+// "does not mutate" (§6.4). Kill the pointer exactly as a certain
+// mutation would — so the arm snapshot/union machinery, the re-fetch
+// clear and the report-once rule all apply unchanged — but record WHICH
+// callee the staleness hangs on. The use site parks its report instead
+// of printing it, and resolve_pending_stale() decides after the module,
+// when the summary is final. Without this, `( grow v )` warned when
+// `grow` sat above the borrow and said nothing when it sat below: the
+// same program, two verdicts, decided by definition order.
+@ __ptr_kill_pending s cont i line s cn s fn i ai → v {
+    ( __ptr_kill_tagged cont line cn fn ( nurl_str_int ai ) )
+}
+
 // The line at which `name` was invalidated, or -1 when it is still live.
 @ __ptr_dead_line s name → i {
-    : i syms g_ptrtab
-    : ~ s rest ( nurl_sym_get syms `__ptr_dead__` )
-    ~ != 0 ( nurl_str_len rest ) {
-        : s p ( str_first_word rest )
-        = rest ( str_skip_word rest )
-        : s l ( str_first_word rest )
-        = rest ( str_skip_word rest )
-        ? ( seq p name ) { ^ ( nurl_str_to_int l ) } {}
-    }
-    ^ - 0 1
+    // Bind the set before handing it to a user function: a fresh
+    // `nurl_sym_get` result passed straight as an argument is not
+    // collected (20330 of them in one self-compile).
+    : s set ( nurl_sym_get g_ptrtab `__ptr_dead__` )
+    : s tail ( __ptr_entry_find set name )
+    ? == 0 ( nurl_str_len tail ) { ^ - 0 1 } {}
+    ^ ( nurl_str_to_int ( str_first_word tail ) )
+}
+
+// The callee this pointer's staleness is still CONDITIONAL on, as
+// "<mangled> <generic> <argidx>", or "" once it is certain (§2.10).
+@ __ptr_dead_pending s name → s {
+    : s set ( nurl_sym_get g_ptrtab `__ptr_dead__` )
+    : s tail ( __ptr_entry_find set name )
+    ? ( __ptr_tail_certain tail ) { ^ `` } {}
+    ? == 0 ( nurl_str_len tail ) { ^ `` } {}
+    ^ ( str_skip_word tail )
 }
 
 // Report once: drop `name` from the stale set after warning about it.
 @ __ptr_revive s name → v {
-    : i syms g_ptrtab
-    : ~ s rest ( nurl_sym_get syms `__ptr_dead__` )
-    : ~ s keep ``
-    ~ != 0 ( nurl_str_len rest ) {
-        : s p ( str_first_word rest )
-        = rest ( str_skip_word rest )
-        : s l ( str_first_word rest )
-        = rest ( str_skip_word rest )
-        ? ( seq p name ) {} {
-            : s entry ( nurl_str_cat3 p ` ` l )
-            = keep ? == 0 ( nurl_str_len keep ) ( nurl_str_cat entry `` ) ( nurl_str_cat3 keep ` ` entry )
-        }
-    }
-    ( nurl_sym_def syms `__ptr_dead__` keep )
+    // Bind before publishing: a fresh owned call result handed straight
+    // to a builtin as an argument is not collected.
+    : s set ( nurl_sym_get g_ptrtab `__ptr_dead__` )
+    : s kept ( __ptr_entry_drop set name )
+    ( nurl_sym_def g_ptrtab `__ptr_dead__` kept )
 }
 
 // Report a use of a pointer whose container was mutated after the borrow.
 // The lexer has already advanced past the identifier, so the position is
 // passed in rather than read from it.
+// The same report addressed by FILE rather than by a live lexer, so the
+// parked replay (resolve_pending_stale) prints the identical text after
+// the module, when the lexer that read the line is long gone.
+@ __ptr_stale_warn_at s file i line i col s name s cont i dline s ctx → v {
+    : s loc ( nurl_str_cat3 file `:`
+    ( nurl_str_cat3 ( nurl_str_int line ) `:` ( nurl_str_int col ) ) )
+    : s msg ( nurl_str_cat3 `pointer '` name
+    ( nurl_str_cat3 `' borrowed from '` cont
+    ( nurl_str_cat3 `' is stale: '` cont
+    ( nurl_str_cat3 `' was mutated on line ` ( nurl_str_int dline )
+    ` and may have reallocated its buffer` ) ) ) )
+    ( nurl_eprintln ( nurl_str_cat3 loc `: warning: ` ( nurl_str_cat msg ctx ) ) )
+    ( nurl_eprintln ( nurl_str_cat3 `  note: re-fetch the pointer after the mutation (` name
+    ( nurl_str_cat3 ` = ( vec_data … ` cont ` ) )` ) ) )
+}
+
 @ __ptr_stale_warn i lex i line i col s name s cont i dline → v {
     : s loc ( nurl_str_cat3 ( nurl_lex_filename lex ) `:`
     ( nurl_str_cat3 ( nurl_str_int line ) `:` ( nurl_str_int col ) ) )
@@ -20487,11 +20646,45 @@
     }
 }
 
+// Replay the parked stale-borrow reports (docs/MEMORY.md §2.10): a
+// pointer whose container was handed to a helper that had not been
+// compiled when the read did. §2.5 can park the QUESTION at the call
+// because its diagnostic fires there; this one fires at a later read of
+// the pointer, so what is parked is the finished REPORT and the callee
+// it is conditional on. Everything before that point — the dead set,
+// the arm union, the re-fetch clear, report-once — already ran as if the
+// mutation were certain, so ordering cannot change which reads are
+// candidates, only whether a candidate is printed.
+@ resolve_pending_stale → v {
+    ? == g_borrowck 0 { ^ } {}
+    : ~ s rest ( nurl_sym_get g_pending_escape `s` )
+    ~ != 0 ( nurl_str_len rest ) {
+        : s cn ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s fn ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s ai ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s nm ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s ct ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s dl ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s ln ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s cl ( str_first_word rest ) = rest ( str_skip_word rest )
+        : s file ( str_first_word rest ) = rest ( str_skip_word rest )
+        // Mangled name first, then the generic — the same two-step
+        // lookup gen_call and resolve_pending_iter_mut do.
+        : ~ s mut ( nurl_sym_get g_fn_mutates cn )
+        ? == 0 ( nurl_str_len mut ) { = mut ( nurl_sym_get g_fn_mutates fn ) } {}
+        ? ( str_contains_word mut ai )
+        { ( __ptr_stale_warn_at file ( nurl_str_to_int ln )
+            ( nurl_str_to_int cl ) nm ct ( nurl_str_to_int dl ) `` ) }
+        {}
+    }
+}
+
 @ resolve_pending_escapes → v {
     ? == g_borrowck 0 {} {
         ( resolve_pending_impls )
         ( resolve_pending_ret_escapes )
         ( resolve_pending_iter_mut )
+        ( resolve_pending_stale )
         : ~ s rest ( nurl_sym_get g_pending_escape `l` )
         ~ != 0 ( nurl_str_len rest ) {
             : s cn ( str_first_word rest ) = rest ( str_skip_word rest )
