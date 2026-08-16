@@ -8,3 +8,8 @@ license = "MIT OR Apache-2.0"
 onnx = { path = "../onnx", version = "^0.8" }
 image = { path = "../image", version = "^0.6" }
 cli = { path = "../cli", version = "^0.2" }
+# Reached through onnx, but present in this package's build either way —
+# declared so the resolver never has to infer them.
+tensor = { path = "../tensor", version = "^0.4" }
+gpukit = { path = "../gpukit", version = "^0.6" }
+gpu = { path = "../gpu", version = "^0.11" }
