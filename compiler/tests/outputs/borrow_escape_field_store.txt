@@ -1,0 +1,7 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/borrow_escape_field_store.nu:26: error: storing into a field of 'box' a value that references a more deeply scoped binding by pointer — it dangles once that inner scope exits
+        = . box cb f
+compiler/tests/borrow_escape_field_store.nu:39: error: returning a value that references a stack binding by pointer — it dangles after this function returns (move the captured data to a heap-backed handle)
+    ^ box
+error: compilation aborted — 2 borrow-checker violations (re-run with --no-borrowck to bypass)

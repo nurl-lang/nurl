@@ -173,6 +173,30 @@ CLASSES = [
                 "    : ( @ v ) f \\ → v { ( vec_free [i] a ) }\n"
                 "    ( f )\n"
                 "    ( vec_free [i] a )"),
+            # A join nested inside a `??` arm. gen_cond carried a nested
+            # join's candidates up; gen_match dropped them, so exactly
+            # this pair — and not their one-level spellings — compiled
+            # clean into a heap use-after-free.
+            "match-of-ternary": prog(
+                "    : ( Vec i ) a ( vec_new [i] )\n"
+                "    : i c 1\n"
+                "    : ( Vec i ) b ?? c { 1 → ? > c 0 a a  _ → ( vec_new [i] ) }\n"
+                "    ( vec_free [i] b )\n"
+                "    ( vec_free [i] a )"),
+            "match-of-match": prog(
+                "    : ( Vec i ) a ( vec_new [i] )\n"
+                "    : i c 1\n"
+                "    : ( Vec i ) b ?? c { 1 → ?? c { 1 → a  _ → a }  "
+                "_ → ( vec_new [i] ) }\n"
+                "    ( vec_free [i] b )\n"
+                "    ( vec_free [i] a )"),
+            "ternary-of-match": prog(
+                "    : ( Vec i ) a ( vec_new [i] )\n"
+                "    : i c 1\n"
+                "    : ( Vec i ) b ? > c 0 ?? c { 1 → a  _ → a } "
+                "( vec_new [i] )\n"
+                "    ( vec_free [i] b )\n"
+                "    ( vec_free [i] a )"),
         },
     },
     {
@@ -822,6 +846,160 @@ CLASSES = [
         },
     },
     {
+        "name": "intraproc-escape",
+        "severity": "memory-unsafety",
+        "doc": "A stack reference reaches a §2.3 sink WITHOUT crossing a "
+               "function boundary: `^`-return, a heap container, an "
+               "assignment into a longer-lived binding. ret-escape and "
+               "escape-into-callee cover the interprocedural halves; this "
+               "is the base rule they build on, and it had no class of "
+               "its own. What varies between spellings is only the route "
+               "the reference takes to the sink — bare, through a `?` or "
+               "`??` phi, bound to a local first, inside an aggregate "
+               "literal, or written into a struct FIELD.",
+        "expect": REJECT_DEFAULT,
+        "expect_msg": ["references a stack binding",
+                       "more deeply scoped", "storing into a field"],
+        "spellings": {
+            "ret-bare": prog(
+                "    : ( @ v ) g ( caller )\n    ( g )",
+                prelude="",
+                extra=ESC_CTR + "@ caller → ( @ v ) {\n" + ESC_MKREF
+                      + "    ^ f\n}\n"),
+            "ret-via-local": prog(
+                "    : ( @ v ) g ( caller )\n    ( g )",
+                prelude="",
+                extra=ESC_CTR + "@ caller → ( @ v ) {\n" + ESC_MKREF
+                      + "    : ( @ v ) t f\n    ^ t\n}\n"),
+            # The phi family. Every one of these ran clean before the
+            # join carried referent depth, and every one is a confirmed
+            # stack-use-after-return.
+            "ret-ternary": prog(
+                "    : ( @ v ) g ( caller )\n    ( g )",
+                prelude="",
+                extra=ESC_CTR + "@ caller → ( @ v ) {\n" + ESC_MKREF
+                      + "    ^ ? > . c n 0 f f\n}\n"),
+            "ret-match": prog(
+                "    : ( @ v ) g ( caller )\n    ( g )",
+                prelude="",
+                extra=ESC_CTR + "@ caller → ( @ v ) {\n" + ESC_MKREF
+                      + "    ^ ?? . c n { 0 → f  _ → f }\n}\n"),
+            "ret-bound-ternary": prog(
+                "    : ( @ v ) g ( caller )\n    ( g )",
+                prelude="",
+                extra=ESC_CTR + "@ caller → ( @ v ) {\n" + ESC_MKREF
+                      + "    : ( @ v ) t ? > . c n 0 f f\n    ^ t\n}\n"),
+            "ret-bound-match": prog(
+                "    : ( @ v ) g ( caller )\n    ( g )",
+                prelude="",
+                extra=ESC_CTR + "@ caller → ( @ v ) {\n" + ESC_MKREF
+                      + "    : ( @ v ) t ?? . c n { 0 → f  _ → f }\n"
+                        "    ^ t\n}\n"),
+            "ret-aggregate-of-ternary": prog(
+                "    : Slot s ( caller )\n    : ( @ v ) g . s cb\n    ( g )",
+                prelude="",
+                extra=ESC_CTR + ESC_SLOT + "@ caller → Slot {\n" + ESC_MKREF
+                      + "    ^ @ Slot { ? > . c n 0 f f }\n}\n"),
+            "ret-ternary-of-aggregate": prog(
+                "    : Slot s ( caller )\n    : ( @ v ) g . s cb\n    ( g )",
+                prelude="",
+                extra=ESC_CTR + ESC_SLOT + "@ caller → Slot {\n" + ESC_MKREF
+                      + "    : Slot s @ Slot { f }\n"
+                        "    ^ ? > . c n 0 s s\n}\n"),
+            # Assignment into a longer-lived binding: bare, and through
+            # a field of one.
+            "assign-outer": prog(
+                "    ( caller )",
+                prelude="",
+                extra=ESC_CTR + "@ caller → v {\n"
+                      "    : ~ ( @ v ) out \\ → v { }\n"
+                      "    ? > 1 0 {\n" + ESC_MKREF
+                      + "        = out f\n    } {}\n    ( out )\n}\n"),
+            "assign-outer-ternary": prog(
+                "    ( caller )",
+                prelude="",
+                extra=ESC_CTR + "@ caller → v {\n"
+                      "    : ~ ( @ v ) out \\ → v { }\n"
+                      "    ? > 1 0 {\n" + ESC_MKREF
+                      + "        = out ? > . c n 0 f f\n    } {}\n"
+                        "    ( out )\n}\n"),
+            "assign-outer-field": prog(
+                "    ( caller )",
+                prelude="",
+                extra=ESC_CTR + ESC_SLOT + "@ caller → v {\n"
+                      "    : ~ Slot box @ Slot { \\ → v { } }\n"
+                      "    ? > 1 0 {\n" + ESC_MKREF
+                      + "        = . box cb f\n    } {}\n"
+                        "    : ( @ v ) g . box cb\n    ( g )\n}\n"),
+            # The field store makes the STRUCT a stack reference; the
+            # `^` is what dangles. Same situation as ret-via-local, one
+            # aggregate in the way.
+            "field-store-then-return": prog(
+                "    : Slot s ( caller )\n    : ( @ v ) g . s cb\n    ( g )",
+                prelude="",
+                extra=ESC_CTR + ESC_SLOT + "@ caller → Slot {\n" + ESC_MKREF
+                      + "    : ~ Slot box @ Slot { \\ → v { } }\n"
+                        "    = . box cb f\n    ^ box\n}\n"),
+            # Heap-container sinks, reached through the phi and through
+            # a struct field.
+            "push-ternary": prog(
+                "    : ( Vec Slot ) h ( vec_new [Slot] )\n"
+                "    ( caller h )\n"
+                "    ( vec_free [Slot] h )",
+                prelude=PRELUDE_VEC,
+                extra=ESC_CTR + ESC_SLOT
+                      + "@ caller ( Vec Slot ) heap → v {\n" + ESC_MKREF
+                      + "    ( vec_push [Slot] heap @ Slot "
+                        "{ ? > . c n 0 f f } )\n}\n"),
+            "push-vec-in-field": prog(
+                "    : Holder h @ Holder { ( vec_new [Slot] ) }\n"
+                "    ( caller h )\n"
+                "    ( vec_free [Slot] . h items )",
+                prelude=PRELUDE_VEC,
+                extra=ESC_CTR + ESC_SLOT
+                      + ": Holder { ( Vec Slot ) items }\n"
+                      + "@ caller Holder h → v {\n" + ESC_MKREF
+                      + "    ( vec_push [Slot] . h items @ Slot { f } )\n}\n"),
+            "vec-set": prog(
+                "    : ( Vec Slot ) h ( vec_new [Slot] )\n"
+                "    ( caller h )\n"
+                "    ( vec_free [Slot] h )",
+                prelude=PRELUDE_VEC,
+                extra=ESC_CTR + ESC_SLOT
+                      + "@ caller ( Vec Slot ) heap → v {\n" + ESC_MKREF
+                      + "    : Slot s @ Slot { f }\n"
+                        "    ( vec_set [Slot] heap 0 s )\n}\n"),
+            "vec-insert": prog(
+                "    : ( Vec Slot ) h ( vec_new [Slot] )\n"
+                "    ( caller h )\n"
+                "    ( vec_free [Slot] h )",
+                prelude=PRELUDE_VEC,
+                extra=ESC_CTR + ESC_SLOT
+                      + "@ caller ( Vec Slot ) heap → v {\n" + ESC_MKREF
+                      + "    : Slot s @ Slot { f }\n"
+                        "    ( vec_insert [Slot] heap 0 s )\n}\n"),
+            "vec-extend": prog(
+                "    : ( Vec Slot ) h ( vec_new [Slot] )\n"
+                "    ( caller h )\n"
+                "    ( vec_free [Slot] h )",
+                prelude=PRELUDE_VEC,
+                extra=ESC_CTR + ESC_SLOT
+                      + "@ caller ( Vec Slot ) heap → v {\n" + ESC_MKREF
+                      + "    : ( Vec Slot ) local ( vec_new [Slot] )\n"
+                        "    ( vec_push [Slot] local @ Slot { f } )\n"
+                        "    ( vec_extend [Slot] heap local )\n"
+                        "    ( vec_free [Slot] local )\n}\n"),
+            "thread-ternary": prog(
+                "    ( caller )",
+                prelude=PRELUDE_THREAD,
+                extra=ESC_CTR + "@ caller → v {\n" + ESC_MKREF
+                      + "    : !Thread ThreadErr t ( thread_spawn "
+                        "? > . c n 0 f f )\n"
+                        "    ?? t { T th → { : i _r ( thread_join th ) } "
+                        "F _ → {} }\n}\n"),
+        },
+    },
+    {
         "name": "escape-into-callee",
         "severity": "memory-unsafety",
         "doc": "The mirror image of ret-escape: a stack reference passed "
@@ -912,6 +1090,66 @@ CLASSES = [
                         "    ?? t { T th → { : i _r ( thread_join th ) } F _ → {} }\n}\n"
                       + "@ leaky → v {\n" + ESC_MKREF
                       + "    : Slot s @ Slot { f }\n    ( detachs s )\n}\n"),
+        },
+    },
+    {
+        "name": "raw-ptr-escape",
+        "severity": "diagnostic-consistency",
+        "doc": "A `# *T` cast that reaches inside an OWNED binding's "
+               "allocation (docs/MEMORY.md §2.9 check 2). The binding is "
+               "auto-dropped at scope exit, so any pointer derived from "
+               "the cast outlives its referent — whether the cast is "
+               "bound, copied, passed straight to a callee, taken in a "
+               "branch, or selected by a phi. Strict-only by design: `*T` "
+               "is the trusted FFI surface (§3), and the default checker "
+               "leaves it alone. This class found no gap when it was "
+               "written — the check fires at the cast itself, where "
+               "spelling cannot vary — and exists to keep it that way.",
+        "expect": REJECT_STRICT,
+        "expect_msg": ["casts an owned binding to a raw pointer"],
+        "spellings": {
+            "cast-string-data": (
+                "$ `stdlib/core/string.nu`\n"
+                "@ main → i {\n"
+                "    : String s ( string_from `hello` )\n"
+                "    : *u p # *u ( string_data s )\n"
+                "    ^ # i . p 0\n}\n"),
+            "cast-then-copy": (
+                "$ `stdlib/core/string.nu`\n"
+                "@ main → i {\n"
+                "    : String s ( string_from `hello` )\n"
+                "    : *u p # *u ( string_data s )\n"
+                "    : *u q p\n"
+                "    ^ # i . q 0\n}\n"),
+            "cast-in-branch": (
+                "$ `stdlib/core/string.nu`\n"
+                "@ main → i {\n"
+                "    : String s ( string_from `hello` )\n"
+                "    ? > 1 0 {\n"
+                "        : *u p # *u ( string_data s )\n"
+                "        ^ # i . p 0\n    } {}\n"
+                "    ^ 0\n}\n"),
+            "cast-through-ternary": (
+                "$ `stdlib/core/string.nu`\n"
+                "@ main → i {\n"
+                "    : String s ( string_from `hello` )\n"
+                "    : *u p ? > 1 0 # *u ( string_data s ) "
+                "# *u ( string_data s )\n"
+                "    ^ # i . p 0\n}\n"),
+            "cast-vec-data": (
+                "$ `stdlib/core/vec.nu`\n"
+                "@ main → i {\n"
+                "    : ( Vec u ) v ( vec_new [u] )\n"
+                "    ( vec_push [u] v # u 1 )\n"
+                "    : *u p # *u ( vec_data [u] v )\n"
+                "    ( vec_free [u] v )\n"
+                "    ^ # i . p 0\n}\n"),
+            "cast-as-argument": (
+                "$ `stdlib/core/string.nu`\n"
+                "@ take *u p → i { ^ # i . p 0 }\n"
+                "@ main → i {\n"
+                "    : String s ( string_from `hello` )\n"
+                "    ^ ( take # *u ( string_data s ) )\n}\n"),
         },
     },
     {
@@ -1261,6 +1499,45 @@ CLASSES = [
                       "    : ( Vec i ) xs ( vec_new [i] )\n"
                       "    : ( @ v ) f \\ → v { ( vec_push [i] xs 1 ) }\n"
                       "    ^ f\n}\n"),
+            # §2.3 join controls. A phi is only as dangerous as what it
+            # selects between: closures that capture NOTHING are values,
+            # and returning a join of them is ordinary code. This is the
+            # control the join-carries-referent-depth rule has to keep
+            # passing — publishing the depth unconditionally, or reading
+            # the condition's residue as an arm's, breaks it.
+            "plain-closure-join-returned": prog(
+                "    : ( @ v ) g ( caller )\n"
+                "    ( g )",
+                prelude="",
+                extra="@ caller → ( @ v ) {\n"
+                      "    : i k 1\n"
+                      "    ^ ? > k 0 \\ → v { } \\ → v { }\n}\n"),
+            # The join never leaves the frame it references, so nothing
+            # outlives anything.
+            "join-stays-in-frame": prog(
+                "    : i n ( caller )",
+                prelude="",
+                extra=ESC_CTR + "@ caller → i {\n" + ESC_MKREF
+                      + "    : ( @ v ) g ? > . c n 0 f f\n"
+                        "    ( g )\n    ^ . c n\n}\n"),
+            # A field store at the SAME region as its referent: the
+            # struct and the frame it points into die together.
+            "field-store-same-region": prog(
+                "    : i n ( caller )",
+                prelude="",
+                extra=ESC_CTR + ESC_SLOT + "@ caller → i {\n" + ESC_MKREF
+                      + "    : ~ Slot box @ Slot { \\ → v { } }\n"
+                        "    = . box cb f\n"
+                        "    : ( @ v ) g . box cb\n    ( g )\n"
+                        "    ^ . c n\n}\n"),
+            # An ordinary scalar field store carries no reference at all
+            # — the spelling the field-store hook sees most often.
+            "scalar-field-store": prog(
+                "    : i n ( caller )",
+                prelude="",
+                extra=ESC_CTR + "@ caller → i {\n"
+                      "    : ~ Counter c @ Counter { 0 10 }\n"
+                      "    = . c n 7\n    ^ . c n\n}\n"),
             # A helper returning a FRESH value, having merely borrowed
             # the reference, is not a passthrough — its result may be
             # returned freely.

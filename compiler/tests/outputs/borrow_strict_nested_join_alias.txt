@@ -1,0 +1,7 @@
+COMPILE FAIL
+ERRORS
+compiler/tests/borrow_strict_nested_join_alias.nu:30: error: 'a' may already be freed here — its handle is one of the values a '??' selected between at line 28; this second free double-frees on that path (strict-borrowck; restructure so exactly one path frees it)
+    ( vec_free [i] a )
+compiler/tests/borrow_strict_nested_join_alias.nu:41: error: 'a' may already be freed here — its handle is one of the values a '??' selected between at line 39; this second free double-frees on that path (strict-borrowck; restructure so exactly one path frees it)
+    ( vec_free [i] a )
+error: compilation aborted — 2 borrow-checker violations (re-run with --no-borrowck to bypass)

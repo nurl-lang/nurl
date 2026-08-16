@@ -262,8 +262,12 @@ points into. The checker assigns every binding a **region** (its
 block-nesting depth — the function body is depth 1, each nested
 `?`/`~`/`??`/`{ }` one deeper, the caller depth 0) and tags a stack
 reference with the deepest region it points into. Reference-ness
-propagates through closure and aggregate literals, `let` copies, and
-`=` assignments. An escape is reported when a stack reference reaches:
+propagates through closure and aggregate literals, `let` copies, `=`
+assignments, `= . obj field` **field stores** (the struct inherits the
+reference, so returning it later fires), and the **phi of a `?` / `??`**
+— the join publishes the deepest depth any *live* arm carries, since one
+arm holding the reference is enough to dangle on that path. An escape is
+reported when a stack reference reaches:
 
 - `^`-return (it would dangle the moment the function returns),
 - `vec_push` / `vec_insert` / `vec_set` / `thread_spawn` (it outlives
@@ -580,9 +584,11 @@ hits in practice. It deliberately does **not** cover:
   `--strict-borrowck` reports a `# *T` escape from an owned binding
   (§2.9).
 - **Aliased mutation beyond a single call.** The exclusive-access
-  check (§2.4) covers a binding aliased among one call's arguments.
-  A binding read through a *nested* sub-expression argument, and
-  any longer-range aliased-mutation analysis, is not done. (Escape
+  check (§2.4) covers a binding aliased among one call's arguments —
+  by default the bare-identifier spelling, and under
+  `--strict-borrowck` a sibling read at any depth (a field projection,
+  a read nested inside another call). What is *not* done is any
+  longer-range aliased-mutation analysis across statements. (Escape
   across a forward or generic call used to be listed here; it is not a
   boundary any more — §2.7 and §2.8 park what they cannot answer and
   resolve it after the module, so definition order no longer changes a
@@ -630,7 +636,8 @@ hits in practice. It deliberately does **not** cover:
 | Loop-carried move (free an outer binding inside a `~` loop) | yes (`error:`) |
 | Interprocedural escape (stack ref stored by a helper) | yes (`error:`) |
 | Return escape (helper returns a passed-in stack ref) | yes (`error:`) |
-| Aliased mutation via nested-argument reads | no |
+| Aliased mutation via nested-argument reads | yes (`--strict-borrowck`, §2.9) |
+| Escape through a `?` / `??` join, or into a struct field | yes (`error:`) |
 | Return escape (through a field, a nested field, a closure env, a local name, a second helper, a forward / generic callee) | yes (`error:`) |
 | Returned borrows / general lifetime inference | partial (§2.8) |
 | `*T` raw pointers | no (by design) |
@@ -678,8 +685,10 @@ class:
   defined above or below the call (§6.4). The conditional forms of the
   alias case need `--strict-borrowck`; §2.2 says which and why.
 - **Dangling stack references** reaching a return, a heap container, a
-  thread, a longer-lived binding, or — interprocedurally — a helper
-  that stores or returns one (§2.3, §2.7, §2.8).
+  thread, a longer-lived binding, a longer-lived binding's *field*, or
+  — interprocedurally — a helper that stores or returns one (§2.3,
+  §2.7, §2.8), and reaching any of those through a `?` / `??` join
+  rather than directly.
 - **Iterator-invalidating mutation** of a container under a `~ x xs`
   foreach (§2.5), and an **aliased `inout` writer** sharing a call with
   another reader of the same binding (§2.4).
@@ -900,11 +909,12 @@ on; they are not two separate tools or two separate builds.
 3. **Diagnostic-coverage gate** — `tools/metamorph/spellings.py`, in
    the build-test job. Not a memory gate but a *consistency* one: it
    writes the same semantic situation N ways and requires the same
-   verdict from the checker for all of them, across nine classes
+   verdict from the checker for all of them, across sixteen classes
    (handle-second-name, use-after-free, loop-carried-free,
    iterator-invalidation, arc-shared-mutation, thread-nonsend /
-   -nonsync, option-payload-type, ret-escape, escape-into-callee,
-   aliased-mutation, stale-borrow, forward-callee-move) plus a
+   -nonsync, option-payload-type, invalid-input, intraproc-escape,
+   ret-escape, escape-into-callee, aliased-mutation, stale-borrow,
+   raw-ptr-escape, forward-callee-move) plus a
    `controls` class of correct programs, which must keep compiling. Its
    baseline (`known_gaps.json`) is **empty**: any new gap fails.
    It also checks one invariant on every accepted program, whatever its
