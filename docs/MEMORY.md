@@ -666,8 +666,9 @@ class:
   (by copy, through a `?` / `??` result, through an assignment, or
   through a callee that hands an argument back), loop-carried
   double-free, indirect (auto-`sink`) use-after-free
-  (§2.1, §2.2, §2.6). The conditional forms of the alias case need
-  `--strict-borrowck`; §2.2 says which and why.
+  (§2.1, §2.2, §2.6) — and all of these whether the helper involved is
+  defined above or below the call (§6.4). The conditional forms of the
+  alias case need `--strict-borrowck`; §2.2 says which and why.
 - **Dangling stack references** reaching a return, a heap container, a
   thread, a longer-lived binding, or — interprocedurally — a helper
   that stores or returns one (§2.3, §2.7, §2.8).
@@ -731,12 +732,17 @@ get right:
   check does not miss a **generic** callee either — a generic function's
   `inout` / `sink` index sets, auto-`sink` included, are derived from the
   stored template as it is declared, so a call site sees them before any
-  instantiation exists (§1). What is left consulting a summary inline is
-  the *move* half — auto-`sink` (§2.2) and the returned-handle summary
-  `g_fn_ret_alias` — and the *mutation* half, `g_fn_mutates`, which
-  §2.5 and §2.10 read to follow a container mutation one call deep. For
-  all three, a callee defined below its call site misses the
-  diagnostic. Never miscompiled — only unchecked.
+  instantiation exists (§1). The *move* half —
+  auto-`sink` (§2.2) and the returned-handle summary `g_fn_ret_alias` —
+  does not depend on order either: a call to a not-yet-compiled callee
+  parks a `pendcall` row, and the whole function's borrow walk is
+  deferred to the end of the module, where both summaries are final.
+  (Deferred rather than repeated: analysing a function twice would
+  report every diagnostic it holds twice.) What is left consulting a
+  summary inline is the *mutation* half, `g_fn_mutates`, which §2.5 and
+  §2.10 read to follow a container mutation one call deep; there, a
+  callee defined below its call site still misses the diagnostic. Never
+  miscompiled — only unchecked.
 
 ### 6.5 This is not Rust
 
@@ -885,8 +891,8 @@ on; they are not two separate tools or two separate builds.
    (handle-second-name, use-after-free, loop-carried-free,
    iterator-invalidation, arc-shared-mutation, thread-nonsend /
    -nonsync, option-payload-type, ret-escape, escape-into-callee,
-   aliased-mutation, stale-borrow) plus a `controls` class of correct
-   programs, which must keep compiling. Its
+   aliased-mutation, stale-borrow, forward-callee-move) plus a
+   `controls` class of correct programs, which must keep compiling. Its
    baseline (`known_gaps.json`) is **empty**: any new gap fails.
    It also checks one invariant on every accepted program, whatever its
    class: the emitted module must pass `llvm-as`. A disagreement is not

@@ -1231,6 +1231,12 @@
 // parameter-passing call site in the whole program. Allocated in main().
 : ~ i g_pending_impl 0
 
+// Functions whose borrow-check walk is parked until the whole module
+// has compiled (see borrowck_fn_end). `n` is the count; `s<i>` / `p<i>`
+// / `f<i>` hold each parked function's statement rows, parameter names
+// and source file. Allocated in main().
+: ~ i g_deferred_bck 0
+
 // Names of functions whose body has been compiled — the "is the inline
 // summary trustworthy for this callee?" test. Set by
 // gen_fn_decl_concrete after the body, read by gen_call to decide
@@ -8193,6 +8199,23 @@
                 // likewise loses access to that arg afterwards.
                 ( bck_record_inferred_sink syms bck_arg_val ) } }
         {}
+        // …and the same question when the callee has NOT been compiled
+        // yet (§2.2 / §6.4). `callee_sink` and the returned-handle
+        // summary are both empty here, which is "not known", not "does
+        // not consume": the move half of the interprocedural summaries
+        // answered inline and so let `( release v )` — with `release`
+        // defined below — hand back a freed handle in silence, while
+        // the identical program with `release` above was rejected.
+        // Park the row; the walk resolves it after the module.
+        ? & & ( is_ident_tok bck_arg_tt )
+        ! ( str_contains_word callee_sink ( nurl_str_int arg_idx ) )
+        & == 0 ( nurl_sym_len g_fn_compiled call_name )
+        & | != 0 ( nurl_sym_len2 syms fname `__arity` )
+        != 0 ( nurl_sym_len2 syms fname `__garity` )
+        == 0 ( nurl_sym_len2 syms fname `__ptr` )
+        { ( bck_stash_pending_call bck_arg_val ( nurl_lex_line lex )
+            call_name arg_idx ) }
+        {}
         // Variadic position: promote BEFORE owned-temp tracking + argstr
         // append, since promotion replaces (at, av) with the widened pair.
         // i8*/i64/i32/double/pointers pass through variadic_promote_arg
@@ -12921,6 +12944,24 @@
 
 // Append one statement record, then clear the read accumulator so the
 // next statement starts fresh.
+// bck_record with two trailing fields (5, 6) — the callee name and
+// argument index of a `pendcall` row. Kept in the ROW rather than in a
+// side map keyed by name+line: line numbers repeat across files, and
+// these rows outlive their function (the walk runs after the module).
+@ bck_record2 s kind s wname i line s x5 s x6 → v {
+    ? & != g_borrowck 0 == g_bck_closure_depth 0 {
+        : s reads ( nurl_sym_get g_bck `reads` )
+        : s head ( nurl_str_cat4 kind `\t` wname `\t` )
+        : s body ( nurl_str_cat4 head reads `\t` ( nurl_str_int line ) )
+        : s rec ( nurl_str_cat3 body `\t` ( nurl_str_int g_bck_depth ) )
+        : s rec2 ( nurl_str_cat4 rec `\t` x5 `\t` )
+        ( nurl_sym_append g_bck `stmts`
+        ? == 0 ( nurl_sym_len g_bck `stmts` ) ( nurl_str_cat rec2 x6 )
+        ( nurl_str_cat3 `\n` rec2 x6 ) )
+        ( nurl_sym_set g_bck `reads` `` )
+    } {}
+}
+
 @ bck_record s kind s wname i line → v {
     ? & != g_borrowck 0 == g_bck_closure_depth 0 {
         : s reads ( nurl_sym_get g_bck `reads` )
@@ -13200,6 +13241,31 @@
     } {}
 }
 
+// Stash a call whose MOVE effect cannot be decided yet (docs/MEMORY.md
+// §2.2 / §6.4): `name` was handed to argument `argidx` of `callee`, and
+// `callee` has not been compiled, so neither its `sink` set nor its
+// returned-handle set exists. An empty summary there means "not known
+// yet", not "does not consume" — reading it as the latter is what let
+// `( release v )` followed by a use of `v` compile clean when `release`
+// was defined BELOW it, while the identical program with `release`
+// above was rejected.
+//
+// The row is resolved during the analyze walk, which for a function
+// carrying one of these rows is deferred to the end of the module
+// (borrowck_fn_end → g_deferred_bck) so every summary is final.
+@ bck_stash_pending_call s name i line s callee i argidx → v {
+    ? & != g_borrowck 0 == g_bck_closure_depth 0 {
+        : s cur ( nurl_sym_get g_bck `ppends` )
+        : s add ( nurl_str_cat3
+        ( nurl_str_cat3 name ` ` ( nurl_str_int line ) )
+        ( nurl_str_cat3 ` ` callee ` ` )
+        ( nurl_str_int argidx ) )
+        ( nurl_sym_set g_bck `ppends`
+        ? == 0 ( nurl_str_len cur ) ( nurl_str_cat add `` ) ( nurl_str_cat3 cur ` ` add ) )
+        ( nurl_sym_set g_bck `deferred` `1` )
+    } {}
+}
+
 // Stash `name` as MAYBE consumed at `line` — the value-producing
 // `?` / `??` selected between this binding's handle and something
 // else, so the new owner holds it on some paths only (see the
@@ -13246,6 +13312,20 @@
             : s qln ( str_first_word qrest )
             = qrest ( str_skip_word qrest )
             ( bck_record `maybemove` qnm ( nurl_str_to_int qln ) )
+        }
+        // …and the calls whose move effect is not decidable yet.
+        : ~ s prest ( nurl_sym_get g_bck `ppends` )
+        ( nurl_sym_set g_bck `ppends` `` )
+        ~ != 0 ( nurl_str_len prest ) {
+            : s pnm ( str_first_word prest )
+            = prest ( str_skip_word prest )
+            : s pln ( str_first_word prest )
+            = prest ( str_skip_word prest )
+            : s pcal ( str_first_word prest )
+            = prest ( str_skip_word prest )
+            : s paix ( str_first_word prest )
+            = prest ( str_skip_word prest )
+            ( bck_record2 `pendcall` pnm ( nurl_str_to_int pln ) pcal paix )
         }
     } {}
 }
@@ -13539,13 +13619,20 @@
 @ bck_xlate_row s rec → s {
     : s kind ( bck_field rec 0 )
     : s w ( bck_field rec 1 )
-    : s w2 ? | | | ( seq kind `let` ) ( seq kind `assign` ) ( seq kind `move` )
-    ( seq kind `maybemove` )
+    : s w2 ? | | | | ( seq kind `let` ) ( seq kind `assign` ) ( seq kind `move` )
+    ( seq kind `maybemove` ) ( seq kind `pendcall` )
     ( nurl_str_int ( bck_intern w ) ) ( nurl_str_cat w `` )
     : s rds ( bck_ids ( bck_field rec 2 ) )
     : s head ( nurl_str_cat4 kind `\t` w2 `\t` )
     : s body ( nurl_str_cat4 head rds `\t` ( bck_field rec 3 ) )
-    ( nurl_str_cat3 body `\t` ( bck_field rec 4 ) )
+    : s five ( nurl_str_cat3 body `\t` ( bck_field rec 4 ) )
+    // A `pendcall` row carries the callee and the argument index it was
+    // passed at; everything else stops at field 4.
+    ? ( seq kind `pendcall` )
+    { ^ ( nurl_str_cat4 five `\t` ( bck_field rec 5 )
+        ( nurl_str_cat3 `\t` ( bck_field rec 6 ) `` ) ) }
+    {}
+    five
 }
 
 // Split the captured statement list on newlines, translating each row
@@ -13775,6 +13862,36 @@
             = p + p 1
             = done T
         } {}
+        ? & ! done ( seq kind `pendcall` ) {
+            // The call whose move effect could not be decided when it
+            // was compiled (bck_stash_pending_call). Every summary is
+            // final by the time this walk runs — the function was
+            // deferred to the end of the module precisely for this — so
+            // ask them now:
+            //   the callee SINKS that parameter   → a definite move,
+            //     exactly as if the sink set had been known inline;
+            //   the callee may RETURN its handle  → a maybe-move, the
+            //     `?`-selected-handle case in another spelling;
+            //   neither                            → nothing happened.
+            : s pvn ( bck_field rec 1 )
+            : i pvid ( nurl_str_to_int pvn )
+            : s pcal ( bck_field rec 5 )
+            : s paix ( bck_field rec 6 )
+            : s psink ( nurl_sym_get g_fn_sink pcal )
+            : s palias ( nurl_sym_get g_fn_ret_alias pcal )
+            ? ( str_contains_word psink paix )
+            { ? & != 0 g_strict_borrowck == BCK_MAYBE_MOVED ( bck_st_get st pvid )
+                { ( bck_diag_maybe pvid ( nurl_str_to_int ( bck_field rec 3 ) ) ) } {}
+                = st ( bck_st_set st pvid BCK_MOVED )
+                ( nurl_sym_set g_bck ( nurl_str_cat `ml_` pvn ) ( bck_field rec 3 ) ) }
+            { ? ( str_contains_word palias paix )
+                { = st ( bck_st_set st pvid
+                    ( bck_join ( bck_st_get st pvid ) BCK_MOVED ) )
+                    ( nurl_sym_set g_bck ( nurl_str_cat `ml_` pvn ) ( bck_field rec 3 ) ) }
+                {} }
+            = p + p 1
+            = done T
+        } {}
         ? & ! done ( seq kind `cond` ) {
             : i ec ( bck_match_close p `cond` `endcond` )
             = st ( bck_handle_cond p ec st )
@@ -13958,6 +14075,39 @@
     ? != 0 ( nurl_str_len final ) {} {}
 }
 
+// Park a whole function's captured statement list for a later walk.
+// Keyed by a running index in g_deferred_bck: `s<i>` the rows, `p<i>`
+// the parameter names, `f<i>` the source file the diagnostics must name.
+@ bck_defer_fn s params → v {
+    : s ns ( nurl_sym_get g_deferred_bck `n` )
+    : i n ? == 0 ( nurl_str_len ns ) 0 ( nurl_str_to_int ns )
+    : s ix ( nurl_str_int n )
+    ( nurl_sym_def g_deferred_bck ( nurl_str_cat `s` ix )
+    ( nurl_sym_get g_bck `stmts` ) )
+    ( nurl_sym_def g_deferred_bck ( nurl_str_cat `p` ix ) params )
+    ( nurl_sym_def g_deferred_bck ( nurl_str_cat `f` ix )
+    ( nurl_sym_get g_bck `file` ) )
+    ( nurl_sym_def g_deferred_bck `n` ( nurl_str_int + n 1 ) )
+}
+
+// Walk every parked function, now that every summary is final. Called
+// from main() beside resolve_pending_escapes.
+@ resolve_deferred_borrowck → v {
+    ? == g_borrowck 0 { ^ } {}
+    : s ns ( nurl_sym_get g_deferred_bck `n` )
+    ? == 0 ( nurl_str_len ns ) { ^ } {}
+    : i n ( nurl_str_to_int ns )
+    : ~ i i 0
+    ~ < i n {
+        : s ix ( nurl_str_int i )
+        ( nurl_sym_set g_bck `file` ( nurl_sym_get g_deferred_bck ( nurl_str_cat `f` ix ) ) )
+        ( nurl_sym_set g_bck `stmts` ( nurl_sym_get g_deferred_bck ( nurl_str_cat `s` ix ) ) )
+        ( nurl_sym_set g_bck `reads` `` )
+        ( bck_analyze ( nurl_sym_get g_deferred_bck ( nurl_str_cat `p` ix ) ) )
+        = i + i 1
+    }
+}
+
 // borrowck_fn_end: called from gen_fn_decl_concrete once a function
 // body is fully parsed — runs the analyze walk over the captured
 // statement list. No-op when --borrowck is off. `lex` gives the
@@ -13965,7 +14115,17 @@
 @ borrowck_fn_end i lex i syms s fname → v {
     ? == g_borrowck 0 {} {
         ( nurl_sym_set g_bck `file` ( nurl_lex_filename lex ) )
-        ( bck_analyze ( nurl_sym_get syms `__fn_param_names__` ) )
+        // A function that called something not yet compiled with a bare
+        // binding cannot be analysed yet: a `pendcall` row's verdict
+        // depends on a summary that does not exist. Park the whole
+        // function — its statement list is one string — and walk it
+        // after the module, where the answer is final. Analysing it
+        // twice is not an option: every diagnostic it holds would be
+        // reported twice.
+        ? != 0 ( nurl_sym_len g_bck `deferred` )
+        { ( bck_defer_fn ( nurl_sym_get syms `__fn_param_names__` ) )
+            ( nurl_sym_set g_bck `deferred` `` ) }
+        { ( bck_analyze ( nurl_sym_get syms `__fn_param_names__` ) ) }
     }
 }
 
@@ -27723,6 +27883,7 @@
     = g_fn_invoke_only ( nurl_sym_new )
     = g_pending_escape ( nurl_sym_new )
     = g_pending_impl ( nurl_sym_new )
+    = g_deferred_bck ( nurl_sym_new )
     = g_fn_compiled ( nurl_sym_new )
     = g_fn_ret_param ( nurl_sym_new )
     = g_fn_ret_alias ( nurl_sym_new )
@@ -27826,6 +27987,7 @@
     // interprocedural-escape checks parked for forward / generic calls
     // (docs/MEMORY.md §3). May bump g_bck_errors, checked below.
     ( resolve_pending_escapes )
+    ( resolve_deferred_borrowck )
     ( dbg_flush )
     // Unused-symbol lint (--lint): every call site (incl. generic
     // instantiations) has now been seen, so report the unused private
@@ -27883,6 +28045,7 @@
     ( nurl_sym_free g_fn_mutates )
     ( nurl_sym_free g_pending_escape )
     ( nurl_sym_free g_pending_impl )
+    ( nurl_sym_free g_deferred_bck )
     ( nurl_sym_free g_fn_compiled )
     ( nurl_sym_free g_bck )
     ( nurl_sym_free g_ptrtab )

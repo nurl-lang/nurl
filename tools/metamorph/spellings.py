@@ -321,8 +321,16 @@ CLASSES = [
                "§2.8); these still answer inline, and an empty summary "
                "reads as 'does not sink' rather than 'not known yet'. "
                "Every spelling here is the same program as its "
-               "defined-above twin, which is rejected.",
-        "expect": REJECT_DEFAULT,
+               "defined-above twin, and must get the same verdict as it. "
+               "The class asks for REJECT_STRICT rather than "
+               "REJECT_DEFAULT because the two families answer at "
+               "different strengths by design: a sink is a DEFINITE "
+               "move, while a returned handle is a MAYBE — the callee "
+               "may hand it back or may return something fresh — and "
+               "the conditional double-free is strict-only (§6.2). What "
+               "must never differ is `accept` versus either of them, "
+               "which is what definition order used to decide.",
+        "expect": REJECT_STRICT,
         "expect_msg": ["use of moved value", "may already be freed"],
         "spellings": {
             "sink-above": prog(

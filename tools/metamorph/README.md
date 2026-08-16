@@ -130,6 +130,13 @@ the output useless for deciding what to fix first.
   (§2.10). It reads plausible garbage rather than crashing, which is why
   it is worth diagnosing; the mutation counts inline, in a loop, and one
   call deep.
+- **`forward-callee-move`** *(memory-unsafety)* — the MOVE half of the
+  interprocedural summaries (auto-`sink`, returned handle) at a call to
+  a callee defined BELOW it. The escape summaries park what they cannot
+  answer; these answered inline, so `( release v )` with `release`
+  defined after `main` freed the buffer under the following push in
+  silence, while the same program written the other way round was
+  rejected.
 - **`controls`** — correct programs, in a class of their own. A checker that
   rejects these is worse than one that misses a bug: every entry is code
   someone would reasonably write, and one of them (`mutex-guarded-mutation`)
