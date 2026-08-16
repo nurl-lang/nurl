@@ -141,6 +141,35 @@ Modes: `spark` (sparkline), `bar` (one `<label> <value>` per line), `hist`
 (`--bins N`), and `line` (`--width`/`--height`). See
 [`chart/README.md`](chart/README.md) for the full CLI and library API.
 
+## `lsmdb/` — a crash-safe key/value store (installable program **and** library)
+
+A real LSM tree in pure NURL: a write-ahead log, a skip-list memtable over
+a byte arena, immutable SSTables with a CRC-32 per block, a Bloom filter
+and a block index, ordered range scans, compaction, and snapshot reads.
+An acknowledged write is fsynced before `put` returns; every crash point
+in the flush and compact sequences recovers to a correct state; a torn log
+tail loses exactly the write that was never acknowledged; and a block that
+fails its checksum fails the read rather than returning something wrong.
+
+```
+nurlpkg install lsmdb
+lsmdb put user:42 '{"name":"ada"}'   # durable when it returns
+lsmdb scan --from user: --limit 20   # ordered, half-open range
+lsmdb get user:42 --at 7             # the database as of write #7
+lsmdb compact                        # merge tables, reclaim space
+
+# …or depend on the store itself:
+#   [dependencies]
+#   lsmdb = "^0.1"
+#   $ `deps/lsmdb/src/lsmdb.nu`
+#   : !*Lsm String db ( lsm_open `/var/db/things` )
+```
+
+Opening a table reads only its index and filter, and a get reads exactly
+the one block it needs, so a table larger than RAM is an ordinary table.
+Leak-clean under ASan/LSan across every path. See
+[`lsmdb/README.md`](lsmdb/README.md) for the file format and the guarantees.
+
 ## `nurl-mcp/` — a local MCP server for the toolchain (installable program)
 
 The LLM-facing counterpart of `nurl-lsp`: a [Model Context

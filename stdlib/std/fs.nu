@@ -810,6 +810,50 @@ $ `stdlib/core/posix.nu`  // open / lseek / mmap / munmap + posix_const
     ^ @ !v IoErr { F ( _io_err_of_kind ( errno_kind ) ) }
 }
 
+// Runtime durability barriers (see nurl_file_sync / nurl_dir_sync in
+// stdlib/runtime_core.c — one shim because the call is fsync(2) on unix
+// and _commit on Windows). Both return 0 on success, -1 on failure.
+& `c` @ nurl_file_sync *v h → i
+
+& `c` @ nurl_dir_sync s path → i
+
+& `c` @ nurl_file_truncate s path i len → i
+
+// Flush AND fsync: return only once the bytes are on the storage device.
+//
+// file_flush pushes libc's buffer into the kernel, which survives the
+// process dying but not the machine dying — the page cache is still
+// volatile. Anything that has to survive power loss in a known state
+// (a write-ahead log before acknowledging a write, a data file before a
+// manifest is allowed to name it) needs this instead. It costs a device
+// round-trip, so it is a deliberate call, not the default on every write.
+@ file_sync File f → !v IoErr {
+    : s hp . f raw
+    ? == 0 # i hp { ^ @ !v IoErr { F @ IoErr { Other } } } {}
+    ? == 0 ( nurl_file_sync # *v hp ) { ^ @ !v IoErr { T 0 } } {}
+    ^ @ !v IoErr { F ( _io_err_of_kind ( errno_kind ) ) }
+}
+
+// Cut `path` down to `len` bytes (or extend it with zeros). The
+// operation an append-only file cannot do without: after a crash,
+// recovery keeps the records up to the last intact one and the file has
+// to END there — otherwise the torn bytes stay at the tail forever and
+// every later append hides behind them. Not available on WASI.
+@ file_truncate s path i len → !v IoErr {
+    ? == 0 ( nurl_file_truncate path len ) { ^ @ !v IoErr { T 0 } } {}
+    ^ @ !v IoErr { F ( _io_err_of_kind ( errno_kind ) ) }
+}
+
+// fsync a directory — what makes a rename durable. A file's contents and
+// the directory entry naming it are separate writes: fsync the file, and
+// a crash can still leave the bytes on disk with no name reaching them.
+// Call this on the parent directory after an atomic publish-by-rename.
+// A no-op on Windows and WASI, which expose no directory handle.
+@ dir_sync s path → !v IoErr {
+    ? == 0 ( nurl_dir_sync path ) { ^ @ !v IoErr { T 0 } } {}
+    ^ @ !v IoErr { F ( _io_err_of_kind ( errno_kind ) ) }
+}
+
 // Seek to `off` relative to `whence`; returns the new ABSOLUTE offset
 // (so `( file_seek f 0 FS_SEEK_END )` doubles as "how big is this").
 @ file_seek File f i off i whence → !i IoErr {

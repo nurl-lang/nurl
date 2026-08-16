@@ -530,6 +530,28 @@ void nurl_print(const char *s) {
         if (g_stdout_tty) fflush(stdout);
     }
 }
+/* Write `n` raw bytes to stdout — NUL bytes included.
+ *
+ * nurl_print takes a NUL-terminated string, so a program holding binary
+ * data (a value read out of a database, a decoded image, a response body
+ * being proxied) had no way to emit it: everything from the first zero
+ * byte was silently dropped, and stdin's side of that already had
+ * read_n_bytes. Routed through the same capture buffer and tty-flush
+ * rule as nurl_print, so ordering and output capture are identical. */
+void nurl_print_bytes(const char *p, long long n) {
+    if (!p || n <= 0) return;
+    if (g_outbuf_mode) {
+        outbuf_reserve((size_t)n);
+        memcpy(g_outbuf + g_outbuf_len, p, (size_t)n);
+        g_outbuf_len += (size_t)n;
+        g_outbuf[g_outbuf_len] = '\0';
+    } else {
+        if (g_stdout_tty < 0) g_stdout_tty = nurl_stdout_isatty() ? 1 : 0;
+        fwrite(p, 1, (size_t)n, stdout);
+        if (g_stdout_tty) fflush(stdout);
+    }
+}
+
 /* Print with a trailing newline. Routed through nurl_print so the
  * output-capture buffer (nurl_print_buf_*) sees it too. */
 void nurl_println(const char *s)  { nurl_print(s); nurl_print("\n"); }
@@ -1562,6 +1584,75 @@ long long nurl_path_type_follow(const char *path) {
     if (S_ISDIR(st.st_mode)) return 2;
     if (S_ISREG(st.st_mode)) return 1;
     return 4;
+}
+
+/* Force a file's bytes out of the kernel's page cache onto the storage
+ * device. fflush() only pushes libc's userspace buffer into the kernel —
+ * a crash between that and writeback still loses the data, which is
+ * exactly the difference between "written" and "durable" for anything
+ * keeping a write-ahead log. Returns 0 on success, -1 on failure.
+ *
+ * macOS note: fsync(2) there hands the data to the drive but does not
+ * force the drive's own cache (F_FULLFSYNC does). That matches what
+ * every mainstream database ships by default, and is what "durable
+ * against process crash and OS crash" means here. */
+long long nurl_file_sync(void *h) {
+    if (!h) return -1;
+    FILE *f = (FILE *)h;
+    if (fflush(f) != 0) return -1;
+#ifdef _WIN32
+    return _commit(_fileno(f)) == 0 ? 0 : -1;
+#elif defined(__wasi__)
+    return 0;   /* no durability barrier to reach for */
+#else
+    return fsync(fileno(f)) == 0 ? 0 : -1;
+#endif
+}
+
+/* Cut a file down to `len` bytes (or extend it with zeros). Returns 0 on
+ * success, -1 on failure.
+ *
+ * The operation an append-only log cannot do without: after a crash,
+ * recovery keeps the records up to the last intact one and has to make
+ * the file END there. Rewriting the good prefix would work for a small
+ * log and not at all for a large one, and leaving the torn bytes in
+ * place makes every later append unreachable behind them. */
+long long nurl_file_truncate(const char *path, long long len) {
+    if (!path || len < 0) return -1;
+#ifdef _WIN32
+    {
+        int fd = _open(path, _O_RDWR | _O_BINARY);
+        if (fd < 0) return -1;
+        int rc = _chsize_s(fd, (__int64)len);
+        _close(fd);
+        return rc == 0 ? 0 : -1;
+    }
+#elif defined(__wasi__)
+    (void)len;
+    return -1;
+#else
+    return truncate(path, (off_t)len) == 0 ? 0 : -1;
+#endif
+}
+
+/* fsync a DIRECTORY — what makes a rename durable. A file's bytes and
+ * the directory entry naming them are two separate writes, so syncing
+ * the file alone can leave a crash-recovered tree where the data is on
+ * disk and the name that reaches it is not. Anything that publishes by
+ * rename (a manifest, an atomically-replaced config) needs this after
+ * the rename. Returns 0 on success, -1 on failure. */
+long long nurl_dir_sync(const char *path) {
+#if defined(_WIN32) || defined(__wasi__)
+    (void)path;
+    return 0;   /* no directory handle to sync through the CRT */
+#else
+    if (!path) return -1;
+    int fd = open(path, O_RDONLY);
+    if (fd < 0) return -1;
+    int rc = fsync(fd);
+    close(fd);
+    return rc == 0 ? 0 : -1;
+#endif
 }
 
 /* ── §9  Memory allocation ─────────────────────────────────────── */

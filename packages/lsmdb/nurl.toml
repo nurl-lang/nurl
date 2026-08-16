@@ -1,0 +1,7 @@
+[package]
+name = "lsmdb"
+version = "0.1.0"
+description = "An embedded, crash-safe key/value store in pure NURL — a real LSM tree: write-ahead log, skip-list memtable, immutable CRC-checked SSTables with a Bloom filter and a block index, ordered range scans, compaction, and snapshot reads. Every write is fsynced before it returns and every crash point in the flush/compact sequence recovers to a correct state; a torn log tail is dropped, never half-applied, and a block that fails its checksum is an error, never data. Sequence numbers make time travel free: read the database exactly as it was after write N. Ships as a library and as a CLI (put/get/del/scan/load/flush/compact/stats/bench)."
+license = "MIT OR Apache-2.0"
+
+[dependencies]
