@@ -4,6 +4,21 @@ All notable changes to `zst` are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the version
 scheme is [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] — 2026-08-17
+
+### Changed
+
+- Levels 13–19 run an optimal parse: a priced shortest path over each
+  block, repriced from its own choices until the cheapest round wins.
+  On a 200 kB text corpus level 19 now beats `zstd -19` outright
+  (55 837 vs 55 938 bytes); on 100 kB of dictionary text it lands
+  0.5 % short (24 903 vs 24 781). Level 19 costs real time — a
+  fraction of a megabyte per second, the same trade the reference's
+  top levels make.
+- Multi-block frames now use the format's repeat modes when they pay:
+  a sequence table or Huffman tree from the previous block is reused
+  (mode 3 / treeless) whenever re-sending one costs more than it saves.
+
 ## [0.1.0] — 2026-08-17
 
 First release.

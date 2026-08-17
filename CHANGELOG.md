@@ -10,6 +10,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`std/zstd`: an optimal parser for levels 13–19.** The greedy parser
+  chooses each match on its own; the new one chooses the SET of matches
+  with the smallest priced total — a shortest path over every position
+  in the block, where an edge is one literal or one match and its
+  weight is the bits it will actually cost. Literals are priced at the
+  integer lengths a Huffman tree would assign, sequence codes at their
+  share of the real quantized FSE table, repeat offsets carried in the
+  arrival state the way the decoder tracks them, and the literals-length
+  code is charged marginally as a run grows (a potential transform —
+  same totals, honest attribution — and alone worth 0.3 % on text).
+  Prices come from the parse itself: parse, count, reprice, parse
+  again, keep the cheapest round; level 19 runs the iteration from two
+  starting-price families because the fixed point depends on the start.
+  Measured: 200 kB of text at level 19 compresses to 55 837 bytes where
+  `zstd -19` writes 55 938 — past the reference — and 100 kB of
+  dictionary text lands 0.5 % short (24 903 vs 24 781). Multi-block
+  frames now also use the format's repeat modes (sequence-table mode 3,
+  treeless literals) when reusing the standing table prices below
+  re-sending it.
+
 - **`std/zstd` — Zstandard (RFC 8878) in pure NURL, both directions.**
   The real format, not a subset: frames with or without a declared
   content size, raw / RLE / compressed blocks, Huffman literals in one

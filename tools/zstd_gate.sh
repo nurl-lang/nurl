@@ -156,7 +156,7 @@ done
 # ── Direction 2: we compress, the reference decompresses ────────────
 enc_fails=0
 enc_checked=0
-if [ $QUICK -eq 1 ]; then ENC_LEVELS="1 3 12"; else ENC_LEVELS="1 2 3 6 9 12 19"; fi
+if [ $QUICK -eq 1 ]; then ENC_LEVELS="1 3 13 19"; else ENC_LEVELS="1 2 3 6 9 12 13 16 19"; fi
 enc_files="$CORPUS/*.bin $WORK/short/*.bin"
 # shellcheck disable=SC2086
 for f in $enc_files; do
@@ -258,10 +258,10 @@ done
 # class of binary, so this is the check that actually runs.)
 leak_fails=0
 leak_report=""
-for pair in "text.bin 300" "zeros.bin 300" "random.bin 200"; do
+for pair in "text.bin 300 3" "zeros.bin 300 3" "random.bin 200 3" "text.bin 25 19"; do
     set -- $pair
-    lf="$CORPUS/$1"; iters="$2"
-    out="$("$GATE" leak "$lf" "$iters" 2>/dev/null)"
+    lf="$CORPUS/$1"; iters="$2"; lvl="$3"
+    out="$("$GATE" leak "$lf" "$iters" "$lvl" 2>/dev/null)"
     set -- $out
     if [ "${1:-}" != "rss" ]; then
         leak_fails=$((leak_fails + 1)); echo "  leak probe produced no reading for $lf"; continue

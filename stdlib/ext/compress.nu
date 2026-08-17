@@ -49,8 +49,8 @@
 // Compression levels:
 //   * zlib: 0 (no compression) … 9 (max). Default 6. The pure encoder
 //     has a single mode, so the level is accepted and ignored.
-//   * zstd: 1 … 19. Default 3. The level selects how far the match
-//     finder searches; see `std/zstd.nu`.
+//   * zstd: 1 … 19. Default 3. Levels up to 12 are greedy with lazy
+//     matching; 13 and up run the optimal parser. See `std/zstd.nu`.
 
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/deflate.nu`  // pure-NURL DEFLATE/inflate + crc32/adler32

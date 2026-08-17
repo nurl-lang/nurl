@@ -197,12 +197,14 @@ sequence tables was predefined, sent, RLE or repeated. That is the view
 you want when a file compresses worse than expected — `zstd --list`
 stops at the frame.
 
-Interoperability is checked against the reference CLI in both directions
-by `tools/zstd_gate.sh`: 1020 reference frames decode byte-identically,
-1932 frames produced here pass `zstd -t` and decode through `zstd -d`,
-600 mutated frames are refused without a crash or a hang, and resident
-size is flat across hundreds of round trips. See
-[`zst/README.md`](zst/README.md).
+Levels 13–19 run an optimal parse — a priced shortest path over each
+block, repriced from its own choices — and on a 200 kB text corpus
+level 19 beats `zstd -19` outright. Interoperability is checked against
+the reference CLI in both directions by `tools/zstd_gate.sh`: reference
+frames at every level decode byte-identically, frames produced here
+pass `zstd -t` and decode through `zstd -d`, mutated frames are refused
+without a crash or a hang, and resident size is flat across hundreds of
+round trips. See [`zst/README.md`](zst/README.md).
 
 ## `nurl-mcp/` — a local MCP server for the toolchain (installable program)
 

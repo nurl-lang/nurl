@@ -75,30 +75,36 @@ It reads any Zstandard file, whoever produced it.
 
 ## Levels
 
-`--level 1` takes the first match its hash chain offers. Every level
-above it examines four candidates and considers starting one byte later,
-which is worth about 4 % on text. Levels above 2 currently select the
-same parameters as 2, and that is a measurement, not an omission: at 16,
-48, 128 and 512 candidates the output came out 1.0 – 1.6 % **larger**,
-because the extra candidates are longer matches further back, and taking
-one abandons the recent offset that the following sequences would have
-ridden for two bits apiece. Making depth pay needs an optimal parser,
-not a bigger number. The full reasoning is in the comment above
-`__zs_attempts` in `std/zstd.nu`.
+`--level 1` takes the first match its hash chain offers. Levels 2–12
+examine four candidates and consider starting one byte later (lazy
+matching), worth about 4 % on text.
 
-Measured at level 3 against the reference at its default level 3, and
-against what it can do when it stops caring about time:
+From level 13 up the encoder stops choosing matches one at a time and
+runs an **optimal parse**: a priced shortest path over every position in
+the block, where an edge is one literal or one match and its weight is
+the bits it will actually cost — literals at the integer lengths a
+Huffman tree would assign, sequence codes at their share of the real
+quantized FSE table, repeat offsets carried along the path the way the
+decoder tracks them. The prices come from the parse itself: parse,
+count what was chosen, reprice, parse again, and keep the cheapest
+round. Level 19 runs that iteration from two different starting-price
+families, because the fixed point it settles into depends on where it
+starts, and which one wins is a property of the data.
 
-| corpus | original | `zst -l 3` | `zstd -3` | `zstd -19` |
-| --- | ---: | ---: | ---: | ---: |
-| 100 kB dictionary text | 100 000 | **28 578** | 32 377 | 24 781 |
-| 200 kB word salad | 201 306 | **60 825** | 62 111 | 55 938 |
+Measured against the reference at its own top level:
 
-So: ahead of the reference's default, behind what it reaches when it
-brings an optimal parser. Speed is the other side of that trade — this
-is one implementation of a format whose reference has had a decade of
-tuning — so `zst b` prints what your machine actually does rather than a
-claim:
+| corpus | original | `zst -l 3` | `zst -l 19` | `zstd -3` | `zstd -19` |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 100 kB dictionary text | 100 000 | 28 629 | 24 903 | 32 377 | **24 781** |
+| 200 kB word salad | 201 306 | 60 851 | **55 837** | 62 111 | 55 938 |
+
+On the word-salad corpus level 19 now beats `zstd -19` outright; on
+dictionary text it lands 0.5 % short. On multi-megabyte inputs the gap
+is 1–3 % — the reference brings a binary-tree match finder whose deep
+search a hash chain does not reproduce. Time is the price of the parse:
+level 19 runs at a fraction of a megabyte per second, which is the same
+trade the reference's top levels make, only steeper. Level 3 speed is
+unchanged:
 
 ```
 $ zst b big.bin
@@ -113,9 +119,7 @@ became eight constant-shifted byte loads that LLVM folds into one
 unaligned 64-bit load; the second became `memcpy` in chunks of the
 offset, which never overlaps within a chunk and still reproduces the
 format's run semantics. The cursor then moved out of its heap struct
-into a local. libzstd is still several times faster — it decodes four
-Huffman streams at once and has had a decade of tuning — and this is
-what the gap costs you today.
+into a local.
 
 ## Safety
 
