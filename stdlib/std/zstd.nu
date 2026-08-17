@@ -192,11 +192,82 @@ $ `stdlib/std/hash_xxh64.nu`
 
 // Read `n` bits from the end of a backward stream. Bits before the
 // start of the buffer read as zero, as the format requires.
+// The same read as `__zs_bk_take`, but WITHOUT the cursor struct: the
+// caller keeps `off` in a local and passes it in. That is the whole
+// optimisation — a `* ZsBk` field is memory the compiler must reload
+// after every call, and this bit cursor is touched six to eight times
+// per sequence. `off` may be negative; the bits before the start of the
+// stream read as zero, as the format requires.
+// The rare halves of `__zs_bits`, moved out of it: the last few bytes
+// of a stream, where an eight-byte load would run off the end, and the
+// bits before its start, which the format defines as zeros. Splitting
+// them out keeps the hot function small enough to be inlined, which is
+// worth more than either branch costs.
+@ __zs_bits_edge * u src i len i off i n → i {
+    ? >= off 0 { ^ ( __zs_rd_le src n off ) } {}
+    : i have + n off
+    : ~ i r 0
+    ? > have 0 { = r ( __zs_rd_le src have 0 ) } {}
+    : i sh - 0 off
+    ^ ? >= sh 64 0 << r sh
+}
+
+// The same read as `__zs_bk_take`, but WITHOUT the cursor struct: the
+// caller keeps `off` in a local and passes it in. That is the whole
+// optimisation — a `* ZsBk` field is memory the compiler must reload
+// after every call, and this bit cursor is touched six to eight times
+// per sequence. `off` may be negative; the bits before the start of the
+// stream read as zero, as the format requires.
+//
+// Eight consecutive byte loads with constant shifts is a pattern LLVM
+// folds into ONE unaligned 64-bit load — the instruction this wants,
+// and one the language has no way to spell directly. Reads are at most
+// 32 bits, so 64 bits minus a 7-bit misalignment always covers them.
+@ __zs_bits * u src i len i off i n → i {
+    : i bytepos >> off 3
+    ? & >= off 0 <= + bytepos 8 len {
+        : i lo | | | # i . src bytepos
+        << # i . src + bytepos 1 8
+        << # i . src + bytepos 2 16
+        << # i . src + bytepos 3 24
+        : i hi | | | # i . src + bytepos 4
+        << # i . src + bytepos 5 8
+        << # i . src + bytepos 6 16
+        << # i . src + bytepos 7 24
+        : i word | lo << hi 32
+        ^ & >> # u64 word & off 7 - << 1 n 1
+    } {}
+    ? == n 0 { ^ 0 } {}
+    ^ ( __zs_bits_edge src len off n )
+}
+
 @ __zs_bk_take * ZsBk b i n → i {
     ? == n 0 { ^ 0 } {}
     = . b off - . b off n
     : i off . b off
-    ? >= off 0 { ^ ( __zs_rd_le . b src n off ) } {}
+    ? >= off 0 {
+        // Fast path — 37 % of decode time was spent in the byte-at-a-
+        // time loop below. Eight consecutive byte loads with constant
+        // shifts is a pattern LLVM folds into ONE unaligned 64-bit
+        // load, which is the instruction this wants and the language
+        // has no way to spell directly. Reads are at most 32 bits, so
+        // 64 bits minus a 7-bit misalignment always covers them.
+        : i bytepos >> off 3
+        ? <= + bytepos 8 . b len {
+            : *u sp . b src
+            : i lo | | | # i . sp bytepos
+            << # i . sp + bytepos 1 8
+            << # i . sp + bytepos 2 16
+            << # i . sp + bytepos 3 24
+            : i hi | | | # i . sp + bytepos 4
+            << # i . sp + bytepos 5 8
+            << # i . sp + bytepos 6 16
+            << # i . sp + bytepos 7 24
+            : i word | lo << hi 32
+            ^ & >> # u64 word & off 7 - << 1 n 1
+        } {}
+        ^ ( __zs_rd_le . b src n off )
+    } {}
     : i have + n off
     : ~ i r 0
     ? > have 0 { = r ( __zs_rd_le . b src have 0 ) } {}
@@ -819,10 +890,19 @@ $ `stdlib/std/hash_xxh64.nu`
         = . d litpos + . d litpos ll
     } {}
     ? | <= offset 0 > offset - o . d framestart { = . d err ZSE_CORRUPT ^ v } {}
-    : ~ i k 0
-    ~ < k ml {
-        = . op + o k . op - + o k offset
-        = k + k 1
+    // The match copy, in chunks of `offset` bytes. Each chunk reads
+    // only bytes written before it started, so no single memcpy ever
+    // overlaps — while the SEQUENCE of them still reproduces the
+    // format's run semantics, where an offset of 1 means "repeat this
+    // byte". A byte-at-a-time loop was a fifth of decode time.
+    : ~ i left ml
+    : ~ i dst o
+    ~ > left 0 {
+        : i chunk ? > offset left left offset
+        ( nurl_memcpy # s # *u + # i op dst
+        # s # *u + # i op - dst offset chunk )
+        = dst + dst chunk
+        = left - left chunk
     }
     = . d olen + o ml
 }
@@ -892,10 +972,22 @@ $ `stdlib/std/hash_xxh64.nu`
     : *i lltp ( vec_data [i] . d llt )
     : *i oftp ( vec_data [i] . d oft )
     : *i mltp ( vec_data [i] . d mlt )
+    // From here the bit cursor is a LOCAL. It is read six to eight times
+    // per sequence, and as a field of the reader struct every one of
+    // those was a load and a store the compiler could not eliminate.
+    : *u bsp . b src
+    : i blen . b len
+    : ~ i boff . b off
     // States are initialized literals-length, offset, match-length.
-    : ~ i lls ( __zs_bk_take b . d lllog )
-    : ~ i ofs ( __zs_bk_take b . d oflog )
-    : ~ i mls ( __zs_bk_take b . d mllog )
+    : i lllog . d lllog
+    : i oflog . d oflog
+    : i mllog . d mllog
+    = boff - boff lllog
+    : ~ i lls ( __zs_bits bsp blen boff lllog )
+    = boff - boff oflog
+    : ~ i ofs ( __zs_bits bsp blen boff oflog )
+    = boff - boff mllog
+    : ~ i mls ( __zs_bits bsp blen boff mllog )
     : ~ i n 0
     ~ & < n nseq == . d err 0 {
         : i ofe # i . oftp ofs
@@ -906,21 +998,32 @@ $ `stdlib/std/hash_xxh64.nu`
         : i mlc & mle 255
         ? | | > llc 35 > mlc 52 > ofc 63 { = . d err ZSE_CORRUPT } {
             // Values are read offset first, then match, then literals.
-            : i offcode + << 1 ofc ( __zs_bk_take b ofc )
-            : i ml + # i . mlbp mlc ( __zs_bk_take b # i . mlxp mlc )
-            : i ll + # i . llbp llc ( __zs_bk_take b # i . llxp llc )
+            = boff - boff ofc
+            : i offcode + << 1 ofc ( __zs_bits bsp blen boff ofc )
+            : i mlx # i . mlxp mlc
+            = boff - boff mlx
+            : i ml + # i . mlbp mlc ( __zs_bits bsp blen boff mlx )
+            : i llx # i . llxp llc
+            = boff - boff llx
+            : i ll + # i . llbp llc ( __zs_bits bsp blen boff llx )
             : i off ( __zs_offset d offcode ll )
             ( __zs_emit d ll ml off )
             ? < + n 1 nseq {
-                = lls + >> lle 16 ( __zs_bk_take b & >> lle 8 255 )
-                = mls + >> mle 16 ( __zs_bk_take b & >> mle 8 255 )
-                = ofs + >> ofe 16 ( __zs_bk_take b & >> ofe 8 255 )
+                : i lnb & >> lle 8 255
+                = boff - boff lnb
+                = lls + >> lle 16 ( __zs_bits bsp blen boff lnb )
+                : i mnb & >> mle 8 255
+                = boff - boff mnb
+                = mls + >> mle 16 ( __zs_bits bsp blen boff mnb )
+                : i onb & >> ofe 8 255
+                = boff - boff onb
+                = ofs + >> ofe 16 ( __zs_bits bsp blen boff onb )
             } {}
         }
         = n + n 1
     }
     // The stream must be consumed exactly.
-    ? & == . d err 0 != . b off 0 { = . d err ZSE_CORRUPT } {}
+    ? & == . d err 0 != boff 0 { = . d err ZSE_CORRUPT } {}
     ( nurl_free # s b )
     ( vec_free [i] llx ) ( vec_free [i] mlx )
     ( vec_free [i] llb ) ( vec_free [i] mlb )
@@ -1167,6 +1270,12 @@ $ `stdlib/std/hash_xxh64.nu`
 
 : i ZS_BLOCK_MAX 131072  // the format's largest block
 : i ZS_MIN_MATCH 4  // the hash indexes 4 bytes, so matches start there
+// What a literal costs, in bits, when the match finder is deciding
+// whether a longer-but-further match is worth its offset. Literals are
+// Huffman-coded, so they are NOT eight bits each; pricing them at eight
+// overvalues distance and makes a deeper search compress WORSE — which
+// is exactly what level 12 did against level 1 before this was a price.
+: i ZS_LIT_BITS 5
 
 @ __zs_pu32 ( Vec u ) v i x → v {
     ( vec_push [u] v # u & x 255 )
@@ -2053,15 +2162,77 @@ $ `stdlib/std/hash_xxh64.nu`
     ^ v
 }
 
-// Search depth per level: the number of chain entries examined before
-// settling for the best match found. Level 1 takes the first hit.
+// Search depth per level — and an honest one.
+//
+// Level 1 takes the first candidate in the chain and never looks aside;
+// every level above it examines four and considers starting one byte
+// later (lazy matching), which is worth about 4 % on text.
+//
+// It does NOT keep growing, because a deeper chain was measured and did
+// not pay: at 16, 48, 128 and 512 candidates the output on the gate's
+// text corpus came out 1.0 – 1.6 % LARGER than at four. That is the
+// greedy parse showing through — the extra candidates are longer
+// matches further back, each locally cheaper and globally worse,
+// because taking one abandons the recent offset the following
+// sequences would have ridden for two bits apiece. A distance penalty
+// heavy enough to make depth monotone (3x the offset's bit length) made
+// every level worse still. The fix for that is an optimal parser, not a
+// bigger number here, so until one lands the levels above 2 select the
+// same parameters rather than pretending to earn their extra time.
 @ __zs_attempts i level → i {
     ? <= level 1 { ^ 1 } {}
-    ? <= level 3 { ^ 4 } {}
-    ? <= level 6 { ^ 16 } {}
-    ? <= level 9 { ^ 48 } {}
-    ? <= level 12 { ^ 128 } {}
-    ^ 512
+    ^ 4
+}
+
+// The best match at `at`, priced rather than merely measured. A longer
+// match that lies further back is not automatically better: its offset
+// costs bits, and a match at the most recent offset costs almost none.
+// Choosing by length alone is why more search made the output BIGGER —
+// level 12 lost to level 1 on ordinary text until this was a price.
+//
+// Reports through `out`: slot 0 = length, slot 1 = offset. Returns the
+// score in eighths of a bit saved, or -1 when nothing matched.
+@ __zs_find * u p ( Vec i ) htab ( Vec i ) chain i hlog i chainmask
+i attempts i at i bend i rep0 i ll ( Vec i ) out → i {
+    : *i hp ( vec_data [i] htab )
+    : *i cp ( vec_data [i] chain )
+    : *i op ( vec_data [i] out )
+    : ~ i best 0
+    : ~ i bestoff 0
+    : ~ i bestscore -1
+    // The most recent offset first: it is two bits, so it wins ties and
+    // most near-ties, and keeping it alive is what makes runs cheap.
+    ? & > ll 0 & > rep0 0 >= - at rep0 0 {
+        : i ml ( __zs_matchlen p - at rep0 at bend )
+        ? >= ml ZS_MIN_MATCH {
+            = best ml
+            = bestoff rep0
+            = bestscore - * ml ZS_LIT_BITS 1
+        } {}
+    } {}
+    : ~ i cand # i . hp ( __zs_hash4 p at hlog )
+    : ~ i tries attempts
+    ~ & > cand 0 > tries 0 {
+        : i cpos - cand 1
+        : i off - at cpos
+        ? > off 0 {
+            : i ml ( __zs_matchlen p cpos at bend )
+            ? >= ml ZS_MIN_MATCH {
+                : i cost ? & > ll 0 == off rep0 1 ( __zs_hbit off )
+                : i score - * ml ZS_LIT_BITS cost
+                ? > score bestscore {
+                    = best ml
+                    = bestoff off
+                    = bestscore score
+                } {}
+            } {}
+        } {}
+        = cand # i . cp & cpos chainmask
+        = tries - tries 1
+    }
+    = . op 0 best
+    = . op 1 bestoff
+    ^ bestscore
 }
 
 @ zstd_encode_at ( Vec u ) src i level → ( Vec u ) {
@@ -2093,6 +2264,9 @@ $ `stdlib/std/hash_xxh64.nu`
     : ( Vec i ) sll ( vec_new [i] )
     : ( Vec i ) sml ( vec_new [i] )
     : ( Vec i ) soff ( vec_new [i] )
+    : ( Vec i ) found ( __zs_zeros 2 )
+    : *i fp ( vec_data [i] found )
+    : b lazy >= level 2
     : ~ i rep0 1
     : ~ i rep1 4
     : ~ i rep2 8
@@ -2108,23 +2282,26 @@ $ `stdlib/std/hash_xxh64.nu`
         : ~ i anchor bstart
         : ~ i at bstart
         ~ <= + at ZS_MIN_MATCH bend {
-            : i h ( __zs_hash4 p at hlog )
-            : i head # i . hp h
-            // Walk the chain for the longest match in range.
-            : ~ i best 0
-            : ~ i bestoff 0
-            : ~ i cand head
-            : ~ i tries attempts
-            ~ & > cand 0 > tries 0 {
-                : i cpos - cand 1
-                : i off - at cpos
-                ? > off 0 {
-                    : i ml ( __zs_matchlen p cpos at bend )
-                    ? & >= ml ZS_MIN_MATCH > ml best { = best ml = bestoff off } {}
+            : i score ( __zs_find p htab chain hlog chainmask attempts
+            at bend rep0 - at anchor found )
+            : ~ i best # i . fp 0
+            : ~ i bestoff # i . fp 1
+            // Lazy matching: a match starting one byte later may be
+            // worth more than this one even after paying for the extra
+            // literal. Only from level 5 up — it doubles the searching.
+            ? & lazy & >= best ZS_MIN_MATCH <= + at + ZS_MIN_MATCH 1 bend {
+                : i s2 ( __zs_find p htab chain hlog chainmask attempts
+                + at 1 bend rep0 + 1 - at anchor found )
+                ? > s2 + score ZS_LIT_BITS {
+                    // Take the literal at `at` and start there instead.
+                    : i hl ( __zs_hash4 p at hlog )
+                    = . cp & at chainmask # i . hp hl
+                    = . hp hl + at 1
+                    = at + at 1
+                    = best # i . fp 0
+                    = bestoff # i . fp 1
                 } {}
-                = cand # i . cp & cpos chainmask
-                = tries - tries 1
-            }
+            } {}
             ? >= best ZS_MIN_MATCH {
                 : i ll - at anchor
                 ( vec_extend_range [u] lits src anchor ll )
@@ -2154,6 +2331,7 @@ $ `stdlib/std/hash_xxh64.nu`
                 = at + at best
                 = anchor at
             } {
+                : i h ( __zs_hash4 p at hlog )
                 = . cp & at chainmask # i . hp h
                 = . hp h + at 1
                 = at + at 1
@@ -2172,6 +2350,7 @@ $ `stdlib/std/hash_xxh64.nu`
     ( vec_free [i] llb ) ( vec_free [i] mlb )
     ( vec_free [u] lits )
     ( vec_free [i] sll ) ( vec_free [i] sml ) ( vec_free [i] soff )
+    ( vec_free [i] found )
     ^ out
 }
 

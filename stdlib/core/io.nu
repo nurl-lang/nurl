@@ -167,6 +167,29 @@ $ `stdlib/core/posix.nu`  // read(2) for the pure-NURL stdin slurp
     ^ != 0 ( nurl_stdin_eof )
 }
 
+// Everything on stdin, as BYTES. `read_all_stdin` returns a String, and
+// a String stops at its first NUL — so a program in the middle of a
+// pipe (`cat a.zst | zst d | wc -c`) could read a text stream whole but
+// not a binary one, with the truncation silent. This is the dual of
+// `write_bytes`, and the pair makes a byte-clean filter possible.
+//
+// Grows in 64 KiB steps and stops at the first zero-length read, so an
+// input of unknown length costs O(size) copies and no length header.
+@ read_all_stdin_bytes → ( Vec u ) {
+    : ( Vec u ) out ( vec_new [u] )
+    : ~ b done F
+    ~ ! done {
+        ( vec_reserve [u] out 65536 )
+        : i len ( vec_len [u] out )
+        : *u dst # *u + # i ( vec_data [u] out ) len
+        : i r ( nurl_stdin_read dst 65536 )
+        ? <= r 0 { = done T } {
+            : b _ok ( vec_set_len [u] out + len r )
+        }
+    }
+    ^ out
+}
+
 // ── Binary stdout ───────────────────────────────────────────────────
 //
 // The write-side dual of read_n_bytes. Every print in the language takes

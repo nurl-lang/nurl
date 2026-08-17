@@ -201,9 +201,93 @@ for f in "$CORPUS"/text.bin "$CORPUS"/zeros.bin; do
     [ "$got" = "-" ] || { size_fails=$((size_fails + 1)); echo "  SIZE streamed $f: got $got want -"; }
 done
 
-total=$((fails + enc_fails + size_fails))
+# ── Corruption: every mutation is an ERROR, never a crash ───────────
+#
+# A decoder's second job is refusing. Bit flips, truncations and spliced
+# frames are fed in by the hundred; each run must exit 0 or 1 — never a
+# signal, never a hang — because a segfault on hostile input is a
+# vulnerability and a hang is a denial of service.
+fuzz_fails=0
+fuzz_runs=0
+zstd -q -f -3 "$CORPUS/text.bin" -o "$WORK/seed.zst" 2>/dev/null
+SEED_SIZE=$(stat -c%s "$WORK/seed.zst")
+if [ $QUICK -eq 1 ]; then FUZZ_N=120; else FUZZ_N=600; fi
+python3 - "$WORK/seed.zst" "$WORK/fuzz" "$FUZZ_N" <<'PY'
+import os, random, sys
+seed, outdir, n = sys.argv[1], sys.argv[2], int(sys.argv[3])
+os.makedirs(outdir, exist_ok=True)
+data = open(seed, "rb").read()
+random.seed(11)
+for i in range(n):
+    b = bytearray(data)
+    kind = i % 4
+    if kind == 0:      # flip a bit anywhere
+        p = random.randrange(len(b)); b[p] ^= 1 << random.randrange(8)
+    elif kind == 1:    # replace a byte in the header region
+        p = random.randrange(min(64, len(b))); b[p] = random.randrange(256)
+    elif kind == 2:    # truncate
+        b = b[:random.randrange(1, len(b))]
+    else:              # splice in a run of noise
+        p = random.randrange(len(b))
+        b[p:p+8] = bytes(random.randrange(256) for _ in range(8))
+    open(os.path.join(outdir, f"f{i:04d}.zst"), "wb").write(bytes(b))
+PY
+for f in "$WORK/fuzz"/*.zst; do
+    fuzz_runs=$((fuzz_runs + 1))
+    timeout 20 "$GATE" d "$f" "$WORK/fuzz.out" >/dev/null 2>&1
+    rc=$?
+    # 0 = decoded (a mutation can land on a legal frame), 1 = refused.
+    if [ $rc -ne 0 ] && [ $rc -ne 1 ]; then
+        fuzz_fails=$((fuzz_fails + 1))
+        if [ $fuzz_fails -le 5 ]; then
+            case $rc in
+                124) echo "  HUNG on $(basename "$f")" ;;
+                139) echo "  SEGFAULT on $(basename "$f")" ;;
+                *)   echo "  exit $rc on $(basename "$f")" ;;
+            esac
+        fi
+    fi
+done
+
+# ── Leaks, without LeakSanitizer ────────────────────────────────────
+#
+# Round-trip one input several hundred times in a single process and
+# watch resident size. A codec that leaks a buffer per call shows up as
+# growth proportional to the iteration count; allocator fragmentation
+# does not. (LSan's stop-the-world tracer deadlocks at exit on this
+# class of binary, so this is the check that actually runs.)
+leak_fails=0
+leak_report=""
+for pair in "text.bin 300" "zeros.bin 300" "random.bin 200"; do
+    set -- $pair
+    lf="$CORPUS/$1"; iters="$2"
+    out="$("$GATE" leak "$lf" "$iters" 2>/dev/null)"
+    set -- $out
+    if [ "${1:-}" != "rss" ]; then
+        leak_fails=$((leak_fails + 1)); echo "  leak probe produced no reading for $lf"; continue
+    fi
+    warm="$2"; mid="$3"; after="$4"
+    if [ "$warm" -le 0 ] || [ "$mid" -le 0 ] || [ "$after" -le 0 ]; then
+        leak_fails=$((leak_fails + 1))
+        echo "  leak probe could not read /proc (got $warm $mid $after)"
+        continue
+    fi
+    first=$((mid - warm))
+    second=$((after - mid))
+    leak_report="$leak_report $(basename "$lf"):+${first}K/+${second}K"
+    # Two stretches of equal length. An allocator settling down grows
+    # less in the second; a leak grows at least as much. 256 KiB of
+    # slack keeps page-level noise from failing the run.
+    if [ "$second" -gt "$((first + 256))" ]; then
+        leak_fails=$((leak_fails + 1))
+        echo "  RSS grew +${first} KiB then +${second} KiB over $iters round trips of $(basename "$lf") — that is a leak, not fragmentation"
+    fi
+done
+
+total=$((fails + enc_fails + size_fails + fuzz_fails + leak_fails))
 if [ $total -ne 0 ]; then
-    echo "== zstd gate: $fails/$checked decodes wrong, $enc_fails/$enc_checked encodes wrong, $size_fails size wrong"
+    echo "== zstd gate: $fails/$checked decodes wrong, $enc_fails/$enc_checked encodes wrong, $size_fails size wrong, $fuzz_fails/$fuzz_runs mutations crashed or hung, $leak_fails leak checks failed"
     exit 1
 fi
 echo "== zstd gate: $checked reference frames decoded byte-identically, $enc_checked frames round-tripped through the zstd CLI"
+echo "              $fuzz_runs mutated frames refused without a crash or a hang; RSS growth (1st half/2nd half):$leak_report"
