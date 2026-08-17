@@ -852,7 +852,13 @@ $ `stdlib/std/hash_xxh64.nu`
         = o + o ll
         = . d litpos + . d litpos ll
     } {}
+    // An offset may not reach behind this frame's own output, and may
+    // not exceed the window the frame's header promised — a decoder
+    // that keeps the whole frame in memory could serve the second case
+    // anyway, and would then accept a frame the format calls invalid
+    // and quietly hand back whatever those bytes happened to be.
     ? | <= offset 0 > offset - o . d framestart { = . d err ZSE_CORRUPT ^ v } {}
+    ? & > . d window 0 > offset . d window { = . d err ZSE_CORRUPT ^ v } {}
     // The match copy, in chunks of `offset` bytes. Each chunk reads
     // only bytes written before it started, so no single memcpy ever
     // overlaps — while the SEQUENCE of them still reproduces the
