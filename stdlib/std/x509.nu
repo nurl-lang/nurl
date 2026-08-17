@@ -13,7 +13,13 @@
 //   sig_alg: 1 rsa_pkcs1_sha256  2 _sha384  3 _sha512
 //            4 ecdsa_sha256      5 ecdsa_sha384
 //            6 rsa_pss           7 ed25519     0 unknown
-//   key_alg: 1 RSA  2 EC  3 Ed25519  0 unknown
+//   key_alg: 1 RSA  2 EC  3 Ed25519  4 ML-DSA  0 unknown
+//
+// Ed25519 and ML-DSA both keep their raw public key in `ec_point` — the
+// field is "the key bytes that are not an RSA modulus", not specifically
+// an EC point. For ML-DSA, `ec_curve` carries the parameter set (44, 65
+// or 87), which the key length also determines but which is cheaper to
+// read back than to re-derive.
 
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
@@ -133,6 +139,12 @@ $ `stdlib/std/bytes.nu`
     ? ( __der_oid_is b oid `2a8648ce3d040303` ) { ^ 5 } {}
     ? ( __der_oid_is b oid `2a864886f70d01010a` ) { ^ 6 } {}
     ? ( __der_oid_is b oid `2b6570` ) { ^ 7 } {}
+    // ML-DSA (FIPS 204): 2.16.840.1.101.3.4.3.{17,18,19}. The same OID
+    // names the key type and the signature algorithm — there is no
+    // separate hash to name, because ML-DSA hashes internally.
+    ? ( __der_oid_is b oid `608648016503040311` ) { ^ 8 } {}
+    ? ( __der_oid_is b oid `608648016503040312` ) { ^ 9 } {}
+    ? ( __der_oid_is b oid `608648016503040313` ) { ^ 10 } {}
     ^ 0
 }
 
@@ -363,7 +375,21 @@ $ `stdlib/std/bytes.nu`
                 = . out key_alg 3
                 ( vec_free [u] . out ec_point )
                 = . out ec_point ( bytes_slice der + . keybits start 1 + . keybits start . keybits len )
-            } {}
+            } {
+                // ML-DSA: the BIT STRING holds the encoded public key
+                // whole, with no AlgorithmIdentifier parameters — the
+                // OID alone fixes the parameter set.
+                : ~ i ml 0
+                ? ( __der_oid_is der keyoid `608648016503040311` ) { = ml 44 } {}
+                ? ( __der_oid_is der keyoid `608648016503040312` ) { = ml 65 } {}
+                ? ( __der_oid_is der keyoid `608648016503040313` ) { = ml 87 } {}
+                ? > ml 0 {
+                    = . out key_alg 4
+                    = . out ec_curve ml
+                    ( vec_free [u] . out ec_point )
+                    = . out ec_point ( bytes_slice der + . keybits start 1 + . keybits start . keybits len )
+                } {}
+            }
         }
     }
 

@@ -36,7 +36,7 @@ All sources live in `stdlib/std/`.
 | ECDH / signatures | `x25519`, `ed25519`, `ecdsa_p256` (P-256 + P-384), `p256_field` | TweetNaCl-derived 25519 ladder over a ten-limb radix-2^25.5 field; `p256_field` is the dedicated **constant-time** fixed-limb GF(p) for the P-256 secret path |
 | RSA | `rsa` (PKCS#1 v1.5 verify, PSS verify + sign) | built on `bigint` |
 | Bignum | `bigint` | sign-magnitude, schoolbook mul / long division, `modpow`, `modinv` |
-| X.509 | `x509`, `tls_verify` | DER parser + chain/host/policy verification |
+| X.509 | `x509`, `tls_verify`, `x509_gen` | DER parser + chain/host/policy verification; generates self-signed P-256 and ML-DSA certificates |
 | TLS | `tls` (client, 1.3 + 1.2 fallback), `tls_server` (1.3) | record layer, key schedule, handshake; the client offers `X25519MLKEM768` first |
 | Randomness | `random` (CSPRNG), `rng` (xoshiro256\*\*, **not** crypto) | |
 | Constant-time | `subtle` | length-independent secret comparison |

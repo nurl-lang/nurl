@@ -10,6 +10,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A TLS 1.3 handshake with nothing classical in it.** The hybrid group
+  made the key exchange post-quantum, so a recording made today survives
+  a future quantum computer. That left the other half: authentication
+  was still ECDSA or RSA, and the same adversary could forge the
+  certificate and simply *be* the server, no recording required. Now the
+  server can present an **ML-DSA certificate** and sign its
+  CertificateVerify with ML-DSA, and every asymmetric operation in the
+  handshake is one a quantum computer does not break.
+
+  - `std/x509` recognises the ML-DSA OIDs (2.16.840.1.101.3.4.3.{17,18,19})
+    in a SubjectPublicKeyInfo and as a signature algorithm. One OID does
+    both jobs, because ML-DSA specifies its own hashing and so has no
+    "with-SHA256" half to name. Such a key parses as `key_alg = 4`, with
+    the raw key in `ec_point` and the parameter set in `ec_curve`.
+  - `std/x509_gen`: `x509_selfsigned_mldsa` and a deterministic
+    `x509_selfsigned_mldsa_pinned`, plus PKCS#8 output for the key.
+  - `std/tls` offers `mldsa44`/`mldsa65`/`mldsa87` (0x0904–0x0906) ahead
+    of the classical schemes and verifies a CertificateVerify signed with
+    them; `std/tls_server`'s `tls_accept_mldsa` produces one. ML-DSA
+    signs the CertificateVerify *content*, not the SHA-256 digest the
+    other schemes take — it hashes internally, so handing it a digest
+    would sign the wrong thing.
+  - `tls_cv_verify` checks the CertificateVerify signature on its own,
+    apart from chain and hostname validation. That is the half that
+    proves possession — a certificate is a public document until its key
+    signs the transcript — and callers pinning a key or trusting a
+    private root need it without the rest.
+
+  `compiler/tests/tls_pq_certificate.nu` runs it end to end: the
+  certificate parses as ML-DSA and verifies its own signature, the group
+  is X25519MLKEM768, the scheme is `mldsa65` rather than a silent
+  fallback, the CertificateVerify checks against the certificate's key,
+  and one flipped bit in that signature makes it fail.
+
 - **`std/mldsa`: ML-DSA (FIPS 204) in pure NURL** — the post-quantum
   signature, at all three parameter sets, alongside the KEM that landed
   with X25519MLKEM768. The complete 256-point NTT over Z_8380417 (unlike

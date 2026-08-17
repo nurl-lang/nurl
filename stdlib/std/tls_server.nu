@@ -42,6 +42,7 @@ $ `stdlib/std/hash_sha256.nu`
 $ `stdlib/std/hkdf.nu`
 $ `stdlib/std/x25519.nu`
 $ `stdlib/std/mlkem.nu`
+$ `stdlib/std/mldsa.nu`
 $ `stdlib/std/ecdsa_p256.nu`
 $ `stdlib/std/rsa.nu`
 $ `stdlib/std/chacha20poly1305.nu`
@@ -247,8 +248,22 @@ $ `stdlib/std/aes_gcm.nu`
 // SHA-256 digest `cvdig` of the signed content. keytype 1 = RSA-PSS
 // (rsa_pss_rsae_sha256, 0x0804) — PSS hashes with SHA-256 so the message
 // digest IS cvdig; otherwise EC P-256 (ecdsa_secp256r1_sha256, 0x0403).
-@ __srv_cv_body i keytype ( Vec u ) ec_priv ( Vec u ) rsa_n ( Vec u ) rsa_e ( Vec u ) rsa_d ( Vec u ) cvdig → ( Vec u ) {
+// keytype 2 = ML-DSA. Note it takes `cvc` — the signed *content* — not
+// the digest the other two use: ML-DSA hashes internally, so handing it
+// a SHA-256 digest would sign the wrong thing and still verify against
+// nothing.
+@ __srv_cv_body i keytype ( Vec u ) ec_priv ( Vec u ) rsa_n ( Vec u ) rsa_e ( Vec u ) rsa_d ( Vec u ) cvdig ( Vec u ) cvc i ml_level → ( Vec u ) {
     : ( Vec u ) cvbody ( vec_new [u] )
+    ? == keytype 2 {
+        : ( Vec u ) ctx ( vec_new [u] )
+        : ( Vec u ) sig ( mldsa_sign ml_level ec_priv cvc ctx )
+        : i scheme ? == ml_level 44 2308 ? == ml_level 65 2309 2310
+        ( _tls_u16 cvbody scheme )
+        ( _tls_u16 cvbody ( vec_len [u] sig ) )
+        ( _tls_cat cvbody sig )
+        ( vec_free [u] sig ) ( vec_free [u] ctx )
+        ^ cvbody
+    } {}
     ? == keytype 1 {
         : ( Vec u ) salt ( _rand_bytes 32 )
         : ( Vec u ) sig ( rsa_pss_sign_sha256 rsa_n rsa_e rsa_d cvdig salt )
@@ -292,7 +307,7 @@ $ `stdlib/std/aes_gcm.nu`
 // arguments are ignored. `cert_chain` is the pre-framed certificate_list
 // body — a concatenation of `tls_cert_entry` blobs (leaf first, then any
 // intermediates).
-@ __tls_accept_impl i raw ( Vec u ) cert_chain i keytype ( Vec u ) ec_priv ( Vec u ) rsa_n ( Vec u ) rsa_e ( Vec u ) rsa_d → !*TlsConn TlsErr {
+@ __tls_accept_impl i raw ( Vec u ) cert_chain i keytype ( Vec u ) ec_priv ( Vec u ) rsa_n ( Vec u ) rsa_e ( Vec u ) rsa_d i ml_level → !*TlsConn TlsErr {
     ? <= raw 0 { ^ @ !*TlsConn TlsErr { F # TlsErr TlsConnect } } {}
     : *TlsConn c ( nurl_alloc Z TlsConn )
     = . c fd raw
@@ -515,7 +530,7 @@ $ `stdlib/std/aes_gcm.nu`
     : ( Vec u ) th_cert ( sha256_pure tr )
     : ( Vec u ) cvc ( __srv_cv_content th_cert )
     : ( Vec u ) cvdig ( sha256_pure cvc )
-    : ( Vec u ) cvbody ( __srv_cv_body keytype ec_priv rsa_n rsa_e rsa_d cvdig )
+    : ( Vec u ) cvbody ( __srv_cv_body keytype ec_priv rsa_n rsa_e rsa_d cvdig cvc ml_level )
     : ( Vec u ) cvmsg ( __srv_hs_wrap 15 cvbody )
     ( _tls_cat tr cvmsg )
     : !v TlsErr cvw ( __srv_send_enc c 22 cvmsg )
@@ -577,7 +592,7 @@ $ `stdlib/std/aes_gcm.nu`
     : ( Vec u ) en ( vec_new [u] )
     : ( Vec u ) ee ( vec_new [u] )
     : ( Vec u ) ed ( vec_new [u] )
-    : !*TlsConn TlsErr r ( __tls_accept_impl raw cert_chain 0 priv en ee ed )
+    : !*TlsConn TlsErr r ( __tls_accept_impl raw cert_chain 0 priv en ee ed 0 )
     ( vec_free [u] en ) ( vec_free [u] ee ) ( vec_free [u] ed )
     ^ r
 }
@@ -589,8 +604,28 @@ $ `stdlib/std/aes_gcm.nu`
 // tls_cert_entry-framed certificate_list.
 @ tls_accept_rsa i raw ( Vec u ) cert_chain ( Vec u ) rsa_n ( Vec u ) rsa_e ( Vec u ) rsa_d → !*TlsConn TlsErr {
     : ( Vec u ) ee ( vec_new [u] )
-    : !*TlsConn TlsErr r ( __tls_accept_impl raw cert_chain 1 ee rsa_n rsa_e rsa_d )
+    : !*TlsConn TlsErr r ( __tls_accept_impl raw cert_chain 1 ee rsa_n rsa_e rsa_d 0 )
     ( vec_free [u] ee )
+    ^ r
+}
+
+// Accept a TLS 1.3 connection with an ML-DSA leaf certificate, signing
+// the CertificateVerify with ML-DSA itself (`mldsa44`/`mldsa65`/
+// `mldsa87`). `sk` is the raw FIPS 204 secret key; `level` is 44, 65 or
+// 87 and must match the key the certificate carries.
+//
+// Combined with the X25519MLKEM768 group this module already prefers,
+// nothing in the resulting handshake is breakable by a quantum
+// adversary: the traffic keys cannot be recovered from a recording, and
+// the server's identity cannot be forged either. No public CA issues
+// ML-DSA certificates yet, so the chain has to be private or
+// self-signed — `x509_selfsigned_mldsa` in std/x509_gen.nu makes one.
+@ tls_accept_mldsa i raw ( Vec u ) cert_chain i level ( Vec u ) sk → !*TlsConn TlsErr {
+    : ( Vec u ) en ( vec_new [u] )
+    : ( Vec u ) ee ( vec_new [u] )
+    : ( Vec u ) ed ( vec_new [u] )
+    : !*TlsConn TlsErr r ( __tls_accept_impl raw cert_chain 2 sk en ee ed level )
+    ( vec_free [u] en ) ( vec_free [u] ee ) ( vec_free [u] ed )
     ^ r
 }
 

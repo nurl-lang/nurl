@@ -499,8 +499,16 @@ $ `stdlib/std/tls_verify.nu`
     ( vec_free [u] grp )
 
     // signature_algorithms (0x000d)
+    // ML-DSA leads: it is the only family here a quantum adversary
+    // cannot forge, and a server that has an ML-DSA certificate should
+    // use it. The classical schemes follow for everything else — which
+    // today is everything with a publicly-issued certificate, since no
+    // CA issues ML-DSA yet.
     : ( Vec u ) sa ( vec_new [u] )
-    ( _tls_u16 sa 16 )  // list length (8 algs × 2)
+    ( _tls_u16 sa 22 )  // list length (11 algs × 2)
+    ( _tls_u16 sa 2309 )  // mldsa65                0x0905
+    ( _tls_u16 sa 2310 )  // mldsa87                0x0906
+    ( _tls_u16 sa 2308 )  // mldsa44                0x0904
     ( _tls_u16 sa 1027 )  // ecdsa_secp256r1_sha256 0x0403
     ( _tls_u16 sa 2052 )  // rsa_pss_rsae_sha256    0x0804
     ( _tls_u16 sa 1025 )  // rsa_pkcs1_sha256       0x0401
