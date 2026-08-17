@@ -8,7 +8,7 @@
 //   zstd_gate el <in> <out.zst> <level>
 //   zstd_gate rt <in>            encode then decode in-process, compare
 //   zstd_gate size <in.zst>      print the declared content size, or "-"
-//   zstd_gate leak <in> [iters]  round-trip N times, report RSS growth
+//   zstd_gate leak <in> [iters] [level]  round-trip N times, report RSS
 //
 // Exit status is 0 on success and 1 on a decoder error, with the error
 // name on stderr — a corrupt-input test asserts on that name, so a
@@ -131,7 +131,7 @@ $ `stdlib/std/zstd.nu`
 // stretches of the same length and the caller compares them.
 //
 // Output: `rss <at 10%> <at 55%> <at 100%> <iters>`.
-@ __cmd_leak s inp i iters → i {
+@ __cmd_leak s inp i iters i level → i {
     ?? ( __read inp ) {
         T src → {
             : ~ i warm 0
@@ -141,7 +141,7 @@ $ `stdlib/std/zstd.nu`
             : i at_warm ? > / iters 10 1 / iters 10 1
             : i at_mid + at_warm / - iters at_warm 2
             ~ < k iters {
-                : ( Vec u ) enc ( zstd_encode src )
+                : ( Vec u ) enc ( zstd_encode_at src level )
                 ?? ( zstd_decode enc ) {
                     T dec → { ( vec_free [u] dec ) }
                     F _e → { = rc 1 }
@@ -164,6 +164,38 @@ $ `stdlib/std/zstd.nu`
             ( string_push_char out 10 )
             ( nurl_print ( string_data out ) )
             ( string_free out )
+            ( vec_free [u] src )
+            ^ rc
+        }
+        F _e → { ^ ( __fail `read failed` ) }
+    }
+}
+
+// Decode and report what the frame's sequences look like:
+// "seqs N lit L match M rep R"
+@ __cmd_stats s inp → i {
+    ?? ( __read inp ) {
+        T src → {
+            : ~ i rc 0
+            ?? ( zstd_decode src ) {
+                T out → { ( vec_free [u] out ) }
+                F _e → { = rc 1 }
+            }
+            : ( Vec i ) st ( zstd_seq_stats )
+            : *i sp ( vec_data [i] st )
+            : String o ( string_with_cap 96 )
+            ( string_push_str o `seqs ` )
+            ( string_push_int o # i . sp 0 )
+            ( string_push_str o ` lit ` )
+            ( string_push_int o # i . sp 1 )
+            ( string_push_str o ` match ` )
+            ( string_push_int o # i . sp 2 )
+            ( string_push_str o ` rep ` )
+            ( string_push_int o # i . sp 3 )
+            ( string_push_char o 10 )
+            ( nurl_print ( string_data o ) )
+            ( string_free o )
+            ( vec_free [i] st )
             ( vec_free [u] src )
             ^ rc
         }
@@ -195,9 +227,11 @@ $ `stdlib/std/zstd.nu`
     : s mode ( nurl_argv_get 1 )
     : s inp ( nurl_argv_get 2 )
     ? ( nurl_str_eq mode `size` ) { ^ ( __cmd_size inp ) } {}
+    ? ( nurl_str_eq mode `st` ) { ^ ( __cmd_stats inp ) } {}
     ? ( nurl_str_eq mode `rt` ) { ^ ( __cmd_roundtrip inp ) } {}
     ? ( nurl_str_eq mode `leak` ) {
-        ^ ( __cmd_leak inp ? >= argc 4 ( nurl_str_to_int ( nurl_argv_get 3 ) ) 200 )
+        ^ ( __cmd_leak inp ? >= argc 4 ( nurl_str_to_int ( nurl_argv_get 3 ) ) 200
+        ? >= argc 5 ( nurl_str_to_int ( nurl_argv_get 4 ) ) 3 )
     } {}
     ? < argc 4 { ^ ( __fail `missing output path` ) } {}
     : s outp ( nurl_argv_get 3 )

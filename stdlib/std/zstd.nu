@@ -69,6 +69,25 @@ $ `stdlib/std/hash_xxh64.nu`
 : i ZSE_LARGE 5
 : i ZSE_MAGIC 6
 
+// Decode-side sequence statistics, for studying what an encoder chose:
+// zeroed by zstd_decode, read back with zstd_seq_stats. Scalars because
+// the language has no compound-typed globals.
+: ~ i g_zs_nseq 0
+: ~ i g_zs_sumll 0
+: ~ i g_zs_summl 0
+: ~ i g_zs_nrep 0
+
+// [0]=sequences [1]=literal bytes in sequences [2]=match bytes
+// [3]=sequences that rode a repeat offset (offbase 1..3)
+@ zstd_seq_stats → ( Vec i ) {
+    : ( Vec i ) v ( vec_new [i] )
+    ( vec_push [i] v g_zs_nseq )
+    ( vec_push [i] v g_zs_sumll )
+    ( vec_push [i] v g_zs_summl )
+    ( vec_push [i] v g_zs_nrep )
+    ^ v
+}
+
 : i ZS_MAGIC 0xFD2FB528
 : i ZS_SKIP_LO 0x184D2A50
 : i ZS_SKIP_HI 0x184D2A5F
@@ -976,6 +995,10 @@ $ `stdlib/std/hash_xxh64.nu`
             = boff - boff llx
             : i ll + # i . llbp llc ( __zs_bits bsp blen boff llx )
             : i off ( __zs_offset d offcode ll )
+            = g_zs_nseq + g_zs_nseq 1
+            = g_zs_sumll + g_zs_sumll ll
+            = g_zs_summl + g_zs_summl ml
+            ? <= offcode 3 { = g_zs_nrep + g_zs_nrep 1 } {}
             ( __zs_emit d ll ml off )
             ? < + n 1 nseq {
                 : i lnb & >> lle 8 255
@@ -1182,6 +1205,10 @@ $ `stdlib/std/hash_xxh64.nu`
 }
 
 @ zstd_decode_limit ( Vec u ) src i max_out → !( Vec u ) ZstdErr {
+    = g_zs_nseq 0
+    = g_zs_sumll 0
+    = g_zs_summl 0
+    = g_zs_nrep 0
     : i n ( vec_len [u] src )
     ? == n 0 {
         ^ @ !( Vec u ) ZstdErr { T ( vec_new [u] ) }
@@ -1431,6 +1458,121 @@ $ `stdlib/std/hash_xxh64.nu`
     ^ k
 }
 
+// ── Cross-block writer state: repeat and treeless modes ─────────────
+//
+// The format lets a block reuse the previous block's entropy tables —
+// mode 3 for a sequence table, block type 3 (treeless) for the Huffman
+// tree — and on any multi-block input that reuse is worth real bytes:
+// three FSE descriptions and a tree, per block, on data whose shape
+// barely changed. The writer keeps what the DECODER would be holding
+// (the last tables it built) and, per block, prices sending a new
+// table against reusing the standing one against the predefined one,
+// in bits, and takes the cheapest. The decoder mirror of this state is
+// ZsDec's hufbits / lllog / oflog / mllog.
+: ZsWst {
+    ( Vec i ) hlen  // previous Huffman code lengths; empty until hvalid
+    i hvalid
+    ( Vec i ) lldist  // previous normalized distributions
+    ( Vec i ) ofdist
+    ( Vec i ) mldist
+    i lllg  // their accuracy logs
+    i oflg
+    i mllg
+    i llok  // 1 = a table is standing (sent or predefined)
+    i ofok
+    i mlok
+    ( Vec i ) shadow  // save/restore snapshot: 256+3*64 dists + 8 scalars
+}
+
+@ __zs_wst_new → *ZsWst {
+    : *ZsWst st ( nurl_alloc Z ZsWst )
+    = . st hlen ( __zs_zeros 256 )
+    = . st hvalid 0
+    = . st lldist ( __zs_zeros 64 )
+    = . st ofdist ( __zs_zeros 64 )
+    = . st mldist ( __zs_zeros 64 )
+    = . st llok 0
+    = . st ofok 0
+    = . st mlok 0
+    = . st shadow ( __zs_zeros 912 )
+    ^ st
+}
+
+@ __zs_wst_free * ZsWst st → v {
+    ( vec_free [i] . st hlen )
+    ( vec_free [i] . st lldist )
+    ( vec_free [i] . st ofdist )
+    ( vec_free [i] . st mldist )
+    ( vec_free [i] . st shadow )
+    ( nurl_free # s st )
+}
+
+// Writing a block ADVANCES this state (a sent table becomes the
+// standing one). Trying several parses of the same block therefore
+// needs the state as it stood before each trial: save it, and either
+// commit the advance (the trial won) or put it back (it lost).
+@ __zs_wst_save * ZsWst st i slot → v {
+    : *i sh0 ( vec_data [i] . st shadow )
+    : *i sh # *i + # i sh0 * slot 3648
+    : *i hl ( vec_data [i] . st hlen )
+    : *i l1 ( vec_data [i] . st lldist )
+    : *i l2 ( vec_data [i] . st ofdist )
+    : *i l3 ( vec_data [i] . st mldist )
+    : ~ i t 0
+    ~ < t 256 { = . sh t # i . hl t = t + t 1 }
+    ~ < t 320 { = . sh t # i . l1 - t 256 = t + t 1 }
+    ~ < t 384 { = . sh t # i . l2 - t 320 = t + t 1 }
+    ~ < t 448 { = . sh t # i . l3 - t 384 = t + t 1 }
+    = . sh 448 . st hvalid
+    = . sh 449 . st lllg
+    = . sh 450 . st oflg
+    = . sh 451 . st mllg
+    = . sh 452 . st llok
+    = . sh 453 . st ofok
+    = . sh 454 . st mlok
+}
+
+@ __zs_wst_restore * ZsWst st i slot → v {
+    : *i sh0 ( vec_data [i] . st shadow )
+    : *i sh # *i + # i sh0 * slot 3648
+    : *i hl ( vec_data [i] . st hlen )
+    : *i l1 ( vec_data [i] . st lldist )
+    : *i l2 ( vec_data [i] . st ofdist )
+    : *i l3 ( vec_data [i] . st mldist )
+    : ~ i t 0
+    ~ < t 256 { = . hl t # i . sh t = t + t 1 }
+    ~ < t 320 { = . l1 - t 256 # i . sh t = t + t 1 }
+    ~ < t 384 { = . l2 - t 320 # i . sh t = t + t 1 }
+    ~ < t 448 { = . l3 - t 384 # i . sh t = t + t 1 }
+    = . st hvalid # i . sh 448
+    = . st lllg # i . sh 449
+    = . st oflg # i . sh 450
+    = . st mllg # i . sh 451
+    = . st llok # i . sh 452
+    = . st ofok # i . sh 453
+    = . st mlok # i . sh 454
+}
+
+// The cost, in 1/16 bits, of coding `counts` with the distribution
+// `dist` (normalized to 1<<log). -1 when some present symbol has no
+// cell — that table cannot code this block at all.
+@ __zs_dist_cost * i cnt i nsym * i dist i ndist i log → i {
+    : ~ i totalc 0
+    : ~ i s 0
+    ~ < s nsym {
+        : i c # i . cnt s
+        ? > c 0 {
+            ? | >= s ndist == # i . dist s 0 { ^ -1 } {}
+            : i share0 # i . dist s
+            // A "less than one" (-1) cell prices as one cell.
+            : i share ? < share0 0 1 share0
+            = totalc + totalc * c - << log 4 ( __zs_log2_16 share )
+        } {}
+        = s + s 1
+    }
+    ^ totalc
+}
+
 // ── Huffman-coded literals ──────────────────────────────────────────
 //
 // Literals are half the output of a text block, so coding them is the
@@ -1605,8 +1747,25 @@ $ `stdlib/std/hash_xxh64.nu`
         ? > q # i . np big { = big s } {}
         = s + s 1
     }
-    // Reconcile: the largest symbol absorbs the difference, and if that
-    // is not enough, take from every symbol that can spare a cell.
+    // Reconcile by largest remainder: each leftover cell goes to the
+    // symbol whose share was rounded down the hardest. Dumping the
+    // whole difference on the biggest symbol — the previous rule —
+    // distorts exactly the code the data uses most.
+    ~ < sum scale {
+        : ~ i pick -1
+        : ~ i pickrem -1
+        : ~ i t 0
+        ~ < t nsym {
+            ? > # i . cp t 0 {
+                : i rem % * # i . cp t scale total
+                ? > rem pickrem { = pickrem rem = pick t } {}
+            } {}
+            = t + t 1
+        }
+        ? < pick 0 { = pick big } {}
+        = . np pick + # i . np pick 1
+        = sum + sum 1
+    }
     ~ != sum scale {
         ? < sum scale {
             = . np big + # i . np big - scale sum
@@ -1773,7 +1932,7 @@ $ `stdlib/std/hash_xxh64.nu`
 
 // Write the literals section. Returns T when it went out Huffman-coded,
 // F when raw literals were smaller (or the tree could not be sent).
-@ __zs_lit_compress ( Vec u ) body ( Vec u ) lits → b {
+@ __zs_lit_compress ( Vec u ) body ( Vec u ) lits * ZsWst wst → b {
     : i n ( vec_len [u] lits )
     ? < n 64 { ^ F } {}
     : ( Vec i ) counts ( __zs_zeros ZS_MAX_SYMS )
@@ -1789,12 +1948,50 @@ $ `stdlib/std/hash_xxh64.nu`
     ? == last 0 { ( vec_free [i] counts ) ^ F } {}
     : ( Vec i ) lens ( __zs_zeros ZS_MAX_SYMS )
     : ( Vec i ) codes ( __zs_zeros ZS_MAX_SYMS )
-    : i maxb ( __zs_huf_lengths counts lens ZS_MAX_SYMS )
+    : ~ i maxb ( __zs_huf_lengths counts lens ZS_MAX_SYMS )
     ? | <= maxb 0 > maxb ZS_MAX_HUF_BITS {
         ( vec_free [i] counts ) ( vec_free [i] lens ) ( vec_free [i] codes )
         ^ F
     } {}
     ( __zs_huf_codes lens codes ZS_MAX_SYMS maxb )
+    // The standing tree — the one the decoder still holds from the
+    // previous block — codes this block for zero header bytes if it
+    // covers every byte present. Weigh that against a fresh tree's
+    // bits-plus-description; the winner is decided in whole bits
+    // before anything is built.
+    : ~ b treeless F
+    ? == . wst hvalid 1 {
+        : *i hlp ( vec_data [i] . wst hlen )
+        : ~ i newbits 0
+        : ~ i prevbits 0
+        : ~ b covered T
+        : *i lnp0 ( vec_data [i] lens )
+        : ~ i t 0
+        ~ < t ZS_MAX_SYMS {
+            : i c # i . cnp t
+            ? > c 0 {
+                = newbits + newbits * c # i . lnp0 t
+                ? > # i . hlp t 0 { = prevbits + prevbits * c # i . hlp t }
+                { = covered F }
+            } {}
+            = t + t 1
+        }
+        // A fresh description costs 40-120 bytes; charge a conservative
+        // 40 against the fresh tree and let ties keep the old one.
+        ? & covered <= prevbits + newbits 320 {
+            = treeless T
+            = t 0
+            ~ < t ZS_MAX_SYMS { = . lnp0 t # i . hlp t = t + t 1 }
+            : ~ i mb 0
+            = t 0
+            ~ < t ZS_MAX_SYMS {
+                ? > # i . lnp0 t mb { = mb # i . lnp0 t } {}
+                = t + t 1
+            }
+            = maxb mb
+            ( __zs_huf_codes lens codes ZS_MAX_SYMS maxb )
+        } {}
+    } {}
     // Tree description: weight = maxbits + 1 - length. The last
     // symbol's weight is what completes the power of two, so it is
     // never transmitted.
@@ -1827,17 +2024,20 @@ $ `stdlib/std/hash_xxh64.nu`
     : i ndir ( vec_len [u] tdir )
     : i nfse ( vec_len [u] tfse )
     : ( Vec u ) tree ( vec_new [u] )
-    ? & > ndir 0 | ! okfse <= ndir nfse {
-        ( vec_extend [u] tree tdir )
-    } { ? okfse { ( vec_extend [u] tree tfse ) } {} }
+    ? treeless {} {
+        ? & > ndir 0 | ! okfse <= ndir nfse {
+            ( vec_extend [u] tree tdir )
+        } { ? okfse { ( vec_extend [u] tree tfse ) } {} }
+    }
     ( vec_free [u] tdir )
     ( vec_free [u] tfse )
     ( vec_free [i] wts )
-    ? == ( vec_len [u] tree ) 0 {
+    ? & ! treeless == ( vec_len [u] tree ) 0 {
         ( vec_free [u] tree )
         ( vec_free [i] counts ) ( vec_free [i] lens ) ( vec_free [i] codes )
         ^ F
     } {}
+    : i btype ? treeless 3 2
     // Four streams above 1023 literals, because that is the only shape
     // the larger size formats describe.
     : ( Vec u ) payload ( vec_with_cap [u] + n 32 )
@@ -1883,18 +2083,18 @@ $ `stdlib/std/hash_xxh64.nu`
     : b win & fits < + hdrlen csize n
     ? win {
         ? one {
-            : i hv | | 2 << 0 2 | << n 4 << csize 14
+            : i hv | | btype << 0 2 | << n 4 << csize 14
             ( vec_push [u] body # u & hv 255 )
             ( vec_push [u] body # u & >> hv 8 255 )
             ( vec_push [u] body # u & >> hv 16 255 )
         } { ? == hdrlen 4 {
-                : i hv | | 2 << 2 2 | << n 4 << csize 18
+                : i hv | | btype << 2 2 | << n 4 << csize 18
                 ( vec_push [u] body # u & hv 255 )
                 ( vec_push [u] body # u & >> hv 8 255 )
                 ( vec_push [u] body # u & >> hv 16 255 )
                 ( vec_push [u] body # u & >> hv 24 255 )
             } {
-                : i hv | | 2 << 3 2 | << n 4 << csize 22
+                : i hv | | btype << 3 2 | << n 4 << csize 22
                 ( vec_push [u] body # u & hv 255 )
                 ( vec_push [u] body # u & >> hv 8 255 )
                 ( vec_push [u] body # u & >> hv 16 255 )
@@ -1905,6 +2105,14 @@ $ `stdlib/std/hash_xxh64.nu`
         ( vec_extend [u] body payload )
     } {}
     : b used win
+    // A tree that actually went out is what the decoder now holds.
+    ? & used ! treeless {
+        : *i hlp2 ( vec_data [i] . wst hlen )
+        : *i lnp2 ( vec_data [i] lens )
+        : ~ i t 0
+        ~ < t ZS_MAX_SYMS { = . hlp2 t # i . lnp2 t = t + t 1 }
+        = . wst hvalid 1
+    } {}
     ( vec_free [u] tree )
     ( vec_free [u] payload )
     ( vec_free [i] counts )
@@ -1958,10 +2166,36 @@ $ `stdlib/std/hash_xxh64.nu`
 // for a distribution of its own; a short one takes the predefined table
 // and spends no header bytes at all. `modeslot[0]` receives the mode.
 @ __zs_seq_ctable ( Vec u ) tabs ( Vec i ) counts i nsym i maxlog i nseq
-( Vec i ) deffreq i defn i deflog ( Vec i ) modeslot → ZsCt {
+( Vec i ) deffreq i defn i deflog ( Vec i ) modeslot
+* ZsWst st i which → ZsCt {
     : *i mp ( vec_data [i] modeslot )
+    : *i cntp ( vec_data [i] counts )
+    // The standing table (what the decoder still holds), if any.
+    : ( Vec i ) prev ? == which 0 . st lldist ? == which 1 . st ofdist . st mldist
+    : i prevok ? == which 0 . st llok ? == which 1 . st ofok . st mlok
+    : i prevlog ? == which 0 . st lllg ? == which 1 . st oflg . st mllg
+    : *i prevp ( vec_data [i] prev )
+    : ~ i cost_rep -1
+    ? == prevok 1 { = cost_rep ( __zs_dist_cost cntp nsym prevp 64 prevlog ) } {}
+    // The predefined table: normalize its -1 entries to one cell for
+    // pricing (that is what they get in the real table).
+    : ( Vec i ) defnorm ( __zs_zeros 64 )
+    : *i dfp ( vec_data [i] deffreq )
+    : *i dnp ( vec_data [i] defnorm )
+    : ~ i q 0
+    ~ < q defn {
+        : i f # i . dfp q
+        = . dnp q ? < f 0 1 f
+        = q + q 1
+    }
+    : i cost_pre ( __zs_dist_cost cntp nsym dnp 64 deflog )
+    // A fresh table, if the block can pay for one.
+    : ~ i cost_new -1
+    : ( Vec i ) norm ( __zs_zeros ? > nsym 0 nsym 1 )
+    : ( Vec u ) ncount ( vec_new [u] )
+    : ~ i newlog 0
+    : ~ i maxsym -1
     ? >= nseq 24 {
-        : ( Vec i ) norm ( __zs_zeros ? > nsym 0 nsym 1 )
         // Resolution the sequence count can pay for, floored at what
         // the alphabet needs and capped at what the format allows.
         : ~ i log - ( __zs_hbit - nseq 1 ) 2
@@ -1969,35 +2203,81 @@ $ `stdlib/std/hash_xxh64.nu`
         ? < log minlog { = log minlog } {}
         ? < log 5 { = log 5 } {}
         ? > log maxlog { = log maxlog } {}
-        : i maxsym ( __zs_normalize counts norm nsym log )
+        = maxsym ( __zs_normalize counts norm nsym log )
         ? > maxsym 0 {
+            = newlog log
             : *ZsBw w ( nurl_alloc Z ZsBw )
             = . w buf ( vec_new [u] )
             = . w acc 0
             = . w bits 0
             ( __zs_write_ncount w norm + maxsym 1 log )
             ( __zs_bw_close_fwd w )
-            ( vec_extend [u] tabs . w buf )
+            ( vec_extend [u] ncount . w buf )
             ( vec_free [u] . w buf )
             ( nurl_free # s w )
-            : ZsCt ct ( __zs_ct_build norm + maxsym 1 log )
-            ( vec_free [i] norm )
-            = . mp 0 2
-            ^ ct
+            : *i normp ( vec_data [i] norm )
+            = cost_new + ( __zs_dist_cost cntp nsym normp nsym log )
+            << * ( vec_len [u] ncount ) 8 4
         } {}
-        ( vec_free [i] norm )
     } {}
-    = . mp 0 0
+    // Cheapest wins; a tie keeps the standing table (no header bytes,
+    // no new state).
+    : ~ i mode 0
+    ? & >= cost_rep 0 | < cost_new 0 <= cost_rep cost_new {
+        ? <= cost_rep cost_pre { = mode 3 } {}
+    } {}
+    ? & != mode 3 >= cost_new 0 {
+        ? < cost_new cost_pre { = mode 2 } {}
+    } {}
+    = . mp 0 mode
+    ? == mode 2 {
+        ( vec_extend [u] tabs ncount )
+        : ZsCt ct ( __zs_ct_build norm + maxsym 1 newlog )
+        // The fresh table becomes the standing one.
+        : *i normp2 ( vec_data [i] norm )
+        = q 0
+        ~ < q 64 { = . prevp q ? < q nsym # i . normp2 q 0 = q + q 1 }
+        ? == which 0 { = . st lllg newlog = . st llok 1 } {
+            ? == which 1 { = . st oflg newlog = . st ofok 1 } {
+                = . st mllg newlog
+                = . st mlok 1
+            }
+        }
+        ( vec_free [i] norm )
+        ( vec_free [u] ncount )
+        ( vec_free [i] defnorm )
+        ^ ct
+    } {}
+    ( vec_free [i] norm )
+    ( vec_free [u] ncount )
+    ? == mode 3 {
+        ( vec_free [i] defnorm )
+        ^ ( __zs_ct_build prev 64 prevlog )
+    } {}
+    // Predefined: it becomes the standing table too — that is what the
+    // decoder will be holding. Stored RAW, -1 cells intact: the decoder
+    // builds its predef table with the "less than one" cells taken from
+    // the TOP, and a repeat must rebuild exactly that table, not a
+    // lookalike whose 1-cells were spread normally.
+    = q 0
+    ~ < q 64 { = . prevp q ? < q defn # i . dfp q 0 = q + q 1 }
+    ? == which 0 { = . st lllg deflog = . st llok 1 } {
+        ? == which 1 { = . st oflg deflog = . st ofok 1 } {
+            = . st mllg deflog
+            = . st mlok 1
+        }
+    }
+    ( vec_free [i] defnorm )
     ^ ( __zs_ct_build deffreq defn deflog )
 }
 
 @ __zs_write_block ( Vec u ) out ( Vec u ) src i bstart i blen i last
 ( Vec u ) lits ( Vec i ) sll ( Vec i ) sml ( Vec i ) soff
-( Vec i ) llb ( Vec i ) mlb ( Vec i ) llx ( Vec i ) mlx → v {
+( Vec i ) llb ( Vec i ) mlb ( Vec i ) llx ( Vec i ) mlx * ZsWst wst → v {
     : i nseq ( vec_len [i] sll )
     : i nlit ( vec_len [u] lits )
     : ( Vec u ) body ( vec_with_cap [u] + blen 64 )
-    ? ! ( __zs_lit_compress body lits ) {
+    ? ! ( __zs_lit_compress body lits wst ) {
         ( __zs_lit_header body nlit )
         ( vec_extend [u] body lits )
     } {}
@@ -2043,13 +2323,13 @@ $ `stdlib/std/hash_xxh64.nu`
         : ( Vec u ) tabs ( vec_new [u] )
         : *i msp ( vec_data [i] modeslot )
         : i lldefn ( __zs_ll_default deffreq )
-        : ZsCt llct ( __zs_seq_ctable tabs llcnt 36 9 nseq deffreq lldefn 6 modeslot )
+        : ZsCt llct ( __zs_seq_ctable tabs llcnt 36 9 nseq deffreq lldefn 6 modeslot wst 0 )
         : i llmode # i . msp 0
         : i ofdefn ( __zs_of_default deffreq )
-        : ZsCt ofct ( __zs_seq_ctable tabs ofcnt 32 8 nseq deffreq ofdefn 5 modeslot )
+        : ZsCt ofct ( __zs_seq_ctable tabs ofcnt 32 8 nseq deffreq ofdefn 5 modeslot wst 1 )
         : i ofmode # i . msp 0
         : i mldefn ( __zs_ml_default deffreq )
-        : ZsCt mlct ( __zs_seq_ctable tabs mlcnt 53 9 nseq deffreq mldefn 6 modeslot )
+        : ZsCt mlct ( __zs_seq_ctable tabs mlcnt 53 9 nseq deffreq mldefn 6 modeslot wst 2 )
         : i mlmode # i . msp 0
         ( vec_push [u] body # u | | << llmode 6 << ofmode 4 << mlmode 2 )
         ( vec_extend [u] body tabs )
@@ -2131,23 +2411,19 @@ $ `stdlib/std/hash_xxh64.nu`
     ^ v
 }
 
-// Search depth per level — and an honest one.
+// Greedy search depth per level — and an honest one.
 //
 // Level 1 takes the first candidate in the chain and never looks aside;
-// every level above it examines four and considers starting one byte
-// later (lazy matching), which is worth about 4 % on text.
-//
-// It does NOT keep growing, because a deeper chain was measured and did
-// not pay: at 16, 48, 128 and 512 candidates the output on the gate's
-// text corpus came out 1.0 – 1.6 % LARGER than at four. That is the
-// greedy parse showing through — the extra candidates are longer
+// levels 2–12 examine four and consider starting one byte later (lazy
+// matching), worth about 4 % on text. Depth beyond four was measured
+// and did not pay UNDER A GREEDY PARSE: the extra candidates are longer
 // matches further back, each locally cheaper and globally worse,
 // because taking one abandons the recent offset the following
-// sequences would have ridden for two bits apiece. A distance penalty
-// heavy enough to make depth monotone (3x the offset's bit length) made
-// every level worse still. The fix for that is an optimal parser, not a
-// bigger number here, so until one lands the levels above 2 select the
-// same parameters rather than pretending to earn their extra time.
+// sequences would have ridden for two bits apiece. That is not a law of
+// nature, it is the greedy parse showing through — and from level 13 up
+// the encoder switches to the optimal parser (__zs_encode_opt), where
+// depth DOES pay because every candidate is priced against every other
+// path through the block.
 @ __zs_attempts i level → i {
     ? <= level 1 { ^ 1 } {}
     ^ 4
@@ -2204,7 +2480,944 @@ i attempts i at i bend i rep0 i ll ( Vec i ) out → i {
     ^ bestscore
 }
 
+// ── Optimal parser (levels 13+) ─────────────────────────────────────
+//
+// The greedy parser above chooses each match on its own; this one
+// chooses the SET of matches with the smallest priced total, which is
+// the difference between beating `zstd -3` and chasing `zstd -19`.
+//
+// It is a shortest-path problem: node = position in the block, edge =
+// one literal or one match, weight = the bits that choice will cost.
+// Positions are relaxed left to right, so by the time a position is
+// extended its own cost is final. Three things make the classic DP
+// match this format:
+//
+//  * REPEAT OFFSETS make edge weights history-dependent — offbase 1
+//    costs ~2 bits but only if the offset matches a rep slot, and the
+//    slots depend on the path. Exact handling would need reps in the
+//    node state; like the reference's btultra2, each position instead
+//    CARRIES the rep state of its best arrival, which is exact along
+//    the chosen path and approximate off it.
+//  * The LITERALS-LENGTH code prices a whole run at once, so a match
+//    edge pays its run's LL code and a literal edge pays only the
+//    literal byte; the run length rides along in the arrival state.
+//  * Prices must come from somewhere. Pass 1 prices literals from the
+//    block's own byte counts and sequences from the predefined
+//    distributions; pass 2 reprices everything from what pass 1
+//    actually chose and parses again. (The reference's btultra2 is
+//    this same two-pass shape.)
+//
+// A match longer than `suff` ends deliberation: it is taken whole and
+// the parse resumes after it, exactly so that a megabyte of zeros costs
+// one decision, not half a billion relaxations.
+
+: i ZS_OPT_SUFF 1024
+: i ZS_OPT_INF 0x0FFFFFFFFFFFFFFF
+: i ZS_H3_MASK 65535
+
+// log2 in 1/16ths of a bit: floor-log2 plus a parabolic correction for
+// the fraction, within ~0.02 bit of the true value — plenty for prices.
+@ __zs_log2_16 i x → i {
+    ? <= x 1 { ^ 0 } {}
+    : i l ( __zs_hbit x )
+    : ~ i frac 0
+    ? >= l 4 { = frac & >> x - l 4 15 } { = frac & << x - 4 l 15 }
+    : i corr >> + * * frac - 16 frac 5 128 8
+    ^ + + << l 4 frac corr
+}
+
+// Symbol prices from occurrence counts: price = log2(total/count),
+// in 1/16 bits. An unseen symbol prices one bit past the rarest.
+@ __zs_prices_16 * i cnt i n * i price → v {
+    : ~ i total 0
+    : ~ i s 0
+    ~ < s n { = total + total # i . cnt s = s + s 1 }
+    ? <= total 0 { = total 1 } {}
+    : i lt ( __zs_log2_16 total )
+    = s 0
+    ~ < s n {
+        : i c # i . cnt s
+        = . price s ? > c 0 - lt ( __zs_log2_16 c ) + lt 16
+        = s + s 1
+    }
+}
+
+@ __zs_fill0 * i pp i n → v {
+    : ~ i s 0
+    ~ < s n { = . pp s 0 = s + s 1 }
+}
+
+// Code lookups over raw base-table pointers (the Vec forms above walk
+// the same tables; these avoid re-fetching vec_data in a hot loop).
+@ __zs_ll_code_p * i basep i ll → i {
+    ? < ll 16 { ^ ll } {}
+    : ~ i c 16
+    ~ & < c 35 <= # i . basep + c 1 ll { = c + c 1 }
+    ^ c
+}
+
+@ __zs_ml_code_p * i basep i ml → i {
+    ? < ml 35 { ^ - ml 3 } {}
+    : ~ i c 32
+    ~ & < c 52 <= # i . basep + c 1 ml { = c + c 1 }
+    ^ c
+}
+
+// Everything one block's parse needs, behind one pointer: the input,
+// the match-finder tables, the DP arrays, and the price tables. The
+// arrays are allocated once per encode and rewritten per block.
+: ZsOpt {
+    * u p
+    i bstart
+    i blen
+    * i hp  // hash4 chain heads
+    * i cp  // chain links
+    * i h3p  // hash3 last-position table
+    i hlog
+    i chainmask
+    i attempts
+    i insert  // 1 = build the chain while parsing (pass 1 only)
+    i suff
+    i skipu  // skip-until, set by an immediate take
+    * i cost  // DP: best arrival price, 1/16 bits
+    * i bln  // DP: arriving match length; 0 = literal
+    * i bof  // DP: arriving match offset (raw distance)
+    * i bll  // DP: the match's literal-run length
+    * i blit  // DP: literal run at this arrival
+    * i br0  // DP: rep state at this arrival
+    * i br1
+    * i br2
+    * i litp  // price tables (extras folded in)
+    * i llp
+    * i mlp
+    * i ofp
+    * i llbp  // code base tables
+    * i mlbp
+    * i cco  // candidate cache: offsets, 8 slots per position
+    * i ccm  // candidate cache: match lengths
+    * i ccn  // candidate cache: how many slots are filled
+    i rep0  // rep state at block start
+    i rep1
+    i rep2
+}
+
+// Relax one candidate over a run of lengths. The ML code is stepped
+// incrementally — its base table is sorted, so a length walk crosses
+// each code boundary once instead of looking every length up.
+@ __zs_opt_relax * ZsOpt o i k i cbase i off i ofprice i lmin i lmax
+i nr0 i nr1 i nr2 → v {
+    ? > lmin lmax { ^ v } {}
+    : *i costp . o cost
+    : *i blnp . o bln
+    : *i bofp . o bof
+    : *i bllp . o bll
+    : *i blitp . o blit
+    : *i br0p . o br0
+    : *i br1p . o br1
+    : *i br2p . o br2
+    : *i mlpp . o mlp
+    : *i mlbp2 . o mlbp
+    : i lr # i . blitp k
+    : i c0 + cbase ofprice
+    : ~ i mlc ( __zs_ml_code_p mlbp2 lmin )
+    : ~ i nextb ? < mlc 52 # i . mlbp2 + mlc 1 ZS_OPT_INF
+    : ~ i L lmin
+    ~ <= L lmax {
+        ~ >= L nextb {
+            = mlc + mlc 1
+            = nextb ? < mlc 52 # i . mlbp2 + mlc 1 ZS_OPT_INF
+        }
+        : i tot + c0 # i . mlpp mlc
+        : i j + k L
+        ? < tot # i . costp j {
+            = . costp j tot
+            = . blnp j L
+            = . bofp j off
+            = . bllp j lr
+            = . blitp j 0
+            = . br0p j nr0
+            = . br1p j nr1
+            = . br2p j nr2
+        } {}
+        = L + L 1
+    }
+}
+
+// All match edges out of position k: the three rep offsets (length 3
+// up — an ML code starts at 3, and a rep is the cheapest offset there
+// is), one hash3 candidate (the length-3 matches the 4-byte hash can
+// never see), and the hash4 chain. Chain candidates are kept only when
+// strictly longer than everything cheaper: the chain yields offsets in
+// increasing order, so for any target length the first candidate that
+// covers it is the cheapest, and each candidate relaxes only the
+// lengths the previous one could not reach.
+@ __zs_opt_matches * ZsOpt o i k → v {
+    : *u p . o p
+    : i bstart . o bstart
+    : i n . o blen
+    : i absk + bstart k
+    : i bend + bstart n
+    : *i costp . o cost
+    : *i blitp . o blit
+    : *i br0p . o br0
+    : *i br1p . o br1
+    : *i br2p . o br2
+    : *i llpp . o llp
+    : *i ofpp . o ofp
+    : *i llbp2 . o llbp
+    : i ck # i . costp k
+    : i lr # i . blitp k
+    : i r0 # i . br0p k
+    : i r1 # i . br1p k
+    : i r2 # i . br2p k
+    : i cbase + ck # i . llpp 0
+    : i suff . o suff
+    : ~ i bestlen 2
+    : ~ i bestoff 0
+    : ~ i bestofp 0
+    // Rep candidates. With no literals before the match the slots
+    // shift: rep0 itself is unreachable and rep0-1 appears — mirror of
+    // the decoder's __zs_offset.
+    : ~ i ri 0
+    ~ < ri 3 {
+        : ~ i rv 0
+        ? > lr 0 {
+            = rv ? == ri 0 r0 ? == ri 1 r1 r2
+        } {
+            = rv ? == ri 0 r1 ? == ri 1 r2 - r0 1
+        }
+        : i ob + ri 1
+        ? & > rv 0 <= rv absk {
+            : i src0 - absk rv
+            ? == # i . p src0 # i . p absk {
+                : i ml ( __zs_matchlen p src0 absk bend )
+                ? >= ml 3 {
+                    : i ofprice # i . ofpp ( __zs_hbit ob )
+                    : ~ i nr0 rv
+                    : ~ i nr1 r0
+                    : ~ i nr2 r1
+                    ? == rv r0 { = nr1 r1 = nr2 r2 } {
+                        ? == rv r1 { = nr2 r2 } {}
+                    }
+                    ? >= ml suff {
+                        ? > ml bestlen {
+                            = bestlen ml
+                            = bestoff rv
+                            = bestofp ofprice
+                        } {}
+                    } {
+                        ( __zs_opt_relax o k cbase rv ofprice 3 ml nr0 nr1 nr2 )
+                        ? > ml bestlen {
+                            = bestlen ml
+                            = bestoff rv
+                            = bestofp ofprice
+                        } {}
+                    }
+                } {}
+            } {}
+        } {}
+        = ri + ri 1
+    }
+    : *i ccop . o cco
+    : *i ccmp . o ccm
+    : *i ccnp . o ccn
+    : i cslot << k 3
+    ? == . o insert 1 {
+        = . ccnp k 0
+        ? < bestlen suff {
+            // hash3: one candidate, the most recent position with these
+            // three bytes. Worth having because a length-3 match at a
+            // small offset beats three literals, and the 4-byte hash is
+            // blind to it.
+            : *i h3pp . o h3p
+            : i v3 | | # i . p absk << # i . p + absk 1 8 << # i . p + absk 2 16
+            : i h3i2 * 2 & >> * v3 2654435761 16 ZS_H3_MASK
+            : ~ i h3q 0
+            ~ & < h3q 2 < bestlen suff {
+                : i cand3 # i . h3pp + h3i2 h3q
+                = h3q + h3q 1
+                ? > cand3 0 {
+                    : i cpos - cand3 1
+                    : i off - absk cpos
+                    ? & > off 0 == # i . p cpos # i . p absk {
+                        : i ml ( __zs_matchlen p cpos absk bend )
+                        ? & >= ml 3 > ml bestlen {
+                            : i ofprice # i . ofpp ( __zs_hbit + off 3 )
+                            : ~ i nr0 off
+                            : ~ i nr1 r0
+                            : ~ i nr2 r1
+                            ? == off r0 { = nr1 r1 = nr2 r2 } {
+                                ? == off r1 { = nr2 r2 } {}
+                            }
+                            = . ccop + cslot # i . ccnp k off
+                            = . ccmp + cslot # i . ccnp k ml
+                            = . ccnp k + # i . ccnp k 1
+                            ? >= ml suff {
+                                = bestlen ml
+                                = bestoff off
+                                = bestofp ofprice
+                            } {
+                                : i lmin ? > + bestlen 1 3 + bestlen 1 3
+                                ( __zs_opt_relax o k cbase off ofprice lmin ml nr0 nr1 nr2 )
+                                = bestlen ml
+                                = bestoff off
+                                = bestofp ofprice
+                            }
+                        } {}
+                    } {}
+                } {}
+            }
+        } {}
+        ? & < bestlen suff <= + k 4 n {
+            : *i hpp . o hp
+            : *i cp2 . o cp
+            : i chainmask . o chainmask
+            : i h4 ( __zs_hash4 p absk . o hlog )
+            : ~ i cand # i . hpp h4
+            : ~ i tries . o attempts
+            : ~ i walked * . o attempts 8
+            : ~ b stop F
+            ~ & & > cand 0 > tries 0 & > walked 0 ! stop {
+                : i cpos - cand 1
+                : i off - absk cpos
+                = walked - walked 1
+                ? > off 0 {
+                    = tries - tries 1
+                    ? >= + absk bestlen bend { = stop T } {
+                        // One byte decides whether this candidate can
+                        // even beat the best so far; most cannot.
+                        ? == # i . p + cpos bestlen # i . p + absk bestlen {
+                            : i ml ( __zs_matchlen p cpos absk bend )
+                            ? & >= ml 4 > ml bestlen {
+                                : i ofprice # i . ofpp ( __zs_hbit + off 3 )
+                                : ~ i nr0 off
+                                : ~ i nr1 r0
+                                : ~ i nr2 r1
+                                ? == off r0 { = nr1 r1 = nr2 r2 } {
+                                    ? == off r1 { = nr2 r2 } {}
+                                }
+                                ? < # i . ccnp k 8 {
+                                    = . ccop + cslot # i . ccnp k off
+                                    = . ccmp + cslot # i . ccnp k ml
+                                    = . ccnp k + # i . ccnp k 1
+                                } {}
+                                ? >= ml suff {
+                                    = bestlen ml
+                                    = bestoff off
+                                    = bestofp ofprice
+                                    = stop T
+                                } {
+                                    : i lmin ? > + bestlen 1 4 + bestlen 1 4
+                                    ( __zs_opt_relax o k cbase off ofprice lmin ml nr0 nr1 nr2 )
+                                    = bestlen ml
+                                    = bestoff off
+                                    = bestofp ofprice
+                                }
+                            } {}
+                        } {}
+                    }
+                } {}
+                = cand # i . cp2 & cpos chainmask
+            }
+        } {}
+    } {
+        // Pass 2: the chain now holds positions AHEAD of this one as
+        // well as behind it, so walking it from the head would spend
+        // the whole budget on the future. The candidates pass 1 found
+        // are cached per position instead — reps are re-evaluated
+        // (their offsets depend on the path, which repricing changes),
+        // the ladder is replayed.
+        : i cn # i . ccnp k
+        : ~ i ci 0
+        ~ < ci cn {
+            : i off # i . ccop + cslot ci
+            : i ml0 # i . ccmp + cslot ci
+            : i ml ? > ml0 - n k - n k ml0
+            : i minl ? >= ml0 4 4 3
+            ? > ml bestlen {
+                : i ofprice # i . ofpp ( __zs_hbit + off 3 )
+                : ~ i nr0 off
+                : ~ i nr1 r0
+                : ~ i nr2 r1
+                ? == off r0 { = nr1 r1 = nr2 r2 } {
+                    ? == off r1 { = nr2 r2 } {}
+                }
+                ? >= ml suff {
+                    = bestlen ml
+                    = bestoff off
+                    = bestofp ofprice
+                    = ci cn
+                } {
+                    : i lmin ? > + bestlen 1 minl + bestlen 1 minl
+                    ( __zs_opt_relax o k cbase off ofprice lmin ml nr0 nr1 nr2 )
+                    = bestlen ml
+                    = bestoff off
+                    = bestofp ofprice
+                }
+            } {}
+            = ci + ci 1
+        }
+    }
+    // A match past `suff` ends deliberation: relax its endpoint alone
+    // and jump the cursor past it.
+    ? >= bestlen suff {
+        : ~ i nr0 bestoff
+        : ~ i nr1 r0
+        : ~ i nr2 r1
+        ? == bestoff r0 { = nr1 r1 = nr2 r2 } {
+            ? == bestoff r1 { = nr2 r2 } {}
+        }
+        ( __zs_opt_relax o k cbase bestoff bestofp bestlen bestlen nr0 nr1 nr2 )
+        = . o skipu + k bestlen
+    } {}
+}
+
+@ __zs_opt_parse * ZsOpt o → v {
+    : *u p . o p
+    : i bstart . o bstart
+    : i n . o blen
+    : i bend + bstart n
+    : *i costp . o cost
+    : *i blnp . o bln
+    : *i blitp . o blit
+    : *i br0p . o br0
+    : *i br1p . o br1
+    : *i br2p . o br2
+    : *i litpp . o litp
+    : *i llpp . o llp
+    : *i llbp3 . o llbp
+    : *i hpp . o hp
+    : *i cp2 . o cp
+    : *i h3pp . o h3p
+    : i hlog . o hlog
+    : i chainmask . o chainmask
+    : i do_insert . o insert
+    = . costp 0 0
+    = . blnp 0 0
+    = . blitp 0 0
+    = . br0p 0 . o rep0
+    = . br1p 0 . o rep1
+    = . br2p 0 . o rep2
+    : ~ i k 1
+    ~ <= k n { = . costp k ZS_OPT_INF = k + k 1 }
+    = . o skipu 0
+    = k 0
+    ~ < k n {
+        ? >= k . o skipu {
+            : i absk + bstart k
+            : i ck # i . costp k
+            // The literal edge. Its price carries the MARGINAL growth
+            // of the literals-length code: a run that will cost a
+            // bigger LL code when the next match lands must look more
+            // expensive while it is being laid down, or the parse
+            // prefers literals it cannot actually afford. (This is a
+            // potential transform — the total over any path is
+            // unchanged, the attribution moves; the match edge pays
+            // llp[0] as its share below.)
+            : i run0 # i . blitp k
+            : i dll - # i . llpp ( __zs_ll_code_p llbp3 + run0 1 )
+            # i . llpp ( __zs_ll_code_p llbp3 run0 )
+            : i lc + + ck # i . litpp # i . p absk dll
+            ? < lc # i . costp + k 1 {
+                = . costp + k 1 lc
+                = . blnp + k 1 0
+                = . blitp + k 1 + # i . blitp k 1
+                = . br0p + k 1 # i . br0p k
+                = . br1p + k 1 # i . br1p k
+                = . br2p + k 1 # i . br2p k
+            } {}
+            ? <= + k 3 n { ( __zs_opt_matches o k ) } {}
+            ? == do_insert 1 {
+                ? <= + absk 4 bend {
+                    : i h4 ( __zs_hash4 p absk hlog )
+                    = . cp2 & absk chainmask # i . hpp h4
+                    = . hpp h4 + absk 1
+                } {}
+                ? <= + absk 3 bend {
+                    : i v3 | | # i . p absk << # i . p + absk 1 8 << # i . p + absk 2 16
+                    : i h3w * 2 & >> * v3 2654435761 16 ZS_H3_MASK
+                    = . h3pp + h3w 1 # i . h3pp h3w
+                    = . h3pp h3w + absk 1
+                } {}
+            } {}
+        } {}
+        = k + k 1
+    }
+}
+
+// Walk the DP result back into sequences, then forward into the
+// (lits, sll, sml, soff) form the block writer takes. The forward walk
+// replays the decoder's rep bookkeeping, so the offbase chosen here is
+// exactly what the decoder will resolve back to the same distance.
+@ __zs_opt_extract * ZsOpt o ( Vec u ) srcv ( Vec u ) lits
+( Vec i ) sll ( Vec i ) sml ( Vec i ) soff * i reps → v {
+    : i n . o blen
+    : i bstart . o bstart
+    : *i blnp . o bln
+    : *i bofp . o bof
+    : *i bllp . o bll
+    : ( Vec i ) tll ( vec_new [i] )
+    : ( Vec i ) tml ( vec_new [i] )
+    : ( Vec i ) tof ( vec_new [i] )
+    : ~ i j n
+    ~ > j 0 {
+        : i L # i . blnp j
+        ? == L 0 { = j - j 1 } {
+            : i ll # i . bllp j
+            ( vec_push [i] tll ll )
+            ( vec_push [i] tml L )
+            ( vec_push [i] tof # i . bofp j )
+            = j - j + L ll
+        }
+    }
+    : i ns ( vec_len [i] tll )
+    : *i tllp ( vec_data [i] tll )
+    : *i tmlp ( vec_data [i] tml )
+    : *i tofp ( vec_data [i] tof )
+    : ~ i r0 # i . reps 0
+    : ~ i r1 # i . reps 1
+    : ~ i r2 # i . reps 2
+    : ~ i cur bstart
+    : ~ i si - ns 1
+    ~ >= si 0 {
+        : i ll # i . tllp si
+        : i L # i . tmlp si
+        : i off # i . tofp si
+        ( vec_extend_range [u] lits srcv cur ll )
+        = cur + cur ll
+        : ~ i ob + off 3
+        ? > ll 0 {
+            ? == off r0 { = ob 1 } {
+                ? == off r1 { = ob 2 } {
+                    ? == off r2 { = ob 3 } {}
+                }
+            }
+        } {
+            ? == off r1 { = ob 1 } {
+                ? == off r2 { = ob 2 } {
+                    ? == off - r0 1 { = ob 3 } {}
+                }
+            }
+        }
+        ( vec_push [i] sll ll )
+        ( vec_push [i] sml L )
+        ( vec_push [i] soff ob )
+        : ~ i nr0 off
+        : ~ i nr1 r0
+        : ~ i nr2 r1
+        ? == off r0 { = nr1 r1 = nr2 r2 } {
+            ? == off r1 { = nr2 r2 } {}
+        }
+        = r0 nr0
+        = r1 nr1
+        = r2 nr2
+        = cur + cur L
+        = si - si 1
+    }
+    ( vec_extend_range [u] lits srcv cur - + bstart n cur )
+    = . reps 0 r0
+    = . reps 1 r1
+    = . reps 2 r2
+    ( vec_free [i] tll )
+    ( vec_free [i] tml )
+    ( vec_free [i] tof )
+}
+
+// Sequence-code prices as the FSE coder will really charge them: the
+// counts are normalized onto the same table the writer will build, and
+// the price of a symbol is its share of that table — quantization
+// included. Entropy-of-counts flattered symbols whose share rounds
+// down, and the parse bought sequences the coder then billed higher.
+@ __zs_seq_prices_q * i cnt i nsym i maxlog i nseq * i price → v {
+    : ( Vec i ) cnt2 ( __zs_zeros nsym )
+    : ( Vec i ) norm ( __zs_zeros nsym )
+    : *i c2 ( vec_data [i] cnt2 )
+    : ~ i t 0
+    ~ < t nsym { = . c2 t # i . cnt t = t + t 1 }
+    : ~ i log - ( __zs_hbit ? > nseq 1 - nseq 1 1 ) 2
+    : i minlog + ( __zs_hbit nsym ) 1
+    ? < log minlog { = log minlog } {}
+    ? < log 5 { = log 5 } {}
+    ? > log maxlog { = log maxlog } {}
+    : i maxsym ( __zs_normalize cnt2 norm nsym log )
+    ? <= maxsym 0 {
+        ( __zs_prices_16 cnt nsym price )
+        ( vec_free [i] cnt2 )
+        ( vec_free [i] norm )
+        ^ v
+    } {}
+    : *i np ( vec_data [i] norm )
+    : i lt << log 4
+    = t 0
+    ~ < t nsym {
+        : i share # i . np t
+        = . price t ? > share 0 - lt ( __zs_log2_16 share ) + lt 16
+        = t + t 1
+    }
+    ( vec_free [i] cnt2 )
+    ( vec_free [i] norm )
+}
+
+// Prices for pass 2: what pass 1 actually chose, counted and turned
+// into bits. Extra-bit costs are folded into each code's price so the
+// relax loop adds one number.
+@ __zs_opt_reprice * ZsOpt o ( Vec u ) lits ( Vec i ) sll ( Vec i ) sml
+( Vec i ) soff ( Vec i ) scratch ( Vec i ) llx ( Vec i ) mlx → v {
+    : *i cnt ( vec_data [i] scratch )
+    : *i litpp . o litp
+    : *i llpp . o llp
+    : *i mlpp . o mlp
+    : *i ofpp . o ofp
+    : *i llbp2 . o llbp
+    : *i mlbp2 . o mlbp
+    : *i llxp ( vec_data [i] llx )
+    : *i mlxp ( vec_data [i] mlx )
+    : i ns ( vec_len [i] sll )
+    // Literals are priced at the INTEGER bit lengths a Huffman tree
+    // would actually assign, not at fractional entropy: the section is
+    // Huffman-coded, so a byte costs a whole number of bits, and a
+    // parse priced on the fraction buys literals the coder cannot
+    // deliver that cheaply.
+    ( __zs_fill0 cnt 256 )
+    : i nlit ( vec_len [u] lits )
+    : *u lp ( vec_data [u] lits )
+    : ~ i q 0
+    ~ < q nlit { : i b # i . lp q = . cnt b + # i . cnt b 1 = q + q 1 }
+    : ( Vec i ) hlens ( __zs_zeros 256 )
+    : ( Vec i ) hcnt ( __zs_zeros 256 )
+    : *i hcp ( vec_data [i] hcnt )
+    = q 0
+    ~ < q 256 { = . hcp q # i . cnt q = q + q 1 }
+    : i hmax ( __zs_huf_lengths hcnt hlens 256 )
+    : *i hlp3 ( vec_data [i] hlens )
+    ? & > hmax 0 <= hmax ZS_MAX_HUF_BITS {
+        = q 0
+        ~ < q 256 {
+            : i hl # i . hlp3 q
+            = . litpp q ? > hl 0 << hl 4 + << hmax 4 16
+            = q + q 1
+        }
+    } {
+        ( __zs_prices_16 cnt 256 litpp )
+        = q 0
+        ~ < q 256 {
+            ? < # i . litpp q 16 { = . litpp q 16 } {}
+            = q + q 1
+        }
+    }
+    ( vec_free [i] hlens )
+    ( vec_free [i] hcnt )
+    // Sequence codes.
+    : *i sllp ( vec_data [i] sll )
+    : *i smlp ( vec_data [i] sml )
+    : *i sofp ( vec_data [i] soff )
+    ( __zs_fill0 cnt 64 )
+    = q 0
+    ~ < q ns {
+        : i c ( __zs_ll_code_p llbp2 # i . sllp q )
+        = . cnt c + # i . cnt c 1
+        = q + q 1
+    }
+    ( __zs_seq_prices_q cnt 36 9 ns llpp )
+    = q 0
+    ~ < q 36 {
+        = . llpp q + # i . llpp q << # i . llxp q 4
+        = q + q 1
+    }
+    ( __zs_fill0 cnt 64 )
+    = q 0
+    ~ < q ns {
+        : i c ( __zs_ml_code_p mlbp2 # i . smlp q )
+        = . cnt c + # i . cnt c 1
+        = q + q 1
+    }
+    ( __zs_seq_prices_q cnt 53 9 ns mlpp )
+    = q 0
+    ~ < q 53 {
+        = . mlpp q + # i . mlpp q << # i . mlxp q 4
+        = q + q 1
+    }
+    ( __zs_fill0 cnt 64 )
+    = q 0
+    ~ < q ns {
+        : i c ( __zs_hbit # i . sofp q )
+        = . cnt c + # i . cnt c 1
+        = q + q 1
+    }
+    ( __zs_seq_prices_q cnt 32 8 ns ofpp )
+    = q 0
+    ~ < q 32 {
+        = . ofpp q + # i . ofpp q << q 4
+        = q + q 1
+    }
+}
+
+// Pass-1 prices: literals from the block's own byte counts (most of
+// the win — 'e' is not priced like 'q'), sequence codes from the
+// format's predefined distributions.
+@ __zs_opt_price_static * ZsOpt o i bstart i blen ( Vec i ) scratch
+( Vec i ) llx ( Vec i ) mlx i variant → v {
+    : *i cnt ( vec_data [i] scratch )
+    : *u p . o p
+    : *i litpp . o litp
+    : *i llpp . o llp
+    : *i mlpp . o mlp
+    : *i ofpp . o ofp
+    : *i llxp ( vec_data [i] llx )
+    : *i mlxp ( vec_data [i] mlx )
+    ( __zs_fill0 cnt 256 )
+    : ~ i q 0
+    ~ < q blen {
+        : i b # i . p + bstart q
+        = . cnt b + # i . cnt b 1
+        = q + q 1
+    }
+    ( __zs_prices_16 cnt 256 litpp )
+    = q 0
+    ~ < q 256 {
+        ? < # i . litpp q 16 { = . litpp q 16 } {}
+        = q + q 1
+    }
+    : i lln ( __zs_ll_default scratch )
+    = q 0
+    ~ < q 36 { ? < # i . cnt q 1 { = . cnt q 1 } {} = q + q 1 }
+    ( __zs_prices_16 cnt 36 llpp )
+    = q 0
+    ~ < q 36 {
+        = . llpp q + # i . llpp q << # i . llxp q 4
+        = q + q 1
+    }
+    // Two seed families, both fed to the same keep-the-cheapest
+    // selector: predefined match-length prices settle into one
+    // equilibrium, optimistic ones into another, and which wins is a
+    // property of the data — dictionary text prefers the optimist,
+    // word salad the predefined. Guessing is not required when both
+    // fixed points can simply be visited.
+    ? == variant 1 {
+        = q 0
+        ~ < q 53 {
+            = . mlpp q + << # i . mlxp q 4 48
+            = q + q 1
+        }
+    } {
+        : i mln ( __zs_ml_default scratch )
+        = q 0
+        ~ < q 53 { ? < # i . cnt q 1 { = . cnt q 1 } {} = q + q 1 }
+        ( __zs_prices_16 cnt 53 mlpp )
+        = q 0
+        ~ < q 53 {
+            = . mlpp q + # i . mlpp q << # i . mlxp q 4
+            = q + q 1
+        }
+    }
+    // Offset codes are priced OPTIMISTICALLY in pass 1: the code cost
+    // is set near its floor and only the unavoidable extra bits stay
+    // real. Pessimism here is self-fulfilling — a match kind that pass
+    // 1 never takes is absent from the statistics, so pass 2 prices it
+    // high, so it is never taken; the marginal length-3 match at a
+    // kilobyte's distance sits exactly on that edge, and the iteration
+    // must be allowed to DISCOVER it before the numbers judge it.
+    = q 0
+    ~ < q 32 {
+        = . ofpp q + << q 4 32
+        = q + q 1
+    }
+}
+
+@ __zs_encode_opt ( Vec u ) src i level → ( Vec u ) {
+    : i n ( vec_len [u] src )
+    : ( Vec u ) out ( vec_with_cap [u] + >> n 1 64 )
+    ( __zs_write_header out n )
+    ? == n 0 {
+        ( __zs_block_header out 0 0 1 )
+        ( __zs_pu32 out & ( xxh64 src ) 0xFFFFFFFF )
+        ^ out
+    } {}
+    : *u p ( vec_data [u] src )
+    : ~ i hlog 12
+    ~ & < hlog 20 < << 1 hlog n { = hlog + hlog 1 }
+    : ( Vec i ) htab ( __zs_zeros << 1 hlog )
+    : i chainbits ? > hlog 18 18 hlog
+    : i chainmask - << 1 + chainbits 2 1
+    : ( Vec i ) chain ( __zs_zeros + chainmask 1 )
+    : ( Vec i ) h3tab ( __zs_zeros * 2 + ZS_H3_MASK 1 )
+    : ( Vec i ) llx ( __zs_ll_extra )
+    : ( Vec i ) mlx ( __zs_ml_extra )
+    : ( Vec i ) llb ( __zs_ll_base llx )
+    : ( Vec i ) mlb ( __zs_ml_base mlx )
+    : i cap + ZS_BLOCK_MAX 1
+    : ( Vec i ) vcost ( __zs_zeros cap )
+    : ( Vec i ) vbln ( __zs_zeros cap )
+    : ( Vec i ) vbof ( __zs_zeros cap )
+    : ( Vec i ) vbll ( __zs_zeros cap )
+    : ( Vec i ) vblit ( __zs_zeros cap )
+    : ( Vec i ) vbr0 ( __zs_zeros cap )
+    : ( Vec i ) vbr1 ( __zs_zeros cap )
+    : ( Vec i ) vbr2 ( __zs_zeros cap )
+    : ( Vec i ) vlitp ( __zs_zeros 256 )
+    : ( Vec i ) vllp ( __zs_zeros 36 )
+    : ( Vec i ) vmlp ( __zs_zeros 53 )
+    : ( Vec i ) vofp ( __zs_zeros 32 )
+    : ( Vec i ) scratch ( __zs_zeros 256 )
+    : ( Vec i ) reps3 ( __zs_zeros 3 )
+    : ( Vec i ) vcco ( __zs_zeros << cap 3 )
+    : ( Vec i ) vccm ( __zs_zeros << cap 3 )
+    : ( Vec i ) vccn ( __zs_zeros cap )
+    : *i reps3p ( vec_data [i] reps3 )
+    : *ZsOpt o ( nurl_alloc Z ZsOpt )
+    = . o p p
+    = . o hp ( vec_data [i] htab )
+    = . o cp ( vec_data [i] chain )
+    = . o h3p ( vec_data [i] h3tab )
+    = . o hlog hlog
+    = . o chainmask chainmask
+    = . o attempts ? >= level 19 256 ? >= level 16 64 32
+    = . o suff ZS_OPT_SUFF
+    = . o cost ( vec_data [i] vcost )
+    = . o bln ( vec_data [i] vbln )
+    = . o bof ( vec_data [i] vbof )
+    = . o bll ( vec_data [i] vbll )
+    = . o blit ( vec_data [i] vblit )
+    = . o br0 ( vec_data [i] vbr0 )
+    = . o br1 ( vec_data [i] vbr1 )
+    = . o br2 ( vec_data [i] vbr2 )
+    = . o litp ( vec_data [i] vlitp )
+    = . o llp ( vec_data [i] vllp )
+    = . o mlp ( vec_data [i] vmlp )
+    = . o ofp ( vec_data [i] vofp )
+    = . o llbp ( vec_data [i] llb )
+    = . o mlbp ( vec_data [i] mlb )
+    = . o cco ( vec_data [i] vcco )
+    = . o ccm ( vec_data [i] vccm )
+    = . o ccn ( vec_data [i] vccn )
+    : ( Vec u ) lits ( vec_with_cap [u] ZS_BLOCK_MAX )
+    : ( Vec i ) sll ( vec_new [i] )
+    : ( Vec i ) sml ( vec_new [i] )
+    : ( Vec i ) soff ( vec_new [i] )
+    : *ZsWst wst ( __zs_wst_new )
+    : ~ i rep0 1
+    : ~ i rep1 4
+    : ~ i rep2 8
+    : ~ i pos 0
+    // Balanced blocks: 196 kB as 98+98 beats 128+68 — the tables of two
+    // like-sized blocks fit their halves better than one full block's
+    // tables fit a full block and a stub's fit a stub.
+    : i nblk / + n - ZS_BLOCK_MAX 1 ZS_BLOCK_MAX
+    : i tgt / + n - nblk 1 nblk
+    ~ < pos n {
+        : i blen ? > - n pos tgt tgt - n pos
+        = . o bstart pos
+        = . o blen blen
+        = . o rep0 rep0
+        = . o rep1 rep1
+        = . o rep2 rep2
+        : i nseeds ? >= level 19 2 1
+        : i extra ? >= level 19 15 ? >= level 16 3 1
+        : ( Vec u ) bestbody ( vec_new [u] )
+        : ( Vec i ) bestreps ( __zs_zeros 3 )
+        : *i bestrepsp ( vec_data [i] bestreps )
+        : ~ i bestsz ZS_OPT_INF
+        : i last ? == + pos blen n 1 0
+        ( __zs_wst_save wst 0 )
+        : ~ i seed 0
+        ~ < seed nseeds {
+            ( __zs_opt_price_static o pos blen scratch llx mlx seed )
+            // The chain and the candidate cache are built by the very
+            // first parse of the block; every later parse — later
+            // rounds and the other seed alike — replays the cache.
+            = . o insert ? == seed 0 1 0
+            ( __zs_opt_parse o )
+            = . o insert 0
+            ( vec_clear [u] lits )
+            ( vec_clear [i] sll )
+            ( vec_clear [i] sml )
+            ( vec_clear [i] soff )
+            = . reps3p 0 rep0
+            = . reps3p 1 rep1
+            = . reps3p 2 rep2
+            ( __zs_opt_extract o src lits sll sml soff reps3p )
+            : ~ i round 0
+            ~ <= round extra {
+                ? > round 0 {
+                    ( __zs_opt_reprice o lits sll sml soff scratch llx mlx )
+                    ( __zs_opt_parse o )
+                    ( vec_clear [u] lits )
+                    ( vec_clear [i] sll )
+                    ( vec_clear [i] sml )
+                    ( vec_clear [i] soff )
+                    = . reps3p 0 rep0
+                    = . reps3p 1 rep1
+                    = . reps3p 2 rep2
+                    ( __zs_opt_extract o src lits sll sml soff reps3p )
+                } {}
+                : ( Vec u ) trial ( vec_new [u] )
+                // Every trial writes from the SAME pre-block state: a
+                // repeat or treeless choice may only reference tables
+                // that actually went out in a previous block, never
+                // ones a losing trial of THIS block imagined sending.
+                ( __zs_wst_restore wst 0 )
+                ( __zs_write_block trial src pos blen last lits sll sml soff
+                llb mlb llx mlx wst )
+                ? < ( vec_len [u] trial ) bestsz {
+                    = bestsz ( vec_len [u] trial )
+                    ( vec_clear [u] bestbody )
+                    ( vec_extend [u] bestbody trial )
+                    = . bestrepsp 0 # i . reps3p 0
+                    = . bestrepsp 1 # i . reps3p 1
+                    = . bestrepsp 2 # i . reps3p 2
+                    ( __zs_wst_save wst 1 )
+                } {}
+                ( vec_free [u] trial )
+                = round + round 1
+            }
+            = seed + seed 1
+        }
+        // The winner's post-block state is what the next block builds on.
+        ( __zs_wst_restore wst 1 )
+        ( vec_extend [u] out bestbody )
+        ( vec_free [u] bestbody )
+        = rep0 # i . bestrepsp 0
+        = rep1 # i . bestrepsp 1
+        = rep2 # i . bestrepsp 2
+        ( vec_free [i] bestreps )
+        = pos + pos blen
+    }
+    ( __zs_pu32 out & ( xxh64 src ) 0xFFFFFFFF )
+    ( __zs_wst_free wst )
+    ( nurl_free # s o )
+    ( vec_free [i] htab )
+    ( vec_free [i] chain )
+    ( vec_free [i] h3tab )
+    ( vec_free [i] llx )
+    ( vec_free [i] mlx )
+    ( vec_free [i] llb )
+    ( vec_free [i] mlb )
+    ( vec_free [i] vcost )
+    ( vec_free [i] vbln )
+    ( vec_free [i] vbof )
+    ( vec_free [i] vbll )
+    ( vec_free [i] vblit )
+    ( vec_free [i] vbr0 )
+    ( vec_free [i] vbr1 )
+    ( vec_free [i] vbr2 )
+    ( vec_free [i] vlitp )
+    ( vec_free [i] vllp )
+    ( vec_free [i] vmlp )
+    ( vec_free [i] vofp )
+    ( vec_free [i] scratch )
+    ( vec_free [i] reps3 )
+    ( vec_free [i] vcco )
+    ( vec_free [i] vccm )
+    ( vec_free [i] vccn )
+    ( vec_free [u] lits )
+    ( vec_free [i] sll )
+    ( vec_free [i] sml )
+    ( vec_free [i] soff )
+    ^ out
+}
+
 @ zstd_encode_at ( Vec u ) src i level → ( Vec u ) {
+    ? >= level 13 { ^ ( __zs_encode_opt src level ) } {}
     : i n ( vec_len [u] src )
     : ( Vec u ) out ( vec_with_cap [u] + >> n 1 64 )
     ( __zs_write_header out n )
@@ -2234,6 +3447,7 @@ i attempts i at i bend i rep0 i ll ( Vec i ) out → i {
     : ( Vec i ) sml ( vec_new [i] )
     : ( Vec i ) soff ( vec_new [i] )
     : ( Vec i ) found ( __zs_zeros 2 )
+    : *ZsWst wst ( __zs_wst_new )
     : *i fp ( vec_data [i] found )
     : b lazy >= level 2
     : ~ i rep0 1
@@ -2309,7 +3523,7 @@ i attempts i at i bend i rep0 i ll ( Vec i ) out → i {
         ( vec_extend_range [u] lits src anchor - bend anchor )
         : i last ? == bend n 1 0
         ( __zs_write_block out src bstart blen last lits sll sml soff
-        llb mlb llx mlx )
+        llb mlb llx mlx wst )
         = pos bend
     }
     ( __zs_pu32 out & ( xxh64 src ) 0xFFFFFFFF )
@@ -2320,6 +3534,7 @@ i attempts i at i bend i rep0 i ll ( Vec i ) out → i {
     ( vec_free [u] lits )
     ( vec_free [i] sll ) ( vec_free [i] sml ) ( vec_free [i] soff )
     ( vec_free [i] found )
+    ( __zs_wst_free wst )
     ^ out
 }
 

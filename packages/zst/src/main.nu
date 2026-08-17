@@ -306,7 +306,7 @@ Commands:
     ( args_flag p `force` 102 `overwrite an existing output file` )  // -f
     ( args_flag p `stdout` 99 `write to stdout, whatever the input was` )  // -c
     ( args_flag p `quiet` 113 `no per-file report on stderr` )  // -q
-    ( args_opt p `level` 108 `N` `compression level 1-19 (default 3)` )  // -l
+    ( args_opt p `level` 108 `N` `level 1-19; 13+ = optimal parse, slow (default 3)` )  // -l
     ( args_opt p `out` 111 `FILE` `write here instead of the derived name` )  // -o
     ( args_opt p `reps` 110 `N` `bench: repetitions, best wins (default 3)` )  // -n
     ( args_opt p `max` 0 `BYTES` `d: refuse to produce more than this` )
