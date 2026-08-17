@@ -104,6 +104,7 @@ $ `stdlib/std/time.nu`
             }
             ( label `server_group` ? == server_group 4588 `X25519MLKEM768` `NOT-PQ` )
             ( label `server_echo` ? == server_ok 1 `OK` `FAIL` )
+            ( tcp_close_listener listener )
         }
         F _e → { ( label `tls_listen` `FAIL` ) }
     }

@@ -51,6 +51,8 @@ $ `stdlib/std/time.nu`
 
 & `c` @ nurl_tcp_accept i lraw → i
 
+& `c` @ nurl_tcp_close i fd → i
+
 : ~ i g_listen 0
 : ~ i g_served 0
 
@@ -151,6 +153,7 @@ $ `stdlib/std/time.nu`
         F _ → { = all ( chk `spawn                ` F ) }
     }
     = all & all ( chk `server_accepted      ` == g_served 1 )
+    ( nurl_tcp_close g_listen )
 
     ( vec_free [u] sk ) ( vec_free [u] chain )
     ( mldsa_keys_free ks )
