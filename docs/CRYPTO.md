@@ -30,6 +30,7 @@ All sources live in `stdlib/std/`.
 | Hashes | `hash_sha256`, `hash_sha512`, `hash_sha3`, `hash_sha1`, `hash_md5`, `hash_blake3` | SHA-1/MD5 for legacy interop only (never trusted for signatures) |
 | XOF | `hash_sha3` (SHAKE128/256) | extendable output, incremental squeeze; ML-KEM is built on it |
 | Post-quantum KEM | `mlkem` (ML-KEM-512/768/1024, FIPS 203) | checked byte-for-byte against NIST's ACVP vectors |
+| Post-quantum signature | `mldsa` (ML-DSA-44/65/87, FIPS 204) | pure and external-mu interfaces; HashML-DSA not implemented |
 | HMAC / KDF | `hkdf`, `pbkdf2`, `scrypt` | HKDF-Expand-Label for TLS 1.3 |
 | AEAD | `aes_gcm` (AES-128/256-GCM), `chacha20poly1305` | the two TLS 1.3 record ciphers |
 | ECDH / signatures | `x25519`, `ed25519`, `ecdsa_p256` (P-256 + P-384), `p256_field` | TweetNaCl-derived 25519 ladder over a ten-limb radix-2^25.5 field; `p256_field` is the dedicated **constant-time** fixed-limb GF(p) for the P-256 secret path |

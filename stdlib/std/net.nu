@@ -332,6 +332,28 @@ $ `stdlib/std/pkey.nu`
     ^ ( tls_alpn_selected # *TlsConn tp )
 }
 
+// The key-exchange group this connection negotiated, as its IANA
+// number — 4588 X25519MLKEM768, 29 x25519, 23 secp256r1 — or 0 for a
+// plaintext conn or one that has not got that far.
+//
+// Worth asking rather than assuming, on either side. A peer that has
+// not deployed ML-KEM falls back to a classical group silently, and
+// nothing else about the connection looks different; a server that
+// wants to log, require or report post-quantum key exchange has no
+// other way to find out.
+@ tcp_tls_group TcpConn c → i {
+    : i tp ( __conn_tlsptr c )
+    ? == tp 0 { ^ 0 } {}
+    ^ ( tls_group # *TlsConn tp )
+}
+
+// T when this connection's key exchange has a post-quantum component,
+// so its forward secrecy survives an adversary recording it today and
+// factoring later.
+@ tcp_is_post_quantum TcpConn c → b {
+    ^ == ( tcp_tls_group c ) 4588
+}
+
 // Open a plain (unencrypted) TCP client connection. Returns a
 // polymorphic TcpConn (kind 0) usable with the same tcp_read/tcp_write
 // family as accepted connections. For an encrypted connection use

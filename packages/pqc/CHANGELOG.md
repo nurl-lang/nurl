@@ -5,6 +5,19 @@ All notable changes to `pqc` are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] — 2026-08-17
+
+### Added
+
+- **ML-DSA (FIPS 204) signatures** at all three parameter sets, built on
+  `stdlib/std/mldsa.nu`: `sign-keygen`, `sign` and `verify`. Signing is
+  hedged, so the same file signed twice gives two different signatures
+  and both verify, and signatures are bound to a `pqc` context string so
+  one cannot be replayed as a signature for another application sharing
+  the key.
+- The parameter set is inferred from key length on `sign` and `verify`,
+  as it already was for `encaps` and `decaps`.
+
 ## [0.1.0] — 2026-08-17
 
 ### Added

@@ -3,20 +3,24 @@
 Post-quantum key encapsulation on the command line, and a probe for
 whether the servers you talk to are ready for it.
 
-`pqc` implements **ML-KEM** — the key-encapsulation mechanism NIST
-standardised as [FIPS 203][fips203] in August 2024, previously known as
-CRYSTALS-Kyber — at all three parameter sets, in pure NURL. No
+`pqc` implements both halves of the post-quantum migration, in pure
+NURL — **ML-KEM** ([FIPS 203][fips203], formerly CRYSTALS-Kyber) for key
+encapsulation and **ML-DSA** ([FIPS 204][fips204], formerly
+CRYSTALS-Dilithium) for signatures, at all three parameter sets each. No
 libcrypto, no liboqs, no `-loqs`: this links libc and nothing else.
 
 [fips203]: https://csrc.nist.gov/pubs/fips/203/final
+[fips204]: https://csrc.nist.gov/pubs/fips/204/final
 
 ## Why you'd want it
 
 Two reasons, and the second is the one that earns a place on a laptop.
 
-**A KEM you can actually run.** Generate a key pair, encapsulate to it,
-decapsulate — the primitive that hybrid TLS, Signal's PQXDH and every
-"harvest now, decrypt later" mitigation is built on.
+**Primitives you can actually run.** Generate a key pair, encapsulate to
+it, decapsulate — the primitive that hybrid TLS, Signal's PQXDH and
+every "harvest now, decrypt later" mitigation is built on. And sign and
+verify a file with ML-DSA, the signature that replaces Ed25519 and RSA
+once a quantum computer exists.
 
 **A post-quantum readiness check.** `pqc probe HOST` completes a real
 TLS 1.3 handshake and reports which key-exchange group the server
@@ -49,19 +53,43 @@ pqc probe api.example.com || echo "not post-quantum yet"
 ## Usage
 
 ```
-pqc keygen [-l 768] -o NAME    write NAME.ek and NAME.dk
+pqc keygen [-l 768] -o NAME    write NAME.ek and NAME.dk       (ML-KEM)
 pqc encaps NAME.ek [-o CT]     encapsulate; prints the shared secret
 pqc decaps NAME.dk CT          recover the same shared secret
+
+pqc sign-keygen [-l 65] -o N   write N.pub and N.key           (ML-DSA)
+pqc sign N.key FILE [-o SIG]   sign FILE, writing FILE.sig
+pqc verify N.pub FILE SIG      check a signature
+
 pqc probe HOST...              report each server's key-exchange group
 pqc bench [-l 768] [-n N]      operations per second on this machine
 pqc kat                        self-test against NIST's ACVP vectors
 ```
 
-Parameter sets are `-l 512`, `-l 768` (the default) and `-l 1024`,
-targeting roughly the security of AES-128, AES-192 and AES-256. For
-`encaps` and `decaps` the level is inferred from the key's length — the
-three sizes are distinct, so you never have to remember which set a key
-came from.
+ML-KEM levels are `-l 512`, `-l 768` (the default) and `-l 1024`; ML-DSA
+levels are `-l 44`, `-l 65` (the default) and `-l 87`. Both ladders
+target roughly the security of AES-128, AES-192 and AES-256. Everywhere
+a key is read the level is inferred from its length — the sizes are all
+distinct, so you never have to remember which set a key came from.
+
+```console
+$ pqc sign-keygen -o id
+verification key -> id.pub (1952 bytes)
+signing key -> id.key (4032 bytes)
+
+$ pqc sign id.key report.pdf
+ML-DSA-65
+signature -> report.pdf.sig (3309 bytes)
+
+$ pqc verify id.pub report.pdf report.pdf.sig
+ML-DSA-65 valid
+```
+
+Signing is *hedged*: 32 fresh random bytes go into every signature, so
+the same file signed twice gives two different signatures and both
+verify. Signatures are bound to a `pqc` context string, so one cannot be
+replayed as a signature made for a different application that happens to
+share the key.
 
 ```console
 $ pqc keygen -o demo
@@ -86,6 +114,12 @@ shared secret 08c07245e811541506dfd489b50ed5c1b001808933d09e3b21012e9d1fd248df
 | ML-KEM-768 | 1184 | 2400 | 1088 | 32 |
 | ML-KEM-1024 | 1568 | 3168 | 1568 | 32 |
 
+| set | public key | secret key | signature |
+|---|---|---|---|
+| ML-DSA-44 | 1312 | 2560 | 2420 |
+| ML-DSA-65 | 1952 | 4032 | 3309 |
+| ML-DSA-87 | 2592 | 4896 | 4627 |
+
 Measured with `pqc bench -n 500` on one core of an x86-64 desktop:
 
 ```
@@ -103,18 +137,27 @@ handshake costs less than the handshake's own round trip.
 `pqc kat` runs a built-in subset of NIST's vectors. The full check lives
 in the compiler repository:
 
-- `compiler/tests/mlkem_vectors.nu` — an offline subset that runs on
-  every build, plus a round trip and the implicit-rejection path at each
-  parameter set.
-- `tools/mlkem_acvp_gate.sh` — every published ACVP case, 180 of them,
-  fetched from `usnistgov/ACVP-Server` and compared byte for byte.
+- `tools/mlkem_acvp_gate.sh` — every published ML-KEM ACVP case, 180 of
+  them, fetched from `usnistgov/ACVP-Server` and compared byte for byte.
+- `tools/mldsa_acvp_gate.sh` — every published ML-DSA case, 480 of them,
+  across key generation, signing and verification.
+- `compiler/tests/mlkem_vectors.nu` and `compiler/tests/mldsa_vectors.nu`
+  — offline subsets that run on every build.
 
-A KEM cannot be validated by round-tripping itself: encapsulate and
-decapsulate with the same broken implementation and the shared secrets
-still agree. The vectors are the only real oracle, and the gate has been
-mutation-tested — a wrong twiddle factor, a dropped NTT layer, a swapped
-noise sign and an unconditional implicit-rejection select are each
-caught.
+Neither scheme can be validated by round-tripping itself: encapsulate
+and decapsulate, or sign and verify, with the same broken implementation
+and the two halves still agree. The vectors are the only real oracle,
+and both gates have been mutation-tested — a wrong twiddle factor, a
+dropped NTT layer, a wrong Montgomery constant, a swapped noise sign and
+an unconditional implicit-rejection select are each caught.
+
+Where the vectors fall short, the offline tests go further. A
+signature's hint has encoding rules whose violation is not a corrupted
+signature but a second valid encoding of a genuine one, and NIST's
+"modified hint" cases barely reach them — deleting the trailing-zero
+rule fails none of the 480 published cases. So `mldsa_vectors.nu`
+constructs re-encodings that decode to identical hint bits and requires
+them to be rejected.
 
 ## Hybrid TLS
 

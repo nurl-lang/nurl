@@ -1,0 +1,17 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+keygen-44#1     ok
+keygen-44#2     ok
+keygen-65#1     ok
+keygen-65#2     ok
+keygen-87#1     ok
+keygen-87#2     ok
+sigGen-44       ok
+roundtrip-44    ok
+roundtrip-65    ok
+roundtrip-87    ok
+hint-44         ok
+hint-65         ok
+hint-87         ok

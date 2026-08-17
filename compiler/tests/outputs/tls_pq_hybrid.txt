@@ -1,0 +1,10 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+client_handshake=OK
+client_group=X25519MLKEM768
+client_is_pq=T
+echo_ok=T
+server_group=X25519MLKEM768
+server_echo=OK
