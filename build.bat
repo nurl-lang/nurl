@@ -49,14 +49,13 @@ REM ── FFI library detection (vcpkg) — issue #229 ────────
 REM Mirror build.sh's feature-lib wiring on Windows. Probe the vcpkg
 REM install (static triplet preferred so produced exes carry no DLL
 REM dependency, then x64-windows) for the libs stdlib\ext\compress.nu
-REM declares — zlib (& `z`) and zstd (& `zstd`) — which nurlpkg pulls in
-REM (gunzip + zstd for registry tarballs). For each lib found we drop the
+REM once declared. Compression is pure NURL now (deflate in §8 P6, zstd
+REM in std\zstd.nu), so nothing here is load-bearing for compress.nu any
+REM more; it stays for whatever else a user FFI-declares. For each lib found we drop the
 REM stdlib\runtime.<name> sentinel nurlc's FFI-lib check consults and
 REM accumulate its link fragment in stdlib\runtime.winlibs for nurl.bat /
 REM tools\nurlpkg\build.bat to append. zlib additionally needs
-REM -DNURL_HAVE_ZLIB + its include so runtime.c's gzip bridge (§22) builds;
-REM zstd is pure-NURL FFI (no runtime.c bridge) so it needs sentinel+link
-REM only. Without these, compress.nu's gzip_*/zstd_* and nurlpkg won't build.
+REM -DNURL_HAVE_ZLIB + its include so runtime.c's gzip bridge (§22) builds.
 set "ZLIB_CFLAGS="
 set "WINLIBS="
 set "VCPKG_INC="
@@ -110,22 +109,8 @@ if defined ZLIB_LIBNAME (
     if defined ZLIB_INC echo [warn] zlib.h at "!ZLIB_INC!" but no zlib*.lib in "!ZLIB_LIBDIR!" - zlib disabled
 )
 
-REM zstd — pure-NURL FFI: sentinel + link only. Same name-probe discipline as
-REM zlib so a header-without-lib can't sneak a dangling -lzstd into the link.
-set "ZSTD_LIBNAME="
-if defined VCPKG_INC if exist "!VCPKG_INC!\zstd.h" (
-    for %%N in (zstd zstd_static libzstd) do (
-        if not defined ZSTD_LIBNAME if exist "!VCPKG_LIBDIR!\%%N.lib" set "ZSTD_LIBNAME=%%N"
-    )
-)
-if defined ZSTD_LIBNAME (
-    > stdlib\runtime.zstd echo 1
-    set WINLIBS=!WINLIBS! -L"!VCPKG_LIBDIR!" -l!ZSTD_LIBNAME!
-    echo [info] zstd enabled: -l!ZSTD_LIBNAME! from "!VCPKG_LIBDIR!"
-) else (
-    if exist stdlib\runtime.zstd del /q stdlib\runtime.zstd
-    if defined VCPKG_INC if exist "!VCPKG_INC!\zstd.h" echo [warn] zstd.h at "!VCPKG_INC!" but no zstd*.lib in "!VCPKG_LIBDIR!" - zstd disabled
-)
+REM zstd is pure NURL over stdlib\std\zstd.nu now - no library, no sentinel.
+if exist stdlib\runtime.zstd del /q stdlib\runtime.zstd
 
 REM ── version header (mirrors build.sh) ────────────────────────
 REM Bake the toolchain version into runtime.o so `nurlc --version` /
@@ -158,7 +143,7 @@ REM
 REM No !ZLIB_CFLAGS! here: it is an MSVC vcpkg include path, and there is
 REM nothing left in the runtime for it to feed — gzip/deflate became pure
 REM NURL in §8 P6, so -DNURL_HAVE_ZLIB no longer selects anything. The
-REM object references neither zlib nor zstd, which is what lets nurl.bat
+REM object references no compression library at all, which is what lets nurl.bat
 REM drop stdlib\winlib from a MinGW link without leaving a dangling
 REM symbol behind.
 set "ZIG_MINGW="
@@ -183,7 +168,7 @@ if defined WINLIBS (
     echo [info] runtime.winlibs =!WINLIBS!
 ) else (
     if exist stdlib\runtime.winlibs del /q stdlib\runtime.winlibs
-    >>"%LOG%" echo [info] no vcpkg zlib/zstd - compress.nu / nurlpkg unavailable
+    >>"%LOG%" echo [info] no vcpkg FFI libs detected
 )
 
 REM ── Bundle the FFI libs for a SELF-CONTAINED, relocatable toolchain ───
@@ -204,10 +189,7 @@ if defined WINLIBS (
         copy /y "!ZLIB_LIBDIR!\!ZLIB_LIBNAME!.lib" "stdlib\winlib\!ZLIB_LIBNAME!.lib" >nul
         set "RELOC=!RELOC! -l!ZLIB_LIBNAME!"
     )
-    if defined ZSTD_LIBNAME if exist "!VCPKG_LIBDIR!\!ZSTD_LIBNAME!.lib" (
-        copy /y "!VCPKG_LIBDIR!\!ZSTD_LIBNAME!.lib" "stdlib\winlib\!ZSTD_LIBNAME!.lib" >nul
-        set "RELOC=!RELOC! -l!ZSTD_LIBNAME!"
-    )
+
     > stdlib\winlib\winlibs.reloc echo  -L"$NURL_LIB$"!RELOC!
     echo [info] bundled FFI libs -^> stdlib\winlib  reloc:!RELOC!
 ) else (

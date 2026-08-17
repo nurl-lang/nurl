@@ -60,8 +60,8 @@ if errorlevel 1 (
     exit /b 1
 )
 
-REM nurlpkg imports stdlib\ext\compress.nu (gunzip + zstd for registry
-REM tarballs), so it needs zlib + zstd at link time. build.bat records the
+REM nurlpkg imports stdlib\ext\compress.nu, whose codecs are pure NURL;
+REM the recorded fragment is kept for any other FFI. build.bat records the
 REM resolved link fragment in stdlib\runtime.winlibs when they were
 REM detected (issue #229).
 set "WINLIBS="

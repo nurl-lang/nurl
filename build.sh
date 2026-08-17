@@ -282,16 +282,10 @@ rm -f stdlib/runtime.z
 ZLIB_CFLAGS=""
 ZLIB_LIBS=""
 
-# ── libzstd detection ──────────────────────────────────────
+# stdlib/ext/compress.nu's zstd_* is pure NURL over stdlib/std/zstd.nu
+# now — no libzstd, no link flag, and no sentinel to gate the module on.
+rm -f stdlib/runtime.zstd
 ZSTD_LIBS=""
-if pkg-config --exists libzstd 2>/dev/null; then
-    ZSTD_LIBS="$(pkg-config --libs libzstd)"
-    echo 1 > stdlib/runtime.zstd
-    log "[info] libzstd detected — Zstd FFI enabled"
-else
-    rm -f stdlib/runtime.zstd
-    log "[info] libzstd not found — stdlib/ext/compress.nu's zstd_* will return CompressOther"
-fi
 
 # ── libopus detection ──────────────────────────────────────
 # pttvoice/opus.nu binds libopus directly (& `opus` @ …, no runtime.c bridge).

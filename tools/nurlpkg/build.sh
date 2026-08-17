@@ -69,7 +69,7 @@ echo "[1/2] $SRC → build/nurlpkg.ll"
 #      of their symbols, so LTO drops the code; we simply never name the
 #      libs here.
 #
-#   2. Its real deps, zlib + zstd (gzip/zstd of package tarballs), are
+#   2. Its compression (gzip/zstd of package tarballs) is pure NURL, so
 #      linked STATICALLY when a static archive is available, so they leave
 #      no DT_NEEDED behind. We fall back to dynamic only if the .a is
 #      absent. `-Wl,--as-needed` on the link line then strips any -lm /
@@ -93,7 +93,6 @@ add_static_lib() {
     fi
 }
 if [[ -f "$ROOT_DIR/stdlib/runtime.z" ]];    then add_static_lib zlib    z    libz.a;    fi
-if [[ -f "$ROOT_DIR/stdlib/runtime.zstd" ]]; then add_static_lib libzstd zstd libzstd.a; fi
 
 echo "[2/2] build/nurlpkg.ll → build/nurlpkg"
 # shellcheck disable=SC2086
