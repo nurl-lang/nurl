@@ -10,6 +10,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **HashML-DSA (FIPS 204 §5.4), and the three SHA-2 variants it needed.**
+  ML-DSA now covers every interface the standard defines, and all **615**
+  published ACVP cases pass with **none skipped** — up from 480 run and
+  135 skipped.
+
+  Pre-hash mode signs a digest instead of the message, so a signer can
+  handle a message it never holds whole, or a protocol that already has a
+  digest need not carry the message to the signer at all. All twelve
+  approved hashes are supported. `mldsa_ph_mprime` is public for callers
+  who already hold the digest or who must supply their own randomness.
+
+  `std/hash_sha256` gains **SHA-224**; `std/hash_sha512` gains
+  **SHA-512/224** and **SHA-512/256**. The last two are not truncations
+  of SHA-512: each has its own initial state, so `SHA-512/256(m)` and the
+  first 32 bytes of `SHA-512(m)` are different values, and a test asserts
+  exactly that — an implementation that truncates produces a hash that
+  looks entirely plausible and interoperates with nothing.
+
+  **The vectors earned their keep again.** The OID that goes into the
+  signed representative was written as bare content bytes rather than a
+  full DER encoding, missing the two-byte `06 09` tag and length. Signer
+  and verifier both used the same wrong bytes, so every round trip
+  agreed; only a vector produced elsewhere could show it. The offline
+  test now pins that encoding structurally, by building the
+  representative from a literal OID and requiring the module's pre-hash
+  signature to be byte-identical to a pure-mode signature over it.
+
+  That structural check exists because the obvious test does not work: a
+  "signature under hash A must not verify under hash B" case passes
+  whether the OID is right, wrong or absent, since two hashes give
+  different digests anyway. Both were mutation-tested — the offline test
+  catches a wrong or headerless OID, the ACVP gate catches a wrong
+  digest length — and neither catches the other's.
+
 - **A TLS 1.3 handshake with nothing classical in it.** The hybrid group
   made the key exchange post-quantum, so a recording made today survives
   a future quantum computer. That left the other half: authentication

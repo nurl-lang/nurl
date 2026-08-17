@@ -44,6 +44,7 @@
 
 $ `stdlib/std/mldsa.nu`
 $ `stdlib/std/hash_sha3.nu`
+$ `stdlib/std/hash_sha256.nu`
 $ `stdlib/std/bytes.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/string.nu`
@@ -218,6 +219,83 @@ $ `stdlib/core/string.nu`
     ^ ( report label & & & okgood okdup okpad okbig )
 }
 
+// ── HashML-DSA: the OID must bind the hash to the signature ────────
+//
+// Pre-hash mode signs `0x01 ‖ |ctx| ‖ ctx ‖ OID(hash) ‖ H(M)`. The OID
+// is inside the signed representative, which is the entire point: it
+// stops a signature over a SHA2-256 digest from being reinterpreted as
+// one over a SHA3-256 digest of some other message.
+//
+// So a round trip is not enough to test this. The case that matters is
+// the cross check — verifying under a *different* hash code must fail,
+// and it would pass if the OID were omitted or wrong. (A missing
+// two-byte DER header on that OID is exactly the bug the ACVP vectors
+// caught during development; nothing but a real vector or this check
+// would have.)
+@ prehash_cases s label i level → b {
+    : ( Vec u ) xi ( vec_new [u] )
+    : ( Vec u ) msg ( vec_new [u] )
+    : ( Vec u ) ctx ( vec_new [u] )
+    : ~ i i 0
+    ~ < i 32 { ( vec_push [u] xi # u % + * i 13 level 251 ) = i + i 1 }
+    = i 0
+    ~ < i 64 { ( vec_push [u] msg # u % + * i 3 9 251 ) = i + i 1 }
+    ( bytes_extend_str ctx `ph` )
+
+    : *MldsaKeys ks ( mldsa_keygen_derand level xi )
+    : ~ b ok T
+    // Every one of the twelve approved hashes round-trips.
+    : ~ i a 1
+    ~ <= a 12 {
+        : ( Vec u ) sig ( mldsa_sign_prehash level ( mldsa_sk ks ) msg ctx a )
+        = ok & ok > ( vec_len [u] sig ) 0
+        = ok & ok ( mldsa_verify_prehash level ( mldsa_pk ks ) msg ctx a sig )
+        // ...and does not verify under a different hash.
+        : i other ? == a 2 8 2
+        = ok & ok ! ( mldsa_verify_prehash level ( mldsa_pk ks ) msg ctx other sig )
+        // ...nor as a pure-mode signature over the same message.
+        = ok & ok ! ( mldsa_verify level ( mldsa_pk ks ) msg ctx sig )
+        ( vec_free [u] sig )
+        = a + a 1
+    }
+    // The OID must actually be in the signed representative, with its
+    // DER tag and length. The cross-hash check above cannot show this:
+    // two different hashes give different digests anyway, so it passes
+    // whether the OID is right, wrong, or absent. So build M' here from
+    // a literal OID and require the module's pre-hash signature to be
+    // byte-identical to a pure-mode signature over it.
+    //
+    //   M' = 0x01 ‖ |ctx| ‖ ctx ‖ 06 09 <oid> ‖ SHA2-256(M)
+    //
+    // 06 09 is the tag and length; omitting them is a real mistake this
+    // catches, and one only a byte-exact comparison ever would.
+    : ( Vec u ) oid ( hexv `0609608648016503040201` )
+    : ( Vec u ) dig ( sha256_pure msg )
+    : ( Vec u ) mp ( vec_new [u] )
+    ( vec_push [u] mp # u 1 )
+    ( vec_push [u] mp # u ( vec_len [u] ctx ) )
+    ( bytes_extend_bytes mp ctx )
+    ( bytes_extend_bytes mp oid )
+    ( bytes_extend_bytes mp dig )
+    : ( Vec u ) z32 ( vec_with_cap [u] 32 )
+    : ~ i zi 0
+    ~ < zi 32 { ( vec_push [u] z32 # u 0 ) = zi + zi 1 }
+    : ( Vec u ) byhand ( mldsa_sign_internal level ( mldsa_sk ks ) mp z32 )
+    : ( Vec u ) bymod ( mldsa_sign_prehash_deterministic level ( mldsa_sk ks ) msg ctx 2 )
+    = ok & ok ( bytes_eq byhand bymod )
+    ( vec_free [u] bymod ) ( vec_free [u] byhand ) ( vec_free [u] z32 )
+    ( vec_free [u] mp ) ( vec_free [u] dig ) ( vec_free [u] oid )
+
+    // An unknown hash code is refused rather than guessed at.
+    : ( Vec u ) bad ( mldsa_sign_prehash level ( mldsa_sk ks ) msg ctx 99 )
+    = ok & ok == ( vec_len [u] bad ) 0
+    ( vec_free [u] bad )
+
+    ( mldsa_keys_free ks )
+    ( vec_free [u] ctx ) ( vec_free [u] msg ) ( vec_free [u] xi )
+    ^ ( report label ok )
+}
+
 @ main → i {
     : ~ b all T
     = all & all ( kg_case `keygen-44#1    ` 44 `7194b13c95231010afd2c909992bd2003ba6f437c3886bdbe3f6b867a14ba161` `d8d9aa0403ddc91a7f2ab668fea9e85f59a6f519beb9499ffc937d6ed76442e3` `0772f7ccc3674b859c9ed70da44b3559cec44bbdf75b8ea31e04a23fa6871b24` )
@@ -246,5 +324,9 @@ $ `stdlib/core/string.nu`
     = all & all ( hint_cases `hint-44        ` 44 )
     = all & all ( hint_cases `hint-65        ` 65 )
     = all & all ( hint_cases `hint-87        ` 87 )
+    = all & all ( prehash_cases `prehash-44           ` 44 )
+    = all & all ( prehash_cases `prehash-65           ` 65 )
+    = all & all ( prehash_cases `prehash-87           ` 87 )
+
     ^ ? all 0 1
 }

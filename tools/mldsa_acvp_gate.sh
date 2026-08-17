@@ -11,9 +11,10 @@
 #  someone else's output, and NIST publishes both.
 #
 #    keyGen   75   seed → pk, sk, byte for byte
-#    sigGen  270   sk, message → signature, deterministic and hedged,
-#                  internal and external interfaces, and external-mu
-#    sigVer  135   pk, message, signature → accept / reject
+#    sigGen  360   sk, message → signature; deterministic and hedged,
+#                  internal and external, external-mu, and HashML-DSA
+#                  across all twelve approved pre-hash algorithms
+#    sigVer  180   pk, message, signature → accept / reject
 #
 #  The sigVer set carries the weight. Only a fifth of its cases are
 #  valid signatures; the rest are tampered in four specific ways —
@@ -23,8 +24,11 @@
 #  hint encoding, which is a forgery derived from a genuine signature
 #  rather than a broken signature.
 #
-#  HashML-DSA (the `preHash` groups) is not implemented; those cases
-#  are reported as skipped rather than passed over silently.
+#  The pre-hash cases earn their place. They caught the OID inside the
+#  message representative being written as bare content bytes instead of
+#  a full DER encoding — the two-byte 06 09 tag and length were missing.
+#  Signer and verifier both used the same wrong bytes, so every round
+#  trip agreed; only a vector produced elsewhere could show it.
 #
 #  Usage:  tools/mldsa_acvp_gate.sh
 #  Env:    NURL         build driver (defaults to ./nurl.sh in a checkout)

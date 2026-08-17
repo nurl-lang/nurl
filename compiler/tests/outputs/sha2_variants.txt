@@ -1,0 +1,14 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+sha224     empty  ok
+sha224     abc    ok
+sha224     200x   ok
+sha512/224 empty  ok
+sha512/224 abc    ok
+sha512/224 200x   ok
+sha512/256 empty  ok
+sha512/256 abc    ok
+sha512/256 200x   ok
+not a truncation ok
