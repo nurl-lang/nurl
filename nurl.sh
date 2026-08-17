@@ -377,7 +377,7 @@ QUIET_FLAGS="-Wno-override-module"
 # ── Probe cache ──────────────────────────────────────────────────
 # The driver runs three trial compiles before every build: the
 # opaque-pointer parse probe below and the two feature-lib trial links
-# (sqlite3, zstd — see add_feature_lib). Together they cost ~190 ms —
+# (sqlite3, libpq — see add_feature_lib). Together they cost ~190 ms —
 # twice the warm build itself — and their answers are properties of the
 # TOOLCHAIN and the installed libraries, not of the program. Cache them,
 # keyed by everything that could change an answer: the compiler binary
@@ -396,7 +396,7 @@ probe_cache_init() {
         ls -Ll "$_cc_path" 2>/dev/null
         ls -ld /usr/lib/*-linux-gnu /usr/lib /usr/local/lib /usr/lib64 2>/dev/null
         echo "${LIBRARY_PATH:-}|${LDFLAGS:-}"
-        ls -l "$SCRIPT_DIR"/stdlib/runtime.sqlite3 "$SCRIPT_DIR"/stdlib/runtime.pq "$SCRIPT_DIR"/stdlib/runtime.zstd 2>/dev/null
+        ls -l "$SCRIPT_DIR"/stdlib/runtime.sqlite3 "$SCRIPT_DIR"/stdlib/runtime.pq 2>/dev/null
     } | cksum | tr -s ' \t' '_')"
     PROBE_CACHE="${NURL_CACHE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/nurl}/probes.$_key"
     if [ -f "$PROBE_CACHE" ]; then
@@ -536,7 +536,7 @@ if grep -qE '@canvas_(open|present|sleep|should_close|close|mouse_x|mouse_y|mous
     fi
 fi
 
-# Auto-link OpenSSL / sqlite3 / libpq / zstd — for each
+# Auto-link OpenSSL / sqlite3 / libpq — for each
 # back-end the runtime was built with (runtime.<name> sentinel), but only
 # if the library is actually AVAILABLE to the compiler on this box (probed
 # with a tiny trial link). Rationale:
@@ -578,7 +578,6 @@ else
     }
     add_feature_lib runtime.sqlite3 -lsqlite3
     add_feature_lib runtime.pq      -lpq
-    add_feature_lib runtime.zstd    -lzstd
     rm -f "$__probe_c" "$__probe_o"
     # Persist this run's probe answers for the next build. Written to a
     # temp name then renamed, so a concurrent build never sources a

@@ -170,6 +170,40 @@ the one block it needs, so a table larger than RAM is an ordinary table.
 Leak-clean under ASan/LSan across every path. See
 [`lsmdb/README.md`](lsmdb/README.md) for the file format and the guarantees.
 
+## `zst/` — Zstandard, with no Zstandard underneath (installable program)
+
+RFC 8878 in pure NURL, both directions, over
+[`stdlib/std/zstd.nu`](../stdlib/std/zstd.nu): frames with or without a
+declared content size, raw / RLE / compressed blocks, Huffman literals in
+one or four bitstreams with a tree that is itself FSE-compressed or
+repeated from the previous block, FSE sequences in all four table modes,
+the repeat offsets, skippable frames, concatenated frames, and the XXH64
+content checksum. The binary links libc and nothing else.
+
+```
+nurlpkg install zst
+zst c archive.tar          # → archive.tar.zst, readable by unzstd
+zst d archive.tar.zst      # and back
+zst t *.zst                # verify structure, sizes and checksum
+zst i archive.tar.zst      # every frame and block, and how each was coded
+zst b archive.tar          # what this machine actually does
+cat x | zst c | zst d | cmp - x    # a byte-clean filter, NULs and all
+```
+
+`zst i` is the part no other tool gives you: per block, whether the
+literals went raw, RLE or Huffman (one stream or four, tree sent or
+repeated), how many sequences it carries, and whether each of the three
+sequence tables was predefined, sent, RLE or repeated. That is the view
+you want when a file compresses worse than expected — `zstd --list`
+stops at the frame.
+
+Interoperability is checked against the reference CLI in both directions
+by `tools/zstd_gate.sh`: 1020 reference frames decode byte-identically,
+1932 frames produced here pass `zstd -t` and decode through `zstd -d`,
+600 mutated frames are refused without a crash or a hang, and resident
+size is flat across hundreds of round trips. See
+[`zst/README.md`](zst/README.md).
+
 ## `nurl-mcp/` — a local MCP server for the toolchain (installable program)
 
 The LLM-facing counterpart of `nurl-lsp`: a [Model Context

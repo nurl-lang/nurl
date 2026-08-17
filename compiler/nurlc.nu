@@ -4439,13 +4439,13 @@
     // Extract function pointer from closure struct (field 0)
     : s fn_ptr ( nurl_cg_reg cg )
     ( nurl_print `  ` ) ( nurl_print fn_ptr )
-    ( nurl_print ` = extractvalue ` ) ( nurl_print closure_type ) ( nurl_print ` ` ) ( nurl_print closure_var )
+    ( nurl_print ` = extractvalue ` ) ( nurl_print ( nurl_llty closure_type ) ) ( nurl_print ` ` ) ( nurl_print closure_var )
     ( nurl_print `, 0\n` )
 
     // Extract environment pointer from closure struct (field 1)
     : s env_ptr ( nurl_cg_reg cg )
     ( nurl_print `  ` ) ( nurl_print env_ptr )
-    ( nurl_print ` = extractvalue ` ) ( nurl_print closure_type ) ( nurl_print ` ` ) ( nurl_print closure_var )
+    ( nurl_print ` = extractvalue ` ) ( nurl_print ( nurl_llty closure_type ) ) ( nurl_print ` ` ) ( nurl_print closure_var )
     ( nurl_print `, 1\n` )
 
     // Call the function pointer with environment as first argument.
@@ -19304,7 +19304,12 @@
         ( nurl_print `, ` )
         : s bpty ( seplist_first body_param_types )
         : s bpname ( str_first_word body_param_names )
-        ( nurl_print bpty ) ( nurl_print ` %` ) ( nurl_print bpname )
+        // LOWER the param type: `param_types` holds NURL-internal types
+        // (`u8`/`u16`/`u32`/`u64`/`v128`), and printing one raw emits
+        // `define i1 @__closure_7(i8* %__env, u8 %a)` — not LLVM. The
+        // sibling print of the closure VALUE's type below lowers for
+        // the same reason.
+        ( nurl_print ( nurl_llty bpty ) ) ( nurl_print ` %` ) ( nurl_print bpname )
         = body_param_types ( seplist_rest body_param_types )
         = body_param_names ( str_skip_word body_param_names )
         = bi + bi 1
@@ -19673,7 +19678,7 @@
     ~ < k param_count {
         ( nurl_print `, ` )
         = __t2 ( seplist_first types2 )
-        ( nurl_print __t2 )
+        ( nurl_print ( nurl_llty __t2 ) )
         = types2 ( seplist_rest types2 )
         = k + k 1
     }

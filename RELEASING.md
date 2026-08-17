@@ -55,16 +55,16 @@ Two mechanisms keep it that way:
 - Every link line passes **`-Wl,--as-needed`**, so a binary keeps a
   `DT_NEEDED` entry only for a library it actually references a symbol from.
   `runtime.o` still contains all the FFI back-ends (curl, OpenSSL, sqlite,
-  libpq, zlib, zstd…), but LTO drops the code a given binary doesn't call,
+  libpq…), but LTO drops the code a given binary doesn't call,
   and `--as-needed` then drops the unreferenced libs. `nurlc` ends up
   needing only libc; `nurlpkg` likewise.
 - **`nurlpkg`** reaches the registry through the system **`curl` binary**
   (`stdlib/ext/http_cli.nu`), not libcurl — the install one-liner already
   requires `curl`, so this adds no new requirement while removing the
-  libcurl/OpenSSL link. Its only other real deps, **zlib + zstd** (package
-  tarball (de)compression), are linked **statically** when a `.a` is
-  available (`tools/nurlpkg/build.sh`). Net result: `nurlpkg` links libc
-  only. On Windows it uses WinHTTP, no extra deps.
+  libcurl/OpenSSL link. Package tarball (de)compression — gzip and zstd
+  alike — is pure NURL (`stdlib/std/deflate.nu`, `stdlib/std/zstd.nu`), so
+  there is nothing left to link. Net result: `nurlpkg` links libc only. On
+  Windows it uses WinHTTP, no extra deps.
 - A user program still links additional libraries on demand — only when it
   imports the matching module — via the `stdlib/runtime.<feature>`
   sentinels and the same `--as-needed` link (`nurl.sh`/`nurl.bat`). A
@@ -120,14 +120,14 @@ Consequences worth knowing:
 - The zig fetch must come **before** `build.bat` in any workflow that
   builds a shippable prefix, or the MinGW object is silently absent and
   everything still passes on a runner that has LLVM installed.
-- Two things stay MSVC-only, because their libraries are MSVC import
-  libs: the **canvas** FFI (`canvas.o` + `SDL2.lib`) and the **zstd** FFI
-  in `stdlib/ext/compress.nu`. A program using either needs clang; the
-  driver refuses with that message rather than leaving it to the linker.
-  gzip/deflate are unaffected — those are pure NURL.
+- One thing stays MSVC-only, because its library is an MSVC import lib:
+  the **canvas** FFI (`canvas.o` + `SDL2.lib`). A program using it needs
+  clang; the driver refuses with that message rather than leaving it to
+  the linker. Compression is unaffected — gzip, deflate and zstd are all
+  pure NURL.
 
 `nurl.sh` also links a feature library (`-lcurl` / `-lssl` / `-lsqlite3` /
-`-lpq` / `-lz` / `-lzstd`) **only when the emitted IR actually references
+`-lpq`) **only when the emitted IR actually references
 that back-end's symbols** — so a feature-free program (the common tool)
 links against libc only and never demands a library the box may lack.
 
@@ -144,8 +144,8 @@ into libc). The release therefore **relinks** the shipped `nurlc` + `nurlpkg`
 with the bundled zig against an **old glibc floor**
 (`tools/relink-toolchain-portable.sh`, `zig cc -target <arch>-linux-gnu.2.28`
 by default) — zig supplies the versioned glibc stubs, so we build on the
-modern runner yet target glibc 2.28. This is possible because `nurlc` is libc-only and
-`nurlpkg` adds only static zlib/zstd (ancient symbols). A successful relink
+modern runner yet target glibc 2.28. This is possible because `nurlc` and
+`nurlpkg` are both libc-only. A successful relink
 *caps* the floor at the target (the link fails outright if any code needs a
 newer symbol), so portability is guaranteed by construction. The bundled
 zig and the user programs it builds target the box's *native* glibc, so

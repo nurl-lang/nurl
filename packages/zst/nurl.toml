@@ -1,0 +1,7 @@
+[package]
+name = "zst"
+version = "0.1.0"
+description = "Zstandard on the command line, with no Zstandard underneath: compress, decompress, verify, benchmark, and — the part no other tool gives you — inspect, which prints the anatomy of a .zst file block by block. For each block it reports the type, how the literals were coded (raw, RLE, Huffman in one or four streams, or a tree repeated from the block before), how many sequences it carries, and whether each of the three sequence tables was predefined, sent, RLE or repeated. That is the view you want when a file compresses worse than expected. Frames it writes are ordinary Zstandard frames that unzstd reads, and frames the zstd CLI writes are read here — both directions checked against that CLI. Built on stdlib/std/zstd.nu, pure NURL, so it links libc and nothing else."
+license = "MIT OR Apache-2.0"
+
+[dependencies]

@@ -1,12 +1,14 @@
-// stdlib/ext/compress.nu — DEFLATE (zlib) and Zstandard bindings via
-// direct libz / libzstd FFI.
+// stdlib/ext/compress.nu — zlib, gzip and Zstandard framing, in one
+// place and with nothing underneath.
 //
-// **Pure-NURL FFI** — every external symbol is declared with `& `z` @ ...`
-// or `& `zstd` @ ...` directly in this file. No runtime.c bridge. The
-// build-time FFI-lib check (`compiler/nurlc.nu::gen_ffi_decl`) consults
-// `stdlib/runtime.z` / `stdlib/runtime.zstd` sentinels emitted by
-// `build.sh` so missing zlib1g-dev / libzstd-dev fails at compile time
-// with a clear diagnostic rather than a cryptic linker error.
+// Every codec here is pure NURL: DEFLATE from `std/deflate.nu` and
+// Zstandard from `std/zstd.nu`. There is no libz, no libzstd, no
+// runtime.c bridge and no build-time sentinel — this module compiles
+// and runs anywhere the compiler does, including a freestanding target,
+// a unikernel, and wasm. (It did not always: the `zstd_*` calls were an
+// `& `zstd` @ ...` FFI, and because an FFI declaration is checked
+// against a build-time sentinel, a machine without libzstd-dev could
+// not compile this file AT ALL — not even to use gzip.)
 //
 // API:
 //
@@ -38,21 +40,21 @@
 //   * `gzip_*` uses the **gzip file format** (RFC 1952): 10-byte header
 //     (`1f 8b` magic, deflate method, mtime, OS), raw DEFLATE body,
 //     CRC-32 + ISIZE trailer. Directly interoperable with `gzip` /
-//     `gunzip` / `Content-Encoding: gzip`. The `z_stream` layout is
-//     platform-specific (88 B on Win64, 112 B on Linux/macOS x64), so
-//     the streaming API stays C-side via the thin `nurl_gzip_compress`
-//     / `nurl_gzip_decompress` bridge in `runtime.c` §22.
-//   * `zstd_*` uses Zstandard's standard frame format
-//     (RFC 8478-compatible) — directly interoperable with the `zstd` /
-//     `unzstd` CLI tools.
+//     `gunzip` / `Content-Encoding: gzip`.
+//   * `zstd_*` uses Zstandard's frame format (RFC 8878) — directly
+//     interoperable with the `zstd` / `unzstd` CLI tools, in both
+//     directions, which `tools/zstd_gate.sh` checks against those very
+//     tools.
 //
 // Compression levels:
-//   * zlib: 0 (no compression) … 9 (max). Default 6 (Z_DEFAULT_COMPRESSION
-//     value passes through libz unchanged via `compress2`).
-//   * zstd: -22 (fast negative levels) … 22 (max). Default 3.
+//   * zlib: 0 (no compression) … 9 (max). Default 6. The pure encoder
+//     has a single mode, so the level is accepted and ignored.
+//   * zstd: 1 … 19. Default 3. The level selects how far the match
+//     finder searches; see `std/zstd.nu`.
 
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/deflate.nu`  // pure-NURL DEFLATE/inflate + crc32/adler32
+$ `stdlib/std/zstd.nu`  // pure-NURL Zstandard (RFC 8878)
 
 : | CompressErr {
     CompressBufTooSmall  // dst buffer overflow on grow-and-retry
@@ -96,29 +98,6 @@ $ `stdlib/std/deflate.nu`  // pure-NURL DEFLATE/inflate + crc32/adler32
     ( vec_push [u] v # u & >> x 16 255 )
     ( vec_push [u] v # u & >> x 24 255 )
 }
-
-// ── zstd FFI ───────────────────────────────────────────────────────
-//
-// `ZSTD_compress(dst, dstCap, src, srcSize, level) → size_t`
-//   returns either the compressed size, or an error code that
-//   `ZSTD_isError(code)` flags as non-zero.
-// `ZSTD_decompress(dst, dstCap, src, srcSize) → size_t` likewise.
-// `ZSTD_compressBound(srcSize) → size_t`.
-// `ZSTD_getFrameContentSize(src, srcSize) → unsigned long long`:
-//   exact decompressed size (zstd frame embeds it), or the sentinel
-//   `ZSTD_CONTENTSIZE_UNKNOWN` (-1ULL) / `ZSTD_CONTENTSIZE_ERROR`
-//   (-2ULL) when the frame is streamed without a size field or invalid.
-// `ZSTD_isError(code) → unsigned` — 1 if `code` is an error.
-
-& `zstd` @ ZSTD_compress *u dst i dstCap *u src i srcSize i32 level → i
-
-& `zstd` @ ZSTD_decompress *u dst i dstCap *u src i srcSize → i
-
-& `zstd` @ ZSTD_compressBound i srcSize → i
-
-& `zstd` @ ZSTD_getFrameContentSize *u src i srcSize → i
-
-& `zstd` @ ZSTD_isError i code → i32
 
 // ── zlib public API ───────────────────────────────────────────────
 
@@ -231,6 +210,17 @@ $ `stdlib/std/deflate.nu`  // pure-NURL DEFLATE/inflate + crc32/adler32
 }
 
 // ── zstd public API ───────────────────────────────────────────────
+//
+// Zstandard is `std/zstd.nu` — pure NURL, no library underneath. These
+// wrappers exist so a caller that already speaks `CompressErr` does not
+// have to learn a second error type.
+
+@ __zstd_to_compress_err ZstdErr e → CompressErr {
+    ^ ?? e {
+        ZstdTooLarge → # CompressErr CompressMemory
+        _ → # CompressErr CompressData
+    }
+}
 
 @ zstd_compress ( Vec u ) src → !( Vec u ) CompressErr {
     ^ ( zstd_compress_at src 3 )
@@ -241,19 +231,7 @@ $ `stdlib/std/deflate.nu`  // pure-NURL DEFLATE/inflate + crc32/adler32
     ? <= n 0 {
         ^ @ !( Vec u ) CompressErr { T ( vec_new [u] ) }
     } {}
-    : i bound ( ZSTD_compressBound n )
-    : ( Vec u ) out ( vec_with_cap [u] bound )
-    ( vec_reserve [u] out bound )
-    : *u dst ( vec_data [u] out )
-    : *u srcp ( vec_data [u] src )
-    : i rc ( ZSTD_compress dst bound srcp n level )
-    : i is_err ( ZSTD_isError rc )
-    ? != is_err 0 {
-        ( vec_free [u] out )
-        ^ @ !( Vec u ) CompressErr { F CompressOther }
-    } {}
-    : b _r ( vec_set_len [u] out rc )
-    ^ @ !( Vec u ) CompressErr { T out }
+    ^ @ !( Vec u ) CompressErr { T ( zstd_encode_at src level ) }
 }
 
 @ zstd_decompress ( Vec u ) src → !( Vec u ) CompressErr {
@@ -261,26 +239,10 @@ $ `stdlib/std/deflate.nu`  // pure-NURL DEFLATE/inflate + crc32/adler32
     ? <= n 0 {
         ^ @ !( Vec u ) CompressErr { T ( vec_new [u] ) }
     } {}
-    : *u srcp ( vec_data [u] src )
-    : i frame_size ( ZSTD_getFrameContentSize srcp n )
-    // Frame header missing the size field → fall back to a generous
-    // guess + grow. ZSTD_CONTENTSIZE_UNKNOWN = -1, _ERROR = -2.
-    : ~ i cap frame_size
-    ? <= cap 0 {
-        = cap * n 8
-        ? < cap 4096 { = cap 4096 } {}
-    } {}
-    : ( Vec u ) out ( vec_with_cap [u] cap )
-    ( vec_reserve [u] out cap )
-    : *u dst ( vec_data [u] out )
-    : i rc ( ZSTD_decompress dst cap srcp n )
-    : i is_err ( ZSTD_isError rc )
-    ? != is_err 0 {
-        ( vec_free [u] out )
-        ^ @ !( Vec u ) CompressErr { F CompressData }
-    } {}
-    : b _r ( vec_set_len [u] out rc )
-    ^ @ !( Vec u ) CompressErr { T out }
+    ?? ( zstd_decode src ) {
+        T out → { ^ @ !( Vec u ) CompressErr { T out } }
+        F e → { ^ @ !( Vec u ) CompressErr { F ( __zstd_to_compress_err e ) } }
+    }
 }
 
 // ── Raw-DEFLATE streaming codec (RFC 1951, no zlib/gzip wrapper) ────

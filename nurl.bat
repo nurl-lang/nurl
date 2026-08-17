@@ -285,9 +285,9 @@ if not errorlevel 1 (
 )
 
 REM Auto-link the FFI libs build.bat detected (issue #229). These are for
-REM programs whose own IR declares the zstd FFI (stdlib\ext\compress.nu);
-REM the runtime itself no longer needs them, since gzip/deflate became
-REM pure NURL in §8 P6 and -DNURL_HAVE_ZLIB stopped meaning anything.
+REM programs whose own IR declares an FFI; the runtime itself no longer
+REM needs them, since gzip/deflate became pure NURL in §8 P6 and zstd in
+REM stdlib\std\zstd.nu.
 REM   - A shipped toolchain carries the static libs in stdlib\winlib\ plus a
 REM     relocatable fragment (winlibs.reloc) whose $NURL_LIB$ placeholder is
 REM     resolved against THIS prefix — self-contained, no vcpkg on the box.
@@ -302,11 +302,10 @@ if exist "%SCRIPTDIR%stdlib\winlib\winlibs.reloc" (
 )
 REM Those are vcpkg's MSVC static libs, which cannot go into a MinGW
 REM image. Nothing in the runtime references them (gzip/deflate have been
-REM pure NURL since §8 P6 — stdlib\std\deflate.nu), so dropping them
-REM leaves no dangling symbol here. What it does cost is a program that
-REM declares the zstd FFI itself (stdlib\ext\compress.nu's `& `zstd``):
-REM that one needs the import lib and so needs clang. It fails at link
-REM naming ZSTD_compress, which is at least a symbol worth searching for.
+REM pure NURL since §8 P6 — stdlib\std\deflate.nu, and zstd likewise in
+REM stdlib\std\zstd.nu), so dropping them leaves no dangling symbol here.
+REM A program that declares some OTHER vcpkg FFI itself still needs the
+REM import lib, and so still needs clang.
 if "!MINGW_ABI!"=="1" set "WINLIBS="
 if defined WINLIBS set "EXTRA_LIBS=!EXTRA_LIBS! !WINLIBS!"
 

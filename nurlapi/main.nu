@@ -1201,7 +1201,7 @@ s combined_stdout s combined_stderr → v {
 // Append the native-build runtime libs to the clang command. Matches
 // what nurl.sh produces locally so a /build link succeeds against the
 // committed stdlib/runtime.native.o (FFI-rich: libcurl + openssl +
-// sqlite3 + libpq + zlib + zstd).
+// sqlite3 + libpq + zlib).
 //
 // `-Wl,--as-needed` MUST precede the `-l` flags: it makes the linker
 // keep a DT_NEEDED entry only for a library the program actually
@@ -1220,7 +1220,6 @@ s combined_stdout s combined_stderr → v {
     ( vec_push [s] args `-lsqlite3` )
     ( vec_push [s] args `-lpq` )
     ( vec_push [s] args `-lz` )
-    ( vec_push [s] args `-lzstd` )
 }
 
 // Build a 200 OK JSON response for the nurlc-failed-before-link path.

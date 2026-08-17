@@ -10,6 +10,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`std/zstd` — Zstandard (RFC 8878) in pure NURL, both directions.**
+  The real format, not a subset: frames with or without a declared
+  content size, raw / RLE / compressed blocks, Huffman literals in one
+  or four bitstreams with a tree that is itself FSE-compressed or
+  repeated from the previous block, FSE sequences in all four table
+  modes, the three repeat offsets with their zero-literals exception,
+  skippable frames, concatenated frames, and the XXH64 content
+  checksum. The compressor is a hash-chain match finder with priced
+  matches and lazy matching, Huffman-coded literals, and sequence
+  tables normalised per block when the block is long enough to pay for
+  them. Checked against the reference `zstd` CLI in both directions by
+  `tools/zstd_gate.sh` — 1020 reference frames decode byte-identically,
+  1932 of ours pass `zstd -t` and decode through `zstd -d`, 600 mutated
+  frames are refused without a crash or a hang. Measured at level 3:
+  100 kB of dictionary text → 28 578 bytes where `zstd -3` writes
+  32 377; decompression 276 MB/s.
+
+- **`std/hash_xxh64` — XXH64.** The stdlib had no fast non-cryptographic
+  hash, and a Zstandard frame checksum is exactly this. One-shot over a
+  Vec or over a pointer range (the pointer form is what lets a decoder
+  checksum a buffer it is still filling). Verified against the reference
+  implementation's vectors by `tools/xxh64_gate.sh`.
+
+- **`packages/zst` — the Zstandard CLI.** compress / decompress / verify
+  / bench, and `inspect`, which prints the anatomy of a `.zst` file
+  block by block: how the literals were coded, how many sequences each
+  block carries, and the mode of each of its three sequence tables. That
+  is recoverable without entropy-decoding anything, and `zstd --list`
+  stops at the frame.
+
+- **`read_all_stdin_bytes` (`core/io`).** `read_all_stdin` returns a
+  String, and a String stops at its first NUL — so a program in a pipe
+  could slurp a text stream whole but not a binary one, silently
+  truncated. This is the dual of `write_bytes`; the pair is what makes a
+  byte-clean filter possible.
+
 - **`packages/lsmdb` — an embedded, crash-safe key/value store in pure
   NURL.** A real LSM tree: a write-ahead log, a skip-list memtable over
   a byte arena, immutable SSTables (CRC-32 per block, Bloom filter,
@@ -47,7 +83,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   tty-flush rule with the ordinary prints so mixing the two never
   reorders output.
 
+### Fixed
+
+- **A closure's parameter types were printed RAW into the IR.** Three
+  places emitted them without `nurl_llty`, so a closure taking a BYTE
+  parameter produced `u8` — not an LLVM type — in its `define` header,
+  in the closure value, and at every call site. `nurlc` exited 0 and
+  clang rejected the file. `i` / `f` / handle parameters happened to
+  spell the same in both, which is why it stayed hidden. Found by
+  `( vec_eq [u] a b \ u x u y → b { ^ == x y } )`, the obvious way to
+  compare two byte vectors. Regression:
+  `compiler/tests/closure_sized_params.nu`.
+
+- **`read_file` could not read `/proc` or `/sys`.** Both readers ask for
+  the size first and treat zero as empty, but a procfs entry reports
+  zero and reads fine — as do character devices and named FIFOs — and
+  some fail the seek outright. Either answer now means "length unknown"
+  and routes to a streaming reader that reads until EOF. Returning an
+  empty string for a file with content is the worst way to be wrong.
+
 ### Changed
+
+- **`ext/compress`'s `zstd_*` no longer needs libzstd — or any library.**
+  It calls `std/zstd` instead. The `libzstd` detection in
+  `build.sh` / `build.bat`, the `stdlib/runtime.zstd` sentinel, the
+  `-lzstd` in `nurl.sh` / `nurl.bat` / `nurlapi`, and the static libzstd
+  hunt in `tools/nurlpkg/build.sh` are all gone. This matters more than
+  a link flag: an `&`-FFI declaration is checked against its sentinel at
+  COMPILE time, so on a machine without libzstd-dev — or on any target
+  that has no such library at all, which is every freestanding build,
+  every unikernel, and wasm — importing `ext/compress` failed outright.
+  You could not have gzip without having libzstd.
 
 - **`std/deflate`'s CRC-32 is table-driven.** It computed the checksum
   bitwise — eight shift-mask-xor rounds per byte — which a profile

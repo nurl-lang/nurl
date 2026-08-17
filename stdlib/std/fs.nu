@@ -64,6 +64,51 @@ $ `stdlib/core/posix.nu`  // open / lseek / mmap / munmap + posix_const
     ^ @ IoErr { Other }
 }
 
+// Read until EOF, trusting no reported size.
+//
+// A file can report a length of zero and still have content: every
+// `/proc` and `/sys` entry does, and so do character devices and a FIFO
+// opened by name. Both size-first readers below would hand such a file
+// back as empty — silently, which is the worst way to be wrong — so
+// when the size comes out zero they come here instead. For a genuinely
+// empty regular file this costs one `fopen` and returns the same
+// nothing.
+@ __read_file_stream_pure s path → s {
+    ? == # i path 0 { ^ # s 0 } {}
+    : s fp ( fopen path `rb` )
+    ? == # i fp 0 { ^ # s 0 } {}
+    : ~ i cap 8192
+    : ~ s buf ( nurl_alloc + cap 1 )
+    ? == # i buf 0 {
+        : i32 _u ( fclose fp )
+        ^ # s 0
+    } {}
+    : ~ i got 0
+    : ~ b done F
+    : ~ b failed F
+    ~ ! done {
+        : i room - cap got
+        : i r ( fread # s # *u + # i buf got 1 room fp )
+        = got + got ? > r 0 r 0
+        ? < r room { = done T } {
+            = cap * cap 2
+            : s grown # s ( nurl_realloc # *u buf + cap 1 )
+            ? == # i grown 0 {
+                = done T
+                = failed T
+            } { = buf grown }
+        }
+    }
+    : i32 _u ( fclose fp )
+    ? failed {
+        ( nurl_free buf )
+        ^ # s 0
+    } {}
+    : *u bp # *u buf
+    = . bp got # u 0
+    ^ buf
+}
+
 // Win32 / WASI fallback for `read_file` — same fopen + fseek(SEEK_END)
 // + ftell + fread + fclose pattern the old `nurl_read_file_safe`
 // followed. Allocates exactly `len + 1` bytes (matches what
@@ -78,9 +123,11 @@ $ `stdlib/core/posix.nu`  // open / lseek / mmap / munmap + posix_const
         ^ # s 0
     } {}
     : i sz ( ftell fp )
-    ? < sz 0 {
+    ? <= sz 0 {
+        // Zero LENGTH is not zero CONTENT, and a failed tell says the
+        // same thing — see __read_file_stream_pure.
         : i32 _u ( fclose fp )
-        ^ # s 0
+        ^ ( __read_file_stream_pure path )
     } {}
     : i32 _r ( fseek fp 0 # i32 0 )
     : s buf ( nurl_alloc + sz 1 )
@@ -111,19 +158,15 @@ $ `stdlib/core/posix.nu`  // open / lseek / mmap / munmap + posix_const
     : i32 fd ( open path # i32 ( posix_const `O_RDONLY` ) # i32 0 )
     ? < fd # i32 0 { ^ # s 0 } {}
     : i sz ( lseek fd 0 # i32 2 )
-    ? < sz 0 {
+    // A seek that FAILS says the same thing a size of zero says here:
+    // the length is not knowable in advance. /proc entries answer both
+    // ways depending on the file.
+    ? <= sz 0 {
+        // Zero LENGTH is not zero CONTENT: /proc and /sys entries,
+        // character devices and named FIFOs all seek to zero and read
+        // fine. Nothing can be mmap'd from them, so stream instead.
         : i _c ( close # i fd )
-        ^ # s 0
-    } {}
-    ? == sz 0 {
-        // Empty file: return a freshly-allocated 1-byte NUL buffer.
-        : i _c ( close # i fd )
-        : s buf ( nurl_alloc 1 )
-        ? != # i buf 0 {
-            : *u bp # *u buf
-            = . bp 0 # u 0
-        } {}
-        ^ buf
+        ^ ( __read_file_stream_pure path )
     } {}
     : *u m ( mmap # *u 0 sz
     # i32 ( posix_const `PROT_READ` )

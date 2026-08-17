@@ -2,8 +2,8 @@ COMPILE OK
 LINK OK
 EXIT 0
 OUTPUT
-zlib round_trip=T comp_len=59 decomp_len=720
-zstd round_trip=T comp_len=65 decomp_len=720
+zlib round_trip=T comp_len=58 decomp_len=720
+zstd round_trip=T comp_len=69 decomp_len=720
 zlib empty ok len=0
 zstd empty ok len=0
 zlib bad err=CompressData

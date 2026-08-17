@@ -262,6 +262,34 @@ jobs:
         # python3's zlib.crc32.
         run: ./tools/crc32_gate.sh
 
+      - name: XXH64 gate (against the reference implementation)
+        # std/hash_xxh64 is what a Zstandard frame checksum is. Its four
+        # code paths — the 32-byte striped loop and the 8/4/1-byte tails —
+        # plus a seed that enters the accumulators asymmetrically cannot
+        # be covered by one length, so this walks every length across the
+        # boundaries under four seeds and checks each digest against the
+        # reference C implementation via python3's `xxhash`.
+        run: |
+          python3 -m pip install --quiet --break-system-packages xxhash || true
+          ./tools/xxh64_gate.sh
+
+      - name: Zstandard gate (both directions, against the zstd CLI)
+        # std/zstd is a format implementation, so the only meaningful
+        # oracle is the implementation everyone else uses. The reference
+        # CLI compresses a corpus chosen to force each branch — random
+        # bytes, one repeated byte, text, entropy that shifts halfway,
+        # matches 200 kB apart, and every length from 0 to 300 — at every
+        # level, with and without checksums and content sizes, in 1 kB
+        # blocks, in long-distance mode, concatenated, and behind
+        # skippable frames; every frame must decode byte-identically.
+        # Then the direction reverses: our frames must satisfy `zstd -t`
+        # and decode back through `zstd -d`. Finally 600 mutated frames
+        # must be REFUSED without a crash or a hang, and resident size
+        # must stay flat across hundreds of round trips.
+        run: |
+          sudo apt-get install -y --no-install-recommends zstd
+          ./tools/zstd_gate.sh --quick
+
       - name: HTTP-server per-request leak gate
         # Builds the leakcheck HTTP server with ASan+LSan and fails on ANY
         # leak across 21 requests. Uses the normal build/nurlc from ./build.sh
