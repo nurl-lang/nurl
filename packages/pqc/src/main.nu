@@ -4,9 +4,17 @@
 //   pqc keygen [-l 768] -o NAME    write NAME.ek and NAME.dk
 //   pqc encaps NAME.ek             → NAME.ct and the shared secret
 //   pqc decaps NAME.dk NAME.ct     → the same shared secret
+//   pqc sign-keygen [-l 65] -o N   write N.pub and N.key   (ML-DSA)
+//   pqc sign N.key FILE            → FILE.sig
+//   pqc verify N.pub FILE FILE.sig → valid / INVALID
 //   pqc probe HOST[:PORT]…         does this server do post-quantum TLS?
 //   pqc bench [-l 768] [-n N]      operations per second, here
 //   pqc kat                        self-test against NIST's vectors
+//
+// Two schemes, one tool: ML-KEM (FIPS 203) replaces the key exchange
+// and ML-DSA (FIPS 204) replaces the signature. The KEM levels are 512,
+// 768 and 1024; the signature levels are 44, 65 and 87, and `-l` picks
+// whichever family the subcommand belongs to.
 //
 // ML-KEM (FIPS 203) is the KEM NIST standardised in 2024, and the
 // `probe` subcommand is the part worth having on a laptop: it completes
@@ -27,6 +35,7 @@ $ `stdlib/std/bytes.nu`
 $ `stdlib/std/fs.nu`
 $ `stdlib/std/time.nu`
 $ `stdlib/std/mlkem.nu`
+$ `stdlib/std/mldsa.nu`
 $ `stdlib/std/hash_sha3.nu`
 $ `stdlib/std/tls.nu`
 $ `stdlib/ext/env.nu`
@@ -195,6 +204,111 @@ $ `stdlib/ext/env.nu`
             }
         }
         F _e → { ( __die `cannot read decapsulation key` ) ^ 1 }
+    }
+}
+
+// ── ML-DSA signing ─────────────────────────────────────────────────
+
+@ __check_sign_level i level → b {
+    ^ | | == level 44 == level 65 == level 87
+}
+
+@ __level_from_pub i n → i {
+    ? == n 1312 { ^ 44 } {}
+    ? == n 1952 { ^ 65 } {}
+    ? == n 2592 { ^ 87 } {}
+    ^ 0
+}
+
+@ __level_from_key i n → i {
+    ? == n 2560 { ^ 44 } {}
+    ? == n 4032 { ^ 65 } {}
+    ? == n 4896 { ^ 87 } {}
+    ^ 0
+}
+
+@ __cmd_sign_keygen i level s name → i {
+    : *MldsaKeys ks ( mldsa_keygen level )
+    : String pp ( string_from name ) ( string_push_str pp `.pub` )
+    : String kp2 ( string_from name ) ( string_push_str kp2 `.key` )
+    : b a ( __write_bytes ( string_data pp ) ( mldsa_pk ks ) `verification key ->` )
+    : b b2 ( __write_bytes ( string_data kp2 ) ( mldsa_sk ks ) `signing key ->` )
+    ( string_free kp2 ) ( string_free pp )
+    ( mldsa_keys_free ks )
+    ^ ? & a b2 0 1
+}
+
+// The context string binds a signature to this tool, so a signature
+// made by `pqc sign` cannot be replayed as one made for some other
+// application that happens to use the same key.
+@ __pqc_ctx → ( Vec u ) {
+    : ( Vec u ) c ( vec_new [u] )
+    ( bytes_extend_str c `pqc` )
+    ^ c
+}
+
+@ __cmd_sign s keypath s msgpath s outpath → i {
+    : !( Vec u ) IoErr rk ( __read_bytes keypath )
+    ?? rk {
+        T sk → {
+            : i level ( __level_from_key ( vec_len [u] sk ) )
+            ? == level 0 {
+                ( __die `not an ML-DSA signing key (expected 2560, 4032 or 4896 bytes)` )
+                ( vec_free [u] sk )
+                ^ 1
+            } {}
+            : !( Vec u ) IoErr rm ( __read_bytes msgpath )
+            ?? rm {
+                T msg → {
+                    : ( Vec u ) ctx ( __pqc_ctx )
+                    : ( Vec u ) sig ( mldsa_sign level sk msg ctx )
+                    : String hd ( __line_new `ML-DSA-` )
+                    ( __line_int hd level ) ( __line_end hd )
+                    : b ok ( __write_bytes outpath sig `signature ->` )
+                    ( vec_free [u] sig ) ( vec_free [u] ctx )
+                    ( vec_free [u] msg ) ( vec_free [u] sk )
+                    ^ ? ok 0 1
+                }
+                F _e → { ( __die `cannot read the file to sign` ) ( vec_free [u] sk ) ^ 1 }
+            }
+        }
+        F _e → { ( __die `cannot read signing key` ) ^ 1 }
+    }
+}
+
+@ __cmd_verify s pubpath s msgpath s sigpath → i {
+    : !( Vec u ) IoErr rp ( __read_bytes pubpath )
+    ?? rp {
+        T pk → {
+            : i level ( __level_from_pub ( vec_len [u] pk ) )
+            ? == level 0 {
+                ( __die `not an ML-DSA verification key (expected 1312, 1952 or 2592 bytes)` )
+                ( vec_free [u] pk )
+                ^ 1
+            } {}
+            : !( Vec u ) IoErr rm ( __read_bytes msgpath )
+            ?? rm {
+                T msg → {
+                    : !( Vec u ) IoErr rs ( __read_bytes sigpath )
+                    ?? rs {
+                        T sig → {
+                            : ( Vec u ) ctx ( __pqc_ctx )
+                            : b ok ( mldsa_verify level pk msg ctx sig )
+                            : String ln ( __line_new `ML-DSA-` )
+                            ( __line_int ln level )
+                            ( string_push_str ln ? ok ` valid` ` INVALID` )
+                            ( __line_end ln )
+                            ( vec_free [u] ctx ) ( vec_free [u] sig )
+                            ( vec_free [u] msg ) ( vec_free [u] pk )
+                            ^ ? ok 0 1
+                        }
+                        F _e → { ( __die `cannot read signature` ) ( vec_free [u] msg ) ( vec_free [u] pk ) ^ 1 }
+                    }
+                }
+                F _e → { ( __die `cannot read the signed file` ) ( vec_free [u] pk ) ^ 1 }
+            }
+        }
+        F _e → { ( __die `cannot read verification key` ) ^ 1 }
     }
 }
 
@@ -376,10 +490,95 @@ $ `stdlib/ext/env.nu`
     ( nurl_print `  keygen NAME          write NAME.ek and NAME.dk\n` )
     ( nurl_print `  encaps NAME.ek       encapsulate to a fresh shared secret\n` )
     ( nurl_print `  decaps NAME.dk CT    recover the shared secret\n` )
+    ( nurl_print `  sign-keygen NAME     write NAME.pub and NAME.key (ML-DSA)\n` )
+    ( nurl_print `  sign KEY FILE        sign FILE, writing FILE.sig\n` )
+    ( nurl_print `  verify PUB FILE SIG  check a signature\n` )
     ( nurl_print `  probe HOST...        report each server's TLS key-exchange group\n` )
     ( nurl_print `  bench                operations per second on this machine\n` )
     ( nurl_print `  kat                  self-test against NIST ACVP vectors\n` )
-    ( nurl_print `\nlevels: 512, 768 (default), 1024\n` )
+    ( nurl_print `\nlevels: ML-KEM 512, 768 (default), 1024\n` )
+    ( nurl_print `        ML-DSA 44, 65 (default), 87\n` )
+}
+
+// One subcommand per clause, each returning directly.
+//
+// Written flat rather than as a nested if/else ladder: with nine
+// subcommands the ladder's tail becomes a run of closing braces whose
+// count is the only thing keeping it correct, and miscounting compiles
+// into a different program rather than an error.
+@ __dispatch ArgParser p ( Vec String ) ps s cmd i level → i {
+    : i n ( vec_len [String] ps )
+
+    ? != 0 ( nurl_str_eq cmd `keygen` ) {
+        ? ( __check_level level ) {} { ( __die `ML-KEM level must be 512, 768 or 1024` ) ^ 2 }
+        : String nm ( __opt_str p `out` ? > n 1 ( __pos ps 1 ) `mlkem` )
+        : i rc ( __cmd_keygen level ( string_data nm ) )
+        ( string_free nm )
+        ^ rc
+    } {}
+
+    ? != 0 ( nurl_str_eq cmd `encaps` ) {
+        ? < n 2 { ( __die `encaps needs an encapsulation key file` ) ^ 2 } {}
+        : String o ( __opt_str p `out` `mlkem.ct` )
+        : i rc ( __cmd_encaps ( __pos ps 1 ) ( string_data o ) )
+        ( string_free o )
+        ^ rc
+    } {}
+
+    ? != 0 ( nurl_str_eq cmd `decaps` ) {
+        ? < n 3 { ( __die `decaps needs a decapsulation key and a ciphertext` ) ^ 2 } {}
+        ^ ( __cmd_decaps ( __pos ps 1 ) ( __pos ps 2 ) )
+    } {}
+
+    ? != 0 ( nurl_str_eq cmd `sign-keygen` ) {
+        : i sl ( __opt_int p `level` 65 )
+        ? ( __check_sign_level sl ) {} { ( __die `ML-DSA level must be 44, 65 or 87` ) ^ 2 }
+        : String nm ( __opt_str p `out` ? > n 1 ( __pos ps 1 ) `mldsa` )
+        : i rc ( __cmd_sign_keygen sl ( string_data nm ) )
+        ( string_free nm )
+        ^ rc
+    } {}
+
+    ? != 0 ( nurl_str_eq cmd `sign` ) {
+        ? < n 3 { ( __die `sign needs a signing key and a file` ) ^ 2 } {}
+        // Default output is the input name with .sig appended.
+        : String derived ( string_from ( __pos ps 2 ) )
+        ( string_push_str derived `.sig` )
+        : String o ( __opt_str p `out` ( string_data derived ) )
+        : i rc ( __cmd_sign ( __pos ps 1 ) ( __pos ps 2 ) ( string_data o ) )
+        ( string_free o )
+        ( string_free derived )
+        ^ rc
+    } {}
+
+    ? != 0 ( nurl_str_eq cmd `verify` ) {
+        ? < n 4 { ( __die `verify needs a key, a file and a signature` ) ^ 2 } {}
+        ^ ( __cmd_verify ( __pos ps 1 ) ( __pos ps 2 ) ( __pos ps 3 ) )
+    } {}
+
+    ? != 0 ( nurl_str_eq cmd `probe` ) {
+        ? < n 2 { ( __die `probe needs at least one host` ) ^ 2 } {}
+        : i port ( __opt_int p `port` 443 )
+        ( nurl_print `host                              PQ?  group\n` )
+        : ~ i k 1
+        : ~ i worst 0
+        ~ < k n {
+            : i r ( __cmd_probe ( __pos ps k ) port )
+            ? > r worst { = worst r } {}
+            = k + k 1
+        }
+        ^ worst
+    } {}
+
+    ? != 0 ( nurl_str_eq cmd `bench` ) {
+        ? ( __check_level level ) {} { ( __die `ML-KEM level must be 512, 768 or 1024` ) ^ 2 }
+        ^ ( __cmd_bench level ( __opt_int p `reps` 200 ) )
+    } {}
+
+    ? != 0 ( nurl_str_eq cmd `kat` ) { ^ ( __cmd_kat ) } {}
+
+    ( __die `unknown command (try --help)` )
+    ^ 2
 }
 
 @ main → i {
@@ -410,54 +609,7 @@ $ `stdlib/ext/env.nu`
     : i level ( __opt_int p `level` 768 )
     : ~ i rc 0
 
-    ? ( __check_level level ) {} {
-        ( __die `level must be 512, 768 or 1024` )
-        = rc 2
-    }
-
-    ? == rc 0 {
-        ? != 0 ( nurl_str_eq cmd `keygen` ) {
-            : String nm ( __opt_str p `out` ? > ( vec_len [String] ps ) 1 ( __pos ps 1 ) `mlkem` )
-            = rc ( __cmd_keygen level ( string_data nm ) )
-            ( string_free nm )
-        } {
-            ? != 0 ( nurl_str_eq cmd `encaps` ) {
-                ? < ( vec_len [String] ps ) 2 { ( __die `encaps needs an encapsulation key file` ) = rc 2 } {
-                    : String o ( __opt_str p `out` `mlkem.ct` )
-                    = rc ( __cmd_encaps ( __pos ps 1 ) ( string_data o ) )
-                    ( string_free o )
-                }
-            } {
-                ? != 0 ( nurl_str_eq cmd `decaps` ) {
-                    ? < ( vec_len [String] ps ) 3 { ( __die `decaps needs a decapsulation key and a ciphertext` ) = rc 2 } {
-                        = rc ( __cmd_decaps ( __pos ps 1 ) ( __pos ps 2 ) )
-                    }
-                } {
-                    ? != 0 ( nurl_str_eq cmd `probe` ) {
-                        ? < ( vec_len [String] ps ) 2 { ( __die `probe needs at least one host` ) = rc 2 } {
-                            : i port ( __opt_int p `port` 443 )
-                            ( nurl_print `host                              PQ?  group\n` )
-                            : ~ i k 1
-                            : i n ( vec_len [String] ps )
-                            : ~ i worst 0
-                            ~ < k n {
-                                : i r ( __cmd_probe ( __pos ps k ) port )
-                                ? > r worst { = worst r } {}
-                                = k + k 1
-                            }
-                            = rc worst
-                        }
-                    } {
-                        ? != 0 ( nurl_str_eq cmd `bench` ) {
-                            = rc ( __cmd_bench level ( __opt_int p `reps` 200 ) )
-                        } {
-                            ? != 0 ( nurl_str_eq cmd `kat` ) {
-                                = rc ( __cmd_kat )
-                            } {
-                                ( __die `unknown command (try --help)` )
-                                = rc 2
-                            } } } } } }
-    } {}
+    = rc ( __dispatch p ps cmd level )
 
     // `ps` is a borrow of the parser's own vector — args_free releases it.
     ( args_free p )

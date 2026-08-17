@@ -18,6 +18,10 @@
 #    5. a truncated ciphertext is refused, not crashed on
 #    6. a file that is not a key is refused by its length
 #    7. all three parameter sets round-trip
+#    8. ML-DSA: sign/verify round trip at all three levels, with the
+#       sizes the standard fixes
+#    9. a tampered file does not verify, a signature does not carry
+#       across to a different key, and signing is hedged
 #
 #  Run from the package dir:  ./tests/pqc_test.sh
 #  Env: NURL (build driver; defaults to ../../nurl.sh in a checkout)
@@ -94,6 +98,48 @@ else ok "junk refused as an encapsulation key"; fi
 if "$PQC" keygen -l 999 -o "$WORK/n" >/dev/null 2>&1; then
     bad "level 999 accepted"
 else ok "invalid level refused"; fi
+
+# 8, 9. ML-DSA
+for lv in 44 65 87; do
+    case $lv in
+        44) pub=1312; key=2560; sg=2420 ;;
+        65) pub=1952; key=4032; sg=3309 ;;
+        87) pub=2592; key=4896; sg=4627 ;;
+    esac
+    "$PQC" sign-keygen -l $lv -o "$WORK/id$lv" >/dev/null || bad "sign-keygen $lv"
+    check "pub size $lv" "$(wc -c < "$WORK/id$lv.pub")" "$pub"
+    check "key size $lv" "$(wc -c < "$WORK/id$lv.key")" "$key"
+
+    printf 'the quick brown fox %s' "$lv" > "$WORK/doc$lv"
+    "$PQC" sign "$WORK/id$lv.key" "$WORK/doc$lv" >/dev/null || bad "sign $lv"
+    check "sig size $lv" "$(wc -c < "$WORK/doc$lv.sig")" "$sg"
+    if "$PQC" verify "$WORK/id$lv.pub" "$WORK/doc$lv" "$WORK/doc$lv.sig" >/dev/null; then
+        ok "sign/verify $lv"
+    else bad "sign/verify $lv"; fi
+
+    printf 'X' | dd of="$WORK/doc$lv" bs=1 seek=0 count=1 conv=notrunc status=none
+    if "$PQC" verify "$WORK/id$lv.pub" "$WORK/doc$lv" "$WORK/doc$lv.sig" >/dev/null 2>&1; then
+        bad "tampered file verified at $lv"
+    else ok "tampered file refused at $lv"; fi
+done
+
+printf 'same text' > "$WORK/x1"
+"$PQC" sign-keygen -l 65 -o "$WORK/other" >/dev/null
+"$PQC" sign "$WORK/id65.key" "$WORK/x1" >/dev/null
+if "$PQC" verify "$WORK/other.pub" "$WORK/x1" "$WORK/x1.sig" >/dev/null 2>&1; then
+    bad "signature verified under the wrong key"
+else ok "wrong key refused"; fi
+
+"$PQC" sign "$WORK/id65.key" "$WORK/x1" -o "$WORK/a.sig" >/dev/null
+"$PQC" sign "$WORK/id65.key" "$WORK/x1" -o "$WORK/b.sig" >/dev/null
+if cmp -s "$WORK/a.sig" "$WORK/b.sig"; then bad "signing is not hedged"; else ok "signing is hedged"; fi
+if "$PQC" verify "$WORK/id65.pub" "$WORK/x1" "$WORK/b.sig" >/dev/null; then
+    ok "second hedged signature verifies"
+else bad "second hedged signature failed"; fi
+
+if "$PQC" sign-keygen -l 99 -o "$WORK/n" >/dev/null 2>&1; then
+    bad "ML-DSA level 99 accepted"
+else ok "invalid ML-DSA level refused"; fi
 
 echo
 if [ "$fails" -eq 0 ]; then echo "PASS"; exit 0; else echo "FAIL ($fails)"; exit 1; fi

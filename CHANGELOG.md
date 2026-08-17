@@ -10,6 +10,61 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`std/mldsa`: ML-DSA (FIPS 204) in pure NURL** — the post-quantum
+  signature, at all three parameter sets, alongside the KEM that landed
+  with X25519MLKEM768. The complete 256-point NTT over Z_8380417 (unlike
+  ML-KEM's, this modulus admits a 512th root of unity, so the transform
+  runs all eight layers and multiplication is an ordinary pointwise
+  product), Montgomery and Barrett reduction in `i32`, rejection
+  sampling of the public matrix and of the noise, `Power2Round` and
+  `Decompose`, hint generation and its packing, and the 3/4/6/10/13/18/
+  20-bit encodings. The pure external interface with FIPS 204 §5.2
+  context strings, plus the external-mu interface; HashML-DSA
+  (`preHash`) is not implemented.
+
+  Signing is **hedged by default** — 32 fresh random bytes into the
+  per-signature nonce, so a repeated message does not produce a repeated
+  signature and a fault does not expose the key the way deterministic
+  signing can. `mldsa_sign_deterministic` remains for interoperability.
+
+  `tools/mldsa_acvp_gate.sh` runs all 480 published ACVP cases: 75
+  keyGen, 270 sigGen (deterministic and hedged, internal and external,
+  and external-mu) and 135 sigVer.
+
+- **The hint-canonicality rules the published vectors do not reach.**
+  A signature's hint has three encoding rules, and violating them is not
+  a corrupted signature but a *second valid encoding of a genuine one* —
+  signature malleability. Deleting each check and re-running all 480
+  NIST cases shows how little they are covered: the
+  strictly-increasing-indices rule fails 1 of 135 sigVer cases, and the
+  trailing-zero rule and the totals bound fail none at all. The reason
+  is that corrupting a hint changes the bits it decodes to, so `c~`
+  stops matching and the signature is refused regardless. So
+  `compiler/tests/mldsa_vectors.nu` constructs re-encodings that decode
+  to *identical* hint bits — the first index duplicated with every
+  running total bumped, and a non-zero byte in the unread tail — and
+  requires both to be rejected. With either check deleted, they fail.
+
+- **Post-quantum key exchange on the server side.** `std/tls_server.nu`
+  now accepts X25519MLKEM768, in preference to the classical groups when
+  a client offers it. There the server is the *encapsulating* party: the
+  client sends an ML-KEM encapsulation key and the reply carries a
+  ciphertext, not a public key. `compiler/tests/tls_pq_hybrid.nu` puts
+  the NURL client and the NURL server on the two ends of one handshake
+  and asserts the negotiated group is 4588 — the encapsulating half that
+  talking to Cloudflare can never exercise, since there that side is
+  theirs.
+
+- **`std/net`: `tcp_tls_group` and `tcp_is_post_quantum`.** A server
+  built on `net.nu` previously had no way to ask whether a connection's
+  key exchange was post-quantum; a peer without ML-KEM falls back
+  silently and nothing else about the connection differs.
+
+- **`packages/pqc`: `sign-keygen`, `sign` and `verify`**, so the tool
+  now covers both halves of the migration. Signatures are bound to a
+  `pqc` context string, so one cannot be replayed as a signature for
+  another application sharing the key.
+
 - **Post-quantum TLS: the handshake now survives a quantum adversary.**
   `std/tls.nu`'s client offers **`X25519MLKEM768`** (group `0x11ec`) as
   its first preference, so an ordinary `tls_connect` negotiates

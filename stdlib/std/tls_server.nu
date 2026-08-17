@@ -8,11 +8,18 @@
 // the client keys; tls.nu's client functions are hardwired the other way).
 //
 // Scope: TLS 1.3 only; an EC P-256 leaf (CertificateVerify signed with
-// ecdsa_secp256r1_sha256) OR an RSA leaf (rsa_pss_rsae_sha256); the X25519
-// and secp256r1 groups; the AES-128-GCM / ChaCha20-Poly1305 cipher suites
-// — i.e. exactly what tls.nu's client offers, so the two interoperate. A
-// full certificate chain (leaf + intermediates) is supported via the
-// tls_cert_entry-framed cert_chain argument.
+// ecdsa_secp256r1_sha256) OR an RSA leaf (rsa_pss_rsae_sha256); the
+// X25519MLKEM768, X25519 and secp256r1 groups; the AES-128-GCM /
+// ChaCha20-Poly1305 cipher suites — i.e. exactly what tls.nu's client
+// offers, so the two interoperate. A full certificate chain (leaf +
+// intermediates) is supported via the tls_cert_entry-framed cert_chain
+// argument.
+//
+// On X25519MLKEM768 the server is the *encapsulating* side: the client
+// sends an ML-KEM encapsulation key and gets back a ciphertext, not a
+// public key. `tcp_tls_group` / `tcp_is_post_quantum` (std/net.nu)
+// report what a given connection settled on, which is worth asking —
+// a client without ML-KEM falls back to a classical group silently.
 //
 //   ( tls_accept     i raw ( Vec u ) cert_chain ( Vec u ) priv )
 //   ( tls_accept_rsa i raw ( Vec u ) cert_chain ( Vec u ) n ( Vec u ) e ( Vec u ) d )
@@ -34,6 +41,7 @@ $ `stdlib/std/tls.nu`
 $ `stdlib/std/hash_sha256.nu`
 $ `stdlib/std/hkdf.nu`
 $ `stdlib/std/x25519.nu`
+$ `stdlib/std/mlkem.nu`
 $ `stdlib/std/ecdsa_p256.nu`
 $ `stdlib/std/rsa.nu`
 $ `stdlib/std/chacha20poly1305.nu`
@@ -161,6 +169,27 @@ $ `stdlib/std/aes_gcm.nu`
         ? == et want { = found + p 4 } { = p + + p 4 el }
     }
     ^ found
+}
+
+// The client's key_exchange for one named group, or an empty Vec if it
+// did not send a share for it.
+//
+// Separate from picking the group because preference and presence are
+// different questions: the client lists its shares in ITS order, and a
+// server that takes the first one it recognises lets the client decide
+// the group. Asking for the groups we want, most-preferred first, keeps
+// that decision here.
+@ __srv_find_share ( Vec u ) ch i ks i ksend i want → ( Vec u ) {
+    : ~ i kp + ks 2
+    ~ < + kp 4 + ksend 1 {
+        : i g ( _rdint ch kp 2 )
+        : i klen ( _rdint ch + kp 2 2 )
+        ? == g want {
+            ^ ( bytes_slice ch + kp 4 + + kp 4 klen )
+        } {}
+        = kp + + kp 4 klen
+    }
+    ^ ( vec_new [u] )
 }
 
 // ── server-flight message builders ──────────────────────────────────
@@ -343,25 +372,82 @@ $ `stdlib/std/aes_gcm.nu`
     : i ksend + + ks 2 kslen
     : ~ i grp 0
     : ~ ( Vec u ) cpub ( vec_new [u] )
-    ~ & < + kp 4 + ksend 1 == grp 0 {
-        : i g ( _rdint ch kp 2 )
-        : i klen ( _rdint ch + kp 2 2 )
-        ? | == g 29 == g 23 {
-            = grp g
+    // Preference order, most-preferred first: X25519MLKEM768, x25519,
+    // secp256r1. A share whose length is wrong for its group is ignored
+    // rather than trusted — every one of these is a fixed size, and the
+    // slicing below depends on it.
+    : ( Vec u ) sh_pq ( __srv_find_share ch ks ksend 4588 )
+    ? == ( vec_len [u] sh_pq ) 1216 {
+        = grp 4588
+        ( vec_free [u] cpub )
+        = cpub ( bytes_slice sh_pq 0 1216 )
+    } {}
+    ( vec_free [u] sh_pq )
+    ? == grp 0 {
+        : ( Vec u ) sh_x ( __srv_find_share ch ks ksend 29 )
+        ? == ( vec_len [u] sh_x ) 32 {
+            = grp 29
             ( vec_free [u] cpub )
-            = cpub ( bytes_slice ch + kp 4 + + kp 4 klen )
+            = cpub ( bytes_slice sh_x 0 32 )
         } {}
-        = kp + + kp 4 klen
-    }
+        ( vec_free [u] sh_x )
+    } {}
+    ? == grp 0 {
+        : ( Vec u ) sh_p ( __srv_find_share ch ks ksend 23 )
+        ? == ( vec_len [u] sh_p ) 65 {
+            = grp 23
+            ( vec_free [u] cpub )
+            = cpub ( bytes_slice sh_p 0 65 )
+        } {}
+        ( vec_free [u] sh_p )
+    } {}
+    = kp ksend
     ? == grp 0 {
         ( vec_free [u] ch ) ( vec_free [u] crand ) ( vec_free [u] cpub ) ( vec_free [u] tr ) ( nurl_free # s c )
         ^ ( __srv_fail raw )
     } {}
 
-    // ── server ephemeral + ECDHE ──
+    // ── server ephemeral + shared secret ──
+    //
+    // For X25519MLKEM768 the server is the *encapsulating* side: the
+    // client sent an ML-KEM encapsulation key, and the reply carries the
+    // ciphertext, not a public key. Both halves keep the group's byte
+    // order — ML-KEM first, X25519 second — in the share and in the
+    // secret alike.
+    = . c kx_group grp
     : ( Vec u ) eph ( __srv_rand 32 )
-    : ( Vec u ) spub ? == grp 29 ( x25519_base eph ) ( p256_ecdh_keygen eph )
-    : ( Vec u ) ecdhe ? == grp 29 ( x25519 eph cpub ) ( p256_ecdh_shared eph cpub )
+    : ~ ( Vec u ) spub ( vec_new [u] )
+    : ~ ( Vec u ) ecdhe ( vec_new [u] )
+    ? == grp 4588 {
+        : ( Vec u ) cek ( bytes_slice cpub 0 1184 )
+        : ( Vec u ) cx ( bytes_slice cpub 1184 1216 )
+        : *MlkemEncap en ( mlkem_encaps 768 cek )
+        : ( Vec u ) sx ( x25519_base eph )
+        : ( Vec u ) xs ( x25519 eph cx )
+        ( vec_free [u] spub )
+        = spub ( bytes_slice ( mlkem_ct en ) 0 1088 )
+        ( bytes_extend_bytes spub sx )
+        // The X25519 half is checked on its own, before the halves are
+        // joined: a low-order client point zeroes it while the ML-KEM
+        // half stays random, so the concatenation would look fine.
+        // Leaving `ecdhe` empty here makes the shared all-zero test
+        // below fail closed.
+        ? ( _all_zero xs ) {} {
+            ( vec_free [u] ecdhe )
+            = ecdhe ( bytes_slice ( mlkem_ss en ) 0 32 )
+            ( bytes_extend_bytes ecdhe xs )
+        }
+        ( vec_free [u] xs )
+        ( vec_free [u] sx )
+        ( mlkem_encap_free en )
+        ( vec_free [u] cx )
+        ( vec_free [u] cek )
+    } {
+        ( vec_free [u] spub )
+        = spub ? == grp 29 ( x25519_base eph ) ( p256_ecdh_keygen eph )
+        ( vec_free [u] ecdhe )
+        = ecdhe ? == grp 29 ( x25519 eph cpub ) ( p256_ecdh_shared eph cpub )
+    }
     // H3: RFC 8446 §7.4.2 — reject a degenerate (all-zero) ECDHE secret from a
     // low-order client key_share before it can seed the key schedule.
     ? ( _all_zero ecdhe ) {

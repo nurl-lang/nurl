@@ -170,19 +170,25 @@ the one block it needs, so a table larger than RAM is an ordinary table.
 Leak-clean under ASan/LSan across every path. See
 [`lsmdb/README.md`](lsmdb/README.md) for the file format and the guarantees.
 
-## `pqc/` — post-quantum key encapsulation, and whether the web is ready (installable program)
+## `pqc/` — post-quantum cryptography, and whether the web is ready (installable program)
 
-ML-KEM (FIPS 203, formerly CRYSTALS-Kyber) at all three parameter sets
-over [`stdlib/std/mlkem.nu`](../stdlib/std/mlkem.nu) — key generation,
-encapsulation, decapsulation — checked byte for byte against NIST's own
-ACVP vectors, all 180 published cases. No libcrypto, no liboqs; the
-binary links libc and nothing else.
+Both halves of the migration over
+[`stdlib/std/mlkem.nu`](../stdlib/std/mlkem.nu) and
+[`stdlib/std/mldsa.nu`](../stdlib/std/mldsa.nu): **ML-KEM** (FIPS 203,
+formerly CRYSTALS-Kyber) for key encapsulation and **ML-DSA** (FIPS 204,
+formerly CRYSTALS-Dilithium) for signatures, at all three parameter sets
+each, checked byte for byte against NIST's own ACVP vectors — 660
+published cases. No libcrypto, no liboqs; the binary links libc and
+nothing else.
 
 ```
 nurlpkg install pqc
 pqc keygen -o demo             # demo.ek (1184 B) + demo.dk (2400 B)
 pqc encaps demo.ek -o demo.ct  # → ciphertext + shared secret
 pqc decaps demo.dk demo.ct     # → the same shared secret
+pqc sign-keygen -o id          # id.pub (1952 B) + id.key (4032 B)
+pqc sign id.key report.pdf     # → report.pdf.sig (3309 B)
+pqc verify id.pub report.pdf report.pdf.sig
 pqc probe cloudflare.com github.com   # who actually does post-quantum TLS?
 pqc bench                      # ~15k keygen/s, ~16k encaps/s on one core
 pqc kat                        # self-test against the NIST vectors
