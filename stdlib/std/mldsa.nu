@@ -374,13 +374,20 @@ $ `stdlib/std/subtle.nu`
 
 // Power2Round: split r into high bits r1 and centred low bits r0 with
 // r = r1·2^13 + r0.
+//
+// Division-free. The spec states these in terms of `mod±`, which reads
+// as a remainder; every one of them is a shift and a mask on a power of
+// two, or a reciprocal multiply where the modulus is not one. That
+// matters here because rounding runs 256·k times per signing attempt
+// and signing retries several times: a 25-cycle `idiv` in that loop
+// costs more than the polynomial arithmetic around it.
 @ __poly_power2round * i32 a1 i o1 * i32 a0 i o0 * i32 a i oa → v {
     : ~ i i 0
     ~ < i 256 {
-        : i r ( __caddq . a + oa i )
-        : i r0 ( __modpm r 8192 )
-        = . a1 + o1 i # i32 >> - r r0 13
-        = . a0 + o0 i # i32 r0
+        : i32 x ( __caddq . a + oa i )
+        : i32 t1 >> + x # i32 4095 # i32 13
+        = . a1 + o1 i t1
+        = . a0 + o0 i - x << t1 # i32 13
         = i + i 1
     }
 }
@@ -388,39 +395,74 @@ $ `stdlib/std/subtle.nu`
 // Decompose: r = r1·2γ2 + r0 with r0 centred, except at the wrap point
 // where r1 is forced to 0 — the case that makes HighBits take only
 // (q−1)/(2γ2) distinct values.
+//
+// The two parameter sets need different reciprocals, so the branch is
+// hoisted out of the loop. 1025/2^22 approximates 1/(2·261888) and
+// 11275/2^24 approximates 1/(2·95232), each chosen so the truncating
+// shift lands on the exact quotient over the whole input range. The
+// wrap case falls out of the arithmetic rather than needing a compare:
+// for γ2=(q−1)/32 the mask `& 15` wraps 16 to 0, and for (q−1)/88 the
+// `^` folds 44 back to 0.
 @ __poly_decompose * i32 a1 i o1 * i32 a0 i o0 * i32 a i oa i g2 → v {
     : ~ i i 0
-    ~ < i 256 {
-        : i r ( __caddq . a + oa i )
-        : i r0 ( __modpm r * 2 g2 )
-        ? == - r r0 8380416 {
-            = . a1 + o1 i # i32 0
-            = . a0 + o0 i # i32 - r0 1
-        } {
-            = . a1 + o1 i # i32 / - r r0 * 2 g2
-            = . a0 + o0 i # i32 r0
+    ? == g2 261888 {
+        ~ < i 256 {
+            : i32 x ( __caddq . a + oa i )
+            : ~ i32 t1 >> + x # i32 127 # i32 7
+            = t1 & >> + * t1 # i32 1025 # i32 2097152 # i32 22 # i32 15
+            : ~ i32 t0 - x * t1 # i32 523776
+            = t0 - t0 & >> - # i32 4190208 t0 # i32 31 # i32 8380417
+            = . a1 + o1 i t1
+            = . a0 + o0 i t0
+            = i + i 1
         }
-        = i + i 1
+    } {
+        ~ < i 256 {
+            : i32 x ( __caddq . a + oa i )
+            : ~ i32 t1 >> + x # i32 127 # i32 7
+            = t1 >> + * t1 # i32 11275 # i32 8388608 # i32 24
+            = t1 ^^ t1 & >> - # i32 43 t1 # i32 31 t1
+            : ~ i32 t0 - x * t1 # i32 190464
+            = t0 - t0 & >> - # i32 4190208 t0 # i32 31 # i32 8380417
+            = . a1 + o1 i t1
+            = . a0 + o0 i t0
+            = i + i 1
+        }
     }
 }
 
-@ __highbits i r i g2 → i {
-    : i x ( __caddq # i32 r )
-    : i r0 ( __modpm x * 2 g2 )
-    ? == - x r0 8380416 { ^ 0 } {}
-    ^ / - x r0 * 2 g2
+// MakeHint, from the decomposed pair rather than from two HighBits
+// calls.
+//
+// The spec writes it as `HighBits(r) ≠ HighBits(r + z)`, which is two
+// decompositions per coefficient. Given `a0` — the low part after the
+// signer has already folded in −⟨⟨c·s2⟩⟩ and ⟨⟨c·t0⟩⟩ — and `a1`, the
+// high part of w, the same predicate is a range test on a0 alone.
+@ __makehint i32 a0 i32 a1 i g2 → i {
+    ^ ? | | > # i a0 g2 < # i a0 - 0 g2 & == # i a0 - 0 g2 != # i a1 0 1 0
 }
 
 // UseHint: recover HighBits(r + z) from HighBits(r) and one bit.
 @ __usehint i h i r i g2 → i {
-    : i m / 8380416 * 2 g2
-    : i x ( __caddq # i32 r )
-    : i r0 ( __modpm x * 2 g2 )
-    : ~ i r1 0
-    ? == - x r0 8380416 { = r1 0 } { = r1 / - x r0 * 2 g2 }
-    ? == h 0 { ^ r1 } {}
-    ? > r0 0 { ^ % + r1 1 m } {}
-    ^ % + - r1 1 m m
+    : i32 x ( __caddq # i32 r )
+    : ~ i32 t1 >> + x # i32 127 # i32 7
+    : ~ i32 t0 # i32 0
+    ? == g2 261888 {
+        = t1 & >> + * t1 # i32 1025 # i32 2097152 # i32 22 # i32 15
+        = t0 - x * t1 # i32 523776
+    } {
+        = t1 >> + * t1 # i32 11275 # i32 8388608 # i32 24
+        = t1 ^^ t1 & >> - # i32 43 t1 # i32 31 t1
+        = t0 - x * t1 # i32 190464
+    }
+    = t0 - t0 & >> - # i32 4190208 t0 # i32 31 # i32 8380417
+    ? == h 0 { ^ # i t1 } {}
+    ? == g2 261888 {
+        ? > # i t0 0 { ^ & + # i t1 1 15 } {}
+        ^ & - # i t1 1 15
+    } {}
+    ? > # i t0 0 { ^ ? == # i t1 43 0 + # i t1 1 } {}
+    ^ ? == # i t1 0 43 - # i t1 1
 }
 
 // ── Bit packing ────────────────────────────────────────────────────
@@ -1056,15 +1098,10 @@ MldsaParams p ( Vec u ) out → v {
                 ( __md_poly_add w0p * 256 i w0p * 256 i ct0p * 256 i )
                 : ~ i j 0
                 ~ < j 256 {
-                    // MakeHint(z, r) with z = −ct0 and r = w0 + ct0:
-                    // HighBits(r) differs from HighBits(r + z), where
-                    // r + z is the low part alone.
-                    : i r0 # i . w0p + * 256 i j
-                    : i r1 # i . w1p + * 256 i j
-                    : i zz - # i32 0 . ct0p + * 256 i j
-                    : i hb0 ( __highbits + r0 * r1 * 2 g2 g2 )
-                    : i hb1 ( __highbits + + r0 * r1 * 2 g2 zz g2 )
-                    : i bit ? != hb0 hb1 1 0
+                    // w0 now holds LowBits(w) − ⟨⟨c·s2⟩⟩ + ⟨⟨c·t0⟩⟩ and
+                    // w1 holds HighBits(w), so the hint is a range test
+                    // on w0 — no second decomposition needed.
+                    : i bit ( __makehint . w0p + * 256 i j . w1p + * 256 i j g2 )
                     = . hp + * 256 i j # i32 bit
                     = ones + ones bit
                     = j + j 1

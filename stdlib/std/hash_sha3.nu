@@ -33,6 +33,10 @@
 // byte) automatically; absorbing after that is a programming error and
 // is ignored. The one-shot entries above are thin compositions of the
 // streaming ones, so the two paths cannot drift.
+//
+// A sponge carries a 25-lane scratch buffer alongside its state, which
+// the permutation ping-pongs against; see __keccakf1600 for why. That
+// is the only reason `sha3_new` allocates more than the state itself.
 
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/bytes.nu`
@@ -66,83 +70,106 @@ $ `stdlib/std/bytes.nu`
     ^ v
 }
 
-// The permutation, in place over 25 lanes.
+// The permutation, over 25 lanes, ping-ponging between two buffers.
 //
 // θ's D-values are folded straight into ρ+π rather than written back to
 // the state first: b[dst] = rotl(a[src] ^ d[src mod 5], r[src]) does in
-// one pass what the spec describes as two. The 25 lanes are held in
-// named locals across the round so the whole body stays in registers —
-// spelled as loops over the state array instead, every lane would be
-// re-loaded three times a round, 24 rounds deep, for a permutation that
-// is otherwise pure ALU.
-@ __keccakf1600 * u64 a * u64 rc → v {
+// one pass what the spec describes as two.
+//
+// The reason for the second buffer is register pressure. Written the
+// obvious way — materialise all 25 ρ+π results, then run χ over them —
+// 35 values are live at once on a machine with 16 general registers,
+// and the round becomes 191 `mov`s against 155 real ALU instructions:
+// more than half the work is spilling. χ cannot simply consume them a
+// row at a time in place either, because ρ+π scatters lanes across
+// rows, so χ's first row would overwrite lanes its fourth row still
+// needs.
+//
+// Writing each χ row into a *different* buffer removes that conflict,
+// and then only one row's five values need to exist at a time. Live
+// set drops to the five D-values plus five row temporaries, which fits
+// in registers. The buffers swap every round; 24 is even, so the result
+// lands back where the caller left the state.
+@ __keccakf1600 * u64 a * u64 b * u64 rc → v {
     : ~ i rnd 0
     ~ < rnd 24 {
-        // θ — column parities
-        : u64 c0 ^^ ^^ ^^ ^^ . a 0 . a 5 . a 10 . a 15 . a 20
-        : u64 c1 ^^ ^^ ^^ ^^ . a 1 . a 6 . a 11 . a 16 . a 21
-        : u64 c2 ^^ ^^ ^^ ^^ . a 2 . a 7 . a 12 . a 17 . a 22
-        : u64 c3 ^^ ^^ ^^ ^^ . a 3 . a 8 . a 13 . a 18 . a 23
-        : u64 c4 ^^ ^^ ^^ ^^ . a 4 . a 9 . a 14 . a 19 . a 24
+        // Even rounds read a and write b; odd rounds the other way.
+        : b even == % rnd 2 0
+        : *u64 s ? even a b
+        : *u64 o ? even b a
+
+        // θ — column parities, then the five D-values. C is dead after
+        // this, so only D stays live across the rows below.
+        : u64 c0 ^^ ^^ ^^ ^^ . s 0 . s 5 . s 10 . s 15 . s 20
+        : u64 c1 ^^ ^^ ^^ ^^ . s 1 . s 6 . s 11 . s 16 . s 21
+        : u64 c2 ^^ ^^ ^^ ^^ . s 2 . s 7 . s 12 . s 17 . s 22
+        : u64 c3 ^^ ^^ ^^ ^^ . s 3 . s 8 . s 13 . s 18 . s 23
+        : u64 c4 ^^ ^^ ^^ ^^ . s 4 . s 9 . s 14 . s 19 . s 24
         : u64 d0 ^^ c4 ( __k_rotl c1 1 )
         : u64 d1 ^^ c0 ( __k_rotl c2 1 )
         : u64 d2 ^^ c1 ( __k_rotl c3 1 )
         : u64 d3 ^^ c2 ( __k_rotl c4 1 )
         : u64 d4 ^^ c3 ( __k_rotl c0 1 )
 
-        // ρ + π, with θ applied on the way in
-        : u64 b0 ^^ . a 0 d0
-        : u64 b1 ( __k_rotl ^^ . a 6 d1 44 )
-        : u64 b2 ( __k_rotl ^^ . a 12 d2 43 )
-        : u64 b3 ( __k_rotl ^^ . a 18 d3 21 )
-        : u64 b4 ( __k_rotl ^^ . a 24 d4 14 )
-        : u64 b5 ( __k_rotl ^^ . a 3 d3 28 )
-        : u64 b6 ( __k_rotl ^^ . a 9 d4 20 )
-        : u64 b7 ( __k_rotl ^^ . a 10 d0 3 )
-        : u64 b8 ( __k_rotl ^^ . a 16 d1 45 )
-        : u64 b9 ( __k_rotl ^^ . a 22 d2 61 )
-        : u64 b10 ( __k_rotl ^^ . a 1 d1 1 )
-        : u64 b11 ( __k_rotl ^^ . a 7 d2 6 )
-        : u64 b12 ( __k_rotl ^^ . a 13 d3 25 )
-        : u64 b13 ( __k_rotl ^^ . a 19 d4 8 )
-        : u64 b14 ( __k_rotl ^^ . a 20 d0 18 )
-        : u64 b15 ( __k_rotl ^^ . a 4 d4 27 )
-        : u64 b16 ( __k_rotl ^^ . a 5 d0 36 )
-        : u64 b17 ( __k_rotl ^^ . a 11 d1 10 )
-        : u64 b18 ( __k_rotl ^^ . a 17 d2 15 )
-        : u64 b19 ( __k_rotl ^^ . a 23 d3 56 )
-        : u64 b20 ( __k_rotl ^^ . a 2 d2 62 )
-        : u64 b21 ( __k_rotl ^^ . a 8 d3 55 )
-        : u64 b22 ( __k_rotl ^^ . a 14 d4 39 )
-        : u64 b23 ( __k_rotl ^^ . a 15 d0 41 )
-        : u64 b24 ( __k_rotl ^^ . a 21 d1 2 )
+        // Row 0 ← lanes 0, 6, 12, 18, 24
+        : u64 r00 ^^ . s 0 d0
+        : u64 r01 ( __k_rotl ^^ . s 6 d1 44 )
+        : u64 r02 ( __k_rotl ^^ . s 12 d2 43 )
+        : u64 r03 ( __k_rotl ^^ . s 18 d3 21 )
+        : u64 r04 ( __k_rotl ^^ . s 24 d4 14 )
+        = . o 0 ^^ ^^ r00 & ~ r01 r02 . rc rnd
+        = . o 1 ^^ r01 & ~ r02 r03
+        = . o 2 ^^ r02 & ~ r03 r04
+        = . o 3 ^^ r03 & ~ r04 r00
+        = . o 4 ^^ r04 & ~ r00 r01
 
-        // χ — row-wise, then ι on lane 0
-        = . a 0 ^^ ^^ b0 & ~ b1 b2 . rc rnd
-        = . a 1 ^^ b1 & ~ b2 b3
-        = . a 2 ^^ b2 & ~ b3 b4
-        = . a 3 ^^ b3 & ~ b4 b0
-        = . a 4 ^^ b4 & ~ b0 b1
-        = . a 5 ^^ b5 & ~ b6 b7
-        = . a 6 ^^ b6 & ~ b7 b8
-        = . a 7 ^^ b7 & ~ b8 b9
-        = . a 8 ^^ b8 & ~ b9 b5
-        = . a 9 ^^ b9 & ~ b5 b6
-        = . a 10 ^^ b10 & ~ b11 b12
-        = . a 11 ^^ b11 & ~ b12 b13
-        = . a 12 ^^ b12 & ~ b13 b14
-        = . a 13 ^^ b13 & ~ b14 b10
-        = . a 14 ^^ b14 & ~ b10 b11
-        = . a 15 ^^ b15 & ~ b16 b17
-        = . a 16 ^^ b16 & ~ b17 b18
-        = . a 17 ^^ b17 & ~ b18 b19
-        = . a 18 ^^ b18 & ~ b19 b15
-        = . a 19 ^^ b19 & ~ b15 b16
-        = . a 20 ^^ b20 & ~ b21 b22
-        = . a 21 ^^ b21 & ~ b22 b23
-        = . a 22 ^^ b22 & ~ b23 b24
-        = . a 23 ^^ b23 & ~ b24 b20
-        = . a 24 ^^ b24 & ~ b20 b21
+        // Row 1 ← lanes 3, 9, 10, 16, 22
+        : u64 r10 ( __k_rotl ^^ . s 3 d3 28 )
+        : u64 r11 ( __k_rotl ^^ . s 9 d4 20 )
+        : u64 r12 ( __k_rotl ^^ . s 10 d0 3 )
+        : u64 r13 ( __k_rotl ^^ . s 16 d1 45 )
+        : u64 r14 ( __k_rotl ^^ . s 22 d2 61 )
+        = . o 5 ^^ r10 & ~ r11 r12
+        = . o 6 ^^ r11 & ~ r12 r13
+        = . o 7 ^^ r12 & ~ r13 r14
+        = . o 8 ^^ r13 & ~ r14 r10
+        = . o 9 ^^ r14 & ~ r10 r11
+
+        // Row 2 ← lanes 1, 7, 13, 19, 20
+        : u64 r20 ( __k_rotl ^^ . s 1 d1 1 )
+        : u64 r21 ( __k_rotl ^^ . s 7 d2 6 )
+        : u64 r22 ( __k_rotl ^^ . s 13 d3 25 )
+        : u64 r23 ( __k_rotl ^^ . s 19 d4 8 )
+        : u64 r24 ( __k_rotl ^^ . s 20 d0 18 )
+        = . o 10 ^^ r20 & ~ r21 r22
+        = . o 11 ^^ r21 & ~ r22 r23
+        = . o 12 ^^ r22 & ~ r23 r24
+        = . o 13 ^^ r23 & ~ r24 r20
+        = . o 14 ^^ r24 & ~ r20 r21
+
+        // Row 3 ← lanes 4, 5, 11, 17, 23
+        : u64 r30 ( __k_rotl ^^ . s 4 d4 27 )
+        : u64 r31 ( __k_rotl ^^ . s 5 d0 36 )
+        : u64 r32 ( __k_rotl ^^ . s 11 d1 10 )
+        : u64 r33 ( __k_rotl ^^ . s 17 d2 15 )
+        : u64 r34 ( __k_rotl ^^ . s 23 d3 56 )
+        = . o 15 ^^ r30 & ~ r31 r32
+        = . o 16 ^^ r31 & ~ r32 r33
+        = . o 17 ^^ r32 & ~ r33 r34
+        = . o 18 ^^ r33 & ~ r34 r30
+        = . o 19 ^^ r34 & ~ r30 r31
+
+        // Row 4 ← lanes 2, 8, 14, 15, 21
+        : u64 r40 ( __k_rotl ^^ . s 2 d2 62 )
+        : u64 r41 ( __k_rotl ^^ . s 8 d3 55 )
+        : u64 r42 ( __k_rotl ^^ . s 14 d4 39 )
+        : u64 r43 ( __k_rotl ^^ . s 15 d0 41 )
+        : u64 r44 ( __k_rotl ^^ . s 21 d1 2 )
+        = . o 20 ^^ r40 & ~ r41 r42
+        = . o 21 ^^ r41 & ~ r42 r43
+        = . o 22 ^^ r42 & ~ r43 r44
+        = . o 23 ^^ r43 & ~ r44 r40
+        = . o 24 ^^ r44 & ~ r40 r41
 
         = rnd + rnd 1
     }
@@ -152,6 +179,7 @@ $ `stdlib/std/bytes.nu`
 
 : Sha3 {
     ( Vec u64 ) st  // 25 lanes
+    ( Vec u64 ) scr  // 25-lane ping-pong buffer for the permutation
     ( Vec u64 ) rc  // ι constants
     i rate  // bytes absorbed/squeezed per permutation
     i pos  // byte offset into the current block
@@ -170,6 +198,9 @@ $ `stdlib/std/bytes.nu`
     : ~ i i 0
     ~ < i 25 { = . sp i # u64 0 = i + i 1 }
     = . h st st
+    : ( Vec u64 ) scr ( vec_with_cap [u64] 25 )
+    : b _s ( vec_set_len [u64] scr 25 )
+    = . h scr scr
     = . h rc ( __keccak_rc )
     = . h rate rate
     = . h pos 0
@@ -180,6 +211,7 @@ $ `stdlib/std/bytes.nu`
 
 @ sha3_free * Sha3 h → v {
     ( vec_free [u64] . h st )
+    ( vec_free [u64] . h scr )
     ( vec_free [u64] . h rc )
     ( nurl_free # s h )
 }
@@ -221,7 +253,7 @@ $ `stdlib/std/bytes.nu`
             = pos + pos 1
         }
         ? >= pos rate {
-            ( __keccakf1600 sp ( vec_data [u64] . h rc ) )
+            ( __keccakf1600 sp ( vec_data [u64] . h scr ) ( vec_data [u64] . h rc ) )
             = pos 0
         } {}
     }
@@ -245,7 +277,7 @@ $ `stdlib/std/bytes.nu`
     = . sp / pos 8 ^^ . sp / pos 8 << # u64 . h dom # u64 * 8 % pos 8
     : i last - rate 1
     = . sp / last 8 ^^ . sp / last 8 << # u64 128 # u64 * 8 % last 8
-    ( __keccakf1600 sp ( vec_data [u64] . h rc ) )
+    ( __keccakf1600 sp ( vec_data [u64] . h scr ) ( vec_data [u64] . h rc ) )
     = . h pos 0
     = . h squeezing T
 }
@@ -266,7 +298,7 @@ $ `stdlib/std/bytes.nu`
     : ~ i pos . h pos
     ~ < off n {
         ? >= pos rate {
-            ( __keccakf1600 sp ( vec_data [u64] . h rc ) )
+            ( __keccakf1600 sp ( vec_data [u64] . h scr ) ( vec_data [u64] . h rc ) )
             = pos 0
         } {}
         ? & == % pos 8 0 & <= + pos 8 rate <= + off 8 n {
