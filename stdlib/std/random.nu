@@ -12,6 +12,7 @@
 //   ( rand_range from to )      → i        uniform integer in [from, to)
 //                                          when from < to; otherwise from.
 //                                          Rejection-sampled, so unbiased.
+//   ( rand_bytes n )            → ( Vec u ) n CSPRNG bytes, any n ≥ 0
 //   ( rand_hex_str n )          → String   2*n lowercase hex chars from
 //                                          n random bytes (n clamped to
 //                                          [0, 4096])
@@ -21,6 +22,7 @@
 // directly.
 
 $ `stdlib/core/string.nu`
+$ `stdlib/core/vec.nu`
 
 // Single syscall-shaped runtime bridge. Returns 1 on success, 0 on a
 // total entropy failure (which the degraded /dev/urandom-or-PRNG fallback
@@ -52,6 +54,26 @@ $ `stdlib/core/string.nu`
         = k + k 1
     }
     ( nurl_free buf )
+    ^ v
+}
+
+// n bytes straight from the OS CSPRNG.
+//
+// The raw draw every key-generating caller actually wants: seeds, nonces,
+// the `d`/`z` inputs to ML-KEM key generation, TLS client randoms. Before
+// this existed each of those open-coded the same fill-and-check against
+// `nurl_rand_fill`, which meant the fail-closed policy was restated once
+// per call site and could drift in any one of them.
+//
+// Fails closed exactly like `rand_u64`: `nurl_rand_fill` returns 0 only
+// when every OS entropy source failed, and handing back predictable bytes
+// to a caller who asked for unpredictable ones is worse than stopping.
+@ rand_bytes i n → ( Vec u ) {
+    : ( Vec u ) v ( vec_with_cap [u] ? > n 0 n 1 )
+    ? <= n 0 { ^ v } {}
+    : b _l ( vec_set_len [u] v n )
+    : i r ( nurl_rand_fill # *u ( vec_data [u] v ) n )
+    ? == r 0 { ( nurl_panic `random: CSPRNG (nurl_rand_fill) failed` ) } {}
     ^ v
 }
 

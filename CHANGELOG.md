@@ -10,6 +10,61 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Post-quantum TLS: the handshake now survives a quantum adversary.**
+  `std/tls.nu`'s client offers **`X25519MLKEM768`** (group `0x11ec`) as
+  its first preference, so an ordinary `tls_connect` negotiates
+  post-quantum key exchange with every peer that supports it —
+  Cloudflare, Google and Wikipedia all take it today; github.com does
+  not and falls back to X25519, which is why `tls_group` and
+  `tls_is_post_quantum` now report which one actually happened. The
+  secret handed to the key schedule is `ML-KEM secret ‖ X25519 secret`,
+  so the session survives *either* primitive being broken and adopting
+  it is never a downgrade. The X25519 half keeps its own RFC 8446
+  §7.4.2 all-zero check: testing only the concatenation would let a
+  low-order peer point zero the classical half while the ML-KEM half
+  stayed random. The ClientHello is now ~1.5 kB and spans more than one
+  TCP segment, matching what browsers sending this group already do.
+
+- **`std/mlkem`: ML-KEM (FIPS 203) in pure NURL**, at all three
+  parameter sets — 512, 768 and 1024. The NTT over Z_3329, Montgomery
+  and Barrett reduction, rejection sampling of the public matrix from
+  SHAKE128, centred binomial noise, and the 1/4/5/10/11/12-bit
+  encodings, in `i16` arithmetic throughout — the first serious use of
+  NURL's signed narrow integers, whose truncation, wrapping, sign
+  extension and arithmetic shift were differentially validated against
+  a model over all 65 536 inputs before anything was built on them.
+  Decapsulation is branch-free on secret data: the re-encryption
+  comparison is `subtle`'s constant-time equality and the
+  implicit-rejection select is an arithmetic mask.
+
+  Correctness is pinned to NIST's own ACVP vectors rather than to
+  itself — a KEM round-trips fine when both halves are equally wrong.
+  `tools/mlkem_acvp_gate.sh` runs all 180 published cases (75 keygen,
+  75 encapsulation, 30 decapsulation including implicit rejection),
+  parsing NIST's JSON directly in NURL; `compiler/tests/mlkem_vectors.nu`
+  carries an offline subset that runs on every build. The gate is
+  mutation-tested: a wrong twiddle factor, a dropped NTT layer, a wrong
+  Montgomery constant, a swapped noise sign, a missing `k` byte in
+  G(d‖k) and an unconditional rejection select are each caught.
+
+- **`std/hash_sha3`: SHA-3 and SHAKE (FIPS 202)** — Keccak-f[1600],
+  SHA3-224/256/384/512, and SHAKE128/256 both one-shot and as a
+  streaming sponge. The incremental squeeze is load-bearing rather than
+  a convenience: ML-KEM's rejection sampler pulls three bytes at a time
+  and needs one continuous stream, so `( squeeze h 3 )` three times and
+  `( squeeze h 9 )` once must agree, and a test pins exactly that.
+  SHA-3 was the last standard hash family stdlib lacked.
+
+- **`std/random`: `rand_bytes n`** — the raw CSPRNG draw every
+  key-generating caller wants. `std/tls.nu` had open-coded its own,
+  which meant the fail-closed policy was restated per call site.
+
+- **`packages/pqc`** — ML-KEM on the command line, plus `pqc probe
+  HOST...`, which completes a real TLS 1.3 handshake and reports the
+  key-exchange group the server chose. Offering the hybrid group is not
+  the same as getting it, and nothing else in the handshake says which
+  happened.
+
 - **`std/zstd`: an optimal parser for levels 13–19.** The greedy parser
   chooses each match on its own; the new one chooses the SET of matches
   with the smallest priced total — a shortest path over every position

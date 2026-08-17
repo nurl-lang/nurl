@@ -27,14 +27,16 @@ All sources live in `stdlib/std/`.
 
 | Area | Module(s) | Notes |
 |---|---|---|
-| Hashes | `hash_sha256`, `hash_sha512`, `hash_sha1`, `hash_md5`, `hash_blake3` | SHA-1/MD5 for legacy interop only (never trusted for signatures) |
+| Hashes | `hash_sha256`, `hash_sha512`, `hash_sha3`, `hash_sha1`, `hash_md5`, `hash_blake3` | SHA-1/MD5 for legacy interop only (never trusted for signatures) |
+| XOF | `hash_sha3` (SHAKE128/256) | extendable output, incremental squeeze; ML-KEM is built on it |
+| Post-quantum KEM | `mlkem` (ML-KEM-512/768/1024, FIPS 203) | checked byte-for-byte against NIST's ACVP vectors |
 | HMAC / KDF | `hkdf`, `pbkdf2`, `scrypt` | HKDF-Expand-Label for TLS 1.3 |
 | AEAD | `aes_gcm` (AES-128/256-GCM), `chacha20poly1305` | the two TLS 1.3 record ciphers |
 | ECDH / signatures | `x25519`, `ed25519`, `ecdsa_p256` (P-256 + P-384), `p256_field` | TweetNaCl-derived 25519 ladder over a ten-limb radix-2^25.5 field; `p256_field` is the dedicated **constant-time** fixed-limb GF(p) for the P-256 secret path |
 | RSA | `rsa` (PKCS#1 v1.5 verify, PSS verify + sign) | built on `bigint` |
 | Bignum | `bigint` | sign-magnitude, schoolbook mul / long division, `modpow`, `modinv` |
 | X.509 | `x509`, `tls_verify` | DER parser + chain/host/policy verification |
-| TLS | `tls` (client, 1.3 + 1.2 fallback), `tls_server` (1.3) | record layer, key schedule, handshake |
+| TLS | `tls` (client, 1.3 + 1.2 fallback), `tls_server` (1.3) | record layer, key schedule, handshake; the client offers `X25519MLKEM768` first |
 | Randomness | `random` (CSPRNG), `rng` (xoshiro256\*\*, **not** crypto) | |
 | Constant-time | `subtle` | length-independent secret comparison |
 
@@ -55,6 +57,37 @@ value and **fails closed** (panics) rather than proceed with predictable
 bytes. `std/rng.nu`
 (xoshiro256\*\*) is a separate, clearly-marked **non-cryptographic** PRNG
 for simulations and is never used by this stack.
+
+### Post-quantum key exchange
+
+`std/mlkem.nu` implements ML-KEM (FIPS 203) at all three parameter sets.
+`std/tls.nu`'s client offers **`X25519MLKEM768`** (group `0x11ec`) as its
+first preference, ahead of X25519 and P-256, so an ordinary
+`tls_connect` gets post-quantum key exchange wherever the peer supports
+it — which today includes Cloudflare, Google and a growing share of the
+web. `tls_group` reports the group that was actually negotiated and
+`tls_is_post_quantum` answers the direct question; both are worth
+checking rather than assuming, because a server without ML-KEM falls
+back to X25519 silently and the handshake looks identical otherwise.
+
+The hybrid secret fed to the key schedule is the concatenation
+`ML-KEM shared secret ‖ X25519 shared secret`. HKDF-Extract over the
+pair is at least as strong as either half, so the session survives
+ML-KEM being broken *and* survives X25519 being broken — adopting it is
+never a downgrade. The X25519 half keeps its own RFC 8446 §7.4.2
+all-zero check: testing only the concatenation would let a low-order
+peer point zero the classical half while the ML-KEM half stayed random.
+
+Offering the group makes the ClientHello roughly 1.5 kB, so it no longer
+fits in a single TCP segment. That matches what every browser sending
+this group already does, but a network path that silently drops large
+handshake packets will now fail where it previously worked.
+
+Decapsulation never reports failure — ML-KEM's *implicit rejection*
+returns an unpredictable-but-deterministic key instead of an error, so a
+probing attacker learns nothing. A wrong ciphertext therefore surfaces
+as a handshake that fails at Finished, which is the intended behaviour
+rather than a missing error path.
 
 ---
 

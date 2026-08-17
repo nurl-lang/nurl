@@ -170,6 +170,41 @@ the one block it needs, so a table larger than RAM is an ordinary table.
 Leak-clean under ASan/LSan across every path. See
 [`lsmdb/README.md`](lsmdb/README.md) for the file format and the guarantees.
 
+## `pqc/` — post-quantum key encapsulation, and whether the web is ready (installable program)
+
+ML-KEM (FIPS 203, formerly CRYSTALS-Kyber) at all three parameter sets
+over [`stdlib/std/mlkem.nu`](../stdlib/std/mlkem.nu) — key generation,
+encapsulation, decapsulation — checked byte for byte against NIST's own
+ACVP vectors, all 180 published cases. No libcrypto, no liboqs; the
+binary links libc and nothing else.
+
+```
+nurlpkg install pqc
+pqc keygen -o demo             # demo.ek (1184 B) + demo.dk (2400 B)
+pqc encaps demo.ek -o demo.ct  # → ciphertext + shared secret
+pqc decaps demo.dk demo.ct     # → the same shared secret
+pqc probe cloudflare.com github.com   # who actually does post-quantum TLS?
+pqc bench                      # ~15k keygen/s, ~16k encaps/s on one core
+pqc kat                        # self-test against the NIST vectors
+```
+
+`pqc probe` is the part worth having on a laptop. It completes a real
+TLS 1.3 handshake and reports the key-exchange group the server chose:
+
+```
+host                              PQ?  group
+cloudflare.com                    PQ   X25519MLKEM768
+www.google.com                    PQ   X25519MLKEM768
+github.com                        no   x25519
+```
+
+That distinction is otherwise invisible. Offering the hybrid group is
+not the same as getting it — a server without ML-KEM falls back to
+X25519, the handshake succeeds, and nothing says so; traffic to it is
+recordable today and decryptable later. The probe works because
+`stdlib/std/tls.nu` offers `X25519MLKEM768` first by default, so every
+`tls_connect` in the tree already negotiates it where it can.
+
 ## `zst/` — Zstandard, with no Zstandard underneath (installable program)
 
 RFC 8878 in pure NURL, both directions, over
