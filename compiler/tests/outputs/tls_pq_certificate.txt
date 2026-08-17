@@ -1,0 +1,14 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+cert_parses           ok
+cert_carries_key      ok
+cert_self_signed      ok
+cert_sig_alg_mldsa65  ok
+handshake             ok
+group_is_pq           ok
+cv_scheme_mldsa65     ok
+cv_verifies           ok
+cv_rejects_tamper     ok
+server_accepted       ok

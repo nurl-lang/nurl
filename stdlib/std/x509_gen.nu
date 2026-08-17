@@ -34,6 +34,7 @@ $ `stdlib/std/bytes.nu`
 $ `stdlib/std/encode.nu`
 $ `stdlib/std/hash_sha256.nu`
 $ `stdlib/std/ecdsa_p256.nu`
+$ `stdlib/std/mldsa.nu`
 $ `stdlib/std/time.nu`
 
 & `c` @ nurl_rand_fill *u buf i n → i
@@ -375,5 +376,130 @@ $ `stdlib/std/time.nu`
     : i now ( now_seconds )
     : X509SelfSigned out ( x509_selfsigned_p256_pinned scalar serial cn - now 86400 + now * days 86400 )
     ( vec_free [u] scalar ) ( vec_free [u] serial )
+    ^ out
+}
+
+// ── ML-DSA certificates (FIPS 204) ─────────────────────────────────
+//
+// A certificate whose subject key and whose signature are both
+// post-quantum. Paired with X25519MLKEM768 for the key exchange, that
+// leaves a TLS 1.3 handshake with nothing in it a quantum computer
+// breaks: the traffic keys are not recoverable from a recording, and
+// the server's identity is not forgeable either.
+//
+// No public CA issues these yet, so in practice they are self-signed or
+// chained to a private root — which is exactly what this generates.
+
+// The OID naming an ML-DSA parameter set: 2.16.840.1.101.3.4.3.{17,18,19}.
+// One OID does the work of two here — it names both the key type and the
+// signature algorithm, because ML-DSA specifies its own hashing and so
+// has no "with-SHA256" half to encode.
+@ __xg_mldsa_oid i level → ( Vec u ) {
+    ? == level 44 { ^ ( __xg_oid `608648016503040311` ) } {}
+    ? == level 87 { ^ ( __xg_oid `608648016503040313` ) } {}
+    ^ ( __xg_oid `608648016503040312` )
+}
+
+@ __xg_alg_mldsa i level → ( Vec u ) {
+    ^ ( __xg_tlv 48 ( __xg_mldsa_oid level ) )
+}
+
+// SubjectPublicKeyInfo. The AlgorithmIdentifier carries no parameters —
+// absent, not NULL — since the OID already fixes the parameter set.
+@ __xg_spki_mldsa i level ( Vec u ) pk → ( Vec u ) {
+    : ~ ( Vec u ) algseq ( __xg_alg_mldsa level )
+    : ( Vec u ) bs ( __xg_bitstring pk )
+    ( bytes_extend_bytes algseq bs ) ( vec_free [u] bs )
+    ^ ( __xg_tlv 48 algseq )
+}
+
+// PKCS#8 OneAsymmetricKey: SEQ{ INTEGER 0, AlgorithmIdentifier,
+// OCTET STRING{ OCTET STRING(sk) } } — the inner OCTET STRING is the
+// `privateKey` wrapper every PKCS#8 key has.
+@ __xg_pkcs8_mldsa i level ( Vec u ) sk → ( Vec u ) {
+    : ~ ( Vec u ) body ( __xg_int1 0 )
+    : ( Vec u ) alg ( __xg_alg_mldsa level )
+    ( bytes_extend_bytes body alg ) ( vec_free [u] alg )
+    : ( Vec u ) inner ( __xg_tlv 4 sk )
+    : ( Vec u ) outer ( __xg_tlv 4 inner )
+    ( bytes_extend_bytes body outer ) ( vec_free [u] outer )
+    ^ ( __xg_tlv 48 body )
+}
+
+// Deterministic core: the caller supplies the key pair, the serial and
+// the validity instants. ML-DSA signing is hedged by default, so this
+// takes the 32-byte `rnd` too — with all of them fixed the certificate
+// is byte-reproducible, which is what makes it testable against a
+// pinned digest.
+@ x509_selfsigned_mldsa_pinned i level ( Vec u ) pk ( Vec u ) sk ( Vec u ) serial ( Vec u ) rnd s cn i not_before_unix i not_after_unix → X509SelfSigned {
+    : ~ ( Vec u ) tbs_body ( __xg_tlv 160 ( __xg_int1 2 ) )  // [0]{ INTEGER 2 } = v3
+    : ( Vec u ) ser ( __xg_int ( bytes_slice serial 0 ( vec_len [u] serial ) ) )
+    ( bytes_extend_bytes tbs_body ser ) ( vec_free [u] ser )
+    : ( Vec u ) alg1 ( __xg_alg_mldsa level )
+    ( bytes_extend_bytes tbs_body alg1 ) ( vec_free [u] alg1 )
+    : ( Vec u ) issuer ( __xg_name cn )
+    ( bytes_extend_bytes tbs_body issuer ) ( vec_free [u] issuer )
+    : ~ ( Vec u ) val ( __xg_utctime not_before_unix )
+    : ( Vec u ) na ( __xg_utctime not_after_unix )
+    ( bytes_extend_bytes val na ) ( vec_free [u] na )
+    : ( Vec u ) val_seq ( __xg_tlv 48 val )
+    ( bytes_extend_bytes tbs_body val_seq ) ( vec_free [u] val_seq )
+    : ( Vec u ) subject ( __xg_name cn )
+    ( bytes_extend_bytes tbs_body subject ) ( vec_free [u] subject )
+    : ( Vec u ) pub_copy ( bytes_slice pk 0 ( vec_len [u] pk ) )
+    : ( Vec u ) spki ( __xg_spki_mldsa level pub_copy )
+    ( bytes_extend_bytes tbs_body spki ) ( vec_free [u] spki )
+    : ( Vec u ) exts ( __xg_extensions cn )
+    ( bytes_extend_bytes tbs_body exts ) ( vec_free [u] exts )
+    : ( Vec u ) tbs ( __xg_tlv 48 tbs_body )
+
+    // Sign the TBS bytes themselves — ML-DSA hashes internally, so there
+    // is no digest step here the way there is for ECDSA or RSA. The
+    // context string is empty: X.509 has no place to carry one.
+    : ( Vec u ) ctx ( vec_new [u] )
+    : ( Vec u ) mp ( __xg_mldsa_mprime tbs ctx )
+    : ( Vec u ) sig ( mldsa_sign_internal level sk mp rnd )
+    ( vec_free [u] mp ) ( vec_free [u] ctx )
+
+    : ~ ( Vec u ) cert_body tbs
+    : ( Vec u ) alg2 ( __xg_alg_mldsa level )
+    ( bytes_extend_bytes cert_body alg2 ) ( vec_free [u] alg2 )
+    : ( Vec u ) sig_bs ( __xg_bitstring sig )
+    ( bytes_extend_bytes cert_body sig_bs ) ( vec_free [u] sig_bs )
+    : ( Vec u ) cert_der ( __xg_tlv 48 cert_body )
+
+    : ( Vec u ) sk_copy ( bytes_slice sk 0 ( vec_len [u] sk ) )
+    : ( Vec u ) key_der ( __xg_pkcs8_mldsa level sk_copy )
+
+    ^ @ X509SelfSigned {
+        ( __xg_pem `CERTIFICATE` cert_der )
+        ( __xg_pem `PRIVATE KEY` key_der )
+    }
+}
+
+// The message representative ML-DSA's external interface signs:
+// 0x00 ‖ |ctx| ‖ ctx ‖ M. Duplicated from std/mldsa.nu's private
+// helper rather than exported from it, because a certificate is the one
+// caller that needs to build it by hand — everything else goes through
+// mldsa_sign.
+@ __xg_mldsa_mprime ( Vec u ) msg ( Vec u ) ctx → ( Vec u ) {
+    : ( Vec u ) m ( vec_new [u] )
+    ( vec_push [u] m # u 0 )
+    ( vec_push [u] m # u ( vec_len [u] ctx ) )
+    ( bytes_extend_bytes m ctx )
+    ( bytes_extend_bytes m msg )
+    ^ m
+}
+
+// Convenience wrapper: fresh key, serial and signing randomness.
+@ x509_selfsigned_mldsa i level s cn i days → X509SelfSigned {
+    : *MldsaKeys ks ( mldsa_keygen level )
+    : ( Vec u ) serial ( __xg_rand_bytes 12 )
+    : ( Vec u ) rnd ( __xg_rand_bytes 32 )
+    : i now ( now_seconds )
+    : X509SelfSigned out ( x509_selfsigned_mldsa_pinned level ( mldsa_pk ks ) ( mldsa_sk ks )
+    serial rnd cn - now 86400 + now * days 86400 )
+    ( vec_free [u] rnd ) ( vec_free [u] serial )
+    ( mldsa_keys_free ks )
     ^ out
 }

@@ -22,6 +22,7 @@ $ `stdlib/std/time.nu`
 $ `stdlib/std/encode.nu`
 $ `stdlib/std/hash_sha256.nu`
 $ `stdlib/std/hash_sha512.nu`
+$ `stdlib/std/mldsa.nu`
 $ `stdlib/std/rsa.nu`
 $ `stdlib/std/ecdsa_p256.nu`
 $ `stdlib/std/x509.nu`
@@ -108,6 +109,22 @@ $ `stdlib/std/x509.nu`
         = ok ( rsa_pss_verify_sha256 . iss rsa_n . iss rsa_e sig h )
         ( vec_free [u] h )
     } {}
+    // ML-DSA. Unlike every branch above, nothing is hashed here first:
+    // ML-DSA takes the message and does its own hashing internally, so
+    // `msg` goes in whole. The scheme code has to agree with the key's
+    // parameter set — a certificate carrying an ML-DSA-65 key cannot
+    // produce an ML-DSA-44 signature, and accepting a mismatch would let
+    // a peer pick the weakest set regardless of the key it presented.
+    ? & == . iss key_alg 4 & >= alg 8 <= alg 10 {
+        : i want ? == alg 8 44 ? == alg 9 65 87
+        ? == . iss ec_curve want {
+            // The context string is empty in TLS, per the draft.
+            : ( Vec u ) ctx ( vec_new [u] )
+            = ok ( mldsa_verify want . iss ec_point msg ctx sig )
+            ( vec_free [u] ctx )
+        } {}
+    } {}
+
     // ECDSA P-256/SHA-256 and P-384/SHA-384.
     ? & == . iss key_alg 2 == alg 4 {
         : ( Vec u ) h ( sha256_pure msg )
@@ -142,6 +159,11 @@ $ `stdlib/std/x509.nu`
     ? == scheme 1025 { ^ 1 } {}  // 0x0401 rsa_pkcs1_sha256
     ? == scheme 1281 { ^ 2 } {}  // 0x0501 rsa_pkcs1_sha384
     ? == scheme 1537 { ^ 3 } {}  // 0x0601 rsa_pkcs1_sha512
+    // ML-DSA (draft-ietf-tls-mldsa). No hash is named because ML-DSA
+    // signs the message itself — the scheme code is the whole story.
+    ? == scheme 2308 { ^ 8 } {}  // 0x0904 mldsa44
+    ? == scheme 2309 { ^ 9 } {}  // 0x0905 mldsa65
+    ? == scheme 2310 { ^ 10 } {}  // 0x0906 mldsa87
     ^ 0
 }
 
@@ -404,17 +426,33 @@ $ `stdlib/std/x509.nu`
     ^ 3
 }
 
-@ tls_cert_verify ( Vec u ) cert_msg i cv_scheme ( Vec u ) cv_sig ( Vec u ) th_cert s hostname → i {
+// The CertificateVerify signature alone: does the leaf's key actually
+// sign this handshake?
+//
+// Split out from `tls_cert_verify` because it answers a different
+// question from chain and hostname validation, and callers that pin a
+// key or trust a private root need this half without the other. It is
+// also the half that proves possession — a certificate anyone can copy
+// says nothing until its key signs the transcript.
+@ tls_cv_verify ( Vec u ) cert_msg i cv_scheme ( Vec u ) cv_sig ( Vec u ) th_cert → b {
     : X509 leaf ( tls_leaf_cert cert_msg 0 )
-    ? ! . leaf ok { ( x509_free leaf ) ^ 2 } {}
-    // CertificateVerify over the leaf public key.
+    ? ! . leaf ok { ( x509_free leaf ) ^ F } {}
     : i alg ( __v_scheme_alg cv_scheme )
-    ? == alg 0 { ( x509_free leaf ) ^ 9 } {}
+    ? == alg 0 { ( x509_free leaf ) ^ F } {}
     : ( Vec u ) content ( __v_cv_content th_cert )
     : b cvok ( __v_sig_check leaf alg cv_sig content )
     ( vec_free [u] content )
     ( x509_free leaf )
-    ? ! cvok { ^ 3 } {}
+    ^ cvok
+}
+
+@ tls_cert_verify ( Vec u ) cert_msg i cv_scheme ( Vec u ) cv_sig ( Vec u ) th_cert s hostname → i {
+    : X509 leaf ( tls_leaf_cert cert_msg 0 )
+    ? ! . leaf ok { ( x509_free leaf ) ^ 2 } {}
+    : i alg ( __v_scheme_alg cv_scheme )
+    ( x509_free leaf )
+    ? == alg 0 { ^ 9 } {}
+    ? ! ( tls_cv_verify cert_msg cv_scheme cv_sig th_cert ) { ^ 3 } {}
     // Hostname + chain + anchor.
     ^ ( tls_chain_verify cert_msg 0 hostname )
 }
