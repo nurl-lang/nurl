@@ -30,6 +30,7 @@ $ `stdlib/std/x25519.nu`
 $ `stdlib/std/ecdsa_p256.nu`
 $ `stdlib/std/chacha20poly1305.nu`
 $ `stdlib/std/aes_gcm.nu`
+$ `stdlib/std/mlkem.nu`
 $ `stdlib/std/tls_verify.nu`
 
 & `libc` @ nurl_tcp_connect s host i port → i
@@ -106,6 +107,10 @@ $ `stdlib/std/tls_verify.nu`
     i cipher  // 0 = ChaCha20-Poly1305, 1 = AES-128-GCM
     i version  // 13 = TLS 1.3, 12 = TLS 1.2
     ( Vec u ) kx_p256  // P-256 ephemeral private key (empty if X25519 chosen)
+    ( Vec u ) kx_mlkem  // ML-KEM-768 decapsulation key (empty unless the
+    // hybrid group is chosen)
+    i kx_group  // negotiated group: 4588 X25519MLKEM768, 29 x25519,
+    // 23 secp256r1, 0 before the handshake reaches it
     ( Vec u ) alpn_sel  // ALPN protocol the server selected (empty if none)
 }
 
@@ -167,6 +172,41 @@ $ `stdlib/std/tls_verify.nu`
     : ~ i k 0
     ~ < k n { = acc | acc ( _t_bget v k ) = k + k 1 }
     ^ == acc 0
+}
+
+// X25519MLKEM768 (RFC 9370 group 0x11ec): turn the server's 1120-byte
+// key_share into the 64-byte secret the key schedule consumes.
+//
+// The server share is `ML-KEM-768 ciphertext (1088) ‖ X25519 public key
+// (32)`, and the result is `ML-KEM shared secret ‖ X25519 shared secret`
+// in the same order.
+//
+// Decapsulation cannot report failure — that is the point of ML-KEM's
+// implicit rejection, which returns an unpredictable key rather than an
+// error so an attacker learns nothing from probing. A wrong ciphertext
+// therefore surfaces here as a handshake that fails at Finished, which
+// is exactly the intended behaviour.
+//
+// The X25519 half still gets RFC 8446 §7.4.2's all-zero check on its
+// own. Checking only the concatenation would not do: a low-order peer
+// point makes the X25519 half all-zero while the ML-KEM half stays
+// random, so the pair looks fine and the classical half is silently
+// worthless. Returning an empty vector here makes the caller's
+// `_all_zero` test fail closed.
+@ __hybrid_shared * TlsConn c ( Vec u ) priv ( Vec u ) spub → ( Vec u ) {
+    : ( Vec u ) ct ( bytes_slice spub 0 1088 )
+    : ( Vec u ) xpub ( bytes_slice spub 1088 1120 )
+    : ( Vec u ) xs ( x25519 priv xpub )
+    ? ( _all_zero xs ) {
+        ( vec_free [u] xs ) ( vec_free [u] xpub ) ( vec_free [u] ct )
+        ^ ( vec_new [u] )
+    } {}
+    : ( Vec u ) out ( mlkem_decaps 768 . c kx_mlkem ct )
+    ( bytes_extend_bytes out xs )
+    ( vec_free [u] xs )
+    ( vec_free [u] xpub )
+    ( vec_free [u] ct )
+    ^ out
 }
 
 // RFC 8446 §4.1.3 downgrade sentinel: a TLS 1.3-capable client that ends up
@@ -395,7 +435,7 @@ $ `stdlib/std/tls_verify.nu`
 }
 
 // ── ClientHello ───────────────────────────────────────────────────
-@ __build_client_hello s host ( Vec u ) pubkey ( Vec u ) p256pub ( Vec u ) random ( Vec u ) sessid s alpn → ( Vec u ) {
+@ __build_client_hello s host ( Vec u ) pubkey ( Vec u ) p256pub ( Vec u ) pqpub ( Vec u ) random ( Vec u ) sessid s alpn → ( Vec u ) {
     : ( Vec u ) body ( vec_new [u] )
     ( _tls_u16 body 771 )  // legacy_version 0x0303
     ( _tls_cat body random )  // 32-byte random
@@ -440,11 +480,18 @@ $ `stdlib/std/tls_verify.nu`
     ( _blk16 ext sni )
     ( vec_free [u] sni )
 
-    // supported_groups (0x000a): x25519 (0x001d) + secp256r1 (0x0017).
-    // Both are offered so the server can pick whichever it is configured
-    // for — PostgreSQL/OpenSSL servers commonly default to P-256.
+    // supported_groups (0x000a): X25519MLKEM768 (0x11ec) first, then
+    // x25519 (0x001d) and secp256r1 (0x0017).
+    //
+    // The hybrid group leads because it is the only one here that
+    // survives a quantum adversary, and because it is what current
+    // browsers put first — servers that know it will take it. The two
+    // classical groups stay for everything else; PostgreSQL/OpenSSL
+    // servers commonly default to P-256. Order is a preference, not a
+    // demand: the server picks, and we sent a key share for all three.
     : ( Vec u ) grp ( vec_new [u] )
-    ( _tls_u16 grp 4 )
+    ( _tls_u16 grp 6 )
+    ( _tls_u16 grp 4588 )  // X25519MLKEM768 0x11ec
     ( _tls_u16 grp 29 )  // x25519
     ( _tls_u16 grp 23 )  // secp256r1
     ( _tls_u16 ext 10 )
@@ -483,11 +530,28 @@ $ `stdlib/std/tls_verify.nu`
     ( _blk16 ext epf )
     ( vec_free [u] epf )
 
-    // key_share (0x0033): both an x25519 (32-byte) and a secp256r1
-    // (65-byte uncompressed) entry, so whichever group the server selects
-    // we already supplied a matching public key — no HelloRetryRequest.
+    // key_share (0x0033): a share for each group we offered, so whichever
+    // one the server selects we already supplied a matching public key —
+    // no HelloRetryRequest round trip.
+    //
+    // The X25519MLKEM768 share is the concatenation
+    // `ML-KEM-768 encapsulation key ‖ X25519 public key` — 1184 + 32 =
+    // 1216 bytes, ML-KEM first. That order is specific to this group
+    // (SecP256r1MLKEM768 puts the classical part first) and getting it
+    // backwards produces a handshake that fails only at Finished.
+    //
+    // It also makes the ClientHello roughly 1.5 kB, so it no longer fits
+    // in one TCP segment. That is ordinary — every browser sending this
+    // group has the same shape — but it does mean a path that silently
+    // drops large handshake packets will now fail where it used to work.
     : ( Vec u ) ks ( vec_new [u] )
     : ( Vec u ) entry ( vec_new [u] )
+    ? > ( vec_len [u] pqpub ) 0 {
+        ( _tls_u16 entry 4588 )  // group X25519MLKEM768
+        ( _tls_u16 entry + ( vec_len [u] pqpub ) 32 )  // 1216
+        ( _tls_cat entry pqpub )
+        ( _tls_cat entry pubkey )
+    } {}
     ( _tls_u16 entry 29 )  // group x25519
     ( _tls_u16 entry 32 )  // key_exchange length
     ( _tls_cat entry pubkey )
@@ -709,6 +773,8 @@ $ `stdlib/std/tls_verify.nu`
     = . c cipher 0
     = . c version 13
     = . c kx_p256 ( vec_new [u] )
+    = . c kx_mlkem ( vec_new [u] )
+    = . c kx_group 0
     = . c alpn_sel ( vec_new [u] )
 
     // ── key share ──
@@ -718,6 +784,14 @@ $ `stdlib/std/tls_verify.nu`
     : ( Vec u ) p256pub ( p256_ecdh_keygen p256priv )
     ( vec_free [u] . c kx_p256 )
     = . c kx_p256 p256priv
+    // ML-KEM-768 for the hybrid group. The decapsulation key lives on the
+    // connection until the server's share arrives; the encapsulation key
+    // travels in the ClientHello.
+    : *MlkemKeys pqkeys ( mlkem_keygen 768 )
+    : ( Vec u ) pqpub ( bytes_slice ( mlkem_ek pqkeys ) 0 ( vec_len [u] ( mlkem_ek pqkeys ) ) )
+    ( vec_free [u] . c kx_mlkem )
+    = . c kx_mlkem ( bytes_slice ( mlkem_dk pqkeys ) 0 ( vec_len [u] ( mlkem_dk pqkeys ) ) )
+    ( mlkem_keys_free pqkeys )
     : ( Vec u ) random ( _rand_bytes 32 )
     : ( Vec u ) sessid ( _rand_bytes 32 )
 
@@ -725,7 +799,8 @@ $ `stdlib/std/tls_verify.nu`
     : ~ ( Vec u ) tr ( vec_new [u] )
 
     // ── ClientHello ──
-    : ( Vec u ) ch ( __build_client_hello server_name cpub p256pub random sessid alpn )
+    : ( Vec u ) ch ( __build_client_hello server_name cpub p256pub pqpub random sessid alpn )
+    ( vec_free [u] pqpub )
     ( vec_free [u] p256pub )
     ( _tls_cat tr ch )
     : !v TlsErr sw ( _send_plain c 22 ch )
@@ -749,8 +824,19 @@ $ `stdlib/std/tls_verify.nu`
 
     // ── key schedule (handshake) ──
     // Distinguish the negotiated group by the server key-exchange length:
-    // X25519 is 32 bytes, secp256r1 an uncompressed point is 65.
-    : ( Vec u ) ecdhe ? == ( vec_len [u] spub ) 65 ( p256_ecdh_shared . c kx_p256 spub ) ( x25519 priv spub )
+    // X25519 is 32 bytes, an uncompressed secp256r1 point is 65, and the
+    // X25519MLKEM768 share is 1088 + 32 = 1120.
+    //
+    // For the hybrid group the shared secret handed to the key schedule
+    // is `ML-KEM shared secret ‖ X25519 shared secret` — 64 bytes, ML-KEM
+    // first, matching the order of the shares. Concatenation is what
+    // makes it a hybrid worth having: HKDF-Extract over the pair is at
+    // least as strong as either half, so the handshake survives ML-KEM
+    // being broken *and* survives X25519 being broken.
+    = . c kx_group ? == ( vec_len [u] spub ) 1120 4588 ? == ( vec_len [u] spub ) 65 23 29
+    : ( Vec u ) ecdhe ? == ( vec_len [u] spub ) 1120
+    ( __hybrid_shared c priv spub )
+    ? == ( vec_len [u] spub ) 65 ( p256_ecdh_shared . c kx_p256 spub ) ( x25519 priv spub )
     // H3: RFC 8446 §7.4.2 — abort if the ECDHE output is all-zero (peer sent a
     // low-order / small-subgroup point forcing a known shared secret).
     ? ( _all_zero ecdhe ) {
@@ -879,6 +965,28 @@ $ `stdlib/std/tls_verify.nu`
 }
 
 // The ALPN protocol the server selected, as an owned String ("" if none).
+// The key-exchange group the server selected, as its IANA number:
+//
+//   4588  X25519MLKEM768   hybrid, post-quantum + X25519
+//     29  x25519
+//     23  secp256r1
+//      0  not negotiated yet, or a TLS 1.2 handshake
+//
+// Worth checking rather than assuming: offering the hybrid group does
+// not mean getting it, and the difference is the whole point. A server
+// that has not deployed ML-KEM silently falls back to X25519, and the
+// handshake looks identical from every other angle.
+@ tls_group * TlsConn c → i {
+    ^ . c kx_group
+}
+
+// T when the negotiated group carries a post-quantum component, so the
+// session's forward secrecy survives a future quantum adversary
+// recording it today.
+@ tls_is_post_quantum * TlsConn c → b {
+    ^ == . c kx_group 4588
+}
+
 @ tls_alpn_selected * TlsConn c → String {
     : String s ( string_new )
     : i n ( vec_len [u] . c alpn_sel )
@@ -1086,6 +1194,7 @@ $ `stdlib/std/tls_verify.nu`
     ( vec_free [u] . c cv_sig )
     ( vec_free [u] . c th_cert )
     ( vec_free [u] . c kx_p256 )
+    ( vec_free [u] . c kx_mlkem )
     ( vec_free [u] . c alpn_sel )
     ( nurl_free # s c )
 }

@@ -1,0 +1,20 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+sha3-256 empty  ok
+sha3-512 empty  ok
+sha3-224 abc    ok
+sha3-256 abc    ok
+sha3-384 abc    ok
+sha3-512 abc    ok
+sha3-256 135x   ok
+sha3-256 136x   ok
+sha3-512 168x   ok
+shake128 abc32  ok
+shake256 abc64  ok
+shake128 400b   ok
+shake256 1000b  ok
+sha3-256 4352b  ok
+absorb pieces   ok
+squeeze by 3    ok

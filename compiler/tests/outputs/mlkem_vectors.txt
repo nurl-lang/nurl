@@ -1,0 +1,18 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+keygen-512#1     ok
+keygen-512#2     ok
+keygen-512#3     ok
+keygen-768#1     ok
+keygen-768#2     ok
+keygen-768#3     ok
+keygen-1024#1    ok
+keygen-1024#2    ok
+keygen-1024#3    ok
+encaps-768       ok
+decaps-768       ok
+roundtrip-512    ok
+roundtrip-768    ok
+roundtrip-1024   ok

@@ -277,6 +277,11 @@ $ `stdlib/std/aes_gcm.nu`
     = . c cert_msg ( vec_new [u] ) = . c cv_sig ( vec_new [u] ) = . c th_cert ( vec_new [u] )
     = . c cv_scheme 0 = . c version 13
     = . c kx_p256 ( vec_new [u] )
+    // The server side does not offer the hybrid group yet, but the field
+    // is part of TlsConn and tls_free will release it, so it has to hold
+    // a real empty Vec rather than whatever the allocation started as.
+    = . c kx_mlkem ( vec_new [u] )
+    = . c kx_group 0
     = . c alpn_sel ( vec_new [u] )
 
     : ( Vec u ) tr ( vec_new [u] )
