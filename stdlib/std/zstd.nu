@@ -241,38 +241,13 @@ $ `stdlib/std/hash_xxh64.nu`
     ^ ( __zs_bits_edge src len off n )
 }
 
+// The cursor-carrying form, for the paths where a struct is clearer
+// than threading an offset through: the Huffman streams and the weight
+// decoder, which read far fewer bits per call than the sequence loop.
 @ __zs_bk_take * ZsBk b i n → i {
     ? == n 0 { ^ 0 } {}
     = . b off - . b off n
-    : i off . b off
-    ? >= off 0 {
-        // Fast path — 37 % of decode time was spent in the byte-at-a-
-        // time loop below. Eight consecutive byte loads with constant
-        // shifts is a pattern LLVM folds into ONE unaligned 64-bit
-        // load, which is the instruction this wants and the language
-        // has no way to spell directly. Reads are at most 32 bits, so
-        // 64 bits minus a 7-bit misalignment always covers them.
-        : i bytepos >> off 3
-        ? <= + bytepos 8 . b len {
-            : *u sp . b src
-            : i lo | | | # i . sp bytepos
-            << # i . sp + bytepos 1 8
-            << # i . sp + bytepos 2 16
-            << # i . sp + bytepos 3 24
-            : i hi | | | # i . sp + bytepos 4
-            << # i . sp + bytepos 5 8
-            << # i . sp + bytepos 6 16
-            << # i . sp + bytepos 7 24
-            : i word | lo << hi 32
-            ^ & >> # u64 word & off 7 - << 1 n 1
-        } {}
-        ^ ( __zs_rd_le . b src n off )
-    } {}
-    : i have + n off
-    : ~ i r 0
-    ? > have 0 { = r ( __zs_rd_le . b src have 0 ) } {}
-    : i sh - 0 off
-    ^ ? >= sh 64 0 << r sh
+    ^ ( __zs_bits . b src . b len . b off n )
 }
 
 // Position a backward reader at the last information bit: the final
@@ -398,11 +373,6 @@ $ `stdlib/std/hash_xxh64.nu`
     = . tp 0 sym
 }
 
-@ __zs_fse_sym ( Vec i ) tab i state → i {
-    : *i tp ( vec_data [i] tab )
-    ^ & # i . tp state 255
-}
-
 // ── Huffman ─────────────────────────────────────────────────────────
 
 // Build a decoding table from per-symbol code lengths. Entries are
@@ -498,13 +468,6 @@ $ `stdlib/std/hash_xxh64.nu`
         = . d ocap ( vec_cap [u] . d out )
         ? < . d ocap want { = . d err ZSE_CORRUPT } {}
     } {}
-}
-
-@ __zs_put * ZsDec d i byte → v {
-    ( __zs_need d 1 )
-    ? != . d err 0 { ^ v } {}
-    = . . d op . d olen # u byte
-    = . d olen + . d olen 1
 }
 
 // ── Literals ────────────────────────────────────────────────────────
