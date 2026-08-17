@@ -8,6 +8,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **The post-quantum stack got 12–29% faster, from two changes the
+  profile picked.** Nothing was guessed: `perf --call-graph lbr` put
+  `__keccakf1600` at **40.6%** of all PQ time — everything in both
+  schemes rides on SHAKE — and a disassembly histogram showed the round
+  compiling to **191 `mov`s against ~155 real ALU instructions**. More
+  than half the work was spilling.
+
+  The cause: materialising all 25 ρ+π results and then running χ over
+  them leaves 35 values live on a 16-register machine. χ cannot consume
+  them a row at a time in place, because ρ+π scatters lanes across rows
+  and χ's first row would overwrite lanes its fourth row still needs.
+  Writing each χ row into a *second* buffer removes the conflict, so
+  only one row's five values need to exist at once — live set drops to
+  ten. The buffers ping-pong; 24 rounds is even, so the state lands back
+  where the caller left it. Round: 367 → 249 instructions, `mov`s 191 →
+  73, with `rol`/`xor`/`not`/`and` counts unchanged. SHAKE128 squeeze:
+  **260 → 354 MB/s**.
+
+  Then ML-DSA's rounding. `Decompose`, `Power2Round` and `UseHint` were
+  written in the spec's `mod±` form, which reads as a remainder and
+  compiles to `idiv`; they run 256·k times per signing attempt and
+  signing retries several times. The reciprocal-multiply forms are
+  division-free, and `MakeHint` now derives the hint from the decomposed
+  pair the signer already has rather than calling `HighBits` twice per
+  coefficient.
+
+  | | before | after |
+  |---|---|---|
+  | ML-KEM-768 keygen | 18.3k/s | 20.8k/s |
+  | ML-KEM-1024 keygen | 11.9k/s | 14.2k/s |
+  | ML-DSA-65 keygen | 4.8k/s | 6.1k/s |
+  | ML-DSA-65 sign | 1356/s | 1737/s |
+  | ML-DSA-44 verify | 7.7k/s | 9.8k/s |
+
+  Every ACVP vector still passes byte-for-byte — 180 ML-KEM and 615
+  ML-DSA — which is the point of having them: a rewrite of the
+  permutation and of three rounding routines is exactly the change that
+  needs an oracle it cannot influence.
+
 ### Added
 
 - **HashML-DSA (FIPS 204 §5.4), and the three SHA-2 variants it needed.**
