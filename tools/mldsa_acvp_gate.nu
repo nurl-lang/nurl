@@ -9,11 +9,14 @@
 // The JSON is NIST's own `internalProjection.json`, carrying expected
 // outputs beside the inputs, so every case is a byte-exact comparison.
 //
-//   keyGen   seed        -> pk, sk
-//   sigGen   sk, message -> signature   (deterministic and hedged,
-//                                        internal and external, and the
-//                                        external-mu interface)
-//   sigVer   pk, message, signature -> accept / reject
+//   keyGen    75  seed        -> pk, sk
+//   sigGen   360  sk, message -> signature
+//   sigVer   180  pk, message, signature -> accept / reject
+//
+// sigGen and sigVer each cover every interface FIPS 204 defines:
+// deterministic and hedged, internal and external, external-mu, and
+// HashML-DSA across all twelve approved pre-hash algorithms. Nothing is
+// skipped.
 //
 // The sigVer set is the valuable half: only a fifth of its cases are
 // valid signatures. The rest are tampered in one of four specific ways
@@ -21,8 +24,11 @@
 // hint — and a verifier that accepts any of them is broken in a way no
 // amount of round-tripping would reveal.
 //
-// HashML-DSA (the `preHash` groups) is not implemented, so those cases
-// are counted as skipped and the count is printed rather than hidden.
+// The pre-hash cases earn their place: they are what caught the OID in
+// the message representative being written as bare content bytes rather
+// than a full DER encoding (missing the two-byte 06 09 tag and length).
+// Signing and verifying both used the same wrong bytes, so every round
+// trip agreed and nothing but a foreign vector could have noticed.
 $ `stdlib/core/vec.nu`
 $ `stdlib/core/string.nu`
 $ `stdlib/std/bytes.nu`
@@ -48,6 +54,24 @@ $ `stdlib/std/mldsa.nu`
 @ __hexv s h → ( Vec u ) {
     ? == ( nurl_str_len h ) 0 { ^ ( vec_new [u] ) } {}
     ?? ( bytes_from_hex h ) { T v → { ^ v } F _e → { ^ ( vec_new [u] ) } }
+}
+
+// ACVP names the pre-hash algorithm as a string; map it to the code
+// std/mldsa.nu takes. 0 = not one we implement.
+@ __ph_alg s h → i {
+    ? != 0 ( nurl_str_eq h `SHA2-224` ) { ^ 1 } {}
+    ? != 0 ( nurl_str_eq h `SHA2-256` ) { ^ 2 } {}
+    ? != 0 ( nurl_str_eq h `SHA2-384` ) { ^ 3 } {}
+    ? != 0 ( nurl_str_eq h `SHA2-512` ) { ^ 4 } {}
+    ? != 0 ( nurl_str_eq h `SHA2-512/224` ) { ^ 5 } {}
+    ? != 0 ( nurl_str_eq h `SHA2-512/256` ) { ^ 6 } {}
+    ? != 0 ( nurl_str_eq h `SHA3-224` ) { ^ 7 } {}
+    ? != 0 ( nurl_str_eq h `SHA3-256` ) { ^ 8 } {}
+    ? != 0 ( nurl_str_eq h `SHA3-384` ) { ^ 9 } {}
+    ? != 0 ( nurl_str_eq h `SHA3-512` ) { ^ 10 } {}
+    ? != 0 ( nurl_str_eq h `SHAKE-128` ) { ^ 11 } {}
+    ? != 0 ( nurl_str_eq h `SHAKE-256` ) { ^ 12 } {}
+    ^ 0
 }
 
 @ __level Json g → i {
@@ -109,9 +133,9 @@ $ `stdlib/std/mldsa.nu`
     ( __report `keyGen` kp kf 0 )
     = totfail + totfail kf
 
-    // ── sigGen: internal interface and external pure only.
-    // preHash needs SHA-2, which is a different module's job; those
-    // groups are counted as skipped rather than silently ignored.
+    // ── sigGen: every interface, including HashML-DSA. A group whose
+    // pre-hash algorithm this module does not know is counted as
+    // skipped rather than silently passed over.
     : Json sg ( __load ( nurl_argv_get 2 ) )
     : Json sgg ?? ( json_obj_get sg `testGroups` ) { T v → { v } F → { ( json_null ) } }
     : ~ i sp 0
@@ -139,22 +163,27 @@ $ `stdlib/std/mldsa.nu`
                 ? ( __eqhex sig ( __str tc `signature` ) ) { = sp + sp 1 } { = sf + sf 1 }
                 ( vec_free [u] sig ) ( vec_free [u] rnd ) ( vec_free [u] mu ) ( vec_free [u] sk )
             } {
-                ? ! | internal pure { = ss + ss 1 } {
+                ? & ! | internal pure == 0 ( __ph_alg ( __str tc `hashAlg` ) ) { = ss + ss 1 } {
                     : ( Vec u ) sk ( __hexv ( __str tc `sk` ) )
                     : ( Vec u ) msg ( __hexv ( __str tc `message` ) )
                     : ( Vec u ) rnd ? det ( __hexv `0000000000000000000000000000000000000000000000000000000000000000` ) ( __hexv ( __str tc `rnd` ) )
+                    : ( Vec u ) ctx ( __hexv ( __str tc `context` ) )
                     : ~ ( Vec u ) mp ( vec_new [u] )
                     ? internal {
                         ( vec_free [u] mp )
                         = mp ( bytes_slice msg 0 ( vec_len [u] msg ) )
                     } {
-                        : ( Vec u ) ctx ( __hexv ( __str tc `context` ) )
-                        ( vec_push [u] mp # u 0 )
-                        ( vec_push [u] mp # u ( vec_len [u] ctx ) )
-                        ( bytes_extend_bytes mp ctx )
-                        ( bytes_extend_bytes mp msg )
-                        ( vec_free [u] ctx )
+                        ? pure {
+                            ( vec_push [u] mp # u 0 )
+                            ( vec_push [u] mp # u ( vec_len [u] ctx ) )
+                            ( bytes_extend_bytes mp ctx )
+                            ( bytes_extend_bytes mp msg )
+                        } {
+                            ( vec_free [u] mp )
+                            = mp ( mldsa_ph_mprime ( __ph_alg ( __str tc `hashAlg` ) ) msg ctx )
+                        }
                     }
+                    ( vec_free [u] ctx )
                     : ( Vec u ) sig ( mldsa_sign_internal level sk mp rnd )
                     ? ( __eqhex sig ( __str tc `signature` ) ) { = sp + sp 1 } { = sf + sf 1 }
                     ( vec_free [u] sig )
@@ -197,22 +226,27 @@ $ `stdlib/std/mldsa.nu`
                 ? == ( mldsa_verify_mu level pk mu sig ) ( __bool tc `testPassed` ) { = vp + vp 1 } { = vf + vf 1 }
                 ( vec_free [u] sig ) ( vec_free [u] mu ) ( vec_free [u] pk )
             } {
-                ? ! | internal pure { = vs + vs 1 } {
+                ? & ! | internal pure == 0 ( __ph_alg ( __str tc `hashAlg` ) ) { = vs + vs 1 } {
                     : ( Vec u ) pk ( __hexv ( __str tc `pk` ) )
                     : ( Vec u ) msg ( __hexv ( __str tc `message` ) )
                     : ( Vec u ) sig ( __hexv ( __str tc `signature` ) )
+                    : ( Vec u ) ctx ( __hexv ( __str tc `context` ) )
                     : ~ ( Vec u ) mp ( vec_new [u] )
                     ? internal {
                         ( vec_free [u] mp )
                         = mp ( bytes_slice msg 0 ( vec_len [u] msg ) )
                     } {
-                        : ( Vec u ) ctx ( __hexv ( __str tc `context` ) )
-                        ( vec_push [u] mp # u 0 )
-                        ( vec_push [u] mp # u ( vec_len [u] ctx ) )
-                        ( bytes_extend_bytes mp ctx )
-                        ( bytes_extend_bytes mp msg )
-                        ( vec_free [u] ctx )
+                        ? pure {
+                            ( vec_push [u] mp # u 0 )
+                            ( vec_push [u] mp # u ( vec_len [u] ctx ) )
+                            ( bytes_extend_bytes mp ctx )
+                            ( bytes_extend_bytes mp msg )
+                        } {
+                            ( vec_free [u] mp )
+                            = mp ( mldsa_ph_mprime ( __ph_alg ( __str tc `hashAlg` ) ) msg ctx )
+                        }
                     }
+                    ( vec_free [u] ctx )
                     : b got ( mldsa_verify_internal level pk mp sig )
                     : b want ( __bool tc `testPassed` )
                     ? == got want { = vp + vp 1 } { = vf + vf 1 }

@@ -15,3 +15,6 @@ roundtrip-87    ok
 hint-44         ok
 hint-65         ok
 hint-87         ok
+prehash-44            ok
+prehash-65            ok
+prehash-87            ok

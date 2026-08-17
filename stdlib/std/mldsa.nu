@@ -51,6 +51,8 @@
 $ `stdlib/core/vec.nu`
 $ `stdlib/std/bytes.nu`
 $ `stdlib/std/hash_sha3.nu`
+$ `stdlib/std/hash_sha256.nu`
+$ `stdlib/std/hash_sha512.nu`
 $ `stdlib/std/random.nu`
 $ `stdlib/std/subtle.nu`
 
@@ -1300,6 +1302,160 @@ MldsaParams p ( Vec u ) out → v {
 @ mldsa_verify i level ( Vec u ) pk ( Vec u ) msg ( Vec u ) ctx ( Vec u ) sig → b {
     ? > ( vec_len [u] ctx ) 255 { ^ F } {}
     : ( Vec u ) mp ( __mldsa_mprime msg ctx )
+    : b ok ( mldsa_verify_internal level pk mp sig )
+    ( vec_free [u] mp )
+    ^ ok
+}
+
+// ── HashML-DSA (FIPS 204 §5.4) ─────────────────────────────────────
+//
+// The pre-hash variant: instead of signing the message, sign a digest
+// of it under a named hash. That lets a signer handle a message it
+// never holds whole — a multi-gigabyte file streamed past a hash — and
+// lets a protocol that already has a digest avoid carrying the message
+// to the signer at all.
+//
+// The named hash is not a free choice made at signing time and forgotten:
+// its OID goes *into* the signed message representative, so a signature
+// over a SHA2-256 digest cannot be reinterpreted as one over a SHA3-256
+// digest of some other message. That binding is the whole reason
+// HashML-DSA is a distinct mode rather than "just hash it yourself".
+//
+//   M' = 0x01 ‖ |ctx| ‖ ctx ‖ OID(hash) ‖ H(M)
+//
+// against the pure mode's `0x00 ‖ |ctx| ‖ ctx ‖ M`. The leading byte is
+// what keeps the two from ever colliding.
+//
+// The twelve approved hashes, by the code this module takes:
+//
+//   1 SHA2-224     2 SHA2-256     3 SHA2-384     4 SHA2-512
+//   5 SHA2-512/224 6 SHA2-512/256 7 SHA3-224     8 SHA3-256
+//   9 SHA3-384    10 SHA3-512    11 SHAKE-128   12 SHAKE-256
+//
+// SHAKE-128 and SHAKE-256 are squeezed to 32 and 64 bytes respectively,
+// the lengths FIPS 204 fixes for this use.
+
+@ MLDSA_SHA2_224 → i { ^ 1 }
+
+@ MLDSA_SHA2_256 → i { ^ 2 }
+
+@ MLDSA_SHA2_384 → i { ^ 3 }
+
+@ MLDSA_SHA2_512 → i { ^ 4 }
+
+@ MLDSA_SHA2_512_224 → i { ^ 5 }
+
+@ MLDSA_SHA2_512_256 → i { ^ 6 }
+
+@ MLDSA_SHA3_224 → i { ^ 7 }
+
+@ MLDSA_SHA3_256 → i { ^ 8 }
+
+@ MLDSA_SHA3_384 → i { ^ 9 }
+
+@ MLDSA_SHA3_512 → i { ^ 10 }
+
+@ MLDSA_SHAKE_128 → i { ^ 11 }
+
+@ MLDSA_SHAKE_256 → i { ^ 12 }
+
+// The full DER encoding of 2.16.840.1.101.3.4.2.n, as hex — tag 0x06,
+// length 0x09, then the nine content bytes. FIPS 204 §5.4 puts the
+// *encoded* OID into the message representative, not its content bytes;
+// dropping the two-byte header produces signatures that verify against
+// nothing and is invisible until you compare with a real vector.
+// Empty for an unknown code, which the callers turn into a refusal.
+@ __mldsa_ph_oid_hex i alg → s {
+    ? == alg 1 { ^ `0609608648016503040204` } {}
+    ? == alg 2 { ^ `0609608648016503040201` } {}
+    ? == alg 3 { ^ `0609608648016503040202` } {}
+    ? == alg 4 { ^ `0609608648016503040203` } {}
+    ? == alg 5 { ^ `0609608648016503040205` } {}
+    ? == alg 6 { ^ `0609608648016503040206` } {}
+    ? == alg 7 { ^ `0609608648016503040207` } {}
+    ? == alg 8 { ^ `0609608648016503040208` } {}
+    ? == alg 9 { ^ `0609608648016503040209` } {}
+    ? == alg 10 { ^ `060960864801650304020a` } {}
+    ? == alg 11 { ^ `060960864801650304020b` } {}
+    ? == alg 12 { ^ `060960864801650304020c` } {}
+    ^ ``
+}
+
+@ __mldsa_ph_digest i alg ( Vec u ) msg → ( Vec u ) {
+    ? == alg 1 { ^ ( sha224_pure msg ) } {}
+    ? == alg 2 { ^ ( sha256_pure msg ) } {}
+    ? == alg 3 { ^ ( sha384_pure msg ) } {}
+    ? == alg 4 { ^ ( sha512_pure msg ) } {}
+    ? == alg 5 { ^ ( sha512_224_pure msg ) } {}
+    ? == alg 6 { ^ ( sha512_256_pure msg ) } {}
+    ? == alg 7 { ^ ( sha3_224_pure msg ) } {}
+    ? == alg 8 { ^ ( sha3_256_pure msg ) } {}
+    ? == alg 9 { ^ ( sha3_384_pure msg ) } {}
+    ? == alg 10 { ^ ( sha3_512_pure msg ) } {}
+    ? == alg 11 { ^ ( shake128_pure msg 32 ) } {}
+    ? == alg 12 { ^ ( shake256_pure msg 64 ) } {}
+    ^ ( vec_new [u] )
+}
+
+// The HashML-DSA message representative, `0x01 ‖ |ctx| ‖ ctx ‖ OID ‖
+// H(M)`. Returns an empty Vec when the hash code is not one of the
+// twelve.
+//
+// Public because two real callers need it and neither is served by
+// `mldsa_sign_prehash`: something that wants to sign with a specific
+// `rnd` rather than a fresh draw (the ACVP vectors, a deterministic
+// build), and something that already holds the digest and never had
+// the message.
+@ mldsa_ph_mprime i alg ( Vec u ) msg ( Vec u ) ctx → ( Vec u ) {
+    : s oidhex ( __mldsa_ph_oid_hex alg )
+    ? == ( nurl_str_len oidhex ) 0 { ^ ( vec_new [u] ) } {}
+    : !( Vec u ) ParseErr r ( bytes_from_hex oidhex )
+    : ( Vec u ) oid ?? r { T v → { v } F _e → { ( vec_new [u] ) } }
+    : ( Vec u ) dig ( __mldsa_ph_digest alg msg )
+    : ( Vec u ) m ( vec_new [u] )
+    ( vec_push [u] m # u 1 )
+    ( vec_push [u] m # u ( vec_len [u] ctx ) )
+    ( bytes_extend_bytes m ctx )
+    ( bytes_extend_bytes m oid )
+    ( bytes_extend_bytes m dig )
+    ( vec_free [u] dig )
+    ( vec_free [u] oid )
+    ^ m
+}
+
+// Sign a digest of `msg` under the named hash, bound to `ctx`. Hedged,
+// like `mldsa_sign`. Returns an empty Vec for an unknown hash code or a
+// context longer than 255 bytes.
+@ mldsa_sign_prehash i level ( Vec u ) sk ( Vec u ) msg ( Vec u ) ctx i alg → ( Vec u ) {
+    ? > ( vec_len [u] ctx ) 255 { ^ ( vec_new [u] ) } {}
+    : ( Vec u ) mp ( mldsa_ph_mprime alg msg ctx )
+    ? == ( vec_len [u] mp ) 0 { ( vec_free [u] mp ) ^ ( vec_new [u] ) } {}
+    : ( Vec u ) rnd ( rand_bytes 32 )
+    : ( Vec u ) sig ( mldsa_sign_internal level sk mp rnd )
+    ( vec_free [u] rnd )
+    ( vec_free [u] mp )
+    ^ sig
+}
+
+// Deterministic HashML-DSA, for interoperability and for the ACVP
+// vectors; `mldsa_sign_prehash` is the better default.
+@ mldsa_sign_prehash_deterministic i level ( Vec u ) sk ( Vec u ) msg ( Vec u ) ctx i alg → ( Vec u ) {
+    ? > ( vec_len [u] ctx ) 255 { ^ ( vec_new [u] ) } {}
+    : ( Vec u ) mp ( mldsa_ph_mprime alg msg ctx )
+    ? == ( vec_len [u] mp ) 0 { ( vec_free [u] mp ) ^ ( vec_new [u] ) } {}
+    : ( Vec u ) rnd ( vec_with_cap [u] 32 )
+    : ~ i i 0
+    ~ < i 32 { ( vec_push [u] rnd # u 0 ) = i + i 1 }
+    : ( Vec u ) sig ( mldsa_sign_internal level sk mp rnd )
+    ( vec_free [u] rnd )
+    ( vec_free [u] mp )
+    ^ sig
+}
+
+@ mldsa_verify_prehash i level ( Vec u ) pk ( Vec u ) msg ( Vec u ) ctx i alg ( Vec u ) sig → b {
+    ? > ( vec_len [u] ctx ) 255 { ^ F } {}
+    : ( Vec u ) mp ( mldsa_ph_mprime alg msg ctx )
+    ? == ( vec_len [u] mp ) 0 { ( vec_free [u] mp ) ^ F } {}
     : b ok ( mldsa_verify_internal level pk mp sig )
     ( vec_free [u] mp )
     ^ ok

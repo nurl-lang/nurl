@@ -339,3 +339,40 @@ $ `stdlib/std/bytes.nu`
     ( vec_free [u] kbuf )
     ^ mac
 }
+
+// ── SHA-512/224 and SHA-512/256 (FIPS 180-4 §6.7) ──────────────────
+//
+// Not truncations of SHA-512: each has its own initial state, derived
+// by running SHA-512 with an IV of the standard one XOR 0xa5a5…, so
+// SHA-512/256(m) and the first 32 bytes of SHA-512(m) are different
+// values. Getting that wrong produces a hash that looks plausible and
+// interoperates with nothing.
+//
+// On a 64-bit machine these are faster than SHA-256 for the same output
+// width, because the compression function works on 64-bit words.
+
+@ sha512_224_pure ( Vec u ) data → ( Vec u ) {
+    : ( Vec u64 ) state ( vec_with_cap [u64] 8 )
+    ( vec_push [u64] state # u64 -8341449602262348382 )
+    ( vec_push [u64] state # u64 8350123849800275158 )
+    ( vec_push [u64] state # u64 2160240930085379202 )
+    ( vec_push [u64] state # u64 7466358040605728719 )
+    ( vec_push [u64] state # u64 1111592415079452072 )
+    ( vec_push [u64] state # u64 8638871050018654530 )
+    ( vec_push [u64] state # u64 4583966954114332360 )
+    ( vec_push [u64] state # u64 1230299281376055969 )
+    ^ ( __sha512_finish data state 28 )
+}
+
+@ sha512_256_pure ( Vec u ) data → ( Vec u ) {
+    : ( Vec u64 ) state ( vec_with_cap [u64] 8 )
+    ( vec_push [u64] state # u64 2463787394917988140 )
+    ( vec_push [u64] state # u64 -6965556091613846334 )
+    ( vec_push [u64] state # u64 2563595384472711505 )
+    ( vec_push [u64] state # u64 -7622211418569250115 )
+    ( vec_push [u64] state # u64 -7626776825740460061 )
+    ( vec_push [u64] state # u64 -4729309413028513390 )
+    ( vec_push [u64] state # u64 3098927326965381290 )
+    ( vec_push [u64] state # u64 1060366662362279074 )
+    ^ ( __sha512_finish data state 32 )
+}

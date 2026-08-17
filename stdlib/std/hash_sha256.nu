@@ -335,3 +335,31 @@ $ `stdlib/std/bytes.nu`
     ( vec_free [u] kbuf )
     ^ mac
 }
+
+// ── SHA-224 (FIPS 180-4 §6.2) ──────────────────────────────────────
+//
+// The SHA-256 compression function with a different initial state,
+// truncated to 224 bits. Nothing else changes — same block size, same
+// round constants, same schedule — which is why this reuses the whole
+// machinery above rather than repeating it.
+//
+// It exists here for HashML-DSA: FIPS 204's pre-hash mode names twelve
+// approved digests by OID, and a caller who picks SHA2-224 needs the
+// signer to compute exactly that.
+@ sha224_pure ( Vec u ) data → ( Vec u ) {
+    : *Sha256 h ( sha256_init )
+    : *u32 sp ( vec_data [u32] . h state )
+    = . sp 0 # u32 3238371032
+    = . sp 1 # u32 914150663
+    = . sp 2 # u32 812702999
+    = . sp 3 # u32 4144912697
+    = . sp 4 # u32 4290775857
+    = . sp 5 # u32 1750603025
+    = . sp 6 # u32 1694076839
+    = . sp 7 # u32 3204075428
+    ( sha256_update h data )
+    : ( Vec u ) full ( sha256_final h )
+    : ( Vec u ) out ( bytes_slice full 0 28 )
+    ( vec_free [u] full )
+    ^ out
+}
