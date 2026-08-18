@@ -8,7 +8,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.45.0] — 2026-08-18
+
 ### Added
+
+- **`std/csr`: PKCS#10 Certificate Signing Requests (RFC 2986) in pure NURL** —
+  RFC 2986 ASN.1 DER parser (`csr_parse`), generator (`csr_generate_p256`,
+  `csr_generate_ed25519`), self-signature verifier (`csr_verify` supporting
+  ECDSA P-256 + SHA-256, Ed25519, RSA PKCS#1 v1.5 + SHA-256, and ML-DSA-44/65/87),
+  PEM encoding/decoding (`csr_to_pem`, `csr_from_pem`), and CA certificate issuance
+  from verified CSRs (`x509_issue_from_csr`). Devices can generate keys locally
+  and request certificates without private keys ever traversing the network.
+  Two-way interoperability is verified against OpenSSL via
+  `compiler/tests/csr_openssl_gate.sh`.
+
+- **`ext/jwt` & `ext/http_jwt`: ES256 (ECDSA P-256 + SHA-256) support** —
+  `jwt_es256_sign`, `jwt_es256_verify_at`, and `jwt_es256_verify` (RFC 7515 /
+  RFC 7518 §3.1), plus HTTP authentication middleware `with_jwt_es256`, enabling
+  direct interoperability with modern OAuth2 / OIDC providers (Apple, Google,
+  Okta, GitHub, WebAuthn).
+
+- **`std/x509`: SLH-DSA (FIPS 205) SHAKE OID recognition** —
+  OIDs `2.16.840.1.101.3.4.3.{21,23,25,27,29,31}` for SHAKE SLH-DSA parameter sets.
+
+- **`packages/pki-server` (v0.2.0) — Pure-NURL Private PKI Certificate Authority and Service** —
+  A complete, native re-implementation of a Private PKI CA microservice in pure NURL with
+  zero external dependencies. Features ECDSA P-256 key generation, automated CA setup,
+  two-tier device lifecycle (`POST /init` enrollment, `POST /renew_initial_cert` renewal,
+  `POST /request-cert` operational issuance), Zero-Trust PKCS#10 CSR enrollment
+  (`POST /request-csr`), RFC 5280 CRL generation (`POST /revoke`, `GET /crl`),
+  OpenSSL `index.txt` compatibility, API key authentication, and responsive modern
+  server-rendered Web UI dashboard.
 
 - **`std/slhdsa`: SLH-DSA (FIPS 205) in pure NURL** — the third and last
   NIST post-quantum standard, and the one that assumes least. ML-KEM and
@@ -13836,7 +13866,8 @@ releases are measured.
   compile-server (`api/`), browser playground (`nurlweb/`).
 * Dual license: MIT (LICENSE-MIT) or Apache-2.0 (LICENSE-APACHE).
 
-[Unreleased]: https://github.com/nurl-lang/nurl/compare/v0.44.2...HEAD
+[Unreleased]: https://github.com/nurl-lang/nurl/compare/v0.45.0...HEAD
+[0.45.0]: https://github.com/nurl-lang/nurl/compare/v0.44.2...v0.45.0
 [0.44.2]: https://github.com/nurl-lang/nurl/compare/v0.44.1...v0.44.2
 [0.44.1]: https://github.com/nurl-lang/nurl/compare/v0.44.0...v0.44.1
 [0.44.0]: https://github.com/nurl-lang/nurl/compare/v0.43.0...v0.44.0

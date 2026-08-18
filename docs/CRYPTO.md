@@ -38,6 +38,8 @@ All sources live in `stdlib/std/`.
 | RSA | `rsa` (PKCS#1 v1.5 verify, PSS verify + sign) | built on `bigint` |
 | Bignum | `bigint` | sign-magnitude, schoolbook mul / long division, `modpow`, `modinv` |
 | X.509 | `x509`, `tls_verify`, `x509_gen` | DER parser + chain/host/policy verification; generates self-signed P-256 and ML-DSA certificates |
+| CSR | `csr` | PKCS#10 (RFC 2986) parser, generator (ECDSA P-256, Ed25519), self-signature verifier (ECDSA P-256, Ed25519, RSA, ML-DSA), and CA certificate issuance |
+| JWT | `ext/jwt`, `ext/http_jwt` | HS256, EdDSA (Ed25519), ES256 (ECDSA P-256 + SHA-256, RFC 7518 §3.1), HTTP bearer-auth middleware |
 | TLS | `tls` (client, 1.3 + 1.2 fallback), `tls_server` (1.3) | record layer, key schedule, handshake; the client offers `X25519MLKEM768` first |
 | Randomness | `random` (CSPRNG), `rng` (xoshiro256\*\*, **not** crypto) | |
 | Constant-time | `subtle` | length-independent secret comparison |
