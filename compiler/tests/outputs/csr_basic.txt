@@ -1,0 +1,12 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+── [csr] PKCS#10 CSR Tests ──
+[1/6] Generating and parsing ECDSA P-256 CSR... OK
+[2/6] Verifying ECDSA P-256 self-signature... OK
+[3/6] Generating and verifying Ed25519 CSR... OK
+[4/6] Testing PEM formatting round-trip... OK
+[5/6] Testing tamper rejection on CSR... OK
+[6/6] Issuing X.509 certificate from CSR... OK
+── ALL 6 CSR TESTS PASSED ──

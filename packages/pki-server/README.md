@@ -159,6 +159,8 @@ Content-Type: application/json
 
 ---
 
+---
+
 ### 5. Request Operational Certificate
 
 Supports both `application/json` and `application/x-www-form-urlencoded`.
@@ -187,7 +189,35 @@ Content-Type: application/json
 
 ---
 
-### 6. Revoke Certificate
+### 6. Request Certificate from PKCS#10 CSR (Zero Trust)
+
+Enables Zero-Trust enrollment where the device generates its own private key locally and sends only the signed PKCS#10 Certificate Signing Request (CSR) across the network. The private key never leaves the client device.
+
+```http
+POST /request-csr
+Content-Type: application/json
+X-API-Key: your-management-key-here
+
+{
+  "csr": "-----BEGIN CERTIFICATE REQUEST-----\n...\n-----END CERTIFICATE REQUEST-----\n",
+  "validity_days": 365
+}
+```
+
+**Response (200 OK):**
+```json
+{
+  "status": "success",
+  "certificate": "-----BEGIN CERTIFICATE-----\n...\n-----END CERTIFICATE-----\n",
+  "ca_certificate": "-----BEGIN CERTIFICATE-----\n...\n-----END CERTIFICATE-----\n",
+  "serial": "3a8f12c9b4e10023",
+  "expires": "2027-08-18T20:00:00Z"
+}
+```
+
+---
+
+### 7. Revoke Certificate
 
 Requires Management API key in `X-API-Key` header, `Authorization: Bearer <key>`, or `?api_key=`.
 

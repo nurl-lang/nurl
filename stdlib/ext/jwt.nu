@@ -18,6 +18,11 @@
 //   ( jwt_eddsa_verify    ( Vec u ) pk s token )          → !Json JwtErr
 //   ( jwt_eddsa_verify_at ( Vec u ) pk s token i now )    → !Json JwtErr
 //
+// ES256 (asymmetric — ECDSA P-256 with SHA-256, RFC 7518 §3.1):
+//   ( jwt_es256_sign      ( Vec u ) scalar Json claims )  → !String CryptoErr
+//   ( jwt_es256_verify    ( Vec u ) pubkey s token )      → !Json JwtErr
+//   ( jwt_es256_verify_at ( Vec u ) pubkey s token i now )→ !Json JwtErr
+//
 //   ( jwt_decode_unverified s token )                     → !Json JwtErr
 //       Decode the payload WITHOUT checking the signature or time
 //       claims. For reading `iss`/`sub`/`kid` to pick a key before
@@ -46,6 +51,7 @@ $ `stdlib/std/hash_sha256.nu`
 $ `stdlib/std/bytes.nu`
 $ `stdlib/std/subtle.nu`
 $ `stdlib/std/time.nu`
+$ `stdlib/std/ecdsa_p256.nu`
 $ `stdlib/ext/json.nu`
 $ `stdlib/ext/crypto.nu`
 
@@ -312,6 +318,80 @@ $ `stdlib/ext/crypto.nu`
 
 @ jwt_eddsa_verify ( Vec u ) pk s token → !Json JwtErr {
     ^ ( jwt_eddsa_verify_at pk token ( now_seconds ) )
+}
+
+// ── ES256 (ECDSA P-256 + SHA-256) ──────────────────────────────────
+
+@ jwt_es256_sign ( Vec u ) scalar Json claims → !String CryptoErr {
+    : i slen ( vec_len [u] scalar )
+    ? != slen 32 { ^ @ !String CryptoErr { F CryptoArg } } {}
+    : String signing ( __jwt_signing_input `{"alg":"ES256","typ":"JWT"}` claims )
+    : ( Vec u ) msg ( __jwt_bytes ( string_data signing ) )
+    : ( Vec u ) h ( sha256_pure msg )
+    ( vec_free [u] msg )
+    : ( Vec u ) sig ( ecdsa_p256_sign scalar h )
+    ( vec_free [u] h )
+    : String sig64 ( b64_url_encode_vec sig )
+    : String token ( string_with_cap + ( string_len signing ) + ( string_len sig64 ) 1 )
+    ( string_push_str token ( string_data signing ) )
+    ( string_push_char token 46 )
+    ( string_push_str token ( string_data sig64 ) )
+    ( vec_free [u] sig )
+    ( string_free sig64 )
+    ( string_free signing )
+    ^ @ !String CryptoErr { T token }
+}
+
+@ jwt_es256_verify_at ( Vec u ) pubkey s token i now → !Json JwtErr {
+    : s d0buf ( nurl_zalloc 8 )
+    : s d1buf ( nurl_zalloc 8 )
+    ? ( __jwt_split token d0buf d1buf ) {} {
+        ( nurl_free d0buf ) ( nurl_free d1buf )
+        ^ @ !Json JwtErr { F JwtMalformed }
+    }
+    : i d0 ( nurl_peek d0buf 0 )
+    : i d1 ( nurl_peek d1buf 0 )
+    ( nurl_free d0buf ) ( nurl_free d1buf )
+    : String signing ( __jwt_slice token 0 d1 )
+    : String sig64 ( __jwt_slice token + d1 1 ( nurl_str_len token ) )
+    : !( Vec u ) ParseErr sd ( b64_url_decode_vec ( string_data sig64 ) )
+    ( string_free sig64 )
+    : ~ b sig_ok F
+    ?? sd {
+        T sig → {
+            : i slen ( vec_len [u] sig )
+            ? == slen 64 {
+                : ( Vec u ) r ( bytes_slice sig 0 32 )
+                : ( Vec u ) s ( bytes_slice sig 32 64 )
+                : ( Vec u ) msg ( __jwt_bytes ( string_data signing ) )
+                : ( Vec u ) h ( sha256_pure msg )
+                ( vec_free [u] msg )
+                = sig_ok ( ecdsa_p256_verify pubkey r s h )
+                ( vec_free [u] r )
+                ( vec_free [u] s )
+                ( vec_free [u] h )
+            } {}
+            ( vec_free [u] sig )
+        }
+        F _ → {}
+    }
+    ( string_free signing )
+    ? sig_ok {} { ^ @ !Json JwtErr { F JwtBadSignature } }
+    : !Json JwtErr pj ( __jwt_payload_json token d0 d1 )
+    ?? pj {
+        T payload → {
+            : ?JwtErr terr ( __jwt_check_time payload now )
+            ?? terr {
+                T e → { ( json_free payload ) ^ @ !Json JwtErr { F e } }
+                F _ → { ^ @ !Json JwtErr { T payload } }
+            }
+        }
+        F e → { ^ @ !Json JwtErr { F e } }
+    }
+}
+
+@ jwt_es256_verify ( Vec u ) pubkey s token → !Json JwtErr {
+    ^ ( jwt_es256_verify_at pubkey token ( now_seconds ) )
 }
 
 // ── Unverified decode ──────────────────────────────────────────────

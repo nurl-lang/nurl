@@ -14,3 +14,6 @@ hs256_wrongkey: status=401 body=Unauthorized
 eddsa_valid: status=200 body=hello bob
 eddsa_missing: status=401 body=Unauthorized
  www-auth=Bearer
+es256_valid: status=200 body=hello carol
+es256_missing: status=401 body=Unauthorized
+ www-auth=Bearer

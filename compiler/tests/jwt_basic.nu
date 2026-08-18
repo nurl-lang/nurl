@@ -10,6 +10,7 @@
 $ `stdlib/core/string.nu`
 $ `stdlib/core/vec.nu`
 $ `stdlib/ext/json.nu`
+$ `stdlib/std/ecdsa_p256.nu`
 $ `stdlib/ext/jwt.nu`
 
 @ hx s h → ( Vec u ) {
@@ -143,6 +144,33 @@ $ `stdlib/ext/jwt.nu`
     }
     ( vec_free [u] sk )
     ( json_free eclaims )
+
+    // ── ES256 (ECDSA P-256 + SHA-256) ──────────────────────────────────
+    : ( Vec u ) es_scalar ( hx `c9afa9d845ba75166b5c215767b1d6934e50c3db36e89b127b8a622b120f6721` )
+    : ( Vec u ) es_pubkey ( p256_ecdh_keygen es_scalar )
+    : Json es_claims ( mk_claims )
+    : !String CryptoErr esso ( jwt_es256_sign es_scalar es_claims )
+    ?? esso {
+        T es_token → {
+            ( show_verify `es256_verify_ok: ` ( jwt_es256_verify_at es_pubkey ( string_data es_token ) 1516239022 ) )
+            // tamper the signature's last char
+            : i es_len ( string_len es_token )
+            : String es_bad ( string_with_cap + es_len 1 )
+            : ~ i idx 0
+            ~ < idx es_len {
+                : i c ( nurl_str_get ( string_data es_token ) idx )
+                ( string_push_char es_bad ? == idx - es_len 1 ? == c 97 98 97 c )
+                = idx + idx 1
+            }
+            ( show_verify `es256_verify_tampered: ` ( jwt_es256_verify_at es_pubkey ( string_data es_bad ) 1516239022 ) )
+            ( string_free es_bad )
+            ( string_free es_token )
+        }
+        F _ → ( nurl_print `es256 sign FAILED\n` )
+    }
+    ( vec_free [u] es_scalar )
+    ( vec_free [u] es_pubkey )
+    ( json_free es_claims )
 
     // ── decode_unverified ──────────────────────────────────────────
     : Json dc ( mk_claims )
