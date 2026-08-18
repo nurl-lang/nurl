@@ -7,7 +7,7 @@ Anything marked done here has a regression test in
 [`compiler/tests/`](compiler/tests/) and is covered by the bootstrap fixed
 point.
 
-_Last reviewed: 2026-08-16 · Current release: **0.44.2** · Language: **Grammar
+_Last reviewed: 2026-08-18 · Current release: **0.45.0** · Language: **Grammar
 v2.5** ([`spec/grammar.ebnf`](spec/grammar.ebnf))._
 
 ---
@@ -158,7 +158,7 @@ small C runtime (`stdlib/runtime.c`) for the bootstrap surface and a few
 platform-specific shims.
 
 - **core** — `string`, `vec`, `option`, `result`, `errors`, `char`, `slice`,
-  `pair`, `box`, `cell`, `mem`, `io`, `symtab`, `posix`.
+  `pair`, `box`, `cell`, `mem`, `io` (`write_bytes`, `read_all_stdin_bytes`), `symtab`, `posix`.
 - **std/collections & algorithms** — `hashmap`, `set`, `deque`, `heap`,
   `ordmap`, `btree`, `lru`, `bitset`, `iter`, `sort`, `cmp`, `bytes`, `bufio`, `fmt`, `int`, `float`,
   `bigint` (arbitrary-precision integers), `decimal` (exact fixed-point).
@@ -166,17 +166,22 @@ platform-specific shims.
   `arena`, `signal`, `panic`/`recover`, `process`, `unixsock` (local IPC),
   `log` (text + JSON), `time` (incl. timezone/DST, HTTP/RFC 2822 dates), `args` (CLI parser),
   `term` (POSIX termios, ANSI).
-- **std/crypto & encoding** — `hash` (SHA-1/256/512, MD5, HMAC),
-  `hash_blake3`, `encode` (hex, base64, base32), `random` (OS CSPRNG),
-  `rng` (seedable, deterministic xoshiro256\*\*).
-- **std/IO & net** — `fs` (incl. streaming + `readlink`), `path` (typed),
+- **std/crypto & encoding** — **Post-Quantum Cryptography**: `mlkem` (ML-KEM-512/768/1024, FIPS 203),
+  `mldsa` (ML-DSA-44/65/87 & HashML-DSA, FIPS 204), `slhdsa` (SLH-DSA, FIPS 205, SHAKE & SHA-2 families),
+  `hash_sha3` (SHA-3 & SHAKE128/256, FIPS 202). **Classical & symmetric**: `x25519`, `ed25519`,
+  `ecdsa_p256` (P-256 + P-384 constant-time), `rsa` (PKCS#1 v1.5 + PSS), `aes_gcm`, `chacha20poly1305`,
+  `hash` (SHA-1/224/256/384/512, SHA-512/224, SHA-512/256, MD5, HMAC), `hash_blake3`, `hash_xxh64` (XXH64),
+  `hkdf`, `pbkdf2`, `scrypt`, `encode` (hex, base64, base32), `random` (OS CSPRNG `rand_bytes`), `rng` (xoshiro256\*\*).
+- **std/PKI & certificates** — `x509` (DER parser + chain/host validation, ML-DSA & SLH-DSA OIDs), `x509_gen` (self-signed P-256 & ML-DSA certificates, PKCS#8), `csr` (PKCS#10 RFC 2986 parser, generator, self-signature verifier, PEM round-trip, CA issuance from CSR).
+- **std/compression** — `zstd` (pure-NURL RFC 8878 Zstandard decompressor & compressor up to level 19 optimal parser, no libzstd), `deflate` (RFC 1951 + table-driven CRC-32).
+- **std/IO & net** — `fs` (incl. streaming, `readlink`, `file_sync`, `dir_sync`, `file_truncate`), `path` (typed),
   `net` (TCP/TLS), `udp`, `dns`, `dos`.
 - **ext/serialization** — `json`, `toml`, `csv`, `msgpack`, `cbor`, `xml`, `yaml`,
   `serde`, `regex`.
 - **ext/web stack** — full HTTP/1.1 server (keep-alive, pipelining, static,
-  auth, JWT bearer-auth, cookies, forms, multipart, router, middleware, access log + Prometheus
+  auth, JWT bearer-auth with HS256/EdDSA/**ES256**, cookies, forms, multipart, router, middleware, access log + Prometheus
   metrics, DoS caps, graceful shutdown, per-request timeouts, panic recovery),
-  HTTP client (with cookie jar), **TLS** (SNI + ALPN + mTLS + live cert reload; the pure ChaCha20-Poly1305 record path serves past gigabit wire speed, and since 0.40.0 the pure-NURL handshake — X25519 + P-256 ECDHE, ECDSA sign/verify, no assembly and no OpenSSL — runs at 4 894 handshakes/s, 2× its 0.39.0 rate), **HTTP/2**
+  HTTP client (with cookie jar), **Post-Quantum TLS 1.3** (client & server: `X25519MLKEM768` hybrid & pure ML-KEM key exchange, ML-DSA certificate support, SNI + ALPN + mTLS + live cert reload), **HTTP/2**
   (RFC 9113 + HPACK, **server and client**), **WebSocket** (RFC 6455, **server
   and client**, with **permessage-deflate** compression — RFC 7692),
   reverse proxy with binary-safe streaming. The stack has had a
@@ -197,7 +202,7 @@ platform-specific shims.
   streaming SSE + tool-use deltas).
 - **ext/packaging** — `semver`, `manifest`, `lockfile`, `resolver`,
   `registry_index`, `pkg_fetch`, `pkg_publish` (the `nurlpkg` backend).
-- **ext/misc** — `compress` (zlib/zstd/gzip), `zip` (archives), `tar`, `uuid` (v4/v7),
+- **ext/misc** — `compress` (pure zlib/zstd/gzip), `zip` (archives), `tar`, `uuid` (v4/v7),
   `credentials`, `env`.
 - **dist/distributed systems** — secure pubkey-addressed p2p overlay, STUN,
   NAT traversal, DERP relay, SWIM membership, state-based CRDTs (PN-Counter,
