@@ -1,0 +1,9 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+keygen-128s     ok
+keygen-128f     ok
+keygen-192f     ok
+keygen-256f     ok
+roundtrip-128f  ok

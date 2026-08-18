@@ -8,6 +8,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`std/slhdsa`: SLH-DSA (FIPS 205) in pure NURL** — the third and last
+  NIST post-quantum standard, and the one that assumes least. ML-KEM and
+  ML-DSA rest on lattice problems; SLH-DSA rests on nothing but the hash
+  function, so it is what still stands if a break lands on lattices. All
+  six SHAKE parameter sets: WOTS+, XMSS, the hypertree, FORS, and the
+  32-byte address structure that domain-separates every hash call.
+
+  The price is size and speed — 7 856 bytes at the smallest set against
+  ML-DSA-44's 2 420, and signing walks a hypertree of Merkle trees
+  rather than doing algebra. Use ML-DSA by default; use this where a
+  signature is rare, long-lived, and has to outlast an assumption:
+  firmware images, root certificates, release artefacts.
+
+  `tools/slhdsa_acvp_gate.sh` checks it against NIST's vectors — all 60
+  SHAKE keyGen cases uncapped, sigGen and sigVer capped per group
+  because signing is slow by construction. The three reasons a case does
+  not run (the cap, the unimplemented SHA-2 family, the pre-hash
+  interfaces) are counted and printed **separately**, so none of them
+  can be read as coverage.
+
+  **Two bugs, both signedness, both found only by the vectors.**
+  SLH-DSA-256f is the one parameter set whose hypertree index fills all
+  64 bits (h − h/d = 68 − 4). Its mask was computed as `1 << 64`, which
+  x86 takes modulo 64 — yielding 1, so the mask became 0 and every tree
+  index was pinned to zero. With that fixed the same set still failed,
+  because `%` and `>>` on a now-negative `i` carried the sign into the
+  next layer, and the address writer shifted past 64 for the top bytes
+  of the 12-byte tree field. Five of the six sets passed throughout;
+  only the one that reaches exactly 64 bits ever showed it, which is why
+  that apparently redundant set is pinned in the offline test too.
+
+  The SHA-2 instantiation of FIPS 205 is not implemented.
+
 ### Changed
 
 - **The post-quantum stack got 12–29% faster, from two changes the
