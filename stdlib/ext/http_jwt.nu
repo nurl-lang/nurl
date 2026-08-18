@@ -112,3 +112,18 @@ $ `stdlib/ext/jwt.nu`
     }
     ^ wrapped
 }
+
+@ with_jwt_es256 ( Vec u ) pubkey ( @ HttpResponse HttpRequest Json ) inner → ( @ HttpResponse HttpRequest ) {
+    : ( @ HttpResponse HttpRequest ) wrapped \ HttpRequest req → HttpResponse {
+        : ?String tok ( parse_bearer_auth req )
+        ^ ?? tok {
+            T t → {
+                : !Json JwtErr vr ( jwt_es256_verify pubkey ( string_data t ) )
+                ( string_free t )
+                ^ ( __jwt_gate vr req inner )
+            }
+            F _ → ( __jwt_unauthorized `` `` )
+        }
+    }
+    ^ wrapped
+}

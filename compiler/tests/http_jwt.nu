@@ -14,6 +14,7 @@ $ `stdlib/ext/http.nu`
 $ `stdlib/ext/http_request.nu`
 $ `stdlib/ext/http_response.nu`
 $ `stdlib/std/bytes.nu`
+$ `stdlib/std/ecdsa_p256.nu`
 $ `stdlib/ext/jwt.nu`
 $ `stdlib/ext/http_jwt.nu`
 
@@ -142,5 +143,30 @@ $ `stdlib/ext/http_jwt.nu`
         }
         F _ → ( nurl_print `keygen FAILED\n` )
     }
+
+    // ── ES256 ──
+    : !( Vec u ) ParseErr es_sr ( bytes_from_hex `c9afa9d845ba75166b5c215767b1d6934e50c3db36e89b127b8a622b120f6721` )
+    : ( Vec u ) es_scalar ?? es_sr { T v → v F _ → ( vec_new [u] ) }
+    : ( Vec u ) es_pub ( p256_ecdh_keygen es_scalar )
+    : ( @ HttpResponse HttpRequest Json ) esleaf \ HttpRequest req Json claims → HttpResponse { ^ ( secure_handler req claims ) }
+    : ( @ HttpResponse HttpRequest ) esguarded ( with_jwt_es256 es_pub esleaf )
+    : Json esp ( json_obj_new )
+    ( json_obj_set esp `sub` ( json_str_lit `carol` ) )
+    : !String CryptoErr esso ( jwt_es256_sign es_scalar esp )
+    ( json_free esp )
+    ?? esso {
+        T estok → {
+            ( run `es256_valid` esguarded ( string_data estok ) )
+            ( string_free estok )
+        }
+        F _ → ( nurl_print `es256 sign FAILED\n` )
+    }
+    ( run `es256_missing` esguarded `` )
+    : *u esguarded_env # *u esguarded 1
+    ( nurl_free # s esguarded_env )
+    : *u esleaf_env # *u esleaf 1
+    ( nurl_free # s esleaf_env )
+    ( vec_free [u] es_scalar ) ( vec_free [u] es_pub )
+
     ^ 0
 }

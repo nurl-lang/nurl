@@ -197,6 +197,26 @@ if command -v openssl >/dev/null 2>&1; then
 
     openssl verify -CAfile "$TMPDIR/ca.crt" "$TMPDIR/dev200.crt" >/dev/null 2>&1 || { echo "FAIL: OpenSSL CA verification of issued cert failed"; exit 1; }
     echo "    OpenSSL CA verification: OK (valid signature & chain)"
+
+    # ── Test 10: POST /request-csr (Zero Trust PKCS#10 CSR) ───────────────
+    echo "--> Test 10: POST /request-csr (PKCS#10 CSR issuance)"
+    openssl ecparam -name prime256v1 -genkey -noout -out "$TMPDIR/client_device.key"
+    openssl req -new -key "$TMPDIR/client_device.key" -out "$TMPDIR/client_device.csr" -subj "/CN=edge-device-500.mesh.local" -addext "subjectAltName=DNS:edge-device-500.mesh.local"
+    
+    CSR_PEM=$(cat "$TMPDIR/client_device.csr")
+    ESCAPED_CSR=$(echo "$CSR_PEM" | awk '{printf "%s\\n", $0}')
+
+    CSR_RESP=$(curl -sf -X POST "http://127.0.0.1:$PORT/request-csr" \
+        -H "Content-Type: application/json" \
+        -H "X-API-Key: $MGMT_KEY" \
+        -d "{\"csr\":\"$ESCAPED_CSR\",\"validity_days\":365}")
+
+    echo "$CSR_RESP" | grep -q '"status":"success"' || { echo "FAIL: request-csr response not success"; exit 1; }
+    CSR_CERT=$(echo "$CSR_RESP" | sed -n 's/.*"certificate":"\([^"]*\)".*/\1/p' | sed 's/\\n/\n/g')
+    echo "$CSR_CERT" > "$TMPDIR/client_device.crt"
+
+    openssl verify -CAfile "$TMPDIR/ca.crt" "$TMPDIR/client_device.crt" >/dev/null 2>&1 || { echo "FAIL: OpenSSL CA verification of CSR-issued cert failed"; exit 1; }
+    echo "    OpenSSL CSR cert verification: OK (Zero Trust issuance verified)"
 fi
 
 echo "=================================================="

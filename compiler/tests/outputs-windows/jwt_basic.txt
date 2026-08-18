@@ -14,4 +14,6 @@ hs256_nbf_ok(now=1500): ok sub=nbf-test
 eddsa_token=eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.vLeihDpjKFbZGE86WqTj7w1eeRh6p8kiUw3oDfW6IS1i79tAeUdaK4vodykBqybCjAa5P9250Ts6w1a9knr9Ag
 eddsa_verify_ok: ok sub=1234567890
 eddsa_verify_tampered: err=BadSignature
+es256_verify_ok: ok sub=1234567890
+es256_verify_tampered: err=BadSignature
 decode_unverified_name=John Doe

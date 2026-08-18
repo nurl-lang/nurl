@@ -80,7 +80,7 @@ $ `stdlib/std/bytes.nu`
 }
 
 // Compare an OID element's content bytes to a hex literal.
-@ __der_oid_is ( Vec u ) b DerTlv t s hexoid → b {
+@ _der_oid_is ( Vec u ) b DerTlv t s hexoid → b {
     : ( Vec u ) want ?? ( bytes_from_hex hexoid ) { T v → v F _ → ( vec_new [u] ) }
     : i wl ( vec_len [u] want )
     ? != . t len wl { ( vec_free [u] want ) ^ F } {}
@@ -132,19 +132,26 @@ $ `stdlib/std/bytes.nu`
 // Map an AlgorithmIdentifier SEQ (at `alg`) to a sig_alg code.
 @ __x509_sigalg ( Vec u ) b DerTlv alg → i {
     : DerTlv oid ( _der_child b alg )
-    ? ( __der_oid_is b oid `2a864886f70d01010b` ) { ^ 1 } {}
-    ? ( __der_oid_is b oid `2a864886f70d01010c` ) { ^ 2 } {}
-    ? ( __der_oid_is b oid `2a864886f70d01010d` ) { ^ 3 } {}
-    ? ( __der_oid_is b oid `2a8648ce3d040302` ) { ^ 4 } {}
-    ? ( __der_oid_is b oid `2a8648ce3d040303` ) { ^ 5 } {}
-    ? ( __der_oid_is b oid `2a864886f70d01010a` ) { ^ 6 } {}
-    ? ( __der_oid_is b oid `2b6570` ) { ^ 7 } {}
+    ? ( _der_oid_is b oid `2a864886f70d01010b` ) { ^ 1 } {}
+    ? ( _der_oid_is b oid `2a864886f70d01010c` ) { ^ 2 } {}
+    ? ( _der_oid_is b oid `2a864886f70d01010d` ) { ^ 3 } {}
+    ? ( _der_oid_is b oid `2a8648ce3d040302` ) { ^ 4 } {}
+    ? ( _der_oid_is b oid `2a8648ce3d040303` ) { ^ 5 } {}
+    ? ( _der_oid_is b oid `2a864886f70d01010a` ) { ^ 6 } {}
+    ? ( _der_oid_is b oid `2b6570` ) { ^ 7 } {}
     // ML-DSA (FIPS 204): 2.16.840.1.101.3.4.3.{17,18,19}. The same OID
     // names the key type and the signature algorithm — there is no
     // separate hash to name, because ML-DSA hashes internally.
-    ? ( __der_oid_is b oid `608648016503040311` ) { ^ 8 } {}
-    ? ( __der_oid_is b oid `608648016503040312` ) { ^ 9 } {}
-    ? ( __der_oid_is b oid `608648016503040313` ) { ^ 10 } {}
+    ? ( _der_oid_is b oid `608648016503040311` ) { ^ 8 } {}
+    ? ( _der_oid_is b oid `608648016503040312` ) { ^ 9 } {}
+    ? ( _der_oid_is b oid `608648016503040313` ) { ^ 10 } {}
+    // SLH-DSA (FIPS 205): 2.16.840.1.101.3.4.3.{21,23,25,27,29,31} (SHAKE family)
+    ? ( _der_oid_is b oid `608648016503040315` ) { ^ 11 } {}  // slh-dsa-shake-128s
+    ? ( _der_oid_is b oid `608648016503040317` ) { ^ 12 } {}  // slh-dsa-shake-128f
+    ? ( _der_oid_is b oid `608648016503040319` ) { ^ 13 } {}  // slh-dsa-shake-192s
+    ? ( _der_oid_is b oid `60864801650304031b` ) { ^ 14 } {}  // slh-dsa-shake-192f
+    ? ( _der_oid_is b oid `60864801650304031d` ) { ^ 15 } {}  // slh-dsa-shake-256s
+    ? ( _der_oid_is b oid `60864801650304031f` ) { ^ 16 } {}  // slh-dsa-shake-256f
     ^ 0
 }
 
@@ -242,10 +249,10 @@ $ `stdlib/std/bytes.nu`
     : ~ DerTlv ext ( _der_child b seq )
     ~ == . ext ok 1 {
         : DerTlv oid ( _der_child b ext )
-        : b is_san ( __der_oid_is b oid `551d11` )
-        : b is_bc ( __der_oid_is b oid `551d13` )
-        : b is_ku ( __der_oid_is b oid `551d0f` )
-        : b is_eku ( __der_oid_is b oid `551d25` )
+        : b is_san ( _der_oid_is b oid `551d11` )
+        : b is_bc ( _der_oid_is b oid `551d13` )
+        : b is_ku ( _der_oid_is b oid `551d0f` )
+        : b is_eku ( _der_oid_is b oid `551d25` )
         ? | | | is_san is_bc is_ku is_eku {
             // value is the last child (OCTET STRING), after optional critical BOOLEAN
             : ~ DerTlv nxt ( _der_next b oid )
@@ -282,8 +289,8 @@ $ `stdlib/std/bytes.nu`
                 : ~ DerTlv ku ( _der_child b inner )
                 ~ == . ku ok 1 {
                     ? == . ku tag 6 {
-                        ? ( __der_oid_is b ku `2b06010505070301` ) { = . ei eku_server T } {}  // serverAuth
-                        ? ( __der_oid_is b ku `551d2500` ) { = . ei eku_server T } {}  // anyExtendedKeyUsage
+                        ? ( _der_oid_is b ku `2b06010505070301` ) { = . ei eku_server T } {}  // serverAuth
+                        ? ( _der_oid_is b ku `551d2500` ) { = . ei eku_server T } {}  // anyExtendedKeyUsage
                     } {}
                     = ku ( _der_next b ku )
                 }
@@ -349,7 +356,7 @@ $ `stdlib/std/bytes.nu`
     : DerTlv keyalg ( _der_child der c )
     : DerTlv keyoid ( _der_child der keyalg )
     : DerTlv keybits ( _der_next der keyalg )
-    ? ( __der_oid_is der keyoid `2a864886f70d010101` ) {
+    ? ( _der_oid_is der keyoid `2a864886f70d010101` ) {
         // RSA: BIT STRING content (after unused-bits byte) is SEQ{n,e}
         = . out key_alg 1
         : DerTlv rsaseq ( der_at der + . keybits start 1 )
@@ -360,18 +367,18 @@ $ `stdlib/std/bytes.nu`
         ( vec_free [u] . out rsa_e )
         = . out rsa_e ( _der_uint der ei )
     } {
-        ? ( __der_oid_is der keyoid `2a8648ce3d0201` ) {
+        ? ( _der_oid_is der keyoid `2a8648ce3d0201` ) {
             // EC: namedCurve param + uncompressed point in the BIT STRING
             = . out key_alg 2
             : DerTlv curve ( _der_next der keyoid )
             : ~ i cc 0
-            ? ( __der_oid_is der curve `2a8648ce3d030107` ) { = cc 256 } {}
-            ? ( __der_oid_is der curve `2b81040022` ) { = cc 384 } {}
+            ? ( _der_oid_is der curve `2a8648ce3d030107` ) { = cc 256 } {}
+            ? ( _der_oid_is der curve `2b81040022` ) { = cc 384 } {}
             = . out ec_curve cc
             ( vec_free [u] . out ec_point )
             = . out ec_point ( bytes_slice der + . keybits start 1 + . keybits start . keybits len )
         } {
-            ? ( __der_oid_is der keyoid `2b6570` ) {
+            ? ( _der_oid_is der keyoid `2b6570` ) {
                 = . out key_alg 3
                 ( vec_free [u] . out ec_point )
                 = . out ec_point ( bytes_slice der + . keybits start 1 + . keybits start . keybits len )
@@ -380,9 +387,9 @@ $ `stdlib/std/bytes.nu`
                 // whole, with no AlgorithmIdentifier parameters — the
                 // OID alone fixes the parameter set.
                 : ~ i ml 0
-                ? ( __der_oid_is der keyoid `608648016503040311` ) { = ml 44 } {}
-                ? ( __der_oid_is der keyoid `608648016503040312` ) { = ml 65 } {}
-                ? ( __der_oid_is der keyoid `608648016503040313` ) { = ml 87 } {}
+                ? ( _der_oid_is der keyoid `608648016503040311` ) { = ml 44 } {}
+                ? ( _der_oid_is der keyoid `608648016503040312` ) { = ml 65 } {}
+                ? ( _der_oid_is der keyoid `608648016503040313` ) { = ml 87 } {}
                 ? > ml 0 {
                     = . out key_alg 4
                     = . out ec_curve ml

@@ -11,6 +11,7 @@ $ `stdlib/std/fs.nu`
 $ `stdlib/std/x509.nu`
 $ `stdlib/std/x509_gen.nu`
 $ `stdlib/std/pkey.nu`
+$ `stdlib/std/csr.nu`
 
 & `c` @ nurl_rand_fill *u buf i n → i
 
@@ -510,6 +511,44 @@ $ `stdlib/std/pkey.nu`
         serial_hex
         expires_iso
     }
+}
+
+// Issue an X.509 certificate from a verified PKCS#10 CSR.
+@ pki_issue_cert_from_csr * PkiCa ca s csr_pem i validity_days → !PkiCert String {
+    : !( Vec u ) ParseErr dr ( pem_to_der csr_pem )
+    : ( Vec u ) der ?? dr { T v → v F _ → ( vec_new [u] ) }
+    ? == ( vec_len [u] der ) 0 {
+        ^ @ !PkiCert String { F ( string_from `Malformed or invalid CSR PEM` ) }
+    } {}
+    : Csr csr ( csr_parse der )
+    ( vec_free [u] der )
+    ? ! . csr ok {
+        ( csr_free csr )
+        ^ @ !PkiCert String { F ( string_from `Invalid PKCS#10 CSR structure` ) }
+    } {}
+    : b valid ( csr_verify csr )
+    ? ! valid {
+        ( csr_free csr )
+        ^ @ !PkiCert String { F ( string_from `CSR self-signature verification failed` ) }
+    } {}
+
+    : ( Vec u ) serial ( _pki_rand_bytes 12 )
+    : String serial_hex ( _pki_bytes_to_hex serial )
+    : i now ( now_seconds )
+    : i not_after + now * validity_days 86400
+    : String expires_iso ( pki_iso_timestamp not_after )
+
+    : ( Vec u ) cert_der ( x509_issue_from_csr . ca scalar . ca pubkey ( string_data . ca cn ) csr serial validity_days F )
+    ( vec_free [u] serial )
+    ( csr_free csr )
+
+    : PkiCert out @ PkiCert {
+        ( _pki_pem `CERTIFICATE` cert_der )
+        ( string_new )
+        serial_hex
+        expires_iso
+    }
+    ^ @ !PkiCert String { T out }
 }
 
 // ── Verification & Inspection ─────────────────────────────────────────

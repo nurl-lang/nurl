@@ -598,6 +598,79 @@ $ `ui.nu`
     }
 }
 
+// POST /request-csr — Issue certificate from a client-provided PKCS#10 CSR.
+// Client private key never crosses the wire (Zero Trust PKI).
+@ handle_request_csr_post HttpRequest req Params p → HttpResponse {
+    ? ! ( auth_check_api_key req g_management_key ) {
+        ^ ( _resp_err_json 401 `Unauthorized: valid management API key required` )
+    } {}
+
+    : String body_str ( bytes_to_str . req body )
+    : ~ String csr_input ( string_new )
+    : ~ i validity_days 365
+
+    : !Json JsonError jr ( json_parse ( string_data body_str ) )
+    ?? jr {
+        T root → {
+            : ?Json cj ( json_obj_get root `csr` )
+            ?? cj { T v → = csr_input ( string_from ( json_str_data v ) ) F _ → {} }
+            : ?Json vj ( json_obj_get root `validity_days` )
+            ?? vj {
+                T v → {
+                    : ?i vi ( json_num_as_i v )
+                    ?? vi {
+                        T val → { ? > val 0 { = validity_days val } {} }
+                        F _ → {}
+                    }
+                }
+                F _ → {}
+            }
+            ( json_free root )
+        }
+        F _ → {
+            // Check if raw PEM is sent in body
+            ? > ( nurl_str_find ( string_data body_str ) `-----BEGIN` ) -1 {
+                = csr_input ( string_clone body_str )
+            } {}
+        }
+    }
+    ( string_free body_str )
+
+    ? == ( string_len csr_input ) 0 {
+        ( string_free csr_input )
+        ^ ( _resp_err_json 400 `Missing CSR PEM in request body` )
+    } {}
+
+    ? != g_ca_handle 0 {
+        : *PkiCa ca # *PkiCa g_ca_handle
+        : !PkiCert String res ( pki_issue_cert_from_csr ca ( string_data csr_input ) validity_days )
+        ( string_free csr_input )
+        ?? res {
+            T cert → {
+                : Json out ( json_obj_new )
+                ( json_obj_set out `status` ( json_str_lit `success` ) )
+                ( json_obj_set out `certificate` ( json_str_lit ( string_data . cert cert_pem ) ) )
+                ( json_obj_set out `ca_certificate` ( json_str_lit ( string_data . ca cert_pem ) ) )
+                ( json_obj_set out `serial` ( json_str_lit ( string_data . cert serial_hex ) ) )
+                ( json_obj_set out `expires` ( json_str_lit ( string_data . cert expires_iso ) ) )
+
+                ( pki_cert_free cert )
+                : String jout ( json_stringify out )
+                ( json_free out )
+                ^ ( _resp_json 200 jout )
+            }
+            F err → {
+                : HttpResponse r ( _resp_err_json 400 ( string_data err ) )
+                ( string_free err )
+                ^ r
+            }
+        }
+    } {
+        ( string_free csr_input )
+        ^ ( _resp_err_json 500 `CA not initialized` )
+    }
+}
+
 // GET /revoke
 @ handle_revoke_get HttpRequest req Params p → HttpResponse {
     ^ ( _resp_html 200 ( ui_render_revoke_cert `` ) )
@@ -815,6 +888,7 @@ $ `ui.nu`
 
     ( http_app_get a `/request-cert` \ HttpRequest req Params p → HttpResponse { ^ ( handle_request_cert_get req p ) } )
     ( http_app_post a `/request-cert` \ HttpRequest req Params p → HttpResponse { ^ ( handle_request_cert_post req p ) } )
+    ( http_app_post a `/request-csr` \ HttpRequest req Params p → HttpResponse { ^ ( handle_request_csr_post req p ) } )
 
     ( http_app_get a `/revoke` \ HttpRequest req Params p → HttpResponse { ^ ( handle_revoke_get req p ) } )
     ( http_app_post a `/revoke` \ HttpRequest req Params p → HttpResponse { ^ ( handle_revoke_post req p ) } )
