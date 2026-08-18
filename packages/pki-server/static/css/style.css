@@ -1,0 +1,363 @@
+/* Main styles for Private PKI Service - pure NURL edition */
+:root {
+    --primary-color: #1e293b;
+    --primary-hover: #0f172a;
+    --secondary-color: #0284c7;
+    --secondary-hover: #0369a1;
+    --accent-color: #ef4444;
+    --light-color: #f1f5f9;
+    --dark-color: #334155;
+    --success-color: #10b981;
+    --warning-color: #f59e0b;
+    --error-color: #ef4444;
+    --border-color: #e2e8f0;
+    --border-radius: 6px;
+    --box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -2px rgba(0, 0, 0, 0.1);
+}
+
+* {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+}
+
+body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+    line-height: 1.6;
+    color: var(--dark-color);
+    background-color: #f8fafc;
+    padding: 24px 16px;
+}
+
+.container {
+    max-width: 1100px;
+    margin: 0 auto;
+    background-color: white;
+    border-radius: 12px;
+    box-shadow: var(--box-shadow);
+    border: 1px solid var(--border-color);
+    overflow: hidden;
+}
+
+/* Header */
+header {
+    background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
+    color: white;
+    text-align: center;
+    padding: 2.5rem 1.5rem;
+}
+
+header h1 {
+    font-size: 2rem;
+    font-weight: 700;
+    letter-spacing: -0.025em;
+    margin-bottom: 0.5rem;
+}
+
+header p {
+    color: #94a3b8;
+    font-size: 1.05rem;
+}
+
+/* Navigation */
+nav {
+    background-color: #0f172a;
+    padding: 0.75rem 1.5rem;
+    border-bottom: 1px solid #334155;
+}
+
+nav ul {
+    display: flex;
+    flex-wrap: wrap;
+    list-style: none;
+    justify-content: center;
+    gap: 0.5rem;
+}
+
+nav ul li a {
+    color: #cbd5e1;
+    text-decoration: none;
+    font-weight: 500;
+    font-size: 0.95rem;
+    padding: 0.5rem 1rem;
+    border-radius: var(--border-radius);
+    transition: all 0.2s ease;
+}
+
+nav ul li a:hover, nav ul li a.active {
+    color: white;
+    background-color: var(--secondary-color);
+}
+
+/* Main content */
+main {
+    padding: 2rem;
+}
+
+.card {
+    background-color: white;
+    border-radius: var(--border-radius);
+}
+
+h2 {
+    color: var(--primary-color);
+    font-size: 1.5rem;
+    font-weight: 600;
+    margin-bottom: 1.25rem;
+    border-bottom: 2px solid var(--light-color);
+    padding-bottom: 0.75rem;
+}
+
+h3 {
+    color: var(--primary-color);
+    font-size: 1.2rem;
+    margin: 1.5rem 0 0.75rem;
+}
+
+/* Features section */
+.features {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 1.5rem;
+    margin-top: 2rem;
+}
+
+.feature {
+    background-color: var(--light-color);
+    padding: 1.75rem;
+    border-radius: 8px;
+    border: 1px solid var(--border-color);
+    text-align: center;
+    transition: transform 0.2s, box-shadow 0.2s;
+}
+
+.feature:hover {
+    transform: translateY(-3px);
+    box-shadow: var(--box-shadow);
+}
+
+.feature h3 {
+    color: var(--secondary-color);
+    margin-top: 0;
+}
+
+.feature p {
+    color: #475569;
+    margin: 1rem 0 1.25rem;
+    font-size: 0.95rem;
+}
+
+/* Buttons */
+.button {
+    display: inline-block;
+    background-color: var(--secondary-color);
+    color: white;
+    padding: 0.65rem 1.25rem;
+    text-decoration: none;
+    border-radius: var(--border-radius);
+    border: none;
+    cursor: pointer;
+    font-size: 0.95rem;
+    font-weight: 500;
+    transition: background-color 0.2s;
+}
+
+.button:hover {
+    background-color: var(--secondary-hover);
+}
+
+.button.primary {
+    background-color: var(--primary-color);
+}
+
+.button.primary:hover {
+    background-color: var(--primary-hover);
+}
+
+/* Forms */
+.form-group {
+    margin-bottom: 1.5rem;
+}
+
+label {
+    display: block;
+    margin-bottom: 0.5rem;
+    font-weight: 600;
+    color: var(--primary-color);
+    font-size: 0.95rem;
+}
+
+input[type="text"],
+input[type="number"],
+textarea {
+    width: 100%;
+    padding: 0.75rem;
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius);
+    font-size: 0.95rem;
+    font-family: inherit;
+    background-color: #fff;
+    transition: border-color 0.2s;
+}
+
+input[type="text"]:focus,
+input[type="number"]:focus,
+textarea:focus {
+    outline: none;
+    border-color: var(--secondary-color);
+    box-shadow: 0 0 0 3px rgba(2, 132, 199, 0.15);
+}
+
+textarea {
+    min-height: 160px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    font-size: 0.85rem;
+    resize: vertical;
+}
+
+small {
+    display: block;
+    color: #64748b;
+    margin-top: 0.35rem;
+    font-size: 0.85rem;
+}
+
+.form-actions {
+    display: flex;
+    gap: 1rem;
+    margin-top: 1rem;
+}
+
+/* Certificate display */
+.cert-container {
+    margin: 2rem 0;
+    display: flex;
+    flex-direction: column;
+    gap: 1.5rem;
+}
+
+.cert-section {
+    background-color: var(--light-color);
+    padding: 1.25rem;
+    border-radius: 8px;
+    border: 1px solid var(--border-color);
+}
+
+.cert-text {
+    width: 100%;
+    height: 180px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    font-size: 0.85rem;
+    padding: 0.75rem;
+    background-color: #fff;
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius);
+    margin: 0.5rem 0 0.75rem;
+    overflow: auto;
+}
+
+.button-group {
+    display: flex;
+    gap: 0.75rem;
+}
+
+.warning {
+    color: var(--warning-color);
+    font-weight: 600;
+    margin-top: 0.5rem;
+    font-size: 0.9rem;
+}
+
+/* Messages */
+.error-message {
+    background-color: #fef2f2;
+    border-left: 4px solid var(--error-color);
+    padding: 1rem;
+    border-radius: 0 var(--border-radius) var(--border-radius) 0;
+    margin-bottom: 1.5rem;
+    color: #991b1b;
+}
+
+.success-message {
+    background-color: #ecfdf5;
+    border-left: 4px solid var(--success-color);
+    padding: 1rem;
+    border-radius: 0 var(--border-radius) var(--border-radius) 0;
+    margin-bottom: 1.5rem;
+    color: #065f46;
+}
+
+/* API docs */
+.api-endpoint {
+    margin-bottom: 2rem;
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius);
+    overflow: hidden;
+}
+
+.api-endpoint h3 {
+    background-color: var(--light-color);
+    padding: 0.85rem 1.25rem;
+    margin: 0;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.endpoint-details {
+    padding: 1.25rem;
+}
+
+pre {
+    background-color: #0f172a;
+    color: #e2e8f0;
+    padding: 1rem;
+    border-radius: var(--border-radius);
+    overflow-x: auto;
+    margin: 0.75rem 0;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    font-size: 0.85rem;
+    line-height: 1.5;
+}
+
+code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    background-color: var(--light-color);
+    padding: 0.15rem 0.35rem;
+    border-radius: 4px;
+    font-size: 0.9em;
+}
+
+.api-info, .crl-info {
+    margin-top: 2rem;
+    padding-top: 1.5rem;
+    border-top: 1px solid var(--border-color);
+}
+
+.action-buttons {
+    display: flex;
+    gap: 1rem;
+    margin-top: 1.5rem;
+}
+
+/* Footer */
+footer {
+    background-color: #0f172a;
+    color: #94a3b8;
+    text-align: center;
+    padding: 1.5rem;
+    font-size: 0.9rem;
+}
+
+@media (max-width: 768px) {
+    nav ul {
+        flex-direction: column;
+        align-items: stretch;
+    }
+    
+    .features {
+        grid-template-columns: 1fr;
+    }
+    
+    .form-actions, .button-group, .action-buttons {
+        flex-direction: column;
+    }
+}
