@@ -59,15 +59,20 @@
 //     a fresh closure handle. The caller owns the resulting closure
 //     identically to a hand-written one — no extra cleanup.
 //
-// Notes on inherited language gaps:
+// Notes on formerly-inherited language gaps (both fixed 2026-05-14 by
+// the multi-field payload boxing fix; `compiler/tests/
+// vec_get_multifield.nu` pins both — including the exact String,
+// String, closure shape Route had then):
 //
-//   * Multi-field structs can't ride `! T E` Ok arms. `router_handle`
-//     can't fail (it always either dispatches or 404s) so it returns
-//     HttpResponse directly.
-//   * `vec_get [Route]` would miscompile for a multi-field Route
-//     (String, String, closure). Iteration uses `vec_data + *Route`
-//     direct-pointer access, mirroring the convention from
-//     `http_request.nu`'s `header_get`.
+//   * Multi-field structs ride `! T E` Ok arms fine now.
+//     `router_handle` still returns HttpResponse directly, but because
+//     it can't fail (it always either dispatches or 404s), not because
+//     the encoding couldn't carry it.
+//   * `vec_get [Route]` is compiler-correct now (and Route is a
+//     single-field handle these days anyway). Iteration keeps
+//     `vec_data + *Route` direct-pointer access for the zero-copy
+//     borrow, mirroring the convention from `http_request.nu`'s
+//     `header_get`.
 //   * Route-level middleware (per-route filter chain) would need a
 //     `Vec[Middleware]` of closure-handle-shaped structs, which the
 //     current generic instantiator handles awkwardly. The handler-level

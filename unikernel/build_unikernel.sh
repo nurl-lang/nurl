@@ -154,7 +154,10 @@ NURL_NETDEV="$ROOT/unikernel/net/netdev_virtio.nu" \
 # compile_nu.sh leaves a hosted-flavoured object; recompile the IR with
 # the kernel flags. `zig cc` drops -O for .ll inputs (#644) and plain
 # clang needs the target flags spelled out for IR input too.
-$CC $KFLAGS -c "$OUTDIR/$base.ll" -o "$OUTDIR/$base.o"
+# -Wno-override-module: nurlc emits no target triple, so clang announces
+# it is supplying one — on every build, with nothing to act on (same
+# silencing as nurl.sh and the arm64/riscv64 scripts).
+$CC $KFLAGS -Wno-override-module -c "$OUTDIR/$base.ll" -o "$OUTDIR/$base.o"
 
 # The baked-in filesystem: a directory becomes a tar, and the tar
 # becomes an object with two symbols around it. With no --fs the
@@ -165,17 +168,31 @@ $CC $KFLAGS -c "$OUTDIR/$base.ll" -o "$OUTDIR/$base.o"
 if [ -n "$FSDIR" ]; then
     tar cf "$OUTDIR/$base.initfs.tar" -C "$FSDIR" .
 fi
-( cd "$OUTDIR" && ld -r -b binary -o "$base.initfs_data.o" "$base.initfs.tar" )
-# `ld -b binary` names its symbols after the path it was given; rename
-# them to something a C file can declare without knowing that path.
-sym="$(printf '%s' "$base.initfs.tar" | tr -c 'A-Za-z0-9' '_')"
-objcopy \
-    --redefine-sym "_binary_${sym}_start=nurl_initfs_start" \
-    --redefine-sym "_binary_${sym}_end=nurl_initfs_end" \
-    --redefine-sym "_binary_${sym}_size=nurl_initfs_size_sym" \
-    "$OUTDIR/$base.initfs_data.o"
+# The archive becomes an object with two symbols around it — the same
+# .incbin spelling the arm64/riscv64 scripts use, rather than the old
+# `ld -r -b binary` + objcopy rename dance. Two things this buys: the
+# symbols are named directly instead of renamed after the path, and the
+# .S can declare an empty .note.GNU-stack section — `ld -b binary`
+# emits no such note, and a final link containing one note-less object
+# makes GNU ld assume an executable stack and warn that the assumption
+# is deprecated. (@progbits: x86 as uses '@' as the type sigil where
+# ARM/RISC-V use '%'.)
+cat > "$OUTDIR/$base.initfs.S" <<EOF
+    .section .rodata
+    .globl nurl_initfs_start
+    .globl nurl_initfs_end
+    .align 8
+nurl_initfs_start:
+    .incbin "$OUTDIR/$base.initfs.tar"
+nurl_initfs_end:
+    .section .note.GNU-stack, "", @progbits
+EOF
+$CC $KFLAGS -c "$OUTDIR/$base.initfs.S" -o "$OUTDIR/$base.initfs_data.o"
 
-$CC -nostdlib -static -no-pie -Wl,-T,"$BOOT/link.ld" -Wl,--build-id=none \
+# No -no-pie: -static already makes the driver skip -pie, and clang 18
+# warns the flag is unused on exactly this line. The custom link.ld
+# owns the layout either way.
+$CC -nostdlib -static -Wl,-T,"$BOOT/link.ld" -Wl,--build-id=none \
     -o "$OUT" \
     "$CACHE/boot.o" "$OUTDIR/$base.o" \
     "$CACHE/runtime_core.o" "$CACHE/runtime_ctx.o" "$CACHE/runtime_bare.o" \

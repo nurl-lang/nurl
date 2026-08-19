@@ -103,8 +103,13 @@ $ `stdlib/ext/http_request.nu`
 // Linear scan returning the first index where the part's `name`
 // matches `target` (case-sensitive — form fields keep their wire
 // casing). -1 when no part matches. Caller pulls the part out via
-// `vec_data [MultipartPart]` + pointer indexing (the multi-field
-// `vec_get [MultipartPart]` default-construction path miscompiles).
+// `vec_data [MultipartPart]` + pointer indexing. (Historical note:
+// this used to be forced — the multi-field `vec_get` default-
+// construction path miscompiled before the Option Some-arm boxing fix
+// shipped 2026-05-14; `compiler/tests/vec_get_multifield.nu` pins the
+// fixed behaviour on exactly this struct shape. The pointer view is
+// kept because it also skips a per-iteration copy of four owned
+// fields, same as http_request.nu's header_get.)
 @ multipart_find_first ( Vec MultipartPart ) parts s target → i {
     : i n ( vec_len [MultipartPart] parts )
     : *MultipartPart data ( vec_data [MultipartPart] parts )

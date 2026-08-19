@@ -73,8 +73,10 @@ for f in start_x86_64 setjmp_x86_64; do
     "$CC" -c "$NOLIBC/$f.S" -o "$OUTDIR/nl_$f.o"
 done
 
-# 5. Link with no libc, no crt, no dynamic loader.
-"$CC" -nostdlib -static -no-pie -o "$OUT" \
+# 5. Link with no libc, no crt, no dynamic loader. (No -no-pie:
+# -static already makes the driver skip -pie, and clang 18 warns the
+# flag is unused here.)
+"$CC" -nostdlib -static -o "$OUT" \
       "$OUTDIR/$base.o" "$OUTDIR/runtime_core.o" "$OUTDIR/runtime_ctx.o" \
       "$OUTDIR/runtime_bare.o" "$OUTDIR"/nl_*.o
 

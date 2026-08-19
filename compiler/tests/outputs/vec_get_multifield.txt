@@ -1,0 +1,9 @@
+COMPILE OK
+LINK OK
+EXIT 0
+OUTPUT
+owned: beta len=2
+owned oob: None
+closure: POST /b h(4)=40
+closure oob: None
+ok arm: ayy bee 7

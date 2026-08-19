@@ -157,6 +157,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`nurlfmt` no longer breaks a `simd @` declaration across lines** — the
   formatter glues the prefix to its decl-starter exactly as it does `pub`.
 
+- **`json_float` keeps the float-ness in the text: `85.0` serialises as
+  `85.0`, not `85`.** An integral double printed as bare digits, which a
+  strictly typed consumer reads back as an integer field — real schema
+  drift the moment an ETL value lands on a whole number. Digits-only
+  raw text now gets `.0` appended; fractional, exponent and non-finite
+  forms pass through untouched. The fix propagates to every JNum
+  producer built on it: a CBOR half-float `1.0` now stringifies as
+  `1.0` (the old golden had baked the bug in as `1`). Pinned by
+  `compiler/tests/json_float_integral.nu`.
+
+- **The unikernel build is warning-clean again.** Three link-stage
+  warnings, one of them living on borrowed time: the initfs data
+  object was built with `ld -r -b binary`, which emits no
+  `.note.GNU-stack` section, so GNU ld assumed an executable stack and
+  warned the assumption will be removed from future linkers. x86 now
+  embeds the archive the way arm64/riscv64 always did — a generated
+  `.S` with `.incbin` and an explicit empty GNU-stack note — which
+  also names the symbols directly instead of the objcopy rename dance
+  (and drops the dead `_size` symbol nothing read). The `.ll` compile
+  gets `-Wno-override-module` (nurlc emits no triple; same silencing
+  as every other driver), and the redundant `-no-pie` clang 18 warns
+  about is gone from the unikernel and nolibc links — `-static`
+  already implies it.
+
+- **The stdlib's `vec_get`-miscompile workaround notes were three
+  months stale — the compiler bug they cite was fixed 2026-05-14.**
+  `http_multipart`, `http_router` and `http_response` still documented
+  "multi-field `vec_get` miscompiles" / "multi-field structs can't
+  ride `! T E` Ok arms" as live facts (http_request.nu's twin note was
+  already updated). Both shapes verified correct today — including the
+  exact String+String+closure struct the router note feared, the
+  4-field owned struct multipart uses, and the out-of-range
+  None default-construction path the comments blamed — clean under
+  ASan+LSan, and pinned by `compiler/tests/vec_get_multifield.nu`.
+  The pointer iteration stays (it is the zero-copy borrow); the
+  comments now say why honestly.
+
 ## [0.45.0] — 2026-08-18
 
 ### Added

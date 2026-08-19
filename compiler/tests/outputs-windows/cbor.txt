@@ -23,11 +23,11 @@ false: false
 true: true
 null: null
 undef: null
-half_1.0: 1
+half_1.0: 1.0
 half_1.5: 1.5
-half_neg4: -4
-half_0: 0
-single_100000: 100000
+half_neg4: -4.0
+half_0: 0.0
+single_100000: 100000.0
 double_1.1: 1.1
 double_pi: 3.141592653589793
 bytestring: unsupported
